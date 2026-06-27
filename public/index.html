@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <!-- 自愈脚本：注销残留的 v1 service worker（v2 不用 SW；旧 PWA 会喂陈旧外壳致「未连接」）。
+       外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。 -->
+  <script src="/js/sw-cleanup.js"></script>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="theme-color" content="#F4F3EE">
+  <title>Claude Chat Mobile</title>
+  <!-- PWA 可安装壳（仅 manifest + 图标；不做 service worker/offline——§6 非目标） -->
+  <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+  <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Claude">
+  <!-- 前端库自托管（vendored，见 public/vendor/）：原走 CDN（jsdelivr/tailwind），但手机网络常连不上 CDN，
+       阻塞式 <script> 会卡住后续 app.js 执行 → socket 永不初始化、页面死在「未连接」。改本地后任何网络（含纯局域网）皆可用。 -->
+  <script src="/vendor/tailwind.js"></script>
+  <!-- Tailwind 语义调色板（Claude token → 工具类）；必在 tailwind.js 之后、外置以合规 CSP script-src 'self' -->
+  <script src="/js/tw-config.js"></script>
+  <script src="/vendor/marked.min.js"></script>
+  <script src="/vendor/purify.min.js"></script>
+  <link rel="stylesheet" href="/vendor/github-light.min.css">
+  <script src="/vendor/highlight.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    /* ── Claude 设计 token（暖米白浅色单主题；改色只动此处，tw-config.js 把它们桥接成语义类）── */
+    :root {
+      --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
+      --line:#E3E0D6; --line-soft:#ECEAE1;
+      --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
+      --accent:#C96442; --accent-deep:#AE5238; --accent-bright:#D97757; --accent-wash:#F0E4DD;
+      --user-bubble:#ECE8DF; --info:#1B6FB3; --success:#3D8A50; --danger:#BC4334; --warning:#C77D33;
+      --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+      --font-read: "Source Serif 4", Georgia, Charter, "Songti SC", "Noto Serif SC", "Times New Roman", serif;
+      --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+      --radius-lg:0.875rem; --radius-md:0.625rem; --radius-sm:0.375rem;
+      --shadow-card:0 1px 2px rgba(60,50,40,.05), 0 4px 16px rgba(60,50,40,.06);
+      --shadow-pop:0 8px 32px rgba(40,32,24,.16);
+      --shadow-lift:0 4px 12px rgba(60,50,40,.08);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --canvas:#121211;
+        --surface:#1C1B1A;
+        --surface-sunk:#161514;
+        --line:#2E2C2A;
+        --line-soft:#242221;
+        --ink:#EEEEEC;
+        --ink-soft:#A3A19D;
+        --ink-faint:#7A7874;
+        --accent:#D97757;
+        --accent-deep:#F0E4DD;
+        --accent-bright:#E2886A;
+        --accent-wash:#2D231E;
+        --user-bubble:#282623;
+      }
+    }
+    /* self-host 开源 serif（SIL OFL）——Claude 回复正文的“书卷阅读感”；中文无字形时由 --font-read 栈回退系统宋体 */
+    @font-face { font-family:"Source Serif 4"; src:url(/vendor/source-serif-400.woff2) format("woff2"); font-weight:400; font-style:normal; font-display:swap; }
+    @font-face { font-family:"Source Serif 4"; src:url(/vendor/source-serif-600.woff2) format("woff2"); font-weight:600; font-style:normal; font-display:swap; }
+    @font-face { font-family:"Source Serif 4"; src:url(/vendor/source-serif-italic.woff2) format("woff2"); font-weight:400; font-style:italic; font-display:swap; }
+
+    body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+
+    /* ── Claude 回复正文：serif 阅读态（区别于其他 AI 聊天 UI 的标志性一笔）── */
+    .msg-body { font-family: var(--font-read); font-size: 15.5px; line-height: 1.72; color: var(--ink); overflow-wrap: break-word; word-break: break-word; }
+    .msg-body pre { font-family: var(--font-mono); border: 1px solid var(--line); border-radius: .5rem; padding: .75rem .85rem; overflow-x: auto; font-size: .82rem; line-height: 1.5; background: var(--surface-sunk); margin: .6rem 0; }
+    .msg-body code:not(pre code) { font-family: var(--font-mono); background: var(--surface-sunk); color: var(--accent-deep); padding: .1rem .35rem; border-radius: .25rem; font-size: .85em; }
+    .msg-body pre code { padding: 0; }
+    .msg-body .hljs { background: transparent; color: var(--ink); }  /* 透出 pre 暖底；语法 token 色由 github-light 提供 */
+    .msg-body p { margin: .5rem 0; } .msg-body p:first-child { margin-top: 0; } .msg-body p:last-child { margin-bottom: 0; }
+    .msg-body ul, .msg-body ol { margin: .5rem 0 .5rem 1.3rem; } .msg-body ul { list-style: disc; } .msg-body ol { list-style: decimal; }
+    .msg-body li { margin: .2rem 0; }
+    .msg-body h1, .msg-body h2, .msg-body h3 { font-weight: 600; margin: .9rem 0 .4rem; line-height: 1.3; }
+    .msg-body h1 { font-size: 1.3em; } .msg-body h2 { font-size: 1.18em; } .msg-body h3 { font-size: 1.05em; }
+    .msg-body a { color: var(--info); text-decoration: underline; text-underline-offset: 2px; }
+    .msg-body blockquote { border-left: 3px solid var(--line); padding-left: .8rem; margin: .5rem 0; color: var(--ink-soft); }
+    .msg-body table { border-collapse: collapse; margin: .5rem 0; font-size: .85em; }
+    .msg-body td, .msg-body th { border: 1px solid var(--line); padding: .3rem .55rem; }
+    .msg-body th { background: var(--surface-sunk); font-weight: 600; }
+    .msg-body hr { border: 0; border-top: 1px solid var(--line); margin: .8rem 0; }
+
+    /* 折叠器：去原生三角，光标手型 */
+    details.thinking > summary, details.toolcard > summary, #cliStatusWrap > summary { cursor: pointer; user-select: none; list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+    #cliStatusWrap[open] .cli-arrow { transform: rotate(180deg); }
+    /* 工具卡片：左竖条标记 agent 动作（Claude 风格） */
+    .toolcard { border-left: 3px solid var(--accent-bright) !important; }
+    /* 思考块：内心独白——serif 斜体淡色 */
+    .thinking .t-body { font-family: var(--font-read); font-style: italic; }
+
+    .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+    .safe-top { padding-top: env(safe-area-inset-top); }
+    /* 弹窗顶部 drag handle */
+    .sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto .75rem; }
+
+    /* 柔和入场动画 + 按钮微反馈（尊重 reduce-motion） */
+    @media (prefers-reduced-motion: no-preference) {
+      #messages > * { animation: msg-in .2s ease both; }
+      @keyframes msg-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+      button { transition: background-color .12s ease, transform .08s ease; }
+      button:active { transform: scale(.97); }
+    }
+    /* 暖色细滚动条 */
+    #messages::-webkit-scrollbar, #sessionPanel::-webkit-scrollbar { width: 8px; }
+    #messages::-webkit-scrollbar-thumb, #sessionPanel::-webkit-scrollbar-thumb { background: var(--line); border-radius: 4px; }
+    /* 用户消息气泡：sans 覆盖（历史气泡含 .msg-body 也不走 serif；用户消息=sans，仅 Claude 回复=serif） */
+    .um { font-family: var(--font-ui); font-size: 14px; line-height: 1.55; }
+
+    /* 落地页仪表盘高级微动效与精致样式 */
+    .dashboard-container {
+      animation: dash-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    @keyframes dash-in {
+      from { opacity: 0; transform: translateY(16px); }
+      to { opacity: 1; transform: none; }
+    }
+    .premium-card {
+      background: var(--surface);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-lg);
+      padding: 1.15rem 1.25rem;
+      text-align: left;
+      cursor: pointer;
+      box-shadow: var(--shadow-card);
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    @media (hover: hover) {
+      .premium-card:hover {
+        border-color: var(--accent-bright);
+        background: var(--surface);
+        transform: translateY(-2.5px);
+        box-shadow: var(--shadow-lift);
+      }
+    }
+    .premium-card:active {
+      transform: scale(0.975);
+      background: var(--surface-sunk);
+    }
+    .dash-recent-item {
+      background: var(--surface);
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius-md);
+      padding: 0.85rem 1rem;
+      text-align: left;
+      cursor: pointer;
+      transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+      box-shadow: 0 1px 2px rgba(60,50,40,.02);
+    }
+    @media (hover: hover) {
+      .dash-recent-item:hover {
+        border-color: var(--accent-bright);
+        background: var(--accent-wash);
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-lift);
+      }
+    }
+    .dash-recent-item:active {
+      transform: scale(0.985);
+      background: var(--surface-sunk);
+    }
+
+    /* ── 新版 UI 高级动效与交互样式微调 (Premium UI Enhancements) ── */
+    .chat-input-pill {
+      display: flex;
+      flex-direction: column;
+      background-color: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 1.25rem;
+      padding: 0.5rem !important;
+      transition: border-color 0.2s, box-shadow 0.2s, background-color 0.2s;
+    }
+    .chat-input-pill:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent-wash), 0 4px 12px rgba(201,100,66,0.06);
+      background-color: var(--surface);
+    }
+    .status-pill-chip {
+      background-color: var(--surface-sunk);
+      border: 1px solid var(--line-soft);
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      color: var(--ink-soft);
+      font-size: 11px;
+      font-weight: 500;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      cursor: pointer;
+      transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+      user-select: none;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+    }
+    .status-pill-chip:active {
+      transform: scale(0.95);
+      background-color: var(--line-soft);
+    }
+    .top-context-pill {
+      min-height: 32px;
+      padding: 0.2rem 0.75rem;
+      background: var(--surface-sunk);
+      border: 1px solid var(--line-soft);
+      border-radius: 9999px;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.02);
+      max-width: 90%;
+      overflow: hidden;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+      cursor: pointer !important;
+      pointer-events: auto !important;
+    }
+    @media (hover: hover) {
+      .top-context-pill:hover {
+        background: var(--line-soft);
+        transform: scale(0.98);
+      }
+    }
+    .top-context-pill:active {
+      transform: scale(0.95);
+    }
+    .msg-frame {
+      width: 100%;
+      box-sizing: border-box;
+      overflow-wrap: break-word;
+      word-break: break-word;
+    }
+    .empty-start {
+      min-height: 0;
+    }
+    .empty-start-card {
+      min-height: 42vh;
+    }
+    .empty-project-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: .45rem;
+      color: var(--ink-soft);
+      font-weight: 650;
+      letter-spacing: -.01em;
+    }
+    .msg-action-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.4rem;
+      opacity: 0.5;
+      transition: opacity 0.2s;
+    }
+    .msg-action-bar:hover, .msg-action-bar:focus-within {
+      opacity: 1;
+    }
+    .msg-action-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.375rem;
+      font-size: 11px;
+      color: var(--ink-faint);
+      border: 1px solid transparent;
+      transition: all 0.12s;
+      cursor: pointer;
+      background: transparent;
+    }
+    .msg-action-btn:hover {
+      color: var(--accent-deep);
+      background-color: var(--surface-sunk);
+      border-color: var(--line-soft);
+    }
+    .msg-action-btn:active {
+      transform: scale(0.95);
+    }
+    /* 隐藏横向滚动条 */
+    .scrollbar-none::-webkit-scrollbar { display: none; }
+    .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* Ensure #btnPush with .hidden class is always completely hidden, even overriding mobile display overrides */
+    #btnPush.hidden {
+      display: none !important;
+    }
+
+    @media (max-width: 767px) {
+      header {
+        padding: max(1.25rem, env(safe-area-inset-top)) 1rem 0.5rem !important;
+        background: var(--canvas) !important;
+        border-bottom: 1px solid var(--line-soft) !important;
+        gap: 0.5rem;
+      }
+      #btnSessions {
+        width: 40px !important;
+        height: 40px !important;
+        border-radius: 0.75rem !important;
+        background: var(--surface) !important;
+        border: 1px solid var(--line-soft) !important;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.02) !important;
+      }
+      #connDot {
+        /* Connection dot positioning is self-contained in its button wrapper */
+      }
+      #headerActions {
+        display: flex !important;
+      }
+
+      #messages {
+        padding: 1rem 1rem 1.5rem !important;
+        max-width: 640px; /* Comfortable expansive column width */
+        width: 100%;
+        margin: 0 auto;
+      }
+      #messages.empty-start {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-start;
+      }
+      .empty-start-card {
+        min-height: 50vh;
+        padding-bottom: 4vh;
+      }
+      footer {
+        padding: 0 1rem max(1rem, env(safe-area-inset-bottom)) !important;
+        background: transparent !important;
+      }
+      footer > .max-w-2xl {
+        max-width: 640px !important;
+      }
+      #statusPillsRow {
+        gap: 0.4rem !important;
+        margin: 0 0 0.5rem 0 !important; /* Perfect symmetry */
+        padding: 0 0.25rem !important;
+      }
+      .status-pill-chip {
+        min-height: 30px;
+        padding: 0.25rem 0.6rem;
+        font-size: 11px;
+        background: var(--surface-sunk);
+        border: 1px solid var(--line-soft);
+        box-shadow: none;
+        transition: background-color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+      }
+      .status-pill-chip:active {
+        background: var(--line);
+        transform: scale(0.95);
+      }
+      .status-pill-chip svg {
+        width: 0.85rem;
+        height: 0.85rem;
+        opacity: 0.7;
+      }
+      .chat-input-pill {
+        min-height: auto !important;
+        border-radius: 1.25rem !important;
+        box-shadow: var(--shadow-card);
+        margin-left: 0 !important; /* Perfect symmetry */
+        position: relative;
+        width: 100%;
+        padding: 0.5rem !important;
+      }
+      #btnAttach {
+        position: static !important;
+        transform: none !important;
+        width: 32px !important;
+        height: 32px !important;
+        border-radius: 0.5rem !important;
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        color: var(--ink-soft) !important;
+      }
+      #btnAttach:active {
+        transform: scale(0.92) !important;
+      }
+      #input {
+        min-height: 32px !important;
+        padding: 0.25rem 0.5rem !important;
+        font-size: 16px !important;
+      }
+      #btnSettings,
+      #btnPush {
+        display: flex !important;
+        width: 32px !important;
+        height: 32px !important;
+        border-radius: 0.5rem !important;
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        color: var(--ink-soft) !important;
+      }
+      #btnSend,
+      #btnStop {
+        width: 32px !important;
+        height: 32px !important;
+      }
+    }
+
+    /* ── 桌面端响应式栅格布局 (Desktop Responsive Grid Layout) ── */
+    @media (min-width: 1024px) {
+      body {
+        display: grid !important;
+        grid-template-columns: 300px 1fr !important;
+        grid-template-rows: auto 1fr auto !important;
+        height: 100vh !important;
+        overflow: hidden !important;
+      }
+
+      /* 1. 侧边栏常驻左侧 (Dock Sidebar to the Left) */
+      #leftSidebar {
+        grid-column: 1 !important;
+        grid-row: 1 / -1 !important;
+        position: relative !important;
+        transform: none !important;
+        width: 300px !important;
+        max-width: 300px !important;
+        height: 100vh !important;
+        border-right: 1px solid var(--line) !important;
+        box-shadow: none !important;
+        background-color: var(--surface) !important;
+        z-index: 10 !important;
+        transition: none !important;
+      }
+
+      /* 2. 主聊天内容分布在右侧 (Main Column) */
+      header {
+        grid-column: 2 !important;
+        grid-row: 1 !important;
+        border-bottom: 1px solid var(--line) !important;
+        z-index: 5 !important;
+      }
+
+      #messages {
+        grid-column: 2 !important;
+        grid-row: 2 !important;
+        height: 100% !important;
+        overflow-y: auto !important;
+      }
+
+      footer {
+        grid-column: 2 !important;
+        grid-row: 3 !important;
+        z-index: 5 !important;
+      }
+
+      /* 3. 隐藏不必要的移动端交互组件 (Hide mobile-only elements) */
+      #sidebarScrim {
+        display: none !important;
+      }
+      #sidebarClose {
+        display: none !important;
+      }
+
+      /* 4. 侧边栏折叠支持 (Sidebar Collapsing Support) */
+      body.sidebar-collapsed {
+        grid-template-columns: 0px 1fr !important;
+      }
+      body.sidebar-collapsed #leftSidebar {
+        display: none !important;
+      }
+    }
+
+    /* ── 三个底栏弹层的统一滑入滑出过渡 (替代 hidden 硬切) ── */
+    #permModal, #questionModal, #consoleModal {
+        visibility: hidden;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity .25s ease, visibility .25s ease;
+      }
+      #permModal > div, #questionModal > div, #consoleModal > div {
+        transform: translateY(100%);
+        transition: transform .3s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      #permModal.sheet-open, #questionModal.sheet-open, #consoleModal.sheet-open {
+        visibility: visible;
+        pointer-events: auto;
+        opacity: 1;
+      }
+      #permModal.sheet-open > div, #questionModal.sheet-open > div, #consoleModal.sheet-open > div {
+        transform: translateY(0);
+      }
+
+      /* ── 状态忙碌条 collapse 弹性过渡 ── */
+      #activeStatusPill {
+        overflow: hidden;
+        max-height: 0;
+        opacity: 0;
+        margin-bottom: 0;
+        transition: max-height .25s cubic-bezier(0.16, 1, 0.3, 1),
+                    opacity .2s ease,
+                    margin-bottom .25s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      #activeStatusPill.pill-active {
+        max-height: 3.5rem;
+        opacity: 1;
+        margin-bottom: 0.5rem;
+      }
+
+      /* ── 44px 物理触控热区扩充 ── */
+      .chat-input-pill button {
+        position: relative;
+      }
+      .chat-input-pill button::after {
+        content: '';
+        position: absolute;
+        top: -6px;
+        left: -6px;
+        right: -6px;
+        bottom: -6px;
+      }
+
+      /* ── 规则动画选中过渡 ── */
+      .perm-tile {
+        transition: all 0.15s ease;
+      }
+
+      /* ── 尊重用户减弱动效偏好 ── */
+      @media (prefers-reduced-motion: reduce) {
+        #permModal, #questionModal, #consoleModal,
+        #permModal > div, #questionModal > div, #consoleModal > div,
+        #activeStatusPill, #leftSidebar, #settingsSheet {
+          transition: none !important;
+        }
+      }
+  </style>
+</head>
+<body data-cf-access="0" class="h-full bg-canvas text-ink flex flex-col overscroll-none">
+
+  <!-- 访问令牌输入页：鉴权失败（connect_error=unauthorized）时显示；输入后存 localStorage 以新 token 重连。
+       不改握手契约，替代手动改 #token= URL（后者仍兼容）。app.js 控制显隐。 -->
+  <div id="authGate" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
+    <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6" style="box-shadow:var(--shadow-pop)">
+      <div class="text-xl font-semibold mb-1" style="font-family:var(--font-read)">Claude</div>
+      <div class="text-sm text-ink-soft mb-5">需要访问令牌才能连接到这台机器。<span class="text-ink-faint">若你刚清过浏览器数据，原先保存的令牌已被清除，重输一次即可。</span></div>
+      <label class="block text-xs text-ink-faint mb-1.5" for="authToken">访问令牌</label>
+      <input id="authToken" type="password" autocomplete="current-password" enterkeyhint="go" placeholder="粘贴 AUTH_TOKEN"
+        class="w-full bg-sunk border border-line rounded-lg px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:ring-1 focus:ring-accent mb-2">
+      <div id="authError" class="hidden text-xs text-danger mb-2"></div>
+      <button id="authSubmit" class="w-full py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep font-medium">进入</button>
+      <div class="text-[11px] text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">.env</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 或启动日志里。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
+    </div>
+  </div>
+
+  <!-- Access 会话过期重登（ADR-017）：公网 Cloudflare Access 会话失效时显示，按钮触发整页跳转重过 Access（非 auto-reload）。 -->
+  <div id="accessRelogin" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
+    <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6" style="box-shadow:var(--shadow-pop)">
+      <div class="text-xl font-semibold mb-1" style="font-family:var(--font-read)">会话已过期</div>
+      <div class="text-sm text-ink-soft mb-5">登录态已失效，请重新通过验证后继续。</div>
+      <button id="accessReloginBtn" class="w-full py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep font-medium">重新登录</button>
+    </div>
+  </div>
+
+  <!-- 顶部状态条 -->
+  <header class="flex items-center justify-between px-4 py-2.5 bg-surface border-b border-line shrink-0 sticky top-0 z-20">
+    <!-- Left Section: Sidebar/Workspaces Toggler -->
+    <div class="relative flex items-center gap-2 shrink-0">
+      <button id="btnSessions" class="relative w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看工作区、会话列表和后台状态" aria-label="工作区与会话">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5 text-ink-soft">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4.75 5.75A1.75 1.75 0 016.5 4h11A1.75 1.75 0 0119.25 5.75v12.5A1.75 1.75 0 0117.5 20h-11a1.75 1.75 0 01-1.75-1.75V5.75z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 4v16M12.5 8h3.75M12.5 12h3.75M12.5 16h2.5" />
+        </svg>
+        <!-- 台阶2 Step B：后台目录有动静时亮（app.js updateSessionsDot 控制） -->
+        <span id="sessionsDot" class="hidden absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-accent border border-surface shadow-sm"></span>
+        
+        <!-- Connection state dot wrapper inside btnSessions -->
+        <div class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-surface rounded-full border border-line-soft shadow-sm" title="连接状态">
+          <span id="connDot" class="w-2 h-2 rounded-full bg-danger shrink-0"></span>
+        </div>
+      </button>
+    </div>
+
+    <!-- Center Section: Elegant top context pill with workspace and status -->
+    <div class="flex items-center justify-center flex-1 min-w-0">
+      <button id="topContextPill" class="top-context-pill select-none cursor-pointer" onclick="document.getElementById('btnSessions').click()" title="查看工作区、会话列表和后台状态">
+        <!-- Minimalist folder icon in Accent color -->
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-3.5 h-3.5 text-accent shrink-0">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
+        </svg>
+        <span id="topTitleText" class="hidden text-xs font-semibold text-ink-soft shrink-0">新聊天</span>
+        <span class="hidden text-ink-faint text-[10px] select-none shrink-0">•</span>
+        <span id="topProjectText" class="text-xs font-bold text-ink truncate">...</span>
+      </button>
+    </div>
+
+    <!-- Right Section: Log and New Session action buttons -->
+    <div id="headerActions" class="flex items-center justify-end gap-2 min-w-[70px]">
+      <!-- 日志 >_ -->
+      <button id="btnConsole" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm font-mono text-xs font-bold leading-none" title="查看当前会话运行日志">
+        &gt;_
+      </button>
+
+      <!-- 新会话 ＋ -->
+      <button id="btnNew" class="w-9 h-9 flex items-center justify-center rounded-xl text-accent hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="创建新会话">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-4.5 h-4.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+        </svg>
+      </button>
+    </div>
+
+    <!-- Hidden connection status text label to maintain JS compatibility -->
+    <span id="statusLine" class="hidden">未连接</span>
+  </header>
+
+  <!-- 左侧侧边栏遮罩 scrim -->
+  <div id="sidebarScrim" class="hidden fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px] transition-opacity duration-300"></div>
+
+  <!-- 左侧抽屉式侧边栏 (Left Sidebar Drawer) -->
+  <aside id="leftSidebar" class="fixed inset-y-0 left-0 z-40 w-5/6 max-w-sm h-full bg-surface border-r border-line shadow-pop transform -translate-x-full transition-transform duration-300 flex flex-col">
+    <!-- 侧边栏顶部标题区 -->
+    <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0">
+      <span class="text-sm font-semibold uppercase tracking-wide text-ink" style="font-family:var(--font-read)">工作区与会话</span>
+      <button id="sidebarClose" class="w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base">✕</button>
+    </div>
+    <!-- 会话列表容器 (复用 sessionPanel 以完美兼容现有 JS) -->
+    <div id="sessionPanel" class="flex-1 overflow-y-auto"></div>
+  </aside>
+
+  <!-- 消息区 -->
+  <main id="messages" class="flex-1 overflow-y-auto overscroll-none px-3 py-3 space-y-3"></main>
+
+  <!-- 权限审批弹窗（底部 sheet） -->
+  <div id="permModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
+      <div class="sheet-handle"></div>
+      <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
+      <div id="permTool" class="font-mono text-sm mb-1 text-ink"></div>
+      <div id="permCwd" class="text-xs text-ink-faint mb-2"></div>
+      <pre id="permInput" class="font-mono bg-sunk rounded-md p-2 text-xs overflow-x-auto max-h-48 overflow-y-auto mb-3 text-ink-soft"></pre>
+      <label class="flex items-center gap-2 text-xs text-ink-soft mb-3">
+        <input type="checkbox" id="permAlways" style="accent-color:var(--accent)">本会话内总是允许此类操作
+      </label>
+      <div class="flex gap-2">
+        <button id="permDeny" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">拒绝</button>
+        <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep font-medium">允许</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- AskUserQuestion 弹窗（E7） -->
+  <div id="questionModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
+      <div class="sheet-handle"></div>
+      <div class="text-info font-semibold mb-2">❓ 需要你选择</div>
+      <div id="questionText" class="text-sm mb-4 text-ink"></div>
+      <div id="questionOptions" class="space-y-2"></div>
+    </div>
+  </div>
+
+  <!-- 实时运行日志弹窗 (Slide-Up Console Drawer) -->
+  <div id="consoleModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+    <div class="w-full h-[70vh] bg-gray-900/95 backdrop-blur-md rounded-t-2xl flex flex-col safe-bottom border-t border-gray-800" style="box-shadow:var(--shadow-pop)">
+      <div class="sheet-handle bg-gray-700 mt-3 shrink-0"></div>
+      
+      <!-- Drawer Header -->
+      <div class="px-4 pb-2 flex items-center justify-between border-b border-gray-800 shrink-0">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-success animate-pulse"></span>
+          <span class="font-mono text-xs text-gray-300 font-bold tracking-wider">交互日志 (Current Session Trace)</span>
+        </div>
+        <button id="consoleClose" class="px-2.5 py-1 rounded bg-gray-800 hover:bg-gray-700 active:scale-95 text-[10px] font-mono text-gray-400">关闭 (Close)</button>
+      </div>
+      
+      <!-- Drawer Log Stream Area -->
+      <div id="consoleLogArea" class="flex-1 overflow-y-auto px-4 py-3 font-mono text-[11px] leading-relaxed text-gray-300 space-y-2.5 selection:bg-accent/30 selection:text-white">
+        <!-- Log rows will go here -->
+      </div>
+      
+      <!-- Drawer Footer -->
+      <div class="px-4 py-2 border-t border-gray-800 bg-gray-950/50 flex items-center justify-between shrink-0 text-[10px] text-gray-500 font-mono">
+        <span>内存环形缓冲最多存 100 条日志，关闭 Tab 自动清理</span>
+        <button id="consoleClear" class="px-2 py-0.5 rounded border border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300 active:scale-95">清屏 (Clear)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 输入区 -->
+  <footer class="shrink-0 bg-transparent px-3 pb-3 shrink-0 z-10 safe-bottom">
+    <div class="max-w-2xl mx-auto flex flex-col">
+      <!-- web 状态栏（E16/ADR-0011）：自有 SDK 数据 + git 结构化渲染，默认折叠为一行摘要 -->
+      <details id="cliStatusWrap" class="hidden bg-surface border border-line rounded-xl mb-2 overflow-hidden shadow-sm">
+        <summary class="px-3 py-2 text-[11px] text-ink-soft bg-sunk/40 cursor-pointer select-none flex items-center justify-between border-b border-line-soft">
+          <span class="flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-ink-faint" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <span id="cliSummary" class="font-medium">状态</span>
+          </span>
+          <span class="cli-arrow text-[9px] text-ink-faint opacity-60 transition-transform duration-200">▼</span>
+        </summary>
+        <div id="cliStatus" class="px-3 py-2 text-[11px] leading-relaxed bg-surface text-ink-soft space-y-1"></div>
+      </details>
+
+      <!-- 极简状态胶囊指示栏 (Pills Indicator) -->
+      <div id="statusPillsRow" class="flex items-center gap-1.5 overflow-x-auto select-none text-[10.5px] scrollbar-none mb-2 px-1">
+        <!-- Compact model chip -->
+        <div id="pillWorkspace" class="status-pill-chip hidden">
+          <svg class="w-3.5 h-3.5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.091-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.091L9 5.25l.813 2.846a4.5 4.5 0 003.091 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.091zM18.25 9.75L17.875 11l-.375-1.25a2.25 2.25 0 00-1.5-1.5L14.75 7.875 16 7.5a2.25 2.25 0 001.5-1.5l.375-1.25.375 1.25a2.25 2.25 0 001.5 1.5l1.25.375-1.25.375a2.25 2.25 0 00-1.5 1.5z" />
+          </svg>
+          <span id="pillWorkspaceText">模型默认</span>
+        </div>
+
+        <div id="pillModel" class="status-pill-chip" title="选择模型">
+          <svg class="w-3.5 h-3.5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z" />
+          </svg>
+          <span id="pillModelText">默认</span>
+        </div>
+
+        <div id="pillPerm" class="status-pill-chip">
+          <svg class="w-3.5 h-3.5 text-ink-soft" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+          </svg>
+          <span id="pillPermText">默认审批</span>
+        </div>
+
+        <div id="pillEffort" class="status-pill-chip hidden">
+          <svg class="w-3.5 h-3.5 text-ink-soft" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+          </svg>
+          <span id="pillEffortText">思考默认</span>
+        </div>
+      </div>
+
+      <!-- 隐藏的原始选择框，保持底层兼容（100% 保持终端等价性与事件契约） -->
+      <div class="hidden">
+        <select id="modelInput">
+          <option value="">不指定（沿用当前）</option>
+        </select>
+        <select id="permModeSelect">
+          <option value="default">默认（白名单外弹窗审批）</option>
+          <option value="plan">计划模式（只规划、不执行）</option>
+          <option value="acceptEdits">自动接受编辑（命令仍审批）</option>
+          <option value="dontAsk">免打扰（白名单外直接拒、不弹窗）</option>
+          <option value="bypassPermissions">⚠️ bypass（跳过所有审批）</option>
+        </select>
+        <div id="effortRow">
+          <select id="effortSelect">
+            <option value="">（模型默认）</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- E17/ADR-013：待发送附件托盘 -->
+      <div id="attachTray" class="hidden px-3 py-2.5 flex flex-wrap gap-2 bg-surface border border-line-soft rounded-2xl mb-2 shadow-sm"></div>
+
+      <!-- E6: Active Status Indicator / Interrupt Panel -->
+      <div id="activeStatusPill" class="flex items-center justify-between px-3 py-2 bg-accent/5 border border-accent/20 rounded-xl text-xs text-accent transition-all duration-300 shrink-0">
+        <div class="flex items-center gap-2 overflow-hidden mr-2">
+          <span class="relative flex h-2 w-2 shrink-0">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
+          </span>
+          <span id="activeStatusText" class="font-medium truncate">Claude 正在执行任务...</span>
+        </div>
+        <button id="btnStopNew" class="px-2.5 py-1 rounded-lg bg-accent text-surface hover:opacity-90 active:scale-95 text-[10px] font-bold transition-all shrink-0" title="中止任务">
+          停止
+        </button>
+      </div>
+
+      <!-- Unified Premium Input Pill Container -->
+      <div class="chat-input-pill flex flex-col gap-1 p-2 bg-surface shadow-md border border-line">
+        <!-- Top Row: Full-width Textarea -->
+        <div class="w-full flex items-start">
+          <textarea id="input" rows="1" placeholder="给 Claude 发消息..." enterkeyhint="send"
+            class="flex-1 resize-none bg-transparent border-0 ring-0 outline-none focus:ring-0 focus:border-transparent px-2.5 py-2 text-sm text-ink placeholder-ink-faint max-h-36 min-h-[36px] leading-relaxed"></textarea>
+        </div>
+
+        <input type="file" id="fileInput" multiple class="hidden">
+
+        <!-- Bottom Row: Toolbar -->
+        <div class="flex items-center justify-between w-full pt-1.5 border-t border-line-soft/30 px-1">
+          <!-- Left side: Utility actions -->
+          <div class="flex items-center gap-1.5">
+            <!-- E17：附件按钮 -->
+            <button id="btnAttach" class="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="添加附件">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+              </svg>
+            </button>
+
+            <!-- E15：推送通知订阅入口 -->
+            <button id="btnPush" class="hidden flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-accent shrink-0 transition-all" title="接收推送通知">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+              </svg>
+            </button>
+
+            <!-- ⚙️ 触感设置按钮 -->
+            <button id="btnSettings" class="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="打开设置面板">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+          </div>
+
+          <!-- Right side: Send/Stop Buttons -->
+          <div class="flex items-center shrink-0">
+            <!-- 兼容性保留：隐藏的原 btnStop -->
+            <button id="btnStop" class="hidden pointer-events-none w-0 h-0" style="display: none !important;"></button>
+            
+            <button id="btnSend" class="flex items-center justify-center w-8 h-8 rounded-full bg-transparent text-ink-faint opacity-40 cursor-not-allowed transition-all duration-200 shrink-0" title="发送" disabled>
+              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </footer>
+
+  <!-- 设备待授权遮罩层 (TOFU Device Waiting Overlay) -->
+  <div id="deviceModal" class="hidden fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="w-full max-w-sm bg-surface rounded-2xl p-6 text-center border border-line" style="box-shadow: var(--shadow-pop)">
+      <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-accent/10 text-accent mb-4 animate-pulse">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" />
+        </svg>
+      </div>
+      <h2 class="text-xl font-semibold text-ink mb-2">🔒 等待授权</h2>
+      <p class="text-sm text-ink-soft mb-4 leading-relaxed">
+        这是一台新设备。在你<strong class="text-accent">另一台已登录的设备</strong>上会弹出「新设备请求接入」，点一下「准入」即可——<strong class="text-accent">无需上电脑终端</strong>。
+      </p>
+      <div class="bg-sunk rounded-xl p-3 text-left border border-line-soft mb-4">
+        <div class="text-[11px] text-ink-faint uppercase font-bold tracking-wider mb-1">本设备 ID (Device ID)</div>
+        <code id="deviceModalId" class="font-mono text-xs break-all text-ink selection:bg-accent/20">generating...</code>
+      </div>
+      <details class="text-[11px] text-ink-faint leading-relaxed text-left">
+        <summary class="cursor-pointer select-none">没有其它已登录的设备？用命令授权 ▾</summary>
+        <div class="mt-1.5">在主机终端按 <strong class="text-accent">回车键</strong> 一键同意最新设备，或执行：
+        <code class="block font-mono bg-sunk px-2 py-1 rounded text-ink mt-1.5 select-all border border-line-soft">node scripts/device.js approve "<span id="deviceModalCmdId">...</span>"</code></div>
+      </details>
+    </div>
+  </div>
+
+  <!-- ADR-0018：已信任设备远程审批——待审批设备请求卡片栈（收 pending_devices 事件，app.js 动态填充）。
+       仅“已登录的可信设备”会收到，点准入/拒绝即发 user:approveDevice/denyDevice，免去上电脑终端。 -->
+  <div id="deviceRequests" class="hidden fixed top-0 inset-x-0 z-50 p-3 space-y-2 pointer-events-none safe-top"></div>
+
+  <!-- ADR-0018：本设备被机主拒绝时的说明遮罩（替代原生 alert，与其它访问页风格一致）。 -->
+  <div id="deviceDenied" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
+    <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6 text-center" style="box-shadow:var(--shadow-pop)">
+      <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-sunk text-danger mb-4">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-7 h-7">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+        </svg>
+      </div>
+      <div class="text-xl font-semibold text-ink mb-2">设备未获授权</div>
+      <p class="text-sm text-ink-soft mb-5 leading-relaxed">机主已拒绝此设备接入。若是误操作，可重新发起请求，由你已登录的可信设备或主机终端批准。</p>
+      <button id="deviceDeniedRetry" class="w-full py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep font-medium mb-3">重新请求接入</button>
+      <button id="deviceDeniedHelp" class="text-xs text-ink-faint underline">查看访问帮助</button>
+    </div>
+  </div>
+
+  <!-- 访问帮助：怎么连接 / 令牌在哪 / 新设备怎么批。常驻入口在配置面板，也从令牌页/被拒页打开。 -->
+  <div id="accessHelp" class="hidden fixed inset-0 z-50 bg-canvas overflow-y-auto p-6 safe-top safe-bottom">
+    <div class="w-full max-w-md mx-auto">
+      <div class="flex items-center justify-between mb-5">
+        <div class="text-lg font-semibold text-ink" style="font-family:var(--font-read)">如何连接与使用</div>
+        <button id="accessHelpClose" class="px-2.5 py-1 rounded bg-sunk active:bg-line-soft text-xs text-ink-soft">关闭</button>
+      </div>
+      <div class="space-y-4 text-sm leading-relaxed">
+        <div>
+          <div class="font-semibold text-ink mb-1">📱 在手机上连接</div>
+          <div class="text-ink-soft">打开 <code class="bg-sunk px-1 rounded text-xs break-all">https://你的域名/#token=令牌</code>。令牌进入后存在本机浏览器，之后免带；装到主屏当 App 用更顺手。</div>
+        </div>
+        <div>
+          <div class="font-semibold text-ink mb-1">🔑 访问令牌在哪</div>
+          <div class="text-ink-soft">在服务器 <code class="bg-sunk px-1 rounded text-xs">.env</code> 的 <code class="bg-sunk px-1 rounded text-xs">AUTH_TOKEN</code>，或服务启动日志里的入口 URL。<strong class="text-ink">清除浏览器数据会一并清掉它</strong>，届时重输一次即可。</div>
+        </div>
+        <div>
+          <div class="font-semibold text-ink mb-1">🆕 新设备怎么获批</div>
+          <div class="text-ink-soft">走公网域名（隧道）通常<strong class="text-ink">无需审批</strong>，贴上令牌即用。仅当你<strong class="text-ink">直连局域网 IP</strong>时才需审批：你已登录的设备会弹「新设备请求接入」，点「准入」即可——<strong class="text-accent">无需上电脑终端</strong>。兜底命令：<code class="bg-sunk px-1 rounded text-xs break-all">node scripts/device.js approve "&lt;ID&gt;"</code>。</div>
+        </div>
+        <div>
+          <div class="font-semibold text-ink mb-1">🔄 连不上怎么办</div>
+          <div class="text-ink-soft">多半是令牌被清——重输即可。切后台/息屏断开会在回到前台时自动重连，无需手动刷新。</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 触觉配置面板遮罩 scrim -->
+  <div id="settingsScrim" class="hidden fixed inset-0 z-30 bg-black/40 transition-opacity duration-300"></div>
+
+  <!-- 触觉配置面板大底栏 (Bottom Settings Sheet Drawer) -->
+  <div id="settingsSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col p-4 max-h-[85vh] overflow-y-auto safe-bottom" style="border-top-color:var(--accent)">
+    <div class="sheet-handle"></div>
+    <div class="flex items-center justify-between mb-4 border-b border-line-soft pb-2 shrink-0">
+      <div class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 配置面板</div>
+      <button id="settingsClose" class="px-2.5 py-1 rounded bg-sunk hover:bg-line-soft active:scale-95 text-xs text-ink-soft">完成</button>
+    </div>
+
+    <div class="space-y-5 flex-1">
+      <!-- 1. 模型选择大磁贴 -->
+      <div>
+        <div class="text-xs font-semibold text-ink-soft mb-2 flex items-center gap-1">✨ 选择模型 <span class="text-[10px] text-ink-faint font-normal">(切换下一条消息起效)</span></div>
+        <div id="customModelGrid" class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+          <!-- 动态生成的模型卡片 -->
+        </div>
+      </div>
+
+      <!-- 2. 权限档大磁贴 -->
+      <div>
+        <div class="text-xs font-semibold text-ink-soft mb-2">🛡️ 权限控制等级</div>
+        <div id="customPermGrid" class="grid grid-cols-2 gap-2">
+          <div data-mode="default" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
+            <div class="text-xs font-semibold text-ink">默认审批</div>
+            <div class="text-[9.5px] text-ink-soft mt-0.5">敏感操作弹窗确认</div>
+          </div>
+          <div data-mode="plan" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
+            <div class="text-xs font-semibold text-ink">计划模式</div>
+            <div class="text-[9.5px] text-ink-soft mt-0.5">只读预览不执行修改</div>
+          </div>
+          <div data-mode="acceptEdits" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
+            <div class="text-xs font-semibold text-ink">自动接受编辑</div>
+            <div class="text-[9.5px] text-ink-soft mt-0.5">文件修改直通，命令审批</div>
+          </div>
+          <div data-mode="dontAsk" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
+            <div class="text-xs font-semibold text-ink">免打扰</div>
+            <div class="text-[9.5px] text-ink-soft mt-0.5">白名单外直接拒、不弹窗</div>
+          </div>
+          <div data-mode="bypassPermissions" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all text-danger">
+            <div class="text-xs font-semibold text-danger">⚠️ Bypass</div>
+            <div class="text-[9.5px] text-red-500/80 mt-0.5">免审飞控（高危）</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. 思考强度大磁贴 -->
+      <div id="customEffortGroup" class="hidden">
+        <div class="text-xs font-semibold text-ink-soft mb-2">🧠 思考强度等级</div>
+        <div id="customEffortGrid" class="flex flex-wrap gap-2">
+          <!-- 动态生成的思考强度按钮 -->
+        </div>
+      </div>
+
+      <!-- 4. 访问与设备帮助（常驻入口）-->
+      <div>
+        <div class="text-xs font-semibold text-ink-soft mb-2">🔑 访问与设备</div>
+        <button id="accessHelpOpen" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">如何连接 · 令牌在哪 · 新设备怎么批 →</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

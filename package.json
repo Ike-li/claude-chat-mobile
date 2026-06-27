@@ -1,0 +1,53 @@
+{
+  "name": "claude-chat-mobile",
+  "version": "1.0.0",
+  "description": "Mobile chat UI that bridges your local claude CLI to your phone — terminal-equivalent agent access (resume, streaming output, on-device tool approvals).",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "author": "Ike-li (https://github.com/Ike-li)",
+  "homepage": "https://github.com/Ike-li/claude-chat-mobile#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ike-li/claude-chat-mobile.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ike-li/claude-chat-mobile/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "anthropic",
+    "agent-sdk",
+    "mobile",
+    "pwa",
+    "websocket",
+    "self-hosted",
+    "remote-access",
+    "chat-ui"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "check": "for f in *.js public/js/*.js; do node --check \"$f\" || exit 1; done && echo 'syntax OK'",
+    "test": "node --test test/*.test.mjs",
+    "test:coverage": "node --experimental-test-coverage --test test/*.test.mjs",
+    "test:visual": "node scripts/visual-e2e-runner.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "compression": "^1.8.1",
+    "dotenv": "^17.0.0",
+    "express": "^5.0.0",
+    "jose": "^6.2.3",
+    "socket.io": "^4.8.0",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "puppeteer": "^25.1.0",
+    "socket.io-client": "^4.8.3"
+  }
+}

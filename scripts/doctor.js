@@ -1,0 +1,392 @@
+#!/usr/bin/env node
+// scripts/doctor.js —— 启动前配置自检
+// 用法: node scripts/doctor.js [--env path/to/.env] [--fix]
+//
+// 检查项（10 项）:
+// 1. AUTH_TOKEN 非空且格式合理
+// 2. CLAUDE_BIN 可执行（which claude 或环境变量指向存在）
+// 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
+// 4. PORT 未被占用
+// 5. ~/.claude/settings.json 可读（statusLine 依赖，不存在时给提示"E16 将禁用"）
+// 6. 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
+// 7. 配置文件权限（.env / data/*.json 是否为 owner-only 0600）
+// 8. 文档一致性（死链 + 旧文件名漂移；防文档间漂移的机械化背书）
+// 9. 前端 JS 语法（public/js/*.js 跑 node --check——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
+import { config } from 'dotenv';
+import { existsSync, accessSync, constants, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+import { homedir, platform } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createConnection } from 'node:net';
+import { isOwnerOnly, fixPermissions } from '../file-security.js';
+
+const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
+const results = [];
+
+// 诊断结果类型
+function ok(name, detail) { results.push({ name, status: 'ok', detail }); }
+function warn(name, detail) { results.push({ name, status: 'warn', detail }); }
+function fail(name, detail) { results.push({ name, status: 'fail', detail }); }
+
+// 彩色输出
+const colors = { ok: '\x1b[32m✓\x1b[0m', warn: '\x1b[33m⚠\x1b[0m', fail: '\x1b[31m✗\x1b[0m' };
+
+function print() {
+  console.log('\n=== 配置诊断 ===\n');
+  for (const r of results) {
+    console.log(`${colors[r.status]} ${r.name}`);
+    if (r.detail) console.log(`  ${r.detail}\n`);
+  }
+  const failed = results.filter(r => r.status === 'fail').length;
+  const warned = results.filter(r => r.status === 'warn').length;
+  console.log(`=== 结果: ${results.length - failed - warned} 通过, ${warned} 警告, ${failed} 失败 ===\n`);
+  process.exit(failed > 0 ? 1 : 0);
+}
+
+// ──────────────────────── 检查项 ────────────────────────
+
+// D1: AUTH_TOKEN
+function checkAuthToken() {
+  const token = process.env.AUTH_TOKEN;
+  if (token === undefined) {
+    warn('AUTH_TOKEN', '未设置 → 仅监听 127.0.0.1（本机），无法从手机访问。需要手机访问请在 .env 设置后重启。');
+    return;
+  }
+  if (!token || !token.trim()) {
+    fail('AUTH_TOKEN', '已设置但为空 → 仅监听 127.0.0.1。若要手机访问，设置非空 token。');
+    return;
+  }
+  if (token.length < 8) {
+    warn('AUTH_TOKEN', `长度仅 ${token.length} 字符，建议 ≥16 字符（随机字符串）提高安全性。`);
+  } else {
+    ok('AUTH_TOKEN', `已设置（${token.length} 字符）`);
+  }
+}
+
+// D2: CLAUDE_BIN 可执行
+function checkClaudeBin() {
+  const explicit = process.env.CLAUDE_BIN;
+  let claudePath = explicit;
+  if (!claudePath) {
+    try {
+      claudePath = execSync('which claude', { encoding: 'utf8' }).trim();
+    } catch {
+      fail('CLAUDE_BIN', '未设置 CLAUDE_BIN 且 `which claude` 找不到。请确认 Claude Code CLI 已安装并在 PATH 中。');
+      return;
+    }
+  }
+  if (!existsSync(claudePath)) {
+    fail('CLAUDE_BIN', `路径不存在: ${claudePath}`);
+    return;
+  }
+  try {
+    accessSync(claudePath, constants.X_OK);
+  } catch {
+    fail('CLAUDE_BIN', `路径存在但不可执行: ${claudePath}`);
+    return;
+  }
+  // 检查版本
+  try {
+    const ver = execSync(`"${claudePath}" --version`, { encoding: 'utf8', timeout: 3000 }).trim();
+    ok('CLAUDE_BIN', `${claudePath} — ${ver}`);
+  } catch (err) {
+    warn('CLAUDE_BIN', `${claudePath} 可执行但 --version 失败: ${err.message}`);
+  }
+}
+
+// D3: WORK_DIR / WORK_DIRS 可写
+function checkWorkDir() {
+  checkOneDir('WORK_DIR', process.env.WORK_DIR || homedir());
+  // 多 repo 台阶1（ADR-010）：WORK_DIRS 白名单各目录也需可写。soft：问题用 warn（server 启动期
+  // 对无效项告警跳过、不挡启动，doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
+  let rawDirs = [];
+  const dirsFile = process.env.WORK_DIRS_FILE;
+  if (dirsFile) {
+    const filePath = dirsFile.startsWith('/') ? dirsFile : join(HERE, dirsFile);
+    try {
+      const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+      if (Array.isArray(parsed)) {
+        rawDirs = parsed.filter(e => typeof e === 'string').map(s => s.trim()).filter(Boolean);
+      } else {
+        warn('WORK_DIRS_FILE', `不是 JSON 数组: ${filePath}`);
+      }
+    } catch (e) {
+      warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath}): ${e.message}`);
+    }
+  } else {
+    rawDirs = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
+  }
+  for (const dir of rawDirs) {
+    checkOneDir('WORK_DIRS', dir, true);
+  }
+}
+
+function checkOneDir(label, dir, soft = false) {
+  if (!existsSync(dir)) {
+    if (soft) { warn(label, `不存在: ${dir}（server 启动期会告警跳过此目录）`); return; }
+    try {
+      mkdirSync(dir, { recursive: true });
+      ok(label, `不存在已创建: ${dir}`);
+    } catch (err) {
+      fail(label, `不存在且无法创建: ${dir} — ${err.message}`);
+    }
+    return;
+  }
+  try {
+    accessSync(dir, constants.W_OK);
+    ok(label, `可写: ${dir}`);
+  } catch {
+    (soft ? warn : fail)(label, `存在但不可写: ${dir}`);
+  }
+}
+
+// D4: PORT 未被占用
+async function checkPort() {
+  const port = parseInt(process.env.PORT || '3000', 10);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    fail('PORT', `无效端口: ${process.env.PORT || '3000'}`);
+    return;
+  }
+  return new Promise(resolve => {
+    const conn = createConnection({ port, host: '127.0.0.1' });
+    conn.on('connect', () => {
+      conn.destroy();
+      fail('PORT', `端口 ${port} 已被占用（可能上次未干净停止）。请 kill 旧进程或换端口。`);
+      resolve();
+    });
+    conn.on('error', err => {
+      if (err.code === 'ECONNREFUSED') {
+        ok('PORT', `端口 ${port} 可用`);
+      } else {
+        warn('PORT', `端口 ${port} 探测失败: ${err.message}`);
+      }
+      resolve();
+    });
+    setTimeout(() => { conn.destroy(); resolve(); }, 500); // 超时兜底
+  });
+}
+
+// D5: ~/.claude/settings.json 可读（statusLine 依赖）
+function checkClaudeSettings() {
+  const path = join(homedir(), '.claude', 'settings.json');
+  if (!existsSync(path)) {
+    warn('~/.claude/settings.json', `不存在 → E16 statusLine 功能将禁用（启动正常，只是没状态条）。`);
+    return;
+  }
+  try {
+    accessSync(path, constants.R_OK);
+    const content = readFileSync(path, 'utf8');
+    JSON.parse(content); // 校验 JSON
+    ok('~/.claude/settings.json', '可读且格式正确');
+  } catch (err) {
+    warn('~/.claude/settings.json', `存在但读取/解析失败: ${err.message} → E16 将禁用`);
+  }
+}
+
+// D6: 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
+function checkAnthropicEnv() {
+  const envPath = join(HERE, '.env');
+  if (!existsSync(envPath)) {
+    ok('ANTHROPIC_* 环境', '.env 不存在（可选）');
+    return;
+  }
+  try {
+    const raw = readFileSync(envPath, 'utf8');
+    const lines = raw.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
+    const hasAnthropicKeys = lines.some(l => /^ANTHROPIC_[A-Z_]+=/.test(l.trim()));
+    if (hasAnthropicKeys) {
+      warn('ANTHROPIC_* 环境',
+        `.env 含 ANTHROPIC_* 变量 → 启动期会被剥除（ADR-001 细则 3）。\n` +
+        `  模型/网关/凭据只能在启动 shell 里 export，不经 .env 配置（终端等价性）。\n` +
+        `  若 web 端模型列表与终端不一致，检查启动 shell 的 ANTHROPIC_* 环境变量。`);
+    } else {
+      ok('ANTHROPIC_* 环境', '.env 不含 ANTHROPIC_* 变量（正确；网关配置应从 shell export）');
+    }
+  } catch (err) {
+    warn('ANTHROPIC_* 环境', `.env 读取失败: ${err.message}`);
+  }
+}
+
+// D7: 配置文件权限（.env, data/sessions.json, data/init-cache.json）
+function checkConfigPermissions() {
+  if (platform() === 'win32') {
+    ok('配置文件权限', 'Windows 平台跳过检查（不支持 POSIX 权限位）');
+    return;
+  }
+
+  const files = [
+    { path: join(HERE, '.env'), name: '.env' },
+    { path: join(HERE, 'data', 'sessions.json'), name: 'data/sessions.json' },
+    { path: join(HERE, 'data', 'init-cache.json'), name: 'data/init-cache.json' },
+  ];
+
+  const problems = [];
+  for (const { path, name } of files) {
+    if (!existsSync(path)) continue;
+    if (!isOwnerOnly(path)) {
+      problems.push(`${name} 权限过宽（非 0600）`);
+    }
+  }
+
+  if (problems.length > 0) {
+    warn('配置文件权限',
+      problems.join('; ') + '\n  运行 `node scripts/doctor.js --fix` 自动修复为 0600');
+  } else {
+    ok('配置文件权限', '所有配置文件均为 owner-only (0600)');
+  }
+}
+
+// D8: 文档一致性（死链 + 旧文件名漂移）。机械化背书单一事实源纪律：
+// PostToolUse hook 只提示"检查同步"，本项把"检查什么"落为可失败的硬门——CI/提交前跑即拦住漂移。
+function checkDocConsistency() {
+  // 扫描集：根目录门面（README/ARCHITECTURE/CLAUDE/CHANGELOG）+ docs/*.md（规格/ADR/宪法）
+  const docFiles = ['README.md', 'CLAUDE.md', 'CHANGELOG.md']
+    .map(f => join(HERE, f));
+  try {
+    for (const f of readdirSync(join(HERE, 'docs'))) {
+      if (f.endsWith('.md')) docFiles.push(join(HERE, 'docs', f));
+    }
+  } catch { /* 无 docs 目录：只扫根目录文档 */ }
+
+  // 死链：markdown 链接 [text](target) 指向的本地文件须存在（外链/锚点跳过；相对路径按所在文件目录解析）
+  const deadLinks = [];
+  const linkRe = /\[[^\]]*\]\(([^)]+)\)/g;
+  for (const file of docFiles) {
+    let text;
+    try { text = readFileSync(file, 'utf8'); } catch { continue; }
+    const rel = file.slice(HERE.length + 1);
+    let m;
+    while ((m = linkRe.exec(text)) !== null) {
+      const target = m[1].trim().split('#')[0];                       // 去锚点
+      if (!target || /^(https?:|mailto:|#)/.test(target)) continue;   // 外链/纯锚点
+      if (!/\.(md|js|json|html|webmanifest|svg|png)$/i.test(target)) continue; // 仅文件链接
+      if (!existsSync(resolve(dirname(file), target))) deadLinks.push(`${rel} → ${target}`);
+    }
+  }
+
+  // 旧文件名漂移：renamed 文件的活引用（排除 CHANGELOG——其历史叙述合法记录「曾叫什么」）
+  const RENAMED = ['需求文档-v2.md', '斜杠命令普查-2026-06-12.md'];
+  const staleRefs = [];
+  for (const file of docFiles) {
+    if (file.endsWith('CHANGELOG.md')) continue;
+    let text;
+    try { text = readFileSync(file, 'utf8'); } catch { continue; }
+    const rel = file.slice(HERE.length + 1);
+    for (const old of RENAMED) {
+      if (text.includes(old)) staleRefs.push(`${rel} 含旧文件名「${old}」`);
+    }
+  }
+
+  const problems = [...deadLinks.map(d => `死链 ${d}`), ...staleRefs];
+  if (problems.length > 0) {
+    fail('文档一致性', problems.join('\n  ') + '\n  （单一事实源/防漂移纪律）');
+  } else {
+    ok('文档一致性', `${docFiles.length} 份文档：链接可达、无旧文件名残留`);
+  }
+}
+
+// D9: 前端 JS 语法（public/js/*.js）。冒烟测试用 socket.io-client、从不加载浏览器 app.js，故前端脚本
+// 的语法错会潜伏（2026-06-14 实有：app.js 括号失配→浏览器整体不执行→页面死在「未连接」）。
+function checkFrontendSyntax() {
+  const dir = join(HERE, 'public', 'js');
+  let files;
+  try {
+    files = readdirSync(dir).filter(f => f.endsWith('.js'));
+  } catch {
+    warn('前端 JS 语法', 'public/js/ 不存在，跳过');
+    return;
+  }
+  const bad = [];
+  for (const f of files) {
+    try {
+      execSync(`node --check "${join(dir, f)}"`, { stdio: 'pipe' });
+    } catch (err) {
+      const msg = (err.stderr?.toString() || err.message || '').split('\n').slice(0, 3).join(' ').trim();
+      bad.push(`public/js/${f}: ${msg}`);
+    }
+  }
+  if (bad.length > 0) {
+    fail('前端 JS 语法', bad.join('\n  ') + '\n  （浏览器脚本无单测覆盖，语法错会致页面死在「未连接」）');
+  } else {
+    ok('前端 JS 语法', `public/js/ ${files.length} 个文件语法通过`);
+  }
+}
+
+// D10: 测试覆盖率门槛（npm test --experimental-test-coverage 行覆盖率 ≥ 50%）
+function checkCoverageThreshold() {
+  try {
+    execSync('node scripts/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 });
+    ok('测试覆盖率', '行覆盖率 ≥ 50%');
+  } catch (err) {
+    const msg = (err.stderr?.toString() || err.message || '').split('\n').filter(Boolean).slice(-3).join(' | ');
+    warn('测试覆盖率', `覆盖率检查未通过: ${msg || '超时或无法运行'}`);
+  }
+}
+
+// ──────────────────────── 主流程 ────────────────────────
+
+// 解析命令行 --env 和 --fix
+const envArg = process.argv.find(a => a.startsWith('--env='));
+const shouldFix = process.argv.includes('--fix');
+const envFile = envArg ? envArg.split('=')[1] : join(HERE, '.env');
+if (existsSync(envFile)) {
+  config({ path: envFile });
+  console.log(`已加载: ${envFile}`);
+} else if (envArg) {
+  console.error(`错误: 指定的 .env 文件不存在: ${envFile}`);
+  process.exit(1);
+}
+
+// 执行 10 项检查（D4 端口检查是 async，需 await）
+(async () => {
+  checkAuthToken();
+  checkClaudeBin();
+  checkWorkDir();
+  await checkPort();
+  checkClaudeSettings();
+  checkAnthropicEnv();
+  checkConfigPermissions();
+  checkDocConsistency();
+  checkFrontendSyntax();
+  checkCoverageThreshold();
+
+  // --fix 选项：自动修复权限
+  if (shouldFix) {
+    console.log('\n=== 执行权限修复 ===\n');
+    fixConfigFiles();
+  }
+
+  print();
+})();
+
+// 权限修复函数
+function fixConfigFiles() {
+  if (platform() === 'win32') {
+    console.log('Windows 平台不支持权限修复\n');
+    return;
+  }
+
+  const files = [
+    join(HERE, '.env'),
+    join(HERE, 'data', 'sessions.json'),
+    join(HERE, 'data', 'init-cache.json'),
+  ];
+
+  let fixed = 0;
+  let skipped = 0;
+  for (const path of files) {
+    if (!existsSync(path)) {
+      skipped++;
+      continue;
+    }
+    if (fixPermissions(path)) {
+      console.log(`✓ 修复 ${path} → 0600`);
+      fixed++;
+    } else {
+      console.log(`✗ 修复失败: ${path}`);
+    }
+  }
+
+  console.log(`\n修复完成: ${fixed} 个文件，${skipped} 个跳过（不存在）\n`);
+}

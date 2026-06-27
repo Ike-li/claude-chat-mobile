@@ -1,0 +1,1035 @@
+import express from 'express';
+import { createServer } from 'node:http';
+import { Server } from 'socket.io';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const PORT = process.env.PORT || 3100;
+const app = express();
+const httpServer = createServer(app);
+const io = new Server(httpServer, {
+  cors: { origin: '*' }
+});
+
+// Calculate asset version finger-print to bypass caching (matching server.js)
+const SELF_JS_DIR = join(HERE, '../public', 'js');
+const SELF_JS_FILES = ['app.js', 'logic.js', 'tw-config.js', 'sw-cleanup.js'];
+function computeAssetVersion() {
+  const h = createHash('sha256');
+  for (const f of SELF_JS_FILES) {
+    try {
+      h.update(readFileSync(join(SELF_JS_DIR, f)));
+    } catch {
+      // ignore
+    }
+  }
+  return h.digest('hex').slice(0, 8);
+}
+const ASSET_VERSION = computeAssetVersion();
+
+// Custom Express Routes
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  next();
+});
+
+app.get(['/', '/index.html'], (_req, res) => {
+  try {
+    const html = readFileSync(join(HERE, '../public/index.html'), 'utf8')
+      .replace(/(\/js\/[\w-]+\.js)(?!\?)/g, `$1?v=${ASSET_VERSION}`)
+      .replace('</head>', `<script>window.SERVER_CF_ACCESS_ENABLED = false;</script></head>`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.type('html').send(html);
+  } catch (err) {
+    res.status(500).send('index load error: ' + err.message);
+  }
+});
+
+app.get('/js/app.js', (_req, res) => {
+  try {
+    const js = readFileSync(join(SELF_JS_DIR, 'app.js'), 'utf8')
+      .replace(/from\s+['"]\.\/logic\.js['"]/g, `from './logic.js?v=${ASSET_VERSION}'`);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('application/javascript').send(js);
+  } catch (err) {
+    res.status(500).send('app.js load error: ' + err.message);
+  }
+});
+
+app.use(express.static(join(HERE, '../public'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
+    else if (filePath.startsWith(SELF_JS_DIR) && filePath.endsWith('.js')) res.setHeader('Cache-Control', 'no-cache');
+  }
+}));
+
+// Mock Database States
+let viewingInstanceId = 'inst_1';
+let permissionMode = 'default';
+let effortLevel = null;
+let activeModel = 'claude-3-5-sonnet';
+
+const mockInstances = [
+  {
+    instanceId: 'inst_1',
+    cwd: '/Users/you/code/claude-chat-mobile',
+    sessionId: 'mock-session-visual-test',
+    title: 'Visual Sandbox (Main)',
+    state: 'idle',
+    permissionMode: 'default',
+    effort: null,
+    model: 'claude-3-5-sonnet'
+  }
+];
+
+let pendingPermission = null;
+let pendingQuestion = null;
+let activeEpoch = 'mock-epoch-init';
+
+// Helper to delay executions to simulate streaming behavior
+const delay = ms => new Promise(res => setTimeout(res, ms));
+
+io.on('connection', socket => {
+  console.log(`[mock-conn] Socket connected: ${socket.id}`);
+
+  // Auto-approve socket for standard testing (simulates local trust)
+  socket.deviceApproved = true;
+
+  // Replay initial hydration events
+  const emitHydration = () => {
+    // 1. init
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'init', payload: {
+        model: activeModel,
+        cwd: mockInstances[0].cwd,
+        claudeVersion: '0.1.0-mock',
+        mcpServers: [],
+        skillsCount: 7,
+        permissionMode: permissionMode,
+        slashCommands: [
+          { name: 'help', description: 'Show help guide' },
+          { name: 'model', description: 'Switch active model' },
+          { name: 'effort', description: 'Adjust Claude thinking effort' }
+        ]
+      }
+    });
+
+    // 2. models
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'models', payload: {
+        models: [
+          { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] },
+          { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
+          { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },
+          { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)' }
+        ]
+      }
+    });
+
+    // 3. permission_mode
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'permission_mode', payload: { mode: permissionMode }
+    });
+
+    // 4. effort_mode
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'effort_mode', payload: { level: effortLevel }
+    });
+
+    // 5. instances
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: {
+        viewingInstanceId,
+        viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+        dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+        instances: mockInstances
+      }
+    });
+
+    // 6. status_line initial (structured format, ADR-011)
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'status_line', payload: {
+        model: 'claude-3-5-sonnet',
+        project: 'claude-chat-mobile',
+        cwd: '/Users/you/code/claude-chat-mobile',
+        git: { branch: 'main', changed: 0, ahead: 0, behind: 0 },
+        ctx: { tokens: 12500, cacheHitPct: 5 },
+        cost: 0.00
+      }
+    });
+  };
+
+  emitHydration();
+
+  // Handle setting permission mode
+  socket.on('user:setPermissionMode', payload => {
+    const { mode, instanceId } = payload || {};
+    console.log(`[mock] Set permission mode: ${mode} for ${instanceId}`);
+    if (mode) {
+      permissionMode = mode;
+      const inst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
+      if (inst) inst.permissionMode = mode;
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, instanceId: instanceId || viewingInstanceId, ts: Date.now(),
+        type: 'permission_mode', payload: { mode }
+      });
+      // Broadcast instances update
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: {
+          viewingInstanceId,
+          viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          instances: mockInstances
+        }
+      });
+    }
+  });
+
+  // Handle setting thinking effort
+  socket.on('user:setEffort', payload => {
+    const { level, instanceId } = payload || {};
+    console.log(`[mock] Set thinking effort: ${level} for ${instanceId}`);
+    effortLevel = level;
+    const inst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
+    if (inst) inst.effort = level;
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, instanceId: instanceId || viewingInstanceId, ts: Date.now(),
+      type: 'effort_mode', payload: { level }
+    });
+    // Broadcast instances update
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: {
+        viewingInstanceId,
+        viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+        dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+        instances: mockInstances
+      }
+    });
+  });
+
+  // Handle active viewing tab switch
+  socket.on('user:setViewing', payload => {
+    const { instanceId } = payload || {};
+    console.log(`[mock] Switch viewing tab to: ${instanceId}`);
+    if (instanceId && mockInstances.some(i => i.instanceId === instanceId)) {
+      viewingInstanceId = instanceId;
+      const inst = mockInstances.find(i => i.instanceId === instanceId);
+      if (inst) {
+        permissionMode = inst.permissionMode;
+        effortLevel = inst.effort;
+        activeModel = inst.model;
+      }
+      // Re-broadcast instances to all
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: {
+          viewingInstanceId,
+          viewingCwd: inst?.cwd || mockInstances[0].cwd,
+          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          instances: mockInstances
+        }
+      });
+    }
+  });
+
+  // Handle Tab close
+  socket.on('session:close', payload => {
+    const { instanceId } = payload || {};
+    console.log(`[mock] Close Tab: ${instanceId}`);
+    const idx = mockInstances.findIndex(i => i.instanceId === instanceId);
+    if (idx !== -1 && mockInstances.length > 1) {
+      mockInstances.splice(idx, 1);
+      if (viewingInstanceId === instanceId) {
+        viewingInstanceId = mockInstances[0].instanceId;
+      }
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: {
+          viewingInstanceId,
+          viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          instances: mockInstances
+        }
+      });
+    }
+  });
+
+  // 新会话：清查看 tab（viewingInstanceId=null）→ 前端进空首页。模拟服务端 session:new（不 dispose 后台实例）。
+  // 配合 test:freshbusy 复现「新会话首发乐观 busy 被懒开广播冲掉」的回归场景。
+  socket.on('session:new', () => {
+    console.log('[mock] session:new → 进空首页（viewingInstanceId=null）');
+    viewingInstanceId = null;
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: {
+        viewingInstanceId: null,
+        viewingCwd: mockInstances[0].cwd,
+        dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+        instances: mockInstances,
+        defaultPermissionMode: 'default',
+        defaultEffort: null
+      }
+    });
+  });
+
+  // Handle session list request for sidebar directory browsing
+  socket.on('session:list', (payload, callback) => {
+    const { cwd } = payload || {};
+    console.log(`[mock] session:list for cwd: ${cwd}`);
+    if (cwd === '/Users/you/code/claude-chat-mobile') {
+      if (typeof callback === 'function') {
+        callback({
+          currentSessionId: 'mock-session-visual-test',
+          sessions: [
+            {
+              id: 'mock-session-visual-test',
+              title: 'Visual Sandbox (Main)',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: Date.now() - 10000,
+              entrypoint: 'sdk-ts'
+            }
+          ]
+        });
+      }
+    } else if (cwd === '/Users/you/code/another-react-project') {
+      if (typeof callback === 'function') {
+        callback({
+          currentSessionId: 'mock-session-another',
+          sessions: [
+            {
+              id: 'mock-session-another',
+              title: 'Another App Concurrency',
+              model: 'claude-3-5-haiku',
+              lastUsedAt: Date.now(),
+              entrypoint: 'sdk-ts'
+            }
+          ]
+        });
+      }
+    } else {
+      if (typeof callback === 'function') {
+        callback({ sessions: [] });
+      }
+    }
+  });
+
+  // Handle sync:since for switching workspace viewing instances and historical message hydration
+  socket.on('sync:since', (payload, callback) => {
+    const { instanceId, sessionId } = payload || {};
+    console.log(`[mock] sync:since received for instanceId=${instanceId}, sessionId=${sessionId}`);
+    if (instanceId === 'inst_2') {
+      // Replay some historical message events for inst_2
+      socket.emit('agent:event', {
+        seq: 1, epoch: 'mock-epoch-another', sessionId: 'mock-session-another', instanceId: 'inst_2', ts: Date.now(),
+        type: 'user_message', payload: { text: 'Show me status please' }
+      });
+      socket.emit('agent:event', {
+        seq: 2, epoch: 'mock-epoch-another', sessionId: 'mock-session-another', instanceId: 'inst_2', ts: Date.now(),
+        type: 'text_delta', payload: { messageId: 'msg_another_1', text: 'This is the concurrent session "Another App Concurrency" historical message!' }
+      });
+      socket.emit('agent:event', {
+        seq: 3, epoch: 'mock-epoch-another', sessionId: 'mock-session-another', instanceId: 'inst_2', ts: Date.now(),
+        type: 'result', payload: { messageId: 'msg_another_1', durationMs: 1000, costUsd: 0.0005, isError: false, models: ['claude-3-5-haiku'] }
+      });
+      if (typeof callback === 'function') {
+        callback({ ok: true, replayed: 3 });
+      }
+    } else if (instanceId === 'inst_1') {
+      if (typeof callback === 'function') {
+        callback({ ok: true, replayed: 0 }); // Fallback to history or empty
+      }
+    } else {
+      if (typeof callback === 'function') {
+        callback({ ok: true, replayed: 0 });
+      }
+    }
+  });
+
+  // Handle custom trigger command inputs
+  socket.on('user:message', async payload => {
+    const text = typeof payload === 'string' ? payload : payload?.text;
+    if (typeof text !== 'string') return;
+    const cmd = text.trim();
+
+    console.log(`[mock] User message received: "${cmd}"`);
+
+    // Always echo user message back
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'user_message', payload: { text: cmd }
+    });
+
+    // Intercept test commands
+    if (cmd.startsWith('test:')) {
+      activeEpoch = 'mock-epoch-' + cmd.replace(/[^a-zA-Z0-9]/g, '_') + '-' + Date.now();
+      const activeInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+
+      if (cmd === 'test:stream') {
+        console.log('[mock] Starting test:stream sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        // Send thinking indicator
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_stream_1', text: '<thinking>Analyzing visual test parameters...\nEmitting mock response chunks...\n</thinking>' }
+        });
+        await delay(800);
+
+        // Stream text chunks
+        const responseText = "Hello! This is a **fully visual-oriented** mock response stream.\n\n" +
+          "Here is what we can test:\n" +
+          "1. **Markdown Formatting**: Bold, lists, code highlighting.\n" +
+          "2. **Interactive Controls**: Click buttons and sliders.\n" +
+          "3. **Animations**: Loading and transitions.\n\n" +
+          "```javascript\n" +
+          "// Code block rendering test\n" +
+          "const tester = 'Antigravity';\n" +
+          "console.log(`E2E Testing by ${tester}`);\n" +
+          "```\n" +
+          "Try running `test:tool` or `test:permission` next!";
+        
+        // Chunk and stream
+        const words = responseText.split(' ');
+        let currentText = '';
+        for (let i = 0; i < words.length; i++) {
+          const chunk = words[i] + ' ';
+          currentText += chunk;
+          socket.emit('agent:event', {
+            seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'text_delta', payload: { messageId: 'msg_stream_1', text: chunk }
+          });
+          await delay(60); // fast visual streaming
+        }
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_stream_1', durationMs: 2500, costUsd: 0.0015, isError: false, models: [activeModel] }
+        });
+
+      } else if (cmd === 'test:freshbusy') {
+        // 回归（shouldRestoreOptimisticBusy）：新会话首发的乐观 busy 不应被「懒开 → 广播 instances →
+        // 前端 bindView→clearView(setBusy(false))」冲掉。前置 session:new 已使前端 viewingInstanceId=null
+        // （空首页），故 send() 这条消息时置了 _pendingFirstSend。
+        console.log('[mock] test:freshbusy — 模拟新会话首发懒开');
+        await delay(150);
+        // 懒开：新建 FRESH 实例（sessionId=null，区别于 resume），切 viewing 并广播 instances
+        // —— 这一步触发前端 bindView→clearView 的 setBusy(false)，是 bug 现场。
+        const freshId = 'inst_fresh';
+        if (!mockInstances.some(i => i.instanceId === freshId)) {
+          mockInstances.push({ instanceId: freshId, cwd: mockInstances[0].cwd, sessionId: null, title: null, state: 'busy', permissionMode: 'default', effort: null, model: activeModel });
+        }
+        viewingInstanceId = freshId;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        // 关键窗口：模拟 SDK 启动慢，此后约 1.1s 不发任何 delta。E2E 在此窗口断言 pill 仍可见
+        // （修复前已被 clearView 冲掉 → fail；修复后由 setInstances 补回 → pass）。
+        await delay(1100);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: null, instanceId: freshId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_fresh_1', text: '新会话首发回复。' }
+        });
+        await delay(100);
+        const fInst = mockInstances.find(i => i.instanceId === freshId);
+        if (fInst) fInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 100, epoch: activeEpoch, sessionId: null, instanceId: freshId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
+        });
+
+      } else if (cmd === 'test:tool') {
+        console.log('[mock] Starting test:tool sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_tool_1', text: '<thinking>Refactoring duplicate date helper utilities...</thinking>' }
+        });
+        await delay(500);
+
+        // Tool 1: Read File
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_read', name: 'read_file', inputSummary: 'utils/date.js' }
+        });
+        await delay(1000);
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_read', ok: true, outputSummary: 'Successfully read 124 lines from utils/date.js' }
+        });
+
+        // Text delta
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_tool_1', text: "I have read `utils/date.js` and identified duplicate formatting helpers. Let's merge them now." }
+        });
+        await delay(500);
+
+        // Tool 2: Edit File
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_edit', name: 'edit_file', inputSummary: 'utils/date.js' }
+        });
+        await delay(1200);
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_edit', ok: true, outputSummary: 'Successfully refactored duplicated blocks in utils/date.js' }
+        });
+
+        // Tool 3: Run Command
+        socket.emit('agent:event', {
+          seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_bash', name: 'run_command', inputSummary: 'npm test' }
+        });
+        await delay(1200);
+        socket.emit('agent:event', {
+          seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_bash', ok: true, outputSummary: '✓ All 5 visual regression unit tests passed successfully!' }
+        });
+
+        socket.emit('agent:event', {
+          seq: 9, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_tool_1', text: "\n\nAll tools executed cleanly. The test suite has confirmed the date merger was a 100% success!" }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 10, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_tool_1', durationMs: 4400, costUsd: 0.0035, isError: false, models: [activeModel] }
+        });
+
+      } else if (cmd === 'test:permission') {
+        console.log('[mock] Starting test:permission sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_perm_1', text: '<thinking>Preparing to push local test commits to the remote origin server...</thinking>' }
+        });
+        await delay(500);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_git_push', name: 'run_command', inputSummary: 'git push origin main' }
+        });
+        await delay(500);
+
+        // Force permission state
+        activeInst.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        pendingPermission = {
+          requestId: 'req_perm_git_push',
+          toolUseId: 't_git_push',
+          messageId: 'msg_perm_1',
+          name: 'run_command',
+          input: 'git push origin main',
+          cwd: activeInst.cwd
+        };
+
+        // Emit permission request popup trigger
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'permission_request', payload: {
+            requestId: pendingPermission.requestId,
+            name: pendingPermission.name,
+            input: pendingPermission.input,
+            cwd: pendingPermission.cwd
+          }
+        });
+
+      } else if (cmd === 'test:exitplan') {
+        // 回归（TC-15）：plan 档下模型调 ExitPlanMode；批准后权限档应从 plan 切到 default，
+        // 手机端权限档图标须跟随。真 SDK 不发 setMode suggestion，后端对 ExitPlanMode 兜底合成
+        // setMode default 并广播 permission_mode（见 agent.js resolvePermission）；mock 复刻该结果。
+        console.log('[mock] test:exitplan — plan 模式 + ExitPlanMode 审批');
+        activeInst.permissionMode = 'plan';
+        activeInst.state = 'permission';
+        // 先把当前档置为 plan（前端 pill 显「计划模式」）
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'permission_mode', payload: { mode: 'plan' }
+        });
+        pendingPermission = {
+          requestId: 'req_exit_plan', toolUseId: 't_exit_plan', messageId: 'msg_exitplan_1',
+          name: 'ExitPlanMode', input: '## 计划\n1. 实现 X\n2. 测试 Y', cwd: activeInst.cwd,
+          setMode: 'default'   // 批准后切此档（复刻后端对 ExitPlanMode 兜底合成 setMode default + 广播）
+        };
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
+        });
+
+      } else if (cmd === 'test:question') {
+        console.log('[mock] Starting test:question sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_quest_1', text: '<thinking>Claude needs clarifying requirements before proceeding...</thinking>' }
+        });
+        await delay(500);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_ask_choice', name: 'AskUserQuestion', inputSummary: 'Choose a publish channel' }
+        });
+        await delay(500);
+
+        activeInst.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        pendingQuestion = {
+          requestId: 'req_quest_choice#0',
+          toolUseId: 't_ask_choice',
+          messageId: 'msg_quest_1',
+          options: ['main (Stable Production)', 'dev (Bleeding-Edge Integration)', 'release-v1.0 (LTS)']
+        };
+
+        // Emit multi-choice question
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'question', payload: {
+            requestId: pendingQuestion.requestId,
+            text: 'We are ready to tag and deploy this mobile dashboard app. Which branch should be our target publish destination?',
+            options: pendingQuestion.options
+          }
+        });
+
+      } else if (cmd === 'test:statusline') {
+        console.log('[mock] Updating status_line');
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'status_line', payload: {
+            ts: Date.now(),
+            model: 'claude-3-5-sonnet',
+            project: 'claude-chat-mobile',
+            cwd: '/Users/you/code/claude-chat-mobile',
+            git: { branch: 'feature/visual-testing', changed: 3, ahead: 2, behind: 0, insertions: 120, deletions: 45, repo: 'Ike-li/claude-chat-mobile' },
+            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, w: 22000, r: 21000 },
+            cost: 0.37,
+            duration: { wallMs: 2500, apiMs: 1200 },
+            version: '2.1.178'
+          }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Simulated Terminal StatusLine updated successfully above!' }
+        });
+
+        await delay(500);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'Simulated Terminal StatusLine updated successfully above!' }
+        });
+
+      } else if (cmd === 'test:tab') {
+        console.log('[mock] Simulating multiple tab concurrency');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another',
+            title: 'Another App Concurrency',
+            state: 'idle',
+            permissionMode: 'plan',
+            effort: 'medium',
+            model: 'claude-3-5-haiku'
+          });
+        }
+
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Concurrency Mode Triggered! A second workspace tab "Another App Concurrency" is now live. Try clicking the tabs at the top!' }
+        });
+
+        await delay(500);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'Concurrency Mode Triggered! A second workspace tab is now live.' }
+        });
+
+      } else if (cmd === 'test:permCrossTab') {
+        // 跨 tab 审批清弹窗回归（坐实诊断「安全」结论的前端支柱）：viewing=inst_1 弹审批，
+        // 同时备好后台 inst_2（不切）。配 test:switchAway 切走 → 前端 bindView→clearView 应清弹窗。
+        console.log('[mock] test:permCrossTab — inst_1 弹审批 + 备好后台 inst_2');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2', cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another', title: 'Another App Concurrency',
+            state: 'busy', permissionMode: 'plan', effort: 'medium', model: 'claude-3-5-haiku'
+          });
+        }
+        viewingInstanceId = 'inst_1';
+        const inst1ct = mockInstances.find(i => i.instanceId === 'inst_1');
+        inst1ct.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst1ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        pendingPermission = { requestId: 'req_perm_cross_tab', toolUseId: 't_cross', name: 'run_command', input: 'git push origin main', cwd: inst1ct.cwd };
+        // 独立 epoch：前端见新 epoch 即重置 seq 去重基线，避免被前序 TC 累积的 lastSeq 误吞
+        socket.emit('agent:event', {
+          seq: 1, epoch: 'mock-epoch-crosstab', sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
+          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
+        });
+
+        // 弹窗渲染后自动「切到 inst_2」（viewing 变化）→ 前端 bindView → clearView 应清掉 inst_1 的审批弹窗。
+        // 内部自动切，避免 runner 在弹窗打开时再走 input+btnSend——那样点击坐标会穿透到 sheet 上的审批按钮、误发回答。
+        await delay(1500);
+        viewingInstanceId = 'inst_2';
+        const inst2ct = mockInstances.find(i => i.instanceId === 'inst_2');
+        console.log('[mock] test:permCrossTab — 自动切 viewing → inst_2（应触发前端 clearView 清弹窗）');
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+      } else if (cmd === 'test:tofu') {
+        console.log('[mock] Forcing unapproved TOFU status');
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
+        });
+
+        // Set timeout to auto-approve and restore state after 8 seconds
+        setTimeout(() => {
+          console.log('[mock] Auto-approving TOFU screen to return to chat state');
+          socket.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'device_status', payload: { status: 'approved', deviceId: 'unauthorized-fingerprint-999' }
+          });
+          emitHydration();
+        }, 8000);
+
+      } else if (cmd === 'test:empty') {
+        console.log('[mock] Reset to empty start screen state');
+        // Clear instances and set viewingInstanceId to null
+        mockInstances.length = 0;
+        viewingInstanceId = null;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId: null,
+            viewingCwd: '/Users/you/code/claude-chat-mobile',
+            dirs: ['/Users/you/code/claude-chat-mobile'],
+            instances: [],
+            defaultPermissionMode: 'default',
+            defaultEffort: null
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: null, instanceId: null, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Empty start screen activated' }
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: null, ts: Date.now(),
+          type: 'result', payload: { text: 'Empty start screen activated' }
+        });
+
+      } else if (cmd === 'test:devicerequests') {
+        console.log('[mock] Emitting pending device requests with busy cycle');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        await delay(200);
+        
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'pending_devices', payload: {
+            devices: [
+              { deviceId: 'aa-bb-cc-dd-iphone-15-pro', ip: '192.168.1.100', userAgent: 'Mozilla/5.0 iPhone', ts: Date.now() - 30000 },
+              { deviceId: 'ee-ff-00-11-ipad-air-m2', ip: '192.168.1.101', userAgent: 'Mozilla/5.0 iPad', ts: Date.now() - 60000 }
+            ]
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] 2 pending devices emitted for visual testing' }
+        });
+        
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'Device requests emitted' }
+        });
+
+      } else if (cmd === 'test:stream-long') {
+        console.log('[mock] Starting long streaming sequence for interrupt test');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_long_1', text: '<thinking>Starting a long-running analysis task...</thinking>' }
+        });
+        await delay(500);
+
+        // Stream slowly — gives time for interrupt
+        for (let i = 0; i < 20; i++) {
+          socket.emit('agent:event', {
+            seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'text_delta', payload: { messageId: 'msg_long_1', text: `Chunk ${i + 1} of analysis... ` }
+          });
+          await delay(800); // slow enough for human to see, fast enough for test
+        }
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_long_1', durationMs: 16000, costUsd: 0.012, isError: false, models: [activeModel] }
+        });
+
+      } else if (cmd === 'test:restore') {
+        console.log('[mock] Restoring normal chat state from empty');
+        if (mockInstances.length === 0) {
+          mockInstances.push({
+            instanceId: 'inst_1',
+            cwd: '/Users/you/code/claude-chat-mobile',
+            sessionId: 'mock-session-visual-test',
+            title: 'Visual Sandbox (Main)',
+            state: 'idle',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-sonnet'
+          });
+          viewingInstanceId = 'inst_1';
+        }
+        emitHydration();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Chat state restored' }
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'Chat state restored' }
+        });
+      }
+    }
+  });
+
+  // Handle user permission decision
+  socket.on('user:approve', async payload => {
+    const { requestId, decision, alwaysThisSession, instanceId } = payload || {};
+    console.log(`[mock] User approve received: requestId=${requestId}, decision=${decision}, always=${alwaysThisSession}`);
+
+    if (pendingPermission && pendingPermission.requestId === requestId) {
+      const activeInst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
+      activeInst.state = 'busy';
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+      });
+
+      // Broadcast resolved
+      io.emit('agent:event', {
+        seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'request_resolved', payload: { requestId, kind: 'permission', outcome: decision }
+      });
+
+      if (decision === 'allow') {
+        // 修复后的后端行为：批准 ExitPlanMode 等含 setMode 的请求 → 切权限档并广播 permission_mode，
+        // 使手机端权限档图标跟随（TC-15 回归的核心断言点）。
+        if (pendingPermission.setMode) {
+          const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+          if (inst) inst.permissionMode = pendingPermission.setMode;
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'permission_mode', payload: { mode: pendingPermission.setMode }
+          });
+        }
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: true, outputSummary: 'git push success: branch main -> origin' }
+        });
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: '\n\n✓ Successfully pushed latest codebase additions!' }
+        });
+      } else {
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: false, outputSummary: 'user denied command execution', denyKind: 'denied' }
+        });
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: '\n\n🚫 Git push command was rejected by user. Aborted.' }
+        });
+      }
+
+      await delay(500);
+      activeInst.state = 'idle';
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+      });
+
+      socket.emit('agent:event', {
+        seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 1200, costUsd: 0.001, isError: false, models: [activeModel] }
+      });
+
+      pendingPermission = null;
+    }
+  });
+
+  // Handle user question choice selection
+  socket.on('user:answer', async payload => {
+    const { requestId, optionIndex, instanceId } = payload || {};
+    console.log(`[mock] User answer received: requestId=${requestId}, choice=${optionIndex}`);
+
+    if (pendingQuestion && pendingQuestion.requestId === requestId) {
+      const activeInst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
+      activeInst.state = 'busy';
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+      });
+
+      // Broadcast resolved
+      io.emit('agent:event', {
+        seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'request_resolved', payload: { requestId, kind: 'question', outcome: `option ${optionIndex}` }
+      });
+
+      const selectedOption = pendingQuestion.options[optionIndex];
+
+      socket.emit('agent:event', {
+        seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'tool_result', payload: { toolUseId: pendingQuestion.toolUseId, ok: true, outputSummary: `User selected: ${selectedOption}`, denyKind: 'answered' }
+      });
+
+      socket.emit('agent:event', {
+        seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'text_delta', payload: { messageId: pendingQuestion.messageId, text: `\n\nUnderstood. We will target the **${selectedOption}** branch. Beginning compilation...` }
+      });
+
+      await delay(800);
+      activeInst.state = 'idle';
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+      });
+
+      socket.emit('agent:event', {
+        seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'result', payload: { messageId: pendingQuestion.messageId, durationMs: 1800, costUsd: 0.0018, isError: false, models: [activeModel] }
+      });
+
+      pendingQuestion = null;
+    }
+  });
+
+  // Handle user interrupt (stop button)
+  socket.on('user:interrupt', payload => {
+    const { instanceId } = payload || {};
+    console.log(`[mock] User interrupt received for instance ${instanceId || viewingInstanceId}`);
+    const activeInst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
+    if (activeInst) {
+      activeInst.state = 'idle';
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+      });
+    }
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, instanceId: instanceId || viewingInstanceId, ts: Date.now(),
+      type: 'system', payload: { message: '已中断', kind: 'interrupted' }
+    });
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`[mock-conn] Socket disconnected: ${socket.id}`);
+  });
+});
+
+httpServer.listen(PORT, '127.0.0.1', () => {
+  console.log(`\n======================================================`);
+  console.log(`🚀 Antigravity Visual Mock Server is running on port ${PORT}`);
+  console.log(`📍 Web UI URL: http://127.0.0.1:${PORT}`);
+  console.log(`🛠️ To execute visual tests, open this URL in your browser!`);
+  console.log(`======================================================\n`);
+});

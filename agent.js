@@ -1,0 +1,681 @@
+// agent.js —— claude 会话桥（ADR-001/002/003）：
+// 每个会话 = 一个长驻 SDK query（streaming input 模式，interrupt/canUseTool 可用），
+// SDK 消息 → agent:event 统一信封（契约见 docs/event-contract.md），seq 单调 + 环形缓冲。
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import * as interactionLog from './interaction-log.js';
+import { sanitize } from './sanitizer.js';
+
+const BUFFER_CAP = 500;       // 环形缓冲条数（见 event-contract.md）
+const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要截断；permission_request 永不截断（4a）
+
+// epoch：每个 AgentSession 实例一个跨重启唯一标识。基于 wall-clock + 进程内计数，
+// 保证服务重启后新实例的 epoch 严格大于旧实例 → 客户端据此区分"新流"并重置 seq 去重基线。
+let instanceCounter = 0;
+function nextEpoch() {
+  return `${Date.now()}.${++instanceCounter}`;
+}
+
+// 模型展示名「原样透传」（机主 2026-06-15 决定）：不再维护项目自己的友好名映射表——
+// web 端 select 直接显示 SDK supportedModels() 返回的 displayName/value、init.model 用裸名。
+// 理由：手维护的映射会跑偏（曾把裸 claude-opus-4-8 误标「(1M context)」与真 [1m] 变体撞车成双 Opus）；
+// 模型「值」本就经 settingSources 与终端 /model 同步，显示层不应再叠加项目默认。终端友好名不再复刻。
+
+export class AgentSession {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, onEvent, onSessionId, onExit, onUsage, historicalCostUsd }) {
+    // 台阶3（ADR-010）：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
+    // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
+    this.instanceId = instanceId;
+    this.cwd = cwd;
+    this.claudeBin = claudeBin;
+    this.idleTimeoutMs = idleTimeoutMs;
+    this.onEvent = onEvent;           // (envelope) => void，由 server 广播
+    this.onSessionId = onSessionId;   // (sessionId, firstMessage, model) => void，登记 sessions.json
+    this.onExit = onExit;             // () => void，进程意外退出/挂死自杀时通知 server 置空
+    this.onUsage = onUsage;           // () => void，assistant message（含工具调用间）更新 usage 后触发——驱动 statusline 实时刷 ctx；不进事件流、不占 seq/buffer
+
+    this.sessionId = resumeId || null;
+    this.resumeId = resumeId || null;   // F4：resume 失败检测基准
+    this.sawInit = false;               // F4：init 事件到达置 true；未到即结束 → resume 失败
+    this.resumeFailed = false;          // F4：onExit 时通知 server 清当前会话，打破死循环
+    this.epoch = nextEpoch();
+    this.seq = 0;
+    this.buffer = [];
+    this.bufferTrimmed = false;
+    this.pendingTurns = 0;             // 在途轮数，仅由 send(+1) 与 result(-1) 改写
+    this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
+    this.pendingQuestions = new Map();   // toolUseID → { resolve, questions, answers, remaining }
+    this.denyKinds = new Map();          // toolUseID → 'answered'|'denied'|'cancelled'：deny+message 通道的真实语义，供前端区分 ☑️/🚫（is_error 不足以分辨）
+    this.permSeq = 0;
+    this.lastActivity = Date.now();
+    this.currentMessageId = null;
+    this.sawTextDelta = false;
+    this.firstMessage = null;
+    this.disposed = false;
+    this.assistantResponseBuffer = '';
+    this.terminating = false;
+    // F1：defaultModel = 启动时配置的模型（会话原模型，sessions.json 指针——ADR-005 修订后唯一来源）。
+    // 消息不带 model（"默认"）时 target 回退到它，而非 SDK 裸默认——否则空选择会把
+    // 配置的网关模型 setModel(undefined) 重置掉（实测：init 从 mimo 变成 opus 并报错）。
+    this.defaultModel = model || undefined;
+    this.activeModel = model || undefined;   // 当前生效模型，差分决定是否调 setModel
+    // A5：init 报告的真实运行模型名，仅供交互日志显示真实生效模型（不入 activeModel——否则 fresh 会话
+    // 下条空发会 target=undefined≠activeModel → setModel(undefined) 把网关模型重置，即 F1 事故）
+    this.reportedModel = null;
+    // ADR-012：当前权限档（default/plan/acceptEdits/bypassPermissions/dontAsk），可运行时切；差分决定是否调 setPermissionMode
+    // dontAsk = 非交互严格档：白名单外终端层直接 deny、不走 canUseTool（手机不弹窗），sdkPermissionMode 原样透传（不映射）
+    this.permissionMode = permissionMode || 'default';
+    // ADR-015：思考强度档（spawn 时注入 --effort），null=模型默认不传。运行时不可改——
+    // SDK 无 effort 控制请求，切档由 server 置换实例（dispose + 下条消息懒重生 resume）
+    this.effort = effort || null;
+
+    // E16 statusline 数据源（server 构造脚本 stdin 时只读，不进事件契约）：
+    this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径，见 ADR-011）
+    this.historicalCostUsd = historicalCostUsd || 0; // 以前各次会话连接/恢复历史的累计成本
+    this.totalCostUsd = 0;        // result.total_cost_usd 最新值（SDK 已是会话累计，勿 +=）
+    this.totalDurationMs = 0;     // += result.duration_ms（活跃轮次累计，非墙钟——实例懒重生不暴露给用户）
+    this.totalApiDurationMs = 0;  // += result.duration_api_ms（增量 = 脚本 cache-TTL 段的活动信号）
+
+    this.queue = [];
+    this.notifyInput = null;
+    this.inputEnded = false;
+
+    // B1：流式 delta 批量缓冲（20ms 时间窗 + 2048 字节阈值）
+    this._textBuf = '';
+    this._textTimer = null;
+    this._thinkBuf = '';
+    this._thinkTimer = null;
+  }
+
+  // ---- streaming input：用户消息队列 → AsyncIterable<SDKUserMessage> ----
+  async *inputStream() {
+    while (!this.inputEnded) {
+      while (this.queue.length > 0) {
+        const item = this.queue.shift();
+        yield {
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'text', text: item.text }] },
+          parent_tool_use_id: null,
+          session_id: this.sessionId || ''
+          // 注：SDKUserMessage 上的 model 字段被 CLI 完全忽略（F1 根因）；模型切换走 q.setModel()
+        };
+      }
+      if (this.inputEnded) break;
+      await new Promise(resolve => { this.notifyInput = resolve; });
+      this.notifyInput = null;
+    }
+  }
+
+  start() {
+    this.abort = new AbortController();
+    const q = query({
+      prompt: this.inputStream(),
+      options: {
+        cwd: this.cwd,
+        pathToClaudeCodeExecutable: this.claudeBin, // E9：用本机 claude，不用 SDK 捆绑副本
+        model: this.activeModel || undefined,
+        resume: this.sessionId || undefined,
+        abortController: this.abort,
+        includePartialMessages: true,                        // E4 流式
+        extraArgs: this.effort ? { effort: this.effort } : {}, // ADR-015：真 --effort 注入（SDK 映射为 --effort <档>，与终端 /effort 同旋钮）
+        permissionMode: this.sdkPermissionMode(),            // ADR-012：bypass 映射为 SDK default（bypass 放行由 handleCanUseTool 自实现）
+        // 不注入 options.allowedTools（2026-06-22 解耦）：放行白名单完全交给 settingSources 加载的
+        // .claude/settings.json 的 permissions.allow（与终端 claude 同源、用户自管），投屏层不再耦合自家白名单。
+        // 实测 SDK 把 settings 的 allow 当「自动放行、不触发 canUseTool」的第一层；未命中即触发下方 canUseTool。
+        canUseTool: (name, input, opts) => this.handleCanUseTool(name, input, opts), // 白名单外统一闸门（ADR-003）
+        settingSources: ['user', 'project', 'local'],        // ADR-004：加载"我的"全部配置
+        systemPrompt: { type: 'preset', preset: 'claude_code' },
+        env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== '')),
+        stderr: data => { if (process.env.LOG_STDERR) console.error('[claude]', sanitize(data)); }
+      }
+    });
+    this.q = q;
+    this.idleTimer = setInterval(() => this.checkIdle(), 30_000);
+    this.fetchModels(); // 提前拉取模型列表，不依赖 init 事件（CLI 首条消息前不输出 init）
+    this.consume(q); // 后台消费，不阻塞调用方
+  }
+
+  // 拉取并广播可用模型列表。fire-and-forget：CLI 未启动完成时 supportedModels 可能不可用（静默跳过），
+  // init 事件到达后会再调用一次兜底。原样透传 SDK 返回（不叠加项目友好名，2026-06-15）。
+  fetchModels() {
+    this.q?.supportedModels?.()
+      ?.then?.(ms => {
+        if (this.disposed) return;
+        this.emit('models', { models: Array.isArray(ms) ? ms : [] });
+      })
+      ?.catch?.(() => {});
+  }
+
+  async consume(q) {
+    let caught = null;
+    try {
+      for await (const msg of q) {
+        if (this.disposed) break;
+        this.lastActivity = Date.now();
+        this.map(msg);
+      }
+    } catch (err) {
+      caught = err; // 实测：resume 失败表现为 throw（"process exited with code 1"），需与正常结束统一处理
+    }
+    if (!this.disposed && !this.terminating) {
+      if (!this.sawInit && this.resumeId) {
+        // F4：resume 失败（CLI 端 session 已失效）——无论优雅结束还是抛错，均明确提示并设
+        // resumeFailed 让 server 清 currentSessionId，打破"重试→resume 同一失效 id→循环"死锁
+        this.resumeFailed = true;
+        this.emit('error', {
+          message: '无法恢复会话（历史可能已被清理），请新建会话或从列表选择其他会话',
+          recoverable: false
+        });
+      } else if (caught) {
+        this.emit('error', { message: `会话异常：${sanitize(caught.message)}`, recoverable: true });
+      } else {
+        this.emit('error', { message: 'claude 进程已退出，可重新发送消息继续', recoverable: true });
+      }
+    }
+    // 清理（无论正常结束/抛错/resume 失败都执行；异常已被上方 catch 收口，不会跳过）
+    clearInterval(this.idleTimer); this.idleTimer = null;
+    this.pendingTurns = 0;
+    for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
+    // F2：清理挂起的 AskUserQuestion（直接 resolve，不走 resolveQuestion 避免重复逻辑）
+    for (const [toolUseID, pending] of this.pendingQuestions) {
+      pending.signal?.removeEventListener('abort', pending.abortHandler);
+      for (let i = 0; i < pending.questions.length; i++) {
+        this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
+      }
+      pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
+    }
+    this.pendingQuestions.clear();
+    this.denyKinds.clear(); // 与 dispose 路径对称：无论哪种退出，denyKind 残留都应清理
+    if (!this.disposed) this.onExit?.();
+  }
+
+  // ---- 对外操作 ----
+  // F1：model 变化时调 setModel()（SDKUserMessage.model 被 CLI 忽略，此为唯一有效切换路径）
+  // E17：opts.displayText/attachments——附件场景下 text=注入路径后的 promptText（送 SDK），
+  // displayText=原文（气泡 + 会话标题，不含路径），attachments=去完整 data 的元数据（含小 thumb）。
+  async send(text, model, opts = {}) {
+    if (this.pendingTurns >= 2) {
+      this.emit('system', { message: '前面还有消息在排队，请等当前任务结束' });
+      return false;
+    }
+    const displayText = opts.displayText ?? text;
+
+    // 空选择（"默认"）回退到 defaultModel，不是 SDK 裸默认——只有真正切换才调 setModel。
+    // setModel 是 await 让出点，之后须重检 disposed/pendingTurns（S3 + 双重检查）。
+    const target = model || this.defaultModel;
+    if (target !== this.activeModel) {
+      try {
+        await this.q?.setModel(target);
+        this.activeModel = target;
+      } catch (err) {
+        this.emit('error', { message: `模型切换失败（${err.message}），已用原模型发送`, recoverable: true });
+      }
+    }
+
+    if (this.disposed) return false; // S3：setModel 的 await 间隙实例可能已被 dispose，勿再往弃用实例排队
+    // 双重检查：setModel await 期间其他 send 可能已把 pendingTurns 推到上限
+    if (this.pendingTurns >= 2) {
+      this.emit('system', { message: '前面还有消息在排队，请等当前任务结束' });
+      return false;
+    }
+
+    // #2：确认能发送（过了 disposed + 双重检查）后才记 firstMessage、emit user_message 气泡、记日志——
+    // 否则拒绝路径会把气泡推上屏却没真正发送（用户以为发了、实际被拒）。
+    if (this.firstMessage === null) this.firstMessage = displayText;
+    this.emit('user_message', { text: displayText, attachments: opts.attachments }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
+    interactionLog.userMessageOut(this.sessionId, displayText, model || this.defaultModel); // 交互日志：server → client（user_message 广播）；model=本轮目标模型（空选择回退 defaultModel）
+
+    this.pendingTurns++;
+    const modelStr = this.activeModel || 'default';
+    const effortStr = this.effort || 'model-default';
+    const permStr = this.permissionMode || 'default';
+    // model 走独立 badge 字段；effort/permission 摘要附在 text 末尾（badge 只放纯模型 ID）
+    interactionLog.agentSend(this.sessionId, `${text} (effort=${effortStr}, permission=${permStr})`, modelStr); // 交互日志：agent → SDK（text=promptText 含路径）
+    this.queue.push({ text });
+    this.notifyInput?.();
+    this.lastActivity = Date.now(); // 续期静默看护：send 是用户活动，防 idle 误判
+    return true;
+  }
+
+  async interrupt() {
+    this._flushText(); this._flushThink();
+    // S7：先同步把队列「换成新空数组」并快照旧队列——await q.interrupt() 是让出点，期间用户若在
+    // 「点停止后、中断未完成」时又发消息，该消息会 push 进新队列，不被本次中断卷入丢弃；
+    // toDrop 才是本次要丢的「中断发起时已排队」。修原竞态：旧实现 await 后才 this.queue=[]，
+    // 会连 await 间隙新发的一起清空（静默丢消息）+ pendingTurns 按旧 dropped 少扣。
+    const toDrop = this.queue;
+    const dropped = toDrop.length;
+    this.queue = [];
+    try {
+      await this.q?.interrupt();
+      if (this.disposed) return; // S3：await 间隙实例可能已被 dispose，勿往弃用实例发事件
+      // 成功中断：丢弃 toDrop（中断前排队的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
+      this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
+      this.emit('system', { message: '已中断', kind: 'interrupted' }); // M7：kind 字段，勿靠字符串匹配
+    } catch {
+      // SDK 无在途任务 → 不丢消息：把 toDrop 放回队列头部（await 期间新发的接其后），pendingTurns 不动。
+      this.queue = toDrop.concat(this.queue);
+      this.emit('system', { message: '当前没有可中断的任务' });
+    }
+  }
+
+  // ADR-012：权限档切换（与 send 的 setModel 同型，差分——仅档位真变才调 SDK）。
+  // 成功后由 server 广播 permission_mode 合成事件（不走 emit/seq 流，符合 event-contract.md 契约）。
+  // ADR-012：给 SDK 的 permissionMode——bypass 映射为 default。SDK 原生 bypassPermissions 需危险全局
+  // flag（allowDangerouslySkipPermissions），那会连 default 审批一起跳过；bypass 改由 handleCanUseTool 放行。
+  sdkPermissionMode() {
+    return this.permissionMode === 'bypassPermissions' ? 'default' : this.permissionMode;
+  }
+
+  async setPermissionMode(mode) {
+    const VALID = ['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk'];
+    if (!VALID.includes(mode)) {
+      this.emit('error', { message: `未知权限档：${mode}`, recoverable: true });
+      return false;
+    }
+    if (mode === this.permissionMode) return true; // 差分：无变化不调 SDK
+    const sdkMode = mode === 'bypassPermissions' ? 'default' : mode;
+    try {
+      await this.q?.setPermissionMode(sdkMode);
+      if (this.disposed) return false; // S3：await 间隙实例可能已被 dispose
+      this.permissionMode = mode;                  // 实例记真实档（含 bypass），canUseTool 据此放行
+      return true;
+    } catch (err) {
+      this.emit('error', { message: `权限档切换失败（${err.message}），仍为「${this.permissionMode}」`, recoverable: true });
+      return false;
+    }
+  }
+
+  // ---- 权限闸门（ADR-003 第二层）+ AskUserQuestion 特判（F2）----
+  handleCanUseTool(name, input, { suggestions, signal, toolUseID }) {
+    // F2：canAskUserQuestion 在 SDK 0.1.77 不存在（静默被忽略），AskUserQuestion 走此统一入口。
+    // ⚠️ 必须在 bypass 短路之前：AskUserQuestion 是模型「向用户提问」，与「绕过工具权限审批」正交——
+    // bypass 也应弹窗作答。若放在 bypass 之后，bypass 档会先 return allow 把提问当普通工具放行，
+    // 不发 question 事件 → 前端无弹窗 → 问题被静默跳过（2026-06-22 实证；原顺序倒置）。
+    if (name === 'AskUserQuestion') return this.handleQuestion(input, { signal, toolUseID });
+    // dontAsk 防御纵深：SDK 契约保证 dontAsk 不调 canUseTool，此处防御 SDK 版本/bug 的误调
+    if (this.permissionMode === 'dontAsk') return { behavior: 'deny', message: '当前模式禁止执行此操作', interrupt: true };
+    // ADR-012：bypass 档自实现放行。不用 SDK allowDangerouslySkipPermissions——实测 2026-06-12 该 flag=true
+    // 是全局 skip，会连 default 档的审批一起废掉（default 假安全），故 bypass 改在此直接 allow。
+    if (this.permissionMode === 'bypassPermissions') return { behavior: 'allow', updatedInput: input };
+    return this.askPermission(name, input, { suggestions, signal, toolUseID });
+  }
+
+  askPermission(name, input, { suggestions, signal, toolUseID }) {
+    // 实证日志：已证实 SDK 的 ExitPlanMode 不经 suggestions 给 setMode（headless 路径 permission_suggestions
+    // 恒空，见 resolvePermission 兜底注释）；保留此日志以便 SDK 版本变更后能第一时间发现 setMode 开始下发。
+    if (suggestions?.length) console.log(`[canUseTool] ${name} suggestions: ${JSON.stringify(suggestions)}`);
+    const requestId = toolUseID || `perm_${++this.permSeq}`;
+    this.emit('permission_request', { requestId, name, input, cwd: this.cwd });
+    return new Promise(resolve => {
+      const abortHandler = () => {
+        if (this.pendingPermissions.delete(requestId)) {
+          this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'aborted' }); // M4
+          this.denyKinds.set(requestId, 'cancelled'); // requestId===toolUseID：供 tool_result 显 🚫 而非红 ❌
+          resolve({ behavior: 'deny', message: '请求已取消', interrupt: true });
+        }
+      };
+      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler });
+      signal.addEventListener('abort', abortHandler);
+    });
+  }
+
+  resolvePermission(requestId, decision, alwaysThisSession) {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) return;
+    // 移除 abort 监听器防僵尸累积（SDK 可能为多个 canUseTool 复用同一 signal）
+    pending.signal?.removeEventListener('abort', pending.abortHandler);
+    this.pendingPermissions.delete(requestId);
+    this.lastActivity = Date.now(); // 用户审批是主动操作，续期静默看护
+    this.emit('request_resolved', { requestId, kind: 'permission', outcome: decision }); // M4
+    if (decision === 'allow') {
+      const suggestions = pending.suggestions || [];
+      // setMode：批准内含的「模式切换」（如 ExitPlanMode 退出 plan）。它是工具批准的内在部分，应始终
+      // 应用（非「始终允许」可选项）；优先跟随 SDK 的 suggestion、不硬编码切到哪档。
+      let modeUpdate = suggestions.find(u => u.type === 'setMode');
+      // 兜底：实测 SDK 的 ExitPlanMode 工具 checkPermissions 只回 {behavior:'ask'}、不带任何 suggestions
+      // （交互式 CLI 的切档由 plan-exit 弹窗用户选 default/acceptEdits/bypass 时补 setMode；headless/
+      // canUseTool 路径没有那个弹窗 → permission_suggestions 为 undefined）。若不兜底，批准后 updatedPermissions
+      // 为空 → SDK 内部 toolPermissionContext.mode 仍停在 plan（后续编辑/命令继续按 plan 审批）、前端图标也
+      // 停在「计划模式」。故对 ExitPlanMode 合成「退出到 default」=终端平按 yes 的等价行为；destination:'session'
+      // 只改本会话上下文、不落盘 settings。SDK 未来若开始发 setMode，则上面的 suggestion 优先、此兜底不触发。
+      if (!modeUpdate && pending.name === 'ExitPlanMode') {
+        modeUpdate = { type: 'setMode', mode: 'default', destination: 'session' };
+      }
+      // 「始终允许本会话」额外应用 session 范围的规则更新（原行为；排除已单列的 setMode 防重复）。
+      const sessionRules = alwaysThisSession
+        ? suggestions.filter(u => u.destination === 'session' && u.type !== 'setMode')
+        : [];
+      const updates = [...(modeUpdate ? [modeUpdate] : []), ...sessionRules];
+      pending.resolve({
+        behavior: 'allow',
+        updatedInput: pending.input,
+        updatedPermissions: updates.length ? updates : undefined
+      });
+      // 模式切换同步：更新本实例档 + emit permission_mode → server onEvent 更新 permModeByInstance 并广播，
+      // 使手机端权限档图标跟随（否则图标停在旧档）。
+      if (modeUpdate && modeUpdate.mode !== this.permissionMode) {
+        this.permissionMode = modeUpdate.mode;
+        this.emit('permission_mode', { mode: modeUpdate.mode });
+      }
+    } else {
+      this.denyKinds.set(requestId, 'denied'); // requestId===toolUseID：拒绝是有意操作非工具报错，前端显 🚫
+      pending.resolve({ behavior: 'deny', message: '用户拒绝了此操作', interrupt: false });
+    }
+  }
+
+  // ---- AskUserQuestion（F2）：实验证明 deny+message 通道有效（2026-06-11）----
+  // 模型将 tool_result 的 error content 识别为答案（is_error:true, content:'用户选择了：「…」'）
+  handleQuestion(input, { signal, toolUseID }) {
+    const questions = input?.questions;
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return { behavior: 'allow', updatedInput: input };
+    }
+    return new Promise(resolve => {
+      const answers = new Array(questions.length).fill(null);
+      let remaining = questions.length;
+      const abortHandler = () => {
+        if (this.pendingQuestions.delete(toolUseID)) {
+          for (let i = 0; i < questions.length; i++) {
+            this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' }); // M4
+          }
+          this.denyKinds.set(toolUseID, 'cancelled'); // 取消≠已回答：前端显 🚫 而非 ☑️
+          resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
+        }
+      };
+      this.pendingQuestions.set(toolUseID, { resolve, questions, answers, remaining, signal, abortHandler });
+
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        const opts = (q.options || []).map(o => (typeof o === 'string' ? o : o.label));
+        this.emit('question', { requestId: `${toolUseID}#${i}`, text: q.question, options: opts });
+      }
+
+      signal?.addEventListener('abort', abortHandler);
+    });
+  }
+
+  // requestId 格式：`${toolUseID}#${questionIndex}`（server 的 user:answer handler 透传）
+  resolveQuestion(requestId, optionIndex) {
+    const hash = requestId.lastIndexOf('#');
+    if (hash === -1) return;
+    const toolUseID = requestId.slice(0, hash);
+    const qIdx = parseInt(requestId.slice(hash + 1), 10);
+    const pending = this.pendingQuestions.get(toolUseID);
+    if (!pending || isNaN(qIdx) || qIdx >= pending.questions.length) return;
+    if (pending.answers[qIdx] !== null) return; // 防重复
+
+    const q = pending.questions[qIdx];
+    const opts = q.options || [];
+    if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= opts.length) return; // S6：越界 optionIndex 不作答（防把 "-1"/"99" 等当答案外发给模型）
+    const opt = opts[optionIndex];
+    const label = typeof opt === 'string' ? opt : (opt?.label ?? String(optionIndex));
+    pending.answers[qIdx] = label;
+    pending.remaining--;
+
+    if (pending.remaining === 0) {
+      // 移除 abort 监听器防僵尸累积
+      pending.signal?.removeEventListener('abort', pending.abortHandler);
+      this.pendingQuestions.delete(toolUseID);
+      this.lastActivity = Date.now(); // 用户答题是主动操作，续期静默看护
+      const msg = '用户选择了：' + pending.answers.map(a => `「${a}」`).join('、');
+      this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome: msg }); // M4
+      this.denyKinds.set(toolUseID, 'answered'); // 已回答：前端显 ☑️（is_error 来自 deny 通道、非真错误）
+      pending.resolve({ behavior: 'deny', message: msg, interrupt: false });
+    }
+  }
+
+  // ---- 静默看护（4c）：等审批不计时；活动静默超限判挂死 ----
+  checkIdle() {
+    if (this.pendingTurns === 0) return;
+    if (this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0) {
+      this.lastActivity = Date.now();
+      return;
+    }
+    if (Date.now() - this.lastActivity > this.idleTimeoutMs) {
+      this.emit('error', {
+        message: `任务静默超过 ${Math.round(this.idleTimeoutMs / 60000)} 分钟，已中断（可重新发送继续）`,
+        recoverable: true
+      });
+      this.terminating = true;
+      try { this.abort?.abort(); } catch { /* noop */ }
+    }
+  }
+
+  _flushText() {
+    clearTimeout(this._textTimer);
+    this._textTimer = null;
+    if (!this._textBuf) return;
+    this.emit('text_delta', { messageId: this.currentMessageId, text: this._textBuf });
+    this._textBuf = '';
+  }
+
+  _flushThink() {
+    clearTimeout(this._thinkTimer);
+    this._thinkTimer = null;
+    if (!this._thinkBuf) return;
+    this.emit('thinking_delta', { messageId: this.currentMessageId, text: this._thinkBuf });
+    this._thinkBuf = '';
+  }
+
+  dispose() {
+    this._flushText(); this._flushThink();
+    this.disposed = true;
+    this.inputEnded = true;
+    this.notifyInput?.();
+    clearInterval(this.idleTimer); this.idleTimer = null;
+    for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
+    // F2：清理挂起的 AskUserQuestion——与 consume 清理路径一致：先 emit request_resolved 再 resolve，
+    // 保证多设备收到问题取消通知（否则前端弹窗永远不消失）
+    for (const [toolUseID, pending] of this.pendingQuestions) {
+      pending.signal?.removeEventListener('abort', pending.abortHandler);
+      for (let i = 0; i < pending.questions.length; i++) {
+        this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
+      }
+      this.denyKinds.set(toolUseID, 'cancelled');
+      pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
+    }
+    this.pendingQuestions.clear();
+    this.denyKinds.clear(); // 防 dispose 后残留（实例即弃，无 tool_result 来消费）
+    try { this.abort?.abort(); } catch { /* noop */ }
+  }
+
+  // ---- 事件信封与缓冲（见 event-contract.md）----
+  emit(type, payload) {
+    const envelope = {
+      seq: ++this.seq,
+      epoch: this.epoch,
+      sessionId: this.sessionId,
+      instanceId: this.instanceId, // 台阶3（ADR-010）：事件所属实例，前端分流权威锚点（按 viewingInstanceId）
+      cwd: this.cwd,            // 台阶2（ADR-010）：事件所属工作目录，台阶3 降为分组/历史属性
+      ts: Date.now(),
+      type,
+      payload
+    };
+    this.buffer.push(envelope);
+    if (this.buffer.length > BUFFER_CAP) {
+      this.buffer.shift();
+      this.bufferTrimmed = true;
+    }
+    this.onEvent(envelope);
+  }
+
+  eventsSince(lastSeq) {
+    const events = this.buffer.filter(e => e.seq > lastSeq);
+    const oldest = this.buffer.length ? this.buffer[0].seq : this.seq + 1;
+    const gap = lastSeq > 0 && this.bufferTrimmed && oldest > lastSeq + 1;
+    return { events, gap, epoch: this.epoch };
+  }
+
+  // ---- SDK 消息 → 契约事件映射 ----
+  map(msg) {
+    switch (msg.type) {
+      case 'system':
+        if (msg.subtype === 'init') {
+          this.sawInit = true; // F4
+          // /clear 等使 CLI 换会话：标题改由新会话首条消息决定（先占位，下条消息回填）
+          if (this.sessionId && msg.session_id !== this.sessionId) {
+            this.firstMessage = null;
+            this.lastUsage = null; // E16：换会话上下文清零，旧 ctx% 不得残留显示
+          }
+          this.sessionId = msg.session_id;
+          // ADR-012：权限档以 SDK init 上报的 msg.permissionMode 为权威「实际生效档」——这是唯一能证明
+          // setPermissionMode/ExitPlanMode 等是否真被 SDK 应用的 SDK 源头凭证（模型同理走 msg.model）。
+          // bypass 例外：用户档 bypass 时 SDK 实为 default（bypass 由 handleCanUseTool 自放行），保留用户档、
+          // 不被 default 覆盖。其余档若 SDK 实际值 ≠ 本地 shadow = 漂移（「我们以为切了、SDK 没应用」那类 bug，
+          // 如修复前的 ExitPlanMode）→ 告警 + 留痕交互日志 + 以 SDK 为准对账，使前端图标如实反映 SDK 真值、
+          // 内部状态不再分叉。msg.permissionMode 缺失（旧 CLI）则跳过、维持 shadow。
+          const sdkMode = msg.permissionMode;
+          if (sdkMode && this.permissionMode !== 'bypassPermissions' && sdkMode !== this.permissionMode) {
+            console.warn(`[perm-drift] 权限档漂移：本地「${this.permissionMode}」≠ SDK 实际「${sdkMode}」，以 SDK 为准对账`);
+            interactionLog.addSessionLog(this.sessionId, 'sys_info',
+              `[SYS] ⚠️ 权限档漂移：本地档=${this.permissionMode} ≠ SDK 实际档=${sdkMode}（已以 SDK 为准对账，前端图标随之校正）`);
+            this.permissionMode = sdkMode;
+          }
+          if (msg.model) this.reportedModel = msg.model; // A5：交互日志显真实运行模型，不再记 'default'
+          this.onSessionId?.(msg.session_id, this.firstMessage, msg.model);
+          this.emit('init', {
+            model: msg.model,
+            cwd: msg.cwd,
+            claudeVersion: msg.claude_code_version,
+            mcpServers: msg.mcp_servers,
+            skillsCount: msg.skills?.length ?? 0,
+            permissionMode: this.permissionMode,  // ADR-012：已与 SDK init 对账的实际生效档（bypass 例外，仍为用户档）
+            slashCommands: msg.slash_commands ?? []
+          });
+          // F1：fire-and-forget 拉取模型列表（init 到达时兜底；start 中已提前调用，此轮通常幂等）
+          this.fetchModels();
+        } else if (msg.subtype === 'status' && msg.status === 'compacting') {
+          this.emit('system', { message: '正在压缩会话上下文…' });
+        } else if (msg.subtype === 'compact_boundary') {
+          this.emit('system', { message: '上下文已压缩' });
+        }
+        break;
+
+      case 'stream_event': {
+        if (msg.parent_tool_use_id) break;
+        const ev = msg.event;
+        if (ev.type === 'message_start') {
+          this.currentMessageId = ev.message?.id || msg.uuid;
+          this.sawTextDelta = false;
+          this.assistantResponseBuffer = '';
+        } else if (ev.type === 'content_block_delta') {
+          if (ev.delta?.type === 'text_delta' && ev.delta.text) {
+            this.sawTextDelta = true;
+            this.assistantResponseBuffer += ev.delta.text;
+            this._textBuf += ev.delta.text;
+            if (this._textBuf.length >= 2048) {
+              this._flushText();
+            } else if (!this._textTimer) {
+              this._textTimer = setTimeout(() => this._flushText(), 20);
+            }
+          } else if (ev.delta?.type === 'thinking_delta' && ev.delta.thinking) {
+            this._thinkBuf += ev.delta.thinking;
+            if (this._thinkBuf.length >= 2048) {
+              this._flushThink();
+            } else if (!this._thinkTimer) {
+              this._thinkTimer = setTimeout(() => this._flushThink(), 20);
+            }
+          }
+        }
+        break;
+      }
+
+      case 'assistant': {
+        this._flushText(); this._flushThink();
+        if (msg.error) {
+          // msg.error 只是 SDK 归类枚举桶（unknown/rate_limit/invalid_request/…），不是上游原文；
+          // 真正的上游报文在 message.content 文本块里（SDK 已加 "API Error:" 前缀）。终端等价 =
+          // 上游返回什么显示什么，故透传 content 原文；枚举桶仅在 content 意外缺失时兜底。
+          const detail = asArray(msg.message?.content)
+            .filter(b => b?.type === 'text' && b.text)
+            .map(b => b.text).join('\n').trim();
+          this.emit('error', { message: detail || `API 错误：${msg.error}`, recoverable: true });
+          break;
+        }
+        if (msg.parent_tool_use_id) break;
+        // E16：单次 API 调用口径的 usage（stream_event 在非流式网关缺席、result.usage 轮内聚合高估 ctx）；
+        // subagent 消息已被上方 parent_tool_use_id 守卫排除
+        if (msg.message?.usage) { this.lastUsage = msg.message.usage; this.onUsage?.(); } // E16：assistant 边界即刷 statusline ctx（不等 result/10s tick）
+        const mid = this.currentMessageId || msg.uuid;
+        for (const block of msg.message?.content ?? []) {
+          if (block.type === 'tool_use') {
+            this.emit('tool_use', {
+              toolUseId: block.id,
+              name: block.name,
+              inputSummary: truncate(stringify(block.input), TOOL_SUMMARY_CAP)
+            });
+          } else if (block.type === 'text' && block.text && !this.sawTextDelta) {
+            // 网关不流式时用完整 assistant 文本兜底
+            this.assistantResponseBuffer += block.text;
+            this.emit('text_delta', { messageId: mid, text: block.text });
+          }
+        }
+        break;
+      }
+
+      case 'user': {
+        if (msg.parent_tool_use_id) break;
+        for (const block of asArray(msg.message?.content)) {
+          if (block?.type === 'tool_result') {
+            const raw = msg.tool_use_result ?? block.content;
+            // denyKind：deny+message 通道（审批拒绝/取消、AskUserQuestion 作答/取消）的真实语义，
+            // 这类结果 is_error=true 但非工具报错——前端据此显 ☑️/🚫 并剥 "Error:" 前缀，不靠字符串匹配。
+            const denyKind = this.denyKinds.get(block.tool_use_id);
+            this.denyKinds.delete(block.tool_use_id);
+            this.emit('tool_result', {
+              toolUseId: block.tool_use_id,
+              ok: !block.is_error,
+              outputSummary: truncate(stringify(raw), TOOL_SUMMARY_CAP),
+              denyKind
+            });
+          }
+        }
+        break;
+      }
+
+      case 'result':
+        this._flushText(); this._flushThink();
+        this.pendingTurns = Math.max(0, this.pendingTurns - 1);
+        if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
+        this.totalDurationMs += msg.duration_ms || 0;
+        this.totalApiDurationMs += msg.duration_api_ms || 0;
+        this.emit('result', {
+          messageId: this.currentMessageId,
+          durationMs: msg.duration_ms,
+          costUsd: msg.total_cost_usd,
+          isError: msg.is_error,
+          errors: msg.subtype === 'success' ? undefined : msg.errors,
+          models: Object.keys(msg.modelUsage ?? {}), // F1：语义断言用
+          text: this.assistantResponseBuffer || undefined // 完整回复文本：供前端断网恢复后校正截断的 s.raw
+        });
+        const modelStr = this.activeModel || this.reportedModel || 'default';
+        const effortStr = this.effort || 'model-default';
+        const permStr = this.permissionMode || 'default';
+        const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms (effort=${effortStr}, permission=${permStr})`; // model 走独立 badge 字段，不再重复进文本
+        const responseText = this.assistantResponseBuffer ? `${durationStr}\n${this.assistantResponseBuffer}` : durationStr;
+        interactionLog.agentResult(this.sessionId, responseText, modelStr);
+        this.assistantResponseBuffer = '';
+        this.currentMessageId = null;
+        this.sawTextDelta = false;
+        break;
+
+      default:
+        break;
+    }
+  }
+}
+
+function truncate(s, cap) {
+  if (typeof s !== 'string') return '';
+  return s.length > cap ? s.slice(0, cap) + ' …（已截断）' : s;
+}
+
+function stringify(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+function asArray(v) {
+  return Array.isArray(v) ? v : [];
+}

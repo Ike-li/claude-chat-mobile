@@ -1,0 +1,32 @@
+# 依赖
+/node_modules/
+
+# 环境变量与密钥（绝不提交）
+.env
+.env.*.local
+workdirs.json
+
+# 运行时状态（ADR-005：会话元数据，本地生成）
+/data/
+
+# 上传附件落盘区（E17/ADR-013：本仓库被当 WORK_DIR 测试时会出现于此）
+.ccm-uploads/
+
+# Claude Code 会话产物（plan、skill 历史等，非项目资产）
+/.claude/
+
+# 日志
+*.log
+npm-debug.log*
+
+# 系统/编辑器
+.DS_Store
+.vscode/
+.idea/
+
+.reasonix
+.codegraph
+reasonix.toml
+
+# 测试/E2E 视觉回归测试临时截图
+/public/test-snapshots/
