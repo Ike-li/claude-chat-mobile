@@ -47,6 +47,8 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "gifenc": "^1.0.3",
+    "pngjs": "^7.0.0",
     "puppeteer": "^25.1.0",
     "socket.io-client": "^4.8.3"
   }
