@@ -1,0 +1,22 @@
+name: test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # 只跑纯逻辑单测（node --test test/*.test.mjs，零 token / 零外部依赖）；
+      # puppeteer 仅 test:visual 用，CI 不需要它下载 chromium——跳过以加速、避免下载失败。
+      PUPPETEER_SKIP_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - run: npm test
