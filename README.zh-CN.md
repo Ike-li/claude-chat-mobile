@@ -7,6 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
+[![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
 **这是给已经在终端用 `claude` CLI 的人做的。** 它**不自带** Claude、也**不是** Claude 的重新实现——而是通过 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 驱动你本机真实的 CLI，于是你得到的是同一个 agent、同一份 `CLAUDE.md`、同样的 MCP 服务器、技能、hooks 和已登录会话，与你在电脑前用的完全一致。设计目标是**终端等价性**：在手机上对 claude 打字，效果和坐在电脑前打字完全相同——改代码、跑命令、接着之前的对话——只是现在可以躺在床上做。
 
