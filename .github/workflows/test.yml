@@ -19,12 +19,4 @@ jobs:
           node-version: '20'
           cache: npm
       - run: npm ci
-      # server.js 的 preflight 跑 `which claude`，找不到就退出；test/server.test.mjs 会起真 server
-      # 子进程测 /health 与 socket（零 token、不真调用 claude）。CI runner 无 claude，装个 stub 让 preflight 过关。
-      - name: install claude CLI stub
-        run: |
-          mkdir -p "$HOME/.local/bin"
-          printf '#!/usr/bin/env bash\necho "claude-stub 0.0.0"\n' > "$HOME/.local/bin/claude"
-          chmod +x "$HOME/.local/bin/claude"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - run: npm test

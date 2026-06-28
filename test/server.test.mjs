@@ -13,7 +13,12 @@ const PORT = 3199;
 let serverProc;
 let tmpDir;
 
+// CI runner 无本机 claude CLI（server.js preflight 会 exit(1)），本文件起真 server 子进程、
+// scout 等用例需真 claude 行为——CI 跳过整个文件，本机（有真 claude）照常全跑。
+const CI_SKIP = process.env.CI ? { skip: 'CI 无本机 claude CLI；server 集成测试仅本机跑' } : {};
+
 test.before(async () => {
+  if (process.env.CI) return;
   tmpDir = await mkdtemp(join(tmpdir(), 'ccm-srv-test-'));
   serverProc = spawn('node', ['server.js'], {
     env: { ...process.env, PORT: String(PORT), AUTH_TOKEN: '', WORK_DIR: tmpDir,
@@ -33,6 +38,7 @@ test.before(async () => {
 });
 
 test.after(async () => {
+  if (process.env.CI) return;
   if (serverProc) {
     serverProc.kill('SIGTERM');
     // 等待进程退出（最多 3s，超时则 SIGKILL）
@@ -45,7 +51,7 @@ test.after(async () => {
   try { await rm(tmpDir, { recursive: true, force: true }); } catch {}
 });
 
-test.describe('HTTP 端点', () => {
+test.describe('HTTP 端点', CI_SKIP, () => {
   test('GET /health → 200 + JSON body', async () => {
     const body = await httpGet(`http://127.0.0.1:${PORT}/health`);
     const j = JSON.parse(body);
@@ -65,7 +71,7 @@ test.describe('HTTP 端点', () => {
   });
 });
 
-test.describe('Socket.IO 连接与认证', () => {
+test.describe('Socket.IO 连接与认证', CI_SKIP, () => {
   test('无 AUTH_TOKEN 时任何 token 都可通过（127.0.0.1 仅本地）', async () => {
     const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
     await new Promise((resolve, reject) => {
@@ -78,7 +84,7 @@ test.describe('Socket.IO 连接与认证', () => {
   });
 });
 
-test.describe('事件流 — 新连接重放', () => {
+test.describe('事件流 — 新连接重放', CI_SKIP, () => {
   test('连接后收到合成事件（instances / device_status / pending_devices 至少其一）', async () => {
     const events = [];
     const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
@@ -98,7 +104,7 @@ test.describe('事件流 — 新连接重放', () => {
   });
 });
 
-test.describe('session:list — 空工作目录', () => {
+test.describe('session:list — 空工作目录', CI_SKIP, () => {
   test('session:list 返回空列表', async () => {
     const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
     await new Promise((resolve, reject) => {
@@ -116,7 +122,7 @@ test.describe('session:list — 空工作目录', () => {
   });
 });
 
-test.describe('session:switch — 非法 sessionId 被拒', () => {
+test.describe('session:switch — 非法 sessionId 被拒', CI_SKIP, () => {
   test('含 ../ 的 sessionId → ack { ok: false }', async () => {
     const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
     await new Promise((resolve, reject) => {
@@ -147,7 +153,7 @@ test.describe('session:switch — 非法 sessionId 被拒', () => {
   });
 });
 
-test.describe('session:new — 创建新会话', () => {
+test.describe('session:new — 创建新会话', CI_SKIP, () => {
   test('session:new → ack { ok: true }（懒创建，不发消息不 spawn agent）', async () => {
     const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
     await new Promise((resolve, reject) => {
@@ -165,7 +171,7 @@ test.describe('session:new — 创建新会话', () => {
   });
 });
 
-test.describe('session:new — scout 获取真实模型清单', () => {
+test.describe('session:new — scout 获取真实模型清单', CI_SKIP, () => {
   // session:new 时无活实例 → openScoutInstance 临时创建 AgentSession 调 supportedModels()，
   // 获取真实模型清单后推送前端 + 写入缓存 + 立即 dispose（不留幽灵会话）。
   // 不再依赖缓存猜测或上区旧模型——scout 保证确定性。
@@ -188,7 +194,7 @@ test.describe('session:new — scout 获取真实模型清单', () => {
   });
 });
 
-test.describe('user:message 输入校验', () => {
+test.describe('user:message 输入校验', CI_SKIP, () => {
   test('空消息 → system error', async () => {
     const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
     await new Promise((resolve, reject) => {
@@ -224,7 +230,7 @@ test.describe('user:message 输入校验', () => {
   });
 });
 
-test.describe('user:setPermissionMode — 档位校验', () => {
+test.describe('user:setPermissionMode — 档位校验', CI_SKIP, () => {
   test('未知权限档 → system error', async () => {
     const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
     await new Promise((resolve, reject) => {
@@ -260,7 +266,7 @@ test.describe('user:setPermissionMode — 档位校验', () => {
   });
 });
 
-test.describe('user:setWorkdir — 白名单校验', () => {
+test.describe('user:setWorkdir — 白名单校验', CI_SKIP, () => {
   test('不在 WORK_DIRS 中的路径 → system error', async () => {
     const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
     await new Promise((resolve, reject) => {
