@@ -203,7 +203,7 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
-  // ADR-012：权限档以 SDK init 的 msg.permissionMode 为权威，对账本地 shadow（防「我们以为切了、SDK 没应用」）
+  // 权限档以 SDK init 的 msg.permissionMode 为权威，对账本地 shadow（防「我们以为切了、SDK 没应用」）
   test('system/init：msg.permissionMode 与 shadow 一致 → 不漂移、echo 该档', () => {
     const { s, events } = makeSession({ permissionMode: 'acceptEdits', onSessionId() {} });
     s.map({ type: 'system', subtype: 'init', session_id: 'sid', model: 'opus', cwd: '/w',

@@ -1,4 +1,4 @@
-// scripts/smoke-permmode-e2e.js —— ADR-012 真实行为验收（真 token，约 $0.02–0.05）：
+// scripts/smoke-permmode-e2e.js —— 权限档真实行为验收（真 token，约 $0.02–0.05）：
 // 证明 SDK 真实切换、非契约假象（E8/E7 假功能教训）——
 //   ① default 档：非白名单 Bash 触发 permission_request（拦截）；
 //   ② 切 bypass：走真实 q.setPermissionMode（agent 已存在）；

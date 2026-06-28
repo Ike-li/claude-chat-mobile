@@ -1,4 +1,4 @@
-// scripts/smoke-apierror.js —— API 错误透传回归守卫（docs/event-contract.md error 事件 / CLAUDE.md map() 错误分支）
+// scripts/smoke-apierror.js —— API 错误透传回归守卫（error 事件 / CLAUDE.md map() 错误分支）
 //
 // 守卫的不变量：上游报错时，error 事件应**透传上游原文**（SDK 已加 "API Error:" 前缀的
 // assistant.message.content），而非 SDK 的归类枚举桶（unknown/rate_limit/…）。

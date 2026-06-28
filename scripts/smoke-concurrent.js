@@ -1,4 +1,4 @@
-// scripts/smoke-concurrent.js —— ADR-010 多 repo **跨 cwd 实例隔离**契约验收（台阶3 instances 契约）。
+// scripts/smoke-concurrent.js —— 多 repo **跨 cwd 实例隔离**契约验收（台阶3 instances 契约）。
 // 台阶3 后并发单位是「会话/tab」（instanceId）——本测专注**跨 cwd 维度**（同 cwd 并发见 smoke-stage3-concurrent.js）：
 //   1) 契约部分（零 token，默认跑）：自起 server（WORK_DIR=dirA, WORK_DIRS=dirA,dirB），用 fixture spawn
 //      idle 实例——测跨 cwd 实例隔离的服务端契约：

@@ -1,4 +1,4 @@
-// statusline.js —— web 自有状态栏（E16/ADR-0011 重订）：server 端用 web 会话自有的 SDK 数据 + 本机 git，
+// statusline.js —— web 自有状态栏（E16）：server 端用 web 会话自有的 SDK 数据 + 本机 git，
 // 纯 JS 组装结构化状态，经 status_line 事件投前端、以 web 原生 UI 渲染。**不调 shell 脚本、不读 .quota-now
 // 快照、不依赖 ~/.claude/settings.json**——自包含、开箱即用。账号级配额段（5h/7d%）SDK 物理拿不到，故不含。
 import { execFile } from 'node:child_process';
@@ -57,7 +57,7 @@ export async function gitStatus(cwd) {
   return data;
 }
 
-// web 会话自己的 ctx/cost（ADR-0011 口径：assistant.message.usage，非 result.usage 轮内聚合避免高估）。
+// web 会话自己的 ctx/cost（口径：assistant.message.usage，非 result.usage 轮内聚合避免高估）。
 // ctx 只回 SDK 真值（token 绝对数），不算「百分比/窗口」——SDK / 会话 jsonl / 快照都不暴露 web 会话自己的
 // 真实 context window 大小，从 model 名猜窗口会误判（官方 1M beta 无 [1m] 后缀 / resume 丢后缀）。
 export function webContextCost({ agent }) {

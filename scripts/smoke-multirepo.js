@@ -1,9 +1,9 @@
-// scripts/smoke-multirepo.js —— ADR-010 多 repo 切目录契约验收（零 token，台阶3 instances 契约）：
+// scripts/smoke-multirepo.js —— 多 repo 切目录契约验收（零 token，台阶3 instances 契约）：
 // 自起 server（WORK_DIR=dirA, WORK_DIRS=dirA,dirB 两临时目录），用 fixture spawn idle 实例（零 token）——
 // 测 server 切目录契约管道（台阶3 用 instances 事件携 viewingCwd 取代台阶2 的 workdir 事件）：
 //   instances 重放（viewingCwd+dirs）/ user:setWorkdir 切换广播 + session:list 列表隔离 / 非白名单拒绝+拨回 /
 //   幂等 / 多设备同步。隔离用 dirA 放一个 marker 会话夹具验证（dirB 无、切过去看不到）。
-// 落盘 e2e（真发消息建会话、验证 jsonl 落对目录）需 token，见 docs/design.md A13 / README 验收清单。
+// 落盘 e2e（真发消息建会话、验证 jsonl 落对目录）需 token，见 docs/design.md A13 验收清单。
 //   用法：node scripts/smoke-multirepo.js   （无需预起 server / token / 网关；临时借用 data/ 并还原）
 import { io } from 'socket.io-client';
 import { spawn } from 'node:child_process';

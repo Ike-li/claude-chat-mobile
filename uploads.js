@@ -1,4 +1,4 @@
-// uploads.js —— E17/ADR-013：附件落盘 + 路径注入 + 防穿越。
+// uploads.js —— E17：附件落盘 + 路径注入 + 防穿越。
 // 落盘方案（机主 2026-06-12 定）：完整文件字节写入 WORK_DIR/.ccm-uploads/，
 // 把绝对路径注入 prompt 文本，claude 用 Read（白名单内、cwd 内免审批）读取——最贴终端等价。
 // 缩略图（thumb）由前端 canvas 降采样生成、经 user_message 投送，此处只透传不生成（零图片依赖）。

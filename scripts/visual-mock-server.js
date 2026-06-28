@@ -155,7 +155,7 @@ io.on('connection', socket => {
       }
     });
 
-    // 6. status_line initial (structured format, ADR-011)
+    // 6. status_line initial (structured format)
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'status_line', payload: {

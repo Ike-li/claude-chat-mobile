@@ -11,4 +11,4 @@
 这是个人项目，按现状（as-is）提供；我会尽力响应，但不承诺修复时限。
 This is a personal project provided as-is; best-effort response, no guaranteed timeline.
 
-本项目的安全模型见 / For the project's security model, see [README · 安全模型](README.md#安全模型)。
+本项目的安全模型见 / For the project's security model, see [docs/design.md](docs/design.md) §4 安全模型 / Security model。

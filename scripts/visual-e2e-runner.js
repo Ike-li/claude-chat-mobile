@@ -111,7 +111,7 @@ async function run() {
     assert.deepStrictEqual(markdownTagsTC1, { hasP: true, hasStrong: true, hasPre: true }, 'TC-1: Markdown tags (p, strong, pre) must be correctly rendered');
 
     // 4. 校验真实模型已解析进 canonical 的 hidden #modelInput（重设计后底栏无独立 model pill：
-    //    pillModel/pillModelText 无对应 DOM；model 经 statusLine 显完整真名 + hidden #modelInput 承载、event-contract）。
+    //    pillModel/pillModelText 无对应 DOM；model 经 statusLine 显完整真名 + hidden #modelInput 承载）。
     const bottomModelTC1 = await page.evaluate(() => {
       const sel = document.getElementById('modelInput');
       return sel ? sel.value : null;
@@ -319,7 +319,7 @@ async function run() {
     });
     assert.strictEqual(isStatusWrapHiddenTC6, false, 'TC-6: StatusLine wrap must be visible (not hidden)');
 
-    // 2. 展开详情：git 分支 + 代码增删 + 精确 token + cache + repo + 版本（web-native 结构化、去 emoji，ADR-011 重做）
+    // 2. 展开详情：git 分支 + 代码增删 + 精确 token + cache + repo + 版本（web-native 结构化、去 emoji）
     const statusTextTC6 = await page.evaluate(() => {
       const box = document.getElementById('cliStatus');
       return box ? box.textContent.trim() : null;

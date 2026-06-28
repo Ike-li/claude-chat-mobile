@@ -1,4 +1,4 @@
-// logic.js —— app.js 的纯决策逻辑（docs/event-contract.md 客户端）。
+// logic.js —— app.js 的纯决策逻辑。
 // 红线：本文件只做数据→数据，不得 import / 触碰 DOM / window / socket / 任何全局可变状态。
 // 目的：让 app.js（浏览器 import）与 test/logic.test.mjs（node:test）共用同一份逻辑，零依赖、零构建。
 
@@ -68,7 +68,7 @@ export function shouldRestoreOptimisticBusy({ pendingFirstSend, viewingInstanceI
   return Boolean(pendingFirstSend && viewingInstanceId && !sessionId);
 }
 
-// 客户端 agent:event 分流（app.js 分发入口；ADR-010 台阶3 instanceId 分流）：是否丢弃该事件不渲染。
+// 客户端 agent:event 分流（app.js 分发入口；台阶3 instanceId 分流）：是否丢弃该事件不渲染。
 // 豁免（永不丢）：instances 合成事件（它定义 viewingInstanceId 本身）、无 instanceId 的合成事件
 // （status_line / init 重放 / models / permission_mode / effort_mode）。
 // instancesReady=false（连接后首个 instances 广播到达前）→ 放行：重放批次都属当前查看实例。

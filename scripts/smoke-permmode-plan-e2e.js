@@ -1,4 +1,4 @@
-// scripts/smoke-permmode-plan-e2e.js —— ADR-012 plan 档真实行为（真 token，约 $0.05）：
+// scripts/smoke-permmode-plan-e2e.js —— plan 档真实行为（真 token，约 $0.05）：
 // plan 档"只规划、不执行"——发"创建文件"，plan 档下探针文件不应被真实创建
 // （对照 default/bypass 都会创建，见 smoke-permmode-e2e）。plan 模式 claude 常走 ExitPlanMode 请求退出去执行；
 // 脚本 allow 所有 permission_request（plan 本质 = 即便放行 SDK 也不执行修改；deny 会假阳性），断言"allow 后仍未创建" = plan 真生效。

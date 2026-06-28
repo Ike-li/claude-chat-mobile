@@ -1,4 +1,4 @@
-// cf-access.js —— Cloudflare Access JWT 校验（SPEC ADR-017 纵深防御）。
+// cf-access.js —— Cloudflare Access JWT 校验（纵深防御）。
 // 经隧道的公网请求（Host = CF_ACCESS_HOSTNAME）强制带合法 Access JWT；LAN/本机（其他 Host）回退 AUTH_TOKEN。
 // CF_ACCESS_HOSTNAME/TEAM/AUD 三者缺一则整层关闭（isPublicHost 恒 false、全回退 token），向后兼容。
 // 支持本地缓存（cf-access-certs.json）与优雅超时/冷却退避，彻底防御由于网络超时、DNS 无法访问、或恶意刷 key 导致的 Socket 卡死崩溃。

@@ -1,5 +1,5 @@
 // test/statusline.test.mjs —— statusline.js 纯函数单测（零 token）
-// statusLine 为 web 自有状态栏（ADR-0011 重订）：自包含组装、不调脚本/快照。ctx 口径：只回 SDK 真实
+// statusLine 为 web 自有状态栏：自包含组装、不调脚本/快照。ctx 口径：只回 SDK 真实
 // token 绝对数，不算窗口/百分比（SDK/jsonl/快照都不暴露 web 会话真实 context window，从 model 名猜会误判）。
 import test from 'node:test';
 import assert from 'node:assert/strict';

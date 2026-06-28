@@ -76,7 +76,7 @@ export function fixPermissions(path, isDir = false) {
 /**
  * 创建 owner-only 文件（0600 权限），真原子写：
  * 0600 写 <path>.tmp → fsync → rename 顶替——任何瞬间读 path 都是完整旧版或完整新版，
- * 写一半被杀/磁盘满不会留下半截文件（sessions.json/init-cache.json 的损坏防线，ADR-005）。
+ * 写一半被杀/磁盘满不会留下半截文件（sessions.json/init-cache.json 的损坏防线）。
  * tmp 固定名在 n=1 单进程、调用方串行写入下无竞态；rename 失败残留的 .tmp 无害（下次覆盖）。
  *
  * 注意：Node.js 的 fs.writeFileSync(path, data, {mode}) 在某些平台上

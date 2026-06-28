@@ -1,4 +1,4 @@
-// make-demo-gif.js —— 用视觉 mock UI 录制一段移动端 demo GIF（README 用）。
+// make-demo-gif.js —— 用视觉 mock UI 录制一段移动端 demo GIF（文档用）。
 // 零外部二进制依赖：puppeteer(CDP screencast 截 PNG 帧) + pngjs(解码) + gifenc(纯 JS 编码)。
 // 流程：启动 mock → 流式回答 → 工具卡片 → 手机端批准「git push」(hero) → 结束。
 // 用法：node scripts/make-demo-gif.js   产物：docs/demo.gif

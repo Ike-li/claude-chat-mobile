@@ -545,7 +545,7 @@
     </div>
   </div>
 
-  <!-- Access 会话过期重登（ADR-017）：公网 Cloudflare Access 会话失效时显示，按钮触发整页跳转重过 Access（非 auto-reload）。 -->
+  <!-- Access 会话过期重登：公网 Cloudflare Access 会话失效时显示，按钮触发整页跳转重过 Access（非 auto-reload）。 -->
   <div id="accessRelogin" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
     <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6" style="box-shadow:var(--shadow-pop)">
       <div class="text-xl font-semibold mb-1" style="font-family:var(--font-read)">会话已过期</div>
@@ -680,7 +680,7 @@
   <!-- 输入区 -->
   <footer class="shrink-0 bg-transparent px-3 pb-3 shrink-0 z-10 safe-bottom">
     <div class="max-w-2xl mx-auto flex flex-col">
-      <!-- web 状态栏（E16/ADR-0011）：自有 SDK 数据 + git 结构化渲染，默认折叠为一行摘要 -->
+      <!-- web 状态栏（E16）：自有 SDK 数据 + git 结构化渲染，默认折叠为一行摘要 -->
       <details id="cliStatusWrap" class="hidden bg-surface border border-line rounded-xl mb-2 overflow-hidden shadow-sm">
         <summary class="px-3 py-2 text-[11px] text-ink-soft bg-sunk/40 cursor-pointer select-none flex items-center justify-between border-b border-line-soft">
           <span class="flex items-center gap-1.5">
@@ -745,7 +745,7 @@
         </div>
       </div>
 
-      <!-- E17/ADR-013：待发送附件托盘 -->
+      <!-- E17：待发送附件托盘 -->
       <div id="attachTray" class="hidden px-3 py-2.5 flex flex-wrap gap-2 bg-surface border border-line-soft rounded-2xl mb-2 shadow-sm"></div>
 
       <!-- E6: Active Status Indicator / Interrupt Panel -->
@@ -839,11 +839,11 @@
     </div>
   </div>
 
-  <!-- ADR-0018：已信任设备远程审批——待审批设备请求卡片栈（收 pending_devices 事件，app.js 动态填充）。
+  <!-- 已信任设备远程审批——待审批设备请求卡片栈（收 pending_devices 事件，app.js 动态填充）。
        仅“已登录的可信设备”会收到，点准入/拒绝即发 user:approveDevice/denyDevice，免去上电脑终端。 -->
   <div id="deviceRequests" class="hidden fixed top-0 inset-x-0 z-50 p-3 space-y-2 pointer-events-none safe-top"></div>
 
-  <!-- ADR-0018：本设备被机主拒绝时的说明遮罩（替代原生 alert，与其它访问页风格一致）。 -->
+  <!-- 本设备被机主拒绝时的说明遮罩（替代原生 alert，与其它访问页风格一致）。 -->
   <div id="deviceDenied" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
     <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6 text-center" style="box-shadow:var(--shadow-pop)">
       <div class="inline-flex items-center justify-center w-14 h-14 rounded-full bg-sunk text-danger mb-4">

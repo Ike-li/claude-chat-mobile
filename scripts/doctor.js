@@ -98,7 +98,7 @@ function checkClaudeBin() {
 // D3: WORK_DIR / WORK_DIRS 可写
 function checkWorkDir() {
   checkOneDir('WORK_DIR', process.env.WORK_DIR || homedir());
-  // 多 repo 台阶1（ADR-010）：WORK_DIRS 白名单各目录也需可写。soft：问题用 warn（server 启动期
+  // 多 repo 台阶1：WORK_DIRS 白名单各目录也需可写。soft：问题用 warn（server 启动期
   // 对无效项告警跳过、不挡启动，doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
   let rawDirs = [];
   const dirsFile = process.env.WORK_DIRS_FILE;
@@ -197,7 +197,7 @@ function checkAnthropicEnv() {
     const hasAnthropicKeys = lines.some(l => /^ANTHROPIC_[A-Z_]+=/.test(l.trim()));
     if (hasAnthropicKeys) {
       warn('ANTHROPIC_* 环境',
-        `.env 含 ANTHROPIC_* 变量 → 启动期会被剥除（ADR-001 细则 3）。\n` +
+        `.env 含 ANTHROPIC_* 变量 → 启动期会被剥除。\n` +
         `  模型/网关/凭据只能在启动 shell 里 export，不经 .env 配置（终端等价性）。\n` +
         `  若 web 端模型列表与终端不一致，检查启动 shell 的 ANTHROPIC_* 环境变量。`);
     } else {
@@ -240,8 +240,8 @@ function checkConfigPermissions() {
 // D8: 文档一致性（死链 + 旧文件名漂移）。机械化背书单一事实源纪律：
 // PostToolUse hook 只提示"检查同步"，本项把"检查什么"落为可失败的硬门——CI/提交前跑即拦住漂移。
 function checkDocConsistency() {
-  // 扫描集：根目录门面（README/ARCHITECTURE/CLAUDE/CHANGELOG）+ docs/*.md（规格/ADR/宪法）
-  const docFiles = ['README.md', 'CLAUDE.md', 'CHANGELOG.md']
+  // 扫描集：根目录门面（README/CLAUDE/CHANGELOG/SECURITY/README.zh-CN）+ docs/*.md（规格/宪法）
+  const docFiles = ['README.md', 'CLAUDE.md', 'CHANGELOG.md', 'SECURITY.md', 'README.zh-CN.md']
     .map(f => join(HERE, f));
   try {
     for (const f of readdirSync(join(HERE, 'docs'))) {

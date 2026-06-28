@@ -106,7 +106,7 @@ function extractContent(content) {
   return '';
 }
 
-// ---- 会话列表（ADR-005 修订）：与 CLI /resume 同源，直接扫 ~/.claude/projects/<编码cwd>/ ----
+// ---- 会话列表：与 CLI /resume 同源，直接扫 ~/.claude/projects/<编码cwd>/ ----
 // 列出该 cwd 下所有会话（含终端 entrypoint:cli 建的），不依赖 sessions.json 注册表。
 // baseDir 仅供单测注入临时夹具；生产用默认 CLAUDE_DIR。
 export async function listSessions(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT } = {}) {

@@ -1,4 +1,4 @@
-// server.js —— Express 静态托管 + Socket.IO 契约层（docs/event-contract.md）。
+// server.js —— Express 静态托管 + Socket.IO 契约层。
 // 会话与 socket 解耦：AgentSession 挂在服务端（4c 物理不变量），事件 io.emit 广播（多设备同看）。
 import dotenv from 'dotenv'; // 不用 'dotenv/config'：需在 config() 前快照 shell 的 ANTHROPIC_*（见下方规整块）
 import { createServer } from 'node:http';
@@ -35,7 +35,7 @@ import {
 
 // #9：dotenv 后一次性剥除空串环境变量，使 .env 里的空行（WORK_DIR= 等）等价于"未设置"，
 // 让下方解构默认值与 Number() 容错统一在一处生效，而非每个读取点各自 `|| / .trim() ||`。
-// ANTHROPIC_*（凭据/网关/模型）只能来自终端环境（2026-06-12 机主决定，ADR-001 细则 3 / ADR-005 修订）：
+// ANTHROPIC_*（凭据/网关/模型）只能来自终端环境（2026-06-12 机主决定）：
 // config() 前快照 shell 已有键，加载后删除 .env 新注入的——web 与终端不得因 .env 分叉。
 const shellAnthropicKeys = new Set(Object.keys(process.env).filter(k => k.startsWith('ANTHROPIC_')));
 dotenv.config();
@@ -44,7 +44,7 @@ for (const k of Object.keys(process.env)) {
   else if (k.startsWith('ANTHROPIC_') && !shellAnthropicKeys.has(k)) delete process.env[k];
 }
 
-// SPEC ADR-017：env 规整后初始化 Cloudflare Access（CF_ACCESS_* 三项齐全才启用；缺则 isPublicHost 恒 false=回退 token）。
+// env 规整后初始化 Cloudflare Access（CF_ACCESS_* 三项齐全才启用；缺则 isPublicHost 恒 false=回退 token）。
 initCfAccess();
 
 const {
@@ -55,7 +55,7 @@ const {
 // WORK_DIR 单列为 let：preflight 通过存在性检查后经 realpathSync 规范化（与 CLI 的
 // ~/.claude/projects 命名一致，令会话列表 cwd 隔离匹配稳健，如 /tmp→/private/tmp）。
 let WORK_DIR = process.env.WORK_DIR || homedir();
-// 多 repo 台阶1（ADR-010）：可在 web 内切换的工作目录白名单（WORK_DIR + WORK_DIRS，preflight 内构建）。
+// 多 repo 台阶1：可在 web 内切换的工作目录白名单（WORK_DIR + WORK_DIRS，preflight 内构建）。
 let workDirs = [];
 
 const idleTimeoutMs = Number(IDLE_TIMEOUT_MS) > 0 ? Number(IDLE_TIMEOUT_MS) : 600000;
@@ -63,10 +63,10 @@ const port = Number(PORT) > 0 ? Number(PORT) : 3000;
 const HERE = import.meta.dirname; // #14：所有相对路径锚定模块目录，从任何 cwd 启动都一致
 // CCM_DATA_DIR 覆盖状态文件根目录——仅测试用：让 E2E 把 init-cache/devices/push-subscription/sessions
 // 全部重定向到临时目录，与生产 data/ 彻底解耦（生产常驻 server 正读写 data/，测试绝不能碰）。
-// 与 CCM_SESSIONS_FILE（sessions.js）同精神，皆为内部测试 hook，不进 configuration.md。
+// 与 CCM_SESSIONS_FILE（sessions.js）同精神，皆为内部测试 hook，不对外暴露、不列入配置文档。
 const DATA_DIR = process.env.CCM_DATA_DIR || join(HERE, 'data');
 
-// ---- Web Push（E15/ADR-009）----
+// ---- Web Push（E15）----
 const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY  || '';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
 const VAPID_SUBJECT     = process.env.VAPID_SUBJECT     || '';
@@ -113,7 +113,7 @@ async function pushNotify(title, body) {
 }
 
 // ---- 启动预检（验收 A9）----
-// E9/ADR-004：必须用本机的 claude（你日常在终端用的那个），不用 SDK 捆绑副本——
+// E9：必须用本机的 claude（你日常在终端用的那个），不用 SDK 捆绑副本——
 // 版本、登录态、代理兼容性都以本机为准。
 const versions = { sdk: 'unknown', cli: 'unknown' };
 
@@ -128,7 +128,7 @@ function preflight() {
     fail(`WORK_DIR 不存在：${WORK_DIR}（请在 .env 中设置有效路径）`);
   }
   WORK_DIR = realpathSync(WORK_DIR); // 规范化（解符号链接/相对段）：存储与查找的 cwd 同 CLI 命名，cwd 隔离匹配稳健
-  // 多 repo 台阶1（ADR-010）：白名单 = WORK_DIR（首位）+ WORK_DIRS_FILE（JSON 数组文件，每个目录一个字符串元素），
+  // 多 repo 台阶1：白名单 = WORK_DIR（首位）+ WORK_DIRS_FILE（JSON 数组文件，每个目录一个字符串元素），
   // 若未设 WORK_DIRS_FILE 则回退 WORK_DIRS（逗号分隔，向后兼容）。
   // 无效项告警跳过不挡启动，去重。只设 WORK_DIR 则 workDirs=[WORK_DIR]，前端目录切换器隐藏（退化单目录）。
   workDirs = [WORK_DIR];
@@ -185,7 +185,7 @@ function preflight() {
   return claudeBin;
 }
 const claudeBin = preflight();
-// 多 repo 台阶3（ADR-010）：viewingInstanceId = 前端当前查看的 tab 实例（台阶2 viewingCwd 的细化）。
+// 多 repo 台阶3：viewingInstanceId = 前端当前查看的 tab 实例（台阶2 viewingCwd 的细化）。
 // 切 tab 只换视图、不 dispose（各实例后台并行存活，见 agents Map）。初值 null——启动预热后置为初始 tab。
 let viewingInstanceId = null;
 // viewingCwd = 当前查看实例的工作目录上下文（新建会话选目录 / statusline git 段 / 白名单维度）。
@@ -214,7 +214,7 @@ app.use((_req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');           // #8：旧浏览器兜底
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  // ADR-017：HSTS（HTTPS 由 Cloudflare 提供；HTTP/局域网下浏览器自动忽略此头）。不加 preload——自由域名不宜做不可逆承诺。
+  // HSTS（HTTPS 由 Cloudflare 提供；HTTP/局域网下浏览器自动忽略此头）。不加 preload——自由域名不宜做不可逆承诺。
   res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
   next();
 });
@@ -271,7 +271,7 @@ app.use(express.static(join(HERE, 'public'), {
     else if (filePath.startsWith(VENDOR_DIR)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
   }
 }));
-// ---- HTTP 鉴权（ADR-017：公网 Host 强制 Access JWT、fail-closed；LAN/本机回退 AUTH_TOKEN）----
+// ---- HTTP 鉴权（公网 Host 强制 Access JWT、fail-closed；LAN/本机回退 AUTH_TOKEN）----
 // 常量时间比较，防计时侧信道（替代原 !== 短路比较）。按字节长度比，多字节 token 也安全。
 function tokenMatches(got) {
   if (!AUTH_TOKEN || typeof got !== 'string') return false;
@@ -317,10 +317,10 @@ app.post('/push/subscribe', httpAuth, express.json({ limit: '4kb' }), (req, res)
 });
 
 // 历史回显（E14）改走鉴权 socket 事件 session:history（见下方 io.on），不再开无鉴权 HTTP 端点：
-// event-contract.md 规定前后端唯一通道是 Socket.IO，HTTP 数据面既越契约、又绕过握手鉴权。
+// 本服务约定前后端唯一通道是 Socket.IO，HTTP 数据面既越契约、又绕过握手鉴权。
 
 const httpServer = createServer(app);
-// E17/ADR-013：maxHttpBufferSize 默认仅 1MB，会直接拒收带附件的消息。抬到 32MB——
+// E17：maxHttpBufferSize 默认仅 1MB，会直接拒收带附件的消息。抬到 32MB——
 // 附件总量上限 20MB（解码后），base64 上线 ~1.33x ≈ 27MB + JSON 开销，32MB 留足余量。
 const io = new Server(httpServer, {
   perMessageDeflate: { threshold: 1024 },
@@ -405,11 +405,11 @@ function disconnectDeviceSockets(deviceToken) {
   }
 }
 
-// ADR-0018：当前全量待审批设备列表（deviceToken→deviceId，幂等载体）。
+// 当前全量待审批设备列表（deviceToken→deviceId，幂等载体）。
 function pendingDevicesPayload() {
   return { devices: getPendingDevices().map(d => ({ deviceId: d.deviceToken, ip: d.ip, userAgent: d.userAgent, ts: d.ts })) };
 }
-// ADR-0018：把待审批列表推给所有“已信任”Socket（deviceApproved===true），供其在 Web UI 远程审批。
+// 把待审批列表推给所有“已信任”Socket（deviceApproved===true），供其在 Web UI 远程审批。
 // 新待批出现 / 批准 / 拒绝后调用，保持各可信端列表一致。
 function broadcastPendingDevices() {
   const payload = pendingDevicesPayload();
@@ -488,7 +488,7 @@ if (process.stdin.isTTY) {
   });
 }
 
-// ---- 鉴权（ADR-017：公网 Host 强制 Access JWT、fail-closed；LAN/本机回退 token；无 token 时仅 localhost）----
+// ---- 鉴权（公网 Host 强制 Access JWT、fail-closed；LAN/本机回退 token；无 token 时仅 localhost）----
 io.use(async (socket, next) => {
   try {
     let authPassed = false;
@@ -523,7 +523,7 @@ io.use(async (socket, next) => {
         const ip = clientIp(socket.handshake.address);
         const ua = socket.handshake.headers['user-agent'] || 'Unknown';
         addPendingDevice(deviceToken, { ip, userAgent: ua });
-        broadcastPendingDevices(); // ADR-0018：通知已登录的可信设备来远程一键审批（免终端）
+        broadcastPendingDevices(); // 通知已登录的可信设备来远程一键审批（免终端）
 
         console.log('\n==================================================');
         console.log(`📢 [安全] 发现新设备请求公网/局域网接入！`);
@@ -548,15 +548,15 @@ io.use(async (socket, next) => {
   }
 });
 
-// ---- 实例并行内核（台阶3/ADR-010：每「会话/tab」一个常驻实例，显式 open、后台并行存活）----
+// ---- 实例并行内核（台阶3：每「会话/tab」一个常驻实例，显式 open、后台并行存活）----
 let instanceCounter = 0;
 const newInstanceId = () => `inst_${++instanceCounter}`; // 进程内唯一、永不变；前端分流锚点
 const agents = new Map();                     // instanceId → AgentSession（台阶3 并发核心）
-const permModeByInstance = new Map();         // instanceId → 权限档（ADR-012，per-instance）
-const effortByInstance = new Map();           // instanceId → 思考强度档（ADR-015，per-instance）
+const permModeByInstance = new Map();         // instanceId → 权限档（per-instance）
+const effortByInstance = new Map();           // instanceId → 思考强度档（per-instance）
 // 新会话预设档（pending）：session:new / setWorkdir 到空 cwd 后 viewingInstanceId=null（懒创建无实例），
 // 此空窗期切档无实例可作用——按 cwd 暂存，待首条消息 openInstance FRESH 懒开时消费（优先于 inherited）。
-// effort 的 null（模型默认）是合法值，故消费时用 Map.has 判存在性而非真值。见 ADR-0012/0015「新会话预设档」。
+// effort 的 null（模型默认）是合法值，故消费时用 Map.has 判存在性而非真值。
 const pendingModeByCwd = new Map();           // cwd → 待应用权限档（新会话懒创建期）
 const pendingEffortByCwd = new Map();         // cwd → 待应用思考强度档（同上；null 合法）
 const permModeOf = id => permModeByInstance.get(id) ?? 'default';
@@ -611,8 +611,8 @@ function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 
     type: 'instances', payload: instancesPayload()
   });
 }
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']; // ADR-015：5 档硬编码，漂移由 smoke-effort 的 CLI warning 检测
-// 最近一次 init payload + 按 cwd 归键的 models 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选（见 event-contract.md）。
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']; // 5 档硬编码，漂移由 smoke-effort 的 CLI warning 检测
+// 最近一次 init payload + 按 cwd 归键的 models 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
 // 持久化到 data/init-cache.json 跨重启读回（CLI 收到首条消息前不输出 init——init 是轮次开始信号，
 // 预热 spawn 也等不来；缓存可能陈旧但每轮 init 覆盖刷新，文件可随时删除，损坏即当作没有）。
 // modelsCache 按 cwd 归键：模型清单随工作区 settings.local.json 覆盖网关/模型名而变，非账号级全局量——
@@ -649,7 +649,7 @@ function pushModelsForCwd(cwd) {
   });
 }
 
-// ---- web 自有状态栏（E16/ADR-0011）：SDK 自有数据 + 本机 git 结构化组装、不调脚本/快照、自包含开箱即用 ----
+// ---- web 自有状态栏（E16）：SDK 自有数据 + 本机 git 结构化组装、不调脚本/快照、自包含开箱即用 ----
 const statusOff = process.env.WEB_STATUSLINE === 'off'; // 禁用开关（默认启用，零 UI 痕迹）
 let lastStatusLine = null;                             // 仅内存：结构化 payload，瞬时数据不持久化
 let statusDebounce = null, statusInterval = null;
@@ -765,7 +765,7 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
     resumeId: saved?.id,
     cwd,
     claudeBin,
-    // resume 时回传会话原模型名（CLI 自身恢复的是规范化裸名，部分网关不认）——来源仅会话指针（ADR-005 修订）
+    // resume 时回传会话原模型名（CLI 自身恢复的是规范化裸名，部分网关不认）——来源仅会话指针
     model: saved?.model || undefined,
     permissionMode: mode,
     effort: eff,
@@ -780,7 +780,6 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
       // P2 性能优化：后台实例（id !== viewingInstanceId）的高频 text_delta/thinking_delta 不广播——
       // 仍入环形缓冲（agent.js buffer.push 先于此 onEvent），sync:since 切回时可完整回放；
       // 低频事件（tool_use/init/result/permission_request 等）维持广播（角标/状态/推送依赖）。
-      // 见 docs/event-contract.md §instanceId「广播裁剪」。
       const _isHighFreqDelta = envelope.type === 'text_delta' || envelope.type === 'thinking_delta';
       if (!_isHighFreqDelta || id === viewingInstanceId) {
         io.emit('agent:event', envelope);
@@ -931,7 +930,7 @@ function disposeInstance(instanceId) {
   broadcastInstances();
 }
 
-// ---- 契约路由（event-contract.md：客户端→服务端）----
+// ---- 契约路由（客户端→服务端）----
 // #6：统一包裹每个 handler，任一抛错只回该 socket 一条 error，绝不冒泡成 uncaughtException 崩进程。
 function on(socket, event, handler) {
   socket.on(event, async (...args) => {
@@ -1019,13 +1018,13 @@ io.on('connection', socket => {
         type: 'status_line', payload: lastStatusLine.payload // 即时上屏（陈旧但快）
       });
     }
-    // ADR-012/台阶3：重放当前查看 tab 的权限档（总是发，含 default）
+    // 台阶3：重放当前查看 tab 的权限档（总是发，含 default）
     permModeTo(socket);
-    // ADR-015：重放当前查看 tab 的思考强度档（总是发，含 null=模型默认）
+    // 重放当前查看 tab 的思考强度档（总是发，含 null=模型默认）
     effortTo(socket);
     // 台阶3：重放 tab 栏快照（viewingInstanceId + dirs + 各实例状态）
     instancesTo(socket);
-    // ADR-0018：可信端连入时重放当前待审批设备列表，使其可立即在 Web UI 远程审批
+    // 可信端连入时重放当前待审批设备列表，使其可立即在 Web UI 远程审批
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'pending_devices', payload: pendingDevicesPayload()
@@ -1045,7 +1044,7 @@ io.on('connection', socket => {
       // system 而非 error：发送前校验，不应 finalize 正在流式的在途任务（前端已先行红字提示）
       return sysTo(socket, `消息过长（${text.length} 字符，上限 50000），未发送`, true);
     }
-    // E17/ADR-013：附件校验（条数/单文件/总量）。失败用 system 提示、不发送、不终结在途轮。
+    // E17：附件校验（条数/单文件/总量）。失败用 system 提示、不发送、不终结在途轮。
     const attErr = validateAttachments(attachments);
     if (attErr) return sysTo(socket, attErr, true);
 
@@ -1090,7 +1089,7 @@ io.on('connection', socket => {
     }
   });
 
-  // ADR-0018：已信任设备远程审批待批设备（免终端）。这两个 handler 经 on() 统一闸保护——deviceApproved=false
+  // 已信任设备远程审批待批设备（免终端）。这两个 handler 经 on() 统一闸保护——deviceApproved=false
   // 的待审批设备发来的审批会在 on() 入口被丢弃（无法自批），故审批权恒属已信任设备。复用既有 approve/deny 函数。
   on(socket, 'user:approveDevice', payload => {
     const deviceId = payload?.deviceId;
@@ -1115,7 +1114,7 @@ io.on('connection', socket => {
     broadcastPendingDevices();
   });
 
-  // ADR-012/台阶3：切权限档（作用于指定实例，缺省 viewingInstanceId）。即时切（成功才落库 + 广播，失败
+  // 台阶3：切权限档（作用于指定实例，缺省 viewingInstanceId）。即时切（成功才落库 + 广播，失败
   // 时 agent 已 emit error）。无实例则 echo 当前档拨回该 socket，不存储。bypassPermissions 已由前端二次确认。
   on(socket, 'user:setPermissionMode', async payload => {
     const mode = payload?.mode;
@@ -1147,7 +1146,7 @@ io.on('connection', socket => {
     });
   });
 
-  // ADR-015/台阶3：切思考强度档（作用于指定实例）。SDK 无 effort 运行时控制 → 置换该实例（dispose +
+  // 台阶3：切思考强度档（作用于指定实例）。SDK 无 effort 运行时控制 → 置换该实例（dispose +
   // open resume 同会话带新 --effort，迁移 viewingInstanceId），一次冷启动。busy（在途轮>0，含审批挂起）
   // 拒切不杀任务；拒切/非法/无实例 单发当前档拨回该 socket。
   on(socket, 'user:setEffort', payload => {
@@ -1305,7 +1304,7 @@ io.on('connection', socket => {
     if (typeof ack !== 'function') return;
     // 归属校验与 session:switch 同款：jsonl 在本 cwd 的 project 目录即有效——接纳终端创建的
     // 会话（不在 sessions.json，原 getSession 守卫会把它们误判为「会话不存在」→ 切入后黑屏）。
-    // 列表/切换/历史三环节统一按文件存在性裁决（双向互见互续，ADR-005 修订）。
+    // 列表/切换/历史三环节统一按文件存在性裁决（双向互见互续）。
     const cwd = routeCwd(payload?.cwd); // 台阶2：读指定目录的历史（缺省 viewingCwd）
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ messages: [], error: '会话不存在' });
@@ -1369,7 +1368,7 @@ io.on('connection', socket => {
   });
 });
 
-// ADR-012/台阶3：单发指定实例当前权限档给该 socket（重放/无实例/拒切拨回；缺省 viewingInstanceId）
+// 台阶3：单发指定实例当前权限档给该 socket（重放/无实例/拒切拨回；缺省 viewingInstanceId）
 function permModeTo(socket, id = viewingInstanceId) {
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
@@ -1377,7 +1376,7 @@ function permModeTo(socket, id = viewingInstanceId) {
   });
 }
 
-// ADR-015/台阶3：单发指定实例当前思考强度档给该 socket（重放缺省 viewingInstanceId；拒切拨回）
+// 台阶3：单发指定实例当前思考强度档给该 socket（重放缺省 viewingInstanceId；拒切拨回）
 function effortTo(socket, id = viewingInstanceId) {
   socket.emit('agent:event', {
     seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),

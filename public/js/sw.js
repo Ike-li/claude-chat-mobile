@@ -1,4 +1,4 @@
-// Service Worker — Web Push only (ADR-009/E15). No caching, no offline.
+// Service Worker — Web Push only (E15). No caching, no offline.
 self.addEventListener('push', e => {
   const data = e.data?.json() ?? {};
   const title = data.title || 'Claude';

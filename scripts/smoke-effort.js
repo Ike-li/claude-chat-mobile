@@ -1,7 +1,7 @@
-// scripts/smoke-effort.js —— ADR-015 思考强度切换契约验收（零 token）：
-// 台阶3（ADR-010）后 effort 升为 per-instance：setEffort 作用于指定实例（instanceId 参数，缺省
+// scripts/smoke-effort.js —— 思考强度切换契约验收（零 token）：
+// 台阶3后 effort 升为 per-instance：setEffort 作用于指定实例（instanceId 参数，缺省
 // viewingInstanceId）。新会话懒创建期（viewingInstanceId===null、无实例）切档 = 存 pending（按 viewingCwd）
-// + echo 新档（ADR-0015「新会话预设档」），首条消息懒开实例时消费（null=模型默认是合法档，用 Map.has 判存在）。本测验证：
+// + echo 新档（新会话预设档），首条消息懒开实例时消费（null=模型默认是合法档，用 Map.has 判存在）。本测验证：
 //   - 新连接重放 effort_mode（无实例、未设 pending 时 null）
 //   - 新会话懒创建期切档 → echo 新档 + 存 pending（不广播给他设备）
 //   - 非法档拒绝（单发拨回 null、不存 pending）

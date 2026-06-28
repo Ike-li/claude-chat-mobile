@@ -1,4 +1,4 @@
-// scripts/smoke-stage3-concurrent.js —— ADR-010 台阶3（同仓库会话并发）契约验收。
+// scripts/smoke-stage3-concurrent.js —— 台阶3（同仓库会话并发）契约验收。
 // 两部分：
 //   1) 契约部分（默认跑，需少量 token ~$0.01）：自起 server（WORK_DIR=dirA, WORK_DIRS=dirA,dirB），用
 //      user:message 懒创建实例（原设计用 fixture resume 零 token，但 CLI 对 jsonl 格式要求严格、

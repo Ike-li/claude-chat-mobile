@@ -1,4 +1,4 @@
-// scripts/smoke-upload.js —— E17/ADR-013 文件/图片上传验收
+// scripts/smoke-upload.js —— E17 文件/图片上传验收
 // 用法：
 //   node scripts/smoke-upload.js --unit   # 零 token：sanitize/校验/写盘+防穿越/路径注入/事件元数据
 //   node scripts/smoke-upload.js          # e2e：server 以 AUTH_TOKEN='' PORT=3100 跑着时执行（~$0.01）

@@ -58,7 +58,7 @@ test('shouldRestoreOptimisticBusy: 仅新会话首发懒开绑定到新建实例
   assert.equal(shouldRestoreOptimisticBusy(), false);
 });
 
-// ── 客户端事件分流（app.js: agent:event 入口；ADR-010 台阶3 instanceId 分流）──
+// ── 客户端事件分流（app.js: agent:event 入口；台阶3 instanceId 分流）──
 // 回归：从活跃会话切到「新会话空窗口」(viewingInstanceId=null) 时，后台活跃实例的 tool_use/tool_result/
 // user_message/result 等带 instanceId 事件，曾因旧逻辑 `viewingInstanceId &&` 在 null 时短路而不被过滤，
 // 污染空窗口（显示别的工作区会话的上下文）。修复：用独立的 instancesReady 标志区分「视图未知（首个
@@ -212,7 +212,7 @@ test('createRingBuffer: cap=1 边界', () => {
   assert.equal(b.tail(), 'b');
 });
 
-// ---- urlBase64ToUint8Array：VAPID 公钥解码（E15/ADR-009） ----
+// ---- urlBase64ToUint8Array：VAPID 公钥解码（E15） ----
 test('urlBase64ToUint8Array: 标准 URL-safe base64 解码', () => {
   // "AQAB" in URL-safe base64 without padding → Uint8Array [1, 0, 1]
   const result = urlBase64ToUint8Array('AQAB');

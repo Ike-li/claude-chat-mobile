@@ -1,4 +1,4 @@
-// app.js —— 契约客户端（docs/event-contract.md）：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
+// app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
 import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction } from './logic.js';
@@ -52,9 +52,9 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
   const cliStatusEl = $('cliStatus');   // E16：终端 statusLine ANSI 行容器（status_line 事件填充）
   const cliStatusWrapEl = $('cliStatusWrap'); // E16：ANSI 行折叠包裹（<details>，揭示=去 hidden）
-  const cliSummaryEl = $('cliSummary'); // E16/ADR-011：折叠条一行摘要（status_line 事件 summary 字段填充）
-  const permModeSelect = $('permModeSelect');  // ADR-012：权限档切换器（5 档；dontAsk 终端 Shift+Tab 切不到，属 setPermissionMode/agent 能力）
-  const effortSelect = $('effortSelect');      // ADR-015：思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
+  const cliSummaryEl = $('cliSummary'); // E16：折叠条一行摘要（status_line 事件 summary 字段填充）
+  const permModeSelect = $('permModeSelect');  // 权限档切换器（5 档；dontAsk 终端 Shift+Tab 切不到，属 setPermissionMode/agent 能力）
+  const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
   const btnAttach = $('btnAttach'), fileInput = $('fileInput'), attachTray = $('attachTray'); // E17：附件
   const btnPush = $('btnPush'); // E15：推送订阅入口
@@ -87,8 +87,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         permInput = $('permInput'), permAlways = $('permAlways');
   const questionModal = $('questionModal'), questionText = $('questionText'), questionOptions = $('questionOptions');
   const authGate = $('authGate'), authToken = $('authToken'), authSubmit = $('authSubmit'), authError = $('authError'); // 访问令牌输入页
-  const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // ADR-017：Access 会话过期重登浮层
-  // ADR-0018：远程设备审批 + 访问帮助 UI
+  const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // Access 会话过期重登浮层
+  // 远程设备审批 + 访问帮助 UI
   const deviceRequests = $('deviceRequests'); // 已信任设备上的待审批请求卡片栈
   const deviceDenied = $('deviceDenied'), deviceDeniedRetry = $('deviceDeniedRetry'), deviceDeniedHelp = $('deviceDeniedHelp');
   const accessHelp = $('accessHelp'), accessHelpClose = $('accessHelpClose'), accessHelpOpen = $('accessHelpOpen'), authHelpLink = $('authHelpLink');
@@ -226,15 +226,15 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   let permExpandBtn = null;             // M1：展开按钮引用，showNextPerm 前清除
   const questionQueue = [];
   let activeQuestion = null;
-  let currentPermMode = 'default';      // ADR-012：当前权限档；onchange 取消时回退、避免重复 emit
+  let currentPermMode = 'default';      // 当前权限档；onchange 取消时回退、避免重复 emit
   let permModeSeen = false;             // 首次服务端同步只定基线不上屏（刷新/重连不冒「切换」假象）
-  let currentEffort = null;             // ADR-015：当前思考强度档（null=模型默认）；onchange 同值不重发
+  let currentEffort = null;             // 当前思考强度档（null=模型默认）；onchange 同值不重发
   let effortSeen = false;               // 首次服务端同步只定基线不上屏（同 permModeSeen）
   let currentCwd = null;                // 当前查看 cwd 上下文（instances.viewingCwd），目录切换器高亮 + 新建会话选目录
   let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
   let workdirStates = {};               // {[cwd]:'idle'|'busy'|'permission'|'done'} 目录切换器角标（台阶3 由 instances 按 cwd 聚合）
-  // ADR-010 台阶3：viewingInstanceId = 当前查看 tab 实例（前端分流锚点）；displayedInstanceId/Session =
+  // 台阶3：viewingInstanceId = 当前查看 tab 实例（前端分流锚点）；displayedInstanceId/Session =
   // 已绑定渲染的实例/会话（viewingInstanceId 变了才切视图，避免每个 instances 边界广播都重载）。
   let viewingInstanceId = null;
   // 是否已收到过首个 instances 广播（视图状态已知）。区分「视图未知（连接初期，应放行重放）」与
@@ -269,7 +269,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   });
 
   let initialLoad = true;
-  let connectErrorCount = 0;  // ADR-017：公网 socket 连续失败计数，攒够再探测 Access 是否过期
+  let connectErrorCount = 0;  // 公网 socket 连续失败计数，攒够再探测 Access 是否过期
   
   function processOfflineQueue() {
     if (offlineQueue.length === 0) return;
@@ -327,7 +327,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
-    accessRelogin?.classList.add('hidden');      // ADR-017：连上即收起重登浮层
+    accessRelogin?.classList.add('hidden');      // 连上即收起重登浮层
     connectErrorCount = 0;
     if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = '进入'; }
     connDot.className = 'w-2 h-2 rounded-full bg-success shrink-0';
@@ -356,7 +356,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         setStatus('需要访问令牌');
         showAuthGate(socket.auth?.token ? '令牌无效，请重新输入' : ''); // 有 token 仍失败 = 无效
       } else {
-        setStatus('需要重新登录');                 // ADR-017：公网无 token 可输，走 Access 重登
+        setStatus('需要重新登录');                 // 公网无 token 可输，走 Access 重登
         maybeAccessRelogin();
       }
     } else {
@@ -402,7 +402,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     });
   }
 
-  // ADR-017：当前是否走公网（非 localhost/局域网）——公网由 Cloudflare Access 把守、无 token 可输。
+  // 当前是否走公网（非 localhost/局域网）——公网由 Cloudflare Access 把守、无 token 可输。
   function isLanOrLocal() {
     const h = location.hostname;
     return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local')
@@ -443,7 +443,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); submitAuth(); }
   });
 
-  // ---- ADR-0018：访问帮助 + 被拒说明 + 已信任设备远程审批（替代必须上电脑终端）----
+  // ---- 访问帮助 + 被拒说明 + 已信任设备远程审批（替代必须上电脑终端）----
   function showAccessHelp() { accessHelp?.classList.remove('hidden'); }
   function hideAccessHelp() { accessHelp?.classList.add('hidden'); }
   if (accessHelpClose) accessHelpClose.onclick = hideAccessHelp;
@@ -499,7 +499,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
   // ---- agent:event 分发（台阶3 instanceId 分流 + epoch 感知去重）----
   socket.on('agent:event', ev => {
-    // 台阶3（ADR-010）：事件按 instanceId 分流——非当前查看 tab（viewingInstanceId）的实例事件不渲染直接丢弃。
+    // 台阶3：事件按 instanceId 分流——非当前查看 tab（viewingInstanceId）的实例事件不渲染直接丢弃。
     // 角标/跨 tab 通知改由 instances 广播驱动（setInstances/notifyStateChanges），不在此重建。
     // 必须在 epoch 去重前过滤，否则后台实例事件会污染 curEpoch/lastSeq 基线。判定见 logic.js shouldDropAgentEvent：
     //   · instances / 无 instanceId 的合成事件永不丢；· instancesReady 前（视图未知）放行重放批次；
@@ -603,7 +603,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         showDeniedOverlay();
       }
     },
-    // ADR-0018：已信任设备收到的待审批设备列表（全量幂等）；渲染成可一键准入/拒绝的卡片。
+    // 已信任设备收到的待审批设备列表（全量幂等）；渲染成可一键准入/拒绝的卡片。
     pending_devices(p) {
       renderDeviceRequests(Array.isArray(p?.devices) ? p.devices : []);
     },
@@ -616,7 +616,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       if (currentModel && m && m !== currentModel) addBar(`模型 → ${m}`, 'text-info');
       updateModelAndSuffix(rawM);
       if (modelsList.length) rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随新模型（列表已在则即时刷）
-      setPermMode(p.permissionMode); // ADR-012：每轮 init 回显当前权限档（幂等，与 permission_mode 事件一致）
+      setPermMode(p.permissionMode); // 每轮 init 回显当前权限档（幂等，与 permission_mode 事件一致）
       // 顶部状态行回归「纯连接状态」职责：model/目录/ctx/cost 已由下方 E16 statusLine 投送（更全更权威），
       // MCP×N·skills×N 由 statusLine 脚本本身输出（终端 + 所有项目共享），此处不再合成覆盖连接状态
       if (Array.isArray(p.slashCommands)) {
@@ -624,15 +624,15 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         localStorage.setItem('slash_commands', JSON.stringify(p.slashCommands));
       }
     },
-    // ADR-012：权限档切换后即时同步（多设备一致）；server 合成事件，与 init.permissionMode 一致
+    // 权限档切换后即时同步（多设备一致）；server 合成事件，与 init.permissionMode 一致
     permission_mode(p) {
       setPermMode(p.mode);
     },
-    // ADR-015：思考强度档回执/重放（含拒切拨回的单发）；server 合成事件
+    // 思考强度档回执/重放（含拒切拨回的单发）；server 合成事件
     effort_mode(p) {
       setEffortMode(p.level);
     },
-    // ADR-010 台阶3：tab 栏快照回执/重放（合成事件，同 permission_mode/effort_mode 惯例）——
+    // 台阶3：tab 栏快照回执/重放（合成事件，同 permission_mode/effort_mode 惯例）——
     // 驱动 viewingInstanceId 分流锚点 + 目录切换器角标 + 切视图（viewingInstanceId 变了才重载）
     instances(p) {
       setInstances(p);
@@ -882,7 +882,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       addBar(p.message, 'text-ink-faint');
       if (p.kind === 'interrupted') { finalizeStreams(); setBusy(false); }
     },
-    // E16/ADR-0011：web 自有结构化状态（非 ANSI）。摘要去 emoji，展开分段构建 DOM（createElement+textContent，
+    // E16：web 自有结构化状态（非 ANSI）。摘要去 emoji，展开分段构建 DOM（createElement+textContent，
     // 不经 innerHTML/DOMPurify，天然 XSS 安全）；服务端未启用则此事件不来，容器恒 hidden
     status_line(p) {
       if (!cliStatusEl || !p || typeof p !== 'object') return;
@@ -1075,7 +1075,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   function send() {
     const text = inputEl.value.trim();
     if (!text && pendingAttachments.length === 0) return; // E17：纯附件（空文本）也可发
-    // ADR-008：/model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
+    // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传
     if (/^\/model(\s|$)/.test(text) && !(window.availableSkills || []).includes('model')) {
       const arg = text.slice(6).trim();
@@ -1196,7 +1196,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     }
   });
 
-  // ---- 附件（E17/ADR-013）：选文件 → base64 + 图片 canvas 缩略图 → 待发送托盘 ----
+  // ---- 附件（E17）：选文件 → base64 + 图片 canvas 缩略图 → 待发送托盘 ----
   const MAX_FILE = 10 * 1024 * 1024, MAX_TOTAL = 20 * 1024 * 1024, MAX_COUNT = 10; // 与服务端 uploads.js 同
   btnAttach.onclick = () => fileInput.click();
   fileInput.onchange = async () => {
@@ -1272,7 +1272,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   const hints = el(`<div id="cmdHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)"></div>`);
   inputEl.parentElement.style.position = 'relative';
   inputEl.parentElement.appendChild(hints);
-  // ADR-008：前端本地拦截命令（不透传后端），并入提示列表
+  // 前端本地拦截命令（不透传后端），并入提示列表
   const LOCAL_COMMANDS = ['model'];
 
   inputEl.addEventListener('input', () => {
@@ -1335,7 +1335,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     };
   }
 
-  // ---- 权限档切换（ADR-012：5 档；dontAsk 非交互档，终端 Shift+Tab 切不到）----
+  // ---- 权限档切换（5 档；dontAsk 非交互档，终端 Shift+Tab 切不到）----
   // setPermMode 仅由 init/permission_mode 服务端事件驱动（权威回执，函数声明有提升），onchange 不再
   // 乐观调用——故上屏的系统条 = 服务端已确认切换。程序设 select.value 不触发 onchange，无回声循环。
   const PERM_LABEL = {
@@ -1401,7 +1401,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     // 失败则 agent 发 error 红条且不广播，下轮 init 拨回 select
   };
 
-  // ---- 思考强度切换（ADR-015：5 档对应终端 /effort；切档=实例置换、下条消息生效）----
+  // ---- 思考强度切换（5 档对应终端 /effort；切档=实例置换、下条消息生效）----
   // setEffortMode 仅由 effort_mode 服务端事件驱动（成功回执广播 / 拒切拨回单发），onchange 不乐观更新。
   function setEffortMode(level, silent = false) {
     if (!effortSelect) return;
@@ -1500,10 +1500,10 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     if (level === currentEffort) return;
     socket.emit('user:setEffort', { level });
     // 不乐观更新：成功则 effort_mode 广播拨档 + 上屏；busy/非法档则 server 发 system 提示
-    // 并单发当前档拨回本设备 select（见 event-contract.md effort_mode）
+    // 并单发当前档拨回本设备 select
   };
 
-  // ---- 工作目录切换（ADR-010 台阶1：多目录单并发）----
+  // ---- 工作目录切换（台阶1：多目录单并发）----
   // basename：路径太长，目录切换器/顶部胶囊只显末段，title 挂全路径兜底重名
   const baseName = projectDisplayName;
 
@@ -2464,7 +2464,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     try { new Notification(title, { body, icon: '/icons/icon-192.png', tag: 'ccm' }); } catch { /* iOS 非 PWA 等场景静默 */ }
   }
 
-  // E15/ADR-009：Web Push 订阅
+  // E15：Web Push 订阅
   function urlBase64ToUint8Array(b64) {
     const pad = '='.repeat((4 - b64.length % 4) % 4);
     const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));

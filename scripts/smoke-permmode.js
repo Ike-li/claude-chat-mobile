@@ -1,7 +1,7 @@
-// scripts/smoke-permmode.js —— ADR-012 权限档切换契约验收（零 token）：
-// 台阶3（ADR-010）后权限档升为 per-instance：setPermissionMode 作用于指定实例（instanceId 参数，缺省
+// scripts/smoke-permmode.js —— 权限档切换契约验收（零 token）：
+// 台阶3后权限档升为 per-instance：setPermissionMode 作用于指定实例（instanceId 参数，缺省
 // viewingInstanceId）。新会话懒创建期（viewingInstanceId===null、无实例）切档 = 存 pending（按 viewingCwd）
-// + echo 新档让 UI 立即上屏（ADR-0012「新会话预设档」），首条消息懒开实例时消费。本测验证：
+// + echo 新档让 UI 立即上屏（新会话预设档），首条消息懒开实例时消费。本测验证：
 //   - 新连接重放 permission_mode（无实例、未设 pending 时 default）
 //   - 新会话懒创建期切档 → echo 新档（instanceId:null，前端不过滤照常上屏）+ 存 pending（不广播给他设备）
 //   - 非法档拒绝（不 echo 新档、不存 pending）
@@ -42,7 +42,7 @@ const run = async () => {
   check('重放为合成事件（epoch=server, seq=0, sessionId=null）',
     replay?.epoch === 'server' && replay?.seq === 0 && replay?.sessionId === null);
 
-  // 2) 新会话懒创建期（viewingInstanceId===null）切档 → echo 新档 + 存 pending（ADR-0012「新会话预设档」）
+  // 2) 新会话懒创建期（viewingInstanceId===null）切档 → echo 新档 + 存 pending（新会话预设档）
   let got = await setMode(s1, e1, 'plan');
   const echoPlan = got.find(e => e.type === 'permission_mode');
   check('新会话懒创建期切 plan → echo 新档 plan（存 pending，不再丢弃设置）',

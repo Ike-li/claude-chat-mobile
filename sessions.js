@@ -1,4 +1,4 @@
-// sessions.js —— 服务端唯一持久状态（ADR-005）：会话元数据，单 JSON 文件，原子写。
+// sessions.js —— 服务端唯一持久状态：会话元数据，单 JSON 文件，原子写。
 // 只存元数据（id/title/cwd/model/时间戳），永不存消息内容——内容事实源是 claude 自己的 session。
 import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
@@ -12,7 +12,7 @@ import { writeOwnerOnlyFile } from './file-security.js';
 const FILE = process.env.CCM_SESSIONS_FILE
   || join(process.env.CCM_DATA_DIR || join(import.meta.dirname, 'data'), 'sessions.json');
 
-// 台阶2（ADR-010）：当前会话指针由全局单指针 currentSessionId 升为 currentByCwd（每工作目录一个）。
+// 台阶2：当前会话指针由全局单指针 currentSessionId 升为 currentByCwd（每工作目录一个）。
 const EMPTY = () => ({ currentByCwd: {}, sessions: [] });
 
 // #5：不仅兜住 parse 抛错，还校验形状——损坏/手改成 {} 的文件不能让后续 .find 崩进程
@@ -127,4 +127,4 @@ export function updateSessionCost(id, cost) {
 
 // 注：原 defaultModelForCwd（空首页"该 cwd 默认模型"推断）已删（A1，2026-06-22）。新会话模型 = 终端
 // ANTHROPIC_* env 默认、服务端不可知；"最近会话 model" 只是推断（上次可能 /model 覆盖、env 默认可能已变），
-// 不算真值。空首页改显「不指定」、首条消息后由 init.model 校正——拿不到真值就不显、不猜。见 docs/event-contract.md。
+// 不算真值。空首页改显「不指定」、首条消息后由 init.model 校正——拿不到真值就不显、不猜。

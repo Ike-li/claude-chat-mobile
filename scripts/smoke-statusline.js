@@ -1,4 +1,4 @@
-// scripts/smoke-statusline.js —— E16/ADR-0011 web 状态栏验收（自包含、不调脚本/快照）
+// scripts/smoke-statusline.js —— E16 web 状态栏验收（自包含、不调脚本/快照）
 // 用法：
 //   node scripts/smoke-statusline.js --unit   # 零 token：buildWebStatusLine 组装 + 真实 git 段实测
 //   node scripts/smoke-statusline.js          # e2e：server 以 AUTH_TOKEN='' PORT=3100 跑着时执行（~$0.02）

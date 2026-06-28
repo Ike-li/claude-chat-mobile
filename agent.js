@@ -1,11 +1,11 @@
-// agent.js —— claude 会话桥（ADR-001/002/003）：
+// agent.js —— claude 会话桥：
 // 每个会话 = 一个长驻 SDK query（streaming input 模式，interrupt/canUseTool 可用），
-// SDK 消息 → agent:event 统一信封（契约见 docs/event-contract.md），seq 单调 + 环形缓冲。
+// SDK 消息 → agent:event 统一信封，seq 单调 + 环形缓冲。
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import * as interactionLog from './interaction-log.js';
 import { sanitize } from './sanitizer.js';
 
-const BUFFER_CAP = 500;       // 环形缓冲条数（见 event-contract.md）
+const BUFFER_CAP = 500;       // 环形缓冲条数
 const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要截断；permission_request 永不截断（4a）
 
 // epoch：每个 AgentSession 实例一个跨重启唯一标识。基于 wall-clock + 进程内计数，
@@ -22,7 +22,7 @@ function nextEpoch() {
 
 export class AgentSession {
   constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, onEvent, onSessionId, onExit, onUsage, historicalCostUsd }) {
-    // 台阶3（ADR-010）：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
+    // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
     this.cwd = cwd;
@@ -53,7 +53,7 @@ export class AgentSession {
     this.disposed = false;
     this.assistantResponseBuffer = '';
     this.terminating = false;
-    // F1：defaultModel = 启动时配置的模型（会话原模型，sessions.json 指针——ADR-005 修订后唯一来源）。
+    // F1：defaultModel = 启动时配置的模型（会话原模型，sessions.json 指针——唯一来源）。
     // 消息不带 model（"默认"）时 target 回退到它，而非 SDK 裸默认——否则空选择会把
     // 配置的网关模型 setModel(undefined) 重置掉（实测：init 从 mimo 变成 opus 并报错）。
     this.defaultModel = model || undefined;
@@ -61,15 +61,15 @@ export class AgentSession {
     // A5：init 报告的真实运行模型名，仅供交互日志显示真实生效模型（不入 activeModel——否则 fresh 会话
     // 下条空发会 target=undefined≠activeModel → setModel(undefined) 把网关模型重置，即 F1 事故）
     this.reportedModel = null;
-    // ADR-012：当前权限档（default/plan/acceptEdits/bypassPermissions/dontAsk），可运行时切；差分决定是否调 setPermissionMode
+    // 当前权限档（default/plan/acceptEdits/bypassPermissions/dontAsk），可运行时切；差分决定是否调 setPermissionMode
     // dontAsk = 非交互严格档：白名单外终端层直接 deny、不走 canUseTool（手机不弹窗），sdkPermissionMode 原样透传（不映射）
     this.permissionMode = permissionMode || 'default';
-    // ADR-015：思考强度档（spawn 时注入 --effort），null=模型默认不传。运行时不可改——
+    // 思考强度档（spawn 时注入 --effort），null=模型默认不传。运行时不可改——
     // SDK 无 effort 控制请求，切档由 server 置换实例（dispose + 下条消息懒重生 resume）
     this.effort = effort || null;
 
     // E16 statusline 数据源（server 构造脚本 stdin 时只读，不进事件契约）：
-    this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径，见 ADR-011）
+    this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径）
     this.historicalCostUsd = historicalCostUsd || 0; // 以前各次会话连接/恢复历史的累计成本
     this.totalCostUsd = 0;        // result.total_cost_usd 最新值（SDK 已是会话累计，勿 +=）
     this.totalDurationMs = 0;     // += result.duration_ms（活跃轮次累计，非墙钟——实例懒重生不暴露给用户）
@@ -116,13 +116,13 @@ export class AgentSession {
         resume: this.sessionId || undefined,
         abortController: this.abort,
         includePartialMessages: true,                        // E4 流式
-        extraArgs: this.effort ? { effort: this.effort } : {}, // ADR-015：真 --effort 注入（SDK 映射为 --effort <档>，与终端 /effort 同旋钮）
-        permissionMode: this.sdkPermissionMode(),            // ADR-012：bypass 映射为 SDK default（bypass 放行由 handleCanUseTool 自实现）
+        extraArgs: this.effort ? { effort: this.effort } : {}, // 真 --effort 注入（SDK 映射为 --effort <档>，与终端 /effort 同旋钮）
+        permissionMode: this.sdkPermissionMode(),            // bypass 映射为 SDK default（bypass 放行由 handleCanUseTool 自实现）
         // 不注入 options.allowedTools（2026-06-22 解耦）：放行白名单完全交给 settingSources 加载的
         // .claude/settings.json 的 permissions.allow（与终端 claude 同源、用户自管），投屏层不再耦合自家白名单。
         // 实测 SDK 把 settings 的 allow 当「自动放行、不触发 canUseTool」的第一层；未命中即触发下方 canUseTool。
-        canUseTool: (name, input, opts) => this.handleCanUseTool(name, input, opts), // 白名单外统一闸门（ADR-003）
-        settingSources: ['user', 'project', 'local'],        // ADR-004：加载"我的"全部配置
+        canUseTool: (name, input, opts) => this.handleCanUseTool(name, input, opts), // 白名单外统一闸门
+        settingSources: ['user', 'project', 'local'],        // 加载"我的"全部配置
         systemPrompt: { type: 'preset', preset: 'claude_code' },
         env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== '')),
         stderr: data => { if (process.env.LOG_STDERR) console.error('[claude]', sanitize(data)); }
@@ -258,9 +258,9 @@ export class AgentSession {
     }
   }
 
-  // ADR-012：权限档切换（与 send 的 setModel 同型，差分——仅档位真变才调 SDK）。
-  // 成功后由 server 广播 permission_mode 合成事件（不走 emit/seq 流，符合 event-contract.md 契约）。
-  // ADR-012：给 SDK 的 permissionMode——bypass 映射为 default。SDK 原生 bypassPermissions 需危险全局
+  // 权限档切换（与 send 的 setModel 同型，差分——仅档位真变才调 SDK）。
+  // 成功后由 server 广播 permission_mode 合成事件（不走 emit/seq 流，符合本服务事件契约）。
+  // 给 SDK 的 permissionMode——bypass 映射为 default。SDK 原生 bypassPermissions 需危险全局
   // flag（allowDangerouslySkipPermissions），那会连 default 审批一起跳过；bypass 改由 handleCanUseTool 放行。
   sdkPermissionMode() {
     return this.permissionMode === 'bypassPermissions' ? 'default' : this.permissionMode;
@@ -285,7 +285,7 @@ export class AgentSession {
     }
   }
 
-  // ---- 权限闸门（ADR-003 第二层）+ AskUserQuestion 特判（F2）----
+  // ---- 权限闸门（第二层）+ AskUserQuestion 特判（F2）----
   handleCanUseTool(name, input, { suggestions, signal, toolUseID }) {
     // F2：canAskUserQuestion 在 SDK 0.1.77 不存在（静默被忽略），AskUserQuestion 走此统一入口。
     // ⚠️ 必须在 bypass 短路之前：AskUserQuestion 是模型「向用户提问」，与「绕过工具权限审批」正交——
@@ -294,7 +294,7 @@ export class AgentSession {
     if (name === 'AskUserQuestion') return this.handleQuestion(input, { signal, toolUseID });
     // dontAsk 防御纵深：SDK 契约保证 dontAsk 不调 canUseTool，此处防御 SDK 版本/bug 的误调
     if (this.permissionMode === 'dontAsk') return { behavior: 'deny', message: '当前模式禁止执行此操作', interrupt: true };
-    // ADR-012：bypass 档自实现放行。不用 SDK allowDangerouslySkipPermissions——实测 2026-06-12 该 flag=true
+    // bypass 档自实现放行。不用 SDK allowDangerouslySkipPermissions——实测 2026-06-12 该 flag=true
     // 是全局 skip，会连 default 档的审批一起废掉（default 假安全），故 bypass 改在此直接 allow。
     if (this.permissionMode === 'bypassPermissions') return { behavior: 'allow', updatedInput: input };
     return this.askPermission(name, input, { suggestions, signal, toolUseID });
@@ -479,14 +479,14 @@ export class AgentSession {
     try { this.abort?.abort(); } catch { /* noop */ }
   }
 
-  // ---- 事件信封与缓冲（见 event-contract.md）----
+  // ---- 事件信封与缓冲 ----
   emit(type, payload) {
     const envelope = {
       seq: ++this.seq,
       epoch: this.epoch,
       sessionId: this.sessionId,
-      instanceId: this.instanceId, // 台阶3（ADR-010）：事件所属实例，前端分流权威锚点（按 viewingInstanceId）
-      cwd: this.cwd,            // 台阶2（ADR-010）：事件所属工作目录，台阶3 降为分组/历史属性
+      instanceId: this.instanceId, // 台阶3：事件所属实例，前端分流权威锚点（按 viewingInstanceId）
+      cwd: this.cwd,            // 台阶2：事件所属工作目录，台阶3 降为分组/历史属性
       ts: Date.now(),
       type,
       payload
@@ -518,7 +518,7 @@ export class AgentSession {
             this.lastUsage = null; // E16：换会话上下文清零，旧 ctx% 不得残留显示
           }
           this.sessionId = msg.session_id;
-          // ADR-012：权限档以 SDK init 上报的 msg.permissionMode 为权威「实际生效档」——这是唯一能证明
+          // 权限档以 SDK init 上报的 msg.permissionMode 为权威「实际生效档」——这是唯一能证明
           // setPermissionMode/ExitPlanMode 等是否真被 SDK 应用的 SDK 源头凭证（模型同理走 msg.model）。
           // bypass 例外：用户档 bypass 时 SDK 实为 default（bypass 由 handleCanUseTool 自放行），保留用户档、
           // 不被 default 覆盖。其余档若 SDK 实际值 ≠ 本地 shadow = 漂移（「我们以为切了、SDK 没应用」那类 bug，
@@ -539,7 +539,7 @@ export class AgentSession {
             claudeVersion: msg.claude_code_version,
             mcpServers: msg.mcp_servers,
             skillsCount: msg.skills?.length ?? 0,
-            permissionMode: this.permissionMode,  // ADR-012：已与 SDK init 对账的实际生效档（bypass 例外，仍为用户档）
+            permissionMode: this.permissionMode,  // 已与 SDK init 对账的实际生效档（bypass 例外，仍为用户档）
             slashCommands: msg.slash_commands ?? []
           });
           // F1：fire-and-forget 拉取模型列表（init 到达时兜底；start 中已提前调用，此轮通常幂等）

@@ -1,5 +1,5 @@
 // smoke-isolation.js —— 会话列表 cwd 隔离 + ~/.claude 扫描单测（零 token，不需 server）
-// 验收 ADR-010 台阶0 / ADR-005 修订：
+// 验收 台阶0：
 //   - listSessions 按 cwd 隔离、从 jsonl head 提取 title/model/entrypoint、按 mtime 降序；
 //   - sessionFileExists 归属校验（本 cwd 命中 / 跨 cwd 与失效 id 不命中）；
 //   - getProjectDir 编码与 CLI 一致（含 /private/tmp 与连续 dash 不折叠）。
