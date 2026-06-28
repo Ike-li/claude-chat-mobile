@@ -40,8 +40,11 @@
 ## 快速开始
 
 ```bash
-npm install
-cp .env.example .env   # 设置 AUTH_TOKEN（任何非 localhost 访问都必填）、WORK_DIR、白名单
+node --version           # 需 Node ≥ 20
+which claude             # 本项目驱动的 CLI——必须已安装并登录
+
+npm install --omit=dev   # 仅运行依赖——不含 puppeteer/浏览器。要跑测试用完整 npm install。
+cp .env.example .env     # 设置 AUTH_TOKEN（任何非 localhost 访问都必填）、WORK_DIR、白名单
 
 # 推荐：启动前自检配置（端口占用、CLAUDE_BIN 路径、网关环境、文件权限）
 node scripts/doctor.js        # 检查配置

@@ -40,8 +40,11 @@
 ## Quick Start
 
 ```bash
-npm install
-cp .env.example .env   # set AUTH_TOKEN (required for any non-localhost access), WORK_DIR, allow-list
+node --version           # need Node ≥ 20
+which claude             # the CLI this project drives — must be installed & logged in
+
+npm install --omit=dev   # runtime deps only — no puppeteer/browser. To run tests, use full `npm install`.
+cp .env.example .env     # set AUTH_TOKEN (required for any non-localhost access), WORK_DIR, allow-list
 
 # Recommended: pre-flight your config (port in use, CLAUDE_BIN path, gateway env, file perms)
 node scripts/doctor.js        # check config

@@ -156,6 +156,8 @@ node scripts/smoke.js --phase2     # 重启终端 1 后：跨重启 resume
 
 ### 提交前自检
 
+> 跑测试需先完整 `npm install`（含 devDependencies；首次全装会为视觉测试拉取 chrome）。用户端只需 `npm install --omit=dev`。
+
 ```bash
 npm run check              # 对 *.js + public/js/*.js 跑 node --check（挡语法错）
 node scripts/doctor.js     # 启动前配置自检 + 文档死链/旧文件名漂移 + 前端 JS 语法
