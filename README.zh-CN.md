@@ -159,3 +159,7 @@ graph LR
 ## 许可证
 
 [MIT](LICENSE) © 2026 Ike-li
+
+## 友链
+
+- [LINUX DO](https://linux.do/)

@@ -157,3 +157,7 @@ Runtime dependencies: `@anthropic-ai/claude-agent-sdk`, `express`, `socket.io`, 
 ## License
 
 [MIT](LICENSE) © 2026 Ike-li
+
+## Friend Links
+
+- [LINUX DO](https://linux.do/)
