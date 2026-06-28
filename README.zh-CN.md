@@ -40,6 +40,9 @@
 ## 快速开始
 
 ```bash
+git clone https://github.com/Ike-li/claude-chat-mobile.git
+cd claude-chat-mobile
+
 node --version           # 需 Node ≥ 20
 which claude             # 本项目驱动的 CLI——必须已安装并登录
 

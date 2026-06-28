@@ -40,6 +40,9 @@
 ## Quick Start
 
 ```bash
+git clone https://github.com/Ike-li/claude-chat-mobile.git
+cd claude-chat-mobile
+
 node --version           # need Node ≥ 20
 which claude             # the CLI this project drives — must be installed & logged in
 
