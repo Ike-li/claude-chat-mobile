@@ -14,10 +14,6 @@
   <img src="docs/demo.gif" width="300" alt="流式回答 → 工具卡片 → 手机端批准 git push">
 </p>
 
-> ⚠️ 本质上，这是**一条可远程触达、直通你本机 shell 的代码执行通道**。把它暴露到公网前，务必先读下方 [安全模型](#安全模型)。
-
-> ℹ️ **个人项目，按现状（as-is）提供**，不保证持续维护或技术支持。欢迎自取自用，风险自负。
-
 ## 界面
 
 <table>
@@ -37,7 +33,7 @@
 
 - **Node.js ≥ 20**——用 `node --version` 检查。
 - **本机有一个可用的 `claude` CLI。** 本项目驱动*你的*本机 CLI，不自带。先确认 `claude` 能在你终端跑起来（`which claude`，再开一次对话确认已登录）——web UI 继承的正是这个 CLI、你的 `CLAUDE.md`、MCP 服务器、技能、hooks 和 shell 环境。
-- **Provider / 网关跟随你的终端。** web 端原样沿用你终端 `claude` 用的 provider、网关与模型——官方订阅或第三方网关皆可（第三方经启动 shell 里 `export` 的 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL`）。**这些只能来自启动 shell、不写进 `.env`**（`.env` 里的 `ANTHROPIC_*` 启动期被剥除，以免 web 与终端分叉）；详见 [docs/configuration.md](docs/configuration.md)。
+- **Provider / 网关跟随你的终端。** web 端原样沿用你终端 `claude` 用的 provider、网关与模型——官方订阅或第三方网关皆可。
 - **macOS 或 Linux。**
 
 ## 快速开始
@@ -67,6 +63,8 @@ cloudflared tunnel --url http://localhost:3000
 > ⚠️ 不设 `AUTH_TOKEN` 时服务只绑定 `127.0.0.1`、无法被隧道穿透——这是有意为之。
 >
 > 📌 以上是**最简配置**（临时随机隧道，仅供测试）。**稳定的生产部署**——固定域名、Cloudflare Access 双因素、作为后台守护进程运行——见 [docs/deployment.md](docs/deployment.md)。
+>
+> ⚠️ 本质上，这是**一条可远程触达、直通你本机 shell 的代码执行通道**。把它暴露到公网前。
 
 ## 运行方式(三选一)
 
@@ -86,7 +84,7 @@ cloudflared tunnel --url http://localhost:3000
 2. **没有 token 就不出本机。** 未设置 `AUTH_TOKEN` 时，服务只绑定 `127.0.0.1`——不存在"留空 = 对全世界开放"的路径。要投送到公网*必须*有 token。
 3. **两层权限闸门——白名单零注入、纯继承你的 CLI。** 本项目不注入任何自家放行 / 禁用清单（代码里无 `allowedTools` / `disallowedTools`）；自动放行集 = 你已有 claude 配置里 `permissions.allow` 的合并结果——全局 `~/.claude/settings.json` + 项目 `.claude/settings.json` + 本地 `.claude/settings.local.json` 三处一并生效（经 `settingSources` 加载，与终端同源）。命中即放行；未命中一律挂起，把审批请求（含完整命令与工作目录）推送到你手机，确认后才执行。
    - ⚠️ **公网暴露前，审查你的全局 `~/.claude/settings.json` 白名单**——终端里多年累积的 `Bash(...)` / `Write` 等会照样自动放行、不弹手机，要收紧的不只项目那份。
-4. **设备信赖（TOFU）。** 既非本机、也未经 Cloudflare Access 验证的连接，必须先在你电脑上一次性授权该设备才能做任何事——光有合法 token 不够（[ADR-0018](docs/decisions.md#adr-0018)）。
+4. **设备信赖（TOFU）。** 既非本机、也未经 Cloudflare Access 验证的连接，必须先在你电脑上一次性授权该设备才能做任何事——光有合法 token 不够。
 
 完整威胁模型与加固指引见 [docs/design.md](docs/design.md) §4。
 
@@ -113,29 +111,6 @@ cloudflared tunnel --url http://localhost:3000
 - **Web Push** 推送审批、提问与结果（iOS 16.4+ 需先添加到主屏幕）。
 - **运维与安全加固**——日志脱敏、`0600` 原子写、`doctor` 启动自检、可选 Cloudflare Access 2FA。
 
-## 文档
-
-**日常使用与部署：**
-
-| 文档 | 内容 |
-|---|---|
-| [docs/design.md](docs/design.md) | 北极星、终端等价性清单、安全模型、验收剧本 |
-| [docs/configuration.md](docs/configuration.md) | 全部环境变量（唯一参考） |
-| [docs/deployment.md](docs/deployment.md) | 生产部署模板 |
-
-**想 fork / 改造代码时再看（内部参考）：**
-
-| 文档 | 内容 |
-|---|---|
-| [docs/architecture.md](docs/architecture.md) | 架构深度解析：设计哲学、安全纵深、AgentSession 内部机制、并发模型 |
-| [docs/event-contract.md](docs/event-contract.md) | 前后端事件契约 |
-| [docs/decisions.md](docs/decisions.md) | 架构决策记录（ADR 0001-0018） |
-
-**读代码的推荐顺序**：[docs/design.md](docs/design.md) §0 北极星 + [docs/event-contract.md](docs/event-contract.md) 事件契约 → `server.js` → `agent.js` 的 `map()` 与 `askPermission()` → `public/js/app.js` 的 `handle` 分发表。
-
-## 项目状态
-
-个人的、单用户（n=1）工具，开源仅供参考——不是社区项目。维护者直接在 `master` 提交；没有贡献流程、issue 处理或支持承诺，欢迎自由 fork。那些有意为之的约束（无 lint / 测试框架 / 构建步骤 / CI）与安全不变量记录在 [docs/design.md](docs/design.md) 和 [CLAUDE.md](CLAUDE.md)。
 
 ## 内部实现（想读代码 / fork 才看）
 
@@ -171,23 +146,6 @@ graph LR
 4. 每个事件套上 `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` 信封 → 进 500 条环形缓冲 → `io.emit` 广播（前端按 `viewingInstanceId` 分流；后台 tab 的高频 delta 不广播以省带宽）
 5. 手机断线再连：`sync:since {lastSeq}` 补发缓冲；`epoch` 变化 = 服务端换了实例，客户端自动重置去重基线
 
-### 后端文件（11 个 .js）
-
-核心四件是主干，其余七件是按需长出的能力/加固模块：
-
-| 文件 | 职责 | 关键点 |
-|---|---|---|
-| `server.js` | 契约层：Socket.IO 路由、鉴权、静态托管、启动预检 | 所有 handler 经 `on()` 包裹防崩；无 `AUTH_TOKEN` 只监听 localhost |
-| `agent.js` | 会话桥：`AgentSession` 包装一个长驻 SDK query | `canUseTool` 审批闸门、`map()` 把 SDK 消息译成契约事件、静默看护 |
-| `sessions.js` | 唯一持久状态：`data/sessions.json` 原子读写 | 只存元数据（id/标题/模型），消息内容的事实源是 claude 自己的 JSONL |
-| `history.js` | CLI JSONL 读取：会话列表扫描 + 历史回显 | 读取 `~/.claude/projects/<project>/`，列表按 cwd 隔离 |
-| `uploads.js` | 文件/图片上传：落盘 `.ccm-uploads` + 路径注入 + 防穿越 | O_EXCL/O_NOFOLLOW + 落点校验 |
-| `statusline.js` | Web 自有状态栏：SDK 数据 + 本机 git 结构化组装 | 开箱即用，不调脚本/快照 |
-| `sanitizer.js` | 日志脱敏：15 种敏感模式 + `maskToken` | 应用于交互日志、stderr、启动打印 |
-| `file-security.js` | 文件安全：0600 原子写（tmp→fsync→rename）+ symlink 守卫 | 配置文件防同机他用户读取 |
-| `interaction-log.js` | 可选交互日志：`LOG_INTERACTIONS=1` 开启 | 四跳内容摘要、脱敏后截断；默认关 |
-| `cf-access.js` | Cloudflare Access JWT 校验：公网 fail-closed 鉴权 | 经 CF 隧道强制验 JWT、不回退 token |
-| `devices.js` | 设备管理：受信任及待批准指纹的载入与持久化 | TOFU 设备信赖（ADR-018） |
 
 运行时依赖：`@anthropic-ai/claude-agent-sdk`、`express`、`socket.io`、`dotenv`、`web-push`、`jose`。前端第三方库本地自托管到 `public/vendor/`（Tailwind/marked/highlight.js/DOMPurify），零 CDN 依赖——见 [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md)。
 

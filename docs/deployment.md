@@ -1,6 +1,6 @@
 # 部署与运维（参考方案：常驻 + 固定公网入口）
 
-> 本文给出一套**生产级常驻部署**的参考配方：macOS LaunchAgent 常驻 + Cloudflare Tunnel 固定域名 + Cloudflare Access 双因素。设计动机见 [ADR-0017](decisions.md#adr-0017)。
+> 本文给出一套**生产级常驻部署**的参考配方：macOS LaunchAgent 常驻 + Cloudflare Tunnel 固定域名 + Cloudflare Access 双因素。
 >
 > 下文用占位符 `<your-domain>`、`<your-team>`、`<UUID>` 等，替换为你自己的值。Linux/systemd 用户把 LaunchAgent 部分换成 systemd unit，思路一致。
 
@@ -14,8 +14,8 @@
 - **两个常驻进程**（随登录自启、崩溃自重启、关终端不掉）：
   - server —— `node server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**以保终端等价性（claude 的 PATH / 登录态与你终端一致）。
   - tunnel —— `cloudflared` 命名隧道，把 `:3000` 投到公网域名。
-- **鉴权分层**（[ADR-0017](decisions.md#adr-0017)）：公网走 Access JWT（服务端 `cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
-  > ⚠️ **反代拓扑会静默关掉设备审批层**（[ADR-0018](decisions.md#adr-0018)）。设备指纹审批按 socket 直连 peer 的 IP 判定「本机」——本配方里 Cloudflare 隧道在 `localhost:3000` 落地，连接显成 `127.0.0.1`，但公网路径已由 Access JWT 兜底，故无碍。**若你换成任何在本机落地的其他反代**（nginx/Caddy 的 `proxy_pass localhost`、SSH 端口转发、frp 等），所有客户端都会显成本机 → 设备审批层被跳过，**防线只剩 `AUTH_TOKEN`**。这类拓扑下务必设强 `AUTH_TOKEN`，别指望设备审批纵深。
+- **鉴权分层**：公网走 Access JWT（服务端 `cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
+  > ⚠️ **反代拓扑会静默关掉设备审批层**。设备指纹审批按 socket 直连 peer 的 IP 判定「本机」——本配方里 Cloudflare 隧道在 `localhost:3000` 落地，连接显成 `127.0.0.1`，但公网路径已由 Access JWT 兜底，故无碍。**若你换成任何在本机落地的其他反代**（nginx/Caddy 的 `proxy_pass localhost`、SSH 端口转发、frp 等），所有客户端都会显成本机 → 设备审批层被跳过，**防线只剩 `AUTH_TOKEN`**。这类拓扑下务必设强 `AUTH_TOKEN`，别指望设备审批纵深。
 
 ## ⚠️ 最容易忘的一条
 
@@ -107,9 +107,6 @@ npm start
 | 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在启动 shell `export ANTHROPIC_MODEL=<带后缀名>` 后重启，或 web 端 `/model <带后缀名>` 切换（`.env` 里的 `ANTHROPIC_*` 启动期被剥除，配置只能来自 shell） |
 | 回复只有工具卡片、无正文 | 网关可能不流式 → `agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
 
-## 部署机跑全局 TUN 代理（Clash / sing-box / mihomo fake-ip）时：cloudflared 连不上 edge（1033）
-
-全局 TUN + fake-ip 会劫持 argotunnel 的 DNS、并让默认 QUIC 经代理超时 → cloudflared 连不上 Cloudflare edge、公网 **1033**。绕过（两件套缺一不可）：① `~/.cloudflared/config.yml` 加 `protocol: http2` + `edge:` YAML 列表写死真实 edge IP（取自 `198.41.192.0/24`、`198.41.200.0/24`，端口 `:7844`）；② 静态路由把这两段 `/24` 指向物理默认网关绕过 TUN（须 `/24` 才压得过 TUN 的 `0/1`、`128/1`），并做成开机自启服务周期重加。验证只认 cloudflared 日志的 `Registered tunnel connection`（CF Access 的 302 不算）。edge IP 硬编码、Cloudflare 轮换需更新。静态路由与开机自启服务的具体命令依操作系统而异（macOS `route -nv add -net … <gw>` + LaunchDaemon、Linux `ip route add … via <gw>` + systemd），按你的环境构造。
 
 ## 最简替代（仅测试用）
 
