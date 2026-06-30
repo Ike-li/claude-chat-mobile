@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -387,19 +387,34 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   window.addEventListener('online', reconnectIfNeeded);
   window.addEventListener('pageshow', reconnectIfNeeded); // 从 bfcache 恢复
 
-  // iOS Safari 键盘弹起时 visualViewport 变化，layout viewport 不动。
-  // Chrome Android 的 interactive-widget=resizes-content 对 iOS 无效，需手动适配。
+  // iOS Safari 键盘弹起时 visualViewport 变化、layout viewport 不动，需补 footer padding 让输入区避开键盘。
+  // 决策（含负/错配/Android 不补 + 失焦回落）抽到 logic.js keyboardInsetPadding，此处只取值/接线。
+  // 失焦必复位是关键：点附件按钮唤起系统选择器会让输入框失焦、viewport 瞬时错配，旧实现会把一个大 inset
+  // 写死进 padding 留出半屏空白且无人复位（E17 附件回流 bug）；改为按焦点门控 + focusout 后重算自愈。
   if (window.visualViewport) {
     const footer = document.querySelector('footer');
-    let baseBottom = 0;
-    window.visualViewport.addEventListener('resize', () => {
+    const vv = window.visualViewport;
+    const baseBottom = footer ? (parseFloat(getComputedStyle(footer).paddingBottom) || 0) : 0;
+    const applyInset = () => {
       if (!footer) return;
-      if (!baseBottom) baseBottom = parseFloat(getComputedStyle(footer).paddingBottom) || 0;
-      const keyboardHeight = window.innerHeight - window.visualViewport.height;
-      footer.style.paddingBottom = (baseBottom + keyboardHeight) + 'px';
-      // 滚动到底部保证输入区可见
-      if (keyboardHeight > 60) scrollBottom();
-    });
+      const ae = document.activeElement;
+      const inputFocused = !!ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT');
+      const pad = keyboardInsetPadding({
+        innerHeight: window.innerHeight,
+        viewportHeight: vv.height,
+        viewportOffsetTop: vv.offsetTop,
+        inputFocused,
+        baseBottom,
+      });
+      footer.style.paddingBottom = pad + 'px';
+      if (pad - baseBottom > 60) scrollBottom(); // 键盘明显占位才滚动到底，保证输入区可见
+    };
+    vv.addEventListener('resize', applyInset);
+    vv.addEventListener('scroll', applyInset);
+    // 焦点变化（尤其附件选择器抢/还焦点）后重算：键盘收起即回落 baseBottom，消除残留空白。
+    // focusout 延后一帧再算——等 activeElement / viewport 落定，避免读到过渡态。
+    window.addEventListener('focusout', () => setTimeout(applyInset, 50));
+    window.addEventListener('focusin', applyInset);
   }
 
   // 当前是否走公网（非 localhost/局域网）——公网由 Cloudflare Access 把守、无 token 可输。

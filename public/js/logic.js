@@ -124,3 +124,20 @@ export function syncAckAction(err, res) {
   if (res && res.gap) return 'reload'; // 缓冲超窗、中间有缺口 → 清屏全量重载历史，否则残缺需手刷
   return 'none';
 }
+
+// 软键盘弹起时，底部输入区(footer)该用多大的 padding-bottom 给键盘让位。
+//   iOS Safari：键盘只缩 visualViewport、layout viewport(innerHeight)不动 → 需手动补 (innerHeight-viewportHeight)
+//     把输入框顶到键盘上方；
+//   Android(viewport meta interactive-widget=resizes-content)：layout viewport 随键盘一起缩，
+//     innerHeight≈viewportHeight → inset≈0、本就不需补。
+// 要害(E17 附件回流空白 bug)：inputFocused=false（键盘应已收起）时**一律回落 baseBottom**。否则点附件按钮
+//   唤起系统文件/相册选择器时，输入框失焦、innerHeight/viewportHeight 在抢/还焦点期间瞬时错配
+//   （innerHeight 已恢复全屏、viewportHeight 还停在键盘弹起的小值），会算出一个大 inset 被写死进 padding，
+//   留出半屏空白且无人复位。按焦点门控后，键盘收起即回落静息值，空白自愈。
+// inset 为负/NaN/0 同样回落 baseBottom，绝不写负 padding。
+export function keyboardInsetPadding({ innerHeight, viewportHeight, viewportOffsetTop = 0, inputFocused, baseBottom = 0 }) {
+  if (!inputFocused) return baseBottom;
+  const inset = innerHeight - viewportHeight - viewportOffsetTop;
+  if (!(inset > 0)) return baseBottom;
+  return baseBottom + inset;
+}
