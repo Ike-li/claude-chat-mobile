@@ -30,6 +30,17 @@
   </tr>
 </table>
 
+## When it's worth it
+
+> This isn't "open a remote desktop back to your computer from your phone." That mirrors a screen; this gives your real local `claude` session a native entry point built for a phone. The difference shows up at moments like these:
+>
+> - **A task is running and you've stepped away.** You kick off "migrate this module from JS to TypeScript, file by file," then leave for a meeting. Twenty minutes in it stops to ask — "I need to add `strict: true` to `tsconfig.json`, allow it?" — and the prompt is pushed to your phone. One tap to approve or deny. No need to keep the computer screen awake or poke into a remote terminal.
+> - **One session, picked up across devices.** Start something from your phone on the way out; resume it at your desk with `/resume` — both ends read the same CLI session log, not two separate ones. On a flaky subway connection it self-heals and replays, so you return to where you were instead of reconnecting and re-locating.
+> - **Several repos in parallel.** claude runs different tasks in two projects at once; switch tabs to check each — a single-screen remote desktop can't watch both at once on a phone.
+> - **Native phone input.** Type `/` for a native command list you tap, send a photo from your library straight to claude, long-press to copy a long output — these are smooth in an interface built for a phone.
+>
+> If you only glance in remotely now and then, an existing remote desktop is enough. The value lands when you use your phone *frequently* as a pocket extension of your terminal.
+
 ## Prerequisites
 
 - **Node.js ≥ 20** — check with `node --version`.
