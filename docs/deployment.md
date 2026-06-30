@@ -63,12 +63,13 @@ cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
 
 ### 3. 常驻（macOS LaunchAgent 示例）
 
-为 server 与 tunnel 各写一个 plist 到 `~/Library/LaunchAgents/`，关键点：
-- server 的 `ProgramArguments` 用 `zsh -lc 'cd <repo> && exec node server.js'`（登录 shell 保环境一致）。
-- `RunAtLoad` + `KeepAlive` 开启。
-- `StandardOutPath`/`StandardErrorPath` 指向 `~/Library/Logs/`。
+仓库 `deploy/` 下有两份**占位符 plist 模板**，复制 → 替换占位符 → 落到 `~/Library/LaunchAgents/`：
 
-加载：
+- [`deploy/server.plist.template`](../deploy/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
+- [`deploy/tunnel.plist.template`](../deploy/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
+
+每份模板顶部的 XML 注释列出占位符（`__LABEL__`/`__REPO__`/`__NODE__`/`__LOG__` 等）与一行可直接跑的 `sed` 替换示例。替换后加载：
+
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-server-label>.plist
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-tunnel-label>.plist
