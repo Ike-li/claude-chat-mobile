@@ -141,3 +141,14 @@ export function keyboardInsetPadding({ innerHeight, viewportHeight, viewportOffs
   if (!(inset > 0)) return baseBottom;
   return baseBottom + inset;
 }
+
+// 交互日志(控制台)某条目是否该在当前查看实例下显示。修「切工作区残留上个区日志」：clientLogBuffer 是
+// 全局缓冲、无实例隔离，loadConsoleLogs 过去把它无差别合并进每个实例的控制台 → 上个工作区的
+// web-send/recv/stream 漏到新工作区。client_conn 是 socket 连接级事件、无工作区归属 → 恒显；
+// 其余按 entry.instanceId 精确匹配当前实例（含两端皆 null 的空首页；undefined 视同 null，旧条目不误判）。
+// 服务端日志(logs:get)本就按 sessionId 隔离、不经此函数。
+export function logEntryVisibleForInstance(entry, instanceId) {
+  if (!entry) return false;
+  if (entry.type === 'client_conn') return true;
+  return (entry.instanceId ?? null) === (instanceId ?? null);
+}

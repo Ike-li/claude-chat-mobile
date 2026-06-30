@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -110,7 +110,11 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     const entry = {
       ts: Date.now(),
       type: 'client_' + type, // client_conn, client_send, client_recv, client_stream
-      text: text
+      text: text,
+      // 打当前查看实例标签，供切工作区时按实例过滤（client_conn 连接级恒显、其标签被忽略）。
+      // recv/stream 仅当前视图实例会产生（后台事件已在 agent:event 分发处 shouldDropAgentEvent 拦掉）；
+      // send 的目标即 viewingInstanceId → 标签准确。见 logic.js logEntryVisibleForInstance。
+      instanceId: viewingInstanceId,
     };
     // 收发两类附当前模型 ID（与服务端四类一致带 chip）；连接/流式片段无单一模型语义、不带
     if ((type === 'send' || type === 'recv') && currentModel) entry.model = currentModel;
@@ -2607,7 +2611,9 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       if (res && Array.isArray(res.logs)) {
         mergedLogs = [...res.logs];
       }
-      mergedLogs = mergedLogs.concat(clientLogBuffer);
+      // 只合并属于本实例(或连接级恒显)的 client 日志——修切工作区残留上个区日志（clientLogBuffer 全局无隔离）。
+      // 服务端日志(res.logs)已按 sessionId 隔离、无 instanceId 字段，不经此过滤。
+      mergedLogs = mergedLogs.concat(clientLogBuffer.filter(e => logEntryVisibleForInstance(e, instId)));
       mergedLogs.sort((a, b) => a.ts - b.ts);
       if (mergedLogs.length > 200) {
         mergedLogs = mergedLogs.slice(mergedLogs.length - 200);
