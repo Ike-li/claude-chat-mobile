@@ -9,7 +9,7 @@ import { homedir } from 'node:os';
 const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
 // 历史回显防爆上限：极端超大会话只回最近 N 条 user/assistant，避免一次性把手机 DOM 撑爆。
 // 正常会话（几百条内）全量返回——与 CLI /resume 的完整历史一致（终端等价性）。不再按字节截断头部。
-const HISTORY_MAX_MESSAGES = 2000;
+export const HISTORY_MAX_MESSAGES = 2000;
 const HEAD_READ_BYTES = 64 * 1024;  // 列表元数据（标题/模型/来源）只需文件头部少量字节
 const LIST_LIMIT = 50;              // 会话列表上限（按 mtime 取最近 N，避免大目录全量读 head）
 
@@ -41,15 +41,15 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
     return []; // 文件不存在：新会话或已删
   }
 
-  // B6：mtime 未变 = 内容未变，直接返回缓存。缓存的是【全量】消息，按 limit 取尾再返回
+  // B6：mtime 未变 = 内容未变，直接返回缓存。缓存的是封顶到 HISTORY_MAX_MESSAGES 的尾部消息，按 limit 取尾再返回
   // （stat ~1ms，远快于重新流式读盘 + 解析）。
   const cached = _histCache.get(historyFile);
   if (cached && cached.mtimeMs === mtimeMs) return cached.messages.slice(-limit);
 
   const messages = [];
   try {
-    // 逐行读：内存只随消息数增长，不一次性 buffer 整个文件——会话可增长到数十 MB，
-    // 流式读才稳、不阻塞事件循环（取代原「尾部 1MB」截断方案）。
+    // 逐行读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
+    // （取代原「尾部 1MB」截断方案）。累积数组下方封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
     const rl = createInterface({
       input: createReadStream(historyFile, { encoding: 'utf-8' }),
       crlfDelay: Infinity
@@ -73,14 +73,24 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
           content,
           timestamp: entry.timestamp
         });
+        // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
+        // 【全量】user/assistant 文本常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
+        // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
+        if (messages.length > HISTORY_MAX_MESSAGES * 2) {
+          messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
+        }
       }
+    }
+    // 循环后精裁到上限（批量裁剪可能残留至多 2×）：缓存的数组严格 ≤ HISTORY_MAX_MESSAGES。
+    if (messages.length > HISTORY_MAX_MESSAGES) {
+      messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
     }
   } catch {
     return []; // 读取失败
   }
 
-  // B6：缓存【全量】消息（LRU，超上限淘汰最旧）；返回时按 limit 取尾。默认上限足够覆盖正常会话
-  // 的全部历史，仅极端超大会话才被削顶——防一次性撑爆前端。
+  // B6：缓存消息（LRU，超上限淘汰最旧）；已在流式阶段封顶到 HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。
+  // 正常会话（≤上限）即全量历史；仅极端超大会话被削顶——既防一次性撑爆前端，也防全量常驻 server 内存。
   if (_histCache.size >= HIST_CACHE_MAX) {
     _histCache.delete(_histCache.keys().next().value);
   }
