@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, listSessions, sessionFileExists, getSessionHistory } from '../history.js';
+import { getProjectDir, listSessions, sessionFileExists, getSessionHistory, HISTORY_MAX_MESSAGES } from '../history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -185,4 +185,51 @@ test('getSessionHistory: limit 参数截取尾部 N 条', async () => {
   assert.equal(msgs.length, 3);
   assert.equal(msgs[0].content, '消息 7');
   assert.equal(msgs[2].content, '消息 9');
+});
+
+// ── 完整加载（回归：曾因 1MB 尾部读 + 默认 50 双截断，导致大会话 Web 端只显示尾部，
+//    与 CLI /resume 的全量历史不同步）─────────────────────────────────────────
+
+test('getSessionHistory: 文件超 1MB 仍读到最开头的消息（头部不被截断）', async () => {
+  const cwd = '/test/big-head-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  // 首条放可识别标记，随后用 ~50KB/条填充把文件撑过 1MB——旧实现只读尾部 1MB，会丢掉首条
+  const filler = 'x'.repeat(50 * 1024);
+  const entries = [{ type: 'user', message: { role: 'user', content: '最开头的消息' } }];
+  for (let i = 0; i < 30; i++) {
+    entries.push({ type: 'assistant', message: { role: 'assistant', content: `${filler}${i}` } });
+  }
+  writeJSONL(dir, 'bighead', entries);
+  const msgs = await getSessionHistory('bighead', cwd, undefined, { baseDir: BASE });
+  assert.equal(msgs.length, 31);
+  assert.equal(msgs[0].content, '最开头的消息'); // 头部未被 1MB 截断
+});
+
+test('getSessionHistory: 默认 limit 下 >50 条消息全部返回（不砍到 50）', async () => {
+  const cwd = '/test/many-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  const entries = Array.from({ length: 120 }, (_, i) => ({
+    type: 'user', message: { role: 'user', content: `消息 ${i}` }
+  }));
+  writeJSONL(dir, 'manyhist', entries);
+  const msgs = await getSessionHistory('manyhist', cwd, undefined, { baseDir: BASE });
+  assert.equal(msgs.length, 120);
+  assert.equal(msgs[0].content, '消息 0');
+  assert.equal(msgs[119].content, '消息 119');
+});
+
+// 超 HISTORY_MAX_MESSAGES 条时削顶到上限——流式阶段封顶（返回上限=内存上限），防超大会话
+// 全量常驻 always-on 进程（P2 review）。锁住「削头留尾」的契约：未来若有人改回累积全量或削错方向即红。
+test('getSessionHistory: 超上限会话削顶到 HISTORY_MAX_MESSAGES，保留尾部', async () => {
+  const cwd = '/test/cap-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  const total = HISTORY_MAX_MESSAGES * 2 + 5; // 跨过 2× 批量裁剪阈值，覆盖循环内 + 循环后两段裁剪
+  const entries = Array.from({ length: total }, (_, i) => ({
+    type: 'user', message: { role: 'user', content: `消息 ${i}` }
+  }));
+  writeJSONL(dir, 'caphist', entries);
+  const msgs = await getSessionHistory('caphist', cwd, undefined, { baseDir: BASE });
+  assert.equal(msgs.length, HISTORY_MAX_MESSAGES);                       // 削顶到上限
+  assert.equal(msgs[0].content, `消息 ${total - HISTORY_MAX_MESSAGES}`); // 头部被削，首条=倒数第 N 条
+  assert.equal(msgs[msgs.length - 1].content, `消息 ${total - 1}`);      // 尾部（最新）保留
 });

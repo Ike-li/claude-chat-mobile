@@ -124,3 +124,31 @@ export function syncAckAction(err, res) {
   if (res && res.gap) return 'reload'; // 缓冲超窗、中间有缺口 → 清屏全量重载历史，否则残缺需手刷
   return 'none';
 }
+
+// 软键盘弹起时，底部输入区(footer)该用多大的 padding-bottom 给键盘让位。
+//   iOS Safari：键盘只缩 visualViewport、layout viewport(innerHeight)不动 → 需手动补 (innerHeight-viewportHeight)
+//     把输入框顶到键盘上方；
+//   Android(viewport meta interactive-widget=resizes-content)：layout viewport 随键盘一起缩，
+//     innerHeight≈viewportHeight → inset≈0、本就不需补。
+// 要害(E17 附件回流空白 bug)：inputFocused=false（键盘应已收起）时**一律回落 baseBottom**。否则点附件按钮
+//   唤起系统文件/相册选择器时，输入框失焦、innerHeight/viewportHeight 在抢/还焦点期间瞬时错配
+//   （innerHeight 已恢复全屏、viewportHeight 还停在键盘弹起的小值），会算出一个大 inset 被写死进 padding，
+//   留出半屏空白且无人复位。按焦点门控后，键盘收起即回落静息值，空白自愈。
+// inset 为负/NaN/0 同样回落 baseBottom，绝不写负 padding。
+export function keyboardInsetPadding({ innerHeight, viewportHeight, viewportOffsetTop = 0, inputFocused, baseBottom = 0 }) {
+  if (!inputFocused) return baseBottom;
+  const inset = innerHeight - viewportHeight - viewportOffsetTop;
+  if (!(inset > 0)) return baseBottom;
+  return baseBottom + inset;
+}
+
+// 交互日志(控制台)某条目是否该在当前查看实例下显示。修「切工作区残留上个区日志」：clientLogBuffer 是
+// 全局缓冲、无实例隔离，loadConsoleLogs 过去把它无差别合并进每个实例的控制台 → 上个工作区的
+// web-send/recv/stream 漏到新工作区。client_conn 是 socket 连接级事件、无工作区归属 → 恒显；
+// 其余按 entry.instanceId 精确匹配当前实例（含两端皆 null 的空首页；undefined 视同 null，旧条目不误判）。
+// 服务端日志(logs:get)本就按 sessionId 隔离、不经此函数。
+export function logEntryVisibleForInstance(entry, instanceId) {
+  if (!entry) return false;
+  if (entry.type === 'client_conn') return true;
+  return (entry.instanceId ?? null) === (instanceId ?? null);
+}
