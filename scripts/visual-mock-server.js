@@ -602,6 +602,13 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
+        // 复刻真实 SDK：ExitPlanMode 作为工具先经 case 'assistant' 派生 tool_use（亮 busy pill +
+        // 文案「运行工具 ExitPlanMode」），随后才在执行前触发 canUseTool → permission_request。
+        // 此前 mock 漏发 tool_use 致 pill 不亮、且批准后 tool_result 指向不存在的 card 被静默丢弃。
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: pendingPermission.toolUseId, name: pendingPermission.name, inputSummary: pendingPermission.input }
+        });
         socket.emit('agent:event', {
           seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }

@@ -286,6 +286,15 @@ async function run() {
     });
     assert.strictEqual(isQuestionModalHiddenTC5, true, 'TC-5: Question modal must hide after selecting option');
 
+    // 2b. Assert status pill immediately reads「思考中」after answering the last question —
+    // fills the empty window between answer-sent and the model's first streaming event
+    // (mock leaves activeStatusText untouched until `result` arrives 800ms later, so this is stable).
+    const statusAfterAnswerTC5 = await page.evaluate(() => {
+      const el = document.getElementById('activeStatusText');
+      return el ? el.textContent.trim() : null;
+    });
+    assert.strictEqual(statusAfterAnswerTC5, 'Claude 正在思考中...', 'TC-5: Status must switch to 思考中 right after answering (no stale tool text)');
+
     await waitIdle();
 
     // 3. Assert toolcard status transitioned to answered (☑️)
@@ -1095,7 +1104,7 @@ async function run() {
     await page.reload({ waitUntil: 'networkidle2' });
     await page.waitForSelector('#input');
     await sleep(500);
-    // 发 test:exitplan（mock 置 plan 档 + 弹 ExitPlanMode 审批；不用 sendCommand 因 permission 流程不触发 busy pill）
+    // 发 test:exitplan（mock 复刻真实 SDK：置 plan 档 → tool_use(ExitPlanMode) 亮 pill+工具文案 → 弹审批）。裸 input 发送
     await page.focus('#input');
     await page.evaluate(() => { const i = document.getElementById('input'); i.value = 'test:exitplan'; i.dispatchEvent(new Event('input', { bubbles: true })); });
     await sleep(200);
@@ -1105,9 +1114,15 @@ async function run() {
     // 批准前:权限档 pill 应为「计划模式」
     const permBeforeTC15 = await page.evaluate(() => document.getElementById('pillPermText')?.textContent?.trim());
     assert.strictEqual(permBeforeTC15, '计划模式', 'TC-15: 批准前权限档应为 plan（计划模式）');
+    // 批准前:状态栏卡在「运行工具 ExitPlanMode」（tool_use 派生的工具文案——批准后该工具瞬间结束、它就成僵尸文案）
+    const statusBeforeTC15 = await page.evaluate(() => document.getElementById('activeStatusText')?.textContent?.trim());
+    assert.strictEqual(statusBeforeTC15, 'Claude 正在运行工具 ExitPlanMode...', 'TC-15: 批准前状态栏应为「运行工具 ExitPlanMode」');
     // 点允许批准 ExitPlanMode
     await page.click('#permAllow');
     await page.waitForSelector('#permModal.hidden');
+    // 批准后:ExitPlanMode 是瞬间完成型工具，状态须从僵尸文案回落「思考中」（与 AskUserQuestion/TC-5 同治）
+    const statusAfterExitPlanTC15 = await page.evaluate(() => document.getElementById('activeStatusText')?.textContent?.trim());
+    assert.strictEqual(statusAfterExitPlanTC15, 'Claude 正在思考中...', 'TC-15: 批准 ExitPlanMode 后状态须回落思考中（不卡僵尸工具文案）');
     await sleep(400); // 等 permission_mode 事件到达并驱动 setPermMode
     // 核心断言:批准后权限档图标必须跟随退出 plan、切到「默认审批」（default）
     const permAfterTC15 = await page.evaluate(() => document.getElementById('pillPermText')?.textContent?.trim());

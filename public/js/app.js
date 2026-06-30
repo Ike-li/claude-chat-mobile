@@ -1051,6 +1051,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   }
   function answerPerm(decision) {
     if (!activePerm) return;
+    const wasExitPlanMode = activePerm.name === 'ExitPlanMode'; // 下方 activePerm 即置 null，提前捕获
     socket.emit('user:approve', {
       requestId: activePerm.requestId,
       decision,
@@ -1062,6 +1063,12 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     permExpandBtn?.remove(); permExpandBtn = null;
     closeSheet(permModal);
     showNextPerm();
+    // ExitPlanMode 与 AskUserQuestion 同属「瞬间完成型」工具：无论批准/拒绝，该工具调用即结束、
+    // 模型转入重新规划的长推理，而文案仍卡在已结束的「运行工具 ExitPlanMode」。仅此一类回落「思考中」
+    // 填补空窗；普通工具批准后真要执行，「运行工具 X」是正确文案、不动。无下一待审才落。见 answerQuestion。
+    if (wasExitPlanMode && !activePerm && activeStatusText) {
+      activeStatusText.textContent = 'Claude 正在思考中...';
+    }
   }
   $('permAllow').onclick = () => answerPerm('allow');
   $('permDeny').onclick = () => answerPerm('deny');
@@ -1088,6 +1095,12 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     activeQuestion = null;
     closeSheet(questionModal);
     showNextQuestion();
+    // 答完最后一题（队列已空、无下一题）：立即把状态栏从过时的「正在运行工具 AskUserQuestion」
+    // 切到「思考中」，填补「答完→模型首个流式事件到达」的空窗（实测中位 ~64s 模型推理）。
+    // 仅状态文案，不碰任何请求/ACK 通道。若还有下一题，activeQuestion 已被 showNextQuestion 重新赋值 → 跳过。
+    if (!activeQuestion && activeStatusText) {
+      activeStatusText.textContent = 'Claude 正在思考中...';
+    }
   }
 
   // ---- 发送 / 停止 ----
