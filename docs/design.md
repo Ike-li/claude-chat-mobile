@@ -52,7 +52,7 @@
 | E11 | Ctrl+C 后 `--continue` 接着聊 | session 元数据持久化，服务重启后可恢复列表并 resume | P0 |
 | E12 | Markdown/代码可读 | marked + highlight.js + DOMPurify，小屏适配，代码块横向滚动 | P0 |
 | E13 | `claude -r` 选择历史会话 | 会话列表 + 新建 + 切换；无重命名/删除 UI（不做会话 CRUD） | P1 |
-| E14 | resume 时看到历史消息 | 切换/恢复会话时回显最近 N 条历史消息（读 CLI JSONL） | P0 |
+| E14 | resume 时看到历史消息 | 切换/恢复会话时回显完整历史消息（流式读完整 CLI JSONL，与 /resume 同源；仅极端超大会话按防爆上限取尾） | P0 |
 | E15 | 坐在终端前，审批/提问出现即被看到 | 推送触达：`permission_request`/`question`/断连期 `result` 三类触发 | P0 |
 | E16 | 终端底部 statusLine（模型/ctx%/配额/成本/git） | **app 自有状态栏 UI**：server 用 SDK 自有数据 + git 结构化组装、web 原生渲染于输入区上方（不复刻终端 ANSI、不含账号级配额段 | P2 |
 | E17 | 把文件/截图丢给 claude | 文件/图片上传：落盘 `.ccm-uploads/` + 路径注入 + claude `Read` | P2 |

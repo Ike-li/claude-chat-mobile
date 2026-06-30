@@ -1,11 +1,15 @@
 // history.js —— 读取 CLI 会话历史用于前端展示（方案 2）
 // CLI 历史文件：~/.claude/projects/<project>/<session_id>.jsonl
 import { open, stat, readdir } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
-const MAX_READ_BYTES = 1024 * 1024; // M6：尾部最多读 1MB，避免大文件同步阻塞事件循环
+// 历史回显防爆上限：极端超大会话只回最近 N 条 user/assistant，避免一次性把手机 DOM 撑爆。
+// 正常会话（几百条内）全量返回——与 CLI /resume 的完整历史一致（终端等价性）。不再按字节截断头部。
+const HISTORY_MAX_MESSAGES = 2000;
 const HEAD_READ_BYTES = 64 * 1024;  // 列表元数据（标题/模型/来源）只需文件头部少量字节
 const LIST_LIMIT = 50;              // 会话列表上限（按 mtime 取最近 N，避免大目录全量读 head）
 
@@ -24,74 +28,65 @@ export function getProjectDir(cwd) {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
-// 读取会话历史消息（仅 user/assistant，过滤工具调用等内部事件）
-export async function getSessionHistory(sessionId, cwd, limit = 50, { baseDir = CLAUDE_DIR } = {}) {
+// 读取会话历史消息（仅 user/assistant，过滤工具调用等内部事件）。
+// 流式读【完整】文件——与 CLI /resume 同源、不按字节截断头部，做到 Web 端看到的历史 = CLI 的全量历史。
+export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, { baseDir = CLAUDE_DIR } = {}) {
   const projectDir = getProjectDir(cwd);
   const historyFile = join(baseDir, projectDir, `${sessionId}.jsonl`);
 
+  let mtimeMs;
   try {
-    const { size, mtimeMs } = await stat(historyFile);
+    ({ mtimeMs } = await stat(historyFile));
+  } catch {
+    return []; // 文件不存在：新会话或已删
+  }
 
-    // B6：mtime 未变 = 文件内容未变，直接返回缓存（stat 本身 ~1ms，比读 1MB 快 100×）
-    const cached = _histCache.get(historyFile);
-    if (cached && cached.mtimeMs === mtimeMs) return cached.messages;
+  // B6：mtime 未变 = 内容未变，直接返回缓存。缓存的是【全量】消息，按 limit 取尾再返回
+  // （stat ~1ms，远快于重新流式读盘 + 解析）。
+  const cached = _histCache.get(historyFile);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.messages.slice(-limit);
 
-    const start = Math.max(0, size - MAX_READ_BYTES);
-    const readLen = size - start;
-
-    const fh = await open(historyFile, 'r');
-    const buf = Buffer.alloc(readLen);
-    await fh.read(buf, 0, readLen, start);
-    await fh.close();
-
-    let text = buf.toString('utf-8');
-    if (start > 0) {
-      // 从字节偏移读起可能截断首行，丢弃第一个换行前的残片
-      const nl = text.indexOf('\n');
-      if (nl !== -1) text = text.slice(nl + 1);
-    }
-
-    const lines = text.trim().split('\n');
-    const messages = [];
-
-    for (const line of lines) {
+  const messages = [];
+  try {
+    // 逐行读：内存只随消息数增长，不一次性 buffer 整个文件——会话可增长到数十 MB，
+    // 流式读才稳、不阻塞事件循环（取代原「尾部 1MB」截断方案）。
+    const rl = createInterface({
+      input: createReadStream(historyFile, { encoding: 'utf-8' }),
+      crlfDelay: Infinity
+    });
+    for await (const line of rl) {
       if (!line.trim()) continue;
-      try {
-        const entry = JSON.parse(line);
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; } // 末行可能是写入中途的半行 → 跳过
 
-        // 跳过 meta 条目（local-command 输出等）
-        if (entry.isMeta) continue;
+      // 跳过 meta 条目（local-command 输出等）
+      if (entry.isMeta) continue;
 
-        // 只取 user 和 assistant 消息；并过滤无正文的条目——纯工具调用的 assistant、
-        // 以 tool_result 形式存在的 user 都会被 extractContent 还原成空串。若不滤掉，
-        // 它们会渲染成空气泡，还会占满"最近 N 条"窗口把真实对话挤出去。
-        if (entry.type === 'user' || entry.type === 'assistant') {
-          const content = extractContent(entry.message?.content);
-          if (!content.trim()) continue;
-          messages.push({
-            role: entry.message?.role || entry.type,
-            content,
-            timestamp: entry.timestamp
-          });
-        }
-      } catch {
-        // 单行解析失败不影响其他行
+      // 只取 user 和 assistant 消息；并过滤无正文的条目——纯工具调用的 assistant、
+      // 以 tool_result 形式存在的 user 都会被 extractContent 还原成空串。若不滤掉，
+      // 它们会渲染成空气泡，还会占满窗口把真实对话挤出去。
+      if (entry.type === 'user' || entry.type === 'assistant') {
+        const content = extractContent(entry.message?.content);
+        if (!content.trim()) continue;
+        messages.push({
+          role: entry.message?.role || entry.type,
+          content,
+          timestamp: entry.timestamp
+        });
       }
     }
-
-    const result = messages.slice(-limit);
-
-    // B6：存入 LRU 缓存（超上限淘汰最旧）
-    if (_histCache.size >= HIST_CACHE_MAX) {
-      _histCache.delete(_histCache.keys().next().value);
-    }
-    _histCache.set(historyFile, { mtimeMs, messages: result });
-
-    return result;
   } catch {
-    // 文件不存在或读取失败：返回空数组（新会话或文件被删）
-    return [];
+    return []; // 读取失败
   }
+
+  // B6：缓存【全量】消息（LRU，超上限淘汰最旧）；返回时按 limit 取尾。默认上限足够覆盖正常会话
+  // 的全部历史，仅极端超大会话才被削顶——防一次性撑爆前端。
+  if (_histCache.size >= HIST_CACHE_MAX) {
+    _histCache.delete(_histCache.keys().next().value);
+  }
+  _histCache.set(historyFile, { mtimeMs, messages });
+
+  return messages.slice(-limit);
 }
 
 // 提取纯文本内容（content 可能是 string 或 array）
