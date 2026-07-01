@@ -73,6 +73,22 @@
     .msg-body code:not(pre code) { font-family: var(--font-mono); background: var(--surface-sunk); color: var(--accent-deep); padding: .1rem .35rem; border-radius: .25rem; font-size: .85em; }
     .msg-body pre code { padding: 0; }
     .msg-body .hljs { background: transparent; color: var(--ink); }  /* 透出 pre 暖底；语法 token 色由 github-light 提供 */
+    /* Per-code-block copy button — hover 代码块浮现 */
+    .code-block-wrap { position: relative; }
+    .code-block-wrap .code-copy-btn {
+      position: absolute; top: 0.4rem; right: 0.4rem;
+      display: inline-flex; align-items: center; gap: 0.15rem;
+      padding: 0.2rem 0.4rem;
+      border-radius: 0.3rem; font-size: 10px;
+      color: var(--ink-faint); background: var(--surface);
+      border: 1px solid var(--line);
+      cursor: pointer; opacity: 0.55;
+      transition: opacity 0.15s;
+    }
+    .code-block-wrap:hover .code-copy-btn { opacity: 1; }
+    .code-block-wrap .code-copy-btn:hover {
+      color: var(--accent-deep); border-color: var(--accent-deep);
+    }
     .msg-body p { margin: .5rem 0; } .msg-body p:first-child { margin-top: 0; } .msg-body p:last-child { margin-bottom: 0; }
     .msg-body ul, .msg-body ol { margin: .5rem 0 .5rem 1.3rem; } .msg-body ul { list-style: disc; } .msg-body ol { list-style: decimal; }
     .msg-body li { margin: .2rem 0; }

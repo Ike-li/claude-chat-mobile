@@ -1028,6 +1028,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       requestAnimationFrame(() => {
         s.el.innerHTML = render(s.raw);
         s.el.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+        injectCodeCopyButtons(s.el);
         appendCopyAction(s.el, () => s.raw, 'left');
         s.el.style.opacity = '1';
         setTimeout(() => s.el.style.transition = '', 120);
@@ -2292,6 +2293,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
           : el(`<div class="msg-frame px-0.5 msg-body"></div>`);
         bubble.innerHTML = render(msg.content);
         bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
+        injectCodeCopyButtons(bubble);
         appendCopyAction(bubble, () => msg.content, isUser ? 'right' : 'left');
         frag.appendChild(bubble);
       }
@@ -2306,6 +2308,36 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
           setTimeout(doHighlight, 0);
         }
       }
+    });
+  }
+
+  // E18: 为代码块注入复制按钮（per-block，hover 时浮现）
+  function injectCodeCopyButtons(container) {
+    container.querySelectorAll('pre').forEach(pre => {
+      if (pre.closest('.code-block-wrap')) return; // 已注入跳过
+      const wrap = document.createElement('div');
+      wrap.className = 'code-block-wrap';
+      pre.parentNode.insertBefore(wrap, pre);
+      wrap.appendChild(pre);
+      const btn = el(`
+        <button class="code-copy-btn" title="复制代码">
+          <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+          </svg>
+          <span>复制</span>
+        </button>
+      `);
+      btn.onclick = async (e) => {
+        e.stopPropagation();
+        haptic('tap');
+        const code = pre.querySelector('code');
+        const text = code ? code.textContent : pre.textContent;
+        const ok = await copyText(text);
+        const span = btn.querySelector('span');
+        if (span) span.textContent = ok ? '已复制' : '失败';
+        setTimeout(() => { if (span) span.textContent = '复制'; }, 1500);
+      };
+      wrap.appendChild(btn);
     });
   }
 
