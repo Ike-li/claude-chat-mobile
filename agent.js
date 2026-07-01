@@ -584,6 +584,12 @@ export class AgentSession {
               this._thinkTimer = setTimeout(() => this._flushThink(), 20);
             }
           }
+        } else if (ev.type === 'message_delta' && ev.usage) {
+          // E16：流式模式下从 message_delta 提取 usage（SDK 在此事件返回 input/cache tokens）
+          this.lastUsage = ev.usage;
+          // 不累加 totalCacheReadTokens——assistant 事件会携带同一轮的 usage 再报一次，
+          // 此处只更新 lastUsage 供 ctx% 即时刷新（不等 assistant 边界）
+          this.onUsage?.();
         }
         break;
       }
