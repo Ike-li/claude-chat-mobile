@@ -659,15 +659,16 @@ io.on('connection', socket => {
 
       } else if (cmd === 'test:statusline') {
         console.log('[mock] Updating status_line');
+        const slNow = Date.now(); // ts 与 cacheExpiresAt 同基准：前端 ttlRemainMs = cacheExpiresAt − ts = 290s（稳定 ~4:50）
         io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          seq: 0, epoch: 'server', sessionId: null, ts: slNow,
           type: 'status_line', payload: {
-            ts: Date.now(),
+            ts: slNow,
             model: 'claude-3-5-sonnet',
             project: 'claude-chat-mobile',
             cwd: '/Users/you/code/claude-chat-mobile',
             git: { branch: 'feature/visual-testing', changed: 3, ahead: 2, behind: 0, insertions: 120, deletions: 45, repo: 'Ike-li/claude-chat-mobile' },
-            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, w: 22000, r: 21000 },
+            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, w: 22000, r: 21000, reused: 1200000, cacheExpiresAt: slNow + 290000 },
             cost: 0.37,
             duration: { wallMs: 2500, apiMs: 1200 },
             version: '2.1.178'

@@ -1169,3 +1169,52 @@ test.describe('lastActivity 刷新', () => {
     s.dispose();
   });
 });
+
+// E16：缓存复用累计（reused 指标）+ 失效倒计时数据源（lastCacheHitAt）。
+// 二者皆从 assistant.message.usage.cache_read_input_tokens 派生：累计量供「本会话复用了多少 token」，
+// 命中墙钟时刻供 statusline 推算 ephemeral cache 失效 deadline（TTL 约定值在 statusline.js，此处只记观测时刻）。
+test.describe('AgentSession 缓存复用累计 + 命中时刻（reused / lastCacheHitAt）', () => {
+  const assistantUsage = u => ({ type: 'assistant', uuid: 'u1', message: { usage: u, content: [] } });
+
+  test('构造默认：totalCacheReadTokens=0、lastCacheHitAt=0', () => {
+    const { s } = makeSession();
+    assert.equal(s.totalCacheReadTokens, 0);
+    assert.equal(s.lastCacheHitAt, 0);
+    s.dispose();
+  });
+
+  test('cache_read>0 → 累加 totalCacheReadTokens + 记录 lastCacheHitAt 墙钟', () => {
+    const { s } = makeSession();
+    const before = Date.now();
+    s.map(assistantUsage({ input_tokens: 100, cache_creation_input_tokens: 0, cache_read_input_tokens: 120_000 }));
+    assert.equal(s.totalCacheReadTokens, 120_000);
+    assert.ok(s.lastCacheHitAt >= before);
+    s.dispose();
+  });
+
+  test('多轮累加（reused 是会话累计，非 lastUsage 那样单轮覆盖）', () => {
+    const { s } = makeSession();
+    s.map(assistantUsage({ input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 100 }));
+    s.map(assistantUsage({ input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 250 }));
+    assert.equal(s.totalCacheReadTokens, 350);
+    s.dispose();
+  });
+
+  test('cache_read=0（未命中）→ 不累加、不刷新 lastCacheHitAt（首轮全 creation 即此情形）', () => {
+    const { s } = makeSession();
+    s.map(assistantUsage({ input_tokens: 100, cache_creation_input_tokens: 100, cache_read_input_tokens: 0 }));
+    assert.equal(s.totalCacheReadTokens, 0);
+    assert.equal(s.lastCacheHitAt, 0);
+    s.dispose();
+  });
+
+  test('换会话（init 新 session_id）→ reused/lastCacheHitAt 清零（不跨会话残留，与 lastUsage 同步清）', () => {
+    const { s } = makeSession({ resumeId: 'sess-A' });
+    s.map(assistantUsage({ input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 500 }));
+    assert.equal(s.totalCacheReadTokens, 500);
+    s.map({ type: 'system', subtype: 'init', session_id: 'sess-B' });
+    assert.equal(s.totalCacheReadTokens, 0);
+    assert.equal(s.lastCacheHitAt, 0);
+    s.dispose();
+  });
+});

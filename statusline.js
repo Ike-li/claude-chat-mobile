@@ -3,6 +3,14 @@
 // 快照、不依赖 ~/.claude/settings.json**——自包含、开箱即用。账号级配额段（5h/7d%）SDK 物理拿不到，故不含。
 import { execFile } from 'node:child_process';
 
+// ---- prompt cache 失效倒计时的 TTL（推算用，非权威）----
+// 来源澄清（重要）：Anthropic ephemeral prompt cache 默认 TTL = 5 分钟，这是【官方文档约定值】，
+// 不是 SDK/CLI 回报的运行时数据——claude-agent-sdk 的 usage 只含 token 计数，其类型定义(coreTypes.d.ts)
+// 无任何 cache 过期/deadline/ttl 字段，上游真实 TTL 不可观测。故 statusline 的「缓存失效倒计时」是
+// 【客户端推算】：deadline = agent.lastCacheHitAt（最后一次 cache_read>0 的墙钟时刻）+ 本常量，每次命中
+// 滑动重置；前端按 deadline−now 本地递减并标 ~est。改本常量不改上游真实 TTL（上游设多少我们看不到）。
+const CACHE_TTL_MS = 300_000;
+
 // ---- 本机 git 段（per-cwd 短 TTL 缓存，避免每次刷新都 spawn git）----
 const GIT_TTL_MS = 5_000;
 const gitCache = new Map(); // cwd -> { at, data|null }
@@ -66,6 +74,7 @@ export function webContextCost({ agent }) {
   if (u) {
     r.context = {
       totalInputTokens: (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0),
+      reused: agent.totalCacheReadTokens || 0, // 会话累计复用 token（reused 指标）——独立于下方 usage 的单轮口径
       usage: {
         input_tokens: u.input_tokens || 0,
         cache_creation_input_tokens: u.cache_creation_input_tokens || 0,
@@ -96,7 +105,10 @@ export async function buildWebStatusLine({ agent, cwd, versions }) {
     // in/w/r：input / cache 写(creation) / cache 读 明细（cli 口径 in:/w:/r:）；tokens=三者和=context 已用绝对数
     p.ctx = { tokens: cc.context.totalInputTokens, in: u.input_tokens, w: u.cache_creation_input_tokens, r: u.cache_read_input_tokens };
     const total = u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens;
-    if (total > 0) p.ctx.cacheHitPct = Math.round(u.cache_read_input_tokens / total * 100);
+    if (total > 0) p.ctx.cacheHitPct = Math.round(u.cache_read_input_tokens / total * 100); // 瞬时：本轮命中率
+    if (cc.context.reused > 0) p.ctx.reused = cc.context.reused;                            // 累计：本会话复用 token（reused）
+    // 缓存失效倒计时 deadline（客户端推算，非权威——详见顶部 CACHE_TTL_MS 注释）：仅曾命中过缓存才给，前端本地递减
+    if (agent?.lastCacheHitAt > 0) p.ctx.cacheExpiresAt = agent.lastCacheHitAt + CACHE_TTL_MS;
   }
   if (cc.cost) {
     if (cc.cost.usedUsd > 0) p.cost = cc.cost.usedUsd;

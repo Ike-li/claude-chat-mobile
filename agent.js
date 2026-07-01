@@ -74,6 +74,9 @@ export class AgentSession {
     this.totalCostUsd = 0;        // result.total_cost_usd 最新值（SDK 已是会话累计，勿 +=）
     this.totalDurationMs = 0;     // += result.duration_ms（活跃轮次累计，非墙钟——实例懒重生不暴露给用户）
     this.totalApiDurationMs = 0;  // += result.duration_api_ms（增量 = 脚本 cache-TTL 段的活动信号）
+    // E16 reused 指标 + 缓存失效倒计时数据源（皆从 assistant.usage.cache_read 派生）：
+    this.totalCacheReadTokens = 0; // += cache_read_input_tokens —— 本会话累计复用 token（区别于 lastUsage 的单轮覆盖口径）
+    this.lastCacheHitAt = 0;       // 最后一次 cache_read>0 的 Date.now()；statusline 据此推算 ephemeral cache 失效 deadline，每次命中滑动重置
 
     this.queue = [];
     this.notifyInput = null;
@@ -516,6 +519,8 @@ export class AgentSession {
           if (this.sessionId && msg.session_id !== this.sessionId) {
             this.firstMessage = null;
             this.lastUsage = null; // E16：换会话上下文清零，旧 ctx% 不得残留显示
+            this.totalCacheReadTokens = 0; // E16：reused 是本会话累计 → 换会话清零（与 lastUsage 同步）
+            this.lastCacheHitAt = 0;       // 倒计时起点随之清零，避免旧会话 deadline 串到新会话
           }
           this.sessionId = msg.session_id;
           // 权限档以 SDK init 上报的 msg.permissionMode 为权威「实际生效档」——这是唯一能证明
@@ -595,7 +600,12 @@ export class AgentSession {
         if (msg.parent_tool_use_id) break;
         // E16：单次 API 调用口径的 usage（stream_event 在非流式网关缺席、result.usage 轮内聚合高估 ctx）；
         // subagent 消息已被上方 parent_tool_use_id 守卫排除
-        if (msg.message?.usage) { this.lastUsage = msg.message.usage; this.onUsage?.(); } // E16：assistant 边界即刷 statusline ctx（不等 result/10s tick）
+        if (msg.message?.usage) {
+          this.lastUsage = msg.message.usage; // 单轮口径（ctx% / in:w:r:）
+          const cr = msg.message.usage.cache_read_input_tokens || 0;
+          if (cr > 0) { this.totalCacheReadTokens += cr; this.lastCacheHitAt = Date.now(); } // E16：累计复用量 + 记命中墙钟（倒计时起点，滑动重置）
+          this.onUsage?.(); // E16：assistant 边界即刷 statusline ctx（不等 result/10s tick）
+        }
         const mid = this.currentMessageId || msg.uuid;
         for (const block of msg.message?.content ?? []) {
           if (block.type === 'tool_use') {

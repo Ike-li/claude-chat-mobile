@@ -337,7 +337,9 @@ async function run() {
     assert.ok(statusTextTC6 && statusTextTC6.includes('feature/visual-testing'), 'TC-6: 展开含 git 分支');
     assert.ok(statusTextTC6 && statusTextTC6.includes('+120'), 'TC-6: 展开含代码新增行数');
     assert.ok(statusTextTC6 && statusTextTC6.includes('45,000 tokens'), 'TC-6: 展开含精确 token 计数');
-    assert.ok(statusTextTC6 && statusTextTC6.includes('cache 45%'), 'TC-6: 展开含缓存命中率');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('cache 45%'), 'TC-6: 展开含缓存命中率（瞬时·本轮）');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('reused 1.2m'), 'TC-6: 展开含累计复用 token（会话级 reused，区别于瞬时 cache%）');
+    assert.ok(statusTextTC6 && /ttl ~\d+:\d{2} est/.test(statusTextTC6), 'TC-6: 展开含缓存失效倒计时（客户端推算，~est 标记非权威）');
     assert.ok(statusTextTC6 && statusTextTC6.includes('in:2.0k'), 'TC-6: 展开含 token 明细 in');
     assert.ok(statusTextTC6 && statusTextTC6.includes('w:22.0k') && statusTextTC6.includes('r:21.0k'), 'TC-6: 展开含 token 明细 w/r');
     assert.ok(statusTextTC6 && statusTextTC6.includes('Ike-li/claude-chat-mobile'), 'TC-6: 展开含 repo 全名');

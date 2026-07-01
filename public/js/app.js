@@ -100,6 +100,24 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   let currentSessionId = localStorage.getItem('current_session') || null;
   const sessionDomCache = new Map();
 
+  // ---- prompt cache 失效倒计时（前端本地递减；deadline 非 SDK 权威值）----
+  // 数据链：statusline.js 用「最后一次 cache_read>0 的墙钟 + 5min ephemeral 约定 TTL」推算 cacheExpiresAt
+  // 下发（详见 statusline.js 顶部 CACHE_TTL_MS 注释，写明上游 TTL 不可观测）。此处仅本地每秒递减显示并标
+  // ~est；剩余基准用 server 端差值(cacheExpiresAt − p.ts)消除手机↔server 时钟偏移；凉了(≤0)显 cold 并停表。
+  let cacheTtlDeadline = 0, cacheTtlTimer = null;
+  const fmtTtlRemain = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+  const ttlPillText = ms => ms > 0 ? `ttl ~${fmtTtlRemain(ms)} est` : 'cache cold est'; // 倒计时 pill 文案单一来源（初始渲染 + 跳秒共用，改文案/单位只改这里）
+  function tickCacheTtl() {
+    const el = document.querySelector('.js-cache-ttl');
+    if (!el || !cacheTtlDeadline) { clearInterval(cacheTtlTimer); cacheTtlTimer = null; return; }
+    const rem = cacheTtlDeadline - Date.now();
+    el.textContent = ttlPillText(rem);
+    if (rem <= 0) { clearInterval(cacheTtlTimer); cacheTtlTimer = null; } // 凉了不再跳，等下次命中刷新 deadline 重启
+  }
+  // 切视图时清倒计时跳秒表（clearView 调用）：timer/deadline 是模块级单例、非 per-view，不清则旧实例的 deadline
+  // 会被新视图 pill 串显（A、B 的 lastCacheHitAt 不同 → deadline 不同）；新视图由各自 status_line 重设。
+  function stopCacheTtl() { if (cacheTtlTimer) { clearInterval(cacheTtlTimer); cacheTtlTimer = null; } cacheTtlDeadline = 0; }
+
   // ---- 客户端本地日志体系 (Console/Log modal) ----
   const clientLogBuffer = [];
   let streamCharCount = 0;
@@ -931,6 +949,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         return line;
       };
       const lines = [];
+      // 缓存失效倒计时的 server 端剩余 = cacheExpiresAt − p.ts（同 server 时钟、差值无偏）；行3 用它初始化、末尾据此启本地跳秒表
+      const ttlRemainMs = (p.ctx && Number.isFinite(p.ctx.cacheExpiresAt) && Number.isFinite(p.ts)) ? p.ctx.cacheExpiresAt - p.ts : null;
       // 行1：分支 ✱变更 ↑ahead ↓behind + 代码增删（+绿 −红双色复合段，跟随项目 emerald/rose 惯例）
       if (p.git?.branch) {
         let b = p.git.branch;
@@ -949,15 +969,18 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       // 行2：精确 token + 缓存命中率 + API 耗时（wall 耗时已在摘要，这里只 API 避免重复）
       lines.push(buildLine([
         p.ctx && Number.isFinite(p.ctx.tokens) && { text: `${p.ctx.tokens.toLocaleString()} tokens`, cls: 'text-ink-soft' },
-        p.ctx && Number.isFinite(p.ctx.cacheHitPct) && { text: `cache ${p.ctx.cacheHitPct}%`, cls: 'text-ink-faint' },
+        p.ctx && Number.isFinite(p.ctx.cacheHitPct) && { text: `cache ${p.ctx.cacheHitPct}%`, cls: 'text-ink-faint' },  // 瞬时:本轮命中率
+        p.ctx && Number.isFinite(p.ctx.reused) && { text: `reused ${fmtTokF(p.ctx.reused)}`, cls: 'text-ink-faint' }, // 累计:本会话复用 token
         p.duration && p.duration.apiMs && { text: `API ${fmtMs(p.duration.apiMs)}`, cls: 'text-ink-faint' }
       ]));
-      // 行3：token 明细 in/w/r（input / cache 写 / cache 读——cli 口径，看缓存效率；窗口百分比 SDK 拿不到故不算）
+      // 行3：token 明细 in/w/r（input / cache 写 / cache 读——cli 口径，看缓存效率）
       if (p.ctx && Number.isFinite(p.ctx.in)) {
         lines.push(buildLine([
           { text: `in:${fmtTokF(p.ctx.in)}`, cls: 'text-ink-faint' },
           { text: `w:${fmtTokF(p.ctx.w)}`, cls: 'text-ink-faint' },
-          { text: `r:${fmtTokF(p.ctx.r)}`, cls: 'text-ink-faint' }
+          { text: `r:${fmtTokF(p.ctx.r)}`, cls: 'text-ink-faint' },
+          // 倒计时 pill（带 js-cache-ttl 供 tick 跳秒定位）：~est 标记其为推算非权威值
+          ttlRemainMs != null && { text: ttlPillText(ttlRemainMs), cls: 'text-ink-faint js-cache-ttl' }
         ]));
       }
       // 行4：repo · 版本 · 时间（时间用后端刷新时刻 p.ts 在前端渲染，不进 payload 以免破坏 server 端去重）
@@ -970,6 +993,10 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       // 一次性替换：清空旧节点 + append 非空行（buildLine 对空行返回 null）
       cliStatusEl.textContent = '';
       lines.filter(Boolean).forEach(l => cliStatusEl.appendChild(l));
+      // 倒计时跳秒表：有剩余则把 server 端剩余换算成本地 deadline 并确保表在跑；无则停表（换会话/未命中时不下发 cacheExpiresAt）
+      cacheTtlDeadline = ttlRemainMs != null ? Date.now() + ttlRemainMs : 0;
+      if (cacheTtlDeadline && !cacheTtlTimer) cacheTtlTimer = setInterval(tickCacheTtl, 1000);
+      else if (!cacheTtlDeadline && cacheTtlTimer) { clearInterval(cacheTtlTimer); cacheTtlTimer = null; }
       cliStatusWrapEl?.classList.remove('hidden'); // 揭示折叠包裹（默认折叠为 summary 摘要）
     }
   };
@@ -2150,6 +2177,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
     // Clear stale status line and hide details row to prevent latency layout flashes
     if (cliStatusEl) cliStatusEl.innerHTML = '';
+    stopCacheTtl(); // 同时停缓存倒计时跳秒表（pill DOM 已随 innerHTML 清空），防旧实例 deadline 串到新视图
     if (cliSummaryEl) cliSummaryEl.textContent = '终端状态行';
     if (cliStatusWrapEl) {
       cliStatusWrapEl.removeAttribute('open'); // Fold <details> element
