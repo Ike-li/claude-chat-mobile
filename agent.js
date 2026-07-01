@@ -77,6 +77,7 @@ export class AgentSession {
     // E16 reused 指标 + 缓存失效倒计时数据源（皆从 assistant.usage.cache_read 派生）：
     this.totalCacheReadTokens = 0; // += cache_read_input_tokens —— 本会话累计复用 token（区别于 lastUsage 的单轮覆盖口径）
     this.lastCacheHitAt = 0;       // 最后一次 cache_read>0 的 Date.now()；statusline 据此推算 ephemeral cache 失效 deadline，每次命中滑动重置
+    this.currentTask = null;      // 当前活跃的 Agent/Task 工具描述（tool_use 设，result/dispose 清）——供 statusline 显示
 
     this.queue = [];
     this.notifyInput = null;
@@ -479,6 +480,7 @@ export class AgentSession {
     }
     this.pendingQuestions.clear();
     this.denyKinds.clear(); // 防 dispose 后残留（实例即弃，无 tool_result 来消费）
+    this.currentTask = null;
     try { this.abort?.abort(); } catch { /* noop */ }
   }
 
@@ -521,6 +523,7 @@ export class AgentSession {
             this.lastUsage = null; // E16：换会话上下文清零，旧 ctx% 不得残留显示
             this.totalCacheReadTokens = 0; // E16：reused 是本会话累计 → 换会话清零（与 lastUsage 同步）
             this.lastCacheHitAt = 0;       // 倒计时起点随之清零，避免旧会话 deadline 串到新会话
+            this.currentTask = null;       // 切换会话清任务名，旧任务不残留
           }
           this.sessionId = msg.session_id;
           // 权限档以 SDK init 上报的 msg.permissionMode 为权威「实际生效档」——这是唯一能证明
@@ -609,6 +612,7 @@ export class AgentSession {
         const mid = this.currentMessageId || msg.uuid;
         for (const block of msg.message?.content ?? []) {
           if (block.type === 'tool_use') {
+            if (block.name === 'Agent') this.currentTask = block.input?.description || null;
             this.emit('tool_use', {
               toolUseId: block.id,
               name: block.name,
@@ -646,6 +650,7 @@ export class AgentSession {
       case 'result':
         this._flushText(); this._flushThink();
         this.pendingTurns = Math.max(0, this.pendingTurns - 1);
+        this.currentTask = null; // 任务完成/结束即清
         if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
         this.totalDurationMs += msg.duration_ms || 0;
         this.totalApiDurationMs += msg.duration_api_ms || 0;

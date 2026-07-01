@@ -92,6 +92,8 @@ export function webContextCost({ agent }) {
 // 权限档 / effort 不在此——前端已有独立 pill（pillPerm/pillEffort），避免重复显示。
 export async function buildWebStatusLine({ agent, cwd, versions }) {
   const p = { ts: Date.now() };
+  // 当前活跃子任务名（Agent/Task 工具 description），有则显示
+  if (agent?.currentTask) p.task = agent.currentTask;
   // FRESH 会话 activeModel 为空（未显式指定 model）时回退 reportedModel（init 报告的真实运行模型）——
   // 只读显示，不碰 activeModel，不触发 F1（空发 setModel 重置网关模型）。见 agent.js reportedModel。
   const model = agent?.activeModel || agent?.reportedModel || '';

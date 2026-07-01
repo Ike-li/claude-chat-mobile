@@ -930,8 +930,9 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
       const fmtMs = ms => { const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}h${String(m).padStart(2, '0')}m` : m ? `${m}m${String(x).padStart(2, '0')}s` : `${x}s`; };
       const fmtTokF = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n); // 带 1 位小数（token 明细，匹配 cli 的 2.1k/199.6k）
-      // 折叠摘要（去 emoji）：<ctx> · $<cost> · <wall 耗时>——三个最常看的值
+      // 折叠摘要（去 emoji）：<task> · <ctx> · $<cost> · <wall 耗时>
       const head = [];
+      if (p.task) head.push(`⚙ ${p.task}`);
       if (p.ctx && Number.isFinite(p.ctx.tokens)) head.push(fmtTok(p.ctx.tokens));
       if (Number.isFinite(p.cost)) head.push(`$${p.cost.toFixed(4)}`);
       if (p.duration && p.duration.wallMs) head.push(fmtMs(p.duration.wallMs));
