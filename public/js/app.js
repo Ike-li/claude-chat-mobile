@@ -652,7 +652,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       // 本轮 model 不变，自然不上屏）
       if (currentModel && m && m !== currentModel) addBar(`模型 → ${m}`, 'text-info');
       updateModelAndSuffix(rawM);
-      if (modelsList.length) rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随新模型（列表已在则即时刷）
+      rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随；空列表也刷（显示默认磁贴，好过整个隐藏）
+      rebuildCustomModelGrid(modelsList); // 模型网格用已有缓存重建（models 事件没到也不空白）
       setPermMode(p.permissionMode); // 每轮 init 回显当前权限档（幂等，与 permission_mode 事件一致）
       // 顶部状态行回归「纯连接状态」职责：model/目录/ctx/cost 已由下方 E16 statusLine 投送（更全更权威），
       // MCP×N·skills×N 由 statusLine 脚本本身输出（终端 + 所有项目共享），此处不再合成覆盖连接状态
