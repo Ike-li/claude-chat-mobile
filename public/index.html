@@ -534,12 +534,54 @@
         transition: all 0.15s ease;
       }
 
+      /* ── 侧边栏工作区与会话高级动效 ── */
+      .subtree-container {
+        max-height: 0;
+        opacity: 0;
+        overflow: hidden;
+        transition: max-height 0.28s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.22s ease;
+      }
+      .subtree-container.expanded {
+        max-height: 1200px; /* 容纳多会话 */
+        opacity: 1;
+      }
+      .dir-arrow {
+        display: inline-block;
+        transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+      }
+      .dir-arrow.rotated {
+        transform: rotate(90deg);
+      }
+      /* 侧滑动画及手势优化 */
+      .row-content {
+        touch-action: pan-y; /* 仅允许纵向滚动，防止横向滑动与页面滚动冲突 */
+      }
+      .row-content.swiping {
+        transition: none !important; /* 拖拽中禁用过渡，紧贴指尖 */
+      }
+      /* 骨架屏脉冲动画 */
+      .skeleton-shimmer {
+        background: linear-gradient(90deg, var(--surface-sunk) 25%, var(--line-soft) 50%, var(--surface-sunk) 75%);
+        background-size: 200% 100%;
+        animation: skeleton-shimmer-pulse 1.5s infinite ease-in-out;
+      }
+      @keyframes skeleton-shimmer-pulse {
+        0% { background-position: 150% 0; }
+        100% { background-position: -150% 0; }
+      }
+
       /* ── 尊重用户减弱动效偏好 ── */
       @media (prefers-reduced-motion: reduce) {
         #permModal, #questionModal, #consoleModal,
         #permModal > div, #questionModal > div, #consoleModal > div,
         #activeStatusPill, #leftSidebar, #settingsSheet {
           transition: none !important;
+        }
+        #activityBanner .animate-spin {
+          animation: none !important;
+        }
+        .skeleton-shimmer {
+          animation: none !important;
         }
       }
   </style>
@@ -763,6 +805,14 @@
 
       <!-- E17：待发送附件托盘 -->
       <div id="attachTray" class="hidden px-3 py-2.5 flex flex-wrap gap-2 bg-surface border border-line-soft rounded-2xl mb-2 shadow-sm"></div>
+
+      <!-- 子代理/Workflow 活动横幅 -->
+      <div id="activityBanner" class="hidden px-3 py-2 bg-accent-wash border border-accent/30 rounded-xl text-xs text-accent mb-1 shrink-0">
+        <div class="flex items-center gap-2">
+          <span class="animate-spin text-sm">⚙</span>
+          <span id="activityBannerText" class="font-medium truncate"></span>
+        </div>
+      </div>
 
       <!-- E6: Active Status Indicator / Interrupt Panel -->
       <div id="activeStatusPill" class="flex items-center justify-between px-3 py-2 bg-accent/5 border border-accent/20 rounded-xl text-xs text-accent transition-all duration-300 shrink-0">

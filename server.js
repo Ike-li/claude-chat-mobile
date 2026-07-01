@@ -575,7 +575,7 @@ function instanceForSession(sessionId) {
 // 在途态 + latch 推导（无实例=idle）；broadcastInstances 在轮次/审批边界推送，前端据此渲染 tab 栏角标 + 通知。
 const doneInstances = new Set();
 const errorInstances = new Set(); // 后台（≠viewing）轮次 result.isError 置位的 latch（出错 ❗），清除点同 doneInstances
-const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved']);
+const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved', 'tool_use']);
 function instanceState(id) {
   const a = agents.get(id);
   if (!a) return 'idle';
@@ -587,12 +587,17 @@ function instanceState(id) {
 }
 function instancesPayload() {
   const list = [];
-  for (const [id, a] of agents) list.push({
-    instanceId: id, cwd: a.cwd, sessionId: a.sessionId,
-    title: sessions.getSession(a.sessionId)?.title ?? null, state: instanceState(id),
-    // 切 tab 面板同步：携带各实例当前档，前端 setInstances 据此静默刷新顶部 permMode/effort/model select
-    permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || null
-  });
+  for (const [id, a] of agents) {
+    const state = instanceState(id);
+    list.push({
+      instanceId: id, cwd: a.cwd, sessionId: a.sessionId,
+      title: sessions.getSession(a.sessionId)?.title ?? null, state,
+      // busy 时携带当前活跃工具信息，供后台 tab 角标细化（🤖 Agent / 🖥 Bash / ⏳ 其他）
+      activeTool: state === 'busy' ? (a.lastToolName || null) : null,
+      // 切 tab 面板同步：携带各实例当前档，前端 setInstances 据此静默刷新顶部 permMode/effort/model select
+      permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || null
+    });
+  }
   const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list };
   // 空首页（viewingInstanceId 为空、无 live 实例）下发「下一条新会话(FRESH)将用的」权限/思考强度档
   // （= 该 cwd pending 预设 ?? CLI 启动默认：权限 default、effort null），供前端如实显示该工作区新会话将用的档

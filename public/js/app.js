@@ -29,6 +29,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   const messagesEl = $('messages'), inputEl = $('input'), statusEl = $('statusLine'), connDot = $('connDot');
   const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnSessions = $('btnSessions');
   const activeStatusPill = $('activeStatusPill'), activeStatusText = $('activeStatusText'), btnStopNew = $('btnStopNew');
+  const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总小圆点
 
@@ -243,6 +244,17 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   const streams = new Map();
   const thinkings = new Map();
   const toolCards = new Map();
+  const agentToolIds = new Set(); // 跟踪 Agent/Task 工具的 toolUseId，用于在 tool_result 时隐藏活动横幅
+  // 从工具 inputSummary（可能被 agent.js truncate）中安全提取字段；JSON 解析失败时回退 fallback
+  // candidateKeys 按优先级排列，返回第一个非空 key 的值
+  function extractInput(inputSummary, candidateKeys, fallback) {
+    if (typeof inputSummary !== 'string') return fallback;
+    let parsed = null;
+    try { parsed = JSON.parse(inputSummary); } catch {}
+    if (!parsed || typeof parsed !== 'object') return fallback;
+    for (const k of candidateKeys) { if (parsed[k] != null && parsed[k] !== '') return parsed[k]; }
+    return fallback;
+  }
   const permQueue = [];
   let activePerm = null;
   let permExpandBtn = null;             // M1：展开按钮引用，showNextPerm 前清除
@@ -266,6 +278,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   let displayedSessionId = null;
   let instancesList = [];               // 最近 instances 事件的实例列表（含 per-instance state）
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
+  const sessionsCache = new Map();      // 会话列表缓存 (cwd -> sessions)，实现 Stale-While-Revalidate，实现 0ms 瞬间二次展开
   // P3：面板结构指纹（dirs + 实例集 + viewingInstanceId + viewingCwd）；纯状态变化时不重建面板。
   let _lastPanelStructKey = null;
   let pendingAttachments = [];          // E17：待发送附件 [{_id,name,mimeType,size,data,thumb?}]，发送后清空
@@ -740,10 +753,23 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       appendMessage(card);
       scrollBottom();
       setBusy(true);
+      // 子代理/Workflow 活动横幅
+      if (p.name === 'Agent' || p.name === 'Task') {
+        agentToolIds.add(p.toolUseId);
+        const desc = extractInput(p.inputSummary, ['description'], '');
+        if (desc) showActivityBanner(desc);
+      }
       if (activeStatusText) {
-        // 直接用 SDK 给的真实工具名（Bash/Write/Edit/Read/…）——原 TOOL_MAPPING 的键是
-        // execute_command 等非 claude 工具名、从不命中，是死表 + mis-label，已删（2026-06-21）
-        activeStatusText.textContent = `Claude 正在运行工具 ${p.name}...`;
+        // 工具状态细化：Bash 显示具体命令，Agent 显示任务描述，其他显示工具名
+        if (p.name === 'Bash') {
+          const cmd = extractInput(p.inputSummary, ['command', 'cmd'], p.inputSummary);
+          activeStatusText.textContent = `🖥 ${cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd}`;
+        } else if (p.name === 'Agent' || p.name === 'Task') {
+          const desc = extractInput(p.inputSummary, ['description'], p.inputSummary);
+          activeStatusText.textContent = `🤖 ${desc.length > 50 ? desc.slice(0, 47) + '...' : desc}`;
+        } else {
+          activeStatusText.textContent = `Claude 正在运行工具 ${p.name}...`;
+        }
       }
     },
     tool_result(p) {
@@ -760,6 +786,11 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         out.classList.remove('hidden');
       }
       toolCards.delete(p.toolUseId);
+      // 子代理/Workflow 完成时隐藏活动横幅（仅当所有并行 Agent 都完成才隐藏）
+      if (agentToolIds.has(p.toolUseId)) {
+        agentToolIds.delete(p.toolUseId);
+        if (agentToolIds.size === 0) hideActivityBanner();
+      }
     },
     // F3：user_message 事件渲染右侧气泡（已入缓冲，多设备/重载均可回放）
     // E17：p.attachments=[{name,mimeType,size,thumb?}]——图片显 thumb（data URI，CSP img-src data: 已许），其他显 📎 chip
@@ -875,6 +906,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       }
       finalizeStreams();
       setBusy(false);
+      hideActivityBanner(); // 会话结束隐藏活动横幅
+      agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       haptic(p.isError ? 'error' : 'success');
       const cost = p.costUsd != null ? ` · $${p.costUsd.toFixed(4)}` : '';
       addBar(`完成 · ${(p.durationMs / 1000).toFixed(1)}s${cost}`, 'text-ink-faint');
@@ -1596,7 +1629,14 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   // dirs + per-cwd 聚合 states 供目录切换器角标（steps 回归补回入口，见 openSessionPanel）。
   function setInstances(p) {
     availableDirs = Array.isArray(p?.dirs) ? p.dirs : [];
+    const prevInstances = instancesList;
     instancesList = Array.isArray(p?.instances) ? p.instances : [];
+    // 实例集变化时清除会话缓存，防止关闭的会话以幽灵数据残留
+    const prevIds = new Set(prevInstances.map(x => x.instanceId));
+    const currIds = new Set(instancesList.map(x => x.instanceId));
+    if (prevIds.size !== currIds.size || ![...currIds].every(id => prevIds.has(id))) {
+      sessionsCache.clear();
+    }
     const newStates = aggregateStates(instancesList, availableDirs); // per-cwd 聚合（permission>busy>done>idle）
     const newViewing = p?.viewingInstanceId ?? null;
     const newCwd = p?.viewingCwd ?? null;
@@ -1665,9 +1705,11 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         openSessionPanel();
       } else {
         refreshDirBadges();
+        refreshInstanceBadges(); // 实例角标实时刷新（busy 时工具图标细化）
       }
     } else {
       refreshDirBadges();
+      refreshInstanceBadges();
     }
   }
 
@@ -1749,6 +1791,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
   // 角标视觉：busy ⏳ / permission ⚠️ / error ❗ / done ✅；idle 隐藏。挂在目录行内、ml-auto 右对齐。
   const DIR_BADGE = { busy: ['⏳', 'text-warning'], permission: ['⚠️', 'text-danger'], error: ['❗', 'text-danger'], done: ['✅', 'text-success'] };
+  // 工具角标细化：busy 时根据 activeTool 显示具体工具图标
+  const TOOL_BADGE = { Agent: '🤖', Task: '🤖', Bash: '🖥', Write: '📝', Edit: '✏️', Read: '👁' };
   function applyBadge(badge, state) {
     const m = DIR_BADGE[state];
     if (m) { badge.textContent = m[0]; badge.className = `dir-badge ml-auto shrink-0 ${m[1]}`; }
@@ -1759,6 +1803,38 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     sessionPanel.querySelectorAll('[data-dir]').forEach(row => {
       const badge = row.querySelector('.dir-badge');
       if (badge) applyBadge(badge, workdirStates[row.dataset.dir]);
+    });
+  }
+  // 面板开着时仅更新已渲染实例行的角标（busy 时细化工具图标）
+  function refreshInstanceBadges() {
+    const instMap = new Map(instancesList.map(x => [x.instanceId, x]));
+    sessionPanel.querySelectorAll('[data-instance-id]').forEach(row => {
+      const instId = row.dataset.instanceId;
+      if (!instId) return;
+      const inst = instMap.get(instId);
+      if (!inst) return;
+      const head = row.querySelector('.truncate');
+      if (!head) return;
+      const oldBadge = head.querySelector('[data-instance-badge]');
+      if (oldBadge) oldBadge.remove();
+      if (inst.state === 'busy') {
+        const badgeIcon = (inst.activeTool && TOOL_BADGE[inst.activeTool]) || '⏳';
+        const badgeCls = 'text-warning';
+        const b = document.createElement('span');
+        b.className = `shrink-0 ${badgeCls}`;
+        b.setAttribute('data-instance-badge', '');
+        b.textContent = badgeIcon;
+        head.appendChild(b);
+      } else {
+        const m = DIR_BADGE[inst.state];
+        if (m) {
+          const b = document.createElement('span');
+          b.className = `shrink-0 ${m[1]}`;
+          b.setAttribute('data-instance-badge', '');
+          b.textContent = m[0];
+          head.appendChild(b);
+        }
+      }
     });
   }
   // 会话按钮汇总圆点：非查看目录有动静即亮，优先级 permission/error(红) > done(绿) > busy(琥珀)
@@ -1799,6 +1875,16 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         }
       }, 250);
     }
+  }
+
+  // ---- 子代理/Workflow 活动横幅 ----
+  function showActivityBanner(description) {
+    if (!activityBanner || !activityBannerText) return;
+    activityBannerText.textContent = description.length > 80 ? description.slice(0, 77) + '...' : description;
+    activityBanner.classList.remove('hidden');
+  }
+  function hideActivityBanner() {
+    if (activityBanner) activityBanner.classList.add('hidden');
   }
 
   // ---- 抽屉式侧边栏控制器 (Left Drawer Sidebar Controllers) ----
@@ -1982,9 +2068,11 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       dirRow.dataset.dir = d;
       dirRow.title = d;
 
-      const toggleBtn = el(`<button class="flex-1 min-w-0 text-left flex items-center gap-2 py-0.5 active:opacity-70"></button>`);
+      const toggleBtn = el(`<button class="flex-1 min-w-0 text-left flex items-center gap-2 py-1.5 active:opacity-70"></button>`);
       const icon = el(`<span class="shrink-0"></span>`); icon.textContent = isExpanded ? '📂' : '📁';
-      const arrow = el(`<span class="shrink-0 text-[10px] w-3"></span>`); arrow.textContent = isExpanded ? '▼' : '▶';
+      // 统一用 "▶" 字符，旋转实现向下效果，平滑过渡
+      const arrow = el(`<span class="shrink-0 text-[9px] w-3 dir-arrow">▶</span>`);
+      if (isExpanded) arrow.classList.add('rotated');
       const name = el(`<span class="truncate"></span>`); name.textContent = baseName(d);
       const badge = el(`<span class="dir-badge hidden"></span>`);
       applyBadge(badge, workdirStates[d]);
@@ -1995,7 +2083,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       toggleBtn.appendChild(badge);
       dirRow.appendChild(toggleBtn);
 
-      const newSessionBtn = el(`<button class="shrink-0 w-5 h-5 rounded flex items-center justify-center border border-line-soft text-ink-faint hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-95 text-xs font-bold" title="在此工作区新建会话">＋</button>`);
+      // 物理热区扩大版 "＋" 新建按钮
+      const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="在此工作区新建会话">＋</button>`);
       newSessionBtn.onclick = (e) => {
         e.stopPropagation();
         closeLeftSidebar();
@@ -2004,35 +2093,24 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       };
       dirRow.appendChild(newSessionBtn);
 
-      toggleBtn.onclick = () => {
-        haptic('tap');
-        if (expandedDirs.has(d)) {
-          // 折叠
-          expandedDirs.delete(d);
-        } else {
-          // 展开
-          expandedDirs.add(d);
-        }
-        openSessionPanel();
-      };
       sessionPanel.appendChild(dirRow);
 
-      // ---- 展开区（仅展开的目录显示子节点） ----
-      if (!isExpanded) continue;
+      // ---- 展开区容器（所有目录均常驻 DOM 以支持 CSS max-height 过渡，仅通过类来控制动画） ----
+      const subtree = el(`<div class="subtree-container"></div>`);
+      if (isExpanded) {
+        subtree.classList.add('expanded');
+      }
+      sessionPanel.appendChild(subtree);
 
-      // ---- 纯 /resume 单一列表：所有会话按 lastUsedAt 倒序混排成一条列表（与 CLI /resume 同源同序）；
-      //      已打开（live）的就地标记（active 高亮 + 状态角标 + ✕ 关闭，点击切 tab 不重新 resume），
-      //      未打开的点击 resume；不再把打开的会话单列到顶部（机主 2026-06-15：要纯 /resume 形态）。----
+      const listCwd = d;
       const tabs = liveByCwd[d] || [];
       const liveBySession = new Map();        // sessionId → 已打开实例（有 id 的 live tab，用于在 /resume 列表中就地标记）
       const freshTabs = [];                   // 无 sessionId 的新会话实例（尚未保存，/resume 列表看不到、无时间）
       for (const inst of tabs) { if (inst.sessionId) liveBySession.set(inst.sessionId, inst); else freshTabs.push(inst); }
-      const subtree = el(`<div></div>`);
-      const listCwd = d;
 
       // 统一行：一条会话（session:list 的 s，或无 id 的新会话）→ DOM 行。liveInst 非空 = 已打开为 tab。
       // 全程 textContent（无 innerHTML 插值用户数据）→ CSP 安全。
-      const sessionRow = (s, liveInst) => {
+      const sessionRow = (s, liveInst, rowCwd) => {
         const active = liveInst && liveInst.instanceId === viewingInstanceId;
         
         // 使用相对定位的包装容器来实现侧滑关闭
@@ -2057,7 +2135,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         }
 
         // 行内容 (可滑动的前景卡片)
-        const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${s.id || ''}" data-instance-id="${liveInst?.instanceId || ''}"></div>`);
+        const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${s.id || ''}" data-instance-id="${liveInst?.instanceId || ''}"></div>`);
         const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
         btn.title = s.title || '新会话';
         const head = el(`<div class="truncate flex items-center gap-1.5"></div>`);
@@ -2065,8 +2143,17 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         titleSpan.textContent = s.title || '新会话';
         head.appendChild(titleSpan);
         if (liveInst) {                        // 已打开标记：状态角标（busy ⏳ / permission ⚠️ / error ❗ / done ✅）
-          const m = DIR_BADGE[liveInst.state];
-          if (m) { const b = el(`<span class="shrink-0"></span>`); b.textContent = m[0]; b.className = `shrink-0 ${m[1]}`; head.appendChild(b); }
+          // busy 时优先使用工具细化图标（🤖 Agent / 🖥 Bash），其他状态用通用角标
+          const badgeState = liveInst.state;
+          let badgeIcon, badgeCls;
+          if (badgeState === 'busy' && liveInst.activeTool && TOOL_BADGE[liveInst.activeTool]) {
+            badgeIcon = TOOL_BADGE[liveInst.activeTool];
+            badgeCls = 'text-warning';
+          } else {
+            const m = DIR_BADGE[badgeState];
+            if (m) { badgeIcon = m[0]; badgeCls = m[1]; }
+          }
+          if (badgeIcon) { const b = el(`<span data-instance-badge></span>`); b.textContent = badgeIcon; b.className = `shrink-0 ${badgeCls}`; head.appendChild(b); }
         }
         btn.appendChild(head);
         const sub = el(`<div class="text-ink-faint text-[10px]"></div>`);
@@ -2075,7 +2162,13 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         btn.appendChild(sub);
         
         let rowSwiped = false;
-        btn.onclick = () => {
+        btn.onclick = (e) => {
+          // 拦截滑动/滚动导致的误触
+          if (rowContent.getAttribute('data-preventClick') === 'true') {
+            e.preventDefault();
+            e.stopPropagation();
+            return;
+          }
           if (rowSwiped) {
             rowContent.style.transform = 'translateX(0px)';
             rowSwiped = false;
@@ -2088,7 +2181,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
           } else {                             // 未打开：resume 打开（同步关面板 + 4s 兜底，不把反馈压在 ack 上）
             closeLeftSidebar();
             let acked = false;
-            socket.emit('session:switch', { sessionId: s.id, cwd: listCwd }, res => { acked = true; if (!res?.ok) addBar(res?.error || '切换失败', 'text-danger'); });
+            socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) addBar(res?.error || '切换失败', 'text-danger'); });
             setTimeout(() => { if (!acked) addBar('切换无响应，请刷新页面后重试', 'text-danger'); }, 4000);
           }
         };
@@ -2110,35 +2203,71 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
         container.appendChild(rowContent);
 
-        // 手机端：侧滑触控手势监听 (Swipe left gestures)
+        // 手机端：侧滑触控手势监听 (Swipe left gestures) - 贴合指尖且防点击误触
         if (liveInst) {
           let rowStartX = 0, rowStartY = 0;
+          let isDragging = false;
+
           rowContent.addEventListener('touchstart', ev => {
             rowStartX = ev.touches[0].clientX;
             rowStartY = ev.touches[0].clientY;
+            isDragging = true;
+            rowContent.classList.add('swiping'); // 禁用过渡
           }, { passive: true });
 
           rowContent.addEventListener('touchmove', ev => {
-            if (!rowStartX) return;
+            if (!rowStartX || !isDragging) return;
             const currentX = ev.touches[0].clientX;
             const currentY = ev.touches[0].clientY;
             const diffX = currentX - rowStartX;
             const diffY = currentY - rowStartY;
 
-            if (Math.abs(diffX) > Math.abs(diffY) * 1.5) {
-              if (diffX < -35 && !rowSwiped) { // 向左滑动：露出“关闭”
-                rowContent.style.transform = 'translateX(-70px)';
-                rowSwiped = true;
-                haptic('tap');
-              } else if (diffX > 35 && rowSwiped) { // 向右滑动：收回
-                rowContent.style.transform = 'translateX(0px)';
-                rowSwiped = false;
-                haptic('tap');
+            // 只要手指发生了明显移动（超过 8px），就标记为拖拽，防止触发点击事件
+            if (Math.abs(diffX) > 8 || Math.abs(diffY) > 8) {
+              rowContent.setAttribute('data-preventClick', 'true');
+            }
+
+            // 横向滑动优势判定
+            if (Math.abs(diffX) > Math.abs(diffY) * 1.2) {
+              let targetX = rowSwiped ? -70 + diffX : diffX;
+              // 边缘阻尼
+              if (targetX > 15) {
+                targetX = 15 * 0.3;
+              } else if (targetX < -100) {
+                targetX = -100 + (targetX + 100) * 0.3;
               }
+              rowContent.style.transform = `translateX(${targetX}px)`;
             }
           }, { passive: true });
 
-          rowContent.addEventListener('touchend', () => {
+          rowContent.addEventListener('touchend', ev => {
+            if (!isDragging) return;
+            isDragging = false;
+            rowContent.classList.remove('swiping'); // 启用过渡
+
+            const currentX = ev.changedTouches[0].clientX;
+            const diffX = currentX - rowStartX;
+
+            let finalSwiped = rowSwiped;
+            if (rowSwiped) {
+              if (diffX > 30) finalSwiped = false;
+            } else {
+              if (diffX < -35) finalSwiped = true;
+            }
+
+            rowSwiped = finalSwiped;
+            if (rowSwiped) {
+              rowContent.style.transform = 'translateX(-70px)';
+              haptic('tap');
+            } else {
+              rowContent.style.transform = 'translateX(0px)';
+            }
+
+            // 延迟清除防误触标志，确保拦截 touchend 后产生的 click 事件
+            setTimeout(() => {
+              rowContent.removeAttribute('data-preventClick');
+            }, 100);
+
             rowStartX = 0;
             rowStartY = 0;
           }, { passive: true });
@@ -2147,16 +2276,74 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         return container;
       };
 
-      // 1) 无 id 的新会话实例（/resume 列表里没有、无时间戳）——置顶（视为"最新、未保存"）
-      for (const inst of freshTabs) subtree.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst));
-      // 2) session:list（与 CLI /resume 同源，按 lastUsedAt 倒序）——统一列表，已打开者就地标记。
-      //    过期守卫：仅当目录依然处于展开状态时渲染，防止误渲染旧回调。
-      socket.emit('session:list', { cwd: listCwd }, state => {
-        if (!expandedDirs.has(listCwd)) return;
-        for (const s of (state?.sessions || [])) subtree.appendChild(sessionRow(s, liveBySession.get(s.id)));
-      });
+      // 组装并渲染子树函数
+      const populateSubtree = (cwd, container, liveMap, fTabs) => {
+        container.innerHTML = '';
+        // 1) 无 id 的新会话实例
+        for (const inst of fTabs) {
+          container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+        }
 
-      sessionPanel.appendChild(subtree); // 子容器紧接在目录头行之后
+        // 2) SWR 缓存极速呈现
+        if (sessionsCache.has(cwd)) {
+          const cached = sessionsCache.get(cwd);
+          for (const s of cached) {
+            container.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
+          }
+        } else {
+          // 显示高级骨架屏
+          const skeleton = el(`
+            <div class="skeleton-loader py-1">
+              <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
+                <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-2/3"></div>
+                <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/3"></div>
+              </div>
+              <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
+                <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-1/2"></div>
+                <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/4"></div>
+              </div>
+            </div>
+          `);
+          container.appendChild(skeleton);
+        }
+
+        // 3) 后端异步刷新
+        socket.emit('session:list', { cwd }, state => {
+          if (!expandedDirs.has(cwd)) return; // 过期守卫
+          const sessions = state?.sessions || [];
+          sessionsCache.set(cwd, sessions); // 存入/更新缓存
+
+          container.innerHTML = '';
+          for (const inst of fTabs) {
+            container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+          }
+          for (const s of sessions) {
+            container.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
+          }
+        });
+      };
+
+      // 如果当前展开，则渲染列表
+      if (isExpanded) {
+        populateSubtree(d, subtree, liveBySession, freshTabs);
+      }
+
+      // 折叠/展开切换：纯 CSS 驱动，不触发重绘全量 DOM
+      toggleBtn.onclick = () => {
+        haptic('tap');
+        if (expandedDirs.has(d)) {
+          expandedDirs.delete(d);
+          subtree.classList.remove('expanded');
+          arrow.classList.remove('rotated');
+          icon.textContent = '📁';
+        } else {
+          expandedDirs.add(d);
+          subtree.classList.add('expanded');
+          arrow.classList.add('rotated');
+          icon.textContent = '📂';
+          populateSubtree(d, subtree, liveBySession, freshTabs);
+        }
+      };
     }
   }
 
