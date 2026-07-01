@@ -33,7 +33,9 @@
     "start": "node server.js",
     "dev": "node --watch server.js",
     "check": "for f in *.js public/js/*.js; do node --check \"$f\" || exit 1; done && echo 'syntax OK'",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test test/*.test.mjs test/integration/*.test.mjs",
+    "test:unit": "node --test test/*.test.mjs",
+    "test:integration": "node --test test/integration/*.test.mjs",
     "test:coverage": "node --experimental-test-coverage --test test/*.test.mjs",
     "test:visual": "node scripts/visual-e2e-runner.js"
   },

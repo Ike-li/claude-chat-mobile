@@ -6,7 +6,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  unit-test:
     runs-on: ubuntu-latest
     env:
       # 只跑纯逻辑单测（node --test test/*.test.mjs，零 token / 零外部依赖）；
@@ -20,3 +20,41 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+
+  visual-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      # 缓存 Puppeteer Chromium 二进制文件（~170MB），避免每次下载
+      - name: Cache Puppeteer Chromium
+        uses: actions/cache@v4
+        id: puppeteer-cache
+        with:
+          path: ~/.cache/puppeteer
+          key: puppeteer-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            puppeteer-${{ runner.os }}-
+
+      - run: npm ci
+
+      # 确保 Chromium 已安装（如果缓存命中则跳过下载）
+      - name: Install Chromium
+        run: npx puppeteer browsers install chrome
+
+      - name: Run Visual E2E Tests
+        run: npm run test:visual
+
+      # 上传截图作为 artifact（可选，用于调试失败）
+      - name: Upload Test Snapshots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-e2e-snapshots
+          path: public/test-snapshots/
+          retention-days: 7

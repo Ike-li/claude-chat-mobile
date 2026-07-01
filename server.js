@@ -1495,3 +1495,6 @@ function shutdown(sig) {
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+// 导出供集成测试使用
+export { httpServer, io, port };

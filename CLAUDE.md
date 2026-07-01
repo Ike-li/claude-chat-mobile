@@ -9,7 +9,9 @@
 ```bash
 npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
-npm test           # node --test test/*.test.mjs：纯逻辑单测（devices/logic，零 token）
+npm test           # node --test test/*.test.mjs test/integration/*.test.mjs：单测 + 集成测试
+npm run test:unit  # node --test test/*.test.mjs：仅纯逻辑单测（零 token）
+npm run test:integration # node --test test/integration/*.test.mjs：仅集成测试（需 claude CLI）
 npm run test:visual # puppeteer 移动端视觉回归 E2E（零外部依赖 mock server）
 
 # 启动前自检配置
