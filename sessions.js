@@ -1,5 +1,5 @@
 // sessions.js —— 服务端唯一持久状态：会话元数据，单 JSON 文件，原子写。
-// 只存元数据（id/title/cwd/model/时间戳），永不存消息内容——内容事实源是 claude 自己的 session。
+// 只存元数据（id/title/cwd/model/permissionMode/effort/时间戳），永不存消息内容——内容事实源是 claude 自己的 session。
 import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -88,12 +88,15 @@ export function setCurrent(cwd, sessionId) {
   save();
 }
 
-// 新会话首次拿到 session_id 时登记；已存在则刷新 lastUsedAt 与 model
-export function upsertSession({ id, title, cwd, model }) {
+// 新会话首次拿到 session_id 时登记；已存在则刷新 lastUsedAt 与 model/effort/permissionMode
+export function upsertSession({ id, title, cwd, model, effort, permissionMode }) {
   const existing = state.sessions.find(s => s.id === id);
   if (existing) {
     existing.lastUsedAt = Date.now();
     if (model) existing.model = model;
+    // effort/permissionMode：init 事件到达时同步持久化（与 model 对称），resume 时可恢复
+    if (effort !== undefined) existing.effort = effort;
+    if (permissionMode !== undefined) existing.permissionMode = permissionMode;
     // /clear 场景：条目先以占位标题登记，该会话首条消息到达后回填；不覆盖已有真实标题
     if (title && existing.title === '新会话') existing.title = String(title).slice(0, 40);
   } else {
@@ -104,6 +107,9 @@ export function upsertSession({ id, title, cwd, model }) {
       // 记录会话实际使用的模型名：CLI resume 会把模型恢复为规范化裸名（如 claude-fable-5），
       // 部分网关只认带后缀的名字（如 claude-fable-5[1m]）——resume 时需显式回传此值
       model: model || null,
+      // 思考强度与权限档持久化：web 端续接会话时恢复（CLI 不存，是 web 端增强）
+      effort: effort ?? null,
+      permissionMode: permissionMode || null,
       createdAt: Date.now(),
       lastUsedAt: Date.now()
     });
@@ -123,6 +129,15 @@ export function updateSessionCost(id, cost) {
     existing.cost = cost;
     save();
   }
+}
+
+// 运行时切档时持久化（权限档/思考强度），与 model 的 upsert 对称
+export function updateSessionPrefs(id, prefs) {
+  const existing = state.sessions.find(s => s.id === id);
+  if (!existing) return;
+  if (prefs.permissionMode !== undefined) existing.permissionMode = prefs.permissionMode;
+  if (prefs.effort !== undefined) existing.effort = prefs.effort;
+  save();
 }
 
 // 注：原 defaultModelForCwd（空首页"该 cwd 默认模型"推断）已删（A1，2026-06-22）。新会话模型 = 终端

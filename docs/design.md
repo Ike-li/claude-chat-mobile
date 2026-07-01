@@ -49,7 +49,7 @@
 | E8 | `/skill`、自定义命令、`/model` | 斜杠命令透传：`init.slash_commands` 列出的直接执行；TUI 命令前端拦截或自然语言替代 | P1 |
 | E9 | 加载我的 CLAUDE.md / MCP / hooks / skills | 完整加载本机配置——操作的是"我的 Claude Code" | P0 |
 | E10 | 离开再回来，任务还在跑、输出还在 | 任务挂在服务端、与 socket 解耦；事件带单调 `seq`，重连按 seq 续传 | P0 |
-| E11 | Ctrl+C 后 `--continue` 接着聊 | session 元数据持久化，服务重启后可恢复列表并 resume | P0 |
+| E11 | Ctrl+C 后 `--continue` 接着聊 | session 元数据持久化（含权限档/思考强度），服务重启后可恢复列表并 resume；web 端续接恢复会话最后生效的档（终端不恢复权限/effort，是 web 增强） | P0 |
 | E12 | Markdown/代码可读 | marked + highlight.js + DOMPurify，小屏适配，代码块横向滚动 | P0 |
 | E13 | `claude -r` 选择历史会话 | 会话列表 + 新建 + 切换；无重命名/删除 UI（不做会话 CRUD） | P1 |
 | E14 | resume 时看到历史消息 | 切换/恢复会话时回显完整历史消息（流式读完整 CLI JSONL，与 /resume 同源；仅极端超大会话按防爆上限取尾） | P0 |

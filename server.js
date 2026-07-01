@@ -743,21 +743,23 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
     interactionLog.addSessionLog(saved.id, 'sys_info', `[SYS] 启动/连接会话: instanceId=${id}, resumeId=${saved.id}, cwd=${cwd}`);
   }
   // 档位初值优先级：显式入参（mode/effort 已定义，如 setEffort 置换）> pending（空首页用户预设，用完即删）>
-  //   FRESH:CLI 启动默认（权限 default / effort null 模型默认）｜ RESUME:继承该 cwd 末实例档。
+  //   FRESH:CLI 启动默认（权限 default / effort null 模型默认）｜ RESUME:saved 持久化值 > 继承该 cwd 末实例档。
   // A1（2026-06-22）：新会话(FRESH)用 CLI 启动默认、不再继承 cwd 末实例档——贴终端等价（新起 claude 是干净默认，
   // 不沿用另一会话的档）；原决策 B「fresh 也继承」已收窄为仅 resume 继承（per-instance 粒度不变）。effort 的 null
   // 合法 → 用 Map.has 判 pending 存在。
+  // resume 时 saved 优先于 inherited：sessions.json 持久化了该会话最后生效的档（web 端增强，CLI 无此行为），
+  // 冷启动无 live agents 时 inherited 回退 default/null，saved 能保持会话状态连续性。
   const isFresh = !resumeId;
   if (mode === undefined) {
     if (isFresh && pendingModeByCwd.has(cwd)) { mode = pendingModeByCwd.get(cwd); pendingModeByCwd.delete(cwd); }
     else if (isFresh) mode = 'default';        // 新会话：CLI 启动默认权限档
-    else mode = inheritedMode(cwd);            // resume：继承该 cwd 上下文档
+    else mode = saved?.permissionMode || inheritedMode(cwd); // resume：saved 优先，无则继承
   }
   let eff;
   if (effort !== undefined) eff = effort;
   else if (isFresh && pendingEffortByCwd.has(cwd)) { eff = pendingEffortByCwd.get(cwd); pendingEffortByCwd.delete(cwd); }
   else if (isFresh) eff = null;                // 新会话：模型默认 effort
-  else eff = inheritedEffort(cwd);             // resume：继承
+  else eff = saved?.effort !== undefined ? saved.effort : inheritedEffort(cwd); // resume：saved 优先，无则继承
   permModeByInstance.set(id, mode);
   effortByInstance.set(id, eff);
   const instance = new AgentSession({
@@ -825,7 +827,9 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
       // sessionId 已在 agent.js 先于 emit('init') 赋值 → 下方 init 边界的 broadcastInstances 自然带新 sid/title。
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, cwd);
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd, model });
+      // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
+      // effort 为构造时注入值（运行时不可改）。web 端续接恢复依赖这两字段。
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd, model, effort: instance.effort, permissionMode: instance.permissionMode });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 会话已获得 ID: sessionId=${sid}, 标题="${firstMessage || '未命名'}", model=${model || '默认'}`);
     },
     // 台阶3：实例意外退出/挂死自杀 → 从 Map 删该 instanceId（不影响其他实例）；resume 失败清该 cwd 指针
@@ -1140,6 +1144,7 @@ io.on('connection', socket => {
     if (!ok) return;
     interactionLog.addSessionLog(a.sessionId, 'sys_info', `[SYS] 切换权限档 (user:setPermissionMode): mode=${mode}, instanceId=${id}`);
     permModeByInstance.set(id, mode);                  // 台阶3：档位 per-instance
+    if (a.sessionId) sessions.updateSessionPrefs(a.sessionId, { permissionMode: mode }); // 持久化，resume 恢复用
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
       type: 'permission_mode', payload: { mode }
@@ -1176,6 +1181,7 @@ io.on('connection', socket => {
     }
     const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, wasViewing = viewingInstanceId === id;
     interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}, 正在置换实例...`);
+    if (sid) sessions.updateSessionPrefs(sid, { effort: level }); // 持久化，resume 恢复用（先于 dispose，防崩溃丢档）
     disposeInstance(id);                                              // 关旧实例
     const ni = openInstance({ cwd, resumeId: sid, mode, effort: level }); // 开新实例 resume 同会话、带新 effort
     if (wasViewing) viewingInstanceId = ni.instanceId;

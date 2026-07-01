@@ -98,6 +98,68 @@ test.describe('sessions.js 单元测试', () => {
     assert.equal(S.getCurrent('/proj/f'), 'curr-sync');
   });
 
+  test('upsertSession: 新会话可带 effort 和 permissionMode', () => {
+    S.upsertSession({ id: 'prefs-new', title: '带档位', cwd: '/proj/h', model: 'claude-opus-4-8', effort: 'high', permissionMode: 'plan' });
+    const s = S.getSession('prefs-new');
+    assert.equal(s.effort, 'high');
+    assert.equal(s.permissionMode, 'plan');
+  });
+
+  test('upsertSession: 已有会话更新 effort 和 permissionMode', () => {
+    S.upsertSession({ id: 'prefs-upd', title: '初始', cwd: '/proj/h', model: null });
+    assert.equal(S.getSession('prefs-upd').effort, null);
+    assert.equal(S.getSession('prefs-upd').permissionMode, null);
+    S.upsertSession({ id: 'prefs-upd', title: '初始', cwd: '/proj/h', model: null, effort: 'max', permissionMode: 'bypassPermissions' });
+    assert.equal(S.getSession('prefs-upd').effort, 'max');
+    assert.equal(S.getSession('prefs-upd').permissionMode, 'bypassPermissions');
+  });
+
+  test('upsertSession: effort/permissionMode 未传时不覆盖已有值', () => {
+    S.upsertSession({ id: 'prefs-keep', title: '保留', cwd: '/proj/h', model: null, effort: 'high', permissionMode: 'plan' });
+    S.upsertSession({ id: 'prefs-keep', title: '保留', cwd: '/proj/h', model: null }); // 不传 effort/perm
+    assert.equal(S.getSession('prefs-keep').effort, 'high');
+    assert.equal(S.getSession('prefs-keep').permissionMode, 'plan');
+  });
+
+  test('upsertSession: effort=null（模型默认）是合法值', () => {
+    S.upsertSession({ id: 'effort-null', title: '默认effort', cwd: '/proj/h', model: null, effort: null });
+    assert.equal(S.getSession('effort-null').effort, null);
+  });
+
+  // ── updateSessionPrefs ────────────────────────────────────────────────────
+
+  test('updateSessionPrefs: 更新已有会话的 effort', () => {
+    S.upsertSession({ id: 'upd-prefs', title: '切档', cwd: '/proj/i', model: null, effort: 'low' });
+    S.updateSessionPrefs('upd-prefs', { effort: 'max' });
+    assert.equal(S.getSession('upd-prefs').effort, 'max');
+  });
+
+  test('updateSessionPrefs: 更新已有会话的 permissionMode', () => {
+    S.upsertSession({ id: 'upd-prefs2', title: '切档2', cwd: '/proj/i', model: null, permissionMode: 'default' });
+    S.updateSessionPrefs('upd-prefs2', { permissionMode: 'acceptEdits' });
+    assert.equal(S.getSession('upd-prefs2').permissionMode, 'acceptEdits');
+  });
+
+  test('updateSessionPrefs: 同时更新两个字段', () => {
+    S.upsertSession({ id: 'upd-both', title: '双切', cwd: '/proj/i', model: null });
+    S.updateSessionPrefs('upd-both', { effort: 'xhigh', permissionMode: 'plan' });
+    const s = S.getSession('upd-both');
+    assert.equal(s.effort, 'xhigh');
+    assert.equal(s.permissionMode, 'plan');
+  });
+
+  test('updateSessionPrefs: 不存在的 id 静默忽略', () => {
+    S.updateSessionPrefs('nonexistent-id', { effort: 'high' }); // 不抛
+  });
+
+  test('updateSessionPrefs: 不传的字段不覆盖', () => {
+    S.upsertSession({ id: 'upd-partial', title: '部分', cwd: '/proj/i', model: null, effort: 'low', permissionMode: 'plan' });
+    S.updateSessionPrefs('upd-partial', { effort: 'max' }); // 只改 effort
+    const s = S.getSession('upd-partial');
+    assert.equal(s.effort, 'max');
+    assert.equal(s.permissionMode, 'plan'); // 不变
+  });
+
   // ── getSession ────────────────────────────────────────────────────────────
 
   test('getSession: 找到已存在的会话', () => {
