@@ -20,7 +20,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions } from '../file-security.js';
-import { normalizeWorkdirEntries } from '../workdirs.js';
+import { normalizeWorkdirEntries, loadWorkdirsFile } from '../workdirs.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const results = [];
@@ -102,22 +102,19 @@ function checkWorkDir() {
   // 多 repo 台阶1：WORK_DIRS 白名单各目录也需可写。soft：问题用 warn（server 启动期
   // 对无效项告警跳过、不挡启动，doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
   // 解析统一走 workdirs.js（与 server.js preflight 单一事实源）：条目支持 string 或 {path, sessionLimit}。
-  let parsed = null;
+  // 文件模式复用导出的 loadWorkdirsFile（read+parse+normalize→null），逗号模式走 normalizeWorkdirEntries。
+  let result = null;
   const dirsFile = process.env.WORK_DIRS_FILE;
   if (dirsFile) {
     const filePath = dirsFile.startsWith('/') ? dirsFile : join(HERE, dirsFile);
-    try {
-      parsed = JSON.parse(readFileSync(filePath, 'utf8'));
-    } catch (e) {
-      warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath}): ${e.message}`);
-    }
+    result = loadWorkdirsFile(filePath);
+    if (!result) warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath})`);
   } else {
-    parsed = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
+    result = normalizeWorkdirEntries((process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean));
   }
-  if (parsed !== null) {
-    const { entries, warnings } = normalizeWorkdirEntries(parsed);
-    for (const w of warnings) warn('WORK_DIRS', w);
-    for (const { path } of entries) checkOneDir('WORK_DIRS', path, true);
+  if (result) {
+    for (const w of result.warnings) warn('WORK_DIRS', w);
+    for (const { path } of result.entries) checkOneDir('WORK_DIRS', path, true);
   }
 }
 

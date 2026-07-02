@@ -70,7 +70,8 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
         if (!content.trim()) continue;
         // 后台任务完成后 CLI 注入的 <task-notification> 是给模型看的系统信号，非用户对话——
         // 回显时跳过，否则重载后会显示成一条原始 XML 用户气泡（后续的 assistant 汇报本身自解释）。
-        if (content.trimStart().startsWith('<task-notification>')) continue;
+        // 要求成对闭合，避免误伤用户随口以裸 <task-notification> 开头（少含闭合标签）的真实消息。
+        if (content.trimStart().startsWith('<task-notification>') && content.includes('</task-notification>')) continue;
         messages.push({
           role: entry.message?.role || entry.type,
           content,

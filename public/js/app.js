@@ -599,6 +599,11 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
   // ---- agent:event 分发（台阶3 instanceId 分流 + epoch 感知去重）----
   socket.on('agent:event', ev => {
+    // task_notification 是跨实例的带外通知（后台任务完成）——必须在 shouldDropAgentEvent / epoch 去重【之前】处理并 return：
+    //   ① 它带 instanceId，若走正常管线会被 shouldDropAgentEvent 按非当前查看实例丢弃（这正是「后台」任务的常态：
+    //      你在看别的会话或落地页）；② 后台实例 epoch 不同，放它进 epoch 块会污染 curEpoch/lastSeq 基线。
+    // 故独立分流：OS 通知无条件触发（跨会话有效），addBar/haptic 仅当前查看实例（否则串进别的会话视图）。
+    if (ev.type === 'task_notification') { onTaskNotification(ev); return; }
     // 台阶3：事件按 instanceId 分流——非当前查看 tab（viewingInstanceId）的实例事件不渲染直接丢弃。
     // 角标/跨 tab 通知改由 instances 广播驱动（setInstances/notifyStateChanges），不在此重建。
     // 必须在 epoch 去重前过滤，否则后台实例事件会污染 curEpoch/lastSeq 基线。判定见 logic.js shouldDropAgentEvent：
@@ -742,19 +747,6 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       if (consoleModal && consoleModal.classList.contains('sheet-open')) {
         appendLogEntry(p);
       }
-    },
-    // 后台任务（Workflow/后台 Agent/后台 Bash）完成通知：修「web 端运行 workflow 后无任何提示」。
-    // source=system：任务本身完成（可能在 idle 期到达）；source=user_injection：模型开始自动汇报（标志新轮启动）。
-    task_notification(p) {
-      const failed = p.status === 'failed' || p.status === 'error';
-      haptic(failed ? 'warning' : 'success');
-      if (p.source === 'user_injection') {
-        addBar('🔔 后台任务完成，Claude 正在汇报结果…', 'text-info');
-      } else {
-        const tail = p.summary ? '：' + p.summary : '';
-        addBar(`🔔 后台任务${failed ? '失败' : '完成'}${tail}`, failed ? 'text-danger' : 'text-info');
-      }
-      notify('🔔 后台任务完成', (p.summary || 'Claude 即将汇报结果').slice(0, 80)); // notify 内部有 document.hidden 门控
     },
     // 可用模型列表由 init 后 fire-and-forget supportedModels() 推送（含重连/重启后的服务端重放）。
     // 原样透传（2026-06-15）：SDK 返回 {value, displayName, description}（兼容纯字符串），option 文案直接用
@@ -2841,6 +2833,27 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   function notify(title, body) {
     if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
     try { new Notification(title, { body, icon: '/icons/icon-192.png', tag: 'ccm' }); } catch { /* iOS 非 PWA 等场景静默 */ }
+  }
+
+  // 后台任务（Workflow/后台 Agent/后台 Bash）完成通知——修「web 端运行 workflow 后无任何提示」。
+  // 跨实例带外处理（在 agent:event 分发顶部拦截、绕过 shouldDropAgentEvent，见那里注释）：
+  //   · notify() 无条件触发——OS 通知在你熄屏/切别的 app/看别的会话时都有效（notify 内部按 document.hidden 自门控）；
+  //   · addBar + haptic 仅当通知来自【当前查看实例】——否则会把 B 会话的完成条串进你正在看的 A 会话视图。
+  //     后台可见（web 开着但在看别的会话）场景由 instances 广播驱动的 sessionsDot / tab 角标覆盖。
+  // source=system：任务本身完成；source=user_injection：模型开始自动汇报。两者都可能到达，OS tag 'ccm' 合并同题通知。
+  function onTaskNotification(ev) {
+    const p = ev.payload || {};
+    const failed = p.status === 'failed' || p.status === 'error';
+    notify(failed ? '🔔 后台任务失败' : '🔔 后台任务完成', (p.summary || 'Claude 即将汇报结果').slice(0, 80));
+    if (ev.instanceId === viewingInstanceId) { // 仅当前查看会话进消息流 + 触觉
+      haptic(failed ? 'warning' : 'success');
+      if (p.source === 'user_injection') {
+        addBar('🔔 后台任务完成，Claude 正在汇报结果…', 'text-info');
+      } else {
+        const tail = p.summary ? '：' + p.summary : '';
+        addBar(`🔔 后台任务${failed ? '失败' : '完成'}${tail}`, failed ? 'text-danger' : 'text-info');
+      }
+    }
   }
 
   // E15：Web Push 订阅

@@ -492,6 +492,7 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
   test('assistant 兜底合成（非流式网关无 message_start）：pendingAutoTurn + assistant → pendingTurns=1', () => {
     const { s } = makeSession();
     s.pendingAutoTurn = true;
+    s.pendingAutoTurnAt = Date.now(); // 新鲜武装（TTL 内）
     s.map({ type: 'assistant', message: { content: [{ type: 'text', text: '报告正文' }] }, uuid: 'a1' });
     assert.equal(s.pendingTurns, 1);
     assert.equal(s.pendingAutoTurn, false);
@@ -504,6 +505,14 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     assert.equal(events.find(e => e.type === 'task_notification'), undefined);
     assert.equal(s.pendingAutoTurn, false);
     assert.equal(s.pendingTurns, 0);
+    s.dispose();
+  });
+
+  test('以 <task-notification> 开头但无闭合标签 → 不误判为注入（收紧）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'user', message: { content: '<task-notification> 这个标签啥意思' } }); // 无 </task-notification>
+    assert.equal(events.find(e => e.type === 'task_notification'), undefined);
+    assert.equal(s.pendingAutoTurn, false);
     s.dispose();
   });
 
@@ -525,6 +534,65 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     assert.doesNotThrow(() => s.map({ type: 'bogus_never_seen' }));
     const logs = getSessionLogs('sess-bogus');
     assert.ok(logs.some(l => l.type === 'sys_info' && l.text.includes('未映射 SDK 消息 type=bogus_never_seen')));
+    s.dispose();
+  });
+
+  // ---- pendingAutoTurn 复位 + TTL 门（防 sticky flag 卡死会话）----
+  test('interrupt() 复位 pendingAutoTurn（用户显式停止，无自动汇报可期）', async () => {
+    const { s } = makeSession();
+    s.pendingAutoTurn = true;
+    s.q = { interrupt: async () => {} };
+    await s.interrupt();
+    assert.equal(s.pendingAutoTurn, false);
+    s.dispose();
+  });
+
+  test('dispose() 复位 pendingAutoTurn（实例销毁不留残留 flag）', () => {
+    const { s } = makeSession();
+    s.pendingAutoTurn = true;
+    s.dispose();
+    assert.equal(s.pendingAutoTurn, false);
+  });
+
+  test('TTL 门：flag 武装但超时（pendingAutoTurnAt 远古）→ message_start 不合成且清 flag', () => {
+    const { s } = makeSession();
+    s.pendingAutoTurn = true;
+    s.pendingAutoTurnAt = 1; // 远古时间戳，远超 TTL
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } }, parent_tool_use_id: null, uuid: 'u1' });
+    assert.equal(s.pendingTurns, 0, '超时不合成');
+    assert.equal(s.pendingAutoTurn, false, '超时清 flag，防长尾误触');
+    s.dispose();
+  });
+
+  test('TTL 门：flag 新鲜武装 → message_start 正常合成', () => {
+    const { s } = makeSession();
+    // 走真实置位路径以设 pendingAutoTurnAt=now
+    s.map({ type: 'user', message: { content: '<task-notification>\n<task-id>a</task-id>\n</task-notification>' } });
+    assert.equal(s.pendingAutoTurn, true);
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } }, parent_tool_use_id: null, uuid: 'u1' });
+    assert.equal(s.pendingTurns, 1, '新鲜 flag 正常合成');
+    s.dispose();
+  });
+});
+
+// ---- logMeta()：统一模型/effort/permission 解析（消除 send vs result 的 defaultModel/'default' 漂移）----
+test.describe('logMeta()', () => {
+  test('全空 → 兜底 default / model-default / default', () => {
+    const { s } = makeSession();
+    assert.deepEqual(s.logMeta(), { model: 'default', effort: 'model-default', permissionMode: 'default' });
+    s.dispose();
+  });
+
+  test('activeModel 优先，effort/permissionMode 透传', () => {
+    const { s } = makeSession({ model: 'claude-opus-4-8', effort: 'high', permissionMode: 'plan' });
+    assert.deepEqual(s.logMeta(), { model: 'claude-opus-4-8', effort: 'high', permissionMode: 'plan' });
+    s.dispose();
+  });
+
+  test('无 active/default，回退 reportedModel（修 default 漂移）', () => {
+    const { s } = makeSession();
+    s.activeModel = undefined; s.defaultModel = undefined; s.reportedModel = 'claude-sonnet-4-6';
+    assert.equal(s.logMeta().model, 'claude-sonnet-4-6');
     s.dispose();
   });
 });

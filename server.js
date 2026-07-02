@@ -495,9 +495,17 @@ if (process.env.WORK_DIRS_FILE) {
   const wf = process.env.WORK_DIRS_FILE.startsWith('/') ? process.env.WORK_DIRS_FILE : join(HERE, process.env.WORK_DIRS_FILE);
   const wbase = basename(wf);
   let wtimer = null;
+  // mtime 前置守卫：相对路径时 dirname(wf) 可能是整个项目根，且部分平台(Linux/网络 FS)不提供 filename→basename 过滤失效。
+  // 每次事件比对 workdirs 文件 mtime，未变即跳过——消除根目录无关文件变动（如 dev 期编辑器 swap）引发的重载风暴。
+  let lastWorkdirsMtime = 0;
+  try { lastWorkdirsMtime = statSync(wf).mtimeMs; } catch { /* 文件暂不存在，首次变更时再取 */ }
   try {
     watch(dirname(wf), (_evt, filename) => {
-      if (filename && filename !== wbase) return; // 只关心 workdirs 文件（filename 在部分平台可能为 null → 放行重读）
+      if (filename && filename !== wbase) return; // 有 filename 时直接按 basename 过滤
+      let m = 0;
+      try { m = statSync(wf).mtimeMs; } catch { return; } // 文件不存在/不可读 → 跳过（保留旧白名单）
+      if (m === lastWorkdirsMtime) return;               // mtime 未变 = 非本文件变动，忽略
+      lastWorkdirsMtime = m;
       clearTimeout(wtimer);
       wtimer = setTimeout(reloadWorkdirs, 300);
     });
@@ -856,10 +864,11 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
             pushNotify(p?.isError ? '⚠️ 任务出错' : '✅ 任务完成',
               `用时 ${((p?.durationMs ?? 0) / 1000).toFixed(1)}s`);
           }
-        } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question' || envelope.type === 'task_notification') {
+        } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question') {
           doneInstances.delete(id); errorInstances.delete(id);
-          // task_notification 是后台任务完成后的新活动（模型即将自动汇报）：清 done/error 残留 latch，
-          // 让后台 tab 角标从「完成 ✅」翻回「运行中 ⏳」。不额外 pushNotify——后续自动轮的 result 会走上方推送，双推是噪音。
+          // task_notification 在 STATE_BOUNDARY 里但【不】清 latch：它到达时 pendingTurns 仍 0（合成发生在后续
+          // message_start），此刻清 error latch 会吞掉后台实例先前未确认的失败 ❗；且忙碌显示由合成的 pendingTurns
+          // 驱动（instanceState busy 优先级本就盖过 done/error），自动汇报轮的 result 再正确重估 latch——无需在此清。
           // E15：permission_request / question 始终推（用户可能锁屏或在别的 app）
           if (envelope.type === 'permission_request') {
             const p = envelope.payload;

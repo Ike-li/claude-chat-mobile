@@ -7,6 +7,8 @@ import { sanitize } from './sanitizer.js';
 
 const BUFFER_CAP = 500;       // 环形缓冲条数
 const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要截断；permission_request 永不截断（4a）
+const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn 的有效期（2min）：宽于任何真实自动汇报延迟、
+                                     // 窄于长尾——超时不合成，防滞留 flag 被无关的 message_start（如 auto-compact fork）误触发。
 
 // epoch：每个 AgentSession 实例一个跨重启唯一标识。基于 wall-clock + 进程内计数，
 // 保证服务重启后新实例的 epoch 严格大于旧实例 → 客户端据此区分"新流"并重置 seq 去重基线。
@@ -45,6 +47,7 @@ export class AgentSession {
     this.pendingAutoTurn = false;      // 后台任务通知已到、下个轮次由非用户输入（task-notification 注入）启动的信号——
                                        // 轮次真正开始（message_start/assistant）时合成 pendingTurns=1，让 busy/看护/角标接回。
                                        // 只武装 flag 不直接 ++：N 条通知未必对应 N 轮（合并轮会卡死 busy → checkIdle 误杀）。
+    this.pendingAutoTurnAt = 0;        // flag 武装时刻（Date.now）：合成前校验未超 AUTO_TURN_ARM_TTL_MS，防滞留 flag 长尾误触发。
     this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
     this.pendingQuestions = new Map();   // toolUseID → { resolve, questions, answers, remaining }
     this.denyKinds = new Map();          // toolUseID → 'answered'|'denied'|'cancelled'：deny+message 通道的真实语义，供前端区分 ☑️/🚫（is_error 不足以分辨）
@@ -161,9 +164,12 @@ export class AgentSession {
         this.lastActivity = Date.now();
         // 诊断 tap（DEBUG_SDK_MESSAGES=1 开启）：map 前打印原始消息骨架，
         // 用于排查"后台任务完成通知在 web 端丢失"——观察 SDK 到底投不投递、以什么 type/subtype/parent 投递。
+        // 独立 try/catch：JSON.stringify 遇循环引用会抛，绝不让诊断插桩反噬主消息泵（否则被外层 catch 当流错误中断会话）。
         if (process.env.DEBUG_SDK_MESSAGES) {
-          console.log('[sdk-msg]', msg.type, msg.subtype ?? '', msg.parent_tool_use_id ?? '-',
-            JSON.stringify(msg).slice(0, 300));
+          try {
+            console.log('[sdk-msg]', msg.type, msg.subtype ?? '', msg.parent_tool_use_id ?? '-',
+              JSON.stringify(msg).slice(0, 300));
+          } catch { console.log('[sdk-msg]', msg.type, msg.subtype ?? '', msg.parent_tool_use_id ?? '-', '(unstringifiable)'); }
         }
         this.map(msg);
       }
@@ -188,6 +194,7 @@ export class AgentSession {
     // 清理（无论正常结束/抛错/resume 失败都执行；异常已被上方 catch 收口，不会跳过）
     clearInterval(this.idleTimer); this.idleTimer = null;
     this.pendingTurns = 0;
+    this.pendingAutoTurn = false; // 实例结束不留滞留 flag，防重开实例后残留状态误合成
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
     // F2：清理挂起的 AskUserQuestion（直接 resolve，不走 resolveQuestion 避免重复逻辑）
     for (const [toolUseID, pending] of this.pendingQuestions) {
@@ -236,15 +243,12 @@ export class AgentSession {
     // 否则拒绝路径会把气泡推上屏却没真正发送（用户以为发了、实际被拒）。
     if (this.firstMessage === null) this.firstMessage = displayText;
     this.emit('user_message', { text: displayText, attachments: opts.attachments }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
-    // 日志模型 ID 解析为真实运行模型：activeModel（本轮目标）> reportedModel（SDK init 上报）> defaultModel，
-    // 避免空选择时只记 'default' 这类笼统名——修「日志不显具体模型 ID」。
-    const realModel = this.activeModel || this.reportedModel || this.defaultModel;
-    const effortStr = this.effort || 'model-default';
-    const permStr = this.permissionMode || 'default';
-    interactionLog.userMessageOut(this.sessionId, displayText, realModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
+    // 日志模型/effort/perm 走统一 logMeta()（消除 send vs result 的模型解析漂移，见 logMeta 注释）。
+    const { model: metaModel, effort: effortStr, permissionMode: permStr } = this.logMeta();
+    interactionLog.userMessageOut(this.sessionId, displayText, metaModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
     this.pendingTurns++;
     // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
-    interactionLog.agentSend(this.sessionId, text, realModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
+    interactionLog.agentSend(this.sessionId, text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
     this.queue.push({ text });
     this.notifyInput?.();
     this.lastActivity = Date.now(); // 续期静默看护：send 是用户活动，防 idle 误判
@@ -253,6 +257,7 @@ export class AgentSession {
 
   async interrupt() {
     this._flushText(); this._flushThink();
+    this.pendingAutoTurn = false; // 用户显式停止：作废任何待合成的后台自动汇报轮
     // S7：先同步把队列「换成新空数组」并快照旧队列——await q.interrupt() 是让出点，期间用户若在
     // 「点停止后、中断未完成」时又发消息，该消息会 push 进新队列，不被本次中断卷入丢弃；
     // toDrop 才是本次要丢的「中断发起时已排队」。修原竞态：旧实现 await 后才 this.queue=[]，
@@ -476,6 +481,7 @@ export class AgentSession {
     this._flushText(); this._flushThink();
     this.disposed = true;
     this.inputEnded = true;
+    this.pendingAutoTurn = false; // 实例销毁：作废滞留 flag，防重开实例后误合成
     this.notifyInput?.();
     clearInterval(this.idleTimer); this.idleTimer = null;
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
@@ -573,6 +579,7 @@ export class AgentSession {
           // 后台任务（Workflow/后台 Agent/后台 Bash）完成的专用 SDK 通道（CLI 交互/SDK 模式）。
           // 通知本身不启轮，但会触发模型自动重调汇报——武装 pendingAutoTurn，待该轮 message_start/assistant 合成 pendingTurns。
           this.pendingAutoTurn = true;
+          this.pendingAutoTurnAt = Date.now();
           this.emit('task_notification', {
             source: 'system',
             taskId: msg.task_id ?? null,
@@ -672,8 +679,10 @@ export class AgentSession {
         const flat = typeof content === 'string'
           ? content
           : asArray(content).filter(b => b?.type === 'text' && b.text).map(b => b.text).join('\n');
-        if (flat.trimStart().startsWith('<task-notification>')) {
+        // 要求成对闭合，降低误伤：用户若随口发以裸 <task-notification> 开头的消息（少含闭合标签）不误判为注入。
+        if (flat.trimStart().startsWith('<task-notification>') && flat.includes('</task-notification>')) {
           this.pendingAutoTurn = true; // 武装：轮次真正开始时合成 pendingTurns（不直接 ++，见构造函数注释）
+          this.pendingAutoTurnAt = Date.now();
           const pick = tag => new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(flat)?.[1]?.trim() ?? null;
           this.emit('task_notification', {
             source: 'user_injection',
@@ -720,9 +729,7 @@ export class AgentSession {
           models: Object.keys(msg.modelUsage ?? {}), // F1：语义断言用
           text: this.assistantResponseBuffer || undefined // 完整回复文本：供前端断网恢复后校正截断的 s.raw
         });
-        const modelStr = this.activeModel || this.reportedModel || 'default';
-        const effortStr = this.effort || 'model-default';
-        const permStr = this.permissionMode || 'default';
+        const { model: modelStr, effort: effortStr, permissionMode: permStr } = this.logMeta(); // 统一解析，消除与 send 的漂移
         const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms`; // model/effort/permission 走独立 chip 字段，不再进文本
         const responseText = this.assistantResponseBuffer ? `${durationStr}\n${this.assistantResponseBuffer}` : durationStr;
         interactionLog.agentResult(this.sessionId, responseText, modelStr, effortStr, permStr);
@@ -741,11 +748,25 @@ export class AgentSession {
   // 后台任务通知触发的"非用户输入轮次"：轮次真正开始（message_start/assistant）时把 pendingTurns 合成到 1，
   // 让 busy 显示、result 正常回落、checkIdle 看护、后台 tab 角标、busy→done 推送全部免费接回。
   // flag 门控（只在 pendingAutoTurn 时合成）：避免 auto-compact 等内部 fork 泄漏 message_start 却无 result 导致 busy 永挂。
+  // TTL 门：滞留 flag（通知到达却无紧邻自动汇报）超 AUTO_TURN_ARM_TTL_MS 即失效清除，不让无关的 message_start 误合成。
   maybeSynthesizeAutoTurn() {
-    if (this.pendingTurns === 0 && this.pendingAutoTurn) {
+    if (!this.pendingAutoTurn) return;
+    if (Date.now() - this.pendingAutoTurnAt >= AUTO_TURN_ARM_TTL_MS) { this.pendingAutoTurn = false; return; } // 超时作废
+    if (this.pendingTurns === 0) {
       this.pendingTurns = 1;
       this.pendingAutoTurn = false;
     }
+  }
+
+  // 交互日志的模型/思考强度/权限档三元组（单一来源，供 send/result 共用）。
+  // 模型解析：activeModel（本轮目标）> reportedModel（SDK init 上报的真实运行模型）> defaultModel（会话原模型）> 'default'。
+  // 消除 send 用 defaultModel、result 用字面量 'default' 的漂移（同轮日志曾可能记出两个不同模型名）。
+  logMeta() {
+    return {
+      model: this.activeModel || this.reportedModel || this.defaultModel || 'default',
+      effort: this.effort || 'model-default',
+      permissionMode: this.permissionMode || 'default'
+    };
   }
 }
 
