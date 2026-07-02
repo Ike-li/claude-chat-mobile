@@ -1,4 +1,4 @@
-// test/server.test.mjs —— server.js 集成测试（零 token、零 agent 创建）
+// test/integration/server.test.mjs —— server.js 集成测试（零 token、零 agent 创建）
 // 启动 server 子进程 → socket.io-client 连接 → 验证事件流与 HTTP 端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
