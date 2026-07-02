@@ -181,7 +181,7 @@ async function cleanup() {
 }
 
 // 测试套件
-test.describe('AUTH_TOKEN 鉴权集成测试', () => {
+test.describe('AUTH_TOKEN 鉴权集成测试', process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : {}, () => {
   test.before(async () => {
     // 只启动一次服务器，所有测试共享
     await startServer({ authEnabled: true, authToken: 'secret-token' });
