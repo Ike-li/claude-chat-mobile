@@ -326,6 +326,9 @@ test.describe('logEntryVisibleForInstance：交互日志按实例分流（切工
   test('client_conn 连接级事件无工作区归属 → 任何实例下恒显', () => {
     assert.equal(logEntryVisibleForInstance({ type: 'client_conn', instanceId: 'A' }, 'B'), true);
     assert.equal(logEntryVisibleForInstance({ type: 'client_conn', instanceId: null }, 'A'), true);
+    // 首页(viewing=null、无选中实例)也恒显——loadConsoleLogs 的无实例分支据此渲染断连/重连痕迹，
+    // 否则首页打开日志抽屉一片空白（实测暴露：conn 日志丢失）。
+    assert.equal(logEntryVisibleForInstance({ type: 'client_conn', instanceId: null }, null), true);
   });
 
   test('空首页两端 instanceId 皆 null → 可见；一端 null 一端有值 → 隐藏', () => {

@@ -1575,8 +1575,8 @@ function shutdown(sig) {
   clearTimeout(statusDebounce);   // （在途 git execFile 由 2s timeout 与进程退出收割）
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批
   agents.clear();
-  httpServer.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 3000).unref();
+  io.close(() => process.exit(0)); // 主动关所有 socket 连接再关底层 http server；否则 WS 长连接把 close 回调拖到 3s 兜底才退（实测断连窗口 ~3.5s → 近乎即时）
+  setTimeout(() => process.exit(0), 3000).unref(); // 兜底：io.close 万一挂起仍强退
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));

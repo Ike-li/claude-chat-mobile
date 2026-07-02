@@ -2994,7 +2994,12 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   function loadConsoleLogs(id) {
     const instId = id || viewingInstanceId;
     if (!instId) {
-      if (consoleLogArea) consoleLogArea.innerHTML = '';
+      // 首页无选中实例：服务端日志按实例隔离故无从拉，但连接级(client_conn)日志无工作区归属、恒显——
+      // 仍渲染它们，否则首页打开日志抽屉一片空白、断连/重连痕迹全丢（logEntryVisibleForInstance 对 client_conn 恒 true）。
+      if (consoleLogArea) {
+        consoleLogArea.innerHTML = '';
+        clientLogBuffer.filter(e => logEntryVisibleForInstance(e, null)).forEach(log => appendLogEntry(log));
+      }
       return;
     }
     socket.emit('logs:get', { instanceId: instId }, (res) => {
