@@ -2,6 +2,8 @@
 
 移动端聊天式 Web UI，把**本机 claude CLI** 投送到手机——目标是终端等价性："坐在电脑前对 claude 打字"和"在手机上打字"效果一样。
 
+技术栈：Node ≥20 · ESM · Express 5 · Socket.io 4 · `@anthropic-ai/claude-agent-sdk` 0.1 · `jose` 6（JWT）· `web-push`（离线推送）· 测试用内置 `node --test` + puppeteer/gifenc/pngjs（视觉 E2E）。
+
 ## 常用命令
 
 > ⚠️ **生产部署 = 常驻服务**（macOS LaunchAgent / Linux systemd 占着 3000 端口，固定公网域名 + Cloudflare Access 2FA）：**勿手动 `npm start`**（会撞端口）；改 `.env`/代码后须**重启常驻 server 进程**才生效。**例外**：`workdirs.json` 支持热加载——改完即生效、免重启（server 监听文件变化，被移除目录上的已开会话继续运行、仅拒新开）。
@@ -9,6 +11,7 @@
 ```bash
 npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
+npm run check      # node --check 根级 *.js + public/js/*.js 语法（零依赖、最快）
 npm test           # 单测 + 可靠集成(server/auth/upload)；claude-turn 集成默认跳过；--test-force-exit 保证退出。CI 里集成整体 skip
 npm run test:unit  # node --test test/*.test.mjs：仅纯逻辑单测（零 token、最快）
 npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）
