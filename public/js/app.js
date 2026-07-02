@@ -1834,13 +1834,14 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   }
 
   // 角标视觉：busy ⏳ / permission ⚠️ / error ❗ / done ✅；idle 隐藏。挂在目录行内、ml-auto 右对齐。
-  const DIR_BADGE = { busy: ['⏳', 'text-warning'], permission: ['⚠️', 'text-danger'], error: ['❗', 'text-danger'], done: ['✅', 'text-success'] };
+  // [emoji, 颜色类, 语义 title]——title 消除「不知道图标/颜色对应什么状态」
+  const DIR_BADGE = { busy: ['⏳', 'text-warning', '运行中'], permission: ['⚠️', 'text-danger', '待审批'], error: ['❗', 'text-danger', '出错'], done: ['✅', 'text-success', '已完成'] };
   // 工具角标细化：busy 时根据 activeTool 显示具体工具图标
   const TOOL_BADGE = { Agent: '🤖', Task: '🤖', Bash: '🖥', Write: '📝', Edit: '✏️', Read: '👁' };
   function applyBadge(badge, state) {
     const m = DIR_BADGE[state];
-    if (m) { badge.textContent = m[0]; badge.className = `dir-badge ml-auto shrink-0 ${m[1]}`; }
-    else { badge.textContent = ''; badge.className = 'dir-badge hidden'; }
+    if (m) { badge.textContent = m[0]; badge.className = `dir-badge ml-auto shrink-0 ${m[1]}`; badge.title = m[2]; }
+    else { badge.textContent = ''; badge.className = 'dir-badge hidden'; badge.title = ''; }
   }
   // 面板开着时仅更新已渲染目录行的角标（不重发 session:list）
   function refreshDirBadges() {
@@ -1896,6 +1897,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     const color = { 4: 'bg-danger', 3: 'bg-danger', 2: 'bg-success', 1: 'bg-warning' }[level];
     const base = 'absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border border-surface';
     sessionsDot.className = color ? `${base} ${color}` : `hidden ${base}`;
+    // title 说明该汇总点语义（其他工作区有动静时）——避免「不知道颜色对应什么」
+    sessionsDot.title = { 4: '其他工作区有会话待审批', 3: '其他工作区有会话出错', 2: '其他工作区有会话已完成', 1: '其他工作区有会话运行中' }[level] || '';
   }
 
 
@@ -2092,6 +2095,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
     // 面板标题
     sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] uppercase tracking-wide text-ink-faint border-b border-line">工作区</div>`));
+    // 状态角标图例：消除「不知道 ⏳/⚠️/❗/✅ 各代表什么」——静态一行，紧跟标题
+    sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] text-ink-faint border-b border-line flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span></div>`));
 
     // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
@@ -2189,15 +2194,16 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         if (liveInst) {                        // 已打开标记：状态角标（busy ⏳ / permission ⚠️ / error ❗ / done ✅）
           // busy 时优先使用工具细化图标（🤖 Agent / 🖥 Bash），其他状态用通用角标
           const badgeState = liveInst.state;
-          let badgeIcon, badgeCls;
+          let badgeIcon, badgeCls, badgeTitle;
           if (badgeState === 'busy' && liveInst.activeTool && TOOL_BADGE[liveInst.activeTool]) {
             badgeIcon = TOOL_BADGE[liveInst.activeTool];
             badgeCls = 'text-warning';
+            badgeTitle = `运行中：${liveInst.activeTool}`;
           } else {
             const m = DIR_BADGE[badgeState];
-            if (m) { badgeIcon = m[0]; badgeCls = m[1]; }
+            if (m) { badgeIcon = m[0]; badgeCls = m[1]; badgeTitle = m[2]; }
           }
-          if (badgeIcon) { const b = el(`<span data-instance-badge></span>`); b.textContent = badgeIcon; b.className = `shrink-0 ${badgeCls}`; head.appendChild(b); }
+          if (badgeIcon) { const b = el(`<span data-instance-badge></span>`); b.textContent = badgeIcon; b.className = `shrink-0 ${badgeCls}`; if (badgeTitle) b.title = badgeTitle; head.appendChild(b); }
         }
         btn.appendChild(head);
         const sub = el(`<div class="text-ink-faint text-[10px]"></div>`);
