@@ -163,6 +163,20 @@ test('getSessionHistory: 纯工具调用（空 content）被过滤', async () =>
   assert.equal(msgs[0].content, '真实回复');
 });
 
+test('getSessionHistory: <task-notification> 注入条目被过滤（不回显成 XML 气泡）', async () => {
+  const cwd = '/test/tasknotif-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'tasknotif', [
+    { type: 'user', message: { role: 'user', content: '跑个后台任务' } },
+    { type: 'user', message: { role: 'user', content: '<task-notification>\n<task-id>w60</task-id>\n</task-notification>' } },
+    { type: 'assistant', message: { role: 'assistant', content: '后台任务结果汇报如下' } },
+  ]);
+  const msgs = await getSessionHistory('tasknotif', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].content, '跑个后台任务');
+  assert.equal(msgs[1].content, '后台任务结果汇报如下');
+});
+
 test('getSessionHistory: content 为数组时拼接 text 块', async () => {
   const cwd = '/test/arr-hist';
   const dir = join(BASE, getProjectDir(cwd));

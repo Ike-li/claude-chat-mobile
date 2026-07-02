@@ -693,6 +693,19 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         appendLogEntry(p);
       }
     },
+    // 后台任务（Workflow/后台 Agent/后台 Bash）完成通知：修「web 端运行 workflow 后无任何提示」。
+    // source=system：任务本身完成（可能在 idle 期到达）；source=user_injection：模型开始自动汇报（标志新轮启动）。
+    task_notification(p) {
+      const failed = p.status === 'failed' || p.status === 'error';
+      haptic(failed ? 'warning' : 'success');
+      if (p.source === 'user_injection') {
+        addBar('🔔 后台任务完成，Claude 正在汇报结果…', 'text-info');
+      } else {
+        const tail = p.summary ? '：' + p.summary : '';
+        addBar(`🔔 后台任务${failed ? '失败' : '完成'}${tail}`, failed ? 'text-danger' : 'text-info');
+      }
+      notify('🔔 后台任务完成', (p.summary || 'Claude 即将汇报结果').slice(0, 80)); // notify 内部有 document.hidden 门控
+    },
     // 可用模型列表由 init 后 fire-and-forget supportedModels() 推送（含重连/重启后的服务端重放）。
     // 原样透传（2026-06-15）：SDK 返回 {value, displayName, description}（兼容纯字符串），option 文案直接用
     // displayName、发送值用 value，不叠加项目友好名映射。预选当前模型用 init.model 精确 value 匹配；

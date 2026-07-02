@@ -575,7 +575,7 @@ function instanceForSession(sessionId) {
 // 在途态 + latch 推导（无实例=idle）；broadcastInstances 在轮次/审批边界推送，前端据此渲染 tab 栏角标 + 通知。
 const doneInstances = new Set();
 const errorInstances = new Set(); // 后台（≠viewing）轮次 result.isError 置位的 latch（出错 ❗），清除点同 doneInstances
-const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved', 'tool_use']);
+const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved', 'tool_use', 'task_notification']);
 function instanceState(id) {
   const a = agents.get(id);
   if (!a) return 'idle';
@@ -812,8 +812,10 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
             pushNotify(p?.isError ? '⚠️ 任务出错' : '✅ 任务完成',
               `用时 ${((p?.durationMs ?? 0) / 1000).toFixed(1)}s`);
           }
-        } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question') {
+        } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question' || envelope.type === 'task_notification') {
           doneInstances.delete(id); errorInstances.delete(id);
+          // task_notification 是后台任务完成后的新活动（模型即将自动汇报）：清 done/error 残留 latch，
+          // 让后台 tab 角标从「完成 ✅」翻回「运行中 ⏳」。不额外 pushNotify——后续自动轮的 result 会走上方推送，双推是噪音。
           // E15：permission_request / question 始终推（用户可能锁屏或在别的 app）
           if (envelope.type === 'permission_request') {
             const p = envelope.payload;

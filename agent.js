@@ -42,6 +42,9 @@ export class AgentSession {
     this.buffer = [];
     this.bufferTrimmed = false;
     this.pendingTurns = 0;             // 在途轮数，仅由 send(+1) 与 result(-1) 改写
+    this.pendingAutoTurn = false;      // 后台任务通知已到、下个轮次由非用户输入（task-notification 注入）启动的信号——
+                                       // 轮次真正开始（message_start/assistant）时合成 pendingTurns=1，让 busy/看护/角标接回。
+                                       // 只武装 flag 不直接 ++：N 条通知未必对应 N 轮（合并轮会卡死 busy → checkIdle 误杀）。
     this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
     this.pendingQuestions = new Map();   // toolUseID → { resolve, questions, answers, remaining }
     this.denyKinds = new Map();          // toolUseID → 'answered'|'denied'|'cancelled'：deny+message 通道的真实语义，供前端区分 ☑️/🚫（is_error 不足以分辨）
@@ -156,6 +159,12 @@ export class AgentSession {
       for await (const msg of q) {
         if (this.disposed) break;
         this.lastActivity = Date.now();
+        // 诊断 tap（DEBUG_SDK_MESSAGES=1 开启）：map 前打印原始消息骨架，
+        // 用于排查"后台任务完成通知在 web 端丢失"——观察 SDK 到底投不投递、以什么 type/subtype/parent 投递。
+        if (process.env.DEBUG_SDK_MESSAGES) {
+          console.log('[sdk-msg]', msg.type, msg.subtype ?? '', msg.parent_tool_use_id ?? '-',
+            JSON.stringify(msg).slice(0, 300));
+        }
         this.map(msg);
       }
     } catch (err) {
@@ -559,6 +568,21 @@ export class AgentSession {
           this.emit('system', { message: '正在压缩会话上下文…' });
         } else if (msg.subtype === 'compact_boundary') {
           this.emit('system', { message: '上下文已压缩' });
+        } else if (msg.subtype === 'task_notification') {
+          // 后台任务（Workflow/后台 Agent/后台 Bash）完成的专用 SDK 通道（CLI 交互/SDK 模式）。
+          // 通知本身不启轮，但会触发模型自动重调汇报——武装 pendingAutoTurn，待该轮 message_start/assistant 合成 pendingTurns。
+          this.pendingAutoTurn = true;
+          this.emit('task_notification', {
+            source: 'system',
+            taskId: msg.task_id ?? null,
+            status: msg.status ?? null,
+            summary: truncate(stringify(msg.summary), TOOL_SUMMARY_CAP),
+            toolUseId: msg.tool_use_id ?? null,
+            outputFile: msg.output_file || null
+          });
+        } else {
+          // 未识别的 system 子类型不再静默蒸发：记入交互日志抽屉，保留可观测性（本次通知丢失的教训）
+          interactionLog.addSessionLog(this.sessionId, 'sys_info', `[SYS] 未映射 system 子类型: ${msg.subtype ?? '(空)'}`);
         }
         break;
 
@@ -566,6 +590,7 @@ export class AgentSession {
         if (msg.parent_tool_use_id) break;
         const ev = msg.event;
         if (ev.type === 'message_start') {
+          this.maybeSynthesizeAutoTurn(); // 后台任务触发的非用户轮：轮次开始即合成 pendingTurns
           this.currentMessageId = ev.message?.id || msg.uuid;
           this.sawTextDelta = false;
           this.assistantResponseBuffer = '';
@@ -610,6 +635,7 @@ export class AgentSession {
           break;
         }
         if (msg.parent_tool_use_id) break;
+        this.maybeSynthesizeAutoTurn(); // 非流式网关无 message_start，assistant 边界兜底合成（flag 已被 message_start 消费则 no-op）
         // E16：单次 API 调用口径的 usage（stream_event 在非流式网关缺席、result.usage 轮内聚合高估 ctx）；
         // subagent 消息已被上方 parent_tool_use_id 守卫排除
         if (msg.message?.usage) {
@@ -639,6 +665,25 @@ export class AgentSession {
 
       case 'user': {
         if (msg.parent_tool_use_id) break;
+        // 后台任务完成后，CLI 以 user 角色消息注入 <task-notification> XML 触发模型自动汇报。
+        // 实证：content 常是纯字符串（终端 jsonl），旧代码只遍历数组 → 全丢。这里两种形态都拍平识别。
+        const content = msg.message?.content;
+        const flat = typeof content === 'string'
+          ? content
+          : asArray(content).filter(b => b?.type === 'text' && b.text).map(b => b.text).join('\n');
+        if (flat.trimStart().startsWith('<task-notification>')) {
+          this.pendingAutoTurn = true; // 武装：轮次真正开始时合成 pendingTurns（不直接 ++，见构造函数注释）
+          const pick = tag => new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(flat)?.[1]?.trim() ?? null;
+          this.emit('task_notification', {
+            source: 'user_injection',
+            taskId: pick('task-id'),
+            status: pick('status'),
+            summary: truncate(pick('summary') ?? '', TOOL_SUMMARY_CAP),
+            toolUseId: pick('tool-use-id'),
+            outputFile: pick('output-file')
+          });
+          break; // 注入消息不含 tool_result，独立分支返回
+        }
         for (const block of asArray(msg.message?.content)) {
           if (block?.type === 'tool_result') {
             const raw = msg.tool_use_result ?? block.content;
@@ -686,7 +731,19 @@ export class AgentSession {
         break;
 
       default:
+        // 未映射的 SDK 消息类型不再静默蒸发：记入交互日志抽屉（三重 cap，无膨胀风险），保留可观测性
+        interactionLog.addSessionLog(this.sessionId, 'sys_info', `[SYS] 未映射 SDK 消息 type=${msg.type ?? '(空)'}`);
         break;
+    }
+  }
+
+  // 后台任务通知触发的"非用户输入轮次"：轮次真正开始（message_start/assistant）时把 pendingTurns 合成到 1，
+  // 让 busy 显示、result 正常回落、checkIdle 看护、后台 tab 角标、busy→done 推送全部免费接回。
+  // flag 门控（只在 pendingAutoTurn 时合成）：避免 auto-compact 等内部 fork 泄漏 message_start 却无 result 导致 busy 永挂。
+  maybeSynthesizeAutoTurn() {
+    if (this.pendingTurns === 0 && this.pendingAutoTurn) {
+      this.pendingTurns = 1;
+      this.pendingAutoTurn = false;
     }
   }
 }

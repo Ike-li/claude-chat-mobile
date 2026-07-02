@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentSession } from '../agent.js';
+import { getSessionLogs } from '../interaction-log.js';
 
 // ---- helpers ----
 function makeSession(opts = {}) {
@@ -404,6 +405,126 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
       delta: { type: 'text_delta', text: 'sub' } }, parent_tool_use_id: 'parent-1', uuid: 'u1' });
     // 无 text_delta 事件
     assert.equal(events.length, 0);
+    s.dispose();
+  });
+});
+
+// ---- 后台任务完成通知（Workflow / 后台 Agent / 后台 Bash）----
+test.describe('map() — 后台任务通知（task_notification）', () => {
+  test('system/task_notification → emit(source:system) + 武装 pendingAutoTurn，pendingTurns 不变', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'task_notification', task_id: 'w60tplm3a',
+      tool_use_id: 'toolu_01', status: 'completed', summary: '深度调研完成', output_file: '/tmp/out.md' });
+    const ev = events.find(e => e.type === 'task_notification');
+    assert.ok(ev, '应 emit task_notification');
+    assert.equal(ev.payload.source, 'system');
+    assert.equal(ev.payload.taskId, 'w60tplm3a');
+    assert.equal(ev.payload.status, 'completed');
+    assert.equal(ev.payload.summary, '深度调研完成');
+    assert.equal(ev.payload.toolUseId, 'toolu_01');
+    assert.equal(ev.payload.outputFile, '/tmp/out.md');
+    assert.equal(s.pendingAutoTurn, true);
+    assert.equal(s.pendingTurns, 0); // 通知本身不启轮
+    s.dispose();
+  });
+
+  test('user 字符串注入 <task-notification> → 武装 flag + emit(source:user_injection)，pendingTurns 不变', () => {
+    const { s, events } = makeSession();
+    // 实证形态：content 是纯字符串（终端 jsonl d8e59a10 第 26 行）
+    s.map({ type: 'user', message: { content:
+      '<task-notification>\n<task-id>w60tplm3a</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<output-file>/tmp/out.md</output-file>\n</task-notification>' } });
+    const ev = events.find(e => e.type === 'task_notification');
+    assert.ok(ev, '字符串 content 也应识别');
+    assert.equal(ev.payload.source, 'user_injection');
+    assert.equal(ev.payload.taskId, 'w60tplm3a');
+    assert.equal(ev.payload.toolUseId, 'toolu_01');
+    assert.equal(s.pendingAutoTurn, true);
+    assert.equal(s.pendingTurns, 0);
+    s.dispose();
+  });
+
+  test('user text-block 数组形态的 <task-notification> → 同样识别', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'user', message: { content: [
+      { type: 'text', text: '<task-notification>\n<task-id>abc</task-id>\n</task-notification>' }
+    ] } });
+    const ev = events.find(e => e.type === 'task_notification');
+    assert.ok(ev);
+    assert.equal(ev.payload.source, 'user_injection');
+    assert.equal(ev.payload.taskId, 'abc');
+    s.dispose();
+  });
+
+  test('4 条注入合并 1 轮：4 注入 + 1 message_start → pendingTurns=1（合并轮情形）', () => {
+    const { s } = makeSession();
+    for (let i = 0; i < 4; i++) {
+      s.map({ type: 'user', message: { content: `<task-notification>\n<task-id>t${i}</task-id>\n</task-notification>` } });
+    }
+    assert.equal(s.pendingTurns, 0); // 注入不直接 ++
+    assert.equal(s.pendingAutoTurn, true);
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } }, parent_tool_use_id: null, uuid: 'u1' });
+    assert.equal(s.pendingTurns, 1, '合并轮只合成一次');
+    assert.equal(s.pendingAutoTurn, false, 'flag 消费后清零');
+    s.dispose();
+  });
+
+  test('逐轮情形：注入→轮→result→再注入→再轮 → 每轮各合成一次', () => {
+    const { s } = makeSession();
+    s.map({ type: 'user', message: { content: '<task-notification>\n<task-id>a</task-id>\n</task-notification>' } });
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } }, parent_tool_use_id: null, uuid: 'u1' });
+    assert.equal(s.pendingTurns, 1);
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    assert.equal(s.pendingTurns, 0);
+    s.map({ type: 'user', message: { content: '<task-notification>\n<task-id>b</task-id>\n</task-notification>' } });
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm2' } }, parent_tool_use_id: null, uuid: 'u2' });
+    assert.equal(s.pendingTurns, 1, '第二轮独立合成');
+    s.dispose();
+  });
+
+  test('回归锚点：无 flag 的 message_start（pendingTurns=0）不得合成（防 auto-compact 误伤）', () => {
+    const { s } = makeSession();
+    assert.equal(s.pendingAutoTurn, false);
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } }, parent_tool_use_id: null, uuid: 'u1' });
+    assert.equal(s.pendingTurns, 0, '无 pendingAutoTurn 不合成');
+    s.dispose();
+  });
+
+  test('assistant 兜底合成（非流式网关无 message_start）：pendingAutoTurn + assistant → pendingTurns=1', () => {
+    const { s } = makeSession();
+    s.pendingAutoTurn = true;
+    s.map({ type: 'assistant', message: { content: [{ type: 'text', text: '报告正文' }] }, uuid: 'a1' });
+    assert.equal(s.pendingTurns, 1);
+    assert.equal(s.pendingAutoTurn, false);
+    s.dispose();
+  });
+
+  test('普通 user 文本（非通知）→ 不触发、pendingTurns/flag 不动（回归）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'user', message: { content: '这是一条普通用户消息' } });
+    assert.equal(events.find(e => e.type === 'task_notification'), undefined);
+    assert.equal(s.pendingAutoTurn, false);
+    assert.equal(s.pendingTurns, 0);
+    s.dispose();
+  });
+
+  test('合成轮受 checkIdle 静默看护（静默超限 → terminating）', () => {
+    const { s } = makeSession({ idleTimeoutMs: 1000 });
+    s.map({ type: 'user', message: { content: '<task-notification>\n<task-id>a</task-id>\n</task-notification>' } });
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } }, parent_tool_use_id: null, uuid: 'u1' });
+    assert.equal(s.pendingTurns, 1);
+    s.lastActivity = 0; // 远古静默
+    s.q = { setModel: async () => {} }; // checkIdle 内 abort 前置
+    s.abort = { abort: () => {} };
+    s.checkIdle();
+    assert.equal(s.terminating, true, '合成轮也被看护，不会永挂');
+    s.dispose();
+  });
+
+  test('未映射 SDK 消息 type → 不抛错 + 记入日志抽屉（可观测性）', () => {
+    const { s } = makeSession({ resumeId: 'sess-bogus' });
+    assert.doesNotThrow(() => s.map({ type: 'bogus_never_seen' }));
+    const logs = getSessionLogs('sess-bogus');
+    assert.ok(logs.some(l => l.type === 'sys_info' && l.text.includes('未映射 SDK 消息 type=bogus_never_seen')));
     s.dispose();
   });
 });
