@@ -159,7 +159,7 @@ async function cleanup() {
 }
 
 // 测试套件
-test.describe('WebSocket 事件流集成测试', process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : {}, () => {
+test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env.RUN_CLAUDE_INTEGRATION) ? { skip: '默认/CI 跳过——需真 claude agent turn(慢/耗 token/不稳);本机设 RUN_CLAUDE_INTEGRATION=1 运行' } : {}, () => {
   test.before(async () => {
     await startServer({ authEnabled: false });
   });

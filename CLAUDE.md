@@ -9,9 +9,10 @@
 ```bash
 npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
-npm test           # node --test test/*.test.mjs test/integration/*.test.mjs：单测 + 集成测试
-npm run test:unit  # node --test test/*.test.mjs：仅纯逻辑单测（零 token）
-npm run test:integration # node --test test/integration/*.test.mjs：仅集成测试（需 claude CLI）
+npm test           # 单测 + 可靠集成(server/auth/upload)；claude-turn 集成默认跳过；--test-force-exit 保证退出。CI 里集成整体 skip
+npm run test:unit  # node --test test/*.test.mjs：仅纯逻辑单测（零 token、最快）
+npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）
+RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测试(claude-lifecycle/session-switch/websocket-events：慢/耗 token/不稳)一起跑
 npm run test:visual # puppeteer 移动端视觉回归 E2E（零外部依赖 mock server）
 
 # 启动前自检配置
