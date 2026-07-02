@@ -11,6 +11,9 @@ const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
 // 正常会话（几百条内）全量返回——与 CLI /resume 的完整历史一致（终端等价性）。不再按字节截断头部。
 export const HISTORY_MAX_MESSAGES = 2000;
 const HEAD_READ_BYTES = 64 * 1024;  // 列表元数据（标题/模型/来源）只需文件头部少量字节
+// CLI 把 ai-title 流式追加到「标题生成完成时」的字节位置——首轮工具/思考很重的长会话里常 > 64KB 头窗。
+// 头窗没抓到 ai-title 时补读文件尾部这一段取最新 ai-title（实测最坏「最后一个 ai-title 距文件尾」330KB，512KB 有余量）。
+const TAIL_READ_BYTES = 512 * 1024;
 const LIST_LIMIT = 50;              // 会话列表上限（按 mtime 取最近 N，避免大目录全量读 head）
 
 // B2：listSessions 结果按 dir 缓存，4s TTL。重复打开列表不重扫盘。
@@ -141,7 +144,7 @@ export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST
     jsonlNames.map(async name => {
       const file = join(dir, name);
       const st = await stat(file);
-      return { id: name.slice(0, -6), file, mtimeMs: st.mtimeMs };
+      return { id: name.slice(0, -6), file, mtimeMs: st.mtimeMs, size: st.size };
     })
   );
   const stated = statResults
@@ -151,7 +154,7 @@ export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST
 
   // B2：readHeadMeta 并发（对前 limit 个）
   const top = stated.slice(0, limit);
-  const metas = await Promise.all(top.map(s => readHeadMeta(s.file)));
+  const metas = await Promise.all(top.map(s => readHeadMeta(s.file, s.size)));
   const sessions = top.map((s, i) => ({
     id: s.id,
     title: metas[i].title || '(无标题)',
@@ -180,41 +183,68 @@ export function invalidateListCache(cwd) {
   }
 }
 
-// 读文件头部 HEAD_READ_BYTES，提取 title（首条非 meta user 文本）/ model（首条 assistant 的 message.model）/ entrypoint。
-// 只读头部：这些元数据都在会话开头；末行可能被截断 → JSON.parse 失败即跳过。
-async function readHeadMeta(file) {
-  let text;
-  try {
-    const fh = await open(file, 'r');
-    const buf = Buffer.alloc(HEAD_READ_BYTES);
-    const { bytesRead } = await fh.read(buf, 0, HEAD_READ_BYTES, 0);
-    await fh.close();
-    text = buf.toString('utf-8', 0, bytesRead);
-  } catch {
-    return {};
-  }
+// 读文件头部 HEAD_READ_BYTES，提取 title（ai-title > 首条 user 文本 > 首条命令名）/ model / entrypoint。
+// model/entrypoint/firstUser 都在会话开头，只读头部即可；ai-title 是 CLI 事后追加、位置不定，头部漏读时
+// 再补读尾窗（见 TAIL_READ_BYTES）。末行可能被截断 → JSON.parse 失败即跳过。
+// size 由 listSessionsPage 的 stat 透传复用（省一次 syscall）；未传时回退 fstat，保持可独立调用。
+async function readHeadMeta(file, size) {
   const meta = { title: '', model: null, entrypoint: null };
   // 标题优先级：CLI 生成的 ai-title（与 /resume 选择器同款）> 首条真实 user 文本 > 首条斜杠命令名。
   // 命令包裹（<command-name>/clear</command-name>…）是 CLI 注入的 meta、非用户原话，不直接当标题。
   let aiTitle = '', firstUser = '', firstCmd = '';
-  for (const line of text.split('\n')) {
-    if (!line.trim()) continue;
-    let entry;
-    try { entry = JSON.parse(line); } catch { continue; } // 截断尾行/非 JSON：跳过
-    if (!meta.entrypoint && entry.entrypoint) meta.entrypoint = entry.entrypoint;
-    if (!meta.model && entry.type === 'assistant' && entry.message?.model) meta.model = entry.message.model;
-    if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
-      aiTitle = entry.aiTitle.trim(); // 取头部最后一次（CLI 会更新，后写更准）
-    } else if (entry.type === 'user' && !entry.isMeta) {
-      const c = extractContent(entry.message?.content).trim();
-      if (c.startsWith('<command-name>')) {
-        if (!firstCmd) { const m = /<command-name>([^<]+)<\/command-name>/.exec(c); if (m) firstCmd = m[1].trim(); }
-      } else if (c.startsWith('<command-') || c.startsWith('<local-command-')) {
-        /* 其他命令片段 / 本地命令 stdout/stderr 包裹：纯噪声，跳过 */
-      } else if (c && !firstUser) {
-        firstUser = c;
+  try {
+    const fh = await open(file, 'r');
+    try {
+      if (size == null) ({ size } = await fh.stat());
+      const headLen = Math.min(HEAD_READ_BYTES, size);
+      // 两个 buffer 都被 fh.read 全量写入、只 toString 到 bytesRead——allocUnsafe 免去无谓零填充（尤其尾窗 512KB）。
+      const buf = Buffer.allocUnsafe(headLen);
+      const { bytesRead } = await fh.read(buf, 0, headLen, 0);
+      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+        if (!line.trim()) continue;
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; } // 截断尾行/非 JSON：跳过
+        if (!meta.entrypoint && entry.entrypoint) meta.entrypoint = entry.entrypoint;
+        if (!meta.model && entry.type === 'assistant' && entry.message?.model) meta.model = entry.message.model;
+        if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
+          aiTitle = entry.aiTitle.trim(); // 取头窗内最后一次（CLI 会更新，后写更准）
+        } else if (entry.type === 'user' && !entry.isMeta) {
+          const c = extractContent(entry.message?.content).trim();
+          if (c.startsWith('<command-name>')) {
+            if (!firstCmd) { const m = /<command-name>([^<]+)<\/command-name>/.exec(c); if (m) firstCmd = m[1].trim(); }
+          } else if (c.startsWith('<command-') || c.startsWith('<local-command-')) {
+            /* 其他命令片段 / 本地命令 stdout/stderr 包裹：纯噪声，跳过 */
+          } else if (c && !firstUser) {
+            firstUser = c;
+          }
+        }
       }
+      // 头窗没抓到 ai-title 且文件比头窗大 → 补读尾窗取最新 ai-title。单独 try 兜底：这第二次读失败绝不能
+      // 连累头窗已提取的 title/model/entrypoint（否则一条好会话反被降级成「(无标题)」）。半行 parse 失败被跳过，
+      // 完整的 ai-title 行仍可读到。⚠️ 头窗与尾窗之间 [64KB, size-512KB) 存在死区：ai-title 若只落在这中间
+      // （早期生成后 CLI 再没更新、且其后堆了 >512KB 内容）会两窗皆漏、回退 firstUser——实测现有会话未触发。
+      if (!aiTitle && size > HEAD_READ_BYTES) {
+        try {
+          // 尾窗起点跳过头窗已扫区省重复读，但回退 4KB 重叠——保证跨 64KB 边界的 ai-title 行（短，远小于 4KB）
+          // 被尾窗完整包含、不被两窗各切一半而漏读。>512KB 文件仍只读末尾 512KB。
+          const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : Math.max(0, HEAD_READ_BYTES - 4096);
+          const tbuf = Buffer.allocUnsafe(size - start);
+          const { bytesRead: tRead } = await fh.read(tbuf, 0, size - start, start);
+          for (const line of tbuf.toString('utf-8', 0, tRead).split('\n')) {
+            if (!line.trim()) continue;
+            let entry;
+            try { entry = JSON.parse(line); } catch { continue; }
+            if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
+              aiTitle = entry.aiTitle.trim(); // 尾窗内最后一次 = 最新
+            }
+          }
+        } catch { /* 尾窗补读失败：保留头窗结果、回退 firstUser，不清空 meta */ }
+      }
+    } finally {
+      await fh.close().catch(() => {}); // close 失败同样不该连累已提取的 meta
     }
+  } catch {
+    return {};
   }
   meta.title = (aiTitle || firstUser || firstCmd).slice(0, 60);
   return meta;

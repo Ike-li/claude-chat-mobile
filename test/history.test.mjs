@@ -97,6 +97,55 @@ test('listSessions: ai-title 优先于首条 user 文本', async () => {
   assert.equal(result[0].title, 'AI 生成标题');
 });
 
+// 回归：CLI 把 ai-title 流式追加到「标题生成完成时」的字节位置，首轮工具/思考很重的长会话里
+// 这个位置常 > 64KB 头窗 → 旧实现只读头 64KB，扫不到 ai-title，回退成第一条 user 文本或「(无标题)」，
+// 与 CLI /resume（读全文）显示的标题不一致。修复：头窗没抓到 ai-title 时补读文件尾部一段取最新 ai-title。
+test('listSessions: ai-title 落在头 64KB 之外时，尾部补读仍能提取（回归大会话丢标题）', async () => {
+  const cwd = '/test/aititle-tail';
+  const dir = join(BASE, getProjectDir(cwd));
+  // 700KB 单条 filler 把 ai-title 推到 ~700KB（远超 64KB 头窗）；文件总 ~900KB，落进 512KB 尾窗。
+  // 尾窗从 ~400KB 起切入 700KB filler 那行中间——半行 parse 失败被跳过，ai-title 完整行仍可读到。
+  const filler = 'x'.repeat(700 * 1024);
+  writeJSONL(dir, 'aititle-tail', [
+    { type: 'user', message: { role: 'user', content: '第一条真实问题' } },       // firstUser（头窗内）
+    { type: 'assistant', message: { role: 'assistant', content: filler } },        // 撑爆头窗
+    { type: 'ai-title', aiTitle: '被推到中段的AI标题' },                          // 头外、尾窗内
+    { type: 'assistant', message: { role: 'assistant', content: '收尾' } },        // ai-title 不在绝对末尾
+  ]);
+  const result = await listSessions(cwd, { baseDir: BASE });
+  assert.equal(result[0].title, '被推到中段的AI标题');
+});
+
+test('listSessions: 中等文件（64KB–512KB）ai-title 在头窗外，尾窗仍提取（覆盖 #4 起点分支）', async () => {
+  const cwd = '/test/aititle-mid';
+  const dir = join(BASE, getProjectDir(cwd));
+  // 120KB filler 把 ai-title 推过 64KB 头窗；文件总 ~120KB ≤ 512KB → 尾窗起点走 max(0, HEAD-4KB) 分支而非 size-512KB。
+  const filler = 'm'.repeat(120 * 1024);
+  writeJSONL(dir, 'aititle-mid', [
+    { type: 'user', message: { role: 'user', content: '中等会话首条' } },
+    { type: 'assistant', message: { role: 'assistant', content: filler } },
+    { type: 'ai-title', aiTitle: '中等文件的AI标题' },
+    { type: 'assistant', message: { role: 'assistant', content: '尾' } },
+  ]);
+  const result = await listSessions(cwd, { baseDir: BASE });
+  assert.equal(result[0].title, '中等文件的AI标题');
+});
+
+test('listSessions: ai-title 距文件尾超尾窗时优雅回退到首条 user（不比现状差）', async () => {
+  const cwd = '/test/aititle-toofar';
+  const dir = join(BASE, getProjectDir(cwd));
+  const head = 'h'.repeat(100 * 1024); // 撑过头窗
+  const tail = 't'.repeat(700 * 1024); // ai-title 之后再堆 700KB，使其距尾 > 512KB 尾窗
+  writeJSONL(dir, 'aititle-toofar', [
+    { type: 'user', message: { role: 'user', content: '兜底首条问题' } },
+    { type: 'assistant', message: { role: 'assistant', content: head } },
+    { type: 'ai-title', aiTitle: '够不到的AI标题' },   // 头窗外、尾窗也够不到
+    { type: 'assistant', message: { role: 'assistant', content: tail } },
+  ]);
+  const result = await listSessions(cwd, { baseDir: BASE });
+  assert.equal(result[0].title, '兜底首条问题'); // 优雅回退，不崩、不空
+});
+
 test('listSessions: isMeta 条目不当标题', async () => {
   const cwd = '/test/metamsg';
   const dir = join(BASE, getProjectDir(cwd));
