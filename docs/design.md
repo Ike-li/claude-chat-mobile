@@ -101,7 +101,7 @@
 | 默认白名单自放行链 | `Write` + `Bash(npm run *)` 可组合成自动执行链 | 高风险/公网应收紧白名单；审批弹窗始终是最后闸门 |
 | 输出 XSS | claude 输出含恶意 HTML | DOMPurify + CSP（`script-src 'self'`，无内联脚本） |
 | 参数注入 | 消息文本被解析为 CLI 参数 | 经 SDK 结构化传参（不拼 shell 字符串） |
-| 路径穿越 | `session:switch`/上传借 `../` 越界读写 | session id 字符集守卫 `^[0-9a-zA-Z_-]+$`；上传 O_NOFOLLOW/O_EXCL + 落点校验；`WORK_DIRS` 精确白名单匹配 |
+| 路径穿越 | `session:switch`/上传借 `../` 越界读写 | session id 字符集守卫 `^[0-9a-zA-Z_-]+$`；上传 O_NOFOLLOW/O_EXCL + 落点校验；`WORK_DIRS` 精确白名单匹配（支持热加载：改 `workdirs.json` 即时重载，移除目录不终止已开实例、仅拒新开；条目支持 `{path, sessionLimit}` 配置每区会话显示条数） |
 | 同机他用户读配置 | 多用户机器上偷 `sessions.json` 等 | 配置文件 0600 + 真原子写（tmp→fsync→rename） |
 
 ### 部署加固建议

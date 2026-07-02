@@ -20,6 +20,7 @@ import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions } from '../file-security.js';
+import { normalizeWorkdirEntries } from '../workdirs.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const results = [];
@@ -100,25 +101,23 @@ function checkWorkDir() {
   checkOneDir('WORK_DIR', process.env.WORK_DIR || homedir());
   // 多 repo 台阶1：WORK_DIRS 白名单各目录也需可写。soft：问题用 warn（server 启动期
   // 对无效项告警跳过、不挡启动，doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
-  let rawDirs = [];
+  // 解析统一走 workdirs.js（与 server.js preflight 单一事实源）：条目支持 string 或 {path, sessionLimit}。
+  let parsed = null;
   const dirsFile = process.env.WORK_DIRS_FILE;
   if (dirsFile) {
     const filePath = dirsFile.startsWith('/') ? dirsFile : join(HERE, dirsFile);
     try {
-      const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
-      if (Array.isArray(parsed)) {
-        rawDirs = parsed.filter(e => typeof e === 'string').map(s => s.trim()).filter(Boolean);
-      } else {
-        warn('WORK_DIRS_FILE', `不是 JSON 数组: ${filePath}`);
-      }
+      parsed = JSON.parse(readFileSync(filePath, 'utf8'));
     } catch (e) {
       warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath}): ${e.message}`);
     }
   } else {
-    rawDirs = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
+    parsed = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
   }
-  for (const dir of rawDirs) {
-    checkOneDir('WORK_DIRS', dir, true);
+  if (parsed !== null) {
+    const { entries, warnings } = normalizeWorkdirEntries(parsed);
+    for (const w of warnings) warn('WORK_DIRS', w);
+    for (const { path } of entries) checkOneDir('WORK_DIRS', path, true);
   }
 }
 

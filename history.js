@@ -117,18 +117,21 @@ function extractContent(content) {
 // ---- 会话列表：与 CLI /resume 同源，直接扫 ~/.claude/projects/<编码cwd>/ ----
 // 列出该 cwd 下所有会话（含终端 entrypoint:cli 建的），不依赖 sessions.json 注册表。
 // baseDir 仅供单测注入临时夹具；生产用默认 CLAUDE_DIR。
-export async function listSessions(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT } = {}) {
+// 返回 { sessions, hasMore }：hasMore=该目录会话总数 > limit（诚实计算，非 length===limit 猜测），
+// 供前端决定是否显示「显示全部」。缓存键含 limit——否则 limit=6 结果会在 TTL 内污染 all(limit=50) 请求。
+export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT } = {}) {
   const dir = join(baseDir, getProjectDir(cwd));
+  const cacheKey = `${dir}:${limit}`;
 
   // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + N×readHeadMeta）
-  const cached = _listCache.get(dir);
+  const cached = _listCache.get(cacheKey);
   if (cached && Date.now() - cached.ts < LIST_CACHE_TTL) return cached.result;
 
   let names;
   try {
     names = await readdir(dir);
   } catch {
-    return []; // 目录不存在 = 该 cwd 尚无任何会话
+    return { sessions: [], hasMore: false }; // 目录不存在 = 该 cwd 尚无任何会话
   }
 
   // B2：stat 并发（Promise.allSettled 容错：单文件失败不影响其他）
@@ -148,23 +151,32 @@ export async function listSessions(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIM
   // B2：readHeadMeta 并发（对前 limit 个）
   const top = stated.slice(0, limit);
   const metas = await Promise.all(top.map(s => readHeadMeta(s.file)));
-  const out = top.map((s, i) => ({
+  const sessions = top.map((s, i) => ({
     id: s.id,
     title: metas[i].title || '(无标题)',
     model: metas[i].model || null,
     entrypoint: metas[i].entrypoint || null,
     lastUsedAt: Math.round(s.mtimeMs)
   }));
+  const result = { sessions, hasMore: stated.length > limit };
 
-  // B2：存缓存
-  _listCache.set(dir, { ts: Date.now(), result: out });
-  return out;
+  // B2：存缓存（键含 limit）
+  _listCache.set(cacheKey, { ts: Date.now(), result });
+  return result;
+}
+
+// 向后兼容包装：仅返回会话数组（多处 script/测试直接用数组）。新代码若需 hasMore 用 listSessionsPage。
+export async function listSessions(cwd, opts = {}) {
+  return (await listSessionsPage(cwd, opts)).sessions;
 }
 
 // B3：写入新会话后失效该 cwd 的列表缓存，确保 session:list 立即可见（不等待 TTL 过期）。
+// 键现含 limit → 删该 dir 的所有 limit 变体。
 export function invalidateListCache(cwd) {
-  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
-  _listCache.delete(dir);
+  const prefix = join(CLAUDE_DIR, getProjectDir(cwd)) + ':';
+  for (const key of _listCache.keys()) {
+    if (key.startsWith(prefix)) _listCache.delete(key);
+  }
 }
 
 // 读文件头部 HEAD_READ_BYTES，提取 title（首条非 meta user 文本）/ model（首条 assistant 的 message.model）/ entrypoint。

@@ -7,7 +7,7 @@ import webpush from 'web-push';
 import { maskToken } from './sanitizer.js';
 import { writeOwnerOnlyFile } from './file-security.js';
 import { homedir, networkInterfaces } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { timingSafeEqual, createHash } from 'node:crypto';
@@ -16,13 +16,14 @@ import compression from 'compression';
 import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
 import * as sessions from './sessions.js';
-import { getSessionHistory, listSessions, sessionFileExists, getProjectDir, invalidateListCache } from './history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache } from './history.js';
 import { buildWebStatusLine } from './statusline.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from './uploads.js';
 import * as interactionLog from './interaction-log.js';
 import { createModelsCache } from './models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from './cf-access.js';
 import { watch } from 'node:fs';
+import { DEFAULT_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs } from './workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -57,6 +58,8 @@ const {
 let WORK_DIR = process.env.WORK_DIR || homedir();
 // 多 repo 台阶1：可在 web 内切换的工作目录白名单（WORK_DIR + WORK_DIRS，preflight 内构建）。
 let workDirs = [];
+// 每工作区历史会话显示条数（session:list 默认截断量）；WORK_DIR 及未指定的目录用 DEFAULT_SESSION_LIMIT。
+let sessionLimitByDir = new Map();
 
 const idleTimeoutMs = Number(IDLE_TIMEOUT_MS) > 0 ? Number(IDLE_TIMEOUT_MS) : 600000;
 const port = Number(PORT) > 0 ? Number(PORT) : 3000;
@@ -112,6 +115,48 @@ async function pushNotify(title, body) {
   }
 }
 
+// ---- 工作区白名单：读取源 + 应用（preflight 与热加载共用）----
+// 读取原始条目源：WORK_DIRS_FILE（JSON 数组文件，优先）或 WORK_DIRS（逗号分隔，向后兼容）。
+// 文件读/解析失败 → 返回 null（调用方保留旧配置，不清空白名单）。
+function readWorkdirSource() {
+  const dirsFile = process.env.WORK_DIRS_FILE;
+  if (dirsFile) {
+    const filePath = dirsFile.startsWith('/') ? dirsFile : join(HERE, dirsFile);
+    return loadWorkdirsFile(filePath); // null=读/解析失败
+  }
+  const raw = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
+  return normalizeWorkdirEntries(raw);
+}
+// 应用条目：realpath 校验 + 设 workDirs / sessionLimitByDir。WORK_DIR 恒首位（其 limit 若在文件里指定则采用）。
+// 返回 warnings[]（调用方决定打印）。
+function applyWorkdirs(source) {
+  const { dirs, limits, warnings: rw } = resolveWorkdirs(source.entries);
+  const nextDirs = [WORK_DIR];
+  const nextLimits = new Map([[WORK_DIR, limits.get(WORK_DIR) ?? DEFAULT_SESSION_LIMIT]]);
+  for (const d of dirs) {
+    if (nextLimits.has(d)) continue;
+    nextDirs.push(d);
+    nextLimits.set(d, limits.get(d));
+  }
+  workDirs = nextDirs;
+  sessionLimitByDir = nextLimits;
+  return [...source.warnings, ...rw];
+}
+// 热加载：重读 workdirs 源并应用。读取失败保留旧白名单；被移除目录上无 live 实例时把 viewingCwd 归位到
+// 首个白名单目录（堵 routeCwd 缺省回退绕过白名单的洞）；末尾广播让前端立即刷新目录列表。免重启改工作区。
+function reloadWorkdirs() {
+  const source = readWorkdirSource();
+  if (source === null) { console.warn('⚠️  [workdirs 热加载] 读取/解析失败，保留旧白名单'); return; }
+  const prevKey = workDirs.join('|');
+  for (const w of applyWorkdirs(source)) console.warn(`⚠️  [workdirs 热加载] ${w}`);
+  // 被移除目录的已开实例保留运行、新开被拒；但若 viewingCwd 停在已移除目录且其上无实例，
+  // 缺省路由(routeCwd)会把新会话仍落进已移除目录 → 归位到首个白名单目录。
+  const viewingHasInstance = agents.get(viewingInstanceId)?.cwd === viewingCwd;
+  if (!workDirs.includes(viewingCwd) && !viewingHasInstance) viewingCwd = workDirs[0];
+  if (workDirs.join('|') !== prevKey) console.log(`[workdirs] 热加载生效：${workDirs.length} 个工作区`);
+  broadcastInstances(); // dirs 变化 → 前端 structKey 变 → 目录面板全量重建（免重启）
+}
+
 // ---- 启动预检（验收 A9）----
 // E9：必须用本机的 claude（你日常在终端用的那个），不用 SDK 捆绑副本——
 // 版本、登录态、代理兼容性都以本机为准。
@@ -128,35 +173,12 @@ function preflight() {
     fail(`WORK_DIR 不存在：${WORK_DIR}（请在 .env 中设置有效路径）`);
   }
   WORK_DIR = realpathSync(WORK_DIR); // 规范化（解符号链接/相对段）：存储与查找的 cwd 同 CLI 命名，cwd 隔离匹配稳健
-  // 多 repo 台阶1：白名单 = WORK_DIR（首位）+ WORK_DIRS_FILE（JSON 数组文件，每个目录一个字符串元素），
-  // 若未设 WORK_DIRS_FILE 则回退 WORK_DIRS（逗号分隔，向后兼容）。
-  // 无效项告警跳过不挡启动，去重。只设 WORK_DIR 则 workDirs=[WORK_DIR]，前端目录切换器隐藏（退化单目录）。
-  workDirs = [WORK_DIR];
-  let rawDirs = [];
-  const dirsFile = process.env.WORK_DIRS_FILE;
-  if (dirsFile) {
-    const filePath = dirsFile.startsWith('/') ? dirsFile : join(HERE, dirsFile);
-    try {
-      const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
-      if (Array.isArray(parsed)) {
-        rawDirs = parsed.filter(e => typeof e === 'string').map(s => s.trim()).filter(Boolean);
-      } else {
-        console.warn(`⚠️  WORK_DIRS_FILE 不是 JSON 数组：${filePath}`);
-      }
-    } catch (e) {
-      console.warn(`⚠️  WORK_DIRS_FILE 读取/解析失败（${filePath}）：${e.message}`);
-    }
-  } else {
-    rawDirs = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
-  }
-  for (const raw of rawDirs) {
-    try {
-      const d = realpathSync(raw);
-      if (!statSync(d).isDirectory()) { console.warn(`⚠️  WORK_DIRS 忽略（不是目录）：${raw}`); continue; }
-      if (!workDirs.includes(d)) workDirs.push(d);
-    } catch {
-      console.warn(`⚠️  WORK_DIRS 忽略（不存在/不可达）：${raw}`);
-    }
+  // 多 repo 台阶1：白名单 = WORK_DIR（首位）+ WORK_DIRS_FILE（JSON 数组文件，条目支持 string 或 {path,sessionLimit}），
+  // 若未设 WORK_DIRS_FILE 则回退 WORK_DIRS（逗号分隔，向后兼容）。解析/校验/去重逻辑在 workdirs.js（doctor.js D3 共用）。
+  // 无效项告警跳过不挡启动。只设 WORK_DIR 则 workDirs=[WORK_DIR]，前端目录切换器隐藏（退化单目录）。
+  const source = readWorkdirSource();
+  for (const w of applyWorkdirs(source ?? { entries: [], warnings: ['WORK_DIRS_FILE 读取/解析失败，仅用 WORK_DIR'] })) {
+    console.warn(`⚠️  ${w}`);
   }
   let claudeBin = process.env.CLAUDE_BIN || '';
   if (!claudeBin) {
@@ -459,6 +481,24 @@ if (existsSync(TRUSTED_DEVICES_FILE)) {
     });
   } catch (err) {
     console.error('[devices] 无法监视 trusted-devices.json 文件:', err.message);
+  }
+}
+
+// workdirs.json 热加载监听（仅 WORK_DIRS_FILE 模式；逗号串 WORK_DIRS 无文件可 watch）。
+// 与 trusted-devices 直接 watch 文件不同：workdirs.json 由人用编辑器改，VS Code/vim 默认原子写(rename 换 inode)
+// 会让对旧 inode 的 watch 永久失聪 → 改为 watch 其目录并过滤 basename（对子文件替换免疫）。300ms 防抖。
+if (process.env.WORK_DIRS_FILE) {
+  const wf = process.env.WORK_DIRS_FILE.startsWith('/') ? process.env.WORK_DIRS_FILE : join(HERE, process.env.WORK_DIRS_FILE);
+  const wbase = basename(wf);
+  let wtimer = null;
+  try {
+    watch(dirname(wf), (_evt, filename) => {
+      if (filename && filename !== wbase) return; // 只关心 workdirs 文件（filename 在部分平台可能为 null → 放行重读）
+      clearTimeout(wtimer);
+      wtimer = setTimeout(reloadWorkdirs, 300);
+    });
+  } catch (err) {
+    console.error('[workdirs] 无法监视 workdirs 文件所在目录:', err.message);
   }
 }
 
@@ -1300,15 +1340,20 @@ io.on('connection', socket => {
   });
 
   on(socket, 'session:list', async (payload, maybeAck) => {
-    // 兼容两种调用形态：emit('session:list', cb)（app.js 现状）与 emit('session:list', {cwd}, cb)
+    // 兼容两种调用形态：emit('session:list', cb)（app.js 现状）与 emit('session:list', {cwd, all?}, cb)
     const ack = typeof payload === 'function' ? payload : maybeAck;
     if (typeof ack !== 'function') return;
-    const cwd = routeCwd((payload && typeof payload === 'object') ? payload.cwd : undefined); // 缺省查看实例 cwd
+    const obj = payload && typeof payload === 'object' ? payload : {};
+    const cwd = routeCwd(obj.cwd); // 缺省查看实例 cwd
     // 数据源 = 扫 ~/.claude/projects/<编码cwd>/（与 CLI /resume 同源，含终端会话），天然按 cwd 隔离。
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
     const id = sessions.getCurrent(cwd);
     const currentSessionId = (id && await sessionFileExists(cwd, id)) ? id : null;
-    ack({ currentSessionId, sessions: await listSessions(cwd) });
+    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 50。
+    const all = obj.all === true;
+    const limit = all ? 50 : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
+    const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit });
+    ack({ currentSessionId, sessions: list, hasMore: all ? false : hasMore });
   });
 
   // E14 历史回显（鉴权随握手；取代原无鉴权的 GET /sessions/:id/history）

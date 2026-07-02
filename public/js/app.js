@@ -2306,19 +2306,40 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
       // 组装并渲染子树函数
       const populateSubtree = (cwd, container, liveMap, fTabs) => {
-        container.innerHTML = '';
-        // 1) 无 id 的新会话实例
-        for (const inst of fTabs) {
-          container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
-        }
-
-        // 2) SWR 缓存极速呈现
-        if (sessionsCache.has(cwd)) {
-          const cached = sessionsCache.get(cwd);
-          for (const s of cached) {
+        // 渲染：无 id 新会话实例 + 会话行 +（若被截断）「显示全部」行
+        const renderRows = (sessions, hasMore) => {
+          container.innerHTML = '';
+          for (const inst of fTabs) {
+            container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+          }
+          for (const s of sessions) {
             container.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
           }
+          if (hasMore) {
+            const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">显示全部会话…</button>`);
+            more.onclick = () => {
+              haptic('tap');
+              more.textContent = '加载中…';
+              socket.emit('session:list', { cwd, all: true }, state => {
+                if (!expandedDirs.has(cwd)) return;
+                const all = state?.sessions || [];
+                sessionsCache.set(cwd, { sessions: all, hasMore: false });
+                renderRows(all, false);
+              });
+            };
+            container.appendChild(more);
+          }
+        };
+
+        // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore}）
+        if (sessionsCache.has(cwd)) {
+          const cached = sessionsCache.get(cwd);
+          renderRows(cached.sessions || [], cached.hasMore);
         } else {
+          container.innerHTML = '';
+          for (const inst of fTabs) {
+            container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+          }
           // 显示高级骨架屏
           const skeleton = el(`
             <div class="skeleton-loader py-1">
@@ -2335,19 +2356,12 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
           container.appendChild(skeleton);
         }
 
-        // 3) 后端异步刷新
+        // 2) 后端异步刷新（默认按每工作区 sessionLimit 截断；hasMore 决定是否显示「显示全部」）
         socket.emit('session:list', { cwd }, state => {
           if (!expandedDirs.has(cwd)) return; // 过期守卫
           const sessions = state?.sessions || [];
-          sessionsCache.set(cwd, sessions); // 存入/更新缓存
-
-          container.innerHTML = '';
-          for (const inst of fTabs) {
-            container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
-          }
-          for (const s of sessions) {
-            container.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
-          }
+          sessionsCache.set(cwd, { sessions, hasMore: !!state?.hasMore });
+          renderRows(sessions, !!state?.hasMore);
         });
       };
 

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, listSessions, sessionFileExists, getSessionHistory, HISTORY_MAX_MESSAGES } from '../history.js';
+import { getProjectDir, listSessions, listSessionsPage, sessionFileExists, getSessionHistory, HISTORY_MAX_MESSAGES } from '../history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -106,6 +106,47 @@ test('listSessions: isMeta 条目不当标题', async () => {
   ]);
   const result = await listSessions(cwd, { baseDir: BASE });
   assert.equal(result[0].title, '真实问题');
+});
+
+// ── listSessionsPage：limit / hasMore / 缓存按 limit 隔离 ─────────────────────
+test('listSessionsPage: limit 截断 + hasMore=true（总数 > limit）', async () => {
+  const cwd = '/test/page-limit';
+  const dir = join(BASE, getProjectDir(cwd));
+  for (let i = 0; i < 5; i++) writeJSONL(dir, `s${i}`, [{ type: 'user', message: { role: 'user', content: `q${i}` } }]);
+  const { sessions, hasMore } = await listSessionsPage(cwd, { baseDir: BASE, limit: 3 });
+  assert.equal(sessions.length, 3);
+  assert.equal(hasMore, true);
+});
+
+test('listSessionsPage: 恰好等于 limit → hasMore=false', async () => {
+  const cwd = '/test/page-exact';
+  const dir = join(BASE, getProjectDir(cwd));
+  for (let i = 0; i < 3; i++) writeJSONL(dir, `s${i}`, [{ type: 'user', message: { role: 'user', content: `q${i}` } }]);
+  const { sessions, hasMore } = await listSessionsPage(cwd, { baseDir: BASE, limit: 3 });
+  assert.equal(sessions.length, 3);
+  assert.equal(hasMore, false);
+});
+
+test('listSessionsPage: 少于 limit → hasMore=false', async () => {
+  const cwd = '/test/page-few';
+  const dir = join(BASE, getProjectDir(cwd));
+  for (let i = 0; i < 2; i++) writeJSONL(dir, `s${i}`, [{ type: 'user', message: { role: 'user', content: `q${i}` } }]);
+  const { sessions, hasMore } = await listSessionsPage(cwd, { baseDir: BASE, limit: 3 });
+  assert.equal(sessions.length, 2);
+  assert.equal(hasMore, false);
+});
+
+test('listSessionsPage: 缓存按 limit 隔离（limit=2 不污染随后 limit=5）', async () => {
+  const cwd = '/test/page-cache';
+  const dir = join(BASE, getProjectDir(cwd));
+  for (let i = 0; i < 5; i++) writeJSONL(dir, `s${i}`, [{ type: 'user', message: { role: 'user', content: `q${i}` } }]);
+  const small = await listSessionsPage(cwd, { baseDir: BASE, limit: 2 });
+  assert.equal(small.sessions.length, 2);
+  assert.equal(small.hasMore, true);
+  // 若缓存只按 dir 键，下面会吃到上面的 2 条缓存 → 断言 5 条即防回归
+  const big = await listSessionsPage(cwd, { baseDir: BASE, limit: 5 });
+  assert.equal(big.sessions.length, 5);
+  assert.equal(big.hasMore, false);
 });
 
 // ── getSessionHistory ──────────────────────────────────────────────────────
