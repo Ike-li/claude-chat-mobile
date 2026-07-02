@@ -1121,7 +1121,7 @@ io.on('connection', socket => {
       viewingInstanceId = a.instanceId;
       broadcastInstances();
     }
-    interactionLog.userMessageIn(a.sessionId, cleanText, model || a.activeModel || a.defaultModel); // 交互日志：client → server；model=本轮目标模型
+    interactionLog.userMessageIn(a.sessionId, cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
     if (hasAttachments) {
       // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
       // 气泡走 displayText（原文，不含路径）+ 去完整 data 的元数据（含小 thumb，进缓冲供回放）

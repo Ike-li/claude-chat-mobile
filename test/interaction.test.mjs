@@ -168,6 +168,32 @@ test.describe('interaction-log', () => {
     assert.ok(entry.text.includes('result text'));
   });
 
+  // ---- effort / permissionMode 独立 chip 字段（显示「那一刻」的档位）----
+  test('addSessionLog：对象 meta → model/effort/permissionMode 各入独立字段', () => {
+    ilog.addSessionLog('meta1', 'agent_send', 'txt', { model: 'claude-opus-4-8', effort: 'high', permissionMode: 'plan' });
+    const e = ilog.getSessionLogs('meta1')[0];
+    assert.equal(e.model, 'claude-opus-4-8');
+    assert.equal(e.effort, 'high');
+    assert.equal(e.permissionMode, 'plan');
+  });
+
+  test('addSessionLog：字符串 meta 仍兼容（旧调用只带 model）', () => {
+    ilog.addSessionLog('meta2', 'user_in', 'txt', 'claude-sonnet-4-6');
+    const e = ilog.getSessionLogs('meta2')[0];
+    assert.equal(e.model, 'claude-sonnet-4-6');
+    assert.equal(e.effort, undefined);
+    assert.equal(e.permissionMode, undefined);
+  });
+
+  test('agentSend：effort/permissionMode 透传到独立字段', () => {
+    ilog.agentSend('meta3', 'prompt', 'claude-opus-4-8', 'medium', 'acceptEdits');
+    const e = ilog.getSessionLogs('meta3').find(l => l.type === 'agent_send');
+    assert.equal(e.model, 'claude-opus-4-8');
+    assert.equal(e.effort, 'medium');
+    assert.equal(e.permissionMode, 'acceptEdits');
+    assert.ok(!e.text.includes('effort='));  // 不再内联进 text
+  });
+
   // 防 sessionBuffers 无界增长：常驻 server 长跑下，历史会话的日志缓冲会按 sessionId 无限累积
   // （每会话上限 100 条、但会话数无上限）。须给会话数也设 FIFO 上限（与 history/sessions 缓存同精神）。
   // 放最后：本用例创建大量 session 触发淘汰，会清掉前面用例的缓冲，故须在它们跑完后执行。

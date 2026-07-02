@@ -23,7 +23,7 @@ export function getSessionLogs(sessionId) {
   return sessionBuffers.get(sessionId) || [];
 }
 
-export function addSessionLog(sessionId, type, text, model) {
+export function addSessionLog(sessionId, type, text, meta) {
   if (!sessionId) return;
   if (!sessionBuffers.has(sessionId)) {
     // 防无界增长：会话数超上限时 FIFO 淘汰最旧会话缓冲（Map 保插入序；与 history/sessions 缓存同精神）
@@ -38,7 +38,15 @@ export function addSessionLog(sessionId, type, text, model) {
     type,
     text
   };
-  if (model) entry.model = model;  // 模型 ID 独立字段（前端渲染独立 chip）；空则不带字段、不渲染
+  // meta 兼容两形态：字符串 = 模型 ID（旧调用）；对象 = {model, effort, permissionMode}——
+  // 各作为独立 chip 数据源（前端 appendLogEntry 渲染），空字段不带、不渲染。
+  if (typeof meta === 'string') {
+    if (meta) entry.model = meta;
+  } else if (meta && typeof meta === 'object') {
+    if (meta.model) entry.model = meta.model;
+    if (meta.effort) entry.effort = meta.effort;
+    if (meta.permissionMode) entry.permissionMode = meta.permissionMode;
+  }
   buffer.push(entry);
   if (buffer.length > 100) {
     buffer.shift();
@@ -62,35 +70,36 @@ function fmt(text) {
 }
 
 // 四跳：client → server → agent → SDK → agent → server → client
+// model/effort/permissionMode 走独立 chip 字段（前端 appendLogEntry 渲染），显示「那一刻」的具体模型 ID + 档位。
 // client → server
-export function userMessageIn(sessionId, text, model) {
+export function userMessageIn(sessionId, text, model, effort, permissionMode) {
   const f = fmt(text);
-  addSessionLog(sessionId, 'user_in', f, model);
+  addSessionLog(sessionId, 'user_in', f, { model, effort, permissionMode });
   if (!enabled) return;
   console.log(`[interact] [user→srv] session=${sessionId}${model ? ` model=${model}` : ''} ← ${f}`);
 }
 
 // server → client（user_message 广播，已入缓冲）
-export function userMessageOut(sessionId, text, model) {
+export function userMessageOut(sessionId, text, model, effort, permissionMode) {
   const f = fmt(text);
-  addSessionLog(sessionId, 'user_out', f, model);
+  addSessionLog(sessionId, 'user_out', f, { model, effort, permissionMode });
   if (!enabled) return;
   console.log(`[interact] [srv→cli] session=${sessionId}${model ? ` model=${model}` : ''} → user_message: ${f}`);
 }
 
 // agent → SDK（send 调用）
-export function agentSend(sessionId, text, model) {
+export function agentSend(sessionId, text, model, effort, permissionMode) {
   const f = fmt(text);
   const m = model || 'default';
-  addSessionLog(sessionId, 'agent_send', f, m);  // model 走独立 badge 字段，text 不再前缀 model=
+  addSessionLog(sessionId, 'agent_send', f, { model: m, effort, permissionMode });  // model/effort/permission 走独立字段，text 不再前缀
   if (!enabled) return;
-  console.log(`[interact] [agt→SDK] session=${sessionId} model=${m} → ${f}`);
+  console.log(`[interact] [agt→SDK] session=${sessionId} model=${m}${effort ? ` effort=${effort}` : ''}${permissionMode ? ` perm=${permissionMode}` : ''} → ${f}`);
 }
 
 // SDK → agent（result 最终文本）
-export function agentResult(sessionId, text, model) {
+export function agentResult(sessionId, text, model, effort, permissionMode) {
   const f = fmt(text);
-  addSessionLog(sessionId, 'agent_result', f, model);
+  addSessionLog(sessionId, 'agent_result', f, { model, effort, permissionMode });
   if (!enabled) return;
   console.log(`[interact] [SDK→agt] session=${sessionId}${model ? ` model=${model}` : ''} ← result: ${f}`);
 }

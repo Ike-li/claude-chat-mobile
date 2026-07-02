@@ -155,7 +155,17 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   let currentModel = '';                // 当前生效模型（init 事件的 model 字段），/model 无参时展示
   let currentGatewaySuffix = '';        // 保存第三方网关的特殊后缀（如 [1m]）进行无感适配，保持 Web 选项名称干净
   let activeSpeechBtn = null;           // 语音朗读当前播放的按钮
-  
+  let currentSessionIdForCopy = null;   // 当前查看会话完整 id（供 pillSession 点按复制）
+
+  // 短 session_id 胶囊：显前 8 位、点按复制完整 id；无会话隐藏。便于对照 CLI /resume、日志、多设备定位同一会话。
+  function updatePillSession(sid) {
+    const pill = $('pillSession'), txt = $('pillSessionText');
+    if (!pill || !txt) return;
+    currentSessionIdForCopy = sid || null;
+    if (sid) { txt.textContent = sid.slice(0, 8); pill.classList.remove('hidden'); }
+    else { txt.textContent = ''; pill.classList.add('hidden'); }
+  }
+
   function syncModelUI(model) {
     // 底栏模型 chip：显完整真名（含网关后缀 [1m]，与 statusLine/实际发送名一致）；未选则显「默认」=
     // 发送时不带 model、用 CLI 启动默认（非猜——显的是你的显式选择或诚实的「默认」）。点击开「选择模型」格。
@@ -513,6 +523,19 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   if (accessHelpClose) accessHelpClose.onclick = hideAccessHelp;
   if (accessHelpOpen) accessHelpOpen.onclick = showAccessHelp;
   if (authHelpLink) authHelpLink.onclick = showAccessHelp;
+
+  // 短 session_id 胶囊点按 → 复制完整 id（便于粘到终端 claude --resume <id> 或跨设备定位）
+  const pillSession = $('pillSession');
+  if (pillSession) pillSession.onclick = async () => {
+    if (!currentSessionIdForCopy) return;
+    haptic('tap');
+    try {
+      await navigator.clipboard.writeText(currentSessionIdForCopy);
+      addBar(`已复制 session id：${currentSessionIdForCopy}`, 'text-ink-faint');
+    } catch {
+      addBar(`session id：${currentSessionIdForCopy}`, 'text-ink-faint'); // 剪贴板不可用（非 HTTPS 等）时至少显示全 id
+    }
+  };
 
   // 开发者模式：一键重启常驻 server（按钮仅 DEV_MODE=1 时由 setInstances 显示）。
   const btnRestartServer = $('btnRestartServer');
@@ -1699,6 +1722,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     // 开发者模式：DEV_MODE=1 时显示齿轮面板「重启服务」组（生产默认隐藏，防误触重启对外服务）
     const devGroup = $('devModeGroup');
     if (devGroup) devGroup.classList.toggle('hidden', !p?.devMode);
+    // 短 session_id 状态胶囊：显示当前查看会话的前 8 位；无会话（空首页/未获 id）隐藏
+    updatePillSession(instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
     if (topTitleText) {
       topTitleText.textContent = shouldShowStartScreen({ viewingInstanceId: newViewing, sessionId: instancesList.find(x => x.instanceId === newViewing)?.sessionId }) ? '新聊天' : '聊天';
     }
@@ -2208,7 +2233,9 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
         btn.appendChild(head);
         const sub = el(`<div class="text-ink-faint text-[10px]"></div>`);
         const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : '新会话（未保存）';
-        sub.textContent = when + (liveInst ? ' · 已打开' : '');
+        // 短 session_id（前 8 位）：便于对照 CLI /resume、日志、多设备定位同一会话；无 id 的新会话不显示。
+        const shortId = s.id ? ` · ${s.id.slice(0, 8)}` : '';
+        sub.textContent = when + (liveInst ? ' · 已打开' : '') + shortId;
         btn.appendChild(sub);
         
         let rowSwiped = false;
@@ -2477,7 +2504,14 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
           </div>
           <div id="dashRecentsList" class="flex flex-col gap-2 w-full"></div>
         </div>
+
+        <!-- 使用引导入口（落地页常驻）：复用设置面板同款帮助页 -->
+        <button id="dashHelpLink" class="mt-6 text-xs text-ink-faint hover:text-accent underline underline-offset-2 transition-colors" type="button">❓ 如何连接与使用</button>
       </div>`);
+
+    // 绑定使用引导入口 → 访问帮助页（showAccessHelp）
+    const dashHelp = container.querySelector('#dashHelpLink');
+    if (dashHelp) dashHelp.onclick = (e) => { e.stopPropagation(); haptic('tap'); showAccessHelp(); };
 
     // 绑定工作区按钮
     container.querySelector('button').onclick = (e) => {
@@ -3026,6 +3060,16 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       modelSpan.title = p.model; // 超长截断时悬停看全名
       row.appendChild(modelSpan);
     }
+    // 思考强度 / 权限档 chip（那一刻的档位）：仅当 entry 带该字段时渲染。'model-default'/'default' 视为「无显式档」省略。
+    const metaChip = (val, ignore, cls, prefix) => {
+      if (!val || val === ignore) return;
+      const c = document.createElement('span');
+      c.className = `px-1 py-0.5 rounded text-[9px] font-bold shrink-0 ${cls}`;
+      c.textContent = prefix + val;
+      row.appendChild(c);
+    };
+    metaChip(p.effort, 'model-default', 'bg-indigo-950/60 text-indigo-300 border border-indigo-700/40', '🧠');
+    metaChip(p.permissionMode, 'default', 'bg-amber-950/60 text-amber-300 border border-amber-700/40', '🔑');
 
     const textSpan = document.createElement('span');
     textSpan.className = `break-all whitespace-pre-wrap ${textClass}`;

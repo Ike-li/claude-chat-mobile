@@ -236,14 +236,15 @@ export class AgentSession {
     // 否则拒绝路径会把气泡推上屏却没真正发送（用户以为发了、实际被拒）。
     if (this.firstMessage === null) this.firstMessage = displayText;
     this.emit('user_message', { text: displayText, attachments: opts.attachments }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
-    interactionLog.userMessageOut(this.sessionId, displayText, model || this.defaultModel); // 交互日志：server → client（user_message 广播）；model=本轮目标模型（空选择回退 defaultModel）
-
-    this.pendingTurns++;
-    const modelStr = this.activeModel || 'default';
+    // 日志模型 ID 解析为真实运行模型：activeModel（本轮目标）> reportedModel（SDK init 上报）> defaultModel，
+    // 避免空选择时只记 'default' 这类笼统名——修「日志不显具体模型 ID」。
+    const realModel = this.activeModel || this.reportedModel || this.defaultModel;
     const effortStr = this.effort || 'model-default';
     const permStr = this.permissionMode || 'default';
-    // model 走独立 badge 字段；effort/permission 摘要附在 text 末尾（badge 只放纯模型 ID）
-    interactionLog.agentSend(this.sessionId, `${text} (effort=${effortStr}, permission=${permStr})`, modelStr); // 交互日志：agent → SDK（text=promptText 含路径）
+    interactionLog.userMessageOut(this.sessionId, displayText, realModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
+    this.pendingTurns++;
+    // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
+    interactionLog.agentSend(this.sessionId, text, realModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
     this.queue.push({ text });
     this.notifyInput?.();
     this.lastActivity = Date.now(); // 续期静默看护：send 是用户活动，防 idle 误判
@@ -722,9 +723,9 @@ export class AgentSession {
         const modelStr = this.activeModel || this.reportedModel || 'default';
         const effortStr = this.effort || 'model-default';
         const permStr = this.permissionMode || 'default';
-        const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms (effort=${effortStr}, permission=${permStr})`; // model 走独立 badge 字段，不再重复进文本
+        const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms`; // model/effort/permission 走独立 chip 字段，不再进文本
         const responseText = this.assistantResponseBuffer ? `${durationStr}\n${this.assistantResponseBuffer}` : durationStr;
-        interactionLog.agentResult(this.sessionId, responseText, modelStr);
+        interactionLog.agentResult(this.sessionId, responseText, modelStr, effortStr, permStr);
         this.assistantResponseBuffer = '';
         this.currentMessageId = null;
         this.sawTextDelta = false;
