@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Chat Mobile — your local claude CLI, on your phone</title>
+<meta name="description" content="A self-hosted, mobile-first web UI that projects your real local claude CLI to your phone. Same agent, same CLAUDE.md, same session — approve a git push from bed. Not a re-implementation, not a hosted service.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
+
+<!-- Open Graph / Twitter -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Claude Chat Mobile">
+<meta property="og:description" content="Use your real local claude CLI from your phone — terminal equivalence. Self-hosted, locked by default.">
+<meta property="og:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
+<meta property="og:url" content="https://ike-li.github.io/claude-chat-mobile/">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Claude Chat Mobile">
+<meta name="twitter:description" content="Your real local claude CLI, driven from your phone. Approve a git push from bed.">
+<meta name="twitter:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
+
+<style>
+  /* ── Claude design tokens, copied verbatim from the product (public/index.html) ── */
+  :root {
+    --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
+    --line:#E3E0D6; --line-soft:#ECEAE1;
+    --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
+    --accent:#C96442; --accent-deep:#AE5238; --accent-bright:#D97757; --accent-wash:#F0E4DD;
+    --user-bubble:#ECE8DF; --info:#1B6FB3; --success:#3D8A50; --danger:#BC4334; --warning:#C77D33;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --font-read: "Source Serif 4", Georgia, Charter, "Songti SC", "Noto Serif SC", "Times New Roman", serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --radius-lg:0.875rem; --radius-md:0.625rem; --radius-sm:0.375rem;
+    --shadow-card:0 1px 2px rgba(60,50,40,.05), 0 4px 16px rgba(60,50,40,.06);
+    --shadow-pop:0 8px 32px rgba(40,32,24,.16);
+    --shadow-lift:0 4px 12px rgba(60,50,40,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas:#121211; --surface:#1C1B1A; --surface-sunk:#161514;
+      --line:#2E2C2A; --line-soft:#242221;
+      --ink:#EEEEEC; --ink-soft:#A3A19D; --ink-faint:#7A7874;
+      --accent:#D97757; --accent-deep:#F0E4DD; --accent-bright:#E2886A; --accent-wash:#2D231E;
+      --user-bubble:#282623;
+    }
+  }
+  @font-face { font-family:"Source Serif 4"; src:url(./vendor/source-serif-400.woff2) format("woff2"); font-weight:400; font-style:normal; font-display:swap; }
+  @font-face { font-family:"Source Serif 4"; src:url(./vendor/source-serif-600.woff2) format("woff2"); font-weight:600; font-style:normal; font-display:swap; }
+  @font-face { font-family:"Source Serif 4"; src:url(./vendor/source-serif-italic.woff2) format("woff2"); font-weight:400; font-style:italic; font-display:swap; }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body {
+    font-family:var(--font-ui); background:var(--canvas); color:var(--ink);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; line-height:1.6;
+  }
+  code, .mono { font-family:var(--font-mono); }
+  :is(h1,h2,h3) code, p code, li code, .tag code {
+    font-family:var(--font-mono); background:var(--surface-sunk); color:var(--accent-deep);
+    padding:.08em .35em; border-radius:.28em; font-size:.86em; border:1px solid var(--line-soft);
+  }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  .wrap { max-width:1080px; margin:0 auto; padding:0 24px; }
+  .serif { font-family:var(--font-read); }
+
+  /* ── Nav ── */
+  nav {
+    position:sticky; top:0; z-index:50; background:color-mix(in srgb, var(--canvas) 82%, transparent);
+    backdrop-filter:saturate(1.4) blur(12px); -webkit-backdrop-filter:saturate(1.4) blur(12px);
+    border-bottom:1px solid var(--line-soft);
+  }
+  .nav-in { display:flex; align-items:center; gap:16px; height:60px; }
+  .brand { display:flex; align-items:center; gap:10px; font-weight:600; font-size:17px; }
+  .brand .mark {
+    width:28px; height:28px; border-radius:8px; background:var(--accent); color:#F4F3EE;
+    display:grid; place-items:center; font-family:var(--font-read); font-size:18px; font-weight:600;
+  }
+  .brand b { font-family:var(--font-read); font-weight:600; }
+  .nav-spacer { flex:1; }
+  .langtoggle { display:inline-flex; border:1px solid var(--line); border-radius:999px; overflow:hidden; }
+  .langtoggle button {
+    font:inherit; font-size:13px; padding:5px 12px; background:transparent; color:var(--ink-soft);
+    border:0; cursor:pointer; line-height:1;
+  }
+  .langtoggle button.active { background:var(--accent); color:#F4F3EE; }
+  .ghlink {
+    display:inline-flex; align-items:center; gap:7px; font-size:14px; font-weight:500;
+    border:1px solid var(--line); border-radius:999px; padding:6px 14px; color:var(--ink);
+  }
+  .ghlink:hover { border-color:var(--accent); text-decoration:none; }
+  .ghlink svg { width:16px; height:16px; }
+
+  /* ── Buttons ── */
+  .btn {
+    display:inline-flex; align-items:center; gap:9px; font-weight:600; font-size:16px;
+    padding:13px 22px; border-radius:var(--radius-md); cursor:pointer; border:1px solid transparent;
+    transition:transform .06s ease;
+  }
+  .btn:active { transform:translateY(1px); }
+  .btn:hover { text-decoration:none; }
+  .btn-primary { background:var(--accent); color:#F8F5F0; box-shadow:var(--shadow-lift); }
+  .btn-primary:hover { background:var(--accent-deep); }
+  .btn-ghost { background:var(--surface); color:var(--ink); border-color:var(--line); }
+  .btn-ghost:hover { border-color:var(--accent); }
+
+  /* ── Hero ── */
+  .hero { padding:72px 0 56px; }
+  .hero-grid { display:grid; grid-template-columns:1.1fr .9fr; gap:52px; align-items:center; }
+  .eyebrow {
+    display:inline-flex; align-items:center; gap:9px; font-family:var(--font-mono); font-size:14px;
+    color:var(--accent-deep); margin-bottom:22px; font-weight:600;
+  }
+  .eyebrow .dot { width:8px; height:8px; border-radius:50%; background:var(--success); box-shadow:0 0 8px var(--success); }
+  h1.hero-title {
+    font-family:var(--font-read); font-size:clamp(38px, 5vw, 58px); line-height:1.05;
+    letter-spacing:-.02em; font-weight:600; margin-bottom:22px;
+  }
+  h1.hero-title .accent { color:var(--accent); }
+  .hero-sub { font-size:19px; line-height:1.62; color:var(--ink-soft); max-width:34em; margin-bottom:16px; }
+  .hero-note { font-size:15px; color:var(--ink-faint); margin-bottom:30px; }
+  .hero-cta { display:flex; gap:14px; flex-wrap:wrap; }
+
+  /* phone mock */
+  .phone {
+    margin:0 auto; width:252px; border-radius:38px; padding:10px;
+    background:linear-gradient(160deg, color-mix(in srgb, var(--ink) 82%, #000), #100c0a);
+    box-shadow:var(--shadow-pop), 0 6px 20px color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  .phone .screen { border-radius:29px; overflow:hidden; background:var(--surface); box-shadow:inset 0 0 0 1px rgba(0,0,0,.28); height:432px; }
+  .phone img { display:block; width:100%; height:100%; object-fit:cover; object-position:bottom; }
+
+  /* ── Sections ── */
+  section { padding:60px 0; }
+  .sec-head { text-align:center; max-width:38em; margin:0 auto 44px; }
+  .sec-head h2 { font-family:var(--font-read); font-size:clamp(28px,3.4vw,38px); font-weight:600; letter-spacing:-.02em; margin-bottom:14px; }
+  .sec-head p { font-size:18px; color:var(--ink-soft); }
+  .kicker { font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--accent); text-transform:uppercase; letter-spacing:.08em; margin-bottom:12px; }
+
+  /* In action: story + gif */
+  .action-grid { display:grid; grid-template-columns:1fr 1fr; gap:44px; align-items:center; }
+  .story { border-left:3px solid var(--accent-wash); padding-left:22px; }
+  .story .line { font-family:var(--font-read); font-size:17.5px; line-height:1.7; color:var(--ink); margin-bottom:14px; }
+  .story .line .t { font-family:var(--font-mono); font-size:14px; color:var(--accent-deep); font-weight:600; margin-right:8px; }
+  .gif-frame { border:1px solid var(--line); border-radius:var(--radius-lg); overflow:hidden; box-shadow:var(--shadow-card); background:var(--surface-sunk); max-width:272px; margin:0 auto; }
+  .gif-frame img { display:block; width:100%; }
+
+  /* Screenshots */
+  .shots { display:grid; grid-template-columns:repeat(3,1fr); gap:24px; }
+  .shot { text-align:center; }
+  .shot .frame { border:1px solid var(--line); border-radius:var(--radius-lg); overflow:hidden; box-shadow:var(--shadow-card); background:var(--surface); margin-bottom:16px; }
+  .shot img { display:block; width:100%; }
+  .shot h3 { font-size:17px; font-weight:600; margin-bottom:5px; }
+  .shot p { font-size:14.5px; color:var(--ink-faint); }
+
+  /* Features */
+  .features { display:grid; grid-template-columns:repeat(2,1fr); gap:20px; }
+  .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-lg); padding:26px; box-shadow:var(--shadow-card); }
+  .card .n { font-family:var(--font-mono); font-size:13px; color:var(--accent); font-weight:600; }
+  .card h3 { font-size:19px; font-weight:600; margin:8px 0 9px; }
+  .card p { font-size:15.5px; color:var(--ink-soft); line-height:1.6; }
+  .subfeatures { margin-top:26px; display:flex; flex-wrap:wrap; gap:10px; justify-content:center; }
+  .pill { font-size:14px; color:var(--ink-soft); background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:8px 15px; }
+
+  /* Security */
+  .security { background:var(--surface-sunk); border-top:1px solid var(--line-soft); border-bottom:1px solid var(--line-soft); }
+  .sec-list { display:grid; grid-template-columns:repeat(2,1fr); gap:22px; max-width:900px; margin:0 auto; }
+  .sec-item { display:flex; gap:14px; }
+  .sec-item .ico { flex:none; width:34px; height:34px; border-radius:9px; background:var(--accent-wash); color:var(--accent-deep); display:grid; place-items:center; font-size:18px; }
+  .sec-item h3 { font-size:16.5px; font-weight:600; margin-bottom:4px; }
+  .sec-item p { font-size:14.5px; color:var(--ink-soft); line-height:1.58; }
+  .locked { text-align:center; margin-top:34px; font-size:15px; color:var(--ink-faint); }
+  .locked code { font-size:.9em; }
+
+  /* Worth it */
+  .worth-body { max-width:44em; margin:0 auto; }
+  .worth-body p { font-size:18px; line-height:1.7; color:var(--ink-soft); margin-bottom:18px; }
+  .worth-body p strong { color:var(--ink); font-weight:600; }
+  .worth-body .verdict { font-family:var(--font-read); font-size:20px; color:var(--ink); border-top:1px solid var(--line); padding-top:22px; }
+
+  /* Get started / footer */
+  .get { text-align:center; }
+  .prereq { max-width:40em; margin:0 auto 30px; font-size:16px; color:var(--ink-soft); }
+  .prereq strong { color:var(--ink); }
+  .clone { max-width:640px; margin:0 auto 30px; text-align:left; background:var(--surface-sunk); border:1px solid var(--line); border-radius:var(--radius-md); padding:18px 20px; font-family:var(--font-mono); font-size:14px; line-height:1.7; color:var(--ink); overflow-x:auto; white-space:pre; }
+  .clone .c { color:var(--ink-faint); }
+  .clone .p { color:var(--accent-deep); }
+  footer { border-top:1px solid var(--line-soft); padding:34px 0 46px; color:var(--ink-faint); font-size:14px; }
+  .foot-in { display:flex; flex-wrap:wrap; gap:16px 28px; align-items:center; justify-content:center; text-align:center; }
+  .foot-in a { color:var(--ink-soft); }
+
+  /* Responsive */
+  @media (max-width:860px) {
+    .hero-grid { grid-template-columns:1fr; gap:38px; }
+    .hero { padding:48px 0 40px; }
+    .hero-sub { max-width:none; }
+    .hero .phone { order:-1; }
+    .action-grid { grid-template-columns:1fr; gap:30px; }
+    .shots { grid-template-columns:1fr; max-width:340px; margin:0 auto; }
+    .features { grid-template-columns:1fr; }
+    .sec-list { grid-template-columns:1fr; }
+  }
+  @media (max-width:520px) {
+    .brand span.full { display:none; }
+    .ghlink .txt { display:none; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-in">
+    <div class="brand">
+      <span class="mark">C</span>
+      <span class="full"><b>Claude</b> Chat Mobile</span>
+    </div>
+    <div class="nav-spacer"></div>
+    <div class="langtoggle" role="group" aria-label="Language">
+      <button data-lang="en">EN</button>
+      <button data-lang="zh">中文</button>
+    </div>
+    <a class="ghlink" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      <span class="txt">GitHub</span>
+    </a>
+  </div>
+</nav>
+
+<!-- ── Hero ── -->
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="eyebrow"><span class="dot"></span><span data-i18n="hero.eyebrow">$ claude · on your phone</span></div>
+      <h1 class="hero-title" data-i18n-html="hero.title">Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span></h1>
+      <p class="hero-sub" data-i18n-html="hero.sub">Not a remote desktop, not a re-implementation. It drives your <strong>real, logged-in</strong> CLI — same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves exactly like sitting at your own terminal.</p>
+      <p class="hero-note" data-i18n="hero.note">Right down to approving a git push — from bed, one tap.</p>
+      <div class="hero-cta">
+        <a class="btn btn-primary" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener"><span data-i18n="hero.cta1">Get started on GitHub</span> <span aria-hidden="true">▸</span></a>
+        <a class="btn btn-ghost" href="#action" data-i18n="hero.cta2">See it in action</a>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="screen"><img src="./screenshots/03-approval.png" width="750" height="1624" alt="Approving a git push from the phone"></div>
+    </div>
+  </div>
+</header>
+
+<!-- ── In action ── -->
+<section id="action">
+  <div class="wrap">
+    <div class="action-grid">
+      <div>
+        <div class="kicker" data-i18n="action.kicker">A night in the life</div>
+        <h2 class="serif" style="font-size:clamp(26px,3.2vw,34px);font-weight:600;letter-spacing:-.02em;margin-bottom:22px;" data-i18n="action.heading">You've stepped away. The work hasn't.</h2>
+        <div class="story">
+          <p class="line"><span class="t">22:30</span><span data-i18n="action.l1">In bed, you text: "merge the duplicate date helpers in utils into one function, make the tests pass."</span></p>
+          <p class="line"><span class="t">22:30</span><span data-i18n="action.l2">Claude streams back, threaded with Read · Edit · Bash(npm test) tool cards.</span></p>
+          <p class="line"><span class="t">22:39</span><span data-i18n="action.l3">You unlock. The page auto-reconnected and replayed everything you missed: tests pass, and one approval is waiting — the full command git commit and its working directory. You tap Allow.</span></p>
+          <p class="line"><span class="t">22:40</span><span data-i18n="action.l4">"Now add a line to the CHANGELOG." It remembers what it just changed, and picks up right where it left off.</span></p>
+        </div>
+      </div>
+      <div class="gif-frame">
+        <img src="./demo.gif" loading="lazy" width="600" height="1299" alt="Stream a reply, watch tool cards, then approve a git push from your phone">
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Screenshots ── -->
+<section style="background:var(--surface-sunk);border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2 data-i18n="shots.heading">Built for a phone, not mirrored from a desktop</h2>
+    </div>
+    <div class="shots">
+      <div class="shot">
+        <div class="frame"><img src="./screenshots/01-stream.png" loading="lazy" width="750" height="1624" alt="Streaming output with Markdown rendering"></div>
+        <h3 data-i18n="shots.t1">Streaming</h3>
+        <p data-i18n="shots.p1">Markdown · syntax highlight · status line</p>
+      </div>
+      <div class="shot">
+        <div class="frame"><img src="./screenshots/02-tools.png" loading="lazy" width="750" height="1624" alt="Tool-call cards"></div>
+        <h3 data-i18n="shots.t2">Visible process</h3>
+        <p data-i18n="shots.p2">tool calls render as collapsible cards</p>
+      </div>
+      <div class="shot">
+        <div class="frame"><img src="./screenshots/03-approval.png" loading="lazy" width="750" height="1624" alt="Dangerous actions approved from the phone"></div>
+        <h3 data-i18n="shots.t3">Approve on phone</h3>
+        <p data-i18n="shots.p3">dangerous actions push full command + cwd</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Features ── -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker" data-i18n="features.kicker">Why it's different</div>
+      <h2 data-i18n="features.heading">A transparent pipe to your terminal — locked by default</h2>
+    </div>
+    <div class="features">
+      <div class="card"><div class="n">01</div><h3 data-i18n="features.f1t">Your real CLI, not a clone</h3><p data-i18n-html="features.f1b">It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so you inherit the same agent, the same <code>CLAUDE.md</code>, the same MCP servers, skills, hooks, and logged-in session you use at your desk.</p></div>
+      <div class="card"><div class="n">02</div><h3 data-i18n="features.f2t">Terminal equivalence</h3><p data-i18n="features.f2b">Edit code, run commands, resume an earlier conversation — typing on your phone behaves exactly like typing at your computer. Except now you can do it from bed.</p></div>
+      <div class="card"><div class="n">03</div><h3 data-i18n="features.f3t">Approve danger from your phone</h3><p data-i18n="features.f3b">Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. One tap to allow or deny — nothing runs until you say so.</p></div>
+      <div class="card"><div class="n">04</div><h3 data-i18n="features.f4t">Survives a flaky subway</h3><p data-i18n="features.f4b">The task lives server-side, decoupled from the socket. On a dropped mobile connection it self-heals and replays, so you land back where you were instead of reconnecting and re-locating.</p></div>
+    </div>
+    <div class="subfeatures">
+      <span class="pill" data-i18n="sub.p1">5 permission modes</span>
+      <span class="pill" data-i18n="sub.p2">Per-message model switching</span>
+      <span class="pill" data-i18n="sub.p3">Multi-repo · multi-session tabs</span>
+      <span class="pill" data-i18n="sub.p4">File &amp; image upload</span>
+      <span class="pill" data-i18n="sub.p5">Web Push</span>
+      <span class="pill" data-i18n="sub.p6">PWA-installable</span>
+      <span class="pill" data-i18n="sub.p7">Zero-CDN, self-hosted</span>
+    </div>
+  </div>
+</section>
+
+<!-- ── Security ── -->
+<section class="security">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker" data-i18n="security.kicker">Security model</div>
+      <h2 data-i18n="security.heading">A code-execution channel into your shell. Treated like one.</h2>
+    </div>
+    <div class="sec-list">
+      <div class="sec-item"><div class="ico">1</div><div><h3 data-i18n="security.t1">Single-user (n = 1)</h3><p data-i18n="security.b1">You are the only user and the only admin. No multi-user system — any request that passes auth has exactly the same power as you at the terminal.</p></div></div>
+      <div class="sec-item"><div class="ico">2</div><div><h3 data-i18n="security.t2">No token, no exit</h3><p data-i18n-html="security.b2">With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only — there is no "empty = open to the world" path. Reaching the internet requires a token.</p></div></div>
+      <div class="sec-item"><div class="ico">3</div><div><h3 data-i18n="security.t3">Pure inheritance, zero injection</h3><p data-i18n="security.b3">The auto-approve set is exactly your existing CLI allowlist — nothing added. Anything off-list is suspended and bounced to your phone for approval.</p></div></div>
+      <div class="sec-item"><div class="ico">4</div><div><h3 data-i18n="security.t4">Device trust (TOFU)</h3><p data-i18n="security.b4">A connection that is neither local nor Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.</p></div></div>
+    </div>
+    <p class="locked" data-i18n-html="security.locked">No <code>AUTH_TOKEN</code> ⇒ binds <code>127.0.0.1</code> only. It cannot reach the public internet until you deliberately open it.</p>
+  </div>
+</section>
+
+<!-- ── When it's worth it ── -->
+<section id="worth">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker" data-i18n="worth.kicker">Honest scope</div>
+      <h2 data-i18n="worth.heading">When it's worth it</h2>
+    </div>
+    <div class="worth-body">
+      <p data-i18n="worth.b1">This isn't "open a remote desktop back to your computer." That mirrors a screen. This gives your real local claude session a native entry point built for a phone: one tap to approve, one session picked up across devices, several repos watched in parallel tabs, native photo upload and long-press copy.</p>
+      <p class="verdict" data-i18n="worth.b2">If you only glance in remotely now and then, an existing remote desktop is enough. The value lands when you use your phone frequently as a pocket extension of your terminal.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ── Get started ── -->
+<section id="get-started" style="background:var(--surface-sunk);border-top:1px solid var(--line-soft);">
+  <div class="wrap get">
+    <div class="sec-head">
+      <h2 data-i18n="get.heading">Run it on your own machine</h2>
+      <p data-i18n="get.sub">It's self-hosted by design — there is no shared demo, because it drives your own authenticated claude CLI.</p>
+    </div>
+    <p class="prereq" data-i18n-html="get.prereq"><strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working, logged-in <code>claude</code> CLI on the host (this project drives it, it doesn't bundle it).</p>
+    <div class="clone">
+<span class="c"># clone, install runtime deps, configure, run</span>
+git clone https://github.com/Ike-li/claude-chat-mobile.git
+<span class="p">cd</span> claude-chat-mobile
+npm install --omit=dev
+cp .env.example .env   <span class="c"># set AUTH_TOKEN, WORK_DIR</span>
+npm start              <span class="c"># http://localhost:3000</span>
+    </div>
+    <a class="btn btn-primary" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener"><span data-i18n="get.cta">Read the full guide on GitHub</span> <span aria-hidden="true">▸</span></a>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-in">
+    <span>Claude Chat Mobile</span>
+    <span aria-hidden="true">·</span>
+    <a href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
+    <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE" target="_blank" rel="noopener">AGPL-3.0-only</a>
+    <a href="https://linux.do/" target="_blank" rel="noopener">LINUX DO</a>
+    <span aria-hidden="true">·</span>
+    <span data-i18n="foot.tag">Your terminal, in your pocket.</span>
+  </div>
+</footer>
+
+<script>
+  const I18N = {
+    en: {
+      'hero.eyebrow': '$ claude · on your phone',
+      'hero.title': 'Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span>',
+      'hero.sub': 'Not a remote desktop, not a re-implementation. It drives your <strong>real, logged-in</strong> CLI — same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves exactly like sitting at your own terminal.',
+      'hero.note': 'Right down to approving a git push — from bed, one tap.',
+      'hero.cta1': 'Get started on GitHub',
+      'hero.cta2': 'See it in action',
+      'action.kicker': 'A night in the life',
+      'action.heading': "You've stepped away. The work hasn't.",
+      'action.l1': 'In bed, you text: "merge the duplicate date helpers in utils into one function, make the tests pass."',
+      'action.l2': 'Claude streams back, threaded with Read · Edit · Bash(npm test) tool cards.',
+      'action.l3': 'You unlock. The page auto-reconnected and replayed everything you missed: tests pass, and one approval is waiting — the full command git commit and its working directory. You tap Allow.',
+      'action.l4': '"Now add a line to the CHANGELOG." It remembers what it just changed, and picks up right where it left off.',
+      'shots.heading': 'Built for a phone, not mirrored from a desktop',
+      'shots.t1': 'Streaming', 'shots.p1': 'Markdown · syntax highlight · status line',
+      'shots.t2': 'Visible process', 'shots.p2': 'tool calls render as collapsible cards',
+      'shots.t3': 'Approve on phone', 'shots.p3': 'dangerous actions push full command + cwd',
+      'features.kicker': "Why it's different",
+      'features.heading': 'A transparent pipe to your terminal — locked by default',
+      'features.f1t': 'Your real CLI, not a clone',
+      'features.f1b': 'It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so you inherit the same agent, the same <code>CLAUDE.md</code>, the same MCP servers, skills, hooks, and logged-in session you use at your desk.',
+      'features.f2t': 'Terminal equivalence',
+      'features.f2b': 'Edit code, run commands, resume an earlier conversation — typing on your phone behaves exactly like typing at your computer. Except now you can do it from bed.',
+      'features.f3t': 'Approve danger from your phone',
+      'features.f3b': 'Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. One tap to allow or deny — nothing runs until you say so.',
+      'features.f4t': 'Survives a flaky subway',
+      'features.f4b': 'The task lives server-side, decoupled from the socket. On a dropped mobile connection it self-heals and replays, so you land back where you were instead of reconnecting and re-locating.',
+      'sub.p1': '5 permission modes', 'sub.p2': 'Per-message model switching', 'sub.p3': 'Multi-repo · multi-session tabs', 'sub.p4': 'File & image upload', 'sub.p5': 'Web Push', 'sub.p6': 'PWA-installable', 'sub.p7': 'Zero-CDN, self-hosted',
+      'security.kicker': 'Security model',
+      'security.heading': 'A code-execution channel into your shell. Treated like one.',
+      'security.t1': 'Single-user (n = 1)', 'security.b1': 'You are the only user and the only admin. No multi-user system — any request that passes auth has exactly the same power as you at the terminal.',
+      'security.t2': 'No token, no exit', 'security.b2': 'With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only — there is no "empty = open to the world" path. Reaching the internet requires a token.',
+      'security.t3': 'Pure inheritance, zero injection', 'security.b3': 'The auto-approve set is exactly your existing CLI allowlist — nothing added. Anything off-list is suspended and bounced to your phone for approval.',
+      'security.t4': 'Device trust (TOFU)', 'security.b4': 'A connection that is neither local nor Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.',
+      'security.locked': 'No <code>AUTH_TOKEN</code> ⇒ binds <code>127.0.0.1</code> only. It cannot reach the public internet until you deliberately open it.',
+      'worth.kicker': 'Honest scope',
+      'worth.heading': "When it's worth it",
+      'worth.b1': 'This isn\'t "open a remote desktop back to your computer." That mirrors a screen. This gives your real local claude session a native entry point built for a phone: one tap to approve, one session picked up across devices, several repos watched in parallel tabs, native photo upload and long-press copy.',
+      'worth.b2': 'If you only glance in remotely now and then, an existing remote desktop is enough. The value lands when you use your phone frequently as a pocket extension of your terminal.',
+      'get.heading': 'Run it on your own machine',
+      'get.sub': "It's self-hosted by design — there is no shared demo, because it drives your own authenticated claude CLI.",
+      'get.prereq': '<strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working, logged-in <code>claude</code> CLI on the host (this project drives it, it doesn\'t bundle it).',
+      'get.cta': 'Read the full guide on GitHub',
+      'foot.tag': 'Your terminal, in your pocket.'
+    },
+    zh: {
+      'hero.eyebrow': '$ claude · 在你手机上',
+      'hero.title': '你本机的 <code>claude</code> CLI，<br><span class="accent">搬到手机上。</span>',
+      'hero.sub': '不是远程桌面，也不是复刻实现。它驱动你<strong>真实的、已登录的</strong> CLI——同一个 agent、同一份 <code>CLAUDE.md</code>、同一个会话。目标是<strong>终端等价性</strong>：在手机上对 claude 打字，和你坐在自己终端前一模一样。',
+      'hero.note': '连在床上批准一次 git push 都一样——一次点按。',
+      'hero.cta1': '去 GitHub 开始',
+      'hero.cta2': '看实际效果',
+      'action.kicker': '一个夜晚',
+      'action.heading': '你离开了，活儿还在跑。',
+      'action.l1': '躺在床上，你发消息："把 utils 里重复的日期处理合并成一个函数，跑通测试。"',
+      'action.l2': '屏幕流式出现 claude 的回复，夹着 Read · Edit · Bash(npm test) 的工具调用卡片。',
+      'action.l3': '你解锁。页面已自动重连、补上错过的全部输出：测试通过，一条待批准的权限请求——完整命令 git commit 和工作目录都在。你点"允许"。',
+      'action.l4': '"再给 CHANGELOG 补一行。" 它记得刚才改了什么，直接续上。',
+      'shots.heading': '为手机而造，不是把桌面投屏过来',
+      'shots.t1': '流式输出', 'shots.p1': 'Markdown · 语法高亮 · 状态行',
+      'shots.t2': '过程可见', 'shots.p2': '工具调用渲染成可折叠卡片',
+      'shots.t3': '回手机审批', 'shots.p3': '危险操作推送完整命令 + 工作目录',
+      'features.kicker': '为什么不一样',
+      'features.heading': '一条通往你终端的透明管道——默认上锁',
+      'features.f1t': '你真实的 CLI，不是克隆',
+      'features.f1b': '它不打包任何自己的 Claude。它通过 Claude Agent SDK 驱动你本机的 CLI，于是你继承同一个 agent、同一份 <code>CLAUDE.md</code>、同样的 MCP 服务、技能、hooks 和已登录会话——和你在电脑前用的一模一样。',
+      'features.f2t': '终端等价性',
+      'features.f2b': '改代码、跑命令、恢复早先的对话——在手机上打字，效果和坐在电脑前完全一样。只不过现在你可以在床上做。',
+      'features.f3t': '危险操作弹手机批准',
+      'features.f3b': '不在 allowlist 上的操作会被挂起，连同完整命令和工作目录推到你手机上。一次点按允许或拒绝——你不点头，什么都不会跑。',
+      'features.f4t': '扛得住地铁断网',
+      'features.f4b': '任务活在服务端，和 socket 解耦。手机网络断了它会自愈重放，让你回到中断处，而不是重连后再找位置。',
+      'sub.p1': '5 种权限模式', 'sub.p2': '逐条消息切模型', 'sub.p3': '多仓库 · 多会话标签', 'sub.p4': '文件与图片上传', 'sub.p5': 'Web Push 推送', 'sub.p6': 'PWA 可安装', 'sub.p7': '零 CDN、自托管',
+      'security.kicker': '安全模型',
+      'security.heading': '一条直通你 shell 的代码执行通道。就按这个来对待。',
+      'security.t1': '单用户（n = 1）', 'security.b1': '你是唯一的用户，也是唯一的管理员。没有多用户系统——任何通过鉴权的请求，权力都和你坐在终端前完全相同。',
+      'security.t2': '没有 token，出不了本机', 'security.b2': '不设 <code>AUTH_TOKEN</code> 时，server 只绑定 <code>127.0.0.1</code>——没有"空 = 对全世界开放"这条路。要触达公网，必须有 token。',
+      'security.t3': '纯继承，零注入', 'security.b3': '自动批准集恰好是你现有的 CLI allowlist——一条不加。不在其上的一律挂起、弹回手机等你批。',
+      'security.t4': '设备信任（TOFU）', 'security.b4': '既非本地、也未经 Access 校验的连接，必须先在你电脑上授权一次才能做任何事。光有合法 token 不够。',
+      'security.locked': '不设 <code>AUTH_TOKEN</code> ⇒ 只绑 <code>127.0.0.1</code>。在你主动开放之前，它触达不了公网。',
+      'worth.kicker': '诚实的边界',
+      'worth.heading': '什么时候值得用',
+      'worth.b1': '这不是"从手机开个远程桌面连回电脑"。那是投屏。这是给你真实的本机 claude 会话一个为手机而造的原生入口：一键批准、一个会话跨设备接力、多个仓库并排标签盯着、原生传照片、长按复制长输出。',
+      'worth.b2': '如果你只是偶尔远程瞄一眼，现成的远程桌面就够了。它的价值，在你把手机当成终端的口袋延伸、频繁使用时才真正兑现。',
+      'get.heading': '在你自己的机器上跑起来',
+      'get.sub': '它天生就是自托管——没有公共 demo，因为它驱动的是你自己已登录的 claude CLI。',
+      'get.prereq': '<strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用且已登录的 <code>claude</code> CLI（本项目驱动它，不打包它）。',
+      'get.cta': '去 GitHub 看完整指南',
+      'foot.tag': '你的终端，装进口袋。'
+    }
+  };
+
+  const nodes = document.querySelectorAll('[data-i18n]');
+  const htmlNodes = document.querySelectorAll('[data-i18n-html]');
+  const buttons = document.querySelectorAll('.langtoggle button');
+
+  function applyLang(lang){
+    if(!I18N[lang]) lang = 'en';
+    const dict = I18N[lang];
+    document.documentElement.lang = (lang === 'zh') ? 'zh-CN' : 'en';
+    nodes.forEach(el => { const v = dict[el.getAttribute('data-i18n')]; if(v != null) el.textContent = v; });
+    htmlNodes.forEach(el => { const v = dict[el.getAttribute('data-i18n-html')]; if(v != null) el.innerHTML = v; });
+    buttons.forEach(b => b.classList.toggle('active', b.getAttribute('data-lang') === lang));
+    try { localStorage.setItem('ccm-lang', lang); } catch(e){}
+  }
+
+  let initial = 'en';
+  try { initial = localStorage.getItem('ccm-lang') || (navigator.language && navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'); } catch(e){}
+  buttons.forEach(b => b.addEventListener('click', () => applyLang(b.getAttribute('data-lang'))));
+  applyLang(initial);
+</script>
+</body>
+</html>
