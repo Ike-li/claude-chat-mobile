@@ -4,7 +4,7 @@
   "description": "Mobile chat UI that bridges your local claude CLI to your phone — terminal-equivalent agent access (resume, streaming output, on-device tool approvals).",
   "type": "module",
   "private": true,
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "author": "Ike-li (https://github.com/Ike-li)",
   "homepage": "https://github.com/Ike-li/claude-chat-mobile#readme",
   "repository": {
