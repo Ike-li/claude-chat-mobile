@@ -37,7 +37,8 @@
     "test:unit": "node --test test/*.test.mjs",
     "test:integration": "node --test --test-force-exit test/integration/*.test.mjs",
     "test:coverage": "node --experimental-test-coverage --test test/*.test.mjs",
-    "test:visual": "node scripts/visual-e2e-runner.js"
+    "test:visual": "node scripts/visual-e2e-runner.js",
+    "preview:landing": "python3 -m http.server -d docs 8000"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",
