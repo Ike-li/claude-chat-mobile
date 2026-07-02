@@ -171,6 +171,23 @@ test.describe('session:new — 创建新会话', CI_SKIP, () => {
   });
 });
 
+test.describe('dev:restart — DEV_MODE 关闭时拒绝', CI_SKIP, () => {
+  test('未设 DEV_MODE（测试子进程默认）→ ack { ok: false }，不重启', async () => {
+    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 3000);
+    });
+    const ack = await new Promise((resolve) => {
+      s.emit('dev:restart', {}, resolve);
+    });
+    assert.equal(ack.ok, false);
+    assert.ok(ack.error);
+    s.disconnect();
+  });
+});
+
 test.describe('session:new — scout 获取真实模型清单', CI_SKIP, () => {
   // session:new 时无活实例 → openScoutInstance 临时创建 AgentSession 调 supportedModels()，
   // 获取真实模型清单后推送前端 + 写入缓存 + 立即 dispose（不留幽灵会话）。

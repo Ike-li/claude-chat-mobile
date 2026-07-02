@@ -514,6 +514,19 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   if (accessHelpOpen) accessHelpOpen.onclick = showAccessHelp;
   if (authHelpLink) authHelpLink.onclick = showAccessHelp;
 
+  // 开发者模式：一键重启常驻 server（按钮仅 DEV_MODE=1 时由 setInstances 显示）。
+  const btnRestartServer = $('btnRestartServer');
+  if (btnRestartServer) btnRestartServer.onclick = () => {
+    const busyN = instancesList.filter(i => i.state === 'busy' || i.state === 'permission').length;
+    const warnLine = busyN ? `\n\n⚠️ 当前有 ${busyN} 个会话在运行/待审批，重启会中断它们（含后台任务）。` : '';
+    if (!confirm(`⟳ 重启常驻 server？${warnLine}\n\n服务将优雅退出并由 KeepAlive 自动拉起，页面会自动重连。`)) return;
+    haptic('warning');
+    addBar('⟳ 正在重启服务…页面将自动重连', 'text-warning');
+    socket.emit('dev:restart', {}, res => {
+      if (res && res.ok === false) addBar(`重启被拒：${res.error || '未知'}`, 'text-danger');
+    });
+  };
+
   function showDeniedOverlay() { deviceDenied?.classList.remove('hidden'); }
   if (deviceDeniedHelp) deviceDeniedHelp.onclick = showAccessHelp;
   if (deviceDeniedRetry) deviceDeniedRetry.onclick = () => {
@@ -1683,6 +1696,9 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     }
     // pillWorkspace（📁 状态 pill）显当前工作区名——该 pill 是工作区入口，显 model 名是名实错配（2026-06-21）
     if ($('pillWorkspaceText')) $('pillWorkspaceText').textContent = baseName(currentCwd);
+    // 开发者模式：DEV_MODE=1 时显示齿轮面板「重启服务」组（生产默认隐藏，防误触重启对外服务）
+    const devGroup = $('devModeGroup');
+    if (devGroup) devGroup.classList.toggle('hidden', !p?.devMode);
     if (topTitleText) {
       topTitleText.textContent = shouldShowStartScreen({ viewingInstanceId: newViewing, sessionId: instancesList.find(x => x.instanceId === newViewing)?.sessionId }) ? '新聊天' : '聊天';
     }

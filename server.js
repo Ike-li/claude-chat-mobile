@@ -53,6 +53,10 @@ const {
   AUTH_TOKEN = '',
   IDLE_TIMEOUT_MS = 600000
 } = process.env;
+// 开发者模式（DEV_MODE=1）：暴露 web 端「重启服务」按钮，供 dogfooding 时改代码/.env 后一键 kickstart
+// 常驻 server（优雅退出 → LaunchAgent KeepAlive 自动拉起 → 前端 socket.io 自动重连 + epoch init 恢复）。
+// 生产（无 DEV_MODE）下 dev:restart 被拒，按钮不显示——防误触重启对外服务。
+const DEV_MODE = process.env.DEV_MODE === '1';
 // WORK_DIR 单列为 let：preflight 通过存在性检查后经 realpathSync 规范化（与 CLI 的
 // ~/.claude/projects 命名一致，令会话列表 cwd 隔离匹配稳健，如 /tmp→/private/tmp）。
 let WORK_DIR = process.env.WORK_DIR || homedir();
@@ -638,7 +642,7 @@ function instancesPayload() {
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || null
     });
   }
-  const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list };
+  const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE };
   // 空首页（viewingInstanceId 为空、无 live 实例）下发「下一条新会话(FRESH)将用的」权限/思考强度档
   // （= 该 cwd pending 预设 ?? CLI 启动默认：权限 default、effort null），供前端如实显示该工作区新会话将用的档
   // （终端等价），修「空首页残留上个会话档」。模型不下发——新会话模型=env 默认、服务端不可知，前端显「不指定」、
@@ -1354,6 +1358,20 @@ io.on('connection', socket => {
     const limit = all ? 50 : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
     const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit });
     ack({ currentSessionId, sessions: list, hasMore: all ? false : hasMore });
+  });
+
+  // 开发者模式：web 端一键重启常驻 server（dogfooding 改代码/.env 后免上电脑 kickstart）。
+  // 仅 DEV_MODE=1 放行；优雅退出复用 shutdown（flush sessions + dispose 实例 + close），
+  // 靠 LaunchAgent/systemd 的 KeepAlive 自动拉起，前端 socket.io 自动重连 + epoch init 恢复。
+  on(socket, 'dev:restart', (payload, ack) => {
+    if (!DEV_MODE) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'DEV_MODE 未开启，拒绝重启' });
+      return;
+    }
+    console.log('[dev] 收到 web 端重启请求，优雅退出（KeepAlive 将自动拉起）');
+    if (typeof ack === 'function') ack({ ok: true });
+    // 稍延后再退出，确保 ack 先发回客户端（客户端据此显示「重启中…」并等待重连）
+    setTimeout(() => shutdown('DEV_RESTART'), 200);
   });
 
   // E14 历史回显（鉴权随握手；取代原无鉴权的 GET /sessions/:id/history）

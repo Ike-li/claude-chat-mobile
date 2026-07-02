@@ -1012,6 +1012,12 @@
         <div class="text-xs font-semibold text-ink-soft mb-2">🔑 访问与设备</div>
         <button id="accessHelpOpen" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">如何连接 · 令牌在哪 · 新设备怎么批 →</button>
       </div>
+
+      <!-- 5. 开发者模式：一键重启常驻 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
+      <div id="devModeGroup" class="hidden">
+        <div class="text-xs font-semibold text-ink-soft mb-2">🛠 开发者</div>
+        <button id="btnRestartServer" type="button" class="w-full text-left p-2.5 rounded-xl border border-warning/40 bg-warning/5 active:bg-warning/10 text-xs text-warning">⟳ 重启服务（改代码/.env 后生效）</button>
+      </div>
     </div>
   </div>
 
