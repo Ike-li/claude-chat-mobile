@@ -9,6 +9,8 @@ const BUFFER_CAP = 500;       // 环形缓冲条数
 const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要截断；permission_request 永不截断（4a）
 const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn 的有效期（2min）：宽于任何真实自动汇报延迟、
                                      // 窄于长尾——超时不合成，防滞留 flag 被无关的 message_start（如 auto-compact fork）误触发。
+const BG_TASK_TTL_MS = 180000;       // 活的后台任务（bgTasks）无心跳的失效期（3min）：SDK getProgressMessage 无增量时不推，
+                                     // 心跳可能稀疏——取值须宽于最大真实心跳间隔，防误清仍在跑的静默任务。漏收完成信号时它是主力清除。
 
 // epoch：每个 AgentSession 实例一个跨重启唯一标识。基于 wall-clock + 进程内计数，
 // 保证服务重启后新实例的 epoch 严格大于旧实例 → 客户端据此区分"新流"并重置 seq 去重基线。
@@ -23,7 +25,7 @@ function nextEpoch() {
 // 模型「值」本就经 settingSources 与终端 /model 同步，显示层不应再叠加项目默认。终端友好名不再复刻。
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, onEvent, onSessionId, onExit, onUsage, historicalCostUsd }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, historicalCostUsd }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -34,6 +36,7 @@ export class AgentSession {
     this.onSessionId = onSessionId;   // (sessionId, firstMessage, model) => void，登记 sessions.json
     this.onExit = onExit;             // () => void，进程意外退出/挂死自杀时通知 server 置空
     this.onUsage = onUsage;           // () => void，assistant message（含工具调用间）更新 usage 后触发——驱动 statusline 实时刷 ctx；不进事件流、不占 seq/buffer
+    this.onBgTaskChange = onBgTaskChange; // () => void，活的后台任务集合"空↔非空/成员增删"时触发——驱动 server 节流重算会话列表 ⏳ 角标
 
     this.sessionId = resumeId || null;
     this.resumeId = resumeId || null;   // F4：resume 失败检测基准
@@ -85,6 +88,7 @@ export class AgentSession {
     this.lastCacheHitAt = 0;       // 最后一次 cache_read>0 的 Date.now()；statusline 据此推算 ephemeral cache 失效 deadline，每次命中滑动重置
     this.currentTask = null;      // 当前活跃的 Agent/Task 工具描述（tool_use 设，result/dispose 清）——供 statusline 显示
     this.lastToolName = null;     // 最后使用的工具名（Bash/Agent/Write 等），供后台 tab 角标细化
+    this.bgTasks = new Map();     // 活的后台任务注册表 key → { taskType, message, lastSeenAt }——task_progress upsert / 完成 or TTL 清；驱动"纯后台运行中"⏳
 
     this.queue = [];
     this.notifyInput = null;
@@ -195,6 +199,7 @@ export class AgentSession {
     clearInterval(this.idleTimer); this.idleTimer = null;
     this.pendingTurns = 0;
     this.pendingAutoTurn = false; // 实例结束不留滞留 flag，防重开实例后残留状态误合成
+    this.bgTasks.clear();         // 实例结束清空活后台注册表，防残留误亮 ⏳
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
     // F2：清理挂起的 AskUserQuestion（直接 resolve，不走 resolveQuestion 避免重复逻辑）
     for (const [toolUseID, pending] of this.pendingQuestions) {
@@ -446,6 +451,9 @@ export class AgentSession {
 
   // ---- 静默看护（4c）：等审批不计时；活动静默超限判挂死 ----
   checkIdle() {
+    // 后台任务 TTL 清扫须在下方 pendingTurns===0 提前返回之前——后台任务运行时 pendingTurns 正是 0，
+    // 放 return 之后就永远清不到（漏收完成信号的任务会把 ⏳ 永挂）。清出变化即回调重算角标。
+    if (this.sweepBgTasks()) this.onBgTaskChange?.();
     if (this.pendingTurns === 0) return;
     if (this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0) {
       this.lastActivity = Date.now();
@@ -459,6 +467,45 @@ export class AgentSession {
       this.terminating = true;
       try { this.abort?.abort(); } catch { /* noop */ }
     }
+  }
+
+  // ---- 活的后台任务注册表（Workflow / 后台 Agent / 后台 Bash）----
+  // SDK 对每个 running 后台任务周期性推 task_progress 心跳（实测 ~5-10s/次）→ upsert 刷新 lastSeenAt；
+  // 完成走 system task_notification / <task-notification> user 注入 → bgTaskDone。实测（生产日志）完成信号可靠带 task_id、
+  // 且与心跳 id 一致（含 workflow 用自身启动 id 报进度与完成）→ 精确删是主力清除。TTL(sweepBgTasks) 为兜底：清「未及心跳
+  // 就完成的快任务」（其完成 id 不在表→bgTaskDone 天然 no-op）与漏收的完成信号。size 变化才回调 onBgTaskChange（稳态同 id 心跳只刷时间戳、不广播——节流关键）。
+  bgTaskUpsert(taskId, taskType, message) {
+    const key = taskId ?? `__notask_${taskType ?? 'x'}`; // taskId 缺失用稳定合成键，避免 null 键互相覆盖多任务
+    const prev = this.bgTasks.get(key);
+    const type = taskType ?? null;
+    this.bgTasks.set(key, { taskType: type, message: message ?? '', lastSeenAt: Date.now() });
+    // 新任务 或 taskType 变化才回调重算角标（稳态同 id 同 type 心跳只刷 message/lastSeenAt、不广播——节流关键）。
+    // taskType 变化也回调：同一任务首条无 subagent_type（→null→⏳）、后续带（→local_agent→🤖）时会话列表图标需随之刷新。
+    if (!prev || prev.taskType !== type) this.onBgTaskChange?.();
+  }
+  bgTaskDone(taskId) {
+    const had = this.bgTasks.size;
+    // 实测：完成信号可靠带 task_id（system task_notification 41/41 + user 注入 <task-id>），且 workflow/agent 的完成 id
+    // 与心跳 id 一致 → 精确删。关键：未及心跳就完成的快任务（实测 bedkhlnbd：progress=0/notification=1）其 id 不在表内，
+    // delete 自然 no-op——【绝不能】"id 不在表就整清"，否则每个快任务完成都误清其他仍在跑者的 ⏳（频繁闪断）。孤儿由 TTL 兜底。
+    // 用 `!= null` 而非真值判断：空串 '' 是畸形/空 <task-id> 标签，delete('') 天然 no-op 不误清；仅真 null/undefined 才整清。
+    if (taskId != null) this.bgTasks.delete(taskId);
+    else this.bgTasks.clear(); // 仅 null/undefined（真无 id 注入）才整清兜底：仍在跑者下拍心跳（≤~10s）即复亮，比 180s TTL 收敛快
+    if (this.bgTasks.size !== had) this.onBgTaskChange?.();
+  }
+  sweepBgTasks() { // 惰性 TTL：超 BG_TASK_TTL_MS 无心跳即判失效清除。由 checkIdle 的 30s tick 驱动，返回是否清出过
+    if (this.bgTasks.size === 0) return false;
+    const now = Date.now();
+    let removed = false;
+    for (const [k, t] of this.bgTasks) if (now - t.lastSeenAt > BG_TASK_TTL_MS) { this.bgTasks.delete(k); removed = true; }
+    return removed;
+  }
+  hasBgTasks() { return this.bgTasks.size > 0; }
+  bgTaskSummary() { // 取 lastSeenAt 最新一条 + 总数：server 据 taskType 映射 activeTool 图标（🤖/🖥），横幅显 message
+    if (this.bgTasks.size === 0) return null;
+    let latest = null;
+    for (const t of this.bgTasks.values()) if (!latest || t.lastSeenAt >= latest.lastSeenAt) latest = t; // >= ：lastSeenAt 平局（同毫秒）取后迭代者，确定性
+    return { taskType: latest.taskType, message: latest.message, count: this.bgTasks.size };
   }
 
   _flushText() {
@@ -499,6 +546,7 @@ export class AgentSession {
     this.denyKinds.clear(); // 防 dispose 后残留（实例即弃，无 tool_result 来消费）
     this.currentTask = null;
     this.lastToolName = null;
+    this.bgTasks.clear(); // dispose 清空活后台注册表
     try { this.abort?.abort(); } catch { /* noop */ }
   }
 
@@ -560,6 +608,7 @@ export class AgentSession {
             this.lastCacheHitAt = 0;       // 倒计时起点随之清零，避免旧会话 deadline 串到新会话
             this.currentTask = null;       // 切换会话清任务名，旧任务不残留
             this.lastToolName = null;      // 切换会话清工具名
+            this.bgTasks.clear();          // 换会话清空活后台注册表（旧会话后台任务不串到新会话）
           }
           this.sessionId = msg.session_id;
           // 权限档以 SDK init 上报的 msg.permissionMode 为权威「实际生效档」——这是唯一能证明
@@ -605,16 +654,23 @@ export class AgentSession {
             toolUseId: msg.tool_use_id ?? null,
             outputFile: msg.output_file || null
           });
+          this.bgTaskDone(msg.task_id ?? msg.taskId ?? null); // 完成：从活后台注册表清除（id 不匹配/缺失则整清，见 bgTaskDone）
         } else if (msg.subtype === 'task_progress') {
           // 后台任务「进行中」的周期性进度心跳（SDK 对每个 running 任务持续推送，高频）。
           // 瞬时广播给前端原地刷新进度横幅——走 emitTransient 而非 emit：不进 replay buffer、不占 seq
           // （高频，进 buffer 会挤爆环形缓冲 / seq 空洞误判 gap）；不武装 pendingAutoTurn（进度不启汇报轮，
           // 完成信号仍走上面的 task_notification）；更不落下面的 else 记「未映射」。
-          this.emitTransient('task_progress', {
-            taskId: msg.task_id ?? null,
-            taskType: msg.task_type ?? null,
-            message: truncate(stringify(msg.message), TOOL_SUMMARY_CAP)
-          });
+          // 实测生产日志（DEBUG_SDK_MESSAGES）真实投递字段 = task_id / description / subagent_type / last_tool_name / usage，
+          // 【无 task_type、无 message】。旧代码读 msg.message → 恒 undefined → 进度横幅恒空（"看不到活动"的第二元凶）。
+          // 故文案优先真实 description（如 "Reading app.js" / "Synthesize: synthesize"，正是用户想看的"在干嘛"）；
+          // 字段名两读兼容内部/旧形状（taskId/message/task_type）防投递层版本差异。
+          const bgTaskId = msg.task_id ?? msg.taskId ?? null;
+          const bgSubagent = msg.subagent_type ?? null;
+          const bgTaskType = msg.task_type ?? msg.taskType ?? (bgSubagent ? 'local_agent' : null); // 无 task_type：有 subagent_type 即代理任务 → 🤖
+          const bgDesc = msg.description || (msg.message != null ? stringify(msg.message) : '') || msg.last_tool_name || stringify(msg.summary) || '';
+          const bgMessage = truncate(bgSubagent ? `${bgSubagent}：${bgDesc}` : bgDesc, TOOL_SUMMARY_CAP);
+          this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage); // 注册"活的后台任务"→ 驱动纯后台 busy 角标（⏳/🤖/🖥）+ 横幅进度文案
+          this.emitTransient('task_progress', { taskId: bgTaskId, taskType: bgTaskType, message: bgMessage });
         } else {
           // 未识别的 system 子类型不再静默蒸发：记入交互日志抽屉，保留可观测性（本次通知丢失的教训）
           interactionLog.addSessionLog(this.sessionId, 'sys_info', `[SYS] 未映射 system 子类型: ${msg.subtype ?? '(空)'}`);
@@ -719,6 +775,7 @@ export class AgentSession {
             toolUseId: pick('tool-use-id'),
             outputFile: pick('output-file')
           });
+          this.bgTaskDone(pick('task-id')); // 完成：从活后台注册表清除（id 缺失/不匹配则整清，见 bgTaskDone）
           break; // 注入消息不含 tool_result，独立分支返回
         }
         for (const block of asArray(msg.message?.content)) {

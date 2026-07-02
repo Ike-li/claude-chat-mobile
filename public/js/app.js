@@ -975,7 +975,8 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       finalizeStreams();
       setBusy(false);
       hideActivityBanner(); // 会话结束隐藏活动横幅
-      hideTaskProgress();   // 会话结束一并撤下后台任务进度横幅
+      // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
+      // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       haptic(p.isError ? 'error' : 'success');
       const cost = p.costUsd != null ? ` · $${p.costUsd.toFixed(4)}` : '';
@@ -1729,6 +1730,14 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     cwdSeen = true;
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
 
+    // 进度横幅可见性收敛（权威状态驱动，替代零散事件隐藏）：当前查看实例无活的后台任务（bgActive=false）即隐藏横幅——
+    // 统一覆盖「切会话到别的会话 / 后台任务 TTL 清 / 完成 / 前台轮残留」所有隐藏场景。显示仍由 onTaskProgress
+    // 逐心跳 showTaskProgress 驱动（仅当前查看实例）。修复：删 result 的 hideTaskProgress 后横幅只靠 task_notification 隐藏的缺口。
+    const viewedInst = instancesList.find(x => x.instanceId === newViewing);
+    // 严格 === false（非 falsy）：仅服务端明确「无活后台任务」或当前无查看实例（切到空会话）才隐藏；
+    // bgActive 缺失（旧服务端 / 视觉 mock 不带该字段）时保守不隐藏，保留 showTaskProgress 逐心跳驱动的原行为。
+    if (!viewedInst || viewedInst.bgActive === false) hideTaskProgress();
+
     // REDESIGN: Update active workspace text pill
     if (topProjectText) {
       topProjectText.textContent = baseName(currentCwd);
@@ -2005,6 +2014,10 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
   // ---- 后台任务进度横幅（task_progress 瞬时事件驱动，原地刷新，不刷屏）----
   function onTaskProgress(ev) {
+    // 只对正在查看的会话刷横幅：进度横幅是"当前会话在后台干嘛"的即时提示（如 workflow 阶段 "Synthesize: synthesize"）；
+    // 跨实例后台状态由会话列表 ⏳ 角标承担，不该把别的会话的后台进度串进当前视图。
+    // （仍不走 epoch 去重——避免污染 curEpoch/lastSeq；此处仅按 viewingInstanceId 过滤显示。）
+    if (ev.instanceId && ev.instanceId !== viewingInstanceId) return;
     const msg = ev.payload?.message || '';
     if (msg) showTaskProgress(msg);
   }

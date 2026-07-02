@@ -628,11 +628,13 @@ function instanceForSession(sessionId) {
 const doneInstances = new Set();
 const errorInstances = new Set(); // 后台（≠viewing）轮次 result.isError 置位的 latch（出错 ❗），清除点同 doneInstances
 const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved', 'tool_use', 'task_notification']);
+const BG_TYPE_TO_TOOL = { local_agent: 'Agent', local_bash: 'Bash' }; // 后台任务类型 → 前端 TOOL_BADGE 键（🤖 Agent / 🖥 Bash）；未知类型 → null → ⏳
 function instanceState(id) {
   const a = agents.get(id);
   if (!a) return 'idle';
   if (a.pendingPermissions.size > 0 || a.pendingQuestions.size > 0) return 'permission'; // 需审批 ⚠️
-  if (a.pendingTurns > 0) return 'busy';                                                  // 运行中 ⏳
+  if (a.pendingTurns > 0) return 'busy';                                                  // 运行中 ⏳（在途轮）
+  if (a.hasBgTasks?.()) return 'busy';                                                     // 纯后台任务运行中（Workflow/后台 Agent/Bash，pendingTurns=0）→ 同样 ⏳
   if (errorInstances.has(id)) return 'error';                                             // 后台出错 ❗
   if (doneInstances.has(id)) return 'done';                                               // 后台完成 ✅
   return 'idle';
@@ -644,8 +646,14 @@ function instancesPayload() {
     list.push({
       instanceId: id, cwd: a.cwd, sessionId: a.sessionId,
       title: sessions.getSession(a.sessionId)?.title ?? null, state,
-      // busy 时携带当前活跃工具信息，供后台 tab 角标细化（🤖 Agent / 🖥 Bash / ⏳ 其他）
-      activeTool: state === 'busy' ? (a.lastToolName || null) : null,
+      // busy 时携带当前活跃工具信息，供后台 tab 角标细化（🤖 Agent / 🖥 Bash / ⏳ 其他）。
+      // 前台轮（pendingTurns>0）优先真实 lastToolName；纯后台任务用 task_type 映射 → 前端 TOOL_BADGE 出 🤖/🖥，未知→null→⏳。
+      activeTool: state === 'busy'
+        ? (a.pendingTurns > 0 ? (a.lastToolName || null) : (BG_TYPE_TO_TOOL[a.bgTaskSummary?.()?.taskType] || null))
+        : null,
+      // 是否有活的后台任务（≠ busy：前台轮 busy 但无后台任务时为 false）——前端据此收敛进度横幅可见性：
+      // 当前查看实例 bgActive=false 即隐藏横幅，统一覆盖「切会话/TTL 清/完成/前台轮残留」所有隐藏场景（权威状态驱动，非零散事件）。
+      bgActive: a.hasBgTasks?.() || false,
       // 切 tab 面板同步：携带各实例当前档，前端 setInstances 据此静默刷新顶部 permMode/effort/model select
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || null
     });
@@ -667,6 +675,13 @@ function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 
     seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, cwd: viewingCwd, ts: Date.now(),
     type: 'instances', payload: instancesPayload()
   });
+}
+// 后台任务集合变化 → 会话列表 ⏳ 重算的 500ms 合并节流：agent 侧 onBgTaskChange 只在"空↔非空/成员增删"时回调（稳态高频心跳不触发），
+// 这里再合并同一 tick 内的多次变化（TTL 批量清 + 新任务同时到）成一次 broadcastInstances，避免重复全量广播。单飞：已排期则忽略。
+let bgBroadcastTimer = null;
+function scheduleBgBroadcast() {
+  if (bgBroadcastTimer) return;
+  bgBroadcastTimer = setTimeout(() => { bgBroadcastTimer = null; broadcastInstances(); }, 500);
 }
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']; // 5 档硬编码，漂移由 smoke-effort 的 CLI warning 检测
 // 最近一次 init payload + 按 cwd 归键的 models 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
@@ -883,6 +898,8 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
     },
     // E16：assistant 边界刷新 statusline（仅当前查看 tab；scheduleStatusRefresh 有 300ms 防抖兜频率）——ctx 不等 result/10s tick
     onUsage: () => { if (id === viewingInstanceId) scheduleStatusRefresh(); },
+    // 活后台任务集合变化 → 节流重算会话列表 ⏳（纯后台运行期 pendingTurns=0，这是唯一的 busy 触发源；scout 实例不接、不跑后台任务）
+    onBgTaskChange: () => scheduleBgBroadcast(),
     onSessionId: (sid, firstMessage, model) => {
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
       // sessionId 已在 agent.js 先于 emit('init') 赋值 → 下方 init 边界的 broadcastInstances 自然带新 sid/title。
