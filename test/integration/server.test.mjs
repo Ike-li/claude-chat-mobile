@@ -22,7 +22,9 @@ test.before(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'ccm-srv-test-'));
   serverProc = spawn('node', ['server.js'], {
     env: { ...process.env, PORT: String(PORT), AUTH_TOKEN: '', WORK_DIR: tmpDir,
-      HOME: process.env.HOME, PATH: process.env.PATH },
+      // 显式关 DEV_MODE：机主 .env 里 DEV_MODE=1(dogfooding)会被子进程 dotenv 读到,
+      // 致 dev:restart 测试真的触发重启、裸进程直接死→后续测试级联崩。钉 '0' 隔离之。
+      DEV_MODE: '0', HOME: process.env.HOME, PATH: process.env.PATH },
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd: process.cwd()
   });
