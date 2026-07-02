@@ -162,11 +162,18 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
   // 短 session_id 胶囊：显前 8 位、点按复制完整 id；无会话隐藏。便于对照 CLI /resume、日志、多设备定位同一会话。
   function updatePillSession(sid) {
-    const pill = $('pillSession'), txt = $('pillSessionText');
+    const pill = $('pillSession'), txt = $('pillSessionText'), row = $('settingsSessionRow');
     if (!pill || !txt) return;
     currentSessionIdForCopy = sid || null;
-    if (sid) { txt.textContent = sid.slice(0, 8); pill.classList.remove('hidden'); }
-    else { txt.textContent = ''; pill.classList.add('hidden'); }
+    if (sid) {
+      txt.textContent = sid.slice(0, 8);
+      pill.classList.remove('hidden');
+      if (row) row.classList.remove('hidden');
+    } else {
+      txt.textContent = '';
+      pill.classList.add('hidden');
+      if (row) row.classList.add('hidden');
+    }
   }
 
   function syncModelUI(model) {
@@ -2169,8 +2176,6 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   function openSessionPanel() {
     sessionPanel.innerHTML = '';
 
-    // 面板标题
-    sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] uppercase tracking-wide text-ink-faint border-b border-line">工作区</div>`));
     // 状态角标图例：消除「不知道 ⏳/⚠️/❗/✅ 各代表什么」——静态一行，紧跟标题
     sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] text-ink-faint border-b border-line flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span></div>`));
 
