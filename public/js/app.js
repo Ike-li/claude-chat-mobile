@@ -30,6 +30,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnSessions = $('btnSessions');
   const activeStatusPill = $('activeStatusPill'), activeStatusText = $('activeStatusText'), btnStopNew = $('btnStopNew');
   const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
+  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText');
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总小圆点
 
@@ -604,6 +605,9 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     //      你在看别的会话或落地页）；② 后台实例 epoch 不同，放它进 epoch 块会污染 curEpoch/lastSeq 基线。
     // 故独立分流：OS 通知无条件触发（跨会话有效），addBar/haptic 仅当前查看实例（否则串进别的会话视图）。
     if (ev.type === 'task_notification') { onTaskNotification(ev); return; }
+    // task_progress：后台任务进行中的瞬时进度心跳（emitTransient，transient=true、不占 seq）。同样带外分流——
+    // 绕过 shouldDropAgentEvent/epoch 去重（后台实例发、无回放价值），只原地刷新进度横幅，不进消息流。
+    if (ev.type === 'task_progress') { onTaskProgress(ev); return; }
     // 台阶3：事件按 instanceId 分流——非当前查看 tab（viewingInstanceId）的实例事件不渲染直接丢弃。
     // 角标/跨 tab 通知改由 instances 广播驱动（setInstances/notifyStateChanges），不在此重建。
     // 必须在 epoch 去重前过滤，否则后台实例事件会污染 curEpoch/lastSeq 基线。判定见 logic.js shouldDropAgentEvent：
@@ -962,6 +966,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       finalizeStreams();
       setBusy(false);
       hideActivityBanner(); // 会话结束隐藏活动横幅
+      hideTaskProgress();   // 会话结束一并撤下后台任务进度横幅
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       haptic(p.isError ? 'error' : 'success');
       const cost = p.costUsd != null ? ` · $${p.costUsd.toFixed(4)}` : '';
@@ -1951,6 +1956,20 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     if (activityBanner) activityBanner.classList.add('hidden');
   }
 
+  // ---- 后台任务进度横幅（task_progress 瞬时事件驱动，原地刷新，不刷屏）----
+  function onTaskProgress(ev) {
+    const msg = ev.payload?.message || '';
+    if (msg) showTaskProgress(msg);
+  }
+  function showTaskProgress(text) {
+    if (!taskProgressBanner || !taskProgressText) return;
+    taskProgressText.textContent = text.length > 80 ? text.slice(0, 77) + '...' : text;
+    taskProgressBanner.classList.remove('hidden');
+  }
+  function hideTaskProgress() {
+    if (taskProgressBanner) taskProgressBanner.classList.add('hidden');
+  }
+
   // ---- 抽屉式侧边栏控制器 (Left Drawer Sidebar Controllers) ----
   function openLeftSidebar() {
     if (window.innerWidth >= 1024) return; // No-op on desktop
@@ -2843,6 +2862,7 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   // source=system：任务本身完成；source=user_injection：模型开始自动汇报。两者都可能到达，OS tag 'ccm' 合并同题通知。
   function onTaskNotification(ev) {
     const p = ev.payload || {};
+    hideTaskProgress(); // 该后台任务已完成/失败，撤下进度横幅（若还有别的 running 任务，下条 task_progress 即刻再显）
     const failed = p.status === 'failed' || p.status === 'error';
     notify(failed ? '🔔 后台任务失败' : '🔔 后台任务完成', (p.summary || 'Claude 即将汇报结果').slice(0, 80));
     if (ev.instanceId === viewingInstanceId) { // 仅当前查看会话进消息流 + 触觉

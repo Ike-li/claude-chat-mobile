@@ -464,6 +464,34 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
         });
 
+      } else if (cmd === 'test:taskprogress') {
+        // 后台任务进度横幅：SDK 对 running 后台任务周期性推送 task_progress（真实 server 走 emitTransient，
+        // transient=true、不进 buffer / 不占 seq）。前端应【原地刷新】同一条横幅（覆盖、不追加），
+        // 完成通知(task_notification)后撤下。此处复刻该心跳序列。
+        console.log('[mock] test:taskprogress — 推送后台任务进度心跳序列 + 完成通知');
+        activeInst.state = 'busy';
+        const progressSteps = ['步骤 1/3：读取源文件…', '步骤 2/3：合并重复逻辑…', '步骤 3/3：运行测试验证…'];
+        for (const message of progressSteps) {
+          await delay(600);
+          io.emit('agent:event', {
+            seq: 50, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'task_progress', transient: true, payload: { taskId: 'bg_task_1', taskType: 'local_agent', message }
+          });
+        }
+        await delay(600);
+        // 完成通知（带外）：前端 onTaskNotification → hideTaskProgress 撤下横幅
+        io.emit('agent:event', {
+          seq: 51, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'task_notification', payload: { source: 'system', taskId: 'bg_task_1', status: 'completed', summary: '后台任务已完成' }
+        });
+        await delay(150);
+        activeInst.state = 'idle';
+        // 结束本轮：撤下乐观 busy（activeStatusPill 隐藏 → runner waitIdle 返回）
+        socket.emit('agent:event', {
+          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_bgtask', durationMs: 2000, costUsd: 0.001, isError: false, models: [activeModel] }
+        });
+
       } else if (cmd === 'test:tool') {
         console.log('[mock] Starting test:tool sequence');
         activeInst.state = 'busy';

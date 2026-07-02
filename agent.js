@@ -522,6 +522,23 @@ export class AgentSession {
     this.onEvent(envelope);
   }
 
+  // 瞬时事件旁路：广播给前端做即时 UI 更新，但【不进 replay buffer、不递增 seq】。
+  // 用于后台任务进度这类高频心跳——进 buffer 会挤爆环形缓冲、占 seq 会制造空洞被 eventsSince 误判为 gap。
+  // 语义：重连不重放（进度是瞬时的、旧进度无回放价值；前端按 transient 标志带外分流、不更新 lastSeq）。
+  emitTransient(type, payload) {
+    this.onEvent({
+      seq: this.seq,            // 复用当前值、不递增：不占序列
+      epoch: this.epoch,
+      sessionId: this.sessionId,
+      instanceId: this.instanceId,
+      cwd: this.cwd,
+      ts: Date.now(),
+      type,
+      payload,
+      transient: true
+    });
+  }
+
   eventsSince(lastSeq) {
     const events = this.buffer.filter(e => e.seq > lastSeq);
     const oldest = this.buffer.length ? this.buffer[0].seq : this.seq + 1;
@@ -587,6 +604,16 @@ export class AgentSession {
             summary: truncate(stringify(msg.summary), TOOL_SUMMARY_CAP),
             toolUseId: msg.tool_use_id ?? null,
             outputFile: msg.output_file || null
+          });
+        } else if (msg.subtype === 'task_progress') {
+          // 后台任务「进行中」的周期性进度心跳（SDK 对每个 running 任务持续推送，高频）。
+          // 瞬时广播给前端原地刷新进度横幅——走 emitTransient 而非 emit：不进 replay buffer、不占 seq
+          // （高频，进 buffer 会挤爆环形缓冲 / seq 空洞误判 gap）；不武装 pendingAutoTurn（进度不启汇报轮，
+          // 完成信号仍走上面的 task_notification）；更不落下面的 else 记「未映射」。
+          this.emitTransient('task_progress', {
+            taskId: msg.task_id ?? null,
+            taskType: msg.task_type ?? null,
+            message: truncate(stringify(msg.message), TOOL_SUMMARY_CAP)
           });
         } else {
           // 未识别的 system 子类型不再静默蒸发：记入交互日志抽屉，保留可观测性（本次通知丢失的教训）

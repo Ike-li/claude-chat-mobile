@@ -537,6 +537,24 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     s.dispose();
   });
 
+  test('system/task_progress → 瞬时广播进度事件（transient，不进 replay buffer）、不记未映射、不武装汇报轮', () => {
+    const { s, events } = makeSession({ resumeId: 'sess-prog' });
+    const bufBefore = s.buffer.length;
+    // SDK 对每个 running 后台任务周期性推送的进度心跳；高频——须走 emitTransient 旁路，
+    // 否则进 buffer 挤爆环形缓冲、占 seq 制造空洞误判 gap
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 't1', task_type: 'local_agent', message: '正在跑测试…' });
+    const prog = events.find(e => e.type === 'task_progress');
+    assert.ok(prog, '应 emit task_progress 供前端原地刷新进度横幅');
+    assert.equal(prog.transient, true, '瞬时事件：前端据此带外分流、不占 seq / 不更新 lastSeq');
+    assert.equal(prog.payload.message, '正在跑测试…');
+    assert.equal(prog.payload.taskId, 't1');
+    assert.equal(s.buffer.length, bufBefore, '瞬时事件不进 replay buffer（防高频进度挤爆环形缓冲）');
+    const logs = getSessionLogs('sess-prog');
+    assert.ok(!logs.some(l => l.text.includes('未映射')), 'task_progress 不该被记为未映射子类型');
+    assert.equal(s.pendingAutoTurn, false, '进度不触发汇报轮（区别于 task_notification 完成通知）');
+    s.dispose();
+  });
+
   // ---- pendingAutoTurn 复位 + TTL 门（防 sticky flag 卡死会话）----
   test('interrupt() 复位 pendingAutoTurn（用户显式停止，无自动汇报可期）', async () => {
     const { s } = makeSession();

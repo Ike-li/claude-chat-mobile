@@ -1132,6 +1132,38 @@ async function run() {
     await waitIdle();
     console.log('✅ TC-15: ExitPlanMode 批准 → 权限档图标更新 passed\n');
 
+    // ==================================================================
+    // TC-16: 后台任务进度横幅（task_progress 原地刷新 + 完成撤下）
+    // ==================================================================
+    console.log('👉 Running TC-16: 后台任务进度横幅（task_progress）...');
+    await page.reload({ waitUntil: 'networkidle2' });
+    await page.waitForSelector('#input');
+    await sleep(500);
+    await sendCommand('test:taskprogress'); // 发送即乐观 busy（sendCommand 内等 activeStatusPill 出现）
+    // 1. 进度横幅出现 + 首条进度文本
+    await page.waitForSelector('#taskProgressBanner:not(.hidden)', { timeout: 5000 });
+    const firstProgressTC16 = await page.evaluate(() => document.getElementById('taskProgressText').textContent);
+    console.log(`   [Assert] 首条进度: "${firstProgressTC16}"`);
+    assert.ok(firstProgressTC16.includes('步骤'), 'TC-16: 进度横幅应显示后台任务进度文本');
+    // 2. 越过第 2、3 条心跳（mock 每 600ms 一条）→ 断言【原地刷新】：同一元素文本更新为最新、未追加拼接、横幅始终仅一条
+    await sleep(1400);
+    const [lastProgressTC16, bannerCountTC16] = await page.evaluate(() => [
+      document.getElementById('taskProgressText').textContent,
+      document.querySelectorAll('#taskProgressBanner').length
+    ]);
+    console.log(`   [Assert] 末条进度: "${lastProgressTC16}" · 横幅数量: ${bannerCountTC16}`);
+    assert.ok(lastProgressTC16.includes('步骤 3/3'), 'TC-16: 进度应原地刷新为最新一条');
+    assert.ok(!lastProgressTC16.includes('步骤 1/3'), 'TC-16: 原地刷新应覆盖旧文本，不追加拼接');
+    assert.strictEqual(bannerCountTC16, 1, 'TC-16: 进度横幅应始终只有一条（原地刷新，不堆叠）');
+    await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc16_task_progress.png` });
+    console.log('📸 Captured and saved tc16_task_progress.png');
+    // 3. 完成通知(task_notification)后进度横幅撤下
+    await page.waitForSelector('#taskProgressBanner.hidden', { timeout: 5000 });
+    const bannerHiddenTC16 = await page.evaluate(() => document.getElementById('taskProgressBanner').classList.contains('hidden'));
+    assert.strictEqual(bannerHiddenTC16, true, 'TC-16: 后台任务完成通知后进度横幅应撤下');
+    await waitIdle();
+    console.log('✅ TC-16: 后台任务进度横幅（task_progress）passed\n');
+
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');
     console.log('==================================================================\n');

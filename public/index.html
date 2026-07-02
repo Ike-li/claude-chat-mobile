@@ -823,6 +823,15 @@
         </div>
       </div>
 
+      <!-- 后台任务进度横幅（task_progress 瞬时事件驱动、原地刷新；琥珀色区别于上方 accent 色的当前会话子agent活动）-->
+      <div id="taskProgressBanner" class="hidden px-3 py-2 bg-surface border border-warning/40 rounded-xl text-xs text-warning mb-1 shrink-0">
+        <div class="flex items-center gap-2">
+          <span class="animate-spin text-sm">⚙</span>
+          <span class="shrink-0 font-semibold">后台任务</span>
+          <span id="taskProgressText" class="font-medium truncate"></span>
+        </div>
+      </div>
+
       <!-- Unified Premium Input Pill Container -->
       <div class="chat-input-pill flex flex-col gap-1 p-2 bg-surface shadow-md border border-line">
         <!-- E6: Active Status Indicator / Interrupt Panel（并入输入框内部顶部条，合理利用空间、不再单独占位）-->
