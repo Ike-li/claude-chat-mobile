@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, modelEntryFor, effortLevelsFor, aggregateStates, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance } from '../public/js/logic.js';
+import { esc, modelEntryFor, effortLevelsFor, aggregateStates, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, generateSuggestions } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test('esc: 转义 HTML 元字符', () => {
@@ -342,5 +342,45 @@ test.describe('logEntryVisibleForInstance：交互日志按实例分流（切工
   test('空 entry → false（不渲染）', () => {
     assert.equal(logEntryVisibleForInstance(null, 'A'), false);
     assert.equal(logEntryVisibleForInstance(undefined, null), false);
+  });
+});
+
+test.describe('generateSuggestions：依上条助手消息推荐后续快捷词（中英关键词 + 通用兜底）', () => {
+  test('空/无文本 → 空数组（不渲染任何 chip）', () => {
+    assert.deepEqual(generateSuggestions(''), []);
+    assert.deepEqual(generateSuggestions(null), []);
+    assert.deepEqual(generateSuggestions(undefined), []);
+  });
+
+  test('英文关键词命中：CI/pipeline → 收工建议', () => {
+    assert.ok(generateSuggestions('The CI pipeline is green').includes('确认 CI 绿了就收工'));
+  });
+
+  test('中文回复也能命中（修「英文-only 致中文回复永不触发」的 bug）', () => {
+    // 本 UI 里 Claude 用中文回复，规则必须匹配中文关键词，否则永远只落通用兜底
+    assert.ok(generateSuggestions('所有测试都通过了').includes('运行测试验证一下'));
+    assert.ok(generateSuggestions('已经提交到仓库了').includes('把修改提交到 git'));
+    assert.ok(generateSuggestions('构建时报错了').includes('帮我修复这个错误'));
+  });
+
+  test('unit / 单元测试 → 追加「写个单测」建议', () => {
+    assert.ok(generateSuggestions('加个 unit test 吧').includes('帮我写个单测'));
+    assert.ok(generateSuggestions('补一下单元测试').includes('帮我写个单测'));
+  });
+
+  test('无关键词的非空文本 → 落通用兜底（恒 3 条、首条为「继续」）', () => {
+    const s = generateSuggestions('今天天气不错');
+    assert.equal(s.length, 3);
+    assert.equal(s[0], '继续');
+  });
+
+  test('多规则命中 → 去重且封顶 3 条', () => {
+    const s = generateSuggestions('测试失败了，git 提交前先跑 lint 和 doctor 自检，再修下 bug');
+    assert.equal(s.length, 3);
+    assert.equal(new Set(s).size, s.length); // 无重复
+  });
+
+  test('「ci」按词边界匹配 → decision/efficiency 之类不误触发 CI 建议', () => {
+    assert.ok(!generateSuggestions('这个 decision 提升了 efficiency').includes('确认 CI 绿了就收工'));
   });
 });
