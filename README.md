@@ -4,7 +4,7 @@
 
 **English** · [中文](README.zh-CN.md)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#quick-start)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
@@ -167,7 +167,9 @@ Runtime dependencies: `@anthropic-ai/claude-agent-sdk`, `express`, `socket.io`, 
 
 ## License
 
-[MIT](LICENSE) © 2026 Ike-li
+[GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li, with additional terms under Section 7 — see [NOTICE](NOTICE).
+
+In short: you are free to use, study, modify, and self-host this software. But if you run a modified version as a network service, the AGPL requires you to release your source under the AGPL as well, and the additional terms require you to preserve the original author attribution and not misrepresent the project's origin. For any use that cannot meet these conditions, please open an issue to discuss.
 
 ## Friend Links
 

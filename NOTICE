@@ -1,0 +1,55 @@
+Claude Chat Mobile
+Copyright (C) 2026 Ike-li
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License, version 3, as published by
+the Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License along
+with this program (see the LICENSE file). If not, see
+<https://www.gnu.org/licenses/>.
+
+================================================================================
+ADDITIONAL TERMS (GNU AGPL-3.0, Section 7)
+================================================================================
+
+As permitted by Section 7 of the GNU Affero General Public License, version 3,
+the following additional terms apply to this program and to every modified
+version of it that you convey or make available to users, including making it
+available over a network:
+
+  (a) Attribution preservation (Section 7(b)).
+      You must preserve the copyright notice above and the author attribution
+      "Claude Chat Mobile by Ike-li", together with a hyperlink to the original
+      project at https://github.com/Ike-li/claude-chat-mobile, in the program's
+      documentation. Where the program displays author, copyright, credits, or
+      an "About" notice to users, you must also retain that attribution there.
+      You may add your own attribution, but you may not remove or obscure this
+      one.
+
+  (b) Misrepresentation of origin (Section 7(c)).
+      You may not misrepresent the origin of this program. You may not state or
+      imply that a modified version is the original, or that your version is
+      produced by, endorsed by, or affiliated with the original author.
+
+These are additional terms expressly authorized by Section 7 (subsections (b)
+and (c)) of the GNU Affero General Public License. They are NOT "further
+restrictions" within the meaning of Section 7, and they travel with the program:
+if you redistribute this program or a modified version, you may not remove them.
+If any one additional term is held unenforceable, the remainder of the License
+and the other additional terms remain in full effect.
+
+================================================================================
+TRADEMARK NOTICE
+================================================================================
+
+"Claude" and "Anthropic" are trademarks of Anthropic PBC. This project is an
+independent tool that drives the user's own locally installed `claude` CLI; it
+is not affiliated with, endorsed by, or sponsored by Anthropic. Nothing in the
+license grants any rights to use Anthropic's trademarks. Any use of the `claude`
+CLI or Anthropic's APIs through this program remains subject to Anthropic's own
+terms of service.

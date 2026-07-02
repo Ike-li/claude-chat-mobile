@@ -4,7 +4,7 @@
 
 [English](README.md) · **中文**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
@@ -169,7 +169,9 @@ graph LR
 
 ## 许可证
 
-[MIT](LICENSE) © 2026 Ike-li
+[GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li，附带 Section 7 补充条款——见 [NOTICE](NOTICE)。
+
+简单说：你可以自由使用、研究、修改并自托管本软件。但如果你把修改后的版本作为网络服务对外提供，AGPL 要求你同样以 AGPL 开源你的源代码；补充条款还要求你保留原作者署名、不得歪曲项目来源。若有无法满足上述条件的使用需求，请开 issue 沟通。
 
 ## 友链
 
