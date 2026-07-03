@@ -166,3 +166,14 @@ export function logEntryVisibleForInstance(entry, instanceId) {
   if (entry.type === 'client_conn') return true;
   return (entry.instanceId ?? null) === (instanceId ?? null);
 }
+
+// 模型网格「默认磁贴」（data-model=""）文案决策。currentModel 非空=已选/已知具体模型 → 磁贴非激活、显通用文案。
+// currentModel 为空且已知 cwd 默认 → 显真实默认名（诚实：cwd 级最佳猜测、非该会话确定值；续接无记录会话真实
+// 模型可能不同，首条消息后由 init.model 校正）。仅改文案，不影响发送（modelInput.value 恒空、不传 --model）。
+export function defaultModelTileLabel({ currentModel, cwdDefaultModel } = {}) {
+  if (!currentModel && cwdDefaultModel) {
+    const naked = String(cwdDefaultModel).replace(/\[[^\]]+\]$/, '');
+    return { title: '默认模型', subtitle: naked, showsName: true };
+  }
+  return { title: '沿用当前模型', subtitle: '不指定特定模型', showsName: false };
+}

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -154,6 +154,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   let lastSeq = 0;
   let curEpoch = null;
   let currentModel = '';                // 当前生效模型（init 事件的 model 字段），/model 无参时展示
+  let cwdDefaultModel = '';             // 当前 cwd 的 CLI 默认模型（instances.defaultModel，服务端 scout 探得）：
+                                        // currentModel 空时默认磁贴显它而非笼统「沿用当前」；只影响标签、不影响发送
   let currentGatewaySuffix = '';        // 保存第三方网关的特殊后缀（如 [1m]）进行无感适配，保持 Web 选项名称干净
   let activeSpeechBtn = null;           // 语音朗读当前播放的按钮
   let currentSessionIdForCopy = null;   // 当前查看会话完整 id（供 pillSession 点按复制）
@@ -175,9 +177,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   }
 
   function syncModelUI(model) {
-    // 底栏模型 chip：显完整真名（含网关后缀 [1m]，与 statusLine/实际发送名一致）；未选则显「默认」=
-    // 发送时不带 model、用 CLI 启动默认（非猜——显的是你的显式选择或诚实的「默认」）。点击开「选择模型」格。
-    if (pillModelText) pillModelText.textContent = model ? model + currentGatewaySuffix : '默认';
+    // 底栏模型 chip：显完整真名（含网关后缀 [1m]，与 statusLine/实际发送名一致）；未选则显「默认」——
+    // 已知 cwd 默认模型时显「默认 · <真名>」（scout 探得的实测值，非猜；发送仍不带 model）。点击开「选择模型」格。
+    if (pillModelText) pillModelText.textContent = model ? model + currentGatewaySuffix
+      : (cwdDefaultModel ? '默认 · ' + cwdDefaultModel.replace(/\[[^\]]+\]$/, '') : '默认');
     if (customModelGrid) {
       customModelGrid.querySelectorAll('.model-tile').forEach(tile => {
         const tileVal = tile.dataset.model;
@@ -204,12 +207,14 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (!customModelGrid) return;
     customModelGrid.innerHTML = '';
     
-    // 默认首选项：不指定（沿用当前）
+    // 默认首选项：不指定（沿用当前）。currentModel 空且已知 cwd 默认 → 标签显真实默认名（仅文案；data-model 仍空、
+    // onclick 仍归零 modelInput → 发送不带 --model，零 F1 风险）。文案决策在 logic.js 纯函数、有单测。
     const defActive = !currentModel;
+    const defLabel = defaultModelTileLabel({ currentModel, cwdDefaultModel });
     const defCard = el(`
       <div data-model="" class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${defActive ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
-        <div class="text-xs font-semibold truncate ${defActive ? 'text-accent' : 'text-ink'}">沿用当前模型</div>
-        <div class="text-[9.5px] text-ink-soft truncate mt-0.5">不指定特定模型</div>
+        <div class="text-xs font-semibold truncate ${defActive ? 'text-accent' : 'text-ink'}">${esc(defLabel.title)}</div>
+        <div class="text-[9.5px] text-ink-soft truncate mt-0.5">${esc(defLabel.subtitle)}</div>
       </div>
     `);
     defCard.onclick = () => {
@@ -1717,6 +1722,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     availableDirs = Array.isArray(p?.dirs) ? p.dirs : [];
     const prevInstances = instancesList;
     instancesList = Array.isArray(p?.instances) ? p.instances : [];
+    // cwd 默认模型：捕获旧值 + currentModel（下方 adoptPanelState 会改 currentModel），末尾据此决定是否重建默认磁贴标签。
+    // 非 string（含 null=未探到）归一空 → 切到无默认的 cwd 自动清、不残留上区默认。
+    const prevDefaultModel = cwdDefaultModel, prevCurrentModel = currentModel;
+    cwdDefaultModel = (typeof p?.defaultModel === 'string') ? p.defaultModel : '';
     // 实例集变化时清除会话缓存，防止关闭的会话以幽灵数据残留
     const prevIds = new Set(prevInstances.map(x => x.instanceId));
     const currIds = new Set(instancesList.map(x => x.instanceId));
@@ -1809,6 +1818,15 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     } else {
       refreshDirBadges();
       refreshInstanceBadges();
+    }
+    // 默认磁贴标签依赖 currentModel(空/非空) + cwdDefaultModel，二者本次都可能变（adoptPanelState 改 currentModel、
+    // scout 完成的同视图广播改 cwdDefaultModel）。用纯函数比对前后标签，仅真变时重建网格刷新——adoptPanelState 只
+    // 切高亮不重建，故此处兜底；无变化不重建（省性能）。
+    const prevLbl = defaultModelTileLabel({ currentModel: prevCurrentModel, cwdDefaultModel: prevDefaultModel });
+    const curLbl = defaultModelTileLabel({ currentModel, cwdDefaultModel });
+    if (prevLbl.title !== curLbl.title || prevLbl.subtitle !== curLbl.subtitle) {
+      rebuildCustomModelGrid(modelsList); // 磁贴标签
+      syncModelUI(currentModel);          // 底栏 chip「默认 · <真名>」（rebuild 不碰 chip）
     }
   }
 

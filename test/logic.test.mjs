@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance } from '../public/js/logic.js';
+import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test('esc: 转义 HTML 元字符', () => {
@@ -361,5 +361,32 @@ test.describe('logEntryVisibleForInstance：交互日志按实例分流（切工
   test('空 entry → false（不渲染）', () => {
     assert.equal(logEntryVisibleForInstance(null, 'A'), false);
     assert.equal(logEntryVisibleForInstance(undefined, null), false);
+  });
+});
+
+// defaultModelTileLabel：模型网格里「默认磁贴」（data-model=""）显示什么文案。
+// currentModel 有值=用户已选/已知具体模型 → 显通用文案（该磁贴非激活）。
+// currentModel 空 + 已知 cwd 默认 → 显真实默认名（诚实：cwd 级最佳猜测，非该会话确定值；续接无记录会话
+// 首条消息后由 init.model 校正）。发送语义不受此影响（modelInput.value 恒空、不传 --model）。
+test.describe('defaultModelTileLabel: 默认磁贴文案', () => {
+  test('currentModel 有值 → 通用文案（无视 cwdDefaultModel）', () => {
+    assert.deepEqual(defaultModelTileLabel({ currentModel: 'opus', cwdDefaultModel: 'sonnet' }),
+      { title: '沿用当前模型', subtitle: '不指定特定模型', showsName: false });
+  });
+  test('currentModel 空 + cwdDefaultModel 有 → 显真实默认名、showsName:true', () => {
+    assert.deepEqual(defaultModelTileLabel({ currentModel: '', cwdDefaultModel: 'sonnet' }),
+      { title: '默认模型', subtitle: 'sonnet', showsName: true });
+  });
+  test('后缀剥离：claude-opus-4-8[1m] → claude-opus-4-8', () => {
+    assert.equal(defaultModelTileLabel({ currentModel: '', cwdDefaultModel: 'claude-opus-4-8[1m]' }).subtitle,
+      'claude-opus-4-8');
+  });
+  test('两者皆空 → 通用文案（兜底，不泄漏）', () => {
+    assert.deepEqual(defaultModelTileLabel({ currentModel: '', cwdDefaultModel: '' }),
+      { title: '沿用当前模型', subtitle: '不指定特定模型', showsName: false });
+  });
+  test('null/undefined 入参安全 → 通用文案，不抛', () => {
+    assert.equal(defaultModelTileLabel({}).showsName, false);
+    assert.equal(defaultModelTileLabel().showsName, false);
   });
 });

@@ -3,7 +3,7 @@
 // 「切工作区后新会话冒出上个工作区 deepseek 模型」bug 的正解。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createModelsCache } from '../models-cache.js';
+import { createModelsCache, isCwdDefaultModel } from '../models-cache.js';
 
 const DS = { models: [{ value: 'opus', displayName: 'deepseek-v4-pro[1m]' }] };
 const REAL = { models: [{ value: 'opus', displayName: 'Claude Opus 4.8' }] };
@@ -60,5 +60,32 @@ test.describe('models-cache：按 cwd 归键、不跨工作区泄漏', () => {
     c.load(null); c.load(undefined); c.load([1, 2, 3]); c.load('garbage');
     c.load({ models: [] }); // 旧 c.models 单全局格式（无 cwd 键）——values 是 payload 但 key 不是真 cwd
     assert.ok(c.get('/ws/a') === null); // 不会把旧格式误当某 cwd 的清单泄漏给真实 cwd
+  });
+});
+
+// isCwdDefaultModel：判断某次启动上报的 init.model 是否 = cwd 真实默认模型，可否入 defaultModelByCwd 缓存。
+// 承重不变量：只有「未 resume（resumeId==null）且未 pin model（pinnedModel===undefined）」的启动，其 init.model
+// 才等于「不带 --model 时 CLI 自选的默认」。resume-no-record 虽未 pin，但 init.model 是 CLI 从 jsonl 恢复的
+// 会话模型（可能被终端 /model 改过）≠ cwd 默认 → 必须拒，否则污染缓存。
+test.describe('isCwdDefaultModel：只采纳「fresh + 未 pin」启动的模型为 cwd 默认', () => {
+  test('scout（resumeId=null, pinned=undefined, model 有值）→ true', () => {
+    assert.equal(isCwdDefaultModel({ resumeId: null, pinnedModel: undefined, reportedModel: 'mimo-v2.5-pro[1m]' }), true);
+  });
+  test('fresh 新会话首 init（同上形状）→ true', () => {
+    assert.equal(isCwdDefaultModel({ resumeId: null, pinnedModel: undefined, reportedModel: 'opus' }), true);
+  });
+  test('resume-no-record（resumeId 有值、未 pin）→ false（防污染：init.model 是会话恢复模型非 cwd 默认）', () => {
+    assert.equal(isCwdDefaultModel({ resumeId: 'sess-abc', pinnedModel: undefined, reportedModel: 'sonnet' }), false);
+  });
+  test('resume-with-pin（resumeId + pinnedModel 都有）→ false', () => {
+    assert.equal(isCwdDefaultModel({ resumeId: 'sess-abc', pinnedModel: 'opus', reportedModel: 'opus' }), false);
+  });
+  test('fresh 但 reportedModel 空（init 未带 model）→ false（不缓存空值）', () => {
+    assert.equal(isCwdDefaultModel({ resumeId: null, pinnedModel: undefined, reportedModel: null }), false);
+    assert.equal(isCwdDefaultModel({ resumeId: null, pinnedModel: undefined, reportedModel: '' }), false);
+  });
+  test('入参缺失/空对象安全 → false，不抛', () => {
+    assert.equal(isCwdDefaultModel({}), false);
+    assert.equal(isCwdDefaultModel(), false);
   });
 });

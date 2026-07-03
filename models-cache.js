@@ -36,3 +36,12 @@ export function createModelsCache({ max = 32 } = {}) {
     get size() { return byCwd.size; }
   };
 }
+
+// 判断某次启动上报的 init.model 是否 = cwd 真实默认模型（可否入 defaultModelByCwd 缓存、供新会话预显）。
+// 只有「未 resume（resumeId==null）且未 pin model（pinnedModel===undefined）」的启动，其 init.model 才等于
+// 「不带 --model 时 CLI 自选的默认」——scout 与 fresh 新会话首 init 属此。
+// resume-no-record 虽未 pin，但 init.model 是 CLI 从 jsonl 恢复的会话模型（可能被终端 /model 改过）≠ cwd 默认 →
+// 必须拒，否则污染缓存把别的会话模型误当 cwd 默认。空 reportedModel 亦拒（不缓存空值）。
+export function isCwdDefaultModel({ resumeId, pinnedModel, reportedModel } = {}) {
+  return resumeId == null && pinnedModel === undefined && !!reportedModel;
+}
