@@ -3145,16 +3145,17 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       modelSpan.title = p.model; // 超长截断时悬停看全名
       row.appendChild(modelSpan);
     }
-    // 思考强度 / 权限档 chip（那一刻的档位）：仅当 entry 带该字段时渲染。'model-default'/'default' 视为「无显式档」省略。
-    const metaChip = (val, ignore, cls, prefix) => {
-      if (!val || val === ignore) return;
+    // 思考强度 / 权限档 chip（那一刻的档位）：只要 entry 带该字段就渲染，默认值（model-default/default）
+    // 也照显——每条数据流记录都完整列出模型 + 强度 + 权限档。字段缺失（如 sys_info 不带这俩）仍跳过、不画空 chip。
+    const metaChip = (val, cls, prefix) => {
+      if (!val) return;
       const c = document.createElement('span');
       c.className = `px-1 py-0.5 rounded text-[9px] font-bold shrink-0 ${cls}`;
       c.textContent = prefix + val;
       row.appendChild(c);
     };
-    metaChip(p.effort, 'model-default', 'bg-indigo-950/60 text-indigo-300 border border-indigo-700/40', '🧠');
-    metaChip(p.permissionMode, 'default', 'bg-amber-950/60 text-amber-300 border border-amber-700/40', '🔑');
+    metaChip(p.effort, 'bg-indigo-950/60 text-indigo-300 border border-indigo-700/40', '🧠');
+    metaChip(p.permissionMode, 'bg-amber-950/60 text-amber-300 border border-amber-700/40', '🔑');
 
     const textSpan = document.createElement('span');
     textSpan.className = `break-all whitespace-pre-wrap ${textClass}`;
