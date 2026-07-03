@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, generateSuggestions } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -32,8 +32,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText');
   const sessionPanel = $('sessionPanel');
-  const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总小圆点
-  const suggestedPromptsRow = $('suggestedPromptsRow');
+  const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
 
   // ---- 极简触觉交互及抽屉式元素 DOM 绑定 ----
   const sidebarScrim = $('sidebarScrim'), leftSidebar = $('leftSidebar'), sidebarClose = $('sidebarClose');
@@ -158,7 +157,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   let currentGatewaySuffix = '';        // 保存第三方网关的特殊后缀（如 [1m]）进行无感适配，保持 Web 选项名称干净
   let activeSpeechBtn = null;           // 语音朗读当前播放的按钮
   let currentSessionIdForCopy = null;   // 当前查看会话完整 id（供 pillSession 点按复制）
-  let lastAssistantMessageText = '';    // 用于生成智能快捷建议的上一条助手消息文本
 
   // 短 session_id 胶囊：显前 8 位、点按复制完整 id；无会话隐藏。便于对照 CLI /resume、日志、多设备定位同一会话。
   function updatePillSession(sid) {
@@ -1001,10 +999,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       if (p.isError) notify('⚠️ 任务出错', (p.errors?.join('; ') || '').slice(0, 80) || `用时 ${(p.durationMs / 1000).toFixed(1)}s`);
       else notify('✅ 任务完成', `用时 ${(p.durationMs / 1000).toFixed(1)}s`);
 
-      if (!p.isError) {
-        renderSuggestedPrompts(lastAssistantMessageText);
-      }
-
       // 防御性清理当前 tab 的挂起提问和审批
       permQueue.length = 0;
       if (activePerm) {
@@ -1160,9 +1154,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         setTimeout(() => s.el.style.transition = '', 120);
       });
     }
-    if (accumulatedText) {
-      lastAssistantMessageText = accumulatedText;
-    }
     streams.clear();
     thinkings.clear();
     scrollBottom();
@@ -1262,8 +1253,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
   // ---- 发送 / 停止 ----
   function send() {
-    if (suggestedPromptsRow) suggestedPromptsRow.classList.add('hidden');
-    lastAssistantMessageText = '';
     const text = inputEl.value.trim();
     if (!text && pendingAttachments.length === 0) return; // E17：纯附件（空文本）也可发
     // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
@@ -1978,32 +1967,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
   }
 
-  // generateSuggestions 已抽到 logic.js（纯逻辑、可单测），此处只保留 DOM 渲染
-  function renderSuggestedPrompts(text) {
-    if (!suggestedPromptsRow) return;
-    suggestedPromptsRow.innerHTML = '';
-    const suggestions = generateSuggestions(text);
-    if (suggestions.length === 0) {
-      suggestedPromptsRow.classList.add('hidden');
-      return;
-    }
-    suggestions.forEach(prompt => {
-      const chip = el(`<button class="px-3 py-1.5 bg-accent-wash border border-accent/20 hover:border-accent/40 text-accent rounded-xl text-xs font-medium active:scale-95 transition-all cursor-pointer shadow-sm" title="点击填入输入框"></button>`);
-      chip.textContent = prompt;
-      chip.onclick = () => {
-        haptic('tap');
-        if (inputEl) {
-          inputEl.value = prompt;
-          inputEl.focus();
-          autosize();
-        }
-        suggestedPromptsRow.classList.add('hidden');
-      };
-      suggestedPromptsRow.appendChild(chip);
-    });
-    suggestedPromptsRow.classList.remove('hidden');
-  }
-
 
   let _busyState = false;
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
@@ -2011,7 +1974,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (!activeStatusPill || b === _busyState) return;
     _busyState = b;
     if (b) {
-      if (suggestedPromptsRow) suggestedPromptsRow.classList.add('hidden');
       activeStatusPill.classList.remove('hidden');
       activeStatusPill.offsetHeight; // 触发 CSS 过渡所需的单次强制 layout（仅在 false→true 时执行一次）
       activeStatusPill.classList.add('pill-active');
@@ -2550,8 +2512,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     questionQueue.length = 0; activeQuestion = null;
     closeSheet(questionModal);
     pendingAttachments = []; renderTray();   // E17：切换/新建清空待发送附件托盘
-    if (suggestedPromptsRow) suggestedPromptsRow.classList.add('hidden');
-    lastAssistantMessageText = '';
     setBusy(false);
 
     // Clear stale status line and hide details row to prevent latency layout flashes

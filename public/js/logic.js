@@ -166,29 +166,3 @@ export function logEntryVisibleForInstance(entry, instanceId) {
   if (entry.type === 'client_conn') return true;
   return (entry.instanceId ?? null) === (instanceId ?? null);
 }
-
-// 依据上一条助手消息的关键词，推荐 ≤3 条后续快捷提示词（chip；渲染见 app.js renderSuggestedPrompts）。
-// 纯启发式：助手输出里提到的主题 → 建议对应后续动作。本 UI 中 Claude 用中文回复，故每条规则中英
-// 关键词都要覆盖——只写英文时中文回复永远匹配不到、只会落通用兜底，功能形同虚设。命中不足 3 条用
-// 通用后续补足；去重、封顶 3。'ci' 走词边界匹配，免得 decision/efficiency 等把 ci 当子串误触发。
-export function generateSuggestions(text) {
-  if (!text) return [];
-  const lower = String(text).toLowerCase();
-  const has = (...kw) => kw.some(k => lower.includes(k));
-  const out = [];
-  const add = (s) => { if (!out.includes(s) && out.length < 3) out.push(s); };
-
-  if (/\bci\b|\bcd\b/.test(lower) || has('workflow', 'pipeline', '流水线', '工作流', '部署')) add('确认 CI 绿了就收工');
-  if (has('test', 'spec', 'pytest', 'unittest', '测试', '单测', '用例')) {
-    add('运行测试验证一下');
-    if (has('unit', '单元', '单测')) add('帮我写个单测');
-  }
-  if (has('git', 'commit', 'push', 'repo', '提交', '推送', '仓库', '分支')) add('把修改提交到 git');
-  if (has('error', 'fail', 'exception', 'bug', 'issue', 'crash', '错误', '失败', '报错', '异常', '崩溃', '出错')) add('帮我修复这个错误');
-  if (has('doctor', 'setup', 'config', 'env', 'install', '配置', '环境', '安装', '自检')) add('帮我运行 doctor 自检一下');
-  if (has('lint', 'format', 'refactor', 'cleanup', '格式化', '重构', '清理', '代码风格')) add('运行 lint 检查代码风格');
-
-  // 通用兜底：任何非空回复都至少给 3 条后续（保持原设计——每轮结束恒显 chip）
-  for (const g of ['继续', '还有什么需要优化的吗？', '运行一下看看效果']) add(g);
-  return out;
-}
