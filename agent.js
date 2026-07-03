@@ -692,6 +692,12 @@ export class AgentSession {
           const bgMessage = truncate(bgSubagent ? `${bgSubagent}：${bgDesc}` : bgDesc, TOOL_SUMMARY_CAP);
           this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage); // 注册"活的后台任务"→ 驱动纯后台 busy 角标（⏳/🤖/🖥）+ 横幅进度文案
           this.emitTransient('task_progress', { taskId: bgTaskId, taskType: bgTaskType, message: bgMessage });
+        } else if (typeof msg.subtype === 'string' && msg.subtype.startsWith('hook_')) {
+          // 新版 SDK 的 hook 生命周期事件（hook_started / hook_progress / …，后者高频）：属【已知】的
+          // 生命周期噪声，与 task_progress 同类——显式识别后静默吞掉，不落交互日志抽屉（否则连续刷屏）、
+          // 不进 buffer、不启轮、不广播。这不违背下面「不静默蒸发」的初衷：那条是给【未知】子类型兜底的，
+          // 这里是我们已认出并有意丢弃。需观察原始投递时用 DEBUG_SDK_MESSAGES=1 看 [sdk-msg] 裸流。
+          // 若日后某个 hook_* 子类型有展示价值，在此分支之上单独加 else if 处理即可。
         } else {
           // 未识别的 system 子类型不再静默蒸发：记入交互日志抽屉，保留可观测性（本次通知丢失的教训）
           interactionLog.addSessionLog(this.sessionId, 'sys_info', `[SYS] 未映射 system 子类型: ${msg.subtype ?? '(空)'}`);

@@ -559,6 +559,22 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     s.dispose();
   });
 
+  test('system/hook_* 生命周期事件 → 不记未映射、不进 buffer、不启轮（高频噪声，静默吞）', () => {
+    const { s } = makeSession({ resumeId: 'sess-hook' });
+    const bufBefore = s.buffer.length;
+    // 新版 SDK 每次 hook 运行推送 hook_started + hook_progress（后者高频）；属已知生命周期噪声，
+    // 与 task_progress 同类——须显式识别后不落交互日志抽屉（否则连续刷屏），也不进 buffer、不启汇报轮。
+    assert.doesNotThrow(() => {
+      s.map({ type: 'system', subtype: 'hook_started', hook_name: 'PreToolUse' });
+      s.map({ type: 'system', subtype: 'hook_progress', hook_name: 'PreToolUse' });
+    });
+    const logs = getSessionLogs('sess-hook');
+    assert.ok(!logs.some(l => l.text.includes('未映射')), 'hook_* 子类型不该被记为未映射（否则日志刷屏）');
+    assert.equal(s.buffer.length, bufBefore, 'hook 生命周期事件不进 replay buffer');
+    assert.equal(s.pendingAutoTurn, false, 'hook 事件不触发汇报轮');
+    s.dispose();
+  });
+
   // ---- pendingAutoTurn 复位 + TTL 门（防 sticky flag 卡死会话）----
   test('interrupt() 复位 pendingAutoTurn（用户显式停止，无自动汇报可期）', async () => {
     const { s } = makeSession();
