@@ -88,6 +88,7 @@ const mockInstances = [
 
 let pendingPermission = null;
 let pendingQuestion = null;
+let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let activeEpoch = 'mock-epoch-init';
 
 // Helper to delay executions to simulate streaming behavior
@@ -329,6 +330,9 @@ io.on('connection', socket => {
   socket.on('sync:since', (payload, callback) => {
     const { instanceId, sessionId } = payload || {};
     console.log(`[mock] sync:since received for instanceId=${instanceId}, sessionId=${sessionId}`);
+    // Bug2 状态对账：mock 侧有未决审批/提问快照时随 ack 带回（模拟真 server 的 pendingRequestsSnapshot）——
+    // 前端 applyPendingSnapshot 在视图稳定后据此重建卡片，即使原始 permission_request 事件从未回放。
+    const ack = (replayed) => { if (typeof callback === 'function') callback({ ok: true, replayed, pending: syncPendingSnapshot }); };
     if (instanceId === 'inst_2') {
       // Replay some historical message events for inst_2
       socket.emit('agent:event', {
@@ -343,17 +347,11 @@ io.on('connection', socket => {
         seq: 3, epoch: 'mock-epoch-another', sessionId: 'mock-session-another', instanceId: 'inst_2', ts: Date.now(),
         type: 'result', payload: { messageId: 'msg_another_1', durationMs: 1000, costUsd: 0.0005, isError: false, models: ['claude-3-5-haiku'] }
       });
-      if (typeof callback === 'function') {
-        callback({ ok: true, replayed: 3 });
-      }
+      ack(3);
     } else if (instanceId === 'inst_1') {
-      if (typeof callback === 'function') {
-        callback({ ok: true, replayed: 0 }); // Fallback to history or empty
-      }
+      ack(0); // Fallback to history or empty
     } else {
-      if (typeof callback === 'function') {
-        callback({ ok: true, replayed: 0 });
-      }
+      ack(0);
     }
   });
 
@@ -464,6 +462,16 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
         });
 
+      } else if (cmd === 'test:pendingsnapshot') {
+        // Bug2 回归：模拟"实例有未决审批，但原始 permission_request 事件已被环形缓冲 trim / 切视图分流丢失"——
+        // 前端此刻无卡片；切入该实例时 sync:since 的 ack.pending 快照应重建审批卡片。刻意【不】emit permission_request。
+        console.log('[mock] test:pendingsnapshot — 设快照但不发 permission_request，切 viewing 到 inst_2 触发 sync:since');
+        syncPendingSnapshot = { permissions: [{ requestId: 'req_snapshot', name: 'run_command', input: 'rm -rf /tmp/stale', cwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd }], questions: [] };
+        viewingInstanceId = 'inst_2';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
       } else if (cmd === 'test:taskprogress') {
         // 后台任务进度横幅：SDK 对 running 后台任务周期性推送 task_progress（真实 server 走 emitTransient，
         // transient=true、不进 buffer / 不占 seq）。前端应【原地刷新】同一条横幅（覆盖、不追加），

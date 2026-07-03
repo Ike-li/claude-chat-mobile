@@ -1596,3 +1596,47 @@ test.describe('AgentSession 缓存复用累计 + 命中时刻（reused / lastCac
     s.dispose();
   });
 });
+
+// ---- pendingRequestsSnapshot()：切入(sync:since)时重建待审批/提问卡片的权威快照 ----
+// 修「角标 ⚠️ 待审批但会话内无卡片」：原始 permission_request/question 事件可能被环形缓冲 trim
+// 或切视图时被前端分流丢弃，pendingPermissions/pendingQuestions 才是权威真相。payload 必须与
+// askPermission 的 emit('permission_request')、handleQuestion 的 emit('question') 逐字段一致。
+test.describe('pendingRequestsSnapshot()', () => {
+  test('全空 → { permissions:[], questions:[] }', () => {
+    const { s } = makeSession();
+    assert.deepEqual(s.pendingRequestsSnapshot(), { permissions: [], questions: [] });
+  });
+
+  test('permission：requestId/name/input/cwd 与 emit(permission_request) 一致', () => {
+    const { s } = makeSession({ cwd: '/tmp/proj' });
+    s.pendingPermissions.set('req_1', { name: 'Bash', input: { command: 'ls -la' }, resolve() {} });
+    const snap = s.pendingRequestsSnapshot();
+    assert.deepEqual(snap.permissions, [{ requestId: 'req_1', name: 'Bash', input: { command: 'ls -la' }, cwd: '/tmp/proj' }]);
+    assert.deepEqual(snap.questions, []);
+  });
+
+  test('question：仅补发未答项（answers[i]===null），options 归一为 label 字符串', () => {
+    const { s } = makeSession();
+    s.pendingQuestions.set('tool_1', {
+      questions: [
+        { question: 'Q0?', options: ['A', 'B'] },
+        { question: 'Q1?', options: [{ label: 'X' }, { label: 'Y' }] }, // 已答 → 不补发
+      ],
+      answers: [null, 'X'],
+      resolve() {},
+    });
+    const snap = s.pendingRequestsSnapshot();
+    assert.deepEqual(snap.questions, [{ requestId: 'tool_1#0', text: 'Q0?', options: ['A', 'B'] }]);
+    assert.deepEqual(snap.permissions, []);
+  });
+
+  test('permission + question 并存', () => {
+    const { s } = makeSession({ cwd: '/w' });
+    s.pendingPermissions.set('p1', { name: 'Write', input: { path: 'a.txt' }, resolve() {} });
+    s.pendingQuestions.set('t1', { questions: [{ question: 'pick?', options: ['one'] }], answers: [null], resolve() {} });
+    const snap = s.pendingRequestsSnapshot();
+    assert.equal(snap.permissions.length, 1);
+    assert.equal(snap.questions.length, 1);
+    assert.equal(snap.questions[0].requestId, 't1#0');
+  });
+});

@@ -359,14 +359,25 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
     showLoadingCard();
     loadHistory(displayedSessionId); // cwd 默认 currentCwd
   }
+  // 状态对账：用 sync:since ack 带回的 pending 快照重建未决审批/提问卡片。走既有 handler（自带 requestId
+  // 去重 + 弹窗/通知）。修「角标 ⚠️ 待审批但会话内无卡片」——原始事件可能被环形缓冲 trim 或切视图分流丢弃，
+  // pendingPermissions/pendingQuestions 才是权威真相。视图稳定后调用（bindView / connect 两路径）。
+  function applyPendingSnapshot(pending) {
+    if (!pending) return;
+    for (const p of pending.permissions || []) handle.permission_request(p);
+    for (const q of pending.questions || []) handle.question(q);
+  }
   function requestSync({ probe }) {
     if (!displayedInstanceId || !displayedSessionId) return;
     const payload = { instanceId: displayedInstanceId, sessionId: displayedSessionId, lastSeq };
     const act = (err, res) => {
       const a = syncAckAction(err, res);
-      if (a === 'reconnect') { if (socket.connected) socket.disconnect(); socket.connect(); }
-      else if (a === 'reload') reloadCurrentFromHistory();
+      if (a === 'reconnect') { if (socket.connected) socket.disconnect(); socket.connect(); return; }
+      if (a === 'reload') reloadCurrentFromHistory();
       // 'none'：回放走正常 agent:event 经 epoch/seq 去重增量渲染
+      // 状态对账：重连/probe 补传后用快照重建未决审批卡片（reload 的 clearView 已同步执行完、不被清）；
+      // reconnect 已 return——它触发干净重连，届时新一轮 sync 会带新快照。
+      applyPendingSnapshot(res?.pending);
     };
     if (probe) {
       if (_probeInFlight) return;       // ack 异步，防 200ms debounce 外的并发探测
@@ -928,12 +939,16 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       scrollBottom(true);
     },
     permission_request(p) {
+      // 幂等：sync:since 切入补发的 pending 快照可能与 buffer 回放的原始事件同 requestId → 只保留一份
+      if (activePerm?.requestId === p.requestId || permQueue.some(r => r.requestId === p.requestId)) return;
       haptic('warning');
       permQueue.push(p);
       showNextPerm();
       notify('⚠️ 等待审批', `${p.name}：${JSON.stringify(p.input).slice(0, 80)}`);
     },
     question(p) {
+      // 幂等：同上（快照补发 vs buffer 回放去重），按 requestId
+      if (activeQuestion?.requestId === p.requestId || questionQueue.some(q => q.requestId === p.requestId)) return;
       haptic('warning');
       questionQueue.push(p);
       showNextQuestion();
@@ -1831,6 +1846,15 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
 
     clearView(sid, null);
 
+    // 新会话首发懒开：实例已建、sessionId 未由 SDK init 返回。此刻回落 dashboard 会「闪首页」——
+    // 到首个 user_message 经 leaveStartScreen 切回聊天前的几百 ms 用户看见首页再弹回。
+    // 首发进行中（判定同 setInstances 的补 busy 守卫：_pendingFirstSend 且绑定到无 sessionId 的新建实例）
+    // → 保持空聊天区 + 乐观 busy（setInstances 随后 shouldRestoreOptimisticBusy 补回 setBusy），
+    // 不 showDashboard；等首个事件经 appendMessage 接管渲染。
+    if (shouldRestoreOptimisticBusy({ pendingFirstSend: _pendingFirstSend, viewingInstanceId: id, sessionId: sid })) {
+      return;
+    }
+
     if (shouldShowStartScreen({ viewingInstanceId: id, sessionId: sid })) {
       showDashboard();
       return;
@@ -1868,6 +1892,9 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       } else {
         hideLoadingCard();
       }
+      // 状态对账：视图已稳定（上面所有 clearView 已执行完）→ 用 ack 带回的快照重建未决审批/提问卡片。
+      // 放最后而非提前 socket.emit，正为不被 gap 分支的 clearView 清掉（workflow 高频事件常触发 gap）。
+      applyPendingSnapshot(res?.pending);
     });
   }
 

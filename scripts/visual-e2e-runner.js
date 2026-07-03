@@ -1077,8 +1077,9 @@ async function run() {
 
     // ==================================================================
     // TC-14: 新会话首发的乐观 busy 不被懒开广播冲掉（回归 shouldRestoreOptimisticBusy）
+    //        + 懒开后（sessionId 未到）不得闪回首页 dashboard（回归 bindView 首发守卫）
     // ==================================================================
-    console.log('👉 Running TC-14: 新会话首发 busy 连续性...');
+    console.log('👉 Running TC-14: 新会话首发 busy 连续性 + 不闪首页...');
     // 重置到干净状态（清掉 TC-13 的 modal/DOM 残留），重连后重新 hydration
     await page.reload({ waitUntil: 'networkidle2' });
     await page.waitForSelector('#btnNew');
@@ -1091,13 +1092,20 @@ async function run() {
     // 3. 关键断言：经过 mock 懒开广播 instances（切 viewing，t≈150ms）之后、首个 delta（t≈1250ms）之前，
     //    pill 必须仍可见——修复前会被 bindView→clearView 的 setBusy(false) 冲掉，此处 fail。
     await sleep(600);
-    const pillStillVisibleTC14 = await page.evaluate(() => {
+    const tc14State = await page.evaluate(() => {
       const pill = document.getElementById('activeStatusPill');
-      return pill && !pill.classList.contains('hidden') && pill.classList.contains('pill-active');
+      const messages = document.getElementById('messages');
+      return {
+        pillVisible: pill && !pill.classList.contains('hidden') && pill.classList.contains('pill-active'),
+        // 懒开广播 instances 后、首个 delta 前，新实例尚无 sessionId；bindView 不得回落 dashboard
+        // （否则 empty-start + .dashboard-container 闪现再被首个 delta 冲掉 = 用户可见的「闪回首页」）。
+        dashboardShown: !!messages && (messages.classList.contains('empty-start') || !!messages.querySelector('.dashboard-container')),
+      };
     });
-    assert.strictEqual(pillStillVisibleTC14, true, 'TC-14: 新会话首发的 busy 提示必须跨越懒开 instances 广播持续可见（回归 shouldRestoreOptimisticBusy）');
+    assert.strictEqual(tc14State.pillVisible, true, 'TC-14: 新会话首发的 busy 提示必须跨越懒开 instances 广播持续可见（回归 shouldRestoreOptimisticBusy）');
+    assert.strictEqual(tc14State.dashboardShown, false, 'TC-14: 新会话首发懒开后（sessionId 未到）不得闪回首页 dashboard（回归 bindView 首发守卫）');
     await waitIdle();
-    console.log('✅ TC-14: 新会话首发 busy 连续性 passed\n');
+    console.log('✅ TC-14: 新会话首发 busy 连续性 + 不闪首页 passed\n');
 
     // ==================================================================
     // TC-15: ExitPlanMode 批准后权限档图标跟随更新（回归:批准内含 setMode 同步前端）
@@ -1163,6 +1171,26 @@ async function run() {
     assert.strictEqual(bannerHiddenTC16, true, 'TC-16: 后台任务完成通知后进度横幅应撤下');
     await waitIdle();
     console.log('✅ TC-16: 后台任务进度横幅（task_progress）passed\n');
+
+    // ==================================================================
+    // TC-17: 切入实例时 sync:since 的 ack.pending 快照重建待审批卡片（回归 Bug2：角标 ⚠️ 但会话内无卡片）
+    // ==================================================================
+    console.log('👉 Running TC-17: sync:since 快照重建待审批卡片...');
+    await page.reload({ waitUntil: 'networkidle2' });
+    await page.waitForSelector('#input');
+    await sleep(500);
+    // 触发：mock 设"有未决审批但从不发 permission_request 事件"（复现 trim/分流丢失）+ 切 viewing 到 inst_2 →
+    // 前端 bindView(inst_2) → sync:since → ack.pending 快照 → applyPendingSnapshot 重建卡片。
+    await sendCommand('test:pendingsnapshot');
+    // 关键断言：修复前无 permission_request 事件 → 永不弹卡片；修复后凭 ack.pending 快照重建 → permModal 出现。
+    await page.waitForSelector('#permModal:not(.hidden)', { timeout: 5000 });
+    const reconciledTC17 = await page.evaluate(() => {
+      const modal = document.getElementById('permModal');
+      return modal && !modal.classList.contains('hidden');
+    });
+    assert.strictEqual(reconciledTC17, true, 'TC-17: 切入实例时应凭 sync:since ack.pending 快照重建待审批卡片（回归 Bug2）');
+    await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc17_pending_snapshot_reconcile.png` });
+    console.log('✅ TC-17: sync:since 快照重建待审批卡片 passed\n');
 
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');

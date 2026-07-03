@@ -1424,8 +1424,8 @@ io.on('connection', socket => {
     // 客户端据此回落到 session:history 回显，避免整页刷新后空屏。found=false 专指「实例已没了」
     // （dispose/重启/effort 切档换 instanceId）——与「实例还在、只是没新事件」的 replayed=0 区分开，
     // 让重连客户端能据此清屏重载历史（connect 路径不像 bindView 那样先 clearView，无法靠 replayed 自辨）。
-    const done = (replayed, gap, found = true) => {
-      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found) });
+    const done = (replayed, gap, found = true, pending = null) => {
+      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending });
     };
     const a = routeInstance(instanceId); // 台阶3：续传指定 tab 实例的缓冲（缺省 viewingInstanceId）
     if (!a || a.sessionId !== sessionId) return done(0, false, false); // 无匹配实例：客户端清屏重载历史；亦会在下个 live 事件凭 epoch 自愈
@@ -1442,7 +1442,10 @@ io.on('connection', socket => {
     // 跳过 loadHistory → 切入后聊天区空白（jsonl 历史从不加载）。排除后这类实例 replayed=0，前端正确回落
     // session:history。events 仍全量回放（前端要 models 填模型/effort 下拉），仅计数口径变。
     const replayed = events.filter(e => e.type !== 'models').length;
-    done(replayed, gap);
+    // 状态对账：随 ack 带回该实例当前未决审批/提问快照。pendingPermissions/pendingQuestions 是权威真相，
+    // 原始 permission_request/question 事件可能已被环形缓冲 trim 或切视图时被前端分流丢弃——前端在视图稳定后
+    // （所有 clearView 之后，尤其 gap→重载路径）据此重建卡片，杜绝「角标 ⚠️ 待审批但会话内无卡片」。
+    done(replayed, gap, true, a.pendingRequestsSnapshot());
   });
 
   on(socket, 'logs:get', (payload, ack) => {

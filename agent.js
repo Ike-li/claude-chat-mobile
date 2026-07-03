@@ -594,6 +594,27 @@ export class AgentSession {
     return { events, gap, epoch: this.epoch };
   }
 
+  // 未决审批/提问快照——供 server 在 sync:since 时让客户端重建卡片。pendingPermissions/pendingQuestions
+  // 是权威真相；原始 permission_request/question 事件可能被环形缓冲 trim 或切视图时被前端分流丢弃，仅靠
+  // buffer 回放无法保证卡片重建（= 会话列表 ⚠️ 待审批却点进去无卡片）。只读、不改状态；payload 与
+  // askPermission 的 emit('permission_request')、handleQuestion 的 emit('question') 逐字段一致（前端复用同一 handler）。
+  pendingRequestsSnapshot() {
+    const permissions = [];
+    for (const [requestId, p] of this.pendingPermissions) {
+      permissions.push({ requestId, name: p.name, input: p.input, cwd: this.cwd });
+    }
+    const questions = [];
+    for (const [toolUseID, p] of this.pendingQuestions) {
+      for (let i = 0; i < p.questions.length; i++) {
+        if (p.answers[i] !== null) continue; // 已答的不补发（切入只重建仍待回答的问题）
+        const q = p.questions[i];
+        const options = (q.options || []).map(o => (typeof o === 'string' ? o : o.label));
+        questions.push({ requestId: `${toolUseID}#${i}`, text: q.question, options });
+      }
+    }
+    return { permissions, questions };
+  }
+
   // ---- SDK 消息 → 契约事件映射 ----
   map(msg) {
     switch (msg.type) {
