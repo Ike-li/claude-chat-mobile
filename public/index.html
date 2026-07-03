@@ -622,11 +622,11 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M4.75 5.75A1.75 1.75 0 016.5 4h11A1.75 1.75 0 0119.25 5.75v12.5A1.75 1.75 0 0117.5 20h-11a1.75 1.75 0 01-1.75-1.75V5.75z" />
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 4v16M12.5 8h3.75M12.5 12h3.75M12.5 16h2.5" />
         </svg>
-        <!-- 台阶2 Step B：后台目录有动静时亮（app.js updateSessionsDot 控制） -->
-        <span id="sessionsDot" class="hidden absolute top-1 right-1 w-2.5 h-2.5 rounded-full bg-accent border border-surface shadow-sm"></span>
+        <!-- 台阶2 Step B：其他工作区有动静时显示状态 emoji（app.js updateSessionsDot 控制；⏳/⚠️/❗/✅ 与面板图例同款）。定位/底色常驻此处，JS 只切 hidden + 换 emoji。 -->
+        <span id="sessionsDot" class="hidden absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-px flex items-center justify-center rounded-full bg-surface border border-line-soft shadow-sm text-[11px] leading-none"></span>
         
         <!-- Connection state dot wrapper inside btnSessions -->
-        <div class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-surface rounded-full border border-line-soft shadow-sm" title="连接状态">
+        <div class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-surface rounded-full border border-line-soft shadow-sm" title="连接状态：绿=已连接 红=断开">
           <span id="connDot" class="w-2 h-2 rounded-full bg-danger shrink-0"></span>
         </div>
       </button>
@@ -823,11 +823,6 @@
           <span class="shrink-0 font-semibold">后台任务</span>
           <span id="taskProgressText" class="font-medium truncate"></span>
         </div>
-      </div>
-
-      <!-- 推荐快捷提示词 (Suggested Prompts) -->
-      <div id="suggestedPromptsRow" class="hidden flex flex-wrap gap-1.5 px-1 mb-2">
-        <!-- 动态生成的建议提示词 chips -->
       </div>
 
       <!-- Unified Premium Input Pill Container -->

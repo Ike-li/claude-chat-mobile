@@ -48,6 +48,20 @@ export function aggregateStates(instances, dirs) {
   return out;
 }
 
+// 汇总「其他工作区」状态给左上角按钮角标：跨目录取最高优先级，返回单个 state（或 null=无动静）。
+// 注意：这里 done>busy（完成=有结果待看，比在跑更该提示），与 aggregateStates 的 busy>done 有意不同——
+// 那是 per-cwd 聚合、这是按钮汇总；且排除 currentCwd（当前工作区自身动静在聊天视图内呈现，不点亮汇总角标）。
+export function summarizeOtherWorkspaces(workdirStates, availableDirs, currentCwd) {
+  const rank = { busy: 1, done: 2, error: 3, permission: 4 };
+  let top = null, topRank = 0;
+  for (const d of (availableDirs || [])) {
+    if (d === currentCwd) continue;
+    const st = workdirStates && workdirStates[d];
+    if ((rank[st] || 0) > topRank) { topRank = rank[st]; top = st; }
+  }
+  return top; // 'permission'|'error'|'done'|'busy'|null
+}
+
 // 顶部/空状态展示名：路径仍作为运行时事实保留，移动端 UI 只露出项目末段。
 export function projectDisplayName(path) {
   const s = String(path || '').replace(/\/+$/, '');

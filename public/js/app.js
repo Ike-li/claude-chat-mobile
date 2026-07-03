@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, generateSuggestions } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, generateSuggestions } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -1960,23 +1960,22 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
       }
     });
   }
-  // 会话按钮汇总圆点：非查看目录有动静即亮，优先级 permission/error(红) > done(绿) > busy(琥珀)
+  // 会话按钮汇总角标：非查看目录有动静即亮，用与面板同款 emoji（⏳/⚠️/❗/✅）而非裸色——消除「不知道颜色对应什么状态」。
+  // 定位/底色样式常驻在 index.html 的 #sessionsDot base 类里，这里只切 hidden + 换 emoji/title。
+  // 优先级 permission>error>done>busy 由 summarizeOtherWorkspaces 决定（纯逻辑、可单测；已排除 currentCwd）。
   function updateSessionsDot() {
     if (!sessionsDot) return;
-    let level = 0; // 0 无 / 1 busy / 2 done / 3 error / 4 permission
-    for (const d of availableDirs) {
-      if (d === currentCwd) continue;
-      const st = workdirStates[d];
-      if (st === 'permission') level = 4;
-      else if (st === 'error') level = Math.max(level, 3);
-      else if (st === 'done') level = Math.max(level, 2);
-      else if (st === 'busy') level = Math.max(level, 1);
+    const top = summarizeOtherWorkspaces(workdirStates, availableDirs, currentCwd);
+    const m = top && DIR_BADGE[top]; // [emoji, 颜色类, 中文名]
+    if (m) {
+      sessionsDot.textContent = m[0];
+      sessionsDot.title = `其他工作区${m[2]}`; // 如「其他工作区待审批」
+      sessionsDot.classList.remove('hidden');
+    } else {
+      sessionsDot.textContent = '';
+      sessionsDot.title = '';
+      sessionsDot.classList.add('hidden');
     }
-    const color = { 4: 'bg-danger', 3: 'bg-danger', 2: 'bg-success', 1: 'bg-warning' }[level];
-    const base = 'absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full border border-surface';
-    sessionsDot.className = color ? `${base} ${color}` : `hidden ${base}`;
-    // title 说明该汇总点语义（其他工作区有动静时）——避免「不知道颜色对应什么」
-    sessionsDot.title = { 4: '其他工作区有会话待审批', 3: '其他工作区有会话出错', 2: '其他工作区有会话已完成', 1: '其他工作区有会话运行中' }[level] || '';
   }
 
   // generateSuggestions 已抽到 logic.js（纯逻辑、可单测），此处只保留 DOM 渲染
@@ -2216,8 +2215,9 @@ import { esc, effortLevelsFor, aggregateStates, projectDisplayName, shouldShowSt
   function openSessionPanel() {
     sessionPanel.innerHTML = '';
 
-    // 状态角标图例：消除「不知道 ⏳/⚠️/❗/✅ 各代表什么」——静态一行，紧跟标题
-    sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] text-ink-faint border-b border-line flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span></div>`));
+    // 状态角标图例：消除「不知道 ⏳/⚠️/❗/✅ 各代表什么」——两行，紧跟标题。
+    // 第二行点明左上角按钮角标只汇总「其他工作区」状态，并解释按钮上的连接点绿/红——消除「绿点=什么」的误解。
+    sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] text-ink-faint border-b border-line flex flex-col gap-1"><div class="flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span></div><div class="flex flex-wrap gap-x-3 gap-y-1 text-ink-faint/80"><span>左上角角标 = 其他工作区状态汇总</span><span>连接点：绿=已连接 · 红=断开</span></div></div>`));
 
     // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
