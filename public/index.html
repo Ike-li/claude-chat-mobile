@@ -825,6 +825,15 @@
         </div>
       </div>
 
+      <!-- 只读追平横幅：该会话正在终端运行时常驻显示 + 禁用输入，硬防并发写盘分叉；「仍要发送」显式接管 -->
+      <div id="mirrorBanner" class="hidden px-3 py-2 bg-surface border border-danger/40 rounded-xl text-xs text-danger mb-1 shrink-0">
+        <div class="flex items-center gap-2">
+          <span class="shrink-0">🔒</span>
+          <span class="font-medium flex-1 min-w-0">此会话正在终端运行，这里只读追平——发送会与终端并发写盘、可能分叉</span>
+          <button id="btnMirrorOverride" class="shrink-0 px-2 py-1 rounded-lg border border-danger text-danger font-semibold hover:bg-danger hover:text-surface active:scale-95 transition-all">仍要发送</button>
+        </div>
+      </div>
+
       <!-- Unified Premium Input Pill Container -->
       <div class="chat-input-pill flex flex-col gap-1 p-2 bg-surface shadow-md border border-line">
         <!-- E6: Active Status Indicator / Interrupt Panel（并入输入框内部顶部条，合理利用空间、不再单独占位）-->

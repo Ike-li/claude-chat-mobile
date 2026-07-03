@@ -106,6 +106,32 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   return messages.slice(-limit);
 }
 
+// 只读「追平」状态机（纯函数，便于单测）——server 每 tick 用它决定该把哪些【新落定】消息推给 web 端。
+// 用于「web 端续接一个正在终端 CLI 里跑的会话」：web 是另起的独立 resume 进程、无法 attach 终端活进程，
+// 只能靠轮询磁盘 transcript 追平终端【已落定】的消息（看不到实时 thinking/在跑子 agent——它们不落盘）。
+//
+// state = { baseline, wasBusy }：baseline=已下发到的消息条数；wasBusy=上次本地实例是否在跑 turn。
+// 规则：
+//   · 本地实例在跑 turn（localBusy）→ 抑制：此刻 SDK 流才是渲染真相，只记 wasBusy=true、不推、不动 baseline；
+//   · 刚 busy→idle（state.wasBusy 且现在 idle）→ 增量归因于「自己刚写盘」，只重置 baseline、不推（吸收己方 turn）；
+//   · 持续 idle 期间的增长 → 判为【外部（终端）写入】→ 推 messages 超出 baseline 的尾巴。
+// messages = 当前 getSessionHistory 结果（仅 user/assistant 文本、≤HISTORY_MAX_MESSAGES 条）。
+// 边界：极端会话 > 2000 条被削头时 len 可能 < baseline → 不推（保守），属已知限制。
+export function catchUpStep(state, { messages, localBusy = false }) {
+  const len = messages.length;
+  if (localBusy) return { emit: [], state: { baseline: state.baseline, wasBusy: true } };
+  if (state.wasBusy) return { emit: [], state: { baseline: len, wasBusy: false } }; // 吸收己方 turn 的写盘
+  if (len > state.baseline) return { emit: messages.slice(state.baseline), state: { baseline: len, wasBusy: false } };
+  return { emit: [], state: { baseline: state.baseline, wasBusy: false } };
+}
+
+// 会话 transcript 最近修改时间（mtimeMs），文件不存在/读失败返回 0。
+// 用于只读追平的「切入即判活」：空闲实例 + transcript 刚被改过 ⇒ 疑似终端正在跑该会话 ⇒ 锁只读防分叉。
+export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
+  try { return (await stat(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`))).mtimeMs; }
+  catch { return 0; }
+}
+
 // 提取纯文本内容（content 可能是 string 或 array）
 function extractContent(content) {
   if (typeof content === 'string') return content;

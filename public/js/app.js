@@ -30,6 +30,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnSessions = $('btnSessions');
   const activeStatusPill = $('activeStatusPill'), activeStatusText = $('activeStatusText'), btnStopNew = $('btnStopNew');
   const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
+  const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText');
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
@@ -631,6 +632,11 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     // task_progress：后台任务进行中的瞬时进度心跳（emitTransient，transient=true、不占 seq）。同样带外分流——
     // 绕过 shouldDropAgentEvent/epoch 去重（后台实例发、无回放价值），只原地刷新进度横幅，不进消息流。
     if (ev.type === 'task_progress') { onTaskProgress(ev); return; }
+    // history_append：只读「追平」——server 轮询终端会话 transcript 检测到【外部新落定】消息（epoch='server'）。
+    // 同样带外分流（在 shouldDropAgentEvent/epoch 之前），onHistoryAppend 内按 viewingInstanceId 自判是否渲染。
+    if (ev.type === 'history_append') { onHistoryAppend(ev); return; }
+    // mirror_state：只读追平锁状态（server 判「会话正在终端运行」）——带外分流，控制常驻横幅 + 输入禁用。
+    if (ev.type === 'mirror_state') { onMirrorState(ev); return; }
     // 台阶3：事件按 instanceId 分流——非当前查看 tab（viewingInstanceId）的实例事件不渲染直接丢弃。
     // 角标/跨 tab 通知改由 instances 广播驱动（setInstances/notifyStateChanges），不在此重建。
     // 必须在 epoch 去重前过滤，否则后台实例事件会污染 curEpoch/lastSeq 基线。判定见 logic.js shouldDropAgentEvent：
@@ -1258,6 +1264,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
   // ---- 发送 / 停止 ----
   function send() {
+    if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「仍要发送」可接管）
+      addBar('此会话正在终端运行，只读中——如确认终端已停，点「仍要发送」接管', 'text-danger');
+      return;
+    }
     const text = inputEl.value.trim();
     if (!text && pendingAttachments.length === 0) return; // E17：纯附件（空文本）也可发
     // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
@@ -2197,7 +2207,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
     // 状态角标图例：消除「不知道 ⏳/⚠️/❗/✅ 各代表什么」——两行，紧跟标题。
     // 第二行点明左上角按钮角标只汇总「其他工作区」状态，并解释按钮上的连接点绿/红——消除「绿点=什么」的误解。
-    sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] text-ink-faint border-b border-line flex flex-col gap-1"><div class="flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span></div><div class="flex flex-wrap gap-x-3 gap-y-1 text-ink-faint/80"><span>左上角角标 = 其他工作区状态汇总</span><span>连接点：绿=已连接 · 红=断开</span></div></div>`));
+    sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] text-ink-faint border-b border-line flex flex-col gap-1"><div class="flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span></div><div class="flex flex-wrap gap-x-3 gap-y-1 text-ink-faint/80"><span>目录角标 = 该工作区最需关注的状态</span><span>左上角角标 = 其他工作区状态汇总</span><span>连接点：绿=已连接 · 红=断开</span></div></div>`));
 
     // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
@@ -2647,32 +2657,72 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         return;
       }
       addBar(`加载了 ${msgs.length} 条历史消息`, 'text-ink-faint');
-      const frag = document.createDocumentFragment();
-      const codeBlocks = [];
-      for (const msg of msgs) {
-        const isUser = msg.role === 'user';
-        const bubble = isUser
-          ? el(`<div class="msg-frame bg-user text-ink um rounded-xl px-3 py-2 text-sm msg-body"></div>`)
-          : el(`<div class="msg-frame px-0.5 msg-body"></div>`);
-        bubble.innerHTML = render(msg.content);
-        bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
-        injectCodeCopyButtons(bubble);
-        appendCopyAction(bubble, () => msg.content, isUser ? 'right' : 'left');
-        frag.appendChild(bubble);
-      }
-      leaveStartScreen();
-      messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow
-      scrollBottom(true);
-      if (codeBlocks.length) {
-        const doHighlight = () => codeBlocks.forEach(b => hljs.highlightElement(b));
-        if (typeof requestIdleCallback !== 'undefined') {
-          requestIdleCallback(doHighlight, { timeout: 2000 });
-        } else {
-          setTimeout(doHighlight, 0);
-        }
-      }
+      renderHistoryBubbles(msgs);
     });
   }
+
+  // 渲染一批历史/追平消息为气泡并追加（loadHistory 与 onHistoryAppend 复用；一次性 fragment 插入 + 空闲高亮）。
+  function renderHistoryBubbles(msgs) {
+    if (!msgs?.length) return;
+    const frag = document.createDocumentFragment();
+    const codeBlocks = [];
+    for (const msg of msgs) {
+      const isUser = msg.role === 'user';
+      const bubble = isUser
+        ? el(`<div class="msg-frame bg-user text-ink um rounded-xl px-3 py-2 text-sm msg-body"></div>`)
+        : el(`<div class="msg-frame px-0.5 msg-body"></div>`);
+      bubble.innerHTML = render(msg.content);
+      bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
+      injectCodeCopyButtons(bubble);
+      appendCopyAction(bubble, () => msg.content, isUser ? 'right' : 'left');
+      frag.appendChild(bubble);
+    }
+    leaveStartScreen();
+    messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow
+    scrollBottom(true);
+    if (codeBlocks.length) {
+      const doHighlight = () => codeBlocks.forEach(b => hljs.highlightElement(b));
+      if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback(doHighlight, { timeout: 2000 });
+      } else {
+        setTimeout(doHighlight, 0);
+      }
+    }
+  }
+
+  // 只读「追平」：server 轮询「正在终端 CLI 里跑」的会话 transcript，检测到【外部新落定】消息 → history_append。
+  // 仅渲染当前查看会话。局限：看不到实时 thinking / 在跑子 agent——它们不落盘，终端把消息落定后才追加得到。
+  function onHistoryAppend(ev) {
+    if (ev.instanceId !== viewingInstanceId) return; // 只进当前查看会话（server 已按 viewing 发，这里再兜一层）
+    const msgs = ev.payload?.messages || [];
+    if (msgs.length) renderHistoryBubbles(msgs);
+  }
+
+  // 只读锁：会话被判「正在终端运行」时常驻横幅 + 禁用输入，硬防两进程并发写盘分叉。
+  // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读。
+  let mirrorReadonlySid = null, mirrorOverriddenSid = null;
+  function applyMirror(readonly, sessionId) {
+    const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
+    mirrorReadonlySid = effective ? sessionId : null;
+    mirrorBanner?.classList.toggle('hidden', !effective);
+    if (inputEl) inputEl.disabled = effective;
+    if (effective) { if (btnSend) btnSend.disabled = true; } // 锁定：禁发送
+    else updateSendButtonState();                            // 解锁：按有无文本恢复发送按钮态
+  }
+  function onMirrorState(ev) {
+    // readonly=true 只对当前查看会话生效；readonly=false（sessionId 可能为 null）一律解锁。
+    const readonly = !!ev.payload?.readonly;
+    if (readonly && ev.instanceId !== viewingInstanceId) return;
+    applyMirror(readonly, ev.sessionId);
+  }
+  // 「仍要发送」：用户确认终端已停、显式接管——解锁并记住本会话不再锁（切会话即失效）。
+  btnMirrorOverride?.addEventListener('click', () => {
+    if (!mirrorReadonlySid) return;
+    mirrorOverriddenSid = mirrorReadonlySid;
+    applyMirror(false, mirrorReadonlySid);
+    addBar('已接管：若终端仍在跑同一会话，并发发送有分叉风险', 'text-warning');
+    inputEl?.focus();
+  });
 
   // E18: 为代码块注入复制按钮（per-block，hover 时浮现）
   function injectCodeCopyButtons(container) {

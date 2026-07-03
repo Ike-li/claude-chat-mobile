@@ -16,7 +16,8 @@ import compression from 'compression';
 import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
 import * as sessions from './sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache } from './history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache, catchUpStep, sessionFileMtime } from './history.js';
+import { notificationForEvent } from './notifications.js';
 import { buildWebStatusLine } from './statusline.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from './uploads.js';
 import * as interactionLog from './interaction-log.js';
@@ -686,6 +687,59 @@ function scheduleBgBroadcast() {
   if (bgBroadcastTimer) return;
   bgBroadcastTimer = setTimeout(() => { bgBroadcastTimer = null; broadcastInstances(); }, 500);
 }
+
+// 只读「追平」：web 端续接「正在终端 CLI 里跑」的会话时，另起的 resume 进程无法 attach 终端活进程，
+// 只能轮询磁盘 transcript，把终端【已落定】的新消息追加到 web。单定时器自适配当前查看会话（切会话即重置基线），
+// 决策交纯函数 catchUpStep（history.js，单测覆盖）。看不到实时 thinking / 在跑子 agent——它们不落盘（已知边界）。
+const CATCH_UP_INTERVAL_MS = 2500;
+// 只读锁：切入 transcript 刚被改过的【纯终端会话】、或运行期观察到外部写入 ⇒ 判终端活跃 ⇒ 发 mirror_state
+// 令前端禁用输入，硬防「两进程并发写同一 JSONL 致会话分叉」。解锁：切会话重判 / 用户显式接管（前端 override）。
+const MIRROR_RECENT_MS = 120_000;                  // transcript 最近改动 < 此 ⇒ 疑似终端正跑该会话（切入即锁）
+let mirrorReadonly = false;                         // 当前查看会话是否判「终端活跃、只读」
+function setMirror(readonly, sessionId, force = false) {
+  if (!force && readonly === mirrorReadonly) return; // 仅变化时广播；force=视图切换入场时强制发权威态（消除切换空窗）
+  mirrorReadonly = readonly;
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: sessionId ?? null, instanceId: viewingInstanceId, cwd: viewingCwd,
+    ts: Date.now(), type: 'mirror_state', payload: { readonly }
+  });
+}
+let catchUpKey = null;                              // `${cwd} ${sessionId}`：当前追平的会话
+let catchUpState = { baseline: 0, wasBusy: false };
+// 本 web 会话「亲自驱动过」的实例集（用户从 web 发过消息）：其 transcript 近期 mtime 是己方写的，判活时排除，
+// 避免切回自己刚用过的会话被误锁只读。foreign（纯终端会话）= 不在此集合。dispose 时清理。
+const localDrivenInstances = new Set();
+async function catchUpTick() {
+  const id = viewingInstanceId;
+  const a = id ? agents.get(id) : null;
+  if (!a || !a.sessionId) { catchUpKey = null; setMirror(false, null); return; }              // 无查看会话：停
+  const key = `${a.cwd} ${a.sessionId}`;
+  const st = instanceState(id);
+  const localBusy = st === 'busy' || st === 'permission';
+  if (key !== catchUpKey) {                                           // 切了会话：以现有历史长度定基线，本 tick 不推
+    let seedLen = 0, mtime = 0;
+    try { seedLen = (await getSessionHistory(a.sessionId, a.cwd)).length; mtime = await sessionFileMtime(a.sessionId, a.cwd); }
+    catch { return; }
+    catchUpKey = key;
+    catchUpState = { baseline: seedLen, wasBusy: localBusy };
+    // 仅【本 web 会话从未驱动过】的实例才按 mtime 判活——否则切回自己刚用过的会话会被误锁（那 mtime 是己方写的）。
+    setMirror(!localDrivenInstances.has(id) && !localBusy && mtime > 0 && (Date.now() - mtime) < MIRROR_RECENT_MS, a.sessionId, true); // 入场强制发
+    return;
+  }
+  if (localBusy) { catchUpState = { baseline: catchUpState.baseline, wasBusy: true }; return; } // 己方在跑：抑制、且免读大文件
+  let messages;
+  try { messages = await getSessionHistory(a.sessionId, a.cwd); } catch { return; }
+  const { emit, state } = catchUpStep(catchUpState, { messages, localBusy: false });
+  catchUpState = state;
+  if (!emit.length || viewingInstanceId !== id) return;               // await 让出后视图可能已切走：只推给仍在看该会话的
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
+    type: 'history_append', payload: { messages: emit, external: true }
+  });
+  setMirror(true, a.sessionId);                                      // 观察到外部写入 → 锁只读（切会话才重判）
+}
+setInterval(() => { catchUpTick().catch(() => {}); }, CATCH_UP_INTERVAL_MS).unref();
+
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']; // 5 档硬编码，漂移由 smoke-effort 的 CLI warning 检测
 // 最近一次 init payload + 按 cwd 归键的 models 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
 // 持久化到 data/init-cache.json 跨重启读回（CLI 收到首条消息前不输出 init——init 是轮次开始信号，
@@ -890,26 +944,18 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
             if (envelope.payload?.isError) { errorInstances.add(id); doneInstances.delete(id); }
             else { doneInstances.add(id); errorInstances.delete(id); }
           }
-          // E15：result 仅在完全无客户端连接时推送（连着的客户端自己能看到）
-          if (io.sockets.sockets.size === 0) {
-            const p = envelope.payload;
-            pushNotify(p?.isError ? '⚠️ 任务出错' : '✅ 任务完成',
-              `用时 ${((p?.durationMs ?? 0) / 1000).toFixed(1)}s`);
-          }
         } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question') {
           doneInstances.delete(id); errorInstances.delete(id);
           // task_notification 在 STATE_BOUNDARY 里但【不】清 latch：它到达时 pendingTurns 仍 0（合成发生在后续
           // message_start），此刻清 error latch 会吞掉后台实例先前未确认的失败 ❗；且忙碌显示由合成的 pendingTurns
           // 驱动（instanceState busy 优先级本就盖过 done/error），自动汇报轮的 result 再正确重估 latch——无需在此清。
-          // E15：permission_request / question 始终推（用户可能锁屏或在别的 app）
-          if (envelope.type === 'permission_request') {
-            const p = envelope.payload;
-            pushNotify('⚠️ Claude 请求许可', `${p?.name ?? '工具'}：${JSON.stringify(p?.input ?? {}).slice(0, 80)}`);
-          } else if (envelope.type === 'question') {
-            const p = envelope.payload;
-            pushNotify('❓ Claude 有问题', (p?.text ?? '').slice(0, 100) || 'Claude 需要你的回答');
-          }
         }
+        // E15 离线 web-push：文案映射抽到 notificationForEvent（纯函数、test/notifications 覆盖）。
+        // result 仅无客户端连时推（连着的自己看得到）；permission/question/task_notification 无条件推
+        // （用户可能锁屏/在别的 app）。task_notification=后台任务（Workflow/后台 Agent/Bash）完成——
+        // 此前落到这里两分支都不命中、从不推，手机锁屏收不到完成通知，本次补齐。
+        const pn = notificationForEvent(envelope.type, envelope.payload, { hasClients: io.sockets.sockets.size > 0 });
+        if (pn) pushNotify(pn.title, pn.body);
         broadcastInstances();
       }
     },
@@ -1029,6 +1075,7 @@ function disposeInstance(instanceId) {
   effortByInstance.delete(instanceId);
   doneInstances.delete(instanceId);
   errorInstances.delete(instanceId);
+  localDrivenInstances.delete(instanceId);
   if (viewingInstanceId === instanceId) viewingInstanceId = agents.keys().next().value ?? null;
   broadcastInstances();
 }
@@ -1079,6 +1126,9 @@ interactionLog.setCallback((sessionId, entry) => {
 
 io.on('connection', socket => {
   console.log(`[conn] ${socket.id} 已连接（来自 ${clientIp(socket.handshake.address)}）`);
+  // 只读追平：客户端（重）连时强制下一 tick 以当前历史长度重定基线——重连会 loadHistory 重渲全量历史，
+  // 若沿用滞后 baseline 会把已显示的消息再 history_append 一遍成重复气泡。重定基线=不推、仅对齐，安全。
+  catchUpKey = null;
 
   if (socket.deviceApproved === false) {
     // 未经授权的设备：跳过任何敏感信息重放，只推送 pending 状态
@@ -1127,6 +1177,12 @@ io.on('connection', socket => {
     effortTo(socket);
     // 台阶3：重放 tab 栏快照（viewingInstanceId + dirs + 各实例状态）
     instancesTo(socket);
+    // 只读追平：向(重)连客户端补发当前只读态——setMirror 仅在变化时广播、不会自动补给新 socket，
+    // 不补则重连客户端会以「可编辑」状态渲染一个终端正在跑的会话，留下并发写盘分叉的窗口。
+    if (mirrorReadonly) socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: agents.get(viewingInstanceId)?.sessionId ?? null,
+      instanceId: viewingInstanceId, cwd: viewingCwd, ts: Date.now(), type: 'mirror_state', payload: { readonly: true }
+    });
     // 可信端连入时重放当前待审批设备列表，使其可立即在 Web UI 远程审批
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -1169,6 +1225,7 @@ io.on('connection', socket => {
       viewingInstanceId = a.instanceId;
       broadcastInstances();
     }
+    localDrivenInstances.add(a.instanceId); // 用户从 web 驱动该实例 → 判活时排除（切回自己刚用过的会话不误锁）
     interactionLog.userMessageIn(a.sessionId, cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
     if (hasAttachments) {
       // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
