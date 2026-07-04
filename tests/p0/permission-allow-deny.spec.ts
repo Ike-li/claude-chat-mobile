@@ -1,0 +1,38 @@
+// spec: specs/claude-chat-mobile-comprehensive-test-plan.md
+// seed: tests/seed.goto-mock.spec.ts
+
+import { test, expect } from '@playwright/test';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+
+test.describe('P0 日常零 token Mock UI 回归', () => {
+  test('P0-06 权限审批 allow/deny 与本会话总是允许', async ({ page }) => {
+    await gotoMock(page);
+
+    // 1. 发送 test:permission 后显示权限请求 bottom sheet。
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permTool')).toHaveText('run_command');
+    await expect(page.locator('#permCwd')).toContainText('/Users/you/code/claude-chat-mobile');
+    await expect(page.locator('#permInput')).toContainText('"git push origin main"');
+    await expect(page.locator('#permAlways')).toBeVisible();
+
+    // 2. 点击允许，工具卡片成功。
+    await page.locator('#permAllow').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('✅');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Successfully pushed');
+
+    // 3. fresh state 后点击拒绝，工具卡片拒绝。
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await page.locator('#permDeny').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('🚫');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('rejected by user');
+
+    await expectNoBrowserErrors(page);
+  });
+});

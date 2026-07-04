@@ -30,5 +30,7 @@ reasonix.toml
 
 # 测试/E2E 视觉回归测试临时截图
 /public/test-snapshots/
+/playwright-report/
+/test-results/
 
 .github/copilot-instructions.md

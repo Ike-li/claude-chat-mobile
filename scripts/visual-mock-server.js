@@ -73,8 +73,8 @@ let permissionMode = 'default';
 let effortLevel = null;
 let activeModel = 'claude-3-5-sonnet';
 
-const mockInstances = [
-  {
+function createDefaultInstances() {
+  return [{
     instanceId: 'inst_1',
     cwd: '/Users/you/code/claude-chat-mobile',
     sessionId: 'mock-session-visual-test',
@@ -83,13 +83,32 @@ const mockInstances = [
     permissionMode: 'default',
     effort: null,
     model: 'claude-3-5-sonnet'
-  }
-];
+  }];
+}
+
+const mockInstances = createDefaultInstances();
 
 let pendingPermission = null;
 let pendingQuestion = null;
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let activeEpoch = 'mock-epoch-init';
+
+function resetMockState() {
+  viewingInstanceId = 'inst_1';
+  permissionMode = 'default';
+  effortLevel = null;
+  activeModel = 'claude-3-5-sonnet';
+  mockInstances.splice(0, mockInstances.length, ...createDefaultInstances());
+  pendingPermission = null;
+  pendingQuestion = null;
+  syncPendingSnapshot = null;
+  activeEpoch = 'mock-epoch-init';
+}
+
+app.post('/__reset', (_req, res) => {
+  resetMockState();
+  res.json({ ok: true });
+});
 
 // Helper to delay executions to simulate streaming behavior
 const delay = ms => new Promise(res => setTimeout(res, ms));
