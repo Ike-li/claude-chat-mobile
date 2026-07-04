@@ -345,6 +345,24 @@ io.on('connection', socket => {
     }
   });
 
+  // Console modal trace fetch. Production serves persisted per-session interaction logs;
+  // the visual lane returns a stable mock row so Clear can be tested without real Claude.
+  socket.on('logs:get', (payload, callback) => {
+    if (typeof callback !== 'function') return;
+    const instanceId = payload?.instanceId || viewingInstanceId;
+    const inst = mockInstances.find(i => i.instanceId === instanceId);
+    callback({
+      logs: [{
+        ts: Date.now() - 1000,
+        type: 'sys_info',
+        text: `[MOCK_LOG] Session trace for ${inst?.title || instanceId || 'new chat'}`,
+        model: inst?.model || activeModel,
+        effort: inst?.effort || 'model-default',
+        permissionMode: inst?.permissionMode || permissionMode
+      }]
+    });
+  });
+
   // Handle sync:since for switching workspace viewing instances and historical message hydration
   socket.on('sync:since', (payload, callback) => {
     const { instanceId, sessionId } = payload || {};
@@ -376,7 +394,9 @@ io.on('connection', socket => {
 
   // Handle custom trigger command inputs
   socket.on('user:message', async payload => {
-    const text = typeof payload === 'string' ? payload : payload?.text;
+    const messagePayload = payload && typeof payload === 'object' ? payload : {};
+    const text = typeof payload === 'string' ? payload : messagePayload.text;
+    const requestedModel = typeof messagePayload.model === 'string' ? messagePayload.model : '';
     if (typeof text !== 'string') return;
     const cmd = text.trim();
 
@@ -740,6 +760,36 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { text: 'Simulated Terminal StatusLine updated successfully above!' }
+        });
+
+      } else if (cmd === 'test:settings-echo') {
+        console.log('[mock] Echoing selected model / permission / effort for settings regression');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        const effectiveModel = requestedModel || '未指定(沿用)';
+        const effectivePermission = activeInst.permissionMode || permissionMode || 'default';
+        const effectiveEffort = activeInst.effort || effortLevel || 'model-default';
+        await delay(250);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: {
+            messageId: 'msg_settings_echo_1',
+            text: `设置回显：model=${effectiveModel}; permission=${effectivePermission}; effort=${effectiveEffort}`
+          }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_settings_echo_1', durationMs: 250, costUsd: 0, isError: false, models: [requestedModel || activeModel] }
         });
 
       } else if (cmd === 'test:tab') {

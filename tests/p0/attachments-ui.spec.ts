@@ -37,4 +37,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-18b 附件超限被拒且重复选择同一文件仍生效', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#fileInput').setInputFiles({
+      name: 'too-large.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.alloc(10 * 1024 * 1024 + 1, 'x')
+    });
+    await expect(page.locator('#messages')).toContainText('「too-large.txt」超过 10MB，未添加');
+    await expect(page.locator('#attachTray')).toBeHidden();
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    const repeatFile = { name: 'repeat.txt', mimeType: 'text/plain', buffer: Buffer.from('repeatable attachment') };
+    await page.locator('#fileInput').setInputFiles(repeatFile);
+    await expect(page.locator('#attachTray').getByText('repeat.txt')).toHaveCount(1);
+    await page.locator('#fileInput').setInputFiles(repeatFile);
+    await expect(page.locator('#attachTray').getByText('repeat.txt')).toHaveCount(2);
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
 });

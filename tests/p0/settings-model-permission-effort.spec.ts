@@ -2,7 +2,7 @@
 // seed: tests/seed.goto-mock.spec.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../seed.goto-mock.spec';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀', async ({ page }) => {
@@ -24,6 +24,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#effortSelect')).toHaveValue('high');
     await page.locator('#settingsClose').click();
     await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-09b 设置选择会随下一条消息发送并可见回显', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#btnSettings').click();
+    await page.locator('.perm-tile[data-mode="plan"]').click();
+    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await page.locator('.effort-tile[data-level="high"]').click();
+    await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
+    await expect(page.locator('#effortSelect')).toHaveValue('high');
+    await page.locator('#settingsClose').click();
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('model=claude-3-opus[1m]');
+    await expect(reply).toContainText('permission=plan');
+    await expect(reply).toContainText('effort=high');
 
     await expectNoBrowserErrors(page);
   });

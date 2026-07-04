@@ -2,7 +2,7 @@
 // seed: tests/seed.goto-mock.spec.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../seed.goto-mock.spec';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-16 交互日志 Console modal', async ({ page }) => {
@@ -18,6 +18,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#messages')).toBeVisible();
     await page.locator('#consoleClose').click();
     await expect(page.locator('#consoleModal')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-16b Console 清屏只清日志不清聊天内容', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:statusline');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:statusline');
+    await expect(page.locator('#messages')).toContainText('Simulated Terminal StatusLine updated successfully');
+
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toBeVisible();
+    await expect(page.locator('#consoleLogArea')).toContainText('[MOCK_LOG]');
+    await page.locator('#consoleClear').click();
+    await expect(page.locator('#consoleLogArea')).toBeEmpty();
+    await page.locator('#consoleClose').click();
+    await expect(page.locator('#consoleModal')).toBeHidden();
+
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:statusline');
+    await expect(page.locator('#messages')).toContainText('Simulated Terminal StatusLine updated successfully');
 
     await expectNoBrowserErrors(page);
   });

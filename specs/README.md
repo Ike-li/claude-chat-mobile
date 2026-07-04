@@ -20,6 +20,12 @@ CCM_PLAYWRIGHT_PORT=33342 npm run test:playwright:p0
 
 The mock server exposes `POST /__reset` for the Playwright seed helper so each test starts from a clean mock state. This endpoint exists only in the visual mock server, not in production `server.js`.
 
+Current P0 mock-only coverage also includes:
+
+- `test:settings-echo` in the visual mock server, which renders the selected model, permission mode, and thinking effort from the next sent message so the settings panel is tested through user-visible chat behavior.
+- A mock `logs:get` response with a stable `[MOCK_LOG]` trace row so the Console modal can verify Clear affects only the log pane, not chat history.
+- Client-side attachment boundary checks for oversized files and repeated same-file selection; these do not upload to the real server or touch Claude.
+
 ## Test Plan
 
 - `claude-chat-mobile-comprehensive-test-plan.md` is the source plan.
