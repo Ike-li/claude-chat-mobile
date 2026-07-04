@@ -655,6 +655,7 @@ function instancesPayload() {
       // 是否有活的后台任务（≠ busy：前台轮 busy 但无后台任务时为 false）——前端据此收敛进度横幅可见性：
       // 当前查看实例 bgActive=false 即隐藏横幅，统一覆盖「切会话/TTL 清/完成/前台轮残留」所有隐藏场景（权威状态驱动，非零散事件）。
       bgActive: a.hasBgTasks?.() || false,
+      queueFull: a.pendingTurns >= 2, // 队列已满（1 运行中 + 1 排队），前端据此禁发送按钮
       // 切 tab 面板同步：携带各实例当前档，前端 setInstances 据此静默刷新顶部 permMode/effort/model select
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || null
     });
@@ -1232,6 +1233,9 @@ io.on('connection', socket => {
     } else {
       await a.send(cleanText, model);               // F1：send 改 async（setModel 需 await）
     }
+    // 队列满（pendingTurns 1→2）时立即广播，前端禁发送按钮无延迟。
+    // result 边界已有广播，此处仅补"变满"方向；send 拒绝（return false）不改 pendingTurns、不触发。
+    if (a.pendingTurns >= 2) broadcastInstances();
   });
 
   on(socket, 'user:approve', payload => {

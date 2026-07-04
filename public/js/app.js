@@ -1507,12 +1507,14 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
   function updateSendButtonState() {
     const hasText = inputEl.value.trim().length > 0 || pendingAttachments.length > 0;
-    if (hasText) {
+    if (hasText && !_queueFull) {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-ink text-surface hover:bg-ink-soft active:scale-95 shadow-sm transition-all duration-200 shrink-0";
       btnSend.disabled = false;
+      btnSend.title = '';
     } else {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-40 cursor-not-allowed transition-all duration-200 shrink-0";
       btnSend.disabled = true;
+      btnSend.title = _queueFull ? '前面已有消息在排队，请等当前任务结束' : '';
     }
   }
 
@@ -1763,6 +1765,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     // 严格 === false（非 falsy）：仅服务端明确「无活后台任务」或当前无查看实例（切到空会话）才隐藏；
     // bgActive 缺失（旧服务端 / 视觉 mock 不带该字段）时保守不隐藏，保留 showTaskProgress 逐心跳驱动的原行为。
     if (!viewedInst || viewedInst.bgActive === false) hideTaskProgress();
+    // 发送按钮禁用态：随 instances 广播的权威 queueFull 字段驱动（undefined/旧服务端=保守 false 不误禁）。
+    _queueFull = viewedInst?.queueFull === true;
 
     // REDESIGN: Update active workspace text pill
     if (topProjectText) {
@@ -1841,6 +1845,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       rebuildCustomModelGrid(modelsList); // 磁贴标签
       syncModelUI(currentModel);          // 底栏 chip「默认 · <真名>」（rebuild 不碰 chip）
     }
+    updateSendButtonState(); // _queueFull 可能随 instances 广播变化，须即时刷新发送按钮禁用态
   }
 
   // aggregateStates 已抽到 logic.js（顶部 import）。
@@ -2000,6 +2005,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
 
   let _busyState = false;
+  let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
   function setBusy(b) {
     if (!activeStatusPill || b === _busyState) return;
