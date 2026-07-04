@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -60,6 +60,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
   const btnAttach = $('btnAttach'), fileInput = $('fileInput'), attachTray = $('attachTray'); // E17：附件
+  const btnUltracode = $('btnUltracode'); // per-turn Workflow 关键词快捷发送
   const btnPush = $('btnPush'); // E15：推送订阅入口
   // 候选之外的模型名（/model 手设、或重建时需保留的当前值）插入为带标注的 option
   function ensureModelOption(value, note) {
@@ -102,6 +103,13 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   // ---- 状态 ----
   let currentSessionId = localStorage.getItem('current_session') || null;
   const sessionDomCache = new Map();
+  // 这些状态会被早期 socket/DOM 回调触达，必须先于回调注册声明，避免首连事件抢跑触发 TDZ。
+  let _busyState = false;
+  let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
+  let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
+  // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读。
+  let mirrorReadonlySid = null, mirrorOverriddenSid = null;
+  let pushVapidKey = null; // 缓存公钥，避免每次重连重复 fetch
 
   // ---- prompt cache 失效倒计时（前端本地递减；deadline 非 SDK 权威值）----
   // 数据链：statusline.js 用「最后一次 cache_read>0 的墙钟 + 5min ephemeral 约定 TTL」推算 cacheExpiresAt
@@ -1263,12 +1271,18 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   }
 
   // ---- 发送 / 停止 ----
-  function send() {
+  function send(opts = {}) {
     if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「仍要发送」可接管）
       addBar('此会话正在终端运行，只读中——如确认终端已停，点「仍要发送」接管', 'text-danger');
       return;
     }
-    const text = inputEl.value.trim();
+    const rawText = inputEl.value.trim();
+    if (opts.ultracode && !rawText && pendingAttachments.length === 0) {
+      addBar('先输入任务，再用 ultracode 发送', 'text-info');
+      inputEl.focus();
+      return;
+    }
+    const text = opts.ultracode ? withUltracodeKeyword(rawText) : rawText;
     if (!text && pendingAttachments.length === 0) return; // E17：纯附件（空文本）也可发
     // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传
@@ -1357,6 +1371,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
 
     if (text.length > 50000) { addBar(`消息过长（${text.length}/50000），未发送`, 'text-danger'); return; }
+    if (opts.ultracode) addBar('ultracode：本轮启用 Workflow 关键词', 'text-info');
     if (text.startsWith('/')) addBar(`⚡ 命令：${text}`, 'text-info');
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
@@ -1379,6 +1394,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     scrollBottom(true);
   }
   btnSend.onclick = send;
+  btnUltracode?.addEventListener('click', () => {
+    haptic('tap');
+    send({ ultracode: true });
+  });
   // 中文输入法：e.isComposing + keyCode 229 双检已覆盖绝大多数现代浏览器，
   // composition 状态追踪作为旧浏览器（Safari <14、部分 Android WebView）的后备兜底
   let composing = false;
@@ -2003,10 +2022,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
   }
 
-
-  let _busyState = false;
-  let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
-  let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
   function setBusy(b) {
     if (!activeStatusPill || b === _busyState) return;
     _busyState = b;
@@ -2708,8 +2723,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   }
 
   // 只读锁：会话被判「正在终端运行」时常驻横幅 + 禁用输入，硬防两进程并发写盘分叉。
-  // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读。
-  let mirrorReadonlySid = null, mirrorOverriddenSid = null;
   function applyMirror(readonly, sessionId) {
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
     mirrorReadonlySid = effective ? sessionId : null;
@@ -3006,8 +3019,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/'));
     return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
   }
-  let pushVapidKey = null; // 缓存公钥，避免每次重连重复 fetch
-
   async function doSubscribe() {
     // 实际执行订阅（需在有权限后调用）
     try {

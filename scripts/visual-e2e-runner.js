@@ -409,6 +409,7 @@ async function run() {
     const cdp = await page.target().createCDPSession();
     await cdp.send('Network.enable');
     let lastEmittedModel = null;
+    let lastEmittedText = null;
     
     cdp.on('Network.webSocketFrameSent', ({ response }) => {
       const data = response.payloadData;
@@ -418,6 +419,7 @@ async function run() {
           const [event, payload] = JSON.parse(data.slice(2));
           if (event === 'user:message') {
             lastEmittedModel = typeof payload === 'string' ? null : payload?.model;
+            lastEmittedText = typeof payload === 'string' ? payload : payload?.text;
           }
         } catch (e) {
           // ignore parsing failures
@@ -842,7 +844,21 @@ async function run() {
     if (chip) await chip.click();
     await sleep(300);
 
-    // 11d. Interrupt button during streaming
+    // 11d. Ultracode button prefixes the current prompt and uses the same send path
+    lastEmittedText = null;
+    await page.focus('#input');
+    await page.evaluate(() => {
+      const input = document.getElementById('input');
+      input.value = '整理 utils 日期工具';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await sleep(200);
+    await page.click('#btnUltracode');
+    await sleep(600);
+    console.log(`   [Assert] Ultracode emitted text: "${lastEmittedText}"`);
+    assert.strictEqual(lastEmittedText, 'ultracode 整理 utils 日期工具', 'TC-11: Ultracode button must prefix and emit the prompt');
+
+    // 11e. Interrupt button during streaming
     await sendCommand('test:stream-long');
 
     // Wait for activeStatusPill to appear, then screenshot

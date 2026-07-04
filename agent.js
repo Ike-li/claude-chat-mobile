@@ -131,7 +131,7 @@ export class AgentSession {
         resume: this.sessionId || undefined,
         abortController: this.abort,
         includePartialMessages: true,                        // E4 流式
-        extraArgs: this.effort ? { effort: this.effort } : {}, // 真 --effort 注入（SDK 映射为 --effort <档>，与终端 /effort 同旋钮）
+        effort: this.effort || undefined,                    // SDK 0.3+ 一等 Options.effort（low/medium/high/xhigh/max，与终端 /effort 同旋钮）。null=模型默认不传
         permissionMode: this.sdkPermissionMode(),            // bypass 映射为 SDK default（bypass 放行由 handleCanUseTool 自实现）
         // 不注入 options.allowedTools（2026-06-22 解耦）：放行白名单完全交给 settingSources 加载的
         // .claude/settings.json 的 permissions.allow（与终端 claude 同源、用户自管），投屏层不再耦合自家白名单。
@@ -692,12 +692,14 @@ export class AgentSession {
           const bgMessage = truncate(bgSubagent ? `${bgSubagent}：${bgDesc}` : bgDesc, TOOL_SUMMARY_CAP);
           this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage); // 注册"活的后台任务"→ 驱动纯后台 busy 角标（⏳/🤖/🖥）+ 横幅进度文案
           this.emitTransient('task_progress', { taskId: bgTaskId, taskType: bgTaskType, message: bgMessage });
-        } else if (typeof msg.subtype === 'string' && msg.subtype.startsWith('hook_')) {
-          // 新版 SDK 的 hook 生命周期事件（hook_started / hook_progress / …，后者高频）：属【已知】的
-          // 生命周期噪声，与 task_progress 同类——显式识别后静默吞掉，不落交互日志抽屉（否则连续刷屏）、
+        } else if (typeof msg.subtype === 'string' && (msg.subtype.startsWith('hook_') || msg.subtype === 'thinking_tokens' || msg.subtype === 'api_retry')) {
+          // 已知生命周期/进度噪声，与 task_progress 同类——显式识别后静默吞，不落交互日志抽屉（否则连续刷屏）、
           // 不进 buffer、不启轮、不广播。这不违背下面「不静默蒸发」的初衷：那条是给【未知】子类型兜底的，
           // 这里是我们已认出并有意丢弃。需观察原始投递时用 DEBUG_SDK_MESSAGES=1 看 [sdk-msg] 裸流。
-          // 若日后某个 hook_* 子类型有展示价值，在此分支之上单独加 else if 处理即可。
+          //   · hook_*（hook_started/hook_progress/hook_response，后者高频）：SessionStart 等钩子生命周期
+          //   · thinking_tokens：推理 token 计数心跳（每条 +1~3，单轮几十上百条，纯进度无展示价值）
+          //   · api_retry：429/限流自动重试（瞬时，高频时也刷屏；限流已由 statusline usage + result 间接反映）
+          // 若日后某个子类型有展示价值，在此分支之上单独加 else if 处理即可。
         } else {
           // 未识别的 system 子类型不再静默蒸发：记入交互日志抽屉，保留可观测性（本次通知丢失的教训）
           interactionLog.addSessionLog(this.sessionId, 'sys_info', `[SYS] 未映射 system 子类型: ${msg.subtype ?? '(空)'}`);

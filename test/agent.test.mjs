@@ -575,6 +575,22 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     s.dispose();
   });
 
+  test('system/thinking_tokens + api_retry → 不记未映射、不进 buffer、不启轮（高频噪声，静默吞）', () => {
+    const { s, events } = makeSession({ resumeId: 'sess-system-noise' });
+    const bufBefore = s.buffer.length;
+    const eventCountBefore = events.length;
+    assert.doesNotThrow(() => {
+      s.map({ type: 'system', subtype: 'thinking_tokens', tokens: 2 });
+      s.map({ type: 'system', subtype: 'api_retry', attempt: 1, delay_ms: 1000 });
+    });
+    const logs = getSessionLogs('sess-system-noise');
+    assert.ok(!logs.some(l => l.text.includes('未映射')), 'thinking_tokens/api_retry 不该被记为未映射（否则日志刷屏）');
+    assert.equal(s.buffer.length, bufBefore, 'thinking_tokens/api_retry 不进 replay buffer');
+    assert.equal(events.length, eventCountBefore, 'thinking_tokens/api_retry 不广播 agent:event');
+    assert.equal(s.pendingAutoTurn, false, 'thinking_tokens/api_retry 不触发汇报轮');
+    s.dispose();
+  });
+
   // ---- pendingAutoTurn 复位 + TTL 门（防 sticky flag 卡死会话）----
   test('interrupt() 复位 pendingAutoTurn（用户显式停止，无自动汇报可期）', async () => {
     const { s } = makeSession();

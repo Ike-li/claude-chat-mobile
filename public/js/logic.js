@@ -7,6 +7,14 @@ export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// ultracode 是 CLI/Workflow 的 per-turn 关键词触发，不是 effort 档位。按钮发送前只做前缀注入；
+// 已有关键词时保持原文，避免多次点击叠加。
+export function withUltracodeKeyword(text) {
+  const t = String(text ?? '').trim();
+  if (!t) return 'ultracode';
+  return /^ultracode(?:\s|$)/i.test(t) ? t : `ultracode ${t}`;
+}
+
 // 模型桥接：把规范名 / 网关后缀名（如 claude-opus-4-8[1m]）匹配到 models 候选项。
 // modelsList 由调用方传入（app.js 的 let modelsList / 测试夹具）。先精确命中，再按 [Nm] 后缀 + base 子串桥接。
 export function modelEntryFor(value, modelsList) {
