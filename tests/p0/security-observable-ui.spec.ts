@@ -26,4 +26,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-20b 鉴权失败显示令牌输入页且重输后恢复连接', async ({ page }) => {
+    const consoleText: string[] = [];
+    captureBrowserErrors(page);
+    page.on('console', message => consoleText.push(message.text()));
+    await page.request.post('/__reset');
+
+    await page.goto('/#token=bad-token');
+    await expect.poll(() => page.url()).not.toContain('bad-token');
+    await expect(page.locator('#authGate')).toBeVisible();
+    await expect(page.locator('#authError')).toContainText('令牌无效，请重新输入');
+    await expect(page.locator('#connDot')).not.toHaveClass(/bg-success/);
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="assistant-message"]')).toHaveCount(0);
+    await expect(page.locator('body')).not.toContainText('bad-token');
+    expect(consoleText.join('\n')).not.toContain('bad-token');
+
+    await page.locator('#authToken').fill('mock-token');
+    await page.locator('#authSubmit').click();
+    await expect(page.locator('#authGate')).toBeHidden();
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/);
+    await expect(page.locator('#input')).toBeVisible();
+    await expect(page.locator('body')).not.toContainText('mock-token');
+    expect(await page.evaluate(() => localStorage.getItem('auth_token'))).toBe('mock-token');
+    expect(consoleText.join('\n')).not.toContain('mock-token');
+
+    await expectNoBrowserErrors(page);
+  });
 });
