@@ -1749,6 +1749,9 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (cwdSeen) notifyStateChanges(newStates, newCwd); // 首次只定基线不通知（刷新/重连不冒假通知）
     workdirStates = newStates;
     currentCwd = newCwd;
+    // 切换查看实例（切 tab / 切工作区 / 新会话）→ 先把只读态复位为可编辑，等 server 按新会话重判并推权威 mirror_state。
+    // 消除切换瞬间旧会话只读横幅残留（server 判活现仅靠观察外部写入、切入不预锁，故复位是安全默认）。override 随会话切换失效。
+    if (newViewing !== viewingInstanceId) { mirrorOverriddenSid = null; applyMirror(false, null); }
     viewingInstanceId = newViewing;
     cwdSeen = true;
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）

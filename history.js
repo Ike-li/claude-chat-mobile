@@ -125,13 +125,6 @@ export function catchUpStep(state, { messages, localBusy = false }) {
   return { emit: [], state: { baseline: state.baseline, wasBusy: false } };
 }
 
-// 会话 transcript 最近修改时间（mtimeMs），文件不存在/读失败返回 0。
-// 用于只读追平的「切入即判活」：空闲实例 + transcript 刚被改过 ⇒ 疑似终端正在跑该会话 ⇒ 锁只读防分叉。
-export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
-  try { return (await stat(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`))).mtimeMs; }
-  catch { return 0; }
-}
-
 // 提取纯文本内容（content 可能是 string 或 array）
 function extractContent(content) {
   if (typeof content === 'string') return content;

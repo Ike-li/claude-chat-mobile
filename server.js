@@ -16,7 +16,7 @@ import compression from 'compression';
 import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
 import * as sessions from './sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache, catchUpStep, sessionFileMtime } from './history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache, catchUpStep } from './history.js';
 import { notificationForEvent } from './notifications.js';
 import { buildWebStatusLine } from './statusline.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from './uploads.js';
@@ -692,9 +692,10 @@ function scheduleBgBroadcast() {
 // 只能轮询磁盘 transcript，把终端【已落定】的新消息追加到 web。单定时器自适配当前查看会话（切会话即重置基线），
 // 决策交纯函数 catchUpStep（history.js，单测覆盖）。看不到实时 thinking / 在跑子 agent——它们不落盘（已知边界）。
 const CATCH_UP_INTERVAL_MS = 2500;
-// 只读锁：切入 transcript 刚被改过的【纯终端会话】、或运行期观察到外部写入 ⇒ 判终端活跃 ⇒ 发 mirror_state
-// 令前端禁用输入，硬防「两进程并发写同一 JSONL 致会话分叉」。解锁：切会话重判 / 用户显式接管（前端 override）。
-const MIRROR_RECENT_MS = 120_000;                  // transcript 最近改动 < 此 ⇒ 疑似终端正跑该会话（切入即锁）
+// 只读锁：仅当轮询【观察到外部真落定新消息】(catchUpStep emit 非空) ⇒ 判终端活跃 ⇒ 发 mirror_state 令前端
+// 禁用输入，硬防「两进程并发写同一 JSONL 致会话分叉」。解锁：切会话重判 / 用户显式接管（前端 override）。
+// 不用 transcript mtime 判活：web 端自己 resume 会话时 claude --resume 就写盘刷新 mtime（追加 mode 记录），
+// 无法据此区分「己方续接」与「终端在跑」——曾致纯 web 打开/切换会话被误锁只读（切入即 mtime 判活口径已废弃）。
 let mirrorReadonly = false;                         // 当前查看会话是否判「终端活跃、只读」
 function setMirror(readonly, sessionId, force = false) {
   if (!force && readonly === mirrorReadonly) return; // 仅变化时广播；force=视图切换入场时强制发权威态（消除切换空窗）
@@ -704,26 +705,22 @@ function setMirror(readonly, sessionId, force = false) {
     ts: Date.now(), type: 'mirror_state', payload: { readonly }
   });
 }
-let catchUpKey = null;                              // `${cwd} ${sessionId}`：当前追平的会话
+let catchUpKey = null;                              // `${cwd}\x00${sessionId}`：当前追平的会话
 let catchUpState = { baseline: 0, wasBusy: false };
-// 本 web 会话「亲自驱动过」的实例集（用户从 web 发过消息）：其 transcript 近期 mtime 是己方写的，判活时排除，
-// 避免切回自己刚用过的会话被误锁只读。foreign（纯终端会话）= 不在此集合。dispose 时清理。
-const localDrivenInstances = new Set();
 async function catchUpTick() {
   const id = viewingInstanceId;
   const a = id ? agents.get(id) : null;
   if (!a || !a.sessionId) { catchUpKey = null; setMirror(false, null); return; }              // 无查看会话：停
-  const key = `${a.cwd} ${a.sessionId}`;
+  const key = `${a.cwd}\x00${a.sessionId}`;
   const st = instanceState(id);
   const localBusy = st === 'busy' || st === 'permission';
   if (key !== catchUpKey) {                                           // 切了会话：以现有历史长度定基线，本 tick 不推
-    let seedLen = 0, mtime = 0;
-    try { seedLen = (await getSessionHistory(a.sessionId, a.cwd)).length; mtime = await sessionFileMtime(a.sessionId, a.cwd); }
+    let seedLen = 0;
+    try { seedLen = (await getSessionHistory(a.sessionId, a.cwd)).length; }
     catch { return; }
     catchUpKey = key;
     catchUpState = { baseline: seedLen, wasBusy: localBusy };
-    // 仅【本 web 会话从未驱动过】的实例才按 mtime 判活——否则切回自己刚用过的会话会被误锁（那 mtime 是己方写的）。
-    setMirror(!localDrivenInstances.has(id) && !localBusy && mtime > 0 && (Date.now() - mtime) < MIRROR_RECENT_MS, a.sessionId, true); // 入场强制发
+    setMirror(false, a.sessionId, true); // 切入不预锁：web resume 自身会刷 mtime、不可作判据；仅下方观察到外部真写入才锁。force 清上个会话残留的锁。
     return;
   }
   if (localBusy) { catchUpState = { baseline: catchUpState.baseline, wasBusy: true }; return; } // 己方在跑：抑制、且免读大文件
@@ -1075,7 +1072,6 @@ function disposeInstance(instanceId) {
   effortByInstance.delete(instanceId);
   doneInstances.delete(instanceId);
   errorInstances.delete(instanceId);
-  localDrivenInstances.delete(instanceId);
   if (viewingInstanceId === instanceId) viewingInstanceId = agents.keys().next().value ?? null;
   broadcastInstances();
 }
@@ -1225,7 +1221,6 @@ io.on('connection', socket => {
       viewingInstanceId = a.instanceId;
       broadcastInstances();
     }
-    localDrivenInstances.add(a.instanceId); // 用户从 web 驱动该实例 → 判活时排除（切回自己刚用过的会话不误锁）
     interactionLog.userMessageIn(a.sessionId, cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
     if (hasAttachments) {
       // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
