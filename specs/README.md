@@ -38,6 +38,7 @@ Current P0 mock-only coverage also includes:
 - Auth failure coverage includes opening the access-help sheet and retrying by Enter from the token gate without leaking rejected or accepted tokens.
 - Settings coverage verifies unsupported-model effort controls hide and do not leak a stale thinking effort into the next turn.
 - Settings coverage verifies new-session empty-start permission/effort presets are consumed by the first sent message.
+- Settings coverage verifies `/model` local command handling does not create a chat message and preserves an explicit `[1m]` suffix for the next turn.
 - Console coverage verifies opening and closing the trace sheet preserves the user's in-progress input draft.
 - Console coverage verifies reopening the trace sheet after a session switch shows the current session trace rather than the previous session trace.
 - Long-stream interrupt coverage verifies that a stopped stream does not keep appending chunks after a later command completes.

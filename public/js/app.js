@@ -235,6 +235,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     defCard.onclick = () => {
       haptic('tap');
       modelInput.value = '';
+      delete modelInput.dataset.fullModel;
       syncModelUI('');
       rebuildEffortOptions(currentModel);
     };
@@ -255,6 +256,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       card.onclick = () => {
         haptic('tap');
         modelInput.value = val;
+        delete modelInput.dataset.fullModel;
         syncModelUI(val);
         rebuildEffortOptions(val);
         if (!effortSelect.value && currentEffort) {
@@ -1354,6 +1356,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         if (match) {
           currentGatewaySuffix = match[0];
           nakedArg = arg.replace(/\[[^\]]+\]$/, '');
+          modelInput.dataset.fullModel = arg;
+        } else {
+          currentGatewaySuffix = '';
+          delete modelInput.dataset.fullModel;
         }
         ensureModelOption(nakedArg, '手动设置'); // select 候选外的任意名（如网关别名）动态插入
         modelInput.value = nakedArg;
@@ -1369,7 +1375,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       autosize();
       return;
     }
-    let model = modelInput.value.trim() || undefined;
+    let model = modelInput.dataset.fullModel || modelInput.value.trim() || undefined;
     // S5：仅对「不在 supportedModels 候选里的自设名」(如 /model 手设并剥离了后缀的) 回贴网关后缀。
     // 候选内的值本就是网关合法完整名(裸别名 opus/sonnet 或显式 deepseek-v4-pro[1m])，原样发送——
     // 否则会把上个模型的后缀错贴到用户新选的别的候选(opus→opus[1m]，网关不认)。

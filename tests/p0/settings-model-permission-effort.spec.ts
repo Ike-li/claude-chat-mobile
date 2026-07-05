@@ -99,4 +99,25 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-09e /model 本地命令只更新下一轮模型不发送聊天', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#input').fill('/model claude-3-opus[1m]');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await page.locator('#btnSend').click();
+
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="assistant-message"]')).toHaveCount(0);
+    await expect(page.locator('#messages')).toContainText('模型已设为 claude-3-opus[1m]（下一条消息生效）');
+    await expect(page.locator('#pillModelText')).toContainText('claude-3-opus[1m]');
+    await expect(page.locator('#input')).toHaveValue('');
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:settings-echo');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('model=claude-3-opus[1m]');
+
+    await expectNoBrowserErrors(page);
+  });
 });
