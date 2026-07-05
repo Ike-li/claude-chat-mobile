@@ -758,6 +758,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
           modal.classList.remove('hidden');
         }
         if (inputEl) inputEl.disabled = true;
+        updateSendButtonState();
       } else if (p.status === 'approved') {
         if (modal) {
           modal.style.transition = 'opacity 0.15s ease-out';
@@ -768,9 +769,11 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
           }, 150);
         }
         if (inputEl) inputEl.disabled = false;
+        updateSendButtonState();
       } else if (p.status === 'denied') {
         if (modal) modal.classList.add('hidden');
-        if (inputEl) inputEl.disabled = false;
+        if (inputEl) inputEl.disabled = true;
+        updateSendButtonState();
         showDeniedOverlay();
       }
     },
@@ -1319,6 +1322,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       addBar('此会话正在终端运行，只读中——如确认终端已停，点「仍要发送」接管', 'text-danger');
       return;
     }
+    if (inputEl.disabled) {
+      addBar('请先完成设备授权或解除只读状态，再发送新消息', 'text-info');
+      return;
+    }
     if (activePerm || activeQuestion) {
       addBar('请先处理当前审批或选择，再发送新消息', 'text-info');
       return;
@@ -1569,14 +1576,17 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   function updateSendButtonState() {
     const hasText = inputEl.value.trim().length > 0 || pendingAttachments.length > 0;
     const blockedByUserRequest = !!activePerm || !!activeQuestion;
-    if (hasText && !_queueFull && !blockedByUserRequest) {
+    const blockedByDisabledInput = inputEl.disabled;
+    if (hasText && !_queueFull && !blockedByUserRequest && !blockedByDisabledInput) {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-ink text-surface hover:bg-ink-soft active:scale-95 shadow-sm transition-all duration-200 shrink-0";
       btnSend.disabled = false;
       btnSend.title = '';
     } else {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-40 cursor-not-allowed transition-all duration-200 shrink-0";
       btnSend.disabled = true;
-      btnSend.title = blockedByUserRequest ? '请先处理当前审批或选择' : (_queueFull ? '前面已有消息在排队，请等当前任务结束' : '');
+      btnSend.title = blockedByUserRequest
+        ? '请先处理当前审批或选择'
+        : (blockedByDisabledInput ? '请先完成设备授权或解除只读状态' : (_queueFull ? '前面已有消息在排队，请等当前任务结束' : ''));
     }
   }
 

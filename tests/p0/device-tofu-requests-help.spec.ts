@@ -90,4 +90,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-15e 等待设备授权期间保留草稿且禁止发送', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tofu-delayed');
+    await page.locator('#input').fill('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expect(page.locator('#deviceModal')).toBeVisible();
+    await expect(page.locator('#deviceModalId')).toHaveText('unauthorized-fingerprint-999');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toHaveAttribute('title', '请先完成设备授权或解除只读状态');
+
+    await expect(page.locator('#deviceModal')).toBeHidden({ timeout: 12_000 });
+    await expect(page.locator('#input')).toBeEnabled();
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await page.locator('#btnSend').click();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+
+    await expectNoBrowserErrors(page);
+  });
 });
