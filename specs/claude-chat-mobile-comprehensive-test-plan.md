@@ -240,6 +240,7 @@
     - expect: 显示本设备 ID，例如 unauthorized-fingerprint-999。
     - expect: 包含“没有其它已登录的设备？用命令授权”说明和 device.js approve 命令模板。
     - expect: 等待授权期间已有输入草稿保留、发送按钮禁用并给出原因；设备批准后草稿可继续发送。
+    - expect: 设备被拒期间已有输入草稿仍保留，发送按钮继续禁用；重新请求接入后回到 pending 授权且仍不能误发送草稿。
     - expect: 失败条件：未授权设备仍可操作聊天、设备 ID 不显示、帮助命令缺失。
   2. 起始状态/假设：fresh state。发送 test:devicerequests。
     - expect: 可信设备视角出现 pending device request 卡片栈。

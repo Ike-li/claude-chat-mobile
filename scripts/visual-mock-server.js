@@ -2240,6 +2240,23 @@ io.on('connection', socket => {
           });
         }, 1200);
 
+      } else if (cmd === 'test:tofu-denied-delayed') {
+        console.log('[mock] Delaying TOFU denial so the UI can hold a draft through pending and denied states');
+        await delay(600);
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
+        });
+
+        await delay(900);
+        deniedDeviceRetryPending = true;
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'device_status', payload: { status: 'denied', deviceId: 'unauthorized-fingerprint-999' }
+        });
+        setTimeout(() => socket.disconnect(true), 50);
+        return;
+
       } else if (cmd === 'test:tofu' || cmd === 'test:tofu-denied') {
         console.log('[mock] Forcing unapproved TOFU status');
         socket.emit('agent:event', {

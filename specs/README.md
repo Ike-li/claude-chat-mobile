@@ -72,6 +72,7 @@ Current P0 mock-only coverage also includes:
 - Mirror-state coverage verifies an in-progress draft is preserved while the terminal read-only lock is active and can be sent after explicit takeover.
 - Device trust coverage includes pending, denied, denied retry back to pending, and trusted-device approval/rejection updates through mock Socket.IO events.
 - Device trust coverage verifies an existing draft is preserved while TOFU approval is pending, Send is disabled with visible reason, and the draft can be sent after approval.
+- Device trust coverage verifies a draft is still preserved after device denial and retrying access keeps Send disabled while returning to pending approval.
 - Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.
 - Attachment isolation coverage verifies unsent attachment chips are cleared on session switch so files selected in one session are not sent to another session.
 - Offline attachment coverage verifies queued attachment messages keep their chip while disconnected and do not duplicate the chip after reconnect resend confirmation.

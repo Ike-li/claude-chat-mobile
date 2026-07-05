@@ -116,4 +116,33 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-15f 设备被拒期间保留草稿且继续禁止发送', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tofu-denied-delayed');
+    await page.locator('#input').fill('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expect(page.locator('#deviceModal')).toBeVisible();
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await expect(page.locator('#deviceDenied')).toBeVisible({ timeout: 12_000 });
+    await expect(page.locator('#deviceDenied')).toContainText('设备未获授权');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toHaveAttribute('title', '请先完成设备授权或解除只读状态');
+
+    await page.locator('#deviceDeniedRetry').click();
+    await expect(page.locator('#deviceDenied')).toBeHidden();
+    await expect(page.locator('#deviceModal')).toBeVisible();
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await expectNoBrowserErrors(page);
+  });
 });
