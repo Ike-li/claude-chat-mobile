@@ -592,6 +592,13 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Gap pending history after buffer trim.' }
         ]
       });
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-gap-question') {
+      callback({
+        messages: [
+          { role: 'user', content: 'Gap question fallback prompt' },
+          { role: 'assistant', content: 'Gap question history after buffer trim.' }
+        ]
+      });
     } else {
       callback({ messages: [] });
     }
@@ -652,6 +659,12 @@ io.on('connection', socket => {
       socket.emit('agent:event', {
         seq: 1, epoch: 'mock-epoch-gap-pending-partial', sessionId: 'mock-session-gap-pending', instanceId: 'inst_gap_pending', ts: Date.now(),
         type: 'text_delta', payload: { messageId: 'msg_gap_pending_partial', text: 'Partial pending gap buffer that must be discarded' }
+      });
+      ack(1, { gap: true });
+    } else if (instanceId === 'inst_gap_question') {
+      socket.emit('agent:event', {
+        seq: 1, epoch: 'mock-epoch-gap-question-partial', sessionId: 'mock-session-gap-question', instanceId: 'inst_gap_question', ts: Date.now(),
+        type: 'text_delta', payload: { messageId: 'msg_gap_question_partial', text: 'Partial question gap buffer that must be discarded' }
       });
       ack(1, { gap: true });
     } else if (instanceId === 'inst_1') {
@@ -920,6 +933,52 @@ io.on('connection', socket => {
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: inst?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      } else if (cmd === 'test:gap-question-snapshot') {
+        console.log('[mock] test:gap-question-snapshot — gap ack 后仍带回 AskUserQuestion pending snapshot');
+        let inst = mockInstances.find(i => i.instanceId === 'inst_gap_question');
+        if (!inst) {
+          inst = {
+            instanceId: 'inst_gap_question',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-gap-question',
+            title: 'Gap Question Recovery',
+            state: 'permission',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-haiku',
+            activeTool: 'AskUserQuestion'
+          };
+          mockInstances.push(inst);
+        } else {
+          inst.state = 'permission';
+          inst.activeTool = 'AskUserQuestion';
+        }
+        pendingQuestion = {
+          instanceId: 'inst_gap_question',
+          requestId: 'req_gap_question_snapshot#0',
+          toolUseId: 't_gap_question_snapshot',
+          messageId: 'msg_gap_question_snapshot_1',
+          options: ['main', 'dev', 'release-v1.0']
+        };
+        syncPendingSnapshot = {
+          permissions: [],
+          questions: [{
+            requestId: pendingQuestion.requestId,
+            text: 'Which release branch should receive the gap-restored pending answer?',
+            options: pendingQuestion.options
+          }]
+        };
+        syncPendingSnapshotInstanceId = 'inst_gap_question';
+        viewingInstanceId = 'inst_gap_question';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: inst.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
         });
       } else if (cmd === 'test:mirror-readonly') {
         console.log('[mock] test:mirror-readonly — 模拟终端会话正在运行，只读追平锁');

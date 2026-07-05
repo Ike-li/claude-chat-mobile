@@ -71,4 +71,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-14e sync gap 后仍保留 AskUserQuestion pending snapshot', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:gap-question-snapshot');
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#messages')).toContainText('Gap question fallback prompt', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('Gap question history after buffer trim.');
+    await expect(page.locator('#messages')).not.toContainText('Partial question gap buffer that must be discarded');
+    await expect(page.locator('#historyLoadingCard')).toHaveCount(0);
+    await expect(page.locator('#questionModal')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#questionText')).toContainText('Which release branch should receive the gap-restored pending answer?');
+    await expect(page.locator('#questionOptions button')).toHaveText([
+      'main',
+      'dev',
+      'release-v1.0'
+    ]);
+
+    await expectNoBrowserErrors(page);
+  });
 });
