@@ -48,6 +48,31 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-11q 切换会话会清空未发送草稿避免串线', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await page.locator('#input').fill('draft that belongs to the main session only');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    await page.locator('button[title="Another App Concurrency"]').click();
+
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#input')).toHaveValue('');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    const sent = page.locator('[data-testid="user-message"]').last();
+    await expect(sent).toContainText('test:settings-echo');
+    await expect(sent).not.toContainText('draft that belongs to the main session only');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11b 关闭后台会话不影响当前会话', async ({ page }) => {
     await gotoMock(page);
     await page.setViewportSize({ width: 900, height: 812 });

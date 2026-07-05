@@ -63,6 +63,7 @@ Current P0 mock-only coverage also includes:
 - Session navigation coverage verifies the first message from a sidebar-created empty chat stays in the selected workspace after the lazy fresh instance opens.
 - Session navigation coverage verifies a failed historical session switch shows an error without replacing the current workspace or chat transcript.
 - Session navigation coverage verifies model, permission, and thinking effort pills follow the selected live instance after a workspace/session switch.
+- Session navigation coverage verifies an unsent text draft is cleared on session switch so it cannot be sent to the wrong session.
 - Pending snapshot reconciliation covers duplicate same-`requestId` pending entries without showing repeated approval sheets, and restores AskUserQuestion choice sheets from `sync:since` pending snapshots.
 - Pending snapshot reconciliation verifies a `sync:since` gap still rebuilds approval and AskUserQuestion state after falling back to `session:history`.
 - AskUserQuestion coverage includes duplicate same-`requestId` replay without showing repeated choice sheets after reconnect/sync paths.

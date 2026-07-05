@@ -1970,6 +1970,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
 
     clearView(sid, null);
+    if (inputEl) {
+      inputEl.value = '';
+      inputEl.dispatchEvent(new Event('input'));
+    }
 
     // 新会话首发懒开：实例已建、sessionId 未由 SDK init 返回。此刻回落 dashboard 会「闪首页」——
     // 到首个 user_message 经 leaveStartScreen 切回聊天前的几百 ms 用户看见首页再弹回。
