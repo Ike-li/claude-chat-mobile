@@ -43,7 +43,7 @@ Current P0 mock-only coverage also includes:
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
 - Multi-session routing guards cover closing the current session and falling back to the remaining session without leaving the closed session's history on screen.
 - Cross-tab pending guards cover AskUserQuestion sheets being cleared when the view switches away and rebuilt only after switching back to the owning session.
-- Workspace status coverage verifies background completion appears in both the top sessions indicator and sidebar badges.
+- Workspace status coverage verifies background completion and error states appear in both the top sessions indicator and sidebar badges.
 - Session navigation coverage verifies unopened historical sessions can be launched from the sidebar and rendered through the `session:history` fallback.
 - Session navigation coverage verifies the sidebar new-session button opens an empty chat in the selected workspace rather than the previously viewed workspace.
 - Session navigation coverage verifies the first message from a sidebar-created empty chat stays in the selected workspace after the lazy fresh instance opens.
