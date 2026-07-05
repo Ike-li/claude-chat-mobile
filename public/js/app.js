@@ -727,6 +727,23 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     handle[ev.type]?.(ev.payload);
   });
 
+  function failPendingToolCards(message) {
+    if (!toolCards.size) return;
+    const summary = message || '工具执行已因本轮错误停止';
+    for (const card of toolCards.values()) {
+      const status = card.querySelector('.t-status');
+      if (status) status.textContent = '❌';
+      const out = card.querySelector('.t-out');
+      if (out) {
+        out.textContent = summary;
+        out.classList.remove('hidden');
+      }
+    }
+    toolCards.clear();
+    agentToolIds.clear();
+    hideActivityBanner();
+  }
+
   const handle = {
     device_status(p) {
       const modal = $('deviceModal');
@@ -1021,6 +1038,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       hideActivityBanner(); // 会话结束隐藏活动横幅
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
+      if (p.isError) failPendingToolCards((p.errors || []).join('; '));
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       haptic(p.isError ? 'error' : 'success');
       const cost = p.costUsd != null ? ` · $${p.costUsd.toFixed(4)}` : '';
@@ -1045,6 +1063,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     },
     error(p) {
       finalizeStreams();
+      failPendingToolCards(p.message);
       haptic('error');
       addBar(`⚠️ ${p.message}`, 'text-danger');
       setBusy(false);

@@ -958,6 +958,30 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_tool_ooo_1', durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
         });
 
+      } else if (cmd === 'test:tool-error') {
+        console.log('[mock] Starting test:tool-error sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_tool_error_cmd', name: 'run_command', inputSummary: 'npm run failing-script' }
+        });
+        await delay(400);
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'error', payload: { message: 'mock tool crashed while running npm run failing-script' }
+        });
+
       } else if (cmd === 'test:permission' || cmd === 'test:permission-remote-resolved') {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';

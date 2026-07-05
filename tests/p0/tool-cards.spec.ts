@@ -47,4 +47,23 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-05c 工具执行中出错会收敛卡片并恢复输入', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tool-error');
+    const failedCard = page.locator('details.toolcard').filter({ hasText: 'run_command' }).first();
+    await expect(failedCard).toBeVisible();
+
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).toContainText('mock tool crashed');
+    await expect(failedCard.locator('.t-status')).toHaveText('❌');
+    await failedCard.locator('summary').click();
+    await expect(failedCard.locator('.t-out')).toContainText('mock tool crashed');
+
+    await page.locator('#input').fill('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
 });
