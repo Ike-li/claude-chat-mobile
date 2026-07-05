@@ -592,7 +592,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   if (deviceDeniedHelp) deviceDeniedHelp.onclick = showAccessHelp;
   if (deviceDeniedRetry) deviceDeniedRetry.onclick = () => {
     deviceDenied?.classList.add('hidden');
-    if (!socket.connected) socket.connect(); // 重新发起 → 重新进入 pending，可信端/终端可再批
+    if (socket.connected) socket.disconnect();
+    socket.connect(); // 重新发起 → 重新进入 pending，可信端/终端可再批
   };
 
   // 已信任设备渲染待审批设备请求（pending_devices 事件）。点准入/拒绝即发 user:approveDevice/denyDevice。

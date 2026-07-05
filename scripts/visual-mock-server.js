@@ -105,6 +105,7 @@ let syncPendingSnapshotInstanceId = null;
 let pendingDevices = [];
 let alwaysAllowedPermissionNames = new Set();
 let activeEpoch = 'mock-epoch-init';
+let deniedDeviceRetryPending = false;
 
 function resetMockState() {
   viewingInstanceId = 'inst_1';
@@ -119,6 +120,7 @@ function resetMockState() {
   pendingDevices = [];
   alwaysAllowedPermissionNames = new Set();
   activeEpoch = 'mock-epoch-init';
+  deniedDeviceRetryPending = false;
 }
 
 function createPendingDeviceRequests() {
@@ -145,6 +147,16 @@ const delay = ms => new Promise(res => setTimeout(res, ms));
 
 io.on('connection', socket => {
   console.log(`[mock-conn] Socket connected: ${socket.id}`);
+
+  if (deniedDeviceRetryPending) {
+    deniedDeviceRetryPending = false;
+    socket.deviceApproved = false;
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
+    });
+    return;
+  }
 
   // Auto-approve socket for standard testing (simulates local trust)
   socket.deviceApproved = true;
@@ -1107,10 +1119,12 @@ io.on('connection', socket => {
 
         if (cmd === 'test:tofu-denied') {
           await delay(500);
+          deniedDeviceRetryPending = true;
           socket.emit('agent:event', {
             seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
             type: 'device_status', payload: { status: 'denied', deviceId: 'unauthorized-fingerprint-999' }
           });
+          setTimeout(() => socket.disconnect(true), 50);
           return;
         }
 

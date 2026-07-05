@@ -38,7 +38,7 @@ Current P0 mock-only coverage also includes:
 - Pending snapshot reconciliation covers duplicate same-`requestId` pending entries without showing repeated approval sheets, and restores AskUserQuestion choice sheets from `sync:since` pending snapshots.
 - AskUserQuestion coverage includes duplicate same-`requestId` replay without showing repeated choice sheets after reconnect/sync paths.
 - Task progress coverage includes failed background tasks so failure notifications also clear the progress banner.
-- Device trust coverage includes pending, denied, and trusted-device approval/rejection updates through mock Socket.IO events.
+- Device trust coverage includes pending, denied, denied retry back to pending, and trusted-device approval/rejection updates through mock Socket.IO events.
 - Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.
 - Responsive and PWA coverage verifies permission approval sheet controls stay reachable in narrow portrait/landscape viewports and manifest icons plus the local service-worker shell script load.
 

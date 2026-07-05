@@ -74,4 +74,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-15d 设备被拒后可重新请求接入并回到等待授权态', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tofu-denied');
+    await expect(page.locator('#deviceDenied')).toBeVisible();
+
+    await page.locator('#deviceDeniedRetry').click();
+    await expect(page.locator('#deviceDenied')).toBeHidden();
+    await expect(page.locator('#deviceModal')).toBeVisible();
+    await expect(page.locator('#deviceModalId')).toHaveText('unauthorized-fingerprint-999');
+    await expect(page.locator('#deviceModal')).toContainText('node scripts/device.js approve');
+    await expect(page.locator('#input')).toBeDisabled();
+
+    await expectNoBrowserErrors(page);
+  });
 });
