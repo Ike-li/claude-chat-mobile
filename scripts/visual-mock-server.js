@@ -105,7 +105,7 @@ let pendingQuestion = null;
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let syncPendingSnapshotInstanceId = null;
 let pendingDevices = [];
-let alwaysAllowedPermissionNames = new Set();
+let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
 let deniedDeviceRetryPending = false;
 
@@ -122,7 +122,7 @@ function resetMockState() {
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
   pendingDevices = [];
-  alwaysAllowedPermissionNames = new Set();
+  alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
   deniedDeviceRetryPending = false;
 }
@@ -865,7 +865,7 @@ io.on('connection', socket => {
         });
         await delay(500);
 
-        if (alwaysAllowedPermissionNames.has('run_command')) {
+        if (alwaysAllowedPermissionNamesByInstance.get(viewingInstanceId)?.has('run_command')) {
           socket.emit('agent:event', {
             seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
             type: 'tool_result', payload: { toolUseId: 't_git_push', ok: true, outputSummary: 'git push success: branch main -> origin' }
@@ -1437,7 +1437,11 @@ io.on('connection', socket => {
 
       if (decision === 'allow') {
         if (alwaysThisSession && pendingPermission.name) {
-          alwaysAllowedPermissionNames.add(pendingPermission.name);
+          const targetInstanceId = activeInst.instanceId;
+          if (!alwaysAllowedPermissionNamesByInstance.has(targetInstanceId)) {
+            alwaysAllowedPermissionNamesByInstance.set(targetInstanceId, new Set());
+          }
+          alwaysAllowedPermissionNamesByInstance.get(targetInstanceId).add(pendingPermission.name);
         }
         // 修复后的后端行为：批准 ExitPlanMode 等含 setMode 的请求 → 切权限档并广播 permission_mode，
         // 使手机端权限档图标跟随（TC-15 回归的核心断言点）。

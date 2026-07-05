@@ -34,7 +34,7 @@ Current P0 mock-only coverage also includes:
 - Console coverage verifies opening and closing the trace sheet preserves the user's in-progress input draft.
 - Long-stream interrupt coverage verifies that a stopped stream does not keep appending chunks after a later command completes.
 - Tool-card coverage includes out-of-order tool results to ensure outputs stay attached to the correct visible card.
-- Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet.
+- Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet and the rule does not leak to another live session.
 - Remote request resolution coverage verifies stale permission and AskUserQuestion sheets close when another trusted device resolves the request.
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
 - Workspace status coverage verifies background completion appears in both the top sessions indicator and sidebar badges.
