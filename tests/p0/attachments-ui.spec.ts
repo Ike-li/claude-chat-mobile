@@ -147,4 +147,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-18f 移除附件 chip 后不会随消息发送', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#fileInput').setInputFiles([
+      { name: 'keep-me.txt', mimeType: 'text/plain', buffer: Buffer.from('keep this attachment') },
+      { name: 'remove-me.txt', mimeType: 'text/plain', buffer: Buffer.from('remove this attachment') }
+    ]);
+    await expect(page.locator('#attachTray')).toContainText('keep-me.txt');
+    await expect(page.locator('#attachTray')).toContainText('remove-me.txt');
+
+    const removedChip = page.locator('#attachTray > div').filter({ hasText: 'remove-me.txt' });
+    await removedChip.locator('button').click();
+    await expect(page.locator('#attachTray')).toContainText('keep-me.txt');
+    await expect(page.locator('#attachTray')).not.toContainText('remove-me.txt');
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    const sent = page.locator('[data-testid="user-message"]').last();
+    await expect(sent).toContainText('test:settings-echo');
+    await expect(sent).toContainText('keep-me.txt');
+    await expect(sent).not.toContainText('remove-me.txt');
+
+    await expectNoBrowserErrors(page);
+  });
 });
