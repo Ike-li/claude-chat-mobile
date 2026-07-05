@@ -52,6 +52,7 @@ Current P0 mock-only coverage also includes:
 - Mirror-state coverage verifies terminal read-only catch-up locks the input and allows an explicit user takeover.
 - Device trust coverage includes pending, denied, denied retry back to pending, and trusted-device approval/rejection updates through mock Socket.IO events.
 - Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.
+- Attachment isolation coverage verifies unsent attachment chips are cleared on session switch so files selected in one session are not sent to another session.
 - Responsive and PWA coverage verifies permission approval sheet controls stay reachable in narrow portrait/landscape viewports and manifest icons plus the local service-worker shell script load.
 
 ## Test Plan

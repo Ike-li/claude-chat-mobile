@@ -2,7 +2,7 @@
 // seed: tests/seed.goto-mock.spec.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../seed.goto-mock.spec';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
 
 const tinyPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
@@ -86,6 +86,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const sent = page.locator('[data-testid="user-message"]').last();
     await expect(sent).toContainText('send unknown attachment');
     await expect(sent).toContainText('LICENSE');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-18d 切换会话会清空未发送附件避免串线', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await page.locator('#fileInput').setInputFiles({
+      name: 'cross-session.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('must not leak to another session')
+    });
+    await expect(page.locator('#attachTray')).toContainText('cross-session.txt');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    await page.locator('button[title="Another App Concurrency"]').click();
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#attachTray')).toBeHidden();
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    const sent = page.locator('[data-testid="user-message"]').last();
+    await expect(sent).toContainText('test:settings-echo');
+    await expect(sent).not.toContainText('cross-session.txt');
 
     await expectNoBrowserErrors(page);
   });
