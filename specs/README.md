@@ -50,6 +50,7 @@ Current P0 mock-only coverage also includes:
 - Workspace status coverage verifies background completion and error states appear in both the top sessions indicator and sidebar badges, and that mixed background states prioritize pending approval over completed/running work.
 - Session navigation coverage verifies unopened historical sessions can be launched from the sidebar and rendered through the `session:history` fallback.
 - Session navigation coverage verifies a `sync:since` gap while opening a historical session clears partial replay and falls back to `session:history`.
+- Session navigation coverage verifies the sidebar `显示全部会话…` path can expand a truncated `session:list` result and open an older history session.
 - Session navigation coverage verifies the sidebar new-session button opens an empty chat in the selected workspace rather than the previously viewed workspace.
 - Session navigation coverage verifies the first message from a sidebar-created empty chat stays in the selected workspace after the lazy fresh instance opens.
 - Session navigation coverage verifies a failed historical session switch shows an error without replacing the current workspace or chat transcript.

@@ -106,6 +106,7 @@ let pendingQuestion = null;
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let syncPendingSnapshotInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
+let historyOverflowMode = false;
 let pendingDevices = [];
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
@@ -125,6 +126,7 @@ function resetMockState() {
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
   lateClosedSessionEventsInstanceId = null;
+  historyOverflowMode = false;
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
@@ -251,6 +253,49 @@ function emitLateClosedSessionEvents(closedInstanceId) {
     seq: 1, epoch: 'mock-epoch-current-after-closed-stale', sessionId: current.sessionId, instanceId: current.instanceId, ts: Date.now(),
     type: 'system', payload: { message: '[MOCK_INFO] Closed-session stale replay finished for current view.' }
   });
+}
+
+function mainCwdSessions() {
+  const sessions = [
+    {
+      id: 'mock-session-visual-test',
+      title: 'Visual Sandbox (Main)',
+      model: 'claude-3-5-sonnet',
+      lastUsedAt: Date.now() - 10000,
+      entrypoint: 'sdk-ts'
+    },
+    {
+      id: 'mock-session-archived',
+      title: 'Archived Planning Session',
+      model: 'claude-3-5-sonnet',
+      lastUsedAt: Date.now() - 600000,
+      entrypoint: 'sdk-ts'
+    },
+    {
+      id: 'mock-session-gap',
+      title: 'Archived Gap Session',
+      model: 'claude-3-5-sonnet',
+      lastUsedAt: Date.now() - 750000,
+      entrypoint: 'sdk-ts'
+    },
+    {
+      id: 'mock-session-deleted',
+      title: 'Deleted Remote Session',
+      model: 'claude-3-5-sonnet',
+      lastUsedAt: Date.now() - 900000,
+      entrypoint: 'sdk-ts'
+    }
+  ];
+  if (historyOverflowMode) {
+    sessions.push({
+      id: 'mock-session-older-migration',
+      title: 'Older Migration Session',
+      model: 'claude-3-5-sonnet',
+      lastUsedAt: Date.now() - 2400000,
+      entrypoint: 'sdk-ts'
+    });
+  }
+  return sessions;
 }
 
 io.on('connection', socket => {
@@ -488,42 +533,16 @@ io.on('connection', socket => {
 
   // Handle session list request for sidebar directory browsing
   socket.on('session:list', (payload, callback) => {
-    const { cwd } = payload || {};
+    const { cwd, all } = payload || {};
     console.log(`[mock] session:list for cwd: ${cwd}`);
     if (cwd === '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') {
+        const sessions = mainCwdSessions();
+        const visibleSessions = historyOverflowMode && !all ? sessions.slice(0, 3) : sessions;
         callback({
           currentSessionId: 'mock-session-visual-test',
-          sessions: [
-            {
-              id: 'mock-session-visual-test',
-              title: 'Visual Sandbox (Main)',
-              model: 'claude-3-5-sonnet',
-              lastUsedAt: Date.now() - 10000,
-              entrypoint: 'sdk-ts'
-            },
-            {
-              id: 'mock-session-archived',
-              title: 'Archived Planning Session',
-              model: 'claude-3-5-sonnet',
-              lastUsedAt: Date.now() - 600000,
-              entrypoint: 'sdk-ts'
-            },
-            {
-              id: 'mock-session-gap',
-              title: 'Archived Gap Session',
-              model: 'claude-3-5-sonnet',
-              lastUsedAt: Date.now() - 750000,
-              entrypoint: 'sdk-ts'
-            },
-            {
-              id: 'mock-session-deleted',
-              title: 'Deleted Remote Session',
-              model: 'claude-3-5-sonnet',
-              lastUsedAt: Date.now() - 900000,
-              entrypoint: 'sdk-ts'
-            }
-          ]
+          sessions: visibleSessions,
+          hasMore: historyOverflowMode && !all
         });
       }
     } else if (cwd === '/Users/you/code/another-react-project') {
@@ -580,6 +599,10 @@ io.on('connection', socket => {
       'mock-session-gap': {
         instanceId: 'inst_gap',
         title: 'Archived Gap Session'
+      },
+      'mock-session-older-migration': {
+        instanceId: 'inst_older_migration',
+        title: 'Older Migration Session'
       }
     };
     const meta = knownArchived[sessionId];
@@ -634,6 +657,13 @@ io.on('connection', socket => {
         messages: [
           { role: 'user', content: 'Gap recovery prompt' },
           { role: 'assistant', content: 'History fallback after sync gap.' }
+        ]
+      });
+    } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-older-migration') {
+      callback({
+        messages: [
+          { role: 'user', content: 'Review older migration notes' },
+          { role: 'assistant', content: 'Older migration history loaded from session:list overflow.' }
         ]
       });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-gap-pending') {
@@ -1752,6 +1782,19 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_background_taskprogress_1', durationMs: 350, costUsd: 0, isError: false, models: [activeModel] }
+        });
+
+      } else if (cmd === 'test:history-overflow') {
+        console.log('[mock] test:history-overflow — session:list 默认截断，显示全部后返回较早历史');
+        historyOverflowMode = true;
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Session history overflow fixture enabled.' }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_history_overflow_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
 
       } else if (cmd === 'test:tab') {

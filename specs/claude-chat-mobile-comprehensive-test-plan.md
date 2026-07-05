@@ -177,6 +177,7 @@
   2. 打开工作区与会话 sidebar，展开工作区列表，切换到第二个工作区/会话。
     - expect: sidebar 显示每个工作区、会话、新建会话入口和关闭会话入口。
     - expect: session:list 结果只显示当前 cwd 对应历史会话。
+    - expect: session:list 返回 hasMore 时，sidebar 显示“显示全部会话…”并可展开较早历史会话，展开后能打开并回放历史。
     - expect: 切换到第二个实例后通过 sync:since/history replay 显示该会话历史消息。
     - expect: sync:since 返回 gap 时清掉残缺回放并回退 session:history，不残留旧会话内容。
     - expect: 关闭当前待审批会话时切到剩余会话，旧会话消息和待审批状态不残留。
