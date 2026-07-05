@@ -40,7 +40,8 @@
     "test:coverage": "node --experimental-test-coverage --test test/*.test.mjs",
     "test:visual": "node scripts/visual-e2e-runner.js",
     "test:playwright": "playwright test",
-    "test:playwright:p0": "playwright test tests/p0"
+    "test:playwright:p0": "playwright test tests/p0",
+    "contract:check": "node scripts/contract-check.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.201",

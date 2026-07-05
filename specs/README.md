@@ -12,6 +12,14 @@ Run it with:
 npm run test:playwright:p0
 ```
 
+Protocol drift guard:
+
+```bash
+npm run contract:check
+```
+
+The contract check is a zero-token Node/static check. It compares `agent.js` and `server.js` event types with `scripts/visual-mock-server.js` so P0 mocks cannot introduce event types that the real server/agent path does not emit.
+
 The Playwright config starts the mock server automatically on `127.0.0.1:33341` by default. Override only for local debugging:
 
 ```bash
@@ -99,6 +107,8 @@ Current P0 mock-only coverage also includes:
 
 - `claude-chat-mobile-comprehensive-test-plan.md` is the source plan.
 - `playwright-test-improvement-backlog.md` tracks what Playwright tests to add, optimize, or refactor next.
+- `docs/event-contract.md` describes the shared `agent:event` contract.
+- `scripts/agent-event-contract.js` is the executable event-contract allowlist used by `npm run contract:check`.
 - `tests/p0/*.spec.ts` implements the P0 mock UI scenarios.
 - `tests/seed.goto-mock.spec.ts` contains shared Playwright helpers.
 - `tests/helpers/p0-ui.ts` contains shared P0 UI helpers for sidebar/session flows.

@@ -1552,7 +1552,7 @@ io.on('connection', socket => {
         // Emit multi-choice question
         socket.emit('agent:event', questionEvent);
         if (cmd === 'test:question-duplicate') {
-          socket.emit('agent:event', { ...questionEvent, seq: 4, ts: Date.now() });
+          socket.emit('agent:event', { ...questionEvent, seq: 4, ts: Date.now(), type: 'question' });
         }
         if (cmd === 'test:question-result-error') {
           await delay(600);

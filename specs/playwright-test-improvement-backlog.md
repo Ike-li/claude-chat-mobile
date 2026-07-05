@@ -23,6 +23,15 @@ The working target is:
 - Browser error capture: all 105 P0 tests call `expectNoBrowserErrors(page)`
 - Forbidden patterns: no `test.only`, `test.skip`, `test.fixme`, `networkidle`, or `waitForTimeout` in the Playwright test lane
 - Heaviest concentration: `tests/p0/workspace-sessions-sidebar.spec.ts` has 18 tests; its common sidebar flows now use `tests/helpers/p0-ui.ts`
+- P1 contract drift guard: `npm run contract:check` statically compares real `agent:event` types with visual mock event types without starting Claude, production server, or Playwright.
+
+## Completed Tooling
+
+1. P1 contract drift check between visual mock events and real server event shapes
+   - Added `scripts/agent-event-contract.js` and `scripts/contract-check.js`.
+   - Added `npm run contract:check`.
+   - Added `test/agent-event-contract.test.mjs`.
+   - Human-facing contract note: `docs/event-contract.md`.
 
 ## Add Test Candidates
 
@@ -42,25 +51,21 @@ The working target is:
 
 ### P1/P2 Candidates To Record Only
 
-1. P1 contract drift check between visual mock events and real server event shapes
-   - Prefer a Node/static contract check over browser UI tests.
-   - Should catch event field drift before P0 mocks become misleading.
-
-2. P1 service worker and offline shell behavior
+1. P1 service worker and offline shell behavior
    - P0 checks local PWA resources load; true offline caching needs a dedicated browser/runtime lane.
 
-3. P1 real Express socket smoke with a fake Claude adapter
+2. P1 real Express socket smoke with a fake Claude adapter
    - Useful for auth/session/socket lifecycle without token use.
    - Should not touch production port 3000.
 
-4. P2 real Claude smoke
+3. P2 real Claude smoke
    - Explicit opt-in only; can consume tokens.
    - Keep separate from `npm run test:playwright:p0`.
 
-5. P2 production domain and Cloudflare Access smoke
+4. P2 production domain and Cloudflare Access smoke
    - Explicit opt-in only; depends on live infrastructure and 2FA state.
 
-6. P2 Web Push delivery
+5. P2 Web Push delivery
    - Requires browser permission, VAPID/device state, and possibly live delivery.
    - Keep out of daily P0.
 
@@ -112,8 +117,8 @@ The working target is:
 
 ## Recommended Execution Order
 
-1. Add P1 contract drift check.
-2. Refactor visual mock scenario registry.
+1. Refactor visual mock scenario registry.
+2. Add P0-20e token retry state regression.
 
 ## Definition Of Done For Each Slice
 
@@ -122,6 +127,7 @@ The working target is:
 - No real Claude, no `RUN_CLAUDE_INTEGRATION`, no `npm start`, no production port 3000.
 - Run target test or spec first.
 - Run `npm run check`.
+- Run `npm run contract:check` for event-contract or visual mock protocol changes.
 - Run `npx playwright test --list`.
 - Run `npm run test:playwright:p0` for any behavior/test change.
 - Run `git diff --check`.
