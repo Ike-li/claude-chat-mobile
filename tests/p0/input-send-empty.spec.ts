@@ -160,4 +160,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-02i 点击斜杠命令提示会填入命令并保持可发送', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#input').fill('/m');
+    await expect(page.locator('#cmdHints')).toBeVisible();
+    await page.locator('#cmdHints [data-cmd="/model"]').click();
+
+    await expect(page.locator('#input')).toHaveValue('/model ');
+    await expect(page.locator('#cmdHints')).toBeHidden();
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
 });

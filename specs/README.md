@@ -33,6 +33,7 @@ Current P0 mock-only coverage also includes:
 - Input coverage verifies a foreground `sync:since` `found:false` recovery clears stale visible content and reloads authoritative session history.
 - Input coverage verifies selecting the ultracode effort preset injects the per-turn keyword once and completes the mock turn.
 - Input coverage verifies slash command hints handle server-provided command objects without breaking typing.
+- Input coverage verifies clicking a slash command hint fills the command, closes the hint list, and keeps Send usable.
 - Stream/Markdown coverage verifies code-block copy controls are present and provide visible feedback after a click.
 - Stream/Markdown coverage verifies the assistant message Edit action restores the previous user prompt exactly, including words that also appear in message action labels.
 - Auth failure coverage includes opening the access-help sheet and retrying by Enter from the token gate without leaking rejected or accepted tokens.
