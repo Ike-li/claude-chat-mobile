@@ -1450,6 +1450,42 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:freshbusy',
+      run: async ({ requestedModel }) => {
+        // 回归（shouldRestoreOptimisticBusy）：新会话首发的乐观 busy 不应被「懒开 → 广播 instances →
+        // 前端 bindView→clearView(setBusy(false))」冲掉。前置 session:new 已使前端 viewingInstanceId=null
+        // （空首页），故 send() 这条消息时置了 _pendingFirstSend。
+        console.log('[mock] test:freshbusy — 模拟新会话首发懒开');
+        await delay(150);
+        // 懒开：新建 FRESH 实例（sessionId=null，区别于 resume），切 viewing 并广播 instances
+        // —— 这一步触发前端 bindView→clearView 的 setBusy(false)，是 bug 现场。
+        const freshInst = openFreshMockInstance(requestedModel);
+        const freshId = freshInst.instanceId;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        // 关键窗口：模拟 SDK 启动慢，此后约 1.1s 不发任何 delta。E2E 在此窗口断言 pill 仍可见
+        // （修复前已被 clearView 冲掉 → fail；修复后由 setInstances 补回 → pass）。
+        await delay(1100);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: null, instanceId: freshId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_fresh_1', text: '新会话首发回复。' }
+        });
+        await delay(100);
+        const fInst = mockInstances.find(i => i.instanceId === freshId);
+        if (fInst) fInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 100, epoch: activeEpoch, sessionId: null, instanceId: freshId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -1604,39 +1640,6 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_stream_1', durationMs: 2500, costUsd: 0.0015, isError: false, models: [activeModel] }
-        });
-
-      } else if (cmd === 'test:freshbusy') {
-        // 回归（shouldRestoreOptimisticBusy）：新会话首发的乐观 busy 不应被「懒开 → 广播 instances →
-        // 前端 bindView→clearView(setBusy(false))」冲掉。前置 session:new 已使前端 viewingInstanceId=null
-        // （空首页），故 send() 这条消息时置了 _pendingFirstSend。
-        console.log('[mock] test:freshbusy — 模拟新会话首发懒开');
-        await delay(150);
-        // 懒开：新建 FRESH 实例（sessionId=null，区别于 resume），切 viewing 并广播 instances
-        // —— 这一步触发前端 bindView→clearView 的 setBusy(false)，是 bug 现场。
-        const freshInst = openFreshMockInstance(requestedModel);
-        const freshId = freshInst.instanceId;
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        // 关键窗口：模拟 SDK 启动慢，此后约 1.1s 不发任何 delta。E2E 在此窗口断言 pill 仍可见
-        // （修复前已被 clearView 冲掉 → fail；修复后由 setInstances 补回 → pass）。
-        await delay(1100);
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: null, instanceId: freshId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: 'msg_fresh_1', text: '新会话首发回复。' }
-        });
-        await delay(100);
-        const fInst = mockInstances.find(i => i.instanceId === freshId);
-        if (fInst) fInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        socket.emit('agent:event', {
-          seq: 100, epoch: activeEpoch, sessionId: null, instanceId: freshId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
         });
 
       } else if (cmd === 'test:tool') {
