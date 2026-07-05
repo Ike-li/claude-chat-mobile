@@ -31,6 +31,7 @@
   },
   "scripts": {
     "start": "node server.js",
+    "setup": "node scripts/setup.js",
     "dev": "node --watch server.js",
     "check": "for f in *.js public/js/*.js; do node --check \"$f\" || exit 1; done && echo 'syntax OK'",
     "test": "node --test --test-force-exit test/*.test.mjs test/integration/*.test.mjs",
