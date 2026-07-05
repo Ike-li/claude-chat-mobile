@@ -130,4 +130,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-11g 关闭当前会话后切到剩余会话且不残留旧历史', async ({ page }) => {
+    await gotoMock(page);
+    await page.setViewportSize({ width: 900, height: 812 });
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    await page.locator('button[title="Another App Concurrency"]').click();
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    const currentRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    page.once('dialog', dialog => dialog.accept());
+    await currentRow.locator('button', { hasText: '✕' }).click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
+    await expect(page.locator('#messages')).not.toContainText('This is the concurrent session');
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#sessionPanel')).not.toContainText('another-react-project');
+
+    await expectNoBrowserErrors(page);
+  });
 });
