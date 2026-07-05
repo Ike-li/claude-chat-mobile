@@ -26,4 +26,31 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-11b 关闭后台会话不影响当前会话', async ({ page }) => {
+    await gotoMock(page);
+    await page.setViewportSize({ width: 900, height: 812 });
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    const backgroundRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    await expect(backgroundRow).toContainText('Another App Concurrency');
+
+    page.once('dialog', dialog => dialog.accept());
+    await backgroundRow.locator('button', { hasText: '✕' }).click();
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
+
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#sessionPanel')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#sessionPanel')).not.toContainText('another-react-project');
+
+    await expectNoBrowserErrors(page);
+  });
 });

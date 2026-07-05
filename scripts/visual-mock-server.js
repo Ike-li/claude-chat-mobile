@@ -101,6 +101,7 @@ const mockInstances = createDefaultInstances();
 let pendingPermission = null;
 let pendingQuestion = null;
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
+let syncPendingSnapshotInstanceId = null;
 let activeEpoch = 'mock-epoch-init';
 
 function resetMockState() {
@@ -112,6 +113,7 @@ function resetMockState() {
   pendingPermission = null;
   pendingQuestion = null;
   syncPendingSnapshot = null;
+  syncPendingSnapshotInstanceId = null;
   activeEpoch = 'mock-epoch-init';
 }
 
@@ -379,7 +381,12 @@ io.on('connection', socket => {
     console.log(`[mock] sync:since received for instanceId=${instanceId}, sessionId=${sessionId}`);
     // Bug2 状态对账：mock 侧有未决审批/提问快照时随 ack 带回（模拟真 server 的 pendingRequestsSnapshot）——
     // 前端 applyPendingSnapshot 在视图稳定后据此重建卡片，即使原始 permission_request 事件从未回放。
-    const ack = (replayed) => { if (typeof callback === 'function') callback({ ok: true, replayed, pending: syncPendingSnapshot }); };
+    const ack = (replayed) => {
+      if (typeof callback === 'function') {
+        const pending = (!syncPendingSnapshotInstanceId || syncPendingSnapshotInstanceId === instanceId) ? syncPendingSnapshot : null;
+        callback({ ok: true, replayed, pending });
+      }
+    };
     if (instanceId === 'inst_2') {
       // Replay some historical message events for inst_2
       socket.emit('agent:event', {
@@ -516,6 +523,7 @@ io.on('connection', socket => {
         // 前端此刻无卡片；切入该实例时 sync:since 的 ack.pending 快照应重建审批卡片。刻意【不】emit permission_request。
         console.log('[mock] test:pendingsnapshot — 设快照但不发 permission_request，切 viewing 到 inst_2 触发 sync:since');
         syncPendingSnapshot = { permissions: [{ requestId: 'req_snapshot', name: 'run_command', input: 'rm -rf /tmp/stale', cwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd }], questions: [] };
+        syncPendingSnapshotInstanceId = 'inst_2';
         viewingInstanceId = 'inst_2';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -857,7 +865,12 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: inst1ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
-        pendingPermission = { requestId: 'req_perm_cross_tab', toolUseId: 't_cross', name: 'run_command', input: 'git push origin main', cwd: inst1ct.cwd };
+        pendingPermission = { requestId: 'req_perm_cross_tab', toolUseId: 't_cross', messageId: 'msg_cross_1', name: 'run_command', input: 'git push origin main', cwd: inst1ct.cwd };
+        syncPendingSnapshot = {
+          permissions: [{ requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }],
+          questions: []
+        };
+        syncPendingSnapshotInstanceId = 'inst_1';
         // 独立 epoch：前端见新 epoch 即重置 seq 去重基线，避免被前序 TC 累积的 lastSeq 误吞
         socket.emit('agent:event', {
           seq: 1, epoch: 'mock-epoch-crosstab', sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
@@ -1076,6 +1089,8 @@ io.on('connection', socket => {
       });
 
       pendingPermission = null;
+      syncPendingSnapshot = null;
+      syncPendingSnapshotInstanceId = null;
     }
   });
 
