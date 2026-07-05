@@ -571,22 +571,25 @@ io.on('connection', socket => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:history sessionId=${sessionId}, cwd=${cwd}`);
     if (typeof callback !== 'function') return;
-    if (cwd !== '/Users/you/code/claude-chat-mobile') {
-      callback({ messages: [] });
-      return;
-    }
-    if (sessionId === 'mock-session-archived') {
+    if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
       callback({
         messages: [
           { role: 'user', content: 'Summarize archived plan' },
           { role: 'assistant', content: 'Archived plan replay from session history.' }
         ]
       });
-    } else if (sessionId === 'mock-session-gap') {
+    } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-gap') {
       callback({
         messages: [
           { role: 'user', content: 'Gap recovery prompt' },
           { role: 'assistant', content: 'History fallback after sync gap.' }
+        ]
+      });
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-gap-pending') {
+      callback({
+        messages: [
+          { role: 'user', content: 'Gap pending fallback prompt' },
+          { role: 'assistant', content: 'Gap pending history after buffer trim.' }
         ]
       });
     } else {
@@ -643,6 +646,12 @@ io.on('connection', socket => {
       socket.emit('agent:event', {
         seq: 1, epoch: 'mock-epoch-gap-partial', sessionId: 'mock-session-gap', instanceId: 'inst_gap', ts: Date.now(),
         type: 'text_delta', payload: { messageId: 'msg_gap_partial', text: 'Partial gap buffer that must be discarded' }
+      });
+      ack(1, { gap: true });
+    } else if (instanceId === 'inst_gap_pending') {
+      socket.emit('agent:event', {
+        seq: 1, epoch: 'mock-epoch-gap-pending-partial', sessionId: 'mock-session-gap-pending', instanceId: 'inst_gap_pending', ts: Date.now(),
+        type: 'text_delta', payload: { messageId: 'msg_gap_pending_partial', text: 'Partial pending gap buffer that must be discarded' }
       });
       ack(1, { gap: true });
     } else if (instanceId === 'inst_1') {
@@ -838,6 +847,55 @@ io.on('connection', socket => {
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      } else if (cmd === 'test:gap-pending-snapshot') {
+        console.log('[mock] test:gap-pending-snapshot — gap ack 后仍带回 pending snapshot');
+        let inst = mockInstances.find(i => i.instanceId === 'inst_gap_pending');
+        if (!inst) {
+          inst = {
+            instanceId: 'inst_gap_pending',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-gap-pending',
+            title: 'Gap Pending Recovery',
+            state: 'permission',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-haiku',
+            activeTool: 'Bash'
+          };
+          mockInstances.push(inst);
+        } else {
+          inst.state = 'permission';
+          inst.activeTool = 'Bash';
+        }
+        pendingPermission = {
+          instanceId: 'inst_gap_pending',
+          requestId: 'req_gap_pending_snapshot',
+          toolUseId: 't_gap_pending_snapshot',
+          messageId: 'msg_gap_pending_snapshot_1',
+          name: 'run_command',
+          input: 'rm -rf /tmp/gap-stale',
+          cwd: inst.cwd
+        };
+        syncPendingSnapshot = {
+          permissions: [{
+            requestId: pendingPermission.requestId,
+            name: pendingPermission.name,
+            input: pendingPermission.input,
+            cwd: pendingPermission.cwd
+          }],
+          questions: []
+        };
+        syncPendingSnapshotInstanceId = 'inst_gap_pending';
+        viewingInstanceId = 'inst_gap_pending';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: inst.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
         });
       } else if (cmd === 'test:questionsnapshot') {
         console.log('[mock] test:questionsnapshot — 设 question 快照但不发原始 question 事件，切 viewing 到 inst_2 触发 sync:since');

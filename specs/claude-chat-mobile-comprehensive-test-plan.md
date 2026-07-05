@@ -216,6 +216,7 @@
   1. 起始状态/假设：fresh state。发送 test:pendingsnapshot。
     - expect: 即使原始 permission_request 未回放，切入目标实例时 sync:since ack.pending 快照能重建审批弹窗。
     - expect: 弹窗显示 run_command、cwd 和 rm -rf /tmp/stale 等 mock 内容。
+    - expect: sync:since 返回 gap 并回退 session:history 时，ack.pending 里的审批弹窗仍在视图稳定后重建。
     - expect: 失败条件：只显示 sidebar 角标但会话内没有审批卡、重复创建多张同 requestId 卡、快照审批路由到错误实例。
 
 #### 1.15. P0-15 设备信赖 TOFU、pending device request 与访问帮助

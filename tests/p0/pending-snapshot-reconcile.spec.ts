@@ -55,4 +55,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-14d sync gap 后仍保留 pending snapshot 审批弹窗', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:gap-pending-snapshot');
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#messages')).toContainText('Gap pending fallback prompt', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('Gap pending history after buffer trim.');
+    await expect(page.locator('#messages')).not.toContainText('Partial pending gap buffer that must be discarded');
+    await expect(page.locator('#historyLoadingCard')).toHaveCount(0);
+    await expect(page.locator('#permModal')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#permTool')).toHaveText('run_command');
+    await expect(page.locator('#permInput')).toContainText('rm -rf /tmp/gap-stale');
+
+    await expectNoBrowserErrors(page);
+  });
 });
