@@ -1097,8 +1097,10 @@ io.on('connection', socket => {
             instances: mockInstances
           }
         });
-      } else if (cmd === 'test:mirror-readonly') {
-        console.log('[mock] test:mirror-readonly — 模拟终端会话正在运行，只读追平锁');
+      } else if (cmd === 'test:mirror-readonly' || cmd === 'test:mirror-readonly-delayed') {
+        const delayedMirror = cmd === 'test:mirror-readonly-delayed';
+        console.log(`[mock] ${cmd} — 模拟终端会话正在运行，只读追平锁`);
+        if (delayedMirror) await delay(650);
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, cwd: activeInst.cwd, ts: Date.now(),
           type: 'mirror_state', payload: { readonly: true }

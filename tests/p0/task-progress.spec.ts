@@ -79,6 +79,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-17f 终端只读锁到来时保留草稿且接管后可发送', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:mirror-readonly-delayed');
+    await page.locator('#input').fill('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expect(page.locator('#mirrorBanner')).toBeVisible();
+    await expect(page.locator('#mirrorBanner')).toContainText('此会话正在终端运行');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toHaveAttribute('title', '请先完成设备授权或解除只读状态');
+
+    await page.locator('#btnMirrorOverride').click();
+    await expect(page.locator('#mirrorBanner')).toBeHidden();
+    await expect(page.locator('#input')).toBeEnabled();
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await page.locator('#btnSend').click();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:settings-echo');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+    await expect(page.locator('#input')).toHaveValue('');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-17e 后台 task_progress 不污染当前会话但保留忙碌角标', async ({ page }) => {
     await gotoMock(page);
 

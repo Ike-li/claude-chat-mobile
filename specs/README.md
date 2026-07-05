@@ -69,6 +69,7 @@ Current P0 mock-only coverage also includes:
 - Task progress coverage verifies another workspace's progress heartbeat does not show a current-session banner while its busy state remains visible in the sessions entry and sidebar.
 - Mirror-state coverage verifies terminal read-only catch-up locks the input and allows an explicit user takeover.
 - Mirror-state coverage verifies switching to another session clears the read-only catch-up lock so it does not block unrelated sessions.
+- Mirror-state coverage verifies an in-progress draft is preserved while the terminal read-only lock is active and can be sent after explicit takeover.
 - Device trust coverage includes pending, denied, denied retry back to pending, and trusted-device approval/rejection updates through mock Socket.IO events.
 - Device trust coverage verifies an existing draft is preserved while TOFU approval is pending, Send is disabled with visible reason, and the draft can be sent after approval.
 - Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.
