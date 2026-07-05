@@ -392,19 +392,27 @@ io.on('connection', socket => {
 
   // 新会话：清查看 tab（viewingInstanceId=null）→ 前端进空首页。模拟服务端 session:new（不 dispose 后台实例）。
   // 配合 test:freshbusy 复现「新会话首发乐观 busy 被懒开广播冲掉」的回归场景。
-  socket.on('session:new', () => {
-    console.log('[mock] session:new → 进空首页（viewingInstanceId=null）');
+  socket.on('session:new', payload => {
+    const requestedCwd = payload && typeof payload === 'object' && typeof payload.cwd === 'string'
+      ? payload.cwd
+      : null;
+    const viewingCwd = requestedCwd
+      || mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
+      || mockInstances[0]?.cwd
+      || '/Users/you/code/claude-chat-mobile';
+    console.log(`[mock] session:new → 进空首页（viewingInstanceId=null, cwd=${viewingCwd})`);
     viewingInstanceId = null;
     permissionMode = 'default';
     effortLevel = null;
     pendingFreshPermissionMode = undefined;
     pendingFreshEffortLevel = undefined;
+    const dirs = Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd]));
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: {
         viewingInstanceId: null,
-        viewingCwd: mockInstances[0].cwd,
-        dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+        viewingCwd,
+        dirs,
         instances: mockInstances,
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
         defaultEffort: pendingFreshEffortOrDefault()

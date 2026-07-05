@@ -91,4 +91,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-11e 可从 sidebar 在其它工作区新建空会话', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button[title="在此工作区新建会话"]').click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    await expect(page.locator('#messages')).toContainText('当前工作区');
+    await expect(page.locator('#messages')).toContainText('another-react-project');
+
+    await expectNoBrowserErrors(page);
+  });
 });
