@@ -1365,6 +1365,25 @@ io.on('connection', socket => {
         });
       },
     },
+    {
+      commands: ['test:mirror-readonly', 'test:mirror-readonly-delayed'],
+      run: async ({ cmd, activeInst }) => {
+        const delayedMirror = cmd === 'test:mirror-readonly-delayed';
+        const mirrorInstanceId = viewingInstanceId;
+        const mirrorSessionId = activeInst.sessionId || 'mock-session-visual-test';
+        const mirrorCwd = activeInst.cwd;
+        console.log(`[mock] ${cmd} — 模拟终端会话正在运行，只读追平锁`);
+        if (delayedMirror) await delay(650);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, cwd: mirrorCwd, ts: Date.now(),
+          type: 'mirror_state', payload: { readonly: true }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_mirror_readonly_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
   ]);
 
   // Handle custom trigger command inputs
@@ -1552,21 +1571,6 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
         });
 
-      } else if (cmd === 'test:mirror-readonly' || cmd === 'test:mirror-readonly-delayed') {
-        const delayedMirror = cmd === 'test:mirror-readonly-delayed';
-        const mirrorInstanceId = viewingInstanceId;
-        const mirrorSessionId = activeInst.sessionId || 'mock-session-visual-test';
-        const mirrorCwd = activeInst.cwd;
-        console.log(`[mock] ${cmd} — 模拟终端会话正在运行，只读追平锁`);
-        if (delayedMirror) await delay(650);
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, cwd: mirrorCwd, ts: Date.now(),
-          type: 'mirror_state', payload: { readonly: true }
-        });
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_mirror_readonly_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
-        });
       } else if (cmd === 'test:taskprogress' || cmd === 'test:taskprogress-failed') {
         // 后台任务进度横幅：SDK 对 running 后台任务周期性推送 task_progress（真实 server 走 emitTransient，
         // transient=true、不进 buffer / 不占 seq）。前端应【原地刷新】同一条横幅（覆盖、不追加），
