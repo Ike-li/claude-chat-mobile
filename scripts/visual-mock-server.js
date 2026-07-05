@@ -1649,6 +1649,66 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:background-priority',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Marking one background workspace with mixed states');
+        const backgroundCwd = '/Users/you/code/another-react-project';
+        const ensureInstance = ({ instanceId, sessionId, title, state, activeTool }) => {
+          let inst = mockInstances.find(i => i.instanceId === instanceId);
+          if (!inst) {
+            inst = {
+              instanceId,
+              cwd: backgroundCwd,
+              sessionId,
+              title,
+              state,
+              activeTool,
+              permissionMode: 'plan',
+              effort: 'medium',
+              model: 'claude-3-5-haiku'
+            };
+            mockInstances.push(inst);
+          }
+          Object.assign(inst, { cwd: backgroundCwd, sessionId, title, state, activeTool });
+        };
+        ensureInstance({
+          instanceId: 'inst_2',
+          sessionId: 'mock-session-another-done',
+          title: 'Background Done Result',
+          state: 'done',
+          activeTool: null
+        });
+        ensureInstance({
+          instanceId: 'inst_3',
+          sessionId: 'mock-session-another-running',
+          title: 'Background Task Running',
+          state: 'busy',
+          activeTool: 'Task'
+        });
+        ensureInstance({
+          instanceId: 'inst_4',
+          sessionId: 'mock-session-another-permission',
+          title: 'Background Needs Approval',
+          state: 'permission',
+          activeTool: 'Bash'
+        });
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: activeInst.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_background_priority_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -1964,63 +2024,6 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_disconnect_now_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
         setTimeout(() => socket.disconnect(true), 50);
-
-      } else if (cmd === 'test:background-priority') {
-        console.log('[mock] Marking one background workspace with mixed states');
-        const backgroundCwd = '/Users/you/code/another-react-project';
-        const ensureInstance = ({ instanceId, sessionId, title, state, activeTool }) => {
-          let inst = mockInstances.find(i => i.instanceId === instanceId);
-          if (!inst) {
-            inst = {
-              instanceId,
-              cwd: backgroundCwd,
-              sessionId,
-              title,
-              state,
-              activeTool,
-              permissionMode: 'plan',
-              effort: 'medium',
-              model: 'claude-3-5-haiku'
-            };
-            mockInstances.push(inst);
-          }
-          Object.assign(inst, { cwd: backgroundCwd, sessionId, title, state, activeTool });
-        };
-        ensureInstance({
-          instanceId: 'inst_2',
-          sessionId: 'mock-session-another-done',
-          title: 'Background Done Result',
-          state: 'done',
-          activeTool: null
-        });
-        ensureInstance({
-          instanceId: 'inst_3',
-          sessionId: 'mock-session-another-running',
-          title: 'Background Task Running',
-          state: 'busy',
-          activeTool: 'Task'
-        });
-        ensureInstance({
-          instanceId: 'inst_4',
-          sessionId: 'mock-session-another-permission',
-          title: 'Background Needs Approval',
-          state: 'permission',
-          activeTool: 'Bash'
-        });
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: {
-            viewingInstanceId,
-            viewingCwd: activeInst.cwd,
-            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
-          }
-        });
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_background_priority_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
-        });
 
       } else if (cmd === 'test:background-taskprogress') {
         console.log('[mock] Emitting background task_progress without changing current view');
