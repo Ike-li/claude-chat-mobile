@@ -529,6 +529,34 @@ io.on('connection', socket => {
       type: 'user_message', payload: { text: cmd, attachments }
     });
 
+    if (cmd.startsWith('ultracode ')) {
+      activeEpoch = 'mock-epoch-ultracode-' + Date.now();
+      const activeInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+      if (!activeInst) return;
+      activeInst.state = 'busy';
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+      });
+
+      await delay(150);
+      socket.emit('agent:event', {
+        seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'text_delta', payload: { messageId: 'msg_ultracode_1', text: `ultracode mock response for: ${cmd}` }
+      });
+
+      activeInst.state = 'idle';
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+      });
+      socket.emit('agent:event', {
+        seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'result', payload: { messageId: 'msg_ultracode_1', durationMs: 150, costUsd: 0, isError: false, models: [activeModel] }
+      });
+      return;
+    }
+
     // Intercept test commands
     if (cmd.startsWith('test:')) {
       activeEpoch = 'mock-epoch-' + cmd.replace(/[^a-zA-Z0-9]/g, '_') + '-' + Date.now();

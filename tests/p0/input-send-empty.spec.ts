@@ -86,4 +86,25 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-02e ultracode 快捷发送只注入一次关键词', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#input').fill('test:workflow-echo');
+    await page.locator('#btnUltracode').click();
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('ultracode test:workflow-echo');
+    const firstText = await page.locator('[data-testid="user-message"]').last().innerText();
+    expect(firstText.match(/\bultracode\b/g)).toHaveLength(1);
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('ultracode mock response');
+
+    await page.locator('#input').fill('ultracode test:workflow-echo');
+    await page.locator('#btnUltracode').click();
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('ultracode test:workflow-echo');
+    const secondText = await page.locator('[data-testid="user-message"]').last().innerText();
+    expect(secondText.match(/\bultracode\b/g)).toHaveLength(1);
+    await waitForIdle(page);
+
+    await expectNoBrowserErrors(page);
+  });
 });
