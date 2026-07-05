@@ -22,7 +22,7 @@ The working target is:
 - P0 count: 102 tests in 20 files
 - Browser error capture: all 102 P0 tests call `expectNoBrowserErrors(page)`
 - Forbidden patterns: no `test.only`, `test.skip`, `test.fixme`, `networkidle`, or `waitForTimeout` in the Playwright test lane
-- Heaviest concentration: `tests/p0/workspace-sessions-sidebar.spec.ts` has 17 tests and the most hard-coded sidebar selectors
+- Heaviest concentration: `tests/p0/workspace-sessions-sidebar.spec.ts` has 17 tests; its common sidebar flows now use `tests/helpers/p0-ui.ts`
 
 ## Add Test Candidates
 
@@ -85,8 +85,8 @@ The working target is:
 ## Optimize Test Candidates
 
 1. Reduce sidebar selector brittleness
-   - Current tests repeatedly use hard-coded selectors such as `div[data-dir="/Users/you/code/another-react-project"] button`, `button[title="Another App Concurrency"]`, and fixed `data-instance-id="inst_2"`.
-   - Preferred path: add helpers such as `openSessionsSidebar`, `selectWorkspace`, `openSessionByTitle`, `closeSessionByTitle`, and `expectSessionBadge`.
+   - Current non-workspace specs still repeat hard-coded selectors such as `div[data-dir="/Users/you/code/another-react-project"] button`, `button[title="Another App Concurrency"]`, and fixed `data-instance-id="inst_2"`.
+   - Preferred path: continue applying `tests/helpers/p0-ui.ts` helpers such as `openSessionsSidebar`, `expandWorkspace`, `openSessionByTitle`, `openWorkspaceSession`, `sessionRowByInstance`, and `expectSessionBadge`.
    - Optional product-safe improvement: add stable `data-testid`/`data-session-title`/`data-workspace-name` attributes to sidebar rows.
 
 2. Reduce repeated modal/draft guard boilerplate
@@ -107,9 +107,9 @@ The working target is:
 
 ## Refactor Candidates
 
-1. Add a P0 UI helper module
-   - Candidate file: `tests/helpers/p0-ui.ts` or extend `tests/seed.goto-mock.spec.ts` conservatively.
-   - First helpers should target repeated sidebar/session flows because that is the largest selector hotspot.
+1. Extend the P0 UI helper module
+   - `tests/helpers/p0-ui.ts` now covers common sidebar/session flows in `workspace-sessions-sidebar.spec.ts`.
+   - Continue migrating other specs opportunistically when they touch sidebar/session flows.
 
 2. Add a visual mock scenario registry
    - `scripts/visual-mock-server.js` currently uses a long `if/else` chain for `test:*` commands.
@@ -130,11 +130,10 @@ The working target is:
 
 ## Recommended Execution Order
 
-1. Refactor sidebar helpers before adding more P0-11 cases.
-2. Add P0-18g attachment removal frees quota.
-3. Add P0-11r close-last-session empty fallback.
-4. Add P1 contract drift check.
-5. Refactor visual mock scenario registry.
+1. Add P0-18g attachment removal frees quota.
+2. Add P0-11r close-last-session empty fallback.
+3. Add P1 contract drift check.
+4. Refactor visual mock scenario registry.
 
 ## Definition Of Done For Each Slice
 

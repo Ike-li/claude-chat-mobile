@@ -3,6 +3,20 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+import {
+  ANOTHER_WORKSPACE,
+  MAIN_WORKSPACE,
+  expandWorkspace,
+  expectSessionBadge,
+  expectSidebarClosed,
+  openSessionByTitle,
+  openSessionsSidebar,
+  openWorkspaceSession,
+  sessionButtonByTitle,
+  sessionRowByInstance,
+  startNewSessionInWorkspace,
+  workspaceRow
+} from '../helpers/p0-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-11 多工作区、多会话 tab、sidebar 与 history replay', async ({ page }) => {
@@ -11,16 +25,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 1. 发送 test:tab 后出现第二个工作区/会话实例。
     await sendChatMessage(page, 'test:tab');
     await waitForIdle(page);
-    await page.locator('#btnSessions').click();
-    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
+    await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel')).toContainText('claude-chat-mobile');
     await expect(page.locator('#sessionPanel')).toContainText('another-react-project');
 
     // 2. 展开第二工作区并切换到 live 会话，验证 history replay。
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    await expect(page.locator('button[title="Another App Concurrency"]')).toBeVisible();
-    await page.locator('button[title="Another App Concurrency"]').click();
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
+    await expectSidebarClosed(page);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
 
@@ -33,12 +44,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:tab-model-effort');
     await waitForIdle(page);
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    await expect(page.locator('button[title="Another App Concurrency"]')).toBeVisible();
-    await page.locator('button[title="Another App Concurrency"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
     await expect(page.locator('#pillModelText')).toContainText('claude-3-opus[1m]');
@@ -56,9 +65,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#input').fill('draft that belongs to the main session only');
     await expect(page.locator('#btnSend')).toBeEnabled();
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    await page.locator('button[title="Another App Concurrency"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
 
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#input')).toHaveValue('');
@@ -82,18 +90,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    const backgroundRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    const backgroundRow = sessionRowByInstance(page, 'inst_2');
     await expect(backgroundRow).toContainText('Another App Concurrency');
 
     page.once('dialog', dialog => dialog.accept());
     await backgroundRow.locator('button', { hasText: '✕' }).click();
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
 
-    await page.locator('#btnSessions').click();
+    await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel')).toContainText('claude-chat-mobile');
     await expect(page.locator('#sessionPanel')).not.toContainText('another-react-project');
 
@@ -109,15 +117,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#sessionsDot')).toHaveText('✅');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区已完成');
 
-    await page.locator('#btnSessions').click();
-    const backgroundDir = page.locator('#sessionPanel div[data-dir="/Users/you/code/another-react-project"]');
+    await openSessionsSidebar(page);
+    const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
     await expect(backgroundDir.locator('.dir-badge')).toHaveText('✅');
     await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '已完成');
 
     await backgroundDir.locator('button').first().click();
-    const backgroundRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    const backgroundRow = sessionRowByInstance(page, 'inst_2');
     await expect(backgroundRow).toContainText('Another App Concurrency');
-    await expect(backgroundRow.locator('[data-instance-badge]')).toHaveText('✅');
+    await expectSessionBadge(page, 'inst_2', '✅');
 
     await expectNoBrowserErrors(page);
   });
@@ -132,16 +140,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#sessionsDot')).toHaveText('❗');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区出错');
 
-    await page.locator('#btnSessions').click();
-    const backgroundDir = page.locator('#sessionPanel div[data-dir="/Users/you/code/another-react-project"]');
+    await openSessionsSidebar(page);
+    const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
     await expect(backgroundDir.locator('.dir-badge')).toHaveText('❗');
     await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '出错');
 
     await backgroundDir.locator('button').first().click();
-    const backgroundRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    const backgroundRow = sessionRowByInstance(page, 'inst_2');
     await expect(backgroundRow).toContainText('Another App Concurrency');
-    await expect(backgroundRow.locator('[data-instance-badge]')).toHaveText('❗');
-    await expect(backgroundRow.locator('[data-instance-badge]')).toHaveAttribute('title', '出错');
+    await expectSessionBadge(page, 'inst_2', '❗', '出错');
 
     await expectNoBrowserErrors(page);
   });
@@ -155,22 +162,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#sessionsDot')).toHaveText('⚠️');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区待审批');
 
-    await page.locator('#btnSessions').click();
-    const backgroundDir = page.locator('#sessionPanel div[data-dir="/Users/you/code/another-react-project"]');
+    await openSessionsSidebar(page);
+    const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
     await expect(backgroundDir.locator('.dir-badge')).toHaveText('⚠️');
     await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '待审批');
 
     await backgroundDir.locator('button').first().click();
-    const doneRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
-    const busyRow = page.locator('[data-testid="session-row"][data-instance-id="inst_3"]');
-    const permissionRow = page.locator('[data-testid="session-row"][data-instance-id="inst_4"]');
+    const doneRow = sessionRowByInstance(page, 'inst_2');
+    const busyRow = sessionRowByInstance(page, 'inst_3');
+    const permissionRow = sessionRowByInstance(page, 'inst_4');
     await expect(doneRow).toContainText('Background Done Result');
-    await expect(doneRow.locator('[data-instance-badge]')).toHaveText('✅');
+    await expectSessionBadge(page, 'inst_2', '✅');
     await expect(busyRow).toContainText('Background Task Running');
-    await expect(busyRow.locator('[data-instance-badge]')).toHaveText('🤖');
+    await expectSessionBadge(page, 'inst_3', '🤖');
     await expect(permissionRow).toContainText('Background Needs Approval');
-    await expect(permissionRow.locator('[data-instance-badge]')).toHaveText('⚠️');
-    await expect(permissionRow.locator('[data-instance-badge]')).toHaveAttribute('title', '待审批');
+    await expectSessionBadge(page, 'inst_4', '⚠️', '待审批');
 
     await expectNoBrowserErrors(page);
   });
@@ -178,13 +184,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-11d 未打开的历史会话可从 sidebar 切换并回放历史', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#btnSessions').click();
-    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    await expect(page.locator('button[title="Archived Planning Session"]')).toBeVisible();
-    await page.locator('button[title="Archived Planning Session"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Planning Session');
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
     await expect(page.locator('#messages')).toContainText('Archived plan replay from session history');
 
@@ -196,18 +199,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:history-overflow');
 
-    await page.locator('#btnSessions').click();
-    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
     await expect(page.getByRole('button', { name: '显示全部会话…' })).toBeVisible();
     await expect(page.locator('#sessionPanel')).not.toContainText('Older Migration Session');
 
     await page.getByRole('button', { name: '显示全部会话…' }).click();
     await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
-    await expect(page.locator('button[title="Older Migration Session"]')).toBeVisible();
+    await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
 
-    await page.locator('button[title="Older Migration Session"]').click();
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await openSessionByTitle(page, 'Older Migration Session');
+    await expectSidebarClosed(page);
     await expect(page.locator('#messages')).toContainText('Review older migration notes', { timeout: 10_000 });
     await expect(page.locator('#messages')).toContainText('Older migration history loaded from session:list overflow.');
     await expect(page.locator('#messages')).not.toContainText('test:history-overflow');
@@ -218,24 +220,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-11n sidebar 刷新已缓存的会话列表后显示较早历史入口', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#btnSessions').click();
-    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    await expect(page.locator('button[title="Archived Planning Session"]')).toBeVisible();
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await expect(sessionButtonByTitle(page, 'Archived Planning Session')).toBeVisible();
     await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
     await page.locator('#sidebarClose').click();
 
     await sendChatMessage(page, 'test:history-overflow');
     await waitForIdle(page);
 
-    await page.locator('#btnSessions').click();
-    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
+    await openSessionsSidebar(page);
     await expect(page.getByRole('button', { name: '显示全部会话…' })).toBeVisible();
     await expect(page.locator('#sessionPanel')).not.toContainText('Older Migration Session');
 
     await page.getByRole('button', { name: '显示全部会话…' }).click();
-    await expect(page.locator('button[title="Older Migration Session"]')).toBeVisible();
-    await page.locator('button[title="Older Migration Session"]').click();
+    await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
+    await openSessionByTitle(page, 'Older Migration Session');
     await expect(page.locator('#messages')).toContainText('Older migration history loaded from session:list overflow.', { timeout: 10_000 });
 
     await expectNoBrowserErrors(page);
@@ -248,12 +248,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    await expect(page.locator('button[title="Archived Gap Session"]')).toBeVisible();
-    await page.locator('button[title="Archived Gap Session"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Archived Gap Session');
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#messages')).toContainText('Gap recovery prompt', { timeout: 10_000 });
     await expect(page.locator('#messages')).toContainText('History fallback after sync gap.');
     await expect(page.locator('#messages')).not.toContainText('Concurrency Mode Triggered');
@@ -268,10 +266,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:tab');
     await waitForIdle(page);
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button[title="在此工作区新建会话"]').click();
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, ANOTHER_WORKSPACE);
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await expect(page.locator('#messages')).toContainText('当前工作区');
@@ -288,12 +286,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    await expect(page.locator('button[title="Deleted Remote Session"]')).toBeVisible();
-    await page.locator('button[title="Deleted Remote Session"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Deleted Remote Session');
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
     await expect(page.locator('#messages')).toContainText('mock session not found');
@@ -310,26 +306,25 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    await page.locator('button[title="Another App Concurrency"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
 
-    await page.locator('#btnSessions').click();
-    const currentRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    await openSessionsSidebar(page);
+    const currentRow = sessionRowByInstance(page, 'inst_2');
     if (!(await currentRow.isVisible())) {
-      await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+      await expandWorkspace(page, ANOTHER_WORKSPACE);
     }
     await expect(currentRow).toBeVisible();
     page.once('dialog', dialog => dialog.accept());
     await currentRow.locator('button', { hasText: '✕' }).click();
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
     await expect(page.locator('#messages')).not.toContainText('This is the concurrent session');
-    await page.locator('#btnSessions').click();
+    await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel')).not.toContainText('another-react-project');
 
     await expectNoBrowserErrors(page);
@@ -342,23 +337,23 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:close-current-pending');
     await expect(page.locator('#messages')).toContainText('Close current pending source session');
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    const currentRow = page.locator('[data-testid="session-row"][data-instance-id="inst_1"]');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const currentRow = sessionRowByInstance(page, 'inst_1');
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
-    await expect(currentRow.locator('[data-instance-badge]')).toHaveText('⚠️');
+    await expectSessionBadge(page, 'inst_1', '⚠️');
 
     page.once('dialog', dialog => dialog.accept());
     await currentRow.locator('button', { hasText: '✕' }).click();
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#permModal')).toBeHidden();
     await expect(page.locator('#messages')).not.toContainText('Close current pending source session');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
     await expect(page.locator('#sessionsDot')).toBeHidden();
 
-    await page.locator('#btnSessions').click();
+    await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel')).not.toContainText('Visual Sandbox (Main)');
     await expect(page.locator('#sessionPanel')).not.toContainText('claude-chat-mobile');
 
@@ -372,16 +367,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:late-closed-current-events');
     await expect(page.locator('#messages')).toContainText('Close current stale source session');
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    const currentRow = page.locator('[data-testid="session-row"][data-instance-id="inst_1"]');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const currentRow = sessionRowByInstance(page, 'inst_1');
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
-    await expect(currentRow.locator('[data-instance-badge]')).toHaveText('⚠️');
+    await expectSessionBadge(page, 'inst_1', '⚠️');
 
     page.once('dialog', dialog => dialog.accept());
     await currentRow.locator('button', { hasText: '✕' }).click();
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#messages')).toContainText('Closed-session stale replay finished for current view.', { timeout: 10_000 });
     await expect(page.locator('#messages')).not.toContainText('Close current stale source session');
@@ -391,7 +386,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permModal')).toBeHidden();
     await expect(page.locator('#questionModal')).toBeHidden();
 
-    await page.locator('#btnSessions').click();
+    await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel')).not.toContainText('Visual Sandbox (Main)');
     await expect(page.locator('#sessionPanel')).not.toContainText('claude-chat-mobile');
 
@@ -403,8 +398,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:tab');
     await waitForIdle(page);
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button[title="在此工作区新建会话"]').click();
+    await openSessionsSidebar(page);
+    await startNewSessionInWorkspace(page, ANOTHER_WORKSPACE);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
 
