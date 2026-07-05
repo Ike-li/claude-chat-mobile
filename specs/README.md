@@ -29,7 +29,7 @@ Current P0 mock-only coverage also includes:
 - Status line coverage verifies stale cross-workspace status replays without `instanceId` are ignored by the current workspace view.
 - Input coverage verifies the foreground turn queue-full state disables Send, keeps the user's draft, and re-enables Send after the queue drains.
 - Input coverage verifies messages sent while disconnected enter the visible offline queue and are retried after reconnect.
-- Input coverage verifies the ultracode quick-send button injects the per-turn keyword once and completes the mock turn.
+- Input coverage verifies selecting the ultracode effort preset injects the per-turn keyword once and completes the mock turn.
 - Auth failure coverage includes opening the access-help sheet and retrying by Enter from the token gate without leaking rejected or accepted tokens.
 - Settings coverage verifies unsupported-model effort controls hide and do not leak a stale thinking effort into the next turn.
 - Settings coverage verifies new-session empty-start permission/effort presets are consumed by the first sent message.
@@ -43,7 +43,7 @@ Current P0 mock-only coverage also includes:
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
 - Multi-session routing guards cover closing the current session and falling back to the remaining session without leaving the closed session's history on screen.
 - Cross-tab pending guards cover AskUserQuestion sheets being cleared when the view switches away and rebuilt only after switching back to the owning session.
-- Workspace status coverage verifies background completion and error states appear in both the top sessions indicator and sidebar badges.
+- Workspace status coverage verifies background completion and error states appear in both the top sessions indicator and sidebar badges, and that mixed background states prioritize pending approval over completed/running work.
 - Session navigation coverage verifies unopened historical sessions can be launched from the sidebar and rendered through the `session:history` fallback.
 - Session navigation coverage verifies the sidebar new-session button opens an empty chat in the selected workspace rather than the previously viewed workspace.
 - Session navigation coverage verifies the first message from a sidebar-created empty chat stays in the selected workspace after the lazy fresh instance opens.

@@ -844,8 +844,25 @@ async function run() {
     if (chip) await chip.click();
     await sleep(300);
 
-    // 11d. Ultracode button prefixes the current prompt and uses the same send path
+    // 11d. ultracode 思考档（CLI /effort 最高档 = xhigh + workflow）给 prompt 加前缀，走同一发送路径
     lastEmittedText = null;
+    // 先切到支持 xhigh 的模型（sonnet），ultracode 档才渲染（haiku 等不支持 effort 的模型无此档）
+    await page.click('#btnSettings');
+    await page.waitForSelector('#settingsSheet:not(.translate-y-full)');
+    await sleep(300);
+    await page.click('.model-tile[data-model="claude-3-5-sonnet"]');
+    await page.waitForSelector('#settingsSheet.translate-y-full'); // 选模型自动收起面板
+    await sleep(300);
+    // 重开面板，选思考档最高档 ultracode
+    await page.click('#btnSettings');
+    await page.waitForSelector('#settingsSheet:not(.translate-y-full)');
+    await sleep(300);
+    await page.click('.effort-tile[data-level="ultracode"]');
+    await sleep(300);
+    await page.click('#settingsClose');
+    await page.waitForSelector('#settingsSheet.translate-y-full');
+    await sleep(300);
+    // ultracode 档已武装，发送自动注入关键词前缀
     await page.focus('#input');
     await page.evaluate(() => {
       const input = document.getElementById('input');
@@ -853,10 +870,10 @@ async function run() {
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await sleep(200);
-    await page.click('#btnUltracode');
+    await page.click('#btnSend');
     await sleep(600);
-    console.log(`   [Assert] Ultracode emitted text: "${lastEmittedText}"`);
-    assert.strictEqual(lastEmittedText, 'ultracode 整理 utils 日期工具', 'TC-11: Ultracode button must prefix and emit the prompt');
+    console.log(`   [Assert] ultracode emitted text: "${lastEmittedText}"`);
+    assert.strictEqual(lastEmittedText, 'ultracode 整理 utils 日期工具', 'TC-11: ultracode 思考档必须给 prompt 加前缀并 emit');
 
     // 11e. Interrupt button during streaming
     await sendCommand('test:stream-long');

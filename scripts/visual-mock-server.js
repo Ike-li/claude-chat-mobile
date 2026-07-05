@@ -248,10 +248,10 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'models', payload: {
         models: [
-          { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] },
+          { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] }, // xhigh：暴露 ultracode 最高档供视觉 E2E（真实档位由网关/CLI 报）
           { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
           { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },
-          { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high'] }
+          { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] } // xhigh：真实 opus 支持，暴露 ultracode 档
         ]
       }
     });
@@ -472,6 +472,27 @@ io.on('connection', socket => {
               title: 'Another App Concurrency',
               model: 'claude-3-5-haiku',
               lastUsedAt: Date.now(),
+              entrypoint: 'sdk-ts'
+            },
+            {
+              id: 'mock-session-another-done',
+              title: 'Background Done Result',
+              model: 'claude-3-5-haiku',
+              lastUsedAt: Date.now() - 1500,
+              entrypoint: 'sdk-ts'
+            },
+            {
+              id: 'mock-session-another-running',
+              title: 'Background Task Running',
+              model: 'claude-3-5-haiku',
+              lastUsedAt: Date.now() - 1000,
+              entrypoint: 'sdk-ts'
+            },
+            {
+              id: 'mock-session-another-permission',
+              title: 'Background Needs Approval',
+              model: 'claude-3-5-haiku',
+              lastUsedAt: Date.now() - 500,
               entrypoint: 'sdk-ts'
             }
           ]
@@ -1391,6 +1412,63 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_background_error_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+
+      } else if (cmd === 'test:background-priority') {
+        console.log('[mock] Marking one background workspace with mixed states');
+        const backgroundCwd = '/Users/you/code/another-react-project';
+        const ensureInstance = ({ instanceId, sessionId, title, state, activeTool }) => {
+          let inst = mockInstances.find(i => i.instanceId === instanceId);
+          if (!inst) {
+            inst = {
+              instanceId,
+              cwd: backgroundCwd,
+              sessionId,
+              title,
+              state,
+              activeTool,
+              permissionMode: 'plan',
+              effort: 'medium',
+              model: 'claude-3-5-haiku'
+            };
+            mockInstances.push(inst);
+          }
+          Object.assign(inst, { cwd: backgroundCwd, sessionId, title, state, activeTool });
+        };
+        ensureInstance({
+          instanceId: 'inst_2',
+          sessionId: 'mock-session-another-done',
+          title: 'Background Done Result',
+          state: 'done',
+          activeTool: null
+        });
+        ensureInstance({
+          instanceId: 'inst_3',
+          sessionId: 'mock-session-another-running',
+          title: 'Background Task Running',
+          state: 'busy',
+          activeTool: 'Task'
+        });
+        ensureInstance({
+          instanceId: 'inst_4',
+          sessionId: 'mock-session-another-permission',
+          title: 'Background Needs Approval',
+          state: 'permission',
+          activeTool: 'Bash'
+        });
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: activeInst.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_background_priority_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
 
       } else if (cmd === 'test:background-taskprogress') {

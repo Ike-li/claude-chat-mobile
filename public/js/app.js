@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -60,7 +60,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
   const btnAttach = $('btnAttach'), fileInput = $('fileInput'), attachTray = $('attachTray'); // E17：附件
-  const btnUltracode = $('btnUltracode'); // per-turn Workflow 关键词快捷发送
+  // ultracode 已从独立按钮并入「思考」档最高档（见 rebuildEffortOptions / ultracodeArmed），不再取独立按钮
   const btnPush = $('btnPush'); // E15：推送订阅入口
   // 候选之外的模型名（/model 手设、或重建时需保留的当前值）插入为带标注的 option
   function ensureModelOption(value, note) {
@@ -301,6 +301,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   let permModeSeen = false;             // 首次服务端同步只定基线不上屏（刷新/重连不冒「切换」假象）
   let currentEffort = null;             // 当前思考强度档（null=模型默认）；onchange 同值不重发
   let effortSeen = false;               // 首次服务端同步只定基线不上屏（同 permModeSeen）
+  let ultracodeArmed = false;           // ultracode 档（=xhigh+workflow）本地武装态：借道 xhigh 发 effort，
+                                        // 由本标志驱动「发送时注入关键词」+ pill/磁贴显示 ultracode。不跨实例（CLI: never persist）
   let currentCwd = null;                // 当前查看 cwd 上下文（instances.viewingCwd），目录切换器高亮 + 新建会话选目录
   let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
@@ -1310,12 +1312,12 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       return;
     }
     const rawText = inputEl.value.trim();
-    if (opts.ultracode && !rawText && pendingAttachments.length === 0) {
-      addBar('先输入任务，再用 ultracode 发送', 'text-info');
+    if (ultracodeArmed && !rawText && pendingAttachments.length === 0) {
+      addBar('ultracode 档需要先输入任务再发送', 'text-info');
       inputEl.focus();
       return;
     }
-    const text = opts.ultracode ? withUltracodeKeyword(rawText) : rawText;
+    const text = ultracodeArmed ? withUltracodeKeyword(rawText) : rawText; // ultracode 档：每轮注入关键词触发 Workflow
     if (!text && pendingAttachments.length === 0) return; // E17：纯附件（空文本）也可发
     // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传
@@ -1404,7 +1406,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
 
     if (text.length > 50000) { addBar(`消息过长（${text.length}/50000），未发送`, 'text-danger'); return; }
-    if (opts.ultracode) addBar('ultracode：本轮启用 Workflow 关键词', 'text-info');
     if (text.startsWith('/')) addBar(`⚡ 命令：${text}`, 'text-info');
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
@@ -1427,10 +1428,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     scrollBottom(true);
   }
   btnSend.onclick = send;
-  btnUltracode?.addEventListener('click', () => {
-    haptic('tap');
-    send({ ultracode: true });
-  });
   // 中文输入法：e.isComposing + keyCode 229 双检已覆盖绝大多数现代浏览器，
   // composition 状态追踪作为旧浏览器（Safari <14、部分 Android WebView）的后备兜底
   let composing = false;
@@ -1656,23 +1653,25 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   function setEffortMode(level, silent = false) {
     if (!effortSelect) return;
     const val = level || null; // 空串/undefined 归一为 null（模型默认）
+    // ultracode 档借道 xhigh：后端只回 xhigh，用本地 ultracodeArmed 决定呈现名
     if (!silent && effortSeen && val !== currentEffort) {
-      addBar(`思考强度 → ${val || '模型默认'}（下一条消息生效）`, 'text-ink-faint');
+      addBar(`思考强度 → ${ultracodeArmed ? 'ultracode' : (val || '模型默认')}（下一条消息生效）`, 'text-ink-faint');
     }
     effortSeen = true;
     currentEffort = val;
     effortSelect.value = val || '';
 
-    // Sync Pill Display Text
+    // Sync Pill Display Text（武装 ultracode 时显 ultracode，而非后端真值 xhigh）
     if (pillEffortText) {
-      pillEffortText.textContent = val || '默认思考';
+      pillEffortText.textContent = ultracodeArmed ? 'ultracode' : (val || '默认思考');
     }
 
-    // Sync Custom Effort Tiles Selection Styling
+    // Sync Custom Effort Tiles Selection Styling（武装 ultracode 时高亮最高档，而非后端真值 xhigh）
     if (customEffortGrid) {
+      const activeLevel = ultracodeArmed ? 'ultracode' : (val || '');
       customEffortGrid.querySelectorAll('.effort-tile').forEach(tile => {
         const tileVal = tile.dataset.level || '';
-        const isCurrent = (val || '') === tileVal;
+        const isCurrent = activeLevel === tileVal;
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
           const title = tile.querySelector('.text-xs') || tile;
@@ -1691,7 +1690,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   // effort 档位按当前模型动态渲染（CLI/SDK 透传，不硬编码）：决策在 logic.js 的 effortLevelsFor，此处只渲染。
   function rebuildEffortOptions(modelValue) {
     if (!effortSelect) return;
-    const { hidden, levels: show } = effortLevelsFor(modelValue, modelsList);
+    const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
+    const show = withUltracodeTier(baseLevels); // xhigh-capable 模型上追加 ultracode 最高档，镜像 CLI /effort
     if (hidden) {
       effortSelect.value = '';
       if (customEffortGrid) customEffortGrid.innerHTML = '';
@@ -1715,7 +1715,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (customEffortGrid) {
       customEffortGrid.innerHTML = '';
       
-      const currentVal = effortSelect.value || '';
+      const currentVal = ultracodeArmed ? 'ultracode' : (effortSelect.value || ''); // 武装 ultracode 时高亮最高档磁贴
       const defActive = !currentVal;
       const defTile = el(`
         <div data-level="" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${defActive ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
@@ -1732,10 +1732,12 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
       for (const lv of show) {
         const active = currentVal === lv;
+        const isUltra = lv === 'ultracode';
+        const sub = isUltra ? 'xhigh + 多 agent workflow · 最彻底，更慢更费额度' : `思考等级: ${lv}`;
         const lvTile = el(`
           <div data-level="${lv}" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
             <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${lv}</div>
-            <div class="text-[9.5px] text-ink-soft mt-0.5">思考等级: ${lv}</div>
+            <div class="text-[9.5px] text-ink-soft mt-0.5">${sub}</div>
           </div>
         `);
         lvTile.onclick = () => {
@@ -1748,11 +1750,19 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
   }
   effortSelect.onchange = () => {
-    const level = effortSelect.value || null;
-    if (level === currentEffort) return;
-    socket.emit('user:setEffort', { level });
-    // 不乐观更新：成功则 effort_mode 广播拨档 + 上屏；busy/非法档则 server 发 system 提示
-    // 并单发当前档拨回本设备 select
+    // ultracode 档在 SDK 层不存在：解析成「借道 xhigh + 武装关键词」。effort 始终是后端认得的合法值。
+    const { effort, ultracode } = resolveEffortSelection(effortSelect.value || null);
+    const armedChanged = ultracode !== ultracodeArmed;
+    ultracodeArmed = ultracode;
+    if (effort !== currentEffort) {
+      socket.emit('user:setEffort', { level: effort });
+      // 不乐观更新：成功则 effort_mode 广播拨档 + 上屏（setEffortMode 读 ultracodeArmed 决定显名）；
+      // busy/非法档则 server 发 system 提示并单发当前档拨回本设备 select
+    } else if (armedChanged) {
+      // effort 未变、仅 ultracode 武装态翻转（xhigh ↔ ultracode）：无后端往返、免会话重建，本地即时刷新
+      setEffortMode(currentEffort, true);
+      addBar(ultracode ? 'ultracode：xhigh + 多 agent workflow（更彻底，更慢更费额度）' : `思考强度 → ${currentEffort || '模型默认'}`, 'text-ink-faint');
+    }
   };
 
   // ---- 工作目录切换（台阶1：多目录单并发）----
@@ -1844,6 +1854,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const startScreenCwdChanged = !newViewing && cwdChanged;
     if (newViewing !== displayedInstanceId || startScreenCwdChanged) {
       const target = instancesList.find(x => x.instanceId === newViewing);
+      ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）
       adoptPanelState(target);          // 先静默同步顶部面板到新实例档（先于 bindView 的 sync 回放）
       // 空首页（无实例）：① 模型不显具体名（新会话模型=env 默认、服务端不可知）→「不指定」，modelInput 归零；
       // ② 权限/思考强度显"下条新会话将用的真实档"（server defaultPermissionMode/defaultEffort = pending ?? CLI 启动默认），

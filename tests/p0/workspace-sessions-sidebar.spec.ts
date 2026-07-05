@@ -100,6 +100,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-11j 后台同工作区多状态优先显示待审批', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:background-priority');
+    await waitForIdle(page);
+    await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#sessionsDot')).toHaveText('⚠️');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区待审批');
+
+    await page.locator('#btnSessions').click();
+    const backgroundDir = page.locator('#sessionPanel div[data-dir="/Users/you/code/another-react-project"]');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveText('⚠️');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '待审批');
+
+    await backgroundDir.locator('button').first().click();
+    const doneRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    const busyRow = page.locator('[data-testid="session-row"][data-instance-id="inst_3"]');
+    const permissionRow = page.locator('[data-testid="session-row"][data-instance-id="inst_4"]');
+    await expect(doneRow).toContainText('Background Done Result');
+    await expect(doneRow.locator('[data-instance-badge]')).toHaveText('✅');
+    await expect(busyRow).toContainText('Background Task Running');
+    await expect(busyRow.locator('[data-instance-badge]')).toHaveText('🤖');
+    await expect(permissionRow).toContainText('Background Needs Approval');
+    await expect(permissionRow.locator('[data-instance-badge]')).toHaveText('⚠️');
+    await expect(permissionRow.locator('[data-instance-badge]')).toHaveAttribute('title', '待审批');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11d 未打开的历史会话可从 sidebar 切换并回放历史', async ({ page }) => {
     await gotoMock(page);
 
