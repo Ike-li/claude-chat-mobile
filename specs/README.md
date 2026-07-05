@@ -33,6 +33,7 @@ Current P0 mock-only coverage also includes:
 - Settings coverage verifies unsupported-model effort controls hide and do not leak a stale thinking effort into the next turn.
 - Settings coverage verifies new-session empty-start permission/effort presets are consumed by the first sent message.
 - Console coverage verifies opening and closing the trace sheet preserves the user's in-progress input draft.
+- Console coverage verifies reopening the trace sheet after a session switch shows the current session trace rather than the previous session trace.
 - Long-stream interrupt coverage verifies that a stopped stream does not keep appending chunks after a later command completes.
 - Tool-card coverage includes out-of-order tool results to ensure outputs stay attached to the correct visible card.
 - Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet and the rule does not leak to another live session.

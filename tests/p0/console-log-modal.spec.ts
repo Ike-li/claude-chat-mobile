@@ -60,4 +60,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-16d Console 切换会话后显示当前会话 trace', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toBeVisible();
+    await expect(page.locator('#consoleLogArea')).toContainText('Session trace for Visual Sandbox (Main)');
+    await page.locator('#consoleClose').click();
+    await expect(page.locator('#consoleModal')).toBeHidden();
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    await page.locator('button[title="Another App Concurrency"]').click();
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
+
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toBeVisible();
+    await expect(page.locator('#consoleLogArea')).toContainText('Session trace for Another App Concurrency');
+    await expect(page.locator('#consoleLogArea')).not.toContainText('Session trace for Visual Sandbox (Main)');
+
+    await expectNoBrowserErrors(page);
+  });
 });
