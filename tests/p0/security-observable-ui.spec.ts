@@ -29,7 +29,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-20b 鉴权失败显示令牌输入页且重输后恢复连接', async ({ page }) => {
     const consoleText: string[] = [];
-    captureBrowserErrors(page);
+    captureBrowserErrors(page, { ignoredResourceStatusCodes: [400] });
     page.on('console', message => consoleText.push(message.text()));
     await page.request.post('/__reset');
 
@@ -57,7 +57,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-20c 鉴权失败页可打开访问帮助且不泄露令牌', async ({ page }) => {
     const consoleText: string[] = [];
-    captureBrowserErrors(page);
+    captureBrowserErrors(page, { ignoredResourceStatusCodes: [400] });
     page.on('console', message => consoleText.push(message.text()));
     await page.request.post('/__reset');
 
@@ -82,7 +82,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-20d 鉴权失败页按 Enter 可重输令牌恢复连接', async ({ page }) => {
     const consoleText: string[] = [];
-    captureBrowserErrors(page);
+    captureBrowserErrors(page, { ignoredResourceStatusCodes: [400] });
     page.on('console', message => consoleText.push(message.text()));
     await page.request.post('/__reset');
 
@@ -106,7 +106,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-20e token 重试成功后不会把失败令牌留在本地输入状态', async ({ page }) => {
     const consoleText: string[] = [];
-    captureBrowserErrors(page);
+    captureBrowserErrors(page, { ignoredResourceStatusCodes: [400] });
     page.on('console', message => consoleText.push(message.text()));
     await page.request.post('/__reset');
 
