@@ -40,4 +40,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-04c 连续点击停止只显示一次中断反馈', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:stream-long');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Chunk 1', { timeout: 10_000 });
+
+    await page.locator('#btnStopNew').dblclick();
+    await waitForIdle(page);
+    await expect(page.locator('#messages .msg-frame.text-center').filter({ hasText: '已中断' })).toHaveCount(1);
+
+    await page.locator('#input').fill('hello after double interrupt');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
 });

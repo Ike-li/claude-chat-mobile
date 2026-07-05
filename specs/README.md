@@ -39,6 +39,7 @@ Current P0 mock-only coverage also includes:
 - Console coverage verifies opening and closing the trace sheet preserves the user's in-progress input draft.
 - Console coverage verifies reopening the trace sheet after a session switch shows the current session trace rather than the previous session trace.
 - Long-stream interrupt coverage verifies that a stopped stream does not keep appending chunks after a later command completes.
+- Long-stream interrupt coverage verifies repeated Stop taps produce a single visible interrupted state rather than duplicate feedback.
 - Tool-card coverage includes out-of-order tool results to ensure outputs stay attached to the correct visible card.
 - Tool-card coverage verifies an in-flight tool is marked failed and the input recovers when the turn ends with an error.
 - Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet and the rule does not leak to another live session.

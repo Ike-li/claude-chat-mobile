@@ -105,6 +105,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   const sessionDomCache = new Map();
   // 这些状态会被早期 socket/DOM 回调触达，必须先于回调注册声明，避免首连事件抢跑触发 TDZ。
   let _busyState = false;
+  let interruptPending = false;
   let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
   // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读。
@@ -1597,11 +1598,19 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   }
   updateSendButtonState();
 
-  btnStop.onclick = () => socket.emit('user:interrupt', { instanceId: viewingInstanceId }); // 台阶3：中断当前查看 tab 的在途任务
+  function requestInterrupt() {
+    if (interruptPending) return;
+    interruptPending = true;
+    if (btnStop) btnStop.disabled = true;
+    if (btnStopNew) btnStopNew.disabled = true;
+    socket.emit('user:interrupt', { instanceId: viewingInstanceId }); // 台阶3：中断当前查看 tab 的在途任务
+  }
+
+  btnStop.onclick = requestInterrupt;
   if (btnStopNew) {
     btnStopNew.onclick = () => {
       haptic('tap');
-      socket.emit('user:interrupt', { instanceId: viewingInstanceId });
+      requestInterrupt();
     };
   }
 
@@ -2098,6 +2107,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (!activeStatusPill || b === _busyState) return;
     _busyState = b;
     if (b) {
+      if (!interruptPending) {
+        if (btnStop) btnStop.disabled = false;
+        if (btnStopNew) btnStopNew.disabled = false;
+      }
       activeStatusPill.classList.remove('hidden');
       activeStatusPill.offsetHeight; // 触发 CSS 过渡所需的单次强制 layout（仅在 false→true 时执行一次）
       activeStatusPill.classList.add('pill-active');
@@ -2105,6 +2118,9 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         activeStatusText.textContent = 'Claude 正在执行任务...';
       }
     } else {
+      interruptPending = false;
+      if (btnStop) btnStop.disabled = false;
+      if (btnStopNew) btnStopNew.disabled = false;
       activeStatusPill.classList.remove('pill-active');
       setTimeout(() => {
         if (!activeStatusPill.classList.contains('pill-active')) {
