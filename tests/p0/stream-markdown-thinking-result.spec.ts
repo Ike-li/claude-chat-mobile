@@ -26,4 +26,19 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-03b 代码块复制按钮提供可见反馈', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:stream');
+    await expect(page.locator('[data-testid="assistant-message"]').last().locator('pre code')).toContainText('tester', { timeout: 20_000 });
+    await waitForIdle(page);
+
+    const copyButton = page.locator('[data-testid="assistant-message"]').last().getByRole('button', { name: /复制代码|复制/ }).first();
+    await expect(copyButton).toBeVisible();
+    await copyButton.click();
+    await expect(copyButton).toContainText(/已复制|失败/);
+
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -56,6 +56,7 @@
   2. 等待流式输出结束。
     - expect: assistant 消息逐步增长并最终完整显示。
     - expect: Markdown 渲染包含粗体、列表、inline code、代码块和复制代码按钮。
+    - expect: 点击代码块复制按钮后有“已复制”或失败反馈，用户能知道操作结果。
     - expect: 完成后 active status pill 隐藏。
     - expect: 结果栏显示完成状态、耗时/成本/模型等可见摘要；成本格式应稳定，例如 $0.0015。
     - expect: 失败条件：流式过程卡住、Markdown 原文泄漏、thinking 混入主回复、完成后仍 busy、结果栏缺失或显示 NaN。
@@ -180,6 +181,7 @@
     - expect: sidebar 显示每个工作区、会话、新建会话入口和关闭会话入口。
     - expect: session:list 结果只显示当前 cwd 对应历史会话。
     - expect: session:list 返回 hasMore 时，sidebar 显示“显示全部会话…”并可展开较早历史会话，展开后能打开并回放历史。
+    - expect: sidebar 已缓存旧 session:list 后，重新刷新到 hasMore 结果时仍显示“显示全部会话…”并可打开较早历史会话。
     - expect: 切换到第二个实例后通过 sync:since/history replay 显示该会话历史消息。
     - expect: sync:since 返回 gap 时清掉残缺回放并回退 session:history，不残留旧会话内容。
     - expect: 关闭当前待审批会话时切到剩余会话，旧会话消息和待审批状态不残留。

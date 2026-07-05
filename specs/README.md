@@ -32,6 +32,7 @@ Current P0 mock-only coverage also includes:
 - Input coverage verifies a foreground `pageshow` sync replay does not duplicate an already-rendered assistant reply.
 - Input coverage verifies a foreground `sync:since` `found:false` recovery clears stale visible content and reloads authoritative session history.
 - Input coverage verifies selecting the ultracode effort preset injects the per-turn keyword once and completes the mock turn.
+- Stream/Markdown coverage verifies code-block copy controls are present and provide visible feedback after a click.
 - Auth failure coverage includes opening the access-help sheet and retrying by Enter from the token gate without leaking rejected or accepted tokens.
 - Settings coverage verifies unsupported-model effort controls hide and do not leak a stale thinking effort into the next turn.
 - Settings coverage verifies new-session empty-start permission/effort presets are consumed by the first sent message.
@@ -53,6 +54,7 @@ Current P0 mock-only coverage also includes:
 - Session navigation coverage verifies unopened historical sessions can be launched from the sidebar and rendered through the `session:history` fallback.
 - Session navigation coverage verifies a `sync:since` gap while opening a historical session clears partial replay and falls back to `session:history`.
 - Session navigation coverage verifies the sidebar `显示全部会话…` path can expand a truncated `session:list` result and open an older history session.
+- Session navigation coverage verifies a previously cached sidebar `session:list` refresh can surface a new `显示全部会话…` entry and open the older history session.
 - Session navigation coverage verifies the sidebar new-session button opens an empty chat in the selected workspace rather than the previously viewed workspace.
 - Session navigation coverage verifies the first message from a sidebar-created empty chat stays in the selected workspace after the lazy fresh instance opens.
 - Session navigation coverage verifies a failed historical session switch shows an error without replacing the current workspace or chat transcript.

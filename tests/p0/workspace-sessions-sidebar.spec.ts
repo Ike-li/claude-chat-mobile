@@ -169,6 +169,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-11n sidebar 刷新已缓存的会话列表后显示较早历史入口', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
+    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
+    await expect(page.locator('button[title="Archived Planning Session"]')).toBeVisible();
+    await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
+    await page.locator('#sidebarClose').click();
+
+    await sendChatMessage(page, 'test:history-overflow');
+    await waitForIdle(page);
+
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
+    await expect(page.getByRole('button', { name: '显示全部会话…' })).toBeVisible();
+    await expect(page.locator('#sessionPanel')).not.toContainText('Older Migration Session');
+
+    await page.getByRole('button', { name: '显示全部会话…' }).click();
+    await expect(page.locator('button[title="Older Migration Session"]')).toBeVisible();
+    await page.locator('button[title="Older Migration Session"]').click();
+    await expect(page.locator('#messages')).toContainText('Older migration history loaded from session:list overflow.', { timeout: 10_000 });
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11k sync gap 后回退 history 且不残留旧会话内容', async ({ page }) => {
     await gotoMock(page);
 
