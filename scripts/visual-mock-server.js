@@ -544,11 +544,15 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
         });
 
-      } else if (cmd === 'test:pendingsnapshot') {
+      } else if (cmd === 'test:pendingsnapshot' || cmd === 'test:pendingsnapshot-duplicate') {
         // Bug2 回归：模拟"实例有未决审批，但原始 permission_request 事件已被环形缓冲 trim / 切视图分流丢失"——
         // 前端此刻无卡片；切入该实例时 sync:since 的 ack.pending 快照应重建审批卡片。刻意【不】emit permission_request。
-        console.log('[mock] test:pendingsnapshot — 设快照但不发 permission_request，切 viewing 到 inst_2 触发 sync:since');
-        syncPendingSnapshot = { permissions: [{ requestId: 'req_snapshot', name: 'run_command', input: 'rm -rf /tmp/stale', cwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd }], questions: [] };
+        console.log(`[mock] ${cmd} — 设快照但不发 permission_request，切 viewing 到 inst_2 触发 sync:since`);
+        const permissionSnapshot = { requestId: 'req_snapshot', name: 'run_command', input: 'rm -rf /tmp/stale', cwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd };
+        syncPendingSnapshot = {
+          permissions: cmd === 'test:pendingsnapshot-duplicate' ? [permissionSnapshot, permissionSnapshot] : [permissionSnapshot],
+          questions: []
+        };
         syncPendingSnapshotInstanceId = 'inst_2';
         viewingInstanceId = 'inst_2';
         io.emit('agent:event', {

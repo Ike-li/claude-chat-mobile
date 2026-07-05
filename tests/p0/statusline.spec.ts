@@ -25,4 +25,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-10b 状态线缓存 TTL 显示估算语义', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:statusline');
+    await waitForIdle(page);
+    await page.locator('#cliStatusWrap summary').click();
+    await expect(page.locator('#cliStatus .js-cache-ttl')).toBeVisible();
+    await expect(page.locator('#cliStatus .js-cache-ttl')).toContainText(/ttl ~|cache cold/);
+    await expect(page.locator('#cliStatus .js-cache-ttl')).toContainText('est');
+
+    await expectNoBrowserErrors(page);
+  });
 });

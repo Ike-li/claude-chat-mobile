@@ -54,4 +54,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-20c 鉴权失败页可打开访问帮助且不泄露令牌', async ({ page }) => {
+    const consoleText: string[] = [];
+    captureBrowserErrors(page);
+    page.on('console', message => consoleText.push(message.text()));
+    await page.request.post('/__reset');
+
+    await page.goto('/#token=expired-token');
+    await expect.poll(() => page.url()).not.toContain('expired-token');
+    await expect(page.locator('#authGate')).toBeVisible();
+    await expect(page.locator('#authError')).toContainText('令牌无效，请重新输入');
+
+    await page.locator('#authHelpLink').click();
+    await expect(page.locator('#accessHelp')).toBeVisible();
+    await expect(page.locator('#accessHelp')).toContainText('访问令牌在哪');
+    await expect(page.locator('#accessHelp')).toContainText('新设备怎么获批');
+    await expect(page.locator('body')).not.toContainText('expired-token');
+    expect(consoleText.join('\n')).not.toContain('expired-token');
+
+    await page.locator('#accessHelpClose').click();
+    await expect(page.locator('#accessHelp')).toBeHidden();
+    await expect(page.locator('#authGate')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
 });
