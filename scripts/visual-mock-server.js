@@ -105,6 +105,7 @@ let pendingPermission = null;
 let pendingQuestion = null;
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let syncPendingSnapshotInstanceId = null;
+let lateClosedSessionEventsInstanceId = null;
 let pendingDevices = [];
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
@@ -123,6 +124,7 @@ function resetMockState() {
   pendingQuestion = null;
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
+  lateClosedSessionEventsInstanceId = null;
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
@@ -206,6 +208,50 @@ app.post('/__reset', (_req, res) => {
 
 // Helper to delay executions to simulate streaming behavior
 const delay = ms => new Promise(res => setTimeout(res, ms));
+
+function emitLateClosedSessionEvents(closedInstanceId) {
+  const staleSessionId = 'mock-session-closed-stale';
+  const staleEpoch = 'mock-epoch-closed-stale';
+  const staleCwd = '/Users/you/code/claude-chat-mobile';
+  const ts = Date.now();
+
+  io.emit('agent:event', {
+    seq: 1, epoch: staleEpoch, sessionId: staleSessionId, instanceId: closedInstanceId, ts,
+    type: 'tool_use', payload: { toolUseId: 't_closed_session_stale', name: 'run_command', inputSummary: 'rm -rf /tmp/closed-session-stale' }
+  });
+  io.emit('agent:event', {
+    seq: 2, epoch: staleEpoch, sessionId: staleSessionId, instanceId: closedInstanceId, ts: ts + 1,
+    type: 'text_delta', payload: { messageId: 'msg_closed_session_stale', text: 'STALE CLOSED SESSION TEXT MUST NOT RENDER' }
+  });
+  io.emit('agent:event', {
+    seq: 3, epoch: staleEpoch, sessionId: staleSessionId, instanceId: closedInstanceId, ts: ts + 2,
+    type: 'permission_request', payload: {
+      requestId: 'req_closed_session_stale',
+      name: 'run_command',
+      input: 'rm -rf /tmp/closed-session-stale',
+      cwd: staleCwd
+    }
+  });
+  io.emit('agent:event', {
+    seq: 4, epoch: staleEpoch, sessionId: staleSessionId, instanceId: closedInstanceId, ts: ts + 3,
+    type: 'question', payload: {
+      requestId: 'req_closed_session_stale_question#0',
+      text: 'This closed session question must not appear',
+      options: ['main', 'dev', 'release-v1.0']
+    }
+  });
+  io.emit('agent:event', {
+    seq: 5, epoch: staleEpoch, sessionId: staleSessionId, instanceId: closedInstanceId, ts: ts + 4,
+    type: 'result', payload: { messageId: 'msg_closed_session_stale', durationMs: 250, costUsd: 0, isError: false, models: [activeModel] }
+  });
+
+  const current = mockInstances.find(i => i.instanceId === viewingInstanceId);
+  if (!current) return;
+  io.emit('agent:event', {
+    seq: 1, epoch: 'mock-epoch-current-after-closed-stale', sessionId: current.sessionId, instanceId: current.instanceId, ts: Date.now(),
+    type: 'system', payload: { message: '[MOCK_INFO] Closed-session stale replay finished for current view.' }
+  });
+}
 
 io.on('connection', socket => {
   console.log(`[mock-conn] Socket connected: ${socket.id}`);
@@ -382,12 +428,14 @@ io.on('connection', socket => {
     console.log(`[mock] Close Tab: ${instanceId}`);
     const idx = mockInstances.findIndex(i => i.instanceId === instanceId);
     if (idx !== -1 && mockInstances.length > 1) {
+      const shouldEmitLateClosedSessionEvents = lateClosedSessionEventsInstanceId === instanceId;
       if (pendingPermission?.instanceId === instanceId) pendingPermission = null;
       if (pendingQuestion?.instanceId === instanceId) pendingQuestion = null;
       if (syncPendingSnapshotInstanceId === instanceId) {
         syncPendingSnapshot = null;
         syncPendingSnapshotInstanceId = null;
       }
+      if (shouldEmitLateClosedSessionEvents) lateClosedSessionEventsInstanceId = null;
       mockInstances.splice(idx, 1);
       if (viewingInstanceId === instanceId) {
         viewingInstanceId = mockInstances[0].instanceId;
@@ -401,6 +449,9 @@ io.on('connection', socket => {
           instances: mockInstances
         }
       });
+      if (shouldEmitLateClosedSessionEvents) {
+        setTimeout(() => emitLateClosedSessionEvents(instanceId), 80);
+      }
     }
   });
 
@@ -1918,6 +1969,55 @@ io.on('connection', socket => {
           }]
         };
         syncPendingSnapshotInstanceId = 'inst_1';
+        viewingInstanceId = 'inst_2';
+        const inst2 = mockInstances.find(i => i.instanceId === 'inst_2');
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: inst2.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+
+      } else if (cmd === 'test:late-closed-session-events') {
+        console.log('[mock] test:late-closed-session-events — 关闭后台 inst_1 后继续发旧实例迟到事件');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another',
+            title: 'Another App Concurrency',
+            state: 'idle',
+            permissionMode: 'plan',
+            effort: 'medium',
+            model: 'claude-3-5-haiku'
+          });
+        }
+        const inst1 = mockInstances.find(i => i.instanceId === 'inst_1');
+        inst1.state = 'permission';
+        inst1.activeTool = 'Bash';
+        pendingPermission = {
+          instanceId: 'inst_1',
+          requestId: 'req_close_background_late',
+          toolUseId: 't_close_background_late',
+          messageId: 'msg_close_background_late_1',
+          name: 'run_command',
+          input: 'git push origin main',
+          cwd: inst1.cwd
+        };
+        syncPendingSnapshot = {
+          permissions: [{
+            requestId: pendingPermission.requestId,
+            name: pendingPermission.name,
+            input: pendingPermission.input,
+            cwd: pendingPermission.cwd
+          }],
+          questions: []
+        };
+        syncPendingSnapshotInstanceId = 'inst_1';
+        lateClosedSessionEventsInstanceId = 'inst_1';
         viewingInstanceId = 'inst_2';
         const inst2 = mockInstances.find(i => i.instanceId === 'inst_2');
         io.emit('agent:event', {

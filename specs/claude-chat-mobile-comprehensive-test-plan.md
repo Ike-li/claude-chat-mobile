@@ -207,6 +207,7 @@
     - expect: 不会把 inst_1 的审批 allow/deny 发给 inst_2。
     - expect: sidebar/状态角标仍可提示后台实例有 pending，但当前视图不显示错误弹窗。
     - expect: 关闭后台 AskUserQuestion pending 会话后，旧问题弹窗和 requestId 不会在当前视图复活。
+    - expect: 关闭后台 pending 会话后，即使服务端迟到发来旧 instanceId 的 tool/text/permission/question/result 事件，当前视图也不显示旧文本、旧审批或旧问题。
     - expect: 失败条件：跨 tab 弹窗残留、点击当前视图按钮解决了后台实例请求、旧 requestId 被错误复用。
 
 #### 1.14. P0-14 pending snapshot 对账重建审批卡片

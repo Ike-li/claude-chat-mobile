@@ -111,4 +111,38 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-13e 关闭后台会话后迟到事件不污染当前视图', async ({ page }) => {
+    await gotoMock(page);
+    await page.setViewportSize({ width: 900, height: 812 });
+
+    await sendChatMessage(page, 'test:late-closed-session-events');
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await expect(page.locator('#permModal')).toBeHidden();
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
+    const closedRow = page.locator('[data-testid="session-row"][data-instance-id="inst_1"]');
+    await expect(closedRow).toContainText('Visual Sandbox (Main)');
+    await expect(closedRow.locator('[data-instance-badge]')).toHaveText('⚠️');
+
+    page.once('dialog', dialog => dialog.accept());
+    await closedRow.locator('button', { hasText: '✕' }).click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#messages')).toContainText('Closed-session stale replay finished for current view.', { timeout: 10_000 });
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#messages')).not.toContainText('STALE CLOSED SESSION TEXT MUST NOT RENDER');
+    await expect(page.locator('#messages')).not.toContainText('rm -rf /tmp/closed-session-stale');
+    await expect(page.locator('#messages')).not.toContainText('This closed session question must not appear');
+    await expect(page.locator('#permModal')).toBeHidden();
+    await expect(page.locator('#questionModal')).toBeHidden();
+
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#sessionPanel')).not.toContainText('Visual Sandbox (Main)');
+    await expect(page.locator('#sessionPanel')).not.toContainText('claude-chat-mobile');
+
+    await expectNoBrowserErrors(page);
+  });
 });
