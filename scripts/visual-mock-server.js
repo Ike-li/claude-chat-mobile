@@ -442,6 +442,13 @@ io.on('connection', socket => {
               model: 'claude-3-5-sonnet',
               lastUsedAt: Date.now() - 600000,
               entrypoint: 'sdk-ts'
+            },
+            {
+              id: 'mock-session-deleted',
+              title: 'Deleted Remote Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: Date.now() - 900000,
+              entrypoint: 'sdk-ts'
             }
           ]
         });

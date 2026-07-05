@@ -108,4 +108,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-11f sidebar 历史会话切换失败只提示不切走当前会话', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
+    await expect(page.locator('button[title="Deleted Remote Session"]')).toBeVisible();
+    await page.locator('button[title="Deleted Remote Session"]').click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
+    await expect(page.locator('#messages')).toContainText('mock session not found');
+    await expect(page.locator('#historyLoadingCard')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
 });
