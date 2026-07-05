@@ -453,6 +453,13 @@ io.on('connection', socket => {
               entrypoint: 'sdk-ts'
             },
             {
+              id: 'mock-session-gap',
+              title: 'Archived Gap Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: Date.now() - 750000,
+              entrypoint: 'sdk-ts'
+            },
+            {
               id: 'mock-session-deleted',
               title: 'Deleted Remote Session',
               model: 'claude-3-5-sonnet',
@@ -508,18 +515,29 @@ io.on('connection', socket => {
   socket.on('session:switch', (payload, callback) => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:switch sessionId=${sessionId}, cwd=${cwd}`);
-    if (sessionId !== 'mock-session-archived' || cwd !== '/Users/you/code/claude-chat-mobile') {
+    const knownArchived = {
+      'mock-session-archived': {
+        instanceId: 'inst_archived',
+        title: 'Archived Planning Session'
+      },
+      'mock-session-gap': {
+        instanceId: 'inst_gap',
+        title: 'Archived Gap Session'
+      }
+    };
+    const meta = knownArchived[sessionId];
+    if (!meta || cwd !== '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') callback({ ok: false, error: 'mock session not found' });
       return;
     }
 
-    let archivedInst = mockInstances.find(i => i.instanceId === 'inst_archived');
+    let archivedInst = mockInstances.find(i => i.instanceId === meta.instanceId);
     if (!archivedInst) {
       archivedInst = {
-        instanceId: 'inst_archived',
+        instanceId: meta.instanceId,
         cwd: '/Users/you/code/claude-chat-mobile',
-        sessionId: 'mock-session-archived',
-        title: 'Archived Planning Session',
+        sessionId,
+        title: meta.title,
         state: 'idle',
         permissionMode: 'default',
         effort: null,
@@ -547,16 +565,27 @@ io.on('connection', socket => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:history sessionId=${sessionId}, cwd=${cwd}`);
     if (typeof callback !== 'function') return;
-    if (sessionId !== 'mock-session-archived' || cwd !== '/Users/you/code/claude-chat-mobile') {
+    if (cwd !== '/Users/you/code/claude-chat-mobile') {
       callback({ messages: [] });
       return;
     }
-    callback({
-      messages: [
-        { role: 'user', content: 'Summarize archived plan' },
-        { role: 'assistant', content: 'Archived plan replay from session history.' }
-      ]
-    });
+    if (sessionId === 'mock-session-archived') {
+      callback({
+        messages: [
+          { role: 'user', content: 'Summarize archived plan' },
+          { role: 'assistant', content: 'Archived plan replay from session history.' }
+        ]
+      });
+    } else if (sessionId === 'mock-session-gap') {
+      callback({
+        messages: [
+          { role: 'user', content: 'Gap recovery prompt' },
+          { role: 'assistant', content: 'History fallback after sync gap.' }
+        ]
+      });
+    } else {
+      callback({ messages: [] });
+    }
   });
 
   // Console modal trace fetch. Production serves persisted per-session interaction logs;
@@ -583,10 +612,10 @@ io.on('connection', socket => {
     console.log(`[mock] sync:since received for instanceId=${instanceId}, sessionId=${sessionId}`);
     // Bug2 状态对账：mock 侧有未决审批/提问快照时随 ack 带回（模拟真 server 的 pendingRequestsSnapshot）——
     // 前端 applyPendingSnapshot 在视图稳定后据此重建卡片，即使原始 permission_request 事件从未回放。
-    const ack = (replayed) => {
+    const ack = (replayed, extra = {}) => {
       if (typeof callback === 'function') {
         const pending = (!syncPendingSnapshotInstanceId || syncPendingSnapshotInstanceId === instanceId) ? syncPendingSnapshot : null;
-        callback({ ok: true, replayed, pending });
+        callback({ ok: true, replayed, pending, ...extra });
       }
     };
     if (instanceId === 'inst_2') {
@@ -604,6 +633,12 @@ io.on('connection', socket => {
         type: 'result', payload: { messageId: 'msg_another_1', durationMs: 1000, costUsd: 0.0005, isError: false, models: ['claude-3-5-haiku'] }
       });
       ack(3);
+    } else if (instanceId === 'inst_gap') {
+      socket.emit('agent:event', {
+        seq: 1, epoch: 'mock-epoch-gap-partial', sessionId: 'mock-session-gap', instanceId: 'inst_gap', ts: Date.now(),
+        type: 'text_delta', payload: { messageId: 'msg_gap_partial', text: 'Partial gap buffer that must be discarded' }
+      });
+      ack(1, { gap: true });
     } else if (instanceId === 'inst_1') {
       ack(0); // Fallback to history or empty
     } else {

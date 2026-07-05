@@ -178,6 +178,7 @@
     - expect: sidebar 显示每个工作区、会话、新建会话入口和关闭会话入口。
     - expect: session:list 结果只显示当前 cwd 对应历史会话。
     - expect: 切换到第二个实例后通过 sync:since/history replay 显示该会话历史消息。
+    - expect: sync:since 返回 gap 时清掉残缺回放并回退 session:history，不残留旧会话内容。
     - expect: 当前模型、权限档、effort 跟随实例切换。
     - expect: 失败条件：工作区历史串线、切换后仍显示旧实例 pending 弹窗、关闭一个实例误关另一个实例。
 

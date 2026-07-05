@@ -145,6 +145,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-11k sync gap 后回退 history 且不残留旧会话内容', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
+    await expect(page.locator('button[title="Archived Gap Session"]')).toBeVisible();
+    await page.locator('button[title="Archived Gap Session"]').click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#messages')).toContainText('Gap recovery prompt', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('History fallback after sync gap.');
+    await expect(page.locator('#messages')).not.toContainText('Concurrency Mode Triggered');
+    await expect(page.locator('#messages')).not.toContainText('Partial gap buffer that must be discarded');
+    await expect(page.locator('#historyLoadingCard')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11e 可从 sidebar 在其它工作区新建空会话', async ({ page }) => {
     await gotoMock(page);
 
