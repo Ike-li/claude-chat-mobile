@@ -50,4 +50,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-13c 跨 tab 问题弹窗切走后清理并切回重建', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:questionCrossTab');
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('#questionText')).toContainText('Which branch should be our target publish destination?');
+    await expect(page.locator('#questionModal')).toBeHidden({ timeout: 8_000 });
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+
+    await page.evaluate(() => document.querySelector('#questionOptions button')?.click());
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
+    await expect(page.locator('button[title="Visual Sandbox (Main)"]')).toBeVisible();
+    await page.locator('button[title="Visual Sandbox (Main)"]').click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#pillPermText')).toContainText('默认审批');
+    await expect(page.locator('#questionModal')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#questionText')).toContainText('Which branch should be our target publish destination?');
+
+    await page.locator('#questionOptions button').nth(1).click();
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('dev (Bleeding-Edge Integration)');
+
+    await expectNoBrowserErrors(page);
+  });
 });

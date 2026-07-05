@@ -1377,6 +1377,58 @@ io.on('connection', socket => {
           type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
 
+      } else if (cmd === 'test:questionCrossTab') {
+        console.log('[mock] test:questionCrossTab — inst_1 弹 AskUserQuestion + 自动切 viewing → inst_2');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2', cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another', title: 'Another App Concurrency',
+            state: 'busy', permissionMode: 'plan', effort: 'medium', model: 'claude-3-5-haiku'
+          });
+        }
+        viewingInstanceId = 'inst_1';
+        const inst1ct = mockInstances.find(i => i.instanceId === 'inst_1');
+        inst1ct.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst1ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        pendingQuestion = {
+          requestId: 'req_question_cross_tab#0',
+          toolUseId: 't_question_cross_tab',
+          messageId: 'msg_question_cross_tab_1',
+          options: ['main (Stable Production)', 'dev (Bleeding-Edge Integration)', 'release-v1.0 (LTS)']
+        };
+        const questionText = 'We are ready to tag and deploy this mobile dashboard app. Which branch should be our target publish destination?';
+        syncPendingSnapshot = {
+          permissions: [],
+          questions: [{
+            requestId: pendingQuestion.requestId,
+            text: questionText,
+            options: pendingQuestion.options
+          }]
+        };
+        syncPendingSnapshotInstanceId = 'inst_1';
+        socket.emit('agent:event', {
+          seq: 1, epoch: 'mock-epoch-question-crosstab', sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: pendingQuestion.toolUseId, name: 'AskUserQuestion', inputSummary: 'Choose a publish channel' }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: 'mock-epoch-question-crosstab', sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
+          type: 'question', payload: {
+            requestId: pendingQuestion.requestId,
+            text: questionText,
+            options: pendingQuestion.options
+          }
+        });
+        await delay(1500);
+        viewingInstanceId = 'inst_2';
+        const inst2ct = mockInstances.find(i => i.instanceId === 'inst_2');
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
       } else if (cmd === 'test:tofu' || cmd === 'test:tofu-denied') {
         console.log('[mock] Forcing unapproved TOFU status');
         socket.emit('agent:event', {
