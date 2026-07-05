@@ -330,6 +330,41 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-11r 关闭最后一个可见会话后回到同工作区空首页', async ({ page }) => {
+    await gotoMock(page);
+    await page.setViewportSize({ width: 900, height: 812 });
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#messages')).toContainText('test:settings-echo');
+    await expect(page.locator('#messages')).toContainText('设置回显：model=');
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const currentRow = sessionRowByInstance(page, 'inst_1');
+    await expect(currentRow).toContainText('Visual Sandbox (Main)');
+
+    page.once('dialog', dialog => dialog.accept());
+    await currentRow.locator('button', { hasText: '✕' }).click();
+
+    await expectSidebarClosed(page);
+    await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    await expect(page.locator('#messages')).toContainText('当前工作区');
+    await expect(page.locator('#messages')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#messages')).not.toContainText('test:settings-echo');
+    await expect(page.locator('#messages')).not.toContainText('设置回显：model=');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await openSessionsSidebar(page);
+    await expect(sessionRowByInstance(page, 'inst_1')).toHaveCount(0);
+    await expect(page.locator('#sessionPanel')).toContainText('Visual Sandbox (Main)');
+    await expect(workspaceRow(page, MAIN_WORKSPACE)).toContainText('claude-chat-mobile');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11l 关闭当前待审批会话后切到剩余会话且不残留待审批状态', async ({ page }) => {
     await gotoMock(page);
     await page.setViewportSize({ width: 900, height: 812 });

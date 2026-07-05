@@ -478,7 +478,8 @@ io.on('connection', socket => {
     const { instanceId } = payload || {};
     console.log(`[mock] Close Tab: ${instanceId}`);
     const idx = mockInstances.findIndex(i => i.instanceId === instanceId);
-    if (idx !== -1 && mockInstances.length > 1) {
+    if (idx !== -1) {
+      const closedCwd = mockInstances[idx].cwd;
       const shouldEmitLateClosedSessionEvents = lateClosedSessionEventsInstanceId === instanceId;
       if (pendingPermission?.instanceId === instanceId) pendingPermission = null;
       if (pendingQuestion?.instanceId === instanceId) pendingQuestion = null;
@@ -489,15 +490,25 @@ io.on('connection', socket => {
       if (shouldEmitLateClosedSessionEvents) lateClosedSessionEventsInstanceId = null;
       mockInstances.splice(idx, 1);
       if (viewingInstanceId === instanceId) {
-        viewingInstanceId = mockInstances[0].instanceId;
+        viewingInstanceId = mockInstances[0]?.instanceId ?? null;
+        if (!viewingInstanceId) {
+          permissionMode = 'default';
+          effortLevel = null;
+          pendingFreshPermissionMode = undefined;
+          pendingFreshEffortLevel = undefined;
+          pendingFreshCwd = closedCwd;
+        }
       }
+      const viewingCwd = mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || closedCwd;
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: {
           viewingInstanceId,
-          viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
-          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-          instances: mockInstances
+          viewingCwd,
+          dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
+          instances: mockInstances,
+          defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
+          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
         }
       });
       if (shouldEmitLateClosedSessionEvents) {
