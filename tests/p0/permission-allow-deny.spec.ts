@@ -146,4 +146,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-06g 点击审批弹窗遮罩不会关闭或提交背景草稿', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permInput')).toContainText('git push origin main');
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
+
+    await page.locator('#input').fill('draft while approving');
+    await page.locator('#permModal').click({ position: { x: 12, y: 12 } });
+
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permInput')).toContainText('git push origin main');
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
+    await expect(page.locator('#input')).toHaveValue('draft while approving');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await page.locator('#permDeny').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('#input')).toHaveValue('draft while approving');
+
+    await expectNoBrowserErrors(page);
+  });
 });

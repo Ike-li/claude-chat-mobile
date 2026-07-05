@@ -52,6 +52,7 @@ Current P0 mock-only coverage also includes:
 - Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet and the rule does not leak to another live session.
 - Permission approval coverage verifies a failed `result.isError` turn closes the active approval sheet, marks the visible tool card failed, and leaves the input usable for the next message.
 - Permission approval coverage verifies background drafts are not submitted while an approval sheet is open, and that the draft can be sent after the approval is resolved.
+- Permission approval coverage verifies tapping the modal backdrop does not dismiss the required approval sheet or submit the background draft.
 - Remote request resolution coverage verifies stale permission and AskUserQuestion sheets close when another trusted device resolves the request.
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
 - Multi-session routing guards cover closing the current session and falling back to the remaining session without leaving the closed session's history on screen.
