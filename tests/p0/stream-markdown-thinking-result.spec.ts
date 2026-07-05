@@ -41,4 +41,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-03c 助手消息编辑按钮保留上一条用户原文', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:message-edit 复制 README');
+    await waitForIdle(page);
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('message edit fixture');
+
+    await reply.getByRole('button', { name: /编辑/ }).click();
+    await expect(page.locator('#input')).toHaveValue('test:message-edit 复制 README');
+
+    await expectNoBrowserErrors(page);
+  });
 });

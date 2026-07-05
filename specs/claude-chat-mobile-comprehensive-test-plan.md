@@ -57,6 +57,7 @@
     - expect: assistant 消息逐步增长并最终完整显示。
     - expect: Markdown 渲染包含粗体、列表、inline code、代码块和复制代码按钮。
     - expect: 点击代码块复制按钮后有“已复制”或失败反馈，用户能知道操作结果。
+    - expect: 点击 assistant 消息的编辑按钮后，上一条用户原文应完整回填到输入框，即使原文包含“复制/编辑/朗读”等操作栏同名词。
     - expect: 完成后 active status pill 隐藏。
     - expect: 结果栏显示完成状态、耗时/成本/模型等可见摘要；成本格式应稳定，例如 $0.0015。
     - expect: 失败条件：流式过程卡住、Markdown 原文泄漏、thinking 混入主回复、完成后仍 busy、结果栏缺失或显示 NaN。

@@ -1571,6 +1571,33 @@ io.on('connection', socket => {
           type: 'result', payload: { text: 'Stale cross-workspace StatusLine replay emitted.' }
         });
 
+      } else if (cmd.startsWith('test:message-edit')) {
+        console.log('[mock] Emitting assistant reply for message edit regression');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        await delay(250);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: {
+            messageId: 'msg_message_edit_1',
+            text: 'message edit fixture: use the assistant Edit action to restore the previous prompt.'
+          }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_message_edit_1', durationMs: 250, costUsd: 0, isError: false, models: [activeModel] }
+        });
+
       } else if (cmd === 'test:settings-echo') {
         console.log('[mock] Echoing selected model / permission / effort for settings regression');
         activeInst.state = 'busy';

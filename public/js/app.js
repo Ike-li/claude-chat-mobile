@@ -3011,11 +3011,16 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       let prevUserText = '';
       let sibling = container.previousElementSibling;
       while (sibling) {
-        if (sibling.classList.contains('bg-user') || (sibling.classList.contains('msg-body') && sibling.querySelector('.whitespace-pre-wrap'))) {
-          // If the element is user message
-          const textEl = sibling.querySelector('.whitespace-pre-wrap') || sibling;
-          prevUserText = textEl.textContent || '';
-          prevUserText = prevUserText.replace(/✓ 已复制|⧉ 复制|复制|已复制|编辑|朗读|停止/g, '').trim();
+        if (sibling.classList.contains('bg-user')) {
+          const textEl = sibling.querySelector(':scope > .whitespace-pre-wrap') || sibling.querySelector('.whitespace-pre-wrap');
+          if (textEl) {
+            prevUserText = textEl.textContent || '';
+          } else {
+            const clone = sibling.cloneNode(true);
+            clone.querySelectorAll?.('.msg-action-bar').forEach(node => node.remove());
+            prevUserText = clone.textContent || '';
+          }
+          prevUserText = prevUserText.trim();
           break;
         }
         sibling = sibling.previousElementSibling;
