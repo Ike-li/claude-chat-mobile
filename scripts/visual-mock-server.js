@@ -1216,6 +1216,155 @@ io.on('connection', socket => {
         });
       },
     },
+    {
+      commands: ['test:pendingsnapshot', 'test:pendingsnapshot-duplicate'],
+      run: async ({ cmd }) => {
+        // Bug2 regression: sync:since ack.pending must rebuild cards when the original event is gone.
+        console.log(`[mock] ${cmd} — 设快照但不发 permission_request，切 viewing 到 inst_2 触发 sync:since`);
+        const permissionSnapshot = { requestId: 'req_snapshot', name: 'run_command', input: 'rm -rf /tmp/stale', cwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd };
+        syncPendingSnapshot = {
+          permissions: cmd === 'test:pendingsnapshot-duplicate' ? [permissionSnapshot, permissionSnapshot] : [permissionSnapshot],
+          questions: []
+        };
+        syncPendingSnapshotInstanceId = 'inst_2';
+        viewingInstanceId = 'inst_2';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      },
+    },
+    {
+      command: 'test:gap-pending-snapshot',
+      run: async () => {
+        console.log('[mock] test:gap-pending-snapshot — gap ack 后仍带回 pending snapshot');
+        let inst = mockInstances.find(i => i.instanceId === 'inst_gap_pending');
+        if (!inst) {
+          inst = {
+            instanceId: 'inst_gap_pending',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-gap-pending',
+            title: 'Gap Pending Recovery',
+            state: 'permission',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-haiku',
+            activeTool: 'Bash'
+          };
+          mockInstances.push(inst);
+        } else {
+          inst.state = 'permission';
+          inst.activeTool = 'Bash';
+        }
+        pendingPermission = {
+          instanceId: 'inst_gap_pending',
+          requestId: 'req_gap_pending_snapshot',
+          toolUseId: 't_gap_pending_snapshot',
+          messageId: 'msg_gap_pending_snapshot_1',
+          name: 'run_command',
+          input: 'rm -rf /tmp/gap-stale',
+          cwd: inst.cwd
+        };
+        syncPendingSnapshot = {
+          permissions: [{
+            requestId: pendingPermission.requestId,
+            name: pendingPermission.name,
+            input: pendingPermission.input,
+            cwd: pendingPermission.cwd
+          }],
+          questions: []
+        };
+        syncPendingSnapshotInstanceId = 'inst_gap_pending';
+        viewingInstanceId = 'inst_gap_pending';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: inst.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+      },
+    },
+    {
+      command: 'test:questionsnapshot',
+      run: async () => {
+        console.log('[mock] test:questionsnapshot — 设 question 快照但不发原始 question 事件，切 viewing 到 inst_2 触发 sync:since');
+        pendingQuestion = {
+          requestId: 'req_question_snapshot#0',
+          toolUseId: 't_question_snapshot',
+          messageId: 'msg_question_snapshot_1',
+          options: ['main', 'dev', 'release-v1.0']
+        };
+        syncPendingSnapshot = {
+          permissions: [],
+          questions: [{
+            requestId: pendingQuestion.requestId,
+            text: 'Which release branch should receive the restored pending answer?',
+            options: pendingQuestion.options
+          }]
+        };
+        syncPendingSnapshotInstanceId = 'inst_2';
+        viewingInstanceId = 'inst_2';
+        const inst = mockInstances.find(i => i.instanceId === 'inst_2');
+        if (inst) inst.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      },
+    },
+    {
+      command: 'test:gap-question-snapshot',
+      run: async () => {
+        console.log('[mock] test:gap-question-snapshot — gap ack 后仍带回 AskUserQuestion pending snapshot');
+        let inst = mockInstances.find(i => i.instanceId === 'inst_gap_question');
+        if (!inst) {
+          inst = {
+            instanceId: 'inst_gap_question',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-gap-question',
+            title: 'Gap Question Recovery',
+            state: 'permission',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-haiku',
+            activeTool: 'AskUserQuestion'
+          };
+          mockInstances.push(inst);
+        } else {
+          inst.state = 'permission';
+          inst.activeTool = 'AskUserQuestion';
+        }
+        pendingQuestion = {
+          instanceId: 'inst_gap_question',
+          requestId: 'req_gap_question_snapshot#0',
+          toolUseId: 't_gap_question_snapshot',
+          messageId: 'msg_gap_question_snapshot_1',
+          options: ['main', 'dev', 'release-v1.0']
+        };
+        syncPendingSnapshot = {
+          permissions: [],
+          questions: [{
+            requestId: pendingQuestion.requestId,
+            text: 'Which release branch should receive the gap-restored pending answer?',
+            options: pendingQuestion.options
+          }]
+        };
+        syncPendingSnapshotInstanceId = 'inst_gap_question';
+        viewingInstanceId = 'inst_gap_question';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: inst.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+      },
+    },
   ]);
 
   // Handle custom trigger command inputs
@@ -1403,140 +1552,6 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
         });
 
-      } else if (cmd === 'test:pendingsnapshot' || cmd === 'test:pendingsnapshot-duplicate') {
-        // Bug2 回归：模拟"实例有未决审批，但原始 permission_request 事件已被环形缓冲 trim / 切视图分流丢失"——
-        // 前端此刻无卡片；切入该实例时 sync:since 的 ack.pending 快照应重建审批卡片。刻意【不】emit permission_request。
-        console.log(`[mock] ${cmd} — 设快照但不发 permission_request，切 viewing 到 inst_2 触发 sync:since`);
-        const permissionSnapshot = { requestId: 'req_snapshot', name: 'run_command', input: 'rm -rf /tmp/stale', cwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd };
-        syncPendingSnapshot = {
-          permissions: cmd === 'test:pendingsnapshot-duplicate' ? [permissionSnapshot, permissionSnapshot] : [permissionSnapshot],
-          questions: []
-        };
-        syncPendingSnapshotInstanceId = 'inst_2';
-        viewingInstanceId = 'inst_2';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-      } else if (cmd === 'test:gap-pending-snapshot') {
-        console.log('[mock] test:gap-pending-snapshot — gap ack 后仍带回 pending snapshot');
-        let inst = mockInstances.find(i => i.instanceId === 'inst_gap_pending');
-        if (!inst) {
-          inst = {
-            instanceId: 'inst_gap_pending',
-            cwd: '/Users/you/code/another-react-project',
-            sessionId: 'mock-session-gap-pending',
-            title: 'Gap Pending Recovery',
-            state: 'permission',
-            permissionMode: 'default',
-            effort: null,
-            model: 'claude-3-5-haiku',
-            activeTool: 'Bash'
-          };
-          mockInstances.push(inst);
-        } else {
-          inst.state = 'permission';
-          inst.activeTool = 'Bash';
-        }
-        pendingPermission = {
-          instanceId: 'inst_gap_pending',
-          requestId: 'req_gap_pending_snapshot',
-          toolUseId: 't_gap_pending_snapshot',
-          messageId: 'msg_gap_pending_snapshot_1',
-          name: 'run_command',
-          input: 'rm -rf /tmp/gap-stale',
-          cwd: inst.cwd
-        };
-        syncPendingSnapshot = {
-          permissions: [{
-            requestId: pendingPermission.requestId,
-            name: pendingPermission.name,
-            input: pendingPermission.input,
-            cwd: pendingPermission.cwd
-          }],
-          questions: []
-        };
-        syncPendingSnapshotInstanceId = 'inst_gap_pending';
-        viewingInstanceId = 'inst_gap_pending';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: {
-            viewingInstanceId,
-            viewingCwd: inst.cwd,
-            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
-          }
-        });
-      } else if (cmd === 'test:questionsnapshot') {
-        console.log('[mock] test:questionsnapshot — 设 question 快照但不发原始 question 事件，切 viewing 到 inst_2 触发 sync:since');
-        pendingQuestion = {
-          requestId: 'req_question_snapshot#0',
-          toolUseId: 't_question_snapshot',
-          messageId: 'msg_question_snapshot_1',
-          options: ['main', 'dev', 'release-v1.0']
-        };
-        syncPendingSnapshot = {
-          permissions: [],
-          questions: [{
-            requestId: pendingQuestion.requestId,
-            text: 'Which release branch should receive the restored pending answer?',
-            options: pendingQuestion.options
-          }]
-        };
-        syncPendingSnapshotInstanceId = 'inst_2';
-        viewingInstanceId = 'inst_2';
-        const inst = mockInstances.find(i => i.instanceId === 'inst_2');
-        if (inst) inst.state = 'permission';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-      } else if (cmd === 'test:gap-question-snapshot') {
-        console.log('[mock] test:gap-question-snapshot — gap ack 后仍带回 AskUserQuestion pending snapshot');
-        let inst = mockInstances.find(i => i.instanceId === 'inst_gap_question');
-        if (!inst) {
-          inst = {
-            instanceId: 'inst_gap_question',
-            cwd: '/Users/you/code/another-react-project',
-            sessionId: 'mock-session-gap-question',
-            title: 'Gap Question Recovery',
-            state: 'permission',
-            permissionMode: 'default',
-            effort: null,
-            model: 'claude-3-5-haiku',
-            activeTool: 'AskUserQuestion'
-          };
-          mockInstances.push(inst);
-        } else {
-          inst.state = 'permission';
-          inst.activeTool = 'AskUserQuestion';
-        }
-        pendingQuestion = {
-          instanceId: 'inst_gap_question',
-          requestId: 'req_gap_question_snapshot#0',
-          toolUseId: 't_gap_question_snapshot',
-          messageId: 'msg_gap_question_snapshot_1',
-          options: ['main', 'dev', 'release-v1.0']
-        };
-        syncPendingSnapshot = {
-          permissions: [],
-          questions: [{
-            requestId: pendingQuestion.requestId,
-            text: 'Which release branch should receive the gap-restored pending answer?',
-            options: pendingQuestion.options
-          }]
-        };
-        syncPendingSnapshotInstanceId = 'inst_gap_question';
-        viewingInstanceId = 'inst_gap_question';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: {
-            viewingInstanceId,
-            viewingCwd: inst.cwd,
-            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
-          }
-        });
       } else if (cmd === 'test:mirror-readonly' || cmd === 'test:mirror-readonly-delayed') {
         const delayedMirror = cmd === 'test:mirror-readonly-delayed';
         const mirrorInstanceId = viewingInstanceId;
