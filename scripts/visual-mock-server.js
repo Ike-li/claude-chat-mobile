@@ -1039,6 +1039,117 @@ io.on('connection', socket => {
         }
       },
     },
+    {
+      commands: ['test:permission', 'test:permission-remote-resolved', 'test:permission-result-error'],
+      run: async ({ cmd, activeInst }) => {
+        console.log(`[mock] Starting ${cmd} sequence`);
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_perm_1', text: '<thinking>Preparing to push local test commits to the remote origin server...</thinking>' }
+        });
+        await delay(500);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_git_push', name: 'run_command', inputSummary: 'git push origin main' }
+        });
+        await delay(500);
+
+        if (alwaysAllowedPermissionNamesByInstance.get(viewingInstanceId)?.has('run_command')) {
+          socket.emit('agent:event', {
+            seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'tool_result', payload: { toolUseId: 't_git_push', ok: true, outputSummary: 'git push success: branch main -> origin' }
+          });
+          socket.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'text_delta', payload: { messageId: 'msg_perm_1', text: '\n\n✓ Successfully pushed latest codebase additions!' }
+          });
+          await delay(250);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          });
+          socket.emit('agent:event', {
+            seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: 'msg_perm_1', durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+          });
+          return;
+        }
+
+        activeInst.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        pendingPermission = {
+          requestId: 'req_perm_git_push',
+          toolUseId: 't_git_push',
+          messageId: 'msg_perm_1',
+          name: 'run_command',
+          input: 'git push origin main',
+          cwd: activeInst.cwd
+        };
+
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'permission_request', payload: {
+            requestId: pendingPermission.requestId,
+            name: pendingPermission.name,
+            input: pendingPermission.input,
+            cwd: pendingPermission.cwd
+          }
+        });
+
+        if (cmd === 'test:permission-result-error') {
+          await delay(600);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          });
+          socket.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 900, costUsd: 0.001, isError: true, errors: ['mock permission turn failed'], models: [activeModel] }
+          });
+          pendingPermission = null;
+        }
+
+        if (cmd === 'test:permission-remote-resolved') {
+          await delay(600);
+          io.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'request_resolved', payload: { requestId: pendingPermission.requestId, kind: 'permission', outcome: 'allow' }
+          });
+          socket.emit('agent:event', {
+            seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: true, outputSummary: 'approved on another trusted device: git push success' }
+          });
+          socket.emit('agent:event', {
+            seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: '\n\nPermission was approved on another trusted device.' }
+          });
+          await delay(250);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          });
+          socket.emit('agent:event', {
+            seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+          });
+          pendingPermission = null;
+        }
+      },
+    },
   ]);
 
   // Handle custom trigger command inputs
@@ -1575,116 +1686,6 @@ io.on('connection', socket => {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'error', payload: { message: 'mock tool crashed while running npm run failing-script' }
         });
-
-      } else if (cmd === 'test:permission' || cmd === 'test:permission-remote-resolved' || cmd === 'test:permission-result-error') {
-        console.log(`[mock] Starting ${cmd} sequence`);
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'thinking_delta', payload: { messageId: 'msg_perm_1', text: '<thinking>Preparing to push local test commits to the remote origin server...</thinking>' }
-        });
-        await delay(500);
-
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: 't_git_push', name: 'run_command', inputSummary: 'git push origin main' }
-        });
-        await delay(500);
-
-        if (alwaysAllowedPermissionNamesByInstance.get(viewingInstanceId)?.has('run_command')) {
-          socket.emit('agent:event', {
-            seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'tool_result', payload: { toolUseId: 't_git_push', ok: true, outputSummary: 'git push success: branch main -> origin' }
-          });
-          socket.emit('agent:event', {
-            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'text_delta', payload: { messageId: 'msg_perm_1', text: '\n\n✓ Successfully pushed latest codebase additions!' }
-          });
-          await delay(250);
-          activeInst.state = 'idle';
-          io.emit('agent:event', {
-            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-          });
-          socket.emit('agent:event', {
-            seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'result', payload: { messageId: 'msg_perm_1', durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
-          });
-          return;
-        }
-
-        // Force permission state
-        activeInst.state = 'permission';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        pendingPermission = {
-          requestId: 'req_perm_git_push',
-          toolUseId: 't_git_push',
-          messageId: 'msg_perm_1',
-          name: 'run_command',
-          input: 'git push origin main',
-          cwd: activeInst.cwd
-        };
-
-        // Emit permission request popup trigger
-        socket.emit('agent:event', {
-          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'permission_request', payload: {
-            requestId: pendingPermission.requestId,
-            name: pendingPermission.name,
-            input: pendingPermission.input,
-            cwd: pendingPermission.cwd
-          }
-        });
-
-        if (cmd === 'test:permission-result-error') {
-          await delay(600);
-          activeInst.state = 'idle';
-          io.emit('agent:event', {
-            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-          });
-          socket.emit('agent:event', {
-            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 900, costUsd: 0.001, isError: true, errors: ['mock permission turn failed'], models: [activeModel] }
-          });
-          pendingPermission = null;
-        }
-
-        if (cmd === 'test:permission-remote-resolved') {
-          await delay(600);
-          io.emit('agent:event', {
-            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'request_resolved', payload: { requestId: pendingPermission.requestId, kind: 'permission', outcome: 'allow' }
-          });
-          socket.emit('agent:event', {
-            seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: true, outputSummary: 'approved on another trusted device: git push success' }
-          });
-          socket.emit('agent:event', {
-            seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: '\n\nPermission was approved on another trusted device.' }
-          });
-          await delay(250);
-          activeInst.state = 'idle';
-          io.emit('agent:event', {
-            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-          });
-          socket.emit('agent:event', {
-            seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
-          });
-          pendingPermission = null;
-        }
 
       } else if (cmd === 'test:exitplan') {
         // 回归（TC-15）：plan 档下模型调 ExitPlanMode；批准后权限档应从 plan 切到 default，
