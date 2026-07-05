@@ -19,8 +19,8 @@ The working target is:
 - Playwright config: `playwright.config.ts`
 - P0 command: `npm run test:playwright:p0`
 - P0 runner: 1 worker, mobile viewport, mock server on `127.0.0.1:33341`
-- P0 count: 106 tests in 20 files
-- Browser error capture: all 106 P0 tests call `expectNoBrowserErrors(page)`
+- P0 count: 107 tests in 20 files
+- Browser error capture: all 107 P0 tests call `expectNoBrowserErrors(page)`
 - Forbidden patterns: no `test.only`, `test.skip`, `test.fixme`, `networkidle`, or `waitForTimeout` in the Playwright test lane
 - Heaviest concentration: `tests/p0/workspace-sessions-sidebar.spec.ts` has 18 tests; its common sidebar flows now use `tests/helpers/p0-ui.ts`
 - P1 contract drift guard: `npm run contract:check` statically compares real `agent:event` types with visual mock event types without starting Claude, production server, or Playwright.
@@ -40,15 +40,15 @@ The working target is:
    - Added `tests/p0/security-observable-ui.spec.ts` coverage for rejected token retry followed by accepted token reconnect.
    - Verifies the auth form is cleared after success and rejected token text/masked prefixes do not persist in visible UI or browser console logs.
 
+2. P0-19d narrow viewport scroll reachability for settings and console sheets
+   - Added `tests/p0/empty-restore-responsive.spec.ts` coverage for narrow portrait and landscape viewports.
+   - Verifies settings and console sheets keep close/action controls reachable after scrolling.
+
 ## Add Test Candidates
 
 ### P0 Mock-Only Additions
 
-1. P0-19d narrow viewport scroll reachability for settings and console sheets
-   - Why: permission sheet reachability is covered; settings/console can also grow vertically.
-   - Test shape: use narrow/landscape viewports and assert close/action controls remain reachable after scrolling.
-   - Mock impact: none.
-   - Priority: low.
+No open P0 mock-only additions currently listed.
 
 ### P1/P2 Candidates To Record Only
 
@@ -119,7 +119,6 @@ The working target is:
 ## Recommended Execution Order
 
 1. Continue visual mock scenario registry migration.
-2. Add P0-19d narrow viewport scroll reachability for settings and console sheets.
 
 ## Definition Of Done For Each Slice
 

@@ -6,14 +6,18 @@ import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '.
 
 async function expectWithinViewport(page: Page, locator: Locator) {
   await expect(locator).toBeVisible();
-  const box = await locator.boundingBox();
-  const viewport = page.viewportSize();
-  expect(box).not.toBeNull();
-  expect(viewport).not.toBeNull();
-  expect(box!.x).toBeGreaterThanOrEqual(0);
-  expect(box!.y).toBeGreaterThanOrEqual(0);
-  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width + 1);
-  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height + 1);
+  await expect.poll(async () => {
+    const box = await locator.boundingBox();
+    const viewport = page.viewportSize();
+    return Boolean(
+      box &&
+      viewport &&
+      box.x >= 0 &&
+      box.y >= 0 &&
+      box.x + box.width <= viewport.width + 1 &&
+      box.y + box.height <= viewport.height + 1
+    );
+  }).toBe(true);
 }
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -85,6 +89,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const serviceWorker = await page.request.get('/js/sw.js');
     expect(serviceWorker.ok()).toBe(true);
     expect(serviceWorker.headers()['content-type']).toContain('javascript');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-19d 窄屏和横屏下 settings 与 console sheet 滚动后关键控件可达', async ({ page }) => {
+    await gotoMock(page);
+
+    for (const viewport of [{ width: 320, height: 700 }, { width: 812, height: 375 }]) {
+      await page.setViewportSize(viewport);
+
+      await page.locator('#btnSettings').click();
+      await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+      await page.locator('#settingsSheet').evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await expectWithinViewport(page, page.locator('#settingsClose'));
+      await expectWithinViewport(page, page.locator('#accessHelpOpen'));
+      await page.locator('#settingsClose').click();
+      await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
+
+      await page.locator('#btnConsole').click();
+      await expect(page.locator('#consoleModal')).toBeVisible();
+      await page.locator('#consoleLogArea').evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await expectWithinViewport(page, page.locator('#consoleClose'));
+      await expectWithinViewport(page, page.locator('#consoleClear'));
+      await page.locator('#consoleClose').click();
+      await expect(page.locator('#consoleModal')).toBeHidden();
+    }
 
     await expectNoBrowserErrors(page);
   });
