@@ -27,6 +27,7 @@ Current P0 mock-only coverage also includes:
 - Visual mock Socket.IO auth rejects `bad-token`, `invalid-token`, and `expired-token` with `unauthorized` so P0 can cover the token retry UI without enabling production `AUTH_TOKEN`.
 - Status line coverage verifies the prompt-cache TTL estimate text, including the `est` marker for derived cache timing.
 - Input coverage verifies the foreground turn queue-full state disables Send, keeps the user's draft, and re-enables Send after the queue drains.
+- Input coverage verifies messages sent while disconnected enter the visible offline queue and are retried after reconnect.
 - Auth failure coverage includes opening the access-help sheet and retrying by Enter from the token gate without leaking rejected or accepted tokens.
 - Settings coverage verifies unsupported-model effort controls hide and do not leak a stale thinking effort into the next turn.
 - Settings coverage verifies new-session empty-start permission/effort presets are consumed by the first sent message.

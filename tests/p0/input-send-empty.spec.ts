@@ -2,7 +2,7 @@
 // seed: tests/seed.goto-mock.spec.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage } from '../seed.goto-mock.spec';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02 输入框、发送按钮与空输入边界', async ({ page }) => {
@@ -63,6 +63,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#btnSend').click();
     await expect(page.locator('[data-testid="user-message"]').last()).toContainText('message after queue drains');
     await expect(page.locator('#input')).toHaveValue('');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-02d 断线时消息进入离线队列并在重连后发送', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:disconnect-now');
+    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+
+    await page.locator('#input').fill('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await page.locator('#btnSend').click();
+    await expect(page.locator('.pending-indicator').last()).toContainText('正在等待连接');
+    await expect(page.locator('#input')).toHaveValue('');
+
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
 
     await expectNoBrowserErrors(page);
   });
