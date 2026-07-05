@@ -84,4 +84,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-08e 选择弹窗打开时背景输入 Enter 不会提交新消息', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:question');
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('#questionText')).toContainText('Which branch should be our target publish destination?');
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
+
+    await page.locator('#input').fill('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toHaveAttribute('title', '请先处理当前审批或选择');
+    await page.locator('#input').press('Enter');
+
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('#questionOptions button')).toHaveCount(3);
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+
+    await page.locator('#questionOptions button').nth(1).click();
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await page.locator('#btnSend').click();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+
+    await expectNoBrowserErrors(page);
+  });
 });

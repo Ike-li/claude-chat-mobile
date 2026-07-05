@@ -1015,6 +1015,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
           if (idx !== -1) permQueue.splice(idx, 1);
         }
         if (!activePerm) showNextPerm();
+        updateSendButtonState();
       } else if (kind === 'question') {
         // question requestId 格式 '${toolUseID}#i'；resolved requestId 是 toolUseID（或 '#i' 形式）
         const matchQ = qId => qId === requestId || qId.startsWith(requestId + '#');
@@ -1026,6 +1027,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
           if (idx !== -1) questionQueue.splice(idx, 1);
         }
         if (!activeQuestion) showNextQuestion();
+        updateSendButtonState();
       }
     },
     result(p) {
@@ -1062,6 +1064,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         activeQuestion = null;
         closeSheet(questionModal);
       }
+      updateSendButtonState();
     },
     error(p) {
       finalizeStreams();
@@ -1082,6 +1085,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         activeQuestion = null;
         closeSheet(questionModal);
       }
+      updateSendButtonState();
     },
     // M7：改用 kind 字段判断中断，不靠字符串匹配（字符串会随 i18n 变化）
     system(p) {
@@ -1250,6 +1254,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
     permAlways.checked = false;
     openSheet(permModal);
+    updateSendButtonState();
   }
   function answerPerm(decision) {
     if (!activePerm) return;
@@ -1271,6 +1276,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (wasExitPlanMode && !activePerm && activeStatusText) {
       activeStatusText.textContent = 'Claude 正在思考中...';
     }
+    updateSendButtonState();
   }
   $('permAllow').onclick = () => answerPerm('allow');
   $('permDeny').onclick = () => answerPerm('deny');
@@ -1288,6 +1294,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       questionOptions.appendChild(btn);
     });
     openSheet(questionModal);
+    updateSendButtonState();
   }
   function answerQuestion(index) {
     if (!activeQuestion) return;
@@ -1303,12 +1310,17 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (!activeQuestion && activeStatusText) {
       activeStatusText.textContent = 'Claude 正在思考中...';
     }
+    updateSendButtonState();
   }
 
   // ---- 发送 / 停止 ----
   function send(opts = {}) {
     if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「仍要发送」可接管）
       addBar('此会话正在终端运行，只读中——如确认终端已停，点「仍要发送」接管', 'text-danger');
+      return;
+    }
+    if (activePerm || activeQuestion) {
+      addBar('请先处理当前审批或选择，再发送新消息', 'text-info');
       return;
     }
     const rawText = inputEl.value.trim();
@@ -1556,14 +1568,15 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
   function updateSendButtonState() {
     const hasText = inputEl.value.trim().length > 0 || pendingAttachments.length > 0;
-    if (hasText && !_queueFull) {
+    const blockedByUserRequest = !!activePerm || !!activeQuestion;
+    if (hasText && !_queueFull && !blockedByUserRequest) {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-ink text-surface hover:bg-ink-soft active:scale-95 shadow-sm transition-all duration-200 shrink-0";
       btnSend.disabled = false;
       btnSend.title = '';
     } else {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-40 cursor-not-allowed transition-all duration-200 shrink-0";
       btnSend.disabled = true;
-      btnSend.title = _queueFull ? '前面已有消息在排队，请等当前任务结束' : '';
+      btnSend.title = blockedByUserRequest ? '请先处理当前审批或选择' : (_queueFull ? '前面已有消息在排队，请等当前任务结束' : '');
     }
   }
 

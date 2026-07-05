@@ -43,6 +43,7 @@ Current P0 mock-only coverage also includes:
 - Tool-card coverage verifies an in-flight tool is marked failed and the input recovers when the turn ends with an error.
 - Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet and the rule does not leak to another live session.
 - Permission approval coverage verifies a failed `result.isError` turn closes the active approval sheet, marks the visible tool card failed, and leaves the input usable for the next message.
+- Permission approval coverage verifies background drafts are not submitted while an approval sheet is open, and that the draft can be sent after the approval is resolved.
 - Remote request resolution coverage verifies stale permission and AskUserQuestion sheets close when another trusted device resolves the request.
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
 - Multi-session routing guards cover closing the current session and falling back to the remaining session without leaving the closed session's history on screen.
@@ -62,6 +63,7 @@ Current P0 mock-only coverage also includes:
 - Pending snapshot reconciliation verifies a `sync:since` gap still rebuilds approval and AskUserQuestion state after falling back to `session:history`.
 - AskUserQuestion coverage includes duplicate same-`requestId` replay without showing repeated choice sheets after reconnect/sync paths.
 - AskUserQuestion coverage verifies a failed `result.isError` turn closes the active choice sheet, marks the visible tool card failed, and leaves the input usable for the next message.
+- AskUserQuestion coverage verifies background drafts are not submitted while a choice sheet is open, and that the draft can be sent after the choice is answered.
 - Task progress coverage includes failed background tasks so failure notifications also clear the progress banner.
 - Task progress coverage verifies another workspace's progress heartbeat does not show a current-session banner while its busy state remains visible in the sessions entry and sidebar.
 - Mirror-state coverage verifies terminal read-only catch-up locks the input and allows an explicit user takeover.

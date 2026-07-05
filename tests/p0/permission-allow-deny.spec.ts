@@ -116,4 +116,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-06f 审批弹窗打开时背景输入 Enter 不会提交新消息', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permInput')).toContainText('git push origin main');
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
+
+    await page.locator('#input').fill('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toHaveAttribute('title', '请先处理当前审批或选择');
+    await page.locator('#input').press('Enter');
+
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permInput')).toContainText('git push origin main');
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+
+    await page.locator('#permDeny').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await page.locator('#btnSend').click();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+
+    await expectNoBrowserErrors(page);
+  });
 });
