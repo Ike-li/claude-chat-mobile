@@ -1419,6 +1419,36 @@ io.on('connection', socket => {
         });
       },
     },
+    {
+      command: 'test:exitplan',
+      run: async ({ activeInst }) => {
+        // Regression TC-15: approving ExitPlanMode should fall permission mode back to default.
+        console.log('[mock] test:exitplan — plan 模式 + ExitPlanMode 审批');
+        activeInst.permissionMode = 'plan';
+        activeInst.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'permission_mode', payload: { mode: 'plan' }
+        });
+        pendingPermission = {
+          requestId: 'req_exit_plan', toolUseId: 't_exit_plan', messageId: 'msg_exitplan_1',
+          name: 'ExitPlanMode', input: '## 计划\n1. 实现 X\n2. 测试 Y', cwd: activeInst.cwd,
+          setMode: 'default'
+        };
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: pendingPermission.toolUseId, name: pendingPermission.name, inputSummary: pendingPermission.input }
+        });
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
+        });
+      },
+    },
   ]);
 
   // Handle custom trigger command inputs
@@ -1739,39 +1769,6 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'error', payload: { message: 'mock tool crashed while running npm run failing-script' }
-        });
-
-      } else if (cmd === 'test:exitplan') {
-        // 回归（TC-15）：plan 档下模型调 ExitPlanMode；批准后权限档应从 plan 切到 default，
-        // 手机端权限档图标须跟随。真 SDK 不发 setMode suggestion，后端对 ExitPlanMode 兜底合成
-        // setMode default 并广播 permission_mode（见 agent.js resolvePermission）；mock 复刻该结果。
-        console.log('[mock] test:exitplan — plan 模式 + ExitPlanMode 审批');
-        activeInst.permissionMode = 'plan';
-        activeInst.state = 'permission';
-        // 先把当前档置为 plan（前端 pill 显「计划模式」）
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'permission_mode', payload: { mode: 'plan' }
-        });
-        pendingPermission = {
-          requestId: 'req_exit_plan', toolUseId: 't_exit_plan', messageId: 'msg_exitplan_1',
-          name: 'ExitPlanMode', input: '## 计划\n1. 实现 X\n2. 测试 Y', cwd: activeInst.cwd,
-          setMode: 'default'   // 批准后切此档（复刻后端对 ExitPlanMode 兜底合成 setMode default + 广播）
-        };
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        // 复刻真实 SDK：ExitPlanMode 作为工具先经 case 'assistant' 派生 tool_use（亮 busy pill +
-        // 文案「运行工具 ExitPlanMode」），随后才在执行前触发 canUseTool → permission_request。
-        // 此前 mock 漏发 tool_use 致 pill 不亮、且批准后 tool_result 指向不存在的 card 被静默丢弃。
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: pendingPermission.toolUseId, name: pendingPermission.name, inputSummary: pendingPermission.input }
-        });
-        socket.emit('agent:event', {
-          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
         });
 
       } else if (cmd === 'test:disconnect-now') {
