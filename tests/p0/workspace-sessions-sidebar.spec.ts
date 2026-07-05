@@ -163,4 +163,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-11h 其它工作区新会话首发后不回跳默认工作区', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button[title="在此工作区新建会话"]').click();
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+
+    await sendChatMessage(page, 'test:fresh-settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#messages')).toContainText('新会话设置回显');
+
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -84,6 +84,7 @@ let effortLevel = null;
 let activeModel = 'claude-3-5-sonnet';
 let pendingFreshPermissionMode;
 let pendingFreshEffortLevel;
+let pendingFreshCwd;
 
 function createDefaultInstances() {
   return [{
@@ -116,6 +117,7 @@ function resetMockState() {
   activeModel = 'claude-3-5-sonnet';
   pendingFreshPermissionMode = undefined;
   pendingFreshEffortLevel = undefined;
+  pendingFreshCwd = undefined;
   mockInstances.splice(0, mockInstances.length, ...createDefaultInstances());
   pendingPermission = null;
   pendingQuestion = null;
@@ -149,11 +151,16 @@ function openFreshMockInstance(requestedModel) {
   const freshId = 'inst_fresh';
   const freshPrefs = consumeFreshPrefs();
   const freshModel = requestedModel || activeModel;
+  const freshCwd = pendingFreshCwd
+    || mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
+    || mockInstances[0]?.cwd
+    || '/Users/you/code/claude-chat-mobile';
+  pendingFreshCwd = undefined;
   let freshInst = mockInstances.find(i => i.instanceId === freshId);
   if (!freshInst) {
     freshInst = {
       instanceId: freshId,
-      cwd: mockInstances[0].cwd,
+      cwd: freshCwd,
       sessionId: null,
       title: null,
       state: 'busy',
@@ -165,6 +172,7 @@ function openFreshMockInstance(requestedModel) {
   } else {
     Object.assign(freshInst, {
       state: 'busy',
+      cwd: freshCwd,
       permissionMode: freshPrefs.permissionMode,
       effort: freshPrefs.effort,
       model: freshModel
@@ -406,6 +414,7 @@ io.on('connection', socket => {
     effortLevel = null;
     pendingFreshPermissionMode = undefined;
     pendingFreshEffortLevel = undefined;
+    pendingFreshCwd = viewingCwd;
     const dirs = Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd]));
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
