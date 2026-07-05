@@ -75,4 +75,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-11d 未打开的历史会话可从 sidebar 切换并回放历史', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
+    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
+    await expect(page.locator('button[title="Archived Planning Session"]')).toBeVisible();
+    await page.locator('button[title="Archived Planning Session"]').click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#messages')).toContainText('Summarize archived plan', { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('Archived plan replay from session history');
+
+    await expectNoBrowserErrors(page);
+  });
 });

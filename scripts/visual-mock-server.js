@@ -427,6 +427,13 @@ io.on('connection', socket => {
               model: 'claude-3-5-sonnet',
               lastUsedAt: Date.now() - 10000,
               entrypoint: 'sdk-ts'
+            },
+            {
+              id: 'mock-session-archived',
+              title: 'Archived Planning Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: Date.now() - 600000,
+              entrypoint: 'sdk-ts'
             }
           ]
         });
@@ -451,6 +458,60 @@ io.on('connection', socket => {
         callback({ sessions: [] });
       }
     }
+  });
+
+  socket.on('session:switch', (payload, callback) => {
+    const { sessionId, cwd } = payload || {};
+    console.log(`[mock] session:switch sessionId=${sessionId}, cwd=${cwd}`);
+    if (sessionId !== 'mock-session-archived' || cwd !== '/Users/you/code/claude-chat-mobile') {
+      if (typeof callback === 'function') callback({ ok: false, error: 'mock session not found' });
+      return;
+    }
+
+    let archivedInst = mockInstances.find(i => i.instanceId === 'inst_archived');
+    if (!archivedInst) {
+      archivedInst = {
+        instanceId: 'inst_archived',
+        cwd: '/Users/you/code/claude-chat-mobile',
+        sessionId: 'mock-session-archived',
+        title: 'Archived Planning Session',
+        state: 'idle',
+        permissionMode: 'default',
+        effort: null,
+        model: 'claude-3-5-sonnet'
+      };
+      mockInstances.push(archivedInst);
+    }
+    viewingInstanceId = archivedInst.instanceId;
+    permissionMode = archivedInst.permissionMode;
+    effortLevel = archivedInst.effort;
+    activeModel = archivedInst.model;
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: {
+        viewingInstanceId,
+        viewingCwd: archivedInst.cwd,
+        dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+        instances: mockInstances
+      }
+    });
+    if (typeof callback === 'function') callback({ ok: true, instanceId: archivedInst.instanceId, sessionId: archivedInst.sessionId });
+  });
+
+  socket.on('session:history', (payload, callback) => {
+    const { sessionId, cwd } = payload || {};
+    console.log(`[mock] session:history sessionId=${sessionId}, cwd=${cwd}`);
+    if (typeof callback !== 'function') return;
+    if (sessionId !== 'mock-session-archived' || cwd !== '/Users/you/code/claude-chat-mobile') {
+      callback({ messages: [] });
+      return;
+    }
+    callback({
+      messages: [
+        { role: 'user', content: 'Summarize archived plan' },
+        { role: 'assistant', content: 'Archived plan replay from session history.' }
+      ]
+    });
   });
 
   // Console modal trace fetch. Production serves persisted per-session interaction logs;
