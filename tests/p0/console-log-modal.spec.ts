@@ -86,4 +86,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-16e Console 清空后新日志到来可重新显示且不清聊天', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:statusline');
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).toContainText('Simulated Terminal StatusLine updated successfully');
+
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toBeVisible();
+    await expect(page.locator('#consoleLogArea')).toContainText('[MOCK_LOG]');
+    await page.locator('#consoleClear').click();
+    await expect(page.locator('#consoleLogArea')).toBeEmpty();
+    await page.locator('#consoleClose').click();
+    await expect(page.locator('#consoleModal')).toBeHidden();
+
+    await sendChatMessage(page, 'test:console-log-after-clear');
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).toContainText('Console log after clear completed.');
+
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toBeVisible();
+    await expect(page.locator('#consoleLogArea')).toContainText('[MOCK_LOG_AFTER_CLEAR]');
+    await expect(page.locator('#consoleLogArea')).toContainText('test:console-log-after-clear');
+
+    await expect(page.locator('#messages')).toContainText('Simulated Terminal StatusLine updated successfully');
+    await expect(page.locator('#messages')).toContainText('Console log after clear completed.');
+
+    await expectNoBrowserErrors(page);
+  });
 });

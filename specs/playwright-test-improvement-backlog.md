@@ -19,8 +19,8 @@ The working target is:
 - Playwright config: `playwright.config.ts`
 - P0 command: `npm run test:playwright:p0`
 - P0 runner: 1 worker, mobile viewport, mock server on `127.0.0.1:33341`
-- P0 count: 104 tests in 20 files
-- Browser error capture: all 104 P0 tests call `expectNoBrowserErrors(page)`
+- P0 count: 105 tests in 20 files
+- Browser error capture: all 105 P0 tests call `expectNoBrowserErrors(page)`
 - Forbidden patterns: no `test.only`, `test.skip`, `test.fixme`, `networkidle`, or `waitForTimeout` in the Playwright test lane
 - Heaviest concentration: `tests/p0/workspace-sessions-sidebar.spec.ts` has 18 tests; its common sidebar flows now use `tests/helpers/p0-ui.ts`
 
@@ -28,19 +28,13 @@ The working target is:
 
 ### P0 Mock-Only Additions
 
-1. P0-16e console modal clear after new logs arrive
-   - Why: clear currently verifies chat history is not deleted. It does not pin behavior when a new mock log arrives after clear/reopen.
-   - Test shape: open console, clear, trigger a message that emits logs, reopen/inspect visible trace and chat separation.
-   - Mock impact: maybe reuse existing `logs:get` plus `test:statusline`.
-   - Priority: medium.
-
-2. P0-20e token retry does not leak rejected token into local UI state
+1. P0-20e token retry does not leak rejected token into local UI state
    - Why: current auth tests verify rejected/accepted tokens are not visibly leaked. A stronger boundary is that retry state does not persist the bad token in input or logs after success.
    - Test shape: bad token, retry good token, assert token input/sheet is gone and logs/messages contain no token text.
    - Mock impact: none.
    - Priority: medium.
 
-3. P0-19d narrow viewport scroll reachability for settings and console sheets
+2. P0-19d narrow viewport scroll reachability for settings and console sheets
    - Why: permission sheet reachability is covered; settings/console can also grow vertically.
    - Test shape: use narrow/landscape viewports and assert close/action controls remain reachable after scrolling.
    - Mock impact: none.
@@ -118,9 +112,8 @@ The working target is:
 
 ## Recommended Execution Order
 
-1. Add P0-16e console modal clear after new logs arrive.
-2. Add P1 contract drift check.
-3. Refactor visual mock scenario registry.
+1. Add P1 contract drift check.
+2. Refactor visual mock scenario registry.
 
 ## Definition Of Done For Each Slice
 

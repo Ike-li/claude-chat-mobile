@@ -44,6 +44,7 @@ Current P0 mock-only coverage also includes:
 - Settings coverage verifies `/model` local command handling does not create a chat message and preserves an explicit `[1m]` suffix for the next turn.
 - Console coverage verifies opening and closing the trace sheet preserves the user's in-progress input draft.
 - Console coverage verifies reopening the trace sheet after a session switch shows the current session trace rather than the previous session trace.
+- Console coverage verifies clearing the trace sheet does not delete chat content and that a later mock session log is visible after reopening.
 - Long-stream interrupt coverage verifies that a stopped stream does not keep appending chunks after a later command completes.
 - Long-stream interrupt coverage verifies repeated Stop taps produce a single visible interrupted state rather than duplicate feedback.
 - Tool-card coverage includes out-of-order tool results to ensure outputs stay attached to the correct visible card.

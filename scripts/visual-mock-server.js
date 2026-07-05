@@ -114,6 +114,7 @@ let pendingDevices = [];
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
 let deniedDeviceRetryPending = false;
+let mockSessionLogsByInstance = new Map();
 
 function resetMockState() {
   viewingInstanceId = 'inst_1';
@@ -137,6 +138,7 @@ function resetMockState() {
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
   deniedDeviceRetryPending = false;
+  mockSessionLogsByInstance = new Map();
 }
 
 function pendingFreshPermissionOrDefault() {
@@ -155,6 +157,33 @@ function consumeFreshPrefs() {
   pendingFreshPermissionMode = undefined;
   pendingFreshEffortLevel = undefined;
   return prefs;
+}
+
+function addMockSessionLog(instanceId, text, type = 'sys_info') {
+  const inst = mockInstances.find(i => i.instanceId === instanceId);
+  const entry = {
+    ts: Date.now(),
+    type,
+    text,
+    model: inst?.model || activeModel,
+    effort: inst?.effort || 'model-default',
+    permissionMode: inst?.permissionMode || permissionMode
+  };
+  const logs = mockSessionLogsByInstance.get(instanceId) || [];
+  logs.push(entry);
+  if (logs.length > 100) logs.shift();
+  mockSessionLogsByInstance.set(instanceId, logs);
+  io.emit('agent:event', {
+    seq: 0,
+    epoch: 'server',
+    sessionId: inst?.sessionId || null,
+    instanceId,
+    cwd: inst?.cwd,
+    ts: entry.ts,
+    type: 'session_log',
+    payload: entry
+  });
+  return entry;
 }
 
 function openFreshMockInstance(requestedModel) {
@@ -724,7 +753,7 @@ io.on('connection', socket => {
         model: inst?.model || activeModel,
         effort: inst?.effort || 'model-default',
         permissionMode: inst?.permissionMode || permissionMode
-      }]
+      }, ...(mockSessionLogsByInstance.get(instanceId) || [])]
     });
   });
 
@@ -1594,6 +1623,22 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { text: 'Simulated Terminal StatusLine updated successfully above!' }
+        });
+
+      } else if (cmd === 'test:console-log-after-clear') {
+        console.log('[mock] Emitting console log after clear');
+        addMockSessionLog(viewingInstanceId, '[MOCK_LOG_AFTER_CLEAR] New trace after clear for test:console-log-after-clear');
+
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_console_log_after_clear_1', text: 'Console log after clear completed.' }
+        });
+
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_console_log_after_clear_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
 
       } else if (cmd === 'test:stale-statusline-replay') {
