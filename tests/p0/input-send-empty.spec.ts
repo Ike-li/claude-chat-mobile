@@ -145,4 +145,19 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-02h 斜杠命令提示可处理服务端对象格式命令', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#input').fill('/m');
+    await expect(page.locator('#cmdHints')).toBeVisible();
+    await expect(page.locator('#cmdHints')).toContainText('/model');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await page.locator('#input').fill('plain message after slash hint');
+    await expect(page.locator('#cmdHints')).toBeHidden();
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
 });

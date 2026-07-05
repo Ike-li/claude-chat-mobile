@@ -161,6 +161,11 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const cachedCmds = JSON.parse(localStorage.getItem('slash_commands'));
     if (Array.isArray(cachedCmds)) window.availableSkills = cachedCmds;
   } catch { /* 缓存损坏等价于无缓存 */ }
+  function slashCommandName(cmd) {
+    if (typeof cmd === 'string') return cmd;
+    if (cmd && typeof cmd.name === 'string') return cmd.name;
+    return '';
+  }
   let lastSeq = 0;
   let curEpoch = null;
   let currentModel = '';                // 当前生效模型（init 事件的 model 字段），/model 无参时展示
@@ -1543,7 +1548,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   inputEl.addEventListener('input', () => {
     const val = inputEl.value;
     if (val.startsWith('/')) {
-      const base = window.availableSkills || [];
+      const base = (window.availableSkills || []).map(slashCommandName).filter(Boolean);
       const cands = base.concat(LOCAL_COMMANDS.filter(c => !base.includes(c)));
       const prefix = val.slice(1).toLowerCase();
       const matches = prefix ?
