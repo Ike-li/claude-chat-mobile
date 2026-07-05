@@ -148,6 +148,7 @@
     - expect: active status 立即回到思考中，不能停留在 AskUserQuestion 工具文案。
     - expect: assistant 回复包含所选选项。
     - expect: 选择弹窗打开时，背景输入草稿按 Enter 或点击发送不会提交新消息；选择完成后草稿仍可继续发送。
+    - expect: 点击选择弹窗遮罩不会关闭必须回答的选择题，也不会丢弃或提交背景草稿。
     - expect: 失败条件：选项顺序错误、点击后弹窗不关、答案发往错误 requestId、重复显示同一问题。
 
 #### 1.9. P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀

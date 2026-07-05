@@ -114,4 +114,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-08f 点击选择弹窗遮罩不会关闭或提交背景草稿', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:question');
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
+
+    await page.locator('#input').fill('draft while choosing');
+    await page.locator('#questionModal').click({ position: { x: 12, y: 12 } });
+
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('#questionOptions button')).toHaveCount(3);
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
+    await expect(page.locator('#input')).toHaveValue('draft while choosing');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await page.locator('#questionOptions button').nth(1).click();
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('#input')).toHaveValue('draft while choosing');
+
+    await expectNoBrowserErrors(page);
+  });
 });

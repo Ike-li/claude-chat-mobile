@@ -74,6 +74,7 @@ Current P0 mock-only coverage also includes:
 - AskUserQuestion coverage includes duplicate same-`requestId` replay without showing repeated choice sheets after reconnect/sync paths.
 - AskUserQuestion coverage verifies a failed `result.isError` turn closes the active choice sheet, marks the visible tool card failed, and leaves the input usable for the next message.
 - AskUserQuestion coverage verifies background drafts are not submitted while a choice sheet is open, and that the draft can be sent after the choice is answered.
+- AskUserQuestion coverage verifies tapping the modal backdrop does not dismiss the required choice sheet or submit the background draft.
 - Task progress coverage includes failed background tasks so failure notifications also clear the progress banner.
 - Task progress coverage verifies another workspace's progress heartbeat does not show a current-session banner while its busy state remains visible in the sessions entry and sidebar.
 - Mirror-state coverage verifies terminal read-only catch-up locks the input and allows an explicit user takeover.
