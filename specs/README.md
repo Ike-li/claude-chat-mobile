@@ -88,6 +88,7 @@ Current P0 mock-only coverage also includes:
 - Device trust coverage verifies a draft is still preserved after device denial and retrying access keeps Send disabled while returning to pending approval.
 - Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.
 - Attachment chip coverage verifies manually removed files are not included in the sent user message.
+- Attachment quota coverage verifies removing a chip frees a count slot so a replacement attachment can be added and only the remaining chips are sent.
 - Attachment isolation coverage verifies unsent attachment chips are cleared on session switch so files selected in one session are not sent to another session.
 - Offline attachment coverage verifies queued attachment messages keep their chip while disconnected and do not duplicate the chip after reconnect resend confirmation.
 - Responsive and PWA coverage verifies permission approval sheet controls stay reachable in narrow portrait/landscape viewports and manifest icons plus the local service-worker shell script load.

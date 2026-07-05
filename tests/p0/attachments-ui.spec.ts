@@ -172,4 +172,44 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-18g 移除附件 chip 后释放数量配额并只发送剩余附件', async ({ page }) => {
+    await gotoMock(page);
+
+    const initialFiles = Array.from({ length: 10 }, (_, index) => ({
+      name: `slot-${index}.txt`,
+      mimeType: 'text/plain',
+      buffer: Buffer.from(`attachment slot ${index}`)
+    }));
+
+    await page.locator('#fileInput').setInputFiles(initialFiles);
+    await expect(page.locator('#attachTray')).toContainText('slot-0.txt');
+    await expect(page.locator('#attachTray')).toContainText('slot-9.txt');
+
+    const removedChip = page.locator('#attachTray > div').filter({ hasText: 'slot-9.txt' });
+    await removedChip.locator('button').click();
+    await expect(page.locator('#attachTray')).not.toContainText('slot-9.txt');
+
+    await page.locator('#fileInput').setInputFiles({
+      name: 'replacement-after-remove.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('replacement after attachment quota frees up')
+    });
+    await expect(page.locator('#attachTray')).toContainText('replacement-after-remove.txt');
+    await expect(page.locator('#messages')).not.toContainText('附件数量已达上限');
+
+    await page.locator('#input').fill('send after freeing attachment quota');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#attachTray')).toBeHidden();
+
+    const sent = page.locator('[data-testid="user-message"]').last();
+    await expect(sent).toContainText('send after freeing attachment quota');
+    for (let index = 0; index < 9; index += 1) {
+      await expect(sent).toContainText(`slot-${index}.txt`);
+    }
+    await expect(sent).toContainText('replacement-after-remove.txt');
+    await expect(sent).not.toContainText('slot-9.txt');
+
+    await expectNoBrowserErrors(page);
+  });
 });
