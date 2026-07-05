@@ -108,6 +108,38 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-17g 迟到只读锁不会污染切走后的当前会话', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    await expect(page.locator('button[title="Another App Concurrency"]')).toBeVisible();
+    await page.locator('#sidebarClose').click();
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+
+    const startedAt = Date.now();
+    await sendChatMessage(page, 'test:mirror-readonly-delayed');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('button[title="Another App Concurrency"]').click();
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
+
+    await expect.poll(() => Date.now() - startedAt, { timeout: 2_000 }).toBeGreaterThan(900);
+    await expect(page.locator('#mirrorBanner')).toBeHidden();
+    await expect(page.locator('#input')).toBeEnabled();
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:settings-echo');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-17e 后台 task_progress 不污染当前会话但保留忙碌角标', async ({ page }) => {
     await gotoMock(page);
 

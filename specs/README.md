@@ -82,6 +82,7 @@ Current P0 mock-only coverage also includes:
 - Mirror-state coverage verifies terminal read-only catch-up locks the input and allows an explicit user takeover.
 - Mirror-state coverage verifies switching to another session clears the read-only catch-up lock so it does not block unrelated sessions.
 - Mirror-state coverage verifies an in-progress draft is preserved while the terminal read-only lock is active and can be sent after explicit takeover.
+- Mirror-state coverage verifies a delayed read-only lock from the previous session cannot disable input after the user has switched to another session.
 - Device trust coverage includes pending, denied, denied retry back to pending, and trusted-device approval/rejection updates through mock Socket.IO events.
 - Device trust coverage verifies an existing draft is preserved while TOFU approval is pending, Send is disabled with visible reason, and the draft can be sent after approval.
 - Device trust coverage verifies a draft is still preserved after device denial and retrying access keeps Send disabled while returning to pending approval.

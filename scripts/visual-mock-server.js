@@ -1140,14 +1140,17 @@ io.on('connection', socket => {
         });
       } else if (cmd === 'test:mirror-readonly' || cmd === 'test:mirror-readonly-delayed') {
         const delayedMirror = cmd === 'test:mirror-readonly-delayed';
+        const mirrorInstanceId = viewingInstanceId;
+        const mirrorSessionId = activeInst.sessionId || 'mock-session-visual-test';
+        const mirrorCwd = activeInst.cwd;
         console.log(`[mock] ${cmd} — 模拟终端会话正在运行，只读追平锁`);
         if (delayedMirror) await delay(650);
         socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, cwd: activeInst.cwd, ts: Date.now(),
+          seq: 1, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, cwd: mirrorCwd, ts: Date.now(),
           type: 'mirror_state', payload: { readonly: true }
         });
         socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          seq: 2, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_mirror_readonly_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
       } else if (cmd === 'test:taskprogress' || cmd === 'test:taskprogress-failed') {
