@@ -55,4 +55,43 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-03d Markdown sanitization blocks executable HTML while keeping safe markdown', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:unsafe-markdown');
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('safe bold markdown', { timeout: 20_000 });
+    await waitForIdle(page);
+
+    await expect(reply.locator('strong')).toContainText('safe bold markdown');
+    await expect(reply.locator('code')).toContainText('safe_inline_code');
+
+    const unsafeState = await reply.evaluate(el => {
+      const win = window as typeof window & {
+        __ccmUnsafeMarkdownScriptFired?: boolean;
+        __ccmUnsafeMarkdownImageFired?: boolean;
+        __ccmUnsafeMarkdownClickFired?: boolean;
+      };
+      return {
+        scriptTags: el.querySelectorAll('script').length,
+        eventAttributes: el.querySelectorAll('[onerror], [onclick], [onload]').length,
+        javascriptHrefs: [...el.querySelectorAll('a')]
+          .filter(a => /^javascript:/i.test(a.getAttribute('href') || '')).length,
+        scriptFired: win.__ccmUnsafeMarkdownScriptFired === true,
+        imageFired: win.__ccmUnsafeMarkdownImageFired === true,
+        clickFired: win.__ccmUnsafeMarkdownClickFired === true
+      };
+    });
+    expect(unsafeState).toEqual({
+      scriptTags: 0,
+      eventAttributes: 0,
+      javascriptHrefs: 0,
+      scriptFired: false,
+      imageFired: false,
+      clickFired: false
+    });
+
+    await expectNoBrowserErrors(page);
+  });
 });

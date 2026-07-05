@@ -900,6 +900,47 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_stream_1', durationMs: 2500, costUsd: 0.0015, isError: false, models: [activeModel] }
         });
 
+      } else if (cmd === 'test:unsafe-markdown') {
+        console.log('[mock] Starting test:unsafe-markdown sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        const responseText = [
+          'This response keeps **safe bold markdown** and `safe_inline_code` visible.',
+          '',
+          '<script>window.__ccmUnsafeMarkdownScriptFired = true</script>',
+          '<img src="/__unsafe-markdown-probe.png" onerror="window.__ccmUnsafeMarkdownImageFired = true" alt="unsafe image probe">',
+          '<a href="javascript:window.__ccmUnsafeMarkdownClickFired = true">unsafe javascript link</a>',
+          '<span onclick="window.__ccmUnsafeMarkdownClickFired = true">unsafe click probe</span>'
+        ].join('\n');
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_unsafe_markdown_1', text: responseText }
+        });
+        await delay(150);
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: {
+            messageId: 'msg_unsafe_markdown_1',
+            text: responseText,
+            durationMs: 150,
+            costUsd: 0,
+            isError: false,
+            models: [activeModel]
+          }
+        });
+
       } else if (cmd === 'test:freshbusy') {
         // 回归（shouldRestoreOptimisticBusy）：新会话首发的乐观 busy 不应被「懒开 → 广播 instances →
         // 前端 bindView→clearView(setBusy(false))」冲掉。前置 session:new 已使前端 viewingInstanceId=null

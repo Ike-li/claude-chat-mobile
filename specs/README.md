@@ -37,6 +37,7 @@ Current P0 mock-only coverage also includes:
 - Input coverage verifies clicking outside slash command hints closes the hint list without dropping the draft or sending a message.
 - Stream/Markdown coverage verifies code-block copy controls are present and provide visible feedback after a click.
 - Stream/Markdown coverage verifies the assistant message Edit action restores the previous user prompt exactly, including words that also appear in message action labels.
+- Stream/Markdown coverage verifies unsafe HTML-like Markdown cannot create executable script tags, event handlers, or `javascript:` links while safe Markdown still renders.
 - Auth failure coverage includes opening the access-help sheet and retrying by Enter from the token gate without leaking rejected or accepted tokens.
 - Settings coverage verifies unsupported-model effort controls hide and do not leak a stale thinking effort into the next turn.
 - Settings coverage verifies new-session empty-start permission/effort presets are consumed by the first sent message.
