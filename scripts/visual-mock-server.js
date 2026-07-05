@@ -5,6 +5,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import { createVisualMockScenarioRegistry } from './visual-mock-scenarios.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3100;
@@ -831,6 +832,124 @@ io.on('connection', socket => {
     }
   });
 
+  const scenarioRegistry = createVisualMockScenarioRegistry([
+    {
+      command: 'test:statusline',
+      run: async () => {
+        console.log('[mock] Updating status_line');
+        const slNow = Date.now(); // ts 与 cacheExpiresAt 同基准：前端 ttlRemainMs = cacheExpiresAt − ts = 290s（稳定 ~4:50）
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: slNow,
+          type: 'status_line', payload: {
+            ts: slNow,
+            model: 'claude-3-5-sonnet',
+            project: 'claude-chat-mobile',
+            cwd: '/Users/you/code/claude-chat-mobile',
+            git: { branch: 'feature/visual-testing', changed: 3, ahead: 2, behind: 0, insertions: 120, deletions: 45, repo: 'Ike-li/claude-chat-mobile' },
+            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, w: 22000, r: 21000, reused: 1200000, cacheExpiresAt: slNow + 290000 },
+            cost: 0.37,
+            duration: { wallMs: 2500, apiMs: 1200 },
+            version: '2.1.178'
+          }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Simulated Terminal StatusLine updated successfully above!' }
+        });
+
+        await delay(500);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'Simulated Terminal StatusLine updated successfully above!' }
+        });
+      },
+    },
+    {
+      command: 'test:console-log-after-clear',
+      run: async () => {
+        console.log('[mock] Emitting console log after clear');
+        addMockSessionLog(viewingInstanceId, '[MOCK_LOG_AFTER_CLEAR] New trace after clear for test:console-log-after-clear');
+
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_console_log_after_clear_1', text: 'Console log after clear completed.' }
+        });
+
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_console_log_after_clear_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      command: 'test:stale-statusline-replay',
+      run: async () => {
+        console.log('[mock] Replaying stale cross-workspace status_line without instanceId');
+        const slNow = Date.now();
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: slNow,
+          type: 'status_line', payload: {
+            ts: slNow,
+            model: 'claude-3-5-haiku',
+            project: 'another-react-project',
+            cwd: '/Users/you/code/another-react-project',
+            git: { branch: 'feature/other-workspace', changed: 7, ahead: 1, behind: 0, insertions: 88, deletions: 13, repo: 'Ike-li/another-react-project' },
+            ctx: { tokens: 99000, cacheHitPct: 12, in: 6000, w: 12000, r: 3000, reused: 750000, cacheExpiresAt: slNow + 180000 },
+            cost: 0.99,
+            duration: { wallMs: 9000, apiMs: 6400 },
+            version: '9.9.999'
+          }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Stale cross-workspace StatusLine replay emitted.' }
+        });
+
+        await delay(300);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'Stale cross-workspace StatusLine replay emitted.' }
+        });
+      },
+    },
+    {
+      prefix: 'test:message-edit',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Emitting assistant reply for message edit regression');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        await delay(250);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: {
+            messageId: 'msg_message_edit_1',
+            text: 'message edit fixture: use the assistant Edit action to restore the previous prompt.'
+          }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_message_edit_1', durationMs: 250, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+  ]);
+
   // Handle custom trigger command inputs
   socket.on('user:message', async payload => {
     const messagePayload = payload && typeof payload === 'object' ? payload : {};
@@ -887,6 +1006,8 @@ io.on('connection', socket => {
     if (cmd.startsWith('test:')) {
       activeEpoch = 'mock-epoch-' + cmd.replace(/[^a-zA-Z0-9]/g, '_') + '-' + Date.now();
       const activeInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+
+      if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
 
       if (cmd === 'test:stream') {
         console.log('[mock] Starting test:stream sequence');
@@ -1594,109 +1715,6 @@ io.on('connection', socket => {
           });
           pendingQuestion = null;
         }
-
-      } else if (cmd === 'test:statusline') {
-        console.log('[mock] Updating status_line');
-        const slNow = Date.now(); // ts 与 cacheExpiresAt 同基准：前端 ttlRemainMs = cacheExpiresAt − ts = 290s（稳定 ~4:50）
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: slNow,
-          type: 'status_line', payload: {
-            ts: slNow,
-            model: 'claude-3-5-sonnet',
-            project: 'claude-chat-mobile',
-            cwd: '/Users/you/code/claude-chat-mobile',
-            git: { branch: 'feature/visual-testing', changed: 3, ahead: 2, behind: 0, insertions: 120, deletions: 45, repo: 'Ike-li/claude-chat-mobile' },
-            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, w: 22000, r: 21000, reused: 1200000, cacheExpiresAt: slNow + 290000 },
-            cost: 0.37,
-            duration: { wallMs: 2500, apiMs: 1200 },
-            version: '2.1.178'
-          }
-        });
-
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'system', payload: { message: '[MOCK_INFO] Simulated Terminal StatusLine updated successfully above!' }
-        });
-
-        await delay(500);
-
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { text: 'Simulated Terminal StatusLine updated successfully above!' }
-        });
-
-      } else if (cmd === 'test:console-log-after-clear') {
-        console.log('[mock] Emitting console log after clear');
-        addMockSessionLog(viewingInstanceId, '[MOCK_LOG_AFTER_CLEAR] New trace after clear for test:console-log-after-clear');
-
-        await delay(100);
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: 'msg_console_log_after_clear_1', text: 'Console log after clear completed.' }
-        });
-
-        await delay(100);
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_console_log_after_clear_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
-        });
-
-      } else if (cmd === 'test:stale-statusline-replay') {
-        console.log('[mock] Replaying stale cross-workspace status_line without instanceId');
-        const slNow = Date.now();
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: slNow,
-          type: 'status_line', payload: {
-            ts: slNow,
-            model: 'claude-3-5-haiku',
-            project: 'another-react-project',
-            cwd: '/Users/you/code/another-react-project',
-            git: { branch: 'feature/other-workspace', changed: 7, ahead: 1, behind: 0, insertions: 88, deletions: 13, repo: 'Ike-li/another-react-project' },
-            ctx: { tokens: 99000, cacheHitPct: 12, in: 6000, w: 12000, r: 3000, reused: 750000, cacheExpiresAt: slNow + 180000 },
-            cost: 0.99,
-            duration: { wallMs: 9000, apiMs: 6400 },
-            version: '9.9.999'
-          }
-        });
-
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'system', payload: { message: '[MOCK_INFO] Stale cross-workspace StatusLine replay emitted.' }
-        });
-
-        await delay(300);
-
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { text: 'Stale cross-workspace StatusLine replay emitted.' }
-        });
-
-      } else if (cmd.startsWith('test:message-edit')) {
-        console.log('[mock] Emitting assistant reply for message edit regression');
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        await delay(250);
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: {
-            messageId: 'msg_message_edit_1',
-            text: 'message edit fixture: use the assistant Edit action to restore the previous prompt.'
-          }
-        });
-
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_message_edit_1', durationMs: 250, costUsd: 0, isError: false, models: [activeModel] }
-        });
 
       } else if (cmd === 'test:settings-echo') {
         console.log('[mock] Echoing selected model / permission / effort for settings regression');

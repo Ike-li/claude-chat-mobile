@@ -24,6 +24,7 @@ The working target is:
 - Forbidden patterns: no `test.only`, `test.skip`, `test.fixme`, `networkidle`, or `waitForTimeout` in the Playwright test lane
 - Heaviest concentration: `tests/p0/workspace-sessions-sidebar.spec.ts` has 18 tests; its common sidebar flows now use `tests/helpers/p0-ui.ts`
 - P1 contract drift guard: `npm run contract:check` statically compares real `agent:event` types with visual mock event types without starting Claude, production server, or Playwright.
+- Visual mock scenario registry: `scripts/visual-mock-scenarios.js` now supports exact and prefix command registration; the first migrated group covers statusline, console-after-clear, stale-statusline, and message-edit fixtures.
 
 ## Completed Tooling
 
@@ -99,9 +100,9 @@ The working target is:
    - Continue migrating other specs opportunistically when they touch sidebar/session flows.
 
 2. Add a visual mock scenario registry
-   - `scripts/visual-mock-server.js` currently uses a long `if/else` chain for `test:*` commands.
-   - A registry object keyed by command would make scenario coverage easier to audit and reduce accidental fall-through.
-   - Keep this refactor behavior-neutral and do it separately from adding new tests.
+   - Registry scaffold exists in `scripts/visual-mock-scenarios.js`.
+   - First migrated group: `test:statusline`, `test:console-log-after-clear`, `test:stale-statusline-replay`, and `test:message-edit*`.
+   - Continue moving remaining `test:*` groups out of the long `if/else` chain in behavior-neutral slices.
 
 3. Add stable sidebar data attributes
    - Existing `data-testid="session-row"` and `data-instance-id` are useful, but tests still depend heavily on titles and synthetic instance IDs.
@@ -117,7 +118,7 @@ The working target is:
 
 ## Recommended Execution Order
 
-1. Refactor visual mock scenario registry.
+1. Continue visual mock scenario registry migration.
 2. Add P0-20e token retry state regression.
 
 ## Definition Of Done For Each Slice

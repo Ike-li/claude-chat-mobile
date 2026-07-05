@@ -109,6 +109,7 @@ Current P0 mock-only coverage also includes:
 - `playwright-test-improvement-backlog.md` tracks what Playwright tests to add, optimize, or refactor next.
 - `docs/event-contract.md` describes the shared `agent:event` contract.
 - `scripts/agent-event-contract.js` is the executable event-contract allowlist used by `npm run contract:check`.
+- `scripts/visual-mock-scenarios.js` contains the reusable visual mock scenario registry for incremental `test:*` command migration.
 - `tests/p0/*.spec.ts` implements the P0 mock UI scenarios.
 - `tests/seed.goto-mock.spec.ts` contains shared Playwright helpers.
 - `tests/helpers/p0-ui.ts` contains shared P0 UI helpers for sidebar/session flows.
