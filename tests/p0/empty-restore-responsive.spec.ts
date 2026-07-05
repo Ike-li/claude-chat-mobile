@@ -1,8 +1,20 @@
 // spec: specs/claude-chat-mobile-comprehensive-test-plan.md
 // seed: tests/seed.goto-mock.spec.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+
+async function expectWithinViewport(page: Page, locator: Locator) {
+  await expect(locator).toBeVisible();
+  const box = await locator.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.y).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(viewport!.width + 1);
+  expect(box!.y + box!.height).toBeLessThanOrEqual(viewport!.height + 1);
+}
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-19 空状态、恢复与移动端响应式/PWA 外壳', async ({ page }) => {
@@ -30,6 +42,27 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     }
     const manifest = await page.request.get('/manifest.webmanifest');
     expect(manifest.ok()).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-19b 窄屏和横屏下权限审批 sheet 按钮可达', async ({ page }) => {
+    await gotoMock(page);
+
+    for (const viewport of [{ width: 320, height: 700 }, { width: 812, height: 375 }]) {
+      await page.setViewportSize(viewport);
+      await sendChatMessage(page, 'test:permission');
+      await expect(page.locator('#permModal')).toBeVisible();
+
+      await expectWithinViewport(page, page.locator('#permTool'));
+      await expectWithinViewport(page, page.locator('#permDeny'));
+      await expectWithinViewport(page, page.locator('#permAllow'));
+      await expect(page.locator('#permInput')).toContainText('git push origin main');
+
+      await page.locator('#permDeny').click();
+      await expect(page.locator('#permModal')).toBeHidden();
+      await waitForIdle(page);
+    }
 
     await expectNoBrowserErrors(page);
   });

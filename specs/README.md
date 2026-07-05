@@ -36,6 +36,7 @@ Current P0 mock-only coverage also includes:
 - AskUserQuestion coverage includes duplicate same-`requestId` replay without showing repeated choice sheets after reconnect/sync paths.
 - Pending device request cards cover both trusted-device approval and rejection updates through mock Socket.IO events.
 - Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.
+- Responsive coverage verifies permission approval sheet controls stay reachable in narrow portrait and landscape mobile viewports.
 
 ## Test Plan
 
