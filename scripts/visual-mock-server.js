@@ -1825,6 +1825,52 @@ io.on('connection', socket => {
           type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
 
+      } else if (cmd === 'test:close-background-question-pending') {
+        console.log('[mock] test:close-background-question-pending — 后台 inst_1 保留待答问题，当前查看 inst_2');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another',
+            title: 'Another App Concurrency',
+            state: 'idle',
+            permissionMode: 'plan',
+            effort: 'medium',
+            model: 'claude-3-5-haiku'
+          });
+        }
+        const inst1 = mockInstances.find(i => i.instanceId === 'inst_1');
+        inst1.state = 'permission';
+        inst1.activeTool = 'AskUserQuestion';
+        pendingQuestion = {
+          instanceId: 'inst_1',
+          requestId: 'req_close_background_question#0',
+          toolUseId: 't_close_background_question',
+          messageId: 'msg_close_background_question_1',
+          options: ['main (Stable Production)', 'dev (Bleeding-Edge Integration)', 'release-v1.0 (LTS)']
+        };
+        const backgroundQuestionText = 'Which branch should be our target publish destination?';
+        syncPendingSnapshot = {
+          permissions: [],
+          questions: [{
+            requestId: pendingQuestion.requestId,
+            text: backgroundQuestionText,
+            options: pendingQuestion.options
+          }]
+        };
+        syncPendingSnapshotInstanceId = 'inst_1';
+        viewingInstanceId = 'inst_2';
+        const inst2 = mockInstances.find(i => i.instanceId === 'inst_2');
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: inst2.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+
       } else if (cmd === 'test:tofu' || cmd === 'test:tofu-denied') {
         console.log('[mock] Forcing unapproved TOFU status');
         socket.emit('agent:event', {

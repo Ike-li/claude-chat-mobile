@@ -45,6 +45,7 @@ Current P0 mock-only coverage also includes:
 - Multi-session routing guards cover closing the current session and falling back to the remaining session without leaving the closed session's history on screen.
 - Multi-session routing guards cover closing the current pending-approval session and falling back without leaving stale approval state.
 - Cross-tab pending guards cover AskUserQuestion sheets being cleared when the view switches away and rebuilt only after switching back to the owning session.
+- Cross-tab pending guards cover closing a background AskUserQuestion session without reviving its stale choice sheet.
 - Workspace status coverage verifies background completion and error states appear in both the top sessions indicator and sidebar badges, and that mixed background states prioritize pending approval over completed/running work.
 - Session navigation coverage verifies unopened historical sessions can be launched from the sidebar and rendered through the `session:history` fallback.
 - Session navigation coverage verifies a `sync:since` gap while opening a historical session clears partial replay and falls back to `session:history`.

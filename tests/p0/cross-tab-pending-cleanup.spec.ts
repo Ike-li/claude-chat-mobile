@@ -81,4 +81,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-13d 关闭后台问题待答会话后不复活选择弹窗', async ({ page }) => {
+    await gotoMock(page);
+    await page.setViewportSize({ width: 900, height: 812 });
+
+    await sendChatMessage(page, 'test:close-background-question-pending');
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#questionModal')).toBeHidden();
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
+    const questionRow = page.locator('[data-testid="session-row"][data-instance-id="inst_1"]');
+    await expect(questionRow).toContainText('Visual Sandbox (Main)');
+    await expect(questionRow.locator('[data-instance-badge]')).toHaveText('⚠️');
+
+    page.once('dialog', dialog => dialog.accept());
+    await questionRow.locator('button', { hasText: '✕' }).click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
+
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#sessionPanel')).not.toContainText('Visual Sandbox (Main)');
+    await expect(page.locator('#sessionPanel')).not.toContainText('Which branch should be our target publish destination?');
+    await expect(page.locator('#questionModal')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
 });
