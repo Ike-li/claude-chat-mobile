@@ -2,7 +2,7 @@
 // seed: tests/seed.goto-mock.spec.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../seed.goto-mock.spec';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage } from '../seed.goto-mock.spec';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02 输入框、发送按钮与空输入边界', async ({ page }) => {
@@ -43,6 +43,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('[data-testid="user-message"]').last()).toContainText('keyboard hello');
     await expect(page.locator('#input')).toHaveValue('');
     await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-02c 队列已满时保留草稿并禁用发送按钮', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:queuefull');
+    await expect(page.locator('#btnSend')).toHaveAttribute('title', '前面已有消息在排队，请等当前任务结束');
+
+    await page.locator('#input').fill('message after queue drains');
+    await expect(page.locator('#input')).toHaveValue('message after queue drains');
+    await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toHaveAttribute('title', '前面已有消息在排队，请等当前任务结束');
+
+    await expect(page.locator('#btnSend')).toBeEnabled({ timeout: 10_000 });
+    await expect(page.locator('#btnSend')).toHaveAttribute('title', '');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('message after queue drains');
+    await expect(page.locator('#input')).toHaveValue('');
 
     await expectNoBrowserErrors(page);
   });
