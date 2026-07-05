@@ -47,6 +47,7 @@ Current P0 mock-only coverage also includes:
 - Long-stream interrupt coverage verifies repeated Stop taps produce a single visible interrupted state rather than duplicate feedback.
 - Tool-card coverage includes out-of-order tool results to ensure outputs stay attached to the correct visible card.
 - Tool-card coverage verifies an in-flight tool is marked failed and the input recovers when the turn ends with an error.
+- Tool-card coverage verifies completed tool output stays collapsed until the user expands the matching card.
 - Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet and the rule does not leak to another live session.
 - Permission approval coverage verifies a failed `result.isError` turn closes the active approval sheet, marks the visible tool card failed, and leaves the input usable for the next message.
 - Permission approval coverage verifies background drafts are not submitted while an approval sheet is open, and that the draft can be sent after the approval is resolved.

@@ -91,6 +91,7 @@
     - expect: 工具运行中状态与 active status pill 一致。
   2. 等待完成并展开第一个工具卡片。
     - expect: 工具卡片可折叠/展开。
+    - expect: 工具输出默认折叠，展开对应卡片后才显示成功/失败输出摘要。
     - expect: 展开后显示 input/output 摘要，例如 utils/date.js、npm test 或成功输出。
     - expect: 所有成功工具最终显示成功状态。
     - expect: 最终 assistant 文本总结工具执行结果。

@@ -66,4 +66,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-05d 工具输出默认折叠并在展开后可见', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tool');
+    const firstToolCard = page.locator('details.toolcard').filter({ hasText: 'read_file' }).first();
+    await expect(firstToolCard).toBeVisible({ timeout: 15_000 });
+
+    await waitForIdle(page);
+    await expect(page.getByText('Successfully read 124 lines from utils/date.js')).toBeHidden();
+
+    await firstToolCard.locator('summary').click();
+    await expect(page.getByText('Successfully read 124 lines from utils/date.js')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
 });
