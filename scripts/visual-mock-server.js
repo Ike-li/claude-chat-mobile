@@ -559,6 +559,30 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
+      } else if (cmd === 'test:questionsnapshot') {
+        console.log('[mock] test:questionsnapshot — 设 question 快照但不发原始 question 事件，切 viewing 到 inst_2 触发 sync:since');
+        pendingQuestion = {
+          requestId: 'req_question_snapshot#0',
+          toolUseId: 't_question_snapshot',
+          messageId: 'msg_question_snapshot_1',
+          options: ['main', 'dev', 'release-v1.0']
+        };
+        syncPendingSnapshot = {
+          permissions: [],
+          questions: [{
+            requestId: pendingQuestion.requestId,
+            text: 'Which release branch should receive the restored pending answer?',
+            options: pendingQuestion.options
+          }]
+        };
+        syncPendingSnapshotInstanceId = 'inst_2';
+        viewingInstanceId = 'inst_2';
+        const inst = mockInstances.find(i => i.instanceId === 'inst_2');
+        if (inst) inst.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
       } else if (cmd === 'test:taskprogress') {
         // 后台任务进度横幅：SDK 对 running 后台任务周期性推送 task_progress（真实 server 走 emitTransient，
         // transient=true、不进 buffer / 不占 seq）。前端应【原地刷新】同一条横幅（覆盖、不追加），

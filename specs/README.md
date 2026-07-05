@@ -32,7 +32,7 @@ Current P0 mock-only coverage also includes:
 - Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet.
 - Remote request resolution coverage verifies stale permission and AskUserQuestion sheets close when another trusted device resolves the request.
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
-- Pending snapshot reconciliation covers duplicate same-`requestId` pending entries without showing repeated approval sheets.
+- Pending snapshot reconciliation covers duplicate same-`requestId` pending entries without showing repeated approval sheets, and restores AskUserQuestion choice sheets from `sync:since` pending snapshots.
 - AskUserQuestion coverage includes duplicate same-`requestId` replay without showing repeated choice sheets after reconnect/sync paths.
 - Pending device request cards cover both trusted-device approval and rejection updates through mock Socket.IO events.
 - Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.

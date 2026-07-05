@@ -33,4 +33,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-14c pending snapshot 可重建 AskUserQuestion 选择弹窗', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:questionsnapshot');
+    await expect(page.locator('#questionModal')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('#questionText')).toContainText('Which release branch should receive the restored pending answer?');
+    await expect(page.locator('#questionOptions button')).toHaveText([
+      'main',
+      'dev',
+      'release-v1.0'
+    ]);
+
+    await page.locator('#questionOptions button').nth(2).click();
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('release-v1.0');
+
+    await expectNoBrowserErrors(page);
+  });
 });
