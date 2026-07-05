@@ -146,8 +146,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
 
     await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
     const currentRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    if (!(await currentRow.isVisible())) {
+      await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    }
+    await expect(currentRow).toBeVisible();
     page.once('dialog', dialog => dialog.accept());
     await currentRow.locator('button', { hasText: '✕' }).click();
 
