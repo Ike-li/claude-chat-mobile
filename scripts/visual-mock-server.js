@@ -1615,6 +1615,40 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:background-error',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Marking background workspace as error');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another',
+            title: 'Another App Concurrency',
+            state: 'error',
+            permissionMode: 'plan',
+            effort: 'medium',
+            model: 'claude-3-5-haiku'
+          });
+        }
+        const bgInst = mockInstances.find(i => i.instanceId === 'inst_2');
+        if (bgInst) bgInst.state = 'error';
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: activeInst.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_background_error_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -1930,37 +1964,6 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_disconnect_now_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
         setTimeout(() => socket.disconnect(true), 50);
-
-      } else if (cmd === 'test:background-error') {
-        console.log('[mock] Marking background workspace as error');
-        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
-          mockInstances.push({
-            instanceId: 'inst_2',
-            cwd: '/Users/you/code/another-react-project',
-            sessionId: 'mock-session-another',
-            title: 'Another App Concurrency',
-            state: 'error',
-            permissionMode: 'plan',
-            effort: 'medium',
-            model: 'claude-3-5-haiku'
-          });
-        }
-        const bgInst = mockInstances.find(i => i.instanceId === 'inst_2');
-        if (bgInst) bgInst.state = 'error';
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: {
-            viewingInstanceId,
-            viewingCwd: activeInst.cwd,
-            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
-          }
-        });
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_background_error_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
-        });
 
       } else if (cmd === 'test:background-priority') {
         console.log('[mock] Marking one background workspace with mixed states');
