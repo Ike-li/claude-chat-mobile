@@ -35,4 +35,23 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-17c 终端只读追平会锁定输入并允许显式接管', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:mirror-readonly');
+    await expect(page.locator('#mirrorBanner')).toBeVisible();
+    await expect(page.locator('#mirrorBanner')).toContainText('此会话正在终端运行');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await page.locator('#btnMirrorOverride').click();
+    await expect(page.locator('#mirrorBanner')).toBeHidden();
+    await expect(page.locator('#input')).toBeEnabled();
+
+    await sendChatMessage(page, 'take over from terminal');
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('take over from terminal');
+
+    await expectNoBrowserErrors(page);
+  });
 });

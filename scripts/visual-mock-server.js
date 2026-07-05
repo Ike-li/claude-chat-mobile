@@ -595,6 +595,16 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: inst?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
+      } else if (cmd === 'test:mirror-readonly') {
+        console.log('[mock] test:mirror-readonly — 模拟终端会话正在运行，只读追平锁');
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, cwd: activeInst.cwd, ts: Date.now(),
+          type: 'mirror_state', payload: { readonly: true }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_mirror_readonly_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
       } else if (cmd === 'test:taskprogress' || cmd === 'test:taskprogress-failed') {
         // 后台任务进度横幅：SDK 对 running 后台任务周期性推送 task_progress（真实 server 走 emitTransient，
         // transient=true、不进 buffer / 不占 seq）。前端应【原地刷新】同一条横幅（覆盖、不追加），
