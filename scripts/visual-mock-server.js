@@ -1072,12 +1072,21 @@ io.on('connection', socket => {
           type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
 
-      } else if (cmd === 'test:tofu') {
+      } else if (cmd === 'test:tofu' || cmd === 'test:tofu-denied') {
         console.log('[mock] Forcing unapproved TOFU status');
         socket.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
         });
+
+        if (cmd === 'test:tofu-denied') {
+          await delay(500);
+          socket.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'device_status', payload: { status: 'denied', deviceId: 'unauthorized-fingerprint-999' }
+          });
+          return;
+        }
 
         // Set timeout to auto-approve and restore state after 8 seconds
         setTimeout(() => {

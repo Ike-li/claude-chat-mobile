@@ -26,7 +26,7 @@ Current P0 mock-only coverage also includes:
 - A mock `logs:get` response with a stable `[MOCK_LOG]` trace row so the Console modal can verify Clear affects only the log pane, not chat history.
 - Visual mock Socket.IO auth rejects `bad-token`, `invalid-token`, and `expired-token` with `unauthorized` so P0 can cover the token retry UI without enabling production `AUTH_TOKEN`.
 - Status line coverage verifies the prompt-cache TTL estimate text, including the `est` marker for derived cache timing.
-- Auth failure coverage includes opening the access-help sheet from the token gate without leaking the rejected token.
+- Auth failure coverage includes opening the access-help sheet and retrying by Enter from the token gate without leaking rejected or accepted tokens.
 - Settings coverage verifies unsupported-model effort controls hide and do not leak a stale thinking effort into the next turn.
 - Console coverage verifies opening and closing the trace sheet preserves the user's in-progress input draft.
 - Long-stream interrupt coverage verifies that a stopped stream does not keep appending chunks after a later command completes.
@@ -37,9 +37,9 @@ Current P0 mock-only coverage also includes:
 - Pending snapshot reconciliation covers duplicate same-`requestId` pending entries without showing repeated approval sheets, and restores AskUserQuestion choice sheets from `sync:since` pending snapshots.
 - AskUserQuestion coverage includes duplicate same-`requestId` replay without showing repeated choice sheets after reconnect/sync paths.
 - Task progress coverage includes failed background tasks so failure notifications also clear the progress banner.
-- Pending device request cards cover both trusted-device approval and rejection updates through mock Socket.IO events.
+- Device trust coverage includes pending, denied, and trusted-device approval/rejection updates through mock Socket.IO events.
 - Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.
-- Responsive coverage verifies permission approval sheet controls stay reachable in narrow portrait and landscape mobile viewports.
+- Responsive and PWA coverage verifies permission approval sheet controls stay reachable in narrow portrait/landscape viewports and manifest icons plus the local service-worker shell script load.
 
 ## Test Plan
 

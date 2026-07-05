@@ -66,4 +66,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-19c PWA manifest 图标与本地 shell 资源可加载', async ({ page }) => {
+    await gotoMock(page);
+
+    const manifestResponse = await page.request.get('/manifest.webmanifest');
+    expect(manifestResponse.ok()).toBe(true);
+    const manifest = await manifestResponse.json();
+    expect(manifest.name).toBe('Claude Chat Mobile');
+    expect(Array.isArray(manifest.icons)).toBe(true);
+
+    for (const icon of manifest.icons) {
+      const response = await page.request.get(icon.src);
+      expect(response.ok()).toBe(true);
+      expect(response.headers()['content-type']).toContain(icon.type);
+    }
+
+    const serviceWorker = await page.request.get('/js/sw.js');
+    expect(serviceWorker.ok()).toBe(true);
+    expect(serviceWorker.headers()['content-type']).toContain('javascript');
+
+    await expectNoBrowserErrors(page);
+  });
 });

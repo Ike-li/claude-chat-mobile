@@ -56,4 +56,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-15c 设备被拒后显示拒绝页并可打开访问帮助', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tofu-denied');
+    await expect(page.locator('#deviceDenied')).toBeVisible();
+    await expect(page.locator('#deviceDenied')).toContainText('设备未获授权');
+    await expect(page.locator('#deviceDenied')).toContainText('重新请求接入');
+
+    await page.locator('#deviceDeniedHelp').click();
+    await expect(page.locator('#accessHelp')).toBeVisible();
+    await expect(page.locator('#accessHelp')).toContainText('新设备怎么获批');
+    await page.locator('#accessHelpClose').click();
+    await expect(page.locator('#accessHelp')).toBeHidden();
+    await expect(page.locator('#deviceDenied')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
 });

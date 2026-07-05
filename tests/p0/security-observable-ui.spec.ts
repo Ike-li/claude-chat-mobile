@@ -79,4 +79,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-20d 鉴权失败页按 Enter 可重输令牌恢复连接', async ({ page }) => {
+    const consoleText: string[] = [];
+    captureBrowserErrors(page);
+    page.on('console', message => consoleText.push(message.text()));
+    await page.request.post('/__reset');
+
+    await page.goto('/#token=invalid-token');
+    await expect.poll(() => page.url()).not.toContain('invalid-token');
+    await expect(page.locator('#authGate')).toBeVisible();
+    await expect(page.locator('#authError')).toContainText('令牌无效，请重新输入');
+
+    await page.locator('#authToken').fill('mock-token');
+    await page.locator('#authToken').press('Enter');
+    await expect(page.locator('#authGate')).toBeHidden();
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/);
+    await expect(page.locator('#input')).toBeVisible();
+    await expect(page.locator('body')).not.toContainText('invalid-token');
+    await expect(page.locator('body')).not.toContainText('mock-token');
+    expect(consoleText.join('\n')).not.toContain('invalid-token');
+    expect(consoleText.join('\n')).not.toContain('mock-token');
+
+    await expectNoBrowserErrors(page);
+  });
 });
