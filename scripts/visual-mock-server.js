@@ -177,7 +177,7 @@ io.on('connection', socket => {
           { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high'] },
           { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
           { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },
-          { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)' }
+          { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high'] }
         ]
       }
     });
@@ -583,13 +583,16 @@ io.on('connection', socket => {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: inst?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
-      } else if (cmd === 'test:taskprogress') {
+      } else if (cmd === 'test:taskprogress' || cmd === 'test:taskprogress-failed') {
         // 后台任务进度横幅：SDK 对 running 后台任务周期性推送 task_progress（真实 server 走 emitTransient，
         // transient=true、不进 buffer / 不占 seq）。前端应【原地刷新】同一条横幅（覆盖、不追加），
-        // 完成通知(task_notification)后撤下。此处复刻该心跳序列。
-        console.log('[mock] test:taskprogress — 推送后台任务进度心跳序列 + 完成通知');
+        // 完成/失败通知(task_notification)后撤下。此处复刻该心跳序列。
+        console.log(`[mock] ${cmd} — 推送后台任务进度心跳序列 + 完成/失败通知`);
         activeInst.state = 'busy';
-        const progressSteps = ['步骤 1/3：读取源文件…', '步骤 2/3：合并重复逻辑…', '步骤 3/3：运行测试验证…'];
+        const failedTask = cmd === 'test:taskprogress-failed';
+        const progressSteps = failedTask
+          ? ['步骤 1/3：读取源文件…', '步骤 2/3：运行测试失败…']
+          : ['步骤 1/3：读取源文件…', '步骤 2/3：合并重复逻辑…', '步骤 3/3：运行测试验证…'];
         for (const message of progressSteps) {
           await delay(600);
           io.emit('agent:event', {
@@ -598,10 +601,15 @@ io.on('connection', socket => {
           });
         }
         await delay(600);
-        // 完成通知（带外）：前端 onTaskNotification → hideTaskProgress 撤下横幅
+        // 完成/失败通知（带外）：前端 onTaskNotification → hideTaskProgress 撤下横幅
         io.emit('agent:event', {
           seq: 51, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'task_notification', payload: { source: 'system', taskId: 'bg_task_1', status: 'completed', summary: '后台任务已完成' }
+          type: 'task_notification', payload: {
+            source: 'system',
+            taskId: 'bg_task_1',
+            status: failedTask ? 'failed' : 'completed',
+            summary: failedTask ? 'mock background task failed' : '后台任务已完成'
+          }
         });
         await delay(150);
         activeInst.state = 'idle';

@@ -230,6 +230,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       haptic('tap');
       modelInput.value = '';
       syncModelUI('');
+      rebuildEffortOptions(currentModel);
     };
     customModelGrid.appendChild(defCard);
 
@@ -249,6 +250,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         haptic('tap');
         modelInput.value = val;
         syncModelUI(val);
+        rebuildEffortOptions(val);
+        if (!effortSelect.value && currentEffort) {
+          socket.emit('user:setEffort', { level: null });
+        }
       };
       customModelGrid.appendChild(card);
     });
@@ -1660,6 +1665,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (!effortSelect) return;
     const { hidden, levels: show } = effortLevelsFor(modelValue, modelsList);
     if (hidden) {
+      effortSelect.value = '';
+      if (customEffortGrid) customEffortGrid.innerHTML = '';
       effortRow?.classList.add('hidden');
       pillEffort?.classList.add('hidden');
       customEffortGroup?.classList.add('hidden');

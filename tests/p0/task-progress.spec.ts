@@ -21,4 +21,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-17b 后台任务失败通知撤下进度横幅', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:taskprogress-failed');
+    await expect(page.locator('#taskProgressBanner')).toBeVisible();
+    await expect(page.locator('#taskProgressText')).toContainText('步骤 2/3', { timeout: 10_000 });
+    await waitForIdle(page);
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+    await expect(page.locator('#messages')).toContainText('后台任务失败');
+    await expect(page.locator('#messages')).toContainText('mock background task failed');
+
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -49,4 +49,27 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-09c 不支持 thinking effort 的模型不会沿用旧 effort', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#btnSettings').click();
+    await page.locator('.effort-tile[data-level="high"]').click();
+    await expect(page.locator('#effortSelect')).toHaveValue('high');
+
+    await page.locator('.model-tile[data-model="claude-3-5-haiku"]').click();
+    await expect(page.locator('#modelInput')).toHaveValue('claude-3-5-haiku');
+    await expect(page.locator('#customEffortGroup')).toHaveClass(/hidden/);
+    await expect(page.locator('#effortRow')).toHaveClass(/hidden/);
+    await expect(page.locator('#effortSelect')).toHaveValue('');
+    await page.locator('#settingsClose').click();
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('model=claude-3-5-haiku');
+    await expect(reply).toContainText('effort=model-default');
+
+    await expectNoBrowserErrors(page);
+  });
 });

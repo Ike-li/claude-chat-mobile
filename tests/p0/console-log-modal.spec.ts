@@ -43,4 +43,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-16c Console 打开关闭不丢输入草稿', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#input').fill('draft before console');
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toBeVisible();
+    await page.locator('#consoleClose').click();
+    await expect(page.locator('#consoleModal')).toBeHidden();
+    await expect(page.locator('#input')).toHaveValue('draft before console');
+
+    await page.locator('#btnSend').click();
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('draft before console');
+    await expect(page.locator('#input')).toHaveValue('');
+
+    await expectNoBrowserErrors(page);
+  });
 });
