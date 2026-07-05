@@ -24,7 +24,7 @@ The working target is:
 - Forbidden patterns: no `test.only`, `test.skip`, `test.fixme`, `networkidle`, or `waitForTimeout` in the Playwright test lane
 - Heaviest concentration: `tests/p0/workspace-sessions-sidebar.spec.ts` has 18 tests; its common sidebar flows now use `tests/helpers/p0-ui.ts`
 - P1 contract drift guard: `npm run contract:check` statically compares real `agent:event` types with visual mock event types without starting Claude, production server, or Playwright.
-- Visual mock scenario registry: `scripts/visual-mock-scenarios.js` now supports exact and prefix command registration; the first migrated group covers statusline, console-after-clear, stale-statusline, and message-edit fixtures.
+- Visual mock scenario registry: `scripts/visual-mock-scenarios.js` now supports exact, alias-list, and prefix command registration. Migrated groups cover statusline, console-after-clear, stale-statusline, message-edit, and ask-user-question fixtures.
 
 ## Completed Tooling
 
@@ -101,7 +101,7 @@ The working target is:
 
 2. Add a visual mock scenario registry
    - Registry scaffold exists in `scripts/visual-mock-scenarios.js`.
-   - First migrated group: `test:statusline`, `test:console-log-after-clear`, `test:stale-statusline-replay`, and `test:message-edit*`.
+   - Migrated groups: `test:statusline`, `test:console-log-after-clear`, `test:stale-statusline-replay`, `test:message-edit*`, and `test:question*` fixtures.
    - Continue moving remaining `test:*` groups out of the long `if/else` chain in behavior-neutral slices.
 
 3. Add stable sidebar data attributes

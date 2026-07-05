@@ -948,6 +948,97 @@ io.on('connection', socket => {
         });
       },
     },
+    {
+      commands: ['test:question', 'test:question-duplicate', 'test:question-remote-resolved', 'test:question-result-error'],
+      run: async ({ cmd, activeInst }) => {
+        console.log(`[mock] Starting ${cmd} sequence`);
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_quest_1', text: '<thinking>Claude needs clarifying requirements before proceeding...</thinking>' }
+        });
+        await delay(500);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_ask_choice', name: 'AskUserQuestion', inputSummary: 'Choose a publish channel' }
+        });
+        await delay(500);
+
+        activeInst.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        pendingQuestion = {
+          requestId: 'req_quest_choice#0',
+          toolUseId: 't_ask_choice',
+          messageId: 'msg_quest_1',
+          options: ['main (Stable Production)', 'dev (Bleeding-Edge Integration)', 'release-v1.0 (LTS)']
+        };
+
+        const questionEvent = {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'question', payload: {
+            requestId: pendingQuestion.requestId,
+            text: 'We are ready to tag and deploy this mobile dashboard app. Which branch should be our target publish destination?',
+            options: pendingQuestion.options
+          }
+        };
+
+        // Emit multi-choice question
+        socket.emit('agent:event', questionEvent);
+        if (cmd === 'test:question-duplicate') {
+          socket.emit('agent:event', { ...questionEvent, seq: 4, ts: Date.now(), type: 'question' });
+        }
+        if (cmd === 'test:question-result-error') {
+          await delay(600);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          });
+          socket.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: pendingQuestion.messageId, durationMs: 900, costUsd: 0.001, isError: true, errors: ['mock question turn failed'], models: [activeModel] }
+          });
+          pendingQuestion = null;
+        }
+        if (cmd === 'test:question-remote-resolved') {
+          await delay(600);
+          const selectedOption = pendingQuestion.options[0];
+          io.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'request_resolved', payload: { requestId: pendingQuestion.requestId, kind: 'question', outcome: 'option 0' }
+          });
+          socket.emit('agent:event', {
+            seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'tool_result', payload: { toolUseId: pendingQuestion.toolUseId, ok: true, outputSummary: `answered on another trusted device: ${selectedOption}`, denyKind: 'answered' }
+          });
+          socket.emit('agent:event', {
+            seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'text_delta', payload: { messageId: pendingQuestion.messageId, text: `\n\nQuestion was answered on another trusted device: **${selectedOption}**.` }
+          });
+          await delay(250);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          });
+          socket.emit('agent:event', {
+            seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: pendingQuestion.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+          });
+          pendingQuestion = null;
+        }
+      },
+    },
   ]);
 
   // Handle custom trigger command inputs
@@ -1627,94 +1718,6 @@ io.on('connection', socket => {
           seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
         });
-
-      } else if (cmd === 'test:question' || cmd === 'test:question-duplicate' || cmd === 'test:question-remote-resolved' || cmd === 'test:question-result-error') {
-        console.log(`[mock] Starting ${cmd} sequence`);
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'thinking_delta', payload: { messageId: 'msg_quest_1', text: '<thinking>Claude needs clarifying requirements before proceeding...</thinking>' }
-        });
-        await delay(500);
-
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: 't_ask_choice', name: 'AskUserQuestion', inputSummary: 'Choose a publish channel' }
-        });
-        await delay(500);
-
-        activeInst.state = 'permission';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        pendingQuestion = {
-          requestId: 'req_quest_choice#0',
-          toolUseId: 't_ask_choice',
-          messageId: 'msg_quest_1',
-          options: ['main (Stable Production)', 'dev (Bleeding-Edge Integration)', 'release-v1.0 (LTS)']
-        };
-
-        const questionEvent = {
-          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'question', payload: {
-            requestId: pendingQuestion.requestId,
-            text: 'We are ready to tag and deploy this mobile dashboard app. Which branch should be our target publish destination?',
-            options: pendingQuestion.options
-          }
-        };
-
-        // Emit multi-choice question
-        socket.emit('agent:event', questionEvent);
-        if (cmd === 'test:question-duplicate') {
-          socket.emit('agent:event', { ...questionEvent, seq: 4, ts: Date.now(), type: 'question' });
-        }
-        if (cmd === 'test:question-result-error') {
-          await delay(600);
-          activeInst.state = 'idle';
-          io.emit('agent:event', {
-            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-          });
-          socket.emit('agent:event', {
-            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'result', payload: { messageId: pendingQuestion.messageId, durationMs: 900, costUsd: 0.001, isError: true, errors: ['mock question turn failed'], models: [activeModel] }
-          });
-          pendingQuestion = null;
-        }
-        if (cmd === 'test:question-remote-resolved') {
-          await delay(600);
-          const selectedOption = pendingQuestion.options[0];
-          io.emit('agent:event', {
-            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'request_resolved', payload: { requestId: pendingQuestion.requestId, kind: 'question', outcome: 'option 0' }
-          });
-          socket.emit('agent:event', {
-            seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'tool_result', payload: { toolUseId: pendingQuestion.toolUseId, ok: true, outputSummary: `answered on another trusted device: ${selectedOption}`, denyKind: 'answered' }
-          });
-          socket.emit('agent:event', {
-            seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'text_delta', payload: { messageId: pendingQuestion.messageId, text: `\n\nQuestion was answered on another trusted device: **${selectedOption}**.` }
-          });
-          await delay(250);
-          activeInst.state = 'idle';
-          io.emit('agent:event', {
-            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-          });
-          socket.emit('agent:event', {
-            seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'result', payload: { messageId: pendingQuestion.messageId, durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
-          });
-          pendingQuestion = null;
-        }
 
       } else if (cmd === 'test:settings-echo') {
         console.log('[mock] Echoing selected model / permission / effort for settings regression');

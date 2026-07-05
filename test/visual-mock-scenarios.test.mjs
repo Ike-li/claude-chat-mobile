@@ -19,6 +19,21 @@ test('visual mock scenario registry dispatches exact and prefix commands', async
   ]);
 });
 
+test('visual mock scenario registry dispatches command aliases through one scenario', async () => {
+  const calls = [];
+  const registry = createVisualMockScenarioRegistry([
+    {
+      commands: ['test:question', 'test:question-duplicate'],
+      run: async context => calls.push(context.cmd),
+    },
+  ]);
+
+  assert.deepEqual(registry.commands(), ['test:question', 'test:question-duplicate']);
+  assert.equal(await registry.run('test:question', { cmd: 'test:question' }), true);
+  assert.equal(await registry.run('test:question-duplicate', { cmd: 'test:question-duplicate' }), true);
+  assert.deepEqual(calls, ['test:question', 'test:question-duplicate']);
+});
+
 test('visual mock scenario registry rejects duplicate exact and prefix keys', () => {
   assert.throws(() => createVisualMockScenarioRegistry([
     { command: 'test:statusline', run: async () => {} },
