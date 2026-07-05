@@ -174,4 +174,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-02j 点击外部会关闭斜杠命令提示且保留草稿', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#input').fill('/m');
+    await expect(page.locator('#cmdHints')).toBeVisible();
+
+    await page.locator('#messages').click({ position: { x: 20, y: 20 } });
+
+    await expect(page.locator('#cmdHints')).toBeHidden();
+    await expect(page.locator('#input')).toHaveValue('/m');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
 });

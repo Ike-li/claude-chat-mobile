@@ -44,6 +44,7 @@
     - expect: 前台恢复/pageshow 触发 sync:since found:false 时，清掉旧实例内容并回载 session:history。
     - expect: 斜杠命令提示可处理服务端返回的对象格式命令，输入 /m 时显示 /model 且不抛 JS error。
     - expect: 点击斜杠命令提示会把命令填入输入框，隐藏提示列表，并保持发送按钮可用。
+    - expect: 点击输入框外部会关闭斜杠命令提示，不丢弃草稿，也不会误生成聊天消息。
     - expect: 失败条件：空输入可发送、产生空消息、按钮状态与输入内容不一致。
 
 #### 1.3. P0-03 流式回复、Markdown、thinking 与结果栏
