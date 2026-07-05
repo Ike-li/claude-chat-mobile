@@ -61,4 +61,27 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-08d 当前提问轮失败结果会关闭选择弹窗并恢复输入', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:question-result-error');
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('#questionText')).toContainText('Which branch should be our target publish destination?');
+    await expect(page.locator('#questionOptions button')).toHaveCount(3);
+
+    await expect(page.locator('#questionModal')).toBeHidden({ timeout: 10_000 });
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).toContainText('出错：mock question turn failed');
+    const failedQuestionCard = page.locator('details.toolcard').filter({ hasText: 'AskUserQuestion' }).last();
+    await expect(failedQuestionCard.locator('.t-status')).toHaveText('❌');
+    await failedQuestionCard.locator('summary').click();
+    await expect(failedQuestionCard.locator('.t-out')).toContainText('mock question turn failed');
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+
+    await expectNoBrowserErrors(page);
+  });
 });

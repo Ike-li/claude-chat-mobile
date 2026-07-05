@@ -1146,7 +1146,7 @@ io.on('connection', socket => {
           type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
         });
 
-      } else if (cmd === 'test:question' || cmd === 'test:question-duplicate' || cmd === 'test:question-remote-resolved') {
+      } else if (cmd === 'test:question' || cmd === 'test:question-duplicate' || cmd === 'test:question-remote-resolved' || cmd === 'test:question-result-error') {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
         io.emit('agent:event', {
@@ -1192,6 +1192,19 @@ io.on('connection', socket => {
         socket.emit('agent:event', questionEvent);
         if (cmd === 'test:question-duplicate') {
           socket.emit('agent:event', { ...questionEvent, seq: 4, ts: Date.now() });
+        }
+        if (cmd === 'test:question-result-error') {
+          await delay(600);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          });
+          socket.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: pendingQuestion.messageId, durationMs: 900, costUsd: 0.001, isError: true, errors: ['mock question turn failed'], models: [activeModel] }
+          });
+          pendingQuestion = null;
         }
         if (cmd === 'test:question-remote-resolved') {
           await delay(600);
