@@ -1073,6 +1073,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       if (!cliStatusEl || !p || typeof p !== 'object') return;
       // 守护：如果 payload 里的 instanceId 与前端当前的 viewingInstanceId 不一致，则丢弃渲染（防止旧 tab 覆盖）
       if (p.instanceId && viewingInstanceId && p.instanceId !== viewingInstanceId) return;
+      // 兼容陈旧重放：老 payload 可能没有 instanceId，但仍带 cwd；用 cwd 兜底防止别的工作区状态线覆盖当前视图。
+      if (!p.instanceId && p.cwd && currentCwd && p.cwd !== currentCwd) return;
       // 空启动页采用极简底部：模型/权限/思考 chips 即可，statusLine 进入消息流后再显示。
       if (messagesEl.classList.contains('empty-start')) return;
       const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);

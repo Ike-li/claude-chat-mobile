@@ -1192,6 +1192,36 @@ io.on('connection', socket => {
           type: 'result', payload: { text: 'Simulated Terminal StatusLine updated successfully above!' }
         });
 
+      } else if (cmd === 'test:stale-statusline-replay') {
+        console.log('[mock] Replaying stale cross-workspace status_line without instanceId');
+        const slNow = Date.now();
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: slNow,
+          type: 'status_line', payload: {
+            ts: slNow,
+            model: 'claude-3-5-haiku',
+            project: 'another-react-project',
+            cwd: '/Users/you/code/another-react-project',
+            git: { branch: 'feature/other-workspace', changed: 7, ahead: 1, behind: 0, insertions: 88, deletions: 13, repo: 'Ike-li/another-react-project' },
+            ctx: { tokens: 99000, cacheHitPct: 12, in: 6000, w: 12000, r: 3000, reused: 750000, cacheExpiresAt: slNow + 180000 },
+            cost: 0.99,
+            duration: { wallMs: 9000, apiMs: 6400 },
+            version: '9.9.999'
+          }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Stale cross-workspace StatusLine replay emitted.' }
+        });
+
+        await delay(300);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'Stale cross-workspace StatusLine replay emitted.' }
+        });
+
       } else if (cmd === 'test:settings-echo') {
         console.log('[mock] Echoing selected model / permission / effort for settings regression');
         activeInst.state = 'busy';

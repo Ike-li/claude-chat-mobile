@@ -26,6 +26,7 @@ Current P0 mock-only coverage also includes:
 - A mock `logs:get` response with a stable `[MOCK_LOG]` trace row so the Console modal can verify Clear affects only the log pane, not chat history.
 - Visual mock Socket.IO auth rejects `bad-token`, `invalid-token`, and `expired-token` with `unauthorized` so P0 can cover the token retry UI without enabling production `AUTH_TOKEN`.
 - Status line coverage verifies the prompt-cache TTL estimate text, including the `est` marker for derived cache timing.
+- Status line coverage verifies stale cross-workspace status replays without `instanceId` are ignored by the current workspace view.
 - Input coverage verifies the foreground turn queue-full state disables Send, keeps the user's draft, and re-enables Send after the queue drains.
 - Input coverage verifies messages sent while disconnected enter the visible offline queue and are retried after reconnect.
 - Input coverage verifies the ultracode quick-send button injects the per-turn keyword once and completes the mock turn.
