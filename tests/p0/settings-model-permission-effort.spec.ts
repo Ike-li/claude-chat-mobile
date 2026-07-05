@@ -72,4 +72,31 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-09d 新会话空首页设置会应用到首条消息', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#btnNew').click();
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+
+    await page.locator('#btnSettings').click();
+    await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+    await page.locator('.perm-tile[data-mode="plan"]').click();
+    await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await page.locator('.effort-tile[data-level="high"]').click();
+    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
+    await expect(page.locator('#effortSelect')).toHaveValue('high');
+    await page.locator('#settingsClose').click();
+
+    await sendChatMessage(page, 'test:fresh-settings-echo');
+    await expect(page.locator('#messages')).not.toHaveClass(/empty-start/);
+    await waitForIdle(page);
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('新会话设置回显：model=claude-3-opus[1m]');
+    await expect(reply).toContainText('permission=plan');
+    await expect(reply).toContainText('effort=high');
+
+    await expectNoBrowserErrors(page);
+  });
 });

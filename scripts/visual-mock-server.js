@@ -82,6 +82,8 @@ let viewingInstanceId = 'inst_1';
 let permissionMode = 'default';
 let effortLevel = null;
 let activeModel = 'claude-3-5-sonnet';
+let pendingFreshPermissionMode;
+let pendingFreshEffortLevel;
 
 function createDefaultInstances() {
   return [{
@@ -112,6 +114,8 @@ function resetMockState() {
   permissionMode = 'default';
   effortLevel = null;
   activeModel = 'claude-3-5-sonnet';
+  pendingFreshPermissionMode = undefined;
+  pendingFreshEffortLevel = undefined;
   mockInstances.splice(0, mockInstances.length, ...createDefaultInstances());
   pendingPermission = null;
   pendingQuestion = null;
@@ -121,6 +125,56 @@ function resetMockState() {
   alwaysAllowedPermissionNames = new Set();
   activeEpoch = 'mock-epoch-init';
   deniedDeviceRetryPending = false;
+}
+
+function pendingFreshPermissionOrDefault() {
+  return pendingFreshPermissionMode === undefined ? 'default' : pendingFreshPermissionMode;
+}
+
+function pendingFreshEffortOrDefault() {
+  return pendingFreshEffortLevel === undefined ? null : pendingFreshEffortLevel;
+}
+
+function consumeFreshPrefs() {
+  const prefs = {
+    permissionMode: pendingFreshPermissionOrDefault(),
+    effort: pendingFreshEffortOrDefault()
+  };
+  pendingFreshPermissionMode = undefined;
+  pendingFreshEffortLevel = undefined;
+  return prefs;
+}
+
+function openFreshMockInstance(requestedModel) {
+  const freshId = 'inst_fresh';
+  const freshPrefs = consumeFreshPrefs();
+  const freshModel = requestedModel || activeModel;
+  let freshInst = mockInstances.find(i => i.instanceId === freshId);
+  if (!freshInst) {
+    freshInst = {
+      instanceId: freshId,
+      cwd: mockInstances[0].cwd,
+      sessionId: null,
+      title: null,
+      state: 'busy',
+      permissionMode: freshPrefs.permissionMode,
+      effort: freshPrefs.effort,
+      model: freshModel
+    };
+    mockInstances.push(freshInst);
+  } else {
+    Object.assign(freshInst, {
+      state: 'busy',
+      permissionMode: freshPrefs.permissionMode,
+      effort: freshPrefs.effort,
+      model: freshModel
+    });
+  }
+  viewingInstanceId = freshId;
+  permissionMode = freshPrefs.permissionMode;
+  effortLevel = freshPrefs.effort;
+  activeModel = freshModel;
+  return freshInst;
 }
 
 function createPendingDeviceRequests() {
@@ -239,10 +293,12 @@ io.on('connection', socket => {
     console.log(`[mock] Set permission mode: ${mode} for ${instanceId}`);
     if (mode) {
       permissionMode = mode;
-      const inst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
+      if (!instanceId && viewingInstanceId === null) pendingFreshPermissionMode = mode;
+      const targetInstanceId = instanceId || viewingInstanceId;
+      const inst = mockInstances.find(i => i.instanceId === targetInstanceId);
       if (inst) inst.permissionMode = mode;
       io.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: null, instanceId: instanceId || viewingInstanceId, ts: Date.now(),
+        seq: 0, epoch: 'server', sessionId: null, instanceId: targetInstanceId, ts: Date.now(),
         type: 'permission_mode', payload: { mode }
       });
       // Broadcast instances update
@@ -252,7 +308,9 @@ io.on('connection', socket => {
           viewingInstanceId,
           viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
           dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-          instances: mockInstances
+          instances: mockInstances,
+          defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
+          defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
         }
       });
     }
@@ -263,10 +321,12 @@ io.on('connection', socket => {
     const { level, instanceId } = payload || {};
     console.log(`[mock] Set thinking effort: ${level} for ${instanceId}`);
     effortLevel = level;
-    const inst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
+    if (!instanceId && viewingInstanceId === null) pendingFreshEffortLevel = level ?? null;
+    const targetInstanceId = instanceId || viewingInstanceId;
+    const inst = mockInstances.find(i => i.instanceId === targetInstanceId);
     if (inst) inst.effort = level;
     io.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: null, instanceId: instanceId || viewingInstanceId, ts: Date.now(),
+      seq: 0, epoch: 'server', sessionId: null, instanceId: targetInstanceId, ts: Date.now(),
       type: 'effort_mode', payload: { level }
     });
     // Broadcast instances update
@@ -276,7 +336,9 @@ io.on('connection', socket => {
         viewingInstanceId,
         viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-        instances: mockInstances
+        instances: mockInstances,
+        defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
+        defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
       }
     });
   });
@@ -333,6 +395,10 @@ io.on('connection', socket => {
   socket.on('session:new', () => {
     console.log('[mock] session:new → 进空首页（viewingInstanceId=null）');
     viewingInstanceId = null;
+    permissionMode = 'default';
+    effortLevel = null;
+    pendingFreshPermissionMode = undefined;
+    pendingFreshEffortLevel = undefined;
     io.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'instances', payload: {
@@ -340,8 +406,8 @@ io.on('connection', socket => {
         viewingCwd: mockInstances[0].cwd,
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
         instances: mockInstances,
-        defaultPermissionMode: 'default',
-        defaultEffort: null
+        defaultPermissionMode: pendingFreshPermissionOrDefault(),
+        defaultEffort: pendingFreshEffortOrDefault()
       }
     });
   });
@@ -528,11 +594,8 @@ io.on('connection', socket => {
         await delay(150);
         // 懒开：新建 FRESH 实例（sessionId=null，区别于 resume），切 viewing 并广播 instances
         // —— 这一步触发前端 bindView→clearView 的 setBusy(false)，是 bug 现场。
-        const freshId = 'inst_fresh';
-        if (!mockInstances.some(i => i.instanceId === freshId)) {
-          mockInstances.push({ instanceId: freshId, cwd: mockInstances[0].cwd, sessionId: null, title: null, state: 'busy', permissionMode: 'default', effort: null, model: activeModel });
-        }
-        viewingInstanceId = freshId;
+        const freshInst = openFreshMockInstance(requestedModel);
+        const freshId = freshInst.instanceId;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
@@ -554,6 +617,36 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: null, instanceId: freshId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
+        });
+
+      } else if (cmd === 'test:fresh-settings-echo') {
+        console.log('[mock] test:fresh-settings-echo — 回显新会话首发设置');
+        await delay(150);
+        const freshInst = openFreshMockInstance(requestedModel);
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        const effectiveModel = requestedModel || '未指定(沿用)';
+        const effectiveEffort = freshInst.effort || 'model-default';
+        await delay(250);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: null, instanceId: freshInst.instanceId, ts: Date.now(),
+          type: 'text_delta', payload: {
+            messageId: 'msg_fresh_settings_echo_1',
+            text: `新会话设置回显：model=${effectiveModel}; permission=${freshInst.permissionMode}; effort=${effectiveEffort}`
+          }
+        });
+
+        freshInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: null, instanceId: freshInst.instanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_fresh_settings_echo_1', durationMs: 250, costUsd: 0, isError: false, models: [requestedModel || activeModel] }
         });
 
       } else if (cmd === 'test:pendingsnapshot' || cmd === 'test:pendingsnapshot-duplicate') {
