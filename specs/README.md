@@ -50,6 +50,7 @@ Current P0 mock-only coverage also includes:
 - AskUserQuestion coverage includes duplicate same-`requestId` replay without showing repeated choice sheets after reconnect/sync paths.
 - Task progress coverage includes failed background tasks so failure notifications also clear the progress banner.
 - Mirror-state coverage verifies terminal read-only catch-up locks the input and allows an explicit user takeover.
+- Mirror-state coverage verifies switching to another session clears the read-only catch-up lock so it does not block unrelated sessions.
 - Device trust coverage includes pending, denied, denied retry back to pending, and trusted-device approval/rejection updates through mock Socket.IO events.
 - Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.
 - Attachment isolation coverage verifies unsent attachment chips are cleared on session switch so files selected in one session are not sent to another session.

@@ -54,4 +54,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-17d 切换会话会清除只读追平锁', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await sendChatMessage(page, 'test:mirror-readonly');
+    await expect(page.locator('#mirrorBanner')).toBeVisible();
+    await expect(page.locator('#input')).toBeDisabled();
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    await page.locator('button[title="Another App Concurrency"]').click();
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#mirrorBanner')).toBeHidden();
+    await expect(page.locator('#input')).toBeEnabled();
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:settings-echo');
+
+    await expectNoBrowserErrors(page);
+  });
 });
