@@ -25,6 +25,7 @@ Current P0 mock-only coverage also includes:
 - `test:settings-echo` in the visual mock server, which renders the selected model, permission mode, and thinking effort from the next sent message so the settings panel is tested through user-visible chat behavior.
 - A mock `logs:get` response with a stable `[MOCK_LOG]` trace row so the Console modal can verify Clear affects only the log pane, not chat history.
 - Visual mock Socket.IO auth rejects `bad-token`, `invalid-token`, and `expired-token` with `unauthorized` so P0 can cover the token retry UI without enabling production `AUTH_TOKEN`.
+- Long-stream interrupt coverage verifies that a stopped stream does not keep appending chunks after a later command completes.
 - Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet.
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
 - Pending device request cards cover both trusted-device approval and rejection updates through mock Socket.IO events.

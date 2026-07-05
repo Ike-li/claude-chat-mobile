@@ -22,4 +22,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-04b 停止后旧长流不再继续追加到旧消息', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:stream-long');
+    const interruptedReply = page.locator('[data-testid="assistant-message"]').filter({ hasText: 'Chunk 1' }).first();
+    await expect(interruptedReply).toContainText('Chunk 1', { timeout: 10_000 });
+    await page.locator('#btnStopNew').click();
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).toContainText('已中断');
+
+    await sendChatMessage(page, 'test:tool');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('All tools executed cleanly');
+    await expect(interruptedReply).not.toContainText('Chunk 4');
+
+    await expectNoBrowserErrors(page);
+  });
 });
