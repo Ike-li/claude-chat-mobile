@@ -103,6 +103,7 @@ let pendingQuestion = null;
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let syncPendingSnapshotInstanceId = null;
 let pendingDevices = [];
+let alwaysAllowedPermissionNames = new Set();
 let activeEpoch = 'mock-epoch-init';
 
 function resetMockState() {
@@ -116,6 +117,7 @@ function resetMockState() {
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
   pendingDevices = [];
+  alwaysAllowedPermissionNames = new Set();
   activeEpoch = 'mock-epoch-init';
 }
 
@@ -671,6 +673,28 @@ io.on('connection', socket => {
         });
         await delay(500);
 
+        if (alwaysAllowedPermissionNames.has('run_command')) {
+          socket.emit('agent:event', {
+            seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'tool_result', payload: { toolUseId: 't_git_push', ok: true, outputSummary: 'git push success: branch main -> origin' }
+          });
+          socket.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'text_delta', payload: { messageId: 'msg_perm_1', text: '\n\n✓ Successfully pushed latest codebase additions!' }
+          });
+          await delay(250);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          });
+          socket.emit('agent:event', {
+            seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: 'msg_perm_1', durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+          });
+          return;
+        }
+
         // Force permission state
         activeInst.state = 'permission';
         io.emit('agent:event', {
@@ -1064,6 +1088,9 @@ io.on('connection', socket => {
       });
 
       if (decision === 'allow') {
+        if (alwaysThisSession && pendingPermission.name) {
+          alwaysAllowedPermissionNames.add(pendingPermission.name);
+        }
         // 修复后的后端行为：批准 ExitPlanMode 等含 setMode 的请求 → 切权限档并广播 permission_mode，
         // 使手机端权限档图标跟随（TC-15 回归的核心断言点）。
         if (pendingPermission.setMode) {

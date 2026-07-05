@@ -35,4 +35,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-06b 本会话总是允许同类操作后不再重复弹审批', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await page.locator('#permAlways').check();
+    await page.locator('#permAllow').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+
+    await sendChatMessage(page, 'test:permission');
+    await waitForIdle(page);
+    await expect(page.locator('#permModal')).toBeHidden();
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Successfully pushed');
+
+    await expectNoBrowserErrors(page);
+  });
 });
