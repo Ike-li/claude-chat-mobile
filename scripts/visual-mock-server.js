@@ -13,6 +13,16 @@ const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: { origin: '*' }
 });
+const REJECTED_AUTH_TOKENS = new Set(['bad-token', 'invalid-token', 'expired-token']);
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+  if (REJECTED_AUTH_TOKENS.has(token)) {
+    next(new Error('unauthorized'));
+    return;
+  }
+  next();
+});
 
 // Calculate asset version finger-print to bypass caching (matching server.js)
 const SELF_JS_DIR = join(HERE, '../public', 'js');
