@@ -87,6 +87,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-02f 前台恢复 sync 不重复已见回复', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:foreground-sync-replay');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').filter({ hasText: 'Foreground sync baseline response.' })).toHaveCount(1);
+
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+    await expect(page.locator('#messages')).toContainText('Foreground sync replay completed.', { timeout: 10_000 });
+    await expect(page.locator('[data-testid="assistant-message"]').filter({ hasText: 'Foreground sync baseline response.' })).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-02e ultracode 快捷发送只注入一次关键词', async ({ page }) => {
     await gotoMock(page);
 

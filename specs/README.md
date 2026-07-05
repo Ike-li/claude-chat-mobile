@@ -29,6 +29,7 @@ Current P0 mock-only coverage also includes:
 - Status line coverage verifies stale cross-workspace status replays without `instanceId` are ignored by the current workspace view.
 - Input coverage verifies the foreground turn queue-full state disables Send, keeps the user's draft, and re-enables Send after the queue drains.
 - Input coverage verifies messages sent while disconnected enter the visible offline queue and are retried after reconnect.
+- Input coverage verifies a foreground `pageshow` sync replay does not duplicate an already-rendered assistant reply.
 - Input coverage verifies selecting the ultracode effort preset injects the per-turn keyword once and completes the mock turn.
 - Auth failure coverage includes opening the access-help sheet and retrying by Enter from the token gate without leaking rejected or accepted tokens.
 - Settings coverage verifies unsupported-model effort controls hide and do not leak a stale thinking effort into the next turn.

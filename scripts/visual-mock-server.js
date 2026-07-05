@@ -107,6 +107,7 @@ let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pe
 let syncPendingSnapshotInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
+let foregroundSyncReplayMode = false;
 let pendingDevices = [];
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
@@ -127,6 +128,7 @@ function resetMockState() {
   syncPendingSnapshotInstanceId = null;
   lateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
+  foregroundSyncReplayMode = false;
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
@@ -749,6 +751,23 @@ io.on('connection', socket => {
       });
       ack(1, { gap: true });
     } else if (instanceId === 'inst_1') {
+      if (foregroundSyncReplayMode) {
+        foregroundSyncReplayMode = false;
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_foreground_sync_1', text: 'Foreground sync baseline response.' }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_foreground_sync_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Foreground sync replay completed.' }
+        });
+        ack(3);
+        return;
+      }
       ack(0); // Fallback to history or empty
     } else {
       ack(0);
@@ -1587,6 +1606,31 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_disconnect_now_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
         setTimeout(() => socket.disconnect(true), 50);
+
+      } else if (cmd === 'test:foreground-sync-replay') {
+        console.log('[mock] Completing current turn, then arming duplicate foreground sync replay');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_foreground_sync_1', text: 'Foreground sync baseline response.' }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_foreground_sync_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+        foregroundSyncReplayMode = true;
 
       } else if (cmd === 'test:queuefull') {
         console.log('[mock] Simulating full foreground turn queue');
