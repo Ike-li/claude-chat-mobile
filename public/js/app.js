@@ -915,8 +915,14 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         
         // 追加任何可能附带的附件
         if (Array.isArray(p.attachments) && p.attachments.length) {
-          const wrap = el(`<div class="flex flex-wrap gap-2 mt-2"></div>`);
+          let wrap = null;
           for (const a of p.attachments) {
+            const alreadyRendered = a.name && (
+              matchedBubble.textContent.includes(a.name)
+              || [...matchedBubble.querySelectorAll('img')].some(img => img.title === a.name)
+            );
+            if (alreadyRendered) continue;
+            if (!wrap) wrap = el(`<div class="flex flex-wrap gap-2 mt-2"></div>`);
             if (a.thumb) {
               const img = el(`<img class="max-w-[8rem] max-h-32 rounded-lg">`);
               img.src = a.thumb; img.title = a.name || '';
@@ -928,7 +934,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
               wrap.appendChild(chip);
             }
           }
-          matchedBubble.appendChild(wrap);
+          if (wrap) matchedBubble.appendChild(wrap);
         }
         if (p.text) appendCopyAction(matchedBubble, () => p.text, 'right');
         scrollBottom(true);

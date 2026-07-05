@@ -117,4 +117,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-18e 离线附件重发后不重复显示附件 chip', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:disconnect-now');
+    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+
+    await page.locator('#fileInput').setInputFiles({
+      name: 'offline-attachment.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('offline attachment payload')
+    });
+    await expect(page.locator('#attachTray')).toContainText('offline-attachment.txt');
+    await page.locator('#input').fill('test:settings-echo');
+    await page.locator('#btnSend').click();
+
+    const queued = page.locator('.msg-frame.opacity-70').last();
+    await expect(queued).toContainText('offline-attachment.txt');
+    await expect(queued.locator('.pending-indicator')).toContainText('正在等待连接');
+    await expect(page.locator('#attachTray')).toBeHidden();
+
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitForIdle(page);
+    await expect(page.locator('.pending-indicator')).toHaveCount(0);
+    await expect(page.locator('#messages').getByText('offline-attachment.txt')).toHaveCount(1);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+
+    await expectNoBrowserErrors(page);
+  });
 });
