@@ -239,6 +239,36 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-11l 关闭当前待审批会话后切到剩余会话且不残留待审批状态', async ({ page }) => {
+    await gotoMock(page);
+    await page.setViewportSize({ width: 900, height: 812 });
+
+    await sendChatMessage(page, 'test:close-current-pending');
+    await expect(page.locator('#messages')).toContainText('Close current pending source session');
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
+    const currentRow = page.locator('[data-testid="session-row"][data-instance-id="inst_1"]');
+    await expect(currentRow).toContainText('Visual Sandbox (Main)');
+    await expect(currentRow.locator('[data-instance-badge]')).toHaveText('⚠️');
+
+    page.once('dialog', dialog => dialog.accept());
+    await currentRow.locator('button', { hasText: '✕' }).click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#permModal')).toBeHidden();
+    await expect(page.locator('#messages')).not.toContainText('Close current pending source session');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
+    await expect(page.locator('#sessionsDot')).toBeHidden();
+
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#sessionPanel')).not.toContainText('Visual Sandbox (Main)');
+    await expect(page.locator('#sessionPanel')).not.toContainText('claude-chat-mobile');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11h 其它工作区新会话首发后不回跳默认工作区', async ({ page }) => {
     await gotoMock(page);
 
