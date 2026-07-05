@@ -53,4 +53,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-11c 后台工作区完成态显示顶部和侧栏角标', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:background-done');
+    await waitForIdle(page);
+    await expect(page.locator('#sessionsDot')).toBeVisible();
+    await expect(page.locator('#sessionsDot')).toHaveText('✅');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区已完成');
+
+    await page.locator('#btnSessions').click();
+    const backgroundDir = page.locator('#sessionPanel div[data-dir="/Users/you/code/another-react-project"]');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveText('✅');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '已完成');
+
+    await backgroundDir.locator('button').first().click();
+    const backgroundRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    await expect(backgroundRow).toContainText('Another App Concurrency');
+    await expect(backgroundRow.locator('[data-instance-badge]')).toHaveText('✅');
+
+    await expectNoBrowserErrors(page);
+  });
 });

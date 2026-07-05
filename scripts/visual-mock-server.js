@@ -1160,6 +1160,41 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_queue_full_1', durationMs: 1200, costUsd: 0, isError: false, models: [activeModel] }
         });
 
+      } else if (cmd === 'test:background-done') {
+        console.log('[mock] Marking background workspace as done');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another',
+            title: 'Another App Concurrency',
+            state: 'done',
+            permissionMode: 'plan',
+            effort: 'medium',
+            model: 'claude-3-5-haiku'
+          });
+        }
+        const bgInst = mockInstances.find(i => i.instanceId === 'inst_2');
+        if (bgInst) bgInst.state = 'done';
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: activeInst.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Background workspace finished and is ready to review.' }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_background_done_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+
       } else if (cmd === 'test:tab') {
         console.log('[mock] Simulating multiple tab concurrency');
         if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
