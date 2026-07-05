@@ -657,6 +657,47 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_tool_1', durationMs: 4400, costUsd: 0.0035, isError: false, models: [activeModel] }
         });
 
+      } else if (cmd === 'test:tool-out-of-order') {
+        console.log('[mock] Starting test:tool-out-of-order sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_order_read', name: 'read_file', inputSummary: 'config.json' }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_order_cmd', name: 'run_command', inputSummary: 'npm run check' }
+        });
+        await delay(500);
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_order_cmd', ok: true, outputSummary: 'command result: npm run check syntax OK' }
+        });
+        await delay(250);
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_order_read', ok: true, outputSummary: 'read_file result: config.json contains mock settings' }
+        });
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_tool_ooo_1', text: 'Out-of-order tool results stayed attached to their original cards.' }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_tool_ooo_1', durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+        });
+
       } else if (cmd === 'test:permission') {
         console.log('[mock] Starting test:permission sequence');
         activeInst.state = 'busy';

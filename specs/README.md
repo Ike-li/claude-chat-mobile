@@ -28,6 +28,7 @@ Current P0 mock-only coverage also includes:
 - Status line coverage verifies the prompt-cache TTL estimate text, including the `est` marker for derived cache timing.
 - Auth failure coverage includes opening the access-help sheet from the token gate without leaking the rejected token.
 - Long-stream interrupt coverage verifies that a stopped stream does not keep appending chunks after a later command completes.
+- Tool-card coverage includes out-of-order tool results to ensure outputs stay attached to the correct visible card.
 - Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet.
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
 - Pending snapshot reconciliation covers duplicate same-`requestId` pending entries without showing repeated approval sheets.
