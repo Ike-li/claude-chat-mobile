@@ -27,6 +27,27 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-11p 切换会话后模型和思考强度跟随目标实例', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:tab-model-effort');
+    await waitForIdle(page);
+
+    await page.locator('#btnSessions').click();
+    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
+    await expect(page.locator('button[title="Another App Concurrency"]')).toBeVisible();
+    await page.locator('button[title="Another App Concurrency"]').click();
+
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await expect(page.locator('#pillModelText')).toContainText('claude-3-opus[1m]');
+    await expect(page.locator('#pillEffort')).toBeVisible();
+    await expect(page.locator('#pillEffortText')).toContainText('high');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11b 关闭后台会话不影响当前会话', async ({ page }) => {
     await gotoMock(page);
     await page.setViewportSize({ width: 900, height: 812 });

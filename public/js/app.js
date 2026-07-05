@@ -1799,12 +1799,14 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   function adoptPanelState(inst) {
     if (!inst) return; // 新会话尚无实例（viewingInstanceId=null）：保持现状不乱跳
     // 始终更新模型显示——即使 inst.model 为 null/空也清掉旧值，防切换工作区时上个区的模型名泄漏
-    updateModelAndSuffix(inst.model || '');
+    const rawModel = inst.model || '';
+    updateModelAndSuffix(rawModel);
+    const effortModelValue = rawModel || currentModel;
     if (modelInput) {
       if (inst.model) {
         ensureModelOption(currentModel);
         modelInput.value = currentModel;
-        rebuildEffortOptions(currentModel);
+        rebuildEffortOptions(effortModelValue);
       } else {
         modelInput.value = '';
       }
@@ -1812,6 +1814,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
     setPermMode(inst.permissionMode || 'default', true);
     setEffortMode(inst.effort ?? null, true);
+    rebuildEffortOptions(effortModelValue);
   }
 
   // tab 栏快照回执/重放（台阶3，Step A+B 均已落地）。首次只定基线不动视图（刷新/重连不清空）；

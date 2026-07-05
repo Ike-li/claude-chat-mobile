@@ -1928,6 +1928,42 @@ io.on('connection', socket => {
           type: 'result', payload: { text: 'Concurrency Mode Triggered! A second workspace tab is now live.' }
         });
 
+      } else if (cmd === 'test:tab-model-effort') {
+        console.log('[mock] Simulating tab switch with model and effort state');
+        const existingInst2 = mockInstances.find(i => i.instanceId === 'inst_2');
+        const modelEffortInst = {
+          instanceId: 'inst_2',
+          cwd: '/Users/you/code/another-react-project',
+          sessionId: 'mock-session-another',
+          title: 'Another App Concurrency',
+          state: 'idle',
+          permissionMode: 'plan',
+          effort: 'high',
+          model: 'claude-3-opus[1m]'
+        };
+        if (existingInst2) Object.assign(existingInst2, modelEffortInst);
+        else mockInstances.push(modelEffortInst);
+
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Model and effort switch fixture ready.' }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_tab_model_effort_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+
       } else if (cmd === 'test:close-current-pending') {
         console.log('[mock] test:close-current-pending — 当前 inst_1 待审批，同时保留 inst_2 作为关闭后的回退会话');
         if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
