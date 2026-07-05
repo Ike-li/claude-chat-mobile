@@ -49,6 +49,7 @@ Current P0 mock-only coverage also includes:
 - Pending snapshot reconciliation covers duplicate same-`requestId` pending entries without showing repeated approval sheets, and restores AskUserQuestion choice sheets from `sync:since` pending snapshots.
 - AskUserQuestion coverage includes duplicate same-`requestId` replay without showing repeated choice sheets after reconnect/sync paths.
 - Task progress coverage includes failed background tasks so failure notifications also clear the progress banner.
+- Task progress coverage verifies another workspace's progress heartbeat does not show a current-session banner while its busy state remains visible in the sessions entry and sidebar.
 - Mirror-state coverage verifies terminal read-only catch-up locks the input and allows an explicit user takeover.
 - Mirror-state coverage verifies switching to another session clears the read-only catch-up lock so it does not block unrelated sessions.
 - Device trust coverage includes pending, denied, denied retry back to pending, and trusted-device approval/rejection updates through mock Socket.IO events.

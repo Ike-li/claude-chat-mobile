@@ -78,4 +78,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-17e 后台 task_progress 不污染当前会话但保留忙碌角标', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:background-taskprogress');
+    await waitForIdle(page);
+
+    await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+    await expect(page.locator('#messages')).not.toContainText('另一个工作区正在运行后台任务');
+    await expect(page.locator('#sessionsDot')).toHaveText('⏳');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区运行中');
+
+    await page.locator('#btnSessions').click();
+    const backgroundDir = page.locator('#sessionPanel div[data-dir="/Users/you/code/another-react-project"]');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveText('⏳');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '运行中');
+    await backgroundDir.locator('button').first().click();
+    const backgroundRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
+    await expect(backgroundRow.locator('[data-instance-badge]')).toHaveText('🤖');
+    await expect(backgroundRow.locator('[data-instance-badge]')).toHaveAttribute('title', '运行中：Task');
+
+    await expectNoBrowserErrors(page);
+  });
 });
