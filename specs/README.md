@@ -39,6 +39,7 @@ Current P0 mock-only coverage also includes:
 - Tool-card coverage includes out-of-order tool results to ensure outputs stay attached to the correct visible card.
 - Tool-card coverage verifies an in-flight tool is marked failed and the input recovers when the turn ends with an error.
 - Permission approval coverage includes the per-session "always allow this tool type" path, so a repeated same-session command can complete without a second approval sheet and the rule does not leak to another live session.
+- Permission approval coverage verifies a failed `result.isError` turn closes the active approval sheet, marks the visible tool card failed, and leaves the input usable for the next message.
 - Remote request resolution coverage verifies stale permission and AskUserQuestion sheets close when another trusted device resolves the request.
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
 - Multi-session routing guards cover closing the current session and falling back to the remaining session without leaving the closed session's history on screen.

@@ -1003,7 +1003,7 @@ io.on('connection', socket => {
           type: 'error', payload: { message: 'mock tool crashed while running npm run failing-script' }
         });
 
-      } else if (cmd === 'test:permission' || cmd === 'test:permission-remote-resolved') {
+      } else if (cmd === 'test:permission' || cmd === 'test:permission-remote-resolved' || cmd === 'test:permission-result-error') {
         console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
         io.emit('agent:event', {
@@ -1071,6 +1071,20 @@ io.on('connection', socket => {
             cwd: pendingPermission.cwd
           }
         });
+
+        if (cmd === 'test:permission-result-error') {
+          await delay(600);
+          activeInst.state = 'idle';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          });
+          socket.emit('agent:event', {
+            seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: pendingPermission.messageId, durationMs: 900, costUsd: 0.001, isError: true, errors: ['mock permission turn failed'], models: [activeModel] }
+          });
+          pendingPermission = null;
+        }
 
         if (cmd === 'test:permission-remote-resolved') {
           await delay(600);
