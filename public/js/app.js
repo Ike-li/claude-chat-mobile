@@ -9,7 +9,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     localStorage.setItem('auth_token', decodeURIComponent(hashMatch[1]));
     history.replaceState(null, '', location.pathname);
   }
-  const token = localStorage.getItem('auth_token') || '';
+  let token = localStorage.getItem('auth_token') || '';
 
   // ---- 设备指纹生成与获取 (TOFU) ----
   let deviceToken = localStorage.getItem('device_token');
@@ -420,6 +420,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
+    if (authToken) authToken.value = '';         // 成功后不把令牌留在本地表单状态里
     accessRelogin?.classList.add('hidden');      // 连上即收起重登浮层
     connectErrorCount = 0;
     if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = '进入'; }
@@ -555,6 +556,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const val = authToken?.value.trim();
     if (!val) { showAuthGate('请输入访问令牌'); return; }
     localStorage.setItem('auth_token', val);
+    token = val;
     socket.auth = { token: val, deviceToken };
     if (authError) authError.classList.add('hidden');
     if (authSubmit) { authSubmit.disabled = true; authSubmit.textContent = '连接中…'; }
