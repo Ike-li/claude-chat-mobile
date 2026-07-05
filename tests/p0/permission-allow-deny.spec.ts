@@ -53,4 +53,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-06c 其它设备解决权限请求后当前审批弹窗自动关闭', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:permission-remote-resolved');
+    await expect(page.locator('#permModal')).toBeVisible();
+    await expect(page.locator('#permTool')).toHaveText('run_command');
+    await expect(page.locator('#permInput')).toContainText('git push origin main');
+
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('✅');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('approved on another trusted device');
+
+    await expectNoBrowserErrors(page);
+  });
 });

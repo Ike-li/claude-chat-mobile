@@ -45,4 +45,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-08c 其它设备回答问题后当前选择弹窗自动关闭', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:question-remote-resolved');
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('#questionText')).toContainText('Which branch should be our target publish destination?');
+    await expect(page.locator('#questionOptions button')).toHaveCount(3);
+
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('☑️');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('answered on another trusted device');
+
+    await expectNoBrowserErrors(page);
+  });
 });
