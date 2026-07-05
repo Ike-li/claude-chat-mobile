@@ -1150,6 +1150,72 @@ io.on('connection', socket => {
         }
       },
     },
+    {
+      command: 'test:fresh-settings-echo',
+      run: async ({ requestedModel }) => {
+        console.log('[mock] test:fresh-settings-echo — 回显新会话首发设置');
+        await delay(150);
+        const freshInst = openFreshMockInstance(requestedModel);
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        const effectiveModel = requestedModel || '未指定(沿用)';
+        const effectiveEffort = freshInst.effort || 'model-default';
+        await delay(250);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: null, instanceId: freshInst.instanceId, ts: Date.now(),
+          type: 'text_delta', payload: {
+            messageId: 'msg_fresh_settings_echo_1',
+            text: `新会话设置回显：model=${effectiveModel}; permission=${freshInst.permissionMode}; effort=${effectiveEffort}`
+          }
+        });
+
+        freshInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: null, instanceId: freshInst.instanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_fresh_settings_echo_1', durationMs: 250, costUsd: 0, isError: false, models: [requestedModel || activeModel] }
+        });
+      },
+    },
+    {
+      command: 'test:settings-echo',
+      run: async ({ activeInst, requestedModel }) => {
+        console.log('[mock] Echoing selected model / permission / effort for settings regression');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        const effectiveModel = requestedModel || '未指定(沿用)';
+        const effectivePermission = activeInst.permissionMode || permissionMode || 'default';
+        const effectiveEffort = activeInst.effort || effortLevel || 'model-default';
+        await delay(250);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: {
+            messageId: 'msg_settings_echo_1',
+            text: `设置回显：model=${effectiveModel}; permission=${effectivePermission}; effort=${effectiveEffort}`
+          }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_settings_echo_1', durationMs: 250, costUsd: 0, isError: false, models: [requestedModel || activeModel] }
+        });
+      },
+    },
   ]);
 
   // Handle custom trigger command inputs
@@ -1335,36 +1401,6 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: null, instanceId: freshId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_fresh_1', durationMs: 1300, costUsd: 0.001, isError: false, models: [activeModel] }
-        });
-
-      } else if (cmd === 'test:fresh-settings-echo') {
-        console.log('[mock] test:fresh-settings-echo — 回显新会话首发设置');
-        await delay(150);
-        const freshInst = openFreshMockInstance(requestedModel);
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        const effectiveModel = requestedModel || '未指定(沿用)';
-        const effectiveEffort = freshInst.effort || 'model-default';
-        await delay(250);
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: null, instanceId: freshInst.instanceId, ts: Date.now(),
-          type: 'text_delta', payload: {
-            messageId: 'msg_fresh_settings_echo_1',
-            text: `新会话设置回显：model=${effectiveModel}; permission=${freshInst.permissionMode}; effort=${effectiveEffort}`
-          }
-        });
-
-        freshInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: null, instanceId: freshInst.instanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_fresh_settings_echo_1', durationMs: 250, costUsd: 0, isError: false, models: [requestedModel || activeModel] }
         });
 
       } else if (cmd === 'test:pendingsnapshot' || cmd === 'test:pendingsnapshot-duplicate') {
@@ -1718,36 +1754,6 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
-        });
-
-      } else if (cmd === 'test:settings-echo') {
-        console.log('[mock] Echoing selected model / permission / effort for settings regression');
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        const effectiveModel = requestedModel || '未指定(沿用)';
-        const effectivePermission = activeInst.permissionMode || permissionMode || 'default';
-        const effectiveEffort = activeInst.effort || effortLevel || 'model-default';
-        await delay(250);
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: {
-            messageId: 'msg_settings_echo_1',
-            text: `设置回显：model=${effectiveModel}; permission=${effectivePermission}; effort=${effectiveEffort}`
-          }
-        });
-
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_settings_echo_1', durationMs: 250, costUsd: 0, isError: false, models: [requestedModel || activeModel] }
         });
 
       } else if (cmd === 'test:disconnect-now') {
