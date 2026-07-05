@@ -187,6 +187,7 @@
     - expect: 切换到第二个实例后通过 sync:since/history replay 显示该会话历史消息。
     - expect: sync:since 返回 gap 时清掉残缺回放并回退 session:history，不残留旧会话内容。
     - expect: 关闭当前待审批会话时切到剩余会话，旧会话消息和待审批状态不残留。
+    - expect: 关闭当前会话并 fallback 到剩余会话后，已关闭实例迟到的 tool/text/permission/question/result 事件不污染当前视图。
     - expect: 当前模型、权限档、effort 跟随实例切换。
     - expect: 失败条件：工作区历史串线、切换后仍显示旧实例 pending 弹窗、关闭一个实例误关另一个实例。
 

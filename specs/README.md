@@ -48,6 +48,7 @@ Current P0 mock-only coverage also includes:
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
 - Multi-session routing guards cover closing the current session and falling back to the remaining session without leaving the closed session's history on screen.
 - Multi-session routing guards cover closing the current pending-approval session and falling back without leaving stale approval state.
+- Multi-session routing guards cover late tool/text/permission/question/result events from a just-closed current session so they do not pollute the fallback session view.
 - Cross-tab pending guards cover AskUserQuestion sheets being cleared when the view switches away and rebuilt only after switching back to the owning session.
 - Cross-tab pending guards cover closing a background AskUserQuestion session without reviving its stale choice sheet.
 - Cross-tab pending guards cover stale events that arrive after a background pending session is closed and verify they do not pollute the current view.
