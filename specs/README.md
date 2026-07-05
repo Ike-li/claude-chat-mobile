@@ -26,7 +26,8 @@ Current P0 mock-only coverage also includes:
 - A mock `logs:get` response with a stable `[MOCK_LOG]` trace row so the Console modal can verify Clear affects only the log pane, not chat history.
 - Visual mock Socket.IO auth rejects `bad-token`, `invalid-token`, and `expired-token` with `unauthorized` so P0 can cover the token retry UI without enabling production `AUTH_TOKEN`.
 - Multi-session routing guards cover closing a background session without disturbing the current view, and switching back to a background pending-permission instance before resolving its approval.
-- Client-side attachment boundary checks for oversized files and repeated same-file selection; these do not upload to the real server or touch Claude.
+- Pending device request cards cover both trusted-device approval and rejection updates through mock Socket.IO events.
+- Client-side attachment boundary checks cover oversized files, repeated same-file selection, total-size overflow, and no-extension generic attachments; these do not upload to the real server or touch Claude.
 
 ## Test Plan
 

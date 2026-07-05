@@ -34,4 +34,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-15b pending device request 准入/拒绝后卡片即时更新', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:devicerequests');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="device-card"]')).toHaveCount(2);
+
+    const iphoneCard = page.locator('[data-testid="device-card"][data-device-id="aa-bb-cc-dd-iphone-15-pro"]');
+    await iphoneCard.getByRole('button', { name: /准入/ }).click();
+    await expect(page.locator('[data-testid="device-card"]')).toHaveCount(1);
+    await expect(page.locator('#deviceRequests')).not.toContainText('aa-bb-cc-dd-iphone-15-pro');
+    await expect(page.locator('#deviceRequests')).toContainText('ee-ff-00-11-ipad-air-m2');
+
+    const ipadCard = page.locator('[data-testid="device-card"][data-device-id="ee-ff-00-11-ipad-air-m2"]');
+    await ipadCard.getByRole('button', { name: /拒绝/ }).click();
+    await expect(page.locator('[data-testid="device-card"]')).toHaveCount(0);
+    await expect(page.locator('#deviceRequests')).toHaveClass(/hidden/);
+    await expect(page.locator('#input')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
 });

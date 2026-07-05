@@ -102,6 +102,7 @@ let pendingPermission = null;
 let pendingQuestion = null;
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let syncPendingSnapshotInstanceId = null;
+let pendingDevices = [];
 let activeEpoch = 'mock-epoch-init';
 
 function resetMockState() {
@@ -114,7 +115,22 @@ function resetMockState() {
   pendingQuestion = null;
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
+  pendingDevices = [];
   activeEpoch = 'mock-epoch-init';
+}
+
+function createPendingDeviceRequests() {
+  return [
+    { deviceId: 'aa-bb-cc-dd-iphone-15-pro', ip: '192.168.1.100', userAgent: 'Mozilla/5.0 iPhone', ts: Date.now() - 30000 },
+    { deviceId: 'ee-ff-00-11-ipad-air-m2', ip: '192.168.1.101', userAgent: 'Mozilla/5.0 iPad', ts: Date.now() - 60000 }
+  ];
+}
+
+function emitPendingDevices() {
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'pending_devices', payload: { devices: pendingDevices }
+  });
 }
 
 app.post('/__reset', (_req, res) => {
@@ -414,6 +430,14 @@ io.on('connection', socket => {
     const messagePayload = payload && typeof payload === 'object' ? payload : {};
     const text = typeof payload === 'string' ? payload : messagePayload.text;
     const requestedModel = typeof messagePayload.model === 'string' ? messagePayload.model : '';
+    const attachments = Array.isArray(messagePayload.attachments)
+      ? messagePayload.attachments.map(a => ({
+        name: a?.name,
+        mimeType: a?.mimeType,
+        size: a?.size,
+        thumb: a?.thumb
+      }))
+      : undefined;
     if (typeof text !== 'string') return;
     const cmd = text.trim();
 
@@ -422,7 +446,7 @@ io.on('connection', socket => {
     // Always echo user message back
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'user_message', payload: { text: cmd }
+      type: 'user_message', payload: { text: cmd, attachments }
     });
 
     // Intercept test commands
@@ -940,15 +964,8 @@ io.on('connection', socket => {
         });
         await delay(200);
         
-        socket.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'pending_devices', payload: {
-            devices: [
-              { deviceId: 'aa-bb-cc-dd-iphone-15-pro', ip: '192.168.1.100', userAgent: 'Mozilla/5.0 iPhone', ts: Date.now() - 30000 },
-              { deviceId: 'ee-ff-00-11-ipad-air-m2', ip: '192.168.1.101', userAgent: 'Mozilla/5.0 iPad', ts: Date.now() - 60000 }
-            ]
-          }
-        });
+        pendingDevices = createPendingDeviceRequests();
+        emitPendingDevices();
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'system', payload: { message: '[MOCK_INFO] 2 pending devices emitted for visual testing' }
@@ -1139,6 +1156,18 @@ io.on('connection', socket => {
 
       pendingQuestion = null;
     }
+  });
+
+  socket.on('user:approveDevice', payload => {
+    const { deviceId } = payload || {};
+    pendingDevices = pendingDevices.filter(d => d.deviceId !== deviceId);
+    emitPendingDevices();
+  });
+
+  socket.on('user:denyDevice', payload => {
+    const { deviceId } = payload || {};
+    pendingDevices = pendingDevices.filter(d => d.deviceId !== deviceId);
+    emitPendingDevices();
   });
 
   // Handle user interrupt (stop button)

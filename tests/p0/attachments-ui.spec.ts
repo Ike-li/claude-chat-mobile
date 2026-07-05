@@ -59,4 +59,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-18c 附件总量超限与无扩展名通用附件回显', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#fileInput').setInputFiles([
+      { name: 'total-a.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(7 * 1024 * 1024, 'a') },
+      { name: 'total-b.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(7 * 1024 * 1024, 'b') },
+      { name: 'total-c.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(7 * 1024 * 1024, 'c') }
+    ]);
+    await expect(page.locator('#messages')).toContainText('附件总量将超过 20MB，未添加');
+    await expect(page.locator('#attachTray')).toContainText('total-a.bin');
+    await expect(page.locator('#attachTray')).toContainText('total-b.bin');
+    await expect(page.locator('#attachTray')).not.toContainText('total-c.bin');
+
+    await gotoMock(page);
+    await page.locator('#fileInput').setInputFiles({
+      name: 'LICENSE',
+      mimeType: '',
+      buffer: Buffer.from('unknown attachment type')
+    });
+    await expect(page.locator('#attachTray')).toContainText('LICENSE');
+    await page.locator('#input').fill('send unknown attachment');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#attachTray')).toBeHidden();
+    const sent = page.locator('[data-testid="user-message"]').last();
+    await expect(sent).toContainText('send unknown attachment');
+    await expect(sent).toContainText('LICENSE');
+
+    await expectNoBrowserErrors(page);
+  });
 });
