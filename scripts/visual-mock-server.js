@@ -1486,6 +1486,35 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:queuefull',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Simulating full foreground turn queue');
+        activeInst.state = 'busy';
+        activeInst.queueFull = true;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Foreground turn queue is full; hold the draft until the active task drains.' }
+        });
+
+        await delay(1200);
+        activeInst.queueFull = false;
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_queue_full_1', durationMs: 1200, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -1856,32 +1885,6 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'system', payload: { message: '[MOCK_INFO] Foreground found=false fixture armed.' }
-        });
-
-      } else if (cmd === 'test:queuefull') {
-        console.log('[mock] Simulating full foreground turn queue');
-        activeInst.state = 'busy';
-        activeInst.queueFull = true;
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'system', payload: { message: '[MOCK_INFO] Foreground turn queue is full; hold the draft until the active task drains.' }
-        });
-
-        await delay(1200);
-        activeInst.queueFull = false;
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_queue_full_1', durationMs: 1200, costUsd: 0, isError: false, models: [activeModel] }
         });
 
       } else if (cmd === 'test:background-done') {
