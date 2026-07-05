@@ -108,6 +108,8 @@ let syncPendingSnapshotInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
 let foregroundSyncReplayMode = false;
+let foregroundFoundMissingMode = false;
+let foregroundFoundMissingHistoryMode = false;
 let pendingDevices = [];
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
@@ -129,6 +131,8 @@ function resetMockState() {
   lateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
   foregroundSyncReplayMode = false;
+  foregroundFoundMissingMode = false;
+  foregroundFoundMissingHistoryMode = false;
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
@@ -654,6 +658,14 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Archived plan replay from session history.' }
         ]
       });
+    } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-visual-test' && foregroundFoundMissingHistoryMode) {
+      foregroundFoundMissingHistoryMode = false;
+      callback({
+        messages: [
+          { role: 'user', content: 'Recovered foreground prompt' },
+          { role: 'assistant', content: 'Authoritative history after foreground reload.' }
+        ]
+      });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-gap') {
       callback({
         messages: [
@@ -751,6 +763,11 @@ io.on('connection', socket => {
       });
       ack(1, { gap: true });
     } else if (instanceId === 'inst_1') {
+      if (foregroundFoundMissingMode) {
+        foregroundFoundMissingMode = false;
+        ack(0, { found: false });
+        return;
+      }
       if (foregroundSyncReplayMode) {
         foregroundSyncReplayMode = false;
         socket.emit('agent:event', {
@@ -1631,6 +1648,37 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_foreground_sync_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
         foregroundSyncReplayMode = true;
+
+      } else if (cmd === 'test:foreground-found-missing') {
+        console.log('[mock] Completing current turn, then arming foreground sync found=false history reload');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_foreground_found_missing_1', text: 'Stale foreground instance response.' }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_foreground_found_missing_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+        await delay(350);
+        foregroundFoundMissingMode = true;
+        foregroundFoundMissingHistoryMode = true;
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Foreground found=false fixture armed.' }
+        });
 
       } else if (cmd === 'test:queuefull') {
         console.log('[mock] Simulating full foreground turn queue');

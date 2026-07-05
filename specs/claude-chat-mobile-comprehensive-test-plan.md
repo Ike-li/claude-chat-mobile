@@ -41,6 +41,7 @@
   3. 清空输入框。
     - expect: 发送按钮恢复 disabled。
     - expect: 前台恢复/pageshow 触发 sync:since replay 时，已渲染的 assistant 回复不重复出现。
+    - expect: 前台恢复/pageshow 触发 sync:since found:false 时，清掉旧实例内容并回载 session:history。
     - expect: 失败条件：空输入可发送、产生空消息、按钮状态与输入内容不一致。
 
 #### 1.3. P0-03 流式回复、Markdown、thinking 与结果栏

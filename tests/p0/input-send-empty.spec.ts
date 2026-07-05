@@ -101,6 +101,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-02g 前台恢复发现实例缺失时回载历史', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:foreground-found-missing');
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).toContainText('Foreground found=false fixture armed.');
+    await expect(page.locator('#messages')).toContainText('Stale foreground instance response.');
+
+    await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+    await expect(page.locator('#messages')).toContainText('Authoritative history after foreground reload.', { timeout: 10_000 });
+    await expect(page.locator('#messages')).not.toContainText('Stale foreground instance response.');
+    await expect(page.locator('#messages')).not.toContainText('Foreground found=false fixture armed.');
+    await expect(page.locator('#messages')).not.toContainText('test:foreground-found-missing');
+    await expect(page.locator('#historyLoadingCard')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-02e ultracode 快捷发送只注入一次关键词', async ({ page }) => {
     await gotoMock(page);
 
