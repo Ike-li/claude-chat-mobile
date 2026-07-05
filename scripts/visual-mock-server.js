@@ -1759,6 +1759,22 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:history-overflow',
+      run: async () => {
+        console.log('[mock] test:history-overflow — session:list 默认截断，显示全部后返回较早历史');
+        historyOverflowMode = true;
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Session history overflow fixture enabled.' }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_history_overflow_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2074,19 +2090,6 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_disconnect_now_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
         setTimeout(() => socket.disconnect(true), 50);
-
-      } else if (cmd === 'test:history-overflow') {
-        console.log('[mock] test:history-overflow — session:list 默认截断，显示全部后返回较早历史');
-        historyOverflowMode = true;
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'system', payload: { message: '[MOCK_INFO] Session history overflow fixture enabled.' }
-        });
-        await delay(100);
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_history_overflow_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
-        });
 
       } else if (cmd === 'test:tab') {
         console.log('[mock] Simulating multiple tab concurrency');
