@@ -2026,6 +2026,60 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:close-current-pending',
+      run: async () => {
+        console.log('[mock] test:close-current-pending — 当前 inst_1 待审批，同时保留 inst_2 作为关闭后的回退会话');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another',
+            title: 'Another App Concurrency',
+            state: 'idle',
+            permissionMode: 'plan',
+            effort: 'medium',
+            model: 'claude-3-5-haiku'
+          });
+        }
+        viewingInstanceId = 'inst_1';
+        const inst1 = mockInstances.find(i => i.instanceId === 'inst_1');
+        inst1.state = 'permission';
+        inst1.activeTool = 'Bash';
+        pendingPermission = {
+          instanceId: 'inst_1',
+          requestId: 'req_close_current_pending',
+          toolUseId: 't_close_current_pending',
+          messageId: 'msg_close_current_pending_1',
+          name: 'run_command',
+          input: 'git push origin main',
+          cwd: inst1.cwd
+        };
+        syncPendingSnapshot = {
+          permissions: [{
+            requestId: pendingPermission.requestId,
+            name: pendingPermission.name,
+            input: pendingPermission.input,
+            cwd: pendingPermission.cwd
+          }],
+          questions: []
+        };
+        syncPendingSnapshotInstanceId = 'inst_1';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: inst1.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Close current pending source session before approving anything.' }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2180,57 +2234,6 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_stream_1', durationMs: 2500, costUsd: 0.0015, isError: false, models: [activeModel] }
-        });
-
-      } else if (cmd === 'test:close-current-pending') {
-        console.log('[mock] test:close-current-pending — 当前 inst_1 待审批，同时保留 inst_2 作为关闭后的回退会话');
-        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
-          mockInstances.push({
-            instanceId: 'inst_2',
-            cwd: '/Users/you/code/another-react-project',
-            sessionId: 'mock-session-another',
-            title: 'Another App Concurrency',
-            state: 'idle',
-            permissionMode: 'plan',
-            effort: 'medium',
-            model: 'claude-3-5-haiku'
-          });
-        }
-        viewingInstanceId = 'inst_1';
-        const inst1 = mockInstances.find(i => i.instanceId === 'inst_1');
-        inst1.state = 'permission';
-        inst1.activeTool = 'Bash';
-        pendingPermission = {
-          instanceId: 'inst_1',
-          requestId: 'req_close_current_pending',
-          toolUseId: 't_close_current_pending',
-          messageId: 'msg_close_current_pending_1',
-          name: 'run_command',
-          input: 'git push origin main',
-          cwd: inst1.cwd
-        };
-        syncPendingSnapshot = {
-          permissions: [{
-            requestId: pendingPermission.requestId,
-            name: pendingPermission.name,
-            input: pendingPermission.input,
-            cwd: pendingPermission.cwd
-          }],
-          questions: []
-        };
-        syncPendingSnapshotInstanceId = 'inst_1';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: {
-            viewingInstanceId,
-            viewingCwd: inst1.cwd,
-            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
-          }
-        });
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
-          type: 'system', payload: { message: '[MOCK_INFO] Close current pending source session before approving anything.' }
         });
 
       } else if (cmd === 'test:late-closed-current-events') {
