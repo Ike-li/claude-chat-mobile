@@ -759,8 +759,8 @@ io.on('connection', socket => {
           type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
         });
 
-      } else if (cmd === 'test:question') {
-        console.log('[mock] Starting test:question sequence');
+      } else if (cmd === 'test:question' || cmd === 'test:question-duplicate') {
+        console.log(`[mock] Starting ${cmd} sequence`);
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -792,15 +792,20 @@ io.on('connection', socket => {
           options: ['main (Stable Production)', 'dev (Bleeding-Edge Integration)', 'release-v1.0 (LTS)']
         };
 
-        // Emit multi-choice question
-        socket.emit('agent:event', {
+        const questionEvent = {
           seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'question', payload: {
             requestId: pendingQuestion.requestId,
             text: 'We are ready to tag and deploy this mobile dashboard app. Which branch should be our target publish destination?',
             options: pendingQuestion.options
           }
-        });
+        };
+
+        // Emit multi-choice question
+        socket.emit('agent:event', questionEvent);
+        if (cmd === 'test:question-duplicate') {
+          socket.emit('agent:event', { ...questionEvent, seq: 4, ts: Date.now() });
+        }
 
       } else if (cmd === 'test:statusline') {
         console.log('[mock] Updating status_line');

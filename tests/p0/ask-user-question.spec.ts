@@ -28,4 +28,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-08b AskUserQuestion 同 requestId 重放不重复弹窗', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:question-duplicate');
+    await expect(page.locator('#questionModal')).toBeVisible();
+    await expect(page.locator('#questionText')).toContainText('Which branch should be our target publish destination?');
+    await expect(page.locator('#questionOptions button')).toHaveCount(3);
+
+    await page.locator('#questionOptions button').nth(1).click();
+    await expect(page.locator('#questionModal')).toBeHidden();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('dev (Bleeding-Edge Integration)');
+    await expect(page.locator('#questionModal')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
 });
