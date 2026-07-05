@@ -59,4 +59,61 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-18c 附件总量超过 20MB 时拒绝新增文件', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#fileInput').setInputFiles([
+      { name: 'bundle-a.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(10 * 1024 * 1024, 'a') },
+      { name: 'bundle-b.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(10 * 1024 * 1024, 'b') },
+      { name: 'overflow.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('x') }
+    ]);
+
+    await expect(page.locator('#attachTray')).toContainText('bundle-a.bin');
+    await expect(page.locator('#attachTray')).toContainText('bundle-b.bin');
+    await expect(page.locator('#attachTray')).not.toContainText('overflow.bin');
+    await expect(page.locator('#messages')).toContainText('附件总量将超过 20MB，未添加');
+    await expect(page.locator('#attachTray').getByText(/bundle-[ab]\.bin/)).toHaveCount(2);
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-18d 无扩展名未知类型文件按通用附件处理', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#fileInput').setInputFiles({
+      name: 'README',
+      mimeType: '',
+      buffer: Buffer.from('plain file without an extension')
+    });
+
+    await expect(page.locator('#attachTray')).toBeVisible();
+    await expect(page.locator('#attachTray')).toContainText('README');
+    await expect(page.locator('#attachTray img')).toHaveCount(0);
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-18e 发送后用户消息回显附件元数据并清空托盘', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#fileInput').setInputFiles([
+      { name: 'context.txt', mimeType: 'text/plain', buffer: Buffer.from('context for Claude') },
+      { name: 'screen.png', mimeType: 'image/png', buffer: tinyPng }
+    ]);
+    await page.locator('#input').fill('请看附件');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await page.locator('#btnSend').click();
+
+    const userMessage = page.locator('[data-testid="user-message"]').last();
+    await expect(userMessage).toContainText('请看附件');
+    await expect(userMessage).toContainText('context.txt');
+    await expect(userMessage.locator('img[title="screen.png"]')).toBeVisible();
+    await expect(page.locator('#attachTray')).toBeHidden();
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await expectNoBrowserErrors(page);
+  });
 });

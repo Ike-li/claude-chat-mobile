@@ -407,6 +407,14 @@ io.on('connection', socket => {
     const messagePayload = payload && typeof payload === 'object' ? payload : {};
     const text = typeof payload === 'string' ? payload : messagePayload.text;
     const requestedModel = typeof messagePayload.model === 'string' ? messagePayload.model : '';
+    const attachmentMeta = Array.isArray(messagePayload.attachments)
+      ? messagePayload.attachments.map(a => ({
+          name: a?.name || '附件',
+          mimeType: a?.mimeType || 'application/octet-stream',
+          size: Number.isFinite(a?.size) ? a.size : 0,
+          thumb: a?.thumb
+        }))
+      : undefined;
     if (typeof text !== 'string') return;
     const cmd = text.trim();
 
@@ -415,7 +423,7 @@ io.on('connection', socket => {
     // Always echo user message back
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'user_message', payload: { text: cmd }
+      type: 'user_message', payload: { text: cmd, attachments: attachmentMeta }
     });
 
     // Intercept test commands
