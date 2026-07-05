@@ -1854,6 +1854,150 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:tool',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Starting test:tool sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_tool_1', text: '<thinking>Refactoring duplicate date helper utilities...</thinking>' }
+        });
+        await delay(500);
+
+        // Tool 1: Read File
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_read', name: 'read_file', inputSummary: 'utils/date.js' }
+        });
+        await delay(1000);
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_read', ok: true, outputSummary: 'Successfully read 124 lines from utils/date.js' }
+        });
+
+        // Text delta
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_tool_1', text: "I have read `utils/date.js` and identified duplicate formatting helpers. Let's merge them now." }
+        });
+        await delay(500);
+
+        // Tool 2: Edit File
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_edit', name: 'edit_file', inputSummary: 'utils/date.js' }
+        });
+        await delay(1200);
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_edit', ok: true, outputSummary: 'Successfully refactored duplicated blocks in utils/date.js' }
+        });
+
+        // Tool 3: Run Command
+        socket.emit('agent:event', {
+          seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_bash', name: 'run_command', inputSummary: 'npm test' }
+        });
+        await delay(1200);
+        socket.emit('agent:event', {
+          seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_bash', ok: true, outputSummary: '✓ All 5 visual regression unit tests passed successfully!' }
+        });
+
+        socket.emit('agent:event', {
+          seq: 9, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_tool_1', text: "\n\nAll tools executed cleanly. The test suite has confirmed the date merger was a 100% success!" }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 10, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_tool_1', durationMs: 4400, costUsd: 0.0035, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      command: 'test:tool-out-of-order',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Starting test:tool-out-of-order sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_order_read', name: 'read_file', inputSummary: 'config.json' }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_order_cmd', name: 'run_command', inputSummary: 'npm run check' }
+        });
+        await delay(500);
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_order_cmd', ok: true, outputSummary: 'command result: npm run check syntax OK' }
+        });
+        await delay(250);
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_order_read', ok: true, outputSummary: 'read_file result: config.json contains mock settings' }
+        });
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_tool_ooo_1', text: 'Out-of-order tool results stayed attached to their original cards.' }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_tool_ooo_1', durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      command: 'test:tool-error',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Starting test:tool-error sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_tool_error_cmd', name: 'run_command', inputSummary: 'npm run failing-script' }
+        });
+        await delay(400);
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'error', payload: { message: 'mock tool crashed while running npm run failing-script' }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2008,141 +2152,6 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_stream_1', durationMs: 2500, costUsd: 0.0015, isError: false, models: [activeModel] }
-        });
-
-      } else if (cmd === 'test:tool') {
-        console.log('[mock] Starting test:tool sequence');
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'thinking_delta', payload: { messageId: 'msg_tool_1', text: '<thinking>Refactoring duplicate date helper utilities...</thinking>' }
-        });
-        await delay(500);
-
-        // Tool 1: Read File
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: 't_read', name: 'read_file', inputSummary: 'utils/date.js' }
-        });
-        await delay(1000);
-        socket.emit('agent:event', {
-          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: 't_read', ok: true, outputSummary: 'Successfully read 124 lines from utils/date.js' }
-        });
-
-        // Text delta
-        socket.emit('agent:event', {
-          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: 'msg_tool_1', text: "I have read `utils/date.js` and identified duplicate formatting helpers. Let's merge them now." }
-        });
-        await delay(500);
-
-        // Tool 2: Edit File
-        socket.emit('agent:event', {
-          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: 't_edit', name: 'edit_file', inputSummary: 'utils/date.js' }
-        });
-        await delay(1200);
-        socket.emit('agent:event', {
-          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: 't_edit', ok: true, outputSummary: 'Successfully refactored duplicated blocks in utils/date.js' }
-        });
-
-        // Tool 3: Run Command
-        socket.emit('agent:event', {
-          seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: 't_bash', name: 'run_command', inputSummary: 'npm test' }
-        });
-        await delay(1200);
-        socket.emit('agent:event', {
-          seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: 't_bash', ok: true, outputSummary: '✓ All 5 visual regression unit tests passed successfully!' }
-        });
-
-        socket.emit('agent:event', {
-          seq: 9, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: 'msg_tool_1', text: "\n\nAll tools executed cleanly. The test suite has confirmed the date merger was a 100% success!" }
-        });
-
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        socket.emit('agent:event', {
-          seq: 10, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_tool_1', durationMs: 4400, costUsd: 0.0035, isError: false, models: [activeModel] }
-        });
-
-      } else if (cmd === 'test:tool-out-of-order') {
-        console.log('[mock] Starting test:tool-out-of-order sequence');
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: 't_order_read', name: 'read_file', inputSummary: 'config.json' }
-        });
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: 't_order_cmd', name: 'run_command', inputSummary: 'npm run check' }
-        });
-        await delay(500);
-        socket.emit('agent:event', {
-          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: 't_order_cmd', ok: true, outputSummary: 'command result: npm run check syntax OK' }
-        });
-        await delay(250);
-        socket.emit('agent:event', {
-          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: 't_order_read', ok: true, outputSummary: 'read_file result: config.json contains mock settings' }
-        });
-        socket.emit('agent:event', {
-          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: 'msg_tool_ooo_1', text: 'Out-of-order tool results stayed attached to their original cards.' }
-        });
-
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        socket.emit('agent:event', {
-          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_tool_ooo_1', durationMs: 900, costUsd: 0.001, isError: false, models: [activeModel] }
-        });
-
-      } else if (cmd === 'test:tool-error') {
-        console.log('[mock] Starting test:tool-error sequence');
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: 't_tool_error_cmd', name: 'run_command', inputSummary: 'npm run failing-script' }
-        });
-        await delay(400);
-
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'error', payload: { message: 'mock tool crashed while running npm run failing-script' }
         });
 
       } else if (cmd === 'test:disconnect-now') {

@@ -24,7 +24,7 @@ The working target is:
 - Forbidden patterns: no `test.only`, `test.skip`, `test.fixme`, `networkidle`, or `waitForTimeout` in the Playwright test lane
 - Heaviest concentration: `tests/p0/workspace-sessions-sidebar.spec.ts` has 18 tests; its common sidebar flows now use `tests/helpers/p0-ui.ts`
 - P1 contract drift guard: `npm run contract:check` statically compares real `agent:event` types with visual mock event types without starting Claude, production server, or Playwright.
-- Visual mock scenario registry: `scripts/visual-mock-scenarios.js` now supports exact, alias-list, and prefix command registration. Migrated groups cover statusline, console-after-clear, stale-statusline, message-edit, fresh-busy, queue-full, foreground-sync-replay, foreground-found-missing, background-done, background-error, background-priority, background-taskprogress, history-overflow, tab, tab-model-effort, unsafe-markdown, ask-user-question, permission, settings-echo, pending-snapshot, mirror-readonly, task-progress, and exit-plan fixtures.
+- Visual mock scenario registry: `scripts/visual-mock-scenarios.js` now supports exact, alias-list, and prefix command registration. Migrated groups cover statusline, console-after-clear, stale-statusline, message-edit, fresh-busy, queue-full, foreground-sync-replay, foreground-found-missing, background-done, background-error, background-priority, background-taskprogress, history-overflow, tab, tab-model-effort, tool-card, unsafe-markdown, ask-user-question, permission, settings-echo, pending-snapshot, mirror-readonly, task-progress, and exit-plan fixtures.
 
 ## Completed Tooling
 
@@ -101,7 +101,7 @@ No open P0 mock-only additions currently listed.
 
 2. Add a visual mock scenario registry
    - Registry scaffold exists in `scripts/visual-mock-scenarios.js`.
-   - Migrated groups: `test:statusline`, `test:console-log-after-clear`, `test:stale-statusline-replay`, `test:message-edit*`, `test:freshbusy`, `test:queuefull`, `test:foreground-sync-replay`, `test:foreground-found-missing`, `test:background-done`, `test:background-error`, `test:background-priority`, `test:background-taskprogress`, `test:history-overflow`, `test:tab`, `test:tab-model-effort`, `test:unsafe-markdown`, `test:question*`, `test:permission*`, `test:settings-echo`, `test:fresh-settings-echo`, `test:pendingsnapshot*`, `test:gap-pending-snapshot`, `test:questionsnapshot`, `test:gap-question-snapshot`, `test:mirror-readonly*`, `test:taskprogress*`, and `test:exitplan` fixtures.
+   - Migrated groups: `test:statusline`, `test:console-log-after-clear`, `test:stale-statusline-replay`, `test:message-edit*`, `test:freshbusy`, `test:queuefull`, `test:foreground-sync-replay`, `test:foreground-found-missing`, `test:background-done`, `test:background-error`, `test:background-priority`, `test:background-taskprogress`, `test:history-overflow`, `test:tab`, `test:tab-model-effort`, `test:tool`, `test:tool-out-of-order`, `test:tool-error`, `test:unsafe-markdown`, `test:question*`, `test:permission*`, `test:settings-echo`, `test:fresh-settings-echo`, `test:pendingsnapshot*`, `test:gap-pending-snapshot`, `test:questionsnapshot`, `test:gap-question-snapshot`, `test:mirror-readonly*`, `test:taskprogress*`, and `test:exitplan` fixtures.
    - Continue moving remaining `test:*` groups out of the long `if/else` chain in behavior-neutral slices.
 
 3. Add stable sidebar data attributes
