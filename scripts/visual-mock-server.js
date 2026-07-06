@@ -2135,6 +2135,50 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:permCrossTab',
+      run: async () => {
+        // 跨 tab 审批清弹窗回归（坐实诊断「安全」结论的前端支柱）：viewing=inst_1 弹审批，
+        // 同时备好后台 inst_2（不切）。配 test:switchAway 切走 → 前端 bindView→clearView 应清弹窗。
+        console.log('[mock] test:permCrossTab — inst_1 弹审批 + 备好后台 inst_2');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2', cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another', title: 'Another App Concurrency',
+            state: 'busy', permissionMode: 'plan', effort: 'medium', model: 'claude-3-5-haiku'
+          });
+        }
+        viewingInstanceId = 'inst_1';
+        const inst1ct = mockInstances.find(i => i.instanceId === 'inst_1');
+        inst1ct.state = 'permission';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst1ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        pendingPermission = { requestId: 'req_perm_cross_tab', toolUseId: 't_cross', messageId: 'msg_cross_1', name: 'run_command', input: 'git push origin main', cwd: inst1ct.cwd };
+        syncPendingSnapshot = {
+          permissions: [{ requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }],
+          questions: []
+        };
+        syncPendingSnapshotInstanceId = 'inst_1';
+        // 独立 epoch：前端见新 epoch 即重置 seq 去重基线，避免被前序 TC 累积的 lastSeq 误吞
+        socket.emit('agent:event', {
+          seq: 1, epoch: 'mock-epoch-crosstab', sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
+          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
+        });
+
+        // 弹窗渲染后自动「切到 inst_2」（viewing 变化）→ 前端 bindView → clearView 应清掉 inst_1 的审批弹窗。
+        // 内部自动切，避免 runner 在弹窗打开时再走 input+btnSend——那样点击坐标会穿透到 sheet 上的审批按钮、误发回答。
+        await delay(1500);
+        viewingInstanceId = 'inst_2';
+        const inst2ct = mockInstances.find(i => i.instanceId === 'inst_2');
+        console.log('[mock] test:permCrossTab — 自动切 viewing → inst_2（应触发前端 clearView 清弹窗）');
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2289,47 +2333,6 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_stream_1', durationMs: 2500, costUsd: 0.0015, isError: false, models: [activeModel] }
-        });
-
-      } else if (cmd === 'test:permCrossTab') {
-        // 跨 tab 审批清弹窗回归（坐实诊断「安全」结论的前端支柱）：viewing=inst_1 弹审批，
-        // 同时备好后台 inst_2（不切）。配 test:switchAway 切走 → 前端 bindView→clearView 应清弹窗。
-        console.log('[mock] test:permCrossTab — inst_1 弹审批 + 备好后台 inst_2');
-        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
-          mockInstances.push({
-            instanceId: 'inst_2', cwd: '/Users/you/code/another-react-project',
-            sessionId: 'mock-session-another', title: 'Another App Concurrency',
-            state: 'busy', permissionMode: 'plan', effort: 'medium', model: 'claude-3-5-haiku'
-          });
-        }
-        viewingInstanceId = 'inst_1';
-        const inst1ct = mockInstances.find(i => i.instanceId === 'inst_1');
-        inst1ct.state = 'permission';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst1ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        pendingPermission = { requestId: 'req_perm_cross_tab', toolUseId: 't_cross', messageId: 'msg_cross_1', name: 'run_command', input: 'git push origin main', cwd: inst1ct.cwd };
-        syncPendingSnapshot = {
-          permissions: [{ requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }],
-          questions: []
-        };
-        syncPendingSnapshotInstanceId = 'inst_1';
-        // 独立 epoch：前端见新 epoch 即重置 seq 去重基线，避免被前序 TC 累积的 lastSeq 误吞
-        socket.emit('agent:event', {
-          seq: 1, epoch: 'mock-epoch-crosstab', sessionId: 'mock-session-visual-test', instanceId: 'inst_1', ts: Date.now(),
-          type: 'permission_request', payload: { requestId: pendingPermission.requestId, name: pendingPermission.name, input: pendingPermission.input, cwd: pendingPermission.cwd }
-        });
-
-        // 弹窗渲染后自动「切到 inst_2」（viewing 变化）→ 前端 bindView → clearView 应清掉 inst_1 的审批弹窗。
-        // 内部自动切，避免 runner 在弹窗打开时再走 input+btnSend——那样点击坐标会穿透到 sheet 上的审批按钮、误发回答。
-        await delay(1500);
-        viewingInstanceId = 'inst_2';
-        const inst2ct = mockInstances.find(i => i.instanceId === 'inst_2');
-        console.log('[mock] test:permCrossTab — 自动切 viewing → inst_2（应触发前端 clearView 清弹窗）');
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
 
       } else if (cmd === 'test:questionCrossTab') {
