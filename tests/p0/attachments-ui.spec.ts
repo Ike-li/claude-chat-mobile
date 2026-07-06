@@ -3,6 +3,7 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../helpers/p0-ui';
 
 const tinyPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
@@ -102,9 +103,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     });
     await expect(page.locator('#attachTray')).toContainText('cross-session.txt');
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    await page.locator('button[title="Another App Concurrency"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#attachTray')).toBeHidden();
     await expect(page.locator('#btnSend')).toBeDisabled();

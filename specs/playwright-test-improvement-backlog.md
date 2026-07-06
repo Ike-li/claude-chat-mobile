@@ -76,6 +76,7 @@ No open P0 mock-only additions currently listed.
 1. Reduce sidebar selector brittleness
    - Current non-workspace specs still repeat hard-coded selectors such as `div[data-dir="/Users/you/code/another-react-project"] button`, `button[title="Another App Concurrency"]`, and fixed `data-instance-id="inst_2"`.
    - Preferred path: continue applying `tests/helpers/p0-ui.ts` helpers such as `openSessionsSidebar`, `expandWorkspace`, `openSessionByTitle`, `openWorkspaceSession`, `sessionRowByInstance`, and `expectSessionBadge`.
+   - Progress: `tests/p0/attachments-ui.spec.ts` P0-18d now uses `openSessionsSidebar` and `openWorkspaceSession` for the cross-session switch.
    - Optional product-safe improvement: add stable `data-testid`/`data-session-title`/`data-workspace-name` attributes to sidebar rows.
 
 2. Reduce repeated modal/draft guard boilerplate
