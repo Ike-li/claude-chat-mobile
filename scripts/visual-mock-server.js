@@ -2423,6 +2423,37 @@ io.on('connection', socket => {
       },
     },
     {
+      commands: ['test:tofu', 'test:tofu-denied'],
+      run: async ({ cmd }) => {
+        console.log('[mock] Forcing unapproved TOFU status');
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
+        });
+
+        if (cmd === 'test:tofu-denied') {
+          await delay(500);
+          deniedDeviceRetryPending = true;
+          socket.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'device_status', payload: { status: 'denied', deviceId: 'unauthorized-fingerprint-999' }
+          });
+          setTimeout(() => socket.disconnect(true), 50);
+          return;
+        }
+
+        // Set timeout to auto-approve and restore state after 8 seconds
+        setTimeout(() => {
+          console.log('[mock] Auto-approving TOFU screen to return to chat state');
+          socket.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'device_status', payload: { status: 'approved', deviceId: 'unauthorized-fingerprint-999' }
+          });
+          emitHydration();
+        }, 8000);
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2616,34 +2647,6 @@ io.on('connection', socket => {
         });
         setTimeout(() => socket.disconnect(true), 50);
         return;
-
-      } else if (cmd === 'test:tofu' || cmd === 'test:tofu-denied') {
-        console.log('[mock] Forcing unapproved TOFU status');
-        socket.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
-        });
-
-        if (cmd === 'test:tofu-denied') {
-          await delay(500);
-          deniedDeviceRetryPending = true;
-          socket.emit('agent:event', {
-            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'device_status', payload: { status: 'denied', deviceId: 'unauthorized-fingerprint-999' }
-          });
-          setTimeout(() => socket.disconnect(true), 50);
-          return;
-        }
-
-        // Set timeout to auto-approve and restore state after 8 seconds
-        setTimeout(() => {
-          console.log('[mock] Auto-approving TOFU screen to return to chat state');
-          socket.emit('agent:event', {
-            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'device_status', payload: { status: 'approved', deviceId: 'unauthorized-fingerprint-999' }
-          });
-          emitHydration();
-        }, 8000);
 
       } else if (cmd === 'test:stream-long') {
         console.log('[mock] Starting long streaming sequence for interrupt test');
