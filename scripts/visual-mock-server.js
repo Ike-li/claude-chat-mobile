@@ -2454,6 +2454,61 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:stream',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Starting test:stream sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        // Send thinking indicator
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_stream_1', text: '<thinking>Analyzing visual test parameters...\nEmitting mock response chunks...\n</thinking>' }
+        });
+        await delay(800);
+
+        // Stream text chunks
+        const responseText = "Hello! This is a **fully visual-oriented** mock response stream.\n\n" +
+          "Here is what we can test:\n" +
+          "1. **Markdown Formatting**: Bold, lists, code highlighting.\n" +
+          "2. **Interactive Controls**: Click buttons and sliders.\n" +
+          "3. **Animations**: Loading and transitions.\n\n" +
+          "```javascript\n" +
+          "// Code block rendering test\n" +
+          "const tester = 'Antigravity';\n" +
+          "console.log(`E2E Testing by ${tester}`);\n" +
+          "```\n" +
+          "Try running `test:tool` or `test:permission` next!";
+
+        // Chunk and stream
+        const words = responseText.split(' ');
+        let currentText = '';
+        for (let i = 0; i < words.length; i++) {
+          const chunk = words[i] + ' ';
+          currentText += chunk;
+          socket.emit('agent:event', {
+            seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'text_delta', payload: { messageId: 'msg_stream_1', text: chunk }
+          });
+          await delay(60); // fast visual streaming
+        }
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_stream_1', durationMs: 2500, costUsd: 0.0015, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2558,59 +2613,7 @@ io.on('connection', socket => {
 
       if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
 
-      if (cmd === 'test:stream') {
-        console.log('[mock] Starting test:stream sequence');
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        // Send thinking indicator
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'thinking_delta', payload: { messageId: 'msg_stream_1', text: '<thinking>Analyzing visual test parameters...\nEmitting mock response chunks...\n</thinking>' }
-        });
-        await delay(800);
-
-        // Stream text chunks
-        const responseText = "Hello! This is a **fully visual-oriented** mock response stream.\n\n" +
-          "Here is what we can test:\n" +
-          "1. **Markdown Formatting**: Bold, lists, code highlighting.\n" +
-          "2. **Interactive Controls**: Click buttons and sliders.\n" +
-          "3. **Animations**: Loading and transitions.\n\n" +
-          "```javascript\n" +
-          "// Code block rendering test\n" +
-          "const tester = 'Antigravity';\n" +
-          "console.log(`E2E Testing by ${tester}`);\n" +
-          "```\n" +
-          "Try running `test:tool` or `test:permission` next!";
-        
-        // Chunk and stream
-        const words = responseText.split(' ');
-        let currentText = '';
-        for (let i = 0; i < words.length; i++) {
-          const chunk = words[i] + ' ';
-          currentText += chunk;
-          socket.emit('agent:event', {
-            seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'text_delta', payload: { messageId: 'msg_stream_1', text: chunk }
-          });
-          await delay(60); // fast visual streaming
-        }
-
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        socket.emit('agent:event', {
-          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_stream_1', durationMs: 2500, costUsd: 0.0015, isError: false, models: [activeModel] }
-        });
-
-      } else if (cmd === 'test:tofu-delayed') {
+      if (cmd === 'test:tofu-delayed') {
         console.log('[mock] Delaying unapproved TOFU status so the UI can hold a draft');
         await delay(600);
         socket.emit('agent:event', {
