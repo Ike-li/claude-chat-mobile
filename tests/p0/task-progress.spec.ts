@@ -3,6 +3,17 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+import {
+  ANOTHER_WORKSPACE,
+  expandWorkspace,
+  expectSessionBadge,
+  expectSidebarClosed,
+  openSessionByTitle,
+  openSessionsSidebar,
+  openWorkspaceSession,
+  sessionButtonByTitle,
+  workspaceRow
+} from '../helpers/p0-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-17 后台 task_progress 横幅原地刷新', async ({ page }) => {
@@ -64,9 +75,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#mirrorBanner')).toBeVisible();
     await expect(page.locator('#input')).toBeDisabled();
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    await page.locator('button[title="Another App Concurrency"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#mirrorBanner')).toBeHidden();
     await expect(page.locator('#input')).toBeEnabled();
@@ -114,17 +124,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:tab');
     await waitForIdle(page);
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    await expect(page.locator('button[title="Another App Concurrency"]')).toBeVisible();
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await expect(sessionButtonByTitle(page, 'Another App Concurrency')).toBeVisible();
     await page.locator('#sidebarClose').click();
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
 
     const startedAt = Date.now();
     await sendChatMessage(page, 'test:mirror-readonly-delayed');
 
-    await page.locator('#btnSessions').click();
-    await page.locator('button[title="Another App Concurrency"]').click();
+    await openSessionsSidebar(page);
+    await openSessionByTitle(page, 'Another App Concurrency');
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
 
@@ -152,14 +162,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#sessionsDot')).toHaveText('⏳');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区运行中');
 
-    await page.locator('#btnSessions').click();
-    const backgroundDir = page.locator('#sessionPanel div[data-dir="/Users/you/code/another-react-project"]');
+    await openSessionsSidebar(page);
+    const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
     await expect(backgroundDir.locator('.dir-badge')).toHaveText('⏳');
     await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '运行中');
-    await backgroundDir.locator('button').first().click();
-    const backgroundRow = page.locator('[data-testid="session-row"][data-instance-id="inst_2"]');
-    await expect(backgroundRow.locator('[data-instance-badge]')).toHaveText('🤖');
-    await expect(backgroundRow.locator('[data-instance-badge]')).toHaveAttribute('title', '运行中：Task');
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await expectSessionBadge(page, 'inst_2', '🤖', '运行中：Task');
 
     await expectNoBrowserErrors(page);
   });

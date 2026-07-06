@@ -3,6 +3,7 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../helpers/p0-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-16 交互日志 Console modal', async ({ page }) => {
@@ -73,9 +74,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#consoleClose').click();
     await expect(page.locator('#consoleModal')).toBeHidden();
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    await page.locator('button[title="Another App Concurrency"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
 

@@ -1,6 +1,6 @@
 # Playwright Test Improvement Backlog
 
-Last audited: 2026-07-05
+Last audited: 2026-07-06
 
 ## Goal
 
@@ -74,9 +74,10 @@ No open P0 mock-only additions currently listed.
 ## Optimize Test Candidates
 
 1. Reduce sidebar selector brittleness
-   - Current non-workspace specs still repeat hard-coded selectors such as `div[data-dir="/Users/you/code/another-react-project"] button`, `button[title="Another App Concurrency"]`, and fixed `data-instance-id="inst_2"`.
+   - High-priority non-workspace P0 specs no longer repeat raw selectors such as `div[data-dir="/Users/you/code/another-react-project"] button`, `button[title="Another App Concurrency"]`, or fixed `[data-testid="session-row"][data-instance-id="inst_2"]` combinations.
    - Preferred path: continue applying `tests/helpers/p0-ui.ts` helpers such as `openSessionsSidebar`, `expandWorkspace`, `openSessionByTitle`, `openWorkspaceSession`, `sessionRowByInstance`, and `expectSessionBadge`.
    - Progress: `tests/p0/attachments-ui.spec.ts` P0-18d now uses `openSessionsSidebar` and `openWorkspaceSession` for the cross-session switch.
+   - Progress: `tests/p0/console-log-modal.spec.ts`, `tests/p0/permission-allow-deny.spec.ts`, `tests/p0/task-progress.spec.ts`, and `tests/p0/cross-tab-pending-cleanup.spec.ts` now use sidebar helpers for cross-workspace navigation, workspace expansion, and instance-row assertions.
    - Optional product-safe improvement: add stable `data-testid`/`data-session-title`/`data-workspace-name` attributes to sidebar rows.
 
 2. Reduce repeated modal/draft guard boilerplate

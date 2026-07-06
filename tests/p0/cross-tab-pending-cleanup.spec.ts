@@ -3,6 +3,14 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+import {
+  expandWorkspace,
+  expectSidebarClosed,
+  MAIN_WORKSPACE,
+  openSessionsSidebar,
+  openWorkspaceSession,
+  sessionRowByInstance
+} from '../helpers/p0-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-13 跨 tab 审批弹窗清理与错路由防护', async ({ page }) => {
@@ -31,13 +39,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permModal')).toBeHidden({ timeout: 8_000 });
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
 
-    await page.locator('#btnSessions').click();
-    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    await expect(page.locator('button[title="Visual Sandbox (Main)"]')).toBeVisible();
-    await page.locator('button[title="Visual Sandbox (Main)"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#pillPermText')).toContainText('默认审批');
     await expect(page.locator('#permModal')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#permCwd')).toContainText('/Users/you/code/claude-chat-mobile');
@@ -64,12 +69,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#questionModal')).toBeHidden();
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    await expect(page.locator('button[title="Visual Sandbox (Main)"]')).toBeVisible();
-    await page.locator('button[title="Visual Sandbox (Main)"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#pillPermText')).toContainText('默认审批');
     await expect(page.locator('#questionModal')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#questionText')).toContainText('Which branch should be our target publish destination?');
@@ -90,21 +93,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#questionModal')).toBeHidden();
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    const questionRow = page.locator('[data-testid="session-row"][data-instance-id="inst_1"]');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const questionRow = sessionRowByInstance(page, 'inst_1');
     await expect(questionRow).toContainText('Visual Sandbox (Main)');
     await expect(questionRow.locator('[data-instance-badge]')).toHaveText('⚠️');
 
     page.once('dialog', dialog => dialog.accept());
     await questionRow.locator('button', { hasText: '✕' }).click();
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#questionModal')).toBeHidden();
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
 
-    await page.locator('#btnSessions').click();
+    await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel')).not.toContainText('Visual Sandbox (Main)');
     await expect(page.locator('#sessionPanel')).not.toContainText('Which branch should be our target publish destination?');
     await expect(page.locator('#questionModal')).toBeHidden();
@@ -121,16 +124,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#questionModal')).toBeHidden();
     await expect(page.locator('#permModal')).toBeHidden();
 
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/claude-chat-mobile"] button').first().click();
-    const closedRow = page.locator('[data-testid="session-row"][data-instance-id="inst_1"]');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const closedRow = sessionRowByInstance(page, 'inst_1');
     await expect(closedRow).toContainText('Visual Sandbox (Main)');
     await expect(closedRow.locator('[data-instance-badge]')).toHaveText('⚠️');
 
     page.once('dialog', dialog => dialog.accept());
     await closedRow.locator('button', { hasText: '✕' }).click();
 
-    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expectSidebarClosed(page);
     await expect(page.locator('#messages')).toContainText('Closed-session stale replay finished for current view.', { timeout: 10_000 });
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#messages')).not.toContainText('STALE CLOSED SESSION TEXT MUST NOT RENDER');
@@ -139,7 +142,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permModal')).toBeHidden();
     await expect(page.locator('#questionModal')).toBeHidden();
 
-    await page.locator('#btnSessions').click();
+    await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel')).not.toContainText('Visual Sandbox (Main)');
     await expect(page.locator('#sessionPanel')).not.toContainText('claude-chat-mobile');
 

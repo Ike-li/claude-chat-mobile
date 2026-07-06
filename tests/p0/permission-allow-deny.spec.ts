@@ -3,6 +3,7 @@
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../helpers/p0-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-06 权限审批 allow/deny 与本会话总是允许', async ({ page }) => {
@@ -82,9 +83,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:tab');
     await waitForIdle(page);
-    await page.locator('#btnSessions').click();
-    await page.locator('div[data-dir="/Users/you/code/another-react-project"] button').first().click();
-    await page.locator('button[title="Another App Concurrency"]').click();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
 
     await sendChatMessage(page, 'test:permission');
