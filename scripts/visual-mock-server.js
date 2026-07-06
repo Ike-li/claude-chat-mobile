@@ -2393,6 +2393,36 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:devicerequests',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Emitting pending device requests with busy cycle');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        await delay(200);
+
+        pendingDevices = createPendingDeviceRequests();
+        emitPendingDevices();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] 2 pending devices emitted for visual testing' }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'Device requests emitted' }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2614,33 +2644,6 @@ io.on('connection', socket => {
           });
           emitHydration();
         }, 8000);
-
-      } else if (cmd === 'test:devicerequests') {
-        console.log('[mock] Emitting pending device requests with busy cycle');
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        await delay(200);
-        
-        pendingDevices = createPendingDeviceRequests();
-        emitPendingDevices();
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'system', payload: { message: '[MOCK_INFO] 2 pending devices emitted for visual testing' }
-        });
-        
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        await delay(300);
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { text: 'Device requests emitted' }
-        });
 
       } else if (cmd === 'test:stream-long') {
         console.log('[mock] Starting long streaming sequence for interrupt test');
