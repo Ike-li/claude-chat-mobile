@@ -2509,6 +2509,30 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:tofu-delayed',
+      run: async () => {
+        console.log('[mock] Delaying unapproved TOFU status so the UI can hold a draft');
+        await delay(600);
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
+        });
+
+        setTimeout(() => {
+          console.log('[mock] Auto-approving delayed TOFU screen to return to chat state');
+          socket.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'device_status', payload: { status: 'approved', deviceId: 'unauthorized-fingerprint-999' }
+          });
+          emitHydration();
+          socket.emit('agent:event', {
+            seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'result', payload: { messageId: 'msg_tofu_delayed_1', durationMs: 1200, costUsd: 0, isError: false, models: [activeModel] }
+          });
+        }, 1200);
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2613,28 +2637,7 @@ io.on('connection', socket => {
 
       if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
 
-      if (cmd === 'test:tofu-delayed') {
-        console.log('[mock] Delaying unapproved TOFU status so the UI can hold a draft');
-        await delay(600);
-        socket.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
-        });
-
-        setTimeout(() => {
-          console.log('[mock] Auto-approving delayed TOFU screen to return to chat state');
-          socket.emit('agent:event', {
-            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'device_status', payload: { status: 'approved', deviceId: 'unauthorized-fingerprint-999' }
-          });
-          emitHydration();
-          socket.emit('agent:event', {
-            seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'result', payload: { messageId: 'msg_tofu_delayed_1', durationMs: 1200, costUsd: 0, isError: false, models: [activeModel] }
-          });
-        }, 1200);
-
-      } else if (cmd === 'test:tofu-denied-delayed') {
+      if (cmd === 'test:tofu-denied-delayed') {
         console.log('[mock] Delaying TOFU denial so the UI can hold a draft through pending and denied states');
         await delay(600);
         socket.emit('agent:event', {
