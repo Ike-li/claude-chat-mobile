@@ -2533,6 +2533,25 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:tofu-denied-delayed',
+      run: async () => {
+        console.log('[mock] Delaying TOFU denial so the UI can hold a draft through pending and denied states');
+        await delay(600);
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
+        });
+
+        await delay(900);
+        deniedDeviceRetryPending = true;
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'device_status', payload: { status: 'denied', deviceId: 'unauthorized-fingerprint-999' }
+        });
+        setTimeout(() => socket.disconnect(true), 50);
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2637,24 +2656,7 @@ io.on('connection', socket => {
 
       if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
 
-      if (cmd === 'test:tofu-denied-delayed') {
-        console.log('[mock] Delaying TOFU denial so the UI can hold a draft through pending and denied states');
-        await delay(600);
-        socket.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'device_status', payload: { status: 'pending', deviceId: 'unauthorized-fingerprint-999' }
-        });
-
-        await delay(900);
-        deniedDeviceRetryPending = true;
-        socket.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'device_status', payload: { status: 'denied', deviceId: 'unauthorized-fingerprint-999' }
-        });
-        setTimeout(() => socket.disconnect(true), 50);
-        return;
-
-      } else if (cmd === 'test:stream-long') {
+      if (cmd === 'test:stream-long') {
         console.log('[mock] Starting long streaming sequence for interrupt test');
         activeInst.state = 'busy';
         io.emit('agent:event', {
