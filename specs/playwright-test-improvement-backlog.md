@@ -24,7 +24,8 @@ The working target is:
 - Forbidden patterns: no `test.only`, `test.skip`, `test.fixme`, `networkidle`, or `waitForTimeout` in the Playwright test lane
 - Heaviest concentration: `tests/p0/workspace-sessions-sidebar.spec.ts` has 18 tests; its common sidebar flows now use `tests/helpers/p0-ui.ts`
 - P1 contract drift guard: `npm run contract:check` statically compares real `agent:event` types with visual mock event types without starting Claude, production server, or Playwright.
-- Visual mock scenario registry: `scripts/visual-mock-scenarios.js` now supports exact, alias-list, and prefix command registration. Migrated groups cover statusline, console-after-clear, stale-statusline, message-edit, stream, long-stream, fresh-busy, queue-full, foreground-sync-replay, foreground-found-missing, background-done, background-error, background-priority, background-taskprogress, history-overflow, tab, tab-model-effort, tool-card, disconnect-now, close-current-pending, late-closed-current-events, permission-cross-tab, question-cross-tab, close-background-question-pending, late-closed-session-events, empty, restore, device-requests, tofu approval/denial, tofu-delayed approval, tofu-delayed denial, unsafe-markdown, ask-user-question, permission, settings-echo, pending-snapshot, mirror-readonly, task-progress, and exit-plan fixtures.
+- Visual mock scenario registry: `scripts/visual-mock-scenarios.js` now supports exact, alias-list, and prefix command registration. All migrated groups are covered by the registry: statusline, console-after-clear, stale-statusline, message-edit, stream, long-stream, fresh-busy, queue-full, foreground-sync-replay, foreground-found-missing, background-done, background-error, background-priority, background-taskprogress, history-overflow, tab, tab-model-effort, tool-card, disconnect-now, close-current-pending, late-closed-current-events, permission-cross-tab, question-cross-tab, close-background-question-pending, late-closed-session-events, empty, restore, device-requests, tofu approval/denial, tofu-delayed approval, tofu-delayed denial, unsafe-markdown, ask-user-question, permission, settings-echo, pending-snapshot, mirror-readonly, task-progress, and exit-plan fixtures.
+- Visual mock registry guard: `npm run check` runs `scripts/check-visual-mock-registry.js` to prevent new top-level `test:*` fallback branches after `scenarioRegistry.run(...)`.
 
 ## Completed Tooling
 
@@ -99,10 +100,10 @@ No open P0 mock-only additions currently listed.
    - `tests/helpers/p0-ui.ts` now covers common sidebar/session flows in `workspace-sessions-sidebar.spec.ts`.
    - Continue migrating other specs opportunistically when they touch sidebar/session flows.
 
-2. Add a visual mock scenario registry
+2. Complete the visual mock scenario registry migration
    - Registry scaffold exists in `scripts/visual-mock-scenarios.js`.
    - Migrated groups: `test:statusline`, `test:console-log-after-clear`, `test:stale-statusline-replay`, `test:stream`, `test:stream-long`, `test:message-edit*`, `test:freshbusy`, `test:queuefull`, `test:foreground-sync-replay`, `test:foreground-found-missing`, `test:background-done`, `test:background-error`, `test:background-priority`, `test:background-taskprogress`, `test:history-overflow`, `test:tab`, `test:tab-model-effort`, `test:tool`, `test:tool-out-of-order`, `test:tool-error`, `test:disconnect-now`, `test:close-current-pending`, `test:late-closed-current-events`, `test:permCrossTab`, `test:questionCrossTab`, `test:close-background-question-pending`, `test:late-closed-session-events`, `test:empty`, `test:restore`, `test:devicerequests`, `test:tofu`, `test:tofu-denied`, `test:tofu-delayed`, `test:tofu-denied-delayed`, `test:unsafe-markdown`, `test:question*`, `test:permission*`, `test:settings-echo`, `test:fresh-settings-echo`, `test:pendingsnapshot*`, `test:gap-pending-snapshot`, `test:questionsnapshot`, `test:gap-question-snapshot`, `test:mirror-readonly*`, `test:taskprogress*`, and `test:exitplan` fixtures.
-   - Continue moving remaining `test:*` groups out of the long `if/else` chain in behavior-neutral slices.
+   - `scripts/check-visual-mock-registry.js` is wired into `npm run check` so new top-level `test:*` fallback branches after `scenarioRegistry.run(...)` fail fast.
 
 3. Add stable sidebar data attributes
    - Existing `data-testid="session-row"` and `data-instance-id` are useful, but tests still depend heavily on titles and synthetic instance IDs.
@@ -118,7 +119,7 @@ No open P0 mock-only additions currently listed.
 
 ## Recommended Execution Order
 
-1. Continue visual mock scenario registry migration.
+1. Continue reducing sidebar selector brittleness with `tests/helpers/p0-ui.ts`.
 
 ## Definition Of Done For Each Slice
 
