@@ -2364,6 +2364,35 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:restore',
+      run: async () => {
+        console.log('[mock] Restoring normal chat state from empty');
+        if (mockInstances.length === 0) {
+          mockInstances.push({
+            instanceId: 'inst_1',
+            cwd: '/Users/you/code/claude-chat-mobile',
+            sessionId: 'mock-session-visual-test',
+            title: 'Visual Sandbox (Main)',
+            state: 'idle',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-sonnet'
+          });
+          viewingInstanceId = 'inst_1';
+        }
+        emitHydration();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Chat state restored' }
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'Chat state restored' }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2646,31 +2675,6 @@ io.on('connection', socket => {
           type: 'result', payload: { messageId: 'msg_long_1', durationMs: 16000, costUsd: 0.012, isError: false, models: [activeModel] }
         });
 
-      } else if (cmd === 'test:restore') {
-        console.log('[mock] Restoring normal chat state from empty');
-        if (mockInstances.length === 0) {
-          mockInstances.push({
-            instanceId: 'inst_1',
-            cwd: '/Users/you/code/claude-chat-mobile',
-            sessionId: 'mock-session-visual-test',
-            title: 'Visual Sandbox (Main)',
-            state: 'idle',
-            permissionMode: 'default',
-            effort: null,
-            model: 'claude-3-5-sonnet'
-          });
-          viewingInstanceId = 'inst_1';
-        }
-        emitHydration();
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'system', payload: { message: '[MOCK_INFO] Chat state restored' }
-        });
-        await delay(300);
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { text: 'Chat state restored' }
-        });
       }
     }
   });
