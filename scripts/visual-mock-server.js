@@ -2509,6 +2509,42 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:stream-long',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Starting long streaming sequence for interrupt test');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_long_1', text: '<thinking>Starting a long-running analysis task...</thinking>' }
+        });
+        await delay(500);
+
+        // Stream slowly: gives time for interrupt while keeping tests bounded.
+        for (let i = 0; i < 20; i++) {
+          socket.emit('agent:event', {
+            seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'text_delta', payload: { messageId: 'msg_long_1', text: `Chunk ${i + 1} of analysis... ` }
+          });
+          await delay(800);
+        }
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_long_1', durationMs: 16000, costUsd: 0.012, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:tofu-delayed',
       run: async () => {
         console.log('[mock] Delaying unapproved TOFU status so the UI can hold a draft');
@@ -2655,41 +2691,6 @@ io.on('connection', socket => {
       const activeInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
 
       if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
-
-      if (cmd === 'test:stream-long') {
-        console.log('[mock] Starting long streaming sequence for interrupt test');
-        activeInst.state = 'busy';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'thinking_delta', payload: { messageId: 'msg_long_1', text: '<thinking>Starting a long-running analysis task...</thinking>' }
-        });
-        await delay(500);
-
-        // Stream slowly — gives time for interrupt
-        for (let i = 0; i < 20; i++) {
-          socket.emit('agent:event', {
-            seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'text_delta', payload: { messageId: 'msg_long_1', text: `Chunk ${i + 1} of analysis... ` }
-          });
-          await delay(800); // slow enough for human to see, fast enough for test
-        }
-
-        activeInst.state = 'idle';
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-        });
-        socket.emit('agent:event', {
-          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_long_1', durationMs: 16000, costUsd: 0.012, isError: false, models: [activeModel] }
-        });
-
-      }
     }
   });
 
