@@ -2335,6 +2335,35 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:empty',
+      run: async () => {
+        console.log('[mock] Reset to empty start screen state');
+        // Clear instances and set viewingInstanceId to null
+        mockInstances.length = 0;
+        viewingInstanceId = null;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId: null,
+            viewingCwd: '/Users/you/code/claude-chat-mobile',
+            dirs: ['/Users/you/code/claude-chat-mobile'],
+            instances: [],
+            defaultPermissionMode: 'default',
+            defaultEffort: null
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: null, instanceId: null, ts: Date.now(),
+          type: 'system', payload: { message: '[MOCK_INFO] Empty start screen activated' }
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: null, ts: Date.now(),
+          type: 'result', payload: { text: 'Empty start screen activated' }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         console.log('[mock] Starting test:unsafe-markdown sequence');
@@ -2556,32 +2585,6 @@ io.on('connection', socket => {
           });
           emitHydration();
         }, 8000);
-
-      } else if (cmd === 'test:empty') {
-        console.log('[mock] Reset to empty start screen state');
-        // Clear instances and set viewingInstanceId to null
-        mockInstances.length = 0;
-        viewingInstanceId = null;
-        io.emit('agent:event', {
-          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: {
-            viewingInstanceId: null,
-            viewingCwd: '/Users/you/code/claude-chat-mobile',
-            dirs: ['/Users/you/code/claude-chat-mobile'],
-            instances: [],
-            defaultPermissionMode: 'default',
-            defaultEffort: null
-          }
-        });
-        socket.emit('agent:event', {
-          seq: 1, epoch: activeEpoch, sessionId: null, instanceId: null, ts: Date.now(),
-          type: 'system', payload: { message: '[MOCK_INFO] Empty start screen activated' }
-        });
-        await delay(300);
-        socket.emit('agent:event', {
-          seq: 2, epoch: activeEpoch, sessionId: null, ts: Date.now(),
-          type: 'result', payload: { text: 'Empty start screen activated' }
-        });
 
       } else if (cmd === 'test:devicerequests') {
         console.log('[mock] Emitting pending device requests with busy cycle');
