@@ -1,8 +1,24 @@
 // spec: specs/claude-chat-mobile-comprehensive-test-plan.md
 // seed: tests/seed.goto-mock.spec.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+
+async function expectWithinViewport(page: Page, locator: Locator) {
+  await expect(locator).toBeVisible();
+  await expect.poll(async () => {
+    const box = await locator.boundingBox();
+    const viewport = page.viewportSize();
+    return Boolean(
+      box &&
+      viewport &&
+      box.x >= 0 &&
+      box.y >= 0 &&
+      box.x + box.width <= viewport.width + 1 &&
+      box.y + box.height <= viewport.height + 1
+    );
+  }).toBe(true);
+}
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-19 空状态、恢复与移动端响应式/PWA 外壳', async ({ page }) => {
@@ -30,6 +46,75 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     }
     const manifest = await page.request.get('/manifest.webmanifest');
     expect(manifest.ok()).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-19b 窄屏和横屏下权限审批 sheet 按钮可达', async ({ page }) => {
+    await gotoMock(page);
+
+    for (const viewport of [{ width: 320, height: 700 }, { width: 812, height: 375 }]) {
+      await page.setViewportSize(viewport);
+      await sendChatMessage(page, 'test:permission');
+      await expect(page.locator('#permModal')).toBeVisible();
+
+      await expectWithinViewport(page, page.locator('#permTool'));
+      await expectWithinViewport(page, page.locator('#permDeny'));
+      await expectWithinViewport(page, page.locator('#permAllow'));
+      await expect(page.locator('#permInput')).toContainText('git push origin main');
+
+      await page.locator('#permDeny').click();
+      await expect(page.locator('#permModal')).toBeHidden();
+      await waitForIdle(page);
+    }
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-19c PWA manifest 图标与本地 shell 资源可加载', async ({ page }) => {
+    await gotoMock(page);
+
+    const manifestResponse = await page.request.get('/manifest.webmanifest');
+    expect(manifestResponse.ok()).toBe(true);
+    const manifest = await manifestResponse.json();
+    expect(manifest.name).toBe('Claude Chat Mobile');
+    expect(Array.isArray(manifest.icons)).toBe(true);
+
+    for (const icon of manifest.icons) {
+      const response = await page.request.get(icon.src);
+      expect(response.ok()).toBe(true);
+      expect(response.headers()['content-type']).toContain(icon.type);
+    }
+
+    const serviceWorker = await page.request.get('/js/sw.js');
+    expect(serviceWorker.ok()).toBe(true);
+    expect(serviceWorker.headers()['content-type']).toContain('javascript');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-19d 窄屏和横屏下 settings 与 console sheet 滚动后关键控件可达', async ({ page }) => {
+    await gotoMock(page);
+
+    for (const viewport of [{ width: 320, height: 700 }, { width: 812, height: 375 }]) {
+      await page.setViewportSize(viewport);
+
+      await page.locator('#btnSettings').click();
+      await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+      await page.locator('#settingsSheet').evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await expectWithinViewport(page, page.locator('#settingsClose'));
+      await expectWithinViewport(page, page.locator('#accessHelpOpen'));
+      await page.locator('#settingsClose').click();
+      await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
+
+      await page.locator('#btnConsole').click();
+      await expect(page.locator('#consoleModal')).toBeVisible();
+      await page.locator('#consoleLogArea').evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await expectWithinViewport(page, page.locator('#consoleClose'));
+      await expectWithinViewport(page, page.locator('#consoleClear'));
+      await page.locator('#consoleClose').click();
+      await expect(page.locator('#consoleModal')).toBeHidden();
+    }
 
     await expectNoBrowserErrors(page);
   });

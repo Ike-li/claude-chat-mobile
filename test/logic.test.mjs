@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword } from '../public/js/logic.js';
+import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test('esc: 转义 HTML 元字符', () => {
@@ -19,6 +19,24 @@ test('withUltracodeKeyword: 单轮 ultracode 关键词前缀且不重复', () =>
   assert.equal(withUltracodeKeyword('ultracode 重构日期工具'), 'ultracode 重构日期工具');
   assert.equal(withUltracodeKeyword('UltraCode 重构日期工具'), 'UltraCode 重构日期工具');
   assert.equal(withUltracodeKeyword(''), 'ultracode');
+});
+
+// ultracode 是 CLI /effort 菜单 xhigh 之上的最高档（= xhigh effort + workflow 编排），
+// 仅在支持 xhigh 的模型上出现。这两个纯函数把「档位列表拼装」与「选中后的行为解析」抽出可测。
+test('withUltracodeTier: 含 xhigh 才追加 ultracode 最高档（镜像 CLI /effort），幂等', () => {
+  assert.deepEqual(withUltracodeTier(['low', 'medium', 'high', 'xhigh']), ['low', 'medium', 'high', 'xhigh', 'ultracode']);
+  assert.deepEqual(withUltracodeTier(['low', 'medium']), ['low', 'medium']); // 无 xhigh → 该模型不够格，不加
+  assert.deepEqual(withUltracodeTier([]), []);
+  assert.deepEqual(withUltracodeTier(['low', 'xhigh', 'ultracode']), ['low', 'xhigh', 'ultracode']); // 已含 → 不重复
+  assert.deepEqual(withUltracodeTier(null), []);
+});
+
+test('resolveEffortSelection: ultracode 档借道 xhigh + 武装关键词，其余档不武装', () => {
+  assert.deepEqual(resolveEffortSelection('ultracode'), { effort: 'xhigh', ultracode: true });
+  assert.deepEqual(resolveEffortSelection('xhigh'), { effort: 'xhigh', ultracode: false });
+  assert.deepEqual(resolveEffortSelection('low'), { effort: 'low', ultracode: false });
+  assert.deepEqual(resolveEffortSelection(''), { effort: null, ultracode: false });
+  assert.deepEqual(resolveEffortSelection(null), { effort: null, ultracode: false });
 });
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {

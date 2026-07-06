@@ -7,12 +7,28 @@ export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// ultracode 是 CLI/Workflow 的 per-turn 关键词触发，不是 effort 档位。按钮发送前只做前缀注入；
-// 已有关键词时保持原文，避免多次点击叠加。
+// ultracode = CLI /effort 菜单 xhigh 之上的最高档（= xhigh effort + dynamic workflow 编排）。
+// SDK 的 effort flag 只认 low..max、不认 ultracode，故 web 借道「xhigh effort + 每轮注入本关键词」复现：
+// 关键词触发 CLI 的 ultracodeKeywordTrigger → 该轮 opt into Workflow 工具。已有关键词时保持原文，避免叠加。
 export function withUltracodeKeyword(text) {
   const t = String(text ?? '').trim();
   if (!t) return 'ultracode';
   return /^ultracode(?:\s|$)/i.test(t) ? t : `ultracode ${t}`;
+}
+
+// 思考档位列表拼装：ultracode 仅在模型支持 xhigh 时作为最高档追加（CLI:"Requires an xhigh-capable model"）。
+// 幂等——列表已含 ultracode 则不重复（防 rebuildEffortOptions 反复渲染叠加）。
+export function withUltracodeTier(levels) {
+  const arr = Array.isArray(levels) ? levels : [];
+  if (!arr.includes('xhigh') || arr.includes('ultracode')) return arr;
+  return [...arr, 'ultracode'];
+}
+
+// 选中思考档 → { effort, ultracode }：ultracode 档在 SDK 层不存在，借道 xhigh + 武装每轮关键词；
+// 其余档原样发 effort（空/未选归 null=模型默认）、不武装。effort 值始终是后端白名单认得的合法值。
+export function resolveEffortSelection(uiLevel) {
+  if (uiLevel === 'ultracode') return { effort: 'xhigh', ultracode: true };
+  return { effort: uiLevel || null, ultracode: false };
 }
 
 // 模型桥接：把规范名 / 网关后缀名（如 claude-opus-4-8[1m]）匹配到 models 候选项。

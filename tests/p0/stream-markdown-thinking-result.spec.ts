@@ -26,4 +26,72 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-03b 代码块复制按钮提供可见反馈', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:stream');
+    await expect(page.locator('[data-testid="assistant-message"]').last().locator('pre code')).toContainText('tester', { timeout: 20_000 });
+    await waitForIdle(page);
+
+    const copyButton = page.locator('[data-testid="assistant-message"]').last().getByRole('button', { name: /复制代码|复制/ }).first();
+    await expect(copyButton).toBeVisible();
+    await copyButton.click();
+    await expect(copyButton).toContainText(/已复制|失败/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-03c 助手消息编辑按钮保留上一条用户原文', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:message-edit 复制 README');
+    await waitForIdle(page);
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('message edit fixture');
+
+    await reply.getByRole('button', { name: /编辑/ }).click();
+    await expect(page.locator('#input')).toHaveValue('test:message-edit 复制 README');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-03d Markdown sanitization blocks executable HTML while keeping safe markdown', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:unsafe-markdown');
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('safe bold markdown', { timeout: 20_000 });
+    await waitForIdle(page);
+
+    await expect(reply.locator('strong')).toContainText('safe bold markdown');
+    await expect(reply.locator('code')).toContainText('safe_inline_code');
+
+    const unsafeState = await reply.evaluate(el => {
+      const win = window as typeof window & {
+        __ccmUnsafeMarkdownScriptFired?: boolean;
+        __ccmUnsafeMarkdownImageFired?: boolean;
+        __ccmUnsafeMarkdownClickFired?: boolean;
+      };
+      return {
+        scriptTags: el.querySelectorAll('script').length,
+        eventAttributes: el.querySelectorAll('[onerror], [onclick], [onload]').length,
+        javascriptHrefs: [...el.querySelectorAll('a')]
+          .filter(a => /^javascript:/i.test(a.getAttribute('href') || '')).length,
+        scriptFired: win.__ccmUnsafeMarkdownScriptFired === true,
+        imageFired: win.__ccmUnsafeMarkdownImageFired === true,
+        clickFired: win.__ccmUnsafeMarkdownClickFired === true
+      };
+    });
+    expect(unsafeState).toEqual({
+      scriptTags: 0,
+      eventAttributes: 0,
+      javascriptHrefs: 0,
+      scriptFired: false,
+      imageFired: false,
+      clickFired: false
+    });
+
+    await expectNoBrowserErrors(page);
+  });
 });

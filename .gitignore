@@ -34,3 +34,4 @@ reasonix.toml
 /test-results/
 
 .github/copilot-instructions.md
+.codex/config.toml

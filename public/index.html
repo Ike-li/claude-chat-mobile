@@ -379,8 +379,7 @@
         width: 100%;
         padding: 0.5rem !important;
       }
-      #btnAttach,
-      #btnUltracode {
+      #btnAttach {
         position: relative !important;
         transform: none !important;
         width: 32px !important;
@@ -869,13 +868,6 @@
               </svg>
             </button>
 
-            <!-- ultracode：单轮 Workflow 关键词快捷发送 -->
-            <button id="btnUltracode" class="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-accent shrink-0 transition-all" title="用 ultracode 发送" aria-label="用 ultracode 发送">
-              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.091-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.091L9 5.25l.813 2.846a4.5 4.5 0 003.091 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.091zM18.25 9.75L17.875 11l-.375-1.25a2.25 2.25 0 00-1.5-1.5L14.75 7.875 16 7.5a2.25 2.25 0 001.5-1.5l.375-1.25.375 1.25a2.25 2.25 0 001.5 1.5l1.25.375-1.25.375a2.25 2.25 0 00-1.5 1.5z" />
-              </svg>
-            </button>
-
             <!-- E15：推送通知订阅入口 -->
             <button id="btnPush" class="hidden flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-accent shrink-0 transition-all" title="接收推送通知">
               <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
@@ -985,7 +977,7 @@
   <!-- 触觉配置面板大底栏 (Bottom Settings Sheet Drawer) -->
   <div id="settingsSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col p-4 max-h-[85vh] overflow-y-auto safe-bottom" style="border-top-color:var(--accent)">
     <div class="sheet-handle"></div>
-    <div class="flex items-center justify-between mb-4 border-b border-line-soft pb-2 shrink-0">
+    <div class="sticky top-0 z-10 bg-surface flex items-center justify-between mb-4 border-b border-line-soft pb-2 shrink-0">
       <div class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 配置面板</div>
       <button id="settingsClose" class="px-2.5 py-1 rounded bg-sunk hover:bg-line-soft active:scale-95 text-xs text-ink-soft">完成</button>
     </div>

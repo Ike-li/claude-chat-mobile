@@ -9,11 +9,11 @@
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-**这是给已经在终端用 `claude` CLI 的人做的。** 它**不自带** Claude、也**不是** Claude 的重新实现——而是通过 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 驱动你本机真实的 CLI，于是你得到的是同一个 agent、同一份 `CLAUDE.md`、同样的 MCP 服务器、技能、hooks 和已登录会话，与你在电脑前用的完全一致。设计目标是**终端等价性**：在手机上对 claude 打字，效果和坐在电脑前打字完全相同——改代码、跑命令、接着之前的对话——只是现在可以躺在床上做。
-
 <p align="center">
   <img src="docs/demo.gif" width="300" alt="流式回答 → 工具卡片 → 手机端批准 git push">
 </p>
+
+**这是给已经在终端用 `claude` CLI 的人做的。** 它**不自带** Claude、也**不是** Claude 的重新实现——而是通过 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 驱动你本机真实的 CLI，于是你得到的是同一个 agent、同一份 `CLAUDE.md`、同样的 MCP 服务器、技能、hooks 和已登录会话，与你在电脑前用的完全一致。设计目标是**终端等价性**：在手机上对 claude 打字，效果和坐在电脑前打字完全相同——改代码、跑命令、接着之前的对话——只是现在可以躺在床上做。
 
 ## 界面
 
@@ -69,7 +69,7 @@ npm start                     # http://localhost:3000
 
 然后在手机上打开——两种方式（启动时会打印已填好 token 的可用 URL）：
 
-- **同一 WiFi：** 打开启动时打印的局域网地址（`http://<lan-ip>:3000/#token=…`）——无需隧道。
+- **同一 WiFi：** 先在 `.env` 设 `AUTH_TOKEN`（局域网也必填——不设手机连不上），再打开启动时打印的局域网地址（`http://<lan-ip>:3000/#token=…`）——无需隧道。
 - **公网 / 安装为 PWA**（PWA 需要 https）：在另一个终端跑隧道：
 
 ```bash
@@ -78,11 +78,11 @@ cloudflared tunnel --url http://localhost:3000
 # token 首次加载存入 localStorage，随后从地址栏清除
 ```
 
-> ⚠️ 不设 `AUTH_TOKEN` 时服务只绑定 `127.0.0.1`、无法被隧道穿透——这是有意为之。
+> ⚠️ 不设 `AUTH_TOKEN` 时服务只绑定 `127.0.0.1`——同 WiFi 的手机和隧道都连不上，这是有意为之。
 >
 > 📌 以上是**最简配置**（临时随机隧道，仅供测试）。**稳定的生产部署**——固定域名、Cloudflare Access 双因素、作为后台守护进程运行——见 [docs/deployment.md](docs/deployment.md)。
 >
-> ⚠️ 本质上，这是**一条可远程触达、直通你本机 shell 的代码执行通道**。把它暴露到公网前。
+> ⚠️ 本质上，这是**一条可远程触达、直通你本机 shell 的代码执行通道**。把它暴露到公网前，先读下面的[安全模型](#安全模型)。
 
 ## 运行方式(三选一)
 

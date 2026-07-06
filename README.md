@@ -9,11 +9,11 @@
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#quick-start)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-**Built for people who already use the `claude` CLI in their terminal.** It does **not** bundle Claude and is **not** a re-implementation — it drives your real local CLI through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), so you get the same agent, the same `CLAUDE.md`, the same MCP servers, skills, hooks, and logged-in session you use at your desk. The goal is **terminal equivalence**: typing to claude on your phone behaves exactly like typing at your computer — edit code, run commands, resume an earlier conversation — except now you can do it from bed.
-
 <p align="center">
   <img src="docs/demo.gif" width="300" alt="Stream a reply, watch tool cards, then approve a git push from your phone">
 </p>
+
+**Built for people who already use the `claude` CLI in their terminal.** It does **not** bundle Claude and is **not** a re-implementation — it drives your real local CLI through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), so you get the same agent, the same `CLAUDE.md`, the same MCP servers, skills, hooks, and logged-in session you use at your desk. The goal is **terminal equivalence**: typing to claude on your phone behaves exactly like typing at your computer — edit code, run commands, resume an earlier conversation — except now you can do it from bed.
 
 ## Screenshots
 
@@ -69,7 +69,7 @@ npm start                     # http://localhost:3000
 
 Then open it on your phone — two ways (the startup log prints ready-to-use URLs with the token pre-filled):
 
-- **Same WiFi:** open the LAN address printed at startup (`http://<lan-ip>:3000/#token=…`) — no tunnel needed.
+- **Same WiFi:** set `AUTH_TOKEN` in `.env` first (required even on your LAN — without it the phone cannot connect), then open the LAN address printed at startup (`http://<lan-ip>:3000/#token=…`) — no tunnel needed.
 - **Public internet / install as a PWA** (PWA needs https): run a tunnel in another terminal:
 
 ```bash
@@ -78,7 +78,7 @@ cloudflared tunnel --url http://localhost:3000
 # The token is stored in localStorage on first load, then cleared from the address bar.
 ```
 
-> ⚠️ With no `AUTH_TOKEN` set, the server binds to `127.0.0.1` only and cannot be reached through a tunnel — this is deliberate.
+> ⚠️ With no `AUTH_TOKEN` set, the server binds to `127.0.0.1` only — neither your phone on the same LAN nor a tunnel can reach it. This is deliberate.
 >
 > 📌 The above is the **minimal setup** (temporary random tunnel, testing only). For a **stable production deployment** — fixed domain, Cloudflare Access two-factor, running as a background daemon — see [docs/deployment.md](docs/deployment.md).
 >

@@ -844,8 +844,21 @@ async function run() {
     if (chip) await chip.click();
     await sleep(300);
 
-    // 11d. Ultracode button prefixes the current prompt and uses the same send path
+    // 11d. ultracode 思考档（CLI /effort 最高档 = xhigh + workflow）给 prompt 加前缀，走同一发送路径
     lastEmittedText = null;
+    // 先切到支持 xhigh 的模型（sonnet），ultracode 档才渲染（haiku 等不支持 effort 的模型无此档）；
+    // 选模型不收面板（同 TC-7），面板保持开、直接续选 ultracode 磁贴，最后显式 #settingsClose 关
+    await page.click('#btnSettings');
+    await page.waitForSelector('#settingsSheet:not(.translate-y-full)');
+    await sleep(300);
+    await page.click('.model-tile[data-model="claude-3-5-sonnet"]');
+    await sleep(500); // 等 rebuildEffortOptions 按 sonnet 档位重渲（含 xhigh → ultracode）
+    await page.click('.effort-tile[data-level="ultracode"]');
+    await sleep(300);
+    await page.click('#settingsClose');
+    await page.waitForSelector('#settingsSheet.translate-y-full');
+    await sleep(300);
+    // ultracode 档已武装，发送自动注入关键词前缀
     await page.focus('#input');
     await page.evaluate(() => {
       const input = document.getElementById('input');
@@ -853,10 +866,20 @@ async function run() {
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await sleep(200);
-    await page.click('#btnUltracode');
+    await page.click('#btnSend');
     await sleep(600);
-    console.log(`   [Assert] Ultracode emitted text: "${lastEmittedText}"`);
-    assert.strictEqual(lastEmittedText, 'ultracode 整理 utils 日期工具', 'TC-11: Ultracode button must prefix and emit the prompt');
+    console.log(`   [Assert] ultracode emitted text: "${lastEmittedText}"`);
+    assert.strictEqual(lastEmittedText, 'ultracode 整理 utils 日期工具', 'TC-11: ultracode 思考档必须给 prompt 加前缀并 emit');
+
+    // 复位 ultracode 武装态（粘性），避免污染后续用例的发送——点默认思考档即可 armed=false
+    await page.click('#btnSettings');
+    await page.waitForSelector('#settingsSheet:not(.translate-y-full)');
+    await sleep(300);
+    await page.evaluate(() => document.querySelector('.effort-tile[data-level=""]')?.click()); // 默认档，evaluate 绕可见性判定
+    await sleep(300);
+    await page.click('#settingsClose');
+    await page.waitForSelector('#settingsSheet.translate-y-full');
+    await sleep(300);
 
     // 11e. Interrupt button during streaming
     await sendCommand('test:stream-long');
@@ -967,6 +990,10 @@ async function run() {
       // End on 'high'
       try { await page.click('.effort-tile[data-level="high"]'); await sleep(200); } catch {}
 
+      const highEffortActiveTC12 = await page.evaluate(() => {
+        const tile = document.querySelector('.effort-tile[data-level="high"]');
+        return tile ? (tile.classList.contains('ring-accent') || tile.classList.contains('ring-1')) : false;
+      });
       console.log(`   [Assert] High effort tile active: ${highEffortActiveTC12}`);
     } else {
       console.log('   [Skip] Effort group hidden (model does not support effort levels)');

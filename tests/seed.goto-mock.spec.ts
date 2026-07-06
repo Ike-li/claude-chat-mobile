@@ -1,12 +1,18 @@
 import { expect, type Page } from '@playwright/test';
 
-export function captureBrowserErrors(page: Page) {
+type BrowserErrorCaptureOptions = {
+  ignoredResourceStatusCodes?: number[];
+};
+
+export function captureBrowserErrors(page: Page, options: BrowserErrorCaptureOptions = {}) {
   const errors: string[] = [];
+  const ignoredResourceStatusCodes = new Set([404, ...(options.ignoredResourceStatusCodes || [])]);
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => {
     const text = message.text();
     if (text.includes('Blocked call to navigator.vibrate')) return;
-    if (text.includes('Failed to load resource: the server responded with a status of 404')) return;
+    const resourceStatus = text.match(/Failed to load resource: the server responded with a status of (\d+)/);
+    if (resourceStatus && ignoredResourceStatusCodes.has(Number(resourceStatus[1]))) return;
     if (message.type() === 'error') errors.push(text);
   });
   (page as Page & { __ccmErrors?: string[] }).__ccmErrors = errors;

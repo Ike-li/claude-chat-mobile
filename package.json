@@ -31,15 +31,17 @@
   },
   "scripts": {
     "start": "node server.js",
+    "setup": "node scripts/setup.js",
     "dev": "node --watch server.js",
-    "check": "for f in *.js public/js/*.js; do node --check \"$f\" || exit 1; done && echo 'syntax OK'",
+    "check": "for f in *.js public/js/*.js; do node --check \"$f\" || exit 1; done && echo 'syntax OK' && node scripts/check-visual-mock-registry.js",
     "test": "node --test --test-force-exit test/*.test.mjs test/integration/*.test.mjs",
     "test:unit": "node --test test/*.test.mjs",
     "test:integration": "node --test --test-force-exit test/integration/*.test.mjs",
     "test:coverage": "node --experimental-test-coverage --test test/*.test.mjs",
     "test:visual": "node scripts/visual-e2e-runner.js",
     "test:playwright": "playwright test",
-    "test:playwright:p0": "playwright test tests/p0"
+    "test:playwright:p0": "playwright test tests/p0",
+    "contract:check": "node scripts/contract-check.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.201",

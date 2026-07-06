@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -9,7 +9,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     localStorage.setItem('auth_token', decodeURIComponent(hashMatch[1]));
     history.replaceState(null, '', location.pathname);
   }
-  const token = localStorage.getItem('auth_token') || '';
+  let token = localStorage.getItem('auth_token') || '';
 
   // ---- 设备指纹生成与获取 (TOFU) ----
   let deviceToken = localStorage.getItem('device_token');
@@ -60,7 +60,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
   const btnAttach = $('btnAttach'), fileInput = $('fileInput'), attachTray = $('attachTray'); // E17：附件
-  const btnUltracode = $('btnUltracode'); // per-turn Workflow 关键词快捷发送
+  // ultracode 已从独立按钮并入「思考」档最高档（见 rebuildEffortOptions / ultracodeArmed），不再取独立按钮
   const btnPush = $('btnPush'); // E15：推送订阅入口
   // 候选之外的模型名（/model 手设、或重建时需保留的当前值）插入为带标注的 option
   function ensureModelOption(value, note) {
@@ -105,6 +105,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   const sessionDomCache = new Map();
   // 这些状态会被早期 socket/DOM 回调触达，必须先于回调注册声明，避免首连事件抢跑触发 TDZ。
   let _busyState = false;
+  let interruptPending = false;
   let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
   // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读。
@@ -160,6 +161,11 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const cachedCmds = JSON.parse(localStorage.getItem('slash_commands'));
     if (Array.isArray(cachedCmds)) window.availableSkills = cachedCmds;
   } catch { /* 缓存损坏等价于无缓存 */ }
+  function slashCommandName(cmd) {
+    if (typeof cmd === 'string') return cmd;
+    if (cmd && typeof cmd.name === 'string') return cmd.name;
+    return '';
+  }
   let lastSeq = 0;
   let curEpoch = null;
   let currentModel = '';                // 当前生效模型（init 事件的 model 字段），/model 无参时展示
@@ -229,7 +235,9 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     defCard.onclick = () => {
       haptic('tap');
       modelInput.value = '';
+      delete modelInput.dataset.fullModel;
       syncModelUI('');
+      rebuildEffortOptions(currentModel);
     };
     customModelGrid.appendChild(defCard);
 
@@ -248,7 +256,12 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       card.onclick = () => {
         haptic('tap');
         modelInput.value = val;
+        delete modelInput.dataset.fullModel;
         syncModelUI(val);
+        rebuildEffortOptions(val);
+        if (!effortSelect.value && currentEffort) {
+          socket.emit('user:setEffort', { level: null });
+        }
       };
       customModelGrid.appendChild(card);
     });
@@ -296,6 +309,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   let permModeSeen = false;             // 首次服务端同步只定基线不上屏（刷新/重连不冒「切换」假象）
   let currentEffort = null;             // 当前思考强度档（null=模型默认）；onchange 同值不重发
   let effortSeen = false;               // 首次服务端同步只定基线不上屏（同 permModeSeen）
+  let ultracodeArmed = false;           // ultracode 档（=xhigh+workflow）本地武装态：借道 xhigh 发 effort，
+                                        // 由本标志驱动「发送时注入关键词」+ pill/磁贴显示 ultracode。不跨实例（CLI: never persist）
   let currentCwd = null;                // 当前查看 cwd 上下文（instances.viewingCwd），目录切换器高亮 + 新建会话选目录
   let availableDirs = [];               // WORK_DIRS 白名单，会话面板目录切换器候选
   let cwdSeen = false;                  // 首次服务端同步只定基线不切视图（刷新/重连不清空）
@@ -405,6 +420,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
+    if (authToken) authToken.value = '';         // 成功后不把令牌留在本地表单状态里
     accessRelogin?.classList.add('hidden');      // 连上即收起重登浮层
     connectErrorCount = 0;
     if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = '进入'; }
@@ -540,6 +556,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const val = authToken?.value.trim();
     if (!val) { showAuthGate('请输入访问令牌'); return; }
     localStorage.setItem('auth_token', val);
+    token = val;
     socket.auth = { token: val, deviceToken };
     if (authError) authError.classList.add('hidden');
     if (authSubmit) { authSubmit.disabled = true; authSubmit.textContent = '连接中…'; }
@@ -587,7 +604,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   if (deviceDeniedHelp) deviceDeniedHelp.onclick = showAccessHelp;
   if (deviceDeniedRetry) deviceDeniedRetry.onclick = () => {
     deviceDenied?.classList.add('hidden');
-    if (!socket.connected) socket.connect(); // 重新发起 → 重新进入 pending，可信端/终端可再批
+    if (socket.connected) socket.disconnect();
+    socket.connect(); // 重新发起 → 重新进入 pending，可信端/终端可再批
   };
 
   // 已信任设备渲染待审批设备请求（pending_devices 事件）。点准入/拒绝即发 user:approveDevice/denyDevice。
@@ -721,6 +739,23 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     handle[ev.type]?.(ev.payload);
   });
 
+  function failPendingToolCards(message) {
+    if (!toolCards.size) return;
+    const summary = message || '工具执行已因本轮错误停止';
+    for (const card of toolCards.values()) {
+      const status = card.querySelector('.t-status');
+      if (status) status.textContent = '❌';
+      const out = card.querySelector('.t-out');
+      if (out) {
+        out.textContent = summary;
+        out.classList.remove('hidden');
+      }
+    }
+    toolCards.clear();
+    agentToolIds.clear();
+    hideActivityBanner();
+  }
+
   const handle = {
     device_status(p) {
       const modal = $('deviceModal');
@@ -733,6 +768,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
           modal.classList.remove('hidden');
         }
         if (inputEl) inputEl.disabled = true;
+        updateSendButtonState();
       } else if (p.status === 'approved') {
         if (modal) {
           modal.style.transition = 'opacity 0.15s ease-out';
@@ -743,9 +779,11 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
           }, 150);
         }
         if (inputEl) inputEl.disabled = false;
+        updateSendButtonState();
       } else if (p.status === 'denied') {
         if (modal) modal.classList.add('hidden');
-        if (inputEl) inputEl.disabled = false;
+        if (inputEl) inputEl.disabled = true;
+        updateSendButtonState();
         showDeniedOverlay();
       }
     },
@@ -909,8 +947,14 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         
         // 追加任何可能附带的附件
         if (Array.isArray(p.attachments) && p.attachments.length) {
-          const wrap = el(`<div class="flex flex-wrap gap-2 mt-2"></div>`);
+          let wrap = null;
           for (const a of p.attachments) {
+            const alreadyRendered = a.name && (
+              matchedBubble.textContent.includes(a.name)
+              || [...matchedBubble.querySelectorAll('img')].some(img => img.title === a.name)
+            );
+            if (alreadyRendered) continue;
+            if (!wrap) wrap = el(`<div class="flex flex-wrap gap-2 mt-2"></div>`);
             if (a.thumb) {
               const img = el(`<img class="max-w-[8rem] max-h-32 rounded-lg">`);
               img.src = a.thumb; img.title = a.name || '';
@@ -922,7 +966,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
               wrap.appendChild(chip);
             }
           }
-          matchedBubble.appendChild(wrap);
+          if (wrap) matchedBubble.appendChild(wrap);
         }
         if (p.text) appendCopyAction(matchedBubble, () => p.text, 'right');
         scrollBottom(true);
@@ -984,6 +1028,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
           if (idx !== -1) permQueue.splice(idx, 1);
         }
         if (!activePerm) showNextPerm();
+        updateSendButtonState();
       } else if (kind === 'question') {
         // question requestId 格式 '${toolUseID}#i'；resolved requestId 是 toolUseID（或 '#i' 形式）
         const matchQ = qId => qId === requestId || qId.startsWith(requestId + '#');
@@ -995,6 +1040,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
           if (idx !== -1) questionQueue.splice(idx, 1);
         }
         if (!activeQuestion) showNextQuestion();
+        updateSendButtonState();
       }
     },
     result(p) {
@@ -1009,6 +1055,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       hideActivityBanner(); // 会话结束隐藏活动横幅
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
+      if (p.isError) failPendingToolCards((p.errors || []).join('; '));
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       haptic(p.isError ? 'error' : 'success');
       const cost = p.costUsd != null ? ` · $${p.costUsd.toFixed(4)}` : '';
@@ -1030,9 +1077,11 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         activeQuestion = null;
         closeSheet(questionModal);
       }
+      updateSendButtonState();
     },
     error(p) {
       finalizeStreams();
+      failPendingToolCards(p.message);
       haptic('error');
       addBar(`⚠️ ${p.message}`, 'text-danger');
       setBusy(false);
@@ -1049,6 +1098,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         activeQuestion = null;
         closeSheet(questionModal);
       }
+      updateSendButtonState();
     },
     // M7：改用 kind 字段判断中断，不靠字符串匹配（字符串会随 i18n 变化）
     system(p) {
@@ -1061,6 +1111,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       if (!cliStatusEl || !p || typeof p !== 'object') return;
       // 守护：如果 payload 里的 instanceId 与前端当前的 viewingInstanceId 不一致，则丢弃渲染（防止旧 tab 覆盖）
       if (p.instanceId && viewingInstanceId && p.instanceId !== viewingInstanceId) return;
+      // 兼容陈旧重放：老 payload 可能没有 instanceId，但仍带 cwd；用 cwd 兜底防止别的工作区状态线覆盖当前视图。
+      if (!p.instanceId && p.cwd && currentCwd && p.cwd !== currentCwd) return;
       // 空启动页采用极简底部：模型/权限/思考 chips 即可，statusLine 进入消息流后再显示。
       if (messagesEl.classList.contains('empty-start')) return;
       const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
@@ -1215,6 +1267,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
     permAlways.checked = false;
     openSheet(permModal);
+    updateSendButtonState();
   }
   function answerPerm(decision) {
     if (!activePerm) return;
@@ -1236,6 +1289,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (wasExitPlanMode && !activePerm && activeStatusText) {
       activeStatusText.textContent = 'Claude 正在思考中...';
     }
+    updateSendButtonState();
   }
   $('permAllow').onclick = () => answerPerm('allow');
   $('permDeny').onclick = () => answerPerm('deny');
@@ -1253,6 +1307,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       questionOptions.appendChild(btn);
     });
     openSheet(questionModal);
+    updateSendButtonState();
   }
   function answerQuestion(index) {
     if (!activeQuestion) return;
@@ -1268,6 +1323,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (!activeQuestion && activeStatusText) {
       activeStatusText.textContent = 'Claude 正在思考中...';
     }
+    updateSendButtonState();
   }
 
   // ---- 发送 / 停止 ----
@@ -1276,13 +1332,21 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       addBar('此会话正在终端运行，只读中——如确认终端已停，点「仍要发送」接管', 'text-danger');
       return;
     }
+    if (inputEl.disabled) {
+      addBar('请先完成设备授权或解除只读状态，再发送新消息', 'text-info');
+      return;
+    }
+    if (activePerm || activeQuestion) {
+      addBar('请先处理当前审批或选择，再发送新消息', 'text-info');
+      return;
+    }
     const rawText = inputEl.value.trim();
-    if (opts.ultracode && !rawText && pendingAttachments.length === 0) {
-      addBar('先输入任务，再用 ultracode 发送', 'text-info');
+    if (ultracodeArmed && !rawText && pendingAttachments.length === 0) {
+      addBar('ultracode 档需要先输入任务再发送', 'text-info');
       inputEl.focus();
       return;
     }
-    const text = opts.ultracode ? withUltracodeKeyword(rawText) : rawText;
+    const text = ultracodeArmed ? withUltracodeKeyword(rawText) : rawText; // ultracode 档：每轮注入关键词触发 Workflow
     if (!text && pendingAttachments.length === 0) return; // E17：纯附件（空文本）也可发
     // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传
@@ -1294,6 +1358,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         if (match) {
           currentGatewaySuffix = match[0];
           nakedArg = arg.replace(/\[[^\]]+\]$/, '');
+          modelInput.dataset.fullModel = arg;
+        } else {
+          currentGatewaySuffix = '';
+          delete modelInput.dataset.fullModel;
         }
         ensureModelOption(nakedArg, '手动设置'); // select 候选外的任意名（如网关别名）动态插入
         modelInput.value = nakedArg;
@@ -1309,7 +1377,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       autosize();
       return;
     }
-    let model = modelInput.value.trim() || undefined;
+    let model = modelInput.dataset.fullModel || modelInput.value.trim() || undefined;
     // S5：仅对「不在 supportedModels 候选里的自设名」(如 /model 手设并剥离了后缀的) 回贴网关后缀。
     // 候选内的值本就是网关合法完整名(裸别名 opus/sonnet 或显式 deepseek-v4-pro[1m])，原样发送——
     // 否则会把上个模型的后缀错贴到用户新选的别的候选(opus→opus[1m]，网关不认)。
@@ -1371,7 +1439,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
 
     if (text.length > 50000) { addBar(`消息过长（${text.length}/50000），未发送`, 'text-danger'); return; }
-    if (opts.ultracode) addBar('ultracode：本轮启用 Workflow 关键词', 'text-info');
     if (text.startsWith('/')) addBar(`⚡ 命令：${text}`, 'text-info');
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
@@ -1394,10 +1461,6 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     scrollBottom(true);
   }
   btnSend.onclick = send;
-  btnUltracode?.addEventListener('click', () => {
-    haptic('tap');
-    send({ ultracode: true });
-  });
   // 中文输入法：e.isComposing + keyCode 229 双检已覆盖绝大多数现代浏览器，
   // composition 状态追踪作为旧浏览器（Safari <14、部分 Android WebView）的后备兜底
   let composing = false;
@@ -1493,7 +1556,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   inputEl.addEventListener('input', () => {
     const val = inputEl.value;
     if (val.startsWith('/')) {
-      const base = window.availableSkills || [];
+      const base = (window.availableSkills || []).map(slashCommandName).filter(Boolean);
       const cands = base.concat(LOCAL_COMMANDS.filter(c => !base.includes(c)));
       const prefix = val.slice(1).toLowerCase();
       const matches = prefix ?
@@ -1526,14 +1589,18 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
   function updateSendButtonState() {
     const hasText = inputEl.value.trim().length > 0 || pendingAttachments.length > 0;
-    if (hasText && !_queueFull) {
+    const blockedByUserRequest = !!activePerm || !!activeQuestion;
+    const blockedByDisabledInput = inputEl.disabled;
+    if (hasText && !_queueFull && !blockedByUserRequest && !blockedByDisabledInput) {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-ink text-surface hover:bg-ink-soft active:scale-95 shadow-sm transition-all duration-200 shrink-0";
       btnSend.disabled = false;
       btnSend.title = '';
     } else {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-40 cursor-not-allowed transition-all duration-200 shrink-0";
       btnSend.disabled = true;
-      btnSend.title = _queueFull ? '前面已有消息在排队，请等当前任务结束' : '';
+      btnSend.title = blockedByUserRequest
+        ? '请先处理当前审批或选择'
+        : (blockedByDisabledInput ? '请先完成设备授权或解除只读状态' : (_queueFull ? '前面已有消息在排队，请等当前任务结束' : ''));
     }
   }
 
@@ -1544,11 +1611,19 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   }
   updateSendButtonState();
 
-  btnStop.onclick = () => socket.emit('user:interrupt', { instanceId: viewingInstanceId }); // 台阶3：中断当前查看 tab 的在途任务
+  function requestInterrupt() {
+    if (interruptPending) return;
+    interruptPending = true;
+    if (btnStop) btnStop.disabled = true;
+    if (btnStopNew) btnStopNew.disabled = true;
+    socket.emit('user:interrupt', { instanceId: viewingInstanceId }); // 台阶3：中断当前查看 tab 的在途任务
+  }
+
+  btnStop.onclick = requestInterrupt;
   if (btnStopNew) {
     btnStopNew.onclick = () => {
       haptic('tap');
-      socket.emit('user:interrupt', { instanceId: viewingInstanceId });
+      requestInterrupt();
     };
   }
 
@@ -1623,23 +1698,25 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   function setEffortMode(level, silent = false) {
     if (!effortSelect) return;
     const val = level || null; // 空串/undefined 归一为 null（模型默认）
+    // ultracode 档借道 xhigh：后端只回 xhigh，用本地 ultracodeArmed 决定呈现名
     if (!silent && effortSeen && val !== currentEffort) {
-      addBar(`思考强度 → ${val || '模型默认'}（下一条消息生效）`, 'text-ink-faint');
+      addBar(`思考强度 → ${ultracodeArmed ? 'ultracode' : (val || '模型默认')}（下一条消息生效）`, 'text-ink-faint');
     }
     effortSeen = true;
     currentEffort = val;
     effortSelect.value = val || '';
 
-    // Sync Pill Display Text
+    // Sync Pill Display Text（武装 ultracode 时显 ultracode，而非后端真值 xhigh）
     if (pillEffortText) {
-      pillEffortText.textContent = val || '默认思考';
+      pillEffortText.textContent = ultracodeArmed ? 'ultracode' : (val || '默认思考');
     }
 
-    // Sync Custom Effort Tiles Selection Styling
+    // Sync Custom Effort Tiles Selection Styling（武装 ultracode 时高亮最高档，而非后端真值 xhigh）
     if (customEffortGrid) {
+      const activeLevel = ultracodeArmed ? 'ultracode' : (val || '');
       customEffortGrid.querySelectorAll('.effort-tile').forEach(tile => {
         const tileVal = tile.dataset.level || '';
-        const isCurrent = (val || '') === tileVal;
+        const isCurrent = activeLevel === tileVal;
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
           const title = tile.querySelector('.text-xs') || tile;
@@ -1658,8 +1735,11 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   // effort 档位按当前模型动态渲染（CLI/SDK 透传，不硬编码）：决策在 logic.js 的 effortLevelsFor，此处只渲染。
   function rebuildEffortOptions(modelValue) {
     if (!effortSelect) return;
-    const { hidden, levels: show } = effortLevelsFor(modelValue, modelsList);
+    const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
+    const show = withUltracodeTier(baseLevels); // xhigh-capable 模型上追加 ultracode 最高档，镜像 CLI /effort
     if (hidden) {
+      effortSelect.value = '';
+      if (customEffortGrid) customEffortGrid.innerHTML = '';
       effortRow?.classList.add('hidden');
       pillEffort?.classList.add('hidden');
       customEffortGroup?.classList.add('hidden');
@@ -1680,7 +1760,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (customEffortGrid) {
       customEffortGrid.innerHTML = '';
       
-      const currentVal = effortSelect.value || '';
+      const currentVal = ultracodeArmed ? 'ultracode' : (effortSelect.value || ''); // 武装 ultracode 时高亮最高档磁贴
       const defActive = !currentVal;
       const defTile = el(`
         <div data-level="" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${defActive ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
@@ -1697,10 +1777,12 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
       for (const lv of show) {
         const active = currentVal === lv;
+        const isUltra = lv === 'ultracode';
+        const sub = isUltra ? 'xhigh + 多 agent workflow · 最彻底，更慢更费额度' : `思考等级: ${lv}`;
         const lvTile = el(`
           <div data-level="${lv}" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
             <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${lv}</div>
-            <div class="text-[9.5px] text-ink-soft mt-0.5">思考等级: ${lv}</div>
+            <div class="text-[9.5px] text-ink-soft mt-0.5">${sub}</div>
           </div>
         `);
         lvTile.onclick = () => {
@@ -1713,11 +1795,19 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
   }
   effortSelect.onchange = () => {
-    const level = effortSelect.value || null;
-    if (level === currentEffort) return;
-    socket.emit('user:setEffort', { level });
-    // 不乐观更新：成功则 effort_mode 广播拨档 + 上屏；busy/非法档则 server 发 system 提示
-    // 并单发当前档拨回本设备 select
+    // ultracode 档在 SDK 层不存在：解析成「借道 xhigh + 武装关键词」。effort 始终是后端认得的合法值。
+    const { effort, ultracode } = resolveEffortSelection(effortSelect.value || null);
+    const armedChanged = ultracode !== ultracodeArmed;
+    ultracodeArmed = ultracode;
+    if (effort !== currentEffort) {
+      socket.emit('user:setEffort', { level: effort });
+      // 不乐观更新：成功则 effort_mode 广播拨档 + 上屏（setEffortMode 读 ultracodeArmed 决定显名）；
+      // busy/非法档则 server 发 system 提示并单发当前档拨回本设备 select
+    } else if (armedChanged) {
+      // effort 未变、仅 ultracode 武装态翻转（xhigh ↔ ultracode）：无后端往返、免会话重建，本地即时刷新
+      setEffortMode(currentEffort, true);
+      addBar(ultracode ? 'ultracode：xhigh + 多 agent workflow（更彻底，更慢更费额度）' : `思考强度 → ${currentEffort || '模型默认'}`, 'text-ink-faint');
+    }
   };
 
   // ---- 工作目录切换（台阶1：多目录单并发）----
@@ -1731,12 +1821,14 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   function adoptPanelState(inst) {
     if (!inst) return; // 新会话尚无实例（viewingInstanceId=null）：保持现状不乱跳
     // 始终更新模型显示——即使 inst.model 为 null/空也清掉旧值，防切换工作区时上个区的模型名泄漏
-    updateModelAndSuffix(inst.model || '');
+    const rawModel = inst.model || '';
+    updateModelAndSuffix(rawModel);
+    const effortModelValue = rawModel || currentModel;
     if (modelInput) {
       if (inst.model) {
         ensureModelOption(currentModel);
         modelInput.value = currentModel;
-        rebuildEffortOptions(currentModel);
+        rebuildEffortOptions(effortModelValue);
       } else {
         modelInput.value = '';
       }
@@ -1744,6 +1836,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
     setPermMode(inst.permissionMode || 'default', true);
     setEffortMode(inst.effort ?? null, true);
+    rebuildEffortOptions(effortModelValue);
   }
 
   // tab 栏快照回执/重放（台阶3，Step A+B 均已落地）。首次只定基线不动视图（刷新/重连不清空）；
@@ -1809,6 +1902,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const startScreenCwdChanged = !newViewing && cwdChanged;
     if (newViewing !== displayedInstanceId || startScreenCwdChanged) {
       const target = instancesList.find(x => x.instanceId === newViewing);
+      ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）
       adoptPanelState(target);          // 先静默同步顶部面板到新实例档（先于 bindView 的 sync 回放）
       // 空首页（无实例）：① 模型不显具体名（新会话模型=env 默认、服务端不可知）→「不指定」，modelInput 归零；
       // ② 权限/思考强度显"下条新会话将用的真实档"（server defaultPermissionMode/defaultEffort = pending ?? CLI 启动默认），
@@ -1889,6 +1983,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
 
     clearView(sid, null);
+    if (inputEl) {
+      inputEl.value = '';
+      inputEl.dispatchEvent(new Event('input'));
+    }
 
     // 新会话首发懒开：实例已建、sessionId 未由 SDK init 返回。此刻回落 dashboard 会「闪首页」——
     // 到首个 user_message 经 leaveStartScreen 切回聊天前的几百 ms 用户看见首页再弹回。
@@ -2026,6 +2124,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (!activeStatusPill || b === _busyState) return;
     _busyState = b;
     if (b) {
+      if (!interruptPending) {
+        if (btnStop) btnStop.disabled = false;
+        if (btnStopNew) btnStopNew.disabled = false;
+      }
       activeStatusPill.classList.remove('hidden');
       activeStatusPill.offsetHeight; // 触发 CSS 过渡所需的单次强制 layout（仅在 false→true 时执行一次）
       activeStatusPill.classList.add('pill-active');
@@ -2033,6 +2135,9 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         activeStatusText.textContent = 'Claude 正在执行任务...';
       }
     } else {
+      interruptPending = false;
+      if (btnStop) btnStop.disabled = false;
+      if (btnStopNew) btnStopNew.disabled = false;
       activeStatusPill.classList.remove('pill-active');
       setTimeout(() => {
         if (!activeStatusPill.classList.contains('pill-active')) {
@@ -2923,11 +3028,16 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       let prevUserText = '';
       let sibling = container.previousElementSibling;
       while (sibling) {
-        if (sibling.classList.contains('bg-user') || (sibling.classList.contains('msg-body') && sibling.querySelector('.whitespace-pre-wrap'))) {
-          // If the element is user message
-          const textEl = sibling.querySelector('.whitespace-pre-wrap') || sibling;
-          prevUserText = textEl.textContent || '';
-          prevUserText = prevUserText.replace(/✓ 已复制|⧉ 复制|复制|已复制|编辑|朗读|停止/g, '').trim();
+        if (sibling.classList.contains('bg-user')) {
+          const textEl = sibling.querySelector(':scope > .whitespace-pre-wrap') || sibling.querySelector('.whitespace-pre-wrap');
+          if (textEl) {
+            prevUserText = textEl.textContent || '';
+          } else {
+            const clone = sibling.cloneNode(true);
+            clone.querySelectorAll?.('.msg-action-bar').forEach(node => node.remove());
+            prevUserText = clone.textContent || '';
+          }
+          prevUserText = prevUserText.trim();
           break;
         }
         sibling = sibling.previousElementSibling;

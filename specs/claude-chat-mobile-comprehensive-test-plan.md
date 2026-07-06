@@ -40,6 +40,11 @@
     - expect: 输入内容保持可编辑，移动端布局不跳动，底部工具栏不遮挡文本。
   3. 清空输入框。
     - expect: 发送按钮恢复 disabled。
+    - expect: 前台恢复/pageshow 触发 sync:since replay 时，已渲染的 assistant 回复不重复出现。
+    - expect: 前台恢复/pageshow 触发 sync:since found:false 时，清掉旧实例内容并回载 session:history。
+    - expect: 斜杠命令提示可处理服务端返回的对象格式命令，输入 /m 时显示 /model 且不抛 JS error。
+    - expect: 点击斜杠命令提示会把命令填入输入框，隐藏提示列表，并保持发送按钮可用。
+    - expect: 点击输入框外部会关闭斜杠命令提示，不丢弃草稿，也不会误生成聊天消息。
     - expect: 失败条件：空输入可发送、产生空消息、按钮状态与输入内容不一致。
 
 #### 1.3. P0-03 流式回复、Markdown、thinking 与结果栏
@@ -54,6 +59,8 @@
   2. 等待流式输出结束。
     - expect: assistant 消息逐步增长并最终完整显示。
     - expect: Markdown 渲染包含粗体、列表、inline code、代码块和复制代码按钮。
+    - expect: 点击代码块复制按钮后有“已复制”或失败反馈，用户能知道操作结果。
+    - expect: 点击 assistant 消息的编辑按钮后，上一条用户原文应完整回填到输入框，即使原文包含“复制/编辑/朗读”等操作栏同名词。
     - expect: 完成后 active status pill 隐藏。
     - expect: 结果栏显示完成状态、耗时/成本/模型等可见摘要；成本格式应稳定，例如 $0.0015。
     - expect: 失败条件：流式过程卡住、Markdown 原文泄漏、thinking 混入主回复、完成后仍 busy、结果栏缺失或显示 NaN。
@@ -68,6 +75,7 @@
     - expect: 回复持续追加 Chunk，不阻塞输入区布局。
   2. 点击停止按钮。
     - expect: 前端发出中断意图，停止按钮不应重复触发多次副作用。
+    - expect: 连续点击停止只显示一次已中断反馈，不堆叠重复中断提示。
     - expect: 用户可见状态从执行中回落到空闲或明确显示已中断。
     - expect: 之后可继续发送新消息。
     - expect: 失败条件：点击停止无反馈、busy 永久不消失、旧流继续无限追加、停止中断到错误会话 tab。
@@ -83,6 +91,7 @@
     - expect: 工具运行中状态与 active status pill 一致。
   2. 等待完成并展开第一个工具卡片。
     - expect: 工具卡片可折叠/展开。
+    - expect: 工具输出默认折叠，展开对应卡片后才显示成功/失败输出摘要。
     - expect: 展开后显示 input/output 摘要，例如 utils/date.js、npm test 或成功输出。
     - expect: 所有成功工具最终显示成功状态。
     - expect: 最终 assistant 文本总结工具执行结果。
@@ -98,6 +107,7 @@
     - expect: sheet 显示工具名 run_command、cwd、完整命令 git push origin main。
     - expect: 包含“本会话内总是允许此类操作”复选框、拒绝、允许按钮。
     - expect: 背景消息和输入不应误触发审批按钮。
+    - expect: 审批弹窗打开时，背景输入草稿按 Enter 或点击发送不会提交新消息；审批解决后草稿仍可继续发送。
   2. 点击允许。
     - expect: 审批弹窗关闭。
     - expect: 对应工具卡片转为成功状态。
@@ -137,6 +147,8 @@
     - expect: 工具卡片状态变为已回答。
     - expect: active status 立即回到思考中，不能停留在 AskUserQuestion 工具文案。
     - expect: assistant 回复包含所选选项。
+    - expect: 选择弹窗打开时，背景输入草稿按 Enter 或点击发送不会提交新消息；选择完成后草稿仍可继续发送。
+    - expect: 点击选择弹窗遮罩不会关闭必须回答的选择题，也不会丢弃或提交背景草稿。
     - expect: 失败条件：选项顺序错误、点击后弹窗不关、答案发往错误 requestId、重复显示同一问题。
 
 #### 1.9. P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀
@@ -153,6 +165,7 @@
     - expect: 底部 pill 与隐藏 select 状态同步更新。
     - expect: [1m] 后缀不被截断、不被当作非法模型名。
     - expect: 关闭设置后选择保留，并在下一条消息发送参数中可观测。
+    - expect: 输入 /model claude-3-opus[1m] 只更新下一轮模型，不创建聊天消息，并在下一条消息里保留 [1m] 后缀。
     - expect: 失败条件：特殊模型选择后显示空白、effort 对不支持模型仍强行显示、权限 pill 与设置面板不一致。
 
 #### 1.10. P0-10 状态线、成本、模型与上下文信息
@@ -177,8 +190,14 @@
   2. 打开工作区与会话 sidebar，展开工作区列表，切换到第二个工作区/会话。
     - expect: sidebar 显示每个工作区、会话、新建会话入口和关闭会话入口。
     - expect: session:list 结果只显示当前 cwd 对应历史会话。
+    - expect: session:list 返回 hasMore 时，sidebar 显示“显示全部会话…”并可展开较早历史会话，展开后能打开并回放历史。
+    - expect: sidebar 已缓存旧 session:list 后，重新刷新到 hasMore 结果时仍显示“显示全部会话…”并可打开较早历史会话。
     - expect: 切换到第二个实例后通过 sync:since/history replay 显示该会话历史消息。
+    - expect: sync:since 返回 gap 时清掉残缺回放并回退 session:history，不残留旧会话内容。
+    - expect: 关闭当前待审批会话时切到剩余会话，旧会话消息和待审批状态不残留。
+    - expect: 关闭当前会话并 fallback 到剩余会话后，已关闭实例迟到的 tool/text/permission/question/result 事件不污染当前视图。
     - expect: 当前模型、权限档、effort 跟随实例切换。
+    - expect: 切换到其它会话/工作区后，未发送文本草稿被清空，不会作为下一条消息发送到错误会话。
     - expect: 失败条件：工作区历史串线、切换后仍显示旧实例 pending 弹窗、关闭一个实例误关另一个实例。
 
 #### 1.12. P0-12 新会话首发 busy 连续性与不闪回首页
@@ -204,6 +223,8 @@
   2. 尝试在 inst_2 当前视图继续发送或操作。
     - expect: 不会把 inst_1 的审批 allow/deny 发给 inst_2。
     - expect: sidebar/状态角标仍可提示后台实例有 pending，但当前视图不显示错误弹窗。
+    - expect: 关闭后台 AskUserQuestion pending 会话后，旧问题弹窗和 requestId 不会在当前视图复活。
+    - expect: 关闭后台 pending 会话后，即使服务端迟到发来旧 instanceId 的 tool/text/permission/question/result 事件，当前视图也不显示旧文本、旧审批或旧问题。
     - expect: 失败条件：跨 tab 弹窗残留、点击当前视图按钮解决了后台实例请求、旧 requestId 被错误复用。
 
 #### 1.14. P0-14 pending snapshot 对账重建审批卡片
@@ -214,6 +235,8 @@
   1. 起始状态/假设：fresh state。发送 test:pendingsnapshot。
     - expect: 即使原始 permission_request 未回放，切入目标实例时 sync:since ack.pending 快照能重建审批弹窗。
     - expect: 弹窗显示 run_command、cwd 和 rm -rf /tmp/stale 等 mock 内容。
+    - expect: sync:since 返回 gap 并回退 session:history 时，ack.pending 里的审批弹窗仍在视图稳定后重建。
+    - expect: sync:since 返回 gap 并回退 session:history 时，ack.pending 里的 AskUserQuestion 选择弹窗仍在视图稳定后重建。
     - expect: 失败条件：只显示 sidebar 角标但会话内没有审批卡、重复创建多张同 requestId 卡、快照审批路由到错误实例。
 
 #### 1.15. P0-15 设备信赖 TOFU、pending device request 与访问帮助
@@ -225,6 +248,8 @@
     - expect: 出现等待授权 overlay。
     - expect: 显示本设备 ID，例如 unauthorized-fingerprint-999。
     - expect: 包含“没有其它已登录的设备？用命令授权”说明和 device.js approve 命令模板。
+    - expect: 等待授权期间已有输入草稿保留、发送按钮禁用并给出原因；设备批准后草稿可继续发送。
+    - expect: 设备被拒期间已有输入草稿仍保留，发送按钮继续禁用；重新请求接入后回到 pending 授权且仍不能误发送草稿。
     - expect: 失败条件：未授权设备仍可操作聊天、设备 ID 不显示、帮助命令缺失。
   2. 起始状态/假设：fresh state。发送 test:devicerequests。
     - expect: 可信设备视角出现 pending device request 卡片栈。
@@ -256,6 +281,7 @@
     - expect: 同一横幅原地刷新，不堆叠多条。
     - expect: 旧步骤文本被覆盖，不拼接。
     - expect: task_notification completed 后横幅撤下。
+    - expect: 终端只读追平锁到来时保留输入草稿、禁用发送并显示原因，用户显式接管后草稿可继续发送。
     - expect: 失败条件：横幅多条堆叠、完成后不消失、当前会话 busy 与后台任务状态互相污染。
 
 #### 1.18. P0-18 文件/图片上传、附件 chip 与前端边界
@@ -268,6 +294,7 @@
     - expect: 文本文件显示文件名/大小/通用附件样式。
     - expect: 图片显示缩略图或图片 chip，不破坏输入区布局。
     - expect: 发送后 user_message 可见附件元数据，附件托盘清空。
+    - expect: 手动移除某个附件 chip 后，该附件不会出现在发送后的用户消息里。
   2. 分别尝试 11 个附件、单文件超过 10MB、总量超过 20MB、重复选择同一文件、无扩展名文件。
     - expect: 超过数量/大小/总量时给出用户可见错误，不发送超限附件。
     - expect: 重复选择同一文件仍可触发 onchange。

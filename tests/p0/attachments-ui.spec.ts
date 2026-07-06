@@ -2,7 +2,8 @@
 // seed: tests/seed.goto-mock.spec.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock } from '../seed.goto-mock.spec';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../seed.goto-mock.spec';
+import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../helpers/p0-ui';
 
 const tinyPng = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=',
@@ -60,43 +61,159 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-18c 附件总量超过 20MB 时拒绝新增文件', async ({ page }) => {
+  test('P0-18c 附件总量超限与无扩展名通用附件回显', async ({ page }) => {
     await gotoMock(page);
 
     await page.locator('#fileInput').setInputFiles([
-      { name: 'bundle-a.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(10 * 1024 * 1024, 'a') },
-      { name: 'bundle-b.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(10 * 1024 * 1024, 'b') },
-      { name: 'overflow.bin', mimeType: 'application/octet-stream', buffer: Buffer.from('x') }
+      { name: 'total-a.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(7 * 1024 * 1024, 'a') },
+      { name: 'total-b.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(7 * 1024 * 1024, 'b') },
+      { name: 'total-c.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(7 * 1024 * 1024, 'c') }
     ]);
-
-    await expect(page.locator('#attachTray')).toContainText('bundle-a.bin');
-    await expect(page.locator('#attachTray')).toContainText('bundle-b.bin');
-    await expect(page.locator('#attachTray')).not.toContainText('overflow.bin');
     await expect(page.locator('#messages')).toContainText('附件总量将超过 20MB，未添加');
-    await expect(page.locator('#attachTray').getByText(/bundle-[ab]\.bin/)).toHaveCount(2);
-    await expect(page.locator('#btnSend')).toBeEnabled();
+    await expect(page.locator('#attachTray')).toContainText('total-a.bin');
+    await expect(page.locator('#attachTray')).toContainText('total-b.bin');
+    await expect(page.locator('#attachTray')).not.toContainText('total-c.bin');
+
+    await gotoMock(page);
+    await page.locator('#fileInput').setInputFiles({
+      name: 'LICENSE',
+      mimeType: '',
+      buffer: Buffer.from('unknown attachment type')
+    });
+    await expect(page.locator('#attachTray')).toContainText('LICENSE');
+    await page.locator('#input').fill('send unknown attachment');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#attachTray')).toBeHidden();
+    const sent = page.locator('[data-testid="user-message"]').last();
+    await expect(sent).toContainText('send unknown attachment');
+    await expect(sent).toContainText('LICENSE');
 
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-18d 无扩展名未知类型文件按通用附件处理', async ({ page }) => {
+  test('P0-18d 切换会话会清空未发送附件避免串线', async ({ page }) => {
     await gotoMock(page);
 
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
     await page.locator('#fileInput').setInputFiles({
-      name: 'README',
-      mimeType: '',
-      buffer: Buffer.from('plain file without an extension')
+      name: 'cross-session.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('must not leak to another session')
     });
+    await expect(page.locator('#attachTray')).toContainText('cross-session.txt');
 
-    await expect(page.locator('#attachTray')).toBeVisible();
-    await expect(page.locator('#attachTray')).toContainText('README');
-    await expect(page.locator('#attachTray img')).toHaveCount(0);
-    await expect(page.locator('#btnSend')).toBeEnabled();
+    await openSessionsSidebar(page);
+    await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
+    await expect(page.locator('#topProjectText')).toContainText('another-react-project');
+    await expect(page.locator('#attachTray')).toBeHidden();
+    await expect(page.locator('#btnSend')).toBeDisabled();
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    const sent = page.locator('[data-testid="user-message"]').last();
+    await expect(sent).toContainText('test:settings-echo');
+    await expect(sent).not.toContainText('cross-session.txt');
 
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-18e 发送后用户消息回显附件元数据并清空托盘', async ({ page }) => {
+  test('P0-18e 离线附件重发后不重复显示附件 chip', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:disconnect-now');
+    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+
+    await page.locator('#fileInput').setInputFiles({
+      name: 'offline-attachment.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('offline attachment payload')
+    });
+    await expect(page.locator('#attachTray')).toContainText('offline-attachment.txt');
+    await page.locator('#input').fill('test:settings-echo');
+    await page.locator('#btnSend').click();
+
+    const queued = page.locator('.msg-frame.opacity-70').last();
+    await expect(queued).toContainText('offline-attachment.txt');
+    await expect(queued.locator('.pending-indicator')).toContainText('正在等待连接');
+    await expect(page.locator('#attachTray')).toBeHidden();
+
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitForIdle(page);
+    await expect(page.locator('.pending-indicator')).toHaveCount(0);
+    await expect(page.locator('#messages').getByText('offline-attachment.txt')).toHaveCount(1);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-18f 移除附件 chip 后不会随消息发送', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#fileInput').setInputFiles([
+      { name: 'keep-me.txt', mimeType: 'text/plain', buffer: Buffer.from('keep this attachment') },
+      { name: 'remove-me.txt', mimeType: 'text/plain', buffer: Buffer.from('remove this attachment') }
+    ]);
+    await expect(page.locator('#attachTray')).toContainText('keep-me.txt');
+    await expect(page.locator('#attachTray')).toContainText('remove-me.txt');
+
+    const removedChip = page.locator('#attachTray > div').filter({ hasText: 'remove-me.txt' });
+    await removedChip.locator('button').click();
+    await expect(page.locator('#attachTray')).toContainText('keep-me.txt');
+    await expect(page.locator('#attachTray')).not.toContainText('remove-me.txt');
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    const sent = page.locator('[data-testid="user-message"]').last();
+    await expect(sent).toContainText('test:settings-echo');
+    await expect(sent).toContainText('keep-me.txt');
+    await expect(sent).not.toContainText('remove-me.txt');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-18g 移除附件 chip 后释放数量配额并只发送剩余附件', async ({ page }) => {
+    await gotoMock(page);
+
+    const initialFiles = Array.from({ length: 10 }, (_, index) => ({
+      name: `slot-${index}.txt`,
+      mimeType: 'text/plain',
+      buffer: Buffer.from(`attachment slot ${index}`)
+    }));
+
+    await page.locator('#fileInput').setInputFiles(initialFiles);
+    await expect(page.locator('#attachTray')).toContainText('slot-0.txt');
+    await expect(page.locator('#attachTray')).toContainText('slot-9.txt');
+
+    const removedChip = page.locator('#attachTray > div').filter({ hasText: 'slot-9.txt' });
+    await removedChip.locator('button').click();
+    await expect(page.locator('#attachTray')).not.toContainText('slot-9.txt');
+
+    await page.locator('#fileInput').setInputFiles({
+      name: 'replacement-after-remove.txt',
+      mimeType: 'text/plain',
+      buffer: Buffer.from('replacement after attachment quota frees up')
+    });
+    await expect(page.locator('#attachTray')).toContainText('replacement-after-remove.txt');
+    await expect(page.locator('#messages')).not.toContainText('附件数量已达上限');
+
+    await page.locator('#input').fill('send after freeing attachment quota');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#attachTray')).toBeHidden();
+
+    const sent = page.locator('[data-testid="user-message"]').last();
+    await expect(sent).toContainText('send after freeing attachment quota');
+    for (let index = 0; index < 9; index += 1) {
+      await expect(sent).toContainText(`slot-${index}.txt`);
+    }
+    await expect(sent).toContainText('replacement-after-remove.txt');
+    await expect(sent).not.toContainText('slot-9.txt');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-18h 发送后用户消息回显附件元数据并清空托盘', async ({ page }) => {
     await gotoMock(page);
 
     await page.locator('#fileInput').setInputFiles([

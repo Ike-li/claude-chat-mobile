@@ -261,6 +261,17 @@ function checkDocConsistency() {
     }
   }
 
+  // 配置模板（.env.example）里的裸 docs/ 路径引用：注释文本非 markdown 链接语法，上面的 linkRe 扫不到，单独兜底。
+  const bareDocRe = /docs\/[\w-]+\.md/g;
+  for (const rel of ['.env.example']) {
+    let text;
+    try { text = readFileSync(join(HERE, rel), 'utf8'); } catch { continue; }
+    let bm;
+    while ((bm = bareDocRe.exec(text)) !== null) {
+      if (!existsSync(join(HERE, bm[0]))) deadLinks.push(`${rel} → ${bm[0]}`);
+    }
+  }
+
   // 旧文件名漂移：renamed 文件的活引用（排除 CHANGELOG——其历史叙述合法记录「曾叫什么」）
   const RENAMED = ['需求文档-v2.md', '斜杠命令普查-2026-06-12.md'];
   const staleRefs = [];
