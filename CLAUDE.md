@@ -2,7 +2,7 @@
 
 移动端聊天式 Web UI，把**本机 claude CLI** 投送到手机——目标是终端等价性："坐在电脑前对 claude 打字"和"在手机上打字"效果一样。
 
-技术栈：Node ≥20 · ESM · Express 5 · Socket.io 4 · `@anthropic-ai/claude-agent-sdk` 0.1 · `jose` 6（JWT）· `web-push`（离线推送）· 测试用内置 `node --test` + puppeteer/gifenc/pngjs（视觉 E2E）。
+技术栈：Node ≥20 · ESM · Express 5 · Socket.io 4 · `@anthropic-ai/claude-agent-sdk` 0.3.201 · `jose` 6（JWT）· `web-push`（离线推送）· 测试用内置 `node --test` + puppeteer/gifenc/pngjs（视觉 E2E）。
 
 ## 常用命令
 
@@ -11,7 +11,7 @@
 ```bash
 npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
-npm run check      # node --check 根级 *.js + public/js/*.js 语法（零依赖、最快）
+npm run check      # node --check 根级 *.js + public/js/*.js + 文档一致性 + visual mock registry guard（零 token、最快）
 npm test           # 单测 + 可靠集成(server/auth/upload)；claude-turn 集成默认跳过；--test-force-exit 保证退出。CI 里集成整体 skip
 npm run test:unit  # node --test test/*.test.mjs：仅纯逻辑单测（零 token、最快）
 npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）
@@ -19,7 +19,7 @@ RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测
 npm run test:visual # puppeteer 移动端视觉回归 E2E（零外部依赖 mock server）
 
 # 启动前自检配置
-node scripts/doctor.js              # 检查 AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/settings.json/ANTHROPIC_*
+node scripts/doctor.js              # 10 项自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率
 node scripts/doctor.js --env=prod.env  # 指定 .env 文件
 
 # 设备指纹审批与管理
@@ -30,7 +30,7 @@ node scripts/device.js deny <ID>    # 拒绝/删除指定设备 ID
 # 冒烟验收（真实调用 claude 消耗 token）
 # ⚠️ e2e 前先备份会话指针：cp data/sessions.json data/sessions.json.bak && rm data/sessions.json
 AUTH_TOKEN='' PORT=3100 WORK_DIR=/tmp/ccm-test node server.js   # 终端 1：测试 server
-node scripts/smoke.js              # 终端 2：M1 行走骨架（A1/A2/A4/A6/A9 + 会话切换）
+node scripts/smoke.js              # 终端 2：M1 行走骨架（A1/A2/A4/A6 + 会话切换）
 node scripts/smoke.js --phase2     # 重启终端 1 后：跨重启 resume
 ```
 

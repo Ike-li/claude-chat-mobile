@@ -27,7 +27,7 @@
 | Backend | Express | 5.0（`server.js` 单文件入口） |
 | Realtime | Socket.IO | 4.8（双向 WebSocket 通信） |
 | Frontend | Vanilla JS + HTML | PWA（`public/`），无框架 |
-| AI | `@anthropic-ai/claude-agent-sdk` | 0.1+（spawn claude 子进程） |
+| AI | `@anthropic-ai/claude-agent-sdk` | 0.3.201（spawn claude 子进程） |
 | Auth | `jose` (JWT) + `dotenv` | AUTH_TOKEN 鉴权 + CF Access |
 | Push | `web-push` | VAPID Web Push |
 | Tunnel | cloudflared | Cloudflare Tunnel 公网暴露 |
@@ -39,28 +39,36 @@
 ### Unit Tests
 
 - **Framework:** Node.js built-in test runner (`node --test`)
-- **Config:** 无独立配置文件，直接运行 `npm test`
-- **Test Directory:** `test/*.test.mjs`（15 个测试文件）
+- **Config:** 无独立配置文件，直接运行 `npm run test:unit`
+- **Test Directory:** `test/*.test.mjs`（根级单测；数量以命令输出为准）
 - **Coverage:** `npm run test:coverage`（`--experimental-test-coverage`）
-- **特点:** 纯逻辑单测，零 token / 零外部依赖，CI 直接跑
+- **特点:** 纯逻辑单测，零 token；CI 通过 `npm test` 一并运行
 
 ### Integration Tests
 
 - **Framework:** Node.js built-in test runner（与单测相同）
-- **Test Directory:** `test/integration/*.test.mjs`（5 个测试文件）
+- **Test Directory:** `test/integration/*.test.mjs`（集成测试；数量以命令输出为准）
 - **Helpers:** `test/helpers/integration.mjs`（服务器启动、socket 客户端、事件收集）
-- **运行:** `npm test`（包含在 test 脚本中）
-- **特点:** 需要真实 claude 子进程、消耗 token、使用 CCM_DATA_DIR 隔离
-- **覆盖:** claude 子进程生命周期、WebSocket 事件流、安全层集成
+- **运行:** `npm run test:integration`；`npm test` 也会包含此 lane
+- **特点:** 使用 CCM_DATA_DIR 隔离；需真实 Claude agent turn 的路径在 CI 中跳过或需显式 opt-in
+- **覆盖:** server/auth/upload、会话/Socket 边界，以及显式 opt-in 的真实 Claude 生命周期路径
 
 ### Visual E2E
 
 - **Framework:** Puppeteer 25.1
 - **Config:** `scripts/visual-e2e-runner.js`（自定义 runner）
 - **Mock Server:** `scripts/visual-mock-server.js`（端口 3100）
-- **运行:** `npm run test:visual`（本地跑，CI 不跑）
+- **运行:** `npm run test:visual`（mock-only；GitHub Actions 的 `visual-e2e` job 也跑）
 - **视口:** iPhone X（375×812），headless Chrome
 - **截图输出:** `public/test-snapshots/`
+
+### Playwright P0 Mock Regression
+
+- **Framework:** Playwright (`@playwright/test`)
+- **Config:** `playwright.config.ts`
+- **Mock Server:** `scripts/visual-mock-server.js`（默认 `127.0.0.1:33341`）
+- **运行:** `npm run test:playwright:p0`
+- **特点:** 零 token、mock-only、每日回归安全；详见 `specs/README.md`
 
 ### Smoke Tests
 
@@ -73,9 +81,9 @@
 
 - **Platform:** GitHub Actions
 - **Workflow:** `.github/workflows/test.yml`
-- **触发:** push to `master` + 所有 PR
+- **触发:** push to `master` / `dev` + 所有 PR
 - **Jobs:**
-  - `unit-test`: `npm ci` → `npm test`（单测 + 集成测试，354+ 用例）
+  - `unit-test`: `npm ci` → `npm test`（单测 + 集成测试；需真 Claude 的路径在 CI 中跳过或显式 opt-in）
   - `visual-e2e`: `npm ci` → `npx puppeteer browsers install chrome` → `npm run test:visual`（Visual E2E）
 - **阻断:** 任一 job 失败 → CI 红 → PR 无法合并（分支保护 require check）
 - **缓存:** Puppeteer Chromium 二进制文件缓存（~170MB），避免每次下载
@@ -98,10 +106,10 @@
 
 | Metric | 目标 | 当前状态 |
 |--------|------|----------|
-| 单元测试行覆盖 | ≥80% 业务逻辑 | 有 `test:coverage` 脚本，未设硬门 |
-| CI 单测通过率 | 100%（330 pass） | ✅ 达成 |
-| Visual E2E | Top critical flows 覆盖 | ✅ TC-1~TC-N 覆盖核心流式/UI |
-| 测试套件时长 | Unit <3 min | ✅ 约 10s |
+| 单元测试行覆盖 | ≥80% 业务逻辑目标 | `coverage-check.js` 设 50% 行覆盖软门（doctor D10 warn 呈现、不阻断 CI） |
+| CI 通过率 | `npm test` + `npm run test:visual` 100% | 以 GitHub Actions 为准 |
+| Visual E2E | Top critical flows 覆盖 | ✅ Puppeteer lane 进 CI；Playwright P0 作为 mock-only 日常回归 |
+| 测试套件时长 | Unit <3 min | 以本机/CI 输出为准 |
 | Flake 容忍度 | <2% | 未追踪（单测稳定，E2E 偶有 flake） |
 
 ## Risk Areas
@@ -153,4 +161,4 @@
 
 - ESM（`import/export`），无 TypeScript
 - 无 ESLint/Prettier 配置
-- `node --check` 做语法检查（`npm run check`）
+- `npm run check` 做 JS 语法、文档一致性、visual mock registry guard

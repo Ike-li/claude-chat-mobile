@@ -1,26 +1,29 @@
 #!/usr/bin/env node
 // scripts/doctor.js —— 启动前配置自检
-// 用法: node scripts/doctor.js [--env path/to/.env] [--fix]
+// 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
 // 检查项（10 项）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（which claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
 // 4. PORT 未被占用
-// 5. ~/.claude/settings.json 可读（statusLine 依赖，不存在时给提示"E16 将禁用"）
+// 5. WEB_STATUSLINE 配置口径（web 自有状态栏默认自包含启用，可用 WEB_STATUSLINE=off 关闭）
 // 6. 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
 // 7. 配置文件权限（.env / data/*.json 是否为 owner-only 0600）
-// 8. 文档一致性（死链 + 旧文件名漂移；防文档间漂移的机械化背书）
+// 8. 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本；防文档间漂移的机械化背书）
 // 9. 前端 JS 语法（public/js/*.js 跑 node --check——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
+// 10. 测试覆盖率门槛
 import { config } from 'dotenv';
 import { existsSync, accessSync, constants, mkdirSync, readFileSync, readdirSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions } from '../file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile } from '../workdirs.js';
+import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
+import { statuslineConfigDiagnostic } from './doctor-checks.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const results = [];
@@ -163,21 +166,11 @@ async function checkPort() {
   });
 }
 
-// D5: ~/.claude/settings.json 可读（statusLine 依赖）
-function checkClaudeSettings() {
-  const path = join(homedir(), '.claude', 'settings.json');
-  if (!existsSync(path)) {
-    warn('~/.claude/settings.json', `不存在 → E16 statusLine 功能将禁用（启动正常，只是没状态条）。`);
-    return;
-  }
-  try {
-    accessSync(path, constants.R_OK);
-    const content = readFileSync(path, 'utf8');
-    JSON.parse(content); // 校验 JSON
-    ok('~/.claude/settings.json', '可读且格式正确');
-  } catch (err) {
-    warn('~/.claude/settings.json', `存在但读取/解析失败: ${err.message} → E16 将禁用`);
-  }
+// D5: WEB_STATUSLINE 配置口径。E16 现在由 statusline.js 自包含组装，不依赖终端 statusLine 脚本或
+// ~/.claude/settings.json；settings.json 仍会被 Claude CLI 自己用于 permissions.allow，但不是 web 状态栏前置条件。
+function checkStatuslineConfig() {
+  const result = statuslineConfigDiagnostic();
+  (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
 // D6: 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
@@ -233,63 +226,14 @@ function checkConfigPermissions() {
   }
 }
 
-// D8: 文档一致性（死链 + 旧文件名漂移）。机械化背书单一事实源纪律：
+// D8: 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本）。机械化背书单一事实源纪律：
 // PostToolUse hook 只提示"检查同步"，本项把"检查什么"落为可失败的硬门——CI/提交前跑即拦住漂移。
 function checkDocConsistency() {
-  // 扫描集：根目录门面（README/CLAUDE/CHANGELOG/SECURITY/README.zh-CN）+ docs/*.md（规格/宪法）
-  const docFiles = ['README.md', 'CLAUDE.md', 'CHANGELOG.md', 'SECURITY.md', 'README.zh-CN.md']
-    .map(f => join(HERE, f));
-  try {
-    for (const f of readdirSync(join(HERE, 'docs'))) {
-      if (f.endsWith('.md')) docFiles.push(join(HERE, 'docs', f));
-    }
-  } catch { /* 无 docs 目录：只扫根目录文档 */ }
-
-  // 死链：markdown 链接 [text](target) 指向的本地文件须存在（外链/锚点跳过；相对路径按所在文件目录解析）
-  const deadLinks = [];
-  const linkRe = /\[[^\]]*\]\(([^)]+)\)/g;
-  for (const file of docFiles) {
-    let text;
-    try { text = readFileSync(file, 'utf8'); } catch { continue; }
-    const rel = file.slice(HERE.length + 1);
-    let m;
-    while ((m = linkRe.exec(text)) !== null) {
-      const target = m[1].trim().split('#')[0];                       // 去锚点
-      if (!target || /^(https?:|mailto:|#)/.test(target)) continue;   // 外链/纯锚点
-      if (!/\.(md|js|json|html|webmanifest|svg|png)$/i.test(target)) continue; // 仅文件链接
-      if (!existsSync(resolve(dirname(file), target))) deadLinks.push(`${rel} → ${target}`);
-    }
-  }
-
-  // 配置模板（.env.example）里的裸 docs/ 路径引用：注释文本非 markdown 链接语法，上面的 linkRe 扫不到，单独兜底。
-  const bareDocRe = /docs\/[\w-]+\.md/g;
-  for (const rel of ['.env.example']) {
-    let text;
-    try { text = readFileSync(join(HERE, rel), 'utf8'); } catch { continue; }
-    let bm;
-    while ((bm = bareDocRe.exec(text)) !== null) {
-      if (!existsSync(join(HERE, bm[0]))) deadLinks.push(`${rel} → ${bm[0]}`);
-    }
-  }
-
-  // 旧文件名漂移：renamed 文件的活引用（排除 CHANGELOG——其历史叙述合法记录「曾叫什么」）
-  const RENAMED = ['需求文档-v2.md', '斜杠命令普查-2026-06-12.md'];
-  const staleRefs = [];
-  for (const file of docFiles) {
-    if (file.endsWith('CHANGELOG.md')) continue;
-    let text;
-    try { text = readFileSync(file, 'utf8'); } catch { continue; }
-    const rel = file.slice(HERE.length + 1);
-    for (const old of RENAMED) {
-      if (text.includes(old)) staleRefs.push(`${rel} 含旧文件名「${old}」`);
-    }
-  }
-
-  const problems = [...deadLinks.map(d => `死链 ${d}`), ...staleRefs];
-  if (problems.length > 0) {
-    fail('文档一致性', problems.join('\n  ') + '\n  （单一事实源/防漂移纪律）');
+  const result = runDocConsistency({ rootDir: HERE });
+  if (result.problems.length > 0) {
+    fail('文档一致性', formatDocConsistency(result) + '\n  （单一事实源/防漂移纪律）');
   } else {
-    ok('文档一致性', `${docFiles.length} 份文档：链接可达、无旧文件名残留`);
+    ok('文档一致性', `${result.docFiles.length} 份文档：链接/命令/SDK 版本一致`);
   }
 }
 
@@ -351,7 +295,7 @@ if (existsSync(envFile)) {
   checkClaudeBin();
   checkWorkDir();
   await checkPort();
-  checkClaudeSettings();
+  checkStatuslineConfig();
   checkAnthropicEnv();
   checkConfigPermissions();
   checkDocConsistency();

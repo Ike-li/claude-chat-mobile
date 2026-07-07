@@ -53,9 +53,9 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     } catch (e) { /* 忽略某些沙箱浏览器不支持 Vibrate 引起的错误 */ }
   }
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
-  const cliStatusEl = $('cliStatus');   // E16：终端 statusLine ANSI 行容器（status_line 事件填充）
-  const cliStatusWrapEl = $('cliStatusWrap'); // E16：ANSI 行折叠包裹（<details>，揭示=去 hidden）
-  const cliSummaryEl = $('cliSummary'); // E16：折叠条一行摘要（status_line 事件 summary 字段填充）
+  const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
+  const cliStatusWrapEl = $('cliStatusWrap'); // E16：状态栏折叠包裹（<details>，揭示=去 hidden）
+  const cliSummaryEl = $('cliSummary'); // E16：折叠条一行摘要（客户端据 status_line 字段拼出）
   const permModeSelect = $('permModeSelect');  // 权限档切换器（5 档；dontAsk 终端 Shift+Tab 切不到，属 setPermissionMode/agent 能力）
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
@@ -802,8 +802,8 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随；空列表也刷（显示默认磁贴，好过整个隐藏）
       rebuildCustomModelGrid(modelsList); // 模型网格用已有缓存重建（models 事件没到也不空白）
       setPermMode(p.permissionMode); // 每轮 init 回显当前权限档（幂等，与 permission_mode 事件一致）
-      // 顶部状态行回归「纯连接状态」职责：model/目录/ctx/cost 已由下方 E16 statusLine 投送（更全更权威），
-      // MCP×N·skills×N 由 statusLine 脚本本身输出（终端 + 所有项目共享），此处不再合成覆盖连接状态
+      // 顶部状态行回归「纯连接状态」职责：model/目录/ctx/cost 已由 E16 web 状态栏投送（更全更权威），
+      // 此处不再合成覆盖连接状态
       if (Array.isArray(p.slashCommands)) {
         window.availableSkills = p.slashCommands;
         localStorage.setItem('slash_commands', JSON.stringify(p.slashCommands));

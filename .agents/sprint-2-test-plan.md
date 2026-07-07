@@ -52,7 +52,7 @@
 
 **Coverage targets:**
 - 需求映射: 27 / 27 (100%)
-- 自动化覆盖: 27 个测试用例（10 AUTH + 17 UPLOAD）
+- 自动化覆盖: 28 个测试用例（8 AUTH + 20 UPLOAD）
 - 手动覆盖: 0（全自动化）
 - Gaps: 无
 
@@ -60,9 +60,9 @@
 
 | 文件 | 用例数 | 说明 |
 |------|--------|------|
-| `test/integration/auth-token.test.mjs` | 10 | AUTH_TOKEN HTTP + Socket.IO 鉴权 |
-| `test/integration/file-upload.test.mjs` | 17 | 文件名清理 + 附件校验 + Socket.IO 上传 |
-| **总计** | **27** | |
+| `test/integration/auth-token.test.mjs` | 8 | AUTH_TOKEN HTTP + Socket.IO 鉴权 |
+| `test/integration/file-upload.test.mjs` | 20 | 文件名清理 + 附件校验 + Socket.IO 上传 |
+| **总计** | **28** | |
 
 ## Entry Criteria
 

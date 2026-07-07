@@ -2,7 +2,7 @@
 
 > Use your real local `claude` CLI from your phone — as if you were sitting at your own terminal.
 
-**English** · [中文](README.zh-CN.md)
+**English** · [中文](README.zh-CN.md) · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
@@ -19,9 +19,9 @@
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/01-stream.png" width="240" alt="Streaming output with Markdown rendering"></td>
-    <td align="center"><img src="docs/screenshots/02-tools.png" width="240" alt="Tool-call cards"></td>
-    <td align="center"><img src="docs/screenshots/03-approval.png" width="240" alt="Dangerous actions approved from the phone"></td>
+    <td align="center"><img src="docs/screenshots/01-stream-en.png" width="240" alt="Streaming output with Markdown rendering"></td>
+    <td align="center"><img src="docs/screenshots/02-tools-en.png" width="240" alt="Tool-call cards"></td>
+    <td align="center"><img src="docs/screenshots/03-approval-en.png" width="240" alt="Dangerous actions approved from the phone"></td>
   </tr>
   <tr>
     <td align="center"><b>Streaming</b><br/>Markdown · syntax highlight · status line</td>
@@ -163,7 +163,7 @@ graph LR
 4. Each event is wrapped in a `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` envelope → into a 500-entry ring buffer → `io.emit` broadcast (the front-end demuxes by `viewingInstanceId`; high-frequency deltas from background tabs are not broadcast to save bandwidth).
 5. Phone reconnects: `sync:since {lastSeq}` replays the buffer; an `epoch` change means the server swapped the instance, so the client resets its dedup baseline automatically.
 
-Runtime dependencies: `@anthropic-ai/claude-agent-sdk`, `express`, `socket.io`, `dotenv`, `web-push`, `jose`. Front-end third-party libraries are self-hosted locally in `public/vendor/` (Tailwind/marked/highlight.js/DOMPurify), with zero CDN dependency — see [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md).
+Runtime dependencies: `@anthropic-ai/claude-agent-sdk`, `express`, `compression`, `socket.io`, `dotenv`, `web-push`, `jose`. Front-end third-party libraries are self-hosted locally in `public/vendor/` (Tailwind/marked/highlight.js/DOMPurify), with zero CDN dependency — see [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md).
 
 ## License
 

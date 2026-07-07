@@ -9,8 +9,8 @@ jobs:
   unit-test:
     runs-on: ubuntu-latest
     env:
-      # 只跑纯逻辑单测（node --test test/*.test.mjs，零 token / 零外部依赖）；
-      # puppeteer 仅 test:visual 用，CI 不需要它下载 chromium——跳过以加速、避免下载失败。
+      # 跑 npm test（单测 test/*.test.mjs + 集成 test/integration/*.test.mjs）；集成里需真 claude 的
+      # 用例有 CI skip 守卫。puppeteer 仅 test:visual 用，CI 跳过 chromium 下载以加速、避免下载失败。
       PUPPETEER_SKIP_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4

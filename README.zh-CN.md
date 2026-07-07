@@ -2,7 +2,7 @@
 
 > 从手机上使用真正的 `claude` CLI——就像你正坐在自己的终端前。
 
-[English](README.md) · **中文**
+[English](README.md) · **中文** · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
@@ -86,7 +86,7 @@ cloudflared tunnel --url http://localhost:3000
 
 ## 运行方式(三选一)
 
-按你的场景挑一种——具体命令见上方「快速开始」与 [docs/deployment.md](docs/deployment.md):
+按你的场景挑一种——具体命令见上方[「快速开始」](#快速开始)与 [docs/deployment.md](docs/deployment.md):
 
 | 方式 | 适合 | 代价 |
 |---|---|---|
@@ -165,7 +165,7 @@ graph LR
 5. 手机断线再连：`sync:since {lastSeq}` 补发缓冲；`epoch` 变化 = 服务端换了实例，客户端自动重置去重基线
 
 
-运行时依赖：`@anthropic-ai/claude-agent-sdk`、`express`、`socket.io`、`dotenv`、`web-push`、`jose`。前端第三方库本地自托管到 `public/vendor/`（Tailwind/marked/highlight.js/DOMPurify），零 CDN 依赖——见 [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md)。
+运行时依赖：`@anthropic-ai/claude-agent-sdk`、`express`、`compression`、`socket.io`、`dotenv`、`web-push`、`jose`。前端第三方库本地自托管到 `public/vendor/`（Tailwind/marked/highlight.js/DOMPurify），零 CDN 依赖——见 [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md)。
 
 ## 许可证
 
