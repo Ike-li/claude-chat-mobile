@@ -4,7 +4,7 @@
 
 - **Name:** claude-chat-mobile
 - **Description:** 移动端聊天式 Web UI，把本机 claude CLI 投送到手机。目标是终端等价性：在手机上打字 = 坐在电脑前对 claude 打字。
-- **Type:** Self-hosted web app / personal tool（非 SaaS，n=1 单用户）
+- **Type:** Self-hosted web app（开源，面向大众自托管；每实例单用户、非多租户 SaaS）
 - **Production URL:** 通过 Cloudflare Tunnel 暴露的公网域名（需 AUTH_TOKEN + CF Access 2FA）
 - **Dev URL:** `http://127.0.0.1:3000`（本地直连）
 

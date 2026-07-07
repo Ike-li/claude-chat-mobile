@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // scripts/setup.js —— 一键配置向导：交互生成 .env（AUTH_TOKEN + WORK_DIR），零依赖。
 // 用法: node scripts/setup.js [--env path/to/.env]
-//   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN，
+//   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN,
 //   否则只绑 127.0.0.1、手机连不上」——向导默认帮你生成。
 //   公网固定部署（Cloudflare Access 2FA / 隧道 / 常驻）不在向导内，见 docs/deployment.md。
+//   界面语言按环境 locale 自动选：zh_* → 中文，其余 → 英文。
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
@@ -30,6 +31,48 @@ export function buildEnvContent(template, { authToken, workDir } = {}) {
   return out;
 }
 
+// 按环境 locale 选界面语言：zh_* → 中文，其余 → 英文。
+export function detectLang(env = process.env) {
+  const raw = env.LC_ALL || env.LC_MESSAGES || env.LANG || '';
+  return /^zh/i.test(raw) ? 'zh' : 'en';
+}
+
+// 交互壳的双语文案（纯文本片段，颜色在 main 里组装）。
+export const MESSAGES = {
+  zh: {
+    title: '⚙  Claude Chat Mobile —— 配置向导',
+    noTemplate: '✗ 找不到 .env.example，请在项目根目录运行。',
+    overwritePrompt: '已存在，覆盖它? [y/N] ',
+    cancelled: '已取消，现有 .env 未改动。',
+    tokenLabel: '已生成 AUTH_TOKEN（手机访问必需）',
+    tokenWrittenSuffix: '…（已写入 .env）',
+    workDirLabel: 'claude 工作目录 WORK_DIR',
+    workDirHint: '(回车 = 默认 $HOME)',
+    wroteLabel: '已写入',
+    permNote: '(权限 0600)',
+    nextSteps: '下一步:',
+    stepDoctor: '# 预检配置',
+    stepStart: '# 启动；日志会打印手机可用的局域网地址',
+    publicNote: '公网访问（固定域名 / Cloudflare Access 2FA / 常驻）见 docs/deployment.md。',
+  },
+  en: {
+    title: '⚙  Claude Chat Mobile — setup wizard',
+    noTemplate: '✗ .env.example not found — run this from the project root.',
+    overwritePrompt: 'already exists. Overwrite it? [y/N] ',
+    cancelled: 'Cancelled. Your existing .env was left untouched.',
+    tokenLabel: 'Generated AUTH_TOKEN (required for phone access)',
+    tokenWrittenSuffix: '… (written to .env)',
+    workDirLabel: 'claude working directory WORK_DIR',
+    workDirHint: '(Enter = default $HOME)',
+    wroteLabel: 'Wrote',
+    permNote: '(mode 0600)',
+    nextSteps: 'Next steps:',
+    stepDoctor: '# pre-flight your config',
+    stepStart: '# start; the log prints a LAN URL you can open on your phone',
+    publicNote: 'Public access (fixed domain / Cloudflare Access 2FA / daemon): see docs/deployment.md.',
+  },
+};
+
 // ──────────────────────── 交互壳（手动跑验证）────────────────────────
 
 const c = {
@@ -47,11 +90,12 @@ function parseArgs(argv) {
 async function main() {
   const { envPath } = parseArgs(process.argv.slice(2));
   const templatePath = join(HERE, '.env.example');
+  const t = MESSAGES[detectLang()];
 
-  console.log(c.bold('\n⚙  Claude Chat Mobile —— 配置向导\n'));
+  console.log(c.bold(`\n${t.title}\n`));
 
   if (!existsSync(templatePath)) {
-    console.error('✗ 找不到 .env.example，请在项目根目录运行。');
+    console.error(t.noTemplate);
     process.exit(1);
   }
 
@@ -59,29 +103,29 @@ async function main() {
   try {
     // 已有 .env → 先问是否覆盖（默认否，绝不静默覆盖既有配置）
     if (existsSync(envPath)) {
-      const ans = (await rl.question(`⚠️  ${envPath} 已存在，覆盖它? [y/N] `)).trim().toLowerCase();
+      const ans = (await rl.question(`⚠️  ${envPath} ${t.overwritePrompt}`)).trim().toLowerCase();
       if (ans !== 'y' && ans !== 'yes') {
-        console.log('已取消，现有 .env 未改动。');
+        console.log(t.cancelled);
         return;
       }
     }
 
     // AUTH_TOKEN：默认自动生成（实测头号门槛——不设则手机连不上）
     const token = generateToken();
-    console.log(`\n${c.green('✓')} 已生成 AUTH_TOKEN（手机访问必需）: ${c.dim(token.slice(0, 8) + '…（已写入 .env）')}`);
+    console.log(`\n${c.green('✓')} ${t.tokenLabel}: ${c.dim(token.slice(0, 8) + t.tokenWrittenSuffix)}`);
 
     // WORK_DIR：默认留空（= $HOME）
-    const wd = (await rl.question(`\nclaude 工作目录 WORK_DIR ${c.dim('(回车 = 默认 $HOME)')}: `)).trim();
+    const wd = (await rl.question(`\n${t.workDirLabel} ${c.dim(t.workDirHint)}: `)).trim();
 
     const template = readFileSync(templatePath, 'utf8');
     const content = buildEnvContent(template, { authToken: token, workDir: wd || undefined });
     writeOwnerOnlyFile(envPath, content);
 
-    console.log(`\n${c.green('✓')} 已写入 ${c.bold(envPath)} ${c.dim('(权限 0600)')}`);
-    console.log(c.bold('\n下一步:'));
-    console.log(`  ${c.accent('node scripts/doctor.js')}   ${c.dim('# 预检配置')}`);
-    console.log(`  ${c.accent('npm start')}                ${c.dim('# 启动；日志会打印手机可用的局域网地址')}`);
-    console.log(c.dim('\n公网访问（固定域名 / Cloudflare Access 2FA / 常驻）见 docs/deployment.md。\n'));
+    console.log(`\n${c.green('✓')} ${t.wroteLabel} ${c.bold(envPath)} ${c.dim(t.permNote)}`);
+    console.log(c.bold(`\n${t.nextSteps}`));
+    console.log(`  ${c.accent('node scripts/doctor.js')}   ${c.dim(t.stepDoctor)}`);
+    console.log(`  ${c.accent('npm start')}                ${c.dim(t.stepStart)}`);
+    console.log(c.dim(`\n${t.publicNote}\n`));
   } finally {
     rl.close();
   }

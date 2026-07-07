@@ -7,7 +7,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 export const DEFAULT_DOC_GLOBS = Object.freeze([
   'README.md',
-  'README.zh-CN.md',
+  'README.en.md',
   'CLAUDE.md',
   'SECURITY.md',
   '.agents/*.md',

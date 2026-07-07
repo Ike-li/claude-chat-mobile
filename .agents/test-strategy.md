@@ -3,7 +3,7 @@
 
 ### 1. Executive Summary
 
-claude-chat-mobile 是一个个人自托管工具，把本机 claude CLI 投送到手机端。作为 n=1 的非 SaaS 项目，测试策略聚焦于**防止回归导致手机端不可用**，而非追求企业级覆盖率。当前 CI 已跑 `npm test` 与 mock-only Puppeteer visual E2E；本地另有 Playwright P0 mock 回归 lane。策略目标是保持这些 lane 语义清晰：日常回归零 token，真实 Claude / 生产 smoke 显式 opt-in。
+claude-chat-mobile 是一个开源、面向大众自托管的工具，把本机 claude CLI 投送到手机端。作为每实例单用户、非多租户 SaaS 的项目，测试策略聚焦于**防止回归导致手机端不可用**，而非追求企业级覆盖率。当前 CI 已跑 `npm test` 与 mock-only Puppeteer visual E2E；本地另有 Playwright P0 mock 回归 lane。策略目标是保持这些 lane 语义清晰：日常回归零 token，真实 Claude / 生产 smoke 显式 opt-in。
 
 ### 2. Scope & Objectives
 

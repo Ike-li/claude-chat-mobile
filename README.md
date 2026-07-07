@@ -1,176 +1,181 @@
 # Claude Chat Mobile
 
-> Use your real local `claude` CLI from your phone — as if you were sitting at your own terminal.
+> 从手机上使用真正的 `claude` CLI——就像你正坐在自己的终端前。
 
-**English** · [中文](README.zh-CN.md) · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/)
+**中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
-[![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#quick-start)
+[![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
 <p align="center">
-  <img src="docs/demo.gif" width="300" alt="Stream a reply, watch tool cards, then approve a git push from your phone">
+  <img src="docs/demo.gif" width="300" alt="流式回答 → 工具卡片 → 手机端批准 git push">
 </p>
 
-**Built for people who already use the `claude` CLI in their terminal.** It does **not** bundle Claude and is **not** a re-implementation — it drives your real local CLI through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), so you get the same agent, the same `CLAUDE.md`, the same MCP servers, skills, hooks, and logged-in session you use at your desk. The goal is **terminal equivalence**: typing to claude on your phone behaves exactly like typing at your computer — edit code, run commands, resume an earlier conversation — except now you can do it from bed.
+**这是给已经在终端用 `claude` CLI 的人做的。** 它**不自带** Claude、也**不是** Claude 的重新实现——而是通过 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 驱动你本机真实的 CLI，于是你得到的是同一个 agent、同一份 `CLAUDE.md`、同样的 MCP 服务器、技能、hooks 和已登录会话，与你在电脑前用的完全一致。设计目标是**终端等价性**：在手机上对 claude 打字，效果和坐在电脑前打字完全相同——改代码、跑命令、接着之前的对话——只是现在可以躺在床上做。
 
-## Screenshots
+## 界面
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/01-stream-en.png" width="240" alt="Streaming output with Markdown rendering"></td>
-    <td align="center"><img src="docs/screenshots/02-tools-en.png" width="240" alt="Tool-call cards"></td>
-    <td align="center"><img src="docs/screenshots/03-approval-en.png" width="240" alt="Dangerous actions approved from the phone"></td>
+    <td align="center"><img src="docs/screenshots/01-stream.png" width="240" alt="流式输出与 Markdown 渲染"></td>
+    <td align="center"><img src="docs/screenshots/02-tools.png" width="240" alt="工具调用卡片"></td>
+    <td align="center"><img src="docs/screenshots/03-approval.png" width="240" alt="危险操作回手机审批"></td>
   </tr>
   <tr>
-    <td align="center"><b>Streaming</b><br/>Markdown · syntax highlight · status line</td>
-    <td align="center"><b>Visible process</b><br/>tool calls render as collapsible cards</td>
-    <td align="center"><b>Approve on phone</b><br/>dangerous actions push full command + cwd</td>
+    <td align="center"><b>流式输出</b><br/>Markdown · 代码高亮 · 状态栏</td>
+    <td align="center"><b>过程可见</b><br/>工具调用渲染为折叠卡片</td>
+    <td align="center"><b>回手机审批</b><br/>危险操作推送完整命令 + cwd</td>
   </tr>
 </table>
 
-## When it's worth it
+## 适用场景
 
-> This isn't "open a remote desktop back to your computer from your phone." That mirrors a screen; this gives your real local `claude` session a native entry point built for a phone. The difference shows up at moments like these:
+> 它和「在手机上开个远程桌面连回电脑」不是一回事——后者把一块屏幕镜像过来，前者给你本机 `claude` 会话一个为手机而生的原生入口。差异在这些时刻才显出来：
 >
-> - **A task is running and you've stepped away.** You kick off "migrate this module from JS to TypeScript, file by file," then leave for a meeting. Twenty minutes in it stops to ask — "I need to add `strict: true` to `tsconfig.json`, allow it?" — and the prompt is pushed to your phone. One tap to approve or deny. No need to keep the computer screen awake or poke into a remote terminal.
-> - **One session, picked up across devices.** Start something from your phone on the way out; resume it at your desk with `/resume` — both ends read the same CLI session log, not two separate ones. On a flaky subway connection it self-heals and replays, so you return to where you were instead of reconnecting and re-locating.
-> - **Several repos in parallel.** claude runs different tasks in two projects at once; switch tabs to check each — a single-screen remote desktop can't watch both at once on a phone.
-> - **Native phone input.** Type `/` for a native command list you tap, send a photo from your library straight to claude, long-press to copy a long output — these are smooth in an interface built for a phone.
+> - **任务在跑、人已离开。** 白天让 claude 把一个模块从 JS 迁到 TypeScript、逐个文件处理，你说完就去开会了；二十分钟后它停下来要确认——「需要在 `tsconfig.json` 加 `strict: true`，是否允许？」——手机收到推送，点一下放行或拒绝。不必让电脑屏幕亮着、也不必远程戳进终端。
+> - **同一个会话，换设备接着用。** 路上用手机起个头，到家电脑终端 `/resume` 无缝接上——两端读的是同一份 CLI 会话记录，不是各开一摊。地铁信号差时连接也会自愈续传，回到前台接着看，而不是断线重连、重新定位。
+> - **多个仓库并行盯着。** claude 同时在两个项目里跑不同任务，标签页切换分别看进度——一块屏的远程桌面在手机上没法同时盯住两个。
+> - **手机原生输入。** 敲 `/` 弹原生命令列表点一下、相册截图直接喂给 claude、长按选中复制长输出——这些在为手机做的界面里才是顺的。
 >
-> If you only glance in remotely now and then, an existing remote desktop is enough. The value lands when you use your phone *frequently* as a pocket extension of your terminal.
+> 如果你只是偶尔远程瞄一眼，一个现成的远程桌面也够。它的价值，在你**高频**地把手机当作终端的随身延伸来用时才兑现。
 
-## Prerequisites
+## 前置条件
 
-- **Node.js ≥ 20** — check with `node --version`.
-- **A working `claude` CLI on the host.** This project drives *your* local CLI; it ships nothing of its own. Confirm `claude` runs in your terminal first (`which claude`, then open a conversation to confirm you are logged in) — the web UI inherits exactly this CLI, your `CLAUDE.md`, MCP servers, skills, hooks, and shell environment.
-- **Provider / gateway follows your terminal.** The web side reuses the same provider, gateway, and model your terminal `claude` uses — official subscription or a third-party gateway alike.
-- **macOS or Linux.**
+- **Node.js ≥ 20**——用 `node --version` 检查。
+- **本机有一个可用的 `claude` CLI。** 本项目驱动*你的*本机 CLI，不自带。先确认 `claude` 能在你终端跑起来（`which claude`，再开一次对话确认已登录）——web UI 继承的正是这个 CLI、你的 `CLAUDE.md`、MCP 服务器、技能、hooks 和 shell 环境。
+- **Provider / 网关跟随你的终端。** web 端原样沿用你终端 `claude` 用的 provider、网关与模型——官方订阅或第三方网关皆可。
+- **macOS 或 Linux。**
 
-## Quick Start
+## 快速开始
 
 ```bash
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 
-node --version           # need Node ≥ 20
-which claude             # the CLI this project drives — must be installed & logged in
+node --version           # 需 Node ≥ 20
+which claude             # 本项目驱动的 CLI——必须已安装并登录
 
-npm install --omit=dev   # runtime deps only — no puppeteer/browser. To run tests, use full `npm install`.
-cp .env.example .env     # set AUTH_TOKEN (required for any non-localhost access), WORK_DIR, allow-list
+npm install --omit=dev   # 仅运行依赖——不含 puppeteer/浏览器。要跑测试用完整 npm install。
+npm run setup            # 交互式向导：自动生成 AUTH_TOKEN（头号门槛）+ 询问 WORK_DIR，写入 .env（权限 0600）
+                         # 推荐用它，免去手搓；想直接用原始模板：cp .env.example .env
 
-# Recommended: pre-flight your config (port in use, CLAUDE_BIN path, gateway env, file perms)
-node scripts/doctor.js        # check config
-node scripts/doctor.js --fix  # tighten perms (.env and data/*.json → 0600)
+# 推荐：启动前自检配置（端口占用、CLAUDE_BIN 路径、网关环境、文件权限）
+node scripts/doctor.js        # 检查配置
+node scripts/doctor.js --fix  # 收紧权限（.env 与 data/*.json → 0600）
 
 npm start                     # http://localhost:3000
 ```
 
-Then open it on your phone — two ways (the startup log prints ready-to-use URLs with the token pre-filled):
+然后在手机上打开——两种方式（启动时会打印已填好 token 的可用 URL）：
 
-- **Same WiFi:** set `AUTH_TOKEN` in `.env` first (required even on your LAN — without it the phone cannot connect), then open the LAN address printed at startup (`http://<lan-ip>:3000/#token=…`) — no tunnel needed.
-- **Public internet / install as a PWA** (PWA needs https): run a tunnel in another terminal:
+- **同一 WiFi：** 先在 `.env` 设 `AUTH_TOKEN`（局域网也必填——不设手机连不上），再打开启动时打印的局域网地址（`http://<lan-ip>:3000/#token=…`）——无需隧道。
+- **公网 / 安装为 PWA**（PWA 需要 https）：在另一个终端跑隧道：
 
 ```bash
 cloudflared tunnel --url http://localhost:3000
-# On your phone open https://<random>.trycloudflare.com/#token=<YOUR_AUTH_TOKEN>
-# The token is stored in localStorage on first load, then cleared from the address bar.
+# 手机打开 https://<random>.trycloudflare.com/#token=<你的 AUTH_TOKEN>
+# token 首次加载存入 localStorage，随后从地址栏清除
 ```
 
-> ⚠️ With no `AUTH_TOKEN` set, the server binds to `127.0.0.1` only — neither your phone on the same LAN nor a tunnel can reach it. This is deliberate.
+> ⚠️ 不设 `AUTH_TOKEN` 时服务只绑定 `127.0.0.1`——同 WiFi 的手机和隧道都连不上，这是有意为之。
 >
-> 📌 The above is the **minimal setup** (temporary random tunnel, testing only). For a **stable production deployment** — fixed domain, Cloudflare Access two-factor, running as a background daemon — see [docs/deployment.md](docs/deployment.md).
+> 📌 以上是**最简配置**（临时随机隧道，仅供测试）。**稳定的生产部署**——固定域名、Cloudflare Access 双因素、作为后台守护进程运行——见 [docs/deployment.md](docs/deployment.md)。
 >
-> ⚠️ At its core, this is **a remotely reachable code-execution channel straight into your local shell.** Read the [Security Model](#security-model) below before exposing it to the public internet.
+> ⚠️ 本质上，这是**一条可远程触达、直通你本机 shell 的代码执行通道**。把它暴露到公网前，先读下面的[安全模型](#安全模型)。
 
-## Three ways to run it
+## 运行方式(三选一)
 
-Pick one for your situation — commands are in [Quick Start](#quick-start) above and [docs/deployment.md](docs/deployment.md):
+按你的场景挑一种——具体命令见上方[「快速开始」](#快速开始)与 [docs/deployment.md](docs/deployment.md):
 
-| Mode | Good for | Cost |
+| 方式 | 适合 | 代价 |
 |---|---|---|
-| **LAN, same WiFi** — `http://<lan-ip>:3000/#token=` | At home, phone and computer on one network | Useless when out; no tunnel, least fuss |
-| **Temporary public** — `cloudflared tunnel --url` (random domain) | Quick trial / demo | Address changes on every restart; testing-only per Cloudflare |
-| **Fixed production** — fixed domain + Cloudflare Access 2FA + daemon | Long-term, anywhere access | One-time DevOps setup, see [docs/deployment.md](docs/deployment.md) |
+| **同 WiFi 局域网直连** —— `http://<lan-ip>:3000/#token=` | 在家、手机和电脑同一网络 | 出门用不了;无隧道、最省事 |
+| **临时公网** —— `cloudflared tunnel --url`(随机域名) | 临时试用 / 演示 | 地址每次重启都变;官方标注仅测试用 |
+| **固定生产** —— 固定域名 + Cloudflare Access 2FA + 常驻进程 | 长期、随时随地用 | 一次性 DevOps 搭建,见 [docs/deployment.md](docs/deployment.md) |
 
-## Security Model
+## 安全模型
 
-> **Read this before exposing it to the public internet.** At its core this is a remotely reachable code-execution channel straight into your local shell. Security is the first concern, not an afterthought:
+> **把它暴露到公网前务必先读。** 本质上，这是一条可远程触达、直通你本机 shell 的代码执行通道。安全是第一考量，不是事后补丁：
 
-1. **Single-user tool (n = 1).** You are the only user and the only admin. There is no multi-user / login system; any request that passes auth has exactly the same power as you sitting at the terminal.
-2. **No token, no leaving the host.** With no `AUTH_TOKEN` set, the server binds to `127.0.0.1` only — there is no "empty = open to the world" path. Reaching the public internet *requires* a token.
-3. **Two-layer permission gate — zero injection, pure inheritance of your CLI.** This project injects no allow/deny lists of its own (no `allowedTools` / `disallowedTools` in the code). The auto-approve set is exactly the merged `permissions.allow` from your existing claude config — global `~/.claude/settings.json` + project `.claude/settings.json` + local `.claude/settings.local.json` together (loaded via `settingSources`, same source as your terminal). A match is auto-approved; anything else is suspended and pushed to your phone as an approval request (with the full command and working directory) to run only after you confirm.
-   - ⚠️ **Before exposing publicly, audit your global `~/.claude/settings.json` allow-list** — years of accumulated `Bash(...)` / `Write` rules in your terminal will auto-approve here too without a phone prompt, so it is not just the project's list you need to tighten.
-4. **Device trust (TOFU).** A connection that is neither local nor Cloudflare Access-verified must be authorized once on your computer before it can do anything — a valid token alone is not enough.
+1. **每实例单用户。** 本项目开放给任何人自托管——你运行属于你自己的实例、给自己用。每个实例被设计为单用户：没有多用户/账号/登录系统，因此任何通过鉴权的请求，权力都和你本人坐在终端前完全相同。请只把它指向你自己的机器——它不是多租户服务。
+2. **没有 token 就不出本机。** 未设置 `AUTH_TOKEN` 时，服务只绑定 `127.0.0.1`——不存在"留空 = 对全世界开放"的路径。要投送到公网*必须*有 token。
+3. **两层权限闸门——白名单零注入、纯继承你的 CLI。** 本项目不注入任何自家放行 / 禁用清单（代码里无 `allowedTools` / `disallowedTools`）；自动放行集 = 你已有 claude 配置里 `permissions.allow` 的合并结果——全局 `~/.claude/settings.json` + 项目 `.claude/settings.json` + 本地 `.claude/settings.local.json` 三处一并生效（经 `settingSources` 加载，与终端同源）。命中即放行；未命中一律挂起，把审批请求（含完整命令与工作目录）推送到你手机，确认后才执行。
+   - ⚠️ **公网暴露前，审查你的全局 `~/.claude/settings.json` 白名单**——终端里多年累积的 `Bash(...)` / `Write` 等会照样自动放行、不弹手机，要收紧的不只项目那份。
+4. **设备信赖（TOFU）。** 既非本机、也未经 Cloudflare Access 验证的连接，必须先在你电脑上一次性授权该设备才能做任何事——光有合法 token 不够。
 
-The full threat model and hardening guidance is in [docs/design.md](docs/design.md) §4.
+完整威胁模型与加固指引见 [docs/design.md](docs/design.md) §4。
 
-## Cost Note
+## 成本提示
 
-> **Know this before you adopt it.**
+> **采用前了解。**
 
-**Currently (as of 2026-06-26): Agent SDK / `claude -p` usage still draws from your subscription quota, in the same pool as interactive use** — using this project on the official subscription path incurs no separate billing.
+**当前（截至 2026-06-26）：Agent SDK / `claude -p` 用量仍吃订阅额度，与交互式同池**——本项目走官方订阅路径不产生独立计费。
 
-Background: Anthropic once announced that, starting 2026-06-15, SDK *headless* usage would move to a separate credit pool (Max 5x $100/month at API rates), but **that change was paused on the day it shipped and never took effect** ([official Help Center](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)). Anthropic says it will rework the plan and give advance notice — this is a **pause, not a cancellation**.
+背景：Anthropic 曾公告自 2026-06-15 起把 SDK *headless* 用量挪到独立 credit 池（Max 5x $100/月、按 API 价），但**该变更已于上线当天暂停、从未生效**（[官方 Help Center](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)）。Anthropic 称会重做方案并提前通知——是**暂停非取消**。
 
-- **Potential risk**: if the policy is revived, this project's SDK usage (personally measured at roughly **~$716/month** equivalent at API rates) would move out of the subscription quota and could hit a separate credit cap. Budget for it then.
-- **Via a third-party gateway** (`ANTHROPIC_*` exported in the shell): unaffected — you pay the gateway's own rates.
+- **潜在风险**：若政策复活，本项目 SDK 用量（个人实测约 **~$716/月**等效 API 价）会从订阅额度移出、可能撞独立 credit 上限。届时再据此预算。
+- **走第三方网关**（shell export 的 `ANTHROPIC_*`）：与此无关，按网关自己费率付费。
 
-## Features
+## 特性
 
-Beyond the core loop above:
+**→ 完整的「手机上到底能做什么」说明，见 [docs/capabilities.md](docs/capabilities.md)。**
 
-- **Five permission modes** (default / plan / acceptEdits / bypassPermissions / dontAsk), switchable at runtime.
-- **Per-message model switching** (gateway-suffixed names supported).
-- **Multi-repo and multi-session** — switch among allow-listed working directories, run several sessions concurrently in tabs.
-- **File and image upload**, with path injection and traversal protection.
-- **Thinking-effort control**, a **web-native status line**, and **`AskUserQuestion`** as a native picker.
-- **Web Push** for approvals, questions, and results (iOS 16.4+ requires Add to Home Screen first).
-- **Ops & security hardening** — log sanitization, `0600` atomic writes, a `doctor` startup self-check, optional Cloudflare Access 2FA.
+在上面的核心循环之外：
 
-## How it works (read only if you want to read or fork the code)
+- **五种权限档**（default / plan / acceptEdits / bypassPermissions / dontAsk），运行时可切。
+- **逐条消息切换模型**（支持网关后缀名）。
+- **多 repo 与多会话**——切换白名单内的工作目录，在标签页里并发跑多个会话。
+- **文件与图片上传**，带路径注入与穿越防护。
+- **思考强度控制**、**Web 自有状态栏**，以及作为原生选择器的 **`AskUserQuestion`**。
+- **Web Push** 推送审批、提问与结果（iOS 16.4+ 需先添加到主屏幕）。
+- **运维与安全加固**——日志脱敏、`0600` 原子写、`doctor` 启动自检、可选 Cloudflare Access 2FA。
 
-A "transparent pipe, locked by default": it projects **your local claude CLI** (carrying your CLAUDE.md / MCP / skills / login state) to a phone browser — continuous sessions, visible process, dangerous actions bounced back to the phone for approval.
+
+## 内部实现（想读代码 / fork 才看）
+
+一根"默认上锁的透明管子"：把**你本机的 claude CLI**（带着你的 CLAUDE.md/MCP/skills/登录态）投送到手机浏览器，会话连续、过程可见、危险操作回手机审批。
 
 ```mermaid
 graph LR
-    subgraph Phone
-        UI[public/ single page<br/>chat bubbles · tool cards · approval sheet]
+    subgraph 手机
+        UI[public/ 单页<br/>聊天气泡·工具卡片·审批弹窗]
     end
-    subgraph Internet
+    subgraph 公网
         CF[Cloudflare Tunnel]
     end
-    subgraph Host
-        S[server.js<br/>Express static + Socket.IO contract layer<br/>auth · preflight · device trust · handler guard]
-        A[agent.js · AgentSession<br/>long-lived SDK query · permission gate<br/>event envelope seq+epoch · ring buffer]
-        J[(data/sessions.json<br/>session metadata)]
+    subgraph 本机
+        S[server.js<br/>Express 静态 + Socket.IO 契约层<br/>鉴权 · 启动预检 · 设备信赖 · handler 兜底]
+        A[agent.js · AgentSession<br/>长驻 SDK query · 权限闸门<br/>事件信封 seq+epoch · 环形缓冲]
+        J[(data/sessions.json<br/>会话元数据)]
         SDK[claude-agent-sdk]
-        CLI[local claude CLI<br/>loads your full config]
-        FS[(your project files<br/>WORK_DIR)]
+        CLI[本机 claude CLI<br/>完整加载你的配置]
+        FS[(你的项目文件<br/>WORK_DIR)]
     end
-    UI <-->|"agent:event envelope / user:* events<br/>(event contract, WebSocket)"| CF <--> S
+    UI <-->|"agent:event 信封 / user:* 事件<br/>(事件契约, WebSocket)"| CF <--> S
     S <--> A
     A <-->|streaming input| SDK <-->|spawn| CLI <--> FS
     S --- J
 ```
 
-### A message's journey
+### 一条消息的旅程
 
-1. Phone `user:message {text}` → server validates → routes to the target instance `agents.get(instanceId)` (lazy-respawned resume; after `session:new` a FRESH instance is lazily opened only on the first message — stage 3).
-2. The text is pushed into the AgentSession's streaming input → SDK → claude CLI works in `WORK_DIR`.
-3. The SDK message stream flows into `map()`: streaming text → `text_delta`, tool calls → `tool_use`/`tool_result`, off-allow-list actions → `permission_request` (suspended, awaiting allow/deny on the phone).
-4. Each event is wrapped in a `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` envelope → into a 500-entry ring buffer → `io.emit` broadcast (the front-end demuxes by `viewingInstanceId`; high-frequency deltas from background tabs are not broadcast to save bandwidth).
-5. Phone reconnects: `sync:since {lastSeq}` replays the buffer; an `epoch` change means the server swapped the instance, so the client resets its dedup baseline automatically.
+1. 手机 `user:message {text}` → server 校验 → 路由到目标实例 `agents.get(instanceId)`（懒重生 resume；`session:new` 后首条消息才懒开 FRESH 实例，台阶3）
+2. 文本 push 进 AgentSession 的 streaming input → SDK → claude CLI 在 `WORK_DIR` 干活
+3. SDK 消息流回 `map()`：流式文本→`text_delta`、工具调用→`tool_use`/`tool_result`、白名单外操作→`permission_request`（挂起等手机点允许/拒绝）
+4. 每个事件套上 `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` 信封 → 进 500 条环形缓冲 → `io.emit` 广播（前端按 `viewingInstanceId` 分流；后台 tab 的高频 delta 不广播以省带宽）
+5. 手机断线再连：`sync:since {lastSeq}` 补发缓冲；`epoch` 变化 = 服务端换了实例，客户端自动重置去重基线
 
-Runtime dependencies: `@anthropic-ai/claude-agent-sdk`, `express`, `compression`, `socket.io`, `dotenv`, `web-push`, `jose`. Front-end third-party libraries are self-hosted locally in `public/vendor/` (Tailwind/marked/highlight.js/DOMPurify), with zero CDN dependency — see [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md).
 
-## License
+运行时依赖：`@anthropic-ai/claude-agent-sdk`、`express`、`compression`、`socket.io`、`dotenv`、`web-push`、`jose`。前端第三方库本地自托管到 `public/vendor/`（Tailwind/marked/highlight.js/DOMPurify），零 CDN 依赖——见 [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md)。
 
-[GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li, with additional terms under Section 7 — see [NOTICE](NOTICE).
+## 许可证
 
-In short: you are free to use, study, modify, and self-host this software. But if you run a modified version as a network service, the AGPL requires you to release your source under the AGPL as well, and the additional terms require you to preserve the original author attribution and not misrepresent the project's origin. For any use that cannot meet these conditions, please open an issue to discuss.
+[GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li，附带 Section 7 补充条款——见 [NOTICE](NOTICE)。
 
-## Friend Links
+简单说：你可以自由使用、研究、修改并自托管本软件。但如果你把修改后的版本作为网络服务对外提供，AGPL 要求你同样以 AGPL 开源你的源代码；补充条款还要求你保留原作者署名、不得歪曲项目来源。若有无法满足上述条件的使用需求，请开 issue 沟通。
+
+## 友链
 
 - [LINUX DO](https://linux.do/)

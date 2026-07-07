@@ -339,7 +339,7 @@
       <h2 data-i18n="security.heading">A code-execution channel into your shell. Treated like one.</h2>
     </div>
     <div class="sec-list">
-      <div class="sec-item"><div class="ico">1</div><div><h3 data-i18n="security.t1">Single-user (n = 1)</h3><p data-i18n="security.b1">You are the only user and the only admin. No multi-user system — any request that passes auth has exactly the same power as you at the terminal.</p></div></div>
+      <div class="sec-item"><div class="ico">1</div><div><h3 data-i18n="security.t1">Single-user per instance</h3><p data-i18n="security.b1">Open for anyone to self-host — you run your own instance, for yourself. Each instance is single-user by design: no accounts, no login. Anyone who passes auth has the same power as you at the terminal, so only ever point it at your own machine.</p></div></div>
       <div class="sec-item"><div class="ico">2</div><div><h3 data-i18n="security.t2">No token, no exit</h3><p data-i18n-html="security.b2">With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only — there is no "empty = open to the world" path. Reaching the internet requires a token.</p></div></div>
       <div class="sec-item"><div class="ico">3</div><div><h3 data-i18n="security.t3">Pure inheritance, zero injection</h3><p data-i18n="security.b3">The auto-approve set is exactly your existing CLI allowlist — nothing added. Anything off-list is suspended and bounced to your phone for approval.</p></div></div>
       <div class="sec-item"><div class="ico">4</div><div><h3 data-i18n="security.t4">Device trust (TOFU)</h3><p data-i18n="security.b4">A connection that is neither local nor Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.</p></div></div>
@@ -429,7 +429,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'sub.p1': '5 permission modes', 'sub.p2': 'Per-message model switching', 'sub.p3': 'Multi-repo · multi-session tabs', 'sub.p4': 'File & image upload', 'sub.p5': 'Web Push', 'sub.p6': 'PWA-installable', 'sub.p7': 'Zero-CDN, self-hosted',
       'security.kicker': 'Security model',
       'security.heading': 'A code-execution channel into your shell. Treated like one.',
-      'security.t1': 'Single-user (n = 1)', 'security.b1': 'You are the only user and the only admin. No multi-user system — any request that passes auth has exactly the same power as you at the terminal.',
+      'security.t1': 'Single-user per instance', 'security.b1': 'Open for anyone to self-host — you run your own instance, for yourself. Each instance is single-user by design: no accounts, no login. Anyone who passes auth has the same power as you at the terminal, so only ever point it at your own machine.',
       'security.t2': 'No token, no exit', 'security.b2': 'With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only — there is no "empty = open to the world" path. Reaching the internet requires a token.',
       'security.t3': 'Pure inheritance, zero injection', 'security.b3': 'The auto-approve set is exactly your existing CLI allowlist — nothing added. Anything off-list is suspended and bounced to your phone for approval.',
       'security.t4': 'Device trust (TOFU)', 'security.b4': 'A connection that is neither local nor Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.',
@@ -484,7 +484,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'sub.p1': '5 种权限模式', 'sub.p2': '逐条消息切模型', 'sub.p3': '多仓库 · 多会话标签', 'sub.p4': '文件与图片上传', 'sub.p5': 'Web Push 推送', 'sub.p6': 'PWA 可安装', 'sub.p7': '零 CDN、自托管',
       'security.kicker': '安全模型',
       'security.heading': '一条直通你 shell 的代码执行通道。就按这个来对待。',
-      'security.t1': '单用户（n = 1）', 'security.b1': '你是唯一的用户，也是唯一的管理员。没有多用户系统——任何通过鉴权的请求，权力都和你坐在终端前完全相同。',
+      'security.t1': '每实例单用户', 'security.b1': '开放给任何人自托管——你运行属于自己的实例、给自己用。每个实例被设计为单用户：没有账号、没有登录。任何通过鉴权的请求，权力都和你坐在终端前完全相同，所以只把它指向你自己的机器。',
       'security.t2': '没有 token，出不了本机', 'security.b2': '不设 <code>AUTH_TOKEN</code> 时，server 只绑定 <code>127.0.0.1</code>——没有"空 = 对全世界开放"这条路。要触达公网，必须有 token。',
       'security.t3': '纯继承，零注入', 'security.b3': '自动批准集恰好是你现有的 CLI allowlist——一条不加。不在其上的一律挂起、弹回手机等你批。',
       'security.t4': '设备信任（TOFU）', 'security.b4': '既非本地、也未经 Access 校验的连接，必须先在你电脑上授权一次才能做任何事。光有合法 token 不够。',
