@@ -1,8 +1,8 @@
 // test/file-security.test.mjs —— file-security.js 安全关键路径单测
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, symlink, writeFile, chmod, stat, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, rm, symlink, writeFile, chmod, stat, readFile, mkdir } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { constants } from 'node:fs';
 import { platform } from 'node:os';
@@ -20,6 +20,32 @@ test.describe('rejectableSymlinkComponent', () => {
 
   test('不存在的路径 → null', () => {
     assert.equal(rejectableSymlinkComponent('/nonexistent/deep/path'), null);
+  });
+
+  test('用户可写目录中的 symlink → 返回该路径（危险分支，此前零覆盖）', async () => {
+    if (isWindows) return;
+    const dir = await mkdtemp(join(tmpdir(), 'ccm-sym-'));
+    try {
+      const target = join(dir, 'target'); await writeFile(target, 'x');
+      const link = join(dir, 'link'); await symlink(target, link);
+      // link 是 symlink 且父目录（mkdtemp 目录）用户可写 → 危险，返回 symlink 自身
+      assert.equal(rejectableSymlinkComponent(link), resolve(link));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('路径中间的 symlink 组件也被检出', async () => {
+    if (isWindows) return;
+    const dir = await mkdtemp(join(tmpdir(), 'ccm-sym-'));
+    try {
+      const real = join(dir, 'real'); await mkdir(real, { recursive: true });
+      const linksub = join(dir, 'linksub'); await symlink(real, linksub);
+      // 查询 linksub/inside.txt：中间组件 linksub 是 symlink → 被检出（返回 linksub）
+      assert.equal(rejectableSymlinkComponent(join(linksub, 'inside.txt')), resolve(linksub));
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

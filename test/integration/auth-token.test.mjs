@@ -1,5 +1,5 @@
 // test/integration/auth-token.test.mjs —— AUTH_TOKEN 鉴权流程集成测试
-// 覆盖：HTTP 端点鉴权 + Socket.IO 握手鉴权 + CF Access 公网鉴权
+// 覆盖：HTTP 端点鉴权 + Socket.IO 握手鉴权（LAN token 路）。公网 CF Access 判决见 cf-access-gate.test.mjs
 // 运行：npm test -- test/integration/auth-token.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';

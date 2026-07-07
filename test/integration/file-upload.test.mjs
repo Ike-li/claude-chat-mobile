@@ -1,9 +1,10 @@
 // test/integration/file-upload.test.mjs —— 文件上传安全集成测试
-// 覆盖：附件校验、路径遍历防护、大小限制、symlink 攻击防护
+// 覆盖：socket 上传端到端流程、附件校验、大小限制。
+// symlink/落盘穿越防御的单测见 test/file-security.test.mjs 与 test/uploads.test.mjs
 // 运行：npm test -- test/integration/file-upload.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';

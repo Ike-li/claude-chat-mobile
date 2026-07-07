@@ -1,8 +1,8 @@
 // test/uploads.test.mjs —— uploads.js 安全关键路径单测
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, rm, symlink, mkdir } from 'node:fs/promises';
+import { join, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   sanitizeName, validateAttachments, saveAttachments, buildPromptText, toEventMeta, UPLOAD_DIR
@@ -130,14 +130,31 @@ test.describe('saveAttachments', () => {
     assert.equal(saved[0].size, 5);
   });
 
-  test('路径穿越被拦截（resolve 校验）', async () => {
-    // saveAttachments 总是 resolve 到绝对路径，但我们可以测试 join(dirResolved, fname) 比较
-    // 通过直接操作目录来模拟——这实际上很难触发因为 resolve 消除了 ../
-    // 用正常附件确保路径校验不误伤即可
-    const attachments = [{ name: 'valid.txt', mimeType: 'text/plain', data: 'aGVsbG8=' }];
-    const saved = await saveAttachments(tmpDir, attachments);
-    const dir = join(tmpDir, UPLOAD_DIR);
-    assert.ok(saved[0].absPath.startsWith(dir));
+  test('恶意文件名穿越仍落在上传目录内（真恶意输入，不逃逸）', async () => {
+    // 真攻击输入：name 含 ../ 与绝对路径片段。sanitizeName 收敛后落点必须仍在 .ccm-uploads 内。
+    const saved = await saveAttachments(tmpDir, [
+      { name: '../../../etc/passwd', mimeType: 'text/plain', data: 'aGVsbG8=' }
+    ]);
+    const dirResolved = resolve(join(tmpDir, UPLOAD_DIR));
+    assert.ok(saved[0].absPath.startsWith(dirResolved + sep), `落点逃逸: ${saved[0].absPath}`);
+    assert.ok(!saved[0].absPath.includes('etc/passwd'), '穿越到 /etc 未被拦截');
+  });
+
+  test('上传目录路径含 symlink → 抛错拒绝（TOCTOU 防御，此前零覆盖）', async () => {
+    if (process.platform === 'win32') return;
+    const base = await mkdtemp(join(tmpdir(), 'ccm-uplink-'));
+    try {
+      const real = join(base, 'realwork'); await mkdir(real, { recursive: true });
+      const linkWork = join(base, 'linkwork'); await symlink(real, linkWork);
+      // workDir 本身经由 symlink（linkWork）→ rejectableSymlinkComponent 检出上传目录路径含软链 → 抛错
+      await assert.rejects(
+        saveAttachments(linkWork, [{ name: 'a.png', mimeType: 'image/png', data: 'aGVsbG8=' }]),
+        /符号链接/,
+        '上传目录路径含 symlink 时应拒绝落盘'
+      );
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
   });
 
   test('空附件列表 → 返回空数组', async () => {
