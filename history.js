@@ -65,6 +65,11 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       // 跳过 meta 条目（local-command 输出等）
       if (entry.isMeta) continue;
 
+      // 子 agent（sidechain）记录不回显——与运行期 agent.js 的 parent_tool_use_id 守卫等效。
+      // 磁盘 JSONL 用 isSidechain 标记子 agent（parent_tool_use_id 是 SDK 运行时流字段、不落盘）；
+      // 一并挡 parent_tool_use_id 作防御。带正文的子 agent assistant 靠下方空正文启发式漏不掉，故须显式滤。
+      if (entry.isSidechain || entry.parent_tool_use_id) continue;
+
       // 只取 user 和 assistant 消息；并过滤无正文的条目——纯工具调用的 assistant、
       // 以 tool_result 形式存在的 user 都会被 extractContent 还原成空串。若不滤掉，
       // 它们会渲染成空气泡，还会占满窗口把真实对话挤出去。
