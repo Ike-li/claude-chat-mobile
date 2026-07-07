@@ -45,7 +45,10 @@
 
 - **Node.js ≥ 20** — check with `node --version`.
 - **A working `claude` CLI on the host.** This project drives *your* local CLI; it ships nothing of its own. Confirm `claude` runs in your terminal first (`which claude`, then open a conversation to confirm you are logged in) — the web UI inherits exactly this CLI, your `CLAUDE.md`, MCP servers, skills, hooks, and shell environment.
-- **Provider / gateway follows your terminal.** The web side reuses the same provider, gateway, and model your terminal `claude` uses — official subscription or a third-party gateway alike.
+- **Official subscription, or a third-party gateway / relay API — both work.** The web side inherits the provider / gateway / model from **the shell that starts the server**:
+  - **Official subscription** (`claude` already logged in) — works out of the box, nothing to configure.
+  - **Third-party gateway / relay** — `export` the `ANTHROPIC_*` your gateway needs (typically `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL`, per your gateway's docs) in the shell that starts the server, then launch it.
+  - ⚠️ Putting `ANTHROPIC_*` in `.env` has **no effect** — they are stripped at startup by design; only the server's shell environment is read.
 - **macOS or Linux.**
 
 ## Quick Start

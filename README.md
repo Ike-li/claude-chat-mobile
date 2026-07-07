@@ -45,7 +45,10 @@
 
 - **Node.js ≥ 20**——用 `node --version` 检查。
 - **本机有一个可用的 `claude` CLI。** 本项目驱动*你的*本机 CLI，不自带。先确认 `claude` 能在你终端跑起来（`which claude`，再开一次对话确认已登录）——web UI 继承的正是这个 CLI、你的 `CLAUDE.md`、MCP 服务器、技能、hooks 和 shell 环境。
-- **Provider / 网关跟随你的终端。** web 端原样沿用你终端 `claude` 用的 provider、网关与模型——官方订阅或第三方网关皆可。
+- **官方订阅、第三方网关 / 中转 API 都支持。** web 端沿用**启动 server 的那个 shell** 里的 provider / 网关 / 模型：
+  - 用**官方订阅**（`claude` 已登录）——开箱即用，什么都不用配。
+  - 用**第三方网关 / 中转**——在启动 server 的 shell 里 `export` 你网关所需的 `ANTHROPIC_*`（通常是 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL`，以你网关的文档为准），再启动 server。
+  - ⚠️ `ANTHROPIC_*` 写进 `.env` **无效**——出于安全启动期一律剥除，只认启动 server 的 shell 环境。
 - **macOS 或 Linux。**
 
 ## 快速开始
