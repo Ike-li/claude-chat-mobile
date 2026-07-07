@@ -264,11 +264,11 @@ function checkFrontendSyntax() {
   }
 }
 
-// D10: 测试覆盖率门槛（npm test --experimental-test-coverage 行覆盖率 ≥ 50%）
+// D10: 测试覆盖率门槛（npm test --experimental-test-coverage 行覆盖率 ≥ 65%）
 function checkCoverageThreshold() {
   try {
     execSync('node scripts/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 });
-    ok('测试覆盖率', '行覆盖率 ≥ 50%');
+    ok('测试覆盖率', '行覆盖率 ≥ 65%');
   } catch (err) {
     const msg = (err.stderr?.toString() || err.message || '').split('\n').filter(Boolean).slice(-3).join(' | ');
     warn('测试覆盖率', `覆盖率检查未通过: ${msg || '超时或无法运行'}`);

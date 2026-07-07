@@ -99,6 +99,32 @@ test('sanitize: 非字符串返回空串', () => {
   assert.equal(sanitize(42), '');
 });
 
+// ── sanitize 假阳性：常见 benign 日志不被误脱敏（此前仅 'hello world' 一例）──
+test.describe('sanitize: benign 文本不被误脱敏', () => {
+  // 现实日志里会出现、但非密钥的文本；sanitizer 不应吃成 ***（否则日志不可读）。
+  const benign = [
+    'restart the server to refresh your session',
+    'MAC address 00:1b:44:11:3a:b7 assigned to eth0',     // 6 组 hex，非 SSH 指纹（需 16+ 组）
+    'request uuid 550e8400-e29b-41d4-a716-446655440000',  // UUID 用连字符，非 SSH 指纹（冒号）
+    'the access_token field must be provided',            // 后无 :/= 值 → 不匹配 OAuth 模式
+    'set the timeout to 30000 milliseconds',
+    'commit a1b2c3d4 merged to main',
+    'GET https://api.example.com/v1/users?page=2',        // 短 query 值不匹配
+    'apiClient.request() returned status 200',            // apiClient 无 api-/api_ 分隔 → 不匹配
+  ];
+  for (const text of benign) {
+    test(`不误伤: ${text.slice(0, 36)}`, () => {
+      assert.equal(sanitize(text), text);
+    });
+  }
+});
+
+test('sanitize: 已知取舍——api-/key-/sk- 前缀 + 15+ 字符被保守脱敏（连字符长术语也误伤，宁枉勿纵）', () => {
+  // #1 正则无法区分 "api-<随机密钥>" 与 "api-<连字符英文术语>"，一律脱敏。这是表征当前行为的锚点、
+  // 非契约保证：若日后收紧正则（如要求密钥段含数字/高熵），此断言应更新为 KEEP。
+  assert.equal(sanitize('see api-reference-documentation-guide online'), 'see *** online');
+});
+
 // ── maskToken ──────────────────────────────────────────────────────────────
 
 test('maskToken: 正常长度 token 保留首尾各 4 字符', () => {

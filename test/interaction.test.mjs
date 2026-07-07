@@ -4,8 +4,30 @@ import assert from 'node:assert/strict';
 import * as ilog from '../interaction-log.js';
 
 test.describe('interaction-log', () => {
-  test('enabled 默认 false（环境变量未设）', () => {
-    assert.equal(ilog.enabled, false);
+  // enabled 在模块加载时由 LOG_INTERACTIONS 求值（运行中不可改）。用动态 import + 受控 env 测两个方向，
+  // 不硬断言 false——否则机主 shell 常驻的 LOG_INTERACTIONS=1 会让本地 npm test 挂（此前真实发生过）。
+  test('enabled=true 当 LOG_INTERACTIONS=1', async () => {
+    const saved = process.env.LOG_INTERACTIONS;
+    process.env.LOG_INTERACTIONS = '1';
+    try {
+      const mod = await import('../interaction-log.js?enabled-on');
+      assert.equal(mod.enabled, true);
+    } finally {
+      if (saved === undefined) delete process.env.LOG_INTERACTIONS;
+      else process.env.LOG_INTERACTIONS = saved;
+    }
+  });
+
+  test('enabled=false 当 LOG_INTERACTIONS 未设', async () => {
+    const saved = process.env.LOG_INTERACTIONS;
+    delete process.env.LOG_INTERACTIONS;
+    try {
+      const mod = await import('../interaction-log.js?enabled-off');
+      assert.equal(mod.enabled, false);
+    } finally {
+      if (saved === undefined) delete process.env.LOG_INTERACTIONS;
+      else process.env.LOG_INTERACTIONS = saved;
+    }
   });
 
   test('getSessionLogs：null sessionId → []', () => {

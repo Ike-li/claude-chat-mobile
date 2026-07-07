@@ -408,6 +408,26 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     assert.equal(events.length, 0);
     s.dispose();
   });
+
+  test('assistant 的 parent_tool_use_id 非空 → 跳过（子 agent 不外露，与 history isSidechain 侧对称）', () => {
+    const { s, events } = makeSession();
+    // 子 agent 的 assistant 消息（带 tool_use + 文字正文）——运行期守卫应整条跳过，不 emit 任何事件。
+    s.map({ type: 'assistant', parent_tool_use_id: 'parent-1', message: { content: [
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
+      { type: 'text', text: '子 agent 内部文字' },
+    ] } });
+    assert.equal(events.length, 0, '带 parent_tool_use_id 的 assistant 不应 emit tool_use/text_delta');
+    s.dispose();
+  });
+
+  test('user 的 parent_tool_use_id 非空 → 跳过（子 agent 不外露）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'user', parent_tool_use_id: 'parent-1', message: { content: [
+      { type: 'text', text: '子 agent 的 user 回合' },
+    ] } });
+    assert.equal(events.length, 0, '带 parent_tool_use_id 的 user 不应 emit 任何事件');
+    s.dispose();
+  });
 });
 
 // ---- 后台任务完成通知（Workflow / 后台 Agent / 后台 Bash）----

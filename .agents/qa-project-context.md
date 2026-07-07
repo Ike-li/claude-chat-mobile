@@ -106,7 +106,7 @@
 
 | Metric | 目标 | 当前状态 |
 |--------|------|----------|
-| 单元测试行覆盖 | ≥80% 业务逻辑目标 | `coverage-check.js` 设 50% 行覆盖软门（doctor D10 warn 呈现、不阻断 CI） |
+| 单元测试行覆盖 | ≥80% 业务逻辑目标 | `coverage-check.js` 设 65% 行覆盖软门（doctor D10 warn 呈现、不阻断 CI） |
 | CI 通过率 | `npm test` + `npm run test:visual` 100% | 以 GitHub Actions 为准 |
 | Visual E2E | Top critical flows 覆盖 | ✅ Puppeteer lane 进 CI；Playwright P0 作为 mock-only 日常回归 |
 | 测试套件时长 | Unit <3 min | 以本机/CI 输出为准 |

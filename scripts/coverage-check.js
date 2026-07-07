@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 // scripts/coverage-check.js —— 覆盖率门槛检查
 // 用法: node scripts/coverage-check.js [--threshold=50]
-//   默认阈值 50% 行覆盖率。在 doctor.js 或 CI 中调用。
+//   默认阈值 65% 行覆盖率（实际约 66%，留 ~1% 缓冲防退化）。在 doctor.js 或 CI 中调用。
 //   exit 0 = 达标, exit 1 = 不达标, exit 2 = 运行失败。
 
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..');
-const THRESHOLD = parseFloat(process.argv.find(a => a.startsWith('--threshold='))?.split('=')[1] || '50');
+const THRESHOLD = parseFloat(process.argv.find(a => a.startsWith('--threshold='))?.split('=')[1] || '65');
 
 const proc = spawn('node', ['--experimental-test-coverage', '--test', 'test/*.test.mjs'], {
   cwd: ROOT,
