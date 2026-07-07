@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Claude Chat Mobile — your local claude CLI, on your phone</title>
-<meta name="description" content="A self-hosted, mobile-first web UI that projects your real local claude CLI to your phone. Same agent, same CLAUDE.md, same session — approve a git push from bed. Not a re-implementation, not a hosted service.">
+<meta name="description" content="A self-hosted, mobile-first web UI that projects your real local claude CLI to your phone. Same agent, same CLAUDE.md, same session, same official subscription or third-party gateway — approve a git push from bed. Not a re-implementation, not a hosted service.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
 
 <!-- Open Graph / Twitter -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Claude Chat Mobile">
-<meta property="og:description" content="Use your real local claude CLI from your phone — terminal equivalence. Self-hosted, locked by default.">
+<meta property="og:description" content="Use your real local claude CLI from your phone — terminal equivalence. Official subscription or third-party gateway, self-hosted and locked by default.">
 <meta property="og:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
 <meta property="og:url" content="https://ike-li.github.io/claude-chat-mobile/">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Claude Chat Mobile">
-<meta name="twitter:description" content="Your real local claude CLI, driven from your phone. Approve a git push from bed.">
+<meta name="twitter:description" content="Your real local claude CLI, driven from your phone. Official subscription or third-party gateway. Approve a git push from bed.">
 <meta name="twitter:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
 
 <style>
@@ -314,7 +314,7 @@
       <h2 data-i18n="features.heading">A transparent pipe to your terminal — locked by default</h2>
     </div>
     <div class="features">
-      <div class="card"><div class="n">01</div><h3 data-i18n="features.f1t">Your real CLI, not a clone</h3><p data-i18n-html="features.f1b">It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so you inherit the same agent, the same <code>CLAUDE.md</code>, the same MCP servers, skills, hooks, and logged-in session you use at your desk.</p></div>
+      <div class="card"><div class="n">01</div><h3 data-i18n="features.f1t">Your real CLI, not a clone</h3><p data-i18n-html="features.f1b">It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so you inherit the same agent, the same <code>CLAUDE.md</code>, the same MCP servers, skills, hooks, logged-in session, and provider setup you use at your desk — official subscription or third-party gateway.</p></div>
       <div class="card"><div class="n">02</div><h3 data-i18n="features.f2t">Terminal equivalence</h3><p data-i18n="features.f2b">Edit code, run commands, resume an earlier conversation — typing on your phone behaves exactly like typing at your computer. Except now you can do it from bed.</p></div>
       <div class="card"><div class="n">03</div><h3 data-i18n="features.f3t">Approve danger from your phone</h3><p data-i18n="features.f3b">Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. One tap to allow or deny — nothing runs until you say so.</p></div>
       <div class="card"><div class="n">04</div><h3 data-i18n="features.f4t">Survives a flaky subway</h3><p data-i18n="features.f4b">The task lives server-side, decoupled from the socket. On a dropped mobile connection it self-heals and replays, so you land back where you were instead of reconnecting and re-locating.</p></div>
@@ -327,6 +327,7 @@
       <span class="pill" data-i18n="sub.p5">Web Push</span>
       <span class="pill" data-i18n="sub.p6">PWA-installable</span>
       <span class="pill" data-i18n="sub.p7">Zero-CDN, self-hosted</span>
+      <span class="pill" data-i18n="sub.p8">Official or gateway</span>
     </div>
   </div>
 </section>
@@ -369,13 +370,14 @@
       <h2 data-i18n="get.heading">Run it on your own machine</h2>
       <p data-i18n="get.sub">It's self-hosted by design — there is no shared demo, because it drives your own authenticated claude CLI.</p>
     </div>
-    <p class="prereq" data-i18n-html="get.prereq"><strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working, logged-in <code>claude</code> CLI on the host (this project drives it, it doesn't bundle it).</p>
+    <p class="prereq" data-i18n-html="get.prereq"><strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.</p>
     <div class="clone">
 <span class="c"># clone, install runtime deps, configure, run</span>
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 <span class="p">cd</span> claude-chat-mobile
 npm install --omit=dev
-cp .env.example .env   <span class="c"># set AUTH_TOKEN, WORK_DIR</span>
+npm run setup          <span class="c"># generate AUTH_TOKEN + ask WORK_DIR</span>
+<span class="c"># Optional gateway: export ANTHROPIC_* in this shell before starting</span>
 npm start              <span class="c"># http://localhost:3000</span>
     </div>
     <a class="btn btn-primary" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener"><span data-i18n="get.cta">Read the full guide on GitHub</span> <span aria-hidden="true">▸</span></a>
@@ -419,14 +421,14 @@ npm start              <span class="c"># http://localhost:3000</span>
       'features.kicker': "Why it's different",
       'features.heading': 'A transparent pipe to your terminal — locked by default',
       'features.f1t': 'Your real CLI, not a clone',
-      'features.f1b': 'It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so you inherit the same agent, the same <code>CLAUDE.md</code>, the same MCP servers, skills, hooks, and logged-in session you use at your desk.',
+      'features.f1b': 'It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so you inherit the same agent, the same <code>CLAUDE.md</code>, the same MCP servers, skills, hooks, logged-in session, and provider setup you use at your desk — official subscription or third-party gateway.',
       'features.f2t': 'Terminal equivalence',
       'features.f2b': 'Edit code, run commands, resume an earlier conversation — typing on your phone behaves exactly like typing at your computer. Except now you can do it from bed.',
       'features.f3t': 'Approve danger from your phone',
       'features.f3b': 'Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. One tap to allow or deny — nothing runs until you say so.',
       'features.f4t': 'Survives a flaky subway',
       'features.f4b': 'The task lives server-side, decoupled from the socket. On a dropped mobile connection it self-heals and replays, so you land back where you were instead of reconnecting and re-locating.',
-      'sub.p1': '5 permission modes', 'sub.p2': 'Per-message model switching', 'sub.p3': 'Multi-repo · multi-session tabs', 'sub.p4': 'File & image upload', 'sub.p5': 'Web Push', 'sub.p6': 'PWA-installable', 'sub.p7': 'Zero-CDN, self-hosted',
+      'sub.p1': '5 permission modes', 'sub.p2': 'Per-message model switching', 'sub.p3': 'Multi-repo · multi-session tabs', 'sub.p4': 'File & image upload', 'sub.p5': 'Web Push', 'sub.p6': 'PWA-installable', 'sub.p7': 'Zero-CDN, self-hosted', 'sub.p8': 'Official or gateway',
       'security.kicker': 'Security model',
       'security.heading': 'A code-execution channel into your shell. Treated like one.',
       'security.t1': 'Single-user per instance', 'security.b1': 'Open for anyone to self-host — you run your own instance, for yourself. Each instance is single-user by design: no accounts, no login. Anyone who passes auth has the same power as you at the terminal, so only ever point it at your own machine.',
@@ -440,7 +442,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'worth.b2': 'If you only glance in remotely now and then, an existing remote desktop is enough. The value lands when you use your phone frequently as a pocket extension of your terminal.',
       'get.heading': 'Run it on your own machine',
       'get.sub': "It's self-hosted by design — there is no shared demo, because it drives your own authenticated claude CLI.",
-      'get.prereq': '<strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working, logged-in <code>claude</code> CLI on the host (this project drives it, it doesn\'t bundle it).',
+      'get.prereq': '<strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.',
       'get.cta': 'Read the full guide on GitHub',
       'foot.tag': 'Your terminal, in your pocket.',
       'img.hero': './screenshots/03-approval-en.png',
@@ -474,14 +476,14 @@ npm start              <span class="c"># http://localhost:3000</span>
       'features.kicker': '为什么不一样',
       'features.heading': '一条通往你终端的透明管道——默认上锁',
       'features.f1t': '你真实的 CLI，不是克隆',
-      'features.f1b': '它不打包任何自己的 Claude。它通过 Claude Agent SDK 驱动你本机的 CLI，于是你继承同一个 agent、同一份 <code>CLAUDE.md</code>、同样的 MCP 服务、技能、hooks 和已登录会话——和你在电脑前用的一模一样。',
+      'features.f1b': '它不打包任何自己的 Claude。它通过 Claude Agent SDK 驱动你本机的 CLI，于是你继承同一个 agent、同一份 <code>CLAUDE.md</code>、同样的 MCP 服务、技能、hooks、会话和 provider 配置——官方订阅或第三方网关 / 中转都可以。',
       'features.f2t': '终端等价性',
       'features.f2b': '改代码、跑命令、恢复早先的对话——在手机上打字，效果和坐在电脑前完全一样。只不过现在你可以在床上做。',
       'features.f3t': '危险操作弹手机批准',
       'features.f3b': '不在 allowlist 上的操作会被挂起，连同完整命令和工作目录推到你手机上。一次点按允许或拒绝——你不点头，什么都不会跑。',
       'features.f4t': '扛得住地铁断网',
       'features.f4b': '任务活在服务端，和 socket 解耦。手机网络断了它会自愈重放，让你回到中断处，而不是重连后再找位置。',
-      'sub.p1': '5 种权限模式', 'sub.p2': '逐条消息切模型', 'sub.p3': '多仓库 · 多会话标签', 'sub.p4': '文件与图片上传', 'sub.p5': 'Web Push 推送', 'sub.p6': 'PWA 可安装', 'sub.p7': '零 CDN、自托管',
+      'sub.p1': '5 种权限模式', 'sub.p2': '逐条消息切模型', 'sub.p3': '多仓库 · 多会话标签', 'sub.p4': '文件与图片上传', 'sub.p5': 'Web Push 推送', 'sub.p6': 'PWA 可安装', 'sub.p7': '零 CDN、自托管', 'sub.p8': '官方或第三方网关',
       'security.kicker': '安全模型',
       'security.heading': '一条直通你 shell 的代码执行通道。就按这个来对待。',
       'security.t1': '每实例单用户', 'security.b1': '开放给任何人自托管——你运行属于自己的实例、给自己用。每个实例被设计为单用户：没有账号、没有登录。任何通过鉴权的请求，权力都和你坐在终端前完全相同，所以只把它指向你自己的机器。',
@@ -495,7 +497,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'worth.b2': '如果你只是偶尔远程瞄一眼，现成的远程桌面就够了。它的价值，在你把手机当成终端的口袋延伸、频繁使用时才真正兑现。',
       'get.heading': '在你自己的机器上跑起来',
       'get.sub': '它天生就是自托管——没有公共 demo，因为它驱动的是你自己已登录的 claude CLI。',
-      'get.prereq': '<strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用且已登录的 <code>claude</code> CLI（本项目驱动它，不打包它）。',
+      'get.prereq': '<strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用的 <code>claude</code> CLI。官方订阅开箱即用；第三方网关 / 中转则在启动 server 的 shell 里 export 所需 <code>ANTHROPIC_*</code>。',
       'get.cta': '去 GitHub 看完整指南',
       'foot.tag': '你的终端，装进口袋。',
       'img.hero': './screenshots/03-approval-zh.png',
