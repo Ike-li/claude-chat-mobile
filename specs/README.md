@@ -1,10 +1,10 @@
 # Specs
 
-This directory stores test plans and generated Playwright scenario sources for the mobile Web UI.
+This directory stores test plans and Playwright scenario sources for the mobile Web UI.
 
 ## Playwright P0 Mock Regression
 
-P0 is the daily-safe browser regression lane. It runs against `scripts/visual-mock-server.js`, uses Socket.IO mock events, and does not call the real Claude CLI or consume tokens.
+P0 is the browser regression lane that is safe to run every day. It runs against `scripts/visual-mock-server.js`, uses Socket.IO mock events, and does not call the real Claude CLI or consume tokens.
 
 Run it with:
 
@@ -18,9 +18,9 @@ Protocol drift guard:
 npm run contract:check
 ```
 
-The contract check is a zero-token Node/static check. It compares `agent.js` and `server.js` event types with `scripts/visual-mock-server.js` so P0 mocks cannot introduce event types that the real server/agent path does not emit.
+The contract check is a zero-token Node/static check. It compares `agent.js` and `server.js` event types with `scripts/visual-mock-server.js`; P0 mocks cannot introduce event types that the real server/agent path does not emit.
 
-The Playwright config starts the mock server automatically on `127.0.0.1:33341` by default. Override only for local debugging:
+The Playwright config starts the mock server automatically on `127.0.0.1:33341` by default. Override the port only for local debugging:
 
 ```bash
 CCM_PLAYWRIGHT_PORT=33342 npm run test:playwright:p0
@@ -28,7 +28,7 @@ CCM_PLAYWRIGHT_PORT=33342 npm run test:playwright:p0
 
 The mock server exposes `POST /__reset` for the Playwright seed helper so each test starts from a clean mock state. This endpoint exists only in the visual mock server, not in production `server.js`.
 
-Current P0 mock-only coverage also includes:
+Current P0 mock-only coverage includes:
 
 - `test:settings-echo` in the visual mock server, which renders the selected model, permission mode, and thinking effort from the next sent message so the settings panel is tested through user-visible chat behavior.
 - A mock `logs:get` response with a stable `[MOCK_LOG]` trace row so the Console modal can verify Clear affects only the log pane, not chat history.

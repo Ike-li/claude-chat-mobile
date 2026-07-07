@@ -1,6 +1,6 @@
 # Agent Event Contract
 
-This document describes the Socket.IO `agent:event` contract shared by the real server path and the Playwright visual mock server.
+This document records the Socket.IO `agent:event` contract shared by the real server path and the Playwright visual mock server.
 
 The executable contract lives in `scripts/agent-event-contract.js`. Run:
 

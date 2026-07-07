@@ -2,7 +2,7 @@
 
 ## 报告漏洞 / Reporting a Vulnerability
 
-**请勿通过公开 issue 报告安全漏洞**——公开 issue 会在修复前就把漏洞暴露给所有人。
+**请勿通过公开 issue 报告安全漏洞。** 公开 issue 会在修复前就把漏洞暴露给所有人。
 **Please do not report security vulnerabilities through public issues.**
 
 请通过 GitHub Security Advisories 私下报告 / Please report privately via GitHub Security Advisories:

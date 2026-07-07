@@ -1,6 +1,6 @@
-# 部署与运维（参考方案：常驻 + 固定公网入口）
+# 部署与运维：常驻服务 + 固定公网入口
 
-> 本文给出一套**生产级常驻部署**的参考配方：macOS LaunchAgent 常驻 + Cloudflare Tunnel 固定域名 + Cloudflare Access 双因素。
+> 本文给出一套常驻部署参考：macOS LaunchAgent 常驻 + Cloudflare Tunnel 固定域名 + Cloudflare Access 双因素。
 >
 > 下文用占位符 `<your-domain>`、`<your-team>`、`<UUID>` 等，替换为你自己的值。Linux/systemd 用户把 LaunchAgent 部分换成 systemd unit，思路一致。
 
@@ -12,12 +12,12 @@
 
 - **公网入口**：固定域名，Cloudflare Access 把守（Email OTP 或 Google/Microsoft 2FA），公网**不带 `#token=`**。
 - **两个常驻进程**（随登录自启、崩溃自重启、关终端不掉）：
-  - server —— `node server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**以保终端等价性（claude 的 PATH / 登录态与你终端一致）。
-  - tunnel —— `cloudflared` 命名隧道，把 `:3000` 投到公网域名。
+  - server：`node server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致。
+  - tunnel：`cloudflared` 命名隧道，把 `:3000` 投到公网域名。
 - **鉴权分层**：公网走 Access JWT（服务端 `cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
-  > ⚠️ **反代拓扑会静默关掉设备审批层**。设备指纹审批按 socket 直连 peer 的 IP 判定「本机」——本配方里 Cloudflare 隧道在 `localhost:3000` 落地，连接显成 `127.0.0.1`，但公网路径已由 Access JWT 兜底，故无碍。**若你换成任何在本机落地的其他反代**（nginx/Caddy 的 `proxy_pass localhost`、SSH 端口转发、frp 等），所有客户端都会显成本机 → 设备审批层被跳过，**防线只剩 `AUTH_TOKEN`**。这类拓扑下务必设强 `AUTH_TOKEN`，别指望设备审批纵深。
+  > ⚠️ **反代拓扑会静默关掉设备审批层**。设备指纹审批按 socket 直连 peer 的 IP 判定「本机」。本配方里 Cloudflare 隧道在 `localhost:3000` 落地，连接显成 `127.0.0.1`，但公网路径已由 Access JWT 兜底，所以可接受。**若你换成任何在本机落地的其他反代**（nginx/Caddy 的 `proxy_pass localhost`、SSH 端口转发、frp 等），所有客户端都会显成本机，设备审批层会被跳过，**防线只剩 `AUTH_TOKEN`**。这类拓扑下务必设强 `AUTH_TOKEN`，不要指望设备审批纵深。
 
-## ⚠️ 最容易忘的一条
+## ⚠️ 最容易忘的一点
 
 生产实例由常驻服务占着 3000 端口，**不要再手动 `npm start`**（会撞端口）。改了 `.env` 或拉了新代码后，**重启 server 进程**才生效：
 
@@ -58,12 +58,12 @@ cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
    CF_ACCESS_TEAM=<your-team>
    CF_ACCESS_AUD=<aud-tag>
    ```
-5. **登录有效期（Session Duration）**：过一次 OTP 后多久内免重复验（默认约 24h）。改法：Zero Trust → Access → Applications → 选中该应用 → **Configure / Edit → Session Duration**，下拉选 15 分钟 ~ 1 个月，或「No duration, expires immediately」每次都验；某条 Policy 内也能单独设、覆盖应用级。
+5. **登录有效期（Session Duration）**：过一次 OTP 后多久内免重复验（默认约 24h）。改法：Zero Trust → Access → Applications → 选中该应用 → **Configure / Edit → Session Duration**，下拉选 15 分钟 ~ 1 个月，或「No duration, expires immediately」每次都验；某条 Policy 内也能单独设，覆盖应用级。
    > 换浏览器 / 无痕窗口 / 清除站点数据都会**重新触发 OTP**——Access 会话是按浏览器隔离的 `CF_Authorization` cookie，与这个时长无关（同浏览器、没清数据、未过期才免验）。
 
 ### 3. 常驻（macOS LaunchAgent 示例）
 
-仓库 `deploy/` 下有两份**占位符 plist 模板**，复制 → 替换占位符 → 落到 `~/Library/LaunchAgents/`：
+仓库 `deploy/` 下有两份**占位符 plist 模板**，复制、替换占位符后放到 `~/Library/LaunchAgents/`：
 
 - [`deploy/server.plist.template`](../deploy/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
 - [`deploy/tunnel.plist.template`](../deploy/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
@@ -75,7 +75,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-server-label>.plis
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-tunnel-label>.plist
 ```
 
-> LaunchAgent 在**登录后**启动。若要"开机未登录也跑"（headless），需改成 root LaunchDaemon。
+> LaunchAgent 在**登录后**启动。若要"开机未登录也跑"（headless），需要改成 root LaunchDaemon。
 
 ## 运维速查
 
@@ -100,8 +100,8 @@ npm start
 
 | 现象 | 处理 |
 |---|---|
-| 公网 502 / 1033 | server 没跑 → 看 server 日志、重启；或隧道挂了 → 看 tunnel 日志 |
-| OTP 登录过了但 app 连不上 | JWT 校验失败 → server 日志搜「Access JWT 校验失败」→ 核 `.env` 的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
+| 公网 502 / 1033 | server 没跑：看 server 日志、重启；或隧道挂了：看 tunnel 日志 |
+| OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜「Access JWT 校验失败」，核对 `.env` 的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
 | 改了 `.env` 不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
 | 公网 1033 且部署机开着全局代理 | 代理 TUN 劫持了 cloudflared 到 edge 的连接 → 见下方「部署机有全局代理时」 |

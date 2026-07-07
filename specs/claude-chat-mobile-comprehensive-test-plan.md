@@ -1,10 +1,10 @@
 # Claude Chat Mobile 综合测试计划
 
-## Application Overview
+## 应用概览
 
-本计划面向 claude-chat-mobile 的移动端聊天式 Web UI。核心目标是验证手机端交互与“坐在电脑前对 claude CLI 打字”的终端等价性：消息发送、流式输出、工具调用、审批、会话/工作区、设置、设备信赖、附件与状态同步都应以用户可见行为和 Socket.IO 可观测事件为准。P0 使用 http://127.0.0.1:33341 的 visual mock server，零 token、可日常回归；P1 覆盖协议/集成边界；P2 覆盖真实 Claude 与生产 smoke，必须低频且显式 opt-in。
+本计划覆盖 claude-chat-mobile 的移动端聊天式 Web UI。目标是验证手机端交互是否和“坐在电脑前对 claude CLI 打字”等价：消息发送、流式输出、工具调用、审批、会话/工作区、设置、设备信赖、附件与状态同步，都以用户可见行为和 Socket.IO 可观测事件为准。P0 使用 http://127.0.0.1:33341 的 visual mock server，零 token，可日常回归；P1 覆盖协议/集成边界；P2 覆盖真实 Claude 与生产 smoke，必须低频且显式 opt-in。
 
-## Test Scenarios
+## 测试场景
 
 ### 1. P0 日常零 token Mock UI 回归
 

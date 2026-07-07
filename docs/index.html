@@ -4,18 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Claude Chat Mobile — your local claude CLI, on your phone</title>
-<meta name="description" content="A self-hosted, mobile-first web UI that projects your real local claude CLI to your phone. Same agent, same CLAUDE.md, same session, same official subscription or third-party gateway — approve a git push from bed. Not a re-implementation, not a hosted service.">
+<meta name="description" content="A self-hosted mobile Web UI for your real local claude CLI. Same agent, same CLAUDE.md, same session, with official subscription or third-party gateway support. Not a reimplementation, not a hosted service.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
 
 <!-- Open Graph / Twitter -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Claude Chat Mobile">
-<meta property="og:description" content="Use your real local claude CLI from your phone — terminal equivalence. Official subscription or third-party gateway, self-hosted and locked by default.">
+<meta property="og:description" content="Use your real local claude CLI from your phone with terminal-equivalent behavior. Official subscription or third-party gateway, self-hosted and locked by default.">
 <meta property="og:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
 <meta property="og:url" content="https://ike-li.github.io/claude-chat-mobile/">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Claude Chat Mobile">
-<meta name="twitter:description" content="Your real local claude CLI, driven from your phone. Official subscription or third-party gateway. Approve a git push from bed.">
+<meta name="twitter:description" content="Your real local claude CLI, driven from your phone. Official subscription or third-party gateway. Self-hosted and locked by default.">
 <meta name="twitter:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
 
 <style>
@@ -231,8 +231,8 @@
     <div>
       <div class="eyebrow"><span class="dot"></span><span data-i18n="hero.eyebrow">$ claude · on your phone</span></div>
       <h1 class="hero-title" data-i18n-html="hero.title">Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span></h1>
-      <p class="hero-sub" data-i18n-html="hero.sub">Not a remote desktop, not a re-implementation. It drives your <strong>real, logged-in</strong> CLI — same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves exactly like sitting at your own terminal.</p>
-      <p class="hero-note" data-i18n="hero.note">Right down to approving a git push — from bed, one tap.</p>
+      <p class="hero-sub" data-i18n-html="hero.sub">Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.</p>
+      <p class="hero-note" data-i18n="hero.note">Approvals, tool output, and resumed sessions stay on the same local Claude path.</p>
       <div class="hero-cta">
         <a class="btn btn-primary" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener"><span data-i18n="hero.cta1">Get started on GitHub</span> <span aria-hidden="true">▸</span></a>
         <a class="btn btn-ghost" href="#action" data-i18n="hero.cta2">See it in action</a>
@@ -249,12 +249,12 @@
   <div class="wrap">
     <div class="action-grid">
       <div>
-        <div class="kicker" data-i18n="action.kicker">A night in the life</div>
-        <h2 class="serif" style="font-size:clamp(26px,3.2vw,34px);font-weight:600;letter-spacing:-.02em;margin-bottom:22px;" data-i18n="action.heading">You've stepped away. The work hasn't.</h2>
+        <div class="kicker" data-i18n="action.kicker">Typical flow</div>
+        <h2 class="serif" style="font-size:clamp(26px,3.2vw,34px);font-weight:600;letter-spacing:-.02em;margin-bottom:22px;" data-i18n="action.heading">You leave the desk. The session keeps running.</h2>
         <div class="story">
-          <p class="line"><span class="t">22:30</span><span data-i18n="action.l1">In bed, you text: "merge the duplicate date helpers in utils into one function, make the tests pass."</span></p>
+          <p class="line"><span class="t">22:30</span><span data-i18n="action.l1">You send: "merge the duplicate date helpers in utils into one function, make the tests pass."</span></p>
           <p class="line"><span class="t">22:30</span><span data-i18n="action.l2">Claude streams back, threaded with Read · Edit · Bash(npm test) tool cards.</span></p>
-          <p class="line"><span class="t">22:39</span><span data-i18n="action.l3">You unlock. The page auto-reconnected and replayed everything you missed: tests pass, and one approval is waiting — the full command git commit and its working directory. You tap Allow.</span></p>
+          <p class="line"><span class="t">22:39</span><span data-i18n="action.l3">You unlock. The page has reconnected and replayed the missed output: tests passed, and one approval is waiting with the full git commit command and working directory. You tap Allow.</span></p>
           <p class="line"><span class="t">22:40</span><span data-i18n="action.l4">"Now add a line to the CHANGELOG." It remembers what it just changed, and picks up right where it left off.</span></p>
         </div>
       </div>
@@ -269,7 +269,7 @@
 <section style="background:var(--surface-sunk);border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);">
   <div class="wrap">
     <div class="sec-head">
-      <h2 data-i18n="shots.heading">Built for a phone, not mirrored from a desktop</h2>
+      <h2 data-i18n="shots.heading">A phone UI for the local CLI</h2>
     </div>
     <div class="shots">
       <div class="shot">
@@ -290,17 +290,17 @@
       <div class="shot">
         <div class="frame"><img data-i18n-img="img.workspace" src="./screenshots/04-workspace-en.png" loading="lazy" width="750" height="1624" alt="Multi-repository workspace session switcher"></div>
         <h3 data-i18n="shots.t4">Workspace switcher</h3>
-        <p data-i18n="shots.p4">Watch and switch multiple repositories easily</p>
+        <p data-i18n="shots.p4">Watch and switch multiple repositories</p>
       </div>
       <div class="shot">
         <div class="frame"><img data-i18n-img="img.settings" src="./screenshots/05-settings-en.png" loading="lazy" width="750" height="1624" alt="Fine-grained settings control"></div>
         <h3 data-i18n="shots.t5">Settings Panel</h3>
-        <p data-i18n="shots.p5">Fine-grained permission and thinking effort limits</p>
+        <p data-i18n="shots.p5">Permission modes and thinking effort</p>
       </div>
       <div class="shot">
         <div class="frame"><img data-i18n-img="img.console" src="./screenshots/06-console-en.png" loading="lazy" width="750" height="1624" alt="Direct log viewing"></div>
         <h3 data-i18n="shots.t6">Real-time Logs</h3>
-        <p data-i18n="shots.p6">Directly inspect terminal process log and SDK errors</p>
+        <p data-i18n="shots.p6">Inspect process logs and SDK errors</p>
       </div>
     </div>
   </div>
@@ -310,14 +310,14 @@
 <section id="features">
   <div class="wrap">
     <div class="sec-head">
-      <div class="kicker" data-i18n="features.kicker">Why it's different</div>
-      <h2 data-i18n="features.heading">A transparent pipe to your terminal — locked by default</h2>
+      <div class="kicker" data-i18n="features.kicker">What it changes</div>
+      <h2 data-i18n="features.heading">Your local CLI, reachable from the phone</h2>
     </div>
     <div class="features">
-      <div class="card"><div class="n">01</div><h3 data-i18n="features.f1t">Your real CLI, not a clone</h3><p data-i18n-html="features.f1b">It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so you inherit the same agent, the same <code>CLAUDE.md</code>, the same MCP servers, skills, hooks, logged-in session, and provider setup you use at your desk — official subscription or third-party gateway.</p></div>
-      <div class="card"><div class="n">02</div><h3 data-i18n="features.f2t">Terminal equivalence</h3><p data-i18n="features.f2b">Edit code, run commands, resume an earlier conversation — typing on your phone behaves exactly like typing at your computer. Except now you can do it from bed.</p></div>
-      <div class="card"><div class="n">03</div><h3 data-i18n="features.f3t">Approve danger from your phone</h3><p data-i18n="features.f3b">Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. One tap to allow or deny — nothing runs until you say so.</p></div>
-      <div class="card"><div class="n">04</div><h3 data-i18n="features.f4t">Survives a flaky subway</h3><p data-i18n="features.f4b">The task lives server-side, decoupled from the socket. On a dropped mobile connection it self-heals and replays, so you land back where you were instead of reconnecting and re-locating.</p></div>
+      <div class="card"><div class="n">01</div><h3 data-i18n="features.f1t">Your real CLI, not a clone</h3><p data-i18n-html="features.f1b">It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so it uses the same agent, <code>CLAUDE.md</code>, MCP servers, skills, hooks, logged-in session, and provider setup you use at your desk.</p></div>
+      <div class="card"><div class="n">02</div><h3 data-i18n="features.f2t">Terminal equivalence</h3><p data-i18n="features.f2b">Edit code, run commands, and resume an earlier conversation. Typing on your phone follows the same local Claude path as typing at your computer.</p></div>
+      <div class="card"><div class="n">03</div><h3 data-i18n="features.f3t">Approve risky actions from your phone</h3><p data-i18n="features.f3b">Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. Nothing runs until you allow it.</p></div>
+      <div class="card"><div class="n">04</div><h3 data-i18n="features.f4t">Handles flaky mobile networks</h3><p data-i18n="features.f4b">The task lives server-side, decoupled from the socket. After a dropped mobile connection, the page reconnects and replays missed events.</p></div>
     </div>
     <div class="subfeatures">
       <span class="pill" data-i18n="sub.p1">5 permission modes</span>
@@ -337,12 +337,12 @@
   <div class="wrap">
     <div class="sec-head">
       <div class="kicker" data-i18n="security.kicker">Security model</div>
-      <h2 data-i18n="security.heading">A code-execution channel into your shell. Treated like one.</h2>
+      <h2 data-i18n="security.heading">A code-execution channel into your shell</h2>
     </div>
     <div class="sec-list">
-      <div class="sec-item"><div class="ico">1</div><div><h3 data-i18n="security.t1">Single-user per instance</h3><p data-i18n="security.b1">Open for anyone to self-host — you run your own instance, for yourself. Each instance is single-user by design: no accounts, no login. Anyone who passes auth has the same power as you at the terminal, so only ever point it at your own machine.</p></div></div>
-      <div class="sec-item"><div class="ico">2</div><div><h3 data-i18n="security.t2">No token, no exit</h3><p data-i18n-html="security.b2">With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only — there is no "empty = open to the world" path. Reaching the internet requires a token.</p></div></div>
-      <div class="sec-item"><div class="ico">3</div><div><h3 data-i18n="security.t3">Pure inheritance, zero injection</h3><p data-i18n="security.b3">The auto-approve set is exactly your existing CLI allowlist — nothing added. Anything off-list is suspended and bounced to your phone for approval.</p></div></div>
+      <div class="sec-item"><div class="ico">1</div><div><h3 data-i18n="security.t1">Single-user per instance</h3><p data-i18n="security.b1">You run your own instance for yourself. There are no accounts or multi-user controls; anyone who passes auth has the same power as you at the terminal.</p></div></div>
+      <div class="sec-item"><div class="ico">2</div><div><h3 data-i18n="security.t2">No token, no exit</h3><p data-i18n-html="security.b2">With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only. There is no "empty = open to the world" path. Reaching the internet requires a token.</p></div></div>
+      <div class="sec-item"><div class="ico">3</div><div><h3 data-i18n="security.t3">CLI permissions are inherited</h3><p data-i18n="security.b3">The auto-approve set is your existing CLI allowlist. Anything off-list is suspended and sent to your phone for approval.</p></div></div>
       <div class="sec-item"><div class="ico">4</div><div><h3 data-i18n="security.t4">Device trust (TOFU)</h3><p data-i18n="security.b4">A connection that is neither local nor Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.</p></div></div>
     </div>
     <p class="locked" data-i18n-html="security.locked">No <code>AUTH_TOKEN</code> ⇒ binds <code>127.0.0.1</code> only. It cannot reach the public internet until you deliberately open it.</p>
@@ -353,12 +353,12 @@
 <section id="worth">
   <div class="wrap">
     <div class="sec-head">
-      <div class="kicker" data-i18n="worth.kicker">Honest scope</div>
+      <div class="kicker" data-i18n="worth.kicker">Scope</div>
       <h2 data-i18n="worth.heading">When it's worth it</h2>
     </div>
     <div class="worth-body">
-      <p data-i18n="worth.b1">This isn't "open a remote desktop back to your computer." That mirrors a screen. This gives your real local claude session a native entry point built for a phone: one tap to approve, one session picked up across devices, several repos watched in parallel tabs, native photo upload and long-press copy.</p>
-      <p class="verdict" data-i18n="worth.b2">If you only glance in remotely now and then, an existing remote desktop is enough. The value lands when you use your phone frequently as a pocket extension of your terminal.</p>
+      <p data-i18n="worth.b1">This is not "open a remote desktop back to your computer." A remote desktop mirrors a screen. This gives your local claude session a phone UI: approvals, one session picked up across devices, several repos in parallel tabs, photo upload, and long-press copy.</p>
+      <p class="verdict" data-i18n="worth.b2">If you only glance in remotely now and then, a remote desktop is enough. This project is for using the phone often as a terminal companion.</p>
     </div>
   </div>
 </section>
@@ -368,7 +368,7 @@
   <div class="wrap get">
     <div class="sec-head">
       <h2 data-i18n="get.heading">Run it on your own machine</h2>
-      <p data-i18n="get.sub">It's self-hosted by design — there is no shared demo, because it drives your own authenticated claude CLI.</p>
+      <p data-i18n="get.sub">It is self-hosted. There is no shared demo because it drives your own authenticated claude CLI.</p>
     </div>
     <p class="prereq" data-i18n-html="get.prereq"><strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.</p>
     <div class="clone">
@@ -401,47 +401,47 @@ npm start              <span class="c"># http://localhost:3000</span>
     en: {
       'hero.eyebrow': '$ claude · on your phone',
       'hero.title': 'Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span>',
-      'hero.sub': 'Not a remote desktop, not a re-implementation. It drives your <strong>real, logged-in</strong> CLI — same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves exactly like sitting at your own terminal.',
-      'hero.note': 'Right down to approving a git push — from bed, one tap.',
+      'hero.sub': 'Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.',
+      'hero.note': 'Approvals, tool output, and resumed sessions stay on the same local Claude path.',
       'hero.cta1': 'Get started on GitHub',
       'hero.cta2': 'See it in action',
-      'action.kicker': 'A night in the life',
-      'action.heading': "You've stepped away. The work hasn't.",
-      'action.l1': 'In bed, you text: "merge the duplicate date helpers in utils into one function, make the tests pass."',
+      'action.kicker': 'Typical flow',
+      'action.heading': 'You leave the desk. The session keeps running.',
+      'action.l1': 'You send: "merge the duplicate date helpers in utils into one function, make the tests pass."',
       'action.l2': 'Claude streams back, threaded with Read · Edit · Bash(npm test) tool cards.',
-      'action.l3': 'You unlock. The page auto-reconnected and replayed everything you missed: tests pass, and one approval is waiting — the full command git commit and its working directory. You tap Allow.',
+      'action.l3': 'You unlock. The page has reconnected and replayed the missed output: tests passed, and one approval is waiting with the full git commit command and working directory. You tap Allow.',
       'action.l4': '"Now add a line to the CHANGELOG." It remembers what it just changed, and picks up right where it left off.',
-      'shots.heading': 'Built for a phone, not mirrored from a desktop',
+      'shots.heading': 'A phone UI for the local CLI',
       'shots.t1': 'Streaming', 'shots.p1': 'Markdown · syntax highlight · status line',
       'shots.t2': 'Visible process', 'shots.p2': 'tool calls render as collapsible cards',
       'shots.t3': 'Approve on phone', 'shots.p3': 'dangerous actions push full command + cwd',
-      'shots.t4': 'Workspace switcher', 'shots.p4': 'Watch and switch multiple repositories easily',
-      'shots.t5': 'Settings Panel', 'shots.p5': 'Fine-grained permission and thinking effort limits',
-      'shots.t6': 'Real-time Logs', 'shots.p6': 'Directly inspect terminal process log and SDK errors',
-      'features.kicker': "Why it's different",
-      'features.heading': 'A transparent pipe to your terminal — locked by default',
+      'shots.t4': 'Workspace switcher', 'shots.p4': 'Watch and switch multiple repositories',
+      'shots.t5': 'Settings Panel', 'shots.p5': 'Permission modes and thinking effort',
+      'shots.t6': 'Real-time Logs', 'shots.p6': 'Inspect process logs and SDK errors',
+      'features.kicker': 'What it changes',
+      'features.heading': 'Your local CLI, reachable from the phone',
       'features.f1t': 'Your real CLI, not a clone',
-      'features.f1b': 'It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so you inherit the same agent, the same <code>CLAUDE.md</code>, the same MCP servers, skills, hooks, logged-in session, and provider setup you use at your desk — official subscription or third-party gateway.',
+      'features.f1b': 'It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so it uses the same agent, <code>CLAUDE.md</code>, MCP servers, skills, hooks, logged-in session, and provider setup you use at your desk.',
       'features.f2t': 'Terminal equivalence',
-      'features.f2b': 'Edit code, run commands, resume an earlier conversation — typing on your phone behaves exactly like typing at your computer. Except now you can do it from bed.',
-      'features.f3t': 'Approve danger from your phone',
-      'features.f3b': 'Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. One tap to allow or deny — nothing runs until you say so.',
-      'features.f4t': 'Survives a flaky subway',
-      'features.f4b': 'The task lives server-side, decoupled from the socket. On a dropped mobile connection it self-heals and replays, so you land back where you were instead of reconnecting and re-locating.',
+      'features.f2b': 'Edit code, run commands, and resume an earlier conversation. Typing on your phone follows the same local Claude path as typing at your computer.',
+      'features.f3t': 'Approve risky actions from your phone',
+      'features.f3b': 'Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. Nothing runs until you allow it.',
+      'features.f4t': 'Handles flaky mobile networks',
+      'features.f4b': 'The task lives server-side, decoupled from the socket. After a dropped mobile connection, the page reconnects and replays missed events.',
       'sub.p1': '5 permission modes', 'sub.p2': 'Per-message model switching', 'sub.p3': 'Multi-repo · multi-session tabs', 'sub.p4': 'File & image upload', 'sub.p5': 'Web Push', 'sub.p6': 'PWA-installable', 'sub.p7': 'Zero-CDN, self-hosted', 'sub.p8': 'Official or gateway',
       'security.kicker': 'Security model',
-      'security.heading': 'A code-execution channel into your shell. Treated like one.',
-      'security.t1': 'Single-user per instance', 'security.b1': 'Open for anyone to self-host — you run your own instance, for yourself. Each instance is single-user by design: no accounts, no login. Anyone who passes auth has the same power as you at the terminal, so only ever point it at your own machine.',
-      'security.t2': 'No token, no exit', 'security.b2': 'With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only — there is no "empty = open to the world" path. Reaching the internet requires a token.',
-      'security.t3': 'Pure inheritance, zero injection', 'security.b3': 'The auto-approve set is exactly your existing CLI allowlist — nothing added. Anything off-list is suspended and bounced to your phone for approval.',
+      'security.heading': 'A code-execution channel into your shell',
+      'security.t1': 'Single-user per instance', 'security.b1': 'You run your own instance for yourself. There are no accounts or multi-user controls; anyone who passes auth has the same power as you at the terminal.',
+      'security.t2': 'No token, no exit', 'security.b2': 'With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only. There is no "empty = open to the world" path. Reaching the internet requires a token.',
+      'security.t3': 'CLI permissions are inherited', 'security.b3': 'The auto-approve set is your existing CLI allowlist. Anything off-list is suspended and sent to your phone for approval.',
       'security.t4': 'Device trust (TOFU)', 'security.b4': 'A connection that is neither local nor Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.',
       'security.locked': 'No <code>AUTH_TOKEN</code> ⇒ binds <code>127.0.0.1</code> only. It cannot reach the public internet until you deliberately open it.',
-      'worth.kicker': 'Honest scope',
+      'worth.kicker': 'Scope',
       'worth.heading': "When it's worth it",
-      'worth.b1': 'This isn\'t "open a remote desktop back to your computer." That mirrors a screen. This gives your real local claude session a native entry point built for a phone: one tap to approve, one session picked up across devices, several repos watched in parallel tabs, native photo upload and long-press copy.',
-      'worth.b2': 'If you only glance in remotely now and then, an existing remote desktop is enough. The value lands when you use your phone frequently as a pocket extension of your terminal.',
+      'worth.b1': 'This is not "open a remote desktop back to your computer." A remote desktop mirrors a screen. This gives your local claude session a phone UI: approvals, one session picked up across devices, several repos in parallel tabs, photo upload, and long-press copy.',
+      'worth.b2': 'If you only glance in remotely now and then, a remote desktop is enough. This project is for using the phone often as a terminal companion.',
       'get.heading': 'Run it on your own machine',
-      'get.sub': "It's self-hosted by design — there is no shared demo, because it drives your own authenticated claude CLI.",
+      'get.sub': 'It is self-hosted. There is no shared demo because it drives your own authenticated claude CLI.',
       'get.prereq': '<strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.',
       'get.cta': 'Read the full guide on GitHub',
       'foot.tag': 'Your terminal, in your pocket.',
@@ -456,48 +456,48 @@ npm start              <span class="c"># http://localhost:3000</span>
     zh: {
       'hero.eyebrow': '$ claude · 在你手机上',
       'hero.title': '你本机的 <code>claude</code> CLI，<br><span class="accent">搬到手机上。</span>',
-      'hero.sub': '不是远程桌面，也不是复刻实现。它驱动你<strong>真实的、已登录的</strong> CLI——同一个 agent、同一份 <code>CLAUDE.md</code>、同一个会话。目标是<strong>终端等价性</strong>：在手机上对 claude 打字，和你坐在自己终端前一模一样。',
-      'hero.note': '连在床上批准一次 git push 都一样——一次点按。',
+      'hero.sub': '不是远程桌面，也不是复刻实现。它驱动你<strong>本机已登录</strong>的 CLI：同一个 agent、同一份 <code>CLAUDE.md</code>、同一个会话。目标是<strong>终端等价性</strong>：在手机上对 claude 打字，效果和坐在终端前一样。',
+      'hero.note': '审批、工具输出、恢复会话都走同一条本机 Claude 路径。',
       'hero.cta1': '去 GitHub 开始',
       'hero.cta2': '看实际效果',
-      'action.kicker': '一个夜晚',
-      'action.heading': '你离开了，活儿还在跑。',
-      'action.l1': '躺在床上，你发消息："把 utils 里重复的日期处理合并成一个函数，跑通测试。"',
+      'action.kicker': '典型流程',
+      'action.heading': '你离开电脑，会话继续跑。',
+      'action.l1': '你发消息："把 utils 里重复的日期处理合并成一个函数，跑通测试。"',
       'action.l2': '屏幕流式出现 claude 的回复，夹着 Read · Edit · Bash(npm test) 的工具调用卡片。',
-      'action.l3': '你解锁。页面已自动重连、补上错过的全部输出：测试通过，一条待批准的权限请求——完整命令 git commit 和工作目录都在。你点"允许"。',
+      'action.l3': '你解锁。页面已重连并补上错过的输出：测试通过，一条待批准的权限请求带着完整 git commit 命令和工作目录。你点"允许"。',
       'action.l4': '"再给 CHANGELOG 补一行。" 它记得刚才改了什么，直接续上。',
-      'shots.heading': '为手机而造，不是把桌面投屏过来',
+      'shots.heading': '给本机 CLI 做的手机界面',
       'shots.t1': '流式输出', 'shots.p1': 'Markdown · 语法高亮 · 状态行',
       'shots.t2': '过程可见', 'shots.p2': '工具调用渲染成可折叠卡片',
       'shots.t3': '回手机审批', 'shots.p3': '危险操作推送完整命令 + 工作目录',
-      'shots.t4': '多工作区', 'shots.p4': '轻松监视与切换多个本地项目仓库',
-      'shots.t5': '齿轮设置', 'shots.p5': '细粒度控制权限级别与模型思考深度',
-      'shots.t6': '运行日志', 'shots.p6': '随时查阅终端执行日志和 SDK 报错详情',
-      'features.kicker': '为什么不一样',
-      'features.heading': '一条通往你终端的透明管道——默认上锁',
+      'shots.t4': '多工作区', 'shots.p4': '查看并切换多个本地项目仓库',
+      'shots.t5': '齿轮设置', 'shots.p5': '权限档与模型思考强度',
+      'shots.t6': '运行日志', 'shots.p6': '查看进程日志和 SDK 报错',
+      'features.kicker': '改变了什么',
+      'features.heading': '从手机访问你的本机 CLI',
       'features.f1t': '你真实的 CLI，不是克隆',
-      'features.f1b': '它不打包任何自己的 Claude。它通过 Claude Agent SDK 驱动你本机的 CLI，于是你继承同一个 agent、同一份 <code>CLAUDE.md</code>、同样的 MCP 服务、技能、hooks、会话和 provider 配置——官方订阅或第三方网关 / 中转都可以。',
+      'features.f1b': '它不打包任何自己的 Claude。它通过 Claude Agent SDK 驱动你本机的 CLI，所以使用的是你桌面端同一套 agent、<code>CLAUDE.md</code>、MCP 服务、技能、hooks、会话和 provider 配置。',
       'features.f2t': '终端等价性',
-      'features.f2b': '改代码、跑命令、恢复早先的对话——在手机上打字，效果和坐在电脑前完全一样。只不过现在你可以在床上做。',
-      'features.f3t': '危险操作弹手机批准',
-      'features.f3b': '不在 allowlist 上的操作会被挂起，连同完整命令和工作目录推到你手机上。一次点按允许或拒绝——你不点头，什么都不会跑。',
-      'features.f4t': '扛得住地铁断网',
-      'features.f4b': '任务活在服务端，和 socket 解耦。手机网络断了它会自愈重放，让你回到中断处，而不是重连后再找位置。',
+      'features.f2b': '改代码、跑命令、恢复早先的对话。手机上输入和电脑前输入走的是同一条本机 Claude 路径。',
+      'features.f3t': '风险操作回手机批准',
+      'features.f3b': '不在 allowlist 上的操作会被挂起，连同完整命令和工作目录推到手机上。你允许后才执行。',
+      'features.f4t': '处理移动网络断连',
+      'features.f4b': '任务活在服务端，和 socket 解耦。手机网络断了以后，页面会重连并补发错过的事件。',
       'sub.p1': '5 种权限模式', 'sub.p2': '逐条消息切模型', 'sub.p3': '多仓库 · 多会话标签', 'sub.p4': '文件与图片上传', 'sub.p5': 'Web Push 推送', 'sub.p6': 'PWA 可安装', 'sub.p7': '零 CDN、自托管', 'sub.p8': '官方或第三方网关',
       'security.kicker': '安全模型',
-      'security.heading': '一条直通你 shell 的代码执行通道。就按这个来对待。',
-      'security.t1': '每实例单用户', 'security.b1': '开放给任何人自托管——你运行属于自己的实例、给自己用。每个实例被设计为单用户：没有账号、没有登录。任何通过鉴权的请求，权力都和你坐在终端前完全相同，所以只把它指向你自己的机器。',
-      'security.t2': '没有 token，出不了本机', 'security.b2': '不设 <code>AUTH_TOKEN</code> 时，server 只绑定 <code>127.0.0.1</code>——没有"空 = 对全世界开放"这条路。要触达公网，必须有 token。',
-      'security.t3': '纯继承，零注入', 'security.b3': '自动批准集恰好是你现有的 CLI allowlist——一条不加。不在其上的一律挂起、弹回手机等你批。',
+      'security.heading': '一条进入你 shell 的代码执行通道',
+      'security.t1': '每实例单用户', 'security.b1': '你运行自己的实例，给自己用。项目没有账号或多用户控制；任何通过鉴权的请求，权限都和你坐在终端前一样。',
+      'security.t2': '没有 token，出不了本机', 'security.b2': '不设 <code>AUTH_TOKEN</code> 时，server 只绑定 <code>127.0.0.1</code>。没有"空 = 对全世界开放"这条路。要触达公网，必须有 token。',
+      'security.t3': '继承 CLI 权限', 'security.b3': '自动批准集就是你现有的 CLI allowlist。不在其上的操作会被挂起，发到手机上等你批。',
       'security.t4': '设备信任（TOFU）', 'security.b4': '既非本地、也未经 Access 校验的连接，必须先在你电脑上授权一次才能做任何事。光有合法 token 不够。',
       'security.locked': '不设 <code>AUTH_TOKEN</code> ⇒ 只绑 <code>127.0.0.1</code>。在你主动开放之前，它触达不了公网。',
-      'worth.kicker': '诚实的边界',
+      'worth.kicker': '边界',
       'worth.heading': '什么时候值得用',
-      'worth.b1': '这不是"从手机开个远程桌面连回电脑"。那是投屏。这是给你真实的本机 claude 会话一个为手机而造的原生入口：一键批准、一个会话跨设备接力、多个仓库并排标签盯着、原生传照片、长按复制长输出。',
-      'worth.b2': '如果你只是偶尔远程瞄一眼，现成的远程桌面就够了。它的价值，在你把手机当成终端的口袋延伸、频繁使用时才真正兑现。',
+      'worth.b1': '这不是"从手机开个远程桌面连回电脑"。远程桌面是投屏；这里是给本机 claude 会话做手机界面：审批、跨设备续接、多个仓库标签、照片上传、长按复制。',
+      'worth.b2': '如果你只是偶尔远程看一眼，远程桌面就够了。这个项目适合把手机当成终端的随身入口来高频使用。',
       'get.heading': '在你自己的机器上跑起来',
-      'get.sub': '它天生就是自托管——没有公共 demo，因为它驱动的是你自己已登录的 claude CLI。',
-      'get.prereq': '<strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用的 <code>claude</code> CLI。官方订阅开箱即用；第三方网关 / 中转则在启动 server 的 shell 里 export 所需 <code>ANTHROPIC_*</code>。',
+      'get.sub': '它是自托管项目。没有公共 demo，因为它驱动的是你自己已登录的 claude CLI。',
+      'get.prereq': '<strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用的 <code>claude</code> CLI。官方订阅无需额外配置；第三方网关 / 中转则在启动 server 的 shell 里 export 所需 <code>ANTHROPIC_*</code>。',
       'get.cta': '去 GitHub 看完整指南',
       'foot.tag': '你的终端，装进口袋。',
       'img.hero': './screenshots/03-approval-zh.png',

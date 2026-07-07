@@ -4,14 +4,14 @@ Last audited: 2026-07-06
 
 ## Goal
 
-Build the Playwright suite into a stable daily regression system instead of an ad-hoc list of P0 cases.
+Turn the Playwright suite into a stable daily regression system, not a pile of unrelated P0 cases.
 
-The working target is:
+Working target:
 
 - Keep P0 zero-token, mock-only, daily-safe, and isolated to `scripts/visual-mock-server.js`.
 - Use P0 for user-visible browser behavior that can be represented by mock Socket.IO events.
 - Keep real Claude, production smoke, Cloudflare Access, push delivery, and live network flows out of P0 unless they are explicitly opt-in P2 work.
-- Track every candidate as one of: add test, optimize test, refactor test infrastructure.
+- Track every candidate as one of: add test, optimize test, or refactor test infrastructure.
 - Prefer vertical TDD slices: one behavior, one test, smallest mock/server/frontend change needed, then verify.
 
 ## Current Snapshot
@@ -75,26 +75,26 @@ No open P0 mock-only additions currently listed.
 
 1. Reduce sidebar selector brittleness
    - High-priority non-workspace P0 specs no longer repeat raw selectors such as `div[data-dir="/Users/you/code/another-react-project"] button`, `button[title="Another App Concurrency"]`, or fixed `[data-testid="session-row"][data-instance-id="inst_2"]` combinations.
-   - Preferred path: continue applying `tests/helpers/p0-ui.ts` helpers such as `openSessionsSidebar`, `expandWorkspace`, `openSessionByTitle`, `openWorkspaceSession`, `sessionRowByInstance`, and `expectSessionBadge`.
+   - Preferred path: keep using `tests/helpers/p0-ui.ts` helpers such as `openSessionsSidebar`, `expandWorkspace`, `openSessionByTitle`, `openWorkspaceSession`, `sessionRowByInstance`, and `expectSessionBadge`.
    - Progress: `tests/p0/attachments-ui.spec.ts` P0-18d now uses `openSessionsSidebar` and `openWorkspaceSession` for the cross-session switch.
    - Progress: `tests/p0/console-log-modal.spec.ts`, `tests/p0/permission-allow-deny.spec.ts`, `tests/p0/task-progress.spec.ts`, and `tests/p0/cross-tab-pending-cleanup.spec.ts` now use sidebar helpers for cross-workspace navigation, workspace expansion, and instance-row assertions.
    - Optional product-safe improvement: add stable `data-testid`/`data-session-title`/`data-workspace-name` attributes to sidebar rows.
 
 2. Reduce repeated modal/draft guard boilerplate
    - Permission, question, device, mirror, and queue-full tests repeat the same "draft stays, Send disabled, no user message sent" pattern.
-   - Preferred path: helper assertions for blocked composer states and draft preservation.
+   - Preferred path: add helper assertions for blocked composer states and draft preservation.
 
 3. Replace option `nth()` where intent is semantic
    - Question and tool-card tests sometimes rely on `nth(1)` or `nth(2)`.
-   - Preferred path: choose by visible label where order is not the point, keep order assertions only where order is the behavior under test.
+   - Preferred path: choose by visible label where order is not the point; keep order assertions only where order is the behavior under test.
 
 4. Split slow/high-density specs when behavior domains diverge
    - `workspace-sessions-sidebar.spec.ts` covers history replay, sidebar overflow, close/fallback, status badges, settings-following, and new sessions.
-   - Preferred path: keep one helper module, then split into `workspace-session-history`, `workspace-session-close`, and `workspace-session-badges` only when refactoring helps reviewability.
+   - Preferred path: keep one helper module, then split into `workspace-session-history`, `workspace-session-close`, and `workspace-session-badges` only when it makes review easier.
 
 5. Keep full P0 under daily-run threshold
    - Current full P0 is roughly 3.5-3.6 minutes locally.
-   - Preferred path: add coverage only when it guards a real regression class; avoid duplicating the same blocked-draft pattern everywhere without a new state transition.
+   - Preferred path: add coverage only when it guards a real regression class; do not duplicate the same blocked-draft pattern unless there is a new state transition.
 
 ## Refactor Candidates
 

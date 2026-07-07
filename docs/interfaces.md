@@ -1,9 +1,9 @@
 # 接口参考 · Interface Reference
 
-本项目所有对外接口与内部模块 API 的地图。定位与既有文档的分工：
+本文件是项目对外接口与内部模块 API 的索引。它和既有文档的分工如下：
 
-- **出向事件**（`agent:event` 24 类 `type`）的可执行事实源是 [event-contract.md](event-contract.md) + `scripts/agent-event-contract.js`（`npm run contract:check` 机械校验）。本文只做引用与信封说明，不重复 24 类明细。
-- **架构与需求**背景见 [design.md](design.md)（§"一条消息的旅程"给出事件流全景）。
+- **出向事件**（`agent:event` 24 类 `type`）的可执行事实源是 [event-contract.md](event-contract.md) + `scripts/agent-event-contract.js`（`npm run contract:check` 静态校验）。本文只说明信封与引用关系，不重复 24 类明细。
+- **架构与需求**背景见 [design.md](design.md)，README 的"消息流程"小节给出事件流。
 - 本文覆盖 event-contract 之外的部分：**HTTP 端点、入向 Socket 事件、内部模块 API**。
 
 ---
@@ -12,7 +12,7 @@
 
 ### 1. 传输与鉴权
 
-前端单页（`public/`）与 server 之间：**主通道 = Socket.IO**（双向事件），另有 4 个 HTTP 端点服务健康检查、推送订阅与脚本分发。三层鉴权（详见 [design.md](design.md) §4）：
+前端单页（`public/`）与 server 之间，**主通道是 Socket.IO**（双向事件），另有 4 个 HTTP 端点用于健康检查、推送订阅与脚本分发。三层鉴权见 [design.md](design.md) §4：
 
 1. **`AUTH_TOKEN`** — 未设置时 server 只绑 `127.0.0.1`；设置后 HTTP（`httpAuth`）与 Socket 握手都需带 token（`?token=` / `x-auth-token` 头 / 握手 auth）。
 2. **TOFU 设备信赖** — 非本机、非 CF Access 的连接须先在宿主机一次性授权设备指纹（`user:approveDevice`）。
@@ -31,7 +31,7 @@
 
 ### 3. Socket.IO 出向（服务端 → 客户端）
 
-所有服务端主动下发**只有一个事件名 `agent:event`**，统一信封：
+服务端主动下发只用一个事件名：`agent:event`。信封统一：
 
 ```js
 { seq, epoch, sessionId, instanceId, cwd, ts, type, payload }
@@ -43,7 +43,7 @@
 
 ### 4. Socket.IO 入向（客户端 → 服务端）
 
-注册于 `server.js`（`on(socket, 'event', handler)` 统一闸，含设备信赖校验）。带 `ack` 的事件通过回调返回数据。`instanceId` 省略时默认作用于当前查看实例（`viewingInstanceId`）。
+这些事件注册在 `server.js`（`on(socket, 'event', handler)` 统一闸，含设备信赖校验）。带 `ack` 的事件通过回调返回数据。`instanceId` 省略时默认作用于当前查看实例（`viewingInstanceId`）。
 
 **会话内操作 `user:*`**
 
@@ -108,7 +108,7 @@
 
 ### `server.js`
 
-`export { httpServer, io, port }` — 仅供集成测试注入（`test/integration/`）。
+`export { httpServer, io, port }`：仅供集成测试注入（`test/integration/`）。
 
 ### `history.js` — CLI 会话历史读取（事实源 `~/.claude/projects/<project>/<id>.jsonl`）
 
@@ -167,4 +167,4 @@
 | 出向 `agent:event` 类型 | `scripts/agent-event-contract.js`（24 类 allowlist） | `npm run contract:check`（零 token 静态，校验 real ⊇ mock） |
 | 文档链接 / npm 脚本名 / SDK 版本 | `scripts/doc-consistency.js` | `npm run check`（含本文件的死链扫描） |
 
-本文件是人类可读地图；协议真相以上表的可执行事实源为准，两者漂移由 `npm run check` + `npm run contract:check` 拦截。
+本文件给人读；协议以表中的可执行事实源为准。两者漂移由 `npm run check` + `npm run contract:check` 拦截。
