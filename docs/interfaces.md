@@ -39,6 +39,7 @@
 
 - `seq` 单调递增（进 500 条环形缓冲，供 `sync:since` 断线补发）；`epoch` 变化 = 服务端换了实例，客户端据此重置去重基线。
 - `type` 为 **24 类之一**（`text_delta` / `tool_use` / `permission_request` / `question` / `result` / `status_line` / `task_progress` / `task_notification` / `init` / `instances` / `models` / … 完整清单与契约见 [event-contract.md](event-contract.md)）。
+- `tool_use` 对文件类工具（`Edit` / `Write` / `Read` / `MultiEdit` / `NotebookEdit`）额外附 `file: {path, changeKind}`（`path` 未截断、`changeKind` ∈ `edit` / `write` / `read` / `multiedit` / `notebook`），供前端工具卡片发起 `tool:preview` 重建 diff / 片段（③）。
 - 前端按 `viewingInstanceId` 分流；后台 tab 的高频 delta 不广播以省带宽。
 
 ### 4. Socket.IO 入向（客户端 → 服务端）
@@ -79,6 +80,13 @@
 | `models:get` | `{}` | `{models[]}`（当前查看 cwd 的可用模型清单，未知工作区返回空） |
 | `dev:restart` | `{}` | `{ok}` 或 `{ok:false, error}`（**仅 `DEV_MODE=1`**：优雅退出，靠 KeepAlive 自动拉起） |
 | `disconnect` | — | 系统事件；**不动 agent**（任务独立于连接存活） |
+
+**预览 / 诊断 `tool:*` / `doctor:*`**（均带 `ack`）
+
+| 事件 | payload | ack 返回 |
+|---|---|---|
+| `tool:preview` | `{instanceId?, toolUseId}` | `{ok, name, inWhitelist, attribution:{workdirLabel, relPath}, diff?, snippet?}` 或 `{ok:false, inWhitelist?, error}`（③ 工具卡片文件预览：`Edit`/`Write`/`MultiEdit`/`NotebookEdit` 出 `diff`、`Read` 出有界 `snippet`；**唯一闸门 `attributePath` 归属 + symlink + realpath 二核**，白名单外 / 穿越一律拒，绝不成为任意文件读） |
+| `doctor:run` | `{}` | `{checks[], readiness}`（④ UI 安全体检：运行时检查 + 全局危险白名单审查；**全程脱敏**，只出布尔 / 计数 / 危险规则串，绝不回显明文 token / 绝对路径 / AUD / 密钥） |
 
 ---
 
@@ -134,9 +142,11 @@
 
 `parseShortstat(str)` · `parseRepo(url)` · `gitStatus(cwd)` · `webContextCost(…)` · `buildWebStatusLine(…)`（组装 `status_line` payload）
 
-### `notifications.js` — 事件 → 离线 web-push 文案的纯映射
+### `notifications.js` — 事件 → 通知的纯映射（渠道无关文案 + ntfy 渠道元数据）
 
-`notificationForEvent(type, payload)` → `{title, body}`（应推）或 `null`（不推）
+`notificationForEvent(type, payload, opts?)` → `{title, body, data?}`（应推）或 `null`（不推）；`opts = {hasClients, instanceId?, sessionId?, cwd?}`，传 `instanceId` 时附 `data`（`{instanceId, sessionId, cwd}`）供点击深链回该会话（②） · `ntfyMetaFor(type, data, publicUrl)` → `{priority, tags, click?}`（ntfy 优先级 / 标签 / 深链 URL） · `ntfyRequestInit({url, topic, token}, title, body, meta)` → `{url, init}`（构造 ntfy POST，纯函数不发网络）
+
+> 传输层 `pushNotify`（Web Push）与 `ntfyNotify`（ntfy）在 `server.js`；本模块只出渠道无关的文案与元数据，便于单测。
 
 ### `models-cache.js` — 按 cwd 归键的可用模型清单缓存
 
@@ -154,9 +164,17 @@
 
 `rejectableSymlinkComponent(path)` · `isOwnerOnly(path, isDir?)` · `fixPermissions(path, isDir?)` · `writeOwnerOnlyFile(path, content)` · `checkPermissions(paths, isDir?)`
 
+### `file-preview.js` — 工具卡片文件预览（③）的纯逻辑 + 有界读盘
+
+`attributePath(filePath, workDirs, cwd)` → `{workDir, relPath, resolved}` / `null`（**唯一安全闸门**：路径归属 + 穿越裁决，零 IO；与 `uploads.js` 同源的 `dir + sep` 前缀判定） · `buildDiff(name, input?)`（`Edit`/`MultiEdit`/`Write`/`NotebookEdit` 变更摘要，不读盘、来自缓存 input；`Read` / 其他 → `null`） · `readPreview(resolved, {maxBytes?, maxLines?})` → `{snippet, truncated, size, binary?}`（有界读盘，字节 + 行数双封顶、含 NUL 判二进制；**调用方必须先过 `attributePath`**）
+
 ### `sanitizer.js` — 日志脱敏（15 种敏感模式，含 Anthropic key）
 
 `stripControlSequences(text)` · `sanitize(text)` · `maskToken(token)` · `sanitizePath(path)`
+
+### `doctor-runtime.js` — UI 安全体检（④）运行时编排（读合并白名单 + 检查 + 脱敏聚合）
+
+`readMergedPermissions({home, workDirs?})` → `{allow, sources}`（合并 `~/.claude` 与各 workDir 的 `permissions.allow`，标 `scope`；坏 JSON 不清空、skip） · `runDoctor(ctx)` → `{checks[], readiness}`（`ctx` 由 `server.js` 喂 env + 内存态：`authToken` / `claudeVersion` / `workDirs` / `home` / `cfEnabled` / `cfAudSet` / `pushEnabled` / `trustedDevices` / `pendingDevices`；**脱敏**，绝不回显明文 token / 绝对路径 / AUD / 密钥）。底层判定在 `scripts/doctor-checks.js`（`classifyAuthToken` / `summarizeDangerous` / `computeReadiness` 等）
 
 ---
 

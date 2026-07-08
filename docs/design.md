@@ -87,6 +87,8 @@
 7. **公网 fail-closed**（启用 Cloudflare Access 时）：经 CF 的公网请求**强制验签 Access JWT、不接受 token 回退**；按 Host 判定鉴权，堵死"不发头改走 token 路"的后门。
 8. **不开无鉴权数据端点**：历史回显走鉴权的 `session:history` socket 事件；`/health` 在设 token 时也需鉴权——避免对外泄漏运行状态。
 9. **TOFU 设备信赖（纵深防御）**：非本地（localhost）且非 Cloudflare Access 验证通过的连接，必须通过机主在主机端的一次性显式授权。未授权连接的**所有上行 Socket 事件均被拦截丢弃**，从 `server.js` 统一事件过滤点 fail-closed 执行。
+10. **预览只读且不越界**：`tool:preview` 经 `attributePath` 唯一闸门（路径归属 + symlink + realpath 二核）只读白名单工作目录内文件；**即便 claude 曾按 `permissions.allow` 读过白名单外文件，预览一律拒绝**，绝不借预览通道退化成任意文件读。
+11. **诊断输出脱敏**：`doctor:run` 安全体检**只回显布尔 / 计数 / 危险规则串**，绝不外泄明文 token / 密钥 / 绝对路径 / AUD——体检是防御工具，其报告本身不得成为新的泄露面。
 
 ### 威胁矩阵
 
@@ -102,7 +104,9 @@
 | 输出 XSS | claude 输出含恶意 HTML | DOMPurify + CSP（`script-src 'self'`，无内联脚本） |
 | 参数注入 | 消息文本被解析为 CLI 参数 | 经 SDK 结构化传参（不拼 shell 字符串） |
 | 路径穿越 | `session:switch`/上传借 `../` 越界读写 | session id 字符集守卫 `^[0-9a-zA-Z_-]+$`；上传 O_NOFOLLOW/O_EXCL + 落点校验；`WORK_DIRS` 精确白名单匹配（支持热加载：改 `workdirs.json` 即时重载，移除目录不终止已开实例、仅拒新开；条目支持 `{path, sessionLimit}` 配置每区会话显示条数） |
+| 工具预览越界读 | 诱导 `tool:preview` 读白名单外文件（含 claude 曾按 `permissions.allow` 读过的越界文件） | `attributePath` 唯一闸门 + symlink + realpath 二核（不变量 10）；非白名单一律拒，只读不成为任意文件读 |
 | 同机他用户读配置 | 多用户机器上偷 `sessions.json` 等 | 配置文件 0600 + 真原子写（tmp→fsync→rename） |
+| 安全体检泄敏 | `doctor:run` 回显明文 token / 密钥 / 路径 | 全程脱敏，只出布尔 / 计数 / 危险规则串（不变量 11，`doctor-runtime.js`） |
 
 ### 部署加固建议
 

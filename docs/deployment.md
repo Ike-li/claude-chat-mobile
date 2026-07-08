@@ -77,6 +77,21 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-tunnel-label>.plis
 
 > LaunchAgent 在**登录后**启动。若要"开机未登录也跑"（headless），需要改成 root LaunchDaemon。
 
+### 4. 通知（可选：ntfy + 深链）
+
+移动端锁屏 / 息屏时，Web Push 在 iOS 上受限（须先"添加到主屏幕"、且局域网 http 下不可用）。配 ntfy 可绕开：server 端一行 POST 到 ntfy 服务，手机装 ntfy app 订阅 topic 即收锁屏通知。全在启动 shell 或 `.env` 注入：
+
+```
+NTFY_URL=https://ntfy.example.com   # 你自托管的 ntfy 实例
+NTFY_TOPIC=<私密-topic>
+NTFY_TOKEN=<可选：私有实例的访问令牌>
+PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退 CF_ACCESS_HOSTNAME
+```
+
+- 不配 ntfy 则优雅缺席、仍走 Web Push。
+- ⚠️ 通知正文可能含命令 / 审批详情 → 务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
+- 改这些 env 后须**重启常驻 server 进程**才生效（见下「运维速查」的 `kickstart`）。
+
 ## 运维速查
 
 ```bash

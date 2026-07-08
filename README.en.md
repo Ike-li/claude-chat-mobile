@@ -129,9 +129,11 @@ Beyond the core loop above:
 - **Per-message model switching** (gateway-suffixed names supported).
 - **Multi-repo and multi-session**: switch among allow-listed working directories, run several sessions concurrently in tabs.
 - **File and image upload**, with path injection and traversal protection.
+- **Preview changes on tool cards**: see the diff for Edit / Write or a snippet for Read, confined to allow-listed working directories (three-layer path gate, read-only, never out of bounds).
 - **Thinking-effort control**, a **web-native status line**, and **`AskUserQuestion`** as a native picker.
-- **Web Push** for approvals, questions, and results (iOS 16.4+ requires Add to Home Screen first).
-- **Ops & security hardening**: log sanitization, `0600` atomic writes, a `doctor` startup self-check, optional Cloudflare Access 2FA.
+- **Web Push / ntfy notifications**: push approvals, questions, and results, with the notification deep-linking back to the session that triggered it (iOS 16.4+ requires Add to Home Screen first; optional ntfy runs self-hosted for more reliable lock-screen delivery).
+- **Installable PWA**: maskable icon + standalone display, "Add to Home Screen" to use it as an app.
+- **Ops & security hardening**: log sanitization, `0600` atomic writes, a `doctor` startup self-check, **a one-tap UI security check-up (redacted, audits the dangerous allowlist)**, optional Cloudflare Access 2FA.
 
 ## How it works (read only if you want to read or fork the code)
 

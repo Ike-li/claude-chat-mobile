@@ -15,6 +15,7 @@ Below is organized by what you do on the phone. Each block also names the claude
 - **Send a message and watch it stream back** word by word — not a finished block, but live, like in the terminal.
 - **It really edits files and runs commands**, not just chat: `Read` / `Edit` / `Write` / `Bash` / `Grep` and more execute for real in your project directory.
 - **The whole process is visible**: every tool call renders as a collapsible card (tool name + argument summary + status), so you see what it's doing right now instead of a black box.
+- **Preview what it's about to change**: on the card for a file tool (`Edit` / `Write`, etc.) tap "Preview changes" to see the diff, or the file snippet for `Read` — always read-only and confined to allow-listed working directories (guarded by a three-layer gate: path attribution + symlink + realpath re-check, never reading an arbitrary file out of bounds).
 - **Markdown and syntax highlighting**: adapted for a small screen, code blocks scroll horizontally, long replies stay readable.
 - **Stop anytime**: a stop button interrupts the current generation without corrupting session state — you can pick right back up.
 
@@ -29,6 +30,7 @@ This is where it differs most from "just glancing at a remote desktop."
 - When claude wants to do something **off your allowlist** (say `git push`, `rm`, editing config, installing deps), it suspends and pushes an approval request to your phone. The dialog shows the **full command + working directory + key arguments**, not just a tool name.
 - You tap **Allow / Deny / Always allow this session**, and only then does claude continue.
 - **Five permission modes, switchable at runtime**: `default` (ask each time), `plan` (plan only, no changes), `acceptEdits` (auto-accept file edits), `bypassPermissions` (allow everything, blast radius = the whole machine, requires an explicit switch + a danger confirmation), `dontAsk`.
+- **One-tap security check-up from the phone**: run "Security check-up" in the settings panel to review `AUTH_TOKEN` / public 2FA / push / device trust / config-file permissions, and to **audit your merged `permissions.allow` for dangerous grants** (like `Bash(*)`). Fully redacted — it reports only booleans / counts / the names of dangerous rules, never a plaintext token or key.
 
 > ↳ CLI capability: the auto-approve set is exactly the `permissions.allow` from your existing claude config (global `~/.claude/settings.json` + project `.claude/settings.json` + local `.claude/settings.local.json`, merged, same source as the terminal). This project injects no allow/deny list of its own. A match is approved; anything else goes through the SDK approval callback and lands on your phone.
 
@@ -58,7 +60,8 @@ Phone use often looks like "check for 30 seconds → lock screen → check again
 - **Multi-repo, multi-session in parallel**: switch among allow-listed working directories and run several sessions at once in tabs — something a single-screen remote desktop can't do.
 - **Upload files / images**: pick one from your library or files and hand it to claude, which `Read`s it on the spot (with path-injection and traversal protection).
 - **Copy long output**: a copy button grabs the raw Markdown source.
-- **Web Push notifications**: **approval requests / claude's questions / results that finished while you were disconnected** are pushed to your phone's notifications, so you don't have to keep staring at the screen (iOS 16.4+ requires "Add to Home Screen" first).
+- **Web Push notifications**: **approval requests / claude's questions / results that finished while you were disconnected** are pushed to your phone's notifications, so you don't have to keep staring at the screen (iOS 16.4+ requires "Add to Home Screen" first). **Tapping a notification deep-links straight back to the session that triggered it.**
+- **ntfy notifications (optional, more reliable)**: with ntfy configured, notifications go through your self-hosted ntfy service, bypassing the Web Push limits of iOS "Add to Home Screen" and LAN http, so they arrive reliably even with the screen locked; just install the ntfy app and subscribe to a topic.
 - **Web-native status line**: above the input, showing model, context usage, cost, git, and more (rendered natively by the app, not a copy of the terminal's ANSI).
 
 > ↳ CLI capability: claude's native session (the JSONL session file) is the single source of truth, and resume relies entirely on it; this project only keeps a lightweight session-metadata mapping on the server. The phone also remembers the permission mode / thinking effort last in effect for a session (a small enhancement over the terminal).
