@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -433,6 +433,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     if (!initialLoad && displayedInstanceId && displayedSessionId) requestSync({ probe: false });
     initialLoad = false;
     setupPush();
+    initDeepLinkOnce();  // ②2c：深链入口（幂等，仅首次 connect 生效）
     
     // 触发离线发送队列重发
     processOfflineQueue();
@@ -572,6 +573,43 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   function hideAccessHelp() { accessHelp?.classList.add('hidden'); }
   if (accessHelpClose) accessHelpClose.onclick = hideAccessHelp;
   if (accessHelpOpen) accessHelpOpen.onclick = showAccessHelp;
+
+  // ④ UI 安全体检：点击 → doctor:run（鉴权 socket）→ 渲染逐项 pass/warn/fail + 危险白名单 + 就绪度横幅。
+  function renderDoctor(rep, box) {
+    box.replaceChildren();
+    if (!rep || !Array.isArray(rep.checks)) {
+      const e = el(`<div class="text-danger"></div>`); e.textContent = '体检失败或无响应'; box.appendChild(e); return;
+    }
+    const R = { ready: ['✅', 'text-success'], caution: ['⚠️', 'text-warning'], blocked: ['🚫', 'text-danger'] };
+    const [ricon, rcls] = R[rep.readiness?.level] || ['', 'text-ink'];
+    const banner = el(`<div class="font-semibold mb-1.5"></div>`);
+    banner.className = `font-semibold mb-1.5 ${rcls}`;
+    banner.textContent = `${ricon} ${rep.readiness?.summary || ''}`;
+    box.appendChild(banner);
+    const SI = { ok: '✓', warn: '⚠', fail: '✗' }, SC = { ok: 'text-success', warn: 'text-warning', fail: 'text-danger' };
+    for (const c of rep.checks) {
+      const row = el(`<div class="flex items-start gap-2 py-1 border-b border-line-soft"><span></span><div class="flex-1 min-w-0"><div class="font-mono text-ink"></div><div class="text-ink-faint break-words"></div></div></div>`);
+      const sp = row.querySelector('span');
+      const [idDiv, detDiv] = row.querySelectorAll('.flex-1 > div');
+      sp.textContent = SI[c.status] || '·'; sp.className = SC[c.status] || 'text-ink-faint';
+      idDiv.textContent = c.id; detDiv.textContent = c.detail || '';
+      box.appendChild(row);
+      if (c.id === 'WHITELIST' && c.safe?.dangerous?.length) {  // 危险规则明细：显规则串 + scope（让用户知道改哪个文件）
+        for (const d of c.safe.dangerous) {
+          const dr = el(`<div class="text-danger pl-6 break-words"></div>`);
+          dr.textContent = `⚠ ${d.rule} —— ${d.reason}（${d.scope || '?'}）`;
+          box.appendChild(dr);
+        }
+      }
+    }
+  }
+  if ($('btnSecurityCheck')) $('btnSecurityCheck').onclick = () => {
+    const box = $('doctorReport');
+    box.classList.remove('hidden');
+    box.replaceChildren();
+    const loading = el(`<div class="text-ink-faint"></div>`); loading.textContent = '🔍 体检中…'; box.appendChild(loading);
+    socket.emit('doctor:run', {}, rep => renderDoctor(rep, box));
+  };
   if (authHelpLink) authHelpLink.onclick = showAccessHelp;
 
   // 短 session_id 胶囊点按 → 复制完整 id（便于粘到终端 claude --resume <id> 或跨设备定位）
@@ -884,6 +922,43 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
           </div>
         </details>`);
       toolCards.set(p.toolUseId, card);
+      if (p.file?.path) {  // ③：文件类工具（Edit/Write/Read/MultiEdit/NotebookEdit）加「预览变更」入口
+        const wrap = el(`<div class="mt-1"><button type="button" class="tp-btn text-info underline">📄 预览变更</button><div class="tp-body hidden mt-1 space-y-1"></div></div>`);
+        const btn = wrap.querySelector('.tp-btn'), tbody = wrap.querySelector('.tp-body');
+        const inst = viewingInstanceId;  // 快照：点击时用卡片创建时所属实例，切换后不错乱
+        let loaded = false;
+        btn.onclick = () => {
+          tbody.classList.toggle('hidden');
+          if (loaded) return;
+          loaded = true;
+          socket.emit('tool:preview', { instanceId: inst, toolUseId: p.toolUseId }, res => {
+            tbody.replaceChildren();
+            if (!res?.ok) {  // inWhitelist=false → 红字（安全拒绝），其余灰字（过期/读失败）
+              const m = el(`<div class="${res?.inWhitelist === false ? 'text-danger' : 'text-ink-faint'}"></div>`);
+              m.textContent = res?.error || '预览不可用';
+              tbody.appendChild(m);
+              return;
+            }
+            const lab = el(`<div class="text-ink-faint"></div>`);
+            lab.textContent = `📁 ${res.attribution.workdirLabel} / ${res.attribution.relPath}`;  // 路径归属
+            tbody.appendChild(lab);
+            const addPre = (txt, bg) => { const pre = el(`<pre class="overflow-x-auto"></pre>`); if (bg) pre.style.background = bg; pre.textContent = txt; tbody.appendChild(pre); };
+            if (res.diff) {  // 变更 diff：old 红底 / new 绿底（textContent 防 XSS）
+              for (const h of (res.diff.hunks || [])) {
+                if (h.old) addPre('- ' + h.old, 'rgba(188,67,52,.12)');
+                if (h.new) addPre('+ ' + h.new, 'rgba(61,138,80,.12)');
+              }
+              if (res.diff.added !== undefined) addPre(res.diff.added, 'rgba(61,138,80,.12)');
+            } else if (res.snippet) {  // Read 文件片段：代码高亮
+              const pre = el(`<pre class="overflow-x-auto"><code></code></pre>`);
+              pre.querySelector('code').textContent = res.snippet.snippet + (res.snippet.truncated ? '\n…（已截断）' : '');
+              tbody.appendChild(pre);
+              try { hljs.highlightElement(pre.querySelector('code')); } catch { /* 高亮失败不影响显示 */ }
+            }
+          });
+        };
+        card.querySelector('.space-y-1')?.appendChild(wrap);
+      }
       appendMessage(card);
       scrollBottom();
       setBusy(true);
@@ -1842,6 +1917,45 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   // tab 栏快照回执/重放（台阶3，Step A+B 均已落地）。首次只定基线不动视图（刷新/重连不清空）；
   // viewingInstanceId 变了才切视图（bindView：sync 活缓冲/回退 history）；cwd 变了全量刷新面板。
   // dirs + per-cwd 聚合 states 供目录切换器角标（steps 回归补回入口，见 openSessionPanel）。
+  // ②2c：通知深链落地——把 {instanceId, sessionId, cwd} 切到对应会话。来源两条：ntfy click / SW openWindow
+  // 的 URL hash（启动时解析）、SW postMessage（运行时）。instances 未就绪（冷启动竞态）时暂存，首个
+  // setInstances 消费一次；实例已失效走 session:switch 懒 resume（服务端校验归属），定位不到则打开会话列表。
+  let pendingDeepLink = null;
+  function applyDeepLink(target) {
+    if (!target || !target.instanceId) return;
+    if (!instancesReady) { pendingDeepLink = target; return; }
+    const r = resolveDeepLinkTarget(target, instancesList);
+    if (r.action === 'setViewing') {
+      if (r.instanceId !== viewingInstanceId) socket.emit('user:setViewing', { instanceId: r.instanceId });
+      closeLeftSidebar();
+    } else if (r.action === 'switch') {
+      closeLeftSidebar();
+      socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
+        if (!res?.ok) addBar(res?.error || '深链目标会话已不可用', 'text-warning');
+      });
+    } else {
+      openLeftSidebar(); // 定位不到（缺 sessionId / 无 instanceId）→ 打开会话列表让用户手选
+    }
+  }
+
+  // ②2c：深链入口初始化（首次 connect 调一次，幂等防重连重复注册）。hash 来自 ntfy click / SW openWindow；
+  // message 来自 SW postMessage（已开窗口场景）。两条最终都汇入 applyDeepLink。
+  let deepLinkInited = false;
+  function initDeepLinkOnce() {
+    if (deepLinkInited) return;
+    deepLinkInited = true;
+    const p = new URLSearchParams(location.hash.slice(1));
+    if (p.get('instance')) {
+      applyDeepLink({ instanceId: p.get('instance'), sessionId: p.get('session') || undefined, cwd: p.get('cwd') || undefined });
+      history.replaceState(null, '', location.pathname + location.search); // 清 hash，防刷新重复触发
+    }
+    navigator.serviceWorker?.addEventListener('message', ev => {
+      if (ev.data?.type === 'ccm:deeplink') {
+        applyDeepLink({ instanceId: ev.data.instanceId, sessionId: ev.data.sessionId, cwd: ev.data.cwd });
+      }
+    });
+  }
+
   function setInstances(p) {
     availableDirs = Array.isArray(p?.dirs) ? p.dirs : [];
     const prevInstances = instancesList;
@@ -1869,6 +1983,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     viewingInstanceId = newViewing;
     cwdSeen = true;
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
+    if (pendingDeepLink) { const t = pendingDeepLink; pendingDeepLink = null; applyDeepLink(t); } // ②2c：instances 到齐后消费暂存深链
 
     // 进度横幅可见性收敛（权威状态驱动，替代零散事件隐藏）：当前查看实例无活的后台任务（bgActive=false）即隐藏横幅——
     // 统一覆盖「切会话到别的会话 / 后台任务 TTL 清 / 完成 / 前台轮残留」所有隐藏场景。显示仍由 onTaskProgress
@@ -3152,9 +3267,22 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
   }
 
+  // 收集当前 Web Push 环境（供 logic.js pushEnvHint 判定）。iPadOS 13+ 的 UA 伪装成 Mac，用 maxTouchPoints 补判。
+  function pushEnv() {
+    const ua = navigator.userAgent || '';
+    const isIOS = /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    const isStandalone = navigator.standalone === true
+      || window.matchMedia?.('(display-mode: standalone)').matches === true;
+    return {
+      isSecureContext: window.isSecureContext,
+      isIOS,
+      isStandalone,
+      hasPushManager: 'serviceWorker' in navigator && 'PushManager' in window,
+    };
+  }
+
   async function setupPush() {
-    // connect 时调用：push 未配置则静默退出；已授权则静默续订；未授权则亮出 🔔 按钮等用户手势
-    if (!window.isSecureContext || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    // connect 时调用。先确认服务端配了 push（拿得到 vapid key）——没配则静默缺席（亮按钮也没用）。
     if (!pushVapidKey) {
       try {
         const authQ = token ? `?token=${encodeURIComponent(token)}` : '';
@@ -3162,6 +3290,13 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         if (!r.ok) return; // push 未配置，优雅缺席
         pushVapidKey = (await r.json()).key;
       } catch { return; }
+    }
+    // 服务端已开 push。环境未就绪（局域网 http / iOS 未加主屏）不再【静默 return】——那正是「通知没触发过」的根因；
+    // 改为仍亮出 🔔，点击时按 pushEnvHint 给出具体引导（need-https / ios-add-home / unsupported）。
+    const hint = pushEnvHint(pushEnv());
+    if (hint !== 'ready') {
+      btnPush?.classList.remove('hidden');
+      return;
     }
     if (Notification.permission === 'granted') {
       doSubscribe(); // 已授权：静默续订（重连幂等）
@@ -3172,10 +3307,18 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
   if (btnPush) {
     btnPush.onclick = async () => {
-      if (!window.isSecureContext) {
-        alert('⚠️ 订阅失败：推送通知仅支持在安全上下文（HTTPS 或 localhost）中启用，当前 HTTP 协议已被浏览器拦截。');
-        addBar('⚠️ 订阅失败：推送通知仅支持在安全上下文（HTTPS 或 localhost）中启用，当前 HTTP 协议已被浏览器拦截', 'text-danger');
-        return;
+      const hint = pushEnvHint(pushEnv());
+      if (hint === 'need-https') {
+        const m = '⚠️ 推送需 HTTPS：局域网 http 下浏览器会拦截通知订阅。请用 https 隧道（cloudflared 等）访问本站。';
+        alert(m); addBar(m, 'text-warning'); return;
+      }
+      if (hint === 'ios-add-home') {
+        const m = '📲 iOS 收推送需先「添加到主屏幕」：点底部分享按钮 → 添加到主屏幕，再从主屏图标打开本站开启通知。';
+        alert(m); addBar(m, 'text-info'); return;
+      }
+      if (hint === 'unsupported') {
+        const m = '🚫 当前浏览器不支持 Web Push（iOS 需 16.4+ 且已加主屏）。';
+        alert(m); addBar(m, 'text-warning'); return;
       }
       if (!pushVapidKey) {
         alert('⚠️ 订阅失败：服务端未启用或配置 Web Push 密钥，或当前未加载成功密钥。请检查 VAPID 环境变量并重启服务。');

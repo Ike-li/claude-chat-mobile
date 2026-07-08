@@ -201,3 +201,28 @@ export function defaultModelTileLabel({ currentModel, cwdDefaultModel } = {}) {
   }
   return { title: '沿用当前模型', subtitle: '不指定特定模型', showsName: false };
 }
+
+// Web Push 环境判定（E15 / ②2a）：手机端「通知没触发过」多半卡在这几道门，返回该给用户的引导标识。
+//   need-https   = 非 secure context（局域网 http，浏览器直接拦掉 SW/Push）——优先级最高
+//   ios-add-home = iOS 且未「添加到主屏幕」（Safari 标签页无 PushManager，必须先装成 PWA 才有 Push API）
+//   unsupported  = 浏览器压根没 Push API（旧 iOS <16.4，或不支持的浏览器）
+//   ready        = 前提齐备，可请求授权 + 订阅
+// 缺省入参（环境未探明）保守回 need-https，宁可提示也不静默失败——正是本次要修的「静默没反应」根因。
+export function pushEnvHint({ isSecureContext, isIOS, isStandalone, hasPushManager } = {}) {
+  if (!isSecureContext) return 'need-https';
+  if (isIOS && !isStandalone) return 'ios-add-home';
+  if (!hasPushManager) return 'unsupported';
+  return 'ready';
+}
+
+// 通知深链落地策略（②2c）：通知带 {instanceId, sessionId, cwd}，点击后据客户端 instances 快照决定动作。
+//   setViewing = instanceId 仍在 live 列表 → 直接切视图（最快）
+//   switch     = 实例已失效（懒重生 / 关闭 / epoch 变化）但会话在 → session:switch 懒 resume（服务端校验归属）
+//   list       = 都定位不到（缺 sessionId 或无 instanceId）→ 打开会话列表让用户手选
+export function resolveDeepLinkTarget(target, instances = []) {
+  if (!target || !target.instanceId) return { action: 'list' };
+  const live = Array.isArray(instances) && instances.some(i => i && i.instanceId === target.instanceId);
+  if (live) return { action: 'setViewing', instanceId: target.instanceId };
+  if (target.sessionId) return { action: 'switch', sessionId: target.sessionId, cwd: target.cwd };
+  return { action: 'list' };
+}

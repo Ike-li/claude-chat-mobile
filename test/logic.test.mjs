@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../public/js/logic.js';
+import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test('esc: 转义 HTML 元字符', () => {
@@ -289,6 +289,60 @@ test('urlBase64ToUint8Array: 自动补填充', () => {
   const result = urlBase64ToUint8Array('AA');
   assert.equal(result.length, 1);
   assert.equal(result[0], 0);
+});
+
+// ---- pushEnvHint：Web Push 环境判定（E15 / ②2a）——手机「没触发过」多半卡在这几道门 ----
+test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
+  const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
+  test('局域网 http（非 secure context）→ need-https（优先级最高，压过一切）', () => {
+    assert.equal(pushEnvHint({ ...base, isSecureContext: false }), 'need-https');
+    assert.equal(pushEnvHint({ ...base, isSecureContext: false, isIOS: true, isStandalone: true }), 'need-https');
+  });
+  test('iOS 未加主屏 → ios-add-home（Safari 标签页无 PushManager，必须先装 PWA）', () => {
+    assert.equal(pushEnvHint({ ...base, isIOS: true, isStandalone: false }), 'ios-add-home');
+  });
+  test('iOS 已加主屏 + 有 PushManager → ready', () => {
+    assert.equal(pushEnvHint({ ...base, isIOS: true, isStandalone: true }), 'ready');
+  });
+  test('iOS 已加主屏但无 PushManager（旧 iOS <16.4）→ unsupported', () => {
+    assert.equal(pushEnvHint({ ...base, isIOS: true, isStandalone: true, hasPushManager: false }), 'unsupported');
+  });
+  test('非 iOS 浏览器有 PushManager → ready（标签页也能收）', () => {
+    assert.equal(pushEnvHint(base), 'ready');
+  });
+  test('非 iOS 无 PushManager → unsupported', () => {
+    assert.equal(pushEnvHint({ ...base, hasPushManager: false }), 'unsupported');
+  });
+  test('缺省入参不抛（环境未知时保守回 need-https）', () => {
+    assert.doesNotThrow(() => pushEnvHint());
+    assert.equal(pushEnvHint(), 'need-https');
+  });
+});
+
+// ---- resolveDeepLinkTarget：通知深链落地 + instanceId 失效回退（②2c）----
+// 通知携带 instanceId + sessionId + cwd。落地时对照客户端 instances 快照：命中 → 切视图；
+// 实例已失效（懒重生/关闭/epoch 变化）但会话在 → 走 session:switch 懒 resume；都没有 → 打开会话列表。
+test.describe('resolveDeepLinkTarget：通知深链落地策略', () => {
+  const instances = [{ instanceId: 'inst_1' }, { instanceId: 'inst_2' }];
+  test('instanceId 命中 live → setViewing', () => {
+    assert.deepEqual(resolveDeepLinkTarget({ instanceId: 'inst_2', sessionId: 's2', cwd: '/r' }, instances),
+      { action: 'setViewing', instanceId: 'inst_2' });
+  });
+  test('instanceId 失效但有 sessionId → switch（带 cwd，懒 resume 接住实例重生/关闭）', () => {
+    assert.deepEqual(resolveDeepLinkTarget({ instanceId: 'gone', sessionId: 's9', cwd: '/r' }, instances),
+      { action: 'switch', sessionId: 's9', cwd: '/r' });
+  });
+  test('instanceId 失效且无 sessionId → list', () => {
+    assert.deepEqual(resolveDeepLinkTarget({ instanceId: 'gone' }, instances), { action: 'list' });
+  });
+  test('无 target / 无 instanceId → list', () => {
+    assert.deepEqual(resolveDeepLinkTarget(null, instances), { action: 'list' });
+    assert.deepEqual(resolveDeepLinkTarget({}, instances), { action: 'list' });
+  });
+  test('instances 缺省不抛（冷启动 instances 未到）', () => {
+    assert.deepEqual(resolveDeepLinkTarget({ instanceId: 'x', sessionId: 's', cwd: '/r' }),
+      { action: 'switch', sessionId: 's', cwd: '/r' });
+  });
 });
 
 // 移动端重连决策（修「切后台→切回卡住不更新」）：覆盖 plan 四分支 + 关键消歧边角。

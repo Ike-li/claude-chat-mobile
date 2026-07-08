@@ -333,6 +333,36 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  test('文件类工具 tool_use → payload.file{path,changeKind}；非文件工具无 file（③）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'tool-e', name: 'Edit', input: { file_path: '/repo/a.txt', old_string: 'x', new_string: 'y' } }
+    ] } });
+    const tu = events.find(e => e.type === 'tool_use' && e.payload.toolUseId === 'tool-e');
+    assert.deepEqual(tu.payload.file, { path: '/repo/a.txt', changeKind: 'edit' });
+
+    s.map({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'tool-b', name: 'Bash', input: { command: 'ls' } }
+    ] } });
+    const tb = events.find(e => e.type === 'tool_use' && e.payload.toolUseId === 'tool-b');
+    assert.equal(tb.payload.file, undefined);
+    s.dispose();
+  });
+
+  test('getToolInput：文件类工具缓存完整 input（无损供预览 diff），非文件/不存在 → null（③）', () => {
+    const { s } = makeSession();
+    s.map({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'tool-e', name: 'Edit', input: { file_path: '/repo/a.txt', old_string: 'aaa', new_string: 'bbb' } },
+      { type: 'tool_use', id: 'tool-b', name: 'Bash', input: { command: 'ls' } }
+    ] } });
+    const cached = s.getToolInput('tool-e');
+    assert.equal(cached.name, 'Edit');
+    assert.equal(cached.input.old_string, 'aaa'); // 完整、未截断
+    assert.equal(s.getToolInput('tool-b'), null); // 非文件工具不缓存
+    assert.equal(s.getToolInput('nonexistent'), null);
+    s.dispose();
+  });
+
   test('assistant 带 text 块（非流式网关兜底）→ text_delta', () => {
     const { s, events } = makeSession();
     s.map({ type: 'assistant', message: { content: [

@@ -7,6 +7,12 @@ import { sanitize } from './sanitizer.js';
 
 const BUFFER_CAP = 500;       // 环形缓冲条数
 const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要截断；permission_request 永不截断（4a）
+// ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
+const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
+const TOOL_INPUT_TTL_MS = 10 * 60 * 1000; // 缓存 input 存活 10 分钟
+const TOOL_INPUT_MAX = 40;                // LRU 上限，防内存涨
+const TOOL_CHANGE_KIND = { Edit: 'edit', Write: 'write', Read: 'read', MultiEdit: 'multiedit', NotebookEdit: 'notebook' };
+const toolFilePath = (input) => input?.file_path ?? input?.notebook_path ?? null;
 const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn 的有效期（2min）：宽于任何真实自动汇报延迟、
                                      // 窄于长尾——超时不合成，防滞留 flag 被无关的 message_start（如 auto-compact fork）误触发。
 const BG_TASK_TTL_MS = 180000;       // 活的后台任务（bgTasks）无心跳的失效期（3min）：SDK getProgressMessage 无增量时不推，
@@ -45,6 +51,7 @@ export class AgentSession {
     this.epoch = nextEpoch();
     this.seq = 0;
     this.buffer = [];
+    this.toolInputs = new Map(); // ③：toolUseId → {name, input, ts}（文件类工具完整 input，供 tool:preview 重建 diff）
     this.bufferTrimmed = false;
     this.pendingTurns = 0;             // 在途轮数，仅由 send(+1) 与 result(-1) 改写
     this.pendingAutoTurn = false;      // 后台任务通知已到、下个轮次由非用户输入（task-notification 注入）启动的信号——
@@ -524,8 +531,23 @@ export class AgentSession {
     this._thinkBuf = '';
   }
 
+  // ③：缓存文件类工具完整 input（LRU + TTL），供 tool:preview 无损重建 diff（避开 tool_use 的 600 字截断）。
+  cacheToolInput(id, name, input) {
+    this.toolInputs.set(id, { name, input, ts: Date.now() });
+    if (this.toolInputs.size > TOOL_INPUT_MAX) {
+      this.toolInputs.delete(this.toolInputs.keys().next().value); // 删最老（Map 保持插入序）
+    }
+  }
+  getToolInput(id) {
+    const e = this.toolInputs.get(id);
+    if (!e) return null;
+    if (Date.now() - e.ts > TOOL_INPUT_TTL_MS) { this.toolInputs.delete(id); return null; }
+    return { name: e.name, input: e.input };
+  }
+
   dispose() {
     this._flushText(); this._flushThink();
+    this.toolInputs.clear(); // ③：释放缓存的 tool input
     this.disposed = true;
     this.inputEnded = true;
     this.pendingAutoTurn = false; // 实例销毁：作废滞留 flag，防重开实例后误合成
@@ -769,10 +791,19 @@ export class AgentSession {
           if (block.type === 'tool_use') {
             if (block.name === 'Agent') this.currentTask = block.input?.description || null;
             this.lastToolName = block.name; // 跟踪最后使用的工具名，供后台 tab 角标细化
+            let file; // ③：文件类工具附未截断 path + changeKind，并缓存完整 input 供预览
+            if (FILE_TOOLS.has(block.name)) {
+              const p = toolFilePath(block.input);
+              if (p) {
+                this.cacheToolInput(block.id, block.name, block.input);
+                file = { path: truncate(String(p), 1024), changeKind: TOOL_CHANGE_KIND[block.name] };
+              }
+            }
             this.emit('tool_use', {
               toolUseId: block.id,
               name: block.name,
-              inputSummary: truncate(stringify(block.input), TOOL_SUMMARY_CAP)
+              inputSummary: truncate(stringify(block.input), TOOL_SUMMARY_CAP),
+              file
             });
           } else if (block.type === 'text' && block.text && !this.sawTextDelta) {
             // 网关不流式时用完整 assistant 文本兜底

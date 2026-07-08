@@ -31,6 +31,11 @@ export function loadTrustedDevices() {
   }
 }
 
+// ④ 安全体检：当前信任设备数（只读，不暴露 token）。
+export function getTrustedCount() {
+  return trustedDevices ? trustedDevices.size : 0;
+}
+
 export function saveTrustedDevices() {
   try {
     mkdirSync(dirname(TRUSTED_DEVICES_FILE), { recursive: true });

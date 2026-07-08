@@ -89,6 +89,20 @@ test.describe('sw.js — push 事件', () => {
     assert.equal(shownTitle, 'Claude');
     assert.equal(shownBody, '');
   });
+
+  test('push 事件：携带 data.data → 进 showNotification options.data（②2c 深链锚点）', async () => {
+    let shownOptions = null;
+    const mockSelf = {
+      addEventListener(event, handler) { if (event === 'push') this._pushHandler = handler; },
+      registration: { showNotification(t, o) { shownOptions = o; return Promise.resolve(); } },
+    };
+    runInMock(swSrc, { self: mockSelf });
+    await mockSelf._pushHandler({
+      data: { json: () => ({ title: 'T', body: 'B', data: { instanceId: 'i1', sessionId: 's1', cwd: '/r' } }) },
+      waitUntil: p => p,
+    });
+    assert.deepEqual(shownOptions.data, { instanceId: 'i1', sessionId: 's1', cwd: '/r' });
+  });
 });
 
 // =========================================================================
@@ -165,6 +179,30 @@ test.describe('sw.js — notificationclick 事件', () => {
     await mockSelf._clickHandler(mockEvent);
 
     assert.equal(openedUrl, '/');
+  });
+
+  test('notificationclick：有 data + 有窗口 → focus + postMessage(ccm:deeplink)', async () => {
+    let posted = null, focused = false;
+    const origin = 'https://chat.example.com';
+    const mockSelf = { location: { origin }, addEventListener(e, h) { if (e === 'notificationclick') this._clickHandler = h; } };
+    const mockClient = { url: origin + '/', focus: () => { focused = true; return Promise.resolve(mockClient); }, postMessage: (m) => { posted = m; } };
+    const mockEvent = { notification: { close: () => {}, data: { instanceId: 'i1', sessionId: 's1', cwd: '/r' } }, waitUntil: p => p };
+    runInMock(swSrc, { self: mockSelf, clients: { matchAll: () => Promise.resolve([mockClient]), openWindow: () => Promise.resolve({}) }, URL, URLSearchParams });
+    await mockSelf._clickHandler(mockEvent);
+    assert.ok(focused, '窗口已聚焦');
+    assert.equal(posted.type, 'ccm:deeplink');
+    assert.equal(posted.instanceId, 'i1');
+  });
+
+  test('notificationclick：有 data + 无窗口 → openWindow 带 #instance=（深链）', async () => {
+    let openedUrl = null;
+    const origin = 'https://chat.example.com';
+    const mockSelf = { location: { origin }, addEventListener(e, h) { if (e === 'notificationclick') this._clickHandler = h; } };
+    const mockEvent = { notification: { close: () => {}, data: { instanceId: 'i1', sessionId: 's1' } }, waitUntil: p => p };
+    runInMock(swSrc, { self: mockSelf, clients: { matchAll: () => Promise.resolve([]), openWindow: (u) => { openedUrl = u; return Promise.resolve({}); } }, URL, URLSearchParams });
+    await mockSelf._clickHandler(mockEvent);
+    assert.match(openedUrl, /#instance=i1/);
+    assert.match(openedUrl, /session=s1/);
   });
 });
 

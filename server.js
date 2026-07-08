@@ -5,7 +5,7 @@ import { createServer } from 'node:http';
 import { statSync, readFileSync, writeFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync } from 'node:fs';
 import webpush from 'web-push';
 import { maskToken } from './sanitizer.js';
-import { writeOwnerOnlyFile } from './file-security.js';
+import { writeOwnerOnlyFile, rejectableSymlinkComponent } from './file-security.js';
 import { homedir, networkInterfaces } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -17,7 +17,9 @@ import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
 import * as sessions from './sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache, catchUpStep } from './history.js';
-import { notificationForEvent } from './notifications.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit } from './notifications.js';
+import { attributePath, buildDiff, readPreview } from './file-preview.js';
+import { runDoctor } from './doctor-runtime.js';
 import { buildWebStatusLine } from './statusline.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from './uploads.js';
 import * as interactionLog from './interaction-log.js';
@@ -32,7 +34,8 @@ import {
   getLatestPendingDevice,
   approveDevice,
   denyDevice,
-  getPendingDevices
+  getPendingDevices,
+  getTrustedCount
 } from './devices.js';
 
 // #9：dotenv 后一次性剥除空串环境变量，使 .env 里的空行（WORK_DIR= 等）等价于"未设置"，
@@ -81,6 +84,18 @@ const VAPID_SUBJECT     = process.env.VAPID_SUBJECT     || '';
 const pushEnabled = !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_SUBJECT);
 if (pushEnabled) webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
+// ---- ntfy（②2b：可靠通知渠道，绕过 iOS 加主屏 / 局域网 http 限制）----
+// server 端一行 POST，不受浏览器 secure-context 约束；没配则优雅缺席（同 pushEnabled 模式）。
+// ⚠️ 通知正文可能含命令详情 → 建议自托管 ntfy 或 topic + NTFY_TOKEN，勿用公共 ntfy.sh 裸 topic。
+const NTFY_URL   = process.env.NTFY_URL   || '';
+const NTFY_TOPIC = process.env.NTFY_TOPIC || '';
+const NTFY_TOKEN = process.env.NTFY_TOKEN || '';
+const ntfyEnabled = !!(NTFY_URL && NTFY_TOPIC);
+// 深链绝对 URL（ntfy click / web push 深链共用）：PUBLIC_URL 优先，回退 CF_ACCESS_HOSTNAME 拼 https；
+// 都无则通知不带 click（仍正常送达，只是点击不深链）。
+const PUBLIC_URL = process.env.PUBLIC_URL
+  || (process.env.CF_ACCESS_HOSTNAME ? `https://${process.env.CF_ACCESS_HOSTNAME}` : '');
+
 const PUSH_SUB_FILE = join(DATA_DIR, 'push-subscription.json');
 // 多设备：按 endpoint 去重的订阅数组（旧版单对象格式向后兼容读入）。手机 + iPad 各留一条，
 // 推送时遍历全部、按 410/404 单独剔除失效——不再"后订阅顶掉前订阅"只剩最后一台收推送。
@@ -103,9 +118,9 @@ function savePushSubscription(sub) {
   persistPushSubscriptions();
 }
 
-async function pushNotify(title, body) {
+async function pushNotify(title, body, data) {
   if (!pushEnabled || pushSubscriptions.length === 0) return;
-  const payload = JSON.stringify({ title, body });
+  const payload = JSON.stringify(data ? { title, body, data } : { title, body });
   const expired = [];
   await Promise.all(pushSubscriptions.map(sub =>
     webpush.sendNotification(sub, payload).catch(e => {
@@ -117,6 +132,17 @@ async function pushNotify(title, body) {
     pushSubscriptions = pushSubscriptions.filter(s => !expired.includes(s.endpoint));
     persistPushSubscriptions();
     console.warn(`[push] 清除 ${expired.length} 条失效订阅`);
+  }
+}
+
+// ②2b：向 ntfy 发一条（Node 原生 fetch，零依赖）。没配 / 出错都静默——通知是尽力而为，绝不阻断主流程。
+async function ntfyNotify(title, body, meta = {}) {
+  if (!ntfyEnabled) return;
+  try {
+    const { url, init } = ntfyRequestInit({ url: NTFY_URL, topic: NTFY_TOPIC, token: NTFY_TOKEN }, title, body, meta);
+    await fetch(url, init);
+  } catch (e) {
+    console.error('[ntfy] 推送失败:', e.message);
   }
 }
 
@@ -952,8 +978,14 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
         // result 仅无客户端连时推（连着的自己看得到）；permission/question/task_notification 无条件推
         // （用户可能锁屏/在别的 app）。task_notification=后台任务（Workflow/后台 Agent/Bash）完成——
         // 此前落到这里两分支都不命中、从不推，手机锁屏收不到完成通知，本次补齐。
-        const pn = notificationForEvent(envelope.type, envelope.payload, { hasClients: io.sockets.sockets.size > 0 });
-        if (pn) pushNotify(pn.title, pn.body);
+        const pn = notificationForEvent(envelope.type, envelope.payload, {
+          hasClients: io.sockets.sockets.size > 0,
+          instanceId: envelope.instanceId, sessionId: envelope.sessionId, cwd: envelope.cwd,
+        });
+        if (pn) {
+          pushNotify(pn.title, pn.body, pn.data);                              // Web Push（带 data 供 SW 深链）
+          ntfyNotify(pn.title, pn.body, ntfyMetaFor(envelope.type, pn.data, PUBLIC_URL)); // ntfy（click 深链，绕移动端限制）
+        }
         broadcastInstances();
       }
     },
@@ -1494,6 +1526,56 @@ io.on('connection', socket => {
     } catch (err) {
       ack({ messages: [], error: err.message });
     }
+  });
+
+  // ③ 工具卡片文件预览：Edit/Write/Read 等的 diff / 文件片段 / 路径归属。走 on() 鉴权闸（deviceApproved fail-closed）。
+  // 安全红线——attributePath 是唯一闸门，diff 与 snippet 都在其之后；三层纵深（归属 + symlink + realpath 二核）
+  // 与上传落盘同源，绝不成为任意文件读（即便 claude 曾按 permissions.allow 读过白名单外文件，预览一律拒绝）。
+  on(socket, 'tool:preview', async ({ instanceId, toolUseId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    const a = routeInstance(instanceId);
+    if (!a) return ack({ ok: false, error: '实例不存在' });
+    const ti = a.getToolInput(toolUseId);
+    if (!ti) return ack({ ok: false, error: '预览不可用（已过期或非文件工具）' });
+    const filePath = ti.input?.file_path ?? ti.input?.notebook_path ?? null;
+    const attr = attributePath(filePath, workDirs, a.cwd);
+    if (!attr) return ack({ ok: false, inWhitelist: false, error: '路径不在白名单工作目录内，预览已拒绝' });
+    if (rejectableSymlinkComponent(attr.resolved)) {
+      return ack({ ok: false, inWhitelist: false, error: '路径含可疑符号链接，预览已拒绝' });
+    }
+    let real = attr.resolved;
+    try { real = realpathSync(attr.resolved); } catch { /* 文件可能已删；下方 readPreview 再报 */ }
+    if (real !== attr.resolved && !attributePath(real, workDirs, a.cwd)) {
+      return ack({ ok: false, inWhitelist: false, error: '路径解析后越出白名单，预览已拒绝' });
+    }
+    const diff = buildDiff(ti.name, ti.input);
+    let snippet;
+    if (ti.name === 'Read') {
+      try { snippet = readPreview(real); } catch (e) { return ack({ ok: false, error: '读取失败：' + e.message }); }
+    }
+    ack({
+      ok: true, name: ti.name, inWhitelist: true,
+      attribution: { workdirLabel: basename(attr.workDir), relPath: attr.relPath },
+      diff: diff || undefined,
+      snippet,
+    });
+  });
+
+  // ④ UI 安全体检：6 项运行时检查 + 全局危险白名单审查。走 on() 鉴权闸（deviceApproved fail-closed）。
+  // 全程脱敏（runDoctor 只出布尔/计数/危险规则串，绝不回显明文 token/绝对路径/AUD/密钥）。
+  on(socket, 'doctor:run', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack(runDoctor({
+      authToken: AUTH_TOKEN,
+      claudeVersion: versions.cli,
+      workDirs,
+      home: homedir(),
+      cfEnabled: isAccessEnabled(),
+      cfAudSet: !!process.env.CF_ACCESS_AUD,
+      pushEnabled,
+      trustedDevices: getTrustedCount(),
+      pendingDevices: getPendingDevices().length,
+    }));
   });
 
   on(socket, 'sync:since', (payload, ack) => {
