@@ -6,12 +6,13 @@
        外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。 -->
   <script src="/js/sw-cleanup.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
-  <meta name="theme-color" content="#F4F3EE">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F3EE">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121211">
   <title>Claude Chat Mobile</title>
   <!-- PWA 可安装壳（仅 manifest + 图标；不做 service worker/offline——§6 非目标） -->
   <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
