@@ -1,0 +1,25 @@
+<!-- 数据流全景 · 一条消息的12步旅程、断线场景、多设备场景 -->
+<h2>一条消息的 12 步旅程</h2>
+
+<ol class="steps">
+<li><strong>用户输入（手机 textarea）</strong>：用户在移动端浏览器输入文本，可附带斜杠命令或 ultracode 关键词。支持 Shift+Enter 换行。</li>
+<li><strong>app.js 构造 user:message</strong>：读取 inputEl.value，调用 withUltracodeKeyword(text)。若有附件，FileReader 读取 base64 数据打包为 attachments。构造 payload：{text, model, attachments, effort, permissionMode}。乐观 UI：立刻在消息列表渲染气泡（opacity-70 + pending 指示器）。</li>
+<li><strong>Socket.IO 发送</strong>：socket.emit('user:message', payload)。握手阶段已携带 token（localStorage.auth_token）和 deviceToken（localStorage.device_token）。</li>
+<li><strong>server.js 鉴权与拦截</strong>：httpAuth 验证 token 匹配 AUTH_TOKEN → deviceApproved 检查设备信赖（isDeviceTrusted）→ 事件拦截。未信任设备加入 pending 列表等待审批。</li>
+<li><strong>路由到 AgentSession.send()</strong>：server.js 找到或创建 AgentSession → 调用 session.send(text, model, opts)。如有附件，先 saveAttachments 落盘，再 buildPromptText 将绝对路径注入文本。</li>
+<li><strong>agent.js 排队</strong>：pendingTurns 检查（≥2 拒绝）→ 模型差异检测（必要时 q.setModel()）→ inputStream 唤醒 → emit user_message 事件 → interactionLog.userMessageIn。</li>
+<li><strong>SDK query() 发送消息</strong>：通过 pathToClaudeCodeExecutable 指向本机 claude 可执行文件，发起子进程。CLI 以 --resume（已有会话）或新进程启动，接收 inputStream 数据。</li>
+<li><strong>Claude 处理（工具调用 + 权限回调）</strong>：Claude agent 运行：思考 → 工具调用 → 观察结果 → 继续。工具调用触发 canUseTool 回调 → emit permission_request → 等待前端 user:approve 回复。</li>
+<li><strong>agent.js map() 映射为 agent:event</strong>：SDK SSE 事件通过 map() 转换为 agent:event。stream_event → text_delta/thinking_delta；assistant/tool_use → tool_use；result → result。每个 emit 创建信封（seq/epoch/sessionId/instanceId/cwd/ts/type/payload），写入环形缓冲。</li>
+<li><strong>server.js 广播</strong>：onEvent 回调接收每个事件 → io.emit('agent:event', envelope) 广播到所有已连接 socket → 写入 interactionLog → 判断是否需推送通知。</li>
+<li><strong>前端 agent:event 分发器渲染</strong>：三层层路由（OOB 旁路 → shouldDropAgentEvent → epoch/seq 去重）→ handle[ev.type] 调用具体处理函数。text_delta → getStream + appendData；permission_request → permQueue；result → finalizeStreams（marked+DOMPurify+highlight.js）。</li>
+<li><strong>结果持久化</strong>：双轨——CLI 写 JSONL（~/.claude/projects/<cwd>/<sessionId>.jsonl）+ server 更新 sessions.json（元数据，原子写 0600 + fsync + rename）。</li>
+</ol>
+
+<h2>断线场景</h2>
+
+<p>步骤 7–10 期间客户端断开时：SDK query → Claude 处理 → map → 广播在服务端持续运行，不依赖客户端连接。重连后 socket.io connect 触发 → foregroundReconnectAction 判定是否需 probe → sync:since 增量补发错过的全部事件。task_progress 瞬态事件不重放（emitTransient）。后台任务完成时客户端仍离线且 result.hasClients=false → 触发 Web Push 通知。</p>
+
+<h2>多设备场景</h2>
+
+<p>io.emit('agent:event', envelope) 将同一事件广播到所有已连接 socket。每个设备独立执行三层层路由，按各自 viewingInstanceId 分流。设备 A 弹窗时设备 B 也收到同样的 permission_request。任一台审批即生效（user:approve 带 messageId 去重）。sync:since 的 lastSeq 是各设备本地独立维护的。</p>

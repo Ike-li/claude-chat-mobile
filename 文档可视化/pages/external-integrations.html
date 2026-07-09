@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>外部集成 · Claude Chat Mobile</title>
+<meta name="description" content="Cloudflare Access JWT、Cloudflare Tunnel、Web Push、ntfy——四个外部系统的对接方式。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 Claude Code 接到手机上——终端等价性的完整实现</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构总览</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界与非目标</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a><a href="versions.html"><span class="idx">06</span><span>版本里程碑</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-equivalence.html"><span class="idx">07</span><span>终端等价性原则</span></a><a href="security-model.html"><span class="idx">08</span><span>安全模型与威胁矩阵</span></a><a href="mobile-first.html"><span class="idx">09</span><span>移动端优先的设计约束</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="server.html"><span class="idx">10</span><span>服务端中枢：server.js</span></a><a href="agent-sdk.html"><span class="idx">11</span><span>Agent 会话封装：agent.js</span></a><a href="session-management.html"><span class="idx">12</span><span>会话管理：sessions.js + history.js</span></a><a href="frontend.html"><span class="idx">13</span><span>前端应用：public/</span></a><a href="infrastructure.html"><span class="idx">14</span><span>基础设施模块一览</span></a><a href="security-modules.html"><span class="idx">15</span><span>安全与诊断模块</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="event-system.html"><span class="idx">16</span><span>事件系统与契约</span></a><a href="data-flow.html"><span class="idx">17</span><span>数据流全景</span></a><a href="external-integrations.html" class="active"><span class="idx">18</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">19</span><span>快速开始</span></a><a href="deployment.html"><span class="idx">20</span><span>生产部署</span></a><a href="operations.html"><span class="idx">21</span><span>运维与故障排查</span></a><a href="doctor.html"><span class="idx">22</span><span>配置自检与安全体检</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="api-reference.html"><span class="idx">23</span><span>API 接口速查</span></a><a href="conventions.html"><span class="idx">24</span><span>项目规范与约定</span></a><a href="testing.html"><span class="idx">25</span><span>测试体系</span></a><a href="drift.html"><span class="idx">26</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · Ike-li/claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第五部分 · 数据与集成</b> &nbsp;/&nbsp; 外部集成</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">05</span> 第五部分 · 数据与集成</span>
+    <h1>外部集成</h1>
+    <p class="lead">Cloudflare Access JWT、Cloudflare Tunnel、Web Push、ntfy——四个外部系统的对接方式。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 19 / 27 篇</span>
+      <span class="src" title="原始文档来源">源自 docs/deployment.md · cf-access.js · notifications.js</span>
+    </div>
+  </header>
+<!-- 外部集成 · Cloudflare Tunnel/Access、Web Push、ntfy 四个外部系统的对接方式 -->
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>四个外部系统</h2>
+
+<div class="cards">
+<div class="card"><h4>Cloudflare Tunnel</h4><p>命名隧道将 localhost:3000 投递到固定域名。cloudflared 作为独立常驻进程运行（deploy/tunnel.plist.template）。cloudflared tunnel create 创建命名隧道，cloudflared tunnel route dns 绑定 DNS，config.yml 定义 ingress 规则。cloudflared 不参与应用层逻辑，仅做 TCP 隧道。</p></div>
+<div class="card"><h4>Cloudflare Access</h4><p>JWT 验签在应用层完成（cf-access.js）。双层缓存：内存缓存 + 文件缓存（data/cf-access-certs.json），公钥获取超时 8s。fail-closed——JWT 缺失或校验失败直接 401，不降级放行。Access 会话有效期由 Cloudflare 控制，独立于浏览器会话。</p></div>
+<div class="card"><h4>Web Push</h4><p>VAPID 协议实现浏览器推送。Service Worker（sw.js）仅处理推送事件，不做缓存拦截。订阅持久化通过 push/subscribe 端点。推送失败返回 410/404 时自动退订。notificationForEvent 构造推送内容。</p></div>
+<div class="card"><h4>ntfy（可选）</h4><p>自托管 ntfy 服务通过 HTTP POST JSON body 发送。配置 NTFY_URL、NTFY_TOPIC、NTFY_TOKEN 即可启用。消息体支持中文，元数据包括 priority、tags、click 深链 URL。适用于高可靠性推送场景。</p></div>
+</div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>通知渠道对比</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>维度</th><th>Web Push</th><th>ntfy</th></tr></thead>
+<tbody>
+<tr><td>iOS 支持</td><td>iOS 16.4+ 需添加到主屏幕；锁屏可靠性一般</td><td>通过 ntfy App 接收；需额外安装</td></tr>
+<tr><td>锁屏可靠性</td><td>依赖浏览器后台；iOS 定时唤醒不可控</td><td>客户端常驻通知服务；可靠性高</td></tr>
+<tr><td>配置复杂度</td><td>需 VAPID 密钥对；sw.js 注册；订阅持久化</td><td>三行环境变量即可启用</td></tr>
+<tr><td>隐私</td><td>推送经浏览器供应商基础设施</td><td>完全自托管；通知不经第三方</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>PUBLIC_URL 深链机制</h2>
+
+<p>PUBLIC_URL 使通知中的链接能复原应用状态。URL hash 参数携带三个上下文字段：instance（目标实例 ID）、session（目标会话 ID）、cwd（目标工作目录，需 realpath 规范化）。客户端 applyDeepLink 解析：instanceId 仍在 live 列表 → setViewing；实例已失效但会话在 → session:switch；都定位不到 → 打开会话列表。</p>
+
+        <nav class="pager"><a class="prev" href="data-flow.html"><span class="dir">← 上一篇</span><span class="ttl">数据流全景</span></a><a class="next" href="quickstart.html"><span class="dir">下一篇 →</span><span class="ttl">快速开始</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">四个外部系统</a></li><li class="h2"><a href="#s2">通知渠道对比</a></li><li class="h2"><a href="#s3">PUBLIC_URL 深链机制</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

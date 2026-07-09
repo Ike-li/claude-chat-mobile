@@ -1,0 +1,91 @@
+<!-- Agent 会话封装 agent.js · 生命周期、核心方法、map()映射、权限闸门、环形缓冲、后台任务跟踪 -->
+<h2>定位</h2>
+
+<p>agent.js（931 行）定义 AgentSession 类。每个 AgentSession 对应一个长驻 SDK query() 调用，以 streaming input 模式运行。将 SDK 消息流转化为 agent:event 统一信封，供 server.js 广播至所有前端设备。</p>
+
+<div class="callout tip">
+  <div class="body">
+    <p>核心抽象：一个 AgentSession = 一个打开的 claude 进程。生命周期与前端连接解耦——用户刷新浏览器不会杀死 agent 进程，dispose 才会。</p>
+  </div>
+</div>
+
+<h2>生命周期</h2>
+
+<ol class="steps">
+<li><strong>constructor()</strong>：初始化 instanceId、cwd、permissionMode、effort、epoch、seq 等全部状态。epoch 由 Date.now() + 进程内计数器生成，保证跨重启唯一。</li>
+<li><strong>start()</strong>：创建 AbortController，调用 SDK query() 传入 inputStream 生成器与 canUseTool 回调。启动 idle 定时器（30s tick）。</li>
+<li><strong>consume(q)</strong>：消费 SDK query 返回的异步迭代器，每条消息调用 map() 映射为 agent:event。流式事件进入 delta 批处理管道；边界事件直接 emit。</li>
+<li><strong>消息循环</strong>：send 将消息推入 queue、触发 inputStream；interrupt 调用 q.interrupt() 并清队列；setPermissionMode 差分调 q.setPermissionMode()。</li>
+<li><strong>dispose()</strong>：flush delta 缓冲区，清空 toolInputs 缓存，resolve 所有挂起的审批与提问（带 cancelled 语义），清空 bgTasks，调用 abort.abort() 杀进程。</li>
+</ol>
+
+<h2>核心方法</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>方法</th><th>说明</th><th>关键行为</th></tr></thead>
+<tbody>
+<tr><td>start()</td><td>启动 SDK query 流</td><td>创建 AbortController，调用 query()，init 到达后 fetchModels()</td></tr>
+<tr><td>send(text, model?, opts?)</td><td>发一轮消息</td><td>校验非空、pendingTurns < 2；emit user_message 气泡；推入 queue 并 notifyInput</td></tr>
+<tr><td>interrupt()</td><td>中断当前轮次</td><td>flush 缓冲区，快照待丢队列，pendingTurns 减 dropped，emit system 事件</td></tr>
+<tr><td>setPermissionMode(mode)</td><td>切换权限档</td><td>差分检测、bypass 映射为 default 传给 SDK；自身记真实档供 canUseTool 放行</td></tr>
+<tr><td>resolvePermission()</td><td>解挂审批请求</td><td>ExitPlanMode 兜底合成 setMode；alwaysThisSession 应用 session 范围规则更新</td></tr>
+<tr><td>resolveQuestion()</td><td>解挂问题</td><td>越界 optionIndex 不处理；全部作答后构造 deny+message 返回</td></tr>
+<tr><td>eventsSince(lastSeq)</td><td>取环形缓冲增量</td><td>返回 {events, gap, epoch}；gap 检测总线 trim 导致的丢失</td></tr>
+<tr><td>dispose()</td><td>销毁实例</td><td>flush、清缓存、resolve 所有挂起项（cancelled）、abort 进程</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>map() 消息映射</h2>
+
+<p>SDK 消息类型到 agent:event 类型的完整映射。这是 SDK 协议与 Web 协议之间的适配层：</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>SDK 消息 type/subtype</th><th>agent:event type</th><th>处理行为</th></tr></thead>
+<tbody>
+<tr><td>system / init</td><td>init</td><td>记录 sessionId、reportedModel、slash_commands、title、supportedEffortLevels</td></tr>
+<tr><td>system / task_notification</td><td>task_notification</td><td>bgTaskDone 移除注册表项；emit 摘要（600 字截断）；注入自动汇报轮</td></tr>
+<tr><td>system / task_progress</td><td>task_progress</td><td>瞬时事件（不占 seq、不进 buffer）。bgTaskUpsert 刷新心跳；emitTransient 广播</td></tr>
+<tr><td>content_block_delta (text)</td><td>text_delta</td><td>入批量缓冲区（20ms + 2048 字节阈值）</td></tr>
+<tr><td>content_block_delta (thinking)</td><td>thinking_delta</td><td>入批量缓冲区</td></tr>
+<tr><td>assistant</td><td>tool_use / text_delta</td><td>提取 tool_use 块（摘要 600 字截断）；文件类工具缓存完整 input 供 tool:preview</td></tr>
+<tr><td>user</td><td>user_message</td><td>透传 tool_result 或 task-notification 注入</td></tr>
+<tr><td>result</td><td>result</td><td>pendingTurns--；提取 total_cost_usd、duration_ms；差异检测模型变更</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>权限闸门流程</h2>
+
+<ol class="steps">
+<li><strong>handleCanUseTool(name, input, opts)</strong> 被 SDK 调用。</li>
+<li><strong>AskUserQuestion 特判</strong>：先于 bypass 短路之前。问问题与绕过权限审批正交。</li>
+<li><strong>dontAsk 防御</strong>：SDK 契约保证 dontAsk 不调 canUseTool，此处防御 SDK bug 的误调用。</li>
+<li><strong>bypassPermissions</strong>：自实现放行（return allow），不依赖 SDK 的 allowDangerouslySkipPermissions。</li>
+<li><strong>askPermission</strong>：默认路径。emit permission_request → 前端弹出审批弹窗 → 用户决策 → resolvePermission → 返回 allow/deny 给 SDK。</li>
+</ol>
+
+<h2>环形缓冲区机制</h2>
+
+<div class="kv">
+<div class="row"><span class="key">BUFFER_CAP</span><span class="val">500 条上限。超限时 shift 丢弃最旧事件。</span></div>
+<div class="row"><span class="key">epoch</span><span class="val">Date.now() + 进程内计数器。跨重启严格递增，客户端据此识别"新流"并重置 seq 去重基线。</span></div>
+<div class="row"><span class="key">seq</span><span class="val">单调递增序列号。每条 emit 消息获得唯一 seq，emitTransient 不递增 seq。</span></div>
+<div class="row"><span class="key">emit vs emitTransient</span><span class="val">emit 入 buffer、递增 seq、供回放；emitTransient 不进 buffer、不递增 seq，用于 task_progress 高频心跳。</span></div>
+<div class="row"><span class="key">eventsSince(lastSeq)</span><span class="val">过滤 buffer 中 seq > lastSeq 的记录。若 bufferTrimmed 且 oldest > lastSeq+1，标记 gap 为 true。</span></div>
+</div>
+
+<h2>后台任务跟踪</h2>
+
+<ul>
+<li><strong>bgTaskUpsert(taskId, taskType, message)</strong>：心跳刷新。新任务或 taskType 变化回调 onBgTaskChange（重算角标）。</li>
+<li><strong>bgTaskDone(taskId)</strong>：完成信号的精确删除。taskId 为 null 时整表清空（兜底：快任务的心跳 id 未注册进表）。</li>
+<li><strong>sweepBgTasks()</strong>：惰性 TTL 清除。30s 定时器驱动，超 180s 无心跳即判失效清除（BG_TASK_TTL_MS）。</li>
+<li><strong>hasBgTasks()</strong>：判定是否有活跃后台任务。server.js 会话列表据此显示忙碌角标。</li>
+</ul>
+
+<h2>Delta 批处理</h2>
+
+<p>text_delta 与 thinking_delta 以 20ms 时间窗口 + 2048 字节阈值批量发送，减少 Socket.IO 的 messages/sec 峰值。dispose、interrupt、result 边界均强制 flush 确保不丢失末尾增量。</p>

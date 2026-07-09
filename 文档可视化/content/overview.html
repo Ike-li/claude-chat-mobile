@@ -1,0 +1,118 @@
+<!-- 项目总览 · 定位、核心理念、技术栈一览 -->
+<div class="lead-extra">
+  <p>Claude Chat Mobile 是一个<strong>自托管的移动端聊天 Web UI</strong>，把本机的 Claude Code CLI 接到手机上。核心目标：<strong>终端等价性</strong>——"坐在电脑前对 claude 打字"和"在手机上打字"，效果一样。</p>
+</div>
+
+<h2>一句话定位</h2>
+
+<div class="callout note">
+  <div class="body">
+    <p>它不是新的 AI，不是 Claude 的重新实现，也不是远程桌面。它是你本机 Claude Code 的一个<strong>移动端入口</strong>——同一个 agent、同一份 CLAUDE.md、同样的 MCP 服务器、技能、hooks 和已登录会话。</p>
+  </div>
+</div>
+
+<h2>核心理念</h2>
+
+<p>项目的设计围绕一个判据展开：<strong>终端等价性</strong>。对任何一次交互，问"此刻我若坐在终端前，会得到什么？"移动端必须给出语义等价物。</p>
+
+<p>这个判据既是下界也是上界：</p>
+
+<div class="split">
+  <div>
+    <h4>少于它 = 残缺</h4>
+    <p>claude 在终端能改文件跑命令，移动端只能聊天——不合格。必须完整支持：流式输出、工具调用、权限审批、会话连续、中断恢复、模型切换。</p>
+  </div>
+  <div>
+    <h4>多于它 = 膨胀</h4>
+    <p>多用户、速率限制、自建消息数据库——终端没有这些，本项目也不许有。中间层只转发，不加工 claude 的语义输出。</p>
+  </div>
+</div>
+
+<h2>用户与信任模型</h2>
+
+<ul>
+  <li><strong>每实例单用户</strong>：每个自托管部署的使用者就是部署者。项目面向所有人开放自托管，但单个实例被设计为一个人用。</li>
+  <li><strong>机主即 root</strong>：通过鉴权的请求拥有与"本人坐在终端前"完全相同的权力。这是产品目的，不是漏洞；漏洞是"未通过鉴权的人获得这个权力"。</li>
+  <li><strong>不做 SaaS / 多租户</strong>：单个实例不做多用户、用户名体系、配额。那是另一类产品。</li>
+</ul>
+
+<h2>终端等价性清单</h2>
+
+<p>19 条功能需求（E1–E19），按优先级排列：</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>#</th><th>能力</th><th>优先级</th></tr></thead>
+<tbody>
+<tr><td>E1</td><td>同一会话连续，claude 记得上下文</td><td>P0</td></tr>
+<tr><td>E2</td><td>真的干活：改文件、跑命令</td><td>P0</td></tr>
+<tr><td>E3</td><td>权限确认：审批弹窗（完整命令 + cwd）</td><td>P0</td></tr>
+<tr><td>E4</td><td>流式输出：看着它逐字输出</td><td>P0</td></tr>
+<tr><td>E5</td><td>工具调用可见：折叠卡片</td><td>P0</td></tr>
+<tr><td>E6</td><td>中断生成：停止按钮</td><td>P0</td></tr>
+<tr><td>E7</td><td>claude 反问选择题</td><td>P1</td></tr>
+<tr><td>E8</td><td>斜杠命令透传</td><td>P1</td></tr>
+<tr><td>E9</td><td>加载本机 CLAUDE.md / MCP / hooks / skills</td><td>P0</td></tr>
+<tr><td>E10</td><td>断线重连：任务存活、输出补全</td><td>P0</td></tr>
+<tr><td>E11</td><td>会话持久化：重启后可 resume</td><td>P0</td></tr>
+<tr><td>E12</td><td>Markdown / 代码高亮</td><td>P0</td></tr>
+<tr><td>E13</td><td>会话列表 + 切换</td><td>P1</td></tr>
+<tr><td>E14</td><td>历史消息回显</td><td>P0</td></tr>
+<tr><td>E15</td><td>推送触达（审批 / 提问 / 结果）</td><td>P0</td></tr>
+<tr><td>E16</td><td>Web 自有状态栏</td><td>P2</td></tr>
+<tr><td>E17</td><td>文件 / 图片上传</td><td>P2</td></tr>
+<tr><td>E18</td><td>复制历史输出</td><td>P3</td></tr>
+<tr><td>E19</td><td>交互与系统日志面板</td><td>P2</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>移动端独有的四个问题</h2>
+
+<p>终端没有、但移动端必须解决的四个约束：</p>
+
+<div class="cards">
+<div class="card">
+  <h4>公网暴露</h4>
+  <p>终端的信任边界是"物理坐在机器前"；隧道把边界搬到公网。安全优先级最高。</p>
+</div>
+<div class="card">
+  <h4>会话碎片化</h4>
+  <p>手机使用模式："看 30 秒 → 锁屏 → 10 分钟后再看"。断线重连是主路径，不是异常分支。</p>
+</div>
+<div class="card">
+  <h4>小屏与弱网</h4>
+  <p>渲染与传输效率必须优化。代码块横向滚动、事件增量传输。</p>
+</div>
+<div class="card">
+  <h4>注意力非对称</h4>
+  <p>agent 可以一直等，人不一定知道它在等。不超时 + 无触达 = 无界死等。推送通知是必须的。</p>
+</div>
+</div>
+
+<h2>运行方式</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>方式</th><th>适用场景</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>本机直接</td><td>开发调试</td><td><code>npm start</code>，访问 <code>http://localhost:3000</code></td></tr>
+<tr><td>局域网</td><td>家里 / 办公室</td><td>连 Wi-Fi 访问 <code>http://&lt;lan-ip&gt;:3000/#token=…</code></td></tr>
+<tr><td>公网（推荐）</td><td>随时随地</td><td>Cloudflare Tunnel 固定域名 + Access 双因素</td></tr>
+<tr><td>公网（临时）</td><td>测试</td><td><code>cloudflared tunnel --url http://localhost:3000</code></td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>技术栈一览</h2>
+
+<div class="kv">
+  <div class="row"><span class="key">后端运行时</span><span class="val">Node.js ≥20，纯 ESM（<code>"type": "module"</code>），零构建、零打包器</span></div>
+  <div class="row"><span class="key">HTTP + WebSocket</span><span class="val">Express 5 + Socket.IO 4</span></div>
+  <div class="row"><span class="key">Agent SDK</span><span class="val">@anthropic-ai/claude-agent-sdk 0.3.201（官方 SDK，streaming input 模式）</span></div>
+  <div class="row"><span class="key">鉴权</span><span class="val">AUTH_TOKEN + TOFU 设备信赖 + Cloudflare Access JWT（可选纵深防御）</span></div>
+  <div class="row"><span class="key">推送</span><span class="val">Web Push API（VAPID）+ ntfy（可选，更可靠的移动端推送）</span></div>
+  <div class="row"><span class="key">前端</span><span class="val">纯 HTML/CSS/JS PWA，marked + DOMPurify + highlight.js，Source Serif 4 正文字体</span></div>
+  <div class="row"><span class="key">测试</span><span class="val">node --test（单测，零 token）+ Puppeteer（视觉 E2E）+ 冒烟脚本（真实 token）</span></div>
+  <div class="row"><span class="key">许可证</span><span class="val">AGPL-3.0-only</span></div>
+</div>

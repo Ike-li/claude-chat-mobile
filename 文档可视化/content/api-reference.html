@@ -1,0 +1,86 @@
+<!-- API 接口速查 · HTTP端点、Socket.IO事件、内部模块API索引 -->
+<h2>HTTP 端点</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>方法</th><th>路径</th><th>鉴权</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>GET</td><td><code>/health</code></td><td>httpAuth</td><td>健康检查，返回 {status, sessionId, busy, versions, timestamp}</td></tr>
+<tr><td>GET</td><td><code>/push/vapid-public-key</code></td><td>httpAuth</td><td>取 Web Push VAPID 公钥（前端订阅用）</td></tr>
+<tr><td>POST</td><td><code>/push/subscribe</code></td><td>httpAuth</td><td>提交浏览器 Push subscription（express.json，限 4KB）</td></tr>
+<tr><td>GET</td><td><code>/js/app.js</code></td><td>无</td><td>前端主脚本分发（静态资源；其余走 express.static）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>Socket.IO 入向事件（client → server）</h2>
+
+<h3>会话内操作 user:*</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>事件</th><th>payload</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>user:message</td><td>{text, attachments?, model?, instanceId?, cwd?}</td><td>发消息。校验非空、text ≤ 50000</td></tr>
+<tr><td>user:approve</td><td>{requestId, decision, alwaysThisSession?}</td><td>审批挂起的 permission_request</td></tr>
+<tr><td>user:answer</td><td>{requestId, optionIndex}</td><td>回答 AskUserQuestion</td></tr>
+<tr><td>user:interrupt</td><td>{instanceId?}</td><td>中断当前轮（不毁会话）</td></tr>
+<tr><td>user:setPermissionMode</td><td>{mode}</td><td>切权限档：default/plan/acceptEdits/bypassPermissions/dontAsk</td></tr>
+<tr><td>user:setEffort</td><td>{level}</td><td>切思考强度；busy 时拒切</td></tr>
+<tr><td>user:setWorkdir</td><td>{cwd}</td><td>切工作区（白名单校验，防穿越）</td></tr>
+<tr><td>user:setViewing</td><td>{instanceId}</td><td>切当前查看 tab</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>会话与 tab 管理 session:*（均带 ack）</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>事件</th><th>payload</th><th>ack 返回</th></tr></thead>
+<tbody>
+<tr><td>session:new</td><td>{cwd?}</td><td>{ok, instanceId:null, sessionId:null}</td></tr>
+<tr><td>session:switch</td><td>{sessionId, cwd?}</td><td>{ok, instanceId, sessionId} 或 {ok:false, error}</td></tr>
+<tr><td>session:close</td><td>{instanceId}</td><td>{ok, viewingInstanceId} 或 {ok:false, error}</td></tr>
+<tr><td>session:list</td><td>{cwd?, all?}</td><td>{currentSessionId, sessions[], hasMore}</td></tr>
+<tr><td>session:history</td><td>{sessionId, cwd?}</td><td>{messages[]} 或 {messages:[], error}</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>同步/日志/元数据（均带 ack）</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>事件</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>sync:since</td><td>断线重连补发环形缓冲；found:false → 客户端清屏重载历史</td></tr>
+<tr><td>logs:get</td><td>该实例的交互日志（需 LOG_INTERACTIONS=1）</td></tr>
+<tr><td>models:get</td><td>当前查看 cwd 的可用模型清单</td></tr>
+<tr><td>dev:restart</td><td>仅 DEV_MODE=1：优雅退出，靠 KeepAlive 自动拉起</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>内部模块 API 索引</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>模块</th><th>关键导出</th></tr></thead>
+<tbody>
+<tr><td>agent.js</td><td>AgentSession 类（start/send/interrupt/setPermissionMode/resolvePermission/eventsSince/dispose）</td></tr>
+<tr><td>server.js</td><td>httpServer, io, port</td></tr>
+<tr><td>sessions.js</td><td>getCurrent, setCurrent, upsertSession, getSession, updateSessionCost, flushSaveSync</td></tr>
+<tr><td>history.js</td><td>getProjectDir, getSessionHistory, catchUpStep, listSessionsPage, sessionFileExists</td></tr>
+<tr><td>workdirs.js</td><td>normalizeWorkdirEntries, resolveWorkdirs, loadWorkdirsFile</td></tr>
+<tr><td>uploads.js</td><td>validateAttachments, saveAttachments, buildPromptText, toEventMeta</td></tr>
+<tr><td>devices.js</td><td>isDeviceTrusted, approveDevice, denyDevice, addPendingDevice</td></tr>
+<tr><td>statusline.js</td><td>buildWebStatusLine, webContextCost, gitStatus</td></tr>
+<tr><td>notifications.js</td><td>notificationForEvent, ntfyMetaFor, ntfyRequestInit</td></tr>
+<tr><td>models-cache.js</td><td>createModelsCache, isCwdDefaultModel</td></tr>
+<tr><td>cf-access.js</td><td>initCfAccess, verifyAccessJwt, isPublicHost</td></tr>
+<tr><td>file-security.js</td><td>rejectableSymlinkComponent, isOwnerOnly, writeOwnerOnlyFile, checkPermissions</td></tr>
+<tr><td>file-preview.js</td><td>attributePath, buildDiff, readPreview</td></tr>
+<tr><td>sanitizer.js</td><td>sanitize, stripControlSequences, maskToken, sanitizePath</td></tr>
+<tr><td>doctor-runtime.js</td><td>readMergedPermissions, runDoctor</td></tr>
+<tr><td>interaction-log.js</td><td>userMessageIn, userMessageOut, agentSend, agentResult</td></tr>
+</tbody>
+</table>
+</div>

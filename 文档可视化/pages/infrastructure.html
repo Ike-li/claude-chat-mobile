@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>基础设施模块一览 · Claude Chat Mobile</title>
+<meta name="description" content="workdirs、uploads、devices、statusline、notifications、models-cache——六个支撑模块的职责与协作。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 Claude Code 接到手机上——终端等价性的完整实现</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构总览</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界与非目标</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a><a href="versions.html"><span class="idx">06</span><span>版本里程碑</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-equivalence.html"><span class="idx">07</span><span>终端等价性原则</span></a><a href="security-model.html"><span class="idx">08</span><span>安全模型与威胁矩阵</span></a><a href="mobile-first.html"><span class="idx">09</span><span>移动端优先的设计约束</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="server.html"><span class="idx">10</span><span>服务端中枢：server.js</span></a><a href="agent-sdk.html"><span class="idx">11</span><span>Agent 会话封装：agent.js</span></a><a href="session-management.html"><span class="idx">12</span><span>会话管理：sessions.js + history.js</span></a><a href="frontend.html"><span class="idx">13</span><span>前端应用：public/</span></a><a href="infrastructure.html" class="active"><span class="idx">14</span><span>基础设施模块一览</span></a><a href="security-modules.html"><span class="idx">15</span><span>安全与诊断模块</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="event-system.html"><span class="idx">16</span><span>事件系统与契约</span></a><a href="data-flow.html"><span class="idx">17</span><span>数据流全景</span></a><a href="external-integrations.html"><span class="idx">18</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">19</span><span>快速开始</span></a><a href="deployment.html"><span class="idx">20</span><span>生产部署</span></a><a href="operations.html"><span class="idx">21</span><span>运维与故障排查</span></a><a href="doctor.html"><span class="idx">22</span><span>配置自检与安全体检</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="api-reference.html"><span class="idx">23</span><span>API 接口速查</span></a><a href="conventions.html"><span class="idx">24</span><span>项目规范与约定</span></a><a href="testing.html"><span class="idx">25</span><span>测试体系</span></a><a href="drift.html"><span class="idx">26</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · Ike-li/claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第四部分 · 核心实现</b> &nbsp;/&nbsp; 基础设施模块一览</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">04</span> 第四部分 · 核心实现</span>
+    <h1>基础设施模块一览</h1>
+    <p class="lead">workdirs、uploads、devices、statusline、notifications、models-cache——六个支撑模块的职责与协作。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 12 分钟</span>
+      <span><span class="lbl">第</span> 15 / 27 篇</span>
+      <span class="src" title="原始文档来源">源自 workdirs.js · uploads.js · devices.js · statusline.js · notifications.js · models-cache.js</span>
+    </div>
+  </header>
+<!-- 基础设施模块一览 · workdirs/uploads/devices/statusline/notifications/models-cache -->
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>模块一览</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>模块</th><th>职责</th><th>关键导出</th><th>调用方</th></tr></thead>
+<tbody>
+<tr><td>workdirs.js</td><td>工作区白名单解析、校验、热加载</td><td>normalizeWorkdirEntries, resolveWorkdirs, loadWorkdirsFile</td><td>server.js preflight + fs.watch, scripts/doctor.js</td></tr>
+<tr><td>uploads.js</td><td>附件校验、落盘、路径注入</td><td>validateAttachments, saveAttachments, buildPromptText, toEventMeta</td><td>server.js user:message 处理</td></tr>
+<tr><td>devices.js</td><td>设备指纹 TOFU 信任模型</td><td>isDeviceTrusted, approveDevice, denyDevice, addPendingDevice</td><td>server.js socket 连接鉴权, scripts/device.js CLI</td></tr>
+<tr><td>statusline.js</td><td>Web 状态栏数据组装</td><td>buildWebStatusLine, webContextCost, gitStatus</td><td>server.js refreshStatusLine</td></tr>
+<tr><td>notifications.js</td><td>事件到通知的映射（渠道无关文案）</td><td>notificationForEvent, ntfyMetaFor, ntfyRequestInit</td><td>server.js pushNotify / ntfyNotify</td></tr>
+<tr><td>models-cache.js</td><td>按 cwd 缓存的模型清单 LRU</td><td>createModelsCache, isCwdDefaultModel</td><td>server.js fetchModels + onConnection</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>workdirs.js —— 工作区白名单解析</h2>
+
+<p>配置来源：workdirs.json 文件（位于 CCM_DATA_DIR，默认 data/）。支持热加载：server.js 通过 fs.watch 监听该文件变化，变更后重新解析并广播 dirs 更新事件到所有已连接客户端。</p>
+
+<p>白名单解析流程：</p>
+<ol>
+<li><strong>原始输入</strong>：JSON 数组，每项可为字符串（路径）或 {path, sessionLimit} 对象。</li>
+<li><strong>normalizeWorkdirEntries(parsed)</strong>（纯函数）：逐条校验——非数组返回空数组+警告；非法条目 warn-skip；按 path 首见去重；sessionLimit 非法回退 DEFAULT_SESSION_LIMIT（6），超上限夹到 MAX_SESSION_LIMIT（50）。</li>
+<li><strong>resolveWorkdirs(entries)</strong>：对每项 path 执行 realpathSync 解符号链接/相对段；statSync.isDirectory() 校验。不存在/不可达/不是目录 warn-skip；realpath 后二次去重（首见 sessionLimit 优先）。</li>
+<li><strong>热加载</strong>：fs.watch 监听 workdirs.json → 触发重解析 → 广播 dirs 更新（已移除目录上的已开会话继续运行、仅拒新开）。</li>
+</ol>
+
+<div class="callout note">
+  <div class="body">
+    <p>容错原则：坏配置不清空白名单。loadWorkdirsFile 读/解析失败返回 null，调用方保留旧配置。单个条目标题 warning（不抛错）——server 启动不因某条工作区不可达而中断。</p>
+  </div>
+</div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>uploads.js —— 附件上传全流程</h2>
+
+<p>完整文件字节写入 WORK_DIR/.ccm-uploads/，将绝对路径注入 prompt 文本，claude 通过 Read（白名单内、cwd 内免审批）读取。</p>
+
+<ol>
+<li><strong>客户端 base64 编码</strong>：用户从手机选择文件后，前端读取为 base64 数据，随 user:message 一起发送。</li>
+<li><strong>validateAttachments(attachments)</strong>（纯校验，零 IO）：上限 10 文件、单文件 10 MiB、总量 20 MiB。</li>
+<li><strong>saveAttachments(workDir, attachments)</strong>：创建 .ccm-uploads/ 目录；rejectableSymlinkComponent 检查上传目录路径中的可疑符号链接；O_NOFOLLOW + O_EXCL 标志打开文件（防 TOCTOU + symlink 攻击）；路径校验防穿越。</li>
+<li><strong>buildPromptText(text, saved)</strong>：在原文末尾追加 [附件] 段（绝对路径逐行列出）。</li>
+<li><strong>toEventMeta(saved)</strong>：为 user_message 事件提供元数据（剥掉 absPath 与完整 data，仅保留 name/mimeType/size/thumb——不泄露服务端路径）。</li>
+</ol>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>devices.js —— TOFU 信任模型</h2>
+
+<p>每台首次连接的浏览器生成随机 16 字节指纹（deviceToken），存入 localStorage.device_token。服务端双文件持久化：</p>
+
+<div class="kv">
+<div class="row"><span class="key">data/trusted-devices.json</span><span class="val">已批准设备 token 的 Set，序列化为数组。</span></div>
+<div class="row"><span class="key">data/pending-devices.json</span><span class="val">待审批设备列表，每项含 {deviceToken, ip, userAgent, ts}。</span></div>
+</div>
+
+<p>生命周期：首次连接 → addPendingDevice → 管理员在任一客户端审批或拒绝 → approveDevice 将 token 加入 trusted set 并移出 pending。每次 isDeviceTrusted 调用都会重新 loadTrustedDevices()，确保多进程/CLI 操作能即时感知。</p>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>statusline.js —— Web 状态栏</h2>
+
+<p>数据来源：SDK lastUsage（input_tokens/cache tokens 计数）、git status（execFile 获取 branch/changed/ahead/behind）、CLI 版本号（启动时采集）。组装逻辑：task（当前子任务名）、model（activeModel/reportedModel）、cwd/project、git（branch + 变更数 + repo）、ctx（token 明细 + 缓存命中率）、cost（累计 USD + wall/API 时间）、version（CLI 版本号）。缓存策略：gitCache 针对每个 cwd 缓存 5s；cache 失效倒计时是客户端推算（CACHE_TTL_MS=300000），非 SDK 回报的权威值。</p>
+
+<h2 id="s6"><a class="anchor" href="#s6" aria-hidden="true"></a>notifications.js —— 通知双渠道</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>事件类型</th><th>文案模板</th><th>抑制条件</th><th>ntfy 优先级</th></tr></thead>
+<tbody>
+<tr><td>result</td><td>"任务完成/出错" + 耗时</td><td>有客户端连接时抑制</td><td>3（default）</td></tr>
+<tr><td>permission_request</td><td>"Claude 请求许可" + 工具名+参数摘要</td><td>无条件推送（可能锁屏）</td><td>5（urgent）</td></tr>
+<tr><td>question</td><td>"Claude 有问题" + 文本摘录</td><td>无条件推送</td><td>5（urgent）</td></tr>
+<tr><td>task_notification</td><td>"后台任务完成/失败" + 摘要</td><td>无条件推送</td><td>3（default）</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>双渠道：Web Push（Service Worker push 事件 + showNotification）与 ntfy（自托管 ntfy server 的 POST 请求）。ntfy 用 JSON body（非 HTTP header）传递标题，避开中文标题的 header 编码问题。消息体中的 instanceId/sessionId/cwd 用于生成深链 click URL。</p>
+
+<h2 id="s7"><a class="anchor" href="#s7" aria-hidden="true"></a>models-cache.js —— 按 cwd 缓存的模型清单</h2>
+
+<div class="callout note">
+  <div class="body">
+    <p>模型清单来自 SDK supportedModels()，而工作区的 .claude/settings.local.json 的 env 块可覆盖 ANTHROPIC_BASE_URL 与自定义模型名。因此模型清单是随工作区变动的量，绝非账号级全局。单全局缓存会把上个工作区的模型泄漏进当前工作区视图。</p>
+  </div>
+</div>
+
+<p>实现：createModelsCache({max=32}) 返回 {set, get, toJSON, load}。LRU-on-write 淘汰。get 对未知 cwd 返回 null，绝不回退别的 cwd 的清单。toJSON/load 支持跨重启持久化到 data/init-cache.json（缓存可弃，损坏即当空）。isCwdDefaultModel 守卫：仅当 resumeId==null 且 pinnedModel===undefined 且 reportedModel 非空时，才将 init.model 视为 cwd 默认模型并入缓存。</p>
+
+        <nav class="pager"><a class="prev" href="frontend.html"><span class="dir">← 上一篇</span><span class="ttl">前端应用：public/</span></a><a class="next" href="security-modules.html"><span class="dir">下一篇 →</span><span class="ttl">安全与诊断模块</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">模块一览</a></li><li class="h2"><a href="#s2">workdirs.js —— 工作区白名单解析</a></li><li class="h2"><a href="#s3">uploads.js —— 附件上传全流程</a></li><li class="h2"><a href="#s4">devices.js —— TOFU 信任模型</a></li><li class="h2"><a href="#s5">statusline.js —— Web 状态栏</a></li><li class="h2"><a href="#s6">notifications.js —— 通知双渠道</a></li><li class="h2"><a href="#s7">models-cache.js —— 按 cwd 缓存的模型清单</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话管理：sessions.js + history.js · Claude Chat Mobile</title>
+<meta name="description" content="元数据持久化与 CLI JSONL 历史读取——两个模块如何分工，为什么消息内容不存服务端。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 Claude Code 接到手机上——终端等价性的完整实现</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构总览</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界与非目标</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a><a href="versions.html"><span class="idx">06</span><span>版本里程碑</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-equivalence.html"><span class="idx">07</span><span>终端等价性原则</span></a><a href="security-model.html"><span class="idx">08</span><span>安全模型与威胁矩阵</span></a><a href="mobile-first.html"><span class="idx">09</span><span>移动端优先的设计约束</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="server.html"><span class="idx">10</span><span>服务端中枢：server.js</span></a><a href="agent-sdk.html"><span class="idx">11</span><span>Agent 会话封装：agent.js</span></a><a href="session-management.html" class="active"><span class="idx">12</span><span>会话管理：sessions.js + history.js</span></a><a href="frontend.html"><span class="idx">13</span><span>前端应用：public/</span></a><a href="infrastructure.html"><span class="idx">14</span><span>基础设施模块一览</span></a><a href="security-modules.html"><span class="idx">15</span><span>安全与诊断模块</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="event-system.html"><span class="idx">16</span><span>事件系统与契约</span></a><a href="data-flow.html"><span class="idx">17</span><span>数据流全景</span></a><a href="external-integrations.html"><span class="idx">18</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">19</span><span>快速开始</span></a><a href="deployment.html"><span class="idx">20</span><span>生产部署</span></a><a href="operations.html"><span class="idx">21</span><span>运维与故障排查</span></a><a href="doctor.html"><span class="idx">22</span><span>配置自检与安全体检</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="api-reference.html"><span class="idx">23</span><span>API 接口速查</span></a><a href="conventions.html"><span class="idx">24</span><span>项目规范与约定</span></a><a href="testing.html"><span class="idx">25</span><span>测试体系</span></a><a href="drift.html"><span class="idx">26</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · Ike-li/claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第四部分 · 核心实现</b> &nbsp;/&nbsp; 会话管理：sessions.js + history.js</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">04</span> 第四部分 · 核心实现</span>
+    <h1>会话管理：sessions.js + history.js</h1>
+    <p class="lead">元数据持久化与 CLI JSONL 历史读取——两个模块如何分工，为什么消息内容不存服务端。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 12 分钟</span>
+      <span><span class="lbl">第</span> 13 / 27 篇</span>
+      <span class="src" title="原始文档来源">源自 sessions.js · history.js</span>
+    </div>
+  </header>
+<!-- 会话管理 sessions.js + history.js · 元数据持久化、JSONL历史读取、过滤规则 -->
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>两个模块的分工</h2>
+
+<div class="split">
+<div>
+<h4>sessions.js（146 行）</h4>
+<p>管<strong>元数据</strong>：谁、什么时候、哪个工作区。持久化到 data/sessions.json，永不存消息内容。currentByCwd Map 建立从工作目录到 sessionId 的快速索引。</p>
+</div>
+<div>
+<h4>history.js（291 行）</h4>
+<p>管<strong>历史内容</strong>：说了什么。从 CLI JSONL 文件（~/.claude/projects/）流式读取，基于 mtime 的 LRU 缓存。是前端展示历史消息的唯一数据来源。</p>
+</div>
+</div>
+
+<div class="callout note">
+  <div class="body">
+    <p><strong>消息内容不存服务端</strong>：CLI JSONL 是唯一事实源。这条约束来自终端等价性：CLI 没有自己的消息数据库，服务端也不应该有。元数据仅用于会话列表显示和 resume 时恢复档位。</p>
+  </div>
+</div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>sessions.js 数据模型</h2>
+
+<div class="kv">
+<div class="row"><span class="key">currentByCwd</span><span class="val">Map<string, string>：每工作目录一个当前会话指针。缺省或记录过期时返回 null。</span></div>
+<div class="row"><span class="key">sessions</span><span class="val">会话元数据数组。每条包含 id、title、cwd、model、effort、permissionMode、createdAt、lastUsedAt。永不存消息内容。</span></div>
+</div>
+
+<h4>upsertSession 逻辑</h4>
+<ul>
+<li>已存在（按 id 匹配）：更新 lastUsedAt；同步 model、effort、permissionMode（diff 更新，不覆盖显式 null）。</li>
+<li>新条目：unshift 到 state.sessions 头部。记录创建与最后使用时间戳。title 从入参获取或占位为"新会话"。</li>
+<li>两种路径均设 currentByCwd[cwd] = id。</li>
+</ul>
+
+<p>持久化：200ms 防抖异步写入，严格原子写（writeFile(tmp, 0o600) → rename(tmp, FILE)）。关闭时调用 flushSaveSync() 同步写入。</p>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>history.js 读取流程</h2>
+
+<ol class="steps">
+<li><strong>getProjectDir(cwd)</strong>：根据 cwd 推断 CLI 项目目录名。路径中所有非字母数字字符替换为 -。cwd 须先经 realpathSync 规范化，才与 CLI 命名一致（如 /tmp → /private/tmp）。</li>
+<li><strong>listSessionsPage(cwd, {limit})</strong>：readdir → stat（并发 allSettled）→ 按 mtime 降序 → 前 limit 个并发 readHeadMeta → 返回 sessions + hasMore。</li>
+<li><strong>readHeadMeta(file, size)</strong>：读文件头部 64KB，逐行 JSON parse。提取 ai-title、model、entrypoint。头部漏读时补读尾部 512KB（含 4KB 跨边重叠）。</li>
+<li><strong>getSessionHistory(sessionId, cwd, limit)</strong>：createReadStream + readline 逐行流式读取——不一次性 buffer 整个文件。逐行解析 → 过滤 → 提取文本 → 封顶到 2000 条。</li>
+</ol>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>过滤规则详解</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>过滤规则</th><th>过滤对象</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>isMeta</td><td>CLI 注入的元信息行</td><td>非用户或 assistant 对话内容，回显会制造大量无用堆砌</td></tr>
+<tr><td>isSidechain</td><td>子 agent 的记录</td><td>与运行期 agent.js 的 parent_tool_use_id 守卫等效。终端行为等价</td></tr>
+<tr><td>parent_tool_use_id</td><td>带此字段的行（防御性）</td><td>isSidechain 的防御补充，确保子 agent 消息绝不进入主消息流</td></tr>
+<tr><td>纯工具块</td><td>content 全为 tool_use/tool_result 的条目</td><td>空文本工具调用渲染成空气泡占用窗口</td></tr>
+<tr><td>task-notification 注入</td><td>CLI 向消息流注入的系统信号</td><td>内部控制信号，非用户对话内容</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>readHeadMeta 标题提取优先级</h2>
+
+<ol class="steps">
+<li><strong>ai-title</strong>（CLI 自动生成）：扫描头部 64KB，取最后一个（后写更准）。未找到且文件大于 64KB 时补读尾部 512KB。</li>
+<li><strong>首条用户文本</strong>：第一条非命令包裹的真实 user 消息。</li>
+<li><strong>首条命令名</strong>：仅当 ai-title 和首条用户文本均缺失时的回退。</li>
+</ol>
+
+<h2 id="s6"><a class="anchor" href="#s6" aria-hidden="true"></a>缓存策略</h2>
+
+<div class="kv">
+<div class="row"><span class="key">history 缓存</span><span class="val">按文件路径缓存 getSessionHistory 结果。基于 mtimeMs 失效。LRU 淘汰上限 10 条。</span></div>
+<div class="row"><span class="key">list 缓存</span><span class="val">按 {dir:limit} 键缓存 listSessionsPage 结果。4s TTL。新会话创建后立即失效缓存。</span></div>
+</div>
+
+<h2 id="s7"><a class="anchor" href="#s7" aria-hidden="true"></a>catchUpStep 状态机</h2>
+
+<p>纯函数实现（便于单测）。用于 web 端续接终端 CLI 里正在跑的会话：</p>
+
+<div class="kv">
+<div class="row"><span class="key">localBusy 抑制</span><span class="val">本地实例正在跑 turn → 只记 wasBusy=true，不推，不动 baseline。</span></div>
+<div class="row"><span class="key">busy → idle 重置</span><span class="val">刚结束自己的 turn → 增量归因于自己刚写盘，只重置 baseline 到当前长度。</span></div>
+<div class="row"><span class="key">idle 增长推送</span><span class="val">持续 idle 期间 JSONL 增长 → 判为外部（终端）写入 → 推超出 baseline 的尾部消息。</span></div>
+</div>
+
+<h2 id="s8"><a class="anchor" href="#s8" aria-hidden="true"></a>sessionFileExists 安全校验</h2>
+
+<ul>
+<li><strong>字符集校验</strong>：正则 ^[0-9a-zA-Z_-]+$ 确保 id 只包含合法 session id 字符。拒绝含 /、\、. 的任何输入。</li>
+<li><strong>文件存在性检查</strong>：校验通过后 stat 验证 JSONL 确实存在于预期的 project 目录内。</li>
+<li><strong>任何校验失败 return false</strong>：不允许 fallback、静默降级或重试。</li>
+</ul>
+
+        <nav class="pager"><a class="prev" href="agent-sdk.html"><span class="dir">← 上一篇</span><span class="ttl">Agent 会话封装：agent.js</span></a><a class="next" href="frontend.html"><span class="dir">下一篇 →</span><span class="ttl">前端应用：public/</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">两个模块的分工</a></li><li class="h2"><a href="#s2">sessions.js 数据模型</a></li><li class="h2"><a href="#s3">history.js 读取流程</a></li><li class="h2"><a href="#s4">过滤规则详解</a></li><li class="h2"><a href="#s5">readHeadMeta 标题提取优先级</a></li><li class="h2"><a href="#s6">缓存策略</a></li><li class="h2"><a href="#s7">catchUpStep 状态机</a></li><li class="h2"><a href="#s8">sessionFileExists 安全校验</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

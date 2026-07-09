@@ -1,0 +1,64 @@
+<!-- 安全与诊断模块 · cf-access、file-security、file-preview、sanitizer、doctor-runtime、interaction-log -->
+<h2>模块一览</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>模块</th><th>职责</th><th>关键导出</th></tr></thead>
+<tbody>
+<tr><td>cf-access.js</td><td>Cloudflare Access JWT 本地验签，公网请求强制 2FA</td><td>initCfAccess, verifyAccessJwt, isPublicHost, isAccessEnabled</td></tr>
+<tr><td>file-security.js</td><td>symlink 穿越防御、owner-only 权限检查与修复、原子写</td><td>rejectableSymlinkComponent, isOwnerOnly, writeOwnerOnlyFile, checkPermissions</td></tr>
+<tr><td>file-preview.js</td><td>工具卡片文件预览的纯逻辑 + 有界读盘</td><td>attributePath, buildDiff, readPreview</td></tr>
+<tr><td>sanitizer.js</td><td>日志脱敏：15 种敏感模式 + ANSI 控制序列处理</td><td>sanitize, stripControlSequences, maskToken, sanitizePath</td></tr>
+<tr><td>doctor-runtime.js</td><td>UI 安全体检运行时编排：白名单合并 + 6+1 检查 + 脱敏聚合</td><td>readMergedPermissions, runDoctor</td></tr>
+<tr><td>interaction-log.js</td><td>可选交互日志：四跳录制 + 脱敏截断 + 容量限制</td><td>userMessageIn, userMessageOut, agentSend, agentResult, getSessionLogs</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>cf-access.js —— Cloudflare Access JWT 校验</h2>
+
+<p>经 Cloudflare Tunnel 的 HTTP 请求在到达 Express 之前被 CF 的 Access 中间件要求 2FA 认证。Access 在请求头注入 JWT（Cf-Access-Jwt-Assertion），服务端独立执行 JWT 验签——不依赖 CF 本身的校验。</p>
+
+<p>验签流程：isPublicHost(host) 判定是否公网请求（Host 匹配 CF_ACCESS_HOSTNAME）→ 提取 JWT 的 kid（decodeProtectedHeader）→ 查找本地 JWKS 缓存（cf-access-certs.json）→ 未缓存则 fetchRemoteJwks（8s 超时 + 30s 冷却）→ jose.jwtVerify 100% 本地运算验签。</p>
+
+<div class="callout warn">
+  <div class="body">
+    <p>8 秒超时是经验值。Clash 直连实测拉取 CF certs 端点约需 2.5 秒。原先 2 秒超时在 Clash 环境下必超时，导致 fail-closed 锁死全端口。30 秒冷却防止频繁拉取。</p>
+  </div>
+</div>
+
+<h2>file-security.js —— 文件安全守卫</h2>
+
+<p>symlink 穿越防御（rejectableSymlinkComponent）：遍历路径所有父级 → lstatSync 检测 symlink → 若父目录可写（accessSync W_OK）+ 是 symlink = 危险，返回路径。权限执行：isOwnerOnly 精确匹配 0600（文件）或 0700（目录），Windows 恒 true。原子写（writeOwnerOnlyFile）：openSync(tmp, O_WRONLY|O_CREAT|O_TRUNC, 0o600) 绕过 umask → writeFileSync → fsyncSync → renameSync 原子顶替。Windows 降级为直接 writeFileSync。</p>
+
+<h2>file-preview.js —— 工具卡片文件预览</h2>
+
+<div class="callout warn">
+  <div class="body">
+    <p>attributePath 是整个文件预览模块唯一的安全闸门。所有调用方必须先过 attributePath，传入 resolved 路径应已确认在白名单工作目录内。</p>
+  </div>
+</div>
+
+<div class="kv">
+<div class="row"><span class="key">attributePath(filePath, workDirs, cwd)</span><span class="val">零 IO，只做 path.resolve。边界判定：resolved.startsWith(dir + sep) 中的 +sep 防前缀欺骗。</span></div>
+<div class="row"><span class="key">buildDiff(name, input)</span><span class="val">纯内存——不读盘。基于 tool input 中缓存的 old_string/new_string/content 构建 diff 摘要。</span></div>
+<div class="row"><span class="key">readPreview(resolved, opts)</span><span class="val">有界读盘。64KB + 400 行双封顶。NUL 字符判定二进制文件。默认 maxBytes=64*1024，maxLines=400。</span></div>
+</div>
+
+<h2>sanitizer.js —— 日志脱敏</h2>
+
+<p>15 种敏感信息正则模式：API keys（sk-/key-/api-）、GitHub tokens（ghp_/github_pat_）、JWT tokens（eyJ 开头）、PEM 私钥、Bearer tokens、环境变量赋值（KEY/SECRET/TOKEN/PASSWORD）、AWS keys（AKIA/ASIA）、Telegram Bot tokens、Anthropic API keys（sk-ant-）等。stripControlSequences 处理 CSI（\x1b[）、OSC（\x1b]）和 C1 控制字符。顺序：先脱敏再截断——sanitize 内先 stripControlSequences 再 15 个模式替换。</p>
+
+<h2>doctor-runtime.js —— UI 安全体检</h2>
+
+<p>readMergedPermissions 合并三层白名单：global（~/.claude/settings.json）→ project（各 workDir 的 .claude/settings.json）→ local（各 workDir 的 .claude/settings.local.json）。容错：读/解析失败的源 skip，坏 JSON 不让体检崩。</p>
+
+<p>runDoctor 6+1 检查项：AUTH_TOKEN（是否设置及长度，不出显明文）、CLAUDE_BIN（CLI 版本是否可采集）、WORK_DIRS（目录数量，不回显路径）、CONFIG_PERMS（配置文件是否 0600）、CF_ACCESS（是否启用，AUD 仅布尔）、PUSH_VAPID（是否配置）、DEVICES（可信/待审批设备数）、WHITELIST（危险白名单规则 + scope 标注）。</p>
+
+<p>computeReadiness 综合判定：全部 ok → ready；有 warn 但无 blocked → caution；有 blocked → blocked。全程脱敏：只出布尔/计数/危险规则串。</p>
+
+<h2>interaction-log.js —— 交互日志</h2>
+
+<p>LOG_INTERACTIONS=1 开启。记录四跳数据：client → server → agent → SDK → agent → server → client。对应函数：userMessageIn（跳1→2）、userMessageOut（跳2→7）、agentSend（跳3→4）、agentResult（跳5→6）。fmt(text) 脱敏+截断：先 sanitize 脱敏，再折叠换行，超 1500 字符截断。</p>
+
+<p>容量限制：每会话 100 条（buffer.length > 100 → shift()）、全局 200 会话（sessionBuffers.size >= MAX_SESSIONS → FIFO 淘汰最旧会话缓冲）。所有日志条目包含 {ts, type, text, model?, effort?, permissionMode?}。</p>

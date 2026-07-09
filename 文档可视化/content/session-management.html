@@ -1,0 +1,92 @@
+<!-- 会话管理 sessions.js + history.js · 元数据持久化、JSONL历史读取、过滤规则 -->
+<h2>两个模块的分工</h2>
+
+<div class="split">
+<div>
+<h4>sessions.js（146 行）</h4>
+<p>管<strong>元数据</strong>：谁、什么时候、哪个工作区。持久化到 data/sessions.json，永不存消息内容。currentByCwd Map 建立从工作目录到 sessionId 的快速索引。</p>
+</div>
+<div>
+<h4>history.js（291 行）</h4>
+<p>管<strong>历史内容</strong>：说了什么。从 CLI JSONL 文件（~/.claude/projects/）流式读取，基于 mtime 的 LRU 缓存。是前端展示历史消息的唯一数据来源。</p>
+</div>
+</div>
+
+<div class="callout note">
+  <div class="body">
+    <p><strong>消息内容不存服务端</strong>：CLI JSONL 是唯一事实源。这条约束来自终端等价性：CLI 没有自己的消息数据库，服务端也不应该有。元数据仅用于会话列表显示和 resume 时恢复档位。</p>
+  </div>
+</div>
+
+<h2>sessions.js 数据模型</h2>
+
+<div class="kv">
+<div class="row"><span class="key">currentByCwd</span><span class="val">Map<string, string>：每工作目录一个当前会话指针。缺省或记录过期时返回 null。</span></div>
+<div class="row"><span class="key">sessions</span><span class="val">会话元数据数组。每条包含 id、title、cwd、model、effort、permissionMode、createdAt、lastUsedAt。永不存消息内容。</span></div>
+</div>
+
+<h4>upsertSession 逻辑</h4>
+<ul>
+<li>已存在（按 id 匹配）：更新 lastUsedAt；同步 model、effort、permissionMode（diff 更新，不覆盖显式 null）。</li>
+<li>新条目：unshift 到 state.sessions 头部。记录创建与最后使用时间戳。title 从入参获取或占位为"新会话"。</li>
+<li>两种路径均设 currentByCwd[cwd] = id。</li>
+</ul>
+
+<p>持久化：200ms 防抖异步写入，严格原子写（writeFile(tmp, 0o600) → rename(tmp, FILE)）。关闭时调用 flushSaveSync() 同步写入。</p>
+
+<h2>history.js 读取流程</h2>
+
+<ol class="steps">
+<li><strong>getProjectDir(cwd)</strong>：根据 cwd 推断 CLI 项目目录名。路径中所有非字母数字字符替换为 -。cwd 须先经 realpathSync 规范化，才与 CLI 命名一致（如 /tmp → /private/tmp）。</li>
+<li><strong>listSessionsPage(cwd, {limit})</strong>：readdir → stat（并发 allSettled）→ 按 mtime 降序 → 前 limit 个并发 readHeadMeta → 返回 sessions + hasMore。</li>
+<li><strong>readHeadMeta(file, size)</strong>：读文件头部 64KB，逐行 JSON parse。提取 ai-title、model、entrypoint。头部漏读时补读尾部 512KB（含 4KB 跨边重叠）。</li>
+<li><strong>getSessionHistory(sessionId, cwd, limit)</strong>：createReadStream + readline 逐行流式读取——不一次性 buffer 整个文件。逐行解析 → 过滤 → 提取文本 → 封顶到 2000 条。</li>
+</ol>
+
+<h2>过滤规则详解</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>过滤规则</th><th>过滤对象</th><th>理由</th></tr></thead>
+<tbody>
+<tr><td>isMeta</td><td>CLI 注入的元信息行</td><td>非用户或 assistant 对话内容，回显会制造大量无用堆砌</td></tr>
+<tr><td>isSidechain</td><td>子 agent 的记录</td><td>与运行期 agent.js 的 parent_tool_use_id 守卫等效。终端行为等价</td></tr>
+<tr><td>parent_tool_use_id</td><td>带此字段的行（防御性）</td><td>isSidechain 的防御补充，确保子 agent 消息绝不进入主消息流</td></tr>
+<tr><td>纯工具块</td><td>content 全为 tool_use/tool_result 的条目</td><td>空文本工具调用渲染成空气泡占用窗口</td></tr>
+<tr><td>task-notification 注入</td><td>CLI 向消息流注入的系统信号</td><td>内部控制信号，非用户对话内容</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>readHeadMeta 标题提取优先级</h2>
+
+<ol class="steps">
+<li><strong>ai-title</strong>（CLI 自动生成）：扫描头部 64KB，取最后一个（后写更准）。未找到且文件大于 64KB 时补读尾部 512KB。</li>
+<li><strong>首条用户文本</strong>：第一条非命令包裹的真实 user 消息。</li>
+<li><strong>首条命令名</strong>：仅当 ai-title 和首条用户文本均缺失时的回退。</li>
+</ol>
+
+<h2>缓存策略</h2>
+
+<div class="kv">
+<div class="row"><span class="key">history 缓存</span><span class="val">按文件路径缓存 getSessionHistory 结果。基于 mtimeMs 失效。LRU 淘汰上限 10 条。</span></div>
+<div class="row"><span class="key">list 缓存</span><span class="val">按 {dir:limit} 键缓存 listSessionsPage 结果。4s TTL。新会话创建后立即失效缓存。</span></div>
+</div>
+
+<h2>catchUpStep 状态机</h2>
+
+<p>纯函数实现（便于单测）。用于 web 端续接终端 CLI 里正在跑的会话：</p>
+
+<div class="kv">
+<div class="row"><span class="key">localBusy 抑制</span><span class="val">本地实例正在跑 turn → 只记 wasBusy=true，不推，不动 baseline。</span></div>
+<div class="row"><span class="key">busy → idle 重置</span><span class="val">刚结束自己的 turn → 增量归因于自己刚写盘，只重置 baseline 到当前长度。</span></div>
+<div class="row"><span class="key">idle 增长推送</span><span class="val">持续 idle 期间 JSONL 增长 → 判为外部（终端）写入 → 推超出 baseline 的尾部消息。</span></div>
+</div>
+
+<h2>sessionFileExists 安全校验</h2>
+
+<ul>
+<li><strong>字符集校验</strong>：正则 ^[0-9a-zA-Z_-]+$ 确保 id 只包含合法 session id 字符。拒绝含 /、\、. 的任何输入。</li>
+<li><strong>文件存在性检查</strong>：校验通过后 stat 验证 JSONL 确实存在于预期的 project 目录内。</li>
+<li><strong>任何校验失败 return false</strong>：不允许 fallback、静默降级或重试。</li>
+</ul>

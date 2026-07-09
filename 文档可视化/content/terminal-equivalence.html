@@ -1,0 +1,101 @@
+<!-- 终端等价性原则 · 唯一判据、19条需求、北极星剧本 -->
+<h2>唯一判据</h2>
+
+<p>项目全部需求的唯一判据是<strong>终端等价性</strong>：对任何一次交互，问"此刻我若坐在终端前，会得到什么？"移动端必须给出语义等价物。形态可以不同——聊天气泡代替 TUI，弹窗代替 y/n——但等价物必须存在。</p>
+
+<div class="callout note">
+  <div class="body">
+    <p>判据既是下界也是上界。少于它等于残缺（claude 在终端能改文件跑命令，移动端只能聊天则不合格）；多于它等于膨胀（多用户、速率限制、自建消息数据库——终端没有这些，本项目也不许有）。</p>
+  </div>
+</div>
+
+<h4>时间维度</h4>
+<p>等价性不仅约束"注视时刻看到什么"，也约束"agent 需要我"到"我知道"的延迟。坐在终端前时这个延迟近似为 0；移动端注意力是间歇的，没有主动触达就可能一直等下去。E15（推送触达）和 E8（交互式问题）因此成为 P0，而非可选的锦上添花。</p>
+
+<h4>对象维度</h4>
+<p>等价的对象是 agent 能力——对话、工具、技能、审批、上下文管理、resume、模型切换——SDK 全部暴露，init 事件的 <code>slash_commands</code> 是其机器可读边界。不包括终端客户端自己的 UI（<code>/plugin</code>、<code>/config</code> 等面板）。后者用 app 自身的 UI 或自然语言替代，不复刻终端面板。</p>
+
+<h2>需求清单</h2>
+
+<p>以下 19 条 E# 需求按优先级分组。P0 全过 + 验收剧本完整通过 = 项目完成。</p>
+
+<h3>P0（核心契约，共 12 条）</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>编号</th><th>需求</th><th>一句话定义</th></tr></thead>
+<tbody>
+<tr><td>E1</td><td>同一会话连续</td><td>首条消息捕获 session_id，后续 resume，claude 记得读过改过什么</td></tr>
+<tr><td>E2</td><td>真的干活</td><td>claude CLI 是什么能力就是什么能力，权限统一闸门，不裁剪工具集</td></tr>
+<tr><td>E3</td><td>权限确认弹窗</td><td>SDK 审批回调转为弹窗（完整命令 + cwd + 参数），允许、拒绝或本会话总是允许</td></tr>
+<tr><td>E4</td><td>流式输出</td><td>text_delta / thinking_delta 事件增量转发渲染</td></tr>
+<tr><td>E5</td><td>工具过程可见</td><td>工具调用与结果渲染为折叠卡片（工具名、参数摘要、状态）</td></tr>
+<tr><td>E6</td><td>中断不毁会话</td><td>停止按钮触发 SDK interrupt()，会话状态不受损，可 resume</td></tr>
+<tr><td>E9</td><td>加载本机全部配置</td><td>加载我的 CLAUDE.md、MCP 服务器、hooks、skills——操作的是"我的 Claude Code"</td></tr>
+<tr><td>E10</td><td>断线重连</td><td>任务挂在服务端、与 socket 解耦；事件带单调 seq，重连按 seq 续传</td></tr>
+<tr><td>E11</td><td>跨重启恢复</td><td>session 元数据持久化（含权限档、思考强度），服务重启后可恢复列表并 resume</td></tr>
+<tr><td>E12</td><td>Markdown 可读</td><td>marked + highlight.js + DOMPurify，小屏适配，代码块横向滚动</td></tr>
+<tr><td>E14</td><td>历史回显</td><td>切换或恢复会话时回显完整历史消息，流式读完整 CLI JSONL，与 /resume 同源</td></tr>
+<tr><td>E15</td><td>推送触达</td><td>permission_request、question、断连期 result 三类触发推送通知</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>P1（重要增强，共 3 条）</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>编号</th><th>需求</th><th>一句话定义</th></tr></thead>
+<tbody>
+<tr><td>E7</td><td>claude 反问选择题</td><td>canUseTool 特判 AskUserQuestion，选项按钮组，deny+message 通道回传答案</td></tr>
+<tr><td>E8</td><td>斜杠命令</td><td>init.slash_commands 列出的命令直接透传执行；TUI 专有命令前端拦截或用自然语言替代</td></tr>
+<tr><td>E13</td><td>会话列表与切换</td><td>会话列表 + 新建 + 切换；不提供重命名或删除 UI</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>P2/P3（实用与锦上添花，共 4 条）</h3>
+<div class="table-wrap">
+<table>
+<thead><tr><th>编号</th><th>需求</th><th>一句话定义</th></tr></thead>
+<tbody>
+<tr><td>E16</td><td>web 自有状态栏</td><td>server 用 SDK 自有 usage + git + CLI 版本结构化组装，web 原生渲染于输入区上方；不复刻终端 ANSI、不读 ~/.claude/settings.json、不含账号级配额段</td></tr>
+<tr><td>E17</td><td>文件上传</td><td>文件或图片落盘 .ccm-uploads/ + 路径注入 + claude Read</td></tr>
+<tr><td>E18</td><td>复制历史输出</td><td>消息体附带"复制"按钮，拷贝原始 Markdown 源文</td></tr>
+<tr><td>E19</td><td>调试诊断</td><td>交互与系统日志面板，通过 logs:get 调取，session_log 实时投影系统消息和底层 Socket 事件</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>北极星验收剧本</h2>
+<div class="callout tip">
+  <div class="body">
+    <p>22:30，躺在床上，手机发出："把 utils 里重复的日期处理合并成一个函数，跑通测试"。屏幕上流式出现 claude 的回复，夹着 Read、Edit、Bash(npm test) 的工具调用卡片。22:31 锁屏，刷十分钟视频。22:39 解锁，页面自动重连并补上错过的全部输出：测试已通过，有一条待批准的权限请求——弹窗里是完整命令 git commit -m "…" 和工作目录。点"允许"。22:40 回复："再给 CHANGELOG 补一行"。claude 记得它刚才改了什么，直接续上。</p>
+  </div>
+</div>
+<p>这个剧本同时检验流式输出（E4）、工具过程可见（E5）、断线任务存活（E10）、重连续传（sync:since）、权限审批（E3）和真实会话连续（E1），全部属于 P0。</p>
+
+<h2>终端有但明确不追求的</h2>
+<div class="table-wrap">
+<table>
+<thead><tr><th>终端特性</th><th>不追求的理由</th></tr></thead>
+<tbody>
+<tr><td>tab 补全</td><td>在移动端没有意义；输入由全键盘或语音完成</td></tr>
+<tr><td>TUI 视觉形态</td><td>聊天 UI 是有意替换，形态等价而非复制</td></tr>
+<tr><td>提示历史召回（终端 ↑ 键）</td><td>微摩擦设计，移动端有更好的输入区机制替代</td></tr>
+<tr><td>statusLine 的账号级配额段</td><td>SDK 物理拿不到 5h/7d% 数据，且每实例单用户无账号体系</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>等价性如何驱动架构决策</h2>
+
+<h4>E10 断线重连 → 环形缓冲 + seq/epoch + sync:since</h4>
+<p>终端不会因为你走开就断开连接。移动端解决了"断线是主路径而非异常分支"的问题——环形缓冲区 500 条上限 + epoch（Date.now() + 计数器）+ seq 单调递增 + sync:since 增量补发 + gap 检测。连接断开后任务继续运行，重连后按 lastSeq 补发错过的全部事件。前端分流不丢后台实例的输出。</p>
+
+<h4>E15 推送触达 → notificationForEvent 纯函数 + 双渠道通知</h4>
+<p>坐在终端前时 agent 需要你即被看到。notificationForEvent 纯函数映射事件类型到推送文案，双渠道并发——Web Push（浏览器标准推送）和 ntfy（HTTP POST，绕过 iOS 加主屏与局域网 http 的双向约束）。permission_request、question 无条件推送；result 仅在无客户端连接时推送。</p>
+
+<h4>E1 会话连续 → CLI JSONL 是唯一事实源</h4>
+<p>sessionId 不在服务端生成，不在数据库中注册——它来自 CLI resume 返回的真实 session_id。服务端只存元数据映射（cwd、标题、模型、权限档），绝不存消息内容。</p>
+
+<h4>E14 历史回显 → 流式读 JSONL + 2000 条防爆</h4>
+<p>不使用自建消息数据库。切换会话时流式读取 CLI 的 JSONL 文件（createReadStream + readline），逐行解析过滤后返回。2000 条防爆上限，与 /resume 同源。</p>

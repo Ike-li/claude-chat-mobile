@@ -1,0 +1,60 @@
+<!-- 测试体系 · 三层测试策略：单元测试、可视化E2E、冒烟测试 -->
+<h2>三层测试策略</h2>
+
+<div class="cards">
+<div class="card"><h4>单元测试</h4><p>零 token，纯逻辑。node --test 运行 25 个文件，覆盖全部纯逻辑模块。耗时 < 1 秒。无外部依赖。</p></div>
+<div class="card"><h4>可视化 E2E</h4><p>零 token，mock server。Puppeteer 驱动 17 个测试用例（TC-1 至 TC-17），覆盖完整前端交互路径。visual-mock-server.js（2860 行）完整模拟 Socket.IO 协议。</p></div>
+<div class="card"><h4>冒烟测试</h4><p>从零 token 契约验证到真实 token E2E。14 个 smoke-*.js 脚本，覆盖会话隔离、断线重连、权限模式、effort、上传、状态栏、后台任务、并发等关键路径。</p></div>
+</div>
+
+<h2>单元测试</h2>
+
+<p>25 个测试文件覆盖：agent、cf-access、devices、doctor-checks、doctor-runtime、file-preview、file-security、history、logic、models-cache、notifications、sanitizer、sessions、setup、statusline、uploads、workdirs 等全部纯逻辑模块。执行命令：<code>node --test test/*.test.mjs</code>（排除 test/integration/）。</p>
+
+<h2>可视化 E2E</h2>
+
+<ul>
+<li><strong>mock 服务端</strong>：scripts/visual-mock-server.js（2860 行），完整 Socket.IO 协议模拟，40+ 注册场景</li>
+<li><strong>测试运行器</strong>：scripts/visual-e2e-runner.js，17 个测试用例（TC-1 至 TC-17）</li>
+<li><strong>驱动</strong>：Puppeteer，零外部依赖</li>
+<li><strong>执行</strong>：npm run test:visual</li>
+</ul>
+
+<p>17 个测试用例覆盖：流式渲染、工具卡片折叠、权限审批、AskUserQuestion 选择、StatusLine 投影、设置面板、跨 tab 权限清除、TOFU 设备信任、空状态、侧栏与会话列表、输入区交互、设置面板全模式、模态面板、乐观 UI、ExitPlanMode 审批、后台任务进度、sync:since 快照对账。</p>
+
+<h2>冒烟测试</h2>
+
+<p>14 个 scripts/smoke-*.js 脚本按验证深度分阶段：</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>脚本</th><th>验证内容</th><th>token 消耗</th></tr></thead>
+<tbody>
+<tr><td>smoke.js</td><td>M1 行走骨架（A1/A2/A4/A6 + 会话切换）</td><td>真实 token</td></tr>
+<tr><td>smoke-isolation.js</td><td>会话列表 cwd 隔离</td><td>零 token</td></tr>
+<tr><td>smoke-m2.js</td><td>安全与审批闸门（A3/A7/A8）</td><td>部分需 token</td></tr>
+<tr><td>smoke-m3.js</td><td>会话碎片化 resilience（A5）</td><td>零 token</td></tr>
+<tr><td>smoke-concurrent.js</td><td>跨 cwd 实例隔离（A13/A14）</td><td>部分需真实 token</td></tr>
+<tr><td>smoke-permmode.js</td><td>权限模式设置契约</td><td>零 token</td></tr>
+<tr><td>smoke-permmode-e2e.js</td><td>bypassPermissions 真 E2E</td><td>$0.02-0.05</td></tr>
+<tr><td>smoke-effort.js</td><td>effort 档位契约</td><td>零 token</td></tr>
+<tr><td>smoke-statusline.js</td><td>Web 状态栏</td><td>零 token（unit）+ 真实 token（E2E）</td></tr>
+<tr><td>smoke-upload.js</td><td>文件上传管线</td><td>零 token（unit）+ 真实 token（E2E）</td></tr>
+<tr><td>smoke-background-task.js</td><td>后台任务生命周期</td><td>真实 token</td></tr>
+<tr><td>smoke-apierror.js</td><td>API 错误透传</td><td>零 token（自建 HTTP mock）</td></tr>
+<tr><td>smoke-stage3-concurrent.js</td><td>同 repo 会话并发</td><td>部分需真实 token</td></tr>
+<tr><td>smoke-multirepo.js</td><td>多 repo 目录切换</td><td>零 token</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>CI 集成</h2>
+
+<p>.github/workflows/test.yml：push 到 master/dev 及所有 PR 触发。Job 1：unit-test（npm test），Job 2：visual-e2e（npm run test:visual）。两 job 均通过后方可合并。需真 Claude 的集成测试用 RUN_CLAUDE_INTEGRATION=1 opt-in。</p>
+
+<h2>覆盖率与契约</h2>
+
+<ul>
+<li><strong>覆盖率</strong>：npm run test:coverage（coverage-check.js，默认 65% 阈值）。低于阈值 CI 不通过。</li>
+<li><strong>契约校验</strong>：npm run contract:check（agent-event-contract.js），确保 visual-mock-server 覆盖所有真实 agent:event 类型。</li>
+</ul>

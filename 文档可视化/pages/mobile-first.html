@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>移动端优先的设计约束 · Claude Chat Mobile</title>
+<meta name="description" content="会话碎片化、弱网、注意力非对称——四个终端没有的问题如何塑造了整个架构。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 Claude Code 接到手机上——终端等价性的完整实现</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构总览</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界与非目标</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a><a href="versions.html"><span class="idx">06</span><span>版本里程碑</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-equivalence.html"><span class="idx">07</span><span>终端等价性原则</span></a><a href="security-model.html"><span class="idx">08</span><span>安全模型与威胁矩阵</span></a><a href="mobile-first.html" class="active"><span class="idx">09</span><span>移动端优先的设计约束</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="server.html"><span class="idx">10</span><span>服务端中枢：server.js</span></a><a href="agent-sdk.html"><span class="idx">11</span><span>Agent 会话封装：agent.js</span></a><a href="session-management.html"><span class="idx">12</span><span>会话管理：sessions.js + history.js</span></a><a href="frontend.html"><span class="idx">13</span><span>前端应用：public/</span></a><a href="infrastructure.html"><span class="idx">14</span><span>基础设施模块一览</span></a><a href="security-modules.html"><span class="idx">15</span><span>安全与诊断模块</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="event-system.html"><span class="idx">16</span><span>事件系统与契约</span></a><a href="data-flow.html"><span class="idx">17</span><span>数据流全景</span></a><a href="external-integrations.html"><span class="idx">18</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">19</span><span>快速开始</span></a><a href="deployment.html"><span class="idx">20</span><span>生产部署</span></a><a href="operations.html"><span class="idx">21</span><span>运维与故障排查</span></a><a href="doctor.html"><span class="idx">22</span><span>配置自检与安全体检</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="api-reference.html"><span class="idx">23</span><span>API 接口速查</span></a><a href="conventions.html"><span class="idx">24</span><span>项目规范与约定</span></a><a href="testing.html"><span class="idx">25</span><span>测试体系</span></a><a href="drift.html"><span class="idx">26</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · Ike-li/claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第三部分 · 方法论</b> &nbsp;/&nbsp; 移动端优先的设计约束</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">03</span> 第三部分 · 方法论</span>
+    <h1>移动端优先的设计约束</h1>
+    <p class="lead">会话碎片化、弱网、注意力非对称——四个终端没有的问题如何塑造了整个架构。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 8 分钟</span>
+      <span><span class="lbl">第</span> 10 / 27 篇</span>
+      <span class="src" title="原始文档来源">源自 docs/design.md §3</span>
+    </div>
+  </header>
+<!-- 移动端优先的设计约束 · 四个终端没有的问题如何塑造架构 -->
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>四个桌面终端没有的问题</h2>
+
+<p>移动端带来了四个桌面终端不存在的问题。每个问题都深刻影响了架构决策——系统不是"把桌面 UI 搬到手机"，而是围绕这些约束生长出来的。</p>
+
+<div class="cards">
+<div class="card"><h4>公网暴露</h4><p>桌面 CLI 在 localhost 运行，没有网络攻击面。手机需要从公网或局域网访问 Web 页面，HTTP 端口天然暴露在网络上。架构响应：三层鉴权（AUTH_TOKEN + TOFU 设备信赖 + CF Access JWT），fail-closed 不降级。11 条安全不变量覆盖文件穿越、日志脱敏、原子写、owner-only 权限。</p></div>
+<div class="card"><h4>会话碎片化</h4><p>桌面 CLI 是长连接终端会话，SSH 断开会话持有。手机浏览器随时可能关闭前台、切换 Wi-Fi 到 4G、进入后台被系统终止。WebSocket 断线是常态而非异常。架构响应：环形缓冲区 500 条 + epoch/seq 去重保证事件不丢不重；sync:since 增量同步实现断点续传；任务进程与 Socket 解耦。</p></div>
+<div class="card"><h4>小屏与弱网</h4><p>桌面终端宽 80 列无带宽限制。手机屏幕 375px 宽度，可能走 4G/5G 网络甚至弱信号。架构响应：事件增量传输、前端/后端职责分流、代码块横向滚动、前端 40 条 DOM 缓存上限避免内存压力。自托管 vendor 依赖消除 CDN 网络请求。</p></div>
+<div class="card"><h4>注意力非对称</h4><p>用户在手机上可能只进行短暂交互（锁屏、切应用）。长时间运行的任务无法在终端前持续等待。架构响应：推送通知（E15，Web Push + ntfy 双通道）让用户知道任务完成。权限审批不超时（E3/A8）——用户锁屏再打开仍可审批。后台任务注册表独立于 Socket 连接注册和跟踪异步任务。</p></div>
+</div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>架构响应总览</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>移动端问题</th><th>架构决策</th><th>涉及模块</th></tr></thead>
+<tbody>
+<tr><td>公网暴露</td><td>三层鉴权 + 11 条安全不变量 + fail-closed</td><td>server.js、devices.js、cf-access.js、file-security.js、sanitizer.js</td></tr>
+<tr><td>断线重连</td><td>环形缓冲区 + sync:since + 任务/Socket 解耦</td><td>agent.js、app.js、history.js、notifications.js</td></tr>
+<tr><td>小屏渲染</td><td>事件增量传输、前端/后端分流、代码块横向滚动、40 条 DOM 缓存</td><td>app.js、logic.js、public/index.html</td></tr>
+<tr><td>非对称注意力</td><td>推送通知（E15）、审批不超时（E3/A8）、后台任务注册表</td><td>notifications.js、agent.js、server.js</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>与桌面端的差异</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>维度</th><th>桌面 CLI</th><th>Web 移动端</th></tr></thead>
+<tbody>
+<tr><td>访问方式</td><td>本机终端直接打开。零网络依赖</td><td>浏览器输入 URL（公网或局域网）。需要 HTTP 可达</td></tr>
+<tr><td>鉴权</td><td>无。操作系统用户隔离即为边界</td><td>三层鉴权：token + 设备信赖 + CF Access JWT</td></tr>
+<tr><td>连接持续</td><td>进程生命周期。关终端则进程终止</td><td>WebSocket 随时断开重连。AgentSession 独立于连接存活</td></tr>
+<tr><td>消息同步</td><td>stdin/stdout 直接读写。零延迟</td><td>Socket.IO agent:event 事件流 + 环形缓冲去重 + sync:since 增量同步</td></tr>
+<tr><td>权限审批</td><td>终端交互式确认。输入 y/n 即时响应</td><td>permission_request/permission_response 异步消息对。审批不超时</td></tr>
+<tr><td>文件上传</td><td>直接读写文件系统。CLI 有权即可操作</td><td>浏览器 file input → uploads.js 落盘 → 路径注入。穿越防御</td></tr>
+<tr><td>多会话</td><td>单终端单会话。tmux/Screen 需额外配置</td><td>多 tab 多 AgentSession 独立并发。viewingInstanceId 路由</td></tr>
+<tr><td>通知</td><td>终端输出即为通知。无推送机制</td><td>Web Push + ntfy 双通道推送。Service Worker 承载通道</td></tr>
+<tr><td>状态显示</td><td>终端状态行（~/.claude/settings.json 配置）</td><td>statusline.js 自有实现。SDK usage + git status + CLI 版本</td></tr>
+<tr><td>历史回显</td><td>终端滚动。屏幕缓冲区保留上下文</td><td>history.js JSONL 读取 + history_append 增量推送 + 环形缓冲区内存级同步</td></tr>
+<tr><td>离线体验</td><td>无。CLI 在线才能工作</td><td>离线队列（app.js），连接恢复后重发。推送通知唤醒用户</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout note">
+  <div class="body">
+    <p>Web 移动端不是桌面 CLI 的替代品，而是补充。两者的核心差异不在 UI 外观，而在连接与消息模型：桌面是进程绑定长连接，手机是随时可能中断的事件驱动连接。架构围绕后者设计。</p>
+  </div>
+</div>
+
+        <nav class="pager"><a class="prev" href="security-model.html"><span class="dir">← 上一篇</span><span class="ttl">安全模型与威胁矩阵</span></a><a class="next" href="server.html"><span class="dir">下一篇 →</span><span class="ttl">服务端中枢：server.js</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">四个桌面终端没有的问题</a></li><li class="h2"><a href="#s2">架构响应总览</a></li><li class="h2"><a href="#s3">与桌面端的差异</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

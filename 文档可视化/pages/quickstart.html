@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>快速开始 · Claude Chat Mobile</title>
+<meta name="description" content="从零到手机访问的最短路径：安装、配置、启动。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 Claude Code 接到手机上——终端等价性的完整实现</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构总览</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界与非目标</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a><a href="versions.html"><span class="idx">06</span><span>版本里程碑</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-equivalence.html"><span class="idx">07</span><span>终端等价性原则</span></a><a href="security-model.html"><span class="idx">08</span><span>安全模型与威胁矩阵</span></a><a href="mobile-first.html"><span class="idx">09</span><span>移动端优先的设计约束</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="server.html"><span class="idx">10</span><span>服务端中枢：server.js</span></a><a href="agent-sdk.html"><span class="idx">11</span><span>Agent 会话封装：agent.js</span></a><a href="session-management.html"><span class="idx">12</span><span>会话管理：sessions.js + history.js</span></a><a href="frontend.html"><span class="idx">13</span><span>前端应用：public/</span></a><a href="infrastructure.html"><span class="idx">14</span><span>基础设施模块一览</span></a><a href="security-modules.html"><span class="idx">15</span><span>安全与诊断模块</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="event-system.html"><span class="idx">16</span><span>事件系统与契约</span></a><a href="data-flow.html"><span class="idx">17</span><span>数据流全景</span></a><a href="external-integrations.html"><span class="idx">18</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html" class="active"><span class="idx">19</span><span>快速开始</span></a><a href="deployment.html"><span class="idx">20</span><span>生产部署</span></a><a href="operations.html"><span class="idx">21</span><span>运维与故障排查</span></a><a href="doctor.html"><span class="idx">22</span><span>配置自检与安全体检</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="api-reference.html"><span class="idx">23</span><span>API 接口速查</span></a><a href="conventions.html"><span class="idx">24</span><span>项目规范与约定</span></a><a href="testing.html"><span class="idx">25</span><span>测试体系</span></a><a href="drift.html"><span class="idx">26</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · Ike-li/claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第六部分 · 部署与运维</b> &nbsp;/&nbsp; 快速开始</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">06</span> 第六部分 · 部署与运维</span>
+    <h1>快速开始</h1>
+    <p class="lead">从零到手机访问的最短路径：安装、配置、启动。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 20 / 27 篇</span>
+      <span class="src" title="原始文档来源">源自 README.md</span>
+    </div>
+  </header>
+<!-- 快速开始 · 从零到手机访问的最短路径 -->
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>前提</h2>
+
+<p>Node.js ≥ 20、claude CLI 已安装并登录（claude --version 输出正常）。</p>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>三步启动</h2>
+
+<ol class="steps">
+<li><strong>克隆仓库</strong>：<code>git clone https://github.com/Ike-li/claude-chat-mobile.git &amp;&amp; cd claude-chat-mobile</code></li>
+<li><strong>配置环境</strong>：运行 <code>node scripts/setup.js</code> 交互式配置向导。最小 .env 只需两行：<code>AUTH_TOKEN=your-token</code> 和 <code>WORK_DIR=/path/to/projects</code>。</li>
+<li><strong>启动服务</strong>：<code>npm start</code>。浏览器访问 <code>http://localhost:3000</code>。</li>
+</ol>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>访问方式</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>方式</th><th>地址</th><th>适用场景</th></tr></thead>
+<tbody>
+<tr><td>本机</td><td><code>http://localhost:3000</code></td><td>开发调试</td></tr>
+<tr><td>局域网</td><td><code>http://&lt;lan-ip&gt;:3000/#token=&lt;TOKEN&gt;</code></td><td>家里/办公室同一 Wi-Fi</td></tr>
+<tr><td>临时公网</td><td><code>cloudflared tunnel --url http://localhost:3000</code></td><td>快速测试</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout warn">
+  <div class="body">
+    <p>trycloudflare.com 临时域名适合短期测试。生产部署请走正式 Cloudflare Tunnel + Access 鉴权。</p>
+  </div>
+</div>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>启动前自检</h2>
+
+<p><code>node scripts/doctor.js</code> 执行 10 项检查（AUTH_TOKEN、CLAUDE_BIN、WORK_DIR、PORT、配置权限等）。全部通过后方可正常启动。</p>
+
+        <nav class="pager"><a class="prev" href="external-integrations.html"><span class="dir">← 上一篇</span><span class="ttl">外部集成</span></a><a class="next" href="deployment.html"><span class="dir">下一篇 →</span><span class="ttl">生产部署</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">前提</a></li><li class="h2"><a href="#s2">三步启动</a></li><li class="h2"><a href="#s3">访问方式</a></li><li class="h2"><a href="#s4">启动前自检</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

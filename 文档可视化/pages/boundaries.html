@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>职责边界与非目标 · Claude Chat Mobile</title>
+<meta name="description" content="各模块如何分工，什么坚决不做、为什么。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 Claude Code 接到手机上——终端等价性的完整实现</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构总览</span></a><a href="boundaries.html" class="active"><span class="idx">04</span><span>职责边界与非目标</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a><a href="versions.html"><span class="idx">06</span><span>版本里程碑</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-equivalence.html"><span class="idx">07</span><span>终端等价性原则</span></a><a href="security-model.html"><span class="idx">08</span><span>安全模型与威胁矩阵</span></a><a href="mobile-first.html"><span class="idx">09</span><span>移动端优先的设计约束</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="server.html"><span class="idx">10</span><span>服务端中枢：server.js</span></a><a href="agent-sdk.html"><span class="idx">11</span><span>Agent 会话封装：agent.js</span></a><a href="session-management.html"><span class="idx">12</span><span>会话管理：sessions.js + history.js</span></a><a href="frontend.html"><span class="idx">13</span><span>前端应用：public/</span></a><a href="infrastructure.html"><span class="idx">14</span><span>基础设施模块一览</span></a><a href="security-modules.html"><span class="idx">15</span><span>安全与诊断模块</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="event-system.html"><span class="idx">16</span><span>事件系统与契约</span></a><a href="data-flow.html"><span class="idx">17</span><span>数据流全景</span></a><a href="external-integrations.html"><span class="idx">18</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">19</span><span>快速开始</span></a><a href="deployment.html"><span class="idx">20</span><span>生产部署</span></a><a href="operations.html"><span class="idx">21</span><span>运维与故障排查</span></a><a href="doctor.html"><span class="idx">22</span><span>配置自检与安全体检</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="api-reference.html"><span class="idx">23</span><span>API 接口速查</span></a><a href="conventions.html"><span class="idx">24</span><span>项目规范与约定</span></a><a href="testing.html"><span class="idx">25</span><span>测试体系</span></a><a href="drift.html"><span class="idx">26</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · Ike-li/claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第一部分 · 认识项目</b> &nbsp;/&nbsp; 职责边界与非目标</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">01</span> 第一部分 · 认识项目</span>
+    <h1>职责边界与非目标</h1>
+    <p class="lead">各模块如何分工，什么坚决不做、为什么。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 8 分钟</span>
+      <span><span class="lbl">第</span> 5 / 27 篇</span>
+      <span class="src" title="原始文档来源">源自 docs/design.md §6</span>
+    </div>
+  </header>
+<!-- 职责边界与非目标 · 每个模块管什么/不管什么、非目标清单、中间层透明原则 -->
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>模块职责分工</h2>
+
+<p>每个根级 JS 模块有明确的职责边界。管什么与不管什么同样重要：</p>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>模块</th><th>管什么</th><th>不管什么</th></tr></thead>
+<tbody>
+<tr><td>server.js</td><td>HTTP/Socket.IO 路由，鉴权闸门三层编排，会话编排，推送通知调度，工作区热加载</td><td>不处理 SDK 消息映射，不管理 CLI 子进程，不存储消息内容</td></tr>
+<tr><td>agent.js</td><td>SDK query() 调用，agent:event 映射，权限闸门，后台任务注册表，环形缓冲区</td><td>不处理 HTTP 请求，不管理会话元数据持久化，不负责前端渲染</td></tr>
+<tr><td>sessions.js</td><td>会话元数据映射持久化到 data/sessions.json，currentByCwd Map，200ms 防抖异步原子写</td><td>不存储消息内容，不管理 CLI 进程生命周期，不创建或销毁 AgentSession</td></tr>
+<tr><td>history.js</td><td>CLI JSONL 文件读取，流式解析，基于 mtime 的 LRU 缓存</td><td>不写 JSONL，不修改 CLI transcript，不提供实时流（实时流由 agent:event 负责）</td></tr>
+<tr><td>workdirs.js</td><td>多工作区白名单解析与校验，workdirs.json 热加载</td><td>不管理会话，不控制 CLI 工作目录切换</td></tr>
+<tr><td>uploads.js</td><td>附件接收与落盘，路径注入到消息上下文，防穿越（O_NOFOLLOW + symlink 检查）</td><td>不扫描文件内容，不限制允许上传的文件类型</td></tr>
+<tr><td>devices.js</td><td>TOFU 设备信赖持久化，trusted-devices.json + pending-devices.json 管理</td><td>不参与鉴权逻辑决策，不管理 AUTH_TOKEN</td></tr>
+<tr><td>cf-access.js</td><td>Cloudflare Access JWT 校验，JWKS 本地验签，8s 超时</td><td>不颁发 token，不管理设备信赖，不参与非公网部署的鉴权</td></tr>
+<tr><td>file-security.js</td><td>symlink 穿越防御，owner-only 权限校验，原子写</td><td>不参与业务逻辑，不处理文件内容</td></tr>
+<tr><td>sanitizer.js</td><td>日志脱敏（15 种敏感模式匹配替换）</td><td>不写日志，不改变数据实际内容（仅脱敏日志输出副本）</td></tr>
+<tr><td>notifications.js</td><td>事件到通知文案的纯映射函数，渠道无关文案 + ntfy 元数据</td><td>不发送推送，不管理 Web Push 订阅</td></tr>
+<tr><td>statusline.js</td><td>Web 自有状态栏：SDK usage 读数，git 分支/变更状态，CLI 版本</td><td>不读 ~/.claude/settings.json，不模拟终端状态行</td></tr>
+<tr><td>app.js（前端）</td><td>UI 渲染，Socket.IO 客户端，agent:event 三层路由分发器，会话 DOM 缓存，离线队列</td><td>不调用 SDK，不访问文件系统，不存储持久状态</td></tr>
+<tr><td>logic.js（前端）</td><td>纯函数：shouldDropAgentEvent、aggregateStates、resolveEffortSelection</td><td>不操作 DOM，不发 socket 事件，不做异步操作</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>非目标清单</h2>
+
+<div class="cards">
+<div class="card">
+  <h4>多用户</h4>
+  <p>每实例单用户是安全边界。多用户引入会话隔离、权限分级、资源配额等复杂度，与中间层透明原则冲突。多租户中转 SaaS 在架构层面被排除。</p>
+</div>
+<div class="card">
+  <h4>速率限制</h4>
+  <p>单用户场景下速率限制的价值有限。CLI 和 Anthropic API 本身有调用频率上限。Web 层不做额外限制，不引入限流中间件。</p>
+</div>
+<div class="card">
+  <h4>自建消息数据库</h4>
+  <p>CLI JSONL 是唯一消息事实源。额外数据库引入双写一致性问题，增加运维负担。</p>
+</div>
+<div class="card">
+  <h4>中间层智能</h4>
+  <p>系统不做消息摘要、不修改用户输入、不优化 Claude 输出。中间层的角色是管道，不是处理器。</p>
+</div>
+<div class="card">
+  <h4>终端模拟器</h4>
+  <p>不模拟终端 ANSI 转义序列、不渲染 CLI 交互界面。Web UI 使用自有状态栏，不读 ~/.claude/settings.json 的终端状态行配置。</p>
+</div>
+<div class="card">
+  <h4>原生 App</h4>
+  <p>不做 iOS/Android 原生 App。PWA 覆盖移动端核心需求（添加到主屏幕、离线推送、全屏沉浸）。</p>
+</div>
+<div class="card">
+  <h4>Lint 构建流程</h4>
+  <p>纯 JS 项目无 TypeScript 编译、无构建步骤、无打包器。Node ESM 原生支持。前端使用自托管 vendor 依赖。零构建工具链降低了开发和部署门槛。</p>
+</div>
+</div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>中间层透明原则</h2>
+
+<div class="callout drift">
+  <div class="body">
+    <p>系统不删改、不摘要、不"优化"Claude 的输出。这是一条设计红线。系统的价值在于把 Claude CLI 的能力搬到手机，而不是在中间加一层"智能"。管道不需要脑子。用户在前端看到的内容和 CLI 输出的内容逐字节一致。</p>
+  </div>
+</div>
+
+<p>此原则的三点推论：</p>
+<ul>
+  <li>不缓存或聚合模型回复内容。历史回显直接从 CLI JSONL 读取。</li>
+  <li>不预检或后处理工具调用结果。权限闸门只问"是否允许"，不问"结果是否合理"。</li>
+  <li>不添加系统提示或注入上下文。用户发的消息逐字到达 CLI，不加前缀、后缀或格式包装。</li>
+</ul>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>前端与后端的职责边界</h2>
+
+<div class="split">
+<div>
+<h4>前端（浏览器）</h4>
+<ul>
+<li>渲染 UI，处理用户触摸/键盘交互</li>
+<li>通过 Socket.IO 发送消息和接收 agent:event</li>
+<li>管理本地易失状态（输入缓冲区、历史 DOM 缓存、设备 ID、离线队列）</li>
+<li>Service Worker 仅用于 Web Push 通知，不做离线页面缓存</li>
+<li>纯函数（logic.js）保持无副作用，可测试</li>
+</ul>
+</div>
+<div>
+<h4>后端（Node.js 服务）</h4>
+<ul>
+<li>鉴权闸门（三层：token + 设备信赖 + CF Access JWT）</li>
+<li>会话编排和 AgentSession 生命周期管理</li>
+<li>CLI 子进程创建、通信、销毁</li>
+<li>文件系统和 CLI JSONL 的独占读写访问</li>
+<li>推送通知调度（Web Push + ntfy）</li>
+<li>安全收敛：文件穿越检查、路径注入、日志脱敏</li>
+</ul>
+</div>
+</div>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>唯一事实源</h2>
+
+<div class="callout tip">
+  <div class="body">
+    <p>CLI 会话是唯一消息事实源。服务端只存元数据映射（data/sessions.json），永不存消息内容。历史消息始终从 CLI 的 JSONL 文件读取：~/.claude/projects/<projectDir>/<sessionId>.jsonl。sessions.js 的 currentByCwd Map 建立从工作目录到 sessionId 的快速索引。</p>
+  </div>
+</div>
+
+        <nav class="pager"><a class="prev" href="architecture.html"><span class="dir">← 上一篇</span><span class="ttl">系统架构总览</span></a><a class="next" href="evolution.html"><span class="dir">下一篇 →</span><span class="ttl">架构演进主线</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">模块职责分工</a></li><li class="h2"><a href="#s2">非目标清单</a></li><li class="h2"><a href="#s3">中间层透明原则</a></li><li class="h2"><a href="#s4">前端与后端的职责边界</a></li><li class="h2"><a href="#s5">唯一事实源</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

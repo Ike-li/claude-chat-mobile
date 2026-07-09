@@ -1,0 +1,52 @@
+<!-- 移动端优先的设计约束 · 四个终端没有的问题如何塑造架构 -->
+<h2>四个桌面终端没有的问题</h2>
+
+<p>移动端带来了四个桌面终端不存在的问题。每个问题都深刻影响了架构决策——系统不是"把桌面 UI 搬到手机"，而是围绕这些约束生长出来的。</p>
+
+<div class="cards">
+<div class="card"><h4>公网暴露</h4><p>桌面 CLI 在 localhost 运行，没有网络攻击面。手机需要从公网或局域网访问 Web 页面，HTTP 端口天然暴露在网络上。架构响应：三层鉴权（AUTH_TOKEN + TOFU 设备信赖 + CF Access JWT），fail-closed 不降级。11 条安全不变量覆盖文件穿越、日志脱敏、原子写、owner-only 权限。</p></div>
+<div class="card"><h4>会话碎片化</h4><p>桌面 CLI 是长连接终端会话，SSH 断开会话持有。手机浏览器随时可能关闭前台、切换 Wi-Fi 到 4G、进入后台被系统终止。WebSocket 断线是常态而非异常。架构响应：环形缓冲区 500 条 + epoch/seq 去重保证事件不丢不重；sync:since 增量同步实现断点续传；任务进程与 Socket 解耦。</p></div>
+<div class="card"><h4>小屏与弱网</h4><p>桌面终端宽 80 列无带宽限制。手机屏幕 375px 宽度，可能走 4G/5G 网络甚至弱信号。架构响应：事件增量传输、前端/后端职责分流、代码块横向滚动、前端 40 条 DOM 缓存上限避免内存压力。自托管 vendor 依赖消除 CDN 网络请求。</p></div>
+<div class="card"><h4>注意力非对称</h4><p>用户在手机上可能只进行短暂交互（锁屏、切应用）。长时间运行的任务无法在终端前持续等待。架构响应：推送通知（E15，Web Push + ntfy 双通道）让用户知道任务完成。权限审批不超时（E3/A8）——用户锁屏再打开仍可审批。后台任务注册表独立于 Socket 连接注册和跟踪异步任务。</p></div>
+</div>
+
+<h2>架构响应总览</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>移动端问题</th><th>架构决策</th><th>涉及模块</th></tr></thead>
+<tbody>
+<tr><td>公网暴露</td><td>三层鉴权 + 11 条安全不变量 + fail-closed</td><td>server.js、devices.js、cf-access.js、file-security.js、sanitizer.js</td></tr>
+<tr><td>断线重连</td><td>环形缓冲区 + sync:since + 任务/Socket 解耦</td><td>agent.js、app.js、history.js、notifications.js</td></tr>
+<tr><td>小屏渲染</td><td>事件增量传输、前端/后端分流、代码块横向滚动、40 条 DOM 缓存</td><td>app.js、logic.js、public/index.html</td></tr>
+<tr><td>非对称注意力</td><td>推送通知（E15）、审批不超时（E3/A8）、后台任务注册表</td><td>notifications.js、agent.js、server.js</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>与桌面端的差异</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>维度</th><th>桌面 CLI</th><th>Web 移动端</th></tr></thead>
+<tbody>
+<tr><td>访问方式</td><td>本机终端直接打开。零网络依赖</td><td>浏览器输入 URL（公网或局域网）。需要 HTTP 可达</td></tr>
+<tr><td>鉴权</td><td>无。操作系统用户隔离即为边界</td><td>三层鉴权：token + 设备信赖 + CF Access JWT</td></tr>
+<tr><td>连接持续</td><td>进程生命周期。关终端则进程终止</td><td>WebSocket 随时断开重连。AgentSession 独立于连接存活</td></tr>
+<tr><td>消息同步</td><td>stdin/stdout 直接读写。零延迟</td><td>Socket.IO agent:event 事件流 + 环形缓冲去重 + sync:since 增量同步</td></tr>
+<tr><td>权限审批</td><td>终端交互式确认。输入 y/n 即时响应</td><td>permission_request/permission_response 异步消息对。审批不超时</td></tr>
+<tr><td>文件上传</td><td>直接读写文件系统。CLI 有权即可操作</td><td>浏览器 file input → uploads.js 落盘 → 路径注入。穿越防御</td></tr>
+<tr><td>多会话</td><td>单终端单会话。tmux/Screen 需额外配置</td><td>多 tab 多 AgentSession 独立并发。viewingInstanceId 路由</td></tr>
+<tr><td>通知</td><td>终端输出即为通知。无推送机制</td><td>Web Push + ntfy 双通道推送。Service Worker 承载通道</td></tr>
+<tr><td>状态显示</td><td>终端状态行（~/.claude/settings.json 配置）</td><td>statusline.js 自有实现。SDK usage + git status + CLI 版本</td></tr>
+<tr><td>历史回显</td><td>终端滚动。屏幕缓冲区保留上下文</td><td>history.js JSONL 读取 + history_append 增量推送 + 环形缓冲区内存级同步</td></tr>
+<tr><td>离线体验</td><td>无。CLI 在线才能工作</td><td>离线队列（app.js），连接恢复后重发。推送通知唤醒用户</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="callout note">
+  <div class="body">
+    <p>Web 移动端不是桌面 CLI 的替代品，而是补充。两者的核心差异不在 UI 外观，而在连接与消息模型：桌面是进程绑定长连接，手机是随时可能中断的事件驱动连接。架构围绕后者设计。</p>
+  </div>
+</div>

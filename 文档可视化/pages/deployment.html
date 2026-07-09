@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>生产部署 · Claude Chat Mobile</title>
+<meta name="description" content="常驻服务 + 固定域名 + 双因素——公网安全部署的完整配方。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 Claude Code 接到手机上——终端等价性的完整实现</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构总览</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界与非目标</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a><a href="versions.html"><span class="idx">06</span><span>版本里程碑</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-equivalence.html"><span class="idx">07</span><span>终端等价性原则</span></a><a href="security-model.html"><span class="idx">08</span><span>安全模型与威胁矩阵</span></a><a href="mobile-first.html"><span class="idx">09</span><span>移动端优先的设计约束</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="server.html"><span class="idx">10</span><span>服务端中枢：server.js</span></a><a href="agent-sdk.html"><span class="idx">11</span><span>Agent 会话封装：agent.js</span></a><a href="session-management.html"><span class="idx">12</span><span>会话管理：sessions.js + history.js</span></a><a href="frontend.html"><span class="idx">13</span><span>前端应用：public/</span></a><a href="infrastructure.html"><span class="idx">14</span><span>基础设施模块一览</span></a><a href="security-modules.html"><span class="idx">15</span><span>安全与诊断模块</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="event-system.html"><span class="idx">16</span><span>事件系统与契约</span></a><a href="data-flow.html"><span class="idx">17</span><span>数据流全景</span></a><a href="external-integrations.html"><span class="idx">18</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">19</span><span>快速开始</span></a><a href="deployment.html" class="active"><span class="idx">20</span><span>生产部署</span></a><a href="operations.html"><span class="idx">21</span><span>运维与故障排查</span></a><a href="doctor.html"><span class="idx">22</span><span>配置自检与安全体检</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="api-reference.html"><span class="idx">23</span><span>API 接口速查</span></a><a href="conventions.html"><span class="idx">24</span><span>项目规范与约定</span></a><a href="testing.html"><span class="idx">25</span><span>测试体系</span></a><a href="drift.html"><span class="idx">26</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · Ike-li/claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第六部分 · 部署与运维</b> &nbsp;/&nbsp; 生产部署</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">06</span> 第六部分 · 部署与运维</span>
+    <h1>生产部署</h1>
+    <p class="lead">常驻服务 + 固定域名 + 双因素——公网安全部署的完整配方。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 12 分钟</span>
+      <span><span class="lbl">第</span> 21 / 27 篇</span>
+      <span class="src" title="原始文档来源">源自 docs/deployment.md · deploy/</span>
+    </div>
+  </header>
+<!-- 生产部署 · 常驻服务 + 固定域名 + 双因素 -->
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>部署架构</h2>
+
+<p>生产实例由四个组件构成：应用服务（Express 5 + Socket.IO 4，监听 localhost:3000）、常驻进程（macOS LaunchAgent，RunAtLoad + KeepAlive）、隧道（Cloudflare Tunnel 命名隧道，域名流量转发至本机 3000）、鉴权网关（Cloudflare Access JWT 校验，fail-closed）。</p>
+
+<p>公网请求路径：用户 → Cloudflare 边缘 → Access JWT 校验 → Tunnel → localhost:3000 → 应用路由。</p>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>隧道搭建</h2>
+
+<ol class="steps">
+<li><strong>认证</strong>：<code>cloudflared tunnel login</code>——浏览器跳转 Cloudflare 授权</li>
+<li><strong>创建命名隧道</strong>：<code>cloudflared tunnel create my-tunnel</code>——生成凭证 JSON</li>
+<li><strong>绑定 DNS</strong>：<code>cloudflared tunnel route dns my-tunnel chat.example.com</code></li>
+<li><strong>配置 ingress</strong>：编辑 <code>~/.cloudflared/config.yml</code>，写入 tunnel/credentials-file/ingress 三段</li>
+</ol>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>Access 配置</h2>
+
+<ol class="steps">
+<li>Cloudflare Zero Trust → Access → Applications → Add → Self-hosted</li>
+<li>填入域名，配置策略（Email OTP 或 Google/Microsoft IdP），指定授权邮箱</li>
+<li>取应用的 AUD tag，连同 team 名填入 .env：CF_ACCESS_HOSTNAME、CF_ACCESS_TEAM、CF_ACCESS_AUD</li>
+</ol>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>常驻服务</h2>
+
+<p>deploy/ 目录提供两个 LaunchAgent 模板：server.plist.template（应用服务）和 tunnel.plist.template（cloudflared 隧道）。替换占位符后安装：</p>
+
+<pre><code># 替换占位符
+sed -e "s|__LABEL__|com.ccm.server|g" \
+    -e "s|__REPO__|$HOME/code/claude-chat-mobile|g" \
+    -e "s|__NODE__|$(which node)|g" \
+    -e "s|__LOG__|$HOME/Library/Logs/ccm-server.log|g" \
+    deploy/server.plist.template > ~/Library/LaunchAgents/com.ccm.server.plist
+
+# 启动
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccm.tunnel.plist</code></pre>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>安全加固清单</h2>
+<ul>
+<li>收紧 permissions.allow：移除 Bash(*)、rm、sudo、curl 等危险放行</li>
+<li>固定 WORK_DIR 到具体项目目录，不使用 $HOME</li>
+<li>VAPID/Anthropic 凭据只从启动 shell 注入，不写 .env</li>
+<li>公网必上 CF Access，禁止裸暴露 3000 端口</li>
+<li>配置文件权限 0600（.env、data/cf-access-certs.json 等）</li>
+</ul>
+
+        <nav class="pager"><a class="prev" href="quickstart.html"><span class="dir">← 上一篇</span><span class="ttl">快速开始</span></a><a class="next" href="operations.html"><span class="dir">下一篇 →</span><span class="ttl">运维与故障排查</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">部署架构</a></li><li class="h2"><a href="#s2">隧道搭建</a></li><li class="h2"><a href="#s3">Access 配置</a></li><li class="h2"><a href="#s4">常驻服务</a></li><li class="h2"><a href="#s5">安全加固清单</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

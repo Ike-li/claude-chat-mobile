@@ -1,0 +1,27 @@
+<!-- 外部集成 · Cloudflare Tunnel/Access、Web Push、ntfy 四个外部系统的对接方式 -->
+<h2>四个外部系统</h2>
+
+<div class="cards">
+<div class="card"><h4>Cloudflare Tunnel</h4><p>命名隧道将 localhost:3000 投递到固定域名。cloudflared 作为独立常驻进程运行（deploy/tunnel.plist.template）。cloudflared tunnel create 创建命名隧道，cloudflared tunnel route dns 绑定 DNS，config.yml 定义 ingress 规则。cloudflared 不参与应用层逻辑，仅做 TCP 隧道。</p></div>
+<div class="card"><h4>Cloudflare Access</h4><p>JWT 验签在应用层完成（cf-access.js）。双层缓存：内存缓存 + 文件缓存（data/cf-access-certs.json），公钥获取超时 8s。fail-closed——JWT 缺失或校验失败直接 401，不降级放行。Access 会话有效期由 Cloudflare 控制，独立于浏览器会话。</p></div>
+<div class="card"><h4>Web Push</h4><p>VAPID 协议实现浏览器推送。Service Worker（sw.js）仅处理推送事件，不做缓存拦截。订阅持久化通过 push/subscribe 端点。推送失败返回 410/404 时自动退订。notificationForEvent 构造推送内容。</p></div>
+<div class="card"><h4>ntfy（可选）</h4><p>自托管 ntfy 服务通过 HTTP POST JSON body 发送。配置 NTFY_URL、NTFY_TOPIC、NTFY_TOKEN 即可启用。消息体支持中文，元数据包括 priority、tags、click 深链 URL。适用于高可靠性推送场景。</p></div>
+</div>
+
+<h2>通知渠道对比</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>维度</th><th>Web Push</th><th>ntfy</th></tr></thead>
+<tbody>
+<tr><td>iOS 支持</td><td>iOS 16.4+ 需添加到主屏幕；锁屏可靠性一般</td><td>通过 ntfy App 接收；需额外安装</td></tr>
+<tr><td>锁屏可靠性</td><td>依赖浏览器后台；iOS 定时唤醒不可控</td><td>客户端常驻通知服务；可靠性高</td></tr>
+<tr><td>配置复杂度</td><td>需 VAPID 密钥对；sw.js 注册；订阅持久化</td><td>三行环境变量即可启用</td></tr>
+<tr><td>隐私</td><td>推送经浏览器供应商基础设施</td><td>完全自托管；通知不经第三方</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>PUBLIC_URL 深链机制</h2>
+
+<p>PUBLIC_URL 使通知中的链接能复原应用状态。URL hash 参数携带三个上下文字段：instance（目标实例 ID）、session（目标会话 ID）、cwd（目标工作目录，需 realpath 规范化）。客户端 applyDeepLink 解析：instanceId 仍在 live 列表 → setViewing；实例已失效但会话在 → session:switch；都定位不到 → 打开会话列表。</p>

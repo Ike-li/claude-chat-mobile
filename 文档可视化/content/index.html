@@ -1,0 +1,97 @@
+<!-- 封面 · home:true → 生成在根 index.html，用自带 hero，不套页眉 -->
+<div class="hero">
+  <h1>Claude Chat Mobile</h1>
+  <p class="hero-tagline">把本机 Claude Code 接到手机上——终端等价性的完整实现</p>
+  <div class="hero-meta">
+    <span class="chip">v1.2.1</span>
+    <span class="chip">AGPL-3.0</span>
+    <span class="chip">Node.js + Socket.IO + PWA</span>
+  </div>
+</div>
+
+<div class="lead-extra">
+  <p>这本手册回答一个问题：<strong>这个项目怎么工作、为什么这样设计、以及你如何接手。</strong></p>
+</div>
+
+<h2>这是什么</h2>
+
+<p>Claude Chat Mobile 是一个自托管的移动端聊天 Web UI，把本机的 <code>claude</code> CLI（Claude Code）接到手机上。核心目标只有一句话：<strong>"坐在电脑前对 claude 打字"和"在手机上打字"，效果一样。</strong></p>
+
+<p>它不是新的 AI，不是 Claude 的重新实现，也不是远程桌面。它是你本机 Claude Code 的一个移动端入口——同一个 agent、同一份 CLAUDE.md、同样的 MCP 服务器、技能、hooks 和已登录会话。</p>
+
+<h2>怎么读这本手册</h2>
+
+<div class="cards">
+
+<div class="card">
+  <span class="k">◆ 起点</span>
+  <h4>先看封面与阅读指南</h4>
+  <p>了解三条阅读路线：30 分钟速览、2–3 小时完整通读、按角色切入。选一条开始。</p>
+</div>
+
+<div class="card">
+  <span class="k">01 认识</span>
+  <h4>理解项目全貌</h4>
+  <p>项目总览 → 系统架构 → 职责边界。搞清楚这是什么、为谁做、整体怎么搭的。</p>
+</div>
+
+<div class="card">
+  <span class="k">02 演进</span>
+  <h4>看清来路</h4>
+  <p>从本地 CLI 到公网移动端的逐层演进，每个关键决策解决了什么问题。</p>
+</div>
+
+<div class="card">
+  <span class="k">03 方法论</span>
+  <h4>掌握设计哲学</h4>
+  <p>终端等价性原则、安全模型、移动端优先的设计约束——三个不可动摇的支柱。</p>
+</div>
+
+<div class="card">
+  <span class="k">04 实现</span>
+  <h4>深入核心代码</h4>
+  <p>server.js → agent.js → 会话管理 → 前端应用 → 基础设施模块 → 安全模块。逐个拆解。</p>
+</div>
+
+<div class="card">
+  <span class="k">05 数据</span>
+  <h4>理解数据流</h4>
+  <p>事件系统契约、完整数据流、外部集成——数据从哪来、到哪去、怎么流动。</p>
+</div>
+
+<div class="card">
+  <span class="k">06 运维</span>
+  <h4>跑起来、跑稳</h4>
+  <p>快速开始 → 生产部署 → 日常运维 → 配置自检。从零到公网安全运行。</p>
+</div>
+
+<div class="card">
+  <span class="k">07 参考</span>
+  <h4>速查与避坑</h4>
+  <p>API 接口速查、项目规范、测试体系、漂移清单。接手和开发时的常用参考。</p>
+</div>
+
+</div>
+
+<h2>关键数字</h2>
+
+<div class="statband">
+  <div class="stat"><span class="num">17</span><span class="lbl">根级 JS 模块</span></div>
+  <div class="stat"><span class="num">24</span><span class="lbl">agent:event 事件类型</span></div>
+  <div class="stat"><span class="num">11</span><span class="lbl">安全不变量</span></div>
+  <div class="stat"><span class="num">~3500</span><span class="lbl">前端 app.js 行数</span></div>
+  <div class="stat"><span class="num">25</span><span class="lbl">单元测试文件</span></div>
+</div>
+
+<h2>技术栈</h2>
+
+<div class="kv">
+  <div class="row"><span class="key">运行时</span><span class="val">Node.js ≥20，纯 ESM，零构建</span></div>
+  <div class="row"><span class="key">HTTP 框架</span><span class="val">Express 5</span></div>
+  <div class="row"><span class="key">实时通道</span><span class="val">Socket.IO 4（WebSocket + HTTP 长轮询回退）</span></div>
+  <div class="row"><span class="key">Agent SDK</span><span class="val">@anthropic-ai/claude-agent-sdk 0.3.201</span></div>
+  <div class="row"><span class="key">鉴权</span><span class="val">jose 6（JWT / JWKS 本地验签）</span></div>
+  <div class="row"><span class="key">推送</span><span class="val">web-push（Web Push）+ ntfy（可选）</span></div>
+  <div class="row"><span class="key">前端</span><span class="val">纯 HTML/CSS/JS，PWA，marked + DOMPurify + highlight.js</span></div>
+  <div class="row"><span class="key">测试</span><span class="val">node --test（单测）+ Puppeteer（视觉 E2E）+ Playwright</span></div>
+</div>

@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>版本里程碑 · Claude Chat Mobile</title>
+<meta name="description" content="v1.0 到 v1.2.1 的关键变更与架构转折。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 Claude Code 接到手机上——终端等价性的完整实现</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构总览</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界与非目标</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a><a href="versions.html" class="active"><span class="idx">06</span><span>版本里程碑</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-equivalence.html"><span class="idx">07</span><span>终端等价性原则</span></a><a href="security-model.html"><span class="idx">08</span><span>安全模型与威胁矩阵</span></a><a href="mobile-first.html"><span class="idx">09</span><span>移动端优先的设计约束</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="server.html"><span class="idx">10</span><span>服务端中枢：server.js</span></a><a href="agent-sdk.html"><span class="idx">11</span><span>Agent 会话封装：agent.js</span></a><a href="session-management.html"><span class="idx">12</span><span>会话管理：sessions.js + history.js</span></a><a href="frontend.html"><span class="idx">13</span><span>前端应用：public/</span></a><a href="infrastructure.html"><span class="idx">14</span><span>基础设施模块一览</span></a><a href="security-modules.html"><span class="idx">15</span><span>安全与诊断模块</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="event-system.html"><span class="idx">16</span><span>事件系统与契约</span></a><a href="data-flow.html"><span class="idx">17</span><span>数据流全景</span></a><a href="external-integrations.html"><span class="idx">18</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">19</span><span>快速开始</span></a><a href="deployment.html"><span class="idx">20</span><span>生产部署</span></a><a href="operations.html"><span class="idx">21</span><span>运维与故障排查</span></a><a href="doctor.html"><span class="idx">22</span><span>配置自检与安全体检</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="api-reference.html"><span class="idx">23</span><span>API 接口速查</span></a><a href="conventions.html"><span class="idx">24</span><span>项目规范与约定</span></a><a href="testing.html"><span class="idx">25</span><span>测试体系</span></a><a href="drift.html"><span class="idx">26</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · Ike-li/claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第二部分 · 演进历程</b> &nbsp;/&nbsp; 版本里程碑</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">02</span> 第二部分 · 演进历程</span>
+    <h1>版本里程碑</h1>
+    <p class="lead">v1.0 到 v1.2.1 的关键变更与架构转折。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 8 分钟</span>
+      <span><span class="lbl">第</span> 7 / 27 篇</span>
+      <span class="src" title="原始文档来源">源自 git history · git tags</span>
+    </div>
+  </header>
+<!-- 版本里程碑 · v1.0 到 v1.2.1 的关键变更与架构转折 -->
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>版本里程碑</h2>
+
+<div class="path">
+<div class="node"><span class="pnum">v1.0.0</span><h4>首次公开发布</h4><p>基础会话能力上线。手机端发送消息到本机 Claude CLI，流式接收回复。AUTH_TOKEN 鉴权保护。TOFU 设备信赖首次确认。权限审批工作流完整实现。sessions.js 元数据持久化到 data/sessions.json。history.js JSONL 历史读取与缓存。statusline.js SDK usage + git 状态显示。</p><p><strong>架构影响</strong>：确立 Socket.IO + agent:event 事件模型。确立 CLI JSONL 为唯一消息事实源。确立每实例单用户安全边界。确立中间层透明原则。24 类 agent:event 类型固化。</p></div>
+<div class="node"><span class="pnum">v1.1.x</span><h4>CI/CD、测试套件根治、发版脚本</h4><p>GitHub Actions CI 管线建立（test.yml）。测试套件重构：server.test.mjs 移入 test/integration/，test:unit 恢复纯逻辑运行（392 测 0.6s）。DEV_MODE 泄漏修复。visual E2E 测试套件（puppeteer + gifenc + pngjs）。发版 scripts/release.sh 固化发版流程。分支模型更新：master（稳定/默认/dev）+ dev（日常开发）。</p><p><strong>架构影响</strong>：CI 加入分支保护门禁。发版流程脱离手动操作。测试隔离级别明确。master 分支保护启用。</p></div>
+<div class="node"><span class="pnum">v1.2.0–v1.2.1</span><h4>PWA 图标、文件预览、安全体检、ntfy 通知、深色主题</h4><p>PWA maskable 图标与深色主题色适配。file-preview.js 工具卡片文件预览（attributePath 唯一安全闸门）。doctor-runtime.js UI 安全体检（读合并白名单 + 6 项检查 + 脱敏报告）。ntfy 推送通知集成（notifications.js 扩展）。深色模式 CSS 自定义属性切换。</p><p><strong>架构影响</strong>：安全层新增两个模块（file-preview.js、doctor-runtime.js）。前端 CSS 架构从纯静态样式演进为 CSS 自定义属性主题化系统。PWA 支持从基础壳进化为完整 Web App。通知架构从纯 Web Push 单通道扩展到 ntfy 双通道。</p></div>
+</div>
+
+        <nav class="pager"><a class="prev" href="evolution.html"><span class="dir">← 上一篇</span><span class="ttl">架构演进主线</span></a><a class="next" href="terminal-equivalence.html"><span class="dir">下一篇 →</span><span class="ttl">终端等价性原则</span></a></nav>
+      </article>
+      
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

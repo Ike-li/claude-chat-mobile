@@ -1,0 +1,69 @@
+<!-- 项目规范与约定 · 分支纪律、提交自检、文档极简、代码风格、命名约定、测试纪律、发版流程 -->
+<h2>分支纪律</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>分支</th><th>用途</th><th>规则</th></tr></thead>
+<tbody>
+<tr><td>master</td><td>稳定发布</td><td>GitHub 默认分支；有分支保护（PR + CI 必过）；git clone 默认拿到 master</td></tr>
+<tr><td>dev</td><td>日常开发</td><td>所有功能开发在此分支上进行；feature 分支从 dev 切出，PR 合回 dev</td></tr>
+<tr><td>feature/*</td><td>功能开发</td><td>从 dev 切出；完成后 PR → dev；不在 master 上直接开发</td></tr>
+</tbody>
+</table>
+</div>
+
+<p>发版流程：dev fast-forward 合并到 master 并打 tag（scripts/release.sh：bump → ff → tag → GitHub Release）。</p>
+
+<h2>提交前自检</h2>
+
+<pre><code>npm run check              # JS 语法 + 文档一致性 + visual mock registry guard（零 token）
+node scripts/doctor.js     # 启动前配置自检
+node --test test/*.test.mjs  # 纯逻辑单测（零 token）
+npm run test:visual        # puppeteer 移动端视觉回归 E2E</code></pre>
+
+<p>推送至远程前建议执行 CI=true npm test 全量模拟（排除需真 Claude 的集成测试）。</p>
+
+<h2>文档极简原则</h2>
+
+<div class="callout note">
+  <div class="body">
+    <p>项目维护少量文档，不设治理层。不写 ADR（架构决策记录），不加 SoT 表/lint 闸/规范文件/数量预算。功能核心文档为 docs/design.md、docs/deployment.md、docs/event-contract.md。规则进入 CLAUDE.md 或保持口头传承。</p>
+  </div>
+</div>
+
+<h2>代码风格</h2>
+
+<ul>
+<li>纯 JS ESM，零构建，零打包器</li>
+<li>console.log + 时间戳足够，不引入"企业级"日志体系</li>
+<li>前端 JS 在 public/js/ 下，无框架单页应用</li>
+<li>后端模块化拆分在根级 .js 文件中，每模块职责单一</li>
+</ul>
+
+<h2>命名约定</h2>
+
+<div class="kv">
+<div class="row"><span class="key">instanceId</span><span class="val">格式 inst_N（N 为整数），进程内唯一、永不重用</span></div>
+<div class="row"><span class="key">sessionId</span><span class="val">使用 claude CLI 原生 ID，对应 transcript jsonl 文件名</span></div>
+<div class="row"><span class="key">cwd</span><span class="val">需经 fs.realpathSync 规范化，避免符号链接导致路径不一致</span></div>
+<div class="row"><span class="key">deviceToken</span><span class="val">由服务端指纹生成；首次连接自动注册，需管理员审批</span></div>
+</div>
+
+<h2>测试纪律</h2>
+
+<div class="table-wrap">
+<table>
+<thead><tr><th>测试类型</th><th>命令</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>全量模拟</td><td>CI=true npm test</td><td>仅纯逻辑测试，零 token，适合 push 前运行</td></tr>
+<tr><td>单元测试</td><td>node --test test/*.test.mjs</td><td>仅 test/ 目录下的纯逻辑测试</td></tr>
+<tr><td>集成测试</td><td>npm run test:integration</td><td>需真 server，位于 test/integration/</td></tr>
+<tr><td>可视化 E2E</td><td>npm run test:visual</td><td>零外部依赖 mock server，Puppeteer 驱动</td></tr>
+<tr><td>真 Claude 集成</td><td>RUN_CLAUDE_INTEGRATION=1 npm test</td><td>opt-in，消耗 token，默认跳过</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2>发版流程</h2>
+
+<p>scripts/release.sh 自动化发版：bump 版本号 → fast-forward dev 到 master → 打 tag → 创建 GitHub Release + CI 模拟/ls-remote/trap 护栏。使用 --dry-run 预览操作而不执行。</p>
