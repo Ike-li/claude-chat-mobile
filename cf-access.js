@@ -9,7 +9,9 @@ import { dirname, join } from 'node:path';
 import { writeOwnerOnlyFile } from './file-security.js';
 
 const HERE = import.meta.dirname;
-const CACHE_FILE = join(HERE, 'data', 'cf-access-certs.json');
+// CCM_DATA_DIR 覆盖状态根——同 devices.js/sessions.js，让测试/探测隔离，绝不污染生产 data/ 的证书缓存
+// （否则任何跑 initCfAccess 的测试会真发网络拉取并覆盖生产 cf-access-certs.json）。
+const CACHE_FILE = join(process.env.CCM_DATA_DIR || join(HERE, 'data'), 'cf-access-certs.json');
 
 let hostname = '';   // 公网主机名（小写、无端口）
 let issuer = '';     // https://<team>.cloudflareaccess.com
