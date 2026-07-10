@@ -299,7 +299,7 @@ export class AgentSession {
   }
 
   async setPermissionMode(mode) {
-    const VALID = ['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk'];
+    const VALID = ['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk', 'auto']; // 'auto'：SDK 用模型分类器自动批准/拒绝权限请求
     if (!VALID.includes(mode)) {
       this.emit('error', { message: `未知权限档：${mode}`, recoverable: true });
       return false;
@@ -766,6 +766,10 @@ export class AgentSession {
 
       case 'assistant': {
         this._flushText(); this._flushThink();
+        // 子 agent（Task 工具内部）消息整条跳过——必须在 msg.error 判断之前：子 agent 自己的一次 API 报错
+        // （如限流）只属于该子 agent，不该被误报为主会话级别的错误（code-review P0：此前 parent_tool_use_id
+        // 守卫在 msg.error 分支之后，error 分支自己 break 掉，导致守卫对错误消息形同虚设）。
+        if (msg.parent_tool_use_id) break;
         if (msg.error) {
           // msg.error 只是 SDK 归类枚举桶（unknown/rate_limit/invalid_request/…），不是上游原文；
           // 真正的上游报文在 message.content 文本块里（SDK 已加 "API Error:" 前缀）。终端等价 =
@@ -781,7 +785,6 @@ export class AgentSession {
           // 'agent.test.mjs 回归锚点(轮⇒result 假设)'——该假设一破即红，作 CLI 升级预警。
           break;
         }
-        if (msg.parent_tool_use_id) break;
         this.maybeSynthesizeAutoTurn(); // 非流式网关无 message_start，assistant 边界兜底合成（flag 已被 message_start 消费则 no-op）
         // E16：单次 API 调用口径的 usage（stream_event 在非流式网关缺席、result.usage 轮内聚合高估 ctx）；
         // subagent 消息已被上方 parent_tool_use_id 守卫排除

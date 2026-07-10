@@ -466,6 +466,15 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  test('assistant 带 error 且 parent_tool_use_id 非空 → 子 agent 内部报错不应误报为主会话 error（code-review P0）', () => {
+    const { s, events } = makeSession();
+    // 子 agent（Task 工具内部）自己的一次 API 报错（如限流），不是主会话级别的失败。
+    s.map({ type: 'assistant', error: 'rate_limit', parent_tool_use_id: 'parent-1',
+      message: { content: [{ type: 'text', text: 'API Error: 429 Too Many Requests' }] } });
+    assert.equal(events.length, 0, '子 agent 自己的 API 报错不应外露为主会话 error 事件');
+    s.dispose();
+  });
+
   test('user 的 parent_tool_use_id 非空 → 跳过（子 agent 不外露）', () => {
     const { s, events } = makeSession();
     s.map({ type: 'user', parent_tool_use_id: 'parent-1', message: { content: [
@@ -1173,6 +1182,15 @@ test.describe('权限闸门', () => {
     // setPermissionMode 是 async——可选链 await this.q?.setPermissionMode 对 null q 即 no-op
     await s.setPermissionMode('plan');
     assert.equal(s.permissionMode, 'plan');
+    s.dispose();
+  });
+
+  test("setPermissionMode：'auto'（SDK 实际支持的第 6 档，模型分类器自动批准/拒绝）应被接受，不报未知权限档（code-review P1）", async () => {
+    const { s, events } = makeSession();
+    const ok = await s.setPermissionMode('auto');
+    assert.equal(ok, true);
+    assert.equal(s.permissionMode, 'auto');
+    assert.equal(events.find(e => e.type === 'error'), undefined);
     s.dispose();
   });
 
