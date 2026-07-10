@@ -150,18 +150,23 @@ export function catchUpStep(state, { messages, localBusy = false }) {
 // 外部写入时上锁，但没有任何自动释放路径（setMirror(false) 仅在「无查看会话」「切了会话」触发），导致终端
 // 写一次就把移动端输入锁死到用户手动切会话/接管为止，即便终端 turn 早已结束。catchUpTick 每 tick 调一次本函数。
 // state = { readonly, quietTicks }：
-//   · externalWrite（本 tick catchUpStep emit 非空 = 观测到外部落定新消息）→ 上锁、quietTicks 清零；
+//   · externalWrite（本 tick catchUpStep emit 非空 = 观测到外部落定新【文本】消息）→ 上锁、quietTicks 清零；
 //   · localBusy（web 自己在跑 turn）→ 终端是否静默无从判断 → 保持当前锁态、quietTicks 清零（不借己方忙碌攒静默）；
-//   · idle 且无外部写入 → quietTicks++；累计到 MIRROR_RELEASE_QUIET_TICKS 判「终端已静默足够久、turn 已停」→ 自动解锁。
-// 保守取舍（见对话）：「静默 N tick」≠「终端 turn 一定结束」（可能在跑长工具/思考、不落盘），故 N 取偏大值；
-//   且前端「仍要发送」手动接管（mirrorOverriddenSid）是另一条独立解锁路径，不受本函数影响，作并发写兜底。
+//   · keepAlive（transcript 文件仍在增长=终端在写盘，但落的是 tool_use/tool_result 等不进 text-only catchUpStep len 的条目）
+//     → 【已锁时】维持锁、quietTicks 清零，免得终端密集跑工具/思考期间被误判静默而熄横幅；【不上锁】——上锁只靠
+//     externalWrite（未锁分支在下方先 return），文件增长不凭空造锁，不把 web 自己 resume 的写盘误判成终端锁；
+//   · idle 且无外部写入、文件也不再增长（真静默）→ quietTicks++；累计到 MIRROR_RELEASE_QUIET_TICKS → 自动解锁。
+// 保守取舍：keepAlive 用文件增长做「终端还活着」的弱判据【仅延缓解锁】——是本项目刻意规避的「mtime 判活」近亲，
+//   但风险低一档（不上锁→绝不误锁死进不去，最坏是终端真停后晚 ~N tick 才解锁）；前端「仍要发送」手动接管仍是兜底。
+//   ⚠️ 前提：web 纯查看 idle 期间其自身 resume 进程不 append transcript（否则 keepAlive 恒真→退回锁死，靠接管兜）——须 live 验证。
 export const MIRROR_RELEASE_QUIET_TICKS = 5; // ×CATCH_UP_INTERVAL_MS(2.5s) ≈ 12.5s 终端静默 → 自动解锁
-export function mirrorReleaseStep(state, { externalWrite = false, localBusy = false } = {}) {
+export function mirrorReleaseStep(state, { externalWrite = false, keepAlive = false, localBusy = false } = {}) {
   const prevReadonly = Boolean(state?.readonly);
   const prevQuiet = Number(state?.quietTicks) || 0;
   if (externalWrite) return { readonly: true, state: { readonly: true, quietTicks: 0 } };
   if (localBusy) return { readonly: prevReadonly, state: { readonly: prevReadonly, quietTicks: 0 } };
   if (!prevReadonly) return { readonly: false, state: { readonly: false, quietTicks: 0 } };
+  if (keepAlive) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘（跑工具/思考）→ 维持锁、静默清零；不上锁靠上一行未锁 return
   const quietTicks = prevQuiet + 1;
   const readonly = quietTicks < MIRROR_RELEASE_QUIET_TICKS;
   return { readonly, state: { readonly, quietTicks: readonly ? quietTicks : 0 } };
@@ -393,5 +398,18 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
     return true;
   } catch {
     return false;
+  }
+}
+
+// transcript 当前字节大小（只读镜像锁的 keep-alive 判活用：文件在长=终端在写盘，含跑工具时的
+// tool_use/tool_result——这些被 getSessionHistory 的 text-only 过滤挡在 len 外，故单看历史长度会误判静默）。
+// id 同 sessionFileExists 做字符集校验防路径穿越；文件不存在/非法 id → -1（catchUpTick 据此本 tick 不判增长）。
+export async function sessionFileSize(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
+  if (typeof sessionId !== 'string' || !/^[0-9a-zA-Z_-]+$/.test(sessionId)) return -1;
+  try {
+    const { size } = await stat(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`));
+    return size;
+  } catch {
+    return -1;
   }
 }

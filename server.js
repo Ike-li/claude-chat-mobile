@@ -16,7 +16,7 @@ import compression from 'compression';
 import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
 import * as sessions from './sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache, catchUpStep, mirrorReleaseStep, readLastPermissionMode } from './history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, getProjectDir, invalidateListCache, catchUpStep, mirrorReleaseStep, readLastPermissionMode } from './history.js';
 import { notificationForEvent, ntfyMetaFor, ntfyRequestInit } from './notifications.js';
 import { attributePath, buildDiff, readPreview } from './file-preview.js';
 import { runDoctor } from './doctor-runtime.js';
@@ -744,10 +744,11 @@ let catchUpState = { baseline: 0, wasBusy: false };
 // 原实现上锁后无任何自动释放路径，终端写一次就把移动端输入锁死到手动切会话/接管为止。现每 tick 据
 // 「本 tick 有无外部写入 / web 是否在跑」推进 quietTicks：终端静默足够久（idle 且连续 N tick 无外部写入）自动解锁。
 let mirrorRelease = { readonly: false, quietTicks: 0 };
+let mirrorLastSize = -1;                            // 上一 tick 的 transcript 字节大小（keep-alive 判文件增长）；-1=基线未建立（切入 / localBusy 后首个正常 tick 只记 size 不判增长）
 async function catchUpTick() {
   const id = viewingInstanceId;
   const a = id ? agents.get(id) : null;
-  if (!a || !a.sessionId) { catchUpKey = null; mirrorRelease = { readonly: false, quietTicks: 0 }; setMirror(false, null); return; } // 无查看会话：停、复位释放态
+  if (!a || !a.sessionId) { catchUpKey = null; mirrorRelease = { readonly: false, quietTicks: 0 }; mirrorLastSize = -1; setMirror(false, null); return; } // 无查看会话：停、复位释放态
   const key = `${a.cwd}\x00${a.sessionId}`;
   const st = instanceState(id);
   const localBusy = st === 'busy' || st === 'permission';
@@ -758,21 +759,28 @@ async function catchUpTick() {
     catchUpKey = key;
     catchUpState = { baseline: seedLen, wasBusy: localBusy };
     mirrorRelease = { readonly: false, quietTicks: 0 };  // 切会话：释放态复位（新会话按其自身外部写入重判）
+    mirrorLastSize = -1;                                 // 基线未建立：切入首个正常 tick 只记 size、不判增长
     setMirror(false, a.sessionId, true); // 切入不预锁：web resume 自身会刷 mtime、不可作判据；仅下方观察到外部真写入才锁。force 清上个会话残留的锁。
     return;
   }
   if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
     catchUpState = { baseline: catchUpState.baseline, wasBusy: true };
+    mirrorLastSize = -1;                                             // 作废 size 基线：己方 turn 会写盘涨 size，不能算终端 keep-alive；localBusy 结束后首个正常 tick 重建
     const rel = mirrorReleaseStep(mirrorRelease, { externalWrite: false, localBusy: true });
     mirrorRelease = rel.state;
     setMirror(rel.readonly, a.sessionId);
     return;
   }
-  let messages;
+  let messages, curSize = -1;
   try { messages = await getSessionHistory(a.sessionId, a.cwd); } catch { return; }
+  try { curSize = await sessionFileSize(a.sessionId, a.cwd); } catch { curSize = -1; }
   const { emit, state } = catchUpStep(catchUpState, { messages, localBusy: false });
-  catchUpState = state;
-  if (viewingInstanceId !== id) return;                              // await 让出后视图可能已切走：不推、不动锁（切走由下轮切换分支重判）
+  if (viewingInstanceId !== id) return;                              // await 让出后视图可能已切走：作废本 tick 观察、不提交 baseline/size（切走由下轮切换分支重判）
+  catchUpState = state;                                              // 视图仍在才提交 baseline——移到切走判断之后，防切走瞬间污染 baseline 致那段外部写入在 catchUp 路径漏推
+  // keep-alive：transcript 文件比上 tick 大 = 终端在写盘（含跑工具/思考的 tool_use/tool_result，被 text-only 过滤挡在 catchUpStep len 外）。
+  // 仅基线已建立(lastSize≥0)时判增长；切入 / localBusy 后首 tick 只记 size 不判（避免把切入前既有体量或己方写盘误当终端活跃）。
+  const keepAlive = mirrorLastSize >= 0 && curSize > mirrorLastSize;
+  mirrorLastSize = curSize;
   const externalWrite = emit.length > 0;
   if (externalWrite) {                                               // 观察到外部写入 → 追平尾巴
     io.emit('agent:event', {
@@ -780,7 +788,7 @@ async function catchUpTick() {
       type: 'history_append', payload: { messages: emit, external: true }
     });
   }
-  const rel = mirrorReleaseStep(mirrorRelease, { externalWrite, localBusy: false }); // 外部写入→锁；idle 无外部→累计静默、达阈值自动解锁
+  const rel = mirrorReleaseStep(mirrorRelease, { externalWrite, keepAlive, localBusy: false }); // 外部 text 写入→锁；文件仍在长(跑工具)→维持锁；真静默→累计、达阈值自动解锁
   mirrorRelease = rel.state;
   setMirror(rel.readonly, a.sessionId);                             // setMirror 仅在锁态变化时广播（解锁瞬间→前端恢复输入）
 }

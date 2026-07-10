@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, listSessions, listSessionsPage, sessionFileExists, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, lastPermissionMode, readLastPermissionMode } from '../history.js';
+import { getProjectDir, listSessions, listSessionsPage, sessionFileExists, sessionFileSize, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, lastPermissionMode, readLastPermissionMode } from '../history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -55,6 +55,35 @@ test('sessionFileExists: 文件存在时返回 true', async () => {
   const dir = join(BASE, getProjectDir(cwd));
   writeJSONL(dir, 'session-abc', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
   assert.equal(await sessionFileExists(cwd, 'session-abc', { baseDir: BASE }), true);
+});
+
+// ── sessionFileSize（只读镜像锁 keep-alive 判活用；注意参数序 (sessionId, cwd) 与 sessionFileExists 相反）──
+
+test('sessionFileSize: 非法 id（路径穿越 / 空串）→ -1', async () => {
+  assert.equal(await sessionFileSize('../etc/passwd', '/cwd', { baseDir: BASE }), -1);
+  assert.equal(await sessionFileSize('foo/bar', '/cwd', { baseDir: BASE }), -1);
+  assert.equal(await sessionFileSize('foo.jsonl', '/cwd', { baseDir: BASE }), -1);
+  assert.equal(await sessionFileSize('', '/cwd', { baseDir: BASE }), -1);
+});
+
+test('sessionFileSize: 合法 id 但文件不存在 → -1', async () => {
+  assert.equal(await sessionFileSize('no-such-session', '/cwd', { baseDir: BASE }), -1);
+});
+
+test('sessionFileSize: 文件存在 → 正字节数；追加后变大（keep-alive 判活的依据）', async () => {
+  const cwd = '/test/size';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sess-1', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
+  const s1 = await sessionFileSize('sess-1', cwd, { baseDir: BASE });
+  assert.ok(s1 > 0, '存在的文件应返回正字节数');
+  // 追加一条【纯 tool_use】（不进 getSessionHistory 的 text-only len）→ 文件仍变大：
+  // 这正是治本的核心前提——终端跑工具时历史 len 不动、但 size 在长。
+  writeJSONL(dir, 'sess-1', [
+    { type: 'user', message: { role: 'user', content: 'hi' } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't', name: 'Read', input: {} }] } },
+  ]);
+  const s2 = await sessionFileSize('sess-1', cwd, { baseDir: BASE });
+  assert.ok(s2 > s1, '追加 tool_use 条目后 size 应变大（终端跑工具期间 keep-alive 据此判活）');
 });
 
 // ── listSessions ───────────────────────────────────────────────────────────

@@ -95,3 +95,40 @@ test('发现1：未上锁时 idle 不产生锁、quietTicks 恒 0（无终端活
   assert.equal(s.readonly, false, '从未观测外部写入 → 不应凭空上锁');
   assert.equal(s.quietTicks, 0);
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 治本：文件增长 keep-alive —— CLI 跑工具/思考期间 transcript 只落 tool_use/tool_result（被
+// getSessionHistory 的 text-only 过滤挡掉、不进 len），catchUpStep 判「无外部写入」→ 原实现会误累计静默、
+// 12.5s 熄横幅（即便终端明明在密集干活）。keepAlive（transcript 文件仍在增长=终端在写盘）在【已锁】时维持锁、
+// 不累计静默；但【不上锁】——上锁仍只靠 externalWrite（text 新消息）强判据，故未锁时文件增长不凭空造锁
+// （避免把 web 自己 resume 进程的写盘误判成终端锁，这是本项目刻意规避 mtime 判活的老坑，风险降一档：只延缓解锁）。
+// 优先级：externalWrite（上锁）> localBusy（保持）> 未锁（不上锁）> keepAlive（已锁则维持）> 静默累计。
+
+test('keepAlive：已锁 + 文件持续增长（终端跑工具、无 text 新消息）→ 维持锁、不累计静默、绝不误解锁', () => {
+  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+  let s = { readonly: false, quietTicks: 0 };
+  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // text 写入上锁
+  // 此后 12 tick 均无 text 新消息(externalWrite=false)，但文件在长(keepAlive=true)=终端在跑工具/思考
+  for (let i = 0; i < 12; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: true, localBusy: false }); s = r.state; }
+  assert.equal(r.readonly, true, 'keepAlive 期间终端仍在写盘 → 横幅应维持，绝不因静默累计而熄');
+  assert.equal(s.quietTicks, 0, 'keepAlive 每 tick 把 quietTicks 清零');
+});
+
+test('keepAlive：未上锁时文件增长不上锁（上锁只靠 text externalWrite，不误判 web 自身写盘）', () => {
+  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+  let s = { readonly: false, quietTicks: 0 };
+  for (let i = 0; i < 8; i++) { const r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: true, localBusy: false }); s = r.state; }
+  assert.equal(s.readonly, false, '从未 text 写入 → 即便文件在长也不上锁');
+});
+
+test('keepAlive：终端「跑工具」转「真静默」→ keepAlive 停止后连续 5 静默 tick 才自动解锁', () => {
+  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+  let s = { readonly: false, quietTicks: 0 };
+  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
+  for (let i = 0; i < 6; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: true, localBusy: false }); s = r.state; } // 跑工具中
+  assert.equal(r.readonly, true, '跑工具期间(文件在长)仍锁');
+  for (let i = 0; i < 4; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, localBusy: false }); s = r.state; } // 终端真停、文件不再长
+  assert.equal(r.readonly, true, '真静默 4 tick 未达阈值 → 仍锁');
+  r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, localBusy: false });
+  assert.equal(r.readonly, false, '真静默满 5 tick → 自动解锁');
+});
