@@ -2972,6 +2972,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   }
   function onMirrorState(ev) {
     // readonly=true 只对当前查看会话生效；readonly=false（sessionId 可能为 null）一律解锁。
+    // ⚠️ 已知边界（code-review 发现3，有意不修）：mirror_state 是 io.emit 广播 + 服务端 viewingInstanceId
+    //   是单例全局（一次只跟踪一个会话的锁）。readonly=false 这里【无条件解锁】——两台设备同时看不同会话时，
+    //   给会话 B 的解锁会误解锁正看着会话 A 的另一端。属"单活跃查看者"架构限制，仅多设备-不同会话场景触发；
+    //   彻底修需把 viewing/catchup/mirror 全改 per-socket + 定向 emit（大改），单用户工具不值，故保留。
     const readonly = !!ev.payload?.readonly;
     if (readonly && ev.instanceId !== viewingInstanceId) return;
     applyMirror(readonly, ev.sessionId);

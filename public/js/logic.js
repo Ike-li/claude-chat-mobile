@@ -174,6 +174,11 @@ export function syncAckAction(err, res) {
 //   replayed===0 && !hasCache → 'load'（聊天区空、拉磁盘首次填充，不必清屏）；
 //   replayed===0 && hasCache && diskLen>seenDiskLen → 'reload'（外部写入盲区：缓存已过期，清屏全量重载）；
 //   否则 → 'keep'（缓存仍是最新，保留 DOM 秒恢复）。
+// ⚠️ 已知边界（code-review 发现4，有意不修）：seenDiskLen 只由 loadHistory/onHistoryAppend 维护，
+//   web 自己 live 流跑出来的轮次【不】更新它。于是"发一轮(磁盘增长)→切走→切回同实例(无外部活动、replayed=0、
+//   缓存命中)"会 diskLen>seenDiskLen → 多余 reload（闪屏+滚动跳，但内容正确）。这是【安全侧】：现状 under-count
+//   → 多 reload(安全)；若改成让 live 轮 bump seenDiskLen，一旦 over-count 就变 under-reload = 漏外部写入 =
+//   数据丢失(正是 #1 盲区)。宁可闪一下、不可漏消息，故保留。
 export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seenDiskLen = 0 } = {}) {
   if (gap) return 'reload';
   if (replayed > 0) return 'keep';
