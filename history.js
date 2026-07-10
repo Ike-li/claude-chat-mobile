@@ -80,6 +80,10 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
         // 回显时跳过，否则重载后会显示成一条原始 XML 用户气泡（后续的 assistant 汇报本身自解释）。
         // 要求成对闭合，避免误伤用户随口以裸 <task-notification> 开头（少含闭合标签）的真实消息。
         if (content.trimStart().startsWith('<task-notification>') && content.includes('</task-notification>')) continue;
+        // CLI 写盘的系统行（isMeta=false，漏过上面的 isMeta 闸）：slash 命令注入的 <command-*>/<local-command-*>
+        // 标签块、[Request interrupted by user] 打断标记、resume 空 turn 的 'No response requested.'。非对话内容，
+        // 回显时跳过——否则会当成 user/assistant 气泡混进历史（见 test「CLI 系统行被过滤」）。
+        if (isCliSystemLine(content)) continue;
         messages.push({
           role: entry.message?.role || entry.type,
           content,
@@ -140,6 +144,23 @@ function extractContent(content) {
       .join('\n');
   }
   return '';
+}
+
+// 识别 CLI 写盘的「系统行」——非对话内容，但 isMeta=false 会漏过 getSessionHistory 的 isMeta 闸，须按 content
+// 形态显式过滤，否则回显成气泡（实测切多次 model/effort + 多次 interrupt 的会话，噪音可达回显的 ~30%）。
+// 只认「以标签开头且闭合」/「整条精确等于标记」，避免误伤用户以这些词开头的真实消息（与 <task-notification>
+// 要求闭合标签同款谨慎）。API Error（上游/网络错误）是真实运行事件、有诊断价值，不在此列——过滤它属独立决策。
+function isCliSystemLine(content) {
+  const t = content.trim();
+  // slash 命令注入：一次 /model、/effort 等被 CLI 拆成 <command-name>/<command-message>/<command-args>
+  // 标签块（起始行 isMeta=false），及其 <local-command-stdout>/<local-command-stderr> 输出。
+  if (/^<command-(name|message|args)>/.test(t) && /<\/command-(name|message|args)>/.test(t)) return true;
+  if (/^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t)) return true;
+  // 用户打断标记（含 [Request interrupted by user] 与 [... for tool use] 变体）。
+  if (/^\[Request interrupted by user[^\]]*\]$/.test(t)) return true;
+  // Continue/继续 触发的 resume 空 turn 占位（assistant）。
+  if (t === 'No response requested.') return true;
+  return false;
 }
 
 // ---- 会话列表：与 CLI /resume 同源，直接扫 ~/.claude/projects/<编码cwd>/ ----
