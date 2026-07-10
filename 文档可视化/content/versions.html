@@ -1,8 +1,0 @@
-<!-- 版本里程碑 · v1.0 到 v1.2.1 的关键变更与架构转折 -->
-<h2>版本里程碑</h2>
-
-<div class="path">
-<div class="node"><span class="pnum">v1.0.0</span><h4>首次公开发布</h4><p>基础会话能力上线。手机端发送消息到本机 Claude CLI，流式接收回复。AUTH_TOKEN 鉴权保护。TOFU 设备信赖首次确认。权限审批工作流完整实现。sessions.js 元数据持久化到 data/sessions.json。history.js JSONL 历史读取与缓存。statusline.js SDK usage + git 状态显示。</p><p><strong>架构影响</strong>：确立 Socket.IO + agent:event 事件模型。确立 CLI JSONL 为唯一消息事实源。确立每实例单用户安全边界。确立中间层透明原则。24 类 agent:event 类型固化。</p></div>
-<div class="node"><span class="pnum">v1.1.x</span><h4>CI/CD、测试套件根治、发版脚本</h4><p>GitHub Actions CI 管线建立（test.yml）。测试套件重构：server.test.mjs 移入 test/integration/，test:unit 恢复纯逻辑运行（392 测 0.6s）。DEV_MODE 泄漏修复。visual E2E 测试套件（puppeteer + gifenc + pngjs）。发版 scripts/release.sh 固化发版流程。分支模型更新：master（稳定/默认/dev）+ dev（日常开发）。</p><p><strong>架构影响</strong>：CI 加入分支保护门禁。发版流程脱离手动操作。测试隔离级别明确。master 分支保护启用。</p></div>
-<div class="node"><span class="pnum">v1.2.0–v1.2.1</span><h4>PWA 图标、文件预览、安全体检、ntfy 通知、深色主题</h4><p>PWA maskable 图标与深色主题色适配。file-preview.js 工具卡片文件预览（attributePath 唯一安全闸门）。doctor-runtime.js UI 安全体检（读合并白名单 + 6 项检查 + 脱敏报告）。ntfy 推送通知集成（notifications.js 扩展）。深色模式 CSS 自定义属性切换。</p><p><strong>架构影响</strong>：安全层新增两个模块（file-preview.js、doctor-runtime.js）。前端 CSS 架构从纯静态样式演进为 CSS 自定义属性主题化系统。PWA 支持从基础壳进化为完整 Web App。通知架构从纯 Web Push 单通道扩展到 ntfy 双通道。</p></div>
-</div>

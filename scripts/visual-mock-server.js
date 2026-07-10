@@ -16,6 +16,16 @@ const io = new Server(httpServer, {
 });
 const REJECTED_AUTH_TOKENS = new Set(['bad-token', 'invalid-token', 'expired-token']);
 
+// demo:* 场景（介绍视频录屏用）：气泡里展示真实感中文提问而非命令本身；test:* 不受影响
+const DEMO_USER_TEXT = {
+  'demo:stream': '梳理一下这个仓库的架构，然后给 README 补一节部署说明',
+  'demo:tool': '修掉登录页在 iOS 上键盘弹起时输入框被遮挡的问题',
+  'demo:permission': '改完了，提交然后推到远程',
+  'demo:question': '这个修复直接发个版吧',
+  'demo:tab': '现在手上有哪些任务在跑？',
+  'demo:statusline': '这轮花了多少？上下文还剩多少？'
+};
+
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token;
   if (REJECTED_AUTH_TOKENS.has(token)) {
@@ -831,6 +841,26 @@ io.on('connection', socket => {
       ack(0);
     }
   });
+
+  // demo:* 场景共用小件：广播实例快照 / 中文按块流式（中文无空格分词，按 6 字块推进）
+  const emitInstancesSnapshot = () => {
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0]?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+    });
+  };
+  const streamZh = async (messageId, text, seq0) => {
+    const chunks = text.match(/[\s\S]{1,6}/g) || [];
+    let seq = seq0;
+    for (const chunk of chunks) {
+      socket.emit('agent:event', {
+        seq: seq++, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'text_delta', payload: { messageId, text: chunk }
+      });
+      await delay(50);
+    }
+    return seq;
+  };
 
   const scenarioRegistry = createVisualMockScenarioRegistry([
     {
@@ -2631,6 +2661,228 @@ io.on('connection', socket => {
         });
       },
     },
+    // ---- demo:* 场景：介绍视频录屏用的真实感中文对话（test:* 是测试基建，勿混用）----
+    {
+      command: 'demo:stream',
+      run: async ({ activeInst }) => {
+        activeInst.state = 'busy';
+        emitInstancesSnapshot();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_demo_stream', text: '<thinking>先读 README 和 server.js，理出模块边界和部署路径……</thinking>' }
+        });
+        await delay(900);
+        const reply = [
+          '这个仓库是**手机 ↔ 本机 claude CLI** 的桥：',
+          '',
+          '1. **server.js** — Express + Socket.IO，事件带单调 seq，断线重连按序补发',
+          '2. **agent.js** — Agent SDK 会话编排，危险操作转手机审批',
+          '3. **public/** — 零构建前端，PWA 可安装',
+          '',
+          '```bash',
+          'npm start   # 默认 3000 端口，生产用常驻服务',
+          '```',
+          '',
+          '部署一节已补进 README：LaunchAgent 常驻 + Cloudflare Access 两步。'
+        ].join('\n');
+        const seq = await streamZh('msg_demo_stream', reply, 2);
+        activeInst.state = 'idle';
+        emitInstancesSnapshot();
+        socket.emit('agent:event', {
+          seq, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_demo_stream', durationMs: 5200, costUsd: 0.0042, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      command: 'demo:tool',
+      run: async ({ activeInst }) => {
+        activeInst.state = 'busy';
+        emitInstancesSnapshot();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_demo_tool', text: '<thinking>键盘弹起时 visualViewport 变化没被监听，输入条被顶出视口……</thinking>' }
+        });
+        await delay(700);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_demo_read', name: 'read_file', inputSummary: 'public/js/app.js' }
+        });
+        await delay(1100);
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_demo_read', ok: true, outputSummary: '读取 812 行' }
+        });
+        let seq = await streamZh('msg_demo_tool', '找到了：`visualViewport` 的 resize 事件没监听，键盘一弹起输入条就被遮住。补上监听，让输入条贴住键盘。', 4);
+        socket.emit('agent:event', {
+          seq: seq++, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_demo_edit', name: 'edit_file', inputSummary: 'public/js/app.js' }
+        });
+        await delay(1300);
+        socket.emit('agent:event', {
+          seq: seq++, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_demo_edit', ok: true, outputSummary: '+18 −2，输入条跟随键盘高度' }
+        });
+        socket.emit('agent:event', {
+          seq: seq++, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_demo_test', name: 'run_command', inputSummary: 'npm run test:unit' }
+        });
+        await delay(1200);
+        socket.emit('agent:event', {
+          seq: seq++, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_demo_test', ok: true, outputSummary: '✓ 392 tests 通过 (0.6s)' }
+        });
+        seq = await streamZh('msg_demo_tool', '\n\n修好了。iOS 上键盘弹起时，输入条现在始终贴在键盘上方。', seq);
+        activeInst.state = 'idle';
+        emitInstancesSnapshot();
+        socket.emit('agent:event', {
+          seq, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_demo_tool', durationMs: 7800, costUsd: 0.0113, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      command: 'demo:permission',
+      run: async ({ activeInst }) => {
+        activeInst.state = 'busy';
+        emitInstancesSnapshot();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_demo_perm', text: '<thinking>先提交本地改动，push 需要机主批准……</thinking>' }
+        });
+        await delay(700);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_demo_commit', name: 'run_command', inputSummary: 'git commit -m "fix: iOS 键盘遮挡输入框"' }
+        });
+        await delay(1100);
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_demo_commit', ok: true, outputSummary: '[dev 3f2a1c8] 2 files changed, +18 −2' }
+        });
+        await delay(400);
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_demo_push', name: 'run_command', inputSummary: 'git push origin dev' }
+        });
+        await delay(500);
+        activeInst.state = 'permission';
+        emitInstancesSnapshot();
+        pendingPermission = {
+          requestId: 'req_demo_push',
+          toolUseId: 't_demo_push',
+          messageId: 'msg_demo_perm',
+          name: 'run_command',
+          input: 'git push origin dev',
+          cwd: activeInst.cwd,
+          approveOutput: '已推送 dev → origin/dev (3f2a1c8)',
+          approveText: '\n\n✓ 已推送到 origin/dev。CI 结果出来我会推送通知到你手机。'
+        };
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'permission_request', payload: {
+            requestId: pendingPermission.requestId,
+            name: pendingPermission.name,
+            input: pendingPermission.input,
+            cwd: pendingPermission.cwd
+          }
+        });
+      },
+    },
+    {
+      command: 'demo:question',
+      run: async ({ activeInst }) => {
+        activeInst.state = 'busy';
+        emitInstancesSnapshot();
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_demo_quest', text: '<thinking>发布口径需要机主拍板：先集成验证还是直接发稳定版……</thinking>' }
+        });
+        await delay(700);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: { toolUseId: 't_demo_ask', name: 'AskUserQuestion', inputSummary: '选择发布分支' }
+        });
+        await delay(500);
+        activeInst.state = 'permission';
+        emitInstancesSnapshot();
+        pendingQuestion = {
+          requestId: 'req_demo_quest#0',
+          toolUseId: 't_demo_ask',
+          messageId: 'msg_demo_quest',
+          options: ['dev — 先集成验证', 'master — 直接发稳定版', '暂不发版'],
+          answerText: '\n\n好，目标 **{option}**。我先跑全量测试，绿了再打 tag。'
+        };
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'question', payload: {
+            requestId: pendingQuestion.requestId,
+            text: '这次修复要发到哪里？',
+            options: pendingQuestion.options
+          }
+        });
+      },
+    },
+    {
+      command: 'demo:tab',
+      run: async ({ activeInst }) => {
+        activeInst.state = 'busy';
+        emitInstancesSnapshot();
+        await delay(400);
+        for (const inst of [
+          { instanceId: 'inst_demo_pay', cwd: '/Users/you/code/payment-service', sessionId: 'mock-session-demo-pay', title: '重构支付回调', state: 'busy', permissionMode: 'default', effort: null, model: activeModel },
+          { instanceId: 'inst_demo_blog', cwd: '/Users/you/code/blog-static', sessionId: 'mock-session-demo-blog', title: '部署博客', state: 'permission', permissionMode: 'default', effort: null, model: activeModel }
+        ]) {
+          if (!mockInstances.some(i => i.instanceId === inst.instanceId)) mockInstances.push(inst);
+        }
+        emitInstancesSnapshot();
+        const reply = [
+          '除了这里，这台 Mac 上还有两个仓库的任务：',
+          '',
+          '- **payment-service** — 重构支付回调，进行中',
+          '- **blog-static** — 部署脚本在等你审批',
+          '',
+          '点左上角随时切过去。'
+        ].join('\n');
+        const seq = await streamZh('msg_demo_tab', reply, 1);
+        activeInst.state = 'idle';
+        emitInstancesSnapshot();
+        socket.emit('agent:event', {
+          seq, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_demo_tab', durationMs: 2600, costUsd: 0.0021, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      command: 'demo:statusline',
+      run: async ({ activeInst }) => {
+        activeInst.state = 'busy';
+        emitInstancesSnapshot();
+        const slNow = Date.now();
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: slNow,
+          type: 'status_line', payload: {
+            ts: slNow,
+            model: activeModel,
+            project: 'claude-chat-mobile',
+            cwd: '/Users/you/code/claude-chat-mobile',
+            git: { branch: 'dev', changed: 3, ahead: 1, behind: 0, insertions: 120, deletions: 45, repo: 'Ike-li/claude-chat-mobile' },
+            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, w: 22000, r: 21000, reused: 1200000, cacheExpiresAt: slNow + 290000 },
+            cost: 0.37,
+            duration: { wallMs: 42500, apiMs: 18300 },
+            version: '2.1.193'
+          }
+        });
+        await delay(600);
+        const seq = await streamZh('msg_demo_sl', '都在状态栏里：45k tokens（缓存命中 45%），本轮 $0.37，dev 分支还有 3 个文件没提交。', 1);
+        activeInst.state = 'idle';
+        emitInstancesSnapshot();
+        socket.emit('agent:event', {
+          seq, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_demo_sl', durationMs: 1900, costUsd: 0.0008, isError: false, models: [activeModel] }
+        });
+      },
+    },
   ]);
 
   // Handle custom trigger command inputs
@@ -2651,10 +2903,10 @@ io.on('connection', socket => {
 
     console.log(`[mock] User message received: "${cmd}"`);
 
-    // Always echo user message back
+    // Always echo user message back（demo:* 回显真实感文案，命令不露出）
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'user_message', payload: { text: cmd, attachments }
+      type: 'user_message', payload: { text: DEMO_USER_TEXT[cmd] || cmd, attachments }
     });
 
     if (cmd.startsWith('ultracode ')) {
@@ -2685,8 +2937,8 @@ io.on('connection', socket => {
       return;
     }
 
-    // Intercept test commands
-    if (cmd.startsWith('test:')) {
+    // Intercept test/demo commands
+    if (cmd.startsWith('test:') || cmd.startsWith('demo:')) {
       activeEpoch = 'mock-epoch-' + cmd.replace(/[^a-zA-Z0-9]/g, '_') + '-' + Date.now();
       const activeInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
 
@@ -2733,11 +2985,11 @@ io.on('connection', socket => {
         }
         socket.emit('agent:event', {
           seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: true, outputSummary: 'git push success: branch main -> origin' }
+          type: 'tool_result', payload: { toolUseId: pendingPermission.toolUseId, ok: true, outputSummary: pendingPermission.approveOutput || 'git push success: branch main -> origin' }
         });
         socket.emit('agent:event', {
           seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: '\n\n✓ Successfully pushed latest codebase additions!' }
+          type: 'text_delta', payload: { messageId: pendingPermission.messageId, text: pendingPermission.approveText || '\n\n✓ Successfully pushed latest codebase additions!' }
         });
       } else {
         socket.emit('agent:event', {
@@ -2796,7 +3048,12 @@ io.on('connection', socket => {
 
       socket.emit('agent:event', {
         seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-        type: 'text_delta', payload: { messageId: pendingQuestion.messageId, text: `\n\nUnderstood. We will target the **${selectedOption}** branch. Beginning compilation...` }
+        type: 'text_delta', payload: {
+          messageId: pendingQuestion.messageId,
+          text: pendingQuestion.answerText
+            ? pendingQuestion.answerText.replace('{option}', selectedOption)
+            : `\n\nUnderstood. We will target the **${selectedOption}** branch. Beginning compilation...`
+        }
       });
 
       await delay(800);
