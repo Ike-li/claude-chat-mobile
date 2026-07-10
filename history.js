@@ -5,6 +5,7 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { MAX_SESSION_LIMIT } from './workdirs.js';
 
 const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
 // 历史回显防爆上限：极端超大会话只回最近 N 条 user/assistant，避免一次性把手机 DOM 撑爆。
@@ -14,7 +15,9 @@ const HEAD_READ_BYTES = 64 * 1024;  // 列表元数据（标题/模型/来源）
 // CLI 把 ai-title 流式追加到「标题生成完成时」的字节位置——首轮工具/思考很重的长会话里常 > 64KB 头窗。
 // 头窗没抓到 ai-title 时补读文件尾部这一段取最新 ai-title（实测最坏「最后一个 ai-title 距文件尾」330KB，512KB 有余量）。
 const TAIL_READ_BYTES = 512 * 1024;
-const LIST_LIMIT = 50;              // 会话列表上限（按 mtime 取最近 N，避免大目录全量读 head）
+// 会话列表上限（按 mtime 取最近 N，避免大目录全量读 head）。与 workdirs.js MAX_SESSION_LIMIT 共享同一
+// 常量而非各自硬编码 50——此前两处独立维护、仅靠注释宣称"一致"，任一方单独改动会静默漂移。
+const LIST_LIMIT = MAX_SESSION_LIMIT;
 
 // B2：listSessions 结果按 dir 缓存，4s TTL。重复打开列表不重扫盘。
 const _listCache = new Map(); // dir → { ts, result }

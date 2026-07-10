@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { realpathSync } from 'node:fs';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
-  normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs,
+  normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted,
 } from '../workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -137,5 +137,19 @@ test.describe('resolveWorkdirs', () => {
     // 同一目录两条（一条带尾斜杠段），realpath 后应归一为一条
     const { dirs } = resolveWorkdirs([{ path: real, sessionLimit: 6 }, { path: join(real, '.'), sessionLimit: 9 }]);
     assert.equal(dirs.length, 1);
+  });
+});
+
+// ── ensureWhitelisted（纯函数）───────────────────────────────────────────
+// 背景：routeCwd 类回退逻辑可能落到「仍有 live 实例挂着、因此未被 reloadWorkdirs 归位」的已移除目录
+// （该目录不在当前 workDirs 里）。新开会话前必须再夯一次白名单，否则「热移除目录仅拒新开」的不变量
+// 会被绕过——同 session:new(#8) 的归位逻辑，抽成共享纯函数防各 handler 各自为政再漂移。
+test.describe('ensureWhitelisted', () => {
+  test('cwd 在白名单内 → 原样放行', () => {
+    assert.equal(ensureWhitelisted('/a', ['/a', '/b']), '/a');
+  });
+
+  test('cwd 不在白名单内（已被热移除）→ 归位到白名单首位', () => {
+    assert.equal(ensureWhitelisted('/removed', ['/a', '/b']), '/a');
   });
 });

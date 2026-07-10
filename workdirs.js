@@ -5,7 +5,7 @@
 import { readFileSync, realpathSync, statSync } from 'node:fs';
 
 export const DEFAULT_SESSION_LIMIT = 6;   // 未指定时每工作区历史会话默认显示条数
-export const MAX_SESSION_LIMIT = 50;      // 上限：与 history.js LIST_LIMIT 一致（= 前端「显示全部」的服务端硬顶）
+export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与 server.js history:list all 分支直接 import 本常量（= 前端「显示全部」的服务端硬顶）
 
 // 校验 sessionLimit：必须是 [1, MAX] 的整数。非法（含缺省交由调用方判断）→ 返回 { value, warning }。
 function validateSessionLimit(raw, path) {
@@ -64,6 +64,13 @@ export function loadWorkdirsFile(filePath) {
     return null; // 坏 JSON：保留旧配置，不清空白名单
   }
   return normalizeWorkdirEntries(parsed);
+}
+
+// 白名单兜底：routeCwd 类回退逻辑（无显式 cwd 时改用当前查看实例/查看目录）可能落到一个已被热移除、
+// 但因仍有 live 实例挂着而未被 reloadWorkdirs 归位的目录——这种目录不在 dirs 里，不能直接信任继续新开会话。
+// 归位到 dirs 首位（同 session:new 的既有归位语义），只挡"新开"，不影响该目录上已有会话的继续查看/读取。
+export function ensureWhitelisted(cwd, dirs) {
+  return dirs.includes(cwd) ? cwd : dirs[0];
 }
 
 // realpathSync（解符号链接/相对段，与 CLI 命名一致）+ isDirectory 校验，warn-skip 无效项；realpath 后二次去重。

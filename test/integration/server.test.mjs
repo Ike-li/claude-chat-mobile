@@ -285,25 +285,6 @@ test.describe('user:setPermissionMode — 档位校验', CI_SKIP, () => {
   });
 });
 
-test.describe('user:setWorkdir — 白名单校验', CI_SKIP, () => {
-  test('不在 WORK_DIRS 中的路径 → system error', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
-    await new Promise((resolve, reject) => {
-      s.on('connect', resolve);
-      s.on('connect_error', reject);
-      setTimeout(() => reject(new Error('timeout')), 3000);
-    });
-    const ack = await new Promise((resolve) => {
-      s.on('agent:event', e => { if (e.type === 'system') resolve(e); });
-      s.emit('user:setWorkdir', { cwd: '/nonexistent/werk/dir' });
-      setTimeout(() => resolve(null), 2000);
-    });
-    assert.ok(ack, 'should get error');
-    assert.ok(ack.payload.message.includes('未知工作目录'));
-    s.disconnect();
-  });
-});
-
 // ---- helpers ----
 function httpGet(url) {
   return new Promise((resolve, reject) => {

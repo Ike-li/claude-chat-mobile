@@ -26,7 +26,7 @@ import * as interactionLog from './interaction-log.js';
 import { createModelsCache, isCwdDefaultModel } from './models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from './cf-access.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs } from './workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted } from './workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -617,7 +617,7 @@ io.use(async (socket, next) => {
         console.log(`   User-Agent: ${ua}`);
         if (process.stdin.isTTY) {
           console.log(`   -> 请在电脑控制台直接按【回车键 (Enter)】一键同意此设备`);
-          console.log(`   -> 或输入【deny】拒绝并拉黑该设备`);
+          console.log(`   -> 或输入【deny】拒绝并移除该设备（非拉黑：denyDevice 只是移出待审/信任列表，同一 token 之后仍可重新申请）`);
         } else {
           console.log(`   -> 当前运行在非交互模式下。请在电脑运行下方命令授权此设备：`);
           console.log(`      node scripts/device.js approve "${deviceToken}"`);
@@ -780,7 +780,7 @@ async function catchUpTick() {
   // keep-alive：transcript 文件比上 tick 大 = 终端在写盘（含跑工具/思考的 tool_use/tool_result，被 text-only 过滤挡在 catchUpStep len 外）。
   // 仅基线已建立(lastSize≥0)时判增长；切入 / localBusy 后首 tick 只记 size 不判（避免把切入前既有体量或己方写盘误当终端活跃）。
   const keepAlive = mirrorLastSize >= 0 && curSize > mirrorLastSize;
-  mirrorLastSize = curSize;
+  if (curSize >= 0) mirrorLastSize = curSize; // 读取瞬时失败(curSize=-1)不覆盖基线：保留上次好值，避免把「基线未建立」哨兵误写回、平白吃掉 1-2 个 tick 的 keep-alive 信号
   const externalWrite = emit.length > 0;
   if (externalWrite) {                                               // 观察到外部写入 → 追平尾巴
     io.emit('agent:event', {
@@ -1067,6 +1067,23 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
   return openInstance({ cwd, resumeId, transcriptMode, ...extra });
 }
 
+// resume 并发去重：openResumeInstance 内部有 await（读 transcript 权限档），调用方常见写法是
+// `instanceForSession(id) || await openResumeInstance(cwd, id)`——两个几乎同时到达、目标同一 sessionId
+// 的请求（如 session:switch 被连点两次、两台设备同时切到同一会话）会双双通过 instanceForSession 检查
+// （此时都还没人注册），双双落入 openResumeInstance，各自 spawn 一个 `claude --resume` 进程操作同一份
+// 会话文件。用 sessionId 键的 in-flight map 把后到的请求收敛到同一个 Promise，只有一次真正 spawn。
+// resumeId 为空（FRESH 新会话）不去重——那是另一套 justOpened 机制（S2）在管，语义不同、不在此处混入。
+const resumeInFlight = new Map(); // sessionId → Promise<AgentSession>
+function dedupedResume(cwd, resumeId, extra = {}) {
+  if (!resumeId) return openResumeInstance(cwd, resumeId, extra);
+  let p = resumeInFlight.get(resumeId);
+  if (!p) {
+    p = openResumeInstance(cwd, resumeId, extra).finally(() => resumeInFlight.delete(resumeId));
+    resumeInFlight.set(resumeId, p);
+  }
+  return p;
+}
+
 // scout 实例：为工作区获取真实模型清单的临时代理。
 // session:new / setWorkdir 到无缓存工作区时，没有活实例调 supportedModels()→前端无模型可选。
 // scout 以「不留任何痕迹」的方式临时启动 CLI：模型一到即缓存 → 推送前端 → dispose → 删除 CLI 残留文件。
@@ -1282,7 +1299,9 @@ io.on('connection', socket => {
     // （resume 该 cwd 当前会话，无则新建；该会话已 live 则聚焦去重），设为查看 tab。
     let a = routeInstance(payload && typeof payload === 'object' ? payload.instanceId : undefined);
     if (!a) {
-      const cwd = routeCwd(payload && typeof payload === 'object' ? payload.cwd : undefined);
+      // ensureWhitelisted 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
+      // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
+      const cwd = ensureWhitelisted(routeCwd(payload && typeof payload === 'object' ? payload.cwd : undefined), workDirs);
       const saved = await currentSessionForCwd(cwd);
       // 并发懒开去重（S2）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd 懒开了实例。
       // RESUME 靠 instanceForSession（sessionId）去重；FRESH 无 sessionId，改认「await 后 viewing 已是本 cwd 实例」
@@ -1290,7 +1309,7 @@ io.on('connection', socket => {
       const justOpened = agents.get(viewingInstanceId);
       a = (saved && instanceForSession(saved.id))
         || (justOpened && justOpened.cwd === cwd ? justOpened : null)
-        || await openResumeInstance(cwd, saved?.id ?? null); // resume 恢复 CLI 原生会话权限档；saved 为空则 FRESH 懒开
+        || await dedupedResume(cwd, saved?.id ?? null); // resume 恢复 CLI 原生会话权限档（去重防并发双开）；saved 为空则 FRESH 懒开
       viewingInstanceId = a.instanceId;
       broadcastInstances();
     }
@@ -1446,11 +1465,11 @@ io.on('connection', socket => {
   on(socket, 'session:new', (payload, maybeAck) => {
     // 兼容两种调用形态：emit('session:new', cb) 与 emit('session:new', {cwd}, cb)
     const ack = typeof payload === 'function' ? payload : maybeAck;
-    let cwd = (payload && typeof payload === 'object') ? routeCwd(payload.cwd) : viewingCwdOf();
     // #8 灰边界修：热移除目录上「仅拒新开」。若正查看该目录的 live 实例，viewingCwd 会停在已移除目录
-    // （reloadWorkdirs 有实例时不归位），routeCwd 缺省回退又会返回它 → 新会话仍落非白名单目录。这里归位到
-    // 白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该目录现有会话不受影响。
-    if (!workDirs.includes(cwd)) cwd = workDirs[0];
+    // （reloadWorkdirs 有实例时不归位），routeCwd 缺省回退又会返回它 → 新会话仍落非白名单目录。
+    // ensureWhitelisted 归位到白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该
+    // 目录现有会话不受影响。session:switch / user:message 共用同一份归位逻辑，见其调用点注释。
+    const cwd = ensureWhitelisted((payload && typeof payload === 'object') ? routeCwd(payload.cwd) : viewingCwdOf(), workDirs);
     viewingCwd = cwd;
     sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
     viewingInstanceId = null;       // 清查看 tab（**不再 dispose 任何实例**——背景 tab 继续跑），首条消息懒开
@@ -1465,7 +1484,11 @@ io.on('connection', socket => {
 
   on(socket, 'session:switch', async (payload, ack) => {
     const sessionId = payload?.sessionId;
-    const cwd = routeCwd(payload?.cwd); // 台阶3：在指定 cwd 内打开/聚焦会话（缺省当前查看实例 cwd）
+    // 台阶3：在指定 cwd 内打开/聚焦会话（缺省当前查看实例 cwd）。ensureWhitelisted 同 session:new(#8)：
+    // routeCwd 的缺省回退(viewingCwdOf)可能仍是热移除目录（该目录有 live 实例挂着未被归位），不夯一次
+    // 白名单会绕过「仅拒新开」——落到非白名单目录后 sessionFileExists 大概率会因该目录下无此 sessionId 而
+    // 拒绝（ack 回 '会话不存在'），是安全的失败模式，不会误开其他目录下的会话。
+    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
     // 归属校验以「jsonl 存在于本 cwd 的 project 目录」为准：既拒跨 cwd / 失效 id，又接纳终端建的会话。
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
@@ -1473,7 +1496,7 @@ io.on('connection', socket => {
     }
     // 台阶3：打开或聚焦——已 live 实例承载该会话则聚焦不重开（去重，防同会话被两实例并发 resume）；
     // 否则 open 新实例 resume（openResumeInstance 先读 transcript 恢复权限档）。**不再 dispose 同 cwd**（其他 tab 后台继续）。
-    const inst = instanceForSession(sessionId) || await openResumeInstance(cwd, sessionId);
+    const inst = instanceForSession(sessionId) || await dedupedResume(cwd, sessionId);
     viewingInstanceId = inst.instanceId;
     viewingCwd = cwd;
     sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（重启预热用）
@@ -1505,9 +1528,9 @@ io.on('connection', socket => {
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
     const id = sessions.getCurrent(cwd);
     const currentSessionId = (id && await sessionFileExists(cwd, id)) ? id : null;
-    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 50。
+    // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
     const all = obj.all === true;
-    const limit = all ? 50 : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
+    const limit = all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
     const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit });
     ack({ currentSessionId, sessions: list, hasMore: all ? false : hasMore });
   });
@@ -1588,6 +1611,7 @@ io.on('connection', socket => {
       home: homedir(),
       cfEnabled: isAccessEnabled(),
       cfAudSet: !!process.env.CF_ACCESS_AUD,
+      webStatuslineOff: process.env.WEB_STATUSLINE === 'off',
       pushEnabled,
       trustedDevices: getTrustedCount(),
       pendingDevices: getPendingDevices().length,
@@ -1758,7 +1782,7 @@ httpServer.listen(port, host, () => {
   // 目录）才预热 resume，避免对别目录会话 resume 失败。全新空状态不预热（viewingInstanceId 保持 null、
   // 首条消息懒开）。失败走 onExit 兜底；空闲不被 checkIdle 误杀；不耗 token。
   currentSessionForCwd(WORK_DIR).then(async s => {
-    if (s) viewingInstanceId = (await openResumeInstance(WORK_DIR, s.id)).instanceId;
+    if (s) viewingInstanceId = (await dedupedResume(WORK_DIR, s.id)).instanceId;
   }).catch(err => console.error('[preheat]', err));
 });
 
