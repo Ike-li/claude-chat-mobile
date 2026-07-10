@@ -16,6 +16,7 @@ function runInMock(scriptSrc, globals = {}) {
   const ctx = createContext({
     ...globals,
     console: { log() {}, warn() {}, error() {} },
+    URL, // 真实浏览器环境的标准全局；沙箱默认不带，脚本若用 URL 解析 scriptURL 需要它
   });
   new Script(scriptSrc).runInContext(ctx);
   return ctx;
@@ -284,6 +285,31 @@ test.describe('sw-cleanup.js — 自愈注销', () => {
 
     assert.equal(unregistered, 0, '合法 push SW 不应被注销');
     assert.equal(reloaded, false, '仅 push SW 时不应 reload');
+  });
+
+  test('push SW 的 scriptURL 带 query string/hash → 仍应放过（code-review P1：不能只做字面 endsWith）', async () => {
+    let unregistered = 0;
+    let reloaded = false;
+
+    const globals = {
+      navigator: {
+        serviceWorker: {
+          getRegistrations: () => Promise.resolve([
+            { active: { scriptURL: 'https://host/js/sw.js?v=2' }, unregister: () => { unregistered++; return Promise.resolve(true); } },
+            { active: { scriptURL: 'https://host/js/sw.js#x' }, unregister: () => { unregistered++; return Promise.resolve(true); } },
+          ]),
+        },
+      },
+      window: { caches: {} },
+      caches: { keys: () => Promise.resolve([]), delete: () => Promise.resolve(true) },
+      location: { reload: () => { reloaded = true; } },
+    };
+
+    runInMock(cleanupSrc, globals);
+    await new Promise(r => setTimeout(r, 100));
+
+    assert.equal(unregistered, 0, '带 query string/hash 的合法 push SW 不应被误判为遗留而注销');
+    assert.equal(reloaded, false);
   });
 
   test('混合：遗留 SW + push SW → 只注销遗留、放过 push、reload', async () => {

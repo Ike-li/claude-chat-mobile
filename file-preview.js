@@ -24,7 +24,8 @@ export function buildDiff(name, input = {}) {
     case 'Edit':
       return { kind: 'edit', hunks: [{ old: input.old_string ?? '', new: input.new_string ?? '' }] };
     case 'MultiEdit':
-      return { kind: 'multiedit', hunks: (input.edits || []).map(e => ({ old: e.old_string ?? '', new: e.new_string ?? '' })) };
+      // Array.isArray 而非 `|| []`：只挡 falsy 挡不住 truthy 但非数组的 edits（如字符串/对象），仍会在 .map 处炸。
+      return { kind: 'multiedit', hunks: (Array.isArray(input.edits) ? input.edits : []).map(e => ({ old: e.old_string ?? '', new: e.new_string ?? '' })) };
     case 'Write':
       return { kind: 'write', added: input.content ?? '' };
     case 'NotebookEdit':

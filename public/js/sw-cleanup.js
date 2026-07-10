@@ -9,7 +9,11 @@ if ('serviceWorker' in navigator) {
     var legacy = rs.filter(function (r) {
       var sw = r.active || r.waiting || r.installing;
       var url = (sw && sw.scriptURL) || '';
-      return !url.endsWith('/js/sw.js');
+      // 按 pathname 比较（不含 query string/hash）：scriptURL 若带版本化参数（如 ?v=2）会让字面
+      // endsWith 误判为"遗留"，重新触发本文件本该防住的静默失效（订阅推送后冷加载误注销）。
+      var path = url;
+      try { path = new URL(url).pathname; } catch (e) {}
+      return !path.endsWith('/js/sw.js');
     });
     if (!legacy.length) return;
     legacy.forEach(function (r) { r.unregister(); });

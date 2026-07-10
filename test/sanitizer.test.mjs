@@ -76,6 +76,13 @@ test('sanitize: 大写环境变量赋值被脱敏', () => {
   assert.match(result, /AUTH_TOKEN=\*\*\*/);
 });
 
+test('sanitize: JSON 形态密钥字段被脱敏（"key":"value" 语法，非 code-review P1 发现前 #6/#7 只认 key=value）', () => {
+  const result = sanitize('{"password":"SuperSecret123!"}');
+  assert.ok(!result.includes('SuperSecret123!'), '应脱敏 JSON password 字段值');
+  const result2 = sanitize('{"token":"not-a-real-secret-just-a-test-value"}');
+  assert.ok(!result2.includes('not-a-real-secret-just-a-test-value'), '应脱敏 JSON token 字段值');
+});
+
 test('sanitize: URL 凭据 user:pass@host 被脱敏', () => {
   const result = sanitize('postgres://admin:s3cr3tPa55@db.example.com/mydb');
   assert.ok(!result.includes('s3cr3tPa55'), '应脱敏 URL 密码');

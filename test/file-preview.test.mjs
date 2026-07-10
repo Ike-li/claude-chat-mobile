@@ -59,4 +59,8 @@ test.describe('buildDiff：变更摘要（不读盘，来自缓存的完整 tool
   test('缺字段安全（Edit 无 old_string → 空串）', () => {
     assert.deepEqual(buildDiff('Edit', {}), { kind: 'edit', hunks: [{ old: '', new: '' }] });
   });
+  test('MultiEdit：edits 是 truthy 但非数组时不应抛错（code-review P2，此前 (input.edits||[]) 只挡 falsy）', () => {
+    assert.deepEqual(buildDiff('MultiEdit', { edits: 'not-an-array' }), { kind: 'multiedit', hunks: [] });
+    assert.deepEqual(buildDiff('MultiEdit', { edits: {} }), { kind: 'multiedit', hunks: [] });
+  });
 });
