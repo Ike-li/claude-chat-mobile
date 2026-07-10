@@ -34,3 +34,33 @@ test('visual mock registry guard rejects test command fallbacks after registry d
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('visual mock registry guard also rejects demo command fallbacks after registry dispatch（code-review P2：此前只认 test: 前缀）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-visual-mock-guard-'));
+  const fixture = join(dir, 'visual-mock-server.js');
+  writeFileSync(fixture, `
+    if (cmd.startsWith('demo:')) {
+      if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
+      if (cmd === 'demo:new-fallback') {
+        socket.emit('agent:event', { type: 'system', payload: {} });
+      }
+    }
+  `);
+
+  try {
+    assert.throws(
+      () => execFileSync(process.execPath, ['scripts/check-visual-mock-registry.js', fixture], {
+        cwd: process.cwd(),
+        encoding: 'utf8',
+        stdio: 'pipe',
+      }),
+      error => {
+        assert.equal(error.status, 1);
+        assert.match(error.stderr, /demo:new-fallback/);
+        return true;
+      }
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

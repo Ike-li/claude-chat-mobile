@@ -12,7 +12,9 @@ export function findFallbackTestCommandBranches(source) {
   const tailStart = dispatchIndex + REGISTRY_DISPATCH.length;
   const firstTailLine = source.slice(0, tailStart).split(/\r?\n/).length;
   const tailLines = source.slice(tailStart).split(/\r?\n/);
-  const fallbackPattern = /\bcmd\s*(?:={2,3})\s*['"`]test:[^'"`]+['"`]|\bcmd\s*\.\s*startsWith\s*\(\s*['"`]test:/;
+  // (?:test|demo) 两个前缀都要认——只加 test: 会漏判新出现的 demo:* 场景族用同一反模式（先 startsWith
+  // 分流、registry.run 之后又手写 cmd === 分支），零成本闸门形同虚设。
+  const fallbackPattern = /\bcmd\s*(?:={2,3})\s*['"`](?:test|demo):[^'"`]+['"`]|\bcmd\s*\.\s*startsWith\s*\(\s*['"`](?:test|demo):/;
 
   return tailLines
     .map((line, index) => ({ lineNumber: firstTailLine + index, text: line.trim() }))

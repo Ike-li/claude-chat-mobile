@@ -58,6 +58,17 @@ test('发现1 RED：终端静默 + web idle 后，只读锁应自动释放（当
   assert.equal(r.readonly, false, '终端静默 5 tick 后应自动解锁；现状无任何释放路径 → 永远 true');
 });
 
+test('阈值边界钉点（code-review P2）：恰好 QUIET_TICKS-1 个静默 tick 仍应保持只读，不早不晚', () => {
+  // 此前只测了 tick=1（远未到阈值）和 tick=5（达阈值），漏了阈值前一步这个最容易被 < / <= 改错的边界。
+  assert.equal(typeof H.MIRROR_RELEASE_QUIET_TICKS, 'number');
+  let s = { readonly: false, quietTicks: 0 };
+  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // 上锁
+  for (let i = 0; i < H.MIRROR_RELEASE_QUIET_TICKS - 1; i++) {
+    r = H.mirrorReleaseStep(s, { externalWrite: false, localBusy: false }); s = r.state;
+  }
+  assert.equal(r.readonly, true, `恰好 ${H.MIRROR_RELEASE_QUIET_TICKS - 1} 个静默 tick（阈值前一步）仍应保持只读`);
+});
+
 test('发现1 RED：静默未达阈值前不得提前解锁（防并发写分叉）', () => {
   assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
   let s = { readonly: false, quietTicks: 0 };
