@@ -320,6 +320,22 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  // 回归锚点(轮⇒result 假设) —— code-review #2 结论：pendingTurns 全套配平压在一条 SDK 契约上：
+  // 每个已启动轮次恰好产出一个 result（成功/报错/被中断都算）。assistant{error} 分支只 emit error、
+  // 【不】碰 pendingTurns，纯靠随后的 result 减掉本轮。此锚点把该隐式依赖钉成显式回归门：若某 SDK/网关
+  // 版本改成「终态错误只发 assistant{error} 不发 result」，第二段断言即红 → pendingTurns 泄漏预警
+  // （症状：排队提示早一轮 / idle 仍 busy）。见 agent.js:769 assistant{error} 分支注释。
+  test('回归锚点(轮⇒result 假设)：错误轮 assistant{error}+随后 result → pendingTurns 归零、不泄漏', () => {
+    const { s } = makeSession();
+    s.pendingTurns = 1; // 一轮在途
+    s.map({ type: 'assistant', error: 'rate_limit',
+      message: { content: [{ type: 'text', text: 'API Error: 429 Too Many Requests' }] } });
+    assert.equal(s.pendingTurns, 1, 'assistant{error} 本身不减 pendingTurns（依赖随后的 result）');
+    s.map({ type: 'result', subtype: 'error', is_error: true, duration_ms: 10, modelUsage: {} });
+    assert.equal(s.pendingTurns, 0, '随后的 result 才减掉在途轮；轮⇒result 假设成立则不泄漏');
+    s.dispose();
+  });
+
   test('assistant 带 tool_use → tool_use 事件', () => {
     const { s, events } = makeSession();
     s.map({ type: 'assistant', message: { content: [

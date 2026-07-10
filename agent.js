@@ -774,6 +774,11 @@ export class AgentSession {
             .filter(b => b?.type === 'text' && b.text)
             .map(b => b.text).join('\n').trim();
           this.emit('error', { message: detail || `API 错误：${msg.error}`, recoverable: true });
+          // ⚠️ 此处【不】减 pendingTurns——整套配平依赖「轮⇒result 假设」：每个已启动轮次恰好产出一个
+          // result（成功/报错/被中断都算），由随后的 result 事件减掉本轮。若某 SDK/网关版本把终态 API 错误
+          // 只发 assistant{error} 不发 result，pendingTurns 会泄漏 → 排队提示早一轮 / idle 仍 busy（idle
+          // 看护 idleTimeoutMs 后 abort 兜底、但活跃交互会一直刷新 lastActivity 使其不触发）。见 test
+          // 'agent.test.mjs 回归锚点(轮⇒result 假设)'——该假设一破即红，作 CLI 升级预警。
           break;
         }
         if (msg.parent_tool_use_id) break;
