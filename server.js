@@ -16,7 +16,7 @@ import compression from 'compression';
 import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
 import * as sessions from './sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache, catchUpStep, mirrorReleaseStep } from './history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache, catchUpStep, mirrorReleaseStep, readLastPermissionMode } from './history.js';
 import { notificationForEvent, ntfyMetaFor, ntfyRequestInit } from './notifications.js';
 import { attributePath, buildDiff, readPreview } from './file-preview.js';
 import { runDoctor } from './doctor-runtime.js';
@@ -925,7 +925,7 @@ function writeSessionEntrypoint(sessionId, cwd) {
 // 台阶3：显式建一个新实例（分配 instanceId、后台并行存活）。`resumeId` 缺省=新会话；调用方
 // （session:new/switch/启动预热）负责去重（instanceForSession）与切 viewingInstanceId。返回实例。
 // 同步建（resumeId 由调用方解析，无需 await）——故无台阶2 的「await 让出窗口双实例」重入竞态。
-function openInstance({ cwd, resumeId = null, mode, effort }) {
+function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = null }) {
   const id = newInstanceId();
   const saved = resumeId ? (sessions.getSession(resumeId) || { id: resumeId }) : null;
   if (saved?.id) {
@@ -936,13 +936,15 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
   // A1（2026-06-22）：新会话(FRESH)用 CLI 启动默认、不再继承 cwd 末实例档——贴终端等价（新起 claude 是干净默认，
   // 不沿用另一会话的档）；原决策 B「fresh 也继承」已收窄为仅 resume 继承（per-instance 粒度不变）。effort 的 null
   // 合法 → 用 Map.has 判 pending 存在。
-  // resume 时 saved 优先于 inherited：sessions.json 持久化了该会话最后生效的档（web 端增强，CLI 无此行为），
-  // 冷启动无 live agents 时 inherited 回退 default/null，saved 能保持会话状态连续性。
+  // resume 权限档优先级：saved（sessions.json 持久化，web 端增强）> transcriptMode（CLI 写进 transcript 的
+  // 末条 permission-mode，纯 CLI 会话 saved 为空时靠它恢复真实档，见调用方 readLastPermissionMode）> inherited。
+  // 冷启动无 live agents 时 inherited 回退 default/null；transcriptMode 补上「CLI 原生会话续接一律显默认审批」的缺口。
+  // effort 无对称恢复：CLI 不把 effort/thinking 档落盘，故续接纯 CLI 会话仍回落模型默认（已知边界）。
   const isFresh = !resumeId;
   if (mode === undefined) {
     if (isFresh && pendingModeByCwd.has(cwd)) { mode = pendingModeByCwd.get(cwd); pendingModeByCwd.delete(cwd); }
     else if (isFresh) mode = 'default';        // 新会话：CLI 启动默认权限档
-    else mode = saved?.permissionMode || inheritedMode(cwd); // resume：saved 优先，无则继承
+    else mode = saved?.permissionMode || transcriptMode || inheritedMode(cwd); // resume：saved（web 持久化）> transcript 末档（CLI 原生）> 继承
   }
   let eff;
   if (effort !== undefined) eff = effort;
@@ -1047,6 +1049,14 @@ function openInstance({ cwd, resumeId = null, mode, effort }) {
   agents.set(id, instance);
   instance.start();
   return instance;
+}
+
+// resume 开实例的异步封装：新开前先读 transcript 末条 permission-mode 恢复权限档（纯 CLI 会话 sessions.json
+// 无档时的恢复来源，见 readLastPermissionMode）。openInstance 本身保持同步（避免重入竞态）；读盘只在此异步前置。
+// 仅 resume（resumeId 非空）才读——FRESH 无档可恢复、也不该读；已 live 实例由调用方 instanceForSession 去重、不覆盖运行时档。
+async function openResumeInstance(cwd, resumeId, extra = {}) {
+  const transcriptMode = resumeId ? await readLastPermissionMode(resumeId, cwd) : null;
+  return openInstance({ cwd, resumeId, transcriptMode, ...extra });
 }
 
 // scout 实例：为工作区获取真实模型清单的临时代理。
@@ -1272,7 +1282,7 @@ io.on('connection', socket => {
       const justOpened = agents.get(viewingInstanceId);
       a = (saved && instanceForSession(saved.id))
         || (justOpened && justOpened.cwd === cwd ? justOpened : null)
-        || openInstance({ cwd, resumeId: saved?.id });
+        || await openResumeInstance(cwd, saved?.id ?? null); // resume 恢复 CLI 原生会话权限档；saved 为空则 FRESH 懒开
       viewingInstanceId = a.instanceId;
       broadcastInstances();
     }
@@ -1415,7 +1425,7 @@ io.on('connection', socket => {
     if (!target) {
       const saved = await currentSessionForCwd(cwd);
       if (saved) {
-        const opened = instanceForSession(saved.id) || openInstance({ cwd, resumeId: saved.id });
+        const opened = instanceForSession(saved.id) || await openResumeInstance(cwd, saved.id);
         target = opened.instanceId;
         interactionLog.addSessionLog(saved.id, 'sys_info', `[SYS] 工作目录切换 (user:setWorkdir): 恢复最近会话 resumeId=${saved.id}, cwd=${cwd}`);
       }
@@ -1482,8 +1492,8 @@ io.on('connection', socket => {
       return;
     }
     // 台阶3：打开或聚焦——已 live 实例承载该会话则聚焦不重开（去重，防同会话被两实例并发 resume）；
-    // 否则 open 新实例 resume。**不再 dispose 同 cwd**（其他 tab 后台继续）。
-    const inst = instanceForSession(sessionId) || openInstance({ cwd, resumeId: sessionId });
+    // 否则 open 新实例 resume（openResumeInstance 先读 transcript 恢复权限档）。**不再 dispose 同 cwd**（其他 tab 后台继续）。
+    const inst = instanceForSession(sessionId) || await openResumeInstance(cwd, sessionId);
     viewingInstanceId = inst.instanceId;
     viewingCwd = cwd;
     sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（重启预热用）
@@ -1776,8 +1786,8 @@ httpServer.listen(port, host, () => {
   // ephemeral（重启没了、从历史列表手动重开，守配额闸）。仅当该 cwd 指针确属本目录（jsonl 在本 project
   // 目录）才预热 resume，避免对别目录会话 resume 失败。全新空状态不预热（viewingInstanceId 保持 null、
   // 首条消息懒开）。失败走 onExit 兜底；空闲不被 checkIdle 误杀；不耗 token。
-  currentSessionForCwd(WORK_DIR).then(s => {
-    if (s) viewingInstanceId = openInstance({ cwd: WORK_DIR, resumeId: s.id }).instanceId;
+  currentSessionForCwd(WORK_DIR).then(async s => {
+    if (s) viewingInstanceId = (await openResumeInstance(WORK_DIR, s.id)).instanceId;
   }).catch(err => console.error('[preheat]', err));
 });
 

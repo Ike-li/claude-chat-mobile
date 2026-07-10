@@ -335,6 +335,52 @@ async function readHeadMeta(file, size) {
   return meta;
 }
 
+// 续接 CLI 原生会话时恢复权限档：CLI 把切档（Shift+Tab）写进 transcript 的 `type:permission-mode` 记录，
+// 但 web 的 sessions.json 不记（那是 web 端才写的增强）。故续接一个纯 CLI 会话时，从 transcript 末条
+// permission-mode 记录恢复，避免一律回落「默认审批」。dontAsk 是 web 专属档、CLI transcript 不会出现，
+// 不列入白名单。⚠️ thinking/effort 档 CLI 完全不落盘（transcript 里只有 thinking 内容块、无档位字段），
+// 无从恢复——「默认思考」是诚实回退，属已知边界。
+const VALID_CLI_PERM_MODES = new Set(['default', 'plan', 'acceptEdits', 'bypassPermissions']);
+
+// 纯函数：给一串已解析 transcript 条目，返回末条【合法】permission-mode 的档值，无则 null。
+// 「末条为准」——权限档可多次切换，最后一次才是当前态；非法/脏值不外泄给 SDK（覆盖为 null，回落上层默认）。
+export function lastPermissionMode(entries) {
+  let mode = null;
+  for (const e of entries) {
+    if (e && e.type === 'permission-mode' && typeof e.permissionMode === 'string') {
+      mode = VALID_CLI_PERM_MODES.has(e.permissionMode) ? e.permissionMode : null;
+    }
+  }
+  return mode;
+}
+
+// 从 transcript 尾部读回末条 permission-mode（tail-oriented：档记录随会话推进落盘，最后一条在文件尾）。
+// 只读末尾 TAIL_READ_BYTES：与 readHeadMeta 尾窗同款权衡——极端超大会话里若末条档记录距尾 >512KB
+// 则读不到、返回 null 优雅回落（不误、不崩）。size 可注入省一次 stat；baseDir 供单测指向 tmpdir。
+export async function readLastPermissionMode(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
+  const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
+  try {
+    const fh = await open(file, 'r');
+    try {
+      if (size == null) ({ size } = await fh.stat());
+      if (size === 0) return null;
+      const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
+      const buf = Buffer.allocUnsafe(size - start);
+      const { bytesRead } = await fh.read(buf, 0, size - start, start);
+      const entries = [];
+      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+        if (!line.trim()) continue;
+        try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行/截断尾行：跳过 */ }
+      }
+      return lastPermissionMode(entries);
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  } catch {
+    return null; // 文件不存在/读失败：回落上层默认
+  }
+}
+
 // 会话归属校验：该 sessionId 的 jsonl 是否就在本 cwd 的 project 目录（server 用它把跨 cwd 的
 // 全局指针/失效 id 当「不属于本 cwd」处理——比 sessions.json 的 cwd 字段更硬，直接以文件存在为准）。
 export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) {
