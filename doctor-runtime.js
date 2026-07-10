@@ -38,7 +38,7 @@ export function runDoctor(ctx = {}) {
   const wc = (ctx.workDirs || []).length;
   checks.push({ id: 'WORK_DIRS', status: wc ? 'ok' : 'warn', detail: `${wc} 个工作目录`, safe: { count: wc } }); // 不回显路径
 
-  const sl = statuslineConfigDiagnostic();
+  const sl = statuslineConfigDiagnostic(ctx.webStatuslineOff);
   checks.push({ id: 'WEB_STATUSLINE', status: sl.status, detail: sl.detail });
 
   checks.push({ id: 'CONFIG_PERMS', status: ctx.configPermsProblems ? 'warn' : 'ok', detail: ctx.configPermsProblems ? `${ctx.configPermsProblems} 处权限过宽（应 0600）` : '配置文件权限 0600', safe: { problemCount: ctx.configPermsProblems || 0 } });

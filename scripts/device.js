@@ -60,6 +60,12 @@ function handleApprove(id) {
     console.error('❌ 错误：请提供需要批准的设备 ID。可以用 list 命令查看。');
     process.exit(1);
   }
+  // 纵深防御：只批准"确在待审批列表里"的设备 token，同 server.js 远程批准路径的既有防线
+  // （防打错 ID / 传入陈旧 ID 被静默加入信任列表——approveDevice 本身对任意非空字符串来者不拒）。
+  if (!getPendingDevices().some(d => d.deviceToken === id)) {
+    console.error(`❌ 错误：设备 ID「${id}」不在待审批列表里，未批准。可用 list 命令查看当前待审批设备。`);
+    process.exit(1);
+  }
   const ok = approveDevice(id);
   if (ok) {
     console.log(`\n✅ 成功批准设备: ${id}\n设备已加入白名单，连接将立即无缝解锁！`);

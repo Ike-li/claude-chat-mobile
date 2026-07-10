@@ -32,9 +32,25 @@ say() { printf '%s\n' "$*"; }
 die() { printf '✗ %s\n' "$*" >&2; exit 1; }
 
 NOTES=""
+TAG=""            # 中途失败时的清理需要判断 tag 是否已建、是否已确认推送（下方两个标记）
+TAG_PUSHED=""
+SUCCESS=""
 # 任何退出（成功/失败/取消/中断）都跑：还原未提交的 bump + 删临时文件。
 # 提交之后 package.json 已 == HEAD，checkout 是无操作，故对成功路径无害。
-cleanup() { git checkout -q -- package.json package-lock.json 2>/dev/null || true; [ -n "$NOTES" ] && rm -f "$NOTES" || true; }
+# 非成功退出额外收拾两处此前会留脏状态的坑：
+#   · tag 已建但未确认推送 → 删本地 tag，防重跑撞"tag 已存在"（无法恢复只能人工诊断）
+#   · 中途失败可能停在 master（已 checkout/merge 但未推完）→ 切回 dev，不留用户手动摸索
+cleanup() {
+  git checkout -q -- package.json package-lock.json 2>/dev/null || true
+  [ -n "$NOTES" ] && rm -f "$NOTES" || true
+  if [ -z "$SUCCESS" ]; then
+    if [ -n "$TAG" ] && [ -z "$TAG_PUSHED" ] && git rev-parse "$TAG" >/dev/null 2>&1; then
+      git tag -d "$TAG" >/dev/null 2>&1 || true
+    fi
+    CUR="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    [ "$CUR" = "master" ] && { git checkout -q dev 2>/dev/null || true; } || true
+  fi
+}
 trap cleanup EXIT
 
 # ── 预检 ─────────────────────────────────────────────
@@ -91,7 +107,7 @@ say "─────────────────────────
 sed 's/^/ │ /' "$NOTES"
 say "─────────────────────────────────────────"
 
-[ -n "$DRY" ] && { say "✓ DRY RUN —— 未改动任何东西"; exit 0; }
+[ -n "$DRY" ] && { SUCCESS=1; say "✓ DRY RUN —— 未改动任何东西"; exit 0; }
 if [ -z "$YES" ]; then
   read -r -p "推 master/dev + 打 tag + 建 Release？[y/N] " ans
   [ "$ans" = y ] || [ "$ans" = Y ] || die "已取消"
@@ -107,9 +123,11 @@ sleep 2
 [ "$(git ls-remote origin refs/heads/master | cut -f1)" = "$(git rev-parse master)" ] || die "origin/master 未更新到位（push 可能静默失败），请手动检查后重试"
 git tag -a "$TAG" -m "$TAG" master
 git push origin "$TAG"
+TAG_PUSHED=1   # 推送已确认成功：cleanup 不应再删本地 tag
 git checkout -q dev
 git push origin dev
 gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" --latest --verify-tag
+SUCCESS=1      # 全流程完成：cleanup 跳过"删 tag / 切回 dev"的失败态收拾
 
 say ""
 say "✓ 已发布 $TAG → https://github.com/$REPO/releases/tag/$TAG"

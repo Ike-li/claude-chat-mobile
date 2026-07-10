@@ -169,7 +169,7 @@ async function checkPort() {
 // D5: WEB_STATUSLINE 配置口径。E16 现在由 statusline.js 自包含组装，不依赖终端 statusLine 脚本或
 // ~/.claude/settings.json；settings.json 仍会被 Claude CLI 自己用于 permissions.allow，但不是 web 状态栏前置条件。
 function checkStatuslineConfig() {
-  const result = statuslineConfigDiagnostic();
+  const result = statuslineConfigDiagnostic(process.env.WEB_STATUSLINE === 'off');
   (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
@@ -197,18 +197,26 @@ function checkAnthropicEnv() {
   }
 }
 
-// D7: 配置文件权限（.env, data/sessions.json, data/init-cache.json）
+// D7: 配置文件权限（.env, data/*.json）。单一事实源列表：checkConfigPermissions 与 fixConfigFiles
+// 共用 CONFIG_FILE_NAMES，防止两处各自维护的清单再次漏同步（trusted/pending-devices.json、
+// cf-access-certs.json 此前就只在 devices.js/cf-access.js 里用 writeOwnerOnlyFile 写成 0600、
+// 却没被这里检查/自动修复覆盖——同样敏感、被漏检）。
+const CONFIG_FILE_NAMES = [
+  '.env',
+  join('data', 'sessions.json'),
+  join('data', 'init-cache.json'),
+  join('data', 'trusted-devices.json'),
+  join('data', 'pending-devices.json'),
+  join('data', 'cf-access-certs.json'),
+];
+
 function checkConfigPermissions() {
   if (platform() === 'win32') {
     ok('配置文件权限', 'Windows 平台跳过检查（不支持 POSIX 权限位）');
     return;
   }
 
-  const files = [
-    { path: join(HERE, '.env'), name: '.env' },
-    { path: join(HERE, 'data', 'sessions.json'), name: 'data/sessions.json' },
-    { path: join(HERE, 'data', 'init-cache.json'), name: 'data/init-cache.json' },
-  ];
+  const files = CONFIG_FILE_NAMES.map(name => ({ path: join(HERE, name), name }));
 
   const problems = [];
   for (const { path, name } of files) {
@@ -318,11 +326,7 @@ function fixConfigFiles() {
     return;
   }
 
-  const files = [
-    join(HERE, '.env'),
-    join(HERE, 'data', 'sessions.json'),
-    join(HERE, 'data', 'init-cache.json'),
-  ];
+  const files = CONFIG_FILE_NAMES.map(name => join(HERE, name));
 
   let fixed = 0;
   let skipped = 0;

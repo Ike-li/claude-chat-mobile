@@ -1,8 +1,12 @@
-export function statuslineConfigDiagnostic() {
+// off：调用方传入的 `process.env.WEB_STATUSLINE === 'off'`（本模块不直接读 env，保持纯函数可测）。
+// 两态都是合法配置、非风险，status 恒 ok；detail 如实反映当前生效状态，不再是恒定文案。
+export function statuslineConfigDiagnostic(off = false) {
   return {
     status: 'ok',
     name: 'WEB_STATUSLINE',
-    detail: 'web 状态栏自包含：使用 SDK usage + 本机 git + CLI 版本，默认启用；设 WEB_STATUSLINE=off 可关闭。',
+    detail: off
+      ? '已通过 WEB_STATUSLINE=off 关闭 web 状态栏。'
+      : 'web 状态栏自包含：使用 SDK usage + 本机 git + CLI 版本，默认启用；设 WEB_STATUSLINE=off 可关闭。',
   };
 }
 
@@ -29,7 +33,8 @@ export function classifyPermissionRule(rule) {
     return { rule: r, severity: 'ok', reason: '限定路径的写' };
   }
   if (tool === 'Read') {
-    if (wildcard || /^~?\/?\*\*/.test(spec)) return { rule: r, severity: 'warn', reason: '可读大范围文件' };
+    // (\.\.\/)* 兜住相对父目录穿越（如 ../** / ../../**）——之前只认 ~/、/、裸 ** 开头，会漏判这类同样宽泛的通配。
+    if (wildcard || /^(\.\.\/)*~?\/?\*\*/.test(spec)) return { rule: r, severity: 'warn', reason: '可读大范围文件' };
     return { rule: r, severity: 'ok', reason: '限定路径的读' };
   }
   if (tool === 'WebFetch' || tool === 'WebSearch') return { rule: r, severity: 'warn', reason: '可访问外部网络' };

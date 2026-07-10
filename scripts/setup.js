@@ -121,6 +121,11 @@ async function main() {
     const content = buildEnvContent(template, { authToken: token, workDir: wd || undefined });
     writeOwnerOnlyFile(envPath, content);
 
+    // 校验替换真的生效——buildEnvContent 靠正则匹配 .env.example 模板里的赋值行，模板格式一旦变了
+    // 会静默不替换（.replace 无匹配即原样返回），此前不管有没有生效都打印"已写入"成功提示。
+    if (!content.includes(`AUTH_TOKEN=${token}`)) {
+      console.error(`\n⚠️  .env.example 模板格式有变，AUTH_TOKEN 未能自动写入！请手动在 ${envPath} 里加一行：\nAUTH_TOKEN=${token}`);
+    }
     console.log(`\n${c.green('✓')} ${t.wroteLabel} ${c.bold(envPath)} ${c.dim(t.permNote)}`);
     console.log(c.bold(`\n${t.nextSteps}`));
     console.log(`  ${c.accent('node scripts/doctor.js')}   ${c.dim(t.stepDoctor)}`);

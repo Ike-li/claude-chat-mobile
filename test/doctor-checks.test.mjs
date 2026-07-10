@@ -11,6 +11,17 @@ test('statuslineConfigDiagnostic treats web statusline as self-contained', () =>
   assert.doesNotMatch(result.detail, /E16.*禁用/);
 });
 
+test('statuslineConfigDiagnostic：实际读取 off 状态，不再是恒定装饰性检查（code-review P2）', () => {
+  const enabled = statuslineConfigDiagnostic(false);
+  assert.equal(enabled.status, 'ok');
+  assert.match(enabled.detail, /SDK/); // 与默认调用一致：启用态
+
+  const off = statuslineConfigDiagnostic(true);
+  assert.equal(off.status, 'ok'); // WEB_STATUSLINE=off 是合法配置，不是风险，仍 ok
+  assert.match(off.detail, /已.*关闭|off/i);
+  assert.notEqual(off.detail, enabled.detail, '开/关两态的 detail 文案应不同，证明确实读取了状态');
+});
+
 // ④ 安全体检核心：危险白名单判定 —— 公网暴露前审查 permissions.allow 里哪些规则过宽。
 test.describe('classifyPermissionRule：危险规则判定', () => {
   const sev = r => classifyPermissionRule(r).severity;
@@ -43,6 +54,10 @@ test.describe('classifyPermissionRule：危险规则判定', () => {
     assert.equal(sev('Read'), 'warn');
     assert.equal(sev('WebFetch'), 'warn');
     assert.equal(sev('Bash(git*)'), 'warn');
+  });
+  test('相对父目录递归通配 Read(../**) → warn，不应被漏判为 ok（code-review P2）', () => {
+    assert.equal(sev('Read(../**)'), 'warn');
+    assert.equal(sev('Read(../../**)'), 'warn');
   });
   test('未知工具 / mcp 不误报 danger', () => {
     assert.equal(sev('mcp__server__tool'), 'ok');
