@@ -56,7 +56,6 @@
 | `user:interrupt` | `{instanceId?}` | 中断当前轮（不毁会话） |
 | `user:setPermissionMode` | `{mode, instanceId?}` | 切权限档：`default`/`plan`/`acceptEdits`/`bypassPermissions`/`dontAsk` |
 | `user:setEffort` | `{level, instanceId?}` | 切思考强度（`level` 为模型支持档位或 `null`=模型默认）；置换实例，busy 时拒切 |
-| `user:setWorkdir` | `{cwd}` | 切工作区（白名单校验，防穿越） |
 | `user:setViewing` | `{instanceId}` | 切当前查看 tab |
 | `user:approveDevice` | `{deviceId}` | 远程批准待信任设备（仅对确在待审批列表的 token 生效） |
 | `user:denyDevice` | `{deviceId}` | 远程拒绝/移除设备 |
@@ -77,7 +76,6 @@
 |---|---|---|
 | `sync:since` | `{sessionId, lastSeq, instanceId?}` | `{replayed, gap, found, pending}`（断线重连补发环形缓冲；`found:false`=实例已没了→客户端清屏重载历史） |
 | `logs:get` | `{instanceId?}` | `{logs[]}`（该实例的交互日志，需 `LOG_INTERACTIONS=1`） |
-| `models:get` | `{}` | `{models[]}`（当前查看 cwd 的可用模型清单，未知工作区返回空） |
 | `dev:restart` | `{}` | `{ok}` 或 `{ok:false, error}`（**仅 `DEV_MODE=1`**：优雅退出，靠 KeepAlive 自动拉起） |
 | `disconnect` | — | 系统事件；**不动 agent**（任务独立于连接存活） |
 
@@ -120,7 +118,7 @@
 
 ### `history.js` — CLI 会话历史读取（事实源 `~/.claude/projects/<project>/<id>.jsonl`）
 
-`HISTORY_MAX_MESSAGES` · `getProjectDir(cwd)` · `getSessionHistory(sessionId, cwd, limit?)` · `catchUpStep(state, …)`（只读追平增量） · `listSessionsPage(cwd, opts)` · `listSessions(cwd, opts?)` · `invalidateListCache(cwd)` · `sessionFileExists(cwd, id)`
+`HISTORY_MAX_MESSAGES` · `getProjectDir(cwd)` · `getSessionHistory(sessionId, cwd, limit?)` · `catchUpStep(state, …)`（只读追平增量） · `MIRROR_RELEASE_QUIET_TICKS` · `mirrorReleaseStep(state, …)`（只读镜像锁静默自动释放） · `listSessionsPage(cwd, opts)` · `listSessions(cwd, opts?)` · `invalidateListCache(cwd)` · `lastPermissionMode(entries)` · `readLastPermissionMode(sessionId, cwd)`（末条权限档恢复） · `sessionFileExists(cwd, id)` · `sessionFileSize(sessionId, cwd)`
 
 ### `sessions.js` — 服务端唯一持久状态（会话元数据，单 JSON 原子写；永不存消息内容）
 
@@ -136,7 +134,7 @@
 
 ### `devices.js` — 受信任 / 待确认设备指纹
 
-`loadTrustedDevices()` · `saveTrustedDevices()` · `loadPendingDevices()` · `savePendingDevices()` · `isDeviceTrusted(deviceToken)` · `addPendingDevice(deviceToken, info)` · `removePendingDevice(deviceToken)` · `getPendingDevices()` · `getLatestPendingDevice()` · `approveDevice(deviceToken)` · `denyDevice(deviceToken)`
+`MAX_PENDING_DEVICES`（50，待审设备上限） · `loadTrustedDevices()` · `getTrustedCount()` · `saveTrustedDevices()` · `loadPendingDevices()` · `savePendingDevices()` · `isDeviceTrusted(deviceToken)` · `addPendingDevice(deviceToken, info)` · `removePendingDevice(deviceToken)` · `getPendingDevices()` · `getLatestPendingDevice()` · `approveDevice(deviceToken)` · `denyDevice(deviceToken)`
 
 ### `statusline.js` — web 自有状态栏（E16，自包含、不读 `~/.claude/settings.json`）
 

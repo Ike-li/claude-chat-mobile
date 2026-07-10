@@ -1419,34 +1419,6 @@ io.on('connection', socket => {
     broadcastInstances();
   });
 
-  // 台阶3：切 cwd 分组上下文（新建会话选目录维度）。校验白名单防穿越。聚焦该 cwd 已有 live 实例（最近一个），
-  // 否则 open 其最后查看会话为一个 tab；全新空状态则 viewingInstanceId=null（前端清视图等首条消息懒开）。
-  on(socket, 'user:setWorkdir', async payload => {
-    const cwd = payload?.cwd;
-    if (typeof cwd !== 'string' || !workDirs.includes(cwd)) {
-      sysTo(socket, `未知工作目录：${cwd}`, true);
-      return instancesTo(socket);
-    }
-    viewingCwd = cwd;
-    let target = null;
-    for (const [iid, a] of agents) if (a.cwd === cwd) target = iid; // 末个匹配=最近 live 实例
-    if (!target) {
-      const saved = await currentSessionForCwd(cwd);
-      if (saved) {
-        const opened = instanceForSession(saved.id) || await openResumeInstance(cwd, saved.id);
-        target = opened.instanceId;
-        interactionLog.addSessionLog(saved.id, 'sys_info', `[SYS] 工作目录切换 (user:setWorkdir): 恢复最近会话 resumeId=${saved.id}, cwd=${cwd}`);
-      }
-    }
-    viewingInstanceId = target;          // 可能 null（该 cwd 全新）：前端清视图等首条消息懒开
-    if (target) { doneInstances.delete(target); errorInstances.delete(target); }
-    broadcastInstances();
-    pushModelsForCwd(cwd); // 有缓存即时推（快速路径），无实例时由下方 scout 补发真实模型
-    if (!viewingInstanceId) openScoutInstance(cwd); // 该 cwd 全新：scout 获取模型（不留幽灵会话）
-    lastStatusLine = null;
-    scheduleStatusRefresh();             // statusline git 段跟随新 cwd 刷新
-  });
-
   // 台阶3 新增：切视图到指定 tab。校验 instanceId ∈ live → 改 viewingInstanceId + 清该实例 done + 广播。
   on(socket, 'user:setViewing', payload => {
     const id = payload?.instanceId;
@@ -1669,15 +1641,6 @@ io.on('connection', socket => {
     }
     const logs = interactionLog.getSessionLogs(a.sessionId);
     ack({ logs });
-  });
-
-  // 主动拉取【当前查看工作区】的可用模型清单：回按 cwd 归键的缓存。模型清单随工作区 settings.local.json
-  // 覆盖网关/模型名而变（非账号级全局量）——故按 viewingCwd 取，未知工作区诚实返回空、绝不回退别区清单
-  // （防跨工作区泄漏 deepseek 等名）。不实时调 supportedModels()——它需活实例，新建会话时实例懒开尚未起；
-  // session:switch 预热的实例其 models 事件已填本区缓存，故切区后通常已是本区清单。
-  on(socket, 'models:get', (payload, ack) => {
-    if (typeof ack !== 'function') return;
-    ack({ models: modelsCache.get(viewingCwd)?.models ?? [] });
   });
 
   on(socket, 'disconnect', () => {
