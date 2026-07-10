@@ -550,6 +550,12 @@ if (process.stdin.isTTY) {
     if (text === '') {
       if (latest) {
         console.log(`\n[TTY] 收到回车！一键批准最新设备: ${latest}`);
+        // F2（code-review #5）：回车批准的是「Enter 那刻的最新」待审设备——若你看提示到按回车之间又来了新设备，
+        // 批准的可能已不是你以为的那个。这里若尚有其他待审设备就告警，让你察觉可能的竞态、必要时 deny 复核。
+        const others = getPendingDevices().filter(d => d.deviceToken !== latest).length;
+        if (others > 0) {
+          console.log(`   ⚠️ 另有 ${others} 个待审设备未处理——请确认刚批准的正是你想放行的那台（如有疑虑，运行 node scripts/device.js deny "${latest}" 撤销）`);
+        }
         approveDevice(latest);
         unlockDeviceSockets(latest);
         broadcastPendingDevices();

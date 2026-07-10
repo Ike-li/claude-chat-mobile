@@ -13,6 +13,11 @@ const PENDING_DEVICES_FILE = join(DATA_DIR, 'pending-devices.json');
 let trustedDevices = new Set();
 let pendingDevices = []; // Array of { deviceToken, ip, userAgent, ts }
 
+// F1（code-review #5）：待审设备容量上限。防「已过 AUTH_TOKEN 但未设备审批」的 LAN 客户端用【每次不同的
+// 随机 deviceToken】反复握手，把 pending-devices.json 撑爆 + 每来一个就 broadcastPendingDevices 刷屏可信端。
+// 正常单用户设备数远小于此；超出按插入序丢最旧（攻击 flood 是新到的，真实少量旧设备优先保留）。
+export const MAX_PENDING_DEVICES = 50;
+
 export function loadTrustedDevices() {
   try {
     if (!existsSync(TRUSTED_DEVICES_FILE)) {
@@ -89,6 +94,11 @@ export function addPendingDevice(deviceToken, info) {
     ...info,
     ts: Date.now()
   });
+  // F1：容量上限，超则按插入序丢最旧（数组头部=最早插入）。getPendingDevices 另按 ts 排序供展示，
+  // 此处按插入序裁剪确定性、不受同毫秒 ts 排序抖动影响。
+  if (pendingDevices.length > MAX_PENDING_DEVICES) {
+    pendingDevices = pendingDevices.slice(-MAX_PENDING_DEVICES);
+  }
   savePendingDevices();
 }
 

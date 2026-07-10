@@ -15,7 +15,8 @@ import {
   getPendingDevices,
   getLatestPendingDevice,
   approveDevice,
-  denyDevice
+  denyDevice,
+  MAX_PENDING_DEVICES
 } from '../devices.js';
 
 // 路径
@@ -127,5 +128,23 @@ test.describe('devices.js 单元测试', () => {
 
     assert.equal(approveDevice(null), false);
     assert.equal(denyDevice(null), false);
+  });
+
+  // F1（code-review #5）：pendingDevices 有容量上限，防 LAN-authenticated flood 撑爆文件/刷屏。
+  test('pendingDevices 有容量上限，超出丢最旧（防 flood）', () => {
+    loadPendingDevices();
+    for (const d of getPendingDevices()) removePendingDevice(d.deviceToken); // 清干净
+    assert.equal(getPendingDevices().length, 0);
+
+    const N = MAX_PENDING_DEVICES + 5;
+    for (let i = 0; i < N; i++) addPendingDevice(`flood-${i}`, { ip: '10.0.0.1', userAgent: 'x' });
+
+    const pending = getPendingDevices();
+    assert.equal(pending.length, MAX_PENDING_DEVICES, '超上限被裁到 MAX');
+    assert.equal(pending.some(d => d.deviceToken === 'flood-0'), false, '最早插入的被丢');
+    assert.equal(pending.some(d => d.deviceToken === `flood-${N - 1}`), true, '最新的保留');
+
+    for (const d of getPendingDevices()) removePendingDevice(d.deviceToken); // 清理
+    assert.equal(getPendingDevices().length, 0);
   });
 });
