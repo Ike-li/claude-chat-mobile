@@ -183,6 +183,13 @@ function isCliSystemLine(content) {
   // 标签块（起始行 isMeta=false），及其 <local-command-stdout>/<local-command-stderr> 输出。
   if (/^<command-(name|message|args)>/.test(t) && /<\/command-(name|message|args)>/.test(t)) return true;
   if (/^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t)) return true;
+  // `!` bash 模式注入：终端里 ! 前缀跑 bash，CLI 以 <bash-input>/<bash-stdout>/<bash-stderr> 注入输入/输出
+  // （role=user、isMeta 缺失，漏过 isMeta 闸）。实证 234 会话漏 4+4 条。
+  if (/^<bash-(input|stdout|stderr)>/.test(t) && /<\/bash-(input|stdout|stderr)>/.test(t)) return true;
+  // IDE 集成上下文注入：<ide_opened_file>/<ide_selection>/…——CLI 在 IDE 里把「打开的文件/选区」当上下文注入，
+  // 非用户对话（实证漏 10+3 条）。用捕获+同名闭合校验，兼容未来其他 <ide_*> 子标签、且仍要求闭合防误伤。
+  const ide = /^<(ide_[a-z_]+)>/.exec(t);
+  if (ide && new RegExp(`</${ide[1]}>`).test(t)) return true;
   // 用户打断标记（含 [Request interrupted by user] 与 [... for tool use] 变体）。
   if (/^\[Request interrupted by user[^\]]*\]$/.test(t)) return true;
   // Continue/继续 触发的 resume 空 turn 占位（assistant）。

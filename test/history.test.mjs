@@ -332,6 +332,36 @@ test('getSessionHistory: 形似系统行的真实消息不被误伤；API Error 
   assert.ok(msgs[2].content.startsWith('API Error:'));
 });
 
+test('getSessionHistory: IDE 集成 / bash 模式注入行（isMeta 缺失）被过滤（实证 code-review #4 漏网）', async () => {
+  // 实证：真实 transcript（234 会话）里 CLI 的 IDE 集成注入 <ide_opened_file>/<ide_selection> 与 `!` bash
+  // 模式注入 <bash-input>/<bash-stdout>(常内嵌 <bash-stderr>) 共漏 21 条——均 role=user、isMeta 缺失(undefined)、
+  // 闭合成对、内容是注入原文（"The user opened the file…" / "sudo bash -c…"），漏过 isMeta 闸当 user 气泡回显。
+  // 与 7/10 的 <command-*>/<local-command-*> 同类，当初未覆盖此两族。fixture 复刻真实形态（不带 isMeta）。
+  const cwd = '/test/ide-bash-noise';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'idebash', [
+    { type: 'user', message: { role: 'user', content: '真实提问' } },
+    { type: 'user', message: { role: 'user', content: '<ide_opened_file>The user opened the file /a/b.md</ide_opened_file>' } },
+    { type: 'user', message: { role: 'user', content: '<ide_selection>The user selected the lines 1 to 1 from /a/b.md</ide_selection>' } },
+    { type: 'user', message: { role: 'user', content: "<bash-input>sudo bash -c 'x'</bash-input>" } },
+    { type: 'user', message: { role: 'user', content: '<bash-stdout></bash-stdout><bash-stderr>sudo: a terminal is required</bash-stderr>' } },
+    { type: 'assistant', message: { role: 'assistant', content: '真实回答' } },
+  ]);
+  const msgs = await getSessionHistory('idebash', cwd, 50, { baseDir: BASE });
+  assert.deepEqual(msgs.map(m => m.content), ['真实提问', '真实回答'], 'IDE/bash 注入不得回显成气泡');
+});
+
+test('getSessionHistory: 形似 ide/bash 标签的真实消息不被误伤（非开头 / 未闭合）', async () => {
+  const cwd = '/test/ide-bash-safe';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'idebashsafe', [
+    { type: 'user', message: { role: 'user', content: '帮我解释 <ide_opened_file> 这个标签是什么' } }, // 非以标签开头
+    { type: 'user', message: { role: 'user', content: '<bash-input> 但我故意不闭合它，这是我随口打的一句话' } }, // 无闭合标签
+  ]);
+  const msgs = await getSessionHistory('idebashsafe', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 2, '非开头 / 未闭合 = 真实消息，应保留');
+});
+
 test('getSessionHistory: 子 agent（isSidechain）记录被过滤，即使带正文（与运行期一致）', async () => {
   const cwd = '/test/sidechain-hist';
   const dir = join(BASE, getProjectDir(cwd));
