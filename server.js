@@ -16,7 +16,7 @@ import compression from 'compression';
 import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
 import * as sessions from './sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache, catchUpStep } from './history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, getProjectDir, invalidateListCache, catchUpStep, mirrorReleaseStep } from './history.js';
 import { notificationForEvent, ntfyMetaFor, ntfyRequestInit } from './notifications.js';
 import { attributePath, buildDiff, readPreview } from './file-preview.js';
 import { runDoctor } from './doctor-runtime.js';
@@ -734,10 +734,14 @@ function setMirror(readonly, sessionId, force = false) {
 }
 let catchUpKey = null;                              // `${cwd}\x00${sessionId}`：当前追平的会话
 let catchUpState = { baseline: 0, wasBusy: false };
+// 只读锁释放状态机（history.js mirrorReleaseStep，含自动解锁计时）——修 code-review 发现 1：
+// 原实现上锁后无任何自动释放路径，终端写一次就把移动端输入锁死到手动切会话/接管为止。现每 tick 据
+// 「本 tick 有无外部写入 / web 是否在跑」推进 quietTicks：终端静默足够久（idle 且连续 N tick 无外部写入）自动解锁。
+let mirrorRelease = { readonly: false, quietTicks: 0 };
 async function catchUpTick() {
   const id = viewingInstanceId;
   const a = id ? agents.get(id) : null;
-  if (!a || !a.sessionId) { catchUpKey = null; setMirror(false, null); return; }              // 无查看会话：停
+  if (!a || !a.sessionId) { catchUpKey = null; mirrorRelease = { readonly: false, quietTicks: 0 }; setMirror(false, null); return; } // 无查看会话：停、复位释放态
   const key = `${a.cwd}\x00${a.sessionId}`;
   const st = instanceState(id);
   const localBusy = st === 'busy' || st === 'permission';
@@ -747,20 +751,32 @@ async function catchUpTick() {
     catch { return; }
     catchUpKey = key;
     catchUpState = { baseline: seedLen, wasBusy: localBusy };
+    mirrorRelease = { readonly: false, quietTicks: 0 };  // 切会话：释放态复位（新会话按其自身外部写入重判）
     setMirror(false, a.sessionId, true); // 切入不预锁：web resume 自身会刷 mtime、不可作判据；仅下方观察到外部真写入才锁。force 清上个会话残留的锁。
     return;
   }
-  if (localBusy) { catchUpState = { baseline: catchUpState.baseline, wasBusy: true }; return; } // 己方在跑：抑制、且免读大文件
+  if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
+    catchUpState = { baseline: catchUpState.baseline, wasBusy: true };
+    const rel = mirrorReleaseStep(mirrorRelease, { externalWrite: false, localBusy: true });
+    mirrorRelease = rel.state;
+    setMirror(rel.readonly, a.sessionId);
+    return;
+  }
   let messages;
   try { messages = await getSessionHistory(a.sessionId, a.cwd); } catch { return; }
   const { emit, state } = catchUpStep(catchUpState, { messages, localBusy: false });
   catchUpState = state;
-  if (!emit.length || viewingInstanceId !== id) return;               // await 让出后视图可能已切走：只推给仍在看该会话的
-  io.emit('agent:event', {
-    seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
-    type: 'history_append', payload: { messages: emit, external: true }
-  });
-  setMirror(true, a.sessionId);                                      // 观察到外部写入 → 锁只读（切会话才重判）
+  if (viewingInstanceId !== id) return;                              // await 让出后视图可能已切走：不推、不动锁（切走由下轮切换分支重判）
+  const externalWrite = emit.length > 0;
+  if (externalWrite) {                                               // 观察到外部写入 → 追平尾巴
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
+      type: 'history_append', payload: { messages: emit, external: true }
+    });
+  }
+  const rel = mirrorReleaseStep(mirrorRelease, { externalWrite, localBusy: false }); // 外部写入→锁；idle 无外部→累计静默、达阈值自动解锁
+  mirrorRelease = rel.state;
+  setMirror(rel.readonly, a.sessionId);                             // setMirror 仅在锁态变化时广播（解锁瞬间→前端恢复输入）
 }
 setInterval(() => { catchUpTick().catch(() => {}); }, CATCH_UP_INTERVAL_MS).unref();
 

@@ -126,12 +126,39 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
 //   · 持续 idle 期间的增长 → 判为【外部（终端）写入】→ 推 messages 超出 baseline 的尾巴。
 // messages = 当前 getSessionHistory 结果（仅 user/assistant 文本、≤HISTORY_MAX_MESSAGES 条）。
 // 边界：极端会话 > 2000 条被削头时 len 可能 < baseline → 不推（保守），属已知限制。
+// ⚠️ 已知边界（code-review 发现 2，有意不修）：外部（终端）写入若【撞进本地 turn 的 busy→idle 吸收窗口】——
+//    即 web 自己 turn 运行期间终端也写了同一会话——会被 wasBusy 分支的整段吸收一并吞掉、停留期间不回显，
+//    须切走该会话经前端 diskLen 重载（logic.js shouldReloadOnEnter）才追平。触发面窄（须停留不切 + 恰好并发
+//    本地 turn），稳健区分己方/外部写入需 server 传 ownDelta 或内容比对、代价不划算，故接受为已知边界。
+//    契约护栏：busy→idle 必须【整段吸收】（emit []），绝不改成把 [baseline,len) 全当外部 emit——否则己方
+//    turn 的每条会被 live 流 + history_append 重复渲染成气泡。见 test/mirror-sync.test.mjs 的 skip 说明。
 export function catchUpStep(state, { messages, localBusy = false }) {
   const len = messages.length;
   if (localBusy) return { emit: [], state: { baseline: state.baseline, wasBusy: true } };
   if (state.wasBusy) return { emit: [], state: { baseline: len, wasBusy: false } }; // 吸收己方 turn 的写盘
   if (len > state.baseline) return { emit: messages.slice(state.baseline), state: { baseline: len, wasBusy: false } };
   return { emit: [], state: { baseline: state.baseline, wasBusy: false } };
+}
+
+// 只读镜像锁的【释放】状态机（纯函数，便于单测）——修 code-review 发现 1：原实现 setMirror(true) 在观测到
+// 外部写入时上锁，但没有任何自动释放路径（setMirror(false) 仅在「无查看会话」「切了会话」触发），导致终端
+// 写一次就把移动端输入锁死到用户手动切会话/接管为止，即便终端 turn 早已结束。catchUpTick 每 tick 调一次本函数。
+// state = { readonly, quietTicks }：
+//   · externalWrite（本 tick catchUpStep emit 非空 = 观测到外部落定新消息）→ 上锁、quietTicks 清零；
+//   · localBusy（web 自己在跑 turn）→ 终端是否静默无从判断 → 保持当前锁态、quietTicks 清零（不借己方忙碌攒静默）；
+//   · idle 且无外部写入 → quietTicks++；累计到 MIRROR_RELEASE_QUIET_TICKS 判「终端已静默足够久、turn 已停」→ 自动解锁。
+// 保守取舍（见对话）：「静默 N tick」≠「终端 turn 一定结束」（可能在跑长工具/思考、不落盘），故 N 取偏大值；
+//   且前端「仍要发送」手动接管（mirrorOverriddenSid）是另一条独立解锁路径，不受本函数影响，作并发写兜底。
+export const MIRROR_RELEASE_QUIET_TICKS = 5; // ×CATCH_UP_INTERVAL_MS(2.5s) ≈ 12.5s 终端静默 → 自动解锁
+export function mirrorReleaseStep(state, { externalWrite = false, localBusy = false } = {}) {
+  const prevReadonly = Boolean(state?.readonly);
+  const prevQuiet = Number(state?.quietTicks) || 0;
+  if (externalWrite) return { readonly: true, state: { readonly: true, quietTicks: 0 } };
+  if (localBusy) return { readonly: prevReadonly, state: { readonly: prevReadonly, quietTicks: 0 } };
+  if (!prevReadonly) return { readonly: false, state: { readonly: false, quietTicks: 0 } };
+  const quietTicks = prevQuiet + 1;
+  const readonly = quietTicks < MIRROR_RELEASE_QUIET_TICKS;
+  return { readonly, state: { readonly, quietTicks: readonly ? quietTicks : 0 } };
 }
 
 // 提取纯文本内容（content 可能是 string 或 array）
