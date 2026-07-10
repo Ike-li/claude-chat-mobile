@@ -362,6 +362,37 @@ test('getSessionHistory: 形似 ide/bash 标签的真实消息不被误伤（非
   assert.equal(msgs.length, 2, '非开头 / 未闭合 = 真实消息，应保留');
 });
 
+test('getSessionHistory: 同 uuid 重复落盘去重（interrupt+queue 竞态重复写 → 不显重复气泡）', async () => {
+  // 实证 code-review：真实 transcript（234 会话）扫出 1 个会话有 8 条同 uuid 重复落盘（interrupt+queue 竞态），
+  // getSessionHistory 无 uuid 去重 → 渲染成重复气泡。uuid 是每条唯一标识：同 uuid = 同一逻辑消息写了两次
+  // （非合法重复），按 uuid 去重安全——合法重复内容（如两次「继续」）是不同 uuid、不误删。
+  const cwd = '/test/dup-uuid';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'dupuuid', [
+    { type: 'user', uuid: 'u1', message: { role: 'user', content: '第一句' } },
+    { type: 'assistant', uuid: 'a1', message: { role: 'assistant', content: '回答' } },
+    { type: 'assistant', uuid: 'a1', message: { role: 'assistant', content: '回答' } }, // 同 uuid 重复落盘
+    { type: 'user', uuid: 'u2', message: { role: 'user', content: '继续' } },
+    { type: 'user', uuid: 'u3', message: { role: 'user', content: '继续' } }, // 合法重复内容、不同 uuid → 保留
+  ]);
+  const msgs = await getSessionHistory('dupuuid', cwd, 50, { baseDir: BASE });
+  assert.deepEqual(msgs.map(m => m.content), ['第一句', '回答', '继续', '继续'],
+    '同 uuid 去重（「回答」只一次）；不同 uuid 的合法重复保留（「继续」两次）');
+});
+
+test('getSessionHistory: 无 uuid 的条目不因 undefined 相撞而互相去重', async () => {
+  // 防御：部分旧条目可能无 uuid；不得把它们全当「同 undefined」去重掉。
+  const cwd = '/test/no-uuid';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'nouuid', [
+    { type: 'user', message: { role: 'user', content: 'A' } },
+    { type: 'assistant', message: { role: 'assistant', content: 'B' } },
+    { type: 'user', message: { role: 'user', content: 'C' } },
+  ]);
+  const msgs = await getSessionHistory('nouuid', cwd, 50, { baseDir: BASE });
+  assert.deepEqual(msgs.map(m => m.content), ['A', 'B', 'C'], '无 uuid 条目全保留');
+});
+
 test('getSessionHistory: 子 agent（isSidechain）记录被过滤，即使带正文（与运行期一致）', async () => {
   const cwd = '/test/sidechain-hist';
   const dir = join(BASE, getProjectDir(cwd));

@@ -50,6 +50,10 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   if (cached && cached.mtimeMs === mtimeMs) return cached.messages.slice(-limit);
 
   const messages = [];
+  // 同 uuid 去重：真实 transcript 存在「interrupt+queue 竞态导致同一消息重复落盘」（同 uuid 写两次）→
+  // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
+  // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 为本次读取的瞬时结构（返回即释放）。
+  const seenUuids = new Set();
   try {
     // 逐行读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
     // （取代原「尾部 1MB」截断方案）。累积数组下方封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
@@ -84,6 +88,8 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
         // 标签块、[Request interrupted by user] 打断标记、resume 空 turn 的 'No response requested.'。非对话内容，
         // 回显时跳过——否则会当成 user/assistant 气泡混进历史（见 test「CLI 系统行被过滤」）。
         if (isCliSystemLine(content)) continue;
+        // 同 uuid 重复落盘去重（仅 uuid 存在时；缺 uuid 的旧条目不因 undefined 相撞而互删）。
+        if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
         messages.push({
           role: entry.message?.role || entry.type,
           content,
