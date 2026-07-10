@@ -1456,7 +1456,11 @@ io.on('connection', socket => {
   on(socket, 'session:new', (payload, maybeAck) => {
     // 兼容两种调用形态：emit('session:new', cb) 与 emit('session:new', {cwd}, cb)
     const ack = typeof payload === 'function' ? payload : maybeAck;
-    const cwd = (payload && typeof payload === 'object') ? routeCwd(payload.cwd) : viewingCwdOf();
+    let cwd = (payload && typeof payload === 'object') ? routeCwd(payload.cwd) : viewingCwdOf();
+    // #8 灰边界修：热移除目录上「仅拒新开」。若正查看该目录的 live 实例，viewingCwd 会停在已移除目录
+    // （reloadWorkdirs 有实例时不归位），routeCwd 缺省回退又会返回它 → 新会话仍落非白名单目录。这里归位到
+    // 白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该目录现有会话不受影响。
+    if (!workDirs.includes(cwd)) cwd = workDirs[0];
     viewingCwd = cwd;
     sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
     viewingInstanceId = null;       // 清查看 tab（**不再 dispose 任何实例**——背景 tab 继续跑），首条消息懒开
