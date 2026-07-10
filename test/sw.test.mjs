@@ -262,6 +262,55 @@ test.describe('sw-cleanup.js — 自愈注销', () => {
     assert.equal(reloaded, false, 'reload 不应被调用');
   });
 
+  test('只有当前 push SW（/js/sw.js）→ 放过，不注销、不 reload', async () => {
+    let unregistered = 0;
+    let reloaded = false;
+
+    const globals = {
+      navigator: {
+        serviceWorker: {
+          getRegistrations: () => Promise.resolve([
+            { active: { scriptURL: 'https://host/js/sw.js' }, unregister: () => { unregistered++; return Promise.resolve(true); } },
+          ]),
+        },
+      },
+      window: { caches: {} },
+      caches: { keys: () => Promise.resolve([]), delete: () => Promise.resolve(true) },
+      location: { reload: () => { reloaded = true; } },
+    };
+
+    runInMock(cleanupSrc, globals);
+    await new Promise(r => setTimeout(r, 100));
+
+    assert.equal(unregistered, 0, '合法 push SW 不应被注销');
+    assert.equal(reloaded, false, '仅 push SW 时不应 reload');
+  });
+
+  test('混合：遗留 SW + push SW → 只注销遗留、放过 push、reload', async () => {
+    const unregistered = [];
+    let reloaded = false;
+
+    const globals = {
+      navigator: {
+        serviceWorker: {
+          getRegistrations: () => Promise.resolve([
+            { active: { scriptURL: 'https://host/sw.js' }, unregister: () => { unregistered.push('legacy'); return Promise.resolve(true); } },
+            { active: { scriptURL: 'https://host/js/sw.js' }, unregister: () => { unregistered.push('push'); return Promise.resolve(true); } },
+          ]),
+        },
+      },
+      window: { caches: {} },
+      caches: { keys: () => Promise.resolve(['v1']), delete: () => Promise.resolve(true) },
+      location: { reload: () => { reloaded = true; } },
+    };
+
+    runInMock(cleanupSrc, globals);
+    await new Promise(r => setTimeout(r, 100));
+
+    assert.deepEqual(unregistered, ['legacy'], '只注销遗留 SW，放过 push SW');
+    assert.equal(reloaded, true, '有遗留 SW 时应 reload');
+  });
+
   test('getRegistrations 抛错 → 静默吞噬', async () => {
     const globals = {
       navigator: {
