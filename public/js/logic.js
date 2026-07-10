@@ -163,6 +163,25 @@ export function syncAckAction(err, res) {
   return 'none';
 }
 
+// 切视图入场（bindView 的 sync:since ack 回调）该拿什么当渲染真相：活缓冲/DOM 缓存 vs 磁盘 history 全量重载。
+// 与 syncAckAction 分工不同——那是「重连/probe」路径（connect 后补发），这是「切视图入场」路径（bindView 独立决策）。
+// 要害盲区：CLI 在终端外部 `--resume` 写盘的消息【不经过】web 这个 SDK 实例的活缓冲，只落磁盘 transcript。
+// 若 web 离开期间被外部写过，切回时 replayed=0（活缓冲无那些消息）却 hasCache=true（有旧 DOM 缓存）——
+// 旧逻辑信缓存不拉盘 → 永远看不到外部写入。故此处比对 server 报的磁盘 history 条数 diskLen 与前端上次为该
+// 会话渲染到的 seenDiskLen：磁盘更长 = 被外部写过 = 当作一种 gap，清屏全量重载磁盘（唯一真相源、清屏天然无重复）。
+//   gap → 'reload'（缓冲超窗，同 syncAckAction）；
+//   replayed>0 → 'keep'（web 端活跃、活缓冲是渲染真相，绝不重载以免丢实时 thinking / 在跑 turn）；
+//   replayed===0 && !hasCache → 'load'（聊天区空、拉磁盘首次填充，不必清屏）；
+//   replayed===0 && hasCache && diskLen>seenDiskLen → 'reload'（外部写入盲区：缓存已过期，清屏全量重载）；
+//   否则 → 'keep'（缓存仍是最新，保留 DOM 秒恢复）。
+export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seenDiskLen = 0 } = {}) {
+  if (gap) return 'reload';
+  if (replayed > 0) return 'keep';
+  if (!hasCache) return 'load';
+  if (diskLen > seenDiskLen) return 'reload';
+  return 'keep';
+}
+
 // 软键盘弹起时，底部输入区(footer)该用多大的 padding-bottom 给键盘让位。
 //   iOS Safari：键盘只缩 visualViewport、layout viewport(innerHeight)不动 → 需手动补 (innerHeight-viewportHeight)
 //     把输入框顶到键盘上方；

@@ -1578,14 +1578,16 @@ io.on('connection', socket => {
     }));
   });
 
-  on(socket, 'sync:since', (payload, ack) => {
+  on(socket, 'sync:since', async (payload, ack) => {
     const { sessionId, lastSeq, instanceId } = payload || {};
-    // ack {replayed, gap, found}：replayed=0 表示该实例无可回放的缓冲（如刚 open 尚未跑/重启后空），
+    // ack {replayed, gap, found, diskLen}：replayed=0 表示该实例无可回放的缓冲（如刚 open 尚未跑/重启后空），
     // 客户端据此回落到 session:history 回显，避免整页刷新后空屏。found=false 专指「实例已没了」
     // （dispose/重启/effort 切档换 instanceId）——与「实例还在、只是没新事件」的 replayed=0 区分开，
     // 让重连客户端能据此清屏重载历史（connect 路径不像 bindView 那样先 clearView，无法靠 replayed 自辨）。
-    const done = (replayed, gap, found = true, pending = null) => {
-      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending });
+    // diskLen=磁盘 transcript 的 history 条数（仅 replayed=0 时读、带回）：供前端切入对账「离开期间被终端外部
+    // 写入」的盲区——磁盘比前端已渲染长即清屏全量重载（见 logic.js shouldReloadOnEnter）。
+    const done = (replayed, gap, found = true, pending = null, diskLen = null) => {
+      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen });
     };
     const a = routeInstance(instanceId); // 台阶3：续传指定 tab 实例的缓冲（缺省 viewingInstanceId）
     if (!a || a.sessionId !== sessionId) return done(0, false, false); // 无匹配实例：客户端清屏重载历史；亦会在下个 live 事件凭 epoch 自愈
@@ -1602,10 +1604,16 @@ io.on('connection', socket => {
     // 跳过 loadHistory → 切入后聊天区空白（jsonl 历史从不加载）。排除后这类实例 replayed=0，前端正确回落
     // session:history。events 仍全量回放（前端要 models 填模型/effort 下拉），仅计数口径变。
     const replayed = events.filter(e => e.type !== 'models').length;
+    // 仅 replayed=0（活缓冲无可回放对话内容）时读磁盘 history 条数带回——正是「切入可能被外部写过的会话」候选；
+    // replayed>0=web 活跃、信活缓冲、不必对账磁盘。getSessionHistory 有 mtime 缓存，成本可忽略。
+    let diskLen = null;
+    if (replayed === 0) {
+      try { diskLen = (await getSessionHistory(a.sessionId, a.cwd)).length; } catch { diskLen = null; }
+    }
     // 状态对账：随 ack 带回该实例当前未决审批/提问快照。pendingPermissions/pendingQuestions 是权威真相，
     // 原始 permission_request/question 事件可能已被环形缓冲 trim 或切视图时被前端分流丢弃——前端在视图稳定后
     // （所有 clearView 之后，尤其 gap→重载路径）据此重建卡片，杜绝「角标 ⚠️ 待审批但会话内无卡片」。
-    done(replayed, gap, true, a.pendingRequestsSnapshot());
+    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen);
   });
 
   on(socket, 'logs:get', (payload, ack) => {

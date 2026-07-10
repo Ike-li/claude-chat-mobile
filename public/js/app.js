@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget } from './logic.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -103,6 +103,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   // ---- 状态 ----
   let currentSessionId = localStorage.getItem('current_session') || null;
   const sessionDomCache = new Map();
+  // per-session「上次为该会话渲染到的磁盘 history 条数」（history 口径，非活缓冲 seq）。切入时与 server 报的
+  // diskLen 比对，判「离开期间被终端外部写过」→ 清屏重载（见 shouldReloadOnEnter）。独立于 sessionDomCache：
+  // 后者只在切走时 set 一次（DOM 快照），这里要在每次 loadHistory/onHistoryAppend 渲染后累积。
+  const seenDiskLenBySession = new Map();
   // 这些状态会被早期 socket/DOM 回调触达，必须先于回调注册声明，避免首连事件抢跑触发 TDZ。
   let _busyState = false;
   let interruptPending = false;
@@ -2139,18 +2143,25 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
     socket.emit('sync:since', { instanceId: id, sessionId: sid, lastSeq: resumeFromSeq }, res => {
       if (displayedInstanceId !== id) return;        // 已切走：丢弃过期回调
-      // S1：不再 innerHTML=''。hasCache 时已增量续传（resumeFromSeq=缓存位置，回放只含新事件、append 不重复）；
-      // 无缓存且 replayed===0 → 回退 history；其余（无缓存有回放 / 有缓存）直接收尾。
-      if (res && res.replayed === 0 && !hasCache) {
+      // S1：hasCache 时已增量续传（resumeFromSeq=缓存位置，回放只含新事件、append 不重复）。
+      // 切入决策交纯函数 shouldReloadOnEnter（logic.js，单测覆盖）——活缓冲/DOM 缓存 vs 磁盘全量重载：
+      //   'load'   无缓存、聊天区空 → 拉磁盘首次填充（不必清屏）；
+      //   'reload' gap（缓冲超窗残缺）或磁盘被外部写长（web 离开期间终端 CLI 写盘的盲区）→ 清屏全量重载磁盘；
+      //   'keep'   缓存/活缓冲即最新真相 → 直接收尾，保留 DOM 秒恢复。
+      const action = shouldReloadOnEnter({
+        replayed: res?.replayed, gap: res?.gap, hasCache,
+        diskLen: res?.diskLen ?? 0, seenDiskLen: seenDiskLenBySession.get(sid) ?? 0
+      });
+      if (action === 'load') {
         loadHistory(sid, entry.cwd);
-      } else if (res && res.gap) {
-        // 缓冲超窗、回放残缺 → 清屏全量重载历史（同重连路径 syncAckAction 的 gap→reload，不把残缺当完整）
+      } else if (action === 'reload') {
+        // 清屏全量重载历史（同重连路径 syncAckAction 的 gap→reload，不把残缺/过期缓存当完整）
         clearView(sid, null); showLoadingCard(); loadHistory(sid, entry.cwd);
       } else {
         hideLoadingCard();
       }
       // 状态对账：视图已稳定（上面所有 clearView 已执行完）→ 用 ack 带回的快照重建未决审批/提问卡片。
-      // 放最后而非提前 socket.emit，正为不被 gap 分支的 clearView 清掉（workflow 高频事件常触发 gap）。
+      // 放最后而非提前 socket.emit，正为不被 reload 分支的 clearView 清掉（workflow 高频事件常触发 gap）。
       applyPendingSnapshot(res?.pending);
     });
   }
@@ -2902,6 +2913,9 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       }
       addBar(`加载了 ${msgs.length} 条历史消息`, 'text-ink-faint');
       renderHistoryBubbles(msgs);
+      // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
+      // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
+      seenDiskLenBySession.set(sessionId, msgs.length);
     });
   }
 
@@ -2939,7 +2953,12 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   function onHistoryAppend(ev) {
     if (ev.instanceId !== viewingInstanceId) return; // 只进当前查看会话（server 已按 viewing 发，这里再兜一层）
     const msgs = ev.payload?.messages || [];
-    if (msgs.length) renderHistoryBubbles(msgs);
+    if (msgs.length) {
+      renderHistoryBubbles(msgs);
+      // 追平也是磁盘 history 增量——累加到已见条数，保持切入对账基准准确（见 shouldReloadOnEnter）。
+      const sid = ev.sessionId;
+      if (sid) seenDiskLenBySession.set(sid, (seenDiskLenBySession.get(sid) || 0) + msgs.length);
+    }
   }
 
   // 只读锁：会话被判「正在终端运行」时常驻横幅 + 禁用输入，硬防两进程并发写盘分叉。
