@@ -4,7 +4,7 @@
 
 | 字段 | 内容 | 字段 | 内容 |
 | --- | --- | --- | --- |
-| 文档编号 | `HLD-CCM-001` | 版本 | v2.13(独立择优稿) |
+| 文档编号 | `HLD-CCM-001` | 版本 | v2.14(独立择优稿) |
 | 文档类型 | 高层架构设计(HLD) | 密级 | 内部 |
 | 承接需求 | `prd-ccm.md` v3.6(提交评审稿) | 参考基线 | 现有实现 `claude-chat-mobile` v1.2.1 |
 | 编制日期 | 2026-07-11 | 状态 | 提交技术评审 |
@@ -30,6 +30,7 @@
 | v2.11 | 2026-07-11 | SP 实证闭合(直读 SDK 0.3.201 类型,零 token):①**SP-11 已闭**——官方 `listSessions({dir,limit,offset,includeProgrammatic})→SDKSessionInfo[]` 坐实(含 sessionId/summary/lastModified/cwd 元数据,另有 `getSessionInfo`),目录枚举降级案废弃;②**SP-01 增量**——allow_session 依赖的 `updatedPermissions?: PermissionUpdate[]`(destination 枚举含 'session')坐实,FR-05 三档官方通路成立,SP-01 仅剩"updatedInput==执行值"实跑。 |
 | v2.12 | 2026-07-11 | **SP-01 实证完全闭合**(真实 turn 实跑,非类型静态核验):spike 脚本直驱 SDK `query()`,`canUseTool` 回调内对模型原始提议的 Bash 写文件命令故意回填不同的 `updatedInput`,以磁盘落地文件(独立于 SDK 自报的 `tool_result`)作 ground truth——3 次独立复现,结果一致为回填值,证实"`updatedInput`==工具实际执行值"运行时语义成立;SP-01 → ✅ 已闭(详见 §9)。SP 表 11 项中 3 项已闭(SP-01/07/11),8 项待验。 |
 | v2.13 | 2026-07-11 | **SP-05/09/10 收尾**(承接 PRD v3.6 OQ-01/OQ-05 决策,独立推导、不参照现有实现):三项均为"设计经纯函数原型验证成立,是否/何时接入生产实现留待路线图"——与 SP-01/07/11 验证外部 SDK 事实、一经确认永久成立不同,SP-05/09/10 验证的是本稿自身机制的算法正确性,"消除跨设备误解/不丢不重不复现"等 SP 原始定义描述的是**产品实际行为**,纯函数证明只闭合算法这一环,不等同于产品行为已达成,故三项**均不计入"已闭"**。①**SP-10 两路一致性重设计**——去掉 `mixedWrites` 分类器与"锚点覆写 vs 增量追平"二分支(连带其竞态论证一并消除),统一为"任何时候推进 `seenDiskLen` 一律走增量 `readSince`+幂等去重,不做信任式覆写",新增本地 turn 结束(busy→idle)即触发一次追平检查——较原方案更简、且从根上消除"外部写入撞入忙碌窗口"这类边界,纯函数 spike 验证不丢不重不复现(详见 LLD §5.1.2);②**SP-05 设计层验证**——LLD §5.4 的 `assertWriter`/`Map<(sessionId,connId),MirrorState>` 设计经纯函数原型验证站得住(LLD 自带测试用例:两连接看不同会话,一方变化→另一方零影响);③**SP-09 部分收尾**——OQ-01 已决(纯按 `waitingSince` 升序,等得越久排越前;风险/项目降为展示分组不参与排序)落地 LLD §3.2.5 `AttentionDeriver`,多会话排序正确性以纯函数 spike 验证;原始定义另含"实时性",这一项本质要求活系统才能验证,纯函数证明结构性够不到,如实标注仍未验证;④**OQ-05 落地**——过期语义仍为 fail-closed(承接既有决定),悬置时长上限(TTL)定为部署可配置项、不预置具体数值,`waitingSince`"不可从 `expiresAt` 反推"结论不因此改变(TTL 本身可配、更不该反推);AD-11 §9.166-167 措辞同步。SP 表 11 项:3 项已闭(01/07/11)、3 项设计验证通过待实现(05/09/10),5 项待验。承接号 v3.5→v3.6。 |
+| v2.14 | 2026-07-11 | **SP-02/03/04/06/08 全面核查收尾**(机主要求把全部未验证项过一遍,避免不必要返工):①**SP-04 已闭**——权威文档调研确认目标浏览器广泛支持 WebAuthn、LLD 既有降级判断成立;**核查中新发现真实缺口并已回补设计**:iOS WKWebView(应用内嵌浏览器)WebAuthn 调用会永久 pending、Promise 不 resolve,原设计裸 `await` 检测会致降级分支永不触发,LLD §3.5.3 已补超时兜底;②**SP-08 已闭**——权威文档调研确认"signCount==0 免单调校验"即 W3C 规范 §7.2 验证算法本身第 17 步的规定、非本设计变通,3 个主流服务端库同构实现;iCloud 侧证据(半官方)强于 Google 侧(未查到一手文档),如实标注不对等但不改变统一处理,LLD §3.5.3 措辞同步精修;③**SP-06 本版本已查证不可用**——SDK 类型定义里"multi-client/worker"语言深挖后确认是 Anthropic 自家 Remote Control(连 claude.ai/code)的内部管线,非第三方可用的通用 attach 原语,一度怀疑可能推翻 AD-3 B 依赖上游的判断、深挖后排除,该判断维持不变;④**SP-02/03 部分收尾,量化/平台真实行为仍待真机**——SP-02 结构性核查(LLD §3.6.1 补 NFR-12 与节流规则的已知张力显性登记,无自建瓶颈)、SP-03 算法层(`resolveCatchUp` epoch/窗口门)纯函数 spike 验证不丢不重(80 组随机场景),二者的真实数值/平台行为超出设计审查与纯函数验证的能力边界,如实标注需真机测试,未强行"闭合"。SP 表 11 项:**5 已闭(01/04/07/08/11)、3 设计验证通过(05/09/10)、2 算法/结构层已核实机行为待测(02/03)、1 持续追踪(06)**。 |
 
 ---
 
@@ -269,13 +270,13 @@ CLI 桥接层(AD-6)、会话管理器(生命周期独立于连接、状态派生
 | 编号 | 待验证 | 目的 | 时机 |
 | --- | --- | --- | --- |
 | SP-01 | ✅ **已验证**:`updatedInput`/执行前调用/fail-closed/带外 signed control_response+`requestId`/allow_session 的 `updatedPermissions`(destination 含 'session')均坐实(直读 SDK 0.3.201);**"updatedInput==工具实际执行值"运行时语义已实跑坐实**——`canUseTool` 回调内对模型原始提议回填不同的 Bash 写文件命令,3 次独立复现,磁盘 ground truth 均为回填值(非模型原始值) | AD-7 审批完整性 + FR-05 三档 | **已闭** |
-| SP-02 | 真实移动网络状态投递 P95 时延 | 确认 NFR-12 | M0 前 |
-| SP-03 | 锁屏/后台/断网的重连补齐不丢不重 | 确认 AD-4 | M0 前 |
-| SP-04 | WebAuthn 在目标浏览器可用性与降级 | 确认 AD-7 强认证 | M0 前 |
+| SP-02 | ◐ **结构性核查完成,量化数值待真机**:LLD §3.6.1 TriggerPolicy 投递路径本身无自建批处理延迟(canUseTool 触发即推送,非轮询);**唯一已知张力**——同会话短间隔内第二个同类通知会被节流规则(建议 60s)压后,系呼应 PRD"注意力不对称"的有意设计取舍、已显性登记,非缺陷。真实移动网络+推送服务链路的 P95 数值无法靠设计审查/纯函数测得,须真机实测(此项 NFR-12 本身已设计"不可达则降级定性验收",非阻塞) | 确认 NFR-12 | M0 前(结构性无阻塞项;数值待真机) |
+| SP-03 | ◐ **算法层已验证,平台真实行为待真机**:`resolveCatchUp` 的 epoch 门+窗口门经纯函数 spike 验证——80 组随机断线/服务重启/缓冲区挤出组合下恒不丢(超窗必 full_reload)、不重(幂等去重)、不误判连续性(epoch 变化必重载)。真实移动设备锁屏/后台/断网时浏览器/OS 何时真正断开连接、何时真正发起重连尝试,是平台层面的真实行为,纯函数无法覆盖,须真机测试终定 | 确认 AD-4 | M0 前(算法已闭;平台行为待真机) |
+| SP-04 | ✅ **已验证**(权威文档调研):目标浏览器(iOS Safari 14.5+/16+ passkey、Android Chrome 67+)广泛支持 WebAuthn(MDN "Baseline Widely available");secure context 强制 HTTPS(纯 IP/不受信自签均不满足)、rpId 不得为 IP(web.dev 官方确认)均属实,LLD 既有"自托管降级是必需路径"判断成立。**核查中新发现一处真实缺口并已回补设计**:iOS 应用内嵌浏览器(WKWebView,缺专属 entitlement)WebAuthn 调用(含能力检测本身)会**永久 pending、Promise 不 resolve**(Apple 开发者论坛实测报告)——原设计裸 `await` 检测会卡死、降级分支永不触发;已在 LLD §3.5.3 补超时兜底。WeChat/支付宝内置浏览器直接支持情况、个别浏览器历史上 rpId-as-IP 分歧的当前状态,未查到权威一手资料,如实标注未知(不影响主结论,已有降级兜底覆盖未知环境) | 确认 AD-7 强认证 | **已闭** |
 | SP-05 | ◐ **设计验证通过**:LLD §5.4 的 `assertWriter(sessionId,connId)` + `Map<(sessionId,connId),MirrorState>` 设计经纯函数原型验证成立(两连接看不同会话,一方变化→另一方零影响);**未接入生产实现,"消除跨设备误解"的产品行为待实现后再验** | AD-5 改进 | 设计验证通过 |
-| SP-06 | 上游 SDK 是否/何时提供 attach 活进程能力 | 追踪 AD-3 B 依赖 | 持续 |
+| SP-06 | ◐ **本版本已查证不可用,继续追踪**(直读 SDK 0.3.201 类型):类型定义里出现的"multi-client/worker/attached client"等语言经深入排查(非浅层 grep),确认是 Anthropic 自家 **Remote Control** 功能的内部管线(连接对象为官方 `claude.ai/code`,经 `claude remote-control`/`--remote-control`/`--rc` 触发,`remoteControlAtStartup` 选项),**不是**第三方可用的通用"挂接已有会话/观察活进程"原语——`query()` 公开 API 未暴露此能力。AD-3 B"依赖上游,暂不可行"的现状判断维持不变(未被本次核查推翻,一度怀疑可能推翻、深挖后排除) | 追踪 AD-3 B 依赖 | 持续(本版本仍不可用) |
 | SP-07 | ✅ **已验证**:官方 `getSessionMessages(sessionId,{dir,limit,offset})` 支持读任意历史会话全量+分页(直读 SDK 0.3.201 类型) | AD-1 消息读取 | **已闭** |
-| SP-08 | WebAuthn 同步 passkey(iCloud/Google)的 signCount 行为 | 确认 AD-7 强认证防重放不误拒 | M0 前 |
+| SP-08 | ✅ **已验证**(权威文档调研):"`signCount==0` 时不做单调校验"并非本设计发明的变通,而是 **W3C WebAuthn 规范 §7.2 验证算法第 17 步本身的规定**(仅当双方计数器之一非零才触发递增校验);SimpleWebAuthn/py_webauthn/webauthn4j 三个主流独立服务端库均为同构实现,非孤例。同步 passkey"`signCount` 常年为 0"——iCloud 侧有半官方来源确证(Apple 开发者论坛员工回复);**Google 侧未查到一手权威文档**(现有二手资料均转引同一 Apple 来源),如实标注证据强度不对等,但不改变设计处理(不区分平台、统一按 `signCount==0` 处理)。LLD §3.5.3 已同步措辞精修(去"变通对策"框架,改"规范本身规定") | 确认 AD-7 强认证防重放不误拒 | **已闭** |
 | SP-09 | ◐ **部分收尾**:排序权重(OQ-01,已决——纯按 `waitingSince` 升序,等得越久排越前)、审批 TTL(OQ-05,已决——部署可配置项)均已定,`deriveAttention` 多会话**排序正确性**经纯函数原型验证;悬置起点字段(`createdAt`/`awaitingSince`)已落 schema。**"实时性"与 `AttentionDeriver` 本身的接入仍未验证**(需活系统,纯函数证明结构性够不到) | 确认 AD-11/FR-22 可落地 | 设计验证通过(实时性待验) |
 | SP-10 | ◐ **设计重设计并验证通过**:两路一致性简化为"始终增量 `readSince`+幂等去重,不做信任式覆写"+ busy→idle 立即触发追平,去掉 `mixedWrites` 分类器与竞态论证;纯函数原型验证不丢不重不复现(含混写场景)。**未接入生产实现** | 确认 AD-3 追平通路 | 设计验证通过 |
 | SP-11 | ✅ **已验证**(直读 SDK 0.3.201 类型):官方 `listSessions({dir,limit,offset,includeProgrammatic})→SDKSessionInfo[]` 坐实,含 sessionId/summary(三级标题 fallback)/lastModified/cwd;另有 `getSessionInfo` 读单会话;目录枚举降级案**不再需要** | 确认 AD-11 基础会话列表(纯终端会话的发现)可落地 | **已闭** |
