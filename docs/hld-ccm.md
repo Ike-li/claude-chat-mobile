@@ -4,7 +4,7 @@
 
 | 字段 | 内容 | 字段 | 内容 |
 | --- | --- | --- | --- |
-| 文档编号 | `HLD-CCM-001` | 版本 | v2.10(独立择优稿) |
+| 文档编号 | `HLD-CCM-001` | 版本 | v2.11(独立择优稿) |
 | 文档类型 | 高层架构设计(HLD) | 密级 | 内部 |
 | 承接需求 | `prd-ccm.md` v3.5(提交评审稿) | 参考基线 | 现有实现 `claude-chat-mobile` v1.2.1 |
 | 编制日期 | 2026-07-11 | 状态 | 提交技术评审 |
@@ -27,6 +27,7 @@
 | v2.8 | 2026-07-11 | 承接 PRD v3.4 评审完善(补两处未登记缺口 + 追溯校准):①**AD-3 补 FR-13a"增量追平通路"**——客户端 `seenDiskLen` 比对后端 `diskLen` 增量下发,**独立于 AD-4 事件流补齐**,闭合"终端外部写入对 web 结构性不可见"缺口(算法落 LLD §5.1);②**AD-7 补重启后 pending 审批 fail-closed 失效**(`canUseTool` 回调随进程终止不可兑现,重启后标失效防"批一个不会执行的操作");③追溯表 FR-21 纳入 web 经手覆盖差额(PRD §14.6)、NFR-12 降级路径、FR-09 指向 LLD AttachmentRef;④承接号 v3.3→v3.4,文档版本 v2.7→v2.8。 |
 | v2.9 | 2026-07-11 | 承接 PRD v3.5 评审修订:①AD-10 状态派生职责拆分("主机离线"归客户端连接层,后端逻辑上不可能派生);②AD-11 数据源②收敛为"驱动中会话"消内部矛盾;③AD-9 补通知正文策略(承接 OQ-08:RFC 8291/备用通道明文风险);④新增 AD-12 工作目录授权范围+FR-07 文件浏览承载补齐;⑤AD-3 补双通路一致性约束与 diskLen 计数口径,新增 SP-10;⑥§6 审批过期语义标暂定(OQ-05);⑦AD-1 补分页读取;⑧修 §1.1 悬空承接号(PRD-CCM-002→prd-ccm.md)、追溯表同步(FR-07/09/13a/14/23、NFR-12)、AD-3 备选表列名。 |
 | v2.10 | 2026-07-11 | SP 表补 **SP-11**(会话枚举 API 核验):LLD v1.12 补会话枚举详设时引用 SP-11,而本表无此编号(SP 编号 SoT 在本表,下游发现上游漏登、即补);无其它变更。 |
+| v2.11 | 2026-07-11 | SP 实证闭合(直读 SDK 0.3.201 类型,零 token):①**SP-11 已闭**——官方 `listSessions({dir,limit,offset,includeProgrammatic})→SDKSessionInfo[]` 坐实(含 sessionId/summary/lastModified/cwd 元数据,另有 `getSessionInfo`),目录枚举降级案废弃;②**SP-01 增量**——allow_session 依赖的 `updatedPermissions?: PermissionUpdate[]`(destination 枚举含 'session')坐实,FR-05 三档官方通路成立,SP-01 仅剩"updatedInput==执行值"实跑。 |
 
 ---
 
@@ -265,7 +266,7 @@ CLI 桥接层(AD-6)、会话管理器(生命周期独立于连接、状态派生
 
 | 编号 | 待验证 | 目的 | 时机 |
 | --- | --- | --- | --- |
-| SP-01 | ◑ **大部分闭合**:`updatedInput`/执行前调用/fail-closed/带外 signed control_response+`requestId` 均坐实(直读 SDK 0.3.201);仅"updatedInput==执行值"运行时语义待一次实跑 | AD-7 审批完整性 | 实跑收尾 |
+| SP-01 | ◑ **大部分闭合**:`updatedInput`/执行前调用/fail-closed/带外 signed control_response+`requestId`/**allow_session 的 `updatedPermissions`(destination 含 'session')** 均坐实(直读 SDK 0.3.201);仅"updatedInput==执行值"运行时语义待一次实跑 | AD-7 审批完整性 + FR-05 三档 | 实跑收尾 |
 | SP-02 | 真实移动网络状态投递 P95 时延 | 确认 NFR-12 | M0 前 |
 | SP-03 | 锁屏/后台/断网的重连补齐不丢不重 | 确认 AD-4 | M0 前 |
 | SP-04 | WebAuthn 在目标浏览器可用性与降级 | 确认 AD-7 强认证 | M0 前 |
@@ -275,7 +276,7 @@ CLI 桥接层(AD-6)、会话管理器(生命周期独立于连接、状态派生
 | SP-08 | WebAuthn 同步 passkey(iCloud/Google)的 signCount 行为 | 确认 AD-7 强认证防重放不误拒 | M0 前 |
 | SP-09 | AD-11 聚合投影在多会话下的正确性/实时性;悬置起点字段(`createdAt`/`awaitingSince`)落地;排序权重(OQ-01)、审批 TTL(OQ-05)待产品定 | 确认 AD-11/FR-22 可落地 | 技术设计 |
 | SP-10 | AD-3 增量追平在"终端外部写入 + web 本地驱动混写"场景的不丢不重不复现(两路增量去重) | 确认 AD-3 追平通路/B6 约束 | M0 前 |
-| SP-11 | 官方"列会话"API 存在性与签名(SP-07 只验证了读单会话);若无,transcript 目录枚举降级案的路径规则跨版本稳定性 | 确认 AD-11 基础会话列表(纯终端会话的发现)可落地 | M0 前 |
+| SP-11 | ✅ **已验证**(直读 SDK 0.3.201 类型):官方 `listSessions({dir,limit,offset,includeProgrammatic})→SDKSessionInfo[]` 坐实,含 sessionId/summary(三级标题 fallback)/lastModified/cwd;另有 `getSessionInfo` 读单会话;目录枚举降级案**不再需要** | 确认 AD-11 基础会话列表(纯终端会话的发现)可落地 | **已闭** |
 
 ---
 

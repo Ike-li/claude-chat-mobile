@@ -4,12 +4,12 @@
 
 | 字段 | 内容 | 字段 | 内容 |
 | --- | --- | --- | --- |
-| 文档编号 | `LLD-CCM-001` | 版本 | v1.13(纯独立蓝图稿) |
+| 文档编号 | `LLD-CCM-001` | 版本 | v1.14(纯独立蓝图稿) |
 | 文档类型 | 详细设计(LLD) | 密级 | 内部 |
-| 承接架构 | `HLD-CCM-001` v2.10 | 参考基线 | 现有实现 `claude-chat-mobile` v1.2.1(**不作设计依据**) |
+| 承接架构 | `HLD-CCM-001` v2.11 | 参考基线 | 现有实现 `claude-chat-mobile` v1.2.1(**不作设计依据**) |
 | 编制日期 | 2026-07-11 | 状态 | 提交详细设计评审 |
 
-**立场。** 本稿为**纯独立蓝图**:承接 HLD v2.10 的十二个架构决策(AD),从第一性原理往下推导每个组件的详细设计,**不参照现有代码实现**。与现有实现的任何重合,是"独立推导与良构实现自然收敛"的结果(见 PRD『高吻合度自我审视』),**不构成设计依据**。设计表达采用类 TypeScript 签名 / 伪代码 / 状态机记号,仅为蓝图清晰,**非实现语言约束**(项目运行时为 ESM/JS)。
+**立场。** 本稿为**纯独立蓝图**:承接 HLD v2.11 的十二个架构决策(AD),从第一性原理往下推导每个组件的详细设计,**不参照现有代码实现**。与现有实现的任何重合,是"独立推导与良构实现自然收敛"的结果(见 PRD『高吻合度自我审视』),**不构成设计依据**。设计表达采用类 TypeScript 签名 / 伪代码 / 状态机记号,仅为蓝图清晰,**非实现语言约束**(项目运行时为 ESM/JS)。
 
 **版本历史**
 
@@ -29,6 +29,7 @@
 | v1.11 | 2026-07-11 | 承接 HLD v2.9 详设落地(v1.10 仅同步承接号,本轮补实质承接):①**新增 §3.4.1 WorkdirScopeGuard `[pure]` + §3.4.2 FileBrowseHandler `[shell]`**(AD-12/FR-23/FR-07:范围判定=resolve symlink+边界前缀、只读浏览=弱网上限+二进制检测+请求-响应不进事件流、TOCTOU 登记 §8.3、越界记审计而浏览本身不进最小审计;create/resume/AttachmentRef/浏览四处统一收口);②**AD-10 职责拆分落地**:`deriveStatus` 收敛后端六态、`host_offline` 改客户端连接层叠加(StateProbe 收四类、状态机图注、fail-closed 表同步);③**§5.1.2 补两路一致性**(`turn_end` 附 `diskLen` 锚点校准 `seenDiskLen` + localBusy 期暂停探测 + 幂等兜底,承接 AD-3 约束①)与 diskLen 计数口径=API 消息条数(约束②);④§3.6.2 通知 payload 最小化详设(两通道共用、按最弱通道设计,承接 AD-9/OQ-08);⑤AD-11 数据源②收敛为驱动中会话;⑥审批过期标暂定(OQ-05)+ 修 handleApproval"承接 AD-6"错引;⑦分页铁律(full_reload/历史回放不整包,承接 AD-1);⑧组件表/模块图/契约表(browse、turn_end.diskLen)/追溯表(FR-23/07/14/状态模型)同步。 |
 | v1.12 | 2026-07-11 | 评审修订(对 v1.11 全文含新增部分的对抗评审):①**FR-05 三档审批补全**(ApprovalDecision=allow_once/allow_session/deny,allow_session 优先走 SDK updatedPermissions、并入 SP-01 核对,契约/时序/追溯同步);②**§5.1.2 锚点改条件覆写**(turn_end 附 mixedWrites,混写轮禁覆写改增量追平+幂等,修"锚点吞混写"缺陷;竞态方向安全注明);③**RateLimiter 退避落地**(backoff 写入 lockUntil 短锁,统一门拦截,修"退避纯装饰");④**L2 删除补 mtime 静默护栏**(终端活跃不可确证,启发式+fail-closed,登记 §8.3);⑤**补会话枚举详设**(listSessions/SessionSummary,官方列会话 API 待核 SP-11、目录枚举降级案,list_sessions 契约,AD-11 基础列表数据源闭合);⑥杂项:镜像图接管边 readonly→writable、Actor 补 connId、NotifPayload kind 'terminal'→'finished' 消歧、BrowseReq/Res/Entry 类型补定义、listDir 分页上限、留存治理落点(NFR-16)、heartbeat 信封例外注明、删 §8.1 host_unreachable、步 4 补 risk、EP-1 措辞消字面矛盾、推送订阅 410 自愈。 |
 | v1.13 | 2026-07-11 | 收敛自查修订:①**TriggerPolicy 补 per-会话节流**(闭合 FR-14"节制不重复轰炸同一会话"的另一半——此前只做了"中间过程不扰";签名扩 throttle 态,纯函数/状态外置);②§5.5 协议步 5 同步三档 decision(消 v1.12 遗留的二档措辞);③§7.2 browse 字段补 maxEntries;④SessionView=SessionSummary+状态派生 的类型关系澄清;⑤§3.1.2 result 行注补 mixedWrites;⑥承接号 v2.9→v2.10(HLD 补登 SP-11,消"LLD 引用 SP-11 而 HLD SP 表无此编号"的跨层悬空)。 |
+| v1.14 | 2026-07-11 | SP 实证闭合同步(直读 SDK 0.3.201 类型,零 token):①**枚举方案①坐实**——§3.2.1 改官方 `listSessions`(SessionSummary 字段直取 SDKSessionInfo:lastModified/summary,TitleDeriver 降兜底;`includeProgrammatic` 口径注意;目录枚举降级案废弃),§8.3 SP-11 待核条移除;②**allow_session 官方通路坐实**——§3.1.3 注更新(updatedPermissions destination 'session' 已核),FR-05 降级案不再需要;③追溯表两行同步;承接号 v2.10→v2.11。 |
 
 ---
 
@@ -36,7 +37,7 @@
 
 ### 1.1 目的与范围
 
-本文档为 `HLD-CCM-001` v2.10 评审通过后的详细设计,面向实现工程师。覆盖后端七组件的:**模块/类分解、接口签名、数据结构(字段级)、关键算法(伪代码)、状态机、错误处理、详细时序、对外接口契约**。不含:具体源码、前端 UI 视觉与交互细节、部署脚本、第三方边缘层(反代/隧道)内部实现。
+本文档为 `HLD-CCM-001` v2.11 评审通过后的详细设计,面向实现工程师。覆盖后端七组件的:**模块/类分解、接口签名、数据结构(字段级)、关键算法(伪代码)、状态机、错误处理、详细时序、对外接口契约**。不含:具体源码、前端 UI 视觉与交互细节、部署脚本、第三方边缘层(反代/隧道)内部实现。
 
 ### 1.2 设计原则(承接 + LLD 层新增)
 
@@ -177,7 +178,8 @@ interface MapContext { sessionId: string; isSubtask: boolean; }
      - allow 且 verifyIntegrity(fp, approvedOp) 通过
          ⟶ return { behavior:'allow', updatedInput: approvedOp.args }   // 显式回填批准值
          // 官方契约: canUseTool 返回值 == 工具实际执行值(无中间变换) ⟹ "所批即所行"由 SDK 兜底
-         // allow_session 额外经 canUseTool 返回值的官方会话级权限更新机制(updatedPermissions)落为本会话内该工具免再批——优先走 SDK 官方机制、不后端自建白名单(瘦中转);其精确字段签名并入 SP-01 直读 SDK 类型核对,若官方无此机制则降级为后端 per-会话记忆已许可工具(自建最小状态,作为瘦中转的显式例外登记)
+         // allow_session 额外回填 updatedPermissions:[{type:'addRules', rules, behavior:'allow', destination:'session'}] 落为本会话内该工具免再批
+         // ✅ 已核(直读 SDK 0.3.201):PermissionResult allow 分支有 updatedPermissions?: PermissionUpdate[],destination 枚举含 'session'——走官方机制、不后端自建白名单(瘦中转),降级案不再需要
      - allow 但指纹不符 ⟶ return { behavior:'deny' } (fail-closed) + 审计告警
      - deny / 过期      ⟶ return { behavior:'deny' }
 ```
@@ -213,13 +215,14 @@ interface SessionRegistry {
   listSessions(cwd: string): SessionSummary[];  // 基础会话列表:含纯终端建的会话(见下"枚举"),AD-11 基础列表/AttentionDeriver 的 sessions 输入源
 }
 interface SessionSummary { sessionId: string; cwd: string; lastActiveAt: number; title?: string; }
-// lastActiveAt = transcript 文件 mtime(元数据,不解析内容);title 经官方消息 API 读首条派生(TitleDeriver)
+// 字段直取官方 SDKSessionInfo(SP-11 已闭):lastActiveAt=lastModified、title=summary(官方三级 fallback:
+// customTitle/自动摘要/首条 prompt——比自派生更全;瘦中转:官方有则不自建);TitleDeriver 降为 web 新建会话首条即时显示的兜底
 // SessionView = SessionSummary + deriveStatus 结果(枚举静态信息 + 运行时状态的合成视图;observe/AttentionDeriver 的输入形态,§3.2.5)
 ```
 
 - **归属**(AD-2):会话归属以"其 transcript 存在于对应 cwd"为准 ⟶ 终端建的与 web 建的天然互见。`resume` 通过驱动一个 resume 会话读既有记录接续。
 - **范围门(承接 AD-12 / FR-23)**:`create`/`resume` 的 cwd 须先经 WorkdirScopeGuard(§3.4.1)判定在授权目录集合内,范围外 fail-closed 拒绝(不建运行时、不驱动)。
-- **枚举(基础会话列表的数据源,承接 AD-11 基础列表 / FR-11 终端会话可见)**:`session_pointer` 只记 web 经手会话,纯终端建的会话须另行发现。两案:①官方"列会话"API——**存在性与签名未核**(SP-07 只验证了读单会话),登记 SP-11 核验;②降级:枚举授权 cwd 对应 transcript 存放目录的文件名(sessionId=文件名)——路径规则属官方稳定契约(hook `transcript_path`)的延伸,仅列目录、不解析文件内容,守 AD-1 精神但对"路径规则跨版本稳定"有额外依赖,SP-11 一并核验。①存在则用①。仅枚举**已授权目录**(FR-23),不全盘扫描。
+- **枚举(基础会话列表的数据源,承接 AD-11 基础列表 / FR-11 终端会话可见)**:`session_pointer` 只记 web 经手会话,纯终端建的会话经**官方 `listSessions({dir,limit,offset})→SDKSessionInfo[]` 枚举**(✅ SP-11 已验证,直读 SDK 0.3.201:含 sessionId/summary/lastModified/cwd/createdAt;另有 `getSessionInfo` 读单会话)。`includeProgrammatic` 口径注意:web 自驱动会话属 programmatic(sdk-ts 入口),**须保持默认 true** 才列得出自己经手的会话——终端 `/resume` 选择器口径是 false,web 列表比它多出 web 系会话属正确差异、非上界膨胀。曾评估的目录枚举降级案随 SP-11 闭合**废弃**。仅枚举**已授权目录**(FR-23),不全盘扫描。
 - **生命周期**:运行时独立于连接(NFR-08),客户端断开不 close;`close` 由显式操作或治理触发。
 
 **3.2.2 TitleDeriver `[pure]`**(瘦中转:标题不自存)
@@ -885,7 +888,6 @@ sequenceDiagram
 - **限速内存态重启清零**:重启后暴破计数归零;由足够的锁定时长 + 边缘层兜底,敏感部署可选持久化。
 - **浏览 TOCTOU 窗口**:范围校验与文件读取之间,路径可被本机进程替换为越界 symlink(§3.4.2);实现层以 fd 级校验(O_NOFOLLOW / 读后复核 realpath)缓解,残余窗口需机主本机进程配合才可利用——在 n=1 信任根之内,登记不消除。
 - **L2 删除的终端活跃探测非完备**:纯终端驱动中的会话对后端不可确证(进行中态不落盘,同 AD-3),mtime 静默阈值是启发式护栏——极端时序(终端恰在阈值后、删除中开始写)仍可撞;fail-closed 方向(疑似活跃即拒)+ 显式二次确认共同缓解,不在本期消除。
-- **会话枚举 API 待核(SP-11)**:官方"列会话"API 存在性/签名未验证;降级案依赖 transcript 目录路径规则跨版本稳定。M0 前核验,核验前枚举实现按降级案预设。
 - **实时镜像 vs 原生**:承接 PRD 张力1,非本设计缺陷,属架构—上游张力。
 
 ---
@@ -896,9 +898,9 @@ sequenceDiagram
 | --- | --- | --- |
 | CliBridge(QueryDriver/MessageMapper) | AD-6 | NFR-14 上游耦合收敛 |
 | PermissionInterceptor + ApprovalIntegrityVerifier + §5.5 | AD-7 审批完整性 | **NFR-17 / 11.8** |
-| ApprovalDecision 三档 + updatedPermissions(§3.4/§3.1.3) | AD-7 + 控制通道 | **FR-05 审批三档语义与终端逐项一致**(allow_session 走 SDK 官方机制,SP-01 核签名) |
+| ApprovalDecision 三档 + updatedPermissions(§3.4/§3.1.3) | AD-7 + 控制通道 | **FR-05 审批三档语义与终端逐项一致**(allow_session 走 SDK 官方机制,✅ 签名已核:destination 'session') |
 | SessionManager + SessionMessageReader | AD-1/2 | FR-11 双向共享 |
-| SessionRegistry.listSessions(§3.2.1) | AD-11 基础列表 / AD-2 归属 | **FR-21 基础会话列表 / FR-11 终端建会话 web 可见**(枚举案待 SP-11) |
+| SessionRegistry.listSessions(§3.2.1) | AD-11 基础列表 / AD-2 归属 | **FR-21 基础会话列表 / FR-11 终端建会话 web 可见**(✅ SP-11 已闭:官方 listSessions) |
 | AttentionDeriver(§3.2.5) | AD-11 | **FR-21 会话发现**(读模型投影,继承 AD-3 边界) |
 | EventEnvelope.origin(§3.3.1) | AD-4 | **FR-02 进展来源识别**(terminal/mobile) |
 | ControlChannel 文件/图片输入 | AD-6/控制面 + AD-12 范围门 | **FR-09**(Should,授权范围(FR-23)内可访问可追踪;上传细节待实现) |
@@ -924,4 +926,4 @@ sequenceDiagram
 
 ---
 
-*本文档为承接 HLD v2.10 的详细设计,纯独立蓝图。所有设计从第一性原理与 HLD 决策推导,不参照现有代码;与现有实现的重合是良构收敛的结果。标注为纯函数的核心可零依赖单测(呼应 PRD 验收策略)。实现语言与具体代码组织,由实现阶段裁量。*
+*本文档为承接 HLD v2.11 的详细设计,纯独立蓝图。所有设计从第一性原理与 HLD 决策推导,不参照现有代码;与现有实现的重合是良构收敛的结果。标注为纯函数的核心可零依赖单测(呼应 PRD 验收策略)。实现语言与具体代码组织,由实现阶段裁量。*
