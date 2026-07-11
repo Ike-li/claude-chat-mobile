@@ -73,6 +73,12 @@ export function ensureWhitelisted(cwd, dirs) {
   return dirs.includes(cwd) ? cwd : dirs[0];
 }
 
+// 精确白名单判定（单一事实源）：cwd 是否为白名单内目录。供 routeCwd 做越界检测 + 审计信号（FR-23）。
+// 与 ensureWhitelisted 的区别：本函数只回答“在不在范围内”（不做归位），让调用方决定越界时如何处理（回退 + 记审计）。
+export function isWhitelisted(cwd, dirs) {
+  return typeof cwd === 'string' && cwd !== '' && dirs.includes(cwd);
+}
+
 // realpathSync（解符号链接/相对段，与 CLI 命名一致）+ isDirectory 校验，warn-skip 无效项；realpath 后二次去重。
 // 返回 { dirs: [规范化路径], limits: Map<路径, sessionLimit>, warnings }。
 export function resolveWorkdirs(entries) {

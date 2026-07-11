@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { realpathSync } from 'node:fs';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
-  normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted,
+  normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
 } from '../workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -151,5 +151,20 @@ test.describe('ensureWhitelisted', () => {
 
   test('cwd 不在白名单内（已被热移除）→ 归位到白名单首位', () => {
     assert.equal(ensureWhitelisted('/removed', ['/a', '/b']), '/a');
+  });
+});
+
+// ── isWhitelisted（纯函数：越界检测，不做归位；供 routeCwd 记审计信号 FR-23）────
+test.describe('isWhitelisted', () => {
+  test('白名单内 → true', () => {
+    assert.equal(isWhitelisted('/a', ['/a', '/b']), true);
+  });
+  test('显式越界（不在白名单）→ false', () => {
+    assert.equal(isWhitelisted('/evil', ['/a', '/b']), false);
+  });
+  test('空串 / 非字符串 → false（无 cwd 回退场景，非越界尝试）', () => {
+    assert.equal(isWhitelisted('', ['/a']), false);
+    assert.equal(isWhitelisted(undefined, ['/a']), false);
+    assert.equal(isWhitelisted(null, ['/a']), false);
   });
 });

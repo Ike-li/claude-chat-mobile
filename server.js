@@ -27,7 +27,7 @@ import { createModelsCache, isCwdDefaultModel } from './models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from './cf-access.js';
 import { onAuthResult, freshState, rlSourceKey } from './rate-limiter.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted } from './workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from './workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -247,7 +247,15 @@ let viewingInstanceId = null;
 let viewingCwd = WORK_DIR;
 const viewingCwdOf = () => agents.get(viewingInstanceId)?.cwd ?? viewingCwd;
 // 白名单校验 + 缺省落 viewingCwd：cwd 维度的事件（setWorkdir/session:list/new）经此解析目标 cwd。
-const routeCwd = cwd => (typeof cwd === 'string' && workDirs.includes(cwd)) ? cwd : viewingCwdOf();
+const routeCwd = cwd => {
+  if (isWhitelisted(cwd, workDirs)) return cwd;
+  // FR-23 越界审计信号：显式传了不在白名单的路径 → 记一条检测信号，再安全回退当前查看目录。
+  // 不 fail-closed：回退本身已防越权（不访问越界目录），拒绝会破坏“传错自动纠正”顺手性 + #8 热移除回退。
+  if (typeof cwd === 'string' && cwd) {
+    console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在白名单，回退当前查看目录`);
+  }
+  return viewingCwdOf();
+};
 // 台阶3：按实例路由——instanceId ∈ live 则该实例，否则缺省落 viewingInstanceId（向后兼容缺参旧调用、防越界）。
 const resolveInstanceId = id => agents.has(id) ? id : viewingInstanceId;
 const routeInstance = id => agents.get(resolveInstanceId(id)) ?? null;
