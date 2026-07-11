@@ -21,6 +21,9 @@
 | v1.3 | 2026-07-10 | 剩余 4 缺口深化到实现级:§5.4 per-会话/per-连接只读定向下发(消除跨设备误解);§3.2.4 补历史读取 API 待验边界(SP-07,须早验);§3.5.3 WebAuthn 完整流程(rpId/HTTPS 约束 + attestation:none + synced-passkey signCount 陷阱 SP-08 + 降级);§4 两级删除(活跃会话保护 + 原子性 + 审计)。并修 §Observability 漏引现有(维持纯独立)。 |
 | v1.4 | 2026-07-10 | **SP-07 实证闭合**(直读本机 SDK 0.3.201 `sdk.d.ts` 类型,非现有代码):官方 `getSessionMessages(sessionId,{dir,limit,offset})` 确认支持读任意历史会话全量+分页 ⟹ §3.2.4 消息读取 API 精确化、超窗重载机制落实,SP-07 风险排除。 |
 | v1.5 | 2026-07-10 | **SP-01 硬验(直读 SDK 0.3.201 类型)**:坐实 `updatedInput` 字段 + `canUseTool` 执行前调用 + fail-closed(null→阻塞)+ **官方带外 signed control_response + `requestId` 机制**(§5.5 审批完整性加固版无需自建、走官方机制);仅"updatedInput==执行值"运行时语义待一次实跑。SP-01 → ◑ 大部分闭合。 |
+| v1.6 | 2026-07-10 | 承接 PRD v3.3 追溯同步:approval_request 有效期溯源 OQ-05→**FR-22 审批时效**(与 NFR-17 并列标注);追溯表登记 **FR-21 会话发现聚合**为 gap(列表基础在 SessionManager、"等我"聚合 IA 待设计,不虚构)。 |
+| v1.7 | 2026-07-10 | 补 **§3.2.5 AttentionDeriver `[pure]`**(承接 AD-11/FR-21):`deriveAttention(sessions, pendingApprovals)→AttentionView` 把已有派生状态 + 持久化 pending 审批投影成"等我"聚合,即时派生不落盘(EP-1)、排序权重承接 OQ-01、边界继承 AD-3;组件表 + 追溯表 FR-21 gap→AD-11。 |
+| v1.8 | 2026-07-10 | **对齐 HLD v2.7(承接号 v2.4→v2.7)**:①闭合 `waitingSince` 数据源缺口——`approval_request` 补 `createdAt`(悬置起点)、`SessionRuntime` 补 `awaitingSince`,AttentionDeriver 数据来源指明二者(不可用 `expiresAt` 反推);②`EventEnvelope` 补 `origin` 承接 FR-02 进展来源识别;③追溯表补 FR-02/FR-09/FR-22 落点;文档版本 v1.5→v1.8(修 header 遗漏)。 |
 
 ---
 
@@ -52,7 +55,7 @@ LLD 层新增两条**工程原则**(为可测试性与可维护性):
 | 组件 | 承接 AD | 内部模块 |
 | --- | --- | --- |
 | CliBridge | AD-6 | QueryDriver, MessageMapper, PermissionInterceptor |
-| SessionManager | AD-1/2/10 | SessionRegistry, TitleDeriver, StatusDeriver, SessionMessageReader |
+| SessionManager | AD-1/2/10/11 | SessionRegistry, TitleDeriver, StatusDeriver, AttentionDeriver, SessionMessageReader |
 | EventStreamEngine | AD-4 | Sequencer, RingBuffer, CatchUpResolver, HeartbeatChannel, ContractGuard |
 | ControlChannel | (承接 AD-5/8/10 的操作面) | Input/Approval/Abort/Device/History Handler |
 | AuthAndDeviceTrust | AD-7/8 | LayeredAuth, RateLimiter, WebAuthnAuthenticator, ApprovalIntegrityVerifier, DeviceTrustStore |
@@ -181,6 +184,7 @@ interface SessionRuntime {
   driver?: QueryDriver;            // 活跃 turn 期间存在
   pendingApprovals: Map<ReqId, ApprovalRequest>;
   pendingInput: boolean;
+  awaitingSince?: number;          // 进入 awaiting_input/approval 的时刻;供 FR-22 悬置时长 + AD-11 排序;状态转移置位、离开等待即清(承接 HLD v2.7)
   lastResult?: TurnResult;
   externalWriteWatch: MirrorState; // 只读镜像/自动释放,见 §5.4
 }
@@ -243,6 +247,32 @@ interface SessionMessageReader {
 - **✅ 已验证(SP-07,直读 SDK 0.3.201 类型定义)**:官方 `getSessionMessages(sessionId, {dir, limit?, offset?, includeSystemMessages?})` 支持读**任意历史会话**全量消息(chronological、空会话返回空数组)、带**分页**;另有 `getSubagentMessages(sessionId, agentId)` 读子 agent 消息。⟹ `full_reload`(§5.1 超窗重载)有官方机制,SP-07 风险**排除**。
 - 冷读、只读、不缓存(EP-1)。实时进展(进行中态)在原生架构下不可见 ⟶ 依赖上游 attach(承接 AD-3,本期只呈现已落定)。
 
+**3.2.5 AttentionDeriver `[pure]`**(**新增**,承接 AD-11 / FR-21)
+
+纯函数,把多会话的派生状态 + 后端持久化 pending 审批投影成"等我"聚合视图(即时派生、**不落盘**,EP-1):
+
+```typescript
+function deriveAttention(
+  sessions: SessionView[],              // 各会话:sessionId/cwd/title/lastActiveAt + deriveStatus 结果
+  pendingApprovals: ApprovalRequest[]   // status=pending 且 now<=expiresAt,取自 approval_request 表
+): AttentionView;
+
+interface AttentionView {
+  needsYou: AttentionItem[];   // awaiting_approval / awaiting_input,按紧迫度降序
+  others: SessionView[];       // 其余会话,按 cwd 分组、lastActiveAt 降序
+}
+interface AttentionItem {
+  sessionId: string; cwd: string; title: string;
+  reason: 'awaiting_approval' | 'awaiting_input';
+  waitingSince: number;        // 悬置起点:供排序 + FR-22 悬置时长呈现
+  risk?: RiskLevel;            // 审批项风险,参与排序
+}
+```
+
+- **数据来源**:审批维度取自持久化 `approval_request`(跨会话/跨重启可靠),`waitingSince` = `approval_request.createdAt`;输入维度取自 web 后端在驱动/观察会话的 `deriveStatus`,`waitingSince` = `SessionRuntime.awaitingSince`。**这两个字段才是悬置起点的真实来源**(承接 HLD v2.7 AD-11 修正:不可用 `expiresAt` 反推,TTL 在 OQ-05 未定);**不新增对 transcript 的轮询**(AD-11 方案 B / EP-1)。
+- **排序权重**(等待时长/风险/项目)待定,承接 **OQ-01**;纯函数便于对不同权重零依赖单测。
+- **边界(承接 AD-3/AD-11)**:纯终端活跃、web 未驱动的会话,其 `awaiting_input` 实时态不可见、`awaiting_approval` 仅在审批经后端时进入聚合——如实呈现,不假装全知。
+
 ---
 
 ### 3.3 EventStreamEngine (承接 AD-4)
@@ -256,6 +286,7 @@ interface EventEnvelope {
   epoch: string;      // 本实例本次运行标识(SessionRuntime.epoch)
   seq: number;        // 每会话单调递增,从 1 起
   type: EventType;    // ∈ 契约事件集 §7.1
+  origin: 'terminal' | 'mobile';  // 进展来源(承接 HLD AD-4 / FR-02):操作者须能区分终端产生 vs 移动端发起
   payload: unknown;
   ts: number;
 }
@@ -490,7 +521,7 @@ interface StateProbe {
 | `session_pointer` | `sessionId`(PK)、`cwd`、`createdAt`、`lastActiveAt` | **只存指针**;`epoch`/`lastSeq` 是运行时易失量,不持久化 |
 | `device_trust` | `deviceId`(PK)、`status`(trusted/pending/denied)、`fingerprint`、`trustedAt`、`trustedBy`、`revokedAt` | AD-8 |
 | `webauthn_credential` | `credId`(PK)、`deviceId`(FK)、`publicKey`、`signCount`、`createdAt` | 只存公钥;私钥不出设备 |
-| `approval_request` | `reqId`(PK)、`sessionId`、`op{tool,args,cwd}`、`fingerprint`、`risk`、`expiresAt`、`status`、`decidedBy`、`decidedAt` | **含指纹与有效期**(NFR-17/审批流) |
+| `approval_request` | `reqId`(PK)、`sessionId`、`op{tool,args,cwd}`、`fingerprint`、`risk`、`createdAt`(悬置起点)、`expiresAt`、`status`、`decidedBy`、`decidedAt` | **含指纹、创建时刻、有效期**(NFR-17 / FR-22:`createdAt`=悬置起点、`expiresAt`=过期,二者不可互推) |
 | `push_subscription` | `endpoint`(PK)、`deviceId`、`keys{p256dh,auth}`、`createdAt` | AD-9 |
 | `audit_record` | `id`(PK)、`ts`、`actor{deviceId,via}`、`action`、`target`、`outcome`、`meta` | **meta 无敏感正文**(NFR-06) |
 
@@ -762,13 +793,17 @@ sequenceDiagram
 | CliBridge(QueryDriver/MessageMapper) | AD-6 | NFR-14 上游耦合收敛 |
 | PermissionInterceptor + ApprovalIntegrityVerifier + §5.5 | AD-7 审批完整性 | **NFR-17 / 11.8** |
 | SessionManager + SessionMessageReader | AD-1/2 | FR-11 双向共享 |
+| AttentionDeriver(§3.2.5) | AD-11 | **FR-21 会话发现**(读模型投影,继承 AD-3 边界) |
+| EventEnvelope.origin(§3.3.1) | AD-4 | **FR-02 进展来源识别**(terminal/mobile) |
+| ControlChannel 文件/图片输入 | AD-6/控制面 | **FR-09**(Should,授权范围内可访问可追踪;上传细节待实现) |
+| approval_request.createdAt + SessionRuntime.awaitingSince | AD-11/AD-7 | **FR-22 悬置时长**数据源(过期靠 expiresAt) |
 | StatusDeriver + §5.3 状态机 | AD-10 | 第八章状态模型 / FR-01 |
 | EventStreamEngine + §5.1 补齐 | AD-4 | FR-03 断线补齐 / NFR-10 |
 | MirrorState + §5.4 只读自动释放 | AD-5 | FR-12 并发保护 |
 | RateLimiter + §3.5.2 | AD-7 限速(新增) | **NFR-03** |
 | WebAuthnAuthenticator | AD-7 强认证(新增) | **NFR-04** |
 | DeviceTrustStore | AD-8 | FR-18 设备信任 |
-| approval_request(有效期) | AD-6/审批流 | OQ-05 审批有效期 |
+| approval_request(有效期,`expiresAt`) | AD-6/审批流 | **FR-22 审批时效**(机制见 OQ-05) |
 | DeleteBoundary(存储层,见 §4 approval/pointer) | AD-1 删除边界 | FR-20 删除(Could/主权) |
 | NotificationService + TriggerPolicy | AD-9 | FR-14/15 |
 | Observability + StateProbe | 部署/可观测 | NFR-15 |
