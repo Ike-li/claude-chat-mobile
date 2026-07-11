@@ -4,12 +4,12 @@
 
 | 字段 | 内容 | 字段 | 内容 |
 | --- | --- | --- | --- |
-| 文档编号 | `LLD-CCM-001` | 版本 | v1.18(纯独立蓝图稿) |
+| 文档编号 | `LLD-CCM-001` | 版本 | v1.19(纯独立蓝图稿) |
 | 文档类型 | 详细设计(LLD) | 密级 | 内部 |
-| 承接架构 | `HLD-CCM-001` v2.15 | 参考基线 | 现有实现 `claude-chat-mobile` v1.2.1(**不作设计依据**) |
+| 承接架构 | `HLD-CCM-001` v2.16 | 参考基线 | 现有实现 `claude-chat-mobile` v1.2.1(**不作设计依据**) |
 | 编制日期 | 2026-07-11 | 状态 | 提交详细设计评审 |
 
-**立场。** 本稿为**纯独立蓝图**:承接 HLD v2.15 的十二个架构决策(AD),从第一性原理往下推导每个组件的详细设计,**不参照现有代码实现**。与现有实现的任何重合,是"独立推导与良构实现自然收敛"的结果(见 PRD『高吻合度自我审视』),**不构成设计依据**。设计表达采用类 TypeScript 签名 / 伪代码 / 状态机记号,仅为蓝图清晰,**非实现语言约束**(项目运行时为 ESM/JS)。
+**立场。** 本稿为**纯独立蓝图**:承接 HLD v2.16 的十二个架构决策(AD),从第一性原理往下推导每个组件的详细设计,**不参照现有代码实现**。与现有实现的任何重合,是"独立推导与良构实现自然收敛"的结果(见 PRD『高吻合度自我审视』),**不构成设计依据**。设计表达采用类 TypeScript 签名 / 伪代码 / 状态机记号,仅为蓝图清晰,**非实现语言约束**(项目运行时为 ESM/JS)。
 
 **版本历史**
 
@@ -34,6 +34,7 @@
 | v1.16 | 2026-07-11 | **SP-05/09/10 收尾 + OQ-01/OQ-05 决策落地**(承接 HLD v2.13,独立推导、不参照现有实现——决策依据仅取本稿及 PRD/HLD 自身已写明的原则,不读取/比对现有代码):①**§5.1.2 两路一致性重设计(SP-10)**——去掉 `mixedWrites` 分类器与"锚点覆写 vs 增量追平"二分支(连带竞态论证一并消除),统一为"任何时候推进 `seenDiskLen` 一律走增量 `readSince`+幂等去重,不做信任式覆写",触发点新增"本地 turn 结束(busy→idle)立即触发一次";`turn_end` 载荷退回 `{status}`(§3.3/§7.1 契约表同步),§5.4"已知边界"(localBusy 期外部写入)随之解除;②**§3.2.5 AttentionDeriver 排序规则落地(OQ-01/SP-09)**——纯按 `waitingSince` 升序(等得越久排越前),`risk` 字段降为展示分组标签、不参与排序公式;③**审批 TTL 机制落地(OQ-05)**——§3.1.3 PermissionInterceptor 补 `expiresAt := createdAt + 部署可配置 TTL` 机制说明(不预置具体数值);§3.4/§5.5/§8/§9 多处"终定随 OQ-05"/"TTL 未定"措辞同步为已决;④SP-05/09/10 均以纯函数 spike 验证设计本身的算法正确性,生产实现留待路线图,如实标注**不计入"已闭"**(详见 HLD §9)。承接号 v2.12→v2.13。 |
 | v1.17 | 2026-07-11 | **SP-02/03/04/06/08 全面核查收尾**(机主要求全部未验证项过一遍,避免不必要返工;权威文档调研+纯函数 spike,不涉及读取现有代码):①**§3.5.3 WebAuthnAuthenticator 补超时兜底(SP-04)**——iOS WKWebView 场景下 WebAuthn 能力检测/注册调用会永久 pending、Promise 不 resolve(经查证的真实平台行为,非本设计缺陷但原设计未覆盖),环境检测须包超时(建议 3s)、到点等同判定不支持,走既有降级路径;②**§3.5.3 signCount 措辞精修(SP-08)**——"`signCount==0` 免单调校验"改为准确表述"W3C 规范 §7.2 验证算法本身第 17 步的规定",去"变通对策"框架;补 iCloud/Google 证据强度不对等的诚实登记(不改变处理);③**§3.6.1 TriggerPolicy 补 NFR-12 已知张力显性登记(SP-02)**——节流规则与 P95≤5s 目标的方向性冲突系有意设计取舍,非缺陷;④SP-02/03 的量化数值/平台真实行为超出设计审查与纯函数验证能力边界,如实标注需真机测试终定,未强行判定。承接号 v2.13→v2.14。 |
 | v1.18 | 2026-07-11 | **承接 HLD v2.15,剩余 7 个 OQ 全部决策落地**(机主要求,独立推导、不参照现有实现):①**§3.5.2 OQ-03 参数确认**——建议参数转为已采纳的可配置默认,措辞由"XX 定"改"XX 已决";②**§3.5.3 新增 OQ-04 推出节奏**——首次部署默认静态令牌+TOFU、不强制先配 WebAuthn,UI 持续引导升级不设截止,静态令牌与 WebAuthn 为并列持久路径;③**§3.1.3 显式落地 OQ-07**——"高风险"判定权完全归 SDK,`risk` 字段为展示性标签非产品自算判定,不设自定义规则配置项;④**§3.6.2 收尾 OQ-08**——`cwdBase` 默认显示不加隐藏配置项;⑤**§4 两级删除标注 OQ-06 答案位置**(设计本身无变化,补交叉引用)。承接号 v2.14→v2.15。至此三份文档 §16 全部 9 项 OQ 均已决,SP 表 11 项技术风险验证也已收口——**文档"提交评审"状态本身未变,决策收口不等同评审通过**。 |
+| v1.19 | 2026-07-11 | **承接实证核查(三模型「代码 vs 文档」比对 + 三路独立复核)修订文档-代码张力,不改独立立场**:①**§7.1 去"契约 SoT"自称**——澄清本表为独立蓝图的语义事件集、非线上事件名清单,线上可执行 SoT 是 `scripts/agent-event-contract.js`(24 类),补"概念名 ↔ 实现名"映射(`message_delta`↔`text_delta` 等 6 对)+ 实现层必需事件登记(`init`/`instances`/`models` 等 14 个),防"照本表新造事件名"误读;②**§3.7 删"审批时延"指标**——承接 PRD OQ-09(授权闭环时延不建运行度量),消 LLD-PRD 版本缝隙;③**§3.1.1/§4 effort 改持久化恢复**——经独立论证(`effort` 是"CLI 未落 transcript 而 web resume 须恢复"的控制面偏好,不恢复=接续失真,持久化不违瘦中转、非第二消息源),修正原"不自存"决策,`session_pointer` 补 `effort` 字段;④**§3.2.1 补 entrypoint 反向可见性**——终端 `/resume` 选择器默认过滤 programmatic 会话,web 会话须写 entrypoint 标记方在终端可见(FR-11 双向的另一半,原稿只覆盖单向)。承接号 v2.15→v2.16。 |
 
 ---
 
@@ -41,7 +42,7 @@
 
 ### 1.1 目的与范围
 
-本文档为 `HLD-CCM-001` v2.15 评审通过后的详细设计,面向实现工程师。覆盖后端七组件的:**模块/类分解、接口签名、数据结构(字段级)、关键算法(伪代码)、状态机、错误处理、详细时序、对外接口契约**。不含:具体源码、前端 UI 视觉与交互细节、部署脚本、第三方边缘层(反代/隧道)内部实现。
+本文档为 `HLD-CCM-001` v2.16 评审通过后的详细设计,面向实现工程师。覆盖后端七组件的:**模块/类分解、接口签名、数据结构(字段级)、关键算法(伪代码)、状态机、错误处理、详细时序、对外接口契约**。不含:具体源码、前端 UI 视觉与交互细节、部署脚本、第三方边缘层(反代/隧道)内部实现。
 
 ### 1.2 设计原则(承接 + LLD 层新增)
 
@@ -122,7 +123,7 @@ graph TD
 interface DriveOptions {
   cwd: string;
   resumeSessionId?: string;        // 有则驱动 resume,无则新建
-  effortDefault: EffortLevel;      // 接受 CLI 默认档,不自存(瘦中转)
+  effort?: EffortLevel;            // 会话控制面偏好:未指定接受 CLI 默认档;web resume 须恢复上次档(见 §4 session_pointer.effort)——属"CLI 未落 transcript、web 接续须恢复"的最小状态,持久化不违瘦中转(消息事实源仍是 transcript)
   canUseTool: PermissionCallback;  // 权限拦截注入点
 }
 interface QueryDriver {
@@ -229,6 +230,7 @@ interface SessionSummary { sessionId: string; cwd: string; lastActiveAt: number;
 - **归属**(AD-2):会话归属以"其 transcript 存在于对应 cwd"为准 ⟶ 终端建的与 web 建的天然互见。`resume` 通过驱动一个 resume 会话读既有记录接续。
 - **范围门(承接 AD-12 / FR-23)**:`create`/`resume` 的 cwd 须先经 WorkdirScopeGuard(§3.4.1)判定在授权目录集合内,范围外 fail-closed 拒绝(不建运行时、不驱动)。
 - **枚举(基础会话列表的数据源,承接 AD-11 基础列表 / FR-11 终端会话可见)**:`session_pointer` 只记 web 经手会话,纯终端建的会话经**官方 `listSessions({dir,limit,offset})→SDKSessionInfo[]` 枚举**(✅ SP-11 已验证,直读 SDK 0.3.201:含 sessionId/summary/lastModified/cwd/createdAt;另有 `getSessionInfo` 读单会话)。`includeProgrammatic` 口径注意:web 自驱动会话属 programmatic(sdk-ts 入口),**须保持默认 true** 才列得出自己经手的会话——终端 `/resume` 选择器口径是 false,web 列表比它多出 web 系会话属正确差异、非上界膨胀。曾评估的目录枚举降级案随 SP-11 闭合**废弃**。仅枚举**已授权目录**(FR-23),不全盘扫描。
+- **web 会话对终端 `/resume` 选择器的可见性(FR-11 双向共享的对偶,须显式保障)**:上条口径差异揭示一个反向缺口——终端原生 `/resume` 选择器以 `includeProgrammatic=false` 枚举,**默认过滤掉 web/SDK 驱动(programmatic)建的会话**,故 web 新建会话默认不出现在终端选择器里;单向可见(终端建的在 web 可见)不等于 FR-11 要求的双向。落地须在 web 新建会话的 transcript 写入**终端可识别的 entrypoint 元数据标记**,使该会话在终端选择器呈现为可续——这是 FR-11 的另一半,须与枚举设计并列实现,不可只做单向。
 - **生命周期**:运行时独立于连接(NFR-08),客户端断开不 close;`close` 由显式操作或治理触发。
 
 **3.2.2 TitleDeriver `[pure]`**(瘦中转:标题不自存)
@@ -591,7 +593,7 @@ interface StateProbe {
 ```
 
 - health 端点须鉴权:未配置鉴权则仅监听本机;配置后未授权访问返回 401,**不开无鉴权数据端点**(第一性:诊断端点也是暴露面)。
-- 指标最小集:活跃会话数、事件 seq 速率、补齐命中/重载率、限速触发数、推送成功率、审批时延。
+- 指标最小集:活跃会话数、事件 seq 速率、补齐命中/重载率、限速触发数、推送成功率。**授权闭环时延(从"智能体请求授权"到"操作者批复"的人机闭环)不入运行度量**——承接 PRD OQ-09(n=1/自托管/无遥测/隐私边界下难自动量化,以定性验收替代、不新增埋点);系统管道侧的投递及时性经既有 seq 速率/推送成功率间接可观测,不单列"审批时延"以免与人机闭环时延混淆。
 
 ---
 
@@ -603,7 +605,7 @@ interface StateProbe {
 
 | 表 | 字段 | 说明 |
 | --- | --- | --- |
-| `session_pointer` | `sessionId`(PK)、`cwd`、`createdAt`、`lastActiveAt` | **只存指针**;`epoch`/`lastSeq` 是运行时易失量,不持久化 |
+| `session_pointer` | `sessionId`(PK)、`cwd`、`createdAt`、`lastActiveAt`、`effort?`(控制面偏好) | **存指针 + web 接续须恢复的控制面偏好**;`effort`=用户在该会话选定的思考强度档(CLI 未落 transcript,web resume 不恢复则每次回落默认档=接续失真,故持久化;非第二消息源、消息仍读 transcript);`epoch`/`lastSeq` 是运行时易失量,不持久化 |
 | `device_trust` | `deviceId`(PK)、`status`(trusted/pending/denied)、`fingerprint`、`trustedAt`、`trustedBy`、`revokedAt` | AD-8 |
 | `webauthn_credential` | `credId`(PK)、`deviceId`(FK)、`publicKey`、`signCount`、`createdAt` | 只存公钥;私钥不出设备 |
 | `approval_request` | `reqId`(PK)、`sessionId`、`op{tool,args,cwd}`、`fingerprint`、`risk`、`createdAt`(悬置起点)、`expiresAt`、`status`、`decidedBy`、`decidedAt` | **含指纹、创建时刻、有效期**(NFR-17 / FR-22:`createdAt`=悬置起点、`expiresAt`=过期,二者不可互推) |
@@ -836,9 +838,9 @@ sequenceDiagram
 
 ## 七、接口契约汇总
 
-### 7.1 契约事件集(server ⟶ client)— 契约 SoT
+### 7.1 契约事件集(server ⟶ client)— 概念契约(可执行 SoT 见 `event-contract`)
 
-> `ContractGuard` 保证 real ⊇ mock(承接 NFR-14)。除 `heartbeat` 外所有事件包 `EventEnvelope`(§3.3.1);`heartbeat` 走旁路轻通道、无信封无 seq(§3.3.4),列于表内仅为契约完整性。
+> **本表是独立蓝图的语义事件集**(按第一性原理设计"须承载哪些语义"),**非线上实现的事件名清单**。线上可执行契约的唯一 SoT 是 `scripts/agent-event-contract.js`(配 `npm run contract:check` 守卫 real ⊇ mock,承接 NFR-14),活文档见 `docs/event-contract.md`——实现事件集共 **24 类**,与本表是"概念 ↔ 实现"映射关系、非同一份命名(下方映射表)。**实现时以可执行 SoT 为准,不据本表新造事件名。** 除 `heartbeat` 外所有事件包 `EventEnvelope`(§3.3.1);`heartbeat` 走旁路轻通道、无信封无 seq(§3.3.4),列于表内仅为契约完整性。
 
 | 事件类型 | payload 关键字段 | 触发 |
 | --- | --- | --- |
@@ -855,6 +857,19 @@ sequenceDiagram
 | `history_append` | `{fromSeq?, events[], origin?}` | 补齐(seq 增量)/追平(transcript diskLen 增量,§5.1.2,payload 标 origin) |
 | `error` | `{kind, raw}` | 错误(原文不改写) |
 | `heartbeat` | `{hostAlive, ts}` | 旁路,不占 seq/不入缓冲 |
+
+**概念名 ↔ 实现名映射**(本蓝图语义名对应线上实现名,防"两套名字=矛盾"误读):
+
+| 本表概念名 | 实现名(`agent-event-contract.js`) |
+| --- | --- |
+| `message_delta` | `text_delta` |
+| `tool_call` | `tool_use` |
+| `approval_request` | `permission_request` |
+| `input_needed` | `question` |
+| `turn_end` | `result` |
+| `readonly_changed` | `mirror_state` |
+
+**实现层事件(本蓝图未列、线上契约必需)**:`init`、`instances`、`models`、`status_line`、`task_progress`、`task_notification`、`permission_mode`、`effort_mode`、`request_resolved`、`session_log`、`system`、`device_status`、`pending_devices`、`user_message`。多为实例编排 / UI 状态同步 / 后台任务 / 设备信任广播的实现载体,不改变本蓝图的语义契约,但实现须完整覆盖(以可执行 SoT 为准)。
 
 ### 7.2 控制通道(client ⟶ server)
 
@@ -935,4 +950,4 @@ sequenceDiagram
 
 ---
 
-*本文档为承接 HLD v2.15 的详细设计,纯独立蓝图。所有设计从第一性原理与 HLD 决策推导,不参照现有代码;与现有实现的重合是良构收敛的结果。标注为纯函数的核心可零依赖单测(呼应 PRD 验收策略)。实现语言与具体代码组织,由实现阶段裁量。*
+*本文档为承接 HLD v2.16 的详细设计,纯独立蓝图。所有设计从第一性原理与 HLD 决策推导,不参照现有代码;与现有实现的重合是良构收敛的结果。标注为纯函数的核心可零依赖单测(呼应 PRD 验收策略)。实现语言与具体代码组织,由实现阶段裁量。*
