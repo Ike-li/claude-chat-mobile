@@ -56,7 +56,9 @@ initCfAccess();
 const {
   PORT = 3000,
   AUTH_TOKEN = '',
-  IDLE_TIMEOUT_MS = 600000
+  IDLE_TIMEOUT_MS = 600000,
+  APPROVAL_TTL_MS = 1800000 // 审批悬置上限（默认 30min，部署可配置，LLD §3.5.2/OQ-05 已决不预置具体数值——
+                            // 此为实现落地时的合理默认：过期 fail-closed，不支持重新确认同一请求
 } = process.env;
 // 开发者模式（DEV_MODE=1）：暴露 web 端「重启服务」按钮，供 dogfooding 时改代码/.env 后一键 kickstart
 // 常驻 server（优雅退出 → LaunchAgent KeepAlive 自动拉起 → 前端 socket.io 自动重连 + epoch init 恢复）。
@@ -71,6 +73,7 @@ let workDirs = [];
 let sessionLimitByDir = new Map();
 
 const idleTimeoutMs = Number(IDLE_TIMEOUT_MS) > 0 ? Number(IDLE_TIMEOUT_MS) : 600000;
+const approvalTtlMs = Number(APPROVAL_TTL_MS) > 0 ? Number(APPROVAL_TTL_MS) : 1800000;
 const port = Number(PORT) > 0 ? Number(PORT) : 3000;
 const HERE = import.meta.dirname; // #14：所有相对路径锚定模块目录，从任何 cwd 启动都一致
 // CCM_DATA_DIR 覆盖状态文件根目录——仅测试用：让 E2E 把 init-cache/devices/push-subscription/sessions
@@ -1041,6 +1044,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     permissionMode: mode,
     effort: eff,
     idleTimeoutMs,
+    approvalTtlMs,
     historicalCostUsd: saved?.cost || 0,
     onEvent: envelope => {
       if (envelope.type === 'init') { lastInit = envelope.payload; saveInitCache(); }
@@ -1162,7 +1166,7 @@ function openScoutInstance(cwd) {
   const id = newInstanceId();
   const instance = new AgentSession({
     instanceId: id, resumeId: null, cwd, claudeBin,
-    model: undefined, permissionMode: 'default', effort: null, idleTimeoutMs,
+    model: undefined, permissionMode: 'default', effort: null, idleTimeoutMs, approvalTtlMs,
     historicalCostUsd: 0,
     onEvent: envelope => {
       if (envelope.type === 'models') {

@@ -17,6 +17,7 @@ function makeSession(opts = {}) {
     permissionMode: opts.permissionMode || 'default',
     effort: opts.effort || null,
     idleTimeoutMs: opts.idleTimeoutMs ?? 60_000,
+    approvalTtlMs: opts.approvalTtlMs, // 未传 → 走 agent.js 内的默认值
     resumeId: opts.resumeId || null,
     historicalCostUsd: opts.historicalCostUsd || 0,
     onEvent(e) { events.push(e); },
@@ -1153,6 +1154,44 @@ test.describe('权限闸门', () => {
     assert.equal(s.denyKinds.get('t1'), 'denied');
     const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
     assert.equal(rr.payload.outcome, 'deny');
+    s.dispose();
+  });
+
+  // 审批 TTL（LLD §3.5.2/§4，承接 OQ-05 fail-closed）
+  test('askPermission：permission_request payload 附 createdAt/expiresAt（expiresAt=createdAt+TTL）', () => {
+    const { s, events } = makeSession({ approvalTtlMs: 5000 });
+    const ac = new AbortController();
+    s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1' });
+    const pr = events.find(e => e.type === 'permission_request');
+    assert.ok(typeof pr.payload.createdAt === 'number');
+    assert.equal(pr.payload.expiresAt, pr.payload.createdAt + 5000);
+    s.resolvePermission('t1', 'deny');
+    s.dispose();
+  });
+
+  test('resolvePermission：已过期 → 不论 decision 一律按 deny 处理，outcome=expired', async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 1 }); // 1ms TTL，立刻过期
+    const ac = new AbortController();
+    const promise = s.askPermission('Bash', { command: 'rm -rf /' }, { signal: ac.signal, toolUseID: 't1' });
+    await new Promise(r => setTimeout(r, 20)); // 确保已越过 1ms TTL
+    s.resolvePermission('t1', 'allow'); // 即便传 allow，过期后也不应放行
+    const result = await promise;
+    assert.equal(result.behavior, 'deny', '过期后不可再兑现，即便传 allow 也必须 deny（fail-closed）');
+    const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
+    assert.equal(rr.payload.outcome, 'expired', 'outcome 应标 expired，区别于用户主动 allow/deny');
+    assert.equal(s.denyKinds.get('t1'), 'denied');
+    s.dispose();
+  });
+
+  test('resolvePermission：未过期时 TTL 机制不影响正常 allow/deny（回归）', async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 60_000 }); // 60s，测试期间不可能过期
+    const ac = new AbortController();
+    const promise = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1' });
+    s.resolvePermission('t1', 'allow');
+    const result = await promise;
+    assert.equal(result.behavior, 'allow');
+    const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
+    assert.equal(rr.payload.outcome, 'allow');
     s.dispose();
   });
 

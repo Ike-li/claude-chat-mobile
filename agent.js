@@ -17,6 +17,8 @@ const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn
                                      // 窄于长尾——超时不合成，防滞留 flag 被无关的 message_start（如 auto-compact fork）误触发。
 const BG_TASK_TTL_MS = 180000;       // 活的后台任务（bgTasks）无心跳的失效期（3min）：SDK getProgressMessage 无增量时不推，
                                      // 心跳可能稀疏——取值须宽于最大真实心跳间隔，防误清仍在跑的静默任务。漏收完成信号时它是主力清除。
+const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 server.js APPROVAL_TTL_MS；
+                                          // LLD §3.5.2/OQ-05 已决：不预置具体数值，此为实现落地的合理默认）
 
 // epoch：每个 AgentSession 实例一个跨重启唯一标识。基于 wall-clock + 进程内计数，
 // 保证服务重启后新实例的 epoch 严格大于旧实例 → 客户端据此区分"新流"并重置 seq 去重基线。
@@ -31,13 +33,14 @@ function nextEpoch() {
 // 模型「值」本就经 settingSources 与终端 /model 同步，显示层不应再叠加项目默认。终端友好名不再复刻。
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, historicalCostUsd }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, historicalCostUsd }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
     this.cwd = cwd;
     this.claudeBin = claudeBin;
     this.idleTimeoutMs = idleTimeoutMs;
+    this.approvalTtlMs = Number(approvalTtlMs) > 0 ? Number(approvalTtlMs) : DEFAULT_APPROVAL_TTL_MS; // 审批悬置上限（部署可配置）
     this.onEvent = onEvent;           // (envelope) => void，由 server 广播
     this.onSessionId = onSessionId;   // (sessionId, firstMessage, model) => void，登记 sessions.json
     this.onExit = onExit;             // () => void，进程意外退出/挂死自杀时通知 server 置空
@@ -337,7 +340,11 @@ export class AgentSession {
     // 恒空，见 resolvePermission 兜底注释）；保留此日志以便 SDK 版本变更后能第一时间发现 setMode 开始下发。
     if (suggestions?.length) console.log(`[canUseTool] ${name} suggestions: ${JSON.stringify(suggestions)}`);
     const requestId = toolUseID || `perm_${++this.permSeq}`;
-    this.emit('permission_request', { requestId, name, input, cwd: this.cwd });
+    // 审批 TTL（LLD §3.5.2/§4，承接 OQ-05）：createdAt=悬置起点，expiresAt=过期时刻；
+    // 事件携带二者供前端未来展示悬置时长/倒计时（FR-22），即使本轮不接 UI 也先备好契约字段。
+    const createdAt = Date.now();
+    const expiresAt = createdAt + this.approvalTtlMs;
+    this.emit('permission_request', { requestId, name, input, cwd: this.cwd, createdAt, expiresAt });
     return new Promise(resolve => {
       const abortHandler = () => {
         if (this.pendingPermissions.delete(requestId)) {
@@ -346,7 +353,7 @@ export class AgentSession {
           resolve({ behavior: 'deny', message: '请求已取消', interrupt: true });
         }
       };
-      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler });
+      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt });
       signal.addEventListener('abort', abortHandler);
     });
   }
@@ -358,6 +365,15 @@ export class AgentSession {
     pending.signal?.removeEventListener('abort', pending.abortHandler);
     this.pendingPermissions.delete(requestId);
     this.lastActivity = Date.now(); // 用户审批是主动操作，续期静默看护
+    // 审批 TTL fail-closed（OQ-05 已决）：过期后不可再兑现同一请求——不论传入的 decision 是什么，一律按
+    // 拒绝处理，避免对一个可能已失去语境（主机/会话状态已变化）的操作误批。outcome 标 'expired' 以区别于
+    // 用户主动 allow/deny，供前端提示"已过期，请重新触发"而非误显示为一次正常的拒绝。
+    if (Date.now() > pending.expiresAt) {
+      this.denyKinds.set(requestId, 'denied');
+      this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'expired' });
+      pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
+      return;
+    }
     this.emit('request_resolved', { requestId, kind: 'permission', outcome: decision }); // M4
     if (decision === 'allow') {
       const suggestions = pending.suggestions || [];
