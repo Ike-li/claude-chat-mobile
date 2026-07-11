@@ -60,9 +60,11 @@ export function effortLevelsFor(modelValue, modelsList) {
   return { hidden: false, levels: show };
 }
 
-// per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>done>idle；失败比在跑更需关注）。
+// per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
+// aborted（P1-4 已中止独立状态）介于 done 与 busy 之间：比顺利完成更值得回头看一眼（为什么被中止），但
+// 已是终态，不该盖过仍在运行的其它会话。
 export function aggregateStates(instances, dirs) {
-  const rank = { idle: 0, done: 1, busy: 2, error: 3, permission: 4 };
+  const rank = { idle: 0, done: 1, aborted: 2, busy: 3, error: 4, permission: 5 };
   const out = {};
   for (const d of (dirs || [])) out[d] = 'idle';
   for (const x of instances || []) {
@@ -76,14 +78,14 @@ export function aggregateStates(instances, dirs) {
 // 注意：这里 done>busy（完成=有结果待看，比在跑更该提示），与 aggregateStates 的 busy>done 有意不同——
 // 那是 per-cwd 聚合、这是按钮汇总；且排除 currentCwd（当前工作区自身动静在聊天视图内呈现，不点亮汇总角标）。
 export function summarizeOtherWorkspaces(workdirStates, availableDirs, currentCwd) {
-  const rank = { busy: 1, done: 2, error: 3, permission: 4 };
+  const rank = { busy: 1, done: 2, aborted: 3, error: 4, permission: 5 };
   let top = null, topRank = 0;
   for (const d of (availableDirs || [])) {
     if (d === currentCwd) continue;
     const st = workdirStates && workdirStates[d];
     if ((rank[st] || 0) > topRank) { topRank = rank[st]; top = st; }
   }
-  return top; // 'permission'|'error'|'done'|'busy'|null
+  return top; // 'permission'|'error'|'aborted'|'done'|'busy'|null
 }
 
 // 顶部/空状态展示名：路径仍作为运行时事实保留，移动端 UI 只露出项目末段。

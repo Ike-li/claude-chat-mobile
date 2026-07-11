@@ -74,6 +74,19 @@ test('summarizeOtherWorkspaces: 跨目录优先级 permission>error>done>busy', 
   assert.equal(summarizeOtherWorkspaces({ '/a': 'busy', '/b': 'done' }, dirs, '/cur'), 'done'); // done 压过 busy（与按钮汇总语义一致）
 });
 
+// P1-4：已中止独立状态——前端聚合函数须认识新状态值，否则被当未知状态（rank 缺省 0）静默吞掉
+test('aggregateStates: 认识 aborted（介于 done 与 busy 之间：比顺利完成更值得回头看，但已是终态不盖过在跑）', () => {
+  assert.equal(aggregateStates([{ cwd: '/a', state: 'aborted' }, { cwd: '/a', state: 'done' }], ['/a'])['/a'], 'aborted');
+  assert.equal(aggregateStates([{ cwd: '/a', state: 'aborted' }, { cwd: '/a', state: 'busy' }], ['/a'])['/a'], 'busy');
+  assert.equal(aggregateStates([{ cwd: '/a', state: 'aborted' }, { cwd: '/a', state: 'error' }], ['/a'])['/a'], 'error');
+});
+
+test('summarizeOtherWorkspaces: 认识 aborted（介于 done 与 error 之间）', () => {
+  const dirs = ['/a', '/b'];
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'done', '/b': 'aborted' }, dirs, '/cur'), 'aborted');
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'aborted', '/b': 'error' }, dirs, '/cur'), 'error');
+});
+
 test('projectDisplayName: 顶部/空状态只显示项目名，不显示完整路径', () => {
   assert.equal(projectDisplayName('/Users/you/code/claude-chat-mobile'), 'claude-chat-mobile');
   assert.equal(projectDisplayName('/Users/you/code/claude-chat-mobile/'), 'claude-chat-mobile');

@@ -61,6 +61,10 @@ export class AgentSession {
                                        // 轮次真正开始（message_start/assistant）时合成 pendingTurns=1，让 busy/看护/角标接回。
                                        // 只武装 flag 不直接 ++：N 条通知未必对应 N 轮（合并轮会卡死 busy → checkIdle 误杀）。
     this.pendingAutoTurnAt = 0;        // flag 武装时刻（Date.now）：合成前校验未超 AUTO_TURN_ARM_TTL_MS，防滞留 flag 长尾误触发。
+    this._awaitingInterruptResult = false; // P1-4：interrupt() 成功后置真，标记"下一条 result 是这次中断的终态确认"
+                                            // ——一次性消费。不能靠嗅探 SDK 的 result.subtype（如 'error_during_execution'）
+                                            // 反推"是不是用户中断"：该 subtype 是"执行过程中出错"的泛化分类，与
+                                            // error_max_turns/error_max_budget_usd 同级，也可能是真实的独立异常。
     this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
     this.pendingQuestions = new Map();   // toolUseID → { resolve, questions, answers, remaining }
     this.denyKinds = new Map();          // toolUseID → 'answered'|'denied'|'cancelled'：deny+message 通道的真实语义，供前端区分 ☑️/🚫（is_error 不足以分辨）
@@ -285,6 +289,7 @@ export class AgentSession {
       if (this.disposed) return; // S3：await 间隙实例可能已被 dispose，勿往弃用实例发事件
       // 成功中断：丢弃 toDrop（中断前排队的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
       this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
+      this._awaitingInterruptResult = true; // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result
       this.emit('system', { message: '已中断', kind: 'interrupted' }); // M7：kind 字段，勿靠字符串匹配
     } catch {
       // SDK 无在途任务 → 不丢消息：把 toDrop 放回队列头部（await 期间新发的接其后），pendingTurns 不动。
@@ -888,6 +893,8 @@ export class AgentSession {
         if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
         this.totalDurationMs += msg.duration_ms || 0;
         this.totalApiDurationMs += msg.duration_api_ms || 0;
+        const wasInterrupted = this._awaitingInterruptResult; // P1-4：一次性消费，防误标到后续无关的 result
+        this._awaitingInterruptResult = false;
         this.emit('result', {
           messageId: this.currentMessageId,
           durationMs: msg.duration_ms,
@@ -895,7 +902,8 @@ export class AgentSession {
           isError: msg.is_error,
           errors: msg.subtype === 'success' ? undefined : msg.errors,
           models: Object.keys(msg.modelUsage ?? {}), // F1：语义断言用
-          text: this.assistantResponseBuffer || undefined // 完整回复文本：供前端断网恢复后校正截断的 s.raw
+          text: this.assistantResponseBuffer || undefined, // 完整回复文本：供前端断网恢复后校正截断的 s.raw
+          interrupted: wasInterrupted // 这条 result 是否由用户主动中止直接导致（区别于独立的真实错误/完成）
         });
         const { model: modelStr, effort: effortStr, permissionMode: permStr } = this.logMeta(); // 统一解析，消除与 send 的漂移
         const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms`; // model/effort/permission 走独立 chip 字段，不再进文本

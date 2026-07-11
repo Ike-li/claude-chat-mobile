@@ -2181,7 +2181,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
 
   // 角标视觉：busy ⏳ / permission ⚠️ / error ❗ / done ✅；idle 隐藏。挂在目录行内、ml-auto 右对齐。
   // [emoji, 颜色类, 语义 title]——title 消除「不知道图标/颜色对应什么状态」
-  const DIR_BADGE = { busy: ['⏳', 'text-warning', '运行中'], permission: ['⚠️', 'text-danger', '待审批'], error: ['❗', 'text-danger', '出错'], done: ['✅', 'text-success', '已完成'] };
+  const DIR_BADGE = { busy: ['⏳', 'text-warning', '运行中'], permission: ['⚠️', 'text-danger', '待审批'], error: ['❗', 'text-danger', '出错'], done: ['✅', 'text-success', '已完成'], aborted: ['⏹', 'text-warning', '已中止'] };
   // 工具角标细化：busy 时根据 activeTool 显示具体工具图标
   const TOOL_BADGE = { Agent: '🤖', Task: '🤖', Bash: '🖥', Write: '📝', Edit: '✏️', Read: '👁' };
   function applyBadge(badge, state) {

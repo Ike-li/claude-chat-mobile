@@ -1032,6 +1032,44 @@ test.describe('interrupt()', () => {
     s.dispose();
   });
 
+  // P1-4 实证发现：真实 SDK 在 interrupt() 成功后，消息流会紧接着自己吐出一条 result 事件
+  // （实测 subtype:'error_during_execution', is_error:true）——这条 result 不是独立的新错误，
+  // 而是这次中断的终态确认。但 error_during_execution 是 SDK 里"执行过程中出错"的泛化 subtype
+  // （与 error_max_turns/error_max_budget_usd 同级），不能反推"就是用户中断"，故不能靠嗅探 SDK
+  // 的 subtype 判断，必须在 interrupt() 内部显式标记"下一条 result 应视为这次中断的终态"。
+  test('interrupt() 成功后，紧跟的下一条 result 事件 payload.interrupted=true（一次性消费）', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt();
+    s.map({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {} });
+    const r1 = events.find(e => e.type === 'result');
+    assert.equal(r1.payload.interrupted, true);
+
+    // 一次性消费：紧接着的下一轮（全新、与本次中断无关）不应再被标记
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 20, modelUsage: {} });
+    const results = events.filter(e => e.type === 'result');
+    assert.equal(results[1].payload.interrupted, false, '标记应一次性消费，不应残留到下一轮 result');
+    s.dispose();
+  });
+
+  test('未调用 interrupt() 的正常 result → payload.interrupted=false（回归）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    const r = events.find(e => e.type === 'result');
+    assert.equal(r.payload.interrupted, false);
+    s.dispose();
+  });
+
+  test('SDK interrupt 抛错（无可中断任务）→ 不设置标记，后续 result 不受影响', async () => {
+    const { s, events } = makeSession();
+    s.q = { interrupt() { return Promise.reject(new Error('no task')); } };
+    await s.interrupt();
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    const r = events.find(e => e.type === 'result');
+    assert.equal(r.payload.interrupted, false, '中断失败（无在途任务）不应误标记后续 result');
+    s.dispose();
+  });
+
   test('_flushText/_flushThink 在 interrupt 前调用', async () => {
     const { s, events } = makeSession();
     s._textBuf = 'pending text';

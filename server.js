@@ -26,6 +26,7 @@ import * as interactionLog from './interaction-log.js';
 import { createModelsCache, isCwdDefaultModel } from './models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from './cf-access.js';
 import { onAuthResult, freshState, rlSourceKey } from './rate-limiter.js';
+import { deriveLatches } from './instance-latches.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from './workdirs.js';
 import {
@@ -733,7 +734,11 @@ function instanceForSession(sessionId) {
 // 在途态 + latch 推导（无实例=idle）；broadcastInstances 在轮次/审批边界推送，前端据此渲染 tab 栏角标 + 通知。
 const doneInstances = new Set();
 const errorInstances = new Set(); // 后台（≠viewing）轮次 result.isError 置位的 latch（出错 ❗），清除点同 doneInstances
-const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved', 'tool_use', 'task_notification']);
+// 已中止独立状态（P1-4，承接用户视角状态模型"中止≠完成/出错"）：与 done/error 不同，中止操作几乎总发生在
+// viewing 的前台会话（public/js/app.js 只对 viewingInstanceId 发 user:interrupt），故无条件 latch（不限 viewing）；
+// 三者的完整置位/清除规则见 instance-latches.js#deriveLatches（抽纯函数防止在 onEvent 大回调里遗漏边界）。
+const abortedInstances = new Set();
+const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved', 'tool_use', 'task_notification', 'system']);
 const BG_TYPE_TO_TOOL = { local_agent: 'Agent', local_bash: 'Bash' }; // 后台任务类型 → 前端 TOOL_BADGE 键（🤖 Agent / 🖥 Bash）；未知类型 → null → ⏳
 function instanceState(id) {
   const a = agents.get(id);
@@ -741,6 +746,7 @@ function instanceState(id) {
   if (a.pendingPermissions.size > 0 || a.pendingQuestions.size > 0) return 'permission'; // 需审批 ⚠️
   if (a.pendingTurns > 0) return 'busy';                                                  // 运行中 ⏳（在途轮）
   if (a.hasBgTasks?.()) return 'busy';                                                     // 纯后台任务运行中（Workflow/后台 Agent/Bash，pendingTurns=0）→ 同样 ⏳
+  if (abortedInstances.has(id)) return 'aborted';                                         // 用户主动中止 ⏹
   if (errorInstances.has(id)) return 'error';                                             // 后台出错 ❗
   if (doneInstances.has(id)) return 'done';                                               // 后台完成 ✅
   return 'idle';
@@ -1062,23 +1068,32 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       // E16：仅当前查看 tab 的轮次边界刷新状态行（后台实例的 init/result 不抢占 viewingInstanceId 的 statusline）
       if ((envelope.type === 'init' || envelope.type === 'result') && id === viewingInstanceId) scheduleStatusRefresh();
       // 台阶3 Step B：轮次/审批边界 → 重算 per-instance 角标并广播。done latch：后台轮次 result 置位；
-      // 该实例新活动 init/审批即清（新一轮活动取代「完成」标记）。
+      // 该实例新活动 init/审批即清（新一轮活动取代「完成」标记）。三个 latch（done/error/aborted）互斥，
+      // 完整置位/清除规则见 instance-latches.js#deriveLatches（P1-4：抽纯函数防在此大回调里遗漏边界）。
       if (STATE_BOUNDARY.has(envelope.type)) {
-        // result latch 按 isError 分流（done/error 互斥）；裸 error 事件不 latch——部分是可恢复警告
-        // （如模型切换失败仍续轮），稳妥信号是 result.isError。done/error 在新活动 init/审批时清。
+        let latchEventType = null;
         if (envelope.type === 'result') {
+          latchEventType = 'result';
           if (instance.sessionId) {
             sessions.updateSessionCost(instance.sessionId, (instance.historicalCostUsd || 0) + (instance.totalCostUsd || 0));
           }
-          if (id !== viewingInstanceId) {
-            if (envelope.payload?.isError) { errorInstances.add(id); doneInstances.delete(id); }
-            else { doneInstances.add(id); errorInstances.delete(id); }
-          }
         } else if (envelope.type === 'init' || envelope.type === 'permission_request' || envelope.type === 'question') {
-          doneInstances.delete(id); errorInstances.delete(id);
-          // task_notification 在 STATE_BOUNDARY 里但【不】清 latch：它到达时 pendingTurns 仍 0（合成发生在后续
-          // message_start），此刻清 error latch 会吞掉后台实例先前未确认的失败 ❗；且忙碌显示由合成的 pendingTurns
-          // 驱动（instanceState busy 优先级本就盖过 done/error），自动汇报轮的 result 再正确重估 latch——无需在此清。
+          latchEventType = 'new_activity';
+          // task_notification 在 STATE_BOUNDARY 里但【不】映射到 new_activity：它到达时 pendingTurns 仍 0（合成发生在
+          // 后续 message_start），此刻清 error latch 会吞掉后台实例先前未确认的失败 ❗；且忙碌显示由合成的 pendingTurns
+          // 驱动（instanceState busy 优先级本就盖过 done/error/aborted），自动汇报轮的 result 再正确重估 latch——无需在此清。
+        } else if (envelope.type === 'system' && envelope.payload?.kind === 'interrupted') {
+          latchEventType = 'system_interrupted'; // P1-4：用户主动中止（agent.js interrupt() 成功分支）
+        }
+        if (latchEventType) {
+          const next = deriveLatches({
+            inDone: doneInstances.has(id), inError: errorInstances.has(id), inAborted: abortedInstances.has(id),
+            eventType: latchEventType, isError: envelope.payload?.isError, isViewing: id === viewingInstanceId,
+            wasInterrupted: envelope.payload?.interrupted, // P1-4：result 是否由用户主动中止直接导致（agent.js 标记）
+          });
+          next.done ? doneInstances.add(id) : doneInstances.delete(id);
+          next.error ? errorInstances.add(id) : errorInstances.delete(id);
+          next.aborted ? abortedInstances.add(id) : abortedInstances.delete(id);
         }
         // E15 离线 web-push：文案映射抽到 notificationForEvent（纯函数、test/notifications 覆盖）。
         // result 仅无客户端连时推（连着的自己看得到）；permission/question/task_notification 无条件推
@@ -1123,6 +1138,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         effortByInstance.delete(id);
         doneInstances.delete(id);
         errorInstances.delete(id);
+        abortedInstances.delete(id);
         if (viewingInstanceId === id) viewingInstanceId = agents.keys().next().value ?? null;
       }
       broadcastInstances(); // 实例退出 → 刷 tab 栏（角标回落 / 该 tab 消失）
@@ -1236,6 +1252,7 @@ function disposeInstance(instanceId) {
   effortByInstance.delete(instanceId);
   doneInstances.delete(instanceId);
   errorInstances.delete(instanceId);
+  abortedInstances.delete(instanceId);
   if (viewingInstanceId === instanceId) viewingInstanceId = agents.keys().next().value ?? null;
   broadcastInstances();
 }
@@ -1524,7 +1541,7 @@ io.on('connection', socket => {
     const a = agents.get(id);
     viewingCwd = a.cwd;
     interactionLog.addSessionLog(a.sessionId, 'sys_info', `[SYS] 切换当前活动视图 (user:setViewing): instanceId=${id}, sessionId=${a.sessionId}`);
-    doneInstances.delete(id); errorInstances.delete(id);
+    doneInstances.delete(id); errorInstances.delete(id); abortedInstances.delete(id);
     broadcastInstances();
     pushModelsForCwd(a.cwd); // 切视图到别区 tab：推该区清单刷新模型选择器（避免显另一 tab 工作区的候选）
     lastStatusLine = null;
@@ -1577,7 +1594,7 @@ io.on('connection', socket => {
     viewingInstanceId = inst.instanceId;
     viewingCwd = cwd;
     sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（重启预热用）
-    doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId);
+    doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);
     broadcastInstances();
     pushModelsForCwd(cwd); // 切区即时推本区清单（无缓存→空）；随后 resume 实例的真 models 兜底
     lastStatusLine = null;
