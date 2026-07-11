@@ -2,7 +2,9 @@
 // 传输层仍在 server.js：pushNotify（Web Push）与 ntfyNotify（ntfy）。
 //
 // notificationForEvent 返回 { title, body, data? }：
-//   · data 仅在传入 instanceId 时附带（{instanceId, sessionId, cwd}）——供 push/ntfy 点击深链回该会话（②）。
+//   · body 最小化（SEC-04 / LLD §3.6.2）：不含命令/参数/问题正文/summary——尤其 ntfy 明文经第三方；正文回 app 内经鉴权取。
+//   · data 仅在传入 instanceId 时附带（{instanceId, sessionId, cwd}）——供深链回该会话。Web Push 的 data 走 RFC 8291
+//     端到端加密（push service 不见明文、不上锁屏），故保留完整 cwd 供深链；ntfy click 深链则不含完整 cwd（见 ntfyMetaFor）。
 //   · 不传 instanceId 时不含 data 键（向后兼容旧调用与单测的 deepEqual）。
 // hasClients = 当前是否有客户端 socket 连着：
 //   · result 仅在【无人连】（用户离线）时推——连着的客户端自己看得到，避免重复；
@@ -21,20 +23,23 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
         body: `用时 ${((p.durationMs ?? 0) / 1000).toFixed(1)}s`
       });
     case 'permission_request':
+      // 最小化（SEC-04）：body 只保留工具名，【不含 input 命令/参数正文】；待批操作回 app 内经鉴权查看。
       return withData({
         title: '⚠️ Claude 请求许可',
-        body: `${p.name ?? '工具'}：${JSON.stringify(p.input ?? {}).slice(0, 80)}`
+        body: `需要你授权：${p.name ?? '工具'}`
       });
     case 'question':
+      // 最小化：不含问题正文（消息正文），固定引导文案；正文回 app 内取。
       return withData({
         title: '❓ Claude 有问题',
-        body: (p.text ?? '').slice(0, 100) || 'Claude 需要你的回答'
+        body: 'Claude 需要你的回答'
       });
     case 'task_notification': {
+      // 最小化：不含 summary 正文（可能含代码/结果），固定引导文案；成功/失败见 title。
       const failed = p.status === 'failed' || p.status === 'error';
       return withData({
         title: failed ? '⚠️ 后台任务失败' : '✅ 后台任务完成',
-        body: p.summary || 'Claude 即将汇报结果'
+        body: failed ? '后台任务未成功，点开查看' : '后台任务已完成，点开查看'
       });
     }
     default:
@@ -59,7 +64,8 @@ export function ntfyMetaFor(type, data = {}, publicUrl = '') {
     const q = new URLSearchParams();
     q.set('instance', data.instanceId);
     if (data.sessionId) q.set('session', data.sessionId);
-    if (data.cwd) q.set('cwd', data.cwd);
+    // 【不把完整 cwd 放进 ntfy click 深链】——ntfy 明文经第三方（SEC-04）。深链靠 instance+session 定位；
+    // 实例已失效时缺 cwd 降级为手选会话（session:switch 以 sessionId 为主键校验、cwd 仅路由辅助）。
     click = `${publicUrl.replace(/\/+$/, '')}/#${q.toString()}`;
   }
   return { priority, tags, click };

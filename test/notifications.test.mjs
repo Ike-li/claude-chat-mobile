@@ -21,31 +21,31 @@ test('result + 有客户端连接 → 不推（客户端自己看得到）', () 
 
 // ── permission_request / question：无条件推 ──────────────────────────────────
 
-test('permission_request → 无条件推，body 含工具名', () => {
-  const n = notificationForEvent('permission_request', { name: 'Bash', input: { command: 'ls' } }, { hasClients: true });
+test('permission_request → 无条件推，body 含工具名但【不含命令/参数正文】（SEC-04 最小化）', () => {
+  const n = notificationForEvent('permission_request', { name: 'Bash', input: { command: 'rm -rf /tmp/x' } }, { hasClients: true });
   assert.equal(n.title, '⚠️ Claude 请求许可');
-  assert.match(n.body, /^Bash：/);
+  assert.match(n.body, /Bash/, 'body 保留工具名（辨识度，泄露面小）');
+  assert.ok(!n.body.includes('rm'), 'body 不得含命令正文');
+  assert.ok(!n.body.includes('command'), 'body 不得含 input JSON');
 });
 
-test('question → 无条件推，空文本回退兜底文案', () => {
-  assert.equal(notificationForEvent('question', { text: '选哪个?' }, { hasClients: true }).body, '选哪个?');
-  assert.equal(notificationForEvent('question', { text: '' }, { hasClients: false }).body, 'Claude 需要你的回答');
+test('question → 无条件推，body 【不含问题正文】（最小化，正文回 app 内经鉴权取）', () => {
+  const n = notificationForEvent('question', { text: '要删除生产库吗?' }, { hasClients: true });
+  assert.ok(!n.body.includes('生产库'), 'body 不得含问题正文');
+  assert.equal(n.body, 'Claude 需要你的回答');
 });
 
-// ── task_notification：后台任务（Workflow/后台 Agent/Bash）完成，本次新补的推送 ──────
+// ── task_notification：后台任务（Workflow/后台 Agent/Bash）完成 ──────
 
-test('task_notification 成功 → 推「后台任务完成」，无条件（有客户端也推）', () => {
-  const n = notificationForEvent('task_notification', { status: 'completed', summary: '生成了 3 个测试' }, { hasClients: true });
-  assert.deepEqual(n, { title: '✅ 后台任务完成', body: '生成了 3 个测试' });
+test('task_notification 成功 → 「后台任务完成」，body 【不含 summary 正文】', () => {
+  const n = notificationForEvent('task_notification', { status: 'completed', summary: '改了 auth.js 的鉴权分支' }, { hasClients: true });
+  assert.equal(n.title, '✅ 后台任务完成');
+  assert.ok(!n.body.includes('auth.js'), 'body 不得含 summary 正文');
 });
 
-test('task_notification 失败（status=failed/error）→ 推「后台任务失败」', () => {
+test('task_notification 失败（status=failed/error）→ 「后台任务失败」', () => {
   assert.equal(notificationForEvent('task_notification', { status: 'failed' }, {}).title, '⚠️ 后台任务失败');
   assert.equal(notificationForEvent('task_notification', { status: 'error' }, {}).title, '⚠️ 后台任务失败');
-});
-
-test('task_notification 无 summary → 兜底文案', () => {
-  assert.equal(notificationForEvent('task_notification', { status: 'completed' }, {}).body, 'Claude 即将汇报结果');
 });
 
 // ── 其余 STATE_BOUNDARY 事件不推 ─────────────────────────────────────────────
@@ -89,12 +89,13 @@ test('ntfyMetaFor: result → 默认优先级 3', () => {
   assert.equal(ntfyMetaFor('result', {}, '').priority, 3);
 });
 
-test('ntfyMetaFor: 有 publicUrl + instanceId → click 深链含 instance/session/cwd（URL 编码）', () => {
-  const m = ntfyMetaFor('permission_request', { instanceId: 'i1', sessionId: 's1', cwd: '/r' }, 'https://x.example.com');
+test('ntfyMetaFor: click 深链含 instance/session，但【不含完整 cwd】（ntfy 明文第三方，SEC-04）', () => {
+  const m = ntfyMetaFor('permission_request', { instanceId: 'i1', sessionId: 's1', cwd: '/Users/me/secret-proj' }, 'https://x.example.com');
   assert.match(m.click, /^https:\/\/x\.example\.com\/#/);
   assert.match(m.click, /instance=i1/);
   assert.match(m.click, /session=s1/);
-  assert.match(m.click, /cwd=%2Fr/);
+  assert.ok(!/cwd=/.test(m.click), 'ntfy click 深链不得含完整 cwd 路径');
+  assert.ok(!m.click.includes('secret'), '不得经第三方明文泄露工作目录路径');
 });
 
 test('ntfyMetaFor: 无 publicUrl 或无 instanceId → 无 click', () => {
