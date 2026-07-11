@@ -27,6 +27,7 @@ import { createModelsCache, isCwdDefaultModel } from './models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from './cf-access.js';
 import { onAuthResult, freshState, rlSourceKey } from './rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
+import { deriveAttention } from './attention.js';
 import { checkAndRecord } from './message-dedup.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from './workdirs.js';
@@ -757,6 +758,40 @@ function instanceState(id) {
   if (doneInstances.has(id)) return 'done';                                               // 后台完成 ✅
   return 'idle';
 }
+// "等我"跨会话聚合（AD-11/§3.2.5 AttentionDeriver，承接 FR-21/FR-22）：跨全部 live 实例（不限 viewingCwd）
+// 投影 needsYou。数据源=运行时 agents（读模型投影，非新数据源，EP-1）：
+//   ①审批维度——每个 live 实例的 pendingPermissions（已有 createdAt/expiresAt，承接审批 TTL 阶段），
+//     此处过滤 now<=expiresAt（deriveAttention 契约要求调用方先过滤，保持纯函数不依赖 Date.now()）；
+//   ②输入维度——pendingQuestions（本次新增 createdAt），仅当该实例无 pendingPermissions 时计入
+//     awaiting_input（镜像 StatusDeriver 优先级：审批 > 输入，与 instanceState() 的 'permission' 判定一致）。
+// 边界（继承 AD-3，如实登记）：纯终端会话的等待态不经此路径可见——本函数只覆盖 web 后端驱动的 live 实例。
+function computeNeedsYou() {
+  const sessionViews = [];
+  const pendingApprovals = [];
+  const instanceIdBySessionId = new Map();
+  const now = Date.now();
+  for (const [instanceId, a] of agents) {
+    if (a.sessionId) instanceIdBySessionId.set(a.sessionId, instanceId);
+    const title = sessions.getSession(a.sessionId)?.title ?? null;
+    const lastActiveAt = sessions.getSession(a.sessionId)?.lastUsedAt ?? 0;
+    let status; let awaitingSince;
+    if (a.pendingPermissions.size > 0) {
+      for (const [requestId, p] of a.pendingPermissions) {
+        if (now > p.expiresAt) continue; // 已过期：不计入聚合（fail-closed 语义下过期即失效，见审批 TTL 阶段）
+        pendingApprovals.push({ sessionId: a.sessionId, cwd: a.cwd, title, requestId, createdAt: p.createdAt, toolName: p.name });
+      }
+    } else if (a.pendingQuestions.size > 0) {
+      status = 'awaiting_input';
+      for (const [, q] of a.pendingQuestions) {
+        if (awaitingSince === undefined || q.createdAt < awaitingSince) awaitingSince = q.createdAt;
+      }
+    }
+    sessionViews.push({ sessionId: a.sessionId, cwd: a.cwd, title, lastActiveAt, status, awaitingSince });
+  }
+  const { needsYou } = deriveAttention(sessionViews, pendingApprovals);
+  // instanceId 是纯函数契约之外的接线专用字段（前端深链需要，复用 FR-14 applyDeepLink({instanceId,sessionId,cwd})）。
+  return needsYou.map(item => ({ ...item, instanceId: instanceIdBySessionId.get(item.sessionId) ?? null }));
+}
 function instancesPayload() {
   const list = [];
   for (const [id, a] of agents) {
@@ -777,7 +812,7 @@ function instancesPayload() {
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || null
     });
   }
-  const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE };
+  const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE, needsYou: computeNeedsYou() };
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
   // 无条件下发（每次 cwd/视图切换均随 broadcastInstances 按 viewingCwd 归键，防跨区泄漏；查看真实 resumed

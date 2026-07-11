@@ -435,7 +435,8 @@ export class AgentSession {
           resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
         }
       };
-      this.pendingQuestions.set(toolUseID, { resolve, questions, answers, remaining, signal, abortHandler });
+      // createdAt：供 AD-11/§3.2.5 AttentionDeriver 的"等我输入"悬置起点（waitingSince），镜像 pendingPermissions 已有的 createdAt 模式。
+      this.pendingQuestions.set(toolUseID, { resolve, questions, answers, remaining, signal, abortHandler, createdAt: Date.now() });
 
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];

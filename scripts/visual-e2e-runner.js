@@ -1235,6 +1235,57 @@ async function run() {
     await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc17_pending_snapshot_reconcile.png` });
     console.log('✅ TC-17: sync:since 快照重建待审批卡片 passed\n');
 
+    // ==================================================================
+    // TC-18: "需要你"聚合区渲染 + 点击深链跳转（AD-11/§3.2.5 AttentionDeriver，承接 FR-21/FR-22）
+    // ==================================================================
+    console.log('👉 Running TC-18: "需要你"聚合区渲染 + 深链跳转...');
+    // TC-17 遗留 viewingInstanceId='inst_2' + 待审批快照（mock server 进程级状态，不随 page.reload() 清空）——
+    // 若不重置，reload 后重连 sync:since 会重发该快照、弹出的 permModal 挡住 sendCommand 的 #btnSend 点击。
+    // 先 reset 再 reload，确保重连时服务端状态已干净（其余 17 个既有 TC 从未需要过，因 TC-17 此前恒为末位）。
+    await fetch('http://127.0.0.1:3100/__reset', { method: 'POST' });
+    await page.reload({ waitUntil: 'networkidle2' });
+    await page.waitForSelector('#input');
+    await sleep(500);
+    // 触发：mock 让一个未在查看的后台实例（inst_needsyou，另一工作区）出现待审批，
+    // 随 instances 广播下发手造的 needsYou（真实 server 由 computeNeedsYou() 投影计算，见 server.js）。
+    await sendCommand('test:needsyou');
+    await waitIdle();
+
+    await page.click('#btnSessions');
+    await page.waitForSelector('#leftSidebar:not(.-translate-x-full)');
+    await sleep(400); // 等侧边栏滑入动画完成（同 TC-7 惯例），screenshot 才不会撞在过渡中间帧
+    await page.waitForSelector('[data-testid="needs-you-row"]', { timeout: 5000 });
+
+    const needsYouInfoTC18 = await page.evaluate(() => {
+      const section = document.getElementById('needsYouSection');
+      const rows = section ? section.querySelectorAll('[data-testid="needs-you-row"]') : [];
+      return {
+        headerText: section?.firstElementChild ? section.firstElementChild.textContent : '',
+        rowText: rows[0] ? rows[0].textContent : '',
+        rowCount: rows.length
+      };
+    });
+    console.log(`   [Assert] needsYou header: "${needsYouInfoTC18.headerText}" · row: "${needsYouInfoTC18.rowText}"`);
+    assert.strictEqual(needsYouInfoTC18.headerText, '需要你 (1)', 'TC-18: needsYou 区头部应显示计数');
+    assert.strictEqual(needsYouInfoTC18.rowCount, 1, 'TC-18: 应恰好渲染一条 needsYou 行');
+    assert.ok(needsYouInfoTC18.rowText.includes('Background Approval Demo'), 'TC-18: 行内应显示会话标题');
+    assert.ok(needsYouInfoTC18.rowText.includes('等待审批'), 'TC-18: 审批维度应标注"等待审批"');
+    assert.ok(needsYouInfoTC18.rowText.includes('Bash'), 'TC-18: 应显示触发审批的工具名');
+    assert.ok(needsYouInfoTC18.rowText.includes('已等待 3 分钟'), 'TC-18: 应据 waitingSince 展示悬置时长（FR-22，与 needsYou 共享数据源）');
+    await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc18_needs_you.png` });
+    console.log('📸 Captured and saved tc18_needs_you.png');
+
+    // 点击深链跳转（复用 FR-14 applyDeepLink）：应切到该后台实例所在工作区，侧边栏随之关闭
+    await page.click('[data-testid="needs-you-row"]');
+    await page.waitForSelector('#leftSidebar.-translate-x-full', { timeout: 5000 });
+    await page.waitForFunction(
+      () => document.getElementById('topProjectText')?.textContent === 'another-react-project',
+      { timeout: 5000 }
+    );
+    const workspaceAfterClickTC18 = await page.evaluate(() => document.getElementById('topProjectText')?.textContent);
+    assert.strictEqual(workspaceAfterClickTC18, 'another-react-project', 'TC-18: 点击 needsYou 行应深链切到对应工作区/会话');
+    console.log('✅ TC-18: "需要你"聚合区渲染 + 深链跳转 passed\n');
+
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');
     console.log('==================================================================\n');

@@ -2883,6 +2883,51 @@ io.on('connection', socket => {
         });
       },
     },
+    {
+      // TC-18：AD-11/§3.2.5 AttentionDeriver（承接 FR-21/FR-22）—— 一个未在查看的后台实例出现待审批，
+      // 断言会话面板顶部"需要你(N)"聚合区渲染出该项（含悬置时长文案），点击后深链切到该实例。
+      // 真实 server 由 computeNeedsYou()（server.js）投影计算；mock 直接手造等价 payload，专注验证前端渲染/交互链路。
+      command: 'test:needsyou',
+      run: async () => {
+        console.log('[mock] test:needsyou — 后台实例出现待审批，验证"需要你"聚合区渲染');
+        let bgInst = mockInstances.find(i => i.instanceId === 'inst_needsyou');
+        if (!bgInst) {
+          bgInst = {
+            instanceId: 'inst_needsyou',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-needsyou',
+            title: 'Background Approval Demo',
+            state: 'permission',
+            permissionMode: 'default',
+            effort: null,
+            model: activeModel
+          };
+          mockInstances.push(bgInst);
+        } else {
+          bgInst.state = 'permission';
+        }
+        const waitingSince = Date.now() - 3 * 60000; // 3 分钟前——断言"已等待 3 分钟"文案
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances,
+            needsYou: [{
+              sessionId: bgInst.sessionId, cwd: bgInst.cwd, title: bgInst.title,
+              reason: 'awaiting_approval', waitingSince, risk: undefined, toolName: 'Bash',
+              instanceId: bgInst.instanceId
+            }]
+          }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_needsyou_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
   ]);
 
   // Handle custom trigger command inputs

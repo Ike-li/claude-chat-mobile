@@ -328,6 +328,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   let displayedInstanceId = undefined;  // undefined 确保首次 viewingInstanceId=null 也会 bind 空启动页
   let displayedSessionId = null;
   let instancesList = [];               // 最近 instances 事件的实例列表（含 per-instance state）
+  let needsYouList = [];                // "等我"聚合（AD-11/§3.2.5，承接 FR-21/FR-22），按 waitingSince 升序（等得越久排越前）
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
   const sessionsCache = new Map();      // 会话列表缓存 (cwd -> sessions)，实现 Stale-While-Revalidate，实现 0ms 瞬间二次展开
   // P3：面板结构指纹（dirs + 实例集 + viewingInstanceId + viewingCwd）；纯状态变化时不重建面板。
@@ -1986,6 +1987,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     availableDirs = Array.isArray(p?.dirs) ? p.dirs : [];
     const prevInstances = instancesList;
     instancesList = Array.isArray(p?.instances) ? p.instances : [];
+    needsYouList = Array.isArray(p?.needsYou) ? p.needsYou : [];
     // cwd 默认模型：捕获旧值 + currentModel（下方 adoptPanelState 会改 currentModel），末尾据此决定是否重建默认磁贴标签。
     // 非 string（含 null=未探到）归一空 → 切到无默认的 cwd 自动清、不残留上区默认。
     const prevDefaultModel = cwdDefaultModel, prevCurrentModel = currentModel;
@@ -2081,14 +2083,16 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const isPanelOpen = leftSidebar && !leftSidebar.classList.contains('-translate-x-full');
     if (isDesktop || isPanelOpen) {
       if (_structChanged) {
-        openSessionPanel();
+        openSessionPanel(); // 内含 needsYou 区全量重建，此路径不必再单独 refreshNeedsYou()
       } else {
         refreshDirBadges();
         refreshInstanceBadges(); // 实例角标实时刷新（busy 时工具图标细化）
+        refreshNeedsYou(); // "等我"聚合独立于 structKey（新增/清除审批不改变实例集结构），须单独刷新
       }
     } else {
       refreshDirBadges();
       refreshInstanceBadges();
+      refreshNeedsYou();
     }
     // 默认磁贴标签依赖 currentModel(空/非空) + cwdDefaultModel，二者本次都可能变（adoptPanelState 改 currentModel、
     // scout 完成的同视图广播改 cwdDefaultModel）。用纯函数比对前后标签，仅真变时重建网格刷新——adoptPanelState 只
@@ -2210,6 +2214,60 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const m = DIR_BADGE[state];
     if (m) { badge.textContent = m[0]; badge.className = `dir-badge ml-auto shrink-0 ${m[1]}`; badge.title = m[2]; }
     else { badge.textContent = ''; badge.className = 'dir-badge hidden'; badge.title = ''; }
+  }
+  // "已等待"文案（FR-22，与 needsYouList 共享 waitingSince 数据源）：按分钟粒度，不做秒级实时动画——
+  // 该区块只在 instances 广播到达时重渲（同 refreshNeedsYou 触发时机），文案本就是"上次广播时刻"的快照。
+  function formatWaitingDuration(waitingSince) {
+    if (typeof waitingSince !== 'number') return '';
+    const mins = Math.max(0, Math.floor((Date.now() - waitingSince) / 60000));
+    if (mins < 1) return '已等待 <1 分钟';
+    if (mins < 60) return `已等待 ${mins} 分钟`;
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return `已等待 ${h} 小时${m ? m + ' 分钟' : ''}`;
+  }
+  // 单条"需要你"行：点击深链跳转（复用 FR-14 applyDeepLink，同通知点击的落地逻辑）。
+  // 全程 textContent 插值动态数据（title/cwd/toolName 均可能含用户数据）→ CSP 安全，同现有行渲染惯例。
+  function needsYouRow(item) {
+    const isApproval = item.reason === 'awaiting_approval';
+    const row = el(`<button class="w-full flex items-center gap-2 pl-3 pr-3 py-2 border-b border-line-soft border-l-2 border-warning text-left hover:bg-sunk/30 active:opacity-70 bg-surface" data-testid="needs-you-row"></button>`);
+    const icon = el(`<span class="shrink-0"></span>`);
+    icon.textContent = isApproval ? '⚠️' : '❓';
+    row.appendChild(icon);
+    const body = el(`<div class="flex-1 min-w-0"></div>`);
+    const head = el(`<div class="truncate text-xs font-medium text-ink"></div>`);
+    head.textContent = item.title || '新会话';
+    const sub = el(`<div class="truncate text-[10px] text-ink-faint"></div>`);
+    const reasonLabel = isApproval ? '等待审批' : '等待输入';
+    const toolSuffix = isApproval && item.toolName ? `（${item.toolName}）` : '';
+    sub.textContent = `${baseName(item.cwd)} · ${reasonLabel}${toolSuffix} · ${formatWaitingDuration(item.waitingSince)}`;
+    body.appendChild(head);
+    body.appendChild(sub);
+    row.appendChild(body);
+    row.onclick = () => {
+      haptic('tap');
+      applyDeepLink({ instanceId: item.instanceId, sessionId: item.sessionId, cwd: item.cwd });
+    };
+    return row;
+  }
+  // 顶部"需要你(N)"聚合区（AD-11/§3.2.5，承接 FR-21）：needsYouList 已由 setInstances 按 waitingSince
+  // 升序排好（等得越久排越前，OQ-01 已决），此处只负责渲染，不重排序。空列表渲染空壳（hidden），
+  // 保持 #needsYouSection 锚点常在，refreshNeedsYou 的 querySelector 才总能找到替换目标。
+  function buildNeedsYouSection() {
+    const section = el(`<div id="needsYouSection"></div>`);
+    if (!needsYouList.length) { section.classList.add('hidden'); return section; }
+    const header = el(`<div class="px-3 py-1.5 text-[10px] font-semibold text-warning border-b border-line"></div>`);
+    header.textContent = `需要你 (${needsYouList.length})`;
+    section.appendChild(header);
+    for (const item of needsYouList) section.appendChild(needsYouRow(item));
+    return section;
+  }
+  // 面板开着时刷新"需要你"区（不重建整个面板）：needsYou 变化（新增/清除审批或提问）不改变 dirs/实例集，
+  // 不会触发 _structKey 变化 → openSessionPanel 不会被调用，须独立刷新（同 refreshDirBadges/refreshInstanceBadges 的定位）。
+  // 面板尚未渲染过（#needsYouSection 不存在）时跳过——首次 openSessionPanel 会用当下 needsYouList 建好。
+  function refreshNeedsYou() {
+    const old = sessionPanel.querySelector('#needsYouSection');
+    if (!old) return;
+    old.replaceWith(buildNeedsYouSection());
   }
   // 面板开着时仅更新已渲染目录行的角标（不重发 session:list）
   function refreshDirBadges() {
@@ -2481,6 +2539,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   // 台阶3 Step B：工作区面板 = 目录树（当前 cwd 展开，其他折叠）——类似 IDE 项目浏览器。
   function openSessionPanel() {
     sessionPanel.innerHTML = '';
+
+    // "需要你"聚合置顶（AD-11/§3.2.5 AttentionDeriver，承接 FR-21）：跨全部工作区/会话，
+    // 不限于当前展开的目录——正是它相对下方逐目录列表的增量价值（注意力不对称）。
+    sessionPanel.appendChild(buildNeedsYouSection());
 
     // 状态角标图例：消除「不知道 ⏳/⚠️/❗/✅ 各代表什么」——两行，紧跟标题。
     // 第二行点明左上角按钮角标只汇总「其他工作区」状态，并解释按钮上的连接点绿/红——消除「绿点=什么」的误解。
