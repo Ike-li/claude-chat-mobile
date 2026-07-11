@@ -4,7 +4,7 @@
 
 | 字段 | 内容 | 字段 | 内容 |
 | --- | --- | --- | --- |
-| 文档编号 | `HLD-CCM-001` | 版本 | v2.11(独立择优稿) |
+| 文档编号 | `HLD-CCM-001` | 版本 | v2.12(独立择优稿) |
 | 文档类型 | 高层架构设计(HLD) | 密级 | 内部 |
 | 承接需求 | `prd-ccm.md` v3.5(提交评审稿) | 参考基线 | 现有实现 `claude-chat-mobile` v1.2.1 |
 | 编制日期 | 2026-07-11 | 状态 | 提交技术评审 |
@@ -28,6 +28,7 @@
 | v2.9 | 2026-07-11 | 承接 PRD v3.5 评审修订:①AD-10 状态派生职责拆分("主机离线"归客户端连接层,后端逻辑上不可能派生);②AD-11 数据源②收敛为"驱动中会话"消内部矛盾;③AD-9 补通知正文策略(承接 OQ-08:RFC 8291/备用通道明文风险);④新增 AD-12 工作目录授权范围+FR-07 文件浏览承载补齐;⑤AD-3 补双通路一致性约束与 diskLen 计数口径,新增 SP-10;⑥§6 审批过期语义标暂定(OQ-05);⑦AD-1 补分页读取;⑧修 §1.1 悬空承接号(PRD-CCM-002→prd-ccm.md)、追溯表同步(FR-07/09/13a/14/23、NFR-12)、AD-3 备选表列名。 |
 | v2.10 | 2026-07-11 | SP 表补 **SP-11**(会话枚举 API 核验):LLD v1.12 补会话枚举详设时引用 SP-11,而本表无此编号(SP 编号 SoT 在本表,下游发现上游漏登、即补);无其它变更。 |
 | v2.11 | 2026-07-11 | SP 实证闭合(直读 SDK 0.3.201 类型,零 token):①**SP-11 已闭**——官方 `listSessions({dir,limit,offset,includeProgrammatic})→SDKSessionInfo[]` 坐实(含 sessionId/summary/lastModified/cwd 元数据,另有 `getSessionInfo`),目录枚举降级案废弃;②**SP-01 增量**——allow_session 依赖的 `updatedPermissions?: PermissionUpdate[]`(destination 枚举含 'session')坐实,FR-05 三档官方通路成立,SP-01 仅剩"updatedInput==执行值"实跑。 |
+| v2.12 | 2026-07-11 | **SP-01 实证完全闭合**(真实 turn 实跑,非类型静态核验):spike 脚本直驱 SDK `query()`,`canUseTool` 回调内对模型原始提议的 Bash 写文件命令故意回填不同的 `updatedInput`,以磁盘落地文件(独立于 SDK 自报的 `tool_result`)作 ground truth——3 次独立复现,结果一致为回填值,证实"`updatedInput`==工具实际执行值"运行时语义成立;SP-01 → ✅ 已闭(详见 §9)。SP 表 11 项中 3 项已闭(SP-01/07/11),8 项待验。 |
 
 ---
 
@@ -266,7 +267,7 @@ CLI 桥接层(AD-6)、会话管理器(生命周期独立于连接、状态派生
 
 | 编号 | 待验证 | 目的 | 时机 |
 | --- | --- | --- | --- |
-| SP-01 | ◑ **大部分闭合**:`updatedInput`/执行前调用/fail-closed/带外 signed control_response+`requestId`/**allow_session 的 `updatedPermissions`(destination 含 'session')** 均坐实(直读 SDK 0.3.201);仅"updatedInput==执行值"运行时语义待一次实跑 | AD-7 审批完整性 + FR-05 三档 | 实跑收尾 |
+| SP-01 | ✅ **已验证**:`updatedInput`/执行前调用/fail-closed/带外 signed control_response+`requestId`/allow_session 的 `updatedPermissions`(destination 含 'session')均坐实(直读 SDK 0.3.201);**"updatedInput==工具实际执行值"运行时语义已实跑坐实**——`canUseTool` 回调内对模型原始提议回填不同的 Bash 写文件命令,3 次独立复现,磁盘 ground truth 均为回填值(非模型原始值) | AD-7 审批完整性 + FR-05 三档 | **已闭** |
 | SP-02 | 真实移动网络状态投递 P95 时延 | 确认 NFR-12 | M0 前 |
 | SP-03 | 锁屏/后台/断网的重连补齐不丢不重 | 确认 AD-4 | M0 前 |
 | SP-04 | WebAuthn 在目标浏览器可用性与降级 | 确认 AD-7 强认证 | M0 前 |
