@@ -404,6 +404,7 @@ function getSocketsByDeviceToken(deviceToken) {
 function unlockSocket(socket) {
   if (socket.deviceApproved) return; // 已经批准了
   socket.deviceApproved = true;
+  socket.trustBasis = 'device-token'; // SEC-03：待审批→批准走的就是设备信任表，受该表控制（吊销须能断连）
   socket.join('approved'); // SEC-01：批准后补入下行隔离房间，同 io.on('connection') 分支的即时批准路径
 
   const deviceToken = socket.handshake.auth?.deviceToken;
@@ -501,27 +502,51 @@ try {
   console.error('[devices] 初始化设备认证文件失败:', err.message);
 }
 
-// 文件变化监听器（用于在 CLI 执行批准操作时自动、即时解锁对应的客户端连接）
+// 文件变化监听器（用于在 CLI 执行批准/拒绝操作时自动、即时同步对应的客户端连接）。
+// SEC-03 修复中实证发现：原先直接 watch(TRUSTED_DEVICES_FILE, ...) 判 eventType==='change' 在 macOS 上不可靠——
+// writeOwnerOnlyFile 是原子写（tmp 文件 + rename 换 inode），第一次 rename 触发的 eventType 是 'rename' 不是
+// 'change'（被现有判断完全漏掉），且 watch 绑定的是旧 inode，一旦被 rename 替换，之后对该路径的写入完全收不到
+// 任何事件（独立脚本实证：连续两次原子写只观察到 1 次事件）。与 workdirs.json 早年踩过的同一个坑（见其注释），
+// 改用同款解法：watch 父目录 + 按 basename 过滤 + mtime 前置守卫防误触发，对 rename 换 inode 免疫。
 if (existsSync(TRUSTED_DEVICES_FILE)) {
+  const tdBase = basename(TRUSTED_DEVICES_FILE);
+  let tdTimer = null;
+  let lastTrustedDevicesMtime = 0;
+  try { lastTrustedDevicesMtime = statSync(TRUSTED_DEVICES_FILE).mtimeMs; } catch { /* 首次变更时再取 */ }
   try {
-    watch(TRUSTED_DEVICES_FILE, (eventType) => {
-      if (eventType === 'change') {
-        setTimeout(() => {
-          for (const socket of io.sockets.sockets.values()) {
-            if (socket.deviceApproved === false) {
-              const token = socket.handshake.auth?.deviceToken;
-              if (isDeviceTrusted(token)) {
-                console.log(`[devices] 检测到 ${TRUSTED_DEVICES_FILE} 变更，自动解锁设备 ${token}`);
-                unlockSocket(socket);
-              }
+    watch(dirname(TRUSTED_DEVICES_FILE), (_evt, filename) => {
+      if (filename && filename !== tdBase) return; // 有 filename 时按 basename 过滤，忽略同目录其他文件变动
+      let m = 0;
+      try { m = statSync(TRUSTED_DEVICES_FILE).mtimeMs; } catch { return; } // 文件暂不可读 → 跳过
+      if (m === lastTrustedDevicesMtime) return;    // mtime 未变 = 非本文件变动（如目录下其他文件），忽略
+      lastTrustedDevicesMtime = m;
+      clearTimeout(tdTimer);
+      tdTimer = setTimeout(() => {
+        const revokedTokens = new Set(); // SEC-03：CLI 从信任表移除的 deviceToken，本轮结束后统一断连（去重：多连接同 token 只需处理一次）
+        for (const socket of io.sockets.sockets.values()) {
+          if (socket.deviceApproved === false) {
+            const token = socket.handshake.auth?.deviceToken;
+            if (isDeviceTrusted(token)) {
+              console.log(`[devices] 检测到 ${TRUSTED_DEVICES_FILE} 变更，自动解锁设备 ${token}`);
+              unlockSocket(socket);
             }
+          } else if (socket.deviceApproved === true && socket.trustBasis === 'device-token') {
+            // SEC-03：CLI 吊销对称断连——此前只处理「新批准」方向，CLI denyDevice 删除信任记录后
+            // 已连接的 approved socket 不会被断开（唯 Web 侧 user:denyDevice 会显式 disconnectDeviceSockets）。
+            // 只检查 trustBasis==='device-token' 的连接：isLocal/CF Access 批准的连接与信任表无关，不受影响。
+            const token = socket.handshake.auth?.deviceToken;
+            if (!isDeviceTrusted(token)) revokedTokens.add(token);
           }
-          broadcastPendingDevices(); // CLI/TTY 审批后刷新各可信端的待批列表（移除已批准/拒绝项）
-        }, 100);
-      }
+        }
+        for (const token of revokedTokens) {
+          console.log(`[devices] 检测到 ${TRUSTED_DEVICES_FILE} 变更，设备 ${token} 信任已被吊销（CLI），断开连接`);
+          disconnectDeviceSockets(token); // 复用 Web 侧同款：发 device_status:denied + disconnect(true)
+        }
+        broadcastPendingDevices(); // CLI/TTY 审批后刷新各可信端的待批列表（移除已批准/拒绝项）
+      }, 100);
     });
   } catch (err) {
-    console.error('[devices] 无法监视 trusted-devices.json 文件:', err.message);
+    console.error('[devices] 无法监视 trusted-devices.json 所在目录:', err.message);
   }
 }
 
@@ -641,10 +666,13 @@ io.use(async (socket, next) => {
     const isLocal = ['localhost', '127.0.0.1', '::1'].includes(clientIp(socket.handshake.address));
     if (accessEnabled || isLocal) {
       socket.deviceApproved = true;
+      socket.trustBasis = 'bypass'; // SEC-03：本机/CF Access 直接批准，不受 trusted-devices.json 信任表控制——
+                                     // CLI 吊销某 deviceToken 时绝不能因此误断这类连接（它们与该表无关）
     } else {
       const deviceToken = socket.handshake.auth?.deviceToken;
       if (isDeviceTrusted(deviceToken)) {
         socket.deviceApproved = true;
+        socket.trustBasis = 'device-token'; // SEC-03：受信任表控制——CLI 从表中移除该 token 时须检测并断连（见文件监听器）
       } else {
         socket.deviceApproved = false;
         const ip = clientIp(socket.handshake.address);
