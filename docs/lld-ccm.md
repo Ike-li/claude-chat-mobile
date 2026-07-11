@@ -4,7 +4,7 @@
 
 | 字段 | 内容 | 字段 | 内容 |
 | --- | --- | --- | --- |
-| 文档编号 | `LLD-CCM-001` | 版本 | v1.11(纯独立蓝图稿) |
+| 文档编号 | `LLD-CCM-001` | 版本 | v1.12(纯独立蓝图稿) |
 | 文档类型 | 详细设计(LLD) | 密级 | 内部 |
 | 承接架构 | `HLD-CCM-001` v2.9 | 参考基线 | 现有实现 `claude-chat-mobile` v1.2.1(**不作设计依据**) |
 | 编制日期 | 2026-07-11 | 状态 | 提交详细设计评审 |
@@ -27,6 +27,7 @@
 | v1.9 | 2026-07-11 | 承接 HLD v2.8 评审完善,补五处缺口到实现级:①**§5.1.2 transcript 增量追平**(`resolveDiskCatchUp` + `readSince`,补 server 事件流覆盖不到的终端外部写入、闭合 FR-13a/FR-11 结构性丢失);②**§4 重启后 pending 审批 fail-closed 失效**(canUseTool 回调随进程终止不可兑现);③**§5.4 `sawExternalWrite` 判定算法**(SDK 流已见差集、非 mtime)+ localBusy 语义澄清;④**§5.5 双端 canonicalize 一致性**残余风险 + 步 4 表述订正(防传输篡改、非端上欺骗);⑤§3.1.1 provider/model 透传(NFR-13)+ AttachmentRef(FR-09 授权/追踪);另修 §5.3 状态图(deny 单工具≠中止任务、对齐 deriveStatus)、awaitingSince 注释精确化、§9 追溯补 FR-13a/13b/07/08/09/NFR-13;承接号 v2.7→v2.8。 |
 | v1.10 | 2026-07-11 | 承接号同步:PRD v3.4→v3.5、HLD v2.8→v2.9(上游评审修订,本层内容无实质变更;新增 FR-23/AD-12 的详设承接留待下轮)。 |
 | v1.11 | 2026-07-11 | 承接 HLD v2.9 详设落地(v1.10 仅同步承接号,本轮补实质承接):①**新增 §3.4.1 WorkdirScopeGuard `[pure]` + §3.4.2 FileBrowseHandler `[shell]`**(AD-12/FR-23/FR-07:范围判定=resolve symlink+边界前缀、只读浏览=弱网上限+二进制检测+请求-响应不进事件流、TOCTOU 登记 §8.3、越界记审计而浏览本身不进最小审计;create/resume/AttachmentRef/浏览四处统一收口);②**AD-10 职责拆分落地**:`deriveStatus` 收敛后端六态、`host_offline` 改客户端连接层叠加(StateProbe 收四类、状态机图注、fail-closed 表同步);③**§5.1.2 补两路一致性**(`turn_end` 附 `diskLen` 锚点校准 `seenDiskLen` + localBusy 期暂停探测 + 幂等兜底,承接 AD-3 约束①)与 diskLen 计数口径=API 消息条数(约束②);④§3.6.2 通知 payload 最小化详设(两通道共用、按最弱通道设计,承接 AD-9/OQ-08);⑤AD-11 数据源②收敛为驱动中会话;⑥审批过期标暂定(OQ-05)+ 修 handleApproval"承接 AD-6"错引;⑦分页铁律(full_reload/历史回放不整包,承接 AD-1);⑧组件表/模块图/契约表(browse、turn_end.diskLen)/追溯表(FR-23/07/14/状态模型)同步。 |
+| v1.12 | 2026-07-11 | 评审修订(对 v1.11 全文含新增部分的对抗评审):①**FR-05 三档审批补全**(ApprovalDecision=allow_once/allow_session/deny,allow_session 优先走 SDK updatedPermissions、并入 SP-01 核对,契约/时序/追溯同步);②**§5.1.2 锚点改条件覆写**(turn_end 附 mixedWrites,混写轮禁覆写改增量追平+幂等,修"锚点吞混写"缺陷;竞态方向安全注明);③**RateLimiter 退避落地**(backoff 写入 lockUntil 短锁,统一门拦截,修"退避纯装饰");④**L2 删除补 mtime 静默护栏**(终端活跃不可确证,启发式+fail-closed,登记 §8.3);⑤**补会话枚举详设**(listSessions/SessionSummary,官方列会话 API 待核 SP-11、目录枚举降级案,list_sessions 契约,AD-11 基础列表数据源闭合);⑥杂项:镜像图接管边 readonly→writable、Actor 补 connId、NotifPayload kind 'terminal'→'finished' 消歧、BrowseReq/Res/Entry 类型补定义、listDir 分页上限、留存治理落点(NFR-16)、heartbeat 信封例外注明、删 §8.1 host_unreachable、步 4 补 risk、EP-1 措辞消字面矛盾、推送订阅 410 自愈。 |
 
 ---
 
@@ -42,7 +43,7 @@
 
 LLD 层新增两条**工程原则**(为可测试性与可维护性):
 
-- **EP-1 单一事实源、零复制。** 运行时事实存在两处且仅两处:①**内存运行时状态**(会话运行时、事件缓冲、限速计数——易失、可重建);②**claude transcript**(消息事实源——持久、属上游)。轻量存储只持久化"CLI 没有且重启须恢复"的最小状态。任何派生量(标题、状态、权限档)**即时派生、不缓存落盘**。
+- **EP-1 单一事实源、零复制。** 运行时事实存在两处且仅两处:①**内存运行时状态**(会话运行时、事件缓冲、限速计数——易失、可重建);②**claude transcript**(消息事实源——持久、属上游)。轻量存储不是第三事实源——只持久化"CLI 没有且重启须恢复"的最小记录(设备信任/审批/订阅/审计/指针),其内容或可由前两者重建、或为纯追加记录。任何派生量(标题、状态、权限档)**即时派生、不缓存落盘**。
 - **EP-2 纯函数优先。** 状态转移、状态派生、断线补齐、限速退避、审批完整性校验、只读锁转移——**一律设计为无副作用的纯函数** `f(当前状态, 输入) → 新状态/决策`。副作用(I/O、广播、SDK 调用)集中在组件外壳,包裹纯核。理由:纯核可零依赖单测(呼应 PRD 验收策略),副作用面收敛。
 
 ### 1.3 记号约定
@@ -169,12 +170,13 @@ interface MapContext { sessionId: string; isSubtask: boolean; }
 1. op := { tool: toolName, args: input, cwd: ctx.cwd }
 2. fingerprint := sha256(canonicalize(op))          // 审批完整性锚点,见 §5.5
 3. reqId := newReqId()
-4. 发射 approval_request 事件 { reqId, op, fingerprint, expiresAt }
+4. 发射 approval_request 事件 { reqId, op, fingerprint, risk, expiresAt }
 5. 挂起,等待 ControlChannel.handleApproval(reqId, decision)
 6. 决策回来(approvedOp = 用户批准的确切操作):
      - allow 且 verifyIntegrity(fp, approvedOp) 通过
          ⟶ return { behavior:'allow', updatedInput: approvedOp.args }   // 显式回填批准值
          // 官方契约: canUseTool 返回值 == 工具实际执行值(无中间变换) ⟹ "所批即所行"由 SDK 兜底
+         // allow_session 额外经 canUseTool 返回值的官方会话级权限更新机制(updatedPermissions)落为本会话内该工具免再批——优先走 SDK 官方机制、不后端自建白名单(瘦中转);其精确字段签名并入 SP-01 直读 SDK 类型核对,若官方无此机制则降级为后端 per-会话记忆已许可工具(自建最小状态,作为瘦中转的显式例外登记)
      - allow 但指纹不符 ⟶ return { behavior:'deny' } (fail-closed) + 审计告警
      - deny / 过期      ⟶ return { behavior:'deny' }
 ```
@@ -207,11 +209,15 @@ interface SessionRegistry {
   observe(sessionId: string): SessionView;           // 只读观察(不驱动)
   close(sessionId: string): void;                    // 生命周期独立于连接,close 显式
   get(sessionId: string): SessionRuntime | null;
+  listSessions(cwd: string): SessionSummary[];  // 基础会话列表:含纯终端建的会话(见下"枚举"),AD-11 基础列表/AttentionDeriver 的 sessions 输入源
 }
+interface SessionSummary { sessionId: string; cwd: string; lastActiveAt: number; title?: string; }
+// lastActiveAt = transcript 文件 mtime(元数据,不解析内容);title 经官方消息 API 读首条派生(TitleDeriver)
 ```
 
 - **归属**(AD-2):会话归属以"其 transcript 存在于对应 cwd"为准 ⟶ 终端建的与 web 建的天然互见。`resume` 通过驱动一个 resume 会话读既有记录接续。
 - **范围门(承接 AD-12 / FR-23)**:`create`/`resume` 的 cwd 须先经 WorkdirScopeGuard(§3.4.1)判定在授权目录集合内,范围外 fail-closed 拒绝(不建运行时、不驱动)。
+- **枚举(基础会话列表的数据源,承接 AD-11 基础列表 / FR-11 终端会话可见)**:`session_pointer` 只记 web 经手会话,纯终端建的会话须另行发现。两案:①官方"列会话"API——**存在性与签名未核**(SP-07 只验证了读单会话),登记 SP-11 核验;②降级:枚举授权 cwd 对应 transcript 存放目录的文件名(sessionId=文件名)——路径规则属官方稳定契约(hook `transcript_path`)的延伸,仅列目录、不解析文件内容,守 AD-1 精神但对"路径规则跨版本稳定"有额外依赖,SP-11 一并核验。①存在则用①。仅枚举**已授权目录**(FR-23),不全盘扫描。
 - **生命周期**:运行时独立于连接(NFR-08),客户端断开不 close;`close` 由显式操作或治理触发。
 
 **3.2.2 TitleDeriver `[pure]`**(瘦中转:标题不自存)
@@ -363,13 +369,14 @@ function assertContract(realTypes: Set<EventType>, mockTypes: Set<EventType>): v
 ```typescript
 interface ControlChannel {
   handleInput(sessionId: string, turn: UserTurn, actor: Actor): void;
-  handleApproval(reqId: ReqId, decision: 'allow' | 'deny', actor: Actor): void;
+  handleApproval(reqId: ReqId, decision: ApprovalDecision, actor: Actor): void;
   handleAbort(sessionId: string, actor: Actor): void;
   handleDevice(action: DeviceAction, actor: Actor): void;
   handleHistory(sessionId: string, sinceSeq?: number, actor: Actor): void; // 触发补齐/重载
   handleBrowse(cwd: string, req: BrowseReq, actor: Actor): BrowseRes;      // 只读文件浏览(AD-12),见 §3.4.2
 }
-type Actor = { deviceId: string; via: 'web' | 'terminal' | 'trusted-device' };
+type Actor = { deviceId: string; connId: string; via: 'web' | 'terminal' | 'trusted-device' };  // connId:本次连接标识,供 per-连接只读粒度(§5.4 assertWriter(sessionId, connId))
+type ApprovalDecision = 'allow_once' | 'allow_session' | 'deny';  // 承接 PRD FR-05 三档:仅本次/本会话始终/拒绝,语义与终端逐项一致
 ```
 
 - **统一前置**:①鉴权已过(Auth 层保证);②`assertWriter(sessionId, actor)`——单一有效写入者判定(§5.4),非写入者的写操作被拒并提示只读。
@@ -401,18 +408,21 @@ function isInScope(candidate: string, scopeDirs: string[]): boolean;
 
 ```typescript
 interface FileBrowseHandler {
-  listDir(cwd: string, relPath: string): Entry[];   // 单层不递归;{name, kind:'file'|'dir'|'symlink', size, mtime}
+  listDir(cwd: string, relPath: string, opts?: {offset?: number; maxEntries?: number}): Entry[];   // 单层不递归
   readFile(cwd: string, relPath: string, opts?: {offset?: number; maxBytes?: number}): FileSlice;
 }
 interface FileSlice { content: string; truncated: boolean; totalSize: number; binary: boolean; }
+type BrowseReq = { relPath: string; op: 'list' | 'read'; offset?: number; maxBytes?: number; maxEntries?: number };
+type BrowseRes = { entries?: Entry[]; slice?: FileSlice; truncated?: boolean };  // list→entries / read→slice
+interface Entry { name: string; kind: 'file' | 'dir' | 'symlink'; size: number; mtime: number; }
 ```
 
 - **只读铁律**:无写/删/改接口;web 侧改文件的唯一路径是"会话内让 claude 改"(经审批链,守 AD-7)。
-- **弱网上限(承接 PRD"小屏弱网")**:`readFile` 默认 `maxBytes` 上限(建议 256KB/片,`offset` 续读、`truncated` 标记);二进制文件返回元信息(`binary:true`)不返回内容。
+- **弱网上限(承接 PRD"小屏弱网")**:`readFile` 默认 `maxBytes` 上限(建议 256KB/片,`offset` 续读、`truncated` 标记);二进制文件返回元信息(`binary:true`)不返回内容;`listDir` 默认 `maxEntries` 上限(建议 500 条/页,`offset` 续取、超限标 `truncated`)——大目录(如依赖目录)不整包。
 - **透明性权衡(显式抉择)**:范围内内容**不做敏感过滤**(`.env` 等照读)——机主即 root(PRD 4.3)+ 透明性(4.2),终端 TUI 语义等同(用户本可让 claude 读任意 cwd 文件);防线在范围门(FR-23)与设备鉴权,不在内容审查。
 - **审计边界**:浏览本身**不进最小审计**(FR-19 收敛为鉴权/设备/审批三类,per-次浏览记录会击穿留存治理 NFR-16);仅 `scope_violation` 记审计(见 §3.4.1)。
 - **TOCTOU**:范围校验与读取之间路径可被替换为越界 symlink,实现层以 fd 级校验(O_NOFOLLOW / 读后复核 realpath)缓解;残余窗口登记 §8.3。
-- **测试**:范围外拒+审计、大文件截断续读、二进制检测、symlink 条目如实标注(`kind:'symlink'`)、空目录。
+- **测试**:范围外拒+审计、大文件截断续读、二进制检测、symlink 条目如实标注(`kind:'symlink'`)、空目录、大目录分页截断。
 
 ---
 
@@ -446,14 +456,14 @@ function onAuthResult(
 算法:
 
 ```
-1. if now < s.lockUntil:              return { verdict:'locked', retryAfterMs: s.lockUntil-now }
+1. if now < s.lockUntil:              return { verdict:'locked', retryAfterMs: s.lockUntil-now }  // 统一门:短锁(退避)与长锁(锁定)都在此拦截
 2. if ok:                             return { next: reset(), verdict:'allow' }        // 成功清零
 3. // 失败:
 4. failCount' := (now - s.lastFailTs > cfg.decayMs) ? 1 : s.failCount + 1              // 静默衰减,不永久惩罚
 5. if failCount' >= cfg.threshold:
 6.     return { next:{failCount', lockUntil: now+cfg.lockMs, lastFailTs:now}, verdict:'locked', retryAfterMs: cfg.lockMs }
 7. backoff := min(cfg.baseBackoffMs * 2^(failCount'-1), cfg.maxBackoffMs)
-8. return { next:{failCount', lockUntil:0, lastFailTs:now}, verdict:'backoff', retryAfterMs: backoff }
+8. return { next:{failCount', lockUntil: now+backoff, lastFailTs:now}, verdict:'backoff', retryAfterMs: backoff }   // 短锁:退避经 lockUntil 强制生效,非仅建议头
 ```
 
 **建议参数(OQ-03 定,可配置默认)**:threshold=8、baseBackoff=500ms、maxBackoff=30s、lockMs=15min、decayMs=15min(手滑容忍 + 暴破不经济 + 久未失败自动原谅)。
@@ -463,13 +473,13 @@ function onAuthResult(
 **两层(单层挡不住分布式)**:①per-source 挡单源枚举;②**global 未认证桶**挡多源分布式暴破,超限进"仅已信任设备可认证"收紧模式。
 
 **三个抉择点(实现级显式决定)**:
-- **锁定期内尝试**:不计数(到期即恢复)——避免攻击者持续戳把机主自己锁死(自我 DoS);持续尝试仍**记审计**(攻击信号)。
+- **锁定期内尝试**:不计数(到期即恢复)——避免攻击者持续戳把机主自己锁死(自我 DoS);持续尝试仍**记审计**(攻击信号)(退避短锁期同理)。
 - **限速故障时**:倾向 **fail-closed**(鉴权门口宁拒错放),但**留机主本地绕过**(否则限速 bug 把机主关门外)。
 - **存储**:n=1 默认**内存** `Map<sourceKey, RateLimitState>`(瘦、快);代价=重启清零暴破计数(fail-open 方向残余风险,§8.3);敏感部署可选持久。
 
 **与设备信任分级(AD-8)**:已信任设备失败宽松、未知设备严格;`pending` 队列上限本身即"设备注册限速",互补。
 
-**测试(纯函数)**:连续失败到阈值→锁定 / 锁定期→locked+retryAfter 递减 / 成功→清零 / 静默超 decayMs→计数重置 / 退避指数增长封顶 / 全局桶 N 异源→熔断 / 伪造 XFF→不影响可信 sourceKey。
+**测试(纯函数)**:连续失败到阈值→锁定 / 锁定期→locked+retryAfter 递减 / 成功→清零 / 静默超 decayMs→计数重置 / 退避指数增长封顶 / 全局桶 N 异源→熔断 / 伪造 XFF→不影响可信 sourceKey / 退避期内再尝试→locked+剩余 retryAfter。
 
 **残余风险**:①内存态重启清零(§8.3);②大规模分布式暴破根治靠边缘层 WAF/DDoS,后端限速是纵深一层;③sourceKey 伪造靠"只信可信注入头"缓解。锁定/退避均**计入审计 + 告警**(承接 AD-7)。
 
@@ -541,7 +551,8 @@ interface FallbackChannel { send(target: string, payload: NotifPayload): Promise
 ```
 
 - 不支持后台推送的平台 ⟶ 重连后状态兜底(不丢决策点)。
-- **payload 最小化(承接 HLD v2.9 AD-9 / PRD OQ-08)**:`NotifPayload = {kind:'approval'|'input'|'terminal', cwdBase, deepLink, ts}`——**不含命令/参数/完整路径/消息正文**(`cwdBase` 仅目录尾段)。**按最弱通道设计**:标准 Web Push 有端到端加密(RFC 8291,push service 不见明文),FallbackChannel 第三方无此保证、按明文对待——故两通道共用同一份最小 payload,正文回 app 内经鉴权取;锁屏预览泄露面同由最小化缓解。剩余裁量(如 `cwdBase` 是否可配置隐去)随 OQ-08 终定。
+- **订阅生命周期**:投递返回 404/410(订阅失效)→ 删除对应 `push_subscription` 记录(自愈,不重试);其他失败有限指数退避重试后放弃,计入 `notify_failed` 可观测(NFR-15)。
+- **payload 最小化(承接 HLD v2.9 AD-9 / PRD OQ-08)**:`NotifPayload = {kind:'approval'|'input'|'finished', cwdBase, deepLink, ts}`——**不含命令/参数/完整路径/消息正文**(`cwdBase` 仅目录尾段)。**按最弱通道设计**:标准 Web Push 有端到端加密(RFC 8291,push service 不见明文),FallbackChannel 第三方无此保证、按明文对待——故两通道共用同一份最小 payload,正文回 app 内经鉴权取;锁屏预览泄露面同由最小化缓解。剩余裁量(如 `cwdBase` 是否可配置隐去)随 OQ-08 终定。
 
 **3.6.3 DeepLinkBuilder `[pure]`**
 
@@ -585,9 +596,10 @@ interface StateProbe {
 
 - **写入约束**:全部最小权限、原子写(临时文件 + rename)。
 - **工作目录授权集合**:属部署配置、非存储表(AD-12);热加载即时生效,收窄仅拒新开、不中断已开会话(§3.4.1)。
+- **留存治理(承接 HLD 数据模型 / NFR-16)**:`audit_record` 设环形上限(建议 5000 条,可配)超限轮转最旧;`approval_request` 终态(非 pending)记录保留期后可清(建议 90 天,可配);`push_subscription` 随投递 404/410 自愈清理(§3.6.2);`session_pointer` 随 L1 删除清理。清理动作记一条汇总审计(条数,不含内容),不无声无限增长。
 - **恢复语义**:重启后从 `session_pointer` 重建可观察会话列表;`epoch` 换新(去重基线自然失效 ⟶ 客户端 full_reload);运行时其余按需重建。
 - **重启后 pending 审批的处置(fail-closed,承接 HLD v2.8 AD-7 / NFR-09/11)**:挂起的审批依赖活的 `canUseTool` 回调(在驱动进程内存),重启后该回调随进程终止、**无法再兑现**。故重启时把持久化表中 `status=pending` 的 `approval_request` 一律置 `expired`(记 `decidedBy:'system:restart'`),前端显示"因主机重启失效,请重新触发",**绝不显示为"仍可批准"**——批一个已无执行上下文的操作是危险假象。
-- **两级删除(承接 AD-1 / FR-20,Could/纯主权)**:**L1 默认**删本产品可见的会话引用(`session_pointer` + 关联审批/审计元数据)→ web 不再显示、transcript 保留;**L2 显式二次确认**删底层 transcript 文件 → 真正抹除。**活跃会话保护**:L2 删前须检查会话**非活跃**(无活跃 `driver`),删活跃会话事实源 → **拒绝**(防与 claude 侧并发写分叉)。**原子性**:先删指针、后删文件,避免孤儿。删除记审计(谁/何时/哪级,**不含被删内容**);删后客户端补齐基线 `seenDiskLen` 须重置。
+- **两级删除(承接 AD-1 / FR-20,Could/纯主权)**:**L1 默认**删本产品可见的会话引用(`session_pointer` + 关联审批/审计元数据)→ web 不再显示、transcript 保留;**L2 显式二次确认**删底层 transcript 文件 → 真正抹除。**活跃会话保护(两道)**:L2 删前 ①无活跃 web `driver`;②transcript 文件 mtime 距今 ≥ 静默阈值(建议 5min,可配)——**纯终端进程正驱动的会话后端无法确证**(同 AD-3 盲区),mtime 新鲜即拒绝并提示"会话可能正被终端使用"(mtime 属文件系统元数据、不解析内容,是对 AD-1"路径为契约"的元数据级延伸,诚实登记此依赖);任一道不过 → **拒绝**(fail-closed,防与 claude 侧并发写分叉)。启发式非完备,登记 §8.3。**原子性**:先删指针、后删文件,避免孤儿。删除记审计(谁/何时/哪级,**不含被删内容**);删后客户端补齐基线 `seenDiskLen` 须重置。
 
 ---
 
@@ -619,7 +631,7 @@ resolveDiskCatchUp(clientDiskLen, serverDiskLen):
 - **触发**:①`sync:since` 重连时携 `clientDiskLen`(= 客户端已渲染 `seenDiskLen`);②观察活跃会话期间,对**当前单个会话**低频探测 `size()`(承接 EP-1:只探当前会话、不轮询所有会话)。
 - **下发**:`serverDiskLen := SessionMessageReader.size()`;区间 `[from,to)` 经 `readSince(from)` 读出,以 `history_append{events, origin:'terminal'}` 下发(复用 history_append,标 origin 供来源区分);客户端渲染后置 `seenDiskLen := to`。
 - **与 server 事件流正交**:`seq` 补齐管 web 侧经后端的事件、`diskLen` 追平管终端侧的外部落盘;**FR-13a"已落定 + 增量"须二者并用**。删除后 `seenDiskLen` 重置(§4)。
-- **两路一致性(承接 HLD v2.9 AD-3 约束①)**:web 本地驱动的消息**同样落盘推高 diskLen**——若 `seenDiskLen` 不随本地渲染推进,下次探测会把本端已渲染内容误判为外部新增、重复下发。三重机制:①**锚点校准**——`turn_end` 事件附带 server 当时的 `diskLen`(§7.1),客户端渲染完本轮即以锚点覆写 `seenDiskLen`(server 单点计数;客户端不自行折算"seq 事件 ↔ transcript 条目"的非 1:1 对应);②**时间互斥**——本端 turn 进行期间(localBusy,与 §5.4 同源信号)暂停 disk 探测,seq 流与 `disk_append` 不交错下发;③**幂等兜底**——消息带上游唯一标识时,客户端按其去重。次序恒为:seq 流轮内事件 → `turn_end` 锚点校准 → 静默期 disk 探测。
+- **两路一致性(承接 HLD v2.9 AD-3 约束①)**:web 本地驱动的消息**同样落盘推高 diskLen**——若 `seenDiskLen` 不随本地渲染推进,下次探测会把本端已渲染内容误判为外部新增、重复下发。三重机制:①**锚点校准(条件覆写)**——`turn_end` 事件附带 server 当时的 `diskLen` 与本轮 `mixedWrites` 标志(= §5.4 sawExternalWrite 是否在本轮触发过;§7.1):**无混写**(mixedWrites=false)时客户端以锚点覆写 `seenDiskLen`(server 单点计数;客户端不自行折算"seq 事件 ↔ transcript 条目"的非 1:1 对应);**有混写**时禁止覆写——锚点区间含终端混写条目而客户端未渲染,覆写即永久丢失——改为发起 `readSince(seenDiskLen)` 增量追平,本端已渲染部分靠幂等去重(机制③)跳过,追平完成后 `seenDiskLen := diskLen`;②**时间互斥**——本端 turn 进行期间(localBusy,与 §5.4 同源信号)暂停 disk 探测,seq 流与 `disk_append` 不交错下发;③**幂等兜底**——消息带上游唯一标识时,客户端按其去重。次序恒为:seq 流轮内事件 → `turn_end` 锚点校准 → 静默期 disk 探测。锚点读取时机竞态(SDK `result` 到达早于 CLI 尾部落盘)方向安全:size() 偏小 ⟶ 下次探测重复下发 ⟶ 幂等兜底,不丢失。
 - **不覆盖**:进行中态(未落盘)仍不可见,依赖上游 attach(§8.3,承接 AD-3)。
 
 ### 5.2 序号与去重
@@ -681,7 +693,7 @@ stateDiagram-v2
   writable --> readonly: 检测到外部写入者
   readonly --> readonly: 仍有外部写 / 本端忙(quiet 清零)
   readonly --> writable: 连续静默 ≥ RELEASE_QUIET_TICKS
-  writable --> writable: 手动接管(并发写兜底,强制 writable)
+  readonly --> writable: 手动接管(强制,并发写兜底)
 ```
 
 - **`sawExternalWrite` 的判定(工程正确性,非 mtime)**:本端(web-driven)驱动 claude 时,从 SDK 流已知自己产生了哪些消息;"外部写入" := transcript 新增条目中**存在本端 SDK 流未见过的消息**(差集非空)。**只认真新消息、不认 mtime**——本端自己 resume/驱动刷新 transcript(mtime 变但消息皆本端已见)不触发锁,避免纯 web 打开被自身刷新误锁;纯观察端(无 driver)看到任何新增即为外部写入。
@@ -755,7 +767,7 @@ sequenceDiagram
   ESE-->>M: 事件(信封 seq/epoch)
   CB->>N: shouldNotify ⟶ 是
   N-->>M: 推送(深链, 无敏感正文)
-  M->>Ctrl: handleApproval(reqId, allow)
+  M->>Ctrl: handleApproval(reqId, allow_once/allow_session)
   Ctrl->>Ctrl: checkExpiry(expiresAt)
   Ctrl->>CB: 决策 allow
   CB->>CB: verifyIntegrity(fp, actual)
@@ -810,7 +822,7 @@ sequenceDiagram
 
 ### 7.1 契约事件集(server ⟶ client)— 契约 SoT
 
-> `ContractGuard` 保证 real ⊇ mock(承接 NFR-14)。所有事件包 `EventEnvelope`(§3.3.1)。
+> `ContractGuard` 保证 real ⊇ mock(承接 NFR-14)。除 `heartbeat` 外所有事件包 `EventEnvelope`(§3.3.1);`heartbeat` 走旁路轻通道、无信封无 seq(§3.3.4),列于表内仅为契约完整性。
 
 | 事件类型 | payload 关键字段 | 触发 |
 | --- | --- | --- |
@@ -820,7 +832,7 @@ sequenceDiagram
 | `tool_result` | `{tool, result, isError}` | 工具结果(错误原文透传) |
 | `approval_request` | `{reqId, op, fingerprint, risk, expiresAt}` | 需授权 |
 | `input_needed` | `{prompt?}` | 等待用户输入 |
-| `turn_end` | `{status: ok/error/aborted, diskLen}` | 轮次真实终态锚点;`diskLen`=server 当时落定条数,供客户端校准 `seenDiskLen`(§5.1.2 两路一致性) |
+| `turn_end` | `{status: ok/error/aborted, diskLen, mixedWrites}` | 轮次真实终态锚点;`diskLen`=server 当时落定条数,供客户端校准 `seenDiskLen`(§5.1.2 两路一致性);mixedWrites=本轮是否检测过外部混写(§5.1.2 条件覆写) |
 | `mode_changed` | `{mode}` | 模式切换 |
 | `readonly_changed` | `{readonly, reason}` | 只读镜像状态(per-会话定向下发) |
 | `device_changed` | `{deviceId, status}` | 设备信任变更 |
@@ -833,18 +845,21 @@ sequenceDiagram
 | 消息 | 字段 | Handler | 前置 |
 | --- | --- | --- | --- |
 | `input` | `{sessionId, turn}` | handleInput | 写入者校验 |
-| `approval` | `{reqId, decision}` | handleApproval | 有效期 + 完整性 |
+| `approval` | `{reqId, decision: allow_once/allow_session/deny}` | handleApproval | 有效期 + 完整性 |
 | `abort` | `{sessionId}` | handleAbort | 写入者校验 |
 | `device_action` | `{action, deviceId}` | handleDevice | 审批权属已信任 |
 | `history_request` | `{sessionId, sinceSeq?}` | handleHistory | 鉴权 |
 | `sync:since` | `{sessionId, clientEpoch, clientSeq, diskLen?}` | → resolveCatchUp | 鉴权 |
 | `browse` | `{cwd, relPath, op:'list'/'read', offset?, maxBytes?}` | FileBrowseHandler(请求-响应,不进事件流) | 鉴权 + 范围门(§3.4.1) |
+| `list_sessions` | `{cwd?}` | SessionRegistry.listSessions + AttentionDeriver(请求-响应,返回 AttentionView) | 鉴权 + 范围门(cwd 给定时) |
+
+> "等我"聚合无独立广播事件:前端以既有 `approval_request`/`turn_end`/`input_needed` 事件为重拉信号(AD-11 触发点),经 `list_sessions` 请求-响应取最新投影——不新增事件类型(瘦中转)。
 
 ---
 
 ## 八、错误处理与边界
 
-**8.1 错误分类与归一。** 全部错误归一为 `{kind, raw, retryable}`:`upstream`(SDK/claude,原文透传)、`auth`、`rate_limited`(带 retryAfter)、`integrity`(指纹不符)、`not_writer`(只读)、`expired`(审批过期)、`host_unreachable`。**透明性:`upstream` 原文不改写**(PRD 4.2)。
+**8.1 错误分类与归一。** 全部错误归一为 `{kind, raw, retryable}`:`upstream`(SDK/claude,原文透传)、`auth`、`rate_limited`(带 retryAfter)、`integrity`(指纹不符)、`not_writer`(只读)、`expired`(审批过期)。**透明性:`upstream` 原文不改写**(PRD 4.2)。
 
 **8.2 fail-closed 汇总**(默认拒绝的判定点):
 
@@ -865,6 +880,8 @@ sequenceDiagram
 - **只读锁 localBusy 吸收**:本端 turn 窗口内到达的外部写,须切走经磁盘重载追平(§5.4,触发面窄)。
 - **限速内存态重启清零**:重启后暴破计数归零;由足够的锁定时长 + 边缘层兜底,敏感部署可选持久化。
 - **浏览 TOCTOU 窗口**:范围校验与文件读取之间,路径可被本机进程替换为越界 symlink(§3.4.2);实现层以 fd 级校验(O_NOFOLLOW / 读后复核 realpath)缓解,残余窗口需机主本机进程配合才可利用——在 n=1 信任根之内,登记不消除。
+- **L2 删除的终端活跃探测非完备**:纯终端驱动中的会话对后端不可确证(进行中态不落盘,同 AD-3),mtime 静默阈值是启发式护栏——极端时序(终端恰在阈值后、删除中开始写)仍可撞;fail-closed 方向(疑似活跃即拒)+ 显式二次确认共同缓解,不在本期消除。
+- **会话枚举 API 待核(SP-11)**:官方"列会话"API 存在性/签名未验证;降级案依赖 transcript 目录路径规则跨版本稳定。M0 前核验,核验前枚举实现按降级案预设。
 - **实时镜像 vs 原生**:承接 PRD 张力1,非本设计缺陷,属架构—上游张力。
 
 ---
@@ -875,7 +892,9 @@ sequenceDiagram
 | --- | --- | --- |
 | CliBridge(QueryDriver/MessageMapper) | AD-6 | NFR-14 上游耦合收敛 |
 | PermissionInterceptor + ApprovalIntegrityVerifier + §5.5 | AD-7 审批完整性 | **NFR-17 / 11.8** |
+| ApprovalDecision 三档 + updatedPermissions(§3.4/§3.1.3) | AD-7 + 控制通道 | **FR-05 审批三档语义与终端逐项一致**(allow_session 走 SDK 官方机制,SP-01 核签名) |
 | SessionManager + SessionMessageReader | AD-1/2 | FR-11 双向共享 |
+| SessionRegistry.listSessions(§3.2.1) | AD-11 基础列表 / AD-2 归属 | **FR-21 基础会话列表 / FR-11 终端建会话 web 可见**(枚举案待 SP-11) |
 | AttentionDeriver(§3.2.5) | AD-11 | **FR-21 会话发现**(读模型投影,继承 AD-3 边界) |
 | EventEnvelope.origin(§3.3.1) | AD-4 | **FR-02 进展来源识别**(terminal/mobile) |
 | ControlChannel 文件/图片输入 | AD-6/控制面 + AD-12 范围门 | **FR-09**(Should,授权范围(FR-23)内可访问可追踪;上传细节待实现) |
@@ -889,6 +908,7 @@ sequenceDiagram
 | DeviceTrustStore | AD-8 | FR-18 设备信任 |
 | approval_request(有效期,`expiresAt`) | AD-6/审批流 | **FR-22 审批时效**(机制见 OQ-05) |
 | DeleteBoundary(存储层,见 §4 approval/pointer) | AD-1 删除边界 | FR-20 删除(Could/主权) |
+| 留存治理(§4:上限/轮转/保留期) | AD-1 数据模型 | **NFR-16 留存有界可治理** |
 | NotificationService + TriggerPolicy | AD-9 | FR-14/15(**Must 交付=web 经手会话**,纯终端会话不产生推送,PRD §14.6;payload 最小化承接 OQ-08) |
 | Observability + StateProbe | 部署/可观测 | NFR-15 |
 | SessionMessageReader.readSince + §5.1.2 | AD-3 增量追平通路 | **FR-13a 已落定增量 / FR-11**(终端外部写入追平) |
