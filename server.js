@@ -17,7 +17,7 @@ import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
 import * as sessions from './sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, getProjectDir, invalidateListCache, catchUpStep, mirrorReleaseStep, readLastPermissionMode } from './history.js';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit } from './notifications.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY } from './notifications.js';
 import { attributePath, buildDiff, readPreview } from './file-preview.js';
 import { runDoctor } from './doctor-runtime.js';
 import { buildWebStatusLine } from './statusline.js';
@@ -58,8 +58,9 @@ const {
   PORT = 3000,
   AUTH_TOKEN = '',
   IDLE_TIMEOUT_MS = 600000,
-  APPROVAL_TTL_MS = 1800000 // 审批悬置上限（默认 30min，部署可配置，LLD §3.5.2/OQ-05 已决不预置具体数值——
-                            // 此为实现落地时的合理默认：过期 fail-closed，不支持重新确认同一请求
+  APPROVAL_TTL_MS = 1800000, // 审批悬置上限（默认 30min，部署可配置，LLD §3.5.2/OQ-05 已决不预置具体数值——
+                             // 此为实现落地时的合理默认：过期 fail-closed，不支持重新确认同一请求
+  NOTIFY_THROTTLE_MS = 60000 // 推送 per-会话节流最小间隔（默认 60s，部署可配置，LLD §3.6.1 TriggerPolicy 建议值）
 } = process.env;
 // 开发者模式（DEV_MODE=1）：暴露 web 端「重启服务」按钮，供 dogfooding 时改代码/.env 后一键 kickstart
 // 常驻 server（优雅退出 → LaunchAgent KeepAlive 自动拉起 → 前端 socket.io 自动重连 + epoch init 恢复）。
@@ -75,6 +76,9 @@ let sessionLimitByDir = new Map();
 
 const idleTimeoutMs = Number(IDLE_TIMEOUT_MS) > 0 ? Number(IDLE_TIMEOUT_MS) : 600000;
 const approvalTtlMs = Number(APPROVAL_TTL_MS) > 0 ? Number(APPROVAL_TTL_MS) : 1800000;
+const notifyThrottleMs = Number(NOTIFY_THROTTLE_MS) > 0 ? Number(NOTIFY_THROTTLE_MS) : 60000;
+let notifyThrottleState = new Map(); // per-会话推送节流态（LLD §3.6.1），sessionId → {[category]:{notifiedAt,pending}}；
+                                      // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
 const port = Number(PORT) > 0 ? Number(PORT) : 3000;
 const HERE = import.meta.dirname; // #14：所有相对路径锚定模块目录，从任何 cwd 启动都一致
 // CCM_DATA_DIR 覆盖状态文件根目录——仅测试用：让 E2E 把 init-cache/devices/push-subscription/sessions
@@ -1095,14 +1099,33 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
           next.error ? errorInstances.add(id) : errorInstances.delete(id);
           next.aborted ? abortedInstances.add(id) : abortedInstances.delete(id);
         }
+        // request_resolved：审批/提问已被处理 → 清除该会话对应类别的"未决"标记（P1-5），
+        // 使下一次同类别通知不再被①层"未决不重复推"拦截（②层最小间隔仍照常生效，不因此重置）。
+        if (envelope.type === 'request_resolved' && envelope.sessionId) {
+          const category = envelope.payload?.kind === 'permission' ? 'approval'
+            : envelope.payload?.kind === 'question' ? 'input' : null;
+          if (category) notifyThrottleState = clearNotifyPending(envelope.sessionId, category, notifyThrottleState);
+        }
         // E15 离线 web-push：文案映射抽到 notificationForEvent（纯函数、test/notifications 覆盖）。
         // result 仅无客户端连时推（连着的自己看得到）；permission/question/task_notification 无条件推
         // （用户可能锁屏/在别的 app）。task_notification=后台任务（Workflow/后台 Agent/Bash）完成——
         // 此前落到这里两分支都不命中、从不推，手机锁屏收不到完成通知，本次补齐。
-        const pn = notificationForEvent(envelope.type, envelope.payload, {
+        // 先判断"若不考虑节流，本该不该推"（result 仅无客户端连时推等既有规则），
+        // 只有确实要推送时才消费节流配额——避免"注定不推"的事件（如有客户端连的 result）白白占用节流窗口，
+        // 致真正需要推送时被误判为"最近推过"。
+        let pn = notificationForEvent(envelope.type, envelope.payload, {
           hasClients: io.sockets.sockets.size > 0,
           instanceId: envelope.instanceId, sessionId: envelope.sessionId, cwd: envelope.cwd,
         });
+        // P1-5 per-会话节流（LLD §3.6.1）：同一会话同一类别已有未决通知或未过最小间隔 → 抑制，不推送。
+        if (pn) {
+          const notifyCategory = NOTIFY_CATEGORY[envelope.type];
+          if (notifyCategory) {
+            const r = throttleNotify(envelope.sessionId, notifyCategory, Date.now(), notifyThrottleState, notifyThrottleMs);
+            if (r.throttled) pn = null;
+            notifyThrottleState = r.next; // 无论放行与否都写回：next 在放行时含新记录，节流时等于原状态（幂等安全）
+          }
+        }
         if (pn) {
           pushNotify(pn.title, pn.body, pn.data);                              // Web Push（带 data 供 SW 深链）
           ntfyNotify(pn.title, pn.body, ntfyMetaFor(envelope.type, pn.data, PUBLIC_URL)); // ntfy（click 深链，绕移动端限制）

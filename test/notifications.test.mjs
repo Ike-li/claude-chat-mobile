@@ -1,7 +1,7 @@
 // test/notifications.test.mjs —— notificationForEvent 纯映射单测（零副作用，不碰 web-push 传输）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit } from '../notifications.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY } from '../notifications.js';
 
 // ── result：仅在无客户端连接时推 ──────────────────────────────────────────────
 
@@ -132,4 +132,81 @@ test('ntfyRequestInit: meta 的 tags/priority/click 进 body', () => {
   assert.deepEqual(b.tags, ['warning']);
   assert.equal(b.priority, 5);
   assert.equal(b.click, 'https://x/#instance=i1');
+});
+
+// ── throttleNotify / clearNotifyPending：per-会话推送节流（LLD §3.6.1 TriggerPolicy，承接 FR-14 另一半）──
+// 两层规则：①同一会话同一类别已有未决通知（未被 request_resolved 清除）不重复推；
+// ②即便已清除，同类事件最小间隔内仍抑制。纯函数、状态外置（EP-2）。
+test.describe('throttleNotify', () => {
+  test('首次推送：不节流，记为该类别未决', () => {
+    const r = throttleNotify('s1', 'approval', 1000, new Map(), 60000);
+    assert.equal(r.throttled, false);
+  });
+
+  test('同会话同类别已有未决通知（如上一个 approval 还没被处理）→ 第二次节流', () => {
+    const r1 = throttleNotify('s1', 'approval', 1000, new Map(), 60000);
+    const r2 = throttleNotify('s1', 'approval', 2000, r1.next, 60000); // 未 clearNotifyPending，仍未决
+    assert.equal(r2.throttled, true, '未决时第二次同类别通知应被节流');
+  });
+
+  test('未决被清除（request_resolved）后、仍在最小间隔内 → 仍节流（间隔层兜底）', () => {
+    const r1 = throttleNotify('s1', 'approval', 1000, new Map(), 60000);
+    const cleared = clearNotifyPending('s1', 'approval', r1.next);
+    const r2 = throttleNotify('s1', 'approval', 30000, cleared, 60000); // 30s < 60s 最小间隔
+    assert.equal(r2.throttled, true, '已清未决但未过最小间隔仍应节流');
+  });
+
+  test('未决被清除且已过最小间隔 → 放行', () => {
+    const r1 = throttleNotify('s1', 'approval', 1000, new Map(), 60000);
+    const cleared = clearNotifyPending('s1', 'approval', r1.next);
+    const r2 = throttleNotify('s1', 'approval', 62000, cleared, 60000); // 61s > 60s
+    assert.equal(r2.throttled, false);
+  });
+
+  test('不同会话互不影响', () => {
+    const r1 = throttleNotify('s1', 'approval', 1000, new Map(), 60000);
+    const r2 = throttleNotify('s2', 'approval', 1001, r1.next, 60000);
+    assert.equal(r2.throttled, false, '不同会话的节流态应独立');
+  });
+
+  test('不同类别（approval vs finished）互不影响', () => {
+    const r1 = throttleNotify('s1', 'approval', 1000, new Map(), 60000);
+    const r2 = throttleNotify('s1', 'finished', 1001, r1.next, 60000);
+    assert.equal(r2.throttled, false, '同会话不同类别应独立节流');
+  });
+
+  test('finished 类别（result/task_notification）无"未决"语义，只受最小间隔节流', () => {
+    const r1 = throttleNotify('s1', 'finished', 1000, new Map(), 60000);
+    const r2 = throttleNotify('s1', 'finished', 2000, r1.next, 60000); // 未调用 clearNotifyPending
+    assert.equal(r2.throttled, true, 'finished 类别短时间内连续两次也应节流（无需 clear 才能受最小间隔约束）');
+    const r3 = throttleNotify('s1', 'finished', 62000, r1.next, 60000);
+    assert.equal(r3.throttled, false, '过了最小间隔应放行');
+  });
+
+  test('未知/空 sessionId → 不节流（保守，不误伤）', () => {
+    assert.equal(throttleNotify(null, 'approval', 1000, new Map()).throttled, false);
+    assert.equal(throttleNotify('', 'approval', 1000, new Map()).throttled, false);
+  });
+
+  test('NOTIFY_CATEGORY 映射：permission_request→approval, question→input, result/task_notification→finished', () => {
+    assert.equal(NOTIFY_CATEGORY.permission_request, 'approval');
+    assert.equal(NOTIFY_CATEGORY.question, 'input');
+    assert.equal(NOTIFY_CATEGORY.result, 'finished');
+    assert.equal(NOTIFY_CATEGORY.task_notification, 'finished');
+  });
+});
+
+test.describe('clearNotifyPending', () => {
+  test('清除不存在的会话/类别 → 原样返回，不抛错', () => {
+    const state = new Map();
+    const next = clearNotifyPending('nope', 'approval', state);
+    assert.equal(next, state);
+  });
+
+  test('清除后，notifiedAt 不受影响（只清 pending，最小间隔仍生效）', () => {
+    const r1 = throttleNotify('s1', 'approval', 1000, new Map(), 60000);
+    const cleared = clearNotifyPending('s1', 'approval', r1.next);
+    const r2 = throttleNotify('s1', 'approval', 1500, cleared, 60000); // 500ms < 60s
+    assert.equal(r2.throttled, true, 'clear 只清未决标记，不重置最小间隔计时');
+  });
 });

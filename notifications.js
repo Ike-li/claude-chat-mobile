@@ -47,6 +47,42 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
   }
 }
 
+// ── per-会话推送节流（LLD §3.6.1 TriggerPolicy，承接 FR-14"不重复轰炸同一会话"的另一半）──
+// 两层规则：①同一会话同一类别已有未决通知（未被 clearNotifyPending 清除）不重复推——
+// approval/input 需要"被处理"（request_resolved）才算未决解除；finished（result/task_notification）
+// 是一次性终态通知，没有"被处理"这个动作，只受②约束。②同类事件最小间隔（默认 60s）内抑制，
+// 防止连续多次触发瞬间炸出好几条。纯函数、状态外置（EP-2）：调用方持有 Map<sessionId, {[category]:{notifiedAt,pending}}>。
+export const NOTIFY_CATEGORY = Object.freeze({
+  permission_request: 'approval',
+  question: 'input',
+  result: 'finished',
+  task_notification: 'finished',
+});
+
+export function throttleNotify(sessionId, category, now, state = new Map(), minIntervalMs = 60000) {
+  if (!sessionId || !category) return { throttled: false, next: state }; // 保守：缺 key 时不误伤，不节流
+  const sessionState = state.get(sessionId) || {};
+  const entry = sessionState[category];
+  if (entry) {
+    if (entry.pending) return { throttled: true, next: state }; // 未决（approval/input 尚未被处理）→ 抑制
+    if (now - entry.notifiedAt < minIntervalMs) return { throttled: true, next: state }; // 未到最小间隔 → 抑制
+  }
+  const next = new Map(state);
+  // approval/input 有"被处理"动作、需要追踪未决；finished 是一次性通知，直接 pending:false（只受最小间隔约束）
+  next.set(sessionId, { ...sessionState, [category]: { notifiedAt: now, pending: category === 'approval' || category === 'input' } });
+  return { throttled: false, next };
+}
+
+// 审批/提问被处理（request_resolved）后调用，清除该会话对应类别的"未决"标记；不动 notifiedAt——
+// 最小间隔计时不因"已处理"而重置，防止"批准后立刻又来一个新审批"瞬间绕开间隔节流。
+export function clearNotifyPending(sessionId, category, state = new Map()) {
+  const sessionState = state.get(sessionId);
+  if (!sessionState || !sessionState[category]) return state;
+  const next = new Map(state);
+  next.set(sessionId, { ...sessionState, [category]: { ...sessionState[category], pending: false } });
+  return next;
+}
+
 // ②2b：ntfy 渠道元数据（优先级 / 标签 / 深链 click）。与文案分离，保持 notificationForEvent 渠道无关。
 //   priority：需用户即时响应的（许可 / 提问）→ 5（urgent），其余 → 3（default）。
 //   click：仅在有 publicUrl 且有 instanceId 时给——点通知直接深链回该实例会话（#instance=…&session=…&cwd=…）。
