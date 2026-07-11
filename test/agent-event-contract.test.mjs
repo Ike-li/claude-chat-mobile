@@ -53,3 +53,32 @@ test('agent event contract reports mock event types that real paths do not emit'
   assert.deepEqual(result.problems.map(problem => problem.code), ['mock_type_not_real']);
   assert.equal(result.problems[0].type, 'mock_only');
 });
+
+// SEC-01：server.js 用 io.to('approved').emit('agent:event', ...) 做下行隔离（房间过滤），
+// 这是合法的链式广播调用、非动态类型——静态扫描须识别，否则会把仍在真实发出的类型误判为「real 不再发出」。
+test('agent event contract 识别 io.to(room).emit("agent:event", ...) 链式调用', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-agent-event-contract-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'agent.js', `
+    class AgentSession {
+      run() {
+        this.emit('init', {});
+      }
+    }
+  `);
+  await writeFixture(root, 'server.js', `
+    io.to('approved').emit('agent:event', { type: 'session_log', payload: {} });
+  `);
+  await writeFixture(root, 'scripts/visual-mock-server.js', `
+    io.emit('agent:event', { type: 'session_log', payload: {} });
+  `);
+
+  const result = checkAgentEventContract({
+    rootDir: root,
+    contractTypes: new Set([...AGENT_EVENT_TYPES, 'session_log']),
+  });
+
+  assert.deepEqual(result.problems, [], 'io.to(room).emit 里的 session_log 应被识别为 real 已发出，不应报 mock_type_not_real');
+  assert.ok(result.realTypes.has('session_log'));
+});
