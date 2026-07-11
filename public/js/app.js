@@ -357,23 +357,37 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   let initialLoad = true;
   let connectErrorCount = 0;  // 公网 socket 连续失败计数，攒够再探测 Access 是否过期
   
+  const OFFLINE_RESEND_ACK_MS = 8000; // 慢移动网络 RTT 留余地（同 cf-access 2s→8s 超时教训，见项目 memory）
   function processOfflineQueue() {
     if (offlineQueue.length === 0) return;
-    addBar(`正在重发离线发送队列中的 ${offlineQueue.length} 条消息...`, 'text-info');
-    logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${offlineQueue.length} 条消息`);
-    while (offlineQueue.length > 0) {
-      const item = offlineQueue.shift();
+    const items = offlineQueue;
+    offlineQueue = []; // 乐观清空：未确认送达的会在下方 ack 失败回调里重新 push 回来
+    addBar(`正在重发离线发送队列中的 ${items.length} 条消息...`, 'text-info');
+    logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息`);
+    for (const item of items) {
       const indicator = item.bubbleEl?.querySelector('.pending-indicator');
       if (indicator) {
         indicator.textContent = '🕐 正在发送...';
       }
       logClientEvent('send', `[WEB_SEND] 重发离线消息: "${item.text.slice(0, 100)}" (${item.text.length} 字符)`);
-      socket.emit('user:message', {
+      // REL-01：用入队时刻保存的目标（item.instanceId/item.cwd），不用重发时的当下 viewingInstanceId/
+      // currentCwd——否则离线期间切换了查看会话，消息会错发到现在正看的会话而非当初想发的那个。
+      // 带 clientMessageId + ack：未确认送达（超时/服务端拒绝）则重新排队，等下次重连再试，不原地无限重试。
+      socket.timeout(OFFLINE_RESEND_ACK_MS).emit('user:message', {
         text: item.text,
         model: item.model,
         attachments: item.attachments,
-        instanceId: viewingInstanceId,
-        cwd: currentCwd
+        instanceId: item.instanceId,
+        cwd: item.cwd,
+        clientMessageId: item.clientMessageId,
+      }, (err, ack) => {
+        if (err || !ack?.ok) {
+          if (indicator) indicator.textContent = '🕐 未确认送达，等待重连重试...';
+          offlineQueue.push(item);
+          logClientEvent('send', `[WEB_SEND] 离线消息重发未确认（${err ? '超时' : '服务端拒绝'}），已重新排队`);
+        } else if (indicator) {
+          indicator.remove();
+        }
       });
     }
     setBusy(true);
@@ -1467,6 +1481,9 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     const attachments = pendingAttachments.length
       ? pendingAttachments.map(({ _id, ...rest }) => rest)
       : undefined;
+    // REL-01：客户端消息 ID——离线重发/网络抖动可能致同一条消息被处理两次，服务端据此去重（message-dedup.js）。
+    // 在线/离线两条路径共享同一个 ID（在离线分支判断前生成）。
+    const clientMessageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     // M2 / Weak Network Optimistic Sending Queue:
     if (!socket.connected) {
@@ -1505,7 +1522,12 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         text,
         model,
         attachments,
-        bubbleEl: bubble
+        bubbleEl: bubble,
+        clientMessageId,
+        // REL-01：保存入队时刻的目标，重发时须用这个而非"当下"的 viewingInstanceId/currentCwd——
+        // 否则用户离线期间切换了查看的会话，消息会被错发到现在正看着的会话，而非当初想发的那个。
+        instanceId: viewingInstanceId,
+        cwd: currentCwd
       });
       
       inputEl.value = '';
@@ -1526,7 +1548,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     // 台阶3：instanceId 路由到当前查看 tab；cwd 供无 tab（首发/session:new 后）时服务端懒开实例
     const attCount = Array.isArray(attachments) ? attachments.length : 0;
     logClientEvent('send', `[WEB_SEND] 发送消息: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" (${text.length} 字符), model=${model || '未指定(沿用)'}, 附件数=${attCount}, instanceId=${viewingInstanceId || 'new'}`);
-    socket.emit('user:message', { text, model, attachments, instanceId: viewingInstanceId, cwd: currentCwd });
+    socket.emit('user:message', { text, model, attachments, instanceId: viewingInstanceId, cwd: currentCwd, clientMessageId });
     // F3：不再本地 append 气泡，由 user_message 事件渲染（同时入缓冲，重载可回放）
     inputEl.value = '';
     pendingAttachments = [];

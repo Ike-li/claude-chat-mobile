@@ -2886,7 +2886,10 @@ io.on('connection', socket => {
   ]);
 
   // Handle custom trigger command inputs
-  socket.on('user:message', async payload => {
+  socket.on('user:message', async (payload, ack) => {
+    // REL-01：真实 server.js 现支持 ack（离线重发路径用 socket.timeout().emit(...,ack)）；
+    // mock 本就是"总是成功"语义，无需等分支处理完才 ack，此处立即回，避免离线重发场景在 mock 下永远超时。
+    if (typeof ack === 'function') ack({ ok: true });
     const messagePayload = payload && typeof payload === 'object' ? payload : {};
     const text = typeof payload === 'string' ? payload : messagePayload.text;
     const requestedModel = typeof messagePayload.model === 'string' ? messagePayload.model : '';

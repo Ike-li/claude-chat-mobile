@@ -27,6 +27,7 @@ import { createModelsCache, isCwdDefaultModel } from './models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from './cf-access.js';
 import { onAuthResult, freshState, rlSourceKey } from './rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
+import { checkAndRecord } from './message-dedup.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from './workdirs.js';
 import {
@@ -79,6 +80,7 @@ const approvalTtlMs = Number(APPROVAL_TTL_MS) > 0 ? Number(APPROVAL_TTL_MS) : 18
 const notifyThrottleMs = Number(NOTIFY_THROTTLE_MS) > 0 ? Number(NOTIFY_THROTTLE_MS) : 60000;
 let notifyThrottleState = new Map(); // per-会话推送节流态（LLD §3.6.1），sessionId → {[category]:{notifiedAt,pending}}；
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
+let messageDedupState = new Map(); // clientMessageId → ts（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
 const port = Number(PORT) > 0 ? Number(PORT) : 3000;
 const HERE = import.meta.dirname; // #14：所有相对路径锚定模块目录，从任何 cwd 启动都一致
 // CCM_DATA_DIR 覆盖状态文件根目录——仅测试用：让 E2E 把 init-cache/devices/push-subscription/sessions
@@ -1394,21 +1396,37 @@ io.on('connection', socket => {
     scheduleStatusRefresh(); // 300ms 后新鲜数据跟上
   }
 
-  on(socket, 'user:message', async payload => {
+  on(socket, 'user:message', async (payload, ack) => {
+    // REL-01 幂等（离线重发/网络抖动可能致同一条消息被处理两次）：clientMessageId 由发送端生成，
+    // 已处理过的直接 ack 放行、不重复执行任何副作用（不重发校验提示、不重复调用 a.send）。
+    // 无 ID（旧客户端未升级）→ 不去重，向后兼容。
+    const clientMessageId = (payload && typeof payload === 'object') ? payload.clientMessageId : undefined;
+    const dedup = checkAndRecord(clientMessageId, messageDedupState);
+    messageDedupState = dedup.next;
+    if (dedup.duplicate) { if (typeof ack === 'function') ack({ ok: true, deduped: true }); return; }
+
     const text = typeof payload === 'string' ? payload : payload?.text;
     const attachments = (payload && typeof payload === 'object') ? payload.attachments : undefined;
     const hasText = typeof text === 'string' && text.trim().length > 0;
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
     if (!hasText && !hasAttachments) {
-      return sysTo(socket, '消息为空或格式无效', true); // #12：不静默丢弃；用 system 不终结在途轮
+      sysTo(socket, '消息为空或格式无效', true); // #12：不静默丢弃；用 system 不终结在途轮
+      if (typeof ack === 'function') ack({ ok: false, error: '消息为空或格式无效' });
+      return;
     }
     if (typeof text === 'string' && text.length > 50000) {
       // system 而非 error：发送前校验，不应 finalize 正在流式的在途任务（前端已先行红字提示）
-      return sysTo(socket, `消息过长（${text.length} 字符，上限 50000），未发送`, true);
+      sysTo(socket, `消息过长（${text.length} 字符，上限 50000），未发送`, true);
+      if (typeof ack === 'function') ack({ ok: false, error: '消息过长' });
+      return;
     }
     // E17：附件校验（条数/单文件/总量）。失败用 system 提示、不发送、不终结在途轮。
     const attErr = validateAttachments(attachments);
-    if (attErr) return sysTo(socket, attErr, true);
+    if (attErr) {
+      sysTo(socket, attErr, true);
+      if (typeof ack === 'function') ack({ ok: false, error: attErr });
+      return;
+    }
 
     const cleanText = hasText ? text.trim() : '';
     const model = (payload && typeof payload === 'object') ? payload.model : undefined;
@@ -1444,6 +1462,7 @@ io.on('connection', socket => {
     // 队列满（pendingTurns 1→2）时立即广播，前端禁发送按钮无延迟。
     // result 边界已有广播，此处仅补"变满"方向；send 拒绝（return false）不改 pendingTurns、不触发。
     if (a.pendingTurns >= 2) broadcastInstances();
+    if (typeof ack === 'function') ack({ ok: true, instanceId: a.instanceId });
   });
 
   on(socket, 'user:approve', payload => {
