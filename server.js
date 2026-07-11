@@ -25,6 +25,7 @@ import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } fr
 import * as interactionLog from './interaction-log.js';
 import { createModelsCache, isCwdDefaultModel } from './models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from './cf-access.js';
+import { onAuthResult, freshState, rlSourceKey } from './rate-limiter.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted } from './workdirs.js';
 import {
@@ -573,25 +574,57 @@ if (process.stdin.isTTY) {
   });
 }
 
+// 鉴权门口防暴破限速（NFR-03 / LLD §3.5.2）：仅当配了鉴权门（公网 CF Access 或 AUTH_TOKEN）时生效——
+// 无鉴权模式(!AUTH_TOKEN 且非公网) authPassed 恒真、永不计失败，天然不触发。sourceKey 只信 CF-Connecting-IP、
+// 不信可伪造的 XFF。状态内存态 Map（重启清零 = 机主误锁时的逃生口，符合 LLD 内存态取舍）；不特判本机绕过，
+// 靠“成功清零”保护机主正常握手（连对 token 不累积失败）。
+const rlStates = new Map(); // sourceKey → RateLimitState
 // ---- 鉴权（公网 Host 强制 Access JWT、fail-closed；LAN/本机回退 token；无 token 时仅 localhost）----
 io.use(async (socket, next) => {
+  const ip = clientIp(socket.handshake.address);
+  const rlActive = isPublicHost(socket.handshake.headers.host) || !!AUTH_TOKEN;
+  const rlKey = rlSourceKey(socket.handshake, clientIp);
   try {
+    // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把机主越锁越久 = 自我 DoS）
+    if (rlActive) {
+      const st = rlStates.get(rlKey) || freshState();
+      const now = Date.now();
+      if (now < st.lockUntil) {
+        console.warn(`[conn] ${ip} 鉴权限速中，拒握手（retryAfter≈${Math.ceil((st.lockUntil - now) / 1000)}s，source=${rlKey}）`);
+        return next(new Error('rate_limited'));
+      }
+    }
+
     let authPassed = false;
     let accessEnabled = false;
 
     if (isPublicHost(socket.handshake.headers.host)) {
-      await verifyAccessJwt(socket.handshake.headers['cf-access-jwt-assertion']);
-      authPassed = true;
-      accessEnabled = true;
+      try {
+        await verifyAccessJwt(socket.handshake.headers['cf-access-jwt-assertion']);
+        authPassed = true;
+        accessEnabled = true;
+      } catch {
+        authPassed = false; // 公网 JWT 校验失败 → 落入统一限速计数 + fail-closed
+      }
     } else if (!AUTH_TOKEN) {
       authPassed = true;
     } else if (tokenMatches(socket.handshake.auth?.token)) {
       authPassed = true;
     }
 
+    // 限速计数：成功清零、失败退避/锁定（LLD §3.5.2 onAuthResult）
+    if (rlActive) {
+      const st = rlStates.get(rlKey) || freshState();
+      const r = onAuthResult(st, authPassed, Date.now());
+      rlStates.set(rlKey, r.next);
+      if (!authPassed && r.verdict === 'locked') {
+        console.warn(`[conn] ${ip} 连续鉴权失败达阈值 → 锁定 ${Math.ceil(r.retryAfterMs / 1000)}s（source=${rlKey}）`);
+      }
+    }
+
     if (!authPassed) {
       const got = socket.handshake.auth?.token;
-      console.warn(`[conn] ${clientIp(socket.handshake.address)} 握手鉴权失败（token ${got ? '不匹配' : '缺失'}）`);
+      console.warn(`[conn] ${ip} 握手鉴权失败（token ${got ? '不匹配' : '缺失'}）`);
       return next(new Error('unauthorized'));
     }
 
