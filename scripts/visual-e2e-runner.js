@@ -740,6 +740,20 @@ async function run() {
     console.log(`   [Assert] Directory label: "${dirLabelTC10}"`);
     assert.ok(dirLabelTC10 && dirLabelTC10.length >= 1, 'TC-10: Directory label must be non-empty');
 
+    // 已打开会话行（mock-session-visual-test ↔ inst_1）必须有可见的 ✕ 关闭入口——手机宽度下不能只靠
+    // 不可发现的侧滑手势（此前 ✕ 按钮带 `md:block hidden`，在 375px 视口下 display:none，用户点开会话
+    // 后这一行从「有垃圾桶」变成「什么按钮都看不见」，只能靠没有任何视觉提示的侧滑关闭）。
+    const closeAffordanceTC10 = await page.evaluate(() => {
+      const row = document.querySelector('#sessionPanel .row-content[data-instance-id="inst_1"]');
+      if (!row) return { found: false };
+      const closeBtn = [...row.querySelectorAll('button')].find(b => b.textContent.trim() === '✕');
+      if (!closeBtn) return { found: false };
+      const style = getComputedStyle(closeBtn);
+      return { found: true, visible: style.display !== 'none' && closeBtn.offsetParent !== null };
+    });
+    assert.strictEqual(closeAffordanceTC10.found, true, 'TC-10: 已打开会话行必须渲染 ✕ 关闭按钮元素');
+    assert.strictEqual(closeAffordanceTC10.visible, true, 'TC-10: ✕ 关闭按钮在手机宽度下也必须可见，不能仅靠侧滑手势关闭');
+
     await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc10_sidebar_expanded.png` });
     console.log('📸 Captured and saved tc10_sidebar_expanded.png');
 

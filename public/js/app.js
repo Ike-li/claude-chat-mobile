@@ -2991,9 +2991,11 @@ import { verifyIntegrity } from './canonicalize.js';
         };
         rowContent.appendChild(btn);
 
-        // 原生 x 按钮（在 PC 端作为辅助，手机端优先侧滑）
+        // 原生 x 按钮：桌面/移动端均常显（此前 md:block hidden 只在桌面显示，手机端只能靠不可发现的侧滑
+        // 手势——已打开会话本行没有其它可见按钮，用户体感是"点开会话后这行的图标凭空消失了"）。
+        // 侧滑仍保留作快捷方式，二者并存、互不冲突，都是触发同一个 session:close。
         if (liveInst) {
-          const closeBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm md:block hidden">✕</button>`);
+          const closeBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm">✕</button>`);
           closeBtn.onclick = e => {
             e.stopPropagation();
             haptic('warning');
