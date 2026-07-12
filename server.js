@@ -28,6 +28,7 @@ import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from './
 import { onAuthResult, freshState, rlSourceKey } from './rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from './attention.js';
+import { listDir, readFile as browseReadFile } from './file-browse.js';
 import { checkAndRecord } from './message-dedup.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from './workdirs.js';
@@ -1704,6 +1705,33 @@ io.on('connection', socket => {
     const limit = all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
     const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit });
     ack({ currentSessionId, sessions: list, hasMore: all ? false : hasMore });
+  });
+
+  // 项目文件只读浏览（LLD §3.4.2 FileBrowseHandler，承接 AD-12/FR-07）：请求-响应型，不进事件流/
+  // RingBuffer（断线重来即可，无"错过"概念）。范围裁决统一交 WorkdirScopeGuard(isInScope)——
+  // listDir/readFile 内部已用它拒绝越界，这里越界时只补一条 [scope] 审计信号（同 routeCwd 越界信号惯例，
+  // 见上方 routeCwd 定义处注释）。范围内内容不做敏感过滤（.env 等照读，见 file-browse.js 头注）。
+  on(socket, 'browse:list', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { cwd: reqCwd, relPath, offset, maxEntries } = payload || {};
+    const cwd = routeCwd(reqCwd);
+    const res = listDir(cwd, relPath, workDirs, { offset, maxEntries });
+    if (res === null) {
+      console.warn(`[scope] 文件浏览越界拒绝（list）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
+      return ack({ ok: false, error: '路径不在授权范围内，或不是目录' });
+    }
+    ack({ ok: true, ...res });
+  });
+  on(socket, 'browse:read', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { cwd: reqCwd, relPath, offset, maxBytes } = payload || {};
+    const cwd = routeCwd(reqCwd);
+    const res = browseReadFile(cwd, relPath, workDirs, { offset, maxBytes });
+    if (res === null) {
+      console.warn(`[scope] 文件浏览越界拒绝（read）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
+      return ack({ ok: false, error: '路径不在授权范围内，或不是文件' });
+    }
+    ack({ ok: true, ...res });
   });
 
   // 开发者模式：web 端一键重启常驻 server（dogfooding 改代码/.env 后免上电脑 kickstart）。

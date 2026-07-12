@@ -99,6 +99,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
         consoleLogArea = $('consoleLogArea');
+  // 项目文件只读浏览（FR-07）
+  const fileBrowseModal = $('fileBrowseModal'), fileBrowseBack = $('fileBrowseBack'),
+        fileBrowsePath = $('fileBrowsePath'), fileBrowseClose = $('fileBrowseClose'),
+        fileBrowseBody = $('fileBrowseBody');
 
   // ---- 状态 ----
   let currentSessionId = localStorage.getItem('current_session') || null;
@@ -329,6 +333,18 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
   let displayedSessionId = null;
   let instancesList = [];               // 最近 instances 事件的实例列表（含 per-instance state）
   let needsYouList = [];                // "等我"聚合（AD-11/§3.2.5，承接 FR-21/FR-22），按 waitingSince 升序（等得越久排越前）
+  // 项目文件只读浏览（FR-07，LLD §3.4.2）状态：browseSegments = 相对 browseCwd 已进入的目录名数组；
+  // browseMode 区分"看目录列表"与"看文件内容"；两组 offset/累积内容各自独立，互不干扰。
+  let browseCwd = null;
+  let browseSegments = [];
+  let browseMode = 'list';               // 'list' | 'content'
+  let browseFileName = null;
+  let browseListEntries = [];            // 当前目录层级已加载的 entries（"加载更多"累积追加）
+  let browseListOffset = 0;
+  let browseListTruncated = false;       // 与 browseListEntries 同步缓存，供从文件内容返回列表时直接复用渲染（不重新请求）
+  let browseListTotal = 0;
+  let browseContentText = '';            // 当前文件已加载的文本（"加载更多"累积追加）
+  let browseContentOffset = 0;           // 字节偏移（服务端 bytesRead 累加——不可用字符串 length，多字节字符下两者不等）
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
   const sessionsCache = new Map();      // 会话列表缓存 (cwd -> sessions)，实现 Stale-While-Revalidate，实现 0ms 瞬间二次展开
   // P3：面板结构指纹（dirs + 实例集 + viewingInstanceId + viewingCwd）；纯状态变化时不重建面板。
@@ -2445,6 +2461,175 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }, 300);
   }
 
+  // ---- 项目文件只读浏览（FR-07，LLD §3.4.2 FileBrowseHandler）----
+  // 请求-响应型（browse:list/browse:read 走 ack 回调，不进事件流）；范围裁决在服务端 WorkdirScopeGuard，
+  // 前端不做任何"越界预判"——只管把服务端 ok:false 的错误展示出来。
+  const BROWSE_ICON = { dir: '📁', file: '📄', symlink: '🔗' };
+  function browseRelPath() {
+    return browseSegments.join('/') || '.';
+  }
+  function fmtFileSize(bytes) {
+    if (!Number.isFinite(bytes)) return '';
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+  }
+  function openFileBrowser(cwd) {
+    browseCwd = cwd;
+    browseSegments = [];
+    browseMode = 'list';
+    browseFileName = null;
+    openSheet(fileBrowseModal);
+    loadBrowseList();
+  }
+  function renderBrowseHeader() {
+    const isRootList = browseMode === 'list' && browseSegments.length === 0;
+    if (fileBrowseBack) fileBrowseBack.classList.toggle('hidden', isRootList);
+    if (!fileBrowsePath) return;
+    const parts = [baseName(browseCwd || '')].concat(browseSegments);
+    if (browseMode === 'content' && browseFileName) parts.push(browseFileName);
+    fileBrowsePath.textContent = parts.join(' / ');
+  }
+  function showBrowseMessage(text, cls) {
+    if (!fileBrowseBody) return;
+    fileBrowseBody.innerHTML = '';
+    const msg = document.createElement('div');
+    msg.className = `p-4 text-xs ${cls || 'text-ink-faint'}`;
+    msg.textContent = text;
+    fileBrowseBody.appendChild(msg);
+  }
+  function loadBrowseList() {
+    browseMode = 'list';
+    browseListEntries = [];
+    browseListOffset = 0;
+    browseListTruncated = false;
+    browseListTotal = 0;
+    renderBrowseHeader();
+    showBrowseMessage('加载中…');
+    fetchListPage(browseRelPath(), 0);
+  }
+  function fetchListPage(requestedPath, offset) {
+    socket.emit('browse:list', { cwd: browseCwd, relPath: requestedPath, offset }, res => {
+      if (browseMode !== 'list' || browseRelPath() !== requestedPath) return; // 过期回调（用户已切走/切层级）丢弃
+      if (!res?.ok) { showBrowseMessage('无法加载：' + (res?.error || '未知错误'), 'text-danger'); return; }
+      browseListEntries = browseListEntries.concat(res.entries);
+      browseListOffset = offset + res.entries.length;
+      browseListTruncated = res.truncated;
+      browseListTotal = res.totalCount;
+      renderBrowseListBody();
+    });
+  }
+  // 读的都是当前缓存态（browseListEntries/Truncated/Total），不接参数——"从文件内容返回列表"时需要
+  // 原样重渲上次加载的结果，若靠参数传值容易在调用点各写各的、产生不一致（曾在此踩过一次这类 bug）。
+  function renderBrowseListBody() {
+    if (!fileBrowseBody) return;
+    fileBrowseBody.innerHTML = '';
+    if (!browseListEntries.length) { showBrowseMessage('（空目录）'); return; }
+    for (const entry of browseListEntries) {
+      const row = el(`<button class="w-full flex items-center gap-2 px-4 py-2.5 border-b border-line-soft text-left hover:bg-sunk/30 active:opacity-70" data-testid="browse-entry"></button>`);
+      const icon = el(`<span class="shrink-0 w-5 text-center"></span>`);
+      icon.textContent = BROWSE_ICON[entry.kind] || '❔';
+      row.appendChild(icon);
+      const name = el(`<span class="flex-1 min-w-0 truncate text-xs text-ink"></span>`);
+      name.textContent = entry.name;
+      row.appendChild(name);
+      if (entry.kind === 'file') {
+        const size = el(`<span class="shrink-0 text-[10px] text-ink-faint"></span>`);
+        size.textContent = fmtFileSize(entry.size);
+        row.appendChild(size);
+      }
+      row.onclick = () => { haptic('tap'); openBrowseEntry(entry); };
+      fileBrowseBody.appendChild(row);
+    }
+    if (browseListTruncated) {
+      const more = el(`<button class="w-full p-3 text-center text-[11px] text-accent hover:bg-sunk/30 active:opacity-70"></button>`);
+      more.textContent = `加载更多（已显示 ${browseListEntries.length}/${browseListTotal}）`;
+      more.onclick = () => { haptic('tap'); fetchListPage(browseRelPath(), browseListOffset); };
+      fileBrowseBody.appendChild(more);
+    }
+  }
+  function openBrowseEntry(entry) {
+    if (entry.kind === 'dir') {
+      browseSegments.push(entry.name);
+      loadBrowseList();
+    } else if (entry.kind === 'file') {
+      loadBrowseContent(entry.name);
+    } else {
+      // symlink：目标类型未知——list 优先尝试，失败（ok:false，通常因指向范围外或不是目录）退化到当文件读。
+      const requestedPath = browseSegments.concat(entry.name).join('/');
+      socket.emit('browse:list', { cwd: browseCwd, relPath: requestedPath }, res => {
+        if (browseMode !== 'list' || browseRelPath() !== browseSegments.join('/')) return;
+        if (res?.ok) {
+          browseSegments.push(entry.name);
+          browseListEntries = res.entries;
+          browseListOffset = res.entries.length;
+          browseListTruncated = res.truncated;
+          browseListTotal = res.totalCount;
+          renderBrowseHeader();
+          renderBrowseListBody();
+        } else {
+          loadBrowseContent(entry.name);
+        }
+      });
+    }
+  }
+  function loadBrowseContent(name) {
+    browseMode = 'content';
+    browseFileName = name;
+    browseContentText = '';
+    browseContentOffset = 0;
+    renderBrowseHeader();
+    showBrowseMessage('加载中…');
+    fetchContentPage(browseSegments.concat(name).join('/'), 0);
+  }
+  function fetchContentPage(requestedPath, offset) {
+    socket.emit('browse:read', { cwd: browseCwd, relPath: requestedPath, offset }, res => {
+      const currentPath = browseSegments.concat(browseFileName || '').join('/');
+      if (browseMode !== 'content' || currentPath !== requestedPath) return; // 过期回调丢弃
+      if (!res?.ok) { showBrowseMessage('无法加载：' + (res?.error || '未知错误'), 'text-danger'); return; }
+      if (res.binary) { showBrowseMessage(`二进制文件（${fmtFileSize(res.totalSize)}），不支持预览`); return; }
+      browseContentText += res.content;
+      // 用服务端 bytesRead（字节数）累加，不能用 res.content.length（JS 字符串长度=字符数，多字节
+      // UTF-8 字符下与字节数不等，用它算下一片 offset 会错位——见 file-browse.js trimIncompleteUtf8Tail 头注）。
+      browseContentOffset = offset + (res.bytesRead ?? res.content.length);
+      renderBrowseContentBody(res.truncated, res.totalSize);
+    });
+  }
+  function renderBrowseContentBody(truncated, totalSize) {
+    if (!fileBrowseBody) return;
+    fileBrowseBody.innerHTML = '';
+    const pre = document.createElement('pre');
+    pre.className = 'p-4 text-[11px] leading-relaxed font-mono text-ink whitespace-pre-wrap break-words';
+    pre.textContent = browseContentText;
+    fileBrowseBody.appendChild(pre);
+    if (truncated) {
+      const more = el(`<button class="w-full p-3 text-center text-[11px] text-accent hover:bg-sunk/30 active:opacity-70 border-t border-line-soft"></button>`);
+      more.textContent = `加载更多（已显示 ${fmtFileSize(browseContentOffset)}/${fmtFileSize(totalSize)}）`;
+      more.onclick = () => { haptic('tap'); fetchContentPage(browseSegments.concat(browseFileName).join('/'), browseContentOffset); };
+      fileBrowseBody.appendChild(more);
+    }
+  }
+  if (fileBrowseBack) {
+    fileBrowseBack.onclick = () => {
+      haptic('tap');
+      if (browseMode === 'content') {
+        // 同层级返回：browseListEntries/Truncated/Total 仍是上次加载该目录时的缓存，直接复用重渲，
+        // 不必重新请求（内容不太可能在浏览会话期间变化，即便变了下次进入该目录也会重新拉取）。
+        browseFileName = null;
+        browseMode = 'list';
+        renderBrowseHeader();
+        renderBrowseListBody();
+      } else if (browseSegments.length > 0) {
+        browseSegments.pop();
+        loadBrowseList();
+      }
+    };
+  }
+  if (fileBrowseClose) fileBrowseClose.onclick = () => closeSheet(fileBrowseModal);
+  if (fileBrowseModal) {
+    fileBrowseModal.onclick = (e) => { if (e.target === fileBrowseModal) closeSheet(fileBrowseModal); };
+  }
+
   // ---- 触觉配置面板抽屉控制器 (Settings Sheet Controllers) ----
   function openSettingsSheet() {
     haptic('tap');
@@ -2591,6 +2776,16 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
         socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
       };
       dirRow.appendChild(newSessionBtn);
+
+      // 项目文件只读浏览入口（FR-07）：挂在目录行本身，与"新建会话"平级——浏览目标是这个工作区，非某个会话。
+      const browseBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm shadow-sm transition-all" title="浏览项目文件（只读）">📄</button>`);
+      browseBtn.onclick = (e) => {
+        e.stopPropagation();
+        closeLeftSidebar();
+        haptic('tap');
+        openFileBrowser(d);
+      };
+      dirRow.appendChild(browseBtn);
 
       sessionPanel.appendChild(dirRow);
 
