@@ -13,7 +13,12 @@ const FILE = process.env.CCM_SESSIONS_FILE
   || join(process.env.CCM_DATA_DIR || join(import.meta.dirname, 'data'), 'sessions.json');
 
 // 台阶2：当前会话指针由全局单指针 currentSessionId 升为 currentByCwd（每工作目录一个）。
-const EMPTY = () => ({ currentByCwd: {}, sessions: [] });
+// hiddenSessionIds（FR-20 两级删除 L1，承接 LLD §4）：session:list 的数据源是直接扫
+// ~/.claude/projects/<cwd>/ 的 transcript 文件（history.js#listSessionsPage，"不依赖 sessions.json
+// 注册表"），本模块原本的会话记录只是体验增强（标题缓存/指针），并非列表的真实数据源——故 L1"删产品
+// 可见引用、transcript 保留"不能只删这里的指针了事，必须有一份独立的隐藏名单，由 listSessionsPage
+// 消费过滤。sessionId 全局唯一（UUID），故用一个扁平集合、不分 cwd。
+const EMPTY = () => ({ currentByCwd: {}, sessions: [], hiddenSessionIds: [] });
 
 // #5：不仅兜住 parse 抛错，还校验形状——损坏/手改成 {} 的文件不能让后续 .find 崩进程
 function load() {
@@ -33,7 +38,9 @@ function load() {
     : {};
   return {
     currentByCwd,
-    sessions: raw.sessions.filter(s => s && typeof s.id === 'string')
+    sessions: raw.sessions.filter(s => s && typeof s.id === 'string'),
+    // 向后兼容：旧文件没有这个字段，缺省空数组（等价于"从未删过"）。
+    hiddenSessionIds: Array.isArray(raw.hiddenSessionIds) ? raw.hiddenSessionIds.filter(id => typeof id === 'string') : []
   };
 }
 
@@ -143,3 +150,29 @@ export function updateSessionPrefs(id, prefs) {
 // 注：原 defaultModelForCwd（空首页"该 cwd 默认模型"推断）已删（A1，2026-06-22）。新会话模型 = 终端
 // ANTHROPIC_* env 默认、服务端不可知；"最近会话 model" 只是推断（上次可能 /model 覆盖、env 默认可能已变），
 // 不算真值。空首页改显「不指定」、首条消息后由 init.model 校正——拿不到真值就不显、不猜。
+
+// ---- 两级删除 L1（FR-20，承接 LLD §4）----
+export function hideSession(id) {
+  if (typeof id !== 'string' || !id) return;
+  if (!state.hiddenSessionIds.includes(id)) {
+    state.hiddenSessionIds.push(id);
+    save();
+  }
+}
+
+// L2 真删文件后调用：隐藏名单不需要再为一个已经不存在的文件长期占位（避免无界增长）。
+export function unhideSession(id) {
+  const idx = state.hiddenSessionIds.indexOf(id);
+  if (idx !== -1) {
+    state.hiddenSessionIds.splice(idx, 1);
+    save();
+  }
+}
+
+export function isHidden(id) {
+  return state.hiddenSessionIds.includes(id);
+}
+
+export function getHiddenIds() {
+  return state.hiddenSessionIds;
+}

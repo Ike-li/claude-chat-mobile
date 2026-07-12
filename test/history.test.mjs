@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, listSessions, listSessionsPage, sessionFileExists, sessionFileSize, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, lastPermissionMode, readLastPermissionMode } from '../history.js';
+import { getProjectDir, listSessions, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, lastPermissionMode, readLastPermissionMode } from '../history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -84,6 +84,25 @@ test('sessionFileSize: 文件存在 → 正字节数；追加后变大（keep-al
   ]);
   const s2 = await sessionFileSize('sess-1', cwd, { baseDir: BASE });
   assert.ok(s2 > s1, '追加 tool_use 条目后 size 应变大（终端跑工具期间 keep-alive 据此判活）');
+});
+
+// ── sessionFileMtime（L2 删除活跃保护②用，FR-20） ──────────────────────────────
+
+test('sessionFileMtime: 非法 id（路径穿越 / 空串）→ -1', async () => {
+  assert.equal(await sessionFileMtime('../etc/passwd', '/cwd', { baseDir: BASE }), -1);
+  assert.equal(await sessionFileMtime('', '/cwd', { baseDir: BASE }), -1);
+});
+
+test('sessionFileMtime: 合法 id 但文件不存在 → -1', async () => {
+  assert.equal(await sessionFileMtime('no-such-session', '/cwd', { baseDir: BASE }), -1);
+});
+
+test('sessionFileMtime: 文件存在 → 正数 mtimeMs', async () => {
+  const cwd = '/test/mtime';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sess-mtime', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
+  const m = await sessionFileMtime('sess-mtime', cwd, { baseDir: BASE });
+  assert.ok(m > 0);
 });
 
 // ── listSessions ───────────────────────────────────────────────────────────
@@ -225,6 +244,26 @@ test('listSessionsPage: 缓存按 limit 隔离（limit=2 不污染随后 limit=5
   const big = await listSessionsPage(cwd, { baseDir: BASE, limit: 5 });
   assert.equal(big.sessions.length, 5);
   assert.equal(big.hasMore, false);
+});
+
+// ── listSessionsPage：hiddenIds 过滤（FR-20 两级删除 L1） ──────────────────────
+
+test('listSessionsPage: hiddenIds 命中的会话不出现在结果里', async () => {
+  const cwd = '/test/page-hidden';
+  const dir = join(BASE, getProjectDir(cwd));
+  for (let i = 0; i < 3; i++) writeJSONL(dir, `h${i}`, [{ type: 'user', message: { role: 'user', content: `q${i}` } }]);
+  const { sessions } = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, hiddenIds: new Set(['h1']) });
+  assert.deepEqual(sessions.map(s => s.id).sort(), ['h0', 'h2']);
+});
+
+test('listSessionsPage: 不传 hiddenIds（或空 Set）→ 不过滤，行为与旧调用点一致', async () => {
+  const cwd = '/test/page-nohidden';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'nh0', [{ type: 'user', message: { role: 'user', content: 'q' } }]);
+  const withoutParam = await listSessionsPage(cwd, { baseDir: BASE, limit: 10 });
+  const withEmptySet = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, hiddenIds: new Set() });
+  assert.equal(withoutParam.sessions.length, 1);
+  assert.equal(withEmptySet.sessions.length, 1);
 });
 
 // ── getSessionHistory ──────────────────────────────────────────────────────

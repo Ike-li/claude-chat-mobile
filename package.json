@@ -36,7 +36,7 @@
     "check": "for f in *.js public/js/*.js; do node --check \"$f\" || exit 1; done && echo 'syntax OK' && node scripts/doc-consistency.js && node scripts/check-visual-mock-registry.js",
     "test": "node --import ./test/_preload-env.mjs --test --test-force-exit test/*.test.mjs test/integration/*.test.mjs",
     "test:unit": "node --import ./test/_preload-env.mjs --test test/*.test.mjs",
-    "test:integration": "node --test --test-force-exit test/integration/*.test.mjs",
+    "test:integration": "node --import ./test/_preload-env.mjs --test --test-force-exit test/integration/*.test.mjs",
     "test:coverage": "node --import ./test/_preload-env.mjs --experimental-test-coverage --test test/*.test.mjs",
     "test:visual": "node scripts/visual-e2e-runner.js",
     "test:playwright": "playwright test",

@@ -715,6 +715,24 @@
     </div>
   </div>
 
+  <!-- 两级删除会话（FR-20，LLD §4）：L1=从产品移除（transcript 保留）/ L2=彻底删底层文件（二次确认，不可恢复）。 -->
+  <div id="deleteSessionModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--danger)">
+      <div class="sheet-handle"></div>
+      <div class="text-danger font-semibold mb-1">🗑 删除会话</div>
+      <div id="deleteSessionTitle" class="font-mono text-sm mb-3 text-ink truncate"></div>
+      <button id="deleteL1Btn" class="w-full text-left rounded-lg px-3 py-2.5 mb-2 bg-sunk active:bg-line text-sm">
+        <div class="text-ink font-medium">从列表移除</div>
+        <div class="text-ink-faint text-xs mt-0.5">仅从本产品隐藏；主机上的完整记录保留，可从终端 <span class="font-mono">claude --resume</span> 找回。</div>
+      </button>
+      <button id="deleteL2Btn" class="w-full text-left rounded-lg px-3 py-2.5 mb-3 bg-danger/10 border border-danger/40 active:bg-danger/20 text-sm">
+        <div class="text-danger font-medium">彻底删除（含底层文件）</div>
+        <div class="text-ink-faint text-xs mt-0.5">真删主机上的会话记录文件，<span class="text-danger">不可恢复</span>；点击后需再次确认。</div>
+      </button>
+      <button id="deleteSessionCancel" class="w-full rounded-lg px-3 py-2 text-sm text-ink-soft active:bg-sunk">取消</button>
+    </div>
+  </div>
+
   <!-- 实时运行日志弹窗 (Slide-Up Console Drawer) -->
   <div id="consoleModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
     <div class="w-full h-[70vh] bg-gray-900/95 backdrop-blur-md rounded-t-2xl flex flex-col safe-bottom border-t border-gray-800" style="box-shadow:var(--shadow-pop)">

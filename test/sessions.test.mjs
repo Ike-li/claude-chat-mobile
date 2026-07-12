@@ -191,4 +191,45 @@ test.describe('sessions.js 单元测试', () => {
   // 注：原 defaultModelForCwd 单测已随该函数删除（A1，2026-06-22）——空首页不再推断/显示模型，
   // 改显「不指定（沿用当前）」、首条消息后由 init.model 校正。空首页权限/思考强度档解析在 server.js
   // （新会话用 CLI 启动默认、不继承），属需起服务端的集成行为，不在此纯逻辑单测覆盖。
+
+  // ── 两级删除 L1：hideSession/unhideSession/isHidden/getHiddenIds（FR-20） ──────
+
+  test('isHidden: 未隐藏的 id 返回 false', () => {
+    assert.equal(S.isHidden('never-hidden'), false);
+  });
+
+  test('hideSession + isHidden: 隐藏后可查到', () => {
+    S.hideSession('hide-me');
+    assert.equal(S.isHidden('hide-me'), true);
+  });
+
+  test('hideSession: 重复调用不产生重复条目', () => {
+    S.hideSession('dup-hide');
+    S.hideSession('dup-hide');
+    const count = S.getHiddenIds().filter(id => id === 'dup-hide').length;
+    assert.equal(count, 1);
+  });
+
+  test('hideSession: 非字符串/空字符串静默忽略', () => {
+    const before = S.getHiddenIds().length;
+    S.hideSession(null);
+    S.hideSession(undefined);
+    S.hideSession('');
+    assert.equal(S.getHiddenIds().length, before);
+  });
+
+  test('unhideSession: 移除后 isHidden 变 false', () => {
+    S.hideSession('to-unhide');
+    assert.equal(S.isHidden('to-unhide'), true);
+    S.unhideSession('to-unhide');
+    assert.equal(S.isHidden('to-unhide'), false);
+  });
+
+  test('unhideSession: 不存在的 id 静默忽略（不抛）', () => {
+    assert.doesNotThrow(() => S.unhideSession('never-was-hidden'));
+  });
+
+  test('getHiddenIds: 返回数组', () => {
+    assert.ok(Array.isArray(S.getHiddenIds()));
+  });
 });

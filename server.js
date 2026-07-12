@@ -15,8 +15,9 @@ import express from 'express';
 import compression from 'compression';
 import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
+import { deleteSession as sdkDeleteSession } from '@anthropic-ai/claude-agent-sdk';
 import * as sessions from './sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, getProjectDir, invalidateListCache, catchUpStep, mirrorReleaseStep, readLastPermissionMode } from './history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, mirrorReleaseStep, readLastPermissionMode } from './history.js';
 import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY } from './notifications.js';
 import { attributePath, buildDiff, readPreview } from './file-preview.js';
 import { runDoctor } from './doctor-runtime.js';
@@ -81,6 +82,9 @@ let sessionLimitByDir = new Map();
 
 const idleTimeoutMs = Number(IDLE_TIMEOUT_MS) > 0 ? Number(IDLE_TIMEOUT_MS) : 600000;
 const approvalTtlMs = Number(APPROVAL_TTL_MS) > 0 ? Number(APPROVAL_TTL_MS) : 1800000;
+// FR-20 两级删除 L2 的活跃会话保护②（承接 LLD §4"建议 5min，可配"）：transcript mtime 距今小于此值
+// 即拒绝删除——纯终端进程正驱动的会话后端无法确证（同 AD-3 盲区），mtime 是启发式护栏、非完备判定。
+const sessionDeleteQuietMs = Number(process.env.SESSION_DELETE_QUIET_MS) > 0 ? Number(process.env.SESSION_DELETE_QUIET_MS) : 300000;
 const notifyThrottleMs = Number(NOTIFY_THROTTLE_MS) > 0 ? Number(NOTIFY_THROTTLE_MS) : 60000;
 let notifyThrottleState = new Map(); // per-会话推送节流态（LLD §3.6.1），sessionId → {[category]:{notifiedAt,pending}}；
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
@@ -1729,8 +1733,62 @@ io.on('connection', socket => {
     // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
     const all = obj.all === true;
     const limit = all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
-    const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit });
+    // hiddenIds（FR-20 两级删除 L1）：L1 删除的会话从这里过滤掉，不出现在列表里（transcript 仍在盘上）。
+    const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit, hiddenIds: new Set(sessions.getHiddenIds()) });
     ack({ currentSessionId, sessions: list, hasMore: all ? false : hasMore });
+  });
+
+  // 两级删除 L1（FR-20，承接 LLD §4）：默认删——只从产品可见列表移除，transcript 原样保留在主机磁盘，
+  // 可从终端 `claude --resume` 或再次经本产品扫盘找回（"隐藏"而非"删除"，但对用户呈现为"删除"）。
+  on(socket, 'session:delete', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { sessionId } = payload || {};
+    const cwd = routeCwd(payload?.cwd);
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      return ack({ ok: false, error: '会话不存在' });
+    }
+    sessions.hideSession(sessionId);
+    if (sessions.getCurrent(cwd) === sessionId) sessions.setCurrent(cwd, null); // 别让指针继续指向一个刚被隐藏的会话
+    invalidateListCache(cwd);
+    audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l1', target: sessionId, outcome: 'success', meta: { cwd } });
+    ack({ ok: true });
+  });
+
+  // 两级删除 L2（FR-20，承接 LLD §4）：显式二次确认（前端二次弹窗把关，本端不重复校验"是否已二次确认"
+  // 这种 UI 语义——收到这个事件本身就代表用户已经过确认）——真删底层 transcript 文件，不可恢复。
+  // 活跃会话保护两道，任一不过 fail-closed 拒绝（防与 claude 侧并发写分叉，§8.3 已登记启发式非完备）。
+  on(socket, 'session:deletePermanent', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const { sessionId } = payload || {};
+    const cwd = routeCwd(payload?.cwd);
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      return ack({ ok: false, error: '会话不存在' });
+    }
+    // 保护①：无活跃 web driver——该会话正被本产品的 canUseTool/turn 驱动中，此刻删文件必与写盘竞态。
+    if (instanceForSession(sessionId)) {
+      return ack({ ok: false, error: '会话正在被本产品驱动，请先结束或关闭该会话再删除' });
+    }
+    // 保护②：transcript mtime 静默阈值——纯终端进程正驱动无法确证，mtime 新鲜即拒绝（启发式非完备）。
+    const mtimeMs = await sessionFileMtime(sessionId, cwd);
+    if (mtimeMs < 0) return ack({ ok: false, error: '会话不存在' });
+    if (Date.now() - mtimeMs < sessionDeleteQuietMs) {
+      return ack({ ok: false, error: '会话可能正被终端使用，请稍后再试' });
+    }
+    // 原子性：先删指针（隐藏 + 清当前指针），后删文件——万一进程在两步之间崩溃，宁可留一个"已隐藏但
+    // 文件还在"的孤儿文件（用户看不到、无害），也不要出现"指针还在指向一个已被删文件"的悬空引用。
+    sessions.hideSession(sessionId);
+    if (sessions.getCurrent(cwd) === sessionId) sessions.setCurrent(cwd, null);
+    invalidateListCache(cwd);
+    try {
+      await sdkDeleteSession(sessionId, { dir: cwd }); // 官方 API：真删 {sessionId}.jsonl + 子 agent transcript 子目录
+    } catch (err) {
+      console.error(`[session-delete] L2 删除底层文件失败 sessionId=${sessionId}:`, err.message);
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'partial_failure', meta: { cwd } });
+      return ack({ ok: false, error: `已从列表移除，但底层文件删除失败：${err.message}` });
+    }
+    sessions.unhideSession(sessionId); // 文件已真删，隐藏名单不必再为它长期占位
+    audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
+    ack({ ok: true });
   });
 
   // 项目文件只读浏览（LLD §3.4.2 FileBrowseHandler，承接 AD-12/FR-07）：请求-响应型，不进事件流/

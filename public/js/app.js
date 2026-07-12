@@ -91,6 +91,7 @@ import { verifyIntegrity } from './canonicalize.js';
   const permModal = $('permModal'), permTool = $('permTool'), permCwd = $('permCwd'),
         permInput = $('permInput'), permAlways = $('permAlways'), permIntegrityWarn = $('permIntegrityWarn');
   const questionModal = $('questionModal'), questionText = $('questionText'), questionOptions = $('questionOptions');
+  const deleteSessionModal = $('deleteSessionModal'), deleteSessionTitle = $('deleteSessionTitle'), deleteL1Btn = $('deleteL1Btn'), deleteL2Btn = $('deleteL2Btn'), deleteSessionCancel = $('deleteSessionCancel');
   const authGate = $('authGate'), authToken = $('authToken'), authSubmit = $('authSubmit'), authError = $('authError'); // 访问令牌输入页
   const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // Access 会话过期重登浮层
   // 远程设备审批 + 访问帮助 UI
@@ -2499,6 +2500,39 @@ import { verifyIntegrity } from './canonicalize.js';
     }, 300);
   }
 
+  // ---- 两级删除会话（FR-20，LLD §4）----
+  // L1=从产品移除（session:delete，transcript 保留）；L2=彻底删底层文件（session:deletePermanent，二次确认）。
+  // 只对「未打开的历史会话」提供入口（见 sessionRow）——已打开的会话先关闭 tab 再删，避免删一个正被本产品
+  // 驱动的会话（后端 L2 保护①也会拒，但前端不给入口更清晰）。此块只执行一次（IIFE 顶层），非每次渲染。
+  let deleteTarget = null; // { sessionId, cwd, title }
+  function openDeleteSession(sessionId, cwd, title) {
+    deleteTarget = { sessionId, cwd, title };
+    deleteSessionTitle.textContent = title || sessionId;
+    openSheet(deleteSessionModal);
+  }
+  if (deleteSessionCancel) deleteSessionCancel.onclick = () => { deleteTarget = null; closeSheet(deleteSessionModal); };
+  if (deleteL1Btn) deleteL1Btn.onclick = () => {
+    if (!deleteTarget) return;
+    const t = deleteTarget; deleteTarget = null;
+    closeSheet(deleteSessionModal);
+    socket.emit('session:delete', { sessionId: t.sessionId, cwd: t.cwd }, res => {
+      if (res?.ok) { addBar(`已从列表移除：${t.title || t.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
+      else addBar(res?.error || '移除失败', 'text-danger');
+    });
+  };
+  if (deleteL2Btn) deleteL2Btn.onclick = () => {
+    if (!deleteTarget) return;
+    const t = deleteTarget;
+    // L2 显式二次确认（LLD §4"显式二次确认删底层 transcript 文件"）——不可恢复，故在 L1 一级弹窗之上再加一道。
+    if (!confirm(`彻底删除会话「${t.title || t.sessionId}」的底层文件？\n\n此操作不可恢复：主机上的会话记录将被真正抹除。`)) return;
+    deleteTarget = null;
+    closeSheet(deleteSessionModal);
+    socket.emit('session:deletePermanent', { sessionId: t.sessionId, cwd: t.cwd }, res => {
+      if (res?.ok) { addBar(`已彻底删除：${t.title || t.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
+      else addBar(res?.error || '彻底删除失败', 'text-danger');
+    });
+  };
+
   // ---- 项目文件只读浏览（FR-07，LLD §3.4.2 FileBrowseHandler）----
   // 请求-响应型（browse:list/browse:read 走 ack 回调，不进事件流）；范围裁决在服务端 WorkdirScopeGuard，
   // 前端不做任何"越界预判"——只管把服务端 ok:false 的错误展示出来。
@@ -2934,6 +2968,18 @@ import { verifyIntegrity } from './canonicalize.js';
             }
           };
           rowContent.appendChild(closeBtn);
+        }
+
+        // 未打开的历史会话：两级删除入口（FR-20）。已打开的会话走上面的关闭 tab，不在此重复给删除入口
+        // （删一个正被本产品驱动的会话语义混乱，后端 L2 保护①也会拒）。无 id 的新会话（未落盘）无从删。
+        if (s.id && !liveInst) {
+          const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" title="删除会话">🗑</button>`);
+          delBtn.onclick = e => {
+            e.stopPropagation();
+            haptic('warning');
+            openDeleteSession(s.id, rowCwd, s.title);
+          };
+          rowContent.appendChild(delBtn);
         }
 
         container.appendChild(rowContent);

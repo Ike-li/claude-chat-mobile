@@ -7,6 +7,10 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { MAX_SESSION_LIMIT } from './workdirs.js';
 
+// CLI transcript 根目录，与 CLI /resume 同源。硬编码 ~/.claude/projects：这是 CLI 的固定约定，且
+// L2 删除走 SDK 官方 deleteSession（它同样只认此真实根、无自定义根的口子），故这里不设环境变量覆盖——
+// 设了也只能隔离本模块的"读"、隔离不了 SDK 的"删"，反而制造读写目录分叉。单测走各函数的 baseDir
+// 参数注入实现隔离；需要真跑 L2 删除的集成测试直接用真实目录下的一次性随机子目录 + 严格清理。
 const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
 // 历史回显防爆上限：极端超大会话只回最近 N 条 user/assistant，避免一次性把手机 DOM 撑爆。
 // 正常会话（几百条内）全量返回——与 CLI /resume 的完整历史一致（终端等价性）。不再按字节截断头部。
@@ -216,14 +220,27 @@ function isCliSystemLine(content) {
 // baseDir 仅供单测注入临时夹具；生产用默认 CLAUDE_DIR。
 // 返回 { sessions, hasMore }：hasMore=该目录会话总数 > limit（诚实计算，非 length===limit 猜测），
 // 供前端决定是否显示「显示全部」。缓存键含 limit——否则 limit=6 结果会在 TTL 内污染 all(limit=50) 请求。
-export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT } = {}) {
+// hiddenIds（FR-20 两级删除 L1，承接 LLD §4）：本函数是 session:list 的真实数据源（直接扫盘，不依赖
+// sessions.json 注册表），故"删除产品可见引用"必须在这里过滤，而不是只删 sessions.js 的指针——否则
+// L1 删除后会话仍会在下次 session:list 时原样列出。传空 Set/不传 = 不过滤（向后兼容旧调用点）。
+// 过滤发生在扫盘结果（含缓存）之后、按 limit 截断的窗口之内——已被隐藏的会话若恰好排在最近 N 条内，
+// 会占掉一个显示配额（下拉即少显示一条，而非自动补下一条）。Could 优先级下接受这个小瑕疵：换成
+// "过滤后再截断"须让缓存也按 hiddenIds 分裂存储（Set 又不宜做缓存键），复杂度不成比例。
+export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT, hiddenIds } = {}) {
   const dir = join(baseDir, getProjectDir(cwd));
   const cacheKey = `${dir}:${limit}`;
 
-  // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + N×readHeadMeta）
+  // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + N×readHeadMeta）——隐藏名单不进缓存键：
+  // 缓存的是"该 cwd 全部会话"的扫盘结果，隐藏过滤在缓存之后应用，删除后 invalidateListCache 仍照常生效。
   const cached = _listCache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < LIST_CACHE_TTL) return cached.result;
+  const fromScan = cached && Date.now() - cached.ts < LIST_CACHE_TTL
+    ? cached.result
+    : await scanSessionsPage(dir, limit, cacheKey);
+  if (!hiddenIds || hiddenIds.size === 0) return fromScan;
+  return { ...fromScan, sessions: fromScan.sessions.filter(s => !hiddenIds.has(s.id)) };
+}
 
+async function scanSessionsPage(dir, limit, cacheKey) {
   let names;
   try {
     names = await readdir(dir);
@@ -412,6 +429,19 @@ export async function sessionFileSize(sessionId, cwd, { baseDir = CLAUDE_DIR } =
   try {
     const { size } = await stat(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`));
     return size;
+  } catch {
+    return -1;
+  }
+}
+
+// L2 删除的活跃会话保护②用（FR-20，承接 LLD §4）：mtime 距今 < 静默阈值即视为"可能正被终端使用"——
+// 纯终端进程正驱动的会话后端无法确证（同 AD-3 盲区），mtime 是文件系统元数据级的启发式护栏，非内容
+// 解析，诚实登记非完备。id 同 sessionFileExists 做字符集校验防路径穿越；不存在/非法 id → -1。
+export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
+  if (typeof sessionId !== 'string' || !/^[0-9a-zA-Z_-]+$/.test(sessionId)) return -1;
+  try {
+    const { mtimeMs } = await stat(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`));
+    return mtimeMs;
   } catch {
     return -1;
   }
