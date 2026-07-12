@@ -143,3 +143,69 @@ test('keepAlive：终端「跑工具」转「真静默」→ keepAlive 停止后
   r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, localBusy: false });
   assert.equal(r.readonly, false, '真静默满 5 tick → 自动解锁');
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 尾部形态 tailPending（2026-07-12 单驾驶员模型）：keepAlive 罩不住的场景——终端在跑一个【长时间零写盘】
+// 的工具调用（深度搜索/长编译，一条 bash 跑几分钟），期间文件完全不增长（keepAlive=false）、更无 text
+// （externalWrite=false）→ 原实现 12.5s 静默窗误判解锁、横幅熄灭，用户体感「感觉没东西在跑」（真实报障）。
+// classifyTranscriptTail 从磁盘尾部形态读出「轮次未完结」（tool_use 落了结果没落 / user 落了回复没落）→
+// tailPending=true 与 keepAlive 同权重：已锁维持、quietTicks 清零；未锁不上锁（形态判定万一失误也不锁死
+// 输入，上锁仍只靠 externalWrite 强判据 + catchUpTick 切入预判）。两判据互补：keepAlive 罩 settled 误判窗
+// （assistant 中途 text 落盘紧跟 tool_use 的落盘间隙），tailPending 罩长工具零写入窗。
+
+test('tailPending：已锁 + 长工具调用零写入（文件不长、无 text）→ 维持锁、绝不因静默累计误解锁', () => {
+  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+  let s = { readonly: false, quietTicks: 0 };
+  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state; // text 写入上锁
+  // 此后 12 tick(30s)：终端卡在一条长 bash 上，磁盘零写入——keepAlive=false、externalWrite=false，
+  // 但尾部形态=tool_use 未见结果 → tailPending=true。原实现第 5 tick 就误解锁（用户报的 bug）。
+  for (let i = 0; i < 12; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, tailPending: true, localBusy: false }); s = r.state; }
+  assert.equal(r.readonly, true, '尾部形态=轮次未完结 → 不管磁盘静默多久都维持锁');
+  assert.equal(s.quietTicks, 0, 'tailPending 每 tick 把 quietTicks 清零');
+});
+
+test('tailPending：未上锁时不凭空造锁（上锁只靠 externalWrite / 切入预判，形态误判不锁死输入）', () => {
+  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+  let s = { readonly: false, quietTicks: 0 };
+  for (let i = 0; i < 8; i++) { const r = H.mirrorReleaseStep(s, { externalWrite: false, keepAlive: false, tailPending: true, localBusy: false }); s = r.state; }
+  assert.equal(s.readonly, false, '未锁 + tailPending → 保持未锁');
+});
+
+test('tailPending：轮次收尾（pending→settled）后走原静默解锁——连续 5 静默 tick 才解', () => {
+  assert.equal(typeof H.mirrorReleaseStep, 'function', '待实现：mirrorReleaseStep');
+  let s = { readonly: false, quietTicks: 0 };
+  let r = H.mirrorReleaseStep(s, { externalWrite: true, localBusy: false }); s = r.state;      // 上锁
+  for (let i = 0; i < 8; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, tailPending: true, localBusy: false }); s = r.state; } // 长工具中
+  assert.equal(r.readonly, true);
+  for (let i = 0; i < 4; i++) { r = H.mirrorReleaseStep(s, { externalWrite: false, tailPending: false, localBusy: false }); s = r.state; } // 收尾且真静默
+  assert.equal(r.readonly, true, 'settled 后静默 4 tick 未达阈值 → 仍锁');
+  r = H.mirrorReleaseStep(s, { externalWrite: false, tailPending: false, localBusy: false });
+  assert.equal(r.readonly, false, 'settled 后真静默满 5 tick → 解锁');
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 切入预锁 + stale 判定（catchUpTick 接线用的两个决策纯函数）：
+// · mirrorEntryLock——切入会话瞬间按尾部形态预判：PENDING=有人正驱动 → 立即预锁，堵「切走再切回、
+//   终端还在跑但要等下一条 text 落盘才锁」的空窗。旧行为「切入不预锁」是因为 mtime 判活不可信；
+//   尾部形态是语义判据、可信。localBusy（web 自己在跑，尾部 PENDING 是己方 turn 的形态）豁免。
+// · mirrorStaleFlag——锁着 + 尾部 PENDING + 最后链条目距今超阈值（零写入）→ 疑似终端被强杀/断电、
+//   轮次没写完就死了：前端从「终端驾驶中」转「疑似中断、可接管」文案。仅在锁态下才有意义。
+
+test('mirrorEntryLock：切入时尾部 pending 且 web 空闲 → 预锁；settled / 己方在跑 → 不锁', () => {
+  assert.equal(typeof H.mirrorEntryLock, 'function', '待实现：mirrorEntryLock');
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false }), true, '外部驱动中 → 预锁');
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: false }), false, '已收尾 → 不锁');
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: true }), false, '己方 turn 的 pending 形态 → 不误锁');
+});
+
+test('mirrorStaleFlag：锁定 + pending + 零写入超 5 分钟 → stale；未超/未锁/已收尾/无时间戳 → 非 stale', () => {
+  assert.equal(typeof H.mirrorStaleFlag, 'function', '待实现：mirrorStaleFlag');
+  assert.equal(typeof H.MIRROR_STALE_PENDING_MS, 'number');
+  const now = 1_800_000_000_000;
+  const over = now - H.MIRROR_STALE_PENDING_MS - 1, under = now - H.MIRROR_STALE_PENDING_MS + 1000;
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }), true, '超阈值 → 疑似中断');
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now }), false, '未超阈值 → 仍算驾驶中');
+  assert.equal(H.mirrorStaleFlag({ readonly: false, tailPending: true, lastChainTs: over, now }), false, '未锁 → stale 无意义');
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: false, lastChainTs: over, now }), false, '已收尾 → 非中断');
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: null, now }), false, '无时间戳 → 保守非 stale');
+});

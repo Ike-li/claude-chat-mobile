@@ -922,6 +922,26 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:mirror',
+      run: async () => {
+        console.log('[mock] test:mirror — 只读镜像锁三态：驾驶中 → 疑似中断(stale) → 解锁');
+        const mkMirror = (readonly, stale) => ({
+          seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'mirror_state', payload: { readonly, stale }
+        });
+        socket.emit('agent:event', mkMirror(true, false));   // ⏱ 终端驾驶中
+        await delay(1500);                                    // 给 runner 断言驾驶态+设置冻结留窗
+        socket.emit('agent:event', mkMirror(true, true));    // ⚠️ 疑似中断（pending 超时零写入）
+        await delay(1500);                                    // 给 runner 断言 stale 态留窗
+        socket.emit('agent:event', mkMirror(false, false));  // 解锁
+        await delay(200);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_mirror_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:console-log-after-clear',
       run: async () => {
         console.log('[mock] Emitting console log after clear');

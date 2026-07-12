@@ -183,18 +183,22 @@ export function catchUpStep(state, { messages, localBusy = false }) {
 //   · keepAlive（transcript 文件仍在增长=终端在写盘，但落的是 tool_use/tool_result 等不进 text-only catchUpStep len 的条目）
 //     → 【已锁时】维持锁、quietTicks 清零，免得终端密集跑工具/思考期间被误判静默而熄横幅；【不上锁】——上锁只靠
 //     externalWrite（未锁分支在下方先 return），文件增长不凭空造锁，不把 web 自己 resume 的写盘误判成终端锁；
-//   · idle 且无外部写入、文件也不再增长（真静默）→ quietTicks++；累计到 MIRROR_RELEASE_QUIET_TICKS → 自动解锁。
+//   · tailPending（classifyTranscriptTail 判尾部形态=轮次未完结：tool_use 落了结果没落 / user 落了回复没落）
+//     → 与 keepAlive 同权重（已锁维持、未锁不造锁）。两判据互补：keepAlive 罩 settled 误判窗（assistant 中途
+//     text 落盘紧跟 tool_use 的落盘间隙），tailPending 罩【长工具调用零写盘窗】——终端卡在一条几分钟的
+//     bash/搜索上，文件完全不增长，原实现 12.5s 误判解锁、横幅熄灭（2026-07-12 真实报障「感觉没东西在跑」）；
+//   · idle 且无外部写入、文件不再增长、尾部形态已收尾（真静默）→ quietTicks++；累计到 MIRROR_RELEASE_QUIET_TICKS → 自动解锁。
 // 保守取舍：keepAlive 用文件增长做「终端还活着」的弱判据【仅延缓解锁】——是本项目刻意规避的「mtime 判活」近亲，
 //   但风险低一档（不上锁→绝不误锁死进不去，最坏是终端真停后晚 ~N tick 才解锁）；前端「仍要发送」手动接管仍是兜底。
 //   ⚠️ 前提：web 纯查看 idle 期间其自身 resume 进程不 append transcript（否则 keepAlive 恒真→退回锁死，靠接管兜）——须 live 验证。
 export const MIRROR_RELEASE_QUIET_TICKS = 5; // ×CATCH_UP_INTERVAL_MS(2.5s) ≈ 12.5s 终端静默 → 自动解锁
-export function mirrorReleaseStep(state, { externalWrite = false, keepAlive = false, localBusy = false } = {}) {
+export function mirrorReleaseStep(state, { externalWrite = false, keepAlive = false, tailPending = false, localBusy = false } = {}) {
   const prevReadonly = Boolean(state?.readonly);
   const prevQuiet = Number(state?.quietTicks) || 0;
   if (externalWrite) return { readonly: true, state: { readonly: true, quietTicks: 0 } };
   if (localBusy) return { readonly: prevReadonly, state: { readonly: prevReadonly, quietTicks: 0 } };
   if (!prevReadonly) return { readonly: false, state: { readonly: false, quietTicks: 0 } };
-  if (keepAlive) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘（跑工具/思考）→ 维持锁、静默清零；不上锁靠上一行未锁 return
+  if (keepAlive || tailPending) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
   const quietTicks = prevQuiet + 1;
   const readonly = quietTicks < MIRROR_RELEASE_QUIET_TICKS;
   return { readonly, state: { readonly, quietTicks: readonly ? quietTicks : 0 } };
@@ -443,6 +447,86 @@ export async function readLastPermissionMode(sessionId, cwd, { baseDir = CLAUDE_
     }
   } catch {
     return null; // 文件不存在/读失败：回落上层默认
+  }
+}
+
+// 切入预锁决策（catchUpTick 切换分支用）：切入会话瞬间按尾部形态预判——PENDING=有人正驱动这个会话
+// （终端 CLI 或别的设备），立即预锁，堵「切走再切回、终端还在跑但要等下一条 text 落盘才锁」的空窗。
+// 旧行为「切入不预锁」是因为当时唯一判据 mtime 不可信（web 自己 resume 就刷 mtime）；尾部形态是语义
+// 判据、可信。localBusy 豁免：web 自己在跑 turn 时尾部 PENDING 是己方 turn 的形态，不能当外部驱动误锁。
+export function mirrorEntryLock({ tailVerdict, localBusy = false } = {}) {
+  return tailVerdict === 'pending' && !localBusy;
+}
+
+// 疑似中断判定：锁着 + 尾部 PENDING + 最后链条目距今超阈值（期间零写入）→ 终端可能被强杀/断电、轮次没
+// 写完就死了。前端据此从「⏱ 终端驾驶中」转「⚠️ 疑似中断、可接管」文案（仍保持锁、不自动解锁——接管
+// 始终要用户显式确认）。阈值 5 分钟：慢工具（长编译/深度搜索）常见 1-3 分钟零写入，5 分钟大概率真死了；
+// 误判代价低——只是提前显示「可接管」引导，不改变锁态。
+export const MIRROR_STALE_PENDING_MS = 5 * 60_000;
+export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now } = {}) {
+  return Boolean(readonly && tailPending && lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS));
+}
+
+// ── 尾部形态判定（单驾驶员模型核心判据，2026-07-12 本机实验实证）────────────────────────────
+// 依据：CLI 每个动作即时落盘——assistant 发起 tool_use 先落、tool_result 回来再落、最终文本收尾落。
+// 于是消息链最后一条的形态可直接读出「轮次是否完结」，不依赖磁盘静默时间窗猜测——修「终端长工具
+// 调用（深度搜索/长编译）期间磁盘零写入 >12.5s 被 mirrorReleaseStep 静默窗误判成终端停了、横幅熄灭」。
+// 实测双样本：正在跑的会话（尾=tool_result 等 assistant）判 pending ✓、已结束的（尾=assistant 纯文本）判 settled ✓。
+// 分类表（链条目 = type∈{user,assistant} 且非 isSidechain；倒序取最后一条）：
+//   assistant 含 tool_use            → pending（正在执行工具，结果未落盘）
+//   assistant 含 text（无 tool_use）  → settled（轮次收尾；'No response requested.' 自然覆盖）
+//   assistant 只有 thinking          → pending（流式中间态，text/tool_use 未落）
+//   user 含 tool_result              → pending（等 assistant 消费结果继续）
+//   user 中断标记 [Request interrupted…] → settled（轮次被 Ctrl+C 掐掉）
+//   user 其他文本                     → pending（等 assistant 回复）
+//   无任何链条目/文件不存在           → settled（新会话/纯 meta：不锁）
+// 注意 settled 有一个已知误判窗：assistant 中途 text 落盘、紧接着还要发 tool_use（多段输出）——落盘间隙
+// 尾部短暂呈 settled。调用方（server catchUpTick）靠 keepAlive（文件增长）判据互补罩住，两者叠加使用。
+export function classifyTailEntries(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (!e || (e.type !== 'user' && e.type !== 'assistant') || e.isSidechain) continue;
+    const lastChainTs = e.timestamp ? (Date.parse(e.timestamp) || null) : null;
+    const c = e.message?.content;
+    const blocks = Array.isArray(c) ? c : null;
+    if (e.type === 'assistant') {
+      if (blocks?.some(b => b?.type === 'tool_use')) return { verdict: 'pending', lastChainTs };
+      if (blocks ? blocks.some(b => b?.type === 'text') : typeof c === 'string') return { verdict: 'settled', lastChainTs };
+      return { verdict: 'pending', lastChainTs }; // 只有 thinking / 空内容：流式中间态
+    }
+    // user
+    if (blocks?.some(b => b?.type === 'tool_result')) return { verdict: 'pending', lastChainTs };
+    const text = typeof c === 'string' ? c : (blocks || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
+    if (/^\[Request interrupted by user[^\]]*\]$/.test(text.trim())) return { verdict: 'settled', lastChainTs };
+    return { verdict: 'pending', lastChainTs };
+  }
+  return { verdict: 'settled', lastChainTs: null }; // 无链条目：不锁
+}
+
+// IO 包装：读 transcript 尾窗 → 解析 → classifyTailEntries。尾窗/半行处理与 readLastPermissionMode 同款。
+// 极端边界：若最后一条链条目距文件尾 >512KB（如超巨型子 agent 尾巴），尾窗里无链条目 → settled（不锁、
+// 不误伤输入；镜像锁的兜底仍有 externalWrite 判据在）。
+export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
+  const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
+  try {
+    const fh = await open(file, 'r');
+    try {
+      if (size == null) ({ size } = await fh.stat());
+      if (size === 0) return { verdict: 'settled', lastChainTs: null };
+      const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
+      const buf = Buffer.allocUnsafe(size - start);
+      const { bytesRead } = await fh.read(buf, 0, size - start, start);
+      const entries = [];
+      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+        if (!line.trim()) continue;
+        try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行/写入中的截断尾行：跳过 */ }
+      }
+      return classifyTailEntries(entries);
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  } catch {
+    return { verdict: 'settled', lastChainTs: null }; // 文件不存在/读失败：不锁
   }
 }
 

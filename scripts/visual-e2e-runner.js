@@ -1334,6 +1334,58 @@ async function run() {
     console.log('📸 Captured and saved tc19_long_model_truncate.png');
     console.log('✅ TC-19: 超长模型名底栏 chip 单行截断 passed\n');
 
+    // ==================================================================
+    // TC-20: 只读镜像锁三态（单驾驶员模型）——⏱ 驾驶中(锁+设置冻结) → ⚠️ 疑似中断(stale) → 解锁恢复
+    // ==================================================================
+    console.log('👉 Running TC-20: 只读镜像锁三态 + 驾驶期设置冻结...');
+    await sendCommand('test:mirror');
+
+    // 1) 驾驶中态：横幅亮、⏱ 图标、输入禁用
+    await page.waitForSelector('#mirrorBanner:not(.hidden)', { timeout: 5000 });
+    const drivingTC20 = await page.evaluate(() => ({
+      icon: document.getElementById('mirrorBannerIcon')?.textContent || '',
+      text: document.getElementById('mirrorBannerText')?.textContent || '',
+      inputDisabled: document.getElementById('input')?.disabled === true,
+      syncBtnVisible: !!document.getElementById('btnMirrorSync'),
+    }));
+    assert.strictEqual(drivingTC20.icon, '⏱', 'TC-20: 驾驶中态图标应为 ⏱');
+    assert.ok(drivingTC20.text.includes('终端驾驶中'), 'TC-20: 驾驶中态文案应含「终端驾驶中」');
+    assert.strictEqual(drivingTC20.inputDisabled, true, 'TC-20: 驾驶中输入框应禁用');
+    assert.strictEqual(drivingTC20.syncBtnVisible, true, 'TC-20: 横幅应有「立即同步」按钮');
+    await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc20_mirror_driving.png` });
+    console.log('📸 Captured and saved tc20_mirror_driving.png');
+
+    // 2) 驾驶期设置冻结：点模型磁贴不生效 + 提示"设置已冻结"
+    const modelBeforeTC20 = await page.evaluate(() => document.getElementById('modelInput')?.value ?? '');
+    await page.evaluate(() => {
+      const tile = [...document.querySelectorAll('#customModelGrid .model-tile')].find(t => (t.dataset.model || '') !== '');
+      tile?.click();
+    });
+    await sleep(300);
+    const frozenTC20 = await page.evaluate(() => {
+      const bars = [...document.querySelectorAll('#messages div')].map(d => d.textContent || '');
+      return {
+        modelAfter: document.getElementById('modelInput')?.value ?? '',
+        frozenBarShown: bars.some(t => t.includes('设置已冻结')),
+      };
+    });
+    assert.strictEqual(frozenTC20.modelAfter, modelBeforeTC20, 'TC-20: 驾驶期点模型磁贴不得改动选择');
+    assert.strictEqual(frozenTC20.frozenBarShown, true, 'TC-20: 驾驶期点设置应提示「设置已冻结」');
+
+    // 3) stale 态：⚠️ 疑似中断文案
+    await page.waitForFunction(() => document.getElementById('mirrorBannerIcon')?.textContent === '⚠️', { timeout: 5000 });
+    const staleTextTC20 = await page.evaluate(() => document.getElementById('mirrorBannerText')?.textContent || '');
+    assert.ok(staleTextTC20.includes('疑似中断'), 'TC-20: stale 态文案应含「疑似中断」');
+    await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc20_mirror_stale.png` });
+    console.log('📸 Captured and saved tc20_mirror_stale.png');
+
+    // 4) 解锁：横幅隐藏、输入恢复
+    await page.waitForSelector('#mirrorBanner.hidden', { timeout: 5000 });
+    const unlockedTC20 = await page.evaluate(() => document.getElementById('input')?.disabled === false);
+    assert.strictEqual(unlockedTC20, true, 'TC-20: 解锁后输入框应恢复可用');
+    await waitIdle();
+    console.log('✅ TC-20: 只读镜像锁三态 + 驾驶期设置冻结 passed\n');
+
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');
     console.log('==================================================================\n');

@@ -32,6 +32,7 @@ import { verifyIntegrity } from './canonicalize.js';
   const activeStatusPill = $('activeStatusPill'), activeStatusText = $('activeStatusText'), btnStopNew = $('btnStopNew');
   const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
+  const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText');
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
@@ -81,6 +82,7 @@ import { verifyIntegrity } from './canonicalize.js';
         </div>
       `);
       card.onclick = () => {
+        if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
         haptic('tap');
         modelInput.value = value;
         syncModelUI(value);
@@ -246,6 +248,7 @@ import { verifyIntegrity } from './canonicalize.js';
       </div>
     `);
     defCard.onclick = () => {
+      if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
       haptic('tap');
       modelInput.value = '';
       delete modelInput.dataset.fullModel;
@@ -267,6 +270,7 @@ import { verifyIntegrity } from './canonicalize.js';
         </div>
       `);
       card.onclick = () => {
+        if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
         haptic('tap');
         modelInput.value = val;
         delete modelInput.dataset.fullModel;
@@ -1869,6 +1873,9 @@ import { verifyIntegrity } from './canonicalize.js';
     }
   }
   permModeSelect.onchange = () => {
+    // 单驾驶员：终端驾驶中（只读锁）设置一并冻结——权限档实际只作用于 web 自己的实例、碰不到终端进程，
+    // 此刻切档只会造成「我切了怎么终端没变」的误解；接管后再调。拨回 select 防 UI 与实际档漂移。
+    if (mirrorReadonlySid) { permModeSelect.value = currentPermMode; addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; }
     const mode = permModeSelect.value;
     if (mode === currentPermMode) return;
     // bypass 二次危险确认（终端等价：终端首次 bypass 亦需确认）；取消则回退 select
@@ -1984,6 +1991,9 @@ import { verifyIntegrity } from './canonicalize.js';
     }
   }
   effortSelect.onchange = () => {
+    // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例、
+    // 往终端正在写的 transcript 里插 mode 记录行，驾驶期间尤其不该发生。拨回防漂移。
+    if (mirrorReadonlySid) { effortSelect.value = currentEffort || ''; addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; }
     // ultracode 档在 SDK 层不存在：解析成「借道 xhigh + 武装关键词」。effort 始终是后端认得的合法值。
     const { effort, ultracode } = resolveEffortSelection(effortSelect.value || null);
     const armedChanged = ultracode !== ultracodeArmed;
@@ -3362,10 +3372,19 @@ import { verifyIntegrity } from './canonicalize.js';
   }
 
   // 只读锁：会话被判「正在终端运行」时常驻横幅 + 禁用输入，硬防两进程并发写盘分叉。
-  function applyMirror(readonly, sessionId) {
+  // 三态文案（2026-07-12 单驾驶员）：stale=false=「⏱ 终端驾驶中」（尾部形态判轮次未完结，长工具调用零写盘
+  // 期间也维持——修「过一会儿感觉没在跑」误判）；stale=true=「⚠️ 疑似中断」（pending 但超 5 分钟零写入，
+  // 终端可能被强杀/断电，引导显式接管）。两态都保持锁，接管始终要用户确认。
+  function applyMirror(readonly, sessionId, stale = false) {
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
     mirrorReadonlySid = effective ? sessionId : null;
     mirrorBanner?.classList.toggle('hidden', !effective);
+    if (effective && mirrorBannerText && mirrorBannerIcon) {
+      mirrorBannerIcon.textContent = stale ? '⚠️' : '⏱';
+      mirrorBannerText.textContent = stale
+        ? '终端疑似中断于执行中（超 5 分钟无活动）——确认终端已停可接管'
+        : '终端驾驶中，这里只读追平——发送会与终端并发写盘、可能分叉';
+    }
     if (inputEl) inputEl.disabled = effective;
     if (effective) { if (btnSend) btnSend.disabled = true; } // 锁定：禁发送
     else updateSendButtonState();                            // 解锁：按有无文本恢复发送按钮态
@@ -3379,15 +3398,23 @@ import { verifyIntegrity } from './canonicalize.js';
     //   （承接 HLD AD-5；2026-07-12 机主确认 Phase 8 不做此 per-socket 大改、保留现状，见 server.js setMirror 登记。）
     const readonly = !!ev.payload?.readonly;
     if (readonly && ev.instanceId !== viewingInstanceId) return;
-    applyMirror(readonly, ev.sessionId);
+    applyMirror(readonly, ev.sessionId, !!ev.payload?.stale);
   }
-  // 「仍要发送」：用户确认终端已停、显式接管——解锁并记住本会话不再锁（切会话即失效）。
+  // 「仍要发送」：显式接管——弹窗确认（说清「不停终端进程 + 分叉后果 + 建议先 Ctrl+C」）后解锁并记住
+  // 本会话不再锁（切会话即失效）。接管后首次发送经 server 陈旧上下文守卫置换实例，吸收终端轮次。
   btnMirrorOverride?.addEventListener('click', () => {
     if (!mirrorReadonlySid) return;
+    if (!confirm('接管此会话？\n\n终端可能正在运行该会话。接管不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再接管。')) return;
     mirrorOverriddenSid = mirrorReadonlySid;
     applyMirror(false, mirrorReadonlySid);
     addBar('已接管：若终端仍在跑同一会话，并发发送有分叉风险', 'text-warning');
     inputEl?.focus();
+  });
+  // 「立即同步」：强制触发一次 server 追平 tick（正常 2.5s 自动跑，这里给"我要确定是最新的"一个确定性入口）
+  btnMirrorSync?.addEventListener('click', () => {
+    haptic('tap');
+    socket.emit('mirror:syncNow');
+    addBar('已请求同步终端最新消息', 'text-ink-faint');
   });
 
   // E18: 为代码块注入复制按钮（per-block，hover 时浮现）

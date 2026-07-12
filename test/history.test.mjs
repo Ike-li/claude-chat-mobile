@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, listSessions, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, lastPermissionMode, readLastPermissionMode } from '../history.js';
+import { getProjectDir, listSessions, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode } from '../history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -573,6 +573,94 @@ test('getSessionHistory: 超上限会话削顶到 HISTORY_MAX_MESSAGES，保留�
   assert.equal(msgs.length, HISTORY_MAX_MESSAGES);                       // 削顶到上限
   assert.equal(msgs[0].content, `消息 ${total - HISTORY_MAX_MESSAGES}`); // 头部被削，首条=倒数第 N 条
   assert.equal(msgs[msgs.length - 1].content, `消息 ${total - 1}`);      // 尾部（最新）保留
+});
+
+// ── classifyTranscriptTail：尾部形态判定（单驾驶员模型的核心判据，2026-07-12 实验实证）──────────
+// 依据：CLI 每个动作即时落盘——assistant 发起 tool_use 先落、tool_result 回来再落、最终文本收尾落。
+// 于是消息链最后一条的形态可直接读出「轮次是否完结」，不依赖磁盘静默时间窗猜测（修「长工具调用
+// 期间零写入 >12.5s 被误判成终端停了」）。实测双样本：正在跑的会话判 pending、已结束的判 settled。
+
+test('classifyTranscriptTail: assistant 纯文本收尾 → settled（轮次完结）', async () => {
+  const cwd = '/test/tail-settled';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'tsettled', [
+    { type: 'user', message: { role: 'user', content: '提问' }, timestamp: '2026-07-12T10:00:00.000Z' },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '想' }] }, timestamp: '2026-07-12T10:00:05.000Z' },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '答完了' }] }, timestamp: '2026-07-12T10:00:10.000Z' },
+    { type: 'last-prompt' }, // 真实形态：链条目后跟非链条目（实验 2b）
+  ]);
+  const r = await classifyTranscriptTail('tsettled', cwd, { baseDir: BASE });
+  assert.equal(r.verdict, 'settled');
+  assert.equal(r.lastChainTs, Date.parse('2026-07-12T10:00:10.000Z'));
+});
+
+test('classifyTranscriptTail: assistant 发起 tool_use（结果未落盘）→ pending（正在执行工具）', async () => {
+  const cwd = '/test/tail-tooluse';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'ttooluse', [
+    { type: 'user', message: { role: 'user', content: '提问' }, timestamp: '2026-07-12T10:00:00.000Z' },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] }, timestamp: '2026-07-12T10:00:05.000Z' },
+  ]);
+  const r = await classifyTranscriptTail('ttooluse', cwd, { baseDir: BASE });
+  assert.equal(r.verdict, 'pending');
+});
+
+test('classifyTranscriptTail: user/tool_result 落盘、assistant 下一步未落 → pending（实验 2a 真实形态）', async () => {
+  const cwd = '/test/tail-toolresult';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'ttoolres', [
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] }, timestamp: '2026-07-12T10:00:00.000Z' },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] }, timestamp: '2026-07-12T10:00:03.000Z' },
+    // 实验 2a 实测：tool_result 后面跟一串非链条目，分类须跳过它们、按最后链条目判
+    { type: 'last-prompt' }, { type: 'ai-title' }, { type: 'agent-name' }, { type: 'mode' }, { type: 'permission-mode' },
+  ]);
+  const r = await classifyTranscriptTail('ttoolres', cwd, { baseDir: BASE });
+  assert.equal(r.verdict, 'pending');
+  assert.equal(r.lastChainTs, Date.parse('2026-07-12T10:00:03.000Z'));
+});
+
+test('classifyTranscriptTail: user 文本未获回复 → pending；中断标记收尾 → settled', async () => {
+  const cwd = '/test/tail-user';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'tuserwait', [
+    { type: 'user', message: { role: 'user', content: '刚发出的提问' }, timestamp: '2026-07-12T10:00:00.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('tuserwait', cwd, { baseDir: BASE })).verdict, 'pending');
+  writeJSONL(dir, 'tinterrupt', [
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] } },
+    { type: 'user', message: { role: 'user', content: '[Request interrupted by user for tool use]' }, timestamp: '2026-07-12T10:00:05.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('tinterrupt', cwd, { baseDir: BASE })).verdict, 'settled');
+});
+
+test('classifyTranscriptTail: assistant 只落了 thinking（text/tool_use 未落）→ pending（流式中间态）', async () => {
+  const cwd = '/test/tail-thinking';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'tthink', [
+    { type: 'user', message: { role: 'user', content: '提问' } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '思考中' }] }, timestamp: '2026-07-12T10:00:02.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('tthink', cwd, { baseDir: BASE })).verdict, 'pending');
+});
+
+test('classifyTranscriptTail: 子 agent（isSidechain）不算链条目——跳过后按主链判', async () => {
+  const cwd = '/test/tail-sidechain';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'tside', [
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '主链答完' }] }, timestamp: '2026-07-12T10:00:00.000Z' },
+    { type: 'user', isSidechain: true, message: { role: 'user', content: '子 agent 内部消息' }, timestamp: '2026-07-12T10:00:05.000Z' },
+    { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'tool_use', id: 's1', name: 'Read', input: {} }] }, timestamp: '2026-07-12T10:00:06.000Z' },
+  ]);
+  const r = await classifyTranscriptTail('tside', cwd, { baseDir: BASE });
+  assert.equal(r.verdict, 'settled'); // 主链已收尾；子 agent 尾巴不改判
+});
+
+test('classifyTranscriptTail: 文件不存在 / 无任何链条目 → settled（不锁），lastChainTs=null', async () => {
+  const cwd = '/test/tail-empty';
+  const dir = join(BASE, getProjectDir(cwd));
+  assert.deepEqual(await classifyTranscriptTail('nonexistent', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null });
+  writeJSONL(dir, 'tmetaonly', [{ type: 'entrypoint-marker' }, { type: 'queue-operation' }]);
+  assert.deepEqual(await classifyTranscriptTail('tmetaonly', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null });
 });
 
 // ── catchUpStep：只读「追平」状态机 ──────────────────────────────────────────
