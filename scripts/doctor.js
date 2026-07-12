@@ -208,6 +208,8 @@ const CONFIG_FILE_NAMES = [
   join('data', 'trusted-devices.json'),
   join('data', 'pending-devices.json'),
   join('data', 'cf-access-certs.json'),
+  join('data', 'approval-requests.json'), // Phase 4/approval-store.js（NFR-16/17/19）
+  join('data', 'audit-records.json'),     // Phase 4/audit.js（NFR-06/16，FR-19）
 ];
 
 function checkConfigPermissions() {

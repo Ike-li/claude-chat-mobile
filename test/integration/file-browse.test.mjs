@@ -102,6 +102,15 @@ test.describe('browse:list / browse:read 接线集成测试', process.env.CI ? {
     assert.equal(res.ok, false);
   });
 
+  // FR-19 最小审计记录（承接 Phase 4）：上面两个越界用例应各留一条 scope_violation 审计记录——
+  // 复用同一个已鉴权 server 实例，audit.js 落盘目标已被 CCM_DATA_DIR 隔离到本测试的临时目录。
+  test('越界拒绝会各写一条 scope_violation 审计记录（via=browse:list / browse:read）', async () => {
+    const AU = await import('../../audit.js');
+    const rows = AU.listRecent({ limit: 100, action: 'scope_violation' });
+    assert.ok(rows.some(r => r.meta?.via === 'browse:list'), `应有 browse:list 越界审计，实际：${JSON.stringify(rows)}`);
+    assert.ok(rows.some(r => r.meta?.via === 'browse:read'), `应有 browse:read 越界审计，实际：${JSON.stringify(rows)}`);
+  });
+
   test('browse:list 未授权 cwd（不在白名单）→ 归位当前 cwd 后仍在范围内正常返回（不是任意穿越）', async () => {
     // routeCwd 对不在白名单的 cwd 会回退到当前查看目录（同 session:list 现状），不是"拒绝连接"，
     // 但归位后的目录仍受 WorkdirScopeGuard 约束——不会因传了个野路径就打开任意目录。

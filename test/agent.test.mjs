@@ -1311,6 +1311,89 @@ test.describe('权限闸门', () => {
     });
   });
 
+  // 持久化台账（LLD §4 approval_request 表，承接 NFR-16/19/22，Phase 4）——askPermission/resolvePermission
+  // 写穿透到 approval-store.js。测试用真实模块（非 mock）：CCM_APPROVAL_STORE_FILE 由
+  // test/_preload-env.mjs 重定向到一次性临时文件，不碰真实 data/approval-requests.json。
+  test.describe('审批持久化台账（NFR-16/19，Phase 4）', () => {
+    test('askPermission：立即在台账里生成一条 status=pending 记录', async () => {
+      const AS = await import('../approval-store.js');
+      const { s } = makeSession({ cwd: '/tmp/proj-store-1' });
+      const ac = new AbortController();
+      s.askPermission('Bash', { command: 'echo a' }, { signal: ac.signal, toolUseID: 'store-t1' });
+      const r = AS.getByReqId('store-t1');
+      assert.ok(r);
+      assert.equal(r.status, 'pending');
+      assert.equal(r.tool, 'Bash');
+      assert.equal(r.cwd, '/tmp/proj-store-1');
+      assert.equal(r.sessionId, s.sessionId);
+      s.resolvePermission('store-t1', 'deny');
+      s.dispose();
+    });
+
+    test('resolvePermission(allow)：台账 status 更新为 allow，返回值为 "allow"', async () => {
+      const AS = await import('../approval-store.js');
+      const { s } = makeSession();
+      const ac = new AbortController();
+      s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t2' });
+      const outcome = s.resolvePermission('store-t2', 'allow', false, { tool: 'Bash', args: { command: 'ls' }, cwd: s.cwd });
+      assert.equal(outcome, 'allow');
+      assert.equal(AS.getByReqId('store-t2').status, 'allow');
+      s.dispose();
+    });
+
+    test('resolvePermission(deny)：台账 status 更新为 deny，返回值为 "deny"', async () => {
+      const AS = await import('../approval-store.js');
+      const { s } = makeSession();
+      const ac = new AbortController();
+      s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t3' });
+      const outcome = s.resolvePermission('store-t3', 'deny');
+      assert.equal(outcome, 'deny');
+      assert.equal(AS.getByReqId('store-t3').status, 'deny');
+      s.dispose();
+    });
+
+    test('resolvePermission：完整性校验失败 → 台账 status=integrity_mismatch，返回值同 outcome', async () => {
+      const AS = await import('../approval-store.js');
+      const { s } = makeSession();
+      const ac = new AbortController();
+      s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t4' });
+      const outcome = s.resolvePermission('store-t4', 'allow', false, { tool: 'Bash', args: { command: 'rm -rf /' }, cwd: s.cwd });
+      assert.equal(outcome, 'integrity_mismatch');
+      assert.equal(AS.getByReqId('store-t4').status, 'integrity_mismatch');
+      s.dispose();
+    });
+
+    test('resolvePermission：已过期 → 台账 status=expired，返回值为 "expired"', async () => {
+      const AS = await import('../approval-store.js');
+      const { s } = makeSession({ approvalTtlMs: 1 });
+      const ac = new AbortController();
+      const promise = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t5' });
+      await new Promise(r => setTimeout(r, 20));
+      const outcome = s.resolvePermission('store-t5', 'allow', false, { tool: 'Bash', args: { command: 'ls' }, cwd: s.cwd });
+      assert.equal(outcome, 'expired');
+      assert.equal(AS.getByReqId('store-t5').status, 'expired');
+      await promise;
+      s.dispose();
+    });
+
+    test('resolvePermission：找不到 pending（已消费/已 abort）→ 返回 undefined，不写台账', async () => {
+      const { s } = makeSession();
+      const outcome = s.resolvePermission('never-existed-reqid', 'allow');
+      assert.equal(outcome, undefined);
+      s.dispose();
+    });
+
+    test('abort：台账 status 更新为 aborted', async () => {
+      const AS = await import('../approval-store.js');
+      const { s } = makeSession();
+      const ac = new AbortController();
+      s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t6' });
+      ac.abort();
+      assert.equal(AS.getByReqId('store-t6').status, 'aborted');
+      s.dispose();
+    });
+  });
+
   test('abort signal 触发 → pendingPermissions.delete + request_resolved(aborted) + denyKinds(cancelled)', () => {
     const { s, events } = makeSession();
     const ac = new AbortController();

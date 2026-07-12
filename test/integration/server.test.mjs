@@ -22,6 +22,11 @@ test.before(async () => {
   tmpDir = await mkdtemp(join(tmpdir(), 'ccm-srv-test-'));
   serverProc = spawn('node', ['server.js'], {
     env: { ...process.env, PORT: String(PORT), AUTH_TOKEN: '', WORK_DIR: tmpDir,
+      // CCM_DATA_DIR 隔离（同其余 test/integration/*.test.mjs 惯例）：此前本文件唯独漏设，子进程
+      // sessions.js/devices.js/approval-store.js/audit.js 全部落到真实 data/ 目录——sessions.js 的
+      // 写入此前一直静默污染，只是没人注意；Phase 4 新增的 approval-store.js/audit.js 让污染第一次
+      // 以"多出两个陌生文件"的形式变得肉眼可见，才揪出这个既有缺口。
+      CCM_DATA_DIR: tmpDir,
       // 显式关 DEV_MODE：机主 .env 里 DEV_MODE=1(dogfooding)会被子进程 dotenv 读到,
       // 致 dev:restart 测试真的触发重启、裸进程直接死→后续测试级联崩。钉 '0' 隔离之。
       DEV_MODE: '0', HOME: process.env.HOME, PATH: process.env.PATH },

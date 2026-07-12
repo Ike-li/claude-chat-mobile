@@ -5,6 +5,7 @@ import { query } from '@anthropic-ai/claude-agent-sdk';
 import * as interactionLog from './interaction-log.js';
 import { sanitize } from './sanitizer.js';
 import { fingerprintSync, verifyIntegritySync } from './fingerprint.js';
+import * as approvalStore from './approval-store.js';
 
 const BUFFER_CAP = 500;       // 环形缓冲条数
 const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要截断；permission_request 永不截断（4a）
@@ -359,10 +360,14 @@ export class AgentSession {
     // pendingPermissions.set() 真正执行前的窗口让 resolvePermission 扑空、返回的 Promise 永远不 resolve。
     const fp = fingerprintSync({ tool: name, args: input, cwd: this.cwd });
     this.emit('permission_request', { requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt });
+    // 持久化台账（LLD §4 approval_request 表，承接 NFR-16/19/22，Phase 4）：只是台账记录，写入失败
+    // 不影响审批流程本身（recordCreated 内部已捕获落盘错误、不向上抛，见 approval-store.js 头部注释）。
+    approvalStore.recordCreated({ reqId: requestId, sessionId: this.sessionId, tool: name, args: input, cwd: this.cwd, fingerprint: fp, risk: null, createdAt, expiresAt });
     return new Promise(resolve => {
       const abortHandler = () => {
         if (this.pendingPermissions.delete(requestId)) {
           this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'aborted' }); // M4
+          approvalStore.recordDecided(requestId, { status: 'aborted', decidedBy: 'system:abort', decidedAt: Date.now() });
           this.denyKinds.set(requestId, 'cancelled'); // requestId===toolUseID：供 tool_result 显 🚫 而非红 ❌
           resolve({ behavior: 'deny', message: '请求已取消', interrupt: true });
         }
@@ -372,9 +377,14 @@ export class AgentSession {
     });
   }
 
+  // 返回值 = 本次落定的 outcome 字符串（与 emit('request_resolved') 的 outcome 一致），供 server.js
+  // 的 user:approve handler 判断是否需要额外写 audit_record（目前只在 integrity_mismatch 时写，
+  // 见 server.js 注释）——resolvePermission 本身不知道调用方是哪个设备/socket，无法自己写 audit_record
+  // （actor 归属信息只有 server.js 层有），故只把结果吐出去，把"要不要审计"的判断留给上层。
+  // 找不到 pending（已被 abort/consume 清理）时返回 undefined，调用方不应据此写审计。
   resolvePermission(requestId, decision, alwaysThisSession, clientOp) {
     const pending = this.pendingPermissions.get(requestId);
-    if (!pending) return;
+    if (!pending) return undefined;
     // 移除 abort 监听器防僵尸累积（SDK 可能为多个 canUseTool 复用同一 signal）
     pending.signal?.removeEventListener('abort', pending.abortHandler);
     this.pendingPermissions.delete(requestId);
@@ -385,8 +395,9 @@ export class AgentSession {
     if (Date.now() > pending.expiresAt) {
       this.denyKinds.set(requestId, 'denied');
       this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'expired' });
+      approvalStore.recordDecided(requestId, { status: 'expired', decidedBy: 'user', decidedAt: Date.now() });
       pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
-      return;
+      return 'expired';
     }
     // 审批完整性绑定（LLD §3.1.3 步骤6/§5.5，承接 AD-7/NFR-17，"所批即所行"）：仅在 allow 时校验——
     // deny 不存在"拒绝了错误操作"这种需要防范的风险。clientOp 缺失或与 askPermission 时锚定的 fp
@@ -397,11 +408,13 @@ export class AgentSession {
         console.error(`[integrity] 审批完整性校验失败 requestId=${requestId} name=${pending.name}：客户端回传操作与原始锚定指纹不符或缺失，fail-closed 拒绝`);
         this.denyKinds.set(requestId, 'denied');
         this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'integrity_mismatch' });
+        approvalStore.recordDecided(requestId, { status: 'integrity_mismatch', decidedBy: 'system:integrity-check', decidedAt: Date.now() });
         pending.resolve({ behavior: 'deny', message: '完整性校验失败，操作已拒绝执行', interrupt: false });
-        return;
+        return 'integrity_mismatch';
       }
     }
     this.emit('request_resolved', { requestId, kind: 'permission', outcome: decision }); // M4
+    approvalStore.recordDecided(requestId, { status: decision, decidedBy: 'user', decidedAt: Date.now() });
     if (decision === 'allow') {
       const suggestions = pending.suggestions || [];
       // setMode：批准内含的「模式切换」（如 ExitPlanMode 退出 plan）。它是工具批准的内在部分，应始终
@@ -436,6 +449,7 @@ export class AgentSession {
       this.denyKinds.set(requestId, 'denied'); // requestId===toolUseID：拒绝是有意操作非工具报错，前端显 🚫
       pending.resolve({ behavior: 'deny', message: '用户拒绝了此操作', interrupt: false });
     }
+    return decision;
   }
 
   // ---- AskUserQuestion（F2）：实验证明 deny+message 通道有效（2026-06-11）----

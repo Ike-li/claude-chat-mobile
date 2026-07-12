@@ -42,6 +42,8 @@ import {
   getPendingDevices,
   getTrustedCount
 } from './devices.js';
+import * as approvalStore from './approval-store.js';
+import * as audit from './audit.js';
 
 // #9：dotenv 后一次性剥除空串环境变量，使 .env 里的空行（WORK_DIR= 等）等价于"未设置"，
 // 让下方解构默认值与 Number() 容错统一在一处生效，而非每个读取点各自 `|| / .trim() ||`。
@@ -265,12 +267,20 @@ const routeCwd = cwd => {
   // 不 fail-closed：回退本身已防越权（不访问越界目录），拒绝会破坏“传错自动纠正”顺手性 + #8 热移除回退。
   if (typeof cwd === 'string' && cwd) {
     console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在白名单，回退当前查看目录`);
+    // FR-19 最小审计记录（承接 Phase 4）：routeCwd 调用点分散、多数无 socket 上下文可传 actor，
+    // 此处 actor 留空——目录越界信号的价值在"发生过"本身，不在于精确到哪个连接（真正的访问控制
+    // 已经生效，这里只是留痕，同 §3.4.1 WorkdirScopeGuard 的既有 [scope] 日志一个粒度）。
+    audit.recordAudit({ action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'routeCwd' } });
   }
   return viewingCwdOf();
 };
 // 台阶3：按实例路由——instanceId ∈ live 则该实例，否则缺省落 viewingInstanceId（向后兼容缺参旧调用、防越界）。
 const resolveInstanceId = id => agents.has(id) ? id : viewingInstanceId;
 const routeInstance = id => agents.get(resolveInstanceId(id)) ?? null;
+// audit_record 的 actor 字段（FR-19，承接 Phase 4）：deviceId 取握手带的 deviceToken（isLocal/CF Access
+// 直连场景恒无 token，null 属正常）；via 复用既有 socket.trustBasis（'device-token'/'bypass'），
+// 不新造一套分类，与 SEC-03 吊销对称逻辑用的是同一份信任来源判断。
+const actorFromSocket = socket => ({ deviceId: socket?.handshake?.auth?.deviceToken ?? null, via: socket?.trustBasis ?? null });
 
 // ---- HTTP ----
 const app = express();
@@ -541,6 +551,7 @@ if (existsSync(TRUSTED_DEVICES_FILE)) {
             if (isDeviceTrusted(token)) {
               console.log(`[devices] 检测到 ${TRUSTED_DEVICES_FILE} 变更，自动解锁设备 ${token}`);
               unlockSocket(socket);
+              audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_approved', target: token, outcome: 'allowed', meta: { via: 'cli' } });
             }
           } else if (socket.deviceApproved === true && socket.trustBasis === 'device-token') {
             // SEC-03：CLI 吊销对称断连——此前只处理「新批准」方向，CLI denyDevice 删除信任记录后
@@ -553,6 +564,7 @@ if (existsSync(TRUSTED_DEVICES_FILE)) {
         for (const token of revokedTokens) {
           console.log(`[devices] 检测到 ${TRUSTED_DEVICES_FILE} 变更，设备 ${token} 信任已被吊销（CLI），断开连接`);
           disconnectDeviceSockets(token); // 复用 Web 侧同款：发 device_status:denied + disconnect(true)
+          audit.recordAudit({ actor: { deviceId: null, via: 'cli' }, action: 'device_revoked', target: token, outcome: 'denied', meta: { via: 'cli' } });
         }
         broadcastPendingDevices(); // CLI/TTY 审批后刷新各可信端的待批列表（移除已批准/拒绝项）
       }, 100);
@@ -665,6 +677,9 @@ io.use(async (socket, next) => {
       rlStates.set(rlKey, r.next);
       if (!authPassed && r.verdict === 'locked') {
         console.warn(`[conn] ${ip} 连续鉴权失败达阈值 → 锁定 ${Math.ceil(r.retryAfterMs / 1000)}s（source=${rlKey}）`);
+        // FR-19 最小审计记录：只在"达阈值锁定"这个粒度写（本就限速到每锁定窗口一次），不逐次失败尝试都写——
+        // 后者本身可被攻击者刷出高频事件、会把环形上限里的真实信号挤掉，锁定事件已足够代表"发生过暴破尝试"。
+        audit.recordAudit({ actor: { deviceId: null, via: 'unauthenticated' }, action: 'auth_rate_limited', target: rlKey, outcome: 'locked', meta: { retryAfterMs: r.retryAfterMs } });
       }
     }
 
@@ -1510,7 +1525,13 @@ io.on('connection', socket => {
     const a = routeInstance(instanceId);
     if (a) {
       interactionLog.addSessionLog(a.sessionId, 'sys_info', `[SYS] 许可决策 (user:approve): requestId=${requestId}, decision=${decision}, alwaysThisSession=${alwaysThisSession}`);
-      a.resolvePermission(requestId, decision, Boolean(alwaysThisSession), op);
+      const outcome = a.resolvePermission(requestId, decision, Boolean(alwaysThisSession), op);
+      // FR-19 最小审计记录（承接 Phase 4）：只在完整性校验失败时写——常规 allow/deny 已完整落在
+      // approval_request 台账里（含 op 全量），这里重复记一条只会用日常噪音挤占 audit_record 的环形
+      // 上限；actor 归属信息只有这层（socket）有，agent.js 保持设备无关，故写点放在这里而非 agent.js。
+      if (outcome === 'integrity_mismatch') {
+        audit.recordAudit({ actor: actorFromSocket(socket), action: 'approval_integrity_mismatch', target: requestId, outcome: 'denied', meta: { tool: op?.tool ?? null } });
+      }
     }
   });
 
@@ -1529,6 +1550,7 @@ io.on('connection', socket => {
     approveDevice(deviceId);
     unlockDeviceSockets(deviceId);
     broadcastPendingDevices();
+    audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_approved', target: deviceId, outcome: 'allowed', meta: { via: 'web' } });
   });
   on(socket, 'user:denyDevice', payload => {
     const deviceId = payload?.deviceId;
@@ -1537,6 +1559,7 @@ io.on('connection', socket => {
     denyDevice(deviceId);
     disconnectDeviceSockets(deviceId);
     broadcastPendingDevices();
+    audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_denied', target: deviceId, outcome: 'denied', meta: { via: 'web' } });
   });
 
   // 台阶3：切权限档（作用于指定实例，缺省 viewingInstanceId）。即时切（成功才落库 + 广播，失败
@@ -1721,6 +1744,7 @@ io.on('connection', socket => {
     const res = listDir(cwd, relPath, workDirs, { offset, maxEntries });
     if (res === null) {
       console.warn(`[scope] 文件浏览越界拒绝（list）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'browse:list', relPath: typeof relPath === 'string' ? relPath : null } });
       return ack({ ok: false, error: '路径不在授权范围内，或不是目录' });
     }
     ack({ ok: true, ...res });
@@ -1732,6 +1756,7 @@ io.on('connection', socket => {
     const res = browseReadFile(cwd, relPath, workDirs, { offset, maxBytes });
     if (res === null) {
       console.warn(`[scope] 文件浏览越界拒绝（read）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'browse:read', relPath: typeof relPath === 'string' ? relPath : null } });
       return ack({ ok: false, error: '路径不在授权范围内，或不是文件' });
     }
     ack({ ok: true, ...res });
@@ -1935,6 +1960,33 @@ function lanIPv4s() {
     .map(i => i.address);
 }
 
+// 重启后 pending 审批的 fail-closed 处置（LLD §4，承接 HLD AD-7/NFR-09/11，Phase 4）：canUseTool 回调
+// 绑在上一进程的内存里，随进程终止已无法兑现——遗留在持久化台账里的 status=pending 记录一律标 expired，
+// 绝不能让它们在"等我"聚合或任何未来查询里看起来"仍可批准"（批一个已无执行上下文的操作是危险假象）。
+// 必须在 httpServer.listen 之前跑完：这之后 io 才可能真正开始接受连接、驱动新的实例。
+{
+  const restartExpiredCount = approvalStore.expireAllPending({ decidedBy: 'system:restart', decidedAt: Date.now() });
+  if (restartExpiredCount > 0) {
+    console.log(`[approval-store] 重启恢复：${restartExpiredCount} 条遗留 pending 审批已标记 expired`);
+    audit.recordAudit({ action: 'approval_restart_expired', outcome: 'expired', meta: { count: restartExpiredCount } });
+  }
+}
+
+// NFR-16 留存治理（LLD §4"建议 90 天，可配"）：approval_request 终态记录超过保留期即清理。清理动作
+// 本身记一条汇总审计（条数，不含内容），呼应设计明文"不无声无限增长"。启动即跑一次（覆盖"长期不重启
+// 的常驻 server 也需要治理"这条路径）+ 之后每 24h 跑一次；audit_record 自己的留存治理是写入时环形
+// 上限（见 audit.js），不需要额外的周期性清理。
+const APPROVAL_RETENTION_MS = (Number(process.env.APPROVAL_RETENTION_DAYS) > 0 ? Number(process.env.APPROVAL_RETENTION_DAYS) : 90) * 24 * 60 * 60 * 1000;
+function runApprovalRetentionSweep() {
+  const purged = approvalStore.purgeTerminalOlderThan(Date.now() - APPROVAL_RETENTION_MS);
+  if (purged > 0) {
+    console.log(`[approval-store] 留存治理：清理 ${purged} 条超过保留期的终态审批记录`);
+    audit.recordAudit({ action: 'retention_cleanup', outcome: 'success', meta: { table: 'approval_request', count: purged } });
+  }
+}
+runApprovalRetentionSweep();
+setInterval(runApprovalRetentionSweep, 24 * 60 * 60 * 1000).unref();
+
 httpServer.listen(port, host, () => {
   console.log('========================================');
   console.log('  Claude Chat Mobile v2');
@@ -1996,6 +2048,12 @@ function shutdown(sig) {
   clearTimeout(statusDebounce);   // （在途 git execFile 由 2s timeout 与进程退出收割）
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批
   agents.clear();
+  // dispose() 内部对每条挂起审批调 resolvePermission('deny') → 触发 approval-store 的防抖写；必须在
+  // dispose 循环之后 flush，早于 process.exit 落盘，否则这些"干净关闭时已 deny"的终态会连同其在途的
+  // 200ms 防抖窗口一起丢失、变成下次启动时被误判为"崩溃遗留"的 pending（虽仍会被重启恢复兜底标 expired，
+  // 但那本该是清晰的用户可见 deny，不该退化成一条不知情由的系统失效记录）。
+  approvalStore.flushSaveSync();
+  audit.flushSaveSync();
   io.close(() => process.exit(0)); // 主动关所有 socket 连接再关底层 http server；否则 WS 长连接把 close 回调拖到 3s 兜底才退（实测断连窗口 ~3.5s → 近乎即时）
   setTimeout(() => process.exit(0), 3000).unref(); // 兜底：io.close 万一挂起仍强退
 }
