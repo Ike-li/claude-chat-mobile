@@ -108,6 +108,15 @@ export function shouldRestoreOptimisticBusy({ pendingFirstSend, viewingInstanceI
   return Boolean(pendingFirstSend && viewingInstanceId && !sessionId);
 }
 
+// bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档在 SDK 层无运行时切换能力，后端 dispose
+// 旧实例 + resume 同会话开新实例（instanceId 变了、sessionId 不变），前端只看 viewingInstanceId 变化就判定
+// 为「切到另一个会话」而清空草稿——这是误伤：用户视角仍在同一个聊天里，只是底层实例被静默替换。
+// 判定：新旧 sessionId 相同且非空 ⇒ 同一会话静默换实例，保留草稿；否则（真实切会话/切到全新未开会话/
+// 任一端为空）⇒ 清空（保守默认，不吞真实导航场景）。
+export function shouldClearInputOnBindView({ prevSessionId, newSessionId } = {}) {
+  return !(newSessionId && newSessionId === prevSessionId);
+}
+
 // 客户端 agent:event 分流（app.js 分发入口；台阶3 instanceId 分流）：是否丢弃该事件不渲染。
 // 豁免（永不丢）：instances 合成事件（它定义 viewingInstanceId 本身）、无 instanceId 的合成事件
 // （status_line / init 重放 / models / permission_mode / effort_mode）。

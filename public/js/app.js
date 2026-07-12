@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -2198,6 +2198,7 @@ import { verifyIntegrity } from './canonicalize.js';
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
   function bindView(entry, id) {
     const prevInstanceId = displayedInstanceId; // S1：缓存归属的(外出)实例，供切回时检测实例是否被替换
+    const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 shouldClearInputOnBindView 判「是否只是同会话静默换实例」
     displayedInstanceId = id;
     const sid = entry?.sessionId || null;
     displayedSessionId = sid;
@@ -2215,7 +2216,9 @@ import { verifyIntegrity } from './canonicalize.js';
     }
 
     clearView(sid, null);
-    if (inputEl) {
+    // 效果强度/模型切档会让后端 dispose 旧实例+resume 同会话开新实例（instanceId 变、sessionId 不变），
+    // viewingInstanceId 因此变化触发这次 bindView，但用户视角仍在同一个聊天——不该清掉正在输入的草稿。
+    if (inputEl && shouldClearInputOnBindView({ prevSessionId, newSessionId: sid })) {
       inputEl.value = '';
       inputEl.dispatchEvent(new Event('input'));
     }

@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget } from '../public/js/logic.js';
+import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test('esc: 转义 HTML 元字符', () => {
@@ -114,6 +114,25 @@ test('shouldRestoreOptimisticBusy: 仅新会话首发懒开绑定到新建实例
   assert.equal(shouldRestoreOptimisticBusy({ pendingFirstSend: true, viewingInstanceId: null, sessionId: null }), false);
   // 空/未定义入参安全
   assert.equal(shouldRestoreOptimisticBusy(), false);
+});
+
+// bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档会让后端 dispose 旧实例 + resume 同会话
+// 开新实例（instanceId 变了、sessionId 不变），这只是底层实例被静默替换、用户视角仍在同一个聊天里——
+// 此时清空草稿是误伤（真实 bug：切效果强度/模型会清空正在输入的指令）。真正切到另一个会话/全新未开会话
+// 才应该清空（用户明确导航离开，草稿属于旧会话）。
+test('shouldClearInputOnBindView: 同一会话静默换实例保留草稿，真实切会话才清空', () => {
+  // 同一非空 sessionId（effort/model 触发的 dispose+recreate，同会话换了个 instanceId）：保留草稿
+  assert.equal(shouldClearInputOnBindView({ prevSessionId: 'sess_1', newSessionId: 'sess_1' }), false);
+  // 真实切到另一个已有会话：清空
+  assert.equal(shouldClearInputOnBindView({ prevSessionId: 'sess_1', newSessionId: 'sess_2' }), true);
+  // 切到全新未开会话（newSessionId 尚无）：清空
+  assert.equal(shouldClearInputOnBindView({ prevSessionId: 'sess_1', newSessionId: null }), true);
+  // 从空首页首次绑定到会话：清空（无「同一会话」可言）
+  assert.equal(shouldClearInputOnBindView({ prevSessionId: null, newSessionId: 'sess_1' }), true);
+  // 两端都空（新会话间切换/初始态）：清空，无法判定是否同一草稿归属
+  assert.equal(shouldClearInputOnBindView({ prevSessionId: null, newSessionId: null }), true);
+  // 空/未定义入参安全：默认清空（保守，不吞真实切换场景）
+  assert.equal(shouldClearInputOnBindView(), true);
 });
 
 // ── 客户端事件分流（app.js: agent:event 入口；台阶3 instanceId 分流）──
