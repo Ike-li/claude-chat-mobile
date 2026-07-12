@@ -40,6 +40,13 @@ export function getProjectDir(cwd) {
 
 // 读取会话历史消息（仅 user/assistant，过滤工具调用等内部事件）。
 // 流式读【完整】文件——与 CLI /resume 同源、不按字节截断头部，做到 Web 端看到的历史 = CLI 的全量历史。
+//
+// 【已评估：不迁 SDK 官方 getSessionMessages（2026-07-12 实证）】SDK 0.3.201 有官方 getSessionMessages，但
+// 实测（真实 1526 行会话）它返回 1115 条**原始消息**（message 为未解析的 {role,content}，含全部 tool_use/
+// tool_result/thinking/子agent/系统行），**零噪音过滤、不提取文本**；本函数过滤后仅剩 46 条真实对话。迁移后
+// 这 7 层过滤（isMeta/isSidechain/parent_tool_use_id/CLI 系统行/task-notification/uuid 去重——都是踩坑补齐的
+// 非显而易见 CLI 行为）一条都省不掉、全得保留，且 SDK 一次性全量载入比现在流式读+提前过滤更耗内存。净负收益，
+// 故保留自实现。别再因"有官方 API"重启这个迁移。
 export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, { baseDir = CLAUDE_DIR } = {}) {
   const projectDir = getProjectDir(cwd);
   const historyFile = join(baseDir, projectDir, `${sessionId}.jsonl`);
@@ -145,6 +152,11 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
 //    本地 turn），稳健区分己方/外部写入需 server 传 ownDelta 或内容比对、代价不划算，故接受为已知边界。
 //    契约护栏：busy→idle 必须【整段吸收】（emit []），绝不改成把 [baseline,len) 全当外部 emit——否则己方
 //    turn 的每条会被 live 流 + history_append 重复渲染成气泡。见 test/mirror-sync.test.mjs 的 skip 说明。
+// 【已评估：不做 SP-10 完整闭合（2026-07-12 机主确认，Phase 8 技术债）】LLD §5.1.2/SP-10 的"两路一致性重设计"
+//    （去掉 busy→idle 吸收、改增量读 + 幂等去重、busy→idle 立即触发）要真正闭合上述边界，前提是前端 history_append
+//    能按 uuid 幂等去重——但实测前端 onHistoryAppend（app.js）无 uuid 去重、live 流气泡也不记 uuid，故"立即触发"
+//    简单版无效（仍受契约护栏约束只能吸收），完整版需前端去重 + live 流记 uuid 的联动大改。上述边界触发面窄，
+//    n=1 单用户下该大改不值，保留现状。别再因"SP-10 设计验证通过"重启这个接入。
 export function catchUpStep(state, { messages, localBusy = false }) {
   const len = messages.length;
   if (localBusy) return { emit: [], state: { baseline: state.baseline, wasBusy: true } };
@@ -218,6 +230,11 @@ function isCliSystemLine(content) {
 // ---- 会话列表：与 CLI /resume 同源，直接扫 ~/.claude/projects/<编码cwd>/ ----
 // 列出该 cwd 下所有会话（含终端 entrypoint:cli 建的），不依赖 sessions.json 注册表。
 // baseDir 仅供单测注入临时夹具；生产用默认 CLAUDE_DIR。
+// 【已评估：不迁 SDK 官方 listSessions（2026-07-12 实证）】SDK 0.3.201 有官方 listSessions（返回 summary/
+// customTitle/firstPrompt/gitBranch 等丰富字段，能省掉本函数的 readdir+N×stat+readHeadMeta），但它**不返回
+// entrypoint**（本函数用它区分 cli/sdk 来源、前端据此显来源），且其 summary 的标题语义 ≠ 本函数的"ai-title >
+// 首条 user > 命令名"优先级（整体替换会改前端标题/来源图标显示）；hasMore（SDK 不给总数）/hiddenIds（Phase 6
+// L1）/mtime 缓存仍要全保留。收益（省扫盘）不抵风险（可见行为变 + 定制照旧），故保留自实现。
 // 返回 { sessions, hasMore }：hasMore=该目录会话总数 > limit（诚实计算，非 length===limit 猜测），
 // 供前端决定是否显示「显示全部」。缓存键含 limit——否则 limit=6 结果会在 TTL 内污染 all(limit=50) 请求。
 // hiddenIds（FR-20 两级删除 L1，承接 LLD §4）：本函数是 session:list 的真实数据源（直接扫盘，不依赖

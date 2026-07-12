@@ -901,7 +901,12 @@ const CATCH_UP_INTERVAL_MS = 2500;
 // 禁用输入，硬防「两进程并发写同一 JSONL 致会话分叉」。解锁：切会话重判 / 用户显式接管（前端 override）。
 // 不用 transcript mtime 判活：web 端自己 resume 会话时 claude --resume 就写盘刷新 mtime（追加 mode 记录），
 // 无法据此区分「己方续接」与「终端在跑」——曾致纯 web 打开/切换会话被误锁只读（切入即 mtime 判活口径已废弃）。
-let mirrorReadonly = false;                         // 当前查看会话是否判「终端活跃、只读」
+let mirrorReadonly = false;                         // 当前查看会话是否判「终端活跃、只读」（全局单值，非 per-连接）
+// 【已评估：不做 AD-5 per-连接锁粒度（2026-07-12 机主确认，Phase 8 技术债）】mirrorReadonly 是全局单值 +
+// io.to('approved') 全局广播 + viewingInstanceId 单例全局——HLD AD-5 指出的已知缺陷：两台设备看不同会话时，
+// 给会话 B 的 mirror_state 会误解锁正看会话 A 的另一端（前端 onMirrorState 注释同款登记）。AD-5 的完整修复
+// （viewing/catchup/mirror 全改 per-(sessionId,connId) + readonly_changed 定向下发）是改动面很广的大改，触发
+// 面窄（仅"同一人多设备同看不同会话"并发），n=1 单用户下不值，保留现状。别再因"AD-5 是改进方向"重启这个大改。
 function setMirror(readonly, sessionId, force = false) {
   if (!force && readonly === mirrorReadonly) return; // 仅变化时广播；force=视图切换入场时强制发权威态（消除切换空窗）
   mirrorReadonly = readonly;
