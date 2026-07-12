@@ -2,6 +2,7 @@
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
 import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array } from './logic.js';
+import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -88,7 +89,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     }
   }
   const permModal = $('permModal'), permTool = $('permTool'), permCwd = $('permCwd'),
-        permInput = $('permInput'), permAlways = $('permAlways');
+        permInput = $('permInput'), permAlways = $('permAlways'), permIntegrityWarn = $('permIntegrityWarn');
   const questionModal = $('questionModal'), questionText = $('questionText'), questionOptions = $('questionOptions');
   const authGate = $('authGate'), authToken = $('authToken'), authSubmit = $('authSubmit'), authError = $('authError'); // 访问令牌输入页
   const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // Access 会话过期重登浮层
@@ -1116,6 +1117,7 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       permQueue.push(p);
       showNextPerm();
       notify('⚠️ 等待审批', `${p.name}：${JSON.stringify(p.input).slice(0, 80)}`);
+      verifyPermIntegrity(p); // 异步、不阻塞渲染——NFR-17 协议步骤4，核验结果稍后到达时若仍是当前卡片才提示
     },
     question(p) {
       // 幂等：同上（快照补发 vs buffer 回放去重），按 requestId
@@ -1129,6 +1131,12 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     request_resolved(p) {
       const { requestId, kind } = p;
       if (kind === 'permission') {
+        // NFR-17：完整性校验失败是服务端 fail-closed 介入，不是用户的选择——若用户刚点了"允许"，
+        // answerPerm() 已乐观显示过"✅ 已允许"（activePerm 早已本地清空，下面的分支找不到它，无从
+        // 事后订正）。这里补一条独立提示，避免用户以为操作已生效、实际却被悄悄拦下。
+        if (p.outcome === 'integrity_mismatch') {
+          addBar('⚠️ 完整性校验未通过，该操作已被服务端拒绝执行（并非您的选择生效）', 'text-danger');
+        }
         if (activePerm?.requestId === requestId) {
           activePerm = null;
           closeSheet(permModal);
@@ -1358,12 +1366,39 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
     return t;
   }
 
+  // ---- 审批完整性预检（NFR-17，承接 LLD §5.5 协议步骤4）----
+  // 渲染前（严格说：渲染后异步补验，见下）重算指纹比对服务端锚定的 fp，防传输层篡改（op 被改而 fp
+  // 未同步改）。不阻塞卡片显示——真正的执行门槛在后端 resolvePermission（agent.js），这里只是"谨慎
+  // 确认"提示，即使因浏览器兼容性等原因未能核验也不影响审批本身仍受后端 fail-closed 保护。
+  async function verifyPermIntegrity(p) {
+    if (!p.fp) return; // 服务端理论上总带 fp；防御性跳过，不误判
+    if (typeof crypto === 'undefined' || !crypto.subtle) {
+      // 非安全上下文（纯局域网 http:// 访问）：Web Crypto 不可用，前端预检优雅降级——
+      // 后端完整性校验不受影响，仍是真正生效的门槛。
+      console.warn('[integrity] crypto.subtle 不可用（非安全上下文），跳过前端预检');
+      return;
+    }
+    let ok;
+    try {
+      ok = await verifyIntegrity(p.fp, { tool: p.name, args: p.input, cwd: p.cwd });
+    } catch (e) {
+      console.error('[integrity] 前端预检计算异常，不误判为篡改：', e.message);
+      return;
+    }
+    if (!ok && activePerm?.requestId === p.requestId) showPermIntegrityWarning();
+  }
+  function showPermIntegrityWarning() {
+    if (permIntegrityWarn) permIntegrityWarn.classList.remove('hidden');
+  }
+
   // ---- 审批弹窗（4a：完整命令 + cwd）----
   function showNextPerm() {
     if (activePerm || permQueue.length === 0) return;
     activePerm = permQueue.shift();
     permTool.textContent = activePerm.name;
     permCwd.textContent = `工作目录：${activePerm.cwd}`;
+    // 每张新卡片先重置警示条（上一张若显示过不应带到这张）；verifyPermIntegrity 若判定不符会异步重新显示。
+    if (permIntegrityWarn) permIntegrityWarn.classList.add('hidden');
     // M1：超 4000 字显示展开按钮，而非截断（防恶意内容藏尾部）
     permExpandBtn?.remove(); permExpandBtn = null;
     const full = JSON.stringify(activePerm.input, null, 2);
@@ -1386,7 +1421,10 @@ import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projec
       requestId: activePerm.requestId,
       decision,
       alwaysThisSession: permAlways.checked,
-      instanceId: viewingInstanceId // 台阶3：路由到当前查看 tab 实例（切过去后审批的本就是该实例）
+      instanceId: viewingInstanceId, // 台阶3：路由到当前查看 tab 实例（切过去后审批的本就是该实例）
+      // op：回传本卡片渲染时所见的确切操作（承接 LLD §5.5 NFR-17 审批完整性绑定协议步骤5）——
+      // 服务端用它重算指纹比对 canUseTool 时锚定的 fp，不一致 fail-closed 拒绝（agent.js#resolvePermission）。
+      op: { tool: activePerm.name, args: activePerm.input, cwd: activePerm.cwd }
     });
     addBar(`${decision === 'allow' ? '✅ 已允许' : '🚫 已拒绝'}：${activePerm.name}`, 'text-ink-faint');
     activePerm = null;

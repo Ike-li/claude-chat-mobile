@@ -1502,12 +1502,15 @@ io.on('connection', socket => {
   });
 
   on(socket, 'user:approve', payload => {
-    const { requestId, decision, alwaysThisSession, instanceId } = payload || {};
+    // op：客户端回传它渲染审批卡片时所见的 {tool,args,cwd}（承接 LLD §5.5 端到端协议步骤5/6，NFR-17
+    // 审批完整性绑定）——allow 决策时 agent.js#resolvePermission 用它重算指纹比对 askPermission 时
+    // 锚定的 fp，不一致 fail-closed 拒绝。deny 决策不校验（拒绝任何操作都安全，op 缺省或不传均可）。
+    const { requestId, decision, alwaysThisSession, instanceId, op } = payload || {};
     if (typeof requestId !== 'string' || !['allow', 'deny'].includes(decision)) return;
     const a = routeInstance(instanceId);
     if (a) {
       interactionLog.addSessionLog(a.sessionId, 'sys_info', `[SYS] 许可决策 (user:approve): requestId=${requestId}, decision=${decision}, alwaysThisSession=${alwaysThisSession}`);
-      a.resolvePermission(requestId, decision, Boolean(alwaysThisSession));
+      a.resolvePermission(requestId, decision, Boolean(alwaysThisSession), op);
     }
   });
 

@@ -1174,7 +1174,8 @@ test.describe('权限闸门', () => {
       signal: ac.signal, toolUseID: 't1',
       suggestions: [{ destination: 'session', permission: 'allow', toolName: 'Read' }]
     });
-    s.resolvePermission('t1', 'allow', true);
+    // NFR-17 审批完整性绑定：allow 决策须回传与 askPermission 时锚定 fp 匹配的 op，否则 fail-closed 拒绝。
+    s.resolvePermission('t1', 'allow', true, { tool: 'Read', args: { file_path: '/a.txt' }, cwd: s.cwd });
 
     assert.equal(removed, true);
     assert.equal(s.pendingPermissions.size, 0);
@@ -1212,7 +1213,8 @@ test.describe('权限闸门', () => {
     const ac = new AbortController();
     const promise = s.askPermission('Bash', { command: 'rm -rf /' }, { signal: ac.signal, toolUseID: 't1' });
     await new Promise(r => setTimeout(r, 20)); // 确保已越过 1ms TTL
-    s.resolvePermission('t1', 'allow'); // 即便传 allow，过期后也不应放行
+    // 过期检查先于完整性校验，op 是否匹配不影响本测试结论——仍传正确 op 保持调用形态真实。
+    s.resolvePermission('t1', 'allow', false, { tool: 'Bash', args: { command: 'rm -rf /' }, cwd: s.cwd }); // 即便传 allow，过期后也不应放行
     const result = await promise;
     assert.equal(result.behavior, 'deny', '过期后不可再兑现，即便传 allow 也必须 deny（fail-closed）');
     const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
@@ -1225,12 +1227,88 @@ test.describe('权限闸门', () => {
     const { s, events } = makeSession({ approvalTtlMs: 60_000 }); // 60s，测试期间不可能过期
     const ac = new AbortController();
     const promise = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1' });
-    s.resolvePermission('t1', 'allow');
+    s.resolvePermission('t1', 'allow', false, { tool: 'Bash', args: { command: 'ls' }, cwd: s.cwd });
     const result = await promise;
     assert.equal(result.behavior, 'allow');
     const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
     assert.equal(rr.payload.outcome, 'allow');
     s.dispose();
+  });
+
+  // 审批完整性绑定（LLD §3.1.3/§5.5，承接 AD-7/NFR-17，"所批即所行"）
+  test.describe('审批完整性绑定（NFR-17）', () => {
+    test('askPermission：permission_request payload 附 fp，且等于 fingerprintSync({tool,args,cwd})', async () => {
+      const { fingerprintSync } = await import('../fingerprint.js');
+      const { s, events } = makeSession({ cwd: '/tmp/proj' });
+      const ac = new AbortController();
+      s.askPermission('Bash', { command: 'ls -la' }, { signal: ac.signal, toolUseID: 't1' });
+      const pr = events.find(e => e.type === 'permission_request');
+      assert.equal(pr.payload.fp, fingerprintSync({ tool: 'Bash', args: { command: 'ls -la' }, cwd: '/tmp/proj' }));
+      s.resolvePermission('t1', 'deny');
+      s.dispose();
+    });
+
+    test('resolvePermission(allow)：clientOp 与锚定 fp 不符（参数被篡改）→ fail-closed deny，outcome=integrity_mismatch', async () => {
+      const { s, events } = makeSession();
+      const ac = new AbortController();
+      const promise = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1' });
+      // 客户端回传的 op 与卡片渲染/锚定时的 { command: 'ls' } 不一致——模拟传输层被篡改
+      s.resolvePermission('t1', 'allow', false, { tool: 'Bash', args: { command: 'rm -rf /' }, cwd: s.cwd });
+      const result = await promise;
+      assert.equal(result.behavior, 'deny', '完整性不符必须 fail-closed 拒绝，即便 decision 是 allow');
+      assert.equal(result.interrupt, false);
+      const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
+      assert.equal(rr.payload.outcome, 'integrity_mismatch');
+      assert.equal(s.denyKinds.get('t1'), 'denied');
+      s.dispose();
+    });
+
+    test('resolvePermission(allow)：clientOp 缺失（未回传 op）→ fail-closed deny，outcome=integrity_mismatch', async () => {
+      const { s, events } = makeSession();
+      const ac = new AbortController();
+      const promise = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1' });
+      s.resolvePermission('t1', 'allow', false); // 不传 clientOp（如旧客户端/协议缺字段）
+      const result = await promise;
+      assert.equal(result.behavior, 'deny');
+      const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
+      assert.equal(rr.payload.outcome, 'integrity_mismatch');
+      s.dispose();
+    });
+
+    test('resolvePermission(allow)：clientOp 的 cwd 与锚定不符（args/tool 不变）→ fail-closed deny', async () => {
+      const { s, events } = makeSession({ cwd: '/workdir-a' });
+      const ac = new AbortController();
+      const promise = s.askPermission('Read', { file_path: '/x' }, { signal: ac.signal, toolUseID: 't1' });
+      s.resolvePermission('t1', 'allow', false, { tool: 'Read', args: { file_path: '/x' }, cwd: '/workdir-b' });
+      const result = await promise;
+      assert.equal(result.behavior, 'deny');
+      const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
+      assert.equal(rr.payload.outcome, 'integrity_mismatch');
+      s.dispose();
+    });
+
+    test('resolvePermission(deny)：不校验完整性——clientOp 缺失/不符也不影响 deny 决策本身正常生效', async () => {
+      const { s, events } = makeSession();
+      const ac = new AbortController();
+      const promise = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1' });
+      s.resolvePermission('t1', 'deny', false); // deny 决策：不传 clientOp，不应被误判为 integrity_mismatch
+      const result = await promise;
+      assert.equal(result.behavior, 'deny');
+      const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
+      assert.equal(rr.payload.outcome, 'deny', 'deny 路径的 outcome 应保持 deny，不应被完整性校验分支抢先接管');
+      s.dispose();
+    });
+
+    test('pendingRequestsSnapshot()：真实 askPermission 产生的 fp 原样出现在快照里（非手造数据）', async () => {
+      const { fingerprintSync } = await import('../fingerprint.js');
+      const { s } = makeSession({ cwd: '/tmp/proj' });
+      const ac = new AbortController();
+      s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 't1' });
+      const snap = s.pendingRequestsSnapshot();
+      assert.equal(snap.permissions[0].fp, fingerprintSync({ tool: 'Bash', args: { command: 'ls' }, cwd: '/tmp/proj' }));
+      s.resolvePermission('t1', 'deny');
+      s.dispose();
+    });
   });
 
   test('abort signal 触发 → pendingPermissions.delete + request_resolved(aborted) + denyKinds(cancelled)', () => {
@@ -1282,7 +1360,7 @@ test.describe('权限闸门', () => {
       signal: ac.signal, toolUseID: 't1',
       suggestions: [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]
     });
-    s.resolvePermission('t1', 'allow', false); // 非「始终允许」，但 setMode 仍应应用
+    s.resolvePermission('t1', 'allow', false, { tool: 'SomeTool', args: { x: 1 }, cwd: s.cwd }); // 非「始终允许」，但 setMode 仍应应用
     const result = await promise;
     assert.equal(result.behavior, 'allow');
     assert.deepEqual(result.updatedPermissions, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]);
@@ -1302,7 +1380,7 @@ test.describe('权限闸门', () => {
     const promise = s.askPermission('ExitPlanMode', { plan: '…' }, {
       signal: ac.signal, toolUseID: 't1', suggestions: undefined // 真 SDK 行为：无 suggestions
     });
-    s.resolvePermission('t1', 'allow', false);
+    s.resolvePermission('t1', 'allow', false, { tool: 'ExitPlanMode', args: { plan: '…' }, cwd: s.cwd });
     const result = await promise;
     assert.equal(result.behavior, 'allow');
     assert.deepEqual(result.updatedPermissions, [{ type: 'setMode', mode: 'default', destination: 'session' }],
@@ -1321,7 +1399,7 @@ test.describe('权限闸门', () => {
       signal: ac.signal, toolUseID: 't1',
       suggestions: [{ type: 'addRules', rules: [{ toolName: 'Bash' }], behavior: 'allow', destination: 'session' }]
     });
-    s.resolvePermission('t1', 'allow', false);
+    s.resolvePermission('t1', 'allow', false, { tool: 'Bash', args: { command: 'ls' }, cwd: s.cwd });
     const result = await promise;
     assert.equal(result.updatedPermissions, undefined); // 非 always + 无 setMode → 不带
     assert.equal(s.permissionMode, 'default');
@@ -1336,7 +1414,7 @@ test.describe('权限闸门', () => {
     const promise = s.askPermission('Bash', { command: 'ls' }, {
       signal: ac.signal, toolUseID: 't1', suggestions: rules
     });
-    s.resolvePermission('t1', 'allow', true);
+    s.resolvePermission('t1', 'allow', true, { tool: 'Bash', args: { command: 'ls' }, cwd: s.cwd });
     const result = await promise;
     assert.deepEqual(result.updatedPermissions, rules);
     s.dispose();
@@ -1457,7 +1535,7 @@ test.describe('跨实例隔离（跨 tab 回答不串台）', () => {
     let outY = 'pending';
     const pX = X.s.askPermission('Bash', { command: 'x' }, { signal: new AbortController().signal, toolUseID: 'reqX' });
     Y.s.askPermission('Bash', { command: 'y' }, { signal: new AbortController().signal, toolUseID: 'reqY' }).then(r => { outY = r.behavior; });
-    X.s.resolvePermission('reqX', 'allow');
+    X.s.resolvePermission('reqX', 'allow', false, { tool: 'Bash', args: { command: 'x' }, cwd: X.s.cwd });
     assert.equal((await pX).behavior, 'allow', 'reqX 解决为 allow');
     assert.equal(X.s.pendingPermissions.size, 0);
     assert.equal(Y.s.pendingPermissions.size, 1, 'reqY 仍挂起');
@@ -1474,7 +1552,7 @@ test.describe('跨实例隔离（跨 tab 回答不串台）', () => {
     assert.equal((await pX).behavior, 'deny');
     assert.equal(X.s.pendingPermissions.size, 0);
     assert.equal(Y.s.pendingPermissions.size, 1, '同名 requestId 在 Y 仍挂起');
-    Y.s.resolvePermission('dup', 'allow');
+    Y.s.resolvePermission('dup', 'allow', false, { tool: 'Bash', args: { command: 'y' }, cwd: Y.s.cwd });
     assert.equal((await pY).behavior, 'allow');
     X.s.dispose(); Y.s.dispose();
   });
@@ -1800,11 +1878,13 @@ test.describe('pendingRequestsSnapshot()', () => {
     assert.deepEqual(s.pendingRequestsSnapshot(), { permissions: [], questions: [] });
   });
 
-  test('permission：requestId/name/input/cwd 与 emit(permission_request) 一致', () => {
+  test('permission：requestId/name/input/cwd/fp/createdAt/expiresAt 与 emit(permission_request) 一致', () => {
     const { s } = makeSession({ cwd: '/tmp/proj' });
-    s.pendingPermissions.set('req_1', { name: 'Bash', input: { command: 'ls -la' }, resolve() {} });
+    // fp/createdAt/expiresAt：真实 pendingPermissions 条目总由 askPermission 写入（NFR-17 完整性绑定
+    // + FR-22 悬置时长/TTL），此处手造数据代表真实形态，断言快照原样透传（而非只透传 name/input）。
+    s.pendingPermissions.set('req_1', { name: 'Bash', input: { command: 'ls -la' }, resolve() {}, fp: 'abc123', createdAt: 1000, expiresAt: 2000 });
     const snap = s.pendingRequestsSnapshot();
-    assert.deepEqual(snap.permissions, [{ requestId: 'req_1', name: 'Bash', input: { command: 'ls -la' }, cwd: '/tmp/proj' }]);
+    assert.deepEqual(snap.permissions, [{ requestId: 'req_1', name: 'Bash', input: { command: 'ls -la' }, cwd: '/tmp/proj', fp: 'abc123', createdAt: 1000, expiresAt: 2000 }]);
     assert.deepEqual(snap.questions, []);
   });
 

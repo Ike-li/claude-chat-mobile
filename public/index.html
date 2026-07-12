@@ -691,6 +691,9 @@
       <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
       <div id="permTool" class="font-mono text-sm mb-1 text-ink"></div>
       <div id="permCwd" class="text-xs text-ink-faint mb-2"></div>
+      <!-- 审批完整性预检警示（NFR-17，承接 LLD §5.5 协议步骤4）：默认隐藏，前端重算指纹与服务端不符时显示。
+           不阻塞审批（后端 resolvePermission 才是真正的执行门槛），仅提示"谨慎确认"，见 app.js showPermIntegrityWarning。 -->
+      <div id="permIntegrityWarn" class="hidden text-xs text-danger bg-danger/10 border border-danger/40 rounded-md px-2 py-1.5 mb-2">⚠️ 完整性预检异常：展示内容与服务端锚定的指纹不符，请谨慎确认后再操作</div>
       <pre id="permInput" class="font-mono bg-sunk rounded-md p-2 text-xs overflow-x-auto max-h-48 overflow-y-auto mb-3 text-ink-soft"></pre>
       <label class="flex items-center gap-2 text-xs text-ink-soft mb-3">
         <input type="checkbox" id="permAlways" style="accent-color:var(--accent)">本会话内总是允许此类操作
