@@ -1237,68 +1237,97 @@ import { verifyIntegrity } from './canonicalize.js';
       const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
       const fmtMs = ms => { const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}h${String(m).padStart(2, '0')}m` : m ? `${m}m${String(x).padStart(2, '0')}s` : `${x}s`; };
       const fmtTokF = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n); // 带 1 位小数（token 明细，匹配 cli 的 2.1k/199.6k）
-      // 折叠摘要（去 emoji）：<task> · <ctx> · $<cost> · <wall 耗时>
-      const head = [];
-      if (p.task) head.push(`⚙ ${p.task}`);
-      if (p.ctx && Number.isFinite(p.ctx.tokens)) head.push(fmtTok(p.ctx.tokens));
-      if (Number.isFinite(p.cost)) head.push(`$${p.cost.toFixed(4)}`);
-      if (p.duration && p.duration.wallMs) head.push(fmtMs(p.duration.wallMs));
-      if (cliSummaryEl) cliSummaryEl.textContent = head.join(' · ') || '状态';
-      // 展开详情：分段着色、纯 DOM 构建。seg = {text,cls} 或 {node}；段间插 faint 的 ' · ' 分隔
+      // 折叠条只显 'statusline' 一词；全部数据在展开态（CLI 密集风、│ 分隔、分段着色）
+      if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
+      // 展开详情：CLI 密集风、分段着色、纯 DOM 构建。seg = {text,cls} 或 {node}。配色用项目语义色 token
+      // （随明/暗主题），不硬塞 CLI 的 Catppuccin。每个非首段把分隔符 │ 与内容打包成一个不可拆的 cell，
+      // 这样窄屏 flex-wrap 折行时 │ 永远跟着它后面的值走、不会被孤零零甩到行尾。
       const span = (text, cls) => { const s = document.createElement('span'); if (cls) s.className = cls; s.textContent = text; return s; };
-      const buildLine = segs => {
+      const row = segs => {
         const segsF = segs.filter(Boolean);
         if (!segsF.length) return null;
         const line = document.createElement('div');
+        line.className = 'flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5';
         segsF.forEach((seg, i) => {
-          if (i) line.appendChild(span(' · ', 'text-ink-faint opacity-50'));
-          line.appendChild(seg.node || span(seg.text, seg.cls));
+          const content = seg.node || span(seg.text, seg.cls);
+          if (!i) { line.appendChild(content); return; }
+          const cell = document.createElement('span');
+          cell.className = 'inline-flex items-baseline gap-x-1.5'; // │ + 内容打包，防分隔符落行尾
+          cell.appendChild(span('│', 'text-ink-faint opacity-40'));
+          cell.appendChild(content);
+          line.appendChild(cell);
         });
         return line;
       };
       const lines = [];
-      // 缓存失效倒计时的 server 端剩余 = cacheExpiresAt − p.ts（同 server 时钟、差值无偏）；行3 用它初始化、末尾据此启本地跳秒表
+      // 缓存失效倒计时的 server 端剩余 = cacheExpiresAt − p.ts（同 server 时钟、差值无偏）；末尾据此启本地跳秒表
       const ttlRemainMs = (p.ctx && Number.isFinite(p.ctx.cacheExpiresAt) && Number.isFinite(p.ts)) ? p.ctx.cacheExpiresAt - p.ts : null;
-      // 行1：分支 ✱变更 ↑ahead ↓behind + 代码增删（+绿 −红双色复合段，跟随项目 emerald/rose 惯例）
+
+      // git 段（分支 ✱变更 ↑ahead ↓behind + 代码增删 +绿 −红双色）作为一个复合节点
+      let gitNode = null;
       if (p.git?.branch) {
         let b = p.git.branch;
         if (p.git.changed) b += ` ✱${p.git.changed}`;
         if (p.git.ahead) b += ` ↑${p.git.ahead}`;
         if (p.git.behind) b += ` ↓${p.git.behind}`;
-        let diff = null;
+        gitNode = document.createElement('span');
+        gitNode.appendChild(span(b, 'text-accent font-medium'));
         if (p.git.insertions || p.git.deletions) {
-          diff = document.createElement('span');
-          if (p.git.insertions) diff.appendChild(span(`+${p.git.insertions}`, 'text-emerald-500'));
-          if (p.git.insertions && p.git.deletions) diff.appendChild(document.createTextNode(' '));
-          if (p.git.deletions) diff.appendChild(span(`−${p.git.deletions}`, 'text-rose-500'));
+          gitNode.appendChild(document.createTextNode(' '));
+          if (p.git.insertions) gitNode.appendChild(span(`+${p.git.insertions}`, 'text-success'));
+          if (p.git.insertions && p.git.deletions) gitNode.appendChild(document.createTextNode(' '));
+          if (p.git.deletions) gitNode.appendChild(span(`−${p.git.deletions}`, 'text-danger'));
         }
-        lines.push(buildLine([{ text: b, cls: 'text-accent font-medium' }, diff && { node: diff }]));
       }
-      // 行2：精确 token + 缓存命中率 + API 耗时（wall 耗时已在摘要，这里只 API 避免重复）
-      lines.push(buildLine([
-        p.ctx && Number.isFinite(p.ctx.tokens) && { text: `${p.ctx.tokens.toLocaleString()} tokens`, cls: 'text-ink-soft' },
-        p.ctx && Number.isFinite(p.ctx.cacheHitPct) && { text: `cache ${p.ctx.cacheHitPct}%`, cls: 'text-ink-faint' },  // 瞬时:本轮命中率
-        p.ctx && Number.isFinite(p.ctx.reused) && { text: `reused ${fmtTokF(p.ctx.reused)}`, cls: 'text-ink-faint' }, // 累计:本会话复用 token
-        p.duration && p.duration.apiMs && { text: `API ${fmtMs(p.duration.apiMs)}`, cls: 'text-ink-faint' }
+      // ctx 段：有 usedPercent → 'ctx X% · left Y'（≥90% 转红警示）；否则退回绝对 token 数（认不出 model 的窗口）
+      let ctxSeg = null;
+      if (p.ctx && Number.isFinite(p.ctx.usedPercent)) {
+        let txt = `ctx ${p.ctx.usedPercent}%`;
+        if (Number.isFinite(p.ctx.windowSize)) txt += ` · left ${fmtTok(Math.max(0, p.ctx.windowSize - p.ctx.tokens))}`;
+        const pc = p.ctx.usedPercent; // 蓝(健康)→橙(≥70)→红(≥90) 三段警示
+        ctxSeg = { text: txt, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' };
+      } else if (p.ctx && Number.isFinite(p.ctx.tokens)) {
+        ctxSeg = { text: `ctx ${fmtTok(p.ctx.tokens)}`, cls: 'text-ink-soft' };
+      }
+      // 行A（headline）：model │ [⚙ 后台任务] │ git │ ctx │ 版本（model 作标题、与 CLI 首段一致；底部 pill 仍是选择器）
+      const modelText = p.model ? (p.model.length > 26 ? p.model.slice(0, 25) + '…' : p.model) : '';
+      lines.push(row([
+        modelText && { text: modelText, cls: 'text-ink font-medium' },
+        p.task && { text: `⚙ ${p.task}`, cls: 'text-accent' },
+        gitNode && { node: gitNode },
+        ctxSeg,
+        p.version && { text: `v${p.version}`, cls: 'text-ink-faint' }
       ]));
-      // 行3：token 明细 in/w/r（input / cache 写 / cache 读——cli 口径，看缓存效率）
+
+      // in/w/r 明细（input / cache 写 / cache 读——cli 口径，看缓存效率）作为一个复合段
+      let inwrNode = null;
       if (p.ctx && Number.isFinite(p.ctx.in)) {
-        lines.push(buildLine([
-          { text: `in:${fmtTokF(p.ctx.in)}`, cls: 'text-ink-faint' },
-          { text: `w:${fmtTokF(p.ctx.w)}`, cls: 'text-ink-faint' },
-          { text: `r:${fmtTokF(p.ctx.r)}`, cls: 'text-ink-faint' },
-          // 倒计时 pill（带 js-cache-ttl 供 tick 跳秒定位）：~est 标记其为推算非权威值
-          ttlRemainMs != null && { text: ttlPillText(ttlRemainMs), cls: 'text-ink-faint js-cache-ttl' }
-        ]));
+        inwrNode = span(`in:${fmtTokF(p.ctx.in)} w:${fmtTokF(p.ctx.w)} r:${fmtTokF(p.ctx.r)}`, 'text-ink-faint');
       }
-      // 行4：repo · 版本 · 时间（时间用后端刷新时刻 p.ts 在前端渲染，不进 payload 以免破坏 server 端去重）
+      // 行B（token 遥测）：精确 token │ cache 命中率 │ in/w/r │ reused │ 缓存失效倒计时(~est)
+      lines.push(row([
+        p.ctx && Number.isFinite(p.ctx.tokens) && { text: `${p.ctx.tokens.toLocaleString()} tokens`, cls: 'text-ink-soft' },
+        p.ctx && Number.isFinite(p.ctx.cacheHitPct) && { text: `cache ${p.ctx.cacheHitPct}%`, cls: 'text-success' }, // 瞬时:本轮命中率
+        inwrNode && { node: inwrNode },
+        p.ctx && Number.isFinite(p.ctx.reused) && { text: `reused ${fmtTokF(p.ctx.reused)}`, cls: 'text-ink-faint' }, // 累计:本会话复用 token
+        ttlRemainMs != null && { text: ttlPillText(ttlRemainMs), cls: 'text-ink-faint js-cache-ttl' } // ~est 标记推算非权威
+      ]));
+
+      // 行C（成本/耗时）：est $成本 │ total 墙钟 │ api 耗时
+      lines.push(row([
+        Number.isFinite(p.cost) && { text: `est $${p.cost.toFixed(2)}`, cls: 'text-success' },
+        p.duration && p.duration.wallMs && { text: `total ${fmtMs(p.duration.wallMs)}`, cls: 'text-ink-faint' },
+        p.duration && p.duration.apiMs && { text: `api ${fmtMs(p.duration.apiMs)}`, cls: 'text-ink-faint' }
+      ]));
+      // 行D（会话身份/元数据，弱化为 faint、rarely-viewed）：repo │ sid │ 时钟
       const clock = p.ts ? new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
-      lines.push(buildLine([
+      lines.push(row([
         p.git?.repo && { text: p.git.repo, cls: 'text-ink-faint' },
-        p.version && { text: `v${p.version}`, cls: 'text-ink-faint' },
+        p.session?.id && { text: `sid ${p.session.id.slice(0, 8)}`, cls: 'text-ink-faint' },
         clock && { text: clock, cls: 'text-ink-faint' }
       ]));
-      // 一次性替换：清空旧节点 + append 非空行（buildLine 对空行返回 null）
+
+      // 一次性替换：清空旧节点 + append 非空行（row 对空行返回 null）
       cliStatusEl.textContent = '';
       lines.filter(Boolean).forEach(l => cliStatusEl.appendChild(l));
       // 倒计时跳秒表：有剩余则把 server 端剩余换算成本地 deadline 并确保表在跑；无则停表（换会话/未命中时不下发 cacheExpiresAt）
@@ -3163,7 +3192,7 @@ import { verifyIntegrity } from './canonicalize.js';
     // Clear stale status line and hide details row to prevent latency layout flashes
     if (cliStatusEl) cliStatusEl.innerHTML = '';
     stopCacheTtl(); // 同时停缓存倒计时跳秒表（pill DOM 已随 innerHTML 清空），防旧实例 deadline 串到新视图
-    if (cliSummaryEl) cliSummaryEl.textContent = '终端状态行';
+    if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
     if (cliStatusWrapEl) {
       cliStatusWrapEl.removeAttribute('open'); // Fold <details> element
       cliStatusWrapEl.classList.add('hidden'); // Hide the wrapper

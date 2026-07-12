@@ -344,15 +344,19 @@ async function run() {
     assert.ok(statusTextTC6 && statusTextTC6.includes('w:22.0k') && statusTextTC6.includes('r:21.0k'), 'TC-6: 展开含 token 明细 w/r');
     assert.ok(statusTextTC6 && statusTextTC6.includes('Ike-li/claude-chat-mobile'), 'TC-6: 展开含 repo 全名');
     assert.ok(statusTextTC6 && statusTextTC6.includes('v2.1.178'), 'TC-6: 展开含 CLI 版本号');
+    // 新增展开字段：ctx% + left（model→窗口映射）、成本、会话元数据 sid/transcript
+    assert.ok(statusTextTC6 && statusTextTC6.includes('ctx 23%'), 'TC-6: 展开含 ctx 百分比（model→窗口映射）');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('left 155k'), 'TC-6: 展开含剩余上下文（windowSize−tokens）');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('est $0.37'), 'TC-6: 展开含成本（est $）');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('sid 784e20b1'), 'TC-6: 展开含会话 sid');
 
-    // 3. 折叠摘要：ctx 缩写 + 成本（去 emoji；模型移至徽章 pill、不再进摘要）
+    // 3. 折叠摘要：只显 'statusline' 一词（全部数据在展开态）
     const summaryTextTC6 = await page.evaluate(() => {
       const summary = document.getElementById('cliSummary');
       return summary ? summary.textContent.trim() : null;
     });
     console.log(`   [Assert] Summary Text: "${summaryTextTC6}"`);
-    assert.ok(summaryTextTC6 && summaryTextTC6.includes('45k'), 'TC-6: 摘要含 context token 缩写');
-    assert.ok(summaryTextTC6 && summaryTextTC6.includes('$0.37'), 'TC-6: 摘要含成本');
+    assert.ok(summaryTextTC6 === 'statusline', 'TC-6: 折叠摘要只显 statusline');
 
     await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc6_statusline.png` });
     console.log('📸 Captured and saved tc6_statusline.png\n');

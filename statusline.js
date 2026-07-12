@@ -65,9 +65,22 @@ export async function gitStatus(cwd) {
   return data;
 }
 
+// ---- 上下文窗口大小映射（model → tokens）----
+// SDK 不回报 web 会话的真实窗口大小，只能按 model 名映射：显式 1M 标记（[1m] / "1M context"）→ 1_000_000；
+// 认得出的 Claude 模型 → 200_000；认不出 → null（调用方退回只显绝对 token 数，不显百分比）。
+// 已知边界（有意接受的取舍）：resume 会丢掉 [1m] 后缀，1M 会话被恢复后会被当 200k、ctx% 偏高；
+// 宁可让多数场景有百分比，也不为这个极端边界砍掉整个功能。认不出的第三方模型直接不显 %，不误导。
+export function contextWindowSize(model) {
+  if (!model) return null;
+  const m = String(model).toLowerCase();
+  if (/\[1m\]|\b1m\b|1m\s*context|1000000/.test(m)) return 1_000_000;
+  if (/claude|opus|sonnet|haiku/.test(m)) return 200_000;
+  return null;
+}
+
 // web 会话自己的 ctx/cost（口径：assistant.message.usage，非 result.usage 轮内聚合避免高估）。
-// ctx 只回 SDK 真值（token 绝对数），不算「百分比/窗口」——SDK / 会话 jsonl / 快照都不暴露 web 会话自己的
-// 真实 context window 大小，从 model 名猜窗口会误判（官方 1M beta 无 [1m] 后缀 / resume 丢后缀）。
+// 本函数只回 SDK 真值（token 绝对数）；ctx 百分比在 buildWebStatusLine 里用 contextWindowSize(model)
+// 事后推算——SDK / 会话 jsonl / 快照都不暴露 web 会话真实 context window 大小，只能按 model 名映射。
 export function webContextCost({ agent }) {
   const r = {};
   const u = agent?.lastUsage;
@@ -111,6 +124,12 @@ export async function buildWebStatusLine({ agent, cwd, versions }) {
     if (cc.context.reused > 0) p.ctx.reused = cc.context.reused;                            // 累计：本会话复用 token（reused）
     // 缓存失效倒计时 deadline（客户端推算，非权威——详见顶部 CACHE_TTL_MS 注释）：仅曾命中过缓存才给，前端本地递减
     if (agent?.lastCacheHitAt > 0) p.ctx.cacheExpiresAt = agent.lastCacheHitAt + CACHE_TTL_MS;
+    // ctx 百分比：按 model→窗口大小映射（能确信时给 usedPercent + windowSize；认不出的 model 不给，前端退回绝对 token 数）
+    const win = contextWindowSize(model);
+    if (win && p.ctx.tokens > 0) {
+      p.ctx.windowSize = win;
+      p.ctx.usedPercent = Math.min(100, Math.round(p.ctx.tokens / win * 100));
+    }
   }
   if (cc.cost) {
     if (cc.cost.usedUsd > 0) p.cost = cc.cost.usedUsd;
@@ -120,5 +139,8 @@ export async function buildWebStatusLine({ agent, cwd, versions }) {
   // claude CLI 版本（启动时采集，server.js 传入）：取首段裸版本号，去 "(Claude Code)" 等后缀；前端加 v 前缀
   const ver = versions?.cli && versions.cli !== 'unknown' ? String(versions.cli).split(/\s+/)[0] : '';
   if (ver) p.version = ver;
+  // 会话元数据：sid（ccm 自管 sessionId）。注：CLI statusline 的 "pid" 实为 Claude Code 的 prompt_id、
+  // SDK 路径不产出；transcript basename 与 sid 冗余（= <sid>.jsonl），故都不含。
+  if (agent?.sessionId) p.session = { id: agent.sessionId };
   return p;
 }

@@ -12,16 +12,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:statusline');
     await waitForIdle(page);
     await expect(page.locator('#cliStatusWrap')).toBeVisible();
+    // 折叠条只显 'statusline' 一词；全部数据在展开态（CLI 密集风）
+    await expect(page.locator('#cliSummary')).toContainText('statusline');
     await page.locator('#cliStatusWrap summary').click();
-    await expect(page.locator('#cliSummary')).toContainText('45k');
-    await expect(page.locator('#cliSummary')).toContainText('$0.37');
     await expect(page.locator('#cliStatus')).toContainText('feature/visual-testing');
     await expect(page.locator('#cliStatus')).toContainText('+120');
+    await expect(page.locator('#cliStatus')).toContainText('ctx 23%');        // model→窗口映射算出的上下文占用
+    await expect(page.locator('#cliStatus')).toContainText('left 155k');      // windowSize − tokens
     await expect(page.locator('#cliStatus')).toContainText('45,000 tokens');
     await expect(page.locator('#cliStatus')).toContainText('cache 45%');
     await expect(page.locator('#cliStatus')).toContainText('reused 1.2m');
+    await expect(page.locator('#cliStatus')).toContainText('$0.37');          // 成本移入展开态：est $0.37
     await expect(page.locator('#cliStatus')).toContainText('Ike-li/claude-chat-mobile');
     await expect(page.locator('#cliStatus')).toContainText('v2.1.178');
+    await expect(page.locator('#cliStatus')).toContainText('sid 784e20b1');   // 会话元数据（sid）
 
     await expectNoBrowserErrors(page);
   });

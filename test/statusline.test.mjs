@@ -1,9 +1,9 @@
 // test/statusline.test.mjs —— statusline.js 纯函数单测（零 token）
-// statusLine 为 web 自有状态栏：自包含组装、不调脚本/快照。ctx 口径：只回 SDK 真实
-// token 绝对数，不算窗口/百分比（SDK/jsonl/快照都不暴露 web 会话真实 context window，从 model 名猜会误判）。
+// statusLine 为 web 自有状态栏：自包含组装、不调脚本/快照。ctx 绝对 token 来自 SDK 真值；
+// ctx 百分比由 buildWebStatusLine 用 contextWindowSize(model) 事后推算（认不出的 model 退回只显绝对数）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, gitStatus, parseShortstat, parseRepo } from '../statusline.js';
+import { webContextCost, buildWebStatusLine, gitStatus, parseShortstat, parseRepo, contextWindowSize } from '../statusline.js';
 
 const usage = t => ({ input_tokens: t, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
 
@@ -122,6 +122,62 @@ test.describe('buildWebStatusLine：web 自包含结构化状态（不调脚本/
     assert.equal(unknown.version, undefined);
     const none = await buildWebStatusLine({ agent: null, cwd: undefined });
     assert.equal(none.version, undefined);
+  });
+});
+
+test.describe('contextWindowSize：model→上下文窗口大小映射', () => {
+  test('[1m] 后缀 → 1M', () => assert.equal(contextWindowSize('claude-opus-4-8[1m]'), 1_000_000));
+  test('"1M context" 文案 → 1M', () => assert.equal(contextWindowSize('Opus 4.8 (1M context)'), 1_000_000));
+  test('裸 Claude 模型 → 200k', () => assert.equal(contextWindowSize('claude-opus-4-8'), 200_000));
+  test('sonnet / haiku → 200k', () => {
+    assert.equal(contextWindowSize('claude-sonnet-5'), 200_000);
+    assert.equal(contextWindowSize('claude-haiku-4-5-20251001'), 200_000);
+  });
+  test('认不出的 model → null（前端退回绝对数）', () => {
+    assert.equal(contextWindowSize('gpt-4o'), null);
+    assert.equal(contextWindowSize(''), null);
+    assert.equal(contextWindowSize(null), null);
+  });
+});
+
+test.describe('buildWebStatusLine：ctx% 由 model→窗口映射推算', () => {
+  const usageT = t => ({ input_tokens: t, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+
+  test('[1m] 模型 + tokens=400k → usedPercent=40 · windowSize=1M', async () => {
+    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-opus-4-8[1m]', lastUsage: usageT(400_000) }, cwd: undefined });
+    assert.equal(p.ctx.windowSize, 1_000_000);
+    assert.equal(p.ctx.usedPercent, 40);
+  });
+
+  test('裸模型 + tokens=100k → usedPercent=50（100k/200k）', async () => {
+    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-opus-4-8', lastUsage: usageT(100_000) }, cwd: undefined });
+    assert.equal(p.ctx.windowSize, 200_000);
+    assert.equal(p.ctx.usedPercent, 50);
+  });
+
+  test('usedPercent 封顶 100（tokens 超窗口）', async () => {
+    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-opus-4-8[1m]', lastUsage: usageT(1_200_000) }, cwd: undefined });
+    assert.equal(p.ctx.usedPercent, 100);
+  });
+
+  test('认不出的 model → 无 usedPercent/windowSize，仍保留绝对 token', async () => {
+    const p = await buildWebStatusLine({ agent: { activeModel: 'some-unknown-model', lastUsage: usageT(100_000) }, cwd: undefined });
+    assert.equal(p.ctx.usedPercent, undefined);
+    assert.equal(p.ctx.windowSize, undefined);
+    assert.equal(p.ctx.tokens, 100_000);
+  });
+});
+
+test.describe('buildWebStatusLine：session 元数据（sid）', () => {
+  test('agent.sessionId → p.session={id}（transcript 与 sid 冗余，不含）', async () => {
+    const id = '784e20b1-a550-45d1-874b-13b5f55eeb46';
+    const p = await buildWebStatusLine({ agent: { sessionId: id, activeModel: 'm', lastUsage: { input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }, cwd: undefined });
+    assert.deepEqual(p.session, { id });
+  });
+
+  test('无 sessionId → 无 p.session（省字段）', async () => {
+    const p = await buildWebStatusLine({ agent: { activeModel: 'm', lastUsage: { input_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } }, cwd: undefined });
+    assert.equal(p.session, undefined);
   });
 });
 
