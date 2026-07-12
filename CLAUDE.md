@@ -38,4 +38,4 @@ node scripts/smoke.js              # 终端 2：M1 行走骨架（A1/A2/A4/A6 + 
 node scripts/smoke.js --phase2     # 重启终端 1 后：跨重启 resume
 ```
 
-健康检查：`GET /health` → `{status, sessionId, busy, versions, timestamp}`（设了 `AUTH_TOKEN` 时需带 `?token=` 或 `x-auth-token` 头，否则 401）。历史回显走鉴权的 `session:history` socket 事件，不开无鉴权 HTTP 数据端点。
+健康检查：`GET /health` → `{status, sessionId, busy, versions, timestamp}`（设了 `AUTH_TOKEN` 时需带 `?token=` 或 `x-auth-token` 头，否则 401）。运行时可观测（NFR-15/LLD §3.7）：`GET /metrics`（同样鉴权）→ `{metrics{activeSessions,events,catchUpHits,catchUpReloads,rateLimitLockouts,pushSuccess,pushFailure}, state, states, timestamp}`——指标最小集 + StateProbe 五类状态分类（后端产出四类，host_offline 由客户端心跳判定）；JSON 非 Prometheus 文本（n=1 无 scraper）。历史回显走鉴权的 `session:history` socket 事件，不开无鉴权 HTTP 数据端点。

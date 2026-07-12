@@ -45,6 +45,7 @@ import {
 } from './devices.js';
 import * as approvalStore from './approval-store.js';
 import * as audit from './audit.js';
+import * as metrics from './metrics.js';
 
 // #9：dotenv 后一次性剥除空串环境变量，使 .env 里的空行（WORK_DIR= 等）等价于"未设置"，
 // 让下方解构默认值与 Number() 容错统一在一处生效，而非每个读取点各自 `|| / .trim() ||`。
@@ -142,10 +143,12 @@ async function pushNotify(title, body, data) {
   const payload = JSON.stringify(data ? { title, body, data } : { title, body });
   const expired = [];
   await Promise.all(pushSubscriptions.map(sub =>
-    webpush.sendNotification(sub, payload).catch(e => {
-      if (e.statusCode === 410 || e.statusCode === 404) expired.push(sub.endpoint); // 过期/注销
-      else console.error('[push] 推送失败:', e.statusCode ?? '', e.message);
-    })
+    webpush.sendNotification(sub, payload)
+      .then(() => metrics.inc('push_success')) // NFR-15 推送成功率（分子）
+      .catch(e => {
+        if (e.statusCode === 410 || e.statusCode === 404) expired.push(sub.endpoint); // 过期/注销：订阅生命周期正常结束，非"通知失败"
+        else { metrics.inc('push_failure'); console.error('[push] 推送失败:', e.statusCode ?? '', e.message); } // NFR-15 notify_failed 信号：真失败（非订阅过期）才计
+      })
   ));
   if (expired.length) {                       // 仅剔除失效的那几条，其余设备订阅保留
     pushSubscriptions = pushSubscriptions.filter(s => !expired.includes(s.endpoint));
@@ -388,6 +391,34 @@ app.get('/health', httpAuth, (req, res) => {
     sessionId: agents.get(viewingInstanceId)?.sessionId ?? null, // 台阶3：报当前查看 tab 实例的会话
     busy: [...agents.values()].some(a => a.pendingTurns > 0), // 任一实例在跑即 busy
     versions, // { sdk, cli }，升级回归核对
+    timestamp: Date.now()
+  });
+});
+// 运行时指标 + 状态分类（LLD §3.7 MetricsCollector/StateProbe，承接 NFR-15）。同 /health 走 httpAuth——
+// 指标是敏感运行数据，"不开无鉴权数据端点"（LLD §3.7）。返回 JSON（非 Prometheus 文本：n=1 自托管无 scraper，
+// 文本格式徒增无消费者的复杂度）。指标最小集 5 项 = 活跃会话数 / 事件 seq 速率（累计，速率由消费者按两次
+// 快照时间差算）/ 补齐命中·重载 / 限速触发 / 推送成功·失败。
+app.get('/metrics', httpAuth, (req, res) => {
+  const c = metrics.snapshot().counters;
+  // 当前实时观测（按需算，不额外埋点）：失败/等待实例数、已连接移动端数。
+  const failed = errorInstances.size;
+  let awaiting = 0;
+  for (const a of agents.values()) if (a.pendingPermissions.size > 0 || a.pendingQuestions.size > 0) awaiting++;
+  const notifyFailed = c.push_failure ?? 0; // 进程生命周期内累计（重启清零），>0 即提示查审计
+  const mobileClients = io.sockets.adapter.rooms.get('approved')?.size ?? 0; // 已批准（TOFU 过）的连接数
+  res.json({
+    metrics: {
+      activeSessions: agents.size,
+      events: c.events ?? 0,
+      catchUpHits: c.catch_up_hits ?? 0,
+      catchUpReloads: c.catch_up_reloads ?? 0,
+      rateLimitLockouts: c.rate_limit_lockouts ?? 0,
+      pushSuccess: c.push_success ?? 0,
+      pushFailure: c.push_failure ?? 0,
+    },
+    // NFR-15 五类状态：后端产出的当前最高优先级分类（host_offline 由客户端心跳缺席判定、不在此列）。
+    state: metrics.classifyState({ failed, awaiting, notifyFailed, mobileClients }),
+    states: { failed, awaiting, notifyFailed, mobileClients }, // 各类原始观测，供更细诊断
     timestamp: Date.now()
   });
 });
@@ -684,6 +715,7 @@ io.use(async (socket, next) => {
         // FR-19 最小审计记录：只在"达阈值锁定"这个粒度写（本就限速到每锁定窗口一次），不逐次失败尝试都写——
         // 后者本身可被攻击者刷出高频事件、会把环形上限里的真实信号挤掉，锁定事件已足够代表"发生过暴破尝试"。
         audit.recordAudit({ actor: { deviceId: null, via: 'unauthenticated' }, action: 'auth_rate_limited', target: rlKey, outcome: 'locked', meta: { retryAfterMs: r.retryAfterMs } });
+        metrics.inc('rate_limit_lockouts'); // NFR-15 限速触发数（与审计同粒度：每锁定窗口一次）
       }
     }
 
@@ -923,6 +955,7 @@ async function catchUpTick() {
   if (curSize >= 0) mirrorLastSize = curSize; // 读取瞬时失败(curSize=-1)不覆盖基线：保留上次好值，避免把「基线未建立」哨兵误写回、平白吃掉 1-2 个 tick 的 keep-alive 信号
   const externalWrite = emit.length > 0;
   if (externalWrite) {                                               // 观察到外部写入 → 追平尾巴
+    metrics.inc('catch_up_hits'); // NFR-15 补齐命中（catchUpTick 成功推了终端侧外部增量的次数）
     io.to('approved').emit('agent:event', { // SEC-01：会话内容，仅广播给已批准设备
       seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
       type: 'history_append', payload: { messages: emit, external: true }
@@ -1114,6 +1147,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     approvalTtlMs,
     historicalCostUsd: saved?.cost || 0,
     onEvent: envelope => {
+      metrics.inc('events'); // NFR-15 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
       if (envelope.type === 'init') { lastInit = envelope.payload; saveInitCache(); }
       else if (envelope.type === 'models') { modelsCache.set(cwd, envelope.payload); saveInitCache(); } // 按本实例 cwd 归键，防跨工作区泄漏
       // 批准内含的 mode 切换（ExitPlanMode 等经 agent.resolvePermission emit）：同步 per-instance 权威档，
@@ -1915,7 +1949,7 @@ io.on('connection', socket => {
       if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen });
     };
     const a = routeInstance(instanceId); // 台阶3：续传指定 tab 实例的缓冲（缺省 viewingInstanceId）
-    if (!a || a.sessionId !== sessionId) return done(0, false, false); // 无匹配实例：客户端清屏重载历史；亦会在下个 live 事件凭 epoch 自愈
+    if (!a || a.sessionId !== sessionId) { metrics.inc('catch_up_reloads'); return done(0, false, false); } // 无匹配实例：客户端清屏重载历史（NFR-15 重载：仅计后端能确证的触发；前端因 diskLen 盲区的重载后端不可观测、不计）；亦会在下个 live 事件凭 epoch 自愈
     const { events, gap } = a.eventsSince(Number(lastSeq) || 0);
     if (gap) { // #13：有缺口时明确告知，客户端可整段重渲染，不把残缺当完整
       socket.emit('agent:event', {
