@@ -92,16 +92,25 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       // 以 tool_result 形式存在的 user 都会被 extractContent 还原成空串。若不滤掉，
       // 它们会渲染成空气泡，还会占满窗口把真实对话挤出去。
       if (entry.type === 'user' || entry.type === 'assistant') {
-        const content = extractContent(entry.message?.content);
+        let content = extractContent(entry.message?.content);
         if (!content.trim()) continue;
         // 后台任务完成后 CLI 注入的 <task-notification> 是给模型看的系统信号，非用户对话——
         // 回显时跳过，否则重载后会显示成一条原始 XML 用户气泡（后续的 assistant 汇报本身自解释）。
         // 要求成对闭合，避免误伤用户随口以裸 <task-notification> 开头（少含闭合标签）的真实消息。
         if (content.trimStart().startsWith('<task-notification>') && content.includes('</task-notification>')) continue;
-        // CLI 写盘的系统行（isMeta=false，漏过上面的 isMeta 闸）：slash 命令注入的 <command-*>/<local-command-*>
-        // 标签块、[Request interrupted by user] 打断标记、resume 空 turn 的 'No response requested.'。非对话内容，
-        // 回显时跳过——否则会当成 user/assistant 气泡混进历史（见 test「CLI 系统行被过滤」）。
-        if (isCliSystemLine(content)) continue;
+        // slash 命令的调用块（<command-message>/<command-name>/<command-args>）——内置命令（/model /effort）
+        // 与自定义项目命令（/deep-research 等）落盘用的是同一套格式，且是磁盘上唯一留存用户原始输入的地方
+        // （7/12 事故：整块当噪音丢弃过，把自定义命令那一整个回合从历史里连根拔掉）。重建成终端里那样的
+        // "/命令名 参数" 一行文本，按普通消息保留——不再整体丢弃、也不原样吐出裸 XML。
+        const rebuilt = reconstructSlashCommand(content);
+        if (rebuilt !== null) {
+          content = rebuilt;
+        } else if (isCliSystemLine(content)) {
+          // CLI 写盘的其余系统行（isMeta=false，漏过上面的 isMeta 闸）：<local-command-*> 命令输出、
+          // [Request interrupted by user] 打断标记、resume 空 turn 的 'No response requested.' 等。
+          // 非对话内容，回显时跳过——否则会当成 user/assistant 气泡混进历史（见 test「CLI 系统行被过滤」）。
+          continue;
+        }
         // 同 uuid 重复落盘去重（仅 uuid 存在时；缺 uuid 的旧条目不因 undefined 相撞而互删）。
         if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
         messages.push({
@@ -203,15 +212,29 @@ function extractContent(content) {
   return '';
 }
 
+// slash 命令调用块重建：<command-message>/<command-name>/<command-args> 是 CLI 对 slash 命令（内置或
+// 自定义项目命令）的落盘形式——这是用户在终端/输入框里实际打出的那一行的唯一磁盘记录，不是系统噪音。
+// 标签顺序不固定（实测两种真实形态都存在），故不锚定起始位置，只按标签名抓取；command-name 缺失视为
+// 不是这类块（交给 isCliSystemLine 走原有噪音判断，不强行重建）。空参数不留多余空格（裸 "/clear" 而非
+// "/clear "）。返回 null 表示"不是 slash 命令块"，调用方据此决定是否继续按噪音过滤判断。
+function reconstructSlashCommand(content) {
+  const t = content.trim();
+  const nameMatch = /<command-name>([^<]*)<\/command-name>/.exec(t);
+  if (!nameMatch) return null;
+  const argsMatch = /<command-args>([^<]*)<\/command-args>/.exec(t);
+  const name = nameMatch[1].trim();
+  const args = argsMatch ? argsMatch[1].trim() : '';
+  return args ? `${name} ${args}` : name;
+}
+
 // 识别 CLI 写盘的「系统行」——非对话内容，但 isMeta=false 会漏过 getSessionHistory 的 isMeta 闸，须按 content
 // 形态显式过滤，否则回显成气泡（实测切多次 model/effort + 多次 interrupt 的会话，噪音可达回显的 ~30%）。
 // 只认「以标签开头且闭合」/「整条精确等于标记」，避免误伤用户以这些词开头的真实消息（与 <task-notification>
 // 要求闭合标签同款谨慎）。API Error（上游/网络错误）是真实运行事件、有诊断价值，不在此列——过滤它属独立决策。
+// 注：slash 命令的调用块（<command-*>）不在此列——那部分交给上面的 reconstructSlashCommand 重建保留，
+// 不再当噪音丢弃；此处只处理命令的「输出」（<local-command-stdout>），那才是真正的系统噪音。
 function isCliSystemLine(content) {
   const t = content.trim();
-  // slash 命令注入：一次 /model、/effort 等被 CLI 拆成 <command-name>/<command-message>/<command-args>
-  // 标签块（起始行 isMeta=false），及其 <local-command-stdout>/<local-command-stderr> 输出。
-  if (/^<command-(name|message|args)>/.test(t) && /<\/command-(name|message|args)>/.test(t)) return true;
   if (/^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t)) return true;
   // `!` bash 模式注入：终端里 ! 前缀跑 bash，CLI 以 <bash-input>/<bash-stdout>/<bash-stderr> 注入输入/输出
   // （role=user、isMeta 缺失，漏过 isMeta 闸）。实证 234 会话漏 4+4 条。
