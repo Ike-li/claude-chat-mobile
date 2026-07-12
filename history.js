@@ -189,7 +189,7 @@ export function catchUpStep(state, { messages, localBusy = false }) {
 //     bash/搜索上，文件完全不增长，原实现 12.5s 误判解锁、横幅熄灭（2026-07-12 真实报障「感觉没东西在跑」）；
 //   · idle 且无外部写入、文件不再增长、尾部形态已收尾（真静默）→ quietTicks++；累计到 MIRROR_RELEASE_QUIET_TICKS → 自动解锁。
 // 保守取舍：keepAlive 用文件增长做「终端还活着」的弱判据【仅延缓解锁】——是本项目刻意规避的「mtime 判活」近亲，
-//   但风险低一档（不上锁→绝不误锁死进不去，最坏是终端真停后晚 ~N tick 才解锁）；前端「仍要发送」手动接管仍是兜底。
+//   但风险低一档（不上锁→绝不误锁死进不去，最坏是终端真停后晚 ~N tick 才解锁）；前端「接管会话」手动接管仍是兜底。
 //   ⚠️ 前提：web 纯查看 idle 期间其自身 resume 进程不 append transcript（否则 keepAlive 恒真→退回锁死，靠接管兜）——须 live 验证。
 export const MIRROR_RELEASE_QUIET_TICKS = 5; // ×CATCH_UP_INTERVAL_MS(2.5s) ≈ 12.5s 终端静默 → 自动解锁
 export function mirrorReleaseStep(state, { externalWrite = false, keepAlive = false, tailPending = false, localBusy = false } = {}) {

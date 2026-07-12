@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget } from '../public/js/logic.js';
+import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test('esc: 转义 HTML 元字符', () => {
@@ -527,4 +527,45 @@ test.describe('defaultModelTileLabel: 默认磁贴文案', () => {
     assert.equal(defaultModelTileLabel({}).showsName, false);
     assert.equal(defaultModelTileLabel().showsName, false);
   });
+});
+
+// ── armedTakeoverStep：排队接管状态机（接管=等终端本轮完结再放行，纯 web 侧） ──
+// armed 期间只有三个出口：本轮完结自动放行(unlock-focus) / 等待中疑似中断自动完成接管(unlock-stale)
+// / 切会话撤销(disarm)；其余一律不动作。未 armed 时对任何信号零影响（不干扰现有 onMirrorState 路径）。
+test('armedTakeoverStep: 未 armed → 任何信号均 none', () => {
+  assert.deepEqual(armedTakeoverStep({ armed: false }, { kind: 'mirror', readonly: false }), { action: 'none' });
+  assert.deepEqual(armedTakeoverStep({}, { kind: 'switch' }), { action: 'none' });
+  assert.deepEqual(armedTakeoverStep(undefined, undefined), { action: 'none' });
+});
+
+test('armedTakeoverStep: armed + readonly=false（终端本轮完结）→ unlock-focus', () => {
+  assert.deepEqual(
+    armedTakeoverStep({ armed: true, armedSid: 's1' }, { kind: 'mirror', readonly: false }),
+    { action: 'unlock-focus' }
+  );
+});
+
+test('armedTakeoverStep: armed + 仍在驾驶（readonly=true, stale=false）→ none 继续等', () => {
+  assert.deepEqual(
+    armedTakeoverStep({ armed: true, armedSid: 's1' }, { kind: 'mirror', readonly: true, stale: false, sessionId: 's1' }),
+    { action: 'none' }
+  );
+});
+
+test('armedTakeoverStep: armed + 同会话转疑似中断（stale=true）→ unlock-stale', () => {
+  assert.deepEqual(
+    armedTakeoverStep({ armed: true, armedSid: 's1' }, { kind: 'mirror', readonly: true, stale: true, sessionId: 's1' }),
+    { action: 'unlock-stale' }
+  );
+});
+
+test('armedTakeoverStep: armed + 他会话 stale → none（不误放行）', () => {
+  assert.deepEqual(
+    armedTakeoverStep({ armed: true, armedSid: 's1' }, { kind: 'mirror', readonly: true, stale: true, sessionId: 's2' }),
+    { action: 'none' }
+  );
+});
+
+test('armedTakeoverStep: armed + 切会话 → disarm', () => {
+  assert.deepEqual(armedTakeoverStep({ armed: true, armedSid: 's1' }, { kind: 'switch' }), { action: 'disarm' });
 });

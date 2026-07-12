@@ -261,3 +261,22 @@ export function resolveDeepLinkTarget(target, instances = []) {
   if (target.sessionId) return { action: 'switch', sessionId: target.sessionId, cwd: target.cwd };
   return { action: 'list' };
 }
+
+// 排队接管状态机（接管=等终端本轮完结再放行，纯 web 侧、零终端侵入）。
+// 驾驶中点「接管会话」进入 armed：不立即解锁（立即发送会与终端在跑的 turn 并发写盘），而是等
+// 现有镜像锁的自动释放信号。armed 期间只有三个出口：
+//   unlock-focus  = readonly=false 到达（终端本轮完结，服务端自动解锁）→ 放行 + 聚焦输入
+//   unlock-stale  = 同会话转 stale（等待中终端 5 分钟零写入疑似中断）→ 自动完成接管（提示保留分叉风险说明）
+//   disarm        = 用户切走会话（armed 意图随视图作废，与 mirrorOverriddenSid 同策略）
+// 未 armed 时对任何信号回 none，不干扰现有 onMirrorState 解锁路径。
+export function armedTakeoverStep(state = {}, signal = {}) {
+  const { armed, armedSid } = state || {};
+  if (!armed) return { action: 'none' };
+  const { kind, readonly, stale, sessionId } = signal || {};
+  if (kind === 'switch') return { action: 'disarm' };
+  if (kind === 'mirror') {
+    if (!readonly) return { action: 'unlock-focus' };
+    if (stale && sessionId === armedSid) return { action: 'unlock-stale' };
+  }
+  return { action: 'none' };
+}

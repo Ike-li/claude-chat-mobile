@@ -874,14 +874,16 @@
         </div>
       </div>
 
-      <!-- 只读追平横幅：该会话正在终端运行时常驻显示 + 禁用输入，硬防并发写盘分叉；「仍要发送」显式接管。
-           三态文案（mirrorBannerText 由 applyMirror 按 stale/活动时间刷新）：驾驶中 / 疑似中断 / 接管确认 -->
+      <!-- 只读追平横幅：该会话正在终端运行时常驻显示 + 禁用输入，硬防并发写盘分叉；「接管会话」发起接管。
+           四态文案（mirrorBannerText 由 applyMirror 按 armed/stale 刷新）：驾驶中(⏱) / 已排队接管等待中(⏳，
+           零并发写盘风险) / 疑似中断(⚠️，即时确认接管) / 隐藏(已解锁)。驾驶中点接管只排队等终端本轮完结再放行
+           （见 logic.js armedTakeoverStep）；疑似中断维持原地即时确认（终端大概率已死，等待无意义）。 -->
       <div id="mirrorBanner" class="hidden px-3 py-2 bg-surface border border-danger/40 rounded-xl text-xs text-danger mb-1 shrink-0">
         <div class="flex items-center gap-2">
           <span id="mirrorBannerIcon" class="shrink-0">⏱</span>
           <span id="mirrorBannerText" class="font-medium flex-1 min-w-0">此会话正在终端运行，这里只读追平</span>
           <button id="btnMirrorSync" class="shrink-0 px-2 py-1 rounded-lg border border-line text-ink-soft font-semibold hover:bg-sunk active:scale-95 transition-all" title="立即拉取终端最新落定的消息">立即同步</button>
-          <button id="btnMirrorOverride" class="shrink-0 px-2 py-1 rounded-lg border border-danger text-danger font-semibold hover:bg-danger hover:text-surface active:scale-95 transition-all">仍要发送</button>
+          <button id="btnMirrorOverride" class="shrink-0 px-2 py-1 rounded-lg border border-danger text-danger font-semibold hover:bg-danger hover:text-surface active:scale-95 transition-all">接管会话</button>
         </div>
       </div>
 

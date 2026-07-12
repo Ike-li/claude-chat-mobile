@@ -1386,6 +1386,51 @@ async function run() {
     await waitIdle();
     console.log('✅ TC-20: 只读镜像锁三态 + 驾驶期设置冻结 passed\n');
 
+    // ==================================================================
+    // TC-21: 排队接管（armed）—— 驾驶中点「接管会话」不立即解锁，等终端本轮完结自动放行（2026-07-13）
+    // ==================================================================
+    console.log('👉 Running TC-21: 排队接管(armed)——等待放行 + 取消 + 自动放行...');
+    await sendCommand('test:mirror-armed');
+
+    // 1) 驾驶中态就绪
+    await page.waitForSelector('#mirrorBanner:not(.hidden)', { timeout: 5000 });
+    await page.waitForFunction(() => document.getElementById('mirrorBannerIcon')?.textContent === '⏱', { timeout: 5000 });
+
+    // 2) 点「接管会话」→ armed：图标⏳、文案含「已请求接管」、按钮变「取消接管」、输入仍禁用（零风险排队，非立即解锁）
+    await page.click('#btnMirrorOverride');
+    await page.waitForFunction(() => document.getElementById('mirrorBannerIcon')?.textContent === '⏳', { timeout: 5000 });
+    const armedTC21 = await page.evaluate(() => ({
+      text: document.getElementById('mirrorBannerText')?.textContent || '',
+      btnLabel: document.getElementById('btnMirrorOverride')?.textContent || '',
+      inputDisabled: document.getElementById('input')?.disabled === true,
+    }));
+    assert.ok(armedTC21.text.includes('已请求接管'), 'TC-21: armed 态文案应含「已请求接管」');
+    assert.strictEqual(armedTC21.btnLabel, '取消接管', 'TC-21: armed 态按钮应变为「取消接管」');
+    assert.strictEqual(armedTC21.inputDisabled, true, 'TC-21: armed 态输入框仍应禁用（未真正解锁，零并发写盘风险）');
+    await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc21_mirror_armed.png` });
+    console.log('📸 Captured and saved tc21_mirror_armed.png');
+
+    // 3) 点「取消接管」→ 回退驾驶中态：图标⏱、按钮变回「接管会话」、输入仍禁用（原地撤销，非解锁）
+    await page.click('#btnMirrorOverride');
+    await page.waitForFunction(() => document.getElementById('mirrorBannerIcon')?.textContent === '⏱', { timeout: 5000 });
+    const cancelledTC21 = await page.evaluate(() => ({
+      btnLabel: document.getElementById('btnMirrorOverride')?.textContent || '',
+      inputDisabled: document.getElementById('input')?.disabled === true,
+    }));
+    assert.strictEqual(cancelledTC21.btnLabel, '接管会话', 'TC-21: 取消接管后按钮应变回「接管会话」');
+    assert.strictEqual(cancelledTC21.inputDisabled, true, 'TC-21: 取消接管后仍处只读，输入应仍禁用');
+
+    // 4) 重新点「接管会话」→ 再次进入 armed，此后不再手动操作，验证服务端信号驱动的自动放行
+    await page.click('#btnMirrorOverride');
+    await page.waitForFunction(() => document.getElementById('mirrorBannerIcon')?.textContent === '⏳', { timeout: 5000 });
+
+    // 5) mock 稍后模拟「终端本轮完结」(readonly=false)→ 应自动放行解锁，无需再点任何按钮
+    await page.waitForSelector('#mirrorBanner.hidden', { timeout: 5000 });
+    const unlockedTC21 = await page.evaluate(() => document.getElementById('input')?.disabled === false);
+    assert.strictEqual(unlockedTC21, true, 'TC-21: 终端本轮完结后应自动放行解锁，无需手动点击');
+    await waitIdle();
+    console.log('✅ TC-21: 排队接管(armed) passed\n');
+
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');
     console.log('==================================================================\n');

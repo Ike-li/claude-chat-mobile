@@ -942,6 +942,24 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:mirror-armed',
+      run: async () => {
+        console.log('[mock] test:mirror-armed — 排队接管：驾驶中(⏱) → runner 点接管进 armed(⏳)/取消/重新点 → 终端本轮完结自动放行');
+        const mkMirror = (readonly, stale) => ({
+          seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'mirror_state', payload: { readonly, stale }
+        });
+        socket.emit('agent:event', mkMirror(true, false));   // ⏱ 终端驾驶中
+        await delay(3000);                                    // 留窗给 runner：观察驾驶态→点接管→观察armed→点取消→观察回退→再点接管→观察armed
+        socket.emit('agent:event', mkMirror(false, false));  // 模拟终端本轮完结 → armedTakeoverStep 应判 unlock-focus 自动放行
+        await delay(200);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_mirror_armed_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:console-log-after-clear',
       run: async () => {
         console.log('[mock] Emitting console log after clear');

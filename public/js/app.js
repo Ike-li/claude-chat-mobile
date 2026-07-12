@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array } from './logic.js';
+import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -120,8 +120,10 @@ import { verifyIntegrity } from './canonicalize.js';
   let interruptPending = false;
   let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
-  // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读。
-  let mirrorReadonlySid = null, mirrorOverriddenSid = null;
+  // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读；
+  // armedTakeoverSid=已排队接管、等终端本轮完结/疑似中断再自动放行（见 logic.js armedTakeoverStep）；
+  // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「接管会话」时判定走排队还是即时确认）。
+  let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
   let pushVapidKey = null; // 缓存公钥，避免每次重连重复 fetch
 
   // ---- prompt cache 失效倒计时（前端本地递减；deadline 非 SDK 权威值）----
@@ -1513,8 +1515,8 @@ import { verifyIntegrity } from './canonicalize.js';
 
   // ---- 发送 / 停止 ----
   function send(opts = {}) {
-    if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「仍要发送」可接管）
-      addBar('此会话正在终端运行，只读中——如确认终端已停，点「仍要发送」接管', 'text-danger');
+    if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「接管会话」可接管）
+      addBar('此会话正在终端运行，只读中——点「接管会话」可接管', 'text-danger');
       return;
     }
     if (inputEl.disabled) {
@@ -2103,8 +2105,9 @@ import { verifyIntegrity } from './canonicalize.js';
     workdirStates = newStates;
     currentCwd = newCwd;
     // 切换查看实例（切 tab / 切工作区 / 新会话）→ 先把只读态复位为可编辑，等 server 按新会话重判并推权威 mirror_state。
-    // 消除切换瞬间旧会话只读横幅残留（server 判活现仅靠观察外部写入、切入不预锁，故复位是安全默认）。override 随会话切换失效。
-    if (newViewing !== viewingInstanceId) { mirrorOverriddenSid = null; applyMirror(false, null); }
+    // 消除切换瞬间旧会话只读横幅残留（server 判活现仅靠观察外部写入、切入不预锁，故复位是安全默认）。override 随会话切换失效；
+    // 排队中的接管同理随会话切换作废（armedTakeoverStep 的 switch→disarm 契约，此处 armed 必真故直接置空，无需查返回值）。
+    if (newViewing !== viewingInstanceId) { mirrorOverriddenSid = null; armedTakeoverSid = null; applyMirror(false, null); }
     viewingInstanceId = newViewing;
     cwdSeen = true;
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
@@ -3372,19 +3375,25 @@ import { verifyIntegrity } from './canonicalize.js';
   }
 
   // 只读锁：会话被判「正在终端运行」时常驻横幅 + 禁用输入，硬防两进程并发写盘分叉。
-  // 三态文案（2026-07-12 单驾驶员）：stale=false=「⏱ 终端驾驶中」（尾部形态判轮次未完结，长工具调用零写盘
-  // 期间也维持——修「过一会儿感觉没在跑」误判）；stale=true=「⚠️ 疑似中断」（pending 但超 5 分钟零写入，
-  // 终端可能被强杀/断电，引导显式接管）。两态都保持锁，接管始终要用户确认。
+  // 四态文案（2026-07-13 排队接管）：stale=false 未 armed=「⏱ 终端驾驶中」（尾部形态判轮次未完结，长工具调用
+  // 零写盘期间也维持——修「过一会儿感觉没在跑」误判）；armed=「⏳ 已排队接管」（点了「接管会话」但终端本轮
+  // 未完结，纯等待、零并发写盘风险，见下方 armedTakeoverStep 接线）；stale=true=「⚠️ 疑似中断」（pending 但
+  // 超 5 分钟零写入，终端可能被强杀/断电，维持即时确认接管——等待对已疑似死亡的终端无意义）。
   function applyMirror(readonly, sessionId, stale = false) {
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
     mirrorReadonlySid = effective ? sessionId : null;
+    mirrorStaleFlag = effective && stale;
     mirrorBanner?.classList.toggle('hidden', !effective);
+    const armed = effective && armedTakeoverSid === sessionId;
     if (effective && mirrorBannerText && mirrorBannerIcon) {
-      mirrorBannerIcon.textContent = stale ? '⚠️' : '⏱';
-      mirrorBannerText.textContent = stale
-        ? '终端疑似中断于执行中（超 5 分钟无活动）——确认终端已停可接管'
-        : '终端驾驶中，这里只读追平——发送会与终端并发写盘、可能分叉';
+      mirrorBannerIcon.textContent = armed ? '⏳' : (stale ? '⚠️' : '⏱');
+      mirrorBannerText.textContent = armed
+        ? '已请求接管，等待终端当前操作完成后自动切换……'
+        : stale
+          ? '终端疑似中断于执行中（超 5 分钟无活动）——确认终端已停可接管'
+          : '终端驾驶中，这里只读追平——发送会与终端并发写盘、可能分叉';
     }
+    if (btnMirrorOverride) btnMirrorOverride.textContent = armed ? '取消接管' : '接管会话';
     if (inputEl) inputEl.disabled = effective;
     if (effective) { if (btnSend) btnSend.disabled = true; } // 锁定：禁发送
     else updateSendButtonState();                            // 解锁：按有无文本恢复发送按钮态
@@ -3397,13 +3406,41 @@ import { verifyIntegrity } from './canonicalize.js';
     //   彻底修需把 viewing/catchup/mirror 全改 per-socket + 定向 emit（大改），单用户工具不值，故保留。
     //   （承接 HLD AD-5；2026-07-12 机主确认 Phase 8 不做此 per-socket 大改、保留现状，见 server.js setMirror 登记。）
     const readonly = !!ev.payload?.readonly;
+    const stale = !!ev.payload?.stale;
     if (readonly && ev.instanceId !== viewingInstanceId) return;
-    applyMirror(readonly, ev.sessionId, !!ev.payload?.stale);
+    if (armedTakeoverSid) { // 排队接管中：交给 armedTakeoverStep 判是否该自动放行（本轮完结/转疑似中断）
+      const step = armedTakeoverStep({ armed: true, armedSid: armedTakeoverSid }, { kind: 'mirror', readonly, stale, sessionId: ev.sessionId });
+      if (step.action !== 'none') {
+        armedTakeoverSid = null;
+        mirrorOverriddenSid = ev.sessionId;
+        applyMirror(false, ev.sessionId);
+        addBar(step.action === 'unlock-focus'
+          ? '已接管：终端本轮已完结，安全切换'
+          : '已接管：终端疑似中断，自动完成接管——若终端仍在跑同一会话，并发发送有分叉风险',
+          step.action === 'unlock-focus' ? 'text-ink-faint' : 'text-warning');
+        inputEl?.focus();
+        return;
+      }
+    }
+    applyMirror(readonly, ev.sessionId, stale);
   }
-  // 「仍要发送」：显式接管——弹窗确认（说清「不停终端进程 + 分叉后果 + 建议先 Ctrl+C」）后解锁并记住
-  // 本会话不再锁（切会话即失效）。接管后首次发送经 server 陈旧上下文守卫置换实例，吸收终端轮次。
+  // 「接管会话」：驾驶中(⏱)点击=排队接管——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行，
+  // 见 onMirrorState），无需确认弹窗；再次点击（此时按钮已变「取消接管」）可撤销排队、回退驾驶中态。
+  // 疑似中断(⚠️)点击=维持原地即时确认（弹窗说清「不停终端进程 + 分叉后果 + 建议先 Ctrl+C」）后立即解锁——
+  // 终端大概率已死，等待无意义。接管后（任一路径）首次发送经 server 陈旧上下文守卫置换实例，吸收终端轮次。
   btnMirrorOverride?.addEventListener('click', () => {
     if (!mirrorReadonlySid) return;
+    if (armedTakeoverSid === mirrorReadonlySid) { // 取消排队中的接管，回退驾驶中态
+      armedTakeoverSid = null;
+      applyMirror(true, mirrorReadonlySid, false); // 仍处于 armed 时必未 stale（stale 经 unlock-stale 已自动放行）
+      return;
+    }
+    if (!mirrorStaleFlag) { // 驾驶中：排队等待，零风险故无需确认弹窗
+      armedTakeoverSid = mirrorReadonlySid;
+      applyMirror(true, mirrorReadonlySid, false);
+      addBar('已请求接管：终端当前操作完成后自动切换，可点「取消接管」撤销', 'text-ink-faint');
+      return;
+    }
     if (!confirm('接管此会话？\n\n终端可能正在运行该会话。接管不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再接管。')) return;
     mirrorOverriddenSid = mirrorReadonlySid;
     applyMirror(false, mirrorReadonlySid);
