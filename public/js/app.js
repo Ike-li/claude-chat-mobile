@@ -204,8 +204,11 @@ import { verifyIntegrity } from './canonicalize.js';
   function syncModelUI(model) {
     // 底栏模型 chip：显完整真名（含网关后缀 [1m]，与 statusLine/实际发送名一致）；未选则显「默认」——
     // 已知 cwd 默认模型时显「默认 · <真名>」（scout 探得的实测值，非猜；发送仍不带 model）。点击开「选择模型」格。
-    if (pillModelText) pillModelText.textContent = model ? model + currentGatewaySuffix
+    const modelPillText = model ? model + currentGatewaySuffix
       : (cwdDefaultModel ? '默认 · ' + cwdDefaultModel.replace(/\[[^\]]+\]$/, '') : '默认');
+    if (pillModelText) pillModelText.textContent = modelPillText;
+    // 完整名进 title：chip 里可能被 … 截断，桌面 hover 兜底看全名；纯默认(无 cwd 默认)时回落操作提示
+    if (pillModel) pillModel.title = (model || cwdDefaultModel) ? modelPillText : '选择模型';
     if (customModelGrid) {
       customModelGrid.querySelectorAll('.model-tile').forEach(tile => {
         const tileVal = tile.dataset.model;

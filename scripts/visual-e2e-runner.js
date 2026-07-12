@@ -1290,6 +1290,36 @@ async function run() {
     assert.strictEqual(workspaceAfterClickTC18, 'another-react-project', 'TC-18: 点击 needsYou 行应深链切到对应工作区/会话');
     console.log('✅ TC-18: "需要你"聚合区渲染 + 深链跳转 passed\n');
 
+    // ==================================================================
+    // TC-19: 超长模型名 → 底栏模型 chip 单行省略截断，不折成两行、与旁边 chip 等高
+    // ==================================================================
+    console.log('👉 Running TC-19: 超长模型名底栏 chip 单行截断...');
+    await sendCommand('test:longmodel');
+    await waitIdle();
+
+    const longModelTC19 = await page.evaluate(() => {
+      const chip = document.getElementById('pillModel');
+      const text = document.getElementById('pillModelText');
+      const perm = document.getElementById('pillPerm');
+      return {
+        textContent: text?.textContent || '',
+        title: chip?.getAttribute('title') || '',
+        // scrollWidth > clientWidth ⇒ 文本被 max-width + overflow:hidden 截断（省略号生效）
+        truncated: text ? text.scrollWidth > text.clientWidth : false,
+        chipVisible: chip ? chip.offsetHeight > 0 : false,
+        chipHeight: chip?.offsetHeight || 0,
+        permHeight: perm?.offsetHeight || 0,
+      };
+    });
+    assert.strictEqual(longModelTC19.textContent, 'mimo-v2.5-pro-ultraspeed', 'TC-19: 模型 chip 文本必须是完整长模型名');
+    assert.strictEqual(longModelTC19.title, 'mimo-v2.5-pro-ultraspeed', 'TC-19: 模型 chip title 必须承载完整名（供桌面 hover 看全名）');
+    assert.strictEqual(longModelTC19.chipVisible, true, 'TC-19: 底栏模型 chip 必须可见');
+    assert.strictEqual(longModelTC19.truncated, true, 'TC-19: 超长模型名必须被单行省略截断（scrollWidth > clientWidth）');
+    assert.strictEqual(longModelTC19.chipHeight, longModelTC19.permHeight, 'TC-19: 模型 chip 必须与审批 chip 等高（未折成两行）');
+    await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc19_long_model_truncate.png` });
+    console.log('📸 Captured and saved tc19_long_model_truncate.png');
+    console.log('✅ TC-19: 超长模型名底栏 chip 单行截断 passed\n');
+
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');
     console.log('==================================================================\n');

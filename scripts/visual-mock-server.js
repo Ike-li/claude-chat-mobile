@@ -898,6 +898,30 @@ io.on('connection', socket => {
       },
     },
     {
+      command: 'test:longmodel',
+      run: async () => {
+        console.log('[mock] test:longmodel — 注入超长模型名，验证底栏模型 chip 单行截断（省略号）不折成两行');
+        // init.model 是生效模型权威值：前端经 updateModelAndSuffix → syncModelUI 渲染进底栏模型 chip
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'init', payload: {
+            model: 'mimo-v2.5-pro-ultraspeed', // 24 字符，超过 8rem max-width → 触发 CSS 省略截断
+            cwd: mockInstances[0].cwd,
+            claudeVersion: '0.1.0-mock',
+            mcpServers: [],
+            skillsCount: 7,
+            permissionMode,
+            slashCommands: [{ name: 'model', description: 'Switch active model' }]
+          }
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_longmodel_1', durationMs: 100, costUsd: 0, isError: false, models: ['mimo-v2.5-pro-ultraspeed'] }
+        });
+      },
+    },
+    {
       command: 'test:console-log-after-clear',
       run: async () => {
         console.log('[mock] Emitting console log after clear');
