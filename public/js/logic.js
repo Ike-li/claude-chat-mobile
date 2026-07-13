@@ -24,6 +24,35 @@ export function formatToolSummary(summary) {
   }
 }
 
+// 从 paste 事件的 clipboardData 里挑出 image/* 文件（桌面 Chrome 截图/复制图 → Ctrl/Cmd+V）。
+// 返回 File 数组；纯文本/无图返回 []——调用方应保留默认粘贴文字行为。
+// 只做数据筛选，不读盘/不转 base64（那是 app.js 附件托盘的既有路径）。
+export function pickPasteImageFiles(clipboardData) {
+  const items = clipboardData?.items;
+  if (!items || typeof items.length !== 'number') return [];
+  const out = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (!it || it.kind !== 'file') continue;
+    const type = String(it.type || '');
+    if (!type.startsWith('image/')) continue;
+    const file = typeof it.getAsFile === 'function' ? it.getAsFile() : null;
+    if (file) out.push(file);
+  }
+  return out;
+}
+
+// 发送前托盘点预览：把附件的完整 base64 拼成 <img src> 可用的 data URI。
+// 仅 image/* + 非空 data；否则 null（调用方不弹灯箱，避免把 PDF/二进制当图打开）。
+export function attachmentDataUrl(att) {
+  if (!att || typeof att !== 'object') return null;
+  const mime = String(att.mimeType || '');
+  const data = att.data;
+  if (!mime.startsWith('image/')) return null;
+  if (typeof data !== 'string' || !data) return null;
+  return `data:${mime};base64,${data}`;
+}
+
 // ultracode = CLI /effort 菜单 xhigh 之上的最高档（= xhigh effort + dynamic workflow 编排）。
 // SDK 的 effort flag 只认 low..max、不认 ultracode，故 web 借道「xhigh effort + 每轮注入本关键词」复现：
 // 关键词触发 CLI 的 ultracodeKeywordTrigger → 该轮 opt into Workflow 工具。已有关键词时保持原文，避免叠加。

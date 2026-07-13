@@ -789,6 +789,15 @@
     </div>
   </div>
 
+  <!-- 发送前附件图片预览灯箱：点托盘 chip 打开原图（data URI），点遮罩/✕/Esc 关闭 -->
+  <div id="attachPreviewModal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="附件预览">
+    <button type="button" id="attachPreviewClose" class="absolute top-3 right-3 w-10 h-10 rounded-full bg-black/50 text-white text-xl leading-none flex items-center justify-center active:scale-95" aria-label="关闭预览">✕</button>
+    <div class="max-w-full max-h-full flex flex-col items-center gap-2">
+      <img id="attachPreviewImg" class="max-w-full max-h-[85vh] object-contain rounded-lg shadow-pop bg-black/20" alt="附件预览">
+      <div id="attachPreviewName" class="text-xs text-white/80 font-mono truncate max-w-[90vw]"></div>
+    </div>
+  </div>
+
   <!-- 输入区 -->
   <footer class="shrink-0 bg-transparent px-3 pb-3 shrink-0 z-10 safe-bottom">
     <div class="max-w-2xl mx-auto flex flex-col">

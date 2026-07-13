@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep } from '../public/js/logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test('esc: 转义 HTML 元字符', () => {
@@ -40,6 +40,66 @@ test('formatToolSummary: 空/非字符串安全', () => {
   assert.equal(formatToolSummary(null), '');
   assert.equal(formatToolSummary(undefined), '');
   assert.equal(formatToolSummary(42), '42');
+});
+
+// 剪贴板粘贴图片：桌面 Chrome 截图/复制图后 Ctrl/Cmd+V 应进附件托盘。
+// pickPasteImageFiles 只从 DataTransfer 里挑 image/* 文件项；纯文本粘贴返回空，交给浏览器默认。
+test('pickPasteImageFiles: 无 clipboardData / 空 items → 空数组', () => {
+  assert.deepEqual(pickPasteImageFiles(null), []);
+  assert.deepEqual(pickPasteImageFiles({}), []);
+  assert.deepEqual(pickPasteImageFiles({ items: [] }), []);
+});
+
+test('pickPasteImageFiles: 纯文本粘贴 → 空（不拦截默认粘贴文字）', () => {
+  const items = [{ kind: 'string', type: 'text/plain', getAsFile: () => null }];
+  assert.deepEqual(pickPasteImageFiles({ items }), []);
+});
+
+test('pickPasteImageFiles: image/png file 项 → 取出 File', () => {
+  const file = { name: 'clip.png', type: 'image/png', size: 12 };
+  const items = [
+    { kind: 'string', type: 'text/plain', getAsFile: () => null },
+    { kind: 'file', type: 'image/png', getAsFile: () => file },
+  ];
+  assert.deepEqual(pickPasteImageFiles({ items }), [file]);
+});
+
+test('pickPasteImageFiles: 多张图按顺序收集；非图片 file 跳过；getAsFile 空跳过', () => {
+  const a = { name: 'a.png', type: 'image/png', size: 1 };
+  const b = { name: 'b.jpeg', type: 'image/jpeg', size: 2 };
+  const items = [
+    { kind: 'file', type: 'image/png', getAsFile: () => a },
+    { kind: 'file', type: 'application/pdf', getAsFile: () => ({ name: 'x.pdf', type: 'application/pdf' }) },
+    { kind: 'file', type: 'image/jpeg', getAsFile: () => null },
+    { kind: 'file', type: 'image/jpeg', getAsFile: () => b },
+  ];
+  assert.deepEqual(pickPasteImageFiles({ items }), [a, b]);
+});
+
+test('pickPasteImageFiles: items 不是可迭代 → 空数组，不抛', () => {
+  assert.deepEqual(pickPasteImageFiles({ items: null }), []);
+  assert.deepEqual(pickPasteImageFiles({ items: 42 }), []);
+});
+
+// 发送前点托盘附件预览：用完整 base64 拼 data URI（比 thumb 清晰）；非图片/无 data → null。
+test('attachmentDataUrl: 图片 + base64 → data URI', () => {
+  assert.equal(
+    attachmentDataUrl({ mimeType: 'image/png', data: 'abc123' }),
+    'data:image/png;base64,abc123'
+  );
+});
+
+test('attachmentDataUrl: 非图片 / 缺 data → null（托盘不弹灯箱）', () => {
+  assert.equal(attachmentDataUrl({ mimeType: 'application/pdf', data: 'abc' }), null);
+  assert.equal(attachmentDataUrl({ mimeType: 'image/jpeg', data: '' }), null);
+  assert.equal(attachmentDataUrl({ mimeType: 'image/jpeg' }), null);
+  assert.equal(attachmentDataUrl(null), null);
+});
+
+test('attachmentDataUrl: mime 缺省但 data 在 → 不猜成图片，返回 null', () => {
+  // 没有 image/* 类型就不当图片预览，避免把任意 base64 当图打开
+  assert.equal(attachmentDataUrl({ data: 'abc' }), null);
+  assert.equal(attachmentDataUrl({ mimeType: 'application/octet-stream', data: 'abc' }), null);
 });
 
 test('withUltracodeKeyword: 单轮 ultracode 关键词前缀且不重复', () => {

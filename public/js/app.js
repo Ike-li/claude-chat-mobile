@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -1703,29 +1703,44 @@ import { verifyIntegrity } from './canonicalize.js';
     }
   });
 
-  // ---- 附件（E17）：选文件 → base64 + 图片 canvas 缩略图 → 待发送托盘 ----
+  // ---- 附件（E17）：选文件 / 剪贴板粘贴图片 → base64 + 图片 canvas 缩略图 → 待发送托盘 ----
   const MAX_FILE = 10 * 1024 * 1024, MAX_TOTAL = 20 * 1024 * 1024, MAX_COUNT = 10; // 与服务端 uploads.js 同
   btnAttach.onclick = () => fileInput.click();
-  fileInput.onchange = async () => {
-    const files = [...fileInput.files];
-    fileInput.value = '';                 // 清空，便于重复选同一文件
-    scheduleInsetResettle();              // E17 回归：picker 返回后主动复位键盘 inset，防下半屏残留白屏
-    for (const file of files) {
+  // 共用入口：file input 与 paste 都走这里（上限/读盘/缩略图逻辑只维护一处）
+  async function addFilesAsAttachments(files) {
+    const list = Array.isArray(files) ? files : [...(files || [])];
+    for (const file of list) {
+      if (!file) continue;
       if (pendingAttachments.length >= MAX_COUNT) { addBar(`附件数量已达上限（${MAX_COUNT}）`, 'text-danger'); break; }
-      if (file.size > MAX_FILE) { addBar(`「${file.name}」超过 10MB，未添加`, 'text-danger'); continue; }
+      if (file.size > MAX_FILE) { addBar(`「${file.name || '附件'}」超过 10MB，未添加`, 'text-danger'); continue; }
       const total = pendingAttachments.reduce((s, a) => s + a.size, 0);
       if (total + file.size > MAX_TOTAL) { addBar('附件总量将超过 20MB，未添加', 'text-danger'); break; }
       try {
         const [data, thumb] = await Promise.all([readBase64(file), makeThumb(file)]);
+        // 剪贴板图片常无名（image.png / blob）；给可读默认名，避免托盘显示空白
+        const name = (file.name && file.name.trim()) || `paste-${Date.now()}.${(file.type || '').split('/')[1] || 'png'}`;
         pendingAttachments.push({
           _id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          name: file.name, mimeType: file.type || 'application/octet-stream',
+          name, mimeType: file.type || 'application/octet-stream',
           size: file.size, data, thumb: (thumb && thumb.length < 100000) ? thumb : undefined // 超 ~100KB 退化为 chip
         });
         renderTray();
-      } catch { addBar(`「${file.name}」读取失败`, 'text-danger'); }
+      } catch { addBar(`「${file.name || '附件'}」读取失败`, 'text-danger'); }
     }
+  }
+  fileInput.onchange = async () => {
+    const files = [...fileInput.files];
+    fileInput.value = '';                 // 清空，便于重复选同一文件
+    scheduleInsetResettle();              // E17 回归：picker 返回后主动复位键盘 inset，防下半屏残留白屏
+    await addFilesAsAttachments(files);
   };
+  // 桌面 Chrome：截图/复制图片后在输入框 Ctrl/Cmd+V → 进附件托盘（原先只有 file input，粘贴无反应）
+  inputEl.addEventListener('paste', (e) => {
+    const images = pickPasteImageFiles(e.clipboardData);
+    if (!images.length) return; // 纯文本等：不 preventDefault，保留默认粘贴
+    e.preventDefault();
+    void addFilesAsAttachments(images);
+  });
   // FileReader → 纯 base64（剥掉 data:<mime>;base64, 前缀；服务端 Buffer.from(data,'base64') 解码）
   function readBase64(file) {
     return new Promise((resolve, reject) => {
@@ -1757,24 +1772,66 @@ import { verifyIntegrity } from './canonicalize.js';
   }
   function renderTray() {
     attachTray.innerHTML = '';
-    if (!pendingAttachments.length) { 
-      attachTray.classList.add('hidden'); 
+    if (!pendingAttachments.length) {
+      attachTray.classList.add('hidden');
       updateSendButtonState();
-      return; 
+      return;
     }
     for (const a of pendingAttachments) {
-      const chip = el(`<div class="relative flex items-center gap-1.5 bg-sunk rounded-lg pl-1.5 pr-6 py-1 text-xs max-w-[10rem]"></div>`);
+      // 整颗 chip 可点预览；右侧 ✕ 单独 stopPropagation，避免误开灯箱
+      const chip = el(`<div class="relative flex items-center gap-1.5 bg-sunk rounded-lg pl-1.5 pr-6 py-1 text-xs max-w-[10rem] cursor-pointer active:scale-[0.98] transition-transform" title="点击预览"></div>`);
       if (a.thumb) { const img = el(`<img class="w-8 h-8 rounded object-cover shrink-0">`); img.src = a.thumb; chip.appendChild(img); }
       else chip.appendChild(el(`<span class="shrink-0">📎</span>`));
       const nm = el(`<span class="truncate"></span>`); nm.textContent = a.name; chip.appendChild(nm);
-      const rm = el(`<button class="absolute right-1 top-1/2 -translate-y-1/2 text-ink-faint active:text-danger">✕</button>`);
-      rm.onclick = () => { pendingAttachments = pendingAttachments.filter(x => x._id !== a._id); renderTray(); };
+      const rm = el(`<button type="button" class="absolute right-1 top-1/2 -translate-y-1/2 text-ink-faint active:text-danger" title="移除">✕</button>`);
+      rm.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        pendingAttachments = pendingAttachments.filter(x => x._id !== a._id);
+        renderTray();
+      };
+      chip.onclick = () => openAttachPreview(a);
       chip.appendChild(rm);
       attachTray.appendChild(chip);
     }
     attachTray.classList.remove('hidden');
     updateSendButtonState();
   }
+
+  // 发送前点托盘：图片用完整 base64 灯箱预览（比 32px thumb 清楚）；非图片仅提示文件名
+  const attachPreviewModal = $('attachPreviewModal');
+  const attachPreviewImg = $('attachPreviewImg');
+  const attachPreviewName = $('attachPreviewName');
+  const attachPreviewClose = $('attachPreviewClose');
+  function closeAttachPreview() {
+    if (!attachPreviewModal) return;
+    attachPreviewModal.classList.add('hidden');
+    if (attachPreviewImg) attachPreviewImg.removeAttribute('src');
+  }
+  function openAttachPreview(att) {
+    const url = attachmentDataUrl(att);
+    if (!url) {
+      addBar(att?.name ? `「${att.name}」不是可预览图片` : '该附件不可预览', 'text-ink-faint');
+      return;
+    }
+    if (!attachPreviewModal || !attachPreviewImg) return;
+    attachPreviewImg.src = url;
+    if (attachPreviewName) attachPreviewName.textContent = att.name || '';
+    attachPreviewModal.classList.remove('hidden');
+    haptic('tap');
+  }
+  if (attachPreviewClose) attachPreviewClose.onclick = (e) => { e.stopPropagation(); closeAttachPreview(); };
+  if (attachPreviewModal) {
+    attachPreviewModal.onclick = (e) => {
+      // 点遮罩关闭；点图片本身不关，方便看清
+      if (e.target === attachPreviewModal || e.target === attachPreviewName) closeAttachPreview();
+    };
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && attachPreviewModal && !attachPreviewModal.classList.contains('hidden')) {
+      closeAttachPreview();
+    }
+  });
 
   // ---- 斜杠命令提示 ----
   const hints = el(`<div id="cmdHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)"></div>`);
