@@ -23,6 +23,34 @@ export function getSessionLogs(sessionId) {
   return sessionBuffers.get(sessionId) || [];
 }
 
+// FRESH 新会话首轮：SDK init 前 sessionId 仍为 null。若直接丢弃，user_in/user_out/agent_send
+// 整段首跳蒸发，交互日志最该看的「我发了什么 / 送进 SDK 的是什么」反而空。
+// 约定：尚无 sessionId 时用 provisionalKey(instanceId) 作缓冲键；init 拿到真 id 后 rebind 合并。
+export function provisionalKey(instanceId) {
+  if (!instanceId) return null;
+  return `inst:${instanceId}`;
+}
+
+// 把 provisional 缓冲并入真实 sessionId（不重放 callback——直播时已按 provisional 键广播过）。
+// 顺序：provisional 在前（时间更早）+ 已有真 session 缓冲在后；超 100 截尾。
+export function rebindSessionLogs(fromKey, sessionId) {
+  if (!fromKey || !sessionId || fromKey === sessionId) return;
+  const pending = sessionBuffers.get(fromKey);
+  if (!pending || !pending.length) {
+    sessionBuffers.delete(fromKey);
+    return;
+  }
+  sessionBuffers.delete(fromKey);
+  const existing = sessionBuffers.get(sessionId) || [];
+  let merged = pending.concat(existing);
+  if (merged.length > 100) merged = merged.slice(merged.length - 100);
+  // 会话数 cap：目标键若是新会话也要占位（pending 迁走后 size 可能仍超）
+  if (!sessionBuffers.has(sessionId) && sessionBuffers.size >= MAX_SESSIONS) {
+    sessionBuffers.delete(sessionBuffers.keys().next().value);
+  }
+  sessionBuffers.set(sessionId, merged);
+}
+
 export function addSessionLog(sessionId, type, text, meta) {
   if (!sessionId) return;
   if (!sessionBuffers.has(sessionId)) {
@@ -58,6 +86,23 @@ export function addSessionLog(sessionId, type, text, meta) {
       console.error('[interact] 流式回调失败:', e.message);
     }
   }
+}
+
+// 实时 session_log 广播 payload（server setCallback → agent:event）。
+// 必须与缓冲 entry 的 chip 字段对齐：抽屉开着时走流式追加、不经 logs:get；
+// 漏掉 model/effort/permissionMode 会导致「直播无 chip、关掉重开又有」的不一致。
+// 空字段不带，与 addSessionLog 写入约定一致。
+export function sessionLogPayload(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const p = {
+    type: entry.type,
+    text: entry.text,
+    ts: entry.ts,
+  };
+  if (entry.model) p.model = entry.model;
+  if (entry.effort) p.effort = entry.effort;
+  if (entry.permissionMode) p.permissionMode = entry.permissionMode;
+  return p;
 }
 
 function fmt(text) {

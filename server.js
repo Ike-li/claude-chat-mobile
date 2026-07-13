@@ -1413,22 +1413,21 @@ function on(socket, event, handler) {
 }
 
 // 注册 Web 端实时流式日志广播回调
-interactionLog.setCallback((sessionId, entry) => {
+// key 可能是真 sessionId，也可能是 FRESH 首轮的 provisionalKey(instanceId)=`inst:${id}`
+interactionLog.setCallback((key, entry) => {
+  const payload = interactionLog.sessionLogPayload(entry); // 含 model/effort/permissionMode，与 logs:get 对齐
+  if (!payload) return;
   for (const [instanceId, a] of agents) {
-    if (a.sessionId === sessionId) {
+    if (a.logKey() === key || a.sessionId === key || interactionLog.provisionalKey(instanceId) === key) {
       io.to('approved').emit('agent:event', { // SEC-01：交互日志内容，仅广播给已批准设备
         seq: 0,
         epoch: 'server',
-        sessionId,
+        sessionId: a.sessionId || null,
         instanceId,
         cwd: a.cwd,
         ts: entry.ts,
         type: 'session_log',
-        payload: {
-          type: entry.type,
-          text: entry.text,
-          ts: entry.ts
-        }
+        payload,
       });
       break;
     }
@@ -1573,7 +1572,8 @@ io.on('connection', socket => {
       if (wasViewing) viewingInstanceId = a.instanceId;
       broadcastInstances();
     }
-    interactionLog.userMessageIn(a.sessionId, cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
+    // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
+    interactionLog.userMessageIn(a.logKey(), cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
     if (hasAttachments) {
       // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
       // 气泡走 displayText（原文，不含路径）+ 去完整 data 的元数据（含小 thumb，进缓冲供回放）
@@ -1594,12 +1594,12 @@ io.on('connection', socket => {
     // op：客户端回传它渲染审批卡片时所见的 {tool,args,cwd}（承接 LLD §5.5 端到端协议步骤5/6，NFR-17
     // 审批完整性绑定）——allow 决策时 agent.js#resolvePermission 用它重算指纹比对 askPermission 时
     // 锚定的 fp，不一致 fail-closed 拒绝。deny 决策不校验（拒绝任何操作都安全，op 缺省或不传均可）。
-    const { requestId, decision, alwaysThisSession, instanceId, op } = payload || {};
+    const { requestId, decision, alwaysThisSession, instanceId, op, exitMode } = payload || {};
     if (typeof requestId !== 'string' || !['allow', 'deny'].includes(decision)) return;
     const a = routeInstance(instanceId);
     if (a) {
-      interactionLog.addSessionLog(a.sessionId, 'sys_info', `[SYS] 许可决策 (user:approve): requestId=${requestId}, decision=${decision}, alwaysThisSession=${alwaysThisSession}`);
-      const outcome = a.resolvePermission(requestId, decision, Boolean(alwaysThisSession), op);
+      interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 许可决策 (user:approve): requestId=${requestId}, decision=${decision}, alwaysThisSession=${alwaysThisSession}${exitMode ? `, exitMode=${exitMode}` : ''}`);
+      const outcome = a.resolvePermission(requestId, decision, Boolean(alwaysThisSession), op, exitMode ? { exitMode } : undefined);
       // FR-19 最小审计记录（承接 Phase 4）：只在完整性校验失败时写——常规 allow/deny 已完整落在
       // approval_request 台账里（含 op 全量），这里重复记一条只会用日常噪音挤占 audit_record 的环形
       // 上限；actor 归属信息只有这层（socket）有，agent.js 保持设备无关，故写点放在这里而非 agent.js。
@@ -1660,7 +1660,7 @@ io.on('connection', socket => {
     }
     const ok = await a.setPermissionMode(mode);
     if (!ok) return;
-    interactionLog.addSessionLog(a.sessionId, 'sys_info', `[SYS] 切换权限档 (user:setPermissionMode): mode=${mode}, instanceId=${id}`);
+    interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 切换权限档 (user:setPermissionMode): mode=${mode}, instanceId=${id}`);
     permModeByInstance.set(id, mode);                  // 台阶3：档位 per-instance
     if (a.sessionId) sessions.updateSessionPrefs(a.sessionId, { permissionMode: mode }); // 持久化，resume 恢复用
     io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
@@ -1718,7 +1718,7 @@ io.on('connection', socket => {
     viewingInstanceId = id;
     const a = agents.get(id);
     viewingCwd = a.cwd;
-    interactionLog.addSessionLog(a.sessionId, 'sys_info', `[SYS] 切换当前活动视图 (user:setViewing): instanceId=${id}, sessionId=${a.sessionId}`);
+    interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 切换当前活动视图 (user:setViewing): instanceId=${id}, sessionId=${a.sessionId || '(pending)'}`);
     doneInstances.delete(id); errorInstances.delete(id); abortedInstances.delete(id);
     broadcastInstances();
     pushModelsForCwd(a.cwd); // 切视图到别区 tab：推该区清单刷新模型选择器（避免显另一 tab 工作区的候选）
@@ -1727,9 +1727,17 @@ io.on('connection', socket => {
   });
 
   on(socket, 'user:answer', payload => {
-    const { requestId, optionIndex, instanceId } = payload || {};
-    if (typeof requestId !== 'string' || typeof optionIndex !== 'number') return;
-    routeInstance(instanceId)?.resolveQuestion(requestId, optionIndex); // 台阶3：按 instanceId 路由
+    const { requestId, optionIndex, optionIndexes, freeText, instanceId } = payload || {};
+    if (typeof requestId !== 'string') return;
+    // 三选一：optionIndex / optionIndexes(multiSelect) / freeText(Other)
+    const hasIdx = typeof optionIndex === 'number';
+    const hasMulti = Array.isArray(optionIndexes) && optionIndexes.length > 0;
+    const hasFree = typeof freeText === 'string' && freeText.trim();
+    if (!hasIdx && !hasMulti && !hasFree) return;
+    const opts = {};
+    if (hasFree) opts.freeText = freeText;
+    else if (hasMulti) opts.optionIndexes = optionIndexes;
+    routeInstance(instanceId)?.resolveQuestion(requestId, hasIdx && !hasMulti && !hasFree ? optionIndex : null, Object.keys(opts).length ? opts : undefined); // 台阶3
   });
 
   on(socket, 'user:interrupt', payload => routeInstance(payload?.instanceId)?.interrupt()); // 台阶3：按 instanceId 路由
@@ -1973,7 +1981,7 @@ io.on('connection', socket => {
     }));
   });
 
-  // 「立即同步」：前端 mirror 横幅的确定性追平入口——强制触发一次 catchUpTick（正常 2.5s 自动跑，
+  // 「刷新消息」（前端按钮文案）：mirror 横幅的确定性追平入口——强制触发一次 catchUpTick（正常 2.5s 自动跑，
   // 这里给「我要确定是最新的」一个即时按钮）。无 payload、无 ack：结果经既有 history_append/mirror_state 广播。
   on(socket, 'mirror:syncNow', () => { catchUpTick().catch(() => {}); });
 
@@ -2013,6 +2021,19 @@ io.on('connection', socket => {
     // 原始 permission_request/question 事件可能已被环形缓冲 trim 或切视图时被前端分流丢弃——前端在视图稳定后
     // （所有 clearView 之后，尤其 gap→重载路径）据此重建卡片，杜绝「角标 ⚠️ 待审批但会话内无卡片」。
     done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen);
+    // 切入/切回后 clearView 会先把 statusline 藏掉；setViewing/switch 的 300ms 防抖刷新可能已在 clearView
+    // 之前发出并被清空。此处在 sync 完成后再强制重发一次（清 lastStatusLine 防 key 去重把「已发过但被 clearView 擦掉」的那次吞掉），
+    // 保证冷路径/缓存路径都有 statusline 上屏，不依赖下一次 tool 事件。
+    if (a.instanceId === viewingInstanceId) {
+      lastStatusLine = null;
+      scheduleStatusRefresh();
+    }
+  });
+
+  // 连接 RTT 探活：客户端定时 emit，服务端立即 ack。无业务副作用、不进缓冲。
+  // 走裸 socket.on（不经 on() 的 deviceApproved 闸）——待审批设备也能看到网络延迟，与「已连上但等审批」语义一致。
+  socket.on('conn:ping', (_payload, ack) => {
+    if (typeof ack === 'function') ack({ ok: true, t: Date.now() });
   });
 
   on(socket, 'logs:get', (payload, ack) => {
@@ -2022,7 +2043,8 @@ io.on('connection', socket => {
     if (!a) {
       return ack({ logs: [] });
     }
-    const logs = interactionLog.getSessionLogs(a.sessionId);
+    // FRESH 首轮 sessionId 未到：读 provisional 缓冲；init rebind 后读真 sessionId
+    const logs = interactionLog.getSessionLogs(a.logKey());
     ack({ logs });
   });
 

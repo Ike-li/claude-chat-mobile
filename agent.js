@@ -15,6 +15,15 @@ const TOOL_INPUT_TTL_MS = 10 * 60 * 1000; // 缓存 input 存活 10 分钟
 const TOOL_INPUT_MAX = 40;                // LRU 上限，防内存涨
 const TOOL_CHANGE_KIND = { Edit: 'edit', Write: 'write', Read: 'read', MultiEdit: 'multiedit', NotebookEdit: 'notebook' };
 const toolFilePath = (input) => input?.file_path ?? input?.notebook_path ?? null;
+// AskUserQuestion 选项归一：字符串 → {label}；对象保留 description/preview（对齐 CLI 自动 Other 之外的完整呈现）
+function normalizeQuestionOption(o) {
+  if (typeof o === 'string') return { label: o };
+  if (!o || typeof o !== 'object') return { label: String(o ?? '') };
+  const out = { label: o.label != null ? String(o.label) : '' };
+  if (o.description != null && String(o.description)) out.description = String(o.description);
+  if (o.preview != null && String(o.preview)) out.preview = String(o.preview);
+  return out;
+}
 const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn 的有效期（2min）：宽于任何真实自动汇报延迟、
                                      // 窄于长尾——超时不合成，防滞留 flag 被无关的 message_start（如 auto-compact fork）误触发。
 const BG_TASK_TTL_MS = 180000;       // 活的后台任务（bgTasks）无心跳的失效期（3min）：SDK getProgressMessage 无增量时不推，
@@ -265,11 +274,12 @@ export class AgentSession {
     if (this.firstMessage === null) this.firstMessage = displayText;
     this.emit('user_message', { text: displayText, attachments: opts.attachments }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
     // 日志模型/effort/perm 走统一 logMeta()（消除 send vs result 的模型解析漂移，见 logMeta 注释）。
+    // 日志键走 logKey()：FRESH 首轮 sessionId 未到时用 provisional，init 后 rebind，避免首跳蒸发。
     const { model: metaModel, effort: effortStr, permissionMode: permStr } = this.logMeta();
-    interactionLog.userMessageOut(this.sessionId, displayText, metaModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
+    interactionLog.userMessageOut(this.logKey(), displayText, metaModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
     this.pendingTurns++;
     // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
-    interactionLog.agentSend(this.sessionId, text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
+    interactionLog.agentSend(this.logKey(), text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
     this.queue.push({ text });
     this.notifyInput?.();
     this.lastActivity = Date.now(); // 续期静默看护：send 是用户活动，防 idle 误判
@@ -382,7 +392,9 @@ export class AgentSession {
   // 见 server.js 注释）——resolvePermission 本身不知道调用方是哪个设备/socket，无法自己写 audit_record
   // （actor 归属信息只有 server.js 层有），故只把结果吐出去，把"要不要审计"的判断留给上层。
   // 找不到 pending（已被 abort/consume 清理）时返回 undefined，调用方不应据此写审计。
-  resolvePermission(requestId, decision, alwaysThisSession, clientOp) {
+  // opts.exitMode：对齐 CLI plan-exit——批准 ExitPlanMode 时用户选的退出后权限档
+  // （default / acceptEdits / bypassPermissions）；非法或缺省回落 default。
+  resolvePermission(requestId, decision, alwaysThisSession, clientOp, opts = {}) {
     const pending = this.pendingPermissions.get(requestId);
     if (!pending) return undefined;
     // 移除 abort 监听器防僵尸累积（SDK 可能为多个 canUseTool 复用同一 signal）
@@ -423,11 +435,13 @@ export class AgentSession {
       // 兜底：实测 SDK 的 ExitPlanMode 工具 checkPermissions 只回 {behavior:'ask'}、不带任何 suggestions
       // （交互式 CLI 的切档由 plan-exit 弹窗用户选 default/acceptEdits/bypass 时补 setMode；headless/
       // canUseTool 路径没有那个弹窗 → permission_suggestions 为 undefined）。若不兜底，批准后 updatedPermissions
-      // 为空 → SDK 内部 toolPermissionContext.mode 仍停在 plan（后续编辑/命令继续按 plan 审批）、前端图标也
-      // 停在「计划模式」。故对 ExitPlanMode 合成「退出到 default」=终端平按 yes 的等价行为；destination:'session'
-      // 只改本会话上下文、不落盘 settings。SDK 未来若开始发 setMode，则上面的 suggestion 优先、此兜底不触发。
+      // 为空 → SDK 内部 toolPermissionContext.mode 仍停在 plan。web 现支持 opts.exitMode 对齐 CLI 三档；
+      // 非法/缺省 → default（=终端平按 yes）。destination:'session' 只改本会话、不落盘 settings。
+      // SDK 未来若开始发 setMode suggestion，则上面的 suggestion 优先、此兜底不触发。
       if (!modeUpdate && pending.name === 'ExitPlanMode') {
-        modeUpdate = { type: 'setMode', mode: 'default', destination: 'session' };
+        const EXIT_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
+        const exitMode = EXIT_MODES.has(opts?.exitMode) ? opts.exitMode : 'default';
+        modeUpdate = { type: 'setMode', mode: exitMode, destination: 'session' };
       }
       // 「始终允许本会话」额外应用 session 范围的规则更新（原行为；排除已单列的 setMode 防重复）。
       const sessionRules = alwaysThisSession
@@ -476,8 +490,15 @@ export class AgentSession {
 
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
-        const opts = (q.options || []).map(o => (typeof o === 'string' ? o : o.label));
-        this.emit('question', { requestId: `${toolUseID}#${i}`, text: q.question, options: opts });
+        // 对齐 CLI：保留 header / multiSelect / option.description|preview，前端才能完整呈现
+        const options = (q.options || []).map(normalizeQuestionOption).filter(o => o.label);
+        this.emit('question', {
+          requestId: `${toolUseID}#${i}`,
+          text: q.question,
+          header: q.header ? String(q.header) : undefined,
+          multiSelect: Boolean(q.multiSelect),
+          options,
+        });
       }
 
       signal?.addEventListener('abort', abortHandler);
@@ -485,7 +506,9 @@ export class AgentSession {
   }
 
   // requestId 格式：`${toolUseID}#${questionIndex}`（server 的 user:answer handler 透传）
-  resolveQuestion(requestId, optionIndex) {
+  // opts.freeText：对齐 CLI 自动提供的 Other——自由文本作答，不依赖 options 下标。
+  // opts.optionIndexes：对齐 multiSelect——多个选项下标，合并为一条答案。
+  resolveQuestion(requestId, optionIndex, opts = {}) {
     const hash = requestId.lastIndexOf('#');
     if (hash === -1) return;
     const toolUseID = requestId.slice(0, hash);
@@ -494,11 +517,31 @@ export class AgentSession {
     if (!pending || isNaN(qIdx) || qIdx >= pending.questions.length) return;
     if (pending.answers[qIdx] !== null) return; // 防重复
 
-    const q = pending.questions[qIdx];
-    const opts = q.options || [];
-    if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= opts.length) return; // S6：越界 optionIndex 不作答（防把 "-1"/"99" 等当答案外发给模型）
-    const opt = opts[optionIndex];
-    const label = typeof opt === 'string' ? opt : (opt?.label ?? String(optionIndex));
+    const freeText = typeof opts?.freeText === 'string' ? opts.freeText.trim() : '';
+    let label;
+    if (freeText) {
+      // Other：自由文本优先（即使同时传了 optionIndex 也用 freeText，对齐「用户最终写的内容」）
+      label = freeText;
+    } else if (Array.isArray(opts?.optionIndexes)) {
+      const q = pending.questions[qIdx];
+      const qopts = q.options || [];
+      const labels = [];
+      const seen = new Set();
+      for (const idx of opts.optionIndexes) {
+        if (!Number.isInteger(idx) || idx < 0 || idx >= qopts.length || seen.has(idx)) continue;
+        seen.add(idx);
+        const opt = qopts[idx];
+        labels.push(typeof opt === 'string' ? opt : (opt?.label ?? String(idx)));
+      }
+      if (!labels.length) return; // 空/全非法 multiSelect 不作答
+      label = labels.join('、');
+    } else {
+      const q = pending.questions[qIdx];
+      const qopts = q.options || [];
+      if (!Number.isInteger(optionIndex) || optionIndex < 0 || optionIndex >= qopts.length) return; // S6：越界 optionIndex 不作答
+      const opt = qopts[optionIndex];
+      label = typeof opt === 'string' ? opt : (opt?.label ?? String(optionIndex));
+    }
     pending.answers[qIdx] = label;
     pending.remaining--;
 
@@ -692,8 +735,14 @@ export class AgentSession {
       for (let i = 0; i < p.questions.length; i++) {
         if (p.answers[i] !== null) continue; // 已答的不补发（切入只重建仍待回答的问题）
         const q = p.questions[i];
-        const options = (q.options || []).map(o => (typeof o === 'string' ? o : o.label));
-        questions.push({ requestId: `${toolUseID}#${i}`, text: q.question, options });
+        const options = (q.options || []).map(normalizeQuestionOption).filter(o => o.label);
+        questions.push({
+          requestId: `${toolUseID}#${i}`,
+          text: q.question,
+          header: q.header ? String(q.header) : undefined,
+          multiSelect: Boolean(q.multiSelect),
+          options,
+        });
       }
     }
     return { permissions, questions };
@@ -715,7 +764,12 @@ export class AgentSession {
             this.lastToolName = null;      // 切换会话清工具名
             this.bgTasks.clear();          // 换会话清空活后台注册表（旧会话后台任务不串到新会话）
           }
+          // FRESH 首轮：init 前的日志写在 provisionalKey(instanceId) 下，先并入真 sessionId 再记后续 sys_info。
+          const prevLogKey = this.logKey();
           this.sessionId = msg.session_id;
+          if (prevLogKey && prevLogKey !== this.sessionId) {
+            interactionLog.rebindSessionLogs(prevLogKey, this.sessionId);
+          }
           // 权限档以 SDK init 上报的 msg.permissionMode 为权威「实际生效档」——这是唯一能证明
           // setPermissionMode/ExitPlanMode 等是否真被 SDK 应用的 SDK 源头凭证（模型同理走 msg.model）。
           // bypass 例外：用户档 bypass 时 SDK 实为 default（bypass 由 handleCanUseTool 自放行），保留用户档、
@@ -725,7 +779,7 @@ export class AgentSession {
           const sdkMode = msg.permissionMode;
           if (sdkMode && this.permissionMode !== 'bypassPermissions' && sdkMode !== this.permissionMode) {
             console.warn(`[perm-drift] 权限档漂移：本地「${this.permissionMode}」≠ SDK 实际「${sdkMode}」，以 SDK 为准对账`);
-            interactionLog.addSessionLog(this.sessionId, 'sys_info',
+            interactionLog.addSessionLog(this.logKey(), 'sys_info',
               `[SYS] ⚠️ 权限档漂移：本地档=${this.permissionMode} ≠ SDK 实际档=${sdkMode}（已以 SDK 为准对账，前端图标随之校正）`);
             this.permissionMode = sdkMode;
           }
@@ -776,17 +830,28 @@ export class AgentSession {
           const bgMessage = truncate(bgSubagent ? `${bgSubagent}：${bgDesc}` : bgDesc, TOOL_SUMMARY_CAP);
           this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage); // 注册"活的后台任务"→ 驱动纯后台 busy 角标（⏳/🤖/🖥）+ 横幅进度文案
           this.emitTransient('task_progress', { taskId: bgTaskId, taskType: bgTaskType, message: bgMessage });
-        } else if (typeof msg.subtype === 'string' && (msg.subtype.startsWith('hook_') || msg.subtype === 'thinking_tokens' || msg.subtype === 'api_retry')) {
-          // 已知生命周期/进度噪声，与 task_progress 同类——显式识别后静默吞，不落交互日志抽屉（否则连续刷屏）、
+        } else if (msg.subtype === 'api_retry') {
+          // CLI 会在 TUI 显示 "Retrying in Ns · attempt i/max"。web 对齐为瞬时横幅：
+          // emitTransient（不进 buffer、不占 seq），前端原地覆盖同一条，避免聊天流堆重试行。
+          // 字段名兼容 SDK 官方（retry_delay_ms/max_retries）与旧测试/投递（delay_ms）。
+          this.emitTransient('api_retry', {
+            attempt: typeof msg.attempt === 'number' ? msg.attempt : null,
+            maxRetries: typeof msg.max_retries === 'number' ? msg.max_retries : null,
+            delayMs: typeof msg.retry_delay_ms === 'number' ? msg.retry_delay_ms
+              : (typeof msg.delay_ms === 'number' ? msg.delay_ms : null),
+            errorStatus: msg.error_status == null ? null : msg.error_status,
+            error: msg.error ?? null,
+          });
+        } else if (typeof msg.subtype === 'string' && (msg.subtype.startsWith('hook_') || msg.subtype === 'thinking_tokens')) {
+          // 已知生命周期/进度噪声——显式识别后静默吞，不落交互日志抽屉（否则连续刷屏）、
           // 不进 buffer、不启轮、不广播。这不违背下面「不静默蒸发」的初衷：那条是给【未知】子类型兜底的，
           // 这里是我们已认出并有意丢弃。需观察原始投递时用 DEBUG_SDK_MESSAGES=1 看 [sdk-msg] 裸流。
           //   · hook_*（hook_started/hook_progress/hook_response，后者高频）：SessionStart 等钩子生命周期
           //   · thinking_tokens：推理 token 计数心跳（每条 +1~3，单轮几十上百条，纯进度无展示价值）
-          //   · api_retry：429/限流自动重试（瞬时，高频时也刷屏；限流已由 statusline usage + result 间接反映）
-          // 若日后某个子类型有展示价值，在此分支之上单独加 else if 处理即可。
+          // api_retry 已上提到独立分支（有展示价值）。若日后某个子类型有展示价值，在此分支之上单独加 else if。
         } else {
           // 未识别的 system 子类型不再静默蒸发：记入交互日志抽屉，保留可观测性（本次通知丢失的教训）
-          interactionLog.addSessionLog(this.sessionId, 'sys_info', `[SYS] 未映射 system 子类型: ${msg.subtype ?? '(空)'}`);
+          interactionLog.addSessionLog(this.logKey(), 'sys_info', `[SYS] 未映射 system 子类型: ${msg.subtype ?? '(空)'}`);
         }
         break;
 
@@ -949,7 +1014,7 @@ export class AgentSession {
         const { model: modelStr, effort: effortStr, permissionMode: permStr } = this.logMeta(); // 统一解析，消除与 send 的漂移
         const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms`; // model/effort/permission 走独立 chip 字段，不再进文本
         const responseText = this.assistantResponseBuffer ? `${durationStr}\n${this.assistantResponseBuffer}` : durationStr;
-        interactionLog.agentResult(this.sessionId, responseText, modelStr, effortStr, permStr);
+        interactionLog.agentResult(this.logKey(), responseText, modelStr, effortStr, permStr);
         this.assistantResponseBuffer = '';
         this.currentMessageId = null;
         this.sawTextDelta = false;
@@ -957,7 +1022,7 @@ export class AgentSession {
 
       default:
         // 未映射的 SDK 消息类型不再静默蒸发：记入交互日志抽屉（三重 cap，无膨胀风险），保留可观测性
-        interactionLog.addSessionLog(this.sessionId, 'sys_info', `[SYS] 未映射 SDK 消息 type=${msg.type ?? '(空)'}`);
+        interactionLog.addSessionLog(this.logKey(), 'sys_info', `[SYS] 未映射 SDK 消息 type=${msg.type ?? '(空)'}`);
         break;
     }
   }
@@ -973,6 +1038,12 @@ export class AgentSession {
       this.pendingTurns = 1;
       this.pendingAutoTurn = false;
     }
+  }
+
+  // 交互日志缓冲键：有真 sessionId 用它；FRESH 首轮 init 前用 provisionalKey(instanceId)。
+  // 与 interactionLog.rebindSessionLogs 配对——init 到真 id 后把 provisional 缓冲并入。
+  logKey() {
+    return this.sessionId || interactionLog.provisionalKey(this.instanceId);
   }
 
   // 交互日志的模型/思考强度/权限档三元组（单一来源，供 send/result 共用）。

@@ -255,12 +255,19 @@ async function run() {
     await sleep(300);
 
     // 1. Assert question modal content and options list
+    // 选项外包 wrap div（支持 description/preview），不能再用 #questionOptions button:nth-child(N)
+    // （nth-child 针对父级位置，button 是 wrap 的首子 → button:nth-child(2) 匹配 0）
     const questionInfoTC5 = await page.evaluate(() => {
       const text = document.getElementById('questionText');
-      const options = Array.from(document.querySelectorAll('#questionOptions button'));
+      // 每个选项 wrap 的主选择按钮是第一个 button（预览按钮若有则是后续）
+      const wraps = Array.from(document.querySelectorAll('#questionOptions > div'));
+      const options = wraps.map(w => {
+        const btn = w.querySelector('button');
+        return btn ? btn.textContent.trim() : '';
+      }).filter(Boolean);
       return {
         text: text ? text.textContent.trim() : null,
-        options: options.map(b => b.textContent.trim())
+        options,
       };
     });
     console.log('   [Assert] Question modal content:', questionInfoTC5);
@@ -273,10 +280,10 @@ async function run() {
 
     await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc5_question_popup.png` });
     console.log('📸 Captured and saved tc5_question_popup.png');
-    
+
     // Click second choice: "dev (Bleeding-Edge Integration)"
-    await page.waitForSelector('#questionOptions button:nth-child(2)');
-    await page.click('#questionOptions button:nth-child(2)');
+    await page.waitForSelector('#questionOptions > div:nth-child(2) > button');
+    await page.click('#questionOptions > div:nth-child(2) > button');
     await page.waitForSelector('#questionModal.hidden');
 
     // 2. Assert modal goes hidden
@@ -1381,12 +1388,12 @@ async function run() {
       icon: document.getElementById('mirrorBannerIcon')?.textContent || '',
       text: document.getElementById('mirrorBannerText')?.textContent || '',
       inputDisabled: document.getElementById('input')?.disabled === true,
-      syncBtnVisible: !!document.getElementById('btnMirrorSync'),
+      syncBtnText: document.getElementById('btnMirrorSync')?.textContent?.trim() || '',
     }));
     assert.strictEqual(drivingTC20.icon, '⏱', 'TC-20: 驾驶中态图标应为 ⏱');
     assert.ok(drivingTC20.text.includes('终端驾驶中'), 'TC-20: 驾驶中态文案应含「终端驾驶中」');
     assert.strictEqual(drivingTC20.inputDisabled, true, 'TC-20: 驾驶中输入框应禁用');
-    assert.strictEqual(drivingTC20.syncBtnVisible, true, 'TC-20: 横幅应有「立即同步」按钮');
+    assert.strictEqual(drivingTC20.syncBtnText, '刷新消息', 'TC-20: 横幅刷新按钮文案应为「刷新消息」');
     await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc20_mirror_driving.png` });
     console.log('📸 Captured and saved tc20_mirror_driving.png');
 
@@ -1422,7 +1429,7 @@ async function run() {
     console.log('✅ TC-20: 只读镜像锁三态 + 驾驶期设置冻结 passed\n');
 
     // ==================================================================
-    // TC-21: 排队接管（armed）—— 驾驶中点「接管会话」不立即解锁，等终端本轮完结自动放行（2026-07-13）
+    // TC-21: 排队接管（armed）—— 驾驶中点「接管 CLI 会话」不立即解锁，等终端本轮完结自动放行（2026-07-13）
     // ==================================================================
     console.log('👉 Running TC-21: 排队接管(armed)——等待放行 + 取消 + 自动放行...');
     await sendCommand('test:mirror-armed');
@@ -1431,7 +1438,7 @@ async function run() {
     await page.waitForSelector('#mirrorBanner:not(.hidden)', { timeout: 5000 });
     await page.waitForFunction(() => document.getElementById('mirrorBannerIcon')?.textContent === '⏱', { timeout: 5000 });
 
-    // 2) 点「接管会话」→ armed：图标⏳、文案含「已请求接管」、按钮变「取消接管」、输入仍禁用（零风险排队，非立即解锁）
+    // 2) 点「接管 CLI 会话」→ armed：图标⏳、文案含「已请求接管」、按钮变「取消接管」、输入仍禁用（零风险排队，非立即解锁）
     await page.click('#btnMirrorOverride');
     await page.waitForFunction(() => document.getElementById('mirrorBannerIcon')?.textContent === '⏳', { timeout: 5000 });
     const armedTC21 = await page.evaluate(() => ({
@@ -1445,17 +1452,17 @@ async function run() {
     await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc21_mirror_armed.png` });
     console.log('📸 Captured and saved tc21_mirror_armed.png');
 
-    // 3) 点「取消接管」→ 回退驾驶中态：图标⏱、按钮变回「接管会话」、输入仍禁用（原地撤销，非解锁）
+    // 3) 点「取消接管」→ 回退驾驶中态：图标⏱、按钮变回「接管 CLI 会话」、输入仍禁用（原地撤销，非解锁）
     await page.click('#btnMirrorOverride');
     await page.waitForFunction(() => document.getElementById('mirrorBannerIcon')?.textContent === '⏱', { timeout: 5000 });
     const cancelledTC21 = await page.evaluate(() => ({
       btnLabel: document.getElementById('btnMirrorOverride')?.textContent || '',
       inputDisabled: document.getElementById('input')?.disabled === true,
     }));
-    assert.strictEqual(cancelledTC21.btnLabel, '接管会话', 'TC-21: 取消接管后按钮应变回「接管会话」');
+    assert.strictEqual(cancelledTC21.btnLabel, '接管 CLI 会话', 'TC-21: 取消接管后按钮应变回「接管 CLI 会话」');
     assert.strictEqual(cancelledTC21.inputDisabled, true, 'TC-21: 取消接管后仍处只读，输入应仍禁用');
 
-    // 4) 重新点「接管会话」→ 再次进入 armed，此后不再手动操作，验证服务端信号驱动的自动放行
+    // 4) 重新点「接管 CLI 会话」→ 再次进入 armed，此后不再手动操作，验证服务端信号驱动的自动放行
     await page.click('#btnMirrorOverride');
     await page.waitForFunction(() => document.getElementById('mirrorBannerIcon')?.textContent === '⏳', { timeout: 5000 });
 
@@ -1467,9 +1474,9 @@ async function run() {
     console.log('✅ TC-21: 排队接管(armed) passed\n');
 
     // ==================================================================
-    // TC-22: 顶部工作区 pill 改为打开文件浏览 + 抽屉逐行按钮常显文字标签
+    // TC-22: 顶部工作区 pill 打开文件浏览；抽屉不再挂逐行浏览按钮
     // ==================================================================
-    console.log('👉 Running TC-22: 顶部 pill 打开文件浏览 + 抽屉浏览按钮文字标签...');
+    console.log('👉 Running TC-22: 顶部 pill 打开文件浏览 + 抽屉无浏览按钮...');
 
     // 1) 点顶部 pill：应直接打开当前工作区的只读文件浏览弹层，不应打开工作区抽屉
     //    （topContextPill 原先只是 btnSessions 的重复代理，职责收归给左上角图标按钮）
@@ -1486,41 +1493,17 @@ async function run() {
     await page.click('#fileBrowseClose');
     await page.waitForSelector('#fileBrowseModal.hidden', { timeout: 5000 });
 
-    // 2) 抽屉里逐工作区行的浏览按钮：改为常显文字标签，不再只靠 hover-only 的 title（移动端摸不到）
+    // 2) 抽屉里不应再出现逐工作区「浏览项目文件」按钮（入口已收归顶部 pill）
     await page.click('#btnSessions');
     await page.waitForSelector('#leftSidebar:not(.-translate-x-full)');
-    const browseBtnTextTC22 = await page.evaluate(() => {
-      // 优先当前工作区行的浏览按钮；否则取第一个。避免 querySelector 拿到被折叠/不可点子树。
+    const browseBtnCountTC22 = await page.evaluate(() => {
       const panel = document.getElementById('sessionPanel');
       const btns = panel ? Array.from(panel.querySelectorAll('button[title*="浏览项目文件"]')) : [];
-      const btn = btns.find(b => {
-        const r = b.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      }) || btns[0];
-      return btn ? { text: btn.textContent.trim(), count: btns.length } : null;
+      return btns.length;
     });
-    assert.ok(browseBtnTextTC22 && browseBtnTextTC22.text.length > 2, 'TC-22: 浏览按钮应带常显文字标签，不能只剩一个 emoji');
+    assert.strictEqual(browseBtnCountTC22, 0, 'TC-22: 抽屉工作区行不应再有浏览按钮');
 
-    // 3) 该按钮点击后仍应能正常打开文件浏览（浏览非当前工作区文件的能力不因加标签而破坏）
-    // 用 evaluate click 避开 puppeteer 对被侧栏动画/遮挡节点的 clickable 校验抖动
-    const clickedBrowse = await page.evaluate(() => {
-      const panel = document.getElementById('sessionPanel');
-      const btns = panel ? Array.from(panel.querySelectorAll('button[title*="浏览项目文件"]')) : [];
-      const btn = btns.find(b => {
-        const r = b.getBoundingClientRect();
-        return r.width > 0 && r.height > 0;
-      }) || btns[0];
-      if (!btn) return false;
-      btn.click();
-      return true;
-    });
-    assert.strictEqual(clickedBrowse, true, 'TC-22: 应能点到带「浏览」文字的文件浏览按钮');
-    await page.waitForSelector('#fileBrowseModal:not(.hidden)', { timeout: 5000 });
-    await page.waitForSelector('#leftSidebar.-translate-x-full', { timeout: 5000 });
-    await page.click('#fileBrowseClose');
-    await page.waitForSelector('#fileBrowseModal.hidden', { timeout: 5000 });
-
-    console.log('✅ TC-22: 顶部 pill 打开文件浏览 + 抽屉按钮文字标签 passed\n');
+    console.log('✅ TC-22: 顶部 pill 打开文件浏览 + 抽屉无浏览按钮 passed\n');
 
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');

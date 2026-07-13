@@ -15,6 +15,17 @@ test('result + isError + 无客户端 → 推「任务出错」', () => {
   assert.equal(n.title, '⚠️ 任务出错');
 });
 
+// 对齐 CLI：用户主动中止后 SDK 仍可能带 is_error + ede_diagnostic；离线推送不得误报「任务出错」
+test('result + interrupted（即使 isError）+ 无客户端 → 推「任务已中止」', () => {
+  const n = notificationForEvent(
+    'result',
+    { durationMs: 249400, isError: true, interrupted: true, errors: ['[ede_diagnostic] stop_reason=tool_use'] },
+    { hasClients: false },
+  );
+  assert.equal(n.title, '⏹ 任务已中止');
+  assert.equal(n.body, '用时 249.4s');
+});
+
 test('result + 有客户端连接 → 不推（客户端自己看得到）', () => {
   assert.equal(notificationForEvent('result', { durationMs: 3210 }, { hasClients: true }), null);
 });

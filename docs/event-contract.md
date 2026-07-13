@@ -24,6 +24,7 @@ The check is static and zero-token. It does not start the production server, the
 
 Allowed `agent:event` types:
 
+- `api_retry`
 - `device_status`
 - `effort_mode`
 - `error`

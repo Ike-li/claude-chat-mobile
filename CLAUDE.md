@@ -4,6 +4,8 @@
 
 技术栈：Node ≥20 · ESM · Express 5 · Socket.io 4 · `@anthropic-ai/claude-agent-sdk` 0.3.201 · `jose` 6（JWT）· `web-push`（离线推送）· 测试用内置 `node --test` + puppeteer（移动端视觉 E2E，断言基于 DOM 状态非像素比对）；gifenc/pngjs 仅供 `scripts/make-demo-gif.js` 生成宣传用 demo.gif，非测试工具链。
 
+当你不知道怎么处理功能时，CLI 有什么 web 就有什么，请找一找 claude code cli 是怎么实现这个功能的
+
 ## 分支纪律
 
 **日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`；分支与发布模型见 `docs/design.md §7`）。

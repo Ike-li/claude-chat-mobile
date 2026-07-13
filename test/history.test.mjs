@@ -323,17 +323,84 @@ test('getSessionHistory: type:mode 记录（claude --resume 写入）被过滤�
   assert.equal(msgs[0].content, '真实消息');
 });
 
-test('getSessionHistory: 纯工具调用（空 content）被过滤', async () => {
+test('getSessionHistory: 纯工具调用输出为 tool_use / tool_result 结构化条目（冷路径可重建卡片）', async () => {
   const cwd = '/test/tool-hist';
   const dir = join(BASE, getProjectDir(cwd));
   writeJSONL(dir, 'toolhist', [
-    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'bash', input: {} }] } },
-    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: 'ok' }] } },
-    { type: 'assistant', message: { role: 'assistant', content: '真实回复' } },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'x', name: 'Bash', input: { command: 'ls' } }] }, timestamp: '2026-07-13T10:00:00.000Z' },
+    { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: 'ok\n', is_error: false }] }, timestamp: '2026-07-13T10:00:01.000Z' },
+    { type: 'assistant', message: { role: 'assistant', content: '真实回复' }, timestamp: '2026-07-13T10:00:02.000Z' },
   ]);
   const msgs = await getSessionHistory('toolhist', cwd, 50, { baseDir: BASE });
-  assert.equal(msgs.length, 1);
-  assert.equal(msgs[0].content, '真实回复');
+  assert.equal(msgs.length, 3);
+  assert.equal(msgs[0].kind, 'tool_use');
+  assert.equal(msgs[0].name, 'Bash');
+  assert.equal(msgs[0].toolUseId, 'x');
+  assert.ok(String(msgs[0].inputSummary || '').includes('ls'));
+  assert.equal(msgs[1].kind, 'tool_result');
+  assert.equal(msgs[1].toolUseId, 'x');
+  assert.equal(msgs[1].ok, true);
+  assert.ok(String(msgs[1].outputSummary || '').includes('ok'));
+  assert.equal(msgs[2].role, 'assistant');
+  assert.equal(msgs[2].content, '真实回复');
+  assert.equal(msgs[2].kind, undefined);
+});
+
+test('getSessionHistory: 同一 assistant 消息内 text + tool_use 按块序拆成多条', async () => {
+  const cwd = '/test/tool-mixed';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'mixed', [
+    {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'text', text: '先说明一下' },
+          { type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: '/tmp/a.ts' } },
+          { type: 'tool_use', id: 'r2', name: 'Read', input: { file_path: '/tmp/b.ts' } },
+        ],
+      },
+      timestamp: '2026-07-13T11:00:00.000Z',
+    },
+  ]);
+  const msgs = await getSessionHistory('mixed', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 3);
+  assert.equal(msgs[0].content, '先说明一下');
+  assert.equal(msgs[1].kind, 'tool_use');
+  assert.equal(msgs[1].toolUseId, 'r1');
+  assert.equal(msgs[2].kind, 'tool_use');
+  assert.equal(msgs[2].toolUseId, 'r2');
+});
+
+test('getSessionHistory: tool_result is_error=true → ok:false；thinking 块不进历史', async () => {
+  const cwd = '/test/tool-err';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'toolerr', [
+    {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: '很长的思考……' },
+          { type: 'tool_use', id: 'e1', name: 'Edit', input: { file_path: '/x' } },
+        ],
+      },
+    },
+    {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'e1', content: 'Error: denied', is_error: true }],
+      },
+    },
+  ]);
+  const msgs = await getSessionHistory('toolerr', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].kind, 'tool_use');
+  assert.equal(msgs[0].name, 'Edit');
+  assert.equal(msgs[1].kind, 'tool_result');
+  assert.equal(msgs[1].ok, false);
+  assert.ok(!msgs.some(m => m.kind === 'thinking' || (m.content && String(m.content).includes('很长的思考'))));
 });
 
 test('getSessionHistory: <task-notification> 注入条目被过滤（不回显成 XML 气泡）', async () => {

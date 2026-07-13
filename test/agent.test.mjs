@@ -698,19 +698,64 @@ test.describe('map() — 后台任务通知（task_notification）', () => {
     s.dispose();
   });
 
-  test('system/thinking_tokens + api_retry → 不记未映射、不进 buffer、不启轮（高频噪声，静默吞）', () => {
+  test('system/thinking_tokens → 不记未映射、不进 buffer、不启轮（高频噪声，静默吞）', () => {
     const { s, events } = makeSession({ resumeId: 'sess-system-noise' });
     const bufBefore = s.buffer.length;
     const eventCountBefore = events.length;
     assert.doesNotThrow(() => {
       s.map({ type: 'system', subtype: 'thinking_tokens', tokens: 2 });
-      s.map({ type: 'system', subtype: 'api_retry', attempt: 1, delay_ms: 1000 });
     });
     const logs = getSessionLogs('sess-system-noise');
-    assert.ok(!logs.some(l => l.text.includes('未映射')), 'thinking_tokens/api_retry 不该被记为未映射（否则日志刷屏）');
-    assert.equal(s.buffer.length, bufBefore, 'thinking_tokens/api_retry 不进 replay buffer');
-    assert.equal(events.length, eventCountBefore, 'thinking_tokens/api_retry 不广播 agent:event');
-    assert.equal(s.pendingAutoTurn, false, 'thinking_tokens/api_retry 不触发汇报轮');
+    assert.ok(!logs.some(l => l.text.includes('未映射')), 'thinking_tokens 不该被记为未映射（否则日志刷屏）');
+    assert.equal(s.buffer.length, bufBefore, 'thinking_tokens 不进 replay buffer');
+    assert.equal(events.length, eventCountBefore, 'thinking_tokens 不广播 agent:event');
+    assert.equal(s.pendingAutoTurn, false, 'thinking_tokens 不触发汇报轮');
+    s.dispose();
+  });
+
+  // api_retry：CLI 会显 "Retrying in Ns · attempt i/max"；web 对齐为瞬时横幅（emitTransient），
+  // 不进 buffer、不占 seq、不启轮——与 task_progress 同类，避免重连回放一堆过期重试行。
+  test('system/api_retry → emitTransient(api_retry)，不进 buffer、不占 seq、不启轮', () => {
+    const { s, events } = makeSession({ resumeId: 'sess-api-retry' });
+    const bufBefore = s.buffer.length;
+    const seqBefore = s.seq;
+    s.map({
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 2,
+      max_retries: 10,
+      retry_delay_ms: 4000,
+      error_status: 429,
+      error: 'rate_limit',
+    });
+    const logs = getSessionLogs('sess-api-retry');
+    assert.ok(!logs.some(l => l.text.includes('未映射')), 'api_retry 是已知子类型，不记未映射');
+    assert.equal(s.buffer.length, bufBefore, 'api_retry 不进 replay buffer');
+    assert.equal(s.seq, seqBefore, 'api_retry 不递增 seq');
+    assert.equal(s.pendingAutoTurn, false, 'api_retry 不触发汇报轮');
+    const retry = events.filter(e => e.type === 'api_retry');
+    assert.equal(retry.length, 1);
+    assert.equal(retry[0].transient, true);
+    assert.deepEqual(retry[0].payload, {
+      attempt: 2,
+      maxRetries: 10,
+      delayMs: 4000,
+      errorStatus: 429,
+      error: 'rate_limit',
+    });
+    s.dispose();
+  });
+
+  test('system/api_retry 兼容旧字段 delay_ms，缺字段安全', () => {
+    const { s, events } = makeSession({ resumeId: 'sess-api-retry-legacy' });
+    s.map({ type: 'system', subtype: 'api_retry', attempt: 1, delay_ms: 1500 });
+    const retry = events.find(e => e.type === 'api_retry');
+    assert.ok(retry);
+    assert.equal(retry.payload.attempt, 1);
+    assert.equal(retry.payload.delayMs, 1500);
+    assert.equal(retry.payload.maxRetries, null);
+    assert.equal(retry.payload.errorStatus, null);
+    assert.equal(retry.payload.error, null);
     s.dispose();
   });
 
@@ -1522,6 +1567,46 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
+  // 对齐 CLI plan-exit：用户批准时可选手 default / acceptEdits / bypassPermissions
+  test('resolvePermission(allow)：ExitPlanMode + exitMode=acceptEdits → setMode acceptEdits', async () => {
+    const { s, events } = makeSession({ permissionMode: 'plan' });
+    const ac = new AbortController();
+    const promise = s.askPermission('ExitPlanMode', { plan: '…' }, {
+      signal: ac.signal, toolUseID: 't1', suggestions: undefined
+    });
+    s.resolvePermission('t1', 'allow', false, { tool: 'ExitPlanMode', args: { plan: '…' }, cwd: s.cwd }, { exitMode: 'acceptEdits' });
+    const result = await promise;
+    assert.deepEqual(result.updatedPermissions, [{ type: 'setMode', mode: 'acceptEdits', destination: 'session' }]);
+    assert.equal(s.permissionMode, 'acceptEdits');
+    assert.equal(events.find(e => e.type === 'permission_mode')?.payload.mode, 'acceptEdits');
+    s.dispose();
+  });
+
+  test('resolvePermission(allow)：ExitPlanMode + exitMode=bypassPermissions → setMode bypass', async () => {
+    const { s } = makeSession({ permissionMode: 'plan' });
+    const ac = new AbortController();
+    const promise = s.askPermission('ExitPlanMode', { plan: '…' }, {
+      signal: ac.signal, toolUseID: 't1', suggestions: undefined
+    });
+    s.resolvePermission('t1', 'allow', false, { tool: 'ExitPlanMode', args: { plan: '…' }, cwd: s.cwd }, { exitMode: 'bypassPermissions' });
+    const result = await promise;
+    assert.equal(result.updatedPermissions[0].mode, 'bypassPermissions');
+    assert.equal(s.permissionMode, 'bypassPermissions');
+    s.dispose();
+  });
+
+  test('resolvePermission(allow)：ExitPlanMode + 非法 exitMode → 回落 default', async () => {
+    const { s } = makeSession({ permissionMode: 'plan' });
+    const ac = new AbortController();
+    const promise = s.askPermission('ExitPlanMode', { plan: '…' }, {
+      signal: ac.signal, toolUseID: 't1', suggestions: undefined
+    });
+    s.resolvePermission('t1', 'allow', false, { tool: 'ExitPlanMode', args: { plan: '…' }, cwd: s.cwd }, { exitMode: 'nope' });
+    const result = await promise;
+    assert.equal(result.updatedPermissions[0].mode, 'default');
+    s.dispose();
+  });
+
   test('resolvePermission(allow)：无 setMode 且非 alwaysThisSession → 不改档、不 emit permission_mode、updatedPermissions 为空', async () => {
     const { s, events } = makeSession({ permissionMode: 'default' });
     const ac = new AbortController();
@@ -1636,6 +1721,126 @@ test.describe('AskUserQuestion', () => {
     );
     s.resolveQuestion('q1#0', 99); // 越界
     assert.equal(s.pendingQuestions.size, 1); // 还在
+    s.dispose();
+  });
+
+  // 对齐 CLI：AskUserQuestion 自动提供 Other，用户可自由文本作答（不在模型给的 options 下标里）
+  test('resolveQuestion：freeText（Other）作答 → answered，文案含自由文本', async () => {
+    const { s, events } = makeSession();
+    const ac = new AbortController();
+    const promise = s.handleQuestion(
+      { questions: [{ question: 'Which lib?', options: ['dayjs', 'luxon'] }] },
+      { signal: ac.signal, toolUseID: 'q1' }
+    );
+    s.resolveQuestion('q1#0', null, { freeText: '  date-fns  ' });
+    assert.equal(s.pendingQuestions.size, 0);
+    assert.equal(s.denyKinds.get('q1'), 'answered');
+    const result = await promise;
+    assert.equal(result.behavior, 'deny');
+    assert.match(result.message, /date-fns/);
+    assert.ok(!result.message.includes('dayjs') || result.message.includes('date-fns'));
+    const rr = events.find(e => e.type === 'request_resolved' && e.payload.kind === 'question');
+    assert.ok(rr.payload.outcome.includes('date-fns'));
+    s.dispose();
+  });
+
+  test('resolveQuestion：freeText 空白 → 不作答（防空 Other）', () => {
+    const { s } = makeSession();
+    const ac = new AbortController();
+    s.handleQuestion(
+      { questions: [{ question: 'Q1', options: ['A'] }] },
+      { signal: ac.signal, toolUseID: 'q1' }
+    );
+    s.resolveQuestion('q1#0', null, { freeText: '   ' });
+    assert.equal(s.pendingQuestions.size, 1);
+    s.dispose();
+  });
+
+  test('resolveQuestion：freeText 优先于 optionIndex（同时传时用自由文本）', async () => {
+    const { s } = makeSession();
+    const ac = new AbortController();
+    const promise = s.handleQuestion(
+      { questions: [{ question: 'Q1', options: ['A', 'B'] }] },
+      { signal: ac.signal, toolUseID: 'q1' }
+    );
+    s.resolveQuestion('q1#0', 0, { freeText: 'custom answer' });
+    const result = await promise;
+    assert.match(result.message, /custom answer/);
+    assert.ok(!result.message.includes('「A」') || result.message.includes('custom'));
+    s.dispose();
+  });
+
+  // 对齐 CLI：透传 header / multiSelect / option.description|preview，不再只剩 label 字符串
+  test('handleQuestion：emit 保留 header/multiSelect/option 详情', () => {
+    const { s, events } = makeSession();
+    const ac = new AbortController();
+    s.handleQuestion(
+      { questions: [{
+        question: 'Which features?',
+        header: 'Features',
+        multiSelect: true,
+        options: [
+          { label: 'A', description: 'Alpha', preview: '```a```' },
+          { label: 'B', description: 'Beta' },
+        ],
+      }] },
+      { signal: ac.signal, toolUseID: 'q1' }
+    );
+    const q = events.find(e => e.type === 'question');
+    assert.equal(q.payload.header, 'Features');
+    assert.equal(q.payload.multiSelect, true);
+    assert.deepEqual(q.payload.options[0], { label: 'A', description: 'Alpha', preview: '```a```' });
+    assert.deepEqual(q.payload.options[1], { label: 'B', description: 'Beta' });
+    s.resolveQuestion('q1#0', null, { optionIndexes: [0] });
+    s.dispose();
+  });
+
+  test('resolveQuestion：multiSelect optionIndexes 多选合并', async () => {
+    const { s } = makeSession();
+    const ac = new AbortController();
+    const promise = s.handleQuestion(
+      { questions: [{ question: 'Pick many', multiSelect: true, options: ['A', 'B', 'C'] }] },
+      { signal: ac.signal, toolUseID: 'q1' }
+    );
+    s.resolveQuestion('q1#0', null, { optionIndexes: [0, 2] });
+    const result = await promise;
+    // 多选合并进同一对书名号：用户选择了：「A、C」
+    assert.match(result.message, /「A、C」/);
+    assert.ok(!result.message.includes('B'));
+    s.dispose();
+  });
+
+  test('resolveQuestion：optionIndexes 空/非法 → 不作答', () => {
+    const { s } = makeSession();
+    const ac = new AbortController();
+    s.handleQuestion(
+      { questions: [{ question: 'Q', multiSelect: true, options: ['A', 'B'] }] },
+      { signal: ac.signal, toolUseID: 'q1' }
+    );
+    s.resolveQuestion('q1#0', null, { optionIndexes: [] });
+    assert.equal(s.pendingQuestions.size, 1);
+    s.resolveQuestion('q1#0', null, { optionIndexes: [99] });
+    assert.equal(s.pendingQuestions.size, 1);
+    s.dispose();
+  });
+
+  test('pendingRequestsSnapshot：未答问题保留 rich options/header/multiSelect', () => {
+    const { s } = makeSession();
+    const ac = new AbortController();
+    s.handleQuestion(
+      { questions: [{
+        question: 'Q',
+        header: 'H',
+        multiSelect: true,
+        options: [{ label: 'A', description: 'desc' }],
+      }] },
+      { signal: ac.signal, toolUseID: 'q1' }
+    );
+    const snap = s.pendingRequestsSnapshot();
+    assert.equal(snap.questions.length, 1);
+    assert.equal(snap.questions[0].header, 'H');
+    assert.equal(snap.questions[0].multiSelect, true);
+    assert.deepEqual(snap.questions[0].options[0], { label: 'A', description: 'desc' });
     s.dispose();
   });
 });
@@ -2018,7 +2223,7 @@ test.describe('pendingRequestsSnapshot()', () => {
     assert.deepEqual(snap.questions, []);
   });
 
-  test('question：仅补发未答项（answers[i]===null），options 归一为 label 字符串', () => {
+  test('question：仅补发未答项（answers[i]===null），options 归一为 {label,...} 对象', () => {
     const { s } = makeSession();
     s.pendingQuestions.set('tool_1', {
       questions: [
@@ -2029,7 +2234,11 @@ test.describe('pendingRequestsSnapshot()', () => {
       resolve() {},
     });
     const snap = s.pendingRequestsSnapshot();
-    assert.deepEqual(snap.questions, [{ requestId: 'tool_1#0', text: 'Q0?', options: ['A', 'B'] }]);
+    // 对齐 CLI rich options：字符串选项也会归一成 {label}；multiSelect 缺省 false
+    assert.deepEqual(snap.questions, [{
+      requestId: 'tool_1#0', text: 'Q0?', header: undefined, multiSelect: false,
+      options: [{ label: 'A' }, { label: 'B' }],
+    }]);
     assert.deepEqual(snap.permissions, []);
   });
 

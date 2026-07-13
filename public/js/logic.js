@@ -53,6 +53,16 @@ export function attachmentDataUrl(att) {
   return `data:${mime};base64,${data}`;
 }
 
+// 文件类工具卡片预览入口文案：Read 只读文件片段/图片，Edit/Write/… 才是 diff 变更。
+// 后端 tool_use.file.changeKind 已区分（read|edit|write|multiedit|notebook）；changeKind 优先，name 兜底。
+export function toolPreviewLabel(meta) {
+  const m = meta && typeof meta === 'object' ? meta : {};
+  const kind = m.changeKind != null ? String(m.changeKind) : '';
+  const name = m.name != null ? String(m.name) : '';
+  const isRead = kind === 'read' || (!kind && name === 'Read');
+  return isRead ? '📄 预览文件' : '📄 预览变更';
+}
+
 // ultracode = CLI /effort 菜单 xhigh 之上的最高档（= xhigh effort + dynamic workflow 编排）。
 // SDK 的 effort flag 只认 low..max、不认 ultracode，故 web 借道「xhigh effort + 每轮注入本关键词」复现：
 // 关键词触发 CLI 的 ultracodeKeywordTrigger → 该轮 opt into Workflow 工具。已有关键词时保持原文，避免叠加。
@@ -199,6 +209,25 @@ export function urlBase64ToUint8Array(b64) {
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
+// 连接 RTT 展示文案：手机顶栏实时延迟。合法有限非负 number → 整数 ms（≥1000 用 1 位小数 s）；
+// 非法/未知（null/NaN/负/非 number）→ ''，接线层据此隐藏，避免断线时残留陈旧数字。
+export function formatRttMs(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.round(ms)}ms`;
+}
+
+// 连接 RTT 色阶语义 token：good(<150) / ok(<400) / warn(<1000) / bad(≥1000)。
+// 返回语义名而非 Tailwind class，接线层映射到 text-success/text-ink-soft/text-warning/text-danger；
+// 非法 → ''，与 formatRttMs 对齐（隐藏时不着色）。
+export function rttToneClass(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';
+  if (ms < 150) return 'good';
+  if (ms < 400) return 'ok';
+  if (ms < 1000) return 'warn';
+  return 'bad';
+}
+
 // 移动端切前台/网络恢复/bfcache 恢复时的重连决策。要害：`socket.connected` 在「半开连接」下会撒谎——
 // 切后台冻结 JS、TCP 未必断、engine.io 心跳计时被冻结尚未发现 server 失联，回前台瞬间它仍是 true。
 // 故 connected 时不能直接判健康（否则白等 socket.io 心跳超时 ~45s 才被动重连 = 用户感受的「卡住」），
@@ -244,6 +273,31 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seen
   return 'keep';
 }
 
+// 同 sessionId 的 DOM 缓存恢复策略：已完成的对话/工具卡片按会话不可变，与当前 instanceId 无关。
+// instance 会因 effort/model 切档被 dispose+open 换新（新 epoch/seq 空间），但历史 DOM 仍可秒恢复；
+// 仅当「缓存归属实例 === 当前实例」时才复用 lastSeq/epoch 做增量续传，否则 seq 从 0 跟新实例，
+// 避免旧实例的 seq 基线对新缓冲错位（错位会漏事件或把新事件当重复丢掉）。
+//   restore=false           → 无节点可恢复，走 loading + history
+//   restore + reuseSeqBaseline → 贴回 DOM，并用 cached.lastSeq/epoch 增量 sync
+//   restore + !reuseSeqBaseline → 贴回 DOM，resumeFromSeq=0（新实例全量增量从空缓冲起）
+export function sessionDomCachePlan({ cached, currentInstanceId } = {}) {
+  if (!cached?.nodes?.length) {
+    return { restore: false, resumeFromSeq: 0, reuseSeqBaseline: false, epoch: null, lastSeq: 0 };
+  }
+  const sameInstance = cached.instanceId === currentInstanceId;
+  if (sameInstance) {
+    const lastSeq = Number(cached.lastSeq) || 0;
+    return {
+      restore: true,
+      resumeFromSeq: lastSeq,
+      reuseSeqBaseline: true,
+      epoch: cached.epoch ?? null,
+      lastSeq,
+    };
+  }
+  return { restore: true, resumeFromSeq: 0, reuseSeqBaseline: false, epoch: null, lastSeq: 0 };
+}
+
 // 软键盘弹起时，底部输入区(footer)该用多大的 padding-bottom 给键盘让位。
 //   iOS Safari：键盘只缩 visualViewport、layout viewport(innerHeight)不动 → 需手动补 (innerHeight-viewportHeight)
 //     把输入框顶到键盘上方；
@@ -270,6 +324,17 @@ export function logEntryVisibleForInstance(entry, instanceId) {
   if (!entry) return false;
   if (entry.type === 'client_conn') return true;
   return (entry.instanceId ?? null) === (instanceId ?? null);
+}
+
+// 交互日志行布局 class 契约（appendLogEntry 唯一来源）。
+// 旧布局：row 横向 flex + 多个 chip shrink-0 + 正文 break-all → 窄屏正文可用宽≈0，中文逐字竖排。
+// 新布局：row 纵向；meta 可换行承载时间戳/type/model/effort/perm；body 独占满宽、break-words 正常折行。
+export function consoleLogEntryLayout() {
+  return {
+    row: 'flex flex-col gap-1 font-mono text-[11px]',
+    meta: 'flex flex-wrap items-center gap-1.5 min-w-0 leading-5',
+    body: 'w-full min-w-0 break-words whitespace-pre-wrap leading-5',
+  };
 }
 
 // 模型网格「默认磁贴」（data-model=""）文案决策。currentModel 非空=已选/已知具体模型 → 磁贴非激活、显通用文案。
@@ -309,7 +374,7 @@ export function resolveDeepLinkTarget(target, instances = []) {
 }
 
 // 排队接管状态机（接管=等终端本轮完结再放行，纯 web 侧、零终端侵入）。
-// 驾驶中点「接管会话」进入 armed：不立即解锁（立即发送会与终端在跑的 turn 并发写盘），而是等
+// 驾驶中点「接管 CLI 会话」进入 armed：不立即解锁（立即发送会与终端在跑的 turn 并发写盘），而是等
 // 现有镜像锁的自动释放信号。armed 期间只有三个出口：
 //   unlock-focus  = readonly=false 到达（终端本轮完结，服务端自动解锁）→ 放行 + 聚焦输入
 //   unlock-stale  = 同会话转 stale（等待中终端 5 分钟零写入疑似中断）→ 自动完成接管（提示保留分叉风险说明）
@@ -325,4 +390,60 @@ export function armedTakeoverStep(state = {}, signal = {}) {
     if (stale && sessionId === armedSid) return { action: 'unlock-stale' };
   }
   return { action: 'none' };
+}
+
+// 轮次 result → 聊天流条/通知/触感/挂起工具收尾。
+// CLI 对用户主动中止只呈现 interrupt，不把 SDK 伴随的 is_error + ede_diagnostic 当红色错误。
+// 后端 agent.js 在 interrupt() 成功后给紧随的 result 打 interrupted=true；此处优先于 isError。
+export function presentTurnResult(payload = {}) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const durationMs = typeof p.durationMs === 'number' ? p.durationMs : 0;
+  const cost = typeof p.costUsd === 'number' ? ` · $${p.costUsd.toFixed(4)}` : '';
+  const secs = (durationMs / 1000).toFixed(1);
+  const errorText = Array.isArray(p.errors) ? p.errors.filter(Boolean).join('; ') : '';
+
+  if (p.interrupted) {
+    return {
+      kind: 'aborted',
+      statusBar: { text: `已中止 · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      errorBar: null,
+      notify: { title: '⏹ 任务已中止', body: `用时 ${secs}s` },
+      failToolsMessage: '已中止',
+      haptic: 'warning',
+    };
+  }
+  if (p.isError) {
+    return {
+      kind: 'error',
+      statusBar: { text: `完成 · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      errorBar: errorText ? { text: `出错：${errorText}`, cls: 'text-danger' } : null,
+      notify: { title: '⚠️ 任务出错', body: errorText.slice(0, 80) || `用时 ${secs}s` },
+      failToolsMessage: errorText || '工具执行已因本轮错误停止',
+      haptic: 'error',
+    };
+  }
+  return {
+    kind: 'success',
+    statusBar: { text: `完成 · ${secs}s${cost}`, cls: 'text-ink-faint' },
+    errorBar: null,
+    notify: { title: '✅ 任务完成', body: `用时 ${secs}s` },
+    failToolsMessage: null,
+    haptic: 'success',
+  };
+}
+
+// CLI "Retrying in 4s · attempt 2/10" 的 web 横幅文案。字段来自 SDK system/api_retry 经 agent 归一后的 payload。
+export function formatApiRetryBanner(payload = {}) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  const attempt = Number(p.attempt);
+  const maxRetries = Number(p.maxRetries ?? p.max_retries);
+  const delayMs = Number(p.delayMs ?? p.retry_delay_ms);
+  const hasAttempt = Number.isFinite(attempt) && attempt > 0;
+  const hasMax = Number.isFinite(maxRetries) && maxRetries > 0;
+  const secs = Number.isFinite(delayMs) && delayMs > 0 ? Math.ceil(delayMs / 1000) : 0;
+  const err = typeof p.error === 'string' ? p.error : '';
+  const kind = err === 'rate_limit' ? '限流重试中' : err === 'overloaded' ? '过载重试中' : '重试中';
+  const frac = hasAttempt && hasMax ? ` · ${attempt}/${maxRetries}` : (hasAttempt ? ` · 第 ${attempt} 次` : '');
+  const wait = secs > 0 ? ` · ${secs}s 后` : '';
+  return `${kind}${frac}${wait}`;
 }

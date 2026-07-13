@@ -18,10 +18,12 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
   switch (type) {
     case 'result':
       if (hasClients) return null;
-      return withData({
-        title: p.isError ? '⚠️ 任务出错' : '✅ 任务完成',
-        body: `用时 ${((p.durationMs ?? 0) / 1000).toFixed(1)}s`
-      });
+      // 对齐 CLI：interrupt 终态 result 即使 is_error/ede_diagnostic，也是「已中止」不是「出错」
+      {
+        const secs = ((p.durationMs ?? 0) / 1000).toFixed(1);
+        const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
+        return withData({ title, body: `用时 ${secs}s` });
+      }
     case 'permission_request':
       // 最小化（SEC-04）：body 只保留工具名，【不含 input 命令/参数正文】；待批操作回 app 内经鉴权查看。
       return withData({

@@ -768,6 +768,11 @@ io.on('connection', socket => {
     });
   });
 
+  // 连接 RTT 探活（与真 server 对齐）：立即 ack，不改业务状态
+  socket.on('conn:ping', (_payload, ack) => {
+    if (typeof ack === 'function') ack({ ok: true, t: Date.now() });
+  });
+
   // Handle sync:since for switching workspace viewing instances and historical message hydration
   socket.on('sync:since', (payload, callback) => {
     const { instanceId, sessionId } = payload || {};
@@ -3059,8 +3064,8 @@ io.on('connection', socket => {
 
   // Handle user permission decision
   socket.on('user:approve', async payload => {
-    const { requestId, decision, alwaysThisSession, instanceId } = payload || {};
-    console.log(`[mock] User approve received: requestId=${requestId}, decision=${decision}, always=${alwaysThisSession}`);
+    const { requestId, decision, alwaysThisSession, instanceId, exitMode } = payload || {};
+    console.log(`[mock] User approve received: requestId=${requestId}, decision=${decision}, always=${alwaysThisSession}${exitMode ? `, exitMode=${exitMode}` : ''}`);
 
     if (pendingPermission && pendingPermission.requestId === requestId) {
       const activeInst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
@@ -3084,14 +3089,17 @@ io.on('connection', socket => {
           }
           alwaysAllowedPermissionNamesByInstance.get(targetInstanceId).add(pendingPermission.name);
         }
-        // 修复后的后端行为：批准 ExitPlanMode 等含 setMode 的请求 → 切权限档并广播 permission_mode，
-        // 使手机端权限档图标跟随（TC-15 回归的核心断言点）。
-        if (pendingPermission.setMode) {
+        // 对齐 CLI plan-exit：ExitPlanMode 批准时优先用客户端 exitMode，否则用场景预设 setMode
+        const EXIT_MODES = new Set(['default', 'acceptEdits', 'bypassPermissions']);
+        const resolvedMode = (pendingPermission.name === 'ExitPlanMode' && EXIT_MODES.has(exitMode))
+          ? exitMode
+          : pendingPermission.setMode;
+        if (resolvedMode) {
           const inst = mockInstances.find(i => i.instanceId === viewingInstanceId);
-          if (inst) inst.permissionMode = pendingPermission.setMode;
+          if (inst) inst.permissionMode = resolvedMode;
           io.emit('agent:event', {
             seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, ts: Date.now(),
-            type: 'permission_mode', payload: { mode: pendingPermission.setMode }
+            type: 'permission_mode', payload: { mode: resolvedMode }
           });
         }
         socket.emit('agent:event', {
@@ -3131,10 +3139,10 @@ io.on('connection', socket => {
     }
   });
 
-  // Handle user question choice selection
+  // Handle user question choice selection (optionIndex / optionIndexes / freeText)
   socket.on('user:answer', async payload => {
-    const { requestId, optionIndex, instanceId } = payload || {};
-    console.log(`[mock] User answer received: requestId=${requestId}, choice=${optionIndex}`);
+    const { requestId, optionIndex, optionIndexes, freeText, instanceId } = payload || {};
+    console.log(`[mock] User answer received: requestId=${requestId}, choice=${optionIndex}, multi=${Array.isArray(optionIndexes) ? optionIndexes.join(',') : ''}, freeText=${freeText ? '[set]' : ''}`);
 
     if (pendingQuestion && pendingQuestion.requestId === requestId) {
       const activeInst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
@@ -3144,13 +3152,30 @@ io.on('connection', socket => {
         type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
       });
 
+      const free = typeof freeText === 'string' ? freeText.trim() : '';
+      let selectedOption;
+      let outcome;
+      if (free) {
+        selectedOption = free;
+        outcome = `other: ${free}`;
+      } else if (Array.isArray(optionIndexes) && optionIndexes.length) {
+        const labels = optionIndexes.map(i => {
+          const o = pendingQuestion.options[i];
+          return (o && typeof o === 'object') ? (o.label || '') : o;
+        }).filter(Boolean);
+        selectedOption = labels.join('、');
+        outcome = `options ${optionIndexes.join(',')}`;
+      } else {
+        const o = pendingQuestion.options[optionIndex];
+        selectedOption = (o && typeof o === 'object') ? (o.label || o) : o;
+        outcome = `option ${optionIndex}`;
+      }
+
       // Broadcast resolved
       io.emit('agent:event', {
         seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-        type: 'request_resolved', payload: { requestId, kind: 'question', outcome: `option ${optionIndex}` }
+        type: 'request_resolved', payload: { requestId, kind: 'question', outcome }
       });
-
-      const selectedOption = pendingQuestion.options[optionIndex];
 
       socket.emit('agent:event', {
         seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -27,7 +27,7 @@ import { verifyIntegrity } from './canonicalize.js';
 
   // ---- DOM ----
   const $ = id => document.getElementById(id);
-  const messagesEl = $('messages'), inputEl = $('input'), statusEl = $('statusLine'), connDot = $('connDot');
+  const messagesEl = $('messages'), inputEl = $('input'), statusEl = $('statusLine'), connDot = $('connDot'), connRttEl = $('connRtt'), connDotWrap = $('connDotWrap');
   const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnSessions = $('btnSessions');
   const activeStatusPill = $('activeStatusPill'), activeStatusText = $('activeStatusText'), btnStopNew = $('btnStopNew');
   const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
@@ -91,8 +91,19 @@ import { verifyIntegrity } from './canonicalize.js';
     }
   }
   const permModal = $('permModal'), permTool = $('permTool'), permCwd = $('permCwd'),
-        permInput = $('permInput'), permAlways = $('permAlways'), permIntegrityWarn = $('permIntegrityWarn');
-  const questionModal = $('questionModal'), questionText = $('questionText'), questionOptions = $('questionOptions'), questionSkip = $('questionSkip');
+        permInput = $('permInput'), permAlways = $('permAlways'), permIntegrityWarn = $('permIntegrityWarn'),
+        permExitModeWrap = $('permExitModeWrap');
+  const questionModal = $('questionModal'), questionText = $('questionText'), questionOptions = $('questionOptions'),
+        questionHeader = $('questionHeader'), questionMultiHint = $('questionMultiHint'),
+        questionMultiSubmit = $('questionMultiSubmit'),
+        questionSkip = $('questionSkip'), questionOtherToggle = $('questionOtherToggle'),
+        questionOtherPanel = $('questionOtherPanel'), questionOtherInput = $('questionOtherInput'),
+        questionOtherSubmit = $('questionOtherSubmit');
+  const permInterrupt = $('permInterrupt');
+  // ExitPlanMode 退出后权限档（对齐 CLI plan-exit）；默认 default
+  let selectedExitMode = 'default';
+  // multiSelect 当前题勾选的下标
+  let multiSelectedIndexes = new Set();
   const deleteSessionModal = $('deleteSessionModal'), deleteSessionTitle = $('deleteSessionTitle'), deleteL1Btn = $('deleteL1Btn'), deleteL2Btn = $('deleteL2Btn'), deleteSessionCancel = $('deleteSessionCancel');
   const authGate = $('authGate'), authToken = $('authToken'), authSubmit = $('authSubmit'), authError = $('authError'); // 访问令牌输入页
   const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // Access 会话过期重登浮层
@@ -122,7 +133,7 @@ import { verifyIntegrity } from './canonicalize.js';
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
   // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读；
   // armedTakeoverSid=已排队接管、等终端本轮完结/疑似中断再自动放行（见 logic.js armedTakeoverStep）；
-  // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「接管会话」时判定走排队还是即时确认）。
+  // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「接管 CLI 会话」时判定走排队还是即时确认）。
   let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
   let pushVapidKey = null; // 缓存公钥，避免每次重连重复 fetch
 
@@ -464,6 +475,62 @@ import { verifyIntegrity } from './canonicalize.js';
     }
   }
 
+
+  // ---- 连接 RTT（手机 ↔ 主机往返延迟）----
+  // 轻量旁路 conn:ping：不读磁盘/不碰会话，仅测应用层 ack 往返。
+  // 连上立即测一次，之后 5s 周期；前台唤醒/online 立刻补测；断线清空避免陈旧数字。
+  const RTT_PING_MS = 3000;      // 单次 ping 超时（远低于 socket 被动心跳 ~45s）
+  const RTT_INTERVAL_MS = 5000;  // 周期采样
+  let _rttTimer = null;
+  let _rttInFlight = false;
+  const RTT_TONE_CLASS = {
+    good: 'text-success',
+    ok: 'text-ink-soft',
+    warn: 'text-warning',
+    bad: 'text-danger',
+  };
+  function clearRttDisplay() {
+    if (!connRttEl) return;
+    connRttEl.textContent = '';
+    connRttEl.className = 'hidden text-[10px] font-mono tabular-nums leading-none select-none';
+    if (connDotWrap) connDotWrap.title = '连接状态：绿=已连接 红=断开';
+  }
+  function renderRtt(ms) {
+    if (!connRttEl) return;
+    const label = formatRttMs(ms);
+    if (!label) { clearRttDisplay(); return; }
+    const tone = rttToneClass(ms);
+    const toneCls = RTT_TONE_CLASS[tone] || 'text-ink-soft';
+    connRttEl.textContent = label;
+    connRttEl.className = `${toneCls} text-[10px] font-mono tabular-nums leading-none select-none`;
+    connRttEl.title = `手机到主机往返延迟 ${label}`;
+    if (connDotWrap) connDotWrap.title = `已连接 · 延迟 ${label}`;
+    setStatus(`已连接 · ${label}`);
+  }
+  function measureRtt() {
+    if (!socket.connected || _rttInFlight) return;
+    _rttInFlight = true;
+    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    socket.timeout(RTT_PING_MS).emit('conn:ping', {}, (err) => {
+      _rttInFlight = false;
+      if (err || !socket.connected) return; // 超时/断线：不刷陈旧值；disconnect 会 clear
+      const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+      renderRtt(t1 - t0);
+    });
+  }
+  function startRttLoop() {
+    stopRttLoop();
+    measureRtt();
+    _rttTimer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return; // 后台不烧电
+      measureRtt();
+    }, RTT_INTERVAL_MS);
+  }
+  function stopRttLoop() {
+    if (_rttTimer) { clearInterval(_rttTimer); _rttTimer = null; }
+    _rttInFlight = false;
+  }
+
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
     if (authToken) authToken.value = '';         // 成功后不把令牌留在本地表单状态里
@@ -472,6 +539,7 @@ import { verifyIntegrity } from './canonicalize.js';
     if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = '进入'; }
     connDot.className = 'w-2 h-2 rounded-full bg-success shrink-0';
     setStatus('已连接');
+    startRttLoop(); // 连上即开始测 RTT（立即一次 + 周期）
     cliStatusWrapEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
     logClientEvent('conn', `连接成功！Socket ID = ${socket.id}。当前使用 token: ${token ? token.slice(0, 4) + '***' : '无（本机/公网）'}`);
     // 台阶3：首连由 instances 事件驱动加载当前查看实例（见 setInstances）；重连（非首连、已有绑定实例）
@@ -487,6 +555,8 @@ import { verifyIntegrity } from './canonicalize.js';
   socket.on('disconnect', (reason) => {
     connDot.className = 'w-2 h-2 rounded-full bg-danger shrink-0';
     setStatus('连接断开，自动重连中…');
+    stopRttLoop();
+    clearRttDisplay();
     cliStatusWrapEl?.classList.add('opacity-40'); // E16：置灰示陈旧（折叠条整体：summary + ANSI 行；内容含 🕐，不另发明离线文案）
     logClientEvent('conn', `网络连接断开，原因: ${reason || '未知'}`);
   });
@@ -519,7 +589,10 @@ import { verifyIntegrity } from './canonicalize.js';
       // 半开连接下 socket.connected 会撒谎为 true（见 logic.js foregroundReconnectAction）：connected →
       // probe（带 timeout 的 sync:since 探活+补发，超时即强制干净重连），未连 → connect（connect handler 会 sync）。
       if (foregroundReconnectAction(socket.connected) === 'connect') socket.connect();
-      else requestSync({ probe: true });
+      else {
+        requestSync({ probe: true });
+        measureRtt(); // 前台唤醒立即刷新延迟（不依赖 5s 周期）
+      }
     }, 200);
   }
   document.addEventListener('visibilitychange', () => {
@@ -742,6 +815,9 @@ import { verifyIntegrity } from './canonicalize.js';
     // task_progress：后台任务进行中的瞬时进度心跳（emitTransient，transient=true、不占 seq）。同样带外分流——
     // 绕过 shouldDropAgentEvent/epoch 去重（后台实例发、无回放价值），只原地刷新进度横幅，不进消息流。
     if (ev.type === 'task_progress') { onTaskProgress(ev); return; }
+    // api_retry：限流/过载自动重试瞬时态（emitTransient）。带外分流 + 仅当前查看实例显示横幅；
+    // 不进聊天流、不占 seq，2/10→3/10 原地覆盖，对齐 CLI "Retrying in Ns · attempt i/max"。
+    if (ev.type === 'api_retry') { onApiRetry(ev); return; }
     // history_append：只读「追平」——server 轮询终端会话 transcript 检测到【外部新落定】消息（epoch='server'）。
     // 同样带外分流（在 shouldDropAgentEvent/epoch 之前），onHistoryAppend 内按 viewingInstanceId 自判是否渲染。
     if (ev.type === 'history_append') { onHistoryAppend(ev); return; }
@@ -944,6 +1020,7 @@ import { verifyIntegrity } from './canonicalize.js';
       // keep 原逻辑已移除——init.model 是权威源，不再依赖 input.value 留存旧选择
     },
     text_delta(p) {
+      clearApiRetryBanner(); // 重试已过，流恢复——撤掉「重试中 n/m」横幅
       const s = getStream(p.messageId);
       s.raw += p.text;
       s.textNode.appendData(p.text);
@@ -951,6 +1028,7 @@ import { verifyIntegrity } from './canonicalize.js';
       setBusy(true);
     },
     thinking_delta(p) {
+      clearApiRetryBanner();
       getThinking(p.messageId).body.appendData(p.text);
       scrollBottom();
       setBusy(true);
@@ -959,6 +1037,7 @@ import { verifyIntegrity } from './canonicalize.js';
       }
     },
     tool_use(p) {
+      clearApiRetryBanner();
       // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
       // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
       const card = el(`
@@ -977,9 +1056,11 @@ import { verifyIntegrity } from './canonicalize.js';
         try { hljs.highlightElement(inCode); } catch { /* 高亮失败不影响显示 */ }
       }
       toolCards.set(p.toolUseId, card);
-      if (p.file?.path) {  // ③：文件类工具（Edit/Write/Read/MultiEdit/NotebookEdit）加「预览变更」入口
-        const wrap = el(`<div class="mt-1"><button type="button" class="tp-btn text-info underline">📄 预览变更</button><div class="tp-body hidden mt-1 space-y-1"></div></div>`);
+      if (p.file?.path) {  // ③：文件类工具入口——Read=预览文件，Edit/Write/…=预览变更（见 toolPreviewLabel）
+        const label = toolPreviewLabel({ name: p.name, changeKind: p.file?.changeKind });
+        const wrap = el(`<div class="mt-1"><button type="button" class="tp-btn text-info underline"></button><div class="tp-body hidden mt-1 space-y-1"></div></div>`);
         const btn = wrap.querySelector('.tp-btn'), tbody = wrap.querySelector('.tp-body');
+        btn.textContent = label;
         const inst = viewingInstanceId;  // 快照：点击时用卡片创建时所属实例，切换后不错乱
         let loaded = false;
         btn.onclick = () => {
@@ -1207,15 +1288,14 @@ import { verifyIntegrity } from './canonicalize.js';
       hideActivityBanner(); // 会话结束隐藏活动横幅
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
-      if (p.isError) failPendingToolCards((p.errors || []).join('; '));
+      // 对齐 CLI：用户主动中止时 SDK 常带 is_error + ede_diagnostic；interrupted 优先，不当红色错误展示。
+      const ui = presentTurnResult(p);
+      if (ui.failToolsMessage) failPendingToolCards(ui.failToolsMessage);
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
-      haptic(p.isError ? 'error' : 'success');
-      const cost = p.costUsd != null ? ` · $${p.costUsd.toFixed(4)}` : '';
-      addBar(`完成 · ${(p.durationMs / 1000).toFixed(1)}s${cost}`, 'text-ink-faint');
-      if (p.isError && p.errors) addBar(`出错：${p.errors.join('; ')}`, 'text-danger');
-      // 通知须区分成败：出错轮次不能误报「✅ 任务完成」
-      if (p.isError) notify('⚠️ 任务出错', (p.errors?.join('; ') || '').slice(0, 80) || `用时 ${(p.durationMs / 1000).toFixed(1)}s`);
-      else notify('✅ 任务完成', `用时 ${(p.durationMs / 1000).toFixed(1)}s`);
+      haptic(ui.haptic);
+      addBar(ui.statusBar.text, ui.statusBar.cls);
+      if (ui.errorBar) addBar(ui.errorBar.text, ui.errorBar.cls);
+      notify(ui.notify.title, ui.notify.body);
 
       // 防御性清理当前 tab 的挂起提问和审批
       permQueue.length = 0;
@@ -1237,6 +1317,7 @@ import { verifyIntegrity } from './canonicalize.js';
       haptic('error');
       addBar(`⚠️ ${p.message}`, 'text-danger');
       setBusy(false);
+      hideActivityBanner(); // 含 api_retry 横幅
 
       // 防御性清理当前 tab 的挂起提问和审批
       permQueue.length = 0;
@@ -1255,7 +1336,7 @@ import { verifyIntegrity } from './canonicalize.js';
     // M7：改用 kind 字段判断中断，不靠字符串匹配（字符串会随 i18n 变化）
     system(p) {
       addBar(p.message, 'text-ink-faint');
-      if (p.kind === 'interrupted') { finalizeStreams(); setBusy(false); }
+      if (p.kind === 'interrupted') { finalizeStreams(); setBusy(false); hideActivityBanner(); }
     },
     // E16：web 自有结构化状态（非 ANSI）。摘要去 emoji，展开分段构建 DOM（createElement+textContent，
     // 不经 innerHTML/DOMPurify，天然 XSS 安全）；服务端未启用则此事件不来，容器恒 hidden
@@ -1474,13 +1555,29 @@ import { verifyIntegrity } from './canonicalize.js';
       permInput.textContent = full;
     }
     permAlways.checked = false;
+    // ExitPlanMode：展示退出后权限档选择（对齐 CLI plan-exit）；其它工具隐藏
+    selectedExitMode = 'default';
+    if (permExitModeWrap) {
+      const isExit = activePerm.name === 'ExitPlanMode';
+      permExitModeWrap.classList.toggle('hidden', !isExit);
+      if (isExit) {
+        permExitModeWrap.querySelectorAll('.perm-exit-mode').forEach(btn => {
+          const on = btn.getAttribute('data-exit-mode') === selectedExitMode;
+          btn.classList.toggle('border-accent', on);
+          btn.classList.toggle('bg-accent-wash', on);
+          btn.classList.toggle('text-ink', on);
+          btn.classList.toggle('border-line', !on);
+          btn.classList.toggle('text-ink-soft', !on);
+        });
+      }
+    }
     openSheet(permModal);
     updateSendButtonState();
   }
   function answerPerm(decision) {
     if (!activePerm) return;
     const wasExitPlanMode = activePerm.name === 'ExitPlanMode'; // 下方 activePerm 即置 null，提前捕获
-    socket.emit('user:approve', {
+    const payload = {
       requestId: activePerm.requestId,
       decision,
       alwaysThisSession: permAlways.checked,
@@ -1488,8 +1585,12 @@ import { verifyIntegrity } from './canonicalize.js';
       // op：回传本卡片渲染时所见的确切操作（承接 LLD §5.5 NFR-17 审批完整性绑定协议步骤5）——
       // 服务端用它重算指纹比对 canUseTool 时锚定的 fp，不一致 fail-closed 拒绝（agent.js#resolvePermission）。
       op: { tool: activePerm.name, args: activePerm.input, cwd: activePerm.cwd }
-    });
-    addBar(`${decision === 'allow' ? '✅ 已允许' : '🚫 已拒绝'}：${activePerm.name}`, 'text-ink-faint');
+    };
+    // 仅 ExitPlanMode 批准时带 exitMode；拒绝/其它工具不传
+    if (wasExitPlanMode && decision === 'allow') payload.exitMode = selectedExitMode || 'default';
+    socket.emit('user:approve', payload);
+    const exitNote = (wasExitPlanMode && decision === 'allow') ? ` → ${payload.exitMode}` : '';
+    addBar(`${decision === 'allow' ? '✅ 已允许' : '🚫 已拒绝'}：${activePerm.name}${exitNote}`, 'text-ink-faint');
     activePerm = null;
     permExpandBtn?.remove(); permExpandBtn = null;
     closeSheet(permModal);
@@ -1504,37 +1605,159 @@ import { verifyIntegrity } from './canonicalize.js';
   }
   $('permAllow').onclick = () => answerPerm('allow');
   $('permDeny').onclick = () => answerPerm('deny');
+  // ExitPlanMode 档位 chip 点选
+  if (permExitModeWrap) {
+    permExitModeWrap.querySelectorAll('.perm-exit-mode').forEach(btn => {
+      btn.onclick = () => {
+        selectedExitMode = btn.getAttribute('data-exit-mode') || 'default';
+        permExitModeWrap.querySelectorAll('.perm-exit-mode').forEach(b => {
+          const on = b.getAttribute('data-exit-mode') === selectedExitMode;
+          b.classList.toggle('border-accent', on);
+          b.classList.toggle('bg-accent-wash', on);
+          b.classList.toggle('text-ink', on);
+          b.classList.toggle('border-line', !on);
+          b.classList.toggle('text-ink-soft', !on);
+        });
+      };
+    });
+  }
 
   // ---- 选择题弹窗（E7：AskUserQuestion）----
+  function resetQuestionOtherUI() {
+    if (questionOtherPanel) questionOtherPanel.classList.add('hidden');
+    if (questionOtherInput) questionOtherInput.value = '';
+  }
+  function optionLabel(opt) {
+    if (opt == null) return '';
+    if (typeof opt === 'string') return opt;
+    return opt.label || '';
+  }
+  function paintMultiOption(btn, selected) {
+    btn.classList.toggle('border-accent', selected);
+    btn.classList.toggle('bg-accent-wash', selected);
+    btn.classList.toggle('border-line', !selected);
+    btn.classList.toggle('bg-sunk', !selected);
+  }
   function showNextQuestion() {
     if (activeQuestion || questionQueue.length === 0) return;
     activeQuestion = questionQueue.shift();
+    multiSelectedIndexes = new Set();
+    const multi = Boolean(activeQuestion.multiSelect);
+    if (questionHeader) {
+      const h = activeQuestion.header ? String(activeQuestion.header) : '';
+      questionHeader.textContent = h;
+      questionHeader.classList.toggle('hidden', !h);
+    }
     questionText.textContent = activeQuestion.text;
+    if (questionMultiHint) questionMultiHint.classList.toggle('hidden', !multi);
+    if (questionMultiSubmit) {
+      questionMultiSubmit.classList.toggle('hidden', !multi);
+      questionMultiSubmit.disabled = true;
+      questionMultiSubmit.textContent = '确认选择';
+    }
     questionOptions.innerHTML = '';
-    activeQuestion.options.forEach((opt, i) => {
-      const btn = el(`<button class="w-full py-2.5 rounded-lg bg-sunk active:bg-line text-ink text-sm text-left px-3"></button>`);
-      btn.textContent = opt.label || opt;
-      btn.onclick = () => answerQuestion(i);
-      questionOptions.appendChild(btn);
+    resetQuestionOtherUI();
+    (activeQuestion.options || []).forEach((opt, i) => {
+      const wrap = el(`<div class="rounded-lg border border-line bg-sunk overflow-hidden"></div>`);
+      const btn = el(`<button type="button" class="w-full py-2.5 px-3 text-ink text-sm text-left"></button>`);
+      const label = optionLabel(opt);
+      btn.textContent = multi ? `☐ ${label}` : label;
+      if (opt && typeof opt === 'object' && opt.description) {
+        const desc = el(`<div class="px-3 pb-2 text-[11px] text-ink-faint leading-snug"></div>`);
+        desc.textContent = opt.description;
+        wrap.appendChild(btn);
+        wrap.appendChild(desc);
+      } else {
+        wrap.appendChild(btn);
+      }
+      if (opt && typeof opt === 'object' && opt.preview) {
+        const prevBtn = el(`<button type="button" class="w-full text-left px-3 pb-2 text-[11px] text-info underline">查看预览</button>`);
+        const prevBox = el(`<pre class="hidden mx-3 mb-2 p-2 rounded bg-canvas border border-line-soft text-[11px] whitespace-pre-wrap break-words text-ink-soft max-h-40 overflow-y-auto"></pre>`);
+        prevBox.textContent = String(opt.preview);
+        prevBtn.onclick = (e) => {
+          e.stopPropagation();
+          prevBox.classList.toggle('hidden');
+          prevBtn.textContent = prevBox.classList.contains('hidden') ? '查看预览' : '收起预览';
+        };
+        wrap.appendChild(prevBtn);
+        wrap.appendChild(prevBox);
+      }
+      if (multi) {
+        btn.onclick = () => {
+          if (multiSelectedIndexes.has(i)) multiSelectedIndexes.delete(i);
+          else multiSelectedIndexes.add(i);
+          const on = multiSelectedIndexes.has(i);
+          btn.textContent = `${on ? '☑' : '☐'} ${label}`;
+          paintMultiOption(wrap, on);
+          if (questionMultiSubmit) {
+            questionMultiSubmit.disabled = multiSelectedIndexes.size === 0;
+            questionMultiSubmit.textContent = multiSelectedIndexes.size
+              ? `确认选择（${multiSelectedIndexes.size}）`
+              : '确认选择';
+          }
+        };
+      } else {
+        btn.onclick = () => answerQuestion(i);
+      }
+      questionOptions.appendChild(wrap);
     });
     openSheet(questionModal);
+    updateSendButtonState();
+  }
+  function finishQuestionUI(barText) {
+    activeQuestion = null;
+    multiSelectedIndexes = new Set();
+    closeSheet(questionModal);
+    resetQuestionOtherUI();
+    showNextQuestion();
+    // 答完最后一题（队列已空、无下一题）：立即把状态栏从过时的「正在运行工具 AskUserQuestion」
+    // 切到「思考中」，填补「答完→模型首个流式事件到达」的空窗（实测中位 ~64s 模型推理）。
+    if (!activeQuestion && activeStatusText) {
+      activeStatusText.textContent = 'Claude 正在思考中...';
+    }
+    if (barText) addBar(barText, 'text-ink-faint');
     updateSendButtonState();
   }
   function answerQuestion(index) {
     if (!activeQuestion) return;
     socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndex: index, instanceId: viewingInstanceId }); // 台阶3 路由
-    const label = activeQuestion.options[index]?.label || activeQuestion.options[index];
-    addBar(`已选择：${label}`, 'text-ink-faint');
-    activeQuestion = null;
-    closeSheet(questionModal);
-    showNextQuestion();
-    // 答完最后一题（队列已空、无下一题）：立即把状态栏从过时的「正在运行工具 AskUserQuestion」
-    // 切到「思考中」，填补「答完→模型首个流式事件到达」的空窗（实测中位 ~64s 模型推理）。
-    // 仅状态文案，不碰任何请求/ACK 通道。若还有下一题，activeQuestion 已被 showNextQuestion 重新赋值 → 跳过。
-    if (!activeQuestion && activeStatusText) {
-      activeStatusText.textContent = 'Claude 正在思考中...';
+    const label = optionLabel(activeQuestion.options[index]);
+    finishQuestionUI(`已选择：${label}`);
+  }
+  function answerQuestionMulti() {
+    if (!activeQuestion || !multiSelectedIndexes.size) {
+      addBar('请至少选择一项', 'text-info');
+      return;
     }
-    updateSendButtonState();
+    const indexes = [...multiSelectedIndexes].sort((a, b) => a - b);
+    socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndexes: indexes, instanceId: viewingInstanceId });
+    const labels = indexes.map(i => optionLabel(activeQuestion.options[i])).filter(Boolean);
+    finishQuestionUI(`已选择：${labels.join('、')}`);
+  }
+  function answerQuestionOther() {
+    if (!activeQuestion) return;
+    const freeText = (questionOtherInput?.value || '').trim();
+    if (!freeText) {
+      addBar('请先输入其他答案', 'text-info');
+      questionOtherInput?.focus();
+      return;
+    }
+    socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: viewingInstanceId });
+    finishQuestionUI(`已回答（其他）：${freeText}`);
+  }
+  if (questionMultiSubmit) questionMultiSubmit.onclick = () => answerQuestionMulti();
+  if (questionOtherToggle) {
+    questionOtherToggle.onclick = () => {
+      if (!questionOtherPanel) return;
+      questionOtherPanel.classList.toggle('hidden');
+      if (!questionOtherPanel.classList.contains('hidden')) questionOtherInput?.focus();
+    };
+  }
+  if (questionOtherSubmit) questionOtherSubmit.onclick = () => answerQuestionOther();
+  if (questionOtherInput) {
+    questionOtherInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); answerQuestionOther(); }
+    });
   }
   // 跳过/中止：复用 user:interrupt。后端 handleQuestion 已监听 abort → deny「问题已取消」；
   // 弹窗内必须自带此入口——遮罩盖住输入区「停止」时否则无路可走。
@@ -1547,11 +1770,20 @@ import { verifyIntegrity } from './canonicalize.js';
       requestInterrupt();
     };
   }
+  // 权限弹窗内「中止本轮」：对齐 CLI Esc，遮罩盖住输入区停止键时仍可中止
+  if (permInterrupt) {
+    permInterrupt.onclick = () => {
+      if (!activePerm) return;
+      haptic('tap');
+      addBar('已请求中止本轮', 'text-ink-faint');
+      requestInterrupt();
+    };
+  }
 
   // ---- 发送 / 停止 ----
   function send(opts = {}) {
-    if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「接管会话」可接管）
-      addBar('此会话正在终端运行，只读中——点「接管会话」可接管', 'text-danger');
+    if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「接管 CLI 会话」可接管）
+      addBar('此会话正在终端运行，只读中——点「接管 CLI 会话」可在手机继续', 'text-danger');
       return;
     }
     if (inputEl.disabled) {
@@ -2342,20 +2574,24 @@ import { verifyIntegrity } from './canonicalize.js';
       return;
     }
 
-    // Phase 2: Check memory cache for instant restoration
+    // Phase 2: Check memory cache for instant restoration.
+    // 已完成的对话/工具卡片按 session 不可变：同 sessionId 即恢复 DOM，不要求 instanceId 相同
+    // （effort/model 切档会换 instance，旧逻辑要求 instance 一致 → 整段重走 history 丢掉工具卡片）。
+    // seq/epoch 仅在「缓存归属实例 === 当前实例」时复用；跨 instance 从 0 跟新缓冲（见 sessionDomCachePlan）。
     let hasCache = false;
     let resumeFromSeq = 0;
     const cached = sid ? sessionDomCache.get(sid) : null;
-    // S1 epoch 边角：仅当「缓存归属的实例 === 当前实例」才复用增量。该会话的实例若被替换（effort 切档=
-    // dispose+open 出新 instanceId+新 epoch），旧缓存的 lastSeq/epoch 对不上新实例的 seq 空间，复用会显示
-    // 陈旧内容、漏掉新实例的事件 → 改判无缓存，走整重载（showLoadingCard→sync:since(0)→回放新实例缓冲/history）。
-    if (cached && cached.instanceId === id) {
+    const cachePlan = sessionDomCachePlan({ cached, currentInstanceId: id });
+    if (cachePlan.restore) {
       for (const node of cached.nodes) messagesEl.appendChild(node);
-      // S1：恢复去重基线到缓存反映的位置，sync:since 只增量续传缓存之后的新事件（同 epoch、seq>缓存位置）。
-      // 既不与缓存重复，也不丢失（缓存=上次完整渲染含历史；回放只补离开期间漏掉的几条）。
-      curEpoch = cached.epoch;
-      lastSeq = cached.lastSeq;
-      resumeFromSeq = cached.lastSeq;
+      if (cachePlan.reuseSeqBaseline) {
+        curEpoch = cachePlan.epoch;
+        lastSeq = cachePlan.lastSeq;
+      } else {
+        curEpoch = null;
+        lastSeq = 0;
+      }
+      resumeFromSeq = cachePlan.resumeFromSeq;
       scrollBottom(true);
       hasCache = true;
     } else {
@@ -2549,13 +2785,33 @@ import { verifyIntegrity } from './canonicalize.js';
   }
 
   // ---- 子代理/Workflow 活动横幅 ----
+  // apiRetryBannerActive：activityBanner 被 api_retry 占用时为真；仅在此情况下 text_delta/tool_use
+  // 才撤横幅（重试已过去、流恢复）。Agent/Task 活动横幅不受影响。
+  let apiRetryBannerActive = false;
   function showActivityBanner(description) {
     if (!activityBanner || !activityBannerText) return;
+    apiRetryBannerActive = false; // Agent/Task 等正常活动覆盖重试态
     activityBannerText.textContent = description.length > 80 ? description.slice(0, 77) + '...' : description;
     activityBanner.classList.remove('hidden');
   }
   function hideActivityBanner() {
+    apiRetryBannerActive = false;
     if (activityBanner) activityBanner.classList.add('hidden');
+  }
+  function showApiRetryBanner(text) {
+    if (!activityBanner || !activityBannerText) return;
+    apiRetryBannerActive = true;
+    activityBannerText.textContent = text.length > 80 ? text.slice(0, 77) + '...' : text;
+    activityBanner.classList.remove('hidden');
+  }
+  function clearApiRetryBanner() {
+    if (!apiRetryBannerActive) return;
+    hideActivityBanner();
+  }
+  function onApiRetry(ev) {
+    // 只对正在查看的会话刷横幅（与 task_progress 同口径）；不走 epoch 去重，避免污染 lastSeq。
+    if (ev.instanceId && ev.instanceId !== viewingInstanceId) return;
+    showApiRetryBanner(formatApiRetryBanner(ev.payload || {}));
   }
 
   // ---- 后台任务进度横幅（task_progress 瞬时事件驱动，原地刷新，不刷屏）----
@@ -2860,8 +3116,7 @@ import { verifyIntegrity } from './canonicalize.js';
 
   if (pillModel) pillModel.onclick = openSettingsSheet; // 点底栏模型 chip → 开「选择模型」格
   // 顶部 pill 原先只是 btnSessions 的重复代理（两者都调 toggleSessions，纯冗余入口）。
-  // 现改为直接打开当前工作区的只读文件浏览——抽屉入口从此唯一由左上角 btnSessions 承担，
-  // 不减少可达性，同时把「只读浏览文件」从抽屉里不起眼的小按钮换到常驻可见的位置。
+  // 现改为直接打开当前工作区的只读文件浏览——抽屉只负责会话切换/新建，文件浏览入口唯一在此。
   if (topContextPill) {
     topContextPill.onclick = (e) => {
       e.preventDefault();
@@ -2993,17 +3248,7 @@ import { verifyIntegrity } from './canonicalize.js';
       };
       dirRow.appendChild(newSessionBtn);
 
-      // 项目文件只读浏览入口（FR-07）：挂在目录行本身，与"新建会话"平级——浏览目标是这个工作区，非某个会话。
-      // 常显文字标签（非仅 hover-only 的 title）：移动端摸不到 title 提示，纯 📄 emoji 也无普遍共识含义，
-      // 首次看到猜不出是干嘛的（当前工作区已有顶部 pill 更显眼的入口，这里主要服务浏览非当前工作区文件）。
-      const browseBtn = el(`<button class="shrink-0 h-8 px-2 rounded-lg flex items-center gap-1 border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm shadow-sm transition-all" title="浏览项目文件（只读）"><span>📄</span><span class="text-[11px] font-medium">浏览</span></button>`);
-      browseBtn.onclick = (e) => {
-        e.stopPropagation();
-        closeLeftSidebar();
-        haptic('tap');
-        openFileBrowser(d);
-      };
-      dirRow.appendChild(browseBtn);
+      // 文件浏览入口已收归顶部 pill（当前工作区）；抽屉只负责会话切换/新建，不再挂逐行「浏览」按钮。
 
       sessionPanel.appendChild(dirRow);
 
@@ -3431,26 +3676,82 @@ import { verifyIntegrity } from './canonicalize.js';
   }
 
   // 渲染一批历史/追平消息为气泡并追加（loadHistory 与 onHistoryAppend 复用；一次性 fragment 插入 + 空闲高亮）。
+  // 支持文本气泡 + 历史 tool_use/tool_result 结构化条目（冷路径重建已完成工具卡片；与 live handle.tool_* 同外观）。
   function renderHistoryBubbles(msgs) {
     if (!msgs?.length) return;
     const frag = document.createDocumentFragment();
     const codeBlocks = [];
+    const histToolCards = new Map(); // toolUseId → card（本批内配对 tool_result）
     for (const msg of msgs) {
+      if (msg?.kind === 'tool_use') {
+        const card = el(`
+          <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
+            <summary class="px-3 py-2 flex items-center gap-2">
+              <span class="t-status">⏳</span><span class="font-mono font-semibold text-ink">${esc(msg.name || 'tool')}</span>
+            </summary>
+            <div class="px-3 pb-2 space-y-1">
+              <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
+              <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
+            </div>
+          </details>`);
+        const inCode = card.querySelector('.t-in code');
+        if (inCode) {
+          inCode.textContent = formatToolSummary(msg.inputSummary || '');
+          codeBlocks.push(inCode);
+        }
+        if (msg.toolUseId) histToolCards.set(msg.toolUseId, card);
+        frag.appendChild(card);
+        continue;
+      }
+      if (msg?.kind === 'tool_result') {
+        const card = msg.toolUseId ? histToolCards.get(msg.toolUseId) : null;
+        if (!card) {
+          // 结果先于调用（截断窗口边界）→ 单独占位卡片
+          const orphan = el(`
+            <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
+              <summary class="px-3 py-2 flex items-center gap-2">
+                <span class="t-status">${msg.ok === false ? '❌' : '✅'}</span>
+                <span class="font-mono font-semibold text-ink">tool</span>
+              </summary>
+              <div class="px-3 pb-2 space-y-1">
+                <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint"><code></code></pre>
+              </div>
+            </details>`);
+          const code = orphan.querySelector('.t-out code');
+          if (code) {
+            code.textContent = formatToolSummary(msg.outputSummary || '');
+            codeBlocks.push(code);
+          }
+          frag.appendChild(orphan);
+          continue;
+        }
+        card.querySelector('.t-status').textContent = msg.ok === false ? '❌' : '✅';
+        if (msg.outputSummary) {
+          const out = card.querySelector('.t-out');
+          const code = out.querySelector('code') || out;
+          code.textContent = formatToolSummary(msg.outputSummary);
+          if (code !== out) codeBlocks.push(code);
+          out.classList.remove('hidden');
+        }
+        histToolCards.delete(msg.toolUseId);
+        continue;
+      }
+      // 文本气泡（默认路径）
       const isUser = msg.role === 'user';
       const bubble = isUser
         ? el(`<div class="msg-frame bg-user text-ink um rounded-xl px-3 py-2 text-sm msg-body"></div>`)
         : el(`<div class="msg-frame px-0.5 msg-body"></div>`);
-      bubble.innerHTML = render(msg.content);
+      bubble.innerHTML = render(msg.content || '');
       bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
       injectCodeCopyButtons(bubble);
-      appendCopyAction(bubble, () => msg.content, isUser ? 'right' : 'left');
+      appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
       frag.appendChild(bubble);
     }
     leaveStartScreen();
     messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow
     scrollBottom(true);
     if (codeBlocks.length) {
-      const doHighlight = () => codeBlocks.forEach(b => hljs.highlightElement(b));
+      const doHighlight = () => codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
       if (typeof requestIdleCallback !== 'undefined') {
         requestIdleCallback(doHighlight, { timeout: 2000 });
       } else {
@@ -3474,7 +3775,7 @@ import { verifyIntegrity } from './canonicalize.js';
 
   // 只读锁：会话被判「正在终端运行」时常驻横幅 + 禁用输入，硬防两进程并发写盘分叉。
   // 四态文案（2026-07-13 排队接管）：stale=false 未 armed=「⏱ 终端驾驶中」（尾部形态判轮次未完结，长工具调用
-  // 零写盘期间也维持——修「过一会儿感觉没在跑」误判）；armed=「⏳ 已排队接管」（点了「接管会话」但终端本轮
+  // 零写盘期间也维持——修「过一会儿感觉没在跑」误判）；armed=「⏳ 已排队接管」（点了「接管 CLI 会话」但终端本轮
   // 未完结，纯等待、零并发写盘风险，见下方 armedTakeoverStep 接线）；stale=true=「⚠️ 疑似中断」（pending 但
   // 超 5 分钟零写入，终端可能被强杀/断电，维持即时确认接管——等待对已疑似死亡的终端无意义）。
   function applyMirror(readonly, sessionId, stale = false) {
@@ -3491,7 +3792,7 @@ import { verifyIntegrity } from './canonicalize.js';
           ? '终端疑似中断于执行中（超 5 分钟无活动）——确认终端已停可接管'
           : '终端驾驶中，这里只读追平——发送会与终端并发写盘、可能分叉';
     }
-    if (btnMirrorOverride) btnMirrorOverride.textContent = armed ? '取消接管' : '接管会话';
+    if (btnMirrorOverride) btnMirrorOverride.textContent = armed ? '取消接管' : '接管 CLI 会话';
     if (inputEl) inputEl.disabled = effective;
     if (effective) { if (btnSend) btnSend.disabled = true; } // 锁定：禁发送
     else updateSendButtonState();                            // 解锁：按有无文本恢复发送按钮态
@@ -3513,8 +3814,8 @@ import { verifyIntegrity } from './canonicalize.js';
         mirrorOverriddenSid = ev.sessionId;
         applyMirror(false, ev.sessionId);
         addBar(step.action === 'unlock-focus'
-          ? '已接管：终端本轮已完结，安全切换'
-          : '已接管：终端疑似中断，自动完成接管——若终端仍在跑同一会话，并发发送有分叉风险',
+          ? '已接管 CLI 会话：终端本轮已完结，安全切换'
+          : '已接管 CLI 会话：终端疑似中断，自动完成接管——若终端仍在跑同一会话，并发发送有分叉风险',
           step.action === 'unlock-focus' ? 'text-ink-faint' : 'text-warning');
         inputEl?.focus();
         return;
@@ -3522,7 +3823,7 @@ import { verifyIntegrity } from './canonicalize.js';
     }
     applyMirror(readonly, ev.sessionId, stale);
   }
-  // 「接管会话」：驾驶中(⏱)点击=排队接管——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行，
+  // 「接管 CLI 会话」：驾驶中(⏱)点击=排队接管——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行，
   // 见 onMirrorState），无需确认弹窗；再次点击（此时按钮已变「取消接管」）可撤销排队、回退驾驶中态。
   // 疑似中断(⚠️)点击=维持原地即时确认（弹窗说清「不停终端进程 + 分叉后果 + 建议先 Ctrl+C」）后立即解锁——
   // 终端大概率已死，等待无意义。接管后（任一路径）首次发送经 server 陈旧上下文守卫置换实例，吸收终端轮次。
@@ -3536,20 +3837,20 @@ import { verifyIntegrity } from './canonicalize.js';
     if (!mirrorStaleFlag) { // 驾驶中：排队等待，零风险故无需确认弹窗
       armedTakeoverSid = mirrorReadonlySid;
       applyMirror(true, mirrorReadonlySid, false);
-      addBar('已请求接管：终端当前操作完成后自动切换，可点「取消接管」撤销', 'text-ink-faint');
+      addBar('已请求接管 CLI 会话：终端当前操作完成后自动切换，可点「取消接管」撤销', 'text-ink-faint');
       return;
     }
-    if (!confirm('接管此会话？\n\n终端可能正在运行该会话。接管不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再接管。')) return;
+    if (!confirm('接管 CLI 会话？\n\n这是电脑终端正在跑的同一条对话。接管不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再接管。')) return;
     mirrorOverriddenSid = mirrorReadonlySid;
     applyMirror(false, mirrorReadonlySid);
-    addBar('已接管：若终端仍在跑同一会话，并发发送有分叉风险', 'text-warning');
+    addBar('已接管 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险', 'text-warning');
     inputEl?.focus();
   });
-  // 「立即同步」：强制触发一次 server 追平 tick（正常 2.5s 自动跑，这里给"我要确定是最新的"一个确定性入口）
+  // 「刷新消息」：强制触发一次 server 追平 tick（正常 2.5s 自动跑，这里给"我要确定是最新的"一个确定性入口）
   btnMirrorSync?.addEventListener('click', () => {
     haptic('tap');
     socket.emit('mirror:syncNow');
-    addBar('已请求同步终端最新消息', 'text-ink-faint');
+    addBar('已请求刷新：拉取终端最新消息', 'text-ink-faint');
   });
 
   // E18: 为代码块注入复制按钮（per-block，hover 时浮现）
@@ -3991,20 +4292,26 @@ import { verifyIntegrity } from './canonicalize.js';
 
   function appendLogEntry(p) {
     if (!p || !consoleLogArea) return;
+    // 布局契约：纵向 row + 可换行 meta + 满宽 body（见 logic.js consoleLogEntryLayout）。
+    // 旧横向 flex 会在窄屏被 chip 挤成一字宽竖排。
+    const layout = consoleLogEntryLayout();
     const row = document.createElement('div');
-    row.className = 'flex items-start gap-1.5 leading-5 font-mono text-[11px]';
-    
+    row.className = layout.row;
+
+    const meta = document.createElement('div');
+    meta.className = layout.meta;
+
     const tsStr = p.ts ? new Date(p.ts).toLocaleTimeString() : new Date().toLocaleTimeString();
     const tsSpan = document.createElement('span');
     tsSpan.className = 'text-gray-500 select-none shrink-0 font-semibold';
     tsSpan.textContent = `[${tsStr}]`;
-    row.appendChild(tsSpan);
+    meta.appendChild(tsSpan);
 
     const badgeSpan = document.createElement('span');
     badgeSpan.className = 'px-1 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider shrink-0';
     let badgeText = '';
     let textClass = 'text-gray-300';
-    
+
     switch (p.type) {
       case 'user_in':
         badgeSpan.className += ' bg-blue-950/60 text-blue-400 border border-blue-800/40';
@@ -4057,7 +4364,7 @@ import { verifyIntegrity } from './canonicalize.js';
         textClass = 'text-gray-300';
     }
     badgeSpan.textContent = badgeText;
-    row.appendChild(badgeSpan);
+    meta.appendChild(badgeSpan);
 
     // 模型 ID 独立 chip（紧邻 type 角标）：仅当 entry 带 model 时渲染；中性配色区别于 type 语义色
     if (p.model) {
@@ -4065,7 +4372,7 @@ import { verifyIntegrity } from './canonicalize.js';
       modelSpan.className = 'px-1 py-0.5 rounded text-[9px] font-bold shrink-0 bg-slate-800 text-slate-300 border border-slate-600/50 max-w-[120px] truncate';
       modelSpan.textContent = p.model;
       modelSpan.title = p.model; // 超长截断时悬停看全名
-      row.appendChild(modelSpan);
+      meta.appendChild(modelSpan);
     }
     // 思考强度 / 权限档 chip（那一刻的档位）：只要 entry 带该字段就渲染，默认值（model-default/default）
     // 也照显——每条数据流记录都完整列出模型 + 强度 + 权限档。字段缺失（如 sys_info 不带这俩）仍跳过、不画空 chip。
@@ -4074,13 +4381,15 @@ import { verifyIntegrity } from './canonicalize.js';
       const c = document.createElement('span');
       c.className = `px-1 py-0.5 rounded text-[9px] font-bold shrink-0 ${cls}`;
       c.textContent = prefix + val;
-      row.appendChild(c);
+      meta.appendChild(c);
     };
     metaChip(p.effort, 'bg-indigo-950/60 text-indigo-300 border border-indigo-700/40', '🧠');
     metaChip(p.permissionMode, 'bg-amber-950/60 text-amber-300 border border-amber-700/40', '🔑');
 
+    row.appendChild(meta);
+
     const textSpan = document.createElement('span');
-    textSpan.className = `break-all whitespace-pre-wrap ${textClass}`;
+    textSpan.className = `${layout.body} ${textClass}`;
     textSpan.textContent = (p.text || '').replace(/\\n/g, '\n');
     row.appendChild(textSpan);
 

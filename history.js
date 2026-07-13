@@ -38,15 +38,15 @@ export function getProjectDir(cwd) {
   return cwd.replace(/[^a-zA-Z0-9]/g, '-');
 }
 
-// 读取会话历史消息（仅 user/assistant，过滤工具调用等内部事件）。
+// 读取会话历史消息（user/assistant 文本 + 主链 tool_use/tool_result；过滤 thinking/子 agent/CLI 噪音）。
 // 流式读【完整】文件——与 CLI /resume 同源、不按字节截断头部，做到 Web 端看到的历史 = CLI 的全量历史。
 //
 // 【已评估：不迁 SDK 官方 getSessionMessages（2026-07-12 实证）】SDK 0.3.201 有官方 getSessionMessages，但
-// 实测（真实 1526 行会话）它返回 1115 条**原始消息**（message 为未解析的 {role,content}，含全部 tool_use/
-// tool_result/thinking/子agent/系统行），**零噪音过滤、不提取文本**；本函数过滤后仅剩 46 条真实对话。迁移后
-// 这 7 层过滤（isMeta/isSidechain/parent_tool_use_id/CLI 系统行/task-notification/uuid 去重——都是踩坑补齐的
-// 非显而易见 CLI 行为）一条都省不掉、全得保留，且 SDK 一次性全量载入比现在流式读+提前过滤更耗内存。净负收益，
-// 故保留自实现。别再因"有官方 API"重启这个迁移。
+// 实测返回大量原始消息（含 thinking/子agent/系统行），零噪音过滤；本函数过滤后仅剩真实对话 + 主链工具。
+// isMeta/isSidechain/parent_tool_use_id/CLI 系统行/task-notification/uuid 去重等过滤须保留，故不迁官方 API。
+//
+// 输出条目：文本 {role,content,timestamp} | tool_use {kind,toolUseId,name,inputSummary,...} |
+// tool_result {kind,toolUseId,ok,outputSummary,...}。前端 loadHistory 据此重建 toolcard。
 export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, { baseDir = CLAUDE_DIR } = {}) {
   const projectDir = getProjectDir(cwd);
   const historyFile = join(baseDir, projectDir, `${sessionId}.jsonl`);
@@ -88,41 +88,24 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       // 一并挡 parent_tool_use_id 作防御。带正文的子 agent assistant 靠下方空正文启发式漏不掉，故须显式滤。
       if (entry.isSidechain || entry.parent_tool_use_id) continue;
 
-      // 只取 user 和 assistant 消息；并过滤无正文的条目——纯工具调用的 assistant、
-      // 以 tool_result 形式存在的 user 都会被 extractContent 还原成空串。若不滤掉，
-      // 它们会渲染成空气泡，还会占满窗口把真实对话挤出去。
+      // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use 混排：按 content block
+      // 顺序展开成多条前端条目（文本气泡 / 工具卡片），冷路径切会话也能重建已完成的工具调用。
+      // thinking 不回显（体积大、仅 live 流有意义）；纯噪音文本仍走原过滤。
       if (entry.type === 'user' || entry.type === 'assistant') {
-        let content = extractContent(entry.message?.content);
-        if (!content.trim()) continue;
-        // 后台任务完成后 CLI 注入的 <task-notification> 是给模型看的系统信号，非用户对话——
-        // 回显时跳过，否则重载后会显示成一条原始 XML 用户气泡（后续的 assistant 汇报本身自解释）。
-        // 要求成对闭合，避免误伤用户随口以裸 <task-notification> 开头（少含闭合标签）的真实消息。
-        if (content.trimStart().startsWith('<task-notification>') && content.includes('</task-notification>')) continue;
-        // slash 命令的调用块（<command-message>/<command-name>/<command-args>）——内置命令（/model /effort）
-        // 与自定义项目命令（/deep-research 等）落盘用的是同一套格式，且是磁盘上唯一留存用户原始输入的地方
-        // （7/12 事故：整块当噪音丢弃过，把自定义命令那一整个回合从历史里连根拔掉）。重建成终端里那样的
-        // "/命令名 参数" 一行文本，按普通消息保留——不再整体丢弃、也不原样吐出裸 XML。
-        const rebuilt = reconstructSlashCommand(content);
-        if (rebuilt !== null) {
-          content = rebuilt;
-        } else if (isCliSystemLine(content)) {
-          // CLI 写盘的其余系统行（isMeta=false，漏过上面的 isMeta 闸）：<local-command-*> 命令输出、
-          // [Request interrupted by user] 打断标记、resume 空 turn 的 'No response requested.' 等。
-          // 非对话内容，回显时跳过——否则会当成 user/assistant 气泡混进历史（见 test「CLI 系统行被过滤」）。
-          continue;
-        }
         // 同 uuid 重复落盘去重（仅 uuid 存在时；缺 uuid 的旧条目不因 undefined 相撞而互删）。
+        // 一条 uuid 对应整条 JSONL entry，展开出的多条 tool/text 共享同一 uuid——只在 entry 级去重一次。
         if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
-        messages.push({
-          role: entry.message?.role || entry.type,
-          content,
-          timestamp: entry.timestamp
-        });
-        // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
-        // 【全量】user/assistant 文本常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
-        // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
-        if (messages.length > HISTORY_MAX_MESSAGES * 2) {
-          messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
+
+        const role = entry.message?.role || entry.type;
+        const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp);
+        for (const item of expanded) {
+          messages.push(item);
+          // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
+          // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
+          // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
+          if (messages.length > HISTORY_MAX_MESSAGES * 2) {
+            messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
+          }
         }
       }
     }
@@ -153,7 +136,7 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
 //   · 本地实例在跑 turn（localBusy）→ 抑制：此刻 SDK 流才是渲染真相，只记 wasBusy=true、不推、不动 baseline；
 //   · 刚 busy→idle（state.wasBusy 且现在 idle）→ 增量归因于「自己刚写盘」，只重置 baseline、不推（吸收己方 turn）；
 //   · 持续 idle 期间的增长 → 判为【外部（终端）写入】→ 推 messages 超出 baseline 的尾巴。
-// messages = 当前 getSessionHistory 结果（仅 user/assistant 文本、≤HISTORY_MAX_MESSAGES 条）。
+// messages = 当前 getSessionHistory 结果（文本 + 主链工具、≤HISTORY_MAX_MESSAGES 条）。
 // 边界：极端会话 > 2000 条被削头时 len 可能 < baseline → 不推（保守），属已知限制。
 // ⚠️ 已知边界（code-review 发现 2，有意不修）：外部（终端）写入若【撞进本地 turn 的 busy→idle 吸收窗口】——
 //    即 web 自己 turn 运行期间终端也写了同一会话——会被 wasBusy 分支的整段吸收一并吞掉、停留期间不回显，
@@ -180,7 +163,7 @@ export function catchUpStep(state, { messages, localBusy = false }) {
 // state = { readonly, quietTicks }：
 //   · externalWrite（本 tick catchUpStep emit 非空 = 观测到外部落定新【文本】消息）→ 上锁、quietTicks 清零；
 //   · localBusy（web 自己在跑 turn）→ 终端是否静默无从判断 → 保持当前锁态、quietTicks 清零（不借己方忙碌攒静默）；
-//   · keepAlive（transcript 文件仍在增长=终端在写盘，但落的是 tool_use/tool_result 等不进 text-only catchUpStep len 的条目）
+//   · keepAlive（transcript 文件仍在增长=终端在写盘：可能是工具结果、也可能是尚未被 catchUp 读到的增量）
 //     → 【已锁时】维持锁、quietTicks 清零，免得终端密集跑工具/思考期间被误判静默而熄横幅；【不上锁】——上锁只靠
 //     externalWrite（未锁分支在下方先 return），文件增长不凭空造锁，不把 web 自己 resume 的写盘误判成终端锁；
 //   · tailPending（classifyTranscriptTail 判尾部形态=轮次未完结：tool_use 落了结果没落 / user 落了回复没落）
@@ -189,7 +172,7 @@ export function catchUpStep(state, { messages, localBusy = false }) {
 //     bash/搜索上，文件完全不增长，原实现 12.5s 误判解锁、横幅熄灭（2026-07-12 真实报障「感觉没东西在跑」）；
 //   · idle 且无外部写入、文件不再增长、尾部形态已收尾（真静默）→ quietTicks++；累计到 MIRROR_RELEASE_QUIET_TICKS → 自动解锁。
 // 保守取舍：keepAlive 用文件增长做「终端还活着」的弱判据【仅延缓解锁】——是本项目刻意规避的「mtime 判活」近亲，
-//   但风险低一档（不上锁→绝不误锁死进不去，最坏是终端真停后晚 ~N tick 才解锁）；前端「接管会话」手动接管仍是兜底。
+//   但风险低一档（不上锁→绝不误锁死进不去，最坏是终端真停后晚 ~N tick 才解锁）；前端「接管 CLI 会话」手动接管仍是兜底。
 //   ⚠️ 前提：web 纯查看 idle 期间其自身 resume 进程不 append transcript（否则 keepAlive 恒真→退回锁死，靠接管兜）——须 live 验证。
 export const MIRROR_RELEASE_QUIET_TICKS = 5; // ×CATCH_UP_INTERVAL_MS(2.5s) ≈ 12.5s 终端静默 → 自动解锁
 export function mirrorReleaseStep(state, { externalWrite = false, keepAlive = false, tailPending = false, localBusy = false } = {}) {
@@ -214,6 +197,115 @@ function extractContent(content) {
       .join('\n');
   }
   return '';
+}
+
+// 历史回显摘要：与 agent.js live 工具卡片同口径的截断/脱敏（本模块独立实现，避免 history↔agent 循环依赖）。
+const HISTORY_TOOL_SUMMARY_CAP = 600;
+const HISTORY_BASE64_REDACT_MIN_LEN = 500;
+const HISTORY_BASE64_ONLY_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+function histTruncate(s, cap = HISTORY_TOOL_SUMMARY_CAP) {
+  if (typeof s !== 'string') return '';
+  return s.length > cap ? s.slice(0, cap) + ' …（已截断）' : s;
+}
+function histStringify(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v;
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+function histRedactBase64(value) {
+  if (typeof value === 'string') {
+    if (value.length >= HISTORY_BASE64_REDACT_MIN_LEN && HISTORY_BASE64_ONLY_RE.test(value)) {
+      return `（base64 数据，约 ${Math.ceil(value.length / 1024)}KB，已省略）`;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(histRedactBase64);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = histRedactBase64(value[k]);
+    return out;
+  }
+  return value;
+}
+function histToolSummary(value) {
+  return histTruncate(histStringify(histRedactBase64(value)));
+}
+
+// 过滤文本类噪音（task-notification / CLI 系统行）；slash 命令重建为 "/name args"。
+// 返回 null = 整条丢弃；字符串 = 保留（可能已重建）。
+function normalizeHistoryText(content) {
+  if (!content || !String(content).trim()) return null;
+  let text = String(content);
+  if (text.trimStart().startsWith('<task-notification>') && text.includes('</task-notification>')) return null;
+  const rebuilt = reconstructSlashCommand(text);
+  if (rebuilt !== null) return rebuilt;
+  if (isCliSystemLine(text)) return null;
+  return text;
+}
+
+// 把一条 user/assistant JSONL 的 content 展开为前端可渲染条目序列（保序）：
+//   · text → { role, content, timestamp }
+//   · tool_use → { kind:'tool_use', role:'assistant', toolUseId, name, inputSummary, timestamp }
+//   · tool_result → { kind:'tool_result', role:'user', toolUseId, ok, outputSummary, timestamp }
+// thinking / 未知块跳过。字符串 content 走文本路径。
+function expandHistoryEntry(content, role, timestamp) {
+  const out = [];
+  if (typeof content === 'string') {
+    const text = normalizeHistoryText(content);
+    if (text != null) out.push({ role, content: text, timestamp });
+    return out;
+  }
+  if (!Array.isArray(content)) return out;
+
+  // 先收集 text 块拼成一条（与旧 extractContent 一致），同时按原数组序穿插 tool 块：
+  // 实现：顺序扫描；连续 text 合并成一段；遇到 tool 先 flush text 再 push tool。
+  let textBuf = [];
+  const flushText = () => {
+    if (!textBuf.length) return;
+    const joined = textBuf.join('\n');
+    textBuf = [];
+    const text = normalizeHistoryText(joined);
+    if (text != null) out.push({ role, content: text, timestamp });
+  };
+
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    if (block.type === 'text') {
+      if (typeof block.text === 'string' && block.text) textBuf.push(block.text);
+      continue;
+    }
+    if (block.type === 'tool_use') {
+      flushText();
+      const id = block.id || block.tool_use_id;
+      if (!id || !block.name) continue;
+      out.push({
+        kind: 'tool_use',
+        role: 'assistant',
+        toolUseId: String(id),
+        name: String(block.name),
+        inputSummary: histToolSummary(block.input ?? {}),
+        timestamp,
+      });
+      continue;
+    }
+    if (block.type === 'tool_result') {
+      flushText();
+      const id = block.tool_use_id || block.toolUseId || block.id;
+      if (!id) continue;
+      out.push({
+        kind: 'tool_result',
+        role: 'user',
+        toolUseId: String(id),
+        ok: !block.is_error,
+        outputSummary: histToolSummary(block.content ?? ''),
+        timestamp,
+      });
+      continue;
+    }
+    // thinking / redacted_thinking / 其它块：不进历史回显
+  }
+  flushText();
+  return out;
 }
 
 // slash 命令调用块重建：<command-message>/<command-name>/<command-args> 是 CLI 对 slash 命令（内置或
@@ -545,8 +637,8 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
   }
 }
 
-// transcript 当前字节大小（只读镜像锁的 keep-alive 判活用：文件在长=终端在写盘，含跑工具时的
-// tool_use/tool_result——这些被 getSessionHistory 的 text-only 过滤挡在 len 外，故单看历史长度会误判静默）。
+// transcript 当前字节大小（只读镜像锁的 keep-alive 判活用：文件在长=终端在写盘）。
+// 单看 history 条数会漏「半行/写盘中」与极短增量，故 keepAlive 用字节 size 而不是 history len。
 // id 同 sessionFileExists 做字符集校验防路径穿越；文件不存在/非法 id → -1（catchUpTick 据此本 tick 不判增长）。
 export async function sessionFileSize(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
   if (typeof sessionId !== 'string' || !/^[0-9a-zA-Z_-]+$/.test(sessionId)) return -1;

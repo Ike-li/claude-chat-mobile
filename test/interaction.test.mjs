@@ -216,6 +216,69 @@ test.describe('interaction-log', () => {
     assert.ok(!e.text.includes('effort='));  // 不再内联进 text
   });
 
+  // 实时 session_log 广播 payload 契约：抽屉开着时走 agent:event 流式追加，
+  // 必须带上 model/effort/permissionMode，否则 chip 只在 logs:get 重载时出现、直播时丢失。
+  // 修前 server setCallback 只透传 type/text/ts，把 chip 字段静默剥掉。
+  test('sessionLogPayload：透传 type/text/ts + 非空 chip 字段（直播广播用）', () => {
+    const p = ilog.sessionLogPayload({
+      ts: 42,
+      type: 'agent_send',
+      text: 'hi',
+      model: 'grok-4.5',
+      effort: 'max',
+      permissionMode: 'bypassPermissions',
+    });
+    assert.deepEqual(p, {
+      ts: 42,
+      type: 'agent_send',
+      text: 'hi',
+      model: 'grok-4.5',
+      effort: 'max',
+      permissionMode: 'bypassPermissions',
+    });
+  });
+
+  test('sessionLogPayload：缺省/空 chip 不带字段；空 entry → null', () => {
+    assert.deepEqual(
+      ilog.sessionLogPayload({ ts: 1, type: 'sys_info', text: 'x' }),
+      { ts: 1, type: 'sys_info', text: 'x' },
+    );
+    assert.equal(ilog.sessionLogPayload(null), null);
+    assert.equal(ilog.sessionLogPayload(undefined), null);
+  });
+
+  // FRESH 首轮：sessionId 未到前用 provisionalKey 缓冲，init 后 rebind 并入真 sessionId
+  test('provisionalKey / rebindSessionLogs：首轮日志不丢', () => {
+    const pk = ilog.provisionalKey('inst_fresh');
+    assert.equal(pk, 'inst:inst_fresh');
+    assert.equal(ilog.provisionalKey(null), null);
+
+    ilog.addSessionLog(pk, 'user_in', 'first msg');
+    ilog.addSessionLog(pk, 'agent_send', 'prompt');
+    assert.equal(ilog.getSessionLogs(pk).length, 2);
+    assert.deepEqual(ilog.getSessionLogs('real-sid'), []);
+
+    ilog.rebindSessionLogs(pk, 'real-sid');
+    assert.deepEqual(ilog.getSessionLogs(pk), [], 'provisional 键清空');
+    const logs = ilog.getSessionLogs('real-sid');
+    assert.equal(logs.length, 2);
+    assert.equal(logs[0].type, 'user_in');
+    assert.equal(logs[1].type, 'agent_send');
+
+    // rebind 后继续写真 session 追加在后
+    ilog.addSessionLog('real-sid', 'sys_info', 'got id');
+    assert.equal(ilog.getSessionLogs('real-sid').length, 3);
+    assert.equal(ilog.getSessionLogs('real-sid')[2].type, 'sys_info');
+  });
+
+  test('rebindSessionLogs：空/同键/无 pending → no-op 不抛', () => {
+    ilog.rebindSessionLogs(null, 's');
+    ilog.rebindSessionLogs('inst:x', null);
+    ilog.rebindSessionLogs('inst:x', 'inst:x');
+    ilog.rebindSessionLogs('inst:never-written', 's-empty');
+    assert.deepEqual(ilog.getSessionLogs('s-empty'), []);
+  });
+
   // 防 sessionBuffers 无界增长：常驻 server 长跑下，历史会话的日志缓冲会按 sessionId 无限累积
   // （每会话上限 100 条、但会话数无上限）。须给会话数也设 FIFO 上限（与 history/sessions 缓存同精神）。
   // 放最后：本用例创建大量 session 触发淘汰，会清掉前面用例的缓冲，故须在它们跑完后执行。

@@ -631,7 +631,7 @@
   <!-- 顶部状态条 -->
   <header class="flex items-center justify-between px-4 py-2.5 bg-surface border-b border-line shrink-0 sticky top-0 z-20">
     <!-- Left Section: Sidebar/Workspaces Toggler -->
-    <div class="relative flex items-center gap-2 shrink-0">
+    <div class="relative flex items-center gap-1.5 shrink-0">
       <button id="btnSessions" class="relative w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看工作区、会话列表和后台状态" aria-label="工作区与会话">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5 text-ink-soft">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4.75 5.75A1.75 1.75 0 016.5 4h11A1.75 1.75 0 0119.25 5.75v12.5A1.75 1.75 0 0117.5 20h-11a1.75 1.75 0 01-1.75-1.75V5.75z" />
@@ -641,10 +641,12 @@
         <span id="sessionsDot" class="hidden absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-px flex items-center justify-center rounded-full bg-surface border border-line-soft shadow-sm text-[11px] leading-none"></span>
         
         <!-- Connection state dot wrapper inside btnSessions -->
-        <div class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-surface rounded-full border border-line-soft shadow-sm" title="连接状态：绿=已连接 红=断开">
+        <div id="connDotWrap" class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-surface rounded-full border border-line-soft shadow-sm" title="连接状态：绿=已连接 红=断开">
           <span id="connDot" class="w-2 h-2 rounded-full bg-danger shrink-0"></span>
         </div>
       </button>
+      <!-- 手机 ↔ 主机 socket 往返延迟；连接后由 app.js 周期测并着色，断线隐藏 -->
+      <span id="connRtt" class="hidden text-[10px] font-mono tabular-nums leading-none select-none" title="手机到主机的往返延迟" aria-live="polite"></span>
     </div>
 
     <!-- Center Section: Elegant top context pill with workspace and status -->
@@ -710,24 +712,45 @@
       <label class="flex items-center gap-2 text-xs text-ink-soft mb-3">
         <input type="checkbox" id="permAlways" style="accent-color:var(--accent)">本会话内总是允许此类操作
       </label>
+      <!-- ExitPlanMode：对齐 CLI plan-exit，批准时可选手 default / acceptEdits / bypass -->
+      <div id="permExitModeWrap" class="hidden mb-3">
+        <div class="text-[11px] text-ink-soft mb-1.5">退出计划后权限档（对齐 CLI）</div>
+        <div id="permExitMode" class="grid grid-cols-3 gap-1.5 text-[11px]">
+          <button type="button" data-exit-mode="default" class="perm-exit-mode py-2 rounded-lg border border-accent bg-accent-wash text-ink font-medium">默认</button>
+          <button type="button" data-exit-mode="acceptEdits" class="perm-exit-mode py-2 rounded-lg border border-line text-ink-soft font-medium">自动接受编辑</button>
+          <button type="button" data-exit-mode="bypassPermissions" class="perm-exit-mode py-2 rounded-lg border border-line text-ink-soft font-medium">Bypass</button>
+        </div>
+      </div>
       <div class="flex gap-2">
         <button id="permDeny" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">拒绝</button>
         <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep font-medium">允许</button>
       </div>
+      <!-- 对齐 CLI Esc：权限弹窗遮罩会挡住输入区「停止」，弹窗内必须自带中止入口 -->
+      <button type="button" id="permInterrupt" class="w-full mt-2 py-2 rounded-lg border border-line text-ink-soft active:bg-sunk text-xs font-medium">中止本轮</button>
     </div>
   </div>
 
   <!-- AskUserQuestion 弹窗（E7） -->
   <!-- 必须自带逃生舱：整屏 z-40 遮罩会盖住输入区「停止」按钮，不能只靠选选项才能走。
-       跳过 = user:interrupt，后端 handleQuestion 的 abort 已支持 resolve deny「问题已取消」。 -->
+       跳过 = user:interrupt；Other = 对齐 CLI 自动提供的自由文本；multiSelect = 可多选。 -->
   <div id="questionModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
-    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
+    <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
       <div class="sheet-handle"></div>
-      <div class="text-info font-semibold mb-2">❓ 需要你选择</div>
-      <div id="questionText" class="text-sm mb-3 text-ink"></div>
+      <div class="text-info font-semibold mb-1">❓ 需要你选择</div>
+      <div id="questionHeader" class="hidden text-[11px] text-ink-faint mb-1"></div>
+      <div id="questionText" class="text-sm mb-2 text-ink"></div>
+      <div id="questionMultiHint" class="hidden text-[11px] text-ink-soft mb-2">可多选，选完点下方「确认选择」</div>
       <div id="questionOptions" class="space-y-2 mb-3"></div>
+      <button type="button" id="questionMultiSubmit" class="hidden w-full mb-3 py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep text-sm font-medium">确认选择</button>
+      <div id="questionOtherWrap" class="mb-3 space-y-2">
+        <button type="button" id="questionOtherToggle" class="w-full py-2.5 rounded-lg bg-sunk active:bg-line text-ink text-sm text-left px-3">其他…</button>
+        <div id="questionOtherPanel" class="hidden space-y-2">
+          <input id="questionOtherInput" type="text" class="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink" placeholder="输入你的答案" autocomplete="off">
+          <button type="button" id="questionOtherSubmit" class="w-full py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep text-sm font-medium">提交其他答案</button>
+        </div>
+      </div>
       <button type="button" id="questionSkip" class="w-full py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">跳过此问题</button>
-      <div class="text-[11px] text-ink-faint mt-2 text-center">跳过会中止本轮提问（等同停止），不必硬选一个选项</div>
+      <div class="text-[11px] text-ink-faint mt-2 text-center">可点选项、多选确认、填「其他」，或跳过中止本轮</div>
     </div>
   </div>
 
@@ -887,7 +910,7 @@
         </div>
       </div>
 
-      <!-- 只读追平横幅：该会话正在终端运行时常驻显示 + 禁用输入，硬防并发写盘分叉；「接管会话」发起接管。
+      <!-- 只读追平横幅：该会话正在终端运行时常驻显示 + 禁用输入，硬防并发写盘分叉；「接管 CLI 会话」发起接管。
            四态文案（mirrorBannerText 由 applyMirror 按 armed/stale 刷新）：驾驶中(⏱) / 已排队接管等待中(⏳，
            零并发写盘风险) / 疑似中断(⚠️，即时确认接管) / 隐藏(已解锁)。驾驶中点接管只排队等终端本轮完结再放行
            （见 logic.js armedTakeoverStep）；疑似中断维持原地即时确认（终端大概率已死，等待无意义）。 -->
@@ -895,8 +918,8 @@
         <div class="flex items-center gap-2">
           <span id="mirrorBannerIcon" class="shrink-0">⏱</span>
           <span id="mirrorBannerText" class="font-medium flex-1 min-w-0">此会话正在终端运行，这里只读追平</span>
-          <button id="btnMirrorSync" class="shrink-0 px-2 py-1 rounded-lg border border-line text-ink-soft font-semibold hover:bg-sunk active:scale-95 transition-all" title="立即拉取终端最新落定的消息">立即同步</button>
-          <button id="btnMirrorOverride" class="shrink-0 px-2 py-1 rounded-lg border border-danger text-danger font-semibold hover:bg-danger hover:text-surface active:scale-95 transition-all">接管会话</button>
+          <button id="btnMirrorSync" class="shrink-0 px-2 py-1 rounded-lg border border-line text-ink-soft font-semibold hover:bg-sunk active:scale-95 transition-all" title="把终端已写完的新消息刷新到这里（不接管输入）">刷新消息</button>
+          <button id="btnMirrorOverride" class="shrink-0 px-2 py-1 rounded-lg border border-danger text-danger font-semibold hover:bg-danger hover:text-surface active:scale-95 transition-all">接管 CLI 会话</button>
         </div>
       </div>
 
