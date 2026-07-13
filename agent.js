@@ -375,16 +375,37 @@ export class AgentSession {
     approvalStore.recordCreated({ reqId: requestId, sessionId: this.sessionId, tool: name, args: input, cwd: this.cwd, fingerprint: fp, risk: null, createdAt, expiresAt });
     return new Promise(resolve => {
       const abortHandler = () => {
+        const p = this.pendingPermissions.get(requestId);
         if (this.pendingPermissions.delete(requestId)) {
+          if (p?.expiryTimer) clearTimeout(p.expiryTimer); // BE-003：取消到期 timer，防僵尸回调
           this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'aborted' }); // M4
           approvalStore.recordDecided(requestId, { status: 'aborted', decidedBy: 'system:abort', decidedAt: Date.now() });
           this.denyKinds.set(requestId, 'cancelled'); // requestId===toolUseID：供 tool_result 显 🚫 而非红 ❌
           resolve({ behavior: 'deny', message: '请求已取消', interrupt: true });
         }
       };
-      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp });
+      // BE-003：到期 timer 主动结算——无人处理审批时（无提交者，且 checkIdle 因 pending 持续刷新 lastActivity
+      // 顶住静默判定），SDK canUseTool 的这个 Promise 会永久悬置、turn 永挂。到 approvalTtlMs 自动 fail-closed
+      // deny + emit expired（与 resolvePermission 的惰性过期分支同义，只是这里「到时主动」而非「有人提交才发现」）。
+      const expiryTimer = setTimeout(() => this._expirePermission(requestId), this.approvalTtlMs);
+      expiryTimer.unref?.(); // 不阻止进程退出
+      this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer });
       signal.addEventListener('abort', abortHandler);
     });
+  }
+
+  // BE-003：审批到期无人处理时的主动结算（由 askPermission 的 expiryTimer 触发）。fail-closed deny + emit
+  // expired + 台账记 expired，与 resolvePermission 的惰性 expired 分支等义。已被用户/abort 结算则 pending
+  // 不在、直接返回（幂等）。
+  _expirePermission(requestId) {
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) return;
+    pending.signal?.removeEventListener('abort', pending.abortHandler);
+    this.pendingPermissions.delete(requestId);
+    this.denyKinds.set(requestId, 'denied');
+    this.emit('request_resolved', { requestId, kind: 'permission', outcome: 'expired' });
+    approvalStore.recordDecided(requestId, { status: 'expired', decidedBy: 'system:timeout', decidedAt: Date.now() });
+    pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
   }
 
   // 返回值 = 本次落定的 outcome 字符串（与 emit('request_resolved') 的 outcome 一致），供 server.js
@@ -399,6 +420,7 @@ export class AgentSession {
     if (!pending) return undefined;
     // 移除 abort 监听器防僵尸累积（SDK 可能为多个 canUseTool 复用同一 signal）
     pending.signal?.removeEventListener('abort', pending.abortHandler);
+    if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // BE-003：用户/系统提交决定，取消到期 timer
     this.pendingPermissions.delete(requestId);
     this.lastActivity = Date.now(); // 用户审批是主动操作，续期静默看护
     // 审批 TTL fail-closed（OQ-05 已决）：过期后不可再兑现同一请求——不论传入的 decision 是什么，一律按

@@ -31,7 +31,7 @@ import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from './attention.js';
 import { listDir, readFile as browseReadFile } from './file-browse.js';
 import { isProcessed, commitProcessed } from './message-dedup.js';
-import { resolveInstanceTarget } from './instance-routing.js';
+import { resolveInstanceTarget, reselectViewingTarget } from './instance-routing.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from './workdirs.js';
 import {
@@ -163,7 +163,12 @@ async function ntfyNotify(title, body, meta = {}) {
   if (!ntfyEnabled) return;
   try {
     const { url, init } = ntfyRequestInit({ url: NTFY_URL, topic: NTFY_TOPIC, token: NTFY_TOKEN }, title, body, meta);
-    await fetch(url, init);
+    const res = await fetch(url, init);
+    if (!res.ok) {
+      // BE-015：fetch 对 4xx/5xx 正常 resolve——不查 res.ok 会把投递失败（401 token 错 / 404 topic 错 / 5xx）
+      // 静默当成功。只记状态码（不记 title/body：SEC-04 明文经第三方，勿落日志）。ntfy 尽力而为、不重试不阻断主流程。
+      console.error(`[ntfy] 推送失败: HTTP ${res.status}`);
+    }
   } catch (e) {
     console.error('[ntfy] 推送失败:', e.message);
   }
@@ -268,6 +273,14 @@ let viewingInstanceId = null;
 // 必须在 preflight 之后取（WORK_DIR 在 preflight 内才 realpathSync 规范化，否则 cwd 隔离失灵）。
 let viewingCwd = WORK_DIR;
 const viewingCwdOf = () => agents.get(viewingInstanceId)?.cwd ?? viewingCwd;
+// BE-016：当前查看实例被移除（退出/dispose）后原子重选 viewing——落到剩余实例取其 cwd，落到空视图(null)保留
+// 刚移除实例的 cwd（它是最后实际查看的），避免裸 viewingCwd 停在更早旧值致新会话选目录/statusline 跳回旧工作区。
+// 调用点须在 agents.delete(退出实例) 之后调用（此时 [...agents.keys()] 已是剩余实例）。
+const reselectViewingAfter = (removedCwd) => {
+  const r = reselectViewingTarget([...agents.keys()], removedCwd, id => agents.get(id).cwd, viewingCwd);
+  viewingInstanceId = r.viewingInstanceId;
+  viewingCwd = r.viewingCwd;
+};
 // 白名单校验 + 缺省落 viewingCwd：cwd 维度的事件（setWorkdir/session:list/new）经此解析目标 cwd。
 const routeCwd = cwd => {
   if (isWhitelisted(cwd, workDirs)) return cwd;
@@ -1232,7 +1245,10 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         // 只有确实要推送时才消费节流配额——避免"注定不推"的事件（如有客户端连的 result）白白占用节流窗口，
         // 致真正需要推送时被误判为"最近推过"。
         let pn = notificationForEvent(envelope.type, envelope.payload, {
-          hasClients: io.sockets.sockets.size > 0,
+          // BE-007：能看到 result 的客户端 = 已加入 approved 房间的连接。待审批(deviceApproved=false)设备虽连着
+          // 但没 join approved、看不到会话内容/result，不能算「有人在看」而抑制离线推送——否则唯一在线的是待审批
+          // 设备时，真正该收到完成通知的离线已批准设备反而收不到。permission/question/task_notification 无条件推、不受此影响。
+          hasClients: (io.sockets.adapter.rooms.get('approved')?.size ?? 0) > 0,
           instanceId: envelope.instanceId, sessionId: envelope.sessionId, cwd: envelope.cwd,
         });
         // P1-5 per-会话节流（LLD §3.6.1）：同一会话同一类别已有未决通知或未过最小间隔 → 抑制，不推送。
@@ -1280,7 +1296,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         doneInstances.delete(id);
         errorInstances.delete(id);
         abortedInstances.delete(id);
-        if (viewingInstanceId === id) viewingInstanceId = agents.keys().next().value ?? null;
+        if (viewingInstanceId === id) reselectViewingAfter(cwd); // BE-016：同步 viewingCwd（cwd=退出实例 cwd），落空视图保留最后查看 cwd
       }
       broadcastInstances(); // 实例退出 → 刷 tab 栏（角标回落 / 该 tab 消失）
     }
@@ -1394,7 +1410,7 @@ function disposeInstance(instanceId) {
   doneInstances.delete(instanceId);
   errorInstances.delete(instanceId);
   abortedInstances.delete(instanceId);
-  if (viewingInstanceId === instanceId) viewingInstanceId = agents.keys().next().value ?? null;
+  if (viewingInstanceId === instanceId) reselectViewingAfter(a.cwd); // BE-016：同步 viewingCwd，落空视图保留最后查看 cwd
   broadcastInstances();
 }
 

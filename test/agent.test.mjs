@@ -1350,6 +1350,22 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
+  test('审批到期无人处理 → 到期 timer 自动 fail-closed deny + emit expired（BE-003：防 SDK canUseTool Promise 永久悬置）', { timeout: 3000 }, async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 30 });
+    const ac = new AbortController();
+    // 纯靠到期 timer 结算：全程【不】调用 resolvePermission，模拟无人处理审批的场景。
+    const promise = s.askPermission('Bash', { command: 'sleep 999' }, { signal: ac.signal, toolUseID: 't1' });
+    assert.equal(s.pendingPermissions.size, 1, '刚请求时应挂起');
+    const result = await promise; // 无到期 timer 时此处永不 resolve（靠 test timeout 兜底红）
+    assert.equal(result.behavior, 'deny', '到期后 fail-closed deny');
+    assert.equal(result.interrupt, false, 'expired 不 interrupt 在途轮');
+    assert.equal(s.pendingPermissions.size, 0, '到期后 pending 清空，不再悬置');
+    const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 't1');
+    assert.equal(rr?.payload.outcome, 'expired', 'outcome 标 expired');
+    assert.equal(s.denyKinds.get('t1'), 'denied');
+    s.dispose();
+  });
+
   test('resolvePermission：未过期时 TTL 机制不影响正常 allow/deny（回归）', async () => {
     const { s, events } = makeSession({ approvalTtlMs: 60_000 }); // 60s，测试期间不可能过期
     const ac = new AbortController();
@@ -1490,16 +1506,18 @@ test.describe('权限闸门', () => {
       s.dispose();
     });
 
-    test('resolvePermission：已过期 → 台账 status=expired，返回值为 "expired"', async () => {
+    test('已过期 → 到期 timer 主动结算：台账 status=expired，过期后再提交扑空（BE-003）', async () => {
       const AS = await import('../approval-store.js');
       const { s } = makeSession({ approvalTtlMs: 1 });
       const ac = new AbortController();
       const promise = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t5' });
-      await new Promise(r => setTimeout(r, 20));
+      // BE-003：到期由 timer 主动结算（不再依赖有人提交才惰性发现过期）——await 到 Promise 被 timer resolve。
+      const result = await promise;
+      assert.equal(result.behavior, 'deny', '过期 fail-closed deny');
+      assert.equal(AS.getByReqId('store-t5').status, 'expired', '台账记 expired');
+      // 过期后再提交（即便 allow）扑空——已被 timer 结算，返回 undefined，绝不放行（fail-closed 保证仍在）。
       const outcome = s.resolvePermission('store-t5', 'allow', false, { tool: 'Bash', args: { command: 'ls' }, cwd: s.cwd });
-      assert.equal(outcome, 'expired');
-      assert.equal(AS.getByReqId('store-t5').status, 'expired');
-      await promise;
+      assert.equal(outcome, undefined, '已被 timer 结算，再提交扑空');
       s.dispose();
     });
 

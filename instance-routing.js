@@ -20,3 +20,15 @@ export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive) {
   if (isLive(requestedId)) return { id: requestedId, stale: false };
   return { id: null, stale: true };
 }
+
+// BE-016：当前查看的实例被移除（退出 / dispose）后，重选查看目标并【原子同步】viewingCwd。
+// 旧实现只更新 viewingInstanceId、不动 viewingCwd：落到剩余实例时 viewingCwdOf 会用实例 cwd 兜住（无感），
+// 但两实例先后关闭最终落到空视图(null)时，裸 viewingCwd 停在更早的旧值 → 新会话选目录 / statusline git 段 /
+// pendingMode 键跳回旧工作区。此处落到剩余实例取其 cwd、落到 null 保留刚移除实例的 cwd（它是最后实际查看的）。
+//
+// remainingIds：移除后仍存活的实例 id（按插入序，对齐 agents.keys()）；removedCwd：刚移除实例的 cwd；
+// cwdOf(id)：id→cwd；fallbackCwd：removedCwd 缺失时的兜底（当前 viewingCwd）。
+export function reselectViewingTarget(remainingIds, removedCwd, cwdOf, fallbackCwd) {
+  const next = remainingIds.length ? remainingIds[0] : null;
+  return { viewingInstanceId: next, viewingCwd: next ? cwdOf(next) : (removedCwd ?? fallbackCwd) };
+}
