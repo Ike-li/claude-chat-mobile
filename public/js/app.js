@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep } from './logic.js';
+import { esc, formatToolSummary, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -831,7 +831,9 @@ import { verifyIntegrity } from './canonicalize.js';
       if (status) status.textContent = '❌';
       const out = card.querySelector('.t-out');
       if (out) {
-        out.textContent = summary;
+        // t-out 内是 <code>；写 textContent 到 pre 会清掉子节点，统一落到 code 上
+        const code = out.querySelector('code') || out;
+        code.textContent = summary;
         out.classList.remove('hidden');
       }
     }
@@ -957,16 +959,23 @@ import { verifyIntegrity } from './canonicalize.js';
       }
     },
     tool_use(p) {
+      // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
+      // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
       const card = el(`
         <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
           <summary class="px-3 py-2 flex items-center gap-2">
             <span class="t-status">⏳</span><span class="font-mono font-semibold text-ink">${esc(p.name)}</span>
           </summary>
           <div class="px-3 pb-2 space-y-1">
-            <pre class="overflow-x-auto text-ink-soft">${esc(p.inputSummary)}</pre>
-            <pre class="t-out overflow-x-auto text-ink-faint hidden"></pre>
+            <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
+            <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
           </div>
         </details>`);
+      const inCode = card.querySelector('.t-in code');
+      if (inCode) {
+        inCode.textContent = formatToolSummary(p.inputSummary || '');
+        try { hljs.highlightElement(inCode); } catch { /* 高亮失败不影响显示 */ }
+      }
       toolCards.set(p.toolUseId, card);
       if (p.file?.path) {  // ③：文件类工具（Edit/Write/Read/MultiEdit/NotebookEdit）加「预览变更」入口
         const wrap = el(`<div class="mt-1"><button type="button" class="tp-btn text-info underline">📄 预览变更</button><div class="tp-body hidden mt-1 space-y-1"></div></div>`);
@@ -995,11 +1004,23 @@ import { verifyIntegrity } from './canonicalize.js';
                 if (h.new) addPre('+ ' + h.new, 'rgba(61,138,80,.12)');
               }
               if (res.diff.added !== undefined) addPre(res.diff.added, 'rgba(61,138,80,.12)');
-            } else if (res.snippet) {  // Read 文件片段：代码高亮
-              const pre = el(`<pre class="overflow-x-auto"><code></code></pre>`);
-              pre.querySelector('code').textContent = res.snippet.snippet + (res.snippet.truncated ? '\n…（已截断）' : '');
-              tbody.appendChild(pre);
-              try { hljs.highlightElement(pre.querySelector('code')); } catch { /* 高亮失败不影响显示 */ }
+            } else if (res.snippet) {  // Read 文件片段：图片 → 缩略图；文本 → 代码高亮
+              if (res.snippet.image?.base64 && res.snippet.image?.mimeType) {
+                // 与用户附件气泡同源：data URI + CSP img-src data: 已许
+                const img = el(`<img class="max-w-full max-h-48 rounded border border-line object-contain bg-sunk" alt="预览">`);
+                img.src = `data:${res.snippet.image.mimeType};base64,${res.snippet.image.base64}`;
+                tbody.appendChild(img);
+                if (res.snippet.snippet) {
+                  const cap = el(`<div class="text-ink-faint text-[11px]"></div>`);
+                  cap.textContent = res.snippet.snippet + (res.snippet.truncated ? ' …（已截断）' : '');
+                  tbody.appendChild(cap);
+                }
+              } else {
+                const pre = el(`<pre class="overflow-x-auto whitespace-pre-wrap break-words"><code></code></pre>`);
+                pre.querySelector('code').textContent = res.snippet.snippet + (res.snippet.truncated ? '\n…（已截断）' : '');
+                tbody.appendChild(pre);
+                try { hljs.highlightElement(pre.querySelector('code')); } catch { /* 高亮失败不影响显示 */ }
+              }
             }
           });
         };
@@ -1037,7 +1058,10 @@ import { verifyIntegrity } from './canonicalize.js';
       if (p.outputSummary) {
         const out = card.querySelector('.t-out');
         // deny 通道正文带 SDK 加的 "Error:" 前缀（非真错误），剥掉只留语义文本
-        out.textContent = p.denyKind ? p.outputSummary.replace(/^Error:\s*/i, '') : p.outputSummary;
+        const raw = p.denyKind ? p.outputSummary.replace(/^Error:\s*/i, '') : p.outputSummary;
+        const code = out.querySelector('code') || out;
+        code.textContent = formatToolSummary(raw);
+        try { if (code !== out) hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
         out.classList.remove('hidden');
       }
       toolCards.delete(p.toolUseId);

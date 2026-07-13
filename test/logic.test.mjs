@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep } from '../public/js/logic.js';
+import { esc, formatToolSummary, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, keyboardInsetPadding, logEntryVisibleForInstance, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test('esc: 转义 HTML 元字符', () => {
@@ -11,6 +11,35 @@ test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(null), '');
   assert.equal(esc(undefined), '');
   assert.equal(esc(5), '5');
+});
+
+// 工具卡片摘要可读化：agent 侧 stringify 是紧凑单行，手机展开一坨难读。
+// formatToolSummary 只负责「能 parse 的 JSON → 缩进 pretty；非 JSON/空 → 原样」，不碰 DOM/hljs。
+test('formatToolSummary: 紧凑 JSON 对象 → 2 空格缩进', () => {
+  const raw = '{"file_path":"/a.js","old_string":"x"}';
+  assert.equal(formatToolSummary(raw), '{\n  "file_path": "/a.js",\n  "old_string": "x"\n}');
+});
+
+test('formatToolSummary: JSON 数组同样 pretty', () => {
+  assert.equal(formatToolSummary('[1,{"a":2}]'), '[\n  1,\n  {\n    "a": 2\n  }\n]');
+});
+
+test('formatToolSummary: 非 JSON 纯文本原样返回（Bash 命令、脱敏占位符、错误文案）', () => {
+  assert.equal(formatToolSummary('ls -la /tmp'), 'ls -la /tmp');
+  assert.equal(formatToolSummary('（base64 数据，约 48KB，已省略）'), '（base64 数据，约 48KB，已省略）');
+  assert.equal(formatToolSummary('Error: permission denied'), 'Error: permission denied');
+});
+
+test('formatToolSummary: 截断后的残缺 JSON 不抛、原样返回（agent 的 TOOL_SUMMARY_CAP 会切尾）', () => {
+  const truncated = '{"file_path":"/a.js","content":"hello wor'; // 缺闭合
+  assert.equal(formatToolSummary(truncated), truncated);
+});
+
+test('formatToolSummary: 空/非字符串安全', () => {
+  assert.equal(formatToolSummary(''), '');
+  assert.equal(formatToolSummary(null), '');
+  assert.equal(formatToolSummary(undefined), '');
+  assert.equal(formatToolSummary(42), '42');
 });
 
 test('withUltracodeKeyword: 单轮 ultracode 关键词前缀且不重复', () => {

@@ -7,6 +7,23 @@ export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
+// 工具卡片摘要可读化：agent 侧 stringify 是紧凑单行，手机展开难读。
+// 能 parse 的 JSON（对象/数组）→ 2 空格缩进；非 JSON / 截断残缺 / 空 → 原样（String 化）。
+// 只做数据→数据，不碰 DOM/hljs（高亮由 app.js 渲染层复用现有 hljs）。
+export function formatToolSummary(summary) {
+  if (summary == null) return '';
+  if (typeof summary !== 'string') return String(summary);
+  const s = summary;
+  if (!s) return '';
+  const t = s.trim();
+  if (!t || (t[0] !== '{' && t[0] !== '[')) return s;
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch {
+    return s; // 截断残缺 JSON 等：不抛、原样
+  }
+}
+
 // ultracode = CLI /effort 菜单 xhigh 之上的最高档（= xhigh effort + dynamic workflow 编排）。
 // SDK 的 effort flag 只认 low..max、不认 ultracode，故 web 借道「xhigh effort + 每轮注入本关键词」复现：
 // 关键词触发 CLI 的 ultracodeKeywordTrigger → 该轮 opt into Workflow 工具。已有关键词时保持原文，避免叠加。

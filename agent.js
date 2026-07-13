@@ -872,7 +872,7 @@ export class AgentSession {
             this.emit('tool_use', {
               toolUseId: block.id,
               name: block.name,
-              inputSummary: truncate(stringify(block.input), TOOL_SUMMARY_CAP),
+              inputSummary: truncate(stringify(redactBase64(block.input)), TOOL_SUMMARY_CAP),
               file
             });
           } else if (block.type === 'text' && block.text && !this.sawTextDelta) {
@@ -918,7 +918,7 @@ export class AgentSession {
             this.emit('tool_result', {
               toolUseId: block.tool_use_id,
               ok: !block.is_error,
-              outputSummary: truncate(stringify(raw), TOOL_SUMMARY_CAP),
+              outputSummary: truncate(stringify(redactBase64(raw)), TOOL_SUMMARY_CAP),
               denyKind
             });
           }
@@ -996,6 +996,29 @@ function stringify(v) {
   if (v == null) return '';
   if (typeof v === 'string') return v;
   try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+// 长 base64/二进制载荷脱敏（Read 读图片等场景，tool_result 会带回原始字节供模型"看见"图片）：
+// 不猜 SDK 具体字段名（同 file-preview.js 的二进制探测思路，防 SDK 版本漂移改字段名致失效）——
+// 整串纯 base64 字符集且达到阈值长度才判定；真实代码/路径/命令几乎不可能连续 500+ 字符不含
+// 空白或标点，故不会误伤 Edit/Write 预览 diff。脱敏须在 truncate() 之前，否则大 base64 会把
+// TOOL_SUMMARY_CAP 截断额度提前占满，挤掉真正有用的字段。
+const BASE64_REDACT_MIN_LEN = 500;
+const BASE64_ONLY_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+function redactBase64(value) {
+  if (typeof value === 'string') {
+    if (value.length >= BASE64_REDACT_MIN_LEN && BASE64_ONLY_RE.test(value)) {
+      return `（base64 数据，约 ${Math.ceil(value.length / 1024)}KB，已省略）`;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(redactBase64);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) out[k] = redactBase64(value[k]);
+    return out;
+  }
+  return value;
 }
 
 function asArray(v) {

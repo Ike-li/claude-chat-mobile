@@ -416,6 +416,53 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  test('tool_use：input 里的长 base64 载荷被脱敏，不占用 TOOL_SUMMARY_CAP 截断额度', () => {
+    const { s, events } = makeSession();
+    const bigBase64 = 'A'.repeat(50000); // 纯 base64 字符集，远超截断上限
+    s.map({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'tool-img-in', name: 'SomeTool', input: { file_path: '/a.jpg', file: { base64: bigBase64 } } }
+    ] } });
+    const tu = events.find(e => e.type === 'tool_use' && e.payload.toolUseId === 'tool-img-in');
+    assert.ok(tu.payload.inputSummary.includes('file_path')); // 正常字段仍可见，未被挤没
+    assert.ok(!tu.payload.inputSummary.includes(bigBase64.slice(0, 300))); // 原始 base64 未原样吐出
+    assert.match(tu.payload.inputSummary, /已省略/);
+    s.dispose();
+  });
+
+  test('tool_result：Read 读图片等场景 raw 里的长 base64 被脱敏（真实病灶：outputSummary）', () => {
+    const { s, events } = makeSession();
+    const bigBase64 = 'B'.repeat(50000);
+    s.map({ type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'tool-img-out', is_error: false,
+        content: [{ type: 'image', file: { base64: bigBase64 } }] }
+    ] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-img-out');
+    assert.ok(!tr.payload.outputSummary.includes(bigBase64.slice(0, 300)));
+    assert.match(tr.payload.outputSummary, /已省略/);
+    s.dispose();
+  });
+
+  test('base64 脱敏不误伤真实长代码（保护 Edit/Write 预览 diff，含换行大括号不会被判成二进制）', () => {
+    const { s, events } = makeSession();
+    const longCode = 'function foo() {\n  return 1;\n}\n'.repeat(50);
+    s.map({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'tool-edit', name: 'Edit', input: { file_path: '/a.js', old_string: 'x', new_string: longCode } }
+    ] } });
+    const tu = events.find(e => e.type === 'tool_use' && e.payload.toolUseId === 'tool-edit');
+    assert.ok(tu.payload.inputSummary.includes('function foo')); // 真代码原样保留
+    s.dispose();
+  });
+
+  test('base64 脱敏不误伤短 base64 状字符串（如短 hash/id，长度不到阈值）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'assistant', message: { content: [
+      { type: 'tool_use', id: 'tool-short', name: 'Bash', input: { command: 'echo', hash: 'YWJjMTIz' } }
+    ] } });
+    const tu = events.find(e => e.type === 'tool_use' && e.payload.toolUseId === 'tool-short');
+    assert.ok(tu.payload.inputSummary.includes('YWJjMTIz'));
+    s.dispose();
+  });
+
   test('result → pendingTurns 递减、cost/duration 累加、text 字段随发', () => {
     const { s, events } = makeSession();
     s.pendingTurns = 1;
