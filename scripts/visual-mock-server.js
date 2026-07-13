@@ -3195,11 +3195,17 @@ io.on('connection', socket => {
     emitPendingDevices();
   });
 
-  // Handle user interrupt (stop button)
+  // Handle user interrupt (stop button / question skip)
+  // 真实 agent 里 interrupt → AbortSignal → handleQuestion abortHandler →
+  // request_resolved(aborted) + denyKinds(cancelled) + 轮次收尾。mock 对齐这条链，
+  // 否则「跳过此问题」只能发出 interrupt 却关不掉弹窗（前端故意不乐观关窗）。
+  // 注意：agent:event 带 activeEpoch 时 seq 必须单调递增——前端 `ev.seq <= lastSeq` 会丢弃回退 seq，
+  // 所以这里绝不能发 seq:0（question 已是 seq:3 时会把 resolved 整条滤掉）。
   socket.on('user:interrupt', payload => {
     const { instanceId } = payload || {};
-    console.log(`[mock] User interrupt received for instance ${instanceId || viewingInstanceId}`);
-    const activeInst = mockInstances.find(i => i.instanceId === (instanceId || viewingInstanceId));
+    const targetId = instanceId || viewingInstanceId;
+    console.log(`[mock] User interrupt received for instance ${targetId}`);
+    const activeInst = mockInstances.find(i => i.instanceId === targetId);
     if (activeInst) {
       activeInst.state = 'idle';
       io.emit('agent:event', {
@@ -3207,8 +3213,47 @@ io.on('connection', socket => {
         type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
       });
     }
+
+    // 挂起的 AskUserQuestion：按真实 abort 路径关闭
+    // 真实 agent 对每道题 emit request_resolved({ requestId: `${toolUseID}#${i}`, outcome:'aborted' })
+    // ——requestId 用带 #i 的完整 id，前端 matchQ 直接相等命中；seq 接在 question(seq:3) 之后。
+    if (pendingQuestion) {
+      const q = pendingQuestion;
+      const toolUseId = q.toolUseId || (typeof q.requestId === 'string' ? q.requestId.split('#')[0] : null);
+      io.emit('agent:event', {
+        seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetId, ts: Date.now(),
+        type: 'request_resolved', payload: { requestId: q.requestId, kind: 'question', outcome: 'aborted' }
+      });
+      if (toolUseId) {
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId, ok: false, outputSummary: '问题已取消', denyKind: 'cancelled' }
+        });
+      }
+      if (q.messageId) {
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetId, ts: Date.now(),
+          type: 'result', payload: { messageId: q.messageId, durationMs: 200, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      }
+      pendingQuestion = null;
+      syncPendingSnapshot = null;
+      syncPendingSnapshotInstanceId = null;
+    }
+
+    // 挂起的权限审批：interrupt 同样应清掉（真实 agent dispose/interrupt 路径会 deny）
+    if (pendingPermission) {
+      io.emit('agent:event', {
+        seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetId, ts: Date.now(),
+        type: 'request_resolved', payload: { requestId: pendingPermission.requestId, kind: 'permission', outcome: 'denied' }
+      });
+      pendingPermission = null;
+      syncPendingSnapshot = null;
+      syncPendingSnapshotInstanceId = null;
+    }
+
     socket.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: null, instanceId: instanceId || viewingInstanceId, ts: Date.now(),
+      seq: 0, epoch: 'server', sessionId: null, instanceId: targetId, ts: Date.now(),
       type: 'system', payload: { message: '已中断', kind: 'interrupted' }
     });
   });

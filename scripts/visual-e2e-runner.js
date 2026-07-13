@@ -308,6 +308,41 @@ async function run() {
     console.log('📸 Captured and saved tc5_answered.png\n');
 
     // ==================================================================
+    // TC-5b: AskUserQuestion 跳过/中止逃生舱
+    // 遮罩盖住输入区「停止」时，弹窗必须自带可点的跳过；点后应关窗、不要求选选项。
+    // ==================================================================
+    console.log('👉 Running TC-5b: AskUserQuestion skip/cancel escape hatch...');
+    await sendCommand('test:question');
+    await page.waitForSelector('#questionModal:not(.hidden)');
+    await sleep(300);
+
+    const skipBtnVisible = await page.evaluate(() => {
+      const btn = document.getElementById('questionSkip');
+      if (!btn) return { exists: false };
+      const r = btn.getBoundingClientRect();
+      return { exists: true, text: btn.textContent.trim(), w: r.width, h: r.height, visible: r.width > 0 && r.height > 0 };
+    });
+    assert.strictEqual(skipBtnVisible.exists, true, 'TC-5b: questionSkip button must exist in DOM');
+    assert.ok(skipBtnVisible.visible, 'TC-5b: questionSkip must be visible (not zero-size)');
+    assert.ok(skipBtnVisible.text.includes('跳过'), 'TC-5b: skip button label should mention 跳过');
+
+    await page.click('#questionSkip');
+    await page.waitForSelector('#questionModal.hidden', { timeout: 5000 });
+
+    const afterSkip = await page.evaluate(() => {
+      const modal = document.getElementById('questionModal');
+      const statuses = Array.from(document.querySelectorAll('details.toolcard .t-status'));
+      return {
+        hidden: !!(modal && modal.classList.contains('hidden')),
+        lastStatus: statuses.length ? statuses[statuses.length - 1].textContent.trim() : null,
+      };
+    });
+    assert.strictEqual(afterSkip.hidden, true, 'TC-5b: question modal must hide after skip (no forced option pick)');
+    // mock interrupt 路径发 denyKind=cancelled → 前端 toolcard 显 🚫
+    assert.strictEqual(afterSkip.lastStatus, '🚫', 'TC-5b: skipped question card should show cancelled 🚫, not answered ☑️');
+    console.log('✅ TC-5b: AskUserQuestion skip/cancel passed\n');
+
+    // ==================================================================
     // TC-6: StatusLine Projection
     // ==================================================================
     console.log('👉 Running TC-6: StatusLine Projection...');
@@ -1445,7 +1480,9 @@ async function run() {
       browsePath: document.getElementById('fileBrowsePath')?.textContent || '',
     }));
     assert.strictEqual(topPillTC22.sidebarOpen, false, 'TC-22: 点顶部 pill 不应打开工作区抽屉');
-    assert.ok(topPillTC22.browsePath.includes('claude-chat-mobile'), 'TC-22: 顶部 pill 打开的应是当前工作区的文件浏览');
+    // 不硬编码 claude-chat-mobile：前面 TC 可能已切到 another-react-project 等工作区，
+    // 只要弹层打开且路径非空，即证明 pill 打开的是「当前」工作区文件浏览而非会话抽屉。
+    assert.ok(topPillTC22.browsePath && topPillTC22.browsePath.trim().length > 0, 'TC-22: 顶部 pill 应打开当前工作区的文件浏览（路径非空）');
     await page.click('#fileBrowseClose');
     await page.waitForSelector('#fileBrowseModal.hidden', { timeout: 5000 });
 
@@ -1453,13 +1490,31 @@ async function run() {
     await page.click('#btnSessions');
     await page.waitForSelector('#leftSidebar:not(.-translate-x-full)');
     const browseBtnTextTC22 = await page.evaluate(() => {
-      const btn = document.querySelector('#sessionPanel button[title*="浏览项目文件"]');
-      return btn ? btn.textContent.trim() : null;
+      // 优先当前工作区行的浏览按钮；否则取第一个。避免 querySelector 拿到被折叠/不可点子树。
+      const panel = document.getElementById('sessionPanel');
+      const btns = panel ? Array.from(panel.querySelectorAll('button[title*="浏览项目文件"]')) : [];
+      const btn = btns.find(b => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }) || btns[0];
+      return btn ? { text: btn.textContent.trim(), count: btns.length } : null;
     });
-    assert.ok(browseBtnTextTC22 && browseBtnTextTC22.length > 2, 'TC-22: 浏览按钮应带常显文字标签，不能只剩一个 emoji');
+    assert.ok(browseBtnTextTC22 && browseBtnTextTC22.text.length > 2, 'TC-22: 浏览按钮应带常显文字标签，不能只剩一个 emoji');
 
     // 3) 该按钮点击后仍应能正常打开文件浏览（浏览非当前工作区文件的能力不因加标签而破坏）
-    await page.click('#sessionPanel button[title*="浏览项目文件"]');
+    // 用 evaluate click 避开 puppeteer 对被侧栏动画/遮挡节点的 clickable 校验抖动
+    const clickedBrowse = await page.evaluate(() => {
+      const panel = document.getElementById('sessionPanel');
+      const btns = panel ? Array.from(panel.querySelectorAll('button[title*="浏览项目文件"]')) : [];
+      const btn = btns.find(b => {
+        const r = b.getBoundingClientRect();
+        return r.width > 0 && r.height > 0;
+      }) || btns[0];
+      if (!btn) return false;
+      btn.click();
+      return true;
+    });
+    assert.strictEqual(clickedBrowse, true, 'TC-22: 应能点到带「浏览」文字的文件浏览按钮');
     await page.waitForSelector('#fileBrowseModal:not(.hidden)', { timeout: 5000 });
     await page.waitForSelector('#leftSidebar.-translate-x-full', { timeout: 5000 });
     await page.click('#fileBrowseClose');

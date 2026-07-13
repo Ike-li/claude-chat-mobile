@@ -718,12 +718,16 @@
   </div>
 
   <!-- AskUserQuestion 弹窗（E7） -->
+  <!-- 必须自带逃生舱：整屏 z-40 遮罩会盖住输入区「停止」按钮，不能只靠选选项才能走。
+       跳过 = user:interrupt，后端 handleQuestion 的 abort 已支持 resolve deny「问题已取消」。 -->
   <div id="questionModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
       <div class="sheet-handle"></div>
       <div class="text-info font-semibold mb-2">❓ 需要你选择</div>
-      <div id="questionText" class="text-sm mb-4 text-ink"></div>
-      <div id="questionOptions" class="space-y-2"></div>
+      <div id="questionText" class="text-sm mb-3 text-ink"></div>
+      <div id="questionOptions" class="space-y-2 mb-3"></div>
+      <button type="button" id="questionSkip" class="w-full py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">跳过此问题</button>
+      <div class="text-[11px] text-ink-faint mt-2 text-center">跳过会中止本轮提问（等同停止），不必硬选一个选项</div>
     </div>
   </div>
 

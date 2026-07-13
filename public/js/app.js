@@ -92,7 +92,7 @@ import { verifyIntegrity } from './canonicalize.js';
   }
   const permModal = $('permModal'), permTool = $('permTool'), permCwd = $('permCwd'),
         permInput = $('permInput'), permAlways = $('permAlways'), permIntegrityWarn = $('permIntegrityWarn');
-  const questionModal = $('questionModal'), questionText = $('questionText'), questionOptions = $('questionOptions');
+  const questionModal = $('questionModal'), questionText = $('questionText'), questionOptions = $('questionOptions'), questionSkip = $('questionSkip');
   const deleteSessionModal = $('deleteSessionModal'), deleteSessionTitle = $('deleteSessionTitle'), deleteL1Btn = $('deleteL1Btn'), deleteL2Btn = $('deleteL2Btn'), deleteSessionCancel = $('deleteSessionCancel');
   const authGate = $('authGate'), authToken = $('authToken'), authSubmit = $('authSubmit'), authError = $('authError'); // 访问令牌输入页
   const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // Access 会话过期重登浮层
@@ -1535,6 +1535,17 @@ import { verifyIntegrity } from './canonicalize.js';
       activeStatusText.textContent = 'Claude 正在思考中...';
     }
     updateSendButtonState();
+  }
+  // 跳过/中止：复用 user:interrupt。后端 handleQuestion 已监听 abort → deny「问题已取消」；
+  // 弹窗内必须自带此入口——遮罩盖住输入区「停止」时否则无路可走。
+  // 不在本地乐观关窗：等 request_resolved(aborted) / result 走既有清理，避免多设备/重放分叉。
+  if (questionSkip) {
+    questionSkip.onclick = () => {
+      if (!activeQuestion) return;
+      haptic('tap');
+      addBar('已跳过提问（中止本轮）', 'text-ink-faint');
+      requestInterrupt();
+    };
   }
 
   // ---- 发送 / 停止 ----
