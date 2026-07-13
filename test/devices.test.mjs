@@ -16,6 +16,7 @@ import {
   getLatestPendingDevice,
   approveDevice,
   denyDevice,
+  persistTrustedChange,
   MAX_PENDING_DEVICES
 } from '../devices.js';
 
@@ -146,5 +147,36 @@ test.describe('devices.js 单元测试', () => {
 
     for (const d of getPendingDevices()) removePendingDevice(d.deviceToken); // 清理
     assert.equal(getPendingDevices().length, 0);
+  });
+});
+
+// BE-011：吊销/批准的持久化失败必须可观测——落盘失败时不得把变更提交到内存、更不得谎报成功
+// （isDeviceTrusted 每次重读磁盘，谎报成功会让被吊销设备下次检查复活）。纯函数，注入 fake persist，不碰文件系统。
+test.describe('persistTrustedChange（BE-011：落盘成功才提交变更）', () => {
+  test('persist 成功 → 返回应用了变更的新集合，原集合不被就地修改', () => {
+    const cur = new Set(['a', 'b']);
+    const next = persistTrustedChange(cur, s => s.delete('a'), () => true);
+    assert.ok(next instanceof Set);
+    assert.equal(next.has('a'), false);
+    assert.equal(next.has('b'), true);
+    assert.equal(cur.has('a'), true, '原集合不被就地修改（在副本上变更）');
+  });
+
+  test('persist 返回 false → 返回 null（变更未提交，调用方据此报失败、不谎报）', () => {
+    const cur = new Set(['a']);
+    const next = persistTrustedChange(cur, s => s.delete('a'), () => false);
+    assert.equal(next, null);
+    assert.equal(cur.has('a'), true, '落盘失败原集合保持不变');
+  });
+
+  test('persist 抛错（EACCES/ENOSPC 等）→ 返回 null，视为落盘失败不提交', () => {
+    const cur = new Set(['a']);
+    const next = persistTrustedChange(cur, s => s.add('b'), () => { throw new Error('EACCES'); });
+    assert.equal(next, null);
+  });
+
+  test('add 变更同理：persist 成功才含新成员', () => {
+    const next = persistTrustedChange(new Set(), s => s.add('x'), () => true);
+    assert.equal(next.has('x'), true);
   });
 });

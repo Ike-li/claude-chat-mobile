@@ -41,13 +41,31 @@ export function getTrustedCount() {
   return trustedDevices ? trustedDevices.size : 0;
 }
 
-export function saveTrustedDevices() {
+// 把给定信任集合原子写盘，返回成败布尔（BE-011：成败必须可观测，不再吞成 undefined——
+// 否则吊销/批准落盘失败会被静默当成功，而 isDeviceTrusted 每次重读磁盘会让被吊销设备复活）。
+function writeTrustedSet(set) {
   try {
     mkdirSync(dirname(TRUSTED_DEVICES_FILE), { recursive: true });
-    writeOwnerOnlyFile(TRUSTED_DEVICES_FILE, JSON.stringify([...trustedDevices], null, 2));
+    writeOwnerOnlyFile(TRUSTED_DEVICES_FILE, JSON.stringify([...set], null, 2));
+    return true;
   } catch (err) {
     console.error('[devices] 保存 trusted-devices.json 失败:', err.message);
+    return false;
   }
+}
+
+export function saveTrustedDevices() {
+  return writeTrustedSet(trustedDevices);
+}
+
+// 纯函数（BE-011）：在【副本】上应用信任集合变更，persist(副本) 成功才返回新集合、失败或抛错返回 null。
+// 调用方仅在非 null 时把新集合提交到内存并报告成功；null 时保持原状 + 报告失败，绝不谎报吊销/批准成功。
+export function persistTrustedChange(currentSet, mutate, persist) {
+  const next = new Set(currentSet);
+  mutate(next);
+  let ok = false;
+  try { ok = persist(next) !== false; } catch { ok = false; }
+  return ok ? next : null;
 }
 
 export function loadPendingDevices() {
@@ -122,10 +140,15 @@ export function getLatestPendingDevice() {
 export function approveDevice(deviceToken) {
   if (!deviceToken || typeof deviceToken !== 'string') return false;
   loadTrustedDevices();
-  trustedDevices.add(deviceToken);
-  saveTrustedDevices();
+  // BE-011：先落盘（写入含新设备的集合），成功才把变更提交到内存；失败返回 false，不谎报信任已生效。
+  const next = persistTrustedChange(trustedDevices, s => s.add(deviceToken), writeTrustedSet);
+  if (next === null) {
+    console.error('[devices] 批准落盘失败，信任未生效:', deviceToken);
+    return false;
+  }
+  trustedDevices = next;
 
-  // 移出待审批
+  // 移出待审批（附带清理；即便这步失败也不影响信任判定）
   loadPendingDevices();
   pendingDevices = pendingDevices.filter(d => d.deviceToken !== deviceToken);
   savePendingDevices();
@@ -135,8 +158,14 @@ export function approveDevice(deviceToken) {
 export function denyDevice(deviceToken) {
   if (!deviceToken || typeof deviceToken !== 'string') return false;
   loadTrustedDevices();
-  trustedDevices.delete(deviceToken);
-  saveTrustedDevices();
+  // BE-011：吊销必须落盘成功才算数——否则 isDeviceTrusted 每次重读磁盘会让被吊销设备复活。
+  // 落盘失败返回 false，调用方据此告警、不记「吊销成功」审计。
+  const next = persistTrustedChange(trustedDevices, s => s.delete(deviceToken), writeTrustedSet);
+  if (next === null) {
+    console.error('[devices] 吊销落盘失败，吊销未生效:', deviceToken);
+    return false;
+  }
+  trustedDevices = next;
 
   // 移出待审批
   loadPendingDevices();

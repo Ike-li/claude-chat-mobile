@@ -29,6 +29,41 @@ function makeSession(opts = {}) {
   return { s, events, dispose: () => s.dispose() };
 }
 
+// BE-008：isBusy 综合忙判定——effort 切档需 dispose+resume 置换实例，只有完全 idle 才能安全置换。
+// 后台任务(bgTasks)/挂起审批/挂起问题都【不】计入 pendingTurns，只查 pendingTurns 会在它们进行时误杀。
+test.describe('isBusy（BE-008：effort 切档前的综合忙判定）', () => {
+  test('全空 → 空闲', () => {
+    const { s, dispose } = makeSession();
+    assert.equal(s.isBusy(), false);
+    dispose();
+  });
+  test('在途轮 pendingTurns>0 → 忙', () => {
+    const { s, dispose } = makeSession();
+    s.pendingTurns = 1;
+    assert.equal(s.isBusy(), true);
+    s.pendingTurns = 0;
+    dispose();
+  });
+  test('后台任务运行中（pendingTurns 仍为 0）→ 忙（防 effort 切档误杀 Workflow/后台 Agent/Bash）', () => {
+    const { s, dispose } = makeSession();
+    s.bgTasks.set('t1', { taskType: 'workflow', message: '', lastSeenAt: Date.now() });
+    assert.equal(s.pendingTurns, 0);
+    assert.equal(s.hasBgTasks(), true);
+    assert.equal(s.isBusy(), true);
+    dispose();
+  });
+  test('挂起审批 / 挂起问题 → 忙', () => {
+    const { s, dispose } = makeSession();
+    s.pendingPermissions.set('r1', {});
+    assert.equal(s.isBusy(), true);
+    s.pendingPermissions.clear();
+    s.pendingQuestions.set('q1', {});
+    assert.equal(s.isBusy(), true);
+    s.pendingQuestions.clear(); // 清掉假 pending 再 dispose，避免 dispose 的 deny 回调触碰空对象
+    dispose();
+  });
+});
+
 // ---- 构造函数 + 默认值 ----
 test.describe('AgentSession 构造函数', () => {
   test('默认值正确', () => {

@@ -30,7 +30,8 @@ import { onAuthResult, freshState, rlSourceKey } from './rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from './attention.js';
 import { listDir, readFile as browseReadFile } from './file-browse.js';
-import { checkAndRecord } from './message-dedup.js';
+import { isProcessed, commitProcessed } from './message-dedup.js';
+import { resolveInstanceTarget } from './instance-routing.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from './workdirs.js';
 import {
@@ -281,9 +282,11 @@ const routeCwd = cwd => {
   }
   return viewingCwdOf();
 };
-// 台阶3：按实例路由——instanceId ∈ live 则该实例，否则缺省落 viewingInstanceId（向后兼容缺参旧调用、防越界）。
-const resolveInstanceId = id => agents.has(id) ? id : viewingInstanceId;
-const routeInstance = id => agents.get(resolveInstanceId(id)) ?? null;
+// 台阶3：按实例路由（BE-001 fail-closed）——缺省（无 instanceId）落 viewingInstanceId（向后兼容缺参旧调用）；
+// 显式命中 live 取该实例；显式但已关闭 → stale（id=null，绝不静默回退 viewing、绝不误投别的会话）。见 instance-routing.js。
+const resolveTarget = id => resolveInstanceTarget(id, viewingInstanceId, x => agents.has(x));
+const resolveInstanceId = id => resolveTarget(id).id;   // 仅取 id：显式 stale → null（不再回退 viewing），无实例的 handler 自然 no-op/echo 拨回
+const routeInstance = id => { const rid = resolveInstanceId(id); return rid ? (agents.get(rid) ?? null) : null; };
 // audit_record 的 actor 字段（FR-19，承接 Phase 4）：deviceId 取握手带的 deviceToken（isLocal/CF Access
 // 直连场景恒无 token，null 属正常）；via 复用既有 socket.trustBasis（'device-token'/'bypass'），
 // 不新造一套分类，与 SEC-03 吊销对称逻辑用的是同一份信任来源判断。
@@ -650,16 +653,20 @@ if (process.stdin.isTTY) {
         if (others > 0) {
           console.log(`   ⚠️ 另有 ${others} 个待审设备未处理——请确认刚批准的正是你想放行的那台（如有疑虑，运行 node scripts/device.js deny "${latest}" 撤销）`);
         }
-        approveDevice(latest);
-        unlockDeviceSockets(latest);
-        broadcastPendingDevices();
+        if (approveDevice(latest)) {
+          unlockDeviceSockets(latest);
+          broadcastPendingDevices();
+        } else {
+          console.error(`   ❌ 批准 ${latest} 落盘失败、未生效，请检查服务端磁盘后重试`); // BE-011：不静默当成功
+        }
       }
     } else if (text === 'deny') {
       if (latest) {
         console.log(`\n[TTY] 收到 deny！拒绝并移除最新设备: ${latest}`);
-        denyDevice(latest);
-        disconnectDeviceSockets(latest);
+        const denied = denyDevice(latest);
+        disconnectDeviceSockets(latest); // 断连照做（纵深防御）
         broadcastPendingDevices();
+        if (!denied) console.error(`   ❌ 吊销 ${latest} 落盘失败、可能未生效（设备重连会复活），请检查服务端磁盘后重试`); // BE-011
       } else {
         console.log('\n[TTY] 当前没有等待审批的设备。');
       }
@@ -1509,9 +1516,12 @@ io.on('connection', socket => {
     // 已处理过的直接 ack 放行、不重复执行任何副作用（不重发校验提示、不重复调用 a.send）。
     // 无 ID（旧客户端未升级）→ 不去重，向后兼容。
     const clientMessageId = (payload && typeof payload === 'object') ? payload.clientMessageId : undefined;
-    const dedup = checkAndRecord(clientMessageId, messageDedupState);
-    messageDedupState = dedup.next;
-    if (dedup.duplicate) { if (typeof ack === 'function') ack({ ok: true, deduped: true }); return; }
+    // BE-002：这里只【查询】是否已处理过，登记推迟到消息真正成功入队之后（见下方 commitProcessed）。
+    // 若在此提前登记（旧 checkAndRecord 行为），校验失败/队满失败的 ID 会被记入，第二次重发命中去重
+    // 得到 {ok:true,deduped:true} 被客户端当成功删除 pending → 消息永久丢失（假成功丢消息根因）。
+    if (isProcessed(clientMessageId, messageDedupState)) {
+      if (typeof ack === 'function') ack({ ok: true, deduped: true }); return;
+    }
 
     const text = typeof payload === 'string' ? payload : payload?.text;
     const attachments = (payload && typeof payload === 'object') ? payload.attachments : undefined;
@@ -1519,20 +1529,20 @@ io.on('connection', socket => {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
     if (!hasText && !hasAttachments) {
       sysTo(socket, '消息为空或格式无效', true); // #12：不静默丢弃；用 system 不终结在途轮
-      if (typeof ack === 'function') ack({ ok: false, error: '消息为空或格式无效' });
+      if (typeof ack === 'function') ack({ ok: false, error: '消息为空或格式无效', permanent: true }); // BE-002：永久校验失败，客户端应停止重试
       return;
     }
     if (typeof text === 'string' && text.length > 50000) {
       // system 而非 error：发送前校验，不应 finalize 正在流式的在途任务（前端已先行红字提示）
       sysTo(socket, `消息过长（${text.length} 字符，上限 50000），未发送`, true);
-      if (typeof ack === 'function') ack({ ok: false, error: '消息过长' });
+      if (typeof ack === 'function') ack({ ok: false, error: '消息过长', permanent: true }); // BE-002：内容超长重发必再失败，客户端应停止重试而非无限重发
       return;
     }
     // E17：附件校验（条数/单文件/总量）。失败用 system 提示、不发送、不终结在途轮。
     const attErr = validateAttachments(attachments);
     if (attErr) {
       sysTo(socket, attErr, true);
-      if (typeof ack === 'function') ack({ ok: false, error: attErr });
+      if (typeof ack === 'function') ack({ ok: false, error: attErr, permanent: true }); // BE-002：附件非法重发必再失败，客户端应停止重试
       return;
     }
 
@@ -1540,7 +1550,16 @@ io.on('connection', socket => {
     const model = (payload && typeof payload === 'object') ? payload.model : undefined;
     // 台阶3：路由到目标实例（instanceId 优先）；无可路由实例（首发/session:new 后/无 open tab）则懒开一个
     // （resume 该 cwd 当前会话，无则新建；该会话已 live 则聚焦去重），设为查看 tab。
-    let a = routeInstance(payload && typeof payload === 'object' ? payload.instanceId : undefined);
+    const rawInstanceId = payload && typeof payload === 'object' ? payload.instanceId : undefined;
+    const target = resolveTarget(rawInstanceId);
+    if (target.stale) {
+      // BE-001：显式指定了一个已关闭 / 未知实例——fail-closed：不回退当前查看会话、不懒开，负 ACK 让客户端刷新后重发。
+      // 不 commit 去重 ID（客户端刷新拿到有效 instanceId 后可用同一 clientMessageId 重发）。
+      sysTo(socket, '目标会话已关闭，请刷新后重发', true);
+      if (typeof ack === 'function') ack({ ok: false, error: 'stale_instance', stale: true });
+      return;
+    }
+    let a = target.id ? (agents.get(target.id) ?? null) : null;
     if (!a) {
       // ensureWhitelisted 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
       // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
@@ -1574,18 +1593,27 @@ io.on('connection', socket => {
     }
     // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
     interactionLog.userMessageIn(a.logKey(), cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
+    let sent;
     if (hasAttachments) {
       // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
       // 气泡走 displayText（原文，不含路径）+ 去完整 data 的元数据（含小 thumb，进缓冲供回放）
       const saved = await saveAttachments(a.cwd, attachments);
-      await a.send(buildPromptText(cleanText, saved), model, {
+      sent = await a.send(buildPromptText(cleanText, saved), model, {
         displayText: cleanText, attachments: toEventMeta(saved)
       });
     } else {
-      await a.send(cleanText, model);               // F1：send 改 async（setModel 需 await）
+      sent = await a.send(cleanText, model);               // F1：send 改 async（setModel 需 await）
     }
+    // BE-002：send 返回 false = 队列已满或实例已弃用（可重试的临时失败），消息【未】入队。
+    // 必须回传 ok:false + retryable 让客户端保留 pending、稍后重连重试，且【不能】commit 去重 ID——
+    // 否则下次重发命中去重被假成功丢弃。旧代码无条件 ack{ok:true} 且忽略 send 返回值是「假成功丢消息」根因。
+    if (!sent) {
+      if (typeof ack === 'function') ack({ ok: false, error: '前面还有消息在排队，请稍后重试', retryable: true });
+      return;
+    }
+    // 只在消息真正成功入队后才登记去重 ID（此后同 ID 重发才判 duplicate、幂等）。
+    messageDedupState = commitProcessed(clientMessageId, messageDedupState);
     // 队列满（pendingTurns 1→2）时立即广播，前端禁发送按钮无延迟。
-    // result 边界已有广播，此处仅补"变满"方向；send 拒绝（return false）不改 pendingTurns、不触发。
     if (a.pendingTurns >= 2) broadcastInstances();
     if (typeof ack === 'function') ack({ ok: true, instanceId: a.instanceId });
   });
@@ -1621,19 +1649,32 @@ io.on('connection', socket => {
       return;
     }
     console.log(`[devices] 已信任设备 ${socket.id} 远程批准 ${deviceId}`);
-    approveDevice(deviceId);
-    unlockDeviceSockets(deviceId);
-    broadcastPendingDevices();
-    audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_approved', target: deviceId, outcome: 'allowed', meta: { via: 'web' } });
+    if (approveDevice(deviceId)) {
+      unlockDeviceSockets(deviceId);
+      broadcastPendingDevices();
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_approved', target: deviceId, outcome: 'allowed', meta: { via: 'web' } });
+    } else {
+      // BE-011：批准落盘失败——设备并未真正信任（isDeviceTrusted 每次重读磁盘），不解锁、不谎报成功，告警并提示重试。
+      broadcastPendingDevices();
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_approved', target: deviceId, outcome: 'error', meta: { via: 'web', persistFailed: true } });
+      sysTo(socket, '设备批准未能写入磁盘、未生效，请重试', true);
+    }
   });
   on(socket, 'user:denyDevice', payload => {
     const deviceId = payload?.deviceId;
     if (typeof deviceId !== 'string' || !deviceId) return;
     console.log(`[devices] 已信任设备 ${socket.id} 远程拒绝 ${deviceId}`);
-    denyDevice(deviceId);
-    disconnectDeviceSockets(deviceId);
+    const revoked = denyDevice(deviceId);
+    disconnectDeviceSockets(deviceId); // 断连照做：即便落盘失败，也先切断该设备当前连接（纵深防御）
     broadcastPendingDevices();
-    audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_denied', target: deviceId, outcome: 'denied', meta: { via: 'web' } });
+    if (revoked) {
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_denied', target: deviceId, outcome: 'denied', meta: { via: 'web' } });
+    } else {
+      // BE-011：吊销落盘失败——磁盘仍含该设备，下次 isDeviceTrusted 重读会复活，不谎报成功，告警 + 提示重试。
+      console.error(`[devices] 吊销 ${deviceId} 落盘失败，可能未生效`);
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'device_denied', target: deviceId, outcome: 'error', meta: { via: 'web', persistFailed: true } });
+      sysTo(socket, '设备吊销未能写入磁盘、可能未生效，请重试或检查服务端磁盘', true);
+    }
   });
 
   // 台阶3：切权限档（作用于指定实例，缺省 viewingInstanceId）。即时切（成功才落库 + 广播，失败
@@ -1693,7 +1734,9 @@ io.on('connection', socket => {
       return effortTo(socket);           // 其他无实例情形：echo 拨回
     }
     if (level === effortOf(id)) return;  // 幂等：同档不置换实例、不广播
-    if (a.pendingTurns > 0) {
+    // BE-008：后台任务(Workflow/后台 Agent/Bash)运行期 pendingTurns 为 0、挂起审批/问题同理，只查 pendingTurns
+    // 会在这些非 turn 活动进行时 disposeInstance→abort 误杀。改用 isBusy() 综合判定：完全 idle 才允许置换实例。
+    if (a.isBusy()) {
       sysTo(socket, '当前有任务在运行，请等结束后再切思考强度', true);
       return effortTo(socket);
     }

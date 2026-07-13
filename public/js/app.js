@@ -420,7 +420,12 @@ import { verifyIntegrity } from './canonicalize.js';
         cwd: item.cwd,
         clientMessageId: item.clientMessageId,
       }, (err, ack) => {
-        if (err || !ack?.ok) {
+        if (!err && ack && ack.ok === false && ack.permanent) {
+          // BE-002：服务端判定永久失败（空/超长/附件非法）——重发必再失败，停止重试、标记失败，不再 re-push。
+          if (indicator) indicator.textContent = `⚠️ ${ack.error || '发送失败'}，已停止重试`;
+          logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${ack.error || ''}），停止重试`);
+        } else if (err || !ack?.ok) {
+          // 超时或可重试失败（如服务端队列已满 retryable）：重新排队，等下次重连重试。
           if (indicator) indicator.textContent = '🕐 未确认送达，等待重连重试...';
           offlineQueue.push(item);
           logClientEvent('send', `[WEB_SEND] 离线消息重发未确认（${err ? '超时' : '服务端拒绝'}），已重新排队`);
@@ -1846,6 +1851,13 @@ import { verifyIntegrity } from './canonicalize.js';
     // 在线/离线两条路径共享同一个 ID（在离线分支判断前生成）。
     const clientMessageId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
+    // BE-002：长度预检必须在离线入队【之前】——否则离线时超长消息也会进 offlineQueue，重连重发被服务端拒，
+    // 反复无法送达。提前拦下，超长消息根本不入队（在线分支原来的重复校验已随之移到这里）。
+    if (typeof text === 'string' && text.length > 50000) {
+      addBar(`消息过长（${text.length}/50000），未发送`, 'text-danger');
+      return;
+    }
+
     // M2 / Weak Network Optimistic Sending Queue:
     if (!socket.connected) {
       // 离线状态：生成乐观消息气泡占位符，保存到离线重发队列，待重连后自动重发
@@ -1900,7 +1912,6 @@ import { verifyIntegrity } from './canonicalize.js';
       return;
     }
 
-    if (text.length > 50000) { addBar(`消息过长（${text.length}/50000），未发送`, 'text-danger'); return; }
     if (text.startsWith('/')) addBar(`⚡ 命令：${text}`, 'text-info');
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});

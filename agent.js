@@ -609,6 +609,12 @@ export class AgentSession {
     return removed;
   }
   hasBgTasks() { return this.bgTasks.size > 0; }
+  // BE-008：实例是否处于「不可安全 dispose」的活动态——供 effort 切档等需置换实例（dispose+resume）的操作判定。
+  // 后台任务(bgTasks)、挂起审批(pendingPermissions)、挂起问题(pendingQuestions)都【不】计入 pendingTurns，
+  // 只查 pendingTurns 会在这些非 turn 活动进行时 disposeInstance→abort 误杀它们。
+  isBusy() {
+    return this.pendingTurns > 0 || this.hasBgTasks() || this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0;
+  }
   bgTaskSummary() { // 取 lastSeenAt 最新一条 + 总数：server 据 taskType 映射 activeTool 图标（🤖/🖥），横幅显 message
     if (this.bgTasks.size === 0) return null;
     let latest = null;
