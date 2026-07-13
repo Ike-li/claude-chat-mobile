@@ -2150,7 +2150,7 @@ import { verifyIntegrity } from './canonicalize.js';
     // REDESIGN: Update active workspace text pill
     if (topProjectText) {
       topProjectText.textContent = baseName(currentCwd);
-      topContextPill.title = currentCwd ? `查看工作区、会话列表和后台状态：${currentCwd}` : '查看工作区、会话列表和后台状态';
+      topContextPill.title = currentCwd ? `浏览项目文件（只读）：${currentCwd}` : '浏览项目文件（只读）';
     }
     // pillWorkspace（📁 状态 pill）显当前工作区名——该 pill 是工作区入口，显 model 名是名实错配（2026-06-21）
     if ($('pillWorkspaceText')) $('pillWorkspaceText').textContent = baseName(currentCwd);
@@ -2791,11 +2791,15 @@ import { verifyIntegrity } from './canonicalize.js';
   if (settingsScrim) settingsScrim.onclick = closeSettingsSheet;
 
   if (pillModel) pillModel.onclick = openSettingsSheet; // 点底栏模型 chip → 开「选择模型」格
+  // 顶部 pill 原先只是 btnSessions 的重复代理（两者都调 toggleSessions，纯冗余入口）。
+  // 现改为直接打开当前工作区的只读文件浏览——抽屉入口从此唯一由左上角 btnSessions 承担，
+  // 不减少可达性，同时把「只读浏览文件」从抽屉里不起眼的小按钮换到常驻可见的位置。
   if (topContextPill) {
     topContextPill.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
-      toggleSessions();
+      haptic('tap');
+      openFileBrowser(currentCwd);
     };
   }
   
@@ -2922,7 +2926,9 @@ import { verifyIntegrity } from './canonicalize.js';
       dirRow.appendChild(newSessionBtn);
 
       // 项目文件只读浏览入口（FR-07）：挂在目录行本身，与"新建会话"平级——浏览目标是这个工作区，非某个会话。
-      const browseBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm shadow-sm transition-all" title="浏览项目文件（只读）">📄</button>`);
+      // 常显文字标签（非仅 hover-only 的 title）：移动端摸不到 title 提示，纯 📄 emoji 也无普遍共识含义，
+      // 首次看到猜不出是干嘛的（当前工作区已有顶部 pill 更显眼的入口，这里主要服务浏览非当前工作区文件）。
+      const browseBtn = el(`<button class="shrink-0 h-8 px-2 rounded-lg flex items-center gap-1 border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm shadow-sm transition-all" title="浏览项目文件（只读）"><span>📄</span><span class="text-[11px] font-medium">浏览</span></button>`);
       browseBtn.onclick = (e) => {
         e.stopPropagation();
         closeLeftSidebar();

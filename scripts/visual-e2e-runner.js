@@ -1431,6 +1431,42 @@ async function run() {
     await waitIdle();
     console.log('✅ TC-21: 排队接管(armed) passed\n');
 
+    // ==================================================================
+    // TC-22: 顶部工作区 pill 改为打开文件浏览 + 抽屉逐行按钮常显文字标签
+    // ==================================================================
+    console.log('👉 Running TC-22: 顶部 pill 打开文件浏览 + 抽屉浏览按钮文字标签...');
+
+    // 1) 点顶部 pill：应直接打开当前工作区的只读文件浏览弹层，不应打开工作区抽屉
+    //    （topContextPill 原先只是 btnSessions 的重复代理，职责收归给左上角图标按钮）
+    await page.click('#topContextPill');
+    await page.waitForSelector('#fileBrowseModal:not(.hidden)', { timeout: 5000 });
+    const topPillTC22 = await page.evaluate(() => ({
+      sidebarOpen: !document.getElementById('leftSidebar')?.classList.contains('-translate-x-full'),
+      browsePath: document.getElementById('fileBrowsePath')?.textContent || '',
+    }));
+    assert.strictEqual(topPillTC22.sidebarOpen, false, 'TC-22: 点顶部 pill 不应打开工作区抽屉');
+    assert.ok(topPillTC22.browsePath.includes('claude-chat-mobile'), 'TC-22: 顶部 pill 打开的应是当前工作区的文件浏览');
+    await page.click('#fileBrowseClose');
+    await page.waitForSelector('#fileBrowseModal.hidden', { timeout: 5000 });
+
+    // 2) 抽屉里逐工作区行的浏览按钮：改为常显文字标签，不再只靠 hover-only 的 title（移动端摸不到）
+    await page.click('#btnSessions');
+    await page.waitForSelector('#leftSidebar:not(.-translate-x-full)');
+    const browseBtnTextTC22 = await page.evaluate(() => {
+      const btn = document.querySelector('#sessionPanel button[title*="浏览项目文件"]');
+      return btn ? btn.textContent.trim() : null;
+    });
+    assert.ok(browseBtnTextTC22 && browseBtnTextTC22.length > 2, 'TC-22: 浏览按钮应带常显文字标签，不能只剩一个 emoji');
+
+    // 3) 该按钮点击后仍应能正常打开文件浏览（浏览非当前工作区文件的能力不因加标签而破坏）
+    await page.click('#sessionPanel button[title*="浏览项目文件"]');
+    await page.waitForSelector('#fileBrowseModal:not(.hidden)', { timeout: 5000 });
+    await page.waitForSelector('#leftSidebar.-translate-x-full', { timeout: 5000 });
+    await page.click('#fileBrowseClose');
+    await page.waitForSelector('#fileBrowseModal.hidden', { timeout: 5000 });
+
+    console.log('✅ TC-22: 顶部 pill 打开文件浏览 + 抽屉按钮文字标签 passed\n');
+
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');
     console.log('==================================================================\n');
