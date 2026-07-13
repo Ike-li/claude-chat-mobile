@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
 // 导入 devices 函数
 import {
@@ -22,16 +22,18 @@ import {
 
 // 路径
 const HERE = import.meta.dirname;
-const TRUSTED_DEVICES_FILE = join(HERE, '..', 'data', 'trusted-devices.json');
-const PENDING_DEVICES_FILE = join(HERE, '..', 'data', 'pending-devices.json');
+// TC-001：优先用 preload 注入的 CCM_*_DEVICES_FILE（临时目录），回退真实 data/——与 devices.js 同源，
+// 保证测试断言/备份的路径 = 模块实际写入路径，且 npm test 下彻底不碰生产 data/。
+const TRUSTED_DEVICES_FILE = process.env.CCM_TRUSTED_DEVICES_FILE || join(HERE, '..', 'data', 'trusted-devices.json');
+const PENDING_DEVICES_FILE = process.env.CCM_PENDING_DEVICES_FILE || join(HERE, '..', 'data', 'pending-devices.json');
 
-const TRUSTED_BACKUP = join(HERE, '..', 'data', 'trusted-devices.json.bak');
-const PENDING_BACKUP = join(HERE, '..', 'data', 'pending-devices.json.bak');
+const TRUSTED_BACKUP = TRUSTED_DEVICES_FILE + '.bak';
+const PENDING_BACKUP = PENDING_DEVICES_FILE + '.bak';
 
 test.describe('devices.js 单元测试', () => {
   // 备份原有数据
   test.before(() => {
-    mkdirSync(join(HERE, '..', 'data'), { recursive: true });
+    mkdirSync(dirname(TRUSTED_DEVICES_FILE), { recursive: true }); // 隔离目录（preload 临时）或回退真实 data/
     if (existsSync(TRUSTED_DEVICES_FILE)) {
       renameSync(TRUSTED_DEVICES_FILE, TRUSTED_BACKUP);
     }

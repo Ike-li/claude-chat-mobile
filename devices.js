@@ -7,8 +7,11 @@ import { writeOwnerOnlyFile } from './file-security.js';
 const HERE = import.meta.dirname || dirname(fileURLToPath(import.meta.url));
 // CCM_DATA_DIR 覆盖状态根——仅测试用，与 server.js/sessions.js 同精神（E2E 隔离生产 data/，绝不碰常驻 server 的 data/）。
 const DATA_DIR = process.env.CCM_DATA_DIR || join(HERE, 'data');
-const TRUSTED_DEVICES_FILE = join(DATA_DIR, 'trusted-devices.json');
-const PENDING_DEVICES_FILE = join(DATA_DIR, 'pending-devices.json');
+// 文件级重定向（TC-001，对称 approval-store 的 CCM_APPROVAL_STORE_FILE / sessions 的 CCM_SESSIONS_FILE）：
+// 优先级 CCM_*_DEVICES_FILE > CCM_DATA_DIR > data/。让单测 preload 把设备文件重定向到临时目录、彻底不碰
+// 生产 data/（避免 devices.test 的 rename 备份中断留残留 / 触发生产 watcher），又不动 CCM_DATA_DIR（不干扰集成测试）。
+const TRUSTED_DEVICES_FILE = process.env.CCM_TRUSTED_DEVICES_FILE || join(DATA_DIR, 'trusted-devices.json');
+const PENDING_DEVICES_FILE = process.env.CCM_PENDING_DEVICES_FILE || join(DATA_DIR, 'pending-devices.json');
 
 let trustedDevices = new Set();
 let pendingDevices = []; // Array of { deviceToken, ip, userAgent, ts }

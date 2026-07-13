@@ -21,6 +21,8 @@ test.describe('CCM_DATA_DIR 状态隔离', () => {
     TMP = mkdtempSync(join(tmpdir(), 'ccm-datadir-test-'));
     process.env.CCM_DATA_DIR = TMP;
     delete process.env.CCM_SESSIONS_FILE; // 确保走 CCM_DATA_DIR 回退而非独立覆盖
+    delete process.env.CCM_TRUSTED_DEVICES_FILE; // 同理：验证 CCM_DATA_DIR 隔离本身，设备文件须走 CCM_DATA_DIR 回退
+    delete process.env.CCM_PENDING_DEVICES_FILE;
     D = await import('../devices.js');
     S = await import('../sessions.js');
   });
