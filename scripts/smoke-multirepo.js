@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { existsSync, renameSync, rmSync, mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
+import { existsSync, rmSync, mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { getProjectDir } from '../history.js';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -40,18 +40,10 @@ function placeFixture() {
   writeFileSync(join(projA, `${markerId}.jsonl`), line + '\n');
 }
 
-// 借用真实 data/（server 写 sessions.json/init-cache.json，路径硬编码 join(HERE,'data',...)）：挪开、结束还原
-const STATE = ['sessions.json', 'init-cache.json'].map(f => {
-  const p = join(ROOT, 'data', f);
-  return { p, bak: p + '.mrbak' };
-});
-function stashState() { for (const { p, bak } of STATE) if (existsSync(p)) renameSync(p, bak); }
-function restoreState() {
-  for (const { p, bak } of STATE) {
-    if (existsSync(p)) rmSync(p, { force: true });   // 删测试痕迹
-    if (existsSync(bak)) renameSync(bak, p);         // 还原原件
-  }
-}
+// WS-017：给 server 独占临时 CCM_DATA_DIR，隔离生产 data/。旧实现 renameSync 挪真实 sessions.json/
+// init-cache.json 再还原（「路径硬编码不可配」注释已过时——CCM_DATA_DIR 早已支持）：无锁 rename + 不等
+// 子进程退出就还原 + 子进程 SIGTERM flush 可覆盖回刚还原的生产文件，均可损坏生产状态。改临时数据根后免 stash。
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'ccm-smoke-multirepo-'));
 
 let server = null, serverLog = '', cleaned = false;
 function cleanup() {
@@ -61,7 +53,7 @@ function cleanup() {
   try { if (projAcreated) rmSync(projA, { recursive: true, force: true }); } catch {}
   try { rmSync(dirA, { recursive: true, force: true }); } catch {}
   try { rmSync(dirB, { recursive: true, force: true }); } catch {}
-  restoreState();
+  try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch {} // WS-017：删临时数据根（隔离生产 data/）
 }
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { cleanup(); process.exit(130); });
 
@@ -104,11 +96,10 @@ async function setWorkdir(s, events, cwd) {
 }
 
 async function run() {
-  stashState();
   placeFixture();
   server = spawn('node', ['server.js'], {
     cwd: ROOT,
-    env: { ...process.env, AUTH_TOKEN: '', PORT: String(APP_PORT), WORK_DIR: dirA, WORK_DIRS: `${dirA},${dirB}` },
+    env: { ...process.env, AUTH_TOKEN: '', PORT: String(APP_PORT), WORK_DIR: dirA, WORK_DIRS: `${dirA},${dirB}`, CCM_DATA_DIR: DATA_DIR },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   server.stdout.on('data', d => (serverLog += d));

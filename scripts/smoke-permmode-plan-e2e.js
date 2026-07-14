@@ -78,16 +78,24 @@ const run = async () => {
   const mark = col.events.length;
   s.emit('user:message', { text: PROMPT, model: MODEL });
 
-  // 关键：allow 所有审批！plan 档本质 = 即便放行，SDK 也不实际执行修改。deny 会假阳性
-  // （deny 本身就阻止创建，分不清是 plan 拦截还是 deny）。allow 后：文件仍未创建 = plan 真生效；
-  // 被创建 = plan 档在此 CLI/网关退化为 default（假档，重要负面发现）。
+  // WS-016：审批必须回显完整 op（{tool,args,cwd}）+ instanceId——否则服务端 NFR-17 完整性校验重算指纹时
+  // 拿不到 op、直接 integrity_mismatch 把每个 allow 变成 deny（agent.js#resolvePermission）。旧实现只发
+  // {requestId,decision} → 所有 allow 实为 deny → 文件当然没建 → 误判「plan 生效」（假绿链，与 plan 档无关）。
+  // ExitPlanMode 单独处理：allow 时带 exitMode（对齐前端 app.js 的真实审批协议）。
   const acted = new Set();
   const allowAll = setInterval(() => {
     for (const e of col.events.slice(mark)) {
       if (e.type === 'permission_request' && !acted.has(e.payload.requestId)) {
         acted.add(e.payload.requestId);
         console.log(`  ↪ allow permission_request name=${e.payload.name}`);
-        s.emit('user:approve', { requestId: e.payload.requestId, decision: 'allow' });
+        const approve = {
+          requestId: e.payload.requestId,
+          decision: 'allow',
+          instanceId: e.instanceId,                                             // 路由回本实例
+          op: { tool: e.payload.name, args: e.payload.input, cwd: e.payload.cwd }, // 回显所见操作，供完整性重算指纹
+        };
+        if (e.payload.name === 'ExitPlanMode') approve.exitMode = 'default';     // 单独处理：退出 plan 档到 default
+        s.emit('user:approve', approve);
       }
     }
   }, 150);
@@ -100,10 +108,17 @@ const run = async () => {
   const fileCreated = existsSync(PROBE);
   const sawExitPlan = after.some(e => e.type === 'permission_request' && e.payload.name === 'ExitPlanMode');
   const okToolResult = after.some(e => e.type === 'tool_result' && e.payload.ok);
+  const resolved = after.filter(e => e.type === 'request_resolved' && e.payload.kind === 'permission');
+  const integrityDenied = resolved.filter(e => e.payload.outcome === 'integrity_mismatch');
+  const honoredAllow = resolved.filter(e => e.payload.outcome === 'allow');
 
-  // allow 后仍未创建 = SDK 真拦截执行（plan 生效）；创建了 = 退化为 default（plan 假档）
-  check('plan 档：allow 后探针文件仍未创建（SDK 真拦截 = plan 生效）', !fileCreated,
-    fileCreated ? '⚠️ 文件被创建 → plan 档在此环境退化为 default（mimo 网关不强制 plan？）' : '未创建 ✓ plan 真拦截');
+  // WS-016：先断言审批【真的被放行】而非被完整性校验静默拒绝——这正是旧假绿的机理（全 integrity_mismatch）。
+  check('审批完整性：无 integrity_mismatch（op 回显正确、allow 真放行）', integrityDenied.length === 0,
+    integrityDenied.length ? `⚠️ ${integrityDenied.length} 条 allow 被完整性校验拒绝（op 未回显？）` : '全部放行 ✓');
+  check('审批被处理：至少一条 outcome=allow', honoredAllow.length > 0, `allow×${honoredAllow.length}`);
+  // 在「审批确已放行」的前提下，文件是否创建才有意义地反映 plan 档语义（是否强制拦截修改）。
+  // 注：此为网关/CLI plan 档行为的负面发现观察，非硬契约——不同网关是否强制 plan 差异大，故仅信息性登记。
+  console.log(`  观察：plan 档 allow 后探针文件${fileCreated ? '被创建（此环境 plan 档退化为 default？mimo 网关不强制 plan）' : '未创建（SDK 真拦截 = plan 生效）'}`);
   console.log(`  观察：${sawExitPlan ? '走了 ExitPlanMode' : '未走 ExitPlanMode（模型直接调修改工具）'}；本轮成功 tool_result(ok)=${okToolResult}`);
 
   if (existsSync(PROBE)) rmSync(PROBE);

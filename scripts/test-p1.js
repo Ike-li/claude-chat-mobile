@@ -33,16 +33,13 @@ socket.on('connect', () => {
     }
 
     // 测试 E7 需要 Claude 主动调用 AskUserQuestion，这里只验证事件响应
-    console.log('\n📋 测试 E7：AskUserQuestion 事件响应');
-    console.log('   （需真实 Claude 对话触发 AskUserQuestion，此处仅验证通道）');
+    console.log('\n📋 测试 E7：AskUserQuestion 通道存活');
+    console.log('   （真实解析需真实 Claude 对话触发 AskUserQuestion + 真 requestId，那需真 token；此处仅验证通道）');
 
-    // 模拟发送 user:answer（实际场景由前端弹窗触发）
-    socket.emit('user:answer', { requestId: 'test_q', optionIndex: 0 });
-    console.log('✅ user:answer 事件发送成功（无报错）');
-    passed++;
-
-    // 总结
-    setTimeout(() => {
+    // 总结（抽成函数：改由 E7 round-trip 的 ack 触发，不再靠固定 500ms 定时器）
+    let summarized = false;
+    const summarize = () => {
+      if (summarized) return; summarized = true;
       console.log(`\n${'='.repeat(50)}`);
       console.log(`验收结果: ${passed} 通过 / ${failed} 失败`);
       console.log('\n📝 手动验收步骤（浏览器）:');
@@ -52,7 +49,22 @@ socket.on('connect', () => {
       console.log('   （例如："帮我选择一个方案"，Claude 可能会用 AskUserQuestion）');
       socket.disconnect();
       process.exit(failed > 0 ? 1 : 0);
-    }, 500);
+    };
+
+    // WS-018：旧实现向【硬编码假 requestId 'test_q'】发 answer，服务端对未知 requestId 是 no-op、无 ack，
+    // 却无条件 passed++——纯假绿（无论服务端是否真处理都"通过"）。真实解析需真实 pending question（真 token）。
+    // 零 token 下唯一可确证的真实信号：发一条 answer 后，用一次真实 session:list round-trip 断言【通道仍响应】
+    // （服务端处理未知 answer 未崩、socket 存活）。真实 AskUserQuestion 解析验证留给上面的手动步骤 / 真实对话。
+    let e7Done = false;
+    const finishE7 = alive => {
+      if (e7Done) return; e7Done = true;
+      if (alive) { console.log('✅ E7 通道存活：发送 user:answer 后服务端仍响应'); passed++; }
+      else { console.log('❌ E7 通道异常：user:answer 后 session:list 无有效响应'); failed++; }
+      summarize();
+    };
+    socket.emit('user:answer', { requestId: 'nonexistent_no_pending_q', optionIndex: 0 }); // 无对应 pending → 服务端 no-op
+    socket.emit('session:list', state => finishE7(!!(state && Array.isArray(state.sessions))));
+    setTimeout(() => finishE7(false), 3000); // 兜底：3s 内无 ack 视为通道异常
   });
 });
 

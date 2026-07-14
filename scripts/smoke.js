@@ -74,8 +74,14 @@ try {
     const reply2 = await ask('我们刚才创建的文件叫什么名字？只回答文件名。');
     check('A1-多轮上下文连续', reply2.includes('demo.md'), reply2.trim().slice(0, 60));
 
-    // --- envelope 契约：所有事件带 epoch（#2 客户端去重依赖）---
-    check('契约-envelope带epoch', events.filter(e => e.epoch && e.epoch !== 'server').every(e => typeof e.epoch === 'string'));
+    // --- envelope 契约：所有【业务流式事件】带 epoch（#2 客户端去重依赖）---
+    // WS-015：旧写法 events.filter(有epoch).every(是字符串)——若所有业务事件都【丢了】epoch（正是要防的回归
+    // 形态），filter 结果为空数组、[].every()===true 假绿。改为先按类型独立选出「本轮必产且应带 epoch」的
+    // 业务事件（Write 轮次的 tool_use/tool_result/text_delta），断言非空，再要求每条都有合法非 'server' epoch。
+    const EPOCH_EVENT_TYPES = ['tool_use', 'tool_result', 'text_delta'];
+    const bizEvents = since(beforeA2).filter(e => EPOCH_EVENT_TYPES.includes(e.type));
+    check('契约-业务事件存在（epoch 断言前提）', bizEvents.length > 0, `${bizEvents.length} 条`);
+    check('契约-envelope带epoch', bizEvents.length > 0 && bizEvents.every(e => typeof e.epoch === 'string' && e.epoch !== 'server'));
 
     // --- 会话切换：不崩（覆盖 #1 sessionExists 崩溃路径）+ 切回后 resume 连续 ---
     const emitAck = (event, payload) => new Promise(res => {

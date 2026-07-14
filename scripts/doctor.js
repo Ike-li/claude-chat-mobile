@@ -176,7 +176,7 @@ function checkStatuslineConfig() {
 
 // D6: 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
 function checkAnthropicEnv() {
-  const envPath = join(HERE, '.env');
+  const envPath = EFFECTIVE.envFile; // WS-011：读被诊断的 .env（--env 指定），非硬编码仓库 HERE/.env
   if (!existsSync(envPath)) {
     ok('ANTHROPIC_* 环境', '.env 不存在（可选）');
     return;
@@ -210,7 +210,7 @@ function checkConfigPermissions() {
     return;
   }
 
-  const files = CONFIG_FILE_NAMES.map(name => ({ path: join(HERE, name), name }));
+  const files = effectiveConfigFiles(); // WS-011：检查 effective 上下文的 .env + 数据目录，非硬编码仓库路径
 
   const problems = [];
   for (const { path, name } of files) {
@@ -291,6 +291,24 @@ if (existsSync(envFile)) {
   process.exit(1);
 }
 
+// WS-011：统一 effective config 上下文。旧实现 --env 只影响 dotenv 加载（改 process.env），D6/D7/--fix 仍硬读
+// 仓库 HERE/.env 与 HERE/data → 诊断指定 prod 配置时检查的是本仓库文件、给出假绿。此处据 --env 解析出被诊断
+// 配置的实际 .env 与数据目录，加载/检查/--fix 全用同一上下文。dataDir 取 CCM_DATA_DIR（可能由刚加载的 env
+// 文件设定）否则回退 HERE/data；常规无 --env / 无 CCM_DATA_DIR 场景等价旧行为，无回归。
+const EFFECTIVE = {
+  envFile,
+  dataDir: process.env.CCM_DATA_DIR || join(HERE, 'data'),
+};
+// 把 CONFIG_FILE_NAMES（单一事实源清单）映射到 effective 绝对路径：'.env' → 被诊断的 envFile；
+// 'data/xxx.json' → 实际数据目录下的 xxx.json。
+function effectiveConfigFiles() {
+  return CONFIG_FILE_NAMES.map(name => {
+    if (name === '.env') return { path: EFFECTIVE.envFile, name };
+    const base = name.replace(/^data[/\\]/, '');
+    return { path: join(EFFECTIVE.dataDir, base), name };
+  });
+}
+
 // 执行 10 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
@@ -320,7 +338,7 @@ function fixConfigFiles() {
     return;
   }
 
-  const files = CONFIG_FILE_NAMES.map(name => join(HERE, name));
+  const files = effectiveConfigFiles().map(f => f.path); // WS-011：--fix 修的是 effective 上下文的文件，与检查同源
 
   let fixed = 0;
   let skipped = 0;

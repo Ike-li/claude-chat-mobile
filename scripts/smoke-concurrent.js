@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { existsSync, renameSync, rmSync, mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
+import { existsSync, rmSync, mkdtempSync, mkdirSync, writeFileSync, realpathSync } from 'node:fs';
 import { getProjectDir } from '../history.js';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -52,18 +52,11 @@ function placeFixtures() {
   }
 }
 
-// 借用真实 data/（server 写 sessions.json/init-cache.json，路径硬编码 join(HERE,'data',...)）：挪开、结束还原
-const STATE = ['sessions.json', 'init-cache.json'].map(f => {
-  const p = join(ROOT, 'data', f);
-  return { p, bak: p + '.ccbak' };
-});
-function stashState() { for (const { p, bak } of STATE) if (existsSync(p)) renameSync(p, bak); }
-function restoreState() {
-  for (const { p, bak } of STATE) {
-    if (existsSync(p)) rmSync(p, { force: true });   // 删测试痕迹
-    if (existsSync(bak)) renameSync(bak, p);         // 还原原件
-  }
-}
+// WS-017：给 server 独占临时 CCM_DATA_DIR，隔离生产 data/。旧实现用 renameSync 把真实 sessions.json/
+// init-cache.json 挪到 .ccbak 再还原（注释「路径硬编码不可配」已过时——sessions.js/server.js 早已支持
+// CCM_DATA_DIR、集成测试都在用）：无锁 rename + 不等子进程退出就还原 + 子进程 SIGTERM flush 可覆盖回刚还原
+// 的生产文件，任一都可损坏生产状态。改临时数据根后无需任何 stash/restore，结束整目录删除即可。
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'ccm-smoke-concurrent-'));
 
 let server = null, serverLog = '', cleaned = false;
 function cleanup() {
@@ -75,7 +68,7 @@ function cleanup() {
   try { if (projBcreated) rmSync(projB, { recursive: true, force: true }); } catch {}
   try { rmSync(dirA, { recursive: true, force: true }); } catch {}
   try { rmSync(dirB, { recursive: true, force: true }); } catch {}
-  restoreState();
+  try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch {} // WS-017：删临时数据根（隔离生产 data/）
 }
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { cleanup(); process.exit(130); });
 
@@ -117,7 +110,7 @@ async function runContract() {
   const { s: s1, events: e1 } = await connect();
   await sleep(500);
 
-  // 1) instances 重放 shape：viewingCwd=dirA（WORK_DIR）、无实例（sessions.json 已 stash、无预热指针）+ dirs 白名单
+  // 1) instances 重放 shape：viewingCwd=dirA（WORK_DIR）、无实例（临时数据根为空、无预热指针）+ dirs 白名单
   const inst0 = lastOf(e1, 'instances');
   check('instances 重放 viewingCwd=dirA + dirs 含 dirA/dirB（合成事件 epoch=server seq=0）',
     inst0?.payload?.viewingCwd === dirA && inst0.payload.dirs.includes(dirA) && inst0.payload.dirs.includes(dirB) &&
@@ -200,11 +193,10 @@ async function runE2E() {
 }
 
 async function run() {
-  stashState();
   placeFixtures();
   server = spawn('node', ['server.js'], {
     cwd: ROOT,
-    env: { ...process.env, AUTH_TOKEN: '', PORT: String(APP_PORT), WORK_DIR: dirA, WORK_DIRS: `${dirA},${dirB}` },
+    env: { ...process.env, AUTH_TOKEN: '', PORT: String(APP_PORT), WORK_DIR: dirA, WORK_DIRS: `${dirA},${dirB}`, CCM_DATA_DIR: DATA_DIR },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   server.stdout.on('data', d => (serverLog += d));

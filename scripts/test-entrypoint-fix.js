@@ -34,13 +34,16 @@ const tests = [
 
       // 等待 init 事件获取 session ID
       const sessionId = await new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error('未收到 init 事件')), 10000);
-        socket.on('agent:event', (envelope) => {
-          if (envelope.type === 'init' && envelope.payload?.sessionId) {
-            clearTimeout(timeout);
-            resolve(envelope.sessionId);
-          }
-        });
+        // WS-014：sessionId 在信封【顶层】（envelope.sessionId），旧 guard 查 envelope.payload?.sessionId 恒
+        // falsy → if 永不成立 → 永不 resolve → 必 10s 超时挂。改查顶层字段；resolve/reject 时清 timeout + off
+        // 监听器（否则 agent:event 监听器泄漏、进程句柄不释放）。
+        let timeout;
+        const onEvent = (envelope) => {
+          if (envelope.type === 'init' && envelope.sessionId) { finish(); resolve(envelope.sessionId); }
+        };
+        const finish = () => { clearTimeout(timeout); socket.off('agent:event', onEvent); };
+        timeout = setTimeout(() => { finish(); reject(new Error('未收到 init 事件')); }, 10000);
+        socket.on('agent:event', onEvent);
       });
 
       socket.disconnect();

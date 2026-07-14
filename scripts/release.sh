@@ -118,15 +118,21 @@ git add package.json package-lock.json
 git commit -q -m "chore: 发版 $TAG"
 git checkout -q master
 git merge --ff-only dev >/dev/null
-git push origin master
+# WS-012：先在本地建好 tag，再用 `git push --atomic` 一次性推 master + dev + tag——任一 ref 被拒则整批回滚，
+# 杜绝旧实现「四次独立 push 中途失败留下远端部分发布（master 推了但 tag/dev 没推）、重跑又被空 diff / 既有 tag
+# 阻断」的部分发布态。master 已 ff 自 dev，两 ref 同指发版 commit、tag 指 master，三者一致。
+git tag -a "$TAG" -m "$TAG" master
+git push --atomic origin master dev "$TAG"
+TAG_PUSHED=1   # 原子推送整体成功：cleanup 不应再删本地 tag
 sleep 2
 [ "$(git ls-remote origin refs/heads/master | cut -f1)" = "$(git rev-parse master)" ] || die "origin/master 未更新到位（push 可能静默失败），请手动检查后重试"
-git tag -a "$TAG" -m "$TAG" master
-git push origin "$TAG"
-TAG_PUSHED=1   # 推送已确认成功：cleanup 不应再删本地 tag
 git checkout -q dev
-git push origin dev
-gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" --latest --verify-tag
+# GitHub Release 作幂等 reconciliation：已存在（如上一次跑到这里网络抖断）则改为 edit，不因「release 已存在」中止。
+if gh release view "$TAG" >/dev/null 2>&1; then
+  gh release edit "$TAG" --title "$TAG" --notes-file "$NOTES" --latest
+else
+  gh release create "$TAG" --title "$TAG" --notes-file "$NOTES" --latest --verify-tag
+fi
 SUCCESS=1      # 全流程完成：cleanup 跳过"删 tag / 切回 dev"的失败态收拾
 
 say ""

@@ -15,7 +15,7 @@ import { io } from 'socket.io-client';
 import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { join } from 'node:path';
-import { existsSync, renameSync, rmSync, mkdtempSync } from 'node:fs';
+import { existsSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -41,21 +41,10 @@ const mock = http.createServer((req, res) => {
   });
 });
 
-// 借用真实 data/ 前先把会话指针与 init 缓存挪开（路径硬编码 join(HERE,'data',...)，不可配），结束原样还原。
-const STATE = ['sessions.json', 'init-cache.json'].map(f => {
-  const p = join(ROOT, 'data', f);
-  const bak = p + '.apierrbak';
-  return { p, bak };
-});
-function stashState() {
-  for (const { p, bak } of STATE) if (existsSync(p)) renameSync(p, bak);
-}
-function restoreState() {
-  for (const { p, bak } of STATE) {
-    if (existsSync(p)) rmSync(p, { force: true });      // 删测试产生的痕迹
-    if (existsSync(bak)) renameSync(bak, p);            // 还原原件
-  }
-}
+// WS-017：给 server 独占临时 CCM_DATA_DIR，隔离生产 data/。旧实现 renameSync 挪真实 sessions.json/
+// init-cache.json 再还原（「路径硬编码不可配」注释已过时——CCM_DATA_DIR 早已支持）：无锁 rename + 不等
+// 子进程退出就还原 + 子进程 SIGTERM flush 可覆盖回刚还原的生产文件，均可损坏生产状态。改临时数据根后免 stash。
+const DATA_DIR = mkdtempSync(join(tmpdir(), 'ccm-smoke-apierr-data-'));
 
 let server = null, serverLog = '', workDir = null, cleaned = false;
 function cleanup() {
@@ -63,7 +52,7 @@ function cleanup() {
   try { if (server && !server.killed) server.kill('SIGTERM'); } catch {}
   try { mock.close(); } catch {}
   try { if (workDir) rmSync(workDir, { recursive: true, force: true }); } catch {}
-  restoreState();
+  try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch {} // WS-017：删临时数据根（隔离生产 data/）
 }
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { cleanup(); process.exit(130); });
 
@@ -92,7 +81,7 @@ async function run() {
   await new Promise(res => mock.listen(0, '127.0.0.1', res));
   const mockPort = mock.address().port;
 
-  stashState();
+  // WS-017：原 stashState() 已删——server 走独占 CCM_DATA_DIR，不再挪动生产 data/
   workDir = mkdtempSync(join(tmpdir(), 'ccm-apierr-'));
 
   // 干净子进程 env：剥掉继承的所有 ANTHROPIC_*（防机主真实网关泄入），只留指向 mock 的两项。
@@ -105,6 +94,7 @@ async function run() {
     AUTH_TOKEN: '',                 // 空 → 规整剥除 → 无鉴权、仅 127.0.0.1
     PORT: String(APP_PORT),
     WORK_DIR: workDir,
+    CCM_DATA_DIR: DATA_DIR,          // WS-017：独占临时数据根，隔离生产 data/
     STATUS_LINE_CMD: 'off',         // 关 E16，去掉无关副作用（影子 HOME / 脚本执行）
   });
   server = spawn(process.execPath, [join(ROOT, 'server.js')], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] });

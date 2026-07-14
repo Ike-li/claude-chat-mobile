@@ -81,14 +81,21 @@ try {
   const s2 = await connect(col2, 'conn2');
   s2.emit('sync:since', { sessionId: health.sessionId, lastSeq: cutSeq });
   console.log('④ 已重连，请求续传 lastSeq=' + cutSeq);
-  // 等任务收尾（若断开期间已完成，补发里就有 result；否则等实时 result）
-  await waitFor(col2, e => e.type === 'result', 180000, '任务 result');
+  // WS-020：按 hadResultBeforeCut 分支。若 result 在断网【前】就已完成（模型过快），它的 seq < cutSeq，
+  // sync:since 从 cutSeq+1 起补发不含它 → 旧的无条件 `waitFor(result, 180000)` 会空等满 180 秒误报失败。
+  // 已完成路径改用确定性短延迟（给补发/收尾落地一点时间即可），未完成路径才等实时 result 收尾。
+  if (hadResultBeforeCut) {
+    console.log('   ⚠️ result 断网前已完成，跳过 180s 等待（存活类断言下方标 N/A）');
+    await sleep(1500);
+  } else {
+    await waitFor(col2, e => e.type === 'result', 180000, '任务 result');
+  }
   await sleep(500); // 收尾事件落地
 
   // ── 断言 ──
   const replay = col2.events.filter(e => e.epoch && e.epoch !== 'server');
-  check('A5-断开期间任务存活', replay.some(e => e.seq > cutSeq),
-    `重连后收到 ${replay.length} 个事件（seq 最大 ${col2.lastSeq}）`);
+  check('A5-断开期间任务存活', hadResultBeforeCut || replay.some(e => e.seq > cutSeq),
+    hadResultBeforeCut ? '任务断前已完成（存活断言 N/A）' : `重连后收到 ${replay.length} 个事件（seq 最大 ${col2.lastSeq}）`);
   check('A5-epoch一致(同实例续传)', replay.every(e => e.epoch === cutEpoch), `epoch=${cutEpoch}`);
 
   // seq 连续性：补发+实时合并后，从 cutSeq+1 起无缺口、无重复
