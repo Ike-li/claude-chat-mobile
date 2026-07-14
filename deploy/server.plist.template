@@ -3,18 +3,23 @@
   占位符 plist 模板 —— 别直接加载本文件。复制它、把下列占位符替换成你的真实值后，
   落到 ~/Library/LaunchAgents/<你的-label>.plist 再 bootstrap。
 
-  占位符（下划线包裹、XML 安全，便于 sed 批量替换）：
+  占位符（下划线包裹）：
     __LABEL__   LaunchAgent 标签，须与目标文件名一致，如 com.you.ccm-server
     __REPO__    仓库绝对路径，如 /Users/you/code/claude-chat-mobile
     __NODE__    node 绝对路径（command -v node），如 /opt/homebrew/bin/node
     __LOG__     日志绝对路径，如 /Users/you/Library/Logs/ccm-server.log
 
-  一键替换（在仓库根执行，按需改 label）：
-    sed -e 's#__LABEL__#com.you.ccm-server#' \
-        -e 's#__REPO__#'"$PWD"'#' \
-        -e 's#__NODE__#'"$(command -v node)"'#' \
-        -e 's#__LOG__#'"$HOME/Library/Logs/ccm-server.log"'#' \
-        deploy/server.plist.template > ~/Library/LaunchAgents/com.you.ccm-server.plist
+  审计 TC-009：直接用 sed 对上述占位符做字符串替换不安全——替换值（路径）若含 sed 替换特殊字符
+  `&`（插入整个匹配串）或定界符本身 `#`，会破坏替换结果；含 XML 元字符（`&`/`<`/`>`）还会生成
+  非法 plist。改用 scripts/render-plist.js（字面量 split/join，非正则、非 shell，且对替换值做
+  XML 转义）：
+
+    node scripts/render-plist.js deploy/server.plist.template \
+      ~/Library/LaunchAgents/com.you.ccm-server.plist \
+      LABEL=com.you.ccm-server REPO="$PWD" NODE="$(command -v node)" \
+      LOG="$HOME/Library/Logs/ccm-server.log"
+
+  （示例里的 "$PWD" 外层双引号是保护当前 shell 调用本命令时的参数边界，与模板内部的转义无关。）
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -25,8 +30,9 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <!-- 登录 shell 启动以保终端等价性：claude 的 PATH / 登录态与你终端一致 -->
-    <string>cd __REPO__ &amp;&amp; exec __NODE__ server.js</string>
+    <!-- 登录 shell 启动以保终端等价性：claude 的 PATH / 登录态与你终端一致。下面两个路径占位符都加了
+         双引号，防路径含空格时被 zsh word-split（TC-009）；仍不支持路径含字面双引号字符的极端情况。 -->
+    <string>cd "__REPO__" &amp;&amp; exec "__NODE__" server.js</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

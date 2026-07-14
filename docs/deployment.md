@@ -68,7 +68,7 @@ cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
 - [`deploy/server.plist.template`](../deploy/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
 - [`deploy/tunnel.plist.template`](../deploy/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
 
-每份模板顶部的 XML 注释列出占位符（`__LABEL__`/`__REPO__`/`__NODE__`/`__LOG__` 等）与一行可直接跑的 `sed` 替换示例。替换后加载：
+每份模板顶部的 XML 注释列出占位符（`__LABEL__`/`__REPO__`/`__NODE__`/`__LOG__` 等）与一行可直接跑的 `node scripts/render-plist.js` 替换示例（字面量替换 + XML 转义，不用裸 `sed`——审计 TC-009：路径若含空格/`&`/`#`/引号等特殊字符，裸 `sed` 可能破坏替换或生成非法 plist）。替换后加载：
 
 ```bash
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-server-label>.plist

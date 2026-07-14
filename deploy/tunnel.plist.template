@@ -13,12 +13,14 @@
     __TUNNEL__        命名隧道名或 UUID（与 config.yml 的 tunnel 一致）
     __LOG__           日志绝对路径，如 /Users/you/Library/Logs/ccm-tunnel.log
 
-  一键替换（在仓库根执行，按需改值）：
-    sed -e 's#__LABEL__#com.you.ccm-tunnel#' \
-        -e 's#__CLOUDFLARED__#'"$(command -v cloudflared)"'#' \
-        -e 's#__TUNNEL__#your-tunnel-name#' \
-        -e 's#__LOG__#'"$HOME/Library/Logs/ccm-tunnel.log"'#' \
-        deploy/tunnel.plist.template > ~/Library/LaunchAgents/com.you.ccm-tunnel.plist
+  审计 TC-009：别直接用 sed 替换——定界符/替换特殊字符/XML 元字符都可能破坏结果（本模板每个占位符
+  都是独立 ProgramArguments 数组元素，不经 shell 解析，但仍需要正确的 XML 转义）。改用
+  scripts/render-plist.js（字面量替换 + XML 转义）：
+
+    node scripts/render-plist.js deploy/tunnel.plist.template \
+      ~/Library/LaunchAgents/com.you.ccm-tunnel.plist \
+      LABEL=com.you.ccm-tunnel CLOUDFLARED="$(command -v cloudflared)" \
+      TUNNEL=your-tunnel-name LOG="$HOME/Library/Logs/ccm-tunnel.log"
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
