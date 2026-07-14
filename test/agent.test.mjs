@@ -529,25 +529,9 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
-  test('stream_event 的 parent_tool_use_id 非空 → 跳过', () => {
-    const { s, events } = makeSession();
-    s.map({ type: 'stream_event', event: { type: 'content_block_delta',
-      delta: { type: 'text_delta', text: 'sub' } }, parent_tool_use_id: 'parent-1', uuid: 'u1' });
-    // 无 text_delta 事件
-    assert.equal(events.length, 0);
-    s.dispose();
-  });
-
-  test('assistant 的 parent_tool_use_id 非空 → 跳过（子 agent 不外露，与 history isSidechain 侧对称）', () => {
-    const { s, events } = makeSession();
-    // 子 agent 的 assistant 消息（带 tool_use + 文字正文）——运行期守卫应整条跳过，不 emit 任何事件。
-    s.map({ type: 'assistant', parent_tool_use_id: 'parent-1', message: { content: [
-      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } },
-      { type: 'text', text: '子 agent 内部文字' },
-    ] } });
-    assert.equal(events.length, 0, '带 parent_tool_use_id 的 assistant 不应 emit tool_use/text_delta');
-    s.dispose();
-  });
+  // 注：原「stream_event / assistant 的 parent_tool_use_id → 整条跳过」两测已删除——
+  // 行为从「丢弃子 agent 消息」改为「分流 emit 带 parentToolUseId」（子 agent 可见），
+  // 见下方 describe「map() — 子 agent 消息分流」。此处仅保留「error 不误报主会话」「user 仍跳过」两条回归。
 
   test('assistant 带 error 且 parent_tool_use_id 非空 → 子 agent 内部报错不应误报为主会话 error（code-review P0）', () => {
     const { s, events } = makeSession();
@@ -1000,6 +984,106 @@ test.describe('map() — 活的后台任务注册表（bgTasks，驱动纯后台
 });
 
 // ---- logMeta()：统一模型/effort/permission 解析（消除 send vs result 的 defaultModel/'default' 漂移）----
+test.describe('map() — background_tasks_changed 全量 reconcile bgTasks（CLI 2.1.209 后台任务真实通道）', () => {
+  // probe 实证（CLI 2.1.209）：后台任务（local_bash 等）走 background_tasks_changed【全量快照】——
+  // 开始发 tasks=[N]、stopTask/完成发 tasks=[]。旧 map() 只认 task_progress/task_notification，
+  // 故 background bash 从不进 bgTasks（⏳ 抓不到、stopTask 无 taskId 来源）。本组是该 bug 的回归防线。
+  test('tasks=[1] → 纳入 bgTasks（修 background bash 漏进注册表的 bug）', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'background_tasks_changed',
+      tasks: [{ task_id: 'bt1', task_type: 'local_bash', description: '在后台运行 sleep 30' }] });
+    assert.equal(s.hasBgTasks(), true);
+    assert.ok(s.bgTasks.has('bt1'));
+    assert.equal(s.bgTasks.get('bt1').taskType, 'local_bash');
+    assert.equal(s.bgTasks.get('bt1').message, '在后台运行 sleep 30');
+    s.dispose();
+  });
+
+  test('全量空快照 tasks=[] → 清空 bgTasks（停止/完成后 ⏳ 熄灭）', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'background_tasks_changed',
+      tasks: [{ task_id: 'bt1', task_type: 'local_bash', description: 'x' }] });
+    assert.equal(s.hasBgTasks(), true);
+    s.map({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+    assert.equal(s.hasBgTasks(), false);
+    assert.equal(s.bgTasks.size, 0);
+    s.dispose();
+  });
+
+  test('全量 reconcile：快照少一个 → 只删消失的、保留仍在的', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'background_tasks_changed',
+      tasks: [{ task_id: 'a', task_type: 'local_bash', description: 'A' },
+              { task_id: 'b', task_type: 'local_agent', description: 'B' }] });
+    assert.equal(s.bgTasks.size, 2);
+    s.map({ type: 'system', subtype: 'background_tasks_changed',
+      tasks: [{ task_id: 'b', task_type: 'local_agent', description: 'B' }] });
+    assert.equal(s.bgTasks.size, 1);
+    assert.ok(!s.bgTasks.has('a'), 'a 消失应删');
+    assert.ok(s.bgTasks.has('b'), 'b 仍在应留');
+    s.dispose();
+  });
+
+  test('size 变化才触发 onBgTaskChange（与注册表节流一致）', () => {
+    let changes = 0;
+    const { s } = makeSession({ onBgTaskChange: () => changes++ });
+    s.map({ type: 'system', subtype: 'background_tasks_changed',
+      tasks: [{ task_id: 'a', task_type: 'local_bash', description: 'A' }] });
+    assert.equal(changes, 1, '0→1 应广播');
+    s.map({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
+    assert.equal(changes, 2, '1→0 应广播');
+    s.dispose();
+  });
+});
+
+test.describe('map() — 子 agent 消息分流（forwardSubagentText：parentToolUseId 标记，不再丢弃）', () => {
+  // probe#6 实证（forwardSubagentText:true）：子 agent 消息经主 query 流实时投递、带 parent_tool_use_id；
+  // assistant 消息另带 subagent_type。旧代码 3 处 `if(parent_tool_use_id) break` 整条丢弃 → 移动端看不到子 agent。
+  // 改为分流 emit（带 parentToolUseId），但【不碰主 agent 状态/buffer】、【不把子 agent 错误当主会话错误】。
+  test('子 agent stream_event text_delta → emit text_delta 带 parentToolUseId（不再丢弃）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'stream_event', parent_tool_use_id: 'agent-1', uuid: 'sa-1',
+      event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '子agent正文' } } });
+    const ev = events.find(e => e.type === 'text_delta' && e.payload?.parentToolUseId === 'agent-1');
+    assert.ok(ev, '子 agent 文本应 emit 带 parentToolUseId');
+    assert.equal(ev.payload.text, '子agent正文');
+    s.dispose();
+  });
+  test('子 agent 文本不污染主 agent 文本缓冲', () => {
+    const { s } = makeSession();
+    s.map({ type: 'stream_event', parent_tool_use_id: 'agent-1', uuid: 'sa-1',
+      event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '子agent正文' } } });
+    assert.equal(s.assistantResponseBuffer, '', '主 buffer 不应被子 agent 文本污染');
+    s.dispose();
+  });
+  test('子 agent stream_event thinking_delta → emit thinking_delta 带 parentToolUseId', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'stream_event', parent_tool_use_id: 'agent-1', uuid: 'sa-1',
+      event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '子agent思考' } } });
+    const ev = events.find(e => e.type === 'thinking_delta' && e.payload?.parentToolUseId === 'agent-1');
+    assert.ok(ev, '子 agent thinking 应 emit 带 parentToolUseId');
+    s.dispose();
+  });
+  test('子 agent assistant tool_use → emit tool_use 带 parentToolUseId + subagentType', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'assistant', parent_tool_use_id: 'agent-1', subagent_type: 'general-purpose', uuid: 'sa-2',
+      message: { content: [{ type: 'tool_use', id: 'tu-1', name: 'Read', input: { file_path: '/x' } }] } });
+    const ev = events.find(e => e.type === 'tool_use' && e.payload?.parentToolUseId === 'agent-1');
+    assert.ok(ev, '子 agent tool_use 应 emit 带 parentToolUseId');
+    assert.equal(ev.payload.subagentType, 'general-purpose');
+    assert.equal(ev.payload.name, 'Read');
+    s.dispose();
+  });
+  test('回归保留：子 agent assistant 的 API 错误【不】上报为主会话 error（code-review P0 守卫）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'assistant', parent_tool_use_id: 'agent-1', error: 'rate_limit', uuid: 'sa-3',
+      message: { content: [{ type: 'text', text: 'API Error: rate limited' }] } });
+    const errEv = events.find(e => e.type === 'error');
+    assert.ok(!errEv, '子 agent 的错误不得当主会话 error 冒泡');
+    s.dispose();
+  });
+});
+
 test.describe('logMeta()', () => {
   test('全空 → 兜底 default / model-default / default', () => {
     const { s } = makeSession();

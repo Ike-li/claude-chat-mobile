@@ -156,6 +156,7 @@ export class AgentSession {
         resume: this.sessionId || undefined,
         abortController: this.abort,
         includePartialMessages: true,                        // E4 流式
+        forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id），移动端才看得到子 agent 活动；默认 false 只给 tool_use 心跳
         effort: this.effort || undefined,                    // SDK 0.3+ 一等 Options.effort（low/medium/high/xhigh/max，与终端 /effort 同旋钮）。null=模型默认不传
         permissionMode: this.sdkPermissionMode(),            // bypass 映射为 SDK default（bypass 放行由 handleCanUseTool 自实现）
         // 不注入 options.allowedTools（2026-06-22 解耦）：放行白名单完全交给 settingSources 加载的
@@ -630,6 +631,28 @@ export class AgentSession {
     for (const [k, t] of this.bgTasks) if (now - t.lastSeenAt > BG_TASK_TTL_MS) { this.bgTasks.delete(k); removed = true; }
     return removed;
   }
+  // background_tasks_changed 全量快照 → 同步 bgTasks：快照内 upsert、快照外删除。
+  // probe 实证该事件是【全量】（开始 tasks=[N] / stopTask 停止 tasks=[]），故"不在快照即已停止/完成"成立。
+  // value 结构对齐 bgTaskUpsert（{taskType,message,lastSeenAt}）。size 变化才 onBgTaskChange（节流，同 bgTaskDone）。
+  reconcileBgTasks(tasks) {
+    const arr = Array.isArray(tasks) ? tasks : [];
+    const had = this.bgTasks.size;
+    const seen = new Set();
+    for (const t of arr) {
+      const id = t?.task_id ?? t?.taskId ?? null;
+      if (id == null) continue;
+      seen.add(id);
+      const prev = this.bgTasks.get(id);
+      this.bgTasks.set(id, {
+        taskType: t.task_type ?? t.taskType ?? prev?.taskType ?? null,
+        message: truncate(String(t.description ?? prev?.message ?? ''), TOOL_SUMMARY_CAP),
+        lastSeenAt: Date.now(),
+      });
+    }
+    for (const k of [...this.bgTasks.keys()]) if (!seen.has(k)) this.bgTasks.delete(k);
+    if (this.bgTasks.size !== had) this.onBgTaskChange?.();
+  }
+
   hasBgTasks() { return this.bgTasks.size > 0; }
   // BE-008：实例是否处于「不可安全 dispose」的活动态——供 effort 切档等需置换实例（dispose+resume）的操作判定。
   // 后台任务(bgTasks)、挂起审批(pendingPermissions)、挂起问题(pendingQuestions)都【不】计入 pendingTurns，
@@ -858,6 +881,16 @@ export class AgentSession {
           const bgMessage = truncate(bgSubagent ? `${bgSubagent}：${bgDesc}` : bgDesc, TOOL_SUMMARY_CAP);
           this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage); // 注册"活的后台任务"→ 驱动纯后台 busy 角标（⏳/🤖/🖥）+ 横幅进度文案
           this.emitTransient('task_progress', { taskId: bgTaskId, taskType: bgTaskType, message: bgMessage });
+        } else if (msg.subtype === 'background_tasks_changed') {
+          // CLI 2.1.209 起后台任务（local_bash/local_agent 等）的权威【全量快照】通道。
+          // probe 实证：开始发 tasks=[N]、stopTask/完成发 tasks=[]（全量，非增量）。全量 reconcile
+          // bgTasks（快照内 upsert、快照外删除）——修 background bash 从不进 bgTasks 的 bug（旧 map
+          // 只认 task_progress，而 background bash 不发它）、供 stopTask 的 taskId、停止/完成自动熄 ⏳。
+          this.reconcileBgTasks(msg.tasks);
+        } else if (msg.subtype === 'task_started' || msg.subtype === 'task_updated') {
+          // 后台任务开始 / 状态变更（task_updated.patch.status: killed/…）的细粒度事件。
+          // background_tasks_changed 全量快照紧邻投递、已覆盖增删，故此二者显式识别静默吞——
+          // 不重复处理、也不落 else 兜底刷「未映射 system 子类型」交互日志（每个后台任务都会发）。
         } else if (msg.subtype === 'api_retry') {
           // CLI 会在 TUI 显示 "Retrying in Ns · attempt i/max"。web 对齐为瞬时横幅：
           // emitTransient（不进 buffer、不占 seq），前端原地覆盖同一条，避免聊天流堆重试行。
@@ -884,8 +917,19 @@ export class AgentSession {
         break;
 
       case 'stream_event': {
-        if (msg.parent_tool_use_id) break;
         const ev = msg.event;
+        if (msg.parent_tool_use_id) {
+          // 子 agent 流式增量：独立 emit（带 parentToolUseId），【不碰主 agent buffer/state】防污染主线正文。
+          // forwardSubagentText:true 下 SDK 才投递子 agent 的 text/thinking delta——移动端子 agent 可见的实时来源。
+          if (ev?.type === 'content_block_delta') {
+            if (ev.delta?.type === 'text_delta' && ev.delta.text) {
+              this.emit('text_delta', { messageId: msg.uuid, text: ev.delta.text, parentToolUseId: msg.parent_tool_use_id });
+            } else if (ev.delta?.type === 'thinking_delta' && ev.delta.thinking) {
+              this.emit('thinking_delta', { messageId: msg.uuid, text: ev.delta.thinking, parentToolUseId: msg.parent_tool_use_id });
+            }
+          }
+          break;
+        }
         if (ev.type === 'message_start') {
           this.maybeSynthesizeAutoTurn(); // 后台任务触发的非用户轮：轮次开始即合成 pendingTurns
           this.currentMessageId = ev.message?.id || msg.uuid;
@@ -921,10 +965,25 @@ export class AgentSession {
 
       case 'assistant': {
         this._flushText(); this._flushThink();
-        // 子 agent（Task 工具内部）消息整条跳过——必须在 msg.error 判断之前：子 agent 自己的一次 API 报错
-        // （如限流）只属于该子 agent，不该被误报为主会话级别的错误（code-review P0：此前 parent_tool_use_id
-        // 守卫在 msg.error 分支之后，error 分支自己 break 掉，导致守卫对错误消息形同虚设）。
-        if (msg.parent_tool_use_id) break;
+        // 子 agent（Task 工具内部）消息分流：emit tool_use（带 parentToolUseId+subagentType）供移动端嵌套展示。
+        // 【必须在 msg.error 判断之前分流并 break】——子 agent 自己的一次 API 报错（如限流）只属于该子 agent，
+        // 绝不能走下面主会话 error 分支误报（code-review P0）。子 agent 正文/thinking 走 stream_event 分流，
+        // 故此处只取 tool_use（避免与流式文本重复 emit）；也【不】碰 pendingTurns/usage（那是主轮口径）。
+        if (msg.parent_tool_use_id) {
+          const subType = msg.subagent_type ?? null;
+          for (const block of msg.message?.content ?? []) {
+            if (block.type === 'tool_use') {
+              this.emit('tool_use', {
+                toolUseId: block.id,
+                name: block.name,
+                inputSummary: truncate(stringify(redactBase64(block.input)), TOOL_SUMMARY_CAP),
+                parentToolUseId: msg.parent_tool_use_id,
+                subagentType: subType,
+              });
+            }
+          }
+          break;
+        }
         if (msg.error) {
           // msg.error 只是 SDK 归类枚举桶（unknown/rate_limit/invalid_request/…），不是上游原文；
           // 真正的上游报文在 message.content 文本块里（SDK 已加 "API Error:" 前缀）。终端等价 =
