@@ -1,14 +1,24 @@
 // test/cf-access.test.mjs —— Cloudflare Access JWT 校验单测（零 token、零网络依赖）
 // 覆盖 initCfAccess / isPublicHost / verifyAccessJwt 全部路径。
+//
+// TC-002 隔离：cf-access.js 本已支持 CCM_DATA_DIR 覆盖状态根（同 devices.js/sessions.js），但本文件此前
+// 没有使用它，而是直接操作真实 data/cf-access-certs.json（rename 成 .bak 备份、beforeEach 删除、after
+// 用 renameSync 恢复）。中断（进程被杀/超时）或恰好落在“真实文件已删、.bak 还没改回来”的窗口内重启，会让
+// 生产 Cloudflare Access 读到空缓存或测试用的假 JWKS——线上校验直接失败。改为 before 设一次性临时
+// CCM_DATA_DIR（reloadModule() 本就是带 cache-busting 的动态 import，模块顶层 CACHE_FILE 常量在每次
+// reload 时重新求值，天然支持运行期切换 DATA_DIR，不需要额外的 preload 时机处理），整套备份/还原逻辑
+// 删除——测试彻底不接触真实 data/cf-access-certs.json。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
-import { existsSync, writeFileSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, writeFileSync, mkdirSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const HERE = import.meta.dirname;
-const CACHE_FILE = join(HERE, '..', 'data', 'cf-access-certs.json');
-const CACHE_BACKUP = join(HERE, '..', 'data', 'cf-access-certs.json.bak');
+const REAL_CACHE_FILE = join(HERE, '..', 'data', 'cf-access-certs.json');
+let TEST_DATA_DIR;
+let CACHE_FILE;
 
 // ---- 测试用 JWK 生成器 ----
 async function makeTestJwk(kid) {
@@ -33,7 +43,7 @@ async function signAccessJwt(privateKey, kid, { issuer, audience, payload = {}, 
 }
 
 function writeOwnerOnly(filepath, content) {
-  mkdirSync(join(HERE, '..', 'data'), { recursive: true });
+  mkdirSync(dirname(filepath), { recursive: true });
   writeFileSync(filepath, content, { mode: 0o600 });
 }
 
@@ -64,40 +74,41 @@ let origFetch;
 const mockFetch = async () => { throw new Error('mock: network unreachable'); };
 
 // ---- 测试生命周期 ----
+let realCacheHashBefore; // 铁证：全程比对生产文件哈希不变（若本来就存在）
+
 test.before(async () => {
   // Mock 全局 fetch，杜绝真实网络请求
   origFetch = globalThis.fetch;
   globalThis.fetch = mockFetch;
 
-  // 备份真实缓存文件
-  if (existsSync(CACHE_FILE)) {
-    renameSync(CACHE_FILE, CACHE_BACKUP);
-  } else {
-    // 确保父目录存在，方便后续 writeOwnerOnly
-    mkdirSync(join(HERE, '..', 'data'), { recursive: true });
-  }
+  realCacheHashBefore = existsSync(REAL_CACHE_FILE) ? readFileSync(REAL_CACHE_FILE, 'utf8') : null;
+
+  // TC-002：套件专属临时 CCM_DATA_DIR——cf-access.js 的 CACHE_FILE 常量在 reloadModule() 每次 cache-busting
+  // 动态 import 时重新求值，故只需在首次 reloadModule() 之前设好该 env，本文件全程不再触碰真实 data/。
+  TEST_DATA_DIR = mkdtempSync(join(tmpdir(), 'ccm-cfaccess-test-'));
+  process.env.CCM_DATA_DIR = TEST_DATA_DIR;
+  CACHE_FILE = join(TEST_DATA_DIR, 'cf-access-certs.json');
 });
 
 test.after(() => {
   // 恢复 fetch
   globalThis.fetch = origFetch;
 
-  // 恢复真实缓存文件
-  if (existsSync(CACHE_FILE)) {
-    try { unlinkSync(CACHE_FILE); } catch {}
-  }
-  if (existsSync(CACHE_BACKUP)) {
-    renameSync(CACHE_BACKUP, CACHE_FILE);
-  }
+  delete process.env.CCM_DATA_DIR;
+  try { rmSync(TEST_DATA_DIR, { recursive: true, force: true }); } catch {}
   clearCfEnv();
+
+  // 铁证：生产 data/cf-access-certs.json 全程未被本文件读写。
+  const realCacheHashAfter = existsSync(REAL_CACHE_FILE) ? readFileSync(REAL_CACHE_FILE, 'utf8') : null;
+  assert.equal(realCacheHashAfter, realCacheHashBefore, '生产 data/cf-access-certs.json 不应被测试改动');
 });
 
 test.beforeEach(async () => {
   // 每个测试前清 env 并重载模块（得干净状态）
   clearCfEnv();
-  // 删除可能残留的缓存文件
+  // 删除可能残留的缓存文件（临时目录内，不碰真实 data/）
   if (existsSync(CACHE_FILE)) {
-    try { unlinkSync(CACHE_FILE); } catch {}
+    try { rmSync(CACHE_FILE); } catch {}
   }
   await reloadModule();
 });
