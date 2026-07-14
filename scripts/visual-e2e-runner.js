@@ -409,12 +409,16 @@ async function run() {
     console.log('   [Assert] Status textContent:', statusTextTC6);
     assert.ok(statusTextTC6 && statusTextTC6.includes('feature/visual-testing'), 'TC-6: 展开含 git 分支');
     assert.ok(statusTextTC6 && statusTextTC6.includes('+120'), 'TC-6: 展开含代码新增行数');
-    assert.ok(statusTextTC6 && statusTextTC6.includes('45,000 tokens'), 'TC-6: 展开含精确 token 计数');
-    assert.ok(statusTextTC6 && statusTextTC6.includes('cache 45%'), 'TC-6: 展开含缓存命中率（瞬时·本轮）');
+    // git 三分（+暂存 !改动 ?未跟踪，对齐 CLI statusline）：mock staged:2 modified:1 untracked:0 → "+2 !1"
+    assert.ok(statusTextTC6 && statusTextTC6.includes('+2 !1'), 'TC-6: 展开含 git 三分（+暂存 !改动）');
+    // token 段新格式：uncached <未缓存输入> response <输出>（替代旧「N tokens」+「in:」）。mock in:2000 out:1500
+    assert.ok(statusTextTC6 && statusTextTC6.includes('uncached 2.0k'), 'TC-6: 展开含 uncached（未缓存输入 token）');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('response 1.5k'), 'TC-6: 展开含 response（输出 token）');
+    // cache 段新格式：命中率按 r/tokens 重算 2 位小数 + write/read（替代旧「cache 45%」+「w:/r:」）。21000/45000=46.67%
+    assert.ok(statusTextTC6 && statusTextTC6.includes('cache 46.67%'), 'TC-6: 展开含缓存命中率（r/tokens=21000/45000=46.67%）');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('write 22.0k') && statusTextTC6.includes('read 21.0k'), 'TC-6: 展开含 cache write/read 明细');
     assert.ok(statusTextTC6 && statusTextTC6.includes('reused 1.2m'), 'TC-6: 展开含累计复用 token（会话级 reused，区别于瞬时 cache%）');
     assert.ok(statusTextTC6 && /ttl ~\d+:\d{2} est/.test(statusTextTC6), 'TC-6: 展开含缓存失效倒计时（客户端推算，~est 标记非权威）');
-    assert.ok(statusTextTC6 && statusTextTC6.includes('in:2.0k'), 'TC-6: 展开含 token 明细 in');
-    assert.ok(statusTextTC6 && statusTextTC6.includes('w:22.0k') && statusTextTC6.includes('r:21.0k'), 'TC-6: 展开含 token 明细 w/r');
     assert.ok(statusTextTC6 && statusTextTC6.includes('Ike-li/claude-chat-mobile'), 'TC-6: 展开含 repo 全名');
     assert.ok(statusTextTC6 && statusTextTC6.includes('v2.1.178'), 'TC-6: 展开含 CLI 版本号');
     // 新增展开字段：ctx% + left（model→窗口映射）、成本、会话元数据 sid/transcript
@@ -1001,13 +1005,15 @@ async function run() {
     await sleep(800);
 
     // WS-008：中断后硬断言（旧实现只 console.log 不 assert，且 mock 后台续发 ~16s 事件让"中断契约"无从验证）。
-    // 现 mock 会在 interrupt 时取消 stream-long 循环，故可断言：① 停止按钮隐藏（中断已处理）② 无新 delta 落地。
-    const stopBtnHiddenTC11 = await page.evaluate(() => {
-      const btn = document.getElementById('btnStopNew');
-      return btn ? btn.classList.contains('hidden') : true;
+    // 现 mock 在 interrupt 时取消 stream-long 循环，故可断言：① 活动 pill（含停止按钮）隐藏 ② 无新 delta 落地。
+    // 注：停止按钮 btnStopNew 自身不带 hidden class——其可见性由父容器 activeStatusPill 控制（system{interrupted}
+    // → setBusy(false) 隐藏 pill），故断言查 pill 而非按钮（旧断言查按钮 class 恒 false，是"中断已处理"的错元素）。
+    const stopPillHiddenTC11 = await page.evaluate(() => {
+      const pill = document.getElementById('activeStatusPill');
+      return pill ? pill.classList.contains('hidden') : true;
     });
-    console.log(`   [Assert] Stop button hidden after interrupt: ${stopBtnHiddenTC11}`);
-    assert.strictEqual(stopBtnHiddenTC11, true, 'TC-11: Stop button must be hidden after interrupt');
+    console.log(`   [Assert] 活动 pill（含停止按钮）中断后隐藏: ${stopPillHiddenTC11}`);
+    assert.strictEqual(stopPillHiddenTC11, true, 'TC-11: 中断后活动 pill（含停止按钮）应隐藏（setBusy(false) 撤下）');
 
     // 断言中断后不再有新 delta 落地：快照消息区文本长度，等待 > 2× mock 循环间隔(800ms) 后应无增长。
     // 旧 mock 中断后仍每 800ms 发一条 text_delta，此断言会因长度增长而失败、逮出未取消的后台循环。

@@ -1393,11 +1393,17 @@ import { verifyIntegrity } from './canonicalize.js';
       // 缓存失效倒计时的 server 端剩余 = cacheExpiresAt − p.ts（同 server 时钟、差值无偏）；末尾据此启本地跳秒表
       const ttlRemainMs = (p.ctx && Number.isFinite(p.ctx.cacheExpiresAt) && Number.isFinite(p.ts)) ? p.ctx.cacheExpiresAt - p.ts : null;
 
-      // git 段（分支 ✱变更 ↑ahead ↓behind + 代码增删 +绿 −红双色）作为一个复合节点
+      // git 段（分支 +暂存 !改动 ?未跟踪 ↑ahead ↓behind + 代码增删 +绿 −红双色）。三分对齐 CLI；陈旧 payload 无三分时回退 ✱changed。
       let gitNode = null;
       if (p.git?.branch) {
         let b = p.git.branch;
-        if (p.git.changed) b += ` ✱${p.git.changed}`;
+        if (p.git.staged || p.git.modified || p.git.untracked) {
+          if (p.git.staged) b += ` +${p.git.staged}`;
+          if (p.git.modified) b += ` !${p.git.modified}`;
+          if (p.git.untracked) b += ` ?${p.git.untracked}`;
+        } else if (p.git.changed) {
+          b += ` ✱${p.git.changed}`;
+        }
         if (p.git.ahead) b += ` ↑${p.git.ahead}`;
         if (p.git.behind) b += ` ↓${p.git.behind}`;
         gitNode = document.createElement('span');
@@ -1429,18 +1435,26 @@ import { verifyIntegrity } from './canonicalize.js';
         p.version && { text: `v${p.version}`, cls: 'text-ink-faint' }
       ]));
 
-      // in/w/r 明细（input / cache 写 / cache 读——cli 口径，看缓存效率）作为一个复合段
-      let inwrNode = null;
+      // token 明细段（对齐 CLI）：uncached <未缓存输入> response <输出>
+      let tokenNode = null;
       if (p.ctx && Number.isFinite(p.ctx.in)) {
-        inwrNode = span(`in:${fmtTokF(p.ctx.in)} w:${fmtTokF(p.ctx.w)} r:${fmtTokF(p.ctx.r)}`, 'text-ink-faint');
+        tokenNode = span(`uncached ${fmtTokF(p.ctx.in)} response ${fmtTokF(p.ctx.out || 0)}`, 'text-info');
       }
-      // 行B（token 遥测）：精确 token │ cache 命中率 │ in/w/r │ reused │ 缓存失效倒计时(~est)
+      // cache 明细段（对齐 CLI）：cache <命中率>.XX% write <cache写> read <cache读>；命中率按 r/tokens 重算 2 位小数
+      let cacheNode = null;
+      if (p.ctx && Number.isFinite(p.ctx.w) && Number.isFinite(p.ctx.r)) {
+        const rate = p.ctx.tokens > 0 ? (p.ctx.r / p.ctx.tokens * 100).toFixed(2) : '0.00';
+        cacheNode = document.createElement('span');
+        cacheNode.appendChild(span(`cache ${rate}%`, 'text-success'));
+        cacheNode.appendChild(document.createTextNode(' '));
+        cacheNode.appendChild(span(`write ${fmtTokF(p.ctx.w)} read ${fmtTokF(p.ctx.r)}`, 'text-ink-faint'));
+      }
+      // 行B（token 遥测）：uncached/response │ cache%+write/read │ reused │ 倒计时(~est)。总 token 数移除（行A ctx 段已含）。
       lines.push(row([
-        p.ctx && Number.isFinite(p.ctx.tokens) && { text: `${p.ctx.tokens.toLocaleString()} tokens`, cls: 'text-ink-soft' },
-        p.ctx && Number.isFinite(p.ctx.cacheHitPct) && { text: `cache ${p.ctx.cacheHitPct}%`, cls: 'text-success' }, // 瞬时:本轮命中率
-        inwrNode && { node: inwrNode },
-        p.ctx && Number.isFinite(p.ctx.reused) && { text: `reused ${fmtTokF(p.ctx.reused)}`, cls: 'text-ink-faint' }, // 累计:本会话复用 token
-        ttlRemainMs != null && { text: ttlPillText(ttlRemainMs), cls: 'text-ink-faint js-cache-ttl' } // ~est 标记推算非权威
+        tokenNode && { node: tokenNode },
+        cacheNode && { node: cacheNode },
+        p.ctx && Number.isFinite(p.ctx.reused) && { text: `reused ${fmtTokF(p.ctx.reused)}`, cls: 'text-ink-faint' }, // 累计:本会话复用 token（web 增强）
+        ttlRemainMs != null && { text: ttlPillText(ttlRemainMs), cls: 'text-ink-faint js-cache-ttl' } // 倒计时 ~est（web 增强）
       ]));
 
       // 行C（成本/耗时）：est $成本 │ total 墙钟 │ api 耗时

@@ -3,7 +3,7 @@
 // ctx 百分比由 buildWebStatusLine 用 contextWindowSize(model) 事后推算（认不出的 model 退回只显绝对数）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, gitStatus, parseShortstat, parseRepo, contextWindowSize } from '../statusline.js';
+import { webContextCost, buildWebStatusLine, gitStatus, parseShortstat, parseRepo, parsePorcelain, contextWindowSize } from '../statusline.js';
 
 const usage = t => ({ input_tokens: t, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
 
@@ -189,6 +189,30 @@ test.describe('parseShortstat：解析 git diff --shortstat 增删行数', () =>
   test('空 / null → 0,0', () => {
     assert.deepEqual(parseShortstat(''), { insertions: 0, deletions: 0 });
     assert.deepEqual(parseShortstat(null), { insertions: 0, deletions: 0 });
+  });
+});
+
+test.describe('parsePorcelain：解析 git status --porcelain → 三分 staged/modified/untracked', () => {
+  // XY PATH：X=index(暂存)位、Y=worktree(工作区)位。staged=X∈MADRC · modified=Y∈MDT · untracked=??。
+  // 三类独立不互斥：MM（既暂存又改）同时计入 staged 与 modified（对齐 CLI statusline 语义）。
+  test('混合多行：staged/modified/untracked 各自计数、不互斥', () => {
+    const status = ['M  a.js', ' M b.js', 'MM c.js', 'A  d.js', '?? e.js', ' D f.js'].join('\n');
+    assert.deepEqual(parsePorcelain(status), { staged: 3, modified: 3, untracked: 1 }); // staged:a,c,d · modified:b,c,f · untracked:e
+  });
+  test('MM 同时计入 staged 与 modified', () => assert.deepEqual(parsePorcelain('MM x.js'), { staged: 1, modified: 1, untracked: 0 }));
+  test('仅暂存（X∈MADRC，Y=空）', () => {
+    assert.deepEqual(parsePorcelain('M  a'), { staged: 1, modified: 0, untracked: 0 });
+    assert.deepEqual(parsePorcelain('A  a'), { staged: 1, modified: 0, untracked: 0 });
+    assert.deepEqual(parsePorcelain('R  a'), { staged: 1, modified: 0, untracked: 0 });
+  });
+  test('仅工作区改动（Y∈MDT，X=空）', () => {
+    assert.deepEqual(parsePorcelain(' M a'), { staged: 0, modified: 1, untracked: 0 });
+    assert.deepEqual(parsePorcelain(' D a'), { staged: 0, modified: 1, untracked: 0 });
+  });
+  test('未跟踪 ??（不双计进 staged/modified）', () => assert.deepEqual(parsePorcelain('?? a'), { staged: 0, modified: 0, untracked: 1 }));
+  test('空 / null → 全 0', () => {
+    assert.deepEqual(parsePorcelain(''), { staged: 0, modified: 0, untracked: 0 });
+    assert.deepEqual(parsePorcelain(null), { staged: 0, modified: 0, untracked: 0 });
   });
 });
 

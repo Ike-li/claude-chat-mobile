@@ -32,6 +32,20 @@ export function parseShortstat(str) {
   return { insertions: ins ? parseInt(ins[1], 10) : 0, deletions: del ? parseInt(del[1], 10) : 0 };
 }
 
+// 解析 `git status --porcelain` → { staged, modified, untracked }（对齐 CLI statusline 的 +暂存 !改动 ?未跟踪 三分）。
+// 每行前两字符是 XY 状态码：X=index(暂存)位、Y=worktree(工作区)位。复刻 CLI 脚本语义（三类独立计数、不互斥，
+// 故 `MM`（既暂存又有新改动）同时计入 staged 与 modified）：staged=X∈MADRC · modified=Y∈MDT · untracked=`??`。
+export function parsePorcelain(str) {
+  let staged = 0, modified = 0, untracked = 0;
+  for (const line of String(str || '').split('\n')) {
+    if (!line) continue;
+    if (line.slice(0, 2) === '??') { untracked++; continue; } // 未跟踪：?? 开头（X/Y 均不落入下方 charset）
+    if ('MADRC'.includes(line[0])) staged++;   // index 位：修改/新增/删除/重命名/复制 → 已暂存
+    if ('MDT'.includes(line[1])) modified++;    // worktree 位：修改/删除/类型变更 → 工作区未暂存改动
+  }
+  return { staged, modified, untracked };
+}
+
 // 从 git remote url 解析 owner/repo（https / git@scp 两种形式），失败回 null。
 // https://github.com/Ike-li/claude-chat-mobile.git → "Ike-li/claude-chat-mobile"
 // git@github.com:Ike-li/claude-chat-mobile.git    → "Ike-li/claude-chat-mobile"
@@ -41,7 +55,8 @@ export function parseRepo(url) {
   return parts.length >= 2 ? parts.slice(-2).join('/') : null;
 }
 
-// 返回 { branch, changed, ahead, behind, insertions, deletions, repo } 或 null（非 git 仓库 / git 不可用 = 优雅缺席）。
+// 返回 { branch, changed, staged, modified, untracked, ahead, behind, insertions, deletions, repo } 或 null
+// （非 git 仓库 / git 不可用 = 优雅缺席）。changed=总变更条数（向后兼容旧渲染）；staged/modified/untracked=三分。
 export async function gitStatus(cwd) {
   if (!cwd) return null;
   const hit = gitCache.get(cwd);
@@ -52,6 +67,9 @@ export async function gitStatus(cwd) {
   if (branch) {
     const status = await execGit(['status', '--porcelain'], cwd);
     const changed = status ? status.split('\n').filter(Boolean).length : 0;
+    // 三分（对齐 CLI statusline 的 +暂存 !改动 ?未跟踪）：并发会话加了纯函数 parsePorcelain 却漏接进这里，
+    // 致真 server 只发 changed；此处接线，让真实会话也带三分（mock payload 早已手填、app.js 渲染早已读取）。
+    const { staged, modified, untracked } = parsePorcelain(status);
     let ahead = 0, behind = 0;
     // HEAD...@{u}：left=本地独有(ahead)、right=上游独有(behind)；无上游则 git 报错→保持 0
     const lr = await execGit(['rev-list', '--left-right', '--count', 'HEAD...@{u}'], cwd);
@@ -59,7 +77,7 @@ export async function gitStatus(cwd) {
     // 工作区相对 HEAD 的未提交改动行数（未跟踪文件不计，符合 git diff 语义）+ repo 全名（owner/repo）
     const { insertions, deletions } = parseShortstat(await execGit(['diff', '--shortstat', 'HEAD'], cwd));
     const repo = parseRepo(await execGit(['config', '--get', 'remote.origin.url'], cwd));
-    data = { branch, changed, ahead, behind, insertions, deletions, repo };
+    data = { branch, changed, staged, modified, untracked, ahead, behind, insertions, deletions, repo };
   }
   gitCache.set(cwd, { at: Date.now(), data });
   return data;
