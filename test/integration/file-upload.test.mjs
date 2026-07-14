@@ -2,6 +2,16 @@
 // 覆盖：socket 上传端到端流程、附件校验、大小限制。
 // symlink/落盘穿越防御的单测见 test/file-security.test.mjs 与 test/uploads.test.mjs
 // 运行：npm test -- test/integration/file-upload.test.mjs
+//
+// 审计 TC-005 复核修正：本文件曾在同一进程内先后起两个 test.describe（默认 lane + 新增的
+// RUN_CLAUDE_INTEGRATION 专用 lane），各自 test.before(startServer)/test.after(cleanup)，但
+// startServer() 用的是 ESM 动态 import('../../server.js')——同 claude-lifecycle.test.mjs/
+// websocket-events.test.mjs 修复前的病灶：第一个 describe 的 cleanup() 关掉真实 httpServer/io 后，
+// 第二个 describe 的 startServer() 再次 import 同一 URL，ESM 模块缓存只会返回同一个（已关闭的）
+// 引用，第二个 describe 的用例永远连不上、必超时。改用 test/integration/_spawn-server.mjs 真起
+// 真杀子进程（同另外两个文件的修复），每次 startServer() 都是全新进程，彻底不受 ESM 缓存影响；
+// CF Access 隔离也不再需要"清 env → import → 再清 env → 重新 initCfAccess()"的进程内二次处理，
+// 直接在 spawn 的子进程 env 里显式传空字符串即可（dotenv 默认不覆盖已存在的 env key，即便是空串）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -9,49 +19,26 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { validateAttachments, saveAttachments, sanitizeName } from '../../uploads.js';
+import { spawnServer, killServer } from './_spawn-server.mjs';
 
-const sleep = ms => new Promise(res => setTimeout(res, ms));
+let port, dataDir, serverProc;
 
-let port, dataDir, httpServer, io;
-
-// 启动测试服务器
+// 启动测试服务器（真子进程，非 ESM 动态 import——见文件头 TC-005 注释）
 async function startServer() {
-  // 创建临时数据目录
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-upload-test-'));
-
-  // 第一步：清除所有可能被 .env 文件覆盖的环境变量
-  delete process.env.PORT;
-  delete process.env.AUTH_TOKEN;
-  delete process.env.IDLE_TIMEOUT_MS;
-  delete process.env.WORK_DIR;
-  delete process.env.CCM_DATA_DIR;
-  delete process.env.CF_ACCESS_HOSTNAME;
-  delete process.env.CF_ACCESS_TEAM;
-  delete process.env.CF_ACCESS_AUD;
-
-  // 第二步：设置测试专用的环境变量
-  process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
-  process.env.IDLE_TIMEOUT_MS = '10000';
-  process.env.WORK_DIR = dataDir;
-
-  // 第三步：动态导入 server 模块（这会触发 dotenv.config() 和 initCfAccess()）
-  const serverModule = await import('../../server.js');
-  httpServer = serverModule.httpServer;
-  io = serverModule.io;
-  port = serverModule.port;
-
-  // 第四步：再次清除 CF Access 环境变量（覆盖 dotenv 加载的值）
-  delete process.env.CF_ACCESS_HOSTNAME;
-  delete process.env.CF_ACCESS_TEAM;
-  delete process.env.CF_ACCESS_AUD;
-
-  // 第五步：重新初始化 CF Access（现在应该返回 false）
-  const cfAccess = await import('../../cf-access.js');
-  cfAccess.initCfAccess();
-
-  // 等待服务器就绪
-  await sleep(500);
+  const started = await spawnServer({
+    AUTH_TOKEN: '',
+    WORK_DIR: dataDir,
+    CCM_DATA_DIR: dataDir,
+    IDLE_TIMEOUT_MS: '10000',
+    // 空串而非 delete：dotenv 默认不覆盖已存在（即便是空串）的 env key，确保不受机主真实 .env 里
+    // CF_ACCESS_* 配置影响，本文件的用例不需要 CF Access。
+    CF_ACCESS_HOSTNAME: '',
+    CF_ACCESS_TEAM: '',
+    CF_ACCESS_AUD: '',
+  });
+  serverProc = started.proc;
+  port = started.port;
 
   return { port, dataDir };
 }
@@ -107,13 +94,9 @@ function createClient() {
 
 // 清理函数
 async function cleanup() {
-  if (httpServer) {
-    httpServer.close();
-    httpServer = null;
-  }
-  if (io) {
-    io.close();
-    io = null;
+  if (serverProc) {
+    await killServer(serverProc);
+    serverProc = null;
   }
   if (dataDir) {
     try {

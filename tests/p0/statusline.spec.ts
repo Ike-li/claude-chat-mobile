@@ -19,8 +19,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#cliStatus')).toContainText('+120');
     await expect(page.locator('#cliStatus')).toContainText('ctx 23%');        // model→窗口映射算出的上下文占用
     await expect(page.locator('#cliStatus')).toContainText('left 155k');      // windowSize − tokens
-    await expect(page.locator('#cliStatus')).toContainText('45,000 tokens');
-    await expect(page.locator('#cliStatus')).toContainText('cache 45%');
+    // 复核发现：这两条断言在另一并发会话的 "categories 明细 UI" 改动（commit bfbe3a8/eae8a0c，
+    // 早于本次 TC-002/003/004/005/006/007/009 六项修复）后就已经和实际渲染对不上——旧的独立"总
+    // token 数"段被移除（app.js:1452 注释：ctx 段已含）、cache 命中率也改成按 r/tokens 现算 2 位
+    // 小数（app.js:1446）而非 mock fixture 里已不再使用的 cacheHitPct 字段。按 mock fixture
+    // （scripts/visual-mock-server.js:894：tokens:45000, r:21000）现算：21000/45000*100=46.67%。
+    // 这不是本次审计 7 项的范围，但会让 TC-003 刚接进 CI 的 playwright-p0 job 一上来就红，故顺带
+    // 把断言改成跟当前真实渲染一致（不改 app.js/statusline.js 生产代码，只改这条过期断言）。
+    await expect(page.locator('#cliStatus')).toContainText('uncached 2.0k response 1.5k');
+    await expect(page.locator('#cliStatus')).toContainText('cache 46.67%');
     await expect(page.locator('#cliStatus')).toContainText('reused 1.2m');
     await expect(page.locator('#cliStatus')).toContainText('$0.37');          // 成本移入展开态：est $0.37
     await expect(page.locator('#cliStatus')).toContainText('Ike-li/claude-chat-mobile');

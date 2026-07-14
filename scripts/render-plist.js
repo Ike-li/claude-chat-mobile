@@ -59,7 +59,14 @@ function main(argv) {
     process.exit(1);
   }
 
-  const vars = parseKeyValueArgs(pairs);
+  let vars;
+  try {
+    vars = parseKeyValueArgs(pairs);
+  } catch (err) {
+    // 复核发现：此前没 catch，单个不带 '=' 的畸形参数会以裸 Node 堆栈退出，而非下面这行友好提示。
+    console.error(`用法: node scripts/render-plist.js <template> <out> KEY=VALUE [KEY=VALUE...]\n${err.message}`);
+    process.exit(1);
+  }
   const template = stripLeadingComment(readFileSync(templatePath, 'utf8'));
   const content = renderTemplate(template, vars);
   writeFileSync(outPath, content);

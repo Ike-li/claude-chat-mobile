@@ -172,6 +172,13 @@ test.describe('Claude 子进程生命周期集成测试', (process.env.CI || !pr
     // 注意：具体行为取决于实现，可能需要调整断言
     const events = clientSocket.events;
     console.log(`CL-2: 等待超时期间收到 ${events.length} 个事件`);
+
+    // 复核发现：真实重启（TC-004 修复后）意味着这里的 2 秒超时进程会一直存活到测试文件结束——
+    // CL-3~CL-6 若不重建服务器，会一直跑在这个 2 秒空闲超时的进程上而非 test.before 里设的默认
+    // 10 秒。此前 ESM 假重启时不存在这个问题（"重启"是空操作，旧的 10 秒进程全程原样存活）；
+    // 现在重启是真的了，必须显式收尾换回默认超时，不能让状态泄漏给后续用例。
+    await cleanup();
+    await startServer({ idleTimeoutMs: 10000 });
   });
 
   // CL-3: 审批等待: idle timer 暂停

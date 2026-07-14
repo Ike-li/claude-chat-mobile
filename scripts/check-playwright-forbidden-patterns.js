@@ -7,6 +7,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
 
 const TARGET_DIRS = ['tests'];
+// 复核发现：此前只认 .ts，未来若加 .js/.mjs/.cjs 的 Playwright spec 会静默漏扫——tests/ 下目前
+// 全是 .ts（无实际影响），但既然是硬闸就不该留这种扩展名死角。
+const TARGET_EXTENSIONS = new Set(['.ts', '.js', '.mjs', '.cjs']);
 const FORBIDDEN = [
   { pattern: /\btest\.only\s*\(/, label: 'test.only(' },
   { pattern: /\btest\.skip\s*\(/, label: 'test.skip(' },
@@ -20,7 +23,7 @@ function walk(dir, files = []) {
     const p = join(dir, entry);
     const st = statSync(p);
     if (st.isDirectory()) walk(p, files);
-    else if (extname(p) === '.ts') files.push(p);
+    else if (TARGET_EXTENSIONS.has(extname(p))) files.push(p);
   }
   return files;
 }

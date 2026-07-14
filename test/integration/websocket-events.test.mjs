@@ -368,6 +368,12 @@ test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env
       await killServer(serverProc);
       serverProc = null;
 
+      // 复核发现：waitForEvent 的"已有事件直接返回"快路径（见 createClient 里的实现）会让下面的
+      // waitForEvent('init') 命中重启前那条旧 init（client.events 里已经有一条，上面刚用来取
+      // originalSessionId），断言形同虚设——不管新进程有没有真的重发 init 都会通过。清空已收事件，
+      // 确保接下来等到的是重启后新进程真正重发的 init。
+      client.clearEvents();
+
       await startServer({ authEnabled: false, port: priorPort, dataDir: priorDataDir });
 
       // 等待客户端重连
@@ -375,7 +381,7 @@ test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env
 
       // 检查是否重连成功
       if (client.socket.connected) {
-        // 等待重连后的初始化
+        // 等待重连后的初始化（clearEvents 之后，这里等到的必是新进程重连时真正重发的 init）
         const reconnectedInit = await client.waitForEvent('init', 10000);
         assert.ok(reconnectedInit.payload, '重连后应该收到 init');
 
