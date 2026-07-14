@@ -58,6 +58,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// WS-010 / TC-008：就绪 + 启动身份探针。返回本进程的 CCM_BUILD_NONCE，供 e2e runner / playwright 确认连的是
+// 【本轮 spawn 的 mock】而非固定端口上残留的其它进程。带 ?nonce=X 时仅在匹配才 200（playwright webServer.url
+// 只判 200，据此拒绝陈旧进程、宁可超时也不误连）；不带 nonce 则回显本进程 nonce 供调用方自行比对。
+app.get('/__ready', (req, res) => {
+  const nonce = process.env.CCM_BUILD_NONCE || null;
+  const want = req.query?.nonce;
+  if (want !== undefined && want !== nonce) return res.status(409).json({ ok: false, nonce });
+  res.json({ ok: true, nonce });
+});
+
 app.get(['/', '/index.html'], (_req, res) => {
   try {
     const html = readFileSync(join(HERE, '../public/index.html'), 'utf8')
@@ -1487,6 +1497,10 @@ io.on('connection', socket => {
       run: async ({ cmd, activeInst }) => {
         // Mirrors transient SDK background task heartbeats without adding buffered events.
         console.log(`[mock] ${cmd} — 推送后台任务进度心跳序列 + 完成/失败通知`);
+        // WS-009：本场景每步都 await delay 后再 emit——期间用户可能切 tab 令全局 viewingInstanceId 变。冻结 dispatch
+        // 时的目标实例 id，全场景事件都用它（对齐相邻 mirror handler 用 mirrorInstanceId 的正确写法），否则切走后
+        // 这些 task_progress/notification/result 会被标成【当前查看的另一实例】。
+        const targetInstanceId = activeInst.instanceId;
         activeInst.state = 'busy';
         const failedTask = cmd === 'test:taskprogress-failed';
         const progressSteps = failedTask
@@ -1495,13 +1509,13 @@ io.on('connection', socket => {
         for (const message of progressSteps) {
           await delay(600);
           io.emit('agent:event', {
-            seq: 50, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            seq: 50, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
             type: 'task_progress', transient: true, payload: { taskId: 'bg_task_1', taskType: 'local_agent', message }
           });
         }
         await delay(600);
         io.emit('agent:event', {
-          seq: 51, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          seq: 51, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
           type: 'task_notification', payload: {
             source: 'system',
             taskId: 'bg_task_1',
@@ -1512,7 +1526,7 @@ io.on('connection', socket => {
         await delay(150);
         activeInst.state = 'idle';
         socket.emit('agent:event', {
-          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_bgtask', durationMs: 2000, costUsd: 0.001, isError: false, models: [activeModel] }
         });
       },
@@ -2624,6 +2638,10 @@ io.on('connection', socket => {
 
         // Stream slowly: gives time for interrupt while keeping tests bounded.
         for (let i = 0; i < 20; i++) {
+          // WS-008：每次 delay 后检查 abort 标志——interrupt 处理器会把 activeInst.aborted 置 true。旧实现不检查，
+          // 中断后这个 16s(20×800ms) 循环仍继续每 800ms 发 text_delta + 末尾 result，污染后续 test case（TC-11
+          // 之后的用例会收到本轮迟到事件）。检测到中断即停：不再发 delta、不发终态 result（interrupt 已发 system）。
+          if (activeInst.aborted) { console.log('[mock] stream-long aborted by interrupt'); return; }
           socket.emit('agent:event', {
             seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
             type: 'text_delta', payload: { messageId: 'msg_long_1', text: `Chunk ${i + 1} of analysis... ` }
@@ -3057,6 +3075,7 @@ io.on('connection', socket => {
     if (cmd.startsWith('test:') || cmd.startsWith('demo:')) {
       activeEpoch = 'mock-epoch-' + cmd.replace(/[^a-zA-Z0-9]/g, '_') + '-' + Date.now();
       const activeInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+      if (activeInst) activeInst.aborted = false; // WS-008：新场景开始，清 abort 标志（interrupt 会置 true 令流式循环提前退出）
 
       if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
     }
@@ -3232,6 +3251,7 @@ io.on('connection', socket => {
     console.log(`[mock] User interrupt received for instance ${targetId}`);
     const activeInst = mockInstances.find(i => i.instanceId === targetId);
     if (activeInst) {
+      activeInst.aborted = true; // WS-008：令仍在跑的流式场景（如 test:stream-long）下个 delay 后提前退出，不再后台续发事件
       activeInst.state = 'idle';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),

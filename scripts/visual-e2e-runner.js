@@ -1,6 +1,8 @@
 import puppeteer from 'puppeteer';
 import { mkdirSync, rmSync } from 'node:fs';
 import { spawn } from 'node:child_process';
+import { createServer as netCreateServer } from 'node:net';
+import { randomUUID } from 'node:crypto';
 import assert from 'node:assert';
 
 const SNAPSHOTS_DIR = './public/test-snapshots';
@@ -10,20 +12,49 @@ mkdirSync(SNAPSHOTS_DIR, { recursive: true });
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 
+// WS-010：取一个内核分配的空闲端口（bind 0 → 读回端口 → close）。避开固定 3100 被占时 runner 误连到端口上
+// 【别的服务】去跑会话/审批/中断。配合下方 nonce 就绪校验，确保连的正是本轮 spawn 的 mock。
+function getFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = netCreateServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => { const { port } = srv.address(); srv.close(() => resolve(port)); });
+  });
+}
+let MOCK_PORT = 3100;
+let BASE_URL = `http://127.0.0.1:${MOCK_PORT}`;
+
 async function run() {
   console.log('\n==================================================================');
   console.log('🚀 Starting Antigravity Automated Visual E2E Regression Tests...');
   console.log('==================================================================\n');
 
-  // 📡 Start Mock Server dynamically on port 3100
-  console.log('📡 Spawning visual mock server on port 3100...');
+  // 📡 WS-010：临时空闲端口 + 启动身份 nonce + 子进程 exit/error 监听 + nonce-bearing 就绪校验。
+  // 旧实现固定 3100 + 仅 sleep(1500)：端口被占 / 子进程 bind 失败退出时，runner 会连到端口上的旧服务并
+  // 对它跑会话/审批/中断（污染 + 假结果）。现改为空闲端口 + 轮询 /__ready 直到回显本轮 nonce。
+  MOCK_PORT = await getFreePort();
+  BASE_URL = `http://127.0.0.1:${MOCK_PORT}`;
+  const nonce = `e2e-${randomUUID()}`;
+  console.log(`📡 Spawning visual mock server on ${BASE_URL} (nonce ${nonce.slice(0, 12)}…)...`);
   const mockServer = spawn('node', ['scripts/visual-mock-server.js'], {
     stdio: 'inherit',
-    env: { ...process.env, PORT: '3100' }
+    env: { ...process.env, PORT: String(MOCK_PORT), CCM_BUILD_NONCE: nonce }
   });
+  let mockExited = null;
+  mockServer.on('exit', (code, sig) => { mockExited = { code, sig }; });
+  mockServer.on('error', err => { mockExited = { error: err.message }; });
 
-  // Give the server 1.5 seconds to bind to port 3100
-  await sleep(1500);
+  // 轮询 /__ready 直到【本轮】mock（nonce 匹配）就绪；子进程提前退出即刻失败，不空等、不误连他者。
+  let mockReady = false;
+  for (let i = 0; i < 100; i++) { // 最多 ~10s
+    if (mockExited) throw new Error(`mock server 提前退出，启动失败：${JSON.stringify(mockExited)}`);
+    try {
+      const r = await fetch(`${BASE_URL}/__ready`);
+      if (r.ok) { const j = await r.json(); if (j.nonce === nonce) { mockReady = true; break; } }
+    } catch { /* 尚未起来 */ }
+    await sleep(100);
+  }
+  if (!mockReady) throw new Error(`mock server 就绪超时（${BASE_URL} 未回显本轮 nonce）`);
 
   let browser;
   try {
@@ -42,8 +73,8 @@ async function run() {
     });
 
     // Navigate to mock server
-    console.log('🔗 Navigating to http://127.0.0.1:3100 ...');
-    await page.goto('http://127.0.0.1:3100', { waitUntil: 'networkidle2' });
+    console.log(`🔗 Navigating to ${BASE_URL} ...`);
+    await page.goto(BASE_URL, { waitUntil: 'networkidle2' });
     await page.waitForSelector('#input');
     console.log('✅ Connected to Mock Server successfully!\n');
 
@@ -681,7 +712,7 @@ async function run() {
     console.log('👉 Running TC-9: Empty & Startup States...');
     
     // Navigate to a fresh page to capture cold-start empty state
-    await page.goto('http://127.0.0.1:3100', { waitUntil: 'domcontentloaded' });
+    await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
     await sleep(500); // let app.js initialize, but before hydration events fully process
 
     // 1. Assert empty start screen or messages area exists
@@ -969,16 +1000,23 @@ async function run() {
     await page.click('#btnStopNew');
     await sleep(800);
 
-    // Assert stop button hidden after interrupt (or timeout)
+    // WS-008：中断后硬断言（旧实现只 console.log 不 assert，且 mock 后台续发 ~16s 事件让"中断契约"无从验证）。
+    // 现 mock 会在 interrupt 时取消 stream-long 循环，故可断言：① 停止按钮隐藏（中断已处理）② 无新 delta 落地。
     const stopBtnHiddenTC11 = await page.evaluate(() => {
       const btn = document.getElementById('btnStopNew');
       return btn ? btn.classList.contains('hidden') : true;
     });
-    // Note: mock server's stream-long continues emitting in background;
-    // frontend should hide stop button and finalize streams on interrupt
     console.log(`   [Assert] Stop button hidden after interrupt: ${stopBtnHiddenTC11}`);
+    assert.strictEqual(stopBtnHiddenTC11, true, 'TC-11: Stop button must be hidden after interrupt');
 
-    await sleep(400);
+    // 断言中断后不再有新 delta 落地：快照消息区文本长度，等待 > 2× mock 循环间隔(800ms) 后应无增长。
+    // 旧 mock 中断后仍每 800ms 发一条 text_delta，此断言会因长度增长而失败、逮出未取消的后台循环。
+    const msgLenAfterInterrupt = await page.evaluate(() => document.getElementById('messages')?.textContent?.length ?? 0);
+    await sleep(1800);
+    const msgLenLater = await page.evaluate(() => document.getElementById('messages')?.textContent?.length ?? 0);
+    console.log(`   [Assert] 消息区长度 中断后=${msgLenAfterInterrupt} → +1.8s 后=${msgLenLater}`);
+    assert.strictEqual(msgLenLater, msgLenAfterInterrupt, 'TC-11: 中断后不应再有新 delta 落地（mock 须取消 stream-long 循环）');
+
     await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc11_after_interrupt.png` });
     console.log('📸 Captured and saved tc11_after_interrupt.png');
     console.log('✅ TC-11: Input area tests passed\n');
@@ -1302,7 +1340,7 @@ async function run() {
     // TC-17 遗留 viewingInstanceId='inst_2' + 待审批快照（mock server 进程级状态，不随 page.reload() 清空）——
     // 若不重置，reload 后重连 sync:since 会重发该快照、弹出的 permModal 挡住 sendCommand 的 #btnSend 点击。
     // 先 reset 再 reload，确保重连时服务端状态已干净（其余 17 个既有 TC 从未需要过，因 TC-17 此前恒为末位）。
-    await fetch('http://127.0.0.1:3100/__reset', { method: 'POST' });
+    await fetch(`${BASE_URL}/__reset`, { method: 'POST' });
     await page.reload({ waitUntil: 'networkidle2' });
     await page.waitForSelector('#input');
     await sleep(500);
