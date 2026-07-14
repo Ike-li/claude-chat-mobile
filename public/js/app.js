@@ -74,13 +74,20 @@ import { verifyIntegrity } from './canonicalize.js';
     modelInput.appendChild(opt);
 
     // 同时也加到自定义模型网格中以保证同步和完备性
-    if (customModelGrid && !customModelGrid.querySelector(`[data-model="${value}"]`)) {
+    // WS-007：value 可能含引号/反斜杠/方括号（用户自定义模型名或恶意服务端下发）。用 CSS.escape 保护属性选择器
+    // （否则 querySelector 抛 DOMException、留半更新 UI），用 DOM API + textContent + dataset 构造卡片、绝不把原值
+    // 插进 CSS selector 或 HTML 串。
+    if (customModelGrid && !customModelGrid.querySelector(`[data-model="${CSS.escape(value)}"]`)) {
       const card = el(`
-        <div data-model="${value}" class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
-          <div class="text-xs font-semibold truncate text-ink">${value}</div>
-          <div class="text-[9.5px] text-ink-soft truncate mt-0.5">${note || '当前加载模型'}</div>
+        <div class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
+          <div class="text-xs font-semibold truncate text-ink"></div>
+          <div class="text-[9.5px] text-ink-soft truncate mt-0.5"></div>
         </div>
       `);
+      card.dataset.model = value;                 // 属性走 dataset，不进 HTML 串
+      const [nameDiv, noteDiv] = card.children;   // 两个内层 div，textContent 赋值（自动转义）
+      nameDiv.textContent = value;
+      noteDiv.textContent = note || '当前加载模型';
       card.onclick = () => {
         if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
         haptic('tap');
@@ -458,8 +465,12 @@ import { verifyIntegrity } from './canonicalize.js';
   }
   function requestSync({ probe }) {
     if (!displayedInstanceId || !displayedSessionId) return;
-    const payload = { instanceId: displayedInstanceId, sessionId: displayedSessionId, lastSeq };
+    const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId; // WS-002：捕获发起时的视图目标（代次）
+    const payload = { instanceId: reqInstanceId, sessionId: reqSessionId, lastSeq };
     const act = (err, res) => {
+      // WS-002：迟到 ACK 守卫——发起后若已切到别的会话/实例，丢弃本回调。否则 A 的 sync ACK 会在当前 B 上
+      // reload（清空 B）或 applyPendingSnapshot 弹出 A 的审批/问题卡。对齐 bindView 的 sync:since 守卫。
+      if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
       const a = syncAckAction(err, res);
       if (a === 'reconnect') { if (socket.connected) socket.disconnect(); socket.connect(); return; }
       if (a === 'reload') reloadCurrentFromHistory();
@@ -3563,6 +3574,7 @@ import { verifyIntegrity } from './canonicalize.js';
     closeSheet(questionModal);
     pendingAttachments = []; renderTray();   // E17：切换/新建清空待发送附件托盘
     setBusy(false);
+    hideActivityBanner(); // WS-005：清 activity 横幅（含 api_retry——二者共用 activityBanner + apiRetryBannerActive），否则 A 的活动/重试态残留到空闲的 B（task-progress 已由 setInstances 按实例处理）
 
     // Clear stale status line and hide details row to prevent latency layout flashes
     if (cliStatusEl) cliStatusEl.innerHTML = '';
@@ -3671,7 +3683,11 @@ import { verifyIntegrity } from './canonicalize.js';
 
   function loadHistory(sessionId, cwd = currentCwd) {
     if (!sessionId) return;
+    const reqInstanceId = displayedInstanceId; // WS-001：捕获发起时的视图目标（代次）
     socket.emit('session:history', { sessionId, cwd }, res => {
+      // WS-001：迟到 ACK 守卫——发起后若已切走（会话或实例变），丢弃本回调。否则 A 的历史会被 renderHistoryBubbles
+      // 追加进当前 B 的 DOM，且 hideLoadingCard 抹掉 B 的 loading 卡。对齐 onHistoryAppend 的 viewingInstanceId 守卫。
+      if (displayedSessionId !== sessionId || displayedInstanceId !== reqInstanceId) return;
       hideLoadingCard();
       const msgs = res?.messages || [];
       if (!msgs.length) {
@@ -4122,10 +4138,10 @@ import { verifyIntegrity } from './canonicalize.js';
   // source=system：任务本身完成；source=user_injection：模型开始自动汇报。两者都可能到达，OS tag 'ccm' 合并同题通知。
   function onTaskNotification(ev) {
     const p = ev.payload || {};
-    hideTaskProgress(); // 该后台任务已完成/失败，撤下进度横幅（若还有别的 running 任务，下条 task_progress 即刻再显）
     const failed = p.status === 'failed' || p.status === 'error';
     notify(failed ? '🔔 后台任务失败' : '🔔 后台任务完成', (p.summary || 'Claude 即将汇报结果').slice(0, 80));
     if (ev.instanceId === viewingInstanceId) { // 仅当前查看会话进消息流 + 触觉
+      hideTaskProgress(); // WS-004：移进实例判断内——否则后台实例 B 的完成通知会闪掉当前 A 的进度横幅（跨实例误撤）
       haptic(failed ? 'warning' : 'success');
       if (p.source === 'user_injection') {
         addBar('🔔 后台任务完成，Claude 正在汇报结果…', 'text-info');
@@ -4138,7 +4154,8 @@ import { verifyIntegrity } from './canonicalize.js';
 
   // E15：Web Push 订阅（urlBase64ToUint8Array 复用 logic.js 导出，见顶部 import）
   async function doSubscribe() {
-    // 实际执行订阅（需在有权限后调用）
+    // 实际执行订阅（需在有权限后调用）。WS-003：返回明确成败布尔——旧实现非 2xx 与异常都吞、返 undefined，
+    // 调用处无法区分成败，无条件 alert「成功订阅」。现成功 true / 失败 false，调用处据此显真实结果。
     try {
       const reg = await navigator.serviceWorker.register('/js/sw.js');
       await navigator.serviceWorker.ready;
@@ -4153,10 +4170,12 @@ import { verifyIntegrity } from './canonicalize.js';
       const r = await fetch(`/push/subscribe${authQ}`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub),
       });
-      if (!r.ok) { console.warn('[push] 订阅未保存(HTTP', r.status + ')'); return; } // Access 过期/未配置不静默成功
+      if (!r.ok) { console.warn('[push] 订阅未保存(HTTP', r.status + ')'); return false; } // Access 过期/未配置不静默成功
       btnPush?.classList.add('hidden'); // 订阅成功，隐藏入口
+      return true;
     } catch (e) {
       console.warn('[push] 订阅失败:', e.message);
+      return false;
     }
   }
 
@@ -4224,9 +4243,15 @@ import { verifyIntegrity } from './canonicalize.js';
         }
         const perm = await Notification.requestPermission(); // 用户手势触发，Chrome 可弹权限框
         if (perm === 'granted') {
-          await doSubscribe();
-          alert('🔔 成功订阅推送通知！当 Claude 完成后台任务或需要审批权限时，您将在手机或桌面端收到系统推送消息。');
-          addBar('🔔 成功订阅推送通知！', 'text-success');
+          // WS-003：按 doSubscribe 真实成败提示，不再无条件报「成功订阅」（服务端 4xx/5xx、PushManager 异常时假成功）。
+          const ok = await doSubscribe();
+          if (ok) {
+            alert('🔔 成功订阅推送通知！当 Claude 完成后台任务或需要审批权限时，您将在手机或桌面端收到系统推送消息。');
+            addBar('🔔 成功订阅推送通知！', 'text-success');
+          } else {
+            alert('⚠️ 订阅未成功：可能是网络问题、服务端未启用 Web Push，或推送环境不就绪。请稍后重试。');
+            addBar('⚠️ 订阅未成功，请稍后重试', 'text-warning');
+          }
         } else {
           alert('🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许。');
           addBar('🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许', 'text-warning');
@@ -4285,6 +4310,9 @@ import { verifyIntegrity } from './canonicalize.js';
     }
     socket.emit('logs:get', { instanceId: instId }, (res) => {
       if (!consoleLogArea) return;
+      // WS-019：迟到 ACK 守卫——发起后若已切到别的实例，丢弃本回调。否则 A 的日志回包会清空并覆盖共享的
+      // consoleLogArea（当前显示 B 的日志）。仅调试抽屉、只读、下次打开自愈，但迟到覆盖仍是可见错乱。
+      if (viewingInstanceId !== instId) return;
       consoleLogArea.innerHTML = '';
       let mergedLogs = [];
       if (res && Array.isArray(res.logs)) {
