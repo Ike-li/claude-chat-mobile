@@ -407,6 +407,9 @@ app.get('/health', httpAuth, (req, res) => {
     sessionId: agents.get(viewingInstanceId)?.sessionId ?? null, // 台阶3：报当前查看 tab 实例的会话
     busy: [...agents.values()].some(a => a.pendingTurns > 0), // 任一实例在跑即 busy
     versions, // { sdk, cli }，升级回归核对
+    // TC-008：本轮启动身份 nonce。仅当调用方（测试 spawn）经 CCM_BUILD_NONCE 注入时下发，生产环境不设、恒 null。
+    // 集成测试据此确认「/health 就绪的正是本轮 spawn 的 server」，而非固定端口上残留的旧 checkout / 其它进程。
+    buildNonce: process.env.CCM_BUILD_NONCE || null,
     timestamp: Date.now()
   });
 });
