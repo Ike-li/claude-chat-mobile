@@ -891,7 +891,7 @@ io.on('connection', socket => {
             project: 'claude-chat-mobile',
             cwd: '/Users/you/code/claude-chat-mobile',
             git: { branch: 'feature/visual-testing', changed: 3, staged: 2, modified: 1, untracked: 0, ahead: 2, behind: 0, insertions: 120, deletions: 45, repo: 'Ike-li/claude-chat-mobile' },
-            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, out: 1500, w: 22000, r: 21000, reused: 1200000, usedPercent: 23, windowSize: 200000, cacheExpiresAt: slNow + 290000 },
+            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, out: 1500, w: 22000, r: 21000, reused: 1200000, usedPercent: 23, windowSize: 200000, cacheExpiresAt: slNow + 290000, categories: [{ name: 'Skills', tokens: 5000, color: '#89b4fa' }, { name: 'Free space', tokens: 195000, color: '#a6e3a1' }] },
             session: { id: '784e20b1-a550-45d1-874b-13b5f55eeb46' },
             cost: 0.37,
             duration: { wallMs: 2500, apiMs: 1200 },

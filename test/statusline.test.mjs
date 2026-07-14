@@ -3,7 +3,7 @@
 // ctx 百分比由 buildWebStatusLine 用 contextWindowSize(model) 事后推算（认不出的 model 退回只显绝对数）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, gitStatus, parseShortstat, parseRepo, parsePorcelain, contextWindowSize } from '../statusline.js';
+import { webContextCost, buildWebStatusLine, gitStatus, parseShortstat, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe } from '../statusline.js';
 
 const usage = t => ({ input_tokens: t, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
 
@@ -165,6 +165,59 @@ test.describe('buildWebStatusLine：ctx% 由 model→窗口映射推算', () => 
     assert.equal(p.ctx.usedPercent, undefined);
     assert.equal(p.ctx.windowSize, undefined);
     assert.equal(p.ctx.tokens, 100_000);
+  });
+});
+
+test.describe('getContextUsageSafe：安全取 Agent SDK 上下文用量（Part2 §6）', () => {
+  test('有 getContextUsage → 返回其值', async () => {
+    const q = { getContextUsage: async () => ({ maxTokens: 1_000_000, percentage: 23, categories: [] }) };
+    assert.equal((await getContextUsageSafe(q, 500)).maxTokens, 1_000_000);
+  });
+  test('无 getContextUsage / q=null → null（降级信号）', async () => {
+    assert.equal(await getContextUsageSafe({}, 500), null);
+    assert.equal(await getContextUsageSafe(null, 500), null);
+  });
+  test('getContextUsage 抛错 → null（降级）', async () => {
+    const q = { getContextUsage: async () => { throw new Error('rpc fail'); } };
+    assert.equal(await getContextUsageSafe(q, 500), null);
+  });
+  test('getContextUsage 超时 → null（降级，小超时确定性）', async () => {
+    const q = { getContextUsage: () => new Promise(() => {}) }; // 永不 resolve
+    assert.equal(await getContextUsageSafe(q, 50), null);
+  });
+});
+
+test.describe('buildWebStatusLine：ctx% 优先 SDK getContextUsage、降级 contextWindowSize（Part2 修 5x bug）', () => {
+  const usageC = t => ({ input_tokens: t, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+  test('活跃会话（q.getContextUsage 返回权威值）→ windowSize/usedPercent 来自 SDK、categories 透传', async () => {
+    // 关键 bug 场景：model 是 haiku（静态映射猜 200k），但 SDK 实报 maxTokens=1M → ctx% 不再偏高 5x
+    const cats = [{ name: 'Skills', tokens: 5000, color: '#abc' }, { name: 'Free space', tokens: 995000, color: '#def' }];
+    const q = { getContextUsage: async () => ({ maxTokens: 1_000_000, percentage: 23, categories: cats }) };
+    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-haiku-4-5', lastUsage: usageC(50_000), q, disposed: false }, cwd: undefined });
+    assert.equal(p.ctx.windowSize, 1_000_000);   // SDK 权威，非静态 200k
+    assert.equal(p.ctx.usedPercent, 23);         // 官方 percentage，非 tokens/win 自算
+    assert.deepEqual(p.ctx.categories, cats);    // categories 透传
+  });
+  test('disposed 会话（q 存在但 disposed）→ 不调 SDK、降级 contextWindowSize', async () => {
+    let called = false;
+    const q = { getContextUsage: async () => { called = true; return { maxTokens: 1e6, percentage: 5, categories: [] }; } };
+    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-haiku-4-5', lastUsage: usageC(50_000), q, disposed: true }, cwd: undefined });
+    assert.equal(called, false);                 // disposed → 不调 SDK
+    assert.equal(p.ctx.windowSize, 200_000);     // 降级静态映射
+    assert.equal(p.ctx.usedPercent, 25);         // 50k/200k
+    assert.equal(p.ctx.categories, undefined);
+  });
+  test('无 q（idle/历史）→ 降级 contextWindowSize', async () => {
+    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-opus-4-8[1m]', lastUsage: usageC(400_000) }, cwd: undefined });
+    assert.equal(p.ctx.windowSize, 1_000_000);   // 静态映射 [1m]→1M
+    assert.equal(p.ctx.usedPercent, 40);
+    assert.equal(p.ctx.categories, undefined);
+  });
+  test('SDK categories 为空 → 不设 p.ctx.categories（省字段）', async () => {
+    const q = { getContextUsage: async () => ({ maxTokens: 1e6, percentage: 10, categories: [] }) };
+    const p = await buildWebStatusLine({ agent: { activeModel: 'm', lastUsage: usageC(1000), q, disposed: false }, cwd: undefined });
+    assert.equal(p.ctx.categories, undefined);
+    assert.equal(p.ctx.windowSize, 1_000_000);   // 仍用 SDK maxTokens
   });
 });
 

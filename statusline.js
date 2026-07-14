@@ -119,6 +119,19 @@ export function webContextCost({ agent }) {
   return r;
 }
 
+// Part2（§6）：安全取 Agent SDK 上下文用量。活跃会话（调用方已确认 agent.q 存在且未 dispose）调 q.getContextUsage()
+// 取【运行时权威】maxTokens/percentage/categories；RPC 超时（默认 1.5s，cold ~3.8s 但不阻塞——先发陈旧值/回来补发）
+// 或抛错 → 返回 null 让调用方降级回 contextWindowSize(model) 静态映射。本函数只兜 RPC 层（延迟/异常），不判生命周期。
+export async function getContextUsageSafe(q, timeoutMs = 1500) {
+  if (!q?.getContextUsage) return null;
+  try {
+    return await Promise.race([
+      q.getContextUsage(),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('getContextUsage timeout')), timeoutMs)),
+    ]);
+  } catch { return null; }
+}
+
 // 组装 web 状态栏结构化 payload（全字段可选，缺则省；前端按存在性渲染原生 UI）。
 // 权限档 / effort 不在此——前端已有独立 pill（pillPerm/pillEffort），避免重复显示。
 export async function buildWebStatusLine({ agent, cwd, versions }) {
@@ -142,11 +155,21 @@ export async function buildWebStatusLine({ agent, cwd, versions }) {
     if (cc.context.reused > 0) p.ctx.reused = cc.context.reused;                            // 累计：本会话复用 token（reused）
     // 缓存失效倒计时 deadline（客户端推算，非权威——详见顶部 CACHE_TTL_MS 注释）：仅曾命中过缓存才给，前端本地递减
     if (agent?.lastCacheHitAt > 0) p.ctx.cacheExpiresAt = agent.lastCacheHitAt + CACHE_TTL_MS;
-    // ctx 百分比：按 model→窗口大小映射（能确信时给 usedPercent + windowSize；认不出的 model 不给，前端退回绝对 token 数）
-    const win = contextWindowSize(model);
-    if (win && p.ctx.tokens > 0) {
-      p.ctx.windowSize = win;
-      p.ctx.usedPercent = Math.min(100, Math.round(p.ctx.tokens / win * 100));
+    // ctx 百分比：优先 Agent SDK getContextUsage() 的【运行时权威】maxTokens/percentage/categories（活跃会话）；
+    // 无活 q（idle/历史/dispose）/ RPC 超时 / 抛错 → 降级回 contextWindowSize(model) 静态映射猜测。
+    // 修真 bug：静态映射把 1M beta 会话当 200k、ctx% 偏高 5 倍；SDK 反映真实窗口。percentage 用官方口径
+    //（对 compact buffer / skills 基线另有折算），勿自算 tokens/maxTokens，免与 CLI /context 显示分叉。
+    const sdkCtx = (agent?.q && !agent.disposed) ? await getContextUsageSafe(agent.q) : null;
+    if (sdkCtx && Number.isFinite(sdkCtx.maxTokens) && sdkCtx.maxTokens > 0) {
+      p.ctx.windowSize = sdkCtx.maxTokens;
+      p.ctx.usedPercent = Math.min(100, Math.max(0, Math.round(sdkCtx.percentage || 0)));
+      if (Array.isArray(sdkCtx.categories) && sdkCtx.categories.length) p.ctx.categories = sdkCtx.categories;
+    } else {
+      const win = contextWindowSize(model);
+      if (win && p.ctx.tokens > 0) {
+        p.ctx.windowSize = win;
+        p.ctx.usedPercent = Math.min(100, Math.round(p.ctx.tokens / win * 100));
+      }
     }
   }
   if (cc.cost) {

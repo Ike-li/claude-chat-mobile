@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, formatContextCategories } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -1456,6 +1456,17 @@ import { verifyIntegrity } from './canonicalize.js';
         p.ctx && Number.isFinite(p.ctx.reused) && { text: `reused ${fmtTokF(p.ctx.reused)}`, cls: 'text-ink-faint' }, // 累计:本会话复用 token（web 增强）
         ttlRemainMs != null && { text: ttlPillText(ttlRemainMs), cls: 'text-ink-faint js-cache-ttl' } // 倒计时 ~est（web 增强）
       ]));
+
+      // 行B2（ctx categories 明细，对齐 CLI /context）：SDK getContextUsage() 的上下文占用分解——各类别 token
+      // （Skills / MCP tools / Memory files / Compact buffer / Free space 等）。仅【活跃会话经 SDK 权威值】时有
+      // p.ctx.categories；idle / 降级到 contextWindowSize 静态映射时缺省 → 不渲染此行（catRows 为空）。
+      const catRows = formatContextCategories(p.ctx?.categories, p.ctx?.windowSize);
+      if (catRows.length) {
+        lines.push(row(catRows.map(c => ({
+          text: `${c.name} ${fmtTokF(c.tokens)}${c.pct != null ? ` ${c.pct}%` : ''}`,
+          cls: c.deferred ? 'text-ink-faint opacity-60' : 'text-ink-faint' // 延迟加载类别弱化
+        }))));
+      }
 
       // 行C（成本/耗时）：est $成本 │ total 墙钟 │ api 耗时
       lines.push(row([

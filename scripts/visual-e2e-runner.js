@@ -426,6 +426,10 @@ async function run() {
     assert.ok(statusTextTC6 && statusTextTC6.includes('left 155k'), 'TC-6: 展开含剩余上下文（windowSize−tokens）');
     assert.ok(statusTextTC6 && statusTextTC6.includes('est $0.37'), 'TC-6: 展开含成本（est $）');
     assert.ok(statusTextTC6 && statusTextTC6.includes('sid 784e20b1'), 'TC-6: 展开含会话 sid');
+    // Part3：ctx categories 明细（SDK getContextUsage 分解，对齐 CLI /context）。mock Skills 5000 / Free space 195000
+    // → 按 tokens 降序、pct 相对 windowSize：Free space 195.0k 98% · Skills 5.0k 3%
+    assert.ok(statusTextTC6 && statusTextTC6.includes('Skills 5.0k'), 'TC-6: 展开含 ctx categories 明细（Skills 类别 token）');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('Free space 195.0k'), 'TC-6: 展开含 ctx categories 明细（Free space 类别 token）');
 
     // 3. 折叠摘要：只显 'statusline' 一词（全部数据在展开态）
     const summaryTextTC6 = await page.evaluate(() => {

@@ -447,3 +447,15 @@ export function formatApiRetryBanner(payload = {}) {
   const wait = secs > 0 ? ` · ${secs}s 后` : '';
   return `${kind}${frac}${wait}`;
 }
+
+// Part3（§6）：SDK getContextUsage() 的 categories 分解 → 展示行。对齐 CLI /context 的上下文占用分解
+// （Skills / MCP tools / Memory files / Compact buffer / Free space 等）。过滤 0/坏项、按 tokens 降序、
+// 算 pct（相对 maxTokens；缺 maxTokens 则 pct=null，前端只显绝对 token）。isDeferred 透传（延迟加载类别）。
+export function formatContextCategories(categories, maxTokens) {
+  if (!Array.isArray(categories)) return [];
+  const win = Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : null;
+  return categories
+    .filter(c => c && typeof c.name === 'string' && Number.isFinite(c.tokens) && c.tokens > 0)
+    .map(c => ({ name: c.name, tokens: c.tokens, pct: win ? Math.round(c.tokens / win * 100) : null, deferred: !!c.isDeferred }))
+    .sort((a, b) => b.tokens - a.tokens);
+}
