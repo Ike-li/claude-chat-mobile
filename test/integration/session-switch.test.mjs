@@ -1,6 +1,12 @@
 // test/integration/session-switch.test.mjs —— 会话切换与 resume 集成测试
 // 覆盖：会话切换、历史回显、多工作区切换
 // 运行：npm test -- test/integration/session-switch.test.mjs
+//
+// 审计 TC-004：此前每个 test 在发首条 user:message 之前 await waitForEvent('init')：fresh 临时
+// CCM_DATA_DIR 下 lastInit 为空，服务端 connection 时只重放 instances 等合成状态，真正的 init 只在
+// 首条消息触发懒建 AgentSession 后才产生——等待顺序与当前 lazy-start 协议相反，先于消息等 init 会
+// 死等到超时。改为连接后只等 instances（这个在连接时就无条件重放），发消息后如需要 init 里的字段
+// （如 sessionId）再从 client.events 里找。本文件没有"重启服务器"式的用例，故不需要 _spawn-server.mjs。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -151,7 +157,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 发送消息创建新会话
@@ -174,7 +180,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 先创建一个会话
@@ -198,7 +204,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 尝试切换到不存在的会话
@@ -218,7 +224,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 创建一个会话
@@ -248,7 +254,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 创建两个临时工作目录
@@ -288,7 +294,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 创建第一个会话
@@ -321,11 +327,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
         client2.waitForConnect(),
       ]);
 
-      await Promise.all([
-        client1.waitForEvent('init'),
-        client2.waitForEvent('init'),
-      ]);
-
+      // TC-004：只等 instances；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await Promise.all([
         client1.waitForEvent('instances'),
         client2.waitForEvent('instances'),
@@ -357,7 +359,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 创建一个会话
@@ -392,7 +394,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 发送多条消息
@@ -427,7 +429,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 查询不存在的会话历史

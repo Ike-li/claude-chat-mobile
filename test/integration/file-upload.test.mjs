@@ -281,34 +281,10 @@ test.describe('文件上传安全集成测试', process.env.CI ? { skip: 'CI 无
   });
 
   // ── Socket.IO 附件发送集成测试 ──
-  test('Socket.IO: 发送合法附件成功', async () => {
-    const client = createClient();
-
-    try {
-      await client.waitForConnect();
-      // 不等待 init 和 instances 事件（测试环境没有真实 claude 子进程）
-
-      const attachments = [
-        { data: Buffer.from('hello').toString('base64'), name: 'test.txt', mimeType: 'text/plain' },
-      ];
-      client.sendMessage('请查看附件', attachments);
-
-      // 等待回复（可能成功或失败，但不应崩溃）
-      try {
-        await client.waitForEvent('result', 20000);
-        console.log('附件发送成功');
-      } catch {
-        // 可能收到 system 或 error 消息
-        const system = client.events.find(e => e.type === 'system' || e.type === 'error');
-        if (system) {
-          console.log('附件发送返回:', system.type, system.payload);
-        }
-      }
-    } finally {
-      client.disconnect();
-    }
-  });
-
+  // TC-005："发送合法附件成功" 这一个 case 移到下面的 RUN_CLAUDE_INTEGRATION 专用 describe 了——
+  // 校验通过后 server.js 会走 resolveTarget → 懒建 AgentSession → a.send()，真实调用 Claude；
+  // 下面两个"过大/过多"case 在 validateAttachments 校验失败时短路返回（server.js:1582-1587），
+  // 从不创建 AgentSession，不触发真实 turn，留在默认 lane。
   test('Socket.IO: 发送过大附件被拒绝', async () => {
     const client = createClient();
 
@@ -354,3 +330,43 @@ test.describe('文件上传安全集成测试', process.env.CI ? { skip: 'CI 无
     }
   });
 });
+
+// TC-005：合法附件通过校验后，server.js 走 resolveTarget → 懒建 AgentSession → a.send()，真实调用
+// Claude——此前这个 case 留在默认 lane（只受 CI-skip 门控，本机 npm test 会真实发一次 turn 耗 token），
+// 且 waitForEvent('result') 超时/异常被 try/catch 全吞，什么都不断言，缺 result 也照样通过（假绿）。
+// 改为门控进 RUN_CLAUDE_INTEGRATION 专用 describe（同 claude-lifecycle.test.mjs 等三件套的 opt-in
+// 约定），且不再吞错误——超时/异常必须让用例 fail。
+test.describe(
+  '文件上传安全集成测试（需真实 Claude turn）',
+  (process.env.CI || !process.env.RUN_CLAUDE_INTEGRATION)
+    ? { skip: '默认/CI 跳过——需真 claude agent turn(慢/耗 token/不稳);本机设 RUN_CLAUDE_INTEGRATION=1 运行' }
+    : {},
+  () => {
+    test.before(async () => {
+      await startServer();
+    });
+
+    test.after(async () => {
+      await cleanup();
+    });
+
+    test('Socket.IO: 发送合法附件成功（真实 Claude turn）', async () => {
+      const client = createClient();
+
+      try {
+        await client.waitForConnect();
+
+        const attachments = [
+          { data: Buffer.from('hello').toString('base64'), name: 'test.txt', mimeType: 'text/plain' },
+        ];
+        client.sendMessage('请查看附件', attachments);
+
+        // 不吞错误：超时/异常直接让用例 fail，不再无条件通过。
+        const result = await client.waitForEvent('result', 20000);
+        assert.ok(result.payload, '应该收到 result');
+      } finally {
+        client.disconnect();
+      }
+    });
+  }
+);

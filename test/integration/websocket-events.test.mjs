@@ -1,44 +1,49 @@
 // test/integration/websocket-events.test.mjs —— WebSocket 事件流集成测试
 // 覆盖：WS-1 ~ WS-6（见 .agents/sprint-1-test-plan.md）
 // 运行：npm test -- test/integration/websocket-events.test.mjs
+//
+// 审计 TC-004：三处协议漂移已修——
+// ①此前每个 test 在发首条 user:message 之前 await waitForEvent('init')：fresh 临时 CCM_DATA_DIR 下
+//   lastInit 为空，服务端 connection 时只重放 instances 等合成状态，真正的 init 只在首条消息触发懒建
+//   AgentSession 后才产生——等待顺序与当前 lazy-start 协议相反。改为连接后只等 instances。
+// ②WS-1 断言 "init 应该在 instances 之前"——这只在"已有 lastInit 的重连/重放"场景成立；本测试是全新
+//   连接首次建会话，实际顺序是 instances（连接时无条件重放）先于 init（首条消息触发懒建后才产生）。
+//   断言方向反了，改成 instances < init。
+// ③WS-5（切 AUTH_TOKEN）、WS-6（模拟"重启"）此前都靠 cleanup() + 再次 import('../../server.js')，但
+//   ESM 按 URL 缓存模块，第二次 import 拿到同一个（已 close 的）httpServer/io 引用，模块顶层读取的
+//   AUTH_TOKEN 也不会重新求值——WS-5 测的其实还是第一次 import 时的（无 auth）配置，WS-6 的"重启"什么
+//   都没重启。改为 spawnServer()/killServer() 真起真杀子进程（test/integration/_spawn-server.mjs，同
+//   test/integration/server.test.mjs 已验证过的 nonce + 就绪探测模式）。WS-6 额外需要重启后端口不变
+//   （客户端的 socket.io 连接 URL 在创建时已固定，端口变了不可能重连到新进程），startServer() 支持传
+//   port 固定它。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
+import { spawnServer, killServer } from './_spawn-server.mjs';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 
-let port, dataDir, httpServer, io;
+let port, dataDir, serverProc;
 
-// 启动隔离的测试服务器
+// 启动隔离的测试服务器（真子进程，非 ESM 动态 import——见文件头 TC-004 注释）
+// dataDir 可传入已存在目录复用（WS-6 重启需要沿用同一份 sessions.json 才能测出"恢复"，
+// 不传则每次新建一次性临时目录）。
 async function startServer(options = {}) {
-  const { authEnabled = false } = options;
+  const { authEnabled = false, port: pinnedPort, dataDir: reuseDataDir } = options;
 
-  // 创建临时数据目录
-  dataDir = mkdtempSync(join(tmpdir(), 'ccm-ws-test-'));
-
-  // 设置环境变量
-  process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
-  process.env.IDLE_TIMEOUT_MS = '10000';
-  process.env.WORK_DIR = dataDir;
-
-  if (authEnabled) {
-    process.env.AUTH_TOKEN = 'test-token-123';
-  } else {
-    delete process.env.AUTH_TOKEN;
-  }
-
-  // 动态导入 server 模块
-  const serverModule = await import('../../server.js');
-  httpServer = serverModule.httpServer;
-  io = serverModule.io;
-  port = serverModule.port;
-
-  // 等待服务器就绪
-  await sleep(500);
+  dataDir = reuseDataDir || mkdtempSync(join(tmpdir(), 'ccm-ws-test-'));
+  const started = await spawnServer({
+    AUTH_TOKEN: authEnabled ? 'test-token-123' : '',
+    WORK_DIR: dataDir,
+    CCM_DATA_DIR: dataDir,
+    IDLE_TIMEOUT_MS: '10000',
+    ...(pinnedPort ? { PORT: String(pinnedPort) } : {}),
+  });
+  serverProc = started.proc;
+  port = started.port;
 
   return { port, dataDir };
 }
@@ -140,13 +145,9 @@ function createClient(options = {}) {
 
 // 清理函数
 async function cleanup() {
-  if (httpServer) {
-    httpServer.close();
-    httpServer = null;
-  }
-  if (io) {
-    io.close();
-    io = null;
+  if (serverProc) {
+    await killServer(serverProc);
+    serverProc = null;
   }
   if (dataDir) {
     try {
@@ -176,8 +177,7 @@ test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env
       // 等待连接
       await client.waitForConnect();
 
-      // 等待初始化事件
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 发送消息
@@ -192,9 +192,10 @@ test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env
       const result = await client.waitForEvent('result', 20000);
       assert.ok(result.payload, 'result 应该有 payload');
 
-      // 验证事件顺序
+      // 验证事件顺序：instances 在连接时无条件重放，先于 init（TC-004：此前反过来断言，
+      // 只在"已有 lastInit 的重连/重放"场景成立；本测试是全新连接首次建会话，顺序相反）。
       const eventTypes = client.events.map(e => e.type);
-      assert.ok(eventTypes.indexOf('init') < eventTypes.indexOf('instances'), 'init 应该在 instances 之前');
+      assert.ok(eventTypes.indexOf('instances') < eventTypes.indexOf('init'), 'instances 应该在 init 之前（全新连接首次建会话）');
       assert.ok(eventTypes.indexOf('text_delta') < eventTypes.indexOf('result'), 'text_delta 应该在 result 之前');
     } finally {
       client.disconnect();
@@ -207,7 +208,7 @@ test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 发送消息建立会话
@@ -243,7 +244,7 @@ test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 发送第一条消息创建会话 A
@@ -277,7 +278,7 @@ test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 快速连续发送多条消息
@@ -350,7 +351,7 @@ test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env
 
     try {
       await client.waitForConnect();
-      await client.waitForEvent('init');
+      // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
       await client.waitForEvent('instances');
 
       // 发送消息建立会话
@@ -359,19 +360,15 @@ test.describe('WebSocket 事件流集成测试', (process.env.CI || !process.env
 
       const originalSessionId = client.events.find(e => e.type === 'init')?.payload?.sessionId;
 
-      // 模拟服务端重启（关闭并重新启动）
-      const oldHttpServer = httpServer;
-      const oldIo = io;
+      // 真实重启（TC-004）：kill 真子进程（不删 dataDir——沿用同一份 sessions.json 才测得出"恢复"），
+      // 用同一个端口 + 同一个 dataDir 重新 spawn，客户端的 socket.io 连接 URL 在创建时已固定，
+      // 端口若变了不可能重连到新进程。
+      const priorPort = port;
+      const priorDataDir = dataDir;
+      await killServer(serverProc);
+      serverProc = null;
 
-      // 关闭旧服务器
-      oldIo.close();
-      oldHttpServer.close();
-
-      await sleep(500);
-
-      // 启动新服务器（相同端口）
-      // 注意：实际测试中可能需要等待端口释放
-      await startServer({ authEnabled: false });
+      await startServer({ authEnabled: false, port: priorPort, dataDir: priorDataDir });
 
       // 等待客户端重连
       await sleep(2000);

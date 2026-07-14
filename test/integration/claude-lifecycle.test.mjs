@@ -2,46 +2,45 @@
 // 覆盖：CL-1 ~ CL-6（见 .agents/sprint-1-test-plan.md）
 // 运行：npm test -- test/integration/claude-lifecycle.test.mjs
 // 要求：claude CLI 可用（PATH 中）
+//
+// 审计 TC-004：两处协议漂移已修——
+// ①此前每个 test 在发首条 user:message 之前 await waitForEvent('init')：fresh 临时 CCM_DATA_DIR 下
+//   lastInit 为空，服务端 connection 时只重放 instances 等合成状态，真正的 init 只在首条消息触发懒建
+//   AgentSession 后才产生——等待顺序与当前 lazy-start 协议相反，先于消息等 init 会死等到超时。改为
+//   连接后只等 instances（这个在连接时就无条件重放），发消息后如需要 init 里的字段再另外等。
+// ②CL-2 需要用不同 IDLE_TIMEOUT_MS 重启服务器；此前用 cleanup() + 再次 import('../../server.js')
+//   模拟"重启"，但 ESM 按 URL 缓存模块，第二次 import 拿到同一个（已 close 的）httpServer/io 引用，
+//   模块顶层读取的 IDLE_TIMEOUT_MS 也不会重新求值，测的其实还是 CL-1 那个旧超时值。改为 spawnServer()
+//   真起子进程（test/integration/_spawn-server.mjs，同 test/integration/server.test.mjs 已验证过的
+//   nonce + 就绪探测模式），kill 旧进程、spawn 新进程即为真重启。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
-import { createServer } from 'node:http';
-import express from 'express';
-import { Server } from 'socket.io';
+import { spawnServer, killServer } from './_spawn-server.mjs';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 
-let server, io, httpServer, port, dataDir;
+let serverProc, port, dataDir;
 let clientSocket;
 
-// 启动隔离的测试服务器
+// 启动隔离的测试服务器（真子进程，非 ESM 动态 import——见文件头 TC-004 注释）
 async function startServer(options = {}) {
   const { idleTimeoutMs = 10000 } = options;
 
-  // 创建临时数据目录
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-cl-test-'));
+  const started = await spawnServer({
+    AUTH_TOKEN: '', // 测试不启用 auth
+    WORK_DIR: dataDir,
+    CCM_DATA_DIR: dataDir,
+    IDLE_TIMEOUT_MS: String(idleTimeoutMs),
+  });
+  serverProc = started.proc;
+  port = started.port;
 
-  // 设置环境变量
-  process.env.CCM_DATA_DIR = dataDir;
-  process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));  // 随机高位端口
-  process.env.IDLE_TIMEOUT_MS = String(idleTimeoutMs);
-  process.env.WORK_DIR = dataDir;
-  delete process.env.AUTH_TOKEN;  // 测试不启用 auth
-
-  // 动态导入 server 模块（需要在 env 设置后）
-  const serverModule = await import('../../server.js');
-  server = serverModule;
-  httpServer = serverModule.httpServer;
-  io = serverModule.io;
-  port = serverModule.port;
-
-  // 等待服务器就绪
-  await sleep(500);
-
-  return { server, io, port, dataDir };
+  return { port, dataDir };
 }
 
 // 创建 socket 客户端
@@ -96,13 +95,9 @@ async function cleanup() {
     clientSocket.disconnect();
     clientSocket = null;
   }
-  if (httpServer) {
-    httpServer.close();
-    httpServer = null;
-  }
-  if (io) {
-    io.close();
-    io = null;
+  if (serverProc) {
+    await killServer(serverProc);
+    serverProc = null;
   }
   if (dataDir) {
     try {
@@ -136,7 +131,7 @@ test.describe('Claude 子进程生命周期集成测试', (process.env.CI || !pr
     clientSocket = createClient();
 
     // 等待连接和初始化
-    await clientSocket.waitForEvent('init');
+    // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
     await clientSocket.waitForEvent('instances');
 
     // 发送简单消息
@@ -158,7 +153,7 @@ test.describe('Claude 子进程生命周期集成测试', (process.env.CI || !pr
     await startServer({ idleTimeoutMs: 2000 });  // 2 秒超时
 
     clientSocket = createClient();
-    await clientSocket.waitForEvent('init');
+    // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
     await clientSocket.waitForEvent('instances');
 
     // 发送消息让子进程启动
@@ -182,7 +177,7 @@ test.describe('Claude 子进程生命周期集成测试', (process.env.CI || !pr
   // CL-3: 审批等待: idle timer 暂停
   test('CL-3: 工具审批期间空闲计时器暂停', async () => {
     clientSocket = createClient();
-    await clientSocket.waitForEvent('init');
+    // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
     await clientSocket.waitForEvent('instances');
 
     // 发送触发工具调用的消息
@@ -213,7 +208,7 @@ test.describe('Claude 子进程生命周期集成测试', (process.env.CI || !pr
   // CL-4: 异常退出: 子进程 crash → 通知前端
   test('CL-4: 子进程异常退出时通知前端', async () => {
     clientSocket = createClient();
-    await clientSocket.waitForEvent('init');
+    // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
     await clientSocket.waitForEvent('instances');
 
     // 这个测试需要模拟子进程 crash
@@ -242,11 +237,7 @@ test.describe('Claude 子进程生命周期集成测试', (process.env.CI || !pr
     const client1 = createClient();
     const client2 = createClient();
 
-    await Promise.all([
-      client1.waitForEvent('init'),
-      client2.waitForEvent('init'),
-    ]);
-
+    // TC-004：只等 instances；init 由懒建的 AgentSession 首次产生，发消息后再到达。
     await Promise.all([
       client1.waitForEvent('instances'),
       client2.waitForEvent('instances'),
@@ -272,7 +263,7 @@ test.describe('Claude 子进程生命周期集成测试', (process.env.CI || !pr
   // CL-6: 超长对话: context window 满 → 行为正确
   test('CL-6: 超长对话上下文窗口满时行为正确', async () => {
     clientSocket = createClient();
-    await clientSocket.waitForEvent('init');
+    // TC-004：只等 instances（连接时无条件重放）；init 由懒建的 AgentSession 首次产生，发消息后再到达。
     await clientSocket.waitForEvent('instances');
 
     // 发送多轮消息填满上下文
