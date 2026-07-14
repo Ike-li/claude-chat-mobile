@@ -14,6 +14,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { writeOwnerOnlyFile } from './file-security.js';
+import { createSerialWriter } from './serial-writer.js';
 
 const FILE = process.env.CCM_AUDIT_FILE
   || join(process.env.CCM_DATA_DIR || join(import.meta.dirname, 'data'), 'audit-records.json');
@@ -39,30 +40,32 @@ function load() {
 let state = load();
 let _seq = 0;
 
-let _saveTimer = null;
-function save() {
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(() => {
-    _saveAsync().catch(e => console.error('[audit] 保存失败（审计记录未落盘）:', e?.message || e));
-  }, 200);
-}
-
 let _saveSeq = 0;
-async function _saveAsync() {
+// BE-012：实际写盘经单写者串行原语——串行不乱序 + 在飞合并 + shutdown fence（防在飞写覆盖同步 flush）。
+const writer = createSerialWriter(async (shouldCommit) => {
   await mkdir(dirname(FILE), { recursive: true });
   const tmp = `${FILE}.${process.pid}.${++_saveSeq}.tmp`;
   try {
     await writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+    if (!shouldCommit()) { await unlink(tmp).catch(() => {}); return; } // BE-012：已被 flushSaveSync fence → 不覆盖同步权威写
     await rename(tmp, FILE);
   } catch (e) {
     try { await unlink(tmp); } catch { /* tmp 可能未生成 */ }
     throw e;
   }
+}, { onError: e => console.error('[audit] 保存失败（审计记录未落盘）:', e?.message || e) });
+
+let _saveTimer = null;
+function save() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => { _saveTimer = null; writer.request(); }, 200);
 }
 
+// BE-012：先 fence 作废在飞异步写，防其 rename 后于本同步写落地覆盖回旧，再同步权威写。
 export function flushSaveSync() {
   clearTimeout(_saveTimer);
   _saveTimer = null;
+  writer.fence();
   mkdirSync(dirname(FILE), { recursive: true });
   writeOwnerOnlyFile(FILE, JSON.stringify(state, null, 2));
 }

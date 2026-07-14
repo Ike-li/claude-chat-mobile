@@ -4,6 +4,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { writeOwnerOnlyFile } from './file-security.js';
+import { createSerialWriter } from './serial-writer.js';
 
 // #14：锚定模块目录而非 process.cwd()，从任何目录启动 server 都读写同一份状态。
 // CCM_SESSIONS_FILE 覆盖路径——仅测试用，让单测指向临时文件、永不碰真实 data/sessions.json（防 npm test 污染生产状态）。
@@ -47,35 +48,35 @@ function load() {
 let state = load();
 
 // B4：防抖异步写——切 tab 热路径不再阻塞事件循环；200ms 内多次调用只落一次盘。
-let _saveTimer = null;
-
-function save() {
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(() => {
-    _saveAsync().catch(e => console.error('[sessions] 保存失败（状态未落盘，cost/会话指针可能丢失）:', e?.message || e));
-  }, 200);
-}
-
+// BE-012：防抖窗后的实际写盘经单写者串行原语（createSerialWriter）——串行不乱序 + 在飞合并 + shutdown fence，
+// 消除「两次异步写 rename 乱序把新态覆盖回旧」与「在飞写覆盖同步 flush」两个数据完整性窗口。
 let _saveSeq = 0;
-async function _saveAsync() {
+const writer = createSerialWriter(async (shouldCommit) => {
   await mkdir(dirname(FILE), { recursive: true });
-  // 原子写：先写 .tmp 再 rename，防写到一半崩溃产生损坏文件。
-  // S4：tmp 用唯一名（pid+自增序）——万一两次 _saveAsync 的 await 重叠（写盘>防抖窗）也不互相覆盖对方 tmp；
-  // rename 仍原子，终态完整。失败则清掉本次唯一 tmp，避免唯一名残留堆积（固定名会被下次覆盖、唯一名不会）。
+  // 原子写：先写 .tmp 再 rename，防写到一半崩溃产生损坏文件。tmp 唯一名（pid+自增序）避免并发覆盖对方 tmp。
   const tmp = `${FILE}.${process.pid}.${++_saveSeq}.tmp`;
   try {
     await writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+    if (!shouldCommit()) { await unlink(tmp).catch(() => {}); return; } // BE-012：已被 flushSaveSync fence → 不覆盖同步权威写
     await rename(tmp, FILE);
   } catch (e) {
     try { await unlink(tmp); } catch { /* tmp 可能未生成 */ }
     throw e;
   }
+}, { onError: e => console.error('[sessions] 保存失败（状态未落盘，cost/会话指针可能丢失）:', e?.message || e) });
+
+let _saveTimer = null;
+function save() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => { _saveTimer = null; writer.request(); }, 200);
 }
 
 // 进程正常退出时同步 flush（由 server.js shutdown() 调用），保证干净退出状态不丢。
+// BE-012：先 fence 作废任何在飞异步写（防其 rename 后于本同步写落地、把终态覆盖回旧），再同步权威写。
 export function flushSaveSync() {
   clearTimeout(_saveTimer);
   _saveTimer = null;
+  writer.fence();
   mkdirSync(dirname(FILE), { recursive: true });
   writeOwnerOnlyFile(FILE, JSON.stringify(state, null, 2));
 }

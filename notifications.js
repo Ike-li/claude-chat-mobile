@@ -120,3 +120,20 @@ export function ntfyRequestInit({ url, topic, token }, title, body, meta = {}) {
   if (token) headers.Authorization = `Bearer ${token}`;
   return { url, init: { method: 'POST', headers, body: JSON.stringify(payload) } };
 }
+
+// BE-014：Web Push 订阅结构校验（纯函数）。旧 HTTP handler `if (!req.body?.endpoint)` 只挡 falsy——
+// truthy 非字符串 endpoint（数字/对象/数组）会先 savePushSubscription 落盘、再 `req.body.endpoint.slice()`
+// 抛异常返回 500，畸形订阅从此常驻，后续 webpush.sendNotification 对它持续失败污染推送。调用方必须在
+// 变更任何状态【之前】用本函数校验，非法即 400。
+// 标准 PushSubscription.toJSON()：{ endpoint:<http(s) URL 字符串>, keys:{ p256dh, auth }, expirationTime? }；
+// keys 为 web-push RFC 8291 加密所必需，缺失会让 sendNotification 抛错，故一并强制。
+export function isValidPushSubscription(sub) {
+  if (!sub || typeof sub !== 'object' || Array.isArray(sub)) return false;
+  if (typeof sub.endpoint !== 'string' || sub.endpoint.length === 0) return false;
+  if (!/^https?:\/\//.test(sub.endpoint)) return false; // 必须是 http(s) URL 端点（拦 javascript:/ftp: 等）
+  const k = sub.keys;
+  if (!k || typeof k !== 'object' || Array.isArray(k)) return false;
+  if (typeof k.p256dh !== 'string' || k.p256dh.length === 0) return false;
+  if (typeof k.auth !== 'string' || k.auth.length === 0) return false;
+  return true;
+}

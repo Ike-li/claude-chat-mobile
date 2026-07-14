@@ -1,7 +1,42 @@
 // test/notifications.test.mjs —— notificationForEvent 纯映射单测（零副作用，不碰 web-push 传输）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY } from '../notifications.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from '../notifications.js';
+
+// ── BE-014：push 订阅结构校验（落盘前拦畸形，防 .slice() 抛 500 + 污染后续推送）──────────────
+test.describe('isValidPushSubscription', () => {
+  const validSub = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: 'BKp...', auth: 'a1b2' } };
+  test('标准订阅（endpoint https + keys.p256dh/auth）→ true', () => {
+    assert.equal(isValidPushSubscription(validSub), true);
+    assert.equal(isValidPushSubscription({ ...validSub, expirationTime: null }), true); // 可选字段不影响
+  });
+  test('truthy 非字符串 endpoint（数字/对象/数组）→ false（正是旧 .slice() 崩+落盘的根因）', () => {
+    assert.equal(isValidPushSubscription({ endpoint: 123, keys: validSub.keys }), false);
+    assert.equal(isValidPushSubscription({ endpoint: { u: 'x' }, keys: validSub.keys }), false);
+    assert.equal(isValidPushSubscription({ endpoint: ['https://x'], keys: validSub.keys }), false);
+  });
+  test('缺失/空 endpoint → false', () => {
+    assert.equal(isValidPushSubscription({ keys: validSub.keys }), false);
+    assert.equal(isValidPushSubscription({ endpoint: '', keys: validSub.keys }), false);
+  });
+  test('endpoint 非 http(s) URL → false', () => {
+    assert.equal(isValidPushSubscription({ endpoint: 'javascript:alert(1)', keys: validSub.keys }), false);
+    assert.equal(isValidPushSubscription({ endpoint: 'ftp://x/y', keys: validSub.keys }), false);
+  });
+  test('缺失/畸形 keys → false（web-push 加密必须 p256dh+auth）', () => {
+    assert.equal(isValidPushSubscription({ endpoint: validSub.endpoint }), false);
+    assert.equal(isValidPushSubscription({ endpoint: validSub.endpoint, keys: {} }), false);
+    assert.equal(isValidPushSubscription({ endpoint: validSub.endpoint, keys: { p256dh: 'x' } }), false); // 缺 auth
+    assert.equal(isValidPushSubscription({ endpoint: validSub.endpoint, keys: { p256dh: 1, auth: 2 } }), false); // 非字符串
+  });
+  test('非对象/null → false（不抛）', () => {
+    assert.equal(isValidPushSubscription(null), false);
+    assert.equal(isValidPushSubscription(undefined), false);
+    assert.equal(isValidPushSubscription('string'), false);
+    assert.equal(isValidPushSubscription([]), false);
+  });
+});
+
 
 // ── result：仅在无客户端连接时推 ──────────────────────────────────────────────
 

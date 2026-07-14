@@ -10,6 +10,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { writeOwnerOnlyFile } from './file-security.js';
+import { createSerialWriter } from './serial-writer.js';
 
 // 优先级同 sessions.js：CCM_APPROVAL_STORE_FILE（仅测试）> CCM_DATA_DIR > data/ 默认。
 const FILE = process.env.CCM_APPROVAL_STORE_FILE
@@ -32,31 +33,33 @@ function load() {
 
 let state = load();
 
-let _saveTimer = null;
-function save() {
-  clearTimeout(_saveTimer);
-  _saveTimer = setTimeout(() => {
-    _saveAsync().catch(e => console.error('[approval-store] 保存失败（审批台账未落盘）:', e?.message || e));
-  }, 200);
-}
-
 let _saveSeq = 0;
-async function _saveAsync() {
+// BE-012：实际写盘经单写者串行原语——串行不乱序 + 在飞合并 + shutdown fence（防在飞写覆盖同步 flush 的 deny 终态）。
+const writer = createSerialWriter(async (shouldCommit) => {
   await mkdir(dirname(FILE), { recursive: true });
   const tmp = `${FILE}.${process.pid}.${++_saveSeq}.tmp`;
   try {
     await writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
+    if (!shouldCommit()) { await unlink(tmp).catch(() => {}); return; } // BE-012：已被 flushSaveSync fence → 不覆盖同步权威写
     await rename(tmp, FILE);
   } catch (e) {
     try { await unlink(tmp); } catch { /* tmp 可能未生成 */ }
     throw e;
   }
+}, { onError: e => console.error('[approval-store] 保存失败（审批台账未落盘）:', e?.message || e) });
+
+let _saveTimer = null;
+function save() {
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => { _saveTimer = null; writer.request(); }, 200);
 }
 
 // 进程正常退出时同步 flush（server.js shutdown() 调用），防抖窗口内未落盘的状态不因 process.exit 丢失。
+// BE-012：先 fence 作废在飞异步写，防其 rename 后于本同步写落地覆盖回旧（丢失 dispose 时刚写的 deny 终态）。
 export function flushSaveSync() {
   clearTimeout(_saveTimer);
   _saveTimer = null;
+  writer.fence();
   mkdirSync(dirname(FILE), { recursive: true });
   writeOwnerOnlyFile(FILE, JSON.stringify(state, null, 2));
 }

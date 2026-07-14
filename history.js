@@ -157,6 +157,21 @@ export function catchUpStep(state, { messages, localBusy = false }) {
   return { emit: [], state: { baseline: state.baseline, wasBusy: false } };
 }
 
+// BE-009：客户端（重）连时 server 会强制重定 catch-up baseline（重连会 loadHistory 全量重渲，沿用滞后 baseline
+// 会把已显示消息再 history_append 一遍成重复气泡——前端 renderHistoryBubbles 不按 uuid 去重，故须靠 rebaseline
+// 避重复）。但该 rebaseline 有副作用：若「连接前终端写了新轮次、catchUpTick 尚未观察/推送」，这段外部增长会被
+// baseline 静默吸收——既不回显、也不标 externalDirty，SDK 子进程内存上下文继续滞后于磁盘，下条手机消息会用
+// 陈旧上下文、从旧位置分叉出第二条 parentUuid 链（transcript 分叉）。
+//
+// 本纯函数判定「这次 rebaseline 是否吸收了未观察到的外部增长」，调用方据此对该 AgentSession 标 externalDirty
+// （下次发送前置换实例吸收，同 effort 切档冷读最新磁盘）。仅当【同一会话】重连(sameSession)才算——真会话切换是
+// 另一段会话的全量历史、无分叉语义。curLen 非有限（读盘失败）保守返回 false，不误标。
+export function rebaselineAbsorbedExternal({ sameSession, curLen, baseline }) {
+  return sameSession === true
+    && Number.isFinite(curLen) && Number.isFinite(baseline)
+    && curLen > baseline;
+}
+
 // 只读镜像锁的【释放】状态机（纯函数，便于单测）——修 code-review 发现 1：原实现 setMirror(true) 在观测到
 // 外部写入时上锁，但没有任何自动释放路径（setMirror(false) 仅在「无查看会话」「切了会话」触发），导致终端
 // 写一次就把移动端输入锁死到用户手动切会话/接管为止，即便终端 turn 早已结束。catchUpTick 每 tick 调一次本函数。

@@ -17,10 +17,10 @@ import { Server } from 'socket.io';
 import { AgentSession } from './agent.js';
 import { deleteSession as sdkDeleteSession } from '@anthropic-ai/claude-agent-sdk';
 import * as sessions from './sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, readLastPermissionMode } from './history.js';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY } from './notifications.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, readLastPermissionMode } from './history.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from './notifications.js';
 import { attributePath, buildDiff, readPreview } from './file-preview.js';
-import { runDoctor } from './doctor-runtime.js';
+import { runDoctor, countConfigPermProblems } from './doctor-runtime.js';
 import { buildWebStatusLine } from './statusline.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from './uploads.js';
 import * as interactionLog from './interaction-log.js';
@@ -445,7 +445,9 @@ app.get('/push/vapid-public-key', httpAuth, (req, res) => {
 });
 app.post('/push/subscribe', httpAuth, express.json({ limit: '4kb' }), (req, res) => {
   if (!pushEnabled) return res.status(503).json({ error: 'push not configured' });
-  if (!req.body?.endpoint) return res.status(400).json({ error: 'invalid subscription' });
+  // BE-014：落盘前结构化校验（endpoint 必须是 http(s) 字符串 URL + keys.p256dh/auth）。旧实现只挡 falsy
+  // endpoint，truthy 非字符串会先落盘再 .slice() 抛 500、畸形订阅永久污染推送。非法一律 400、不改状态。
+  if (!isValidPushSubscription(req.body)) return res.status(400).json({ error: 'invalid subscription' });
   savePushSubscription(req.body);
   console.log('[push] 订阅已保存:', req.body.endpoint.slice(0, 60) + '…');
   res.json({ ok: true });
@@ -938,6 +940,7 @@ function setMirror(readonly, sessionId, force = false, stale = false) {
 }
 let catchUpKey = null;                              // `${cwd}\x00${sessionId}`：当前追平的会话
 let catchUpState = { baseline: 0, wasBusy: false };
+let catchUpRebaselineRequested = false;             // BE-009：客户端（重）连时置位，下一 tick 重定基线；先检测被吸收的外部增长再标 externalDirty，防分叉
 // 只读锁释放状态机（history.js mirrorReleaseStep，含自动解锁计时）——修 code-review 发现 1：
 // 原实现上锁后无任何自动释放路径，终端写一次就把移动端输入锁死到手动切会话/接管为止。现每 tick 据
 // 「本 tick 有无外部写入 / web 是否在跑」推进 quietTicks：终端静默足够久（idle 且连续 N tick 无外部写入）自动解锁。
@@ -950,6 +953,22 @@ async function catchUpTick() {
   const key = `${a.cwd}\x00${a.sessionId}`;
   const st = instanceState(id);
   const localBusy = st === 'busy' || st === 'permission';
+  // BE-009：处理「客户端（重）连要求重定基线」。旧实现连接时直接 `catchUpKey = null` 强制下方 switch 分支重建
+  // baseline，但会把「连接前终端写入、catchUpTick 尚未观察」的外部增长静默吸收——不标 externalDirty，SDK 内存
+  // 上下文继续滞后 → 下条手机消息从旧位置分叉。此处在重建【之前】比较磁盘长度与旧 baseline：同一会话重连且磁盘
+  // 更长 = 有被吸收的外部增长 → 标 externalDirty（下次发送前置换实例吸收），再置 catchUpKey=null 保留原「重连
+  // 重渲无重复气泡」行为。真会话切换（key !== catchUpKey）不在此判、由下方 switch 分支按新会话正常重建。
+  if (catchUpRebaselineRequested) {
+    catchUpRebaselineRequested = false;
+    if (key === catchUpKey) {                                        // 同一会话重连（非真切换）
+      let curLen = -1;
+      try { curLen = (await getSessionHistory(a.sessionId, a.cwd)).length; } catch { curLen = -1; }
+      if (viewingInstanceId === id && rebaselineAbsorbedExternal({ sameSession: true, curLen, baseline: catchUpState.baseline })) {
+        a.externalDirty = true; // 被 rebaseline 吸收的终端外部增长 → 标脏防分叉
+      }
+    }
+    catchUpKey = null;                                               // 强制下方 switch 分支重建 baseline + 重评 mirror 入口锁
+  }
   if (key !== catchUpKey) {                                           // 切了会话：以现有历史长度定基线，本 tick 不推
     let seedLen = 0;
     try { seedLen = (await getSessionHistory(a.sessionId, a.cwd)).length; }
@@ -1459,9 +1478,11 @@ interactionLog.setCallback((key, entry) => {
 
 io.on('connection', socket => {
   console.log(`[conn] ${socket.id} 已连接（来自 ${clientIp(socket.handshake.address)}）`);
-  // 只读追平：客户端（重）连时强制下一 tick 以当前历史长度重定基线——重连会 loadHistory 重渲全量历史，
-  // 若沿用滞后 baseline 会把已显示的消息再 history_append 一遍成重复气泡。重定基线=不推、仅对齐，安全。
-  catchUpKey = null;
+  // 只读追平：客户端（重）连时请求下一 tick 重定基线——重连会 loadHistory 重渲全量历史，若沿用滞后 baseline
+  // 会把已显示的消息再 history_append 一遍成重复气泡。重定基线=不推、仅对齐，安全。
+  // BE-009：改为置 catchUpRebaselineRequested 标志（而非直接 catchUpKey=null）——让下一 tick 在重建 baseline
+  // 之【前】比较磁盘长度、把被吸收的终端外部增长标 externalDirty，防它被静默吞掉致下条手机消息分叉。
+  catchUpRebaselineRequested = true;
 
   if (socket.deviceApproved === false) {
     // 未经授权的设备：跳过任何敏感信息重放，只推送 pending 状态
@@ -2037,6 +2058,7 @@ io.on('connection', socket => {
       pushEnabled,
       trustedDevices: getTrustedCount(),
       pendingDevices: getPendingDevices().length,
+      configPermsProblems: countConfigPermProblems(HERE), // BE-013：实际检查配置文件权限（number/null），不再缺省当 0 假绿
     }));
   });
 
@@ -2249,7 +2271,13 @@ httpServer.listen(port, host, () => {
   // 目录）才预热 resume，避免对别目录会话 resume 失败。全新空状态不预热（viewingInstanceId 保持 null、
   // 首条消息懒开）。失败走 onExit 兜底；空闲不被 checkIdle 误杀；不耗 token。
   currentSessionForCwd(WORK_DIR).then(async s => {
-    if (s) viewingInstanceId = (await dedupedResume(WORK_DIR, s.id)).instanceId;
+    if (s) {
+      viewingInstanceId = (await dedupedResume(WORK_DIR, s.id)).instanceId;
+      // BE-018：预热选定初始 tab 后补广播完整快照。listen 已开始接受连接、但 preheat 是异步——这之间连上的
+      // 客户端拿到的是空实例快照；preheat 注册了初始实例并设为 viewingInstanceId 却不广播，已连客户端会停留
+      // 在空快照、看不到这个被路由的初始 tab（首条消息虽仍正确路由、随后续事件自愈，但空窗是可见瞬态）。
+      broadcastInstances();
+    }
   }).catch(err => console.error('[preheat]', err));
 });
 

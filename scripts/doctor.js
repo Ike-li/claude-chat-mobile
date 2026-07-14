@@ -24,6 +24,7 @@ import { isOwnerOnly, fixPermissions } from '../file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile } from '../workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import { statuslineConfigDiagnostic } from './doctor-checks.js';
+import { CONFIG_FILE_NAMES } from '../doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const results = [];
@@ -201,16 +202,7 @@ function checkAnthropicEnv() {
 // 共用 CONFIG_FILE_NAMES，防止两处各自维护的清单再次漏同步（trusted/pending-devices.json、
 // cf-access-certs.json 此前就只在 devices.js/cf-access.js 里用 writeOwnerOnlyFile 写成 0600、
 // 却没被这里检查/自动修复覆盖——同样敏感、被漏检）。
-const CONFIG_FILE_NAMES = [
-  '.env',
-  join('data', 'sessions.json'),
-  join('data', 'init-cache.json'),
-  join('data', 'trusted-devices.json'),
-  join('data', 'pending-devices.json'),
-  join('data', 'cf-access-certs.json'),
-  join('data', 'approval-requests.json'), // Phase 4/approval-store.js（NFR-16/17/19）
-  join('data', 'audit-records.json'),     // Phase 4/audit.js（NFR-06/16，FR-19）
-];
+// BE-013：清单已上移至 doctor-runtime.js，CLI 检查与 UI 体检（countConfigPermProblems）共用同一份，防漂移。
 
 function checkConfigPermissions() {
   if (platform() === 'win32') {
