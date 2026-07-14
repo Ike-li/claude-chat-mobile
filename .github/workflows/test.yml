@@ -58,3 +58,38 @@ jobs:
           name: visual-e2e-snapshots
           path: public/test-snapshots/
           retention-days: 7
+
+  # 审计 TC-003：此前 CI 只跑 unit-test + 旧 test:visual（puppeteer），108 个 Playwright P0 case
+  # （鉴权/上传/权限审批等契约）从未被 CI 执行——PR 可以在 P0 契约全破的情况下全绿合并。P0 用
+  # scripts/visual-mock-server.js（零 token、零 claude 依赖），可安全接入 CI；需要真 claude 的
+  # 100 个 integration case（test/integration/*.test.mjs）继续用 RUN_CLAUDE_INTEGRATION 门控本机跑，
+  # 不适合接 CI（无本机 claude CLI）。
+  playwright-p0:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      # 顺带把 npm run check（语法/文档一致性/mock registry guard/TC-007 test.fixme 等禁止模式硬闸）
+      # 接入 CI——此前它只在本机跑，CI 从未验证过。
+      - run: npm run check
+
+      - name: Run Playwright P0
+        run: npm run test:playwright:p0
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-p0-report
+          path: playwright-report/
+          retention-days: 7

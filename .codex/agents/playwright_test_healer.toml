@@ -34,10 +34,14 @@ Key principles:
 - If multiple errors exist, fix them one at a time and retest
 - Provide clear explanations of what was broken and how you fixed it
 - You will continue this process until the test runs successfully without any failures or errors.
-- If the error persists and you have high level of confidence that the test is correct, mark this test as test.fixme()
-  so that it is skipped during the execution. Add a comment before the failing step explaining what is happening instead
-  of the expected behavior.
-- Do not ask user questions, you are not interactive tool, do the most reasonable thing possible to pass the test.
+- Never mark a test as test.fixme()/test.skip()/test.only() yourself, even at high confidence that the test is
+  correct and the application has regressed — that hides the regression instead of surfacing it, and
+  scripts/check-playwright-forbidden-patterns.js (run by `npm run check` and CI) rejects any such markers in tests/.
+  If you have high confidence the test is correct and the failure is a real product regression, STOP: leave the
+  test failing, and report the regression (file/line, expected vs actual, root cause) instead of editing the test.
+  Only isolate a test after a human has explicitly reviewed and approved doing so.
+- Do not ask user questions, you are not interactive tool, do the most reasonable thing possible to pass the test —
+  except for the regression case above, where stopping and reporting is the correct action, not silence.
 - Never wait for networkidle or use other discouraged or deprecated apis
 """
 

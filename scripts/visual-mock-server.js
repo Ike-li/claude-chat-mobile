@@ -1490,6 +1490,17 @@ io.on('connection', socket => {
           seq: 2, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_mirror_readonly_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
+        // TC-003 附带修复：2026-07-13「排队接管」上线后，非 stale 会话点「接管 CLI 会话」只 armed（见 app.js
+        // armedTakeoverStep），不再像旧的两态模型那样立即解锁——需要终端本轮完结（readonly:false 到达）才自动
+        // 放行。此前本场景从不发这个后续事件，P0-17c/17f 的「点接管 → 断言解锁」断言因此永久等不到，被
+        // task-progress.spec.ts:55/100 的旧横幅文案断言抢先失败掩盖，两个问题叠在一起。同 test:mirror-armed
+        // 场景的手法，补一次延迟后的 readonly:false，模拟终端本轮完结——不管此刻是否已点接管，效果都正确
+        // （armed 则 unlock-focus 自动放行；未 armed 则直接照常解锁），零改动测试断言本身。
+        await delay(1200);
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, ts: Date.now(),
+          type: 'mirror_state', payload: { readonly: false }
+        });
       },
     },
     {
