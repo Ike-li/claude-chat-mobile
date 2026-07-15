@@ -3,7 +3,7 @@ export function createContentScenarios(getContext) {
     {
       prefix: 'test:message-edit',
       run: async ({ activeInst }) => {
-        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
         console.log('[mock] Emitting assistant reply for message edit regression');
         activeInst.state = 'busy';
         io.emit('agent:event', {
@@ -34,7 +34,7 @@ export function createContentScenarios(getContext) {
     {
       command: 'test:tool',
       run: async ({ activeInst }) => {
-        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
         console.log('[mock] Starting test:tool sequence');
         activeInst.state = 'busy';
         io.emit('agent:event', {
@@ -112,7 +112,7 @@ export function createContentScenarios(getContext) {
     {
       command: 'test:tool-out-of-order',
       run: async ({ activeInst }) => {
-        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
         console.log('[mock] Starting test:tool-out-of-order sequence');
         activeInst.state = 'busy';
         io.emit('agent:event', {
@@ -157,7 +157,7 @@ export function createContentScenarios(getContext) {
     {
       command: 'test:tool-error',
       run: async ({ activeInst }) => {
-        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        const { io, socket, activeEpoch, viewingInstanceId, mockInstances, delay } = getContext();
         console.log('[mock] Starting test:tool-error sequence');
         activeInst.state = 'busy';
         io.emit('agent:event', {
@@ -185,7 +185,7 @@ export function createContentScenarios(getContext) {
     {
       command: 'test:disconnect-now',
       run: async ({ activeInst }) => {
-        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
         console.log('[mock] Completing current turn, then forcing a socket disconnect');
         activeInst.state = 'busy';
         io.emit('agent:event', {
@@ -216,7 +216,8 @@ export function createContentScenarios(getContext) {
       // 默认收起；展开后可见子 agent 正文与内部工具。对齐 agent.js forwardSubagentText 分流字段。
       command: 'test:subagent',
       run: async ({ activeInst }) => {
-        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        // 空首页兜底需重指 viewingInstanceId，故此处用 let（其余场景为 const）
+        let { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
         console.log('[mock] Starting test:subagent sequence');
         // 空首页（session:new 后 viewing=null）时 activeInst 为 undefined——兜底到 inst_1
         if (!activeInst) {
@@ -311,7 +312,7 @@ export function createContentScenarios(getContext) {
     {
       command: 'test:stream',
       run: async ({ activeInst }) => {
-        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
         console.log('[mock] Starting test:stream sequence');
         activeInst.state = 'busy';
         io.emit('agent:event', {
@@ -341,10 +342,8 @@ export function createContentScenarios(getContext) {
 
         // Chunk and stream
         const words = responseText.split(' ');
-        let currentText = '';
         for (let i = 0; i < words.length; i++) {
           const chunk = words[i] + ' ';
-          currentText += chunk;
           socket.emit('agent:event', {
             seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
             type: 'text_delta', payload: { messageId: 'msg_stream_1', text: chunk }
@@ -367,7 +366,7 @@ export function createContentScenarios(getContext) {
     {
       command: 'test:stream-long',
       run: async ({ activeInst }) => {
-        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
         console.log('[mock] Starting long streaming sequence for interrupt test');
         activeInst.state = 'busy';
         io.emit('agent:event', {
@@ -408,7 +407,7 @@ export function createContentScenarios(getContext) {
     {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
-        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
         console.log('[mock] Starting test:unsafe-markdown sequence');
         activeInst.state = 'busy';
         io.emit('agent:event', {

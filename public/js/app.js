@@ -54,7 +54,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // ---- 极简触觉交互及抽屉式元素 DOM 绑定 ----
   const sidebarScrim = $('sidebarScrim'), leftSidebar = $('leftSidebar'), sidebarClose = $('sidebarClose');
   const btnSettings = $('btnSettings'), settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsClose = $('settingsClose');
-  const statusPillsRow = $('statusPillsRow'), pillModel = $('pillModel'), pillModelText = $('pillModelText');
+  const pillModel = $('pillModel'), pillModelText = $('pillModelText');
   const pillPerm = $('pillPerm'), pillPermText = $('pillPermText'), pillEffort = $('pillEffort'), pillEffortText = $('pillEffortText');
   const topContextPill = $('topContextPill'), topTitleText = $('topTitleText'), topProjectText = $('topProjectText');
   const customModelGrid = $('customModelGrid'), customPermGrid = $('customPermGrid'), customEffortGrid = $('customEffortGrid'), customEffortGroup = $('customEffortGroup');
@@ -415,7 +415,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const {
     permissionQueue: permQueue,
     questionQueue,
-    answeredQuestionIds,
     markQuestionAnswered,
   } = interactionState;
   const clientLogger = createClientLogger(appContext, {
@@ -1605,11 +1604,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     return s;
   }
   function finalizeStreams() {
-    let accumulatedText = '';
     for (const s of streams.values()) {
       if (s.done) continue;
       if (s._mdTimer) { clearTimeout(s._mdTimer); s._mdTimer = null; }
-      accumulatedText += (s.raw || '');
       s.done = true;
       s.el.style.transition = 'opacity .1s';
       s.el.style.opacity = '0.4';
@@ -2001,7 +1998,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
 
   // ---- 发送 / 停止 ----
-  function send(opts = {}) {
+  function send() {
     ensureAlertAudio(); // 发送=用户手势：解锁 WebAudio，本轮完成后提示音才能响
     if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「接管 CLI 会话」可接管）
       addBar('此会话正在终端运行，只读中——点「接管 CLI 会话」可在手机继续', 'text-danger');
@@ -3526,7 +3523,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       sessionPanel.appendChild(subtree);
 
-      const listCwd = d;
       const tabs = liveByCwd[d] || [];
       const liveBySession = new Map();        // sessionId → 已打开实例（有 id 的 live tab，用于在 /resume 列表中就地标记）
       const freshTabs = [];                   // 无 sessionId 的新会话实例（尚未保存，/resume 列表看不到、无时间）
@@ -3541,7 +3537,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const container = el(`<div class="relative overflow-hidden w-full select-none swipe-row-container"></div>`);
         
         // 背景红底“关闭”按钮
-        let deleteBtn = null;
+        let deleteBtn;
         if (liveInst) {
           deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">关闭</div>`);
           deleteBtn.onclick = (e) => {
@@ -3845,7 +3841,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
 
     const hour = new Date().getHours();
-    let greeting = '今天我能帮您做什么？';
+    let greeting;
     if (hour < 5) greeting = '夜深了，有什么需要我帮忙的吗？';
     else if (hour < 11) greeting = '上午好，今天我能帮您做什么？';
     else if (hour < 13) greeting = '中午好，今天我能帮您做什么？';
@@ -4650,8 +4646,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
     const badgeSpan = document.createElement('span');
     badgeSpan.className = 'px-1 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider shrink-0';
-    let badgeText = '';
-    let textClass = 'text-gray-300';
+    let badgeText;
+    let textClass;
 
     switch (p.type) {
       case 'user_in':

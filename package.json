@@ -36,7 +36,9 @@
     "statusline:install": "node scripts/statusline-bridge-setup.js install",
     "statusline:uninstall": "node scripts/statusline-bridge-setup.js uninstall",
     "dev": "node --watch server.js",
-    "check": "node scripts/check-syntax.js && node scripts/doc-consistency.js && node scripts/check-visual-mock-registry.js && node scripts/check-playwright-forbidden-patterns.js && npm run inventory:check",
+    "check": "eslint . && node scripts/doc-consistency.js && node scripts/check-visual-mock-registry.js && node scripts/check-playwright-forbidden-patterns.js && npm run inventory:check",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "inventory:update": "node scripts/repo-inventory.js --write",
     "inventory:check": "node scripts/repo-inventory.js --check",
     "test": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/unit/*.test.mjs tests/integration/*.test.mjs",
@@ -61,8 +63,12 @@
     "web-push": "^3.6.7"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.61.1",
+    "eslint": "^10.7.0",
+    "eslint-plugin-unused-imports": "^4.4.1",
     "gifenc": "^1.0.3",
+    "globals": "^17.7.0",
     "pngjs": "^7.0.0",
     "socket.io-client": "^4.8.3"
   }

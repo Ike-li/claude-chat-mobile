@@ -1,13 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession, sdkChildEnv } from '../../src/agent/agent.js';
-import { getSessionLogs } from '../../src/agent/interaction-log.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 
 // ---- dispose() ----
 test.describe('dispose()', () => {
   test('dispose：设置 disposed/inputEnded、clearInterval、abort', () => {
-    const { s, events } = makeSession();
+    const { s } = makeSession();
     let cleared = false;
     s.idleTimer = setInterval(() => {}, 99999);
     const origClear = clearInterval;
@@ -245,7 +243,7 @@ test.describe('consume() 退出路径', () => {
 
   test('disposed=true → 不调 onExit', async () => {
     let exited = false;
-    const { s, events } = makeSession({ onExit() { exited = true; } });
+    const { s } = makeSession({ onExit() { exited = true; } });
     s.disposed = true;
 
     const fakeQ = {
@@ -258,7 +256,7 @@ test.describe('consume() 退出路径', () => {
   });
 
   test('consume 清理：pendingTurns 清零、denyKinds clear、pendingPermissions 全部 deny', async () => {
-    const { s, events } = makeSession();
+    const { s } = makeSession();
     const ac = new AbortController();
     s.pendingTurns = 3;
     s.askPermission('Read', { file_path: '/a' }, { signal: ac.signal, toolUseID: 't1' });

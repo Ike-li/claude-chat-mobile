@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
-import { collectSyntaxFiles } from '../../scripts/check-syntax.js';
+import { collectSyntaxFiles } from '../../scripts/collect-source-files.js';
 
-test('syntax checker discovers nested project JavaScript without scanning dependencies', async t => {
+test('source file walker discovers nested project JavaScript without scanning dependencies', async t => {
   const root = await mkdtemp(join(tmpdir(), 'ccm-syntax-'));
   t.after(() => rm(root, { recursive: true, force: true }));
 

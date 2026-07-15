@@ -28,10 +28,6 @@ async function makeTestJwk(kid) {
   return { publicJwk: pubJwk, privateKey };
 }
 
-async function makeTestJwks(jwksObj) {
-  writeOwnerOnly(CACHE_FILE, JSON.stringify(jwksObj, null, 2));
-}
-
 async function signAccessJwt(privateKey, kid, { issuer, audience, payload = {}, expiresIn = '1h' } = {}) {
   return await new SignJWT(payload)
     .setProtectedHeader({ alg: 'ES256', kid })

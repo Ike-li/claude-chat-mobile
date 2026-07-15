@@ -9,7 +9,7 @@
 // （如 sessionId）再从 client.events 里找。本文件没有"重启服务器"式的用例，故不需要 _spawn-server.mjs。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
@@ -229,7 +229,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
       // 创建一个会话
       client.sendMessage('Session for history test');
-      const result = await client.waitForEvent('result', 30000);
+      await client.waitForEvent('result', 30000);
 
       // 获取当前 sessionId
       const init = client.events.find(e => e.type === 'init');
@@ -307,7 +307,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
       // 发送新消息（应该在同一个会话中）
       client.sendMessage('Second message in same session');
-      const result2 = await client.waitForEvent('result', 30000);
+      await client.waitForEvent('result', 30000);
 
       // 检查事件是否仍然指向同一个会话
       console.log(`会话 1 继续消息，sessionId 保持: ${sessionId1}`);
@@ -337,7 +337,7 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
       client1.sendMessage('Session from client 1');
       client2.sendMessage('Session from client 2');
 
-      const [result1, result2] = await Promise.all([
+      await Promise.all([
         client1.waitForEvent('result', 30000),
         client2.waitForEvent('result', 30000),
       ]);

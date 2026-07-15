@@ -1223,7 +1223,7 @@ export class AgentSession {
         break;
       }
 
-      case 'result':
+      case 'result': {
         this._flushText(); this._flushThink();
         this.pendingTurns = Math.max(0, this.pendingTurns - 1);
         this.lastToolName = null; // 清空工具名跟踪
@@ -1250,6 +1250,7 @@ export class AgentSession {
         this.currentMessageId = null;
         this.sawTextDelta = false;
         break;
+      }
 
       default:
         // 未映射的 SDK 消息类型不再静默蒸发：记入交互日志抽屉（三重 cap，无膨胀风险），保留可观测性

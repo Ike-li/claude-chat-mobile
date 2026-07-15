@@ -60,9 +60,8 @@ test.describe('audit.js 单元测试', () => {
 
   test('listRecent: 按 since 过滤', () => {
     const before = AU.recordAudit({ action: 'since-old' });
-    const cutoff = before.ts + 1;
     const after = AU.recordAudit({ action: 'since-new' });
-    // 时钟精度可能相同 ts；只断言 old 不在结果里（new 的 ts 若与 cutoff 相同也应保留，>= 语义）
+    // 时钟精度可能相同 ts；只断言 old 不在结果里（new 的 ts 若与 since 相同也应保留，>= 语义）
     const rows = AU.listRecent({ limit: 1000, since: after.ts });
     assert.ok(rows.some(r => r.id === after.id));
     assert.ok(!rows.some(r => r.id === before.id) || before.ts >= after.ts);

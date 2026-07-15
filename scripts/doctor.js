@@ -26,7 +26,7 @@ import { normalizeWorkdirEntries, loadWorkdirsFile } from '../src/sessions/workd
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import { statuslineBridgeDiagnostic, statuslineConfigDiagnostic } from './doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
-import { collectSyntaxFiles } from './check-syntax.js';
+import { collectSyntaxFiles } from './collect-source-files.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const results = [];
@@ -109,7 +109,7 @@ function checkWorkDir() {
   // 对无效项告警跳过、不挡启动，doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
   // 解析统一走 workdirs.js（与 server.js preflight 单一事实源）：条目支持 string 或 {path, sessionLimit}。
   // 文件模式复用导出的 loadWorkdirsFile（read+parse+normalize→null），逗号模式走 normalizeWorkdirEntries。
-  let result = null;
+  let result;
   const dirsFile = process.env.WORK_DIRS_FILE;
   if (dirsFile) {
     const filePath = dirsFile.startsWith('/') ? dirsFile : join(HERE, dirsFile);
@@ -276,7 +276,7 @@ function checkDocConsistency() {
 // D10: 前端 JS 语法（递归 public/js/**/*.js）。冒烟测试用 socket.io-client、从不加载浏览器 app.js，故前端脚本
 // 的语法错会潜伏（2026-06-14 实有：app.js 括号失配→浏览器整体不执行→页面死在「未连接」）。
 function checkFrontendSyntax() {
-  let files = [];
+  let files;
   try {
     files = collectSyntaxFiles(HERE).filter(file => file.startsWith('public/js/'));
   } catch {

@@ -27,7 +27,7 @@ test.describe('sanitizeName', () => {
   });
 
   test('BOM 前缀不应让前导点"复活"（code-review P1：trim 需在去前导点之前跑）', () => {
-    // ﻿ 是 trim() 承认的空白字符；若去前导点先跑（此时开头是 BOM 不是点，不剥离），
+    // BOM(U+FEFF) 是 trim() 承认的空白字符；若去前导点先跑（此时开头是 BOM 不是点，不剥离），
     // trim 才把 BOM 去掉，结果会重新暴露一个未被剥离的前导点隐藏文件名。
     assert.equal(sanitizeName('﻿.hidden'), 'hidden');
   });

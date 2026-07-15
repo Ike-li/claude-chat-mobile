@@ -1,6 +1,5 @@
 // tests/helpers/integration.mjs —— 集成测试基础设施
 // 提供服务器启动、socket.io 客户端连接、测试隔离等辅助函数
-import { createServer } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';

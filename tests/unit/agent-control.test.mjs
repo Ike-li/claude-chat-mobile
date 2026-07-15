@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession, sdkChildEnv } from '../../src/agent/agent.js';
-import { getSessionLogs } from '../../src/agent/interaction-log.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 
 test.describe('logMeta()', () => {

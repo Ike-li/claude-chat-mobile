@@ -88,7 +88,7 @@ function httpRequest(path, options = {}) {
 
 // 创建 socket 客户端
 function createClient(options = {}) {
-  const { auth = {}, autoConnect = true } = options;
+  const { auth = {} } = options;
 
   const socket = ioClient(`http://127.0.0.1:${port}`, {
     auth,

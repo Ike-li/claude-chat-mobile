@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession, sdkChildEnv } from '../../src/agent/agent.js';
-import { getSessionLogs } from '../../src/agent/interaction-log.js';
+import { AgentSession } from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 
 // ---- map() SDK 消息映射 ----
@@ -31,7 +30,7 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
   });
 
   test('system/init：/clear 换会话 → firstMessage/lastUsage 重置', () => {
-    const { s, events } = makeSession({ resumeId: 'sid-1', onSessionId() {} });
+    const { s } = makeSession({ resumeId: 'sid-1', onSessionId() {} });
     s.firstMessage = 'hello';
     s.lastUsage = { input_tokens: 100 };
     s.sessionId = 'sid-1';

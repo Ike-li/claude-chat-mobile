@@ -125,7 +125,7 @@ export async function verifyAccessJwt(token) {
     const header = decodeProtectedHeader(token);
     kid = header.kid;
   } catch (err) {
-    throw new Error(`Invalid JWT header: ${err.message}`);
+    throw new Error(`Invalid JWT header: ${err.message}`, { cause: err });
   }
 
   // 如果本地有缓存但没有此 kid，或者完全没有缓存，尝试远程更新

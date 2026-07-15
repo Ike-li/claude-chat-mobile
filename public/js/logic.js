@@ -307,7 +307,9 @@ export function shouldDropAgentEvent(ev, viewingInstanceId, instancesReady) {
 // 逐段 esc 后拼接（安全顺序：escape → 着色 → 调用方 DOMPurify），结尾补闭合防未闭合 ANSI。
 export function ansiToHtml(s) {
   let out = '', open = 0;
+  // eslint-disable-next-line no-control-regex -- 本函数职责就是解析 ANSI 转义序列
   for (const part of s.split(/(\x1b\[[0-9;]*m)/)) {
+    // eslint-disable-next-line no-control-regex -- 同上
     const m = /^\x1b\[([0-9;]*)m$/.exec(part);
     if (!m) { out += esc(part); continue; }
     const rgb = /^38;2;(\d{1,3});(\d{1,3});(\d{1,3})$/.exec(m[1]);

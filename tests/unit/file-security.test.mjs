@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, symlink, writeFile, chmod, stat, readFile, mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { constants } from 'node:fs';
 import { platform } from 'node:os';
 import {
   rejectableSymlinkComponent, writeOwnerOnlyFile, isOwnerOnly, fixPermissions, checkPermissions

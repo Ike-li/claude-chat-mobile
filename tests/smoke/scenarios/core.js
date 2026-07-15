@@ -32,7 +32,6 @@ const waitEvent = (pred, ms) => new Promise((resolve, reject) => {
 });
 const mark = () => events.length;
 const since = i => events.slice(i);
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function ask(text, timeout = 180000) {
   const from = mark();

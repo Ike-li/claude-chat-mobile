@@ -38,7 +38,6 @@ import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, load
 import {
   isDeviceTrusted,
   addPendingDevice,
-  removePendingDevice,
   getLatestPendingDevice,
   approveDevice,
   denyDevice,
@@ -497,7 +496,7 @@ if (existsSync(TRUSTED_DEVICES_FILE)) {
   try {
     watch(dirname(TRUSTED_DEVICES_FILE), (_evt, filename) => {
       if (filename && filename !== tdBase) return; // 有 filename 时按 basename 过滤，忽略同目录其他文件变动
-      let m = 0;
+      let m;
       try { m = statSync(TRUSTED_DEVICES_FILE).mtimeMs; } catch { return; } // 文件暂不可读 → 跳过
       if (m === lastTrustedDevicesMtime) return;    // mtime 未变 = 非本文件变动（如目录下其他文件），忽略
       lastTrustedDevicesMtime = m;
@@ -547,7 +546,7 @@ if (process.env.WORK_DIRS_FILE) {
   try {
     watch(dirname(wf), (_evt, filename) => {
       if (filename && filename !== wbase) return; // 有 filename 时直接按 basename 过滤
-      let m = 0;
+      let m;
       try { m = statSync(wf).mtimeMs; } catch { return; } // 文件不存在/不可读 → 跳过（保留旧白名单）
       if (m === lastWorkdirsMtime) return;               // mtime 未变 = 非本文件变动，忽略
       lastWorkdirsMtime = m;
@@ -970,7 +969,7 @@ async function catchUpTickOnce() {
   if (catchUpRebaselineRequested) {
     catchUpRebaselineRequested = false;
     if (key === catchUpKey) {                                        // 同一会话重连（非真切换）
-      let curLen = -1;
+      let curLen;
       try { curLen = (await getSessionHistory(a.sessionId, a.cwd)).length; } catch { curLen = -1; }
       if (viewingInstanceId === id && agents.get(id) === a && `${a.cwd}\x00${a.sessionId}` === key
           && rebaselineAbsorbedExternal({ sameSession: true, curLen, baseline: catchUpState.baseline })) {
@@ -980,7 +979,7 @@ async function catchUpTickOnce() {
     catchUpKey = null;                                               // 强制下方 switch 分支重建 baseline + 重评 mirror 入口锁
   }
   if (key !== catchUpKey) {                                           // 切了会话：以现有历史长度定基线，本 tick 不推
-    let seedLen = 0;
+    let seedLen;
     try { seedLen = (await getSessionHistory(a.sessionId, a.cwd)).length; }
     catch { return; }
     catchUpKey = key;
@@ -1018,7 +1017,7 @@ async function catchUpTickOnce() {
     setMirror(rel.readonly, a.sessionId);
     return;
   }
-  let messages, curSize = -1, tail = { verdict: 'settled', lastChainTs: null };
+  let messages, curSize, tail = { verdict: 'settled', lastChainTs: null };
   let observedCli = { model: null, permissionMode: null };
   try { messages = await getSessionHistory(a.sessionId, a.cwd); } catch { return; }
   try { curSize = await sessionFileSize(a.sessionId, a.cwd); } catch { curSize = -1; }

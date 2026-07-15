@@ -6,7 +6,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -24,6 +24,7 @@ const ROOT_FILES = new Map([
   ['package-lock.json', ['Generated lockfile', 'Pinned npm dependency graph', 'generated']],
   ['server.js', ['Runtime entrypoint', 'Compatibility launcher used by npm and service managers', 'keep']],
   ['playwright.config.ts', ['Test configuration', 'Playwright E2E configuration', 'keep']],
+  ['eslint.config.js', ['Project configuration', 'ESLint flat config (npm run check static gate)', 'keep']],
   ['.env.example', ['Configuration template', 'Documented runtime environment variables', 'keep']],
   ['.gitignore', ['Project configuration', 'Generated and secret file exclusions', 'keep']],
   ['.nvmrc', ['Project configuration', 'Recommended Node major version', 'keep']],
@@ -72,6 +73,7 @@ function entryAndGeneration(path, classification) {
   if (path === 'server.js') entry = '`node server.js` / `npm start`';
   else if (path === 'package.json' || path === 'package-lock.json') entry = '`npm`';
   else if (path === 'playwright.config.ts') entry = '`npm run test:e2e`';
+  else if (path === 'eslint.config.js') entry = '`npm run check` / `npm run lint`';
   else if (path === '.env.example') entry = '`scripts/setup.js` and runtime configuration';
   else if (path === 'CLAUDE.md' || path === 'AGENTS.md') entry = 'Claude Code and Codex project instruction loader';
   else if (path.startsWith('.github/')) entry = 'GitHub Actions';

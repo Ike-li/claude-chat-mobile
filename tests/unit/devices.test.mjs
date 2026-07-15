@@ -1,14 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 
 // 导入 devices 函数
 import {
   loadTrustedDevices,
-  saveTrustedDevices,
   loadPendingDevices,
-  savePendingDevices,
   isDeviceTrusted,
   addPendingDevice,
   removePendingDevice,

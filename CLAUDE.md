@@ -19,7 +19,8 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 ```bash
 npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
-npm run check      # node --check 根级 *.js + public/js/*.js + 文档一致性 + visual mock registry guard（零 token、最快）
+npm run check      # ESLint（语法+死代码+未定义引用）+ 文档一致性 + visual mock registry guard + 禁止模式 + inventory（零 token、最快）
+npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
 npm test           # 单测 + 可靠集成(server/auth/upload)；claude-turn 集成默认跳过；--test-force-exit 保证退出。CI 里集成整体 skip
 npm run test:unit  # node --test tests/unit/*.test.mjs：仅纯逻辑单测（零 token、最快）
 npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）

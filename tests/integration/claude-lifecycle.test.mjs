@@ -197,9 +197,6 @@ test.describe('Claude 子进程生命周期集成测试', (process.env.CI || !pr
       const perm = await clientSocket.waitForEvent('permission_request', 20000);
       assert.ok(perm.payload, 'permission_request 应该有 payload');
 
-      // 记录时间
-      const requestTime = Date.now();
-
       // 等待一段时间（不批准）
       await sleep(2000);
 

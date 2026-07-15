@@ -12,13 +12,13 @@ const PATTERNS = [
   [/\bgithub_pat_[A-Za-z0-9_]{20,}\b/g, '***'],
 
   // 3. JWT tokens (eyJ 开头的 base64.base64.base64 结构)
-  [/\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b/g, '***'],
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, '***'],
 
   // 4. PEM private keys
   [/-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]+?-----END [A-Z ]+PRIVATE KEY-----/g, '***'],
 
   // 5. Bearer tokens
-  [/Bearer\s+[A-Za-z0-9._\-]{20,}/g, 'Bearer ***'],
+  [/Bearer\s+[A-Za-z0-9._-]{20,}/g, 'Bearer ***'],
 
   // 6. 环境变量赋值（大写严格匹配，避免误杀）
   [/([A-Z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)[A-Z_]*\s*=\s*)\S+/g, '$1***'],
@@ -30,13 +30,13 @@ const PATTERNS = [
   [/\b(aws_session_token|AWS_SESSION_TOKEN)\s*=\s*\S+/gi, '***'],
 
   // 9. OAuth access/refresh tokens（≥20 字符）
-  [/\b(access_token|refresh_token)[:=]\s*[A-Za-z0-9._\-]{20,}\b/g, '$1:***'],
+  [/\b(access_token|refresh_token)[:=]\s*[A-Za-z0-9._-]{20,}\b/g, '$1:***'],
 
   // 10. SSH key fingerprints (MD5: xx:xx:xx:...)
   [/\b[0-9a-f]{2}(:[0-9a-f]{2}){15,}\b/g, '***'],
 
   // 11. URL 凭据 (scheme://user:pass@host)
-  [/\b([a-zA-Z][a-zA-Z0-9+.\-]*:\/\/[^\s:/@]+:)[^\s/@]+(@)/g, '$1***$2'],
+  [/\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s:/@]+:)[^\s/@]+(@)/g, '$1***$2'],
 
   // 12. HTTP Basic auth header
   [/(?:Basic\s+)[A-Za-z0-9+/=]{8,}/gi, 'Basic ***'],
@@ -56,7 +56,9 @@ const PATTERNS = [
 ];
 
 // ANSI 转义序列正则（CSI/OSC/C1 控制字符）
+// eslint-disable-next-line no-control-regex -- 本模块职责就是剥离控制字符
 const ANSI_ESCAPE_RE = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g;
+// eslint-disable-next-line no-control-regex -- 同上
 const CONTROL_CHARS_RE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
 
 /**

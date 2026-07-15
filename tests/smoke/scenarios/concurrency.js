@@ -32,7 +32,7 @@ import { spawn } from 'node:child_process';
 import http from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { existsSync, rmSync, mkdtempSync, realpathSync } from 'node:fs';
+import { rmSync, mkdtempSync, realpathSync } from 'node:fs';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
 const APP_PORT = Number(process.env.PORT || 3220);

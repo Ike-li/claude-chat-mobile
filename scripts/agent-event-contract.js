@@ -218,9 +218,7 @@ function extractAgentEventObjectTypes(source, file) {
   // (?:\.to\([^)]*\))? 容许中间插入一次 .to(room)（SEC-01：io.to('approved').emit(...) 房间过滤广播，
   // 与 io.emit(...) 同为真实广播路径，静态扫描须一视同仁，否则会把仍在发出的类型误判为"real 不再发出"。
   const emitPattern = /\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?(?:\.to\([^)]*\))?\.emit\s*\(\s*(['"])agent:event\1\s*,/g;
-  let match;
-
-  while ((match = emitPattern.exec(source))) {
+  while (emitPattern.exec(source)) {
     const cursor = skipWhitespace(source, emitPattern.lastIndex);
     if (source[cursor] !== '{') continue;
 

@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession, sdkChildEnv } from '../../src/agent/agent.js';
-import { getSessionLogs } from '../../src/agent/interaction-log.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 
 // ---- 权限闸门 ----
@@ -19,7 +17,7 @@ test.describe('权限闸门', () => {
   });
 
   test('handleCanUseTool：AskUserQuestion → handleQuestion', () => {
-    const { s, events } = makeSession();
+    const { s } = makeSession();
     const result = s.handleCanUseTool('AskUserQuestion', { questions: [] }, { signal: new AbortController().signal, toolUseID: 'q1' });
     // 空 questions → allow
     assert.deepEqual(result, { behavior: 'allow', updatedInput: { questions: [] } });
@@ -73,7 +71,7 @@ test.describe('权限闸门', () => {
     const origRemove = ac.signal.removeEventListener;
     ac.signal.removeEventListener = (type, fn) => { removed = true; origRemove.call(ac.signal, type, fn); };
 
-    const promise = s.askPermission('Read', { file_path: '/a.txt' }, {
+    s.askPermission('Read', { file_path: '/a.txt' }, {
       signal: ac.signal, toolUseID: 't1',
       suggestions: [{ destination: 'session', permission: 'allow', toolName: 'Read' }]
     });

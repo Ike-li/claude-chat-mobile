@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AgentSession, sdkChildEnv } from '../../src/agent/agent.js';
-import { getSessionLogs } from '../../src/agent/interaction-log.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 
 test('sdkChildEnv：SDK 子进程带项目自有 origin 标记且调用方不能覆盖', () => {
@@ -138,7 +137,7 @@ test.describe('emit / buffer / eventsSince', () => {
   });
 
   test('缓冲上限 BUFFER_CAP(2000) → 溢出后 bufferTrimmed=true、最旧 seq=2', () => {
-    const { s, events } = makeSession();
+    const { s } = makeSession();
     // push 2001 条（seq 1..2001），buffer 只保留最近 2000 条（seq 2..2001）
     for (let i = 0; i < 2001; i++) s.emit('system', { n: i });
     assert.equal(s.buffer.length, 2000);
@@ -184,7 +183,7 @@ test.describe('emit / buffer / eventsSince', () => {
   // 修：已答 AskUserQuestion / 已决审批仍在环形缓冲 → sync:since 回放又弹窗。
   // pending* 是权威真相；eventsSince 回放须跳过已不再 pending 的 question/permission_request。
   test('eventsSince：已答 question 与已决 permission_request 不再回放', () => {
-    const { s, events } = makeSession();
+    const { s } = makeSession();
     const ac = new AbortController();
     s.handleQuestion(
       { questions: [{ question: 'Q0', options: ['A', 'B'] }, { question: 'Q1', options: ['X'] }] },
