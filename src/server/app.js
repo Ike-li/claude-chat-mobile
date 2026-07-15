@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { statSync, readFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync } from 'node:fs';
 import { maskToken } from '../shared/sanitizer.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent } from '../files/file-security.js';
-import { homedir, networkInterfaces } from 'node:os';
+import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
@@ -46,6 +46,7 @@ import {
 } from '../auth/devices.js';
 import { createDeviceGate } from '../auth/device-gate.js';
 import * as approvalStore from '../agent/approval-store.js';
+import { expireOrphanedPending, startApprovalRetentionSweep } from '../agent/approval-lifecycle.js';
 import * as audit from '../ops/audit.js';
 import * as metrics from '../ops/metrics.js';
 import { parseServerConfig } from './config.js';
@@ -53,6 +54,7 @@ import {
   clientIp,
   configureHttpShell,
   createHttpAuth,
+  lanIPv4s,
   registerOperationalRoutes,
   tokenMatches as secureTokenMatches,
 } from './http.js';
@@ -2129,44 +2131,11 @@ httpServer.on('error', err => {
   }
   process.exit(1);
 });
-// 局域网 IPv4（手机同 WiFi 直连用）。排除：VPN/代理虚拟网卡（utun* 等，手机不可达）、
-// link-local（169.254.*）、RFC 2544 基准段（198.18/15，TUN 代理常用假网段）。
-function lanIPv4s() {
-  return Object.entries(networkInterfaces())
-    .filter(([name]) => !/^(utun|tun|tap|ppp)/.test(name))
-    .flatMap(([, addrs]) => addrs)
-    .filter(i => i?.family === 'IPv4' && !i.internal
-      && !i.address.startsWith('169.254.')
-      && !/^198\.1[89]\./.test(i.address))
-    .map(i => i.address);
-}
 
-// 重启后 pending 审批的 fail-closed 处置（见 docs/design.md §4）：canUseTool 回调
-// 绑在上一进程的内存里，随进程终止已无法兑现——遗留在持久化台账里的 status=pending 记录一律标 expired，
-// 绝不能让它们在"等我"聚合或任何未来查询里看起来"仍可批准"（批一个已无执行上下文的操作是危险假象）。
-// 必须在 httpServer.listen 之前跑完：这之后 io 才可能真正开始接受连接、驱动新的实例。
-{
-  const restartExpiredCount = approvalStore.expireAllPending({ decidedBy: 'system:restart', decidedAt: Date.now() });
-  if (restartExpiredCount > 0) {
-    console.log(`[approval-store] 重启恢复：${restartExpiredCount} 条遗留 pending 审批已标记 expired`);
-    audit.recordAudit({ action: 'approval_restart_expired', outcome: 'expired', meta: { count: restartExpiredCount } });
-  }
-}
-
-// NFR-16 留存治理（docs/design.md"建议 90 天，可配"）：approval_request 终态记录超过保留期即清理。清理动作
-// 本身记一条汇总审计（条数，不含内容），呼应设计明文"不无声无限增长"。启动即跑一次（覆盖"长期不重启
-// 的常驻 server 也需要治理"这条路径）+ 之后每 24h 跑一次；audit_record 自己的留存治理是写入时环形
-// 上限（见 audit.js），不需要额外的周期性清理。
-const APPROVAL_RETENTION_MS = (Number(process.env.APPROVAL_RETENTION_DAYS) > 0 ? Number(process.env.APPROVAL_RETENTION_DAYS) : 90) * 24 * 60 * 60 * 1000;
-function runApprovalRetentionSweep() {
-  const purged = approvalStore.purgeTerminalOlderThan(Date.now() - APPROVAL_RETENTION_MS);
-  if (purged > 0) {
-    console.log(`[approval-store] 留存治理：清理 ${purged} 条超过保留期的终态审批记录`);
-    audit.recordAudit({ action: 'retention_cleanup', outcome: 'success', meta: { table: 'approval_request', count: purged } });
-  }
-}
-runApprovalRetentionSweep();
-setInterval(runApprovalRetentionSweep, 24 * 60 * 60 * 1000).unref();
+// 重启 fail-closed 处置遗留 pending 审批（必须在 listen 之前：这之后 io 才可能接受连接、驱动新实例）
+// + NFR-16 留存治理（启动即清一次 + 每 24h）。实现下沉 src/agent/approval-lifecycle.js。
+expireOrphanedPending();
+startApprovalRetentionSweep();
 
 httpServer.listen(port, host, () => {
   console.log('========================================');

@@ -1,10 +1,24 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import compression from 'compression';
 import express from 'express';
 
 export const clientIp = value => (value || '').toString().replace(/^::ffff:/, '');
+
+// 局域网 IPv4（手机同 WiFi 直连用）。排除：VPN/代理虚拟网卡（utun* 等，手机不可达）、
+// link-local（169.254.*）、RFC 2544 基准段（198.18/15，TUN 代理常用假网段）。
+// interfaces 可注入（默认 os.networkInterfaces()）便于单测。
+export function lanIPv4s(interfaces = networkInterfaces()) {
+  return Object.entries(interfaces)
+    .filter(([name]) => !/^(utun|tun|tap|ppp)/.test(name))
+    .flatMap(([, addrs]) => addrs || [])
+    .filter(i => i?.family === 'IPv4' && !i.internal
+      && !i.address.startsWith('169.254.')
+      && !/^198\.1[89]\./.test(i.address))
+    .map(i => i.address);
+}
 
 export function setSecurityHeaders(res) {
   res.setHeader('Content-Security-Policy', [

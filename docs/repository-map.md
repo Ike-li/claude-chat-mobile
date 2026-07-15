@@ -32,7 +32,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 2 |
-| Backend source | 39 |
+| Backend source | 40 |
 | Configuration template | 1 |
 | Deployment | 2 |
 | Documentation | 14 |
@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 74 |
+| Unit test | 76 |
 | Vendored asset | 12 |
 
-Total classified files: **279**.
+Total classified files: **282**.
 
 ## Complete file inventory
 
@@ -164,6 +164,7 @@ Total classified files: **279**.
 | `SECURITY.md` | Documentation | Security policy and deployment boundary | User or maintainer documentation | Authored and reviewed manually | keep |
 | `server.js` | Runtime entrypoint | Compatibility launcher used by npm and service managers | `node server.js` / `npm start` | Authored and reviewed manually | keep |
 | `src/agent/agent.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/agent/approval-lifecycle.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/agent/approval-store.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/agent/cli-mirror-state.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/agent/cli-settings-defaults.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -274,6 +275,7 @@ Total classified files: **279**.
 | `tests/unit/agent-lifecycle.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/agent-permissions.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/agent-subagents.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/approval-lifecycle.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/approval-store.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/attention.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/audit.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
@@ -305,6 +307,7 @@ Total classified files: **279**.
 | `tests/unit/instance-manager.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/instance-routing.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/interaction.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/lan-ipv4s.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-content.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-rendering.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-session.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
