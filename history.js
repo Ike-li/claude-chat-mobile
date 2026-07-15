@@ -5,7 +5,13 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { listSessions as sdkListSessions } from '@anthropic-ai/claude-agent-sdk';
 import { MAX_SESSION_LIMIT } from './workdirs.js';
+
+// 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
+// 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
+export let __sdkListSessionsForTest;
+export function __setSdkListSessionsForTest(fn) { __sdkListSessionsForTest = fn; }
 
 // CLI transcript 根目录，与 CLI /resume 同源。硬编码 ~/.claude/projects：这是 CLI 的固定约定，且
 // L2 删除走 SDK 官方 deleteSession（它同样只认此真实根、无自定义根的口子），故这里不设环境变量覆盖——
@@ -386,12 +392,48 @@ export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST
   const cached = _listCache.get(cacheKey);
   const fromScan = cached && Date.now() - cached.ts < LIST_CACHE_TTL
     ? cached.result
-    : await scanSessionsPage(dir, limit, cacheKey);
+    : await scanSessionsPage(dir, cwd, limit, cacheKey, baseDir);
   if (!hiddenIds || hiddenIds.size === 0) return fromScan;
   return { ...fromScan, sessions: fromScan.sessions.filter(s => !hiddenIds.has(s.id)) };
 }
 
-async function scanSessionsPage(dir, limit, cacheKey) {
+// 快路径判定：生产 baseDir === CLAUDE_DIR 时走 SDK 官方 listSessions（summary = CLI /resume 同款标题，
+// 省去本模块 readdir+N×stat+readHeadMeta 且无需维护标题语义跟随 CLI）；隔离测试实例（baseDir 指它处）
+// 时 SDK 写死 ~/.claude 管不着，回落自造扫盘。SDK 只吃原始 cwd（已编码路径它当普通目录名→空数组，
+// 见 scripts/sdk-session-probe.mjs 铁证坑），故 cwd 单独透传、不复用上游已编码的 dir。
+const useSdk = (baseDir) => baseDir === CLAUDE_DIR;
+
+// 把 SDKSessionInfo 映射成本函数返回 shape（前端真实消费只有 id/title/lastUsedAt——model/entrypoint 是
+// 死重字段、SDK 也不给，故不返回；gitBranch/tag 等备用字段暂不存为死字段、以后要用再从 SDK 拿）。
+// limit+1 取数：多取 1 条判 hasMore（SDK 不给总数）；越界那条不进 sessions。
+async function scanSessionsViaSdk(cwd, limit) {
+  const fn = __sdkListSessionsForTest || sdkListSessions;
+  const all = await fn({ dir: cwd, limit: limit + 1 });
+  const sessions = (Array.isArray(all) ? all : []).slice(0, limit).map(s => ({
+    id: s.sessionId,
+    title: s.summary || '(无标题)',
+    lastUsedAt: Math.round(s.lastModified),
+  }));
+  return { sessions, hasMore: (all?.length ?? 0) > limit };
+}
+
+async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir) {
+  if (useSdk(baseDir)) {
+    try {
+      const result = await scanSessionsViaSdk(cwd, limit);
+      _listCache.set(cacheKey, { ts: Date.now(), result });
+      return result;
+    } catch {
+      // SDK 异常（CLI 版本/环境/编码不一致）不 fail-closed：回落自造扫盘兜底，列表照常出。
+      return scanViaReaddir(dir, limit, cacheKey);
+    }
+  }
+  return scanViaReaddir(dir, limit, cacheKey);
+}
+
+// 自造扫盘（兜底路径 + baseDir 隔离测试实例）：readdir + N×stat + readHeadMeta 头尾窗解析标题。
+// readHeadMeta 仍保留——兜底依赖它，快路径不进此。
+async function scanViaReaddir(dir, limit, cacheKey) {
   let names;
   try {
     names = await readdir(dir);
