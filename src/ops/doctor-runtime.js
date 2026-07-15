@@ -4,7 +4,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { isOwnerOnly } from '../files/file-security.js';
-import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, computeReadiness } from '../../scripts/doctor-checks.js';
+import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, computeReadiness } from './doctor-checks.js';
 
 // 敏感配置文件清单（相对项目根）——CLI doctor（scripts/doctor.js）与本运行时 doctor 共用同一事实源，
 // 防两处各自维护再漏同步。列表新增项须同时被 CLI 检查/自动修复与 UI 体检覆盖。

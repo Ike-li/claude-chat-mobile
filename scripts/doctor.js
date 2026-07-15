@@ -24,7 +24,7 @@ import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile } from '../src/sessions/workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
-import { statuslineBridgeDiagnostic, statuslineConfigDiagnostic } from './doctor-checks.js';
+import { statuslineBridgeDiagnostic, statuslineConfigDiagnostic } from '../src/ops/doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
 

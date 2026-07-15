@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness } from '../../scripts/doctor-checks.js';
+import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness } from '../../src/ops/doctor-checks.js';
 
 test('statuslineConfigDiagnostic treats web statusline as self-contained', () => {
   const result = statuslineConfigDiagnostic();
