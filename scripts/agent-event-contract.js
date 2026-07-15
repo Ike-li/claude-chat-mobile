@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..');
@@ -344,6 +344,183 @@ export function formatContractProblems(result) {
       `real types: ${result.realTypes.size}`,
       `mock types: ${result.mockTypes.size}`,
       `root: ${relative(process.cwd(), result.rootDir) || '.'}`,
+    ].join('\n');
+  }
+
+  return result.problems
+    .map(problem => `[${problem.code}] ${problem.message}`)
+    .join('\n');
+}
+
+// ---- 入向 socket 事件契约（客户端 → 服务端）----
+// 出向 agent:event 的 type 有上方 allowlist 机器校验；入向事件名此前只活在
+// docs/interfaces.md 的手写表格里，漂移无人拦——本节把它升级为同等保真：
+// server 注册面 = 契约（双向相等）、前端 emit 面 ⊆ 契约、visual mock 注册面 ⊆ 契约。
+
+export const INBOUND_SOCKET_EVENTS = Object.freeze([
+  'browse:list',
+  'browse:read',
+  'conn:ping',
+  'dev:restart',
+  'doctor:run',
+  'logs:get',
+  'mirror:syncNow',
+  'session:close',
+  'session:delete',
+  'session:deletePermanent',
+  'session:history',
+  'session:home',
+  'session:list',
+  'session:new',
+  'session:switch',
+  'sync:since',
+  'task:stop',
+  'tool:full',
+  'tool:preview',
+  'usage:get',
+  'user:answer',
+  'user:approve',
+  'user:approveDevice',
+  'user:denyDevice',
+  'user:interrupt',
+  'user:message',
+  'user:setEffort',
+  'user:setPermissionMode',
+  'user:setViewing',
+]);
+
+// socket.io 内建连接生命周期事件：属传输层而非业务契约
+const BUILTIN_SOCKET_EVENTS = new Set([
+  'connect',
+  'connection',
+  'connect_error',
+  'disconnect',
+  'disconnecting',
+  'error',
+  'reconnect',
+]);
+
+// 目录递归收集 .js/.mjs（新增模块自动纳入扫描面，不靠手工登记文件清单）
+function listJsFiles(rootDir, dir) {
+  const files = [];
+  let entries;
+  try {
+    entries = readdirSync(join(rootDir, dir), { withFileTypes: true });
+  } catch {
+    return files; // 扫描根缺失（如测试夹具只建了一侧）→ 空面
+  }
+  for (const entry of entries) {
+    const rel = join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...listJsFiles(rootDir, rel));
+    else if (/\.(?:js|mjs)$/.test(entry.name)) files.push(rel);
+  }
+  return files.sort();
+}
+
+// kind 'socket-server'：registrar 形 on(socket, 'x', …) + 裸 socket.on('x', …) 都算注册面
+// kind 'socket-client-emit'：任意接收者的 .emit('x', …) 字面量（前端只应 emit 契约内事件）
+export function extractInboundSocketEvents(source, { kind, file = '<source>' } = {}) {
+  const result = { events: new Set(), locations: [] };
+  const patterns =
+    kind === 'socket-server'
+      ? [/\bon\(\s*socket\s*,\s*(['"])([^'"]+)\1/g, /\bsocket\.on\(\s*(['"])([^'"]+)\1/g]
+      : kind === 'socket-client-emit'
+        ? [/\.emit\(\s*(['"])([^'"]+)\1/g]
+        : null;
+  if (!patterns) throw new Error(`Unknown inbound socket source kind: ${kind}`);
+
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(source))) {
+      const event = match[2];
+      if (BUILTIN_SOCKET_EVENTS.has(event)) continue;
+      result.events.add(event);
+      result.locations.push({ event, file, ...lineColumn(source, match.index) });
+    }
+  }
+  return result;
+}
+
+function collectInboundEvents(rootDir, dirs, kind) {
+  const events = new Set();
+  const locations = [];
+  for (const dir of dirs) {
+    for (const file of listJsFiles(rootDir, dir)) {
+      const text = readFileSync(join(rootDir, file), 'utf8');
+      const extracted = extractInboundSocketEvents(text, { kind, file });
+      for (const event of extracted.events) events.add(event);
+      locations.push(...extracted.locations);
+    }
+  }
+  return { events, locations };
+}
+
+export function checkInboundSocketContract({
+  rootDir = ROOT,
+  contractEvents = new Set(INBOUND_SOCKET_EVENTS),
+  serverDirs = ['src'],
+  clientDirs = ['public/js'],
+  mockDirs = ['tests/e2e/mock'],
+} = {}) {
+  const contract = new Set(contractEvents);
+  const server = collectInboundEvents(rootDir, serverDirs, 'socket-server');
+  const client = collectInboundEvents(rootDir, clientDirs, 'socket-client-emit');
+  const mock = collectInboundEvents(rootDir, mockDirs, 'socket-server');
+  const problems = [];
+
+  for (const event of [...server.events].sort()) {
+    if (contract.has(event)) continue;
+    problems.push({
+      code: 'real_inbound_not_contract',
+      event,
+      message: `server registers uncontracted inbound socket event "${event}"`,
+    });
+  }
+  for (const event of [...contract].sort()) {
+    if (server.events.has(event)) continue;
+    problems.push({
+      code: 'contract_inbound_not_registered',
+      event,
+      message: `contract lists inbound socket event "${event}" that no server path registers`,
+    });
+  }
+  for (const event of [...client.events].sort()) {
+    if (contract.has(event)) continue;
+    problems.push({
+      code: 'client_inbound_not_contract',
+      event,
+      message: `frontend emits uncontracted socket event "${event}"`,
+    });
+  }
+  for (const event of [...mock.events].sort()) {
+    if (contract.has(event)) continue;
+    problems.push({
+      code: 'mock_inbound_not_contract',
+      event,
+      message: `visual mock registers uncontracted inbound socket event "${event}"`,
+    });
+  }
+
+  return {
+    problems,
+    contractEvents: contract,
+    serverEvents: server.events,
+    clientEvents: client.events,
+    mockEvents: mock.events,
+    serverLocations: server.locations,
+    clientLocations: client.locations,
+    mockLocations: mock.locations,
+    rootDir,
+  };
+}
+
+export function formatInboundContractProblems(result) {
+  if (result.problems.length === 0) {
+    return [
+      `inbound socket contract OK`,
+      `server events: ${result.serverEvents.size}`,
+      `client emits: ${result.clientEvents.size}`,
+      `mock handlers: ${result.mockEvents.size}`,
     ].join('\n');
   }
 

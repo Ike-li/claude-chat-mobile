@@ -48,6 +48,8 @@
 
 这些事件由 `src/server/app.js` 组合，统一经过 `src/server/socket.js` 的设备信赖闸；文件类事件单列在 `src/server/socket-files.js`。带 `ack` 的事件通过回调返回数据。`instanceId` 省略时默认作用于当前查看实例（`viewingInstanceId`）。
 
+> **事件名的可执行事实源**：`scripts/agent-event-contract.js` 的 `INBOUND_SOCKET_EVENTS`（29 项）。`npm run contract:check` 校验三面对齐：server 注册面 = 契约（双向相等）、前端 emit 面 ⊆ 契约、visual mock 注册面 ⊆ 契约。本表描述各事件的 payload / ack 形状；表中事件名与 allowlist 漂移会被检查拦截。
+
 **会话内操作 `user:*`**
 
 | 事件 | payload | 说明 |
@@ -169,7 +171,15 @@
 
 `notificationForEvent(type, payload, opts?)` → `{title, body, data?}`（应推）或 `null`（不推）；`opts = {hasClients, instanceId?, sessionId?, cwd?}`，传 `instanceId` 时附 `data`（`{instanceId, sessionId, cwd}`）供点击深链回该会话（②） · `ntfyMetaFor(type, data, publicUrl)` → `{priority, tags, click?}`（ntfy 优先级 / 标签 / 深链 URL） · `ntfyRequestInit({url, topic, token}, title, body, meta)` → `{url, init}`（构造 ntfy POST，纯函数不发网络）
 
-> 传输层 `pushNotify`（Web Push）与 `ntfyNotify`（ntfy）由 `src/server/app.js` 组合；本模块只出渠道无关的文案与元数据，便于单测。
+> 传输层 `pushNotify`（Web Push）与 `ntfyNotify`（ntfy）在 `src/ops/notify-channels.js`（`createNotifyChannels({dataDir, env, fetchImpl?, webpushImpl?, onDeliveryFailure})` 工厂：订阅按 endpoint 去重存储、410/404 剔除、失败计数与回调），由 `src/server/app.js` 组装；本模块只出渠道无关的文案与元数据，便于单测。
+
+### `src/auth/device-gate.js` — 设备审批网关（socket 分组操作 + CLI 审批文件监听）
+
+`createDeviceGate({io, dataDir, onUnlockSocket, listPendingDevices?, isTrusted?})` → `{unlockDeviceSockets(token)` · `disconnectDeviceSockets(token)` · `pendingDevicesPayload()` · `broadcastPendingDevices()}`；创建时确保设备文件存在并监听 `trusted-devices.json` 父目录（原子写免疫），CLI 侧批准/吊销即时同步 web 连接。重放初始态的 `unlockSocket` 留在 `src/server/app.js`、经 `onUnlockSocket` 注入。
+
+### `src/agent/approval-lifecycle.js` — 审批台账生命周期
+
+`approvalRetentionMs(env?)`（`APPROVAL_RETENTION_DAYS` 解析，0/负/NaN 回落 90 天） · `expireOrphanedPending()`（重启 fail-closed：遗留 pending 一律标 expired，须在 listen 前跑） · `startApprovalRetentionSweep()`（NFR-16 留存清扫：启动即清 + 每 24h，定时器 unref）
 
 ### `src/agent/models-cache.js` — 按 cwd 归键的可用模型清单缓存
 
@@ -197,7 +207,7 @@
 
 ### `src/ops/doctor-runtime.js` — UI 安全体检（④）运行时编排（读合并白名单 + 检查 + 脱敏聚合）
 
-`readMergedPermissions({home, workDirs?})` → `{allow, sources}`（合并 `~/.claude` 与各 workDir 的 `permissions.allow`，标 `scope`；坏 JSON 不清空、skip） · `runDoctor(ctx)` → `{checks[], readiness}`（`ctx` 由 `src/server/app.js` 喂 env + 内存态：`authToken` / `claudeVersion` / `workDirs` / `home` / `cfEnabled` / `cfAudSet` / `pushEnabled` / `trustedDevices` / `pendingDevices`；**脱敏**，绝不回显明文 token / 绝对路径 / AUD / 密钥）。底层判定在 `scripts/doctor-checks.js`（`classifyAuthToken` / `summarizeDangerous` / `computeReadiness` 等）
+`readMergedPermissions({home, workDirs?})` → `{allow, sources}`（合并 `~/.claude` 与各 workDir 的 `permissions.allow`，标 `scope`；坏 JSON 不清空、skip） · `runDoctor(ctx)` → `{checks[], readiness}`（`ctx` 由 `src/server/app.js` 喂 env + 内存态：`authToken` / `claudeVersion` / `workDirs` / `home` / `cfEnabled` / `cfAudSet` / `pushEnabled` / `trustedDevices` / `pendingDevices`；**脱敏**，绝不回显明文 token / 绝对路径 / AUD / 密钥）。底层判定在 `src/ops/doctor-checks.js`（`classifyAuthToken` / `summarizeDangerous` / `computeReadiness` 等，doctor CLI 与 UI 体检共用）
 
 ---
 
@@ -206,6 +216,7 @@
 | 层 | 事实源 | 机械校验 |
 |---|---|---|
 | 出向 `agent:event` 类型 | `scripts/agent-event-contract.js`（26 类 allowlist） | `npm run contract:check`（零 token 静态，校验 real ⊇ mock） |
+| 入向 socket 事件名 | `scripts/agent-event-contract.js`（`INBOUND_SOCKET_EVENTS` 29 项） | `npm run contract:check`（server 注册面 = 契约；前端 emit / mock ⊆ 契约） |
 | 文档链接 / npm 脚本名 / SDK 版本 | `scripts/doc-consistency.js` | `npm run check`（含本文件的死链扫描） |
 
 本文件给人读；协议以表中的可执行事实源为准。两者漂移由 `npm run check` + `npm run contract:check` 拦截。

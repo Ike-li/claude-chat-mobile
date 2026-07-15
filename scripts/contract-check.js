@@ -2,12 +2,17 @@
 import {
   checkAgentEventContract,
   formatContractProblems,
+  checkInboundSocketContract,
+  formatInboundContractProblems,
 } from './agent-event-contract.js';
 
-const result = checkAgentEventContract();
-const output = formatContractProblems(result);
+const outbound = checkAgentEventContract();
+const inbound = checkInboundSocketContract();
+const failed = outbound.problems.length > 0 || inbound.problems.length > 0;
 
-if (result.problems.length > 0) {
+const output = [formatContractProblems(outbound), formatInboundContractProblems(inbound)].join('\n');
+
+if (failed) {
   console.error(output);
   process.exit(1);
 }

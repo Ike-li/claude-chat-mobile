@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   AGENT_EVENT_TYPES,
+  INBOUND_SOCKET_EVENTS,
   checkAgentEventContract,
+  checkInboundSocketContract,
 } from '../../scripts/agent-event-contract.js';
 
 async function writeFixture(root, relativePath, source) {
@@ -87,4 +89,86 @@ test('agent event contract 识别 io.to(room).emit("agent:event", ...) 链式调
 
   assert.deepEqual(result.problems, [], 'io.to(room).emit 里的 session_log 应被识别为 real 已发出，不应报 mock_type_not_real');
   assert.ok(result.realTypes.has('session_log'));
+});
+
+// ---- 入向 socket 事件契约（客户端 → 服务端）----
+
+test('inbound socket contract covers real server registrations, client emits, and mock handlers', () => {
+  const result = checkInboundSocketContract();
+
+  assert.deepEqual(result.problems, []);
+  // 三面抽样：server 注册、前端 emit、mock 注册
+  assert.ok(result.serverEvents.has('user:message'));
+  assert.ok(result.serverEvents.has('session:switch'));
+  assert.ok(result.serverEvents.has('tool:preview')); // socket-files.js 单列注册面也须被扫到
+  assert.ok(result.serverEvents.has('conn:ping'));    // 裸 socket.on（绕过 registrar）也须被扫到
+  assert.ok(result.clientEvents.has('user:message'));
+  assert.ok(result.mockEvents.has('user:message'));
+  // socket.io 内建生命周期事件不属于业务契约
+  assert.ok(!result.serverEvents.has('disconnect'));
+  assert.ok(!result.mockEvents.has('disconnect'));
+});
+
+test('inbound contract flags server registrations missing from the contract', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-inbound-contract-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'src/server/app.js', `
+    on(socket, 'user:message', () => {});
+    on(socket, 'user:rogue', () => {});
+    socket.on('disconnect', () => {});
+  `);
+  await writeFixture(root, 'public/js/app.js', `socket.emit('user:message', {});`);
+  await writeFixture(root, 'tests/e2e/mock/server.js', `socket.on('user:message', () => {});`);
+
+  const result = checkInboundSocketContract({
+    rootDir: root,
+    contractEvents: new Set(['user:message']),
+  });
+
+  assert.deepEqual(result.problems.map(p => p.code), ['real_inbound_not_contract']);
+  assert.equal(result.problems[0].event, 'user:rogue');
+});
+
+test('inbound contract flags stale contract entries no longer registered by the server', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-inbound-contract-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'src/server/app.js', `on(socket, 'user:message', () => {});`);
+  await writeFixture(root, 'public/js/app.js', `socket.emit('user:message', {});`);
+  await writeFixture(root, 'tests/e2e/mock/server.js', `socket.on('user:message', () => {});`);
+
+  const result = checkInboundSocketContract({
+    rootDir: root,
+    contractEvents: new Set(['user:message', 'user:ghost']),
+  });
+
+  assert.deepEqual(result.problems.map(p => p.code), ['contract_inbound_not_registered']);
+  assert.equal(result.problems[0].event, 'user:ghost');
+});
+
+test('inbound contract flags client emits and mock handlers outside the contract', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-inbound-contract-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'src/server/app.js', `on(socket, 'user:message', () => {});`);
+  await writeFixture(root, 'public/js/app/extra.js', `sock.emit('user:unhandled', {});`);
+  await writeFixture(root, 'tests/e2e/mock/server.js', `socket.on('mock:invented', () => {});`);
+
+  const result = checkInboundSocketContract({
+    rootDir: root,
+    contractEvents: new Set(['user:message']),
+  });
+
+  assert.deepEqual(result.problems.map(p => p.code).sort(), [
+    'client_inbound_not_contract',
+    'mock_inbound_not_contract',
+  ]);
+});
+
+test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量抽查）', () => {
+  // 29 = user:*(9) + task:stop + session:*(8) + sync/logs/usage/mirror/conn/dev(6) + tool:*(2) + browse:*(2) + doctor:run
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 29);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('session:deletePermanent'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('doctor:run'));
 });
