@@ -1,8 +1,7 @@
 // app.js —— Express 静态托管 + Socket.IO 契约层；环境已由根 server.js 在动态导入前加载。
 // 会话与 socket 解耦：AgentSession 挂在服务端（4c 物理不变量），事件 io.emit 广播（多设备同看）。
 import { createServer } from 'node:http';
-import { statSync, readFileSync, writeFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync } from 'node:fs';
-import webpush from 'web-push';
+import { statSync, readFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync } from 'node:fs';
 import { maskToken } from '../shared/sanitizer.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent } from '../files/file-security.js';
 import { homedir, networkInterfaces } from 'node:os';
@@ -16,7 +15,8 @@ import { deleteSession as sdkDeleteSession, resolveSettings as sdkResolveSetting
 import { resolveFreshPrefs, defaultsFromEffectiveSettings } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, readLastPermissionMode } from '../sessions/history.js';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from '../ops/notifications.js';
+import { notificationForEvent, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from '../ops/notifications.js';
+import { createNotifyChannels } from '../ops/notify-channels.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
 import { buildWebStatusLine, buildCliStatusLine } from '../ops/statusline.js';
@@ -88,88 +88,14 @@ let notifyThrottleState = new Map(); // per-会话推送节流态（docs/design.
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
 let messageDedupState = new Map(); // clientMessageId → ts（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
 
-// ---- Web Push（E15）----
-const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY  || '';
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
-const VAPID_SUBJECT     = process.env.VAPID_SUBJECT     || '';
-const pushEnabled = !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_SUBJECT);
-if (pushEnabled) webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-
-// ---- ntfy（②2b：可靠通知渠道，绕过 iOS 加主屏 / 局域网 http 限制）----
-// server 端一行 POST，不受浏览器 secure-context 约束；没配则优雅缺席（同 pushEnabled 模式）。
-// ⚠️ 通知正文可能含命令详情 → 建议自托管 ntfy 或 topic + NTFY_TOKEN，勿用公共 ntfy.sh 裸 topic。
-const NTFY_URL   = process.env.NTFY_URL   || '';
-const NTFY_TOPIC = process.env.NTFY_TOPIC || '';
-const NTFY_TOKEN = process.env.NTFY_TOKEN || '';
-const ntfyEnabled = !!(NTFY_URL && NTFY_TOPIC);
-// 深链绝对 URL（ntfy click / web push 深链共用）：PUBLIC_URL 优先，回退 CF_ACCESS_HOSTNAME 拼 https；
-// 都无则通知不带 click（仍正常送达，只是点击不深链）。
-const PUBLIC_URL = process.env.PUBLIC_URL
-  || (process.env.CF_ACCESS_HOSTNAME ? `https://${process.env.CF_ACCESS_HOSTNAME}` : '');
-
-const PUSH_SUB_FILE = join(DATA_DIR, 'push-subscription.json');
-// 多设备：按 endpoint 去重的订阅数组（旧版单对象格式向后兼容读入）。手机 + iPad 各留一条，
-// 推送时遍历全部、按 410/404 单独剔除失效——不再"后订阅顶掉前订阅"只剩最后一台收推送。
-let pushSubscriptions = [];
-try {
-  const raw = JSON.parse(readFileSync(PUSH_SUB_FILE, 'utf8'));
-  if (Array.isArray(raw)) pushSubscriptions = raw.filter(s => s?.endpoint);
-  else if (raw?.endpoint) pushSubscriptions = [raw]; // 向后兼容旧单对象格式
-} catch {}
-
-function persistPushSubscriptions() {
-  try { writeFileSync(PUSH_SUB_FILE, JSON.stringify(pushSubscriptions)); } catch (e) {
-    console.error('[push] 保存订阅失败:', e.message);
-  }
-}
-function savePushSubscription(sub) {
-  if (!sub?.endpoint) return;
-  pushSubscriptions = pushSubscriptions.filter(s => s.endpoint !== sub.endpoint); // 同设备重订覆盖
-  pushSubscriptions.push(sub);
-  persistPushSubscriptions();
-}
-
-async function pushNotify(title, body, data) {
-  if (!pushEnabled || pushSubscriptions.length === 0) return;
-  const payload = JSON.stringify(data ? { title, body, data } : { title, body });
-  const expired = [];
-  await Promise.all(pushSubscriptions.map(sub =>
-    webpush.sendNotification(sub, payload)
-      .then(() => metrics.inc('push_success')) // NFR-15 推送成功率（分子）
-      .catch(e => {
-        if (e.statusCode === 410 || e.statusCode === 404) expired.push(sub.endpoint); // 过期/注销：订阅生命周期正常结束，非"通知失败"
-        else {
-          metrics.inc('push_failure'); console.error('[push] 推送失败:', e.statusCode ?? '', e.message); // NFR-15 notify_failed 信号：真失败（非订阅过期）才计
-          metrics.gauge('push_failure_last_ts', Date.now()); scheduleBgBroadcast(); // 服务状态可见性：带时间戳广播，供 recentDeliveryFailure 判定
-        }
-      })
-  ));
-  if (expired.length) {                       // 仅剔除失效的那几条，其余设备订阅保留
-    pushSubscriptions = pushSubscriptions.filter(s => !expired.includes(s.endpoint));
-    persistPushSubscriptions();
-    console.warn(`[push] 清除 ${expired.length} 条失效订阅`);
-  }
-}
-
-// ②2b：向 ntfy 发一条（Node 原生 fetch，零依赖）。没配 / 出错都静默——通知是尽力而为，绝不阻断主流程。
-async function ntfyNotify(title, body, meta = {}) {
-  if (!ntfyEnabled) return;
-  try {
-    const { url, init } = ntfyRequestInit({ url: NTFY_URL, topic: NTFY_TOPIC, token: NTFY_TOKEN }, title, body, meta);
-    const res = await fetch(url, init);
-    if (!res.ok) {
-      // BE-015：fetch 对 4xx/5xx 正常 resolve——不查 res.ok 会把投递失败（401 token 错 / 404 topic 错 / 5xx）
-      // 静默当成功。只记状态码（不记 title/body：SEC-04 明文经第三方，勿落日志）。ntfy 尽力而为、不重试不阻断主流程。
-      console.error(`[ntfy] 推送失败: HTTP ${res.status}`);
-      // 服务状态可见性：此前只 console.error，从未计入 metrics——与 pushNotify 的失败计数不对称的既有盲点，
-      // 此处一并补上（ntfy 是绕开 iOS/PWA 推送限制的备用通道，可能是部分场景的主力通道）。
-      metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); scheduleBgBroadcast();
-    }
-  } catch (e) {
-    console.error('[ntfy] 推送失败:', e.message);
-    metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); scheduleBgBroadcast();
-  }
-}
+// ---- 通知发送通道（Web Push E15 + ntfy ②2b）：实现下沉至 ops/notify-channels.js ----
+// onDeliveryFailure 延迟绑定 scheduleBgBroadcast（定义在下方）——真失败时广播服务健康。
+const notify = createNotifyChannels({
+  dataDir: DATA_DIR,
+  env: process.env,
+  onDeliveryFailure: () => scheduleBgBroadcast(),
+});
+const { pushEnabled, pushNotify, ntfyNotify, savePushSubscription } = notify;
 
 // ---- 工作区白名单：读取源 + 应用（preflight 与热加载共用）----
 // 读取原始条目源：WORK_DIRS_FILE（JSON 数组文件，优先）或 WORK_DIRS（逗号分隔，向后兼容）。
@@ -358,7 +284,7 @@ registerOperationalRoutes({
   },
   push: {
     enabled: pushEnabled,
-    publicKey: VAPID_PUBLIC_KEY,
+    publicKey: notify.vapidPublicKey,
     isValidSubscription: isValidPushSubscription,
     saveSubscription: savePushSubscription,
   },
@@ -1405,7 +1331,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         }
         if (pn) {
           pushNotify(pn.title, pn.body, pn.data);                              // Web Push（带 data 供 SW 深链）
-          ntfyNotify(pn.title, pn.body, ntfyMetaFor(envelope.type, pn.data, PUBLIC_URL)); // ntfy（click 深链，绕移动端限制）
+          ntfyNotify(pn.title, pn.body, ntfyMetaFor(envelope.type, pn.data, notify.publicUrl)); // ntfy（click 深链，绕移动端限制）
         }
         broadcastInstances();
       }
