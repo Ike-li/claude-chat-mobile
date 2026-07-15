@@ -245,11 +245,15 @@ test('readCliStatusSnapshot：目录或文件权限过宽时返回 insecure', {
   }
 });
 
-test('selectStatusOwner：mirrorReadonly 或 externalDirty 任一成立即以 CLI 为权威', () => {
+test('selectStatusOwner：仅 mirrorReadonly（终端真在驾驶）切 CLI；externalDirty 不参与', () => {
+  // externalDirty = SDK 内存滞后、下次发送前须置换，≠ CLI 此刻仍在驾驶。
+  // 若 externalDirty 也切 CLI，mirror 自动解锁后 Web 已能输入，却会因无 CLI 快照长期显示
+  // 「CLI 状态暂不可用 (missing)」（真机截图 2026-07-15 复现路径）。
   assert.equal(selectStatusOwner({ mirrorReadonly: false, externalDirty: false }), 'sdk');
   assert.equal(selectStatusOwner({ mirrorReadonly: true, externalDirty: false }), 'cli');
-  assert.equal(selectStatusOwner({ mirrorReadonly: false, externalDirty: true }), 'cli');
+  assert.equal(selectStatusOwner({ mirrorReadonly: false, externalDirty: true }), 'sdk');
   assert.equal(selectStatusOwner({ mirrorReadonly: true, externalDirty: true }), 'cli');
+  assert.equal(selectStatusOwner({}), 'sdk');
 });
 
 test('selectStatusSource：单一来源选择，CLI 不可用时绝不混入 SDK 陈值', () => {

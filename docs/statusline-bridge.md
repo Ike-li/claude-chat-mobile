@@ -10,9 +10,11 @@ Web 自己驾驶的会话不依赖它：默认直接使用 Agent SDK 状态。br
 
 | 当前状态 | `status_line.payload.source.kind` | Web 显示 |
 |---|---|---|
-| Web 正在驾驶 | `sdk` | Agent SDK 的 usage、模型、成本等状态 |
-| Web 只读镜像 CLI，或发现会话已被外部 CLI 改写 | `cli` | 同 session、同 cwd 且仍在 TTL 内的 CLI 快照 |
+| Web 正在驾驶（含 mirror 已解锁、仅 externalDirty 待发送前置换） | `sdk` | Agent SDK 的 usage、模型、成本等状态 |
+| Web 只读镜像 CLI（`mirrorReadonly`：终端真在驾驶 / 尾部 pending） | `cli` | 同 session、同 cwd 且仍在 TTL 内的 CLI 快照 |
 | CLI 应为权威，但快照缺失、过期或校验失败 | `cli-unavailable` | 明示“CLI 状态暂不可用”及原因 |
+
+> **为何 externalDirty 不切 CLI 来源**：`externalDirty` 只保证下次手机发送前 dispose+resume 吸收终端写入，避免上下文分叉；mirror 自动解锁后 Web 已能输入，若仍把 statusline 锁在 CLI 而 Web 会话从不写 CLI 快照，会长期显示「CLI 状态暂不可用 (missing)」。
 
 CLI 是权威时，server 不会拿旧 SDK 字段补空缺。除当前工作目录的本机 git 状态外，两条状态构建路径不做字段级混拼。
 

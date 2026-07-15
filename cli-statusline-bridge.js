@@ -268,11 +268,16 @@ export function readCliStatusSnapshot(sessionId, {
   return { state: 'fresh', ageMs, snapshot };
 }
 
+// 状态栏事实源：仅当 Web 处于只读镜像（mirrorReadonly=终端真在驾驶/尾部 pending）时走 CLI 快照。
+// externalDirty 故意不参与——它只表示「SDK 子进程内存滞后于磁盘、下次发送前须置换实例」，
+// 不表示 CLI 此刻仍是驾驶员。mirror 自动解锁后 Web 已可输入；若仍因 externalDirty 锁在 CLI
+// 来源，而 Web 会话从不写 CLI 快照（CCM_STATUSLINE_ORIGIN=web-sdk 跳过 capture），会长期显示
+// 「CLI 状态暂不可用 (missing)」。形参保留以兼容旧调用方，忽略其值。
 export function selectStatusOwner({
   mirrorReadonly = false,
-  externalDirty = false,
+  externalDirty: _externalDirty = false,
 } = {}) {
-  return mirrorReadonly || externalDirty ? 'cli' : 'sdk';
+  return mirrorReadonly ? 'cli' : 'sdk';
 }
 
 export function selectStatusSource({ owner, cliRead, sdkPayload } = {}) {

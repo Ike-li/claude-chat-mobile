@@ -39,7 +39,7 @@
 
 - `seq` 单调递增（进 500 条环形缓冲，供 `sync:since` 断线补发）；`epoch` 变化 = 服务端换了实例，客户端据此重置去重基线。
 - `type` 为 **24 类之一**（`text_delta` / `tool_use` / `permission_request` / `question` / `result` / `status_line` / `task_progress` / `task_notification` / `init` / `instances` / `models` / … 完整清单与契约见 [event-contract.md](event-contract.md)）。
-- `status_line.payload.source.kind` 标明该帧唯一事实源：`sdk`（Web 驾驶）、`cli`（CLI 驾驶且快照新鲜）或 `cli-unavailable`（CLI 应为权威，但快照缺失、过期或校验失败）。CLI 权威时不按字段混入 SDK 陈值；不可用就明确显示未知。
+- `status_line.payload.source.kind` 标明该帧唯一事实源：`sdk`（Web 驾驶，含仅 externalDirty、mirror 已解锁）、`cli`（`mirrorReadonly` 终端驾驶且快照新鲜）或 `cli-unavailable`（mirror 锁定期 CLI 应为权威，但快照缺失、过期或校验失败）。CLI 权威时不按字段混入 SDK 陈值；不可用就明确显示未知。`selectStatusOwner` 只看 `mirrorReadonly`，`externalDirty` 不参与（后者只驱动发送前实例置换）。
 - `tool_use` 对文件类工具（`Edit` / `Write` / `Read` / `MultiEdit` / `NotebookEdit`）额外附 `file: {path, changeKind}`（`path` 未截断、`changeKind` ∈ `edit` / `write` / `read` / `multiedit` / `notebook`），供前端工具卡片发起 `tool:preview` 重建 diff / 片段（③）。
 - 前端按 `viewingInstanceId` 分流；后台 tab 的高频 delta 不广播以省带宽。
 
@@ -143,7 +143,7 @@
 
 ### `cli-statusline-bridge.js` — CLI statusline 私有快照
 
-`CLI_STATUSLINE_SCHEMA_VERSION` · `MAX_CLI_STATUSLINE_SNAPSHOT_BYTES`（64 KiB） · `DEFAULT_CLI_STATUSLINE_DIR` · `cliStatuslineTtlMs(refreshIntervalSec)` · `normalizeCliStatusInput(raw, opts?)` · `writeCliStatusSnapshot(snapshot, opts?)` · `readCliStatusSnapshot(sessionId, opts?)` · `selectStatusOwner({mirrorReadonly, externalDirty})` · `selectStatusSource({owner, cliRead, sdkPayload})` · `selectStatusReplay(cache, current)`。读取会验证 schema/source、session、cwd、大小、权限与 TTL；连接重放还要求 owner、instance、session、cwd 全匹配，失败时不返回半可信数据。
+`CLI_STATUSLINE_SCHEMA_VERSION` · `MAX_CLI_STATUSLINE_SNAPSHOT_BYTES`（64 KiB） · `DEFAULT_CLI_STATUSLINE_DIR` · `cliStatuslineTtlMs(refreshIntervalSec)` · `normalizeCliStatusInput(raw, opts?)` · `writeCliStatusSnapshot(snapshot, opts?)` · `readCliStatusSnapshot(sessionId, opts?)` · `selectStatusOwner({mirrorReadonly, externalDirty})`（**只看 mirrorReadonly**；`externalDirty` 形参兼容保留、不参与判定）· `selectStatusSource({owner, cliRead, sdkPayload})` · `selectStatusReplay(cache, current)`。读取会验证 schema/source、session、cwd、大小、权限与 TTL；连接重放还要求 owner、instance、session、cwd 全匹配，失败时不返回半可信数据。
 
 ### `scripts/statusline-bridge*.js` — 显式安装与透明运行
 
