@@ -235,6 +235,20 @@ export function planSessionDraftSwap({
   return { action: 'swap', save, restoreText, restoreAttachments };
 }
 
+// 客户端是否应忽略某条 question 事件（已本地作答 / 已收 request_resolved）。
+// 乐观作答后 clearView+sync 竞态下，server 可能尚未 resolve 就把 pending 快照/缓冲 question 再推回来；
+// answeredIds 记录本端已答 requestId（及整组 toolUseID），防止重弹。server eventsSince 过滤是主路径，
+// 此集合补「作答→sync 之间」与多端关窗。
+// - answeredIds 形如 Set<string>；未传/无 has → 不忽略
+// - requestId 为 toolUseID#i 时，若 set 含 toolUseID 也算已决（整组终态 request_resolved）
+export function isAnsweredQuestionId(requestId, answeredIds) {
+  if (!requestId || !answeredIds || typeof answeredIds.has !== 'function') return false;
+  if (answeredIds.has(requestId)) return true;
+  const hash = String(requestId).lastIndexOf('#');
+  if (hash > 0 && answeredIds.has(String(requestId).slice(0, hash))) return true;
+  return false;
+}
+
 // 回车键是否触发发送（2026-07-13 排查报告 §4：移动端回车发送截断）。桌面物理键盘用 Shift+Enter
 // 当换行「逃生舱」，非 Shift 回车一律发送；但触屏软键盘没有 Shift+Enter 这个组合，若照搬桌面语义，
 // 用户想换行分段时按下的每一次回车都会被当场发出，把一条多行长消息在换行处截断成几条。

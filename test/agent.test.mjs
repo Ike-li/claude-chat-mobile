@@ -206,6 +206,45 @@ test.describe('emit / buffer / eventsSince', () => {
     assert.equal(r.events.length, 1);
     s.dispose();
   });
+
+  // 修：已答 AskUserQuestion / 已决审批仍在环形缓冲 → sync:since 回放又弹窗。
+  // pending* 是权威真相；eventsSince 回放须跳过已不再 pending 的 question/permission_request。
+  test('eventsSince：已答 question 与已决 permission_request 不再回放', () => {
+    const { s, events } = makeSession();
+    const ac = new AbortController();
+    s.handleQuestion(
+      { questions: [{ question: 'Q0', options: ['A', 'B'] }, { question: 'Q1', options: ['X'] }] },
+      { signal: ac.signal, toolUseID: 'tool_q' },
+    );
+    // 只答第 0 题：q#0 已答、q#1 仍挂起
+    s.resolveQuestion('tool_q#0', 0);
+    const mid = s.eventsSince(0);
+    const midQs = mid.events.filter(e => e.type === 'question').map(e => e.payload.requestId);
+    assert.deepEqual(midQs, ['tool_q#1'], '已答 #0 不得回放，未答 #1 仍回放');
+
+    // 再答完 #1：整组离开 pending → 两题都不再回放
+    s.resolveQuestion('tool_q#1', 0);
+    const done = s.eventsSince(0);
+    assert.equal(done.events.filter(e => e.type === 'question').length, 0);
+    // request_resolved 仍回放（供多设备关窗）；至少含单题 answered + 整组终态
+    assert.ok(done.events.some(e => e.type === 'request_resolved' && e.payload.requestId === 'tool_q#0'));
+    assert.ok(done.events.some(e => e.type === 'request_resolved' && e.payload.requestId === 'tool_q'));
+
+    // permission：resolve 后不应再回放 permission_request
+    const permEvents = [];
+    const onEvent = s.onEvent;
+    s.onEvent = (env) => { permEvents.push(env); onEvent?.(env); };
+    // 手塞一条 permission_request 进缓冲 + pending，再 resolve 清 pending
+    s.pendingPermissions.set('perm_1', { resolve() {}, name: 'Bash', input: {}, suggestions: [] });
+    s.emit('permission_request', { requestId: 'perm_1', name: 'Bash', input: {} });
+    assert.ok(s.eventsSince(0).events.some(e => e.type === 'permission_request' && e.payload.requestId === 'perm_1'));
+    s.pendingPermissions.delete('perm_1');
+    assert.equal(
+      s.eventsSince(0).events.filter(e => e.type === 'permission_request' && e.payload.requestId === 'perm_1').length,
+      0,
+    );
+    s.dispose();
+  });
 });
 
 // ---- map() SDK 消息映射 ----
@@ -2002,7 +2041,7 @@ test.describe('AskUserQuestion', () => {
     s.dispose();
   });
 
-  test('resolveQuestion：部分答题不 resolve', () => {
+  test('resolveQuestion：部分答题不整组 resolve，但单题立即 request_resolved(answered)', () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
     s.handleQuestion(
@@ -2010,11 +2049,18 @@ test.describe('AskUserQuestion', () => {
       { signal: ac.signal, toolUseID: 'q1' }
     );
     s.resolveQuestion('q1#0', 1); // 选 B
-    assert.equal(s.pendingQuestions.size, 1); // 还在
+    assert.equal(s.pendingQuestions.size, 1); // 整组还在
+    // 单题落定必须立刻广播，否则切会话/sync 会靠缓冲里的 question 重弹已答项
+    const partial = events.filter(e => e.type === 'request_resolved' && e.payload.kind === 'question');
+    assert.equal(partial.length, 1);
+    assert.equal(partial[0].payload.requestId, 'q1#0');
+    assert.equal(partial[0].payload.outcome, 'answered');
+    // 整组 toolUseID 级终态尚未发出
+    assert.equal(partial.filter(e => e.payload.requestId === 'q1').length, 0);
     s.dispose();
   });
 
-  test('resolveQuestion：全部答完 → removeEventListener + request_resolved + denyKinds(answered)', () => {
+  test('resolveQuestion：全部答完 → removeEventListener + 单题+整组 request_resolved + denyKinds(answered)', () => {
     const { s, events } = makeSession();
     const ac = new AbortController();
     let removed = false;
@@ -2029,9 +2075,12 @@ test.describe('AskUserQuestion', () => {
     assert.equal(s.pendingQuestions.size, 0);
     assert.equal(removed, true);
     assert.equal(s.denyKinds.get('q1'), 'answered');
-    const rr = events.find(e => e.type === 'request_resolved' && e.payload.kind === 'question');
-    assert.ok(rr);
-    assert.ok(rr.payload.outcome.includes('「'));
+    const rrs = events.filter(e => e.type === 'request_resolved' && e.payload.kind === 'question');
+    // 单题 answered + 整组终态（outcome 含「答案」）
+    assert.ok(rrs.some(e => e.payload.requestId === 'q1#0' && e.payload.outcome === 'answered'));
+    const final = rrs.find(e => e.payload.requestId === 'q1');
+    assert.ok(final);
+    assert.ok(final.payload.outcome.includes('「'));
     s.dispose();
   });
 
@@ -2077,7 +2126,10 @@ test.describe('AskUserQuestion', () => {
     assert.equal(result.behavior, 'deny');
     assert.match(result.message, /date-fns/);
     assert.ok(!result.message.includes('dayjs') || result.message.includes('date-fns'));
-    const rr = events.find(e => e.type === 'request_resolved' && e.payload.kind === 'question');
+    const rr = events.find(e =>
+      e.type === 'request_resolved' && e.payload.kind === 'question' && e.payload.requestId === 'q1'
+    );
+    assert.ok(rr);
     assert.ok(rr.payload.outcome.includes('date-fns'));
     s.dispose();
   });

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -372,6 +372,17 @@ import { verifyIntegrity } from './canonicalize.js';
   let permExpandBtn = null;             // M1：展开按钮引用，showNextPerm 前清除
   const questionQueue = [];
   let activeQuestion = null;
+  // 本端已答/已决提问 requestId（含整组 toolUseID）。乐观作答后 sync 竞态或缓冲回放时防重弹；
+  // server eventsSince 已过滤已答项，此集合补作答→ack 窗口与 request_resolved 关窗标记。
+  const answeredQuestionIds = new Set();
+  function markQuestionAnswered(requestId) {
+    if (!requestId) return;
+    answeredQuestionIds.add(requestId);
+    if (answeredQuestionIds.size > 200) {
+      const oldest = answeredQuestionIds.values().next().value;
+      answeredQuestionIds.delete(oldest);
+    }
+  }
   let currentPermMode = 'default';      // 当前权限档；onchange 取消时回退、避免重复 emit
   let permModeSeen = false;             // 首次服务端同步只定基线不上屏（刷新/重连不冒「切换」假象）
   let currentEffort = null;             // 当前思考强度档（null=模型默认）；onchange 同值不重发
@@ -1305,6 +1316,8 @@ import { verifyIntegrity } from './canonicalize.js';
     question(p) {
       // 幂等：同上（快照补发 vs buffer 回放去重），按 requestId
       if (activeQuestion?.requestId === p.requestId || questionQueue.some(q => q.requestId === p.requestId)) return;
+      // 已本地作答/已收 request_resolved：忽略重放（切会话、probe、整页刷新后的 sync）
+      if (isAnsweredQuestionId(p.requestId, answeredQuestionIds)) return;
       alertCue('need');
       questionQueue.push(p);
       showNextQuestion();
@@ -1331,14 +1344,21 @@ import { verifyIntegrity } from './canonicalize.js';
         if (!activePerm) showNextPerm();
         updateSendButtonState();
       } else if (kind === 'question') {
-        // question requestId 格式 '${toolUseID}#i'；resolved requestId 是 toolUseID（或 '#i' 形式）
+        // question requestId 格式 '${toolUseID}#i'；单题 resolved 用 '#i'，整组终态用 toolUseID
         const matchQ = qId => qId === requestId || qId.startsWith(requestId + '#');
+        markQuestionAnswered(requestId); // 整组 toolUseID 也入库 → isAnsweredQuestionId 覆盖所有 #i
         if (activeQuestion && matchQ(activeQuestion.requestId)) {
+          markQuestionAnswered(activeQuestion.requestId);
           activeQuestion = null;
           closeSheet(questionModal);
         } else {
-          const idx = questionQueue.findIndex(q => matchQ(q.requestId));
-          if (idx !== -1) questionQueue.splice(idx, 1);
+          // 可能一次终态清掉队列里同 tool 的多题
+          for (let i = questionQueue.length - 1; i >= 0; i--) {
+            if (matchQ(questionQueue[i].requestId)) {
+              markQuestionAnswered(questionQueue[i].requestId);
+              questionQueue.splice(i, 1);
+            }
+          }
         }
         if (!activeQuestion) showNextQuestion();
         updateSendButtonState();
@@ -1836,6 +1856,8 @@ import { verifyIntegrity } from './canonicalize.js';
   }
   function answerQuestion(index) {
     if (!activeQuestion) return;
+    // 先标记已答再 emit/关窗：紧接的切会话/sync 即使抢在 server resolve 前到达，也不会重弹
+    markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndex: index, instanceId: viewingInstanceId }); // 台阶3 路由
     const label = optionLabel(activeQuestion.options[index]);
     finishQuestionUI(`已选择：${label}`);
@@ -1846,6 +1868,7 @@ import { verifyIntegrity } from './canonicalize.js';
       return;
     }
     const indexes = [...multiSelectedIndexes].sort((a, b) => a - b);
+    markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndexes: indexes, instanceId: viewingInstanceId });
     const labels = indexes.map(i => optionLabel(activeQuestion.options[i])).filter(Boolean);
     finishQuestionUI(`已选择：${labels.join('、')}`);
@@ -1858,6 +1881,7 @@ import { verifyIntegrity } from './canonicalize.js';
       questionOtherInput?.focus();
       return;
     }
+    markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: viewingInstanceId });
     finishQuestionUI(`已回答（其他）：${freeText}`);
   }

@@ -610,13 +610,18 @@ export class AgentSession {
     pending.answers[qIdx] = label;
     pending.remaining--;
 
+    // 单题落定立刻广播（requestId=toolUseID#i）。multi-Q 只答了一题时若等整组 remaining===0 才
+    // emit，切会话/sync:since 回放缓冲里的 question 会把已答项再弹一次（用户报告）。pending 快照
+    // 虽已跳过 answers[i]!=null，但 buffer 回放仍会送 question——单题 resolved + eventsSince 过滤双保险。
+    this.emit('request_resolved', { requestId, kind: 'question', outcome: 'answered' });
+
     if (pending.remaining === 0) {
       // 移除 abort 监听器防僵尸累积
       pending.signal?.removeEventListener('abort', pending.abortHandler);
       this.pendingQuestions.delete(toolUseID);
       this.lastActivity = Date.now(); // 用户答题是主动操作，续期静默看护
       const msg = '用户选择了：' + pending.answers.map(a => `「${a}」`).join('、');
-      this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome: msg }); // M4
+      this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome: msg }); // M4 整组终态
       this.denyKinds.set(toolUseID, 'answered'); // 已回答：前端显 ☑️（is_error 来自 deny 通道、非真错误）
       pending.resolve({ behavior: 'deny', message: msg, interrupt: false });
     }
@@ -819,8 +824,32 @@ export class AgentSession {
     });
   }
 
+  // question 是否仍待回答（权威=pendingQuestions）。已答/已整组结束/非法 id → false。
+  // 供 eventsSince 过滤：缓冲里的历史 question 事件在作答后不应再被 sync:since 回放弹窗。
+  isQuestionStillPending(requestId) {
+    if (typeof requestId !== 'string' || !requestId) return false;
+    const hash = requestId.lastIndexOf('#');
+    if (hash === -1) return this.pendingQuestions.has(requestId);
+    const toolUseID = requestId.slice(0, hash);
+    const qIdx = parseInt(requestId.slice(hash + 1), 10);
+    const pending = this.pendingQuestions.get(toolUseID);
+    if (!pending || Number.isNaN(qIdx) || qIdx < 0 || qIdx >= pending.questions.length) return false;
+    return pending.answers[qIdx] === null;
+  }
+
   eventsSince(lastSeq) {
-    const events = this.buffer.filter(e => e.seq > lastSeq);
+    // pending* 是未决审批/提问的权威真相；环形缓冲里的 permission_request/question 在 resolve 后
+    // 仍可能残留。sync:since 若原样回放会把已答提问/已批审批再弹一次（切会话、前台 probe、整页刷新
+    // 均走此路径）。过滤掉已不再 pending 的两类事件；其余（含 request_resolved）照常回放。
+    const events = this.buffer.filter(e => {
+      if (e.seq <= lastSeq) return false;
+      if (e.type === 'question') return this.isQuestionStillPending(e.payload?.requestId);
+      if (e.type === 'permission_request') {
+        const id = e.payload?.requestId;
+        return typeof id === 'string' && this.pendingPermissions.has(id);
+      }
+      return true;
+    });
     const oldest = this.buffer.length ? this.buffer[0].seq : this.seq + 1;
     const gap = lastSeq > 0 && this.bufferTrimmed && oldest > lastSeq + 1;
     return { events, gap, epoch: this.epoch };

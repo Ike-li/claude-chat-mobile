@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from '../public/js/logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test.describe('parseUsageForWeb（③ 套餐额度窗后端：提取 rate_limits + 降级 + 剔除隐私）', () => {
@@ -470,6 +470,20 @@ test('planSessionDraftSwap: 同会话 keep；切会话存旧草稿并恢复目�
     }),
     { action: 'swap', save: { sessionId: 'a', text: '', attachments: [] }, restoreText: '旧纯文字', restoreAttachments: [] },
   );
+});
+
+// 已答提问 requestId 忽略判定（防切会话/sync 重弹）
+test('isAnsweredQuestionId: 精确命中 / 整组 toolUseID 覆盖 #i / 安全默认', () => {
+  const ids = new Set(['tool_a#0', 'tool_b']);
+  assert.equal(isAnsweredQuestionId('tool_a#0', ids), true);
+  assert.equal(isAnsweredQuestionId('tool_a#1', ids), false); // 仅 #0 入库时 #1 不覆盖
+  assert.equal(isAnsweredQuestionId('tool_b#0', ids), true);  // 整组 tool_b → 所有 #i
+  assert.equal(isAnsweredQuestionId('tool_b#9', ids), true);
+  assert.equal(isAnsweredQuestionId('tool_b', ids), true);
+  assert.equal(isAnsweredQuestionId('other#0', ids), false);
+  assert.equal(isAnsweredQuestionId('tool_a#0', null), false);
+  assert.equal(isAnsweredQuestionId('', ids), false);
+  assert.equal(isAnsweredQuestionId(null, ids), false);
 });
 
 // ── 客户端事件分流（app.js: agent:event 入口；台阶3 instanceId 分流）──
