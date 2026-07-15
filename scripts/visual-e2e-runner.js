@@ -542,13 +542,13 @@ async function run() {
     console.log(`   [Assert] WebSocket intercepted model payload: "${lastEmittedModel}"`);
     assert.strictEqual(lastEmittedModel, 'claude-3-opus[1m]', 'TC-7: Gateway suffix [1m] must be seamlessly retained and emitted');
 
-    // 3. Click "沿用当前模型" tile to verify model置空 safety
+    // 3. Click "Default (recommended)" tile (=CLI /model 首项 value:'default') to verify model置空 safety
     await page.click('#btnSettings');
     await page.waitForSelector('#settingsSheet:not(.translate-y-full)');
     await sleep(400);
 
-    console.log('   [Assert] Clicking "沿用当前模型" tile to reset select value...');
-    await page.click('.model-tile[data-model=""]');
+    console.log('   [Assert] Clicking "Default (recommended)" tile to reset select value...');
+    await page.click('.model-tile[data-model="default"]');
     await sleep(200);
 
     const modelInputValue = await page.evaluate(() => {
@@ -1125,8 +1125,8 @@ async function run() {
     await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc12_model_opus.png` });
     console.log('📸 Captured and saved tc12_model_opus.png');
 
-    // Reset to default model
-    await page.click('.model-tile[data-model=""]');
+    // Reset to default model (CLI /model 首项 value:'default'，点它置空 select = 安全重置)
+    await page.click('.model-tile[data-model="default"]');
     await sleep(200);
 
     // Close settings

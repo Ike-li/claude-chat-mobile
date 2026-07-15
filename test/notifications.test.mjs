@@ -94,6 +94,40 @@ test('task_notification 失败（status=failed/error）→ 「后台任务失败
   assert.equal(notificationForEvent('task_notification', { status: 'error' }, {}).title, '⚠️ 后台任务失败');
 });
 
+// ── cwdBase（LLD §3.6.2/OQ-08 已决：默认显示，不设隐藏配置项）——多工作区场景分辨通知来自哪个项目 ──
+
+test('permission_request 带 cwd → title 追加目录尾段（仅 basename，非完整路径）', () => {
+  const n = notificationForEvent('permission_request', { name: 'Bash' }, { hasClients: true, cwd: '/Users/me/secret-proj' });
+  assert.equal(n.title, '⚠️ Claude 请求许可 · secret-proj');
+  assert.ok(!n.title.includes('/Users/me'), 'title 不得含完整路径前缀（SEC-04 同精神）');
+  assert.ok(!n.body.includes('secret-proj'), 'cwdBase 只进 title，不重复进 body');
+});
+
+test('question 带 cwd → title 追加目录尾段', () => {
+  const n = notificationForEvent('question', { text: 'x' }, { hasClients: true, cwd: '/repo/nested/dir' });
+  assert.equal(n.title, '❓ Claude 有问题 · dir');
+});
+
+test('task_notification 带 cwd（成功/失败）→ title 均追加目录尾段', () => {
+  assert.equal(notificationForEvent('task_notification', { status: 'completed' }, { cwd: '/a/b/proj' }).title, '✅ 后台任务完成 · proj');
+  assert.equal(notificationForEvent('task_notification', { status: 'failed' }, { cwd: '/a/b/proj' }).title, '⚠️ 后台任务失败 · proj');
+});
+
+test('result 无客户端 + 带 cwd → title 追加目录尾段', () => {
+  const n = notificationForEvent('result', { durationMs: 1000 }, { hasClients: false, cwd: '/a/b/proj' });
+  assert.equal(n.title, '✅ 任务完成 · proj');
+});
+
+test('无 cwd（未绑定实例）→ title 不追加，向后兼容不破坏既有精确断言', () => {
+  const n = notificationForEvent('permission_request', { name: 'Bash' }, { hasClients: true });
+  assert.equal(n.title, '⚠️ Claude 请求许可');
+});
+
+test('cwd 带尾斜杠 → basename 正常取尾段（不留空段）', () => {
+  const n = notificationForEvent('question', {}, { cwd: '/a/b/proj/' });
+  assert.equal(n.title, '❓ Claude 有问题 · proj');
+});
+
 // ── 其余 STATE_BOUNDARY 事件不推 ─────────────────────────────────────────────
 
 test('init / tool_use / error / request_resolved → 一律不推', () => {

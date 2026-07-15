@@ -4,7 +4,9 @@
 
 技术栈：Node ≥20 · ESM · Express 5 · Socket.io 4 · `@anthropic-ai/claude-agent-sdk` 0.3.201 · `jose` 6（JWT）· `web-push`（离线推送）· 测试用内置 `node --test` + puppeteer（移动端视觉 E2E，断言基于 DOM 状态非像素比对）；gifenc/pngjs 仅供 `scripts/make-demo-gif.js` 生成宣传用 demo.gif，非测试工具链。
 
-当你不知道怎么处理功能时，CLI 有什么 web 就有什么，请找一找 claude code cli 是怎么实现这个功能的
+当你不知道怎么处理功能时，CLI 有什么 web 就有什么，请找一找 claude code cli 是怎么实现这个功能的。
+Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重复造轮子
+发送路径(Web→Agent SDK→Claude Code CLI)和接收路径(Claude code CLI→Agent SDK→Web)
 
 ## 分支纪律
 
@@ -40,4 +42,4 @@ node scripts/smoke.js              # 终端 2：M1 行走骨架（A1/A2/A4/A6 + 
 node scripts/smoke.js --phase2     # 重启终端 1 后：跨重启 resume
 ```
 
-健康检查：`GET /health` → `{status, sessionId, busy, versions, timestamp}`（设了 `AUTH_TOKEN` 时需带 `?token=` 或 `x-auth-token` 头，否则 401）。运行时可观测（NFR-15/LLD §3.7）：`GET /metrics`（同样鉴权）→ `{metrics{activeSessions,events,catchUpHits,catchUpReloads,rateLimitLockouts,pushSuccess,pushFailure}, state, states, timestamp}`——指标最小集 + StateProbe 五类状态分类（后端产出四类，host_offline 由客户端心跳判定）；JSON 非 Prometheus 文本（n=1 无 scraper）。历史回显走鉴权的 `session:history` socket 事件，不开无鉴权 HTTP 数据端点。
+健康检查：`GET /health` → `{status, sessionId, busy, versions, timestamp}`（设了 `AUTH_TOKEN` 时需带 `?token=` 或 `x-auth-token` 头，否则 401）。运行时可观测（NFR-15/LLD §3.7）：`GET /metrics`（同样鉴权）→ `{metrics{activeSessions,events,catchUpHits,catchUpReloads,rateLimitLockouts,pushSuccess,pushFailure,ntfyFailure}, state, states, timestamp}`——指标最小集 + StateProbe 五类状态分类（后端产出四类，host_offline 由客户端心跳判定）；JSON 非 Prometheus 文本（n=1 无 scraper）。历史回显走鉴权的 `session:history` socket 事件，不开无鉴权 HTTP 数据端点。服务状态可见性（第一性原理重新设计版）：`instances` 广播额外带 `service{startedAt,deliveryFailure}` 字段（推送投递健康 + 服务重启感知，与"需要你(N)"聚合是不同轴，不混判）。

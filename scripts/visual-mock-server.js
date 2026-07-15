@@ -395,6 +395,7 @@ io.on('connection', socket => {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'models', payload: {
         models: [
+          { value: 'default', displayName: 'Default (recommended)' }, // CLI /model 列表首项（不 pin，由 CLI 自选）；空首页高亮它代替旧 data-model="" 伪默认磁贴
           { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] }, // xhigh：暴露 ultracode 最高档供视觉 E2E（真实档位由网关/CLI 报）
           { value: 'claude-3-5-haiku', displayName: 'Claude 3.5 Haiku' },
           { value: 'claude-3-opus', displayName: 'Claude 3 Opus' },

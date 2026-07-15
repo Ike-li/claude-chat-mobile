@@ -48,3 +48,23 @@ export function classifyState({ failed = 0, awaiting = 0, notifyFailed = 0, mobi
   if (mobileClients === 0) return 'mobile_offline';
   return null;
 }
+
+// 服务状态可见性（第一性原理重新设计版，见 docs/hld-ccm.md 附近）——刻意不复用 classifyState：
+// 那是给 /metrics 外部消费的粗分类（failed/awaiting 已被会话 ❗ 角标与"需要你(N)"聚合覆盖，重复无意义；
+// mobile_offline 对正在看 UI 的设备是自指悖论）。这里只取"推送投递健康"这一条真正没有 UI 覆盖过的信号，
+// 且必须带时间语义——notifyFailed 计数器进程重启前累计不衰减，原样展示布尔值会有"狼来了/过期红灯"问题，
+// 故只在时效窗口内（默认 24h）才判定为"最近失败"，超窗自动退场。纯函数、不读 counters/gauges 模块状态，
+// 调用方（server.js computeServiceHealth）传入当下 gauge 快照。
+const DEFAULT_STALE_AFTER_MS = 24 * 60 * 60 * 1000; // 24h：超过这个时长的失败不再视为"最近"
+
+export function recentDeliveryFailure({ pushFailureAt, ntfyFailureAt, now, staleAfterMs = DEFAULT_STALE_AFTER_MS } = {}) {
+  const candidates = [];
+  if (typeof pushFailureAt === 'number' && now - pushFailureAt <= staleAfterMs) {
+    candidates.push({ channel: 'push', at: pushFailureAt });
+  }
+  if (typeof ntfyFailureAt === 'number' && now - ntfyFailureAt <= staleAfterMs) {
+    candidates.push({ channel: 'ntfy', at: ntfyFailureAt });
+  }
+  if (!candidates.length) return null;
+  return candidates.reduce((latest, c) => (c.at > latest.at ? c : latest));
+}

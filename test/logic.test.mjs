@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter } from '../public/js/logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test.describe('parseUsageForWeb（③ 套餐额度窗后端：提取 rate_limits + 降级 + 剔除隐私）', () => {
@@ -597,6 +597,91 @@ test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   test('缺省入参不抛（环境未知时保守回 need-https）', () => {
     assert.doesNotThrow(() => pushEnvHint());
     assert.equal(pushEnvHint(), 'need-https');
+  });
+});
+
+// ---- 完成提示偏好：默认开，仅 '0' 为关；localStorage 读写纯函数 ----
+test.describe('readAlertPrefs / writeAlertPref：完成提示开关', () => {
+  test('缺省 / 空存储 → 三项全 true（默认开）', () => {
+    assert.deepEqual(readAlertPrefs(() => null), { sound: true, vibrate: true, foregroundComplete: true });
+    assert.deepEqual(readAlertPrefs(() => undefined), { sound: true, vibrate: true, foregroundComplete: true });
+    assert.deepEqual(readAlertPrefs(() => ''), { sound: true, vibrate: true, foregroundComplete: true });
+  });
+  test("显式 '0' → 关；'1' / 其他 → 开", () => {
+    const store = {
+      [ALERT_PREF_KEYS.sound]: '0',
+      [ALERT_PREF_KEYS.vibrate]: '1',
+      [ALERT_PREF_KEYS.foregroundComplete]: 'nope',
+    };
+    assert.deepEqual(readAlertPrefs((k) => store[k]), { sound: false, vibrate: true, foregroundComplete: true });
+  });
+  test('writeAlertPref 写 1/0，未知 key 不写', () => {
+    const out = {};
+    assert.equal(writeAlertPref((k, v) => { out[k] = v; }, 'sound', false), true);
+    assert.equal(writeAlertPref((k, v) => { out[k] = v; }, 'vibrate', true), true);
+    assert.equal(writeAlertPref((k, v) => { out[k] = v; }, 'nope', true), false);
+    assert.deepEqual(out, {
+      [ALERT_PREF_KEYS.sound]: '0',
+      [ALERT_PREF_KEYS.vibrate]: '1',
+    });
+  });
+});
+
+// ---- 状态一瞥：live 实例汇总 + whatNeedsAttention ----
+test.describe('summarizeInstanceStates：live 会话实例汇总（非 OS 进程）', () => {
+  test('空 / 非数组 → total 0', () => {
+    assert.deepEqual(summarizeInstanceStates([]).total, 0);
+    assert.equal(summarizeInstanceStates(null).running, 0);
+    assert.equal(summarizeInstanceStates(undefined).byState.busy, 0);
+  });
+  test('按 state 计数；无 instanceId 跳过；未知 state 归 idle', () => {
+    const r = summarizeInstanceStates([
+      { instanceId: 'a', state: 'busy' },
+      { instanceId: 'b', state: 'busy' },
+      { instanceId: 'c', state: 'permission' },
+      { instanceId: 'd', state: 'error' },
+      { instanceId: 'e', state: 'weird' },
+      { state: 'busy' }, // 无 id
+    ]);
+    assert.equal(r.total, 5);
+    assert.equal(r.running, 2);
+    assert.equal(r.byState.busy, 2);
+    assert.equal(r.byState.permission, 1);
+    assert.equal(r.byState.error, 1);
+    assert.equal(r.byState.idle, 1);
+  });
+});
+
+test.describe('whatNeedsAttention：ok / attention / alert', () => {
+  test('全空 → ok', () => {
+    assert.deepEqual(whatNeedsAttention({}), { level: 'ok', items: [] });
+    assert.deepEqual(whatNeedsAttention({ instances: [], needsYou: [], service: null }), { level: 'ok', items: [] });
+  });
+  test('needsYou 非空 → attention', () => {
+    const r = whatNeedsAttention({
+      needsYou: [{ reason: 'awaiting_approval', instanceId: 'i1', title: '批 Bash' }],
+      service: { deliveryFailure: null },
+    });
+    assert.equal(r.level, 'attention');
+    assert.equal(r.items.length, 1);
+    assert.equal(r.items[0].kind, 'awaiting_approval');
+  });
+  test('instance permission 且 needsYou 空 → attention（兜底）', () => {
+    const r = whatNeedsAttention({
+      instances: [{ instanceId: 'i1', state: 'permission', title: 'X' }],
+      needsYou: [],
+    });
+    assert.equal(r.level, 'attention');
+    assert.equal(r.items[0].ref, 'i1');
+  });
+  test('deliveryFailure → alert（优先于 attention）', () => {
+    const r = whatNeedsAttention({
+      needsYou: [{ reason: 'awaiting_input', instanceId: 'i1' }],
+      service: { deliveryFailure: { channel: 'push', at: 1, count: 2 } },
+    });
+    assert.equal(r.level, 'alert');
+    assert.ok(r.items.some(i => i.kind === 'delivery_failure'));
+    assert.ok(r.items.some(i => i.kind === 'awaiting_input'));
   });
 });
 

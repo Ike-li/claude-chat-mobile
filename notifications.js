@@ -1,8 +1,11 @@
 // notifications.js —— 事件 → 通知的纯逻辑层（渠道无关文案 + 渠道元数据），从 server.js 抽出便于单测。
 // 传输层仍在 server.js：pushNotify（Web Push）与 ntfyNotify（ntfy）。
-//
+import { basename } from 'node:path';
+
 // notificationForEvent 返回 { title, body, data? }：
 //   · body 最小化（SEC-04 / LLD §3.6.2）：不含命令/参数/问题正文/summary——尤其 ntfy 明文经第三方；正文回 app 内经鉴权取。
+//   · title 追加 cwdBase（LLD §3.6.2 NotifPayload/OQ-08 已决：默认显示，不设隐藏配置项）——仅目录尾段（basename），
+//     非完整路径，帮多工作区场景分辨通知来自哪个项目；无 cwd（如未绑定实例）时不追加，向后兼容不带 cwd 的旧调用。
 //   · data 仅在传入 instanceId 时附带（{instanceId, sessionId, cwd}）——供深链回该会话。Web Push 的 data 走 RFC 8291
 //     端到端加密（push service 不见明文、不上锁屏），故保留完整 cwd 供深链；ntfy click 深链则不含完整 cwd（见 ntfyMetaFor）。
 //   · 不传 instanceId 时不含 data 键（向后兼容旧调用与单测的 deepEqual）。
@@ -15,6 +18,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
   const { hasClients = false, instanceId, sessionId, cwd } = opts;
   const p = payload || {};
   const withData = (base) => (instanceId ? { ...base, data: { instanceId, sessionId, cwd } } : base);
+  const titleWithCwd = (title) => (cwd ? `${title} · ${basename(cwd)}` : title);
   switch (type) {
     case 'result':
       if (hasClients) return null;
@@ -22,25 +26,25 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       {
         const secs = ((p.durationMs ?? 0) / 1000).toFixed(1);
         const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
-        return withData({ title, body: `用时 ${secs}s` });
+        return withData({ title: titleWithCwd(title), body: `用时 ${secs}s` });
       }
     case 'permission_request':
       // 最小化（SEC-04）：body 只保留工具名，【不含 input 命令/参数正文】；待批操作回 app 内经鉴权查看。
       return withData({
-        title: '⚠️ Claude 请求许可',
+        title: titleWithCwd('⚠️ Claude 请求许可'),
         body: `需要你授权：${p.name ?? '工具'}`
       });
     case 'question':
       // 最小化：不含问题正文（消息正文），固定引导文案；正文回 app 内取。
       return withData({
-        title: '❓ Claude 有问题',
+        title: titleWithCwd('❓ Claude 有问题'),
         body: 'Claude 需要你的回答'
       });
     case 'task_notification': {
       // 最小化：不含 summary 正文（可能含代码/结果），固定引导文案；成功/失败见 title。
       const failed = p.status === 'failed' || p.status === 'error';
       return withData({
-        title: failed ? '⚠️ 后台任务失败' : '✅ 后台任务完成',
+        title: titleWithCwd(failed ? '⚠️ 后台任务失败' : '✅ 后台任务完成'),
         body: failed ? '后台任务未成功，点开查看' : '后台任务已完成，点开查看'
       });
     }

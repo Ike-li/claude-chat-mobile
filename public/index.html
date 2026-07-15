@@ -881,6 +881,7 @@
           <option value="plan">计划模式（只规划、不执行）</option>
           <option value="acceptEdits">自动接受编辑（命令仍审批）</option>
           <option value="dontAsk">免打扰（白名单外直接拒、不弹窗）</option>
+          <option value="auto">Auto（LLM 自动判批/拒权限）</option>
           <option value="bypassPermissions">⚠️ bypass（跳过所有审批）</option>
         </select>
         <div id="effortRow">
@@ -1100,6 +1101,10 @@
             <div class="text-xs font-semibold text-ink">免打扰</div>
             <div class="text-[9.5px] text-ink-soft mt-0.5">白名单外直接拒、不弹窗</div>
           </div>
+          <div data-mode="auto" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
+            <div class="text-xs font-semibold text-ink">Auto</div>
+            <div class="text-[9.5px] text-ink-soft mt-0.5">LLM 自动判批/拒权限</div>
+          </div>
           <div data-mode="bypassPermissions" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all text-danger">
             <div class="text-xs font-semibold text-danger">⚠️ Bypass</div>
             <div class="text-[9.5px] text-red-500/80 mt-0.5">免审飞控（高危）</div>
@@ -1112,6 +1117,35 @@
         <div class="text-xs font-semibold text-ink-soft mb-2">🧠 思考强度等级</div>
         <div id="customEffortGrid" class="flex flex-wrap gap-2">
           <!-- 动态生成的思考强度按钮 -->
+        </div>
+      </div>
+
+      <!-- 3b. 完成提示（默认开，可关）——轮次完成 / 需要你时的音与震 -->
+      <div>
+        <div class="text-xs font-semibold text-ink-soft mb-2">🔔 完成提示 <span class="text-[10px] text-ink-faint font-normal">(默认开，可关)</span></div>
+        <div class="space-y-2">
+          <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+            <span class="min-w-0">
+              <span class="font-semibold block">提示音</span>
+              <span class="text-[9.5px] text-ink-soft">模型说完 / 需要你审批或回答时短响一声</span>
+            </span>
+            <input id="prefAlertSound" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
+          </label>
+          <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+            <span class="min-w-0">
+              <span class="font-semibold block">震动</span>
+              <span class="text-[9.5px] text-ink-soft">完成/出错/需要你时震动（Android 有效）</span>
+            </span>
+            <input id="prefAlertVibrate" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
+          </label>
+          <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
+            <span class="min-w-0">
+              <span class="font-semibold block">前台也弹系统通知</span>
+              <span class="text-[9.5px] text-ink-soft">页面开着时轮次完成也弹一条（默认只在后台弹）</span>
+            </span>
+            <input id="prefAlertFgComplete" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
+          </label>
+          <button id="btnAlertPreview" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">▶ 试听提示音 / 试震一下</button>
         </div>
       </div>
 

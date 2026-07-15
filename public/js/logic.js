@@ -369,6 +369,85 @@ export function pushEnvHint({ isSecureContext, isIOS, isStandalone, hasPushManag
   return 'ready';
 }
 
+// 完成提示（提示音 / 震动 / 前台系统通知）本地偏好——默认全开，仅显式存 '0' 为关。
+// storage 键与 localStorage 对齐；纯函数便于单测，不直接碰 window。
+export const ALERT_PREF_KEYS = Object.freeze({
+  sound: 'ccm_alert_sound',
+  vibrate: 'ccm_alert_vibrate',
+  foregroundComplete: 'ccm_alert_fg_complete',
+});
+export function readAlertPrefs(getItem) {
+  const g = typeof getItem === 'function' ? getItem : () => null;
+  // 缺省 / 非 '0' → true（默认开）；只有字面量 '0' 为关
+  const on = (k) => g(k) !== '0';
+  return {
+    sound: on(ALERT_PREF_KEYS.sound),
+    vibrate: on(ALERT_PREF_KEYS.vibrate),
+    foregroundComplete: on(ALERT_PREF_KEYS.foregroundComplete),
+  };
+}
+export function writeAlertPref(setItem, key, enabled) {
+  const storageKey = ALERT_PREF_KEYS[key];
+  if (!storageKey || typeof setItem !== 'function') return false;
+  setItem(storageKey, enabled ? '1' : '0');
+  return true;
+}
+
+// ── 状态一瞥：live 会话实例汇总（非 OS 进程表）────────────────────────────────
+// 数据源 = instances 广播的 live AgentSession 列表。running = busy 计数（含前台轮 + 后台 bgTasks）。
+// 不做 PID / 僵尸：后端无子进程 PID，本函数也不假装。
+const INSTANCE_STATES = ['busy', 'permission', 'error', 'done', 'aborted', 'idle'];
+export function summarizeInstanceStates(instances) {
+  const byState = Object.fromEntries(INSTANCE_STATES.map(s => [s, 0]));
+  let total = 0;
+  for (const inst of Array.isArray(instances) ? instances : []) {
+    if (!inst || !inst.instanceId) continue;
+    total++;
+    const s = INSTANCE_STATES.includes(inst.state) ? inst.state : 'idle';
+    byState[s]++;
+  }
+  return { total, byState, running: byState.busy };
+}
+
+// 统一判定：会话待处理 + 服务异常 → ok | attention | alert（提案 whatNeedsAttention MVP）。
+// priority: alert > attention > ok。不引入 softwareEvents 环 / doctor healthVerdict（第二刀）。
+export function whatNeedsAttention({ instances, needsYou, service } = {}) {
+  const items = [];
+  if (Array.isArray(needsYou)) {
+    for (const n of needsYou) {
+      if (!n) continue;
+      items.push({
+        kind: n.reason === 'awaiting_input' ? 'awaiting_input' : 'awaiting_approval',
+        ref: n.instanceId || n.sessionId || null,
+        summary: n.title || n.toolName || n.reason || '需要你',
+      });
+    }
+  }
+  // needsYou 可能空但 instance 仍 permission（竞态/旧端）——补一条
+  if (!items.length && Array.isArray(instances)) {
+    for (const inst of instances) {
+      if (inst?.state === 'permission') {
+        items.push({
+          kind: 'awaiting_approval',
+          ref: inst.instanceId || null,
+          summary: inst.title || '待审批',
+        });
+      }
+    }
+  }
+  if (service && service.deliveryFailure && typeof service.deliveryFailure === 'object') {
+    const df = service.deliveryFailure;
+    items.push({
+      kind: 'delivery_failure',
+      ref: df.channel || null,
+      summary: `推送失败（${df.channel || 'push'}）`,
+    });
+    return { level: 'alert', items };
+  }
+  if (items.length) return { level: 'attention', items };
+  return { level: 'ok', items: [] };
+}
+
 // 通知深链落地策略（②2c）：通知带 {instanceId, sessionId, cwd}，点击后据客户端 instances 快照决定动作。
 //   setViewing = instanceId 仍在 live 列表 → 直接切视图（最快）
 //   switch     = 实例已失效（懒重生 / 关闭 / epoch 变化）但会话在 → session:switch 懒 resume（服务端校验归属）

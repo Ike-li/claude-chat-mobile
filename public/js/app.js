@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -45,20 +45,64 @@ import { verifyIntegrity } from './canonicalize.js';
   const topContextPill = $('topContextPill'), topTitleText = $('topTitleText'), topProjectText = $('topProjectText');
   const customModelGrid = $('customModelGrid'), customPermGrid = $('customPermGrid'), customEffortGrid = $('customEffortGrid'), customEffortGroup = $('customEffortGroup');
 
-  // ---- Web Haptics (触觉振动反馈) ----
+  // ---- Web Haptics + 完成提示音（默认开，设置面板可关）----
+  // 偏好存 localStorage（readAlertPrefs/writeAlertPref 在 logic.js）：缺省=开，仅 '0' 为关。
+  let alertPrefs = readAlertPrefs((k) => localStorage.getItem(k));
+  let alertAudioCtx = null; // WebAudio 懒创建，须用户手势后才能出声（Android Chrome 同样）
+  function ensureAlertAudio() {
+    if (alertAudioCtx) return alertAudioCtx;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+    try { alertAudioCtx = new AC(); } catch { return null; }
+    return alertAudioCtx;
+  }
+  // 短提示音：完成=双音上行；需要你=中音；出错=下行。纯振荡器、无外部音频文件。
+  function playAlertTone(kind = 'success') {
+    if (!alertPrefs.sound) return;
+    const ctx = ensureAlertAudio();
+    if (!ctx) return;
+    try {
+      if (ctx.state === 'suspended') ctx.resume?.();
+      const now = ctx.currentTime;
+      const tones = kind === 'error' || kind === 'warning'
+        ? [[440, 0], [330, 0.12]]
+        : kind === 'need'
+          ? [[660, 0], [660, 0.14]]
+          : [[523.25, 0], [659.25, 0.11]]; // C5 → E5
+      for (const [freq, when] of tones) {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = freq;
+        g.gain.setValueAtTime(0.0001, now + when);
+        g.gain.exponentialRampToValueAtTime(0.12, now + when + 0.015);
+        g.gain.exponentialRampToValueAtTime(0.0001, now + when + 0.14);
+        o.connect(g); g.connect(ctx.destination);
+        o.start(now + when);
+        o.stop(now + when + 0.16);
+      }
+    } catch { /* 静默：无音频权限/被策略拦 */ }
+  }
   function haptic(type) {
+    // tap 是 UI 点按反馈，不受「完成震动」开关影响；success/error/warning/need 受开关门控
+    if (type !== 'tap' && !alertPrefs.vibrate) return;
     if (!navigator.vibrate) return;
     try {
       if (type === 'tap') navigator.vibrate(12);
-      else if (type === 'success') navigator.vibrate([15, 80, 15]);
+      else if (type === 'success' || type === 'need') navigator.vibrate([15, 80, 15]);
       else if (type === 'error' || type === 'warning') navigator.vibrate([30, 80, 30, 80, 30]);
     } catch (e) { /* 忽略某些沙箱浏览器不支持 Vibrate 引起的错误 */ }
+  }
+  // 完成/需要你：震动 + 提示音一次打包（开关各自生效）
+  function alertCue(kind) {
+    haptic(kind === 'need' ? 'need' : kind);
+    playAlertTone(kind === 'need' ? 'need' : kind);
   }
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
   const cliStatusWrapEl = $('cliStatusWrap'); // E16：状态栏折叠包裹（<details>，揭示=去 hidden）
   const cliSummaryEl = $('cliSummary'); // E16：折叠条一行摘要（客户端据 status_line 字段拼出）
-  const permModeSelect = $('permModeSelect');  // 权限档切换器（5 档；dontAsk 终端 Shift+Tab 切不到，属 setPermissionMode/agent 能力）
+  const permModeSelect = $('permModeSelect');  // 权限档切换器（6 档：default/plan/acceptEdits/dontAsk/auto/bypass；dontAsk+auto 终端交互切不到，属 setPermissionMode/agent 能力）
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
   const btnAttach = $('btnAttach'), fileInput = $('fileInput'), attachTray = $('attachTray'); // E17：附件
@@ -206,17 +250,23 @@ import { verifyIntegrity } from './canonicalize.js';
   }
 
   function syncModelUI(model) {
-    // 底栏模型 chip：显完整真名（含网关后缀 [1m]，与 statusLine/实际发送名一致）；未选则显「默认」——
-    // 已知 cwd 默认模型时显「默认 · <真名>」（scout 探得的实测值，非猜；发送仍不带 model）。点击开「选择模型」格。
+    // 底栏模型 chip：显完整真名（含网关后缀 [1m]）；未选具体模型时优先显 CLI 列表里 value=default 的 displayName，
+    // 否则回落 scout 探得的 cwd 默认名 /「默认」。不再渲染 Web 自造的「默认模型」磁贴。
+    const cliDefault = (modelsList || []).find(m => (typeof m === 'string' ? m : m?.value) === 'default');
+    const cliDefaultLabel = cliDefault && typeof cliDefault === 'object'
+      ? (cliDefault.displayName || 'Default (recommended)')
+      : null;
     const modelPillText = model ? model + currentGatewaySuffix
-      : (cwdDefaultModel ? '默认 · ' + cwdDefaultModel.replace(/\[[^\]]+\]$/, '') : '默认');
+      : (cliDefaultLabel
+        || (cwdDefaultModel ? cwdDefaultModel.replace(/\[[^\]]+\]$/, '') : '默认'));
     if (pillModelText) pillModelText.textContent = modelPillText;
-    // 完整名进 title：chip 里可能被 … 截断，桌面 hover 兜底看全名；纯默认(无 cwd 默认)时回落操作提示
-    if (pillModel) pillModel.title = (model || cwdDefaultModel) ? modelPillText : '选择模型';
+    if (pillModel) pillModel.title = (model || cliDefaultLabel || cwdDefaultModel) ? modelPillText : '选择模型';
     if (customModelGrid) {
+      // 空选中时高亮 CLI 的 default 项（与终端 /model 列表一致），不靠 data-model="" 伪项
+      const activeVal = model || (cliDefault ? 'default' : '');
       customModelGrid.querySelectorAll('.model-tile').forEach(tile => {
         const tileVal = tile.dataset.model;
-        const isCurrent = tileVal === model;
+        const isCurrent = tileVal === activeVal || (!!model && tileVal === model);
         const title = tile.querySelector('.text-xs');
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
@@ -238,49 +288,42 @@ import { verifyIntegrity } from './canonicalize.js';
   function rebuildCustomModelGrid(models) {
     if (!customModelGrid) return;
     customModelGrid.innerHTML = '';
-    
-    // 默认首选项：不指定（沿用当前）。currentModel 空且已知 cwd 默认 → 标签显真实默认名（仅文案；data-model 仍空、
-    // onclick 仍归零 modelInput → 发送不带 --model，零 F1 风险）。文案决策在 logic.js 纯函数、有单测。
-    const defActive = !currentModel;
-    const defLabel = defaultModelTileLabel({ currentModel, cwdDefaultModel });
-    const defCard = el(`
-      <div data-model="" class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${defActive ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
-        <div class="text-xs font-semibold truncate ${defActive ? 'text-accent' : 'text-ink'}">${esc(defLabel.title)}</div>
-        <div class="text-[9.5px] text-ink-soft truncate mt-0.5">${esc(defLabel.subtitle)}</div>
-      </div>
-    `);
-    defCard.onclick = () => {
-      if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
-      haptic('tap');
-      modelInput.value = '';
-      delete modelInput.dataset.fullModel;
-      syncModelUI('');
-      rebuildEffortOptions(currentModel);
-    };
-    customModelGrid.appendChild(defCard);
+    // 终端等价：只渲染 CLI/SDK supportedModels 列表，不自造「默认模型」空磁贴。
+    // CLI 列表自带 value:"default" / "Default (recommended)"；空首页未选时高亮该项。
+    const list = models || [];
+    const hasCliDefault = list.some(m => (typeof m === 'string' ? m : m?.value) === 'default');
+    // 选中规则：已有具体 currentModel → 精确/别名命中；否则 FRESH 高亮 CLI default 项
+    const selectedVal = currentModel
+      || (modelInput?.value || '')
+      || (hasCliDefault ? 'default' : '');
 
-    (models || []).forEach(m => {
+    list.forEach(m => {
       const val = typeof m === 'string' ? m : m.value;
       const display = typeof m === 'string' ? m : (m.displayName || m.value);
       const desc = typeof m === 'string' ? '' : (m.description || '');
-      
-      const active = val === currentModel;
+      const active = val === selectedVal
+        || (!!currentModel && val === currentModel)
+        || (!currentModel && val === 'default' && selectedVal === 'default');
       const card = el(`
-        <div data-model="${val}" class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
-          <div class="text-xs font-semibold truncate ${active ? 'text-accent' : 'text-ink'}">${display}</div>
-          <div class="text-[9.5px] text-ink-soft truncate mt-0.5">${desc || val}</div>
+        <div data-model="${esc(val)}" class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
+          <div class="text-xs font-semibold truncate ${active ? 'text-accent' : 'text-ink'}">${esc(display)}</div>
+          <div class="text-[9.5px] text-ink-soft truncate mt-0.5">${esc(desc || val)}</div>
         </div>
       `);
       card.onclick = () => {
-        if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
+        if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; }
         haptic('tap');
-        modelInput.value = val;
+        // value=default 是 CLI /model 「不 pin」语义：select 置空（发消息=undefined→CLI 自选），
+        // 不把字面 'default' 写进 select（否则发消息会带 model:'default' 让后端误 setModel 字面值）。
+        modelInput.value = val === 'default' ? '' : val;
         delete modelInput.dataset.fullModel;
-        syncModelUI(val);
-        rebuildEffortOptions(val);
-        if (!effortSelect.value && currentEffort) {
-          socket.emit('user:setEffort', { level: null });
+        if (val === 'default') {
+          syncModelUI('');
+          if (pillModelText && display) pillModelText.textContent = display;
+        } else {
+          syncModelUI(val);
         }
+        rebuildEffortOptions(val === 'default' ? (cwdDefaultModel || currentModel) : val);
       };
       customModelGrid.appendChild(card);
     });
@@ -994,34 +1037,31 @@ import { verifyIntegrity } from './canonicalize.js';
       }
     },
     // 可用模型列表由 init 后 fire-and-forget supportedModels() 推送（含重连/重启后的服务端重放）。
-    // 原样透传（2026-06-15）：SDK 返回 {value, displayName, description}（兼容纯字符串），option 文案直接用
-    // displayName、发送值用 value，不叠加项目友好名映射。预选当前模型用 init.model 精确 value 匹配；
-    // 不在列表（如网关后缀名 [1m]）则 ensureModelOption 插入裸名后选中——F1：匹配不到也绝不静默切走。
-    // 空值选项「不指定」保留：用户可显式回退到不传 model，由会话沿用原有模型（F1 事故教训）。
+    // 原样透传（2026-06-15 / 2026-07-14）：只渲染 CLI/SDK 列表（含 value=default 的 Default recommended），
+    // 不再自造「不指定/默认模型」空选项。预选 currentModel；空则选 CLI default。
     models(p) {
       modelsList = Array.isArray(p.models) ? p.models : []; // 存原始候选供 effort 动态渲染
-      rebuildEffortOptions(currentModel);                    // 列表到达 → 按当前模型刷新 effort 档位
+      rebuildEffortOptions(currentModel || cwdDefaultModel); // 列表到达 → 按当前/默认模型刷新 effort
       rebuildCustomModelGrid(modelsList);                    // 刷新自定义设置面板中的模型选择
       if (!modelInput) return;
       modelInput.innerHTML = '';
-      const def = document.createElement('option');
-      def.value = '';
-      def.textContent = '不指定（沿用当前）';
-      modelInput.appendChild(def);
       (p.models || []).forEach(m => {
         const opt = document.createElement('option');
         if (typeof m === 'string') { opt.value = m; opt.textContent = m; }
         else { opt.value = m.value; opt.textContent = m.displayName || m.value; }
         modelInput.appendChild(opt);
       });
-      // 预选当前模型（init.model）：已在列表则选中，否则插入裸名后选中（ensureModelOption 内部去重）
+      // 预选：有 currentModel 用它；否则 CLI default；再不济留空
       if (currentModel) {
         ensureModelOption(currentModel);
         modelInput.value = currentModel;
         syncModelUI(currentModel);
+      } else if ([...modelInput.options].some(o => o.value === 'default')) {
+        modelInput.value = 'default';
+        syncModelUI('');
+      } else {
+        syncModelUI('');
       }
-      // 若 /model 手设的 pending 值不同于当前模型，确保它在 option 里（切换前可见但不可选中的中间态）
-      // keep 原逻辑已移除——init.model 是权威源，不再依赖 input.value 留存旧选择
     },
     text_delta(p) {
       clearApiRetryBanner(); // 重试已过，流恢复——撤掉「重试中 n/m」横幅
@@ -1232,7 +1272,7 @@ import { verifyIntegrity } from './canonicalize.js';
     permission_request(p) {
       // 幂等：sync:since 切入补发的 pending 快照可能与 buffer 回放的原始事件同 requestId → 只保留一份
       if (activePerm?.requestId === p.requestId || permQueue.some(r => r.requestId === p.requestId)) return;
-      haptic('warning');
+      alertCue('need');
       permQueue.push(p);
       showNextPerm();
       notify('⚠️ 等待审批', `${p.name}：${JSON.stringify(p.input).slice(0, 80)}`);
@@ -1241,7 +1281,7 @@ import { verifyIntegrity } from './canonicalize.js';
     question(p) {
       // 幂等：同上（快照补发 vs buffer 回放去重），按 requestId
       if (activeQuestion?.requestId === p.requestId || questionQueue.some(q => q.requestId === p.requestId)) return;
-      haptic('warning');
+      alertCue('need');
       questionQueue.push(p);
       showNextQuestion();
       notify('❓ 需要选择', p.text.slice(0, 80));
@@ -1296,10 +1336,10 @@ import { verifyIntegrity } from './canonicalize.js';
       const ui = presentTurnResult(p);
       if (ui.failToolsMessage) failPendingToolCards(ui.failToolsMessage);
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
-      haptic(ui.haptic);
+      alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
       addBar(ui.statusBar.text, ui.statusBar.cls);
       if (ui.errorBar) addBar(ui.errorBar.text, ui.errorBar.cls);
-      notify(ui.notify.title, ui.notify.body);
+      notify(ui.notify.title, ui.notify.body, { force: alertPrefs.foregroundComplete });
 
       // 防御性清理当前 tab 的挂起提问和审批
       permQueue.length = 0;
@@ -1318,7 +1358,7 @@ import { verifyIntegrity } from './canonicalize.js';
     error(p) {
       finalizeStreams();
       failPendingToolCards(p.message);
-      haptic('error');
+      alertCue('error');
       addBar(`⚠️ ${p.message}`, 'text-danger');
       setBusy(false);
       hideActivityBanner(); // 含 api_retry 横幅
@@ -1819,6 +1859,7 @@ import { verifyIntegrity } from './canonicalize.js';
 
   // ---- 发送 / 停止 ----
   function send(opts = {}) {
+    ensureAlertAudio(); // 发送=用户手势：解锁 WebAudio，本轮完成后提示音才能响
     if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「接管 CLI 会话」可接管）
       addBar('此会话正在终端运行，只读中——点「接管 CLI 会话」可在手机继续', 'text-danger');
       return;
@@ -2194,7 +2235,7 @@ import { verifyIntegrity } from './canonicalize.js';
     };
   }
 
-  // ---- 权限档切换（5 档；dontAsk 非交互档，终端 Shift+Tab 切不到）----
+  // ---- 权限档切换（6 档；dontAsk/auto 非交互档，终端只切得到 default/plan/acceptEdits/bypass）----
   // setPermMode 仅由 init/permission_mode 服务端事件驱动（权威回执，函数声明有提升），onchange 不再
   // 乐观调用——故上屏的系统条 = 服务端已确认切换。程序设 select.value 不触发 onchange，无回声循环。
   const PERM_LABEL = {
@@ -2202,6 +2243,7 @@ import { verifyIntegrity } from './canonicalize.js';
     plan: '计划模式',
     acceptEdits: '自动接受编辑',
     dontAsk: '免打扰（白名单外直接拒）',
+    auto: 'Auto（LLM 自动判批/拒权限）',
     bypassPermissions: '⚠️ bypass（跳过所有审批）'
   };
   function setPermMode(mode, silent = false) {
@@ -2225,6 +2267,7 @@ import { verifyIntegrity } from './canonicalize.js';
         plan: '计划模式',
         acceptEdits: '自动接受编辑',
         dontAsk: '免打扰',
+        auto: 'Auto',
         bypassPermissions: 'Bypass'
       };
       pillPermText.textContent = labels[mode] || mode;
@@ -2319,32 +2362,27 @@ import { verifyIntegrity } from './canonicalize.js';
     pillEffort?.classList.remove('hidden');
     customEffortGroup?.classList.remove('hidden');
 
+    // 终端等价：只列 CLI/SDK 档位（+ web 的 ultracode 扩展），不自造「模型默认」空档。
+    // 当前档不在列表时回落 show[0]（常见 low），与 settings.effortLevel 对齐；列表空则保持空。
     effortSelect.innerHTML = '';
-    const def = document.createElement('option'); def.value = ''; def.textContent = '（模型默认）';
-    effortSelect.appendChild(def);
-    for (const lv of show) { const o = document.createElement('option'); o.value = lv; o.textContent = lv; effortSelect.appendChild(o); }
-    // 保留当前档（仍在新列表里则保持，否则回落「模型默认」）
-    effortSelect.value = (currentEffort && show.includes(currentEffort)) ? currentEffort : '';
+    for (const lv of show) {
+      const o = document.createElement('option');
+      o.value = lv;
+      o.textContent = lv;
+      effortSelect.appendChild(o);
+    }
+    const pick = (currentEffort && show.includes(currentEffort))
+      ? currentEffort
+      : (show.includes('low') ? 'low' : (show[0] || ''));
+    if (pick && pick !== currentEffort && !ultracodeArmed) {
+      // 列表刚到 / 模型切换导致档位重算：把影子 currentEffort 收敛到合法档，避免 UI 高亮与发送值分叉
+      currentEffort = pick === 'ultracode' ? 'xhigh' : pick;
+    }
+    effortSelect.value = ultracodeArmed ? 'ultracode' : (pick || '');
 
-    // Dynamic tactile grid population inside #customEffortGrid
     if (customEffortGrid) {
       customEffortGrid.innerHTML = '';
-      
-      const currentVal = ultracodeArmed ? 'ultracode' : (effortSelect.value || ''); // 武装 ultracode 时高亮最高档磁贴
-      const defActive = !currentVal;
-      const defTile = el(`
-        <div data-level="" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${defActive ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
-          <div class="text-xs font-semibold ${defActive ? 'text-accent' : 'text-ink'}">模型默认</div>
-          <div class="text-[9.5px] text-ink-soft mt-0.5">默认思考时长</div>
-        </div>
-      `);
-      defTile.onclick = () => {
-        haptic('tap');
-        effortSelect.value = '';
-        effortSelect.onchange();
-      };
-      customEffortGrid.appendChild(defTile);
-
+      const currentVal = ultracodeArmed ? 'ultracode' : (effortSelect.value || '');
       for (const lv of show) {
         const active = currentVal === lv;
         const isUltra = lv === 'ultracode';
@@ -2362,6 +2400,10 @@ import { verifyIntegrity } from './canonicalize.js';
         };
         customEffortGrid.appendChild(lvTile);
       }
+    }
+    // 同步 pill 文案（无「模型默认」伪档后 pill 应显真实档名）
+    if (pillEffortText) {
+      pillEffortText.textContent = ultracodeArmed ? 'ultracode' : (currentEffort || pick || '—');
     }
   }
   effortSelect.onchange = () => {
@@ -2520,8 +2562,9 @@ import { verifyIntegrity } from './canonicalize.js';
       ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）
       adoptPanelState(target);          // 先静默同步顶部面板到新实例档（先于 bindView 的 sync 回放）
       // 空首页（无实例）：① 模型不显具体名（新会话模型=env 默认、服务端不可知）→「不指定」，modelInput 归零；
-      // ② 权限/思考强度显"下条新会话将用的真实档"（server defaultPermissionMode/defaultEffort = pending ?? CLI 启动默认），
-      // silent 同步不上屏——修空首页残留上个会话档（A1，2026-06-22）。
+      // ② 权限/思考强度显"下条新会话将用的真实档"
+      // （server defaultPermissionMode/defaultEffort = L0 pending > L3 CLI settings > L4 硬默认），
+      // silent 同步不上屏——修空首页残留上个会话档（A1，2026-06-22；L3 2026-07-14）。
       if (!target) {
         updateModelAndSuffix(''); if (modelInput) modelInput.value = '';
         setPermMode(p.defaultPermissionMode || 'default', true);
@@ -2538,6 +2581,13 @@ import { verifyIntegrity } from './canonicalize.js';
       if (consoleModal && consoleModal.classList.contains('sheet-open')) {
         loadConsoleLogs(newViewing);
       }
+    } else if (!newViewing) {
+      // 空首页视图未变（displayed 已是 null、cwd 也没变），但仍可能收到二次 instances：
+      // session:new / 启动后 ensureCliDefaults 异步到齐会再广播一次，defaults 从 L4→L3。
+      // 若不在此静默刷新，顶部 mode/effort 会卡在首帧硬默认，直到用户切走再回来。
+      // 用户在空窗手改档（L0）时 server 会把 pending 编进 default*，这里幂等对齐权威源即可。
+      setPermMode(p.defaultPermissionMode || 'default', true);
+      setEffortMode(p.defaultEffort ?? null, true);
     }
     updateSessionsDot();
     updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进 _structChanged 分支）
@@ -2556,17 +2606,20 @@ import { verifyIntegrity } from './canonicalize.js';
     const isPanelOpen = leftSidebar && !leftSidebar.classList.contains('-translate-x-full');
     if (isDesktop || isPanelOpen) {
       if (_structChanged) {
-        openSessionPanel(); // 内含 needsYou 区全量重建，此路径不必再单独 refreshNeedsYou()
+        openSessionPanel(); // 内含 needsYou/status/service 区全量重建，此路径不必再单独 refresh*
       } else {
         refreshDirBadges();
         refreshInstanceBadges(); // 实例角标实时刷新（busy 时工具图标细化）
         refreshNeedsYou(); // "等我"聚合独立于 structKey（新增/清除审批不改变实例集结构），须单独刷新
+        refreshStatusSection(); // live 实例状态汇总（busy 计数等随 state 变，不进 structKey）
       }
     } else {
       refreshDirBadges();
       refreshInstanceBadges();
       refreshNeedsYou();
+      refreshStatusSection();
     }
+    updateAttentionSignal(); // 顶栏 connDotWrap 边框：alert/attention/ok（与连通性内圈绿/红分轴）
     // 默认磁贴标签依赖 currentModel(空/非空) + cwdDefaultModel，二者本次都可能变（adoptPanelState 改 currentModel、
     // scout 完成的同视图广播改 cwdDefaultModel）。用纯函数比对前后标签，仅真变时重建网格刷新——adoptPanelState 只
     // 切高亮不重建，故此处兜底；无变化不重建（省性能）。
@@ -2770,6 +2823,118 @@ import { verifyIntegrity } from './canonicalize.js';
     if (!old) return;
     old.replaceWith(buildServiceSection());
   }
+  // 状态一瞥区（live 会话实例汇总，非 OS 进程表）：摘要 + 实例表 + 说明。
+  // 数据全来自 instances 广播；attention 优先排序；点行深链。锚点 #statusSection 常在，refresh 可独立替换。
+  function buildStatusSection() {
+    const section = el(`<div id="statusSection" class="border-b border-line"></div>`);
+    const sum = summarizeInstanceStates(instancesList);
+    const attention = whatNeedsAttention({
+      instances: instancesList,
+      needsYou: needsYouList,
+      service: latestServiceHealth,
+    });
+    const header = el(`<div class="px-3 py-1.5 text-[10px] font-semibold border-b border-line-soft flex items-center justify-between gap-2"></div>`);
+    const title = el(`<span></span>`);
+    title.textContent = '状态 · live 会话实例';
+    header.appendChild(title);
+    const levelEl = el(`<span class="font-normal"></span>`);
+    if (attention.level === 'alert') {
+      levelEl.textContent = '告警';
+      levelEl.className = 'font-normal text-danger';
+      header.classList.add('text-danger');
+    } else if (attention.level === 'attention') {
+      levelEl.textContent = '待处理';
+      levelEl.className = 'font-normal text-warning';
+      header.classList.add('text-warning');
+    } else {
+      levelEl.textContent = '正常';
+      levelEl.className = 'font-normal text-ink-faint';
+      header.classList.add('text-ink-soft');
+    }
+    header.appendChild(levelEl);
+    section.appendChild(header);
+
+    const summary = el(`<div class="px-3 py-1 text-[10px] text-ink-soft"></div>`);
+    const b = sum.byState;
+    summary.textContent = `live ${sum.total} · 运行 ${sum.running} · 待批 ${b.permission} · 出错 ${b.error} · 完成 ${b.done} · 中止 ${b.aborted} · 空闲 ${b.idle}`;
+    section.appendChild(summary);
+
+    // 实例表：attention 优先（permission > error > busy > aborted > done > idle），同档按 title
+    const rank = { permission: 0, error: 1, busy: 2, aborted: 3, done: 4, idle: 5 };
+    const rows = [...instancesList]
+      .filter(i => i && i.instanceId)
+      .sort((a, b2) => (rank[a.state] ?? 9) - (rank[b2.state] ?? 9) || String(a.title || '').localeCompare(String(b2.title || '')));
+    if (rows.length) {
+      const list = el(`<div class="pb-1"></div>`);
+      for (const inst of rows) {
+        const row = el(`<button type="button" class="w-full flex items-center gap-2 pl-3 pr-3 py-1.5 text-left hover:bg-sunk/30 active:opacity-70" data-testid="status-instance-row"></button>`);
+        const badge = el(`<span class="shrink-0 text-xs"></span>`);
+        const m = DIR_BADGE[inst.state];
+        if (m) { badge.textContent = m[0]; badge.className = `shrink-0 text-xs ${m[1]}`; badge.title = m[2]; }
+        else if (inst.state === 'busy' && inst.activeTool && TOOL_BADGE[inst.activeTool]) {
+          badge.textContent = TOOL_BADGE[inst.activeTool];
+          badge.className = 'shrink-0 text-xs text-warning';
+          badge.title = `运行中：${inst.activeTool}`;
+        } else { badge.textContent = '·'; badge.className = 'shrink-0 text-xs text-ink-faint'; }
+        row.appendChild(badge);
+        const body = el(`<div class="flex-1 min-w-0"></div>`);
+        const head = el(`<div class="truncate text-xs font-medium text-ink"></div>`);
+        head.textContent = inst.title || '新会话';
+        const sub = el(`<div class="truncate text-[10px] text-ink-faint"></div>`);
+        const stateLabel = (m && m[2]) || inst.state || '空闲';
+        const toolBit = inst.activeTool ? ` · ${inst.activeTool}` : '';
+        const bgBit = inst.bgActive ? ' · 后台' : '';
+        sub.textContent = `${baseName(inst.cwd)} · ${stateLabel}${toolBit}${bgBit}`;
+        body.appendChild(head);
+        body.appendChild(sub);
+        row.appendChild(body);
+        row.onclick = () => {
+          haptic('tap');
+          applyDeepLink({ instanceId: inst.instanceId, sessionId: inst.sessionId, cwd: inst.cwd });
+        };
+        list.appendChild(row);
+      }
+      section.appendChild(list);
+    } else {
+      const empty = el(`<div class="px-3 py-1 text-[10px] text-ink-faint"></div>`);
+      empty.textContent = '当前无 live 实例（空首页或尚未发消息）';
+      section.appendChild(empty);
+    }
+
+    const note = el(`<div class="px-3 py-1.5 text-[9.5px] text-ink-faint/80 leading-snug"></div>`);
+    note.textContent = '此处为 web 驱动的会话实例，不含本机其它 claude 终端进程；无法检测 OS 僵尸。';
+    section.appendChild(note);
+    return section;
+  }
+  function refreshStatusSection() {
+    const old = sessionPanel.querySelector('#statusSection');
+    if (!old) return;
+    old.replaceWith(buildStatusSection());
+  }
+  // 顶栏 connDotWrap 边框：服务异常(alert) 优先于 会话待处理(attention)；内圈绿/红仍只管连通性。
+  // 与 updateServiceNotice 共用边框，避免两轴打架——本函数在 setInstances 末尾统一重算。
+  function updateAttentionSignal() {
+    if (!connDotWrap) return;
+    const { level } = whatNeedsAttention({
+      instances: instancesList,
+      needsYou: needsYouList,
+      service: latestServiceHealth,
+    });
+    // 清旧态
+    connDotWrap.classList.remove('border-warning', 'border-danger', 'border-line-soft');
+    if (level === 'alert') {
+      connDotWrap.classList.add('border-danger');
+      // 保留 RTT/连接 title 前缀语义：追加注意力说明
+      const base = connDotWrap.title || '';
+      if (!base.includes('服务告警')) connDotWrap.title = (base ? base + ' · ' : '') + '服务告警（推送失败等）';
+    } else if (level === 'attention') {
+      connDotWrap.classList.add('border-warning');
+      const base = connDotWrap.title || '';
+      if (!base.includes('需要你')) connDotWrap.title = (base ? base + ' · ' : '') + `需要你 (${needsYouList.length || '…'})`;
+    } else {
+      connDotWrap.classList.add('border-line-soft');
+    }
+  }
   // 面板开着时仅更新已渲染目录行的角标（不重发 session:list）
   function refreshDirBadges() {
     sessionPanel.querySelectorAll('[data-dir]').forEach(row => {
@@ -2840,9 +3005,7 @@ import { verifyIntegrity } from './canonicalize.js';
       // 一旦命中过就锁定为 true（不因下一次广播里 changed 判回 false 而让提示瞬间消失，见变量声明处注释）。
       if (changed) _serviceRestartNoticeActive = true;
     }
-    const hasNotice = formatServiceNotices({ service: latestServiceHealth, restartChanged: _serviceRestartNoticeActive, now: Date.now() }).length > 0;
-    connDotWrap?.classList.toggle('border-warning', hasNotice);
-    connDotWrap?.classList.toggle('border-line-soft', !hasNotice);
+    // 边框由 updateAttentionSignal 统一重算（alert > attention > ok），此处只刷服务文案区。
     refreshServiceSection();
   }
 
@@ -3190,6 +3353,12 @@ import { verifyIntegrity } from './canonicalize.js';
   // ---- 触觉配置面板抽屉控制器 (Settings Sheet Controllers) ----
   function openSettingsSheet() {
     haptic('tap');
+    ensureAlertAudio(); // 打开设置即算用户手势：解锁 WebAudio，后续完成提示音才出得来
+    // 把 localStorage 偏好同步到开关 UI（默认开 = checked）
+    const soundEl = $('prefAlertSound'), vibEl = $('prefAlertVibrate'), fgEl = $('prefAlertFgComplete');
+    if (soundEl) soundEl.checked = !!alertPrefs.sound;
+    if (vibEl) vibEl.checked = !!alertPrefs.vibrate;
+    if (fgEl) fgEl.checked = !!alertPrefs.foregroundComplete;
     if (settingsSheet) settingsSheet.classList.remove('translate-y-full');
     if (settingsScrim) settingsScrim.classList.remove('hidden');
   }
@@ -3203,6 +3372,31 @@ import { verifyIntegrity } from './canonicalize.js';
   if (settingsClose) settingsClose.onclick = closeSettingsSheet;
   if (settingsScrim) settingsScrim.onclick = closeSettingsSheet;
 
+  // 完成提示三开关：默认开，点关写 '0'；试听按钮顺带解锁音频
+  const bindAlertToggle = (id, key) => {
+    const el = $(id);
+    if (!el) return;
+    el.onchange = () => {
+      writeAlertPref((k, v) => localStorage.setItem(k, v), key, el.checked);
+      alertPrefs = readAlertPrefs((k) => localStorage.getItem(k));
+      if (key === 'sound' && el.checked) { ensureAlertAudio(); playAlertTone('success'); }
+      if (key === 'vibrate' && el.checked) haptic('success');
+    };
+  };
+  bindAlertToggle('prefAlertSound', 'sound');
+  bindAlertToggle('prefAlertVibrate', 'vibrate');
+  bindAlertToggle('prefAlertFgComplete', 'foregroundComplete');
+  const btnAlertPreview = $('btnAlertPreview');
+  if (btnAlertPreview) {
+    btnAlertPreview.onclick = () => {
+      ensureAlertAudio();
+      // 预览不受开关限制：临时打开音/震各打一次，让用户听见/感到效果
+      const prev = { ...alertPrefs };
+      alertPrefs = { ...alertPrefs, sound: true, vibrate: true };
+      alertCue('success');
+      alertPrefs = prev;
+    };
+  }
   if (pillModel) pillModel.onclick = openSettingsSheet; // 点底栏模型 chip → 开「选择模型」格
   // 顶部 pill 原先只是 btnSessions 的重复代理（两者都调 toggleSessions，纯冗余入口）。
   // 现改为直接打开当前工作区的只读文件浏览——抽屉只负责会话切换/新建，文件浏览入口唯一在此。
@@ -3296,6 +3490,11 @@ import { verifyIntegrity } from './canonicalize.js';
     // "服务"小节（第一性原理重新设计，NFR-15/可维护性）：与上方"需要你"聚合故意分隔——图例之后、
     // 目录列表之前，仅异常时渲染，见 buildServiceSection 注释。
     sessionPanel.appendChild(buildServiceSection());
+
+    // "状态一瞥"小节（台阶6 状态中心 MVP，承接 NFR-15/会话状态可见性）：live 会话实例汇总表，
+    // 不含 OS 进程/僵尸（后端无 PID、设计禁 OS 探针）。置服务小节之后、目录列表之前——
+    // 与"需要你"不同轴：这里数量化（在跑几个/出错几个），那里注意力化（哪个等你）。
+    sessionPanel.appendChild(buildStatusSection());
 
     // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
@@ -4195,8 +4394,9 @@ import { verifyIntegrity } from './canonicalize.js';
   }
   // esc / ansiToHtml 已抽到 logic.js（顶部 import）。
 
-  function notify(title, body) {
-    if (!document.hidden || !('Notification' in window) || Notification.permission !== 'granted') return;
+  function notify(title, body, { force = false } = {}) {
+    // force=true：前台也弹（设置「前台也弹系统通知」）；默认仍只在页面隐藏时弹，避免盯着屏幕时轰炸
+    if ((!force && !document.hidden) || !('Notification' in window) || Notification.permission !== 'granted') return;
     try { new Notification(title, { body, icon: '/icons/icon-192.png', tag: 'ccm' }); } catch { /* iOS 非 PWA 等场景静默 */ }
   }
 
@@ -4209,10 +4409,10 @@ import { verifyIntegrity } from './canonicalize.js';
   function onTaskNotification(ev) {
     const p = ev.payload || {};
     const failed = p.status === 'failed' || p.status === 'error';
-    notify(failed ? '🔔 后台任务失败' : '🔔 后台任务完成', (p.summary || 'Claude 即将汇报结果').slice(0, 80));
-    if (ev.instanceId === viewingInstanceId) { // 仅当前查看会话进消息流 + 触觉
+    notify(failed ? '🔔 后台任务失败' : '🔔 后台任务完成', (p.summary || 'Claude 即将汇报结果').slice(0, 80), { force: alertPrefs.foregroundComplete });
+    if (ev.instanceId === viewingInstanceId) { // 仅当前查看会话进消息流 + 触觉/音
       hideTaskProgress(); // WS-004：移进实例判断内——否则后台实例 B 的完成通知会闪掉当前 A 的进度横幅（跨实例误撤）
-      haptic(failed ? 'warning' : 'success');
+      alertCue(failed ? 'warning' : 'success');
       if (p.source === 'user_injection') {
         addBar('🔔 后台任务完成，Claude 正在汇报结果…', 'text-info');
       } else {
