@@ -185,6 +185,38 @@ export function shouldShowStartScreen({ viewingInstanceId, sessionId } = {}) {
   return !viewingInstanceId || !sessionId;
 }
 
+// 空首页「最近活跃」：把各 workdir 的 session:list 结果摊平，按 lastUsedAt 降序取 topN。
+// 每条附 cwd + workspaceName，前端可一键 session:switch 跨工作区，不必先开侧栏目录树。
+// dirLists: Array<{ cwd, sessions: Array<{ id, title, lastUsedAt, ... }> }>
+// 无 id 的行跳过；缺 lastUsedAt 的排最后（仍可点开）；非法 limit 回落默认 8。
+export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}) {
+  const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 8;
+  const rows = [];
+  for (const entry of Array.isArray(dirLists) ? dirLists : []) {
+    if (!entry || typeof entry.cwd !== 'string' || !entry.cwd) continue;
+    const cwd = entry.cwd;
+    const workspaceName = projectDisplayName(cwd);
+    const sessions = Array.isArray(entry.sessions) ? entry.sessions : [];
+    for (const s of sessions) {
+      if (!s || typeof s.id !== 'string' || !s.id) continue;
+      rows.push({
+        id: s.id,
+        title: s.title || '无标题会话',
+        lastUsedAt: s.lastUsedAt ?? null,
+        cwd,
+        workspaceName,
+        entrypoint: s.entrypoint ?? null,
+      });
+    }
+  }
+  rows.sort((a, b) => {
+    const ta = Number(a.lastUsedAt) || 0;
+    const tb = Number(b.lastUsedAt) || 0;
+    return tb - ta;
+  });
+  return rows.slice(0, cap);
+}
+
 // 新会话首发的乐观 busy（send() 的 setBusy(true)）会被「服务端懒开实例 → 广播 instances → setInstances →
 // bindView → clearView 的 setBusy(false)」冲掉，直到首个 delta 才重现（已有会话发消息不触发 bindView，故无此问题）。
 // 仅当：发送时置了首发标志、且已绑定到一个尚无 sessionId 的新建实例（FRESH、SDK init 未回；区别于

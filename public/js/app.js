@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -28,7 +28,7 @@ import { verifyIntegrity } from './canonicalize.js';
   // ---- DOM ----
   const $ = id => document.getElementById(id);
   const messagesEl = $('messages'), inputEl = $('input'), statusEl = $('statusLine'), connDot = $('connDot'), connRttEl = $('connRtt'), connDotWrap = $('connDotWrap');
-  const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnSessions = $('btnSessions');
+  const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnHome = $('btnHome'), btnSessions = $('btnSessions');
   const activeStatusPill = $('activeStatusPill'), activeStatusText = $('activeStatusText'), btnStopNew = $('btnStopNew');
   const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
@@ -3661,6 +3661,24 @@ import { verifyIntegrity } from './canonicalize.js';
   // （session:new/switch、setWorkdir/setViewing）时按本区主动推 models 事件（无缓存→空），统一走下方
   // models(p) 处理器「空则清、非空则填」，单一权威路径不再分叉。
 
+  // 回空首页枢纽（最近工作区/会话）。已在空首页则只重渲列表；否则 session:home。
+  // 与 ＋ 分工：二者都到空首页且 compose=FRESH；＋ 额外重置 pending 权限/思考档并 scout 模型，🏠 保留面板档、专为「去选最近」。
+  if (btnHome) btnHome.onclick = () => {
+    haptic('tap');
+    closeLeftSidebar();
+    const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId || null;
+    if (shouldShowStartScreen({ viewingInstanceId, sessionId: sid })) {
+      showDashboard();
+      return;
+    }
+    let acked = false;
+    socket.emit('session:home', {}, res => {
+      acked = true;
+      if (res && res.ok === false) addBar(res.error || '回首页失败', 'text-danger');
+    });
+    setTimeout(() => { if (!acked) addBar('回首页无响应，请刷新后重试', 'text-danger'); }, 4000);
+  };
+
   // 台阶3：新建会话 = 在当前 cwd 开新 tab（旧 tab 后台继续、**不中断**），清视图等首条消息懒开。
   // 不再 confirm「将被中断」——台阶3 新建不中断任何在途任务（视图由 instances 广播驱动清空）。
   btnNew.onclick = () => {
@@ -4064,6 +4082,10 @@ import { verifyIntegrity } from './canonicalize.js';
     if (tip) addBar(tip, 'text-ink-faint');
   }
 
+  // 空首页最近列表代次：连续 showDashboard（切 cwd / 重连）时丢弃过期 ack，防旧列表盖新。
+  // 产品决策：重启/空闲回收后永远停在空首页，只展示最近列表，不自动 session:switch。
+  let _dashRecentsGen = 0;
+
   function showDashboard() {
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
@@ -4084,7 +4106,7 @@ import { verifyIntegrity } from './canonicalize.js';
         <div class="text-center mb-6 w-full">
           <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-ink mb-3 leading-tight" id="dashGreeting">${esc(greeting)}</h1>
           <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1">当前工作区 / Active Workspace</div>
-          <button class="empty-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="点击选择工作区">
+          <button type="button" class="empty-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="点击打开会话列表（按工作区浏览）">
             <svg class="w-4 h-4 shrink-0 text-accent opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5h4.25l2 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
             </svg>
@@ -4093,10 +4115,18 @@ import { verifyIntegrity } from './canonicalize.js';
           </button>
         </div>
 
+        <div id="dashWorkspacesSection" class="w-full hidden mb-5">
+          <div class="text-[10.5px] font-bold text-ink-faint uppercase tracking-wider mb-2 px-1 flex items-center gap-1">
+            <span>📁</span>
+            <span>最近活跃工作区</span>
+          </div>
+          <div id="dashWorkspacesList" class="flex flex-wrap gap-2 w-full px-0.5"></div>
+        </div>
+
         <div id="dashRecentsSection" class="w-full hidden">
           <div class="text-[10.5px] font-bold text-ink-faint uppercase tracking-wider mb-3 px-1 flex items-center gap-1">
             <span>⏱️</span>
-            <span>最近活跃会话 (Resume)</span>
+            <span>最近活跃会话</span>
           </div>
           <div id="dashRecentsList" class="flex flex-col gap-2 w-full"></div>
         </div>
@@ -4109,48 +4139,101 @@ import { verifyIntegrity } from './canonicalize.js';
     const dashHelp = container.querySelector('#dashHelpLink');
     if (dashHelp) dashHelp.onclick = (e) => { e.stopPropagation(); haptic('tap'); showAccessHelp(); };
 
-    // 绑定工作区按钮
-    container.querySelector('button').onclick = (e) => {
+    // 绑定工作区按钮 → 打开侧栏完整会话树（按工作区浏览 / 新建）
+    container.querySelector('.empty-project-pill').onclick = (e) => {
       e.stopPropagation();
       haptic('tap');
       if (btnSessions) btnSessions.onclick();
     };
 
-    // 异步加载最近 3 个会话
+    // 跨全部白名单工作区拉最近会话（并行 session:list），合并后展示，便于冷启动/空首页一键切回。
     const recentsSection = container.querySelector('#dashRecentsSection');
     const recentsList = container.querySelector('#dashRecentsList');
-    if (recentsSection && recentsList) {
-      socket.emit('session:list', { cwd: currentCwd }, state => {
-        const list = state?.sessions || [];
-        if (list.length > 0) {
-          recentsSection.classList.remove('hidden');
-          recentsList.innerHTML = '';
-          list.slice(0, 3).forEach(s => {
-            const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : '新会话';
-            const item = el(`
-              <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
-                <div class="flex-1 min-w-0 pr-3">
-                  <div class="font-bold text-xs text-ink truncate">${esc(s.title || '无标题会话')}</div>
-                  <div class="text-[10px] text-ink-faint mt-1 flex items-center gap-1.5">
-                    <span>⏱️ ${esc(when)}</span>
-                  </div>
-                </div>
-                <div class="text-xs text-accent font-bold shrink-0">进入 ➔</div>
-              </div>
-            `);
-            item.onclick = (e) => {
-              e.stopPropagation();
-              haptic('tap');
-              let acked = false;
-              socket.emit('session:switch', { sessionId: s.id, cwd: currentCwd }, res => {
-                acked = true;
-                if (!res?.ok) addBar(res?.error || '切换失败', 'text-danger');
-              });
-              setTimeout(() => { if (!acked) addBar('切换无响应，请刷新页面后重试', 'text-danger'); }, 4000);
-            };
-            recentsList.appendChild(item);
-          });
+    const workspacesSection = container.querySelector('#dashWorkspacesSection');
+    const workspacesList = container.querySelector('#dashWorkspacesList');
+    const dirs = (availableDirs && availableDirs.length) ? availableDirs.slice() : (currentCwd ? [currentCwd] : []);
+    const gen = ++_dashRecentsGen;
+
+    const switchToSession = (s) => {
+      let acked = false;
+      socket.emit('session:switch', { sessionId: s.id, cwd: s.cwd }, res => {
+        acked = true;
+        if (!res?.ok) addBar(res?.error || '切换失败', 'text-danger');
+      });
+      setTimeout(() => { if (!acked) addBar('切换无响应，请刷新页面后重试', 'text-danger'); }, 4000);
+    };
+
+    const renderDashRecents = (recent) => {
+      // 工作区 chips：按最近会话时间去重排序，点 chip → 进入该区最近一条
+      if (workspacesSection && workspacesList) {
+        const seen = new Set();
+        const wsOrder = [];
+        for (const s of recent) {
+          if (seen.has(s.cwd)) continue;
+          seen.add(s.cwd);
+          wsOrder.push(s);
         }
+        workspacesList.innerHTML = '';
+        for (const s of wsOrder) {
+          const chip = el(`
+            <button type="button" class="inline-flex items-center gap-1.5 max-w-full px-3 py-1.5 rounded-full border border-line-soft bg-surface hover:bg-accent-wash/40 hover:border-accent-bright/50 active:scale-[0.98] transition-all text-xs font-semibold text-ink shadow-sm">
+              <span class="shrink-0 opacity-80">📁</span>
+              <span class="truncate max-w-[10rem]"></span>
+            </button>`);
+          chip.querySelector('span.truncate').textContent = s.workspaceName;
+          chip.title = s.cwd;
+          chip.onclick = (e) => {
+            e.stopPropagation();
+            haptic('tap');
+            switchToSession(s);
+          };
+          workspacesList.appendChild(chip);
+        }
+        workspacesSection.classList.remove('hidden');
+      }
+
+      recentsSection.classList.remove('hidden');
+      recentsList.innerHTML = '';
+      for (const s of recent) {
+        const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : '时间未知';
+        const item = el(`
+          <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
+            <div class="flex-1 min-w-0 pr-3">
+              <div class="font-bold text-xs text-ink truncate"></div>
+              <div class="text-[10px] text-ink-faint mt-1 flex items-center gap-1.5 min-w-0">
+                <span class="shrink-0">📁</span>
+                <span class="truncate dash-ws"></span>
+                <span class="shrink-0 opacity-50">·</span>
+                <span class="shrink-0 dash-when"></span>
+              </div>
+            </div>
+            <div class="text-xs text-accent font-bold shrink-0">进入 ➔</div>
+          </div>
+        `);
+        item.querySelector('.font-bold').textContent = s.title || '无标题会话';
+        item.querySelector('.dash-ws').textContent = s.workspaceName;
+        item.querySelector('.dash-when').textContent = when;
+        item.title = `${s.workspaceName} · ${s.title || '无标题会话'}`;
+        item.onclick = (e) => {
+          e.stopPropagation();
+          haptic('tap');
+          switchToSession(s);
+        };
+        recentsList.appendChild(item);
+      }
+    };
+
+    if (recentsSection && recentsList && dirs.length) {
+      Promise.all(dirs.map(cwd => new Promise(resolve => {
+        let settled = false;
+        const done = (sessions) => { if (!settled) { settled = true; resolve({ cwd, sessions }); } };
+        socket.emit('session:list', { cwd }, state => done(state?.sessions || []));
+        setTimeout(() => done([]), 4000); // 单目录超时不挡整表
+      }))).then(dirLists => {
+        if (gen !== _dashRecentsGen) return; // 已换页/重渲
+        const recent = mergeRecentSessionsAcrossWorkspaces(dirLists, { limit: 8 });
+        if (!recent.length) return;
+        renderDashRecents(recent);
       });
     }
 

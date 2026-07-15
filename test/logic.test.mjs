@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from '../public/js/logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test.describe('parseUsageForWeb（③ 套餐额度窗后端：提取 rate_limits + 降级 + 剔除隐私）', () => {
@@ -347,6 +347,68 @@ test('shouldShowStartScreen: 仅无实例或无 session 的新会话显示启动
   assert.equal(shouldShowStartScreen({ viewingInstanceId: null, sessionId: null }), true);
   assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: null }), true);
   assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: 'abc' }), false);
+});
+
+// 空首页「最近活跃」：跨全部 workdir 的 session:list 结果合并后按 lastUsedAt 降序取 topN，
+// 每条带 cwd + workspaceName，方便一键 session:switch 到任意工作区会话（不必先展开侧栏目录树）。
+test('mergeRecentSessionsAcrossWorkspaces: 跨 cwd 合并、按 lastUsedAt 降序截断、补 workspaceName', () => {
+  const merged = mergeRecentSessionsAcrossWorkspaces([
+    {
+      cwd: '/Users/you/code/claude-chat-mobile',
+      sessions: [
+        { id: 'a1', title: '旧会话 A', lastUsedAt: 1000 },
+        { id: 'a2', title: '新会话 A', lastUsedAt: 3000 },
+      ],
+    },
+    {
+      cwd: '/Users/you/code/ai_video',
+      sessions: [
+        { id: 'b1', title: '中会话 B', lastUsedAt: 2000 },
+      ],
+    },
+    {
+      cwd: '/Users/you/code/empty',
+      sessions: [],
+    },
+  ], { limit: 2 });
+  assert.equal(merged.length, 2);
+  assert.deepEqual(merged.map(s => s.id), ['a2', 'b1']);
+  assert.equal(merged[0].cwd, '/Users/you/code/claude-chat-mobile');
+  assert.equal(merged[0].workspaceName, 'claude-chat-mobile');
+  assert.equal(merged[1].workspaceName, 'ai_video');
+  assert.equal(merged[0].title, '新会话 A');
+});
+
+test('mergeRecentSessionsAcrossWorkspaces: 缺 lastUsedAt 排后；无 id 跳过；空入参安全', () => {
+  const merged = mergeRecentSessionsAcrossWorkspaces([
+    {
+      cwd: '/x/foo',
+      sessions: [
+        { id: 'with-time', title: '有时间', lastUsedAt: 50 },
+        { id: 'no-time', title: '无时间' },
+        { title: '无 id', lastUsedAt: 9999 },
+        null,
+      ],
+    },
+  ], { limit: 10 });
+  assert.deepEqual(merged.map(s => s.id), ['with-time', 'no-time']);
+  assert.equal(merged[1].workspaceName, 'foo');
+  assert.deepEqual(mergeRecentSessionsAcrossWorkspaces(null), []);
+  assert.deepEqual(mergeRecentSessionsAcrossWorkspaces([]), []);
+  assert.deepEqual(mergeRecentSessionsAcrossWorkspaces([{ cwd: '/x', sessions: null }]), []);
+});
+
+test('mergeRecentSessionsAcrossWorkspaces: limit 默认 8，非法 limit 回落', () => {
+  const many = {
+    cwd: '/x/p',
+    sessions: Array.from({ length: 12 }, (_, i) => ({ id: `s${i}`, title: `t${i}`, lastUsedAt: i + 1 })),
+  };
+  assert.equal(mergeRecentSessionsAcrossWorkspaces([many]).length, 8);
+  assert.equal(mergeRecentSessionsAcrossWorkspaces([many], { limit: 0 }).length, 8);
+  assert.equal(mergeRecentSessionsAcrossWorkspaces([many], { limit: -1 }).length, 8);
+  assert.equal(mergeRecentSessionsAcrossWorkspaces([many], { limit: 3 }).length, 3);
+  // 最新应是 lastUsedAt 最大
+  assert.equal(mergeRecentSessionsAcrossWorkspaces([many], { limit: 1 })[0].id, 's11');
 });
 
 // 新会话首发的乐观 busy（"正在执行任务"）在服务端懒开实例并广播 instances 后，会被 setInstances→bindView→

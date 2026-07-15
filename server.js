@@ -291,7 +291,7 @@ function preflight() {
 }
 const claudeBin = preflight();
 // 多 repo 台阶3：viewingInstanceId = 前端当前查看的 tab 实例（台阶2 viewingCwd 的细化）。
-// 切 tab 只换视图、不 dispose（各实例后台并行存活，见 agents Map）。初值 null——启动预热后置为初始 tab。
+// 切 tab 只换视图、不 dispose（各实例后台并行存活，见 agents Map）。初值 null——启动不自动 resume，空首页手选。
 let viewingInstanceId = null;
 // viewingCwd = 当前查看实例的工作目录上下文（新建会话选目录 / statusline git 段 / 白名单维度）。
 // 必须在 preflight 之后取（WORK_DIR 在 preflight 内才 realpathSync 规范化，否则 cwd 隔离失灵）。
@@ -1365,7 +1365,7 @@ function writeSessionEntrypoint(sessionId, cwd) {
 }
 
 // 台阶3：显式建一个新实例（分配 instanceId、后台并行存活）。`resumeId` 缺省=新会话；调用方
-// （session:new/switch/启动预热）负责去重（instanceForSession）与切 viewingInstanceId。返回实例。
+// （session:new/switch）负责去重（instanceForSession）与切 viewingInstanceId。返回实例。
 // 同步建（resumeId 由调用方解析，无需 await）——故无台阶2 的「await 让出窗口双实例」重入竞态。
 function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = null }) {
   const id = newInstanceId();
@@ -2073,6 +2073,35 @@ io.on('connection', socket => {
     });
   });
 
+  // 回空首页枢纽（与 session:new 分工）：
+  //   home = 去看最近列表 / 换会话；live tab 全保留；**不**重置 pending mode/effort；
+  //   new  = 同上 + 重置 pending + scout 强制刷模型。
+  // 二者都会清 viewing + 清该 cwd 的 current 指针：空首页输入框发消息 = FRESH，避免「只想回枢纽却把字续到旧会话」。
+  // 点最近列表仍走 session:switch resume。
+  on(socket, 'session:home', (payload, maybeAck) => {
+    const ack = typeof payload === 'function' ? payload : maybeAck;
+    const obj = payload && typeof payload === 'object' ? payload : {};
+    // 可选 cwd：在指定工作区上下文下开空首页（白名单内）；默认保留当前 viewingCwd。
+    if (typeof obj.cwd === 'string' && obj.cwd) {
+      viewingCwd = ensureWhitelisted(routeCwd(obj.cwd), workDirs);
+    }
+    const wasViewing = viewingInstanceId != null;
+    viewingInstanceId = null;
+    sessions.setCurrent(viewingCwd, null); // 空首页 compose → FRESH（与 session:new 同；列表进入仍 resume）
+    // 已在首页也广播一帧：空首页 defaults / models 与 viewingCwd 对齐；前端 viewing 未变时自行 showDashboard 刷列表。
+    broadcastInstances();
+    pushModelsForCwd(viewingCwd);
+    lastStatusLine = null;
+    scheduleStatusRefresh();
+    ensureCliDefaults(viewingCwd).then(() => {
+      if (!viewingInstanceId) broadcastInstances();
+    }).catch(err => console.warn('[cli-settings] session:home 刷新失败:', err?.message || err));
+    if (wasViewing) {
+      interactionLog.addSessionLog('server', 'sys_info', `[SYS] 回空首页 (session:home), viewingCwd=${viewingCwd}`);
+    }
+    if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
+  });
+
   on(socket, 'session:new', (payload, maybeAck) => {
     // 兼容两种调用形态：emit('session:new', cb) 与 emit('session:new', {cwd}, cb)
     const ack = typeof payload === 'function' ? payload : maybeAck;
@@ -2114,7 +2143,7 @@ io.on('connection', socket => {
     const inst = instanceForSession(sessionId) || await dedupedResume(cwd, sessionId);
     viewingInstanceId = inst.instanceId;
     viewingCwd = cwd;
-    sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（重启预热用）
+    sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（session:list 的 currentSessionId 等）
     doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);
     broadcastInstances();
     pushModelsForCwd(cwd); // 切区即时推本区清单（无缓存→空）；随后 resume 实例的真 models 兜底
@@ -2517,30 +2546,13 @@ httpServer.listen(port, host, () => {
     }
   }
   console.log('========================================');
-  // 启动预热：有会话指针时提前 spawn CLI（resume），省掉首条消息的冷启动延迟（终端等价：
-  // claude 启动后挂着等输入）。实测 CLI 首条消息前不输出 init，重放缓存空窗由 init-cache.json
-  // 持久化解决，与预热无关。全新空状态不预热——会 spawn 新会话写入零消息的"幽灵会话"条目。
-  // 失败走 onExit 懒重生兜底；空闲不被 checkIdle 误杀（pendingTurns=0 不计时）；不耗 token。
-  // 台阶3：只预热初始 cwd（WORK_DIR）的最后查看会话为唯一恢复 tab，设为 viewingInstanceId；其余 tab
-  // ephemeral（重启没了、从历史列表手动重开，守配额闸）。仅当该 cwd 指针确属本目录（jsonl 在本 project
-  // 目录）才预热 resume，避免对别目录会话 resume 失败。全新空状态不预热（viewingInstanceId 保持 null、
-  // 首条消息懒开）。失败走 onExit 兜底；空闲不被 checkIdle 误杀；不耗 token。
-  // L3：并行预取初始 cwd 的 CLI settings 默认，空首页 / FRESH 懒开不必等首条消息才 resolveSettings。
-  ensureCliDefaults(WORK_DIR).catch(err => console.warn('[cli-settings] 启动预取失败:', err?.message || err));
-  currentSessionForCwd(WORK_DIR).then(async s => {
-    if (s) {
-      viewingInstanceId = (await dedupedResume(WORK_DIR, s.id)).instanceId;
-      // BE-018：预热选定初始 tab 后补广播完整快照。listen 已开始接受连接、但 preheat 是异步——这之间连上的
-      // 客户端拿到的是空实例快照；preheat 注册了初始实例并设为 viewingInstanceId 却不广播，已连客户端会停留
-      // 在空快照、看不到这个被路由的初始 tab（首条消息虽仍正确路由、随后续事件自愈，但空窗是可见瞬态）。
-      broadcastInstances();
-    } else {
-      // 无会话指针=空首页：L3 预取完成后补广播，让 defaultPermissionMode/defaultEffort 带上 CLI 真值
-      ensureCliDefaults(WORK_DIR).then(() => {
-        if (!viewingInstanceId) broadcastInstances();
-      }).catch(() => {});
-    }
-  }).catch(err => console.error('[preheat]', err));
+  // 启动不再自动 resume 上次会话为 viewing tab——产品决策：重启后永远停在空首页，
+  // 由前端 showDashboard 展示跨工作区最近列表，用户手点才 session:switch。
+  // 仍预取初始 cwd 的 CLI settings 默认，空首页 / FRESH 懒开不必等首条消息才 resolveSettings。
+  // （历史：曾预热 WORK_DIR 指针并设 viewingInstanceId 省冷启动；现改为列表手选，首点会 resume 冷启。）
+  ensureCliDefaults(WORK_DIR).then(() => {
+    if (!viewingInstanceId) broadcastInstances();
+  }).catch(err => console.warn('[cli-settings] 启动预取失败:', err?.message || err));
 });
 
 // #4：SIGINT 与 SIGTERM 都要清理（node --watch 重启、systemd、docker stop 走 SIGTERM）

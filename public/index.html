@@ -662,8 +662,15 @@
       </button>
     </div>
 
-    <!-- Right Section: Log and New Session action buttons -->
-    <div id="headerActions" class="flex items-center justify-end gap-2 min-w-[70px]">
+    <!-- Right Section: Home / Log / New Session -->
+    <div id="headerActions" class="flex items-center justify-end gap-1.5 min-w-[70px]">
+      <!-- 回空首页（最近工作区/会话枢纽；不清会话指针，与 ＋ 新建分工） -->
+      <button id="btnHome" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="回首页（最近工作区与会话）" aria-label="回首页">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12 12 2.25 21.75 12M4.5 10.5v9.75a.75.75 0 00.75.75h4.5v-6h4.5v6h4.5a.75.75 0 00.75-.75V10.5" />
+        </svg>
+      </button>
+
       <!-- 日志 >_ -->
       <button id="btnConsole" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm font-mono text-xs font-bold leading-none" title="查看当前会话运行日志">
         &gt;_
