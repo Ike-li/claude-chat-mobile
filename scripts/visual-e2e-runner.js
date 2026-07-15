@@ -1335,6 +1335,23 @@ async function run() {
     });
     assert.strictEqual(stopBtnTC16.exists, true, 'TC-16: #btnTaskStop 应存在');
     assert.strictEqual(stopBtnTC16.hidden, false, 'TC-16: 有 taskId 时停止按钮应可见');
+    // 点停止：mock 应收到 task:stop（至少不抛）；横幅可仍在直到 notification
+    let stopEmitted = false;
+    await page.evaluate(() => {
+      window.__ccmTaskStopLog = [];
+      const s = window.__ccmSocket || null;
+    });
+    // 通过 CDP 拦截 WebSocket 帧更稳；此处直接 click 并断言按钮仍存在/可点
+    await page.click('#btnTaskStop');
+    await sleep(200);
+    // mock 侧无硬断言 channel：产品上点停止后前端会 addBar；检查 messages 或 bar 文案
+    const stopBar = await page.evaluate(() => {
+      const bars = Array.from(document.querySelectorAll('#messages .msg-frame, #messages [class*="text-"]'));
+      // 系统条可能在 status bars 区域
+      const all = document.body.innerText || '';
+      return all.includes('已请求停止后台任务');
+    });
+    assert.strictEqual(stopBar, true, 'TC-16: 点击停止后应提示「已请求停止后台任务」');
     // 2. 越过第 2、3 条心跳（mock 每 600ms 一条）→ 断言【原地刷新】：同一元素文本更新为最新、未追加拼接、横幅始终仅一条
     await sleep(1400);
     const [lastProgressTC16, bannerCountTC16] = await page.evaluate(() => [

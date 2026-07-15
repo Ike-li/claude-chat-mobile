@@ -547,7 +547,7 @@ test('getSessionHistory: 同一 assistant 消息内 text + tool_use 按块序拆
   assert.equal(msgs[2].toolUseId, 'r2');
 });
 
-test('getSessionHistory: tool_result is_error=true → ok:false；thinking 块不进历史', async () => {
+test('getSessionHistory: tool_result is_error=true → ok:false；thinking 块折叠回显', async () => {
   const cwd = '/test/tool-err';
   const dir = join(BASE, getProjectDir(cwd));
   writeJSONL(dir, 'toolerr', [
@@ -570,12 +570,13 @@ test('getSessionHistory: tool_result is_error=true → ok:false；thinking 块�
     },
   ]);
   const msgs = await getSessionHistory('toolerr', cwd, 50, { baseDir: BASE });
-  assert.equal(msgs.length, 2);
-  assert.equal(msgs[0].kind, 'tool_use');
-  assert.equal(msgs[0].name, 'Edit');
-  assert.equal(msgs[1].kind, 'tool_result');
-  assert.equal(msgs[1].ok, false);
-  assert.ok(!msgs.some(m => m.kind === 'thinking' || (m.content && String(m.content).includes('很长的思考'))));
+  assert.equal(msgs.length, 3);
+  assert.equal(msgs[0].kind, 'thinking');
+  assert.ok(String(msgs[0].content).includes('很长的思考'));
+  assert.equal(msgs[1].kind, 'tool_use');
+  assert.equal(msgs[1].name, 'Edit');
+  assert.equal(msgs[2].kind, 'tool_result');
+  assert.equal(msgs[2].ok, false);
 });
 
 test('getSessionHistory: <task-notification> 注入条目被过滤（不回显成 XML 气泡）', async () => {
@@ -731,19 +732,31 @@ test('getSessionHistory: 无 uuid 的条目不因 undefined 相撞而互相去�
   assert.deepEqual(msgs.map(m => m.content), ['A', 'B', 'C'], '无 uuid 条目全保留');
 });
 
-test('getSessionHistory: 子 agent（isSidechain）记录被过滤，即使带正文（与运行期一致）', async () => {
+test('getSessionHistory: 子 agent（isSidechain）回显并挂靠最近主链 Agent toolUseId', async () => {
   const cwd = '/test/sidechain-hist';
   const dir = join(BASE, getProjectDir(cwd));
   writeJSONL(dir, 'sidehist', [
     { type: 'user', message: { role: 'user', content: '主线问题' } },
-    // 子 agent 内部消息：磁盘用 isSidechain 标记（parent_tool_use_id 是运行时 SDK 流字段、不落盘）。
-    // 带正文的子 agent assistant 若不滤会被当主线回显——与运行期 agent.js 的 parent_tool_use_id 守卫不一致。
+    { type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 'agent-main-1', name: 'Agent', input: { description: ' dig', subagent_type: 'Explore' } },
+    ] } },
+    // 子 agent 内部：磁盘 isSidechain；无 parent_tool_use_id 时挂靠上一主链 Agent
     { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'text', text: '子 agent 内部输出' }] } },
-    { type: 'user', isSidechain: true, message: { role: 'user', content: 'Warmup' } },
+    { type: 'user', isSidechain: true, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'sa-read', content: 'ok', is_error: false }] } },
     { type: 'assistant', message: { role: 'assistant', content: '主线回答' } },
   ]);
   const msgs = await getSessionHistory('sidehist', cwd, 50, { baseDir: BASE });
-  assert.deepEqual(msgs.map(m => m.content), ['主线问题', '主线回答']);
+  assert.equal(msgs[0].content, '主线问题');
+  assert.equal(msgs[1].kind, 'tool_use');
+  assert.equal(msgs[1].name, 'Agent');
+  const sideText = msgs.find(m => m.content === '子 agent 内部输出');
+  assert.ok(sideText, 'sidechain 正文应回显');
+  assert.equal(sideText.isSidechain, true);
+  assert.equal(sideText.parentToolUseId, 'agent-main-1');
+  const sideTr = msgs.find(m => m.kind === 'tool_result' && m.toolUseId === 'sa-read');
+  assert.ok(sideTr);
+  assert.equal(sideTr.parentToolUseId, 'agent-main-1');
+  assert.equal(msgs[msgs.length - 1].content, '主线回答');
 });
 
 test('getSessionHistory: content 为数组时拼接 text 块', async () => {

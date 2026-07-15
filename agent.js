@@ -7,8 +7,9 @@ import { sanitize } from './sanitizer.js';
 import { fingerprintSync, verifyIntegritySync } from './fingerprint.js';
 import * as approvalStore from './approval-store.js';
 
-const BUFFER_CAP = 500;       // 环形缓冲条数
-const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要截断；permission_request 永不截断（4a）
+const BUFFER_CAP = 2000;      // 环形缓冲条数（抬高：长 ultracode/多工具轮少 gap 闪屏；transient 仍不进 buffer）
+const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要默认截断；permission_request 永不截断（4a）
+const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几行
 // ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
 const TOOL_INPUT_TTL_MS = 10 * 60 * 1000; // 缓存 input 存活 10 分钟
@@ -77,6 +78,7 @@ export class AgentSession {
     this.buffer = [];
     this.toolInputs = new Map(); // ③：toolUseId → {name, input, ts}（文件类工具完整 input，供 tool:preview 重建 diff）
     this.toolOutputs = new Map(); // 工具完整 output（截断前），供 tool:full 展开；TTL/LRU 与 toolInputs 同口径
+    this.toolNames = new Map();   // toolUseId → name（tool_result 选 cap 用，短命）
     this.bufferTrimmed = false;
     this.pendingTurns = 0;             // 在途轮数，仅由 send(+1) 与 result(-1) 改写
     this.pendingAutoTurn = false;      // 后台任务通知已到、下个轮次由非用户输入（task-notification 注入）启动的信号——
@@ -730,6 +732,12 @@ export class AgentSession {
     for (const t of this.bgTasks.values()) if (!latest || t.lastSeenAt >= latest.lastSeenAt) latest = t; // >= ：lastSeenAt 平局（同毫秒）取后迭代者，确定性
     return { taskType: latest.taskType, message: latest.message, count: this.bgTasks.size };
   }
+  // 活后台任务列表（供前端多任务停止）：按 lastSeenAt 降序，含 taskId
+  bgTasksList() {
+    return [...this.bgTasks.entries()]
+      .map(([taskId, t]) => ({ taskId, taskType: t.taskType, message: t.message, lastSeenAt: t.lastSeenAt }))
+      .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+  }
 
   _flushText() {
     clearTimeout(this._textTimer);
@@ -781,6 +789,7 @@ export class AgentSession {
     this._flushText(); this._flushThink();
     this.toolInputs.clear(); // ③：释放缓存的 tool input
     this.toolOutputs.clear();
+    this.toolNames.clear();
     this.disposed = true;
     this.inputEnded = true;
     this.pendingAutoTurn = false; // 实例销毁：作废滞留 flag，防重开实例后误合成
@@ -1079,6 +1088,7 @@ export class AgentSession {
           if (subType != null) this.subagentTypeByParent.set(msg.parent_tool_use_id, subType);
           for (const block of msg.message?.content ?? []) {
             if (block.type === 'tool_use') {
+              this.toolNames.set(block.id, block.name);
               this.emit('tool_use', {
                 toolUseId: block.id,
                 name: block.name,
@@ -1124,6 +1134,7 @@ export class AgentSession {
                 file = { path: truncate(String(p), 1024), changeKind: TOOL_CHANGE_KIND[block.name] };
               }
             }
+            this.toolNames.set(block.id, block.name);
             this.emit('tool_use', {
               toolUseId: block.id,
               name: block.name,
@@ -1151,12 +1162,14 @@ export class AgentSession {
               const raw = msg.tool_use_result ?? block.content;
               const full = stringify(redactBase64(raw));
               this.cacheToolOutput(block.tool_use_id, full);
-              const outputSummary = truncate(full, TOOL_SUMMARY_CAP);
+              const cap = toolResultCap(this.toolNames.get(block.tool_use_id));
+              this.toolNames.delete(block.tool_use_id);
+              const outputSummary = truncate(full, cap);
               this.emit('tool_result', {
                 toolUseId: block.tool_use_id,
                 ok: !block.is_error,
                 outputSummary,
-                truncated: full.length > TOOL_SUMMARY_CAP,
+                truncated: full.length > cap,
                 parentToolUseId: msg.parent_tool_use_id,
                 subagentType: subType,
               });
@@ -1195,12 +1208,14 @@ export class AgentSession {
             this.denyKinds.delete(block.tool_use_id);
             const full = stringify(redactBase64(raw));
             this.cacheToolOutput(block.tool_use_id, full);
-            const outputSummary = truncate(full, TOOL_SUMMARY_CAP);
+            const cap = toolResultCap(this.toolNames.get(block.tool_use_id));
+            this.toolNames.delete(block.tool_use_id);
+            const outputSummary = truncate(full, cap);
             this.emit('tool_result', {
               toolUseId: block.tool_use_id,
               ok: !block.is_error,
               outputSummary,
-              truncated: full.length > TOOL_SUMMARY_CAP,
+              truncated: full.length > cap,
               denyKind
             });
           }
@@ -1274,9 +1289,14 @@ export class AgentSession {
   }
 }
 
-function truncate(s, cap) {
+function truncate(s, cap = TOOL_SUMMARY_CAP) {
   if (typeof s !== 'string') return '';
   return s.length > cap ? s.slice(0, cap) + ' …（已截断）' : s;
+}
+function toolResultCap(name) {
+  const n = String(name || '');
+  if (n === 'Bash' || n === 'bash' || n === 'run_command' || n === 'Shell') return TOOL_SUMMARY_CAP_BASH;
+  return TOOL_SUMMARY_CAP;
 }
 
 function stringify(v) {

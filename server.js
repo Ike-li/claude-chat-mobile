@@ -997,7 +997,9 @@ function scheduleBgBroadcast() {
 // 只读「追平」：web 端续接「正在终端 CLI 里跑」的会话时，另起的 resume 进程无法 attach 终端活进程，
 // 只能轮询磁盘 transcript，把终端【已落定】的新消息追加到 web。单定时器自适配当前查看会话（切会话即重置基线），
 // 决策交纯函数 catchUpStep（history.js，单测覆盖）。看不到实时 thinking / 在跑子 agent——它们不落盘（已知边界）。
-const CATCH_UP_INTERVAL_MS = 2500;
+const CATCH_UP_INTERVAL_MS = 2500;          // 常态追平间隔
+const CATCH_UP_MIRROR_INTERVAL_MS = 1000;   // 只读镜像中更勤：盯终端落盘时体感更跟手
+const MIRROR_RELEASE_MS = 12_500;           // 终端静默多久自动解锁（与 history MIRROR_RELEASE_QUIET_TICKS×2.5s 同口径）
 const statusBridgeOff = process.env.CLI_STATUSLINE_BRIDGE === 'off'; // 紧急回滚：恢复旧 SDK-only statusline
 // 只读锁：仅当轮询【观察到外部真落定新消息】(catchUpStep emit 非空) ⇒ 判终端活跃 ⇒ 发 mirror_state 令前端
 // 禁用输入，硬防「两进程并发写同一 JSONL 致会话分叉」。解锁：切会话重判 / 用户显式接管（前端 override）。
@@ -1042,23 +1044,45 @@ function mergeCliObserved(transcriptObserved, sessionId, cwd) {
     effort: snapshot?.effort ?? null,
   };
 }
+function catchUpIntervalMs(readonly = mirrorReadonly) {
+  return readonly ? CATCH_UP_MIRROR_INTERVAL_MS : CATCH_UP_INTERVAL_MS;
+}
+function mirrorReleaseTicksNeeded(readonly = mirrorReadonly) {
+  // 墙钟目标 MIRROR_RELEASE_MS：mirror 提速轮询时提高 tick 数，避免 1s×5=5s 过早解锁
+  return Math.max(1, Math.ceil(MIRROR_RELEASE_MS / catchUpIntervalMs(readonly)));
+}
+function mirrorRemainingMs({ readonly = mirrorReadonly, quietTicks = Number(mirrorRelease?.quietTicks) || 0 } = {}) {
+  if (!readonly) return 0;
+  const interval = catchUpIntervalMs(readonly);
+  const need = mirrorReleaseTicksNeeded(readonly);
+  return Math.max(0, (need - quietTicks) * interval);
+}
 function setMirror(readonly, sessionId, force = false, stale = false, observedCli = mirrorObservedCli) {
   const nextObserved = normalizeMirrorObserved(observedCli, readonly);
   const nextSessionId = readonly ? (sessionId ?? null) : null;
   const nextInstanceId = readonly ? viewingInstanceId : null;
+  const quietTicks = Number(mirrorRelease?.quietTicks) || 0;
+  // 用【目标】readonly 算 remaining，勿读旧 mirrorReadonly（上锁瞬间旧值仍是 false 会算成 0）
+  const remainingMs = mirrorRemainingMs({ readonly, quietTicks });
+  // remainingMs 变化时也要推（倒计时 UI）；与 observedCli 同理
   if (!force && readonly === mirrorReadonly && stale === mirrorStale
       && nextSessionId === mirrorSessionId && nextInstanceId === mirrorInstanceId
-      && sameMirrorObserved(nextObserved, mirrorObservedCli)) return;
+      && sameMirrorObserved(nextObserved, mirrorObservedCli)
+      && remainingMs === (mirrorLastEmittedRemainingMs ?? -1)) return;
   // observedCli 也参与变化判定：CLI 在同一只读轮次里 /model 或 /permissions 后，readonly/stale 不变，
   // 仍必须推一条 mirror_state；否则 Web 会永远停在旧模型/模式。
   mirrorReadonly = readonly; mirrorStale = stale; mirrorObservedCli = nextObserved;
   mirrorSessionId = nextSessionId; mirrorInstanceId = nextInstanceId;
+  mirrorLastEmittedRemainingMs = remainingMs;
   io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
     seq: 0, epoch: 'server', sessionId: sessionId ?? null, instanceId: viewingInstanceId, cwd: viewingCwd,
-    ts: Date.now(), type: 'mirror_state', payload: { readonly, stale, observedCli: nextObserved }
+    ts: Date.now(), type: 'mirror_state',
+    payload: { readonly, stale, observedCli: nextObserved, quietTicks, remainingMs },
   });
   scheduleStatusRefresh(); // 驾驶方或 CLI 观察态变化时立即切换/刷新 statusline 来源
+  rescheduleCatchUp(); // 锁态变 → 追平间隔在 1s/2.5s 间切换
 }
+let mirrorLastEmittedRemainingMs = -1;
 let catchUpKey = null;                              // `${cwd}\x00${sessionId}`：当前追平的会话
 let catchUpState = { baseline: 0, wasBusy: false };
 let catchUpRebaselineRequested = false;             // BE-009：客户端（重）连时置位，下一 tick 重定基线；先检测被吸收的外部增长再标 externalDirty，防分叉
@@ -1123,7 +1147,9 @@ async function catchUpTickOnce() {
   if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
     catchUpState = { baseline: catchUpState.baseline, wasBusy: true };
     mirrorLastSize = -1;                                             // 作废 size 基线：己方 turn 会写盘涨 size，不能算终端 keep-alive；localBusy 结束后首个正常 tick 重建
-    const rel = mirrorReleaseStep(mirrorRelease, { externalWrite: false, localBusy: true });
+    const rel = mirrorReleaseStep(mirrorRelease, {
+      externalWrite: false, localBusy: true, releaseTicks: mirrorReleaseTicksNeeded(),
+    });
     mirrorRelease = rel.state;
     setMirror(rel.readonly, a.sessionId);
     return;
@@ -1155,7 +1181,10 @@ async function catchUpTickOnce() {
     });
   }
   const tailPending = tail.verdict === 'pending';
-  const rel = mirrorReleaseStep(mirrorRelease, { externalWrite, keepAlive, tailPending, localBusy: false }); // 外部 text 写入→锁；文件仍在长/轮次未完结→维持锁；真静默→累计、达阈值自动解锁
+  const rel = mirrorReleaseStep(mirrorRelease, {
+    externalWrite, keepAlive, tailPending, localBusy: false,
+    releaseTicks: mirrorReleaseTicksNeeded(),
+  }); // 外部 text 写入→锁；文件仍在长/轮次未完结→维持锁；真静默→累计、达阈值自动解锁
   mirrorRelease = rel.state;
   setMirror(rel.readonly, a.sessionId, false,                       // 锁/stale/CLI 观察值任一变化都广播
     mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now() }),
@@ -1169,7 +1198,17 @@ function catchUpTick() {
   catchUpInFlight = wrapped;
   return wrapped;
 }
-setInterval(() => { catchUpTick().catch(() => {}); }, CATCH_UP_INTERVAL_MS).unref();
+// 动态追平调度：mirror 只读时 1s，常态 2.5s（墙钟解锁仍按 MIRROR_RELEASE_MS≈12.5s）
+let catchUpTimer = null;
+function rescheduleCatchUp() {
+  if (catchUpTimer) clearTimeout(catchUpTimer);
+  const ms = catchUpIntervalMs();
+  catchUpTimer = setTimeout(() => {
+    catchUpTick().catch(() => {}).finally(() => rescheduleCatchUp());
+  }, ms);
+  if (typeof catchUpTimer.unref === 'function') catchUpTimer.unref();
+}
+rescheduleCatchUp();
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']; // 5 档硬编码，漂移由 smoke-effort 的 CLI warning 检测
 // 最近一次 init payload + 按 cwd 归键的 models 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。

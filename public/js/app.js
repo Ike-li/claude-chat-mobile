@@ -34,7 +34,8 @@ import { verifyIntegrity } from './canonicalize.js';
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop');
-  let activeBgTaskId = null; // 当前查看会话最新 task_progress.taskId，供「停止」按钮
+  let activeBgTaskId = null; // 当前查看会话最新 task_progress.taskId，供「停止」按钮（兼容单按钮）
+  const activeBgTasks = new Map(); // taskId → { message, taskType } 多后台任务列表
   let pendingUsageRender = null; // 额度窗一次消费：usage:get 后等 agent:event type=usage
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
@@ -1129,7 +1130,17 @@ import { verifyIntegrity } from './canonicalize.js';
       }
       const s = getStream(p.messageId);
       s.raw += p.text;
-      s.textNode.appendData(p.text);
+      // 流式轻量 markdown：首 400ms 内 TextNode 即时跟手；此后节流用 marked 预览（result 时 finalize 权威全文）
+      if (s.textNode && !s._mdLive) s.textNode.appendData(p.text);
+      if (!s._mdTimer) {
+        s._mdTimer = setTimeout(() => {
+          s._mdTimer = null;
+          s._mdLive = true;
+          s.textNode = null;
+          try { s.el.innerHTML = render(s.raw); } catch { /* 失败保持现状 */ }
+          scrollBottom();
+        }, 400);
+      }
       scrollBottom();
       setBusy(true);
     },
@@ -1701,6 +1712,7 @@ import { verifyIntegrity } from './canonicalize.js';
     let accumulatedText = '';
     for (const s of streams.values()) {
       if (s.done) continue;
+      if (s._mdTimer) { clearTimeout(s._mdTimer); s._mdTimer = null; }
       accumulatedText += (s.raw || '');
       s.done = true;
       s.el.style.transition = 'opacity .1s';
@@ -3500,11 +3512,16 @@ import { verifyIntegrity } from './canonicalize.js';
     if (ev.instanceId && ev.instanceId !== viewingInstanceId) return;
     const msg = ev.payload?.message || '';
     const tid = ev.payload?.taskId;
-    if (typeof tid === 'string' && tid) activeBgTaskId = tid;
+    if (typeof tid === 'string' && tid) {
+      activeBgTaskId = tid;
+      activeBgTasks.set(tid, { message: msg, taskType: ev.payload?.taskType || null });
+    }
     if (msg) showTaskProgress(msg);
+    renderBgTaskList();
   }
   function syncTaskStopBtn() {
     if (!btnTaskStop) return;
+    // 多任务时主按钮停「最新」；列表内可逐个停
     const ui = taskStopUiState({
       taskId: activeBgTaskId,
       bannerVisible: taskProgressBanner && !taskProgressBanner.classList.contains('hidden'),
@@ -3514,14 +3531,44 @@ import { verifyIntegrity } from './canonicalize.js';
   }
   function showTaskProgress(text) {
     if (!taskProgressBanner || !taskProgressText) return;
-    taskProgressText.textContent = text.length > 80 ? text.slice(0, 77) + '...' : text;
+    const n = activeBgTasks.size;
+    const head = n > 1 ? `(${n}) ` : '';
+    taskProgressText.textContent = head + (text.length > 72 ? text.slice(0, 69) + '...' : text);
     taskProgressBanner.classList.remove('hidden');
     syncTaskStopBtn();
   }
   function hideTaskProgress() {
     if (taskProgressBanner) taskProgressBanner.classList.add('hidden');
     activeBgTaskId = null;
+    activeBgTasks.clear();
+    const list = $('taskProgressList');
+    if (list) { list.replaceChildren(); list.classList.add('hidden'); }
     syncTaskStopBtn();
+  }
+  function renderBgTaskList() {
+    let list = $('taskProgressList');
+    if (!list && taskProgressBanner) {
+      list = el(`<div id="taskProgressList" class="mt-1 space-y-0.5 hidden" data-testid="bg-task-list"></div>`);
+      taskProgressBanner.appendChild(list);
+    }
+    if (!list) return;
+    list.replaceChildren();
+    if (activeBgTasks.size <= 1) { list.classList.add('hidden'); return; }
+    list.classList.remove('hidden');
+    for (const [taskId, t] of activeBgTasks) {
+      const row = el(`<div class="flex items-center gap-2 text-[11px]"></div>`);
+      const lab = el(`<span class="truncate flex-1 min-w-0 text-ink-soft"></span>`);
+      lab.textContent = (t.message || taskId).slice(0, 60);
+      const stop = el(`<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>`);
+      stop.onclick = () => {
+        haptic('tap');
+        socket.emit('task:stop', { instanceId: viewingInstanceId, taskId });
+        addBar(`已请求停止后台任务 ${taskId.slice(0, 8)}…`, 'text-ink-faint');
+      };
+      row.appendChild(lab);
+      row.appendChild(stop);
+      list.appendChild(row);
+    }
   }
   btnTaskStop?.addEventListener('click', () => {
     const ui = taskStopUiState({
@@ -4507,13 +4554,50 @@ import { verifyIntegrity } from './canonicalize.js';
   }
 
   // 渲染一批历史/追平消息为气泡并追加（loadHistory 与 onHistoryAppend 复用；一次性 fragment 插入 + 空闲高亮）。
-  // 支持文本气泡 + 历史 tool_use/tool_result 结构化条目（冷路径重建已完成工具卡片；与 live handle.tool_* 同外观）。
+  // 支持文本 / thinking / tool_use / tool_result；sidechain（parentToolUseId）收进可折叠子 agent 卡。
   function renderHistoryBubbles(msgs) {
     if (!msgs?.length) return;
     const frag = document.createDocumentFragment();
     const codeBlocks = [];
     const histToolCards = new Map(); // toolUseId → card（本批内配对 tool_result）
+    const histSubCards = new Map(); // parentToolUseId → { el, body, titleEl }
+    const ensureHistSub = (parentId) => {
+      let c = histSubCards.get(parentId);
+      if (c) return c;
+      const wrap = el(`
+        <details class="msg-frame subagent-card rounded-lg bg-surface border border-line text-xs" data-testid="subagent-card" data-history="1">
+          <summary class="px-3 py-2 flex items-center gap-2 cursor-pointer select-none">
+            <span class="sa-title text-ink font-medium"></span>
+          </summary>
+          <div class="sa-body px-3 pb-2 pl-4 border-l-2 border-accent/40 ml-3 space-y-1"></div>
+        </details>`);
+      wrap.dataset.parentId = parentId;
+      const titleEl = wrap.querySelector('.sa-title');
+      titleEl.textContent = formatSubagentCardTitle({ subagentType: null, running: false });
+      c = { el: wrap, body: wrap.querySelector('.sa-body'), titleEl };
+      histSubCards.set(parentId, c);
+      frag.appendChild(wrap);
+      return c;
+    };
+    const appendNode = (node, msg) => {
+      if (msg?.parentToolUseId || msg?.isSidechain) {
+        const pid = msg.parentToolUseId || 'sidechain';
+        ensureHistSub(pid).body.appendChild(node);
+      } else {
+        frag.appendChild(node);
+      }
+    };
     for (const msg of msgs) {
+      if (msg?.kind === 'thinking') {
+        const wrap = el(`
+          <details class="msg-frame thinking rounded-lg bg-surface border border-line-soft text-xs text-ink-faint">
+            <summary class="px-3 py-1.5">💭 思考过程</summary>
+            <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
+          </details>`);
+        wrap.querySelector('.t-body').textContent = msg.content || '';
+        appendNode(wrap, msg);
+        continue;
+      }
       if (msg?.kind === 'tool_use') {
         const card = el(`
           <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
@@ -4531,13 +4615,16 @@ import { verifyIntegrity } from './canonicalize.js';
           codeBlocks.push(inCode);
         }
         if (msg.toolUseId) histToolCards.set(msg.toolUseId, card);
-        frag.appendChild(card);
+        // 主链 Agent/Task：预建折叠卡（与 live 一致）
+        if (!msg.parentToolUseId && !msg.isSidechain && (msg.name === 'Agent' || msg.name === 'Task') && msg.toolUseId) {
+          ensureHistSub(msg.toolUseId);
+        }
+        appendNode(card, msg);
         continue;
       }
       if (msg?.kind === 'tool_result') {
         const card = msg.toolUseId ? histToolCards.get(msg.toolUseId) : null;
         if (!card) {
-          // 结果先于调用（截断窗口边界）→ 单独占位卡片
           const orphan = el(`
             <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
               <summary class="px-3 py-2 flex items-center gap-2">
@@ -4553,7 +4640,7 @@ import { verifyIntegrity } from './canonicalize.js';
             code.textContent = formatToolSummary(msg.outputSummary || '');
             codeBlocks.push(code);
           }
-          frag.appendChild(orphan);
+          appendNode(orphan, msg);
           continue;
         }
         card.querySelector('.t-status').textContent = msg.ok === false ? '❌' : '✅';
@@ -4565,6 +4652,11 @@ import { verifyIntegrity } from './canonicalize.js';
           out.classList.remove('hidden');
         }
         histToolCards.delete(msg.toolUseId);
+        // 主链 Agent 完成 → 子卡标题「已完成」
+        if (!msg.parentToolUseId && histSubCards.has(msg.toolUseId)) {
+          const sa = histSubCards.get(msg.toolUseId);
+          sa.titleEl.textContent = formatSubagentCardTitle({ running: false });
+        }
         continue;
       }
       // 文本气泡（默认路径）
@@ -4572,11 +4664,16 @@ import { verifyIntegrity } from './canonicalize.js';
       const bubble = isUser
         ? el(`<div class="msg-frame bg-user text-ink um rounded-xl px-3 py-2 text-sm msg-body"></div>`)
         : el(`<div class="msg-frame px-0.5 msg-body"></div>`);
+      if (msg.parentToolUseId || msg.isSidechain) {
+        // 子 agent 正文：纯文本进卡，避免历史 markdown 二次污染嵌套
+        bubble.textContent = msg.content || '';
+        bubble.className = 'msg-body px-0.5 text-ink-soft whitespace-pre-wrap text-xs';
+        appendNode(bubble, msg);
+        continue;
+      }
       bubble.innerHTML = render(msg.content || '');
       bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
       injectCodeCopyButtons(bubble);
-      // 长指令历史回显也折叠（与 live user_message 一致，移动端上滑看前文）。复用纯函数阈值；
-      // innerHTML 已含 markdown 渲染，包裹一层限高容器 + 「展开」按钮。
       if (isUser) foldLongUserBubble(bubble, msg.content || '');
       appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
       frag.appendChild(bubble);
@@ -4604,7 +4701,7 @@ import { verifyIntegrity } from './canonicalize.js';
       // 追平也是磁盘 history 增量——累加到已见条数，保持切入对账基准准确（见 shouldReloadOnEnter）。
       const sid = ev.sessionId;
       if (sid) seenDiskLenBySession.set(sid, (seenDiskLenBySession.get(sid) || 0) + msgs.length);
-      // 外部写入重置自动解锁估计倒计时（与 server quietTicks 清零同语义）
+      // 外部写入重置自动解锁倒计时（quietTicks 清零 → 重新满量约 12.5s）
       if (ev.payload?.external && mirrorReadonlySid) startMirrorCountdown();
     }
   }
@@ -4614,8 +4711,8 @@ import { verifyIntegrity } from './canonicalize.js';
   // 零写盘期间也维持——修「过一会儿感觉没在跑」误判）；armed=「⏳ 已排队接管」（点了「接管 CLI 会话」但终端本轮
   // 未完结，纯等待、零并发写盘风险，见下方 armedTakeoverStep 接线）；stale=true=「⚠️ 疑似中断」（pending 但
   // 超 5 分钟零写入，终端可能被强杀/断电，维持即时确认接管——等待对已疑似死亡的终端无意义）。
-  // 驾驶中倒计时：前端估计「约 12.5s 无外部写入可自动解锁」（对齐 MIRROR_RELEASE_QUIET_TICKS×2.5s）；
-  // 每次 history_append 外部消息 / 重新上锁会 reset；非精确时钟、仅体感提示。
+  // 驾驶中倒计时：优先 mirror_state.remainingMs（服务端 quietTicks×间隔）；缺省回落 12.5s 估计。
+  // 每次 history_append 外部消息 / 重新上锁会 reset。
   const MIRROR_UNLOCK_EST_SEC = 12.5;
   let mirrorCountdownTimer = null;
   let mirrorCountdownEndsAt = 0;
@@ -4634,9 +4731,10 @@ import { verifyIntegrity } from './canonicalize.js';
       armed, stale: mirrorStaleFlag, remainingSec: armed || mirrorStaleFlag ? undefined : remainingSec,
     });
   }
-  function startMirrorCountdown() {
+  function startMirrorCountdown(remainingMs) {
     stopMirrorCountdown();
-    mirrorCountdownEndsAt = Date.now() + MIRROR_UNLOCK_EST_SEC * 1000;
+    const ms = Number.isFinite(remainingMs) ? remainingMs : MIRROR_UNLOCK_EST_SEC * 1000;
+    mirrorCountdownEndsAt = Date.now() + Math.max(0, ms);
     refreshMirrorBannerCopy();
     mirrorCountdownTimer = setInterval(() => {
       if (!mirrorReadonlySid || armedTakeoverSid || mirrorStaleFlag) { stopMirrorCountdown(); return; }
@@ -4649,7 +4747,7 @@ import { verifyIntegrity } from './canonicalize.js';
       refreshMirrorBannerCopy();
     }, 1000);
   }
-  function applyMirror(readonly, sessionId, stale = false, observedCli) {
+  function applyMirror(readonly, sessionId, stale = false, observedCli, remainingMs) {
     const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
     if (effective && !wasEffective) {
@@ -4678,7 +4776,7 @@ import { verifyIntegrity } from './canonicalize.js';
     mirrorBanner?.classList.toggle('hidden', !effective);
     const armed = effective && armedTakeoverSid === sessionId;
     if (effective) {
-      if (!armed && !stale) startMirrorCountdown();
+      if (!armed && !stale) startMirrorCountdown(remainingMs);
       else { stopMirrorCountdown(); refreshMirrorBannerCopy(); }
     } else {
       stopMirrorCountdown();
@@ -4712,7 +4810,7 @@ import { verifyIntegrity } from './canonicalize.js';
         return;
       }
     }
-    applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli);
+    applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli, ev.payload?.remainingMs);
   }
   // 「接管 CLI 会话」：驾驶中(⏱)点击=排队接管——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行，
   // 见 onMirrorState），无需确认弹窗；再次点击（此时按钮已变「取消接管」）可撤销排队、回退驾驶中态。
@@ -5045,7 +5143,20 @@ import { verifyIntegrity } from './canonicalize.js';
     const failed = p.status === 'failed' || p.status === 'error';
     notify(failed ? '🔔 后台任务失败' : '🔔 后台任务完成', (p.summary || 'Claude 即将汇报结果').slice(0, 80), { force: alertPrefs.foregroundComplete });
     if (ev.instanceId === viewingInstanceId) { // 仅当前查看会话进消息流 + 触觉/音
-      hideTaskProgress(); // WS-004：移进实例判断内——否则后台实例 B 的完成通知会闪掉当前 A 的进度横幅（跨实例误撤）
+      // 多任务：只摘掉对应 taskId；无 id 或已空 → 整清横幅
+      const tid = p.taskId;
+      if (typeof tid === 'string' && tid && activeBgTasks.has(tid)) {
+        activeBgTasks.delete(tid);
+        if (activeBgTaskId === tid) activeBgTaskId = activeBgTasks.size ? [...activeBgTasks.keys()].pop() : null;
+        if (activeBgTasks.size === 0) hideTaskProgress();
+        else {
+          const latest = activeBgTasks.get(activeBgTaskId);
+          if (latest?.message) showTaskProgress(latest.message);
+          renderBgTaskList();
+        }
+      } else {
+        hideTaskProgress(); // WS-004：移进实例判断内——否则后台实例 B 的完成通知会闪掉当前 A 的进度横幅（跨实例误撤）
+      }
       alertCue(failed ? 'warning' : 'success');
       if (p.source === 'user_injection') {
         addBar('🔔 后台任务完成，Claude 正在汇报结果…', 'text-info');

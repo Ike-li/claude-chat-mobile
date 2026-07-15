@@ -163,14 +163,14 @@ test.describe('emit / buffer / eventsSince', () => {
     s.dispose();
   });
 
-  test('缓冲上限 500 条（BUFFER_CAP）→ 溢出后 bufferTrimmed=true、最旧 seq=2', () => {
+  test('缓冲上限 BUFFER_CAP(2000) → 溢出后 bufferTrimmed=true、最旧 seq=2', () => {
     const { s, events } = makeSession();
-    // push 501 条（seq 1..501），buffer 只保留最近 500 条（seq 2..501）
-    for (let i = 0; i < 501; i++) s.emit('system', { n: i });
-    assert.equal(s.buffer.length, 500);
+    // push 2001 条（seq 1..2001），buffer 只保留最近 2000 条（seq 2..2001）
+    for (let i = 0; i < 2001; i++) s.emit('system', { n: i });
+    assert.equal(s.buffer.length, 2000);
     assert.equal(s.bufferTrimmed, true);
     assert.equal(s.buffer[0].seq, 2);  // seq 1 被挤出
-    assert.equal(s.buffer[499].seq, 501);
+    assert.equal(s.buffer[1999].seq, 2001);
     s.dispose();
   });
 
@@ -190,8 +190,8 @@ test.describe('emit / buffer / eventsSince', () => {
 
   test('eventsSince：gap 检测（bufferTrimmed + oldest 超出范围）', () => {
     const { s } = makeSession();
-    // push 502 条 → buffer 保留最近 500 条（seq 3..502），seq 1-2 被挤出
-    for (let i = 0; i < 502; i++) s.emit('system', { n: i });
+    // push 2002 条 → buffer 保留最近 2000 条（seq 3..2002），seq 1-2 被挤出
+    for (let i = 0; i < 2002; i++) s.emit('system', { n: i });
     // 最旧 seq=3 > lastSeq+1=2 → 有 gap
     const r = s.eventsSince(1);
     assert.equal(r.gap, true);

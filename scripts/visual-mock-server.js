@@ -3453,6 +3453,11 @@ io.on('connection', socket => {
     emitPendingDevices();
   });
 
+  // 后台任务停止（对齐 server task:stop → agent.stopTask）：mock 仅记日志，幂等
+  socket.on('task:stop', payload => {
+    console.log(`[mock] task:stop taskId=${payload?.taskId || ''} instanceId=${payload?.instanceId || viewingInstanceId}`);
+  });
+
   // Handle user interrupt (stop button / question skip)
   // 真实 agent 里 interrupt → AbortSignal → handleQuestion abortHandler →
   // request_resolved(aborted) + denyKinds(cancelled) + 轮次收尾。mock 对齐这条链，

@@ -15,8 +15,7 @@
 3. **切片 A(子 agent 后端分流)**:`agent.js` query options 加 `forwardSubagentText:true`;三处 `parent_tool_use_id break` 改为分流 emit——stream_event 子 agent→emit text_delta/thinking_delta 带 `parentToolUseId`(不碰主 buffer);assistant 子 agent→emit tool_use 带 `parentToolUseId`+`subagentType`(正文走 stream_event 避免重复);**保留 error 不误报主会话守卫**;user 子 agent 仍 break(tool_result 留后续)。删了旧「stream_event/assistant parent_tool_use_id→跳过」两测。**test/agent.test.mjs 187 pass 0 fail;contract:check OK(类型级,新字段无需改契约)。**
 
 ## 待做
-- **切片 2c/2d(stopTask 前端按钮)**:server.js 已有 `task:stop`→`stopTask`；前端后台任务停止按钮仍缺。
-- **③ usage 套餐额度窗 UI**:后端/纯函数侧已有骨架；前端额度窗展示仍待接线。
+- （本波体感对等已收口；生产重启常驻 server 后真机验证 stopTask / 历史 sidechain / mirror 1s 追平）
 
 ## 已完成(续 2026-07-15)
 - **切片 C(前端子 agent 可折叠卡)**:
@@ -24,6 +23,9 @@
   - `app.js`:parentToolUseId 分流进 `[data-testid=subagent-card]`(默认收起)；主 Agent tool_use 预建卡；tool_result/result 标「已完成」；clearView 清 map
   - visual:`test:subagent` mock + **TC-24**（默认收起/类型标题/嵌套工具与正文/主流无 thinking 污染/点击展开）
   - 顺带修 visual mock:question requestId 递增(TC-5→5b)、`mock-session-another` history 回填(TC-7 冷切入 reload)
+- **切片 2c/2d**:前端「停止」+ mock `task:stop` + TC-16 点击断言
+- **③ 额度窗 UI**:状态区「查看套餐额度」
+- **历史**:thinking 折叠 + sidechain 挂靠主链 Agent 重建卡
 
 ## 教训/坑
 - **app.js(~4434 行)本轮 grep+Read 返回损坏输出**(重复行/错行号/断语法)。**下次读该文件小范围、多次核对,损坏就重读,绝不据损坏输出 Edit**。

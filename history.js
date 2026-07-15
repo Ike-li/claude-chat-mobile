@@ -78,6 +78,8 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   // 回显成重复气泡（实证 234 会话中 1 个含 8 条）。uuid 是每条唯一标识，同 uuid = 同一逻辑消息（非合法重复），
   // 按 uuid 去重安全——合法重复内容（两次「继续」）是不同 uuid、不误删。Set 为本次读取的瞬时结构（返回即释放）。
   const seenUuids = new Set();
+  // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡
+  let lastMainAgentToolId = null;
   try {
     // 逐行读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
     // （取代原「尾部 1MB」截断方案）。累积数组下方封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
@@ -93,22 +95,27 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       // 跳过 meta 条目（local-command 输出等）
       if (entry.isMeta) continue;
 
-      // 子 agent（sidechain）记录不回显——与运行期 agent.js 的 parent_tool_use_id 守卫等效。
-      // 磁盘 JSONL 用 isSidechain 标记子 agent（parent_tool_use_id 是 SDK 运行时流字段、不落盘）；
-      // 一并挡 parent_tool_use_id 作防御。带正文的子 agent assistant 靠下方空正文启发式漏不掉，故须显式滤。
-      if (entry.isSidechain || entry.parent_tool_use_id) continue;
-
-      // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use 混排：按 content block
-      // 顺序展开成多条前端条目（文本气泡 / 工具卡片），冷路径切会话也能重建已完成的工具调用。
-      // thinking 不回显（体积大、仅 live 流有意义）；纯噪音文本仍走原过滤。
+      // 只取 user 和 assistant。同一条 JSONL 可能含 text + tool_use + thinking 混排：按 content block
+      // 顺序展开。sidechain（子 agent）一并回显（带 isSidechain / parentToolUseId），前端收进折叠卡；
+      // 不再整段丢弃——刷新后也能看子 agent 详情（与 live parentToolUseId 卡对齐）。
+      // parent_tool_use_id 若意外落盘则直接用作 parent；否则用最近主链 Agent/Task 的 toolUseId 挂靠。
       if (entry.type === 'user' || entry.type === 'assistant') {
         // 同 uuid 重复落盘去重（仅 uuid 存在时；缺 uuid 的旧条目不因 undefined 相撞而互删）。
         // 一条 uuid 对应整条 JSONL entry，展开出的多条 tool/text 共享同一 uuid——只在 entry 级去重一次。
         if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
 
         const role = entry.message?.role || entry.type;
-        const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp);
+        const isSide = Boolean(entry.isSidechain || entry.parent_tool_use_id);
+        const parentFromDisk = entry.parent_tool_use_id || entry.parentToolUseId || entry.agentId || null;
+        const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp, {
+          isSidechain: isSide,
+          parentToolUseId: isSide ? (parentFromDisk || lastMainAgentToolId || 'sidechain') : null,
+        });
         for (const item of expanded) {
+          // 主链 Agent/Task 工具：记住 id，供后续无 parent 字段的 sidechain 行挂靠
+          if (!isSide && item.kind === 'tool_use' && (item.name === 'Agent' || item.name === 'Task') && item.toolUseId) {
+            lastMainAgentToolId = item.toolUseId;
+          }
           messages.push(item);
           // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
           // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
@@ -199,16 +206,20 @@ export function rebaselineAbsorbedExternal({ sameSession, curLen, baseline }) {
 // 保守取舍：keepAlive 用文件增长做「终端还活着」的弱判据【仅延缓解锁】——是本项目刻意规避的「mtime 判活」近亲，
 //   但风险低一档（不上锁→绝不误锁死进不去，最坏是终端真停后晚 ~N tick 才解锁）；前端「接管 CLI 会话」手动接管仍是兜底。
 //   ⚠️ 前提：web 纯查看 idle 期间其自身 resume 进程不 append transcript（否则 keepAlive 恒真→退回锁死，靠接管兜）——须 live 验证。
-export const MIRROR_RELEASE_QUIET_TICKS = 5; // ×CATCH_UP_INTERVAL_MS(2.5s) ≈ 12.5s 终端静默 → 自动解锁
-export function mirrorReleaseStep(state, { externalWrite = false, keepAlive = false, tailPending = false, localBusy = false } = {}) {
+export const MIRROR_RELEASE_QUIET_TICKS = 5; // 默认 ×2.5s ≈ 12.5s；mirror 提速轮询时由调用方传入更大 releaseTicks 保墙钟
+export function mirrorReleaseStep(state, {
+  externalWrite = false, keepAlive = false, tailPending = false, localBusy = false,
+  releaseTicks = MIRROR_RELEASE_QUIET_TICKS,
+} = {}) {
   const prevReadonly = Boolean(state?.readonly);
   const prevQuiet = Number(state?.quietTicks) || 0;
+  const need = Number(releaseTicks) > 0 ? Number(releaseTicks) : MIRROR_RELEASE_QUIET_TICKS;
   if (externalWrite) return { readonly: true, state: { readonly: true, quietTicks: 0 } };
   if (localBusy) return { readonly: prevReadonly, state: { readonly: prevReadonly, quietTicks: 0 } };
   if (!prevReadonly) return { readonly: false, state: { readonly: false, quietTicks: 0 } };
   if (keepAlive || tailPending) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
   const quietTicks = prevQuiet + 1;
-  const readonly = quietTicks < MIRROR_RELEASE_QUIET_TICKS;
+  const readonly = quietTicks < need;
   return { readonly, state: { readonly, quietTicks: readonly ? quietTicks : 0 } };
 }
 
@@ -268,35 +279,61 @@ function normalizeHistoryText(content) {
   return text;
 }
 
+// 历史 thinking 单块上限（字符）：防 always-on 内存被超长推理撑爆；超出截断并标 truncated。
+const HISTORY_THINKING_CAP = 4000;
+
 // 把一条 user/assistant JSONL 的 content 展开为前端可渲染条目序列（保序）：
-//   · text → { role, content, timestamp }
-//   · tool_use → { kind:'tool_use', role:'assistant', toolUseId, name, inputSummary, timestamp }
-//   · tool_result → { kind:'tool_result', role:'user', toolUseId, ok, outputSummary, timestamp }
-// thinking / 未知块跳过。字符串 content 走文本路径。
-function expandHistoryEntry(content, role, timestamp) {
+//   · text → { role, content, timestamp [, isSidechain, parentToolUseId] }
+//   · thinking → { kind:'thinking', role:'assistant', content, timestamp, ... }
+//   · tool_use → { kind:'tool_use', role:'assistant', toolUseId, name, inputSummary, timestamp, ... }
+//   · tool_result → { kind:'tool_result', role:'user', toolUseId, ok, outputSummary, timestamp, ... }
+// 字符串 content 走文本路径。opts 把 sidechain 归属传给每条展开项。
+function expandHistoryEntry(content, role, timestamp, opts = {}) {
+  const side = {};
+  if (opts.isSidechain) {
+    side.isSidechain = true;
+    if (opts.parentToolUseId) side.parentToolUseId = String(opts.parentToolUseId);
+  }
   const out = [];
   if (typeof content === 'string') {
     const text = normalizeHistoryText(content);
-    if (text != null) out.push({ role, content: text, timestamp });
+    if (text != null) out.push({ role, content: text, timestamp, ...side });
     return out;
   }
   if (!Array.isArray(content)) return out;
 
-  // 先收集 text 块拼成一条（与旧 extractContent 一致），同时按原数组序穿插 tool 块：
-  // 实现：顺序扫描；连续 text 合并成一段；遇到 tool 先 flush text 再 push tool。
+  // 先收集 text 块拼成一条（与旧 extractContent 一致），同时按原数组序穿插 tool / thinking 块：
+  // 实现：顺序扫描；连续 text 合并成一段；遇到 tool/thinking 先 flush text 再 push。
   let textBuf = [];
   const flushText = () => {
     if (!textBuf.length) return;
     const joined = textBuf.join('\n');
     textBuf = [];
     const text = normalizeHistoryText(joined);
-    if (text != null) out.push({ role, content: text, timestamp });
+    if (text != null) out.push({ role, content: text, timestamp, ...side });
   };
 
   for (const block of content) {
     if (!block || typeof block !== 'object') continue;
     if (block.type === 'text') {
       if (typeof block.text === 'string' && block.text) textBuf.push(block.text);
+      continue;
+    }
+    if (block.type === 'thinking' || block.type === 'redacted_thinking') {
+      flushText();
+      const raw = block.type === 'redacted_thinking'
+        ? '（思考内容已脱敏）'
+        : (typeof block.thinking === 'string' ? block.thinking : '');
+      if (!raw) continue;
+      const truncated = raw.length > HISTORY_THINKING_CAP;
+      out.push({
+        kind: 'thinking',
+        role: 'assistant',
+        content: truncated ? raw.slice(0, HISTORY_THINKING_CAP) + ' …（已截断）' : raw,
+        truncated: truncated || undefined,
+        timestamp,
+        ...side,
+      });
       continue;
     }
     if (block.type === 'tool_use') {
@@ -310,6 +347,7 @@ function expandHistoryEntry(content, role, timestamp) {
         name: String(block.name),
         inputSummary: histToolSummary(block.input ?? {}),
         timestamp,
+        ...side,
       });
       continue;
     }
@@ -324,10 +362,11 @@ function expandHistoryEntry(content, role, timestamp) {
         ok: !block.is_error,
         outputSummary: histToolSummary(block.content ?? ''),
         timestamp,
+        ...side,
       });
       continue;
     }
-    // thinking / redacted_thinking / 其它块：不进历史回显
+    // 其它未知块：跳过
   }
   flushText();
   return out;
