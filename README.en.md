@@ -60,13 +60,13 @@ cd claude-chat-mobile
 node --version           # need Node ≥ 20
 which claude             # the CLI this project drives — must be installed & logged in
 
-npm install --omit=dev   # runtime deps only — no puppeteer/browser. To run tests, use full `npm install`.
+npm install --omit=dev   # runtime deps only — no Playwright/browser. Use a full install for UI tests.
 npm run setup            # interactive wizard: generates AUTH_TOKEN (the #1 gotcha) + asks for WORK_DIR, writes .env (0600)
                          # prefer this over hand-editing; to use the raw template instead: cp .env.example .env
 
 # Recommended: pre-flight your config (port in use, CLAUDE_BIN path, gateway env, file perms)
 node scripts/doctor.js        # check config
-node scripts/doctor.js --fix  # tighten perms (.env and data/*.json → 0600)
+node scripts/doctor.js --fix  # tighten perms (.env and CCM_DATA_DIR/*.json → 0600)
 
 npm start                     # http://localhost:3000
 ```
@@ -148,9 +148,9 @@ graph LR
         CF[Cloudflare Tunnel]
     end
     subgraph Host
-        S[server.js<br/>Express static + Socket.IO contract layer<br/>auth · preflight · device trust · handler guard]
-        A[agent.js · AgentSession<br/>long-lived SDK query · permission gate<br/>event envelope seq+epoch · ring buffer]
-        J[(data/sessions.json<br/>session metadata)]
+        S[src/server/ + thin server.js launcher<br/>Express static + Socket.IO contract layer<br/>auth · preflight · device trust · handler guard]
+        A[src/agent/agent.js · AgentSession<br/>long-lived SDK query · permission gate<br/>event envelope seq+epoch · ring buffer]
+        J[(CCM_DATA_DIR/sessions.json<br/>session metadata)]
         SDK[claude-agent-sdk]
         CLI[local claude CLI<br/>loads your full config]
         FS[(your project files<br/>WORK_DIR)]
@@ -166,7 +166,7 @@ graph LR
 1. Phone `user:message {text}` → server validates → routes to the target instance `agents.get(instanceId)` (lazy-respawned resume; after `session:new` a FRESH instance is lazily opened only on the first message — stage 3).
 2. The text is pushed into the AgentSession's streaming input → SDK → claude CLI works in `WORK_DIR`.
 3. The SDK message stream flows into `map()`: streaming text → `text_delta`, tool calls → `tool_use`/`tool_result`, off-allow-list actions → `permission_request` (suspended, awaiting allow/deny on the phone).
-4. Each event is wrapped in a `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` envelope → into a 500-entry ring buffer → `io.emit` broadcast (the front-end demuxes by `viewingInstanceId`; high-frequency deltas from background tabs are not broadcast to save bandwidth).
+4. Each event is wrapped in a `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` envelope → into a 2,000-entry ring buffer → `io.emit` broadcast (the front-end demuxes by `viewingInstanceId`; high-frequency deltas from background tabs are not broadcast to save bandwidth).
 5. Phone reconnects: `sync:since {lastSeq}` replays the buffer; an `epoch` change means the server swapped the instance, so the client resets its dedup baseline automatically.
 
 Runtime dependencies: `@anthropic-ai/claude-agent-sdk`, `express`, `compression`, `socket.io`, `dotenv`, `web-push`, `jose`. Front-end third-party libraries are self-hosted locally in `public/vendor/` (Tailwind/marked/highlight.js/DOMPurify), with no CDN dependency; see [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md).

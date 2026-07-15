@@ -11,7 +11,7 @@ import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { writeOwnerOnlyFile } from '../file-security.js';
+import { writeOwnerOnlyFile } from '../src/files/file-security.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 

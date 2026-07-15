@@ -1,8 +1,21 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, taskStopUiState, formatUsageWindowLines } from './logic.js';
+import { esc, formatToolSummary, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatUsageWindowLines } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
+import { createAppContext } from './app/context.js';
+import { createClientLogger } from './app/client-log.js';
+import { createAlertController } from './app/alerts.js';
+import { createAttachmentController } from './app/attachments.js';
+import { createRttMonitor } from './app/connection-sync.js';
+import { createMessageRenderer } from './app/message-renderer.js';
+import { createAgentEventDispatcher } from './app/event-dispatch.js';
+import { createFileBrowser } from './app/file-browser.js';
+import { createSettingsController } from './app/settings.js';
+import { createNotificationController } from './app/notifications.js';
+import { createTaskStatusController } from './app/task-status.js';
+import { createSessionWorkspaceState } from './app/session-workspaces.js';
+import { createInteractionQueueState } from './app/approval-questions.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -34,8 +47,6 @@ import { verifyIntegrity } from './canonicalize.js';
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop');
-  let activeBgTaskId = null; // 当前查看会话最新 task_progress.taskId，供「停止」按钮（兼容单按钮）
-  const activeBgTasks = new Map(); // taskId → { message, taskType } 多后台任务列表
   let pendingUsageRender = null; // 额度窗一次消费：usage:get 后等 agent:event type=usage
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
@@ -48,59 +59,6 @@ import { verifyIntegrity } from './canonicalize.js';
   const topContextPill = $('topContextPill'), topTitleText = $('topTitleText'), topProjectText = $('topProjectText');
   const customModelGrid = $('customModelGrid'), customPermGrid = $('customPermGrid'), customEffortGrid = $('customEffortGrid'), customEffortGroup = $('customEffortGroup');
 
-  // ---- Web Haptics + 完成提示音（默认开，设置面板可关）----
-  // 偏好存 localStorage（readAlertPrefs/writeAlertPref 在 logic.js）：缺省=开，仅 '0' 为关。
-  let alertPrefs = readAlertPrefs((k) => localStorage.getItem(k));
-  let alertAudioCtx = null; // WebAudio 懒创建，须用户手势后才能出声（Android Chrome 同样）
-  function ensureAlertAudio() {
-    if (alertAudioCtx) return alertAudioCtx;
-    const AC = window.AudioContext || window.webkitAudioContext;
-    if (!AC) return null;
-    try { alertAudioCtx = new AC(); } catch { return null; }
-    return alertAudioCtx;
-  }
-  // 短提示音：完成=双音上行；需要你=中音；出错=下行。纯振荡器、无外部音频文件。
-  function playAlertTone(kind = 'success') {
-    if (!alertPrefs.sound) return;
-    const ctx = ensureAlertAudio();
-    if (!ctx) return;
-    try {
-      if (ctx.state === 'suspended') ctx.resume?.();
-      const now = ctx.currentTime;
-      const tones = kind === 'error' || kind === 'warning'
-        ? [[440, 0], [330, 0.12]]
-        : kind === 'need'
-          ? [[660, 0], [660, 0.14]]
-          : [[523.25, 0], [659.25, 0.11]]; // C5 → E5
-      for (const [freq, when] of tones) {
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = 'sine';
-        o.frequency.value = freq;
-        g.gain.setValueAtTime(0.0001, now + when);
-        g.gain.exponentialRampToValueAtTime(0.12, now + when + 0.015);
-        g.gain.exponentialRampToValueAtTime(0.0001, now + when + 0.14);
-        o.connect(g); g.connect(ctx.destination);
-        o.start(now + when);
-        o.stop(now + when + 0.16);
-      }
-    } catch { /* 静默：无音频权限/被策略拦 */ }
-  }
-  function haptic(type) {
-    // tap 是 UI 点按反馈，不受「完成震动」开关影响；success/error/warning/need 受开关门控
-    if (type !== 'tap' && !alertPrefs.vibrate) return;
-    if (!navigator.vibrate) return;
-    try {
-      if (type === 'tap') navigator.vibrate(12);
-      else if (type === 'success' || type === 'need') navigator.vibrate([15, 80, 15]);
-      else if (type === 'error' || type === 'warning') navigator.vibrate([30, 80, 30, 80, 30]);
-    } catch (e) { /* 忽略某些沙箱浏览器不支持 Vibrate 引起的错误 */ }
-  }
-  // 完成/需要你：震动 + 提示音一次打包（开关各自生效）
-  function alertCue(kind) {
-    haptic(kind === 'need' ? 'need' : kind);
-    playAlertTone(kind === 'need' ? 'need' : kind);
-  }
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
   const cliStatusWrapEl = $('cliStatusWrap'); // E16：状态栏折叠包裹（<details>，揭示=去 hidden）
@@ -109,6 +67,8 @@ import { verifyIntegrity } from './canonicalize.js';
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
   const btnAttach = $('btnAttach'), fileInput = $('fileInput'), attachTray = $('attachTray'); // E17：附件
+  const attachPreviewModal = $('attachPreviewModal'), attachPreviewImg = $('attachPreviewImg'),
+        attachPreviewName = $('attachPreviewName'), attachPreviewClose = $('attachPreviewClose');
   // ultracode 已从独立按钮并入「思考」档最高档（见 rebuildEffortOptions / ultracodeArmed），不再取独立按钮
   const btnPush = $('btnPush'); // E15：推送订阅入口
   // 候选之外的模型名（/model 手设、或重建时需保留的当前值）插入为带标注的 option
@@ -175,14 +135,11 @@ import { verifyIntegrity } from './canonicalize.js';
 
   // ---- 状态 ----
   let currentSessionId = localStorage.getItem('current_session') || null;
-  const sessionDomCache = new Map();
   // per-session 未发送草稿 {text, attachments}（切会话存/切回恢复；同会话静默换实例不读写，见 planSessionDraftSwap）。
   // 仅内存、不落盘——刷新页面后丢失可接受（与 sessionDomCache 同寿）。
-  const sessionDraftCache = new Map();
   // per-session「上次为该会话渲染到的磁盘 history 条数」（history 口径，非活缓冲 seq）。切入时与 server 报的
   // diskLen 比对，判「离开期间被终端外部写过」→ 清屏重载（见 shouldReloadOnEnter）。独立于 sessionDomCache：
   // 后者只在切走时 set 一次（DOM 快照），这里要在每次 loadHistory/onHistoryAppend 渲染后累积。
-  const seenDiskLenBySession = new Map();
   // 这些状态会被早期 socket/DOM 回调触达，必须先于回调注册声明，避免首连事件抢跑触发 TDZ。
   let _busyState = false;
   let interruptPending = false;
@@ -194,34 +151,7 @@ import { verifyIntegrity } from './canonicalize.js';
   let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
   let mirrorObservedCli = { model: null, permissionMode: null, effort: null };
   let mirrorWebPanelSnapshot = null; // CLI 观察态只负责展示；接管时恢复进入镜像前的 Web 选择，绝不写回实例偏好
-  let pushVapidKey = null; // 缓存公钥，避免每次重连重复 fetch
 
-  // ---- 客户端本地日志体系 (Console/Log modal) ----
-  const clientLogBuffer = [];
-  let streamCharCount = 0;
-  let streamThinkingCharCount = 0;
-  let currentStreamingMessageId = null;
-
-  function logClientEvent(type, text) {
-    const entry = {
-      ts: Date.now(),
-      type: 'client_' + type, // client_conn, client_send, client_recv, client_stream
-      text: text,
-      // 打当前查看实例标签，供切工作区时按实例过滤（client_conn 连接级恒显、其标签被忽略）。
-      // recv/stream 仅当前视图实例会产生（后台事件已在 agent:event 分发处 shouldDropAgentEvent 拦掉）；
-      // send 的目标即 viewingInstanceId → 标签准确。见 logic.js logEntryVisibleForInstance。
-      instanceId: viewingInstanceId,
-    };
-    // 收发两类附当前模型 ID（与服务端四类一致带 chip）；连接/流式片段无单一模型语义、不带
-    if ((type === 'send' || type === 'recv') && currentModel) entry.model = currentModel;
-    clientLogBuffer.push(entry);
-    if (clientLogBuffer.length > 200) {
-      clientLogBuffer.shift();
-    }
-    if (consoleModal && consoleModal.classList.contains('sheet-open')) {
-      appendLogEntry(entry);
-    }
-  }
   // 斜杠命令提示：init 事件推送 + localStorage 缓存（init 每轮到达并刷新缓存；页面刷新后、下一轮 init 前靠缓存提示）
   try {
     const cachedCmds = JSON.parse(localStorage.getItem('slash_commands'));
@@ -373,22 +303,11 @@ import { verifyIntegrity } from './canonicalize.js';
     for (const k of candidateKeys) { if (parsed[k] != null && parsed[k] !== '') return parsed[k]; }
     return fallback;
   }
-  const permQueue = [];
   let activePerm = null;
   let permExpandBtn = null;             // M1：展开按钮引用，showNextPerm 前清除
-  const questionQueue = [];
   let activeQuestion = null;
   // 本端已答/已决提问 requestId（含整组 toolUseID）。乐观作答后 sync 竞态或缓冲回放时防重弹；
   // server eventsSince 已过滤已答项，此集合补作答→ack 窗口与 request_resolved 关窗标记。
-  const answeredQuestionIds = new Set();
-  function markQuestionAnswered(requestId) {
-    if (!requestId) return;
-    answeredQuestionIds.add(requestId);
-    if (answeredQuestionIds.size > 200) {
-      const oldest = answeredQuestionIds.values().next().value;
-      answeredQuestionIds.delete(oldest);
-    }
-  }
   let currentPermMode = 'default';      // 当前权限档；onchange 取消时回退、避免重复 emit
   let permModeSeen = false;             // 首次服务端同步只定基线不上屏（刷新/重连不冒「切换」假象）
   let currentEffort = null;             // 当前思考强度档（null=模型默认）；onchange 同值不重发
@@ -415,43 +334,136 @@ import { verifyIntegrity } from './canonicalize.js';
   // 导致提示瞬间消失——重启提示应持续到用户主动离开/刷新页面，不是那种毫秒级归零的一次性事件。
   let latestServiceHealth = null;
   let _serviceRestartNoticeActive = false;
-  // 项目文件只读浏览（FR-07，LLD §3.4.2）状态：browseSegments = 相对 browseCwd 已进入的目录名数组；
-  // browseMode 区分"看目录列表"与"看文件内容"；两组 offset/累积内容各自独立，互不干扰。
-  let browseCwd = null;
-  let browseSegments = [];
-  let browseMode = 'list';               // 'list' | 'content'
-  let browseFileName = null;
-  let browseListEntries = [];            // 当前目录层级已加载的 entries（"加载更多"累积追加）
-  let browseListOffset = 0;
-  let browseListTruncated = false;       // 与 browseListEntries 同步缓存，供从文件内容返回列表时直接复用渲染（不重新请求）
-  let browseListTotal = 0;
-  let browseContentText = '';            // 当前文件已加载的文本（"加载更多"累积追加）
-  let browseContentOffset = 0;           // 字节偏移（服务端 bytesRead 累加——不可用字符串 length，多字节字符下两者不等）
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
-  const sessionsCache = new Map();      // 会话列表缓存 (cwd -> sessions)，实现 Stale-While-Revalidate，实现 0ms 瞬间二次展开
   // P3：面板结构指纹（dirs + 实例集 + viewingInstanceId + viewingCwd）；纯状态变化时不重建面板。
   let _lastPanelStructKey = null;
-  let pendingAttachments = [];          // E17：待发送附件 [{_id,name,mimeType,size,data,thumb?}]，发送后清空
   let offlineQueue = [];                // 弱网离线发送队列：重连后 processOfflineQueue 逐条补发
 
-  marked.setOptions({ breaks: true, gfm: true });
-  const render = raw => DOMPurify.sanitize(marked.parse(raw));
-
-  // L5：输出中的链接加 target=_blank，防止跳出当前页（DOMPurify 已处理 XSS）
-  DOMPurify.addHook('afterSanitizeAttributes', node => {
-    if (node.tagName === 'A') {
-      node.setAttribute('target', '_blank');
-      node.setAttribute('rel', 'noopener noreferrer');
-    }
+  // 所有拆出的浏览器模块只通过显式 context 读取共享 DOM、状态和依赖。
+  const appContext = createAppContext({
+    dom: {
+      messages: messagesEl,
+      input: inputEl,
+      status: statusEl,
+      connRtt: connRttEl,
+      connDotWrap,
+      consoleModal,
+      consoleLogArea,
+      btnAttach,
+      fileInput,
+      attachTray,
+      attachPreviewModal,
+      attachPreviewImg,
+      attachPreviewName,
+      attachPreviewClose,
+      fileBrowseModal,
+      fileBrowseBack,
+      fileBrowsePath,
+      fileBrowseClose,
+      fileBrowseBody,
+      btnSettings,
+      settingsScrim,
+      settingsSheet,
+      settingsClose,
+      prefAlertSound: $('prefAlertSound'),
+      prefAlertVibrate: $('prefAlertVibrate'),
+      prefAlertForeground: $('prefAlertFgComplete'),
+      btnAlertPreview: $('btnAlertPreview'),
+      btnPush,
+      activityBanner,
+      activityBannerText,
+      taskProgressBanner,
+      taskProgressText,
+      btnTaskStop,
+    },
+    state: {},
+    dependencies: {
+      now: Date.now,
+      random: Math.random,
+      window,
+      navigator,
+      storage: localStorage,
+      document,
+      FileReader,
+      Image,
+      URL,
+      performance,
+      marked,
+      DOMPurify,
+      Notification: window.Notification,
+      fetch: window.fetch.bind(window),
+      alert: window.alert.bind(window),
+      console,
+    },
   });
+  Object.defineProperties(appContext.state, {
+    viewingInstanceId: { enumerable: true, get: () => viewingInstanceId },
+    currentModel: { enumerable: true, get: () => currentModel },
+    instancesReady: { enumerable: true, get: () => instancesReady },
+    curEpoch: { enumerable: true, get: () => curEpoch, set: value => { curEpoch = value; } },
+    lastSeq: { enumerable: true, get: () => lastSeq, set: value => { lastSeq = value; } },
+    currentSessionId: { enumerable: true, get: () => currentSessionId, set: value => { currentSessionId = value; } },
+  });
+  const sessionWorkspaceState = createSessionWorkspaceState(appContext);
+  const {
+    sessionDomCache,
+    sessionDraftCache,
+    seenDiskLenBySession,
+    sessionsCache,
+  } = sessionWorkspaceState;
+  const interactionState = createInteractionQueueState(appContext);
+  const {
+    permissionQueue: permQueue,
+    questionQueue,
+    answeredQuestionIds,
+    markQuestionAnswered,
+  } = interactionState;
+  const clientLogger = createClientLogger(appContext, {
+    onEntry(entry) {
+      if (consoleModal?.classList.contains('sheet-open')) appendLogEntry(entry);
+    },
+  });
+  const logClientEvent = clientLogger.log;
+  const alerts = createAlertController(appContext);
+  const haptic = alerts.haptic;
+  const alertCue = alerts.cue;
+  const ensureAlertAudio = alerts.ensureAudio;
+  const messageRenderer = createMessageRenderer(appContext, { scrollBottom: () => scrollBottom() });
+  const render = messageRenderer.renderMarkdown;
+  const el = messageRenderer.createElement;
+  const setStatus = messageRenderer.setStatus;
+  const leaveStartScreen = messageRenderer.leaveStartScreen;
+  const appendMessage = messageRenderer.appendMessage;
+  const addBar = messageRenderer.addBar;
+  const notifications = createNotificationController(appContext, {
+    addBar,
+    getToken: () => token,
+  });
+  const notify = notifications.notify;
+  const setupPush = notifications.setup;
+  const taskStatus = createTaskStatusController(appContext, {
+    addBar,
+    alertCue,
+    alerts,
+    createElement: el,
+    haptic,
+    notify,
+  });
+  const showActivityBanner = taskStatus.showActivity;
+  const hideActivityBanner = taskStatus.hideActivity;
+  const clearApiRetryBanner = taskStatus.clearApiRetry;
+  const onApiRetry = taskStatus.onApiRetry;
+  const onTaskProgress = taskStatus.onProgress;
+  const hideTaskProgress = taskStatus.hideProgress;
+  const onTaskNotification = taskStatus.onComplete;
 
   // ---- socket ----
-  const socket = io({
+  const socket = appContext.setSocket(io({
     auth: { token, deviceToken },
     // 移动端常切后台/息屏，断开后想尽快回来：调小重连退避（默认 1000/5000ms 太久）
     reconnectionDelay: 500,
     reconnectionDelayMax: 2000,
-  });
+  }));
 
   let initialLoad = true;
   let connectErrorCount = 0;  // 公网 socket 连续失败计数，攒够再探测 Access 是否过期
@@ -551,61 +563,12 @@ import { verifyIntegrity } from './canonicalize.js';
   }
 
 
-  // ---- 连接 RTT（手机 ↔ 主机往返延迟）----
-  // 轻量旁路 conn:ping：不读磁盘/不碰会话，仅测应用层 ack 往返。
-  // 连上立即测一次，之后 5s 周期；前台唤醒/online 立刻补测；断线清空避免陈旧数字。
-  const RTT_PING_MS = 3000;      // 单次 ping 超时（远低于 socket 被动心跳 ~45s）
-  const RTT_INTERVAL_MS = 5000;  // 周期采样
-  let _rttTimer = null;
-  let _rttInFlight = false;
-  const RTT_TONE_CLASS = {
-    good: 'text-success',
-    ok: 'text-ink-soft',
-    warn: 'text-warning',
-    bad: 'text-danger',
-  };
-  function clearRttDisplay() {
-    if (!connRttEl) return;
-    connRttEl.textContent = '';
-    connRttEl.className = 'hidden text-[10px] font-mono tabular-nums leading-none select-none';
-    if (connDotWrap) connDotWrap.title = '连接状态：绿=已连接 红=断开';
-  }
-  function renderRtt(ms) {
-    if (!connRttEl) return;
-    const label = formatRttMs(ms);
-    if (!label) { clearRttDisplay(); return; }
-    const tone = rttToneClass(ms);
-    const toneCls = RTT_TONE_CLASS[tone] || 'text-ink-soft';
-    connRttEl.textContent = label;
-    connRttEl.className = `${toneCls} text-[10px] font-mono tabular-nums leading-none select-none`;
-    connRttEl.title = `手机到主机往返延迟 ${label}`;
-    if (connDotWrap) connDotWrap.title = `已连接 · 延迟 ${label}`;
-    setStatus(`已连接 · ${label}`);
-  }
-  function measureRtt() {
-    if (!socket.connected || _rttInFlight) return;
-    _rttInFlight = true;
-    const t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-    socket.timeout(RTT_PING_MS).emit('conn:ping', {}, (err) => {
-      _rttInFlight = false;
-      if (err || !socket.connected) return; // 超时/断线：不刷陈旧值；disconnect 会 clear
-      const t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
-      renderRtt(t1 - t0);
-    });
-  }
-  function startRttLoop() {
-    stopRttLoop();
-    measureRtt();
-    _rttTimer = setInterval(() => {
-      if (document.visibilityState === 'hidden') return; // 后台不烧电
-      measureRtt();
-    }, RTT_INTERVAL_MS);
-  }
-  function stopRttLoop() {
-    if (_rttTimer) { clearInterval(_rttTimer); _rttTimer = null; }
-    _rttInFlight = false;
-  }
-
+  // ---- 连接同步：RTT 旁路监测由独立 controller 管理 ----
+  const rttMonitor = createRttMonitor(appContext, { setStatus });
+  const clearRttDisplay = rttMonitor.clear;
+  const measureRtt = rttMonitor.measure;
+  const startRttLoop = rttMonitor.start;
+  const stopRttLoop = rttMonitor.stop;
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
     if (authToken) authToken.value = '';         // 成功后不把令牌留在本地表单状态里
@@ -880,109 +843,42 @@ import { verifyIntegrity } from './canonicalize.js';
     }
   }
 
-  // ---- agent:event 分发（台阶3 instanceId 分流 + epoch 感知去重）----
-  socket.on('agent:event', ev => {
-    // task_notification 是跨实例的带外通知（后台任务完成）——必须在 shouldDropAgentEvent / epoch 去重【之前】处理并 return：
-    //   ① 它带 instanceId，若走正常管线会被 shouldDropAgentEvent 按非当前查看实例丢弃（这正是「后台」任务的常态：
-    //      你在看别的会话或落地页）；② 后台实例 epoch 不同，放它进 epoch 块会污染 curEpoch/lastSeq 基线。
-    // 故独立分流：OS 通知无条件触发（跨会话有效），addBar/haptic 仅当前查看实例（否则串进别的会话视图）。
-    if (ev.type === 'task_notification') { onTaskNotification(ev); return; }
-    // task_progress：后台任务进行中的瞬时进度心跳（emitTransient，transient=true、不占 seq）。同样带外分流——
-    // 绕过 shouldDropAgentEvent/epoch 去重（后台实例发、无回放价值），只原地刷新进度横幅，不进消息流。
-    if (ev.type === 'task_progress') { onTaskProgress(ev); return; }
-    // api_retry：限流/过载自动重试瞬时态（emitTransient）。带外分流 + 仅当前查看实例显示横幅；
-    // 不进聊天流、不占 seq，2/10→3/10 原地覆盖，对齐 CLI "Retrying in Ns · attempt i/max"。
-    if (ev.type === 'api_retry') { onApiRetry(ev); return; }
-    // history_append：只读「追平」——server 轮询终端会话 transcript 检测到【外部新落定】消息（epoch='server'）。
-    // 同样带外分流（在 shouldDropAgentEvent/epoch 之前），onHistoryAppend 内按 viewingInstanceId 自判是否渲染。
-    if (ev.type === 'history_append') { onHistoryAppend(ev); return; }
-    // 额度窗：usage:get 的应答（epoch=server），不进会话流、不占 seq 去重
-    if (ev.type === 'usage') {
-      if (pendingUsageRender) {
-        const fn = pendingUsageRender;
+  // ---- agent:event：带外事件、实例分流、epoch/seq 去重与日志由独立 dispatcher 管理 ----
+  const dispatchAgentEvent = createAgentEventDispatcher(appContext, {
+    handlers: () => handle,
+    logger: clientLogger,
+    outOfBand: {
+      task_notification: onTaskNotification,
+      task_progress: onTaskProgress,
+      api_retry: onApiRetry,
+      history_append: onHistoryAppend,
+      mirror_state: onMirrorState,
+      usage(ev) {
+        if (!pendingUsageRender) return;
+        const renderUsage = pendingUsageRender;
         pendingUsageRender = null;
-        fn(ev.payload);
+        renderUsage(ev.payload);
+      },
+    },
+    onEpochReset() {
+      permQueue.length = 0;
+      if (activePerm) {
+        activePerm = null;
+        closeSheet(permModal);
+        permExpandBtn?.remove();
+        permExpandBtn = null;
       }
-      return;
-    }
-    // mirror_state：只读追平锁状态（server 判「会话正在终端运行」）——带外分流，控制常驻横幅 + 输入禁用。
-    if (ev.type === 'mirror_state') { onMirrorState(ev); return; }
-    // 台阶3：事件按 instanceId 分流——非当前查看 tab（viewingInstanceId）的实例事件不渲染直接丢弃。
-    // 角标/跨 tab 通知改由 instances 广播驱动（setInstances/notifyStateChanges），不在此重建。
-    // 必须在 epoch 去重前过滤，否则后台实例事件会污染 curEpoch/lastSeq 基线。判定见 logic.js shouldDropAgentEvent：
-    //   · instances / 无 instanceId 的合成事件永不丢；· instancesReady 前（视图未知）放行重放批次；
-    //   · 视图已知后按 viewingInstanceId 精确分流——含 viewingInstanceId=null（新会话空窗口）时丢弃一切后台实例事件。
-    if (shouldDropAgentEvent(ev, viewingInstanceId, instancesReady)) return;
-    if (ev.epoch && ev.epoch !== 'server') {
-      if (ev.epoch !== curEpoch) {
-        curEpoch = ev.epoch;
-        lastSeq = 0;
-        // 清理旧 epoch 的挂起审批和提问，避免阻塞新 epoch 的弹窗流程
-        permQueue.length = 0;
-        if (activePerm) {
-          activePerm = null;
-          closeSheet(permModal);
-          permExpandBtn?.remove(); permExpandBtn = null;
-        }
-        questionQueue.length = 0;
-        if (activeQuestion) {
-          activeQuestion = null;
-          closeSheet(questionModal);
-        }
+      questionQueue.length = 0;
+      if (activeQuestion) {
+        activeQuestion = null;
+        closeSheet(questionModal);
       }
-      if (ev.seq <= lastSeq) return;
-      lastSeq = ev.seq;
-    }
-    if (ev.sessionId && ev.sessionId !== currentSessionId) {
-      currentSessionId = ev.sessionId;
-      localStorage.setItem('current_session', currentSessionId);
-    }
-
-    // Log incoming event to our local clientLogBuffer
-    if (ev.type === 'init') {
-      logClientEvent('recv', `[WEB_RECV] 初始化 (init): model=${ev.payload?.model || ''}, cwd=${ev.payload?.cwd || ''}, commandsCount=${ev.payload?.slashCommands?.length || 0}`);
-    } else if (ev.type === 'models') {
-      const modelNames = (ev.payload?.models || []).map(m => typeof m === 'string' ? m : (m.displayName || m.value)).join(', ');
-      logClientEvent('recv', `[WEB_RECV] 可用模型列表 (models): 共 ${ev.payload?.models?.length || 0} 个选项 [${modelNames}]`);
-    } else if (ev.type === 'result') {
-      logClientEvent('recv', `[WEB_RECV] 结果 (result): isError=${ev.payload?.isError || false}, duration=${ev.payload?.durationMs}ms, cost=$${ev.payload?.costUsd || 0}`);
-      if (currentStreamingMessageId) {
-        logClientEvent('stream', `[STREAM] 流式接收完成。共计: 文本 ${streamCharCount} 字符, 思考 ${streamThinkingCharCount} 字符`);
-        streamCharCount = 0;
-        streamThinkingCharCount = 0;
-        currentStreamingMessageId = null;
-      }
-    } else if (ev.type === 'error') {
-      logClientEvent('recv', `[WEB_RECV] 错误 (error): ${ev.payload?.message || ''}`);
-    } else if (ev.type === 'system') {
-      logClientEvent('recv', `[WEB_RECV] 系统通知 (system): ${ev.payload?.message || ''}`);
-    } else if (ev.type === 'permission_request') {
-      logClientEvent('recv', `[WEB_RECV] 权限审批请求: tool=${ev.payload?.name || ''}`);
-    } else if (ev.type === 'question') {
-      logClientEvent('recv', `[WEB_RECV] 提问: "${ev.payload?.text?.slice(0, 50)}..."`);
-    } else if (ev.type === 'user_message') {
-      logClientEvent('recv', `[WEB_RECV] 广播用户消息 (user_message): "${ev.payload?.text?.slice(0, 50)}${ev.payload?.text?.length > 50 ? '...' : ''}" (${ev.payload?.text?.length || 0} chars)`);
-    } else if (ev.type === 'text_delta') {
-      if (!currentStreamingMessageId) {
-        currentStreamingMessageId = ev.payload?.messageId || 'default';
-        logClientEvent('stream', `[STREAM] 启动流式文本段接收 (messageId=${currentStreamingMessageId})`);
-      }
-      streamCharCount += (ev.payload?.text?.length || 0);
-    } else if (ev.type === 'thinking_delta') {
-      if (!currentStreamingMessageId) {
-        currentStreamingMessageId = ev.payload?.messageId || 'default';
-        logClientEvent('stream', `[STREAM] 启动流式思考段接收 (messageId=${currentStreamingMessageId})`);
-      }
-      streamThinkingCharCount += (ev.payload?.text?.length || 0);
-    } else if (ev.type === 'tool_use') {
-      logClientEvent('recv', `[WEB_RECV] 工具启动: ${ev.payload?.name || ''}`);
-    } else if (ev.type === 'tool_result') {
-      logClientEvent('recv', `[WEB_RECV] 工具返回: toolUseId=${ev.payload?.toolUseId || ''}, ok=${ev.payload?.ok || false}`);
-    }
-
-    handle[ev.type]?.(ev.payload);
+    },
+    onSessionId(sessionId) {
+      localStorage.setItem('current_session', sessionId);
+    },
   });
-
+  socket.on('agent:event', dispatchAgentEvent);
   function failPendingToolCards(message) {
     if (!toolCards.size) return;
     const summary = message || '工具执行已因本轮错误停止';
@@ -1390,7 +1286,7 @@ import { verifyIntegrity } from './canonicalize.js';
       // 幂等：同上（快照补发 vs buffer 回放去重），按 requestId
       if (activeQuestion?.requestId === p.requestId || questionQueue.some(q => q.requestId === p.requestId)) return;
       // 已本地作答/已收 request_resolved：忽略重放（切会话、probe、整页刷新后的 sync）
-      if (isAnsweredQuestionId(p.requestId, answeredQuestionIds)) return;
+      if (interactionState.isQuestionAnswered(p.requestId)) return;
       alertCue('need');
       questionQueue.push(p);
       showNextQuestion();
@@ -1457,7 +1353,7 @@ import { verifyIntegrity } from './canonicalize.js';
       alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
       addBar(ui.statusBar.text, ui.statusBar.cls);
       if (ui.errorBar) addBar(ui.errorBar.text, ui.errorBar.cls);
-      notify(ui.notify.title, ui.notify.body, { force: alertPrefs.foregroundComplete });
+      notify(ui.notify.title, ui.notify.body, { force: alerts.preferences().foregroundComplete });
 
       // 防御性清理当前 tab 的挂起提问和审批
       permQueue.length = 0;
@@ -1830,7 +1726,7 @@ import { verifyIntegrity } from './canonicalize.js';
     return t;
   }
 
-  // ---- 审批完整性预检（NFR-17，承接 LLD §5.5 协议步骤4）----
+  // ---- 审批完整性预检（NFR-17，承接 docs/design.md 协议步骤4）----
   // 渲染前（严格说：渲染后异步补验，见下）重算指纹比对服务端锚定的 fp，防传输层篡改（op 被改而 fp
   // 未同步改）。不阻塞卡片显示——真正的执行门槛在后端 resolvePermission（agent.js），这里只是"谨慎
   // 确认"提示，即使因浏览器兼容性等原因未能核验也不影响审批本身仍受后端 fail-closed 保护。
@@ -1902,7 +1798,7 @@ import { verifyIntegrity } from './canonicalize.js';
       decision,
       alwaysThisSession: permAlways.checked,
       instanceId: viewingInstanceId, // 台阶3：路由到当前查看 tab 实例（切过去后审批的本就是该实例）
-      // op：回传本卡片渲染时所见的确切操作（承接 LLD §5.5 NFR-17 审批完整性绑定协议步骤5）——
+      // op：回传本卡片渲染时所见的确切操作（承接 docs/design.md NFR-17 审批完整性绑定协议步骤5）——
       // 服务端用它重算指纹比对 canUseTool 时锚定的 fp，不一致 fail-closed 拒绝（agent.js#resolvePermission）。
       op: { tool: activePerm.name, args: activePerm.input, cwd: activePerm.cwd }
     };
@@ -2120,13 +2016,13 @@ import { verifyIntegrity } from './canonicalize.js';
       return;
     }
     const rawText = inputEl.value.trim();
-    if (ultracodeArmed && !rawText && pendingAttachments.length === 0) {
+    if (ultracodeArmed && !rawText && attachments.items().length === 0) {
       addBar('ultracode 档需要先输入任务再发送', 'text-info');
       inputEl.focus();
       return;
     }
     const text = ultracodeArmed ? withUltracodeKeyword(rawText) : rawText; // ultracode 档：每轮注入关键词触发 Workflow
-    if (!text && pendingAttachments.length === 0) return; // E17：纯附件（空文本）也可发
+    if (!text && attachments.items().length === 0) return; // E17：纯附件（空文本）也可发
     // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传
     if (/^\/model(\s|$)/.test(text) && !(window.availableSkills || []).includes('model')) {
@@ -2164,8 +2060,8 @@ import { verifyIntegrity } from './canonicalize.js';
       model = model + currentGatewaySuffix;
     }
     // E17：剥掉本地 _id（非契约字段），data=完整 base64、thumb=小缩略图随消息上传
-    const attachments = pendingAttachments.length
-      ? pendingAttachments.map(({ _id, ...rest }) => rest)
+    const outgoingAttachments = attachments.items().length
+      ? attachments.payload()
       : undefined;
     // REL-01：客户端消息 ID——离线重发/网络抖动可能致同一条消息被处理两次，服务端据此去重（message-dedup.js）。
     // 在线/离线两条路径共享同一个 ID（在离线分支判断前生成）。
@@ -2192,9 +2088,9 @@ import { verifyIntegrity } from './canonicalize.js';
       }
       
       // 添加离线待发送的附件缩略 chip/图片预览，让离线体验达到原生级
-      if (attachments && attachments.length) {
+      if (outgoingAttachments && outgoingAttachments.length) {
         const wrap = el(`<div class="flex flex-wrap gap-2${text ? ' mt-2' : ''}"></div>`);
-        for (const a of pendingAttachments) { // pendingAttachments 含有 thumb
+        for (const a of attachments.items()) { // controller 中保留 thumb 供气泡预览
           if (a.thumb) {
             const img = el(`<img class="max-w-[8rem] max-h-32 rounded-lg">`);
             img.src = a.thumb; img.title = a.name || '';
@@ -2216,7 +2112,7 @@ import { verifyIntegrity } from './canonicalize.js';
       offlineQueue.push({
         text,
         model,
-        attachments,
+        attachments: outgoingAttachments,
         bubbleEl: bubble,
         clientMessageId,
         // REL-01：保存入队时刻的目标，重发时须用这个而非"当下"的 viewingInstanceId/currentCwd——
@@ -2228,8 +2124,7 @@ import { verifyIntegrity } from './canonicalize.js';
       inputEl.value = '';
       // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
       if (currentSessionId) sessionDraftCache.delete(currentSessionId);
-      pendingAttachments = [];
-      renderTray();
+      attachments.clear();
       hints.classList.add('hidden');
       autosize();
       scrollBottom(true);
@@ -2242,15 +2137,14 @@ import { verifyIntegrity } from './canonicalize.js';
     }
 
     // 台阶3：instanceId 路由到当前查看 tab；cwd 供无 tab（首发/session:new 后）时服务端懒开实例
-    const attCount = Array.isArray(attachments) ? attachments.length : 0;
+    const attCount = Array.isArray(outgoingAttachments) ? outgoingAttachments.length : 0;
     logClientEvent('send', `[WEB_SEND] 发送消息: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" (${text.length} 字符), model=${model || '未指定(沿用)'}, 附件数=${attCount}, instanceId=${viewingInstanceId || 'new'}`);
-    socket.emit('user:message', { text, model, attachments, instanceId: viewingInstanceId, cwd: currentCwd, clientMessageId });
+    socket.emit('user:message', { text, model, attachments: outgoingAttachments, instanceId: viewingInstanceId, cwd: currentCwd, clientMessageId });
     // F3：不再本地 append 气泡，由 user_message 事件渲染（同时入缓冲，重载可回放）
     inputEl.value = '';
     // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
     if (currentSessionId) sessionDraftCache.delete(currentSessionId);
-    pendingAttachments = [];
-    renderTray();
+    attachments.clear();
     hints.classList.add('hidden');
     autosize();
     setBusy(true);
@@ -2277,136 +2171,14 @@ import { verifyIntegrity } from './canonicalize.js';
     }
   });
 
-  // ---- 附件（E17）：选文件 / 剪贴板粘贴图片 → base64 + 图片 canvas 缩略图 → 待发送托盘 ----
-  const MAX_FILE = 10 * 1024 * 1024, MAX_TOTAL = 20 * 1024 * 1024, MAX_COUNT = 10; // 与服务端 uploads.js 同
-  btnAttach.onclick = () => fileInput.click();
-  // 共用入口：file input 与 paste 都走这里（上限/读盘/缩略图逻辑只维护一处）
-  async function addFilesAsAttachments(files) {
-    const list = Array.isArray(files) ? files : [...(files || [])];
-    for (const file of list) {
-      if (!file) continue;
-      if (pendingAttachments.length >= MAX_COUNT) { addBar(`附件数量已达上限（${MAX_COUNT}）`, 'text-danger'); break; }
-      if (file.size > MAX_FILE) { addBar(`「${file.name || '附件'}」超过 10MB，未添加`, 'text-danger'); continue; }
-      const total = pendingAttachments.reduce((s, a) => s + a.size, 0);
-      if (total + file.size > MAX_TOTAL) { addBar('附件总量将超过 20MB，未添加', 'text-danger'); break; }
-      try {
-        const [data, thumb] = await Promise.all([readBase64(file), makeThumb(file)]);
-        // 剪贴板图片常无名（image.png / blob）；给可读默认名，避免托盘显示空白
-        const name = (file.name && file.name.trim()) || `paste-${Date.now()}.${(file.type || '').split('/')[1] || 'png'}`;
-        pendingAttachments.push({
-          _id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          name, mimeType: file.type || 'application/octet-stream',
-          size: file.size, data, thumb: (thumb && thumb.length < 100000) ? thumb : undefined // 超 ~100KB 退化为 chip
-        });
-        renderTray();
-      } catch { addBar(`「${file.name || '附件'}」读取失败`, 'text-danger'); }
-    }
-  }
-  fileInput.onchange = async () => {
-    const files = [...fileInput.files];
-    fileInput.value = '';                 // 清空，便于重复选同一文件
-    scheduleInsetResettle();              // E17 回归：picker 返回后主动复位键盘 inset，防下半屏残留白屏
-    await addFilesAsAttachments(files);
-  };
-  // 桌面 Chrome：截图/复制图片后在输入框 Ctrl/Cmd+V → 进附件托盘（原先只有 file input，粘贴无反应）
-  inputEl.addEventListener('paste', (e) => {
-    const images = pickPasteImageFiles(e.clipboardData);
-    if (!images.length) return; // 纯文本等：不 preventDefault，保留默认粘贴
-    e.preventDefault();
-    void addFilesAsAttachments(images);
+  // ---- 输入与附件：状态、读取、预览和 DOM 绑定由独立 controller 管理 ----
+  const attachments = createAttachmentController(appContext, {
+    addBar,
+    createElement: el,
+    haptic,
+    onChange: updateSendButtonState,
+    scheduleInsetResettle: () => scheduleInsetResettle(),
   });
-  // FileReader → 纯 base64（剥掉 data:<mime>;base64, 前缀；服务端 Buffer.from(data,'base64') 解码）
-  function readBase64(file) {
-    return new Promise((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => { const s = String(r.result); const i = s.indexOf(','); resolve(i >= 0 ? s.slice(i + 1) : s); };
-      r.onerror = () => reject(r.error);
-      r.readAsDataURL(file);
-    });
-  }
-  // 图片 canvas 降采样为小 JPEG data URI（长边≤320）供气泡预览；非图片或失败返回 null
-  function makeThumb(file) {
-    return new Promise(resolve => {
-      if (!file.type.startsWith('image/')) return resolve(null);
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        let w = img.width, h = img.height; const max = 320;
-        if (w > h && w > max) { h = Math.round(h * max / w); w = max; }
-        else if (h >= w && h > max) { w = Math.round(w * max / h); h = max; }
-        const c = document.createElement('canvas'); c.width = w; c.height = h;
-        c.getContext('2d').drawImage(img, 0, 0, w, h);
-        URL.revokeObjectURL(url);
-        let out = null; try { out = c.toDataURL('image/jpeg', 0.6); } catch { /* 跨域/超限 */ }
-        resolve(out);
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-      img.src = url;
-    });
-  }
-  function renderTray() {
-    attachTray.innerHTML = '';
-    if (!pendingAttachments.length) {
-      attachTray.classList.add('hidden');
-      updateSendButtonState();
-      return;
-    }
-    for (const a of pendingAttachments) {
-      // 整颗 chip 可点预览；右侧 ✕ 单独 stopPropagation，避免误开灯箱
-      const chip = el(`<div class="relative flex items-center gap-1.5 bg-sunk rounded-lg pl-1.5 pr-6 py-1 text-xs max-w-[10rem] cursor-pointer active:scale-[0.98] transition-transform" title="点击预览"></div>`);
-      if (a.thumb) { const img = el(`<img class="w-8 h-8 rounded object-cover shrink-0">`); img.src = a.thumb; chip.appendChild(img); }
-      else chip.appendChild(el(`<span class="shrink-0">📎</span>`));
-      const nm = el(`<span class="truncate"></span>`); nm.textContent = a.name; chip.appendChild(nm);
-      const rm = el(`<button type="button" class="absolute right-1 top-1/2 -translate-y-1/2 text-ink-faint active:text-danger" title="移除">✕</button>`);
-      rm.onclick = (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        pendingAttachments = pendingAttachments.filter(x => x._id !== a._id);
-        renderTray();
-      };
-      chip.onclick = () => openAttachPreview(a);
-      chip.appendChild(rm);
-      attachTray.appendChild(chip);
-    }
-    attachTray.classList.remove('hidden');
-    updateSendButtonState();
-  }
-
-  // 发送前点托盘：图片用完整 base64 灯箱预览（比 32px thumb 清楚）；非图片仅提示文件名
-  const attachPreviewModal = $('attachPreviewModal');
-  const attachPreviewImg = $('attachPreviewImg');
-  const attachPreviewName = $('attachPreviewName');
-  const attachPreviewClose = $('attachPreviewClose');
-  function closeAttachPreview() {
-    if (!attachPreviewModal) return;
-    attachPreviewModal.classList.add('hidden');
-    if (attachPreviewImg) attachPreviewImg.removeAttribute('src');
-  }
-  function openAttachPreview(att) {
-    const url = attachmentDataUrl(att);
-    if (!url) {
-      addBar(att?.name ? `「${att.name}」不是可预览图片` : '该附件不可预览', 'text-ink-faint');
-      return;
-    }
-    if (!attachPreviewModal || !attachPreviewImg) return;
-    attachPreviewImg.src = url;
-    if (attachPreviewName) attachPreviewName.textContent = att.name || '';
-    attachPreviewModal.classList.remove('hidden');
-    haptic('tap');
-  }
-  if (attachPreviewClose) attachPreviewClose.onclick = (e) => { e.stopPropagation(); closeAttachPreview(); };
-  if (attachPreviewModal) {
-    attachPreviewModal.onclick = (e) => {
-      // 点遮罩关闭；点图片本身不关，方便看清
-      if (e.target === attachPreviewModal || e.target === attachPreviewName) closeAttachPreview();
-    };
-  }
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && attachPreviewModal && !attachPreviewModal.classList.contains('hidden')) {
-      closeAttachPreview();
-    }
-  });
-
   // ---- 斜杠命令提示 ----
   const hints = el(`<div id="cmdHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)"></div>`);
   inputEl.parentElement.style.position = 'relative';
@@ -2449,7 +2221,7 @@ import { verifyIntegrity } from './canonicalize.js';
   });
 
   function updateSendButtonState() {
-    const hasText = inputEl.value.trim().length > 0 || pendingAttachments.length > 0;
+    const hasText = inputEl.value.trim().length > 0 || attachments.items().length > 0;
     const blockedByUserRequest = !!activePerm || !!activeQuestion;
     const blockedByDisabledInput = inputEl.disabled;
     if (hasText && !_queueFull && !blockedByUserRequest && !blockedByDisabledInput) {
@@ -3008,7 +2780,7 @@ import { verifyIntegrity } from './canonicalize.js';
     // 不再在 clearView 里无脑清空——否则同会话 keep 会误清托盘）。
     const draftSnapshot = {
       text: inputEl ? inputEl.value : '',
-      attachments: pendingAttachments.slice(),
+      attachments: attachments.items(),
     };
     clearView(sid, null);
     // 未发送草稿（文字+附件）按 sessionId 存/取：同会话静默换实例(keep)不动；真实切会话(swap)存旧恢复新。
@@ -3035,8 +2807,7 @@ import { verifyIntegrity } from './canonicalize.js';
         inputEl.value = draftPlan.restoreText;
         inputEl.dispatchEvent(new Event('input'));
       }
-      pendingAttachments = draftPlan.restoreAttachments.slice();
-      renderTray();
+      attachments.setItems(draftPlan.restoreAttachments);
     }
 
     // 新会话首发懒开：实例已建、sessionId 未由 SDK init 返回。此刻回落 dashboard 会「闪首页」——
@@ -3474,113 +3245,6 @@ import { verifyIntegrity } from './canonicalize.js';
     }
   }
 
-  // ---- 子代理/Workflow 活动横幅 ----
-  // apiRetryBannerActive：activityBanner 被 api_retry 占用时为真；仅在此情况下 text_delta/tool_use
-  // 才撤横幅（重试已过去、流恢复）。Agent/Task 活动横幅不受影响。
-  let apiRetryBannerActive = false;
-  function showActivityBanner(description) {
-    if (!activityBanner || !activityBannerText) return;
-    apiRetryBannerActive = false; // Agent/Task 等正常活动覆盖重试态
-    activityBannerText.textContent = description.length > 80 ? description.slice(0, 77) + '...' : description;
-    activityBanner.classList.remove('hidden');
-  }
-  function hideActivityBanner() {
-    apiRetryBannerActive = false;
-    if (activityBanner) activityBanner.classList.add('hidden');
-  }
-  function showApiRetryBanner(text) {
-    if (!activityBanner || !activityBannerText) return;
-    apiRetryBannerActive = true;
-    activityBannerText.textContent = text.length > 80 ? text.slice(0, 77) + '...' : text;
-    activityBanner.classList.remove('hidden');
-  }
-  function clearApiRetryBanner() {
-    if (!apiRetryBannerActive) return;
-    hideActivityBanner();
-  }
-  function onApiRetry(ev) {
-    // 只对正在查看的会话刷横幅（与 task_progress 同口径）；不走 epoch 去重，避免污染 lastSeq。
-    if (ev.instanceId && ev.instanceId !== viewingInstanceId) return;
-    showApiRetryBanner(formatApiRetryBanner(ev.payload || {}));
-  }
-
-  // ---- 后台任务进度横幅（task_progress 瞬时事件驱动，原地刷新，不刷屏）----
-  function onTaskProgress(ev) {
-    // 只对正在查看的会话刷横幅：进度横幅是"当前会话在后台干嘛"的即时提示（如 workflow 阶段 "Synthesize: synthesize"）；
-    // 跨实例后台状态由会话列表 ⏳ 角标承担，不该把别的会话的后台进度串进当前视图。
-    // （仍不走 epoch 去重——避免污染 curEpoch/lastSeq；此处仅按 viewingInstanceId 过滤显示。）
-    if (ev.instanceId && ev.instanceId !== viewingInstanceId) return;
-    const msg = ev.payload?.message || '';
-    const tid = ev.payload?.taskId;
-    if (typeof tid === 'string' && tid) {
-      activeBgTaskId = tid;
-      activeBgTasks.set(tid, { message: msg, taskType: ev.payload?.taskType || null });
-    }
-    if (msg) showTaskProgress(msg);
-    renderBgTaskList();
-  }
-  function syncTaskStopBtn() {
-    if (!btnTaskStop) return;
-    // 多任务时主按钮停「最新」；列表内可逐个停
-    const ui = taskStopUiState({
-      taskId: activeBgTaskId,
-      bannerVisible: taskProgressBanner && !taskProgressBanner.classList.contains('hidden'),
-    });
-    btnTaskStop.classList.toggle('hidden', !ui.canStop);
-    btnTaskStop.disabled = !ui.canStop;
-  }
-  function showTaskProgress(text) {
-    if (!taskProgressBanner || !taskProgressText) return;
-    const n = activeBgTasks.size;
-    const head = n > 1 ? `(${n}) ` : '';
-    taskProgressText.textContent = head + (text.length > 72 ? text.slice(0, 69) + '...' : text);
-    taskProgressBanner.classList.remove('hidden');
-    syncTaskStopBtn();
-  }
-  function hideTaskProgress() {
-    if (taskProgressBanner) taskProgressBanner.classList.add('hidden');
-    activeBgTaskId = null;
-    activeBgTasks.clear();
-    const list = $('taskProgressList');
-    if (list) { list.replaceChildren(); list.classList.add('hidden'); }
-    syncTaskStopBtn();
-  }
-  function renderBgTaskList() {
-    let list = $('taskProgressList');
-    if (!list && taskProgressBanner) {
-      list = el(`<div id="taskProgressList" class="mt-1 space-y-0.5 hidden" data-testid="bg-task-list"></div>`);
-      taskProgressBanner.appendChild(list);
-    }
-    if (!list) return;
-    list.replaceChildren();
-    if (activeBgTasks.size <= 1) { list.classList.add('hidden'); return; }
-    list.classList.remove('hidden');
-    for (const [taskId, t] of activeBgTasks) {
-      const row = el(`<div class="flex items-center gap-2 text-[11px]"></div>`);
-      const lab = el(`<span class="truncate flex-1 min-w-0 text-ink-soft"></span>`);
-      lab.textContent = (t.message || taskId).slice(0, 60);
-      const stop = el(`<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>`);
-      stop.onclick = () => {
-        haptic('tap');
-        socket.emit('task:stop', { instanceId: viewingInstanceId, taskId });
-        addBar(`已请求停止后台任务 ${taskId.slice(0, 8)}…`, 'text-ink-faint');
-      };
-      row.appendChild(lab);
-      row.appendChild(stop);
-      list.appendChild(row);
-    }
-  }
-  btnTaskStop?.addEventListener('click', () => {
-    const ui = taskStopUiState({
-      taskId: activeBgTaskId,
-      bannerVisible: taskProgressBanner && !taskProgressBanner.classList.contains('hidden'),
-    });
-    if (!ui.canStop) return;
-    haptic('tap');
-    socket.emit('task:stop', { instanceId: viewingInstanceId, taskId: ui.taskId });
-    addBar('已请求停止后台任务…', 'text-ink-faint');
-  });
-
   // ---- 抽屉式侧边栏控制器 (Left Drawer Sidebar Controllers) ----
   function openLeftSidebar() {
     if (window.innerWidth >= 1024) return; // No-op on desktop
@@ -3645,7 +3309,7 @@ import { verifyIntegrity } from './canonicalize.js';
     }, 300);
   }
 
-  // ---- 两级删除会话（FR-20，LLD §4）----
+  // ---- 两级删除会话（FR-20，docs/design.md）----
   // L1=从产品移除（session:delete，transcript 保留）；L2=彻底删底层文件（session:deletePermanent，二次确认）。
   // 只对「未打开的历史会话」提供入口（见 sessionRow）——已打开的会话先关闭 tab 再删，避免删一个正被本产品
   // 驱动的会话（后端 L2 保护①也会拒，但前端不给入口更清晰）。此块只执行一次（IIFE 顶层），非每次渲染。
@@ -3668,7 +3332,7 @@ import { verifyIntegrity } from './canonicalize.js';
   if (deleteL2Btn) deleteL2Btn.onclick = () => {
     if (!deleteTarget) return;
     const t = deleteTarget;
-    // L2 显式二次确认（LLD §4"显式二次确认删底层 transcript 文件"）——不可恢复，故在 L1 一级弹窗之上再加一道。
+    // L2 显式二次确认（docs/design.md"显式二次确认删底层 transcript 文件"）——不可恢复，故在 L1 一级弹窗之上再加一道。
     if (!confirm(`彻底删除会话「${t.title || t.sessionId}」的底层文件？\n\n此操作不可恢复：主机上的会话记录将被真正抹除。`)) return;
     deleteTarget = null;
     closeSheet(deleteSessionModal);
@@ -3678,222 +3342,18 @@ import { verifyIntegrity } from './canonicalize.js';
     });
   };
 
-  // ---- 项目文件只读浏览（FR-07，LLD §3.4.2 FileBrowseHandler）----
-  // 请求-响应型（browse:list/browse:read 走 ack 回调，不进事件流）；范围裁决在服务端 WorkdirScopeGuard，
-  // 前端不做任何"越界预判"——只管把服务端 ok:false 的错误展示出来。
-  const BROWSE_ICON = { dir: '📁', file: '📄', symlink: '🔗' };
-  function browseRelPath() {
-    return browseSegments.join('/') || '.';
-  }
-  function fmtFileSize(bytes) {
-    if (!Number.isFinite(bytes)) return '';
-    if (bytes < 1024) return `${bytes}B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-    return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
-  }
-  function openFileBrowser(cwd) {
-    browseCwd = cwd;
-    browseSegments = [];
-    browseMode = 'list';
-    browseFileName = null;
-    openSheet(fileBrowseModal);
-    loadBrowseList();
-  }
-  function renderBrowseHeader() {
-    const isRootList = browseMode === 'list' && browseSegments.length === 0;
-    if (fileBrowseBack) fileBrowseBack.classList.toggle('hidden', isRootList);
-    if (!fileBrowsePath) return;
-    const parts = [baseName(browseCwd || '')].concat(browseSegments);
-    if (browseMode === 'content' && browseFileName) parts.push(browseFileName);
-    fileBrowsePath.textContent = parts.join(' / ');
-  }
-  function showBrowseMessage(text, cls) {
-    if (!fileBrowseBody) return;
-    fileBrowseBody.innerHTML = '';
-    const msg = document.createElement('div');
-    msg.className = `p-4 text-xs ${cls || 'text-ink-faint'}`;
-    msg.textContent = text;
-    fileBrowseBody.appendChild(msg);
-  }
-  function loadBrowseList() {
-    browseMode = 'list';
-    browseListEntries = [];
-    browseListOffset = 0;
-    browseListTruncated = false;
-    browseListTotal = 0;
-    renderBrowseHeader();
-    showBrowseMessage('加载中…');
-    fetchListPage(browseRelPath(), 0);
-  }
-  function fetchListPage(requestedPath, offset) {
-    socket.emit('browse:list', { cwd: browseCwd, relPath: requestedPath, offset }, res => {
-      if (browseMode !== 'list' || browseRelPath() !== requestedPath) return; // 过期回调（用户已切走/切层级）丢弃
-      if (!res?.ok) { showBrowseMessage('无法加载：' + (res?.error || '未知错误'), 'text-danger'); return; }
-      browseListEntries = browseListEntries.concat(res.entries);
-      browseListOffset = offset + res.entries.length;
-      browseListTruncated = res.truncated;
-      browseListTotal = res.totalCount;
-      renderBrowseListBody();
-    });
-  }
-  // 读的都是当前缓存态（browseListEntries/Truncated/Total），不接参数——"从文件内容返回列表"时需要
-  // 原样重渲上次加载的结果，若靠参数传值容易在调用点各写各的、产生不一致（曾在此踩过一次这类 bug）。
-  function renderBrowseListBody() {
-    if (!fileBrowseBody) return;
-    fileBrowseBody.innerHTML = '';
-    if (!browseListEntries.length) { showBrowseMessage('（空目录）'); return; }
-    for (const entry of browseListEntries) {
-      const row = el(`<button class="w-full flex items-center gap-2 px-4 py-2.5 border-b border-line-soft text-left hover:bg-sunk/30 active:opacity-70" data-testid="browse-entry"></button>`);
-      const icon = el(`<span class="shrink-0 w-5 text-center"></span>`);
-      icon.textContent = BROWSE_ICON[entry.kind] || '❔';
-      row.appendChild(icon);
-      const name = el(`<span class="flex-1 min-w-0 truncate text-xs text-ink"></span>`);
-      name.textContent = entry.name;
-      row.appendChild(name);
-      if (entry.kind === 'file') {
-        const size = el(`<span class="shrink-0 text-[10px] text-ink-faint"></span>`);
-        size.textContent = fmtFileSize(entry.size);
-        row.appendChild(size);
-      }
-      row.onclick = () => { haptic('tap'); openBrowseEntry(entry); };
-      fileBrowseBody.appendChild(row);
-    }
-    if (browseListTruncated) {
-      const more = el(`<button class="w-full p-3 text-center text-[11px] text-accent hover:bg-sunk/30 active:opacity-70"></button>`);
-      more.textContent = `加载更多（已显示 ${browseListEntries.length}/${browseListTotal}）`;
-      more.onclick = () => { haptic('tap'); fetchListPage(browseRelPath(), browseListOffset); };
-      fileBrowseBody.appendChild(more);
-    }
-  }
-  function openBrowseEntry(entry) {
-    if (entry.kind === 'dir') {
-      browseSegments.push(entry.name);
-      loadBrowseList();
-    } else if (entry.kind === 'file') {
-      loadBrowseContent(entry.name);
-    } else {
-      // symlink：目标类型未知——list 优先尝试，失败（ok:false，通常因指向范围外或不是目录）退化到当文件读。
-      const requestedPath = browseSegments.concat(entry.name).join('/');
-      socket.emit('browse:list', { cwd: browseCwd, relPath: requestedPath }, res => {
-        if (browseMode !== 'list' || browseRelPath() !== browseSegments.join('/')) return;
-        if (res?.ok) {
-          browseSegments.push(entry.name);
-          browseListEntries = res.entries;
-          browseListOffset = res.entries.length;
-          browseListTruncated = res.truncated;
-          browseListTotal = res.totalCount;
-          renderBrowseHeader();
-          renderBrowseListBody();
-        } else {
-          loadBrowseContent(entry.name);
-        }
-      });
-    }
-  }
-  function loadBrowseContent(name) {
-    browseMode = 'content';
-    browseFileName = name;
-    browseContentText = '';
-    browseContentOffset = 0;
-    renderBrowseHeader();
-    showBrowseMessage('加载中…');
-    fetchContentPage(browseSegments.concat(name).join('/'), 0);
-  }
-  function fetchContentPage(requestedPath, offset) {
-    socket.emit('browse:read', { cwd: browseCwd, relPath: requestedPath, offset }, res => {
-      const currentPath = browseSegments.concat(browseFileName || '').join('/');
-      if (browseMode !== 'content' || currentPath !== requestedPath) return; // 过期回调丢弃
-      if (!res?.ok) { showBrowseMessage('无法加载：' + (res?.error || '未知错误'), 'text-danger'); return; }
-      if (res.binary) { showBrowseMessage(`二进制文件（${fmtFileSize(res.totalSize)}），不支持预览`); return; }
-      browseContentText += res.content;
-      // 用服务端 bytesRead（字节数）累加，不能用 res.content.length（JS 字符串长度=字符数，多字节
-      // UTF-8 字符下与字节数不等，用它算下一片 offset 会错位——见 file-browse.js trimIncompleteUtf8Tail 头注）。
-      browseContentOffset = offset + (res.bytesRead ?? res.content.length);
-      renderBrowseContentBody(res.truncated, res.totalSize);
-    });
-  }
-  function renderBrowseContentBody(truncated, totalSize) {
-    if (!fileBrowseBody) return;
-    fileBrowseBody.innerHTML = '';
-    const pre = document.createElement('pre');
-    pre.className = 'p-4 text-[11px] leading-relaxed font-mono text-ink whitespace-pre-wrap break-words';
-    pre.textContent = browseContentText;
-    fileBrowseBody.appendChild(pre);
-    if (truncated) {
-      const more = el(`<button class="w-full p-3 text-center text-[11px] text-accent hover:bg-sunk/30 active:opacity-70 border-t border-line-soft"></button>`);
-      more.textContent = `加载更多（已显示 ${fmtFileSize(browseContentOffset)}/${fmtFileSize(totalSize)}）`;
-      more.onclick = () => { haptic('tap'); fetchContentPage(browseSegments.concat(browseFileName).join('/'), browseContentOffset); };
-      fileBrowseBody.appendChild(more);
-    }
-  }
-  if (fileBrowseBack) {
-    fileBrowseBack.onclick = () => {
-      haptic('tap');
-      if (browseMode === 'content') {
-        // 同层级返回：browseListEntries/Truncated/Total 仍是上次加载该目录时的缓存，直接复用重渲，
-        // 不必重新请求（内容不太可能在浏览会话期间变化，即便变了下次进入该目录也会重新拉取）。
-        browseFileName = null;
-        browseMode = 'list';
-        renderBrowseHeader();
-        renderBrowseListBody();
-      } else if (browseSegments.length > 0) {
-        browseSegments.pop();
-        loadBrowseList();
-      }
-    };
-  }
-  if (fileBrowseClose) fileBrowseClose.onclick = () => closeSheet(fileBrowseModal);
-  if (fileBrowseModal) {
-    fileBrowseModal.onclick = (e) => { if (e.target === fileBrowseModal) closeSheet(fileBrowseModal); };
-  }
-
-  // ---- 触觉配置面板抽屉控制器 (Settings Sheet Controllers) ----
-  function openSettingsSheet() {
-    haptic('tap');
-    ensureAlertAudio(); // 打开设置即算用户手势：解锁 WebAudio，后续完成提示音才出得来
-    // 把 localStorage 偏好同步到开关 UI（默认开 = checked）
-    const soundEl = $('prefAlertSound'), vibEl = $('prefAlertVibrate'), fgEl = $('prefAlertFgComplete');
-    if (soundEl) soundEl.checked = !!alertPrefs.sound;
-    if (vibEl) vibEl.checked = !!alertPrefs.vibrate;
-    if (fgEl) fgEl.checked = !!alertPrefs.foregroundComplete;
-    if (settingsSheet) settingsSheet.classList.remove('translate-y-full');
-    if (settingsScrim) settingsScrim.classList.remove('hidden');
-  }
-  function closeSettingsSheet() {
-    haptic('tap');
-    if (settingsSheet) settingsSheet.classList.add('translate-y-full');
-    if (settingsScrim) settingsScrim.classList.add('hidden');
-  }
-
-  if (btnSettings) btnSettings.onclick = openSettingsSheet;
-  if (settingsClose) settingsClose.onclick = closeSettingsSheet;
-  if (settingsScrim) settingsScrim.onclick = closeSettingsSheet;
-
-  // 完成提示三开关：默认开，点关写 '0'；试听按钮顺带解锁音频
-  const bindAlertToggle = (id, key) => {
-    const el = $(id);
-    if (!el) return;
-    el.onchange = () => {
-      writeAlertPref((k, v) => localStorage.setItem(k, v), key, el.checked);
-      alertPrefs = readAlertPrefs((k) => localStorage.getItem(k));
-      if (key === 'sound' && el.checked) { ensureAlertAudio(); playAlertTone('success'); }
-      if (key === 'vibrate' && el.checked) haptic('success');
-    };
-  };
-  bindAlertToggle('prefAlertSound', 'sound');
-  bindAlertToggle('prefAlertVibrate', 'vibrate');
-  bindAlertToggle('prefAlertFgComplete', 'foregroundComplete');
-  const btnAlertPreview = $('btnAlertPreview');
-  if (btnAlertPreview) {
-    btnAlertPreview.onclick = () => {
-      ensureAlertAudio();
-      // 预览不受开关限制：临时打开音/震各打一次，让用户听见/感到效果
-      const prev = { ...alertPrefs };
-      alertPrefs = { ...alertPrefs, sound: true, vibrate: true };
-      alertCue('success');
-      alertPrefs = prev;
-    };
-  }
+  // ---- 项目文件只读浏览：传输回调、分页状态和 DOM 渲染由独立 controller 管理 ----
+  const fileBrowser = createFileBrowser(appContext, {
+    baseName,
+    closeSheet,
+    createElement: el,
+    haptic,
+    openSheet,
+  });
+  const openFileBrowser = fileBrowser.open;
+  // ---- 设置：抽屉、完成提示偏好和预览由独立 controller 管理 ----
+  const settings = createSettingsController(appContext, { alerts, haptic });
+  const openSettingsSheet = settings.open;
   if (pillModel) pillModel.onclick = openSettingsSheet; // 点底栏模型 chip → 开「选择模型」格
   // 顶部 pill 原先只是 btnSessions 的重复代理（两者都调 toggleSessions，纯冗余入口）。
   // 现改为直接打开当前工作区的只读文件浏览——抽屉只负责会话切换/新建，文件浏览入口唯一在此。
@@ -4662,8 +4122,8 @@ import { verifyIntegrity } from './canonicalize.js';
       // 文本气泡（默认路径）
       const isUser = msg.role === 'user';
       const bubble = isUser
-        ? el(`<div class="msg-frame bg-user text-ink um rounded-xl px-3 py-2 text-sm msg-body"></div>`)
-        : el(`<div class="msg-frame px-0.5 msg-body"></div>`);
+        ? el(`<div class="msg-frame bg-user text-ink um rounded-xl px-3 py-2 text-sm msg-body" data-testid="user-message"></div>`)
+        : el(`<div class="msg-frame px-0.5 msg-body" data-testid="assistant-message"></div>`);
       if (msg.parentToolUseId || msg.isSidechain) {
         // 子 agent 正文：纯文本进卡，避免历史 markdown 二次污染嵌套
         bubble.textContent = msg.content || '';
@@ -4792,7 +4252,7 @@ import { verifyIntegrity } from './canonicalize.js';
     //   是单例全局（一次只跟踪一个会话的锁）。readonly=false 这里【无条件解锁】——两台设备同时看不同会话时，
     //   给会话 B 的解锁会误解锁正看着会话 A 的另一端。属"单活跃查看者"架构限制，仅多设备-不同会话场景触发；
     //   彻底修需把 viewing/catchup/mirror 全改 per-socket + 定向 emit（大改），单用户工具不值，故保留。
-    //   （承接 HLD AD-5；2026-07-12 机主确认 Phase 8 不做此 per-socket 大改、保留现状，见 server.js setMirror 登记。）
+    //   （承接 docs/design.md；2026-07-12 机主确认 Phase 8 不做此 per-socket 大改、保留现状，见 server.js setMirror 登记。）
     const readonly = !!ev.payload?.readonly;
     const stale = !!ev.payload?.stale;
     if (readonly && ev.instanceId !== viewingInstanceId) return;
@@ -5086,26 +4546,6 @@ import { verifyIntegrity } from './canonicalize.js';
     wrap.after(btn);
   }
 
-  function setStatus(text) { statusEl.textContent = text; }
-  function leaveStartScreen() {
-    if (!messagesEl.classList.contains('empty-start')) return;
-    messagesEl.classList.remove('empty-start');
-    messagesEl.innerHTML = '';
-  }
-  function appendMessage(node) {
-    leaveStartScreen();
-    return messagesEl.appendChild(node);
-  }
-  function addBar(text, cls) {
-    appendMessage(el(`<div class="msg-frame text-center text-xs ${cls}"></div>`)).textContent = text;
-    scrollBottom();
-  }
-  function el(html) {
-    const t = document.createElement('template');
-    t.innerHTML = html.trim();
-    return t.content.firstChild;
-  }
-
   function showLoadingCard() {
     if ($('historyLoadingCard')) return;
     const card = el(`
@@ -5125,159 +4565,6 @@ import { verifyIntegrity } from './canonicalize.js';
     $('historyLoadingCard')?.remove();
   }
   // esc / ansiToHtml 已抽到 logic.js（顶部 import）。
-
-  function notify(title, body, { force = false } = {}) {
-    // force=true：前台也弹（设置「前台也弹系统通知」）；默认仍只在页面隐藏时弹，避免盯着屏幕时轰炸
-    if ((!force && !document.hidden) || !('Notification' in window) || Notification.permission !== 'granted') return;
-    try { new Notification(title, { body, icon: '/icons/icon-192.png', tag: 'ccm' }); } catch { /* iOS 非 PWA 等场景静默 */ }
-  }
-
-  // 后台任务（Workflow/后台 Agent/后台 Bash）完成通知——修「web 端运行 workflow 后无任何提示」。
-  // 跨实例带外处理（在 agent:event 分发顶部拦截、绕过 shouldDropAgentEvent，见那里注释）：
-  //   · notify() 无条件触发——OS 通知在你熄屏/切别的 app/看别的会话时都有效（notify 内部按 document.hidden 自门控）；
-  //   · addBar + haptic 仅当通知来自【当前查看实例】——否则会把 B 会话的完成条串进你正在看的 A 会话视图。
-  //     后台可见（web 开着但在看别的会话）场景由 instances 广播驱动的 sessionsDot / tab 角标覆盖。
-  // source=system：任务本身完成；source=user_injection：模型开始自动汇报。两者都可能到达，OS tag 'ccm' 合并同题通知。
-  function onTaskNotification(ev) {
-    const p = ev.payload || {};
-    const failed = p.status === 'failed' || p.status === 'error';
-    notify(failed ? '🔔 后台任务失败' : '🔔 后台任务完成', (p.summary || 'Claude 即将汇报结果').slice(0, 80), { force: alertPrefs.foregroundComplete });
-    if (ev.instanceId === viewingInstanceId) { // 仅当前查看会话进消息流 + 触觉/音
-      // 多任务：只摘掉对应 taskId；无 id 或已空 → 整清横幅
-      const tid = p.taskId;
-      if (typeof tid === 'string' && tid && activeBgTasks.has(tid)) {
-        activeBgTasks.delete(tid);
-        if (activeBgTaskId === tid) activeBgTaskId = activeBgTasks.size ? [...activeBgTasks.keys()].pop() : null;
-        if (activeBgTasks.size === 0) hideTaskProgress();
-        else {
-          const latest = activeBgTasks.get(activeBgTaskId);
-          if (latest?.message) showTaskProgress(latest.message);
-          renderBgTaskList();
-        }
-      } else {
-        hideTaskProgress(); // WS-004：移进实例判断内——否则后台实例 B 的完成通知会闪掉当前 A 的进度横幅（跨实例误撤）
-      }
-      alertCue(failed ? 'warning' : 'success');
-      if (p.source === 'user_injection') {
-        addBar('🔔 后台任务完成，Claude 正在汇报结果…', 'text-info');
-      } else {
-        const tail = p.summary ? '：' + p.summary : '';
-        addBar(`🔔 后台任务${failed ? '失败' : '完成'}${tail}`, failed ? 'text-danger' : 'text-info');
-      }
-    }
-  }
-
-  // E15：Web Push 订阅（urlBase64ToUint8Array 复用 logic.js 导出，见顶部 import）
-  async function doSubscribe() {
-    // 实际执行订阅（需在有权限后调用）。WS-003：返回明确成败布尔——旧实现非 2xx 与异常都吞、返 undefined，
-    // 调用处无法区分成败，无条件 alert「成功订阅」。现成功 true / 失败 false，调用处据此显真实结果。
-    try {
-      const reg = await navigator.serviceWorker.register('/js/sw.js');
-      await navigator.serviceWorker.ready;
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(pushVapidKey),
-        });
-      }
-      const authQ = token ? `?token=${encodeURIComponent(token)}` : '';
-      const r = await fetch(`/push/subscribe${authQ}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sub),
-      });
-      if (!r.ok) { console.warn('[push] 订阅未保存(HTTP', r.status + ')'); return false; } // Access 过期/未配置不静默成功
-      btnPush?.classList.add('hidden'); // 订阅成功，隐藏入口
-      return true;
-    } catch (e) {
-      console.warn('[push] 订阅失败:', e.message);
-      return false;
-    }
-  }
-
-  // 收集当前 Web Push 环境（供 logic.js pushEnvHint 判定）。iPadOS 13+ 的 UA 伪装成 Mac，用 maxTouchPoints 补判。
-  function pushEnv() {
-    const ua = navigator.userAgent || '';
-    const isIOS = /iP(hone|ad|od)/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
-    const isStandalone = navigator.standalone === true
-      || window.matchMedia?.('(display-mode: standalone)').matches === true;
-    return {
-      isSecureContext: window.isSecureContext,
-      isIOS,
-      isStandalone,
-      hasPushManager: 'serviceWorker' in navigator && 'PushManager' in window,
-    };
-  }
-
-  async function setupPush() {
-    // connect 时调用。先确认服务端配了 push（拿得到 vapid key）——没配则静默缺席（亮按钮也没用）。
-    if (!pushVapidKey) {
-      try {
-        const authQ = token ? `?token=${encodeURIComponent(token)}` : '';
-        const r = await fetch(`/push/vapid-public-key${authQ}`);
-        if (!r.ok) return; // push 未配置，优雅缺席
-        pushVapidKey = (await r.json()).key;
-      } catch { return; }
-    }
-    // 服务端已开 push。环境未就绪（局域网 http / iOS 未加主屏）不再【静默 return】——那正是「通知没触发过」的根因；
-    // 改为仍亮出 🔔，点击时按 pushEnvHint 给出具体引导（need-https / ios-add-home / unsupported）。
-    const hint = pushEnvHint(pushEnv());
-    if (hint !== 'ready') {
-      btnPush?.classList.remove('hidden');
-      return;
-    }
-    if (Notification.permission === 'granted') {
-      doSubscribe(); // 已授权：静默续订（重连幂等）
-    } else if (Notification.permission !== 'denied') {
-      btnPush?.classList.remove('hidden'); // 未决：亮出按钮，等用户手势
-    }
-  }
-
-  if (btnPush) {
-    btnPush.onclick = async () => {
-      const hint = pushEnvHint(pushEnv());
-      if (hint === 'need-https') {
-        const m = '⚠️ 推送需 HTTPS：局域网 http 下浏览器会拦截通知订阅。请用 https 隧道（cloudflared 等）访问本站。';
-        alert(m); addBar(m, 'text-warning'); return;
-      }
-      if (hint === 'ios-add-home') {
-        const m = '📲 iOS 收推送需先「添加到主屏幕」：点底部分享按钮 → 添加到主屏幕，再从主屏图标打开本站开启通知。';
-        alert(m); addBar(m, 'text-info'); return;
-      }
-      if (hint === 'unsupported') {
-        const m = '🚫 当前浏览器不支持 Web Push（iOS 需 16.4+ 且已加主屏）。';
-        alert(m); addBar(m, 'text-warning'); return;
-      }
-      if (!pushVapidKey) {
-        alert('⚠️ 订阅失败：服务端未启用或配置 Web Push 密钥，或当前未加载成功密钥。请检查 VAPID 环境变量并重启服务。');
-        addBar('⚠️ 订阅失败：服务端未启用/配置 Web Push 密钥，或当前未加载成功密钥。请检查 VAPID 环境变量并重启服务。', 'text-danger');
-        return;
-      }
-      try {
-        if (typeof Notification === 'undefined') {
-          throw new Error('当前浏览器/环境不支持 Notification API');
-        }
-        const perm = await Notification.requestPermission(); // 用户手势触发，Chrome 可弹权限框
-        if (perm === 'granted') {
-          // WS-003：按 doSubscribe 真实成败提示，不再无条件报「成功订阅」（服务端 4xx/5xx、PushManager 异常时假成功）。
-          const ok = await doSubscribe();
-          if (ok) {
-            alert('🔔 成功订阅推送通知！当 Claude 完成后台任务或需要审批权限时，您将在手机或桌面端收到系统推送消息。');
-            addBar('🔔 成功订阅推送通知！', 'text-success');
-          } else {
-            alert('⚠️ 订阅未成功：可能是网络问题、服务端未启用 Web Push，或推送环境不就绪。请稍后重试。');
-            addBar('⚠️ 订阅未成功，请稍后重试', 'text-warning');
-          }
-        } else {
-          alert('🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许。');
-          addBar('🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许', 'text-warning');
-          btnPush.classList.add('hidden'); // 已拒绝，不再显示
-        }
-      } catch (err) {
-        alert(`❌ 订阅出错: ${err.message}`);
-        addBar(`❌ 订阅出错: ${err.message}`, 'text-danger');
-      }
-    };
-  }
 
   if (btnConsole) {
     btnConsole.onclick = () => {
@@ -5319,7 +4606,7 @@ import { verifyIntegrity } from './canonicalize.js';
       // 仍渲染它们，否则首页打开日志抽屉一片空白、断连/重连痕迹全丢（logEntryVisibleForInstance 对 client_conn 恒 true）。
       if (consoleLogArea) {
         consoleLogArea.innerHTML = '';
-        clientLogBuffer.filter(e => logEntryVisibleForInstance(e, null)).forEach(log => appendLogEntry(log));
+        clientLogger.entries().filter(e => logEntryVisibleForInstance(e, null)).forEach(log => appendLogEntry(log));
       }
       return;
     }
@@ -5335,7 +4622,7 @@ import { verifyIntegrity } from './canonicalize.js';
       }
       // 只合并属于本实例(或连接级恒显)的 client 日志——修切工作区残留上个区日志（clientLogBuffer 全局无隔离）。
       // 服务端日志(res.logs)已按 sessionId 隔离、无 instanceId 字段，不经此过滤。
-      mergedLogs = mergedLogs.concat(clientLogBuffer.filter(e => logEntryVisibleForInstance(e, instId)));
+      mergedLogs = mergedLogs.concat(clientLogger.entries().filter(e => logEntryVisibleForInstance(e, instId)));
       mergedLogs.sort((a, b) => a.ts - b.ts);
       if (mergedLogs.length > 200) {
         mergedLogs = mergedLogs.slice(mergedLogs.length - 200);

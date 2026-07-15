@@ -1,0 +1,531 @@
+# 测试与验收
+
+本文件是项目唯一的测试说明，合并了原人工测试计划与历史规格目录中仍有效的内容。自动化默认必须零 Claude token、使用临时端口和隔离数据；真实 Claude、生产域名、Cloudflare Access、推送与真机行为只能显式运行。
+
+## 测试分层
+
+| 目录 | 作用 | 默认命令 | 外部影响 |
+| --- | --- | --- | --- |
+| `tests/unit/` | 纯逻辑、静态契约与模块行为 | `npm run test:unit` | 零 token；状态文件由 preload 重定向到临时目录 |
+| `tests/integration/` | 真 HTTP/Socket/server 入口集成 | `npm run test:integration` | 默认零 token；需要 Claude turn 的用例跳过 |
+| `tests/e2e/p0/` | Playwright 移动端 UI 回归 | `npm run test:e2e` | 零 token；只连接 `tests/e2e/mock/server.js` |
+| `tests/smoke/` | 真实 Claude CLI 场景 | `node tests/smoke/runner.js --list` | 显式 opt-in；可能消耗 token |
+| `tests/helpers/`、`tests/setup/` | 公共测试基础设施 | 不单独运行 | 不含业务用例 |
+
+常用完整闸门：
+
+```bash
+npm run check
+npm test
+npm run contract:check
+npm run test:e2e
+```
+
+`npm run test:visual` 暂作为 `test:e2e` 的兼容别名；项目不再维护第二套 Puppeteer runner。Playwright 的测试清单以 `npx playwright test --list` 为准。E2E 每个用例通过 `POST /__reset` 获得干净 Mock 状态；该端点只存在于测试 Mock，生产服务没有。
+
+### 安全边界
+
+- 默认命令不得设置 `RUN_CLAUDE_INTEGRATION=1`，不得启动生产端口 3000，也不得读写真实 `data/`。
+- 真实 server 集成使用随机/临时端口与 `CCM_DATA_DIR`；测试结束必须清理子进程和临时目录。
+- 真实 Claude 场景只有获得明确授权后才运行；先用 `--list` 检查场景，再用 `--scenario <name>` 精确选择。
+- Playwright 用例只断言用户可见行为，并在结束前调用 `expectNoBrowserErrors(page)`。
+
+## 历史脚本覆盖归并
+
+以下零散入口已归并到正式测试层，不再单独保留。这里记录删除依据，防止后续误以为脚本被无覆盖移除。
+
+| 已移除入口 | 现有覆盖 |
+| --- | --- |
+| `smoke-apierror.js` | `tests/unit/agent.test.mjs` 的 API 错误与可恢复性事件 |
+| `smoke-concurrent.js`、`smoke-multirepo.js` | server/instance/session 单元与集成测试；真实并发统一为 smoke `concurrency` 场景 |
+| `smoke-effort.js`、`smoke-permmode.js` | agent、socket 与设置单元测试；真实行为统一为 smoke `permission-modes`、`plan-mode` 场景 |
+| `smoke-isolation.js`、`manual-test-entrypoint.js` | history/session 隔离单元测试；CLI 可见性统一为 smoke `entrypoint` 场景 |
+| `smoke-m2.js` | auth、approval、rate-limit 单元与集成测试 |
+| `test-p1.js` | AskUserQuestion 单元、集成、Playwright P0-08 系列与 smoke `question` 场景 |
+| `test-slash.js` | smoke `slash-command` 场景 |
+
+真实 Claude 场景统一使用：
+
+```bash
+npm run test:smoke -- --list
+npm run test:smoke -- --scenario question
+npm run test:smoke -- --all
+```
+
+runner 会为每个场景创建随机端口、临时 `WORK_DIR` 与临时 `CCM_DATA_DIR`；除 `--list` 外都会调用真实 Claude CLI，必须获得明确授权后执行。
+
+## 旧 Puppeteer TC1–TC24 覆盖迁移
+
+下表是删除旧 `scripts/visual-e2e-runner.js` 的覆盖凭据。一个旧 TC 同时包含多个行为时，映射到多个 Playwright 用例；不存在以删除 runner 代替迁移的空项。
+
+| 旧用例 | Playwright 覆盖 |
+| --- | --- |
+| TC-1 流式文本、Markdown、thinking、结果栏 | `stream-markdown-thinking-result.spec.ts`：P0-03～03d；`statusline.spec.ts`：P0-10 |
+| TC-2 工具卡折叠、状态、全文展开 | `tool-cards.spec.ts`：P0-05、05b、05d（含 `tool:full`） |
+| TC-3 权限允许 | `permission-allow-deny.spec.ts`：P0-06 |
+| TC-4 权限拒绝 | `permission-allow-deny.spec.ts`：P0-06、06e |
+| TC-5 AskUserQuestion 选择 | `ask-user-question.spec.ts`：P0-08～08f |
+| TC-5b AskUserQuestion 跳过 | `ask-user-question.spec.ts`：P0-08g |
+| TC-6 statusline 投影 | `statusline.spec.ts`：P0-10、10c、10d |
+| TC-7 设置、模型后缀、并发切换、历史回放 | `settings-model-permission-effort.spec.ts`：P0-09～09g；`workspace-sessions-sidebar.spec.ts`：P0-11、11p |
+| TC-7b 跨 tab 清审批 | `cross-tab-pending-cleanup.spec.ts`：P0-13、13b |
+| TC-8 TOFU 设备信任 | `device-tofu-requests-help.spec.ts`：P0-15～15f |
+| TC-9 冷启动与空状态 | `cold-start-hydration.spec.ts`：P0-01；`empty-restore-responsive.spec.ts`：P0-19 |
+| TC-10 会话侧栏 | `workspace-sessions-sidebar.spec.ts`：P0-11 系列 |
+| TC-11 输入、附件、停止长流 | `input-send-empty.spec.ts`：P0-02 系列；`attachments-ui.spec.ts`：P0-18 系列；`long-stream-interrupt.spec.ts`：P0-04 系列 |
+| TC-12 全权限档、effort 与模型设置 | `settings-model-permission-effort.spec.ts`：P0-09 系列 |
+| TC-13 Console、设备请求、访问帮助 | `console-log-modal.spec.ts`：P0-16 系列；`device-tofu-requests-help.spec.ts`：P0-15 系列 |
+| TC-14 新会话首发 busy 连续性 | `new-session-first-send.spec.ts`：P0-12 |
+| TC-15 ExitPlanMode | `exit-plan-mode.spec.ts`：P0-07 |
+| TC-16 后台任务进度 | `task-progress.spec.ts`：P0-17、17b、17e |
+| TC-17 pending 快照对账 | `pending-snapshot-reconcile.spec.ts`：P0-14～14e |
+| TC-18 “需要你”聚合与深链 | `workspace-sessions-sidebar.spec.ts`：P0-11s |
+| TC-19 长模型名单行截断 | `settings-model-permission-effort.spec.ts`：P0-09h |
+| TC-20 镜像驾驶/stale/解锁与设置冻结 | `task-progress.spec.ts`：P0-17c、17f、17i |
+| TC-21 排队接管、取消、自动放行 | `task-progress.spec.ts`：P0-17h |
+| TC-22 文件浏览入口 | `file-browser.spec.ts`：P0-21 |
+| TC-23 触屏 Enter 换行 | `input-send-empty.spec.ts`：P0-02b |
+| TC-24 子代理折叠卡 | `tool-cards.spec.ts`：P0-05e |
+
+## 生产实例全量人工回归
+
+以下清单会碰真实会话、消耗真实 token、触发真实设备/推送/审批。必须先完成 Suite 0；未获明确授权时不要执行。
+
+本清单挂靠 `docs/design.md` 的终端等价性剧本与验收锚点。自动化已覆盖的部分只需抽查，自动化无法覆盖的真机或公网链路再做深测。
+
+### 怎么用
+
+- 按 **Suite 0 → 11** 顺序执行；每条一个可勾选块。
+- 覆盖标签：`[纯人工]` 自动化够不到、必须深测 · `[集成/单测/视觉 已覆盖·抽查]` 有自动化守着、人工抽查即可 · `[smoke 可跑]` 有现成脚本可先跑一遍。
+- 失败就在 `[ ] 失败` 后写现象 + 复现 + 锚点编号，最后汇总到 Suite 11。
+- 占位符：`<your-domain>` 你的公网域名 · `<label>` 常驻 server 的 launchd/systemd 标签 · `<ID>` 设备 ID · `/Users/you/...` 你的路径。
+
+---
+
+## Suite 0 — 前置与生产防护栏（强制）
+
+### MT-0.1 确认生产 server 代码版本 · P0 · [纯人工·决策点]
+- 操作：确认公网上跑的常驻 server 是哪个 commit（对 `git rev-parse HEAD` 与生产日志/health 版本）。
+- 决策：若要验收最近未发布的功能，须先重启到当前代码 `launchctl kickstart -k gui/$(id -u)/<label>`（Linux：`systemctl --user restart <label>`）。否则你测的是旧代码。
+- 预期：明确记录"本次回归针对的是 commit ___"。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-0.2 备份会话指针 · P0 · [纯人工]
+- 操作：`cp data/sessions.json data/sessions.json.bak`。
+- 预期：备份文件存在；后续测试即使污染 `sessions.json` 也能还原。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-0.3 启动前自检全绿 · P0 · [smoke 可跑]
+- 操作：`node scripts/doctor.js`（如用独立 env：`--env=<path>`）。
+- 预期：11 项自检全通过；无红项。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-0.4 记录基线（health + metrics + token 用量）· P1 · [集成已覆盖·抽查]
+- 操作：带鉴权访问 `GET /health` 与 `GET /metrics`（`?token=` 或 `x-auth-token` 头 / 已过 CF Access）。记录起始的 metrics 计数与账号 token 用量。
+- 预期：`/health` 返回 `{status,sessionId,busy,versions,timestamp}`；`/metrics` 返回 `{metrics{...},state,states,timestamp}`。作为 Suite 11 对账基线。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-0.5 破坏性用例的护栏须知 · P0 · [纯人工]
+- 须知：L2 真删、设备吊销、限速锁定这些**只在一次性会话/设备上做**。注意：**限速会把你自己锁 60s**、**吊销会断真实设备**、**L2 真删不可恢复**。
+- [ ] 已知悉
+
+---
+
+## Suite 1 — 接入与鉴权（公网真实链路）
+锚 A7/A15 · FR-16/18 · NFR-01/02/03
+
+### MT-1.1 CF Access 2FA 首次登录 · P0 · [纯人工]
+- 操作：清浏览器数据后访问 `https://<your-domain>` → 触发 CF Access 登录 → 输入 Email OTP。
+- 预期：签发 JWT，进入 app；页面正常连上（connection dot 绿）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-1.2 CF 会话 cookie 持久化 · P1 · [纯人工]
+- 操作：登录后关标签，短时内重开 `https://<your-domain>`。
+- 预期：cookie 有效期内**不再要求 OTP**，直接进入。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-1.3 冒充 Host / 不带 JWT 直连被拒 · P0 · [集成已覆盖·抽查]
+- 操作：绕过 CF、直接对源站发 socket.io 握手且不带 `Cf-Access-Jwt-Assertion`。
+- 预期：被拒（日志 `missing Cf-Access-Jwt-Assertion header`），非裸放行（fail-closed）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-1.4 限速防暴破 · P1 · [单测已覆盖·抽查]
+- 前置：用一台一次性设备/浏览器（会被锁 60s）。
+- 操作：连续 3 次用错误凭据握手。
+- 预期：锁定 60s、期间正确凭据也拒；`/metrics` 的 `rateLimitLockouts` +1；中途一次成功清零计数。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-1.5 设备 TOFU 审批全流程 · P0 · [纯人工]（锚 A15）
+- 操作：用**新设备/新浏览器**首连 → 显示"等待主机授权"，此时发消息被丢弃 → 用已信任设备网页远程批准（或 `node scripts/device.js approve <ID>`）→ 新设备解锁恢复。
+- 预期：pending → approved 三态清晰；未授权期消息不执行；批准后正常。三路径都验：网页远程批 / CLI `approve` / CLI `deny`（`node scripts/device.js list`）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-1.6 设备吊销实时断连 · P1 · [集成已覆盖·抽查]
+- 前置：一台一次性已信任设备。
+- 操作：`node scripts/device.js deny <ID>`。
+- 预期：该设备所有连接实时收到 `device_status:denied` 并断开（watch + mtime 防抖）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-1.7 未批准设备数据隔离 · P1 · [集成已覆盖·抽查]
+- 操作：待审批设备连上后观察它收到的事件。
+- 预期：只收 `device_status:pending`，**不入 `approved` 房间**、看不到任何 agent 事件 / status_line / instances（SEC-01）。
+- [ ] 通过　　[ ] 失败：____________
+
+---
+
+## Suite 2 — 聊天主流程（消耗 token 真实 turn）
+锚 A1/A2/A4/A10 · E4/E5/E12
+
+### MT-2.1 首条消息懒开会话 + 流式输出 · P0 · [smoke 可跑]
+- 操作：新会话发一句普通对话。
+- 预期：懒开实例、逐字流式出现回复；轮次结束获得 sessionId、会话入库（终端 `claude --resume` 能看到）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-2.2 真实干活落盘 · P0 · [smoke 可跑]（锚 A2）
+- 操作：发"在 WORK_DIR 新建 demo.md 写两行"。
+- 预期：文件真实出现在磁盘。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-2.3 工具卡片过程可见 · P0 · [集成已覆盖·抽查]（锚 A4/E5）
+- 操作：发"读 README 再改一行再跑 `npm run check`"。
+- 预期：Read / Edit / Bash 卡片依次出现，状态 ⏳→✅，参数摘要可读、可折叠。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-2.4 工具预览（diff / 片段 / 路径校验）· P1 · [集成已覆盖·抽查]
+- 操作：点 Edit/Write 卡片预览看 diff；点 Read 卡片看文件片段；尝试预览白名单外路径。
+- 预期：diff 高亮正确；片段带行号；白名单外预览被拒。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-2.5 多轮上下文连续 · P0 · [smoke 可跑]（锚 A1）
+- 操作：发"创建 /tmp/a.txt 写入 hello" → 再发"刚才那个文件里写了什么"。
+- 预期：第二问直接答 hello、无复述。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-2.6 渲染与 i18n corner case · P1 · [纯人工]
+- 操作：让 claude 输出长 Markdown + 代码块；输入含中文/emoji/超长无空格单词。
+- 预期：代码高亮、复制原始 Markdown、流式自动滚到底；中文/emoji 正确计数、长词合理折行或横向滚动。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-2.7 北极星剧本端到端 · P0 · [纯人工]（锚 A10 / §0）
+- 操作：完整走一遍 §0 剧本——手机发合并重复函数并跑测试 → 锁屏 10min → 解锁补齐 → 批准 `git commit` → 续问改 CHANGELOG。
+- 预期：全程流式/工具可见/断线存活/重连续传/审批/会话连续，一次通过。
+- [ ] 通过　　[ ] 失败：____________
+
+---
+
+## Suite 3 — 权限与审批
+锚 A3/A8 · E3/E7 · NFR-17
+
+### MT-3.1 审批弹窗完整参数 + 三选 · P0 · [视觉E2E已覆盖·抽查]（锚 A3）
+- 操作：发白名单外操作（如 `git push`）。
+- 预期：弹窗显示完整命令 + cwd；允许/拒绝/本会话总是允许都可选；拒绝后 claude 报告"用户拒绝"。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-3.2 权限档 5 档即时切换 · P0 · [视觉E2E已覆盖·抽查]
+- 操作：在 default/plan/acceptEdits/dontAsk/bypassPermissions 间切换并各触发一次操作。
+- 预期：切档即时生效，工具行为符合当前档；无实例时暂存为 pending、首条消息消费。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-3.3 effort 档切换 · P1 · [smoke 可跑]
+- 操作：切换思考强度（含回到"模型默认"）。
+- 预期：置换实例 + 档正确继承；busy 时拒切并拨回当前档；模型不支持时该行隐藏。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-3.4 审批指纹完整性 · P1 · [集成已覆盖·抽查]
+- 操作：正常审批观察绿；（尽力构造）参数被篡改的审批。
+- 预期：正常绿通过；不一致 → ⚠️ 橙条 + fail-closed 拒（审计 `approval_integrity_mismatch`）。难构造时信任 approval-integrity 集成测试结论。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-3.5 审批 TTL 过期 · P2 · [单测已覆盖·抽查]
+- 操作：触发审批后放置超过 TTL（默认 30min）。
+- 预期：自动过期、fail-closed；不会误批一个已过期的操作。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-3.6 AskUserQuestion 多选 + 远程回答 · P1 · [视觉E2E已覆盖·抽查]（锚 E7）
+- 操作：触发 claude 反问选择题；在另一设备回答。
+- 预期：选项按钮组正常；一端回答后另一端弹窗自动关闭、答案被正确引用。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-3.7 审批挂起跨锁屏 · P1 · [纯人工]（锚 A8）
+- 操作：触发审批 → 锁屏 10min → 解锁。
+- 预期：弹窗仍在（不超时），批准后任务继续。
+- [ ] 通过　　[ ] 失败：____________
+
+---
+
+## Suite 4 — 会话与工作区生命周期
+锚 A1(重启)/A13/A14 · E11/E13/E14 · FR-20/23
+
+### MT-4.1 会话切换 + resume 冷读历史 · P0 · [集成已覆盖·抽查]（锚 E14）
+- 操作：多会话间切换。
+- 预期：切换时回显完整历史；无 live 实例则冷读 transcript resume；快速连点同会话不重复 open（去重）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-4.2 跨重启 resume · P0 · [smoke 可跑]（锚 A1 phase2）
+- 操作：重启常驻 server 后回到最后会话。
+- 预期：按 cwd 指针自动恢复到最后会话、上下文接得上（权限档/effort 也恢复）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-4.3 两级删除 · P0 · [集成已覆盖·抽查]（锚 FR-20）
+- 前置：**用一次性会话**。
+- 操作：L1 `session:delete` 隐藏 → 确认能从终端 `claude --resume` 恢复；再对另一个一次性会话 L2 `session:deletePermanent`。
+- 预期：L1 仅列表隐藏、transcript 留盘；L2 双保护（无 live 实例 + mtime 静默 300s）后真删、活跃会话被拒。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-4.4 多工作区隔离 · P1 · [smoke 可跑]（锚 A13）
+- 操作：切到 dirB 建会话 → 切回 dirA；尝试切到非白名单 cwd。
+- 预期：会话列表按 cwd 隔离；模型缓存 per-cwd 隔离；非白名单被拒。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-4.5 同仓库会话并发 · P1 · [smoke 可跑]（锚 A14）
+- 操作：会话 1 跑长任务（进行中）→ 同 cwd 开会话 2 → 切回会话 1。
+- 预期：会话 1 未被中断；两 tab 权限档独立。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-4.6 workdirs.json 热加载 · P1 · [单测已覆盖·抽查]
+- 操作：运行时增删 `workdirs.json` 条目（不重启）。
+- 预期：改后即生效；被移除目录的已开会话续跑、仅拒新开；viewingCwd 归位到白名单首个。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-4.7 会话发现 / "等我"聚合 · P1 · [单测已覆盖·抽查]（锚 FR-21）
+- 操作：制造多个待审批/待输入的会话。
+- 预期：侧栏角标 ⏳/⚠️/❗/✅ 聚合；等待处理的排前。
+- [ ] 通过　　[ ] 失败：____________
+
+---
+
+## Suite 5 — 断线 / 续传 / 跨端同步 / 镜像
+锚 A5/A5b · E10 · FR-13
+
+### MT-5.1 锁屏续传 · P0 · [纯人工]（锚 A5）
+- 操作：发起 ≥1min 任务 → 立即锁屏 2min → 解锁。
+- 预期：自动重连、错过的输出完整补上，无重复无丢失。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-5.2 迟到观察者 · P1 · [集成已覆盖·抽查]（锚 A5b）
+- 操作：任一轮完成后新设备连接、不发任何消息；重启 server 后再来一遍。
+- 预期：连接后 2s 内收到 `epoch:'server'` 的 init 与非空 models。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-5.3 终端写 → 手机冷读追平 · P1 · [纯人工·已知边界]
+- 操作：终端里跑一个会话（Write/Bash），手机打开同一会话观察。
+- 预期：进行中的 turn（子 agent/thinking）看不到实时——**这是架构限制、非缺陷**；轮次落盘后手机能冷读追平补上。如实记录，不当 bug。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-5.4 只读镜像锁自动释放 · P1 · [单测已覆盖·抽查]
+- 前置：**需 live 会话 + 当前代码 + 已重启的 server**。
+- 操作：终端写一次 → 手机端变只读 → 静置。
+- 预期：手机进入只读（输入禁用 + 提示）；约 12.5s idle 无外部写入后自动解锁恢复输入；手动"接管"也能解锁。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-5.5 sync:since 补齐 + diskLen 对账 · P1 · [单测已覆盖·抽查]
+- 操作：断网重连；制造离开期间被终端写过的盲区。
+- 预期：从缓冲回放；缓冲 trim 后用 diskLen 判"需全量重载"、补上盲区。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-5.6 离线输入幂等 · P1 · [集成已覆盖·抽查]
+- 操作：弱网/离线连发同一条消息两次。
+- 预期：clientMessageId 去重、SDK 只执行 1 次、两次 ack 都回。
+- [ ] 通过　　[ ] 失败：____________
+
+---
+
+## Suite 6 — 推送通知（真机 iOS/Android）
+锚 A11 · E15 · FR-14
+
+### MT-6.1 Web Push 订阅 + 触达 + 深链 · P0 · [纯人工]（锚 A11）
+- 前置：iOS 需先"添加到主屏幕"。
+- 操作：订阅推送 → 触发审批/提问/后台任务完成 → 锁屏 → 观察通知 → 点通知。
+- 预期：锁屏秒级收到推送；点击深链直达对应会话/审批弹窗。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-6.2 ntfy 路径 · P2 · [纯人工]
+- 前置：配置了 `NTFY_URL` + 私密 `NTFY_TOPIC`。
+- 操作：触发通知。
+- 预期：POST 到自托管 ntfy、深链回 `PUBLIC_URL`；正文不泄敏感命令（用私密 topic）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-6.3 推送节流不轰炸 · P1 · [单测已覆盖·抽查]
+- 操作：短时间内触发多条同类通知（如连串 permission_request）。
+- 预期：同会话同类别 60s 内最多推 1 条。
+- [ ] 通过　　[ ] 失败：____________
+
+---
+
+## Suite 7 — 文件浏览与上传
+FR-07/09 · E17
+
+### MT-7.1 文件浏览三层锁 · P1 · [单测已覆盖·抽查]
+- 操作：浏览项目文件；尝试越界路径 / symlink 指向白名单外。
+- 预期：白名单 + symlink 拒绝 + realpath 重验三层，越界被拒；分页加载正常。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-7.2 上传图片/文件端到端 · P1 · [集成已覆盖·抽查]
+- 操作：上传图片和文本文件 → 预览 → 发送 → 让 claude 用它。
+- 预期：预览缩略图正确；路径注入 claude 可读；穿越防护生效。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-7.3 上传超限提示 · P2 · [视觉E2E已覆盖·抽查]
+- 操作：超 10 个 / 单文件 10MB / 总量 20MB（与 `public/js/app.js` 的 `MAX_COUNT`/`MAX_FILE`/`MAX_TOTAL` 一致）。
+- 预期：清晰超限提示、禁止发送。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-7.4 大文件 / 二进制 / 中文文件名 · P2 · [纯人工]
+- 操作：上传大文件、二进制（图片/视频）、中文名文件。
+- 预期：正确处理或给出可读错误，不崩。
+- [ ] 通过　　[ ] 失败：____________
+
+---
+
+## Suite 8 — 可观测与运维
+NFR-15
+
+### MT-8.1 /health + /metrics 内容 · P1 · [集成已覆盖·抽查]（锚 A12）
+- 操作：带鉴权访问两端点。
+- 预期：health 含 sessionId/busy/versions；metrics 含 7 项计数 + `state`/`states` 五类分类；无账号级配额段。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-8.2 StateProbe 随负载变化 · P2 · [单测已覆盖·抽查]
+- 操作：分别制造"有待审批""后台轮次失败""客户端心跳缺席"。
+- 预期：state 切到 `awaiting_action` / `session_error` / `host_offline`（后者客户端判定）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-8.3 doctor 网页脱敏体检 · P2 · [单测已覆盖·抽查]
+- 操作：点设置里"安全体检"。
+- 预期：报告全脱敏（布尔/计数/规则名），显示如"Bash(*) 已放行"等风险；不泄绝对路径/token。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-8.4 实时日志 + 审计落表 · P2 · [单测已覆盖·抽查]
+- 操作：看实时日志面板；触发若干鉴权/审批事件后查审计。
+- 预期：环形缓冲最近 100 条；审计记录脱敏、不含正文（`auth_rate_limited`/`scope_violation`/`device_approved`/`approval_integrity_mismatch`）。
+- [ ] 通过　　[ ] 失败：____________
+
+---
+
+## Suite 9 — 真机 UX 与响应式（纯人工，自动化零覆盖）
+
+### MT-9.1 软键盘行为 · P0 · [纯人工]
+- 操作：真机聚焦输入框、输入、失焦。
+- 预期：键盘弹起/收起顺畅；输入框自适应高度；内容不被键盘遮挡。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-9.2 触摸手势 · P1 · [纯人工]
+- 操作：长按复制、侧栏侧滑删除会话、滑动关弹窗、代码块横向滚动。
+- 预期：手势识别正确、无误触。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-9.3 异形屏 / safe area · P1 · [纯人工]
+- 操作：在带刘海/灵动岛的机型看布局。
+- 预期：safe area 适配，无内容被遮挡或贴边。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-9.4 横竖屏切换 · P2 · [纯人工]
+- 操作：portrait ↔ landscape 切换。
+- 预期：布局自适应、不错位。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-9.5 Safari vs Android Chrome 差异 · P1 · [纯人工]
+- 操作：两个真实浏览器各跑核心流程。
+- 预期：行为一致；无平台特异性崩溃。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-9.6 连接指示与后台角标 · P2 · [视觉E2E已覆盖·抽查]
+- 操作：断网/恢复；制造其他工作区动静。
+- 预期：connection dot 红↔绿；后台角标 ⏳/⚠️/❗/✅ 聚合正确。
+- [ ] 通过　　[ ] 失败：____________
+
+---
+
+## Suite 10 — 稳定性与边界
+锚 A9/A12
+
+### MT-10.1 长期运行内存 · P2 · [纯人工]
+- 操作：连续聊 50+ 轮，DevTools 看 heap。
+- 预期：内存稳定、无明显泄漏。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-10.2 大历史渲染 · P2 · [纯人工]
+- 操作：打开 1000+ 消息的会话滚动。
+- 预期：滚动流畅、不卡死。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-10.3 WebSocket 断线重连 · P1 · [纯人工]
+- 操作：强制断网/切网。
+- 预期：指数退避自动重连、状态恢复、消息不丢。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-10.4 输入边界 · P2 · [视觉E2E已覆盖·抽查]
+- 操作：粘超 50000 字；队列满（≥2 turn）时再发。
+- 预期：超长拒发 + system 提示；队列满禁发。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-10.5 API 错误显示 · P2 · [纯人工]
+- 操作：（如可构造）触发 429 / 5xx。
+- 预期：清晰错误、可重试、不终结轮/不崩会话。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-10.6 重启后 pending 审批失效 · P1 · [集成已覆盖·抽查]
+- 操作：留一个 pending 审批 → 重启 server。
+- 预期：持久化表中 pending 一律标失效（无 canUseTool 上下文）；不会"批准一个不会执行的操作"。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-10.7 配置变体分支 · P2 · [集成已覆盖·抽查]（锚 A7/A9/A12-off）
+- 说明：A7 不设 token / A9 无 claude 环境 / A12 `WEB_STATUSLINE=off` **须临时改配置重启，生产上代价高**。建议放收尾窗口做，或信任 auth-token / doctor / statusline 自动化已覆盖的结论。
+- 操作（可选）：在收尾窗口临时起独立实例验证各分支。
+- 预期：不设 token 只听 localhost 并警告；无 claude 启动失败给可读原因；statusline 关闭后无 UI 痕迹。
+- [ ] 通过 / [ ] 信任自动化跳过　　[ ] 失败：____________
+
+---
+
+## Suite 11 — 收尾
+
+### MT-11.1 还原与清理 · P0 · [纯人工]
+- 操作：`cp data/sessions.json.bak data/sessions.json`（或按需还原）；删除测试产生的一次性会话/设备/上传文件。
+- 预期：生产数据回到测试前状态。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-11.2 确认 server 代码版本回位 · P0 · [纯人工]
+- 操作：确认常驻 server 停在期望的 commit（对 MT-0.1）。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-11.3 token 用量对账 · P1 · [纯人工]
+- 操作：对比 Suite 0 基线，记录本次回归消耗。
+- [ ] 通过　　[ ] 失败：____________
+
+### MT-11.4 缺陷汇总 · P0 · [纯人工]
+- 操作：把所有 `[ ] 失败` 汇成清单：现象 + 复现 + 锚点编号（A#/E#/FR/NFR/MT-#）。
+- [ ] 完成
+
+---
+
+## 追溯完整性（A1~A15 落位）
+
+| 剧本 | 对应条目 |
+|---|---|
+| A1 会话连续 | MT-2.5 / MT-4.2 |
+| A2 干活能力 | MT-2.2 |
+| A3 审批闸门 | MT-3.1 |
+| A4 过程可见 | MT-2.3 |
+| A5 锁屏续传 | MT-5.1 |
+| A5b 迟到观察者 | MT-5.2 |
+| A6 中断不毁会话 | MT-2.7（含）/ smoke `core` 场景 |
+| A7 鉴权不变量 | MT-1.3 / MT-1.4 / MT-10.7 |
+| A8 审批挂起跨锁屏 | MT-3.7 |
+| A9 环境预检 | MT-0.3 / MT-10.7 |
+| A10 北极星 | MT-2.7 |
+| A11 触达 | MT-6.1 |
+| A12 web 状态栏 | MT-8.1 / MT-10.7 |
+| A13 多 repo | MT-4.4 |
+| A14 同仓库并发 | MT-4.5 |
+| A15 TOFU 设备信赖 | MT-1.5 |
+
+E1~E16 均被上述 Suite 覆盖（对照 `docs/design.md §2`）。
+
+## 参考
+
+- `docs/design.md` — §2 E1~E16、§5 A1~A15 权威剧本与验收纪律
+- `docs/deployment.md` — 生产重启 / Cloudflare Access / 排错
+- `docs/event-contract.md` — socket 事件契约
+- `docs/interfaces.md` — HTTP、Socket 与内部模块契约
+- `scripts/doctor.js` · `scripts/device.js` — 运维自检与设备管理
+- `tests/smoke/runner.js` — 统一真实 Claude 场景入口（仅显式授权后运行）

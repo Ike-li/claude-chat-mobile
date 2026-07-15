@@ -19,9 +19,9 @@
 
 <table>
   <tr>
-    <td align="center"><img src="docs/screenshots/01-stream.png" width="240" alt="流式输出与 Markdown 渲染"></td>
-    <td align="center"><img src="docs/screenshots/02-tools.png" width="240" alt="工具调用卡片"></td>
-    <td align="center"><img src="docs/screenshots/03-approval.png" width="240" alt="危险操作回手机审批"></td>
+    <td align="center"><img src="docs/screenshots/01-stream-zh.png" width="240" alt="流式输出与 Markdown 渲染"></td>
+    <td align="center"><img src="docs/screenshots/02-tools-zh.png" width="240" alt="工具调用卡片"></td>
+    <td align="center"><img src="docs/screenshots/03-approval-zh.png" width="240" alt="危险操作回手机审批"></td>
   </tr>
   <tr>
     <td align="center"><b>流式输出</b><br/>Markdown · 代码高亮 · 状态栏</td>
@@ -60,13 +60,13 @@ cd claude-chat-mobile
 node --version           # 需 Node ≥ 20
 which claude             # 本项目驱动的 CLI——必须已安装并登录
 
-npm install --omit=dev   # 仅运行依赖——不含 puppeteer/浏览器。要跑测试用完整 npm install。
+npm install --omit=dev   # 仅运行依赖——不含 Playwright/浏览器。要跑 UI 测试用完整 npm install。
 npm run setup            # 交互式向导：自动生成 AUTH_TOKEN（头号门槛）+ 询问 WORK_DIR，写入 .env（权限 0600）
                          # 推荐用它，免去手搓；想直接用原始模板：cp .env.example .env
 
 # 推荐：启动前自检配置（端口占用、CLAUDE_BIN 路径、网关环境、文件权限）
 node scripts/doctor.js        # 检查配置
-node scripts/doctor.js --fix  # 收紧权限（.env 与 data/*.json → 0600）
+node scripts/doctor.js --fix  # 收紧权限（.env 与 CCM_DATA_DIR/*.json → 0600）
 
 npm start                     # http://localhost:3000
 ```
@@ -158,9 +158,9 @@ graph LR
         CF[Cloudflare Tunnel]
     end
     subgraph 本机
-        S[server.js<br/>Express 静态 + Socket.IO 契约层<br/>鉴权 · 启动预检 · 设备信赖 · handler 兜底]
-        A[agent.js · AgentSession<br/>长驻 SDK query · 权限闸门<br/>事件信封 seq+epoch · 环形缓冲]
-        J[(data/sessions.json<br/>会话元数据)]
+        S[src/server/ + server.js 薄入口<br/>Express 静态 + Socket.IO 契约层<br/>鉴权 · 启动预检 · 设备信赖 · handler 兜底]
+        A[src/agent/agent.js · AgentSession<br/>长驻 SDK query · 权限闸门<br/>事件信封 seq+epoch · 环形缓冲]
+        J[(CCM_DATA_DIR/sessions.json<br/>会话元数据)]
         SDK[claude-agent-sdk]
         CLI[本机 claude CLI<br/>完整加载你的配置]
         FS[(你的项目文件<br/>WORK_DIR)]
@@ -176,7 +176,7 @@ graph LR
 1. 手机 `user:message {text}` → server 校验 → 路由到目标实例 `agents.get(instanceId)`（懒重生 resume；`session:new` 后首条消息才懒开 FRESH 实例，台阶3）
 2. 文本 push 进 AgentSession 的 streaming input → SDK → claude CLI 在 `WORK_DIR` 干活
 3. SDK 消息流回 `map()`：流式文本→`text_delta`、工具调用→`tool_use`/`tool_result`、白名单外操作→`permission_request`（挂起等手机点允许/拒绝）
-4. 每个事件套上 `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` 信封 → 进 500 条环形缓冲 → `io.emit` 广播（前端按 `viewingInstanceId` 分流；后台 tab 的高频 delta 不广播以省带宽）
+4. 每个事件套上 `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` 信封 → 进 2000 条环形缓冲 → `io.emit` 广播（前端按 `viewingInstanceId` 分流；后台 tab 的高频 delta 不广播以省带宽）
 5. 手机断线再连：`sync:since {lastSeq}` 补发缓冲；`epoch` 变化 = 服务端换了实例，客户端自动重置去重基线
 
 

@@ -1,11 +1,16 @@
 // scripts/device.js —— CLI 工具：管理待确认和受信任的设备指纹。
-import { getPendingDevices, approveDevice, denyDevice, loadTrustedDevices } from '../devices.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { config } from 'dotenv';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const TRUSTED_DEVICES_FILE = join(HERE, '..', 'data', 'trusted-devices.json');
+const ROOT = join(HERE, '..');
+config({ path: join(ROOT, '.env'), quiet: true });
+const DATA_DIR = process.env.CCM_DATA_DIR || join(ROOT, 'data');
+const TRUSTED_DEVICES_FILE = join(DATA_DIR, 'trusted-devices.json');
+// devices.js 在模块初始化时锚定数据路径，必须先加载 .env 再动态导入。
+const { getPendingDevices, approveDevice, denyDevice } = await import('../src/auth/devices.js');
 
 const args = process.argv.slice(2);
 const command = args[0] || 'help';

@@ -4,12 +4,12 @@
 // Android/iOS 的圆形/圆角遮罩会裁掉圆角与绿点。maskable 规范要求内容落在中心直径 80% 的 safe-zone 内，
 // 故此处「背景铺满整幅（无圆角）+ 内容缩到中心 72%（四周留 ~14% padding > 规范 10%）」。
 //
-// 依赖 puppeteer（devDep，比照 scripts/make-demo-gif.js 的 launch 范式）栅格化 SVG→PNG。
+// 依赖 Playwright Chromium（与 tests/e2e 共用同一浏览器工具链）栅格化 SVG→PNG。
 // 用法：node scripts/gen-icons.js
 // 产物：public/icons/{icon-maskable-192,icon-maskable-512,apple-touch-icon-180}.png（需生成后提交）
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import puppeteer from 'puppeteer';
+import { chromium } from '@playwright/test';
 
 const HERE = import.meta.dirname;
 const ICONS = join(HERE, '..', 'public', 'icons');
@@ -25,12 +25,14 @@ const maskableSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 51
 </svg>`;
 
 async function renderPng(browser, svg, size, outName) {
-  const page = await browser.newPage();
-  await page.setViewport({ width: size, height: size, deviceScaleFactor: 1 });
+  const page = await browser.newPage({
+    viewport: { width: size, height: size },
+    deviceScaleFactor: 1,
+  });
   const sized = svg.replace('<svg ', `<svg width="${size}" height="${size}" `);
   await page.setContent(
     `<!doctype html><html><body style="margin:0;padding:0;line-height:0">${sized}</body></html>`,
-    { waitUntil: 'networkidle0' }
+    { waitUntil: 'networkidle' }
   );
   const buf = await page.screenshot({ type: 'png', clip: { x: 0, y: 0, width: size, height: size } });
   writeFileSync(join(ICONS, outName), buf);
@@ -38,7 +40,7 @@ async function renderPng(browser, svg, size, outName) {
   console.log(`✔ ${outName} (${size}×${size}, ${buf.length}B)`);
 }
 
-const browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+const browser = await chromium.launch({ headless: true });
 try {
   // maskable：Android 自适应图标（192/512）
   await renderPng(browser, maskableSvg, 192, 'icon-maskable-192.png');

@@ -10,9 +10,8 @@ const baseURL = process.env.CCM_PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${port}
 const buildNonce = process.env.CCM_PLAYWRIGHT_NONCE || `pw-${randomUUID()}`;
 
 export default defineConfig({
-  testDir: './tests',
-  testMatch: '**/*.spec.ts',
-  testIgnore: ['**/seed.*.spec.ts'],
+  testDir: './tests/e2e',
+  testMatch: 'p0/**/*.spec.ts',
   fullyParallel: false,
   workers: 1,
   timeout: 45_000,
@@ -30,7 +29,7 @@ export default defineConfig({
     hasTouch: true
   },
   webServer: {
-    command: `CCM_BUILD_NONCE=${buildNonce} PORT=${port} node scripts/visual-mock-server.js`,
+    command: `CCM_BUILD_NONCE=${buildNonce} PORT=${port} node tests/e2e/mock/server.js`,
     url: `${baseURL}/__ready?nonce=${buildNonce}`, // 仅本轮 nonce 匹配才 200，拒绝端口上的陈旧/他者进程
     timeout: 30_000,
     reuseExistingServer: false                     // TC-008：不盲目复用端口上任意进程；始终自起、身份经 nonce 校验

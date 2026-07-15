@@ -1,14 +1,12 @@
-// scripts/check-playwright-forbidden-patterns.js —— Playwright 测试基建硬闸（审计 TC-007）。
-// specs/playwright-test-improvement-backlog.md 早把 test.only/test.skip/test.fixme/networkidle/
-// waitForTimeout 列为 P0 lane 禁止模式，但此前只是文档声明、没有可执行的守卫——.codex/agents/
-// playwright_test_healer.toml 配置的自动化 test healer 在测试持续失败时会自主写 test.fixme() 隐藏
-// 产品回归，光靠文档约定拦不住它。本脚本把禁止清单落成 npm run check / CI 都跑的真门禁。
+// scripts/check-playwright-forbidden-patterns.js —— Playwright 测试基建硬闸。
+// test.only/test.skip/test.fixme/networkidle/waitForTimeout 会隐藏回归或引入不确定等待；
+// 本脚本把禁止清单落成 npm run check / CI 都执行的确定性门禁。
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
 
-const TARGET_DIRS = ['tests'];
-// 复核发现：此前只认 .ts，未来若加 .js/.mjs/.cjs 的 Playwright spec 会静默漏扫——tests/ 下目前
-// 全是 .ts（无实际影响），但既然是硬闸就不该留这种扩展名死角。
+const TARGET_DIRS = ['tests/e2e'];
+// 只扫描 Playwright E2E 树；Node 单元测试里的平台条件 skip 是合法的。未来若加 .js/.mjs/.cjs 的
+// Playwright spec 也必须纳入，避免扩展名死角。
 const TARGET_EXTENSIONS = new Set(['.ts', '.js', '.mjs', '.cjs']);
 const FORBIDDEN = [
   { pattern: /\btest\.only\s*\(/, label: 'test.only(' },
@@ -47,4 +45,4 @@ if (violations.length > 0) {
   console.error('若确认某用例需要暂时隔离，须经人工审阅后显式处理，不得由自动化 agent 自主写入 test.fixme。');
   process.exit(1);
 }
-console.log('✅ Playwright 测试基建禁止模式检查通过（tests/ 下无 test.only/skip/fixme/networkidle/waitForTimeout）。');
+console.log('✅ Playwright 测试基建禁止模式检查通过（tests/e2e/ 下无 test.only/skip/fixme/networkidle/waitForTimeout）。');

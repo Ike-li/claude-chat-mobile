@@ -8,10 +8,6 @@ on:
 jobs:
   unit-test:
     runs-on: ubuntu-latest
-    env:
-      # 跑 npm test（单测 test/*.test.mjs + 集成 test/integration/*.test.mjs）；集成里需真 claude 的
-      # 用例有 CI skip 守卫。puppeteer 仅 test:visual 用，CI 跳过 chromium 下载以加速、避免下载失败。
-      PUPPETEER_SKIP_DOWNLOAD: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,50 +17,7 @@ jobs:
       - run: npm ci
       - run: npm test
 
-  visual-e2e:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: npm
-
-      # 缓存 Puppeteer Chromium 二进制文件（~170MB），避免每次下载
-      - name: Cache Puppeteer Chromium
-        uses: actions/cache@v4
-        id: puppeteer-cache
-        with:
-          path: ~/.cache/puppeteer
-          key: puppeteer-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            puppeteer-${{ runner.os }}-
-
-      - run: npm ci
-
-      # 确保 Chromium 已安装（如果缓存命中则跳过下载）
-      - name: Install Chromium
-        run: npx puppeteer browsers install chrome
-
-      - name: Run Visual E2E Tests
-        run: npm run test:visual
-
-      # 上传截图作为 artifact（可选，用于调试失败）
-      - name: Upload Test Snapshots
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: visual-e2e-snapshots
-          path: public/test-snapshots/
-          retention-days: 7
-
-  # 审计 TC-003：此前 CI 只跑 unit-test + 旧 test:visual（puppeteer），108 个 Playwright P0 case
-  # （鉴权/上传/权限审批等契约）从未被 CI 执行——PR 可以在 P0 契约全破的情况下全绿合并。P0 用
-  # scripts/visual-mock-server.js（零 token、零 claude 依赖），可安全接入 CI；需要真 claude 的
-  # 100 个 integration case（test/integration/*.test.mjs）继续用 RUN_CLAUDE_INTEGRATION 门控本机跑，
-  # 不适合接 CI（无本机 claude CLI）。
-  playwright-p0:
+  e2e:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -83,13 +36,13 @@ jobs:
       # 接入 CI——此前它只在本机跑，CI 从未验证过。
       - run: npm run check
 
-      - name: Run Playwright P0
-        run: npm run test:playwright:p0
+      - name: Run Playwright E2E
+        run: npm run test:e2e
 
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-p0-report
+          name: playwright-e2e-report
           path: playwright-report/
           retention-days: 7

@@ -36,3 +36,5 @@ reasonix.toml
 .github/copilot-instructions.md
 .codex/config.toml
 .bug-hunter/
+.agents/
+.codex/

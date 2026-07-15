@@ -33,12 +33,15 @@ export const AGENT_EVENT_TYPES = Object.freeze([
 ]);
 
 const REAL_SOURCES = Object.freeze([
-  { path: 'agent.js', kind: 'agent-session' },
-  { path: 'server.js', kind: 'agent-event-emit' },
+  { path: 'src/agent/agent.js', kind: 'agent-session' },
+  { path: 'src/server/app.js', kind: 'agent-event-emit' },
 ]);
 
 const MOCK_SOURCES = Object.freeze([
-  { path: 'scripts/visual-mock-server.js', kind: 'agent-event-emit' },
+  { path: 'tests/e2e/mock/server.js', kind: 'agent-event-emit' },
+  { path: 'tests/e2e/mock/scenarios/content.js', kind: 'agent-event-emit' },
+  { path: 'tests/e2e/mock/scenarios/demo.js', kind: 'agent-event-emit' },
+  { path: 'tests/e2e/mock/scenarios/status.js', kind: 'agent-event-emit' },
 ]);
 
 function lineColumn(source, index) {

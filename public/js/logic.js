@@ -1,6 +1,6 @@
 // logic.js —— app.js 的纯决策逻辑。
 // 红线：本文件只做数据→数据，不得 import / 触碰 DOM / window / socket / 任何全局可变状态。
-// 目的：让 app.js（浏览器 import）与 test/logic.test.mjs（node:test）共用同一份逻辑，零依赖、零构建。
+// 目的：让 app.js（浏览器 import）与 tests/unit/logic.test.mjs（node:test）共用同一份逻辑，零依赖、零构建。
 
 // HTML 转义。app.js 多处复用（审批命令、工具参数摘要）+ ansiToHtml 内部。
 export function esc(s) {
@@ -669,10 +669,7 @@ export function formatApiRetryBanner(payload = {}) {
   return `${kind}${frac}${wait}`;
 }
 
-// Part3（§6）：SDK getContextUsage() 的 categories 分解 → 展示行。对齐 CLI /context 的上下文占用分解
-// （Skills / MCP tools / Memory files / Compact buffer / Free space 等）。过滤 0/坏项、按 tokens 降序、
-// 算 pct（相对 maxTokens；缺 maxTokens 则 pct=null，前端只显绝对 token）。isDeferred 透传（延迟加载类别）。
-// 服务状态可见性（第一性原理重新设计——见 docs/hld-ccm.md 附近）：与"需要你(N)"聚合（FR-21/AD-11，会话待处理，
+// 服务状态可见性（见 docs/design.md「用户可观察状态」）：与"需要你(N)"聚合（会话待处理，
 // 论证依据=注意力不对称）是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（NFR-15，论证依据=可维护性），
 // 不复用/不混入会话状态判定。每设备独立感知：本地 localStorage 存上次已知的服务启动时刻，与服务端下发的
 // 当前启动时刻对比，不同即服务重启过（LaunchAgent 静默拉起/意外崩溃恢复），当前设备此前不知情。

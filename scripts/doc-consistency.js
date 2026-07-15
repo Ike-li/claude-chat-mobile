@@ -10,11 +10,9 @@ export const DEFAULT_DOC_GLOBS = Object.freeze([
   'README.en.md',
   'CLAUDE.md',
   'SECURITY.md',
-  '.agents/*.md',
   '.github/copilot-instructions.md',
   '.env.example',
   'docs/*.md',
-  'specs/*.md',
 ]);
 
 const RENAMED = Object.freeze([

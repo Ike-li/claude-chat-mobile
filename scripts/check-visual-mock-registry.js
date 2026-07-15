@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-const DEFAULT_TARGET = 'scripts/visual-mock-server.js';
+const DEFAULT_TARGET = 'tests/e2e/mock/server.js';
 const REGISTRY_DISPATCH = 'if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;';
 
 export function findFallbackTestCommandBranches(source) {

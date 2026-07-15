@@ -1,11 +1,11 @@
 // make-demo-gif.js —— 用视觉 mock UI 录制一段移动端 demo GIF（文档用）。
-// 零外部二进制依赖：puppeteer(CDP screencast 截 PNG 帧) + pngjs(解码) + gifenc(纯 JS 编码)。
+// 零外部二进制依赖：Playwright Chromium(CDP screencast 截 PNG 帧) + pngjs(解码) + gifenc(纯 JS 编码)。
 // 流程：启动 mock → 流式回答 → 工具卡片 → 手机端批准「git push」(hero) → 结束。
 // 用法：node scripts/make-demo-gif.js   产物：docs/demo.gif
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import puppeteer from 'puppeteer';
+import { chromium } from '@playwright/test';
 import gifenc from 'gifenc';
 import pngjs from 'pngjs';
 
@@ -13,15 +13,15 @@ const { GIFEncoder, quantize, applyPalette } = gifenc;
 const { PNG } = pngjs;
 const HERE = import.meta.dirname;
 const ROOT = join(HERE, '..');
-const OUT = join(ROOT, 'docs', 'demo.gif');
-const PORT = '3199';
+const OUT = process.env.CCM_DEMO_GIF_OUT || join(ROOT, 'docs', 'demo.gif');
+const PORT = process.env.CCM_DEMO_PORT || '3199';
 const FPS = 8;                  // 输出帧率
 const FRAME_MS = Math.round(1000 / FPS);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 async function main() {
   console.log('📡 启动 mock server (PORT=' + PORT + ')...');
-  const mock = spawn('node', ['scripts/visual-mock-server.js'], {
+  const mock = spawn('node', ['tests/e2e/mock/server.js'], {
     cwd: ROOT, stdio: 'ignore', env: { ...process.env, PORT }
   });
   const cleanup = () => { try { mock.kill('SIGKILL'); } catch {} };
@@ -29,17 +29,19 @@ async function main() {
 
   await sleep(1600);
 
-  const browser = await puppeteer.launch({
-    headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
+  const browser = await chromium.launch({ headless: true });
   try {
-    const page = await browser.newPage();
-    await page.setViewport({ width: 375, height: 812, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
-    await page.goto(`http://127.0.0.1:${PORT}`, { waitUntil: 'networkidle2' });
+    const page = await browser.newPage({
+      viewport: { width: 375, height: 812 },
+      isMobile: true,
+      hasTouch: true,
+      deviceScaleFactor: 2,
+    });
+    await page.goto(`http://127.0.0.1:${PORT}`, { waitUntil: 'networkidle' });
     await page.waitForSelector('#input');
 
     // ---- CDP 截帧（PNG，按变化推帧）----
-    const client = await page.createCDPSession();
+    const client = await page.context().newCDPSession(page);
     const frames = []; // { buf, t }
     client.on('Page.screencastFrame', async ({ data, sessionId }) => {
       frames.push({ buf: Buffer.from(data, 'base64'), t: Date.now() });

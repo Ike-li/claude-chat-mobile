@@ -12,20 +12,21 @@
 // 7. 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
 // 8. 配置文件权限（.env / data/*.json 是否为 owner-only 0600）
 // 9. 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本；防文档间漂移的机械化背书）
-// 10. 前端 JS 语法（public/js/*.js 跑 node --check——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
+// 10. 前端 JS 语法（递归检查 public/js/**/*.js——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
 // 11. 测试覆盖率门槛
 import { config } from 'dotenv';
-import { existsSync, accessSync, constants, mkdirSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, accessSync, constants, mkdirSync, readFileSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
-import { isOwnerOnly, fixPermissions } from '../file-security.js';
-import { normalizeWorkdirEntries, loadWorkdirsFile } from '../workdirs.js';
+import { isOwnerOnly, fixPermissions } from '../src/files/file-security.js';
+import { normalizeWorkdirEntries, loadWorkdirsFile } from '../src/sessions/workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import { statuslineBridgeDiagnostic, statuslineConfigDiagnostic } from './doctor-checks.js';
-import { CONFIG_FILE_NAMES } from '../doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
+import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
+import { collectSyntaxFiles } from './check-syntax.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const results = [];
@@ -272,13 +273,12 @@ function checkDocConsistency() {
   }
 }
 
-// D10: 前端 JS 语法（public/js/*.js）。冒烟测试用 socket.io-client、从不加载浏览器 app.js，故前端脚本
+// D10: 前端 JS 语法（递归 public/js/**/*.js）。冒烟测试用 socket.io-client、从不加载浏览器 app.js，故前端脚本
 // 的语法错会潜伏（2026-06-14 实有：app.js 括号失配→浏览器整体不执行→页面死在「未连接」）。
 function checkFrontendSyntax() {
-  const dir = join(HERE, 'public', 'js');
-  let files;
+  let files = [];
   try {
-    files = readdirSync(dir).filter(f => f.endsWith('.js'));
+    files = collectSyntaxFiles(HERE).filter(file => file.startsWith('public/js/'));
   } catch {
     warn('前端 JS 语法', 'public/js/ 不存在，跳过');
     return;
@@ -286,16 +286,16 @@ function checkFrontendSyntax() {
   const bad = [];
   for (const f of files) {
     try {
-      execSync(`node --check "${join(dir, f)}"`, { stdio: 'pipe' });
+      execFileSync(process.execPath, ['--check', join(HERE, f)], { stdio: 'pipe' });
     } catch (err) {
       const msg = (err.stderr?.toString() || err.message || '').split('\n').slice(0, 3).join(' ').trim();
-      bad.push(`public/js/${f}: ${msg}`);
+      bad.push(`${f}: ${msg}`);
     }
   }
   if (bad.length > 0) {
     fail('前端 JS 语法', bad.join('\n  ') + '\n  （浏览器脚本无单测覆盖，语法错会致页面死在「未连接」）');
   } else {
-    ok('前端 JS 语法', `public/js/ ${files.length} 个文件语法通过`);
+    ok('前端 JS 语法', `public/js/ ${files.length} 个文件（含 app/ 子模块）语法通过`);
   }
 }
 

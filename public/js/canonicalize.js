@@ -1,4 +1,4 @@
-// public/js/canonicalize.js —— 审批完整性绑定的规范化 + 指纹核心（LLD §5.5，承接 AD-7/NFR-17）
+// public/js/canonicalize.js —— 审批完整性绑定的规范化 + 指纹核心（docs/design.md，承接 AD-7/NFR-17）
 // 前后端共享同一份文件（浏览器原生 ESM 加载 /js/canonicalize.js；Node 端 agent.js 用相对路径 import
 // 同一文件）——"机制强度==双端一致性强度"，任一端 NFC/键排序/数字格式化行为不同都会使合法审批在
 // 校验步被误判为篡改。哈希用 crypto.subtle（Web Crypto，Node 20+ 与所有现代浏览器均全局可用，SHA-256

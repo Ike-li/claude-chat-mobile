@@ -14,7 +14,7 @@
 - **两个常驻进程**（随登录自启、崩溃自重启、关终端不掉）：
   - server：`node server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致。
   - tunnel：`cloudflared` 命名隧道，把 `:3000` 投到公网域名。
-- **鉴权分层**：公网走 Access JWT（服务端 `cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
+- **鉴权分层**：公网走 Access JWT（服务端 `src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
   > ⚠️ **反代拓扑会静默关掉设备审批层**。设备指纹审批按 socket 直连 peer 的 IP 判定「本机」。本配方里 Cloudflare 隧道在 `localhost:3000` 落地，连接显成 `127.0.0.1`，但公网路径已由 Access JWT 兜底，所以可接受。**若你换成任何在本机落地的其他反代**（nginx/Caddy 的 `proxy_pass localhost`、SSH 端口转发、frp 等），所有客户端都会显成本机，设备审批层会被跳过，**防线只剩 `AUTH_TOKEN`**。这类拓扑下务必设强 `AUTH_TOKEN`，不要指望设备审批纵深。
 
 ## ⚠️ 最容易忘的一点
@@ -77,6 +77,21 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-tunnel-label>.plis
 
 > LaunchAgent 在**登录后**启动。若要"开机未登录也跑"（headless），需要改成 root LaunchDaemon。
 
+#### 控制面数据放在仓库外
+
+`CCM_DATA_DIR` 是受支持的状态根目录；不设置时仍兼容 `./data`。常驻部署建议把它设为绝对路径，避免切分支、清理仓库或测试脚本碰到生产状态：
+
+```bash
+mkdir -p "$HOME/Library/Application Support/claude-chat-mobile/data"
+chmod 700 "$HOME/Library/Application Support/claude-chat-mobile" \
+  "$HOME/Library/Application Support/claude-chat-mobile/data"
+
+# 写入项目 .env（示例值请换成你的绝对路径）
+CCM_DATA_DIR=/Users/you/Library/Application Support/claude-chat-mobile/data
+```
+
+目录保存 CCM 的会话指针/偏好、设备信任、审批、审计、推送和缓存，文件应保持 `0600`。Claude 原始 transcript 仍在 `~/.claude/projects/`，不会迁入这里；上传附件仍在各工作目录的 `.ccm-uploads/`。迁移前停止常驻服务并备份，迁移后运行 `node scripts/doctor.js` 再重启。`scripts/device.js`、server 与 doctor 都读取同一 `CCM_DATA_DIR`。
+
 ### 4. 通知（可选：ntfy + 深链）
 
 移动端锁屏 / 息屏时，Web Push 在 iOS 上受限（须先"添加到主屏幕"、且局域网 http 下不可用）。配 ntfy 可绕开：server 端一行 POST 到 ntfy 服务，手机装 ntfy app 订阅 topic 即收锁屏通知。全在启动 shell 或 `.env` 注入：
@@ -121,7 +136,7 @@ npm start
 | 改了 `.env` 不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
 | 公网 1033 且部署机开着全局代理 | 代理 TUN 劫持了 cloudflared 到 edge 的连接 → 见下方「部署机有全局代理时」 |
 | 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在启动 shell `export ANTHROPIC_MODEL=<带后缀名>` 后重启，或 web 端 `/model <带后缀名>` 切换（`.env` 里的 `ANTHROPIC_*` 启动期被剥除，配置只能来自 shell） |
-| 回复只有工具卡片、无正文 | 网关可能不流式 → `agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
+| 回复只有工具卡片、无正文 | 网关可能不流式 → `src/agent/agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
 
 
 ## 最简替代（仅测试用）
