@@ -116,6 +116,22 @@ export function effortLevelsFor(modelValue, modelsList) {
   return { hidden: false, levels: show };
 }
 
+// effort 展示态必须保留后端真值；重建候选列表只决定 select 能否选中，绝不能把未知/null 猜成 low。
+// mirrorReadonly 时 null 的语义是「外部 CLI 活进程档位不可观测」，与 FRESH 的「模型默认」分开文案。
+export function effortUiState(level, supportedLevels, { mirrorReadonly = false } = {}) {
+  const normalized = level || null;
+  const levels = Array.isArray(supportedLevels) ? supportedLevels : [];
+  const selected = normalized && levels.includes(normalized) ? normalized : '';
+  return {
+    level: normalized,
+    selected,
+    label: normalized || (mirrorReadonly ? 'CLI 档位未知' : '默认思考'),
+    placeholder: normalized
+      ? `${normalized}（当前模型不可选）`
+      : (mirrorReadonly ? 'CLI 当前档未知' : '模型默认'),
+  };
+}
+
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
 // aborted（P1-4 已中止独立状态）介于 done 与 busy 之间：比顺利完成更值得回头看一眼（为什么被中止），但
 // 已是终态，不该盖过仍在运行的其它会话。

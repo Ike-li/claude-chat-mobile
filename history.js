@@ -399,8 +399,8 @@ export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST
 
 // 快路径判定：生产 baseDir === CLAUDE_DIR 时走 SDK 官方 listSessions（summary = CLI /resume 同款标题，
 // 省去本模块 readdir+N×stat+readHeadMeta 且无需维护标题语义跟随 CLI）；隔离测试实例（baseDir 指它处）
-// 时 SDK 写死 ~/.claude 管不着，回落自造扫盘。SDK 只吃原始 cwd（已编码路径它当普通目录名→空数组，
-// 见 scripts/sdk-session-probe.mjs 铁证坑），故 cwd 单独透传、不复用上游已编码的 dir。
+// 时 SDK 写死 ~/.claude 管不着，回落自造扫盘。SDK 只吃原始 cwd（已编码路径它当普通目录名→空数组），
+// 故 cwd 单独透传、不复用上游已编码的 dir。
 const useSdk = (baseDir) => baseDir === CLAUDE_DIR;
 
 // 把 SDKSessionInfo 映射成本函数返回 shape（前端真实消费只有 id/title/lastUsedAt——model/entrypoint 是

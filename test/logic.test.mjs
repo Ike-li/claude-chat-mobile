@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from '../public/js/logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, effortUiState, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test.describe('parseUsageForWeb（③ 套餐额度窗后端：提取 rate_limits + 降级 + 剔除隐私）', () => {
@@ -463,6 +463,18 @@ test('effortLevelsFor: 解析不到 → 全候选并集，不隐藏', () => {
   const r = effortLevelsFor('unknown-xyz', ml);
   assert.equal(r.hidden, false);
   assert.deepEqual([...r.levels].sort(), ['high', 'low', 'medium']); // 并集（去重）
+});
+
+test('effortUiState: CLI 镜像档位未知时保持未知，不得从候选列表猜成 low', () => {
+  assert.deepEqual(
+    effortUiState(null, ['low', 'medium', 'high', 'max'], { mirrorReadonly: true }),
+    {
+      level: null,
+      selected: '',
+      label: 'CLI 档位未知',
+      placeholder: 'CLI 当前档未知',
+    },
+  );
 });
 
 test('ansiToHtml: 纯文本被 esc', () => {
