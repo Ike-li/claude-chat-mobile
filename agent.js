@@ -76,6 +76,7 @@ export class AgentSession {
     this.seq = 0;
     this.buffer = [];
     this.toolInputs = new Map(); // ③：toolUseId → {name, input, ts}（文件类工具完整 input，供 tool:preview 重建 diff）
+    this.toolOutputs = new Map(); // 工具完整 output（截断前），供 tool:full 展开；TTL/LRU 与 toolInputs 同口径
     this.bufferTrimmed = false;
     this.pendingTurns = 0;             // 在途轮数，仅由 send(+1) 与 result(-1) 改写
     this.pendingAutoTurn = false;      // 后台任务通知已到、下个轮次由非用户输入（task-notification 注入）启动的信号——
@@ -760,9 +761,26 @@ export class AgentSession {
     return { name: e.name, input: e.input };
   }
 
+  // 工具完整输出缓存（脱敏后、截断前）：live 卡片只推 600 字摘要，点「展开全文」经 tool:full 取此处。
+  // 与 toolInputs 同 TTL/LRU；非文件工具也能展开（Bash/MCP 长输出是主场景）。
+  cacheToolOutput(id, fullText) {
+    if (!id || typeof fullText !== 'string') return;
+    this.toolOutputs.set(id, { text: fullText, ts: Date.now() });
+    if (this.toolOutputs.size > TOOL_INPUT_MAX) {
+      this.toolOutputs.delete(this.toolOutputs.keys().next().value);
+    }
+  }
+  getToolOutput(id) {
+    const e = this.toolOutputs.get(id);
+    if (!e) return null;
+    if (Date.now() - e.ts > TOOL_INPUT_TTL_MS) { this.toolOutputs.delete(id); return null; }
+    return e.text;
+  }
+
   dispose() {
     this._flushText(); this._flushThink();
     this.toolInputs.clear(); // ③：释放缓存的 tool input
+    this.toolOutputs.clear();
     this.disposed = true;
     this.inputEnded = true;
     this.pendingAutoTurn = false; // 实例销毁：作废滞留 flag，防重开实例后误合成
@@ -1131,10 +1149,14 @@ export class AgentSession {
           for (const block of asArray(msg.message?.content)) {
             if (block?.type === 'tool_result') {
               const raw = msg.tool_use_result ?? block.content;
+              const full = stringify(redactBase64(raw));
+              this.cacheToolOutput(block.tool_use_id, full);
+              const outputSummary = truncate(full, TOOL_SUMMARY_CAP);
               this.emit('tool_result', {
                 toolUseId: block.tool_use_id,
                 ok: !block.is_error,
-                outputSummary: truncate(stringify(redactBase64(raw)), TOOL_SUMMARY_CAP),
+                outputSummary,
+                truncated: full.length > TOOL_SUMMARY_CAP,
                 parentToolUseId: msg.parent_tool_use_id,
                 subagentType: subType,
               });
@@ -1171,10 +1193,14 @@ export class AgentSession {
             // 这类结果 is_error=true 但非工具报错——前端据此显 ☑️/🚫 并剥 "Error:" 前缀，不靠字符串匹配。
             const denyKind = this.denyKinds.get(block.tool_use_id);
             this.denyKinds.delete(block.tool_use_id);
+            const full = stringify(redactBase64(raw));
+            this.cacheToolOutput(block.tool_use_id, full);
+            const outputSummary = truncate(full, TOOL_SUMMARY_CAP);
             this.emit('tool_result', {
               toolUseId: block.tool_use_id,
               ok: !block.is_error,
-              outputSummary: truncate(stringify(redactBase64(raw)), TOOL_SUMMARY_CAP),
+              outputSummary,
+              truncated: full.length > TOOL_SUMMARY_CAP,
               denyKind
             });
           }

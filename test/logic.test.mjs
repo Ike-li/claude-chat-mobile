@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces } from '../public/js/logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, taskStopUiState, formatUsageWindowLines } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test.describe('parseUsageForWeb（③ 套餐额度窗后端：提取 rate_limits + 降级 + 剔除隐私）', () => {
@@ -1390,5 +1390,103 @@ test.describe('formatServiceNotices（服务状态可见性——组装会话面
     assert.match(bodyOf(45 * 60 * 1000), /^🔔 推送最近失败于 45 分钟前（push）$/);
     assert.match(bodyOf(5 * 60 * 60 * 1000), /^🔔 推送最近失败于 5 小时前（push）$/);
     assert.match(bodyOf(2 * 24 * 60 * 60 * 1000), /^🔔 推送最近失败于 2 天前（push）$/);
+  });
+});
+
+// 子 agent 可折叠卡片（切片 C）：事件是否归入子 agent 卡 + 标题文案。
+// app.js 用这两个纯函数决定「主流气泡 vs 嵌套卡」；DOM 接线归 visual E2E。
+test.describe('isSubagentPayload / formatSubagentCardTitle（子 agent 嵌套卡片）', () => {
+  test('parentToolUseId 非空字符串 → true（后端分流字段）', () => {
+    assert.equal(isSubagentPayload({ parentToolUseId: 'agent-1', text: 'hi' }), true);
+    assert.equal(isSubagentPayload({ parentToolUseId: 'x', subagentType: 'code-reviewer' }), true);
+  });
+
+  test('主会话事件（无 parentToolUseId / 空 / 非字符串）→ false', () => {
+    assert.equal(isSubagentPayload({ messageId: 'm1', text: 'hi' }), false);
+    assert.equal(isSubagentPayload({ parentToolUseId: '' }), false);
+    assert.equal(isSubagentPayload({ parentToolUseId: null }), false);
+    assert.equal(isSubagentPayload({ parentToolUseId: 42 }), false);
+    assert.equal(isSubagentPayload(null), false);
+    assert.equal(isSubagentPayload(undefined), false);
+  });
+
+  test('标题：有类型 + 运行中 → 「🤖 {type} 运行中」', () => {
+    assert.equal(formatSubagentCardTitle({ subagentType: 'code-reviewer', running: true }), '🤖 code-reviewer 运行中');
+  });
+
+  test('标题：有类型 + 已完成 → 「🤖 {type} 已完成」', () => {
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Explore', running: false }), '🤖 Explore 已完成');
+  });
+
+  test('标题：类型缺失/空白 → 兜底「子 agent」', () => {
+    assert.equal(formatSubagentCardTitle({ running: true }), '🤖 子 agent 运行中');
+    assert.equal(formatSubagentCardTitle({ subagentType: '  ', running: false }), '🤖 子 agent 已完成');
+    assert.equal(formatSubagentCardTitle({ subagentType: null, running: true }), '🤖 子 agent 运行中');
+  });
+
+  test('标题：running 默认 true（懒创建时未传也显示运行中）', () => {
+    assert.equal(formatSubagentCardTitle({ subagentType: 'Plan' }), '🤖 Plan 运行中');
+  });
+});
+
+test.describe('isToolSummaryTruncated（工具卡展开全文门）', () => {
+  test('显式 truncated:true/false 优先于嗅探', () => {
+    assert.equal(isToolSummaryTruncated('短', { truncated: true }), true);
+    assert.equal(isToolSummaryTruncated('x …（已截断）', { truncated: false }), false);
+  });
+  test('无 flag 时嗅探尾缀「 …（已截断）」', () => {
+    assert.equal(isToolSummaryTruncated('hello …（已截断）'), true);
+    assert.equal(isToolSummaryTruncated('hello full output'), false);
+    assert.equal(isToolSummaryTruncated(null), false);
+  });
+});
+
+test.describe('formatMirrorBannerText（只读锁横幅四态）', () => {
+  test('armed / stale 优先', () => {
+    assert.match(formatMirrorBannerText({ armed: true, remainingSec: 3 }), /已请求接管/);
+    assert.match(formatMirrorBannerText({ stale: true }), /疑似中断/);
+  });
+  test('driving + remainingSec → 倒计时句', () => {
+    assert.match(formatMirrorBannerText({ remainingSec: 12.2 }), /约 13s/);
+    assert.match(formatMirrorBannerText({ remainingSec: 1 }), /约 1s/);
+  });
+  test('无倒计时 → 默认驾驶中句', () => {
+    assert.match(formatMirrorBannerText({}), /终端驾驶中，这里只读追平/);
+    assert.match(formatMirrorBannerText({ remainingSec: 0 }), /终端驾驶中，这里只读追平/);
+  });
+});
+
+test.describe('taskStopUiState（后台任务停止按钮）', () => {
+  test('有 taskId 且横幅可见 → canStop', () => {
+    assert.deepEqual(taskStopUiState({ taskId: 't1', bannerVisible: true }), { canStop: true, taskId: 't1' });
+  });
+  test('无 taskId / 横幅隐藏 → 不可停', () => {
+    assert.equal(taskStopUiState({ taskId: '', bannerVisible: true }).canStop, false);
+    assert.equal(taskStopUiState({ taskId: 't1', bannerVisible: false }).canStop, false);
+    assert.equal(taskStopUiState({}).canStop, false);
+  });
+});
+
+test.describe('formatUsageWindowLines（额度窗行）', () => {
+  test('available:false → 空行', () => {
+    assert.deepEqual(formatUsageWindowLines({ available: false }), { available: false, lines: [], subscriptionType: null });
+    assert.equal(formatUsageWindowLines(null).available, false);
+  });
+  test('订阅 + 5h/7d 利用率 + 重置倒计时', () => {
+    const now = Date.parse('2026-07-15T12:00:00Z');
+    const r = formatUsageWindowLines({
+      available: true,
+      subscriptionType: 'max',
+      session: { totalCostUsd: 1.5 },
+      rateLimits: {
+        five_hour: { utilization: 42.2, resetsAt: '2026-07-15T14:05:00Z' },
+        seven_day: { utilization: 11, resetsAt: '2026-07-18T12:00:00Z' },
+      },
+    }, { now });
+    assert.equal(r.available, true);
+    assert.ok(r.lines.some(l => l.key === 'sub' && l.text === 'max'));
+    assert.ok(r.lines.some(l => l.key === 'cost' && l.text === '$1.50'));
+    assert.ok(r.lines.some(l => l.key === 'five_hour' && /42%/.test(l.text) && /重置/.test(l.text)));
+    assert.ok(r.lines.some(l => l.key === 'seven_day' && /11%/.test(l.text)));
   });
 });

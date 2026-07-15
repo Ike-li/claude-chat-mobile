@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, taskStopUiState, formatUsageWindowLines } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -33,7 +33,9 @@ import { verifyIntegrity } from './canonicalize.js';
   const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
-  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText');
+  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop');
+  let activeBgTaskId = null; // 当前查看会话最新 task_progress.taskId，供「停止」按钮
+  let pendingUsageRender = null; // 额度窗一次消费：usage:get 后等 agent:event type=usage
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
 
@@ -357,6 +359,9 @@ import { verifyIntegrity } from './canonicalize.js';
   const thinkings = new Map();
   const toolCards = new Map();
   const agentToolIds = new Set(); // 跟踪 Agent/Task 工具的 toolUseId，用于在 tool_result 时隐藏活动横幅
+  // 子 agent 可折叠卡：parentToolUseId → { el, body, titleEl, type, running, streams, thinkings }
+  // 键 = 主会话 Agent/Task 的 toolUseId（后端 parent_tool_use_id）。默认 <details> 收起。
+  const subagentCards = new Map();
   // 从工具 inputSummary（可能被 agent.js truncate）中安全提取字段；JSON 解析失败时回退 fallback
   // candidateKeys 按优先级排列，返回第一个非空 key 的值
   function extractInput(inputSummary, candidateKeys, fallback) {
@@ -890,6 +895,15 @@ import { verifyIntegrity } from './canonicalize.js';
     // history_append：只读「追平」——server 轮询终端会话 transcript 检测到【外部新落定】消息（epoch='server'）。
     // 同样带外分流（在 shouldDropAgentEvent/epoch 之前），onHistoryAppend 内按 viewingInstanceId 自判是否渲染。
     if (ev.type === 'history_append') { onHistoryAppend(ev); return; }
+    // 额度窗：usage:get 的应答（epoch=server），不进会话流、不占 seq 去重
+    if (ev.type === 'usage') {
+      if (pendingUsageRender) {
+        const fn = pendingUsageRender;
+        pendingUsageRender = null;
+        fn(ev.payload);
+      }
+      return;
+    }
     // mirror_state：只读追平锁状态（server 判「会话正在终端运行」）——带外分流，控制常驻横幅 + 输入禁用。
     if (ev.type === 'mirror_state') { onMirrorState(ev); return; }
     // 台阶3：事件按 instanceId 分流——非当前查看 tab（viewingInstanceId）的实例事件不渲染直接丢弃。
@@ -1103,6 +1117,16 @@ import { verifyIntegrity } from './canonicalize.js';
     },
     text_delta(p) {
       clearApiRetryBanner(); // 重试已过，流恢复——撤掉「重试中 n/m」横幅
+      // 子 agent 正文：嵌进可折叠卡（不污染主流气泡）；parentToolUseId = 主 Agent/Task 的 toolUseId
+      if (isSubagentPayload(p)) {
+        const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
+        const s = getSubagentStream(sa, p.messageId);
+        s.raw += p.text;
+        s.textNode.appendData(p.text);
+        scrollBottom();
+        setBusy(true);
+        return;
+      }
       const s = getStream(p.messageId);
       s.raw += p.text;
       s.textNode.appendData(p.text);
@@ -1111,6 +1135,14 @@ import { verifyIntegrity } from './canonicalize.js';
     },
     thinking_delta(p) {
       clearApiRetryBanner();
+      if (isSubagentPayload(p)) {
+        const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
+        getSubagentThinking(sa, p.messageId).body.appendData(p.text);
+        scrollBottom();
+        setBusy(true);
+        if (activeStatusText) activeStatusText.textContent = 'Claude 正在思考中...';
+        return;
+      }
       getThinking(p.messageId).body.appendData(p.text);
       scrollBottom();
       setBusy(true);
@@ -1189,12 +1221,21 @@ import { verifyIntegrity } from './canonicalize.js';
         };
         card.querySelector('.space-y-1')?.appendChild(wrap);
       }
-      appendMessage(card);
+      // 子 agent 内部工具 → 嵌进对应可折叠卡 body；主会话工具仍走主流 appendMessage
+      if (isSubagentPayload(p)) {
+        const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
+        sa.body.appendChild(card);
+      } else {
+        appendMessage(card);
+      }
       scrollBottom();
       setBusy(true);
-      // 子代理/Workflow 活动横幅
-      if (p.name === 'Agent' || p.name === 'Task') {
+      // 子代理/Workflow 活动横幅（仅主会话 Agent/Task；嵌套内部 Agent 不再叠横幅）
+      if (!isSubagentPayload(p) && (p.name === 'Agent' || p.name === 'Task')) {
         agentToolIds.add(p.toolUseId);
+        // 预建空卡：主 Agent 工具一启动就有「🤖 … 运行中」占位，后续 parentToolUseId 事件填内容
+        const subType = extractInput(p.inputSummary, ['subagent_type', 'subagentType'], '');
+        ensureSubagentCard(p.toolUseId, subType || null);
         const desc = extractInput(p.inputSummary, ['description'], '');
         if (desc) showActivityBanner(desc);
       }
@@ -1212,8 +1253,19 @@ import { verifyIntegrity } from './canonicalize.js';
       }
     },
     tool_result(p) {
+      // 主会话 Agent/Task 完成 → 对应子 agent 卡标题改「已完成」（键 = toolUseId = 子事件的 parentToolUseId）
+      if (!isSubagentPayload(p) && subagentCards.has(p.toolUseId)) {
+        markSubagentCardDone(p.toolUseId);
+      }
       const card = toolCards.get(p.toolUseId);
-      if (!card) return;
+      if (!card) {
+        // 无工具卡时仍处理 Agent 横幅（预建了子 agent 卡但 tool 卡可能被清过）
+        if (agentToolIds.has(p.toolUseId)) {
+          agentToolIds.delete(p.toolUseId);
+          if (agentToolIds.size === 0) hideActivityBanner();
+        }
+        return;
+      }
       // deny+message 通道结果被 SDK 标 is_error（ok:false），但真实语义由 denyKind 决定（agent.js）：
       // answered=已回答 ☑️ / denied=已拒绝 🚫 / cancelled=已取消 🚫——均非工具报错；无 denyKind 才按 ok 显 ✅/❌。
       const DENY_ICON = { answered: '☑️', denied: '🚫', cancelled: '🚫' };
@@ -1226,6 +1278,10 @@ import { verifyIntegrity } from './canonicalize.js';
         code.textContent = formatToolSummary(raw);
         try { if (code !== out) hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
         out.classList.remove('hidden');
+        // 截断时挂「展开全文」——点后走 tool:full 取 agent 缓存的完整输出
+        if (isToolSummaryTruncated(raw, { truncated: p.truncated }) && p.toolUseId) {
+          attachToolFullExpand(card, p.toolUseId);
+        }
       }
       toolCards.delete(p.toolUseId);
       // 子代理/Workflow 完成时隐藏活动横幅（仅当所有并行 Agent 都完成才隐藏）
@@ -1378,6 +1434,7 @@ import { verifyIntegrity } from './canonicalize.js';
         if (s) s.raw = p.text;
       }
       finalizeStreams();
+      markAllSubagentCardsDone(); // 主轮结束：仍 running 的子 agent 卡标「已完成」（防 tool_result 漏标）
       setBusy(false);
       hideActivityBanner(); // 会话结束隐藏活动横幅
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
@@ -1594,6 +1651,34 @@ import { verifyIntegrity } from './canonicalize.js';
     }
   };
 
+  // 工具卡「展开全文」：live 路径 agent 缓存截断前全文；成功后替换 .t-out 并去掉按钮。
+  function attachToolFullExpand(card, toolUseId) {
+    if (!card || !toolUseId || card.querySelector('[data-testid="tool-expand-full"]')) return;
+    const host = card.querySelector('.space-y-1') || card;
+    const btn = el(`<button type="button" class="text-info underline text-[11px]" data-testid="tool-expand-full">展开全文</button>`);
+    const inst = viewingInstanceId;
+    btn.onclick = () => {
+      btn.disabled = true;
+      btn.textContent = '加载中…';
+      socket.emit('tool:full', { instanceId: inst, toolUseId }, res => {
+        if (!res?.ok) {
+          btn.textContent = res?.error || '全文不可用';
+          btn.disabled = false;
+          return;
+        }
+        const out = card.querySelector('.t-out');
+        const code = out?.querySelector('code') || out;
+        if (code) {
+          code.textContent = formatToolSummary(res.text || '');
+          try { if (code !== out) hljs.highlightElement(code); } catch { /* noop */ }
+          out?.classList.remove('hidden');
+        }
+        btn.remove();
+      });
+    };
+    host.appendChild(btn);
+  }
+
   // ---- 流式气泡 ----
   function getStream(id) {
     const key = id || '_';
@@ -1648,6 +1733,87 @@ import { verifyIntegrity } from './canonicalize.js';
       t = { body };
       thinkings.set(key, t);
       scrollBottom();
+    }
+    return t;
+  }
+
+  // ---- 子 agent 可折叠卡（切片 C：默认收起，点头展开看 text/thinking/tool）----
+  // parentId = 主会话 Agent/Task 的 toolUseId（= 后端 parent_tool_use_id / parentToolUseId）
+  function ensureSubagentCard(parentId, subagentType) {
+    let c = subagentCards.get(parentId);
+    if (!c) {
+      // 默认不设 open —— 收起态；data-testid 供 visual E2E 断言
+      const wrap = el(`
+        <details class="msg-frame subagent-card rounded-lg bg-surface border border-line text-xs" data-testid="subagent-card">
+          <summary class="px-3 py-2 flex items-center gap-2 cursor-pointer select-none">
+            <span class="sa-title text-ink font-medium"></span>
+          </summary>
+          <div class="sa-body px-3 pb-2 pl-4 border-l-2 border-accent/40 ml-3 space-y-1"></div>
+        </details>`);
+      wrap.dataset.parentId = parentId;
+      const titleEl = wrap.querySelector('.sa-title');
+      const type = subagentType != null && String(subagentType).trim() ? String(subagentType).trim() : null;
+      titleEl.textContent = formatSubagentCardTitle({ subagentType: type, running: true });
+      c = {
+        el: wrap,
+        body: wrap.querySelector('.sa-body'),
+        titleEl,
+        type,
+        running: true,
+        streams: new Map(),
+        thinkings: new Map(),
+      };
+      subagentCards.set(parentId, c);
+      appendMessage(wrap);
+      scrollBottom();
+    } else if (subagentType != null && String(subagentType).trim() && !c.type) {
+      // 首批 delta 可能早于带 subagentType 的 assistant：后来补类型标签
+      c.type = String(subagentType).trim();
+      c.titleEl.textContent = formatSubagentCardTitle({ subagentType: c.type, running: c.running });
+    }
+    return c;
+  }
+
+  function markSubagentCardDone(parentId) {
+    const c = subagentCards.get(parentId);
+    if (!c || !c.running) return;
+    c.running = false;
+    c.titleEl.textContent = formatSubagentCardTitle({ subagentType: c.type, running: false });
+  }
+
+  function markAllSubagentCardsDone() {
+    for (const id of subagentCards.keys()) markSubagentCardDone(id);
+  }
+
+  // 子 agent 卡内流式正文（与 getStream 同构，但挂到 sa.body，不进主流 streams Map）
+  function getSubagentStream(sa, messageId) {
+    const key = messageId || '_';
+    let s = sa.streams.get(key);
+    if (!s) {
+      const wrap = el(`<div class="msg-body px-0.5 text-ink-soft whitespace-pre-wrap" data-testid="subagent-text"></div>`);
+      const textNode = document.createTextNode('');
+      wrap.appendChild(textNode);
+      sa.body.appendChild(wrap);
+      s = { el: wrap, raw: '', textNode };
+      sa.streams.set(key, s);
+    }
+    return s;
+  }
+
+  function getSubagentThinking(sa, messageId) {
+    const key = messageId || '_';
+    let t = sa.thinkings.get(key);
+    if (!t) {
+      const wrap = el(`
+        <details class="thinking rounded-lg bg-sunk/40 border border-line-soft text-xs text-ink-faint">
+          <summary class="px-2 py-1">💭 思考过程</summary>
+          <pre class="t-body px-2 pb-1 whitespace-pre-wrap"></pre>
+        </details>`);
+      const body = document.createTextNode('');
+      wrap.querySelector('.t-body').appendChild(body);
+      sa.body.appendChild(wrap);
+      t = { body };
+      sa.thinkings.set(key, t);
     }
     return t;
   }
@@ -2499,6 +2665,8 @@ import { verifyIntegrity } from './canonicalize.js';
     ultracodeArmed = ultracode;
     if (effort !== currentEffort) {
       socket.emit('user:setEffort', { level: effort });
+      // 体感：置换实例有冷启动延迟；server 也会 emit kind:resuming system，这里立刻本地提示一次
+      addBar('正在切换思考强度并续接会话…', 'text-ink-faint');
       // 不乐观更新：成功则 effort_mode 广播拨档 + 上屏（setEffortMode 读 ultracodeArmed 决定显名）；
       // busy/非法档则 server 发 system 提示并单发当前档拨回本设备 select
     } else if (armedChanged) {
@@ -3110,7 +3278,59 @@ import { verifyIntegrity } from './canonicalize.js';
     const note = el(`<div class="px-3 py-1.5 text-[9.5px] text-ink-faint/80 leading-snug"></div>`);
     note.textContent = '此处为 web 驱动的会话实例，不含本机其它 claude 终端进程；无法检测 OS 僵尸。';
     section.appendChild(note);
+
+    // 额度窗入口：按需 usage:get → 弹简易层（第三方 available:false 时显示不可用说明）
+    const usageRow = el(`<div class="px-3 py-2 border-t border-line-soft"></div>`);
+    const usageBtn = el(`<button type="button" class="w-full text-left text-[11px] text-info underline" data-testid="usage-open-btn">查看套餐额度</button>`);
+    usageBtn.onclick = () => {
+      haptic('tap');
+      openUsageWindow();
+    };
+    usageRow.appendChild(usageBtn);
+    const usageBody = el(`<div id="usageWindowBody" class="hidden mt-1 text-[10px] text-ink-soft space-y-0.5" data-testid="usage-window"></div>`);
+    usageRow.appendChild(usageBody);
+    section.appendChild(usageRow);
     return section;
+  }
+
+  let _usageReqGen = 0;
+  function openUsageWindow() {
+    const body = sessionPanel.querySelector('#usageWindowBody');
+    if (!body) return;
+    body.classList.remove('hidden');
+    body.replaceChildren();
+    const loading = el(`<div class="text-ink-faint"></div>`);
+    loading.textContent = '加载中…';
+    body.appendChild(loading);
+    const gen = ++_usageReqGen;
+    socket.emit('usage:get', { instanceId: viewingInstanceId }, () => { /* ack 可选，真值走 agent:event usage */ });
+    // 兼容：server 以 agent:event type=usage 推送；也接受 ack 形态（若未来改）
+    const onUsage = (payload) => {
+      if (gen !== _usageReqGen) return;
+      renderUsageWindow(body, payload);
+    };
+    // 一次性监听：通过 pending flag 在 agent:event 分发处消费
+    pendingUsageRender = onUsage;
+  }
+  function renderUsageWindow(body, payload) {
+    const view = formatUsageWindowLines(payload || { available: false });
+    body.replaceChildren();
+    if (!view.available) {
+      const empty = el(`<div class="text-ink-faint"></div>`);
+      empty.textContent = '当前认证无套餐额度（API key / 第三方 provider 不提供）';
+      body.appendChild(empty);
+      return;
+    }
+    for (const line of view.lines) {
+      const row = el(`<div class="flex justify-between gap-2"></div>`);
+      const lab = el(`<span class="text-ink-faint"></span>`);
+      lab.textContent = line.label;
+      const val = el(`<span class="text-ink font-medium"></span>`);
+      val.textContent = line.text;
+      row.appendChild(lab);
+      row.appendChild(val);
+      body.appendChild(row);
+    }
   }
   function refreshStatusSection() {
     const old = sessionPanel.querySelector('#statusSection');
@@ -3279,16 +3499,40 @@ import { verifyIntegrity } from './canonicalize.js';
     // （仍不走 epoch 去重——避免污染 curEpoch/lastSeq；此处仅按 viewingInstanceId 过滤显示。）
     if (ev.instanceId && ev.instanceId !== viewingInstanceId) return;
     const msg = ev.payload?.message || '';
+    const tid = ev.payload?.taskId;
+    if (typeof tid === 'string' && tid) activeBgTaskId = tid;
     if (msg) showTaskProgress(msg);
+  }
+  function syncTaskStopBtn() {
+    if (!btnTaskStop) return;
+    const ui = taskStopUiState({
+      taskId: activeBgTaskId,
+      bannerVisible: taskProgressBanner && !taskProgressBanner.classList.contains('hidden'),
+    });
+    btnTaskStop.classList.toggle('hidden', !ui.canStop);
+    btnTaskStop.disabled = !ui.canStop;
   }
   function showTaskProgress(text) {
     if (!taskProgressBanner || !taskProgressText) return;
     taskProgressText.textContent = text.length > 80 ? text.slice(0, 77) + '...' : text;
     taskProgressBanner.classList.remove('hidden');
+    syncTaskStopBtn();
   }
   function hideTaskProgress() {
     if (taskProgressBanner) taskProgressBanner.classList.add('hidden');
+    activeBgTaskId = null;
+    syncTaskStopBtn();
   }
+  btnTaskStop?.addEventListener('click', () => {
+    const ui = taskStopUiState({
+      taskId: activeBgTaskId,
+      bannerVisible: taskProgressBanner && !taskProgressBanner.classList.contains('hidden'),
+    });
+    if (!ui.canStop) return;
+    haptic('tap');
+    socket.emit('task:stop', { instanceId: viewingInstanceId, taskId: ui.taskId });
+    addBar('已请求停止后台任务…', 'text-ink-faint');
+  });
 
   // ---- 抽屉式侧边栏控制器 (Left Drawer Sidebar Controllers) ----
   function openLeftSidebar() {
@@ -4061,6 +4305,7 @@ import { verifyIntegrity } from './canonicalize.js';
     messagesEl.innerHTML = '';
     messagesEl.classList.remove('empty-start');
     streams.clear(); thinkings.clear(); toolCards.clear();
+    subagentCards.clear(); // 切会话/清屏：丢弃子 agent 卡状态（DOM 已随 messagesEl 清空）
     permQueue.length = 0; activePerm = null;
     permExpandBtn?.remove(); permExpandBtn = null;
     closeSheet(permModal);
@@ -4359,6 +4604,8 @@ import { verifyIntegrity } from './canonicalize.js';
       // 追平也是磁盘 history 增量——累加到已见条数，保持切入对账基准准确（见 shouldReloadOnEnter）。
       const sid = ev.sessionId;
       if (sid) seenDiskLenBySession.set(sid, (seenDiskLenBySession.get(sid) || 0) + msgs.length);
+      // 外部写入重置自动解锁估计倒计时（与 server quietTicks 清零同语义）
+      if (ev.payload?.external && mirrorReadonlySid) startMirrorCountdown();
     }
   }
 
@@ -4367,6 +4614,41 @@ import { verifyIntegrity } from './canonicalize.js';
   // 零写盘期间也维持——修「过一会儿感觉没在跑」误判）；armed=「⏳ 已排队接管」（点了「接管 CLI 会话」但终端本轮
   // 未完结，纯等待、零并发写盘风险，见下方 armedTakeoverStep 接线）；stale=true=「⚠️ 疑似中断」（pending 但
   // 超 5 分钟零写入，终端可能被强杀/断电，维持即时确认接管——等待对已疑似死亡的终端无意义）。
+  // 驾驶中倒计时：前端估计「约 12.5s 无外部写入可自动解锁」（对齐 MIRROR_RELEASE_QUIET_TICKS×2.5s）；
+  // 每次 history_append 外部消息 / 重新上锁会 reset；非精确时钟、仅体感提示。
+  const MIRROR_UNLOCK_EST_SEC = 12.5;
+  let mirrorCountdownTimer = null;
+  let mirrorCountdownEndsAt = 0;
+  function stopMirrorCountdown() {
+    if (mirrorCountdownTimer) { clearInterval(mirrorCountdownTimer); mirrorCountdownTimer = null; }
+    mirrorCountdownEndsAt = 0;
+  }
+  function refreshMirrorBannerCopy() {
+    if (!mirrorReadonlySid || !mirrorBannerText || !mirrorBannerIcon) return;
+    const armed = armedTakeoverSid === mirrorReadonlySid;
+    const remainingSec = (!armed && !mirrorStaleFlag && mirrorCountdownEndsAt)
+      ? Math.max(0, (mirrorCountdownEndsAt - Date.now()) / 1000)
+      : undefined;
+    mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
+    mirrorBannerText.textContent = formatMirrorBannerText({
+      armed, stale: mirrorStaleFlag, remainingSec: armed || mirrorStaleFlag ? undefined : remainingSec,
+    });
+  }
+  function startMirrorCountdown() {
+    stopMirrorCountdown();
+    mirrorCountdownEndsAt = Date.now() + MIRROR_UNLOCK_EST_SEC * 1000;
+    refreshMirrorBannerCopy();
+    mirrorCountdownTimer = setInterval(() => {
+      if (!mirrorReadonlySid || armedTakeoverSid || mirrorStaleFlag) { stopMirrorCountdown(); return; }
+      if (Date.now() >= mirrorCountdownEndsAt) {
+        // 到点不自动解锁（权威在 server mirror_state）；文案回落默认句，等 server 解锁事件
+        stopMirrorCountdown();
+        refreshMirrorBannerCopy();
+        return;
+      }
+      refreshMirrorBannerCopy();
+    }, 1000);
+  }
   function applyMirror(readonly, sessionId, stale = false, observedCli) {
     const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
@@ -4395,13 +4677,11 @@ import { verifyIntegrity } from './canonicalize.js';
     }
     mirrorBanner?.classList.toggle('hidden', !effective);
     const armed = effective && armedTakeoverSid === sessionId;
-    if (effective && mirrorBannerText && mirrorBannerIcon) {
-      mirrorBannerIcon.textContent = armed ? '⏳' : (stale ? '⚠️' : '⏱');
-      mirrorBannerText.textContent = armed
-        ? '已请求接管，等待终端当前操作完成后自动切换……'
-        : stale
-          ? '终端疑似中断于执行中（超 5 分钟无活动）——确认终端已停可接管'
-          : '终端驾驶中，这里只读追平——发送会与终端并发写盘、可能分叉';
+    if (effective) {
+      if (!armed && !stale) startMirrorCountdown();
+      else { stopMirrorCountdown(); refreshMirrorBannerCopy(); }
+    } else {
+      stopMirrorCountdown();
     }
     if (btnMirrorOverride) btnMirrorOverride.textContent = armed ? '取消接管' : '接管 CLI 会话';
     if (inputEl) inputEl.disabled = effective;

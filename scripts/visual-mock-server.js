@@ -124,6 +124,7 @@ const mockInstances = createDefaultInstances();
 
 let pendingPermission = null;
 let pendingQuestion = null;
+let questSeq = 0; // 每次 test:question* 递增，避免 TC-5 答过后 TC-5b 同 requestId 被 answeredQuestionIds 吞掉
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let syncPendingSnapshotInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
@@ -756,6 +757,15 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Gap question history after buffer trim.' }
         ]
       });
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-another') {
+      // TC-7 并发 tab：冷切入 inst_2 时 shouldReloadOnEnter(!hasCache && replayed>0)→reload，
+      // 会 clearView 掉 sync:since 活缓冲回放，必须以磁盘 history 为真相源回填（否则 hydrated=0）。
+      callback({
+        messages: [
+          { role: 'user', content: 'Show me status please' },
+          { role: 'assistant', content: 'This is the concurrent session "Another App Concurrency" historical message!' }
+        ]
+      });
     } else {
       callback({ messages: [] });
     }
@@ -1117,9 +1127,12 @@ io.on('connection', socket => {
         });
         await delay(500);
 
+        questSeq += 1;
+        const questToolId = `t_ask_choice_${questSeq}`;
+        const questMsgId = `msg_quest_${questSeq}`;
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_use', payload: { toolUseId: 't_ask_choice', name: 'AskUserQuestion', inputSummary: 'Choose a publish channel' }
+          type: 'tool_use', payload: { toolUseId: questToolId, name: 'AskUserQuestion', inputSummary: 'Choose a publish channel' }
         });
         await delay(500);
 
@@ -1130,9 +1143,9 @@ io.on('connection', socket => {
         });
 
         pendingQuestion = {
-          requestId: 'req_quest_choice#0',
-          toolUseId: 't_ask_choice',
-          messageId: 'msg_quest_1',
+          requestId: `${questToolId}#0`,
+          toolUseId: questToolId,
+          messageId: questMsgId,
           options: ['main (Stable Production)', 'dev (Bleeding-Edge Integration)', 'release-v1.0 (LTS)']
         };
 
@@ -2095,7 +2108,7 @@ io.on('connection', socket => {
           type: 'tool_result', payload: { toolUseId: 't_edit', ok: true, outputSummary: 'Successfully refactored duplicated blocks in utils/date.js' }
         });
 
-        // Tool 3: Run Command
+        // Tool 3: Run Command（截断摘要 + truncated 标记，供「展开全文」）
         socket.emit('agent:event', {
           seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'tool_use', payload: { toolUseId: 't_bash', name: 'run_command', inputSummary: 'npm test' }
@@ -2103,7 +2116,11 @@ io.on('connection', socket => {
         await delay(1200);
         socket.emit('agent:event', {
           seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'tool_result', payload: { toolUseId: 't_bash', ok: true, outputSummary: '✓ All 5 visual regression unit tests passed successfully!' }
+          type: 'tool_result', payload: {
+            toolUseId: 't_bash', ok: true,
+            outputSummary: '✓ All 5 visual regression unit tests passed successfully! …（已截断）',
+            truncated: true,
+          }
         });
 
         socket.emit('agent:event', {
@@ -2648,6 +2665,101 @@ io.on('connection', socket => {
           });
           emitHydration();
         }, 8000);
+      },
+    },
+    {
+      // TC-24：子 agent 可折叠卡——主 Agent tool_use 预建卡 + parentToolUseId 嵌套 text/thinking/tool
+      // 默认收起；展开后可见子 agent 正文与内部工具。对齐 agent.js forwardSubagentText 分流字段。
+      command: 'test:subagent',
+      run: async ({ activeInst }) => {
+        console.log('[mock] Starting test:subagent sequence');
+        // 空首页（session:new 后 viewing=null）时 activeInst 为 undefined——兜底到 inst_1
+        if (!activeInst) {
+          activeInst = mockInstances.find(i => i.instanceId === 'inst_1') || mockInstances[0];
+          if (!activeInst) return;
+          viewingInstanceId = activeInst.instanceId;
+        }
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        // 主会话：启动 Agent 工具（input 含 subagent_type + description）→ 前端预建可折叠卡
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: {
+            toolUseId: 'agent-parent-1',
+            name: 'Agent',
+            inputSummary: JSON.stringify({ description: 'Review auth module', subagent_type: 'code-reviewer' }),
+          }
+        });
+        await delay(200);
+
+        // 子 agent thinking（带 parentToolUseId）→ 进卡内，不进主流 details.thinking
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: {
+            messageId: 'msg_sa_1', text: 'Scanning auth handlers for CSRF gaps…',
+            parentToolUseId: 'agent-parent-1', subagentType: 'code-reviewer',
+          }
+        });
+        await delay(150);
+
+        // 子 agent 内部工具
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: {
+            toolUseId: 't_sa_read', name: 'Read',
+            inputSummary: JSON.stringify({ file_path: 'src/auth.js' }),
+            parentToolUseId: 'agent-parent-1', subagentType: 'code-reviewer',
+          }
+        });
+        await delay(200);
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: {
+            toolUseId: 't_sa_read', ok: true, outputSummary: 'export function login() { /* ... */ }',
+            parentToolUseId: 'agent-parent-1', subagentType: 'code-reviewer',
+          }
+        });
+        await delay(150);
+
+        // 子 agent 正文
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: {
+            messageId: 'msg_sa_1', text: 'Found 1 CSRF gap in login handler.',
+            parentToolUseId: 'agent-parent-1', subagentType: 'code-reviewer',
+          }
+        });
+        await delay(150);
+
+        // 主 Agent tool 完成 → 卡标题改「已完成」
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: {
+            toolUseId: 'agent-parent-1', ok: true,
+            outputSummary: 'Subagent code-reviewer finished review.',
+          }
+        });
+        await delay(100);
+
+        // 主流收尾正文 + result
+        socket.emit('agent:event', {
+          seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_main_sa', text: 'Review complete — see nested agent card for details.' }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_main_sa', durationMs: 1200, costUsd: 0.002, isError: false, models: [activeModel] }
+        });
       },
     },
     {
@@ -3246,6 +3358,18 @@ io.on('connection', socket => {
       syncPendingSnapshot = null;
       syncPendingSnapshotInstanceId = null;
     }
+  });
+
+  // 工具全文展开（对齐 server tool:full）：mock 对已知 toolUseId 返回全文
+  socket.on('tool:full', ({ toolUseId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    if (toolUseId === 't_bash') {
+      return ack({ ok: true, text: '✓ All 5 visual regression unit tests passed successfully!\n(extra full lines from tool:full mock)' });
+    }
+    if (toolUseId === 't_trunc') {
+      return ack({ ok: true, text: 'FULL_TOOL_OUTPUT_LINE\n'.repeat(40).trim() });
+    }
+    ack({ ok: false, error: '全文不可用（mock 未缓存）' });
   });
 
   // Handle user question choice selection (optionIndex / optionIndexes / freeText)

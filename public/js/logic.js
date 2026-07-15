@@ -762,3 +762,81 @@ function normalizeRateWindow(w) {
   if (typeof w.resets_at === 'string' && w.resets_at) out.resetsAt = w.resets_at;
   return Object.keys(out).length ? out : null;
 }
+
+// 子 agent 事件判定：agent.js 对 parent_tool_use_id 消息分流 emit 时带 parentToolUseId。
+// 前端 text_delta/thinking_delta/tool_use/tool_result 用它决定「嵌进子 agent 卡」vs「主流气泡」。
+// 只认非空字符串——数字/空串都当主流，防脏字段把主对话误收进卡。
+export function isSubagentPayload(p) {
+  return !!(p && typeof p.parentToolUseId === 'string' && p.parentToolUseId);
+}
+
+// 子 agent 可折叠卡片标题（默认收起；机主选「可折叠卡片」形态）。
+// running=true → 运行中；false → 已完成（主 Agent tool_result 或本轮 result 收束）。
+// 类型缺失时兜底「子 agent」（stream_event 首批 delta 可能早于带 subagent_type 的 assistant）。
+export function formatSubagentCardTitle({ subagentType, running = true } = {}) {
+  const raw = subagentType != null ? String(subagentType).trim() : '';
+  const type = raw || '子 agent';
+  return running ? `🤖 ${type} 运行中` : `🤖 ${type} 已完成`;
+}
+
+// 工具摘要是否已被 agent/history 截断（口径：尾缀「 …（已截断）」——见 agent.js truncate）。
+// 前端据此显「展开全文」；payload.truncated 优先（布尔），缺省时嗅探摘要串。
+export function isToolSummaryTruncated(summary, { truncated } = {}) {
+  if (truncated === true) return true;
+  if (truncated === false) return false;
+  return typeof summary === 'string' && summary.includes('…（已截断）');
+}
+
+// 只读镜像锁横幅文案（四态：armed / stale / driving+倒计时 / driving）。
+// remainingSec：前端估计「再静默约 N 秒可自动解锁」（对齐 MIRROR_RELEASE_QUIET_TICKS×2.5s≈12.5s）；
+// 非有限/≤0 时不写倒计时，回落驾驶中默认句。
+export function formatMirrorBannerText({ armed = false, stale = false, remainingSec } = {}) {
+  if (armed) return '已请求接管，等待终端当前操作完成后自动切换……';
+  if (stale) return '终端疑似中断于执行中（超 5 分钟无活动）——确认终端已停可接管';
+  if (Number.isFinite(remainingSec) && remainingSec > 0) {
+    const s = Math.max(1, Math.ceil(remainingSec));
+    return `终端驾驶中，只读追平 · 约 ${s}s 无写入后可自动解锁（或点接管）`;
+  }
+  return '终端驾驶中，这里只读追平——发送会与终端并发写盘、可能分叉';
+}
+
+// 后台任务停止按钮态：有非空 taskId 且横幅可见才可点（对齐 SDK stopTask(taskId)）。
+export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
+  const id = typeof taskId === 'string' ? taskId.trim() : '';
+  return { canStop: Boolean(id) && bannerVisible !== false, taskId: id || null };
+}
+
+// 额度窗展示行：parseUsageForWeb 输出 → 人读 lines（供 modal 渲染）。
+// available:false → 空行 + available:false（第三方/无 RPC 时整窗隐藏）。
+// now 可注入便于单测重置倒计时。
+export function formatUsageWindowLines(parsed, { now = Date.now() } = {}) {
+  if (!parsed || parsed.available !== true) return { available: false, lines: [], subscriptionType: null };
+  const lines = [];
+  if (parsed.subscriptionType) lines.push({ key: 'sub', label: '订阅', text: String(parsed.subscriptionType) });
+  if (parsed.session && Number.isFinite(parsed.session.totalCostUsd)) {
+    lines.push({ key: 'cost', label: '本会话成本', text: `$${parsed.session.totalCostUsd.toFixed(2)}` });
+  }
+  const rl = parsed.rateLimits || {};
+  const winLabel = {
+    five_hour: '5 小时窗',
+    seven_day: '7 天窗',
+    seven_day_opus: '7 天 Opus',
+    seven_day_sonnet: '7 天 Sonnet',
+    seven_day_oauth_apps: '7 天 OAuth Apps',
+  };
+  for (const key of Object.keys(winLabel)) {
+    const w = rl[key];
+    if (!w || !Number.isFinite(w.utilization)) continue;
+    let text = `${Math.round(w.utilization)}%`;
+    if (w.resetsAt) {
+      const rem = Date.parse(w.resetsAt) - now;
+      if (Number.isFinite(rem) && rem > 0) {
+        const mins = Math.ceil(rem / 60_000);
+        const h = Math.floor(mins / 60), m = mins % 60;
+        text += h > 0 ? ` · 重置 ${h}h${String(m).padStart(2, '0')}m` : ` · 重置 ${m}m`;
+      }
+    }
+    lines.push({ key, label: winLabel[key], text });
+  }
+  return { available: true, lines, subscriptionType: parsed.subscriptionType || null };
+}

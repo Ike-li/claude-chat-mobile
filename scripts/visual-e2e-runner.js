@@ -193,6 +193,26 @@ async function run() {
     console.log('   [Assert] Tool card statuses:', toolStatusesTC2);
     assert.deepStrictEqual(toolStatusesTC2, ['✅', '✅', '✅'], 'TC-2: All tool statuses must have transitioned to ✅');
 
+    // 4. 截断工具卡应有「展开全文」；先展开 <details> 再点（closed details 内按钮可能不可点）
+    const expandBtnCount = await page.evaluate(() => document.querySelectorAll('[data-testid="tool-expand-full"]').length);
+    assert.ok(expandBtnCount >= 1, 'TC-2: 截断工具结果应出现「展开全文」按钮');
+    await page.evaluate(() => {
+      const btn = document.querySelector('[data-testid="tool-expand-full"]');
+      const card = btn?.closest('details.toolcard');
+      if (card) card.open = true;
+    });
+    await sleep(100);
+    await page.click('[data-testid="tool-expand-full"]');
+    await page.waitForFunction(() => {
+      const outs = Array.from(document.querySelectorAll('details.toolcard .t-out'));
+      return outs.some(o => (o.textContent || '').includes('tool:full mock') || (o.textContent || '').includes('extra full'));
+    }, { timeout: 5000 });
+    const expandedFull = await page.evaluate(() => {
+      const outs = Array.from(document.querySelectorAll('details.toolcard .t-out'));
+      return outs.map(o => o.textContent || '').join('\n');
+    });
+    assert.ok(expandedFull.includes('tool:full mock') || expandedFull.includes('extra full'), 'TC-2: 展开全文应写入 tool:full 返回内容');
+
     await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc2_tools.png` });
     console.log('📸 Captured and saved tc2_tools.png\n');
 
@@ -1307,6 +1327,14 @@ async function run() {
     const firstProgressTC16 = await page.evaluate(() => document.getElementById('taskProgressText').textContent);
     console.log(`   [Assert] 首条进度: "${firstProgressTC16}"`);
     assert.ok(firstProgressTC16.includes('步骤'), 'TC-16: 进度横幅应显示后台任务进度文本');
+    // 停止按钮：有 taskId 时应可见（task:stop 接线）
+    const stopBtnTC16 = await page.evaluate(() => {
+      const btn = document.getElementById('btnTaskStop');
+      if (!btn) return { exists: false };
+      return { exists: true, hidden: btn.classList.contains('hidden'), text: btn.textContent.trim() };
+    });
+    assert.strictEqual(stopBtnTC16.exists, true, 'TC-16: #btnTaskStop 应存在');
+    assert.strictEqual(stopBtnTC16.hidden, false, 'TC-16: 有 taskId 时停止按钮应可见');
     // 2. 越过第 2、3 条心跳（mock 每 600ms 一条）→ 断言【原地刷新】：同一元素文本更新为最新、未追加拼接、横幅始终仅一条
     await sleep(1400);
     const [lastProgressTC16, bannerCountTC16] = await page.evaluate(() => [
@@ -1589,6 +1617,60 @@ async function run() {
     assert.strictEqual(tc23State.messagesEmptyStart, true, 'TC-23: 移动端按下回车不应触发发送（消息区应仍是未发送过的空态，无新气泡）');
 
     console.log('✅ TC-23: 移动端回车换行不再截断发送 passed\n');
+
+    // ==================================================================
+    // TC-24: 子 agent 可折叠卡（切片 C）—— parentToolUseId 嵌套，默认收起
+    // ==================================================================
+    console.log('👉 Running TC-24: 子 agent 可折叠卡（默认收起 / 展开可见嵌套内容）...');
+    // TC-23 以 session:new 结束（viewingInstanceId=null）——mock 场景需要 activeInst。
+    // 整页 reload 回到默认 viewing=inst_1，再清到空闲后发 test:subagent。
+    await page.reload({ waitUntil: 'networkidle2' });
+    await page.waitForSelector('#btnSend', { timeout: 10000 });
+    await sleep(600);
+    await sendCommand('test:subagent');
+    await waitIdle();
+
+    const saBefore = await page.evaluate(() => {
+      const cards = Array.from(document.querySelectorAll('[data-testid="subagent-card"]'));
+      const card = cards[0] || null;
+      const title = card?.querySelector('.sa-title')?.textContent?.trim() || '';
+      const nestedTools = card ? card.querySelectorAll('details.toolcard').length : 0;
+      const nestedText = card?.querySelector('[data-testid="subagent-text"]')?.textContent || '';
+      // 主流 thinking（msg-frame.thinking）不应被父工具 use 的子 agent thinking 污染
+      // 子 agent thinking 在卡内 .thinking，不带 msg-frame 或在 .sa-body 内
+      const mainThinkingCount = document.querySelectorAll('#messages > details.thinking.msg-frame').length;
+      return {
+        count: cards.length,
+        open: card ? card.hasAttribute('open') : null,
+        title,
+        nestedTools,
+        nestedText,
+        mainThinkingCount,
+      };
+    });
+    assert.strictEqual(saBefore.count, 1, 'TC-24: 应恰好 1 张子 agent 卡');
+    assert.strictEqual(saBefore.open, false, 'TC-24: 默认必须收起（无 open 属性）');
+    assert.ok(saBefore.title.includes('code-reviewer'), 'TC-24: 标题应含 subagent 类型 code-reviewer');
+    assert.ok(saBefore.title.includes('已完成'), 'TC-24: 主 Agent tool_result 后标题应为「已完成」');
+    assert.strictEqual(saBefore.nestedTools, 1, 'TC-24: 卡内应有 1 张嵌套工具卡（Read）');
+    assert.ok(saBefore.nestedText.includes('CSRF'), 'TC-24: 卡内正文应含子 agent 输出（CSRF）');
+    assert.strictEqual(saBefore.mainThinkingCount, 0, 'TC-24: 子 agent thinking 不得落到主流 details.thinking');
+
+    // 点头展开
+    await page.click('[data-testid="subagent-card"] summary');
+    await sleep(200);
+    const saOpen = await page.evaluate(() => {
+      const card = document.querySelector('[data-testid="subagent-card"]');
+      return {
+        open: card ? card.hasAttribute('open') : false,
+        bodyVisible: card ? !!(card.querySelector('.sa-body') && card.querySelector('.sa-body').offsetParent !== null) : false,
+      };
+    });
+    assert.strictEqual(saOpen.open, true, 'TC-24: 点击 summary 后卡应展开（open）');
+
+    await page.screenshot({ path: `${SNAPSHOTS_DIR}/tc24_subagent.png` });
+    console.log('📸 Captured and saved tc24_subagent.png');
+    console.log('✅ TC-24: 子 agent 可折叠卡 passed\n');
 
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');

@@ -15,17 +15,15 @@
 3. **切片 A(子 agent 后端分流)**:`agent.js` query options 加 `forwardSubagentText:true`;三处 `parent_tool_use_id break` 改为分流 emit——stream_event 子 agent→emit text_delta/thinking_delta 带 `parentToolUseId`(不碰主 buffer);assistant 子 agent→emit tool_use 带 `parentToolUseId`+`subagentType`(正文走 stream_event 避免重复);**保留 error 不误报主会话守卫**;user 子 agent 仍 break(tool_result 留后续)。删了旧「stream_event/assistant parent_tool_use_id→跳过」两测。**test/agent.test.mjs 187 pass 0 fail;contract:check OK(类型级,新字段无需改契约)。**
 
 ## 待做
-- **task 11 / 切片 C(前端子 agent 嵌套气泡)——机主已选「可折叠卡片(默认收起)」**:
-  - UI:子 agent 活动收进卡片「🤖 {subagentType} 运行中 ▶」,点头展开看详情(text/thinking/tool_use 缩进)。
-  - 前端消费点(`public/js/app.js` ~L898-920 事件分发):`text_delta`/`tool_use`/`tool_result`/`thinking_delta` 的 `ev.payload.parentToolUseId` 非空→路由到子 agent 卡片(而非主流)。
-  - 可靠已知的渲染函数(app.js ~2472-2494,**注意:本轮 Read 该区域返回损坏内容,下次务必重新干净读取核对**):
-    - `addAssistantChunk(messageId,text)`: ensureMsgRow + streamBucket/msgBody + appendMarkdownChunk
-    - `renderToolUse(payload)`: renderToolCard + attachToolCard(toolCards Map by toolUseId)
-    - `renderToolResult(payload)`: toolCards.get(toolUseId)+updateToolCard
-    - `renderThinking(payload)`: ensureMsgRow + msgBody + renderThinkingInto
-  - 纯逻辑(卡片分组/标题格式化)进 `logic.js` 单测;DOM 进 app.js + visual E2E(`scripts/visual-mock-server.js` 加子 agent 消息场景 + `scripts/visual-e2e-runner.js` 加断言:卡片存在/默认收起/点开展开)。
-- **切片 2c/2d(stopTask 接线)**:server.js 照 `:1855 on(socket,'user:interrupt',...)` 加 `on(socket,'task:stop', p=>routeInstance(p?.instanceId)?.stopTask(p?.taskId))` + 前端后台任务停止按钮。
-- **③ usage 套餐额度窗**:agent.fetchUsage()(usage_EXPERIMENTAL,防御性解析)+ 纯函数(rate_limits 提取 + **第三方 provider `rate_limits_available:false` 降级隐藏** + 剔除 `behaviors` 隐私)+ server 接线 + 前端额度窗 UI。实测:订阅认证 max=有额度;第三方=无(`.d.ts` 坐实 API key/Bedrock/Vertex → false/null)。
+- **切片 2c/2d(stopTask 前端按钮)**:server.js 已有 `task:stop`→`stopTask`；前端后台任务停止按钮仍缺。
+- **③ usage 套餐额度窗 UI**:后端/纯函数侧已有骨架；前端额度窗展示仍待接线。
+
+## 已完成(续 2026-07-15)
+- **切片 C(前端子 agent 可折叠卡)**:
+  - `logic.js`:`isSubagentPayload` / `formatSubagentCardTitle` + `test/logic.test.mjs` 6 测
+  - `app.js`:parentToolUseId 分流进 `[data-testid=subagent-card]`(默认收起)；主 Agent tool_use 预建卡；tool_result/result 标「已完成」；clearView 清 map
+  - visual:`test:subagent` mock + **TC-24**（默认收起/类型标题/嵌套工具与正文/主流无 thinking 污染/点击展开）
+  - 顺带修 visual mock:question requestId 递增(TC-5→5b)、`mock-session-another` history 回填(TC-7 冷切入 reload)
 
 ## 教训/坑
 - **app.js(~4434 行)本轮 grep+Read 返回损坏输出**(重复行/错行号/断语法)。**下次读该文件小范围、多次核对,损坏就重读,绝不据损坏输出 Edit**。

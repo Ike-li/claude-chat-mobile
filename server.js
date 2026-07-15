@@ -1842,6 +1842,11 @@ io.on('connection', socket => {
     if (a.externalDirty && a.sessionId) {
       const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId), wasViewing = viewingInstanceId === a.instanceId;
       interactionLog.addSessionLog(sid, 'sys_info', '[SYS] 会话曾被外部（终端）驱动，发送前置换实例吸收外部轮次（防陈旧上下文分叉）');
+      // 体感：置换会冷启动 resume，前端先收到 system 条再等 init，避免「点了没反应」
+      socket.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: sid, instanceId: a.instanceId, ts: Date.now(),
+        type: 'system', payload: { message: '正在续接会话（吸收终端写入）…', kind: 'resuming' }
+      });
       disposeInstance(a.instanceId);
       a = openInstance({ cwd, resumeId: sid, mode, effort: eff });
       if (wasViewing) viewingInstanceId = a.instanceId;
@@ -2006,6 +2011,11 @@ io.on('connection', socket => {
     const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, wasViewing = viewingInstanceId === id;
     interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}, 正在置换实例...`);
     if (sid) sessions.updateSessionPrefs(sid, { effort: level }); // 持久化，resume 恢复用（先于 dispose，防崩溃丢档）
+    // 体感：effort 换实例是冷启动，先推 system 让前端立刻显「正在续接」
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
+      type: 'system', payload: { message: '正在切换思考强度并续接会话…', kind: 'resuming' }
+    });
     disposeInstance(id);                                              // 关旧实例
     const ni = openInstance({ cwd, resumeId: sid, mode, effort: level }); // 开新实例 resume 同会话、带新 effort
     if (wasViewing) viewingInstanceId = ni.instanceId;
@@ -2292,6 +2302,17 @@ io.on('connection', socket => {
     } catch (err) {
       ack({ messages: [], error: err.message });
     }
+  });
+
+  // 工具卡「展开全文」：取 agent 缓存的截断前完整 output（脱敏后）。过期/非本实例 → 明确失败文案。
+  on(socket, 'tool:full', ({ instanceId, toolUseId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    const a = routeInstance(instanceId);
+    if (!a) return ack({ ok: false, error: '实例不存在' });
+    if (typeof toolUseId !== 'string' || !toolUseId) return ack({ ok: false, error: '缺少 toolUseId' });
+    const text = a.getToolOutput(toolUseId);
+    if (text == null) return ack({ ok: false, error: '全文不可用（已过期或未缓存）' });
+    ack({ ok: true, text });
   });
 
   // ③ 工具卡片文件预览：Edit/Write/Read 等的 diff / 文件片段 / 路径归属。走 on() 鉴权闸（deviceApproved fail-closed）。

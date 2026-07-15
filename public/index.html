@@ -909,12 +909,14 @@
         </div>
       </div>
 
-      <!-- 后台任务进度横幅（task_progress 瞬时事件驱动、原地刷新；琥珀色区别于上方 accent 色的当前会话子agent活动）-->
+      <!-- 后台任务进度横幅（task_progress 瞬时事件驱动、原地刷新；琥珀色区别于上方 accent 色的当前会话子agent活动）
+           「停止」= task:stop → SDK stopTask(taskId)，对齐 CLI 停单个后台任务。-->
       <div id="taskProgressBanner" class="hidden px-3 py-2 bg-surface border border-warning/40 rounded-xl text-xs text-warning mb-1 shrink-0">
         <div class="flex items-center gap-2">
           <span class="animate-spin text-sm">⚙</span>
           <span class="shrink-0 font-semibold">后台任务</span>
-          <span id="taskProgressText" class="font-medium truncate"></span>
+          <span id="taskProgressText" class="font-medium truncate flex-1 min-w-0"></span>
+          <button type="button" id="btnTaskStop" class="hidden shrink-0 px-2 py-1 rounded-lg border border-warning text-warning font-semibold hover:bg-warning hover:text-surface active:scale-95 transition-all" data-testid="task-stop-btn" title="停止该后台任务">停止</button>
         </div>
       </div>
 

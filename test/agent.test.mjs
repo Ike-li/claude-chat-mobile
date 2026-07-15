@@ -511,6 +511,20 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  test('tool_result：超长输出 → truncated:true + getToolOutput 可取全文（展开全文）', () => {
+    const { s, events } = makeSession();
+    // 必须含空白/标点：纯 base64 字符集会被 redactBase64 整段省略，测不到截断路径
+    const long = ('line of tool output with spaces.\n').repeat(40); // >600
+    s.map({ type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'tool-long', is_error: false, content: long }
+    ] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-long');
+    assert.equal(tr.payload.truncated, true);
+    assert.ok(tr.payload.outputSummary.includes('…（已截断）'));
+    assert.equal(s.getToolOutput('tool-long'), long);
+    s.dispose();
+  });
+
   test('tool_result：Read 读图片等场景 raw 里的长 base64 被脱敏（真实病灶：outputSummary）', () => {
     const { s, events } = makeSession();
     const bigBase64 = 'B'.repeat(50000);
