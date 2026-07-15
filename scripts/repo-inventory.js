@@ -28,6 +28,19 @@ const ROOT_FILES = new Map([
   ['.env.example', ['Configuration template', 'Documented runtime environment variables', 'keep']],
   ['.gitignore', ['Project configuration', 'Generated and secret file exclusions', 'keep']],
   ['.nvmrc', ['Project configuration', 'Recommended Node major version', 'keep']],
+  // docs/ 手写文档逐篇显式登记（无 .md 通配）：往 docs/ 新增文档必须先在此声明用途，
+  // 否则 inventory:check 拒绝——挡住审计报告/进度笔记/提案等一次性产物悄悄回堆。
+  ['docs/capabilities.md', ['Documentation', 'Chinese capability tour answering "what can the phone do"', 'keep']],
+  ['docs/capabilities.en.md', ['Documentation', 'English capability tour', 'keep']],
+  ['docs/deployment.md', ['Documentation', 'Persistent service, tunnel, and Cloudflare Access operations guide', 'keep']],
+  ['docs/design.md', ['Documentation', 'Requirements, security invariants, and state-semantics source of truth', 'keep']],
+  ['docs/event-contract.md', ['Documentation', 'Outbound agent:event contract reference backed by contract:check', 'keep']],
+  ['docs/interfaces.md', ['Documentation', 'HTTP, inbound socket, and internal module interface reference', 'keep']],
+  ['docs/sdk-boundary.md', ['Documentation', 'Agent SDK boundary audit and upgrade-review baseline', 'keep']],
+  ['docs/statusline-bridge.md', ['Documentation', 'CLI statusline bridge install, security, and rollback guide', 'keep']],
+  ['docs/testing.md', ['Documentation', 'Test layering, migration evidence, and manual production regression suites', 'keep']],
+  ['docs/index.html', ['Documentation', 'Bilingual static landing page served by GitHub Pages', 'keep']],
+  ['docs/.nojekyll', ['Documentation', 'GitHub Pages marker disabling Jekyll processing', 'keep']],
 ]);
 
 const PREFIX_RULES = [
@@ -52,7 +65,7 @@ const PREFIX_RULES = [
   ['docs/demo.gif', 'Generated asset', 'README demonstration animation', 'generated'],
   ['docs/og-image.jpg', 'Documentation asset', 'Documentation-site social preview', 'keep'],
   ['docs/repository-map.md', 'Generated documentation', 'Exhaustive repository file map', 'generated'],
-  ['docs/', 'Documentation', 'Maintainer or user documentation', 'keep'],
+  // 有意不设 docs/ 通配兜底：手写文档在 ROOT_FILES 逐篇登记，新文档未登记即拒。
 ];
 
 export function classifyRepositoryPath(path) {

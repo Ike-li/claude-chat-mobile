@@ -70,15 +70,15 @@ Total classified files: **282**.
 | `CLAUDE.md` | Instructions | Canonical project and Claude Code instructions | Claude Code and Codex project instruction loader | Authored and reviewed manually | keep |
 | `deploy/server.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/tunnel.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
-| `docs/.nojekyll` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/capabilities.en.md` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/capabilities.md` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/.nojekyll` | Documentation | GitHub Pages marker disabling Jekyll processing | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/capabilities.en.md` | Documentation | English capability tour | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/capabilities.md` | Documentation | Chinese capability tour answering "what can the phone do" | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/demo.gif` | Generated asset | README demonstration animation | README, documentation site, or maintainer reference | `node scripts/make-demo-gif.js` | generated |
-| `docs/deployment.md` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/design.md` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/event-contract.md` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/index.html` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/interfaces.md` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/deployment.md` | Documentation | Persistent service, tunnel, and Cloudflare Access operations guide | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/design.md` | Documentation | Requirements, security invariants, and state-semantics source of truth | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/event-contract.md` | Documentation | Outbound agent:event contract reference backed by contract:check | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/index.html` | Documentation | Bilingual static landing page served by GitHub Pages | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/interfaces.md` | Documentation | HTTP, inbound socket, and internal module interface reference | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/og-image.jpg` | Documentation asset | Documentation-site social preview | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/repository-map.md` | Generated documentation | Exhaustive repository file map | README, documentation site, or maintainer reference | `npm run inventory:update` | generated |
 | `docs/screenshots/01-stream-en.png` | Documentation asset | README screenshot | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
@@ -90,9 +90,9 @@ Total classified files: **282**.
 | `docs/screenshots/04-workspace-en.png` | Documentation asset | README screenshot | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/screenshots/05-settings-en.png` | Documentation asset | README screenshot | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/screenshots/06-console-en.png` | Documentation asset | README screenshot | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/sdk-boundary.md` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/statusline-bridge.md` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/testing.md` | Documentation | Maintainer or user documentation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/sdk-boundary.md` | Documentation | Agent SDK boundary audit and upgrade-review baseline | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/statusline-bridge.md` | Documentation | CLI statusline bridge install, security, and rollback guide | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/testing.md` | Documentation | Test layering, migration evidence, and manual production regression suites | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/vendor/source-serif-400.woff2` | Vendored asset | Pinned documentation-site font | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/vendor/source-serif-600.woff2` | Vendored asset | Pinned documentation-site font | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/vendor/source-serif-italic.woff2` | Vendored asset | Pinned documentation-site font | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
