@@ -451,6 +451,42 @@ export function formatApiRetryBanner(payload = {}) {
 // Part3（§6）：SDK getContextUsage() 的 categories 分解 → 展示行。对齐 CLI /context 的上下文占用分解
 // （Skills / MCP tools / Memory files / Compact buffer / Free space 等）。过滤 0/坏项、按 tokens 降序、
 // 算 pct（相对 maxTokens；缺 maxTokens 则 pct=null，前端只显绝对 token）。isDeferred 透传（延迟加载类别）。
+// 服务状态可见性（第一性原理重新设计——见 docs/hld-ccm.md 附近）：与"需要你(N)"聚合（FR-21/AD-11，会话待处理，
+// 论证依据=注意力不对称）是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（NFR-15，论证依据=可维护性），
+// 不复用/不混入会话状态判定。每设备独立感知：本地 localStorage 存上次已知的服务启动时刻，与服务端下发的
+// 当前启动时刻对比，不同即服务重启过（LaunchAgent 静默拉起/意外崩溃恢复），当前设备此前不知情。
+export function detectServiceRestart({ startedAt, lastSeenStartedAt } = {}) {
+  const valid = typeof startedAt === 'number' && Number.isFinite(startedAt);
+  if (!valid) return { changed: false, nextStartedAt: lastSeenStartedAt ?? null }; // 防御：坏数据不覆盖已有基线
+  if (lastSeenStartedAt == null) return { changed: false, nextStartedAt: startedAt }; // 首次见到，只建基线不告警
+  return { changed: startedAt !== lastSeenStartedAt, nextStartedAt: startedAt };
+}
+
+function formatAgo(ms) {
+  if (!Number.isFinite(ms) || ms < 60000) return '刚刚';
+  const mins = Math.floor(ms / 60000);
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.floor(hours / 24)} 天前`;
+}
+
+// 组装会话面板"服务"小节文案（会话面板既有图例区之后、目录列表之前，仅异常时渲染）。空数组=一切正常。
+// 刻意不吞并/复用"需要你(N)"聚合的展示逻辑——两条轴分开陈列，不让服务健康看起来像"更多同类待办"。
+export function formatServiceNotices({ service, restartChanged, now } = {}) {
+  const notices = [];
+  if (restartChanged) {
+    notices.push('🔄 服务自上次连接后已重启，请确认之前任务是否正常完成');
+  }
+  const df = service && service.deliveryFailure;
+  if (df && typeof df.at === 'number') {
+    const channelLabel = df.channel === 'ntfy' ? 'ntfy' : 'push';
+    const countSuffix = Number.isFinite(df.count) && df.count > 0 ? `，累计 ${df.count} 次` : '';
+    notices.push(`🔔 推送最近失败于 ${formatAgo(now - df.at)}（${channelLabel}${countSuffix}）`);
+  }
+  return notices;
+}
+
 export function formatContextCategories(categories, maxTokens) {
   if (!Array.isArray(categories)) return [];
   const win = Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : null;
@@ -458,4 +494,58 @@ export function formatContextCategories(categories, maxTokens) {
     .filter(c => c && typeof c.name === 'string' && Number.isFinite(c.tokens) && c.tokens > 0)
     .map(c => ({ name: c.name, tokens: c.tokens, pct: win ? Math.round(c.tokens / win * 100) : null, deferred: !!c.isDeferred }))
     .sort((a, b) => b.tokens - a.tokens);
+}
+
+// ③ 从 SDK usage_EXPERIMENTAL...() 响应提取 web 额度窗所需字段（防御性解析——运行时结构比 .d.ts 富且
+// 标记 EXPERIMENTAL_MAY_CHANGE、会漂，故不绑固定 schema、逐字段存在性校验）。三条硬规则：
+// ① usage 为空（fetchUsage 超时/无 q/抛错）或 rate_limits_available===false（API key / Bedrock / Vertex /
+//    无 profile scope 的第三方 provider）→ 返回 { available:false }，前端据此隐藏额度窗、不显任何额度数字。
+// ② 剔除 behaviors：含本机使用画像隐私（per-skill/agent/plugin/MCP 归因、请求/会话计数），绝不外露。
+// ③ 成本（session.total_cost_usd）与订阅类型（max/pro）非隐私、可留。
+// 窗口 key（five_hour/seven_day_opus 等）保留 SDK 原名（= SDKRateLimitInfo.rateLimitType 枚举，稳定可辨），
+// 叶子字段归一 camelCase（resets_at→resetsAt）符合 web 契约。
+export function parseUsageForWeb(usage) {
+  if (!usage || typeof usage !== 'object') return { available: false };
+  if (usage.rate_limits_available === false) return { available: false };
+  const out = { available: true };
+  if (typeof usage.subscription_type === 'string' && usage.subscription_type) out.subscriptionType = usage.subscription_type;
+  const sess = usage.session;
+  if (sess && typeof sess === 'object' && Number.isFinite(sess.total_cost_usd)) out.session = { totalCostUsd: sess.total_cost_usd };
+  const rl = usage.rate_limits;
+  if (rl && typeof rl === 'object') {
+    const limits = {};
+    for (const key of ['five_hour', 'seven_day', 'seven_day_oauth_apps', 'seven_day_opus', 'seven_day_sonnet']) {
+      const w = normalizeRateWindow(rl[key]);
+      if (w) limits[key] = w;
+    }
+    if (Array.isArray(rl.model_scoped)) {
+      const scoped = rl.model_scoped.map(m => {
+        const w = normalizeRateWindow(m);
+        if (w && m && typeof m.display_name === 'string' && m.display_name) w.displayName = m.display_name;
+        return w;
+      }).filter(Boolean);
+      if (scoped.length) limits.model_scoped = scoped;
+    }
+    if (rl.extra_usage && typeof rl.extra_usage === 'object') {
+      const e = rl.extra_usage, extra = {};
+      if (typeof e.is_enabled === 'boolean') extra.isEnabled = e.is_enabled;
+      if (Number.isFinite(e.utilization)) extra.utilization = e.utilization;
+      if (Number.isFinite(e.monthly_limit)) extra.monthlyLimit = e.monthly_limit;
+      if (Number.isFinite(e.used_credits)) extra.usedCredits = e.used_credits;
+      if (Object.keys(extra).length) limits.extraUsage = extra;
+    }
+    if (Object.keys(limits).length) out.rateLimits = limits;
+  }
+  return out;
+}
+
+// 归一化单个额度窗：{ utilization:number|null, resets_at:string|null } → { utilization?, resetsAt? }。
+// 防御性：非对象/全空 → null（调用方据此省略该窗）。utilization=0 是有效值（刚开始用）必须保留，故用
+// Number.isFinite 而非真值判断。非导出 helper（parseUsageForWeb 专用）。
+function normalizeRateWindow(w) {
+  if (!w || typeof w !== 'object') return null;
+  const out = {};
+  if (Number.isFinite(w.utilization)) out.utilization = w.utilization;
+  if (typeof w.resets_at === 'string' && w.resets_at) out.resetsAt = w.resets_at;
+  return Object.keys(out).length ? out : null;
 }

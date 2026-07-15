@@ -114,6 +114,10 @@ export class AgentSession {
     this.currentTask = null;      // 当前活跃的 Agent/Task 工具描述（tool_use 设，result/dispose 清）——供 statusline 显示
     this.lastToolName = null;     // 最后使用的工具名（Bash/Agent/Write 等），供后台 tab 角标细化
     this.bgTasks = new Map();     // 活的后台任务注册表 key → { taskType, message, lastSeenAt }——task_progress upsert / 完成 or TTL 清；驱动"纯后台运行中"⏳
+    // 子 agent 类型缓存 parent_tool_use_id → subagent_type：probe 实证只有 assistant 消息带 subagent_type，
+    // stream_event（text/thinking delta）与 user（tool_result）都不带。缓存供后二者补标签——否则纯文本子 agent
+    // （无 tool_use、只走 stream_event）的卡片永远没有 🤖 类型名。换会话/dispose 清空，不跨会话/实例串标签。
+    this.subagentTypeByParent = new Map();
 
     this.queue = [];
     this.notifyInput = null;
@@ -309,6 +313,38 @@ export class AgentSession {
       this.queue = toDrop.concat(this.queue);
       this.emit('system', { message: '当前没有可中断的任务' });
     }
+  }
+
+  // 停止单个运行中的后台任务（子 agent / 后台 Bash），对应终端 Ctrl+X Ctrl+K 停某个任务。
+  // taskId 来自 task_notification / task_progress / background_tasks_changed 事件。SDK stopTask 成功后会
+  // 自发 status='stopped' 的 task_notification（经 map() 走 bgTaskDone 清理 bgTasks、熄 ⏳、广播）——故此处
+  // 【不】额外 emit，避免与 SDK 通道重复。与 interrupt()（停整轮 + 清主队列 + 减 pendingTurns）不同：
+  // stopTask 只停单个后台任务，不碰主队列 / pendingTurns。返回 true=已请求停止；false=disposed / 无有效
+  // taskId / 无 q / SDK 抛错（幂等——重复点停止或任务已结束都安全返回 false，不抛）。
+  async stopTask(taskId) {
+    if (this.disposed) return false;                          // 弃用实例不发
+    if (typeof taskId !== 'string' || !taskId) return false;  // 无有效 taskId 不调 SDK
+    if (!this.q?.stopTask) return false;                      // 无 q（实例未 start）/ SDK 无该方法：显式判，勿靠 ?. 静默通过
+    try {
+      await this.q.stopTask(taskId);
+      return true;
+    } catch {
+      return false; // SDK 无该任务 / 已结束：静默吞（幂等）
+    }
+  }
+
+  // ③ 套餐额度窗数据源：调 SDK 实验性 usage RPC（session 成本 + claude.ai 套餐额度利用率窗）。带超时
+  // （照 statusline getContextUsageSafe 1500ms 模式：cold RPC 可能慢，不阻塞调用方）——超时 / 无 q / 无该
+  // 方法（旧 CLI / 网关不支持）/ 抛错一律返回 null 降级（server 侧 parseUsageForWeb(null) → available:false 隐藏额度窗）。
+  // 只取原始对象、解析交给纯函数 parseUsageForWeb：运行时结构比 .d.ts 富且标记 EXPERIMENTAL_MAY_CHANGE、会漂。
+  async fetchUsage(timeoutMs = 1500) {
+    if (typeof this.q?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') return null;
+    try {
+      return await Promise.race([
+        this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('usage timeout')), timeoutMs)),
+      ]);
+    } catch { return null; }
   }
 
   // 权限档切换（与 send 的 setModel 同型，差分——仅档位真变才调 SDK）。
@@ -721,6 +757,7 @@ export class AgentSession {
     this.currentTask = null;
     this.lastToolName = null;
     this.bgTasks.clear(); // dispose 清空活后台注册表
+    this.subagentTypeByParent.clear(); // dispose 清空子 agent 类型缓存（不跨实例串标签）
     try { this.abort?.abort(); } catch { /* noop */ }
   }
 
@@ -814,6 +851,7 @@ export class AgentSession {
             this.currentTask = null;       // 切换会话清任务名，旧任务不残留
             this.lastToolName = null;      // 切换会话清工具名
             this.bgTasks.clear();          // 换会话清空活后台注册表（旧会话后台任务不串到新会话）
+            this.subagentTypeByParent.clear(); // 换会话清空子 agent 类型缓存（旧会话子 agent 类型不串到新会话）
           }
           // FRESH 首轮：init 前的日志写在 provisionalKey(instanceId) 下，先并入真 sessionId 再记后续 sys_info。
           const prevLogKey = this.logKey();
@@ -922,10 +960,11 @@ export class AgentSession {
           // 子 agent 流式增量：独立 emit（带 parentToolUseId），【不碰主 agent buffer/state】防污染主线正文。
           // forwardSubagentText:true 下 SDK 才投递子 agent 的 text/thinking delta——移动端子 agent 可见的实时来源。
           if (ev?.type === 'content_block_delta') {
+            const subType = this.subagentTypeByParent.get(msg.parent_tool_use_id) ?? null; // assistant 已 set 则补类型标签；未 set（首批 delta 早于 assistant）→ null，前端后续补
             if (ev.delta?.type === 'text_delta' && ev.delta.text) {
-              this.emit('text_delta', { messageId: msg.uuid, text: ev.delta.text, parentToolUseId: msg.parent_tool_use_id });
+              this.emit('text_delta', { messageId: msg.uuid, text: ev.delta.text, parentToolUseId: msg.parent_tool_use_id, subagentType: subType });
             } else if (ev.delta?.type === 'thinking_delta' && ev.delta.thinking) {
-              this.emit('thinking_delta', { messageId: msg.uuid, text: ev.delta.thinking, parentToolUseId: msg.parent_tool_use_id });
+              this.emit('thinking_delta', { messageId: msg.uuid, text: ev.delta.thinking, parentToolUseId: msg.parent_tool_use_id, subagentType: subType });
             }
           }
           break;
@@ -971,6 +1010,9 @@ export class AgentSession {
         // 故此处只取 tool_use（避免与流式文本重复 emit）；也【不】碰 pendingTurns/usage（那是主轮口径）。
         if (msg.parent_tool_use_id) {
           const subType = msg.subagent_type ?? null;
+          // 记住该子 agent 的类型：后续 stream_event（delta）/ user（tool_result）都不带 subagent_type，靠此缓存补标签。
+          // 非 null 保护：一旦记住有效类型，不被后续不带 subagent_type 的同 parent 消息抹成 null。
+          if (subType != null) this.subagentTypeByParent.set(msg.parent_tool_use_id, subType);
           for (const block of msg.message?.content ?? []) {
             if (block.type === 'tool_use') {
               this.emit('tool_use', {
@@ -1037,7 +1079,26 @@ export class AgentSession {
       }
 
       case 'user': {
-        if (msg.parent_tool_use_id) break;
+        if (msg.parent_tool_use_id) {
+          // 子 agent 的 tool_result 分流（带 parentToolUseId + subagentType）供移动端嵌套展示——
+          // 【必须在主 <task-notification> 注入判断之前分流并 break】：子 agent 消息不发主任务自动汇报注入。
+          // 不带 denyKind：那是主会话审批（deny+message 通道，requestId===toolUseID）的语义，子 agent 内部
+          // 工具结果未经 canUseTool 闸门、无审批语义。raw/脱敏/截断复用主 tool_result 同一形态（见下方主分支）。
+          const subType = this.subagentTypeByParent.get(msg.parent_tool_use_id) ?? null;
+          for (const block of asArray(msg.message?.content)) {
+            if (block?.type === 'tool_result') {
+              const raw = msg.tool_use_result ?? block.content;
+              this.emit('tool_result', {
+                toolUseId: block.tool_use_id,
+                ok: !block.is_error,
+                outputSummary: truncate(stringify(redactBase64(raw)), TOOL_SUMMARY_CAP),
+                parentToolUseId: msg.parent_tool_use_id,
+                subagentType: subType,
+              });
+            }
+          }
+          break;
+        }
         // 后台任务完成后，CLI 以 user 角色消息注入 <task-notification> XML 触发模型自动汇报。
         // 实证：content 常是纯字符串（终端 jsonl），旧代码只遍历数组 → 全丢。这里两种形态都拍平识别。
         const content = msg.message?.content;

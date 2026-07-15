@@ -3,8 +3,87 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, formatContextCategories } from '../public/js/logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, formatContextCategories, detectServiceRestart, formatServiceNotices, parseUsageForWeb } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
+
+test.describe('parseUsageForWeb（③ 套餐额度窗后端：提取 rate_limits + 降级 + 剔除隐私）', () => {
+  // 一份"订阅认证 max、额度可用"的典型 usage（结构照 SDKControlGetUsageResponse 运行时形态）
+  const fullUsage = () => ({
+    session: { total_cost_usd: 1.23, total_api_duration_ms: 100, total_duration_ms: 200, model_usage: {} },
+    subscription_type: 'max',
+    rate_limits_available: true,
+    rate_limits: {
+      five_hour: { utilization: 42, resets_at: '2026-07-14T20:00:00Z' },
+      seven_day: { utilization: 15, resets_at: '2026-07-20T00:00:00Z' },
+      seven_day_opus: { utilization: 8, resets_at: '2026-07-20T00:00:00Z' },
+      seven_day_sonnet: { utilization: 3, resets_at: '2026-07-20T00:00:00Z' },
+      model_scoped: [{ display_name: 'Fable', utilization: 10, resets_at: '2026-07-20T00:00:00Z' }],
+      extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null },
+    },
+    behaviors: { day: { request_count: 999, session_count: 7 }, skills: [{ name: 'secret-skill' }] },
+  });
+
+  test('null / undefined / 非对象 → { available:false }（降级，不给额度窗）', () => {
+    assert.deepEqual(parseUsageForWeb(null), { available: false });
+    assert.deepEqual(parseUsageForWeb(undefined), { available: false });
+    assert.deepEqual(parseUsageForWeb('x'), { available: false });
+  });
+
+  test('rate_limits_available:false（第三方 provider）→ { available:false }，即便 rate_limits 有值也不外露', () => {
+    const u = fullUsage(); u.rate_limits_available = false;
+    assert.deepEqual(parseUsageForWeb(u), { available: false });
+  });
+
+  test('剔除 behaviors 隐私（本机使用画像绝不外露）', () => {
+    const r = parseUsageForWeb(fullUsage());
+    assert.equal('behaviors' in r, false, 'behaviors 不得出现在输出');
+    const json = JSON.stringify(r);
+    assert.equal(json.includes('behaviors'), false);
+    assert.equal(json.includes('secret-skill'), false);
+    assert.equal(json.includes('request_count'), false);
+  });
+
+  test('提取五类命名额度窗 + model_scoped 数组（utilization / resetsAt / displayName）', () => {
+    const r = parseUsageForWeb(fullUsage());
+    assert.equal(r.available, true);
+    assert.equal(r.rateLimits.five_hour.utilization, 42);
+    assert.equal(r.rateLimits.five_hour.resetsAt, '2026-07-14T20:00:00Z');
+    assert.equal(r.rateLimits.seven_day.utilization, 15);
+    assert.equal(r.rateLimits.seven_day_opus.utilization, 8);
+    assert.equal(r.rateLimits.seven_day_sonnet.utilization, 3);
+    assert.equal(Array.isArray(r.rateLimits.model_scoped), true);
+    assert.equal(r.rateLimits.model_scoped[0].displayName, 'Fable');
+    assert.equal(r.rateLimits.model_scoped[0].utilization, 10);
+  });
+
+  test('保留 subscriptionType + session.totalCostUsd（非隐私）', () => {
+    const r = parseUsageForWeb(fullUsage());
+    assert.equal(r.subscriptionType, 'max');
+    assert.equal(r.session.totalCostUsd, 1.23);
+  });
+
+  test('utilization:0 是有效值（刚开始用）不被当 falsy 丢弃', () => {
+    const u = fullUsage(); u.rate_limits.five_hour.utilization = 0;
+    assert.equal(parseUsageForWeb(u).rateLimits.five_hour.utilization, 0);
+  });
+
+  test('防御性：rate_limits 为 null（available:true 但无窗）→ available:true、无 rateLimits 键、不崩', () => {
+    const u = fullUsage(); u.rate_limits = null;
+    const r = parseUsageForWeb(u);
+    assert.equal(r.available, true);
+    assert.equal('rateLimits' in r, false);
+  });
+
+  test('防御性：单窗字段缺失 / 非法（utilization 非数、resets_at 非串、窗为 null）→ 跳过该窗不崩', () => {
+    const u = fullUsage();
+    u.rate_limits.five_hour = { utilization: 'oops', resets_at: 123 };
+    u.rate_limits.seven_day = null;
+    const r = parseUsageForWeb(u);
+    assert.equal('five_hour' in r.rateLimits, false, 'utilization 非数 + resets_at 非串 → 整窗省略');
+    assert.equal('seven_day' in r.rateLimits, false, 'null 窗省略');
+    assert.equal(r.rateLimits.seven_day_opus.utilization, 8, '其余窗不受影响');
+  });
+});
 
 test.describe('formatContextCategories: SDK ctx categories → 过滤/降序/pct 展示行（Part3）', () => {
   test('按 tokens 降序、过滤 0/负、算 pct（相对 maxTokens）', () => {
@@ -870,4 +949,104 @@ test('armedTakeoverStep: armed + 他会话 stale → none（不误放行）', ()
 
 test('armedTakeoverStep: armed + 切会话 → disarm', () => {
   assert.deepEqual(armedTakeoverStep({ armed: true, armedSid: 's1' }, { kind: 'switch' }), { action: 'disarm' });
+});
+
+test.describe('detectServiceRestart（服务状态可见性——每设备独立感知，本地基线对比）', () => {
+  test('无本地基线 → 只建立基线，不告警（首次打开/清过 localStorage）', () => {
+    assert.deepEqual(
+      detectServiceRestart({ startedAt: 1000, lastSeenStartedAt: null }),
+      { changed: false, nextStartedAt: 1000 }
+    );
+  });
+
+  test('基线存在且不同 → changed:true（服务确实重启过）', () => {
+    assert.deepEqual(
+      detectServiceRestart({ startedAt: 2000, lastSeenStartedAt: 1000 }),
+      { changed: true, nextStartedAt: 2000 }
+    );
+  });
+
+  test('基线存在且相同 → changed:false（同一进程，非重启）', () => {
+    assert.deepEqual(
+      detectServiceRestart({ startedAt: 1000, lastSeenStartedAt: 1000 }),
+      { changed: false, nextStartedAt: 1000 }
+    );
+  });
+
+  test('startedAt 非法（防御性，字段缺失/坏数据不崩、不误判、不用坏值覆盖基线）', () => {
+    assert.deepEqual(
+      detectServiceRestart({ startedAt: undefined, lastSeenStartedAt: 1000 }),
+      { changed: false, nextStartedAt: 1000 }
+    );
+    assert.deepEqual(
+      detectServiceRestart({ startedAt: 'bad', lastSeenStartedAt: null }),
+      { changed: false, nextStartedAt: null }
+    );
+    assert.deepEqual(detectServiceRestart(), { changed: false, nextStartedAt: null });
+  });
+});
+
+test.describe('formatServiceNotices（服务状态可见性——组装会话面板"服务"小节文案）', () => {
+  test('空 service + 无重启 → []（一切正常，不渲染小节）', () => {
+    assert.deepEqual(formatServiceNotices({ service: null, restartChanged: false, now: 1000 }), []);
+    assert.deepEqual(formatServiceNotices(), []);
+  });
+
+  test('仅重启 → 一行固定文案', () => {
+    assert.deepEqual(
+      formatServiceNotices({ service: null, restartChanged: true, now: 1000 }),
+      ['🔄 服务自上次连接后已重启，请确认之前任务是否正常完成']
+    );
+  });
+
+  test('仅推送失败 → 一行含"多久之前" + 渠道 + 累计次数', () => {
+    const now = 1_000_000;
+    assert.deepEqual(
+      formatServiceNotices({
+        service: { deliveryFailure: { channel: 'ntfy', at: now - 12 * 60 * 1000, count: 2 } },
+        restartChanged: false,
+        now
+      }),
+      ['🔔 推送最近失败于 12 分钟前（ntfy，累计 2 次）']
+    );
+  });
+
+  test('推送失败但无 count（防御性）→ 不显示"累计 N 次"后缀', () => {
+    const now = 1_000_000;
+    assert.deepEqual(
+      formatServiceNotices({
+        service: { deliveryFailure: { channel: 'push', at: now - 5 * 60 * 1000 } },
+        restartChanged: false,
+        now
+      }),
+      ['🔔 推送最近失败于 5 分钟前（push）']
+    );
+  });
+
+  test('重启 + 推送失败都命中 → 两行，重启在前、顺序稳定', () => {
+    const now = 1_000_000;
+    assert.deepEqual(
+      formatServiceNotices({
+        service: { deliveryFailure: { channel: 'push', at: now - 60 * 1000, count: 1 } },
+        restartChanged: true,
+        now
+      }),
+      [
+        '🔄 服务自上次连接后已重启，请确认之前任务是否正常完成',
+        '🔔 推送最近失败于 1 分钟前（push，累计 1 次）'
+      ]
+    );
+  });
+
+  test('"多久之前"文案跨量级：<1分钟→刚刚、<1小时→N 分钟前、<1天→N 小时前、≥1天→N 天前', () => {
+    const now = 10_000_000;
+    const at = (deltaMs) => now - deltaMs;
+    const bodyOf = (deltaMs) => formatServiceNotices({
+      service: { deliveryFailure: { channel: 'push', at: at(deltaMs) } }, restartChanged: false, now
+    })[0];
+    assert.match(bodyOf(30 * 1000), /^🔔 推送最近失败于 刚刚（push）$/);
+    assert.match(bodyOf(45 * 60 * 1000), /^🔔 推送最近失败于 45 分钟前（push）$/);
+    assert.match(bodyOf(5 * 60 * 60 * 1000), /^🔔 推送最近失败于 5 小时前（push）$/);
+    assert.match(bodyOf(2 * 24 * 60 * 60 * 1000), /^🔔 推送最近失败于 2 天前（push）$/);
+  });
 });

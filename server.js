@@ -22,6 +22,7 @@ import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, cle
 import { attributePath, buildDiff, readPreview } from './file-preview.js';
 import { runDoctor, countConfigPermProblems } from './doctor-runtime.js';
 import { buildWebStatusLine } from './statusline.js';
+import { parseUsageForWeb } from './public/js/logic.js'; // ③ 额度窗：纯函数解析 SDK usage（防御 + 剔隐私 + 降级），与前端共用同一份
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from './uploads.js';
 import * as interactionLog from './interaction-log.js';
 import { createModelsCache, isCwdDefaultModel } from './models-cache.js';
@@ -148,7 +149,10 @@ async function pushNotify(title, body, data) {
       .then(() => metrics.inc('push_success')) // NFR-15 推送成功率（分子）
       .catch(e => {
         if (e.statusCode === 410 || e.statusCode === 404) expired.push(sub.endpoint); // 过期/注销：订阅生命周期正常结束，非"通知失败"
-        else { metrics.inc('push_failure'); console.error('[push] 推送失败:', e.statusCode ?? '', e.message); } // NFR-15 notify_failed 信号：真失败（非订阅过期）才计
+        else {
+          metrics.inc('push_failure'); console.error('[push] 推送失败:', e.statusCode ?? '', e.message); // NFR-15 notify_failed 信号：真失败（非订阅过期）才计
+          metrics.gauge('push_failure_last_ts', Date.now()); scheduleBgBroadcast(); // 服务状态可见性：带时间戳广播，供 recentDeliveryFailure 判定
+        }
       })
   ));
   if (expired.length) {                       // 仅剔除失效的那几条，其余设备订阅保留
@@ -168,9 +172,13 @@ async function ntfyNotify(title, body, meta = {}) {
       // BE-015：fetch 对 4xx/5xx 正常 resolve——不查 res.ok 会把投递失败（401 token 错 / 404 topic 错 / 5xx）
       // 静默当成功。只记状态码（不记 title/body：SEC-04 明文经第三方，勿落日志）。ntfy 尽力而为、不重试不阻断主流程。
       console.error(`[ntfy] 推送失败: HTTP ${res.status}`);
+      // 服务状态可见性：此前只 console.error，从未计入 metrics——与 pushNotify 的失败计数不对称的既有盲点，
+      // 此处一并补上（ntfy 是绕开 iOS/PWA 推送限制的备用通道，可能是部分场景的主力通道）。
+      metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); scheduleBgBroadcast();
     }
   } catch (e) {
     console.error('[ntfy] 推送失败:', e.message);
+    metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); scheduleBgBroadcast();
   }
 }
 
@@ -220,6 +228,9 @@ function reloadWorkdirs() {
 // E9：必须用本机的 claude（你日常在终端用的那个），不用 SDK 捆绑副本——
 // 版本、登录态、代理兼容性都以本机为准。
 const versions = { sdk: 'unknown', cli: 'unknown' };
+// 服务状态可见性（第一性原理重新设计）：本进程启动时刻，模块加载时算一次、恒定不变。用于让每台设备
+// 独立感知"服务是否在我不知情时重启过"（LaunchAgent 静默拉起 / 意外崩溃恢复）——见 computeServiceHealth()。
+const SERVICE_STARTED_AT = Date.now();
 
 function preflight() {
   const fail = msg => {
@@ -434,6 +445,7 @@ app.get('/metrics', httpAuth, (req, res) => {
       rateLimitLockouts: c.rate_limit_lockouts ?? 0,
       pushSuccess: c.push_success ?? 0,
       pushFailure: c.push_failure ?? 0,
+      ntfyFailure: c.ntfy_failure ?? 0, // 服务状态可见性：与 pushFailure 对称补齐，此前 ntfy 失败只 console.error 不计数
     },
     // NFR-15 五类状态：后端产出的当前最高优先级分类（host_offline 由客户端心跳缺席判定、不在此列）。
     state: metrics.classifyState({ failed, awaiting, notifyFailed, mobileClients }),
@@ -869,6 +881,24 @@ function computeNeedsYou() {
   // instanceId 是纯函数契约之外的接线专用字段（前端深链需要，复用 FR-14 applyDeepLink({instanceId,sessionId,cwd})）。
   return needsYou.map(item => ({ ...item, instanceId: instanceIdBySessionId.get(item.sessionId) ?? null }));
 }
+// 服务状态可见性（NFR-15/可维护性，与上面 computeNeedsYou 的 FR-21/注意力不对称是不同的轴，不混入其判定）：
+// "ccm 这个服务本身有没有出过岔子"——目前收敛到两个此前从未有任何 UI 展示过的信号：推送投递健康（超窗自动
+// 退场，不做不衰减的常驻布尔，见 recentDeliveryFailure）+ 服务启动时刻（供前端与本地基线比对判定重启）。
+// 刻意不接 classifyState()：那是 /metrics 外部消费的粗分类，failed/awaiting 已被会话 ❗ 角标/需要你(N) 覆盖，
+// mobile_offline 对正在看 UI 的设备是自指悖论——原样接入会制造重复信号，见方案 Context。
+function computeServiceHealth() {
+  const g = metrics.snapshot().gauges;
+  const c = metrics.snapshot().counters;
+  const failure = metrics.recentDeliveryFailure({
+    pushFailureAt: g.push_failure_last_ts, ntfyFailureAt: g.ntfy_failure_last_ts, now: Date.now()
+  });
+  return {
+    startedAt: SERVICE_STARTED_AT,
+    deliveryFailure: failure
+      ? { ...failure, count: (failure.channel === 'ntfy' ? c.ntfy_failure : c.push_failure) ?? 0 }
+      : null
+  };
+}
 function instancesPayload() {
   const list = [];
   for (const [id, a] of agents) {
@@ -889,7 +919,7 @@ function instancesPayload() {
       permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || null
     });
   }
-  const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE, needsYou: computeNeedsYou() };
+  const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE, needsYou: computeNeedsYou(), service: computeServiceHealth() };
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
   // 无条件下发（每次 cwd/视图切换均随 broadcastInstances 按 viewingCwd 归键，防跨区泄漏；查看真实 resumed
@@ -1824,6 +1854,31 @@ io.on('connection', socket => {
   });
 
   on(socket, 'user:interrupt', payload => routeInstance(payload?.instanceId)?.interrupt()); // 台阶3：按 instanceId 路由
+  // 停单个后台任务（子 agent / 后台 Bash），对应终端 Ctrl+X Ctrl+K；按 instanceId 路由。taskId 来自
+  // task_notification / task_progress / background_tasks_changed 事件。stopTask 内部 disposed / 无效
+  // taskId / 无 q / SDK 抛错均幂等吞掉（返回 false 不抛），故无实例（routeInstance→null）时 ?. 安全 no-op。
+  on(socket, 'task:stop', payload => routeInstance(payload?.instanceId)?.stopTask(payload?.taskId));
+
+  // ③ 套餐额度窗：按需拉取（用户打开额度窗时前端发 usage:get）。usage 是账号级（非 per-instance），但取数
+  // 要经某个活 agent 的 q——优先当前查看实例，无 / 无 q（fetchUsage→null）时回退任一活实例（fetchUsage 对
+  // 无该方法者即时返回 null，开销小）。parseUsageForWeb 做防御性解析 + 剔除 behaviors 隐私 + 第三方 provider
+  // 降级（available:false）。点对点回请求方（on-demand，不广播给未请求的设备）；鉴权由 on() 的 fail-closed 守卫。
+  on(socket, 'usage:get', async payload => {
+    const routed = routeInstance(payload?.instanceId);
+    let usage = routed ? await routed.fetchUsage() : null;
+    if (usage == null) {
+      for (const cand of agents.values()) {
+        if (cand === routed || cand.disposed) continue;
+        usage = await cand.fetchUsage();
+        if (usage != null) break;
+      }
+    }
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      instanceId: payload?.instanceId ?? null,
+      type: 'usage', payload: parseUsageForWeb(usage)
+    });
+  });
 
   on(socket, 'session:new', (payload, maybeAck) => {
     // 兼容两种调用形态：emit('session:new', cb) 与 emit('session:new', {cwd}, cb)

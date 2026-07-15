@@ -542,12 +542,13 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
-  test('user 的 parent_tool_use_id 非空 → 跳过（子 agent 不外露）', () => {
+  test('user 的 parent_tool_use_id 非空、仅 text 块 → 不外露（只分流 tool_result 块，非 text）', () => {
     const { s, events } = makeSession();
+    // 子 agent 正文走 stream_event（text_delta）分流；user 角色里的 text 块不重复外露，只有 tool_result 块才分流。
     s.map({ type: 'user', parent_tool_use_id: 'parent-1', message: { content: [
       { type: 'text', text: '子 agent 的 user 回合' },
     ] } });
-    assert.equal(events.length, 0, '带 parent_tool_use_id 的 user 不应 emit 任何事件');
+    assert.equal(events.length, 0, '子 agent user 的 text 块不 emit（tool_result 块才分流，见子 agent 分流 describe）');
     s.dispose();
   });
 });
@@ -1082,6 +1083,101 @@ test.describe('map() — 子 agent 消息分流（forwardSubagentText：parentTo
     assert.ok(!errEv, '子 agent 的错误不得当主会话 error 冒泡');
     s.dispose();
   });
+
+  // ---- 切片 1a：子 agent 的 tool_result 分流（user 分支，在主 <task-notification> 注入判断之前）----
+  test('子 agent user tool_result → 分流 emit 带 parentToolUseId + subagentType（不带 denyKind）', () => {
+    const { s, events } = makeSession();
+    // 子 agent 先发 assistant（带 subagent_type + tool_use）——记住类型 + 发工具卡
+    s.map({ type: 'assistant', parent_tool_use_id: 'agent-1', subagent_type: 'general-purpose', uuid: 'sa-a',
+      message: { content: [{ type: 'tool_use', id: 'tu-1', name: 'Read', input: { file_path: '/x' } }] } });
+    // 子 agent 的工具结果回合（user 角色，不带 subagent_type）
+    s.map({ type: 'user', parent_tool_use_id: 'agent-1', uuid: 'sa-b',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tu-1', is_error: false, content: '文件内容' }] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload?.parentToolUseId === 'agent-1');
+    assert.ok(tr, '子 agent tool_result 应分流 emit 带 parentToolUseId');
+    assert.equal(tr.payload.toolUseId, 'tu-1');
+    assert.equal(tr.payload.ok, true);
+    assert.ok(tr.payload.outputSummary.includes('文件内容'));
+    assert.equal(tr.payload.subagentType, 'general-purpose', '从 subagentTypeByParent 补 subagentType');
+    assert.ok(!('denyKind' in tr.payload), '子 agent tool_result 不带 denyKind（那是主会话审批语义）');
+    s.dispose();
+  });
+
+  test('子 agent user tool_result raw 走 tool_use_result ?? content（长 base64 被脱敏）', () => {
+    const { s, events } = makeSession();
+    const bigBase64 = 'C'.repeat(50000);
+    s.map({ type: 'user', parent_tool_use_id: 'agent-img', uuid: 'sa-img',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tu-img', is_error: false,
+        content: [{ type: 'image', file: { base64: bigBase64 } }] }] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload?.parentToolUseId === 'agent-img');
+    assert.ok(tr);
+    assert.ok(!tr.payload.outputSummary.includes(bigBase64.slice(0, 300)), '子 agent tool_result 的长 base64 也脱敏');
+    assert.match(tr.payload.outputSummary, /已省略/);
+    s.dispose();
+  });
+
+  test('子 agent tool_result is_error=true → ok:false，且不当主会话 error 冒泡', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'user', parent_tool_use_id: 'agent-9', uuid: 'sa-e',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tu-9', is_error: true, content: 'boom' }] } });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload?.parentToolUseId === 'agent-9');
+    assert.ok(tr);
+    assert.equal(tr.payload.ok, false);
+    assert.equal(tr.payload.subagentType, null, '未见过该 parent 的 assistant → subagentType 为 null（前端后续补）');
+    assert.ok(!events.find(e => e.type === 'error'), '子 agent 工具报错不得当主会话 error 冒泡');
+    s.dispose();
+  });
+
+  // ---- 切片 1b：subagentTypeByParent 缓存——纯文本子 agent（无 tool_use）的类型标签 ----
+  test('纯文本子 agent：assistant 记住 subagent_type → 后续 stream_event delta 补 subagentType', () => {
+    const { s, events } = makeSession();
+    // 纯文本子 agent 的 assistant 只有 text 块（无 tool_use，当前不 emit），但带 subagent_type
+    s.map({ type: 'assistant', parent_tool_use_id: 'agent-2', subagent_type: 'code-reviewer', uuid: 'sa-t',
+      message: { content: [{ type: 'text', text: '子agent的完整文本' }] } });
+    // 流式 delta 不带 subagent_type
+    s.map({ type: 'stream_event', parent_tool_use_id: 'agent-2', uuid: 'sa-t2',
+      event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '增量' } } });
+    const ev = events.find(e => e.type === 'text_delta' && e.payload?.parentToolUseId === 'agent-2');
+    assert.ok(ev, '子 agent text_delta 应 emit');
+    assert.equal(ev.payload.subagentType, 'code-reviewer', 'stream_event 从 subagentTypeByParent 补 subagentType');
+    // thinking_delta 同样补
+    s.map({ type: 'stream_event', parent_tool_use_id: 'agent-2', uuid: 'sa-t3',
+      event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: '思考' } } });
+    const th = events.find(e => e.type === 'thinking_delta' && e.payload?.parentToolUseId === 'agent-2');
+    assert.equal(th.payload.subagentType, 'code-reviewer');
+    s.dispose();
+  });
+
+  test('subagentTypeByParent：非 null 保护——后续不带 subagent_type 的子 agent 消息不抹掉已记标签', () => {
+    const { s } = makeSession();
+    s.map({ type: 'assistant', parent_tool_use_id: 'agent-3', subagent_type: 'researcher', uuid: 'sa-x',
+      message: { content: [] } });
+    assert.equal(s.subagentTypeByParent.get('agent-3'), 'researcher');
+    // 后续一条不带 subagent_type 的子 agent assistant 不应把标签冲成 null
+    s.map({ type: 'assistant', parent_tool_use_id: 'agent-3', uuid: 'sa-x2', message: { content: [] } });
+    assert.equal(s.subagentTypeByParent.get('agent-3'), 'researcher', '已记标签不被后续 null 覆盖');
+    s.dispose();
+  });
+
+  test('dispose 清空 subagentTypeByParent（不跨实例串子 agent 类型标签）', () => {
+    const { s } = makeSession();
+    s.map({ type: 'assistant', parent_tool_use_id: 'agent-4', subagent_type: 'x', uuid: 'sa',
+      message: { content: [] } });
+    assert.equal(s.subagentTypeByParent.size, 1);
+    s.dispose();
+    assert.equal(s.subagentTypeByParent.size, 0);
+  });
+
+  test('换会话（init 换 session_id）清空 subagentTypeByParent（旧会话子 agent 类型不串到新会话）', () => {
+    const { s } = makeSession({ resumeId: 'old-sid' });
+    s.map({ type: 'assistant', parent_tool_use_id: 'agent-5', subagent_type: 'y', uuid: 'sa',
+      message: { content: [] } });
+    assert.equal(s.subagentTypeByParent.size, 1);
+    s.map({ type: 'system', subtype: 'init', session_id: 'new-sid', model: 'opus', cwd: '/w',
+      slash_commands: [], mcp_servers: [] });
+    assert.equal(s.subagentTypeByParent.size, 0, '换会话清空子 agent 类型缓存');
+    s.dispose();
+  });
 });
 
 test.describe('logMeta()', () => {
@@ -1308,6 +1404,103 @@ test.describe('interrupt()', () => {
     await p;
     assert.equal(s.queue.length, 1, 'await 期间新发的消息不应被 interrupt 清空');
     assert.equal(s.queue[0]?.text, 'after-interrupt', '保留的正是那条新消息');
+    s.dispose();
+  });
+});
+
+test.describe('stopTask()（切片 2b：停单个后台任务，对应终端 Ctrl+X Ctrl+K；不碰主队列/pendingTurns）', () => {
+  test('有有效 taskId + q → 调 q.stopTask(taskId)、返回 true', async () => {
+    const { s } = makeSession();
+    let stopped = null;
+    s.q = { stopTask(id) { stopped = id; return Promise.resolve(); } };
+    const ok = await s.stopTask('task-42');
+    assert.equal(ok, true);
+    assert.equal(stopped, 'task-42', '把 taskId 透传给 SDK stopTask');
+    s.dispose();
+  });
+
+  test('stopTask 不动主队列 / pendingTurns（与 interrupt 停整轮不同）', async () => {
+    const { s } = makeSession();
+    s.pendingTurns = 2;
+    s.queue.push({ text: 'a' });
+    s.q = { stopTask() { return Promise.resolve(); } };
+    await s.stopTask('task-1');
+    assert.equal(s.queue.length, 1, '停单个后台任务不清主队列');
+    assert.equal(s.pendingTurns, 2, '不动 pendingTurns');
+    s.dispose();
+  });
+
+  test('disposed → 不调 SDK、返回 false（不往弃用实例发）', async () => {
+    const { s } = makeSession();
+    let called = false;
+    s.q = { stopTask() { called = true; return Promise.resolve(); } };
+    s.dispose();
+    const ok = await s.stopTask('task-1');
+    assert.equal(ok, false);
+    assert.equal(called, false, 'disposed 后不调 SDK stopTask');
+  });
+
+  test('taskId 缺失 / 非字符串 → 不调 SDK、返回 false', async () => {
+    const { s } = makeSession();
+    let called = false;
+    s.q = { stopTask() { called = true; return Promise.resolve(); } };
+    assert.equal(await s.stopTask(null), false);
+    assert.equal(await s.stopTask(''), false);
+    assert.equal(await s.stopTask(123), false);
+    assert.equal(called, false, '无有效 taskId 不调 SDK');
+    s.dispose();
+  });
+
+  test('SDK stopTask 抛错（任务不存在/已结束）→ 返回 false、不抛（幂等，重复点停止无害）', async () => {
+    const { s } = makeSession();
+    s.q = { stopTask() { return Promise.reject(new Error('no such task')); } };
+    const ok = await s.stopTask('gone');
+    assert.equal(ok, false);
+    s.dispose();
+  });
+
+  test('无 q（实例未 start）→ 返回 false、不抛', async () => {
+    const { s } = makeSession();
+    s.q = null;
+    assert.equal(await s.stopTask('task-1'), false);
+    s.dispose();
+  });
+});
+
+test.describe('fetchUsage()（③ 套餐额度窗数据源：实验性 usage RPC + 超时降级）', () => {
+  test('q 有 usage 方法 → 返回其原始结果（解析交给纯函数 parseUsageForWeb）', async () => {
+    const { s } = makeSession();
+    const fake = { subscription_type: 'max', rate_limits_available: true, rate_limits: {} };
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => fake };
+    assert.equal(await s.fetchUsage(), fake);
+    s.dispose();
+  });
+
+  test('无 q（实例未 start）→ null（不崩）', async () => {
+    const { s } = makeSession();
+    s.q = null;
+    assert.equal(await s.fetchUsage(), null);
+    s.dispose();
+  });
+
+  test('q 无该方法（旧 CLI / 网关不支持）→ null', async () => {
+    const { s } = makeSession();
+    s.q = { interrupt: async () => {} };
+    assert.equal(await s.fetchUsage(), null);
+    s.dispose();
+  });
+
+  test('RPC 抛错 → null（降级）', async () => {
+    const { s } = makeSession();
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { throw new Error('rpc fail'); } };
+    assert.equal(await s.fetchUsage(), null);
+    s.dispose();
+  });
+
+  test('RPC 超时 → null（不阻塞，照 statusline getContextUsageSafe 1500ms 模式）', async () => {
+    const { s } = makeSession();
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}) }; // 永不 resolve
+    assert.equal(await s.fetchUsage(10), null); // 10ms 超时
     s.dispose();
   });
 });
