@@ -880,6 +880,44 @@ io.on('connection', socket => {
 
   const scenarioRegistry = createVisualMockScenarioRegistry([
     {
+      command: 'test:cli-statusline',
+      run: async () => {
+        const slNow = Date.now();
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: slNow,
+          type: 'status_line', payload: {
+            ts: slNow,
+            model: 'Opus 4.8', effort: 'max', thinking: { enabled: true },
+            project: 'claude-chat-mobile', cwd: '/Users/you/code/claude-chat-mobile',
+            ctx: { tokens: 45_000, in: 2_000, out: 1_500, w: 22_000, r: 21_000, usedPercent: 23, windowSize: 200_000 },
+            session: { id: '784e20b1-a550-45d1-874b-13b5f55eeb46' },
+            version: '2.1.210',
+            source: { kind: 'cli', capturedAt: slNow, ageMs: 25 },
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'CLI statusline snapshot ready' }
+        });
+      },
+    },
+    {
+      command: 'test:cli-statusline-unavailable',
+      run: async () => {
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'status_line', payload: {
+            cwd: '/Users/you/code/claude-chat-mobile',
+            source: { kind: 'cli-unavailable', reason: 'stale', ageMs: 180_000 },
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'CLI statusline unavailable' }
+        });
+      },
+    },
+    {
       command: 'test:statusline',
       run: async () => {
         console.log('[mock] Updating status_line');
@@ -1477,6 +1515,35 @@ io.on('connection', socket => {
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
             instances: mockInstances
           }
+        });
+      },
+    },
+    {
+      commands: ['test:mirror-observed-settings', 'ultracode test:mirror-observed-settings'],
+      run: async ({ activeInst }) => {
+        const mirrorInstanceId = viewingInstanceId;
+        const mirrorSessionId = activeInst.sessionId || 'mock-session-visual-test';
+        console.log('[mock] test:mirror-observed-settings — 模拟 CLI 设置观察态');
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, cwd: activeInst.cwd, ts: Date.now(),
+          type: 'mirror_state',
+          payload: {
+            readonly: true,
+            stale: true,
+            observedCli: { model: 'claude-opus-4-8[1m]', permissionMode: 'auto', effort: 'max' },
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: null, instanceId: mirrorInstanceId, ts: Date.now(),
+          type: 'models', payload: { models: [
+            { value: 'default', displayName: 'Default (recommended)' },
+            { value: 'claude-3-5-sonnet', displayName: 'Claude 3.5 Sonnet', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] },
+            { value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low', 'medium', 'high', 'xhigh'] },
+          ] }
+        });
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_mirror_observed_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
       },
     },
@@ -3067,6 +3134,9 @@ io.on('connection', socket => {
       activeEpoch = 'mock-epoch-ultracode-' + Date.now();
       const activeInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
       if (!activeInst) return;
+      // 部分回归场景刻意在已武装 ultracode 时验证其它状态；先让显式 registry 命令接管，
+      // 普通 ultracode prompt 再走下方通用 mock 回复。
+      if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
       activeInst.state = 'busy';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),

@@ -3,7 +3,7 @@
 // ctx 绝对 token 来自 SDK 真值；ctx 百分比优先 getContextUsage、降级 contextWindowSize(model)。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine } from '../statusline.js';
+import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine } from '../statusline.js';
 
 const usage = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
 
@@ -106,6 +106,31 @@ test.describe('buildWebStatusLine：web 自包含结构化状态（对齐 CLI st
     const none = await buildWebStatusLine({ agent: null, cwd: undefined });
     assert.equal(none.version, undefined);
   });
+});
+
+test('buildCliStatusLine：只把 CLI 快照投影成现有 Web statusline 契约，不借用 SDK 陈值', async () => {
+  const snapshot = {
+    source: 'claude-cli', capturedAt: 1_000, sessionId: 'cli-session', cwd: '/tmp/not-a-repo',
+    model: { id: 'claude-opus-4-8', displayName: 'Opus 4.8' }, effort: 'max', thinking: { enabled: true },
+    ctx: { tokens: 100, in: 5, out: 2, w: 10, r: 85, windowSize: 1_000, usedPercent: 10 },
+    cost: 1.25, duration: { wallMs: 2_000, apiMs: 1_500 }, lines: { added: 3, removed: 1 },
+    rate: { fiveHour: { usedPercent: 42, resetsAt: 1_784_106_000 } }, cliVersion: '2.1.210',
+    secret: 'must-not-leak',
+  };
+  const payload = await buildCliStatusLine({ snapshot, cwd: snapshot.cwd });
+
+  assert.equal(payload.model, 'Opus 4.8');
+  assert.equal(payload.effort, 'max');
+  assert.deepEqual(payload.thinking, { enabled: true });
+  assert.deepEqual(payload.ctx, snapshot.ctx);
+  assert.equal(payload.cost, 1.25);
+  assert.deepEqual(payload.duration, snapshot.duration);
+  assert.deepEqual(payload.lines, snapshot.lines);
+  assert.deepEqual(payload.rate.fiveHour, { usedPercent: 42, resetsAt: '2026-07-15T09:00:00.000Z' });
+  assert.equal(payload.version, '2.1.210');
+  assert.deepEqual(payload.session, { id: 'cli-session' });
+  assert.equal(payload.project, 'not-a-repo');
+  assert.equal(payload.secret, undefined);
 });
 
 test.describe('contextWindowSize：model→上下文窗口大小映射', () => {

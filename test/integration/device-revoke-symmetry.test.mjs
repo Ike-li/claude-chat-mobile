@@ -31,7 +31,8 @@ const LAN_IP = getLanIp();
 
 async function startServer(authToken = 'secret-token') {
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-device-revoke-test-'));
-  for (const k of ['PORT', 'AUTH_TOKEN', 'IDLE_TIMEOUT_MS', 'WORK_DIR', 'CCM_DATA_DIR', 'WEB_STATUSLINE',
+  for (const k of ['PORT', 'AUTH_TOKEN', 'IDLE_TIMEOUT_MS', 'WORK_DIR', 'CCM_DATA_DIR',
+    'CCM_TRUSTED_DEVICES_FILE', 'CCM_PENDING_DEVICES_FILE', 'WEB_STATUSLINE',
     'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   process.env.CCM_DATA_DIR = dataDir;
   process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));

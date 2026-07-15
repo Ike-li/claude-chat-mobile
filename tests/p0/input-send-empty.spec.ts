@@ -27,7 +27,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-02b Enter 键不会发送空输入但会发送有效文本', async ({ page }) => {
+  test('P0-02b 触屏 Enter 只换行不发送，按钮仍会发送有效文本', async ({ page }) => {
     await gotoMock(page);
 
     await page.locator('#input').press('Enter');
@@ -40,6 +40,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#input').fill('keyboard hello');
     await expect(page.locator('#btnSend')).toBeEnabled();
     await page.locator('#input').press('Enter');
+    await expect(page.locator('#input')).toHaveValue('keyboard hello\n');
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(0);
+    await page.locator('#btnSend').click();
     await expect(page.locator('[data-testid="user-message"]').last()).toContainText('keyboard hello');
     await expect(page.locator('#input')).toHaveValue('');
     await expect(page.locator('#btnSend')).toBeDisabled();

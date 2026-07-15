@@ -39,6 +39,7 @@
 
 - `seq` 单调递增（进 500 条环形缓冲，供 `sync:since` 断线补发）；`epoch` 变化 = 服务端换了实例，客户端据此重置去重基线。
 - `type` 为 **24 类之一**（`text_delta` / `tool_use` / `permission_request` / `question` / `result` / `status_line` / `task_progress` / `task_notification` / `init` / `instances` / `models` / … 完整清单与契约见 [event-contract.md](event-contract.md)）。
+- `status_line.payload.source.kind` 标明该帧唯一事实源：`sdk`（Web 驾驶）、`cli`（CLI 驾驶且快照新鲜）或 `cli-unavailable`（CLI 应为权威，但快照缺失、过期或校验失败）。CLI 权威时不按字段混入 SDK 陈值；不可用就明确显示未知。
 - `tool_use` 对文件类工具（`Edit` / `Write` / `Read` / `MultiEdit` / `NotebookEdit`）额外附 `file: {path, changeKind}`（`path` 未截断、`changeKind` ∈ `edit` / `write` / `read` / `multiedit` / `notebook`），供前端工具卡片发起 `tool:preview` 重建 diff / 片段（③）。
 - 前端按 `viewingInstanceId` 分流；后台 tab 的高频 delta 不广播以省带宽。
 
@@ -136,9 +137,22 @@
 
 `MAX_PENDING_DEVICES`（50，待审设备上限） · `loadTrustedDevices()` · `getTrustedCount()` · `saveTrustedDevices()` · `loadPendingDevices()` · `savePendingDevices()` · `isDeviceTrusted(deviceToken)` · `addPendingDevice(deviceToken, info)` · `removePendingDevice(deviceToken)` · `getPendingDevices()` · `getLatestPendingDevice()` · `approveDevice(deviceToken)` · `denyDevice(deviceToken)`
 
-### `statusline.js` — web 自有状态栏（E16，自包含、不读 `~/.claude/settings.json`）
+### `statusline.js` — 状态栏 payload 构建（E16）
 
-`parseShortstat(str)` · `parseRepo(url)` · `gitStatus(cwd)` · `webContextCost(…)` · `buildWebStatusLine(…)`（组装 `status_line` payload）
+`parseShortstat(str)` · `parseRepo(url)` · `gitStatus(cwd)` · `webContextCost(…)` · `buildWebStatusLine(…)`（SDK 单一来源） · `buildCliStatusLine({snapshot, cwd})`（CLI 快照单一来源）。两条构建路径分开，除当前 cwd 的本机 git 状态外不做字段级混拼。
+
+### `cli-statusline-bridge.js` — CLI statusline 私有快照
+
+`CLI_STATUSLINE_SCHEMA_VERSION` · `MAX_CLI_STATUSLINE_SNAPSHOT_BYTES`（64 KiB） · `DEFAULT_CLI_STATUSLINE_DIR` · `cliStatuslineTtlMs(refreshIntervalSec)` · `normalizeCliStatusInput(raw, opts?)` · `writeCliStatusSnapshot(snapshot, opts?)` · `readCliStatusSnapshot(sessionId, opts?)` · `selectStatusOwner({mirrorReadonly, externalDirty})` · `selectStatusSource({owner, cliRead, sdkPayload})` · `selectStatusReplay(cache, current)`。读取会验证 schema/source、session、cwd、大小、权限与 TTL；连接重放还要求 owner、instance、session、cwd 全匹配，失败时不返回半可信数据。
+
+### `scripts/statusline-bridge*.js` — 显式安装与透明运行
+
+- `npm run statusline:status`：只读报告 `installed` / `not-installed` / `drifted`，不创建文件、不改 Claude settings。
+- `npm run statusline:install`：备份原 `statusLine.command`/`refreshInterval` 后安装透明 wrapper；重复执行幂等。
+- `npm run statusline:uninstall`：仅当当前 command 仍等于已安装 wrapper 时恢复原配置；检测到 drift 时按 CAS 语义拒绝覆盖。
+- wrapper 保持原 renderer 的 stdin/stdout/stderr/退出码；`CCM_STATUSLINE_ORIGIN=web-sdk` 时不采集，防 Web SDK 子进程覆盖真实 CLI 快照。
+
+运维步骤、环境变量和故障处理见 [statusline-bridge.md](statusline-bridge.md)。
 
 ### `notifications.js` — 事件 → 通知的纯映射（渠道无关文案 + ntfy 渠道元数据）
 

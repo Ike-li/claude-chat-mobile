@@ -132,6 +132,19 @@ export function effortUiState(level, supportedLevels, { mirrorReadonly = false }
   };
 }
 
+// 设置面板的数据源必须按驾驶方整组切换：CLI 镜像态只展示 CLI 观察值，哪怕某字段未知；
+// 绝不能拿 Web 接管偏好补空，否则会把 saved low/bypass/model 伪装成终端当前状态。
+export function resolvePanelState({ mirrorReadonly = false, observedCli, web } = {}) {
+  const source = mirrorReadonly ? 'cli' : 'web';
+  const selected = (mirrorReadonly ? observedCli : web) || {};
+  return {
+    source,
+    model: selected.model ?? null,
+    permissionMode: selected.permissionMode ?? null,
+    effort: selected.effort ?? null,
+  };
+}
+
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
 // aborted（P1-4 已中止独立状态）介于 done 与 busy 之间：比顺利完成更值得回头看一眼（为什么被中止），但
 // 已是终态，不该盖过仍在运行的其它会话。

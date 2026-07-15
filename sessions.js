@@ -96,11 +96,12 @@ export function setCurrent(cwd, sessionId) {
   save();
 }
 
-// 新会话首次拿到 session_id 时登记；已存在则刷新 lastUsedAt 与 model/effort/permissionMode
+// 新会话首次拿到 session_id 时登记；已存在则刷新 model/effort/permissionMode。
+// lastUsedAt：仅新建时写；已有条目【不】在 upsert 时刷新——对齐「最后消息时间」
+// （resume/init 重登记不得把会话顶新）。消息活动走 touchSessionActivity。
 export function upsertSession({ id, title, cwd, model, effort, permissionMode }) {
   const existing = state.sessions.find(s => s.id === id);
   if (existing) {
-    existing.lastUsedAt = Date.now();
     if (model) existing.model = model;
     // effort/permissionMode：init 事件到达时同步持久化（与 model 对称），resume 时可恢复
     if (effort !== undefined) existing.effort = effort;
@@ -108,6 +109,7 @@ export function upsertSession({ id, title, cwd, model, effort, permissionMode })
     // /clear 场景：条目先以占位标题登记，该会话首条消息到达后回填；不覆盖已有真实标题
     if (title && existing.title === '新会话') existing.title = String(title).slice(0, 40);
   } else {
+    const now = Date.now();
     state.sessions.unshift({
       id,
       title: (title || '新会话').slice(0, 40),
@@ -118,11 +120,24 @@ export function upsertSession({ id, title, cwd, model, effort, permissionMode })
       // 思考强度与权限档持久化：web 端续接会话时恢复（CLI 不存，是 web 端增强）
       effort: effort ?? null,
       permissionMode: permissionMode || null,
-      createdAt: Date.now(),
-      lastUsedAt: Date.now()
+      createdAt: now,
+      lastUsedAt: now
     });
   }
   state.currentByCwd[cwd] = id; // 台阶2：该 cwd 的当前会话指向新 id
+  save();
+}
+
+// 用户/助手消息活动时间：默认 now；可注入 transcript 消息 timestamp（ms）。
+// 单调不回退：at < 已有 lastUsedAt 时忽略（防乱序/重放把时间拨旧）。
+export function touchSessionActivity(id, at = Date.now()) {
+  if (!id || typeof id !== 'string') return;
+  const ms = typeof at === 'number' ? at : Number(at);
+  if (!Number.isFinite(ms)) return;
+  const existing = state.sessions.find(s => s.id === id);
+  if (!existing) return;
+  if (typeof existing.lastUsedAt === 'number' && ms < existing.lastUsedAt) return;
+  existing.lastUsedAt = ms;
   save();
 }
 

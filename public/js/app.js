@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -186,6 +186,8 @@ import { verifyIntegrity } from './canonicalize.js';
   // armedTakeoverSid=已排队接管、等终端本轮完结/疑似中断再自动放行（见 logic.js armedTakeoverStep）；
   // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「接管 CLI 会话」时判定走排队还是即时确认）。
   let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
+  let mirrorObservedCli = { model: null, permissionMode: null, effort: null };
+  let mirrorWebPanelSnapshot = null; // CLI 观察态只负责展示；接管时恢复进入镜像前的 Web 选择，绝不写回实例偏好
   let pushVapidKey = null; // 缓存公钥，避免每次重连重复 fetch
 
   // ---- 客户端本地日志体系 (Console/Log modal) ----
@@ -1006,11 +1008,20 @@ import { verifyIntegrity } from './canonicalize.js';
       // 模型切换成功无独立回执事件（随 user:message 捎带、send 内差分 setModel），每轮 init.model 是
       // 实际生效模型的权威值：跨轮 diff 上屏（首轮只定基线；切换失败时 agent 已发显式 error 且
       // 本轮 model 不变，自然不上屏）
-      if (currentModel && m && m !== currentModel) addBar(`模型 → ${m}`, 'text-info');
-      updateModelAndSuffix(rawM);
-      rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随；空列表也刷（显示默认磁贴，好过整个隐藏）
-      rebuildCustomModelGrid(modelsList); // 模型网格用已有缓存重建（models 事件没到也不空白）
-      setPermMode(p.permissionMode); // 每轮 init 回显当前权限档（幂等，与 permission_mode 事件一致）
+      if (mirrorReadonlySid) {
+        // SDK 回执只更新接管后的 Web 偏好快照；CLI 驾驶中的展示仍保持 observedCli，禁止被晚到 init 覆盖。
+        if (mirrorWebPanelSnapshot) {
+          mirrorWebPanelSnapshot.model = rawM || null;
+          if (p.permissionMode) mirrorWebPanelSnapshot.permissionMode = p.permissionMode;
+        }
+        renderCliPanelState();
+      } else {
+        if (currentModel && m && m !== currentModel) addBar(`模型 → ${m}`, 'text-info');
+        updateModelAndSuffix(rawM);
+        rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随；空列表也刷（显示默认磁贴，好过整个隐藏）
+        rebuildCustomModelGrid(modelsList); // 模型网格用已有缓存重建（models 事件没到也不空白）
+        setPermMode(p.permissionMode); // 每轮 init 回显当前权限档（幂等，与 permission_mode 事件一致）
+      }
       // 顶部状态行回归「纯连接状态」职责：model/目录/ctx/cost 已由 E16 web 状态栏投送（更全更权威），
       // 此处不再合成覆盖连接状态
       if (Array.isArray(p.slashCommands)) {
@@ -1020,11 +1031,17 @@ import { verifyIntegrity } from './canonicalize.js';
     },
     // 权限档切换后即时同步（多设备一致）；server 合成事件，与 init.permissionMode 一致
     permission_mode(p) {
-      setPermMode(p.mode);
+      if (mirrorReadonlySid) {
+        if (mirrorWebPanelSnapshot && p.mode) mirrorWebPanelSnapshot.permissionMode = p.mode;
+        renderCliPanelState();
+      } else setPermMode(p.mode);
     },
     // 思考强度档回执/重放（含拒切拨回的单发）；server 合成事件
     effort_mode(p) {
-      setEffortMode(p.level);
+      if (mirrorReadonlySid) {
+        if (mirrorWebPanelSnapshot) mirrorWebPanelSnapshot.effort = p.level ?? null;
+        renderCliPanelState();
+      } else setEffortMode(p.level);
     },
     // 台阶3：tab 栏快照回执/重放（合成事件，同 permission_mode/effort_mode 惯例）——
     // 驱动 viewingInstanceId 分流锚点 + 目录切换器角标 + 切视图（viewingInstanceId 变了才重载）
@@ -1062,6 +1079,7 @@ import { verifyIntegrity } from './canonicalize.js';
       } else {
         syncModelUI('');
       }
+      if (mirrorReadonlySid) renderCliPanelState(); // 晚到 models 只能更新候选，不能覆盖 CLI 未知/观察态
     },
     text_delta(p) {
       clearApiRetryBanner(); // 重试已过，流恢复——撤掉「重试中 n/m」横幅
@@ -1435,6 +1453,18 @@ import { verifyIntegrity } from './canonicalize.js';
       };
       const linesArr = [];
 
+      if (p.source?.kind === 'cli-unavailable') {
+        cliStatusEl.textContent = '';
+        const unavailable = document.createElement('div');
+        unavailable.className = 'flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5';
+        unavailable.appendChild(span('CLI 状态暂不可用', 'text-warning font-medium'));
+        if (p.source.reason) unavailable.appendChild(span(`(${p.source.reason})`, 'text-ink-faint'));
+        cliStatusEl.appendChild(unavailable);
+        if (cliSummaryEl) cliSummaryEl.textContent = 'statusline · CLI 暂不可用';
+        cliStatusWrapEl?.classList.remove('hidden');
+        return; // CLI owner 缺/陈旧时明确空缺，绝不把上一份 SDK/CLI 字段混进来
+      }
+
       // git 段（分支 +暂存 !改动 ?未跟踪 ↑ahead ↓behind）。三分对齐 CLI；陈旧 payload 无三分时回退 ✱changed。
       // 不含 git 工作区 +ins/−del（web 独有口径已删；会话工具改行走 lines +/−）。
       let gitNode = null;
@@ -1468,6 +1498,7 @@ import { verifyIntegrity } from './canonicalize.js';
       linesArr.push(row([
         modelText && { text: modelText, cls: 'text-ink font-medium' },
         p.effort && { text: `effort ${p.effort}`, cls: 'text-warning' },
+        typeof p.thinking?.enabled === 'boolean' && { text: `think ${p.thinking.enabled ? 'on' : 'off'}`, cls: 'text-ink-soft' },
         location && { text: location, cls: 'text-info' },
         gitNode && { node: gitNode },
         ctxSeg,
@@ -1522,7 +1553,9 @@ import { verifyIntegrity } from './canonicalize.js';
       // 不含时钟（web 独有已删）；不含 pid/transcript/PR/wt（CLI 独有、SDK 路径不产出或不接）。
       linesArr.push(row([
         p.git?.repo && { text: p.git.repo, cls: 'text-ink-faint' },
-        p.session?.id && { text: `sid ${p.session.id.slice(0, 8)}`, cls: 'text-ink-faint' }
+        p.session?.id && { text: `sid ${p.session.id.slice(0, 8)}`, cls: 'text-ink-faint' },
+        p.source?.kind === 'cli' && { text: 'source CLI', cls: 'text-info' },
+        p.source?.kind === 'sdk' && { text: 'source Web SDK', cls: 'text-ink-faint' }
       ]));
 
       // 一次性替换：清空旧节点 + append 非空行（row 对空行返回 null）
@@ -2251,8 +2284,12 @@ import { verifyIntegrity } from './canonicalize.js';
     auto: 'Auto（LLM 自动判批/拒权限）',
     bypassPermissions: '⚠️ bypass（跳过所有审批）'
   };
+  function clearCliUnknownPermissionOption() {
+    permModeSelect?.querySelector('option[data-cli-observed-unknown]')?.remove();
+  }
   function setPermMode(mode, silent = false) {
     if (!permModeSelect || !mode) return;
+    clearCliUnknownPermissionOption();
     if (!silent && permModeSeen && mode !== currentPermMode) {
       addBar(`权限档 → ${PERM_LABEL[mode] || mode}`,
         mode === 'bypassPermissions' ? 'text-danger' : 'text-ink-faint');
@@ -2356,6 +2393,9 @@ import { verifyIntegrity } from './canonicalize.js';
     const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
     const show = withUltracodeTier(baseLevels); // xhigh-capable 模型上追加 ultracode 最高档，镜像 CLI /effort
     if (hidden) {
+      // 候选明确声明该模型不支持 effort（区别于“当前 CLI 档未知”）：Web 驾驶时把实例档清回
+      // model-default，等服务端 effort_mode 回执再更新 currentEffort；CLI 镜像只读态绝不写回。
+      if (!mirrorReadonlySid && currentEffort !== null) socket.emit('user:setEffort', { level: null });
       effortSelect.value = '';
       if (customEffortGrid) customEffortGrid.innerHTML = '';
       effortRow?.classList.add('hidden');
@@ -2367,23 +2407,24 @@ import { verifyIntegrity } from './canonicalize.js';
     pillEffort?.classList.remove('hidden');
     customEffortGroup?.classList.remove('hidden');
 
-    // 终端等价：只列 CLI/SDK 档位（+ web 的 ultracode 扩展），不自造「模型默认」空档。
-    // 当前档不在列表时回落 show[0]（常见 low），与 settings.effortLevel 对齐；列表空则保持空。
+    // 候选列表只决定「能选什么」，不得改写当前档事实。CLI 镜像拿不到档位时保留 null/未知，
+    // 不能因为候选第一项是 low 就谎报 low；FRESH settings=low 会由服务端明确下发，仍正常选中。
+    const ui = effortUiState(currentEffort, show, { mirrorReadonly: Boolean(mirrorReadonlySid) });
     effortSelect.innerHTML = '';
+    if (!ui.selected && !ultracodeArmed) {
+      const placeholder = document.createElement('option');
+      placeholder.value = '';
+      placeholder.textContent = ui.placeholder;
+      placeholder.disabled = true;
+      effortSelect.appendChild(placeholder);
+    }
     for (const lv of show) {
       const o = document.createElement('option');
       o.value = lv;
       o.textContent = lv;
       effortSelect.appendChild(o);
     }
-    const pick = (currentEffort && show.includes(currentEffort))
-      ? currentEffort
-      : (show.includes('low') ? 'low' : (show[0] || ''));
-    if (pick && pick !== currentEffort && !ultracodeArmed) {
-      // 列表刚到 / 模型切换导致档位重算：把影子 currentEffort 收敛到合法档，避免 UI 高亮与发送值分叉
-      currentEffort = pick === 'ultracode' ? 'xhigh' : pick;
-    }
-    effortSelect.value = ultracodeArmed ? 'ultracode' : (pick || '');
+    effortSelect.value = ultracodeArmed ? 'ultracode' : ui.selected;
 
     if (customEffortGrid) {
       customEffortGrid.innerHTML = '';
@@ -2408,7 +2449,7 @@ import { verifyIntegrity } from './canonicalize.js';
     }
     // 同步 pill 文案（无「模型默认」伪档后 pill 应显真实档名）
     if (pillEffortText) {
-      pillEffortText.textContent = ultracodeArmed ? 'ultracode' : (currentEffort || pick || '—');
+      pillEffortText.textContent = ultracodeArmed ? 'ultracode' : ui.label;
     }
   }
   effortSelect.onchange = () => {
@@ -2457,6 +2498,93 @@ import { verifyIntegrity } from './canonicalize.js';
     setPermMode(inst.permissionMode || 'default', true);
     setEffortMode(inst.effort ?? null, true);
     rebuildEffortOptions(effortModelValue);
+  }
+
+  function captureWebPanelState() {
+    return {
+      model: currentModel ? `${currentModel}${currentGatewaySuffix}` : null,
+      selectedModel: modelInput?.value || '',
+      selectedFullModel: modelInput?.dataset.fullModel || '',
+      gatewaySuffix: currentGatewaySuffix,
+      permissionMode: currentPermMode || 'default',
+      effort: currentEffort,
+      ultracodeArmed,
+    };
+  }
+
+  function renderCliPermissionMode(mode) {
+    if (mode) {
+      setPermMode(mode, true);
+      return;
+    }
+    clearCliUnknownPermissionOption();
+    const unknown = document.createElement('option');
+    unknown.value = '';
+    unknown.textContent = 'CLI 当前模式未知';
+    unknown.disabled = true;
+    unknown.dataset.cliObservedUnknown = '1';
+    permModeSelect?.prepend(unknown);
+    currentPermMode = '';
+    if (permModeSelect) permModeSelect.value = '';
+    if (pillPermText) pillPermText.textContent = 'CLI 模式未知';
+    permModeSelect?.classList.remove('ring-1', 'ring-danger', 'text-danger');
+    customPermGrid?.querySelectorAll('.perm-tile').forEach(tile => {
+      tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
+      tile.querySelector('.text-xs')?.classList.remove('text-accent');
+    });
+  }
+
+  function renderCliPanelState() {
+    const panel = resolvePanelState({
+      mirrorReadonly: true,
+      observedCli: mirrorObservedCli,
+      web: mirrorWebPanelSnapshot,
+    });
+    const rawModel = panel.model || '';
+    updateModelAndSuffix(rawModel);
+    if (modelInput) {
+      delete modelInput.dataset.fullModel;
+      if (rawModel) {
+        ensureModelOption(currentModel, 'CLI 当前模型');
+        modelInput.value = currentModel;
+      } else {
+        modelInput.value = '';
+        if (pillModelText) pillModelText.textContent = 'CLI 模型未知';
+        if (pillModel) pillModel.title = 'CLI 当前模型未知';
+        customModelGrid?.querySelectorAll('.model-tile').forEach(tile => {
+          tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
+          const title = tile.querySelector('.text-xs');
+          title?.classList.remove('text-accent');
+          title?.classList.add('text-ink');
+        });
+      }
+    }
+    renderCliPermissionMode(panel.permissionMode);
+    setEffortMode(panel.effort, true);
+    rebuildEffortOptions(rawModel || cwdDefaultModel);
+  }
+
+  function restoreWebPanelState() {
+    const saved = mirrorWebPanelSnapshot;
+    if (!saved) return;
+    const panel = resolvePanelState({ mirrorReadonly: false, observedCli: mirrorObservedCli, web: saved });
+    ultracodeArmed = saved.ultracodeArmed === true;
+    updateModelAndSuffix(panel.model || '');
+    currentGatewaySuffix = saved.gatewaySuffix || currentGatewaySuffix;
+    if (modelInput) {
+      if (saved.selectedModel) {
+        ensureModelOption(saved.selectedModel);
+        modelInput.value = saved.selectedModel;
+      } else {
+        modelInput.value = '';
+      }
+      if (saved.selectedFullModel) modelInput.dataset.fullModel = saved.selectedFullModel;
+      else delete modelInput.dataset.fullModel;
+      syncModelUI(saved.selectedModel || currentModel);
+    }
+    setPermMode(panel.permissionMode || 'default', true);
+    setEffortMode(panel.effort, true);
+    rebuildEffortOptions(saved.selectedModel || currentModel || cwdDefaultModel);
   }
 
   // tab 栏快照回执/重放（台阶3，Step A+B 均已落地）。首次只定基线不动视图（刷新/重连不清空）；
@@ -4082,10 +4210,32 @@ import { verifyIntegrity } from './canonicalize.js';
   // 零写盘期间也维持——修「过一会儿感觉没在跑」误判）；armed=「⏳ 已排队接管」（点了「接管 CLI 会话」但终端本轮
   // 未完结，纯等待、零并发写盘风险，见下方 armedTakeoverStep 接线）；stale=true=「⚠️ 疑似中断」（pending 但
   // 超 5 分钟零写入，终端可能被强杀/断电，维持即时确认接管——等待对已疑似死亡的终端无意义）。
-  function applyMirror(readonly, sessionId, stale = false) {
+  function applyMirror(readonly, sessionId, stale = false, observedCli) {
+    const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
+    if (effective && !wasEffective) {
+      mirrorWebPanelSnapshot = captureWebPanelState();
+      ultracodeArmed = false; // CLI 观察态从不继承 Web-only workflow 武装；退出镜像时由快照恢复
+    }
+    if (observedCli !== undefined) {
+      mirrorObservedCli = {
+        model: observedCli?.model ?? null,
+        permissionMode: observedCli?.permissionMode ?? null,
+        effort: observedCli?.effort ?? null,
+      };
+    }
     mirrorReadonlySid = effective ? sessionId : null;
     mirrorStaleFlag = effective && stale;
+    if (effective) {
+      // observed CLI state 只是镜像展示层，不能写回 Web 实例偏好；未知字段也必须保持未知。
+      renderCliPanelState();
+    } else if (wasEffective) {
+      restoreWebPanelState();
+      mirrorWebPanelSnapshot = null;
+      mirrorObservedCli = { model: null, permissionMode: null, effort: null };
+    } else {
+      rebuildEffortOptions(currentModel || cwdDefaultModel);
+    }
     mirrorBanner?.classList.toggle('hidden', !effective);
     const armed = effective && armedTakeoverSid === sessionId;
     if (effective && mirrorBannerText && mirrorBannerIcon) {
@@ -4125,7 +4275,7 @@ import { verifyIntegrity } from './canonicalize.js';
         return;
       }
     }
-    applyMirror(readonly, ev.sessionId, stale);
+    applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli);
   }
   // 「接管 CLI 会话」：驾驶中(⏱)点击=排队接管——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行，
   // 见 onMirrorState），无需确认弹窗；再次点击（此时按钮已变「取消接管」）可撤销排队、回退驾驶中态。

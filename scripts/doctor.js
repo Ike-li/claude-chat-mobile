@@ -2,20 +2,21 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
-// 检查项（10 项）:
+// 检查项（11 项）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（which claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
 // 4. PORT 未被占用
 // 5. WEB_STATUSLINE 配置口径（web 自有状态栏默认自包含启用，可用 WEB_STATUSLINE=off 关闭）
-// 6. 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
-// 7. 配置文件权限（.env / data/*.json 是否为 owner-only 0600）
-// 8. 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本；防文档间漂移的机械化背书）
-// 9. 前端 JS 语法（public/js/*.js 跑 node --check——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
-// 10. 测试覆盖率门槛
+// 6. CLI statusline bridge 安装态（只读 status；不安装、不改 ~/.claude）
+// 7. 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
+// 8. 配置文件权限（.env / data/*.json 是否为 owner-only 0600）
+// 9. 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本；防文档间漂移的机械化背书）
+// 10. 前端 JS 语法（public/js/*.js 跑 node --check——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
+// 11. 测试覆盖率门槛
 import { config } from 'dotenv';
 import { existsSync, accessSync, constants, mkdirSync, readFileSync, readdirSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,7 +24,7 @@ import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions } from '../file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile } from '../workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
-import { statuslineConfigDiagnostic } from './doctor-checks.js';
+import { statuslineBridgeDiagnostic, statuslineConfigDiagnostic } from './doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -174,7 +175,39 @@ function checkStatuslineConfig() {
   (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
-// D6: 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
+// D6: CLI statusline bridge 安装态。status 子命令是只读探针：不创建 manifest、不改 settings。
+// 这里只消费 state，不回显 currentCommand，避免 doctor 输出用户自定义命令内容。
+function checkStatuslineBridge() {
+  const webOff = process.env.WEB_STATUSLINE === 'off';
+  const bridgeOff = process.env.CLI_STATUSLINE_BRIDGE === 'off';
+  let installState;
+  try {
+    const raw = execFileSync(process.execPath, [join(HERE, 'scripts', 'statusline-bridge-setup.js'), 'status'], {
+      cwd: HERE,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 3000,
+    });
+    const parsed = JSON.parse(raw);
+    if (!['installed', 'not-installed', 'drifted'].includes(parsed?.state)) {
+      throw new Error('status 返回了未知状态');
+    }
+    installState = parsed.state;
+  } catch (err) {
+    if (webOff || bridgeOff) {
+      const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState: 'not-installed' });
+      ok(result.name, result.detail);
+      return;
+    }
+    const detail = (err?.stderr?.toString() || err?.message || '未知错误').split('\n').filter(Boolean)[0];
+    warn('CLI_STATUSLINE_BRIDGE', `无法只读检查安装状态：${detail}。运行 \`npm run statusline:status\` 查看详情。`);
+    return;
+  }
+  const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState });
+  (result.status === 'ok' ? ok : warn)(result.name, result.detail);
+}
+
+// D7: 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
 function checkAnthropicEnv() {
   const envPath = EFFECTIVE.envFile; // WS-011：读被诊断的 .env（--env 指定），非硬编码仓库 HERE/.env
   if (!existsSync(envPath)) {
@@ -198,7 +231,7 @@ function checkAnthropicEnv() {
   }
 }
 
-// D7: 配置文件权限（.env, data/*.json）。单一事实源列表：checkConfigPermissions 与 fixConfigFiles
+// D8: 配置文件权限（.env, data/*.json）。单一事实源列表：checkConfigPermissions 与 fixConfigFiles
 // 共用 CONFIG_FILE_NAMES，防止两处各自维护的清单再次漏同步（trusted/pending-devices.json、
 // cf-access-certs.json 此前就只在 devices.js/cf-access.js 里用 writeOwnerOnlyFile 写成 0600、
 // 却没被这里检查/自动修复覆盖——同样敏感、被漏检）。
@@ -228,7 +261,7 @@ function checkConfigPermissions() {
   }
 }
 
-// D8: 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本）。机械化背书单一事实源纪律：
+// D9: 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本）。机械化背书单一事实源纪律：
 // PostToolUse hook 只提示"检查同步"，本项把"检查什么"落为可失败的硬门——CI/提交前跑即拦住漂移。
 function checkDocConsistency() {
   const result = runDocConsistency({ rootDir: HERE });
@@ -239,7 +272,7 @@ function checkDocConsistency() {
   }
 }
 
-// D9: 前端 JS 语法（public/js/*.js）。冒烟测试用 socket.io-client、从不加载浏览器 app.js，故前端脚本
+// D10: 前端 JS 语法（public/js/*.js）。冒烟测试用 socket.io-client、从不加载浏览器 app.js，故前端脚本
 // 的语法错会潜伏（2026-06-14 实有：app.js 括号失配→浏览器整体不执行→页面死在「未连接」）。
 function checkFrontendSyntax() {
   const dir = join(HERE, 'public', 'js');
@@ -266,7 +299,7 @@ function checkFrontendSyntax() {
   }
 }
 
-// D10: 测试覆盖率门槛（npm test --experimental-test-coverage 行覆盖率 ≥ 65%）
+// D11: 测试覆盖率门槛（npm test --experimental-test-coverage 行覆盖率 ≥ 65%）
 function checkCoverageThreshold() {
   try {
     execSync('node scripts/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 });
@@ -309,13 +342,14 @@ function effectiveConfigFiles() {
   });
 }
 
-// 执行 10 项检查（D4 端口检查是 async，需 await）
+// 执行 11 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
   checkClaudeBin();
   checkWorkDir();
   await checkPort();
   checkStatuslineConfig();
+  checkStatuslineBridge();
   checkAnthropicEnv();
   checkConfigPermissions();
   checkDocConsistency();

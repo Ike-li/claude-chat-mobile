@@ -25,9 +25,13 @@ const HEAD_READ_BYTES = 64 * 1024;  // 列表元数据（标题/模型/来源）
 // CLI 把 ai-title 流式追加到「标题生成完成时」的字节位置——首轮工具/思考很重的长会话里常 > 64KB 头窗。
 // 头窗没抓到 ai-title 时补读文件尾部这一段取最新 ai-title（实测最坏「最后一个 ai-title 距文件尾」330KB，512KB 有余量）。
 const TAIL_READ_BYTES = 512 * 1024;
-// 会话列表上限（按 mtime 取最近 N，避免大目录全量读 head）。与 workdirs.js MAX_SESSION_LIMIT 共享同一
-// 常量而非各自硬编码 50——此前两处独立维护、仅靠注释宣称"一致"，任一方单独改动会静默漂移。
+// 会话列表上限（按「最后主链消息时间」取最近 N；扫描阶段对全量 jsonl 只 stat + 读尾窗，不对全量 readHeadMeta）。
+// 与 workdirs.js MAX_SESSION_LIMIT 共享同一常量而非各自硬编码 50——此前两处独立维护、仅靠注释宣称"一致"，
+// 任一方单独改动会静默漂移。
 const LIST_LIMIT = MAX_SESSION_LIMIT;
+// 列表活动时间尾窗：最后一条 user/assistant 几乎总在文件末尾附近；resume/切档追加的 mode 行很短，
+// 64KB 足够覆盖「末条消息 + 其后一串元数据」。比 TAIL_READ_BYTES(512KB) 更轻，因列表要对目录内每个会话读一次。
+const LIST_ACTIVITY_TAIL_BYTES = 64 * 1024;
 
 // B2：listSessions 结果按 dir 缓存，4s TTL。重复打开列表不重扫盘。
 const _listCache = new Map(); // dir → { ts, result }
@@ -387,7 +391,7 @@ export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST
   const dir = join(baseDir, getProjectDir(cwd));
   const cacheKey = `${dir}:${limit}`;
 
-  // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + N×readHeadMeta）——隐藏名单不进缓存键：
+  // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + 尾窗活动时间 + N×readHeadMeta）——隐藏名单不进缓存键：
   // 缓存的是"该 cwd 全部会话"的扫盘结果，隐藏过滤在缓存之后应用，删除后 invalidateListCache 仍照常生效。
   const cached = _listCache.get(cacheKey);
   const fromScan = cached && Date.now() - cached.ts < LIST_CACHE_TTL
@@ -405,16 +409,35 @@ const useSdk = (baseDir) => baseDir === CLAUDE_DIR;
 
 // 把 SDKSessionInfo 映射成本函数返回 shape（前端真实消费只有 id/title/lastUsedAt——model/entrypoint 是
 // 死重字段、SDK 也不给，故不返回；gitBranch/tag 等备用字段暂不存为死字段、以后要用再从 SDK 拿）。
-// limit+1 取数：多取 1 条判 hasMore（SDK 不给总数）；越界那条不进 sessions。
+// 取数：至少取到 LIST_LIMIT+1（再按消息时间重排后截到 limit）。默认 limit=6 时若只取 7 条 mtime 候选，
+// 被 resume 刷 mtime 的旧会话会占满窗口，真有近消息的会话进不了候选集——多取到硬顶再重排可消掉。
+// lastUsedAt：优先读 transcript 尾窗「最后主链 user/assistant」时间；读不到才回落 SDK lastModified。
 async function scanSessionsViaSdk(cwd, limit) {
   const fn = __sdkListSessionsForTest || sdkListSessions;
-  const all = await fn({ dir: cwd, limit: limit + 1 });
-  const sessions = (Array.isArray(all) ? all : []).slice(0, limit).map(s => ({
-    id: s.sessionId,
-    title: s.summary || '(无标题)',
-    lastUsedAt: Math.round(s.lastModified),
+  // 候选窗口 ≥ 显示 limit，且至少覆盖「显示全部」硬顶，便于按活动时间重排后仍能选出真最近 N。
+  const fetchLimit = Math.max(limit, LIST_LIMIT) + 1;
+  const all = await fn({ dir: cwd, limit: fetchLimit });
+  const arr = Array.isArray(all) ? all : [];
+  const projectDir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const enriched = await Promise.all(arr.map(async s => {
+    const file = join(projectDir, `${s.sessionId}.jsonl`);
+    let activityAt = null;
+    try {
+      const st = await stat(file);
+      activityAt = await readLastMessageActivityMs(file, st.size);
+    } catch { /* 文件不存在/不可读 → 回落 lastModified */ }
+    return {
+      id: s.sessionId,
+      title: s.summary || '(无标题)',
+      lastUsedAt: Math.round(activityAt ?? s.lastModified),
+    };
   }));
-  return { sessions, hasMore: (all?.length ?? 0) > limit };
+  enriched.sort((a, b) => b.lastUsedAt - a.lastUsedAt || String(a.id).localeCompare(String(b.id)));
+  // hasMore：重排后仍有未展示项，或 SDK 候选触顶（目录里可能还有更旧/未纳入的会话）
+  return {
+    sessions: enriched.slice(0, limit),
+    hasMore: enriched.length > limit || arr.length >= fetchLimit,
+  };
 }
 
 async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir) {
@@ -431,8 +454,9 @@ async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir) {
   return scanViaReaddir(dir, limit, cacheKey);
 }
 
-// 自造扫盘（兜底路径 + baseDir 隔离测试实例）：readdir + N×stat + readHeadMeta 头尾窗解析标题。
-// readHeadMeta 仍保留——兜底依赖它，快路径不进此。
+// 自造扫盘（兜底路径 + baseDir 隔离测试实例）：readdir + N×stat + 全量尾窗活动时间 + 前 limit 条 readHeadMeta。
+// 排序/lastUsedAt 用最后主链消息时间（无则回落 mtime），避免 mode/permission-mode 等元数据写盘把旧会话顶前。
+// readHeadMeta 仍保留——兜底依赖它取 title/model/entrypoint，快路径不进此。
 async function scanViaReaddir(dir, limit, cacheKey) {
   let names;
   try {
@@ -453,19 +477,31 @@ async function scanViaReaddir(dir, limit, cacheKey) {
   const stated = statResults
     .filter(r => r.status === 'fulfilled')
     .map(r => r.value);
-  stated.sort((a, b) => b.mtimeMs - a.mtimeMs);
 
-  // B2：readHeadMeta 并发（对前 limit 个）
-  const top = stated.slice(0, limit);
+  // 全量读尾窗活动时间再排序（只读 64KB 尾，不对全量 readHeadMeta）——保证 limit 截断窗口本身按真消息时间取最近 N。
+  const activityResults = await Promise.allSettled(
+    stated.map(async s => {
+      const activityAt = await readLastMessageActivityMs(s.file, s.size);
+      return { ...s, activityAt: activityAt ?? s.mtimeMs };
+    })
+  );
+  const withActivity = activityResults
+    .filter(r => r.status === 'fulfilled')
+    .map(r => r.value);
+  // 活动时间相同（或都回落 mtime）时按 id 稳定排序，避免两次 list 顺序抖动。
+  withActivity.sort((a, b) => b.activityAt - a.activityAt || String(a.id).localeCompare(String(b.id)));
+
+  // B2：readHeadMeta 并发（仅对前 limit 个——标题/model/entrypoint）
+  const top = withActivity.slice(0, limit);
   const metas = await Promise.all(top.map(s => readHeadMeta(s.file, s.size)));
   const sessions = top.map((s, i) => ({
     id: s.id,
     title: metas[i].title || '(无标题)',
     model: metas[i].model || null,
     entrypoint: metas[i].entrypoint || null,
-    lastUsedAt: Math.round(s.mtimeMs)
+    lastUsedAt: Math.round(s.activityAt)
   }));
-  const result = { sessions, hasMore: stated.length > limit };
+  const result = { sessions, hasMore: withActivity.length > limit };
 
   // B2：存缓存（键含 limit）
   _listCache.set(cacheKey, { ts: Date.now(), result });
@@ -559,6 +595,46 @@ async function readHeadMeta(file, size) {
 // 不列入白名单。⚠️ thinking/effort 档 CLI 完全不落盘（transcript 里只有 thinking 内容块、无档位字段），
 // 无从恢复——「默认思考」是诚实回退，属已知边界。
 const VALID_CLI_PERM_MODES = new Set(['default', 'plan', 'acceptEdits', 'bypassPermissions']);
+
+// 纯函数：倒序找最后一条主链 user/assistant 的 timestamp（ms）。
+// 用于会话列表 lastUsedAt/排序——忽略 mode/permission-mode/ai-title/last-prompt 等元数据写盘
+// （web resume、CLI 切档会刷 mtime，否则旧会话会莫名顶到抽屉最前）。
+// 跳过 isSidechain（子代理链）、isMeta（系统注入）、无 timestamp / 非法时间。无命中 → null（调用方回落 mtime）。
+export function lastMessageActivityMs(entries) {
+  if (!Array.isArray(entries)) return null;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (!e || (e.type !== 'user' && e.type !== 'assistant') || e.isSidechain || e.isMeta) continue;
+    if (typeof e.timestamp !== 'string' || !e.timestamp) continue;
+    const ms = Date.parse(e.timestamp);
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+}
+
+// 读 transcript 尾窗，解析最后主链消息时间。size 可注入省一次 stat；失败/空文件 → null。
+async function readLastMessageActivityMs(file, size) {
+  try {
+    const fh = await open(file, 'r');
+    try {
+      if (size == null) ({ size } = await fh.stat());
+      if (!size) return null;
+      const start = size > LIST_ACTIVITY_TAIL_BYTES ? size - LIST_ACTIVITY_TAIL_BYTES : 0;
+      const buf = Buffer.allocUnsafe(size - start);
+      const { bytesRead } = await fh.read(buf, 0, size - start, start);
+      const entries = [];
+      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+        if (!line.trim()) continue;
+        try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行：跳过 */ }
+      }
+      return lastMessageActivityMs(entries);
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  } catch {
+    return null;
+  }
+}
 
 // 纯函数：给一串已解析 transcript 条目，返回末条【合法】permission-mode 的档值，无则 null。
 // 「末条为准」——权限档可多次切换，最后一次才是当前态；非法/脏值不外泄给 SDK（覆盖为 null，回落上层默认）。

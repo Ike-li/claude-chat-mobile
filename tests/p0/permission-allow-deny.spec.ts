@@ -117,7 +117,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-06f 审批弹窗打开时背景输入 Enter 不会提交新消息', async ({ page }) => {
+  test('P0-06f 审批弹窗打开时触屏 Enter 不提交且保留换行草稿', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:permission');
@@ -133,12 +133,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permModal')).toBeVisible();
     await expect(page.locator('#permInput')).toContainText('git push origin main');
     await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
-    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo\n');
 
     await page.locator('#permDeny').click();
     await expect(page.locator('#permModal')).toBeHidden();
     await waitForIdle(page);
-    await expect(page.locator('#input')).toHaveValue('test:settings-echo');
+    await expect(page.locator('#input')).toHaveValue('test:settings-echo\n');
     await expect(page.locator('#btnSend')).toBeEnabled();
     await page.locator('#btnSend').click();
     await waitForIdle(page);

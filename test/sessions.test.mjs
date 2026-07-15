@@ -66,13 +66,42 @@ test.describe('sessions.js 单元测试', () => {
     assert.equal(count, 1);
   });
 
-  test('upsertSession: 更新已有条目的 model 和 lastUsedAt', () => {
+  test('upsertSession: 更新已有条目的 model，但不无条件刷新 lastUsedAt', () => {
     S.upsertSession({ id: 'update-me', title: '原标题', cwd: '/proj/d', model: 'old-model' });
     const before = S.getSession('update-me').lastUsedAt;
     S.upsertSession({ id: 'update-me', title: '新标题', cwd: '/proj/d', model: 'new-model' });
     const after = S.getSession('update-me');
     assert.equal(after.model, 'new-model');
-    assert.ok(after.lastUsedAt >= before);
+    // lastUsedAt 对齐消息时间：init/onSessionId 重登记不得把会话“顶新”
+    assert.equal(after.lastUsedAt, before);
+  });
+
+  test('touchSessionActivity: 刷新 lastUsedAt（默认 now；可注入消息时间）', () => {
+    S.upsertSession({ id: 'touch-me', title: 't', cwd: '/proj/d', model: null });
+    // 单调不回退：注入时间须 ≥ 新建时的 lastUsedAt（Date.now）
+    const fixed = Date.now() + 60_000;
+    S.touchSessionActivity('touch-me', fixed);
+    assert.equal(S.getSession('touch-me').lastUsedAt, fixed);
+    const before = S.getSession('touch-me').lastUsedAt;
+    S.touchSessionActivity('touch-me');
+    assert.ok(S.getSession('touch-me').lastUsedAt >= before);
+  });
+
+  test('touchSessionActivity: 未知 id / 非法 at 不写', () => {
+    assert.doesNotThrow(() => S.touchSessionActivity('no-such'));
+    S.upsertSession({ id: 'touch-bad', title: 't', cwd: '/proj/d', model: null });
+    const before = S.getSession('touch-bad').lastUsedAt;
+    S.touchSessionActivity('touch-bad', Number.NaN);
+    S.touchSessionActivity('touch-bad', 'not-a-number');
+    assert.equal(S.getSession('touch-bad').lastUsedAt, before);
+  });
+
+  test('touchSessionActivity: 单调不回退（更旧 at 忽略）', () => {
+    S.upsertSession({ id: 'touch-mono', title: 't', cwd: '/proj/d', model: null });
+    const high = Date.now() + 120_000;
+    S.touchSessionActivity('touch-mono', high);
+    S.touchSessionActivity('touch-mono', high - 1_000);
+    assert.equal(S.getSession('touch-mono').lastUsedAt, high);
   });
 
   test('upsertSession: 已有真实标题不被新标题覆盖', () => {

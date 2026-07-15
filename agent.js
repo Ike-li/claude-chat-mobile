@@ -31,6 +31,14 @@ const BG_TASK_TTL_MS = 180000;       // 活的后台任务（bgTasks）无心跳
 const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 server.js APPROVAL_TTL_MS；
                                           // LLD §3.5.2/OQ-05 已决：不预置具体数值，此为实现落地的合理默认）
 
+export function sdkChildEnv(base = process.env) {
+  return {
+    ...Object.fromEntries(Object.entries(base || {}).filter(([, value]) => value !== '')),
+    // statusline wrapper 据此只转发 renderer、不捕获：防 Web SDK 子进程覆盖真实终端 session 快照。
+    CCM_STATUSLINE_ORIGIN: 'web-sdk',
+  };
+}
+
 // epoch：每个 AgentSession 实例一个跨重启唯一标识。基于 wall-clock + 进程内计数，
 // 保证服务重启后新实例的 epoch 严格大于旧实例 → 客户端据此区分"新流"并重置 seq 去重基线。
 let instanceCounter = 0;
@@ -44,13 +52,15 @@ function nextEpoch() {
 // 模型「值」本就经 settingSources 与终端 /model 同步，显示层不应再叠加项目默认。终端友好名不再复刻。
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, historicalCostUsd }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, historicalCostUsd }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
     this.cwd = cwd;
     this.claudeBin = claudeBin;
     this.idleTimeoutMs = idleTimeoutMs;
+    // 完全空闲（!isBusy）超过此阈值则回收子进程；0/负数 = 禁用。与 idleTimeoutMs（在途轮静默挂死）正交。
+    this.instanceIdleReclaimMs = Number(instanceIdleReclaimMs) > 0 ? Number(instanceIdleReclaimMs) : 0;
     this.approvalTtlMs = Number(approvalTtlMs) > 0 ? Number(approvalTtlMs) : DEFAULT_APPROVAL_TTL_MS; // 审批悬置上限（部署可配置）
     this.onEvent = onEvent;           // (envelope) => void，由 server 广播
     this.onSessionId = onSessionId;   // (sessionId, firstMessage, model) => void，登记 sessions.json
@@ -165,7 +175,7 @@ export class AgentSession {
         canUseTool: (name, input, opts) => this.handleCanUseTool(name, input, opts), // 白名单外统一闸门
         settingSources: ['user', 'project', 'local'],        // 加载"我的"全部配置
         systemPrompt: { type: 'preset', preset: 'claude_code' },
-        env: Object.fromEntries(Object.entries(process.env).filter(([, v]) => v !== '')),
+        env: sdkChildEnv(process.env),
         stderr: data => { if (process.env.LOG_STDERR) console.error('[claude]', sanitize(data)); }
       }
     });
@@ -612,17 +622,33 @@ export class AgentSession {
     }
   }
 
-  // ---- 静默看护（4c）：等审批不计时；活动静默超限判挂死 ----
+  // ---- 静默看护 + 空闲实例回收 ----
+  // ① 在途轮静默挂死（idleTimeoutMs）：pendingTurns>0 且无审批/提问时，长时间零活动 → abort。
+  // ② 空闲真回收（instanceIdleReclaimMs）：完全 !isBusy 且超阈 → abort 释放子进程；会话盘上仍在，
+  //    下次发送/切换会 resume 重建。0 = 禁用。等审批/后台任务/提问都算 busy，不回收。
   checkIdle() {
-    // 后台任务 TTL 清扫须在下方 pendingTurns===0 提前返回之前——后台任务运行时 pendingTurns 正是 0，
+    // 后台任务 TTL 清扫须在下方分支之前——后台任务运行时 pendingTurns 正是 0，
     // 放 return 之后就永远清不到（漏收完成信号的任务会把 ⏳ 永挂）。清出变化即回调重算角标。
     if (this.sweepBgTasks()) this.onBgTaskChange?.();
-    if (this.pendingTurns === 0) return;
     if (this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0) {
       this.lastActivity = Date.now();
       return;
     }
-    if (Date.now() - this.lastActivity > this.idleTimeoutMs) {
+    const idleFor = Date.now() - this.lastActivity;
+    if (this.pendingTurns === 0) {
+      // 完全空闲回收：isBusy 还含 bgTasks（刚 sweep 后可能仍有活任务）
+      if (this.instanceIdleReclaimMs > 0 && !this.isBusy() && idleFor > this.instanceIdleReclaimMs) {
+        const mins = Math.max(1, Math.round(this.instanceIdleReclaimMs / 60000));
+        this.emit('error', {
+          message: `会话空闲超过 ${mins} 分钟，已回收子进程（再发送或切换回来会自动续接）`,
+          recoverable: true
+        });
+        this.terminating = true;
+        try { this.abort?.abort(); } catch { /* noop */ }
+      }
+      return;
+    }
+    if (idleFor > this.idleTimeoutMs) {
       this.emit('error', {
         message: `任务静默超过 ${Math.round(this.idleTimeoutMs / 60000)} 分钟，已中断（可重新发送继续）`,
         recoverable: true

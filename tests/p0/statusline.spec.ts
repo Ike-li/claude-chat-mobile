@@ -56,4 +56,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-10d CLI 镜像状态线标明唯一来源，快照不可用时不回退 SDK 陈值', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:cli-statusline');
+    await waitForIdle(page);
+    await page.locator('#cliStatusWrap summary').click();
+    await expect(page.locator('#cliStatus')).toContainText('Opus 4.8');
+    await expect(page.locator('#cliStatus')).toContainText('effort max');
+    await expect(page.locator('#cliStatus')).toContainText('think on');
+    await expect(page.locator('#cliStatus')).toContainText('source CLI');
+
+    await sendChatMessage(page, 'test:cli-statusline-unavailable');
+    await waitForIdle(page);
+    await expect(page.locator('#cliStatus')).toContainText('CLI 状态暂不可用');
+    await expect(page.locator('#cliStatus')).not.toContainText('Opus 4.8');
+    await expect(page.locator('#cliStatus')).not.toContainText('claude-3-5-sonnet');
+
+    await expectNoBrowserErrors(page);
+  });
 });

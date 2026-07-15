@@ -3,8 +3,15 @@
 // send()/interrupt()/权限闸门/AskUserQuestion/dispose()/checkIdle()/consume() 退出路径。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession } from '../agent.js';
+import { AgentSession, sdkChildEnv } from '../agent.js';
 import { getSessionLogs } from '../interaction-log.js';
+
+test('sdkChildEnv：SDK 子进程带项目自有 origin 标记且调用方不能覆盖', () => {
+  assert.deepEqual(sdkChildEnv({ KEEP: 'yes', EMPTY: '', CCM_STATUSLINE_ORIGIN: 'terminal' }), {
+    KEEP: 'yes',
+    CCM_STATUSLINE_ORIGIN: 'web-sdk',
+  });
+});
 
 // ---- helpers ----
 function makeSession(opts = {}) {
@@ -17,6 +24,7 @@ function makeSession(opts = {}) {
     permissionMode: opts.permissionMode || 'default',
     effort: opts.effort || null,
     idleTimeoutMs: opts.idleTimeoutMs ?? 60_000,
+    instanceIdleReclaimMs: opts.instanceIdleReclaimMs,
     approvalTtlMs: opts.approvalTtlMs, // 未传 → 走 agent.js 内的默认值
     resumeId: opts.resumeId || null,
     historicalCostUsd: opts.historicalCostUsd || 0,
@@ -2301,16 +2309,60 @@ test.describe('dispose()', () => {
 
 // ---- checkIdle() ----
 test.describe('checkIdle()', () => {
-  test('pendingTurns=0 → 直接 return（不设 terminating）', () => {
-    const { s } = makeSession();
+  test('pendingTurns=0 且未超空闲回收阈 → 不回收', () => {
+    const { s } = makeSession({ instanceIdleReclaimMs: 60_000 });
     s.pendingTurns = 0;
+    s.lastActivity = Date.now();
     s.checkIdle();
     assert.equal(s.terminating, false);
     s.dispose();
   });
 
+  test('pendingTurns=0 且超空闲回收阈 → 回收子进程（abort + recoverable error）', () => {
+    const { s, events } = makeSession({ instanceIdleReclaimMs: 1 });
+    s.pendingTurns = 0;
+    s.lastActivity = 0;
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.checkIdle();
+    assert.equal(s.terminating, true);
+    assert.equal(aborted, true);
+    const err = events.find(e => e.type === 'error');
+    assert.ok(err);
+    assert.ok(err.payload.message.includes('空闲') || err.payload.message.includes('回收'));
+    assert.equal(err.payload.recoverable, true);
+    s.dispose();
+  });
+
+  test('instanceIdleReclaimMs=0 → 禁用空闲回收', () => {
+    const { s, events } = makeSession({ instanceIdleReclaimMs: 0 });
+    s.pendingTurns = 0;
+    s.lastActivity = 0;
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.checkIdle();
+    assert.equal(s.terminating, false);
+    assert.equal(aborted, false);
+    assert.equal(events.find(e => e.type === 'error'), undefined);
+    s.dispose();
+  });
+
+  test('有后台任务 isBusy → 不走空闲回收', () => {
+    const { s } = makeSession({ instanceIdleReclaimMs: 1 });
+    s.pendingTurns = 0;
+    s.lastActivity = 0;
+    s.bgTasks.set('bg1', { taskType: 'local_agent', message: '跑', lastSeenAt: Date.now() });
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.checkIdle();
+    assert.equal(s.terminating, false);
+    assert.equal(aborted, false);
+    s.bgTasks.clear();
+    s.dispose();
+  });
+
   test('pendingPermissions 非空 → lastActivity 刷新，不触发超时', () => {
-    const { s } = makeSession({ idleTimeoutMs: 1 });
+    const { s } = makeSession({ idleTimeoutMs: 1, instanceIdleReclaimMs: 1 });
     s.pendingTurns = 1;
     s.lastActivity = 0; // 很久以前
     // 模拟合法 pending 条目（含 resolve，防 dispose 报错）
@@ -2324,7 +2376,7 @@ test.describe('checkIdle()', () => {
   });
 
   test('pendingQuestions 非空 → lastActivity 刷新', () => {
-    const { s } = makeSession({ idleTimeoutMs: 1 });
+    const { s } = makeSession({ idleTimeoutMs: 1, instanceIdleReclaimMs: 1 });
     s.pendingTurns = 1;
     s.lastActivity = 0;
     // 模拟合法 pending 条目（含 questions 数组 + resolve，防 dispose 报错）
@@ -2335,7 +2387,7 @@ test.describe('checkIdle()', () => {
     s.dispose();
   });
 
-  test('超时 → emit error + terminating=true + abort', () => {
+  test('在途轮静默超时 → emit error + terminating=true + abort', () => {
     const { s, events } = makeSession({ idleTimeoutMs: 1 });
     s.pendingTurns = 1;
     s.lastActivity = 0;

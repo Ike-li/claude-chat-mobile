@@ -972,11 +972,12 @@ async function run() {
     console.log(`   [Assert] ultracode emitted text: "${lastEmittedText}"`);
     assert.strictEqual(lastEmittedText, 'ultracode 整理 utils 日期工具', 'TC-11: ultracode 思考档必须给 prompt 加前缀并 emit');
 
-    // 复位 ultracode 武装态（粘性），避免污染后续用例的发送——点默认思考档即可 armed=false
+    // 复位 ultracode 武装态（粘性），避免污染后续用例的发送——CLI 候选已无伪「默认」档，
+    // 点同底层 effort 的 xhigh 即可只解除 workflow 武装、不改变真实档位。
     await page.click('#btnSettings');
     await page.waitForSelector('#settingsSheet:not(.translate-y-full)');
     await sleep(300);
-    await page.evaluate(() => document.querySelector('.effort-tile[data-level=""]')?.click()); // 默认档，evaluate 绕可见性判定
+    await page.click('.effort-tile[data-level="xhigh"]');
     await sleep(300);
     await page.click('#settingsClose');
     await page.waitForSelector('#settingsSheet.translate-y-full');

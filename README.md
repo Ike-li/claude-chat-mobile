@@ -71,6 +71,15 @@ node scripts/doctor.js --fix  # 收紧权限（.env 与 data/*.json → 0600）
 npm start                     # http://localhost:3000
 ```
 
+Web 自己发起的会话开箱即用 SDK 状态栏，不需要改 Claude 配置。若还要在 Web **只读查看正在 CLI 里运行的会话**时同步 CLI 的模型、思考强度、上下文、成本和额度，可显式安装透明 statusline bridge：
+
+```bash
+npm run statusline:status     # 只读查看，不改 ~/.claude
+npm run statusline:install    # 显式安装；不会由 npm install / npm start 自动执行
+```
+
+安装后重开 Claude CLI，并重启常驻 server。卸载、紧急回滚、自定义快照目录和安全边界见 [CLI statusline bridge 指南](docs/statusline-bridge.md)。
+
 然后在手机上打开。启动日志会打印已带 token 的可用 URL：
 
 - **同一 WiFi：** 先在 `.env` 设 `AUTH_TOKEN`（局域网也必填，不设手机连不上），再打开启动时打印的局域网地址（`http://<lan-ip>:3000/#token=…`）。不需要隧道。
@@ -130,7 +139,7 @@ cloudflared tunnel --url http://localhost:3000
 - **多 repo 与多会话**：切换白名单内的工作目录，在标签页里并发跑多个会话。
 - **文件与图片上传**，带路径注入与穿越防护。
 - **工具卡片预览变更**：Edit / Write 看 diff、Read 看片段，限白名单工作目录（三层路径闸，只读不越界）。
-- **思考强度控制**、**Web 自有状态栏**，以及作为原生选择器的 **`AskUserQuestion`**。
+- **思考强度控制**、**单一来源状态栏**（Web 驾驶取 SDK；可选 bridge 让 CLI 驾驶取 CLI 快照），以及作为原生选择器的 **`AskUserQuestion`**。
 - **Web Push / ntfy 通知**：推送审批、提问与结果，点通知深链回触发它的会话（iOS 16.4+ 需先添加到主屏幕；可选配 ntfy 走自托管、锁屏更可靠）。
 - **PWA 可安装**：maskable 图标 + 独立显示，"添加到主屏幕"当 app 用。
 - **运维与安全加固**：日志脱敏、`0600` 原子写、`doctor` 启动自检、**UI 一键安全体检（脱敏，审查危险白名单）**、可选 Cloudflare Access 2FA。

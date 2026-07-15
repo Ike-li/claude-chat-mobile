@@ -4,7 +4,10 @@ const DEFAULT_TARGET = 'scripts/visual-mock-server.js';
 const REGISTRY_DISPATCH = 'if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;';
 
 export function findFallbackTestCommandBranches(source) {
-  const dispatchIndex = source.indexOf(REGISTRY_DISPATCH);
+  // 不同命令族可以各自先走同一个 registry（例如 ultracode 的显式别名，随后才是
+  // test:/demo: 主命令族）。只审计最后一个 dispatch 之后的手写分支；否则会把后一个
+  // 命令族的入口本身误报成前一个命令族的 fallback。
+  const dispatchIndex = source.lastIndexOf(REGISTRY_DISPATCH);
   if (dispatchIndex === -1) {
     throw new Error(`Missing visual mock scenario registry dispatch: ${REGISTRY_DISPATCH}`);
   }

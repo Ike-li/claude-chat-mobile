@@ -64,3 +64,27 @@ test('visual mock registry guard also rejects demo command fallbacks after regis
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('visual mock registry guard 允许独立命令族各自先走 registry dispatch', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-visual-mock-guard-'));
+  const fixture = join(dir, 'visual-mock-server.js');
+  writeFileSync(fixture, `
+    if (cmd.startsWith('ultracode ')) {
+      if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
+      runGenericUltracodeReply();
+    }
+    if (cmd.startsWith('test:') || cmd.startsWith('demo:')) {
+      if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
+    }
+  `);
+
+  try {
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['scripts/check-visual-mock-registry.js', fixture], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      stdio: 'pipe',
+    }));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -54,12 +54,12 @@
 | E13 | `claude -r` 选择历史会话 | 会话列表 + 新建 + 切换；无重命名/删除 UI（不做会话 CRUD） | P1 |
 | E14 | resume 时看到历史消息 | 切换/恢复会话时回显完整历史消息（流式读完整 CLI JSONL，与 /resume 同源；仅极端超大会话按防爆上限取尾） | P0 |
 | E15 | 坐在终端前，审批/提问出现即被看到 | 推送触达：`permission_request`/`question`/断连期 `result` 三类触发 | P0 |
-| E16 | 终端底部 statusLine（模型/ctx/成本/git 等状态感知） | **app 自有状态栏 UI**：server 用 SDK 自有 usage + git + CLI 版本结构化组装，web 原生渲染于输入区上方；不复刻终端 ANSI，不读 `~/.claude/settings.json`，不含账号级配额段 | P2 |
+| E16 | 终端底部 statusLine（模型/ctx/成本/git 等状态感知） | **app 自有状态栏 UI + 单一来源路由**：Web 驾驶时取 SDK usage；CLI 驾驶时可经显式安装的透明 bridge 取该 session 的 CLI 快照。两源不混拼；CLI 快照不可用就显示未知，不拿 SDK 陈值冒充 | P2 |
 | E17 | 把文件/截图丢给 claude | 文件/图片上传：落盘 `.ccm-uploads/` + 路径注入 + claude `Read` | P2 |
 | E18 | 滚动回看并选中复制历史输出 | 消息体「⧉ 复制」按钮，拷原始 Markdown 源文 | P3 |
 | E19 | 了解底层通信和调试诊断 | 交互与系统日志面板：前端 logs 面板通过 `logs:get` 调取，并通过 `session_log` 实时投影系统消息、过滤决策和底层 Socket 事件，方便排错 | P2 |
 
-**终端有、但明确不追求的**：tab 补全（无意义）、TUI 视觉形态（聊天 UI 是有意替代）、提示历史召回（终端 ↑ 键，微摩擦）、statusLine 的账号级配额段（5h/7d%，SDK 物理拿不到）。
+**终端有、但明确不追求的**：tab 补全（无意义）、TUI 视觉形态（聊天 UI 是有意替代）、提示历史召回（终端 ↑ 键，微摩擦）。statusLine 的账号级配额段在 SDK 路径仍不可得；显式启用 CLI bridge 后，只在 CLI 快照实际携带时展示。
 
 ## 3. 移动端独有的四个问题（终端没有的）
 
@@ -89,6 +89,7 @@
 9. **TOFU 设备信赖（纵深防御）**：非本地（localhost）且非 Cloudflare Access 验证通过的连接，必须通过机主在主机端的一次性显式授权。未授权连接的**所有上行 Socket 事件均被拦截丢弃**，从 `server.js` 统一事件过滤点 fail-closed 执行。
 10. **预览只读且不越界**：`tool:preview` 经 `attributePath` 唯一闸门（路径归属 + symlink + realpath 二核）只读白名单工作目录内文件；**即便 claude 曾按 `permissions.allow` 读过白名单外文件，预览一律拒绝**，绝不借预览通道退化成任意文件读。
 11. **诊断输出脱敏**：`doctor:run` 安全体检**只回显布尔 / 计数 / 危险规则串**，绝不外泄明文 token / 密钥 / 绝对路径 / AUD——体检是防御工具，其报告本身不得成为新的泄露面。
+12. **statusline 来源不混用**：Web 驾驶只信 SDK，CLI 驾驶只信通过 session/cwd/TTL/权限校验的新鲜 CLI 快照。快照目录须为 `0700`、文件须为 `0600`；缺失、过期、超限或校验失败一律显示不可用，不按字段回退另一来源。
 
 ### 威胁矩阵
 
@@ -107,6 +108,7 @@
 | 工具预览越界读 | 诱导 `tool:preview` 读白名单外文件（含 claude 曾按 `permissions.allow` 读过的越界文件） | `attributePath` 唯一闸门 + symlink + realpath 二核（不变量 10）；非白名单一律拒，只读不成为任意文件读 |
 | 同机他用户读配置 | 多用户机器上偷 `sessions.json` 等 | 配置文件 0600 + 真原子写（tmp→fsync→rename） |
 | 安全体检泄敏 | `doctor:run` 回显明文 token / 密钥 / 路径 | 全程脱敏，只出布尔 / 计数 / 危险规则串（不变量 11，`doctor-runtime.js`） |
+| CLI statusline 快照串会话 / 陈值冒充 | 读到别的 session/cwd 或过期状态后仍展示 | 文件名按 session 哈希隔离；内容再验 session/cwd/schema/source/TTL/大小/权限；失败不混入 SDK（不变量 12） |
 
 ### 部署加固建议
 
@@ -139,7 +141,7 @@
 | A9 | 环境预检 | 在无 claude 命令的环境启动 | 启动失败并给出可读的原因与修复提示 |
 | A10 | **北极星** | §0 剧本 | 完整通过 |
 | A11 | 触达（E15） | 触发审批 → 锁屏/杀掉浏览器 → 等待 | 手机秒级收到系统推送，点开直达审批弹窗 |
-| A12 | web 状态栏投送（E16） | 发消息；观察输入区上方状态栏；再以 `WEB_STATUSLINE=off` 启动验证关闭分支 | 状态栏显示真实 input/cache token、成本/耗时、git 与 CLI 版本（模型在底栏 chip、cwd/project 在顶栏 pill）；不显示账号级配额；关闭后无 UI 痕迹 |
+| A12 | 状态栏投送（E16） | Web 发一轮验证 SDK source；显式安装 bridge 后在 CLI 发一轮并从 Web 只读查看；再让快照过期，最后以 `WEB_STATUSLINE=off` 重启 | Web 驾驶只显示 SDK 值；CLI 驾驶显示同 session 的 CLI 值（含实际携带的 effort/额度）；过期时明确不可用且不混 SDK 陈值；关闭后无 UI 痕迹 |
 | A13 | 多 repo 切目录 | 设 `WORK_DIRS=dirA,dirB` → 切到 dirB 建会话 → 切回 dirA | 会话列表按 cwd 隔离；非白名单 cwd 被拒 |
 | A14 | 同仓库会话并发 | 会话 1 发长任务（在跑）→ 同 cwd 开会话 2 → 切回会话 1 | 会话 1 仍在跑、未被中断；两 tab 权限档独立 |
 | A15 | TOFU 设备信赖 | 公网新设备首次接入，注入正确 `AUTH_TOKEN` | 提示"等待主机授权"；未授权消息被丢弃；授权后恢复正常 |

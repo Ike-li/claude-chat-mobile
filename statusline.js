@@ -213,3 +213,62 @@ export async function buildWebStatusLine({ agent, cwd, versions }) {
   if (agent?.sessionId) p.session = { id: agent.sessionId };
   return p;
 }
+
+function cliResetIso(value) {
+  if (typeof value === 'string' && Number.isFinite(Date.parse(value))) return value;
+  if (!Number.isFinite(value) || value < 0) return null;
+  try {
+    // Claude CLI statusline 当前给 Unix 秒；兼容未来直接给毫秒，避免 1970 年倒计时。
+    return new Date(value < 1e12 ? value * 1000 : value).toISOString();
+  } catch { return null; }
+}
+
+function copyFinite(source, keys) {
+  const out = {};
+  for (const key of keys) if (Number.isFinite(source?.[key]) && source[key] >= 0) out[key] = source[key];
+  return out;
+}
+
+// CLI owner 时只消费 bridge 的白名单快照；与 SDK payload 分开构建，禁止按字段回退/混拼陈旧 Web 数据。
+// git 是当前 cwd 的本机事实，仍即时读取；其余模型、effort、上下文、成本、额度均来自同一份 CLI 快照。
+export async function buildCliStatusLine({ snapshot, cwd } = {}) {
+  const s = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const p = { ts: Number.isFinite(s.capturedAt) ? s.capturedAt : Date.now() };
+  const model = typeof s.model?.displayName === 'string' && s.model.displayName
+    ? s.model.displayName
+    : (typeof s.model?.id === 'string' ? s.model.id : '');
+  if (model) p.model = model;
+  if (typeof s.effort === 'string' && s.effort) p.effort = s.effort;
+  if (typeof s.thinking?.enabled === 'boolean') p.thinking = { enabled: s.thinking.enabled };
+
+  const statusCwd = typeof cwd === 'string' && cwd ? cwd : (typeof s.cwd === 'string' ? s.cwd : '');
+  if (statusCwd) {
+    p.cwd = statusCwd;
+    p.project = statusCwd.replace(/\/+$/, '').split('/').pop() || statusCwd;
+    const git = await gitStatus(statusCwd);
+    if (git) p.git = git;
+  }
+
+  const ctx = copyFinite(s.ctx, ['tokens', 'in', 'out', 'w', 'r', 'currentTotal', 'cacheHitPct', 'windowSize', 'usedPercent']);
+  if (Object.keys(ctx).length) p.ctx = ctx;
+  if (Number.isFinite(s.cost) && s.cost >= 0) p.cost = s.cost;
+  const duration = copyFinite(s.duration, ['wallMs', 'apiMs']);
+  if (Object.keys(duration).length) p.duration = duration;
+  const lines = copyFinite(s.lines, ['added', 'removed']);
+  if (Object.keys(lines).length) p.lines = lines;
+
+  const rate = {};
+  for (const [sourceKey, targetKey] of [['fiveHour', 'fiveHour'], ['sevenDay', 'sevenDay']]) {
+    const source = s.rate?.[sourceKey];
+    if (!source || !Number.isFinite(source.usedPercent) || source.usedPercent < 0 || source.usedPercent > 100) continue;
+    const window = { usedPercent: source.usedPercent };
+    const resetsAt = cliResetIso(source.resetsAt);
+    if (resetsAt) window.resetsAt = resetsAt;
+    rate[targetKey] = window;
+  }
+  if (Object.keys(rate).length) p.rate = rate;
+
+  if (typeof s.cliVersion === 'string' && s.cliVersion) p.version = s.cliVersion.split(/\s+/)[0];
+  if (typeof s.sessionId === 'string' && s.sessionId) p.session = { id: s.sessionId };
+  return p;
+}

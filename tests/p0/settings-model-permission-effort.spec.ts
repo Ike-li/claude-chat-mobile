@@ -12,8 +12,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#btnSettings').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
     await expect(page.locator('#settingsSheet')).toContainText('选择模型');
-    await expect(page.locator('.model-tile')).toContainText(['沿用当前模型', 'Claude 3.5 Sonnet', 'Claude 3.5 Haiku', 'Claude 3 Opus', 'Claude 3 Opus (1m Context)']);
-    await expect(page.locator('.perm-tile')).toHaveCount(5);
+    await expect(page.locator('.model-tile')).toContainText(['Default (recommended)', 'Claude 3.5 Sonnet', 'Claude 3.5 Haiku', 'Claude 3 Opus', 'Claude 3 Opus (1m Context)']);
+    await expect(page.locator('.perm-tile')).toHaveCount(6); // 含 CLI/SDK 支持但终端交互菜单不直接暴露的 auto
 
     // 2. 选择计划模式、[1m] 模型后缀和 high effort。
     await page.locator('.perm-tile[data-mode="plan"]').click();
@@ -117,6 +117,45 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:settings-echo');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('model=claude-3-opus[1m]');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-09f CLI 镜像拿不到 effort 时显示未知，不伪装成 low', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:mirror-readonly');
+    await expect(page.locator('#mirrorBanner')).toBeVisible();
+    await expect(page.locator('#pillEffortText')).toHaveText('CLI 档位未知', { timeout: 800 });
+
+    await page.locator('#btnSettings').click();
+    await expect(page.locator('#effortSelect')).toHaveValue('');
+    await expect(page.locator('#effortSelect option:checked')).toHaveText('CLI 当前档未知');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-09g CLI 镜像展示观察态，接管后恢复 Web 设置偏好', async ({ page }) => {
+    await gotoMock(page);
+
+    await page.locator('#btnSettings').click();
+    await page.locator('.perm-tile[data-mode="plan"]').click();
+    await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await page.locator('.effort-tile[data-level="ultracode"]').click();
+    await page.locator('#settingsClose').click();
+
+    await sendChatMessage(page, 'test:mirror-observed-settings');
+    await expect(page.locator('#mirrorBanner')).toBeVisible();
+    await expect(page.locator('#pillModelText')).toHaveText('claude-opus-4-8[1m]');
+    await expect(page.locator('#pillPermText')).toHaveText('Auto');
+    await expect(page.locator('#pillEffortText')).toHaveText('max');
+
+    page.once('dialog', dialog => dialog.accept());
+    await page.locator('#btnMirrorOverride').click();
+    await expect(page.locator('#mirrorBanner')).toBeHidden();
+    await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
+    await expect(page.locator('#pillPermText')).toHaveText('计划模式');
+    await expect(page.locator('#effortSelect')).toHaveValue('ultracode');
 
     await expectNoBrowserErrors(page);
   });
