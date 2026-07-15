@@ -14,9 +14,11 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCAN_ROOTS = ['src', 'public/js'];
 const EXTRA_FILES = ['server.js'];
 
-// import/export ... from '...'、动态 import('...')、副作用 import '...'
-const IMPORT_RE =
-  /(?:^|\n)\s*(?:import\s[^'"]*?from\s*|import\s*\(\s*|export\s[^'"]*?from\s*|import\s*)['"]([^'"]+)['"]/g;
+// 静态 import/export-from（行首锚定）；动态 import('...') 单独一条（可出现在行中任意位置，
+// 如 `const m = await import('./x.js')`——不锚定行首，否则边界规则可被动态 import 绕过）。
+const STATIC_IMPORT_RE =
+  /(?:^|\n)\s*(?:import\s[^'"]*?from\s*|export\s[^'"]*?from\s*|import\s*)['"]([^'"]+)['"]/g;
+const DYNAMIC_IMPORT_RE = /(?<![.\w])import\s*\(\s*['"]([^'"]+)['"]/g;
 
 // 分层规则。violation 判定：from 匹配 fromPrefix 且 to 匹配 toTest 且不在白名单。
 export const BOUNDARY_RULES = [
@@ -94,10 +96,12 @@ export function buildImportGraph(root = ROOT) {
   for (const rel of listFiles(root)) {
     const src = readFileSync(join(root, rel), 'utf8');
     const deps = [];
-    for (const m of src.matchAll(IMPORT_RE)) {
-      const spec = m[1];
-      if (!spec.startsWith('.')) continue; // 只跟踪项目内相对 import
-      deps.push(relative(root, resolve(join(root, dirname(rel)), spec)));
+    for (const re of [STATIC_IMPORT_RE, DYNAMIC_IMPORT_RE]) {
+      for (const m of src.matchAll(re)) {
+        const spec = m[1];
+        if (!spec.startsWith('.')) continue; // 只跟踪项目内相对 import
+        deps.push(relative(root, resolve(join(root, dirname(rel)), spec)));
+      }
     }
     graph.set(rel, deps);
   }

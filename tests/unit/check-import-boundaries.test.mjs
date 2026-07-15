@@ -112,3 +112,19 @@ test('只跟踪项目内相对 import，忽略裸模块说明符', async t => {
   const graph = buildImportGraph(root);
   assert.deepEqual(graph.get('src/agent/agent.js'), ['src/shared/util.js']);
 });
+
+test('行中动态 import() 也计入依赖图（防边界规则被 await import 绕过）', async t => {
+  const root = await scaffold({
+    'server.js': "const runtime = await import('./src/server/app.js');\nexport const x = runtime;\n",
+    'src/server/app.js': 'export const y = 1;\n',
+    'public/js/app.js': "async function lazy() { return (await import('../../src/agent/agent.js')).x; }\nexport { lazy };\n",
+    'src/agent/agent.js': 'export const x = 2;\n',
+  });
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  const graph = buildImportGraph(root);
+  assert.deepEqual(graph.get('server.js'), ['src/server/app.js']);
+  // 前端动态 import 后端 → 依赖图可见 → 边界规则可判
+  const violations = findBoundaryViolations(graph, BOUNDARY_RULES);
+  assert.ok(violations.some(v => v.rule === 'frontend-no-backend' && v.from === 'public/js/app.js'));
+});
