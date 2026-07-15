@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -173,6 +173,9 @@ import { verifyIntegrity } from './canonicalize.js';
   // ---- 状态 ----
   let currentSessionId = localStorage.getItem('current_session') || null;
   const sessionDomCache = new Map();
+  // per-session 未发送草稿 {text, attachments}（切会话存/切回恢复；同会话静默换实例不读写，见 planSessionDraftSwap）。
+  // 仅内存、不落盘——刷新页面后丢失可接受（与 sessionDomCache 同寿）。
+  const sessionDraftCache = new Map();
   // per-session「上次为该会话渲染到的磁盘 history 条数」（history 口径，非活缓冲 seq）。切入时与 server 报的
   // diskLen 比对，判「离开期间被终端外部写过」→ 清屏重载（见 shouldReloadOnEnter）。独立于 sessionDomCache：
   // 后者只在切走时 set 一次（DOM 快照），这里要在每次 loadHistory/onHistoryAppend 渲染后累积。
@@ -2015,6 +2018,8 @@ import { verifyIntegrity } from './canonicalize.js';
       });
       
       inputEl.value = '';
+      // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
+      if (currentSessionId) sessionDraftCache.delete(currentSessionId);
       pendingAttachments = [];
       renderTray();
       hints.classList.add('hidden');
@@ -2034,6 +2039,8 @@ import { verifyIntegrity } from './canonicalize.js';
     socket.emit('user:message', { text, model, attachments, instanceId: viewingInstanceId, cwd: currentCwd, clientMessageId });
     // F3：不再本地 append 气泡，由 user_message 事件渲染（同时入缓冲，重载可回放）
     inputEl.value = '';
+    // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
+    if (currentSessionId) sessionDraftCache.delete(currentSessionId);
     pendingAttachments = [];
     renderTray();
     hints.classList.add('hidden');
@@ -2770,7 +2777,7 @@ import { verifyIntegrity } from './canonicalize.js';
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
   function bindView(entry, id) {
     const prevInstanceId = displayedInstanceId; // S1：缓存归属的(外出)实例，供切回时检测实例是否被替换
-    const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 shouldClearInputOnBindView 判「是否只是同会话静默换实例」
+    const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 planSessionDraftSwap 判 keep/swap
     displayedInstanceId = id;
     const sid = entry?.sessionId || null;
     displayedSessionId = sid;
@@ -2787,12 +2794,39 @@ import { verifyIntegrity } from './canonicalize.js';
       }
     }
 
+    // 草稿快照须在 clearView 之前取（clearView 清消息 DOM；附件托盘改由下方 swap 路径统一接管，
+    // 不再在 clearView 里无脑清空——否则同会话 keep 会误清托盘）。
+    const draftSnapshot = {
+      text: inputEl ? inputEl.value : '',
+      attachments: pendingAttachments.slice(),
+    };
     clearView(sid, null);
-    // 效果强度/模型切档会让后端 dispose 旧实例+resume 同会话开新实例（instanceId 变、sessionId 不变），
-    // viewingInstanceId 因此变化触发这次 bindView，但用户视角仍在同一个聊天——不该清掉正在输入的草稿。
-    if (inputEl && shouldClearInputOnBindView({ prevSessionId, newSessionId: sid })) {
-      inputEl.value = '';
-      inputEl.dispatchEvent(new Event('input'));
+    // 未发送草稿（文字+附件）按 sessionId 存/取：同会话静默换实例(keep)不动；真实切会话(swap)存旧恢复新。
+    // 旧逻辑只 clear 不存 → 切走再切回输入/附件被清空（用户报告）。
+    const draftPlan = planSessionDraftSwap({
+      prevSessionId,
+      newSessionId: sid,
+      currentDraft: draftSnapshot.text,
+      currentAttachments: draftSnapshot.attachments,
+      drafts: sessionDraftCache,
+    });
+    if (draftPlan.action === 'swap') {
+      if (draftPlan.save) {
+        sessionDraftCache.set(draftPlan.save.sessionId, {
+          text: draftPlan.save.text,
+          attachments: draftPlan.save.attachments,
+        });
+        if (sessionDraftCache.size > 40) {
+          const oldestKey = sessionDraftCache.keys().next().value;
+          sessionDraftCache.delete(oldestKey);
+        }
+      }
+      if (inputEl) {
+        inputEl.value = draftPlan.restoreText;
+        inputEl.dispatchEvent(new Event('input'));
+      }
+      pendingAttachments = draftPlan.restoreAttachments.slice();
+      renderTray();
     }
 
     // 新会话首发懒开：实例已建、sessionId 未由 SDK init 返回。此刻回落 dashboard 会「闪首页」——
@@ -3975,7 +4009,8 @@ import { verifyIntegrity } from './canonicalize.js';
     closeSheet(permModal);
     questionQueue.length = 0; activeQuestion = null;
     closeSheet(questionModal);
-    pendingAttachments = []; renderTray();   // E17：切换/新建清空待发送附件托盘
+    // 附件托盘不再这里无脑清空：bindView 经 planSessionDraftSwap 按会话存/取；
+    // 发送成功路径各自清空。否则同会话静默换实例 / 重载历史会误清未发送附件。
     setBusy(false);
     hideActivityBanner(); // WS-005：清 activity 横幅（含 api_retry——二者共用 activityBanner + apiRetryBannerActive），否则 A 的活动/重试态残留到空闲的 B（task-progress 已由 setInstances 按实例处理）
 
