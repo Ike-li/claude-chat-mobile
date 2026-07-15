@@ -102,16 +102,12 @@ export class AgentSession {
     // SDK 无 effort 控制请求，切档由 server 置换实例（dispose + 下条消息懒重生 resume）
     this.effort = effort || null;
 
-    // E16 statusline 数据源（server 构造脚本 stdin 时只读，不进事件契约）：
-    this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径）
+    // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
+    this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
     this.historicalCostUsd = historicalCostUsd || 0; // 以前各次会话连接/恢复历史的累计成本
     this.totalCostUsd = 0;        // result.total_cost_usd 最新值（SDK 已是会话累计，勿 +=）
     this.totalDurationMs = 0;     // += result.duration_ms（活跃轮次累计，非墙钟——实例懒重生不暴露给用户）
-    this.totalApiDurationMs = 0;  // += result.duration_api_ms（增量 = 脚本 cache-TTL 段的活动信号）
-    // E16 reused 指标 + 缓存失效倒计时数据源（皆从 assistant.usage.cache_read 派生）：
-    this.totalCacheReadTokens = 0; // += cache_read_input_tokens —— 本会话累计复用 token（区别于 lastUsage 的单轮覆盖口径）
-    this.lastCacheHitAt = 0;       // 最后一次 cache_read>0 的 Date.now()；statusline 据此推算 ephemeral cache 失效 deadline，每次命中滑动重置
-    this.currentTask = null;      // 当前活跃的 Agent/Task 工具描述（tool_use 设，result/dispose 清）——供 statusline 显示
+    this.totalApiDurationMs = 0;  // += result.duration_api_ms
     this.lastToolName = null;     // 最后使用的工具名（Bash/Agent/Write 等），供后台 tab 角标细化
     this.bgTasks = new Map();     // 活的后台任务注册表 key → { taskType, message, lastSeenAt }——task_progress upsert / 完成 or TTL 清；驱动"纯后台运行中"⏳
     // 子 agent 类型缓存 parent_tool_use_id → subagent_type：probe 实证只有 assistant 消息带 subagent_type，
@@ -754,7 +750,6 @@ export class AgentSession {
     }
     this.pendingQuestions.clear();
     this.denyKinds.clear(); // 防 dispose 后残留（实例即弃，无 tool_result 来消费）
-    this.currentTask = null;
     this.lastToolName = null;
     this.bgTasks.clear(); // dispose 清空活后台注册表
     this.subagentTypeByParent.clear(); // dispose 清空子 agent 类型缓存（不跨实例串标签）
@@ -846,9 +841,6 @@ export class AgentSession {
           if (this.sessionId && msg.session_id !== this.sessionId) {
             this.firstMessage = null;
             this.lastUsage = null; // E16：换会话上下文清零，旧 ctx% 不得残留显示
-            this.totalCacheReadTokens = 0; // E16：reused 是本会话累计 → 换会话清零（与 lastUsage 同步）
-            this.lastCacheHitAt = 0;       // 倒计时起点随之清零，避免旧会话 deadline 串到新会话
-            this.currentTask = null;       // 切换会话清任务名，旧任务不残留
             this.lastToolName = null;      // 切换会话清工具名
             this.bgTasks.clear();          // 换会话清空活后台注册表（旧会话后台任务不串到新会话）
             this.subagentTypeByParent.clear(); // 换会话清空子 agent 类型缓存（旧会话子 agent 类型不串到新会话）
@@ -993,9 +985,8 @@ export class AgentSession {
             }
           }
         } else if (ev.type === 'message_delta' && ev.usage) {
-          // E16：流式模式下从 message_delta 提取 usage（SDK 在此事件返回 input/cache tokens）
+          // E16：流式模式下从 message_delta 提取 usage（SDK 在此事件返回 input/cache/output tokens）
           this.lastUsage = ev.usage;
-          // 不累加 totalCacheReadTokens——assistant 事件会携带同一轮的 usage 再报一次，
           // 此处只更新 lastUsage 供 ctx% 即时刷新（不等 assistant 边界）
           this.onUsage?.();
         }
@@ -1045,15 +1036,12 @@ export class AgentSession {
         // E16：单次 API 调用口径的 usage（stream_event 在非流式网关缺席、result.usage 轮内聚合高估 ctx）；
         // subagent 消息已被上方 parent_tool_use_id 守卫排除
         if (msg.message?.usage) {
-          this.lastUsage = msg.message.usage; // 单轮口径（ctx% / in:w:r:）
-          const cr = msg.message.usage.cache_read_input_tokens || 0;
-          if (cr > 0) { this.totalCacheReadTokens += cr; this.lastCacheHitAt = Date.now(); } // E16：累计复用量 + 记命中墙钟（倒计时起点，滑动重置）
+          this.lastUsage = msg.message.usage; // 单轮口径（ctx% / in:out:w:r:）
           this.onUsage?.(); // E16：assistant 边界即刷 statusline ctx（不等 result/10s tick）
         }
         const mid = this.currentMessageId || msg.uuid;
         for (const block of msg.message?.content ?? []) {
           if (block.type === 'tool_use') {
-            if (block.name === 'Agent') this.currentTask = block.input?.description || null;
             this.lastToolName = block.name; // 跟踪最后使用的工具名，供后台 tab 角标细化
             let file; // ③：文件类工具附未截断 path + changeKind，并缓存完整 input 供预览
             if (FILE_TOOLS.has(block.name)) {
@@ -1142,7 +1130,6 @@ export class AgentSession {
       case 'result':
         this._flushText(); this._flushThink();
         this.pendingTurns = Math.max(0, this.pendingTurns - 1);
-        this.currentTask = null; // 任务完成/结束即清
         this.lastToolName = null; // 清空工具名跟踪
         if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
         this.totalDurationMs += msg.duration_ms || 0;

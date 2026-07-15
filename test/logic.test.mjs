@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, formatContextCategories, detectServiceRestart, formatServiceNotices, parseUsageForWeb } from '../public/js/logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test.describe('parseUsageForWeb（③ 套餐额度窗后端：提取 rate_limits + 降级 + 剔除隐私）', () => {
@@ -82,35 +82,6 @@ test.describe('parseUsageForWeb（③ 套餐额度窗后端：提取 rate_limits
     assert.equal('five_hour' in r.rateLimits, false, 'utilization 非数 + resets_at 非串 → 整窗省略');
     assert.equal('seven_day' in r.rateLimits, false, 'null 窗省略');
     assert.equal(r.rateLimits.seven_day_opus.utilization, 8, '其余窗不受影响');
-  });
-});
-
-test.describe('formatContextCategories: SDK ctx categories → 过滤/降序/pct 展示行（Part3）', () => {
-  test('按 tokens 降序、过滤 0/负、算 pct（相对 maxTokens）', () => {
-    const cats = [
-      { name: 'Skills', tokens: 5000, color: '#a' },
-      { name: 'Free space', tokens: 195000, color: '#b' },
-      { name: 'Empty', tokens: 0, color: '#c' },
-    ];
-    assert.deepEqual(formatContextCategories(cats, 200000), [
-      { name: 'Free space', tokens: 195000, pct: 98, deferred: false }, // 195k/200k=97.5→98
-      { name: 'Skills', tokens: 5000, pct: 3, deferred: false },        // 5k/200k=2.5→3
-    ]);
-  });
-  test('isDeferred 透传', () => {
-    assert.deepEqual(formatContextCategories([{ name: 'MCP', tokens: 100, isDeferred: true }], 1000), [{ name: 'MCP', tokens: 100, pct: 10, deferred: true }]);
-  });
-  test('无/非法 maxTokens → pct=null（仍给 name/tokens）', () => {
-    assert.deepEqual(formatContextCategories([{ name: 'X', tokens: 100 }], null), [{ name: 'X', tokens: 100, pct: null, deferred: false }]);
-    assert.deepEqual(formatContextCategories([{ name: 'X', tokens: 100 }], 0), [{ name: 'X', tokens: 100, pct: null, deferred: false }]);
-  });
-  test('非数组 / 空 → []', () => {
-    assert.deepEqual(formatContextCategories(null, 1000), []);
-    assert.deepEqual(formatContextCategories([], 1000), []);
-    assert.deepEqual(formatContextCategories(undefined, 1000), []);
-  });
-  test('过滤缺 name / 非有限 tokens 的坏项', () => {
-    assert.deepEqual(formatContextCategories([{ tokens: 100 }, { name: 'ok', tokens: 50 }, { name: 'bad', tokens: NaN }], 1000), [{ name: 'ok', tokens: 50, pct: 5, deferred: false }]);
   });
 });
 
@@ -949,6 +920,29 @@ test('armedTakeoverStep: armed + 他会话 stale → none（不误放行）', ()
 
 test('armedTakeoverStep: armed + 切会话 → disarm', () => {
   assert.deepEqual(armedTakeoverStep({ armed: true, armedSid: 's1' }, { kind: 'switch' }), { action: 'disarm' });
+});
+
+// ── shouldSendOnEnter：移动端回车发送截断修复（2026-07-13 排查报告 §8.1）──
+// 桌面物理键盘有 Shift+Enter 这个「换行逃生舱」，触屏软键盘没有——同样一律拿「非 Shift 回车」当
+// 发送信号，会把触屏用户想换行分段的操作误判成发送，截断成两条消息。触屏设备下回车不再发送，
+// 只走 textarea 默认换行，发送收窄为仅走发送按钮。
+test.describe('shouldSendOnEnter（回车是否触发发送——移动端回车语义修复）', () => {
+  test('非触摸设备 + 无 Shift → true（桌面 Enter 发送，维持现状）', () => {
+    assert.equal(shouldSendOnEnter({ shiftKey: false, isTouchDevice: false }), true);
+  });
+  test('非触摸设备 + Shift → false（桌面 Shift+Enter 换行，维持现状）', () => {
+    assert.equal(shouldSendOnEnter({ shiftKey: true, isTouchDevice: false }), false);
+  });
+  test('触摸设备 + 无 Shift → false（本次修复：手机回车=换行，不发送）', () => {
+    assert.equal(shouldSendOnEnter({ shiftKey: false, isTouchDevice: true }), false);
+  });
+  test('触摸设备 + Shift → false（触摸设备下回车恒不发送，与 Shift 无关）', () => {
+    assert.equal(shouldSendOnEnter({ shiftKey: true, isTouchDevice: true }), false);
+  });
+  test('空入参安全 → true（不崩，且延续修复前的桌面默认行为）', () => {
+    assert.equal(shouldSendOnEnter({}), true);
+    assert.equal(shouldSendOnEnter(), true);
+  });
 });
 
 test.describe('detectServiceRestart（服务状态可见性——每设备独立感知，本地基线对比）', () => {

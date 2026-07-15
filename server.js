@@ -1015,7 +1015,12 @@ async function catchUpTick() {
     let tail = { verdict: 'settled', lastChainTs: null };
     try { tail = await classifyTranscriptTail(a.sessionId, a.cwd); } catch { /* 读失败保守不锁 */ }
     if (viewingInstanceId !== id) return;                // await 让出后视图可能已切走：不提交预锁（下轮按新会话重判）
-    const entryLock = mirrorEntryLock({ tailVerdict: tail.verdict, localBusy });
+    const entryLock = mirrorEntryLock({
+      tailVerdict: tail.verdict,
+      localBusy,
+      lastChainTs: tail.lastChainTs,
+      now: Date.now(),
+    });
     mirrorRelease = { readonly: entryLock, quietTicks: 0 };
     setMirror(entryLock, a.sessionId, true,              // force 清上个会话残留的锁/发权威态
       mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now() }));

@@ -401,35 +401,37 @@ async function run() {
     });
     assert.strictEqual(isStatusWrapHiddenTC6, false, 'TC-6: StatusLine wrap must be visible (not hidden)');
 
-    // 2. 展开详情：git 分支 + 代码增删 + 精确 token + cache + repo + 版本（web-native 结构化、去 emoji）
+    // 2. 展开详情：对齐 CLI statusline 文案（model/effort/location/git/ctx/5h7d/uncached/response/cache/est$/lines/sid/v）
     const statusTextTC6 = await page.evaluate(() => {
       const box = document.getElementById('cliStatus');
       return box ? box.textContent.trim() : null;
     });
     console.log('   [Assert] Status textContent:', statusTextTC6);
     assert.ok(statusTextTC6 && statusTextTC6.includes('feature/visual-testing'), 'TC-6: 展开含 git 分支');
-    assert.ok(statusTextTC6 && statusTextTC6.includes('+120'), 'TC-6: 展开含代码新增行数');
     // git 三分（+暂存 !改动 ?未跟踪，对齐 CLI statusline）：mock staged:2 modified:1 untracked:0 → "+2 !1"
     assert.ok(statusTextTC6 && statusTextTC6.includes('+2 !1'), 'TC-6: 展开含 git 三分（+暂存 !改动）');
-    // token 段新格式：uncached <未缓存输入> response <输出>（替代旧「N tokens」+「in:」）。mock in:2000 out:1500
+    // 对齐 CLI 的 effort / location
+    assert.ok(statusTextTC6 && statusTextTC6.includes('effort high'), 'TC-6: 展开含 effort 档');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('claude-chat-mobile'), 'TC-6: 展开含 location/project');
+    // token 段：uncached <未缓存输入> response <输出>。mock in:2000 out:1500
     assert.ok(statusTextTC6 && statusTextTC6.includes('uncached 2.0k'), 'TC-6: 展开含 uncached（未缓存输入 token）');
     assert.ok(statusTextTC6 && statusTextTC6.includes('response 1.5k'), 'TC-6: 展开含 response（输出 token）');
-    // cache 段新格式：命中率按 r/tokens 重算 2 位小数 + write/read（替代旧「cache 45%」+「w:/r:」）。21000/45000=46.67%
+    // cache 段：命中率按 r/tokens 重算 2 位小数 + write/read。21000/45000=46.67%
     assert.ok(statusTextTC6 && statusTextTC6.includes('cache 46.67%'), 'TC-6: 展开含缓存命中率（r/tokens=21000/45000=46.67%）');
     assert.ok(statusTextTC6 && statusTextTC6.includes('write 22.0k') && statusTextTC6.includes('read 21.0k'), 'TC-6: 展开含 cache write/read 明细');
-    assert.ok(statusTextTC6 && statusTextTC6.includes('reused 1.2m'), 'TC-6: 展开含累计复用 token（会话级 reused，区别于瞬时 cache%）');
-    assert.ok(statusTextTC6 && /ttl ~\d+:\d{2} est/.test(statusTextTC6), 'TC-6: 展开含缓存失效倒计时（客户端推算，~est 标记非权威）');
+    // 账号额度 5h/7d（对齐 CLI；web 独有 reused/ttl/categories 已删）
+    assert.ok(statusTextTC6 && statusTextTC6.includes('5h 42%'), 'TC-6: 展开含 5h 额度');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('7d 11%'), 'TC-6: 展开含 7d 额度');
+    assert.ok(statusTextTC6 && !statusTextTC6.includes('reused'), 'TC-6: 不含 web 独有 reused');
+    assert.ok(statusTextTC6 && !/ttl ~/.test(statusTextTC6), 'TC-6: 不含 web 独有 cache TTL');
+    assert.ok(statusTextTC6 && !statusTextTC6.includes('Skills'), 'TC-6: 不含 categories 明细（非 CLI statusline）');
     assert.ok(statusTextTC6 && statusTextTC6.includes('Ike-li/claude-chat-mobile'), 'TC-6: 展开含 repo 全名');
     assert.ok(statusTextTC6 && statusTextTC6.includes('v2.1.178'), 'TC-6: 展开含 CLI 版本号');
-    // 新增展开字段：ctx% + left（model→窗口映射）、成本、会话元数据 sid/transcript
-    assert.ok(statusTextTC6 && statusTextTC6.includes('ctx 23%'), 'TC-6: 展开含 ctx 百分比（model→窗口映射）');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('ctx 23%'), 'TC-6: 展开含 ctx 百分比');
     assert.ok(statusTextTC6 && statusTextTC6.includes('left 155k'), 'TC-6: 展开含剩余上下文（windowSize−tokens）');
     assert.ok(statusTextTC6 && statusTextTC6.includes('est $0.37'), 'TC-6: 展开含成本（est $）');
+    assert.ok(statusTextTC6 && statusTextTC6.includes('lines +12/-4'), 'TC-6: 展开含会话工具改行 lines');
     assert.ok(statusTextTC6 && statusTextTC6.includes('sid 784e20b1'), 'TC-6: 展开含会话 sid');
-    // Part3：ctx categories 明细（SDK getContextUsage 分解，对齐 CLI /context）。mock Skills 5000 / Free space 195000
-    // → 按 tokens 降序、pct 相对 windowSize：Free space 195.0k 98% · Skills 5.0k 3%
-    assert.ok(statusTextTC6 && statusTextTC6.includes('Skills 5.0k'), 'TC-6: 展开含 ctx categories 明细（Skills 类别 token）');
-    assert.ok(statusTextTC6 && statusTextTC6.includes('Free space 195.0k'), 'TC-6: 展开含 ctx categories 明细（Free space 类别 token）');
 
     // 3. 折叠摘要：只显 'statusline' 一词（全部数据在展开态）
     const summaryTextTC6 = await page.evaluate(() => {
@@ -1552,6 +1554,40 @@ async function run() {
     assert.strictEqual(browseBtnCountTC22, 0, 'TC-22: 抽屉工作区行不应再有浏览按钮');
 
     console.log('✅ TC-22: 顶部 pill 打开文件浏览 + 抽屉无浏览按钮 passed\n');
+
+    // ==================================================================
+    // TC-23: 移动端回车语义修复回归（2026-07-13 排查报告 §8.1：回车发送截断）
+    //   本文件全局 viewport 已是 isMobile+hasTouch（见文件顶部 setViewport）——触摸设备下按 Enter
+    //   应插入换行、不应触发发送；修复前任何非 Shift 回车都会 preventDefault()+send()，把这条两行
+    //   消息在换行处截断成一条只含"第一行内容"就发出去（value 被清空 + 触发忙碌态）。
+    // ==================================================================
+    console.log('👉 Running TC-23: 移动端回车换行不再截断发送...');
+    // 重置到全新会话（而非仅 reload）：TC-18 结束时 viewing 停在 inst_needsyou（带一条待审批 Bash），
+    // 单纯 reload 会重连回这个带待办的实例，activeStatusPill 会因那条待审批而常亮，
+    // 和"回车是否触发了发送"无关，会把 pillHidden 断言弄假阳性/假阴性。开新会话确保是干净的 idle 态。
+    await page.reload({ waitUntil: 'networkidle2' });
+    await page.waitForSelector('#btnNew');
+    await sleep(500);
+    await page.click('#btnNew');
+    await page.waitForSelector('#messages.empty-start', { timeout: 5000 });
+
+    await page.focus('#input');
+    await page.keyboard.type('第一行内容');
+    await page.keyboard.press('Enter'); // 移动端：意图换行，不应发送
+    await page.keyboard.type('第二行内容');
+
+    const tc23State = await page.evaluate(() => ({
+      value: document.getElementById('input')?.value || '',
+      // 次要佐证：send() 走线上分支时由 user_message 事件回显气泡（F3），从不本地 append——
+      // 没被截断发送出去，#messages 应仍是刚开新会话时的空态，不应多出气泡。
+      // （没有用 activeStatusPill 的 hidden class 做第二信号：全新会话从未真正 busy→idle 过一轮时，
+      // 该 class 本就不会被 JS 打上，是静态 HTML 的默认中间态，与"是否发送"无关，验证时曾误报。）
+      messagesEmptyStart: document.getElementById('messages')?.classList.contains('empty-start'),
+    }));
+    assert.strictEqual(tc23State.value, '第一行内容\n第二行内容', 'TC-23: 移动端回车应插入换行并保留两行完整内容，不应被发送清空/截断');
+    assert.strictEqual(tc23State.messagesEmptyStart, true, 'TC-23: 移动端按下回车不应触发发送（消息区应仍是未发送过的空态，无新气泡）');
+
+    console.log('✅ TC-23: 移动端回车换行不再截断发送 passed\n');
 
     console.log('==================================================================');
     console.log('🎉 All Automated Visual E2E Regression Tests Passed Perfectly!');

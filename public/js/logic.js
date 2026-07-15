@@ -173,6 +173,14 @@ export function shouldClearInputOnBindView({ prevSessionId, newSessionId } = {})
   return !(newSessionId && newSessionId === prevSessionId);
 }
 
+// 回车键是否触发发送（2026-07-13 排查报告 §4：移动端回车发送截断）。桌面物理键盘用 Shift+Enter
+// 当换行「逃生舱」，非 Shift 回车一律发送；但触屏软键盘没有 Shift+Enter 这个组合，若照搬桌面语义，
+// 用户想换行分段时按下的每一次回车都会被当场发出，把一条多行长消息在换行处截断成几条。
+// 触摸设备下回车恒不发送（走 textarea 默认插入换行），发送收窄为仅走发送按钮；非触摸设备维持原状。
+export function shouldSendOnEnter({ shiftKey, isTouchDevice } = {}) {
+  return !shiftKey && !isTouchDevice;
+}
+
 // 客户端 agent:event 分流（app.js 分发入口；台阶3 instanceId 分流）：是否丢弃该事件不渲染。
 // 豁免（永不丢）：instances 合成事件（它定义 viewingInstanceId 本身）、无 instanceId 的合成事件
 // （status_line / init 重放 / models / permission_mode / effort_mode）。
@@ -487,15 +495,6 @@ export function formatServiceNotices({ service, restartChanged, now } = {}) {
   return notices;
 }
 
-export function formatContextCategories(categories, maxTokens) {
-  if (!Array.isArray(categories)) return [];
-  const win = Number.isFinite(maxTokens) && maxTokens > 0 ? maxTokens : null;
-  return categories
-    .filter(c => c && typeof c.name === 'string' && Number.isFinite(c.tokens) && c.tokens > 0)
-    .map(c => ({ name: c.name, tokens: c.tokens, pct: win ? Math.round(c.tokens / win * 100) : null, deferred: !!c.isDeferred }))
-    .sort((a, b) => b.tokens - a.tokens);
-}
-
 // ③ 从 SDK usage_EXPERIMENTAL...() 响应提取 web 额度窗所需字段（防御性解析——运行时结构比 .d.ts 富且
 // 标记 EXPERIMENTAL_MAY_CHANGE、会漂，故不绑固定 schema、逐字段存在性校验）。三条硬规则：
 // ① usage 为空（fetchUsage 超时/无 q/抛错）或 rate_limits_available===false（API key / Bedrock / Vertex /
@@ -504,6 +503,7 @@ export function formatContextCategories(categories, maxTokens) {
 // ③ 成本（session.total_cost_usd）与订阅类型（max/pro）非隐私、可留。
 // 窗口 key（five_hour/seven_day_opus 等）保留 SDK 原名（= SDKRateLimitInfo.rateLimitType 枚举，稳定可辨），
 // 叶子字段归一 camelCase（resets_at→resetsAt）符合 web 契约。
+// 注：statusline 显示面另由 statusline.js usageBitsForStatusLine 取 5h/7d + lines；本函数服务独立额度窗通道。
 export function parseUsageForWeb(usage) {
   if (!usage || typeof usage !== 'object') return { available: false };
   if (usage.rate_limits_available === false) return { available: false };

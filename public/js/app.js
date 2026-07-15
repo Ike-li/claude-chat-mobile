@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, formatContextCategories } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -143,24 +143,6 @@ import { verifyIntegrity } from './canonicalize.js';
   // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「接管 CLI 会话」时判定走排队还是即时确认）。
   let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
   let pushVapidKey = null; // 缓存公钥，避免每次重连重复 fetch
-
-  // ---- prompt cache 失效倒计时（前端本地递减；deadline 非 SDK 权威值）----
-  // 数据链：statusline.js 用「最后一次 cache_read>0 的墙钟 + 5min ephemeral 约定 TTL」推算 cacheExpiresAt
-  // 下发（详见 statusline.js 顶部 CACHE_TTL_MS 注释，写明上游 TTL 不可观测）。此处仅本地每秒递减显示并标
-  // ~est；剩余基准用 server 端差值(cacheExpiresAt − p.ts)消除手机↔server 时钟偏移；凉了(≤0)显 cold 并停表。
-  let cacheTtlDeadline = 0, cacheTtlTimer = null;
-  const fmtTtlRemain = ms => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
-  const ttlPillText = ms => ms > 0 ? `ttl ~${fmtTtlRemain(ms)} est` : 'cache cold est'; // 倒计时 pill 文案单一来源（初始渲染 + 跳秒共用，改文案/单位只改这里）
-  function tickCacheTtl() {
-    const el = document.querySelector('.js-cache-ttl');
-    if (!el || !cacheTtlDeadline) { clearInterval(cacheTtlTimer); cacheTtlTimer = null; return; }
-    const rem = cacheTtlDeadline - Date.now();
-    el.textContent = ttlPillText(rem);
-    if (rem <= 0) { clearInterval(cacheTtlTimer); cacheTtlTimer = null; } // 凉了不再跳，等下次命中刷新 deadline 重启
-  }
-  // 切视图时清倒计时跳秒表（clearView 调用）：timer/deadline 是模块级单例、非 per-view，不清则旧实例的 deadline
-  // 会被新视图 pill 串显（A、B 的 lastCacheHitAt 不同 → deadline 不同）；新视图由各自 status_line 重设。
-  function stopCacheTtl() { if (cacheTtlTimer) { clearInterval(cacheTtlTimer); cacheTtlTimer = null; } cacheTtlDeadline = 0; }
 
   // ---- 客户端本地日志体系 (Console/Log modal) ----
   const clientLogBuffer = [];
@@ -362,6 +344,12 @@ import { verifyIntegrity } from './canonicalize.js';
   let displayedSessionId = null;
   let instancesList = [];               // 最近 instances 事件的实例列表（含 per-instance state）
   let needsYouList = [];                // "等我"聚合（AD-11/§3.2.5，承接 FR-21/FR-22），按 waitingSince 升序（等得越久排越前）
+  // 服务状态可见性（第一性原理重新设计，与上面 needsYouList 是不同轴——这条答"服务本身有没有出过岔子"）：
+  // latestServiceHealth = 最近一次 instances 广播里的 service 字段；_serviceRestartNoticeActive 一旦本次
+  // 页面生命周期内命中过重启就保持 true，防止下一次不相关广播里 detectServiceRestart 判回 changed:false
+  // 导致提示瞬间消失——重启提示应持续到用户主动离开/刷新页面，不是那种毫秒级归零的一次性事件。
+  let latestServiceHealth = null;
+  let _serviceRestartNoticeActive = false;
   // 项目文件只读浏览（FR-07，LLD §3.4.2）状态：browseSegments = 相对 browseCwd 已进入的目录名数组；
   // browseMode 区分"看目录列表"与"看文件内容"；两组 offset/累积内容各自独立，互不干扰。
   let browseCwd = null;
@@ -1367,6 +1355,19 @@ import { verifyIntegrity } from './canonicalize.js';
       const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
       const fmtMs = ms => { const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}h${String(m).padStart(2, '0')}m` : m ? `${m}m${String(x).padStart(2, '0')}s` : `${x}s`; };
       const fmtTokF = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n); // 带 1 位小数（token 明细，匹配 cli 的 2.1k/199.6k）
+      // 额度重置倒计时：ISO resets_at → 相对时长（对齐 CLI statusline `reset 2h05m`）
+      const fmtReset = iso => {
+        if (!iso) return '';
+        const t = Date.parse(iso);
+        if (!Number.isFinite(t)) return '';
+        const rem = Math.max(0, t - Date.now());
+        if (rem <= 0) return 'now';
+        const totalMins = Math.ceil(rem / 60_000);
+        const days = Math.floor(totalMins / 1440), hours = Math.floor((totalMins % 1440) / 60), mins = totalMins % 60;
+        if (days > 0) return `${days}d${hours}h${String(mins).padStart(2, '0')}m`;
+        if (hours > 0) return `${hours}h${String(mins).padStart(2, '0')}m`;
+        return `${mins}m`;
+      };
       // 折叠条只显 'statusline' 一词；全部数据在展开态（CLI 密集风、│ 分隔、分段着色）
       if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
       // 展开详情：CLI 密集风、分段着色、纯 DOM 构建。seg = {text,cls} 或 {node}。配色用项目语义色 token
@@ -1389,11 +1390,10 @@ import { verifyIntegrity } from './canonicalize.js';
         });
         return line;
       };
-      const lines = [];
-      // 缓存失效倒计时的 server 端剩余 = cacheExpiresAt − p.ts（同 server 时钟、差值无偏）；末尾据此启本地跳秒表
-      const ttlRemainMs = (p.ctx && Number.isFinite(p.ctx.cacheExpiresAt) && Number.isFinite(p.ts)) ? p.ctx.cacheExpiresAt - p.ts : null;
+      const linesArr = [];
 
-      // git 段（分支 +暂存 !改动 ?未跟踪 ↑ahead ↓behind + 代码增删 +绿 −红双色）。三分对齐 CLI；陈旧 payload 无三分时回退 ✱changed。
+      // git 段（分支 +暂存 !改动 ?未跟踪 ↑ahead ↓behind）。三分对齐 CLI；陈旧 payload 无三分时回退 ✱changed。
+      // 不含 git 工作区 +ins/−del（web 独有口径已删；会话工具改行走 lines +/−）。
       let gitNode = null;
       if (p.git?.branch) {
         let b = p.git.branch;
@@ -1406,14 +1406,7 @@ import { verifyIntegrity } from './canonicalize.js';
         }
         if (p.git.ahead) b += ` ↑${p.git.ahead}`;
         if (p.git.behind) b += ` ↓${p.git.behind}`;
-        gitNode = document.createElement('span');
-        gitNode.appendChild(span(b, 'text-accent font-medium'));
-        if (p.git.insertions || p.git.deletions) {
-          gitNode.appendChild(document.createTextNode(' '));
-          if (p.git.insertions) gitNode.appendChild(span(`+${p.git.insertions}`, 'text-success'));
-          if (p.git.insertions && p.git.deletions) gitNode.appendChild(document.createTextNode(' '));
-          if (p.git.deletions) gitNode.appendChild(span(`−${p.git.deletions}`, 'text-danger'));
-        }
+        gitNode = span(b, 'text-accent font-medium');
       }
       // ctx 段：有 usedPercent → 'ctx X% · left Y'（≥90% 转红警示）；否则退回绝对 token 数（认不出 model 的窗口）
       let ctxSeg = null;
@@ -1425,11 +1418,14 @@ import { verifyIntegrity } from './canonicalize.js';
       } else if (p.ctx && Number.isFinite(p.ctx.tokens)) {
         ctxSeg = { text: `ctx ${fmtTok(p.ctx.tokens)}`, cls: 'text-ink-soft' };
       }
-      // 行A（headline）：model │ [⚙ 后台任务] │ git │ ctx │ 版本（model 作标题、与 CLI 首段一致；底部 pill 仍是选择器）
+      // 行A（headline，对齐 CLI 首行）：model │ effort │ location │ git │ ctx │ 版本
+      // location = project（cwd 末段）或 git.repo 短名；model 作标题、与 CLI 首段一致；底部 pill 仍是选择器。
       const modelText = p.model ? (p.model.length > 26 ? p.model.slice(0, 25) + '…' : p.model) : '';
-      lines.push(row([
+      const location = p.project || (p.git?.repo ? p.git.repo.split('/').pop() : '');
+      linesArr.push(row([
         modelText && { text: modelText, cls: 'text-ink font-medium' },
-        p.task && { text: `⚙ ${p.task}`, cls: 'text-accent' },
+        p.effort && { text: `effort ${p.effort}`, cls: 'text-warning' },
+        location && { text: location, cls: 'text-info' },
         gitNode && { node: gitNode },
         ctxSeg,
         p.version && { text: `v${p.version}`, cls: 'text-ink-faint' }
@@ -1449,46 +1445,46 @@ import { verifyIntegrity } from './canonicalize.js';
         cacheNode.appendChild(document.createTextNode(' '));
         cacheNode.appendChild(span(`write ${fmtTokF(p.ctx.w)} read ${fmtTokF(p.ctx.r)}`, 'text-ink-faint'));
       }
-      // 行B（token 遥测）：uncached/response │ cache%+write/read │ reused │ 倒计时(~est)。总 token 数移除（行A ctx 段已含）。
-      lines.push(row([
+      // 额度段（对齐 CLI）：5h X% [reset …] │ 7d Y% [reset …]
+      const rateSegs = [];
+      if (p.rate?.fiveHour && Number.isFinite(p.rate.fiveHour.usedPercent)) {
+        const pc = p.rate.fiveHour.usedPercent;
+        let t = `5h ${Math.round(pc)}%`;
+        const r = fmtReset(p.rate.fiveHour.resetsAt);
+        if (r) t += ` reset ${r}`;
+        rateSegs.push({ text: t, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
+      }
+      if (p.rate?.sevenDay && Number.isFinite(p.rate.sevenDay.usedPercent)) {
+        const pc = p.rate.sevenDay.usedPercent;
+        let t = `7d ${Math.round(pc)}%`;
+        const r = fmtReset(p.rate.sevenDay.resetsAt);
+        if (r) t += ` reset ${r}`;
+        rateSegs.push({ text: t, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
+      }
+      // 行B（遥测，对齐 CLI 次行）：5h/7d │ uncached/response │ cache%+write/read
+      linesArr.push(row([
+        ...rateSegs,
         tokenNode && { node: tokenNode },
-        cacheNode && { node: cacheNode },
-        p.ctx && Number.isFinite(p.ctx.reused) && { text: `reused ${fmtTokF(p.ctx.reused)}`, cls: 'text-ink-faint' }, // 累计:本会话复用 token（web 增强）
-        ttlRemainMs != null && { text: ttlPillText(ttlRemainMs), cls: 'text-ink-faint js-cache-ttl' } // 倒计时 ~est（web 增强）
+        cacheNode && { node: cacheNode }
       ]));
 
-      // 行B2（ctx categories 明细，对齐 CLI /context）：SDK getContextUsage() 的上下文占用分解——各类别 token
-      // （Skills / MCP tools / Memory files / Compact buffer / Free space 等）。仅【活跃会话经 SDK 权威值】时有
-      // p.ctx.categories；idle / 降级到 contextWindowSize 静态映射时缺省 → 不渲染此行（catRows 为空）。
-      const catRows = formatContextCategories(p.ctx?.categories, p.ctx?.windowSize);
-      if (catRows.length) {
-        lines.push(row(catRows.map(c => ({
-          text: `${c.name} ${fmtTokF(c.tokens)}${c.pct != null ? ` ${c.pct}%` : ''}`,
-          cls: c.deferred ? 'text-ink-faint opacity-60' : 'text-ink-faint' // 延迟加载类别弱化
-        }))));
-      }
-
-      // 行C（成本/耗时）：est $成本 │ total 墙钟 │ api 耗时
-      lines.push(row([
+      // 行C（成本/耗时/改行，对齐 CLI）：est $成本 │ total 墙钟 │ api 耗时 │ lines +A/-R
+      linesArr.push(row([
         Number.isFinite(p.cost) && { text: `est $${p.cost.toFixed(2)}`, cls: 'text-success' },
         p.duration && p.duration.wallMs && { text: `total ${fmtMs(p.duration.wallMs)}`, cls: 'text-ink-faint' },
-        p.duration && p.duration.apiMs && { text: `api ${fmtMs(p.duration.apiMs)}`, cls: 'text-ink-faint' }
+        p.duration && p.duration.apiMs && { text: `api ${fmtMs(p.duration.apiMs)}`, cls: 'text-ink-faint' },
+        p.lines && (p.lines.added || p.lines.removed) && { text: `lines +${p.lines.added || 0}/-${p.lines.removed || 0}`, cls: 'text-success' }
       ]));
-      // 行D（会话身份/元数据，弱化为 faint、rarely-viewed）：repo │ sid │ 时钟
-      const clock = p.ts ? new Date(p.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
-      lines.push(row([
+      // 行D（会话身份/元数据，弱化为 faint）：repo │ sid
+      // 不含时钟（web 独有已删）；不含 pid/transcript/PR/wt（CLI 独有、SDK 路径不产出或不接）。
+      linesArr.push(row([
         p.git?.repo && { text: p.git.repo, cls: 'text-ink-faint' },
-        p.session?.id && { text: `sid ${p.session.id.slice(0, 8)}`, cls: 'text-ink-faint' },
-        clock && { text: clock, cls: 'text-ink-faint' }
+        p.session?.id && { text: `sid ${p.session.id.slice(0, 8)}`, cls: 'text-ink-faint' }
       ]));
 
       // 一次性替换：清空旧节点 + append 非空行（row 对空行返回 null）
       cliStatusEl.textContent = '';
-      lines.filter(Boolean).forEach(l => cliStatusEl.appendChild(l));
-      // 倒计时跳秒表：有剩余则把 server 端剩余换算成本地 deadline 并确保表在跑；无则停表（换会话/未命中时不下发 cacheExpiresAt）
-      cacheTtlDeadline = ttlRemainMs != null ? Date.now() + ttlRemainMs : 0;
-      if (cacheTtlDeadline && !cacheTtlTimer) cacheTtlTimer = setInterval(tickCacheTtl, 1000);
-      else if (!cacheTtlDeadline && cacheTtlTimer) { clearInterval(cacheTtlTimer); cacheTtlTimer = null; }
+      linesArr.filter(Boolean).forEach(l => cliStatusEl.appendChild(l));
       cliStatusWrapEl?.classList.remove('hidden'); // 揭示折叠包裹（默认折叠为 summary 摘要）
     }
   };
@@ -1970,13 +1966,18 @@ import { verifyIntegrity } from './canonicalize.js';
     scrollBottom(true);
   }
   btnSend.onclick = send;
+  // 移动端回车发送截断修复（2026-07-13 排查报告 §4/§8.1）：触屏软键盘没有 Shift+Enter 这个换行
+  // 逃生舱，回车恒当发送键会把长消息在换行处截断。触摸设备下回车走 textarea 默认换行，发送收窄为
+  // 仅走发送按钮；enterkeyhint 同步改 'enter'，避免部分输入法把回车当 action 直接派发而非插入换行符。
+  const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+  inputEl.enterKeyHint = isTouchDevice ? 'enter' : 'send';
   // 中文输入法：e.isComposing + keyCode 229 双检已覆盖绝大多数现代浏览器，
   // composition 状态追踪作为旧浏览器（Safari <14、部分 Android WebView）的后备兜底
   let composing = false;
   inputEl.addEventListener('compositionstart', () => { composing = true; });
   inputEl.addEventListener('compositionend', () => { composing = false; });
   inputEl.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229 && !composing) {
+    if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !composing && shouldSendOnEnter({ shiftKey: e.shiftKey, isTouchDevice })) {
       e.preventDefault();
       send();
     }
@@ -2539,6 +2540,7 @@ import { verifyIntegrity } from './canonicalize.js';
       }
     }
     updateSessionsDot();
+    updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进 _structChanged 分支）
     // P3 性能优化：仅结构变化时全量重建面板（+ N×session:list 往返）；纯状态变化（busy/done/error）走
     // 轻量路径 refreshDirBadges()，避免并发流式时反复 innerHTML teardown + socket 往返 + 滚动跳位。
     // 结构键 = dirs 集合 + 实例集（id/sessionId/title 前20字）+ viewingInstanceId + viewingCwd。
@@ -2747,6 +2749,27 @@ import { verifyIntegrity } from './canonicalize.js';
     if (!old) return;
     old.replaceWith(buildNeedsYouSection());
   }
+  // "服务"小节（第一性原理重新设计）：与上面"需要你"聚合故意保持视觉分隔——放在状态角标图例之后、
+  // 目录列表之前，避免看起来像"更多同类待办"（两条轴论证依据不同，见 updateServiceNotice 注释）。
+  // 仅异常时渲染（空数组=一切正常，section 直接 hidden），锚点 #serviceSection 常在同 needsYouSection 惯例。
+  function buildServiceSection() {
+    const section = el(`<div id="serviceSection"></div>`);
+    const notices = formatServiceNotices({ service: latestServiceHealth, restartChanged: _serviceRestartNoticeActive, now: Date.now() });
+    if (!notices.length) { section.classList.add('hidden'); return section; }
+    const wrap = el(`<div class="px-3 py-1.5 text-[10px] font-semibold text-warning border-b border-line flex flex-col gap-0.5"></div>`);
+    for (const line of notices) {
+      const row = el(`<div></div>`);
+      row.textContent = line; // 动态文案，textContent 插值同现有行渲染惯例（CSP 安全）
+      wrap.appendChild(row);
+    }
+    section.appendChild(wrap);
+    return section;
+  }
+  function refreshServiceSection() {
+    const old = sessionPanel.querySelector('#serviceSection');
+    if (!old) return;
+    old.replaceWith(buildServiceSection());
+  }
   // 面板开着时仅更新已渲染目录行的角标（不重发 session:list）
   function refreshDirBadges() {
     sessionPanel.querySelectorAll('[data-dir]').forEach(row => {
@@ -2802,6 +2825,25 @@ import { verifyIntegrity } from './canonicalize.js';
       sessionsDot.title = '';
       sessionsDot.classList.add('hidden');
     }
+  }
+  // 服务状态可见性（第一性原理重新设计）：与上面 updateSessionsDot（会话待处理，FR-21/注意力不对称）
+  // 是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（NFR-15/可维护性），复用 connDotWrap（已有的
+  // 服务级 UI 落点，纯连通性的 connDot 内圈继续只管绿/红，环形边框承载这条独立语义）。
+  // 本地基线存 localStorage（跨刷新持久，命名对齐既有 auth_token/device_token 风格）；每设备独立判定。
+  function updateServiceNotice(service) {
+    latestServiceHealth = service;
+    if (service && typeof service.startedAt === 'number') {
+      const lastSeenRaw = localStorage.getItem('service_started_at');
+      const lastSeen = lastSeenRaw != null ? Number(lastSeenRaw) : null;
+      const { changed, nextStartedAt } = detectServiceRestart({ startedAt: service.startedAt, lastSeenStartedAt: lastSeen });
+      if (nextStartedAt != null) localStorage.setItem('service_started_at', String(nextStartedAt));
+      // 一旦命中过就锁定为 true（不因下一次广播里 changed 判回 false 而让提示瞬间消失，见变量声明处注释）。
+      if (changed) _serviceRestartNoticeActive = true;
+    }
+    const hasNotice = formatServiceNotices({ service: latestServiceHealth, restartChanged: _serviceRestartNoticeActive, now: Date.now() }).length > 0;
+    connDotWrap?.classList.toggle('border-warning', hasNotice);
+    connDotWrap?.classList.toggle('border-line-soft', !hasNotice);
+    refreshServiceSection();
   }
 
   function setBusy(b) {
@@ -3251,6 +3293,10 @@ import { verifyIntegrity } from './canonicalize.js';
     // 第二行点明左上角按钮角标只汇总「其他工作区」状态，并解释按钮上的连接点绿/红——消除「绿点=什么」的误解。
     sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] text-ink-faint border-b border-line flex flex-col gap-1"><div class="flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span></div><div class="flex flex-wrap gap-x-3 gap-y-1 text-ink-faint/80"><span>目录角标 = 该工作区最需关注的状态</span><span>左上角角标 = 其他工作区状态汇总</span><span>连接点：绿=已连接 · 红=断开</span></div></div>`));
 
+    // "服务"小节（第一性原理重新设计，NFR-15/可维护性）：与上方"需要你"聚合故意分隔——图例之后、
+    // 目录列表之前，仅异常时渲染，见 buildServiceSection 注释。
+    sessionPanel.appendChild(buildServiceSection());
+
     // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
     //   折叠：📁 ▶ basename + 角标 → 点击展开（若非当前 cwd 则同时切换）
@@ -3603,7 +3649,6 @@ import { verifyIntegrity } from './canonicalize.js';
 
     // Clear stale status line and hide details row to prevent latency layout flashes
     if (cliStatusEl) cliStatusEl.innerHTML = '';
-    stopCacheTtl(); // 同时停缓存倒计时跳秒表（pill DOM 已随 innerHTML 清空），防旧实例 deadline 串到新视图
     if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
     if (cliStatusWrapEl) {
       cliStatusWrapEl.removeAttribute('open'); // Fold <details> element

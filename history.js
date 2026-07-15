@@ -557,19 +557,30 @@ export async function readLastPermissionMode(sessionId, cwd, { baseDir = CLAUDE_
   }
 }
 
+// 切入预锁 / 疑似中断共用阈值：慢工具（长编译/深度搜索）常见 1-3 分钟零写入，5 分钟大概率真死了。
+// 切入时：尾部 pending 但 lastChainTs 已超此阈值 → 不预锁（陈旧挂起消息，不是活终端）。
+// 驾驶中：锁着 + pending + lastChainTs 超此阈值 → stale 文案「疑似中断、可接管」。
+export const MIRROR_STALE_PENDING_MS = 5 * 60_000;
+
 // 切入预锁决策（catchUpTick 切换分支用）：切入会话瞬间按尾部形态预判——PENDING=有人正驱动这个会话
 // （终端 CLI 或别的设备），立即预锁，堵「切走再切回、终端还在跑但要等下一条 text 落盘才锁」的空窗。
 // 旧行为「切入不预锁」是因为当时唯一判据 mtime 不可信（web 自己 resume 就刷 mtime）；尾部形态是语义
 // 判据、可信。localBusy 豁免：web 自己在跑 turn 时尾部 PENDING 是己方 turn 的形态，不能当外部驱动误锁。
-export function mirrorEntryLock({ tailVerdict, localBusy = false } = {}) {
-  return tailVerdict === 'pending' && !localBusy;
+//
+// 陈旧 pending 豁免（2026-07-14 真机）：尾部是 user 文本 / tool_use 等「形态 pending」但 lastChainTs
+// 已超 MIRROR_STALE_PENDING_MS（典型：用户发完就走、终端没回、隔天打开 / server 重启后打开）——
+// 此时没有活终端在跑，预锁会立刻叠加 stale 文案「疑似中断、可接管」，每次进工作区都误拦输入。
+// 形态仍是 pending（真若终端还在跑长工具，keepAlive/后续 externalWrite 会再上锁），但切入时不预锁。
+export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now() } = {}) {
+  if (localBusy || tailVerdict !== 'pending') return false;
+  if (lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS)) return false;
+  return true;
 }
 
 // 疑似中断判定：锁着 + 尾部 PENDING + 最后链条目距今超阈值（期间零写入）→ 终端可能被强杀/断电、轮次没
 // 写完就死了。前端据此从「⏱ 终端驾驶中」转「⚠️ 疑似中断、可接管」文案（仍保持锁、不自动解锁——接管
-// 始终要用户显式确认）。阈值 5 分钟：慢工具（长编译/深度搜索）常见 1-3 分钟零写入，5 分钟大概率真死了；
-// 误判代价低——只是提前显示「可接管」引导，不改变锁态。
-export const MIRROR_STALE_PENDING_MS = 5 * 60_000;
+// 始终要用户显式确认）。误判代价低——只是提前显示「可接管」引导，不改变锁态。
+// 注意：仅在【已上锁】后的驾驶过程中有意义；切入时陈旧 pending 由 mirrorEntryLock 直接不锁，不会走到这里。
 export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now } = {}) {
   return Boolean(readonly && tailPending && lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS));
 }

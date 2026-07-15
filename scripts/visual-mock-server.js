@@ -882,16 +882,22 @@ io.on('connection', socket => {
       command: 'test:statusline',
       run: async () => {
         console.log('[mock] Updating status_line');
-        const slNow = Date.now(); // ts 与 cacheExpiresAt 同基准：前端 ttlRemainMs = cacheExpiresAt − ts = 290s（稳定 ~4:50）
+        const slNow = Date.now();
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: slNow,
           type: 'status_line', payload: {
             ts: slNow,
             model: 'claude-3-5-sonnet',
+            effort: 'high',
             project: 'claude-chat-mobile',
             cwd: '/Users/you/code/claude-chat-mobile',
-            git: { branch: 'feature/visual-testing', changed: 3, staged: 2, modified: 1, untracked: 0, ahead: 2, behind: 0, insertions: 120, deletions: 45, repo: 'Ike-li/claude-chat-mobile' },
-            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, out: 1500, w: 22000, r: 21000, reused: 1200000, usedPercent: 23, windowSize: 200000, cacheExpiresAt: slNow + 290000, categories: [{ name: 'Skills', tokens: 5000, color: '#89b4fa' }, { name: 'Free space', tokens: 195000, color: '#a6e3a1' }] },
+            git: { branch: 'feature/visual-testing', changed: 3, staged: 2, modified: 1, untracked: 0, ahead: 2, behind: 0, repo: 'Ike-li/claude-chat-mobile' },
+            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, out: 1500, w: 22000, r: 21000, usedPercent: 23, windowSize: 200000 },
+            rate: {
+              fiveHour: { usedPercent: 42, resetsAt: new Date(slNow + 2 * 3600_000).toISOString() },
+              sevenDay: { usedPercent: 11, resetsAt: new Date(slNow + 3 * 86400_000).toISOString() }
+            },
+            lines: { added: 12, removed: 4 },
             session: { id: '784e20b1-a550-45d1-874b-13b5f55eeb46' },
             cost: 0.37,
             duration: { wallMs: 2500, apiMs: 1200 },
@@ -1005,8 +1011,8 @@ io.on('connection', socket => {
             model: 'claude-3-5-haiku',
             project: 'another-react-project',
             cwd: '/Users/you/code/another-react-project',
-            git: { branch: 'feature/other-workspace', changed: 7, staged: 3, modified: 2, untracked: 2, ahead: 1, behind: 0, insertions: 88, deletions: 13, repo: 'Ike-li/another-react-project' },
-            ctx: { tokens: 99000, cacheHitPct: 12, in: 6000, out: 4000, w: 12000, r: 3000, reused: 750000, cacheExpiresAt: slNow + 180000 },
+            git: { branch: 'feature/other-workspace', changed: 7, staged: 3, modified: 2, untracked: 2, ahead: 1, behind: 0, repo: 'Ike-li/another-react-project' },
+            ctx: { tokens: 99000, cacheHitPct: 12, in: 6000, out: 4000, w: 12000, r: 3000 },
             cost: 0.99,
             duration: { wallMs: 9000, apiMs: 6400 },
             version: '9.9.999'
@@ -2963,8 +2969,10 @@ io.on('connection', socket => {
             model: activeModel,
             project: 'claude-chat-mobile',
             cwd: '/Users/you/code/claude-chat-mobile',
-            git: { branch: 'dev', changed: 3, staged: 2, modified: 1, untracked: 0, ahead: 1, behind: 0, insertions: 120, deletions: 45, repo: 'Ike-li/claude-chat-mobile' },
-            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, out: 1500, w: 22000, r: 21000, reused: 1200000, cacheExpiresAt: slNow + 290000 },
+            git: { branch: 'dev', changed: 3, staged: 2, modified: 1, untracked: 0, ahead: 1, behind: 0, repo: 'Ike-li/claude-chat-mobile' },
+            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, out: 1500, w: 22000, r: 21000, usedPercent: 23, windowSize: 200000 },
+            rate: { fiveHour: { usedPercent: 42 }, sevenDay: { usedPercent: 11 } },
+            lines: { added: 12, removed: 4 },
             cost: 0.37,
             duration: { wallMs: 42500, apiMs: 18300 },
             version: '2.1.193'

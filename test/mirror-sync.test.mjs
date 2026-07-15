@@ -198,6 +198,17 @@ test('mirrorEntryLock：切入时尾部 pending 且 web 空闲 → 预锁；sett
   assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: true }), false, '己方 turn 的 pending 形态 → 不误锁');
 });
 
+test('mirrorEntryLock：陈旧 pending（lastChainTs 超 5 分钟）→ 切入不预锁（修每次重启/打开都弹接管横幅）', () => {
+  // 真机：Official 工作区尾部是用户发完就走的骂人消息（~16h 前），形态 pending 但无活终端。
+  // 旧实现预锁 + stale → 每次 server 重启 / 切入都弹「疑似中断、可接管」。
+  const now = 1_800_000_000_000;
+  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
+  const under = now - H.MIRROR_STALE_PENDING_MS + 1000;
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now }), false, '陈旧 pending → 不预锁');
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: under, now }), true, '新鲜 pending → 仍预锁（可能是长工具）');
+  assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now }), true, '无时间戳 → 保守预锁（形态仍 pending）');
+});
+
 test('mirrorStaleFlag：锁定 + pending + 零写入超 5 分钟 → stale；未超/未锁/已收尾/无时间戳 → 非 stale', () => {
   assert.equal(typeof H.mirrorStaleFlag, 'function', '待实现：mirrorStaleFlag');
   assert.equal(typeof H.MIRROR_STALE_PENDING_MS, 'number');
