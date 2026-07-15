@@ -19,8 +19,10 @@ test.describe('normalizePermissionMode', () => {
   test("SDK 别名 'manual' → 'default'", () => {
     assert.equal(normalizePermissionMode('manual'), 'default');
   });
-  test("CCM 不支持的 'auto' / 垃圾 → null（回落 L4）", () => {
-    assert.equal(normalizePermissionMode('auto'), null);
+  test("'auto' 是合法档（与 CLI / SDK 对齐）", () => {
+    assert.equal(normalizePermissionMode('auto'), 'auto');
+  });
+  test("垃圾 / 空 → null（回落 L4）", () => {
     assert.equal(normalizePermissionMode('nope'), null);
     assert.equal(normalizePermissionMode(''), null);
     assert.equal(normalizePermissionMode(null), null);
@@ -68,10 +70,10 @@ test.describe('defaultsFromEffectiveSettings（L3 抽取）', () => {
     );
     assert.equal(defaultsFromEffectiveSettings({ model: '' }).model, undefined);
   });
-  test('auto defaultMode → 归一失败回落 default', () => {
+  test('auto defaultMode → 透传 auto（CLI 设 auto 时新会话继承）', () => {
     assert.equal(
       defaultsFromEffectiveSettings({ permissions: { defaultMode: 'auto' } }).mode,
-      'default',
+      'auto',
     );
   });
 });

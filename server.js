@@ -1810,7 +1810,7 @@ io.on('connection', socket => {
   // 时 agent 已 emit error）。无实例则 echo 当前档拨回该 socket，不存储。bypassPermissions 已由前端二次确认。
   on(socket, 'user:setPermissionMode', async payload => {
     const mode = payload?.mode;
-    if (!['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk'].includes(mode)) {
+    if (!['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk', 'auto'].includes(mode)) {
       return sysTo(socket, `未知权限档：${mode}`, true);
     }
     const id = resolveInstanceId(payload?.instanceId); // 台阶3：作用实例（缺省 viewingInstanceId）

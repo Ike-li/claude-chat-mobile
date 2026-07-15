@@ -9,9 +9,9 @@
 //
 // 规则：FRESH 初值 = L0 ?? L3 ?? L4；resume 禁止走本模块。
 
-/** CCM 支持的权限档（与 server user:setPermissionMode / 前端 select 对齐；不含 SDK 的 auto） */
+/** CCM 支持的权限档（与 server user:setPermissionMode / 前端 select 对齐；含 SDK 的 auto） */
 export const CCM_PERMISSION_MODES = Object.freeze([
-  'default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk',
+  'default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk', 'auto',
 ]);
 
 /** CCM / SDK Options.effort 合法档（settings.effortLevel 通常无 max，但归一时放行） */
@@ -22,7 +22,7 @@ export const CCM_EFFORT_LEVELS = Object.freeze([
 /**
  * 把 settings / 入参里的权限档归一成 CCM 可识别值。
  * - 'manual' → 'default'（SDK 文档：manual 是 default 别名）
- * - 'auto' 等 CCM UI 不支持的档 → null（调用方回落 L4）
+ * - 其余非白名单档 → null（调用方回落 L4）
  */
 export function normalizePermissionMode(mode) {
   if (mode == null || mode === '') return null;
