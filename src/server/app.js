@@ -1,5 +1,10 @@
 // app.js —— Express 静态托管 + Socket.IO 契约层；环境已由根 server.js 在动态导入前加载。
 // 会话与 socket 解耦：AgentSession 挂在服务端（4c 物理不变量），事件 io.emit 广播（多设备同看）。
+//
+// 分层边界（check-import-boundaries 硬闸）：本文件是唯一组装根——低耦合机制已下沉
+// （notify-channels/device-gate/approval-lifecycle/http/socket/instance-*），留在这里的
+// mirror/catchUp 同步引擎、openInstance 生命周期、契约路由共享同一组顶层可变状态
+// （viewing*/mirror*/catchUp*），拆开只会把耦合变成上下文对象穿针——有意保留为组装根本体。
 import { createServer } from 'node:http';
 import { statSync, readFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync } from 'node:fs';
 import { maskToken } from '../shared/sanitizer.js';
