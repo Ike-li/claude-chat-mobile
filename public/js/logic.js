@@ -356,6 +356,24 @@ export function defaultModelTileLabel({ currentModel, cwdDefaultModel } = {}) {
   return { title: '沿用当前模型', subtitle: '不指定特定模型', showsName: false };
 }
 
+// 用户气泡长消息折叠决策（纯函数）。
+// 移动端痛点：长指令气泡占满屏、想上滑看前面的内容被它顶住。阈值取「实际换行数 + 自动换行估算」
+// 偏多的一类——超阈值则建议折叠（DOM 接线在 app.js 渲染 max-height + 展开按钮）。
+//
+// 行数估算：显式 \n 拆出的段 + 每段按 cols 字符自动换行行数（cols≈手机气泡可容纳字符宽）。
+// cols 取 30：实测旧款 iPhone Safari 中文 16px 气泡约 28-32 字符/行，取偏窄值保守触发折叠。
+//   返回 { fold: bool, lines: number }
+//   fold 仅当超 foldLines（默认 10）行——短指令（一两周行）不折，覆盖原痛点又不过度。
+export function userBubbleFold(text, { foldLines = 10, cols = 30 } = {}) {
+  const s = String(text ?? '');
+  if (!s) return { fold: false, lines: 0 };
+  let lines = 0;
+  for (const seg of s.split('\n')) {
+    lines += seg.length === 0 ? 1 : Math.ceil(seg.length / cols);
+  }
+  return { fold: lines > foldLines, lines };
+}
+
 // Web Push 环境判定（E15 / ②2a）：手机端「通知没触发过」多半卡在这几道门，返回该给用户的引导标识。
 //   need-https   = 非 secure context（局域网 http，浏览器直接拦掉 SW/Push）——优先级最高
 //   ios-add-home = iOS 且未「添加到主屏幕」（Safari 标签页无 PushManager，必须先装成 PWA 才有 Push API）

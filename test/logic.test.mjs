@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention } from '../public/js/logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, modelEntryFor, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, ansiToHtml, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, urlBase64ToUint8Array, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, parseUsageForWeb, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from '../public/js/logic.js';
 import { createRingBuffer } from '../public/js/ring-buffer.js';
 
 test.describe('parseUsageForWeb（③ 套餐额度窗后端：提取 rate_limits + 降级 + 剔除隐私）', () => {
@@ -685,9 +685,48 @@ test.describe('whatNeedsAttention：ok / attention / alert', () => {
   });
 });
 
+// ---- userBubbleFold：用户气泡长消息折叠决策（移动端上滑看前文不被长指令顶住）----
+test.describe('userBubbleFold：行数估算 + 超阈值才折叠', () => {
+  test('短指令不折（单行、两三行）', () => {
+    assert.deepEqual(userBubbleFold('修这个 bug'), { fold: false, lines: 1 });
+    assert.deepEqual(userBubbleFold('做 A\n做 B\n做 C'), { fold: false, lines: 3 });
+  });
+  test('按 \\n 拆段计行', () => {
+    const t = Array.from({ length: 11 }, () => 'x').join('\n'); // 11 行（含空段）
+    const r = userBubbleFold(t);
+    assert.equal(r.lines, 11);
+    assert.equal(r.fold, true);
+  });
+  test('长单行按 cols 自动换行计行（中文长单行一段）', () => {
+    // 105 字符 / cols 30 → 4 行；不足阈值不折
+    const r = userBubbleFold('字'.repeat(105));
+    assert.equal(r.lines, 4);
+    assert.equal(r.fold, false);
+  });
+  test('长单行超阈值触发折叠', () => {
+    // 360 字符 / 30 = 12 行 > 10 → fold
+    const r = userBubbleFold('字'.repeat(360));
+    assert.equal(r.lines, 12);
+    assert.equal(r.fold, true);
+  });
+  test('空 / null / undefined → 不折、0 行', () => {
+    assert.deepEqual(userBubbleFold(''), { fold: false, lines: 0 });
+    assert.deepEqual(userBubbleFold(null), { fold: false, lines: 0 });
+    assert.deepEqual(userBubbleFold(undefined), { fold: false, lines: 0 });
+  });
+  test('阈值参数可调（foldLines=5 → 8 行也折）', () => {
+    const t = Array.from({ length: 9 }, () => 'a').join('\n'); // 9 显式行
+    assert.equal(userBubbleFold(t, { foldLines: 5 }).fold, true);
+    assert.equal(userBubbleFold(t, { foldLines: 10 }).fold, false);
+  });
+  test('cols 参数影响长单行计行', () => {
+    const t = '字'.repeat(60);
+    assert.equal(userBubbleFold(t, { cols: 30 }).lines, 2);  // 60/30=2
+    assert.equal(userBubbleFold(t, { cols: 20 }).lines, 3);  // 60/20=3
+  });
+});
+
 // ---- resolveDeepLinkTarget：通知深链落地 + instanceId 失效回退（②2c）----
-// 通知携带 instanceId + sessionId + cwd。落地时对照客户端 instances 快照：命中 → 切视图；
-// 实例已失效（懒重生/关闭/epoch 变化）但会话在 → 走 session:switch 懒 resume；都没有 → 打开会话列表。
 test.describe('resolveDeepLinkTarget：通知深链落地策略', () => {
   const instances = [{ instanceId: 'inst_1' }, { instanceId: 'inst_2' }];
   test('instanceId 命中 live → setViewing', () => {

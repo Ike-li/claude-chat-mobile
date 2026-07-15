@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention } from './logic.js';
+import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, effortLevelsFor, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, shouldDropAgentEvent, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, pushEnvHint, resolveDeepLinkTarget, urlBase64ToUint8Array, armedTakeoverStep, formatRttMs, rttToneClass, presentTurnResult, formatApiRetryBanner, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, summarizeInstanceStates, whatNeedsAttention, userBubbleFold } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
@@ -1247,6 +1247,9 @@ import { verifyIntegrity } from './canonicalize.js';
       if (p.text) {
         const t = el(`<div class="whitespace-pre-wrap"></div>`);
         t.textContent = p.text;
+        // 长指令默认折叠（移动端痛点：上滑看前文被长指令顶住）。纯函数判超 10 行才折，
+        // 折叠态限高可见一截 + 底部「展开」按钮；点开保持展开、再点收起。
+        foldLongUserText(t, p.text);
         bubble.appendChild(t);
       }
       if (Array.isArray(p.attachments) && p.attachments.length) {
@@ -1939,6 +1942,8 @@ import { verifyIntegrity } from './canonicalize.js';
       if (text) {
         const t = el(`<div class="whitespace-pre-wrap"></div>`);
         t.textContent = text;
+        // 离线乐观占位符气泡也折叠（与已确认气泡一致，长指令发出去那刻就折）
+        foldLongUserText(t, text);
         bubble.appendChild(t);
       }
       
@@ -4040,6 +4045,9 @@ import { verifyIntegrity } from './canonicalize.js';
       bubble.innerHTML = render(msg.content || '');
       bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
       injectCodeCopyButtons(bubble);
+      // 长指令历史回显也折叠（与 live user_message 一致，移动端上滑看前文）。复用纯函数阈值；
+      // innerHTML 已含 markdown 渲染，包裹一层限高容器 + 「展开」按钮。
+      if (isUser) foldLongUserBubble(bubble, msg.content || '');
       appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
       frag.appendChild(bubble);
     }
@@ -4352,6 +4360,45 @@ import { verifyIntegrity } from './canonicalize.js';
     bar.appendChild(editBtn);
 
     container.appendChild(bar);
+  }
+
+  // 长用户文本折叠（live user_message、离线乐观占位符、历史回显共用）。
+  // 纯函数 userBubbleFold 判超 10 行才折；折叠态限高 8rem（≈6 行可见一截）+ 内联「展开」按钮，
+  // 点开保持展开、再点收起（用户选的策略：点开就保持展开）。
+  function foldLongUserText(textEl, rawText) {
+    if (!textEl) return;
+    const { fold } = userBubbleFold(rawText);
+    if (!fold) return;
+    textEl.classList.add('overflow-hidden');
+    textEl.style.maxHeight = '8rem';
+    const btn = el(`<button class="text-xs text-accent mt-1 block">展开</button>`);
+    let expanded = false;
+    btn.onclick = () => {
+      expanded = !expanded;
+      if (expanded) { textEl.style.maxHeight = 'none'; btn.textContent = '收起'; textEl.classList.remove('overflow-hidden'); }
+      else { textEl.style.maxHeight = '8rem'; btn.textContent = '展开'; textEl.classList.add('overflow-hidden'); }
+    };
+    textEl.after(btn);
+  }
+
+  // 历史回显气泡（innerHTML 渲染过 markdown）：把渲染产物包进一层限高容器 + 「展开」按钮，
+  // 与 foldLongUserText 视觉一致。不重写已渲染的 innerHTML（避免二次 markdown 解释风险）。
+  function foldLongUserBubble(bubble, rawText) {
+    if (!bubble) return;
+    const { fold } = userBubbleFold(rawText);
+    if (!fold) return;
+    // 把气泡里已渲染的 DOM 节点平移进一个限高包装层
+    const wrap = el(`<div class="overflow-hidden" style="max-height:8rem"></div>`);
+    while (bubble.firstChild) wrap.appendChild(bubble.firstChild);
+    bubble.appendChild(wrap);
+    const btn = el(`<button class="text-xs text-accent mt-1 block">展开</button>`);
+    let expanded = false;
+    btn.onclick = () => {
+      expanded = !expanded;
+      if (expanded) { wrap.style.maxHeight = 'none'; wrap.classList.remove('overflow-hidden'); btn.textContent = '收起'; }
+      else { wrap.style.maxHeight = '8rem'; wrap.classList.add('overflow-hidden'); btn.textContent = '展开'; }
+    };
+    wrap.after(btn);
   }
 
   function setStatus(text) { statusEl.textContent = text; }
