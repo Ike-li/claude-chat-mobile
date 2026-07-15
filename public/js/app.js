@@ -498,7 +498,13 @@ import { verifyIntegrity } from './canonicalize.js';
   let _probeInFlight = false;
   function reloadCurrentFromHistory() {
     if (!displayedSessionId) return;
+    // 与 bindView reload 同理：clearView 前的 lastSeq/curEpoch 可能刚被 sync 回放推进；
+    // 归零后若再 sync 会把环形缓冲整段再叠到磁盘历史上。恢复基线，仅丢未落盘的实时中间态。
+    const keepSeq = lastSeq;
+    const keepEpoch = curEpoch;
     clearView(displayedSessionId, null);
+    lastSeq = keepSeq;
+    curEpoch = keepEpoch;
     showLoadingCard();
     loadHistory(displayedSessionId); // cwd 默认 currentCwd
   }
@@ -2905,8 +2911,17 @@ import { verifyIntegrity } from './canonicalize.js';
       if (action === 'load') {
         loadHistory(sid, entry.cwd);
       } else if (action === 'reload') {
-        // 清屏全量重载历史（同重连路径 syncAckAction 的 gap→reload，不把残缺/过期缓存当完整）
-        clearView(sid, null); showLoadingCard(); loadHistory(sid, entry.cwd);
+        // 清屏全量重载历史（同重连路径 syncAckAction 的 gap→reload，不把残缺/过期缓存当完整）。
+        // sync:since 已把活缓冲事件推进 lastSeq/curEpoch 并渲染进 DOM；clearView 会归零基线——
+        // 若不恢复，后续 reconnect 以 lastSeq=0 再回放缓冲会与磁盘历史叠成重复气泡。history 不占 seq，
+        // 恢复本轮已推进的基线即可让后续增量从缓冲尾部续。
+        const keepSeq = lastSeq;
+        const keepEpoch = curEpoch;
+        clearView(sid, null);
+        lastSeq = keepSeq;
+        curEpoch = keepEpoch;
+        showLoadingCard();
+        loadHistory(sid, entry.cwd);
       } else {
         hideLoadingCard();
       }

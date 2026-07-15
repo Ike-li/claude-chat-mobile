@@ -984,8 +984,14 @@ test.describe('foregroundReconnectAction / syncAckAction', () => {
 });
 
 test.describe('shouldReloadOnEnter：切入会话时该用缓存/活缓冲还是磁盘全量重载', () => {
-  test('replayed>0（web 活跃、活缓冲是渲染真相）→ keep，绝不重载以免丢实时', () => {
+  test('有 DOM 缓存 + replayed>0（切 tab 秒恢复）→ keep，不重载以免丢实时 thinking', () => {
     assert.equal(shouldReloadOnEnter({ replayed: 5, gap: false, hasCache: true, diskLen: 99, seenDiskLen: 0 }), 'keep');
+  });
+  test('整页刷新/无 DOM 缓存：replayed>0 仍须 reload（活缓冲≠全量历史，BUFFER_CAP 外全丢）', () => {
+    // 复刻 PWA 下拉刷新 bug：hard reload 后 sessionDomCache 清空(hasCache=false)，server 实例仍在、
+    // sync:since(0) 回放环形缓冲(≤500 事件) → replayed>0；旧逻辑 keep 跳过 session:history，
+    // 只剩缓冲里能拼出的最近一两轮，磁盘里更早的对话永久丢失到下次手动切会话。
+    assert.equal(shouldReloadOnEnter({ replayed: 50, gap: false, hasCache: false, diskLen: 200, seenDiskLen: 0 }), 'reload');
   });
   test('gap（缓冲超窗有缺口）→ reload（同 syncAckAction 口径）', () => {
     assert.equal(shouldReloadOnEnter({ replayed: 3, gap: true, hasCache: true, diskLen: 3, seenDiskLen: 3 }), 'reload');
@@ -1006,6 +1012,9 @@ test.describe('shouldReloadOnEnter：切入会话时该用缓存/活缓冲还是
   });
   test('gap 优先于 replayed>0（有回放但有缺口仍重载）', () => {
     assert.equal(shouldReloadOnEnter({ replayed: 9, gap: true, hasCache: true, diskLen: 0, seenDiskLen: 0 }), 'reload');
+  });
+  test('gap 优先于 hasCache=false 的 reload 分支（有缺口仍 reload，口径一致）', () => {
+    assert.equal(shouldReloadOnEnter({ replayed: 9, gap: true, hasCache: false, diskLen: 0, seenDiskLen: 0 }), 'reload');
   });
 });
 

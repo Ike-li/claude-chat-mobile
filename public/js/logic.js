@@ -335,24 +335,32 @@ export function syncAckAction(err, res) {
 
 // 切视图入场（bindView 的 sync:since ack 回调）该拿什么当渲染真相：活缓冲/DOM 缓存 vs 磁盘 history 全量重载。
 // 与 syncAckAction 分工不同——那是「重连/probe」路径（connect 后补发），这是「切视图入场」路径（bindView 独立决策）。
-// 要害盲区：CLI 在终端外部 `--resume` 写盘的消息【不经过】web 这个 SDK 实例的活缓冲，只落磁盘 transcript。
+// 要害盲区①：CLI 在终端外部 `--resume` 写盘的消息【不经过】web 这个 SDK 实例的活缓冲，只落磁盘 transcript。
 // 若 web 离开期间被外部写过，切回时 replayed=0（活缓冲无那些消息）却 hasCache=true（有旧 DOM 缓存）——
 // 旧逻辑信缓存不拉盘 → 永远看不到外部写入。故此处比对 server 报的磁盘 history 条数 diskLen 与前端上次为该
 // 会话渲染到的 seenDiskLen：磁盘更长 = 被外部写过 = 当作一种 gap，清屏全量重载磁盘（唯一真相源、清屏天然无重复）。
+// 要害盲区②（PWA 下拉刷新 / 整页 reload）：sessionDomCache 是内存态，硬刷新后 hasCache=false；server 实例仍在，
+// sync:since(0) 回放环形缓冲（BUFFER_CAP=500 事件）。旧逻辑见 replayed>0 就 keep → 永远不拉 session:history，
+// 只剩缓冲里能拼出的最近一两轮（流式 text_delta 很快填满 500 槽；且 gap 要求 lastSeq>0，硬刷新 lastSeq=0 永远
+// 判不出缺口）。故「无 DOM 缓存」必须优先走磁盘全量——有缓冲回放过时用 reload（先清再装，避免缓冲片段叠历史）。
 //   gap → 'reload'（缓冲超窗，同 syncAckAction）；
-//   replayed>0 → 'keep'（web 端活跃、活缓冲是渲染真相，绝不重载以免丢实时 thinking / 在跑 turn）；
-//   replayed===0 && !hasCache → 'load'（聊天区空、拉磁盘首次填充，不必清屏）；
-//   replayed===0 && hasCache && diskLen>seenDiskLen → 'reload'（外部写入盲区：缓存已过期，清屏全量重载）；
+//   !hasCache && replayed>0 → 'reload'（冷入场：缓冲片段 ≠ 全量历史，清屏拉盘）；
+//   !hasCache → 'load'（聊天区空、拉磁盘首次填充，不必再清）；
+//   hasCache && replayed>0 → 'keep'（切 tab 秒恢复：DOM 缓存已是全量渲染真相 + 活缓冲增量，不重载以免丢实时 thinking）；
+//   hasCache && diskLen>seenDiskLen → 'reload'（外部写入盲区：缓存已过期，清屏全量重载）；
 //   否则 → 'keep'（缓存仍是最新，保留 DOM 秒恢复）。
 // ⚠️ 已知边界（code-review 发现4，有意不修）：seenDiskLen 只由 loadHistory/onHistoryAppend 维护，
 //   web 自己 live 流跑出来的轮次【不】更新它。于是"发一轮(磁盘增长)→切走→切回同实例(无外部活动、replayed=0、
 //   缓存命中)"会 diskLen>seenDiskLen → 多余 reload（闪屏+滚动跳，但内容正确）。这是【安全侧】：现状 under-count
 //   → 多 reload(安全)；若改成让 live 轮 bump seenDiskLen，一旦 over-count 就变 under-reload = 漏外部写入 =
 //   数据丢失(正是 #1 盲区)。宁可闪一下、不可漏消息，故保留。
+// ⚠️ 冷入场 reload 的代价：环形缓冲里尚未落盘的实时 thinking/在跑工具卡会被 clearView 清掉；硬刷新本就是
+//   用户主动重入，可接受——后续 live 事件与 pending 快照仍会接上。
 export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seenDiskLen = 0 } = {}) {
   if (gap) return 'reload';
+  // 冷入场（整页刷新/无 DOM 缓存）优先于「有缓冲就 keep」——缓冲只保最近事件，不是全量历史。
+  if (!hasCache) return (replayed > 0) ? 'reload' : 'load';
   if (replayed > 0) return 'keep';
-  if (!hasCache) return 'load';
   if (diskLen > seenDiskLen) return 'reload';
   return 'keep';
 }
