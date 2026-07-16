@@ -43,7 +43,9 @@ export async function sendChatMessage(page: Page, text: string) {
 }
 
 export async function waitForIdle(page: Page) {
-  await expect(page.locator('#activeStatusPill')).toBeHidden({ timeout: 20_000 });
+  // busy 结束：流内 live 行移除，发送钮不再处于 stop 模式
+  await expect(page.locator('#streamLiveStatus')).toHaveCount(0, { timeout: 20_000 });
+  await expect(page.locator('#btnSend')).not.toHaveAttribute('data-mode', 'stop');
 }
 
 export async function expectNoBrowserErrors(page: Page) {

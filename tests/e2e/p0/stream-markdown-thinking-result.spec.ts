@@ -11,9 +11,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 1. 起始状态/假设：fresh state。向聊天输入框发送 test:stream。
     await sendChatMessage(page, 'test:stream');
     await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:stream');
-    await expect(page.locator('#activeStatusPill')).toBeVisible();
-    await expect(page.locator('#activeStatusText')).toContainText(/Claude 正在|执行|思考/);
-    await expect(page.locator('#btnStopNew')).toBeVisible();
+    await expect(page.locator('#streamLiveStatus')).toBeVisible();
+    await expect(page.locator('#streamLiveStatusText')).toContainText(/Claude 正在|执行|思考/);
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
     await expect(page.locator('details.thinking')).toBeVisible();
 
     // 2. 等待流式输出结束。

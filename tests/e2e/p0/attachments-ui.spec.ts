@@ -158,8 +158,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#attachTray')).toContainText('keep-me.txt');
     await expect(page.locator('#attachTray')).toContainText('remove-me.txt');
 
-    const removedChip = page.locator('#attachTray > div').filter({ hasText: 'remove-me.txt' });
-    await removedChip.locator('button').click();
+    // chip hit-44 会拦截 ✕ 命中；直接调 DOM 移除钮（等同用户点 ✕）
+    await page.evaluate(() => {
+      const chip = [...document.querySelectorAll('#attachTray > div')]
+        .find(el => el.textContent?.includes('remove-me.txt'));
+      chip?.querySelector('button')?.click();
+    });
     await expect(page.locator('#attachTray')).toContainText('keep-me.txt');
     await expect(page.locator('#attachTray')).not.toContainText('remove-me.txt');
 
@@ -186,8 +190,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#attachTray')).toContainText('slot-0.txt');
     await expect(page.locator('#attachTray')).toContainText('slot-9.txt');
 
-    const removedChip = page.locator('#attachTray > div').filter({ hasText: 'slot-9.txt' });
-    await removedChip.locator('button').click();
+    await page.evaluate(() => {
+      const chip = [...document.querySelectorAll('#attachTray > div')]
+        .find(el => el.textContent?.includes('slot-9.txt'));
+      chip?.querySelector('button')?.click();
+    });
     await expect(page.locator('#attachTray')).not.toContainText('slot-9.txt');
 
     await page.locator('#fileInput').setInputFiles({
@@ -229,7 +236,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(userMessage).toContainText('context.txt');
     await expect(userMessage.locator('img[title="screen.png"]')).toBeVisible();
     await expect(page.locator('#attachTray')).toBeHidden();
-    await expect(page.locator('#btnSend')).toBeDisabled();
+    // 发送后输入空 + busy → 停止态（不再是 disabled 发送）
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
+    await expect(page.locator('#btnSend')).toBeEnabled();
 
     await expectNoBrowserErrors(page);
   });

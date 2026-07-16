@@ -530,21 +530,29 @@ details > summary::-webkit-details-marker { display: none; }
     pointer-events: none;
   }
 
-  /* ── 状态忙碌条 collapse 弹性过渡（已并入 .chat-input-pill 内部顶部条）── */
-  #activeStatusPill {
-    overflow: hidden;
-    max-height: 0;
-    opacity: 0;
-    margin-bottom: 0;
-    transition: max-height .25s cubic-bezier(0.16, 1, 0.3, 1),
-                opacity .2s ease,
-                margin-bottom .25s cubic-bezier(0.16, 1, 0.3, 1);
+  /* ── 流内 live 活动行（busy 时挂在 #messages 末尾，不进 history/cache）── */
+  #streamLiveStatus {
+    color: var(--activity);
   }
-  #activeStatusPill.pill-active {
-    max-height: 3.5rem;
+  #streamLiveStatus .stream-live-dot {
+    background: var(--activity);
+  }
+  #btnSend[data-mode="stop"] {
+    background: var(--activity);
+    color: var(--surface);
     opacity: 1;
-    margin-bottom: 0.375rem;
-    border-bottom: 1px solid var(--line-soft); /* 与下方 textarea 分隔的细线（仅激活时可见）*/
+    cursor: pointer;
+  }
+  #btnSend[data-mode="stop"]:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+  #btnSend[data-mode="stop"] .btn-send-stop-icon {
+    display: block;
+    width: 0.7rem;
+    height: 0.7rem;
+    border-radius: 0.12rem;
+    background: currentColor;
   }
 
   /* ── 44px 物理触控热区扩充 ── */
@@ -605,10 +613,11 @@ details > summary::-webkit-details-marker { display: none; }
   @media (prefers-reduced-motion: reduce) {
     #permModal, #questionModal, #consoleModal,
     #permModal > div, #questionModal > div, #consoleModal > div,
-    #activeStatusPill, #leftSidebar, #settingsSheet {
+    #leftSidebar, #settingsSheet {
       transition: none !important;
     }
-    #activityBanner .animate-spin {
+    #activityBanner .animate-spin,
+    #streamLiveStatus .animate-ping {
       animation: none !important;
     }
     .skeleton-shimmer {
@@ -643,8 +652,8 @@ details > summary::-webkit-details-marker { display: none; }
     --activity: #6BA3D4;
   }
 }
-#activeStatusPill.pill-active,
-#activityBanner {
+#activityBanner,
+#streamLiveStatus {
   color: var(--activity);
   border-color: color-mix(in srgb, var(--activity) 40%, transparent);
 }

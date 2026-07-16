@@ -10,12 +10,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 1. 起始状态/假设：fresh state。发送 test:stream-long，等待至少一个 Chunk 出现。
     await sendChatMessage(page, 'test:stream-long');
-    await expect(page.locator('#activeStatusPill')).toBeVisible();
-    await expect(page.locator('#btnStopNew')).toBeVisible();
+    await expect(page.locator('#streamLiveStatus')).toBeVisible();
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Chunk 1', { timeout: 10_000 });
 
-    // 2. 点击停止按钮。
-    await page.locator('#btnStopNew').click();
+    // 2. 空输入时发送钮 morph 为停止，点击中止。
+    await page.locator('#btnSend[data-mode="stop"]').click();
     await waitForIdle(page);
     await page.locator('#input').fill('hello after interrupt');
     await expect(page.locator('#btnSend')).toBeEnabled();
@@ -29,7 +29,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:stream-long');
     const interruptedReply = page.locator('[data-testid="assistant-message"]').filter({ hasText: 'Chunk 1' }).first();
     await expect(interruptedReply).toContainText('Chunk 1', { timeout: 10_000 });
-    await page.locator('#btnStopNew').click();
+    await page.locator('#btnSend[data-mode="stop"]').click();
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('已中断');
 
@@ -47,7 +47,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:stream-long');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Chunk 1', { timeout: 10_000 });
 
-    await page.locator('#btnStopNew').dblclick();
+    await page.locator('#btnSend[data-mode="stop"]').dblclick();
     await waitForIdle(page);
     await expect(page.locator('#messages .msg-frame.text-center').filter({ hasText: '已中断' })).toHaveCount(1);
 

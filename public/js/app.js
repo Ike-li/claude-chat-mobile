@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, acceptMirrorState, shouldResetMirrorOnViewChange } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -42,8 +42,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const $ = id => document.getElementById(id);
   const messagesEl = $('messages'), inputEl = $('input'), statusEl = $('statusLine'), connDot = $('connDot'), connRttEl = $('connRtt'), connDotWrap = $('connDotWrap');
   const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnHome = $('btnHome'), btnSessions = $('btnSessions');
-  const activeStatusPill = $('activeStatusPill'), activeStatusText = $('activeStatusText'), btnStopNew = $('btnStopNew');
   const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
+  // 流内 live 活动行（懒创建 #streamLiveStatus）；composer 顶条 #activeStatusPill 已移除
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop');
@@ -446,8 +446,63 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     messageRenderer.leaveStartScreen();
     messagesEl?.querySelectorAll('.empty-session-guide').forEach(n => n.remove());
   };
-  const appendMessage = messageRenderer.appendMessage;
-  const addBar = messageRenderer.addBar;
+  // 流内 live 活动行：ephemeral，busy 时挂在 #messages 末尾；不进 disk/history；sessionDomCache 前 strip。
+  let streamLiveStatusEl = null;
+  function ensureStreamLiveStatus() {
+    if (streamLiveStatusEl && streamLiveStatusEl.isConnected) return streamLiveStatusEl;
+    streamLiveStatusEl = el(`
+      <div id="streamLiveStatus" class="stream-live-status msg-frame flex items-center justify-center gap-2 px-3 py-1.5 text-xs" data-ephemeral="1" aria-live="polite" aria-busy="true">
+        <span class="relative flex h-2 w-2 shrink-0">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full stream-live-dot opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2 w-2 stream-live-dot"></span>
+        </span>
+        <span id="streamLiveStatusText" class="font-medium truncate max-w-full"></span>
+      </div>`);
+    return streamLiveStatusEl;
+  }
+  function setStreamLiveStatusText(text) {
+    // busy 期间保证挂在 #messages 末尾（仅 ensure 不 append 会留下断链节点）
+    if (_busyState) {
+      showStreamLiveStatus(text);
+      return;
+    }
+    if (!streamLiveStatusEl?.isConnected) return;
+    const t = streamLiveStatusEl.querySelector('#streamLiveStatusText');
+    if (t) t.textContent = text || formatLiveActivityText('default');
+  }
+  function showStreamLiveStatus(text) {
+    if (!messagesEl) return;
+    leaveStartScreen();
+    const row = ensureStreamLiveStatus();
+    const t = row.querySelector('#streamLiveStatusText');
+    if (t) t.textContent = text || formatLiveActivityText('default');
+    if (row.parentNode !== messagesEl) messagesEl.appendChild(row);
+    else if (messagesEl.lastChild !== row) messagesEl.appendChild(row);
+    scrollBottom();
+  }
+  function pinStreamLiveStatus() {
+    if (!streamLiveStatusEl || !messagesEl || !streamLiveStatusEl.isConnected) return;
+    if (messagesEl.lastChild !== streamLiveStatusEl) messagesEl.appendChild(streamLiveStatusEl);
+  }
+  function hideStreamLiveStatus() {
+    if (streamLiveStatusEl?.parentNode) streamLiveStatusEl.parentNode.removeChild(streamLiveStatusEl);
+    streamLiveStatusEl = null;
+  }
+  function stripEphemeralMessageNodes(nodes) {
+    return nodes.filter(n => !(n?.nodeType === 1 && n.getAttribute?.('data-ephemeral') === '1'));
+  }
+  // 流内 live 行须始终在 #messages 末尾；append 后 pin，避免工具卡/思考卡插到它下面。
+  const appendMessage = (node) => {
+    const result = messageRenderer.appendMessage(node);
+    pinStreamLiveStatus();
+    return result;
+  };
+  // addBar 内部走 messageRenderer 自己的 append，须再 pin 一次
+  const addBar = (text, className) => {
+    const bar = messageRenderer.addBar(text, className);
+    pinStreamLiveStatus();
+    return bar;
+  };
   // UI-007：工具卡/角标状态标 — 可信 SVG + aria-label（currentColor 吃语义色）
   function setStatusIcon(el, kind) {
     if (!el) return;
@@ -981,30 +1036,42 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       renderDeviceRequests(Array.isArray(p?.devices) ? p.devices : []);
     },
     init(p) {
-      const rawM = p.model || '';
-      const m = rawM.replace(/\[[^\]]+\]$/, '');
-      // 模型切换成功无独立回执事件（随 user:message 捎带、send 内差分 setModel），每轮 init.model 是
-      // 实际生效模型的权威值：跨轮 diff 上屏（首轮只定基线；切换失败时 agent 已发显式 error 且
-      // 本轮 model 不变，自然不上屏）
-      if (mirrorReadonlySid) {
-        // SDK 回执只更新接管后的 Web 偏好快照；CLI 驾驶中的展示仍保持 observedCli，禁止被晚到 init 覆盖。
-        if (mirrorWebPanelSnapshot) {
-          mirrorWebPanelSnapshot.model = rawM || null;
-          if (p.permissionMode) mirrorWebPanelSnapshot.permissionMode = p.permissionMode;
+      // 合成 init 可能只带 slashCommands（切区重放）或只校正 model/cwd——按字段是否存在分别处理，
+      // 缺字段不覆盖：否则 pushSlashCommandsForCwd 的精简 init 会把 currentModel 冲成空。
+      const hasModel = p && Object.prototype.hasOwnProperty.call(p, 'model');
+      if (hasModel) {
+        const rawM = p.model || '';
+        const m = rawM.replace(/\[[^\]]+\]$/, '');
+        // 模型切换成功无独立回执事件（随 user:message 捎带、send 内差分 setModel），每轮 init.model 是
+        // 实际生效模型的权威值：跨轮 diff 上屏（首轮只定基线；切换失败时 agent 已发显式 error 且
+        // 本轮 model 不变，自然不上屏）
+        if (mirrorReadonlySid) {
+          // SDK 回执只更新接管后的 Web 偏好快照；CLI 驾驶中的展示仍保持 observedCli，禁止被晚到 init 覆盖。
+          if (mirrorWebPanelSnapshot) {
+            mirrorWebPanelSnapshot.model = rawM || null;
+            if (p.permissionMode) mirrorWebPanelSnapshot.permissionMode = p.permissionMode;
+          }
+          renderCliPanelState();
+        } else {
+          if (currentModel && m && m !== currentModel) addModeBar(`模型 → ${m}`, 'text-info');
+          updateModelAndSuffix(rawM);
+          rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随；空列表也刷（显示默认磁贴，好过整个隐藏）
+          rebuildCustomModelGrid(modelsList); // 模型网格用已有缓存重建（models 事件没到也不空白）
+          setPermMode(p.permissionMode); // 每轮 init 回显当前权限档（幂等，与 permission_mode 事件一致）
         }
+      } else if (mirrorReadonlySid && p?.permissionMode && mirrorWebPanelSnapshot) {
+        mirrorWebPanelSnapshot.permissionMode = p.permissionMode;
         renderCliPanelState();
-      } else {
-        if (currentModel && m && m !== currentModel) addModeBar(`模型 → ${m}`, 'text-info');
-        updateModelAndSuffix(rawM);
-        rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随；空列表也刷（显示默认磁贴，好过整个隐藏）
-        rebuildCustomModelGrid(modelsList); // 模型网格用已有缓存重建（models 事件没到也不空白）
-        setPermMode(p.permissionMode); // 每轮 init 回显当前权限档（幂等，与 permission_mode 事件一致）
+      } else if (!mirrorReadonlySid && p?.permissionMode) {
+        setPermMode(p.permissionMode);
       }
       // 顶部状态行回归「纯连接状态」职责：model/目录/ctx/cost 已由 E16 web 状态栏投送（更全更权威），
       // 此处不再合成覆盖连接状态
+      // slashCommands：真 init / 服务端按 cwd 重放都会带；空数组也接受（表示该 cwd 确实无命令）。
+      // 缺字段（合成 init 仅校正 model/cwd 时）不碰缓存，保留 localStorage / 上次列表。
       if (Array.isArray(p.slashCommands)) {
         window.availableSkills = p.slashCommands;
-        localStorage.setItem('slash_commands', JSON.stringify(p.slashCommands));
+        try { localStorage.setItem('slash_commands', JSON.stringify(p.slashCommands)); } catch { /* quota / 隐私模式 */ }
       }
     },
     // 权限档切换后即时同步（多设备一致）；server 合成事件，与 init.permissionMode 一致
@@ -1090,15 +1157,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
         scrollBottom();
         setBusy(true);
-        if (activeStatusText) activeStatusText.textContent = 'Claude 正在思考中...';
+        setStreamLiveStatusText(formatLiveActivityText('thinking'));
         return;
       }
       getThinking(p.messageId).body.appendData(p.text);
       scrollBottom();
       setBusy(true);
-      if (activeStatusText) {
-        activeStatusText.textContent = 'Claude 正在思考中...';
-      }
+      setStreamLiveStatusText(formatLiveActivityText('thinking'));
     },
     tool_use(p) {
       clearApiRetryBanner();
@@ -1192,17 +1257,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const desc = extractInput(p.inputSummary, ['description'], '');
         if (desc) showActivityBanner(desc);
       }
-      if (activeStatusText) {
-        // 工具状态细化：Bash 显示具体命令，Agent 显示任务描述，其他显示工具名
-        if (p.name === 'Bash') {
-          const cmd = extractInput(p.inputSummary, ['command', 'cmd'], p.inputSummary);
-          activeStatusText.textContent = `🖥 ${cmd.length > 60 ? cmd.slice(0, 57) + '...' : cmd}`;
-        } else if (p.name === 'Agent' || p.name === 'Task') {
-          const desc = extractInput(p.inputSummary, ['description'], p.inputSummary);
-          activeStatusText.textContent = `🤖 ${desc.length > 50 ? desc.slice(0, 47) + '...' : desc}`;
-        } else {
-          activeStatusText.textContent = `Claude 正在运行工具 ${p.name}...`;
-        }
+      // 工具状态细化：Bash 显示具体命令，Agent 显示任务描述，其他显示工具名
+      if (p.name === 'Bash') {
+        const cmd = extractInput(p.inputSummary, ['command', 'cmd'], p.inputSummary);
+        setStreamLiveStatusText(formatLiveActivityText('tool', { name: 'Bash', command: cmd }));
+      } else if (p.name === 'Agent' || p.name === 'Task') {
+        const desc = extractInput(p.inputSummary, ['description'], p.inputSummary);
+        setStreamLiveStatusText(formatLiveActivityText('tool', { name: p.name, description: desc }));
+      } else {
+        setStreamLiveStatusText(formatLiveActivityText('tool', { name: p.name }));
       }
     },
     tool_result(p) {
@@ -1919,8 +1982,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // ExitPlanMode 与 AskUserQuestion 同属「瞬间完成型」工具：无论批准/拒绝，该工具调用即结束、
     // 模型转入重新规划的长推理，而文案仍卡在已结束的「运行工具 ExitPlanMode」。仅此一类回落「思考中」
     // 填补空窗；普通工具批准后真要执行，「运行工具 X」是正确文案、不动。无下一待审才落。见 answerQuestion。
-    if (wasExitPlanMode && !activePerm && activeStatusText) {
-      activeStatusText.textContent = 'Claude 正在思考中...';
+    if (wasExitPlanMode && !activePerm) {
+      setStreamLiveStatusText(formatLiveActivityText('thinking'));
     }
     updateSendButtonState();
   }
@@ -2031,10 +2094,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     closeSheet(questionModal);
     resetQuestionOtherUI();
     showNextQuestion();
-    // 答完最后一题（队列已空、无下一题）：立即把状态栏从过时的「正在运行工具 AskUserQuestion」
+    // 答完最后一题（队列已空、无下一题）：立即把流内状态从过时的「正在运行工具 AskUserQuestion」
     // 切到「思考中」，填补「答完→模型首个流式事件到达」的空窗（实测中位 ~64s 模型推理）。
-    if (!activeQuestion && activeStatusText) {
-      activeStatusText.textContent = 'Claude 正在思考中...';
+    if (!activeQuestion) {
+      setStreamLiveStatusText(formatLiveActivityText('thinking'));
     }
     if (barText) addBar(barText, 'text-ink-faint');
     updateSendButtonState();
@@ -2281,7 +2344,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!viewingInstanceId) _pendingFirstSend = true;
     scrollBottom(true);
   }
-  btnSend.onclick = send;
+  btnSend.onclick = () => {
+    if (btnSend.dataset.mode === 'stop') {
+      haptic('tap');
+      requestInterrupt();
+      return;
+    }
+    send();
+  };
   // 移动端回车发送截断修复（2026-07-13 排查报告 §4/§8.1）：触屏软键盘没有 Shift+Enter 这个换行
   // 逃生舱，回车恒当发送键会把长消息在换行处截断。触摸设备下回车走 textarea 默认换行，发送收窄为
   // 仅走发送按钮；enterkeyhint 同步改 'enter'，避免部分输入法把回车当 action 直接派发而非插入换行符。
@@ -2348,29 +2418,43 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       closeLeftSidebar();
   });
 
+  const SEND_ICON_HTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>`;
+  const STOP_ICON_HTML = `<span class="btn-send-stop-icon" aria-hidden="true"></span>`;
+  let _btnSendMode = null; // 仅 mode 变化时换图标，避免按键 thrash
+
   function updateSendButtonState() {
-    const hasText = inputEl.value.trim().length > 0 || attachments.items().length > 0;
-    const blockedByUserRequest = !!activePerm || !!activeQuestion;
-    const blockedByDisabledInput = inputEl.disabled;
-    // FE-004：上一条尚未 ack 的窗口（与 send() 闸一致），只挡双击/合成双 click；离线仍允许入 offlineQueue。
-    // 不用 _busyState——那段横跨整个 turn，会连带挡住服务端本就允许的"忙碌中排第二条"（_queueFull 负责）。
-    const blockedBySendInFlight = socket.connected && _sendInFlight;
-    if (hasText && !_queueFull && !blockedByUserRequest && !blockedByDisabledInput && !blockedBySendInFlight) {
-      // UI-002：激活态品牌 cta 底白箭头（与允许/进入主 CTA 一致）
-      btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-cta text-white hover:brightness-95 active:scale-95 shadow-sm transition-all duration-200 shrink-0";
-      btnSend.disabled = false;
-      btnSend.title = '';
+    if (!btnSend) return;
+    const hasContent = inputEl.value.trim().length > 0 || attachments.items().length > 0;
+    // FE-004：busy 不直接禁发送；有内容时仍可排队。空内容 + busy → 停止（见 resolveComposerPrimaryMode）。
+    const state = resolveComposerPrimaryMode({
+      busy: _busyState,
+      hasContent,
+      interruptPending,
+      queueFull: _queueFull,
+      blockedByUserRequest: !!activePerm || !!activeQuestion,
+      blockedByDisabledInput: inputEl.disabled,
+      blockedBySendInFlight: socket.connected && _sendInFlight,
+    });
+    const modeChanged = _btnSendMode !== state.mode;
+    _btnSendMode = state.mode;
+    btnSend.dataset.mode = state.mode;
+    btnSend.disabled = !state.enabled;
+    // title 用 resolve 结果（空串=无额外提示）；aria-label 才是「发送/停止」可访问名
+    btnSend.title = state.title;
+    btnSend.setAttribute('aria-label', state.ariaLabel);
+    if (state.mode === 'stop') {
+      btnSend.className = 'flex items-center justify-center w-9 h-9 rounded-full shrink-0 transition-all duration-200 shadow-sm' +
+        (state.enabled
+          ? ' hover:brightness-95 active:scale-95'
+          : ' opacity-55 cursor-not-allowed');
+      if (modeChanged) btnSend.innerHTML = STOP_ICON_HTML;
+    } else if (state.enabled) {
+      // UI-002：激活态品牌 cta 底白箭头
+      btnSend.className = 'flex items-center justify-center w-9 h-9 rounded-full bg-cta text-white hover:brightness-95 active:scale-95 shadow-sm transition-all duration-200 shrink-0';
+      if (modeChanged) btnSend.innerHTML = SEND_ICON_HTML;
     } else {
-      // UI-002：disabled 提到约 60% 不透明，仍能发现发送位置
-      btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0";
-      btnSend.disabled = true;
-      // _queueFull 排在防抖之前：防抖窗口很短且随时可能与 queueFull 同时为真，队列已满是更持久、更该
-      // 让用户看到的状态（P0-02c）。
-      btnSend.title = blockedByUserRequest
-        ? '请先处理当前审批或选择'
-        : (blockedByDisabledInput ? '请先完成设备授权或解除只读状态'
-          : (_queueFull ? '前面已有消息在排队，请等当前任务结束'
-            : (blockedBySendInFlight ? '请稍候…' : '')));
+      btnSend.className = 'flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0';
+      if (modeChanged) btnSend.innerHTML = SEND_ICON_HTML;
     }
   }
 
@@ -2385,17 +2469,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (interruptPending) return;
     interruptPending = true;
     if (btnStop) btnStop.disabled = true;
-    if (btnStopNew) btnStopNew.disabled = true;
+    setStreamLiveStatusText(formatLiveActivityText('stopping'));
+    updateSendButtonState();
     socket.emit('user:interrupt', { instanceId: viewingInstanceId }); // 台阶3：中断当前查看 tab 的在途任务
   }
 
-  btnStop.onclick = requestInterrupt;
-  if (btnStopNew) {
-    btnStopNew.onclick = () => {
-      haptic('tap');
-      requestInterrupt();
-    };
-  }
+  if (btnStop) btnStop.onclick = requestInterrupt;
 
   // ---- 权限档切换（6 档；dontAsk/auto 非交互档，终端只切得到 default/plan/acceptEdits/bypass）----
   // setPermMode 仅由 init/permission_mode 服务端事件驱动（权威回执，函数声明有提升），onchange 不再
@@ -2925,8 +3004,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // S1：连同去重基线(lastSeq/epoch)一并缓存——切回时据此「只增量续传缓存之后的新事件」，而非
     // sync:since(0) 全量回放（会与缓存重复，且旧逻辑用 innerHTML='' 清重复时把回放也一起清掉 → 空屏）。
     if (currentSessionId && !messagesEl.classList.contains('empty-start') && messagesEl.childNodes.length > 0) {
-      const nodes = Array.from(messagesEl.childNodes);
-      sessionDomCache.set(currentSessionId, { nodes, lastSeq, epoch: curEpoch, instanceId: prevInstanceId });
+      // strip ephemeral live 行，避免切回会话时把 busy 状态行当历史气泡
+      const nodes = stripEphemeralMessageNodes(Array.from(messagesEl.childNodes));
+      if (nodes.length === 0) { /* 仅有 ephemeral 时不缓存空壳 */ }
+      else sessionDomCache.set(currentSessionId, { nodes, lastSeq, epoch: curEpoch, instanceId: prevInstanceId });
       if (sessionDomCache.size > 40) {
         const oldestKey = sessionDomCache.keys().next().value;
         sessionDomCache.delete(oldestKey);
@@ -3353,33 +3434,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
 
   function setBusy(b) {
-    // UX-010：镜像只读时不与本地忙碌条同现
+    // UX-010：镜像只读时不与本地忙碌条同现；live 状态迁到消息流 #streamLiveStatus，发送钮双态由 updateSendButtonState 驱动
     const show = shouldShowBusyWithMirror({ mirrorReadonly: Boolean(mirrorReadonlySid), busy: b });
-    if (!activeStatusPill || show === _busyState) return;
+    if (show === _busyState) return;
     _busyState = show;
-    updateSendButtonState(); // FE-004：busy 变化即时刷新发送按钮
     if (show) {
-      if (!interruptPending) {
-        if (btnStop) btnStop.disabled = false;
-        if (btnStopNew) btnStopNew.disabled = false;
-      }
-      activeStatusPill.classList.remove('hidden');
-      activeStatusPill.offsetHeight; // 触发 CSS 过渡所需的单次强制 layout（仅在 false→true 时执行一次）
-      activeStatusPill.classList.add('pill-active');
-      if (activeStatusText) {
-        activeStatusText.textContent = 'Claude 正在执行任务...';
-      }
+      if (!interruptPending && btnStop) btnStop.disabled = false;
+      showStreamLiveStatus(formatLiveActivityText('default'));
     } else {
       interruptPending = false;
       if (btnStop) btnStop.disabled = false;
-      if (btnStopNew) btnStopNew.disabled = false;
-      activeStatusPill.classList.remove('pill-active');
-      setTimeout(() => {
-        if (!activeStatusPill.classList.contains('pill-active')) {
-          activeStatusPill.classList.add('hidden');
-        }
-      }, 250);
+      hideStreamLiveStatus();
     }
+    updateSendButtonState(); // FE-004 / 停止 morph：busy 变化即时刷新主按钮
   }
 
   // ---- 抽屉式侧边栏控制器 (Left Drawer Sidebar Controllers) ----

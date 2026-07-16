@@ -16,7 +16,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('details.toolcard .t-name').nth(0)).toHaveText('read_file · utils/date.js');
     await expect(page.locator('details.toolcard .t-name').nth(1)).toHaveText('edit_file · utils/date.js');
     await expect(page.locator('details.toolcard .t-name').nth(2)).toHaveText('run_command · npm test');
-    await expect(page.locator('#activeStatusPill')).toBeVisible();
+    await expect(page.locator('#streamLiveStatus')).toBeVisible();
 
     // 2. 等待完成并展开第一个工具卡片。
     await waitForIdle(page);

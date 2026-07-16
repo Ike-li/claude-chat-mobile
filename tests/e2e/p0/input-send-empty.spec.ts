@@ -51,7 +51,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#btnSend').click();
     await expect(page.locator('[data-testid="user-message"]').last()).toContainText('keyboard hello');
     await expect(page.locator('#input')).toHaveValue('');
-    await expect(page.locator('#btnSend')).toBeDisabled();
+    // 发送后输入空 + busy：主钮 morph 为停止（普通文本 mock 未必立刻 result，不强制 waitForIdle）
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await expect(page.locator('#btnSend')).toHaveAttribute('aria-label', '停止');
 
     await expectNoBrowserErrors(page);
   });
@@ -60,10 +63,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:queuefull');
-    await expect(page.locator('#btnSend')).toHaveAttribute('title', '前面已有消息在排队，请等当前任务结束');
+    // 发送后输入空 + busy：主钮为停止；queueFull 只在有内容时挡发送（FE-004）
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
 
     await page.locator('#input').fill('message after queue drains');
     await expect(page.locator('#input')).toHaveValue('message after queue drains');
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'send');
     await expect(page.locator('#btnSend')).toBeDisabled();
     await expect(page.locator('#btnSend')).toHaveAttribute('title', '前面已有消息在排队，请等当前任务结束');
 

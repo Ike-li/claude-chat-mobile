@@ -12,7 +12,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#btnNew').click();
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await sendChatMessage(page, 'test:freshbusy');
-    await expect(page.locator('#activeStatusPill')).toBeVisible();
+    await expect(page.locator('#streamLiveStatus')).toBeVisible();
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
     await expect(page.locator('#messages')).not.toHaveClass(/empty-start/);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('新会话首发回复', { timeout: 10_000 });
     await waitForIdle(page);

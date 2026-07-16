@@ -18,14 +18,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permInput')).toContainText('测试 Y');
     await expect(page.locator('#permInput')).not.toContainText('\\n');
     await expect(page.locator('#permInput li')).toHaveCount(2);
-    await expect(page.locator('#activeStatusText')).toContainText('ExitPlanMode');
+    await expect(page.locator('#streamLiveStatusText')).toContainText('ExitPlanMode');
 
     // 2. 批准后权限档回落默认审批，状态不残留 ExitPlanMode。
     await page.locator('#permAllow').click();
     await expect(page.locator('#permModal')).toBeHidden();
     await expect(page.locator('#pillPermText')).toContainText('默认审批');
     await waitForIdle(page);
-    await expect(page.locator('#activeStatusPill')).toBeHidden();
+    await expect(page.locator('#streamLiveStatus')).toHaveCount(0);
     await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '成功');
 
     await expectNoBrowserErrors(page);

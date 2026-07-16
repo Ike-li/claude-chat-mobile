@@ -21,7 +21,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 2. 点击第二个选项 dev。
     await page.locator('#questionOptions button').nth(1).click();
     await expect(page.locator('#questionModal')).toBeHidden();
-    await expect(page.locator('#activeStatusText')).toContainText('Claude 正在思考中...');
+    await expect(page.locator('#streamLiveStatusText')).toContainText('Claude 正在思考中...');
     await waitForIdle(page);
     await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '已回答');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('dev (Bleeding-Edge Integration)');

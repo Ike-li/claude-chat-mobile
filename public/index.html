@@ -335,21 +335,9 @@
         </div>
       </div>
 
-      <!-- Unified Premium Input Pill Container -->
+      <!-- Unified Premium Input Pill Container
+           busy 态：发送钮双态（空输入→停止 / 有内容→排队发送）；live 状态迁到消息流 #streamLiveStatus，不再占 pill 顶行。-->
       <div class="chat-input-pill flex flex-col gap-1 p-2 bg-surface shadow-md border border-line">
-        <!-- E6: Active Status Indicator / Interrupt Panel（并入输入框内部顶部条，合理利用空间、不再单独占位）-->
-        <div id="activeStatusPill" class="flex items-center justify-between px-2 py-1.5 text-xs text-accent transition-all duration-300 shrink-0">
-          <div class="flex items-center gap-2 overflow-hidden mr-2">
-            <span class="relative flex h-2 w-2 shrink-0">
-              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
-              <span class="relative inline-flex rounded-full h-2 w-2 bg-accent"></span>
-            </span>
-            <span id="activeStatusText" class="font-medium truncate">Claude 正在执行任务...</span>
-          </div>
-          <button id="btnStopNew" class="px-2.5 py-1 rounded-lg bg-accent text-surface hover:opacity-90 active:scale-95 text-xs font-bold transition-all shrink-0" title="中止任务">
-            停止
-          </button>
-        </div>
         <!-- Top Row: Full-width Textarea -->
         <div class="w-full flex items-start">
           <textarea id="input" rows="1" placeholder="给 Claude 发消息..." enterkeyhint="send"

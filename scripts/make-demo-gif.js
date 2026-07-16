@@ -58,7 +58,12 @@ async function main() {
       await page.click('#btnSend');
     };
     const waitIdle = async () => {
-      await page.waitForSelector('#activeStatusPill.hidden', { timeout: 15000 }).catch(() => {});
+      // busy 结束：流内 live 行移除（或发送钮离开 stop 模式）
+      await page.waitForFunction(() => {
+        const live = document.getElementById('streamLiveStatus');
+        const send = document.getElementById('btnSend');
+        return !live && send?.dataset?.mode !== 'stop';
+      }, { timeout: 15000 }).catch(() => {});
     };
 
     await sleep(1400);                        // 等冷启动水合

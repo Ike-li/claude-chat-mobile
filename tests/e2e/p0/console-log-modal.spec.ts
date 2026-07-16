@@ -12,7 +12,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 1. 点击顶部日志按钮打开交互日志 bottom sheet。
     await page.locator('#btnConsole').click();
     await expect(page.locator('#consoleModal')).toBeVisible();
-    await expect(page.locator('#consoleModal')).toContainText('Current Session Trace');
+    await expect(page.locator('#consoleModal')).toContainText('交互日志');
     await expect(page.locator('#consoleClose')).toBeVisible();
     await expect(page.locator('#consoleClear')).toBeVisible();
     await page.locator('#consoleClear').click();

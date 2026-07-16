@@ -38,7 +38,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Documentation | 15 |
 | Documentation asset | 10 |
 | E2E test | 28 |
-| Frontend asset | 2 |
+| Frontend asset | 3 |
 | Frontend source | 21 |
 | Generated asset | 7 |
 | Generated documentation | 1 |
@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 78 |
+| Unit test | 79 |
 | Vendored asset | 13 |
 
-Total classified files: **286**.
+Total classified files: **288**.
 
 ## Complete file inventory
 
@@ -132,6 +132,7 @@ Total classified files: **286**.
 | `public/js/sw.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/tw-config.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/manifest.webmanifest` | Frontend asset | PWA shell or web asset | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/mockup-pills-toolbar.html` | Frontend asset | PWA shell or web asset | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/github-dark.min.css` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/github-light.min.css` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/highlight.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -311,6 +312,7 @@ Total classified files: **286**.
 | `tests/unit/instance-routing.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/interaction.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/lan-ipv4s.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-composer-primary.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-content.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-rendering.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-session.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

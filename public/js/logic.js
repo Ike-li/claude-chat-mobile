@@ -126,6 +126,104 @@ export function shouldShowBusyWithMirror({ mirrorReadonly = false, busy = false 
   return Boolean(busy);
 }
 
+// 输入区主按钮双态：busy 且无内容 → 停止；有内容时优先发送/排队（FE-004，不因 busy 禁发）。
+// 审批/提问 sheet、输入禁用、queueFull、sendInFlight 仍按原闸挡发送；sheet 打开时不 morph 停止（中止走 sheet 逃生口）。
+export function resolveComposerPrimaryMode({
+  busy = false,
+  hasContent = false,
+  interruptPending = false,
+  queueFull = false,
+  blockedByUserRequest = false,
+  blockedByDisabledInput = false,
+  blockedBySendInFlight = false,
+} = {}) {
+  if (blockedByUserRequest) {
+    return {
+      mode: 'send',
+      enabled: false,
+      title: '请先处理当前审批或选择',
+      ariaLabel: '发送',
+    };
+  }
+  if (blockedByDisabledInput) {
+    return {
+      mode: 'send',
+      enabled: false,
+      title: '请先完成设备授权或解除只读状态',
+      ariaLabel: '发送',
+    };
+  }
+  // busy 且输入空 → 停止（queueFull 不挡中止）
+  if (busy && !hasContent) {
+    if (interruptPending) {
+      return {
+        mode: 'stop',
+        enabled: false,
+        title: '正在停止…',
+        ariaLabel: '正在停止',
+      };
+    }
+    return {
+      mode: 'stop',
+      enabled: true,
+      title: '停止',
+      ariaLabel: '停止',
+    };
+  }
+  // 发送路径（含 busy+有内容 排队）
+  if (queueFull) {
+    return {
+      mode: 'send',
+      enabled: false,
+      title: '前面已有消息在排队，请等当前任务结束',
+      ariaLabel: '发送',
+    };
+  }
+  if (blockedBySendInFlight) {
+    return {
+      mode: 'send',
+      enabled: false,
+      title: '请稍候…',
+      ariaLabel: '发送',
+    };
+  }
+  if (hasContent) {
+    return {
+      mode: 'send',
+      enabled: true,
+      title: '',
+      ariaLabel: '发送',
+    };
+  }
+  return {
+    mode: 'send',
+    enabled: false,
+    title: '',
+    ariaLabel: '发送',
+  };
+}
+
+// 流内 live 活动行文案（与历史 activeStatusText 分支一致；不写 disk/history）。
+export function formatLiveActivityText(kind = 'default', payload = {}) {
+  if (kind === 'thinking') return 'Claude 正在思考中...';
+  if (kind === 'stopping') return '正在停止…';
+  if (kind === 'tool') {
+    const name = String(payload?.name || '').trim() || 'tool';
+    if (name === 'Bash') {
+      const cmd = String(payload?.command ?? payload?.cmd ?? payload?.inputSummary ?? '').trim();
+      if (!cmd) return `Claude 正在运行工具 ${name}...`;
+      return `🖥 ${cmd.length > 60 ? `${cmd.slice(0, 57)}...` : cmd}`;
+    }
+    if (name === 'Agent' || name === 'Task') {
+      const desc = String(payload?.description ?? payload?.inputSummary ?? '').trim();
+      if (!desc) return `Claude 正在运行工具 ${name}...`;
+      return `🤖 ${desc.length > 50 ? `${desc.slice(0, 47)}...` : desc}`;
+    }
+    return `Claude 正在运行工具 ${name}...`;
+  }
+  return 'Claude 正在执行任务...';
+}
+
 // UX-010：横幅优先级仲裁（同屏最多一条）。
 // bannerPriority = 任务约定名；pickBannerToShow 保留给已接线 app.js import。
 export function bannerPriority({ mirror = false, task = false, subagent = false, activity = false } = {}) {
