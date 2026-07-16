@@ -46,12 +46,21 @@ export function tokenMatches(expected, provided) {
 // AUTH-001：HTTP 鉴权与 Socket 握手共用限速——否则 /health|/metrics|/push/* 可无限试 AUTH_TOKEN，
 // 而同 IP 的 socket 已被 lock。rateLimit 可选；不传则行为与改造前一致（仅鉴权）。
 // rateLimit = { active, sourceKey, getState, setState, onResult, now?, onLocked? }
+// rateLimit.active：boolean 或 (req) => boolean。AUTH-NEW-1：公网 Host 即使无 AUTH_TOKEN 也须限速，
+// 与 socket `publicHost || AUTH_TOKEN` 对齐；函数形可按请求 Host 判定。
+function rateLimitActive(rl, req) {
+  if (!rl) return false;
+  const a = rl.active;
+  if (typeof a === 'function') return !!a(req);
+  return !!a;
+}
+
 export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateLimit = null }) {
   return async function httpAuth(req, res, next) {
     try {
       const publicHost = isPublicHost(req.headers.host);
       const rl = rateLimit;
-      if (rl?.active) {
+      if (rateLimitActive(rl, req)) {
         const key = rl.sourceKey(req);
         const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
         const now = rl.now ? rl.now() : Date.now();
@@ -73,7 +82,7 @@ export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateL
         authPassed = true;
       }
 
-      if (rl?.active) {
+      if (rateLimitActive(rl, req)) {
         const key = rl.sourceKey(req);
         const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
         const now = rl.now ? rl.now() : Date.now();
@@ -91,7 +100,7 @@ export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateL
     } catch {
       // JWT 失败等：若启用了限速，计一次失败（与 socket 失败路径对齐）
       const rl = rateLimit;
-      if (rl?.active) {
+      if (rateLimitActive(rl, req)) {
         try {
           const key = rl.sourceKey(req);
           const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
@@ -116,7 +125,7 @@ export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateL
 // 只哈希根层几个文件时，改 connection-sync.js 不会换 ?v=，手机继续吃缓存。
 function listJsFilesRecursive(dir) {
   const out = [];
-  let entries = [];
+  let entries;
   try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
   for (const entry of entries) {
     const path = join(dir, entry.name);

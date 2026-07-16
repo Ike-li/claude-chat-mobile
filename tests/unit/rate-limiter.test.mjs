@@ -1,7 +1,13 @@
 // tests/unit/rate-limiter.test.mjs —— 鉴权端口防暴破限速纯函数状态机单测（零依赖，承接 docs/design.md / NFR-03）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { onAuthResult, freshState, rlSourceKey, DEFAULT_RATE_LIMIT_CONFIG as CFG } from '../../src/auth/rate-limiter.js';
+import {
+  onAuthResult,
+  freshState,
+  rlSourceKey,
+  shouldTrustCfConnectingIp,
+  DEFAULT_RATE_LIMIT_CONFIG as CFG,
+} from '../../src/auth/rate-limiter.js';
 
 const T0 = 1_000_000; // 基准时刻（远大于 decayMs 起点，避免衰减分支歧义）
 
@@ -125,5 +131,25 @@ test.describe('rlSourceKey 来源识别', () => {
   test('CF-IP 为空串 → 回退连接 IP', () => {
     const hs = { address: '10.0.0.3', headers: { 'cf-connecting-ip': '  ' } };
     assert.equal(rlSourceKey(hs, norm, { trustCfConnectingIp: true }), 'ip:10.0.0.3');
+  });
+});
+
+// AUTH-NEW-2：仅当 Host 公网且 peer 为 loopback（隧道终止）时采信 CF-IP
+test.describe('shouldTrustCfConnectingIp（AUTH-NEW-2）', () => {
+  const norm = (x) => (x || '').replace(/^::ffff:/, '');
+
+  test('非公网 Host → 永不信', () => {
+    assert.equal(shouldTrustCfConnectingIp({ publicHost: false, peerAddress: '127.0.0.1' }, norm), false);
+  });
+
+  test('公网 Host + loopback peer → 信（cloudflared 拓扑）', () => {
+    assert.equal(shouldTrustCfConnectingIp({ publicHost: true, peerAddress: '127.0.0.1' }, norm), true);
+    assert.equal(shouldTrustCfConnectingIp({ publicHost: true, peerAddress: '::1' }, norm), true);
+    assert.equal(shouldTrustCfConnectingIp({ publicHost: true, peerAddress: '::ffff:127.0.0.1' }, norm), true);
+  });
+
+  test('公网 Host + LAN peer（Host spoof）→ 不信', () => {
+    assert.equal(shouldTrustCfConnectingIp({ publicHost: true, peerAddress: '10.0.0.8' }, norm), false);
+    assert.equal(shouldTrustCfConnectingIp({ publicHost: true, peerAddress: '192.168.1.10' }, norm), false);
   });
 });

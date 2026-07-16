@@ -135,3 +135,54 @@ test('createHttpAuth rateLimit：连续失败锁定 → 429（AUTH-001）', asyn
   }
   assert.equal(locked, 1);
 });
+
+// AUTH-NEW-1：active 可为 (req)=>boolean；无 AUTH_TOKEN 但公网 Host 仍须对 JWT 失败限速
+test('createHttpAuth rateLimit：active(req) 公网 Host 无 token 仍计入失败（AUTH-NEW-1）', async () => {
+  const states = new Map();
+  let now = 2_000_000;
+  const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
+  const auth = createHttpAuth({
+    authToken: '', // 无 AUTH_TOKEN
+    isPublicHost: (h) => h === 'app.example.com',
+    verifyAccessJwt: async () => { throw new Error('bad jwt'); },
+    rateLimit: {
+      active: (req) => !!(req?.headers?.host === 'app.example.com'),
+      sourceKey: () => 'ip:cf',
+      getState: (k) => states.get(k),
+      setState: (k, st) => { states.set(k, st); },
+      onResult: onAuthResult,
+      now: () => now,
+    },
+  });
+  const run = async () => {
+    const response = { statusCode: 200, body: null, headers: new Map() };
+    const res = {
+      status(code) { response.statusCode = code; return this; },
+      json(body) { response.body = body; return this; },
+      setHeader(k, v) { response.headers.set(k, v); return this; },
+    };
+    await auth({ headers: { host: 'app.example.com' }, query: {}, socket: {} }, res, () => {});
+    return response;
+  };
+  for (let i = 0; i < 8; i++) {
+    const r = await run();
+    if (i < 7) {
+      assert.equal(r.statusCode, 401, `public JWT fail ${i + 1} → 401`);
+      const st = states.get('ip:cf');
+      now = (st?.lockUntil || now) + 1;
+    } else {
+      assert.equal(r.statusCode, 429, '公网无 AUTH_TOKEN 第 8 次 JWT 失败应 429');
+    }
+  }
+  // 本机 Host + active(req)=false 不应累加同一桶
+  states.clear();
+  now = 3_000_000;
+  const lanRes = { statusCode: 200, body: null, headers: new Map(),
+    status(c) { this.statusCode = c; return this; },
+    json(b) { this.body = b; return this; },
+    setHeader() { return this; },
+  };
+  // active 对 lan host 为 false → 不限速；无 token 本机放行
+  await auth({ headers: { host: '127.0.0.1' }, query: {}, socket: {} }, lanRes, () => {});
+  assert.equal(states.size, 0, '非公网且 active(req)=false 不写限速状态');
+});

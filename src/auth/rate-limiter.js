@@ -66,3 +66,14 @@ export function rlSourceKey(handshake, normalizeIp = (x) => x, { trustCfConnecti
   }
   return `ip:${normalizeIp(handshake?.address || '')}`;
 }
+
+// AUTH-NEW-2：是否采信 CF-Connecting-IP。
+// 拓扑前提：公网流量经 cloudflared/nginx 终止在本机 loopback 再进 Node——此时 peer=127.0.0.1/::1
+// 且 Host=公网域名，CF-IP 由边缘注入可信。
+// 若 peer 是 LAN/公网直连 IP，即使 Host 被伪造为 CF_ACCESS_HOSTNAME，也【不】信 CF-IP
+// （否则攻击者 Host spoof + 随机 CF-Connecting-IP 可无限拆限速桶）。
+export function shouldTrustCfConnectingIp({ publicHost, peerAddress }, normalizeIp = (x) => x) {
+  if (!publicHost) return false;
+  const ip = String(normalizeIp(peerAddress || '') || '').toLowerCase();
+  return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
+}
