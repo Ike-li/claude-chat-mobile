@@ -381,6 +381,14 @@ test('modelEntryFor: 无命中 / 空列表 / 空值 → null', () => {
   assert.equal(modelEntryFor('x', undefined), null);
 });
 
+test('modelEntryFor: 子串误匹配防护——mBase 在 base 中间出现但不是模型名边界', () => {
+  const list = [{ value: 'deepseek-v3' }];
+  // 'deepseek-v3.1' 包含 'deepseek-v3' 子串，但 .1 不是 [Nm] 后缀 → 不应误匹配
+  assert.equal(modelEntryFor('deepseek-v3.1', list), null, '.1 后缀非 [Nm] → 不匹配');
+  // 精确匹配不受影响
+  assert.equal(modelEntryFor('deepseek-v3', list), list[0], '精确命中照常');
+});
+
 test('effortLevelsFor: 模型支持 → 列其档', () => {
   const ml = [{ value: 'opus[1m]', supportedEffortLevels: ['low', 'high', 'max'] }];
   assert.deepEqual(effortLevelsFor('opus[1m]', ml), { hidden: false, levels: ['low', 'high', 'max'] });

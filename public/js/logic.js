@@ -99,7 +99,13 @@ export function modelEntryFor(value, modelsList) {
     if (!m || typeof m === 'string' || !m.value) return false;
     const mSfx = (m.value.match(/\[[^\]]+\]$/) || [''])[0];
     const mBase = m.value.replace(/\[[^\]]+\]$/, '');
-    return mSfx === sfx && mBase && base.includes(mBase);
+    if (mSfx !== sfx || !mBase) return false;
+    // 子串桥接须在词边界位置（前后都是 '-' 或字符串开头/结尾）：防 'deepseek-v3' 误匹配 'deepseek-v3.1'
+    const idx = base.indexOf(mBase);
+    if (idx < 0) return false;
+    const after = idx + mBase.length;
+    return (idx === 0 || base[idx - 1] === '-')
+      && (after >= base.length || base[after] === '-' || base[after] === '[');
   }) || null;
 }
 
