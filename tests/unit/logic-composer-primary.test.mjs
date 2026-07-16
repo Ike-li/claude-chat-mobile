@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   resolveComposerPrimaryMode,
   formatLiveActivityText,
+  presentOnlineSendAck,
 } from '../../public/js/logic.js';
 
 test('resolveComposerPrimaryMode: 空闲空输入 → 禁用发送', () => {
@@ -133,4 +134,45 @@ test('formatLiveActivityText: 其他工具名', () => {
     formatLiveActivityText('tool', { name: 'ExitPlanMode' }),
     'Claude 正在运行工具 ExitPlanMode...',
   );
+});
+
+// 在线 user:message 的 socket ack 决策：成功只清 in-flight；失败须清 busy + 可见文案（可重试/永久）。
+// 旧实现把 ack 回调当 clearSendInFlight 忽略 payload → 负 ack 时像「发送失败但无反馈」。
+test('presentOnlineSendAck: ok → 仅确认成功，不清 busy', () => {
+  const out = presentOnlineSendAck({ ok: true, instanceId: 'i1' });
+  assert.equal(out.ok, true);
+  assert.equal(out.clearBusy, false);
+  assert.equal(out.restoreDraft, false);
+  assert.equal(out.message, '');
+});
+
+test('presentOnlineSendAck: 可重试失败 → 清 busy + 文案 + 恢复草稿', () => {
+  const out = presentOnlineSendAck({ ok: false, error: '前面还有消息在排队，请稍后重试', retryable: true });
+  assert.equal(out.ok, false);
+  assert.equal(out.clearBusy, true);
+  assert.equal(out.restoreDraft, true);
+  assert.equal(out.retryable, true);
+  assert.match(out.message, /排队|重试/);
+});
+
+test('presentOnlineSendAck: 永久失败 / stale → 清 busy + 恢复草稿', () => {
+  const permanent = presentOnlineSendAck({ ok: false, error: '消息过长', permanent: true });
+  assert.equal(permanent.ok, false);
+  assert.equal(permanent.clearBusy, true);
+  assert.equal(permanent.restoreDraft, true);
+  assert.equal(permanent.permanent, true);
+  assert.match(permanent.message, /过长|失败/);
+
+  const stale = presentOnlineSendAck({ ok: false, error: 'stale_instance', stale: true });
+  assert.equal(stale.ok, false);
+  assert.equal(stale.clearBusy, true);
+  assert.equal(stale.stale, true);
+  assert.ok(stale.message.length > 0);
+});
+
+test('presentOnlineSendAck: 缺省/畸形 ack 当失败', () => {
+  assert.equal(presentOnlineSendAck(null).ok, false);
+  assert.equal(presentOnlineSendAck(undefined).ok, false);
+  assert.equal(presentOnlineSendAck({}).ok, false);
+  assert.equal(presentOnlineSendAck({ ok: false }).clearBusy, true);
 });

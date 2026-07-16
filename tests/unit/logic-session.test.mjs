@@ -201,6 +201,46 @@ test('shouldRestoreOptimisticBusy: 仅新会话首发懒开绑定到新建实例
   assert.equal(shouldRestoreOptimisticBusy(), false);
 });
 
+// externalDirty / effort 等同会话静默换实例：send() 已 setBusy(true)，随后 dispose+resume 换 instanceId、
+// sessionId 不变 → bindView→clearView 冲掉 busy。须靠 pendingSendBusy + 同 sessionId 补回。
+// 注意：有 sessionId 时不得仅凭 pendingFirstSend 补回（那是 session:switch 打开已有会话的误伤面）。
+test('shouldRestoreOptimisticBusy: 同会话静默换实例且 pendingSendBusy 时补回乐观 busy', () => {
+  assert.equal(shouldRestoreOptimisticBusy({
+    pendingSendBusy: true,
+    viewingInstanceId: 'inst_new',
+    sessionId: 'sess_1',
+    prevSessionId: 'sess_1',
+  }), true);
+  // 真切到另一会话：不补（避免把 A 的发送态挂到 B）
+  assert.equal(shouldRestoreOptimisticBusy({
+    pendingSendBusy: true,
+    viewingInstanceId: 'inst_b',
+    sessionId: 'sess_b',
+    prevSessionId: 'sess_a',
+  }), false);
+  // 无 pendingSendBusy（纯 effort 切档且用户未在发送窗口）：不补
+  assert.equal(shouldRestoreOptimisticBusy({
+    pendingSendBusy: false,
+    viewingInstanceId: 'inst_new',
+    sessionId: 'sess_1',
+    prevSessionId: 'sess_1',
+  }), false);
+  // 缺 prevSessionId：无法判定同会话，不补（bindView 内首发路径也不应误命中 swap 分支）
+  assert.equal(shouldRestoreOptimisticBusy({
+    pendingSendBusy: true,
+    viewingInstanceId: 'inst_new',
+    sessionId: 'sess_1',
+  }), false);
+  // pendingFirstSend + 有 sessionId 仍不补（保持 session:switch 护栏）
+  assert.equal(shouldRestoreOptimisticBusy({
+    pendingFirstSend: true,
+    pendingSendBusy: false,
+    viewingInstanceId: 'inst_1',
+    sessionId: 'sess_1',
+    prevSessionId: 'sess_1',
+  }), false);
+});
+
 // bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档会让后端 dispose 旧实例 + resume 同会话
 // 开新实例（instanceId 变了、sessionId 不变），这只是底层实例被静默替换、用户视角仍在同一个聊天里——
 // 此时清空草稿是误伤（真实 bug：切效果强度/模型会清空正在输入的指令）。真正切到另一个会话/全新未开会话

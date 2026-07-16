@@ -495,12 +495,62 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
   return rows.slice(0, cap);
 }
 
-// 新会话首发的乐观 busy（send() 的 setBusy(true)）会被「服务端懒开实例 → 广播 instances → setInstances →
-// bindView → clearView 的 setBusy(false)」冲掉，直到首个 delta 才重现（已有会话发消息不触发 bindView，故无此问题）。
-// 仅当：发送时置了首发标志、且已绑定到一个尚无 sessionId 的新建实例（FRESH、SDK init 未回；区别于
-// session:switch 打开的已有会话）时，才在 bindView 后同步补回 busy。
-export function shouldRestoreOptimisticBusy({ pendingFirstSend, viewingInstanceId, sessionId } = {}) {
-  return Boolean(pendingFirstSend && viewingInstanceId && !sessionId);
+// 乐观 busy（send() 的 setBusy(true)）会被「服务端换实例 → 广播 instances → setInstances →
+// bindView → clearView 的 setBusy(false)」冲掉，直到首个 delta 才重现。两种场景要补回：
+// 1) 新会话首发懒开：pendingFirstSend + 已绑定新实例 + 尚无 sessionId（FRESH、SDK init 未回；
+//    区别于 session:switch 打开的已有会话——有 sessionId 时不得仅凭 pendingFirstSend 补）。
+// 2) 同会话静默换实例：externalDirty / effort 等 dispose+resume（instanceId 变、sessionId 不变），
+//    发送窗口内 pendingSendBusy + prevSessionId===sessionId 才补，避免把 A 的发送态挂到 B。
+export function shouldRestoreOptimisticBusy({
+  pendingFirstSend,
+  pendingSendBusy,
+  viewingInstanceId,
+  sessionId,
+  prevSessionId,
+} = {}) {
+  if (!viewingInstanceId) return false;
+  // 新会话首发：无 sessionId 的懒开实例
+  if (pendingFirstSend && !sessionId) return true;
+  // 同会话静默换实例：发送已发出、sessionId 前后一致且非空
+  if (pendingSendBusy && sessionId && sessionId === prevSessionId) return true;
+  return false;
+}
+
+// 在线 user:message 的 socket ack 决策（纯函数）。成功只清 in-flight；失败须清乐观 busy +
+// 可见文案，并可恢复草稿（输入已被 send() 清空）。旧实现把 ack 当 clearSendInFlight 忽略 payload。
+export function presentOnlineSendAck(ack) {
+  if (ack && ack.ok === true) {
+    return {
+      ok: true,
+      clearBusy: false,
+      restoreDraft: false,
+      retryable: false,
+      permanent: false,
+      stale: false,
+      message: '',
+    };
+  }
+  const error = (ack && typeof ack.error === 'string' && ack.error.trim())
+    ? ack.error.trim()
+    : '发送失败';
+  const permanent = Boolean(ack?.permanent);
+  const retryable = Boolean(ack?.retryable) || (!permanent && !ack?.stale);
+  const stale = Boolean(ack?.stale);
+  let message = error;
+  if (error === 'stale_instance' || stale) {
+    message = '目标会话已关闭，请刷新后重发';
+  } else if (!message.startsWith('发送') && !message.includes('失败')) {
+    message = `发送失败：${message}`;
+  }
+  return {
+    ok: false,
+    clearBusy: true,
+    restoreDraft: true,
+    retryable,
+    permanent,
+    stale,
+    message,
+  };
 }
 
 // bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档在 SDK 层无运行时切换能力，后端 dispose
