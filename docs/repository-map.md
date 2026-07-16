@@ -35,7 +35,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 40 |
 | Configuration template | 1 |
 | Deployment | 2 |
-| Documentation | 14 |
+| Documentation | 15 |
 | Documentation asset | 10 |
 | E2E test | 28 |
 | Frontend asset | 2 |
@@ -55,7 +55,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 76 |
 | Vendored asset | 12 |
 
-Total classified files: **282**.
+Total classified files: **283**.
 
 ## Complete file inventory
 
@@ -93,6 +93,7 @@ Total classified files: **282**.
 | `docs/sdk-boundary.md` | Documentation | Agent SDK boundary audit and upgrade-review baseline | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/statusline-bridge.md` | Documentation | CLI statusline bridge install, security, and rollback guide | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/testing.md` | Documentation | Test layering, migration evidence, and manual production regression suites | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/ux-ui-review-2026-07-16.md` | Documentation | Point-in-time UX/UI evaluation for horizontal model comparison (2026-07-16) | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/vendor/source-serif-400.woff2` | Vendored asset | Pinned documentation-site font | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/vendor/source-serif-600.woff2` | Vendored asset | Pinned documentation-site font | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/vendor/source-serif-italic.woff2` | Vendored asset | Pinned documentation-site font | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
