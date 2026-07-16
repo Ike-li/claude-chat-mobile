@@ -11,12 +11,28 @@ import { request } from 'node:http';
 import { randomUUID } from 'node:crypto';
 
 const PORT = 3199;
+// 显式测试专用 token：不能 AUTH_TOKEN:''——config.js SH-001 会删空串再 dotenv 回填机主 .env，
+// 致 /health 401、socket 握手失败（session-delete/aborted-state 同款注释）。
+const AUTH_TOKEN = 'srvtest-token';
 let serverProc;
 let tmpDir;
 
 // CI runner 无本机 claude CLI（server.js preflight 会 exit(1)），本文件起真 server 子进程、
 // scout 等用例需真 claude 行为——CI 跳过整个文件，本机（有真 claude）照常全跑。
 const CI_SKIP = process.env.CI ? { skip: 'CI 无本机 claude CLI；server 集成测试仅本机跑' } : {};
+
+function url(path) {
+  const sep = path.includes('?') ? '&' : '?';
+  return `http://127.0.0.1:${PORT}${path}${sep}token=${encodeURIComponent(AUTH_TOKEN)}`;
+}
+
+function connectSocket(opts = {}) {
+  return ioc(`http://127.0.0.1:${PORT}`, {
+    auth: { token: AUTH_TOKEN },
+    forceNew: true,
+    ...opts,
+  });
+}
 
 test.before(async () => {
   if (process.env.CI) return;
@@ -26,7 +42,7 @@ test.before(async () => {
   // 立即失败，不空等满 10s、也绝不对错误进程发有状态事件。
   const buildNonce = `srvtest-${randomUUID()}`;
   serverProc = spawn('node', ['server.js'], {
-    env: { ...process.env, PORT: String(PORT), AUTH_TOKEN: '', WORK_DIR: tmpDir,
+    env: { ...process.env, PORT: String(PORT), AUTH_TOKEN, WORK_DIR: tmpDir,
       // CCM_DATA_DIR 隔离（同其余 tests/integration/*.test.mjs 惯例）：此前本文件唯独漏设，子进程
       // sessions.js/devices.js/approval-store.js/audit.js 全部落到真实 data/ 目录——sessions.js 的
       // 写入此前一直静默污染，只是没人注意；Phase 4 新增的 approval-store.js/audit.js 让污染第一次
@@ -43,12 +59,12 @@ test.before(async () => {
   let earlyExit = null;
   serverProc.on('exit', (code, sig) => { earlyExit = { code, sig }; });
   serverProc.on('error', err => { earlyExit = { error: err.message }; });
-  // 轮询 /health 直到【本轮】server ready（最多 10s）
+  // 轮询 /health 直到【本轮】server ready（最多 10s）；带 token，避免 401 被 catch 吞成“未起来”。
   for (let i = 0; i < 40; i++) {
     if (earlyExit) throw new Error(`server 子进程提前退出，启动失败：${JSON.stringify(earlyExit)}`);
     await new Promise(r => setTimeout(r, 250));
     try {
-      const h = JSON.parse(await httpGet(`http://127.0.0.1:${PORT}/health`));
+      const h = JSON.parse(await httpGet(url('/health')));
       if (h.status === 'ok' && h.buildNonce === buildNonce) return; // 确认是本轮 spawn 的 server
       // status:ok 但 nonce 不符 = 端口上是别的 server（旧 checkout / 未退实例）——它不会变成我们的，
       // 继续轮询直至超时报错，绝不误连它跑测试。
@@ -73,7 +89,7 @@ test.after(async () => {
 
 test.describe('HTTP 端点', CI_SKIP, () => {
   test('GET /health → 200 + JSON body', async () => {
-    const body = await httpGet(`http://127.0.0.1:${PORT}/health`);
+    const body = await httpGet(url('/health'));
     const j = JSON.parse(body);
     assert.equal(j.status, 'ok');
     assert.ok(typeof j.timestamp === 'number');
@@ -81,19 +97,19 @@ test.describe('HTTP 端点', CI_SKIP, () => {
   });
 
   test('GET / → 200 + HTML（index.html）', async () => {
-    const body = await httpGet(`http://127.0.0.1:${PORT}/`);
+    const body = await httpGet(url('/'));
     assert.ok(body.includes('<!DOCTYPE html>') || body.includes('<html'));
   });
 
   test('GET /nonexistent → 404', async () => {
-    const { statusCode } = await httpGetRaw(`http://127.0.0.1:${PORT}/no-such-path`);
+    const { statusCode } = await httpGetRaw(url('/no-such-path'));
     assert.equal(statusCode, 404);
   });
 });
 
 test.describe('Socket.IO 连接与认证', CI_SKIP, () => {
-  test('无 AUTH_TOKEN 时任何 token 都可通过（127.0.0.1 仅本地）', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+  test('正确 AUTH_TOKEN 握手成功', async () => {
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -107,7 +123,7 @@ test.describe('Socket.IO 连接与认证', CI_SKIP, () => {
 test.describe('事件流 — 新连接重放', CI_SKIP, () => {
   test('连接时总是收到权威 mirror_state，空闲态明确 readonly=false', async (t) => {
     const events = [];
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     t.after(() => s.disconnect());
     s.on('agent:event', e => events.push(e));
     await new Promise((resolve, reject) => {
@@ -124,7 +140,7 @@ test.describe('事件流 — 新连接重放', CI_SKIP, () => {
 
   test('连接后收到合成事件（instances / device_status / pending_devices 至少其一）', async () => {
     const events = [];
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     s.on('agent:event', e => events.push(e));
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
@@ -143,7 +159,7 @@ test.describe('事件流 — 新连接重放', CI_SKIP, () => {
 
 test.describe('session:list — 空工作目录', CI_SKIP, () => {
   test('session:list 返回空列表', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -161,7 +177,7 @@ test.describe('session:list — 空工作目录', CI_SKIP, () => {
 
 test.describe('session:switch — 非法 sessionId 被拒', CI_SKIP, () => {
   test('含 ../ 的 sessionId → ack { ok: false }', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -176,7 +192,7 @@ test.describe('session:switch — 非法 sessionId 被拒', CI_SKIP, () => {
   });
 
   test('合法但不存在的 sessionId → ack { ok: false }', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -192,7 +208,7 @@ test.describe('session:switch — 非法 sessionId 被拒', CI_SKIP, () => {
 
 test.describe('session:new — 创建新会话', CI_SKIP, () => {
   test('session:new → ack { ok: true }（懒创建，不发消息不 spawn agent）', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -210,7 +226,7 @@ test.describe('session:new — 创建新会话', CI_SKIP, () => {
 
 test.describe('dev:restart — DEV_MODE 关闭时拒绝', CI_SKIP, () => {
   test('未设 DEV_MODE（测试子进程默认）→ ack { ok: false }，不重启', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -230,7 +246,7 @@ test.describe('session:new — scout 获取真实模型清单', CI_SKIP, () => {
   // 获取真实模型清单后推送前端 + 写入缓存 + 立即 dispose（不留幽灵会话）。
   // 不再依赖缓存猜测或上区旧模型——scout 保证确定性。
   test('session:new 后收到一条 models 事件（scout 获取真实模型）', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -250,7 +266,7 @@ test.describe('session:new — scout 获取真实模型清单', CI_SKIP, () => {
 
 test.describe('user:message 输入校验', CI_SKIP, () => {
   test('空消息 → system error', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -267,7 +283,7 @@ test.describe('user:message 输入校验', CI_SKIP, () => {
   });
 
   test('超长消息 → system error', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -286,7 +302,7 @@ test.describe('user:message 输入校验', CI_SKIP, () => {
 
 test.describe('user:setPermissionMode — 档位校验', CI_SKIP, () => {
   test('未知权限档 → system error', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
@@ -303,7 +319,7 @@ test.describe('user:setPermissionMode — 档位校验', CI_SKIP, () => {
   });
 
   test('有效权限档（无实例）→ permission_mode 回执', async () => {
-    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    const s = connectSocket();
     await new Promise((resolve, reject) => {
       s.on('connect', resolve);
       s.on('connect_error', reject);
