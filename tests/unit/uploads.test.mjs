@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, symlink, mkdir } from 'node:fs/promises';
-import { join, resolve, sep } from 'node:path';
+import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   sanitizeName, validateAttachments, saveAttachments, buildPromptText, toEventMeta, UPLOAD_DIR
@@ -115,6 +115,15 @@ test.describe('validateAttachments', () => {
     ]);
     assert.equal(valid, null);
   });
+
+  // FILES-4：thumb 服务端上限
+  test('thumb 超 100k 字符 → 拒（FILES-4）', () => {
+    const thumb = 'x'.repeat(100_001);
+    const err = validateAttachments([
+      { name: 'a.png', mimeType: 'image/png', data: 'aGVsbG8=', thumb },
+    ]);
+    assert.ok(err && err.includes('缩略图过大'));
+  });
 });
 
 test.describe('saveAttachments', () => {
@@ -130,7 +139,11 @@ test.describe('saveAttachments', () => {
     const attachments = [{ name: 'test.txt', mimeType: 'text/plain', data: 'aGVsbG8=' }];
     const saved = await saveAttachments(tmpDir, attachments);
     assert.equal(saved.length, 1);
-    assert.ok(saved[0].absPath.startsWith(join(tmpDir, UPLOAD_DIR)));
+    // macOS /var → /private/var：与 realpath 后的上传目录比前缀
+    const { realpathSync } = await import('node:fs');
+    const uploadReal = realpathSync(join(tmpDir, UPLOAD_DIR));
+    assert.ok(saved[0].absPath.startsWith(uploadReal + sep) || saved[0].absPath.startsWith(uploadReal),
+      `absPath=${saved[0].absPath} uploadReal=${uploadReal}`);
     assert.equal(saved[0].name, 'test.txt');
     assert.equal(saved[0].mimeType, 'text/plain');
     assert.equal(saved[0].size, 5);
@@ -141,7 +154,8 @@ test.describe('saveAttachments', () => {
     const saved = await saveAttachments(tmpDir, [
       { name: '../../../etc/passwd', mimeType: 'text/plain', data: 'aGVsbG8=' }
     ]);
-    const dirResolved = resolve(join(tmpDir, UPLOAD_DIR));
+    const { realpathSync } = await import('node:fs');
+    const dirResolved = realpathSync(join(tmpDir, UPLOAD_DIR));
     assert.ok(saved[0].absPath.startsWith(dirResolved + sep), `落点逃逸: ${saved[0].absPath}`);
     assert.ok(!saved[0].absPath.includes('etc/passwd'), '穿越到 /etc 未被拦截');
   });

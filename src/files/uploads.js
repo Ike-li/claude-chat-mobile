@@ -2,16 +2,17 @@
 // 落盘方案（机主 2026-06-12 定）：完整文件字节写入 WORK_DIR/.ccm-uploads/，
 // 把绝对路径注入 prompt 文本，claude 用 Read（白名单内、cwd 内免审批）读取——最贴终端等价。
 // 缩略图（thumb）由前端 canvas 降采样生成、经 user_message 投送，此处只透传不生成（零图片依赖）。
-import { mkdir, open } from 'node:fs/promises';
+import { mkdir, open, realpath } from 'node:fs/promises';
 import { join, resolve, basename, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { constants } from 'node:fs';
+import { constants, realpathSync } from 'node:fs';
 import { rejectableSymlinkComponent } from './file-security.js';
 
 export const UPLOAD_DIR = '.ccm-uploads';     // WORK_DIR 下的落盘子目录（点前缀，gitignore 友好）
 const MAX_FILES = 10;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;      // 单文件 10MB（解码后字节）
 const MAX_TOTAL_BYTES = 20 * 1024 * 1024;     // 总量 20MB（注：base64 上线 ~1.33x，见 server maxHttpBufferSize）
+const MAX_THUMB_CHARS = 100_000;             // FILES-4：thumb 服务端上限（与前端 self-limit 对齐）
 
 // 文件名收敛：只取 basename，去路径分隔/控制/危险字符，去前导点（防 . / .. / 隐藏覆盖），空则回退 file。
 // basename 在 posix 不剥 Windows 反斜杠，故显式替换分隔字符——纵深防御，配合 saveAttachments 的落点校验。
@@ -35,6 +36,13 @@ export function validateAttachments(attachments) {
     const bytes = Buffer.byteLength(a.data, 'base64');
     if (bytes > MAX_FILE_BYTES) return `附件「${a.name}」过大（${(bytes / 1048576).toFixed(1)}MB，单文件上限 10MB）`;
     total += bytes;
+    // FILES-4：thumb 进 ring buffer + 广播，须有服务端上限（前端 100k 自限不可信）
+    if (a.thumb != null) {
+      if (typeof a.thumb !== 'string') return `附件「${a.name}」缩略图类型无效`;
+      if (a.thumb.length > MAX_THUMB_CHARS) {
+        return `附件「${a.name}」缩略图过大（${a.thumb.length} 字符，上限 ${MAX_THUMB_CHARS}）`;
+      }
+    }
   }
   if (total > MAX_TOTAL_BYTES) return `附件总量过大（${(total / 1048576).toFixed(1)}MB，上限 20MB）`;
   return null;
@@ -42,25 +50,44 @@ export function validateAttachments(attachments) {
 
 // 落盘（假定已 validate）：写 WORK_DIR/.ccm-uploads/<ts>-<rand>-<safe>，resolve 校验落点不逃出该目录。
 // 增强安全：symlink 检查 + O_NOFOLLOW 标志（POSIX 平台防 TOCTOU 攻击）。
+// FILES-2：mkdir 后再检一次 symlink；用 realpath 后的目录做前缀校验，挡中间路径被换成外向 symlink。
 // 返回 [{ absPath, name, mimeType, size, thumb? }]（含 absPath 供注入 prompt；thumb 原样透传给 user_message）。
 export async function saveAttachments(workDir, attachments) {
   const dir = join(workDir, UPLOAD_DIR);
   await mkdir(dir, { recursive: true });
 
-  // 新增：检查上传目录路径中是否包含可疑 symlink
-  const symlink = rejectableSymlinkComponent(dir);
+  // 写前 + 写后双检：mkdir 与 open 之间 dir 可能被换成外向 symlink
+  let symlink = rejectableSymlinkComponent(dir);
   if (symlink) {
     throw new Error(`上传目录路径包含可疑符号链接: ${symlink}`);
   }
 
-  const dirResolved = resolve(dir);
+  let dirResolved;
+  try {
+    dirResolved = await realpath(dir);
+  } catch {
+    dirResolved = resolve(dir);
+  }
+  // FILES-2：realpath 后必须仍落在 workDir 真实路径树内（挡中间路径换成外向 symlink）
+  let workReal = resolve(workDir);
+  try { workReal = realpathSync(workDir); } catch { /* keep resolve */ }
+  if (dirResolved !== workReal && !dirResolved.startsWith(workReal + sep)) {
+    throw new Error('上传目录解析后越出工作目录');
+  }
+
   const saved = [];
 
   for (const a of attachments) {
-    const fname = `${Date.now()}-${randomBytes(4).toString('hex')}-${sanitizeName(a.name)}`;
-    const absPath = resolve(dir, fname);
+    // 每文件写前再检一次（FILES-2 中间窗口）
+    symlink = rejectableSymlinkComponent(dirResolved);
+    if (symlink) {
+      throw new Error(`上传目录路径包含可疑符号链接: ${symlink}`);
+    }
 
-    // 原有的路径穿越检查（保留，纵深防御）
+    const fname = `${Date.now()}-${randomBytes(4).toString('hex')}-${sanitizeName(a.name)}`;
+    const absPath = resolve(dirResolved, fname);
+
+    // 原有的路径穿越检查（保留，纵深防御）——以 realpath 后目录为锚
     if (absPath !== join(dirResolved, fname) || !absPath.startsWith(dirResolved + sep)) {
       throw new Error(`非法附件路径：${a.name}`);
     }
