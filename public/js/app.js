@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatUsageWindowLines } from './logic.js';
+import { esc, formatToolSummary, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -47,7 +47,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop');
-  let pendingUsageRender = null; // 额度窗一次消费：usage:get 后等 agent:event type=usage
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
 
@@ -859,12 +858,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       api_retry: onApiRetry,
       history_append: onHistoryAppend,
       mirror_state: onMirrorState,
-      usage(ev) {
-        if (!pendingUsageRender) return;
-        const renderUsage = pendingUsageRender;
-        pendingUsageRender = null;
-        renderUsage(ev.payload);
-      },
     },
     onEpochReset() {
       permQueue.length = 0;
@@ -3140,62 +3133,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
 
     const note = el(`<div class="px-3 py-1.5 text-[9.5px] text-ink-faint/80 leading-snug"></div>`);
-    note.textContent = '此处为 web 驱动的会话实例，不含本机其它 claude 终端进程；无法检测 OS 僵尸。';
+    note.textContent = '此处为 web 驱动的会话实例，不含本机其它 claude 终端进程；无法检测 OS 僵尸。套餐 5h/7d 额度见底栏 statusline。';
     section.appendChild(note);
-
-    // 额度窗入口：按需 usage:get → 弹简易层（第三方 available:false 时显示不可用说明）
-    const usageRow = el(`<div class="px-3 py-2 border-t border-line-soft"></div>`);
-    const usageBtn = el(`<button type="button" class="w-full text-left text-[11px] text-info underline" data-testid="usage-open-btn">查看套餐额度</button>`);
-    usageBtn.onclick = () => {
-      haptic('tap');
-      openUsageWindow();
-    };
-    usageRow.appendChild(usageBtn);
-    const usageBody = el(`<div id="usageWindowBody" class="hidden mt-1 text-[10px] text-ink-soft space-y-0.5" data-testid="usage-window"></div>`);
-    usageRow.appendChild(usageBody);
-    section.appendChild(usageRow);
     return section;
   }
 
-  let _usageReqGen = 0;
-  function openUsageWindow() {
-    const body = sessionPanel.querySelector('#usageWindowBody');
-    if (!body) return;
-    body.classList.remove('hidden');
-    body.replaceChildren();
-    const loading = el(`<div class="text-ink-faint"></div>`);
-    loading.textContent = '加载中…';
-    body.appendChild(loading);
-    const gen = ++_usageReqGen;
-    socket.emit('usage:get', { instanceId: viewingInstanceId }, () => { /* ack 可选，真值走 agent:event usage */ });
-    // 兼容：server 以 agent:event type=usage 推送；也接受 ack 形态（若未来改）
-    const onUsage = (payload) => {
-      if (gen !== _usageReqGen) return;
-      renderUsageWindow(body, payload);
-    };
-    // 一次性监听：通过 pending flag 在 agent:event 分发处消费
-    pendingUsageRender = onUsage;
-  }
-  function renderUsageWindow(body, payload) {
-    const view = formatUsageWindowLines(payload || { available: false });
-    body.replaceChildren();
-    if (!view.available) {
-      const empty = el(`<div class="text-ink-faint"></div>`);
-      empty.textContent = '当前认证无套餐额度（API key / 第三方 provider 不提供）';
-      body.appendChild(empty);
-      return;
-    }
-    for (const line of view.lines) {
-      const row = el(`<div class="flex justify-between gap-2"></div>`);
-      const lab = el(`<span class="text-ink-faint"></span>`);
-      lab.textContent = line.label;
-      const val = el(`<span class="text-ink font-medium"></span>`);
-      val.textContent = line.text;
-      row.appendChild(lab);
-      row.appendChild(val);
-      body.appendChild(row);
-    }
-  }
   function refreshStatusSection() {
     const old = sessionPanel.querySelector('#statusSection');
     if (!old) return;

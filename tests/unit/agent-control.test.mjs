@@ -309,8 +309,8 @@ test.describe('stopTask()（切片 2b：停单个后台任务，对应终端 Ctr
   });
 });
 
-test.describe('fetchUsage()（③ 套餐额度窗数据源：实验性 usage RPC + 超时降级）', () => {
-  test('q 有 usage 方法 → 返回其原始结果（解析交给纯函数 parseUsageForWeb）', async () => {
+test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC + 超时降级）', () => {
+  test('q 有 usage 方法 → 返回其原始结果（解析交给 statusline.usageBitsForStatusLine）', async () => {
     const { s } = makeSession();
     const fake = { subscription_type: 'max', rate_limits_available: true, rate_limits: {} };
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => fake };

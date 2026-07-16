@@ -713,61 +713,6 @@ export function formatServiceNotices({ service, restartChanged, now } = {}) {
   return notices;
 }
 
-// ③ 从 SDK usage_EXPERIMENTAL...() 响应提取 web 额度窗所需字段（防御性解析——运行时结构比 .d.ts 富且
-// 标记 EXPERIMENTAL_MAY_CHANGE、会漂，故不绑固定 schema、逐字段存在性校验）。三条硬规则：
-// ① usage 为空（fetchUsage 超时/无 q/抛错）或 rate_limits_available===false（API key / Bedrock / Vertex /
-//    无 profile scope 的第三方 provider）→ 返回 { available:false }，前端据此隐藏额度窗、不显任何额度数字。
-// ② 剔除 behaviors：含本机使用画像隐私（per-skill/agent/plugin/MCP 归因、请求/会话计数），绝不外露。
-// ③ 成本（session.total_cost_usd）与订阅类型（max/pro）非隐私、可留。
-// 窗口 key（five_hour/seven_day_opus 等）保留 SDK 原名（= SDKRateLimitInfo.rateLimitType 枚举，稳定可辨），
-// 叶子字段归一 camelCase（resets_at→resetsAt）符合 web 契约。
-// 注：statusline 显示面另由 statusline.js usageBitsForStatusLine 取 5h/7d + lines；本函数服务独立额度窗通道。
-export function parseUsageForWeb(usage) {
-  if (!usage || typeof usage !== 'object') return { available: false };
-  if (usage.rate_limits_available === false) return { available: false };
-  const out = { available: true };
-  if (typeof usage.subscription_type === 'string' && usage.subscription_type) out.subscriptionType = usage.subscription_type;
-  const sess = usage.session;
-  if (sess && typeof sess === 'object' && Number.isFinite(sess.total_cost_usd)) out.session = { totalCostUsd: sess.total_cost_usd };
-  const rl = usage.rate_limits;
-  if (rl && typeof rl === 'object') {
-    const limits = {};
-    for (const key of ['five_hour', 'seven_day', 'seven_day_oauth_apps', 'seven_day_opus', 'seven_day_sonnet']) {
-      const w = normalizeRateWindow(rl[key]);
-      if (w) limits[key] = w;
-    }
-    if (Array.isArray(rl.model_scoped)) {
-      const scoped = rl.model_scoped.map(m => {
-        const w = normalizeRateWindow(m);
-        if (w && m && typeof m.display_name === 'string' && m.display_name) w.displayName = m.display_name;
-        return w;
-      }).filter(Boolean);
-      if (scoped.length) limits.model_scoped = scoped;
-    }
-    if (rl.extra_usage && typeof rl.extra_usage === 'object') {
-      const e = rl.extra_usage, extra = {};
-      if (typeof e.is_enabled === 'boolean') extra.isEnabled = e.is_enabled;
-      if (Number.isFinite(e.utilization)) extra.utilization = e.utilization;
-      if (Number.isFinite(e.monthly_limit)) extra.monthlyLimit = e.monthly_limit;
-      if (Number.isFinite(e.used_credits)) extra.usedCredits = e.used_credits;
-      if (Object.keys(extra).length) limits.extraUsage = extra;
-    }
-    if (Object.keys(limits).length) out.rateLimits = limits;
-  }
-  return out;
-}
-
-// 归一化单个额度窗：{ utilization:number|null, resets_at:string|null } → { utilization?, resetsAt? }。
-// 防御性：非对象/全空 → null（调用方据此省略该窗）。utilization=0 是有效值（刚开始用）必须保留，故用
-// Number.isFinite 而非真值判断。非导出 helper（parseUsageForWeb 专用）。
-function normalizeRateWindow(w) {
-  if (!w || typeof w !== 'object') return null;
-  const out = {};
-  if (Number.isFinite(w.utilization)) out.utilization = w.utilization;
-  if (typeof w.resets_at === 'string' && w.resets_at) out.resetsAt = w.resets_at;
-  return Object.keys(out).length ? out : null;
-}
-
 // 子 agent 事件判定：agent.js 对 parent_tool_use_id 消息分流 emit 时带 parentToolUseId。
 // 前端 text_delta/thinking_delta/tool_use/tool_result 用它决定「嵌进子 agent 卡」vs「主流气泡」。
 // 只认非空字符串——数字/空串都当主流，防脏字段把主对话误收进卡。
@@ -809,39 +754,4 @@ export function formatMirrorBannerText({ armed = false, stale = false, remaining
 export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   const id = typeof taskId === 'string' ? taskId.trim() : '';
   return { canStop: Boolean(id) && bannerVisible !== false, taskId: id || null };
-}
-
-// 额度窗展示行：parseUsageForWeb 输出 → 人读 lines（供 modal 渲染）。
-// available:false → 空行 + available:false（第三方/无 RPC 时整窗隐藏）。
-// now 可注入便于单测重置倒计时。
-export function formatUsageWindowLines(parsed, { now = Date.now() } = {}) {
-  if (!parsed || parsed.available !== true) return { available: false, lines: [], subscriptionType: null };
-  const lines = [];
-  if (parsed.subscriptionType) lines.push({ key: 'sub', label: '订阅', text: String(parsed.subscriptionType) });
-  if (parsed.session && Number.isFinite(parsed.session.totalCostUsd)) {
-    lines.push({ key: 'cost', label: '本会话成本', text: `$${parsed.session.totalCostUsd.toFixed(2)}` });
-  }
-  const rl = parsed.rateLimits || {};
-  const winLabel = {
-    five_hour: '5 小时窗',
-    seven_day: '7 天窗',
-    seven_day_opus: '7 天 Opus',
-    seven_day_sonnet: '7 天 Sonnet',
-    seven_day_oauth_apps: '7 天 OAuth Apps',
-  };
-  for (const key of Object.keys(winLabel)) {
-    const w = rl[key];
-    if (!w || !Number.isFinite(w.utilization)) continue;
-    let text = `${Math.round(w.utilization)}%`;
-    if (w.resetsAt) {
-      const rem = Date.parse(w.resetsAt) - now;
-      if (Number.isFinite(rem) && rem > 0) {
-        const mins = Math.ceil(rem / 60_000);
-        const h = Math.floor(mins / 60), m = mins % 60;
-        text += h > 0 ? ` · 重置 ${h}h${String(m).padStart(2, '0')}m` : ` · 重置 ${m}m`;
-      }
-    }
-    lines.push({ key, label: winLabel[key], text });
-  }
-  return { available: true, lines, subscriptionType: parsed.subscriptionType || null };
 }

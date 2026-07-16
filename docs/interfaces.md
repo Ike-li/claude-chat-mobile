@@ -84,7 +84,6 @@
 |---|---|---|
 | `sync:since` | `{sessionId, lastSeq, instanceId?}` | `{replayed, gap, found, pending, diskLen}`（断线补发；`found:false`=实例已没了，`diskLen` 供 transcript 对账） |
 | `logs:get` | `{instanceId?}` | `{logs[]}`（该实例的交互日志，需 `LOG_INTERACTIONS=1`） |
-| `usage:get` | `{instanceId?}` | 当前实例用量投影；结果经 `usage` 事件返回 |
 | `mirror:syncNow` | `{}` | 无 ack；立即触发一次 transcript 追平 |
 | `conn:ping` | `{}` | `{ok:true,t}`；连接 RTT 探活，不进业务缓冲 |
 | `dev:restart` | `{}` | `{ok}` 或 `{ok:false, error}`（**仅 `DEV_MODE=1`**：优雅退出，靠 KeepAlive 自动拉起） |

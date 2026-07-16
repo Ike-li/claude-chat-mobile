@@ -369,10 +369,9 @@ export class AgentSession {
     }
   }
 
-  // ③ 套餐额度窗数据源：调 SDK 实验性 usage RPC（session 成本 + claude.ai 套餐额度利用率窗）。带超时
-  // （照 statusline getContextUsageSafe 1500ms 模式：cold RPC 可能慢，不阻塞调用方）——超时 / 无 q / 无该
-  // 方法（旧 CLI / 网关不支持）/ 抛错一律返回 null 降级（server 侧 parseUsageForWeb(null) → available:false 隐藏额度窗）。
-  // 只取原始对象、解析交给纯函数 parseUsageForWeb：运行时结构比 .d.ts 富且标记 EXPERIMENTAL_MAY_CHANGE、会漂。
+  // statusline 5h/7d 额度 + 会话 lines 数据源：SDK 实验性 usage RPC（与 CLI /usage 同源）。
+  // 超时 / 无 q / 无方法 / 抛错 → null（statusline 字段省略，不崩）。
+  // 原始对象交给 statusline.usageBitsForStatusLine 解析；API 标 EXPERIMENTAL_MAY_CHANGE、会漂。
   async fetchUsage(timeoutMs = 1500) {
     if (typeof this.q?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') return null;
     try {

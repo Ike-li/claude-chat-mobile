@@ -28,7 +28,6 @@ export const AGENT_EVENT_TYPES = Object.freeze([
   'thinking_delta',
   'tool_result',
   'tool_use',
-  'usage',
   'user_message',
 ]);
 
@@ -377,7 +376,6 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'task:stop',
   'tool:full',
   'tool:preview',
-  'usage:get',
   'user:answer',
   'user:approve',
   'user:approveDevice',

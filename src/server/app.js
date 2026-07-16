@@ -27,7 +27,6 @@ import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
 import { buildWebStatusLine, buildCliStatusLine } from '../ops/statusline.js';
 import { readCliObservedState } from '../agent/cli-mirror-state.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
-import { parseUsageForWeb } from '../../public/js/logic.js'; // ③ 额度窗：纯函数解析 SDK usage（防御 + 剔隐私 + 降级），与前端共用同一份
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
 import { createModelsCache, isCwdDefaultModel } from '../agent/models-cache.js';
@@ -1834,27 +1833,6 @@ registerSocketConnection(io, socket => {
   // task_notification / task_progress / background_tasks_changed 事件。stopTask 内部 disposed / 无效
   // taskId / 无 q / SDK 抛错均幂等吞掉（返回 false 不抛），故无实例（routeInstance→null）时 ?. 安全 no-op。
   on(socket, 'task:stop', payload => routeInstance(payload?.instanceId)?.stopTask(payload?.taskId));
-
-  // ③ 套餐额度窗：按需拉取（用户打开额度窗时前端发 usage:get）。usage 是账号级（非 per-instance），但取数
-  // 要经某个活 agent 的 q——优先当前查看实例，无 / 无 q（fetchUsage→null）时回退任一活实例（fetchUsage 对
-  // 无该方法者即时返回 null，开销小）。parseUsageForWeb 做防御性解析 + 剔除 behaviors 隐私 + 第三方 provider
-  // 降级（available:false）。点对点回请求方（on-demand，不广播给未请求的设备）；鉴权由 on() 的 fail-closed 守卫。
-  on(socket, 'usage:get', async payload => {
-    const routed = routeInstance(payload?.instanceId);
-    let usage = routed ? await routed.fetchUsage() : null;
-    if (usage == null) {
-      for (const cand of agents.values()) {
-        if (cand === routed || cand.disposed) continue;
-        usage = await cand.fetchUsage();
-        if (usage != null) break;
-      }
-    }
-    socket.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-      instanceId: payload?.instanceId ?? null,
-      type: 'usage', payload: parseUsageForWeb(usage)
-    });
-  });
 
   // 回空首页枢纽（与 session:new 分工）：
   //   home = 去看最近列表 / 换会话；live tab 全保留；**不**重置 pending mode/effort；

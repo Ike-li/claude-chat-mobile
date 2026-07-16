@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, taskStopUiState, formatUsageWindowLines } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, taskStopUiState } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -684,26 +684,3 @@ test.describe('taskStopUiState（后台任务停止按钮）', () => {
   });
 });
 
-test.describe('formatUsageWindowLines（额度窗行）', () => {
-  test('available:false → 空行', () => {
-    assert.deepEqual(formatUsageWindowLines({ available: false }), { available: false, lines: [], subscriptionType: null });
-    assert.equal(formatUsageWindowLines(null).available, false);
-  });
-  test('订阅 + 5h/7d 利用率 + 重置倒计时', () => {
-    const now = Date.parse('2026-07-15T12:00:00Z');
-    const r = formatUsageWindowLines({
-      available: true,
-      subscriptionType: 'max',
-      session: { totalCostUsd: 1.5 },
-      rateLimits: {
-        five_hour: { utilization: 42.2, resetsAt: '2026-07-15T14:05:00Z' },
-        seven_day: { utilization: 11, resetsAt: '2026-07-18T12:00:00Z' },
-      },
-    }, { now });
-    assert.equal(r.available, true);
-    assert.ok(r.lines.some(l => l.key === 'sub' && l.text === 'max'));
-    assert.ok(r.lines.some(l => l.key === 'cost' && l.text === '$1.50'));
-    assert.ok(r.lines.some(l => l.key === 'five_hour' && /42%/.test(l.text) && /重置/.test(l.text)));
-    assert.ok(r.lines.some(l => l.key === 'seven_day' && /11%/.test(l.text)));
-  });
-});
