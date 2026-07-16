@@ -491,6 +491,10 @@ details > summary::-webkit-details-marker { display: none; }
   #permModal.sheet-open > div, #questionModal.sheet-open > div, #consoleModal.sheet-open > div {
     transform: translateY(0);
   }
+  /* UX-003：审批 sheet 弹出后短暂防误触（过渡期按钮不可点） */
+  #permModal.sheet-arming button {
+    pointer-events: none;
+  }
 
   /* ── 状态忙碌条 collapse 弹性过渡（已并入 .chat-input-pill 内部顶部条）── */
   #activeStatusPill {

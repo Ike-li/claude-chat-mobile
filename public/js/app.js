@@ -1838,7 +1838,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     }
     openSheet(permModal);
+    // UX-003：弹出后 350ms 内按钮不可点，防拇指热区误触授权
+    armPermSheetButtons(350);
     updateSendButtonState();
+  }
+  let permArmTimer = null;
+  function armPermSheetButtons(ms = 350) {
+    if (!permModal) return;
+    permModal.classList.add('sheet-arming');
+    if (permArmTimer) clearTimeout(permArmTimer);
+    permArmTimer = setTimeout(() => {
+      permModal.classList.remove('sheet-arming');
+      permArmTimer = null;
+    }, ms);
   }
   function answerPerm(decision) {
     if (!activePerm) return;
@@ -3339,6 +3351,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function closeSheet(el) {
     haptic('tap');
     el.classList.remove('sheet-open');
+    // UX-003：关闭时清防误触 arming，避免下次打开残留
+    if (el === permModal) {
+      el.classList.remove('sheet-arming');
+      if (permArmTimer) { clearTimeout(permArmTimer); permArmTimer = null; }
+    }
     // Delay adding hidden class to let slide-down animation finish,
     // which takes around 300ms. E2E wait tasks wait up to 15s so 300ms is perfect.
     setTimeout(() => {

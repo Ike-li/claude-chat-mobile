@@ -172,4 +172,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('UX-003 审批 sheet 弹出后短暂防误触（pointer-events）', async ({ page }) => {
+    // 纯视觉/交互契约：.sheet-arming 下按钮 pointer-events:none；解除后可点。
+    // 不依赖真实 350ms 竞态（goto 后事件到达时间不定），直接验证 CSS + 类切换契约。
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:permission');
+    await expect(page.locator('#permModal')).toBeVisible();
+
+    const peWhileArming = await page.locator('#permModal').evaluate((modal) => {
+      modal.classList.add('sheet-arming');
+      return getComputedStyle(modal.querySelector('#permAllow')).pointerEvents;
+    });
+    expect(peWhileArming).toBe('none');
+
+    const peAfter = await page.locator('#permModal').evaluate((modal) => {
+      modal.classList.remove('sheet-arming');
+      return getComputedStyle(modal.querySelector('#permAllow')).pointerEvents;
+    });
+    expect(peAfter).not.toBe('none');
+
+    // 解除后允许点击走通；等 turn 结束避免污染 worker 内后续用例
+    await page.locator('#permDeny').click();
+    await expect(page.locator('#permModal')).toBeHidden();
+    await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
 });
