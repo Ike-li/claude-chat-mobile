@@ -32,3 +32,32 @@ export function reselectViewingTarget(remainingIds, removedCwd, cwdOf, fallbackC
   const next = remainingIds.length ? remainingIds[0] : null;
   return { viewingInstanceId: next, viewingCwd: next ? cwdOf(next) : (removedCwd ?? fallbackCwd) };
 }
+
+// 置换（externalDirty / setEffort）await 结束后是否应接管 viewing。
+// 前提：silent dispose 不 reselect——viewing 仍指向已删 id（死指针），或用户已主动切走。
+//   · viewingNow === disposedId → 用户未切走（仍停在被换实例）→ claim 新实例
+//   · 否则（切到其他 live / home null / 已是 openedId）→ 不抢
+export function shouldClaimViewingAfterSwap({ disposedId, viewingNow } = {}) {
+  if (disposedId == null) return false;
+  return viewingNow === disposedId;
+}
+
+// 懒开 await 结束后是否应接管 viewing。
+//   · viewingNow === viewingAtStart → 用户未在 open 窗口内切走（含双方皆 null 的空首页首发）→ claim
+//   · 否则 → 不抢
+export function shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow } = {}) {
+  return viewingNow === viewingAtStart;
+}
+
+// SRV-NEW-004：session:delete / deletePermanent 是否允许继续删除。
+// liveInstance=true → web 正驱动；resumeInFlight=true → 并发 switch/open 正在 spawn。
+// 两道闸任一命中 → fail-closed 拒绝（避免 hide/删文件与 resume 写盘竞态）。
+export function canDeleteSessionGuard({ liveInstance = false, resumeInFlight = false } = {}) {
+  if (liveInstance) {
+    return { ok: false, reason: 'live', error: '会话正在被本产品驱动，请先结束或关闭该会话再删除' };
+  }
+  if (resumeInFlight) {
+    return { ok: false, reason: 'opening', error: '会话正在打开中，请稍后再删除' };
+  }
+  return { ok: true, reason: null, error: null };
+}
