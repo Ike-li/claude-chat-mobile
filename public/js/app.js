@@ -2313,11 +2313,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 不用 _busyState——那段横跨整个 turn，会连带挡住服务端本就允许的"忙碌中排第二条"（_queueFull 负责）。
     const blockedBySendInFlight = socket.connected && _sendInFlight;
     if (hasText && !_queueFull && !blockedByUserRequest && !blockedByDisabledInput && !blockedBySendInFlight) {
-      btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-ink text-surface hover:bg-ink-soft active:scale-95 shadow-sm transition-all duration-200 shrink-0";
+      // UI-002：激活态品牌 cta 底白箭头（与允许/进入主 CTA 一致）
+      btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-cta text-white hover:brightness-95 active:scale-95 shadow-sm transition-all duration-200 shrink-0";
       btnSend.disabled = false;
       btnSend.title = '';
     } else {
-      btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-40 cursor-not-allowed transition-all duration-200 shrink-0";
+      // UI-002：disabled 提到约 60% 不透明，仍能发现发送位置
+      btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0";
       btnSend.disabled = true;
       // _queueFull 排在防抖之前：防抖窗口很短且随时可能与 queueFull 同时为真，队列已满是更持久、更该
       // 让用户看到的状态（P0-02c）。
