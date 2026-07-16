@@ -37,12 +37,18 @@ import {
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from '../auth/cf-access.js';
-import { onAuthResult, freshState, rlSourceKey } from '../auth/rate-limiter.js';
+import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listDir, readFile as browseReadFile } from '../files/file-browse.js';
 import { isProcessed, commitProcessed } from '../agent/message-dedup.js';
-import { resolveInstanceTarget, reselectViewingTarget } from './instance-routing.js';
+import {
+  resolveInstanceTarget,
+  reselectViewingTarget,
+  shouldClaimViewingAfterSwap,
+  shouldClaimViewingAfterLazyOpen,
+  canDeleteSessionGuard,
+} from './instance-routing.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from '../sessions/workdirs.js';
 import {
@@ -263,14 +269,18 @@ const httpAuth = createHttpAuth({
   verifyAccessJwt,
   // AUTH-001：HTTP 与 socket 握手共享限速 Map，堵住 /health|/metrics|/push 无限试 token。
   rateLimit: {
-    get active() { return !!AUTH_TOKEN; }, // 无 token 时仅本机，不限速
+    // AUTH-NEW-1：与 socket `publicHost || AUTH_TOKEN` 对齐——CF Access-only（空 AUTH_TOKEN）公网 Host
+    // 上的 /health|/metrics|/push JWT 失败也须限速；纯本机无 token 仍不限。
+    active: (req) => !!(AUTH_TOKEN || isPublicHost(req?.headers?.host)),
     sourceKey: (req) => {
-      // AUTH-002：仅公网 Access Host 采信 CF-Connecting-IP；LAN 伪造头只回落连接 IP
+      // AUTH-002 + AUTH-NEW-2：公网 Host 且 peer=loopback（隧道）才采信 CF-Connecting-IP；
+      // LAN 伪造 Host+CF-IP 只回落连接 IP，防拆限速桶。
       const publicHost = isPublicHost(req.headers?.host);
+      const peer = req.socket?.remoteAddress || req.ip || '';
       return rlSourceKey(
-        { address: req.socket?.remoteAddress || req.ip || '', headers: req.headers || {} },
+        { address: peer, headers: req.headers || {} },
         clientIp,
-        { trustCfConnectingIp: publicHost },
+        { trustCfConnectingIp: shouldTrustCfConnectingIp({ publicHost, peerAddress: peer }, clientIp) },
       );
     },
     getState: (key) => rlStates.get(key),
@@ -470,7 +480,13 @@ io.use(async (socket, next) => {
   const ip = clientIp(socket.handshake.address);
   const publicHost = isPublicHost(socket.handshake.headers.host);
   const rlActive = publicHost || !!AUTH_TOKEN;
-  const rlKey = rlSourceKey(socket.handshake, clientIp, { trustCfConnectingIp: publicHost });
+  // AUTH-NEW-2：与 HTTP sourceKey 同判据——Host spoof 从 LAN 直连时不信 CF-IP
+  const rlKey = rlSourceKey(socket.handshake, clientIp, {
+    trustCfConnectingIp: shouldTrustCfConnectingIp({
+      publicHost,
+      peerAddress: socket.handshake.address,
+    }, clientIp),
+  });
   try {
     // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把机主越锁越久 = 自我 DoS）
     if (rlActive) {
@@ -612,10 +628,14 @@ function computeNeedsYou() {
         pendingApprovals.push({ sessionId: a.sessionId, cwd: a.cwd, title, requestId, createdAt: p.createdAt, toolName: p.name });
       }
     } else if (a.pendingQuestions.size > 0) {
-      status = 'awaiting_input';
+      // AG-NEW-003：与 permissions 对称过滤 expiresAt（timer 已删 Map 时此窗极短，仍防 residual）
+      let hasLiveQuestion = false;
       for (const [, q] of a.pendingQuestions) {
+        if (typeof q.expiresAt === 'number' && now > q.expiresAt) continue;
+        hasLiveQuestion = true;
         if (awaitingSince === undefined || q.createdAt < awaitingSince) awaitingSince = q.createdAt;
       }
+      if (hasLiveQuestion) status = 'awaiting_input';
     }
     sessionViews.push({ sessionId: a.sessionId, cwd: a.cwd, title, lastActiveAt, status, awaitingSince });
   }
@@ -712,7 +732,8 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
 }
 function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 各实例角标状态，合成事件惯例）
   io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
-    seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, cwd: viewingCwd, ts: Date.now(),
+    // SRV-NEW-006：信封 cwd 与 payload.viewingCwd 同源（viewingCwdOf），避免 dispose/reselect 窗内裸 viewingCwd 漂移
+    seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(),
     type: 'instances', payload: instancesPayload()
   });
 }
@@ -811,7 +832,7 @@ function setMirror(readonly, sessionId, force = false, stale = false, observedCl
   io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
     seq: 0, epoch: 'server', sessionId: sessionId ?? null,
     instanceId: readonly ? forInstanceId : viewingInstanceId,
-    cwd: viewingCwd,
+    cwd: viewingCwdOf(), // SRV-NEW-006
     ts: Date.now(), type: 'mirror_state',
     payload: { readonly, stale, observedCli: nextObserved, quietTicks, remainingMs },
   });
@@ -852,10 +873,18 @@ async function catchUpTickOnce() {
   if (catchUpRebaselineRequested) {
     catchUpRebaselineRequested = false;
     if (key === catchUpKey) {                                        // 同一会话重连（非真切换）
-      let curLen;
-      try { curLen = (await getSessionHistory(a.sessionId, a.cwd)).length; } catch { curLen = -1; }
+      // SS-NEW-002：保留 messages 算 tailKey——满窗滑动时 length 不变，仅比 length 会漏标 externalDirty
+      const curMsgs = await getSessionHistory(a.sessionId, a.cwd).catch(() => null);
+      const curLen = Array.isArray(curMsgs) ? curMsgs.length : -1;
+      const curTailKey = Array.isArray(curMsgs) ? historyTailKey(curMsgs) : null;
       if (viewingInstanceId === id && agents.get(id) === a && `${a.cwd}\x00${a.sessionId}` === key
-          && rebaselineAbsorbedExternal({ sameSession: true, curLen, baseline: catchUpState.baseline })) {
+          && rebaselineAbsorbedExternal({
+            sameSession: true,
+            curLen,
+            baseline: catchUpState.baseline,
+            prevTailKey: catchUpState.lastTailKey ?? null,
+            curTailKey,
+          })) {
         a.externalDirty = true; // 被 rebaseline 吸收的终端外部增长 → 标脏防分叉
       }
     }
@@ -1468,16 +1497,22 @@ function openScoutInstance(cwd) {
 
 // 显式关 tab：dispose 后同步删 Map（dispose 置 disposed=true，consume 的 onExit 不再触发——
 // 与台阶2 disposeAgent 同款，不依赖 onExit）。viewingInstanceId 命中则回落到任一存活实例。
-function disposeInstance(instanceId) {
-  const a = agents.get(instanceId);
-  if (!a) return;
-  if (a.sessionId) {
-    interactionLog.addSessionLog(a.sessionId, 'sys_info', `[SYS] 实例已手动销毁/关闭 (disposeInstance): instanceId=${instanceId}`);
+// opts.reselect（默认 true）：用户关 tab / 真移除 → reselect + clearMirror + broadcast。
+  // opts.reselect=false：internal 置换（externalDirty / setEffort）——只 remove，viewing 保持死指针，
+  // 不 clearMirror、不 broadcast 中间态；调用方 await 新实例后按 shouldClaimViewingAfterSwap 原子接管。
+  function disposeInstance(instanceId, { reselect = true } = {}) {
+    const a = agents.get(instanceId);
+    if (!a) return;
+    if (a.sessionId) {
+      interactionLog.addSessionLog(a.sessionId, 'sys_info', `[SYS] 实例已手动销毁/关闭 (disposeInstance): instanceId=${instanceId}`);
+    }
+    instanceManager.remove(instanceId);
+    if (reselect) {
+      if (viewingInstanceId === instanceId) reselectViewingAfter(a.cwd); // BE-016：同步 viewingCwd，落空视图保留最后查看 cwd
+      broadcastInstances();
+    }
+    // silent：viewingInstanceId 可仍等于已删 id（死指针），供 shouldClaimViewingAfterSwap 识别「用户未切走」
   }
-  instanceManager.remove(instanceId);
-  if (viewingInstanceId === instanceId) reselectViewingAfter(a.cwd); // BE-016：同步 viewingCwd，落空视图保留最后查看 cwd
-  broadcastInstances();
-}
 
 // ---- 契约路由（客户端→服务端）----
 const on = createSocketEventRegistrar();
@@ -1566,7 +1601,7 @@ registerSocketConnection(io, socket => {
     const mirrorReadonly = Boolean(currentMirrorAgent && mirrorOwnedBy(currentMirrorAgent.sessionId, viewingInstanceId));
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: currentMirrorAgent?.sessionId ?? null,
-      instanceId: viewingInstanceId, cwd: viewingCwd, ts: Date.now(), type: 'mirror_state',
+      instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(), type: 'mirror_state',
       payload: {
         readonly: mirrorReadonly,
         stale: mirrorReadonly && mirrorStale,
@@ -1634,6 +1669,8 @@ registerSocketConnection(io, socket => {
       // ensureWhitelisted 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
       // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
       const cwd = ensureWhitelisted(routeCwd(payload && typeof payload === 'object' ? payload.cwd : undefined), workDirs);
+      // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
+      const viewingAtStart = viewingInstanceId;
       const saved = await currentSessionForCwd(cwd);
       // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
       // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
@@ -1642,10 +1679,13 @@ registerSocketConnection(io, socket => {
       a = (saved && instanceForSession(saved.id))
         || (justOpened && justOpened.cwd === cwd ? justOpened : null)
         || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
-      viewingInstanceId = a.instanceId;
-      // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧 WORK_DIR。
-      viewingCwd = a.cwd;
-      broadcastInstances();
+      if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
+        viewingInstanceId = a.instanceId;
+        // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧 WORK_DIR。
+        viewingCwd = a.cwd;
+        broadcastInstances();
+      }
+      // 用户已切走：实例仍留在 agents Map，不写 viewing、不 broadcast 抢焦点
     }
     // 陈旧上下文守卫（2026-07-12 单驾驶员，修「接管后的语义分叉」）：实例的 SDK 子进程上下文是进程内存态、
     // 只在启动(resume)那一刻读过磁盘；外部驱动方（终端 CLI）此后写的轮次，web 靠追平【显示】了、但子进程
@@ -1660,19 +1700,25 @@ registerSocketConnection(io, socket => {
         if (typeof ack === 'function') ack({ ok: false, error: '会话正在处理，请稍后重试', retryable: true });
         return;
       }
-      const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId), wasViewing = viewingInstanceId === a.instanceId;
+      const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId);
+      const disposedId = a.instanceId;
       interactionLog.addSessionLog(sid, 'sys_info', '[SYS] 会话曾被外部（终端）驱动，发送前置换实例吸收外部轮次（防陈旧上下文分叉）');
       // 体感：置换会冷启动 resume，前端先收到 system 条再等 init，避免「点了没反应」
       socket.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: sid, instanceId: a.instanceId, ts: Date.now(),
+        seq: 0, epoch: 'server', sessionId: sid, instanceId: disposedId, ts: Date.now(),
         type: 'system', payload: { message: '正在续接会话（吸收终端写入）…', kind: 'resuming' }
       });
-      disposeInstance(a.instanceId);
+      // SS-NEW-001 / SRV-NEW-002：silent dispose——不 reselect 到 remaining[0]、不 clearMirror、不中间 broadcast；
+      // viewing 保持死指针，await 后按 shouldClaimViewingAfterSwap 决定是否原子接管（用户切走则不抢）。
+      disposeInstance(disposedId, { reselect: false });
       // SRV-003：走 dedupedResume 而非裸 openInstance，并发 swap 收敛到同一 resume Promise。
       a = await dedupedResume(cwd, sid, { mode, effort: eff });
-      if (wasViewing) {
+      if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
         viewingInstanceId = a.instanceId;
-        viewingCwd = a.cwd; // SRV-002 对称
+        viewingCwd = a.cwd;
+      } else if (viewingInstanceId === disposedId) {
+        // 安全网：理论上 silent 后 viewing 应仍是 disposedId 或用户已改；若仍死指针却未 claim，落 reselect
+        reselectViewingAfter(cwd);
       }
       broadcastInstances();
     }
@@ -1818,7 +1864,7 @@ registerSocketConnection(io, socket => {
   // 台阶3：切思考强度档（作用于指定实例）。SDK 无 effort 运行时控制 → 置换该实例（dispose +
   // open resume 同会话带新 --effort，迁移 viewingInstanceId），一次冷启动。busy（在途轮>0，含审批挂起）
   // 拒切不杀任务；拒切/非法/无实例 单发当前档拨回该 socket。
-  on(socket, 'user:setEffort', payload => {
+  on(socket, 'user:setEffort', async payload => {
     const level = payload?.level ?? null;
     const id = resolveInstanceId(payload?.instanceId); // 台阶3：作用实例（缺省 viewingInstanceId）
     const a = agents.get(id);
@@ -1845,7 +1891,7 @@ registerSocketConnection(io, socket => {
       sysTo(socket, '当前有任务在运行，请等结束后再切思考强度', true);
       return effortTo(socket);
     }
-    const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, wasViewing = viewingInstanceId === id;
+    const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, disposedId = id;
     interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}, 正在置换实例...`);
     if (sid) sessions.updateSessionPrefs(sid, { effort: level }); // 持久化，resume 恢复用（先于 dispose，防崩溃丢档）
     // 体感：effort 换实例是冷启动，先推 system 让前端立刻显「正在续接」
@@ -1853,9 +1899,16 @@ registerSocketConnection(io, socket => {
       seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
       type: 'system', payload: { message: '正在切换思考强度并续接会话…', kind: 'resuming' }
     });
-    disposeInstance(id);                                              // 关旧实例
-    const ni = openInstance({ cwd, resumeId: sid, mode, effort: level }); // 开新实例 resume 同会话、带新 effort
-    if (wasViewing) viewingInstanceId = ni.instanceId;
+    // SRV-NEW-003：silent dispose + dedupedResume（single-flight），避免并发 setEffort 双开 CLI；
+    // claim 用 shouldClaimViewingAfterSwap，同步 viewingCwd（旧实现只改 instanceId）。
+    disposeInstance(disposedId, { reselect: false });
+    const ni = await dedupedResume(cwd, sid, { mode, effort: level });
+    if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
+      viewingInstanceId = ni.instanceId;
+      viewingCwd = ni.cwd;
+    } else if (viewingInstanceId === disposedId) {
+      reselectViewingAfter(cwd);
+    }
     io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
       seq: 0, epoch: 'server', sessionId: null, instanceId: ni.instanceId, ts: Date.now(),
       type: 'effort_mode', payload: { level }
@@ -2027,10 +2080,18 @@ registerSocketConnection(io, socket => {
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
     }
-    // SRV-005：L1 隐藏也不应盖住仍被 web 驱动的会话（列表消失但 tab 仍在跑，用户难找回）。
-    // 与 L2 保护①同判据；L1 不删文件，但「从产品可见列表移除」仍应先结束/关闭驱动实例。
-    if (instanceForSession(sessionId)) {
-      return ack({ ok: false, error: '会话正在被本产品驱动，请先结束或关闭该会话再从列表移除' });
+    // SRV-005 + SRV-NEW-004：live 驱动或 resumeInFlight 中均拒删（防 switch 打开窗口 TOCTOU）
+    const delGuardL1 = canDeleteSessionGuard({
+      liveInstance: !!instanceForSession(sessionId),
+      resumeInFlight: resumeInFlight.has(sessionId),
+    });
+    if (!delGuardL1.ok) {
+      return ack({
+        ok: false,
+        error: delGuardL1.reason === 'opening'
+          ? '会话正在打开中，请稍后再从列表移除'
+          : '会话正在被本产品驱动，请先结束或关闭该会话再从列表移除',
+      });
     }
     sessions.hideSession(sessionId);
     if (sessions.getCurrent(cwd) === sessionId) sessions.setCurrent(cwd, null); // 别让指针继续指向一个刚被隐藏的会话
@@ -2049,9 +2110,18 @@ registerSocketConnection(io, socket => {
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
     }
-    // 保护①：无活跃 web driver——该会话正被本产品的 canUseTool/turn 驱动中，此刻删文件必与写盘竞态。
-    if (instanceForSession(sessionId)) {
-      return ack({ ok: false, error: '会话正在被本产品驱动，请先结束或关闭该会话再删除' });
+    // 保护① + SRV-NEW-004：无 live driver，且无 in-flight resume（switch/open 窗口）
+    const delGuardL2 = canDeleteSessionGuard({
+      liveInstance: !!instanceForSession(sessionId),
+      resumeInFlight: resumeInFlight.has(sessionId),
+    });
+    if (!delGuardL2.ok) {
+      return ack({
+        ok: false,
+        error: delGuardL2.reason === 'opening'
+          ? '会话正在打开中，请稍后再删除'
+          : '会话正在被本产品驱动，请先结束或关闭该会话再删除',
+      });
     }
     // 保护②：transcript mtime 静默阈值——纯终端进程正驱动无法确证，mtime 新鲜即拒绝（启发式非完备）。
     const mtimeMs = await sessionFileMtime(sessionId, cwd);
@@ -2234,14 +2304,14 @@ function effortTo(socket, id = viewingInstanceId) {
 // 台阶3：单发 tab 栏快照给指定 socket（重放 + 非法/幂等拨回用；广播走 broadcastInstances）
 function instancesTo(socket) {
   socket.emit('agent:event', {
-    seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, cwd: viewingCwd, ts: Date.now(),
+    seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(),
     type: 'instances', payload: instancesPayload()
   });
 }
 
 function sysTo(socket, message, recoverable) {
   socket.emit('agent:event', {
-    seq: 0, epoch: 'server', sessionId: null, instanceId: null, cwd: viewingCwd, ts: Date.now(),
+    seq: 0, epoch: 'server', sessionId: null, instanceId: null, cwd: viewingCwdOf(), ts: Date.now(),
     type: recoverable ? 'system' : 'error',
     payload: recoverable ? { message } : { message, recoverable: false }
   });
@@ -2326,6 +2396,8 @@ function shutdown(sig) {
   clearInterval(statusInterval);  // E16：node --watch 的 SIGTERM 重启路径必须清定时器
   clearTimeout(statusDebounce);   // （在途 git execFile 由 2s timeout 与进程退出收割）
   clearTimeout(catchUpTimer);     // 只读追平定时器（.unref 不阻止退出，但清掉避免关闭期间噪音回调）
+  // SRV-NEW-007：清 bgBroadcast 合并定时器，防 agents.clear 后仍 fire broadcastInstances
+  if (bgBroadcastTimer) { clearTimeout(bgBroadcastTimer); bgBroadcastTimer = null; }
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批
   agents.clear();
   // dispose() 内部对每条挂起审批调 resolvePermission('deny') → 触发 approval-store 的防抖写；必须在
