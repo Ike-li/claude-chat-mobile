@@ -162,7 +162,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   let _pendingSendBusy = false;
   // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读；
   // armedTakeoverSid=已排队接管、等终端本轮完结/疑似中断再自动放行（见 logic.js armedTakeoverStep）；
-  // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「接管 CLI 会话」时判定走排队还是即时确认）。
+  // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「续接 CLI 会话」时判定走排队还是即时确认）。
   let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
   let mirrorObservedCli = { model: null, permissionMode: null, effort: null };
   let mirrorWebPanelSnapshot = null; // CLI 观察态只负责展示；接管时恢复进入镜像前的 Web 选择，绝不写回实例偏好
@@ -2186,7 +2186,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // ---- 发送 / 停止 ----
   function send() {
     ensureAlertAudio(); // 发送=用户手势：解锁 WebAudio，本轮完成后提示音才能响
-    if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「接管 CLI 会话」可接管）
+    if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点发送位「续接 CLI 会话」）
       showMirrorComposerHint();
       return;
     }
@@ -2390,6 +2390,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       requestInterrupt();
       return;
     }
+    // CLI 镜像：发送位变成「续接 / 取消续接」，走与旧横幅按钮同一套 requestMirrorResume
+    if (btnSend.dataset.mode === 'resume' || btnSend.dataset.mode === 'cancel-resume') {
+      haptic('tap');
+      requestMirrorResume();
+      return;
+    }
     send();
   };
   // 移动端回车发送截断修复（2026-07-13 排查报告 §4/§8.1）：触屏软键盘没有 Shift+Enter 这个换行
@@ -2471,7 +2477,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function updateSendButtonState() {
     if (!btnSend) return;
     const hasContent = inputEl.value.trim().length > 0 || attachments.items().length > 0;
-    // FE-004：busy 不直接禁发送；有内容时仍可排队。空内容 + busy → 停止（见 resolveComposerPrimaryMode）。
+    const mirrorArmed = Boolean(mirrorReadonlySid && armedTakeoverSid === mirrorReadonlySid);
+    // FE-004：busy 不直接禁发送；有内容时仍可排队。空内容 + busy → 停止。
+    // CLI 镜像：mirrorReadonly 优先 → mode resume/cancel-resume，发送位变成「续接 CLI 会话」。
     const state = resolveComposerPrimaryMode({
       busy: _busyState,
       hasContent,
@@ -2480,15 +2488,25 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       blockedByUserRequest: !!activePerm || !!activeQuestion,
       blockedByDisabledInput: inputEl.disabled,
       blockedBySendInFlight: socket.connected && _sendInFlight,
+      mirrorReadonly: Boolean(mirrorReadonlySid),
+      mirrorArmed,
     });
     const modeChanged = _btnSendMode !== state.mode;
     _btnSendMode = state.mode;
     btnSend.dataset.mode = state.mode;
     btnSend.disabled = !state.enabled;
-    // title 用 resolve 结果（空串=无额外提示）；aria-label 才是「发送/停止」可访问名
+    // title 用 resolve 结果（空串=无额外提示）；aria-label 才是可访问名
     btnSend.title = state.title;
     btnSend.setAttribute('aria-label', state.ariaLabel);
-    if (state.mode === 'stop') {
+    if (state.mode === 'resume' || state.mode === 'cancel-resume') {
+      // 文字主按钮：替换圆形发送图标位，文案来自 resolve 的 label
+      btnSend.className = 'flex items-center justify-center min-w-[7.5rem] h-9 px-3 rounded-full shrink-0 transition-all duration-200 shadow-sm text-xs font-semibold' +
+        (state.mode === 'cancel-resume'
+          ? ' border border-line text-ink-soft bg-surface hover:bg-sunk active:scale-95'
+          : ' bg-cta text-white hover:brightness-95 active:scale-95');
+      if (modeChanged) btnSend.textContent = state.label || (state.mode === 'cancel-resume' ? '取消续接' : '续接 CLI 会话');
+      else if (btnSend.textContent !== state.label) btnSend.textContent = state.label;
+    } else if (state.mode === 'stop') {
       btnSend.className = 'flex items-center justify-center w-9 h-9 rounded-full shrink-0 transition-all duration-200 shadow-sm' +
         (state.enabled
           ? ' hover:brightness-95 active:scale-95'
@@ -4530,11 +4548,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     })) return;
     _mirrorComposerHintLast = { text, at: now };
     addBar(text, 'text-info');
-    // 把视线导到横幅接管按钮（不自动接管）
+    // 把视线导到发送位「续接」按钮（不自动续接）
     try {
-      mirrorBanner?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
-      mirrorBanner?.classList.add('ring-1', 'ring-danger/50');
-      setTimeout(() => mirrorBanner?.classList.remove('ring-1', 'ring-danger/50'), 900);
+      btnSend?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+      btnSend?.classList.add('ring-2', 'ring-danger/40');
+      setTimeout(() => btnSend?.classList.remove('ring-2', 'ring-danger/40'), 900);
     } catch { /* scroll/classList 在极端 DOM 下可忽略 */ }
   }
 
@@ -4570,27 +4588,25 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // UX-010：镜像时强制隐藏忙碌条
     if (effective) setBusy(false);
     reconcileBanners();
-    const armed = effective && armedTakeoverSid === sessionId;
     if (effective) refreshMirrorBannerCopy();
-    if (btnMirrorOverride) btnMirrorOverride.textContent = armed ? '取消接管' : '接管 CLI 会话';
     if (inputEl) inputEl.disabled = effective;
     // 附件入口随只读锁：禁点 + 防「选了图却发不出」
     if (btnAttach) {
       btnAttach.disabled = effective;
       btnAttach.classList.toggle('opacity-50', effective);
       btnAttach.classList.toggle('cursor-not-allowed', effective);
-      btnAttach.title = effective ? '终端驾驶中，只读——点此查看如何继续' : '添加附件';
+      btnAttach.title = effective ? '终端运行中，只读——点右侧续接可在手机继续' : '添加附件';
     }
-    if (effective) { if (btnSend) btnSend.disabled = true; } // 锁定：禁发送
-    else updateSendButtonState();                            // 解锁：按有无文本恢复发送按钮态
+    // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
+    updateSendButtonState();
   }
 
   // 输入 pill 捕获点击：disabled 的 textarea/按钮自身常不派发 click，父级 pointerdown 仍能收到。
-  // 仅 mirror 只读时解释状态；不拦截横幅上的接管/刷新按钮（它们不在 pill 内）。
+  // 仅 mirror 只读时解释状态；不挡发送位「续接」主按钮（由 btnSend.onclick → requestMirrorResume）。
   document.querySelector('.chat-input-pill')?.addEventListener('pointerdown', (ev) => {
     if (!mirrorReadonlySid) return;
-    // 设置 chip 已有自己的「设置已冻结」提示，避免双 bar
-    if (ev.target?.closest?.('#pillModel, #pillPerm, #pillEffort, #btnSettings')) return;
+    // 设置 chip 已有自己的「设置已冻结」提示；续接主按钮自行处理
+    if (ev.target?.closest?.('#pillModel, #pillPerm, #pillEffort, #btnSettings, #btnSend')) return;
     showMirrorComposerHint();
   }, { capture: true });
   function onMirrorState(ev) {
@@ -4609,15 +4625,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       eventInstanceId: ev.instanceId ?? null,
       viewingInstanceId,
     })) return;
-    if (armedTakeoverSid) { // 排队接管中：交给 armedTakeoverStep 判是否该自动放行（本轮完结/转疑似中断）
+    if (armedTakeoverSid) { // 排队续接中：交给 armedTakeoverStep 判是否该自动放行（本轮完结/转疑似中断）
       const step = armedTakeoverStep({ armed: true, armedSid: armedTakeoverSid }, { kind: 'mirror', readonly, stale, sessionId: ev.sessionId });
       if (step.action !== 'none') {
         armedTakeoverSid = null;
         mirrorOverriddenSid = ev.sessionId;
         applyMirror(false, ev.sessionId);
         addBar(step.action === 'unlock-focus'
-          ? '已接管 CLI 会话：终端本轮已完结，安全切换'
-          : '已接管 CLI 会话：终端疑似中断，自动完成接管——若终端仍在跑同一会话，并发发送有分叉风险',
+          ? '已续接 CLI 会话：终端本轮已完结，安全切换'
+          : '已续接 CLI 会话：终端疑似中断，自动完成续接——若终端仍在跑同一会话，并发发送有分叉风险',
           step.action === 'unlock-focus' ? 'text-ink-faint' : 'text-warning');
         inputEl?.focus();
         return;
@@ -4625,30 +4641,31 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli);
   }
-  // 「接管 CLI 会话」：驾驶中(⏱)点击=排队接管——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行，
-  // 见 onMirrorState），无需确认弹窗；再次点击（此时按钮已变「取消接管」）可撤销排队、回退驾驶中态。
-  // 疑似中断(⚠️)点击=维持原地即时确认（弹窗说清「不停终端进程 + 分叉后果 + 建议先 Ctrl+C」）后立即解锁——
-  // 终端大概率已死，等待无意义。接管后（任一路径）首次发送经 server 陈旧上下文守卫置换实例，吸收终端轮次。
-  btnMirrorOverride?.addEventListener('click', () => {
+  // 「续接 CLI 会话」（发送钮位 mode=resume / cancel-resume）：
+  // 运行中点击=排队续接——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行）；
+  // 再次点击（按钮已变「取消续接」）可撤销排队。疑似中断点击=确认后立即解锁。
+  // 续接后首次发送经 server 陈旧上下文守卫置换实例，吸收终端轮次。
+  function requestMirrorResume() {
     if (!mirrorReadonlySid) return;
-    if (armedTakeoverSid === mirrorReadonlySid) { // 取消排队中的接管，回退驾驶中态
+    if (armedTakeoverSid === mirrorReadonlySid) { // 取消排队中的续接，回退只读态
       armedTakeoverSid = null;
-      applyMirror(true, mirrorReadonlySid, false); // 仍处于 armed 时必未 stale（stale 经 unlock-stale 已自动放行）
+      applyMirror(true, mirrorReadonlySid, false);
       return;
     }
-    if (!mirrorStaleFlag) { // 驾驶中：排队等待，零风险故无需确认弹窗
+    if (!mirrorStaleFlag) { // 运行中：排队等待，零风险故无需确认弹窗
       armedTakeoverSid = mirrorReadonlySid;
       applyMirror(true, mirrorReadonlySid, false);
-      addBar('已请求接管 CLI 会话：终端当前操作完成后自动切换，可点「取消接管」撤销', 'text-ink-faint');
+      addBar('已请求续接 CLI 会话：终端当前操作完成后自动切换，可点「取消续接」撤销', 'text-ink-faint');
       return;
     }
-    if (!confirm('接管 CLI 会话？\n\n这是电脑终端正在跑的同一条对话。接管不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再接管。')) return;
+    if (!confirm('续接 CLI 会话？\n\n这是电脑终端正在跑的同一条对话。续接不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再续接。')) return;
     mirrorOverriddenSid = mirrorReadonlySid;
     applyMirror(false, mirrorReadonlySid);
-    addBar('已接管 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险', 'text-warning');
+    addBar('已续接 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险', 'text-warning');
     inputEl?.focus();
-  });
-  // 「刷新消息」：强制触发一次 server 追平 tick（正常 2.5s 自动跑，这里给"我要确定是最新的"一个确定性入口）
+  }
+  // 兼容：旧隐藏按钮若仍被外部点到，转发到同一路径
+  btnMirrorOverride?.addEventListener('click', () => { requestMirrorResume(); });
   btnMirrorSync?.addEventListener('click', () => {
     haptic('tap');
     socket.emit('mirror:syncNow');

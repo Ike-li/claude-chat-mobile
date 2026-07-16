@@ -91,6 +91,34 @@ test('resolveComposerPrimaryMode: 输入禁用 → 禁用', () => {
   assert.match(out.title, /授权|只读/);
 });
 
+// CLI 镜像只读：发送钮位换成「续接 CLI 会话」主操作（横幅不再放接管按钮）。
+// mirrorReadonly 优先于 busy / blockedByDisabledInput（镜像时 input 仍会 disabled）。
+test('resolveComposerPrimaryMode: mirrorReadonly → 续接启用', () => {
+  const out = resolveComposerPrimaryMode({
+    mirrorReadonly: true,
+    busy: true,
+    blockedByDisabledInput: true,
+    hasContent: true,
+  });
+  assert.equal(out.mode, 'resume');
+  assert.equal(out.enabled, true);
+  assert.equal(out.label, '续接 CLI 会话');
+  assert.equal(out.ariaLabel, '续接 CLI 会话');
+  assert.match(out.title, /续接|终端/);
+});
+
+test('resolveComposerPrimaryMode: mirrorReadonly + armed → 取消续接', () => {
+  const out = resolveComposerPrimaryMode({
+    mirrorReadonly: true,
+    mirrorArmed: true,
+    blockedByDisabledInput: true,
+  });
+  assert.equal(out.mode, 'cancel-resume');
+  assert.equal(out.enabled, true);
+  assert.equal(out.label, '取消续接');
+  assert.equal(out.ariaLabel, '取消续接');
+});
+
 test('resolveComposerPrimaryMode: sendInFlight 挡双击发送', () => {
   const out = resolveComposerPrimaryMode({
     hasContent: true,

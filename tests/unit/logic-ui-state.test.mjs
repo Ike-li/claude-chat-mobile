@@ -636,40 +636,41 @@ test.describe('isToolSummaryTruncated（工具卡展开全文门）', () => {
 
 test.describe('formatMirrorBannerText（只读锁横幅三态）', () => {
   test('armed / stale 优先', () => {
-    assert.match(formatMirrorBannerText({ armed: true }), /已请求接管/);
+    assert.match(formatMirrorBannerText({ armed: true }), /已请求续接|等待终端/);
     assert.match(formatMirrorBannerText({ stale: true }), /疑似中断/);
   });
-  test('driving 默认句：无秒数倒计时', () => {
+  test('driving 默认句：状态短句，无秒数倒计时、无点接管指令', () => {
     const t = formatMirrorBannerText({});
-    assert.match(t, /终端驾驶中/);
+    assert.match(t, /终端运行中/);
     assert.match(t, /只读追平/);
-    assert.match(t, /接管|自动可写/);
+    assert.doesNotMatch(t, /接管|静默后|点/);
     assert.equal(/\d+\s*s/.test(t), false, '不应展示约 Ns 假精密倒计时');
   });
 });
 
 // 驾驶中点输入区时的可操作说明（disabled 吞点击 → 需主动 addBar；与横幅短句互补）
+// 主操作已迁到发送钮位「续接 CLI 会话」，说明文案指向该按钮。
 test.describe('formatMirrorComposerHint（点输入区说明三态）', () => {
   test('armed：等待自动切换 + 可取消', () => {
     const t = formatMirrorComposerHint({ armed: true });
-    assert.match(t, /已请求接管|等待|自动可写/);
-    assert.match(t, /取消接管/);
+    assert.match(t, /已请求续接|等待|自动可写/);
+    assert.match(t, /取消续接/);
   });
-  test('stale：确认终端已停后接管', () => {
+  test('stale：确认终端已停后续接', () => {
     const t = formatMirrorComposerHint({ stale: true });
     assert.match(t, /疑似中断/);
-    assert.match(t, /接管 CLI 会话/);
+    assert.match(t, /续接 CLI 会话/);
   });
   test('driving：能/不能/硬要怎么做；无假精密倒计时', () => {
     const t = formatMirrorComposerHint({});
-    assert.match(t, /终端驾驶中|只读追平/);
+    assert.match(t, /终端运行中|只读追平/);
     assert.match(t, /不能/);
     assert.match(t, /能/);
-    assert.match(t, /接管 CLI 会话/);
+    assert.match(t, /续接 CLI 会话/);
     assert.equal(/\d+\s*s/.test(t), false);
   });
   test('armed 优先于 stale', () => {
-    assert.match(formatMirrorComposerHint({ armed: true, stale: true }), /已请求接管|取消接管/);
+    assert.match(formatMirrorComposerHint({ armed: true, stale: true }), /已请求续接|取消续接/);
   });
 });
 

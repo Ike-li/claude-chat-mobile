@@ -325,18 +325,17 @@
         </div>
       </div>
 
-      <!-- 只读追平横幅：该会话正在终端运行时常驻显示 + 禁用输入，硬防并发写盘分叉；「接管 CLI 会话」发起接管。
-           四态文案（mirrorBannerText 由 applyMirror 按 armed/stale 刷新）：驾驶中(⏱) / 已排队接管等待中(⏳，
-           零并发写盘风险) / 疑似中断(⚠️，即时确认接管) / 隐藏(已解锁)。驾驶中点接管只排队等终端本轮完结再放行
-           （见 logic.js armedTakeoverStep）；疑似中断维持原地即时确认（终端大概率已死，等待无意义）。 -->
+      <!-- 只读追平横幅：终端运行时状态提示（无操作按钮）。主操作在输入区发送钮位「续接 CLI 会话」
+           （mode=resume / cancel-resume，见 resolveComposerPrimaryMode）。三态文案：运行中 / 已请求续接 / 疑似中断。 -->
       <div id="mirrorBanner" class="hidden px-3 py-2 bg-surface border border-danger/40 rounded-xl text-xs text-danger mb-1 shrink-0">
         <div class="flex items-center gap-2">
           <span id="mirrorBannerIcon" class="shrink-0">⏱</span>
-          <span id="mirrorBannerText" class="font-medium flex-1 min-w-0">此会话正在终端运行，这里只读追平</span>
-          <button id="btnMirrorSync" class="shrink-0 px-2 py-1 rounded-lg border border-line text-ink-soft font-semibold hover:bg-sunk active:scale-95 transition-all" title="把终端已写完的新消息刷新到这里（不接管输入）">刷新消息</button>
-          <button id="btnMirrorOverride" class="shrink-0 px-2 py-1 rounded-lg border border-danger text-danger font-semibold hover:bg-danger hover:text-surface active:scale-95 transition-all">接管 CLI 会话</button>
+          <span id="mirrorBannerText" class="font-medium flex-1 min-w-0">终端运行中 · 只读追平</span>
         </div>
       </div>
+      <!-- 兼容：旧脚本/测试可能仍查这两个 id；主操作已迁到 #btnSend。隐藏保留节点，避免 null 接线。 -->
+      <button id="btnMirrorSync" type="button" class="hidden" tabindex="-1" aria-hidden="true">刷新消息</button>
+      <button id="btnMirrorOverride" type="button" class="hidden" tabindex="-1" aria-hidden="true">续接 CLI 会话</button>
 
       <!-- Unified Premium Input Pill Container
            busy 态：发送钮双态（空输入→停止 / 有内容→排队发送）；live 状态迁到消息流 #streamLiveStatus，不再占 pill 顶行。-->

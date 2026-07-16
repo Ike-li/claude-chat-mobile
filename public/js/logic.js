@@ -126,8 +126,9 @@ export function shouldShowBusyWithMirror({ mirrorReadonly = false, busy = false 
   return Boolean(busy);
 }
 
-// 输入区主按钮双态：busy 且无内容 → 停止；有内容时优先发送/排队（FE-004，不因 busy 禁发）。
+// 输入区主按钮：CLI 镜像只读 → 续接/取消续接；否则 busy 且无内容 → 停止；有内容时优先发送/排队（FE-004）。
 // 审批/提问 sheet、输入禁用、queueFull、sendInFlight 仍按原闸挡发送；sheet 打开时不 morph 停止（中止走 sheet 逃生口）。
+// mirrorReadonly 优先于 blockedByDisabledInput：镜像时 input 仍 disabled，但主按钮要可点「续接」。
 export function resolveComposerPrimaryMode({
   busy = false,
   hasContent = false,
@@ -136,7 +137,27 @@ export function resolveComposerPrimaryMode({
   blockedByUserRequest = false,
   blockedByDisabledInput = false,
   blockedBySendInFlight = false,
+  mirrorReadonly = false,
+  mirrorArmed = false,
 } = {}) {
+  if (mirrorReadonly) {
+    if (mirrorArmed) {
+      return {
+        mode: 'cancel-resume',
+        enabled: true,
+        label: '取消续接',
+        title: '取消排队中的续接，继续只读追平',
+        ariaLabel: '取消续接',
+      };
+    }
+    return {
+      mode: 'resume',
+      enabled: true,
+      label: '续接 CLI 会话',
+      title: '终端运行中时在此续接；运行中会排队等本轮结束，疑似中断需确认',
+      ariaLabel: '续接 CLI 会话',
+    };
+  }
   if (blockedByUserRequest) {
     return {
       mode: 'send',
@@ -1059,19 +1080,19 @@ export function isToolSummaryTruncated(summary, { truncated } = {}) {
 }
 
 // 只读镜像锁横幅文案（三态：armed / stale / driving）。
-// 自动解锁仍由服务端 12.5s 静默逻辑负责；横幅不写「约 Ns」假精密倒计时（写入会重置、到点本地也不解锁）。
+// 主操作在发送钮位「续接 CLI 会话」；横幅只报状态。自动解锁仍由服务端 ~12.5s 静默负责，不写假精密倒计时。
 export function formatMirrorBannerText({ armed = false, stale = false } = {}) {
-  if (armed) return '已请求接管，等待终端当前操作完成后自动切换……';
-  if (stale) return '终端疑似中断于执行中（超 5 分钟无活动）——确认终端已停可接管';
-  return '终端驾驶中 · 只读追平——静默后自动可写，或点接管';
+  if (armed) return '已请求续接，等待终端当前操作完成…';
+  if (stale) return '终端疑似中断（超 5 分钟无活动）——确认已停可续接';
+  return '终端运行中 · 只读追平';
 }
 
-// 驾驶中点输入区/附件/禁用发送钮时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
-// 单行 · 分隔：addBar 用 textContent，无 pre-wrap，换行会塌成空格。
+// 驾驶中点输入区/附件时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
+// 主操作指向发送钮位「续接 CLI 会话」。单行 · 分隔：addBar 用 textContent，无 pre-wrap。
 export function formatMirrorComposerHint({ armed = false, stale = false } = {}) {
-  if (armed) return '已请求接管：等终端当前操作完成后自动可写。可点「取消接管」撤销。';
-  if (stale) return '终端疑似中断。确认终端已停后点「接管 CLI 会话」即可在手机继续。';
-  return '终端驾驶中，这里只读追平 · 不能：打字/发图/改模型权限思考 · 能：看消息、「刷新消息」、等终端静默后自动可写 · 硬要手机继续：点上方「接管 CLI 会话」（等本轮结束再放行；疑似中断可立即接管，有分叉风险）';
+  if (armed) return '已请求续接：等终端当前操作完成后自动可写。可点「取消续接」撤销。';
+  if (stale) return '终端疑似中断。确认终端已停后点「续接 CLI 会话」即可在手机继续。';
+  return '终端运行中，这里只读追平 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接 CLI 会话」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）';
 }
 
 // 同文案节流：避免用户连点输入框刷一串相同 bar；换文案（armed/stale 切换）立即放行。
