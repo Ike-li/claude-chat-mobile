@@ -144,6 +144,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   let _busyState = false;
   let interruptPending = false;
   let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
+  // FE-004：只挡"这条消息还没被服务端 ack"的窗口（挡瞬时双击/触屏合成双 click），不挡"忙碌中主动发
+  // 第二条"——后者本就由服务端 pendingTurns>=2/_queueFull 承接（服务端设计允许"1 运行 + 1 排队"，见
+  // app.js:649）。早先版本借用整段 turn 期间的 _busyState 做这道闸，会把服务端本该放行的第二条一起堵
+  // 死；改成用真实 ack 回执判定，不猜时长——ack 都是收到即回、不等整轮 turn，正常网络下近乎瞬时清零。
+  // SEND_ACK_FALLBACK_MS 只是兜底：ack 真丢了也不永久卡死发送按钮。
+  const SEND_ACK_FALLBACK_MS = 5000;
+  let _sendInFlight = false;
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
   // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读；
   // armedTakeoverSid=已排队接管、等终端本轮完结/疑似中断再自动放行（见 logic.js armedTakeoverStep）；
@@ -2046,10 +2053,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addBar('请先完成设备授权或解除只读状态，再发送新消息', 'text-info');
       return;
     }
-    // FE-004：在途 turn 本地 busy 时禁连发——_queueFull 只在 pendingTurns>=2 才由 instances 广播，
-    // 双击 Send 在首条 ack 前会发出两条不同 clientMessageId。离线入队不走 busy 闸（无在途 SDK turn）。
-    if (socket.connected && _busyState) {
-      addBar('当前任务还在进行，请等结束后再发（或点停止）', 'text-info');
+    // FE-004：上一条还没收到 ack 前挡新的一次触发——_queueFull 只在 pendingTurns>=2 才由 instances
+    // 广播，双击 Send 在首条 ack 前会发出两条不同 clientMessageId。离线入队不走此闸（无在途 SDK
+    // turn，本地乐观消息允许多条）。不用 _busyState：那是整段 turn 期间的状态，会连带挡住服务端本
+    // 就允许的"忙碌中排第二条"。
+    if (socket.connected && _sendInFlight) {
       return;
     }
     if (activePerm || activeQuestion) {
@@ -2185,7 +2193,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 台阶3：instanceId 路由到当前查看 tab；cwd 供无 tab（首发/session:new 后）时服务端懒开实例
     const attCount = Array.isArray(outgoingAttachments) ? outgoingAttachments.length : 0;
     logClientEvent('send', `[WEB_SEND] 发送消息: "${text.slice(0, 100)}${text.length > 100 ? '...' : ''}" (${text.length} 字符), model=${model || '未指定(沿用)'}, 附件数=${attCount}, instanceId=${viewingInstanceId || 'new'}`);
-    socket.emit('user:message', { text, model, attachments: outgoingAttachments, instanceId: viewingInstanceId, cwd: currentCwd, clientMessageId });
+    // FE-004：发出即置位，ack 一回来（或到点兜底）就解锁——用真实回执判定"这条是否已被服务端收到"，
+    // 不猜时长；服务端/mock 的 ack 都是收到就回，不等整轮 turn 跑完，正常网络下几乎瞬时清零。
+    _sendInFlight = true;
+    const clearSendInFlight = () => {
+      if (!_sendInFlight) return;
+      _sendInFlight = false;
+      clearTimeout(sendInFlightTimer);
+      updateSendButtonState();
+    };
+    const sendInFlightTimer = setTimeout(clearSendInFlight, SEND_ACK_FALLBACK_MS); // 兜底：ack 真丢了也不永久卡死
+    socket.emit('user:message', { text, model, attachments: outgoingAttachments, instanceId: viewingInstanceId, cwd: currentCwd, clientMessageId }, clearSendInFlight);
+    updateSendButtonState(); // 立即反映在途态，不等下一次外部驱动的刷新
     // F3：不再本地 append 气泡，由 user_message 事件渲染（同时入缓冲，重载可回放）
     inputEl.value = '';
     // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
@@ -2270,20 +2289,23 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const hasText = inputEl.value.trim().length > 0 || attachments.items().length > 0;
     const blockedByUserRequest = !!activePerm || !!activeQuestion;
     const blockedByDisabledInput = inputEl.disabled;
-    // FE-004：在线在途 busy 也禁发送（与 send() 闸一致）；离线仍允许入 offlineQueue。
-    const blockedByBusy = socket.connected && _busyState;
-    if (hasText && !_queueFull && !blockedByUserRequest && !blockedByDisabledInput && !blockedByBusy) {
+    // FE-004：上一条尚未 ack 的窗口（与 send() 闸一致），只挡双击/合成双 click；离线仍允许入 offlineQueue。
+    // 不用 _busyState——那段横跨整个 turn，会连带挡住服务端本就允许的"忙碌中排第二条"（_queueFull 负责）。
+    const blockedBySendInFlight = socket.connected && _sendInFlight;
+    if (hasText && !_queueFull && !blockedByUserRequest && !blockedByDisabledInput && !blockedBySendInFlight) {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-ink text-surface hover:bg-ink-soft active:scale-95 shadow-sm transition-all duration-200 shrink-0";
       btnSend.disabled = false;
       btnSend.title = '';
     } else {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-40 cursor-not-allowed transition-all duration-200 shrink-0";
       btnSend.disabled = true;
+      // _queueFull 排在防抖之前：防抖窗口很短且随时可能与 queueFull 同时为真，队列已满是更持久、更该
+      // 让用户看到的状态（P0-02c）。
       btnSend.title = blockedByUserRequest
         ? '请先处理当前审批或选择'
         : (blockedByDisabledInput ? '请先完成设备授权或解除只读状态'
-          : (blockedByBusy ? '当前任务还在进行，请等结束后再发（或点停止）'
-            : (_queueFull ? '前面已有消息在排队，请等当前任务结束' : '')));
+          : (_queueFull ? '前面已有消息在排队，请等当前任务结束'
+            : (blockedBySendInFlight ? '请稍候…' : '')));
     }
   }
 

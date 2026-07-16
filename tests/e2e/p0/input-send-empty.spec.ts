@@ -193,4 +193,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-02k 防抖窗口内连续两次触发发送只产生一条消息（FE-004）', async ({ page }) => {
+    await gotoMock(page);
+
+    // 发送按钮点击后会同步转入 disabled，原生 disabled 按钮不派发 click 事件、Playwright 的
+    // .click() 也会等按钮重新可用才点——都无法真实复现"两次触发落在同一竞态窗口内"。
+    // 直接同步调用两次 onclick（中间回填文本，模拟"没反应就手快再点一次"）才是这场竞态的真实形态。
+    await page.evaluate(() => {
+      const input = document.getElementById('input') as HTMLTextAreaElement;
+      const btn = document.getElementById('btnSend') as HTMLButtonElement & { onclick: (() => void) | null };
+      input.value = 'test:settings-echo';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      btn.onclick?.();
+      input.value = 'test:settings-echo';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      btn.onclick?.();
+    });
+
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
+
+    // 防抖窗口过后应正常恢复：能再发一条新消息（不是被永久卡死）。
+    await page.locator('#input').fill('test:settings-echo');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await page.locator('#btnSend').click();
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="user-message"]')).toHaveCount(2);
+
+    await expectNoBrowserErrors(page);
+  });
 });
