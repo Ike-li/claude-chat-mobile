@@ -17,7 +17,7 @@ const HERE = import.meta.dirname;
 const ICONS = join(HERE, '..', 'public', 'icons');
 const SRC = join(ICONS, 'icon.svg');
 
-const BG = '#AE5238';
+const BG = '#FFF7ED';
 
 /** 从 any 构图抽出「主图形」层（去掉外层圆角底），供 maskable 缩放。 */
 function extractMark(svg) {
