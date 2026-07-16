@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -1794,16 +1794,29 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     permCwd.textContent = `工作目录：${activePerm.cwd}`;
     // 每张新卡片先重置警示条（上一张若显示过不应带到这张）；verifyPermIntegrity 若判定不符会异步重新显示。
     if (permIntegrityWarn) permIntegrityWarn.classList.add('hidden');
+    // UX-001：ExitPlanMode 计划用 renderMarkdown（DOMPurify）；普通命令去 JSON 引号、mono 纯文本。
     // M1：超 4000 字显示展开按钮，而非截断（防恶意内容藏尾部）
     permExpandBtn?.remove(); permExpandBtn = null;
-    const full = JSON.stringify(activePerm.input, null, 2);
+    const display = formatPermInputDisplay(activePerm.name, activePerm.input);
+    const full = display.text || '';
+    const applyPermInput = (text) => {
+      if (display.mode === 'markdown') {
+        permInput.classList.remove('font-mono', 'whitespace-pre-wrap');
+        permInput.classList.add('msg-body', 'perm-input-md');
+        permInput.innerHTML = render(text);
+      } else {
+        permInput.classList.remove('msg-body', 'perm-input-md');
+        permInput.classList.add('font-mono', 'whitespace-pre-wrap');
+        permInput.textContent = text;
+      }
+    };
     if (full.length > 4000) {
-      permInput.textContent = full.slice(0, 4000);
+      applyPermInput(full.slice(0, 4000));
       permExpandBtn = el(`<button class="text-xs text-accent mt-1 block">…显示全部（${full.length} 字符）</button>`);
-      permExpandBtn.onclick = () => { permInput.textContent = full; permExpandBtn.remove(); permExpandBtn = null; };
+      permExpandBtn.onclick = () => { applyPermInput(full); permExpandBtn.remove(); permExpandBtn = null; };
       permInput.after(permExpandBtn);
     } else {
-      permInput.textContent = full;
+      applyPermInput(full);
     }
     permAlways.checked = false;
     // ExitPlanMode：展示退出后权限档选择（对齐 CLI plan-exit）；其它工具隐藏

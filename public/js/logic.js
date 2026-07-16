@@ -24,6 +24,23 @@ export function formatToolSummary(summary) {
   }
 }
 
+// UX-001：审批 sheet 内容可读化（数据→数据）。
+// ExitPlanMode 计划书走 markdown 源文（调用方 renderMarkdown + DOMPurify）；
+// 普通命令去掉 JSON.stringify 对字符串包的引号/\n 转义，保留纯文本供 mono 展示。
+// 对象 input：ExitPlanMode 优先取 .plan 字段；其余 pretty JSON。
+export function formatPermInputDisplay(toolName, input) {
+  const isExit = String(toolName || '') === 'ExitPlanMode';
+  let text;
+  if (input == null) text = '';
+  else if (typeof input === 'string') text = input;
+  else if (typeof input === 'object') {
+    text = (isExit && typeof input.plan === 'string')
+      ? input.plan
+      : JSON.stringify(input, null, 2);
+  } else text = String(input);
+  return { mode: isExit ? 'markdown' : 'text', text };
+}
+
 // 从 paste 事件的 clipboardData 里挑出 image/* 文件（桌面 Chrome 截图/复制图 → Ctrl/Cmd+V）。
 // 返回 File 数组；纯文本/无图返回 []——调用方应保留默认粘贴文字行为。
 // 只做数据筛选，不读盘/不转 base64（那是 app.js 附件托盘的既有路径）。

@@ -13,7 +13,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
     await expect(page.locator('#permModal')).toBeVisible();
     await expect(page.locator('#permTool')).toHaveText('ExitPlanMode');
+    // UX-001：计划走 markdown 渲染，不再是 JSON 引号 + 字面 \\n
     await expect(page.locator('#permInput')).toContainText('实现 X');
+    await expect(page.locator('#permInput')).toContainText('测试 Y');
+    await expect(page.locator('#permInput')).not.toContainText('\\n');
+    await expect(page.locator('#permInput li')).toHaveCount(2);
     await expect(page.locator('#activeStatusText')).toContainText('ExitPlanMode');
 
     // 2. 批准后权限档回落默认审批，状态不残留 ExitPlanMode。

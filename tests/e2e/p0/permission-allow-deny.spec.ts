@@ -14,7 +14,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permModal')).toBeVisible();
     await expect(page.locator('#permTool')).toHaveText('run_command');
     await expect(page.locator('#permCwd')).toContainText('/Users/you/code/claude-chat-mobile');
-    await expect(page.locator('#permInput')).toContainText('"git push origin main"');
+    // UX-001：普通命令去掉 JSON 引号转义，mono 纯文本
+    await expect(page.locator('#permInput')).toHaveText('git push origin main');
     await expect(page.locator('#permAlways')).toBeVisible();
 
     // 2. 点击允许，工具卡片成功。

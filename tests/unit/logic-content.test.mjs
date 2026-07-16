@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../../public/js/logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../../public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -39,6 +39,38 @@ test('formatToolSummary: 空/非字符串安全', () => {
   assert.equal(formatToolSummary(null), '');
   assert.equal(formatToolSummary(undefined), '');
   assert.equal(formatToolSummary(42), '42');
+});
+
+// UX-001：审批 sheet 展示——ExitPlanMode 走 markdown 源文；普通命令去掉 JSON 引号转义、保留纯文本。
+// 只做数据→数据（mode + text），DOM/DOMPurify 由 app.js 接线。
+test('formatPermInputDisplay: ExitPlanMode 字符串计划 → markdown 模式，保留换行', () => {
+  const plan = '## 计划\n1. 实现 X\n2. 测试 Y';
+  assert.deepEqual(formatPermInputDisplay('ExitPlanMode', plan), { mode: 'markdown', text: plan });
+});
+
+test('formatPermInputDisplay: ExitPlanMode 对象取 plan 字段', () => {
+  const plan = '## 计划\n1. 实现 X';
+  assert.deepEqual(formatPermInputDisplay('ExitPlanMode', { plan }), { mode: 'markdown', text: plan });
+});
+
+test('formatPermInputDisplay: 普通命令字符串不包 JSON 引号', () => {
+  assert.deepEqual(
+    formatPermInputDisplay('run_command', 'git push origin main'),
+    { mode: 'text', text: 'git push origin main' },
+  );
+});
+
+test('formatPermInputDisplay: 普通工具对象 → pretty JSON 文本', () => {
+  assert.deepEqual(
+    formatPermInputDisplay('Write', { file_path: '/a.js', content: 'x' }),
+    { mode: 'text', text: '{\n  "file_path": "/a.js",\n  "content": "x"\n}' },
+  );
+});
+
+test('formatPermInputDisplay: 空/缺省安全', () => {
+  assert.deepEqual(formatPermInputDisplay('run_command', null), { mode: 'text', text: '' });
+  assert.deepEqual(formatPermInputDisplay('ExitPlanMode', null), { mode: 'markdown', text: '' });
+  assert.deepEqual(formatPermInputDisplay(null, 'x'), { mode: 'text', text: 'x' });
 });
 
 // 剪贴板粘贴图片：桌面 Chrome 截图/复制图后 Ctrl/Cmd+V 应进附件托盘。
