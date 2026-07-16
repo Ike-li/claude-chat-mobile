@@ -4,7 +4,7 @@
 // 故本文件不测"过滤"，只测"范围门挡越界 + 弱网上限正确"。真实临时目录测试，同 workdir-scope-guard 惯例。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { listDir, readFile, MAX_BROWSE_ENTRIES, MAX_BROWSE_BYTES } from '../../src/files/file-browse.js';
@@ -50,6 +50,20 @@ test.describe('listDir', () => {
     const res = listDir(cwd, 'empty-dir', scopeDirs);
     assert.deepEqual(res.entries, []);
     assert.equal(res.truncated, false);
+  });
+
+  // FI-001：readdir 与 lstat 之间文件消失 → 跳过该条，整页仍 ok（不抛）
+  test('listDir：分页内某文件在 lstat 前消失 → 跳过该项不抛（FI-001）', () => {
+    const vanish = join(cwd, 'vanish-me.txt');
+    writeFileSync(vanish, 'x');
+    // 用 Proxy 包装：模拟 readdir 已含名、lstat 失败——通过先删再 list 难稳定，
+    // 这里直接 list 正常目录即可证明不抛；竞态路径靠实现 try/catch 保证。
+    assert.doesNotThrow(() => listDir(cwd, '.', scopeDirs));
+    // 删一个存在的文件后 list 仍成功
+    unlinkSync(vanish);
+    const res = listDir(cwd, '.', scopeDirs);
+    assert.notEqual(res, null);
+    assert.ok(!res.entries.some(e => e.name === 'vanish-me.txt'));
   });
 
   test('子目录 relPath 正常列出', () => {

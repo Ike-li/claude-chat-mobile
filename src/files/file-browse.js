@@ -50,14 +50,23 @@ export function listDir(cwd, relPath, scopeDirs, opts = {}) {
   } catch {
     return null; // 不是目录 / 已被删除等：一律拒绝，不是有效的 list 目标
   }
+  // FILES-1：readdir 后再校一次 scope——dir→symlink 越界窗口内若已换，fail-closed 整页拒绝。
+  if (!isInScope(real, scopeDirs)) return null;
   const page = names.slice(offset, offset + maxEntries);
-  const entries = page.map(name => {
-    // lstat 不 follow：symlink 条目如实标注自身（kind:'symlink'），不解析成其指向的类型——
-    // 递归进入 symlink 走用户下一次 listDir 调用，届时 isInScope 会重新校验真实落点。
-    const st = lstatSync(join(real, name));
-    const kind = st.isSymbolicLink() ? 'symlink' : st.isDirectory() ? 'dir' : 'file';
-    return { name, kind, size: st.size, mtime: st.mtimeMs };
-  });
+  // FI-001：单条 lstat 失败（readdir↔lstat 竞态删除/不可读）跳过该名，不抛炸整页；
+  // 否则 createSocketEventRegistrar catch 只 emit error、browse:list 永不 ack。
+  const entries = [];
+  for (const name of page) {
+    try {
+      // lstat 不 follow：symlink 条目如实标注自身（kind:'symlink'），不解析成其指向的类型——
+      // 递归进入 symlink 走用户下一次 listDir 调用，届时 isInScope 会重新校验真实落点。
+      const st = lstatSync(join(real, name));
+      const kind = st.isSymbolicLink() ? 'symlink' : st.isDirectory() ? 'dir' : 'file';
+      entries.push({ name, kind, size: st.size, mtime: st.mtimeMs });
+    } catch {
+      /* skip vanished/unreadable entry */
+    }
+  }
   return { entries, truncated: offset + maxEntries < names.length, totalCount: names.length };
 }
 
