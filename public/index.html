@@ -325,20 +325,18 @@
         </div>
       </div>
 
-      <!-- 只读追平横幅：终端运行时状态提示（无操作按钮）。主操作在输入区发送钮位「续接 CLI 会话」
-           （mode=resume / cancel-resume，见 resolveComposerPrimaryMode）。三态文案：运行中 / 已请求续接 / 疑似中断。 -->
-      <div id="mirrorBanner" class="hidden px-3 py-2 bg-surface border border-danger/40 rounded-xl text-xs text-danger mb-1 shrink-0">
-        <div class="flex items-center gap-2">
-          <span id="mirrorBannerIcon" class="shrink-0">⏱</span>
-          <span id="mirrorBannerText" class="font-medium flex-1 min-w-0">终端运行中 · 只读追平</span>
-        </div>
+      <!-- 只读镜像：状态写进 #input placeholder（替换「给 Claude 发消息...」），主操作在发送钮「续接 CLI 会话」。
+           #mirrorBanner 及旧按钮 id 仅兼容保留，恒 hidden。 -->
+      <div id="mirrorBanner" class="hidden" aria-hidden="true">
+        <span id="mirrorBannerIcon"></span>
+        <span id="mirrorBannerText"></span>
       </div>
-      <!-- 兼容：旧脚本/测试可能仍查这两个 id；主操作已迁到 #btnSend。隐藏保留节点，避免 null 接线。 -->
       <button id="btnMirrorSync" type="button" class="hidden" tabindex="-1" aria-hidden="true">刷新消息</button>
       <button id="btnMirrorOverride" type="button" class="hidden" tabindex="-1" aria-hidden="true">续接 CLI 会话</button>
 
       <!-- Unified Premium Input Pill Container
-           busy 态：发送钮双态（空输入→停止 / 有内容→排队发送）；live 状态迁到消息流 #streamLiveStatus，不再占 pill 顶行。-->
+           busy 态：发送钮双态（空输入→停止 / 有内容→排队发送）；live 状态迁到消息流 #streamLiveStatus，不再占 pill 顶行。
+           CLI 镜像：placeholder 显示「终端运行中 · 只读追平」等，发送位变「续接 CLI 会话」。-->
       <div class="chat-input-pill flex flex-col gap-1 p-2 bg-surface shadow-md border border-line">
         <!-- Top Row: Full-width Textarea -->
         <div class="w-full flex items-start">
@@ -348,7 +346,7 @@
 
         <input type="file" id="fileInput" multiple class="hidden">
 
-        <!-- Bottom Row: Toolbar —— 模型/权限/思考 并入此行，省掉 statusPillsRow；驾驶态靠上方 mirrorBanner -->
+        <!-- Bottom Row: Toolbar —— 模型/权限/思考 并入此行；CLI 镜像态靠 placeholder + 发送位续接 -->
         <div class="flex items-center justify-between w-full pt-1.5 border-t border-line-soft/30 px-1">
           <!-- Left side: 设置 chip + 附件/推送/齿轮（横向可滑） -->
           <div class="flex items-center gap-1 min-w-0 flex-1 overflow-x-auto scrollbar-none">

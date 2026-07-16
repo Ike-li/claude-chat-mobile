@@ -56,7 +56,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const pillModel = $('pillModel'), pillModelText = $('pillModelText');
   const pillPerm = $('pillPerm'), pillPermText = $('pillPermText'), pillEffort = $('pillEffort'), pillEffortText = $('pillEffortText');
 
-  // UX-009 已废弃：不再注入「终端驾驶中」合并胶囊；驾驶态仅靠上方 #mirrorBanner 提示
+  // UX-009 已废弃：不再注入「终端驾驶中」合并胶囊；驾驶态靠 input placeholder + 发送位「续接」
   // （pillMirrorMerged 已从 DOM/CSS 移除）
 
   const topContextPill = $('topContextPill'), topTitleText = $('topTitleText'), topProjectText = $('topProjectText');
@@ -4489,19 +4489,25 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
   }
 
-  // 只读锁：会话被判「正在终端运行」时常驻横幅 + 禁用输入，硬防两进程并发写盘分叉。
-  // 三态文案：driving=⏱ 终端驾驶中；armed=⏳ 已排队接管；stale=⚠️ 疑似中断。
-  // 自动解锁仍在服务端（~12.5s 静默）；横幅不展示秒数倒计时。
-  function refreshMirrorBannerCopy() {
-    if (!mirrorReadonlySid || !mirrorBannerText || !mirrorBannerIcon) return;
+  // 只读锁：禁用输入 + 发送位「续接」；状态文案写进 input placeholder，不再占单独横幅行。
+  // 三态：driving / armed / stale（formatMirrorBannerText）。自动解锁仍在服务端 ~12.5s 静默。
+  const DEFAULT_INPUT_PLACEHOLDER = '给 Claude 发消息...';
+  function refreshMirrorComposerCopy() {
+    if (!inputEl) return;
+    if (!mirrorReadonlySid) {
+      inputEl.placeholder = DEFAULT_INPUT_PLACEHOLDER;
+      return;
+    }
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
-    mirrorBannerText.textContent = formatMirrorBannerText({ armed, stale: mirrorStaleFlag });
+    inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag });
+    // 兼容：隐藏节点若仍在 DOM，同步文案（不展示）
+    if (mirrorBannerText) mirrorBannerText.textContent = inputEl.placeholder;
+    if (mirrorBannerIcon) mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
   }
 
   // UX-010：横幅优先级仲裁 mirror > task > subagent > activity
+  // mirror 状态已迁到 placeholder + 续接钮，#mirrorBanner 恒隐；仍占仲裁优先级以压住 task/activity。
   function reconcileBanners() {
-    // UX-010：同屏最多一条横幅（mirror > task > activity）；子代理在工具卡内不占横幅层
     const taskOn = Boolean(taskProgressBanner && !taskProgressBanner.classList.contains('hidden'));
     const activityOn = Boolean(activityBanner && !activityBanner.classList.contains('hidden'));
     const pick = pickBannerToShow({
@@ -4510,15 +4516,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       subagent: false,
       activity: activityOn,
     });
-    if (mirrorBanner) mirrorBanner.classList.toggle('hidden', pick !== 'mirror');
+    if (mirrorBanner) mirrorBanner.classList.add('hidden');
     if (taskProgressBanner) {
-      // 数据层仍可保留；视觉上非选中则隐藏（task controller 再次 show 时会 unhide，再走 reconcile）
       if (pick !== 'task' && pick === 'mirror') taskProgressBanner.classList.add('hidden');
     }
     if (activityBanner) {
       if (pick !== 'activity') activityBanner.classList.add('hidden');
     }
-    // 镜像时忙碌条已由 shouldShowBusyWithMirror 闸
   }
 
   // UX-010：活动/后台任务横幅显示后走仲裁
@@ -4583,13 +4587,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     } else {
       rebuildEffortOptions(currentModel || cwdDefaultModel);
     }
-    mirrorBanner?.classList.toggle('hidden', !effective);
+    if (mirrorBanner) mirrorBanner.classList.add('hidden'); // 状态改走 placeholder，横幅恒隐
     document.body.classList.toggle('mirror-readonly', effective); // UX-009
     // UX-010：镜像时强制隐藏忙碌条
     if (effective) setBusy(false);
     reconcileBanners();
-    if (effective) refreshMirrorBannerCopy();
     if (inputEl) inputEl.disabled = effective;
+    refreshMirrorComposerCopy();
     // 附件入口随只读锁：禁点 + 防「选了图却发不出」
     if (btnAttach) {
       btnAttach.disabled = effective;
