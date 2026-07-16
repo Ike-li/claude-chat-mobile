@@ -204,6 +204,23 @@ details > summary::-webkit-details-marker { display: none; }
   box-shadow: 0 1px 2px rgba(0,0,0,0.02);
   white-space: nowrap;
 }
+/* 并入输入框底栏后的紧凑 chip（模型/权限/思考） */
+.status-pill-chip.toolbar-pill {
+  min-height: 28px;
+  height: 28px;
+  padding: 0 0.5rem;
+  font-size: 10.5px;
+  flex-shrink: 0;
+  box-shadow: none;
+}
+.status-pill-chip.toolbar-pill svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  opacity: 0.75;
+}
+#pillModelText {
+  max-width: 5.5rem;
+}
 /* UX-019：空态档位变更时胶囊短暂高亮（替代消息区系统条） */
 @keyframes status-pill-flash {
   0%, 100% { box-shadow: 0 1px 2px rgba(0,0,0,0.02); background-color: var(--surface-sunk); border-color: var(--line-soft); }
@@ -356,14 +373,12 @@ details > summary::-webkit-details-marker { display: none; }
     max-width: 640px !important;
   }
   #statusPillsRow {
-    gap: 0.4rem !important;
-    margin: 0 0 0.5rem 0 !important; /* Perfect symmetry */
-    padding: 0 0.25rem !important;
+    display: none !important; /* 已并入输入框底栏，保留选择器防旧缓存命中 */
   }
   .status-pill-chip {
-    min-height: 30px;
-    padding: 0.25rem 0.6rem;
-    font-size: 11px;
+    min-height: 28px;
+    padding: 0 0.5rem;
+    font-size: 10.5px;
     background: var(--surface-sunk);
     border: 1px solid var(--line-soft);
     box-shadow: none;
@@ -379,7 +394,7 @@ details > summary::-webkit-details-marker { display: none; }
     opacity: 0.7;
   }
   #pillModelText {
-    max-width: min(8rem, 42vw); /* 窄屏更保守，避免三 chip 互挤 */
+    max-width: min(5.5rem, 28vw); /* 底栏三 chip 并排，窄屏更保守 */
   }
   .chat-input-pill {
     min-height: auto !important;
@@ -648,18 +663,8 @@ details.thinking.thinking-live > summary::before {
   content: '思考中 · ';
 }
 
-/* UX-009：镜像合并胶囊 */
-#pillMirrorMerged {
-  display: none;
-}
-body.mirror-readonly #pillModel,
-body.mirror-readonly #pillPerm,
-body.mirror-readonly #pillEffort {
-  display: none !important;
-}
-body.mirror-readonly #pillMirrorMerged {
-  display: inline-flex !important;
-}
+/* 驾驶态：底栏模型/权限/思考 chip 保持可见（只读冻结由 JS 拦截）；
+   驾驶提示仅靠上方 #mirrorBanner，不再隐藏设置 chip、不再注入「终端驾驶中」合并胶囊。 */
 
 /* UI-007：状态 SVG 图标 */
 .status-icon {

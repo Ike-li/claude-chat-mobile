@@ -919,6 +919,33 @@ export function formatMirrorBannerText({ armed = false, stale = false } = {}) {
   return '终端驾驶中 · 只读追平——静默后自动可写，或点接管';
 }
 
+// 是否接纳一条 mirror_state（防跨会话/跨工作区误锁）。
+// 契约：
+//   · readonly=false → 一律接受解锁（含 sessionId/instanceId 为空的权威空闲快照）
+//   · readonly=true  → 仅当 event.instanceId 与当前 viewingInstanceId 严格相等才接受；
+//     缺 instanceId、viewing 为空首页、或指向别的 tab → 拒绝（否则 CLI 在 A 驾驶会把 B 的新会话锁死）
+// 不读 sessionId：server 广播以 instanceId 为查看锚点；sessionId 在 FRESH 懒开前可能为 null。
+export function acceptMirrorState({ readonly = false, eventInstanceId = null, viewingInstanceId = null } = {}) {
+  if (!readonly) return true;
+  if (eventInstanceId == null || eventInstanceId === '') return false;
+  if (viewingInstanceId == null || viewingInstanceId === '') return false;
+  return eventInstanceId === viewingInstanceId;
+}
+
+// 切视图/切工作区时是否应先本地复位只读锁（等 server 按新上下文重判）。
+// viewing 变了必清；空首页内换 cwd（viewing 恒 null）也要清——否则 A 空首页残留的锁会挂到 B 空首页。
+export function shouldResetMirrorOnViewChange({
+  prevViewing = null,
+  nextViewing = null,
+  prevCwd = null,
+  nextCwd = null,
+  cwdSeen = false,
+} = {}) {
+  if (prevViewing !== nextViewing) return true;
+  if (cwdSeen && nextCwd && prevCwd && nextCwd !== prevCwd) return true;
+  return false;
+}
+
 // 后台任务停止按钮态：有非空 taskId 且横幅可见才可点（对齐 SDK stopTask(taskId)）。
 export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   const id = typeof taskId === 'string' ? taskId.trim() : '';

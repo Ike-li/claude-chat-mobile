@@ -276,41 +276,12 @@
         <div id="cliStatus" class="px-3 py-2 text-xs leading-relaxed bg-surface text-ink-soft space-y-1"></div>
       </details>
 
-      <!-- 极简状态胶囊指示栏 (Pills Indicator) -->
-      <div id="statusPillsRow" class="flex items-center gap-1.5 overflow-x-auto select-none text-xs scrollbar-none mb-2 px-1">
-        <!-- Compact model chip -->
-        <div id="pillWorkspace" class="status-pill-chip hidden">
-          <svg class="w-3.5 h-3.5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.091-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.091L9 5.25l.813 2.846a4.5 4.5 0 003.091 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.091zM18.25 9.75L17.875 11l-.375-1.25a2.25 2.25 0 00-1.5-1.5L14.75 7.875 16 7.5a2.25 2.25 0 001.5-1.5l.375-1.25.375 1.25a2.25 2.25 0 001.5 1.5l1.25.375-1.25.375a2.25 2.25 0 00-1.5 1.5z" />
-          </svg>
-          <span id="pillWorkspaceText">模型默认</span>
-        </div>
-
-        <div id="pillModel" class="status-pill-chip" title="选择模型">
-          <svg class="w-3.5 h-3.5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z" />
-          </svg>
-          <span id="pillModelText">默认</span>
-        </div>
-
-        <div id="pillPerm" class="status-pill-chip">
-          <svg class="w-3.5 h-3.5 text-ink-soft" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-          </svg>
-          <span id="pillPermText">默认审批</span>
-        </div>
-
-        <div id="pillEffort" class="status-pill-chip hidden">
-          <svg class="w-3.5 h-3.5 text-ink-soft" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-          </svg>
-          <span id="pillEffortText">思考默认</span>
-        </div>
-
-      </div>
-
       <!-- 隐藏的原始选择框，保持底层兼容（100% 保持终端等价性与事件契约） -->
       <div class="hidden">
+        <!-- pillWorkspace 保留 DOM 供 JS 写工作区名，不进底栏（用户确认布局不含此项） -->
+        <div id="pillWorkspace" class="hidden">
+          <span id="pillWorkspaceText">模型默认</span>
+        </div>
         <select id="modelInput">
           <option value="">不指定（沿用当前）</option>
         </select>
@@ -387,10 +358,31 @@
 
         <input type="file" id="fileInput" multiple class="hidden">
 
-        <!-- Bottom Row: Toolbar -->
+        <!-- Bottom Row: Toolbar —— 模型/权限/思考 并入此行，省掉 statusPillsRow；驾驶态靠上方 mirrorBanner -->
         <div class="flex items-center justify-between w-full pt-1.5 border-t border-line-soft/30 px-1">
-          <!-- Left side: Utility actions -->
-          <div class="flex items-center gap-1.5">
+          <!-- Left side: 设置 chip + 附件/推送/齿轮（横向可滑） -->
+          <div class="flex items-center gap-1 min-w-0 flex-1 overflow-x-auto scrollbar-none">
+            <div id="pillModel" class="status-pill-chip toolbar-pill" title="选择模型">
+              <svg class="w-3.5 h-3.5 text-accent shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z" />
+              </svg>
+              <span id="pillModelText">默认</span>
+            </div>
+
+            <div id="pillPerm" class="status-pill-chip toolbar-pill" title="权限模式">
+              <svg class="w-3.5 h-3.5 text-ink-soft shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+              </svg>
+              <span id="pillPermText">默认审批</span>
+            </div>
+
+            <div id="pillEffort" class="status-pill-chip toolbar-pill hidden" title="思考强度">
+              <svg class="w-3.5 h-3.5 text-ink-soft shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+              </svg>
+              <span id="pillEffortText">思考默认</span>
+            </div>
+
             <!-- E17：附件按钮 -->
             <button id="btnAttach" class="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="添加附件">
               <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">

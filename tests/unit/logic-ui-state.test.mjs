@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, taskStopUiState } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, taskStopUiState, acceptMirrorState, shouldResetMirrorOnViewChange } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -669,6 +669,70 @@ test.describe('formatMirrorBannerText（只读锁横幅三态）', () => {
     assert.match(t, /只读追平/);
     assert.match(t, /接管|自动可写/);
     assert.equal(/\d+\s*s/.test(t), false, '不应展示约 Ns 假精密倒计时');
+  });
+});
+
+// 跨工作区/跨会话误锁守卫：CLI 在 A 驾驶时，切到 B 新会话不得接纳 A 的 readonly=true。
+test.describe('acceptMirrorState（mirror_state 归属）', () => {
+  test('readonly=false 一律接受（权威解锁，含空 idle 快照）', () => {
+    assert.equal(acceptMirrorState({ readonly: false, eventInstanceId: null, viewingInstanceId: null }), true);
+    assert.equal(acceptMirrorState({ readonly: false, eventInstanceId: 'inst_A', viewingInstanceId: 'inst_B' }), true);
+    assert.equal(acceptMirrorState({ readonly: false }), true);
+  });
+  test('readonly=true 且 instanceId 匹配当前 viewing → 接受', () => {
+    assert.equal(acceptMirrorState({
+      readonly: true, eventInstanceId: 'inst_A', viewingInstanceId: 'inst_A',
+    }), true);
+  });
+  test('readonly=true 但指向别的 tab → 拒绝（防跨会话误锁）', () => {
+    assert.equal(acceptMirrorState({
+      readonly: true, eventInstanceId: 'inst_A', viewingInstanceId: 'inst_B',
+    }), false);
+  });
+  test('readonly=true 但 viewing 为空首页/新会话 → 拒绝', () => {
+    assert.equal(acceptMirrorState({
+      readonly: true, eventInstanceId: 'inst_A', viewingInstanceId: null,
+    }), false);
+  });
+  test('readonly=true 但事件缺 instanceId → 拒绝（无主不上锁）', () => {
+    assert.equal(acceptMirrorState({
+      readonly: true, eventInstanceId: null, viewingInstanceId: 'inst_A',
+    }), false);
+    assert.equal(acceptMirrorState({
+      readonly: true, eventInstanceId: '', viewingInstanceId: 'inst_A',
+    }), false);
+  });
+});
+
+test.describe('shouldResetMirrorOnViewChange（切视图/工作区先本地清锁）', () => {
+  test('viewing 变了 → 清', () => {
+    assert.equal(shouldResetMirrorOnViewChange({
+      prevViewing: 'inst_A', nextViewing: 'inst_B',
+    }), true);
+    assert.equal(shouldResetMirrorOnViewChange({
+      prevViewing: 'inst_A', nextViewing: null,
+    }), true);
+  });
+  test('viewing 不变且 cwd 不变 → 不清', () => {
+    assert.equal(shouldResetMirrorOnViewChange({
+      prevViewing: 'inst_A', nextViewing: 'inst_A',
+      prevCwd: '/a', nextCwd: '/a', cwdSeen: true,
+    }), false);
+    assert.equal(shouldResetMirrorOnViewChange({
+      prevViewing: null, nextViewing: null,
+    }), false);
+  });
+  test('空首页内换工作区（viewing 恒 null、cwd 变）→ 清', () => {
+    assert.equal(shouldResetMirrorOnViewChange({
+      prevViewing: null, nextViewing: null,
+      prevCwd: '/a', nextCwd: '/b', cwdSeen: true,
+    }), true);
+  });
+  test('首帧（cwdSeen=false）不因 cwd 冒充切换而清', () => {
+    assert.equal(shouldResetMirrorOnViewChange({
+      prevViewing: null, nextViewing: null,
+      prevCwd: null, nextCwd: '/a', cwdSeen: false,
+    }), false);
   });
 });
 

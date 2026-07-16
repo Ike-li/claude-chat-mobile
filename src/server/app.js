@@ -213,6 +213,8 @@ const reselectViewingAfter = (removedCwd) => {
   const r = reselectViewingTarget([...agents.keys()], removedCwd, id => agents.get(id).cwd, viewingCwd);
   viewingInstanceId = r.viewingInstanceId;
   viewingCwd = r.viewingCwd;
+  // 被移除的实例若正被镜像锁，立即清全局锁；落到另一实例后由 catchUpTick 重判
+  clearMirrorOnViewChange();
 };
 // 白名单校验 + 缺省落 viewingCwd：cwd 维度的事件（setWorkdir/session:list/new）经此解析目标 cwd。
 const routeCwd = cwd => {
@@ -776,10 +778,14 @@ function mirrorRemainingMs({ readonly = mirrorReadonly, quietTicks = Number(mirr
   const need = mirrorReleaseTicksNeeded(readonly);
   return Math.max(0, (need - quietTicks) * interval);
 }
-function setMirror(readonly, sessionId, force = false, stale = false, observedCli = mirrorObservedCli) {
+function setMirror(readonly, sessionId, force = false, stale = false, observedCli = mirrorObservedCli, forInstanceId = viewingInstanceId) {
+  // forInstanceId = 调用方冻结的 viewing 快照（catchUpTick 入口 id）。切视图后旧 tick 不得改全局锁——
+  // 否则 A 的解锁会误解锁 B，A 的上锁会以「当下 viewing」重贴到 B（跨工作区误锁根因）。
+  // force 仅给 clearMirrorOnViewChange / 接管后显式解锁：允许在 viewing 已变时推权威态。
+  if (!force && forInstanceId !== viewingInstanceId) return;
   const nextObserved = normalizeMirrorObserved(observedCli, readonly);
   const nextSessionId = readonly ? (sessionId ?? null) : null;
-  const nextInstanceId = readonly ? viewingInstanceId : null;
+  const nextInstanceId = readonly ? forInstanceId : null;
   const quietTicks = Number(mirrorRelease?.quietTicks) || 0;
   // 用【目标】readonly 算 remaining，勿读旧 mirrorReadonly（上锁瞬间旧值仍是 false 会算成 0）
   const remainingMs = mirrorRemainingMs({ readonly, quietTicks });
@@ -794,12 +800,24 @@ function setMirror(readonly, sessionId, force = false, stale = false, observedCl
   mirrorSessionId = nextSessionId; mirrorInstanceId = nextInstanceId;
   mirrorLastEmittedRemainingMs = remainingMs;
   io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
-    seq: 0, epoch: 'server', sessionId: sessionId ?? null, instanceId: viewingInstanceId, cwd: viewingCwd,
+    seq: 0, epoch: 'server', sessionId: sessionId ?? null,
+    instanceId: readonly ? forInstanceId : viewingInstanceId,
+    cwd: viewingCwd,
     ts: Date.now(), type: 'mirror_state',
     payload: { readonly, stale, observedCli: nextObserved, quietTicks, remainingMs },
   });
   scheduleStatusRefresh(); // 驾驶方或 CLI 观察态变化时立即切换/刷新 statusline 来源
   rescheduleCatchUp(); // 锁态变 → 追平间隔在 1s/2.5s 间切换
+}
+// 切视图 / 切工作区 / 新会话 / 回空首页：立即复位全局 mirror 态并广播 readonly=false。
+// 否则 catchUpTick 要等下一轮（切换分支 classifyTail 或无会话分支）才清锁，空窗内全局
+// mirrorReadonly 仍挂着 A 会话——statusline/重连快照会把「终端驾驶中」套到 B（跨工作区误锁根因）。
+// force=true 保证即使已是 false 也推一条权威空闲快照（前端 setInstances 已本地清，但重连/迟到事件靠此兜底）。
+function clearMirrorOnViewChange() {
+  catchUpKey = null;
+  mirrorRelease = { readonly: false, quietTicks: 0 };
+  mirrorLastSize = -1;
+  setMirror(false, null, true, false);
 }
 let mirrorLastEmittedRemainingMs = -1;
 let catchUpKey = null;                              // `${cwd}\x00${sessionId}`：当前追平的会话
@@ -813,7 +831,7 @@ let mirrorLastSize = -1;                            // 上一 tick 的 transcrip
 async function catchUpTickOnce() {
   const id = viewingInstanceId;
   const a = id ? agents.get(id) : null;
-  if (!a || !a.sessionId) { catchUpKey = null; mirrorRelease = { readonly: false, quietTicks: 0 }; mirrorLastSize = -1; setMirror(false, null); return; } // 无查看会话：停、复位释放态
+  if (!a || !a.sessionId) { catchUpKey = null; mirrorRelease = { readonly: false, quietTicks: 0 }; mirrorLastSize = -1; setMirror(false, null, false, false, undefined, id); return; } // 无查看会话：停、复位释放态
   const key = `${a.cwd}\x00${a.sessionId}`;
   const st = instanceState(id);
   const localBusy = st === 'busy' || st === 'permission';
@@ -862,7 +880,7 @@ async function catchUpTickOnce() {
     mirrorRelease = { readonly: entryLock, quietTicks: 0 };
     setMirror(entryLock, a.sessionId, true,              // force 清上个会话残留的锁/发权威态
       mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now() }),
-      observedCli);
+      observedCli, id);
     return;
   }
   if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
@@ -872,7 +890,7 @@ async function catchUpTickOnce() {
       externalWrite: false, localBusy: true, releaseTicks: mirrorReleaseTicksNeeded(),
     });
     mirrorRelease = rel.state;
-    setMirror(rel.readonly, a.sessionId);
+    setMirror(rel.readonly, a.sessionId, false, false, undefined, id);
     return;
   }
   let messages, curSize, tail = { verdict: 'settled', lastChainTs: null };
@@ -919,7 +937,7 @@ async function catchUpTickOnce() {
   mirrorRelease = rel.state;
   setMirror(rel.readonly, a.sessionId, false,                       // 锁/stale/CLI 观察值任一变化都广播
     mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now() }),
-    observedCli);
+    observedCli, id);
 }
 let catchUpInFlight = null;
 function catchUpTick() {
@@ -1811,6 +1829,8 @@ registerSocketConnection(io, socket => {
     viewingInstanceId = id;
     const a = agents.get(id);
     viewingCwd = a.cwd;
+    // 切视图立即清全局 mirror（否则 catchUpTick 切换分支完成前，A 的锁仍挂着）
+    clearMirrorOnViewChange();
     interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 切换当前活动视图 (user:setViewing): instanceId=${id}, sessionId=${a.sessionId || '(pending)'}`);
     doneInstances.delete(id); errorInstances.delete(id); abortedInstances.delete(id);
     broadcastInstances();
@@ -1854,6 +1874,8 @@ registerSocketConnection(io, socket => {
     const wasViewing = viewingInstanceId != null;
     viewingInstanceId = null;
     sessions.setCurrent(viewingCwd, null); // 空首页 compose → FRESH（与 session:new 同；列表进入仍 resume）
+    // 回空首页立即清全局 mirror，防 A 工作区 CLI 驾驶锁挂到空首页/下一会话
+    clearMirrorOnViewChange();
     // 已在首页也广播一帧：空首页 defaults / models 与 viewingCwd 对齐；前端 viewing 未变时自行 showDashboard 刷列表。
     broadcastInstances();
     pushModelsForCwd(viewingCwd);
@@ -1879,6 +1901,8 @@ registerSocketConnection(io, socket => {
     viewingCwd = cwd;
     sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
     viewingInstanceId = null;       // 清查看 tab（**不再 dispose 任何实例**——背景 tab 继续跑），首条消息懒开
+    // 新会话空窗口立即清全局 mirror（跨工作区新建最易撞「A 驾驶锁挂到 B」）
+    clearMirrorOnViewChange();
     pendingModeByCwd.delete(cwd); pendingEffortByCwd.delete(cwd); // 重置 L0（防上次未发的残留被误消费）
     broadcastInstances(); // 先推一帧（可能仍是 L4 或旧 L3 缓存）；下方 force 刷新 L3 后再补广播
     pushModelsForCwd(cwd); // 有缓存即时推（快速路径），无缓存由下方 scout 补发
@@ -1910,6 +1934,8 @@ registerSocketConnection(io, socket => {
     viewingInstanceId = inst.instanceId;
     viewingCwd = cwd;
     sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（session:list 的 currentSessionId 等）
+    // 切会话立即清全局 mirror；catchUpTick 切换分支会按新会话尾部形态重判预锁
+    clearMirrorOnViewChange();
     doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);
     broadcastInstances();
     pushModelsForCwd(cwd); // 切区即时推本区清单（无缓存→空）；随后 resume 实例的真 models 兜底

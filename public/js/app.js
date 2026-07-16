@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, acceptMirrorState, shouldResetMirrorOnViewChange } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -56,16 +56,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const pillModel = $('pillModel'), pillModelText = $('pillModelText');
   const pillPerm = $('pillPerm'), pillPermText = $('pillPermText'), pillEffort = $('pillEffort'), pillEffortText = $('pillEffortText');
 
-  // UX-009：镜像态合并胶囊
-  if (pillModel?.parentElement && !document.getElementById('pillMirrorMerged')) {
-    const merged = document.createElement('div');
-    merged.id = 'pillMirrorMerged';
-    merged.className = 'status-pill-chip';
-    merged.title = '终端驾驶中：点击打开镜像说明';
-    merged.innerHTML = '<span>⏱</span><span>终端驾驶中</span>';
-    merged.onclick = () => { mirrorBanner?.classList.remove('hidden'); haptic('tap'); };
-    pillModel.parentElement.appendChild(merged);
-  }
+  // UX-009 已废弃：不再注入「终端驾驶中」合并胶囊；驾驶态仅靠上方 #mirrorBanner 提示
+  // （pillMirrorMerged 已从 DOM/CSS 移除）
 
   const topContextPill = $('topContextPill'), topTitleText = $('topTitleText'), topProjectText = $('topProjectText');
   const customModelGrid = $('customModelGrid'), customPermGrid = $('customPermGrid'), customEffortGrid = $('customEffortGrid'), customEffortGroup = $('customEffortGroup');
@@ -2786,11 +2778,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const cwdChanged = cwdSeen && newCwd && newCwd !== currentCwd;
     if (cwdSeen) notifyStateChanges(newStates, newCwd); // 首次只定基线不通知（刷新/重连不冒假通知）
     workdirStates = newStates;
+    // 切换查看实例 / 空首页内换工作区 → 先把只读态复位为可编辑，等 server 按新上下文重判并推权威 mirror_state。
+    // 消除切换瞬间旧会话只读横幅残留（server 判活现仅靠观察外部写入、切入不预锁，故复位是安全默认）。
+    // 空首页 viewing 恒 null 时仅靠 instanceId 差判会漏清 → shouldResetMirrorOnViewChange 补 cwd 轴。
+    // ⚠️ 必须在 currentCwd/viewingInstanceId 覆写之前读 prev（否则 prevCwd 已是 newCwd）。
+    // override / 排队接管随会话切换作废（armedTakeoverStep 的 switch→disarm 契约）。
+    if (shouldResetMirrorOnViewChange({
+      prevViewing: viewingInstanceId, nextViewing: newViewing,
+      prevCwd: currentCwd, nextCwd: newCwd, cwdSeen,
+    })) {
+      mirrorOverriddenSid = null;
+      armedTakeoverSid = null;
+      applyMirror(false, null);
+    }
     currentCwd = newCwd;
-    // 切换查看实例（切 tab / 切工作区 / 新会话）→ 先把只读态复位为可编辑，等 server 按新会话重判并推权威 mirror_state。
-    // 消除切换瞬间旧会话只读横幅残留（server 判活现仅靠观察外部写入、切入不预锁，故复位是安全默认）。override 随会话切换失效；
-    // 排队中的接管同理随会话切换作废（armedTakeoverStep 的 switch→disarm 契约，此处 armed 必真故直接置空，无需查返回值）。
-    if (newViewing !== viewingInstanceId) { mirrorOverriddenSid = null; armedTakeoverSid = null; applyMirror(false, null); }
     viewingInstanceId = newViewing;
     cwdSeen = true;
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
@@ -4474,6 +4475,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   function onMirrorState(ev) {
     // readonly=true 只对当前查看会话生效；readonly=false（sessionId 可能为 null）一律解锁。
+    // 归属守卫在 logic.acceptMirrorState：CLI 在 A 驾驶时切到 B 新会话/空首页，不得接纳 A 的 readonly=true
+    // （否则「终端驾驶中」胶囊会挂到无关工作区）。readonly=false 仍一律接受——权威空闲快照。
     // ⚠️ 已知边界（code-review 发现3，有意不修）：mirror_state 是 io.emit 广播 + 服务端 viewingInstanceId
     //   是单例全局（一次只跟踪一个会话的锁）。readonly=false 这里【无条件解锁】——两台设备同时看不同会话时，
     //   给会话 B 的解锁会误解锁正看着会话 A 的另一端。属"单活跃查看者"架构限制，仅多设备-不同会话场景触发；
@@ -4481,7 +4484,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     //   （承接 docs/design.md；2026-07-12 机主确认 Phase 8 不做此 per-socket 大改、保留现状，见 server.js setMirror 登记。）
     const readonly = !!ev.payload?.readonly;
     const stale = !!ev.payload?.stale;
-    if (readonly && ev.instanceId !== viewingInstanceId) return;
+    if (!acceptMirrorState({
+      readonly,
+      eventInstanceId: ev.instanceId ?? null,
+      viewingInstanceId,
+    })) return;
     if (armedTakeoverSid) { // 排队接管中：交给 armedTakeoverStep 判是否该自动放行（本轮完结/转疑似中断）
       const step = armedTakeoverStep({ armed: true, armedSid: armedTakeoverSid }, { kind: 'mirror', readonly, stale, sessionId: ev.sessionId });
       if (step.action !== 'none') {
