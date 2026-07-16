@@ -19,7 +19,7 @@ import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { resolveFreshPrefs, defaultsFromEffectiveSettings } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, readLastPermissionMode } from '../sessions/history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, readLastPermissionMode } from '../sessions/history.js';
 import { notificationForEvent, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from '../ops/notifications.js';
 import { createNotifyChannels } from '../ops/notify-channels.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
@@ -248,10 +248,39 @@ configureHttpShell({
 });
 
 const tokenMatches = provided => secureTokenMatches(AUTH_TOKEN, provided);
+// 鉴权限速状态（socket + HTTP 共用，AUTH-001）。NFR-03：仅鉴权门口，重启清零可接受。
+const rlStates = new Map(); // sourceKey → RateLimitState
 const httpAuth = createHttpAuth({
   authToken: AUTH_TOKEN,
   isPublicHost,
   verifyAccessJwt,
+  // AUTH-001：HTTP 与 socket 握手共享限速 Map，堵住 /health|/metrics|/push 无限试 token。
+  rateLimit: {
+    get active() { return !!AUTH_TOKEN; }, // 无 token 时仅本机，不限速
+    sourceKey: (req) => {
+      // AUTH-002：仅公网 Access Host 采信 CF-Connecting-IP；LAN 伪造头只回落连接 IP
+      const publicHost = isPublicHost(req.headers?.host);
+      return rlSourceKey(
+        { address: req.socket?.remoteAddress || req.ip || '', headers: req.headers || {} },
+        clientIp,
+        { trustCfConnectingIp: publicHost },
+      );
+    },
+    getState: (key) => rlStates.get(key),
+    setState: (key, st) => { rlStates.set(key, st); },
+    onResult: onAuthResult,
+    onLocked: (key, r) => {
+      console.warn(`[http-auth] 连续鉴权失败达阈值 → 锁定 ${Math.ceil((r.retryAfterMs || 0) / 1000)}s（source=${key}）`);
+      audit.recordAudit({
+        actor: { deviceId: null, via: 'unauthenticated' },
+        action: 'auth_rate_limited',
+        target: key,
+        outcome: 'locked',
+        meta: { retryAfterMs: r.retryAfterMs, via: 'http' },
+      });
+      metrics.inc('rate_limit_lockouts');
+    },
+  },
 });
 
 registerOperationalRoutes({
@@ -272,7 +301,8 @@ registerOperationalRoutes({
     for (const agent of agents.values()) {
       if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0) awaiting += 1;
     }
-    const notifyFailed = counters.push_failure ?? 0;
+    // OPS-3：StateProbe notify_failed 必须覆盖双通道——仅计 push 时，纯 ntfy 用户失败永不翻状态。
+    const notifyFailed = (counters.push_failure ?? 0) + (counters.ntfy_failure ?? 0);
     const mobileClients = io.sockets.adapter.rooms.get('approved')?.size ?? 0;
     return {
       metrics: {
@@ -422,15 +452,15 @@ if (process.stdin.isTTY) {
 }
 
 // 鉴权门口防暴破限速（NFR-03 / docs/design.md）：仅当配了鉴权门（公网 CF Access 或 AUTH_TOKEN）时生效——
-// 无鉴权模式(!AUTH_TOKEN 且非公网) authPassed 恒真、永不计失败，天然不触发。sourceKey 只信 CF-Connecting-IP、
-// 不信可伪造的 XFF。状态内存态 Map（重启清零 = 机主误锁时的逃生口，符合 docs/design.md 内存态取舍）；不特判本机绕过，
-// 靠“成功清零”保护机主正常握手（连对 token 不累积失败）。
-const rlStates = new Map(); // sourceKey → RateLimitState
+// 无鉴权模式(!AUTH_TOKEN 且非公网) authPassed 恒真、永不计失败，天然不触发。
+// AUTH-002：CF-Connecting-IP 仅公网 Host 采信；LAN 只认连接 IP（防伪造头拆分限速桶）。
+// 状态内存态 Map（与 HTTP createHttpAuth 共用 rlStates；重启清零 = 机主误锁时的逃生口）。
 // ---- 鉴权（公网 Host 强制 Access JWT、fail-closed；LAN/本机回退 token；无 token 时仅 localhost）----
 io.use(async (socket, next) => {
   const ip = clientIp(socket.handshake.address);
-  const rlActive = isPublicHost(socket.handshake.headers.host) || !!AUTH_TOKEN;
-  const rlKey = rlSourceKey(socket.handshake, clientIp);
+  const publicHost = isPublicHost(socket.handshake.headers.host);
+  const rlActive = publicHost || !!AUTH_TOKEN;
+  const rlKey = rlSourceKey(socket.handshake, clientIp, { trustCfConnectingIp: publicHost });
   try {
     // 限速锁定门：退避/锁定期内直接拒、不做鉴权、不计数（避免攻击者持续戳把机主越锁越久 = 自我 DoS）
     if (rlActive) {
@@ -445,7 +475,7 @@ io.use(async (socket, next) => {
     let authPassed = false;
     let accessEnabled = false;
 
-    if (isPublicHost(socket.handshake.headers.host)) {
+    if (publicHost) {
       try {
         await verifyAccessJwt(socket.handshake.headers['cf-access-jwt-assertion']);
         authPassed = true;
@@ -774,7 +804,7 @@ function setMirror(readonly, sessionId, force = false, stale = false, observedCl
 }
 let mirrorLastEmittedRemainingMs = -1;
 let catchUpKey = null;                              // `${cwd}\x00${sessionId}`：当前追平的会话
-let catchUpState = { baseline: 0, wasBusy: false };
+let catchUpState = { baseline: 0, wasBusy: false, lastTailKey: null };
 let catchUpRebaselineRequested = false;             // BE-009：客户端（重）连时置位，下一 tick 重定基线；先检测被吸收的外部增长再标 externalDirty，防分叉
 // 只读锁释放状态机（history.js mirrorReleaseStep，含自动解锁计时）——修 code-review 发现 1：
 // 原实现上锁后无任何自动释放路径，终端写一次就把移动端输入锁死到手动切会话/接管为止。现每 tick 据
@@ -806,11 +836,13 @@ async function catchUpTickOnce() {
     catchUpKey = null;                                               // 强制下方 switch 分支重建 baseline + 重评 mirror 入口锁
   }
   if (key !== catchUpKey) {                                           // 切了会话：以现有历史长度定基线，本 tick 不推
-    let seedLen;
-    try { seedLen = (await getSessionHistory(a.sessionId, a.cwd)).length; }
+    let seedMsgs;
+    try { seedMsgs = await getSessionHistory(a.sessionId, a.cwd); }
     catch { return; }
+    const seedLen = seedMsgs.length;
     catchUpKey = key;
-    catchUpState = { baseline: seedLen, wasBusy: localBusy };
+    // SS-001：seed 时同步 lastTailKey，否则下一 tick 满窗会把「首次记指纹」当滑动误 reload
+    catchUpState = { baseline: seedLen, wasBusy: localBusy, lastTailKey: historyTailKey(seedMsgs) };
     mirrorLastSize = -1;                                 // 基线未建立：切入首个正常 tick 只记 size、不判增长
     // 切入预判（2026-07-12 单驾驶员）：按尾部形态立即预锁——PENDING=有人正驱动（终端轮次未完结），
     // 堵「切走再切回、终端还在跑但要等下一条 text 落盘才锁」的空窗。旧「切入不预锁」是因为当时唯一
@@ -835,7 +867,7 @@ async function catchUpTickOnce() {
     return;
   }
   if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
-    catchUpState = { baseline: catchUpState.baseline, wasBusy: true };
+    catchUpState = { baseline: catchUpState.baseline, wasBusy: true, lastTailKey: catchUpState.lastTailKey ?? null };
     mirrorLastSize = -1;                                             // 作废 size 基线：己方 turn 会写盘涨 size，不能算终端 keep-alive；localBusy 结束后首个正常 tick 重建
     const rel = mirrorReleaseStep(mirrorRelease, {
       externalWrite: false, localBusy: true, releaseTicks: mirrorReleaseTicksNeeded(),
@@ -853,7 +885,7 @@ async function catchUpTickOnce() {
   try { tail = await classifyTranscriptTail(a.sessionId, a.cwd, { size: curSize >= 0 ? curSize : null }); } catch { /* 读失败保守 settled：不多锁 */ }
   try { observedCli = await readCliObservedState(a.sessionId, a.cwd, { size: curSize >= 0 ? curSize : null }); } catch { /* 读失败显未知 */ }
   observedCli = mergeCliObserved(observedCli, a.sessionId, a.cwd);
-  const { emit, state } = catchUpStep(catchUpState, { messages, localBusy: false });
+  const { emit, state, reload } = catchUpStep(catchUpState, { messages, localBusy: false });
   if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
                                                                     // await 让出后视图/实例/session 可能已变：作废旧 tick，不提交 baseline/size/观察态
   catchUpState = state;                                              // 视图仍在才提交 baseline——移到切走判断之后，防切走瞬间污染 baseline 致那段外部写入在 catchUp 路径漏推
@@ -861,8 +893,18 @@ async function catchUpTickOnce() {
   // 仅基线已建立(lastSize≥0)时判增长；切入 / localBusy 后首 tick 只记 size 不判（避免把切入前既有体量或己方写盘误当终端活跃）。
   const keepAlive = mirrorLastSize >= 0 && curSize > mirrorLastSize;
   if (curSize >= 0) mirrorLastSize = curSize; // 读取瞬时失败(curSize=-1)不覆盖基线：保留上次好值，避免把「基线未建立」哨兵误写回、平白吃掉 1-2 个 tick 的 keep-alive 信号
-  const externalWrite = emit.length > 0;
-  if (externalWrite) {                                               // 观察到外部写入 → 追平尾巴
+  // SS-001：满窗滑动 → reload：全量推当前 history 窗口（替代不可 slice 的增量）+ 标 externalDirty。
+  // 复用 history_append + replace:true（不新增契约事件类型），前端清屏后以 messages 重渲。
+  if (reload) {
+    metrics.inc('catch_up_reloads');
+    a.externalDirty = true;
+    io.to('approved').emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),
+      type: 'history_append', payload: { messages, external: true, replace: true, reason: 'sliding_window' },
+    });
+  }
+  const externalWrite = emit.length > 0 || reload;
+  if (emit.length > 0) {                                               // 观察到外部写入 → 追平尾巴
     metrics.inc('catch_up_hits'); // NFR-15 补齐命中（catchUpTick 成功推了终端侧外部增量的次数）
     a.externalDirty = true; // 该实例的 SDK 子进程内存上下文已落后于磁盘（外部驱动方写了新轮次）——web 下次发送前须置换实例吸收，否则模型看不到这些轮次、语义分叉
     io.to('approved').emit('agent:event', { // SEC-01：会话内容，仅广播给已批准设备
@@ -1289,14 +1331,17 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
 // 的请求（如 session:switch 被连点两次、两台设备同时切到同一会话）会双双通过 instanceForSession 检查
 // （此时都还没人注册），双双落入 openResumeInstance，各自 spawn 一个 `claude --resume` 进程操作同一份
 // 会话文件。用 sessionId 键的 in-flight map 把后到的请求收敛到同一个 Promise，只有一次真正 spawn。
-// resumeId 为空（FRESH 新会话）不去重——那是另一套 justOpened 机制（S2）在管，语义不同、不在此处混入。
-const resumeInFlight = new Map(); // sessionId → Promise<AgentSession>
+//
+// SRV-001：FRESH（resumeId 空）同样需要 single-flight——旧实现「FRESH 不去重、靠 justOpened」只在
+// 第一条 open 完成后 viewingInstanceId 才有值；await currentSessionForCwd 间隙内两条并发首消息都会
+// miss justOpened 并各 spawn 一个孤儿 CLI。键用 `fresh:${cwd}`，与 resume sessionId 空间隔离。
+const resumeInFlight = new Map(); // key → Promise<AgentSession>
 function dedupedResume(cwd, resumeId, extra = {}) {
-  if (!resumeId) return openResumeInstance(cwd, resumeId, extra);
-  let p = resumeInFlight.get(resumeId);
+  const key = resumeId || `fresh:${cwd}`;
+  let p = resumeInFlight.get(key);
   if (!p) {
-    p = openResumeInstance(cwd, resumeId, extra).finally(() => resumeInFlight.delete(resumeId));
-    resumeInFlight.set(resumeId, p);
+    p = openResumeInstance(cwd, resumeId, extra).finally(() => resumeInFlight.delete(key));
+    resumeInFlight.set(key, p);
   }
   return p;
 }
@@ -1526,25 +1571,31 @@ registerSocketConnection(io, socket => {
       // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
       const cwd = ensureWhitelisted(routeCwd(payload && typeof payload === 'object' ? payload.cwd : undefined), workDirs);
       const saved = await currentSessionForCwd(cwd);
-      // 并发懒开去重（S2）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd 懒开了实例。
-      // RESUME 靠 instanceForSession（sessionId）去重；FRESH 无 sessionId，改认「await 后 viewing 已是本 cwd 实例」
-      // ——两条无 instanceId 的并发首消息都意在打开该 cwd 当前(空)会话，应收敛到同一实例，不重复 spawn 孤儿实例。
+      // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
+      // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
+      // justOpened 仍作二次收敛（已完成的 open 但尚未写入 inFlight 清理窗口）。
       const justOpened = agents.get(viewingInstanceId);
       a = (saved && instanceForSession(saved.id))
         || (justOpened && justOpened.cwd === cwd ? justOpened : null)
-        || await dedupedResume(cwd, saved?.id ?? null); // resume 恢复 CLI 原生会话权限档（去重防并发双开）；saved 为空则 FRESH 懒开
+        || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
       viewingInstanceId = a.instanceId;
+      // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧 WORK_DIR。
+      viewingCwd = a.cwd;
       broadcastInstances();
     }
     // 陈旧上下文守卫（2026-07-12 单驾驶员，修「接管后的语义分叉」）：实例的 SDK 子进程上下文是进程内存态、
     // 只在启动(resume)那一刻读过磁盘；外部驱动方（终端 CLI）此后写的轮次，web 靠追平【显示】了、但子进程
     // 【内存里没有】——直接发送=模型看不到那些轮次、还从旧位置分叉出第二条 parentUuid 链。externalDirty 由
     // catchUpTick 观察到外部 text 写入时标记（其 localBusy 吸收逻辑已排除己方写入），此处先置换实例
-    // （dispose+resume 冷读最新磁盘，同 effort 切档模式）再发送。标记时实例必然 idle（catchUpTick 的
-    // externalWrite 只在 localBusy=false 分支产生），dispose 不杀在途任务。
+    // （dispose+resume 冷读最新磁盘，同 effort 切档模式）再发送。
     // 已知边界：catchUpTick 只盯当前查看会话——后台 tab 被外部写过、切入后首个 tick(≤2.5s)前极速发送不经
     // 此守卫（切入流程本身 1-2s，实际难触发）；接受，不为此每次发送读盘比对。
     if (a.externalDirty && a.sessionId) {
+      // SRV-003：忙碌中禁止置换（会 kill 在途 canUseTool / turn）；可重试 ack，客户端保留 pending。
+      if (a.isBusy()) {
+        if (typeof ack === 'function') ack({ ok: false, error: '会话正在处理，请稍后重试', retryable: true });
+        return;
+      }
       const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId), wasViewing = viewingInstanceId === a.instanceId;
       interactionLog.addSessionLog(sid, 'sys_info', '[SYS] 会话曾被外部（终端）驱动，发送前置换实例吸收外部轮次（防陈旧上下文分叉）');
       // 体感：置换会冷启动 resume，前端先收到 system 条再等 init，避免「点了没反应」
@@ -1553,22 +1604,39 @@ registerSocketConnection(io, socket => {
         type: 'system', payload: { message: '正在续接会话（吸收终端写入）…', kind: 'resuming' }
       });
       disposeInstance(a.instanceId);
-      a = openInstance({ cwd, resumeId: sid, mode, effort: eff });
-      if (wasViewing) viewingInstanceId = a.instanceId;
+      // SRV-003：走 dedupedResume 而非裸 openInstance，并发 swap 收敛到同一 resume Promise。
+      a = await dedupedResume(cwd, sid, { mode, effort: eff });
+      if (wasViewing) {
+        viewingInstanceId = a.instanceId;
+        viewingCwd = a.cwd; // SRV-002 对称
+      }
       broadcastInstances();
     }
     // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
     interactionLog.userMessageIn(a.logKey(), cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
     let sent;
-    if (hasAttachments) {
-      // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
-      // 气泡走 displayText（原文，不含路径）+ 去完整 data 的元数据（含小 thumb，进缓冲供回放）
-      const saved = await saveAttachments(a.cwd, attachments);
-      sent = await a.send(buildPromptText(cleanText, saved), model, {
-        displayText: cleanText, attachments: toEventMeta(saved)
-      });
-    } else {
-      sent = await a.send(cleanText, model);               // F1：send 改 async（setModel 需 await）
+    try {
+      if (hasAttachments) {
+        // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
+        // 气泡走 displayText（原文，不含路径）+ 去完整 data 的元数据（含小 thumb，进缓冲供回放）
+        // SRV-004：saveAttachments 抛错必须结构化 ack（permanent 磁盘类），避免离线队列永久重试。
+        const saved = await saveAttachments(a.cwd, attachments);
+        sent = await a.send(buildPromptText(cleanText, saved), model, {
+          displayText: cleanText,
+          attachments: toEventMeta(saved),
+          clientMessageId, // FE-002：离线乐观气泡对账
+        });
+      } else {
+        // F1：send 改 async（setModel 需 await）；clientMessageId 供前端对账
+        sent = await a.send(cleanText, model, { clientMessageId });
+      }
+    } catch (err) {
+      // SRV-004：附件落盘失败 / 其它同步抛错 → 负 ACK；附件失败多半 permanent（权限/symlink/满盘）
+      const msg = err?.message || String(err);
+      const permanent = hasAttachments; // 附件校验已过、落盘仍失败 → 重试通常无意义
+      sysTo(socket, hasAttachments ? `附件保存失败：${msg}` : `发送失败：${msg}`, true);
+      if (typeof ack === 'function') ack({ ok: false, error: msg, permanent, retryable: !permanent });
+      return;
     }
     // BE-002：send 返回 false = 队列已满或实例已弃用（可重试的临时失败），消息【未】入队。
     // 必须回传 ok:false + retryable 让客户端保留 pending、稍后重连重试，且【不能】commit 去重 ID——
@@ -1903,6 +1971,11 @@ registerSocketConnection(io, socket => {
     const cwd = routeCwd(payload?.cwd);
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       return ack({ ok: false, error: '会话不存在' });
+    }
+    // SRV-005：L1 隐藏也不应盖住仍被 web 驱动的会话（列表消失但 tab 仍在跑，用户难找回）。
+    // 与 L2 保护①同判据；L1 不删文件，但「从产品可见列表移除」仍应先结束/关闭驱动实例。
+    if (instanceForSession(sessionId)) {
+      return ack({ ok: false, error: '会话正在被本产品驱动，请先结束或关闭该会话再从列表移除' });
     }
     sessions.hideSession(sessionId);
     if (sessions.getCurrent(cwd) === sessionId) sessions.setCurrent(cwd, null); // 别让指针继续指向一个刚被隐藏的会话
