@@ -44,20 +44,32 @@ const HIST_CACHE_MAX = 10;
 // 根据 cwd 推断项目目录名。CLI 命名规则：路径中所有非字母数字字符（/、.、_ 等）都替换为 -（不折叠连续 -）。
 // cwd 须先经 realpath 规范化（server.js 启动期做），才与 CLI 的 ~/.claude/projects 命名一致（如 /tmp→/private/tmp）。
 // 导出供 listSessions 与单测用。
+// SS-004：与 CLI 同规则——非字母数字 → '-'，故 /tmp/foo 与 /tmp-foo 会编码成同一目录名。
+// 改编码会与 CLI 裂；调用方用 workdirs.findProjectDirCollisions 在 resolveWorkdirs 时 warn。
 export function getProjectDir(cwd) {
-  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
+  return String(cwd || '').replace(/[^a-zA-Z0-9]/g, '-');
 }
+
+// SS-004 检测实现在 workdirs.js（resolve 时 warn），避免 history↔workdirs 互相 import。
+// 此处仅保留 getProjectDir 作为编码 SoT。
 
 // 读取会话历史消息（user/assistant 文本 + 主链 tool_use/tool_result；过滤 thinking/子 agent/CLI 噪音）。
 // 流式读【完整】文件——与 CLI /resume 同源、不按字节截断头部，做到 Web 端看到的历史 = CLI 的全量历史。
 //
 // 【已评估：不迁 SDK 官方 getSessionMessages（2026-07-12 实证）】SDK 0.3.201 有官方 getSessionMessages，但
+// SS-003：sessionId 进入路径前统一字符集校验（与 sessionFileExists 同规则）。
+// 拒绝含 / \ . 等的穿越形态；非法 id 调用方返回空/settled/-1，不拼进 join。
+export function isSafeSessionId(id) {
+  return typeof id === 'string' && /^[0-9a-zA-Z_-]+$/.test(id);
+}
+
 // 实测返回大量原始消息（含 thinking/子agent/系统行），零噪音过滤；本函数过滤后仅剩真实对话 + 主链工具。
 // isMeta/isSidechain/parent_tool_use_id/CLI 系统行/task-notification/uuid 去重等过滤须保留，故不迁官方 API。
 //
 // 输出条目：文本 {role,content,timestamp} | tool_use {kind,toolUseId,name,inputSummary,...} |
 // tool_result {kind,toolUseId,ok,outputSummary,...}。前端 loadHistory 据此重建 toolcard。
 export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESSAGES, { baseDir = CLAUDE_DIR } = {}) {
+  if (!isSafeSessionId(sessionId)) return []; // SS-003：非法 id 不拼路径
   const projectDir = getProjectDir(cwd);
   const historyFile = join(baseDir, projectDir, `${sessionId}.jsonl`);
 
@@ -155,6 +167,10 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
 //   · 持续 idle 期间的增长 → 判为【外部（终端）写入】→ 推 messages 超出 baseline 的尾巴。
 // messages = 当前 getSessionHistory 结果（文本 + 主链工具、≤HISTORY_MAX_MESSAGES 条）。
 // 边界：极端会话 > 2000 条被削头时 len 可能 < baseline → 不推（保守），属已知限制。
+// SS-001：另有「满窗滑动」——len 恒 = HISTORY_MAX_MESSAGES = baseline，但头被 splice、尾是新内容。
+//    仅比长度会永远 emit [] 且不标 externalDirty。用 lastTailKey（末条 timestamp|content 指纹）检测滑动；
+//    检出后 emit 仍 []（slice 会把仍可见的中间条当新尾巴重推），reload=true 让 server 全量 history_append
+//    重发尾窗 + 标 externalDirty。historyCap 可注入便于单测。
 // ⚠️ 已知边界（code-review 发现 2，有意不修）：外部（终端）写入若【撞进本地 turn 的 busy→idle 吸收窗口】——
 //    即 web 自己 turn 运行期间终端也写了同一会话——会被 wasBusy 分支的整段吸收一并吞掉、停留期间不回显，
 //    须切走该会话经前端 diskLen 重载（logic.js shouldReloadOnEnter）才追平。触发面窄（须停留不切 + 恰好并发
@@ -166,12 +182,44 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
 //    能按 uuid 幂等去重——但实测前端 onHistoryAppend（app.js）无 uuid 去重、live 流气泡也不记 uuid，故"立即触发"
 //    简单版无效（仍受契约护栏约束只能吸收），完整版需前端去重 + live 流记 uuid 的联动大改。上述边界触发面窄，
 //    n=1 单用户下该大改不值，保留现状。别再因"SP-10 设计验证通过"重启这个接入。
-export function catchUpStep(state, { messages, localBusy = false }) {
+
+export function catchUpStep(state, { messages, localBusy = false } = {}) {
   const len = messages.length;
-  if (localBusy) return { emit: [], state: { baseline: state.baseline, wasBusy: true } };
-  if (state.wasBusy) return { emit: [], state: { baseline: len, wasBusy: false } }; // 吸收己方 turn 的写盘
-  if (len > state.baseline) return { emit: messages.slice(state.baseline), state: { baseline: len, wasBusy: false } };
-  return { emit: [], state: { baseline: state.baseline, wasBusy: false } };
+  const tailKey = historyTailKey(messages);
+  if (localBusy) {
+    return { emit: [], reload: false, state: { baseline: state.baseline, wasBusy: true, lastTailKey: state.lastTailKey ?? null } };
+  }
+  if (state.wasBusy) {
+    // 吸收己方 turn 的写盘：重置 baseline + 同步 tail 指纹（己方写入也在窗口内）
+    return { emit: [], reload: false, state: { baseline: len, wasBusy: false, lastTailKey: tailKey } };
+  }
+  if (len > state.baseline) {
+    return {
+      emit: messages.slice(state.baseline),
+      reload: false,
+      state: { baseline: len, wasBusy: false, lastTailKey: tailKey },
+    };
+  }
+  // SS-001：满窗 + 长度未增 + 指纹已变 → 滑动窗口吞了新尾；不能 slice，请求全量重载
+  const atCap = Number.isFinite(historyCap) && historyCap > 0 && len >= historyCap && state.baseline >= historyCap;
+  const prevTail = state.lastTailKey;
+  if (atCap && prevTail != null && tailKey != null && prevTail !== tailKey) {
+    return {
+      emit: [],
+      reload: true,
+      state: { baseline: len, wasBusy: false, lastTailKey: tailKey },
+    };
+  }
+  return {
+    emit: [],
+    reload: false,
+    state: {
+      baseline: state.baseline,
+      wasBusy: false,
+      // 首次观察或之前未记指纹时补上，避免下一 tick 误判「从 null→有」为滑动
+      lastTailKey: prevTail == null ? tailKey : prevTail,
+    },
+  };
 }
 
 // BE-009：客户端（重）连时 server 会强制重定 catch-up baseline（重连会 loadHistory 全量重渲，沿用滞后 baseline
@@ -691,6 +739,7 @@ export function lastPermissionMode(entries) {
 // 只读末尾 TAIL_READ_BYTES：与 readHeadMeta 尾窗同款权衡——极端超大会话里若末条档记录距尾 >512KB
 // 则读不到、返回 null 优雅回落（不误、不崩）。size 可注入省一次 stat；baseDir 供单测指向 tmpdir。
 export async function readLastPermissionMode(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
+  if (!isSafeSessionId(sessionId)) return null; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
     const fh = await open(file, 'r');
@@ -782,6 +831,7 @@ export function classifyTailEntries(entries) {
 // 极端边界：若最后一条链条目距文件尾 >512KB（如超巨型子 agent 尾巴），尾窗里无链条目 → settled（不锁、
 // 不误伤输入；镜像锁的兜底仍有 externalWrite 判据在）。
 export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
+  if (!isSafeSessionId(sessionId)) return { verdict: 'settled', lastChainTs: null }; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
     const fh = await open(file, 'r');
@@ -811,7 +861,7 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
   // id 必须是合法 session id 字符集（UUID 形态：仅 [0-9a-zA-Z_-]）——拒绝含 / \ . 的路径穿越。
   // session:switch 是纵深防御层：前端列表已按 cwd 过滤，但构造 payload（如 '../别的cwd/<id>'）不得
   // 借 join 规范化越出本 cwd 的 project 目录（/verify 2026-06-12 实测抓出）。空串也被 + 量词挡掉。
-  if (typeof id !== 'string' || !/^[0-9a-zA-Z_-]+$/.test(id)) return false;
+  if (!isSafeSessionId(id)) return false;
   try {
     await stat(join(baseDir, getProjectDir(cwd), `${id}.jsonl`));
     return true;
@@ -824,7 +874,7 @@ export async function sessionFileExists(cwd, id, { baseDir = CLAUDE_DIR } = {}) 
 // 单看 history 条数会漏「半行/写盘中」与极短增量，故 keepAlive 用字节 size 而不是 history len。
 // id 同 sessionFileExists 做字符集校验防路径穿越；文件不存在/非法 id → -1（catchUpTick 据此本 tick 不判增长）。
 export async function sessionFileSize(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
-  if (typeof sessionId !== 'string' || !/^[0-9a-zA-Z_-]+$/.test(sessionId)) return -1;
+  if (!isSafeSessionId(sessionId)) return -1;
   try {
     const { size } = await stat(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`));
     return size;
@@ -837,7 +887,7 @@ export async function sessionFileSize(sessionId, cwd, { baseDir = CLAUDE_DIR } =
 // 纯终端进程正驱动的会话后端无法确证（同 AD-3 盲区），mtime 是文件系统元数据级的启发式护栏，非内容
 // 解析，诚实登记非完备。id 同 sessionFileExists 做字符集校验防路径穿越；不存在/非法 id → -1。
 export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
-  if (typeof sessionId !== 'string' || !/^[0-9a-zA-Z_-]+$/.test(sessionId)) return -1;
+  if (!isSafeSessionId(sessionId)) return -1;
   try {
     const { mtimeMs } = await stat(join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`));
     return mtimeMs;

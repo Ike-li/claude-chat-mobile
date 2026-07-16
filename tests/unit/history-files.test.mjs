@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, sessionFileExists, sessionFileSize, sessionFileMtime, lastMessageActivityMs } from '../../src/sessions/history.js';
+import { getProjectDir, sessionFileExists, sessionFileSize, sessionFileMtime, lastMessageActivityMs, isSafeSessionId, getSessionHistory, classifyTranscriptTail, readLastPermissionMode } from '../../src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -35,6 +35,15 @@ test('sessionFileExists: 含 . 的路径穿越被拒', async () => {
   assert.equal(await sessionFileExists('/cwd', '../etc/passwd', { baseDir: BASE }), false);
   assert.equal(await sessionFileExists('/cwd', '../../foo', { baseDir: BASE }), false);
   assert.equal(await sessionFileExists('/cwd', 'foo.jsonl', { baseDir: BASE }), false);
+});
+
+// SS-003：getSessionHistory / classifyTranscriptTail / readLastPermissionMode 同字符集守卫
+test('isSafeSessionId + 路径构建函数对穿越 id 安全（SS-003）', async () => {
+  assert.equal(isSafeSessionId('../x'), false);
+  assert.equal(isSafeSessionId('good-id_01'), true);
+  assert.deepEqual(await getSessionHistory('../etc/passwd', '/cwd', 10, { baseDir: BASE }), []);
+  assert.deepEqual(await classifyTranscriptTail('../x', '/cwd', { baseDir: BASE }), { verdict: 'settled', lastChainTs: null });
+  assert.equal(await readLastPermissionMode('../x', '/cwd', { baseDir: BASE }), null);
 });
 
 test('sessionFileExists: 含 / 的路径穿越被拒', async () => {
