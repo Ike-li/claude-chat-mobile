@@ -53,6 +53,94 @@ export function shouldEmitModeChangeBar({ emptyStart = false } = {}) {
   return !emptyStart;
 }
 
+// UX-018：模型磁贴 displayName 撞车时主标题回退 value，避免整排同名。
+export function resolveModelTileDisplay(models) {
+  const list = Array.isArray(models) ? models : [];
+  const rows = list.map(m => {
+    if (typeof m === 'string') {
+      return { value: m, displayName: m, description: '', raw: m };
+    }
+    const value = m?.value != null ? String(m.value) : '';
+    const displayName = (m?.displayName != null && String(m.displayName).trim())
+      ? String(m.displayName).trim()
+      : value;
+    const description = m?.description != null ? String(m.description) : '';
+    return { value, displayName, description, raw: m };
+  });
+  const counts = new Map();
+  for (const r of rows) {
+    const key = r.displayName || r.value;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return rows.map(r => {
+    const key = r.displayName || r.value;
+    const duplicate = (counts.get(key) || 0) > 1;
+    const title = duplicate ? (r.value || r.displayName || 'model') : (r.displayName || r.value || 'model');
+    const subtitle = r.description || r.value || '';
+    return { value: r.value, title, subtitle, duplicate, raw: r.raw };
+  });
+}
+
+// UX-020：同名附件序号；可选大小。
+export function formatAttachmentChipLabel(name, occurrence = 1, sizeBytes) {
+  const base = (name != null && String(name).trim()) ? String(name).trim() : '附件';
+  const n = Math.max(1, Number(occurrence) || 1);
+  let label = n > 1 ? `${base} (${n})` : base;
+  if (sizeBytes != null && Number.isFinite(Number(sizeBytes))) {
+    const b = Number(sizeBytes);
+    let sizeStr;
+    if (b < 1024) sizeStr = `${b}B`;
+    else if (b < 1024 * 1024) sizeStr = `${Math.max(1, Math.round(b / 1024))}KB`;
+    else sizeStr = `${(b / (1024 * 1024)).toFixed(1)}MB`;
+    label += ` · ${sizeStr}`;
+  }
+  return label;
+}
+
+// UX-015：cache 比例/百分数取整为 "N%"。
+export function formatCachePercent(ratio) {
+  if (ratio == null || !Number.isFinite(Number(ratio))) return '—';
+  let n = Number(ratio);
+  if (n >= 0 && n <= 1) n *= 100;
+  return `${Math.round(n)}%`;
+}
+
+// UX-014：思考档副文案（增量信息，非重复等级名）。
+export function effortLevelSubtitle(level) {
+  const lv = String(level || '').toLowerCase();
+  const map = {
+    low: '更快更省',
+    medium: '均衡',
+    med: '均衡',
+    high: '更深入',
+    xhigh: '很深入，更慢',
+    max: '最深入，更慢更贵',
+    ultracode: 'xhigh + 多 agent · 最彻底',
+  };
+  return map[lv] || '';
+}
+
+// UX-010：镜像只读时不与本地忙碌条同现。
+export function shouldShowBusyWithMirror({ mirrorReadonly = false, busy = false } = {}) {
+  if (mirrorReadonly) return false;
+  return Boolean(busy);
+}
+
+// UX-010：横幅优先级仲裁（同屏最多一条）。
+export function pickBannerToShow({ mirror = false, task = false, subagent = false, activity = false } = {}) {
+  if (mirror) return 'mirror';
+  if (task) return 'task';
+  if (subagent) return 'subagent';
+  if (activity) return 'activity';
+  return null;
+}
+
+// UX-004：流式 markdown 预览节流间隔（ms）。
+export function formatStreamPreviewIntervalMs(ms) {
+  const n = Number(ms);
+  return Number.isFinite(n) && n > 0 ? n : 80;
+}
+
 export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
   const name = String(toolName || '').trim() || 'tool';
   const raw = inputSummary == null ? '' : String(inputSummary).trim();
