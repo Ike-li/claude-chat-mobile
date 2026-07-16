@@ -3,7 +3,13 @@
 // 「切工作区后新会话冒出上个工作区 deepseek 模型」bug 的正解。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createModelsCache, isCwdDefaultModel } from '../../src/agent/models-cache.js';
+import {
+  createModelsCache,
+  createCwdKeyedCache,
+  isCwdDefaultModel,
+  normalizeSlashCommands,
+  resolveSlashCommandsForCwd,
+} from '../../src/agent/models-cache.js';
 
 const DS = { models: [{ value: 'opus', displayName: 'deepseek-v4-pro[1m]' }] };
 const REAL = { models: [{ value: 'opus', displayName: 'Claude Opus 4.8' }] };
@@ -87,5 +93,45 @@ test.describe('isCwdDefaultModel：只采纳「fresh + 未 pin」启动的模型
   test('入参缺失/空对象安全 → false，不抛', () => {
     assert.equal(isCwdDefaultModel({}), false);
     assert.equal(isCwdDefaultModel(), false);
+  });
+});
+
+// slash 命令 per-cwd：连接重放 / 切区注入的数据源。核心不变量同 models——A 区列表绝不进 B 区视图。
+test.describe('normalizeSlashCommands / resolveSlashCommandsForCwd', () => {
+  test('normalize：string[] 原样；{name} 抽名；空/非数组 → null', () => {
+    assert.deepEqual(normalizeSlashCommands(['clear', 'model', 'git-commit']), ['clear', 'model', 'git-commit']);
+    assert.deepEqual(normalizeSlashCommands([{ name: 'help' }, { name: 'effort', description: 'x' }]), ['help', 'effort']);
+    assert.equal(normalizeSlashCommands([]), null);
+    assert.equal(normalizeSlashCommands(null), null);
+    assert.equal(normalizeSlashCommands('clear'), null);
+    assert.equal(normalizeSlashCommands([{ description: 'no name' }, '', null]), null);
+  });
+
+  test('resolve：优先本 cwd 缓存；未知 cwd 不回落别区 lastInit', () => {
+    const c = createCwdKeyedCache();
+    c.set('/ws/a', { slashCommands: ['a-skill', 'clear'] });
+    const lastInit = { cwd: '/ws/a', slashCommands: ['a-skill', 'clear', 'model'] };
+
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit), ['a-skill', 'clear']);
+    // B 区无缓存、lastInit.cwd≠B → null（旧 #5 整字段剥离的动机：不把 A 区 skill 灌进 B）
+    assert.equal(resolveSlashCommandsForCwd(c, '/ws/b', lastInit), null);
+  });
+
+  test('resolve：本 cwd 无缓存但 lastInit.cwd 命中 → 回落 lastInit（冷启动种种子）', () => {
+    const c = createCwdKeyedCache();
+    const lastInit = { cwd: '/ws/a', slashCommands: ['clear', 'model', 'effort'] };
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', lastInit), ['clear', 'model', 'effort']);
+  });
+
+  test('resolve：缓存可直接存 string[]（兼容 load 形态）', () => {
+    const c = createCwdKeyedCache();
+    c.set('/ws/a', ['clear', 'compact']);
+    assert.deepEqual(resolveSlashCommandsForCwd(c, '/ws/a', null), ['clear', 'compact']);
+  });
+
+  test('resolve：缺 cache / 缺 cwd 安全 → null，不抛', () => {
+    assert.equal(resolveSlashCommandsForCwd(null, '/ws/a', null), null);
+    assert.equal(resolveSlashCommandsForCwd(createCwdKeyedCache(), '', { cwd: '/ws/a', slashCommands: ['x'] }), null);
+    assert.equal(resolveSlashCommandsForCwd(createCwdKeyedCache(), null, null), null);
   });
 });

@@ -29,7 +29,13 @@ import { readCliObservedState } from '../agent/cli-mirror-state.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
-import { createModelsCache, isCwdDefaultModel } from '../agent/models-cache.js';
+import {
+  createModelsCache,
+  createCwdKeyedCache,
+  isCwdDefaultModel,
+  normalizeSlashCommands,
+  resolveSlashCommandsForCwd,
+} from '../agent/models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from '../auth/cf-access.js';
 import { onAuthResult, freshState, rlSourceKey } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
@@ -360,9 +366,11 @@ function unlockSocket(socket) {
   // 无缝补发跳过的初始数据重放，使用户不需要刷新页面即可直入聊天界面
   if (lastInit) {
     const va = agents.get(viewingInstanceId);
-    // #5：重放不带 slashCommands——lastInit 是全局最近一次任意实例 init，斜杠命令含 project 级项，
-    // 跨 repo/tab 重放会串（前端会用别 repo 的命令覆盖提示）；剔除后前端保留 localStorage 缓存、真 init 到达即校正
+    // #5：全局 lastInit 的 slashCommands 可能来自别 cwd（含 project skill）→ 先剥离，再按 viewing cwd 注入 per-cwd 缓存
+    // （有缓存才注入；无则省略字段，前端保留 localStorage，真 init 到达即校正）
     const { slashCommands: _omitCmds, ...initBase } = lastInit;
+    const replayCwd = va?.cwd ?? viewingCwd;
+    const replayCmds = resolveSlashCommandsForCwd(slashCommandsCache, replayCwd, lastInit);
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
       type: 'init', payload: {
@@ -371,7 +379,8 @@ function unlockSocket(socket) {
         // model/cwd 校正到当前查看 tab：va 存在用实例值（FRESH 实例 activeModel 为空则 null，不回退 lastInit）；
         // va 为空（空首页）model 不下发=null（新会话模型=env 默认、服务端不可知，前端显「不指定」，A1）、cwd 用 viewingCwd
         ...(va ? { model: va.activeModel ?? null, cwd: va.cwd }
-              : { model: null, cwd: viewingCwd })
+              : { model: null, cwd: viewingCwd }),
+        ...(replayCmds ? { slashCommands: replayCmds } : {}),
       }
     });
   }
@@ -960,14 +969,15 @@ function rescheduleCatchUp() {
 rescheduleCatchUp();
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']; // 5 档硬编码，漂移由 smoke-effort 的 CLI warning 检测
-// 最近一次 init payload + 按 cwd 归键的 models 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
+// 最近一次 init payload + 按 cwd 归键的 models / slashCommands 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
 // 持久化到 data/init-cache.json 跨重启读回（CLI 收到首条消息前不输出 init——init 是轮次开始信号，
 // 预热 spawn 也等不来；缓存可能陈旧但每轮 init 覆盖刷新，文件可随时删除，损坏即当作没有）。
-// modelsCache 按 cwd 归键：模型清单随工作区 settings.local.json 覆盖网关/模型名而变，非账号级全局量——
-// 单全局缓存会跨工作区泄漏（切区点新会话冒出上个区 deepseek 名），同 lastInit 的 per-cwd 治理。详见 models-cache.js。
+// modelsCache / slashCommandsCache 按 cwd 归键：二者都随工作区 settings/skills 而变，非账号级全局量——
+// 单全局缓存会跨工作区泄漏（模型 deepseek 名串区；斜杠 skill 串区）。详见 models-cache.js。
 const INIT_CACHE = join(DATA_DIR, 'init-cache.json');
 let lastInit = null;
 const modelsCache = createModelsCache();
+const slashCommandsCache = createCwdKeyedCache(); // cwd → { slashCommands: string[] }
 // per-cwd「CLI 默认模型」缓存：新会话/无记录续接在 init 返回前显它、而非笼统「沿用当前」（只显示、不改发送）。
 // 仅由「未 resume 且未 pin model」的启动填充（scout / fresh 首 init，判据 isCwdDefaultModel）。
 const defaultModelByCwd = new Map();
@@ -975,6 +985,12 @@ try {
   const c = JSON.parse(readFileSync(INIT_CACHE, 'utf8'));
   lastInit = c.init ?? null;
   modelsCache.load(c.modelsByCwd); // 旧格式 c.models（单全局）不迁移——缓存可弃、下轮 models 事件即重建本区清单
+  slashCommandsCache.load(c.slashCommandsByCwd);
+  // 旧缓存只有 lastInit.slashCommands、无 per-cwd 表：用 lastInit.cwd 种一棵，覆盖该 cwd 冷启动「只剩 /model」
+  if (slashCommandsCache.size === 0 && lastInit?.cwd) {
+    const seed = normalizeSlashCommands(lastInit.slashCommands);
+    if (seed) slashCommandsCache.set(lastInit.cwd, { slashCommands: seed });
+  }
   if (c.defaultModelByCwd && typeof c.defaultModelByCwd === 'object' && !Array.isArray(c.defaultModelByCwd)) {
     for (const [cwd, m] of Object.entries(c.defaultModelByCwd)) if (cwd && typeof m === 'string' && m) defaultModelByCwd.set(cwd, m);
   }
@@ -982,7 +998,12 @@ try {
 function saveInitCache() {
   try {
     mkdirSync(dirname(INIT_CACHE), { recursive: true });
-    writeOwnerOnlyFile(INIT_CACHE, JSON.stringify({ init: lastInit, modelsByCwd: modelsCache.toJSON(), defaultModelByCwd: Object.fromEntries(defaultModelByCwd) }));
+    writeOwnerOnlyFile(INIT_CACHE, JSON.stringify({
+      init: lastInit,
+      modelsByCwd: modelsCache.toJSON(),
+      slashCommandsByCwd: slashCommandsCache.toJSON(),
+      defaultModelByCwd: Object.fromEntries(defaultModelByCwd),
+    }));
   }
   catch { /* 写失败不致命：缓存仅是重启后首轮前的体验增强 */ }
 }
@@ -1008,6 +1029,18 @@ function pushModelsForCwd(cwd) {
   io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
     seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
     type: 'models', payload: p
+  });
+}
+
+// 切 cwd 上下文后按新 cwd 注入 slashCommands（合成 init，只带 slashCommands + cwd；其它字段不动）。
+// 有缓存才推——无缓存不推空数组（会把前端 localStorage 里的好缓存冲成空，只剩本地 /model）。
+// 跨区防护：resolveSlashCommandsForCwd 只认本 cwd 缓存 / lastInit.cwd 命中，绝不用别区 lastInit。
+function pushSlashCommandsForCwd(cwd) {
+  const cmds = resolveSlashCommandsForCwd(slashCommandsCache, cwd, lastInit);
+  if (!cmds) return;
+  io.to('approved').emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'init', payload: { cwd: cwd || null, slashCommands: cmds },
   });
 }
 
@@ -1213,7 +1246,13 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     historicalCostUsd: saved?.cost || 0,
     onEvent: envelope => {
       metrics.inc('events'); // NFR-15 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
-      if (envelope.type === 'init') { lastInit = envelope.payload; saveInitCache(); }
+      if (envelope.type === 'init') {
+        lastInit = envelope.payload;
+        // slash 命令按本实例 cwd 归键（project/local skill 随区变）；空列表不写，避免冲掉更好缓存
+        const cmds = normalizeSlashCommands(envelope.payload?.slashCommands);
+        if (cmds) slashCommandsCache.set(cwd, { slashCommands: cmds });
+        saveInitCache();
+      }
       else if (envelope.type === 'models') { modelsCache.set(cwd, envelope.payload); saveInitCache(); } // 按本实例 cwd 归键，防跨工作区泄漏
       // 批准内含的 mode 切换（ExitPlanMode 等经 agent.resolvePermission emit）：同步 per-instance 权威档，
       // 使重连 / instances 重放与手机端权限档图标一致（envelope 随后照常 io.emit → 前端 setPermMode）。
@@ -1489,8 +1528,10 @@ registerSocketConnection(io, socket => {
       // permissionMode 同理（否则前端先按陈旧档定基线、再被下方 permission_mode 重放纠正，冒出假「权限档→X」）；
       // model/cwd 一并校正，避免新设备连入时短暂显示后台实例的模型/目录（下一轮真 init 到达即自愈）。
       const va = agents.get(viewingInstanceId);
-      // #5：重放不带 slashCommands（跨 repo/tab 串防护，同 unlockSocket）；前端保留缓存、真 init 到达即校正
+      // #5：全局 lastInit 的 slashCommands 可能来自别 cwd → 先剥离，再按 viewing cwd 注入 per-cwd 缓存
       const { slashCommands: _omitCmds, ...initBase } = lastInit;
+      const replayCwd = va?.cwd ?? viewingCwd;
+      const replayCmds = resolveSlashCommandsForCwd(slashCommandsCache, replayCwd, lastInit);
       socket.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'init', payload: {
@@ -1499,7 +1540,8 @@ registerSocketConnection(io, socket => {
           // model/cwd 校正到当前查看 tab：va 存在用实例值（FRESH 实例 activeModel 为空则 null，不回退 lastInit）；
           // va 为空（空首页）model 不下发=null（新会话模型=env 默认、服务端不可知，前端显「不指定」，A1）、cwd 用 viewingCwd
           ...(va ? { model: va.activeModel ?? null, cwd: va.cwd }
-                : { model: null, cwd: viewingCwd })
+                : { model: null, cwd: viewingCwd }),
+          ...(replayCmds ? { slashCommands: replayCmds } : {}),
         }
       });
     }
@@ -1835,6 +1877,7 @@ registerSocketConnection(io, socket => {
     doneInstances.delete(id); errorInstances.delete(id); abortedInstances.delete(id);
     broadcastInstances();
     pushModelsForCwd(a.cwd); // 切视图到别区 tab：推该区清单刷新模型选择器（避免显另一 tab 工作区的候选）
+    pushSlashCommandsForCwd(a.cwd); // 同 models：按区刷新 slash 提示，防别区 skill 残留
     lastStatusLine = null;
     scheduleStatusRefresh();
   });
@@ -1879,6 +1922,7 @@ registerSocketConnection(io, socket => {
     // 已在首页也广播一帧：空首页 defaults / models 与 viewingCwd 对齐；前端 viewing 未变时自行 showDashboard 刷列表。
     broadcastInstances();
     pushModelsForCwd(viewingCwd);
+    pushSlashCommandsForCwd(viewingCwd);
     lastStatusLine = null;
     scheduleStatusRefresh();
     ensureCliDefaults(viewingCwd).then(() => {
@@ -1906,6 +1950,7 @@ registerSocketConnection(io, socket => {
     pendingModeByCwd.delete(cwd); pendingEffortByCwd.delete(cwd); // 重置 L0（防上次未发的残留被误消费）
     broadcastInstances(); // 先推一帧（可能仍是 L4 或旧 L3 缓存）；下方 force 刷新 L3 后再补广播
     pushModelsForCwd(cwd); // 有缓存即时推（快速路径），无缓存由下方 scout 补发
+    pushSlashCommandsForCwd(cwd); // 有缓存即时推 slash 提示；无缓存保留前端 localStorage，首条消息真 init 校正
     if (!viewingInstanceId) openScoutInstance(cwd); // 无实例：scout 获取真实模型（不留幽灵会话）
     // L3：强制重读 CLI settings，空首页 defaultPermissionMode/defaultEffort 与终端对齐；完成后若仍停在本 cwd 空视图则补广播
     ensureCliDefaults(cwd, { force: true }).then(() => {
@@ -1939,6 +1984,7 @@ registerSocketConnection(io, socket => {
     doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);
     broadcastInstances();
     pushModelsForCwd(cwd); // 切区即时推本区清单（无缓存→空）；随后 resume 实例的真 models 兜底
+    pushSlashCommandsForCwd(cwd); // 同 models：切区推本区 slash；无缓存保留前端缓存，resume 真 init 校正
     lastStatusLine = null;
     scheduleStatusRefresh();
     if (typeof ack === 'function') ack({ ok: true, instanceId: inst.instanceId, sessionId });
