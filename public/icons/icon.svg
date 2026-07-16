@@ -1,6 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="96" fill="#0f172a"/>
-  <rect x="56" y="56" width="400" height="400" rx="64" fill="#1e293b"/>
-  <text x="120" y="330" font-family="Menlo, monospace" font-size="220" font-weight="700" fill="#38bdf8">›_</text>
-  <circle cx="400" cy="140" r="28" fill="#22c55e"/>
+  <!-- Claude Chat Mobile · 方案 A：深砖橙底 + 米白 CLI 提示符 ›_
+       色：--cta/#AE5238 · --canvas/#F4F3EE。
+       提示符用 path（非 <text>）保证 headless 栅格化与各端一致。 -->
+  <rect width="512" height="512" rx="96" fill="#AE5238"/>
+  <!-- › 厚 chevron（光学略偏左） -->
+  <path d="M148 140 L300 256 L148 372"
+        fill="none" stroke="#F4F3EE" stroke-width="52"
+        stroke-linecap="square" stroke-linejoin="miter"/>
+  <!-- _ 光标底杠 -->
+  <rect x="318" y="328" width="112" height="44" rx="6" fill="#F4F3EE"/>
 </svg>
