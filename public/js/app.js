@@ -875,6 +875,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     },
     onSessionId(sessionId) {
       localStorage.setItem('current_session', sessionId);
+      // FE-001：新会话懒开时 bindView 用 entry.sessionId=null 绑定，displayedSessionId 一直 null，
+      // requestSync / reloadCurrentFromHistory 早退 → 重连追平死。SDK 首到 sessionId 时补丁同一实例。
+      if (displayedInstanceId && !displayedSessionId && sessionId) {
+        displayedSessionId = sessionId;
+        updatePillSession(sessionId);
+        if (topTitleText) topTitleText.textContent = '聊天';
+      }
     },
   });
   socket.on('agent:event', dispatchAgentEvent);
@@ -1201,11 +1208,24 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     user_message(p) {
       // 弱网韧性：检查是否存在具有相同文本的未连接/离线发送中的乐观占位符。
       // 如果存在，不创建新气泡，而是将占位符气泡无缝转换为已确认的消息状态。
+      // FE-002：优先 clientMessageId；纯附件无 .whitespace-pre-wrap 时按附件名集合匹配。
       const pendingBubbles = [...messagesEl.querySelectorAll('.opacity-70')];
       let matchedBubble = null;
+      const attNames = Array.isArray(p.attachments)
+        ? p.attachments.map(a => a?.name).filter(Boolean).sort().join('\0')
+        : '';
       for (const b of pendingBubbles) {
+        if (p.clientMessageId && b.dataset.clientMessageId === p.clientMessageId) {
+          matchedBubble = b;
+          break;
+        }
         const tDiv = b.querySelector('.whitespace-pre-wrap');
-        if (tDiv && tDiv.textContent === p.text) {
+        if (tDiv && p.text && tDiv.textContent === p.text) {
+          matchedBubble = b;
+          break;
+        }
+        // 纯附件（无文本）占位：用 data-att-names 对齐
+        if (!p.text && attNames && b.dataset.attNames === attNames) {
           matchedBubble = b;
           break;
         }
@@ -1214,7 +1234,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (matchedBubble) {
         matchedBubble.classList.remove('opacity-70');
         matchedBubble.querySelector('.pending-indicator')?.remove();
-        
+        // FE-005：离线占位曾是纯 textContent——确认时升级为与历史一致的 markdown 渲染（保留附件区）
+        if (p.text && !matchedBubble.classList.contains('um')) {
+          const attWrap = matchedBubble.querySelector('.flex.flex-wrap');
+          matchedBubble.innerHTML = render(p.text);
+          matchedBubble.classList.add('msg-body', 'um');
+          if (attWrap) matchedBubble.appendChild(attWrap);
+          matchedBubble.querySelectorAll('pre code').forEach(b => {
+            try { hljs.highlightElement(b); } catch { /* ignore */ }
+          });
+          injectCodeCopyButtons(matchedBubble);
+          foldLongUserBubble(matchedBubble, p.text);
+        }
+
         // 追加任何可能附带的附件
         if (Array.isArray(p.attachments) && p.attachments.length) {
           let wrap = null;
@@ -1238,19 +1270,23 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           }
           if (wrap) matchedBubble.appendChild(wrap);
         }
-        if (p.text) appendCopyAction(matchedBubble, () => p.text, 'right');
+        if (p.text && !matchedBubble.querySelector('[data-copy-action]')) {
+          appendCopyAction(matchedBubble, () => p.text, 'right');
+        }
         scrollBottom(true);
         return; // 匹配成功，直接返回，避免生成重复聊天气泡
       }
 
       const bubble = el(`<div class="msg-frame rounded-xl bg-user text-ink px-3 py-2 text-sm" data-testid="user-message"></div>`);
       if (p.text) {
-        const t = el(`<div class="whitespace-pre-wrap"></div>`);
-        t.textContent = p.text;
-        // 长指令默认折叠（移动端痛点：上滑看前文被长指令顶住）。纯函数判超 10 行才折，
-        // 折叠态限高可见一截 + 底部「展开」按钮；点开保持展开、再点收起。
-        foldLongUserText(t, p.text);
-        bubble.appendChild(t);
+        // FE-005：与历史路径一致——marked + DOMPurify，避免「发出去纯文本 / 回来看变 markdown」观感分裂。
+        bubble.innerHTML = render(p.text);
+        bubble.classList.add('msg-body', 'um');
+        bubble.querySelectorAll('pre code').forEach(b => {
+          try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ }
+        });
+        injectCodeCopyButtons(bubble);
+        foldLongUserBubble(bubble, p.text);
       }
       if (Array.isArray(p.attachments) && p.attachments.length) {
         const wrap = el(`<div class="flex flex-wrap gap-2${p.text ? ' mt-2' : ''}"></div>`);
@@ -1289,7 +1325,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       alertCue('need');
       questionQueue.push(p);
       showNextQuestion();
-      notify('❓ 需要选择', p.text.slice(0, 80));
+      // FE-003：text 可能缺失/非字符串（畸形 AskUserQuestion / SDK 漂移），slice 会抛并中断 handler。
+      const qPreview = typeof p.text === 'string' ? p.text : (p.text == null ? '' : String(p.text));
+      notify('❓ 需要选择', qPreview.slice(0, 80));
     },
     // M4：审批/选题完成后广播，多设备或重放缓冲时关闭陈旧弹窗
     request_resolved(p) {
@@ -2008,6 +2046,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addBar('请先完成设备授权或解除只读状态，再发送新消息', 'text-info');
       return;
     }
+    // FE-004：在途 turn 本地 busy 时禁连发——_queueFull 只在 pendingTurns>=2 才由 instances 广播，
+    // 双击 Send 在首条 ack 前会发出两条不同 clientMessageId。离线入队不走 busy 闸（无在途 SDK turn）。
+    if (socket.connected && _busyState) {
+      addBar('当前任务还在进行，请等结束后再发（或点停止）', 'text-info');
+      return;
+    }
     if (activePerm || activeQuestion) {
       addBar('请先处理当前审批或选择，再发送新消息', 'text-info');
       return;
@@ -2076,6 +2120,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 离线状态：生成乐观消息气泡占位符，保存到离线重发队列，待重连后自动重发
       haptic('tap');
       const bubble = el(`<div class="msg-frame rounded-xl bg-user text-ink px-3 py-2 text-sm opacity-70 transition-opacity"></div>`);
+      // FE-002：挂 clientMessageId + 附件名指纹，供 user_message 回放精确匹配（含纯附件无文本）
+      bubble.dataset.clientMessageId = clientMessageId;
+      if (outgoingAttachments?.length) {
+        bubble.dataset.attNames = outgoingAttachments.map(a => a?.name).filter(Boolean).sort().join('\0');
+      }
       if (text) {
         const t = el(`<div class="whitespace-pre-wrap"></div>`);
         t.textContent = text;
@@ -2221,7 +2270,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const hasText = inputEl.value.trim().length > 0 || attachments.items().length > 0;
     const blockedByUserRequest = !!activePerm || !!activeQuestion;
     const blockedByDisabledInput = inputEl.disabled;
-    if (hasText && !_queueFull && !blockedByUserRequest && !blockedByDisabledInput) {
+    // FE-004：在线在途 busy 也禁发送（与 send() 闸一致）；离线仍允许入 offlineQueue。
+    const blockedByBusy = socket.connected && _busyState;
+    if (hasText && !_queueFull && !blockedByUserRequest && !blockedByDisabledInput && !blockedByBusy) {
       btnSend.className = "flex items-center justify-center w-9 h-9 rounded-full bg-ink text-surface hover:bg-ink-soft active:scale-95 shadow-sm transition-all duration-200 shrink-0";
       btnSend.disabled = false;
       btnSend.title = '';
@@ -2230,7 +2281,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       btnSend.disabled = true;
       btnSend.title = blockedByUserRequest
         ? '请先处理当前审批或选择'
-        : (blockedByDisabledInput ? '请先完成设备授权或解除只读状态' : (_queueFull ? '前面已有消息在排队，请等当前任务结束' : ''));
+        : (blockedByDisabledInput ? '请先完成设备授权或解除只读状态'
+          : (blockedByBusy ? '当前任务还在进行，请等结束后再发（或点停止）'
+            : (_queueFull ? '前面已有消息在排队，请等当前任务结束' : '')));
     }
   }
 
@@ -2699,6 +2752,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       _pendingFirstSend = false; // 一次性：进入视图切换即消费，防标志悬留误触发后续绑定
       if (consoleModal && consoleModal.classList.contains('sheet-open')) {
         loadConsoleLogs(newViewing);
+      }
+    } else if (newViewing && displayedInstanceId === newViewing && !displayedSessionId) {
+      // FE-001：同一实例后续 instances 广播补上了 sessionId（懒开后 init），须补丁 displayedSessionId，
+      // 否则 newViewing === displayedInstanceId 永远不进 bindView，requestSync 持续早退。
+      const target = instancesList.find(x => x.instanceId === newViewing);
+      if (target?.sessionId) {
+        displayedSessionId = target.sessionId;
+        updatePillSession(target.sessionId);
+        if (topTitleText) topTitleText.textContent = '聊天';
       }
     } else if (!newViewing) {
       // 空首页视图未变（displayed 已是 null、cwd 也没变），但仍可能收到二次 instances：
@@ -3218,6 +3280,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function setBusy(b) {
     if (!activeStatusPill || b === _busyState) return;
     _busyState = b;
+    updateSendButtonState(); // FE-004：busy 变化即时刷新发送按钮
     if (b) {
       if (!interruptPending) {
         if (btnStop) btnStop.disabled = false;
@@ -4152,14 +4215,24 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function onHistoryAppend(ev) {
     if (ev.instanceId !== viewingInstanceId) return; // 只进当前查看会话（server 已按 viewing 发，这里再兜一层）
     const msgs = ev.payload?.messages || [];
-    if (msgs.length) {
+    if (!msgs.length && !ev.payload?.replace) return;
+    // SS-001：满窗滑动全量重发——先清屏再渲，避免把中间条当增量叠上去。
+    if (ev.payload?.replace) {
+      messagesEl.innerHTML = '';
+      messagesEl.classList.remove('empty-start');
+      toolCards.clear();
+      subagentCards.clear();
+      if (msgs.length) renderHistoryBubbles(msgs);
+      const sid = ev.sessionId;
+      if (sid) seenDiskLenBySession.set(sid, msgs.length);
+    } else if (msgs.length) {
       renderHistoryBubbles(msgs);
       // 追平也是磁盘 history 增量——累加到已见条数，保持切入对账基准准确（见 shouldReloadOnEnter）。
       const sid = ev.sessionId;
       if (sid) seenDiskLenBySession.set(sid, (seenDiskLenBySession.get(sid) || 0) + msgs.length);
-      // 外部写入重置自动解锁倒计时（quietTicks 清零 → 重新满量约 12.5s）
-      if (ev.payload?.external && mirrorReadonlySid) startMirrorCountdown();
     }
+    // 外部写入重置自动解锁倒计时（quietTicks 清零 → 重新满量约 12.5s）
+    if (ev.payload?.external && mirrorReadonlySid) startMirrorCountdown();
   }
 
   // 只读锁：会话被判「正在终端运行」时常驻横幅 + 禁用输入，硬防两进程并发写盘分叉。
