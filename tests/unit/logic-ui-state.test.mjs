@@ -641,15 +641,14 @@ test.describe('formatMirrorBannerText（只读锁横幅三态）', () => {
   });
   test('driving 默认句：状态短句，无秒数倒计时、无点接管指令', () => {
     const t = formatMirrorBannerText({});
-    assert.match(t, /终端运行中/);
-    assert.match(t, /只读追平/);
+    assert.equal(t, '终端会话运行中，移动端当前只读');
     assert.doesNotMatch(t, /接管|静默后|点/);
     assert.equal(/\d+\s*s/.test(t), false, '不应展示约 Ns 假精密倒计时');
   });
 });
 
-// 驾驶中点输入区时的可操作说明（disabled 吞点击 → 需主动 addBar；与横幅短句互补）
-// 主操作已迁到发送钮位「续接 CLI 会话」，说明文案指向该按钮。
+// 驾驶中点输入区时的可操作说明（disabled 吞点击 → 需主动 addBar；与 placeholder 短句互补）
+// 主操作已迁到发送钮位「续接」，说明文案指向该按钮。
 test.describe('formatMirrorComposerHint（点输入区说明三态）', () => {
   test('armed：等待自动切换 + 可取消', () => {
     const t = formatMirrorComposerHint({ armed: true });
@@ -659,14 +658,15 @@ test.describe('formatMirrorComposerHint（点输入区说明三态）', () => {
   test('stale：确认终端已停后续接', () => {
     const t = formatMirrorComposerHint({ stale: true });
     assert.match(t, /疑似中断/);
-    assert.match(t, /续接 CLI 会话/);
+    assert.match(t, /续接/);
   });
   test('driving：能/不能/硬要怎么做；无假精密倒计时', () => {
     const t = formatMirrorComposerHint({});
-    assert.match(t, /终端运行中|只读追平/);
+    assert.match(t, /终端会话运行中/);
+    assert.match(t, /移动端当前只读/);
     assert.match(t, /不能/);
     assert.match(t, /能/);
-    assert.match(t, /续接 CLI 会话/);
+    assert.match(t, /续接/);
     assert.equal(/\d+\s*s/.test(t), false);
   });
   test('armed 优先于 stale', () => {

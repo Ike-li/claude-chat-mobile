@@ -385,20 +385,20 @@
               </svg>
             </button>
 
-            <!-- ⚙️ 触感设置按钮 -->
-            <button id="btnSettings" class="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="打开设置面板">
-              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+            <!-- ⚙️ 设置：保持在左侧工具条末（附件后），位置不因续接钮改变 -->
+            <button id="btnSettings" class="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="打开设置面板" aria-label="打开设置面板">
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
           </div>
 
-          <!-- Right side: Send/Stop Buttons -->
+          <!-- Right side: Send/Stop/Resume（短文案「续接」，不挪动左侧齿轮） -->
           <div class="flex items-center shrink-0">
             <!-- 兼容性保留：隐藏的原 btnStop -->
             <button id="btnStop" class="hidden pointer-events-none w-0 h-0" style="display: none !important;"></button>
-            
+
             <button id="btnSend" class="flex items-center justify-center w-8 h-8 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0" title="发送" disabled>
               <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />

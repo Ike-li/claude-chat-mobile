@@ -145,7 +145,8 @@ export function resolveComposerPrimaryMode({
       return {
         mode: 'cancel-resume',
         enabled: true,
-        label: '取消续接',
+        // 钮面短文案，完整语义在 aria/title——避免宽按钮挤掉底栏齿轮
+        label: '取消',
         title: '取消排队中的续接，继续只读追平',
         ariaLabel: '取消续接',
       };
@@ -153,8 +154,8 @@ export function resolveComposerPrimaryMode({
     return {
       mode: 'resume',
       enabled: true,
-      label: '续接 CLI 会话',
-      title: '终端运行中时在此续接；运行中会排队等本轮结束，疑似中断需确认',
+      label: '续接',
+      title: '续接 CLI 会话：运行中会排队等本轮结束，疑似中断需确认',
       ariaLabel: '续接 CLI 会话',
     };
   }
@@ -1084,15 +1085,15 @@ export function isToolSummaryTruncated(summary, { truncated } = {}) {
 export function formatMirrorBannerText({ armed = false, stale = false } = {}) {
   if (armed) return '已请求续接，等待终端当前操作完成…';
   if (stale) return '终端疑似中断（超 5 分钟无活动）——确认已停可续接';
-  return '终端运行中 · 只读追平';
+  return '终端会话运行中，移动端当前只读';
 }
 
 // 驾驶中点输入区/附件时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
-// 主操作指向发送钮位「续接 CLI 会话」。单行 · 分隔：addBar 用 textContent，无 pre-wrap。
+// 主操作指向发送钮位「续接」。单行 · 分隔：addBar 用 textContent，无 pre-wrap。
 export function formatMirrorComposerHint({ armed = false, stale = false } = {}) {
   if (armed) return '已请求续接：等终端当前操作完成后自动可写。可点「取消续接」撤销。';
-  if (stale) return '终端疑似中断。确认终端已停后点「续接 CLI 会话」即可在手机继续。';
-  return '终端运行中，这里只读追平 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接 CLI 会话」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）';
+  if (stale) return '终端疑似中断。确认终端已停后点「续接」即可在手机继续。';
+  return '终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）';
 }
 
 // 同文案节流：避免用户连点输入框刷一串相同 bar；换文案（armed/stale 切换）立即放行。

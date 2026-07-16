@@ -2499,12 +2499,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     btnSend.title = state.title;
     btnSend.setAttribute('aria-label', state.ariaLabel);
     if (state.mode === 'resume' || state.mode === 'cancel-resume') {
-      // 文字主按钮：替换圆形发送图标位，文案来自 resolve 的 label
-      btnSend.className = 'flex items-center justify-center min-w-[7.5rem] h-9 px-3 rounded-full shrink-0 transition-all duration-200 shadow-sm text-xs font-semibold' +
+      // 短文案 pill：宽度贴近「发送」圆钮，不挤左侧芯片/齿轮；完整名在 aria-label/title
+      btnSend.className = 'flex items-center justify-center h-9 px-2.5 rounded-full shrink-0 transition-all duration-200 shadow-sm text-xs font-semibold whitespace-nowrap' +
         (state.mode === 'cancel-resume'
           ? ' border border-line text-ink-soft bg-surface hover:bg-sunk active:scale-95'
           : ' bg-cta text-white hover:brightness-95 active:scale-95');
-      if (modeChanged) btnSend.textContent = state.label || (state.mode === 'cancel-resume' ? '取消续接' : '续接 CLI 会话');
+      if (modeChanged) btnSend.textContent = state.label || (state.mode === 'cancel-resume' ? '取消' : '续接');
       else if (btnSend.textContent !== state.label) btnSend.textContent = state.label;
     } else if (state.mode === 'stop') {
       btnSend.className = 'flex items-center justify-center w-9 h-9 rounded-full shrink-0 transition-all duration-200 shadow-sm' +
@@ -4599,7 +4599,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       btnAttach.disabled = effective;
       btnAttach.classList.toggle('opacity-50', effective);
       btnAttach.classList.toggle('cursor-not-allowed', effective);
-      btnAttach.title = effective ? '终端运行中，只读——点右侧续接可在手机继续' : '添加附件';
+      btnAttach.title = effective ? '终端会话运行中，移动端当前只读——点右侧续接可在手机继续' : '添加附件';
     }
     // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
     updateSendButtonState();
