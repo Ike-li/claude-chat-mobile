@@ -105,6 +105,23 @@ test.describe('Socket.IO 连接与认证', CI_SKIP, () => {
 });
 
 test.describe('事件流 — 新连接重放', CI_SKIP, () => {
+  test('连接时总是收到权威 mirror_state，空闲态明确 readonly=false', async (t) => {
+    const events = [];
+    const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });
+    t.after(() => s.disconnect());
+    s.on('agent:event', e => events.push(e));
+    await new Promise((resolve, reject) => {
+      s.on('connect', resolve);
+      s.on('connect_error', reject);
+      setTimeout(() => reject(new Error('timeout')), 5000);
+    });
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const mirrorState = events.find(e => e.type === 'mirror_state');
+    assert.ok(mirrorState, `expected mirror_state, got: ${events.map(e => e.type).join(', ')}`);
+    assert.equal(mirrorState.payload.readonly, false);
+    assert.equal(mirrorState.payload.stale, false);
+  });
+
   test('连接后收到合成事件（instances / device_status / pending_devices 至少其一）', async () => {
     const events = [];
     const s = ioc(`http://127.0.0.1:${PORT}`, { auth: { token: '' }, forceNew: true });

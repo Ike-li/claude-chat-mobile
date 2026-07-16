@@ -1500,13 +1500,18 @@ registerSocketConnection(io, socket => {
     effortTo(socket);
     // 台阶3：重放 tab 栏快照（viewingInstanceId + dirs + 各实例状态）
     instancesTo(socket);
-    // 只读追平：向(重)连客户端补发当前只读态——setMirror 仅在变化时广播、不会自动补给新 socket，
-    // 不补则重连客户端会以「可编辑」状态渲染一个终端正在跑的会话，留下并发写盘分叉的窗口。
+    // 只读追平：向(重)连客户端补发权威完整快照（含 readonly=false）。setMirror 仅在变化时广播，
+    // 若空闲态省略事件，断线前残留 readonly=true 的客户端会在重连后继续假锁；实例 ID 重启复用时尤其明显。
     const currentMirrorAgent = agents.get(viewingInstanceId);
-    if (currentMirrorAgent && mirrorOwnedBy(currentMirrorAgent.sessionId, viewingInstanceId)) socket.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: currentMirrorAgent.sessionId,
+    const mirrorReadonly = Boolean(currentMirrorAgent && mirrorOwnedBy(currentMirrorAgent.sessionId, viewingInstanceId));
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: currentMirrorAgent?.sessionId ?? null,
       instanceId: viewingInstanceId, cwd: viewingCwd, ts: Date.now(), type: 'mirror_state',
-      payload: { readonly: true, stale: mirrorStale, observedCli: mirrorObservedCli }
+      payload: {
+        readonly: mirrorReadonly,
+        stale: mirrorReadonly && mirrorStale,
+        ...(mirrorReadonly ? { observedCli: mirrorObservedCli } : {}),
+      }
     });
     // 可信端连入时重放当前待审批设备列表，使其可立即在 Web UI 远程审批
     socket.emit('agent:event', {
