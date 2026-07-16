@@ -1067,6 +1067,27 @@ export function formatMirrorBannerText({ armed = false, stale = false } = {}) {
   return '终端驾驶中 · 只读追平——静默后自动可写，或点接管';
 }
 
+// 驾驶中点输入区/附件/禁用发送钮时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
+// 单行 · 分隔：addBar 用 textContent，无 pre-wrap，换行会塌成空格。
+export function formatMirrorComposerHint({ armed = false, stale = false } = {}) {
+  if (armed) return '已请求接管：等终端当前操作完成后自动可写。可点「取消接管」撤销。';
+  if (stale) return '终端疑似中断。确认终端已停后点「接管 CLI 会话」即可在手机继续。';
+  return '终端驾驶中，这里只读追平 · 不能：打字/发图/改模型权限思考 · 能：看消息、「刷新消息」、等终端静默后自动可写 · 硬要手机继续：点上方「接管 CLI 会话」（等本轮结束再放行；疑似中断可立即接管，有分叉风险）';
+}
+
+// 同文案节流：避免用户连点输入框刷一串相同 bar；换文案（armed/stale 切换）立即放行。
+export function shouldEmitThrottledHint({
+  lastText = '',
+  lastAt = 0,
+  nextText = '',
+  now = 0,
+  throttleMs = 2500,
+} = {}) {
+  if (!nextText) return false;
+  if (nextText === lastText && Number(now) - Number(lastAt) < Number(throttleMs)) return false;
+  return true;
+}
+
 // 是否接纳一条 mirror_state（防跨会话/跨工作区误锁）。
 // 契约：
 //   · readonly=false → 一律接受解锁（含 sessionId/instanceId 为空的权威空闲快照）

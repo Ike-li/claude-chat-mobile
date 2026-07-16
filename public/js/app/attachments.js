@@ -12,6 +12,8 @@ export function createAttachmentController(context, options = {}) {
     haptic = () => {},
     onChange = () => {},
     scheduleInsetResettle = () => {},
+    // 返回 false 则拒绝添加（如 CLI 驾驶只读）；可在回调内自行 addBar 说明。
+    canAdd = () => true,
   } = options;
   const dom = context.dom;
   const deps = context.dependencies;
@@ -89,6 +91,7 @@ export function createAttachmentController(context, options = {}) {
   }
 
   async function addFiles(files) {
+    if (canAdd() === false) return;
     const list = Array.isArray(files) ? files : [...(files || [])];
     for (const file of list) {
       if (!file) continue;
@@ -188,7 +191,12 @@ export function createAttachmentController(context, options = {}) {
 
   function bind() {
     const doc = deps.document || globalThis.document;
-    if (dom.btnAttach && dom.fileInput) dom.btnAttach.onclick = () => dom.fileInput.click();
+    if (dom.btnAttach && dom.fileInput) {
+      dom.btnAttach.onclick = () => {
+        if (canAdd() === false) return;
+        dom.fileInput.click();
+      };
+    }
     if (dom.fileInput) {
       dom.fileInput.onchange = async () => {
         const files = [...dom.fileInput.files];

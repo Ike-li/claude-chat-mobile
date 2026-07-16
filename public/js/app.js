@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -163,6 +163,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
   let mirrorObservedCli = { model: null, permissionMode: null, effort: null };
   let mirrorWebPanelSnapshot = null; // CLI 观察态只负责展示；接管时恢复进入镜像前的 Web 选择，绝不写回实例偏好
+  // 点输入区/附件/禁发钮时的说明节流（同文案 2.5s 内不刷屏；换 armed/stale 文案立即放行）
+  let _mirrorComposerHintLast = { text: '', at: 0 };
+  const MIRROR_COMPOSER_HINT_THROTTLE_MS = 2500;
 
   // 斜杠命令提示：init 事件推送 + localStorage 缓存（init 每轮到达并刷新缓存；页面刷新后、下一轮 init 前靠缓存提示）
   try {
@@ -2181,7 +2184,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function send() {
     ensureAlertAudio(); // 发送=用户手势：解锁 WebAudio，本轮完成后提示音才能响
     if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点「接管 CLI 会话」可接管）
-      addBar('此会话正在终端运行，只读中——点「接管 CLI 会话」可在手机继续', 'text-danger');
+      showMirrorComposerHint();
       return;
     }
     if (inputEl.disabled) {
@@ -2410,6 +2413,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     haptic,
     onChange: updateSendButtonState,
     scheduleInsetResettle: () => scheduleInsetResettle(),
+    // CLI 驾驶只读：拒加附件（否则进 tray 却发不出去）；说明走 showMirrorComposerHint。
+    canAdd: () => {
+      if (!mirrorReadonlySid) return true;
+      showMirrorComposerHint();
+      return false;
+    },
   });
   // ---- 斜杠命令提示 ----
   const hints = el(`<div id="cmdHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)"></div>`);
@@ -4565,6 +4574,29 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     hideTaskProgress = (...a) => { _hp(...a); reconcileBanners(); };
   }
 
+  // 驾驶中点输入区：解释能/不能/硬要怎么做（disabled 吞原生 focus，需主动反馈）。
+  function showMirrorComposerHint() {
+    if (!mirrorReadonlySid) return;
+    const armed = armedTakeoverSid === mirrorReadonlySid;
+    const text = formatMirrorComposerHint({ armed, stale: mirrorStaleFlag });
+    const now = Date.now();
+    if (!shouldEmitThrottledHint({
+      lastText: _mirrorComposerHintLast.text,
+      lastAt: _mirrorComposerHintLast.at,
+      nextText: text,
+      now,
+      throttleMs: MIRROR_COMPOSER_HINT_THROTTLE_MS,
+    })) return;
+    _mirrorComposerHintLast = { text, at: now };
+    addBar(text, 'text-info');
+    // 把视线导到横幅接管按钮（不自动接管）
+    try {
+      mirrorBanner?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+      mirrorBanner?.classList.add('ring-1', 'ring-danger/50');
+      setTimeout(() => mirrorBanner?.classList.remove('ring-1', 'ring-danger/50'), 900);
+    } catch { /* scroll/classList 在极端 DOM 下可忽略 */ }
+  }
+
   function applyMirror(readonly, sessionId, stale = false, observedCli) {
     const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
@@ -4588,6 +4620,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       restoreWebPanelState();
       mirrorWebPanelSnapshot = null;
       mirrorObservedCli = { model: null, permissionMode: null, effort: null };
+      _mirrorComposerHintLast = { text: '', at: 0 }; // 解锁后清节流，下次再锁可立刻提示
     } else {
       rebuildEffortOptions(currentModel || cwdDefaultModel);
     }
@@ -4600,9 +4633,25 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (effective) refreshMirrorBannerCopy();
     if (btnMirrorOverride) btnMirrorOverride.textContent = armed ? '取消接管' : '接管 CLI 会话';
     if (inputEl) inputEl.disabled = effective;
+    // 附件入口随只读锁：禁点 + 防「选了图却发不出」
+    if (btnAttach) {
+      btnAttach.disabled = effective;
+      btnAttach.classList.toggle('opacity-50', effective);
+      btnAttach.classList.toggle('cursor-not-allowed', effective);
+      btnAttach.title = effective ? '终端驾驶中，只读——点此查看如何继续' : '添加附件';
+    }
     if (effective) { if (btnSend) btnSend.disabled = true; } // 锁定：禁发送
     else updateSendButtonState();                            // 解锁：按有无文本恢复发送按钮态
   }
+
+  // 输入 pill 捕获点击：disabled 的 textarea/按钮自身常不派发 click，父级 pointerdown 仍能收到。
+  // 仅 mirror 只读时解释状态；不拦截横幅上的接管/刷新按钮（它们不在 pill 内）。
+  document.querySelector('.chat-input-pill')?.addEventListener('pointerdown', (ev) => {
+    if (!mirrorReadonlySid) return;
+    // 设置 chip 已有自己的「设置已冻结」提示，避免双 bar
+    if (ev.target?.closest?.('#pillModel, #pillPerm, #pillEffort, #btnSettings')) return;
+    showMirrorComposerHint();
+  }, { capture: true });
   function onMirrorState(ev) {
     // readonly=true 只对当前查看会话生效；readonly=false（sessionId 可能为 null）一律解锁。
     // 归属守卫在 logic.acceptMirrorState：CLI 在 A 驾驶时切到 B 新会话/空首页，不得接纳 A 的 readonly=true

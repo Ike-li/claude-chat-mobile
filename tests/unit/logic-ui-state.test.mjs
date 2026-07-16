@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, taskStopUiState, acceptMirrorState, shouldResetMirrorOnViewChange } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, taskStopUiState, acceptMirrorState, shouldResetMirrorOnViewChange } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -669,6 +669,55 @@ test.describe('formatMirrorBannerText（只读锁横幅三态）', () => {
     assert.match(t, /只读追平/);
     assert.match(t, /接管|自动可写/);
     assert.equal(/\d+\s*s/.test(t), false, '不应展示约 Ns 假精密倒计时');
+  });
+});
+
+// 驾驶中点输入区时的可操作说明（disabled 吞点击 → 需主动 addBar；与横幅短句互补）
+test.describe('formatMirrorComposerHint（点输入区说明三态）', () => {
+  test('armed：等待自动切换 + 可取消', () => {
+    const t = formatMirrorComposerHint({ armed: true });
+    assert.match(t, /已请求接管|等待|自动可写/);
+    assert.match(t, /取消接管/);
+  });
+  test('stale：确认终端已停后接管', () => {
+    const t = formatMirrorComposerHint({ stale: true });
+    assert.match(t, /疑似中断/);
+    assert.match(t, /接管 CLI 会话/);
+  });
+  test('driving：能/不能/硬要怎么做；无假精密倒计时', () => {
+    const t = formatMirrorComposerHint({});
+    assert.match(t, /终端驾驶中|只读追平/);
+    assert.match(t, /不能/);
+    assert.match(t, /能/);
+    assert.match(t, /接管 CLI 会话/);
+    assert.equal(/\d+\s*s/.test(t), false);
+  });
+  test('armed 优先于 stale', () => {
+    assert.match(formatMirrorComposerHint({ armed: true, stale: true }), /已请求接管|取消接管/);
+  });
+});
+
+test.describe('shouldEmitThrottledHint（同文案节流）', () => {
+  test('首次必发', () => {
+    assert.equal(shouldEmitThrottledHint({ lastText: '', lastAt: 0, nextText: 'hello', now: 1000, throttleMs: 2500 }), true);
+  });
+  test('同文案在节流窗内不发', () => {
+    assert.equal(shouldEmitThrottledHint({
+      lastText: 'hello', lastAt: 1000, nextText: 'hello', now: 2000, throttleMs: 2500,
+    }), false);
+  });
+  test('同文案过节流窗再发', () => {
+    assert.equal(shouldEmitThrottledHint({
+      lastText: 'hello', lastAt: 1000, nextText: 'hello', now: 4000, throttleMs: 2500,
+    }), true);
+  });
+  test('换文案立即发（armed/stale 切换）', () => {
+    assert.equal(shouldEmitThrottledHint({
+      lastText: 'a', lastAt: 1000, nextText: 'b', now: 1100, throttleMs: 2500,
+    }), true);
+  });
+  test('空文案不发', () => {
+    assert.equal(shouldEmitThrottledHint({ lastText: '', lastAt: 0, nextText: '', now: 1, throttleMs: 2500 }), false);
   });
 });
 
