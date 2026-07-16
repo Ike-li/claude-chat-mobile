@@ -148,6 +148,26 @@ test.describe('interrupt()', () => {
     s.dispose();
   });
 
+  // AG-004：interrupt 成功后须结算挂起的审批/提问，不依赖 SDK abort signal
+  test('interrupt 成功 → pendingPermissions / pendingQuestions 清空（AG-004）', async () => {
+    const { s, events } = makeSession();
+    const ac = new AbortController();
+    s.askPermission('Bash', { command: 'sleep 9' }, { signal: ac.signal, toolUseID: 't1' });
+    s.handleQuestion(
+      { questions: [{ question: 'Pick?', options: ['A', 'B'] }] },
+      { signal: ac.signal, toolUseID: 'q1' },
+    );
+    assert.equal(s.pendingPermissions.size, 1);
+    assert.equal(s.pendingQuestions.size, 1);
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt();
+    assert.equal(s.pendingPermissions.size, 0);
+    assert.equal(s.pendingQuestions.size, 0);
+    assert.ok(events.some(e => e.type === 'request_resolved' && e.payload.requestId === 't1'));
+    assert.ok(events.some(e => e.type === 'request_resolved' && e.payload.requestId === 'q1#0' && e.payload.outcome === 'aborted'));
+    s.dispose();
+  });
+
   test('SDK interrupt 抛错 → 队列不动、pendingTurns 不动', async () => {
     const { s, events } = makeSession();
     s.pendingTurns = 2;
