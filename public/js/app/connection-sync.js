@@ -1,11 +1,15 @@
 import { formatRttMs, rttToneClass } from '../logic.js';
 
+// good/ok 都用中性 ink-soft：健康延迟不与绿点抢 success 色；仅 warn/bad 上色告警。
 const TONE_CLASSES = {
-  good: 'text-success',
+  good: 'text-ink-soft',
   ok: 'text-ink-soft',
   warn: 'text-warning',
   bad: 'text-danger',
 };
+
+// 顶栏胶囊基类：与 top-context-pill 同语汇（sunk 底 + 软边 + 圆角），尺寸更小；色阶由 tone class 叠上。
+const RTT_CHIP_BASE = 'conn-rtt-chip tabular-nums leading-none select-none';
 
 export function createRttMonitor(context, {
   pingTimeoutMs = 3000,
@@ -26,7 +30,7 @@ export function createRttMonitor(context, {
     const rtt = context.dom.connRtt;
     if (!rtt) return;
     rtt.textContent = '';
-    rtt.className = 'hidden text-[10px] font-mono tabular-nums leading-none select-none';
+    rtt.className = `hidden ${RTT_CHIP_BASE}`;
     if (context.dom.connDotWrap) context.dom.connDotWrap.title = '连接状态：绿=已连接 红=断开';
   }
 
@@ -39,11 +43,12 @@ export function createRttMonitor(context, {
       return '';
     }
     const toneClass = TONE_CLASSES[rttToneClass(milliseconds)] || 'text-ink-soft';
-    rtt.textContent = label;
-    rtt.className = `${toneClass} text-[10px] font-mono tabular-nums leading-none select-none`;
+    // 人话前缀「延迟」：主界面可读；formatRttMs 仍只产出数值（42ms / 1.2s），便于单测与复用。
+    rtt.textContent = `延迟 ${label}`;
+    rtt.className = `${toneClass} ${RTT_CHIP_BASE}`;
     rtt.title = `手机到主机往返延迟 ${label}`;
     if (context.dom.connDotWrap) context.dom.connDotWrap.title = `已连接 · 延迟 ${label}`;
-    setStatus(`已连接 · ${label}`);
+    setStatus(`已连接 · 延迟 ${label}`);
     return label;
   }
 

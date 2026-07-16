@@ -257,6 +257,28 @@ details > summary::-webkit-details-marker { display: none; }
   cursor: pointer !important;
   pointer-events: auto !important;
 }
+/* 顶栏左侧延迟胶囊：比中间 project pill 更小一号，同 sunk/软边/圆角语汇；
+   不做成按钮（无 hover scale），避免与工作区入口抢主操作。色阶由 JS 叠 text-*。 */
+.conn-rtt-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 0.45rem;
+  border-radius: 9999px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--line-soft);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.02);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  max-width: 7.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.conn-rtt-chip.hidden {
+  display: none;
+}
 @media (hover: hover) {
   .top-context-pill:hover {
     background: var(--line-soft);

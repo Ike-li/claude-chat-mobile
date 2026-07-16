@@ -670,8 +670,8 @@ export function urlBase64ToUint8Array(b64) {
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
-// 连接 RTT 展示文案：手机顶栏实时延迟。合法有限非负 number → 整数 ms（≥1000 用 1 位小数 s）；
-// 非法/未知（null/NaN/负/非 number）→ ''，接线层据此隐藏，避免断线时残留陈旧数字。
+// 连接 RTT 数值段：合法有限非负 number → 整数 ms（≥1000 用 1 位小数 s）。
+// 接线层再拼人话前缀「延迟 …」；非法/未知 → ''，接线层据此隐藏，避免断线残留陈旧数字。
 export function formatRttMs(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';
   if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`;
@@ -679,7 +679,7 @@ export function formatRttMs(ms) {
 }
 
 // 连接 RTT 色阶语义 token：good(<150) / ok(<400) / warn(<1000) / bad(≥1000)。
-// 返回语义名而非 Tailwind class，接线层映射到 text-success/text-ink-soft/text-warning/text-danger；
+// 返回语义名而非 Tailwind class；接线层：good/ok → 中性 ink-soft（不与绿点抢色），warn/bad → warning/danger。
 // 非法 → ''，与 formatRttMs 对齐（隐藏时不着色）。
 export function rttToneClass(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';

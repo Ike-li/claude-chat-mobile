@@ -2,9 +2,46 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
   createHttpAuth,
+  rewriteAppModuleImports,
+  rewriteIndexAssetUrls,
   setSecurityHeaders,
   tokenMatches,
 } from '../../src/server/http.js';
+
+// 前端拆到 public/js/app/* 后，若只给 logic.js 打 ?v=，connection-sync 等子模块会吃浏览器缓存——
+// 手机顶栏「延迟」改文案却不生效就是这个坑。与 e2e mock transport 对齐：所有相对 import + css 都戳版本。
+test('rewriteAppModuleImports versions every relative ESM import, not only logic.js', () => {
+  const src = [
+    "import { createRttMonitor } from './app/connection-sync.js';",
+    'import { esc } from "./logic.js";',
+    "import { x } from '../logic.js';",
+    "export const keep = from('./not-an-import.js');", // 非 import 语法不误伤
+  ].join('\n');
+  const out = rewriteAppModuleImports(src, 'abc12345');
+  assert.match(out, /from '\.\/app\/connection-sync\.js\?v=abc12345'/);
+  assert.match(out, /from '\.\/logic\.js\?v=abc12345'/);
+  assert.match(out, /from '\.\.\/logic\.js\?v=abc12345'/);
+  assert.match(out, /from\('\.\/not-an-import\.js'\)/); // 保持原样
+});
+
+test('rewriteIndexAssetUrls versions js and css under /js and /css', () => {
+  const html = [
+    '<script type="module" src="/js/app.js"></script>',
+    '<script src="/js/sw-cleanup.js"></script>',
+    '<link rel="stylesheet" href="/css/app.css">',
+    '<link rel="icon" href="/icons/icon.svg">',
+  ].join('\n');
+  const out = rewriteIndexAssetUrls(html, 'deadbeef');
+  assert.match(out, /\/js\/app\.js\?v=deadbeef/);
+  assert.match(out, /\/js\/sw-cleanup\.js\?v=deadbeef/);
+  assert.match(out, /\/css\/app\.css\?v=deadbeef/);
+  assert.match(out, /\/icons\/icon\.svg"/); // 图标不进 assetVersion 链
+  // 已带 ?v= 的不重复追加
+  assert.equal(
+    rewriteIndexAssetUrls('/js/app.js?v=old', 'new'),
+    '/js/app.js?v=old',
+  );
+});
 
 test('tokenMatches compares exact byte sequences and rejects missing configuration', () => {
   assert.equal(tokenMatches('', 'anything'), false);

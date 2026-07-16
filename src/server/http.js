@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { join } from 'node:path';
 import compression from 'compression';
@@ -112,19 +112,59 @@ export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateL
   };
 }
 
-function computeAssetVersion(selfJsDir, files) {
-  const hash = createHash('sha256');
-  for (const file of files) {
-    try { hash.update(readFileSync(join(selfJsDir, file))); } catch { /* optional asset */ }
+// 递归收集 public/js 下全部 .js（含 app/* 子模块），供 assetVersion 哈希。
+// 只哈希根层几个文件时，改 connection-sync.js 不会换 ?v=，手机继续吃缓存。
+function listJsFilesRecursive(dir) {
+  const out = [];
+  let entries = [];
+  try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return out; }
+  for (const entry of entries) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...listJsFilesRecursive(path));
+    else if (entry.isFile() && entry.name.endsWith('.js')) out.push(path);
   }
+  return out.sort();
+}
+
+function computeAssetVersion(selfJsDir, publicDir, files) {
+  const hash = createHash('sha256');
+  if (files?.length) {
+    for (const file of files) {
+      try { hash.update(readFileSync(join(selfJsDir, file))); } catch { /* optional */ }
+    }
+  } else {
+    for (const path of listJsFilesRecursive(selfJsDir)) {
+      try { hash.update(readFileSync(path)); } catch { /* optional */ }
+    }
+  }
+  // css 进版本链：顶栏胶囊样式改完也能逼浏览器换新
+  try { hash.update(readFileSync(join(publicDir, 'css', 'app.css'))); } catch { /* optional */ }
   return hash.digest('hex').slice(0, 8);
+}
+
+// index.html：/js/**/*.js 与 /css/**/*.css 统一打 ?v=（已带 query 的不重复追加）。
+export function rewriteIndexAssetUrls(html, assetVersion) {
+  return html.replace(
+    /(\/(?:js|css)\/[\w./-]+\.(?:js|css))(?!\?)/g,
+    `$1?v=${assetVersion}`,
+  );
+}
+
+// app.js（及将来其它壳模块）：所有相对 ESM import 打 ?v=，含 ./app/*.js 与 ../logic.js。
+// 只改 logic.js 会漏掉子模块——生产曾因此让 connection-sync 改动在手机上不生效。
+export function rewriteAppModuleImports(source, assetVersion) {
+  return source.replace(
+    /from\s+(['"])(\.\.?\/[\w./-]+\.js)\1/g,
+    `from '$2?v=${assetVersion}'`,
+  );
 }
 
 export function configureHttpShell({
   app,
   projectRoot,
   isAccessEnabled,
-  selfJsFiles = ['app.js', 'logic.js', 'tw-config.js', 'sw-cleanup.js'],
+  // 默认 null：哈希 public/js 全树 + css/app.css。传数组则仅哈希这些相对 selfJsDir 的路径（单测用）。
+  selfJsFiles = null,
 }) {
   app.use(compression());
   app.use((_req, res, next) => {
@@ -135,18 +175,21 @@ export function configureHttpShell({
   const publicDir = join(projectRoot, 'public');
   const vendorDir = join(publicDir, 'vendor');
   const selfJsDir = join(publicDir, 'js');
-  const assetVersion = computeAssetVersion(selfJsDir, selfJsFiles);
+  const assetVersion = computeAssetVersion(selfJsDir, publicDir, selfJsFiles);
 
   let indexHtml = null;
   let appJs = null;
   try {
-    indexHtml = readFileSync(join(publicDir, 'index.html'), 'utf8')
-      .replace(/(\/js\/[\w-]+\.js)(?!\?)/g, `$1?v=${assetVersion}`)
-      .replace('<body ', `<body data-cf-access="${isAccessEnabled() ? '1' : '0'}" `);
+    indexHtml = rewriteIndexAssetUrls(
+      readFileSync(join(publicDir, 'index.html'), 'utf8'),
+      assetVersion,
+    ).replace('<body ', `<body data-cf-access="${isAccessEnabled() ? '1' : '0'}" `);
   } catch { /* served as 500 below */ }
   try {
-    appJs = readFileSync(join(selfJsDir, 'app.js'), 'utf8')
-      .replace(/from\s+['"]\.\/logic\.js['"]/g, `from './logic.js?v=${assetVersion}'`);
+    appJs = rewriteAppModuleImports(
+      readFileSync(join(selfJsDir, 'app.js'), 'utf8'),
+      assetVersion,
+    );
   } catch { /* served as 500 below */ }
 
   app.get(['/', '/index.html'], (_req, res) => {
@@ -158,6 +201,22 @@ export function configureHttpShell({
     if (!appJs) return res.status(500).send('app.js load error');
     res.setHeader('Cache-Control', 'no-cache');
     return res.type('application/javascript').send(appJs);
+  });
+  // 子模块也改写相对 import 的 ?v=，避免 connection-sync 拉到未戳版本的 logic.js 双实例。
+  app.get(/^\/js\/.+\.js$/, (req, res, next) => {
+    if (req.path === '/js/app.js') return next(); // 上面专用路由已处理
+    const rel = req.path.replace(/^\/js\//, '');
+    if (rel.includes('..')) return res.status(400).end();
+    try {
+      const source = rewriteAppModuleImports(
+        readFileSync(join(selfJsDir, rel), 'utf8'),
+        assetVersion,
+      );
+      res.setHeader('Cache-Control', 'no-cache');
+      return res.type('application/javascript').send(source);
+    } catch {
+      return next(); // 交给 static 404
+    }
   });
   app.use(express.static(publicDir, {
     setHeaders: (res, filePath) => {

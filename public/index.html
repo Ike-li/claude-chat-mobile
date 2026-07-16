@@ -75,8 +75,8 @@
           <span id="connDot" class="w-2 h-2 rounded-full bg-danger shrink-0"></span>
         </div>
       </button>
-      <!-- 手机 ↔ 主机 socket 往返延迟；连接后由 app.js 周期测并着色，断线隐藏 -->
-      <span id="connRtt" class="hidden text-xs font-mono tabular-nums leading-none select-none" title="手机到主机的往返延迟" aria-live="polite"></span>
+      <!-- 手机 ↔ 主机 socket 往返延迟：迷你胶囊「延迟 Nms」，与中间 top-context-pill 同语汇；连上后由 app.js 周期测，断线隐藏 -->
+      <span id="connRtt" class="hidden conn-rtt-chip tabular-nums leading-none select-none" title="手机到主机的往返延迟" aria-live="polite"></span>
     </div>
 
     <!-- Center Section: Elegant top context pill with workspace and status -->
