@@ -70,6 +70,19 @@ test.describe('classifyPermissionRule：危险规则判定', () => {
     assert.equal(sev('Read(../**)'), 'warn');
     assert.equal(sev('Read(../../**)'), 'warn');
   });
+  // OPS-1：Write/Edit 的 ** / ~/** / /** 与 Read 同属「宽路径」，不得被当成「限定路径的写」→ ok。
+  // 此前 wildcard 只认 null/''/'*' /':*'，Write(**) 走 ok 分支 → doctor readiness 可假绿。
+  test('宽路径 Write/Edit(**|~/**|/**) → danger，不得误判 ok（OPS-1）', () => {
+    assert.equal(sev('Write(**)'), 'danger');
+    assert.equal(sev('Write(~/**)'), 'danger');
+    assert.equal(sev('Write(/**)'), 'danger');
+    assert.equal(sev('Edit(**)'), 'danger');
+    assert.equal(sev('MultiEdit(**)'), 'danger');
+    assert.equal(sev('NotebookEdit(~/**)'), 'danger');
+    assert.equal(sev('Write(../**)'), 'danger');
+    // 真正窄路径仍 ok（与既有 Write(//repo/**) 一致）
+    assert.equal(sev('Write(//repo/**)'), 'ok');
+  });
   test('未知工具 / mcp 不误报 danger', () => {
     assert.equal(sev('mcp__server__tool'), 'ok');
     assert.notEqual(sev('SomeWeirdTool'), 'danger');
@@ -134,3 +147,4 @@ test.describe('computeReadiness：公网暴露就绪度', () => {
     assert.equal(computeReadiness([chk('AUTH_TOKEN', 'ok'), chk('WHITELIST', 'ok', { dangerous: [] })]).level, 'ready');
   });
 });
+

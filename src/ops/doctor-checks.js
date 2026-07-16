@@ -44,13 +44,16 @@ export function classifyPermissionRule(rule) {
     if (/^\S+\*/.test(s)) return { rule: r, severity: 'warn', reason: '通配命令族，注意范围' }; // 命令名直接跟*=宽
     return { rule: r, severity: 'ok', reason: '限定命令' };
   }
+  // 宽路径通配（** / ~/** / /** / ../** …）：读与写共用——此前 Write 只认 null/''/'*' /':*' 为
+  // wildcard，Write(**) 被当成「限定路径的写」→ ok，doctor readiness 假绿（OPS-1）。
+  const broadPathGlob = /^(\.\.\/)*~?\/?\*\*/.test(spec);
   if (tool === 'Write' || tool === 'Edit' || tool === 'MultiEdit' || tool === 'NotebookEdit') {
-    if (wildcard) return { rule: r, severity: 'danger', reason: '可写任意文件（无路径限定）' };
+    if (wildcard || broadPathGlob) return { rule: r, severity: 'danger', reason: '可写任意文件（无路径限定）' };
     return { rule: r, severity: 'ok', reason: '限定路径的写' };
   }
   if (tool === 'Read') {
     // (\.\.\/)* 兜住相对父目录穿越（如 ../** / ../../**）——之前只认 ~/、/、裸 ** 开头，会漏判这类同样宽泛的通配。
-    if (wildcard || /^(\.\.\/)*~?\/?\*\*/.test(spec)) return { rule: r, severity: 'warn', reason: '可读大范围文件' };
+    if (wildcard || broadPathGlob) return { rule: r, severity: 'warn', reason: '可读大范围文件' };
     return { rule: r, severity: 'ok', reason: '限定路径的读' };
   }
   if (tool === 'WebFetch' || tool === 'WebSearch') return { rule: r, severity: 'warn', reason: '可访问外部网络' };
