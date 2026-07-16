@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -440,6 +440,30 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const leaveStartScreen = messageRenderer.leaveStartScreen;
   const appendMessage = messageRenderer.appendMessage;
   const addBar = messageRenderer.addBar;
+  // UX-019：档位变更反馈——空态不打系统条，改胶囊短暂高亮；有消息后仍可留痕。
+  // 审批留痕（已允许/已拒绝）必须直接走 addBar，不经此闸。
+  let pillFlashTimer = null;
+  function flashStatusPills() {
+    const pills = [pillModel, pillPerm, pillEffort].filter(p => p && !p.classList.contains('hidden'));
+    for (const p of pills) {
+      p.classList.remove('status-pill-flash');
+      void p.offsetWidth;
+      p.classList.add('status-pill-flash');
+    }
+    if (pillFlashTimer) clearTimeout(pillFlashTimer);
+    pillFlashTimer = setTimeout(() => {
+      for (const p of pills) p.classList.remove('status-pill-flash');
+      pillFlashTimer = null;
+    }, 800);
+  }
+  function addModeBar(text, className) {
+    const emptyStart = Boolean(messagesEl?.classList.contains('empty-start'));
+    if (!shouldEmitModeChangeBar({ emptyStart })) {
+      flashStatusPills();
+      return null;
+    }
+    return addBar(text, className);
+  }
   const notifications = createNotificationController(appContext, {
     addBar,
     getToken: () => token,
@@ -953,7 +977,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
         renderCliPanelState();
       } else {
-        if (currentModel && m && m !== currentModel) addBar(`模型 → ${m}`, 'text-info');
+        if (currentModel && m && m !== currentModel) addModeBar(`模型 → ${m}`, 'text-info');
         updateModelAndSuffix(rawM);
         rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随；空列表也刷（显示默认磁贴，好过整个隐藏）
         rebuildCustomModelGrid(modelsList); // 模型网格用已有缓存重建（models 事件没到也不空白）
@@ -2110,7 +2134,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         ensureModelOption(nakedArg, '手动设置'); // select 候选外的任意名（如网关别名）动态插入
         modelInput.value = nakedArg;
         syncModelUI(nakedArg);
-        addBar(`模型已设为 ${nakedArg}${currentGatewaySuffix}（下一条消息生效）`, 'text-info');
+        addModeBar(`模型已设为 ${nakedArg}${currentGatewaySuffix}（下一条消息生效）`, 'text-info');
       } else {
         const pending = modelInput.value.trim();
         const opts = [...modelInput.options].map(o => o.value).filter(Boolean);
@@ -2372,7 +2396,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!permModeSelect || !mode) return;
     clearCliUnknownPermissionOption();
     if (!silent && permModeSeen && mode !== currentPermMode) {
-      addBar(`权限档 → ${PERM_LABEL[mode] || mode}`,
+      // UX-019：空态不打条（胶囊高亮）；有消息后保留「权限档 → X」留痕
+      addModeBar(`权限档 → ${PERM_LABEL[mode] || mode}`,
         mode === 'bypassPermissions' ? 'text-danger' : 'text-ink-faint');
     }
     permModeSeen = true;
@@ -2436,7 +2461,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const val = level || null; // 空串/undefined 归一为 null（模型默认）
     // ultracode 档借道 xhigh：后端只回 xhigh，用本地 ultracodeArmed 决定呈现名
     if (!silent && effortSeen && val !== currentEffort) {
-      addBar(`思考强度 → ${ultracodeArmed ? 'ultracode' : (val || '模型默认')}（下一条消息生效）`, 'text-ink-faint');
+      addModeBar(`思考强度 → ${ultracodeArmed ? 'ultracode' : (val || '模型默认')}（下一条消息生效）`, 'text-ink-faint');
     }
     effortSeen = true;
     currentEffort = val;
@@ -2544,13 +2569,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (effort !== currentEffort) {
       socket.emit('user:setEffort', { level: effort });
       // 体感：置换实例有冷启动延迟；server 也会 emit kind:resuming system，这里立刻本地提示一次
-      addBar('正在切换思考强度并续接会话…', 'text-ink-faint');
+      addModeBar('正在切换思考强度并续接会话…', 'text-ink-faint');
       // 不乐观更新：成功则 effort_mode 广播拨档 + 上屏（setEffortMode 读 ultracodeArmed 决定显名）；
       // busy/非法档则 server 发 system 提示并单发当前档拨回本设备 select
     } else if (armedChanged) {
       // effort 未变、仅 ultracode 武装态翻转（xhigh ↔ ultracode）：无后端往返、免会话重建，本地即时刷新
       setEffortMode(currentEffort, true);
-      addBar(ultracode ? 'ultracode：xhigh + 多 agent workflow（更彻底，更慢更费额度）' : `思考强度 → ${currentEffort || '模型默认'}`, 'text-ink-faint');
+      addModeBar(ultracode ? 'ultracode：xhigh + 多 agent workflow（更彻底，更慢更费额度）' : `思考强度 → ${currentEffort || '模型默认'}`, 'text-ink-faint');
     }
   };
 

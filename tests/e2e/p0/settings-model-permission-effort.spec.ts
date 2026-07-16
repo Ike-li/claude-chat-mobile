@@ -87,6 +87,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
     await expect(page.locator('#effortSelect')).toHaveValue('high');
+    // UX-019：empty-start 下档位变更不打居中系统条（胶囊承载）
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    await expect(page.locator('#messages')).not.toContainText('权限档 →');
+    await expect(page.locator('#messages')).not.toContainText('思考强度 →');
+    await expect(page.locator('#messages')).not.toContainText('模型 →');
     await page.locator('#settingsClose').click();
 
     await sendChatMessage(page, 'test:fresh-settings-echo');

@@ -47,6 +47,12 @@ const TOOL_SUMMARY_KEYS = [
   'file_path', 'filePath', 'path', 'command', 'cmd', 'pattern', 'query',
   'url', 'description', 'plan',
 ];
+// UX-019：空态（empty-start）不向消息区打档位变更系统条；有消息后仍可留痕。
+// 审批留痕（已允许/已拒绝）不走此闸，由调用方直接 addBar。
+export function shouldEmitModeChangeBar({ emptyStart = false } = {}) {
+  return !emptyStart;
+}
+
 export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
   const name = String(toolName || '').trim() || 'tool';
   const raw = inputSummary == null ? '' : String(inputSummary).trim();

@@ -21,6 +21,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 2. 点击允许，工具卡片成功。
     await page.locator('#permAllow').click();
     await expect(page.locator('#permModal')).toBeHidden();
+    // UX-019：审批留痕必须保留（不许吞）
+    await expect(page.locator('#messages')).toContainText('已允许');
     await waitForIdle(page);
     await expect(page.locator('details.toolcard .t-status').last()).toHaveText('✅');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Successfully pushed');
