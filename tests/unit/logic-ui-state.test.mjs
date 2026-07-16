@@ -658,18 +658,17 @@ test.describe('isToolSummaryTruncated（工具卡展开全文门）', () => {
   });
 });
 
-test.describe('formatMirrorBannerText（只读锁横幅四态）', () => {
+test.describe('formatMirrorBannerText（只读锁横幅三态）', () => {
   test('armed / stale 优先', () => {
-    assert.match(formatMirrorBannerText({ armed: true, remainingSec: 3 }), /已请求接管/);
+    assert.match(formatMirrorBannerText({ armed: true }), /已请求接管/);
     assert.match(formatMirrorBannerText({ stale: true }), /疑似中断/);
   });
-  test('driving + remainingSec → 倒计时句', () => {
-    assert.match(formatMirrorBannerText({ remainingSec: 12.2 }), /约 13s/);
-    assert.match(formatMirrorBannerText({ remainingSec: 1 }), /约 1s/);
-  });
-  test('无倒计时 → 默认驾驶中句', () => {
-    assert.match(formatMirrorBannerText({}), /终端驾驶中，这里只读追平/);
-    assert.match(formatMirrorBannerText({ remainingSec: 0 }), /终端驾驶中，这里只读追平/);
+  test('driving 默认句：无秒数倒计时', () => {
+    const t = formatMirrorBannerText({});
+    assert.match(t, /终端驾驶中/);
+    assert.match(t, /只读追平/);
+    assert.match(t, /接管|自动可写/);
+    assert.equal(/\d+\s*s/.test(t), false, '不应展示约 Ns 假精密倒计时');
   });
 });
 

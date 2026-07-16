@@ -52,7 +52,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:mirror-readonly');
     await expect(page.locator('#mirrorBanner')).toBeVisible();
-    await expect(page.locator('#mirrorBanner')).toContainText('终端驾驶中，只读追平');
+    await expect(page.locator('#mirrorBanner')).toContainText('终端驾驶中');
+    await expect(page.locator('#mirrorBanner')).toContainText('只读追平');
     await expect(page.locator('#input')).toBeDisabled();
     await expect(page.locator('#btnSend')).toBeDisabled();
 
@@ -97,7 +98,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#btnSend')).toBeEnabled();
 
     await expect(page.locator('#mirrorBanner')).toBeVisible();
-    await expect(page.locator('#mirrorBanner')).toContainText('终端驾驶中，只读追平');
+    await expect(page.locator('#mirrorBanner')).toContainText('终端驾驶中');
+    await expect(page.locator('#mirrorBanner')).toContainText('只读追平');
     await expect(page.locator('#input')).toBeDisabled();
     await expect(page.locator('#input')).toHaveValue('test:settings-echo');
     await expect(page.locator('#btnSend')).toBeDisabled();

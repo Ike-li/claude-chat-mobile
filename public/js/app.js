@@ -4388,50 +4388,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const sid = ev.sessionId;
       if (sid) seenDiskLenBySession.set(sid, (seenDiskLenBySession.get(sid) || 0) + msgs.length);
     }
-    // 外部写入重置自动解锁倒计时（quietTicks 清零 → 重新满量约 12.5s）
-    if (ev.payload?.external && mirrorReadonlySid) startMirrorCountdown();
   }
 
   // 只读锁：会话被判「正在终端运行」时常驻横幅 + 禁用输入，硬防两进程并发写盘分叉。
-  // 四态文案（2026-07-13 排队接管）：stale=false 未 armed=「⏱ 终端驾驶中」（尾部形态判轮次未完结，长工具调用
-  // 零写盘期间也维持——修「过一会儿感觉没在跑」误判）；armed=「⏳ 已排队接管」（点了「接管 CLI 会话」但终端本轮
-  // 未完结，纯等待、零并发写盘风险，见下方 armedTakeoverStep 接线）；stale=true=「⚠️ 疑似中断」（pending 但
-  // 超 5 分钟零写入，终端可能被强杀/断电，维持即时确认接管——等待对已疑似死亡的终端无意义）。
-  // 驾驶中倒计时：优先 mirror_state.remainingMs（服务端 quietTicks×间隔）；缺省回落 12.5s 估计。
-  // 每次 history_append 外部消息 / 重新上锁会 reset。
-  const MIRROR_UNLOCK_EST_SEC = 12.5;
-  let mirrorCountdownTimer = null;
-  let mirrorCountdownEndsAt = 0;
-  function stopMirrorCountdown() {
-    if (mirrorCountdownTimer) { clearInterval(mirrorCountdownTimer); mirrorCountdownTimer = null; }
-    mirrorCountdownEndsAt = 0;
-  }
+  // 三态文案：driving=⏱ 终端驾驶中；armed=⏳ 已排队接管；stale=⚠️ 疑似中断。
+  // 自动解锁仍在服务端（~12.5s 静默）；横幅不展示秒数倒计时。
   function refreshMirrorBannerCopy() {
     if (!mirrorReadonlySid || !mirrorBannerText || !mirrorBannerIcon) return;
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    const remainingSec = (!armed && !mirrorStaleFlag && mirrorCountdownEndsAt)
-      ? Math.max(0, (mirrorCountdownEndsAt - Date.now()) / 1000)
-      : undefined;
     mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
-    mirrorBannerText.textContent = formatMirrorBannerText({
-      armed, stale: mirrorStaleFlag, remainingSec: armed || mirrorStaleFlag ? undefined : remainingSec,
-    });
-  }
-  function startMirrorCountdown(remainingMs) {
-    stopMirrorCountdown();
-    const ms = Number.isFinite(remainingMs) ? remainingMs : MIRROR_UNLOCK_EST_SEC * 1000;
-    mirrorCountdownEndsAt = Date.now() + Math.max(0, ms);
-    refreshMirrorBannerCopy();
-    mirrorCountdownTimer = setInterval(() => {
-      if (!mirrorReadonlySid || armedTakeoverSid || mirrorStaleFlag) { stopMirrorCountdown(); return; }
-      if (Date.now() >= mirrorCountdownEndsAt) {
-        // 到点不自动解锁（权威在 server mirror_state）；文案回落默认句，等 server 解锁事件
-        stopMirrorCountdown();
-        refreshMirrorBannerCopy();
-        return;
-      }
-      refreshMirrorBannerCopy();
-    }, 1000);
+    mirrorBannerText.textContent = formatMirrorBannerText({ armed, stale: mirrorStaleFlag });
   }
 
   // UX-010：横幅优先级仲裁 mirror > task > subagent > activity
@@ -4468,7 +4434,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     hideTaskProgress = (...a) => { _hp(...a); reconcileBanners(); };
   }
 
-  function applyMirror(readonly, sessionId, stale = false, observedCli, remainingMs) {
+  function applyMirror(readonly, sessionId, stale = false, observedCli) {
     const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
     if (effective && !wasEffective) {
@@ -4500,12 +4466,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (effective) setBusy(false);
     reconcileBanners();
     const armed = effective && armedTakeoverSid === sessionId;
-    if (effective) {
-      if (!armed && !stale) startMirrorCountdown(remainingMs);
-      else { stopMirrorCountdown(); refreshMirrorBannerCopy(); }
-    } else {
-      stopMirrorCountdown();
-    }
+    if (effective) refreshMirrorBannerCopy();
     if (btnMirrorOverride) btnMirrorOverride.textContent = armed ? '取消接管' : '接管 CLI 会话';
     if (inputEl) inputEl.disabled = effective;
     if (effective) { if (btnSend) btnSend.disabled = true; } // 锁定：禁发送
@@ -4535,7 +4496,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         return;
       }
     }
-    applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli, ev.payload?.remainingMs);
+    applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli);
   }
   // 「接管 CLI 会话」：驾驶中(⏱)点击=排队接管——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行，
   // 见 onMirrorState），无需确认弹窗；再次点击（此时按钮已变「取消接管」）可撤销排队、回退驾驶中态。

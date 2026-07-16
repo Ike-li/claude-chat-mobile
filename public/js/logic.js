@@ -911,17 +911,12 @@ export function isToolSummaryTruncated(summary, { truncated } = {}) {
   return typeof summary === 'string' && summary.includes('…（已截断）');
 }
 
-// 只读镜像锁横幅文案（四态：armed / stale / driving+倒计时 / driving）。
-// remainingSec：前端估计「再静默约 N 秒可自动解锁」（对齐 MIRROR_RELEASE_QUIET_TICKS×2.5s≈12.5s）；
-// 非有限/≤0 时不写倒计时，回落驾驶中默认句。
-export function formatMirrorBannerText({ armed = false, stale = false, remainingSec } = {}) {
+// 只读镜像锁横幅文案（三态：armed / stale / driving）。
+// 自动解锁仍由服务端 12.5s 静默逻辑负责；横幅不写「约 Ns」假精密倒计时（写入会重置、到点本地也不解锁）。
+export function formatMirrorBannerText({ armed = false, stale = false } = {}) {
   if (armed) return '已请求接管，等待终端当前操作完成后自动切换……';
   if (stale) return '终端疑似中断于执行中（超 5 分钟无活动）——确认终端已停可接管';
-  if (Number.isFinite(remainingSec) && remainingSec > 0) {
-    const s = Math.max(1, Math.ceil(remainingSec));
-    return `终端驾驶中，只读追平 · 约 ${s}s 无写入后可自动解锁（或点接管）`;
-  }
-  return '终端驾驶中，这里只读追平——发送会与终端并发写盘、可能分叉';
+  return '终端驾驶中 · 只读追平——静默后自动可写，或点接管';
 }
 
 // 后台任务停止按钮态：有非空 taskId 且横幅可见才可点（对齐 SDK stopTask(taskId)）。
