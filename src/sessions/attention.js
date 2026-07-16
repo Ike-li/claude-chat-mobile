@@ -26,6 +26,8 @@ export function deriveAttention(sessions, pendingApprovals) {
   for (const s of sessions) {
     if (s.status !== 'awaiting_input') continue;
     if (typeof s.awaitingSince !== 'number') continue; // 数据不完整：防御性跳过，不参与排序，但仍留在 others
+    // SS-005：已在审批维度出现的 sessionId 不重复列入 awaiting_input（生产路径虽互斥，纯函数须自洽）。
+    if (needsYouSessionIds.has(s.sessionId)) continue;
     needsYou.push({
       sessionId: s.sessionId,
       cwd: s.cwd,

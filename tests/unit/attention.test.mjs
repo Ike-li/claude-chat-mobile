@@ -57,6 +57,16 @@ test.describe('deriveAttention', () => {
     assert.deepEqual(needsYou.map(x => x.sessionId), ['s-appr-old', 's-input', 's-appr-new']);
   });
 
+  // SS-005：同一 sessionId 同时出现在 approvals 与 awaiting_input 时，只保留审批维度（不双列）
+  test('同 sessionId 同时在审批与 awaiting_input → needsYou 只保留一条（SS-005）', () => {
+    const sessions = [{ sessionId: 's1', cwd: '/a', title: 'T', lastActiveAt: 1, status: 'awaiting_input', awaitingSince: 2000 }];
+    const approvals = [{ sessionId: 's1', cwd: '/a', title: 'T', requestId: 'r1', createdAt: 1000, toolName: 'Bash' }];
+    const { needsYou } = deriveAttention(sessions, approvals);
+    assert.equal(needsYou.length, 1);
+    assert.equal(needsYou[0].reason, 'awaiting_approval');
+    assert.equal(needsYou[0].toolName, 'Bash');
+  });
+
   test('risk 字段仅展示标签透传，不参与排序（OQ-01 已决：risk 不进排序公式）', () => {
     const approvals = [
       { sessionId: 'low', cwd: '/a', title: 'Low', requestId: 'r1', createdAt: 2000, risk: 'high' },
