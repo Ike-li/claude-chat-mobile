@@ -5,6 +5,10 @@ import {
   resolveComposerPrimaryMode,
   formatLiveActivityText,
   presentOnlineSendAck,
+  presentOfflineResendAck,
+  shouldBusyAfterOfflineBatch,
+  safeJsonPreview,
+  shouldSeedBusyFromInstanceState,
 } from '../../public/js/logic.js';
 
 test('resolveComposerPrimaryMode: 空闲空输入 → 禁用发送', () => {
@@ -203,4 +207,67 @@ test('presentOnlineSendAck: 缺省/畸形 ack 当失败', () => {
   assert.equal(presentOnlineSendAck(undefined).ok, false);
   assert.equal(presentOnlineSendAck({}).ok, false);
   assert.equal(presentOnlineSendAck({ ok: false }).clearBusy, true);
+});
+
+// FE-NEW-001 / FE-NEW-006：离线重发 ack 与批后 busy
+test('presentOfflineResendAck: ok → 不 requeue', () => {
+  const out = presentOfflineResendAck(null, { ok: true });
+  assert.equal(out.outcome, 'ok');
+  assert.equal(out.requeue, false);
+  assert.equal(out.clearBusyIfViewing, false);
+});
+
+test('presentOfflineResendAck: permanent → 停重试并提示清 viewing busy', () => {
+  const out = presentOfflineResendAck(null, { ok: false, permanent: true, error: '消息过长' });
+  assert.equal(out.outcome, 'permanent');
+  assert.equal(out.requeue, false);
+  assert.equal(out.clearBusyIfViewing, true);
+  assert.match(out.message, /过长/);
+});
+
+test('presentOfflineResendAck: timeout / retryable → requeue', () => {
+  assert.equal(presentOfflineResendAck(new Error('timeout'), undefined).outcome, 'requeue');
+  assert.equal(presentOfflineResendAck(null, { ok: false, retryable: true }).requeue, true);
+  assert.equal(presentOfflineResendAck(null, null).requeue, true);
+});
+
+test('shouldBusyAfterOfflineBatch: 无 viewing 剩余且无 viewing ok → 不 busy', () => {
+  assert.equal(shouldBusyAfterOfflineBatch({
+    viewingInstanceId: 'v',
+    remainingItems: [{ instanceId: 'other' }],
+    hadViewingOk: false,
+  }), false);
+});
+
+test('shouldBusyAfterOfflineBatch: viewing 仍有 requeue → busy', () => {
+  assert.equal(shouldBusyAfterOfflineBatch({
+    viewingInstanceId: 'v',
+    remainingItems: [{ instanceId: 'v' }],
+    hadViewingOk: false,
+  }), true);
+});
+
+test('shouldBusyAfterOfflineBatch: 本批 viewing ok → busy 等 result', () => {
+  assert.equal(shouldBusyAfterOfflineBatch({
+    viewingInstanceId: 'v',
+    remainingItems: [],
+    hadViewingOk: true,
+  }), true);
+});
+
+test('safeJsonPreview: undefined/null/circular 不抛', () => {
+  assert.equal(safeJsonPreview(undefined), 'null');
+  assert.equal(safeJsonPreview(null), 'null');
+  assert.equal(safeJsonPreview({ a: 1 }, 80), '{"a":1}');
+  const o = {}; o.self = o;
+  assert.equal(safeJsonPreview(o), '[unserializable]');
+  assert.equal(safeJsonPreview('x'.repeat(100), 10).length, 10);
+});
+
+test('shouldSeedBusyFromInstanceState: busy/permission only', () => {
+  assert.equal(shouldSeedBusyFromInstanceState('busy'), true);
+  assert.equal(shouldSeedBusyFromInstanceState('permission'), true);
+  assert.equal(shouldSeedBusyFromInstanceState('idle'), false);
+  assert.equal(shouldSeedBusyFromInstanceState('done'), false);
+  assert.equal(shouldSeedBusyFromInstanceState(undefined), false);
 });

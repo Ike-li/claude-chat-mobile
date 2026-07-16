@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -578,44 +578,55 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   let connectErrorCount = 0;  // 公网 socket 连续失败计数，攒够再探测 Access 是否过期
   
   const OFFLINE_RESEND_ACK_MS = 8000; // 慢移动网络 RTT 留余地（同 cf-access 2s→8s 超时教训，见项目 memory）
-  function processOfflineQueue() {
-    if (offlineQueue.length === 0) return;
+  // FE-NEW-001/006：串行重发 + 按 viewing 作用域决定 busy（永久失败/他会话成功不再 sticky busy）。
+  // 在线路径有 _sendInFlight；离线旧实现 for 循环并行 emit 易撞 queueFull，且 setBusy(true) 无配对 clear。
+  let _offlineDrainInFlight = false;
+  async function processOfflineQueue() {
+    if (_offlineDrainInFlight || offlineQueue.length === 0) return;
+    _offlineDrainInFlight = true;
     const items = offlineQueue;
-    offlineQueue = []; // 乐观清空：未确认送达的会在下方 ack 失败回调里重新 push 回来
+    offlineQueue = []; // 本批取出；requeue 的再 push 回
     addBar(`正在重发离线发送队列中的 ${items.length} 条消息...`, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息`);
-    for (const item of items) {
-      const indicator = item.bubbleEl?.querySelector('.pending-indicator');
-      if (indicator) {
-        indicator.textContent = '🕐 正在发送...';
-      }
-      logClientEvent('send', `[WEB_SEND] 重发离线消息: "${item.text.slice(0, 100)}" (${item.text.length} 字符)`);
-      // REL-01：用入队时刻保存的目标（item.instanceId/item.cwd），不用重发时的当下 viewingInstanceId/
-      // currentCwd——否则离线期间切换了查看会话，消息会错发到现在正看的会话而非当初想发的那个。
-      // 带 clientMessageId + ack：未确认送达（超时/服务端拒绝）则重新排队，等下次重连再试，不原地无限重试。
-      socket.timeout(OFFLINE_RESEND_ACK_MS).emit('user:message', {
-        text: item.text,
-        model: item.model,
-        attachments: item.attachments,
-        instanceId: item.instanceId,
-        cwd: item.cwd,
-        clientMessageId: item.clientMessageId,
-      }, (err, ack) => {
-        if (!err && ack && ack.ok === false && ack.permanent) {
-          // BE-002：服务端判定永久失败（空/超长/附件非法）——重发必再失败，停止重试、标记失败，不再 re-push。
-          if (indicator) indicator.textContent = `⚠️ ${ack.error || '发送失败'}，已停止重试`;
-          logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${ack.error || ''}），停止重试`);
-        } else if (err || !ack?.ok) {
-          // 超时或可重试失败（如服务端队列已满 retryable）：重新排队，等下次重连重试。
+    let hadViewingOk = false;
+    try {
+      for (const item of items) {
+        const indicator = item.bubbleEl?.querySelector('.pending-indicator');
+        if (indicator) indicator.textContent = '🕐 正在发送...';
+        logClientEvent('send', `[WEB_SEND] 重发离线消息: "${String(item.text || '').slice(0, 100)}" (${String(item.text || '').length} 字符)`);
+        // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
+        const decision = await new Promise((resolve) => {
+          socket.timeout(OFFLINE_RESEND_ACK_MS).emit('user:message', {
+            text: item.text,
+            model: item.model,
+            attachments: item.attachments,
+            instanceId: item.instanceId,
+            cwd: item.cwd,
+            clientMessageId: item.clientMessageId,
+          }, (err, ack) => resolve(presentOfflineResendAck(err, ack)));
+        });
+        const targetsViewing = item.instanceId != null && item.instanceId === viewingInstanceId;
+        if (decision.outcome === 'ok') {
+          if (indicator) indicator.remove();
+          if (targetsViewing) hadViewingOk = true;
+        } else if (decision.outcome === 'permanent') {
+          if (indicator) indicator.textContent = `⚠️ ${decision.message || '发送失败'}，已停止重试`;
+          logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
+        } else {
           if (indicator) indicator.textContent = '🕐 未确认送达，等待重连重试...';
           offlineQueue.push(item);
-          logClientEvent('send', `[WEB_SEND] 离线消息重发未确认（${err ? '超时' : '服务端拒绝'}），已重新排队`);
-        } else if (indicator) {
-          indicator.remove();
+          logClientEvent('send', `[WEB_SEND] 离线消息重发未确认，已重新排队`);
         }
-      });
+      }
+    } finally {
+      _offlineDrainInFlight = false;
+      // 批后 busy：仅 viewing 相关 in-flight/成功才抬；永久失败且无剩余 viewing 队列 → clear
+      setBusy(shouldBusyAfterOfflineBatch({
+        viewingInstanceId,
+        remainingItems: offlineQueue,
+        hadViewingOk,
+      }));
     }
-    setBusy(true);
   }
 
   // 移动端切前台/重连后的统一 sync 入口（命中根因 A/B）。复用 clearView（清 DOM + 重置 lastSeq/curEpoch
@@ -1432,7 +1443,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       alertCue('need');
       permQueue.push(p);
       showNextPerm();
-      notify('⚠️ 等待审批', `${p.name}：${JSON.stringify(p.input).slice(0, 80)}`);
+      // FE-NEW-002：JSON.stringify(undefined) 为 undefined，.slice 抛错会中断 handler（verify 也不跑）
+      notify('⚠️ 等待审批', `${p.name}：${safeJsonPreview(p.input, 80)}`);
       verifyPermIntegrity(p); // 异步、不阻塞渲染——NFR-17 协议步骤4，核验结果稍后到达时若仍是当前卡片才提示
     },
     question(p) {
@@ -3119,13 +3131,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
 
     // clearView 刚 setBusy(false)：发送窗口内（首发懒开 / 同会话静默换实例）立即补回，避免 live 行闪没。
+    // FE-NEW-004：切入已在跑的 live 实例时 seed busy（instances.state），否则发送钮停在 idle 直到下一条 delta。
     const restoreBusy = shouldRestoreOptimisticBusy({
       pendingFirstSend: _pendingFirstSend,
       pendingSendBusy: _pendingSendBusy,
       viewingInstanceId: id,
       sessionId: sid,
       prevSessionId,
-    });
+    }) || shouldSeedBusyFromInstanceState(entry?.state);
     if (restoreBusy) setBusy(true);
 
     // 新会话首发懒开：实例已建、sessionId 未由 SDK init 返回。此刻回落 dashboard 会「闪首页」——
@@ -4476,6 +4489,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (ev.payload?.replace) {
       messagesEl.innerHTML = '';
       messagesEl.classList.remove('empty-start');
+      // FE-NEW-005：与 clearView 对齐——replace 全量窗口时清 streams/thinkings，避免 live 节点挂到已拆 DOM
+      streams.clear();
+      thinkings.clear();
       toolCards.clear();
       subagentCards.clear();
       if (msgs.length) renderHistoryBubbles(msgs);

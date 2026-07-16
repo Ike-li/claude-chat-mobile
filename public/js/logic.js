@@ -590,6 +590,57 @@ export function presentOnlineSendAck(ack) {
   };
 }
 
+// 离线队列单条重发 ack 决策（FE-NEW-001）。与在线不同：不恢复草稿（气泡已在消息流）、
+// permanent 必停重试；timeout/err 与非 permanent 负 ack 一律 requeue。
+// outcome: 'ok' | 'permanent' | 'requeue'
+export function presentOfflineResendAck(err, ack) {
+  if (!err && ack && ack.ok === true) {
+    return { outcome: 'ok', permanent: false, requeue: false, clearBusyIfViewing: false, message: '' };
+  }
+  if (!err && ack && ack.ok === false && ack.permanent) {
+    const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : '发送失败';
+    return { outcome: 'permanent', permanent: true, requeue: false, clearBusyIfViewing: true, message: error };
+  }
+  // 超时 / 可重试失败 / 畸形 ack
+  return {
+    outcome: 'requeue',
+    permanent: false,
+    requeue: true,
+    clearBusyIfViewing: false,
+    message: err ? '未确认送达' : ((ack && typeof ack.error === 'string' && ack.error.trim()) || '发送失败'),
+  };
+}
+
+// 离线批处理后是否应 busy：仅当「仍有目标为当前 viewing 的重入队项」或「本批有 viewing 相关 ok 且
+// 指望 result 清 busy」时保持 busy。FE-NEW-001：永久失败且无剩余 viewing 队列 → 必须 clear。
+// remainingItems = 本批结束后仍在 offlineQueue 的项；viewingInstanceId 可为 null。
+export function shouldBusyAfterOfflineBatch({ viewingInstanceId, remainingItems = [], hadViewingOk = false } = {}) {
+  const viewingPending = remainingItems.some(it => it && it.instanceId != null && it.instanceId === viewingInstanceId);
+  if (viewingPending) return true;
+  // 本批对当前 viewing 成功发出 → 短暂 busy 等 result（与在线一致）；非 viewing 成功不抬 busy
+  if (hadViewingOk && viewingInstanceId != null) return true;
+  return false;
+}
+
+// 通知预览安全截断（FE-NEW-002）：JSON.stringify(undefined) 是 undefined，.slice 会抛。
+export function safeJsonPreview(value, maxLen = 80) {
+  let s;
+  try {
+    if (value === undefined) s = 'null';
+    else s = JSON.stringify(value);
+    if (s === undefined) s = 'null'; // stringify 对 undefined 顶层返回 undefined
+  } catch {
+    s = '[unserializable]';
+  }
+  s = String(s);
+  return s.length > maxLen ? s.slice(0, maxLen) : s;
+}
+
+// 切入已在跑的 live 实例时是否 seed busy（FE-NEW-004）。state 来自 instances[].state。
+export function shouldSeedBusyFromInstanceState(state) {
+  return state === 'busy' || state === 'permission';
+}
+
 // bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档在 SDK 层无运行时切换能力，后端 dispose
 // 旧实例 + resume 同会话开新实例（instanceId 变了、sessionId 不变），前端只看 viewingInstanceId 变化就判定
 // 为「切到另一个会话」而清空草稿——这是误伤：用户视角仍在同一个聊天里，只是底层实例被静默替换。
