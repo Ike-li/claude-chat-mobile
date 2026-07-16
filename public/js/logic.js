@@ -41,6 +41,36 @@ export function formatPermInputDisplay(toolName, input) {
   return { mode: isExit ? 'markdown' : 'text', text };
 }
 
+// UX-002：工具卡收起态标题「工具名 · inputSummary 截断」。
+// 摘要优先取常见短字段（path/command 等），否则压成单行；maxLen 控制摘要段长度（默认 48）。
+const TOOL_SUMMARY_KEYS = [
+  'file_path', 'filePath', 'path', 'command', 'cmd', 'pattern', 'query',
+  'url', 'description', 'plan',
+];
+export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
+  const name = String(toolName || '').trim() || 'tool';
+  const raw = inputSummary == null ? '' : String(inputSummary).trim();
+  if (!raw) return name;
+  let snippet = raw;
+  if (raw[0] === '{' || raw[0] === '[') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        for (const k of TOOL_SUMMARY_KEYS) {
+          if (typeof parsed[k] === 'string' && parsed[k].trim()) {
+            snippet = parsed[k].trim();
+            break;
+          }
+        }
+      }
+    } catch { /* 残缺 JSON 原样 */ }
+  }
+  snippet = snippet.replace(/\s+/g, ' ');
+  const cap = Math.max(8, Number(maxLen) || 48);
+  if (snippet.length > cap) snippet = snippet.slice(0, cap - 1) + '…';
+  return `${name} · ${snippet}`;
+}
+
 // 从 paste 事件的 clipboardData 里挑出 image/* 文件（桌面 Chrome 截图/复制图 → Ctrl/Cmd+V）。
 // 返回 File 数组；纯文本/无图返回 []——调用方应保留默认粘贴文字行为。
 // 只做数据筛选，不读盘/不转 base64（那是 app.js 附件托盘的既有路径）。

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -1067,10 +1067,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       clearApiRetryBanner();
       // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
       // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
+      // UX-002：收起态标题「工具名 · inputSummary 截断」，扫读不必逐张展开
+      const cardTitle = formatToolCardTitle(p.name, p.inputSummary);
       const card = el(`
         <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
-          <summary class="px-3 py-2 flex items-center gap-2">
-            <span class="t-status">⏳</span><span class="font-mono font-semibold text-ink">${esc(p.name)}</span>
+          <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
+            <span class="t-status shrink-0">⏳</span><span class="t-name font-mono font-semibold text-ink truncate">${esc(cardTitle)}</span>
           </summary>
           <div class="px-3 pb-2 space-y-1">
             <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
@@ -4095,10 +4097,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         continue;
       }
       if (msg?.kind === 'tool_use') {
+        // UX-002：历史回显与 live 一致——收起态带 inputSummary 截断
+        const histTitle = formatToolCardTitle(msg.name || 'tool', msg.inputSummary);
         const card = el(`
           <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
-            <summary class="px-3 py-2 flex items-center gap-2">
-              <span class="t-status">⏳</span><span class="font-mono font-semibold text-ink">${esc(msg.name || 'tool')}</span>
+            <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
+              <span class="t-status shrink-0">⏳</span><span class="t-name font-mono font-semibold text-ink truncate">${esc(histTitle)}</span>
             </summary>
             <div class="px-3 pb-2 space-y-1">
               <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>

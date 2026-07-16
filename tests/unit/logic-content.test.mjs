@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, formatPermInputDisplay, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../../public/js/logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../../public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -71,6 +71,43 @@ test('formatPermInputDisplay: 空/缺省安全', () => {
   assert.deepEqual(formatPermInputDisplay('run_command', null), { mode: 'text', text: '' });
   assert.deepEqual(formatPermInputDisplay('ExitPlanMode', null), { mode: 'markdown', text: '' });
   assert.deepEqual(formatPermInputDisplay(null, 'x'), { mode: 'text', text: 'x' });
+});
+
+// UX-002：工具卡收起态标题「工具名 · inputSummary 截断」——扫读对象，不必逐张展开。
+test('formatToolCardTitle: 有摘要 → 工具名 · 摘要', () => {
+  assert.equal(formatToolCardTitle('read_file', 'public/js/app.js'), 'read_file · public/js/app.js');
+  assert.equal(formatToolCardTitle('run_command', 'npm test'), 'run_command · npm test');
+});
+
+test('formatToolCardTitle: 无摘要 → 仅工具名', () => {
+  assert.equal(formatToolCardTitle('read_file', ''), 'read_file');
+  assert.equal(formatToolCardTitle('read_file', null), 'read_file');
+  assert.equal(formatToolCardTitle('read_file', '   '), 'read_file');
+});
+
+test('formatToolCardTitle: 长摘要按 maxLen 截断加省略号', () => {
+  const long = 'a'.repeat(80);
+  const title = formatToolCardTitle('Write', long, 40);
+  assert.ok(title.startsWith('Write · '));
+  assert.ok(title.endsWith('…'));
+  // 总长不超过 工具名 + 分隔 + maxLen 摘要（省略号占 1）
+  assert.ok(title.length <= 'Write · '.length + 40);
+});
+
+test('formatToolCardTitle: JSON 摘要取首个可读短字段（path/command 等）', () => {
+  assert.equal(
+    formatToolCardTitle('Read', JSON.stringify({ file_path: 'src/a.js', offset: 1 })),
+    'Read · src/a.js',
+  );
+  assert.equal(
+    formatToolCardTitle('Bash', JSON.stringify({ command: 'ls -la' })),
+    'Bash · ls -la',
+  );
+});
+
+test('formatToolCardTitle: 缺省工具名安全', () => {
+  assert.equal(formatToolCardTitle('', 'x'), 'tool · x');
+  assert.equal(formatToolCardTitle(null, null), 'tool');
 });
 
 // 剪贴板粘贴图片：桌面 Chrome 截图/复制图后 Ctrl/Cmd+V 应进附件托盘。

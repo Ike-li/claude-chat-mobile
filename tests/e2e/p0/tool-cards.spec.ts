@@ -12,9 +12,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:tool');
     await expect(page.locator('details.thinking')).toBeVisible();
     await expect(page.locator('details.toolcard')).toHaveCount(3, { timeout: 15_000 });
-    await expect(page.locator('details.toolcard').nth(0)).toContainText('read_file');
-    await expect(page.locator('details.toolcard').nth(1)).toContainText('edit_file');
-    await expect(page.locator('details.toolcard').nth(2)).toContainText('run_command');
+    // UX-002：收起态标题带 inputSummary，扫读可见操作对象
+    await expect(page.locator('details.toolcard .t-name').nth(0)).toHaveText('read_file · utils/date.js');
+    await expect(page.locator('details.toolcard .t-name').nth(1)).toHaveText('edit_file · utils/date.js');
+    await expect(page.locator('details.toolcard .t-name').nth(2)).toHaveText('run_command · npm test');
     await expect(page.locator('#activeStatusPill')).toBeVisible();
 
     // 2. 等待完成并展开第一个工具卡片。
