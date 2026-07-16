@@ -182,8 +182,17 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
 //    能按 uuid 幂等去重——但实测前端 onHistoryAppend（app.js）无 uuid 去重、live 流气泡也不记 uuid，故"立即触发"
 //    简单版无效（仍受契约护栏约束只能吸收），完整版需前端去重 + live 流记 uuid 的联动大改。上述边界触发面窄，
 //    n=1 单用户下该大改不值，保留现状。别再因"SP-10 设计验证通过"重启这个接入。
+export function historyTailKey(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  const last = messages[messages.length - 1];
+  if (!last || typeof last !== 'object') return null;
+  // timestamp + 角色 + 主文本/tool id——足够区分滑窗后的新尾巴；勿用整对象 JSON（thinking 截断会抖）
+  const body = last.content != null ? String(last.content).slice(0, 80)
+    : (last.toolUseId || last.name || last.kind || '');
+  return `${last.timestamp || ''}|${last.role || ''}|${body}`;
+}
 
-export function catchUpStep(state, { messages, localBusy = false } = {}) {
+export function catchUpStep(state, { messages, localBusy = false, historyCap = HISTORY_MAX_MESSAGES } = {}) {
   const len = messages.length;
   const tailKey = historyTailKey(messages);
   if (localBusy) {
@@ -809,19 +818,26 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now } = {}
 export function classifyTailEntries(entries) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
-    if (!e || (e.type !== 'user' && e.type !== 'assistant') || e.isSidechain) continue;
+    // SS-002：跳过 isMeta 与 CLI 系统噪音行（与 getSessionHistory / lastMessageActivityMs 对齐）。
+    // 否则 settled 轮次后的 <local-command-stdout> 等会把 tail 误判 pending，quietTicks 永清零 → 镜像锁不释放。
+    if (!e || (e.type !== 'user' && e.type !== 'assistant') || e.isSidechain || e.isMeta) continue;
     const lastChainTs = e.timestamp ? (Date.parse(e.timestamp) || null) : null;
     const c = e.message?.content;
     const blocks = Array.isArray(c) ? c : null;
     if (e.type === 'assistant') {
       if (blocks?.some(b => b?.type === 'tool_use')) return { verdict: 'pending', lastChainTs };
-      if (blocks ? blocks.some(b => b?.type === 'text') : typeof c === 'string') return { verdict: 'settled', lastChainTs };
+      if (blocks ? blocks.some(b => b?.type === 'text') : typeof c === 'string') {
+        const text = typeof c === 'string' ? c : (blocks || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
+        if (isCliSystemLine(text)) continue; // "No response requested." 等助手噪音：跳过继续往前找真链
+        return { verdict: 'settled', lastChainTs };
+      }
       return { verdict: 'pending', lastChainTs }; // 只有 thinking / 空内容：流式中间态
     }
     // user
     if (blocks?.some(b => b?.type === 'tool_result')) return { verdict: 'pending', lastChainTs };
     const text = typeof c === 'string' ? c : (blocks || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
     if (/^\[Request interrupted by user[^\]]*\]$/.test(text.trim())) return { verdict: 'settled', lastChainTs };
+    if (isCliSystemLine(text)) continue; // local-command / bash / ide 噪音：不当链尾
     return { verdict: 'pending', lastChainTs };
   }
   return { verdict: 'settled', lastChainTs: null }; // 无链条目：不锁
