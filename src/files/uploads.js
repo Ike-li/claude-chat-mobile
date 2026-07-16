@@ -2,7 +2,7 @@
 // 落盘方案（机主 2026-06-12 定）：完整文件字节写入 WORK_DIR/.ccm-uploads/，
 // 把绝对路径注入 prompt 文本，claude 用 Read（白名单内、cwd 内免审批）读取——最贴终端等价。
 // 缩略图（thumb）由前端 canvas 降采样生成、经 user_message 投送，此处只透传不生成（零图片依赖）。
-import { mkdir, open, realpath } from 'node:fs/promises';
+import { mkdir, open, realpath, rm } from 'node:fs/promises';
 import { join, resolve, basename, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { constants, realpathSync } from 'node:fs';
@@ -94,6 +94,7 @@ export async function saveAttachments(workDir, attachments) {
 
     // 增强：使用 O_NOFOLLOW 防止 symlink 攻击（POSIX 平台）
     // O_NOFOLLOW 在 Windows 上值为 0（无效），但不影响功能（回退到路径检查）
+    // FILES-NEW-1：open 仍会跟随中间目录 symlink；写后 realpath 父目录，若已偏离 dirResolved 则删孤儿并 fail-closed。
     const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (constants.O_NOFOLLOW || 0);
     const fh = await open(absPath, flags, 0o600);  // 0600 = owner-only
     try {
@@ -101,6 +102,28 @@ export async function saveAttachments(workDir, attachments) {
       await fh.sync();  // fsync 确保落盘
     } finally {
       await fh.close();
+    }
+
+    let parentReal;
+    try {
+      parentReal = await realpath(dirResolved);
+    } catch {
+      parentReal = null;
+    }
+    if (!parentReal || (parentReal !== dirResolved && !parentReal.startsWith(workReal + sep))) {
+      try { await rm(absPath, { force: true }); } catch { /* best-effort */ }
+      throw new Error('上传目录在写入窗口内被替换为越界路径，已拒绝');
+    }
+    // 文件自身 realpath 也须仍在 dirResolved 下（极端：目录又被换）
+    let fileReal;
+    try {
+      fileReal = await realpath(absPath);
+    } catch {
+      fileReal = absPath;
+    }
+    if (fileReal !== absPath && !fileReal.startsWith(dirResolved + sep) && !fileReal.startsWith(parentReal + sep)) {
+      try { await rm(absPath, { force: true }); } catch { /* best-effort */ }
+      throw new Error('上传文件解析后越出工作目录，已拒绝');
     }
 
     saved.push({
