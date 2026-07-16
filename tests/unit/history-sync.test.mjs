@@ -113,6 +113,32 @@ test('classifyTranscriptTail: settled 后接 <local-command-stdout> / isMeta use
   assert.equal((await classifyTranscriptTail('tmeta', cwd, { baseDir: BASE })).verdict, 'settled');
 });
 
+// 2026-07-16 真机：/config 等本地 slash 落盘为 command-name + local-command-stdout，无 assistant。
+// 旧逻辑把 command-name 当「用户等回复」→ pending → quietTicks 永清零 → 镜像锁不释放。
+test('classifyTranscriptTail: 本地 slash（/config）command-name + stdout 收尾 → settled', async () => {
+  const cwd = '/test/tail-local-slash';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'tconfig', [
+    { type: 'user', message: { role: 'user', content: '<local-command-caveat>Caveat…</local-command-caveat>' }, isMeta: true, timestamp: '2026-07-16T22:17:47.980Z' },
+    { type: 'user', message: { role: 'user', content: '<command-name>/config</command-name>\n            <command-message>config</command-message>\n            <command-args></command-args>' }, isMeta: false, timestamp: '2026-07-16T22:17:47.980Z' },
+    { type: 'user', message: { role: 'user', content: '<local-command-stdout>Set model to opus</local-command-stdout>' }, isMeta: false, timestamp: '2026-07-16T22:17:47.980Z' },
+    { type: 'last-prompt' },
+  ]);
+  const r = await classifyTranscriptTail('tconfig', cwd, { baseDir: BASE });
+  assert.equal(r.verdict, 'settled', '本地 slash 已 stdout 收尾，不得判 pending 锁死输入');
+  assert.equal(r.lastChainTs, Date.parse('2026-07-16T22:17:47.980Z'));
+});
+
+// 自定义/项目 slash 注入后仍等 assistant：仅有 command-name、无 local-command-stdout → 仍 pending。
+test('classifyTranscriptTail: 项目 slash 仅 command-name、尚无 assistant → pending', async () => {
+  const cwd = '/test/tail-project-slash';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'tdeep', [
+    { type: 'user', message: { role: 'user', content: '<command-message>deep-research</command-message>\n<command-name>/deep-research</command-name>\n<command-args>foo</command-args>' }, timestamp: '2026-07-16T22:00:00.000Z' },
+  ]);
+  assert.equal((await classifyTranscriptTail('tdeep', cwd, { baseDir: BASE })).verdict, 'pending');
+});
+
 // ── catchUpStep：只读「追平」状态机 ──────────────────────────────────────────
 
 const M = n => Array.from({ length: n }, (_, i) => ({ role: i % 2 ? 'assistant' : 'user', content: `m${i}` }));

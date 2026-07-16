@@ -816,6 +816,23 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now } = {}
 //   无任何链条目/文件不存在           → settled（新会话/纯 meta：不锁）
 // 注意 settled 有一个已知误判窗：assistant 中途 text 落盘、紧接着还要发 tool_use（多段输出）——落盘间隙
 // 尾部短暂呈 settled。调用方（server catchUpTick）靠 keepAlive（文件增长）判据互补罩住，两者叠加使用。
+// 该 user 条目之后（更高 index）是否已有本地 slash 的 stdout——/config /model 等本地命令
+// 落盘形态：command-name → local-command-stdout，无 assistant。若只认 command-name 会永远 pending 锁死。
+function hasLocalCommandStdoutAfter(entries, fromIndex) {
+  for (let j = fromIndex + 1; j < entries.length; j++) {
+    const e = entries[j];
+    if (!e || e.type !== 'user' || e.isSidechain) continue;
+    const c = e.message?.content;
+    const text = typeof c === 'string' ? c : Array.isArray(c)
+      ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n')
+      : '';
+    if (!text) continue;
+    if (/^<local-command-(stdout|stderr)>/.test(text.trim())
+        && /<\/local-command-(stdout|stderr)>/.test(text.trim())) return true;
+  }
+  return false;
+}
+
 export function classifyTailEntries(entries) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
@@ -839,6 +856,11 @@ export function classifyTailEntries(entries) {
     const text = typeof c === 'string' ? c : (blocks || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
     if (/^\[Request interrupted by user[^\]]*\]$/.test(text.trim())) return { verdict: 'settled', lastChainTs };
     if (isCliSystemLine(text)) continue; // local-command / bash / ide 噪音：不当链尾
+    // 本地 slash（/config 等）：command-name 后已有 local-command-stdout → 命令已本地跑完，settled。
+    // 项目 slash（/deep-research）仅 command-name、等 assistant → 仍 pending。
+    if (reconstructSlashCommand(text) && hasLocalCommandStdoutAfter(entries, i)) {
+      return { verdict: 'settled', lastChainTs };
+    }
     return { verdict: 'pending', lastChainTs };
   }
   return { verdict: 'settled', lastChainTs: null }; // 无链条目：不锁
