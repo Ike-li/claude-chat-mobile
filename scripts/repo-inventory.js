@@ -39,7 +39,7 @@ const ROOT_FILES = new Map([
   ['docs/sdk-boundary.md', ['Documentation', 'Agent SDK boundary audit and upgrade-review baseline', 'keep']],
   ['docs/statusline-bridge.md', ['Documentation', 'CLI statusline bridge install, security, and rollback guide', 'keep']],
   ['docs/testing.md', ['Documentation', 'Test layering, migration evidence, and manual production regression suites', 'keep']],
-  ['docs/ux-ui-review-2026-07-16.md', ['Documentation', 'Point-in-time UX/UI evaluation for horizontal model comparison (2026-07-16)', 'keep']],
+  ['docs/ui-ux-issues-2026-07-16.md', ['Documentation', 'Mobile UI/UX issue backlog from the 2026-07-16 viewport evaluation (P0-P2 with evidence)', 'keep']],
   ['docs/index.html', ['Documentation', 'Bilingual static landing page served by GitHub Pages', 'keep']],
   ['docs/.nojekyll', ['Documentation', 'GitHub Pages marker disabling Jekyll processing', 'keep']],
 ]);

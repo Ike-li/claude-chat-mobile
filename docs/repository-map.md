@@ -93,7 +93,7 @@ Total classified files: **283**.
 | `docs/sdk-boundary.md` | Documentation | Agent SDK boundary audit and upgrade-review baseline | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/statusline-bridge.md` | Documentation | CLI statusline bridge install, security, and rollback guide | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/testing.md` | Documentation | Test layering, migration evidence, and manual production regression suites | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/ux-ui-review-2026-07-16.md` | Documentation | Point-in-time UX/UI evaluation for horizontal model comparison (2026-07-16) | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/ui-ux-issues-2026-07-16.md` | Documentation | Mobile UI/UX issue backlog from the 2026-07-16 viewport evaluation (P0-P2 with evidence) | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/vendor/source-serif-400.woff2` | Vendored asset | Pinned documentation-site font | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/vendor/source-serif-600.woff2` | Vendored asset | Pinned documentation-site font | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/vendor/source-serif-italic.woff2` | Vendored asset | Pinned documentation-site font | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
