@@ -143,6 +143,37 @@ export function formatStreamPreviewIntervalMs(ms) {
   return Number.isFinite(n) && n > 0 ? n : 80;
 }
 
+// UI-007：高频状态标 SVG（可信静态串，无用户输入）。currentColor 吃语义色。
+// 返回 { html, label }；html 供 innerHTML 到 .t-status / 角标；label 作 aria-label。
+const STATUS_ICON_PATHS = {
+  // hourglass-ish circle for pending/busy
+  pending: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  busy: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  ok: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+  error: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  warn: '<path d="M12 3l9 16H3L12 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v4M12 17h.01" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  denied: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+  answered: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+  aborted: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>',
+};
+const STATUS_ICON_LABELS = {
+  pending: '进行中',
+  busy: '运行中',
+  ok: '成功',
+  error: '出错',
+  warn: '待审批',
+  denied: '已拒绝',
+  answered: '已回答',
+  aborted: '已中止',
+};
+export function statusIconSpec(kind) {
+  const k = STATUS_ICON_PATHS[kind] ? kind : 'pending';
+  const path = STATUS_ICON_PATHS[k];
+  const label = STATUS_ICON_LABELS[k] || STATUS_ICON_LABELS.pending;
+  const html = `<svg class="status-svg" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">${path}</svg>`;
+  return { html, label, kind: k };
+}
+
 export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
   const name = String(toolName || '').trim() || 'tool';
   const raw = inputSummary == null ? '' : String(inputSummary).trim();

@@ -26,7 +26,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillPermText')).toContainText('默认审批');
     await waitForIdle(page);
     await expect(page.locator('#activeStatusPill')).toBeHidden();
-    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('✅');
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '成功');
 
     await expectNoBrowserErrors(page);
   });

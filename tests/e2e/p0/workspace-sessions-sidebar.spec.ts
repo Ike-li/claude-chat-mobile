@@ -114,12 +114,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:background-done');
     await waitForIdle(page);
     await expect(page.locator('#sessionsDot')).toBeVisible();
-    await expect(page.locator('#sessionsDot')).toHaveText('✅');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '成功');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区已完成');
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
-    await expect(backgroundDir.locator('.dir-badge')).toHaveText('✅');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('aria-label', '成功');
     await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '已完成');
 
     await backgroundDir.locator('button').first().click();
@@ -137,12 +137,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#sessionsDot')).toBeVisible();
-    await expect(page.locator('#sessionsDot')).toHaveText('❗');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '出错');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区出错');
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
-    await expect(backgroundDir.locator('.dir-badge')).toHaveText('❗');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('aria-label', '出错');
     await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '出错');
 
     await backgroundDir.locator('button').first().click();
@@ -159,12 +159,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:background-priority');
     await waitForIdle(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
-    await expect(page.locator('#sessionsDot')).toHaveText('⚠️');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '待审批');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区待审批');
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
-    await expect(backgroundDir.locator('.dir-badge')).toHaveText('⚠️');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('aria-label', '待审批');
     await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '待审批');
 
     await backgroundDir.locator('button').first().click();

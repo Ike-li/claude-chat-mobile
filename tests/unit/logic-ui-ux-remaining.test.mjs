@@ -10,6 +10,7 @@ import {
   bannerPriority,
   pickBannerToShow,
   formatStreamPreviewIntervalMs,
+  statusIconSpec,
 } from '../../public/js/logic.js';
 
 // UX-018
@@ -128,4 +129,21 @@ test('bannerPriority: mirror > task > subagent > activity > null', () => {
 test('formatStreamPreviewIntervalMs: 默认 80ms 节流', () => {
   assert.equal(formatStreamPreviewIntervalMs(), 80);
   assert.equal(formatStreamPreviewIntervalMs(50), 50);
+});
+
+// UI-007：状态图标 kind → 可信 SVG HTML + aria-label
+test('statusIconSpec: 各 kind 返回 svg + label，无用户输入注入', () => {
+  for (const kind of ['pending', 'ok', 'error', 'warn', 'denied', 'answered', 'aborted', 'busy']) {
+    const s = statusIconSpec(kind);
+    assert.ok(s.html.includes('<svg'), kind);
+    assert.ok(s.html.includes('aria-hidden="true"'), kind);
+    assert.ok(s.label && s.label.length > 0, kind);
+    assert.equal(s.html.includes('<script'), false);
+  }
+});
+
+test('statusIconSpec: 未知 kind 回退 pending', () => {
+  const s = statusIconSpec('nope');
+  assert.equal(s.label, statusIconSpec('pending').label);
+  assert.ok(s.html.includes('<svg'));
 });

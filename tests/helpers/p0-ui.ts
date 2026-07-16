@@ -58,8 +58,19 @@ export function sessionRowByInstance(page: Page, instanceId: string) {
   return page.locator(`[data-testid="session-row"][data-instance-id="${cssAttr(instanceId)}"]`);
 }
 
+// UI-007：状态标多为 SVG（aria-label）；工具角标仍可能是 emoji textContent。
+const BADGE_ARIA: Record<string, string> = {
+  '✅': '成功',
+  '⚠️': '待审批',
+  '❗': '出错',
+  '⏳': '运行中',
+  '⏹': '已中止',
+};
+
 export async function expectSessionBadge(page: Page, instanceId: string, text: string, title?: string) {
   const badge = sessionRowByInstance(page, instanceId).locator('[data-instance-badge]');
-  await expect(badge).toHaveText(text);
+  const aria = BADGE_ARIA[text];
+  if (aria) await expect(badge).toHaveAttribute('aria-label', aria);
+  else await expect(badge).toHaveText(text);
   if (title) await expect(badge).toHaveAttribute('title', title);
 }

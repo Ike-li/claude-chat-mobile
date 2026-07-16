@@ -24,7 +24,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // UX-019：审批留痕必须保留（不许吞）
     await expect(page.locator('#messages')).toContainText('已允许');
     await waitForIdle(page);
-    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('✅');
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '成功');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Successfully pushed');
 
     // 3. fresh state 后点击拒绝，工具卡片拒绝。
@@ -34,7 +34,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#permDeny').click();
     await expect(page.locator('#permModal')).toBeHidden();
     await waitForIdle(page);
-    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('🚫');
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '已拒绝');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('rejected by user');
 
     await expectNoBrowserErrors(page);
@@ -68,7 +68,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expect(page.locator('#permModal')).toBeHidden();
     await waitForIdle(page);
-    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('✅');
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '成功');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('approved on another trusted device');
 
     await expectNoBrowserErrors(page);
@@ -109,7 +109,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('出错：mock permission turn failed');
     const failedCard = page.locator('details.toolcard').filter({ hasText: 'run_command' }).last();
-    await expect(failedCard.locator('.t-status')).toHaveText('❌');
+    await expect(failedCard.locator('.t-status')).toHaveAttribute('aria-label', '出错');
     await failedCard.locator('summary').click();
     await expect(failedCard.locator('.t-out')).toContainText('mock permission turn failed');
 

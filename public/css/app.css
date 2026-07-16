@@ -660,3 +660,32 @@ body.mirror-readonly #pillEffort {
 body.mirror-readonly #pillMirrorMerged {
   display: inline-flex !important;
 }
+
+/* UI-007：状态 SVG 图标 */
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  vertical-align: middle;
+}
+.status-icon .status-svg,
+.t-status .status-svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+#sessionsDot.status-icon {
+  font-size: 0; /* 隐藏残留文本，只留 SVG */
+  min-width: 16px;
+  min-height: 16px;
+}
+#sessionsDot.status-icon .status-svg {
+  width: 12px;
+  height: 12px;
+}
+.dir-badge.status-icon .status-svg {
+  width: 13px;
+  height: 13px;
+}

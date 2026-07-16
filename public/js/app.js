@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -456,6 +456,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   };
   const appendMessage = messageRenderer.appendMessage;
   const addBar = messageRenderer.addBar;
+  // UI-007：工具卡/角标状态标 — 可信 SVG + aria-label（currentColor 吃语义色）
+  function setStatusIcon(el, kind) {
+    if (!el) return;
+    const { html, label } = statusIconSpec(kind);
+    el.classList.add('status-icon', 't-status');
+    el.setAttribute('aria-label', label);
+    el.innerHTML = html;
+  }
+
   // UX-019：档位变更反馈——空态不打系统条，改胶囊短暂高亮；有消息后仍可留痕。
   // 审批留痕（已允许/已拒绝）必须直接走 addBar，不经此闸。
   let pillFlashTimer = null;
@@ -494,12 +503,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     haptic,
     notify,
   });
-  const showActivityBanner = taskStatus.showActivity;
-  const hideActivityBanner = taskStatus.hideActivity;
+  let showActivityBanner = taskStatus.showActivity;
+  let hideActivityBanner = taskStatus.hideActivity;
   const clearApiRetryBanner = taskStatus.clearApiRetry;
   const onApiRetry = taskStatus.onApiRetry;
-  const onTaskProgress = taskStatus.onProgress;
-  const hideTaskProgress = taskStatus.hideProgress;
+  let onTaskProgress = taskStatus.onProgress;
+  let hideTaskProgress = taskStatus.hideProgress;
   const onTaskNotification = taskStatus.onComplete;
 
   // ---- socket ----
@@ -894,7 +903,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     logger: clientLogger,
     outOfBand: {
       task_notification: onTaskNotification,
-      task_progress: onTaskProgress,
+      task_progress: (ev) => onTaskProgress(ev), // let 可后绑 reconcile 包装
       api_retry: onApiRetry,
       history_append: onHistoryAppend,
       mirror_state: onMirrorState,
@@ -930,7 +939,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const summary = message || '工具执行已因本轮错误停止';
     for (const card of toolCards.values()) {
       const status = card.querySelector('.t-status');
-      if (status) status.textContent = '❌';
+      if (status) setStatusIcon(status, 'error');
       const out = card.querySelector('.t-out');
       if (out) {
         // t-out 内是 <code>；写 textContent 到 pre 会清掉子节点，统一落到 code 上
@@ -1108,13 +1117,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const card = el(`
         <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
           <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
-            <span class="t-status shrink-0">⏳</span><span class="t-name font-mono font-semibold text-ink truncate">${esc(cardTitle)}</span>
+            <span class="t-status status-icon shrink-0 text-warning" aria-label="进行中"></span><span class="t-name font-mono font-semibold text-ink truncate">${esc(cardTitle)}</span>
           </summary>
           <div class="px-3 pb-2 space-y-1">
             <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
             <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
           </div>
         </details>`);
+      setStatusIcon(card.querySelector('.t-status'), 'pending');
       const inCode = card.querySelector('.t-in code');
       if (inCode) {
         inCode.textContent = formatToolSummary(p.inputSummary || '');
@@ -1219,8 +1229,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       // deny+message 通道结果被 SDK 标 is_error（ok:false），但真实语义由 denyKind 决定（agent.js）：
       // answered=已回答 ☑️ / denied=已拒绝 🚫 / cancelled=已取消 🚫——均非工具报错；无 denyKind 才按 ok 显 ✅/❌。
-      const DENY_ICON = { answered: '☑️', denied: '🚫', cancelled: '🚫' };
-      card.querySelector('.t-status').textContent = DENY_ICON[p.denyKind] || (p.ok ? '✅' : '❌');
+      // UI-007：结果态 SVG
+      const statusKind = p.denyKind === 'answered' ? 'answered'
+        : (p.denyKind === 'denied' || p.denyKind === 'cancelled') ? 'denied'
+        : (p.ok ? 'ok' : 'error');
+      const stEl = card.querySelector('.t-status');
+      setStatusIcon(stEl, statusKind);
+      if (statusKind === 'ok') stEl?.classList.add('text-success');
+      else if (statusKind === 'error' || statusKind === 'denied') stEl?.classList.add('text-danger');
+      else stEl?.classList.add('text-ink-soft');
       if (p.outputSummary) {
         const out = card.querySelector('.t-out');
         // deny 通道正文带 SDK 加的 "Error:" 前缀（非真错误），剥掉只留语义文本
@@ -3036,13 +3053,29 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // 角标视觉：busy ⏳ / permission ⚠️ / error ❗ / done ✅；idle 隐藏。挂在目录行内、ml-auto 右对齐。
   // [emoji, 颜色类, 语义 title]——title 消除「不知道图标/颜色对应什么状态」
-  const DIR_BADGE = { busy: ['⏳', 'text-warning', '运行中'], permission: ['⚠️', 'text-danger', '待审批'], error: ['❗', 'text-danger', '出错'], done: ['✅', 'text-success', '已完成'], aborted: ['⏹', 'text-warning', '已中止'] };
-  // 工具角标细化：busy 时根据 activeTool 显示具体工具图标
+  // UI-007：角标 kind → SVG；第三元为 title/aria
+  const DIR_BADGE = {
+    busy: ['busy', 'text-warning', '运行中'],
+    permission: ['warn', 'text-danger', '待审批'],
+    error: ['error', 'text-danger', '出错'],
+    done: ['ok', 'text-success', '已完成'],
+    aborted: ['aborted', 'text-warning', '已中止'],
+  };
+  // 工具角标细化：busy 时仍用工具 emoji（低频）；主状态走 SVG
   const TOOL_BADGE = { Agent: '🤖', Task: '🤖', Bash: '🖥', Write: '📝', Edit: '✏️', Read: '👁' };
   function applyBadge(badge, state) {
     const m = DIR_BADGE[state];
-    if (m) { badge.textContent = m[0]; badge.className = `dir-badge ml-auto shrink-0 ${m[1]}`; badge.title = m[2]; }
-    else { badge.textContent = ''; badge.className = 'dir-badge hidden'; badge.title = ''; }
+    if (m) {
+      badge.className = `dir-badge status-icon ml-auto shrink-0 ${m[1]}`;
+      badge.title = m[2];
+      setStatusIcon(badge, m[0]);
+      badge.classList.remove('hidden');
+    } else {
+      badge.textContent = '';
+      badge.innerHTML = '';
+      badge.className = 'dir-badge hidden';
+      badge.title = '';
+    }
   }
   // "已等待"文案（FR-22，与 needsYouList 共享 waitingSince 数据源）：按分钟粒度，不做秒级实时动画——
   // 该区块只在 instances 广播到达时重渲（同 refreshNeedsYou 触发时机），文案本就是"上次广播时刻"的快照。
@@ -3170,8 +3203,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const row = el(`<button type="button" class="w-full flex items-center gap-2 pl-3 pr-3 py-1.5 text-left hover:bg-sunk/30 active:opacity-70 hit-44" data-testid="status-instance-row"></button>`);
         const badge = el(`<span class="shrink-0 text-xs"></span>`);
         const m = DIR_BADGE[inst.state];
-        if (m) { badge.textContent = m[0]; badge.className = `shrink-0 text-xs ${m[1]}`; badge.title = m[2]; }
-        else if (inst.state === 'busy' && inst.activeTool && TOOL_BADGE[inst.activeTool]) {
+        if (m) {
+          badge.className = `shrink-0 text-xs status-icon ${m[1]}`;
+          badge.title = m[2];
+          setStatusIcon(badge, m[0]);
+        } else if (inst.state === 'busy' && inst.activeTool && TOOL_BADGE[inst.activeTool]) {
           badge.textContent = TOOL_BADGE[inst.activeTool];
           badge.className = 'shrink-0 text-xs text-warning';
           badge.title = `运行中：${inst.activeTool}`;
@@ -3268,9 +3304,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const m = DIR_BADGE[inst.state];
         if (m) {
           const b = document.createElement('span');
-          b.className = `shrink-0 ${m[1]}`;
+          b.className = `shrink-0 status-icon ${m[1]}`;
           b.setAttribute('data-instance-badge', '');
-          b.textContent = m[0];
+          setStatusIcon(b, m[0]);
           head.appendChild(b);
         }
       }
@@ -3282,12 +3318,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function updateSessionsDot() {
     if (!sessionsDot) return;
     const top = summarizeOtherWorkspaces(workdirStates, availableDirs, currentCwd);
-    const m = top && DIR_BADGE[top]; // [emoji, 颜色类, 中文名]
+    const m = top && DIR_BADGE[top]; // [kind, 颜色类, 中文名]
     if (m) {
-      sessionsDot.textContent = m[0];
-      sessionsDot.title = `其他工作区${m[2]}`; // 如「其他工作区待审批」
       sessionsDot.classList.remove('hidden');
+      sessionsDot.classList.add('status-icon');
+      setStatusIcon(sessionsDot, m[0]);
+      sessionsDot.title = `其他工作区${m[2]}`;
+      // 小点位：保持紧凑
+      sessionsDot.classList.add(m[1]);
     } else {
+      sessionsDot.innerHTML = '';
       sessionsDot.textContent = '';
       sessionsDot.title = '';
       sessionsDot.classList.add('hidden');
@@ -3386,12 +3426,40 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
   }, { passive: true });
 
+  // UI-012：sheet 焦点管理（打开移焦、关闭还焦、Tab 陷阱）
+  let sheetFocusPrev = null;
+  let sheetKeyHandler = null;
+  function sheetFocusables(root) {
+    return [...root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+      .filter(n => !n.disabled && n.offsetParent !== null);
+  }
   function openSheet(el) {
     haptic('tap');
+    sheetFocusPrev = document.activeElement;
     el.classList.remove('hidden');
     // Force reflow
     el.offsetHeight;
     el.classList.add('sheet-open');
+    if (!el.getAttribute('role')) el.setAttribute('role', 'dialog');
+    if (!el.getAttribute('aria-modal')) el.setAttribute('aria-modal', 'true');
+    // 移焦到首个可聚焦控件（arming 结束后用户仍可 Tab）
+    requestAnimationFrame(() => {
+      const list = sheetFocusables(el);
+      (list[0] || el).focus?.();
+    });
+    if (sheetKeyHandler) document.removeEventListener('keydown', sheetKeyHandler, true);
+    sheetKeyHandler = (e) => {
+      if (e.key !== 'Tab' || !el.classList.contains('sheet-open')) return;
+      const list = sheetFocusables(el);
+      if (!list.length) return;
+      const first = list[0], last = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault(); last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault(); first.focus();
+      }
+    };
+    document.addEventListener('keydown', sheetKeyHandler, true);
   }
   function closeSheet(el) {
     haptic('tap');
@@ -3401,11 +3469,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       el.classList.remove('sheet-arming');
       if (permArmTimer) { clearTimeout(permArmTimer); permArmTimer = null; }
     }
+    if (sheetKeyHandler) {
+      document.removeEventListener('keydown', sheetKeyHandler, true);
+      sheetKeyHandler = null;
+    }
+    const prev = sheetFocusPrev;
+    sheetFocusPrev = null;
     // Delay adding hidden class to let slide-down animation finish,
     // which takes around 300ms. E2E wait tasks wait up to 15s so 300ms is perfect.
     setTimeout(() => {
       if (!el.classList.contains('sheet-open')) {
         el.classList.add('hidden');
+        try { prev?.focus?.({ preventScroll: true }); } catch { /* ignore */ }
       }
     }, 300);
   }
@@ -3675,7 +3750,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             badgeTitle = `运行中：${liveInst.activeTool}`;
           } else {
             const m = DIR_BADGE[badgeState];
-            if (m) { badgeIcon = m[0]; badgeCls = m[1]; badgeTitle = m[2]; }
+            if (m) {
+              const b = el(`<span data-instance-badge class="shrink-0 status-icon ${m[1]}"></span>`);
+              setStatusIcon(b, m[0]);
+              b.title = m[2];
+              head.appendChild(b);
+              badgeIcon = null; // already appended
+            }
           }
           if (badgeIcon) { const b = el(`<span data-instance-badge></span>`); b.textContent = badgeIcon; b.className = `shrink-0 ${badgeCls}`; if (badgeTitle) b.title = badgeTitle; head.appendChild(b); }
         }
@@ -4195,13 +4276,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const card = el(`
           <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
             <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
-              <span class="t-status shrink-0">⏳</span><span class="t-name font-mono font-semibold text-ink truncate">${esc(histTitle)}</span>
+              <span class="t-status status-icon shrink-0 text-warning" aria-label="进行中"></span><span class="t-name font-mono font-semibold text-ink truncate">${esc(histTitle)}</span>
             </summary>
             <div class="px-3 pb-2 space-y-1">
               <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
               <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
             </div>
           </details>`);
+        setStatusIcon(card.querySelector('.t-status'), 'pending');
         const inCode = card.querySelector('.t-in code');
         if (inCode) {
           inCode.textContent = formatToolSummary(msg.inputSummary || '');
@@ -4221,13 +4303,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           const orphan = el(`
             <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
               <summary class="px-3 py-2 flex items-center gap-2">
-                <span class="t-status">${msg.ok === false ? '❌' : '✅'}</span>
+                <span class="t-status status-icon shrink-0"></span>
                 <span class="font-mono font-semibold text-ink">tool</span>
               </summary>
               <div class="px-3 pb-2 space-y-1">
                 <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint"><code></code></pre>
               </div>
             </details>`);
+          setStatusIcon(orphan.querySelector('.t-status'), msg.ok === false ? 'error' : 'ok');
           const code = orphan.querySelector('.t-out code');
           if (code) {
             code.textContent = formatToolSummary(msg.outputSummary || '');
@@ -4236,7 +4319,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           appendNode(orphan, msg);
           continue;
         }
-        card.querySelector('.t-status').textContent = msg.ok === false ? '❌' : '✅';
+        setStatusIcon(card.querySelector('.t-status'), msg.ok === false ? 'error' : 'ok');
         if (msg.outputSummary) {
           const out = card.querySelector('.t-out');
           const code = out.querySelector('code') || out;
@@ -4353,26 +4436,36 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // UX-010：横幅优先级仲裁 mirror > task > subagent > activity
   function reconcileBanners() {
-    const flags = {
-      mirror: Boolean(mirrorReadonlySid) && mirrorBanner && !mirrorBanner.classList.contains('hidden'),
-      task: taskProgressBanner && !taskProgressBanner.classList.contains('hidden'),
-      subagent: false, // 子代理嵌工具卡，无独立横幅 DOM
-      activity: activityBanner && !activityBanner.classList.contains('hidden'),
-    };
-    // 若 mirror 有效，强制只显 mirror
+    // UX-010：同屏最多一条横幅（mirror > task > activity）；子代理在工具卡内不占横幅层
+    const taskOn = Boolean(taskProgressBanner && !taskProgressBanner.classList.contains('hidden'));
+    const activityOn = Boolean(activityBanner && !activityBanner.classList.contains('hidden'));
     const pick = pickBannerToShow({
       mirror: Boolean(mirrorReadonlySid),
-      task: flags.task,
+      task: taskOn,
       subagent: false,
-      activity: flags.activity && !mirrorReadonlySid,
+      activity: activityOn,
     });
-    if (mirrorBanner && mirrorReadonlySid) mirrorBanner.classList.remove('hidden');
-    if (taskProgressBanner && pick !== 'task' && pick === 'mirror') {
-      // keep task data but visually demote under mirror: leave visible if no mirror
+    if (mirrorBanner) mirrorBanner.classList.toggle('hidden', pick !== 'mirror');
+    if (taskProgressBanner) {
+      // 数据层仍可保留；视觉上非选中则隐藏（task controller 再次 show 时会 unhide，再走 reconcile）
+      if (pick !== 'task' && pick === 'mirror') taskProgressBanner.classList.add('hidden');
     }
-    if (activityBanner && (pick === 'mirror' || pick === 'task')) {
-      activityBanner.classList.add('hidden');
+    if (activityBanner) {
+      if (pick !== 'activity') activityBanner.classList.add('hidden');
     }
+    // 镜像时忙碌条已由 shouldShowBusyWithMirror 闸
+  }
+
+  // UX-010：活动/后台任务横幅显示后走仲裁
+  {
+    const _sa = showActivityBanner;
+    const _ha = hideActivityBanner;
+    const _op = onTaskProgress;
+    const _hp = hideTaskProgress;
+    showActivityBanner = (...a) => { _sa(...a); reconcileBanners(); };
+    hideActivityBanner = (...a) => { _ha(...a); reconcileBanners(); };
+    onTaskProgress = (ev) => { const r = _op(ev); reconcileBanners(); return r; };
+    hideTaskProgress = (...a) => { _hp(...a); reconcileBanners(); };
   }
 
   function applyMirror(readonly, sessionId, stale = false, observedCli, remainingMs) {

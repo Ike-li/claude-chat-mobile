@@ -23,7 +23,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('details.toolcard summary').first().click();
     await expect(page.locator('details.toolcard').first()).toHaveAttribute('open', '');
     await expect(page.locator('details.toolcard pre').first()).toContainText('utils/date.js');
-    await expect(page.locator('details.toolcard .t-status')).toHaveText(['✅', '✅', '✅']);
+    const st = page.locator('details.toolcard .t-status');
+    await expect(st).toHaveCount(3);
+    for (let i = 0; i < 3; i++) await expect(st.nth(i)).toHaveAttribute('aria-label', '成功');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('All tools executed cleanly');
 
     await page.locator('details.toolcard summary').last().click();
@@ -50,7 +52,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('details.toolcard').nth(0)).not.toContainText('command result: npm run check');
     await expect(page.locator('details.toolcard').nth(1)).toContainText('command result: npm run check');
     await expect(page.locator('details.toolcard').nth(1)).not.toContainText('read_file result: config.json');
-    await expect(page.locator('details.toolcard .t-status')).toHaveText(['✅', '✅']);
+    const st2 = page.locator('details.toolcard .t-status');
+    await expect(st2).toHaveCount(2);
+    for (let i = 0; i < 2; i++) await expect(st2.nth(i)).toHaveAttribute('aria-label', '成功');
 
     await expectNoBrowserErrors(page);
   });
@@ -64,7 +68,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('mock tool crashed');
-    await expect(failedCard.locator('.t-status')).toHaveText('❌');
+    await expect(failedCard.locator('.t-status')).toHaveAttribute('aria-label', '出错');
     await failedCard.locator('summary').click();
     await expect(failedCard.locator('.t-out')).toContainText('mock tool crashed');
 

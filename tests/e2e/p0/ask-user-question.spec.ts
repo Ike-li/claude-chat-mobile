@@ -23,7 +23,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#questionModal')).toBeHidden();
     await expect(page.locator('#activeStatusText')).toContainText('Claude 正在思考中...');
     await waitForIdle(page);
-    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('☑️');
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '已回答');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('dev (Bleeding-Edge Integration)');
 
     await expectNoBrowserErrors(page);
@@ -56,7 +56,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expect(page.locator('#questionModal')).toBeHidden();
     await waitForIdle(page);
-    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('☑️');
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '已回答');
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('answered on another trusted device');
 
     await expectNoBrowserErrors(page);
@@ -74,7 +74,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#messages')).toContainText('出错：mock question turn failed');
     const failedQuestionCard = page.locator('details.toolcard').filter({ hasText: 'AskUserQuestion' }).last();
-    await expect(failedQuestionCard.locator('.t-status')).toHaveText('❌');
+    await expect(failedQuestionCard.locator('.t-status')).toHaveAttribute('aria-label', '出错');
     await failedQuestionCard.locator('summary').click();
     await expect(failedQuestionCard.locator('.t-out')).toContainText('mock question turn failed');
 
@@ -149,7 +149,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#questionSkip').click();
     await expect(page.locator('#questionModal')).toBeHidden();
-    await expect(page.locator('details.toolcard .t-status').last()).toHaveText('🚫');
+    await expect(page.locator('details.toolcard .t-status').last()).toHaveAttribute('aria-label', '已拒绝');
 
     await expectNoBrowserErrors(page);
   });
