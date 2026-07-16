@@ -394,6 +394,20 @@ test.describe('map() — 活的后台任务注册表（bgTasks，驱动纯后台
     s.dispose();
   });
 
+  test('BUG-1 回归：<task-notification> 缺 <task-id> 不误清其他在跑的 bgTasks', () => {
+    const { s } = makeSession();
+    s.map(prog('t1'));
+    s.map(prog('t2'));
+    assert.equal(s.bgTasks.size, 2);
+    // 有闭合标签但无 <task-id> 子标签 —— pick('task-id') 返回 null
+    s.map({ type: 'user', message: { content: '<task-notification>\n<status>completed</status>\n</task-notification>' } });
+    assert.equal(s.bgTasks.size, 2, '缺 <task-id> 时不整清：t1 和 t2 仍在跑者保留');
+    assert.equal(s.bgTasks.has('t1'), true);
+    assert.equal(s.bgTasks.has('t2'), true);
+    assert.equal(s.pendingAutoTurn, true, '通知仍应武装 pendingAutoTurn（触发汇报轮）');
+    s.dispose();
+  });
+
   test('TTL sweep：超 BG_TASK_TTL_MS 无心跳者被清、未过期者留', () => {
     const { s } = makeSession();
     s.map(prog('old')); s.map(prog('fresh'));

@@ -1260,7 +1260,11 @@ export class AgentSession {
             toolUseId: pick('tool-use-id'),
             outputFile: pick('output-file')
           });
-          this.bgTaskDone(pick('task-id')); // 完成：从活后台注册表清除（id 缺失/不匹配则整清，见 bgTaskDone）
+          // BUG-1 修复：pick('task-id') 为 null 时跳过 bgTaskDone——缺 <task-id> 的 <task-notification>
+          // 不应触发 null→clear() 清空全部在跑后台任务。整清兜底仅留给 bgTaskDone 直接调用方（SDK
+          // system/task_notification 路径，41/41 实测必带 task_id）。user 注入走正则提取、可靠性低一档。
+          const doneTaskId = pick('task-id');
+          if (doneTaskId != null) this.bgTaskDone(doneTaskId);
           break; // 注入消息不含 tool_result，独立分支返回
         }
         for (const block of asArray(msg.message?.content)) {
