@@ -241,10 +241,23 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
 // 本纯函数判定「这次 rebaseline 是否吸收了未观察到的外部增长」，调用方据此对该 AgentSession 标 externalDirty
 // （下次发送前置换实例吸收，同 effort 切档冷读最新磁盘）。仅当【同一会话】重连(sameSession)才算——真会话切换是
 // 另一段会话的全量历史、无分叉语义。curLen 非有限（读盘失败）保守返回 false，不误标。
-export function rebaselineAbsorbedExternal({ sameSession, curLen, baseline }) {
-  return sameSession === true
-    && Number.isFinite(curLen) && Number.isFinite(baseline)
-    && curLen > baseline;
+// BE-009 + SS-NEW-002：同会话重连 rebaseline 是否吸收了未观察的外部增长。
+// 长度增长 → true；HISTORY_MAX 满窗滑动时 len 不变但尾指纹变 → 也 true（对齐 catchUpStep lastTailKey）。
+export function rebaselineAbsorbedExternal({
+  sameSession,
+  curLen,
+  baseline,
+  historyCap = HISTORY_MAX_MESSAGES,
+  prevTailKey = null,
+  curTailKey = null,
+} = {}) {
+  if (sameSession !== true) return false;
+  if (!Number.isFinite(curLen) || !Number.isFinite(baseline)) return false;
+  if (curLen > baseline) return true;
+  const atCap = Number.isFinite(historyCap) && historyCap > 0
+    && curLen >= historyCap && baseline >= historyCap;
+  if (atCap && prevTailKey != null && curTailKey != null && prevTailKey !== curTailKey) return true;
+  return false;
 }
 
 // 只读镜像锁的【释放】状态机（纯函数，便于单测）——修 code-review 发现 1：原实现 setMirror(true) 在观测到

@@ -243,6 +243,28 @@ test.describe('rebaselineAbsorbedExternal（BE-009）', () => {
     assert.equal(rebaselineAbsorbedExternal({ sameSession: true, curLen: -1, baseline: 2 }), false);
     assert.equal(rebaselineAbsorbedExternal({ sameSession: true, curLen: NaN, baseline: 2 }), false);
   });
+  // SS-NEW-002：满窗滑动 length 不变，靠 tailKey 检出被吸收的外部增长
+  test('满窗 + 同长 + tail 变 → true（须标 externalDirty）', () => {
+    const cap = 4;
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: cap, baseline: cap, historyCap: cap,
+      prevTailKey: 't1|user|old', curTailKey: 't2|assistant|new',
+    }), true);
+  });
+  test('满窗 + 同长 + tail 同 → false', () => {
+    const cap = 4;
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: cap, baseline: cap, historyCap: cap,
+      prevTailKey: 't1|user|same', curTailKey: 't1|user|same',
+    }), false);
+  });
+  test('满窗但 prevTail 未知（null）→ false（对齐 catchUpStep 不误判）', () => {
+    const cap = 4;
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: cap, baseline: cap, historyCap: cap,
+      prevTailKey: null, curTailKey: 't2|user|x',
+    }), false);
+  });
 });
 
 // ── 原始同步 bug 复现（web 额度耗尽 → CLI 外部 resume+compact 写入 → web 重开看不到 CLI 新输出）────────
