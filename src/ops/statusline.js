@@ -128,11 +128,15 @@ export function usageBitsForStatusLine(usage) {
     if (rl && typeof rl === 'object') {
       const five = rl.five_hour, seven = rl.seven_day;
       const rate = {};
-      if (five && typeof five === 'object' && Number.isFinite(five.utilization)) {
+      // OPS-2：utilization 必须夹在 [0,100]——CLI 路径 buildCliStatusLine 会丢弃越界值，
+      // SDK 路径此前原样拷贝 150/-5，statusline 文案与颜色阈值失真。
+      if (five && typeof five === 'object' && Number.isFinite(five.utilization)
+          && five.utilization >= 0 && five.utilization <= 100) {
         rate.fiveHour = { usedPercent: five.utilization };
         if (typeof five.resets_at === 'string' && five.resets_at) rate.fiveHour.resetsAt = five.resets_at;
       }
-      if (seven && typeof seven === 'object' && Number.isFinite(seven.utilization)) {
+      if (seven && typeof seven === 'object' && Number.isFinite(seven.utilization)
+          && seven.utilization >= 0 && seven.utilization <= 100) {
         rate.sevenDay = { usedPercent: seven.utilization };
         if (typeof seven.resets_at === 'string' && seven.resets_at) rate.sevenDay.resetsAt = seven.resets_at;
       }
