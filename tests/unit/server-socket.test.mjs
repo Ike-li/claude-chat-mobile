@@ -40,3 +40,25 @@ test('socket event registrar converts handler failures into one recoverable erro
   assert.equal(socket.emitted[0][1].payload.recoverable, true);
   assert.match(socket.emitted[0][1].payload.message, /browse:read.*boom/);
 });
+
+// SRV-NEW-005：handler 抛错时 trailing ack 必须收到负回执，否则离线队列/UI 永久 in-flight
+test('socket event registrar nacks trailing ack when handler throws', async () => {
+  const socket = fakeSocket();
+  const on = createSocketEventRegistrar({ logger: { warn() {}, error() {} } });
+  on(socket, 'user:message', () => { throw new Error('disk full'); });
+  let ackPayload = null;
+  await socket.handlers.get('user:message')({ text: 'hi' }, (p) => { ackPayload = p; });
+  assert.equal(socket.emitted[0][1].type, 'error');
+  assert.deepEqual(ackPayload, { ok: false, error: 'disk full', retryable: true });
+});
+
+test('socket event registrar nacks unapproved device when ack present', async () => {
+  const socket = fakeSocket({ approved: false });
+  const on = createSocketEventRegistrar({ logger: { warn() {}, error() {} } });
+  let called = false;
+  on(socket, 'user:message', () => { called = true; });
+  let ackPayload = null;
+  await socket.handlers.get('user:message')({ text: 'x' }, (p) => { ackPayload = p; });
+  assert.equal(called, false);
+  assert.deepEqual(ackPayload, { ok: false, error: 'device_not_approved', permanent: true });
+});
