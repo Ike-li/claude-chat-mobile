@@ -47,6 +47,17 @@ test('sanitize: sk-* API key 被脱敏', () => {
   assert.match(result, /\*\*\*/);
 });
 
+// SH-002：无引号 colon 形态（header 风格），#16 只盖 JSON 引号值会漏
+test('sanitize: 无引号 api_key: / x-api-key: / client_secret: 被脱敏（SH-002）', () => {
+  const a = sanitize('api_key: abcdefghijklmnopqrstuvwxyz012345');
+  assert.ok(!a.includes('abcdefghijklmnopqrstuvwxyz012345'), 'api_key: 裸值应脱敏');
+  assert.match(a, /api_key:\s*\*\*\*/i);
+  const b = sanitize('x-api-key: supersecrettokenvalue99');
+  assert.ok(!b.includes('supersecrettokenvalue99'));
+  const c = sanitize('client_secret: myclientsecretvalue');
+  assert.ok(!c.includes('myclientsecretvalue'));
+});
+
 test('sanitize: Anthropic key sk-ant-* 被脱敏', () => {
   const result = sanitize('sk-ant-api03-abcdefghijklmnopqrstuvwxyz');
   assert.ok(!result.includes('sk-ant-'), '应脱敏 Anthropic key');

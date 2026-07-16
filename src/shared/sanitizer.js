@@ -53,6 +53,10 @@ const PATTERNS = [
   // 16. JSON 形态密钥字段（"key":"value"，覆盖 JSON.stringify 后的日志文本——#6/#7 只认 key=value 语法，
   // 分隔符是 : 而不是 = 时会漏过）。同 #6/#7 的取舍：字段名子串命中也保守脱敏，宁枉勿纵。
   [/(["']?[A-Za-z_]*(?:key|secret|token|password|passwd|credential)[A-Za-z_]*["']?\s*:\s*)["'][^"']*["']/gi, '$1"***"'],
+
+  // 17. SH-002：无引号 colon 形态（api_key: value / x-api-key: … / client_secret: …），
+  // #16 只盖 JSON 引号值，header 风格裸值会漏到 LOG_INTERACTIONS/LOG_STDERR。
+  [/\b([A-Za-z_]*(?:key|secret|token|password|passwd|credential)[A-Za-z_]*)\s*:\s*([^\s"'`,;]{8,})/gi, '$1: ***'],
 ];
 
 // ANSI 转义序列正则（CSI/OSC/C1 控制字符）
