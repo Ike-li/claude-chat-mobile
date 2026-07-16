@@ -79,6 +79,28 @@ export function isWhitelisted(cwd, dirs) {
   return typeof cwd === 'string' && cwd !== '' && dirs.includes(cwd);
 }
 
+// SS-004：与 history.getProjectDir / CLI 同规则（非字母数字 → '-'）。
+// 放在本模块避免 workdirs↔history 循环耦合；history 仍是路径编码的 SoT 实现。
+function projectDirKey(cwd) {
+  return String(cwd || '').replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+// SS-004：在一组已 realpath 的工作区路径上检测 project 目录名碰撞。
+export function findProjectDirCollisions(dirs = []) {
+  const byEnc = new Map();
+  for (const d of dirs) {
+    if (typeof d !== 'string' || !d) continue;
+    const enc = projectDirKey(d);
+    if (!byEnc.has(enc)) byEnc.set(enc, []);
+    byEnc.get(enc).push(d);
+  }
+  const collisions = [];
+  for (const [encoded, paths] of byEnc) {
+    if (paths.length >= 2) collisions.push({ encoded, paths: [...paths] });
+  }
+  return collisions;
+}
+
 // realpathSync（解符号链接/相对段，与 CLI 命名一致）+ isDirectory 校验，warn-skip 无效项；realpath 后二次去重。
 // 返回 { dirs: [规范化路径], limits: Map<路径, sessionLimit>, warnings }。
 export function resolveWorkdirs(entries) {
@@ -97,6 +119,12 @@ export function resolveWorkdirs(entries) {
     if (limits.has(real)) continue; // realpath 后去重（首见 sessionLimit 优先）
     dirs.push(real);
     limits.set(real, sessionLimit);
+  }
+  // SS-004：CLI 同款 getProjectDir 编码碰撞 → warn（不挡启动；会话列表/历史可能串目录）
+  for (const c of findProjectDirCollisions(dirs)) {
+    warnings.push(
+      `工作区 project 目录名碰撞（CLI 编码「${c.encoded}」）：${c.paths.join(' ↔ ')}——会话列表/历史可能混用，请避免仅分隔符不同的路径`,
+    );
   }
   return { dirs, limits, warnings };
 }

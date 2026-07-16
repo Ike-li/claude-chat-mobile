@@ -8,6 +8,7 @@ import { realpathSync } from 'node:fs';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
+  findProjectDirCollisions,
 } from '../../src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -166,5 +167,18 @@ test.describe('isWhitelisted', () => {
     assert.equal(isWhitelisted('', ['/a']), false);
     assert.equal(isWhitelisted(undefined, ['/a']), false);
     assert.equal(isWhitelisted(null, ['/a']), false);
+  });
+});
+
+test.describe('findProjectDirCollisions（SS-004）', () => {
+  test('无碰撞 → []', () => {
+    assert.deepEqual(findProjectDirCollisions(['/Users/a/proj', '/Users/a/other']), []);
+  });
+  test('/tmp/foo 与 /tmp-foo 编码相同 → 一组碰撞', () => {
+    // 注意：测试用字面路径，不要求目录真实存在（纯编码函数）
+    const c = findProjectDirCollisions(['/tmp/foo', '/tmp-foo', '/unique/path']);
+    assert.equal(c.length, 1);
+    assert.equal(c[0].encoded, '-tmp-foo');
+    assert.deepEqual(c[0].paths.sort(), ['/tmp-foo', '/tmp/foo'].sort());
   });
 });
