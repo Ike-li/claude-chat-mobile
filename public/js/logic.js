@@ -113,9 +113,9 @@ export function effortLevelSubtitle(level) {
     medium: '均衡',
     med: '均衡',
     high: '更深入',
-    xhigh: '很深入，更慢',
-    max: '最深入，更慢更贵',
-    ultracode: 'xhigh + 多 agent · 最彻底',
+    xhigh: '很深入更慢',
+    max: '最深入更慢更贵',
+    ultracode: 'xhigh + 多 agent workflow · 最彻底',
   };
   return map[lv] || '';
 }
@@ -127,13 +127,15 @@ export function shouldShowBusyWithMirror({ mirrorReadonly = false, busy = false 
 }
 
 // UX-010：横幅优先级仲裁（同屏最多一条）。
-export function pickBannerToShow({ mirror = false, task = false, subagent = false, activity = false } = {}) {
+// bannerPriority = 任务约定名；pickBannerToShow 保留给已接线 app.js import。
+export function bannerPriority({ mirror = false, task = false, subagent = false, activity = false } = {}) {
   if (mirror) return 'mirror';
   if (task) return 'task';
   if (subagent) return 'subagent';
   if (activity) return 'activity';
   return null;
 }
+export const pickBannerToShow = bannerPriority;
 
 // UX-004：流式 markdown 预览节流间隔（ms）。
 export function formatStreamPreviewIntervalMs(ms) {

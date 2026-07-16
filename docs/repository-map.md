@@ -53,9 +53,9 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Test configuration | 1 |
 | Test support | 5 |
 | Unit test | 78 |
-| Vendored asset | 12 |
+| Vendored asset | 13 |
 
-Total classified files: **285**.
+Total classified files: **286**.
 
 ## Complete file inventory
 
@@ -132,6 +132,7 @@ Total classified files: **285**.
 | `public/js/sw.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/tw-config.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/manifest.webmanifest` | Frontend asset | PWA shell or web asset | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/github-dark.min.css` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/github-light.min.css` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/highlight.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/marked.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |

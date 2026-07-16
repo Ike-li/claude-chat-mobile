@@ -26,7 +26,8 @@
   <script src="/js/tw-config.js"></script>
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
-  <link rel="stylesheet" href="/vendor/github-light.min.css">
+  <link rel="stylesheet" href="/vendor/github-light.min.css" media="(prefers-color-scheme: light)">
+  <link rel="stylesheet" href="/vendor/github-dark.min.css" media="(prefers-color-scheme: dark)">
   <script src="/vendor/highlight.min.js"></script>
   <script src="/socket.io/socket.io.js"></script>
   <link rel="stylesheet" href="/css/app.css">
@@ -44,7 +45,7 @@
         class="w-full bg-sunk border border-line rounded-lg px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:ring-1 focus:ring-accent mb-2">
       <div id="authError" class="hidden text-xs text-danger mb-2"></div>
       <button id="authSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">进入</button>
-      <div class="text-[11px] text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">.env</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 或启动日志里。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
+      <div class="text-xs text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">.env</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 或启动日志里。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
     </div>
   </div>
 
@@ -67,7 +68,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M9 4v16M12.5 8h3.75M12.5 12h3.75M12.5 16h2.5" />
         </svg>
         <!-- 台阶2 Step B：其他工作区有动静时显示状态 emoji（app.js updateSessionsDot 控制；⏳/⚠️/❗/✅ 与面板图例同款）。定位/底色常驻此处，JS 只切 hidden + 换 emoji。 -->
-        <span id="sessionsDot" class="hidden absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-px flex items-center justify-center rounded-full bg-surface border border-line-soft shadow-sm text-[11px] leading-none"></span>
+        <span id="sessionsDot" class="hidden absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-px flex items-center justify-center rounded-full bg-surface border border-line-soft shadow-sm text-xs leading-none"></span>
         
         <!-- Connection state dot wrapper inside btnSessions -->
         <div id="connDotWrap" class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-surface rounded-full border border-line-soft shadow-sm" title="连接状态：绿=已连接 红=断开">
@@ -75,7 +76,7 @@
         </div>
       </button>
       <!-- 手机 ↔ 主机 socket 往返延迟；连接后由 app.js 周期测并着色，断线隐藏 -->
-      <span id="connRtt" class="hidden text-[10px] font-mono tabular-nums leading-none select-none" title="手机到主机的往返延迟" aria-live="polite"></span>
+      <span id="connRtt" class="hidden text-xs font-mono tabular-nums leading-none select-none" title="手机到主机的往返延迟" aria-live="polite"></span>
     </div>
 
     <!-- Center Section: Elegant top context pill with workspace and status -->
@@ -86,7 +87,7 @@
           <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
         </svg>
         <span id="topTitleText" class="hidden text-xs font-semibold text-ink-soft shrink-0">新聊天</span>
-        <span class="hidden text-ink-faint text-[10px] select-none shrink-0">•</span>
+        <span class="hidden text-ink-faint text-xs select-none shrink-0">•</span>
         <span id="topProjectText" class="text-xs font-bold text-ink truncate">...</span>
       </button>
     </div>
@@ -125,7 +126,7 @@
     <!-- 侧边栏顶部标题区 -->
     <div class="px-4 py-3 border-b border-line flex items-center justify-between shrink-0">
       <span class="text-sm font-semibold uppercase tracking-wide text-ink" style="font-family:var(--font-read)">工作区与会话</span>
-      <button id="sidebarClose" class="w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base">✕</button>
+      <button id="sidebarClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base">✕</button>
     </div>
     <!-- 会话列表容器 (复用 sessionPanel 以完美兼容现有 JS) -->
     <div id="sessionPanel" class="flex-1 overflow-y-auto"></div>
@@ -135,7 +136,7 @@
   <main id="messages" class="flex-1 overflow-y-auto overscroll-none px-3 py-3 space-y-3"></main>
 
   <!-- 权限审批弹窗（底部 sheet） -->
-  <div id="permModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+  <div id="permModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
       <div class="sheet-handle"></div>
       <div class="text-accent-deep font-semibold mb-1">⚠️ 权限请求</div>
@@ -151,11 +152,11 @@
       </label>
       <!-- ExitPlanMode：对齐 CLI plan-exit，批准时可选手 default / acceptEdits / bypass -->
       <div id="permExitModeWrap" class="hidden mb-3">
-        <div class="text-[11px] text-ink-soft mb-1.5">退出计划后权限档（对齐 CLI）</div>
-        <div id="permExitMode" class="grid grid-cols-3 gap-1.5 text-[11px]">
+        <div class="text-xs text-ink-soft mb-1.5">退出计划后权限档（对齐 CLI）</div>
+        <div id="permExitMode" class="grid grid-cols-3 gap-1.5 text-xs">
           <button type="button" data-exit-mode="default" class="perm-exit-mode py-2 rounded-lg border border-accent bg-accent-wash text-ink font-medium">默认</button>
           <button type="button" data-exit-mode="acceptEdits" class="perm-exit-mode py-2 rounded-lg border border-line text-ink-soft font-medium">自动接受编辑</button>
-          <button type="button" data-exit-mode="bypassPermissions" class="perm-exit-mode py-2 rounded-lg border border-line text-ink-soft font-medium">Bypass</button>
+          <button type="button" data-exit-mode="bypassPermissions" class="perm-exit-mode py-2 rounded-lg border border-danger text-danger font-medium">⚠️ Bypass</button>
         </div>
       </div>
       <div class="flex gap-2">
@@ -170,13 +171,13 @@
   <!-- AskUserQuestion 弹窗（E7） -->
   <!-- 必须自带逃生舱：整屏 z-40 遮罩会盖住输入区「停止」按钮，不能只靠选选项才能走。
        跳过 = user:interrupt；Other = 对齐 CLI 自动提供的自由文本；multiSelect = 可多选。 -->
-  <div id="questionModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+  <div id="questionModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="需要你选择">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom max-h-[85vh] overflow-y-auto" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--info)">
       <div class="sheet-handle"></div>
       <div class="text-info font-semibold mb-1">❓ 需要你选择</div>
-      <div id="questionHeader" class="hidden text-[11px] text-ink-faint mb-1"></div>
+      <div id="questionHeader" class="hidden text-xs text-ink-faint mb-1"></div>
       <div id="questionText" class="text-sm mb-2 text-ink"></div>
-      <div id="questionMultiHint" class="hidden text-[11px] text-ink-soft mb-2">可多选，选完点下方「确认选择」</div>
+      <div id="questionMultiHint" class="hidden text-xs text-ink-soft mb-2">可多选，选完点下方「确认选择」</div>
       <div id="questionOptions" class="space-y-2 mb-3"></div>
       <button type="button" id="questionMultiSubmit" class="hidden w-full mb-3 py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium">确认选择</button>
       <div id="questionOtherWrap" class="mb-3 space-y-2">
@@ -186,8 +187,8 @@
           <button type="button" id="questionOtherSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium">提交其他答案</button>
         </div>
       </div>
-      <button type="button" id="questionSkip" class="w-full py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">跳过此问题</button>
-      <div class="text-[11px] text-ink-faint mt-2 text-center">可点选项、多选确认、填「其他」，或跳过中止本轮</div>
+      <button type="button" id="questionSkip" class="w-full py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">跳过并中止本轮</button>
+      <div class="text-xs text-ink-faint mt-2 text-center">可点选项、多选确认、填「其他」，或跳过中止本轮</div>
     </div>
   </div>
 
@@ -218,20 +219,20 @@
       <div class="px-4 pb-2 flex items-center justify-between border-b border-gray-800 shrink-0">
         <div class="flex items-center gap-2">
           <span class="w-2 h-2 rounded-full bg-success animate-pulse"></span>
-          <span class="font-mono text-xs text-gray-300 font-bold tracking-wider">交互日志 (Current Session Trace)</span>
+          <span class="font-mono text-xs text-gray-300 font-bold tracking-wider">交互日志</span>
         </div>
-        <button id="consoleClose" class="px-2.5 py-1 rounded bg-gray-800 hover:bg-gray-700 active:scale-95 text-[10px] font-mono text-gray-400">关闭 (Close)</button>
+        <button id="consoleClose" class="px-2.5 py-1 rounded bg-gray-800 hover:bg-gray-700 active:scale-95 text-xs font-mono text-gray-400">关闭</button>
       </div>
       
       <!-- Drawer Log Stream Area -->
-      <div id="consoleLogArea" class="flex-1 overflow-y-auto px-4 py-3 font-mono text-[11px] leading-relaxed text-gray-300 space-y-2.5 selection:bg-accent/30 selection:text-white">
+      <div id="consoleLogArea" class="flex-1 overflow-y-auto px-4 py-3 font-mono text-xs leading-relaxed text-gray-300 space-y-2.5 selection:bg-accent/30 selection:text-white">
         <!-- Log rows will go here -->
       </div>
       
       <!-- Drawer Footer -->
-      <div class="px-4 py-2 border-t border-gray-800 bg-gray-950/50 flex items-center justify-between shrink-0 text-[10px] text-gray-500 font-mono">
+      <div class="px-4 py-2 border-t border-gray-800 bg-gray-950/50 flex items-center justify-between shrink-0 text-xs text-gray-500 font-mono">
         <span>内存环形缓冲最多存 100 条日志，关闭 Tab 自动清理</span>
-        <button id="consoleClear" class="px-2 py-0.5 rounded border border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300 active:scale-95">清屏 (Clear)</button>
+        <button id="consoleClear" class="px-2 py-0.5 rounded border border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300 active:scale-95">清屏</button>
       </div>
     </div>
   </div>
@@ -243,7 +244,7 @@
       <div class="px-4 pb-2 flex items-center gap-2 border-b border-line shrink-0">
         <button id="fileBrowseBack" class="hidden w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="返回上一级">←</button>
         <div id="fileBrowsePath" class="flex-1 min-w-0 text-xs font-mono text-ink-soft truncate"></div>
-        <button id="fileBrowseClose" class="w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0">✕</button>
+        <button id="fileBrowseClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0">✕</button>
       </div>
       <div id="fileBrowseBody" class="flex-1 overflow-y-auto"></div>
     </div>
@@ -263,20 +264,20 @@
     <div class="max-w-2xl mx-auto flex flex-col">
       <!-- web 状态栏（E16）：自有 SDK 数据 + git 结构化渲染，默认折叠为一行摘要 -->
       <details id="cliStatusWrap" class="hidden bg-surface border border-line rounded-xl mb-2 overflow-hidden shadow-sm">
-        <summary class="px-3 py-2 text-[11px] text-ink-soft bg-sunk/40 cursor-pointer select-none flex items-center justify-between border-b border-line-soft">
+        <summary class="px-3 py-2 text-xs text-ink-soft bg-sunk/40 cursor-pointer select-none flex items-center justify-between border-b border-line-soft">
           <span class="flex items-center gap-1.5">
             <svg class="w-3.5 h-3.5 text-ink-faint" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
             <span id="cliSummary" class="font-medium">statusline</span>
           </span>
-          <span class="cli-arrow text-[9px] text-ink-faint opacity-60 transition-transform duration-200">▼</span>
+          <span class="cli-arrow text-xs text-ink-faint opacity-60 transition-transform duration-200">▼</span>
         </summary>
-        <div id="cliStatus" class="px-3 py-2 text-[11px] leading-relaxed bg-surface text-ink-soft space-y-1"></div>
+        <div id="cliStatus" class="px-3 py-2 text-xs leading-relaxed bg-surface text-ink-soft space-y-1"></div>
       </details>
 
       <!-- 极简状态胶囊指示栏 (Pills Indicator) -->
-      <div id="statusPillsRow" class="flex items-center gap-1.5 overflow-x-auto select-none text-[10.5px] scrollbar-none mb-2 px-1">
+      <div id="statusPillsRow" class="flex items-center gap-1.5 overflow-x-auto select-none text-xs scrollbar-none mb-2 px-1">
         <!-- Compact model chip -->
         <div id="pillWorkspace" class="status-pill-chip hidden">
           <svg class="w-3.5 h-3.5 text-accent" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
@@ -374,7 +375,7 @@
             </span>
             <span id="activeStatusText" class="font-medium truncate">Claude 正在执行任务...</span>
           </div>
-          <button id="btnStopNew" class="px-2.5 py-1 rounded-lg bg-accent text-surface hover:opacity-90 active:scale-95 text-[10px] font-bold transition-all shrink-0" title="中止任务">
+          <button id="btnStopNew" class="px-2.5 py-1 rounded-lg bg-accent text-surface hover:opacity-90 active:scale-95 text-xs font-bold transition-all shrink-0" title="中止任务">
             停止
           </button>
         </div>
@@ -442,10 +443,10 @@
         这是一台新设备。在你<strong class="text-accent">另一台已登录的设备</strong>上会弹出「新设备请求接入」，点一下「准入」即可——<strong class="text-accent">无需上电脑终端</strong>。
       </p>
       <div class="bg-sunk rounded-xl p-3 text-left border border-line-soft mb-4">
-        <div class="text-[11px] text-ink-faint uppercase font-bold tracking-wider mb-1">本设备 ID (Device ID)</div>
+        <div class="text-xs text-ink-faint uppercase font-bold tracking-wider mb-1">本设备 ID</div>
         <code id="deviceModalId" class="font-mono text-xs break-all text-ink selection:bg-accent/20">generating...</code>
       </div>
-      <details class="text-[11px] text-ink-faint leading-relaxed text-left">
+      <details class="text-xs text-ink-faint leading-relaxed text-left">
         <summary class="cursor-pointer select-none">没有其它已登录的设备？用命令授权 ▾</summary>
         <div class="mt-1.5">在主机终端按 <strong class="text-accent">回车键</strong> 一键同意最新设备，或执行：
         <code class="block font-mono bg-sunk px-2 py-1 rounded text-ink mt-1.5 select-all border border-line-soft">node scripts/device.js approve "<span id="deviceModalCmdId">...</span>"</code></div>
@@ -514,7 +515,7 @@
     <div class="space-y-5 flex-1">
       <!-- 1. 模型选择大磁贴 -->
       <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2 flex items-center gap-1">✨ 选择模型 <span class="text-[10px] text-ink-faint font-normal">(切换下一条消息起效)</span></div>
+        <div class="text-xs font-semibold text-ink-soft mb-2 flex items-center gap-1">✨ 选择模型 <span class="text-xs text-ink-faint font-normal">(切换下一条消息起效)</span></div>
         <div id="customModelGrid" class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
           <!-- 动态生成的模型卡片 -->
         </div>
@@ -526,27 +527,27 @@
         <div id="customPermGrid" class="grid grid-cols-2 gap-2">
           <div data-mode="default" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
             <div class="text-xs font-semibold text-ink">默认审批</div>
-            <div class="text-[9.5px] text-ink-soft mt-0.5">敏感操作弹窗确认</div>
+            <div class="text-xs text-ink-soft mt-0.5">敏感操作弹窗确认</div>
           </div>
           <div data-mode="plan" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
             <div class="text-xs font-semibold text-ink">计划模式</div>
-            <div class="text-[9.5px] text-ink-soft mt-0.5">只读预览不执行修改</div>
+            <div class="text-xs text-ink-soft mt-0.5">只读预览不执行修改</div>
           </div>
           <div data-mode="acceptEdits" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
             <div class="text-xs font-semibold text-ink">自动接受编辑</div>
-            <div class="text-[9.5px] text-ink-soft mt-0.5">文件修改直通，命令审批</div>
+            <div class="text-xs text-ink-soft mt-0.5">文件修改直通，命令审批</div>
           </div>
           <div data-mode="dontAsk" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
             <div class="text-xs font-semibold text-ink">免打扰</div>
-            <div class="text-[9.5px] text-ink-soft mt-0.5">白名单外直接拒、不弹窗</div>
+            <div class="text-xs text-ink-soft mt-0.5">白名单外直接拒、不弹窗</div>
           </div>
           <div data-mode="auto" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
             <div class="text-xs font-semibold text-ink">Auto</div>
-            <div class="text-[9.5px] text-ink-soft mt-0.5">LLM 自动判批/拒权限</div>
+            <div class="text-xs text-ink-soft mt-0.5">LLM 自动判批/拒权限</div>
           </div>
           <div data-mode="bypassPermissions" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all text-danger">
             <div class="text-xs font-semibold text-danger">⚠️ Bypass</div>
-            <div class="text-[9.5px] text-red-500/80 mt-0.5">免审飞控（高危）</div>
+            <div class="text-xs text-red-500/80 mt-0.5">免审飞控（高危）</div>
           </div>
         </div>
       </div>
@@ -561,26 +562,26 @@
 
       <!-- 3b. 完成提示（默认开，可关）——轮次完成 / 需要你时的音与震 -->
       <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2">🔔 完成提示 <span class="text-[10px] text-ink-faint font-normal">(默认开，可关)</span></div>
+        <div class="text-xs font-semibold text-ink-soft mb-2">🔔 完成提示 <span class="text-xs text-ink-faint font-normal">(默认开，可关)</span></div>
         <div class="space-y-2">
           <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
             <span class="min-w-0">
               <span class="font-semibold block">提示音</span>
-              <span class="text-[9.5px] text-ink-soft">模型说完 / 需要你审批或回答时短响一声</span>
+              <span class="text-xs text-ink-soft">模型说完 / 需要你审批或回答时短响一声</span>
             </span>
             <input id="prefAlertSound" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
           </label>
           <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
             <span class="min-w-0">
               <span class="font-semibold block">震动</span>
-              <span class="text-[9.5px] text-ink-soft">完成/出错/需要你时震动（Android 有效）</span>
+              <span class="text-xs text-ink-soft">完成/出错/需要你时震动（Android 有效）</span>
             </span>
             <input id="prefAlertVibrate" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
           </label>
           <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
             <span class="min-w-0">
               <span class="font-semibold block">前台也弹系统通知</span>
-              <span class="text-[9.5px] text-ink-soft">页面开着时轮次完成也弹一条（默认只在后台弹）</span>
+              <span class="text-xs text-ink-soft">页面开着时轮次完成也弹一条（默认只在后台弹）</span>
             </span>
             <input id="prefAlertFgComplete" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0" checked>
           </label>
@@ -594,7 +595,7 @@
         <div class="space-y-2">
           <!-- 会话 ID 卡片 -->
           <div id="settingsSessionRow" class="hidden p-2.5 rounded-xl border border-line bg-surface flex items-center justify-between text-xs text-ink transition-all">
-            <span class="text-ink-soft font-medium">当前会话 (Session ID)</span>
+            <span class="text-ink-soft font-medium">当前会话</span>
             <button id="pillSession" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-sunk hover:bg-line-soft active:scale-95 text-ink-soft transition-all font-mono" title="点按复制完整 session id">
               <svg class="w-3.5 h-3.5 text-ink-soft" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />

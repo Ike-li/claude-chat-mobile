@@ -1,4 +1,4 @@
-import { attachmentDataUrl, pickPasteImageFiles } from '../logic.js';
+import { attachmentDataUrl, pickPasteImageFiles, formatAttachmentChipLabel } from '../logic.js';
 
 const MAX_FILE = 10 * 1024 * 1024;
 const MAX_TOTAL = 20 * 1024 * 1024;
@@ -153,8 +153,15 @@ export function createAttachmentController(context, options = {}) {
       tray.classList.add('hidden');
       return;
     }
+    // UX-020：同名序号 + 可选大小；优先缩略图
+    const nameCount = new Map();
     for (const attachment of pending) {
-      const chip = createElement('<div class="relative flex items-center gap-1.5 bg-sunk rounded-lg pl-1.5 pr-6 py-1 text-xs max-w-[10rem] cursor-pointer active:scale-[0.98] transition-transform" title="点击预览"></div>');
+      const base = attachment.name || '附件';
+      nameCount.set(base, (nameCount.get(base) || 0) + 1);
+      attachment._nameOcc = nameCount.get(base);
+    }
+    for (const attachment of pending) {
+      const chip = createElement('<div class="relative flex items-center gap-1.5 bg-sunk rounded-lg pl-1.5 pr-6 py-1 text-xs max-w-[12rem] cursor-pointer active:scale-[0.98] transition-transform hit-44" title="点击预览"></div>');
       if (attachment.thumb) {
         const image = createElement('<img class="w-8 h-8 rounded object-cover shrink-0">');
         image.src = attachment.thumb;
@@ -163,7 +170,7 @@ export function createAttachmentController(context, options = {}) {
         chip.appendChild(createElement('<span class="shrink-0">📎</span>'));
       }
       const name = createElement('<span class="truncate"></span>');
-      name.textContent = attachment.name;
+      name.textContent = formatAttachmentChipLabel(attachment.name, attachment._nameOcc, attachment.size);
       chip.appendChild(name);
       const remove = createElement('<button type="button" class="absolute right-1 top-1/2 -translate-y-1/2 text-ink-faint active:text-danger" title="移除">✕</button>');
       remove.onclick = event => {

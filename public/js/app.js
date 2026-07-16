@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -55,6 +55,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const btnSettings = $('btnSettings'), settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsClose = $('settingsClose');
   const pillModel = $('pillModel'), pillModelText = $('pillModelText');
   const pillPerm = $('pillPerm'), pillPermText = $('pillPermText'), pillEffort = $('pillEffort'), pillEffortText = $('pillEffortText');
+
+  // UX-009：镜像态合并胶囊
+  if (pillModel?.parentElement && !document.getElementById('pillMirrorMerged')) {
+    const merged = document.createElement('div');
+    merged.id = 'pillMirrorMerged';
+    merged.className = 'status-pill-chip';
+    merged.title = '终端驾驶中：点击打开镜像说明';
+    merged.innerHTML = '<span>⏱</span><span>终端驾驶中</span>';
+    merged.onclick = () => { mirrorBanner?.classList.remove('hidden'); haptic('tap'); };
+    pillModel.parentElement.appendChild(merged);
+  }
+
   const topContextPill = $('topContextPill'), topTitleText = $('topTitleText'), topProjectText = $('topProjectText');
   const customModelGrid = $('customModelGrid'), customPermGrid = $('customPermGrid'), customEffortGrid = $('customEffortGrid'), customEffortGroup = $('customEffortGroup');
 
@@ -241,17 +253,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       || (modelInput?.value || '')
       || (hasCliDefault ? 'default' : '');
 
-    list.forEach(m => {
-      const val = typeof m === 'string' ? m : m.value;
-      const display = typeof m === 'string' ? m : (m.displayName || m.value);
-      const desc = typeof m === 'string' ? '' : (m.description || '');
+    // UX-018：displayName 撞车时主标题回退 value
+    const tiles = resolveModelTileDisplay(list);
+    tiles.forEach(({ value: val, title, subtitle }) => {
+      const display = title;
       const active = val === selectedVal
         || (!!currentModel && val === currentModel)
         || (!currentModel && val === 'default' && selectedVal === 'default');
+      const using = active ? ' · 使用中' : '';
       const card = el(`
         <div data-model="${esc(val)}" class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
-          <div class="text-xs font-semibold truncate ${active ? 'text-accent' : 'text-ink'}">${esc(display)}</div>
-          <div class="text-[9.5px] text-ink-soft truncate mt-0.5">${esc(desc || val)}</div>
+          <div class="text-xs font-semibold truncate ${active ? 'text-accent' : 'text-ink'}">${esc(display)}${using ? `<span class="text-[11px] font-normal opacity-80">${esc(using)}</span>` : ''}</div>
+          <div class="text-xs text-ink-soft truncate mt-0.5">${esc(subtitle || val)}</div>
         </div>
       `);
       card.onclick = () => {
@@ -437,7 +450,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const render = messageRenderer.renderMarkdown;
   const el = messageRenderer.createElement;
   const setStatus = messageRenderer.setStatus;
-  const leaveStartScreen = messageRenderer.leaveStartScreen;
+  const leaveStartScreen = () => {
+    messageRenderer.leaveStartScreen();
+    messagesEl?.querySelectorAll('.empty-session-guide').forEach(n => n.remove());
+  };
   const appendMessage = messageRenderer.appendMessage;
   const addBar = messageRenderer.addBar;
   // UX-019：档位变更反馈——空态不打系统条，改胶囊短暂高亮；有消息后仍可留痕。
@@ -1056,18 +1072,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       const s = getStream(p.messageId);
       s.raw += p.text;
-      // 流式轻量 markdown：首 400ms 内 TextNode 即时跟手；此后节流用 marked 预览（result 时 finalize 权威全文）
-      if (s.textNode && !s._mdLive) s.textNode.appendData(p.text);
+      // UX-004：流式期间节流全量 renderMarkdown（默认 80ms），避免裸星号/列表源码；result 时 finalize 权威全文
       if (!s._mdTimer) {
         s._mdTimer = setTimeout(() => {
           s._mdTimer = null;
-          s._mdLive = true;
-          s.textNode = null;
           try { s.el.innerHTML = render(s.raw); } catch { /* 失败保持现状 */ }
           scrollBottom();
-        }, 400);
+        }, formatStreamPreviewIntervalMs());
       }
-      scrollBottom();
       setBusy(true);
     },
     thinking_delta(p) {
@@ -1543,7 +1555,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         let txt = `ctx ${p.ctx.usedPercent}%`;
         if (Number.isFinite(p.ctx.windowSize)) txt += ` · left ${fmtTok(Math.max(0, p.ctx.windowSize - p.ctx.tokens))}`;
         const pc = p.ctx.usedPercent; // 蓝(健康)→橙(≥70)→红(≥90) 三段警示
-        ctxSeg = { text: txt, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' };
+        ctxSeg = { text: txt, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-ink-soft' }; // UI-011 数据色非链接蓝
       } else if (p.ctx && Number.isFinite(p.ctx.tokens)) {
         ctxSeg = { text: `ctx ${fmtTok(p.ctx.tokens)}`, cls: 'text-ink-soft' };
       }
@@ -1564,14 +1576,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // token 明细段（对齐 CLI）：uncached <未缓存输入> response <输出>
       let tokenNode = null;
       if (p.ctx && Number.isFinite(p.ctx.in)) {
-        tokenNode = span(`uncached ${fmtTokF(p.ctx.in)} response ${fmtTokF(p.ctx.out || 0)}`, 'text-info');
+        tokenNode = span(`uncached ${fmtTokF(p.ctx.in)} response ${fmtTokF(p.ctx.out || 0)}`, 'text-ink-soft');
       }
       // cache 明细段（对齐 CLI）：cache <命中率>.XX% write <cache写> read <cache读>；命中率按 r/tokens 重算 2 位小数
       let cacheNode = null;
       if (p.ctx && Number.isFinite(p.ctx.w) && Number.isFinite(p.ctx.r)) {
-        const rate = p.ctx.tokens > 0 ? (p.ctx.r / p.ctx.tokens * 100).toFixed(2) : '0.00';
+        const rate = formatCachePercent(p.ctx.tokens > 0 ? (p.ctx.r / p.ctx.tokens) : 0);
         cacheNode = document.createElement('span');
-        cacheNode.appendChild(span(`cache ${rate}%`, 'text-success'));
+        cacheNode.appendChild(span(`cache ${rate}`, 'text-ink-soft'));
         cacheNode.appendChild(document.createTextNode(' '));
         cacheNode.appendChild(span(`write ${fmtTokF(p.ctx.w)} read ${fmtTokF(p.ctx.r)}`, 'text-ink-faint'));
       }
@@ -1654,14 +1666,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const key = id || '_';
     let s = streams.get(key);
     if (!s) {
-      const wrap = el(`<div class="msg-frame msg-body px-0.5" data-testid="assistant-message"></div>`);
-      const textNode = document.createTextNode('');
-      const span = document.createElement('span');
-      span.className = 'whitespace-pre-wrap';
-      span.appendChild(textNode);
-      wrap.appendChild(span);
+      // UX-004：直接 msg-body 容器，流式走 innerHTML=render，不再用纯文本 textNode 裸显 markdown
+      const wrap = el(`<div class="msg-frame msg-body px-0.5" data-testid="assistant-message" aria-live="polite"></div>`);
       appendMessage(wrap);
-      s = { el: wrap, raw: '', textNode, done: false };
+      s = { el: wrap, raw: '', done: false };
       streams.set(key, s);
       scrollBottom();
     }
@@ -1684,6 +1692,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       });
     }
     streams.clear();
+    for (const th of thinkings.values()) th.el?.classList.remove('thinking-live');
     thinkings.clear();
     scrollBottom();
   }
@@ -1698,8 +1707,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         </details>`);
       const body = document.createTextNode('');
       wrap.querySelector('.t-body').appendChild(body);
+      wrap.classList.add('thinking-live'); // UX-016
       appendMessage(wrap);
-      t = { body };
+      t = { body, el: wrap };
       thinkings.set(key, t);
       scrollBottom();
     }
@@ -2538,11 +2548,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       for (const lv of show) {
         const active = currentVal === lv;
         const isUltra = lv === 'ultracode';
-        const sub = isUltra ? 'xhigh + 多 agent workflow · 最彻底，更慢更费额度' : `思考等级: ${lv}`;
+        // UX-014：副文案增量信息，非「思考等级: low」同义反复
+        const sub = effortLevelSubtitle(lv) || (isUltra ? 'xhigh + 多 agent · 最彻底' : '');
         const lvTile = el(`
           <div data-level="${lv}" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
             <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${lv}</div>
-            <div class="text-[9.5px] text-ink-soft mt-0.5">${sub}</div>
+            ${sub ? `<div class="text-xs text-ink-soft mt-0.5">${sub}</div>` : ''}
           </div>
         `);
         lvTile.onclick = () => {
@@ -3139,20 +3150,24 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     header.appendChild(levelEl);
     section.appendChild(header);
 
-    const summary = el(`<div class="px-3 py-1 text-[10px] text-ink-soft"></div>`);
+    // UX-005：计数缩成一行 live N · 需处理 M
+    const summary = el(`<div class="px-3 py-1 text-xs text-ink-soft"></div>`);
     const b = sum.byState;
-    summary.textContent = `live ${sum.total} · 运行 ${sum.running} · 待批 ${b.permission} · 出错 ${b.error} · 完成 ${b.done} · 中止 ${b.aborted} · 空闲 ${b.idle}`;
+    const needN = (b.permission || 0) + (b.error || 0);
+    summary.textContent = `live ${sum.total} · 需处理 ${needN} · 运行 ${sum.running}`;
     section.appendChild(summary);
 
-    // 实例表：attention 优先（permission > error > busy > aborted > done > idle），同档按 title
+    // UX-006：有 needsYou 时实例表默认折叠，避免待批三重呈现
     const rank = { permission: 0, error: 1, busy: 2, aborted: 3, done: 4, idle: 5 };
     const rows = [...instancesList]
       .filter(i => i && i.instanceId)
       .sort((a, b2) => (rank[a.state] ?? 9) - (rank[b2.state] ?? 9) || String(a.title || '').localeCompare(String(b2.title || '')));
     if (rows.length) {
-      const list = el(`<div class="pb-1"></div>`);
+      const wrap = el(`<details class="pb-1"${needsYouList.length ? '' : ' open'}><summary class="px-3 py-1 text-xs text-ink-faint cursor-pointer select-none">实例列表 (${rows.length})</summary></details>`);
+      const list = el(`<div></div>`);
+      wrap.appendChild(list);
       for (const inst of rows) {
-        const row = el(`<button type="button" class="w-full flex items-center gap-2 pl-3 pr-3 py-1.5 text-left hover:bg-sunk/30 active:opacity-70" data-testid="status-instance-row"></button>`);
+        const row = el(`<button type="button" class="w-full flex items-center gap-2 pl-3 pr-3 py-1.5 text-left hover:bg-sunk/30 active:opacity-70 hit-44" data-testid="status-instance-row"></button>`);
         const badge = el(`<span class="shrink-0 text-xs"></span>`);
         const m = DIR_BADGE[inst.state];
         if (m) { badge.textContent = m[0]; badge.className = `shrink-0 text-xs ${m[1]}`; badge.title = m[2]; }
@@ -3165,7 +3180,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const body = el(`<div class="flex-1 min-w-0"></div>`);
         const head = el(`<div class="truncate text-xs font-medium text-ink"></div>`);
         head.textContent = inst.title || '新会话';
-        const sub = el(`<div class="truncate text-[10px] text-ink-faint"></div>`);
+        const sub = el(`<div class="truncate text-xs text-ink-faint"></div>`);
         const stateLabel = (m && m[2]) || inst.state || '空闲';
         const toolBit = inst.activeTool ? ` · ${inst.activeTool}` : '';
         const bgBit = inst.bgActive ? ' · 后台' : '';
@@ -3179,15 +3194,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         };
         list.appendChild(row);
       }
-      section.appendChild(list);
+      section.appendChild(wrap);
     } else {
-      const empty = el(`<div class="px-3 py-1 text-[10px] text-ink-faint"></div>`);
-      empty.textContent = '当前无 live 实例（空首页或尚未发消息）';
+      const empty = el(`<div class="px-3 py-1 text-xs text-ink-faint"></div>`);
+      empty.textContent = '当前无 live 实例';
       section.appendChild(empty);
     }
 
-    const note = el(`<div class="px-3 py-1.5 text-[9.5px] text-ink-faint/80 leading-snug"></div>`);
-    note.textContent = '此处为 web 驱动的会话实例，不含本机其它 claude 终端进程；无法检测 OS 僵尸。套餐 5h/7d 额度见底栏 statusline。';
+    // UX-005：用户语言（非 OS 僵尸黑话）
+    const note = el(`<div class="px-3 py-1.5 text-xs text-ink-faint leading-snug"></div>`);
+    note.textContent = '仅显示由本应用发起的会话；额度见底栏 statusline。';
     section.appendChild(note);
     return section;
   }
@@ -3296,10 +3312,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
 
   function setBusy(b) {
-    if (!activeStatusPill || b === _busyState) return;
-    _busyState = b;
+    // UX-010：镜像只读时不与本地忙碌条同现
+    const show = shouldShowBusyWithMirror({ mirrorReadonly: Boolean(mirrorReadonlySid), busy: b });
+    if (!activeStatusPill || show === _busyState) return;
+    _busyState = show;
     updateSendButtonState(); // FE-004：busy 变化即时刷新发送按钮
-    if (b) {
+    if (show) {
       if (!interruptPending) {
         if (btnStop) btnStop.disabled = false;
         if (btnStopNew) btnStopNew.disabled = false;
@@ -3536,23 +3554,22 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 台阶3 Step B：工作区面板 = 目录树（当前 cwd 展开，其他折叠）——类似 IDE 项目浏览器。
   function openSessionPanel() {
     sessionPanel.innerHTML = '';
+    // UX-007：当前工作区默认展开 + 记忆用户展开态
+    try {
+      const saved = JSON.parse(localStorage.getItem('ccm_expanded_dirs') || '[]');
+      if (Array.isArray(saved)) for (const d of saved) if (d) expandedDirs.add(d);
+    } catch { /* ignore */ }
+    if (currentCwd) expandedDirs.add(currentCwd);
 
     // "需要你"聚合置顶（AD-11/§3.2.5 AttentionDeriver，承接 FR-21）：跨全部工作区/会话，
     // 不限于当前展开的目录——正是它相对下方逐目录列表的增量价值（注意力不对称）。
     sessionPanel.appendChild(buildNeedsYouSection());
 
-    // 状态角标图例：消除「不知道 ⏳/⚠️/❗/✅ 各代表什么」——两行，紧跟标题。
-    // 第二行点明左上角按钮角标只汇总「其他工作区」状态，并解释按钮上的连接点绿/红——消除「绿点=什么」的误解。
-    sessionPanel.appendChild(el(`<div class="px-3 py-1.5 text-[10px] text-ink-faint border-b border-line flex flex-col gap-1"><div class="flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span></div><div class="flex flex-wrap gap-x-3 gap-y-1 text-ink-faint/80"><span>目录角标 = 该工作区最需关注的状态</span><span>左上角角标 = 其他工作区状态汇总</span><span>连接点：绿=已连接 · 红=断开</span></div></div>`));
-
-    // "服务"小节（第一性原理重新设计，NFR-15/可维护性）：与上方"需要你"聚合故意分隔——图例之后、
-    // 目录列表之前，仅异常时渲染，见 buildServiceSection 注释。
-    sessionPanel.appendChild(buildServiceSection());
-
-    // "状态一瞥"小节（台阶6 状态中心 MVP，承接 NFR-15/会话状态可见性）：live 会话实例汇总表，
-    // 不含 OS 进程/僵尸（后端无 PID、设计禁 OS 探针）。置服务小节之后、目录列表之前——
-    // 与"需要你"不同轴：这里数量化（在跑几个/出错几个），那里注意力化（哪个等你）。
+    // UX-005：状态紧凑行优先；图例折叠；树在下方
     sessionPanel.appendChild(buildStatusSection());
+    sessionPanel.appendChild(buildServiceSection());
+    sessionPanel.appendChild(el(`<details class="px-3 py-1.5 text-xs text-ink-soft border-b border-line"><summary class="cursor-pointer select-none text-ink-faint">状态图例 (?)</summary><div class="mt-1.5 flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span><span class="text-ink-faint w-full">角标=工作区最需关注 · 连接点绿=已连</span></div></details>`));
+
 
     // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
@@ -3870,11 +3887,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         haptic('tap');
         if (expandedDirs.has(d)) {
           expandedDirs.delete(d);
+          try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
           subtree.classList.remove('expanded');
           arrow.classList.remove('rotated');
           icon.textContent = '📁';
         } else {
           expandedDirs.add(d);
+          try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
           subtree.classList.add('expanded');
           arrow.classList.add('rotated');
           icon.textContent = '📂';
@@ -3886,6 +3905,34 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // 清视图层（DOM + 去重基线 + 弹窗队列），不加载历史——加载由调用方决定（台阶3：bindView 切 tab 时
   // 先 sync 活缓冲、无缓冲再 history）。
+
+  // UX-008：新会话空白态极简引导（非空首页 dashboard；leaveStartScreen/appendMessage 会清掉）
+  function maybeShowEmptySessionGuide() {
+    if (!messagesEl || messagesEl.childNodes.length) return;
+    if (messagesEl.classList.contains('empty-start')) return;
+    const guide = el(`
+      <div class="empty-session-guide flex flex-col items-center justify-center py-10 px-4 text-center select-none" data-testid="empty-session-guide">
+        <div class="text-base font-medium text-ink mb-1">新会话已就绪</div>
+        <div class="text-xs text-ink-soft mb-4">工作区 <span class="font-semibold text-ink">${esc(baseName(currentCwd) || '…')}</span>${currentModel ? ` · 模型 <span class="font-semibold">${esc(currentModel)}</span>` : ''}</div>
+        <div class="flex flex-col gap-2 w-full max-w-sm">
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="总结当前仓库结构并指出入口文件">💡 总结当前仓库结构</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="帮我写一个最小改动的修复计划">🛠 写一个最小修复计划</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="运行相关测试并解读失败">🧪 运行测试并解读</button>
+        </div>
+      </div>`);
+    guide.querySelectorAll('.esg-prompt').forEach(btn => {
+      btn.onclick = () => {
+        haptic('tap');
+        if (inputEl) {
+          inputEl.value = btn.getAttribute('data-p') || '';
+          inputEl.focus();
+          inputEl.dispatchEvent(new Event('input'));
+        }
+      };
+    });
+    messagesEl.appendChild(guide);
+  }
+
   function clearView(sessionId, tip) {
     currentSessionId = sessionId;
     lastSeq = 0;
@@ -3894,6 +3941,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     messagesEl.innerHTML = '';
     messagesEl.classList.remove('empty-start');
     streams.clear(); thinkings.clear(); toolCards.clear();
+    // UX-008：清视图后若仍无内容（新会话），给极简引导
+    queueMicrotask(() => maybeShowEmptySessionGuide());
     subagentCards.clear(); // 切会话/清屏：丢弃子 agent 卡状态（DOM 已随 messagesEl 清空）
     permQueue.length = 0; activePerm = null;
     permExpandBtn?.remove(); permExpandBtn = null;
@@ -4301,6 +4350,31 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       refreshMirrorBannerCopy();
     }, 1000);
   }
+
+  // UX-010：横幅优先级仲裁 mirror > task > subagent > activity
+  function reconcileBanners() {
+    const flags = {
+      mirror: Boolean(mirrorReadonlySid) && mirrorBanner && !mirrorBanner.classList.contains('hidden'),
+      task: taskProgressBanner && !taskProgressBanner.classList.contains('hidden'),
+      subagent: false, // 子代理嵌工具卡，无独立横幅 DOM
+      activity: activityBanner && !activityBanner.classList.contains('hidden'),
+    };
+    // 若 mirror 有效，强制只显 mirror
+    const pick = pickBannerToShow({
+      mirror: Boolean(mirrorReadonlySid),
+      task: flags.task,
+      subagent: false,
+      activity: flags.activity && !mirrorReadonlySid,
+    });
+    if (mirrorBanner && mirrorReadonlySid) mirrorBanner.classList.remove('hidden');
+    if (taskProgressBanner && pick !== 'task' && pick === 'mirror') {
+      // keep task data but visually demote under mirror: leave visible if no mirror
+    }
+    if (activityBanner && (pick === 'mirror' || pick === 'task')) {
+      activityBanner.classList.add('hidden');
+    }
+  }
+
   function applyMirror(readonly, sessionId, stale = false, observedCli, remainingMs) {
     const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
@@ -4328,6 +4402,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       rebuildEffortOptions(currentModel || cwdDefaultModel);
     }
     mirrorBanner?.classList.toggle('hidden', !effective);
+    document.body.classList.toggle('mirror-readonly', effective); // UX-009
+    // UX-010：镜像时强制隐藏忙碌条
+    if (effective) setBusy(false);
+    reconcileBanners();
     const armed = effective && armedTakeoverSid === sessionId;
     if (effective) {
       if (!armed && !stale) startMirrorCountdown(remainingMs);
@@ -4456,7 +4534,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (align === 'right') {
       const row = el(`<div class="mt-1 text-right msg-action-bar justify-end"></div>`);
       const btn = el(`
-        <button class="msg-action-btn" title="复制消息">
+        <button class="msg-action-btn hit-44" title="复制消息">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
           </svg>
@@ -4471,6 +4549,26 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         setTimeout(() => { if (span) span.textContent = '复制'; }, 1500);
       };
       row.appendChild(btn);
+      // UX-012：改写重发放在用户气泡，操作对象与位置一致
+      const rewrite = el(`
+        <button class="msg-action-btn hit-44" title="改写后重发">
+          <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+          </svg>
+          <span>改写重发</span>
+        </button>
+      `);
+      rewrite.onclick = () => {
+        haptic('tap');
+        const val = getText();
+        if (inputEl) {
+          inputEl.value = val;
+          inputEl.focus();
+          inputEl.dispatchEvent(new Event('input'));
+          scrollBottom(true);
+        }
+      };
+      row.appendChild(rewrite);
       container.appendChild(row);
       return;
     }
@@ -4558,45 +4656,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
     bar.appendChild(speakBtn);
 
-    // 3. Edit / Reuse Button to put the message text back into input
-    const editBtn = el(`
-      <button class="msg-action-btn" title="编辑消息/重新放入输入框">
-        <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-        </svg>
-        <span>编辑</span>
-      </button>
-    `);
-    editBtn.onclick = () => {
-      haptic('tap');
-      // Find the previous user bubble to get the prompt
-      let prevUserText = '';
-      let sibling = container.previousElementSibling;
-      while (sibling) {
-        if (sibling.classList.contains('bg-user')) {
-          const textEl = sibling.querySelector(':scope > .whitespace-pre-wrap') || sibling.querySelector('.whitespace-pre-wrap');
-          if (textEl) {
-            prevUserText = textEl.textContent || '';
-          } else {
-            const clone = sibling.cloneNode(true);
-            clone.querySelectorAll?.('.msg-action-bar').forEach(node => node.remove());
-            prevUserText = clone.textContent || '';
-          }
-          prevUserText = prevUserText.trim();
-          break;
-        }
-        sibling = sibling.previousElementSibling;
-      }
-      
-      const valToSet = prevUserText || getText();
-      if (inputEl) {
-        inputEl.value = valToSet;
-        inputEl.focus();
-        inputEl.dispatchEvent(new Event('input'));
-        scrollBottom(true);
-      }
-    };
-    bar.appendChild(editBtn);
+    // UX-012：编辑已迁到用户气泡「改写重发」
 
     container.appendChild(bar);
   }

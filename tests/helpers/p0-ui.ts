@@ -26,7 +26,12 @@ export function workspaceRow(page: Page, cwd: string) {
 
 export async function expandWorkspace(page: Page, cwd: string) {
   const row = workspaceRow(page, cwd);
-  await row.locator('button').first().click();
+  // UX-007：当前工作区默认展开；幂等展开，已展开则不点（否则 toggle 会折叠）
+  const subtree = row.locator('xpath=following-sibling::*[1]');
+  const alreadyOpen = await subtree.evaluate((el) => el.classList.contains('expanded')).catch(() => false);
+  if (!alreadyOpen) {
+    await row.locator('button').first().click();
+  }
   return row;
 }
 

@@ -600,3 +600,63 @@ details > summary::-webkit-details-marker { display: none; }
       animation: none !important;
     }
   }
+
+/* UI-004：通用 44px 热区扩充 */
+.hit-44 { position: relative; }
+.hit-44::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+}
+.msg-action-btn {
+  min-height: 32px;
+  min-width: 32px;
+  position: relative;
+}
+.msg-action-btn::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+}
+
+/* UI-010：运行态专用活动色（中性蓝调），与品牌 accent 分离 */
+:root {
+  --activity: #3D6F9E;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --activity: #6BA3D4;
+  }
+}
+#activeStatusPill.pill-active,
+#activityBanner {
+  color: var(--activity);
+  border-color: color-mix(in srgb, var(--activity) 40%, transparent);
+}
+.toolcard { border-left-color: var(--activity) !important; }
+
+/* UX-016：思考进行中 shimmer */
+@keyframes thinking-shimmer {
+  0% { opacity: 0.55; }
+  50% { opacity: 1; }
+  100% { opacity: 0.55; }
+}
+details.thinking.thinking-live > summary {
+  animation: thinking-shimmer 1.4s ease-in-out infinite;
+}
+details.thinking.thinking-live > summary::before {
+  content: '思考中 · ';
+}
+
+/* UX-009：镜像合并胶囊 */
+#pillMirrorMerged {
+  display: none;
+}
+body.mirror-readonly #pillModel,
+body.mirror-readonly #pillPerm,
+body.mirror-readonly #pillEffort {
+  display: none !important;
+}
+body.mirror-readonly #pillMirrorMerged {
+  display: inline-flex !important;
+}
