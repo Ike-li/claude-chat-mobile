@@ -53,17 +53,28 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 .msg-body code:not(pre code) { font-family: var(--font-mono); background: var(--surface-sunk); color: var(--accent-deep); padding: .1rem .35rem; border-radius: .25rem; font-size: .85em; }
 .msg-body pre code { padding: 0; }
 .msg-body .hljs { background: transparent; color: var(--ink); }  /* 透出 pre 暖底；语法 token 色由 github-light 提供 */
-/* Per-code-block copy button — hover 代码块浮现 */
+/* Per-code-block copy button — UI-003：pre 顶留白防遮代码；触点 ≥32px */
 .code-block-wrap { position: relative; }
+.code-block-wrap > pre {
+  padding-top: 2rem; /* 给右上角 copy 钮留行，避免压住首行代码 */
+}
 .code-block-wrap .code-copy-btn {
-  position: absolute; top: 0.4rem; right: 0.4rem;
-  display: inline-flex; align-items: center; gap: 0.15rem;
-  padding: 0.2rem 0.4rem;
-  border-radius: 0.3rem; font-size: 10px;
+  position: absolute; top: 0.35rem; right: 0.35rem;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.15rem;
+  min-width: 32px; min-height: 32px;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.3rem; font-size: 11px;
   color: var(--ink-faint); background: var(--surface);
   border: 1px solid var(--line);
-  cursor: pointer; opacity: 0.55;
+  cursor: pointer; opacity: 0.7;
   transition: opacity 0.15s;
+  z-index: 1;
+}
+/* 热区扩充：按钮本体 32px，::after 再扩一点 */
+.code-block-wrap .code-copy-btn::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
 }
 .code-block-wrap:hover .code-copy-btn { opacity: 1; }
 .code-block-wrap .code-copy-btn:hover {

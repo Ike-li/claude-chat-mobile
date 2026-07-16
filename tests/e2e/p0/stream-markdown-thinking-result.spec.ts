@@ -36,6 +36,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     const copyButton = page.locator('[data-testid="assistant-message"]').last().getByRole('button', { name: /复制代码|复制/ }).first();
     await expect(copyButton).toBeVisible();
+    // UI-003：触点 ≥32px，pre 顶留白防遮代码
+    const metrics = await copyButton.evaluate((btn) => {
+      const style = getComputedStyle(btn);
+      const wrap = btn.closest('.code-block-wrap');
+      const pre = wrap?.querySelector('pre');
+      const prePadTop = pre ? parseFloat(getComputedStyle(pre).paddingTop) : 0;
+      return {
+        minH: parseFloat(style.minHeight) || btn.getBoundingClientRect().height,
+        minW: parseFloat(style.minWidth) || btn.getBoundingClientRect().width,
+        prePadTop,
+      };
+    });
+    expect(metrics.minH).toBeGreaterThanOrEqual(32);
+    expect(metrics.minW).toBeGreaterThanOrEqual(32);
+    expect(metrics.prePadTop).toBeGreaterThanOrEqual(24); // 2rem ≈ 32px，宽松 ≥24
     await copyButton.click();
     await expect(copyButton).toContainText(/已复制|失败/);
 
