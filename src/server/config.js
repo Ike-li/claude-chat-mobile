@@ -31,8 +31,11 @@ export function loadRuntimeEnvironment(env = process.env, { envFile, quiet = fal
   // OPS/SH-001：dotenv 默认不覆盖已存在的 key——含空串。LaunchAgent/systemd 若 export AUTH_TOKEN=
   // 或 CCM_DATA_DIR=，会挡住 .env 填入，normalize 再删空串 → 进程当「未设置」跑（绑 127.0.0.1 /
   // 落盘到仓库 data/）。空串 ≡ 未设置，加载前清掉，让 .env 能补全。
+  // 但 ANTHROPIC_* 必须排除在外：这条预清空会让 dotenv 把 .env 里的 ANTHROPIC_* 填进来，而
+  // shellAnthropicKeys（下面 normalizeLoadedEnvironment 用于判断"是否真是 shell 声明"）此刻已把
+  // 这个空串 key 记成"shell 有"，导致 .env 值绕过守卫存活——违反"ANTHROPIC_* 只认真实 shell 值"。
   for (const key of Object.keys(env)) {
-    if (env[key] === '') delete env[key];
+    if (env[key] === '' && !key.startsWith('ANTHROPIC_')) delete env[key];
   }
   dotenv.config({
     ...(envFile ? { path: envFile } : {}),
