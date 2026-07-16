@@ -43,20 +43,70 @@ export function tokenMatches(expected, provided) {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt }) {
+// AUTH-001：HTTP 鉴权与 Socket 握手共用限速——否则 /health|/metrics|/push/* 可无限试 AUTH_TOKEN，
+// 而同 IP 的 socket 已被 lock。rateLimit 可选；不传则行为与改造前一致（仅鉴权）。
+// rateLimit = { active, sourceKey, getState, setState, onResult, now?, onLocked? }
+export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateLimit = null }) {
   return async function httpAuth(req, res, next) {
     try {
-      if (isPublicHost(req.headers.host)) {
-        await verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
-        return next();
+      const publicHost = isPublicHost(req.headers.host);
+      const rl = rateLimit;
+      if (rl?.active) {
+        const key = rl.sourceKey(req);
+        const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
+        const now = rl.now ? rl.now() : Date.now();
+        if (now < st.lockUntil) {
+          res.setHeader?.('Retry-After', String(Math.ceil((st.lockUntil - now) / 1000)));
+          return res.status(429).json({ status: 'rate_limited' });
+        }
       }
-      if (
+
+      let authPassed = false;
+      if (publicHost) {
+        await verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
+        authPassed = true;
+      } else if (
         !authToken
         || tokenMatches(authToken, req.query.token)
         || tokenMatches(authToken, req.headers['x-auth-token'])
-      ) return next();
-      return res.status(401).json({ status: 'unauthorized' });
+      ) {
+        authPassed = true;
+      }
+
+      if (rl?.active) {
+        const key = rl.sourceKey(req);
+        const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
+        const now = rl.now ? rl.now() : Date.now();
+        const r = rl.onResult(st, authPassed, now);
+        rl.setState(key, r.next);
+        if (!authPassed && r.verdict === 'locked') {
+          rl.onLocked?.(key, r);
+          res.setHeader?.('Retry-After', String(Math.ceil((r.retryAfterMs || 0) / 1000)));
+          return res.status(429).json({ status: 'rate_limited' });
+        }
+      }
+
+      if (!authPassed) return res.status(401).json({ status: 'unauthorized' });
+      return next();
     } catch {
+      // JWT 失败等：若启用了限速，计一次失败（与 socket 失败路径对齐）
+      const rl = rateLimit;
+      if (rl?.active) {
+        try {
+          const key = rl.sourceKey(req);
+          const st = rl.getState(key) || { failCount: 0, lockUntil: 0, lastFailTs: 0 };
+          const now = rl.now ? rl.now() : Date.now();
+          if (now >= st.lockUntil) {
+            const r = rl.onResult(st, false, now);
+            rl.setState(key, r.next);
+            if (r.verdict === 'locked') {
+              rl.onLocked?.(key, r);
+              res.setHeader?.('Retry-After', String(Math.ceil((r.retryAfterMs || 0) / 1000)));
+              return res.status(429).json({ status: 'rate_limited' });
+            }
+          }
+        } catch { /* 限速辅助失败不挡 401 */ }
+      }
       return res.status(401).json({ status: 'unauthorized' });
     }
   };
