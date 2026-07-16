@@ -324,7 +324,20 @@ export class AgentSession {
     this.queue = [];
     try {
       await this.q?.interrupt();
-      if (this.disposed) return; // S3：await 间隙实例可能已被 dispose，勿往弃用实例发事件
+      // AG-NEW-004：await 间隙若实例已被 dispose，仍须结算 pending 与 pendingTurns 账面，
+      // 再 return——勿静默丢 toDrop 账面/挂起审批；emit 仅在未 dispose 时发（弃用实例无监听者）。
+      if (this.disposed) {
+        this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
+        for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny');
+        for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
+          pending.signal?.removeEventListener('abort', pending.abortHandler);
+          if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
+          this.pendingQuestions.delete(toolUseID);
+          this.denyKinds.set(toolUseID, 'cancelled');
+          try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
+        }
+        return;
+      }
       // 成功中断：丢弃 toDrop（中断前排队的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
       this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
       this._awaitingInterruptResult = true; // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result
@@ -346,8 +359,11 @@ export class AgentSession {
       this.emit('system', { message: '已中断', kind: 'interrupted' }); // M7：kind 字段，勿靠字符串匹配
     } catch {
       // SDK 无在途任务 → 不丢消息：把 toDrop 放回队列头部（await 期间新发的接其后），pendingTurns 不动。
-      this.queue = toDrop.concat(this.queue);
-      this.emit('system', { message: '当前没有可中断的任务' });
+      // AG-NEW-004：若已 dispose 则不必 requeue（实例即弃、无人再 drain）
+      if (!this.disposed) {
+        this.queue = toDrop.concat(this.queue);
+        this.emit('system', { message: '当前没有可中断的任务' });
+      }
     }
   }
 
@@ -970,6 +986,9 @@ export class AgentSession {
           header: q.header ? String(q.header) : undefined,
           multiSelect: Boolean(q.multiSelect),
           options,
+          // AG-NEW-001：与 live emit('question') / permissions 快照对称，切会话重建卡片可显 TTL
+          createdAt: p.createdAt,
+          expiresAt: p.expiresAt,
         });
       }
     }

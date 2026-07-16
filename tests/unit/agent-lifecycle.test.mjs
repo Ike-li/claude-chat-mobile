@@ -325,12 +325,16 @@ test.describe('pendingRequestsSnapshot()', () => {
       ],
       answers: [null, 'X'],
       resolve() {},
+      createdAt: 111,
+      expiresAt: 222,
     });
     const snap = s.pendingRequestsSnapshot();
     // 对齐 CLI rich options：字符串选项也会归一成 {label}；multiSelect 缺省 false
+    // AG-NEW-001：createdAt/expiresAt 与 live emit('question') 对称
     assert.deepEqual(snap.questions, [{
       requestId: 'tool_1#0', text: 'Q0?', header: undefined, multiSelect: false,
       options: [{ label: 'A' }, { label: 'B' }],
+      createdAt: 111, expiresAt: 222,
     }]);
     assert.deepEqual(snap.permissions, []);
   });

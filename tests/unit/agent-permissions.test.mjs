@@ -714,6 +714,10 @@ test.describe('AskUserQuestion', () => {
     assert.equal(snap.questions[0].header, 'H');
     assert.equal(snap.questions[0].multiSelect, true);
     assert.deepEqual(snap.questions[0].options[0], { label: 'A', description: 'desc' });
+    // AG-NEW-001：真实 handleQuestion 写入的 TTL 须出现在快照
+    assert.equal(typeof snap.questions[0].createdAt, 'number');
+    assert.equal(typeof snap.questions[0].expiresAt, 'number');
+    assert.ok(snap.questions[0].expiresAt >= snap.questions[0].createdAt);
     s.dispose();
   });
 });
