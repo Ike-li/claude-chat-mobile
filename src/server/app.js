@@ -2270,6 +2270,7 @@ function shutdown(sig) {
   sessions.flushSaveSync(); // B4：防抖窗口内未落盘的状态同步写入
   clearInterval(statusInterval);  // E16：node --watch 的 SIGTERM 重启路径必须清定时器
   clearTimeout(statusDebounce);   // （在途 git execFile 由 2s timeout 与进程退出收割）
+  clearTimeout(catchUpTimer);     // 只读追平定时器（.unref 不阻止退出，但清掉避免关闭期间噪音回调）
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批
   agents.clear();
   // dispose() 内部对每条挂起审批调 resolvePermission('deny') → 触发 approval-store 的防抖写；必须在
