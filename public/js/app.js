@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -155,6 +155,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const SEND_ACK_FALLBACK_MS = 5000;
   let _sendInFlight = false;
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
+  // 空首页枢纽默认隐藏底部输入条；仅点 ＋ / session:new 进入 compose 就绪，或进入真实会话后显示。
+  // 防「未选项目就直接发消息」歧义（懒开 FRESH 路径仍保留，但入口收窄为显式 ＋）。
+  let _composeReady = false;
   // 在线发送后到 result/error/负 ack 前：同会话静默换实例（externalDirty/effort dispose+resume）也要补 busy
   let _pendingSendBusy = false;
   // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读；
@@ -3112,6 +3115,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 首发进行中 → 保持空聊天区 + 乐观 busy，不 showDashboard；等首个事件经 appendMessage 接管渲染。
     // 注意：同会话静默换实例也 restoreBusy，但有 sessionId，须继续走缓存/history，不能 early return。
     if (restoreBusy && _pendingFirstSend && !sid) {
+      syncComposerVisibility();
       return;
     }
 
@@ -3119,6 +3123,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       showDashboard();
       return;
     }
+
+    // 进入真实会话：输入条常显（shouldShowComposer 看 sessionId）；composeReady 可清掉。
+    leaveComposeReady();
+    syncComposerVisibility();
 
     // Phase 2: Check memory cache for instant restoration.
     // 已完成的对话/工具卡片按 session 不可变：同 sessionId 即恢复 DOM，不要求 instanceId 相同
@@ -3620,9 +3628,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // 回空首页枢纽（最近工作区/会话）。已在空首页则只重渲列表；否则 session:home。
   // 与 ＋ 分工：二者都到空首页且 compose=FRESH；＋ 额外重置 pending 权限/思考档并 scout 模型，🏠 保留面板档、专为「去选最近」。
+  // 🏠 同时收起 compose 就绪态：枢纽只选会话，不保留「点 ＋ 后的输入条」。
   if (btnHome) btnHome.onclick = () => {
     haptic('tap');
     closeLeftSidebar();
+    leaveComposeReady();
     const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId || null;
     if (shouldShowStartScreen({ viewingInstanceId, sessionId: sid })) {
       showDashboard();
@@ -3638,8 +3648,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // 台阶3：新建会话 = 在当前 cwd 开新 tab（旧 tab 后台继续、**不中断**），清视图等首条消息懒开。
   // 不再 confirm「将被中断」——台阶3 新建不中断任何在途任务（视图由 instances 广播驱动清空）。
+  // 显式 ＋ = compose 就绪：空首页枢纽隐藏的输入条在此打开，允许当前工作区懒开首发。
   btnNew.onclick = () => {
     haptic('tap');
+    enterComposeReady();
     socket.emit('session:new', { cwd: currentCwd }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
   };
   function toggleSessions() {
@@ -3712,6 +3724,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         e.stopPropagation();
         closeLeftSidebar();
         haptic('tap');
+        enterComposeReady();
         socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
       };
       dirRow.appendChild(newSessionBtn);
@@ -4088,11 +4101,41 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 产品决策：重启/空闲回收后永远停在空首页，只展示最近列表，不自动 session:switch。
   let _dashRecentsGen = 0;
 
+  // 底部输入区显隐：空首页枢纽隐藏；composeReady（点 ＋）/ 有 session / 首发在途显示。
+  const composerFooterEl = document.getElementById('composerFooter') || document.querySelector('footer');
+  function syncComposerVisibility() {
+    const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId
+      || currentSessionId
+      || displayedSessionId
+      || null;
+    const show = shouldShowComposer({
+      viewingInstanceId,
+      sessionId: sid,
+      composeReady: _composeReady,
+      pendingFirstSend: _pendingFirstSend,
+    });
+    if (!composerFooterEl) return;
+    composerFooterEl.classList.toggle('hidden', !show);
+  }
+  function enterComposeReady() {
+    _composeReady = true;
+    syncComposerVisibility();
+  }
+  function leaveComposeReady() {
+    if (!_composeReady) {
+      syncComposerVisibility();
+      return;
+    }
+    _composeReady = false;
+    syncComposerVisibility();
+  }
+
   function showDashboard() {
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
     if (topTitleText) topTitleText.textContent = '新聊天';
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
+    syncComposerVisibility();
 
     const hour = new Date().getHours();
     let greeting;

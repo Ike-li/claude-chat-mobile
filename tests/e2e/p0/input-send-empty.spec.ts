@@ -2,11 +2,12 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02 输入框、发送按钮与空输入边界', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     // 1. 起始状态/假设：fresh state，已连接，输入框为空。
     await expect(page.locator('#btnSend')).toBeDisabled();
@@ -35,6 +36,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-02b 触屏 Enter 只换行不发送，按钮仍会发送有效文本', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#input').press('Enter');
     await page.locator('#input').fill('   ');
@@ -135,6 +137,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-02e ultracode 快捷发送只注入一次关键词', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#btnSettings').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
@@ -162,6 +165,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-02h 斜杠命令提示可处理服务端对象格式命令', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#input').fill('/m');
     await expect(page.locator('#cmdHints')).toBeVisible();
@@ -177,6 +181,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-02i 点击斜杠命令提示会填入命令并保持可发送', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#input').fill('/m');
     await expect(page.locator('#cmdHints')).toBeVisible();
@@ -191,6 +196,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-02j 点击外部会关闭斜杠命令提示且保留草稿', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#input').fill('/m');
     await expect(page.locator('#cmdHints')).toBeVisible();

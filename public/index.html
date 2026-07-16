@@ -101,14 +101,17 @@
         </svg>
       </button>
 
-      <!-- 日志 >_ -->
-      <button id="btnConsole" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm font-mono text-xs font-bold leading-none" title="查看当前会话运行日志">
-        &gt;_
+      <!-- 会话运行日志：终端窗线稿，与 btnHome/btnNew 同材质同线宽 -->
+      <button id="btnConsole" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看当前会话运行日志" aria-label="查看会话日志">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5" aria-hidden="true">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 5.25A1.5 1.5 0 016 3.75h12A1.5 1.5 0 0119.5 5.25v13.5A1.5 1.5 0 0118 20.25H6A1.5 1.5 0 014.5 18.75V5.25z" />
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 9.75 10.5 12l-2.25 2.25M12.75 14.25h3" />
+        </svg>
       </button>
 
-      <!-- 新会话 ＋ -->
-      <button id="btnNew" class="w-9 h-9 flex items-center justify-center rounded-xl text-accent hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="创建新会话">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-4.5 h-4.5">
+      <!-- 新会话 ＋：与 btnHome/btnConsole 同色同线宽，不单独用 accent 抢视觉 -->
+      <button id="btnNew" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="创建新会话" aria-label="创建新会话">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
         </svg>
       </button>
@@ -259,8 +262,8 @@
     </div>
   </div>
 
-  <!-- 输入区 -->
-  <footer class="shrink-0 bg-transparent px-3 pb-3 shrink-0 z-10 safe-bottom">
+  <!-- 输入区：空首页枢纽默认隐藏（#composerFooter + app.js syncComposerVisibility）；点 ＋ / 进入会话后显示 -->
+  <footer id="composerFooter" class="hidden shrink-0 bg-transparent px-3 pb-3 shrink-0 z-10 safe-bottom">
     <div class="max-w-2xl mx-auto flex flex-col">
       <!-- web 状态栏（E16）：自有 SDK 数据 + git 结构化渲染，默认折叠为一行摘要 -->
       <details id="cliStatusWrap" class="hidden bg-surface border border-line rounded-xl mb-2 overflow-hidden shadow-sm">

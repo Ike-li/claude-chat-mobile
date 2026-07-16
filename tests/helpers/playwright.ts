@@ -30,12 +30,24 @@ export async function gotoMock(page: Page) {
   captureBrowserErrors(page);
   await page.request.post('/__reset');
   await page.goto('/');
-  await expect(page.locator('#input')).toBeVisible();
-  await expect(page.locator('#btnSend')).toBeVisible();
+  // 空首页枢纽默认隐藏底部输入条；就绪信号改为顶栏 + 连接点。
+  await expect(page.locator('#btnNew')).toBeVisible();
+  await expect(page.locator('#btnSessions')).toBeVisible();
+  await expect(page.locator('#messages')).toBeVisible();
   await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
 }
 
+/** 进入可发消息态：空首页须先点 ＋（composeReady）才露出输入条；已在会话内则 no-op。 */
+export async function ensureComposerReady(page: Page) {
+  const input = page.locator('#input');
+  if (await input.isVisible()) return;
+  await page.locator('#btnNew').click();
+  await expect(input).toBeVisible();
+  await expect(page.locator('#btnSend')).toBeVisible();
+}
+
 export async function sendChatMessage(page: Page, text: string) {
+  await ensureComposerReady(page);
   const input = page.locator('#input');
   await input.fill(text);
   await expect(page.locator('#btnSend')).toBeEnabled();

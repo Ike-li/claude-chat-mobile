@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 async function expectWithinViewport(page: Page, locator: Locator) {
   await expect(locator).toBeVisible();
@@ -95,6 +95,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-19d 窄屏和横屏下 settings 与 console sheet 滚动后关键控件可达', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     for (const viewport of [{ width: 320, height: 700 }, { width: 812, height: 375 }]) {
       await page.setViewportSize(viewport);

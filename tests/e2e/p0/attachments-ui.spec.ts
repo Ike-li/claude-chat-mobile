@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
 
 const tinyPng = Buffer.from(
@@ -13,6 +13,7 @@ const tinyPng = Buffer.from(
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-18 文件/图片上传、附件 chip 与前端边界', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     // 1. 上传一个小文本文件和一张小图片，附件托盘显示 chip。
     await page.locator('#fileInput').setInputFiles([
@@ -41,6 +42,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-18b 附件超限被拒且重复选择同一文件仍生效', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#fileInput').setInputFiles({
       name: 'too-large.txt',
@@ -63,6 +65,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-18c 附件总量超限与无扩展名通用附件回显', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#fileInput').setInputFiles([
       { name: 'total-a.bin', mimeType: 'application/octet-stream', buffer: Buffer.alloc(7 * 1024 * 1024, 'a') },
@@ -75,6 +78,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#attachTray')).not.toContainText('total-c.bin');
 
     await gotoMock(page);
+    await ensureComposerReady(page);
     await page.locator('#fileInput').setInputFiles({
       name: 'LICENSE',
       mimeType: '',
@@ -150,6 +154,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-18f 移除附件 chip 后不会随消息发送', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#fileInput').setInputFiles([
       { name: 'keep-me.txt', mimeType: 'text/plain', buffer: Buffer.from('keep this attachment') },
@@ -179,6 +184,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-18g 移除附件 chip 后释放数量配额并只发送剩余附件', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     const initialFiles = Array.from({ length: 10 }, (_, index) => ({
       name: `slot-${index}.txt`,
@@ -222,6 +228,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-18h 发送后用户消息回显附件元数据并清空托盘', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#fileInput').setInputFiles([
       { name: 'context.txt', mimeType: 'text/plain', buffer: Buffer.from('context for Claude') },

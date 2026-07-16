@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, mergeRecentSessionsAcrossWorkspaces } from '../../public/js/logic.js';
+import { modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, mergeRecentSessionsAcrossWorkspaces } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -121,6 +121,18 @@ test('shouldShowStartScreen: 仅无实例或无 session 的新会话显示启动
   assert.equal(shouldShowStartScreen({ viewingInstanceId: null, sessionId: null }), true);
   assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: null }), true);
   assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: 'abc' }), false);
+});
+
+// 空首页枢纽不展示底部输入条：须先选会话或点 ＋ 进入 compose 就绪态。
+test('shouldShowComposer: 空首页隐藏；composeReady/有 session/首发在途显示', () => {
+  assert.equal(shouldShowComposer({ viewingInstanceId: null, sessionId: null }), false);
+  assert.equal(shouldShowComposer({ viewingInstanceId: 'inst_1', sessionId: null }), false);
+  assert.equal(shouldShowComposer({ viewingInstanceId: null, sessionId: null, composeReady: true }), true);
+  assert.equal(shouldShowComposer({ viewingInstanceId: 'inst_1', sessionId: null, composeReady: true }), true);
+  assert.equal(shouldShowComposer({ viewingInstanceId: 'inst_1', sessionId: 'abc' }), true);
+  assert.equal(shouldShowComposer({ viewingInstanceId: null, sessionId: null, pendingFirstSend: true }), true);
+  // 有 session 时 composeReady 无关
+  assert.equal(shouldShowComposer({ viewingInstanceId: 'inst_1', sessionId: 'abc', composeReady: false }), true);
 });
 
 // 空首页「最近活跃」：跨全部 workdir 的 session:list 结果合并后按 lastUsedAt 降序取 topN，

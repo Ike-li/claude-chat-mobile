@@ -463,6 +463,21 @@ export function shouldShowStartScreen({ viewingInstanceId, sessionId } = {}) {
   return !viewingInstanceId || !sessionId;
 }
 
+// 底部输入条（composer）可见性：空首页枢纽只做「选工作区/会话」，不提供直接发消息入口——
+// 避免未选项目就打字、懒开新会话的歧义路径。显示条件：
+//   · 已进入可渲染会话（有 sessionId）
+//   · 或用户刚点 ＋ / session:new 进入 compose 就绪空窗（composeReady）
+//   · 或新会话首发在途（pendingFirstSend：懒开瞬间 sid 仍空，不能闪藏输入区）
+// 与 shouldShowStartScreen 正交：start screen 仍可在 composeReady 时显示（dashboard + 输入条）。
+export function shouldShowComposer({ viewingInstanceId, sessionId, composeReady = false, pendingFirstSend = false } = {}) {
+  if (sessionId) return true;
+  if (pendingFirstSend) return true;
+  if (composeReady) return true;
+  // viewingInstanceId 有无都不改变「无 sid 且未 compose」→ 隐藏
+  void viewingInstanceId;
+  return false;
+}
+
 // 空首页「最近活跃」：把各 workdir 的 session:list 结果摊平，按 lastUsedAt 降序取 topN。
 // 每条附 cwd + workspaceName，前端可一键 session:switch 跨工作区，不必先开侧栏目录树。
 // dirLists: Array<{ cwd, sessions: Array<{ id, title, lastUsedAt, ... }> }>

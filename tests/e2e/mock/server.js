@@ -518,6 +518,36 @@ io.on('connection', socket => {
     });
   });
 
+  // 回空首页枢纽：清 viewing、保留 live 实例与 pending 档（与 session:new 分工，对齐真 server session:home）。
+  // 前端 leaveComposeReady → 底部输入条隐藏，直到再点 ＋ 或进入会话。
+  socket.on('session:home', (payload, maybeAck) => {
+    const ack = typeof payload === 'function' ? payload : maybeAck;
+    const obj = payload && typeof payload === 'object' ? payload : {};
+    const requestedCwd = typeof obj.cwd === 'string' && obj.cwd ? obj.cwd : null;
+    const viewingCwd = requestedCwd
+      || mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
+      || pendingFreshCwd
+      || mockInstances[0]?.cwd
+      || '/Users/you/code/claude-chat-mobile';
+    console.log(`[mock] session:home → 空首页枢纽（viewingInstanceId=null, cwd=${viewingCwd})`);
+    viewingInstanceId = null;
+    // 不重置 permissionMode/effort/pendingFresh*（与 session:new 区分）
+    pendingFreshCwd = viewingCwd;
+    const dirs = Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd]));
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: {
+        viewingInstanceId: null,
+        viewingCwd,
+        dirs,
+        instances: mockInstances,
+        defaultPermissionMode: pendingFreshPermissionOrDefault(),
+        defaultEffort: pendingFreshEffortOrDefault()
+      }
+    });
+    if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
+  });
+
   // Handle session list request for sidebar directory browsing
   socket.on('session:list', (payload, callback) => {
     const { cwd, all } = payload || {};

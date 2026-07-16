@@ -2,11 +2,12 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     // 1. 打开配置面板，检查模型、权限、思考强度入口。
     await page.locator('#btnSettings').click();
@@ -30,6 +31,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-09b 设置选择会随下一条消息发送并可见回显', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#btnSettings').click();
     await page.locator('.perm-tile[data-mode="plan"]').click();
@@ -52,6 +54,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-09c 不支持 thinking effort 的模型不会沿用旧 effort', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#btnSettings').click();
     await page.locator('.effort-tile[data-level="high"]').click();
@@ -107,6 +110,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-09e /model 本地命令只更新下一轮模型不发送聊天', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#input').fill('/model claude-3-opus[1m]');
     await expect(page.locator('#btnSend')).toBeEnabled();
@@ -142,6 +146,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-09g CLI 镜像展示观察态，接管后恢复 Web 设置偏好', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#btnSettings').click();
     await page.locator('.perm-tile[data-mode="plan"]').click();

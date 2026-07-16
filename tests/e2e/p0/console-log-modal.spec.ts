@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
@@ -47,6 +47,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
   test('P0-16c Console 打开关闭不丢输入草稿', async ({ page }) => {
     await gotoMock(page);
+    await ensureComposerReady(page);
 
     await page.locator('#input').fill('draft before console');
     await page.locator('#btnConsole').click();
