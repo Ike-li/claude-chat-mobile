@@ -243,6 +243,7 @@ export class AgentSession {
     // F2：清理挂起的 AskUserQuestion（直接 resolve，不走 resolveQuestion 避免重复逻辑）
     for (const [toolUseID, pending] of this.pendingQuestions) {
       pending.signal?.removeEventListener('abort', pending.abortHandler);
+      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
       for (let i = 0; i < pending.questions.length; i++) {
         this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
       }
@@ -250,7 +251,13 @@ export class AgentSession {
     }
     this.pendingQuestions.clear();
     this.denyKinds.clear(); // 与 dispose 路径对称：无论哪种退出，denyKind 残留都应清理
-    if (!this.disposed) this.onExit?.();
+    // AG-005：自然退出（CLI 进程结束）也要标 disposed/inputEnded——否则 onExit 删 Map 前的竞态窗口里
+    // 陈旧引用仍可 send()，且与 dispose 路径不对称。
+    if (!this.disposed) {
+      this.disposed = true;
+      this.inputEnded = true;
+      this.onExit?.();
+    }
   }
 
   // ---- 对外操作 ----
@@ -286,7 +293,12 @@ export class AgentSession {
     // #2：确认能发送（过了 disposed + 双重检查）后才记 firstMessage、emit user_message 气泡、记日志——
     // 否则拒绝路径会把气泡推上屏却没真正发送（用户以为发了、实际被拒）。
     if (this.firstMessage === null) this.firstMessage = displayText;
-    this.emit('user_message', { text: displayText, attachments: opts.attachments }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
+    // FE-002：透传 clientMessageId，供前端离线乐观气泡精确对账（含纯附件无文本）。
+    this.emit('user_message', {
+      text: displayText,
+      attachments: opts.attachments,
+      ...(opts.clientMessageId ? { clientMessageId: opts.clientMessageId } : {}),
+    }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
     // 日志模型/effort/perm 走统一 logMeta()（消除 send vs result 的模型解析漂移，见 logMeta 注释）。
     // 日志键走 logKey()：FRESH 首轮 sessionId 未到时用 provisional，init 后 rebind，避免首跳蒸发。
     const { model: metaModel, effort: effortStr, permissionMode: permStr } = this.logMeta();
@@ -316,6 +328,21 @@ export class AgentSession {
       // 成功中断：丢弃 toDrop（中断前排队的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
       this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
       this._awaitingInterruptResult = true; // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result
+      // AG-004：Stop 应对齐「取消在途工具审批/提问」——不依赖 SDK 是否 abort canUseTool signal。
+      // 若 signal 已 abort，abortHandler 会先清 Map，下面 resolve/expire 幂等（pending 不在则 no-op）。
+      // 注意：Map.keys() 的元素是字符串，for-of 解构 for (const [id] of keys) 会把 't1' 拆成字符 't'——
+      // 必须 for (const id of keys) 或 entries() 解构。
+      for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny');
+      for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
+        pending.signal?.removeEventListener('abort', pending.abortHandler);
+        if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
+        this.pendingQuestions.delete(toolUseID);
+        for (let i = 0; i < pending.questions.length; i++) {
+          this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
+        }
+        this.denyKinds.set(toolUseID, 'cancelled');
+        pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
+      }
       this.emit('system', { message: '已中断', kind: 'interrupted' }); // M7：kind 字段，勿靠字符串匹配
     } catch {
       // SDK 无在途任务 → 不丢消息：把 toDrop 放回队列头部（await 期间新发的接其后），pendingTurns 不动。
@@ -436,7 +463,9 @@ export class AgentSession {
       const expiryTimer = setTimeout(() => this._expirePermission(requestId), this.approvalTtlMs);
       expiryTimer.unref?.(); // 不阻止进程退出
       this.pendingPermissions.set(requestId, { resolve, name, suggestions, input, signal, abortHandler, createdAt, expiresAt, fp, expiryTimer });
-      signal.addEventListener('abort', abortHandler);
+      // AG-002：与 handleQuestion 一致，signal 可能缺失（测试桩/SDK 形态漂移）；硬调用 addEventListener 会在
+      // Map 插入之后仍抛——其实 set 已在前；但若未来挪序或 signal 在 set 前访问仍炸。统一可选链。
+      signal?.addEventListener('abort', abortHandler);
     });
   }
 
@@ -545,7 +574,9 @@ export class AgentSession {
       const answers = new Array(questions.length).fill(null);
       let remaining = questions.length;
       const abortHandler = () => {
+        const p = this.pendingQuestions.get(toolUseID);
         if (this.pendingQuestions.delete(toolUseID)) {
+          if (p?.expiryTimer) clearTimeout(p.expiryTimer); // AG-001：取消到期 timer
           for (let i = 0; i < questions.length; i++) {
             this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' }); // M4
           }
@@ -553,8 +584,14 @@ export class AgentSession {
           resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
         }
       };
+      // AG-001：提问 TTL（镜像 BE-003 审批 TTL）——无人作答时 canUseTool Promise 永久悬置、checkIdle
+      // 因 pendingQuestions 持续刷新 lastActivity → 实例永不 idle-reclaim。复用 approvalTtlMs。
+      const createdAt = Date.now();
+      const expiresAt = createdAt + this.approvalTtlMs;
+      const expiryTimer = setTimeout(() => this._expireQuestion(toolUseID), this.approvalTtlMs);
+      expiryTimer.unref?.();
       // createdAt：供 AD-11/§3.2.5 AttentionDeriver 的"等我输入"悬置起点（waitingSince），镜像 pendingPermissions 已有的 createdAt 模式。
-      this.pendingQuestions.set(toolUseID, { resolve, questions, answers, remaining, signal, abortHandler, createdAt: Date.now() });
+      this.pendingQuestions.set(toolUseID, { resolve, questions, answers, remaining, signal, abortHandler, createdAt, expiresAt, expiryTimer });
 
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
@@ -566,11 +603,31 @@ export class AgentSession {
           header: q.header ? String(q.header) : undefined,
           multiSelect: Boolean(q.multiSelect),
           options,
+          createdAt,
+          expiresAt,
         });
       }
 
       signal?.addEventListener('abort', abortHandler);
     });
+  }
+
+  // AG-001：提问到期无人作答时的主动结算（由 handleQuestion 的 expiryTimer 触发）。fail-closed deny +
+  // emit expired，与 _expirePermission 等义。已被用户/abort 结算则 pending 不在、直接返回（幂等）。
+  _expireQuestion(toolUseID) {
+    const pending = this.pendingQuestions.get(toolUseID);
+    if (!pending) return;
+    pending.signal?.removeEventListener('abort', pending.abortHandler);
+    if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
+    this.pendingQuestions.delete(toolUseID);
+    this.denyKinds.set(toolUseID, 'denied');
+    for (let i = 0; i < pending.questions.length; i++) {
+      if (pending.answers[i] === null) {
+        this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'expired' });
+      }
+    }
+    this.emit('request_resolved', { requestId: toolUseID, kind: 'question', outcome: 'expired' });
+    pending.resolve({ behavior: 'deny', message: '提问已过期，操作未作答', interrupt: false });
   }
 
   // requestId 格式：`${toolUseID}#${questionIndex}`（server 的 user:answer handler 透传）
@@ -584,6 +641,11 @@ export class AgentSession {
     const pending = this.pendingQuestions.get(toolUseID);
     if (!pending || isNaN(qIdx) || qIdx >= pending.questions.length) return;
     if (pending.answers[qIdx] !== null) return; // 防重复
+    // AG-001：过期后不可再作答（fail-closed），与 resolvePermission 对称
+    if (pending.expiresAt != null && Date.now() > pending.expiresAt) {
+      this._expireQuestion(toolUseID);
+      return;
+    }
 
     const freeText = typeof opts?.freeText === 'string' ? opts.freeText.trim() : '';
     let label;
@@ -621,6 +683,7 @@ export class AgentSession {
     if (pending.remaining === 0) {
       // 移除 abort 监听器防僵尸累积
       pending.signal?.removeEventListener('abort', pending.abortHandler);
+      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
       this.pendingQuestions.delete(toolUseID);
       this.lastActivity = Date.now(); // 用户答题是主动操作，续期静默看护
       const msg = '用户选择了：' + pending.answers.map(a => `「${a}」`).join('、');
@@ -800,6 +863,7 @@ export class AgentSession {
     // 保证多设备收到问题取消通知（否则前端弹窗永远不消失）
     for (const [toolUseID, pending] of this.pendingQuestions) {
       pending.signal?.removeEventListener('abort', pending.abortHandler);
+      if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // AG-001
       for (let i = 0; i < pending.questions.length; i++) {
         this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
       }

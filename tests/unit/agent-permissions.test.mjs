@@ -635,6 +635,39 @@ test.describe('AskUserQuestion', () => {
     s.dispose();
   });
 
+  // AG-001：提问 TTL 镜像 BE-003——无人作答时到期 timer fail-closed，防 canUseTool 永挂 + isBusy 锁死
+  test('提问到期无人作答 → 到期 timer 自动 fail-closed deny + emit expired（AG-001）', { timeout: 3000 }, async () => {
+    const { s, events } = makeSession({ approvalTtlMs: 30 });
+    const ac = new AbortController();
+    const promise = s.handleQuestion(
+      { questions: [{ question: 'Pick?', options: ['A', 'B'] }] },
+      { signal: ac.signal, toolUseID: 'q1' },
+    );
+    assert.equal(s.pendingQuestions.size, 1);
+    const result = await promise;
+    assert.equal(result.behavior, 'deny');
+    assert.equal(result.interrupt, false);
+    assert.equal(s.pendingQuestions.size, 0);
+    const rr = events.find(e => e.type === 'request_resolved' && e.payload.requestId === 'q1' && e.payload.outcome === 'expired');
+    assert.ok(rr, '整组 outcome=expired');
+    assert.equal(s.denyKinds.get('q1'), 'denied');
+    s.dispose();
+  });
+
+  test('handleQuestion：permission/question payload 带 createdAt/expiresAt（AG-001 契约）', () => {
+    const { s, events } = makeSession({ approvalTtlMs: 5000 });
+    const ac = new AbortController();
+    s.handleQuestion(
+      { questions: [{ question: 'Q', options: ['A'] }] },
+      { signal: ac.signal, toolUseID: 'q1' },
+    );
+    const q = events.find(e => e.type === 'question');
+    assert.ok(typeof q.payload.createdAt === 'number');
+    assert.equal(q.payload.expiresAt, q.payload.createdAt + 5000);
+    s.resolveQuestion('q1#0', 0);
+    s.dispose();
+  });
+
   test('resolveQuestion：multiSelect optionIndexes 多选合并', async () => {
     const { s } = makeSession();
     const ac = new AbortController();
