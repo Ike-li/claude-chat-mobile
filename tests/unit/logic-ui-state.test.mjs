@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, taskStopUiState, acceptMirrorState, shouldResetMirrorOnViewChange } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, taskStopUiState, acceptMirrorState, shouldResetMirrorOnViewChange } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -59,31 +59,7 @@ test.describe('readAlertPrefs / writeAlertPref：完成提示开关', () => {
   });
 });
 
-// ---- 状态一瞥：live 实例汇总 + whatNeedsAttention ----
-test.describe('summarizeInstanceStates：live 会话实例汇总（非 OS 进程）', () => {
-  test('空 / 非数组 → total 0', () => {
-    assert.deepEqual(summarizeInstanceStates([]).total, 0);
-    assert.equal(summarizeInstanceStates(null).running, 0);
-    assert.equal(summarizeInstanceStates(undefined).byState.busy, 0);
-  });
-  test('按 state 计数；无 instanceId 跳过；未知 state 归 idle', () => {
-    const r = summarizeInstanceStates([
-      { instanceId: 'a', state: 'busy' },
-      { instanceId: 'b', state: 'busy' },
-      { instanceId: 'c', state: 'permission' },
-      { instanceId: 'd', state: 'error' },
-      { instanceId: 'e', state: 'weird' },
-      { state: 'busy' }, // 无 id
-    ]);
-    assert.equal(r.total, 5);
-    assert.equal(r.running, 2);
-    assert.equal(r.byState.busy, 2);
-    assert.equal(r.byState.permission, 1);
-    assert.equal(r.byState.error, 1);
-    assert.equal(r.byState.idle, 1);
-  });
-});
-
+// ---- whatNeedsAttention：顶栏注意力信号（抽屉不再放 live 实例汇总）----
 test.describe('whatNeedsAttention：ok / attention / alert', () => {
   test('全空 → ok', () => {
     assert.deepEqual(whatNeedsAttention({}), { level: 'ok', items: [] });

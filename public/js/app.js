@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, summarizeInstanceStates, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -3015,18 +3015,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const isPanelOpen = leftSidebar && !leftSidebar.classList.contains('-translate-x-full');
     if (isDesktop || isPanelOpen) {
       if (_structChanged) {
-        openSessionPanel(); // 内含 needsYou/status/service 区全量重建，此路径不必再单独 refresh*
+        openSessionPanel(); // 内含 needsYou/service 区 + 工作区树全量重建，此路径不必再单独 refresh*
       } else {
         refreshDirBadges();
         refreshInstanceBadges(); // 实例角标实时刷新（busy 时工具图标细化）
         refreshNeedsYou(); // "等我"聚合独立于 structKey（新增/清除审批不改变实例集结构），须单独刷新
-        refreshStatusSection(); // live 实例状态汇总（busy 计数等随 state 变，不进 structKey）
       }
     } else {
       refreshDirBadges();
       refreshInstanceBadges();
       refreshNeedsYou();
-      refreshStatusSection();
     }
     updateAttentionSignal(); // 顶栏 connDotWrap 边框：alert/attention/ok（与连通性内圈绿/红分轴）
     // 默认磁贴标签依赖 currentModel(空/非空) + cwdDefaultModel，二者本次都可能变（adoptPanelState 改 currentModel、
@@ -3273,9 +3271,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!old) return;
     old.replaceWith(buildNeedsYouSection());
   }
-  // "服务"小节（第一性原理重新设计）：与上面"需要你"聚合故意保持视觉分隔——放在状态角标图例之后、
-  // 目录列表之前，避免看起来像"更多同类待办"（两条轴论证依据不同，见 updateServiceNotice 注释）。
+  // "服务"小节：与"需要你"聚合故意保持视觉分隔——放在需要你之后、目录列表之前，
+  // 避免看起来像"更多同类待办"（两条轴论证依据不同，见 updateServiceNotice 注释）。
   // 仅异常时渲染（空数组=一切正常，section 直接 hidden），锚点 #serviceSection 常在同 needsYouSection 惯例。
+  // 抽屉不再放 live 实例汇总/状态图例——状态只活在需要你、行角标、主聊天面、底栏。
   function buildServiceSection() {
     const section = el(`<div id="serviceSection"></div>`);
     const notices = formatServiceNotices({ service: latestServiceHealth, restartChanged: _serviceRestartNoticeActive, now: Date.now() });
@@ -3293,103 +3292,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const old = sessionPanel.querySelector('#serviceSection');
     if (!old) return;
     old.replaceWith(buildServiceSection());
-  }
-  // 状态一瞥区（live 会话实例汇总，非 OS 进程表）：摘要 + 实例表 + 说明。
-  // 数据全来自 instances 广播；attention 优先排序；点行深链。锚点 #statusSection 常在，refresh 可独立替换。
-  function buildStatusSection() {
-    const section = el(`<div id="statusSection" class="border-b border-line"></div>`);
-    const sum = summarizeInstanceStates(instancesList);
-    const attention = whatNeedsAttention({
-      instances: instancesList,
-      needsYou: needsYouList,
-      service: latestServiceHealth,
-    });
-    const header = el(`<div class="px-3 py-1.5 text-[10px] font-semibold border-b border-line-soft flex items-center justify-between gap-2"></div>`);
-    const title = el(`<span></span>`);
-    title.textContent = '状态 · live 会话实例';
-    header.appendChild(title);
-    const levelEl = el(`<span class="font-normal"></span>`);
-    if (attention.level === 'alert') {
-      levelEl.textContent = '告警';
-      levelEl.className = 'font-normal text-danger';
-      header.classList.add('text-danger');
-    } else if (attention.level === 'attention') {
-      levelEl.textContent = '待处理';
-      levelEl.className = 'font-normal text-warning';
-      header.classList.add('text-warning');
-    } else {
-      levelEl.textContent = '正常';
-      levelEl.className = 'font-normal text-ink-faint';
-      header.classList.add('text-ink-soft');
-    }
-    header.appendChild(levelEl);
-    section.appendChild(header);
-
-    // UX-005：计数缩成一行 live N · 需处理 M
-    const summary = el(`<div class="px-3 py-1 text-xs text-ink-soft"></div>`);
-    const b = sum.byState;
-    const needN = (b.permission || 0) + (b.error || 0);
-    summary.textContent = `live ${sum.total} · 需处理 ${needN} · 运行 ${sum.running}`;
-    section.appendChild(summary);
-
-    // UX-006：有 needsYou 时实例表默认折叠，避免待批三重呈现
-    const rank = { permission: 0, error: 1, busy: 2, aborted: 3, done: 4, idle: 5 };
-    const rows = [...instancesList]
-      .filter(i => i && i.instanceId)
-      .sort((a, b2) => (rank[a.state] ?? 9) - (rank[b2.state] ?? 9) || String(a.title || '').localeCompare(String(b2.title || '')));
-    if (rows.length) {
-      const wrap = el(`<details class="pb-1"${needsYouList.length ? '' : ' open'}><summary class="px-3 py-1 text-xs text-ink-faint cursor-pointer select-none">实例列表 (${rows.length})</summary></details>`);
-      const list = el(`<div></div>`);
-      wrap.appendChild(list);
-      for (const inst of rows) {
-        const row = el(`<button type="button" class="w-full flex items-center gap-2 pl-3 pr-3 py-1.5 text-left hover:bg-sunk/30 active:opacity-70 hit-44" data-testid="status-instance-row"></button>`);
-        const badge = el(`<span class="shrink-0 text-xs"></span>`);
-        const m = DIR_BADGE[inst.state];
-        if (m) {
-          badge.className = `shrink-0 text-xs status-icon ${m[1]}`;
-          badge.title = m[2];
-          setStatusIcon(badge, m[0]);
-        } else if (inst.state === 'busy' && inst.activeTool && TOOL_BADGE[inst.activeTool]) {
-          badge.textContent = TOOL_BADGE[inst.activeTool];
-          badge.className = 'shrink-0 text-xs text-warning';
-          badge.title = `运行中：${inst.activeTool}`;
-        } else { badge.textContent = '·'; badge.className = 'shrink-0 text-xs text-ink-faint'; }
-        row.appendChild(badge);
-        const body = el(`<div class="flex-1 min-w-0"></div>`);
-        const head = el(`<div class="truncate text-xs font-medium text-ink"></div>`);
-        head.textContent = inst.title || '新会话';
-        const sub = el(`<div class="truncate text-xs text-ink-faint"></div>`);
-        const stateLabel = (m && m[2]) || inst.state || '空闲';
-        const toolBit = inst.activeTool ? ` · ${inst.activeTool}` : '';
-        const bgBit = inst.bgActive ? ' · 后台' : '';
-        sub.textContent = `${baseName(inst.cwd)} · ${stateLabel}${toolBit}${bgBit}`;
-        body.appendChild(head);
-        body.appendChild(sub);
-        row.appendChild(body);
-        row.onclick = () => {
-          haptic('tap');
-          applyDeepLink({ instanceId: inst.instanceId, sessionId: inst.sessionId, cwd: inst.cwd });
-        };
-        list.appendChild(row);
-      }
-      section.appendChild(wrap);
-    } else {
-      const empty = el(`<div class="px-3 py-1 text-xs text-ink-faint"></div>`);
-      empty.textContent = '当前无 live 实例';
-      section.appendChild(empty);
-    }
-
-    // UX-005：用户语言（非 OS 僵尸黑话）
-    const note = el(`<div class="px-3 py-1.5 text-xs text-ink-faint leading-snug"></div>`);
-    note.textContent = '仅显示由本应用发起的会话；额度见底栏 statusline。';
-    section.appendChild(note);
-    return section;
-  }
-
-  function refreshStatusSection() {
-    const old = sessionPanel.querySelector('#statusSection');
-    if (!old) return;
-    old.replaceWith(buildStatusSection());
   }
   // 顶栏 connDotWrap 边框：服务异常(alert) 优先于 会话待处理(attention)；内圈绿/红仍只管连通性。
   // 与 updateServiceNotice 共用边框，避免两轴打架——本函数在 setInstances 末尾统一重算。
@@ -3764,15 +3666,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     } catch { /* ignore */ }
     if (currentCwd) expandedDirs.add(currentCwd);
 
+    // 抽屉 = 注意力入口 + 导航树（非状态仪表盘）：需要你 → 服务异常 → 工作区树。
     // "需要你"聚合置顶（AD-11/§3.2.5 AttentionDeriver，承接 FR-21）：跨全部工作区/会话，
     // 不限于当前展开的目录——正是它相对下方逐目录列表的增量价值（注意力不对称）。
     sessionPanel.appendChild(buildNeedsYouSection());
-
-    // UX-005：状态紧凑行优先；图例折叠；树在下方
-    sessionPanel.appendChild(buildStatusSection());
     sessionPanel.appendChild(buildServiceSection());
-    sessionPanel.appendChild(el(`<details class="px-3 py-1.5 text-xs text-ink-soft border-b border-line"><summary class="cursor-pointer select-none text-ink-faint">状态图例 (?)</summary><div class="mt-1.5 flex flex-wrap gap-x-3 gap-y-1"><span>⏳ 运行中</span><span>⚠️ 待审批</span><span>❗ 出错</span><span>✅ 已完成</span><span class="text-ink-faint w-full">角标=工作区最需关注 · 连接点绿=已连</span></div></details>`));
-
 
     // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）

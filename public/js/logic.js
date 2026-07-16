@@ -857,24 +857,8 @@ export function writeAlertPref(setItem, key, enabled) {
   return true;
 }
 
-// ── 状态一瞥：live 会话实例汇总（非 OS 进程表）────────────────────────────────
-// 数据源 = instances 广播的 live AgentSession 列表。running = busy 计数（含前台轮 + 后台 bgTasks）。
-// 不做 PID / 僵尸：后端无子进程 PID，本函数也不假装。
-const INSTANCE_STATES = ['busy', 'permission', 'error', 'done', 'aborted', 'idle'];
-export function summarizeInstanceStates(instances) {
-  const byState = Object.fromEntries(INSTANCE_STATES.map(s => [s, 0]));
-  let total = 0;
-  for (const inst of Array.isArray(instances) ? instances : []) {
-    if (!inst || !inst.instanceId) continue;
-    total++;
-    const s = INSTANCE_STATES.includes(inst.state) ? inst.state : 'idle';
-    byState[s]++;
-  }
-  return { total, byState, running: byState.busy };
-}
-
-// 统一判定：会话待处理 + 服务异常 → ok | attention | alert（提案 whatNeedsAttention MVP）。
-// priority: alert > attention > ok。不引入 softwareEvents 环 / doctor healthVerdict（第二刀）。
+// 统一判定：会话待处理 + 服务异常 → ok | attention | alert（顶栏 connDot 边框 / 注意力信号）。
+// priority: alert > attention > ok。抽屉不再复述计数；状态落在需要你卡、工作区树角标、主聊天面。
 export function whatNeedsAttention({ instances, needsYou, service } = {}) {
   const items = [];
   if (Array.isArray(needsYou)) {
@@ -1019,7 +1003,7 @@ function formatAgo(ms) {
   return `${Math.floor(hours / 24)} 天前`;
 }
 
-// 组装会话面板"服务"小节文案（会话面板既有图例区之后、目录列表之前，仅异常时渲染）。空数组=一切正常。
+// 组装会话面板"服务"小节文案（需要你之后、目录列表之前，仅异常时渲染）。空数组=一切正常。
 // 刻意不吞并/复用"需要你(N)"聚合的展示逻辑——两条轴分开陈列，不让服务健康看起来像"更多同类待办"。
 export function formatServiceNotices({ service, restartChanged, now } = {}) {
   const notices = [];

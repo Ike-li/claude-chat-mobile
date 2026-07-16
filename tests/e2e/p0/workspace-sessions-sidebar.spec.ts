@@ -28,6 +28,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel')).toContainText('claude-chat-mobile');
     await expect(page.locator('#sessionPanel')).toContainText('another-react-project');
+    // 抽屉 = 需要你 + 服务异常 + 工作区树；不再占位「状态 · live / 图例 / 实例列表副本」
+    await expect(page.locator('#sessionPanel')).not.toContainText('状态 · live');
+    await expect(page.locator('#sessionPanel')).not.toContainText('状态图例');
+    await expect(page.locator('#statusSection')).toHaveCount(0);
+    await expect(page.locator('[data-testid="status-instance-row"]')).toHaveCount(0);
 
     // 2. 展开第二工作区并切换到 live 会话，验证 history replay。
     await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
