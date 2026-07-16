@@ -18,6 +18,7 @@ tailwind.config = {
           bright: 'var(--accent-bright)',
           wash: 'var(--accent-wash)',
         },
+        cta: 'var(--cta)',
         user: 'var(--user-bubble)',
         info: 'var(--info)',
         success: 'var(--success)',

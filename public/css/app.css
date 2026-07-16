@@ -3,8 +3,12 @@
   --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
   --line:#E3E0D6; --line-soft:#ECEAE1;
   --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
-  --accent:#C96442; --accent-deep:#AE5238; --accent-bright:#D97757; --accent-wash:#F0E4DD;
-  --user-bubble:#ECE8DF; --info:#1B6FB3; --success:#3D8A50; --danger:#BC4334; --warning:#C77D33;
+  /* UI-001：accent 提至 AA 正文对比（白字 5.17 / 字面 4.95）；cta 专供实底白字按钮（深浅一致） */
+  --accent:#AE5238; --accent-deep:#8F422C; --accent-bright:#D97757; --accent-wash:#F0E4DD;
+  --cta:#AE5238;
+  --user-bubble:#ECE8DF; --info:#1B6FB3; --success:#3D8A50; --danger:#BC4334;
+  /* warning 加深：字面/surface 4.98（旧 #C77D33 = 3.14） */
+  --warning:#9A5F22;
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-read: "Source Serif 4", Georgia, Charter, "Songti SC", "Noto Serif SC", "Times New Roman", serif;
   --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
@@ -28,7 +32,12 @@
     --accent-deep:#F0E4DD;
     --accent-bright:#E2886A;
     --accent-wash:#2D231E;
+    --cta:#AE5238; /* 深色实底白字仍用深砖橙，勿用提亮的 accent */
     --user-bubble:#282623;
+    /* UI-001：深色 danger/info 提亮一档；warning 保持可读（继承浅色过深会掉到 3.3） */
+    --danger:#E55D4C;
+    --info:#3D8FD4;
+    --warning:#D4A04A;
   }
 }
 /* self-host 开源 serif（SIL OFL）——Claude 回复正文的“书卷阅读感”；中文无字形时由 --font-read 栈回退系统宋体 */

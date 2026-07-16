@@ -834,7 +834,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       btns.className = 'flex gap-2';
       const approve = document.createElement('button');
       approve.type = 'button';
-      approve.className = 'flex-1 py-2 rounded-lg bg-accent text-white active:bg-accent-deep text-xs font-medium';
+      approve.className = 'flex-1 py-2 rounded-lg bg-cta text-white active:brightness-95 text-xs font-medium';
       approve.textContent = '✓ 准入';
       approve.addEventListener('click', () => { socket.emit('user:approveDevice', { deviceId: d.deviceId }); });
       const deny = document.createElement('button');

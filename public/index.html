@@ -43,7 +43,7 @@
       <input id="authToken" type="password" autocomplete="current-password" enterkeyhint="go" placeholder="粘贴 AUTH_TOKEN"
         class="w-full bg-sunk border border-line rounded-lg px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:ring-1 focus:ring-accent mb-2">
       <div id="authError" class="hidden text-xs text-danger mb-2"></div>
-      <button id="authSubmit" class="w-full py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep font-medium">进入</button>
+      <button id="authSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">进入</button>
       <div class="text-[11px] text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">.env</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 或启动日志里。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
     </div>
   </div>
@@ -53,7 +53,7 @@
     <div class="w-full max-w-sm bg-surface border border-line rounded-2xl p-6" style="box-shadow:var(--shadow-pop)">
       <div class="text-xl font-semibold mb-1" style="font-family:var(--font-read)">会话已过期</div>
       <div class="text-sm text-ink-soft mb-5">登录态已失效，请重新通过验证后继续。</div>
-      <button id="accessReloginBtn" class="w-full py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep font-medium">重新登录</button>
+      <button id="accessReloginBtn" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">重新登录</button>
     </div>
   </div>
 
@@ -160,7 +160,7 @@
       </div>
       <div class="flex gap-2">
         <button id="permDeny" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">拒绝</button>
-        <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep font-medium">允许</button>
+        <button id="permAllow" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">允许</button>
       </div>
       <!-- 对齐 CLI Esc：权限弹窗遮罩会挡住输入区「停止」，弹窗内必须自带中止入口 -->
       <button type="button" id="permInterrupt" class="w-full mt-2 py-2 rounded-lg border border-line text-ink-soft active:bg-sunk text-xs font-medium">中止本轮</button>
@@ -178,12 +178,12 @@
       <div id="questionText" class="text-sm mb-2 text-ink"></div>
       <div id="questionMultiHint" class="hidden text-[11px] text-ink-soft mb-2">可多选，选完点下方「确认选择」</div>
       <div id="questionOptions" class="space-y-2 mb-3"></div>
-      <button type="button" id="questionMultiSubmit" class="hidden w-full mb-3 py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep text-sm font-medium">确认选择</button>
+      <button type="button" id="questionMultiSubmit" class="hidden w-full mb-3 py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium">确认选择</button>
       <div id="questionOtherWrap" class="mb-3 space-y-2">
         <button type="button" id="questionOtherToggle" class="w-full py-2.5 rounded-lg bg-sunk active:bg-line text-ink text-sm text-left px-3">其他…</button>
         <div id="questionOtherPanel" class="hidden space-y-2">
           <input id="questionOtherInput" type="text" class="w-full rounded-lg border border-line bg-canvas px-3 py-2 text-sm text-ink" placeholder="输入你的答案" autocomplete="off">
-          <button type="button" id="questionOtherSubmit" class="w-full py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep text-sm font-medium">提交其他答案</button>
+          <button type="button" id="questionOtherSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 text-sm font-medium">提交其他答案</button>
         </div>
       </div>
       <button type="button" id="questionSkip" class="w-full py-2.5 rounded-lg border border-line text-ink-soft active:bg-sunk text-sm font-medium">跳过此问题</button>
@@ -467,7 +467,7 @@
       </div>
       <div class="text-xl font-semibold text-ink mb-2">设备未获授权</div>
       <p class="text-sm text-ink-soft mb-5 leading-relaxed">机主已拒绝此设备接入。若是误操作，可重新发起请求，由你已登录的可信设备或主机终端批准。</p>
-      <button id="deviceDeniedRetry" class="w-full py-2.5 rounded-lg bg-accent text-white active:bg-accent-deep font-medium mb-3">重新请求接入</button>
+      <button id="deviceDeniedRetry" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium mb-3">重新请求接入</button>
       <button id="deviceDeniedHelp" class="text-xs text-ink-faint underline">查看访问帮助</button>
     </div>
   </div>
