@@ -28,6 +28,12 @@ export function normalizeLoadedEnvironment(env, shellAnthropicKeys) {
 // app.js would be too late for CCM_DATA_DIR. Provider variables remain shell-only.
 export function loadRuntimeEnvironment(env = process.env, { envFile, quiet = false } = {}) {
   const shellAnthropicKeys = new Set(Object.keys(env).filter(key => key.startsWith('ANTHROPIC_')));
+  // OPS/SH-001：dotenv 默认不覆盖已存在的 key——含空串。LaunchAgent/systemd 若 export AUTH_TOKEN=
+  // 或 CCM_DATA_DIR=，会挡住 .env 填入，normalize 再删空串 → 进程当「未设置」跑（绑 127.0.0.1 /
+  // 落盘到仓库 data/）。空串 ≡ 未设置，加载前清掉，让 .env 能补全。
+  for (const key of Object.keys(env)) {
+    if (env[key] === '') delete env[key];
+  }
   dotenv.config({
     ...(envFile ? { path: envFile } : {}),
     processEnv: env,

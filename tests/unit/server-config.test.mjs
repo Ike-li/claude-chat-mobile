@@ -31,6 +31,26 @@ test('loadRuntimeEnvironment reads CCM_DATA_DIR before runtime modules are impor
   }
 });
 
+test('loadRuntimeEnvironment：shell 空串 AUTH_TOKEN/CCM_DATA_DIR 不挡 .env 填入（SH-001）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-env-empty-shell-'));
+  try {
+    const envFile = join(dir, '.env');
+    writeFileSync(envFile, [
+      'AUTH_TOKEN=from-dotenv-token',
+      'CCM_DATA_DIR=/external/from-dotenv',
+    ].join('\n'));
+    // 模拟 LaunchAgent/systemd export 了空串——dotenv 默认不覆盖已有 key
+    const env = { AUTH_TOKEN: '', CCM_DATA_DIR: '' };
+
+    loadRuntimeEnvironment(env, { envFile, quiet: true });
+
+    assert.equal(env.AUTH_TOKEN, 'from-dotenv-token');
+    assert.equal(env.CCM_DATA_DIR, '/external/from-dotenv');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('normalizeLoadedEnvironment removes empty values and .env-only ANTHROPIC keys', () => {
   const env = {
     KEEP: 'yes',
