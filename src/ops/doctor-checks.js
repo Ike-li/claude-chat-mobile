@@ -76,6 +76,31 @@ export function classifyAuthToken(token) {
   return { status: 'ok', isSet: true, length: t.length };
 }
 
+// AUTH-003：localhost / 反代到 127.0.0.1 的隧道会跳过设备指纹审批（trustBasis=bypass），
+// 公网只剩 AUTH_TOKEN 一层。CF Access 已开则 JWT 是公网门，不警告。
+// 返回 { status, detail, safe } 供 runDoctor 挂 checks。
+export function classifyDeviceGateTopology({ authTokenSet, cfEnabled } = {}) {
+  if (cfEnabled) {
+    return {
+      status: 'ok',
+      detail: '公网经 CF Access 2FA；本机/Access 跳过设备门为设计路径',
+      safe: { risk: 'none', cfEnabled: true },
+    };
+  }
+  if (authTokenSet) {
+    return {
+      status: 'warn',
+      detail: 'AUTH_TOKEN 已设但未开 CF Access：cloudflared/SSH/nginx 反代到 127.0.0.1 时会跳过设备指纹审批，公网只靠 token。建议开 CF Access，或勿把未批设备暴露到公网',
+      safe: { risk: 'tunnel_skips_device_gate', cfEnabled: false, authTokenSet: true },
+    };
+  }
+  return {
+    status: 'ok',
+    detail: '未设 AUTH_TOKEN（仅绑 127.0.0.1），无公网设备门问题',
+    safe: { risk: 'none', authTokenSet: false },
+  };
+}
+
 // 公网暴露就绪度聚合。blocked = 有 fail，或（危险白名单 + 无 CF Access 兜底 + token 弱）；
 // caution = 有危险白名单 / 任一 warn；ready = 关键项皆净。
 export function computeReadiness(checks = []) {

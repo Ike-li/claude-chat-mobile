@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness } from '../../src/ops/doctor-checks.js';
+import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology } from '../../src/ops/doctor-checks.js';
 
 test('statuslineConfigDiagnostic treats web statusline as self-contained', () => {
   const result = statuslineConfigDiagnostic();
@@ -148,3 +148,20 @@ test.describe('computeReadiness：公网暴露就绪度', () => {
   });
 });
 
+test.describe('classifyDeviceGateTopology（AUTH-003）', () => {
+  test('CF Access 已开 → ok（设备门 bypass 为设计路径）', () => {
+    const r = classifyDeviceGateTopology({ authTokenSet: true, cfEnabled: true });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.safe.risk, 'none');
+  });
+  test('有 AUTH_TOKEN 无 CF Access → warn tunnel_skips_device_gate', () => {
+    const r = classifyDeviceGateTopology({ authTokenSet: true, cfEnabled: false });
+    assert.equal(r.status, 'warn');
+    assert.equal(r.safe.risk, 'tunnel_skips_device_gate');
+    assert.match(r.detail, /设备指纹|CF Access/);
+  });
+  test('无 AUTH_TOKEN → ok（仅本机）', () => {
+    const r = classifyDeviceGateTopology({ authTokenSet: false, cfEnabled: false });
+    assert.equal(r.status, 'ok');
+  });
+});

@@ -4,7 +4,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { isOwnerOnly } from '../files/file-security.js';
-import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, computeReadiness } from './doctor-checks.js';
+import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, computeReadiness, classifyDeviceGateTopology } from './doctor-checks.js';
 
 // 敏感配置文件清单（相对项目根）——CLI doctor（scripts/doctor.js）与本运行时 doctor 共用同一事实源，
 // 防两处各自维护再漏同步。列表新增项须同时被 CLI 检查/自动修复与 UI 体检覆盖。
@@ -82,6 +82,10 @@ export function runDoctor(ctx = {}) {
   });
 
   checks.push({ id: 'CF_ACCESS', status: ctx.cfEnabled ? 'ok' : 'warn', detail: ctx.cfEnabled ? '已启用公网 2FA' : '未启用（回退纯 AUTH_TOKEN）', safe: { enabled: !!ctx.cfEnabled, audSet: !!ctx.cfAudSet } }); // AUD 仅布尔
+
+  // AUTH-003：token 公网 + 无 CF Access 时，localhost 反代/隧道会跳过设备指纹门——显式 warn，不改运行时默认。
+  const gate = classifyDeviceGateTopology({ authTokenSet: tok.isSet && tok.status !== 'fail', cfEnabled: !!ctx.cfEnabled });
+  checks.push({ id: 'DEVICE_GATE', status: gate.status, detail: gate.detail, safe: gate.safe });
 
   checks.push({ id: 'PUSH_VAPID', status: ctx.pushEnabled ? 'ok' : 'warn', detail: ctx.pushEnabled ? '已配置' : '未配置（推送优雅缺席）', safe: { enabled: !!ctx.pushEnabled } }); // 密钥仅布尔
 
