@@ -100,14 +100,21 @@ test.describe('onAuthResult 纯函数状态机', () => {
 test.describe('rlSourceKey 来源识别', () => {
   const norm = (x) => (x || '').replace(/^::ffff:/, ''); // 同 server.js clientIp
 
-  test('优先取 CF-Connecting-IP（边缘可信注入）', () => {
+  test('公网路径 trustCfConnectingIp=true → 优先 CF-Connecting-IP', () => {
     const hs = { address: '127.0.0.1', headers: { 'cf-connecting-ip': '203.0.113.7' } };
-    assert.equal(rlSourceKey(hs, norm), 'cfip:203.0.113.7');
+    assert.equal(rlSourceKey(hs, norm, { trustCfConnectingIp: true }), 'cfip:203.0.113.7');
+  });
+
+  // AUTH-002：默认/LAN 不采信 CF-IP（客户端可伪造拆分限速桶）
+  test('LAN 默认 trustCfConnectingIp=false → 忽略 CF-IP 用连接 IP（AUTH-002）', () => {
+    const hs = { address: '10.0.0.9', headers: { 'cf-connecting-ip': '203.0.113.7' } };
+    assert.equal(rlSourceKey(hs, norm), 'ip:10.0.0.9');
+    assert.equal(rlSourceKey(hs, norm, { trustCfConnectingIp: false }), 'ip:10.0.0.9');
   });
 
   test('无 CF-IP → 回退连接 IP（去 ::ffff: 前缀）', () => {
     const hs = { address: '::ffff:192.168.1.5', headers: {} };
-    assert.equal(rlSourceKey(hs, norm), 'ip:192.168.1.5');
+    assert.equal(rlSourceKey(hs, norm, { trustCfConnectingIp: true }), 'ip:192.168.1.5');
   });
 
   test('绝不信客户端伪造的 X-Forwarded-For', () => {
@@ -117,6 +124,6 @@ test.describe('rlSourceKey 来源识别', () => {
 
   test('CF-IP 为空串 → 回退连接 IP', () => {
     const hs = { address: '10.0.0.3', headers: { 'cf-connecting-ip': '  ' } };
-    assert.equal(rlSourceKey(hs, norm), 'ip:10.0.0.3');
+    assert.equal(rlSourceKey(hs, norm, { trustCfConnectingIp: true }), 'ip:10.0.0.3');
   });
 });

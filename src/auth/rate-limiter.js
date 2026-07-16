@@ -56,8 +56,13 @@ export function onAuthResult(s, ok, now, cfg = DEFAULT_RATE_LIMIT_CONFIG) {
 // 优先级：边缘层可信注入的真实来源(CF-Connecting-IP) → 连接 IP。
 // 信任边界：只信自己边缘层（Cloudflare）注入的头，【绝不信客户端自称的 X-Forwarded-For】——
 // 后者可伪造，用它做 key 等于给攻击者一把绕过 per-source 限速的钥匙。normalizeIp 由调用方注入（去 ::ffff: 前缀）。
-export function rlSourceKey(handshake, normalizeIp = (x) => x) {
-  const cfip = handshake?.headers?.['cf-connecting-ip'];
-  if (cfip && typeof cfip === 'string' && cfip.trim()) return `cfip:${cfip.trim()}`;
+//
+// AUTH-002：CF-Connecting-IP 仅在 trustCfConnectingIp=true 时采信（调用方应只在 isPublicHost 公网
+// Access 路径下置 true）。LAN/直连上该头可被客户端伪造，采信会把限速状态拆成无限 source key 绕过。
+export function rlSourceKey(handshake, normalizeIp = (x) => x, { trustCfConnectingIp = false } = {}) {
+  if (trustCfConnectingIp) {
+    const cfip = handshake?.headers?.['cf-connecting-ip'];
+    if (cfip && typeof cfip === 'string' && cfip.trim()) return `cfip:${cfip.trim()}`;
+  }
   return `ip:${normalizeIp(handshake?.address || '')}`;
 }
