@@ -55,8 +55,12 @@ let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
 let deniedDeviceRetryPending = false;
 let mockSessionLogsByInstance = new Map();
+// 服务状态面板：确定性 startedAt（mock 进程启动时刻）；deliveryFailure 由 test:service-delivery-failure 注入
+const MOCK_SERVICE_STARTED_AT = Date.now();
+let mockDeliveryFailure = null;
 
 function resetMockState() {
+  mockDeliveryFailure = null;
   viewingInstanceId = 'inst_1';
   permissionMode = 'default';
   effortLevel = null;
@@ -742,6 +746,23 @@ io.on('connection', socket => {
     if (typeof ack === 'function') ack({ ok: true, t: Date.now() });
   });
 
+  // 服务状态面板（与真 server service:status 契约对齐）：确定性 payload 供 E2E 断言；
+  // deliveryFailure/pushFailure 由 test:service-delivery-failure 场景注入
+  socket.on('service:status', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({
+      ok: true,
+      startedAt: MOCK_SERVICE_STARTED_AT,
+      versions: { server: '1.2.1-mock', cli: '0.1.0-mock', sdk: '0.3.201-mock' },
+      metrics: {
+        activeSessions: 2, events: 1841, catchUpHits: 12, catchUpReloads: 1,
+        rateLimitLockouts: 0, pushSuccess: 57, pushFailure: mockDeliveryFailure ? 3 : 0, ntfyFailure: 0,
+      },
+      deliveryFailure: mockDeliveryFailure,
+      timestamp: Date.now(),
+    });
+  });
+
   // Handle sync:since for switching workspace viewing instances and historical message hydration
   socket.on('sync:since', (payload, callback) => {
     const { instanceId, sessionId } = payload || {};
@@ -839,6 +860,7 @@ io.on('connection', socket => {
   const scenarioRegistry = createVisualMockScenarioRegistry([
     ...createStatusScenarios(() => ({
       io, socket, activeEpoch, viewingInstanceId, activeModel, permissionMode, mockInstances, delay, addMockSessionLog,
+      setMockDeliveryFailure: value => { mockDeliveryFailure = value; },
     })),
     ...createDemoScenarios(() => ({
       io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, emitInstancesSnapshot, streamZh,

@@ -228,5 +228,17 @@ export function createStatusScenarios(getContext) {
         });
       }),
     },
+    {
+      // 服务状态面板告警注入：后续 service:status ack 将带 deliveryFailure（+pushFailure=3），
+      // 供 E2E 验证面板告警段渲染（P0-22b）。18 分钟前 → 文案「推送最近失败于 18 分钟前」。
+      command: 'test:service-delivery-failure',
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockDeliveryFailure }) => {
+        setMockDeliveryFailure({ channel: 'push', at: Date.now() - 18 * 60_000, count: 3 });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_svc_fail_1', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      }),
+    },
   ];
 }

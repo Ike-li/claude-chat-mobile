@@ -25,8 +25,10 @@ export function createRttMonitor(context, {
     : () => Date.now();
   let timer = null;
   let inFlight = false;
+  let lastMs = null; // 最近一次成功测得的 RTT 数值；断线/清空归 null（服务状态面板经 last() 复用，不另发 ping）
 
   function clear() {
+    lastMs = null;
     const rtt = context.dom.connRtt;
     if (!rtt) return;
     rtt.textContent = '';
@@ -42,6 +44,7 @@ export function createRttMonitor(context, {
       clear();
       return '';
     }
+    lastMs = milliseconds;
     const toneClass = TONE_CLASSES[rttToneClass(milliseconds)] || 'text-ink-soft';
     // 人话前缀「延迟」：主界面可读；formatRttMs 仍只产出数值（42ms / 1.2s），便于单测与复用。
     rtt.textContent = `延迟 ${label}`;
@@ -79,5 +82,5 @@ export function createRttMonitor(context, {
     }, intervalMs);
   }
 
-  return { clear, measure, render, start, stop };
+  return { clear, measure, render, start, stop, last: () => lastMs };
 }

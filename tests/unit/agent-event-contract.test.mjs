@@ -167,10 +167,11 @@ test('inbound contract flags client emits and mock handlers outside the contract
 });
 
 test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量抽查）', () => {
-  // 28 = user:*(9) + task:stop + session:*(8) + sync/logs/mirror/conn/dev(5) + tool:*(2) + browse:*(2) + doctor:run
+  // 29 = user:*(9) + task:stop + session:*(8) + sync/logs/mirror/conn/dev(5) + tool:*(2) + browse:*(2) + doctor:run + service:status
   // （曾含 usage:get；抽屉额度窗已砍，额度只走 statusline）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 28);
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 29);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:deletePermanent'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('doctor:run'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('service:status'));
   assert.equal(INBOUND_SOCKET_EVENTS.includes('usage:get'), false);
 });

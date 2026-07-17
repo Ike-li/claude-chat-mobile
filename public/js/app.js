@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, serviceMetricsRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -893,6 +893,92 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const loading = el(`<div class="text-ink-faint"></div>`); loading.textContent = '🔍 体检中…'; box.appendChild(loading);
     socket.emit('doctor:run', {}, rep => renderDoctor(rep, box));
   };
+
+  // ---- 服务状态面板（NFR-15 可见性）----
+  // 设置「访问与设备」组入口 → 底部 sheet 三段渲染：基础(时长/版本/连接) + 运行指标(8 项) + 异常告警。
+  // 数据走鉴权 service:status ack（doctor:run 同构）；打开即拉、开着时 5s 重拉（后台 tab 跳过）、关闭即停。
+  const serviceStatusModal = $('serviceStatusModal'), serviceStatusBody = $('serviceStatusBody');
+  let serviceStatusTimer = null;
+  function renderServiceStatus(res) {
+    if (!serviceStatusBody) return;
+    const now = Date.now();
+    const section = (title, titleSuffix) => {
+      const s = el(`<div><div class="text-xs font-semibold text-ink-soft mb-2"></div><div class="rounded-xl border border-line bg-surface"></div></div>`);
+      s.firstChild.textContent = title;
+      if (titleSuffix) {
+        const soft = el(`<span class="font-normal text-ink-faint"></span>`);
+        soft.textContent = ` ${titleSuffix}`;
+        s.firstChild.appendChild(soft);
+      }
+      return s;
+    };
+    const addRow = (card, label, value, valueClass) => {
+      const row = el(`<div class="flex items-center justify-between gap-3 px-3 py-2.5 text-xs border-t border-line-soft first:border-t-0"><span class="text-ink-soft font-medium shrink-0"></span><span class="text-ink text-right tabular-nums"></span></div>`);
+      row.firstChild.textContent = label;
+      row.lastChild.textContent = value;
+      if (valueClass) row.lastChild.classList.add(valueClass);
+      card.appendChild(row);
+    };
+    serviceStatusBody.replaceChildren();
+    // 段1 基础：连接状态取自本 socket 与 RTT 监视器（不另发 ping）
+    const basic = section('基础');
+    for (const r of serviceStatusBasicRows({ startedAt: res.startedAt, versions: res.versions, connected: socket.connected, rttMs: rttMonitor.last(), now })) {
+      addRow(basic.lastChild, r.label, r.value);
+    }
+    serviceStatusBody.appendChild(basic);
+    // 段2 运行指标：alert 行（失败/锁定类 >0）标红
+    const metricsSection = section('运行指标', '（本次启动以来累计）');
+    for (const r of serviceMetricsRows(res.metrics)) {
+      addRow(metricsSection.lastChild, r.label, r.value.toLocaleString('zh-CN'), r.alert ? 'text-danger' : null);
+    }
+    serviceStatusBody.appendChild(metricsSection);
+    // 段3 异常告警：与抽屉「服务」小节同一纯函数（文案一致）；重启提示直读广播维护的标记，不二次写基线
+    const noticesSection = section('异常告警');
+    const notices = formatServiceNotices({ service: { deliveryFailure: res.deliveryFailure }, restartChanged: _serviceRestartNoticeActive, now });
+    if (!notices.length) {
+      const okRow = el(`<div class="px-3 py-2.5 text-xs text-success"></div>`);
+      okRow.textContent = '✓ 无异常';
+      noticesSection.lastChild.appendChild(okRow);
+    } else {
+      for (const line of notices) {
+        const row = el(`<div class="px-3 py-2.5 text-xs border-t border-line-soft first:border-t-0"></div>`);
+        row.classList.add(line.startsWith('🔔') ? 'text-danger' : 'text-warning');
+        row.textContent = line;
+        noticesSection.lastChild.appendChild(row);
+      }
+    }
+    serviceStatusBody.appendChild(noticesSection);
+    const hint = el(`<div class="text-[10px] text-ink-faint"></div>`);
+    hint.textContent = '数据每 5 秒自动刷新 · 指标随服务重启清零';
+    serviceStatusBody.appendChild(hint);
+  }
+  function loadServiceStatus() {
+    if (!serviceStatusModal || !serviceStatusModal.classList.contains('sheet-open')) return;
+    socket.timeout(3000).emit('service:status', {}, (err, res) => {
+      if (err || !res || res.ok !== true) return; // 断线/未审批设备无 ack：面板留旧值，不挂 spinner
+      // WS-019 同款迟到 ack 守卫：回包时面板已关则丢弃，防对着 hidden DOM 白渲染
+      if (!serviceStatusModal.classList.contains('sheet-open')) return;
+      renderServiceStatus(res);
+    });
+  }
+  function closeServiceStatus() {
+    if (serviceStatusTimer) { clearInterval(serviceStatusTimer); serviceStatusTimer = null; }
+    if (serviceStatusModal) closeSheet(serviceStatusModal);
+  }
+  if ($('btnServiceStatus')) $('btnServiceStatus').onclick = () => {
+    if (!serviceStatusModal) return;
+    settings.close(); // 从设置面板切入：先收设置 sheet 再弹状态 sheet
+    openSheet(serviceStatusModal);
+    loadServiceStatus();
+    if (serviceStatusTimer) clearInterval(serviceStatusTimer);
+    serviceStatusTimer = setInterval(() => {
+      if (document.visibilityState === 'hidden') return;
+      loadServiceStatus();
+    }, 5000);
+  };
+  if ($('serviceStatusClose')) $('serviceStatusClose').onclick = closeServiceStatus;
+  if (serviceStatusModal) serviceStatusModal.onclick = e => { if (e.target === serviceStatusModal) closeServiceStatus(); };
+
   if (authHelpLink) authHelpLink.onclick = showAccessHelp;
 
   // 短 session_id 胶囊点按 → 复制完整 id（便于粘到终端 claude --resume <id> 或跨设备定位）
