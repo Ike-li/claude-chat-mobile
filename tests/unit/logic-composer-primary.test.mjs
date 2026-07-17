@@ -9,6 +9,8 @@ import {
   shouldBusyAfterOfflineBatch,
   safeJsonPreview,
   shouldSeedBusyFromInstanceState,
+  shouldReseedBusyAfterReload,
+  shouldBindBusyFromBroadcast,
 } from '../../public/js/logic.js';
 
 test('resolveComposerPrimaryMode: 空闲空输入 → 禁用发送', () => {
@@ -279,4 +281,50 @@ test('shouldSeedBusyFromInstanceState: busy/permission only', () => {
   assert.equal(shouldSeedBusyFromInstanceState('idle'), false);
   assert.equal(shouldSeedBusyFromInstanceState('done'), false);
   assert.equal(shouldSeedBusyFromInstanceState(undefined), false);
+});
+
+test('shouldReseedBusyAfterReload: 广播优先，回退入场快照', () => {
+  // 主场景：广播里该实例 state='busy'
+  assert.equal(shouldReseedBusyAfterReload({
+    instances: [{ instanceId: 'a', state: 'busy' }],
+    instanceId: 'a',
+    entryState: 'idle',
+  }), true);
+  // 过期入场快照：广播 state='idle' 但 entryState='busy' → 信最新广播，防 stale-busy 卡死
+  assert.equal(shouldReseedBusyAfterReload({
+    instances: [{ instanceId: 'a', state: 'idle' }],
+    instanceId: 'a',
+    entryState: 'busy',
+  }), false);
+  // 广播缺该实例、entryState='busy' → 回退入场快照
+  assert.equal(shouldReseedBusyAfterReload({
+    instances: [{ instanceId: 'b', state: 'busy' }],
+    instanceId: 'a',
+    entryState: 'busy',
+  }), true);
+  // 广播缺该实例、entryState undefined
+  assert.equal(shouldReseedBusyAfterReload({
+    instances: [],
+    instanceId: 'a',
+    entryState: undefined,
+  }), false);
+  // 广播 state='permission'
+  assert.equal(shouldReseedBusyAfterReload({
+    instances: [{ instanceId: 'a', state: 'permission' }],
+    instanceId: 'a',
+  }), true);
+});
+
+test('shouldBindBusyFromBroadcast: 单向绑定，bgActive 门控', () => {
+  // {state:'busy', bgActive:false} → true
+  assert.equal(shouldBindBusyFromBroadcast({ state: 'busy', bgActive: false }), true);
+  // {state:'busy'}（bgActive undefined，旧服务端/mock 兼容）→ true
+  assert.equal(shouldBindBusyFromBroadcast({ state: 'busy' }), true);
+  // {state:'busy', bgActive:true} → false（纯后台任务期不驱动运行条，防单向无释放卡死）
+  assert.equal(shouldBindBusyFromBroadcast({ state: 'busy', bgActive: true }), false);
+  // {state:'permission', bgActive:false} → true
+  assert.equal(shouldBindBusyFromBroadcast({ state: 'permission', bgActive: false }), true);
+  // {state:'idle'} / {} → false
+  assert.equal(shouldBindBusyFromBroadcast({ state: 'idle' }), false);
+  assert.equal(shouldBindBusyFromBroadcast({}), false);
 });

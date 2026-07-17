@@ -37,7 +37,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Deployment | 2 |
 | Documentation | 15 |
 | Documentation asset | 10 |
-| E2E test | 28 |
+| E2E test | 29 |
 | Frontend asset | 3 |
 | Frontend source | 21 |
 | Generated asset | 7 |
@@ -55,7 +55,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 82 |
 | Vendored asset | 13 |
 
-Total classified files: **292**.
+Total classified files: **293**.
 
 ## Complete file inventory
 
@@ -215,6 +215,7 @@ Total classified files: **292**.
 | `tests/e2e/mock/transport.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/ask-user-question.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/attachments-ui.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/busy-session-switch-back.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/cold-start-hydration.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/console-log-modal.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/cross-tab-pending-cleanup.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |

@@ -47,6 +47,7 @@ let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pe
 let syncPendingSnapshotInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
+let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
 let foregroundSyncReplayMode = false;
 let foregroundFoundMissingMode = false;
 let foregroundFoundMissingHistoryMode = false;
@@ -71,6 +72,7 @@ function resetMockState() {
   syncPendingSnapshotInstanceId = null;
   lateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
+  busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
   foregroundFoundMissingHistoryMode = false;
@@ -755,6 +757,17 @@ io.on('connection', socket => {
       }
     };
     if (instanceId === 'inst_2') {
+      if (busySilentSwitchMode) {
+        // 静默窗口：只回放 user_message（replayed=1 → !hasCache 触发 reload 分支），
+        // 故意不发 text_delta/tool_use/result——这些会各自 setBusy，掩盖「reload 后运行条被抹掉」的缺陷。
+        // 运行态真相靠 instances 广播的 inst_2.state='busy'（bindView 入场 seed + reload 后 reseed）。
+        socket.emit('agent:event', {
+          seq: 1, epoch: 'mock-epoch-another', sessionId: 'mock-session-another', instanceId: 'inst_2', ts: Date.now(),
+          type: 'user_message', payload: { text: 'Run the long P0 suite in background' }
+        });
+        ack(1);
+        return;
+      }
       // Replay some historical message events for inst_2
       socket.emit('agent:event', {
         seq: 1, epoch: 'mock-epoch-another', sessionId: 'mock-session-another', instanceId: 'inst_2', ts: Date.now(),
@@ -1798,6 +1811,44 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_tab_model_effort_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      // 回归：切走再切回一个「后端在跑但正处静默窗口（无 delta/result）」的会话，运行条应重新出现。
+      // inst_2 置 state='busy'，其 sync:since 走 busySilentSwitchMode 只回放 user_message（触发 reload、不发 result）。
+      command: 'test:busy-silent-switch',
+      run: async () => {
+        console.log('[mock] test:busy-silent-switch — inst_2 busy 静默窗口，验证切回后运行条重种');
+        busySilentSwitchMode = true;
+        const busyInst = {
+          instanceId: 'inst_2',
+          cwd: '/Users/you/code/another-react-project',
+          sessionId: 'mock-session-another',
+          title: 'Another App Concurrency',
+          state: 'busy',
+          bgActive: false,
+          permissionMode: 'default',
+          effort: null,
+          model: 'claude-3-5-haiku'
+        };
+        const existing = mockInstances.find(i => i.instanceId === 'inst_2');
+        if (existing) Object.assign(existing, busyInst); else mockInstances.push(busyInst);
+
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+        // 当前视图（inst_1）收尾 → waitForIdle 可用；inst_2 的 busy 只体现在 instances.state。
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_busy_silent_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
         });
       },
     },

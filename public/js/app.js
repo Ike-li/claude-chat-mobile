@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -683,6 +683,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     clearView(displayedSessionId, null);
     lastSeq = keepSeq;
     curEpoch = keepEpoch;
+    // clearView 内部只补乐观 busy（shouldRestoreOptimisticBusy），不含 state seed——
+    // 前台回切/重连 gap→reload 静默窗口无 delta 自愈，运行条被本次清屏永久抹掉 → 按 server 权威 state 重种。
+    if (shouldReseedBusyAfterReload({ instances: instancesList, instanceId: displayedInstanceId })) setBusy(true);
     showLoadingCard();
     loadHistory(displayedSessionId); // cwd 默认 currentCwd
   }
@@ -3219,6 +3222,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // compose 页默认档摘要跟 pill 同源；L3 到齐后就地刷新，避免仍显 L4 硬默认。
       if (_composeReady) refreshComposeDefaultsSummary();
     }
+    // 视图未变的广播：server 权威 busy 单向对齐（reload 误擦兜底 + 多设备同视图静默窗口）。
+    // 只置 true；释放交给 live result（见 shouldBindBusyFromBroadcast 注释）。
+    if (newViewing && newViewing === displayedInstanceId
+        && shouldBindBusyFromBroadcast({ state: viewedInst?.state, bgActive: viewedInst?.bgActive })) {
+      setBusy(true);
+    }
     updateSessionsDot();
     updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进 _structChanged 分支）
     // P3 性能优化：仅结构变化时全量重建面板（+ N×session:list 往返）；纯状态变化（busy/done/error）走
@@ -3405,6 +3414,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         clearView(sid, null);
         lastSeq = keepSeq;
         curEpoch = keepEpoch;
+        // clearView 内部只补乐观 busy（shouldRestoreOptimisticBusy），不含 state seed——
+        // 静默窗口（长 Bash 执行中）无 delta 自愈，运行条被本次清屏永久抹掉 → 按 server 权威 state 重种。
+        if (shouldReseedBusyAfterReload({ instances: instancesList, instanceId: id, entryState: entry?.state })) setBusy(true);
         showLoadingCard();
         loadHistory(sid, entry.cwd);
       } else {

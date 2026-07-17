@@ -2297,6 +2297,9 @@ registerSocketConnection(io, socket => {
     if (a.instanceId === viewingInstanceId) {
       lastStatusLine = null;
       scheduleStatusRefresh();
+      // 切回/重连：task_progress 是 transient（不进环形缓冲、上面 events 回放拿不到）→ 有活后台任务时
+      // 重发全量快照，前端 onProgress 按 tasks 数组幂等 reconcile 重建任务明细横幅（否则要等下一次心跳）。
+      if (a.hasBgTasks?.()) a.emitBgTasksSnapshot();
     }
   });
 

@@ -855,6 +855,21 @@ export function shouldSeedBusyFromInstanceState(state) {
   return state === 'busy' || state === 'permission';
 }
 
+// reload 清屏后运行态重种：state 优先取 ack 时刻 instances 广播的最新值（切回瞬间 turn
+// 恰结束时入场 entry.state 是过期快照，直接用会 stale-busy）；广播查不到才回退入场快照。
+export function shouldReseedBusyAfterReload({ instances = [], instanceId, entryState } = {}) {
+  const live = instances.find(x => x?.instanceId === instanceId);
+  return shouldSeedBusyFromInstanceState(live ? live.state : entryState);
+}
+
+// instances 广播（视图未变）→ 运行条单向对齐：只置 true、绝不置 false。
+// bgActive===true 排除：纯后台任务期无 result 事件可释放，单向置 true 会卡死运行条
+//（该期 UI 归 task_progress 横幅）；undefined（旧服务端/视觉 mock）视为无后台任务。
+export function shouldBindBusyFromBroadcast({ state, bgActive } = {}) {
+  if (bgActive === true) return false;
+  return shouldSeedBusyFromInstanceState(state);
+}
+
 // bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档在 SDK 层无运行时切换能力，后端 dispose
 // 旧实例 + resume 同会话开新实例（instanceId 变了、sessionId 不变），前端只看 viewingInstanceId 变化就判定
 // 为「切到另一个会话」而清空草稿——这是误伤：用户视角仍在同一个聊天里，只是底层实例被静默替换。
