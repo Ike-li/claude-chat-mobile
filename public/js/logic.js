@@ -485,12 +485,31 @@ export function shouldShowStartScreen({ viewingInstanceId, sessionId } = {}) {
   return !viewingInstanceId || !sessionId;
 }
 
+// 空表面形态：＋ / 🏠 分流。
+//   none    = 已在真实会话（有 session 流），不渲染空态页
+//   home    = 枢纽（最近工作区/会话），输入条隐藏
+//   compose = 干净新会话页（工作区确认 + 默认档 + 示例 prompt），输入条显示
+// 判定：先 shouldShowStartScreen；再看 composeReady（点 ＋ / session:new）。
+export function resolveEmptySurface({ viewingInstanceId, sessionId, composeReady = false } = {}) {
+  if (!shouldShowStartScreen({ viewingInstanceId, sessionId })) return 'none';
+  return composeReady ? 'compose' : 'home';
+}
+
+// 新会话页「本工作区将开 CLI 用的默认档」摘要。读前端已同步的 pill 文案（L0>L3>L4）。
+// 空/空白项跳过；全空回落固定文案（scout/defaults 未到时仍有可读提示）。
+export function formatComposeDefaultsSummary({ modelLabel, modeLabel, effortLabel } = {}) {
+  const parts = [modelLabel, modeLabel, effortLabel]
+    .map(s => (typeof s === 'string' ? s.trim() : ''))
+    .filter(Boolean);
+  return parts.length ? parts.join(' · ') : '使用工作区默认配置';
+}
+
 // 底部输入条（composer）可见性：空首页枢纽只做「选工作区/会话」，不提供直接发消息入口——
 // 避免未选项目就打字、懒开新会话的歧义路径。显示条件：
 //   · 已进入可渲染会话（有 sessionId）
 //   · 或用户刚点 ＋ / session:new 进入 compose 就绪空窗（composeReady）
 //   · 或新会话首发在途（pendingFirstSend：懒开瞬间 sid 仍空，不能闪藏输入区）
-// 与 shouldShowStartScreen 正交：start screen 仍可在 composeReady 时显示（dashboard + 输入条）。
+// 与 shouldShowStartScreen 正交：composeReady 时 resolveEmptySurface='compose'（干净新会话页 + 输入条）。
 export function shouldShowComposer({ viewingInstanceId, sessionId, composeReady = false, pendingFirstSend = false } = {}) {
   if (sessionId) return true;
   if (pendingFirstSend) return true;

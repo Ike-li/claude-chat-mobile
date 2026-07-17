@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -239,6 +239,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       });
     }
+    // compose 页默认档摘要与底栏同源；模型 chip 变了就地刷
+    if (_composeReady) refreshComposeDefaultsSummary();
   }
 
   function rebuildCustomModelGrid(models) {
@@ -1144,6 +1146,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         syncModelUI('');
       }
       if (mirrorReadonlySid) renderCliPanelState(); // 晚到 models 只能更新候选，不能覆盖 CLI 未知/观察态
+      // scout 模型到齐后，compose 页默认档摘要与底栏 pill 同步刷新
+      if (_composeReady) refreshComposeDefaultsSummary();
     },
     text_delta(p) {
       clearApiRetryBanner(); // 重试已过，流恢复——撤掉「重试中 n/m」横幅
@@ -2610,6 +2614,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       });
     }
+    if (_composeReady) refreshComposeDefaultsSummary();
   }
   permModeSelect.onchange = () => {
     // 单驾驶员：终端驾驶中（只读锁）设置一并冻结——权限档实际只作用于 web 自己的实例、碰不到终端进程，
@@ -2663,6 +2668,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       });
     }
+    if (_composeReady) refreshComposeDefaultsSummary();
   }
   // 把当前模型（init.model 规范名）桥接到 models 候选项（取其 supportedEffortLevels）。
   // 先精确 value 命中；否则 alias↔规范名桥接：剥 [Nm] 上下文后缀，候选别名作为 family 子串落在规范名里、
@@ -2732,6 +2738,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (pillEffortText) {
       pillEffortText.textContent = ultracodeArmed ? 'ultracode' : ui.label;
     }
+    if (_composeReady) refreshComposeDefaultsSummary();
   }
   effortSelect.onchange = () => {
     // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例、
@@ -2997,7 +3004,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       // bindView 内 clearView 前的 displayedSessionId 作 prevSessionId，供同会话静默换实例补 busy
       const prevSidForBusy = displayedSessionId;
-      bindView(target, newViewing); // 空首页→showDashboard 重渲（工作区名 + greeting + 模型一致刷新）
+      bindView(target, newViewing); // 空表面→home dashboard / compose 新会话页（工作区名 + 默认档一致刷新）
       // bindView 内已按 shouldRestoreOptimisticBusy 补 busy；此处再补一次防 bindView early-return 路径漏补
       // （首发无 sessionId / 同会话 externalDirty·effort 置换）。session:switch 打开已有会话不补。
       if (shouldRestoreOptimisticBusy({
@@ -3030,6 +3037,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 用户在空窗手改档（L0）时 server 会把 pending 编进 default*，这里幂等对齐权威源即可。
       setPermMode(p.defaultPermissionMode || 'default', true);
       setEffortMode(p.defaultEffort ?? null, true);
+      // compose 页默认档摘要跟 pill 同源；L3 到齐后就地刷新，避免仍显 L4 硬默认。
+      if (_composeReady) refreshComposeDefaultsSummary();
     }
     updateSessionsDot();
     updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进 _structChanged 分支）
@@ -3150,8 +3159,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return;
     }
 
-    if (shouldShowStartScreen({ viewingInstanceId: id, sessionId: sid })) {
+    // ＋ → compose 干净新会话页；🏠 / 冷启动 → home 最近枢纽；有 session → none
+    const emptySurface = resolveEmptySurface({
+      viewingInstanceId: id,
+      sessionId: sid,
+      composeReady: _composeReady,
+    });
+    if (emptySurface === 'home') {
       showDashboard();
+      return;
+    }
+    if (emptySurface === 'compose') {
+      showComposeSurface();
       return;
     }
 
@@ -3657,9 +3676,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // （session:new/switch、setWorkdir/setViewing）时按本区主动推 models 事件（无缓存→空），统一走下方
   // models(p) 处理器「空则清、非空则填」，单一权威路径不再分叉。
 
-  // 回空首页枢纽（最近工作区/会话）。已在空首页则只重渲列表；否则 session:home。
-  // 与 ＋ 分工：二者都到空首页且 compose=FRESH；＋ 额外重置 pending 权限/思考档并 scout 模型，🏠 保留面板档、专为「去选最近」。
-  // 🏠 同时收起 compose 就绪态：枢纽只选会话，不保留「点 ＋ 后的输入条」。
+  // 回空首页枢纽（最近工作区/会话）。已在空表面则只重渲 home；否则 session:home。
+  // 与 ＋ 分工：🏠 = home 枢纽（输入条隐藏、保留面板档）；＋ = compose 干净新会话页（输入条开、重置 pending + scout）。
   if (btnHome) btnHome.onclick = () => {
     haptic('tap');
     closeLeftSidebar();
@@ -3677,12 +3695,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     setTimeout(() => { if (!acked) addBar('回首页无响应，请刷新后重试', 'text-danger'); }, 4000);
   };
 
-  // 台阶3：新建会话 = 在当前 cwd 开新 tab（旧 tab 后台继续、**不中断**），清视图等首条消息懒开。
-  // 不再 confirm「将被中断」——台阶3 新建不中断任何在途任务（视图由 instances 广播驱动清空）。
-  // 显式 ＋ = compose 就绪：空首页枢纽隐藏的输入条在此打开，允许当前工作区懒开首发。
+  // 台阶3：新建会话 = 在当前 cwd 开 compose 页（旧 tab 后台继续、**不中断**），等首条消息懒开。
+  // 显式 ＋ = compose 就绪：干净新会话页 + 输入条，底栏/页内摘要显示本工作区默认模型·权限·思考。
+  // 已在空表面时 viewing 仍 null，instances 广播不会进 bindView，须本地 ensure 切到 compose。
   btnNew.onclick = () => {
     haptic('tap');
     enterComposeReady();
+    ensureEmptySurface();
     socket.emit('session:new', { cwd: currentCwd }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
   };
   function toggleSessions() {
@@ -3756,6 +3775,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         closeLeftSidebar();
         haptic('tap');
         enterComposeReady();
+        ensureEmptySurface(); // cwd 可能变了；空表面内 viewing 仍 null 须本地切到 compose
         socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
       };
       dirRow.appendChild(newSessionBtn);
@@ -4057,10 +4077,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 清视图层（DOM + 去重基线 + 弹窗队列），不加载历史——加载由调用方决定（台阶3：bindView 切 tab 时
   // 先 sync 活缓冲、无缓冲再 history）。
 
-  // UX-008：新会话空白态极简引导（非空首页 dashboard；leaveStartScreen/appendMessage 会清掉）
+  // UX-008 回落：非 empty-start 的空消息区（极少路径）。＋ 主路径走 showComposeSurface，不靠这里。
   function maybeShowEmptySessionGuide() {
     if (!messagesEl || messagesEl.childNodes.length) return;
     if (messagesEl.classList.contains('empty-start')) return;
+    if (_composeReady) return; // compose 页由 showComposeSurface 渲染
     const guide = el(`
       <div class="empty-session-guide flex flex-col items-center justify-center py-10 px-4 text-center select-none" data-testid="empty-session-guide">
         <div class="text-base font-medium text-ink mb-1">新会话已就绪</div>
@@ -4159,6 +4180,96 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     _composeReady = false;
     syncComposerVisibility();
+  }
+
+  // 读底栏 pill 已同步的文案（instances defaults / models scout）→ 写进 compose 页摘要。
+  // 与 setPermMode / setEffortMode / syncModelUI 同源，避免页内与底栏各猜一套。
+  function currentComposeDefaultsLabels() {
+    const cliDefault = (modelsList || []).find(m => (typeof m === 'string' ? m : m?.value) === 'default');
+    const cliDefaultLabel = cliDefault && typeof cliDefault === 'object'
+      ? (cliDefault.displayName || 'Default (recommended)')
+      : null;
+    const modelLabel = currentModel
+      ? (currentModel + (currentGatewaySuffix || ''))
+      : (cliDefaultLabel
+        || (cwdDefaultModel ? cwdDefaultModel.replace(/\[[^\]]+\]$/, '') : '')
+        || (pillModelText?.textContent || '').trim());
+    return {
+      modelLabel,
+      modeLabel: (pillPermText?.textContent || '').trim(),
+      effortLabel: (pillEffortText?.textContent || '').trim(),
+    };
+  }
+  function refreshComposeDefaultsSummary() {
+    const elSum = messagesEl?.querySelector?.('[data-compose-defaults]');
+    if (!elSum) return;
+    elSum.textContent = formatComposeDefaultsSummary(currentComposeDefaultsLabels());
+  }
+
+  // 空表面本地分流：viewing 已 null 时 instances 广播不进 bindView，＋/侧栏 ＋ 须直接重渲。
+  function ensureEmptySurface() {
+    const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId
+      || currentSessionId
+      || displayedSessionId
+      || null;
+    const surface = resolveEmptySurface({
+      viewingInstanceId,
+      sessionId: sid,
+      composeReady: _composeReady,
+    });
+    if (surface === 'compose') showComposeSurface();
+    else if (surface === 'home') showDashboard();
+  }
+
+  // 干净新会话页（＋ / session:new）：当前工作区 + 将开 CLI 的默认档 + 示例 prompt；无最近列表。
+  function showComposeSurface() {
+    messagesEl.innerHTML = '';
+    messagesEl.classList.add('empty-start');
+    if (topTitleText) topTitleText.textContent = '新聊天';
+    if (topProjectText) topProjectText.textContent = baseName(currentCwd);
+    syncComposerVisibility();
+
+    const defaultsText = formatComposeDefaultsSummary(currentComposeDefaultsLabels());
+    const container = el(`
+      <div class="compose-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="compose-surface">
+        <div class="text-center mb-5 w-full">
+          <h1 class="text-xl md:text-2xl font-bold tracking-tight text-ink mb-2 leading-tight">新会话已就绪</h1>
+          <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1">将在此工作区开新 CLI 会话</div>
+          <button type="button" class="compose-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="点击打开会话列表（按工作区浏览）">
+            <svg class="w-4 h-4 shrink-0 text-accent opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5h4.25l2 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
+            </svg>
+            <span class="max-w-[12rem] truncate">${esc(baseName(currentCwd))}</span>
+            <span class="text-xs text-ink-faint">⌄</span>
+          </button>
+          <div class="mt-2 text-xs text-ink-soft" data-compose-defaults>${esc(defaultsText)}</div>
+        </div>
+        <div class="flex flex-col gap-2 w-full max-w-sm">
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="总结当前仓库结构并指出入口文件">💡 总结当前仓库结构</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="帮我写一个最小改动的修复计划">🛠 写一个最小修复计划</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="运行相关测试并解读失败">🧪 运行测试并解读</button>
+        </div>
+      </div>`);
+
+    container.querySelector('.compose-project-pill').onclick = (e) => {
+      e.stopPropagation();
+      haptic('tap');
+      if (btnSessions) btnSessions.onclick();
+    };
+    container.querySelectorAll('.esg-prompt').forEach(btn => {
+      btn.onclick = () => {
+        haptic('tap');
+        if (inputEl) {
+          inputEl.value = btn.getAttribute('data-p') || '';
+          inputEl.focus();
+          inputEl.dispatchEvent(new Event('input'));
+        }
+      };
+    });
+
+    messagesEl.appendChild(container);
+    // defaults 可能仍在 L4→L3 途中；微任务再刷一次，兜住刚 setPerm/setEffort 的 pill 文案
+    queueMicrotask(() => refreshComposeDefaultsSummary());
   }
 
   function showDashboard() {
