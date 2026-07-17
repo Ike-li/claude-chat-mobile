@@ -732,13 +732,13 @@ body.ccm-sheet-open #messages {
   inset: -6px;
 }
 
-/* UI-010：运行态专用活动色（中性蓝调），与品牌 accent 分离 */
+/* UI-010 回退：运行态恢复品牌 accent（用户偏好熟悉的红橙；与 CTA 同色是已知权衡） */
 :root {
-  --activity: #3D6F9E;
+  --activity: var(--accent);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --activity: #6BA3D4;
+    --activity: var(--accent);
   }
 }
 #activityBanner,
