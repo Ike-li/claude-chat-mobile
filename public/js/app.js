@@ -1566,6 +1566,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       flushTurnFileChangesCard(); // 出错前若已改盘，仍给汇总
       failPendingToolCards(p.message);
       alertCue('error');
+      hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       addBar(`⚠️ ${p.message}`, 'text-danger');
       _pendingSendBusy = false;
       setBusy(false);

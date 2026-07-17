@@ -21,16 +21,33 @@ export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive) {
   return { id: null, stale: true };
 }
 
-// BE-016：当前查看的实例被移除（退出 / dispose）后，重选查看目标并【原子同步】viewingCwd。
+// BE-016 + resumeFailed UX：当前查看的实例被移除（退出 / dispose）后，重选查看目标并【原子同步】viewingCwd。
 // 旧实现只更新 viewingInstanceId、不动 viewingCwd：落到剩余实例时 viewingCwdOf 会用实例 cwd 兜住（无感），
 // 但两实例先后关闭最终落到空视图(null)时，裸 viewingCwd 停在更早的旧值 → 新会话选目录 / statusline git 段 /
-// pendingMode 键跳回旧工作区。此处落到剩余实例取其 cwd、落到 null 保留刚移除实例的 cwd（它是最后实际查看的）。
+// pendingMode 键跳回旧工作区。
+//
+// 策略（2026-07-17）：
+//   1. 一律优先同 removedCwd 的剩余实例（同工作区其它 tab）
+//   2. 无同 cwd 时：
+//      · allowCrossWorkspace=false（默认；进程退出 / resumeFailed）→ null + 保留 removedCwd
+//        —— 禁止把视图静默弹到其它工作区（用户切会话 resume 失败时曾闪回 mimo）
+//      · allowCrossWorkspace=true（用户主动 session:close）→ 插入序第一个剩余，cwd 随该实例
+//   3. 无任何剩余 → null + (removedCwd ?? fallbackCwd)
 //
 // remainingIds：移除后仍存活的实例 id（按插入序，对齐 agents.keys()）；removedCwd：刚移除实例的 cwd；
 // cwdOf(id)：id→cwd；fallbackCwd：removedCwd 缺失时的兜底（当前 viewingCwd）。
-export function reselectViewingTarget(remainingIds, removedCwd, cwdOf, fallbackCwd) {
-  const next = remainingIds.length ? remainingIds[0] : null;
-  return { viewingInstanceId: next, viewingCwd: next ? cwdOf(next) : (removedCwd ?? fallbackCwd) };
+export function reselectViewingTarget(remainingIds, removedCwd, cwdOf, fallbackCwd, opts = {}) {
+  const ids = Array.isArray(remainingIds) ? remainingIds : [];
+  const allowCross = opts.allowCrossWorkspace === true;
+  if (removedCwd != null) {
+    const sameCwd = ids.find(id => cwdOf(id) === removedCwd);
+    if (sameCwd) return { viewingInstanceId: sameCwd, viewingCwd: removedCwd };
+  }
+  if (allowCross && ids.length) {
+    const next = ids[0];
+    return { viewingInstanceId: next, viewingCwd: cwdOf(next) };
+  }
+  return { viewingInstanceId: null, viewingCwd: removedCwd ?? fallbackCwd };
 }
 
 // 置换（externalDirty / setEffort）await 结束后是否应接管 viewing。
@@ -60,4 +77,57 @@ export function canDeleteSessionGuard({ liveInstance = false, resumeInFlight = f
     return { ok: false, reason: 'opening', error: '会话正在打开中，请稍后再删除' };
   }
   return { ok: true, reason: null, error: null };
+}
+
+// SRV-003：externalDirty 需 dispose+resume 置换，但 isBusy 时禁止置换（会 kill 在途 turn / bg / 审批）。
+// 负 ACK 须同时说明「为何要置换」+「为何现在不能」——旧文案「会话正在处理」在 UI 已 result「完成」时极误导
+// （例如仅 bgTasks 残留、或 turn 刚结束与发送竞态）。detail 供 interact 日志排障。
+// 优先级：turn > permission/question > bgTasks > busy 兜底。
+export function externalDirtyBusyNack({
+  pendingTurns = 0,
+  bgTaskCount = 0,
+  pendingPermissionCount = 0,
+  pendingQuestionCount = 0,
+} = {}) {
+  const turns = Number(pendingTurns) > 0 ? Number(pendingTurns) : 0;
+  const bgs = Number(bgTaskCount) > 0 ? Number(bgTaskCount) : 0;
+  const perms = Number(pendingPermissionCount) > 0 ? Number(pendingPermissionCount) : 0;
+  const qs = Number(pendingQuestionCount) > 0 ? Number(pendingQuestionCount) : 0;
+  const bits = [];
+  if (turns) bits.push(`pendingTurns=${turns}`);
+  if (bgs) bits.push(`bgTasks=${bgs}`);
+  if (perms) bits.push(`permissions=${perms}`);
+  if (qs) bits.push(`questions=${qs}`);
+  const detail = bits.length ? bits.join(' ') : 'busy=true';
+
+  if (turns > 0) {
+    return {
+      error: '需先吸收终端写入，但上一轮仍在处理，请完成后重试',
+      reason: 'turn',
+      detail,
+      retryable: true,
+    };
+  }
+  if (perms > 0 || qs > 0) {
+    return {
+      error: '需先吸收终端写入，但仍有待处理的审批或提问',
+      reason: 'permission',
+      detail,
+      retryable: true,
+    };
+  }
+  if (bgs > 0) {
+    return {
+      error: '需先吸收终端写入，但后台任务仍在运行，请完成后重试',
+      reason: 'bg_tasks',
+      detail,
+      retryable: true,
+    };
+  }
+  return {
+    error: '需先吸收终端写入，但会话仍忙，请稍后重试',
+    reason: 'busy',
+    detail,
+    retryable: true,
+  };
 }

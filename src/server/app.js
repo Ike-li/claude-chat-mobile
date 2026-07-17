@@ -48,7 +48,9 @@ import {
   shouldClaimViewingAfterSwap,
   shouldClaimViewingAfterLazyOpen,
   canDeleteSessionGuard,
+  externalDirtyBusyNack,
 } from './instance-routing.js';
+import { prepareSessionForWebResume } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from '../sessions/workdirs.js';
 import {
@@ -221,8 +223,11 @@ const viewingCwdOf = () => agents.get(viewingInstanceId)?.cwd ?? viewingCwd;
 // BE-016：当前查看实例被移除（退出/dispose）后原子重选 viewing——落到剩余实例取其 cwd，落到空视图(null)保留
 // 刚移除实例的 cwd（它是最后实际查看的），避免裸 viewingCwd 停在更早旧值致新会话选目录/statusline 跳回旧工作区。
 // 调用点须在 agents.delete(退出实例) 之后调用（此时 [...agents.keys()] 已是剩余实例）。
-const reselectViewingAfter = (removedCwd) => {
-  const r = reselectViewingTarget([...agents.keys()], removedCwd, id => agents.get(id).cwd, viewingCwd);
+// opts.allowCrossWorkspace：仅用户主动关 tab 为 true；进程退出 / resumeFailed 默认 false，禁止闪回其它工作区。
+const reselectViewingAfter = (removedCwd, opts = {}) => {
+  const r = reselectViewingTarget(
+    [...agents.keys()], removedCwd, id => agents.get(id).cwd, viewingCwd, opts,
+  );
   viewingInstanceId = r.viewingInstanceId;
   viewingCwd = r.viewingCwd;
   // 被移除的实例若正被镜像锁，立即清全局锁；落到另一实例后由 catchUpTick 重判
@@ -1380,7 +1385,8 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 会话已获得 ID: sessionId=${sid}, 标题="${firstMessage || '未命名'}", model=${model || '默认'}`);
     },
     // 台阶3：实例意外退出/挂死自杀 → 从 Map 删该 instanceId（不影响其他实例）；resume 失败清该 cwd 指针
-    // 打破"重试→resume 同一失效 id→循环"死锁；若退的是当前查看 tab，视图回落到任一存活实例。
+    // 打破"重试→resume 同一失效 id→循环"死锁；若退的是当前查看 tab，重选：优先同 cwd，默认不跨工作区
+    // （resumeFailed 尤其禁止闪回 mimo 等其它 live tab；用户主动关 tab 走 disposeInstance allowCross）。
     onExit: () => {
       if (instance.sessionId) {
         interactionLog.addSessionLog(instance.sessionId, 'sys_info', `[SYS] 实例已退出 (onExit): instanceId=${id}, resumeFailed=${instance.resumeFailed}`);
@@ -1393,7 +1399,8 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         doneInstances.delete(id);
         errorInstances.delete(id);
         abortedInstances.delete(id);
-        if (viewingInstanceId === id) reselectViewingAfter(cwd); // BE-016：同步 viewingCwd（cwd=退出实例 cwd），落空视图保留最后查看 cwd
+        // 默认 allowCrossWorkspace=false：同 cwd tab 或空表面保留本工作区，不弹到异 cwd live 实例
+        if (viewingInstanceId === id) reselectViewingAfter(cwd);
       }
       broadcastInstances(); // 实例退出 → 刷 tab 栏（角标回落 / 该 tab 消失）
     }
@@ -1406,7 +1413,23 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
 // resume 开实例的异步封装：新开前先读 transcript 末条 permission-mode 恢复权限档（纯 CLI 会话 sessions.json
 // 无档时的恢复来源，见 readLastPermissionMode）。openInstance 本身保持同步（避免重入竞态）；读盘只在此异步前置。
 // 仅 resume（resumeId 非空）才读——FRESH 无档可恢复、也不该读；已 live 实例由调用方 instanceForSession 去重、不覆盖运行时档。
+//
+// CLI bg 独占锁：若 session 被 `claude agents` 登记为 background，SDK resume 会立刻失败（「running as a
+// background agent」）。web 续接前自动 SIGTERM 该类后台进程（不动 interactive），保证「CLI 会话 web 能开」。
 async function openResumeInstance(cwd, resumeId, extra = {}) {
+  if (resumeId) {
+    try {
+      const prep = await prepareSessionForWebResume(resumeId, {
+        claudeBin,
+        cwd,
+        timeoutMs: 4000,
+        waitMs: 350,
+      });
+      if (prep.log) interactionLog.addSessionLog(resumeId, 'sys_info', prep.log);
+    } catch (err) {
+      console.warn('[cli-bg-lock] prepareSessionForWebResume failed:', err?.message || err);
+    }
+  }
   const transcriptMode = resumeId ? await readLastPermissionMode(resumeId, cwd) : null;
   return openInstance({ cwd, resumeId, transcriptMode, ...extra });
 }
@@ -1496,7 +1519,7 @@ function openScoutInstance(cwd) {
 }
 
 // 显式关 tab：dispose 后同步删 Map（dispose 置 disposed=true，consume 的 onExit 不再触发——
-// 与台阶2 disposeAgent 同款，不依赖 onExit）。viewingInstanceId 命中则回落到任一存活实例。
+// 与台阶2 disposeAgent 同款，不依赖 onExit）。viewing 命中则优先同 cwd，否则允许跨工作区（P0-11g）。
 // opts.reselect（默认 true）：用户关 tab / 真移除 → reselect + clearMirror + broadcast。
   // opts.reselect=false：internal 置换（externalDirty / setEffort）——只 remove，viewing 保持死指针，
   // 不 clearMirror、不 broadcast 中间态；调用方 await 新实例后按 shouldClaimViewingAfterSwap 原子接管。
@@ -1508,7 +1531,8 @@ function openScoutInstance(cwd) {
     }
     instanceManager.remove(instanceId);
     if (reselect) {
-      if (viewingInstanceId === instanceId) reselectViewingAfter(a.cwd); // BE-016：同步 viewingCwd，落空视图保留最后查看 cwd
+      // 用户主动关 tab：允许跨工作区落到剩余 live（与 onExit/resumeFailed 默认禁止跨区不同）
+      if (viewingInstanceId === instanceId) reselectViewingAfter(a.cwd, { allowCrossWorkspace: true });
       broadcastInstances();
     }
     // silent：viewingInstanceId 可仍等于已删 id（死指针），供 shouldClaimViewingAfterSwap 识别「用户未切走」
@@ -1696,8 +1720,22 @@ registerSocketConnection(io, socket => {
     // 此守卫（切入流程本身 1-2s，实际难触发）；接受，不为此每次发送读盘比对。
     if (a.externalDirty && a.sessionId) {
       // SRV-003：忙碌中禁止置换（会 kill 在途 canUseTool / turn）；可重试 ack，客户端保留 pending。
+      // 文案区分「吸收终端写入」与具体忙因（turn / 审批 / 后台任务），避免 UI 已「完成」仍见笼统「会话正在处理」。
       if (a.isBusy()) {
-        if (typeof ack === 'function') ack({ ok: false, error: '会话正在处理，请稍后重试', retryable: true });
+        const nack = externalDirtyBusyNack({
+          pendingTurns: a.pendingTurns,
+          bgTaskCount: a.bgTasks?.size ?? 0,
+          pendingPermissionCount: a.pendingPermissions?.size ?? 0,
+          pendingQuestionCount: a.pendingQuestions?.size ?? 0,
+        });
+        interactionLog.addSessionLog(
+          a.sessionId,
+          'sys_info',
+          `[SYS] externalDirty 置换被拒（${nack.reason}）：${nack.detail}`,
+        );
+        if (typeof ack === 'function') {
+          ack({ ok: false, error: nack.error, retryable: nack.retryable, reason: nack.reason });
+        }
         return;
       }
       const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId);

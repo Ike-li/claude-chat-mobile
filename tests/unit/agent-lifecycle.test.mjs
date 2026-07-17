@@ -202,6 +202,54 @@ test.describe('consume() 退出路径', () => {
     s.dispose();
   });
 
+  test('resume 失败且 stream throw → 文案附 caught 原因，仍 resumeFailed + recoverable:false', async () => {
+    let exited = false;
+    const { s, events } = makeSession({ resumeId: 'bad-id', onExit() { exited = true; } });
+    s.sawInit = false;
+
+    const fakeQ = {
+      [Symbol.asyncIterator]() {
+        return {
+          next() { return Promise.reject(new Error('process exited with code 1')); }
+        };
+      }
+    };
+    await s.consume(fakeQ);
+
+    assert.equal(s.resumeFailed, true);
+    assert.equal(exited, true);
+    const err = events.find(e => e.type === 'error' && !e.payload.recoverable);
+    assert.ok(err);
+    assert.ok(err.payload.message.includes('无法恢复会话'));
+    assert.ok(err.payload.message.includes('process exited with code 1'));
+    s.dispose();
+  });
+
+  test('resume 撞 background agent 锁 → 文案含后台 agent，不含「历史被清理」', async () => {
+    let exited = false;
+    const { s, events } = makeSession({ resumeId: 'bg-locked', onExit() { exited = true; } });
+    s.sawInit = false;
+    const fakeQ = {
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            return Promise.reject(new Error(
+              'Session bg-locked is currently running as a background agent (bg). Use claude agents…',
+            ));
+          },
+        };
+      },
+    };
+    await s.consume(fakeQ);
+    assert.equal(s.resumeFailed, true);
+    assert.equal(exited, true);
+    const err = events.find(e => e.type === 'error' && !e.payload.recoverable);
+    assert.ok(err);
+    assert.match(err.payload.message, /后台 agent/);
+    assert.doesNotMatch(err.payload.message, /历史可能已被清理/);
+    s.dispose();
+  });
+
   test('异常结束 → caught 路径 emit error(recoverable:true) + onExit', async () => {
     let exited = false;
     const { s, events } = makeSession({ onExit() { exited = true; } });

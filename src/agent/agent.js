@@ -6,6 +6,7 @@ import * as interactionLog from './interaction-log.js';
 import { sanitize } from '../shared/sanitizer.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
+import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 
 const BUFFER_CAP = 2000;      // 环形缓冲条数（抬高：长 ultracode/多工具轮少 gap 闪屏；transient 仍不进 buffer）
 const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要默认截断；permission_request 永不截断（4a）
@@ -221,11 +222,21 @@ export class AgentSession {
     }
     if (!this.disposed && !this.terminating) {
       if (!this.sawInit && this.resumeId) {
-        // F4：resume 失败（CLI 端 session 已失效）——无论优雅结束还是抛错，均明确提示并设
-        // resumeFailed 让 server 清 currentSessionId，打破"重试→resume 同一失效 id→循环"死锁
+        // F4：resume 失败（CLI 未吐 init 即退出）——无论优雅结束还是抛错，均明确提示并设
+        // resumeFailed 让 server 清 currentSessionId，打破"重试→resume 同一失效 id→循环"死锁。
+        // sessionFileExists 已通过时「历史被清理」常误导：优先透传 CLI 真实原因（含 background agent 独占）。
         this.resumeFailed = true;
+        const reason = caught?.message ? sanitize(String(caught.message)).slice(0, 200) : '';
+        let message;
+        if (/background agent/i.test(reason)) {
+          message = formatSessionLockError({ kind: 'background', rawMessage: reason });
+        } else if (reason) {
+          message = `无法恢复会话：${reason.slice(0, 120)}。请新建会话或从列表选择其他会话`;
+        } else {
+          message = '无法恢复会话（CLI 未完成初始化），请新建会话或从列表选择其他会话';
+        }
         this.emit('error', {
-          message: '无法恢复会话（历史可能已被清理），请新建会话或从列表选择其他会话',
+          message,
           recoverable: false
         });
       } else if (caught) {
