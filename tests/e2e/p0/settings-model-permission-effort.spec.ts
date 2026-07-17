@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀', async ({ page }) => {
@@ -23,7 +23,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
     await expect(page.locator('#effortSelect')).toHaveValue('high');
-    await page.locator('#settingsClose').click();
+    await closeSettings(page);
     await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
 
     await expectNoBrowserErrors(page);
@@ -40,7 +40,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
     await expect(page.locator('#effortSelect')).toHaveValue('high');
-    await page.locator('#settingsClose').click();
+    await closeSettings(page);
 
     await sendChatMessage(page, 'test:settings-echo');
     await waitForIdle(page);
@@ -65,7 +65,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#customEffortGroup')).toHaveClass(/hidden/);
     await expect(page.locator('#effortRow')).toHaveClass(/hidden/);
     await expect(page.locator('#effortSelect')).toHaveValue('');
-    await page.locator('#settingsClose').click();
+    await closeSettings(page);
 
     await sendChatMessage(page, 'test:settings-echo');
     await waitForIdle(page);
@@ -95,7 +95,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#messages')).not.toContainText('权限档 →');
     await expect(page.locator('#messages')).not.toContainText('思考强度 →');
     await expect(page.locator('#messages')).not.toContainText('模型 →');
-    await page.locator('#settingsClose').click();
+    await closeSettings(page);
 
     await sendChatMessage(page, 'test:fresh-settings-echo');
     await expect(page.locator('#messages')).not.toHaveClass(/empty-start/);
@@ -152,7 +152,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('.perm-tile[data-mode="plan"]').click();
     await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
     await page.locator('.effort-tile[data-level="ultracode"]').click();
-    await page.locator('#settingsClose').click();
+    await closeSettings(page);
 
     await sendChatMessage(page, 'test:mirror-observed-settings');
     await expect(page.locator('#mirrorBanner')).toBeVisible();
@@ -189,6 +189,43 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     });
     expect(layout.truncated).toBe(true);
     expect(layout.chipHeight).toBe(layout.permissionHeight);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-09i 超长模型名不挤掉设置齿轮与发送钮', async ({ page }) => {
+    // 窄屏 + 长模型名：齿轮/发送钉在右侧动作区，不被 chip 滚动层盖住
+    await page.setViewportSize({ width: 320, height: 700 });
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:longmodel');
+    await waitForIdle(page);
+
+    await expect(page.locator('#btnSettings')).toBeVisible();
+    await expect(page.locator('#btnSend')).toBeVisible();
+    const geometry = await page.evaluate(() => {
+      const settings = document.querySelector('#btnSettings')?.getBoundingClientRect();
+      const send = document.querySelector('#btnSend')?.getBoundingClientRect();
+      const model = document.querySelector('#pillModelText') as HTMLElement | null;
+      if (!settings || !send) return null;
+      return {
+        settingsLeft: settings.left,
+        settingsRight: settings.right,
+        sendLeft: send.left,
+        sendRight: send.right,
+        viewportW: window.innerWidth,
+        modelTruncated: Boolean(model && model.scrollWidth > model.clientWidth + 0.5),
+        // 齿轮完全在视口内，且不与发送钮重叠（允许 1px 亚像素）
+        settingsInView: settings.left >= 0 && settings.right <= window.innerWidth + 1,
+        noOverlap: settings.right <= send.left + 1,
+      };
+    });
+    expect(geometry).not.toBeNull();
+    expect(geometry!.settingsInView).toBe(true);
+    expect(geometry!.noOverlap).toBe(true);
+    expect(geometry!.modelTruncated).toBe(true);
+    // 仍可点开设置
+    await page.locator('#btnSettings').click();
+    await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
 
     await expectNoBrowserErrors(page);
   });

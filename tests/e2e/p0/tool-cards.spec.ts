@@ -115,4 +115,48 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-05f Workflow 子流建卡 + 后台任务全量列表（含单任务详情行）', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:workflow-subagents');
+    // mock 推 2 条 task_progress → 标题「2 个运行中」+ 两行明细
+    await expect(page.locator('#taskProgressBanner')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('#taskProgressText')).toContainText('2 个运行中');
+    await expect(page.locator('#taskProgressText')).not.toContainText('后台任务 后台任务');
+    await expect(page.locator('[data-testid="bg-task-list"]')).toBeVisible();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toHaveCount(2);
+    await expect(page.locator('[data-testid="bg-task-row"]').first()).toContainText('Explore');
+
+    await waitForIdle(page);
+
+    // Workflow 不预建空卡；有 parentToolUseId 子流时才出现折叠卡
+    const card = page.locator('[data-testid="subagent-card"]');
+    await expect(card).toHaveCount(1);
+    await expect(card.locator('.sa-title')).toContainText('workflow');
+    await expect(card.locator('[data-testid="subagent-text"]')).toContainText('Five search agents');
+    await expect(card.locator('details.toolcard')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-05g turn-end 文件变更汇总卡：已编辑 N 个文件 + 行统计', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:file-changes');
+    await waitForIdle(page);
+
+    const card = page.locator('[data-testid="turn-file-changes"]');
+    await expect(card).toBeVisible();
+    await expect(card).toContainText('已编辑 2 个文件');
+    await expect(card).toContainText('+5');
+    await expect(card).toContainText('-1');
+    await expect(page.locator('[data-testid="turn-file-row"]')).toHaveCount(2);
+    await expect(card).toContainText('CLAUDE.md');
+    await expect(card).toContainText('README.md');
+    // Read 不进汇总
+    await expect(card).not.toContainText('package.json');
+
+    await expectNoBrowserErrors(page);
+  });
 });

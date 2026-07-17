@@ -277,8 +277,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
-    await expect(page.locator('#messages')).toContainText('当前工作区');
+    // 侧栏 ＋ → compose 干净新会话页（不再是带「当前工作区」的首页枢纽）
+    await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
     await expect(page.locator('#messages')).toContainText('another-react-project');
+    await expect(page.locator('#messages')).not.toContainText('当前工作区');
 
     await expectNoBrowserErrors(page);
   });
@@ -356,8 +358,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
-    await expect(page.locator('#messages')).toContainText('当前工作区');
-    await expect(page.locator('#messages')).toContainText('claude-chat-mobile');
+    // 关掉当前会话 → 回首页枢纽（无「当前工作区」pill）
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
+    await expect(page.locator('#messages')).not.toContainText('当前工作区');
     await expect(page.locator('#messages')).not.toContainText('test:settings-echo');
     await expect(page.locator('#messages')).not.toContainText('设置回显：model=');
     await expect(page.locator('#btnSend')).toBeDisabled();

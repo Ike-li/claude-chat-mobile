@@ -46,6 +46,14 @@ export async function ensureComposerReady(page: Page) {
   await expect(page.locator('#btnSend')).toBeVisible();
 }
 
+/** 关闭配置面板。勿点 #settingsScrim 中心——面板盖住中部会拦截点击；Escape / 遮罩顶部空白均可。 */
+export async function closeSettings(page: Page) {
+  const sheet = page.locator('#settingsSheet');
+  if (await sheet.evaluate(el => el.classList.contains('translate-y-full')).catch(() => true)) return;
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveClass(/translate-y-full/);
+}
+
 export async function sendChatMessage(page: Page, text: string) {
   await ensureComposerReady(page);
   const input = page.locator('#input');

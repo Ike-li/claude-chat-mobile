@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, mergeRecentSessionsAcrossWorkspaces } from '../../public/js/logic.js';
+import { modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, mergeRecentSessionsAcrossWorkspaces } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -121,6 +121,13 @@ test('shouldShowStartScreen: 仅无实例或无 session 的新会话显示启动
   assert.equal(shouldShowStartScreen({ viewingInstanceId: null, sessionId: null }), true);
   assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: null }), true);
   assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: 'abc' }), false);
+});
+
+// 顶部文件夹 pill：首页/compose 隐藏（页面内已有工作区入口）；进入真实会话后显示（点开文件浏览）。
+test('shouldShowTopContextPill: 与 start screen 互斥', () => {
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null }), false);
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: null }), false);
+  assert.equal(shouldShowTopContextPill({ viewingInstanceId: 'inst_1', sessionId: 'abc' }), true);
 });
 
 // 空首页枢纽不展示底部输入条：须先选会话或点 ＋ 进入 compose 就绪态。

@@ -1,4 +1,4 @@
-import { formatApiRetryBanner, taskStopUiState } from '../logic.js';
+import { formatApiRetryBanner, formatBgTaskRowLabel, taskStopUiState } from '../logic.js';
 
 export function createTaskStatusController(context, {
   addBar = () => {},
@@ -10,6 +10,7 @@ export function createTaskStatusController(context, {
   notify = () => {},
 } = {}) {
   const dom = context.dom;
+  /** @type {Map<string, { message: string, taskType: string|null, lastToolName?: string|null, description?: string|null, subagentType?: string|null }>} */
   const tasks = new Map();
   let activeTaskId = null;
   let apiRetryActive = false;
@@ -47,25 +48,33 @@ export function createTaskStatusController(context, {
   function taskList() {
     if (dom.taskProgressList) return dom.taskProgressList;
     if (!createElement || !dom.taskProgressBanner) return null;
-    dom.taskProgressList = createElement('<div id="taskProgressList" class="mt-1 space-y-0.5 hidden" data-testid="bg-task-list"></div>');
+    dom.taskProgressList = createElement('<div id="taskProgressList" class="mt-1.5 space-y-1 hidden" data-testid="bg-task-list"></div>');
     dom.taskProgressBanner.appendChild(dom.taskProgressList);
     return dom.taskProgressList;
   }
 
   function syncStopButton() {
     if (!dom.btnTaskStop) return;
+    // 多任务时每行自带「停」；主按钮只在单任务时显示（停当前 active）
+    const multi = tasks.size > 1;
     const ui = taskStopUiState({
       taskId: activeTaskId,
       bannerVisible: dom.taskProgressBanner && !dom.taskProgressBanner.classList.contains('hidden'),
     });
-    dom.btnTaskStop.classList.toggle('hidden', !ui.canStop);
+    const show = ui.canStop && !multi;
+    dom.btnTaskStop.classList.toggle('hidden', !show);
     dom.btnTaskStop.disabled = !ui.canStop;
   }
 
-  function showProgress(text) {
+  function showBanner() {
     if (!dom.taskProgressBanner || !dom.taskProgressText) return;
-    const prefix = tasks.size > 1 ? `(${tasks.size}) ` : '';
-    dom.taskProgressText.textContent = prefix + (text.length > 72 ? `${text.slice(0, 69)}...` : text);
+    const n = tasks.size;
+    // 固定标签「后台任务」在 HTML；这里只写数量/状态，明细全在列表行
+    if (n <= 0) {
+      dom.taskProgressText.textContent = '';
+      return;
+    }
+    dom.taskProgressText.textContent = n > 1 ? `${n} 个运行中` : '运行中';
     dom.taskProgressBanner.classList.remove('hidden');
     syncStopButton();
   }
@@ -92,31 +101,98 @@ export function createTaskStatusController(context, {
     const list = taskList();
     if (!list) return;
     list.replaceChildren();
-    if (tasks.size <= 1) {
+    if (tasks.size === 0) {
       list.classList.add('hidden');
       return;
     }
+    // 始终展开：单任务也给一行详情（标题只写「运行中」，避免复读）
     list.classList.remove('hidden');
     for (const [taskId, task] of tasks) {
-      const row = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
-      const label = createElement('<span class="truncate flex-1 min-w-0 text-ink-soft"></span>');
-      label.textContent = (task.message || taskId).slice(0, 60);
+      const row = createElement('<div class="rounded-lg border border-warning/25 bg-warning/5 px-2 py-1.5" data-testid="bg-task-row"></div>');
+      const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
+      const label = createElement('<span class="truncate flex-1 min-w-0 text-ink font-medium"></span>');
+      const title = formatBgTaskRowLabel({
+        taskType: task.taskType,
+        message: task.message,
+        taskId,
+      });
+      label.textContent = title.slice(0, 72);
+      label.title = task.message || taskId;
       const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
-      stop.onclick = () => stopTask(taskId, `已请求停止后台任务 ${taskId.slice(0, 8)}…`);
-      row.append(label, stop);
+      stop.onclick = () => stopTask(taskId, `已请求停止后台任务 ${String(taskId).slice(0, 8)}…`);
+      top.append(label, stop);
+
+      const metaParts = [];
+      if (task.lastToolName) metaParts.push(`工具 ${task.lastToolName}`);
+      if (task.subagentType && !(task.message || '').includes(String(task.subagentType))) {
+        metaParts.push(String(task.subagentType));
+      }
+      const shortId = typeof taskId === 'string' && !taskId.startsWith('__notask_')
+        ? taskId.slice(0, 10)
+        : '';
+      if (shortId) metaParts.push(`#${shortId}`);
+      if (metaParts.length) {
+        const meta = createElement('<div class="text-[10px] text-ink-faint mt-0.5 truncate"></div>');
+        meta.textContent = metaParts.join(' · ');
+        meta.title = metaParts.join(' · ');
+        row.append(top, meta);
+      } else {
+        row.append(top);
+      }
       list.appendChild(row);
     }
   }
 
-  function onProgress(event) {
-    if (event.instanceId && event.instanceId !== context.state.viewingInstanceId) return false;
-    const message = event.payload?.message || '';
-    const taskId = event.payload?.taskId;
+  function applyTasksFromPayload(payload) {
+    const list = Array.isArray(payload?.tasks) ? payload.tasks : null;
+    if (list) {
+      // 权威全量快照（task_progress / background_tasks_changed 经后端 emitBgTasksSnapshot）
+      tasks.clear();
+      for (const t of list) {
+        const id = t?.taskId ?? t?.task_id;
+        if (typeof id !== 'string' || !id) continue;
+        tasks.set(id, {
+          message: t.message || t.description || '',
+          taskType: t.taskType ?? t.task_type ?? null,
+          lastToolName: t.lastToolName ?? t.last_tool_name ?? null,
+          description: t.description ?? null,
+          subagentType: t.subagentType ?? t.subagent_type ?? null,
+        });
+      }
+      if (typeof payload.taskId === 'string' && payload.taskId && tasks.has(payload.taskId)) {
+        activeTaskId = payload.taskId;
+      } else {
+        activeTaskId = tasks.size ? [...tasks.keys()][0] : null;
+      }
+      return true;
+    }
+    // 兼容旧单条 upsert（无 tasks 数组）
+    const taskId = payload?.taskId;
+    const message = payload?.message || '';
     if (typeof taskId === 'string' && taskId) {
       activeTaskId = taskId;
-      tasks.set(taskId, { message, taskType: event.payload?.taskType || null });
+      const prev = tasks.get(taskId) || {};
+      tasks.set(taskId, {
+        message: message || prev.message || '',
+        taskType: payload?.taskType ?? prev.taskType ?? null,
+        lastToolName: payload?.lastToolName ?? prev.lastToolName ?? null,
+        description: payload?.description ?? prev.description ?? null,
+        subagentType: payload?.subagentType ?? prev.subagentType ?? null,
+      });
+      return true;
     }
-    if (message) showProgress(message);
+    return false;
+  }
+
+  function onProgress(event) {
+    if (event.instanceId && event.instanceId !== context.state.viewingInstanceId) return false;
+    const payload = event.payload || {};
+    applyTasksFromPayload(payload);
+    if (tasks.size === 0) {
+      hideProgress();
+      return true;
+    }
+    showBanner();
     renderTaskList();
     return true;
   }
@@ -134,11 +210,17 @@ export function createTaskStatusController(context, {
     const taskId = payload.taskId;
     if (typeof taskId === 'string' && taskId && tasks.has(taskId)) {
       tasks.delete(taskId);
-      if (activeTaskId === taskId) activeTaskId = tasks.size ? [...tasks.keys()].pop() : null;
+      if (activeTaskId === taskId) activeTaskId = tasks.size ? [...tasks.keys()][0] : null;
       if (tasks.size === 0) hideProgress();
       else {
-        const latest = tasks.get(activeTaskId);
-        if (latest?.message) showProgress(latest.message);
+        showBanner();
+        renderTaskList();
+      }
+    } else if (Array.isArray(payload.tasks)) {
+      applyTasksFromPayload(payload);
+      if (tasks.size === 0) hideProgress();
+      else {
+        showBanner();
         renderTaskList();
       }
     } else {

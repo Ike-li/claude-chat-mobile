@@ -220,21 +220,30 @@ test('settings controller synchronizes alert preferences when opening the sheet'
   };
   const sheetClasses = classes(['translate-y-full']);
   const scrimClasses = classes(['hidden']);
+  const bodyClasses = classes([]);
+  const htmlClasses = classes([]);
   const sound = {};
   const vibrate = {};
   const foreground = {};
+  const sheetBody = { scrollTop: 42 };
   const context = createAppContext({
     dom: {
-      settingsSheet: { classList: sheetClasses },
+      settingsSheet: { classList: sheetClasses, scrollTop: 0 },
+      settingsSheetBody: sheetBody,
       settingsScrim: { classList: scrimClasses },
       prefAlertSound: sound,
       prefAlertVibrate: vibrate,
       prefAlertForeground: foreground,
     },
   });
+  const fakeDoc = {
+    documentElement: { classList: htmlClasses },
+    body: { classList: bodyClasses },
+  };
   const controller = createSettingsController(context, {
     alerts: { preferences: () => ({ sound: false, vibrate: true, foregroundComplete: false }), ensureAudio: () => {} },
     autoBind: false,
+    doc: fakeDoc,
   });
 
   controller.open();
@@ -243,10 +252,16 @@ test('settings controller synchronizes alert preferences when opening the sheet'
   assert.equal(foreground.checked, false);
   assert.equal(sheetClasses.has('translate-y-full'), false);
   assert.equal(scrimClasses.has('hidden'), false);
+  // 打开锁背景滚动 + 内容区滚回顶部
+  assert.equal(bodyClasses.has('ccm-sheet-open'), true);
+  assert.equal(htmlClasses.has('ccm-sheet-open'), true);
+  assert.equal(sheetBody.scrollTop, 0);
 
   controller.close();
   assert.equal(sheetClasses.has('translate-y-full'), true);
   assert.equal(scrimClasses.has('hidden'), true);
+  assert.equal(bodyClasses.has('ccm-sheet-open'), false);
+  assert.equal(htmlClasses.has('ccm-sheet-open'), false);
 });
 
 test('notification controller only raises foreground notifications when explicitly forced', () => {

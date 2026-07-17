@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, taskStopUiState, acceptMirrorState, shouldResetMirrorOnViewChange } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, armedTakeoverStep, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, taskStopUiState, resolveSheetDragEnd, acceptMirrorState, shouldResetMirrorOnViewChange } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -588,6 +588,38 @@ test.describe('formatServiceNotices（服务状态可见性——组装会话面
 
 // 子 agent 可折叠卡片（切片 C）：事件是否归入子 agent 卡 + 标题文案。
 // app.js 用这两个纯函数决定「主流气泡 vs 嵌套卡」；DOM 接线归 visual E2E。
+test.describe('isSpawnToolName / formatBgTaskRowLabel（Workflow 子代理可见）', () => {
+  test('Agent/Task/Workflow 为 spawn 工具，其它否', () => {
+    assert.equal(isSpawnToolName('Agent'), true);
+    assert.equal(isSpawnToolName('Task'), true);
+    assert.equal(isSpawnToolName('Workflow'), true);
+    assert.equal(isSpawnToolName('Bash'), false);
+    assert.equal(isSpawnToolName('Read'), false);
+    assert.equal(isSpawnToolName(''), false);
+    assert.equal(isSpawnToolName(null), false);
+  });
+  test('formatBgTaskRowLabel：local_agent 加 🤖；洗 Search: search: 重复', () => {
+    assert.equal(
+      formatBgTaskRowLabel({ taskType: 'local_agent', message: 'Reading app.js', taskId: 't1' }),
+      '🤖 Reading app.js',
+    );
+    assert.equal(
+      formatBgTaskRowLabel({ taskType: 'local_agent', message: 'Explore：Searching…' }),
+      '🤖 Explore：Searching…',
+    );
+    assert.equal(
+      formatBgTaskRowLabel({ taskType: 'local_bash', message: 'npm test' }),
+      '🖥 npm test',
+    );
+    assert.equal(
+      formatBgTaskRowLabel({ message: 'Search: search:行业分布' }),
+      'Search：行业分布',
+    );
+    assert.equal(formatBgTaskRowLabel({ message: 'Synthesize: report' }), 'Synthesize: report');
+    assert.equal(formatBgTaskRowLabel({ taskId: 'abc123456789' }), 'abc123456789'.slice(0, 12));
+  });
+});
+
 test.describe('isSubagentPayload / formatSubagentCardTitle（子 agent 嵌套卡片）', () => {
   test('parentToolUseId 非空字符串 → true（后端分流字段）', () => {
     assert.equal(isSubagentPayload({ parentToolUseId: 'agent-1', text: 'hi' }), true);
@@ -770,6 +802,25 @@ test.describe('taskStopUiState（后台任务停止按钮）', () => {
     assert.equal(taskStopUiState({ taskId: '', bannerVisible: true }).canStop, false);
     assert.equal(taskStopUiState({ taskId: 't1', bannerVisible: false }).canStop, false);
     assert.equal(taskStopUiState({}).canStop, false);
+  });
+});
+
+test.describe('resolveSheetDragEnd（配置面板下拉关闭）', () => {
+  test('位移 ≥ dismissPx → close', () => {
+    assert.equal(resolveSheetDragEnd({ dy: 96 }), 'close');
+    assert.equal(resolveSheetDragEnd({ dy: 200 }), 'close');
+  });
+  test('位移不够且无速度 → snap', () => {
+    assert.equal(resolveSheetDragEnd({ dy: 40, velocityY: 0 }), 'snap');
+    assert.equal(resolveSheetDragEnd({ dy: 0 }), 'snap');
+  });
+  test('快速下甩且至少移动 minFlickDy → close', () => {
+    assert.equal(resolveSheetDragEnd({ dy: 30, velocityY: 0.8 }), 'close');
+    // 几乎没动就甩 → 仍 snap（防误触）
+    assert.equal(resolveSheetDragEnd({ dy: 10, velocityY: 1.2 }), 'snap');
+  });
+  test('上推（负 dy）一律 snap', () => {
+    assert.equal(resolveSheetDragEnd({ dy: -40, velocityY: -1 }), 'snap');
   });
 });
 

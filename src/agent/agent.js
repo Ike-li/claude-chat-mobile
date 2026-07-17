@@ -749,11 +749,19 @@ export class AgentSession {
   // 完成走 system task_notification / <task-notification> user 注入 → bgTaskDone。实测（生产日志）完成信号可靠带 task_id、
   // 且与心跳 id 一致（含 workflow 用自身启动 id 报进度与完成）→ 精确删是主力清除。TTL(sweepBgTasks) 为兜底：清「未及心跳
   // 就完成的快任务」（其完成 id 不在表→bgTaskDone 天然 no-op）与漏收的完成信号。size 变化才回调 onBgTaskChange（稳态同 id 心跳只刷时间戳、不广播——节流关键）。
-  bgTaskUpsert(taskId, taskType, message) {
+  // meta: { lastToolName?, description?, subagentType? } — 供前端任务明细行展示（不进角标判定）
+  bgTaskUpsert(taskId, taskType, message, meta = {}) {
     const key = taskId ?? `__notask_${taskType ?? 'x'}`; // taskId 缺失用稳定合成键，避免 null 键互相覆盖多任务
     const prev = this.bgTasks.get(key);
     const type = taskType ?? null;
-    this.bgTasks.set(key, { taskType: type, message: message ?? '', lastSeenAt: Date.now() });
+    this.bgTasks.set(key, {
+      taskType: type,
+      message: message ?? '',
+      lastSeenAt: Date.now(),
+      lastToolName: meta.lastToolName ?? prev?.lastToolName ?? null,
+      description: meta.description ?? prev?.description ?? null,
+      subagentType: meta.subagentType ?? prev?.subagentType ?? null,
+    });
     // 新任务 或 taskType 变化才回调重算角标（稳态同 id 同 type 心跳只刷 message/lastSeenAt、不广播——节流关键）。
     // taskType 变化也回调：同一任务首条无 subagent_type（→null→⏳）、后续带（→local_agent→🤖）时会话列表图标需随之刷新。
     if (!prev || prev.taskType !== type) this.onBgTaskChange?.();
@@ -766,7 +774,11 @@ export class AgentSession {
     // 用 `!= null` 而非真值判断：空串 '' 是畸形/空 <task-id> 标签，delete('') 天然 no-op 不误清；仅真 null/undefined 才整清。
     if (taskId != null) this.bgTasks.delete(taskId);
     else this.bgTasks.clear(); // 仅 null/undefined（真无 id 注入）才整清兜底：仍在跑者下拍心跳（≤~10s）即复亮，比 180s TTL 收敛快
-    if (this.bgTasks.size !== had) this.onBgTaskChange?.();
+    if (this.bgTasks.size !== had) {
+      this.onBgTaskChange?.();
+      // 完成/停止后推全量，前端列表立刻去掉该行（不必等下一拍心跳）
+      this.emitBgTasksSnapshot();
+    }
   }
   sweepBgTasks() { // 惰性 TTL：超 BG_TASK_TTL_MS 无心跳即判失效清除。由 checkIdle 的 30s tick 驱动，返回是否清出过
     if (this.bgTasks.size === 0) return false;
@@ -787,14 +799,38 @@ export class AgentSession {
       if (id == null) continue;
       seen.add(id);
       const prev = this.bgTasks.get(id);
+      const desc = t.description ?? t.message ?? prev?.description ?? '';
+      const lastTool = t.last_tool_name ?? t.lastToolName ?? prev?.lastToolName ?? null;
+      const subType = t.subagent_type ?? t.subagentType ?? prev?.subagentType ?? null;
       this.bgTasks.set(id, {
-        taskType: t.task_type ?? t.taskType ?? prev?.taskType ?? null,
-        message: truncate(String(t.description ?? prev?.message ?? ''), TOOL_SUMMARY_CAP),
+        taskType: t.task_type ?? t.taskType ?? (subType ? 'local_agent' : prev?.taskType) ?? null,
+        message: truncate(String(desc || prev?.message || ''), TOOL_SUMMARY_CAP),
         lastSeenAt: Date.now(),
+        lastToolName: lastTool,
+        description: desc ? truncate(String(desc), TOOL_SUMMARY_CAP) : prev?.description ?? null,
+        subagentType: subType,
       });
     }
     for (const k of [...this.bgTasks.keys()]) if (!seen.has(k)) this.bgTasks.delete(k);
     if (this.bgTasks.size !== had) this.onBgTaskChange?.();
+    // 全量快照同步到前端：否则 web 只攒到「最新一条 task_progress」，看不到并行任务列表
+    this.emitBgTasksSnapshot();
+  }
+
+  // 把当前 bgTasks 全量推给前端（瞬时，不进 buffer）。空表也推 → 前端可立刻收起横幅。
+  emitBgTasksSnapshot(extra = {}) {
+    const tasks = this.bgTasksList();
+    const latest = tasks[0] || null;
+    this.emitTransient('task_progress', {
+      taskId: latest?.taskId ?? null,
+      taskType: latest?.taskType ?? null,
+      message: latest?.message ?? '',
+      description: latest?.description ?? null,
+      lastToolName: latest?.lastToolName ?? null,
+      subagentType: latest?.subagentType ?? null,
+      tasks, // 全量明细：前端以它为准 reconcile
+      ...extra,
+    });
   }
 
   hasBgTasks() { return this.bgTasks.size > 0; }
@@ -810,10 +846,18 @@ export class AgentSession {
     for (const t of this.bgTasks.values()) if (!latest || t.lastSeenAt >= latest.lastSeenAt) latest = t; // >= ：lastSeenAt 平局（同毫秒）取后迭代者，确定性
     return { taskType: latest.taskType, message: latest.message, count: this.bgTasks.size };
   }
-  // 活后台任务列表（供前端多任务停止）：按 lastSeenAt 降序，含 taskId
+  // 活后台任务列表（供前端多任务明细/停止）：按 lastSeenAt 降序
   bgTasksList() {
     return [...this.bgTasks.entries()]
-      .map(([taskId, t]) => ({ taskId, taskType: t.taskType, message: t.message, lastSeenAt: t.lastSeenAt }))
+      .map(([taskId, t]) => ({
+        taskId,
+        taskType: t.taskType,
+        message: t.message,
+        lastSeenAt: t.lastSeenAt,
+        lastToolName: t.lastToolName ?? null,
+        description: t.description ?? null,
+        subagentType: t.subagentType ?? null,
+      }))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
   }
 
@@ -1071,15 +1115,29 @@ export class AgentSession {
           const bgTaskId = msg.task_id ?? msg.taskId ?? null;
           const bgSubagent = msg.subagent_type ?? null;
           const bgTaskType = msg.task_type ?? msg.taskType ?? (bgSubagent ? 'local_agent' : null); // 无 task_type：有 subagent_type 即代理任务 → 🤖
-          const bgDesc = msg.description || (msg.message != null ? stringify(msg.message) : '') || msg.last_tool_name || stringify(msg.summary) || '';
+          const bgLastTool = msg.last_tool_name ?? msg.lastToolName ?? null;
+          const bgDesc = msg.description || (msg.message != null ? stringify(msg.message) : '') || bgLastTool || stringify(msg.summary) || '';
           const bgMessage = truncate(bgSubagent ? `${bgSubagent}：${bgDesc}` : bgDesc, TOOL_SUMMARY_CAP);
-          this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage); // 注册"活的后台任务"→ 驱动纯后台 busy 角标（⏳/🤖/🖥）+ 横幅进度文案
-          this.emitTransient('task_progress', { taskId: bgTaskId, taskType: bgTaskType, message: bgMessage });
+          this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage, {
+            lastToolName: bgLastTool,
+            description: bgDesc ? truncate(String(bgDesc), TOOL_SUMMARY_CAP) : null,
+            subagentType: bgSubagent,
+          });
+          // 附带全量 tasks 快照：前端据此画「跑了哪些任务 + 每条详情」，而非只显示最新一句
+          this.emitBgTasksSnapshot({
+            taskId: bgTaskId,
+            taskType: bgTaskType,
+            message: bgMessage,
+            description: bgDesc ? truncate(String(bgDesc), TOOL_SUMMARY_CAP) : null,
+            lastToolName: bgLastTool,
+            subagentType: bgSubagent,
+          });
         } else if (msg.subtype === 'background_tasks_changed') {
           // CLI 2.1.209 起后台任务（local_bash/local_agent 等）的权威【全量快照】通道。
           // probe 实证：开始发 tasks=[N]、stopTask/完成发 tasks=[]（全量，非增量）。全量 reconcile
           // bgTasks（快照内 upsert、快照外删除）——修 background bash 从不进 bgTasks 的 bug（旧 map
           // 只认 task_progress，而 background bash 不发它）、供 stopTask 的 taskId、停止/完成自动熄 ⏳。
+          // reconcile 末尾 emitBgTasksSnapshot → 前端任务列表与 CLI 权威态对齐。
           this.reconcileBgTasks(msg.tasks);
         } else if (msg.subtype === 'task_started' || msg.subtype === 'task_updated') {
           // 后台任务开始 / 状态变更（task_updated.patch.status: killed/…）的细粒度事件。
@@ -1208,12 +1266,18 @@ export class AgentSession {
         for (const block of msg.message?.content ?? []) {
           if (block.type === 'tool_use') {
             this.lastToolName = block.name; // 跟踪最后使用的工具名，供后台 tab 角标细化
-            let file; // ③：文件类工具附未截断 path + changeKind，并缓存完整 input 供预览
+            let file; // ③：文件类工具附未截断 path + changeKind + 行统计，并缓存完整 input 供预览
             if (FILE_TOOLS.has(block.name)) {
               const p = toolFilePath(block.input);
               if (p) {
                 this.cacheToolInput(block.id, block.name, block.input);
-                file = { path: truncate(String(p), 1024), changeKind: TOOL_CHANGE_KIND[block.name] };
+                const stats = estimateMutationLineStats(block.name, block.input);
+                file = {
+                  path: truncate(String(p), 1024),
+                  changeKind: TOOL_CHANGE_KIND[block.name],
+                  added: stats.added,
+                  removed: stats.removed,
+                };
               }
             }
             this.toolNames.set(block.id, block.name);
@@ -1390,6 +1454,28 @@ function stringify(v) {
   if (v == null) return '';
   if (typeof v === 'string') return v;
   try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+// 从完整 tool input 估 +/- 行（与前端 summarize 同源口径：块级行数，非精细 diff）。
+function estimateMutationLineStats(name, input = {}) {
+  const lines = (t) => {
+    if (t == null) return 0;
+    const s = String(t);
+    return s ? s.split('\n').length : 0;
+  };
+  if (name === 'Edit') return { added: lines(input?.new_string), removed: lines(input?.old_string) };
+  if (name === 'MultiEdit') {
+    const edits = Array.isArray(input?.edits) ? input.edits : [];
+    let added = 0, removed = 0;
+    for (const e of edits) {
+      added += lines(e?.new_string);
+      removed += lines(e?.old_string);
+    }
+    return { added, removed };
+  }
+  if (name === 'Write') return { added: lines(input?.content), removed: 0 };
+  if (name === 'NotebookEdit') return { added: lines(input?.new_source), removed: 0 };
+  return { added: 0, removed: 0 };
 }
 
 // 长 base64/二进制载荷脱敏（Read 读图片等场景，tool_result 会带回原始字节供模型"看见"图片）：

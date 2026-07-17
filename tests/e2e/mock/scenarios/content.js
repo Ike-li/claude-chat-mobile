@@ -183,6 +183,87 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // turn-end 文件变更汇总：Write + Edit → result 后出现「已编辑 2 个文件」卡（Read 不计入）
+      command: 'test:file-changes',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
+        console.log('[mock] Starting test:file-changes sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_fc_1', text: 'Updating project docs…' }
+        });
+        await delay(150);
+
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: {
+            toolUseId: 't_fc_write',
+            name: 'Write',
+            inputSummary: JSON.stringify({ file_path: 'CLAUDE.md', content: 'line1\nline2\nline3' }),
+            file: { path: 'CLAUDE.md', changeKind: 'write', added: 3, removed: 0 },
+          }
+        });
+        await delay(200);
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_fc_write', ok: true, outputSummary: 'Wrote CLAUDE.md' }
+        });
+        await delay(150);
+
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: {
+            toolUseId: 't_fc_edit',
+            name: 'Edit',
+            inputSummary: JSON.stringify({ file_path: 'README.md', old_string: 'old', new_string: 'a\nb' }),
+            file: { path: 'README.md', changeKind: 'edit', added: 2, removed: 1 },
+          }
+        });
+        await delay(200);
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_fc_edit', ok: true, outputSummary: 'Edited README.md' }
+        });
+        await delay(100);
+
+        socket.emit('agent:event', {
+          seq: 6, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: {
+            toolUseId: 't_fc_read',
+            name: 'Read',
+            inputSummary: JSON.stringify({ file_path: 'package.json' }),
+            file: { path: 'package.json', changeKind: 'read' },
+          }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: { toolUseId: 't_fc_read', ok: true, outputSummary: '{}' }
+        });
+
+        socket.emit('agent:event', {
+          seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_fc_1', text: '\nDocs updated.' }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 9, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_fc_1', durationMs: 1200, costUsd: 0.002, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:disconnect-now',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
@@ -306,6 +387,89 @@ export function createContentScenarios(getContext) {
         socket.emit('agent:event', {
           seq: 8, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_main_sa', durationMs: 1200, costUsd: 0.002, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      // Workflow：预建 workflow 卡 + parentToolUseId 子流 + 多后台任务列表（单任务也展开）
+      command: 'test:workflow-subagents',
+      run: async ({ activeInst }) => {
+        let { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, setViewingInstanceId } = getContext();
+        console.log('[mock] Starting test:workflow-subagents sequence');
+        if (!activeInst) {
+          activeInst = mockInstances.find(i => i.instanceId === 'inst_1') || mockInstances[0];
+          if (!activeInst) return;
+          viewingInstanceId = activeInst.instanceId;
+          setViewingInstanceId(viewingInstanceId);
+        }
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: {
+            toolUseId: 'wf-parent-1',
+            name: 'Workflow',
+            inputSummary: JSON.stringify({ args: '调研 Python 后端', description: '深度调研工作流' }),
+          }
+        });
+        await delay(150);
+
+        // 并发后台任务心跳（Workflow Search 阶段常见）——附全量 tasks 快照（与真实后端 emitBgTasksSnapshot 对齐）
+        const bgTasks = [
+          { taskId: 'bg_search_1', taskType: 'local_agent', message: 'Explore：Searching docs…', lastToolName: 'WebSearch', subagentType: 'Explore' },
+          { taskId: 'bg_search_2', taskType: 'local_agent', message: 'Explore：Searching github…', lastToolName: 'WebSearch', subagentType: 'Explore' },
+        ];
+        for (const t of bgTasks) {
+          socket.emit('agent:event', {
+            seq: 0, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'task_progress', transient: true,
+            payload: {
+              taskId: t.taskId, taskType: t.taskType, message: t.message,
+              lastToolName: t.lastToolName, subagentType: t.subagentType,
+              tasks: bgTasks,
+            },
+          });
+        }
+        await delay(150);
+
+        // 子流挂到 Workflow parent
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: {
+            messageId: 'msg_wf_sa', text: 'Scope done. Five search agents running.',
+            parentToolUseId: 'wf-parent-1', subagentType: 'workflow',
+          }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_use', payload: {
+            toolUseId: 't_wf_web', name: 'WebSearch',
+            inputSummary: JSON.stringify({ query: 'python backend 2026' }),
+            parentToolUseId: 'wf-parent-1', subagentType: 'workflow',
+          }
+        });
+        await delay(100);
+
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'tool_result', payload: {
+            toolUseId: 'wf-parent-1', ok: true, outputSummary: 'Workflow finished.',
+          }
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_wf_main', durationMs: 800, costUsd: 0.01, isError: false, models: [activeModel] }
         });
       },
     },

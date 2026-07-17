@@ -124,8 +124,10 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
           parentToolUseId: isSide ? (parentFromDisk || lastMainAgentToolId || 'sidechain') : null,
         });
         for (const item of expanded) {
-          // 主链 Agent/Task 工具：记住 id，供后续无 parent 字段的 sidechain 行挂靠
-          if (!isSide && item.kind === 'tool_use' && (item.name === 'Agent' || item.name === 'Task') && item.toolUseId) {
+          // 主链 spawn 工具（Agent/Task/Workflow）：记住 id，供后续无 parent 字段的 sidechain 行挂靠
+          if (!isSide && item.kind === 'tool_use'
+              && (item.name === 'Agent' || item.name === 'Task' || item.name === 'Workflow')
+              && item.toolUseId) {
             lastMainAgentToolId = item.toolUseId;
           }
           messages.push(item);

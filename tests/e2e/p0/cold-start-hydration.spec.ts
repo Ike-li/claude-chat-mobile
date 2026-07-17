@@ -27,14 +27,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillModelText')).not.toHaveText('');
     await expect(page.locator('#pillPermText')).toContainText('默认审批');
 
-    // 2. 回空首页枢纽：输入条隐藏（须先选会话或点 ＋ 才能发消息）。
+    // 2. 回空首页枢纽：输入条隐藏；顶栏文件夹 pill 隐藏；无「当前工作区」标。
     await page.locator('#btnHome').click();
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible();
     await expect(page.locator('.dashboard-container')).toBeVisible();
     await expect(page.locator('#composerFooter')).toBeHidden();
     await expect(page.locator('#input')).toBeHidden();
+    await expect(page.locator('#topContextPill')).toBeHidden();
+    await expect(page.locator('#messages')).not.toContainText('当前工作区');
+    await expect(page.locator('#messages')).not.toContainText('ACTIVE WORKSPACE');
 
-    // 3. 点 ＋ 进入 compose 干净新会话页：输入条出现；无最近列表；页内摘要与底栏默认档同源。
+    // 3. 点 ＋ 进入 compose 干净新会话页：输入条出现；顶栏文件夹仍隐藏（页内工作区 pill 已够）。
     await page.locator('#btnNew').click();
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     await expect(page.locator('[data-testid="compose-surface"]')).toBeVisible();
@@ -43,6 +47,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#input')).toBeVisible();
     await expect(page.locator('#btnSend')).toBeVisible();
     await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#topContextPill')).toBeHidden();
     await expect(page.locator('#pillPermText')).toContainText('默认审批');
     // 页内默认档摘要至少带上权限文案（与底栏 pill 同源）
     await expect(page.locator('[data-compose-defaults]')).toContainText('默认审批');

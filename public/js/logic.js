@@ -236,10 +236,11 @@ export function formatLiveActivityText(kind = 'default', payload = {}) {
       if (!cmd) return `Claude 正在运行工具 ${name}...`;
       return `🖥 ${cmd.length > 60 ? `${cmd.slice(0, 57)}...` : cmd}`;
     }
-    if (name === 'Agent' || name === 'Task') {
+    if (isSpawnToolName(name)) {
       const desc = String(payload?.description ?? payload?.inputSummary ?? '').trim();
       if (!desc) return `Claude 正在运行工具 ${name}...`;
-      return `🤖 ${desc.length > 50 ? `${desc.slice(0, 47)}...` : desc}`;
+      const icon = name === 'Workflow' ? '⚙️' : '🤖';
+      return `${icon} ${desc.length > 50 ? `${desc.slice(0, 47)}...` : desc}`;
     }
     return `Claude 正在运行工具 ${name}...`;
   }
@@ -355,6 +356,108 @@ export function toolPreviewLabel(meta) {
   const name = m.name != null ? String(m.name) : '';
   const isRead = kind === 'read' || (!kind && name === 'Read');
   return isRead ? '📄 预览文件' : '📄 预览变更';
+}
+
+// 是否「会改盘」的文件工具（进 turn-end 变更汇总；Read 排除）。
+export function isFileMutationTool({ name, changeKind } = {}) {
+  const kind = changeKind != null ? String(changeKind) : '';
+  if (kind === 'read') return false;
+  if (kind === 'edit' || kind === 'write' || kind === 'multiedit' || kind === 'notebook') return true;
+  const n = name != null ? String(name) : '';
+  return n === 'Edit' || n === 'Write' || n === 'MultiEdit' || n === 'NotebookEdit';
+}
+
+// 文本行数（用于 +/- 估算；空串 0；末尾换行按 split 自然计数）。
+export function countContentLines(text) {
+  if (text == null) return 0;
+  const s = String(text);
+  if (!s) return 0;
+  return s.split('\n').length;
+}
+
+// 从工具完整 input 估 +/- 行（与终端「一块旧/新文本」观感对齐；非精确 diff 算法）。
+export function estimateMutationLineStats(name, input = {}) {
+  const n = name != null ? String(name) : '';
+  if (n === 'Edit') {
+    return {
+      added: countContentLines(input?.new_string),
+      removed: countContentLines(input?.old_string),
+    };
+  }
+  if (n === 'MultiEdit') {
+    const edits = Array.isArray(input?.edits) ? input.edits : [];
+    let added = 0, removed = 0;
+    for (const e of edits) {
+      added += countContentLines(e?.new_string);
+      removed += countContentLines(e?.old_string);
+    }
+    return { added, removed };
+  }
+  if (n === 'Write') {
+    return { added: countContentLines(input?.content), removed: 0 };
+  }
+  if (n === 'NotebookEdit') {
+    return { added: countContentLines(input?.new_source), removed: 0 };
+  }
+  return { added: 0, removed: 0 };
+}
+
+// 本轮文件变更账本：key=path。同文件多次 Edit 累加 +/-，保留最后 toolUseId（点审核预览用）。
+// map: Map<path, { path, changeKind, toolUseId, name, added, removed }>
+export function accumulateTurnFileChange(map, event = {}) {
+  if (!map || typeof map.set !== 'function') return map;
+  const e = event && typeof event === 'object' ? event : {};
+  const path = e.path != null ? String(e.path).trim() : '';
+  if (!path) return map;
+  if (!isFileMutationTool({ name: e.name, changeKind: e.changeKind })) return map;
+  const added = Number.isFinite(e.added) ? Math.max(0, Math.floor(e.added)) : 0;
+  const removed = Number.isFinite(e.removed) ? Math.max(0, Math.floor(e.removed)) : 0;
+  const prev = map.get(path);
+  if (!prev) {
+    map.set(path, {
+      path,
+      changeKind: e.changeKind || null,
+      toolUseId: e.toolUseId || null,
+      name: e.name || null,
+      added,
+      removed,
+    });
+    return map;
+  }
+  prev.added += added;
+  prev.removed += removed;
+  if (e.toolUseId) prev.toolUseId = e.toolUseId;
+  if (e.changeKind) prev.changeKind = e.changeKind;
+  if (e.name) prev.name = e.name;
+  return map;
+}
+
+// 汇总账本 → 卡片数据。无变更 → null。
+export function summarizeTurnFileChanges(map) {
+  if (!map || typeof map.values !== 'function') return null;
+  const files = [...map.values()]
+    .filter(f => f && f.path)
+    .map(f => ({
+      path: f.path,
+      baseName: String(f.path).split(/[/\\]/).pop() || f.path,
+      changeKind: f.changeKind || null,
+      toolUseId: f.toolUseId || null,
+      name: f.name || null,
+      added: Number(f.added) || 0,
+      removed: Number(f.removed) || 0,
+    }))
+    .sort((a, b) => a.path.localeCompare(b.path));
+  if (!files.length) return null;
+  const added = files.reduce((s, f) => s + f.added, 0);
+  const removed = files.reduce((s, f) => s + f.removed, 0);
+  return {
+    fileCount: files.length,
+    added,
+    removed,
+    files,
+    title: `已编辑 ${files.length} 个文件`,
+    statsLabel: `+${added} -${removed}`,
+  };
 }
 
 // ultracode = CLI /effort 菜单 xhigh 之上的最高档（= xhigh effort + dynamic workflow 编排）。
@@ -502,6 +605,12 @@ export function formatComposeDefaultsSummary({ modelLabel, modeLabel, effortLabe
     .map(s => (typeof s === 'string' ? s.trim() : ''))
     .filter(Boolean);
   return parts.length ? parts.join(' · ') : '使用工作区默认配置';
+}
+
+// 顶部工作区 pill（点开文件浏览）可见性：空首页/compose 枢纽已自有工作区入口，
+// 顶栏再放文件夹会重复且暗示「当前在会话里」。仅在有可渲染会话流时显示。
+export function shouldShowTopContextPill({ viewingInstanceId, sessionId } = {}) {
+  return !shouldShowStartScreen({ viewingInstanceId, sessionId });
 }
 
 // 底部输入条（composer）可见性：空首页枢纽只做「选工作区/会话」，不提供直接发消息入口——
@@ -1133,6 +1242,35 @@ export function isSubagentPayload(p) {
   return !!(p && typeof p.parentToolUseId === 'string' && p.parentToolUseId);
 }
 
+// 会 spawn 子 agent / 后台阶段 的主工具：预建折叠卡、活动横幅、历史 sidechain 挂靠共用。
+// Workflow（ultracode 工作流）与 Agent/Task 同列——否则 web 点 Workflow 只有橙条、看不到子代理卡挂点。
+export function isSpawnToolName(name) {
+  return name === 'Agent' || name === 'Task' || name === 'Workflow';
+}
+
+// 后台任务行主标题：优先可读 message；local_agent 加 🤖，bash 加 🖥。
+// 避免再叠「子代理 ·」当 message 已是「Plan：…」形态。
+export function formatBgTaskRowLabel({ taskType, message, taskId, subagentType } = {}) {
+  let msg = (typeof message === 'string' && message.trim()) ? message.trim() : '';
+  if (!msg && subagentType) msg = String(subagentType).trim();
+  if (!msg && typeof taskId === 'string' && taskId && !taskId.startsWith('__notask_')) {
+    msg = taskId.slice(0, 12);
+  }
+  if (!msg) msg = '后台任务';
+  // 洗掉「Search: search:」类重复段（workflow 阶段名 + last_tool 同词）
+  msg = msg.replace(/^([A-Za-z一-鿿]{2,24})\s*[:：]\s*\1\s*[:：]\s*/i, '$1：');
+  const t = taskType != null ? String(taskType).trim() : '';
+  if (t === 'local_agent' || t === 'agent') {
+    if (/^🤖/.test(msg)) return msg;
+    if (/^[^\s：:]{2,40}[：:]/.test(msg)) return `🤖 ${msg}`;
+    return `🤖 ${msg}`;
+  }
+  if (t === 'local_bash' || t === 'bash') {
+    return msg.startsWith('🖥') ? msg : `🖥 ${msg}`;
+  }
+  return msg;
+}
+
 // 子 agent 可折叠卡片标题（默认收起；机主选「可折叠卡片」形态）。
 // running=true → 运行中；false → 已完成（主 Agent tool_result 或本轮 result 收束）。
 // 类型缺失时兜底「子 agent」（stream_event 首批 delta 可能早于带 subagent_type 的 assistant）。
@@ -1210,4 +1348,21 @@ export function shouldResetMirrorOnViewChange({
 export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   const id = typeof taskId === 'string' ? taskId.trim() : '';
   return { canStop: Boolean(id) && bannerVisible !== false, taskId: id || null };
+}
+
+// 底栏 sheet 下拉关闭判定：位移够大，或带一点位移的快速下甩 → close；否则 snap 回原位。
+// dy / velocityY 正向=向下（px / px·ms⁻¹）；负值（上推）一律 snap。
+export function resolveSheetDragEnd({
+  dy = 0,
+  velocityY = 0,
+  dismissPx = 96,
+  dismissVelocity = 0.55,
+  minFlickDy = 24,
+} = {}) {
+  const d = Number(dy) || 0;
+  const v = Number(velocityY) || 0;
+  if (d < 0) return 'snap';
+  if (d >= dismissPx) return 'close';
+  if (v >= dismissVelocity && d >= minFlickDy) return 'close';
+  return 'snap';
 }

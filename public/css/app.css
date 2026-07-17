@@ -105,6 +105,41 @@ details > summary::-webkit-details-marker { display: none; }
 .safe-top { padding-top: env(safe-area-inset-top); }
 /* 弹窗顶部 drag handle */
 .sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--line); margin: 0 auto .75rem; }
+/* 配置面板下拉关闭热区：扩大把手可点范围，禁浏览器默认手势抢 pointer */
+.settings-drag-zone {
+  touch-action: none;
+  cursor: grab;
+  padding-top: 0.35rem;
+}
+.settings-drag-zone:active,
+#settingsSheet.is-dragging .settings-drag-zone {
+  cursor: grabbing;
+}
+#settingsSheet.is-dragging {
+  /* 拖动中禁用 CSS transition，跟手；结束时由 JS 清 inline 后恢复 */
+  transition: none !important;
+  will-change: transform;
+}
+#settingsSheet.is-dragging .sheet-handle {
+  background: var(--accent);
+  width: 44px;
+}
+/* 配置面板打开：锁住背后主页面滚动（#messages 仍是 overflow-y-auto，不锁会把聊天顶穿面板）
+   不用 touch-action:none on body——会误伤 fixed 面板内的滑动（部分 Android Chrome）。 */
+html.ccm-sheet-open,
+body.ccm-sheet-open {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+body.ccm-sheet-open #messages {
+  overflow: hidden !important;
+  overscroll-behavior: none;
+}
+/* 面板自身内容区允许滚动；overscroll-contain 阻止链式滚动到背后 */
+#settingsSheetBody {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
 
 /* 柔和入场动画 + 按钮微反馈（尊重 reduce-motion） */
 @media (prefers-reduced-motion: no-preference) {
@@ -212,14 +247,48 @@ details > summary::-webkit-details-marker { display: none; }
   font-size: 10.5px;
   flex-shrink: 0;
   box-shadow: none;
+  max-width: 100%;
 }
 .status-pill-chip.toolbar-pill svg {
   width: 0.85rem;
   height: 0.85rem;
   opacity: 0.75;
 }
+/* 模型名过长：ellipsis 截断，完整名仍在 title；不整行缩放、不挤钉死动作区 */
+#pillModelText,
+#pillPermText,
+#pillEffortText {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  min-width: 0;
+}
 #pillModelText {
-  max-width: 5.5rem;
+  /* 约 8 字宽 + 窄屏 vw 上限：长名截断，齿轮永远在右侧可见 */
+  max-width: min(7.5rem, 36vw);
+}
+#pillPermText {
+  max-width: min(5rem, 28vw);
+}
+#pillEffortText {
+  max-width: min(4.5rem, 24vw);
+}
+/* 底栏工具条：chip 区可滚，动作区不缩 */
+.composer-toolbar {
+  min-width: 0;
+}
+.composer-chips {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 12px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, #000 0%, #000 calc(100% - 12px), transparent 100%);
+}
+.composer-actions {
+  position: relative;
+  z-index: 1;
+  background: var(--surface);
 }
 /* UX-019：空态档位变更时胶囊短暂高亮（替代消息区系统条） */
 @keyframes status-pill-flash {
@@ -232,14 +301,6 @@ details > summary::-webkit-details-marker { display: none; }
 .status-pill-chip:active {
   transform: scale(0.95);
   background-color: var(--line-soft);
-}
-#pillModelText {
-  display: inline-block;
-  max-width: 8rem; /* 容 claude-opus-4-8[1m]，截断更长的第三方模型名；实测微调 */
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  vertical-align: middle;
 }
 .top-context-pill {
   min-height: 32px;
@@ -416,7 +477,13 @@ details > summary::-webkit-details-marker { display: none; }
     opacity: 0.7;
   }
   #pillModelText {
-    max-width: min(5.5rem, 28vw); /* 底栏三 chip 并排，窄屏更保守 */
+    max-width: min(6.5rem, 32vw); /* 窄屏：截断模型名，动作区（齿轮/发送）钉死不挤 */
+  }
+  #pillPermText {
+    max-width: min(4.5rem, 24vw);
+  }
+  #pillEffortText {
+    max-width: min(4rem, 20vw);
   }
   .chat-input-pill {
     min-height: auto !important;

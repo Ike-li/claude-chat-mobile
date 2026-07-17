@@ -312,6 +312,23 @@ test.describe('map() — 活的后台任务注册表（bgTasks，驱动纯后台
     assert.equal(sum.message, 'Plan：Reading public/js/app.js', 'description 作进度文案 + subagent_type 前缀');
     const prog = events.find(e => e.type === 'task_progress');
     assert.equal(prog.payload.message, 'Plan：Reading public/js/app.js', '横幅拿到真实活动文案（修旧代码读不存在的 msg.message 恒空）');
+    assert.ok(Array.isArray(prog.payload.tasks), 'task_progress 附带全量 tasks 快照供前端列表明细');
+    assert.equal(prog.payload.tasks.length, 1);
+    assert.equal(prog.payload.tasks[0].taskId, 'a1');
+    assert.equal(prog.payload.tasks[0].lastToolName, 'Read');
+    assert.equal(prog.payload.lastToolName, 'Read');
+    s.dispose();
+  });
+
+  test('多任务 task_progress：payload.tasks 含全部在跑 id', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 's1', description: 'Search A' });
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 's2', description: 'Search B' });
+    const progs = events.filter(e => e.type === 'task_progress');
+    const last = progs[progs.length - 1];
+    assert.equal(last.payload.tasks.length, 2);
+    const ids = last.payload.tasks.map(t => t.taskId).sort();
+    assert.deepEqual(ids, ['s1', 's2']);
     s.dispose();
   });
 

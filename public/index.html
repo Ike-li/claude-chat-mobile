@@ -81,7 +81,8 @@
 
     <!-- Center Section: Elegant top context pill with workspace and status -->
     <div class="flex items-center justify-center flex-1 min-w-0">
-      <button id="topContextPill" class="top-context-pill select-none cursor-pointer" title="浏览项目文件（只读）">
+      <!-- 默认 hidden：空首页/compose 不显示；进入真实会话后由 app.js syncTopContextPillVisibility 打开 -->
+      <button id="topContextPill" class="top-context-pill select-none cursor-pointer hidden" title="浏览项目文件（只读）" aria-hidden="true" tabindex="-1">
         <!-- Minimalist folder icon in Accent color -->
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-3.5 h-3.5 text-accent shrink-0">
           <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
@@ -346,10 +347,12 @@
 
         <input type="file" id="fileInput" multiple class="hidden">
 
-        <!-- Bottom Row: Toolbar —— 模型/权限/思考 并入此行；CLI 镜像态靠 placeholder + 发送位续接 -->
-        <div class="flex items-center justify-between w-full pt-1.5 border-t border-line-soft/30 px-1">
-          <!-- Left side: 设置 chip + 附件/推送/齿轮（横向可滑） -->
-          <div class="flex items-center gap-1 min-w-0 flex-1 overflow-x-auto scrollbar-none">
+        <!-- Bottom Row: Toolbar
+             可变宽 chip（模型/权限/思考）单独横向滚动；齿轮/附件/发送钉在右侧 shrink-0，
+             模型名再长也挤不掉设置——不整行缩放（保 32px 触控）。CLI 镜像态靠 placeholder + 发送位续接。 -->
+        <div class="composer-toolbar flex items-center gap-1 w-full pt-1.5 border-t border-line-soft/30 px-1">
+          <!-- 可滚动 chip 区：只放会变长的胶囊 -->
+          <div id="composerChips" class="composer-chips flex items-center gap-1 min-w-0 flex-1 overflow-x-auto scrollbar-none">
             <div id="pillModel" class="status-pill-chip toolbar-pill" title="选择模型">
               <svg class="w-3.5 h-3.5 text-accent shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z" />
@@ -370,7 +373,10 @@
               </svg>
               <span id="pillEffortText">思考默认</span>
             </div>
+          </div>
 
+          <!-- 钉死动作区：附件 / 推送 / 设置 / 发送——永不进横向滚动、不被长模型名挤没 -->
+          <div id="composerActions" class="composer-actions flex items-center gap-0.5 shrink-0">
             <!-- E17：附件按钮 -->
             <button id="btnAttach" class="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="添加附件">
               <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
@@ -385,17 +391,13 @@
               </svg>
             </button>
 
-            <!-- ⚙️ 设置：保持在左侧工具条末（附件后），位置不因续接钮改变 -->
             <button id="btnSettings" class="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="打开设置面板" aria-label="打开设置面板">
               <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
               </svg>
             </button>
-          </div>
 
-          <!-- Right side: Send/Stop/Resume（短文案「续接」，不挪动左侧齿轮） -->
-          <div class="flex items-center shrink-0">
             <!-- 兼容性保留：隐藏的原 btnStop -->
             <button id="btnStop" class="hidden pointer-events-none w-0 h-0" style="display: none !important;"></button>
 
@@ -484,15 +486,20 @@
   <!-- 触觉配置面板遮罩 scrim -->
   <div id="settingsScrim" class="hidden fixed inset-0 z-30 bg-black/40 transition-opacity duration-300"></div>
 
-  <!-- 触觉配置面板大底栏 (Bottom Settings Sheet Drawer) -->
-  <div id="settingsSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col p-4 max-h-[85vh] overflow-y-auto safe-bottom" style="border-top-color:var(--accent)">
-    <div class="sheet-handle"></div>
-    <div class="sticky top-0 z-10 bg-surface flex items-center justify-between mb-4 border-b border-line-soft pb-2 shrink-0">
-      <div class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 配置面板</div>
-      <button id="settingsClose" class="px-2.5 py-1 rounded bg-sunk hover:bg-line-soft active:scale-95 text-xs text-ink-soft">完成</button>
+  <!-- 触觉配置面板大底栏 (Bottom Settings Sheet Drawer)
+       标题固定 + 内容区内部滚动；关法=点遮罩 / Escape / 把手区下拉（无「完成」）。
+       打开时 body.ccm-sheet-open 锁住背后主页面滚动，避免上滑把聊天内容顶穿面板。 -->
+  <div id="settingsSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col max-h-[85vh] overflow-hidden safe-bottom" style="border-top-color:var(--accent)" role="dialog" aria-modal="true" aria-labelledby="settingsSheetTitle">
+    <!-- 下拉关闭热区：把手 + 标题（内容区滚动不绑手势） -->
+    <div id="settingsDragZone" class="settings-drag-zone shrink-0 select-none" aria-label="下拉关闭配置面板">
+      <div class="sheet-handle"></div>
+      <div class="px-4 pt-0.5 pb-2 border-b border-line-soft bg-surface">
+        <div id="settingsSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 配置面板</div>
+        <div class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭</div>
+      </div>
     </div>
 
-    <div class="space-y-5 flex-1">
+    <div id="settingsSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-5">
       <!-- 1. 模型选择大磁贴 -->
       <div>
         <div class="text-xs font-semibold text-ink-soft mb-2 flex items-center gap-1">✨ 选择模型 <span class="text-xs text-ink-faint font-normal">(切换下一条消息起效)</span></div>

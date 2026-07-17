@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 async function expectWithinViewport(page: Page, locator: Locator) {
   await expect(locator).toBeVisible();
@@ -39,7 +39,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await expect(page.locator('#input')).toBeVisible();
       await page.locator('#btnSettings').click();
       await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
-      await page.locator('#settingsClose').click();
+      await closeSettings(page);
       await page.locator('#btnSessions').click();
       await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
       await page.locator('#sidebarClose').click();
@@ -102,10 +102,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
       await page.locator('#btnSettings').click();
       await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
-      await page.locator('#settingsSheet').evaluate(el => { el.scrollTop = el.scrollHeight; });
-      await expectWithinViewport(page, page.locator('#settingsClose'));
+      // 内容区内部滚动；标题栏固定在 sheet 顶部，背后主页面被 ccm-sheet-open 锁住
+      await page.locator('#settingsSheetBody').evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await expectWithinViewport(page, page.locator('#settingsSheetTitle'));
       await expectWithinViewport(page, page.locator('#accessHelpOpen'));
-      await page.locator('#settingsClose').click();
+      await closeSettings(page);
       await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
 
       await page.locator('#btnConsole').click();

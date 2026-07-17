@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -52,7 +52,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // ---- 极简触觉交互及抽屉式元素 DOM 绑定 ----
   const sidebarScrim = $('sidebarScrim'), leftSidebar = $('leftSidebar'), sidebarClose = $('sidebarClose');
-  const btnSettings = $('btnSettings'), settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsClose = $('settingsClose');
+  const btnSettings = $('btnSettings'), settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsSheetBody = $('settingsSheetBody'), settingsDragZone = $('settingsDragZone'), settingsClose = $('settingsClose');
   const pillModel = $('pillModel'), pillModelText = $('pillModelText');
   const pillPerm = $('pillPerm'), pillPermText = $('pillPermText'), pillEffort = $('pillEffort'), pillEffortText = $('pillEffortText');
 
@@ -310,6 +310,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const streams = new Map();
   const thinkings = new Map();
   const toolCards = new Map();
+  // 本轮主会话文件变更账本（Edit/Write/…）；result 时汇总成卡后清空。子 agent 内改动不入（嵌在子卡里）。
+  let turnFileChanges = new Map();
   const agentToolIds = new Set(); // 跟踪 Agent/Task 工具的 toolUseId，用于在 tool_result 时隐藏活动横幅
   // 子 agent 可折叠卡：parentToolUseId → { el, body, titleEl, type, running, streams, thinkings }
   // 键 = 主会话 Agent/Task 的 toolUseId（后端 parent_tool_use_id）。默认 <details> 收起。
@@ -385,6 +387,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       btnSettings,
       settingsScrim,
       settingsSheet,
+      settingsSheetBody,
+      settingsDragZone,
       settingsClose,
       prefAlertSound: $('prefAlertSound'),
       prefAlertVibrate: $('prefAlertVibrate'),
@@ -1211,6 +1215,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         try { hljs.highlightElement(inCode); } catch { /* 高亮失败不影响显示 */ }
       }
       toolCards.set(p.toolUseId, card);
+      // 主会话写盘工具 → 记入本轮变更账本（Read / 子 agent 工具不入）
+      if (!isSubagentPayload(p) && p.file?.path && isFileMutationTool({ name: p.name, changeKind: p.file?.changeKind })) {
+        accumulateTurnFileChange(turnFileChanges, {
+          path: p.file.path,
+          name: p.name,
+          changeKind: p.file.changeKind,
+          toolUseId: p.toolUseId,
+          added: p.file.added,
+          removed: p.file.removed,
+        });
+      }
       if (p.file?.path) {  // ③：文件类工具入口——Read=预览文件，Edit/Write/…=预览变更（见 toolPreviewLabel）
         const label = toolPreviewLabel({ name: p.name, changeKind: p.file?.changeKind });
         const wrap = el(`<div class="mt-1"><button type="button" class="tp-btn text-info underline"></button><div class="tp-body hidden mt-1 space-y-1"></div></div>`);
@@ -1271,21 +1286,24 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       scrollBottom();
       setBusy(true);
-      // 子代理/Workflow 活动横幅（仅主会话 Agent/Task；嵌套内部 Agent 不再叠横幅）
-      if (!isSubagentPayload(p) && (p.name === 'Agent' || p.name === 'Task')) {
+      // 子代理/Workflow 活动横幅（主会话 spawn 工具；嵌套内部 Agent 不再叠横幅）
+      // Agent/Task：预建空卡占位。Workflow 多数阶段只走 task_progress、常无 parent 子流——
+      // 预建会留下「🤖 workflow 已完成」空壳（机主反馈怪），故等首条 parentToolUseId 事件再建卡。
+      if (!isSubagentPayload(p) && isSpawnToolName(p.name)) {
         agentToolIds.add(p.toolUseId);
-        // 预建空卡：主 Agent 工具一启动就有「🤖 … 运行中」占位，后续 parentToolUseId 事件填内容
-        const subType = extractInput(p.inputSummary, ['subagent_type', 'subagentType'], '');
-        ensureSubagentCard(p.toolUseId, subType || null);
-        const desc = extractInput(p.inputSummary, ['description'], '');
+        if (p.name !== 'Workflow') {
+          const subType = extractInput(p.inputSummary, ['subagent_type', 'subagentType'], '');
+          ensureSubagentCard(p.toolUseId, subType || null);
+        }
+        const desc = extractInput(p.inputSummary, ['description', 'prompt', 'args'], '');
         if (desc) showActivityBanner(desc);
       }
-      // 工具状态细化：Bash 显示具体命令，Agent 显示任务描述，其他显示工具名
+      // 工具状态细化：Bash 显示具体命令，spawn 工具显示任务描述，其他显示工具名
       if (p.name === 'Bash') {
         const cmd = extractInput(p.inputSummary, ['command', 'cmd'], p.inputSummary);
         setStreamLiveStatusText(formatLiveActivityText('tool', { name: 'Bash', command: cmd }));
-      } else if (p.name === 'Agent' || p.name === 'Task') {
-        const desc = extractInput(p.inputSummary, ['description'], p.inputSummary);
+      } else if (isSpawnToolName(p.name)) {
+        const desc = extractInput(p.inputSummary, ['description', 'prompt', 'args'], p.inputSummary);
         setStreamLiveStatusText(formatLiveActivityText('tool', { name: p.name, description: desc }));
       } else {
         setStreamLiveStatusText(formatLiveActivityText('tool', { name: p.name }));
@@ -1513,6 +1531,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       finalizeStreams();
       markAllSubagentCardsDone(); // 主轮结束：仍 running 的子 agent 卡标「已完成」（防 tool_result 漏标）
+      // turn-end 文件变更汇总卡（对齐官方「已编辑 N 个文件」；完整 diff 仍走单卡预览）
+      flushTurnFileChangesCard();
       _pendingSendBusy = false;
       setBusy(false);
       hideActivityBanner(); // 会话结束隐藏活动横幅
@@ -1543,6 +1563,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     },
     error(p) {
       finalizeStreams();
+      flushTurnFileChangesCard(); // 出错前若已改盘，仍给汇总
       failPendingToolCards(p.message);
       alertCue('error');
       addBar(`⚠️ ${p.message}`, 'text-danger');
@@ -1898,6 +1919,91 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       sa.thinkings.set(key, t);
     }
     return t;
+  }
+
+  // turn-end：把本轮主会话写盘工具聚合成「已编辑 N 个文件」卡（对齐官方汇总；无撤销）。
+  // 完整 diff 仍走 tool:preview；点文件行按需拉 hunk 内嵌展示。
+  function flushTurnFileChangesCard() {
+    const summary = summarizeTurnFileChanges(turnFileChanges);
+    turnFileChanges = new Map();
+    if (!summary) return null;
+    const inst = viewingInstanceId;
+    const card = el(`
+      <div class="msg-frame turn-file-changes rounded-xl border border-line bg-surface overflow-hidden" data-testid="turn-file-changes">
+        <div class="flex items-center gap-2 px-3 py-2.5 border-b border-line-soft">
+          <div class="w-8 h-8 rounded-lg bg-sunk flex items-center justify-center text-ink-soft shrink-0" aria-hidden="true">
+            <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z"/></svg>
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-xs font-semibold text-ink tfc-title"></div>
+            <div class="text-[11px] tabular-nums tfc-stats"><span class="text-success"></span> <span class="text-danger"></span></div>
+          </div>
+        </div>
+        <div class="tfc-list divide-y divide-line-soft"></div>
+      </div>`);
+    card.querySelector('.tfc-title').textContent = summary.title;
+    const statsEl = card.querySelector('.tfc-stats');
+    statsEl.children[0].textContent = `+${summary.added}`;
+    statsEl.children[1].textContent = `-${summary.removed}`;
+    const list = card.querySelector('.tfc-list');
+    for (const f of summary.files) {
+      const row = el(`
+        <div class="tfc-row" data-testid="turn-file-row">
+          <button type="button" class="tfc-row-btn w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-sunk/60 active:bg-sunk transition-colors">
+            <span class="tfc-name flex-1 min-w-0 truncate text-xs text-ink font-medium"></span>
+            <span class="tfc-file-stats shrink-0 text-[11px] tabular-nums"><span class="text-success"></span> <span class="text-danger"></span></span>
+          </button>
+          <div class="tfc-preview hidden px-3 pb-2 space-y-1 text-[11px]"></div>
+        </div>`);
+      row.querySelector('.tfc-name').textContent = f.baseName;
+      row.querySelector('.tfc-name').title = f.path;
+      const fs = row.querySelector('.tfc-file-stats');
+      fs.children[0].textContent = `+${f.added}`;
+      fs.children[1].textContent = `-${f.removed}`;
+      const btn = row.querySelector('.tfc-row-btn');
+      const preview = row.querySelector('.tfc-preview');
+      let loaded = false;
+      btn.onclick = () => {
+        preview.classList.toggle('hidden');
+        if (loaded || !f.toolUseId) return;
+        loaded = true;
+        socket.emit('tool:preview', { instanceId: inst, toolUseId: f.toolUseId }, res => {
+          preview.replaceChildren();
+          if (!res?.ok) {
+            const m = el(`<div class="${res?.inWhitelist === false ? 'text-danger' : 'text-ink-faint'}"></div>`);
+            m.textContent = res?.error || '预览不可用';
+            preview.appendChild(m);
+            return;
+          }
+          if (res.attribution) {
+            const lab = el(`<div class="text-ink-faint"></div>`);
+            lab.textContent = `📁 ${res.attribution.workdirLabel} / ${res.attribution.relPath}`;
+            preview.appendChild(lab);
+          }
+          const addPre = (txt, bg) => {
+            const pre = el(`<pre class="overflow-x-auto whitespace-pre-wrap break-words rounded px-2 py-1"></pre>`);
+            if (bg) pre.style.background = bg;
+            pre.textContent = txt;
+            preview.appendChild(pre);
+          };
+          if (res.diff) {
+            for (const h of (res.diff.hunks || [])) {
+              if (h.old) addPre('- ' + h.old, 'rgba(188,67,52,.12)');
+              if (h.new) addPre('+ ' + h.new, 'rgba(61,138,80,.12)');
+            }
+            if (res.diff.added !== undefined) addPre(String(res.diff.added), 'rgba(61,138,80,.12)');
+          } else {
+            const m = el(`<div class="text-ink-faint"></div>`);
+            m.textContent = '无 diff 详情（可到对应工具卡查看）';
+            preview.appendChild(m);
+          }
+        });
+      };
+      list.appendChild(row);
+    }
+    appendMessage(card);
+    scrollBottom();
+    return card;
   }
 
   // ---- 审批完整性预检（NFR-17，承接 docs/design.md 协议步骤4）----
@@ -2972,7 +3078,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // REDESIGN: Update active workspace text pill
     if (topProjectText) {
       topProjectText.textContent = baseName(currentCwd);
-      topContextPill.title = currentCwd ? `浏览项目文件（只读）：${currentCwd}` : '浏览项目文件（只读）';
+      if (topContextPill) {
+        topContextPill.title = currentCwd ? `浏览项目文件（只读）：${currentCwd}` : '浏览项目文件（只读）';
+      }
     }
     // pillWorkspace（📁 状态 pill）显当前工作区名——该 pill 是工作区入口，显 model 名是名实错配（2026-06-21）
     if ($('pillWorkspaceText')) $('pillWorkspaceText').textContent = baseName(currentCwd);
@@ -2984,6 +3092,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (topTitleText) {
       topTitleText.textContent = shouldShowStartScreen({ viewingInstanceId: newViewing, sessionId: instancesList.find(x => x.instanceId === newViewing)?.sessionId }) ? '新聊天' : '聊天';
     }
+    // 顶栏文件夹 pill：首页/compose 隐藏（页内已有工作区入口）；进入真实会话后显示
+    syncTopContextPillVisibility(newViewing, instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
     // 保持纯手动展开折叠，不自动展开任何工作区目录
 
     // 切视图：viewingInstanceId 变了重载；空首页内换工作区（newViewing 恒 null、cwd 变了）也重渲——
@@ -3177,6 +3287,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 进入真实会话：输入条常显（shouldShowComposer 看 sessionId）；composeReady 可清掉。
     leaveComposeReady();
     syncComposerVisibility();
+    syncTopContextPillVisibility(id, sid);
 
     // Phase 2: Check memory cache for instant restoration.
     // 已完成的对话/工具卡片按 session 不可变：同 sessionId 即恢复 DOM，不要求 instanceId 相同
@@ -4116,6 +4227,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     messagesEl.innerHTML = '';
     messagesEl.classList.remove('empty-start');
     streams.clear(); thinkings.clear(); toolCards.clear();
+    turnFileChanges = new Map(); // 切会话：丢弃未 flush 的本轮账本
     // UX-008：清视图后若仍无内容（新会话），给极简引导
     queueMicrotask(() => maybeShowEmptySessionGuide());
     subagentCards.clear(); // 切会话/清屏：丢弃子 agent 卡状态（DOM 已随 messagesEl 清空）
@@ -4168,6 +4280,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     });
     if (!composerFooterEl) return;
     composerFooterEl.classList.toggle('hidden', !show);
+  }
+  // 顶部文件夹 pill：仅真实会话显示（首页/compose 页内已有工作区入口，再放会重复）。
+  function syncTopContextPillVisibility(viewingId = viewingInstanceId, sessionId = null) {
+    if (!topContextPill) return;
+    const sid = sessionId
+      ?? instancesList.find(x => x.instanceId === viewingId)?.sessionId
+      ?? currentSessionId
+      ?? displayedSessionId
+      ?? null;
+    const show = shouldShowTopContextPill({ viewingInstanceId: viewingId, sessionId: sid });
+    topContextPill.classList.toggle('hidden', !show);
+    // 隐藏时不可聚焦，避免读屏仍读到「浏览项目文件」
+    topContextPill.tabIndex = show ? 0 : -1;
+    topContextPill.setAttribute('aria-hidden', show ? 'false' : 'true');
   }
   function enterComposeReady() {
     _composeReady = true;
@@ -4228,6 +4354,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (topTitleText) topTitleText.textContent = '新聊天';
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
+    syncTopContextPillVisibility(null, null); // compose 页：隐藏顶栏文件夹（页内已有工作区 pill）
 
     const defaultsText = formatComposeDefaultsSummary(currentComposeDefaultsLabels());
     const container = el(`
@@ -4278,6 +4405,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (topTitleText) topTitleText.textContent = '新聊天';
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
+    syncTopContextPillVisibility(null, null); // 首页：顶栏文件夹隐藏
 
     const hour = new Date().getHours();
     let greeting;
@@ -4287,19 +4415,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     else if (hour < 18) greeting = '下午好，今天我能帮您做什么？';
     else greeting = '晚上好，今天我能帮您做什么？';
 
+    // 首页 = 枢纽：问候 + 最近工作区/会话；不标「当前工作区」
+    // （＋ 仍用 currentCwd 默认区；要先选区 → 侧栏或最近 chip）
     const container = el(`
-      <div class="dashboard-container flex flex-col items-center w-full max-w-xl mx-auto py-6 px-3 select-none">
-        <!-- 问候语区域 -->
+      <div class="dashboard-container flex flex-col items-center w-full max-w-xl mx-auto py-6 px-3 select-none" data-testid="home-dashboard">
         <div class="text-center mb-6 w-full">
-          <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-ink mb-3 leading-tight" id="dashGreeting">${esc(greeting)}</h1>
-          <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1">当前工作区 / Active Workspace</div>
-          <button type="button" class="empty-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="点击打开会话列表（按工作区浏览）">
-            <svg class="w-4 h-4 shrink-0 text-accent opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5h4.25l2 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
-            </svg>
-            <span class="max-w-[12rem] truncate">${esc(baseName(currentCwd))}</span>
-            <span class="text-xs text-ink-faint">⌄</span>
-          </button>
+          <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-ink mb-1 leading-tight" id="dashGreeting">${esc(greeting)}</h1>
+          <p class="text-xs text-ink-faint">从最近会话继续，或点 ＋ 新建</p>
         </div>
 
         <div id="dashWorkspacesSection" class="w-full hidden mb-5">
@@ -4318,7 +4440,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           <div id="dashRecentsList" class="flex flex-col gap-2 w-full"></div>
         </div>
 
-        <!-- 使用引导入口（落地页常驻）：复用设置面板同款帮助页 -->
+        <div id="dashEmptyHint" class="w-full hidden text-center mt-2">
+          <p class="text-xs text-ink-faint mb-3">还没有最近会话</p>
+          <button type="button" class="dash-open-sessions inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="打开会话列表">
+            打开工作区与会话列表
+          </button>
+        </div>
+
         <button id="dashHelpLink" class="mt-6 text-xs text-ink-faint hover:text-accent underline underline-offset-2 transition-colors" type="button">❓ 如何连接与使用</button>
       </div>`);
 
@@ -4326,18 +4454,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const dashHelp = container.querySelector('#dashHelpLink');
     if (dashHelp) dashHelp.onclick = (e) => { e.stopPropagation(); haptic('tap'); showAccessHelp(); };
 
-    // 绑定工作区按钮 → 打开侧栏完整会话树（按工作区浏览 / 新建）
-    container.querySelector('.empty-project-pill').onclick = (e) => {
-      e.stopPropagation();
+    const openSessions = (e) => {
+      e?.stopPropagation?.();
       haptic('tap');
       if (btnSessions) btnSessions.onclick();
     };
+    container.querySelector('.dash-open-sessions')?.addEventListener('click', openSessions);
 
     // 跨全部白名单工作区拉最近会话（并行 session:list），合并后展示，便于冷启动/空首页一键切回。
     const recentsSection = container.querySelector('#dashRecentsSection');
     const recentsList = container.querySelector('#dashRecentsList');
     const workspacesSection = container.querySelector('#dashWorkspacesSection');
     const workspacesList = container.querySelector('#dashWorkspacesList');
+    const emptyHint = container.querySelector('#dashEmptyHint');
     const dirs = (availableDirs && availableDirs.length) ? availableDirs.slice() : (currentCwd ? [currentCwd] : []);
     const gen = ++_dashRecentsGen;
 
@@ -4376,10 +4505,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           };
           workspacesList.appendChild(chip);
         }
-        workspacesSection.classList.remove('hidden');
+        if (wsOrder.length) workspacesSection.classList.remove('hidden');
+        else workspacesSection.classList.add('hidden');
       }
 
-      recentsSection.classList.remove('hidden');
       recentsList.innerHTML = '';
       for (const s of recent) {
         const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : '时间未知';
@@ -4408,6 +4537,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         };
         recentsList.appendChild(item);
       }
+      if (recent.length) {
+        recentsSection.classList.remove('hidden');
+        emptyHint?.classList.add('hidden');
+      } else {
+        recentsSection.classList.add('hidden');
+        emptyHint?.classList.remove('hidden');
+      }
     };
 
     if (recentsSection && recentsList && dirs.length) {
@@ -4419,9 +4555,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }))).then(dirLists => {
         if (gen !== _dashRecentsGen) return; // 已换页/重渲
         const recent = mergeRecentSessionsAcrossWorkspaces(dirLists, { limit: 8 });
-        if (!recent.length) return;
-        renderDashRecents(recent);
+        renderDashRecents(recent); // 空列表也渲 → dashEmptyHint
       });
+    } else if (emptyHint) {
+      emptyHint.classList.remove('hidden');
     }
 
     messagesEl.appendChild(container);
@@ -4514,7 +4651,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
         if (msg.toolUseId) histToolCards.set(msg.toolUseId, card);
         // 主链 Agent/Task：预建折叠卡（与 live 一致）
-        if (!msg.parentToolUseId && !msg.isSidechain && (msg.name === 'Agent' || msg.name === 'Task') && msg.toolUseId) {
+        if (!msg.parentToolUseId && !msg.isSidechain && isSpawnToolName(msg.name) && msg.toolUseId) {
           ensureHistSub(msg.toolUseId);
         }
         appendNode(card, msg);
