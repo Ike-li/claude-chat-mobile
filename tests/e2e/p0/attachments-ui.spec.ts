@@ -163,12 +163,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#attachTray')).toContainText('keep-me.txt');
     await expect(page.locator('#attachTray')).toContainText('remove-me.txt');
 
-    // chip hit-44 会拦截 ✕ 命中；直接调 DOM 移除钮（等同用户点 ✕）
-    await page.evaluate(() => {
-      const chip = [...document.querySelectorAll('#attachTray > div')]
-        .find(el => el.textContent?.includes('remove-me.txt'));
-      chip?.querySelector('button')?.click();
-    });
+    // 真实点击 ✕（hit-44 必须在按钮上而非 chip，否则 ::after 会吞点击）
+    await page.locator('#attachTray > div')
+      .filter({ hasText: 'remove-me.txt' })
+      .getByRole('button', { name: '移除附件' })
+      .click();
     await expect(page.locator('#attachTray')).toContainText('keep-me.txt');
     await expect(page.locator('#attachTray')).not.toContainText('remove-me.txt');
 
@@ -196,11 +195,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#attachTray')).toContainText('slot-0.txt');
     await expect(page.locator('#attachTray')).toContainText('slot-9.txt');
 
-    await page.evaluate(() => {
-      const chip = [...document.querySelectorAll('#attachTray > div')]
-        .find(el => el.textContent?.includes('slot-9.txt'));
-      chip?.querySelector('button')?.click();
-    });
+    await page.locator('#attachTray > div')
+      .filter({ hasText: 'slot-9.txt' })
+      .getByRole('button', { name: '移除附件' })
+      .click();
     await expect(page.locator('#attachTray')).not.toContainText('slot-9.txt');
 
     await page.locator('#fileInput').setInputFiles({

@@ -30,9 +30,30 @@ export function createAttachmentController(context, options = {}) {
     onChange(items());
   }
 
+  function ensureId(item) {
+    if (!item || typeof item !== 'object') return item;
+    if (item._id) return item;
+    const now = (deps.now || Date.now)();
+    const random = (deps.random || Math.random)();
+    return {
+      ...item,
+      _id: `${now}-${random.toString(36).slice(2)}`,
+    };
+  }
+
   function setItems(next) {
-    pending = Array.isArray(next) ? next.slice() : [];
+    // payload()/发送失败回灌可能无 _id；补齐后 ✕ 才能按 id 移除（否则 undefined!==undefined 永 false）
+    pending = Array.isArray(next) ? next.map(ensureId) : [];
     notifyChange();
+  }
+
+  function remove(id) {
+    if (id == null) return false;
+    const before = pending.length;
+    pending = pending.filter(item => item._id !== id);
+    if (pending.length === before) return false;
+    notifyChange();
+    return true;
   }
 
   function clear() {
@@ -164,7 +185,9 @@ export function createAttachmentController(context, options = {}) {
       attachment._nameOcc = nameCount.get(base);
     }
     for (const attachment of pending) {
-      const chip = createElement('<div class="relative flex items-center gap-1.5 bg-sunk rounded-lg pl-1.5 pr-6 py-1 text-xs max-w-[12rem] cursor-pointer active:scale-[0.98] transition-transform hit-44" title="点击预览"></div>');
+      // 勿给 chip 挂 hit-44：其 ::after 叠在子节点之上，会吞掉内部 ✕ 的点击（手机点叉叉无效）。
+      // 热区扩到 ✕ 按钮自身 + z-10，保证盖住 chip 点击预览。
+      const chip = createElement('<div class="relative flex items-center gap-1.5 bg-sunk rounded-lg pl-1.5 pr-7 py-1 text-xs max-w-[12rem] cursor-pointer active:scale-[0.98] transition-transform" title="点击预览"></div>');
       if (attachment.thumb) {
         const image = createElement('<img class="w-8 h-8 rounded object-cover shrink-0">');
         image.src = attachment.thumb;
@@ -175,15 +198,14 @@ export function createAttachmentController(context, options = {}) {
       const name = createElement('<span class="truncate"></span>');
       name.textContent = formatAttachmentChipLabel(attachment.name, attachment._nameOcc, attachment.size);
       chip.appendChild(name);
-      const remove = createElement('<button type="button" class="absolute right-1 top-1/2 -translate-y-1/2 text-ink-faint active:text-danger" title="移除">✕</button>');
-      remove.onclick = event => {
+      const removeBtn = createElement('<button type="button" class="absolute right-0 top-1/2 -translate-y-1/2 z-10 hit-44 w-7 h-7 flex items-center justify-center text-ink-faint active:text-danger" title="移除" aria-label="移除附件">✕</button>');
+      removeBtn.onclick = event => {
         event.preventDefault();
         event.stopPropagation();
-        pending = pending.filter(item => item._id !== attachment._id);
-        notifyChange();
+        remove(attachment._id);
       };
       chip.onclick = () => openPreview(attachment);
-      chip.appendChild(remove);
+      chip.appendChild(removeBtn);
       tray.appendChild(chip);
     }
     tray.classList.remove('hidden');
@@ -230,5 +252,5 @@ export function createAttachmentController(context, options = {}) {
   }
 
   if (autoBind) bind();
-  return { addFiles, clear, closePreview, items, openPreview, payload, render, setItems };
+  return { addFiles, clear, closePreview, items, openPreview, payload, remove, render, setItems };
 }

@@ -123,6 +123,39 @@ test('attachment controller owns pending attachment state without leaking mutabl
   assert.equal(changes.length, 2);
 });
 
+// 用户点 chip ✕ 移除附件：按 _id 删；payload/草稿回灌可能丢 _id，setItems 须补齐否则 filter 永 false。
+test('attachment controller remove filters by _id and backfills missing ids on setItems', () => {
+  let seq = 0;
+  const context = createAppContext({
+    dependencies: {
+      now: () => 1000 + seq,
+      random: () => 0.123456789 + (seq++ * 0.01),
+    },
+  });
+  const attachments = createAttachmentController(context, { autoBind: false });
+
+  attachments.setItems([
+    { name: 'keep.txt', size: 1, data: 'YQ==' },
+    { name: 'drop.txt', size: 1, data: 'Yg==' },
+  ]);
+  const [keep, drop] = attachments.items();
+  assert.ok(keep._id, 'setItems 无 _id 时应补齐');
+  assert.ok(drop._id);
+  assert.notEqual(keep._id, drop._id);
+
+  assert.equal(attachments.remove(drop._id), true);
+  assert.deepEqual(
+    attachments.items().map(a => a.name),
+    ['keep.txt'],
+  );
+  assert.equal(attachments.remove('missing-id'), false);
+  assert.equal(attachments.items().length, 1);
+
+  // 保留已有 _id，不重写
+  attachments.setItems([{ _id: 'stable', name: 'x.bin', size: 2, data: 'eA==' }]);
+  assert.equal(attachments.items()[0]._id, 'stable');
+});
+
 test('RTT monitor renders latency through app context and clears stale values', () => {
   const rtt = { textContent: '', className: '', title: '' };
   const wrap = { title: '' };
