@@ -242,6 +242,9 @@ export function formatLiveActivityText(kind = 'default', payload = {}) {
       const icon = name === 'Workflow' ? '⚙️' : '🤖';
       return `${icon} ${desc.length > 50 ? `${desc.slice(0, 47)}...` : desc}`;
     }
+    // Task 清单工具按读/写语义给人话文案（'Task' spawn 工具已被上面分支截走）
+    if (name === 'TaskCreate' || name === 'TaskUpdate') return 'Claude 正在更新任务清单...';
+    if (name === 'TaskList' || name === 'TaskGet') return 'Claude 正在查看任务清单...';
     return `Claude 正在运行工具 ${name}...`;
   }
   return 'Claude 正在执行任务...';
@@ -298,7 +301,7 @@ export function statusIconSpec(kind) {
 export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
   const name = String(toolName || '').trim() || 'tool';
   const raw = inputSummary == null ? '' : String(inputSummary).trim();
-  if (!raw) return name;
+  if (!raw || raw === '{}') return name; // 空对象输入不拼「· {}」（CLI 对空输入零渲染）
   let snippet = raw;
   if (raw[0] === '{' || raw[0] === '[') {
     try {
@@ -317,6 +320,89 @@ export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
   const cap = Math.max(8, Number(maxLen) || 48);
   if (snippet.length > cap) snippet = snippet.slice(0, cap - 1) + '…';
   return `${name} · ${snippet}`;
+}
+
+// Task 清单工具（CLI 内建 todo：TaskCreate/TaskUpdate/TaskList/TaskGet）。
+// CLI 对这组工具 renderToolUseMessage=null + 专用任务面板；web 无面板，
+// 折中为流内特化渲染：标题去 JSON 噪音、结果显 ☐/◐/☒ 清单（机主 7/17 拍板）。
+const TASK_LIST_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet']);
+const TASK_STATUS_ICONS = { pending: '☐', in_progress: '◐', completed: '☒' };
+const taskStatusIcon = s => TASK_STATUS_ICONS[s] ?? `[${s}]`;
+
+function parseJsonObject(raw) {
+  if (typeof raw !== 'string') return null;
+  const t = raw.trim();
+  if (t[0] !== '{') return null;
+  try {
+    const parsed = JSON.parse(t);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch { return null; } // agent 端截断的残缺 JSON → null，调用方走通用路径
+}
+
+// 特化收起态标题；非 Task 清单工具返回 null → 调用方回落 formatToolCardTitle。
+export function formatTaskToolTitle(toolName, inputSummary, maxLen = 48) {
+  const name = String(toolName || '').trim();
+  if (!TASK_LIST_TOOLS.has(name)) return null;
+  const input = parseJsonObject(inputSummary) ?? {};
+  if (name === 'TaskCreate') {
+    const subject = typeof input.subject === 'string' ? input.subject.trim() : '';
+    return subject ? formatToolCardTitle(name, subject, maxLen) : name;
+  }
+  const id = (typeof input.taskId === 'string' || typeof input.taskId === 'number') && String(input.taskId).trim()
+    ? `#${String(input.taskId).trim()}` : '';
+  if (name === 'TaskUpdate') {
+    const status = typeof input.status === 'string' ? input.status.trim() : '';
+    if (id && status) return `${name} · ${id} → ${status}`;
+    return id ? `${name} · ${id}` : name;
+  }
+  if (name === 'TaskGet') return id ? `${name} · ${id}` : name;
+  return name; // TaskList 输入恒空
+}
+
+// 特化结果正文（纯文本，调用方 textContent 注入、不走 hljs）。返回 null → 通用 JSON pretty。
+// 两种输入形态都认：live 走 agent.js 的结构化 tool_use_result JSON；历史回显走
+// history.js 的 block.content 文本（"#1 [pending] 主题" / "No tasks found"）。
+export function renderTaskToolResultText(toolName, outputSummary) {
+  const name = String(toolName || '').trim();
+  if (!TASK_LIST_TOOLS.has(name) || typeof outputSummary !== 'string') return null;
+  const out = parseJsonObject(outputSummary);
+  if (name === 'TaskList') {
+    if (out) {
+      if (!Array.isArray(out.tasks)) return null;
+      if (out.tasks.length === 0) return '（无任务）';
+      return out.tasks.map(t => {
+        const id = t?.id != null ? `#${t.id} ` : '';
+        const subject = typeof t?.subject === 'string' ? t.subject : '';
+        const blocked = Array.isArray(t?.blockedBy) && t.blockedBy.length
+          ? `（被 ${t.blockedBy.map(b => `#${b}`).join(' ')} 阻塞）` : '';
+        return `${taskStatusIcon(String(t?.status ?? 'pending'))} ${id}${subject}${blocked}`.trimEnd();
+      }).join('\n');
+    }
+    if (outputSummary.trim() === 'No tasks found') return '（无任务）';
+    // 历史文本形态逐行转图标；整体不匹配则交还通用路径
+    const lines = outputSummary.trim().split('\n');
+    const converted = lines.map(l => {
+      const m = /^#(\S+) \[([\w-]+)\] (.*)$/.exec(l.trim());
+      return m ? `${taskStatusIcon(m[2])} #${m[1]} ${m[3]}` : null;
+    });
+    return converted.every(Boolean) ? converted.join('\n') : null;
+  }
+  if (!out) return null;
+  if (name === 'TaskCreate') {
+    if (out.task?.id == null) return null;
+    const subject = typeof out.task.subject === 'string' && out.task.subject ? `：${out.task.subject}` : '';
+    return `☐ 已建任务 #${out.task.id}${subject}`;
+  }
+  if (name === 'TaskUpdate') {
+    if (out.success === false) return `更新失败：${out.error || '未知原因'}`;
+    if (out.taskId == null) return null;
+    const sc = out.statusChange;
+    if (sc?.from && sc?.to) return `${taskStatusIcon(sc.to)} #${out.taskId} ${sc.from} → ${sc.to}`;
+    const fields = Array.isArray(out.updatedFields) && out.updatedFields.length
+      ? `（${out.updatedFields.join(', ')}）` : '';
+    return `#${out.taskId} 已更新${fields}`;
+  }
+  return null; // TaskGet 详情信息量大，保留通用 JSON 展示
 }
 
 // 从 paste 事件的 clipboardData 里挑出 image/* 文件（桌面 Chrome 截图/复制图 → Ctrl/Cmd+V）。

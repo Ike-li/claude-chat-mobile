@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../../public/js/logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../../public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -109,6 +109,103 @@ test('formatToolCardTitle: 缺省工具名安全', () => {
   assert.equal(formatToolCardTitle('', 'x'), 'tool · x');
   assert.equal(formatToolCardTitle(null, null), 'tool');
 });
+
+// 对齐 CLI：Task 清单工具 renderToolUseMessage=null——空对象输入不该拼「· {}」噪音
+test('formatToolCardTitle: 空对象输入 {} → 仅工具名（对齐 CLI 不显输入）', () => {
+  assert.equal(formatToolCardTitle('TaskList', '{}'), 'TaskList');
+  assert.equal(formatToolCardTitle('AnyTool', '  {}  '), 'AnyTool');
+});
+
+// Task 清单工具（TaskCreate/TaskUpdate/TaskList/TaskGet）特化标题；非 Task 工具返回 null 走通用路径
+test('formatTaskToolTitle: TaskCreate 取 subject（description 长文不入标题）', () => {
+  const input = JSON.stringify({ subject: '修登录 bug', description: '很长的实现说明……', activeForm: '修复中' });
+  assert.equal(formatTaskToolTitle('TaskCreate', input), 'TaskCreate · 修登录 bug');
+});
+
+test('formatTaskToolTitle: TaskUpdate 显 #id → status；无 status 只显 #id', () => {
+  assert.equal(
+    formatTaskToolTitle('TaskUpdate', JSON.stringify({ taskId: '9', status: 'in_progress' })),
+    'TaskUpdate · #9 → in_progress',
+  );
+  assert.equal(
+    formatTaskToolTitle('TaskUpdate', JSON.stringify({ taskId: '9', subject: '改名' })),
+    'TaskUpdate · #9',
+  );
+});
+
+test('formatTaskToolTitle: TaskList 仅工具名；TaskGet 显 #id', () => {
+  assert.equal(formatTaskToolTitle('TaskList', '{}'), 'TaskList');
+  assert.equal(formatTaskToolTitle('TaskGet', JSON.stringify({ taskId: '3' })), 'TaskGet · #3');
+});
+
+test('formatTaskToolTitle: 非 Task 工具 / 残缺 JSON → null 或安全回退', () => {
+  assert.equal(formatTaskToolTitle('Bash', JSON.stringify({ command: 'ls' })), null);
+  assert.equal(formatTaskToolTitle('TaskCreate', '{"subject":"被截'), 'TaskCreate');
+  assert.equal(formatTaskToolTitle('TaskList', null), 'TaskList');
+});
+
+// Task 清单工具结果特化正文：live 结构化 JSON（agent.js 优先 tool_use_result）与
+// 历史回显文本形态（history.js 只取 block.content："#1 [pending] 主题"）都要认
+test('renderTaskToolResultText: TaskList JSON → ☐/◐/☒ 清单 + 阻塞标注', () => {
+  const out = JSON.stringify({ tasks: [
+    { id: '2', subject: 'A组核实', status: 'completed', blockedBy: [] },
+    { id: '4', subject: 'C组核实', status: 'in_progress', blockedBy: [] },
+    { id: '10', subject: '汇总报告', status: 'pending', blockedBy: ['4'] },
+  ] });
+  assert.equal(
+    renderTaskToolResultText('TaskList', out),
+    '☒ #2 A组核实\n◐ #4 C组核实\n☐ #10 汇总报告（被 #4 阻塞）',
+  );
+});
+
+test('renderTaskToolResultText: TaskList 空清单两种形态 → （无任务）', () => {
+  assert.equal(renderTaskToolResultText('TaskList', JSON.stringify({ tasks: [] })), '（无任务）');
+  assert.equal(renderTaskToolResultText('TaskList', 'No tasks found'), '（无任务）');
+});
+
+test('renderTaskToolResultText: TaskList 历史文本形态 "#1 [pending] 主题" → 图标行', () => {
+  const text = '#2 [completed] A组核实\n#4 [in_progress] C组核实\n#10 [pending] 汇总报告';
+  assert.equal(
+    renderTaskToolResultText('TaskList', text),
+    '☒ #2 A组核实\n◐ #4 C组核实\n☐ #10 汇总报告',
+  );
+});
+
+test('renderTaskToolResultText: TaskCreate → 已建任务行；TaskUpdate → 状态迁移行', () => {
+  assert.equal(
+    renderTaskToolResultText('TaskCreate', JSON.stringify({ task: { id: '9', subject: '修登录 bug' } })),
+    '☐ 已建任务 #9：修登录 bug',
+  );
+  assert.equal(
+    renderTaskToolResultText('TaskUpdate', JSON.stringify({
+      success: true, taskId: '9', updatedFields: ['status'],
+      statusChange: { from: 'pending', to: 'in_progress' },
+    })),
+    '◐ #9 pending → in_progress',
+  );
+});
+
+test('renderTaskToolResultText: TaskUpdate 无状态迁移显更新字段；失败显错误', () => {
+  assert.equal(
+    renderTaskToolResultText('TaskUpdate', JSON.stringify({ success: true, taskId: '9', updatedFields: ['subject', 'description'] })),
+    '#9 已更新（subject, description）',
+  );
+  assert.equal(
+    renderTaskToolResultText('TaskUpdate', JSON.stringify({ success: false, taskId: '9', updatedFields: [], error: 'Task not found' })),
+    '更新失败：Task not found',
+  );
+});
+
+test('renderTaskToolResultText: 非 Task 工具 / 截断残缺 JSON / 未知状态 → null 或兜底', () => {
+  assert.equal(renderTaskToolResultText('Bash', '{"tasks":[]}'), null);
+  assert.equal(renderTaskToolResultText('TaskList', '{"tasks":[{"id":"1","被截'), null);
+  // 未知 status 不抛：显 [status] 文本兜底
+  assert.equal(
+    renderTaskToolResultText('TaskList', JSON.stringify({ tasks: [{ id: '1', subject: 'x', status: 'paused', blockedBy: [] }] })),
+    '[paused] #1 x',
+  );
+});
+
 
 // UX-019：空态不打档位变更系统条；有消息后可留痕。审批留痕不走此函数。
 test('shouldEmitModeChangeBar: empty-start 抑制；非空放行', () => {

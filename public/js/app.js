@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -1196,8 +1196,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       clearApiRetryBanner();
       // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
       // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
-      // UX-002：收起态标题「工具名 · inputSummary 截断」，扫读不必逐张展开
-      const cardTitle = formatToolCardTitle(p.name, p.inputSummary);
+      // UX-002：收起态标题「工具名 · inputSummary 截断」，扫读不必逐张展开；Task 清单工具特化
+      const cardTitle = formatTaskToolTitle(p.name, p.inputSummary) ?? formatToolCardTitle(p.name, p.inputSummary);
       const card = el(`
         <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
           <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
@@ -1209,10 +1209,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           </div>
         </details>`);
       setStatusIcon(card.querySelector('.t-status'), 'pending');
+      card.dataset.toolName = p.name || ''; // tool_result 无 name，结果特化渲染从卡上取
       const inCode = card.querySelector('.t-in code');
       if (inCode) {
-        inCode.textContent = formatToolSummary(p.inputSummary || '');
-        try { hljs.highlightElement(inCode); } catch { /* 高亮失败不影响显示 */ }
+        // 空对象输入展开也只有「{}」噪音 → 整块藏掉（CLI 对空输入零渲染）
+        if (String(p.inputSummary || '').trim() === '{}') {
+          card.querySelector('.t-in')?.classList.add('hidden');
+        } else {
+          inCode.textContent = formatToolSummary(p.inputSummary || '');
+          try { hljs.highlightElement(inCode); } catch { /* 高亮失败不影响显示 */ }
+        }
       }
       toolCards.set(p.toolUseId, card);
       // 主会话写盘工具 → 记入本轮变更账本（Read / 子 agent 工具不入）
@@ -1339,8 +1345,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         // deny 通道正文带 SDK 加的 "Error:" 前缀（非真错误），剥掉只留语义文本
         const raw = p.denyKind ? p.outputSummary.replace(/^Error:\s*/i, '') : p.outputSummary;
         const code = out.querySelector('code') || out;
-        code.textContent = formatToolSummary(raw);
-        try { if (code !== out) hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
+        // Task 清单工具结果 → ☐/◐/☒ 清单文本（deny/报错走通用路径保留原文）
+        const taskText = (!p.denyKind && p.ok) ? renderTaskToolResultText(card.dataset.toolName, raw) : null;
+        code.textContent = taskText ?? formatToolSummary(raw);
+        try { if (!taskText && code !== out) hljs.highlightElement(code); } catch { /* 高亮失败不影响显示 */ }
+        if (taskText) card.open = true; // 清单即结果本体，收起就白渲染了（对齐 CLI 面板可见性）
         out.classList.remove('hidden');
         // 截断时挂「展开全文」——点后走 tool:full 取 agent 缓存的完整输出
         if (isToolSummaryTruncated(raw, { truncated: p.truncated }) && p.toolUseId) {
@@ -4632,8 +4641,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         continue;
       }
       if (msg?.kind === 'tool_use') {
-        // UX-002：历史回显与 live 一致——收起态带 inputSummary 截断
-        const histTitle = formatToolCardTitle(msg.name || 'tool', msg.inputSummary);
+        // UX-002：历史回显与 live 一致——收起态带 inputSummary 截断；Task 清单工具特化
+        const histTitle = formatTaskToolTitle(msg.name, msg.inputSummary) ?? formatToolCardTitle(msg.name || 'tool', msg.inputSummary);
         const card = el(`
           <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
             <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
@@ -4645,10 +4654,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             </div>
           </details>`);
         setStatusIcon(card.querySelector('.t-status'), 'pending');
+        card.dataset.toolName = msg.name || ''; // tool_result 无 name，结果特化渲染从卡上取
         const inCode = card.querySelector('.t-in code');
         if (inCode) {
-          inCode.textContent = formatToolSummary(msg.inputSummary || '');
-          codeBlocks.push(inCode);
+          if (String(msg.inputSummary || '').trim() === '{}') {
+            card.querySelector('.t-in')?.classList.add('hidden'); // 空对象输入不显（同 live）
+          } else {
+            inCode.textContent = formatToolSummary(msg.inputSummary || '');
+            codeBlocks.push(inCode);
+          }
         }
         if (msg.toolUseId) histToolCards.set(msg.toolUseId, card);
         // 主链 Agent/Task：预建折叠卡（与 live 一致）
@@ -4684,8 +4698,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (msg.outputSummary) {
           const out = card.querySelector('.t-out');
           const code = out.querySelector('code') || out;
-          code.textContent = formatToolSummary(msg.outputSummary);
-          if (code !== out) codeBlocks.push(code);
+          // Task 清单工具结果 → ☐/◐/☒ 清单文本（同 live；历史是 block.content 文本形态）
+          const taskText = msg.ok !== false ? renderTaskToolResultText(card.dataset.toolName, msg.outputSummary) : null;
+          code.textContent = taskText ?? formatToolSummary(msg.outputSummary);
+          if (!taskText && code !== out) codeBlocks.push(code);
+          if (taskText) card.open = true; // 清单即结果本体（同 live）
           out.classList.remove('hidden');
         }
         histToolCards.delete(msg.toolUseId);

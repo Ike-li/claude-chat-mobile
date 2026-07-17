@@ -168,6 +168,15 @@ test('formatLiveActivityText: 其他工具名', () => {
   );
 });
 
+// 对齐 CLI：Task 清单工具不报「正在运行工具 TaskList」，按读/写语义给人话文案。
+// 注意 'Task'（spawn 子 agent）不在此列——上面 Agent/Task 分支已先命中。
+test('formatLiveActivityText: Task 清单工具 → 任务清单文案', () => {
+  assert.equal(formatLiveActivityText('tool', { name: 'TaskCreate' }), 'Claude 正在更新任务清单...');
+  assert.equal(formatLiveActivityText('tool', { name: 'TaskUpdate' }), 'Claude 正在更新任务清单...');
+  assert.equal(formatLiveActivityText('tool', { name: 'TaskList' }), 'Claude 正在查看任务清单...');
+  assert.equal(formatLiveActivityText('tool', { name: 'TaskGet' }), 'Claude 正在查看任务清单...');
+});
+
 // 在线 user:message 的 socket ack 决策：成功只清 in-flight；失败须清 busy + 可见文案（可重试/永久）。
 // 旧实现把 ack 回调当 clearSendInFlight 忽略 payload → 负 ack 时像「发送失败但无反馈」。
 test('presentOnlineSendAck: ok → 仅确认成功，不清 busy', () => {
