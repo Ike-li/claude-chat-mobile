@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, serviceMetricsRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, serviceMetricsRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -443,11 +443,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     markQuestionAnswered,
   } = interactionState;
   const clientLogger = createClientLogger(appContext, {
+    storage: (typeof localStorage !== 'undefined' ? localStorage : null), // 抗 PWA 被杀：落盘+重开恢复
     onEntry(entry) {
       if (consoleModal?.classList.contains('sheet-open')) appendLogEntry(entry);
     },
   });
   const logClientEvent = clientLogger.log;
+  // 切后台/被 iOS 杀前把节流窗口内未落盘的日志尾巴强制写入。pagehide 在移动端比 unload 可靠；
+  // visibilitychange→hidden 覆盖「切走但未卸载」。flush 幂等（force write）、双挂无害。
+  window.addEventListener('pagehide', () => clientLogger.flush());
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') clientLogger.flush(); });
   const alerts = createAlertController(appContext);
   const haptic = alerts.haptic;
   const alertCue = alerts.cue;
@@ -620,7 +625,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const step = clientErrorGateStep(clientErrorGate, signature, Date.now());
       clientErrorGate = step.state;
       if (!step.send) return;
-      logClientEvent('error', `[JS_ERROR] ${payload.message}${payload.source ? ` @${payload.source}:${payload.line ?? '?'}` : ''}`);
+      // 本地抽屉条目附 stack 前 3 帧（此前 stack 只上服务端）——手机端无 devtools，本地就能看到出错位置。
+      const stackTail = payload.stack ? ` | ${payload.stack.split('\n').slice(0, 3).map(s => s.trim()).join(' ⏎ ')}` : '';
+      logClientEvent('error', `[JS_ERROR] ${payload.message}${payload.source ? ` @${payload.source}:${payload.line ?? '?'}` : ''}${stackTail}`);
       if (socket.connected) socket.emit('logs:clientError', payload);
     } catch { /* 上报器绝不能自己再抛 */ }
   };
@@ -722,6 +729,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
       const a = syncAckAction(err, res);
       if (a === 'reconnect') { if (socket.connected) socket.disconnect(); socket.connect(); return; }
+      if (res?.replayed > 0) logClientEvent('recv', `[WEB_RECV] 断线追平补发 ${res.replayed} 条`); // 对账断线期漏收
       if (a === 'reload') reloadCurrentFromHistory();
       // 'none'：回放走正常 agent:event 经 epoch/seq 去重增量渲染
       // 状态对账：重连/probe 补传后用快照重建未决审批卡片（reload 的 clearView 已同步执行完、不被清）；
@@ -1690,6 +1698,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
       // 对齐 CLI：用户主动中止时 SDK 常带 is_error + ede_diagnostic；interrupted 优先，不当红色错误展示。
       const ui = presentTurnResult(p);
+      logClientEvent('recv', `[WEB_RECV] ${ui.statusBar.text}`); // send↔recv 对账：turn 结果在客户端到达
       if (ui.failToolsMessage) failPendingToolCards(ui.failToolsMessage);
       agentToolIds.clear(); // 清理 Agent 工具 ID 跟踪
       alertCue(ui.haptic); // success / warning / error：音+震（各自开关门控）
@@ -5384,7 +5393,40 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   if (consoleClear) {
     consoleClear.onclick = () => {
+      clientLogger.clear(); // 清内存缓冲 + 落盘空缓冲（否则重开又恢复已清的旧条目）
+      lastRenderedLogs = [];
       if (consoleLogArea) consoleLogArea.innerHTML = '';
+    };
+  }
+
+  // 复制到剪贴板：优先 async Clipboard API；局域网 http（非安全上下文）下它不可用，回退隐藏 textarea+execCommand。
+  async function copyToClipboard(text) {
+    try {
+      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+    } catch { /* 权限拒绝/非安全上下文：落到回退 */ }
+    try {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      return ok;
+    } catch { return false; }
+  }
+
+  // 「复制全部」：把当前抽屉可见日志拼成多行文本，发给电脑 / 贴给 Claude 排障——手机端唯一带走途径。
+  const consoleCopy = $('consoleCopy');
+  if (consoleCopy) {
+    consoleCopy.onclick = async () => {
+      const text = formatLogsForCopy(lastRenderedLogs);
+      if (!text) return;
+      const ok = await copyToClipboard(text);
+      const orig = consoleCopy.textContent;
+      consoleCopy.textContent = ok ? '已复制' : '复制失败';
+      setTimeout(() => { consoleCopy.textContent = orig; }, 1500);
     };
   }
 
@@ -5395,7 +5437,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 仍渲染它们，否则首页打开日志抽屉一片空白、断连/重连痕迹全丢（logEntryVisibleForInstance 对 client_conn 恒 true）。
       if (consoleLogArea) {
         consoleLogArea.innerHTML = '';
-        clientLogger.entries().filter(e => logEntryVisibleForInstance(e, null)).forEach(log => appendLogEntry(log));
+        renderLogList(clientLogger.entries().filter(e => logEntryVisibleForInstance(e, null)));
       }
       return;
     }
@@ -5416,8 +5458,27 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (mergedLogs.length > 200) {
         mergedLogs = mergedLogs.slice(mergedLogs.length - 200);
       }
-      mergedLogs.forEach(log => appendLogEntry(log));
+      renderLogList(mergedLogs);
     });
+  }
+
+  let lastRenderedLogs = []; // 抽屉当前渲染的条目快照——「复制全部」的所见即所得数据源
+  // 批量渲染日志：在恢复段(上次会话)与本次会话交界插一条「—— 本次会话 ——」分隔（isRestoredBoundary）。
+  // 实时 onEntry 追加的都是本次(非 restored)、永不触发分隔，故分隔只在此批量路径出现。
+  function renderLogList(entries) {
+    if (!consoleLogArea) return;
+    lastRenderedLogs = entries;
+    let prev = null;
+    for (const entry of entries) {
+      if (isRestoredBoundary(prev, entry)) {
+        const sep = document.createElement('div');
+        sep.className = 'text-center text-[10px] text-gray-600 select-none py-1';
+        sep.textContent = '—— 本次会话 ——';
+        consoleLogArea.appendChild(sep);
+      }
+      appendLogEntry(entry);
+      prev = entry;
+    }
   }
 
   function appendLogEntry(p) {

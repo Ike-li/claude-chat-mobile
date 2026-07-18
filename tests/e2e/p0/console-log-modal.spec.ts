@@ -117,4 +117,48 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-16f 客户端日志落盘 localStorage 并在 reload 后恢复（抗 PWA 被杀）+ recv 对账锚点', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:statusline');
+    await waitForIdle(page);
+
+    // turn 结果到达记 recv 锚点（send↔recv 对账）
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleLogArea')).toContainText('WEB_RECV');
+    await page.locator('#consoleClose').click();
+
+    // 落盘：环形缓冲已同步写入 localStorage（首条 log 即写，不等节流）
+    const persisted = await page.evaluate(() => localStorage.getItem('ccm_client_logs'));
+    expect(persisted).toBeTruthy();
+    expect(persisted).toContain('client_');
+
+    // reload：localStorage 保留 → 恢复上次会话日志（restored），抽屉非空、不报错
+    await page.reload();
+    await ensureComposerReady(page);
+    const afterReload = await page.evaluate(() => localStorage.getItem('ccm_client_logs'));
+    expect(afterReload).toBeTruthy();
+
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toBeVisible();
+    await expect(page.locator('#consoleLogArea')).not.toBeEmpty();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-16g Console「复制全部」按钮存在且点击有反馈', async ({ page, context }) => {
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:statusline');
+    await waitForIdle(page);
+
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleCopy')).toBeVisible();
+    await page.locator('#consoleCopy').click();
+    await expect(page.locator('#consoleCopy')).toHaveText(/已复制|复制失败/);
+
+    await expectNoBrowserErrors(page);
+  });
 });

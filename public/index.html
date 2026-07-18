@@ -235,8 +235,11 @@
       
       <!-- Drawer Footer -->
       <div class="px-4 py-2 border-t border-gray-800 bg-gray-950/50 flex items-center justify-between shrink-0 text-xs text-gray-500 font-mono">
-        <span>内存环形缓冲最多存 100 条日志，关闭 Tab 自动清理</span>
-        <button id="consoleClear" class="px-2 py-0.5 rounded border border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300 active:scale-95">清屏</button>
+        <span>最多存 500 条，落盘本机、重开恢复</span>
+        <div class="flex items-center gap-1.5">
+          <button id="consoleCopy" class="px-2 py-0.5 rounded border border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300 active:scale-95">复制</button>
+          <button id="consoleClear" class="px-2 py-0.5 rounded border border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-300 active:scale-95">清屏</button>
+        </div>
       </div>
     </div>
   </div>

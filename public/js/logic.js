@@ -1592,3 +1592,48 @@ export function clientErrorGateStep(state, signature, now, { windowMs = 60000, m
   if (s.seen.includes(signature) || s.sent >= max) return { state: s, send: false };
   return { state: { windowStart: s.windowStart, sent: s.sent + 1, seen: [...s.seen, signature] }, send: true };
 }
+
+// ---- 客户端日志持久化/导出（抗 PWA 被 iOS 杀：环形缓冲纯内存，事故瞬间证据蒸发）----
+
+const CLIENT_LOG_SCHEMA = 1;         // 结构版本：不符即安全丢弃（不迁移旧格式，避免坏数据污染）
+const CLIENT_LOG_PERSIST_MAX = 500;  // 落盘上限：防 localStorage 超配额（~5MB）
+
+// entries → JSON 字符串（含 schema 版本）。只留最后 max 条：localStorage 同步写，越小越省。
+export function serializeClientLogs(entries, { max = CLIENT_LOG_PERSIST_MAX } = {}) {
+  const arr = Array.isArray(entries) ? entries.slice(-max) : [];
+  return JSON.stringify({ v: CLIENT_LOG_SCHEMA, entries: arr });
+}
+
+// JSON 字符串 → entries[]。不可信持久化数据：任何异常/结构不符/版本不符一律 → []（不崩、不污染）。
+// 每条打 restored:true——渲染层据此在「上次会话」与本次之间画分隔（见 isRestoredBoundary）。
+export function deserializeClientLogs(raw) {
+  if (typeof raw !== 'string' || !raw) return [];
+  let obj;
+  try { obj = JSON.parse(raw); } catch { return []; }
+  if (!obj || obj.v !== CLIENT_LOG_SCHEMA || !Array.isArray(obj.entries)) return [];
+  return obj.entries
+    .filter(e => e && typeof e === 'object')
+    .map(e => ({ ...e, restored: true }));
+}
+
+// 节流决策：距上次落盘是否已够久（默认 2s）。lastTs 空=从没写过→立即写。push 高频，靠此免每条同步写。
+export function shouldPersistLog(lastTs, now, intervalMs = 2000) {
+  if (lastTs == null) return true;
+  return now - lastTs >= intervalMs;
+}
+
+// 导出多行文本：`[本地时间] type text`，供抽屉「复制全部」发给电脑/贴给 Claude 排障。
+export function formatLogsForCopy(entries) {
+  if (!Array.isArray(entries) || !entries.length) return '';
+  return entries.map(e => {
+    const t = e?.ts ? new Date(e.ts).toLocaleTimeString() : '';
+    const type = String(e?.type ?? '').replace(/^client_/, '');
+    return `[${t}] ${type} ${e?.text ?? ''}`.trim();
+  }).join('\n');
+}
+
+// 本次会话分隔线判定：合并按 ts 升序=恢复段(上次会话)在前、本次在后；在恢复段末尾→本次开头的
+// 交界处（前条 restored、当前非 restored）画一次「—— 本次会话 ——」。全本次或全恢复都不画。
+export function isRestoredBoundary(prevEntry, entry) {
+  return !!prevEntry?.restored && !entry?.restored;
+}
