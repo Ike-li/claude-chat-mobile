@@ -225,28 +225,10 @@ export function resolveComposerPrimaryMode({
   };
 }
 
-// 流内 live 活动行文案（与历史 activeStatusText 分支一致；不写 disk/history）。
-export function formatLiveActivityText(kind = 'default', payload = {}) {
-  if (kind === 'thinking') return 'Claude 正在思考中...';
+// 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
+// spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令），故只剩 stopping/default 两种。
+export function formatLiveActivityText(kind = 'default') {
   if (kind === 'stopping') return '正在停止…';
-  if (kind === 'tool') {
-    const name = String(payload?.name || '').trim() || 'tool';
-    if (name === 'Bash') {
-      const cmd = String(payload?.command ?? payload?.cmd ?? payload?.inputSummary ?? '').trim();
-      if (!cmd) return `Claude 正在运行工具 ${name}...`;
-      return `🖥 ${cmd.length > 60 ? `${cmd.slice(0, 57)}...` : cmd}`;
-    }
-    if (isSpawnToolName(name)) {
-      const desc = String(payload?.description ?? payload?.inputSummary ?? '').trim();
-      if (!desc) return `Claude 正在运行工具 ${name}...`;
-      const icon = name === 'Workflow' ? '⚙️' : '🤖';
-      return `${icon} ${desc.length > 50 ? `${desc.slice(0, 47)}...` : desc}`;
-    }
-    // Task 清单工具按读/写语义给人话文案（'Task' spawn 工具已被上面分支截走）
-    if (name === 'TaskCreate' || name === 'TaskUpdate') return 'Claude 正在更新任务清单...';
-    if (name === 'TaskList' || name === 'TaskGet') return 'Claude 正在查看任务清单...';
-    return `Claude 正在运行工具 ${name}...`;
-  }
   return 'Claude 正在执行任务...';
 }
 
@@ -1458,15 +1440,15 @@ export function pickSpinnerVerb(rand = Math.random) {
   return SPINNER_VERBS[Math.floor(rand() * SPINNER_VERBS.length)] || 'Working';
 }
 
-// CLI 式动态状态行组装：✻ Stewing… (55s · ↓ 3.3k tokens · thought for 1s)[ · 🖥 npm test]
-// thinking = null | { state: 'active'|'done', ms }；outTokens 空/0 省段；工具文案在括号外做后缀段。
+// CLI 式动态状态行组装：✻ Stewing… (55s · ↓ 3.3k tokens · thought for 1s)
+// thinking = null | { state: 'active'|'done', ms }；outTokens 空/0 省段。
+// 对齐 CLI 不挂工具后缀段——正在执行的命令由消息流里的工具卡显示，此行只保动词+秒表+tokens+thinking。
 export function formatCliSpinnerLine({
   verb = '',
   elapsedSec = 0,
   outTokens = null,
   thinking = null,
   effort = null,
-  toolText = '',
   glyph = '✻',
 } = {}) {
   const v = String(verb || '').trim() || 'Working';
@@ -1478,8 +1460,7 @@ export function formatCliSpinnerLine({
   } else if (thinking?.state === 'done') {
     segs.push(`thought for ${Math.max(1, Math.round((thinking.ms || 0) / 1000))}s`);
   }
-  const tool = String(toolText || '').trim();
-  return `${glyph} ${v}… (${segs.join(' · ')})${tool ? ` · ${tool}` : ''}`;
+  return `${glyph} ${v}… (${segs.join(' · ')})`;
 }
 
 // thinking 秒数 burst 累计：delta 间隔 ≤ gapMs 计入时长，超 gap 视为新 burst 不补空档；首帧只记 lastTs。

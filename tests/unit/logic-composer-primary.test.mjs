@@ -135,48 +135,13 @@ test('resolveComposerPrimaryMode: sendInFlight 挡双击发送', () => {
   assert.match(out.title, /稍候/);
 });
 
-test('formatLiveActivityText: default / thinking / stopping', () => {
+// 对齐 CLI：spinner 行不挂工具后缀（'tool'/'thinking' 分支已退役），未知 kind 一律回落 default。
+test('formatLiveActivityText: default / stopping / 未知 kind 回落 default', () => {
   assert.equal(formatLiveActivityText('default'), 'Claude 正在执行任务...');
   assert.equal(formatLiveActivityText(), 'Claude 正在执行任务...');
-  assert.equal(formatLiveActivityText('thinking'), 'Claude 正在思考中...');
   assert.equal(formatLiveActivityText('stopping'), '正在停止…');
-});
-
-test('formatLiveActivityText: Bash 截断 60', () => {
-  const short = formatLiveActivityText('tool', { name: 'Bash', command: 'ls -la' });
-  assert.equal(short, '🖥 ls -la');
-  const longCmd = 'x'.repeat(70);
-  const long = formatLiveActivityText('tool', { name: 'Bash', command: longCmd });
-  assert.equal(long, `🖥 ${'x'.repeat(57)}...`);
-  assert.ok(long.length <= 4 + 60); // emoji + truncated
-});
-
-test('formatLiveActivityText: Agent/Task 截断 50', () => {
-  const short = formatLiveActivityText('tool', { name: 'Agent', description: 'explore UI' });
-  assert.equal(short, '🤖 explore UI');
-  const longDesc = 'y'.repeat(60);
-  const long = formatLiveActivityText('tool', { name: 'Task', description: longDesc });
-  assert.equal(long, `🤖 ${'y'.repeat(47)}...`);
-});
-
-test('formatLiveActivityText: 其他工具名', () => {
-  assert.equal(
-    formatLiveActivityText('tool', { name: 'Read' }),
-    'Claude 正在运行工具 Read...',
-  );
-  assert.equal(
-    formatLiveActivityText('tool', { name: 'ExitPlanMode' }),
-    'Claude 正在运行工具 ExitPlanMode...',
-  );
-});
-
-// 对齐 CLI：Task 清单工具不报「正在运行工具 TaskList」，按读/写语义给人话文案。
-// 注意 'Task'（spawn 子 agent）不在此列——上面 Agent/Task 分支已先命中。
-test('formatLiveActivityText: Task 清单工具 → 任务清单文案', () => {
-  assert.equal(formatLiveActivityText('tool', { name: 'TaskCreate' }), 'Claude 正在更新任务清单...');
-  assert.equal(formatLiveActivityText('tool', { name: 'TaskUpdate' }), 'Claude 正在更新任务清单...');
-  assert.equal(formatLiveActivityText('tool', { name: 'TaskList' }), 'Claude 正在查看任务清单...');
-  assert.equal(formatLiveActivityText('tool', { name: 'TaskGet' }), 'Claude 正在查看任务清单...');
+  assert.equal(formatLiveActivityText('thinking'), 'Claude 正在执行任务...');
+  assert.equal(formatLiveActivityText('tool', { name: 'Bash', command: 'ls -la' }), 'Claude 正在执行任务...');
 });
 
 // 在线 user:message 的 socket ack 决策：成功只清 in-flight；失败须清 busy + 可见文案（可重试/永久）。

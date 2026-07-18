@@ -18,7 +18,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permInput')).toContainText('测试 Y');
     await expect(page.locator('#permInput')).not.toContainText('\\n');
     await expect(page.locator('#permInput li')).toHaveCount(2);
-    await expect(page.locator('#streamLiveStatusText')).toContainText('ExitPlanMode');
+    // 对齐 CLI：spinner 行不挂工具后缀（工具卡已显示 ExitPlanMode），保持纯 ✻ 动词… (Ns…) 形态
+    await expect(page.locator('#streamLiveStatusText')).toContainText(/^✻ .+… \(\d+s/);
+    await expect(page.locator('#streamLiveStatusText')).not.toContainText('ExitPlanMode');
 
     // 2. 批准后权限档回落默认审批，状态不残留 ExitPlanMode。
     await page.locator('#permAllow').click();

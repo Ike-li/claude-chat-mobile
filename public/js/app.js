@@ -465,11 +465,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function ensureStreamLiveStatus() {
     if (streamLiveStatusEl && streamLiveStatusEl.isConnected) return streamLiveStatusEl;
     streamLiveStatusEl = el(`
-      <div id="streamLiveStatus" class="stream-live-status msg-frame flex items-center justify-center gap-2 px-3 py-1.5 text-xs" data-ephemeral="1" aria-live="polite" aria-busy="true">
-        <span class="relative flex h-2 w-2 shrink-0">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full stream-live-dot opacity-75"></span>
-          <span class="relative inline-flex rounded-full h-2 w-2 stream-live-dot"></span>
-        </span>
+      <div id="streamLiveStatus" class="stream-live-status msg-frame flex items-center justify-center px-3 py-1.5 text-xs" data-ephemeral="1" aria-live="polite" aria-busy="true">
         <span id="streamLiveStatusText" class="font-medium truncate max-w-full"></span>
       </div>`);
     return streamLiveStatusEl;
@@ -505,7 +501,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // CLI 式动态状态行（终端等价）：✻ Stewing… (55s · ↓ 3.3k tokens · thought for 1s)。
   // 每 turn setBusy(false→true) 时选一次动词并起 1s 秒表；token/秒表权威值来自 status_line.turn
   // （无该数据时退化为本地 Date.now() 从 0 计 + 省略 token 段）；文案组装在 logic.js 纯函数。
-  let liveLine = null;   // { verb, turnStartTs, serverTurnStartedAt, outTokens, thinking:{state,ms,lastTs}|null, toolText, override }
+  let liveLine = null;   // { verb, turnStartTs, serverTurnStartedAt, outTokens, thinking:{state,ms,lastTs}|null, override }
   let liveTicker = null;
   function renderLiveLineText() {
     if (!liveLine) return formatLiveActivityText('default');
@@ -517,7 +513,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       outTokens: liveLine.outTokens,
       thinking: liveLine.thinking,
       effort: currentEffort,
-      toolText: liveLine.toolText,
     });
   }
   // 已挂载时只直写文本节点（不 append/不 scrollBottom——status_line 300ms 一发，走 show 路径会把
@@ -1455,23 +1450,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const desc = extractInput(p.inputSummary, ['description', 'prompt', 'args'], '');
         if (desc) showActivityBanner(desc);
       }
-      // 工具状态细化：Bash 显示具体命令，spawn 工具显示任务描述，其他显示工具名（挂 spinner 行后缀段）
-      let toolText;
-      if (p.name === 'Bash') {
-        const cmd = extractInput(p.inputSummary, ['command', 'cmd'], p.inputSummary);
-        toolText = formatLiveActivityText('tool', { name: 'Bash', command: cmd });
-      } else if (isSpawnToolName(p.name)) {
-        const desc = extractInput(p.inputSummary, ['description', 'prompt', 'args'], p.inputSummary);
-        toolText = formatLiveActivityText('tool', { name: p.name, description: desc });
-      } else {
-        toolText = formatLiveActivityText('tool', { name: p.name });
-      }
-      if (liveLine) {
-        if (liveLine.thinking?.state === 'active') liveLine.thinking.state = 'done';
-        liveLine.toolText = toolText;
+      // 对齐 CLI：spinner 行不挂工具后缀（命令由上方工具卡显示）；工具启动只终结 thinking burst
+      if (liveLine?.thinking?.state === 'active') {
+        liveLine.thinking.state = 'done';
         renderLiveLine();
-      } else {
-        setStreamLiveStatusText(toolText);
       }
     },
     tool_result(p) {
@@ -2291,13 +2273,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     permExpandBtn?.remove(); permExpandBtn = null;
     closeSheet(permModal);
     showNextPerm();
-    // ExitPlanMode 与 AskUserQuestion 同属「瞬间完成型」工具：无论批准/拒绝，该工具调用即结束、
-    // 模型转入重新规划的长推理，而文案仍卡在已结束的「运行工具 ExitPlanMode」。仅此一类回落「思考中」
-    // 填补空窗；普通工具批准后真要执行，「运行工具 X」是正确文案、不动。无下一待审才落。见 answerQuestion。
-    if (wasExitPlanMode && !activePerm) {
-      if (liveLine) { liveLine.toolText = ''; renderLiveLine(); }
-      else setStreamLiveStatusText(formatLiveActivityText('thinking'));
-    }
     updateSendButtonState();
   }
   $('permAllow').onclick = () => answerPerm('allow');
@@ -2407,12 +2382,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     closeSheet(questionModal);
     resetQuestionOtherUI();
     showNextQuestion();
-    // 答完最后一题（队列已空、无下一题）：立即把流内状态从过时的「正在运行工具 AskUserQuestion」
-    // 切到「思考中」，填补「答完→模型首个流式事件到达」的空窗（实测中位 ~64s 模型推理）。
-    if (!activeQuestion) {
-      if (liveLine) { liveLine.toolText = ''; renderLiveLine(); }
-      else setStreamLiveStatusText(formatLiveActivityText('thinking'));
-    }
     if (barText) addBar(barText, 'text-ink-faint');
     updateSendButtonState();
   }
@@ -3759,7 +3728,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (show) {
       if (!interruptPending && btnStop) btnStop.disabled = false;
       // show === _busyState 去重保证每 turn 恰好在此选一次动词、起一次秒表
-      liveLine = { verb: pickSpinnerVerb(), turnStartTs: Date.now(), serverTurnStartedAt: null, outTokens: null, thinking: null, toolText: '', override: '' };
+      liveLine = { verb: pickSpinnerVerb(), turnStartTs: Date.now(), serverTurnStartedAt: null, outTokens: null, thinking: null, override: '' };
       startLiveTicker();
       showStreamLiveStatus(renderLiveLineText());
     } else {

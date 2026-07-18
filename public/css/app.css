@@ -623,9 +623,6 @@ body.ccm-sheet-open #messages {
   #streamLiveStatus {
     color: var(--activity);
   }
-  #streamLiveStatus .stream-live-dot {
-    background: var(--activity);
-  }
   #btnSend[data-mode="stop"] {
     background: var(--activity);
     color: var(--surface);
@@ -705,8 +702,7 @@ body.ccm-sheet-open #messages {
     #leftSidebar, #settingsSheet {
       transition: none !important;
     }
-    #activityBanner .animate-spin,
-    #streamLiveStatus .animate-ping {
+    #activityBanner .animate-spin {
       animation: none !important;
     }
     .skeleton-shimmer {
