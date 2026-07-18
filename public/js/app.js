@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -501,6 +501,40 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function hideStreamLiveStatus() {
     if (streamLiveStatusEl?.parentNode) streamLiveStatusEl.parentNode.removeChild(streamLiveStatusEl);
     streamLiveStatusEl = null;
+  }
+  // CLI 式动态状态行（终端等价）：✻ Stewing… (55s · ↓ 3.3k tokens · thought for 1s)。
+  // 每 turn setBusy(false→true) 时选一次动词并起 1s 秒表；token/秒表权威值来自 status_line.turn
+  // （无该数据时退化为本地 Date.now() 从 0 计 + 省略 token 段）；文案组装在 logic.js 纯函数。
+  let liveLine = null;   // { verb, turnStartTs, serverTurnStartedAt, outTokens, thinking:{state,ms,lastTs}|null, toolText, override }
+  let liveTicker = null;
+  function renderLiveLineText() {
+    if (!liveLine) return formatLiveActivityText('default');
+    if (liveLine.override) return liveLine.override;
+    const base = liveLine.serverTurnStartedAt || liveLine.turnStartTs;
+    return formatCliSpinnerLine({
+      verb: liveLine.verb,
+      elapsedSec: Math.max(0, Math.floor((Date.now() - base) / 1000)),
+      outTokens: liveLine.outTokens,
+      thinking: liveLine.thinking,
+      effort: currentEffort,
+      toolText: liveLine.toolText,
+    });
+  }
+  // 已挂载时只直写文本节点（不 append/不 scrollBottom——status_line 300ms 一发，走 show 路径会把
+  // 上翻阅读的用户反复拽底）；未挂载且忙碌才走 showStreamLiveStatus 完成挂载+置底。
+  function renderLiveLine() {
+    if (streamLiveStatusEl?.isConnected) {
+      const t = streamLiveStatusEl.querySelector('#streamLiveStatusText');
+      if (t) { t.textContent = renderLiveLineText(); return; }
+    }
+    if (_busyState) showStreamLiveStatus(renderLiveLineText());
+  }
+  function startLiveTicker() {
+    if (liveTicker) return;
+    liveTicker = setInterval(() => { if (liveLine) renderLiveLine(); }, 1000);
+  }
+  function stopLiveTicker() {
+    if (liveTicker) { clearInterval(liveTicker); liveTicker = null; }
   }
   function stripEphemeralMessageNodes(nodes) {
     return nodes.filter(n => !(n?.nodeType === 1 && n.getAttribute?.('data-ephemeral') === '1'));
@@ -1176,6 +1210,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }, formatStreamPreviewIntervalMs());
       }
       setBusy(true);
+      // 正文开流 = 本轮 thinking 阶段结束（事件驱动切换，比 idle 超时判定准）
+      if (liveLine?.thinking?.state === 'active') {
+        liveLine.thinking.state = 'done';
+        renderLiveLine();
+      }
     },
     thinking_delta(p) {
       clearApiRetryBanner();
@@ -1184,13 +1223,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
         scrollBottom();
         setBusy(true);
-        setStreamLiveStatusText(formatLiveActivityText('thinking'));
+        // 子 agent thinking 不计主线 thinking 时长（内容已折叠进子卡，live 行保留主线状态）
         return;
       }
       getThinking(p.messageId).body.appendData(p.text);
       scrollBottom();
       setBusy(true);
-      setStreamLiveStatusText(formatLiveActivityText('thinking'));
+      if (liveLine) {
+        liveLine.thinking = { state: 'active', ...advanceThinkingClock(liveLine.thinking || undefined, Date.now()) };
+        renderLiveLine();
+      }
     },
     tool_use(p) {
       clearApiRetryBanner();
@@ -1304,15 +1346,23 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const desc = extractInput(p.inputSummary, ['description', 'prompt', 'args'], '');
         if (desc) showActivityBanner(desc);
       }
-      // 工具状态细化：Bash 显示具体命令，spawn 工具显示任务描述，其他显示工具名
+      // 工具状态细化：Bash 显示具体命令，spawn 工具显示任务描述，其他显示工具名（挂 spinner 行后缀段）
+      let toolText;
       if (p.name === 'Bash') {
         const cmd = extractInput(p.inputSummary, ['command', 'cmd'], p.inputSummary);
-        setStreamLiveStatusText(formatLiveActivityText('tool', { name: 'Bash', command: cmd }));
+        toolText = formatLiveActivityText('tool', { name: 'Bash', command: cmd });
       } else if (isSpawnToolName(p.name)) {
         const desc = extractInput(p.inputSummary, ['description', 'prompt', 'args'], p.inputSummary);
-        setStreamLiveStatusText(formatLiveActivityText('tool', { name: p.name, description: desc }));
+        toolText = formatLiveActivityText('tool', { name: p.name, description: desc });
       } else {
-        setStreamLiveStatusText(formatLiveActivityText('tool', { name: p.name }));
+        toolText = formatLiveActivityText('tool', { name: p.name });
+      }
+      if (liveLine) {
+        if (liveLine.thinking?.state === 'active') liveLine.thinking.state = 'done';
+        liveLine.toolText = toolText;
+        renderLiveLine();
+      } else {
+        setStreamLiveStatusText(toolText);
       }
     },
     tool_result(p) {
@@ -1613,6 +1663,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (p.instanceId && viewingInstanceId && p.instanceId !== viewingInstanceId) return;
       // 兼容陈旧重放：老 payload 可能没有 instanceId，但仍带 cwd；用 cwd 兜底防止别的工作区状态线覆盖当前视图。
       if (!p.instanceId && p.cwd && currentCwd && p.cwd !== currentCwd) return;
+      // per-turn 权威秒表/token（agent.turnStartedAt/turnOutputTokens）：刷新/切实例回来后 live 行恢复真值
+      if (p.turn && liveLine) {
+        liveLine.serverTurnStartedAt = Number(p.turn.startedAt) || null;
+        liveLine.outTokens = Number(p.turn.outTokens) || null;
+        renderLiveLine();
+      }
       // 空启动页采用极简底部：模型/权限/思考 chips 即可，statusLine 进入消息流后再显示。
       if (messagesEl.classList.contains('empty-start')) return;
       const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
@@ -2130,7 +2186,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 模型转入重新规划的长推理，而文案仍卡在已结束的「运行工具 ExitPlanMode」。仅此一类回落「思考中」
     // 填补空窗；普通工具批准后真要执行，「运行工具 X」是正确文案、不动。无下一待审才落。见 answerQuestion。
     if (wasExitPlanMode && !activePerm) {
-      setStreamLiveStatusText(formatLiveActivityText('thinking'));
+      if (liveLine) { liveLine.toolText = ''; renderLiveLine(); }
+      else setStreamLiveStatusText(formatLiveActivityText('thinking'));
     }
     updateSendButtonState();
   }
@@ -2244,7 +2301,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 答完最后一题（队列已空、无下一题）：立即把流内状态从过时的「正在运行工具 AskUserQuestion」
     // 切到「思考中」，填补「答完→模型首个流式事件到达」的空窗（实测中位 ~64s 模型推理）。
     if (!activeQuestion) {
-      setStreamLiveStatusText(formatLiveActivityText('thinking'));
+      if (liveLine) { liveLine.toolText = ''; renderLiveLine(); }
+      else setStreamLiveStatusText(formatLiveActivityText('thinking'));
     }
     if (barText) addBar(barText, 'text-ink-faint');
     updateSendButtonState();
@@ -2665,7 +2723,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (interruptPending) return;
     interruptPending = true;
     if (btnStop) btnStop.disabled = true;
-    setStreamLiveStatusText(formatLiveActivityText('stopping'));
+    if (liveLine) { liveLine.override = formatLiveActivityText('stopping'); renderLiveLine(); }
+    else setStreamLiveStatusText(formatLiveActivityText('stopping'));
     updateSendButtonState();
     socket.emit('user:interrupt', { instanceId: viewingInstanceId }); // 台阶3：中断当前查看 tab 的在途任务
   }
@@ -3581,9 +3640,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     _busyState = show;
     if (show) {
       if (!interruptPending && btnStop) btnStop.disabled = false;
-      showStreamLiveStatus(formatLiveActivityText('default'));
+      // show === _busyState 去重保证每 turn 恰好在此选一次动词、起一次秒表
+      liveLine = { verb: pickSpinnerVerb(), turnStartTs: Date.now(), serverTurnStartedAt: null, outTokens: null, thinking: null, toolText: '', override: '' };
+      startLiveTicker();
+      showStreamLiveStatus(renderLiveLineText());
     } else {
       interruptPending = false;
+      stopLiveTicker();
+      liveLine = null;
       if (btnStop) btnStop.disabled = false;
       hideStreamLiveStatus();
     }

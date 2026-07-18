@@ -491,6 +491,15 @@ export function createContentScenarios(getContext) {
         });
         await delay(800);
 
+        // CLI 式动态状态行：per-turn 秒表/输出 token 权威帧（status_line.turn，对齐真 server buildWebStatusLine）
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'status_line', payload: {
+            ts: Date.now(), instanceId: viewingInstanceId, model: activeModel,
+            turn: { startedAt: Date.now() - 1500, outTokens: 3300 },
+          }
+        });
+
         // Stream text chunks
         const responseText = "Hello! This is a **fully visual-oriented** mock response stream.\n\n" +
           "Here is what we can test:\n" +

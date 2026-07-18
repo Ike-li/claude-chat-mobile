@@ -1436,6 +1436,45 @@ export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   return { canStop: Boolean(id) && bannerVisible !== false, taskId: id || null };
 }
 
+// CLI 式 spinner 动词表：逐字提取自本机 claude CLI bundle（2.1.211）的本地词表，保终端等价性。
+export const SPINNER_VERBS = Object.freeze(['Accomplishing', 'Actioning', 'Actualizing', 'Architecting', 'Baking', 'Beaming', "Beboppin'", 'Befuddling', 'Billowing', 'Blanching', 'Bloviating', 'Boogieing', 'Boondoggling', 'Booping', 'Bootstrapping', 'Brewing', 'Bunning', 'Burrowing', 'Calculating', 'Canoodling', 'Caramelizing', 'Cascading', 'Catapulting', 'Cerebrating', 'Channeling', 'Channelling', 'Choreographing', 'Churning', 'Clauding', 'Coalescing', 'Cogitating', 'Combobulating', 'Composing', 'Computing', 'Concocting', 'Considering', 'Contemplating', 'Cooking', 'Crafting', 'Creating', 'Crunching', 'Crystallizing', 'Cultivating', 'Deciphering', 'Deliberating', 'Determining', 'Dilly-dallying', 'Discombobulating', 'Doing', 'Doodling', 'Drizzling', 'Ebbing', 'Effecting', 'Elucidating', 'Embellishing', 'Enchanting', 'Envisioning', 'Fermenting', 'Fiddle-faddling', 'Finagling', 'Flambéing', 'Flibbertigibbeting', 'Flowing', 'Flummoxing', 'Fluttering', 'Forging', 'Forming', 'Frolicking', 'Frosting', 'Gallivanting', 'Galloping', 'Garnishing', 'Generating', 'Gesticulating', 'Germinating', 'Gitifying', 'Grooving', 'Gusting', 'Harmonizing', 'Hashing', 'Hatching', 'Herding', 'Honking', 'Hullaballooing', 'Hyperspacing', 'Ideating', 'Imagining', 'Improvising', 'Incubating', 'Inferring', 'Infusing', 'Ionizing', 'Jitterbugging', 'Julienning', 'Kneading', 'Leavening', 'Levitating', 'Lollygagging', 'Manifesting', 'Marinating', 'Meandering', 'Metamorphosing', 'Misting', 'Moonwalking', 'Moseying', 'Mulling', 'Mustering', 'Musing', 'Nebulizing', 'Nesting', 'Newspapering', 'Noodling', 'Nucleating', 'Orbiting', 'Orchestrating', 'Osmosing', 'Perambulating', 'Percolating', 'Perusing', 'Philosophising', 'Photosynthesizing', 'Pollinating', 'Pondering', 'Pontificating', 'Pouncing', 'Precipitating', 'Prestidigitating', 'Processing', 'Proofing', 'Propagating', 'Puttering', 'Puzzling', 'Quantumizing', 'Razzle-dazzling', 'Razzmatazzing', 'Recombobulating', 'Reticulating', 'Roosting', 'Ruminating', 'Sautéing', 'Scampering', 'Schlepping', 'Scurrying', 'Seasoning', 'Shenaniganing', 'Shimmying', 'Simmering', 'Skedaddling', 'Sketching', 'Slithering', 'Smooshing', 'Sock-hopping', 'Spelunking', 'Spinning', 'Sprouting', 'Stewing', 'Sublimating', 'Swirling', 'Swooping', 'Symbioting', 'Synthesizing', 'Tempering', 'Thinking', 'Thundering', 'Tinkering', 'Tomfoolering', 'Topsy-turvying', 'Transfiguring', 'Transmuting', 'Twisting', 'Undulating', 'Unfurling', 'Unravelling', 'Vibing', 'Waddling', 'Wandering', 'Warping', 'Whatchamacalliting', 'Whirlpooling', 'Whirring', 'Whisking', 'Wibbling', 'Working', 'Wrangling', 'Zesting', 'Zigzagging']);
+
+export function pickSpinnerVerb(rand = Math.random) {
+  return SPINNER_VERBS[Math.floor(rand() * SPINNER_VERBS.length)] || 'Working';
+}
+
+// CLI 式动态状态行组装：✻ Stewing… (55s · ↓ 3.3k tokens · thought for 1s)[ · 🖥 npm test]
+// thinking = null | { state: 'active'|'done', ms }；outTokens 空/0 省段；工具文案在括号外做后缀段。
+export function formatCliSpinnerLine({
+  verb = '',
+  elapsedSec = 0,
+  outTokens = null,
+  thinking = null,
+  effort = null,
+  toolText = '',
+  glyph = '✻',
+} = {}) {
+  const v = String(verb || '').trim() || 'Working';
+  const fmtTok = n => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}m` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
+  const segs = [`${Math.max(0, Math.floor(Number(elapsedSec) || 0))}s`];
+  if (Number.isFinite(outTokens) && outTokens > 0) segs.push(`↓ ${fmtTok(outTokens)} tokens`);
+  if (thinking?.state === 'active') {
+    segs.push(effort ? `thinking with ${effort} effort` : 'thinking…');
+  } else if (thinking?.state === 'done') {
+    segs.push(`thought for ${Math.max(1, Math.round((thinking.ms || 0) / 1000))}s`);
+  }
+  const tool = String(toolText || '').trim();
+  return `${glyph} ${v}… (${segs.join(' · ')})${tool ? ` · ${tool}` : ''}`;
+}
+
+// thinking 秒数 burst 累计：delta 间隔 ≤ gapMs 计入时长，超 gap 视为新 burst 不补空档；首帧只记 lastTs。
+export function advanceThinkingClock({ ms = 0, lastTs = 0 } = {}, nowTs, gapMs = 2000) {
+  const now = Number(nowTs) || 0;
+  const prev = Number(lastTs) || 0;
+  const delta = prev > 0 ? now - prev : 0;
+  return { ms: (Number(ms) || 0) + (delta > 0 && delta <= gapMs ? delta : 0), lastTs: now };
+}
+
 // 底栏 sheet 下拉关闭判定：位移够大，或带一点位移的快速下甩 → close；否则 snap 回原位。
 // dy / velocityY 正向=向下（px / px·ms⁻¹）；负值（上推）一律 snap。
 export function resolveSheetDragEnd({

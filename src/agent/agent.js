@@ -118,6 +118,10 @@ export class AgentSession {
 
     // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
     this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
+    // per-turn 秒表/输出 token（CLI 式动态状态行 ✻ Verb… (Ns · ↓ tokens)，经 status_line.turn 透出）：
+    this.turnStartedAt = null;    // 本轮开始时间戳（send/合成轮置位，result 无排队轮清 null）
+    this.turnOutputTokens = 0;    // 本轮累计输出 token（跨 message 累加）
+    this._msgOutBase = 0;         // 当前 message 已计入的 output_tokens 水位（message 内 usage 为累计值，取增量防重复计）
     this.historicalCostUsd = historicalCostUsd || 0; // 以前各次会话连接/恢复历史的累计成本
     this.totalCostUsd = 0;        // result.total_cost_usd 最新值（SDK 已是会话累计，勿 +=）
     this.totalDurationMs = 0;     // += result.duration_ms（活跃轮次累计，非墙钟——实例懒重生不暴露给用户）
@@ -315,6 +319,7 @@ export class AgentSession {
     const { model: metaModel, effort: effortStr, permissionMode: permStr } = this.logMeta();
     interactionLog.userMessageOut(this.logKey(), displayText, metaModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
     this.pendingTurns++;
+    if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表（排队第二轮不覆盖在途轮基准）
     // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
     interactionLog.agentSend(this.logKey(), text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
     this.queue.push({ text });
@@ -1199,6 +1204,7 @@ export class AgentSession {
           this.currentMessageId = ev.message?.id || msg.uuid;
           this.sawTextDelta = false;
           this.assistantResponseBuffer = '';
+          this._msgOutBase = 0; // 新 message：output_tokens 累计水位归零（turn 内跨 message 续累计）
         } else if (ev.type === 'content_block_delta') {
           if (ev.delta?.type === 'text_delta' && ev.delta.text) {
             this.sawTextDelta = true;
@@ -1220,6 +1226,10 @@ export class AgentSession {
         } else if (ev.type === 'message_delta' && ev.usage) {
           // E16：流式模式下从 message_delta 提取 usage（SDK 在此事件返回 input/cache/output tokens）
           this.lastUsage = ev.usage;
+          // per-turn 输出 token：message 内 usage.output_tokens 是累计值，对水位取增量（防同 message 重复计）
+          const out = ev.usage.output_tokens || 0;
+          this.turnOutputTokens += Math.max(0, out - this._msgOutBase);
+          this._msgOutBase = Math.max(this._msgOutBase, out);
           // 此处只更新 lastUsage 供 ctx% 即时刷新（不等 assistant 边界）
           this.onUsage?.();
         }
@@ -1271,6 +1281,11 @@ export class AgentSession {
         // subagent 消息已被上方 parent_tool_use_id 守卫排除
         if (msg.message?.usage) {
           this.lastUsage = msg.message.usage; // 单轮口径（ctx% / in:out:w:r:）
+          // per-turn 输出 token 兜底：非流式网关无 message_delta，在 assistant 边界补增量；
+          // 流式路径 message_delta 已计到同水位 → 增量为 0 不双计。message 收尾，水位归零。
+          const out = msg.message.usage.output_tokens || 0;
+          this.turnOutputTokens += Math.max(0, out - this._msgOutBase);
+          this._msgOutBase = 0;
           this.onUsage?.(); // E16：assistant 边界即刷 statusline ctx（不等 result/10s tick）
         }
         const mid = this.currentMessageId || msg.uuid;
@@ -1387,6 +1402,10 @@ export class AgentSession {
       case 'result': {
         this._flushText(); this._flushThink();
         this.pendingTurns = Math.max(0, this.pendingTurns - 1);
+        // 本轮收表：还有排队轮 → 立即为下一轮重开；否则清零（status_line 不再带 turn 段）
+        if (this.pendingTurns > 0) { this.turnStartedAt = Date.now(); } else { this.turnStartedAt = null; }
+        this.turnOutputTokens = 0;
+        this._msgOutBase = 0;
         this.lastToolName = null; // 清空工具名跟踪
         if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
         this.totalDurationMs += msg.duration_ms || 0;
@@ -1430,6 +1449,7 @@ export class AgentSession {
     if (this.pendingTurns === 0) {
       this.pendingTurns = 1;
       this.pendingAutoTurn = false;
+      this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; // 合成轮同样开表
     }
   }
 

@@ -194,7 +194,8 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
       { type: 'tool_use', id: 'tool-e', name: 'Edit', input: { file_path: '/repo/a.txt', old_string: 'x', new_string: 'y' } }
     ] } });
     const tu = events.find(e => e.type === 'tool_use' && e.payload.toolUseId === 'tool-e');
-    assert.deepEqual(tu.payload.file, { path: '/repo/a.txt', changeKind: 'edit' });
+    // added/removed = estimateMutationLineStats 行统计（turn-end 变更汇总），Edit 单行换单行 → 1/1
+    assert.deepEqual(tu.payload.file, { path: '/repo/a.txt', changeKind: 'edit', added: 1, removed: 1 });
 
     s.map({ type: 'assistant', message: { content: [
       { type: 'tool_use', id: 'tool-b', name: 'Bash', input: { command: 'ls' } }
@@ -371,3 +372,74 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
 });
 
 // ---- 后台任务完成通知（Workflow / 后台 Agent / 后台 Bash）----
+
+// ---- per-turn 秒表/输出 token 累计器（CLI 式动态状态行数据源，经 status_line.turn 透出）----
+test.describe('per-turn turnStartedAt / turnOutputTokens', () => {
+  test('send 启轮 → turnStartedAt 置位、turnOutputTokens 归零', async () => {
+    const { s } = makeSession();
+    assert.equal(s.turnStartedAt, null);
+    const before = Date.now();
+    await s.send('hi');
+    assert.ok(s.turnStartedAt >= before, 'send 后 turnStartedAt 应为当下时间戳');
+    assert.equal(s.turnOutputTokens, 0);
+    s.dispose();
+  });
+
+  test('message_delta 累计口径：message 内 output_tokens 是累计值取增量，跨 message 由 message_start 归零', async () => {
+    const { s } = makeSession();
+    await s.send('hi');
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } });
+    s.map({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 50 } } });
+    s.map({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 120 } } });
+    assert.equal(s.turnOutputTokens, 120, '同一 message 内取增量不重复计');
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm2' } } });
+    s.map({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 30 } } });
+    assert.equal(s.turnOutputTokens, 150, '跨 message 续累计');
+    s.dispose();
+  });
+
+  test('流式路径 assistant 收尾同 usage 不重复计；非流式网关 assistant 兜底累计', async () => {
+    const { s } = makeSession();
+    await s.send('hi');
+    // 流式：message_delta 已计 120，assistant 边界带同一 usage → 不再加
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } });
+    s.map({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 120 } } });
+    s.map({ type: 'assistant', message: { usage: { output_tokens: 120 }, content: [] } });
+    assert.equal(s.turnOutputTokens, 120, '流式收尾不双计');
+    // 非流式网关：无 message_start/message_delta，直接 assistant
+    s.map({ type: 'assistant', message: { usage: { output_tokens: 40 }, content: [] } });
+    assert.equal(s.turnOutputTokens, 160, '非流式 assistant 兜底累计');
+    s.dispose();
+  });
+
+  test('result 收轮：无排队轮 → 清 null/0；有排队轮 → 立即重开表', async () => {
+    const { s } = makeSession();
+    await s.send('a');
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } });
+    s.map({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 99 } } });
+    s.map({ type: 'result', subtype: 'success', duration_ms: 5, modelUsage: {} });
+    assert.equal(s.turnStartedAt, null);
+    assert.equal(s.turnOutputTokens, 0);
+    // 排队两轮：第一轮 result 后第二轮立即重开表
+    await s.send('b');
+    const firstStart = s.turnStartedAt;
+    await s.send('c');
+    assert.equal(s.pendingTurns, 2);
+    s.map({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 10 } } });
+    s.map({ type: 'result', subtype: 'success', duration_ms: 5, modelUsage: {} });
+    assert.equal(s.pendingTurns, 1);
+    assert.ok(s.turnStartedAt >= firstStart, '第二轮重开表');
+    assert.equal(s.turnOutputTokens, 0, '第二轮 token 归零');
+    s.dispose();
+  });
+
+  test('后台任务合成轮（maybeSynthesizeAutoTurn）也开表', () => {
+    const { s } = makeSession();
+    s.pendingAutoTurn = true;
+    s.pendingAutoTurnAt = Date.now();
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } });
+    assert.equal(s.pendingTurns, 1);
+    assert.ok(s.turnStartedAt != null, '合成轮同样有秒表基准');
+    s.dispose();
+  });
+});

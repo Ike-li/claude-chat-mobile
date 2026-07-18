@@ -164,6 +164,8 @@ export async function buildWebStatusLine({ agent, cwd, versions }) {
   if (model) p.model = model;
   // effort：实例 spawn 档（null=模型默认 → 不显，对齐 CLI 空 effort 时不打印）
   if (agent?.effort) p.effort = agent.effort;
+  // per-turn 秒表/输出 token（前端 CLI 式动态状态行 ✻ Verb… (Ns · ↓ tokens) 的权威数据；空闲不带）
+  if (agent?.turnStartedAt) p.turn = { startedAt: agent.turnStartedAt, outTokens: agent.turnOutputTokens || 0 };
   if (cwd) { p.cwd = cwd; p.project = cwd.replace(/\/+$/, '').split('/').pop() || cwd; }
   const git = await gitStatus(cwd);
   if (git) p.git = git;

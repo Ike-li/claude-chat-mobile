@@ -12,9 +12,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:stream');
     await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:stream');
     await expect(page.locator('#streamLiveStatus')).toBeVisible();
-    await expect(page.locator('#streamLiveStatusText')).toContainText(/Claude 正在|执行|思考/);
+    // CLI 式动态状态行：✻ 动词… (Ns …)；thinking_delta 已到 → thinking 段（进行中或已收束为 thought for）
+    await expect(page.locator('#streamLiveStatusText')).toContainText(/^✻ .+… \(\d+s/);
+    await expect(page.locator('#streamLiveStatusText')).toContainText(/thinking|thought for/);
     await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
     await expect(page.locator('details.thinking')).toBeVisible();
+    // status_line.turn 权威帧 → ↓ token 段；秒表已 ≥1s（startedAt 提前 1.5s，断言轮询免 1s 粒度 flake）
+    await expect(page.locator('#streamLiveStatusText')).toContainText(/↓ 3\.3k tokens/);
+    await expect(page.locator('#streamLiveStatusText')).toContainText(/\([1-9]\d*s/);
+    // 正文开流 → thinking 阶段事件驱动收束为 thought for Ns
+    await expect(page.locator('#streamLiveStatusText')).toContainText(/thought for \d+s/);
 
     // 2. 等待流式输出结束。
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('fully visual-oriented', { timeout: 20_000 });

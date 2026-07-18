@@ -331,3 +331,21 @@ test.describe('parseRepo：从 remote url 解析 owner/repo', () => {
   test('https 无 .git 后缀', () => assert.equal(parseRepo('https://github.com/Ike-li/claude-chat-mobile'), 'Ike-li/claude-chat-mobile'));
   test('尾随斜杠', () => assert.equal(parseRepo('https://github.com/owner/repo/'), 'owner/repo'));
 });
+
+// ---- per-turn 秒表/token 透出（CLI 式动态状态行数据源）----
+test.describe('buildWebStatusLine：turn 段（per-turn 秒表/输出 token）', () => {
+  test('agent 在途轮（turnStartedAt 置位）→ p.turn = {startedAt, outTokens}', async () => {
+    const p = await buildWebStatusLine({
+      agent: { activeModel: 'm', lastUsage: null, turnStartedAt: 1234567890, turnOutputTokens: 3300 },
+      cwd: undefined,
+    });
+    assert.deepEqual(p.turn, { startedAt: 1234567890, outTokens: 3300 });
+  });
+
+  test('无在途轮（turnStartedAt null/缺省）→ 不放 turn 段', async () => {
+    const idle = await buildWebStatusLine({ agent: { activeModel: 'm', lastUsage: null, turnStartedAt: null, turnOutputTokens: 0 }, cwd: undefined });
+    assert.equal(idle.turn, undefined);
+    const legacy = await buildWebStatusLine({ agent: { activeModel: 'm', lastUsage: null }, cwd: undefined });
+    assert.equal(legacy.turn, undefined);
+  });
+});
