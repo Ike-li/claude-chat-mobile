@@ -32,10 +32,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 2 |
-| Backend source | 41 |
+| Backend source | 42 |
 | Configuration template | 1 |
 | Deployment | 2 |
-| Documentation | 15 |
+| Documentation | 16 |
 | Documentation asset | 10 |
 | E2E test | 29 |
 | Frontend asset | 3 |
@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 82 |
+| Unit test | 83 |
 | Vendored asset | 13 |
 
-Total classified files: **293**.
+Total classified files: **296**.
 
 ## Complete file inventory
 
@@ -205,6 +205,7 @@ Total classified files: **293**.
 | `src/sessions/history.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/sessions/sessions.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/sessions/workdirs.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/sessions/worktree-sessions.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/shared/sanitizer.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/shared/serial-writer.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `tests/e2e/mock/registry.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
@@ -354,3 +355,5 @@ Total classified files: **293**.
 | `tests/unit/visual-mock-scenarios.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/workdir-scope-guard.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/workdirs.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/worktree-sessions.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `worktree-progress.md` | Documentation | Worktree session continuation WIP handoff notes; delete when that line lands | User or maintainer documentation | Authored and reviewed manually | keep |

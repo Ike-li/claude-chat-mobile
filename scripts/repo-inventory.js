@@ -26,6 +26,7 @@ const ROOT_FILES = new Map([
   ['playwright.config.ts', ['Test configuration', 'Playwright E2E configuration', 'keep']],
   ['eslint.config.js', ['Project configuration', 'ESLint flat config (npm run check static gate)', 'keep']],
   ['.env.example', ['Configuration template', 'Documented runtime environment variables', 'keep']],
+  ['worktree-progress.md', ['Documentation', 'Worktree session continuation WIP handoff notes; delete when that line lands', 'keep']],
   ['.gitignore', ['Project configuration', 'Generated and secret file exclusions', 'keep']],
   ['.nvmrc', ['Project configuration', 'Recommended Node major version', 'keep']],
   // docs/ 手写文档逐篇显式登记（无 .md 通配）：往 docs/ 新增文档必须先在此声明用途，
