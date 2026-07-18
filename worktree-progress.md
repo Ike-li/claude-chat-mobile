@@ -15,12 +15,12 @@
 1. **worktree 会话怎么产生/消失**：CLI 调 `EnterWorktree` → transcript relocate 到 `encode(worktreePath)` 的 project 目录 → 逐轮写 `worktree-state` 记录（含 `originalCwd / worktreeBranch / worktreePath / enteredExisting`）。
 2. **地基已实测**：`workdirs.json` 12 个开发目录，`git branch` / `git worktree list` 都能程序化拿到（9 个 git repo，3 个非 repo 自动跳过）。
 3. **关键概念**：有 branch ≠ 有 worktree（codex 4 branch/1 worktree）；**session 绑的是 worktree 目录、不是 branch**。
-4. **决策（你拍板的）**：只列「有 worktree 的分支」（活的）。发现主轴 = `git worktree list`；worktree 已删的孤儿留 **Phase 2**（那才需要靠会话内 `worktree-state` 反查）。
-5. **唯一性/互斥**：`claude agents --json` 是「谁正占着哪个会话」的权威表（`kind=interactive/background` + `status/pid`）；**CLI 本身 refuse resume 一个已占用的 session = 硬锁**；ccm 已用它挡 interactive（`src/ops/cli-bg-session-lock.js`，报「终端驾驶中，请先退出」）。web 会话也进表（本会话 `eca81f41`=interactive 为证）→ **双向互斥地基现成**。
+4. **决策（你拍板的）**：只列「有 worktree 的分支」（活的）。发现主轴 = `git worktree list`；worktree 已删的孤儿留 **Phase 2**。
+5. **唯一性/互斥**：`claude agents --json` 是「谁正占着哪个会话」的权威表（`kind=interactive/background` + `status/pid`）；**CLI 本身 refuse resume 一个已占用的 session = 硬锁**；ccm 已用它挡 interactive（`src/ops/cli-bg-session-lock.js`）。web 会话也进表（本会话 `eca81f41`=interactive 为证）→ **双向互斥地基现成**。
 
 ---
 
-## 已完成的代码（新增 2 文件，**未提交**，dev 分支）
+## 已完成的代码（**已提交 dev：`f5d15b3`**，未 push）
 
 `src/sessions/worktree-sessions.js` + `tests/unit/worktree-sessions.test.mjs`
 
@@ -43,29 +43,49 @@
 
 ## ⚠️ 本会话的环境问题（重要）
 
-工具**读取/输出层严重污染**：文件明明有内容却报「不存在」、甚至凭空捏造出假数据行（这一路拦下过两次差点被误导，如假的 `kind:worktree`）。所以本会话后期实测可靠性打折——**只有经「干净 python 解析 / 二次核实」的才算数**。下次接续建议在新会话里做，避开这个污染。
+工具**读取/输出层严重污染**：文件明明有内容却报「不存在」、甚至凭空捏造出假数据行（这一路拦下过两次差点被误导，如假的 `kind:worktree`）。所以本会话后期实测可靠性打折——**只有经「干净 python 解析 / 二次核实」的才算数**。下次接续务必换新会话。
 
 ---
 
-## 待办（下次接续）
+## 待办 · 合并 service-status-panel → dev（**下次新会话做，别在本会话做**）
 
-- [ ] gate `isAllowedWorktreeTarget` **补 4 个测试**（白名单内放行 / repo 不在白名单拒 / 伪造路径拒 / 空输入拒）
+**目标**：把 `service-status-panel` 分支的服务状态面板功能合进 dev，然后删该分支。
+
+**已核实的事实（2026-07-18）**：
+- `662eb6b`（服务状态面板：设置入口三段式 sheet + `service:status` 事件 + 单测/E2E，13 文件 +418 行）**未进 dev**（`git cherry -v dev service-status-panel` = `+`）。
+- 分叉点 merge-base = `26d512b`（7/17 11:49）；分叉后 dev 领先 **4 个 commit**：`db25863`(动态状态行) / `4b63e20`(修测试) / `74af6e5` / `f5d15b3`(worktree WIP)。
+- `git merge-tree` 预览冲突：**2 处真冲突** `docs/repository-map.md` + `public/js/app.js`；`public/js/logic.js` / `src/server/app.js` / `tests/e2e/mock/server.js` 三个 git 自动合并。
+
+**步骤**：
+1. `git checkout dev`（确认工作树干净）
+2. `git merge service-status-panel`（或 `git cherry-pick 662eb6b`）
+3. 解 2 个冲突：`docs/repository-map.md`（小）、`public/js/app.js`（170KB 大文件，仔细看上下文）
+4. `npm run check` + `npm run test:unit` + `npm run test:e2e` 全绿
+5. **绿了才删**：`git worktree remove .claude/worktrees/service-status-panel` + `git branch -d service-status-panel`
+
+**注意**：删 worktree 后 `d7a185a3` 会话变孤儿——它的 transcript 在 `~/.claude/projects/-Users-raylee-code-claude-chat-mobile--claude-worktrees-service-status-panel/` **保留不删**，只是 worktree 目录没了。
+
+---
+
+## 待你验证（worktree 续接功能本身）
+
+在终端 `claude` 进一个 worktree 会话 → web 端去打开它 → 看 ccm 是否挡你 / 报「终端驾驶中」。这是唯一性最可靠的真机验证。
+
+---
+
+## 待办（worktree 续接功能，下次接续）
+
+- [ ] gate `isAllowedWorktreeTarget` **补 4 个测试**
 - [ ] `worktrees:list` socket 事件 + 契约登记（`scripts/agent-event-contract.js` 双面）
 - [ ] 前端 git picker（`public/app.js` 内改、**不拆文件**）：开发目录 → branch(worktree) → session，选中续接
-- [ ] 续接路径接上 gate + **唯一性检查**（复用 `cli-bg-session-lock` 的 interactive lock 挡「已被占用」）
+- [ ] 续接路径接上 gate + **唯一性检查**（复用 `cli-bg-session-lock` 的 interactive lock）
 - [ ] 收口：`npm run check` + `test:unit` + `test:e2e` 全绿 + `inventory:update`
 - [ ] Phase 2（可选）：孤儿 worktree 会话（worktree 已删 → 落 `originalCwd`）
 
 ---
 
-## 待你验证
-
-明天你自己端到端验一次：**在终端 `claude` 进一个 worktree 会话 → web 端去打开它 → 看 ccm 是否挡你 / 报「终端驾驶中」**。这是唯一性最可靠的真机验证。
-
----
-
 ## 状态清单
 
-- 新增未提交：`src/sessions/worktree-sessions.js`、`tests/unit/worktree-sessions.test.mjs`（+ 本文件）——都是 untracked，注意别被 `git clean -fd` 冲掉。
-- 临时探针/中间文件：已清理。
+- 已提交 dev：`f5d15b3`（worktree-sessions.js + test + 本文件）；`dev` 本地领先 origin 188、未 push。
+- 分支：`dev` / `master`（未动）/ `service-status-panel`（保留，待新会话合并）。
 - 生产 server：未动、未重启。
