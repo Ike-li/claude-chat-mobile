@@ -1,5 +1,11 @@
 function contextual(getContext, handler) {
-  return async args => handler(getContext(), args);
+  return async args => {
+    const ctx = getContext();
+    // demo:* 场景须能在空首页（viewingInstanceId=null → activeInst undefined）直接演示，
+    // 不像其它 test:* 场景那样静默 return；回退到默认实例而非崩溃或不响应。
+    const activeInst = args.activeInst || ctx.mockInstances[0];
+    return handler(ctx, { ...args, activeInst });
+  };
 }
 
 export function createDemoScenarios(getContext) {
