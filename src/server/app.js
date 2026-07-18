@@ -163,7 +163,7 @@ function reloadWorkdirs() {
 // ---- 启动预检（验收 A9）----
 // E9：必须用本机的 claude（你日常在终端用的那个），不用 SDK 捆绑副本——
 // 版本、登录态、代理兼容性都以本机为准。
-const versions = { sdk: 'unknown', cli: 'unknown' };
+const versions = { sdk: 'unknown', cli: 'unknown', server: 'unknown' };
 // 服务状态可见性（第一性原理重新设计）：本进程启动时刻，模块加载时算一次、恒定不变。用于让每台设备
 // 独立感知"服务是否在我不知情时重启过"（LaunchAgent 静默拉起 / 意外崩溃恢复）——见 computeServiceHealth()。
 const SERVICE_STARTED_AT = Date.now();
@@ -203,9 +203,15 @@ function preflight() {
   try {
     versions.cli = execSync(`"${claudeBin}" --version`, { encoding: 'utf8' }).trim();
   } catch { /* 非致命 */ }
+  // 三段各自独立 try：任一来源失败只让自己留 unknown，不连坐其余（曾把 server 版本挂在 SDK 同块里被连坐跳过）。
+  const require = createRequire(import.meta.url);
   try {
-    const require = createRequire(import.meta.url);
-    versions.sdk = require('@anthropic-ai/claude-agent-sdk/package.json').version;
+    // SDK 0.3.x 的 exports 不暴露 ./package.json（直接 require 抛 ERR_PACKAGE_PATH_NOT_EXPORTED，
+    // versions.sdk 曾因此恒为 unknown）——经入口文件反查包根再读。
+    versions.sdk = JSON.parse(readFileSync(join(dirname(require.resolve('@anthropic-ai/claude-agent-sdk')), 'package.json'), 'utf8')).version;
+  } catch { /* 非致命 */ }
+  try {
+    versions.server = require('../../package.json').version;
   } catch { /* 非致命 */ }
   if (!process.env.ANTHROPIC_AUTH_TOKEN && !process.env.ANTHROPIC_API_KEY) {
     console.warn('⚠️  未检测到 ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY，将依赖 claude CLI 自身的登录态');
@@ -305,6 +311,35 @@ const httpAuth = createHttpAuth({
   },
 });
 
+// 具名提取（原 registerOperationalRoutes 内联箭头）：service:status socket 事件复用其 metrics 字段，
+// 避免 8 项拼装逻辑在 HTTP /metrics 与面板 ack 两处复制漂移。
+const getMetricsPayload = () => {
+  const counters = metrics.snapshot().counters;
+  const failed = errorInstances.size;
+  let awaiting = 0;
+  for (const agent of agents.values()) {
+    if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0) awaiting += 1;
+  }
+  // OPS-3：StateProbe notify_failed 必须覆盖双通道——仅计 push 时，纯 ntfy 用户失败永不翻状态。
+  const notifyFailed = (counters.push_failure ?? 0) + (counters.ntfy_failure ?? 0);
+  const mobileClients = io.sockets.adapter.rooms.get('approved')?.size ?? 0;
+  return {
+    metrics: {
+      activeSessions: agents.size,
+      events: counters.events ?? 0,
+      catchUpHits: counters.catch_up_hits ?? 0,
+      catchUpReloads: counters.catch_up_reloads ?? 0,
+      rateLimitLockouts: counters.rate_limit_lockouts ?? 0,
+      pushSuccess: counters.push_success ?? 0,
+      pushFailure: counters.push_failure ?? 0,
+      ntfyFailure: counters.ntfy_failure ?? 0,
+    },
+    state: metrics.classifyState({ failed, awaiting, notifyFailed, mobileClients }),
+    states: { failed, awaiting, notifyFailed, mobileClients },
+    timestamp: Date.now(),
+  };
+};
+
 registerOperationalRoutes({
   app,
   httpAuth,
@@ -316,32 +351,7 @@ registerOperationalRoutes({
     buildNonce: process.env.CCM_BUILD_NONCE || null,
     timestamp: Date.now(),
   }),
-  getMetrics: () => {
-    const counters = metrics.snapshot().counters;
-    const failed = errorInstances.size;
-    let awaiting = 0;
-    for (const agent of agents.values()) {
-      if (agent.pendingPermissions.size > 0 || agent.pendingQuestions.size > 0) awaiting += 1;
-    }
-    // OPS-3：StateProbe notify_failed 必须覆盖双通道——仅计 push 时，纯 ntfy 用户失败永不翻状态。
-    const notifyFailed = (counters.push_failure ?? 0) + (counters.ntfy_failure ?? 0);
-    const mobileClients = io.sockets.adapter.rooms.get('approved')?.size ?? 0;
-    return {
-      metrics: {
-        activeSessions: agents.size,
-        events: counters.events ?? 0,
-        catchUpHits: counters.catch_up_hits ?? 0,
-        catchUpReloads: counters.catch_up_reloads ?? 0,
-        rateLimitLockouts: counters.rate_limit_lockouts ?? 0,
-        pushSuccess: counters.push_success ?? 0,
-        pushFailure: counters.push_failure ?? 0,
-        ntfyFailure: counters.ntfy_failure ?? 0,
-      },
-      state: metrics.classifyState({ failed, awaiting, notifyFailed, mobileClients }),
-      states: { failed, awaiting, notifyFailed, mobileClients },
-      timestamp: Date.now(),
-    };
-  },
+  getMetrics: getMetricsPayload,
   push: {
     enabled: pushEnabled,
     publicKey: notify.vapidPublicKey,
@@ -2249,6 +2259,21 @@ registerSocketConnection(io, socket => {
       pendingDevices: getPendingDevices().length,
       configPermsProblems: countConfigPermProblems(HERE), // BE-013：实际检查配置文件权限（number/null），不再缺省当 0 假绿
     }));
+  });
+
+  // 服务状态面板（NFR-15 可见性）：一次 ack 拼齐 基础(startedAt/versions) + 指标(/metrics 同源) + 投递健康。
+  // 走 on() 鉴权闸（deviceApproved fail-closed，指标属敏感运行数据）；重启提示不进 payload——
+  // 前端已有 _serviceRestartNoticeActive（instances 广播维护），面板直读，避免二次写 localStorage 基线。
+  on(socket, 'service:status', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({
+      ok: true,
+      startedAt: SERVICE_STARTED_AT,
+      versions,
+      metrics: getMetricsPayload().metrics,
+      deliveryFailure: computeServiceHealth().deliveryFailure,
+      timestamp: Date.now(),
+    });
   });
 
   // 「刷新消息」（前端按钮文案）：mirror 横幅的确定性追平入口——强制触发一次 catchUpTick（正常 2.5s 自动跑，

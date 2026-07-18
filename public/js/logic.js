@@ -1506,3 +1506,60 @@ export function resolveSheetDragEnd({
   if (v >= dismissVelocity && d >= minFlickDy) return 'close';
   return 'snap';
 }
+
+// ── 服务状态面板（service:status ack → 三段渲染）────────────────────────────
+// 与 formatAgo 分工：这里是"运行了多久"（时长），那边是"多久之前"（时点距今）。
+export function formatUptime(ms) {
+  if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs} 秒`;
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} 分钟`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时 ${mins % 60} 分`;
+  return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
+}
+
+// 基础段四行。versions 缺失字段显 unknown（升级半途/旧 server 也能渲染）；
+// 连接行的延迟复用 formatRttMs（非法→'' 时只显「已连接」，不残留陈旧数字）。
+export function serviceStatusBasicRows({ startedAt, versions, connected, rttMs, now } = {}) {
+  const startedValid = typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0;
+  const uptime = startedValid ? formatUptime(now - startedAt) : '';
+  let startedLabel = '未知';
+  if (startedValid) {
+    const d = new Date(startedAt);
+    const two = n => String(n).padStart(2, '0');
+    startedLabel = `${d.getMonth() + 1}/${d.getDate()} ${two(d.getHours())}:${two(d.getMinutes())}`;
+  }
+  const v = versions && typeof versions === 'object' ? versions : {};
+  const pick = key => (typeof v[key] === 'string' && v[key] ? v[key] : 'unknown');
+  const rtt = formatRttMs(rttMs);
+  return [
+    { label: '运行时长', value: uptime || '未知' },
+    { label: '启动于', value: startedLabel },
+    { label: '版本', value: `server ${pick('server')} · CLI ${pick('cli')} · SDK ${pick('sdk')}` },
+    { label: '连接', value: connected ? `已连接${rtt ? ` · 延迟 ${rtt}` : ''}` : '未连接' },
+  ];
+}
+
+// 指标段八行固定顺序（/metrics 最小集同名 key）。失败/锁定类 >0 标 alert 供接线层标红；
+// 缺失/非数一律 0——指标是进程内累计，缺 key 意味着旧 server，显 0 比显 undefined 诚实。
+const SERVICE_METRIC_ROWS = Object.freeze([
+  { key: 'activeSessions', label: '活跃会话' },
+  { key: 'events', label: '事件总数' },
+  { key: 'catchUpHits', label: '断线补发命中' },
+  { key: 'catchUpReloads', label: '补发降级重载' },
+  { key: 'rateLimitLockouts', label: '限速锁定' },
+  { key: 'pushSuccess', label: '推送成功' },
+  { key: 'pushFailure', label: '推送失败' },
+  { key: 'ntfyFailure', label: 'ntfy 失败' },
+]);
+const SERVICE_METRIC_ALERT_KEYS = new Set(['rateLimitLockouts', 'pushFailure', 'ntfyFailure']);
+export function serviceMetricsRows(metrics) {
+  const m = metrics && typeof metrics === 'object' ? metrics : {};
+  return SERVICE_METRIC_ROWS.map(({ key, label }) => {
+    const raw = m[key];
+    const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
+    return { key, label, value, alert: SERVICE_METRIC_ALERT_KEYS.has(key) && value > 0 };
+  });
+}
