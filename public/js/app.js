@@ -1839,11 +1839,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (p.git.behind) b += ` ↓${p.git.behind}`;
         gitNode = span(b, 'text-accent font-medium');
       }
-      // ctx 段：有 usedPercent → 'ctx X% · left Y'（≥90% 转红警示）；否则退回绝对 token 数（认不出 model 的窗口）
+      // ctx 段：有 usedPercent → 'ctx X% · left Y/Z'（Y=剩余 Z=窗口总量，对齐本机 CLI statusline.sh 里
+      // elif 分支已用的 '/' 记法，这里扩展到有百分比的分支）；否则退回绝对 token 数（认不出 model 的窗口）
       let ctxSeg = null;
       if (p.ctx && Number.isFinite(p.ctx.usedPercent)) {
         let txt = `ctx ${p.ctx.usedPercent}%`;
-        if (Number.isFinite(p.ctx.windowSize)) txt += ` · left ${fmtTok(Math.max(0, p.ctx.windowSize - p.ctx.tokens))}`;
+        if (Number.isFinite(p.ctx.windowSize)) txt += ` · left ${fmtTok(Math.max(0, p.ctx.windowSize - p.ctx.tokens))}/${fmtTok(p.ctx.windowSize)}`;
         const pc = p.ctx.usedPercent; // 蓝(健康)→橙(≥70)→红(≥90) 三段警示
         ctxSeg = { text: txt, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-ink-soft' }; // UI-011 数据色非链接蓝
       } else if (p.ctx && Number.isFinite(p.ctx.tokens)) {

@@ -20,7 +20,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#cliStatus')).toContainText('effort high');
     await expect(page.locator('#cliStatus')).toContainText('claude-chat-mobile'); // location
     await expect(page.locator('#cliStatus')).toContainText('ctx 23%');
-    await expect(page.locator('#cliStatus')).toContainText('left 155k');
+    await expect(page.locator('#cliStatus')).toContainText('left 155k/200k');
     // mock fixture：tokens:45000, r:21000 → formatCachePercent 取整 47%
     await expect(page.locator('#cliStatus')).toContainText('uncached 2.0k response 1.5k');
     await expect(page.locator('#cliStatus')).toContainText('cache 47%');
