@@ -47,23 +47,9 @@
 
 ---
 
-## 待办 · 合并 service-status-panel → dev（**下次新会话做，别在本会话做**）
+## ✅ 已完成 · 合并 service-status-panel → dev（2026-07-18）
 
-**目标**：把 `service-status-panel` 分支的服务状态面板功能合进 dev，然后删该分支。
-
-**已核实的事实（2026-07-18）**：
-- `662eb6b`（服务状态面板：设置入口三段式 sheet + `service:status` 事件 + 单测/E2E，13 文件 +418 行）**未进 dev**（`git cherry -v dev service-status-panel` = `+`）。
-- 分叉点 merge-base = `26d512b`（7/17 11:49）；分叉后 dev 领先 **4 个 commit**：`db25863`(动态状态行) / `4b63e20`(修测试) / `74af6e5` / `f5d15b3`(worktree WIP)。
-- `git merge-tree` 预览冲突：**2 处真冲突** `docs/repository-map.md` + `public/js/app.js`；`public/js/logic.js` / `src/server/app.js` / `tests/e2e/mock/server.js` 三个 git 自动合并。
-
-**步骤**：
-1. `git checkout dev`（确认工作树干净）
-2. `git merge service-status-panel`（或 `git cherry-pick 662eb6b`）
-3. 解 2 个冲突：`docs/repository-map.md`（小）、`public/js/app.js`（170KB 大文件，仔细看上下文）
-4. `npm run check` + `npm run test:unit` + `npm run test:e2e` 全绿
-5. **绿了才删**：`git worktree remove .claude/worktrees/service-status-panel` + `git branch -d service-status-panel`
-
-**注意**：删 worktree 后 `d7a185a3` 会话变孤儿——它的 transcript 在 `~/.claude/projects/-Users-raylee-code-claude-chat-mobile--claude-worktrees-service-status-panel/` **保留不删**，只是 worktree 目录没了。
+merge commit `ed20d21`：解 2 冲突（`public/js/app.js` import 行两侧并集 + `docs/repository-map.md` 经 `inventory:update` 重生成 298 文件）；check 全绿 + 单测 1387/0 + E2E 127/0 后删除 worktree 与分支。顺手修了 dev 既有 inventory 红（`9af167f`：f5d15b3 的 3 个文件没登记）。`d7a185a3` 的 transcript 在 `~/.claude/projects/-Users-raylee-code-claude-chat-mobile--claude-worktrees-service-status-panel/` 保留（worktree 目录已删、会话成孤儿=Phase 2 的现成案例）。
 
 ---
 
@@ -86,6 +72,6 @@
 
 ## 状态清单
 
-- 已提交 dev：`f5d15b3`（worktree-sessions.js + test + 本文件）；`dev` 本地领先 origin 188、未 push。
-- 分支：`dev` / `master`（未动）/ `service-status-panel`（保留，待新会话合并）。
-- 生产 server：未动、未重启。
+- 已提交 dev：`f5d15b3`（worktree-sessions.js + test + 本文件）→ `9af167f`(inventory 补登记) → `ed20d21`(merge 服务状态面板)；`dev` 本地领先 origin 192、未 push。
+- 分支：`dev` / `master`（未动）；`service-status-panel` 已合并删除（worktree 同删）。
+- 生产 server：未动、未重启（服务状态面板生效需重启常驻 server）。
