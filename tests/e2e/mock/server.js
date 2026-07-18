@@ -56,12 +56,17 @@ let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
 let deniedDeviceRetryPending = false;
 let mockSessionLogsByInstance = new Map();
-// 服务状态面板：确定性 startedAt（mock 进程启动时刻）；deliveryFailure 由 test:service-delivery-failure 注入
+// 服务状态面板：确定性 startedAt（mock 进程启动时刻）；deliveryFailure 由 test:service-delivery-failure 注入，
+// rateLimitLockout/clientError（判定化告警）由 test:service-incidents 注入
 const MOCK_SERVICE_STARTED_AT = Date.now();
 let mockDeliveryFailure = null;
+let mockRateLimitLockout = null;
+let mockClientError = null;
 
 function resetMockState() {
   mockDeliveryFailure = null;
+  mockRateLimitLockout = null;
+  mockClientError = null;
   viewingInstanceId = 'inst_1';
   permissionMode = 'default';
   effortLevel = null;
@@ -748,20 +753,17 @@ io.on('connection', socket => {
     if (typeof ack === 'function') ack({ ok: true, t: Date.now() });
   });
 
-  // 服务状态面板（与真 server service:status 契约对齐）：确定性 payload 供 E2E 断言；
-  // deliveryFailure/pushFailure 由 test:service-delivery-failure 场景注入
+  // 服务状态面板（与真 server service:status 契约对齐，判定化：不带裸计数器）：确定性 payload 供 E2E 断言；
+  // deliveryFailure 由 test:service-delivery-failure 注入，rateLimitLockout/clientError 由 test:service-incidents 注入
   socket.on('service:status', (_payload, ack) => {
     if (typeof ack !== 'function') return;
     ack({
       ok: true,
       startedAt: MOCK_SERVICE_STARTED_AT,
       versions: { server: '1.2.1-mock', cli: '0.1.0-mock', sdk: '0.3.201-mock' },
-      metrics: {
-        activeSessions: 2, events: 1841, catchUpHits: 12, catchUpReloads: 1,
-        rateLimitLockouts: 0, pushSuccess: 57, pushFailure: mockDeliveryFailure ? 3 : 0, ntfyFailure: 0,
-        clientErrors: 0,
-      },
       deliveryFailure: mockDeliveryFailure,
+      rateLimitLockout: mockRateLimitLockout,
+      clientError: mockClientError,
       logging: { interactions: true, sdkDebug: false, stderr: true },
       timestamp: Date.now(),
     });
@@ -876,6 +878,9 @@ io.on('connection', socket => {
     ...createStatusScenarios(() => ({
       io, socket, activeEpoch, viewingInstanceId, activeModel, permissionMode, mockInstances, delay, addMockSessionLog,
       setMockDeliveryFailure: value => { mockDeliveryFailure = value; },
+      setMockServiceIncidents: ({ rateLimitLockout = null, clientError = null } = {}) => {
+        mockRateLimitLockout = rateLimitLockout; mockClientError = clientError;
+      },
     })),
     ...createDemoScenarios(() => ({
       io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, emitInstancesSnapshot, streamZh,

@@ -1,8 +1,9 @@
 // tests/unit/logic-service-status.test.mjs —— 服务状态面板纯函数单测（零 DOM/零 token）。
-// 面板三段：基础(formatUptime/serviceStatusBasicRows) + 指标(serviceMetricsRows) + 告警(复用 formatServiceNotices)。
+// 面板两段：基础(formatUptime/serviceStatusBasicRows) + 告警(复用 formatServiceNotices)。
+// 裸计数器段已判定化撤除（serviceMetricsRows 删除）：原始计数留 /metrics 巡检端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUptime, serviceStatusBasicRows, serviceMetricsRows, formatServiceNotices } from '../../public/js/logic.js';
+import { formatUptime, serviceStatusBasicRows, formatServiceNotices } from '../../public/js/logic.js';
 
 test.describe('formatUptime：运行时长分档', () => {
   test('非法/负 → 空串（接线层据此显「未知」）', () => {
@@ -67,33 +68,6 @@ test.describe('serviceStatusBasicRows：基础段四行', () => {
   });
 });
 
-test.describe('serviceMetricsRows：指标段九行固定顺序', () => {
-  const full = { activeSessions: 2, events: 1841, catchUpHits: 12, catchUpReloads: 1, rateLimitLockouts: 0, pushSuccess: 57, pushFailure: 3, ntfyFailure: 0, clientErrors: 0 };
-
-  test('九行固定顺序 + 中文 label + 数值透传', () => {
-    const rows = serviceMetricsRows(full);
-    assert.deepEqual(rows.map(r => r.key), ['activeSessions', 'events', 'catchUpHits', 'catchUpReloads', 'rateLimitLockouts', 'pushSuccess', 'pushFailure', 'ntfyFailure', 'clientErrors']);
-    assert.deepEqual(rows.map(r => r.label), ['活跃会话', '事件总数', '断线补发命中', '补发降级重载', '限速锁定', '推送成功', '推送失败', 'ntfy 失败', '前端错误']);
-    assert.deepEqual(rows.map(r => r.value), [2, 1841, 12, 1, 0, 57, 3, 0, 0]);
-  });
-  test('失败/锁定类 >0 才标 alert（接线层据此标红），成功类不标', () => {
-    const rows = serviceMetricsRows({ ...full, clientErrors: 2 });
-    const byKey = Object.fromEntries(rows.map(r => [r.key, r]));
-    assert.equal(byKey.pushFailure.alert, true);
-    assert.equal(byKey.clientErrors.alert, true); // 前端错误 >0 标红：手机端唯一可见性入口
-    assert.equal(byKey.ntfyFailure.alert, false); // 值为 0 不标
-    assert.equal(byKey.rateLimitLockouts.alert, false);
-    assert.equal(byKey.events.alert, false); // 非失败类，1841 也不标
-    assert.equal(byKey.activeSessions.alert, false);
-  });
-  test('缺字段/非数 → 0；非对象入参 → 全 0（旧 server 无 clientErrors 也走这条显 0）', () => {
-    const rows = serviceMetricsRows({ activeSessions: '3', events: NaN });
-    assert.deepEqual(rows.map(r => r.value), [0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    assert.deepEqual(serviceMetricsRows(null).map(r => r.value), [0, 0, 0, 0, 0, 0, 0, 0, 0]);
-    assert.deepEqual(serviceMetricsRows().map(r => r.value), [0, 0, 0, 0, 0, 0, 0, 0, 0]);
-  });
-});
-
 test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () => {
   test('无失败无重启 → 空数组（接线层渲染「无异常」）', () => {
     assert.deepEqual(formatServiceNotices({ service: { deliveryFailure: null }, restartChanged: false, now: 1000 }), []);
@@ -104,5 +78,53 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
     assert.equal(notices.length, 2);
     assert.match(notices[0], /^🔄 服务自上次连接后已重启/);
     assert.equal(notices[1], '🔔 推送最近失败于 18 分钟前（push，累计 3 次）');
+  });
+  test('限速锁定 → ⛔ 行：多久之前 + 累计次数 + 安全提示（有人在暴力尝试入口）', () => {
+    const now = 100 * 60_000;
+    assert.deepEqual(
+      formatServiceNotices({ service: { rateLimitLockout: { at: now - 42 * 60_000, count: 2 } }, restartChanged: false, now }),
+      ['⛔ 登录限速锁定于 42 分钟前（累计 2 次）——可能有人在暴力尝试你的入口']
+    );
+  });
+  test('前端错误 → 🐞 行：多久之前 + 累计次数 + 指向日志面板', () => {
+    const now = 100 * 60_000;
+    assert.deepEqual(
+      formatServiceNotices({ service: { clientError: { at: now - 3 * 60_000, count: 5 } }, restartChanged: false, now }),
+      ['🐞 前端错误发生于 3 分钟前（累计 5 次），详见日志面板']
+    );
+  });
+  test('count 缺失（防御性）→ 不显示累计后缀', () => {
+    const now = 100 * 60_000;
+    assert.deepEqual(
+      formatServiceNotices({ service: { rateLimitLockout: { at: now - 60_000 } }, restartChanged: false, now }),
+      ['⛔ 登录限速锁定于 1 分钟前——可能有人在暴力尝试你的入口']
+    );
+    assert.deepEqual(
+      formatServiceNotices({ service: { clientError: { at: now - 60_000 } }, restartChanged: false, now }),
+      ['🐞 前端错误发生于 1 分钟前，详见日志面板']
+    );
+  });
+  test('全类命中 → 固定顺序：重启 → 限速锁定 → 投递失败 → 前端错误', () => {
+    const now = 100 * 60_000;
+    const notices = formatServiceNotices({
+      service: {
+        deliveryFailure: { channel: 'ntfy', at: now - 1000, count: 1 },
+        rateLimitLockout: { at: now - 2000, count: 1 },
+        clientError: { at: now - 3000, count: 1 },
+      },
+      restartChanged: true,
+      now,
+    });
+    assert.deepEqual(notices.map(l => [...l][0]), ['🔄', '⛔', '🔔', '🐞']);
+  });
+  test('旧 server ack 无新字段 → 优雅缺席不报错', () => {
+    assert.deepEqual(formatServiceNotices({ service: { deliveryFailure: null }, restartChanged: false, now: 1000 }), []);
+    assert.deepEqual(formatServiceNotices({ service: {}, restartChanged: false, now: 1000 }), []);
+  });
+  test('at 非数（脏字段）→ 该行跳过', () => {
+    assert.deepEqual(
+      formatServiceNotices({ service: { rateLimitLockout: { at: 'bad', count: 1 }, clientError: { count: 2 } }, restartChanged: false, now: 1000 }),
+      []
+    );
   });
 });

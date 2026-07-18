@@ -68,3 +68,9 @@ export function recentDeliveryFailure({ pushFailureAt, ntfyFailureAt, now, stale
   if (!candidates.length) return null;
   return candidates.reduce((latest, c) => (c.at > latest.at ? c : latest));
 }
+
+// 单一时间戳版的时效窗判定——recentDeliveryFailure 模式的推广（限速锁定/前端错误升格告警共用）。
+// 语义同上：只在窗内才算"最近发生过"，超窗自动退场；从未发生（无时间戳 gauge）→ null。
+export function recentIncident({ at, now, staleAfterMs = DEFAULT_STALE_AFTER_MS } = {}) {
+  return (typeof at === 'number' && now - at <= staleAfterMs) ? { at } : null;
+}

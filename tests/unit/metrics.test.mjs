@@ -1,7 +1,7 @@
 // tests/unit/metrics.test.mjs —— metrics.js 单测（docs/design.md MetricsCollector + StateProbe，承接 NFR-15）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inc, gauge, snapshot, reset, classifyState, recentDeliveryFailure } from '../../src/ops/metrics.js';
+import { inc, gauge, snapshot, reset, classifyState, recentDeliveryFailure, recentIncident } from '../../src/ops/metrics.js';
 
 test.describe('MetricsCollector（docs/design.md 指标最小集）', () => {
   test.beforeEach(() => reset());
@@ -127,5 +127,34 @@ test.describe('recentDeliveryFailure（服务状态可见性——推送投递�
       recentDeliveryFailure({ pushFailureAt: NOW - 2000, now: NOW, staleAfterMs: 3000 }),
       { channel: 'push', at: NOW - 2000 }
     );
+  });
+});
+
+test.describe('recentIncident（单一时间戳的时效窗判定——限速锁定/前端错误升格告警共用）', () => {
+  const NOW = 1_000_000_000;
+  const DAY = 24 * 60 * 60 * 1000;
+
+  test('窗内 → 命中 {at}', () => {
+    assert.deepEqual(recentIncident({ at: NOW - 1000, now: NOW }), { at: NOW - 1000 });
+  });
+
+  test('超默认 24h 窗 → null（超窗自动退场，同 recentDeliveryFailure 语义）', () => {
+    assert.equal(recentIncident({ at: NOW - DAY - 1, now: NOW }), null);
+  });
+
+  test('边界值：恰好等于窗口 → 仍命中', () => {
+    assert.deepEqual(recentIncident({ at: NOW - DAY, now: NOW }), { at: NOW - DAY });
+  });
+
+  test('从未发生（at 缺失/非数）→ null', () => {
+    assert.equal(recentIncident({ now: NOW }), null);
+    assert.equal(recentIncident({ at: undefined, now: NOW }), null);
+    assert.equal(recentIncident({ at: 'bad', now: NOW }), null);
+    assert.equal(recentIncident(), null);
+  });
+
+  test('staleAfterMs 可自定义覆盖默认窗口', () => {
+    assert.equal(recentIncident({ at: NOW - 2000, now: NOW, staleAfterMs: 1000 }), null);
+    assert.deepEqual(recentIncident({ at: NOW - 2000, now: NOW, staleAfterMs: 3000 }), { at: NOW - 2000 });
   });
 });

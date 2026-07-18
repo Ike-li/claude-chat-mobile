@@ -308,12 +308,13 @@ const httpAuth = createHttpAuth({
         meta: { retryAfterMs: r.retryAfterMs, via: 'http' },
       });
       metrics.inc('rate_limit_lockouts');
+      metrics.gauge('rate_limit_lockouts_last_ts', Date.now()); // 服务状态可见性：带时间戳，供 recentIncident 判定
     },
   },
 });
 
-// 具名提取（原 registerOperationalRoutes 内联箭头）：service:status socket 事件复用其 metrics 字段，
-// 避免 8 项拼装逻辑在 HTTP /metrics 与面板 ack 两处复制漂移。
+// 具名提取（原 registerOperationalRoutes 内联箭头）：仅 HTTP /metrics 巡检端点消费（机器可读原料）。
+// 面板 service:status ack 已判定化改造，不再带裸计数器（见 computeServiceHealth）。
 const getMetricsPayload = () => {
   const counters = metrics.snapshot().counters;
   const failed = errorInstances.size;
@@ -543,6 +544,7 @@ io.use(async (socket, next) => {
         // 后者本身可被攻击者刷出高频事件、会把环形上限里的真实信号挤掉，锁定事件已足够代表"发生过暴破尝试"。
         audit.recordAudit({ actor: { deviceId: null, via: 'unauthenticated' }, action: 'auth_rate_limited', target: rlKey, outcome: 'locked', meta: { retryAfterMs: r.retryAfterMs } });
         metrics.inc('rate_limit_lockouts'); // NFR-15 限速触发数（与审计同粒度：每锁定窗口一次）
+        metrics.gauge('rate_limit_lockouts_last_ts', Date.now()); // 服务状态可见性：带时间戳，供 recentIncident 判定
       }
     }
 
@@ -661,21 +663,27 @@ function computeNeedsYou() {
   return needsYou.map(item => ({ ...item, instanceId: instanceIdBySessionId.get(item.sessionId) ?? null }));
 }
 // 服务状态可见性（NFR-15/可维护性，与上面 computeNeedsYou 的 FR-21/注意力不对称是不同的轴，不混入其判定）：
-// "ccm 这个服务本身有没有出过岔子"——目前收敛到两个此前从未有任何 UI 展示过的信号：推送投递健康（超窗自动
-// 退场，不做不衰减的常驻布尔，见 recentDeliveryFailure）+ 服务启动时刻（供前端与本地基线比对判定重启）。
+// "ccm 这个服务本身有没有出过岔子"——判定化信号，全部带时效窗自动退场（不做不衰减的常驻布尔）：
+// 推送投递健康（recentDeliveryFailure）+ 服务启动时刻（供前端与本地基线比对判定重启）+ 登录限速锁定
+// （=有人在暴力尝试入口，安全信号）+ 前端错误（=界面自身坏了，详情在日志面板）。
 // 刻意不接 classifyState()：那是 /metrics 外部消费的粗分类，failed/awaiting 已被会话 ❗ 角标/需要你(N) 覆盖，
 // mobile_offline 对正在看 UI 的设备是自指悖论——原样接入会制造重复信号，见方案 Context。
 function computeServiceHealth() {
   const g = metrics.snapshot().gauges;
   const c = metrics.snapshot().counters;
+  const now = Date.now();
   const failure = metrics.recentDeliveryFailure({
-    pushFailureAt: g.push_failure_last_ts, ntfyFailureAt: g.ntfy_failure_last_ts, now: Date.now()
+    pushFailureAt: g.push_failure_last_ts, ntfyFailureAt: g.ntfy_failure_last_ts, now
   });
+  const lockout = metrics.recentIncident({ at: g.rate_limit_lockouts_last_ts, now });
+  const clientError = metrics.recentIncident({ at: g.client_errors_last_ts, now });
   return {
     startedAt: SERVICE_STARTED_AT,
     deliveryFailure: failure
       ? { ...failure, count: (failure.channel === 'ntfy' ? c.ntfy_failure : c.push_failure) ?? 0 }
-      : null
+      : null,
+    rateLimitLockout: lockout ? { ...lockout, count: c.rate_limit_lockouts ?? 0 } : null,
+    clientError: clientError ? { ...clientError, count: c.client_errors ?? 0 } : null,
   };
 }
 function instancesPayload() {
@@ -2268,17 +2276,20 @@ registerSocketConnection(io, socket => {
     }));
   });
 
-  // 服务状态面板（NFR-15 可见性）：一次 ack 拼齐 基础(startedAt/versions) + 指标(/metrics 同源) + 投递健康。
-  // 走 on() 鉴权闸（deviceApproved fail-closed，指标属敏感运行数据）；重启提示不进 payload——
+  // 服务状态面板（NFR-15 可见性）：一次 ack 拼齐 基础(startedAt/versions) + 判定化告警(computeServiceHealth)。
+  // 不带裸计数器——那是 /metrics 巡检端点的机器原料，对人无参照系不可解读（判定化改造，见 plans）。
+  // 走 on() 鉴权闸（deviceApproved fail-closed，运行状态属敏感数据）；重启提示不进 payload——
   // 前端已有 _serviceRestartNoticeActive（instances 广播维护），面板直读，避免二次写 localStorage 基线。
   on(socket, 'service:status', (_payload, ack) => {
     if (typeof ack !== 'function') return;
+    const health = computeServiceHealth();
     ack({
       ok: true,
       startedAt: SERVICE_STARTED_AT,
       versions,
-      metrics: getMetricsPayload().metrics,
-      deliveryFailure: computeServiceHealth().deliveryFailure,
+      deliveryFailure: health.deliveryFailure,
+      rateLimitLockout: health.rateLimitLockout,
+      clientError: health.clientError,
       // 日志开关可见性：DEBUG_SDK_MESSAGES 长开曾把日志刷到 149M 而无任何界面可见——
       // 面板「日志开关」行据此渲染（sdkDebug 开着标黄）。env 启动时定死，ack 时读即最新。
       logging: {
@@ -2369,7 +2380,8 @@ registerSocketConnection(io, socket => {
     const line = formatClientErrorLine(payload);
     if (!line) return;
     console.warn('[client-error]', socket.id, line);
-    metrics.inc('client_errors'); // 状态面板「前端错误」行：手机端对这类错误的唯一可见性入口
+    metrics.inc('client_errors'); // 服务状态可见性：手机端对这类错误的告警入口（详情在日志面板）
+    metrics.gauge('client_errors_last_ts', Date.now()); // 带时间戳，供 recentIncident 判定
   });
 
   on(socket, 'disconnect', () => {

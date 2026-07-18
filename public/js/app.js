@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, serviceMetricsRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -955,7 +955,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   };
 
   // ---- 服务状态面板（NFR-15 可见性）----
-  // 设置「访问与设备」组入口 → 底部 sheet 三段渲染：基础(时长/版本/连接) + 运行指标(8 项) + 异常告警。
+  // 设置「访问与设备」组入口 → 底部 sheet 两段渲染：基础(时长/版本/连接/日志开关) + 异常告警（判定化：
+  // 裸计数器段已撤——对人无参照系不可解读，原始计数留 /metrics 巡检端点；有信号项升格为带时效窗告警）。
   // 数据走鉴权 service:status ack（doctor:run 同构）；打开即拉、开着时 5s 重拉（后台 tab 跳过）、关闭即停。
   const serviceStatusModal = $('serviceStatusModal'), serviceStatusBody = $('serviceStatusBody');
   let serviceStatusTimer = null;
@@ -986,15 +987,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addRow(basic.lastChild, r.label, r.value, r.alert ? 'text-warning' : null); // 日志开关：SDK 调试开着标黄（忘关观测点）
     }
     serviceStatusBody.appendChild(basic);
-    // 段2 运行指标：alert 行（失败/锁定类 >0）标红
-    const metricsSection = section('运行指标', '（本次启动以来累计）');
-    for (const r of serviceMetricsRows(res.metrics)) {
-      addRow(metricsSection.lastChild, r.label, r.value.toLocaleString('zh-CN'), r.alert ? 'text-danger' : null);
-    }
-    serviceStatusBody.appendChild(metricsSection);
-    // 段3 异常告警：与抽屉「服务」小节同一纯函数（文案一致）；重启提示直读广播维护的标记，不二次写基线
+    // 段2 异常告警：与抽屉「服务」小节同一纯函数（文案一致）；重启提示直读广播维护的标记，不二次写基线。
+    // 服务端已按时效窗判定（超窗自动退场），此处只渲染。
     const noticesSection = section('异常告警');
-    const notices = formatServiceNotices({ service: { deliveryFailure: res.deliveryFailure }, restartChanged: _serviceRestartNoticeActive, now });
+    const notices = formatServiceNotices({
+      service: { deliveryFailure: res.deliveryFailure, rateLimitLockout: res.rateLimitLockout, clientError: res.clientError },
+      restartChanged: _serviceRestartNoticeActive,
+      now,
+    });
     if (!notices.length) {
       const okRow = el(`<div class="px-3 py-2.5 text-xs text-success"></div>`);
       okRow.textContent = '✓ 无异常';
@@ -1002,14 +1002,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     } else {
       for (const line of notices) {
         const row = el(`<div class="px-3 py-2.5 text-xs border-t border-line-soft first:border-t-0"></div>`);
-        row.classList.add(line.startsWith('🔔') ? 'text-danger' : 'text-warning');
+        // 判色按告警类别：投递失败(🔔)/限速锁定(⛔)红——错过审批与安全事件；重启(🔄)/前端错误(🐞)黄
+        row.classList.add(line.startsWith('🔔') || line.startsWith('⛔') ? 'text-danger' : 'text-warning');
         row.textContent = line;
         noticesSection.lastChild.appendChild(row);
       }
     }
     serviceStatusBody.appendChild(noticesSection);
     const hint = el(`<div class="text-[10px] text-ink-faint"></div>`);
-    hint.textContent = '数据每 5 秒自动刷新 · 指标随服务重启清零';
+    hint.textContent = '数据每 5 秒自动刷新 · 告警超 24 小时自动退场 · 原始计数见 /metrics';
     serviceStatusBody.appendChild(hint);
   }
   function loadServiceStatus() {

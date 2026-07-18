@@ -240,5 +240,20 @@ export function createStatusScenarios(getContext) {
         });
       }),
     },
+    {
+      // 判定化告警注入：后续 service:status ack 带 rateLimitLockout（⛔ 红）+ clientError（🐞 黄），
+      // 供 E2E 验证升格告警行渲染与判色（P0-22c）。42 分钟前锁定、3 分钟前前端错误。
+      command: 'test:service-incidents',
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, setMockServiceIncidents }) => {
+        setMockServiceIncidents({
+          rateLimitLockout: { at: Date.now() - 42 * 60_000, count: 2 },
+          clientError: { at: Date.now() - 3 * 60_000, count: 5 },
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_svc_incident_1', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      }),
+    },
   ];
 }

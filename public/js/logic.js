@@ -1303,17 +1303,29 @@ function formatAgo(ms) {
 }
 
 // 组装会话面板"服务"小节文案（需要你之后、目录列表之前，仅异常时渲染）。空数组=一切正常。
-// 刻意不吞并/复用"需要你(N)"聚合的展示逻辑——两条轴分开陈列，不让服务健康看起来像"更多同类待办"。
+// 判定化告警四类，固定顺序：重启 → 限速锁定(⛔ 安全信号) → 投递失败(🔔) → 前端错误(🐞)。
+// 各类均由服务端时效窗判定（超窗自动退场，见 metrics.js recentIncident/recentDeliveryFailure）；
+// 旧 server 无新字段 → 优雅缺席。刻意不吞并/复用"需要你(N)"聚合的展示逻辑——
+// 两条轴分开陈列，不让服务健康看起来像"更多同类待办"。
 export function formatServiceNotices({ service, restartChanged, now } = {}) {
   const notices = [];
   if (restartChanged) {
     notices.push('🔄 服务自上次连接后已重启，请确认之前任务是否正常完成');
   }
+  const countSuffix = c => (Number.isFinite(c) && c > 0 ? `（累计 ${c} 次）` : '');
+  const lockout = service && service.rateLimitLockout;
+  if (lockout && typeof lockout.at === 'number') {
+    notices.push(`⛔ 登录限速锁定于 ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}——可能有人在暴力尝试你的入口`);
+  }
   const df = service && service.deliveryFailure;
   if (df && typeof df.at === 'number') {
     const channelLabel = df.channel === 'ntfy' ? 'ntfy' : 'push';
-    const countSuffix = Number.isFinite(df.count) && df.count > 0 ? `，累计 ${df.count} 次` : '';
-    notices.push(`🔔 推送最近失败于 ${formatAgo(now - df.at)}（${channelLabel}${countSuffix}）`);
+    const cnt = Number.isFinite(df.count) && df.count > 0 ? `，累计 ${df.count} 次` : '';
+    notices.push(`🔔 推送最近失败于 ${formatAgo(now - df.at)}（${channelLabel}${cnt}）`);
+  }
+  const ce = service && service.clientError;
+  if (ce && typeof ce.at === 'number') {
+    notices.push(`🐞 前端错误发生于 ${formatAgo(now - ce.at)}${countSuffix(ce.count)}，详见日志面板`);
   }
   return notices;
 }
@@ -1534,28 +1546,9 @@ export function serviceStatusBasicRows({ startedAt, versions, connected, rttMs, 
   return rows;
 }
 
-// 指标段九行固定顺序（/metrics 最小集同名 key）。失败/锁定类 >0 标 alert 供接线层标红；
-// 缺失/非数一律 0——指标是进程内累计，缺 key 意味着旧 server，显 0 比显 undefined 诚实。
-const SERVICE_METRIC_ROWS = Object.freeze([
-  { key: 'activeSessions', label: '活跃会话' },
-  { key: 'events', label: '事件总数' },
-  { key: 'catchUpHits', label: '断线补发命中' },
-  { key: 'catchUpReloads', label: '补发降级重载' },
-  { key: 'rateLimitLockouts', label: '限速锁定' },
-  { key: 'pushSuccess', label: '推送成功' },
-  { key: 'pushFailure', label: '推送失败' },
-  { key: 'ntfyFailure', label: 'ntfy 失败' },
-  { key: 'clientErrors', label: '前端错误' },
-]);
-const SERVICE_METRIC_ALERT_KEYS = new Set(['rateLimitLockouts', 'pushFailure', 'ntfyFailure', 'clientErrors']);
-export function serviceMetricsRows(metrics) {
-  const m = metrics && typeof metrics === 'object' ? metrics : {};
-  return SERVICE_METRIC_ROWS.map(({ key, label }) => {
-    const raw = m[key];
-    const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : 0;
-    return { key, label, value, alert: SERVICE_METRIC_ALERT_KEYS.has(key) && value > 0 };
-  });
-}
+// 指标段（九行裸计数器）已判定化撤除：裸计数对人无参照系不可解读（好/坏不可判），
+// 是 /metrics 巡检端点的机器原料；有信号的两项（限速锁定/前端错误）升格进 formatServiceNotices
+// 带时效窗告警。原始计数仍在 GET /metrics（鉴权）。
 
 // ---- 全局 JS 错误上报（手机浏览器无 devtools，错误经 socket 落服务端日志）----
 
