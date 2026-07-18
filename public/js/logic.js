@@ -1522,7 +1522,7 @@ export function formatUptime(ms) {
 
 // 基础段四行。versions 缺失字段显 unknown（升级半途/旧 server 也能渲染）；
 // 连接行的延迟复用 formatRttMs（非法→'' 时只显「已连接」，不残留陈旧数字）。
-export function serviceStatusBasicRows({ startedAt, versions, connected, rttMs, now } = {}) {
+export function serviceStatusBasicRows({ startedAt, versions, connected, rttMs, now, logging } = {}) {
   const startedValid = typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0;
   const uptime = startedValid ? formatUptime(now - startedAt) : '';
   let startedLabel = '未知';
@@ -1534,15 +1534,26 @@ export function serviceStatusBasicRows({ startedAt, versions, connected, rttMs, 
   const v = versions && typeof versions === 'object' ? versions : {};
   const pick = key => (typeof v[key] === 'string' && v[key] ? v[key] : 'unknown');
   const rtt = formatRttMs(rttMs);
-  return [
+  const rows = [
     { label: '运行时长', value: uptime || '未知' },
     { label: '启动于', value: startedLabel },
     { label: '版本', value: `server ${pick('server')} · CLI ${pick('cli')} · SDK ${pick('sdk')}` },
     { label: '连接', value: connected ? `已连接${rtt ? ` · 延迟 ${rtt}` : ''}` : '未连接' },
   ];
+  // 日志开关可见性：DEBUG_SDK_MESSAGES 曾长开半月把日志刷到 149M，此前没有任何界面能看到
+  // "调试开关开着"这个事实。sdkDebug 开着标 alert（接线层标黄）；旧 server ack 无 logging → 优雅缺席。
+  if (logging && typeof logging === 'object') {
+    const sw = v => (v ? '开' : '关');
+    rows.push({
+      label: '日志开关',
+      value: `交互日志 ${sw(logging.interactions)} · SDK 调试 ${sw(logging.sdkDebug)} · stderr ${sw(logging.stderr)}`,
+      alert: !!logging.sdkDebug,
+    });
+  }
+  return rows;
 }
 
-// 指标段八行固定顺序（/metrics 最小集同名 key）。失败/锁定类 >0 标 alert 供接线层标红；
+// 指标段九行固定顺序（/metrics 最小集同名 key）。失败/锁定类 >0 标 alert 供接线层标红；
 // 缺失/非数一律 0——指标是进程内累计，缺 key 意味着旧 server，显 0 比显 undefined 诚实。
 const SERVICE_METRIC_ROWS = Object.freeze([
   { key: 'activeSessions', label: '活跃会话' },
@@ -1553,8 +1564,9 @@ const SERVICE_METRIC_ROWS = Object.freeze([
   { key: 'pushSuccess', label: '推送成功' },
   { key: 'pushFailure', label: '推送失败' },
   { key: 'ntfyFailure', label: 'ntfy 失败' },
+  { key: 'clientErrors', label: '前端错误' },
 ]);
-const SERVICE_METRIC_ALERT_KEYS = new Set(['rateLimitLockouts', 'pushFailure', 'ntfyFailure']);
+const SERVICE_METRIC_ALERT_KEYS = new Set(['rateLimitLockouts', 'pushFailure', 'ntfyFailure', 'clientErrors']);
 export function serviceMetricsRows(metrics) {
   const m = metrics && typeof metrics === 'object' ? metrics : {};
   return SERVICE_METRIC_ROWS.map(({ key, label }) => {

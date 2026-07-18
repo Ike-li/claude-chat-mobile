@@ -979,8 +979,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     serviceStatusBody.replaceChildren();
     // 段1 基础：连接状态取自本 socket 与 RTT 监视器（不另发 ping）
     const basic = section('基础');
-    for (const r of serviceStatusBasicRows({ startedAt: res.startedAt, versions: res.versions, connected: socket.connected, rttMs: rttMonitor.last(), now })) {
-      addRow(basic.lastChild, r.label, r.value);
+    for (const r of serviceStatusBasicRows({ startedAt: res.startedAt, versions: res.versions, connected: socket.connected, rttMs: rttMonitor.last(), now, logging: res.logging })) {
+      addRow(basic.lastChild, r.label, r.value, r.alert ? 'text-warning' : null); // 日志开关：SDK 调试开着标黄（忘关观测点）
     }
     serviceStatusBody.appendChild(basic);
     // 段2 运行指标：alert 行（失败/锁定类 >0）标红

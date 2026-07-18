@@ -51,31 +51,46 @@ test.describe('serviceStatusBasicRows：基础段四行', () => {
     assert.equal(rows[0].value, '未知');
     assert.equal(rows[1].value, '未知');
   });
+  test('logging 存在 → 第五行「日志开关」；SDK 调试开着才标 alert（忘关事故观测点）', () => {
+    const rows = serviceStatusBasicRows({ ...base, logging: { interactions: true, sdkDebug: false, stderr: true } });
+    assert.equal(rows.length, 5);
+    assert.equal(rows[4].label, '日志开关');
+    assert.equal(rows[4].value, '交互日志 开 · SDK 调试 关 · stderr 开');
+    assert.equal(rows[4].alert, false);
+    const hot = serviceStatusBasicRows({ ...base, logging: { interactions: false, sdkDebug: true, stderr: false } });
+    assert.equal(hot[4].value, '交互日志 关 · SDK 调试 开 · stderr 关');
+    assert.equal(hot[4].alert, true);
+  });
+  test('logging 缺席（旧 server ack）→ 维持四行优雅缺席', () => {
+    assert.equal(serviceStatusBasicRows(base).length, 4);
+    assert.equal(serviceStatusBasicRows({ ...base, logging: null }).length, 4);
+  });
 });
 
-test.describe('serviceMetricsRows：指标段八行固定顺序', () => {
-  const full = { activeSessions: 2, events: 1841, catchUpHits: 12, catchUpReloads: 1, rateLimitLockouts: 0, pushSuccess: 57, pushFailure: 3, ntfyFailure: 0 };
+test.describe('serviceMetricsRows：指标段九行固定顺序', () => {
+  const full = { activeSessions: 2, events: 1841, catchUpHits: 12, catchUpReloads: 1, rateLimitLockouts: 0, pushSuccess: 57, pushFailure: 3, ntfyFailure: 0, clientErrors: 0 };
 
-  test('八行固定顺序 + 中文 label + 数值透传', () => {
+  test('九行固定顺序 + 中文 label + 数值透传', () => {
     const rows = serviceMetricsRows(full);
-    assert.deepEqual(rows.map(r => r.key), ['activeSessions', 'events', 'catchUpHits', 'catchUpReloads', 'rateLimitLockouts', 'pushSuccess', 'pushFailure', 'ntfyFailure']);
-    assert.deepEqual(rows.map(r => r.label), ['活跃会话', '事件总数', '断线补发命中', '补发降级重载', '限速锁定', '推送成功', '推送失败', 'ntfy 失败']);
-    assert.deepEqual(rows.map(r => r.value), [2, 1841, 12, 1, 0, 57, 3, 0]);
+    assert.deepEqual(rows.map(r => r.key), ['activeSessions', 'events', 'catchUpHits', 'catchUpReloads', 'rateLimitLockouts', 'pushSuccess', 'pushFailure', 'ntfyFailure', 'clientErrors']);
+    assert.deepEqual(rows.map(r => r.label), ['活跃会话', '事件总数', '断线补发命中', '补发降级重载', '限速锁定', '推送成功', '推送失败', 'ntfy 失败', '前端错误']);
+    assert.deepEqual(rows.map(r => r.value), [2, 1841, 12, 1, 0, 57, 3, 0, 0]);
   });
   test('失败/锁定类 >0 才标 alert（接线层据此标红），成功类不标', () => {
-    const rows = serviceMetricsRows(full);
+    const rows = serviceMetricsRows({ ...full, clientErrors: 2 });
     const byKey = Object.fromEntries(rows.map(r => [r.key, r]));
     assert.equal(byKey.pushFailure.alert, true);
+    assert.equal(byKey.clientErrors.alert, true); // 前端错误 >0 标红：手机端唯一可见性入口
     assert.equal(byKey.ntfyFailure.alert, false); // 值为 0 不标
     assert.equal(byKey.rateLimitLockouts.alert, false);
     assert.equal(byKey.events.alert, false); // 非失败类，1841 也不标
     assert.equal(byKey.activeSessions.alert, false);
   });
-  test('缺字段/非数 → 0；非对象入参 → 全 0', () => {
+  test('缺字段/非数 → 0；非对象入参 → 全 0（旧 server 无 clientErrors 也走这条显 0）', () => {
     const rows = serviceMetricsRows({ activeSessions: '3', events: NaN });
-    assert.deepEqual(rows.map(r => r.value), [0, 0, 0, 0, 0, 0, 0, 0]);
-    assert.deepEqual(serviceMetricsRows(null).map(r => r.value), [0, 0, 0, 0, 0, 0, 0, 0]);
-    assert.deepEqual(serviceMetricsRows().map(r => r.value), [0, 0, 0, 0, 0, 0, 0, 0]);
+    assert.deepEqual(rows.map(r => r.value), [0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert.deepEqual(serviceMetricsRows(null).map(r => r.value), [0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert.deepEqual(serviceMetricsRows().map(r => r.value), [0, 0, 0, 0, 0, 0, 0, 0, 0]);
   });
 });
 

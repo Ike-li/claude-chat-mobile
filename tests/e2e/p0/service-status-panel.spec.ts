@@ -23,9 +23,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(body).toContainText('启动于');
     await expect(body).toContainText('server 1.2.1-mock · CLI 0.1.0-mock · SDK 0.3.201-mock');
     await expect(body).toContainText('已连接');
+    await expect(body).toContainText('日志开关');
+    await expect(body).toContainText('交互日志 开 · SDK 调试 关 · stderr 开');
 
-    // 3. 指标段：8 项 label 齐全 + 数值千分位透传
-    for (const label of ['活跃会话', '事件总数', '断线补发命中', '补发降级重载', '限速锁定', '推送成功', '推送失败', 'ntfy 失败']) {
+    // 3. 指标段：9 项 label 齐全 + 数值千分位透传
+    for (const label of ['活跃会话', '事件总数', '断线补发命中', '补发降级重载', '限速锁定', '推送成功', '推送失败', 'ntfy 失败', '前端错误']) {
       await expect(body).toContainText(label);
     }
     await expect(body).toContainText('1,841');

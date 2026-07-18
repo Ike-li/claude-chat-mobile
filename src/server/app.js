@@ -334,6 +334,7 @@ const getMetricsPayload = () => {
       pushSuccess: counters.push_success ?? 0,
       pushFailure: counters.push_failure ?? 0,
       ntfyFailure: counters.ntfy_failure ?? 0,
+      clientErrors: counters.client_errors ?? 0,
     },
     state: metrics.classifyState({ failed, awaiting, notifyFailed, mobileClients }),
     states: { failed, awaiting, notifyFailed, mobileClients },
@@ -2273,6 +2274,13 @@ registerSocketConnection(io, socket => {
       versions,
       metrics: getMetricsPayload().metrics,
       deliveryFailure: computeServiceHealth().deliveryFailure,
+      // 日志开关可见性：DEBUG_SDK_MESSAGES 长开曾把日志刷到 149M 而无任何界面可见——
+      // 面板「日志开关」行据此渲染（sdkDebug 开着标黄）。env 启动时定死，ack 时读即最新。
+      logging: {
+        interactions: process.env.LOG_INTERACTIONS === '1', // 同 interaction-log.js:11 的判定
+        sdkDebug: !!process.env.DEBUG_SDK_MESSAGES,         // 同 agent.js 诊断 tap 的 truthy 判定
+        stderr: !!process.env.LOG_STDERR,                   // 同 agent.js:187 的 truthy 判定
+      },
       timestamp: Date.now(),
     });
   });
@@ -2354,7 +2362,9 @@ registerSocketConnection(io, socket => {
   on(socket, 'logs:clientError', payload => {
     if (!clientErrorLimiter.allow()) return;
     const line = formatClientErrorLine(payload);
-    if (line) console.warn('[client-error]', socket.id, line);
+    if (!line) return;
+    console.warn('[client-error]', socket.id, line);
+    metrics.inc('client_errors'); // 状态面板「前端错误」行：手机端对这类错误的唯一可见性入口
   });
 
   on(socket, 'disconnect', () => {

@@ -759,8 +759,10 @@ io.on('connection', socket => {
       metrics: {
         activeSessions: 2, events: 1841, catchUpHits: 12, catchUpReloads: 1,
         rateLimitLockouts: 0, pushSuccess: 57, pushFailure: mockDeliveryFailure ? 3 : 0, ntfyFailure: 0,
+        clientErrors: 0,
       },
       deliveryFailure: mockDeliveryFailure,
+      logging: { interactions: true, sdkDebug: false, stderr: true },
       timestamp: Date.now(),
     });
   });

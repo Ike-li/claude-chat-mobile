@@ -99,7 +99,7 @@
 | `browse:list` | `{cwd?,relPath?,offset?,maxEntries?}` | `{ok,entries,...}` 或越界错误 |
 | `browse:read` | `{cwd?,relPath,offset?,maxBytes?}` | `{ok,text,...}` 或越界错误；同样受工作目录、symlink 与 realpath 边界保护 |
 | `doctor:run` | `{}` | `{checks[], readiness}`（④ UI 安全体检：运行时检查 + 全局危险白名单审查；**全程脱敏**，只出布尔 / 计数 / 危险规则串，绝不回显明文 token / 绝对路径 / AUD / 密钥） |
-| `service:status` | `{}` | `{ok, startedAt, versions:{server,cli,sdk}, metrics:{activeSessions,events,catchUpHits,catchUpReloads,rateLimitLockouts,pushSuccess,pushFailure,ntfyFailure}, deliveryFailure, timestamp}`（服务状态面板：一次 ack 拼齐基础 + /metrics 同源指标 + 投递健康；面板开着时 5s 重拉） |
+| `service:status` | `{}` | `{ok, startedAt, versions:{server,cli,sdk}, metrics:{activeSessions,events,catchUpHits,catchUpReloads,rateLimitLockouts,pushSuccess,pushFailure,ntfyFailure,clientErrors}, deliveryFailure, logging:{interactions,sdkDebug,stderr}, timestamp}`（服务状态面板：一次 ack 拼齐基础 + /metrics 同源指标 + 投递健康 + 日志开关可见性；面板开着时 5s 重拉） |
 
 ---
 
