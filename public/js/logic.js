@@ -1563,3 +1563,39 @@ export function serviceMetricsRows(metrics) {
     return { key, label, value, alert: SERVICE_METRIC_ALERT_KEYS.has(key) && value > 0 };
   });
 }
+
+// ---- 全局 JS 错误上报（手机浏览器无 devtools，错误经 socket 落服务端日志）----
+
+const CLIENT_ERROR_CAPS = { message: 500, source: 300, stack: 1500 };
+const clampStr = (v, cap) => (typeof v === 'string' && v ? v.slice(0, cap) : null);
+
+// 错误事件 → 上报载荷 + 去重签名。kind='error' 取 ErrorEvent 字段；
+// kind='unhandledrejection' 的 reason 可能是 Error/字符串/任意值，分别取 message/stack 或 String 化。
+export function buildClientErrorReport(kind, info = {}) {
+  let message = info.message;
+  let stack = info.stack;
+  if (info.reason !== undefined) {
+    const r = info.reason;
+    if (r && typeof r === 'object') { message = r.message ?? String(r); stack = r.stack ?? stack; }
+    else message = String(r);
+  }
+  const payload = {
+    kind: kind === 'unhandledrejection' ? 'unhandledrejection' : 'error',
+    message: clampStr(String(message ?? ''), CLIENT_ERROR_CAPS.message) || '(无错误信息)',
+    source: clampStr(info.source, CLIENT_ERROR_CAPS.source),
+    line: Number.isFinite(info.line) ? info.line : null,
+    col: Number.isFinite(info.col) ? info.col : null,
+    stack: clampStr(stack, CLIENT_ERROR_CAPS.stack),
+  };
+  const loc = payload.source ? `${payload.source}:${payload.line ?? '?'}` : '';
+  return { payload, signature: `${payload.kind}|${payload.message.slice(0, 120)}|${loc}` };
+}
+
+// 去重+限流门（纯步进，状态由接线层持有）：同签名窗口内只报一次；窗口内最多 max 条；
+// 窗口滚动整体复位。防错误风暴（如 rAF 循环里抛错）刷爆 socket 与服务端日志。
+export function clientErrorGateStep(state, signature, now, { windowMs = 60000, max = 5 } = {}) {
+  let s = state;
+  if (!s || now - s.windowStart >= windowMs) s = { windowStart: now, sent: 0, seen: [] };
+  if (s.seen.includes(signature) || s.sent >= max) return { state: s, send: false };
+  return { state: { windowStart: s.windowStart, sent: s.sent + 1, seen: [...s.seen, signature] }, send: true };
+}

@@ -22,6 +22,7 @@ import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, readLastPermissionMode } from '../sessions/history.js';
 import { notificationForEvent, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from '../ops/notifications.js';
 import { createNotifyChannels } from '../ops/notify-channels.js';
+import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
 import { buildWebStatusLine, buildCliStatusLine } from '../ops/statusline.js';
@@ -2344,6 +2345,16 @@ registerSocketConnection(io, socket => {
     // FRESH 首轮 sessionId 未到：读 provisional 缓冲；init rebind 后读真 sessionId
     const logs = interactionLog.getSessionLogs(a.logKey());
     ack({ logs });
+  });
+
+  // 前端全局 JS 错误上报：手机浏览器无 devtools，前端运行期错误经此落服务端日志。
+  // 载荷是不可信客户端输入——校验/钳制/脱敏在 formatClientErrorLine（非法返回 null 丢弃），
+  // per-socket 限流兜前端去重门失效的底。fire-and-forget，无 ack。
+  const clientErrorLimiter = createSocketErrorLimiter();
+  on(socket, 'logs:clientError', payload => {
+    if (!clientErrorLimiter.allow()) return;
+    const line = formatClientErrorLine(payload);
+    if (line) console.warn('[client-error]', socket.id, line);
   });
 
   on(socket, 'disconnect', () => {

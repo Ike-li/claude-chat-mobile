@@ -84,6 +84,7 @@
 |---|---|---|
 | `sync:since` | `{sessionId, lastSeq, instanceId?}` | `{replayed, gap, found, pending, diskLen}`（断线补发；`found:false`=实例已没了，`diskLen` 供 transcript 对账） |
 | `logs:get` | `{instanceId?}` | `{logs[]}`（该实例的交互日志，需 `LOG_INTERACTIONS=1`） |
+| `logs:clientError` | `{kind,message,source?,line?,col?,stack?}` | 无 ack；前端全局 JS 错误落服务端日志（钳制+脱敏+per-socket 限流） |
 | `mirror:syncNow` | `{}` | 无 ack；立即触发一次 transcript 追平 |
 | `conn:ping` | `{}` | `{ok:true,t}`；连接 RTT 探活，不进业务缓冲 |
 | `dev:restart` | `{}` | `{ok}` 或 `{ok:false, error}`（**仅 `DEV_MODE=1`**：优雅退出，靠 KeepAlive 自动拉起） |
@@ -216,7 +217,7 @@
 | 层 | 事实源 | 机械校验 |
 |---|---|---|
 | 出向 `agent:event` 类型 | `scripts/agent-event-contract.js`（26 类 allowlist） | `npm run contract:check`（零 token 静态，校验 real ⊇ mock） |
-| 入向 socket 事件名 | `scripts/agent-event-contract.js`（`INBOUND_SOCKET_EVENTS` 29 项） | `npm run contract:check`（server 注册面 = 契约；前端 emit / mock ⊆ 契约） |
+| 入向 socket 事件名 | `scripts/agent-event-contract.js`（`INBOUND_SOCKET_EVENTS` 30 项） | `npm run contract:check`（server 注册面 = 契约；前端 emit / mock ⊆ 契约） |
 | 文档链接 / npm 脚本名 / SDK 版本 | `scripts/doc-consistency.js` | `npm run check`（含本文件的死链扫描） |
 
 本文件给人读；协议以表中的可执行事实源为准。两者漂移由 `npm run check` + `npm run contract:check` 拦截。

@@ -362,6 +362,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'conn:ping',
   'dev:restart',
   'doctor:run',
+  'logs:clientError',
   'logs:get',
   'mirror:syncNow',
   'service:status',

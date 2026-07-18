@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, serviceMetricsRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, serviceMetricsRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -613,6 +613,26 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     reconnectionDelay: 500,
     reconnectionDelayMax: 2000,
   }));
+
+  // 全局 JS 错误上报：手机浏览器无 devtools，运行期错误进本地日志抽屉（client_error）
+  // 并经 logs:clientError 落服务端日志。只覆盖启动成功之后的错误——更早的解析/启动
+  // 失败连本上报器都不存在。去重+限流（clientErrorGateStep）防错误风暴；上报路径自身
+  // 抛错会再触发 error 监听，除 try 兜底外同签名也会被门直接吸收，不会递归放大。
+  let clientErrorGate = null;
+  const reportClientError = (kind, info) => {
+    try {
+      const { payload, signature } = buildClientErrorReport(kind, info);
+      const step = clientErrorGateStep(clientErrorGate, signature, Date.now());
+      clientErrorGate = step.state;
+      if (!step.send) return;
+      logClientEvent('error', `[JS_ERROR] ${payload.message}${payload.source ? ` @${payload.source}:${payload.line ?? '?'}` : ''}`);
+      if (socket.connected) socket.emit('logs:clientError', payload);
+    } catch { /* 上报器绝不能自己再抛 */ }
+  };
+  window.addEventListener('error', e => reportClientError('error', {
+    message: e.message, source: e.filename, line: e.lineno, col: e.colno, stack: e.error?.stack,
+  }));
+  window.addEventListener('unhandledrejection', e => reportClientError('unhandledrejection', { reason: e.reason }));
 
   let initialLoad = true;
   let connectErrorCount = 0;  // 公网 socket 连续失败计数，攒够再探测 Access 是否过期
