@@ -887,6 +887,10 @@ async function catchUpTickOnce() {
   // 上下文继续滞后 → 下条手机消息从旧位置分叉。此处在重建【之前】比较磁盘长度与旧 baseline：同一会话重连且磁盘
   // 更长 = 有被吸收的外部增长 → 标 externalDirty（下次发送前置换实例吸收），再置 catchUpKey=null 保留原「重连
   // 重渲无重复气泡」行为。真会话切换（key !== catchUpKey）不在此判、由下方 switch 分支按新会话正常重建。
+  // 2026-07-18 修复：上面这段判断此前没看本函数已算好的 localBusy——手机锁屏/切后台/切网络自动重连时，若恰好
+  // 撞上己方 turn 还在跑或后台任务未完，磁盘变长其实是自己写出来的，却被无条件标 externalDirty：忙碌时命中
+  // externalDirtyBusyNack 硬拒绝发送（不排队、不重试）、空闲时则触发一次没必要的 dispose+resume 冷启动。现把
+  // localBusy 传给 rebaselineAbsorbedExternal，与下面「己方在跑不算终端 keep-alive」对齐同一判据。
   if (catchUpRebaselineRequested) {
     catchUpRebaselineRequested = false;
     if (key === catchUpKey) {                                        // 同一会话重连（非真切换）
@@ -899,6 +903,7 @@ async function catchUpTickOnce() {
             sameSession: true,
             curLen,
             baseline: catchUpState.baseline,
+            localBusy, // 己方忙碌不算外部写入
             prevTailKey: catchUpState.lastTailKey ?? null,
             curTailKey,
           })) {

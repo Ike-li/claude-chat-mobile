@@ -245,15 +245,19 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
 // 另一段会话的全量历史、无分叉语义。curLen 非有限（读盘失败）保守返回 false，不误标。
 // BE-009 + SS-NEW-002：同会话重连 rebaseline 是否吸收了未观察的外部增长。
 // 长度增长 → true；HISTORY_MAX 满窗滑动时 len 不变但尾指纹变 → 也 true（对齐 catchUpStep lastTailKey）。
+// 2026-07-18 修复：新增 localBusy（调用方 instanceState 已算好、同 catchUpStep/mirrorReleaseStep 同名参数同判据）
+// ——己方正跑 turn/等审批时磁盘变长大概率是自己写出来的，不是终端外部写入，早退 false 不误标 externalDirty。
 export function rebaselineAbsorbedExternal({
   sameSession,
   curLen,
   baseline,
+  localBusy = false,
   historyCap = HISTORY_MAX_MESSAGES,
   prevTailKey = null,
   curTailKey = null,
 } = {}) {
   if (sameSession !== true) return false;
+  if (localBusy === true) return false;
   if (!Number.isFinite(curLen) || !Number.isFinite(baseline)) return false;
   if (curLen > baseline) return true;
   const atCap = Number.isFinite(historyCap) && historyCap > 0

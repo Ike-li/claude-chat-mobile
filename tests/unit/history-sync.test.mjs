@@ -265,6 +265,21 @@ test.describe('rebaselineAbsorbedExternal（BE-009）', () => {
       prevTailKey: null, curTailKey: 't2|user|x',
     }), false);
   });
+  // 2026-07-18 修复：BE-009 重连分支原先没检查 localBusy，磁盘变长可能是己方 turn/后台任务自己写出来的，
+  // 不是终端外部写入，不该标 externalDirty。与 catchUpStep/mirrorReleaseStep 的 localBusy 早退对齐同一判据。
+  test('localBusy=true + 磁盘确实变长 → false（己方在跑不算外部写入，不误标 externalDirty）', () => {
+    assert.equal(rebaselineAbsorbedExternal({ sameSession: true, curLen: 5, baseline: 2, localBusy: true }), false);
+  });
+  test('localBusy=true + 满窗 tail 变（SS-NEW-002 判据）→ 同样 false（早退要挡住两条判定支路）', () => {
+    const cap = 4;
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: cap, baseline: cap, historyCap: cap, localBusy: true,
+      prevTailKey: 't1|user|old', curTailKey: 't2|assistant|new',
+    }), false);
+  });
+  test('localBusy=false（显式传入）+ 磁盘变长 → 仍 true（老行为不受影响，回归保护）', () => {
+    assert.equal(rebaselineAbsorbedExternal({ sameSession: true, curLen: 5, baseline: 2, localBusy: false }), true);
+  });
 });
 
 // ── 原始同步 bug 复现（web 额度耗尽 → CLI 外部 resume+compact 写入 → web 重开看不到 CLI 新输出）────────
