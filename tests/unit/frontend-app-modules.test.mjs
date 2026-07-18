@@ -337,8 +337,11 @@ test('task status controller ignores other instances and updates the current pro
 
   assert.equal(status.onProgress({ instanceId: 'inst-2', payload: { message: 'wrong' } }), false);
   assert.equal(status.onProgress({ instanceId: 'inst-1', payload: { taskId: 't1', message: 'running' } }), true);
-  assert.equal(textNode.textContent, 'running');
+  // b4716e7 起横幅只写数量/状态（固定标签在 HTML、明细在列表行），不再回显任务 message 原文
+  assert.equal(textNode.textContent, '运行中');
   assert.equal(hidden.has('hidden'), false);
+  assert.equal(status.onProgress({ instanceId: 'inst-1', payload: { taskId: 't2', message: 'another' } }), true);
+  assert.equal(textNode.textContent, '2 个运行中');
 });
 
 test('session workspace state exposes isolated caches through app context', () => {

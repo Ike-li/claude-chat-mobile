@@ -134,7 +134,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:mirror-readonly');
-    await expect(page.locator('#mirrorBanner')).toBeVisible();
+    await expect(page.locator('#input')).toBeDisabled();
     await expect(page.locator('#pillEffortText')).toHaveText('CLI 档位未知', { timeout: 800 });
 
     await page.locator('#btnSettings').click();
@@ -155,14 +155,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await closeSettings(page);
 
     await sendChatMessage(page, 'test:mirror-observed-settings');
-    await expect(page.locator('#mirrorBanner')).toBeVisible();
+    await expect(page.locator('#input')).toBeDisabled();
     await expect(page.locator('#pillModelText')).toHaveText('claude-opus-4-8[1m]');
     await expect(page.locator('#pillPermText')).toHaveText('Auto');
     await expect(page.locator('#pillEffortText')).toHaveText('max');
 
     page.once('dialog', dialog => dialog.accept());
-    await page.locator('#btnMirrorOverride').click();
-    await expect(page.locator('#mirrorBanner')).toBeHidden();
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toBeEnabled();
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
     await expect(page.locator('#pillPermText')).toHaveText('计划模式');
     await expect(page.locator('#effortSelect')).toHaveValue('ultracode');

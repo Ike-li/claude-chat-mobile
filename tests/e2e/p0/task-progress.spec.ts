@@ -22,10 +22,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 1. 发送 test:taskprogress 后出现后台任务进度横幅。
     await sendChatMessage(page, 'test:taskprogress');
     await expect(page.locator('#taskProgressBanner')).toBeVisible();
-    await expect(page.locator('#taskProgressText')).toContainText('步骤', { timeout: 10_000 });
+    // b4716e7 起横幅只写数量态「运行中」，步骤明细迁到任务列表行 bg-task-row
+    await expect(page.locator('#taskProgressText')).toContainText('运行中', { timeout: 10_000 });
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('步骤', { timeout: 10_000 });
 
     // 2. 心跳原地刷新，完成后撤下。
-    await expect(page.locator('#taskProgressText')).toContainText('步骤 3/3', { timeout: 10_000 });
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('步骤 3/3', { timeout: 10_000 });
     await expect(page.locator('#taskProgressBanner')).toHaveCount(1);
     await waitForIdle(page);
     await expect(page.locator('#taskProgressBanner')).toBeHidden();
@@ -38,7 +40,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:taskprogress-failed');
     await expect(page.locator('#taskProgressBanner')).toBeVisible();
-    await expect(page.locator('#taskProgressText')).toContainText('步骤 2/3', { timeout: 10_000 });
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('步骤 2/3', { timeout: 10_000 });
     await waitForIdle(page);
     await expect(page.locator('#taskProgressBanner')).toBeHidden();
     await expect(page.locator('#messages')).toContainText('后台任务失败');
@@ -51,15 +53,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:mirror-readonly');
-    await expect(page.locator('#mirrorBanner')).toBeVisible();
-    await expect(page.locator('#mirrorBanner')).toContainText('终端驾驶中');
-    await expect(page.locator('#mirrorBanner')).toContainText('只读追平');
     await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
+    await expect(page.locator('#btnSend')).toHaveText('续接');
+    await expect(page.locator('#btnSend')).toBeEnabled();
 
-    await page.locator('#btnMirrorOverride').click();
-    await expect(page.locator('#mirrorBanner')).toBeHidden();
-    await expect(page.locator('#input')).toBeEnabled();
+    // 非 stale 只读态点续接 = 排队等终端本轮完结；mock 稍后发 readonly:false 自动放行
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toBeEnabled({ timeout: 10_000 });
 
     await sendChatMessage(page, 'take over from terminal');
     await expect(page.locator('[data-testid="user-message"]').last()).toContainText('take over from terminal');
@@ -73,13 +74,12 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:tab');
     await waitForIdle(page);
     await sendChatMessage(page, 'test:mirror-readonly');
-    await expect(page.locator('#mirrorBanner')).toBeVisible();
     await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toHaveText('续接');
 
     await openSessionsSidebar(page);
     await openWorkspaceSession(page, ANOTHER_WORKSPACE, 'Another App Concurrency');
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
-    await expect(page.locator('#mirrorBanner')).toBeHidden();
     await expect(page.locator('#input')).toBeEnabled();
     await expect(page.locator('#btnSend')).toBeDisabled();
 
@@ -97,19 +97,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#input').fill('test:settings-echo');
     await expect(page.locator('#btnSend')).toBeEnabled();
 
-    await expect(page.locator('#mirrorBanner')).toBeVisible();
-    await expect(page.locator('#mirrorBanner')).toContainText('终端驾驶中');
-    await expect(page.locator('#mirrorBanner')).toContainText('只读追平');
     await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
     await expect(page.locator('#input')).toHaveValue('test:settings-echo');
-    await expect(page.locator('#btnSend')).toBeDisabled();
-    await expect(page.locator('#btnSend')).toHaveAttribute('title', '请先完成设备授权或解除只读状态');
+    await expect(page.locator('#btnSend')).toHaveText('续接');
 
-    await page.locator('#btnMirrorOverride').click();
-    await expect(page.locator('#mirrorBanner')).toBeHidden();
-    await expect(page.locator('#input')).toBeEnabled();
+    // 点续接排队，终端本轮完结（mock 后续 readonly:false）后自动放行，草稿仍在
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toBeEnabled({ timeout: 10_000 });
     await expect(page.locator('#input')).toHaveValue('test:settings-echo');
-    await expect(page.locator('#btnSend')).toBeEnabled();
 
     await page.locator('#btnSend').click();
     await waitForIdle(page);
@@ -141,7 +137,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('Another App Concurrency', { timeout: 10_000 });
 
     await expect.poll(() => Date.now() - startedAt, { timeout: 2_000 }).toBeGreaterThan(900);
-    await expect(page.locator('#mirrorBanner')).toBeHidden();
+    // 迟到只读锁不污染已切走的会话：当前会话 input 仍可写（镜像横幅已恒 hidden，改判 input 态）
     await expect(page.locator('#input')).toBeEnabled();
 
     await sendChatMessage(page, 'test:settings-echo');
@@ -178,25 +174,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:mirror-armed');
-    await expect(page.locator('#mirrorBanner')).toBeVisible();
-    await expect(page.locator('#mirrorBannerIcon')).toHaveText('⏱');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
+    await expect(page.locator('#btnSend')).toHaveText('续接');
+
+    // 点续接 → 排队（armed），发送位变「取消」，仍只读
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', /已请求续接|等待终端/);
+    await expect(page.locator('#btnSend')).toHaveText('取消');
     await expect(page.locator('#input')).toBeDisabled();
 
-    await page.locator('#btnMirrorOverride').click();
-    await expect(page.locator('#mirrorBannerIcon')).toHaveText('⏳');
-    await expect(page.locator('#mirrorBannerText')).toContainText('已请求接管');
-    await expect(page.locator('#btnMirrorOverride')).toHaveText('取消接管');
+    // 点取消 → 回到只读驾驶态
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
+    await expect(page.locator('#btnSend')).toHaveText('续接');
     await expect(page.locator('#input')).toBeDisabled();
 
-    await page.locator('#btnMirrorOverride').click();
-    await expect(page.locator('#mirrorBannerIcon')).toHaveText('⏱');
-    await expect(page.locator('#btnMirrorOverride')).toHaveText('接管 CLI 会话');
-    await expect(page.locator('#input')).toBeDisabled();
-
-    await page.locator('#btnMirrorOverride').click();
-    await expect(page.locator('#mirrorBannerIcon')).toHaveText('⏳');
-    await expect(page.locator('#mirrorBanner')).toBeHidden({ timeout: 10_000 });
-    await expect(page.locator('#input')).toBeEnabled();
+    // 再点续接排队，终端本轮完结（mock 后续 readonly:false）后自动放行
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', /已请求续接|等待终端/);
+    await expect(page.locator('#input')).toBeEnabled({ timeout: 10_000 });
     await waitForIdle(page);
 
     await expectNoBrowserErrors(page);
@@ -206,11 +203,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:mirror');
-    await expect(page.locator('#mirrorBanner')).toBeVisible();
-    await expect(page.locator('#mirrorBannerIcon')).toHaveText('⏱');
-    await expect(page.locator('#mirrorBannerText')).toContainText('终端驾驶中');
     await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#btnMirrorSync')).toHaveText('刷新消息');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
+    await expect(page.locator('#btnSend')).toHaveText('续接');
 
     const modelBefore = await page.locator('#modelInput').inputValue();
     await page.locator('#customModelGrid .model-tile').evaluateAll((tiles) => {
@@ -220,10 +215,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#modelInput')).toHaveValue(modelBefore);
     await expect(page.locator('#messages')).toContainText('设置已冻结');
 
-    await expect(page.locator('#mirrorBannerIcon')).toHaveText('⚠️', { timeout: 5_000 });
-    await expect(page.locator('#mirrorBannerText')).toContainText('疑似中断');
-    await expect(page.locator('#mirrorBanner')).toBeHidden({ timeout: 5_000 });
-    await expect(page.locator('#input')).toBeEnabled();
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', /疑似中断/, { timeout: 5_000 });
+    await expect(page.locator('#input')).toBeEnabled({ timeout: 5_000 });
     await waitForIdle(page);
 
     await expectNoBrowserErrors(page);
