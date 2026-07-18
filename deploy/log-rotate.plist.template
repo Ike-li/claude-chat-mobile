@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  占位符 plist 模板 —— 别直接加载本文件。复制它、把下列占位符替换成你的真实值后，
+  落到 ~/Library/LaunchAgents/<你的-label>.plist 再 bootstrap。
+
+  作用：每天 03:47 跑一次 scripts/rotate-logs.sh，对常驻服务日志做 copy-truncate 轮转
+  （为什么必须 copy-truncate 而非 newsyslog rename，见脚本头部注释）。
+
+  占位符（下划线包裹）：
+    __LABEL__   LaunchAgent 标签，须与目标文件名一致，如 com.you.ccm-logrotate
+    __REPO__    仓库绝对路径，如 /Users/you/code/claude-chat-mobile
+    __LOG__     本定时器自身的日志绝对路径（每次轮转仅一行输出），如
+                /Users/you/Library/Logs/ccm-logrotate.log
+
+  用 scripts/render-plist.js 替换（勿裸 sed，理由见 server.plist.template 头注）：
+
+    node scripts/render-plist.js deploy/log-rotate.plist.template \
+      ~/Library/LaunchAgents/com.you.ccm-logrotate.plist \
+      LABEL=com.you.ccm-logrotate REPO="$PWD" \
+      LOG="$HOME/Library/Logs/ccm-logrotate.log"
+
+  加载：launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.you.ccm-logrotate.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__REPO__/scripts/rotate-logs.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>47</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+</dict>
+</plist>

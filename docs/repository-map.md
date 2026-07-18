@@ -34,7 +34,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Automation | 2 |
 | Backend source | 42 |
 | Configuration template | 1 |
-| Deployment | 2 |
+| Deployment | 3 |
 | Documentation | 16 |
 | Documentation asset | 10 |
 | E2E test | 30 |
@@ -46,7 +46,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Instructions | 2 |
 | Integration test | 18 |
 | Legal | 2 |
-| Maintainer tooling | 19 |
+| Maintainer tooling | 20 |
 | Project configuration | 4 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
@@ -55,7 +55,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 84 |
 | Vendored asset | 13 |
 
-Total classified files: **298**.
+Total classified files: **300**.
 
 ## Complete file inventory
 
@@ -68,6 +68,7 @@ Total classified files: **298**.
 | `.nvmrc` | Project configuration | Recommended Node major version | Referenced by maintainers | Authored and reviewed manually | keep |
 | `AGENTS.md` | Instructions | Codex project instructions symlink | Claude Code and Codex project instruction loader | Authored and reviewed manually | keep |
 | `CLAUDE.md` | Instructions | Canonical project and Claude Code instructions | Claude Code and Codex project instruction loader | Authored and reviewed manually | keep |
+| `deploy/log-rotate.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/server.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/tunnel.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `docs/.nojekyll` | Documentation | GitHub Pages marker disabling Jekyll processing | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
@@ -160,6 +161,7 @@ Total classified files: **298**.
 | `scripts/release.sh` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/render-plist.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/repo-inventory.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/rotate-logs.sh` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/setup.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/start-for-mobile.sh` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/statusline-bridge-setup.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |

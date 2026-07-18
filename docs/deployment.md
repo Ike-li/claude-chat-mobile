@@ -63,10 +63,11 @@ cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
 
 ### 3. 常驻（macOS LaunchAgent 示例）
 
-仓库 `deploy/` 下有两份**占位符 plist 模板**，复制、替换占位符后放到 `~/Library/LaunchAgents/`：
+仓库 `deploy/` 下有三份**占位符 plist 模板**，复制、替换占位符后放到 `~/Library/LaunchAgents/`：
 
 - [`deploy/server.plist.template`](../deploy/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
 - [`deploy/tunnel.plist.template`](../deploy/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
+- [`deploy/log-rotate.plist.template`](../deploy/log-rotate.plist.template) —— 每天 03:47 跑 `scripts/rotate-logs.sh` 做日志轮转（copy-truncate：launchd 持 O_APPEND fd，rename 式的 newsyslog/logrotate 转出来的新文件永远是空的，机制见脚本头注；默认超 20MB 才转、gzip 保留 5 份）。
 
 每份模板顶部的 XML 注释列出占位符（`__LABEL__`/`__REPO__`/`__NODE__`/`__LOG__` 等）与一行可直接跑的 `node scripts/render-plist.js` 替换示例（字面量替换 + XML 转义，不用裸 `sed`——审计 TC-009：路径若含空格/`&`/`#`/引号等特殊字符，裸 `sed` 可能破坏替换或生成非法 plist）。替换后加载：
 
@@ -110,7 +111,7 @@ PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退
 ## 运维速查
 
 ```bash
-# 实时日志
+# 实时日志（轮转归档在同目录 <name>.0.gz…<name>.4.gz，最新的是 .0）
 tail -f ~/Library/Logs/<your-server-log>.log
 
 # 重启 / 停 / 起（macOS）
