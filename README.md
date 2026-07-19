@@ -10,6 +10,7 @@
 
 | 路径 | 内容 |
 |---|---|
+| `PLAYBOOK.md` | **从代码到文案到视频的全流程**（三条铁律 + 更新/出片/维护指引）——先读这个 |
 | `copy/vertical.md` | 竖屏短视频文案（抖音 30s / 朋友圈 15s，静音字幕友好） |
 | `copy/horizontal.md` | 横屏长视频文案（B 站 / YouTube，约 3 分钟分镜+旁白） |
 | `timeline/*.json` | 文案的结构化形态：分镜/字幕/时长/画布参数——gen-cards 与 compose 的单一输入源 |
