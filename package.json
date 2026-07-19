@@ -50,8 +50,7 @@
     "test:playwright": "npm run test:e2e",
     "test:playwright:p0": "playwright test tests/e2e/p0",
     "test:smoke": "node tests/smoke/runner.js",
-    "contract:check": "node scripts/contract-check.js",
-    "preview:landing": "python3 -m http.server -d docs 8000"
+    "contract:check": "node scripts/contract-check.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.201",
@@ -67,9 +66,7 @@
     "@playwright/test": "^1.61.1",
     "eslint": "^10.7.0",
     "eslint-plugin-unused-imports": "^4.4.1",
-    "gifenc": "^1.0.3",
     "globals": "^17.7.0",
-    "pngjs": "^7.0.0",
     "socket.io-client": "^4.8.3"
   }
 }

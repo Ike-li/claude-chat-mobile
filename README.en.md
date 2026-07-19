@@ -2,33 +2,14 @@
 
 > Use your local `claude` CLI from your phone, with the same effect as typing at your terminal.
 
-[中文](README.md) · **English** · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/)
+[中文](README.md) · **English**
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#quick-start)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-<p align="center">
-  <img src="docs/demo.gif" width="300" alt="Stream a reply, watch tool cards, then approve a git push from your phone">
-</p>
-
 This project is for people who already use the `claude` CLI in a terminal. It does not bundle Claude, and it is not a reimplementation. It drives your logged-in local CLI through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). The phone sees the same agent, the same `CLAUDE.md`, the same MCP servers, skills, hooks, and session logs. The goal is narrow: typing to claude on your phone should be equivalent to typing at your computer. You can edit code, run commands, and resume an earlier conversation.
-
-## Screenshots
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/screenshots/01-stream-en.png" width="240" alt="Streaming output with Markdown rendering"></td>
-    <td align="center"><img src="docs/screenshots/02-tools-en.png" width="240" alt="Tool-call cards"></td>
-    <td align="center"><img src="docs/screenshots/03-approval-en.png" width="240" alt="Dangerous actions approved from the phone"></td>
-  </tr>
-  <tr>
-    <td align="center"><b>Streaming</b><br/>Markdown · syntax highlight · status line</td>
-    <td align="center"><b>Visible process</b><br/>tool calls render as collapsible cards</td>
-    <td align="center"><b>Approve on phone</b><br/>dangerous actions push full command + cwd</td>
-  </tr>
-</table>
 
 ## When it's worth it
 
@@ -108,8 +89,6 @@ Pick one for your situation. Commands are in [Quick Start](#quick-start) above a
    - ⚠️ **Before exposing publicly, audit your global `~/.claude/settings.json` allow-list**. Old `Bash(...)` / `Write` rules from terminal use will auto-approve here too, without a phone prompt. Tighten more than just the project-local config.
 4. **Device trust (TOFU).** A connection that is neither local nor Cloudflare Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.
 
-The full threat model and hardening guidance is in [docs/design.md](docs/design.md) §4.
-
 ## Cost Note
 
 **Currently (as of 2026-06-26): Agent SDK / `claude -p` usage still draws from your subscription quota, in the same pool as interactive use**. On the official subscription path, this project does not incur separate billing.
@@ -120,8 +99,6 @@ Background: Anthropic once announced that, starting 2026-06-15, SDK *headless* u
 - **Via a third-party gateway** (`ANTHROPIC_*` exported in the shell): unaffected — you pay the gateway's own rates.
 
 ## Features
-
-Phone-side capabilities are listed in [docs/capabilities.en.md](docs/capabilities.en.md).
 
 Beyond the core loop above:
 

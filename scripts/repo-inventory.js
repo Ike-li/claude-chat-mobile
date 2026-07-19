@@ -26,23 +26,11 @@ const ROOT_FILES = new Map([
   ['playwright.config.ts', ['Test configuration', 'Playwright E2E configuration', 'keep']],
   ['eslint.config.js', ['Project configuration', 'ESLint flat config (npm run check static gate)', 'keep']],
   ['.env.example', ['Configuration template', 'Documented runtime environment variables', 'keep']],
-  ['worktree-progress.md', ['Documentation', 'Worktree session continuation WIP handoff notes; delete when that line lands', 'keep']],
   ['.gitignore', ['Project configuration', 'Generated and secret file exclusions', 'keep']],
   ['.nvmrc', ['Project configuration', 'Recommended Node major version', 'keep']],
   // docs/ 手写文档逐篇显式登记（无 .md 通配）：往 docs/ 新增文档必须先在此声明用途，
   // 否则 inventory:check 拒绝——挡住审计报告/进度笔记/提案等一次性产物悄悄回堆。
-  ['docs/capabilities.md', ['Documentation', 'Chinese capability tour answering "what can the phone do"', 'keep']],
-  ['docs/capabilities.en.md', ['Documentation', 'English capability tour', 'keep']],
   ['docs/deployment.md', ['Documentation', 'Persistent service, tunnel, and Cloudflare Access operations guide', 'keep']],
-  ['docs/design.md', ['Documentation', 'Requirements, security invariants, and state-semantics source of truth', 'keep']],
-  ['docs/event-contract.md', ['Documentation', 'Outbound agent:event contract reference backed by contract:check', 'keep']],
-  ['docs/interfaces.md', ['Documentation', 'HTTP, inbound socket, and internal module interface reference', 'keep']],
-  ['docs/sdk-boundary.md', ['Documentation', 'Agent SDK boundary audit and upgrade-review baseline', 'keep']],
-  ['docs/statusline-bridge.md', ['Documentation', 'CLI statusline bridge install, security, and rollback guide', 'keep']],
-  ['docs/testing.md', ['Documentation', 'Test layering, migration evidence, and manual production regression suites', 'keep']],
-  ['docs/ui-ux-issues-2026-07-16.md', ['Documentation', 'Mobile UI/UX issue backlog from the 2026-07-16 viewport evaluation (P0-P2 with evidence)', 'keep']],
-  ['docs/index.html', ['Documentation', 'Bilingual static landing page served by GitHub Pages', 'keep']],
-  ['docs/.nojekyll', ['Documentation', 'GitHub Pages marker disabling Jekyll processing', 'keep']],
 ]);
 
 const PREFIX_RULES = [
@@ -62,10 +50,6 @@ const PREFIX_RULES = [
   ['tests/helpers/', 'Test support', 'Shared test helper', 'keep'],
   ['tests/setup/', 'Test support', 'Test environment preload or setup', 'keep'],
   ['scripts/', 'Maintainer tooling', 'Project maintenance or verification command', 'keep'],
-  ['docs/screenshots/', 'Documentation asset', 'README screenshot', 'keep'],
-  ['docs/vendor/', 'Vendored asset', 'Pinned documentation-site font', 'keep'],
-  ['docs/demo.gif', 'Generated asset', 'README demonstration animation', 'generated'],
-  ['docs/og-image.jpg', 'Documentation asset', 'Documentation-site social preview', 'keep'],
   ['docs/repository-map.md', 'Generated documentation', 'Exhaustive repository file map', 'generated'],
   // 有意不设 docs/ 通配兜底：手写文档在 ROOT_FILES 逐篇登记，新文档未登记即拒。
 ];
@@ -107,7 +91,6 @@ function entryAndGeneration(path, classification) {
   let generatedBy = 'Authored and reviewed manually';
   if (path === 'package-lock.json') generatedBy = '`npm install`';
   else if (path === 'docs/repository-map.md') generatedBy = '`npm run inventory:update`';
-  else if (path === 'docs/demo.gif') generatedBy = '`node scripts/make-demo-gif.js`';
   else if (path.startsWith('public/icons/')) generatedBy = '`node scripts/gen-icons.js`';
   else if (classification.retention === 'generated') generatedBy = 'Project generation tooling';
 

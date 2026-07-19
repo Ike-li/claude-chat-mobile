@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/release.sh —— 一条命令发版：bump → dev→master(ff) → tag → GitHub Release
 #
-# 分支模型（见 docs/design.md §7）：dev=开发线、master=稳定发布线。
+# 分支模型：dev=开发线、master=稳定发布线。
 # 发版 = 把 dev 快进合并进 master、打 tag、建 GitHub Release、两分支都推。
 #
 # 用法：

@@ -2,33 +2,14 @@
 
 > 在手机上用你本机的 `claude` CLI，效果和坐在终端前一样。
 
-**中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/)
+**中文** · [English](README.en.md)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-<p align="center">
-  <img src="docs/demo.gif" width="300" alt="流式回答 → 工具卡片 → 手机端批准 git push">
-</p>
-
 这个项目给已经在终端使用 `claude` CLI 的人用。它不打包 Claude，也不是 Claude 的重新实现；它通过 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 驱动你本机已登录的 CLI。手机端拿到的是同一个 agent、同一份 `CLAUDE.md`、同样的 MCP 服务器、技能、hooks 和会话记录。目标很窄：在手机上对 claude 打字，应当和坐在电脑前打字等价，可以改代码、跑命令，也可以接着之前的对话。
-
-## 界面
-
-<table>
-  <tr>
-    <td align="center"><img src="docs/screenshots/01-stream-zh.png" width="240" alt="流式输出与 Markdown 渲染"></td>
-    <td align="center"><img src="docs/screenshots/02-tools-zh.png" width="240" alt="工具调用卡片"></td>
-    <td align="center"><img src="docs/screenshots/03-approval-zh.png" width="240" alt="危险操作回手机审批"></td>
-  </tr>
-  <tr>
-    <td align="center"><b>流式输出</b><br/>Markdown · 代码高亮 · 状态栏</td>
-    <td align="center"><b>过程可见</b><br/>工具调用渲染为折叠卡片</td>
-    <td align="center"><b>回手机审批</b><br/>危险操作推送完整命令 + cwd</td>
-  </tr>
-</table>
 
 ## 适用场景
 
@@ -78,7 +59,7 @@ npm run statusline:status     # 只读查看，不改 ~/.claude
 npm run statusline:install    # 显式安装；不会由 npm install / npm start 自动执行
 ```
 
-安装后重开 Claude CLI，并重启常驻 server。卸载、紧急回滚、自定义快照目录和安全边界见 [CLI statusline bridge 指南](docs/statusline-bridge.md)。
+安装后重开 Claude CLI，并重启常驻 server；卸载用 `npm run statusline:uninstall`。
 
 然后在手机上打开。启动日志会打印已带 token 的可用 URL：
 
@@ -117,8 +98,6 @@ cloudflared tunnel --url http://localhost:3000
    - ⚠️ **公网暴露前，审查你的全局 `~/.claude/settings.json` 白名单**。终端里多年累积的 `Bash(...)` / `Write` 等规则在这里也会自动放行，不会再弹手机。要收紧的不只项目那份配置。
 4. **设备信赖（TOFU）。** 既非本机、也未经 Cloudflare Access 验证的连接，必须先在电脑上一次性授权该设备才能操作。合法 token 本身不够。
 
-完整威胁模型与加固指引见 [docs/design.md](docs/design.md) §4。
-
 ## 成本提示
 
 **当前（截至 2026-06-26）：Agent SDK / `claude -p` 用量仍吃订阅额度，与交互式同池**。本项目走官方订阅路径时，不产生独立计费。
@@ -129,8 +108,6 @@ cloudflared tunnel --url http://localhost:3000
 - **走第三方网关**（shell export 的 `ANTHROPIC_*`）：与此无关，按网关自己费率付费。
 
 ## 特性
-
-手机端能力说明见 [docs/capabilities.md](docs/capabilities.md)。
 
 在上面的核心循环之外：
 

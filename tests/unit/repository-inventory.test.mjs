@@ -10,18 +10,17 @@ test('final inventory rejects legacy roots and loose test files', () => {
   assert.equal(classifyRepositoryPath('tests/loose.test.mjs'), null);
 });
 
-test('docs/ 不再通配放行：新 .md 须显式登记，现存文档与站点产物仍分类', () => {
+test('docs/ 不再通配放行：新 .md 须显式登记，未登记的历史文档同样被拒', () => {
   // 一次性产物（审计报告/进度笔记/提案）落进 docs/ 应被 inventory:check 拒绝
   assert.equal(classifyRepositoryPath('docs/one-off-audit-2026-08-01.md'), null);
   assert.equal(classifyRepositoryPath('docs/new-proposal.md'), null);
-  // 现存长期文档逐一登记，仍正常分类
-  assert.equal(classifyRepositoryPath('docs/design.md')?.category, 'Documentation');
-  assert.equal(classifyRepositoryPath('docs/testing.md')?.category, 'Documentation');
-  assert.equal(classifyRepositoryPath('docs/capabilities.en.md')?.category, 'Documentation');
-  // GitHub Pages 站点产物不受影响
-  assert.equal(classifyRepositoryPath('docs/index.html')?.category, 'Documentation');
-  assert.equal(classifyRepositoryPath('docs/.nojekyll')?.category, 'Documentation');
-  assert.equal(classifyRepositoryPath('docs/screenshots/01-stream.png')?.category, 'Documentation asset');
+  // 已随宣传层下线的文档不再登记，回流应被拒
+  assert.equal(classifyRepositoryPath('docs/design.md'), null);
+  assert.equal(classifyRepositoryPath('docs/index.html'), null);
+  assert.equal(classifyRepositoryPath('docs/screenshots/01-stream.png'), null);
+  // 现存长期文档与生成清单仍正常分类
+  assert.equal(classifyRepositoryPath('docs/deployment.md')?.category, 'Documentation');
+  assert.equal(classifyRepositoryPath('docs/repository-map.md')?.category, 'Generated documentation');
 });
 
 test('repository map records entry path and generation source for every file', () => {
