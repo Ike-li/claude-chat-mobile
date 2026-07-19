@@ -15,6 +15,9 @@ workdirs.json
 # Claude Code 会话产物（plan、skill 历史等，非项目资产）
 /.claude/
 
+# 常驻 worktree（promo/gh-pages 等分支的仓内检出位，便于 IDE 同窗查看；点目录 ESLint 默认不扫）
+/.worktrees/
+
 # 日志
 *.log
 npm-debug.log*

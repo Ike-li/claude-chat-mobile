@@ -21,6 +21,7 @@ export default [
       '.bug-hunter/**',
       '.codegraph/**',
       '.reasonix/**',
+      '.worktrees/**',
     ],
   },
   js.configs.recommended,
