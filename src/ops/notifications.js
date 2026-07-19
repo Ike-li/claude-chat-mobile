@@ -65,6 +65,11 @@ export const NOTIFY_CATEGORY = Object.freeze({
   task_notification: 'finished',
 });
 
+// 有界窗口（同 message-dedup DEDUP_CAP / interaction-log MAX_SESSIONS 的 always-on 有界纪律）：
+// per-会话节流态在常驻进程里长跑不应无限增长；超上限按插入序丢最旧会话（正常单用户远不及此，
+// 真触发时被丢的必是早已 resolved 的老会话，最坏后果 = 那个老会话下次通知少一次节流抑制）。
+export const NOTIFY_THROTTLE_CAP = 500;
+
 export function throttleNotify(sessionId, category, now, state = new Map(), minIntervalMs = 60000) {
   if (!sessionId || !category) return { throttled: false, next: state }; // 保守：缺 key 时不误伤，不节流
   const sessionState = state.get(sessionId) || {};
@@ -76,6 +81,8 @@ export function throttleNotify(sessionId, category, now, state = new Map(), minI
   const next = new Map(state);
   // approval/input 有"被处理"动作、需要追踪未决；finished 是一次性通知，直接 pending:false（只受最小间隔约束）
   next.set(sessionId, { ...sessionState, [category]: { notifiedAt: now, pending: category === 'approval' || category === 'input' } });
+  // 有界：新增会话推到尾部，超上限删头部最旧（Map 保插入序）；已存在会话 set 不改位置、size 不变、不触发。
+  if (next.size > NOTIFY_THROTTLE_CAP) next.delete(next.keys().next().value);
   return { throttled: false, next };
 }
 

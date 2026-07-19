@@ -3079,9 +3079,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         // UX-014：副文案增量信息，非「思考等级: low」同义反复
         const sub = effortLevelSubtitle(lv) || (isUltra ? 'xhigh + 多 agent · 最彻底' : '');
         const lvTile = el(`
-          <div data-level="${lv}" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
-            <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${lv}</div>
-            ${sub ? `<div class="text-xs text-ink-soft mt-0.5">${sub}</div>` : ''}
+          <div data-level="${esc(lv)}" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
+            <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${esc(lv)}</div>
+            ${sub ? `<div class="text-xs text-ink-soft mt-0.5">${esc(sub)}</div>` : ''}
           </div>
         `);
         lvTile.onclick = () => {

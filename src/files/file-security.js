@@ -113,7 +113,7 @@ export function checkPermissions(paths, isDir = false) {
   const problems = [];
   for (const path of paths) {
     try {
-      if (!lstatSync(path)) continue;  // 不存在跳过
+      lstatSync(path);  // 不存在会抛 → 下面 catch 跳过
     } catch {
       continue;
     }

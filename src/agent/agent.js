@@ -953,6 +953,16 @@ export class AgentSession {
     this._thinkBuf = '';
   }
 
+  // toolNames（toolUseId→name，tool_result 选 cap 用、短命）：正常靠 tool_result 配对 delete + dispose clear
+  // 收敛；此处补 LRU 上限（同 toolInputs/toolOutputs 的 TOOL_INPUT_MAX），防异常 SDK 流下大量 tool_use 无
+  // 配对 tool_result 时无界增长。删最旧仅在 >40 并发未配对工具的极端场景触发（几乎不可达）。
+  rememberToolName(id, name) {
+    this.toolNames.set(id, name);
+    if (this.toolNames.size > TOOL_INPUT_MAX) {
+      this.toolNames.delete(this.toolNames.keys().next().value);
+    }
+  }
+
   // ③：缓存文件类工具完整 input（LRU + TTL），供 tool:preview 无损重建 diff（避开 tool_use 的 600 字截断）。
   cacheToolInput(id, name, input) {
     this.toolInputs.set(id, { name, input, ts: Date.now() });
@@ -1309,7 +1319,7 @@ export class AgentSession {
           if (subType != null) this.subagentTypeByParent.set(msg.parent_tool_use_id, subType);
           for (const block of msg.message?.content ?? []) {
             if (block.type === 'tool_use') {
-              this.toolNames.set(block.id, block.name);
+              this.rememberToolName(block.id, block.name);
               this.emit('tool_use', {
                 toolUseId: block.id,
                 name: block.name,
@@ -1366,7 +1376,7 @@ export class AgentSession {
                 };
               }
             }
-            this.toolNames.set(block.id, block.name);
+            this.rememberToolName(block.id, block.name);
             this.emit('tool_use', {
               toolUseId: block.id,
               name: block.name,
