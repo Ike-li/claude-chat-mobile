@@ -381,6 +381,7 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'user:answer',
   'user:approve',
   'user:approveDevice',
+  'user:cancelQueued',
   'user:denyDevice',
   'user:interrupt',
   'user:message',

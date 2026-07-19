@@ -578,6 +578,34 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      command: 'test:queued-hold',
+      // 排队转正回归用：busy 保持 4s 后正常收 result——期间入队的第二条消息应在 result 后自动摘排队标记
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
+        console.log('[mock] Starting queued-hold sequence');
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_qhold_1', text: 'Working on the first turn... ' }
+        });
+        await delay(4000);
+        if (activeInst.aborted) { console.log('[mock] queued-hold aborted by interrupt'); return; }
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_qhold_1', durationMs: 4000, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
       command: 'test:unsafe-markdown',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();

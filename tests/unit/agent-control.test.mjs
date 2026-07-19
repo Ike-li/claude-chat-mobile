@@ -51,6 +51,18 @@ test.describe('send()', () => {
     s.dispose();
   });
 
+  // 排队可见性：user_message.queued 标记「这条发出时前面已有在途轮」（emit 在 pendingTurns++ 之前，≥1 即排队）
+  test('queued 字段：空闲首条 false、busy 第二条 true', async () => {
+    const { s, events } = makeSession();
+    await s.send('first');
+    await s.send('second');
+    const ums = events.filter(e => e.type === 'user_message');
+    assert.equal(ums.length, 2);
+    assert.equal(ums[0].payload.queued, false);
+    assert.equal(ums[1].payload.queued, true);
+    s.dispose();
+  });
+
   test('首条消息 → firstMessage 捕获', async () => {
     const { s } = makeSession();
     assert.equal(s.firstMessage, null);
@@ -343,6 +355,136 @@ test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC +
     const { s } = makeSession();
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}) }; // 永不 resolve
     assert.equal(await s.fetchUsage(10), null); // 10ms 超时
+    s.dispose();
+  });
+});
+
+// ---- cancelQueued() / 排队撤回（CLI cancel_async_message 对齐）----
+// SDK 泵是贪婪拉取（实证 2026-07-18 探针）：send 的消息几乎立即离开 this.queue 进 CLI 内部队列。
+// 撤回主路径 = cancelAsyncMessage(uuid)；this.queue splice 仅覆盖罕见竞态窗（setModel await 间隙等）。
+test.describe('cancelQueued() — 排队消息撤回', () => {
+  test('排队第二条：queue 项带 clientMessageId/uuid/displayText，cliQueued 登记（首条不登记）', async () => {
+    const { s } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });
+    assert.equal(s.cliQueued, null);
+    await s.send('/tmp/x.txt second', null, { clientMessageId: 'c2', displayText: 'second' });
+    assert.equal(s.queue.length, 2);
+    assert.equal(s.queue[1].clientMessageId, 'c2');
+    assert.ok(s.queue[1].uuid, 'queue 项须带 uuid 供 CLI 队列撤回');
+    assert.equal(s.queue[1].displayText, 'second');
+    assert.equal(s.cliQueued?.clientMessageId, 'c2');
+    assert.equal(s.cliQueued?.uuid, s.queue[1].uuid);
+    s.dispose();
+  });
+
+  test('竞态窗路径：消息仍在 this.queue → splice + pendingTurns-- + 回 displayText + emit queue_cancelled', async () => {
+    const { s, events } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });
+    await s.send('prompt-with-path', null, { clientMessageId: 'c2', displayText: 'raw text' });
+    assert.equal(s.pendingTurns, 2);
+    const r = await s.cancelQueued('c2');
+    assert.deepEqual(r, { ok: true, text: 'raw text' });
+    assert.equal(s.queue.length, 1);
+    assert.equal(s.pendingTurns, 1);
+    assert.equal(s.cliQueued, null);
+    const ev = events.find(e => e.type === 'system' && e.payload.kind === 'queue_cancelled');
+    assert.ok(ev, '须 emit queue_cancelled 供前端（含 buffer 回放）标记气泡');
+    assert.equal(ev.payload.clientMessageId, 'c2');
+    s.dispose();
+  });
+
+  test('CLI 队列路径：queue 已被泵空 → cancelAsyncMessage(uuid)=true → pendingTurns-- + ok', async () => {
+    const { s, events } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });
+    await s.send('second', null, { clientMessageId: 'c2' });
+    const u2 = s.cliQueued.uuid;
+    s.queue = []; // 模拟贪婪泵已抽走
+    let calledWith = null;
+    s.q = { cancelAsyncMessage: async u => { calledWith = u; return true; } };
+    const r = await s.cancelQueued('c2');
+    assert.equal(calledWith, u2);
+    assert.deepEqual(r, { ok: true, text: 'second' });
+    assert.equal(s.pendingTurns, 1);
+    assert.equal(s.cliQueued, null);
+    assert.ok(events.find(e => e.type === 'system' && e.payload.kind === 'queue_cancelled'));
+    s.dispose();
+  });
+
+  test('CLI 队列路径：cancelled=false（已开始执行）→ ok:false、账目不动、cliQueued 放回', async () => {
+    const { s } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });
+    await s.send('second', null, { clientMessageId: 'c2' });
+    s.queue = [];
+    s.q = { cancelAsyncMessage: async () => false };
+    const r = await s.cancelQueued('c2');
+    assert.equal(r.ok, false);
+    assert.equal(s.pendingTurns, 2);
+    assert.equal(s.cliQueued?.clientMessageId, 'c2');
+    s.dispose();
+  });
+
+  test('未命中（无此 id / 已处理）→ ok:false 账目不动', async () => {
+    const { s } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });
+    const r = await s.cancelQueued('nope');
+    assert.equal(r.ok, false);
+    assert.equal(s.pendingTurns, 1);
+    s.dispose();
+  });
+
+  test('result 到达 → cliQueued 清（排队条要么已开跑要么已结清，不再可撤）', async () => {
+    const { s } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });
+    await s.send('second', null, { clientMessageId: 'c2' });
+    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
+    assert.equal(s.cliQueued, null);
+    assert.equal(s.pendingTurns, 1);
+    s.dispose();
+  });
+});
+
+// ---- interrupt() 对 CLI 队列排队条的结算（幽灵 busy 修复）----
+// 实证（探针场景2）：CLI interrupt 会丢弃其内部队列的排队消息且不产生 result——若不补扣
+// pendingTurns 会泄漏 1（停止后 busy 卡到 idle 看护兜底）。
+test.describe('interrupt() — CLI 队列排队条结算', () => {
+  test('queue 已泵空 + cliQueued 存在 → 补扣 1 + queue_dropped(clientMessageIds) + cliQueued 清', async () => {
+    const { s, events } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });
+    await s.send('second', null, { clientMessageId: 'c2' });
+    s.queue = []; // 贪婪泵已抽走
+    s.q = { interrupt: async () => {} };
+    await s.interrupt();
+    assert.equal(s.pendingTurns, 1, '在途轮的 1 留给 result 扣，排队条的 1 此处补扣');
+    assert.equal(s.cliQueued, null);
+    const ev = events.find(e => e.type === 'system' && e.payload.kind === 'queue_dropped');
+    assert.ok(ev);
+    assert.deepEqual(ev.payload.clientMessageIds, ['c2']);
+    s.dispose();
+  });
+
+  test('竞态窗：排队条仍在 this.queue（toDrop 卷走）→ 不双扣，queue_dropped 仍含其 id', async () => {
+    const { s, events } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });
+    await s.send('second', null, { clientMessageId: 'c2' });
+    s.queue.shift(); // 只模拟首条被泵走，第二条仍在本地队列
+    s.q = { interrupt: async () => {} };
+    await s.interrupt();
+    assert.equal(s.pendingTurns, 1, 'toDrop=1 扣一次，不得再按 cliQueued 双扣');
+    assert.equal(s.cliQueued, null);
+    const ev = events.find(e => e.type === 'system' && e.payload.kind === 'queue_dropped');
+    assert.ok(ev);
+    assert.deepEqual(ev.payload.clientMessageIds, ['c2']);
+    s.dispose();
+  });
+
+  test('无排队条 → 不发 queue_dropped、账目照旧', async () => {
+    const { s, events } = makeSession();
+    await s.send('only', null, { clientMessageId: 'c1' });
+    s.queue = [];
+    s.q = { interrupt: async () => {} };
+    await s.interrupt();
+    assert.equal(s.pendingTurns, 1);
+    assert.equal(events.find(e => e.type === 'system' && e.payload.kind === 'queue_dropped'), undefined);
     s.dispose();
   });
 });

@@ -2013,6 +2013,23 @@ registerSocketConnection(io, socket => {
   });
 
   on(socket, 'user:interrupt', payload => routeInstance(payload?.instanceId)?.interrupt()); // 台阶3：按 instanceId 路由
+  // 撤回排队中的消息（对齐 CLI ESC 撤回）：路由到实例 cancelQueued（CLI cancel_async_message 主路径 +
+  // 本地队列竞态窗兜底，账目配平在 agent 内）。成功须立即广播 instances——queueFull true→false 解锁发送按钮；
+  // 失败（已开始处理/无此条）回结构化负 ack，前端就地把气泡转正并提示。
+  on(socket, 'user:cancelQueued', async (payload, ack) => {
+    const a = routeInstance(payload?.instanceId);
+    if (!a) {
+      if (typeof ack === 'function') ack({ ok: false, error: '会话实例不存在或已关闭' });
+      return;
+    }
+    const r = await a.cancelQueued(typeof payload?.clientMessageId === 'string' ? payload.clientMessageId : '');
+    if (r.ok) {
+      broadcastInstances();
+      if (typeof ack === 'function') ack({ ok: true, text: r.text ?? '' });
+    } else if (typeof ack === 'function') {
+      ack({ ok: false, error: '该消息已开始处理，无法撤回' });
+    }
+  });
   // 停单个后台任务（子 agent / 后台 Bash），对应终端 Ctrl+X Ctrl+K；按 instanceId 路由。taskId 来自
   // task_notification / task_progress / background_tasks_changed 事件。stopTask 内部 disposed / 无效
   // taskId / 无 q / SDK 抛错均幂等吞掉（返回 false 不抛），故无实例（routeInstance→null）时 ?. 安全 no-op。

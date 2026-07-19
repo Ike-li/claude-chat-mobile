@@ -11,6 +11,8 @@ import {
   shouldSeedBusyFromInstanceState,
   shouldReseedBusyAfterReload,
   shouldBindBusyFromBroadcast,
+  queuedBubbleState,
+  resolveCancelRefill,
 } from '../../public/js/logic.js';
 
 test('resolveComposerPrimaryMode: 空闲空输入 → 禁用发送', () => {
@@ -292,4 +294,41 @@ test('shouldBindBusyFromBroadcast: 单向绑定，bgActive 门控', () => {
   // {state:'idle'} / {} → false
   assert.equal(shouldBindBusyFromBroadcast({ state: 'idle' }), false);
   assert.equal(shouldBindBusyFromBroadcast({}), false);
+});
+
+// ---- 排队可见性 + 撤回回填（对齐 CLI Queued/ESC）----
+test.describe('queuedBubbleState', () => {
+  test('queued=true → 显示排队标记与文案', () => {
+    const st = queuedBubbleState({ queued: true });
+    assert.equal(st.show, true);
+    assert.ok(st.label.includes('排队中'));
+  });
+  test('queued 缺省/false → 不显示', () => {
+    assert.equal(queuedBubbleState({}).show, false);
+    assert.equal(queuedBubbleState({ queued: false }).show, false);
+    assert.equal(queuedBubbleState().show, false);
+  });
+});
+
+test.describe('resolveCancelRefill', () => {
+  test('输入框为空 → 直接回填撤回文本', () => {
+    assert.deepEqual(
+      resolveCancelRefill({ inputText: '', cancelledText: 'hello' }),
+      { mode: 'fill', value: 'hello' },
+    );
+    assert.deepEqual(
+      resolveCancelRefill({ inputText: '   ', cancelledText: 'hello' }),
+      { mode: 'fill', value: 'hello' },
+    );
+  });
+  test('输入框已有未发内容 → 撤回文本置于其上（空行分隔），零丢失', () => {
+    assert.deepEqual(
+      resolveCancelRefill({ inputText: 'draft', cancelledText: 'hello' }),
+      { mode: 'prepend', value: 'hello\n\ndraft' },
+    );
+  });
+  test('畸形入参 → 不抛、按空串兜底', () => {
+    assert.deepEqual(resolveCancelRefill(), { mode: 'fill', value: '' });
+    assert.deepEqual(resolveCancelRefill({ inputText: null, cancelledText: null }), { mode: 'fill', value: '' });
+  });
 });

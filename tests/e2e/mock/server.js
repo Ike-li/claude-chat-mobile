@@ -48,6 +48,7 @@ let syncPendingSnapshotInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
+const queuedEchoItems = new Map(); // busy 期回显为 queued 的消息 clientMessageId → {text}：user:cancelQueued 撤回 / interrupt 连带取消 都按它对账
 let foregroundSyncReplayMode = false;
 let foregroundFoundMissingMode = false;
 let foregroundFoundMissingHistoryMode = false;
@@ -2376,9 +2377,17 @@ io.on('connection', socket => {
     console.log(`[mock] User message received: "${cmd}"`);
 
     // Always echo user message back（demo:* 回显真实感文案，命令不露出）
+    // 排队语义镜像真实 server：busy 期间发的消息 queued:true + 透传 clientMessageId（撤回按它定位）
+    const echoInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    const echoQueued = echoInst?.state === 'busy';
+    const echoClientMessageId = typeof messagePayload.clientMessageId === 'string' ? messagePayload.clientMessageId : undefined;
+    if (echoQueued && echoClientMessageId) queuedEchoItems.set(echoClientMessageId, { text: DEMO_USER_TEXT[cmd] || cmd });
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'user_message', payload: { text: DEMO_USER_TEXT[cmd] || cmd, attachments }
+      type: 'user_message', payload: {
+        text: DEMO_USER_TEXT[cmd] || cmd, attachments, queued: echoQueued,
+        ...(echoClientMessageId ? { clientMessageId: echoClientMessageId } : {})
+      }
     });
 
     if (cmd.startsWith('ultracode ')) {
@@ -2603,6 +2612,23 @@ io.on('connection', socket => {
   // 否则「跳过此问题」只能发出 interrupt 却关不掉弹窗（前端故意不乐观关窗）。
   // 注意：agent:event 带 activeEpoch 时 seq 必须单调递增——前端 `ev.seq <= lastSeq` 会丢弃回退 seq，
   // 所以这里绝不能发 seq:0（question 已是 seq:3 时会把 resolved 整条滤掉）。
+  // 撤回排队中的消息（镜像真 server user:cancelQueued：命中→ok+text+system queue_cancelled；未命中→负 ack）
+  socket.on('user:cancelQueued', (payload, ack) => {
+    const id = typeof payload?.clientMessageId === 'string' ? payload.clientMessageId : '';
+    const item = queuedEchoItems.get(id);
+    console.log(`[mock] User cancelQueued received: clientMessageId=${id}, hit=${Boolean(item)}`);
+    if (!item) {
+      if (typeof ack === 'function') ack({ ok: false, error: '该消息已开始处理，无法撤回' });
+      return;
+    }
+    queuedEchoItems.delete(id);
+    if (typeof ack === 'function') ack({ ok: true, text: item.text });
+    socket.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'system', payload: { message: '已撤回排队中的消息', kind: 'queue_cancelled', clientMessageId: id }
+    });
+  });
+
   socket.on('user:interrupt', payload => {
     const { instanceId } = payload || {};
     const targetId = instanceId || viewingInstanceId;
@@ -2614,6 +2640,15 @@ io.on('connection', socket => {
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+      });
+    }
+    // 镜像真 server：interrupt 连带丢弃 CLI 队列里的排队条 → queue_dropped（前端据此把气泡标「已随停止取消」）
+    if (queuedEchoItems.size > 0) {
+      const droppedIds = [...queuedEchoItems.keys()];
+      queuedEchoItems.clear();
+      socket.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: targetId, ts: Date.now(),
+        type: 'system', payload: { message: '排队中的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds }
       });
     }
 

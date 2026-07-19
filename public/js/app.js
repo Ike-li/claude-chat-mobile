@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -1172,6 +1172,69 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     hideActivityBanner();
   }
 
+  // ---- 排队可见性 + 撤回（FE-004 对齐 CLI Queued/ESC；标记转正/落终态均事件驱动，buffer 回放可收敛）----
+  // 排队气泡淡显走内联 style（不用 .opacity-70：那是离线占位匹配选择器，语义是「等连接」不是「排队」）
+  function addQueuedMarker(bubble, clientMessageId) {
+    if (bubble.querySelector('.queued-indicator')) return; // 幂等：sync 回放可能重复喂同一条
+    bubble.classList.add('queued-bubble');
+    bubble.style.opacity = '0.8';
+    const row = el(`<div class="queued-indicator flex items-center gap-2 text-[11px] text-ink-faint mt-1"></div>`);
+    const lbl = el(`<span class="animate-pulse"></span>`);
+    lbl.textContent = queuedBubbleState({ queued: true }).label;
+    row.appendChild(lbl);
+    if (clientMessageId) { // 无 id（旧客户端发的）没法定位撤回，只显示状态不给按钮
+      const btn = el(`<button type="button" class="underline decoration-dotted" data-testid="queued-cancel">撤回</button>`);
+      btn.onclick = () => requestCancelQueued(clientMessageId);
+      row.appendChild(btn);
+    }
+    bubble.appendChild(row);
+  }
+
+  // 本轮 result 到达 = 队头排队条开跑：摘标记转正（上限 1 条，全清即可）
+  function promoteQueuedBubbles() {
+    for (const b of messagesEl.querySelectorAll('.queued-bubble')) {
+      b.classList.remove('queued-bubble');
+      b.style.opacity = '';
+      b.querySelector('.queued-indicator')?.remove();
+    }
+  }
+
+  // 撤回/随停止取消：气泡落灰色终态（不删除——与 buffer 回放、多设备视图一致）
+  function markQueuedCancelled(ids, label) {
+    for (const id of ids) {
+      const b = messagesEl.querySelector(`.queued-bubble[data-client-message-id="${CSS.escape(id)}"]`);
+      if (!b) continue;
+      b.classList.remove('queued-bubble');
+      b.style.opacity = '0.55';
+      const row = b.querySelector('.queued-indicator');
+      if (row) {
+        row.textContent = label;
+        row.classList.remove('animate-pulse');
+      }
+    }
+  }
+
+  function requestCancelQueued(clientMessageId) {
+    if (!clientMessageId || !viewingInstanceId || !socket.connected) return;
+    haptic('tap');
+    socket.emit('user:cancelQueued', { instanceId: viewingInstanceId, clientMessageId }, (ack) => {
+      if (!ack?.ok) {
+        // 已开跑/实例没了：就地转正气泡（它不再是排队态），负因走提示条
+        addBar(ack?.error || '撤回失败，请重试', 'text-info');
+        promoteQueuedBubbles();
+        return;
+      }
+      // 气泡终态交给广播的 system{queue_cancelled}（多设备一致）；这里只负责把文本还回输入框
+      const d = resolveCancelRefill({ inputText: inputEl.value, cancelledText: ack.text || '' });
+      inputEl.value = d.value;
+      inputEl.dispatchEvent(new Event('input'));
+      autosize();
+      inputEl.focus();
+      updateSendButtonState();
+      logClientEvent('send', `[WEB_SEND] 撤回排队消息成功: clientMessageId=${clientMessageId}`);
+    });
+  }
+
   const handle = {
     device_status(p) {
       const modal = $('deviceModal');
@@ -1583,11 +1646,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (p.text && !matchedBubble.querySelector('[data-copy-action]')) {
           appendCopyAction(matchedBubble, () => p.text, 'right');
         }
+        // 离线占位转正后若这条实际在排队（重连时另一轮已在跑）→ 同样挂排队标记
+        if (queuedBubbleState(p).show) addQueuedMarker(matchedBubble, p.clientMessageId);
         scrollBottom(true);
         return; // 匹配成功，直接返回，避免生成重复聊天气泡
       }
 
       const bubble = el(`<div class="msg-frame rounded-xl bg-user text-ink px-3 py-2 text-sm" data-testid="user-message"></div>`);
+      // 排队撤回/标记转正都按 clientMessageId 定位气泡（离线占位分支已挂，此处补齐在线新建分支）
+      if (p.clientMessageId) bubble.dataset.clientMessageId = p.clientMessageId;
       if (p.text) {
         // FE-005：与历史路径一致——marked + DOMPurify，避免「发出去纯文本 / 回来看变 markdown」观感分裂。
         bubble.innerHTML = render(p.text);
@@ -1615,6 +1682,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         bubble.appendChild(wrap);
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
+      if (queuedBubbleState(p).show) addQueuedMarker(bubble, p.clientMessageId); // 排队可见性（FE-004 对齐 CLI Queued）
       appendMessage(bubble);
       scrollBottom(true);
     },
@@ -1690,6 +1758,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       finalizeStreams();
       markAllSubagentCardsDone(); // 主轮结束：仍 running 的子 agent 卡标「已完成」（防 tool_result 漏标）
+      promoteQueuedBubbles(); // 本轮结束=队头排队条开跑，排队标记转正
       // turn-end 文件变更汇总卡（对齐官方「已编辑 N 个文件」；完整 diff 仍走单卡预览）
       flushTurnFileChangesCard();
       _pendingSendBusy = false;
@@ -1754,6 +1823,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         _pendingSendBusy = false;
         setBusy(false);
         hideActivityBanner();
+      }
+      // 排队条终态（live + buffer 回放共用同一路径，多设备视图一致）
+      if (p.kind === 'queue_dropped' && Array.isArray(p.clientMessageIds)) {
+        markQueuedCancelled(p.clientMessageIds, '已随停止取消，未发送');
+      }
+      if (p.kind === 'queue_cancelled' && p.clientMessageId) {
+        markQueuedCancelled([p.clientMessageId], '已撤回，未发送');
       }
     },
     // E16：web 自有结构化状态（非 ANSI）。摘要去 emoji，展开分段构建 DOM（createElement+textContent，
@@ -2691,6 +2767,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !composing && shouldSendOnEnter({ shiftKey: e.shiftKey, isTouchDevice })) {
       e.preventDefault();
       send();
+    }
+    // 对齐 CLI ESC：撤回最近一条排队中的消息（物理键盘路径；触屏无 ESC，走气泡「撤回」按钮）
+    if (e.key === 'Escape') {
+      const queued = messagesEl.querySelectorAll('.queued-bubble[data-client-message-id]');
+      const last = queued[queued.length - 1];
+      if (last) {
+        e.preventDefault();
+        requestCancelQueued(last.dataset.clientMessageId);
+      }
     }
   });
 

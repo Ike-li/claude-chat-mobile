@@ -225,6 +225,22 @@ export function resolveComposerPrimaryMode({
   };
 }
 
+// 排队可见性（对齐 CLI「Queued」态）：user_message.queued=true 的气泡挂排队标记，
+// 本轮 result 到达时转正；被撤回/随停止取消时由 system{queue_cancelled/queue_dropped} 落终态。
+export function queuedBubbleState({ queued = false } = {}) {
+  if (!queued) return { show: false, label: '' };
+  return { show: true, label: '⏳ 排队中 · 本轮结束后发送' };
+}
+
+// 撤回回填决策（对齐 CLI ESC 撤回→内容回编辑器）：输入框为空 → 直接回填；
+// 已有未发内容 → 撤回文本置于其上（空行分隔）——零丢失、无隐藏暂存，比覆盖/丢弃都诚实。
+export function resolveCancelRefill({ inputText = '', cancelledText = '' } = {}) {
+  const cur = typeof inputText === 'string' ? inputText : '';
+  const back = typeof cancelledText === 'string' ? cancelledText : '';
+  if (!cur.trim()) return { mode: 'fill', value: back };
+  return { mode: 'prepend', value: `${back}\n\n${cur}` };
+}
+
 // 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
 // spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令），故只剩 stopping/default 两种。
 export function formatLiveActivityText(kind = 'default') {
