@@ -33,6 +33,7 @@
 - **拍摄 rig 会过时**：rig 是历史检出，UI 大改后录出的画面 = 旧 UI。要新画面有两条路：把 `demo.js` 场景（`git show ae0e722^:tests/e2e/mock/scenarios/demo.js`）临时移植到新代码的 mock server 上录完即弃；或接受旧画面。移植后记得把本文件和 shotlist.md 的 rig 指针改成新的 commit。
 - **证据路径会漂移**：主仓重构（文件改名/spec 合并）后核查表路径失效不代表能力消失——先找新位置，找不到再删主张。
 - **成片不进 git**：`render/` 被 ignore；留存拷去稳定盘位（如 `~/code/ai_video/projects/`），发布平台本身也是一份留存。
+- **`/promo` skill 的激活副本在主仓本机** `.claude/skills/promo/SKILL.md`（主仓 gitignore 挡 `.claude/`，换机会丢）：本分支 `.claude/skills/promo/SKILL.md` 是入库源，丢了 `cp` 回去即恢复。
 
 ## 分工地图
 
