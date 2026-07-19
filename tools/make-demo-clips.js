@@ -1,7 +1,7 @@
 // make-demo-clips.js —— 用 ccm 视觉 mock UI 录制 6 段高分辨率手机演示片段（宣传视频素材）。
-// 收编自主仓 scripts/make-demo-clips.js（已随宣传层从 dev 移除，见主仓 e487a7e）；
-// demo:* 中文场景也已从 dev 拆除（ae0e722），所以录制必须对着一个**含 demo 场景的历史检出**跑：
-//   git -C <ccm主仓> worktree add --detach <rigDir> ae0e722^   # demo 场景拆除前最后一个 commit
+// 收编自主仓 scripts/make-demo-clips.js（已随宣传层从 dev 移除，见主仓 f995000）；
+// demo:* 中文场景也已从 dev 拆除（00c5b01），所以录制必须对着一个**含 demo 场景的历史检出**跑：
+//   git -C <ccm主仓> worktree add --detach <rigDir> 00c5b01^   # demo 场景拆除前最后一个 commit
 //   cd <rigDir> && npm ci                                       # rig 自己的依赖（mock server 需要）
 // 用法：
 //   CCM_REPO_DIR=<rigDir> [CCM_CLIPS_OUT_DIR=clips] node tools/make-demo-clips.js
@@ -15,7 +15,7 @@ import { chromium } from '@playwright/test';
 const REPO = process.env.CCM_REPO_DIR;
 if (!REPO || !existsSync(join(REPO, 'tests/e2e/mock/scenarios/demo.js'))) {
   console.error('❌ 需要 CCM_REPO_DIR 指向含 demo:* mock 场景的 ccm 检出（demo 场景已从 dev 拆除）。');
-  console.error('   git -C <ccm主仓> worktree add --detach <rigDir> ae0e722^ && cd <rigDir> && npm ci');
+  console.error('   git -C <ccm主仓> worktree add --detach <rigDir> 00c5b01^ && cd <rigDir> && npm ci');
   process.exit(1);
 }
 const OUT_DIR = process.env.CCM_CLIPS_OUT_DIR || join(process.cwd(), 'clips');

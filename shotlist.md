@@ -6,8 +6,8 @@
 # 0) 一次性：本分支装依赖（Playwright Chromium）
 npm i
 
-# 1) 起拍摄 rig：demo:* mock 场景已从 dev 拆除，须检出历史（ae0e722^ = 拆除前最后一个 commit）
-git -C /path/to/claude-chat-mobile worktree add --detach /tmp/ccm-shoot 'ae0e722^'
+# 1) 起拍摄 rig：demo:* mock 场景已从 dev 拆除，须检出历史（00c5b01^ = 拆除前最后一个 commit）
+git -C /path/to/claude-chat-mobile worktree add --detach /tmp/ccm-shoot '00c5b01^'
 (cd /tmp/ccm-shoot && npm ci)
 
 # 2) 录 6 段手机 UI 素材（mock server 零 token，1124×2436@30fps）
