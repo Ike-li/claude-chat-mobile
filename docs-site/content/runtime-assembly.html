@@ -1,0 +1,71 @@
+<p class="lead-extra">启动路径刻意拆成薄入口与组装根：环境必须在状态模块求值前就绪；listen 前必须清孤儿审批。</p>
+
+<h2>server.js（薄入口）</h2>
+<pre><code>loadRuntimeEnvironment()   // dotenv；ANTHROPIC_* 只认 shell
+installLogTimestamps()     // 须在动态 import 之前
+await import('./src/server/app.js')
+export httpServer, io, port</code></pre>
+<p>约 9 行。LaunchAgent / systemd / npm start / 集成测试都走这里。</p>
+
+<h2>环境加载要点</h2>
+<ul>
+  <li>dotenv 在动态 import app 之前执行，保证 CCM_DATA_DIR 等在模块求值期已正确（状态模块在 import 时解析路径）。</li>
+  <li>空串环境变量在加载前删除（除 ANTHROPIC_*），避免 LaunchAgent 的 AUTH_TOKEN= 挡住 .env。</li>
+  <li>ANTHROPIC_* 只认启动 shell 中已有的真实值；写入 .env 的会被剥除。</li>
+  <li>parseServerConfig：port / authToken / idleTimeoutMs / instanceIdleReclaimMs / approvalTtlMs / notifyThrottleMs / sessionDeleteQuietMs / devMode / workDir / dataDir。</li>
+</ul>
+
+<h2>app.js 组装顺序</h2>
+<ol class="steps">
+  <li>顶层 import 完成（agent / auth / sessions / files / ops / server 子模块）。</li>
+  <li>initCfAccess()；parseServerConfig 得到 port/token/timeouts/WORK_DIR/DATA_DIR。</li>
+  <li>通知通道 createNotifyChannels（Web Push + ntfy，尽力而为）。</li>
+  <li>preflight（致命则 process.exit(1)）：
+    <ul>
+      <li>WORK_DIR 存在且为目录 → realpathSync</li>
+      <li>构建 workDirs 白名单（WORK_DIRS_FILE 优先，否则 WORK_DIRS）</li>
+      <li>解析 CLAUDE_BIN 或 which claude，文件须存在</li>
+      <li>采集 versions（非致命）；无 ANTHROPIC_AUTH_TOKEN/API_KEY 仅 warn</li>
+    </ul>
+  </li>
+  <li>初始化 viewing 态：viewingInstanceId=null，viewingCwd=WORK_DIR（<strong>不自动 resume</strong>）。</li>
+  <li>Express：configureHttpShell（压缩、CSP、asset ?v= 哈希、静态 public/）。</li>
+  <li>HTTP 鉴权 createHttpAuth + 运维路由 /health /metrics /push/*。</li>
+  <li>createServer + Socket.IO；createDeviceGate；io.use 握手鉴权。</li>
+  <li>createInstanceManager + 连接 handler（业务 on + 文件 handler）。</li>
+  <li>可选 WORK_DIRS_FILE 时 fs.watch 热加载。</li>
+  <li>进程兜底 uncaughtException / unhandledRejection（只记不退）。</li>
+  <li>listen 前：expireOrphanedPending + startApprovalRetentionSweep。</li>
+  <li>listen(port, AUTH_TOKEN ? '0.0.0.0' : '127.0.0.1')；EADDRINUSE → 可读错误 + exit(1)。</li>
+  <li>SIGINT/SIGTERM：flush sessions/approvals/audit → dispose 全部 agent → io.close → exit。</li>
+</ol>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>app.js 是有意保留的组装根本体：mirror / catchUp / openInstance 与契约路由共享顶层可变状态（viewing*、mirror*、catchUp*）。域逻辑已下沉，接线不拆成多文件穿针。边界守卫：server 是 sink。
+</div></div>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>无 AUTH_TOKEN 时只绑定 127.0.0.1，手机与隧道均不可达。这是有意设计，不是故障。
+</div></div>
+
+<h2>默认超时（parseServerConfig）</h2>
+<table>
+<thead><tr><th>项</th><th>默认</th></tr></thead>
+<tbody>
+<tr><td>PORT</td><td>3000</td></tr>
+<tr><td>IDLE_TIMEOUT_MS</td><td>600000（10 min）</td></tr>
+<tr><td>INSTANCE_IDLE_RECLAIM_MS</td><td>1800000（30 min；0=关）</td></tr>
+<tr><td>APPROVAL_TTL_MS</td><td>1800000</td></tr>
+<tr><td>NOTIFY_THROTTLE_MS</td><td>60000</td></tr>
+<tr><td>SESSION_DELETE_QUIET_MS</td><td>300000</td></tr>
+</tbody>
+</table>
+
+<h2>关键模块入口</h2>
+<div class="kv">
+  <div class="row"><div class="key">config.js</div><div class="val">dotenv + parseServerConfig</div></div>
+  <div class="row"><div class="key">http.js</div><div class="val">HTTP 壳、鉴权中间件、运维路由</div></div>
+  <div class="row"><div class="key">socket.js</div><div class="val">事件注册器、设备门、ack 兜底</div></div>
+  <div class="row"><div class="key">instance-manager.js</div><div class="val">agents Map 与 stateOf</div></div>
+  <div class="row"><div class="key">instance-routing.js</div><div class="val">路由、externalDirty NACK 等纯函数</div></div>
+</div>

@@ -1,0 +1,59 @@
+<p class="lead-extra">外部依赖只做「桥」与「通道」，不承接多租户账号，不替代本机 CLI。每一层都有明确的做与不做。</p>
+
+<h2>职责对照</h2>
+<table>
+<thead><tr><th>集成</th><th>做什么</th><th>不做什么</th></tr></thead>
+<tbody>
+<tr><td><strong>Claude Agent SDK</strong> + 本机 <code>claude</code> CLI</td><td>长驻 <code>query()</code>、流式输入、权限回调、spawn CLI；继承本机 settings / CLAUDE.md / MCP / skills / hooks</td><td>不重新实现 Claude；不注入独立 <code>allowedTools</code> 清单；不自带登录态</td></tr>
+<tr><td><strong>Cloudflare Tunnel</strong> + <strong>Access</strong>（jose 验 JWT）</td><td>固定域名把公网流量落到 <code>localhost:3000</code>；公网 Host 上强制 Access JWT（三项 env 齐全才启用）</td><td>不替代 <code>AUTH_TOKEN</code>（LAN/本机仍靠 token）；不负责业务鉴权细粒度授权</td></tr>
+<tr><td><strong>web-push</strong>（VAPID）</td><td>浏览器推送：审批、提问、结果等（需 https；iOS 先加主屏幕）</td><td>未配 VAPID 则优雅缺席；不保证息屏必达</td></tr>
+<tr><td><strong>ntfy</strong></td><td>服务端 POST 通知，绕过 iOS PWA / 局域网 http 限制；可配深链 <code>PUBLIC_URL</code></td><td>未配则优雅缺席；公共裸 topic 不安全（正文可能含命令线索）</td></tr>
+</tbody>
+</table>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong><code>ANTHROPIC_*</code> 只认启动 server 的 shell 环境；写进 <code>.env</code> 会在启动期剥除。官方订阅与第三方网关都走同一 CLI/SDK 路径，差别只在 shell 里 export 了什么。
+</div></div>
+
+<h2>生态关系</h2>
+<div class="mermaid">
+flowchart TB
+  Phone["手机浏览器 / PWA"]
+  CF["Cloudflare 边缘\nAccess JWT"]
+  Tunnel["cloudflared 命名隧道"]
+  S["CCM server\nExpress + Socket.IO"]
+  SDK["Agent SDK"]
+  CLI["本机 claude CLI"]
+  FS["WORK_DIR 项目文件"]
+  Push["web-push / ntfy"]
+  Data["CCM_DATA_DIR"]
+  Tx["~/.claude/projects jsonl"]
+
+  Phone -->|"公网"| CF --> Tunnel --> S
+  Phone -.->|"同 WiFi #token"| S
+  S --> SDK --> CLI --> FS
+  S --> Data
+  CLI --> Tx
+  S --> Push
+  Push -.->|"可选通知"| Phone
+</div>
+
+<h2>运行时 npm 依赖</h2>
+<p>生产依赖（<code>package.json</code>）：</p>
+<ul>
+  <li><code>@anthropic-ai/claude-agent-sdk</code>（探针时 0.3.201）</li>
+  <li><code>express</code> · <code>compression</code> · <code>socket.io</code> · <code>dotenv</code></li>
+  <li><code>web-push</code> · <code>jose</code></li>
+</ul>
+<p>前端第三方不经 npm 运行时路径，而是自托管到 <code>public/vendor/</code>（Tailwind / marked / highlight.js / DOMPurify 等），见 <code>public/vendor/THIRD-PARTY-NOTICES.md</code>。</p>
+
+<h2>可选与缺席</h2>
+<ul>
+  <li><code>CF_ACCESS_HOSTNAME</code> / <code>TEAM</code> / <code>AUD</code> 任一缺失：Access 整层关闭，公网与 LAN 都回退 token 模型。</li>
+  <li>VAPID 三项不全：Web Push 关闭；仅 ntfy 或无推送仍可交互（需打开页面审批）。</li>
+  <li><code>statusline:install</code> 不随 <code>npm install</code> 自动执行；CLI bridge 显式安装后才与终端 statusLine 同步。</li>
+  <li>项目不内置 cloudflared 生命周期管理；凭据在 <code>~/.cloudflared</code>，模板在 <code>deploy/</code>。</li>
+</ul>
+
+<h2>与职责边界的衔接</h2>
+<p>集成层之上的产品边界（单用户、非 SaaS、权限继承 CLI）见<a href="boundaries.html">职责边界</a>与<a href="security-model.html">安全模型</a>。本页只回答「外部系统各自管什么」。</p>

@@ -1,0 +1,50 @@
+<p class="lead-extra">分支、门禁、测试分层与贡献约定。遵守这些约束，比多写一层文档更能保持仓库可合并。</p>
+
+<h2>分支与 worktree</h2>
+<ul>
+  <li><strong>日常开发在 <code>dev</code></strong>；<code>master</code> 为稳定 / GitHub 默认 / 分支保护。功能完成后由 dev ff 合并 master，发版用 <code>scripts/release.sh</code>。</li>
+  <li>仓内 <code>.worktrees/</code> 是其他分支（promo、gh-pages）的检出位，<strong>不是本分支源码</strong>。搜索与审查排除该目录（裸 <code>grep</code>/<code>find</code> 加 <code>--exclude-dir=.worktrees</code>）。</li>
+  <li>宣传物与 landing 站留在 gh-pages / promo 孤儿线，不回灌 master/dev。</li>
+</ul>
+
+<h2>门禁</h2>
+<pre><code>npm run check
+# ESLint
+# + check-import-boundaries（分层 + 零环依赖）
+# + contract-check（出向 agent:event + 入向 socket）
+# + doc-consistency
+# + visual mock registry / Playwright 禁止模式
+# + inventory:check</code></pre>
+<p>新增、移动、删除入库文件后须 <code>npm run inventory:update</code>，否则 check 红。生成的 <code>docs/repository-map.md</code> 勿手改正文。</p>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>推送带 CI 的仓库前可用 <code>CI=true npm test</code> 模拟 CI。集成在 CI 中常 skip 需 CLI 段；真 Claude turn 用 <code>RUN_CLAUDE_INTEGRATION=1</code>。
+</div></div>
+
+<h2>测试分层</h2>
+<table>
+<thead><tr><th>命令</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>npm run test:unit</code></td><td>纯逻辑单测，零 token，最快</td></tr>
+<tr><td><code>npm run test:integration</code></td><td>起真 server；需本机 CLI</td></tr>
+<tr><td><code>npm test</code></td><td>unit + 可靠 integration；<code>--test-force-exit</code></td></tr>
+<tr><td><code>npm run test:e2e</code></td><td>Playwright 移动端 UI，mock server，零外部 token</td></tr>
+<tr><td><code>npm run test:smoke</code></td><td>真 Claude 回合；默认不跑，耗 token</td></tr>
+</tbody>
+</table>
+<p>E2E 断言基于 DOM 状态，非像素比对。mock 发出的事件 type 必须 ⊆ 契约 allowlist。</p>
+
+<h2>工程约定</h2>
+<ul>
+  <li><strong>不引入 TypeScript 编译闸（tsc）</strong>：项目以 Node ESM + ESLint + 契约脚本为门禁。</li>
+  <li><strong><code>src/server/app.js</code> 组装根有意保留</strong>：mirror / catchUp / openInstance 与契约路由共享顶层可变状态；勿为「拆文件」而拆同步引擎，除非有明确边界设计与全量回归。</li>
+  <li><strong>commit 不加 Claude 署名</strong>：不要 Co-Authored-By / Claude-Session 行；说明改了什么、为何、如何验证即可。</li>
+  <li>一次性测试 server 须隔离四件套：<code>PORT</code> / <code>WORK_DIR</code> / <code>CCM_DATA_DIR</code> / <code>AUTH_TOKEN</code>，避免污染生产 data。</li>
+  <li>生产改 <code>.env</code>/代码后须重启常驻进程；例外是 <code>WORK_DIRS_FILE</code> 热加载。</li>
+</ul>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>并发开发同一文件时用 git worktree 隔离，避免互相 reset 冲掉未提交工作。本手册产物在 gh-pages 的 docs-site，不回写 dev 的产品 docs。
+</div></div>
+
+<p>分层规则细节见<a href="contracts-gates.html">契约与工程门禁</a>。</p>

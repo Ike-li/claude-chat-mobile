@@ -1,0 +1,65 @@
+<p class="lead-extra">通知与状态栏都是「尽力增强」：失败不阻断主对话；Web 驾驶与 CLI 驾驶的状态来源不同。</p>
+
+<h2>Web Push</h2>
+<ul>
+  <li>需 <code>VAPID_PUBLIC_KEY</code> / <code>VAPID_PRIVATE_KEY</code> / <code>VAPID_SUBJECT</code> 三项齐全，否则优雅缺席。</li>
+  <li>订阅保存在 <code>$CCM_DATA_DIR/push-subscription.json</code>。</li>
+  <li>HTTP：<code>GET /push/vapid-public-key</code>、<code>POST /push/subscribe</code>（均走 httpAuth）。</li>
+  <li>典型触发：审批、提问、结果类（经分类与节流）。</li>
+  <li>实现：<code>src/ops/notify-channels.js</code> + <code>notifications.js</code>。</li>
+</ul>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>iOS 上 Web Push 要求「添加到主屏幕」且 https。局域网 http 不可用；此时应配 ntfy 或保持页面前台。
+</div></div>
+
+<h2>ntfy</h2>
+<ul>
+  <li><code>NTFY_URL</code> + <code>NTFY_TOPIC</code> 启用；可选 <code>NTFY_TOKEN</code> 访问私有实例。</li>
+  <li><code>PUBLIC_URL</code> 用于通知深链绝对 URL；空则回退 <code>https://$CF_ACCESS_HOSTNAME</code>。</li>
+  <li>server 一行 POST 到 ntfy；手机装 ntfy app 订阅 topic 可锁屏收通知。</li>
+  <li>正文可能含命令 / 审批摘要 → 务必自托管或私密 topic + token，勿用公共 <code>ntfy.sh</code> 裸 topic。</li>
+</ul>
+
+<p>节流窗口：<code>NOTIFY_THROTTLE_MS</code> 默认 <strong>60000</strong>（同会话同类通知）。投递失败会记入服务健康（deliveryFailure），面板可展示，不阻断对话。</p>
+
+<h2>Statusline 来源选择</h2>
+<table>
+<thead><tr><th>场景</th><th>来源</th></tr></thead>
+<tbody>
+<tr><td>Web 驾驶</td><td>SDK 状态（模型、上下文、成本等）</td></tr>
+<tr><td>CLI 驾驶 + bridge 已装</td><td>CLI 快照目录中的 statusline 观察态</td></tr>
+<tr><td><code>WEB_STATUSLINE=off</code></td><td>关闭 Web 状态栏 UI</td></tr>
+<tr><td><code>CLI_STATUSLINE_BRIDGE=off</code></td><td>server 侧回滚为 SDK-only（不自动卸载 CLI wrapper）</td></tr>
+</tbody>
+</table>
+<pre><code>npm run statusline:status      # 只读查看，不改 ~/.claude
+npm run statusline:install     # 显式安装；不随 npm install / start 自动执行
+npm run statusline:uninstall</code></pre>
+<p>安装后须重开 Claude CLI 并重启常驻 server。CLI 与 server 的 <code>CLI_STATUSLINE_DIR</code> 须一致（默认约定在 <code>~/.claude/ccm/…</code> 下）。</p>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>多数用户只需 Web 驾驶的 SDK 状态栏。仅在「Web 只读镜像正在 CLI 里跑的会话、且要看 CLI 同源 statusline」时再装 bridge。
+</div></div>
+
+<h2>动态状态行与回合收尾</h2>
+<ul>
+  <li>运行中可展示 CLI 式动态状态行（动词 / 秒表 / tokens 等，经 <code>status_line</code> 事件）。</li>
+  <li>成功轮可有回合收尾行（对齐 CLI：过去式动词 + 时长）；中断/错误路径有意不同文案。</li>
+</ul>
+
+<h2>服务状态面板</h2>
+<p><code>instances</code> 广播可带判定化字段：</p>
+<pre><code>service: {
+  startedAt,
+  deliveryFailure,
+  rateLimitLockout,
+  clientError
+}</code></pre>
+<ul>
+  <li>面板渲染「基础 + 判定化告警」两段；告警带 24h 时效窗自动退场。</li>
+  <li>裸计数器不进入面板（对人无参照系）；原始计数留 <code>/metrics</code>。</li>
+  <li>与「需要你 (N)」角标聚合是不同轴，不混判。</li>
+</ul>
+
+<p>相关：<a href="single-driver.html">单驾驶员</a>（谁驾驶决定 statusline 源）、<a href="ops-troubleshoot.html">运维排错</a>（/metrics）。</p>

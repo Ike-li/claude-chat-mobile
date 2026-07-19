@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>阅读顺序指南 · Claude Chat Mobile</title>
+<meta name="description" content="主线通读、30 分钟速览、按角色切入。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html" class="active"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>起点</b> &nbsp;/&nbsp; 阅读顺序指南</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag">起点</span>
+    <h1>阅读顺序指南</h1>
+    <p class="lead">主线通读、30 分钟速览、按角色切入。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 8 分钟</span>
+      <span><span class="lbl">第</span> 2 / 28 篇</span>
+      
+    </div>
+  </header>
+<p class="lead-extra">读者打开手册后应立刻知道：怎么读、读哪条线、按什么顺序。主线兜底，速览与角色线是捷径。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>主线通读</h2>
+<p>主线 = 七部分的天然顺序，与侧栏一致：</p>
+<pre><code>起点 → 认识 → 演进 → 方法论 → 实现 → 数据 → 运维 → 规范</code></pre>
+<p>预计 2–3 小时。适合第一次完整接手。每页可独立读懂，但仍建议按序建立心智模型。</p>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>30 分钟速览</h2>
+<ol class="steps">
+  <li><strong>封面与总览。</strong><a href="../index.html">封面</a> → <a href="overview.html">项目总览</a>：一句话定位与场景。</li>
+  <li><strong>架构与边界。</strong><a href="architecture.html">系统架构</a> → <a href="boundaries.html">职责边界</a>：分层与「不做什么」。</li>
+  <li><strong>方法论三页。</strong><a href="terminal-parity.html">终端等价</a> → <a href="security-model.html">安全模型</a> → <a href="single-driver.html">单驾驶员</a>。</li>
+  <li><strong>能跑起来。</strong><a href="quickstart.html">快速开始</a>；若要公网再扫<a href="production-deploy.html">生产部署</a>标题。</li>
+  <li><strong>校准事实。</strong><a href="drift.html">漂移清单</a>：文档与代码不一致处以代码为准。</li>
+</ol>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>按角色切入</h2>
+<table>
+<thead><tr><th>角色</th><th>先读</th><th>再补</th></tr></thead>
+<tbody>
+<tr><td>自托管运维</td><td>快速开始、生产部署、运维排错、环境变量</td><td>安全模型、鉴权与设备</td></tr>
+<tr><td>后端 / 同步</td><td>架构、AgentSession、事件信封、单驾驶员、数据全景</td><td>会话与历史、契约门禁</td></tr>
+<tr><td>前端 / PWA</td><td>前端与 PWA、事件信封、API 事件参考</td><td>通知与状态栏</td></tr>
+<tr><td>安全审查</td><td>安全模型、鉴权与设备、文件上传、职责边界</td><td>生产部署中的反代警告</td></tr>
+<tr><td>贡献者</td><td>项目规范、契约门禁、术语表</td><td>演进主线、漂移清单</td></tr>
+</tbody>
+</table>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>事实基线约定</h2>
+<div class="callout drift"><div class="body">
+<strong>以代码为准</strong>手册基于 dev 源码交叉核对（探针 HEAD <code>8084005</code>），<strong>不是</strong>持续自动同步。注释里若仍出现 <code>docs/design.md</code>，该文件已从仓库移除；权威安全叙述在 README「安全模型」节。矛盾点集中记在<a href="drift.html">漂移清单</a>。
+</div></div>
+
+<div class="callout tip"><div class="body">
+<strong>搜索</strong>任意页按 <kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd> 打开全文搜索。深浅色由顶栏切换，偏好写入 <code>localStorage</code>。
+</div></div>
+
+        <nav class="pager"><a class="prev" href="../index.html"><span class="dir">← 上一篇</span><span class="ttl">封面与导读</span></a><a class="next" href="overview.html"><span class="dir">下一篇 →</span><span class="ttl">项目总览</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">主线通读</a></li><li class="h2"><a href="#s2">30 分钟速览</a></li><li class="h2"><a href="#s3">按角色切入</a></li><li class="h2"><a href="#s4">事实基线约定</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

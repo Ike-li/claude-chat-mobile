@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>环境变量参考 · Claude Chat Mobile</title>
+<meta name="description" content="从 .env.example 与 parseServerConfig 核对的配置表。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html" class="active"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第七部分 · 参考与规范</b> &nbsp;/&nbsp; 环境变量参考</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">07</span> 第七部分 · 参考与规范</span>
+    <h1>环境变量参考</h1>
+    <p class="lead">从 .env.example 与 parseServerConfig 核对的配置表。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 27 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 .env.example · src/server/config.js</span>
+    </div>
+  </header>
+<p class="lead-extra">配置以 <code>.env.example</code> 与 <code>parseServerConfig</code> / 各模块读取为准。空串在加载期等同未设置（ANTHROPIC_* 另有规则）。</p>
+
+<table>
+<thead><tr><th>变量</th><th>默认</th><th>含义</th><th>易错</th></tr></thead>
+<tbody>
+<tr><td><code>AUTH_TOKEN</code></td><td>空 → 仅 127.0.0.1</td><td>共享密钥</td><td>LAN/公网必非空</td></tr>
+<tr><td><code>PORT</code></td><td>3000</td><td>监听端口</td><td>生产勿撞常驻</td></tr>
+<tr><td><code>CCM_DATA_DIR</code></td><td>./data</td><td>控制面根</td><td>生产外置绝对路径</td></tr>
+<tr><td><code>WORK_DIR</code></td><td>$HOME</td><td>默认 cwd</td><td>公网应钉具体项目</td></tr>
+<tr><td><code>WORK_DIRS_FILE</code></td><td>空</td><td>JSON 白名单；热加载</td><td>契约名不是文件名本身</td></tr>
+<tr><td><code>WORK_DIRS</code></td><td>空</td><td>逗号白名单</td><td>改后须重启</td></tr>
+<tr><td><code>CLAUDE_BIN</code></td><td>which claude</td><td>CLI 路径</td><td>LaunchAgent 常需绝对路径</td></tr>
+<tr><td><code>IDLE_TIMEOUT_MS</code></td><td>600000</td><td>静默挂死中断</td><td>过短误杀长工具</td></tr>
+<tr><td><code>INSTANCE_IDLE_RECLAIM_MS</code></td><td>1800000</td><td>空闲回收；0=关</td><td>与 IDLE 正交</td></tr>
+<tr><td><code>APPROVAL_TTL_MS</code></td><td>1800000</td><td>审批 TTL</td><td>example 可能未列</td></tr>
+<tr><td><code>NOTIFY_THROTTLE_MS</code></td><td>60000</td><td>通知节流</td><td></td></tr>
+<tr><td><code>SESSION_DELETE_QUIET_MS</code></td><td>300000</td><td>永久删安静期</td><td></td></tr>
+<tr><td><code>DEV_MODE</code></td><td>空</td><td>面板重启等</td><td>生产勿开</td></tr>
+<tr><td><code>LOG_STDERR</code> / <code>LOG_INTERACTIONS</code> / <code>DEBUG_SDK_MESSAGES</code></td><td>空</td><td>诊断日志</td><td>生产勿长开</td></tr>
+<tr><td><code>CF_ACCESS_HOSTNAME</code> / <code>TEAM</code> / <code>AUD</code></td><td>空</td><td>Access 三项全齐才启用</td><td>缺一则整层关</td></tr>
+<tr><td><code>VAPID_*</code></td><td>空</td><td>Web Push 三项</td><td>私钥勿入库</td></tr>
+<tr><td><code>NTFY_URL</code> / <code>TOPIC</code> / <code>TOKEN</code></td><td>空</td><td>ntfy</td><td>勿用公共裸 topic</td></tr>
+<tr><td><code>PUBLIC_URL</code></td><td>空→CF host</td><td>通知深链</td><td></td></tr>
+<tr><td><code>WEB_STATUSLINE</code></td><td>默认开</td><td><code>off</code> 关闭</td><td></td></tr>
+<tr><td><code>CLI_STATUSLINE_BRIDGE</code></td><td>空</td><td><code>off</code> 回滚 SDK-only</td><td>不自动卸载 wrapper</td></tr>
+<tr><td><code>CLI_STATUSLINE_DIR</code></td><td>约定 snapshots 路径</td><td>CLI 与 server 同值</td><td></td></tr>
+<tr><td><code>ANTHROPIC_*</code></td><td>仅 shell</td><td>网关/模型</td><td><strong>.env 无效</strong></td></tr>
+</tbody>
+</table>
+
+<div class="callout danger"><div class="body">
+<strong>危险</strong>LaunchAgent 若 <code>export AUTH_TOKEN=</code> 空串，会挡住 dotenv 填入。空串应视为未设。
+</div></div>
+<p>环形缓冲 <code>BUFFER_CAP = 2000</code> 为代码常量，无对应 env。</p>
+
+        <nav class="pager"><a class="prev" href="api-events.html"><span class="dir">← 上一篇</span><span class="ttl">事件与端点参考</span></a><a class="next" href="drift.html"><span class="dir">下一篇 →</span><span class="ttl">漂移清单</span></a></nav>
+      </article>
+      
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

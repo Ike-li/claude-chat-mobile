@@ -1,0 +1,53 @@
+<p class="lead-extra">接手者最需要的认知往往是「这事归谁」。本节把职责边界写死，避免按 SaaS 或远程桌面去设计。</p>
+
+<h2>做什么</h2>
+<ul>
+  <li>把本机 <code>claude</code> CLI 接到手机浏览器（聊天 UI、工具卡片、审批、提问）。</li>
+  <li>与终端共享同一会话 transcript（<code>~/.claude/projects/…</code>）与配置来源（user / project / local settings）。</li>
+  <li>在 CLI 权限未命中时，把审批推到手机；命中则自动放行（与终端同源）。</li>
+  <li>提供多工作区白名单、多会话标签、附件上传、PWA 与尽力而为的推送。</li>
+  <li>提供 doctor / health / metrics 等运维面，便于自托管排查。</li>
+</ul>
+
+<h2>不做什么</h2>
+<table>
+<thead><tr><th>不做</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>多租户 / 账号体系 / Hosted SaaS</td><td>每实例单用户；任何通过鉴权的请求 = 坐在终端前的你</td></tr>
+<tr><td>Claude 重实现</td><td>不自带模型服务；不维护平行 agent 协议栈</td></tr>
+<tr><td>项目级 allowedTools 放行表</td><td>不注入 <code>allowedTools</code> / <code>disallowedTools</code>；放行集 = 用户已有 settings 的并集</td></tr>
+<tr><td>无 token 的公网开放</td><td>未设 <code>AUTH_TOKEN</code> 只绑 127.0.0.1</td></tr>
+<tr><td>把 CLI transcript 迁入仓库</td><td>控制面在 <code>CCM_DATA_DIR</code>；消息正文仍在 <code>~/.claude</code></td></tr>
+<tr><td>跨实例联邦 / 远程管理 SaaS</td><td>运维面有意克制</td></tr>
+</tbody>
+</table>
+
+<h2>与相邻系统的分界</h2>
+<div class="mermaid">
+flowchart TB
+  CCM["Claude Chat Mobile\n转发 + UI + 审批"]
+  CLI["claude CLI\n执行 · 权限 · MCP · skills"]
+  CF["Cloudflare\n隧道 + Access"]
+  Push["Web Push / ntfy"]
+  UserFS["用户工作区文件"]
+
+  CCM -->|"SDK query"| CLI
+  CLI --> UserFS
+  CF -->|"HTTPS 到 :3000"| CCM
+  CCM --> Push
+</div>
+
+<div class="kv">
+  <div class="row"><div class="key">Claude CLI</div><div class="val">真实执行者；权限策略与登录态的权威在 CLI 侧</div></div>
+  <div class="row"><div class="key">Cloudflare</div><div class="val">可选公网入口与 2FA；项目不内置 cloudflared 生命周期管理</div></div>
+  <div class="row"><div class="key">通知通道</div><div class="val">尽力而为；失败不阻断主对话循环</div></div>
+</div>
+
+<h2>安全相关边界（摘要）</h2>
+<ol class="steps">
+  <li><strong>单用户。</strong>不要当多租户服务部署。</li>
+  <li><strong>无 token 不出本机。</strong></li>
+  <li><strong>权限只继承 CLI。</strong>公网暴露前审查 <code>~/.claude/settings.json</code> 白名单。</li>
+  <li><strong>设备 TOFU。</strong>合法 token 不够；非本机设备须一次性批准。反代到 loopback 会跳过设备层——公网须 Access 或自觉强 token。</li>
+</ol>
+<p>完整叙述见<a href="security-model.html">安全模型</a>与 README 对应章节。</p>

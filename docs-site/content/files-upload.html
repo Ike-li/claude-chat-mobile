@@ -1,0 +1,47 @@
+<p class="lead-extra">文件能力围绕「白名单工作区」与「只读不越界」：上传附件进会话，浏览与预览不得逃出允许目录。</p>
+
+<h2>工作区白名单</h2>
+<ul>
+  <li>默认 cwd：<code>WORK_DIR</code>（未设则 home）。</li>
+  <li>附加目录：<code>WORK_DIRS</code>（逗号串）或 <code>WORK_DIRS_FILE</code>（JSON 文件，优先）。</li>
+  <li><code>WORK_DIRS_FILE</code> 支持热加载：server 监听文件变更（父目录 watch + mtime + debounce）；改完免重启。</li>
+  <li>被移除目录上<strong>已有 live 实例可继续</strong>；该目录上<strong>新开会话拒绝</strong>（<code>ensureWhitelisted</code>）。</li>
+  <li>无效目录 soft-skip 并告警，不挡启动。</li>
+</ul>
+
+<div class="callout drift"><div class="body">
+<strong>以代码为准</strong>口语常说「改 workdirs.json」。契约环境变量名是 <code>WORK_DIRS_FILE</code>（值通常指向仓库根 <code>workdirs.json</code>）。未设置该 env 时不会 watch，改文件也不热加载。
+</div></div>
+
+<h2>附件上传流程</h2>
+<ol class="steps">
+  <li>客户端经 socket 上传字节（校验类型与大小，见 <code>validateAttachments</code>）。</li>
+  <li>服务端写入 <code>&lt;当前 cwd&gt;/.ccm-uploads/&lt;ts&gt;-&lt;rand&gt;-&lt;safeName&gt;</code>（常量 <code>UPLOAD_DIR = '.ccm-uploads'</code>）。</li>
+  <li><code>buildPromptText</code> 把绝对路径注入 prompt，供 CLI / 工具 <code>Read</code>。</li>
+  <li>事件 meta 带缩略信息与 <code>storedName</code>；历史消息可按需再拉预览（browse 读盘，非无鉴权 HTTP 图片端点）。</li>
+</ol>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>transcript 记录的是当时绝对路径。挪工作区、改机器用户名或清空 <code>.ccm-uploads</code> 后，旧附件可能无法打开。备份对话若仍要看图，须一并备份对应上传目录。
+</div></div>
+
+<h2>路径闸（三层）</h2>
+<table>
+<thead><tr><th>层</th><th>模块</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td>写安全</td><td><code>file-security.js</code></td><td>owner-only 写（0600）、符号链接危险组件拒绝、原子写辅助</td></tr>
+<tr><td>范围门</td><td><code>workdir-scope-guard.js</code></td><td>路径必须落在白名单 realpath 之下</td></tr>
+<tr><td>浏览/预览</td><td><code>file-browse.js</code> · <code>file-preview.js</code></td><td>只读列表、片段与 diff；工具卡片同源约束</td></tr>
+</tbody>
+</table>
+
+<p>工具卡片对 Edit / Write 显示 diff、对 Read 显示片段，均限白名单工作目录内，只读不越界。</p>
+
+<h2>相关 socket 事件</h2>
+<ul>
+  <li>上传随 <code>user:message</code> 附件字段进入主发送路径。</li>
+  <li><code>browse:list</code> / <code>browse:read</code>：工作区内只读浏览（含历史附件按需读）。</li>
+  <li><code>tool:preview</code> / <code>tool:full</code>：工具结果预览与全文拉取。</li>
+</ul>
+
+<p>实现入口：<code>src/files/*</code>、<code>src/server/socket-files.js</code>、<code>src/sessions/workdirs.js</code>。</p>

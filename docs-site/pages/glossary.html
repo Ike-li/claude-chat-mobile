@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>术语表 · Claude Chat Mobile</title>
+<meta name="description" content="instance、envelope、mirror、TOFU 等高频词。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html" class="active"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第三部分 · 方法论</b> &nbsp;/&nbsp; 术语表</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">03</span> 第三部分 · 方法论</span>
+    <h1>术语表</h1>
+    <p class="lead">instance、envelope、mirror、TOFU 等高频词。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 6 分钟</span>
+      <span><span class="lbl">第</span> 11 / 28 篇</span>
+      
+    </div>
+  </header>
+<p class="lead-extra">高频专有名词的准确定义。阅读实现章节前建议扫一遍。</p>
+
+<table>
+<thead><tr><th>术语</th><th>定义</th></tr></thead>
+<tbody>
+<tr><td><code>instanceId</code></td><td>进程内 AgentSession 实例 ID（如 <code>inst_N</code>）。换实例会变。</td></tr>
+<tr><td><code>sessionId</code></td><td>Claude CLI 会话 ID，与 transcript 文件名对应。</td></tr>
+<tr><td><code>epoch</code></td><td>实例世代号。新实例更大；客户端见变化应重置 seq 去重基线。</td></tr>
+<tr><td><code>seq</code></td><td>实例内事件序号，单调递增；用于 <code>sync:since</code> 补发。</td></tr>
+<tr><td>envelope</td><td><code>agent:event</code> 外层：<code>{seq,epoch,sessionId,instanceId,cwd,ts,type,payload}</code>。</td></tr>
+<tr><td>AgentSession</td><td><code>src/agent/agent.js</code> 中长驻 SDK query 的运行时对象。</td></tr>
+<tr><td><code>viewingInstanceId</code></td><td>当前「正在看」的实例；影响高频 delta 是否广播。</td></tr>
+<tr><td><code>mirrorReadonly</code></td><td>CLI 驾驶时的 Web 只读锁，锁定输入。</td></tr>
+<tr><td><code>externalDirty</code></td><td>捕获到终端对 transcript 的外部写入后的脏标记。</td></tr>
+<tr><td>FRESH</td><td>无 resumeId 的新开会话；不继承 cwd 末实例档位。</td></tr>
+<tr><td>resume</td><td>以已有 sessionId 冷读/续接 transcript。</td></tr>
+<tr><td>TOFU</td><td>Trust On First Use：设备首次须本机批准。</td></tr>
+<tr><td><code>CCM_DATA_DIR</code></td><td>控制面数据根（sessions/devices/audit/push 等）。</td></tr>
+<tr><td><code>WORK_DIR</code></td><td>默认工作目录（claude cwd）。</td></tr>
+<tr><td><code>settingSources</code></td><td>SDK 加载 settings 的来源：user / project / local。</td></tr>
+<tr><td><code>canUseTool</code></td><td>SDK 权限回调；未放行则弹 <code>permission_request</code>。</td></tr>
+<tr><td><code>permission_request</code></td><td>需用户批准的工具调用事件。</td></tr>
+<tr><td><code>sync:since</code></td><td>客户端按 lastSeq 请求缓冲回放。</td></tr>
+<tr><td>catchUp</td><td>轮询 jsonl 增量，镜像 CLI 写入。</td></tr>
+<tr><td>ring buffer</td><td>每实例事件环形缓冲，cap <strong>2000</strong>。</td></tr>
+<tr><td>worktree sessions</td><td>发现 git worktree 内会话，使 Web 触达「cd 进 worktree 即 resume」的等价物。</td></tr>
+<tr><td>statusline bridge</td><td>可选包装：CLI 驾驶时把 CLI statusline 快照同步给 Web。</td></tr>
+<tr><td><code>effort</code></td><td>思考强度；spawn 时注入 SDK options。Web 切档经 <code>user:setEffort</code> → dispose+resume，不可 in-place 改活进程。</td></tr>
+<tr><td><code>auto</code>（权限档）</td><td>六合法档之一：SDK 模型分类器自动批/拒；另五档 default / plan / acceptEdits / bypassPermissions / dontAsk。</td></tr>
+<tr><td>CLI doctor vs UI 体检</td><td>CLI：<code>scripts/doctor.js</code> 固定 D1–D11。UI：<code>doctor-runtime.js</code> 另含 Access/设备门/VAPID/白名单等，勿混为一谈。</td></tr>
+</tbody>
+</table>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>事实基线探针 dev@8084005。契约事件数：入向 32、出向 25——以 <code>scripts/agent-event-contract.js</code> 为准。
+</div></div>
+
+        <nav class="pager"><a class="prev" href="contracts-gates.html"><span class="dir">← 上一篇</span><span class="ttl">契约与工程门禁</span></a><a class="next" href="runtime-assembly.html"><span class="dir">下一篇 →</span><span class="ttl">启动与组装根</span></a></nav>
+      </article>
+      
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

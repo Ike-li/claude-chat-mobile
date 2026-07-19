@@ -1,0 +1,64 @@
+<p class="lead-extra">同步的单位是带序号的事件信封，而不是「整页 HTML」。客户端靠 seq / epoch 去重与补洞；磁盘侧另有 catch-up 追平 CLI 写入。</p>
+
+<h2>信封</h2>
+<pre><code>{
+  seq, epoch, sessionId, instanceId, cwd, ts,
+  type,   // 契约内 agent:event type
+  payload
+}</code></pre>
+<ul>
+  <li><code>seq</code>：实例内单调递增；用于 <code>sync:since</code>。</li>
+  <li><code>epoch</code>：实例世代；换实例（effort 的 dispose+resume、dirty 置换、reclaim 等）后变大，客户端必须重置 lastSeq 基线。</li>
+  <li>入环形缓冲 cap=<strong>2000</strong>（<code>BUFFER_CAP</code>）；溢出丢最旧并可能标 gap。</li>
+  <li><code>emitTransient</code>：不占 seq、不进缓冲（如 <code>task_progress</code> 心跳）。</li>
+</ul>
+
+<h2>广播策略</h2>
+<ul>
+  <li>默认发往已批准设备房间 <code>approved</code>（<code>io.to('approved').emit('agent:event', …)</code>）。</li>
+  <li>高频 <code>text_delta</code> / <code>thinking_delta</code>：仅当该实例是当前 <code>viewingInstanceId</code> 时广播；后台 tab 仍写入缓冲，切回后用 <code>sync:since</code> 回放。</li>
+  <li>边界事件驱动角标 latch、推送节流、会话活动 touch。</li>
+</ul>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>调试「后台会话像没字」时，先确认是否仅靠 live 流、是否切回后触发了 sync；后台不播高频 delta 是带宽设计，不是丢失。
+</div></div>
+
+<h2>sync:since</h2>
+<ol class="steps">
+  <li>客户端发送 <code>{ sessionId, lastSeq, instanceId }</code>。</li>
+  <li>服务端 <code>eventsSince(lastSeq)</code>：过滤已 resolve 的审批/提问（避免重弹）。</li>
+  <li>若缓冲被 trim 且存在空洞 → 标记 <code>gap</code> 并提示。</li>
+  <li>ack 可含 <code>pending</code> 快照（重建审批卡片）与 <code>diskLen</code>（对账终端写入量）。</li>
+  <li><code>epoch</code> 变化 = 新实例 → 客户端重置 lastSeq，不可混接旧流。</li>
+</ol>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>已 resolve 的审批不会从缓冲回放——必须以 pending 快照为准。极长轮次可能 gap，需依赖 history 全量或提示用户。
+</div></div>
+
+<h2>与 catch-up / mirror 的分工</h2>
+<table>
+<thead><tr><th>机制</th><th>数据源</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td>环形缓冲 + sync:since</td><td>进程内存信封</td><td>Web 驾驶时的断线补发、切 tab 回放</td></tr>
+<tr><td>catchUpTick / history_append</td><td>磁盘 jsonl</td><td>CLI 驾驶时只读追平；标 externalDirty</td></tr>
+<tr><td>session:history</td><td>磁盘 jsonl 冷读</td><td>打开会话时全量/分页历史</td></tr>
+</tbody>
+</table>
+<p>详见<a href="single-driver.html">单驾驶员模型</a>。</p>
+
+<h2>出向 type 分组</h2>
+<table>
+<thead><tr><th>组</th><th>type</th></tr></thead>
+<tbody>
+<tr><td>流式内容</td><td><code>text_delta</code> <code>thinking_delta</code> <code>result</code></td></tr>
+<tr><td>工具</td><td><code>tool_use</code> <code>tool_result</code></td></tr>
+<tr><td>审批/提问</td><td><code>permission_request</code> <code>question</code> <code>request_resolved</code></td></tr>
+<tr><td>会话控制</td><td><code>init</code> <code>system</code> <code>error</code> <code>user_message</code></td></tr>
+<tr><td>状态</td><td><code>status_line</code> <code>permission_mode</code> <code>effort_mode</code> <code>models</code> <code>mirror_state</code> <code>instances</code></td></tr>
+<tr><td>任务</td><td><code>task_notification</code> <code>task_progress</code> <code>api_retry</code></td></tr>
+<tr><td>设备/日志</td><td><code>device_status</code> <code>pending_devices</code> <code>session_log</code> <code>history_append</code></td></tr>
+</tbody>
+</table>
+<p>完整 allowlist：出向 25 type、入向 32 事件——见<a href="api-events.html">事件与端点参考</a>。契约由 <code>npm run check</code> 中的 contract-check 硬闸；与源码冲突时以 <code>scripts/agent-event-contract.js</code> 为准。</p>

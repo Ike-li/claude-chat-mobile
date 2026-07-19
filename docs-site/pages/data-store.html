@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>数据全景 · Claude Chat Mobile</title>
+<meta name="description" content="CCM_DATA_DIR、transcript、上传与忽略态文件。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html" class="active"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第五部分 · 数据与集成</b> &nbsp;/&nbsp; 数据全景</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">05</span> 第五部分 · 数据与集成</span>
+    <h1>数据全景</h1>
+    <p class="lead">CCM_DATA_DIR、transcript、上传与忽略态文件。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 12 分钟</span>
+      <span><span class="lbl">第</span> 20 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 docs/repository-map.md · src/sessions/sessions.js</span>
+    </div>
+  </header>
+<p class="lead-extra">控制面状态、CLI transcript、附件与内存态分属不同根目录。备份与清盘前，先分清「可迁出的 CCM 状态」与「CLI 真相源」。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>存储全景</h2>
+<table>
+<thead><tr><th>路径</th><th>角色</th><th>生命周期</th></tr></thead>
+<tbody>
+<tr><td><code>$CCM_DATA_DIR/sessions.json</code></td><td>会话元数据与偏好（含隐藏列表等），非消息正文</td><td>持久；宜 0600</td></tr>
+<tr><td><code>…/approval-requests.json</code></td><td>审批台账；执行闸门仍在内存</td><td>持久台账</td></tr>
+<tr><td><code>…/audit-records.json</code></td><td>安全审计环形记录</td><td>持久</td></tr>
+<tr><td><code>…/trusted-devices.json</code> · <code>pending-devices.json</code></td><td>设备 TOFU</td><td>持久；清盘 = 废掉手机信任</td></tr>
+<tr><td><code>…/cf-access-certs.json</code></td><td>Access JWKS 缓存</td><td>可弃；损坏再拉</td></tr>
+<tr><td><code>…/init-cache.json</code></td><td>模型列表等 init 缓存</td><td>可弃</td></tr>
+<tr><td><code>…/push-subscription.json</code></td><td>Web Push 订阅</td><td>持久</td></tr>
+<tr><td><code>workdirs.json</code>（由 <code>WORK_DIRS_FILE</code> 指向）</td><td>多工作区白名单；可热加载</td><td><strong>不在</strong> CCM_DATA_DIR；勿提交</td></tr>
+<tr><td><code>~/.claude/projects/&lt;编码cwd&gt;/&lt;sessionId&gt;.jsonl</code></td><td>消息真相源；与 CLI <code>/resume</code> 同源</td><td>不随 CCM_DATA_DIR 迁走</td></tr>
+<tr><td><code>WORK_DIR/.ccm-uploads/</code></td><td>附件原件；prompt 注入绝对路径</td><td>删附件 → 历史预览失效</td></tr>
+<tr><td>内存 ring buffer · agents Map</td><td>最近 2000 事件、在途状态</td><td><strong>易失</strong></td></tr>
+</tbody>
+</table>
+
+<div class="callout note"><div class="body">
+<strong>默认根</strong><code>CCM_DATA_DIR</code> 未设时回落仓库 <code>./data</code>。生产建议外置绝对路径、目录 0700、敏感 JSON 0600。多数状态模块在 import 时解析路径，故 env 须在 <code>server.js</code> 薄入口加载完成后再装 <code>app.js</code>。
+</div></div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>双真相源</h2>
+<div class="split">
+  <div>
+    <h4>CCM 控制面</h4>
+    <p><code>sessions.json</code>、设备、审批台账、推送、缓存。描述「web 如何看待会话与谁可连」，不替代对话正文。</p>
+  </div>
+  <div>
+    <h4>CLI transcript</h4>
+    <p><code>~/.claude/projects/**/*.jsonl</code> 是对话与工具轨迹的权威落盘。历史冷读、镜像追平、续接都读这里。</p>
+  </div>
+</div>
+
+<div class="callout warn"><div class="body">
+<strong>风险</strong>只备份 <code>CCM_DATA_DIR</code> 会丢掉消息正文；只备份 <code>~/.claude</code> 会丢掉设备信任、隐藏会话与推送订阅。两端不一致时可能出现「有元数据、无历史」或续接失败。
+</div></div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>备份含义</h2>
+<ul>
+  <li><strong>完整可恢复</strong>：外置 <code>CCM_DATA_DIR</code> + 相关 <code>~/.claude/projects/</code> + 各 <code>WORK_DIR/.ccm-uploads/</code>（若仍要打开历史附件）+ <code>.env</code> / 隧道凭据（另管）。</li>
+  <li><strong>可丢弃</strong>：init-cache、cf-access-certs、环形缓冲与 agents 内存态。</li>
+  <li><strong>迁移</strong>：停常驻服务 → 拷贝数据根 → 改 <code>CCM_DATA_DIR</code> → <code>node scripts/doctor.js</code> → kickstart 重启。</li>
+</ul>
+
+<div class="callout tip"><div class="body">
+<strong>热加载例外</strong><code>WORK_DIRS_FILE</code> 指向的文件由 server 监听，改完即生效、免重启；被移除目录上已开会话可继续，仅拒新开。逗号串 <code>WORK_DIRS</code> 无文件可 watch，改后须重启。
+</div></div>
+
+<div class="callout danger"><div class="body">
+<strong>危险</strong>一次性测试 server 必须隔离 <code>PORT</code> / <code>WORK_DIR</code> / <code>CCM_DATA_DIR</code> / <code>AUTH_TOKEN</code>，否则会污染生产 data。
+</div></div>
+
+<p>硬编码证据：<code>src/sessions/history.js</code> 中 <code>CLAUDE_DIR = join(homedir(), '.claude', 'projects')</code>；deployment 文档亦写明 transcript 不迁入 CCM_DATA_DIR。</p>
+
+        <nav class="pager"><a class="prev" href="notify-status.html"><span class="dir">← 上一篇</span><span class="ttl">通知与状态栏</span></a><a class="next" href="integrations.html"><span class="dir">下一篇 →</span><span class="ttl">外部集成</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">存储全景</a></li><li class="h2"><a href="#s2">双真相源</a></li><li class="h2"><a href="#s3">备份含义</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

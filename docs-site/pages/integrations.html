@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>外部集成 · Claude Chat Mobile</title>
+<meta name="description" content="Agent SDK、claude CLI、Cloudflare、推送通道。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html" class="active"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第五部分 · 数据与集成</b> &nbsp;/&nbsp; 外部集成</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">05</span> 第五部分 · 数据与集成</span>
+    <h1>外部集成</h1>
+    <p class="lead">Agent SDK、claude CLI、Cloudflare、推送通道。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 21 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 package.json · src/auth/cf-access.js</span>
+    </div>
+  </header>
+<p class="lead-extra">外部依赖只做「桥」与「通道」，不承接多租户账号，不替代本机 CLI。每一层都有明确的做与不做。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>职责对照</h2>
+<table>
+<thead><tr><th>集成</th><th>做什么</th><th>不做什么</th></tr></thead>
+<tbody>
+<tr><td><strong>Claude Agent SDK</strong> + 本机 <code>claude</code> CLI</td><td>长驻 <code>query()</code>、流式输入、权限回调、spawn CLI；继承本机 settings / CLAUDE.md / MCP / skills / hooks</td><td>不重新实现 Claude；不注入独立 <code>allowedTools</code> 清单；不自带登录态</td></tr>
+<tr><td><strong>Cloudflare Tunnel</strong> + <strong>Access</strong>（jose 验 JWT）</td><td>固定域名把公网流量落到 <code>localhost:3000</code>；公网 Host 上强制 Access JWT（三项 env 齐全才启用）</td><td>不替代 <code>AUTH_TOKEN</code>（LAN/本机仍靠 token）；不负责业务鉴权细粒度授权</td></tr>
+<tr><td><strong>web-push</strong>（VAPID）</td><td>浏览器推送：审批、提问、结果等（需 https；iOS 先加主屏幕）</td><td>未配 VAPID 则优雅缺席；不保证息屏必达</td></tr>
+<tr><td><strong>ntfy</strong></td><td>服务端 POST 通知，绕过 iOS PWA / 局域网 http 限制；可配深链 <code>PUBLIC_URL</code></td><td>未配则优雅缺席；公共裸 topic 不安全（正文可能含命令线索）</td></tr>
+</tbody>
+</table>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong><code>ANTHROPIC_*</code> 只认启动 server 的 shell 环境；写进 <code>.env</code> 会在启动期剥除。官方订阅与第三方网关都走同一 CLI/SDK 路径，差别只在 shell 里 export 了什么。
+</div></div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>生态关系</h2>
+<div class="mermaid">
+flowchart TB
+  Phone["手机浏览器 / PWA"]
+  CF["Cloudflare 边缘\nAccess JWT"]
+  Tunnel["cloudflared 命名隧道"]
+  S["CCM server\nExpress + Socket.IO"]
+  SDK["Agent SDK"]
+  CLI["本机 claude CLI"]
+  FS["WORK_DIR 项目文件"]
+  Push["web-push / ntfy"]
+  Data["CCM_DATA_DIR"]
+  Tx["~/.claude/projects jsonl"]
+
+  Phone -->|"公网"| CF --> Tunnel --> S
+  Phone -.->|"同 WiFi #token"| S
+  S --> SDK --> CLI --> FS
+  S --> Data
+  CLI --> Tx
+  S --> Push
+  Push -.->|"可选通知"| Phone
+</div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>运行时 npm 依赖</h2>
+<p>生产依赖（<code>package.json</code>）：</p>
+<ul>
+  <li><code>@anthropic-ai/claude-agent-sdk</code>（探针时 0.3.201）</li>
+  <li><code>express</code> · <code>compression</code> · <code>socket.io</code> · <code>dotenv</code></li>
+  <li><code>web-push</code> · <code>jose</code></li>
+</ul>
+<p>前端第三方不经 npm 运行时路径，而是自托管到 <code>public/vendor/</code>（Tailwind / marked / highlight.js / DOMPurify 等），见 <code>public/vendor/THIRD-PARTY-NOTICES.md</code>。</p>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>可选与缺席</h2>
+<ul>
+  <li><code>CF_ACCESS_HOSTNAME</code> / <code>TEAM</code> / <code>AUD</code> 任一缺失：Access 整层关闭，公网与 LAN 都回退 token 模型。</li>
+  <li>VAPID 三项不全：Web Push 关闭；仅 ntfy 或无推送仍可交互（需打开页面审批）。</li>
+  <li><code>statusline:install</code> 不随 <code>npm install</code> 自动执行；CLI bridge 显式安装后才与终端 statusLine 同步。</li>
+  <li>项目不内置 cloudflared 生命周期管理；凭据在 <code>~/.cloudflared</code>，模板在 <code>deploy/</code>。</li>
+</ul>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>与职责边界的衔接</h2>
+<p>集成层之上的产品边界（单用户、非 SaaS、权限继承 CLI）见<a href="boundaries.html">职责边界</a>与<a href="security-model.html">安全模型</a>。本页只回答「外部系统各自管什么」。</p>
+
+        <nav class="pager"><a class="prev" href="data-store.html"><span class="dir">← 上一篇</span><span class="ttl">数据全景</span></a><a class="next" href="quickstart.html"><span class="dir">下一篇 →</span><span class="ttl">快速开始</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">职责对照</a></li><li class="h2"><a href="#s2">生态关系</a></li><li class="h2"><a href="#s3">运行时 npm 依赖</a></li><li class="h2"><a href="#s4">可选与缺席</a></li><li class="h2"><a href="#s5">与职责边界的衔接</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

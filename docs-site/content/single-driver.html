@@ -1,0 +1,69 @@
+<p class="lead-extra">同一 <code>sessionId</code> 在同一时刻只允许一个驾驶员写入。Web 与本机 CLI 不能并行写同一会话；后到的一方只读镜像或置换冷读，避免 transcript 分叉。</p>
+
+<h2>为什么需要单驾驶员</h2>
+<p>会话内容的权威落点是 CLI transcript（jsonl）。若 Web 侧 SDK 子进程与终端里正在跑的 CLI 同时向同一 sessionId 追加轮次，会出现双 parent 链、模型上下文滞后、手机与终端各说各话。单驾驶员把「谁可以 send」收成互斥问题，而不是事后合并冲突。</p>
+
+<div class="cards">
+  <div class="card"><span class="k">CLI 驾</span><h4>Web 只读镜像</h4><p>追平磁盘 transcript，输入锁为只读。</p></div>
+  <div class="card"><span class="k">Web 驾</span><h4>SDK 长驻 query</h4><p>正常发送、审批、中断。</p></div>
+  <div class="card"><span class="k">外部脏</span><h4>externalDirty</h4><p>磁盘已超前于 SDK 内存，发送前须置换。</p></div>
+</div>
+
+<h2>三种形态</h2>
+<table>
+<thead><tr><th>形态</th><th>写入者</th><th>Web 行为</th></tr></thead>
+<tbody>
+<tr><td>Web 驾驶</td><td>本进程 AgentSession</td><td>正常发送；状态栏取 SDK</td></tr>
+<tr><td>CLI 驾驶（只读镜像）</td><td>终端 CLI</td><td>输入锁定；catch-up 追 transcript；可选 statusline bridge</td></tr>
+<tr><td>接管</td><td>Web 在镜像下成功 send</td><td>清 mirrorReadonly；dispose+resume 后 Web 驾驶</td></tr>
+</tbody>
+</table>
+
+<h2>镜像机制</h2>
+<div class="kv">
+  <div class="row"><div class="key">catchUpTick</div><div class="val">轮询当前查看会话的 jsonl 增量 → history_append；只读时约 1s 一拍，常态约 2.5s</div></div>
+  <div class="row"><div class="key">mirror_state</div><div class="val">广播只读锁与观察态（model/permission 等）</div></div>
+  <div class="row"><div class="key">mirrorEntryLock</div><div class="val">切入会话时预锁（尾部 pending）</div></div>
+  <div class="row"><div class="key">mirrorReleaseStep</div><div class="val">安静约 12.5s 后自动释放只读锁（文件仍增长则 keepAlive）</div></div>
+  <div class="row"><div class="key">cli-mirror-state</div><div class="val">只读观察 CLI 落盘偏好，不写回 Web 实例偏好</div></div>
+</div>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>Web resume 是<strong>冷读</strong> transcript，不能 attach 正在运行的 CLI 活进程。正在终端里跑的会话，Web 侧只能镜像或等其结束后再 resume。
+</div></div>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>长工具若长时间不写盘，仅靠「文件增长」会误判静默；实现用 tailPending / keepAlive 等互补判据，避免横幅误灭成「感觉没在跑」。
+</div></div>
+
+<h2>externalDirty 与发送</h2>
+<ol class="steps">
+  <li>catch-up 或 rebaseline 发现磁盘已超前 → 标记 <code>externalDirty</code>。</li>
+  <li>用户发送时若实例 <strong>idle</strong>：dispose + resume，冷读磁盘后再发（吸收终端写入）。</li>
+  <li>若实例 <strong>busy</strong>：硬拒绝（NACK），可重试；不是静默排队。</li>
+</ol>
+<p><code>externalDirty</code> 只约束「下次 Web 写入前必须吸收磁盘」；它不单独把 statusline 锁到 CLI——statusline 是否走 CLI 快照看 <code>mirrorReadonly</code>。</p>
+
+<div class="mermaid">
+flowchart LR
+  A["查看会话"] --> B{"尾部/锁判定"}
+  B -->|"CLI 在写"| C["mirrorReadonly"]
+  C --> D["catchUpTick 追平"]
+  D --> E["mirrorReleaseStep ~12.5s"]
+  E -->|"静默满"| F["解锁可输入"]
+  B -->|"外部已超前"| G["externalDirty"]
+  G --> H{"发送时 idle?"}
+  H -->|是| I["dispose + resume 冷读"]
+  H -->|否| J["NACK"]
+</div>
+
+<h2>切回运行中会话（busy reseed）</h2>
+<p>从其他标签切回仍在跑的会话时，前端按 server 权威 state 重种运行指示，避免「其实还在跑，UI 却像空闲」。权威来源是 instances 等载荷中的 state，而非本地 spinner 记忆。</p>
+
+<h2>已知边界</h2>
+<ul>
+  <li>mirror 全局单值（非 per-连接）；切视图会清理，设计上未做细粒度 per-socket 锁。</li>
+  <li>catchUp 主要盯<strong>当前查看</strong>会话。</li>
+  <li>busy→idle 窗口内部分终端写入可能被吸收而不标脏（有意取舍，防重复气泡）。</li>
+  <li>环形事件缓冲 2000 与历史消息 2000 上限是不同轴（事件信封 vs transcript 条数）。</li>
+</ul>

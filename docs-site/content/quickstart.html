@@ -1,0 +1,54 @@
+<p class="lead-extra">最短可跑路径与 README 一致：装依赖、写 <code>.env</code>、doctor、起服务。同 WiFi 必填 <code>AUTH_TOKEN</code>；公网用临时隧道即可试用。</p>
+
+<h2>前置</h2>
+<ul>
+  <li>Node ≥ 20（<code>node --version</code>）</li>
+  <li>本机已安装并登录的 <code>claude</code> CLI（<code>which claude</code>）</li>
+  <li>macOS 或 Linux</li>
+</ul>
+
+<ol class="steps">
+  <li><strong>克隆并确认前置。</strong>
+<pre><code>git clone https://github.com/Ike-li/claude-chat-mobile.git
+cd claude-chat-mobile
+node --version
+which claude</code></pre>
+  </li>
+  <li><strong>安装运行依赖并交互配置。</strong>
+<pre><code>npm install --omit=dev   # 仅运行依赖；跑测试用完整 npm install
+npm run setup            # 生成 AUTH_TOKEN、询问 WORK_DIR，写入 .env（0600）
+# 或：cp .env.example .env 后手改</code></pre>
+  </li>
+  <li><strong>自检。</strong>
+<pre><code>node scripts/doctor.js
+node scripts/doctor.js --fix  # 收紧 .env 与 data JSON → 0600</code></pre>
+  </li>
+  <li><strong>启动。</strong>
+<pre><code>npm start                 # http://localhost:3000
+# 启动日志会打印带 token 的可用 URL</code></pre>
+  </li>
+</ol>
+
+<h2>如何从手机连上</h2>
+<table>
+<thead><tr><th>场景</th><th>做法</th></tr></thead>
+<tbody>
+<tr><td>同一 WiFi</td><td>在 <code>.env</code> 设非空 <code>AUTH_TOKEN</code>，打开启动日志中的 <code>http://&lt;lan-ip&gt;:3000/#token=…</code>。无 token 时只绑 <code>127.0.0.1</code>，手机连不上（有意为之）。</td></tr>
+<tr><td>临时公网 / PWA https</td><td>另开终端：<code>cloudflared tunnel --url http://localhost:3000</code>，手机打开随机域名并带 <code>#token=</code>。token 首次写入 localStorage 后从地址栏清除。</td></tr>
+<tr><td>固定生产</td><td>命名隧道 + Access 2FA + 常驻进程；见<a href="production-deploy.html">生产部署</a>。</td></tr>
+</tbody>
+</table>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong><code>ANTHROPIC_*</code> 只认启动 server 的 shell。第三方网关请在该 shell 中 export 后再启动。写进 <code>.env</code> 会被剥除。官方订阅则依赖 CLI 自身登录态即可。
+</div></div>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>可选 CLI 镜像状态栏：<code>npm run statusline:install</code>（不会随 install/start 自动装）。查看：<code>npm run statusline:status</code>。多数用户只开 Web 驾驶时不需要。
+</div></div>
+
+<h2>开发模式</h2>
+<pre><code>npm run dev    # node --watch server.js
+npm run check  # 推送前零 token 门禁</code></pre>
+
+<p>生产常驻已占 3000 时，勿再手动 <code>npm start</code> 撞端口；临时调试先 bootout 常驻服务。更多见<a href="ops-troubleshoot.html">运维与排错</a>。</p>

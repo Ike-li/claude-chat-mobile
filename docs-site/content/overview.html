@@ -1,0 +1,58 @@
+<p class="lead-extra">项目给已经在终端使用 <code>claude</code> CLI 的人用：在手机上对同一 agent 打字，效果与坐在电脑前等价。</p>
+
+<h2>一句话定位</h2>
+<p>移动端聊天式 Web UI，通过 Claude Agent SDK 驱动<strong>本机已登录的</strong> <code>claude</code> CLI。不打包 Claude，不重实现 agent 循环；继承同一份 <code>CLAUDE.md</code>、MCP、skills、hooks 与会话 transcript。</p>
+
+<h2>适用场景</h2>
+<ul>
+  <li><strong>任务在跑，人离开电脑。</strong>审批与提问推到手机，点允许或拒绝。</li>
+  <li><strong>同一会话，换设备继续。</strong>手机与终端读同一份 CLI 会话记录；路上起头，回家 <code>/resume</code> 接上。</li>
+  <li><strong>多仓库并行。</strong>白名单内切换工作目录，标签页看多个会话进度。</li>
+  <li><strong>手机输入更顺。</strong>斜杠命令、相册附图、长按复制等按触控设计，而非缩小终端。</li>
+</ul>
+<p>若只是偶尔远程看一眼屏幕，远程桌面通常够用。本项目面向「把手机当成终端随身入口」的高频使用。</p>
+
+<h2>技术栈</h2>
+<div class="kv">
+  <div class="row"><div class="key">运行时</div><div class="val">Node ≥20 · ESM · Express · Socket.IO 4 · compression · dotenv</div></div>
+  <div class="row"><div class="key">Agent</div><div class="val"><code>@anthropic-ai/claude-agent-sdk</code> 0.3.201 · 本机 <code>claude</code></div></div>
+  <div class="row"><div class="key">鉴权 / 推送</div><div class="val">jose 6（Access JWT）· web-push（VAPID）· 可选 ntfy</div></div>
+  <div class="row"><div class="key">前端</div><div class="val">原生 ESM PWA；vendor 自托管（Tailwind / marked / highlight.js / DOMPurify）</div></div>
+  <div class="row"><div class="key">测试</div><div class="val"><code>node --test</code> 单测/集成 · Playwright 移动端 E2E · smoke 真 CLI（默认不跑）</div></div>
+  <div class="row"><div class="key">许可</div><div class="val">AGPL-3.0-only · NOTICE Section 7 补充条款</div></div>
+</div>
+
+<h2>仓库形态</h2>
+<table>
+<thead><tr><th>路径</th><th>角色</th></tr></thead>
+<tbody>
+<tr><td><code>server.js</code></td><td>兼容启动器（npm / LaunchAgent / systemd）</td></tr>
+<tr><td><code>src/</code></td><td>服务端实现，按域分包</td></tr>
+<tr><td><code>public/</code></td><td>Express 直接托管的 PWA</td></tr>
+<tr><td><code>scripts/</code></td><td>维护命令，非运行时</td></tr>
+<tr><td><code>tests/</code></td><td>唯一自动化测试根</td></tr>
+<tr><td><code>docs/</code></td><td>极简：deployment + repository-map</td></tr>
+<tr><td><code>deploy/</code></td><td>plist 模板</td></tr>
+</tbody>
+</table>
+
+<p>inventory 分类文件约 <strong>277</strong> 个（见生成的 <code>docs/repository-map.md</code>）。后端源约 44 文件，前端源约 21，单测约 89，E2E 约 30。</p>
+
+<h2>分支纪律</h2>
+<ul>
+  <li><strong>dev</strong>：日常开发。</li>
+  <li><strong>master</strong>：稳定 / 默认克隆目标；有分支保护；经 <code>scripts/release.sh</code> 从 dev ff 合并并发版。</li>
+  <li><strong>gh-pages</strong>：宣传站孤儿分支（本手册产物所在）。</li>
+  <li><strong>promo</strong>：宣传文案创作区，非产品源码。</li>
+</ul>
+<div class="callout note"><div class="body">
+<strong>附注</strong>仓内 <code>.worktrees/</code> 是其他分支的常驻检出位，不是 dev 源码。在 dev 上搜索/审查应排除该目录。
+</div></div>
+
+<h2>前置条件</h2>
+<ol class="steps">
+  <li><strong>Node ≥20。</strong><code>node --version</code> 检查。</li>
+  <li><strong>本机可用的 claude CLI。</strong><code>which claude</code> 且能登录对话；项目不自带 CLI。</li>
+  <li><strong>订阅或网关。</strong>官方订阅沿用 CLI 登录态；第三方网关在<strong>启动 server 的 shell</strong> 中 <code>export ANTHROPIC_*</code>（写入 <code>.env</code> 会被剥除）。</li>
+  <li><strong>macOS 或 Linux。</strong></li>
+</ol>

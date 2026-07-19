@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>通知与状态栏 · Claude Chat Mobile</title>
+<meta name="description" content="Web Push / ntfy、statusline 与 CLI bridge。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html" class="active"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第四部分 · 核心实现</b> &nbsp;/&nbsp; 通知与状态栏</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">04</span> 第四部分 · 核心实现</span>
+    <h1>通知与状态栏</h1>
+    <p class="lead">Web Push / ntfy、statusline 与 CLI bridge。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 19 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 src/ops/notifications.js · src/ops/statusline.js</span>
+    </div>
+  </header>
+<p class="lead-extra">通知与状态栏都是「尽力增强」：失败不阻断主对话；Web 驾驶与 CLI 驾驶的状态来源不同。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>Web Push</h2>
+<ul>
+  <li>需 <code>VAPID_PUBLIC_KEY</code> / <code>VAPID_PRIVATE_KEY</code> / <code>VAPID_SUBJECT</code> 三项齐全，否则优雅缺席。</li>
+  <li>订阅保存在 <code>$CCM_DATA_DIR/push-subscription.json</code>。</li>
+  <li>HTTP：<code>GET /push/vapid-public-key</code>、<code>POST /push/subscribe</code>（均走 httpAuth）。</li>
+  <li>典型触发：审批、提问、结果类（经分类与节流）。</li>
+  <li>实现：<code>src/ops/notify-channels.js</code> + <code>notifications.js</code>。</li>
+</ul>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>iOS 上 Web Push 要求「添加到主屏幕」且 https。局域网 http 不可用；此时应配 ntfy 或保持页面前台。
+</div></div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>ntfy</h2>
+<ul>
+  <li><code>NTFY_URL</code> + <code>NTFY_TOPIC</code> 启用；可选 <code>NTFY_TOKEN</code> 访问私有实例。</li>
+  <li><code>PUBLIC_URL</code> 用于通知深链绝对 URL；空则回退 <code>https://$CF_ACCESS_HOSTNAME</code>。</li>
+  <li>server 一行 POST 到 ntfy；手机装 ntfy app 订阅 topic 可锁屏收通知。</li>
+  <li>正文可能含命令 / 审批摘要 → 务必自托管或私密 topic + token，勿用公共 <code>ntfy.sh</code> 裸 topic。</li>
+</ul>
+
+<p>节流窗口：<code>NOTIFY_THROTTLE_MS</code> 默认 <strong>60000</strong>（同会话同类通知）。投递失败会记入服务健康（deliveryFailure），面板可展示，不阻断对话。</p>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>Statusline 来源选择</h2>
+<table>
+<thead><tr><th>场景</th><th>来源</th></tr></thead>
+<tbody>
+<tr><td>Web 驾驶</td><td>SDK 状态（模型、上下文、成本等）</td></tr>
+<tr><td>CLI 驾驶 + bridge 已装</td><td>CLI 快照目录中的 statusline 观察态</td></tr>
+<tr><td><code>WEB_STATUSLINE=off</code></td><td>关闭 Web 状态栏 UI</td></tr>
+<tr><td><code>CLI_STATUSLINE_BRIDGE=off</code></td><td>server 侧回滚为 SDK-only（不自动卸载 CLI wrapper）</td></tr>
+</tbody>
+</table>
+<pre><code>npm run statusline:status      # 只读查看，不改 ~/.claude
+npm run statusline:install     # 显式安装；不随 npm install / start 自动执行
+npm run statusline:uninstall</code></pre>
+<p>安装后须重开 Claude CLI 并重启常驻 server。CLI 与 server 的 <code>CLI_STATUSLINE_DIR</code> 须一致（默认约定在 <code>~/.claude/ccm/…</code> 下）。</p>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>多数用户只需 Web 驾驶的 SDK 状态栏。仅在「Web 只读镜像正在 CLI 里跑的会话、且要看 CLI 同源 statusline」时再装 bridge。
+</div></div>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>动态状态行与回合收尾</h2>
+<ul>
+  <li>运行中可展示 CLI 式动态状态行（动词 / 秒表 / tokens 等，经 <code>status_line</code> 事件）。</li>
+  <li>成功轮可有回合收尾行（对齐 CLI：过去式动词 + 时长）；中断/错误路径有意不同文案。</li>
+</ul>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>服务状态面板</h2>
+<p><code>instances</code> 广播可带判定化字段：</p>
+<pre><code>service: {
+  startedAt,
+  deliveryFailure,
+  rateLimitLockout,
+  clientError
+}</code></pre>
+<ul>
+  <li>面板渲染「基础 + 判定化告警」两段；告警带 24h 时效窗自动退场。</li>
+  <li>裸计数器不进入面板（对人无参照系）；原始计数留 <code>/metrics</code>。</li>
+  <li>与「需要你 (N)」角标聚合是不同轴，不混判。</li>
+</ul>
+
+<p>相关：<a href="single-driver.html">单驾驶员</a>（谁驾驶决定 statusline 源）、<a href="ops-troubleshoot.html">运维排错</a>（/metrics）。</p>
+
+        <nav class="pager"><a class="prev" href="frontend-pwa.html"><span class="dir">← 上一篇</span><span class="ttl">前端与 PWA</span></a><a class="next" href="data-store.html"><span class="dir">下一篇 →</span><span class="ttl">数据全景</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">Web Push</a></li><li class="h2"><a href="#s2">ntfy</a></li><li class="h2"><a href="#s3">Statusline 来源选择</a></li><li class="h2"><a href="#s4">动态状态行与回合收尾</a></li><li class="h2"><a href="#s5">服务状态面板</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+<p class="lead-extra">生产形态是两个常驻进程加固定域名：Access 守公网，隧道落到本机 loopback，server 经登录 shell 启动以继承与终端一致的 PATH 与登录态。</p>
+
+<h2>架构</h2>
+<pre><code>手机 → 域名 → Cloudflare Access（2FA）→ 命名隧道 → localhost:3000 → server</code></pre>
+
+<div class="kv">
+  <div class="row"><div class="key">公网入口</div><div class="val">固定域名；Access 验 OTP / IdP；公网路径不带 <code>#token=</code></div></div>
+  <div class="row"><div class="key">LAN / 本机</div><div class="val">仍可用 <code>http://&lt;lan-ip&gt;:3000/#token=…</code>，走 <code>AUTH_TOKEN</code></div></div>
+  <div class="row"><div class="key">两个常驻进程</div><div class="val">server（node）与 tunnel（cloudflared）；崩溃自拉起、关终端不掉</div></div>
+</div>
+
+<h2>从零搭建（摘要）</h2>
+<ol class="steps">
+  <li><strong>隧道。</strong><code>cloudflared tunnel login</code> → create → route dns → 写 <code>~/.cloudflared/config.yml</code> ingress 到 <code>http://localhost:3000</code>。凭据勿提交。</li>
+  <li><strong>Access。</strong>Zero Trust 添加 Self-hosted 应用；取 AUD tag；填入 <code>CF_ACCESS_HOSTNAME</code> / <code>TEAM</code> / <code>AUD</code> 三项。</li>
+  <li><strong>常驻。</strong>用 <code>deploy/*.plist.template</code> + <code>scripts/render-plist.js</code> 渲染后 <code>launchctl bootstrap</code>（Linux 换 systemd，思路相同）。</li>
+  <li><strong>控制面外置。</strong>设 <code>CCM_DATA_DIR</code> 绝对路径 0700；doctor 再 kickstart。</li>
+  <li><strong>可选通知。</strong>VAPID 与/或 ntfy + <code>PUBLIC_URL</code>。</li>
+</ol>
+
+<h2>LaunchAgent 模板</h2>
+<ul>
+  <li><code>deploy/server.plist.template</code> — 经 <code>zsh -lc 'cd &lt;repo&gt; &amp;&amp; exec &lt;node&gt; server.js'</code> 启动，保 PATH/登录态；RunAtLoad + KeepAlive</li>
+  <li><code>deploy/tunnel.plist.template</code> — <code>cloudflared tunnel run &lt;name&gt;</code></li>
+  <li><code>deploy/log-rotate.plist.template</code> — 定时 <code>scripts/rotate-logs.sh</code>（copy-truncate）</li>
+</ul>
+<pre><code>node scripts/render-plist.js deploy/server.plist.template \
+  ~/Library/LaunchAgents/com.you.ccm-server.plist \
+  LABEL=com.you.ccm-server REPO="$PWD" NODE="$(command -v node)" \
+  LOG="$HOME/Library/Logs/ccm-server.log"
+
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.you.ccm-server.plist</code></pre>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>用 <code>render-plist.js</code> 做字面量替换与 XML 转义；路径含 <code>&amp;</code> / <code>#</code> / 空格时勿用裸 sed。
+</div></div>
+
+<h2>控制面外置</h2>
+<pre><code>mkdir -p "$HOME/Library/Application Support/claude-chat-mobile/data"
+chmod 700 "$HOME/Library/Application Support/claude-chat-mobile" \
+  "$HOME/Library/Application Support/claude-chat-mobile/data"
+# .env:
+# CCM_DATA_DIR=/Users/you/Library/Application Support/claude-chat-mobile/data</code></pre>
+<p>transcript 仍在 <code>~/.claude/projects/</code>；附件仍在各 <code>.ccm-uploads/</code>。迁移前停服并备份，迁后 doctor 再重启。</p>
+
+<h2>运维铁律</h2>
+<ul>
+  <li>生产端口已被常驻占用：<strong>勿再</strong> <code>npm start</code>（撞端口）。</li>
+  <li>改 <code>.env</code> 或代码后须 <code>launchctl kickstart -k gui/$(id -u)/&lt;label&gt;</code>（或 systemd restart）才生效。</li>
+  <li>例外：<code>WORK_DIRS_FILE</code> 热加载免重启 server。</li>
+  <li>LaunchAgent 在登录后启动；开机未登录也跑需改 LaunchDaemon（进阶）。</li>
+</ul>
+
+<div class="callout danger"><div class="body">
+<strong>危险</strong>反代到 loopback 会使设备审批按「本机」跳过。本配方公网靠 Access JWT 兜底；换成其它本机反代时务必强 <code>AUTH_TOKEN</code>，勿只靠设备层。详见<a href="security-model.html">安全模型</a>。
+</div></div>
+
+<p>更细的隧道 / Access / ntfy / 排错表见源码 <code>docs/deployment.md</code> 与<a href="ops-troubleshoot.html">运维与排错</a>。</p>

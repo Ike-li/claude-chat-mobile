@@ -1,0 +1,82 @@
+<p class="lead-extra">安全模型围绕一句话展开：这是<strong>每实例单用户</strong>的自托管桥，不是多租户 SaaS。任何通过鉴权的请求，都与机主本人坐在本机终端前拥有同等权限。权威叙述在 README「安全模型」节。</p>
+
+<div class="callout danger"><div class="body">
+<strong>危险</strong>这是一条可远程触达、直通本机 shell 的代码执行通道。暴露到公网前必须完成 token、设备门、CLI 权限与（建议）Cloudflare Access 的审查。
+</div></div>
+
+<h2>四条铁律</h2>
+<ol class="steps">
+  <li><strong>每实例单用户。</strong>无多用户、账号或登录系统。通过鉴权 = 与坐在终端前同等权限。不要当多租户服务。</li>
+  <li><strong>没有 token 就不出本机。</strong>未设置 AUTH_TOKEN 时服务只绑定 127.0.0.1。不存在「留空 = 对全世界开放」。</li>
+  <li><strong>权限只继承 CLI。</strong>项目不维护独立放行/禁用清单。放行 = 用户已有 settings 的 permissions.allow 并集。</li>
+  <li><strong>设备信赖（TOFU）。</strong>既非本机、也未经 Cloudflare Access 验证的连接，须在电脑上一次性授权该设备。合法 token 本身不够。</li>
+</ol>
+
+<h2>绑定地址</h2>
+<table>
+<thead><tr><th>条件</th><th>listen host</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td>AUTH_TOKEN 非空</td><td>0.0.0.0</td><td>局域网与隧道可达</td></tr>
+<tr><td>未设或空串</td><td>127.0.0.1</td><td>仅本机；手机/隧道进不来</td></tr>
+</tbody>
+</table>
+<pre><code>// app.js（语义）
+const host = AUTH_TOKEN ? '0.0.0.0' : '127.0.0.1';</code></pre>
+<p>默认端口 PORT = 3000。</p>
+
+<h2>权限继承 CLI</h2>
+<p>工具放行与拒绝继承本机 CLI 的 settings 与权限档，不另建「Web 专用超级白名单」。公网暴露前应审查：</p>
+<pre><code>~/.claude/settings.json
+# 以及各工作区 .claude/settings.json / settings.local.json</code></pre>
+<p>重点看 permissions.allow 是否含过宽规则（如无限制 Bash）。运行中 UI 体检（doctor-runtime）会对危险白名单做脱敏摘要；启动前 CLI doctor（D1–D11）不替代该项。</p>
+
+<h2>鉴权分层</h2>
+<div class="mermaid">
+flowchart TB
+  A["连接进入"] --> B{"Host 是否公网 Access"}
+  B -->|是| C["校验 CF Access JWT"]
+  B -->|否| D["校验 AUTH_TOKEN"]
+  C --> E["限速状态机 onAuthResult"]
+  D --> E
+  E -->|通过| F{"本机或已批设备?"}
+  F -->|否| G["TOFU pending"]
+  F -->|是| H["进入业务事件"]
+</div>
+<ul>
+  <li>HTTP（/health、/metrics、/push/*）与 Socket 握手共用 token 匹配与限速 Map。</li>
+  <li>Cloudflare Access：仅当 CF_ACCESS_HOSTNAME / TEAM / AUD <strong>三项齐全</strong> 才启用；缺一则整层关闭。</li>
+  <li>公网路径靠 Access JWT；局域网仍用 #token= / 头。</li>
+  <li>限速为进程内状态机（连续失败阈值、指数退避、锁定）；重启清零可作为误锁逃生口。限速只挡鉴权门口，不限制已鉴权操作面。</li>
+</ul>
+
+<h2>设备 TOFU 与反代陷阱</h2>
+<p>设备指纹审批按 socket 直连 peer 的 IP 判定「是否本机」。Cloudflare 隧道在 localhost:3000 落地时连接显成 127.0.0.1，但公网已由 Access 兜底，可接受。</p>
+<div class="callout danger"><div class="body">
+<strong>危险</strong>若换成任意在本机落地的其他反代（nginx/Caddy 的 proxy_pass localhost、SSH 转发、frp 等），所有客户端都会显成本机，设备审批层被跳过，防线只剩 AUTH_TOKEN。此类拓扑必须使用强 token，并优先考虑 Access。UI 体检 DEVICE_GATE 会对「隧道/反代跳过设备门」类配置告警。
+</div></div>
+
+<ul>
+  <li>本机 127.0.0.1 / ::1 / localhost：视为本机，可直接 approved。</li>
+  <li>真实 LAN IP：触发 TOFU pending，须机主批准（UI 或 <code>node scripts/device.js approve</code>）。</li>
+</ul>
+
+<h2>审批与日志</h2>
+<ul>
+  <li>工具审批台账写入 approval-requests.json；进程内回调才是执行真相。重启后孤儿 pending 全部标过期（fail-closed）。</li>
+  <li>敏感写盘走 owner-only（0600）与串行 writer。</li>
+  <li>日志脱敏（token 掩码）；前端错误可上报服务端。</li>
+</ul>
+
+<h2>明确不做</h2>
+<ul>
+  <li>多租户 / 账号体系 / 按用户隔离 workspace。</li>
+  <li>把 CCM 当 hosted SaaS 中转他人密钥。</li>
+  <li>在无 token 时监听全接口地址。</li>
+</ul>
+
+<h2>安全报告</h2>
+<p>请勿通过公开 issue 报告漏洞。走 GitHub Security Advisories（见 SECURITY.md）。</p>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>默认超时与安全正交但常被问到：idleTimeoutMs 默认 600000；instanceIdleReclaimMs 默认 1800000。数据目录默认 CCM_DATA_DIR 指向项目下 data/，与 CLI 的 ~/.claude 分离。
+</div></div>

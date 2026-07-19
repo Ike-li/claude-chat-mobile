@@ -1,0 +1,34 @@
+<p class="lead-extra">配置以 <code>.env.example</code> 与 <code>parseServerConfig</code> / 各模块读取为准。空串在加载期等同未设置（ANTHROPIC_* 另有规则）。</p>
+
+<table>
+<thead><tr><th>变量</th><th>默认</th><th>含义</th><th>易错</th></tr></thead>
+<tbody>
+<tr><td><code>AUTH_TOKEN</code></td><td>空 → 仅 127.0.0.1</td><td>共享密钥</td><td>LAN/公网必非空</td></tr>
+<tr><td><code>PORT</code></td><td>3000</td><td>监听端口</td><td>生产勿撞常驻</td></tr>
+<tr><td><code>CCM_DATA_DIR</code></td><td>./data</td><td>控制面根</td><td>生产外置绝对路径</td></tr>
+<tr><td><code>WORK_DIR</code></td><td>$HOME</td><td>默认 cwd</td><td>公网应钉具体项目</td></tr>
+<tr><td><code>WORK_DIRS_FILE</code></td><td>空</td><td>JSON 白名单；热加载</td><td>契约名不是文件名本身</td></tr>
+<tr><td><code>WORK_DIRS</code></td><td>空</td><td>逗号白名单</td><td>改后须重启</td></tr>
+<tr><td><code>CLAUDE_BIN</code></td><td>which claude</td><td>CLI 路径</td><td>LaunchAgent 常需绝对路径</td></tr>
+<tr><td><code>IDLE_TIMEOUT_MS</code></td><td>600000</td><td>静默挂死中断</td><td>过短误杀长工具</td></tr>
+<tr><td><code>INSTANCE_IDLE_RECLAIM_MS</code></td><td>1800000</td><td>空闲回收；0=关</td><td>与 IDLE 正交</td></tr>
+<tr><td><code>APPROVAL_TTL_MS</code></td><td>1800000</td><td>审批 TTL</td><td>example 可能未列</td></tr>
+<tr><td><code>NOTIFY_THROTTLE_MS</code></td><td>60000</td><td>通知节流</td><td></td></tr>
+<tr><td><code>SESSION_DELETE_QUIET_MS</code></td><td>300000</td><td>永久删安静期</td><td></td></tr>
+<tr><td><code>DEV_MODE</code></td><td>空</td><td>面板重启等</td><td>生产勿开</td></tr>
+<tr><td><code>LOG_STDERR</code> / <code>LOG_INTERACTIONS</code> / <code>DEBUG_SDK_MESSAGES</code></td><td>空</td><td>诊断日志</td><td>生产勿长开</td></tr>
+<tr><td><code>CF_ACCESS_HOSTNAME</code> / <code>TEAM</code> / <code>AUD</code></td><td>空</td><td>Access 三项全齐才启用</td><td>缺一则整层关</td></tr>
+<tr><td><code>VAPID_*</code></td><td>空</td><td>Web Push 三项</td><td>私钥勿入库</td></tr>
+<tr><td><code>NTFY_URL</code> / <code>TOPIC</code> / <code>TOKEN</code></td><td>空</td><td>ntfy</td><td>勿用公共裸 topic</td></tr>
+<tr><td><code>PUBLIC_URL</code></td><td>空→CF host</td><td>通知深链</td><td></td></tr>
+<tr><td><code>WEB_STATUSLINE</code></td><td>默认开</td><td><code>off</code> 关闭</td><td></td></tr>
+<tr><td><code>CLI_STATUSLINE_BRIDGE</code></td><td>空</td><td><code>off</code> 回滚 SDK-only</td><td>不自动卸载 wrapper</td></tr>
+<tr><td><code>CLI_STATUSLINE_DIR</code></td><td>约定 snapshots 路径</td><td>CLI 与 server 同值</td><td></td></tr>
+<tr><td><code>ANTHROPIC_*</code></td><td>仅 shell</td><td>网关/模型</td><td><strong>.env 无效</strong></td></tr>
+</tbody>
+</table>
+
+<div class="callout danger"><div class="body">
+<strong>危险</strong>LaunchAgent 若 <code>export AUTH_TOKEN=</code> 空串，会挡住 dotenv 填入。空串应视为未设。
+</div></div>
+<p>环形缓冲 <code>BUFFER_CAP = 2000</code> 为代码常量，无对应 env。</p>

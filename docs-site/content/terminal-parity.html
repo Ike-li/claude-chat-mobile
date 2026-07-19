@@ -1,0 +1,74 @@
+<p class="lead-extra">Claude Chat Mobile 的产品目标是终端等价：CLI 有什么，Web 就有什么。实现上不重造 Agent 能力，而是用 Agent SDK 驱动本机已登录的 <code>claude</code> CLI，并与 CLI 共用配置、权限与 transcript。</p>
+
+<h2>等价原则</h2>
+<blockquote><p>当你不知道怎么处理功能时，CLI 有什么 web 就有什么，请找一找 claude code cli 是怎么实现这个功能的。—— <code>CLAUDE.md</code></p></blockquote>
+<p>本项目不是远程桌面，也不是另一套 Claude 客户端。手机上的一次发送、一次审批、一次切模型，应与坐在本机终端前操作同一会话等价。遇到「Web 还缺什么」时，默认动作是<strong>找 CLI 现有实现与配置面</strong>，而不是在转发层另开一套语义。</p>
+
+<div class="cards">
+  <div class="card"><span class="k">01</span><h4>同源驱动</h4><p>Agent SDK 拉起本机 CLI 子进程，而不是另写一套工具循环。</p></div>
+  <div class="card"><span class="k">02</span><h4>同源配置</h4><p><code>settingSources: ['user','project','local']</code>，与 CLI 读同一组 settings。</p></div>
+  <div class="card"><span class="k">03</span><h4>同源会话</h4><p>transcript 落在 <code>~/.claude/projects</code>，与 CLI <code>/resume</code> 同一事实源。</p></div>
+</div>
+
+<h2>配置加载：settingSources</h2>
+<pre><code>settingSources: ['user', 'project', 'local']</code></pre>
+<p>含义与 CLI 一致：用户级、项目级、本地覆盖依次参与合并。模型默认、权限白名单、env 块等由这些 settings 决定，转发层不维护平行配置权威。</p>
+<div class="callout tip"><div class="body">
+<strong>建议</strong>改权限或默认模型时，先改 <code>~/.claude/settings.json</code> 或工作区 <code>.claude/settings.json[.local]</code>，再在 Web 验证；不要在 CCM 里另造白名单文件。
+</div></div>
+
+<h2>权限：不注入 allowedTools</h2>
+<p>SDK 选项<strong>不注入</strong> <code>options.allowedTools</code>。放行白名单完全交给 settingSources 加载的 settings 里 <code>permissions.allow</code> 并集（与终端 claude 同源、由用户自管）。SDK 把 settings 的 allow 当作「自动放行、不触发 canUseTool」的第一层；未命中则进入统一闸门 canUseTool。</p>
+<table>
+<thead><tr><th>层</th><th>行为</th></tr></thead>
+<tbody>
+<tr><td>settings <code>permissions.allow</code></td><td>命中则自动放行，不弹手机审批</td></tr>
+<tr><td><code>canUseTool</code></td><td>白名单外统一闸门；按当前权限档 allow / deny / 弹窗</td></tr>
+<tr><td>转发层自建白名单</td><td>不维护；避免与 CLI 分叉</td></tr>
+</tbody>
+</table>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>公网暴露前务必审查全局 <code>~/.claude/settings.json</code>。终端里多年累积的 <code>Bash(…)</code> / <code>Write</code> 规则在手机侧也会自动放行，不会再弹审批。
+</div></div>
+
+<h2>权限档</h2>
+<p>代码白名单（<code>setPermissionMode</code> / <code>CCM_PERMISSION_MODES</code>）为 <strong>六档</strong>：</p>
+<table>
+<thead><tr><th>档</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>default</code></td><td>默认审批；白名单外走 canUseTool 弹窗</td></tr>
+<tr><td><code>plan</code></td><td>计划模式，与 CLI plan 语义一致</td></tr>
+<tr><td><code>acceptEdits</code></td><td>接受编辑类操作的放宽档</td></tr>
+<tr><td><code>bypassPermissions</code></td><td>实例记真实 bypass；给 SDK 映射为 <code>default</code>，由 <code>handleCanUseTool</code> 直接 allow（避免 SDK 危险全局 flag）</td></tr>
+<tr><td><code>dontAsk</code></td><td>Web 专属严格档：白名单外 deny、手机不弹窗；CLI transcript 不会出现</td></tr>
+<tr><td><code>auto</code></td><td>SDK 用模型分类器自动批准/拒绝权限请求</td></tr>
+</tbody>
+</table>
+<p>从 CLI transcript 恢复时，可读档为 default / plan / acceptEdits / bypassPermissions 等 CLI 可写出的档；dontAsk 属 Web 专属，不会从 CLI transcript 读回。</p>
+
+<h2>会话与 transcript</h2>
+<pre><code>~/.claude/projects/&lt;编码 cwd&gt;/&lt;session_id&gt;.jsonl</code></pre>
+<p>CCM 的 sessions.json 只存元数据，不存消息正文。列表与历史冷读与 CLI /resume 同源扫描该目录；历史封顶 HISTORY_MAX_MESSAGES = 2000。</p>
+
+<h2>模型与 effort</h2>
+<p>模型可在发送路径切换。思考强度 <code>effort</code> 在 spawn 时注入 SDK options（与终端 <code>/effort</code> 同旋钮）；<strong>SDK 无运行时 effort 控制请求</strong>。Web 侧 <code>user:setEffort</code> 的切档路径是 server <strong>dispose 当前实例 + 同 sessionId resume 新实例</strong>（instanceId / epoch 会变），不是 in-place 改活进程。新会话（FRESH）的默认档来自 CLI settings 合并结果，而不是「继承本 cwd 上一个 Web 实例的末档」——贴近「新起一条 claude 是干净默认」。</p>
+
+<div class="kv">
+  <div class="row"><div class="key">驱动</div><div class="val">Agent SDK → 本机 claude CLI</div></div>
+  <div class="row"><div class="key">配置源</div><div class="val">user / project / local</div></div>
+  <div class="row"><div class="key">工具白名单</div><div class="val">settings permissions.allow 并集，不注入 allowedTools</div></div>
+  <div class="row"><div class="key">transcript</div><div class="val">~/.claude/projects</div></div>
+</div>
+
+<h2>发送与接收路径</h2>
+<pre><code>发送：Web → Agent SDK → Claude Code CLI
+接收：Claude Code CLI → Agent SDK → Web</code></pre>
+
+<h2>刻意不对齐之处</h2>
+<ul>
+  <li>手机 UI 是触控优先的聊天壳，不是终端仿真器（斜杠命令、相册附图、长按复制等）。</li>
+  <li>Web resume 是冷读 transcript，不能 attach 正在运行的 CLI 活进程（见<a href="single-driver.html">单驾驶员</a>）。</li>
+  <li>通知、PWA、设备 TOFU 是桥接层能力，CLI 本身没有对应物。</li>
+  <li>状态文案 / spinner / statusline 尽量对齐 CLI 语义，交互壳可以是手机 UI，但权限与会话语义不得分叉。</li>
+</ul>

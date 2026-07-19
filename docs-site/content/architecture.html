@@ -1,0 +1,77 @@
+<p class="lead-extra">系统是一条默认上锁的转发链：手机 UI 经 Socket.IO 到本机 server，再经 Agent SDK 驱动 claude CLI 读写你的工作区。</p>
+
+<h2>分层总览</h2>
+<div class="mermaid">
+flowchart LR
+  subgraph Phone["手机"]
+    UI["public/ 单页\n气泡·工具卡·审批"]
+  end
+  subgraph Edge["公网可选"]
+    CF["Cloudflare Tunnel\n+ Access"]
+  end
+  subgraph Host["本机"]
+    S["server.js + src/server\nExpress · Socket.IO · 鉴权"]
+    A["AgentSession\nSDK query · 权限闸 · 信封缓冲"]
+    SDK["claude-agent-sdk"]
+    CLI["本机 claude CLI"]
+    FS["WORK_DIR 项目文件"]
+    J["CCM_DATA_DIR\n元数据"]
+  end
+  UI <-->|"agent:event / user:*"| CF
+  CF <--> S
+  UI <-.->|"LAN #token"| S
+  S <--> A
+  A <--> SDK
+  SDK <--> CLI
+  CLI <--> FS
+  S --- J
+</div>
+
+<h2>后端域划分</h2>
+<table>
+<thead><tr><th>目录</th><th>职责</th></tr></thead>
+<tbody>
+<tr><td><code>src/server/</code></td><td>组装根（sink）：HTTP 壳、Socket 契约、实例生命周期与业务接线</td></tr>
+<tr><td><code>src/agent/</code></td><td>SDK 桥、审批台账、消息去重、模型缓存、CLI mirror</td></tr>
+<tr><td><code>src/auth/</code></td><td>CF Access JWT、设备 TOFU、鉴权限速</td></tr>
+<tr><td><code>src/sessions/</code></td><td>会话元数据、transcript 历史、工作区白名单、worktree 发现</td></tr>
+<tr><td><code>src/files/</code></td><td>上传、只读浏览/预览、路径闸</td></tr>
+<tr><td><code>src/ops/</code></td><td>审计、指标、推送、statusline、doctor</td></tr>
+<tr><td><code>src/shared/</code></td><td>叶子：日志时间戳、脱敏、串行写盘</td></tr>
+</tbody>
+</table>
+
+<p><code>src/server</code> 是唯一组装 sink：只有 <code>server.js</code> 与 <code>src/server/*</code> 可 import 它。域模块不得反向依赖 server。边界由 <code>scripts/check-import-boundaries.js</code> 在 <code>npm run check</code> 中硬闸。</p>
+
+<h2>消息流程（五步）</h2>
+<ol class="steps">
+  <li><strong>发送。</strong>手机 <code>user:message {text}</code> → server 校验 → 路由到 <code>agents.get(instanceId)</code>（懒开 FRESH 或 resume）。</li>
+  <li><strong>驱动。</strong>文本进入 AgentSession 的 streaming input → SDK → CLI 在 <code>WORK_DIR</code> 执行。</li>
+  <li><strong>映射。</strong>SDK 消息经 <code>map()</code>：流式文本 → <code>text_delta</code>；工具 → <code>tool_use</code> / <code>tool_result</code>；白名单外 → <code>permission_request</code>。</li>
+  <li><strong>信封。</strong>每个事件套 <code>{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}</code> → 入 2000 条环形缓冲 → <code>io.emit</code>（前端按 <code>viewingInstanceId</code> 分流；后台 tab 的高频 delta 不广播以省带宽）。</li>
+  <li><strong>补发。</strong>断线重连 <code>sync:since {lastSeq}</code> 从缓冲回放；<code>epoch</code> 变化表示服务端换了实例，客户端重置去重基线。</li>
+</ol>
+
+<h2>启动路径</h2>
+<pre><code>server.js
+  loadRuntimeEnvironment()   # dotenv；ANTHROPIC_* 只认 shell
+  installLogTimestamps()
+  dynamic import src/server/app.js
+    initCfAccess / parseServerConfig
+    preflight（WORK_DIR、CLAUDE_BIN、workDirs）
+    Express + Socket.IO + 鉴权 + instance manager
+    expireOrphanedPending + 审批留存清扫
+    listen(port, AUTH_TOKEN ? 0.0.0.0 : 127.0.0.1)</code></pre>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>无 <code>AUTH_TOKEN</code> 时只绑定 <code>127.0.0.1</code>，手机与隧道均不可达。这是有意设计，不是故障。
+</div></div>
+
+<h2>前端结构</h2>
+<ul>
+  <li><code>public/js/app.js</code>：大壳，socket 与 UI 编排。</li>
+  <li><code>public/js/logic.js</code>：纯决策（禁 DOM/socket），与 node:test 共用。</li>
+  <li><code>public/js/canonicalize.js</code>：前后端共享操作规范化（边界白名单）。</li>
+  <li><code>public/js/app/*</code>：会话、附件、审批、设置、通知等子控制器。</li>
+  <li><code>public/vendor/</code>：第三方库本地自托管，不依赖 CDN。</li>
+</ul>

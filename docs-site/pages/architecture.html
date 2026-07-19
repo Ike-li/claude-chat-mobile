@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>系统架构 · Claude Chat Mobile</title>
+<meta name="description" content="从手机 UI 到本机 CLI 的分层与数据路径。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html" class="active"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第一部分 · 认识项目</b> &nbsp;/&nbsp; 系统架构</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">01</span> 第一部分 · 认识项目</span>
+    <h1>系统架构</h1>
+    <p class="lead">从手机 UI 到本机 CLI 的分层与数据路径。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 14 分钟</span>
+      <span><span class="lbl">第</span> 4 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 README.md · src/server/app.js · server.js</span>
+    </div>
+  </header>
+<p class="lead-extra">系统是一条默认上锁的转发链：手机 UI 经 Socket.IO 到本机 server，再经 Agent SDK 驱动 claude CLI 读写你的工作区。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>分层总览</h2>
+<div class="mermaid">
+flowchart LR
+  subgraph Phone["手机"]
+    UI["public/ 单页\n气泡·工具卡·审批"]
+  end
+  subgraph Edge["公网可选"]
+    CF["Cloudflare Tunnel\n+ Access"]
+  end
+  subgraph Host["本机"]
+    S["server.js + src/server\nExpress · Socket.IO · 鉴权"]
+    A["AgentSession\nSDK query · 权限闸 · 信封缓冲"]
+    SDK["claude-agent-sdk"]
+    CLI["本机 claude CLI"]
+    FS["WORK_DIR 项目文件"]
+    J["CCM_DATA_DIR\n元数据"]
+  end
+  UI <-->|"agent:event / user:*"| CF
+  CF <--> S
+  UI <-.->|"LAN #token"| S
+  S <--> A
+  A <--> SDK
+  SDK <--> CLI
+  CLI <--> FS
+  S --- J
+</div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>后端域划分</h2>
+<table>
+<thead><tr><th>目录</th><th>职责</th></tr></thead>
+<tbody>
+<tr><td><code>src/server/</code></td><td>组装根（sink）：HTTP 壳、Socket 契约、实例生命周期与业务接线</td></tr>
+<tr><td><code>src/agent/</code></td><td>SDK 桥、审批台账、消息去重、模型缓存、CLI mirror</td></tr>
+<tr><td><code>src/auth/</code></td><td>CF Access JWT、设备 TOFU、鉴权限速</td></tr>
+<tr><td><code>src/sessions/</code></td><td>会话元数据、transcript 历史、工作区白名单、worktree 发现</td></tr>
+<tr><td><code>src/files/</code></td><td>上传、只读浏览/预览、路径闸</td></tr>
+<tr><td><code>src/ops/</code></td><td>审计、指标、推送、statusline、doctor</td></tr>
+<tr><td><code>src/shared/</code></td><td>叶子：日志时间戳、脱敏、串行写盘</td></tr>
+</tbody>
+</table>
+
+<p><code>src/server</code> 是唯一组装 sink：只有 <code>server.js</code> 与 <code>src/server/*</code> 可 import 它。域模块不得反向依赖 server。边界由 <code>scripts/check-import-boundaries.js</code> 在 <code>npm run check</code> 中硬闸。</p>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>消息流程（五步）</h2>
+<ol class="steps">
+  <li><strong>发送。</strong>手机 <code>user:message {text}</code> → server 校验 → 路由到 <code>agents.get(instanceId)</code>（懒开 FRESH 或 resume）。</li>
+  <li><strong>驱动。</strong>文本进入 AgentSession 的 streaming input → SDK → CLI 在 <code>WORK_DIR</code> 执行。</li>
+  <li><strong>映射。</strong>SDK 消息经 <code>map()</code>：流式文本 → <code>text_delta</code>；工具 → <code>tool_use</code> / <code>tool_result</code>；白名单外 → <code>permission_request</code>。</li>
+  <li><strong>信封。</strong>每个事件套 <code>{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}</code> → 入 2000 条环形缓冲 → <code>io.emit</code>（前端按 <code>viewingInstanceId</code> 分流；后台 tab 的高频 delta 不广播以省带宽）。</li>
+  <li><strong>补发。</strong>断线重连 <code>sync:since {lastSeq}</code> 从缓冲回放；<code>epoch</code> 变化表示服务端换了实例，客户端重置去重基线。</li>
+</ol>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>启动路径</h2>
+<pre><code>server.js
+  loadRuntimeEnvironment()   # dotenv；ANTHROPIC_* 只认 shell
+  installLogTimestamps()
+  dynamic import src/server/app.js
+    initCfAccess / parseServerConfig
+    preflight（WORK_DIR、CLAUDE_BIN、workDirs）
+    Express + Socket.IO + 鉴权 + instance manager
+    expireOrphanedPending + 审批留存清扫
+    listen(port, AUTH_TOKEN ? 0.0.0.0 : 127.0.0.1)</code></pre>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>无 <code>AUTH_TOKEN</code> 时只绑定 <code>127.0.0.1</code>，手机与隧道均不可达。这是有意设计，不是故障。
+</div></div>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>前端结构</h2>
+<ul>
+  <li><code>public/js/app.js</code>：大壳，socket 与 UI 编排。</li>
+  <li><code>public/js/logic.js</code>：纯决策（禁 DOM/socket），与 node:test 共用。</li>
+  <li><code>public/js/canonicalize.js</code>：前后端共享操作规范化（边界白名单）。</li>
+  <li><code>public/js/app/*</code>：会话、附件、审批、设置、通知等子控制器。</li>
+  <li><code>public/vendor/</code>：第三方库本地自托管，不依赖 CDN。</li>
+</ul>
+
+        <nav class="pager"><a class="prev" href="overview.html"><span class="dir">← 上一篇</span><span class="ttl">项目总览</span></a><a class="next" href="boundaries.html"><span class="dir">下一篇 →</span><span class="ttl">职责边界</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">分层总览</a></li><li class="h2"><a href="#s2">后端域划分</a></li><li class="h2"><a href="#s3">消息流程（五步）</a></li><li class="h2"><a href="#s4">启动路径</a></li><li class="h2"><a href="#s5">前端结构</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

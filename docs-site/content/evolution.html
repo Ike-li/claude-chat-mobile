@@ -1,0 +1,38 @@
+<p class="lead-extra">今天的架构来自一串可观察的决策，而不是一次性设计文档。以下主线由 git 历史与现行代码交叉归纳。</p>
+
+<h2>主线阶段</h2>
+<div class="path">
+  <div class="node"><span class="pnum">桥接层</span><h4>Web ↔ Agent SDK ↔ CLI</h4><p>以 streaming input 与事件映射为中心；server 作为契约层而非业务 agent。</p></div>
+  <div class="node"><span class="pnum">同步</span><h4>信封 · 缓冲 · catch-up</h4><p><code>seq</code>/<code>epoch</code> 信封、2000 条环形缓冲、<code>sync:since</code> 重连补发；断线可恢复。</p></div>
+  <div class="node"><span class="pnum">驾驶权</span><h4>单驾驶员 + 只读镜像</h4><p>Web 与终端不可同时写同一会话；CLI 驾驶时 Web 只读追平 transcript，发送路径接管。</p></div>
+  <div class="node"><span class="pnum">安全纵深</span><h4>token · TOFU · Access</h4><p>无 token 绑 127.0.0.1；设备指纹审批；可选 Cloudflare Access JWT fail-closed。</p></div>
+  <div class="node"><span class="pnum">工程门禁</span><h4>check 流水线</h4><p>ESLint、import 边界、双向事件契约、inventory、文档一致性；AI 会话下防止结构回缠。</p></div>
+  <div class="node"><span class="pnum">文档极简</span><h4>宣传层撤出主分支</h4><p>2026-07-19 起设计长文与演示场景下线；产品 docs 只留部署与 inventory；宣传物迁 gh-pages / promo。</p></div>
+</div>
+
+<h2>近期可观察提交主题（dev）</h2>
+<table>
+<thead><tr><th>主题</th><th>代表方向</th></tr></thead>
+<tbody>
+<tr><td>同步 / mirror</td><td>externalDirty、镜像锁自动释放、busy reseed、重连误判修复</td></tr>
+<tr><td>状态可见性</td><td>CLI 式动态状态行、回合收尾行、服务状态面板判定化</td></tr>
+<tr><td>排队与交互</td><td>排队可见、撤回重编辑、原生 confirm 改 sheet</td></tr>
+<tr><td>运维</td><td>日志时间戳、copy-truncate 轮转、客户端错误上报</td></tr>
+<tr><td>仓库边界</td><td>宣传层下线、demo 场景拆除、worktree 会话触达、.worktrees 约定</td></tr>
+</tbody>
+</table>
+
+<h2>有意保留的「上帝模块」</h2>
+<p><code>src/server/app.js</code> 仍是组装根本体：mirror / catchUp / openInstance 与契约路由共享同一组顶层可变状态（viewing*、mirror*、catchUp*）。域逻辑已下沉，但接线有意不拆成多个上下文穿针——注释与边界守卫共同说明这一点。</p>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>代码注释中大量 <code>docs/design.md</code> / AD-x / NFR-x 溯源标记是历史决策锚点；文件本身已删除，标记有意保留，勿当作仍存在的文档路径。
+</div></div>
+
+<h2>分支与产物解耦</h2>
+<ul>
+  <li>产品开发线：master / dev。</li>
+  <li>展示：gh-pages 孤儿分支（landing + 本手册）。</li>
+  <li>文案：promo 孤儿分支。</li>
+</ul>
+<p>宣传物与产品源码解耦，避免主分支再次被素材与生成脚本淹没。</p>

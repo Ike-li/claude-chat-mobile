@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>终端等价性 · Claude Chat Mobile</title>
+<meta name="description" content="CLI 有什么 Web 就有什么；权限与配置同源。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html" class="active"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第三部分 · 方法论</b> &nbsp;/&nbsp; 终端等价性</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">03</span> 第三部分 · 方法论</span>
+    <h1>终端等价性</h1>
+    <p class="lead">CLI 有什么 Web 就有什么；权限与配置同源。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 7 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 CLAUDE.md · README.md</span>
+    </div>
+  </header>
+<p class="lead-extra">Claude Chat Mobile 的产品目标是终端等价：CLI 有什么，Web 就有什么。实现上不重造 Agent 能力，而是用 Agent SDK 驱动本机已登录的 <code>claude</code> CLI，并与 CLI 共用配置、权限与 transcript。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>等价原则</h2>
+<blockquote><p>当你不知道怎么处理功能时，CLI 有什么 web 就有什么，请找一找 claude code cli 是怎么实现这个功能的。—— <code>CLAUDE.md</code></p></blockquote>
+<p>本项目不是远程桌面，也不是另一套 Claude 客户端。手机上的一次发送、一次审批、一次切模型，应与坐在本机终端前操作同一会话等价。遇到「Web 还缺什么」时，默认动作是<strong>找 CLI 现有实现与配置面</strong>，而不是在转发层另开一套语义。</p>
+
+<div class="cards">
+  <div class="card"><span class="k">01</span><h4>同源驱动</h4><p>Agent SDK 拉起本机 CLI 子进程，而不是另写一套工具循环。</p></div>
+  <div class="card"><span class="k">02</span><h4>同源配置</h4><p><code>settingSources: ['user','project','local']</code>，与 CLI 读同一组 settings。</p></div>
+  <div class="card"><span class="k">03</span><h4>同源会话</h4><p>transcript 落在 <code>~/.claude/projects</code>，与 CLI <code>/resume</code> 同一事实源。</p></div>
+</div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>配置加载：settingSources</h2>
+<pre><code>settingSources: ['user', 'project', 'local']</code></pre>
+<p>含义与 CLI 一致：用户级、项目级、本地覆盖依次参与合并。模型默认、权限白名单、env 块等由这些 settings 决定，转发层不维护平行配置权威。</p>
+<div class="callout tip"><div class="body">
+<strong>建议</strong>改权限或默认模型时，先改 <code>~/.claude/settings.json</code> 或工作区 <code>.claude/settings.json[.local]</code>，再在 Web 验证；不要在 CCM 里另造白名单文件。
+</div></div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>权限：不注入 allowedTools</h2>
+<p>SDK 选项<strong>不注入</strong> <code>options.allowedTools</code>。放行白名单完全交给 settingSources 加载的 settings 里 <code>permissions.allow</code> 并集（与终端 claude 同源、由用户自管）。SDK 把 settings 的 allow 当作「自动放行、不触发 canUseTool」的第一层；未命中则进入统一闸门 canUseTool。</p>
+<table>
+<thead><tr><th>层</th><th>行为</th></tr></thead>
+<tbody>
+<tr><td>settings <code>permissions.allow</code></td><td>命中则自动放行，不弹手机审批</td></tr>
+<tr><td><code>canUseTool</code></td><td>白名单外统一闸门；按当前权限档 allow / deny / 弹窗</td></tr>
+<tr><td>转发层自建白名单</td><td>不维护；避免与 CLI 分叉</td></tr>
+</tbody>
+</table>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>公网暴露前务必审查全局 <code>~/.claude/settings.json</code>。终端里多年累积的 <code>Bash(…)</code> / <code>Write</code> 规则在手机侧也会自动放行，不会再弹审批。
+</div></div>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>权限档</h2>
+<p>代码白名单（<code>setPermissionMode</code> / <code>CCM_PERMISSION_MODES</code>）为 <strong>六档</strong>：</p>
+<table>
+<thead><tr><th>档</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>default</code></td><td>默认审批；白名单外走 canUseTool 弹窗</td></tr>
+<tr><td><code>plan</code></td><td>计划模式，与 CLI plan 语义一致</td></tr>
+<tr><td><code>acceptEdits</code></td><td>接受编辑类操作的放宽档</td></tr>
+<tr><td><code>bypassPermissions</code></td><td>实例记真实 bypass；给 SDK 映射为 <code>default</code>，由 <code>handleCanUseTool</code> 直接 allow（避免 SDK 危险全局 flag）</td></tr>
+<tr><td><code>dontAsk</code></td><td>Web 专属严格档：白名单外 deny、手机不弹窗；CLI transcript 不会出现</td></tr>
+<tr><td><code>auto</code></td><td>SDK 用模型分类器自动批准/拒绝权限请求</td></tr>
+</tbody>
+</table>
+<p>从 CLI transcript 恢复时，可读档为 default / plan / acceptEdits / bypassPermissions 等 CLI 可写出的档；dontAsk 属 Web 专属，不会从 CLI transcript 读回。</p>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>会话与 transcript</h2>
+<pre><code>~/.claude/projects/&lt;编码 cwd&gt;/&lt;session_id&gt;.jsonl</code></pre>
+<p>CCM 的 sessions.json 只存元数据，不存消息正文。列表与历史冷读与 CLI /resume 同源扫描该目录；历史封顶 HISTORY_MAX_MESSAGES = 2000。</p>
+
+<h2 id="s6"><a class="anchor" href="#s6" aria-hidden="true"></a>模型与 effort</h2>
+<p>模型可在发送路径切换。思考强度 <code>effort</code> 在 spawn 时注入 SDK options（与终端 <code>/effort</code> 同旋钮）；<strong>SDK 无运行时 effort 控制请求</strong>。Web 侧 <code>user:setEffort</code> 的切档路径是 server <strong>dispose 当前实例 + 同 sessionId resume 新实例</strong>（instanceId / epoch 会变），不是 in-place 改活进程。新会话（FRESH）的默认档来自 CLI settings 合并结果，而不是「继承本 cwd 上一个 Web 实例的末档」——贴近「新起一条 claude 是干净默认」。</p>
+
+<div class="kv">
+  <div class="row"><div class="key">驱动</div><div class="val">Agent SDK → 本机 claude CLI</div></div>
+  <div class="row"><div class="key">配置源</div><div class="val">user / project / local</div></div>
+  <div class="row"><div class="key">工具白名单</div><div class="val">settings permissions.allow 并集，不注入 allowedTools</div></div>
+  <div class="row"><div class="key">transcript</div><div class="val">~/.claude/projects</div></div>
+</div>
+
+<h2 id="s7"><a class="anchor" href="#s7" aria-hidden="true"></a>发送与接收路径</h2>
+<pre><code>发送：Web → Agent SDK → Claude Code CLI
+接收：Claude Code CLI → Agent SDK → Web</code></pre>
+
+<h2 id="s8"><a class="anchor" href="#s8" aria-hidden="true"></a>刻意不对齐之处</h2>
+<ul>
+  <li>手机 UI 是触控优先的聊天壳，不是终端仿真器（斜杠命令、相册附图、长按复制等）。</li>
+  <li>Web resume 是冷读 transcript，不能 attach 正在运行的 CLI 活进程（见<a href="single-driver.html">单驾驶员</a>）。</li>
+  <li>通知、PWA、设备 TOFU 是桥接层能力，CLI 本身没有对应物。</li>
+  <li>状态文案 / spinner / statusline 尽量对齐 CLI 语义，交互壳可以是手机 UI，但权限与会话语义不得分叉。</li>
+</ul>
+
+        <nav class="pager"><a class="prev" href="evolution.html"><span class="dir">← 上一篇</span><span class="ttl">架构演进主线</span></a><a class="next" href="security-model.html"><span class="dir">下一篇 →</span><span class="ttl">安全模型</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">等价原则</a></li><li class="h2"><a href="#s2">配置加载：settingSources</a></li><li class="h2"><a href="#s3">权限：不注入 allowedTools</a></li><li class="h2"><a href="#s4">权限档</a></li><li class="h2"><a href="#s5">会话与 transcript</a></li><li class="h2"><a href="#s6">模型与 effort</a></li><li class="h2"><a href="#s7">发送与接收路径</a></li><li class="h2"><a href="#s8">刻意不对齐之处</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

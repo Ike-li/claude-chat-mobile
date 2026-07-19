@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鉴权与设备信赖 · Claude Chat Mobile</title>
+<meta name="description" content="AUTH_TOKEN、CF Access、限速、设备指纹 TOFU。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html" class="active"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第四部分 · 核心实现</b> &nbsp;/&nbsp; 鉴权与设备信赖</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">04</span> 第四部分 · 核心实现</span>
+    <h1>鉴权与设备信赖</h1>
+    <p class="lead">AUTH_TOKEN、CF Access、限速、设备指纹 TOFU。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 12 分钟</span>
+      <span><span class="lbl">第</span> 16 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 src/auth/ · src/server/http.js</span>
+    </div>
+  </header>
+<p class="lead-extra">鉴权是纵深结构：token（或 Access JWT）证明「知道密钥」；设备 TOFU 证明「这台设备被主人批过」。合法 token  alone 不足以操作未信任设备上的业务。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>绑定与可达性</h2>
+<table>
+<thead><tr><th>条件</th><th>listen host</th><th>可达性</th></tr></thead>
+<tbody>
+<tr><td><code>AUTH_TOKEN</code> 非空</td><td><code>0.0.0.0</code></td><td>LAN + 隧道可达</td></tr>
+<tr><td>未设 / 空串</td><td><code>127.0.0.1</code></td><td>仅本机；手机与隧道均不可达（有意）</td></tr>
+</tbody>
+</table>
+<p>代码：<code>src/server/app.js</code> 中 <code>host = AUTH_TOKEN ? '0.0.0.0' : '127.0.0.1'</code>。</p>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>HTTP 与 Socket 共用</h2>
+<ul>
+  <li>Token 匹配：HTTP 用头 <code>x-auth-token</code> 或查询 <code>?token=</code>；Socket 用握手 auth。</li>
+  <li>限速 Map 共享：<code>/health</code>、<code>/metrics</code>、<code>/push/*</code> 与 socket 握手共用，防无限试 token（默认连续失败阈值与锁定逻辑在 <code>rate-limiter.js</code>）。</li>
+  <li>公网 Host 且 Access 启用时：优先 JWT；LAN / 其它 Host 用 token。</li>
+  <li>无鉴权门（无 token 且非公网 Host）时限速不激活：本机调试路径 auth 恒过。</li>
+</ul>
+
+<div class="mermaid">
+flowchart TD
+  Conn["新连接"] --> Pub{"公网 Host\n且 Access 已配?"}
+  Pub -->|是| JWT["校验 CF Access JWT\nfail-closed"]
+  Pub -->|否| Tok{"AUTH_TOKEN\n匹配?"}
+  JWT --> RL["限速 onAuthResult"]
+  Tok -->|否| Deny["拒绝"]
+  Tok -->|是| RL
+  RL --> Dev{"本机或已信任\n或 Access?"}
+  Dev -->|否| Pending["TOFU pending"]
+  Dev -->|是| OK["进入业务房间 approved"]
+</div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>Cloudflare Access</h2>
+<p><code>CF_ACCESS_HOSTNAME</code>、<code>CF_ACCESS_TEAM</code>、<code>CF_ACCESS_AUD</code> <strong>三项齐全</strong>才启用。校验经 jose + JWKS（缓存 <code>cf-access-certs.json</code>），失败则拒绝。任一缺失则整层关闭，回退 token 路径。改 env 后须重启常驻 server。</p>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>OTP 已过但 app 仍连不上：多为 JWT 校验失败（TEAM/AUD 与 CF 应用不一致）。日志搜「Access JWT」。
+</div></div>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>设备信赖（TOFU）</h2>
+<table>
+<thead><tr><th>文件</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td><code>$CCM_DATA_DIR/trusted-devices.json</code></td><td>已信任设备（含 deviceToken）</td></tr>
+<tr><td><code>$CCM_DATA_DIR/pending-devices.json</code></td><td>等待批准的设备请求</td></tr>
+</tbody>
+</table>
+<ul>
+  <li>本机 loopback（<code>127.0.0.1</code> / <code>::1</code> / <code>localhost</code>）可跳过设备门。</li>
+  <li>非本机须批准后才能进入业务房间 <code>approved</code>。</li>
+  <li>CLI：<code>node scripts/device.js list|approve &lt;ID&gt;|deny &lt;ID&gt;</code>（与 server 读同一 <code>CCM_DATA_DIR</code>）。</li>
+  <li>待批通过 <code>pending_devices</code> 等事件推到已信任端；UI 亦可批准。</li>
+</ul>
+
+<div class="callout danger"><div class="body">
+<strong>危险</strong>任意把公网流量反代到 127.0.0.1 的拓扑（nginx/Caddy 的 <code>proxy_pass localhost</code>、SSH 转发、frp 等），都会让 peer 显「本机」，从而跳过设备审批，防线只剩 token（+ 若开 Access 则 JWT）。Cloudflare 命名隧道落到 localhost 时同样显本机，但公网有 Access 兜底，本配方可接受。
+</div></div>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>与审批台账的区别</h2>
+<p>设备 TOFU 管「谁可以连上来操作」；工具 <code>permission_request</code> 管「CLI 是否执行某条命令」。二者都是 fail-closed 纵深，不可互相替代。重启后设备信任仍在磁盘；在途工具审批回调死亡，磁盘 pending 会标过期。</p>
+
+<p>实现：<code>src/auth/*</code>、<code>src/server/http.js</code>、<code>src/server/app.js</code> 握手段。</p>
+
+        <nav class="pager"><a class="prev" href="sessions-history.html"><span class="dir">← 上一篇</span><span class="ttl">会话与历史</span></a><a class="next" href="files-upload.html"><span class="dir">下一篇 →</span><span class="ttl">文件与上传</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">绑定与可达性</a></li><li class="h2"><a href="#s2">HTTP 与 Socket 共用</a></li><li class="h2"><a href="#s3">Cloudflare Access</a></li><li class="h2"><a href="#s4">设备信赖（TOFU）</a></li><li class="h2"><a href="#s5">与审批台账的区别</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

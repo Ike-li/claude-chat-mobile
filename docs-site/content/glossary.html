@@ -1,0 +1,36 @@
+<p class="lead-extra">高频专有名词的准确定义。阅读实现章节前建议扫一遍。</p>
+
+<table>
+<thead><tr><th>术语</th><th>定义</th></tr></thead>
+<tbody>
+<tr><td><code>instanceId</code></td><td>进程内 AgentSession 实例 ID（如 <code>inst_N</code>）。换实例会变。</td></tr>
+<tr><td><code>sessionId</code></td><td>Claude CLI 会话 ID，与 transcript 文件名对应。</td></tr>
+<tr><td><code>epoch</code></td><td>实例世代号。新实例更大；客户端见变化应重置 seq 去重基线。</td></tr>
+<tr><td><code>seq</code></td><td>实例内事件序号，单调递增；用于 <code>sync:since</code> 补发。</td></tr>
+<tr><td>envelope</td><td><code>agent:event</code> 外层：<code>{seq,epoch,sessionId,instanceId,cwd,ts,type,payload}</code>。</td></tr>
+<tr><td>AgentSession</td><td><code>src/agent/agent.js</code> 中长驻 SDK query 的运行时对象。</td></tr>
+<tr><td><code>viewingInstanceId</code></td><td>当前「正在看」的实例；影响高频 delta 是否广播。</td></tr>
+<tr><td><code>mirrorReadonly</code></td><td>CLI 驾驶时的 Web 只读锁，锁定输入。</td></tr>
+<tr><td><code>externalDirty</code></td><td>捕获到终端对 transcript 的外部写入后的脏标记。</td></tr>
+<tr><td>FRESH</td><td>无 resumeId 的新开会话；不继承 cwd 末实例档位。</td></tr>
+<tr><td>resume</td><td>以已有 sessionId 冷读/续接 transcript。</td></tr>
+<tr><td>TOFU</td><td>Trust On First Use：设备首次须本机批准。</td></tr>
+<tr><td><code>CCM_DATA_DIR</code></td><td>控制面数据根（sessions/devices/audit/push 等）。</td></tr>
+<tr><td><code>WORK_DIR</code></td><td>默认工作目录（claude cwd）。</td></tr>
+<tr><td><code>settingSources</code></td><td>SDK 加载 settings 的来源：user / project / local。</td></tr>
+<tr><td><code>canUseTool</code></td><td>SDK 权限回调；未放行则弹 <code>permission_request</code>。</td></tr>
+<tr><td><code>permission_request</code></td><td>需用户批准的工具调用事件。</td></tr>
+<tr><td><code>sync:since</code></td><td>客户端按 lastSeq 请求缓冲回放。</td></tr>
+<tr><td>catchUp</td><td>轮询 jsonl 增量，镜像 CLI 写入。</td></tr>
+<tr><td>ring buffer</td><td>每实例事件环形缓冲，cap <strong>2000</strong>。</td></tr>
+<tr><td>worktree sessions</td><td>发现 git worktree 内会话，使 Web 触达「cd 进 worktree 即 resume」的等价物。</td></tr>
+<tr><td>statusline bridge</td><td>可选包装：CLI 驾驶时把 CLI statusline 快照同步给 Web。</td></tr>
+<tr><td><code>effort</code></td><td>思考强度；spawn 时注入 SDK options。Web 切档经 <code>user:setEffort</code> → dispose+resume，不可 in-place 改活进程。</td></tr>
+<tr><td><code>auto</code>（权限档）</td><td>六合法档之一：SDK 模型分类器自动批/拒；另五档 default / plan / acceptEdits / bypassPermissions / dontAsk。</td></tr>
+<tr><td>CLI doctor vs UI 体检</td><td>CLI：<code>scripts/doctor.js</code> 固定 D1–D11。UI：<code>doctor-runtime.js</code> 另含 Access/设备门/VAPID/白名单等，勿混为一谈。</td></tr>
+</tbody>
+</table>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>事实基线探针 dev@8084005。契约事件数：入向 32、出向 25——以 <code>scripts/agent-event-contract.js</code> 为准。
+</div></div>

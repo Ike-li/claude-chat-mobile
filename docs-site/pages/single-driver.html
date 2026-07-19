@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>单驾驶员模型 · Claude Chat Mobile</title>
+<meta name="description" content="Web 与 CLI 不可同时写同一会话；镜像只读追平。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html" class="active"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第三部分 · 方法论</b> &nbsp;/&nbsp; 单驾驶员模型</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">03</span> 第三部分 · 方法论</span>
+    <h1>单驾驶员模型</h1>
+    <p class="lead">Web 与 CLI 不可同时写同一会话；镜像只读追平。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 9 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 src/agent/cli-mirror-state.js · src/sessions/history.js</span>
+    </div>
+  </header>
+<p class="lead-extra">同一 <code>sessionId</code> 在同一时刻只允许一个驾驶员写入。Web 与本机 CLI 不能并行写同一会话；后到的一方只读镜像或置换冷读，避免 transcript 分叉。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>为什么需要单驾驶员</h2>
+<p>会话内容的权威落点是 CLI transcript（jsonl）。若 Web 侧 SDK 子进程与终端里正在跑的 CLI 同时向同一 sessionId 追加轮次，会出现双 parent 链、模型上下文滞后、手机与终端各说各话。单驾驶员把「谁可以 send」收成互斥问题，而不是事后合并冲突。</p>
+
+<div class="cards">
+  <div class="card"><span class="k">CLI 驾</span><h4>Web 只读镜像</h4><p>追平磁盘 transcript，输入锁为只读。</p></div>
+  <div class="card"><span class="k">Web 驾</span><h4>SDK 长驻 query</h4><p>正常发送、审批、中断。</p></div>
+  <div class="card"><span class="k">外部脏</span><h4>externalDirty</h4><p>磁盘已超前于 SDK 内存，发送前须置换。</p></div>
+</div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>三种形态</h2>
+<table>
+<thead><tr><th>形态</th><th>写入者</th><th>Web 行为</th></tr></thead>
+<tbody>
+<tr><td>Web 驾驶</td><td>本进程 AgentSession</td><td>正常发送；状态栏取 SDK</td></tr>
+<tr><td>CLI 驾驶（只读镜像）</td><td>终端 CLI</td><td>输入锁定；catch-up 追 transcript；可选 statusline bridge</td></tr>
+<tr><td>接管</td><td>Web 在镜像下成功 send</td><td>清 mirrorReadonly；dispose+resume 后 Web 驾驶</td></tr>
+</tbody>
+</table>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>镜像机制</h2>
+<div class="kv">
+  <div class="row"><div class="key">catchUpTick</div><div class="val">轮询当前查看会话的 jsonl 增量 → history_append；只读时约 1s 一拍，常态约 2.5s</div></div>
+  <div class="row"><div class="key">mirror_state</div><div class="val">广播只读锁与观察态（model/permission 等）</div></div>
+  <div class="row"><div class="key">mirrorEntryLock</div><div class="val">切入会话时预锁（尾部 pending）</div></div>
+  <div class="row"><div class="key">mirrorReleaseStep</div><div class="val">安静约 12.5s 后自动释放只读锁（文件仍增长则 keepAlive）</div></div>
+  <div class="row"><div class="key">cli-mirror-state</div><div class="val">只读观察 CLI 落盘偏好，不写回 Web 实例偏好</div></div>
+</div>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>Web resume 是<strong>冷读</strong> transcript，不能 attach 正在运行的 CLI 活进程。正在终端里跑的会话，Web 侧只能镜像或等其结束后再 resume。
+</div></div>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>长工具若长时间不写盘，仅靠「文件增长」会误判静默；实现用 tailPending / keepAlive 等互补判据，避免横幅误灭成「感觉没在跑」。
+</div></div>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>externalDirty 与发送</h2>
+<ol class="steps">
+  <li>catch-up 或 rebaseline 发现磁盘已超前 → 标记 <code>externalDirty</code>。</li>
+  <li>用户发送时若实例 <strong>idle</strong>：dispose + resume，冷读磁盘后再发（吸收终端写入）。</li>
+  <li>若实例 <strong>busy</strong>：硬拒绝（NACK），可重试；不是静默排队。</li>
+</ol>
+<p><code>externalDirty</code> 只约束「下次 Web 写入前必须吸收磁盘」；它不单独把 statusline 锁到 CLI——statusline 是否走 CLI 快照看 <code>mirrorReadonly</code>。</p>
+
+<div class="mermaid">
+flowchart LR
+  A["查看会话"] --> B{"尾部/锁判定"}
+  B -->|"CLI 在写"| C["mirrorReadonly"]
+  C --> D["catchUpTick 追平"]
+  D --> E["mirrorReleaseStep ~12.5s"]
+  E -->|"静默满"| F["解锁可输入"]
+  B -->|"外部已超前"| G["externalDirty"]
+  G --> H{"发送时 idle?"}
+  H -->|是| I["dispose + resume 冷读"]
+  H -->|否| J["NACK"]
+</div>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>切回运行中会话（busy reseed）</h2>
+<p>从其他标签切回仍在跑的会话时，前端按 server 权威 state 重种运行指示，避免「其实还在跑，UI 却像空闲」。权威来源是 instances 等载荷中的 state，而非本地 spinner 记忆。</p>
+
+<h2 id="s6"><a class="anchor" href="#s6" aria-hidden="true"></a>已知边界</h2>
+<ul>
+  <li>mirror 全局单值（非 per-连接）；切视图会清理，设计上未做细粒度 per-socket 锁。</li>
+  <li>catchUp 主要盯<strong>当前查看</strong>会话。</li>
+  <li>busy→idle 窗口内部分终端写入可能被吸收而不标脏（有意取舍，防重复气泡）。</li>
+  <li>环形事件缓冲 2000 与历史消息 2000 上限是不同轴（事件信封 vs transcript 条数）。</li>
+</ul>
+
+        <nav class="pager"><a class="prev" href="security-model.html"><span class="dir">← 上一篇</span><span class="ttl">安全模型</span></a><a class="next" href="contracts-gates.html"><span class="dir">下一篇 →</span><span class="ttl">契约与工程门禁</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">为什么需要单驾驶员</a></li><li class="h2"><a href="#s2">三种形态</a></li><li class="h2"><a href="#s3">镜像机制</a></li><li class="h2"><a href="#s4">externalDirty 与发送</a></li><li class="h2"><a href="#s5">切回运行中会话（busy reseed）</a></li><li class="h2"><a href="#s6">已知边界</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

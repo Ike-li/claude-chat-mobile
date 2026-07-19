@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>漂移清单 · Claude Chat Mobile</title>
+<meta name="description" content="文档与代码不一致处，以代码为准。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html" class="active"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第七部分 · 参考与规范</b> &nbsp;/&nbsp; 漂移清单</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">07</span> 第七部分 · 参考与规范</span>
+    <h1>漂移清单</h1>
+    <p class="lead">文档与代码不一致处，以代码为准。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 8 分钟</span>
+      <span><span class="lbl">第</span> 28 / 28 篇</span>
+      
+    </div>
+  </header>
+<p class="lead-extra">下列条目是文档/注释与当前代码之间已知不一致。阅读与改需求时以代码与本手册为基线。</p>
+
+<table>
+<thead><tr><th>条目</th><th>文档/注释侧</th><th>代码侧（为准）</th></tr></thead>
+<tbody>
+<tr><td>设计长文</td><td>多处注释仍写 <code>docs/design.md</code>；旧链到该文件章节</td><td>文件已删（2026-07-19）。安全权威 = README「安全模型」；运维 = <code>docs/deployment.md</code></td></tr>
+<tr><td>repository-map 分类</td><td>生成表把大量 <code>src/**</code> 标成统一 domain module</td><td>边界脚本另有 sink/分层语义；map 是 inventory 用途，不区分组装根</td></tr>
+<tr><td>workdirs 配置名</td><td>CLAUDE/口语常说「workdirs.json 热加载」</td><td>契约环境变量名是 <code>WORK_DIRS_FILE</code>（值常为仓库根 workdirs.json）；未设则回退 WORK_DIRS 且无热加载</td></tr>
+<tr><td>SHARED_ALLOWLIST</td><td>allowlist 含 <code>logic.js</code>（注释：server 与浏览器共用）</td><td>后端实际主要 import <code>canonicalize.js</code>；logic 以浏览器与单测消费为主</td></tr>
+<tr><td>缓冲数字</td><td>历史文档可能写 500 等</td><td>环形缓冲 <strong>2000</strong>（BUFFER_CAP）；HISTORY_MAX_MESSAGES 亦 2000</td></tr>
+<tr><td>需求来源</td><td>旧 design / demo 场景族 / 宣传脚本</td><td>7/19 起已撤出主开发线；勿按已删 design 找需求；demo 脚本需从 git 历史找回</td></tr>
+<tr><td>AD-x / NFR-x 注释</td><td>代码中大量溯源标记</td><td>文件已删，标记有意保留；不是仍存在的文档路径</td></tr>
+</tbody>
+</table>
+
+<div class="callout drift"><div class="body">
+<strong>注释引用 design.md</strong>仍有多处实现文件在注释中写「承接 docs/design.md …」。那是溯源残留，不是文件仍存在。新改动勿再新增对该路径的依赖；安全与威胁模型以 README 与鉴权代码为准。
+</div></div>
+
+<div class="callout drift"><div class="body">
+<strong>热加载措辞</strong>对用户说「改 workdirs.json」通常没错（推荐文件名），但自动化与 env 模板必须写 <code>WORK_DIRS_FILE</code>。只改文件却未设置该 env，server 不会 watch。
+</div></div>
+
+<div class="callout drift"><div class="body">
+<strong>数字校验纪律</strong>凡手册或 PR 描述中的计数、默认毫秒、缓冲上限，应用 <code>rg</code> 对照 <code>src/</code> 与 <code>scripts/agent-event-contract.js</code>；不要从记忆或旧 markdown 抄。本手册探针基线：dev @ 8084005。
+</div></div>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>源码探针分支为 dev（HEAD <code>8084005</code>）；产物维护在 gh-pages 的 docs-site。<strong>本站不随 dev 自动重生成</strong>。发现新漂移时优先记入本页，再改叙述，避免静默「修文档盖住代码」。
+</div></div>
+
+<div class="callout drift"><div class="body">
+<strong>已纠偏（相对初稿）</strong>权限档为六值（含 <code>auto</code>），不是「五种」；effort 不可 in-place 改活进程，须 dispose+resume；doctor 区分 CLI 11 项与 UI 体检；入向 socket 以契约 <strong>32</strong> 个、出向 agent:event 以契约 <strong>25</strong> 个为完整列表（见<a href="api-events.html">事件与端点参考</a>）。
+</div></div>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>本手册自身边界</h2>
+<ul>
+  <li>不把 gh-pages landing 宣传文案当产品架构事实。</li>
+  <li>不把 promo 文案仓当源码。</li>
+  <li>inventory 数字（约 277 分类文件等）以生成 map 为准，会随 dev 变更。</li>
+  <li>关键数字/契约以代码与 <code>scripts/agent-event-contract.js</code> 为准；手册滞后时以代码胜。</li>
+</ul>
+
+        <nav class="pager"><a class="prev" href="env-reference.html"><span class="dir">← 上一篇</span><span class="ttl">环境变量参考</span></a><a class="next disabled"></a></nav>
+      </article>
+      
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

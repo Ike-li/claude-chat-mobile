@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>事件信封与同步 · Claude Chat Mobile</title>
+<meta name="description" content="agent:event 信封、seq/epoch、sync:since、catch-up。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html" class="active"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第四部分 · 核心实现</b> &nbsp;/&nbsp; 事件信封与同步</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">04</span> 第四部分 · 核心实现</span>
+    <h1>事件信封与同步</h1>
+    <p class="lead">agent:event 信封、seq/epoch、sync:since、catch-up。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 12 分钟</span>
+      <span><span class="lbl">第</span> 14 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 src/server/app.js · src/agent/agent.js</span>
+    </div>
+  </header>
+<p class="lead-extra">同步的单位是带序号的事件信封，而不是「整页 HTML」。客户端靠 seq / epoch 去重与补洞；磁盘侧另有 catch-up 追平 CLI 写入。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>信封</h2>
+<pre><code>{
+  seq, epoch, sessionId, instanceId, cwd, ts,
+  type,   // 契约内 agent:event type
+  payload
+}</code></pre>
+<ul>
+  <li><code>seq</code>：实例内单调递增；用于 <code>sync:since</code>。</li>
+  <li><code>epoch</code>：实例世代；换实例（effort 的 dispose+resume、dirty 置换、reclaim 等）后变大，客户端必须重置 lastSeq 基线。</li>
+  <li>入环形缓冲 cap=<strong>2000</strong>（<code>BUFFER_CAP</code>）；溢出丢最旧并可能标 gap。</li>
+  <li><code>emitTransient</code>：不占 seq、不进缓冲（如 <code>task_progress</code> 心跳）。</li>
+</ul>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>广播策略</h2>
+<ul>
+  <li>默认发往已批准设备房间 <code>approved</code>（<code>io.to('approved').emit('agent:event', …)</code>）。</li>
+  <li>高频 <code>text_delta</code> / <code>thinking_delta</code>：仅当该实例是当前 <code>viewingInstanceId</code> 时广播；后台 tab 仍写入缓冲，切回后用 <code>sync:since</code> 回放。</li>
+  <li>边界事件驱动角标 latch、推送节流、会话活动 touch。</li>
+</ul>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>调试「后台会话像没字」时，先确认是否仅靠 live 流、是否切回后触发了 sync；后台不播高频 delta 是带宽设计，不是丢失。
+</div></div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>sync:since</h2>
+<ol class="steps">
+  <li>客户端发送 <code>{ sessionId, lastSeq, instanceId }</code>。</li>
+  <li>服务端 <code>eventsSince(lastSeq)</code>：过滤已 resolve 的审批/提问（避免重弹）。</li>
+  <li>若缓冲被 trim 且存在空洞 → 标记 <code>gap</code> 并提示。</li>
+  <li>ack 可含 <code>pending</code> 快照（重建审批卡片）与 <code>diskLen</code>（对账终端写入量）。</li>
+  <li><code>epoch</code> 变化 = 新实例 → 客户端重置 lastSeq，不可混接旧流。</li>
+</ol>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>已 resolve 的审批不会从缓冲回放——必须以 pending 快照为准。极长轮次可能 gap，需依赖 history 全量或提示用户。
+</div></div>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>与 catch-up / mirror 的分工</h2>
+<table>
+<thead><tr><th>机制</th><th>数据源</th><th>用途</th></tr></thead>
+<tbody>
+<tr><td>环形缓冲 + sync:since</td><td>进程内存信封</td><td>Web 驾驶时的断线补发、切 tab 回放</td></tr>
+<tr><td>catchUpTick / history_append</td><td>磁盘 jsonl</td><td>CLI 驾驶时只读追平；标 externalDirty</td></tr>
+<tr><td>session:history</td><td>磁盘 jsonl 冷读</td><td>打开会话时全量/分页历史</td></tr>
+</tbody>
+</table>
+<p>详见<a href="single-driver.html">单驾驶员模型</a>。</p>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>出向 type 分组</h2>
+<table>
+<thead><tr><th>组</th><th>type</th></tr></thead>
+<tbody>
+<tr><td>流式内容</td><td><code>text_delta</code> <code>thinking_delta</code> <code>result</code></td></tr>
+<tr><td>工具</td><td><code>tool_use</code> <code>tool_result</code></td></tr>
+<tr><td>审批/提问</td><td><code>permission_request</code> <code>question</code> <code>request_resolved</code></td></tr>
+<tr><td>会话控制</td><td><code>init</code> <code>system</code> <code>error</code> <code>user_message</code></td></tr>
+<tr><td>状态</td><td><code>status_line</code> <code>permission_mode</code> <code>effort_mode</code> <code>models</code> <code>mirror_state</code> <code>instances</code></td></tr>
+<tr><td>任务</td><td><code>task_notification</code> <code>task_progress</code> <code>api_retry</code></td></tr>
+<tr><td>设备/日志</td><td><code>device_status</code> <code>pending_devices</code> <code>session_log</code> <code>history_append</code></td></tr>
+</tbody>
+</table>
+<p>完整 allowlist：出向 25 type、入向 32 事件——见<a href="api-events.html">事件与端点参考</a>。契约由 <code>npm run check</code> 中的 contract-check 硬闸；与源码冲突时以 <code>scripts/agent-event-contract.js</code> 为准。</p>
+
+        <nav class="pager"><a class="prev" href="agent-session.html"><span class="dir">← 上一篇</span><span class="ttl">AgentSession</span></a><a class="next" href="sessions-history.html"><span class="dir">下一篇 →</span><span class="ttl">会话与历史</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">信封</a></li><li class="h2"><a href="#s2">广播策略</a></li><li class="h2"><a href="#s3">sync:since</a></li><li class="h2"><a href="#s4">与 catch-up / mirror 的分工</a></li><li class="h2"><a href="#s5">出向 type 分组</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

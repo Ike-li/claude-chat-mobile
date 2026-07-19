@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>职责边界 · Claude Chat Mobile</title>
+<meta name="description" content="做什么、不做什么；与 CLI / 云 / SaaS 的分界。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html" class="active"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第一部分 · 认识项目</b> &nbsp;/&nbsp; 职责边界</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">01</span> 第一部分 · 认识项目</span>
+    <h1>职责边界</h1>
+    <p class="lead">做什么、不做什么；与 CLI / 云 / SaaS 的分界。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 8 分钟</span>
+      <span><span class="lbl">第</span> 5 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 README.md · SECURITY.md</span>
+    </div>
+  </header>
+<p class="lead-extra">接手者最需要的认知往往是「这事归谁」。本节把职责边界写死，避免按 SaaS 或远程桌面去设计。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>做什么</h2>
+<ul>
+  <li>把本机 <code>claude</code> CLI 接到手机浏览器（聊天 UI、工具卡片、审批、提问）。</li>
+  <li>与终端共享同一会话 transcript（<code>~/.claude/projects/…</code>）与配置来源（user / project / local settings）。</li>
+  <li>在 CLI 权限未命中时，把审批推到手机；命中则自动放行（与终端同源）。</li>
+  <li>提供多工作区白名单、多会话标签、附件上传、PWA 与尽力而为的推送。</li>
+  <li>提供 doctor / health / metrics 等运维面，便于自托管排查。</li>
+</ul>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>不做什么</h2>
+<table>
+<thead><tr><th>不做</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>多租户 / 账号体系 / Hosted SaaS</td><td>每实例单用户；任何通过鉴权的请求 = 坐在终端前的你</td></tr>
+<tr><td>Claude 重实现</td><td>不自带模型服务；不维护平行 agent 协议栈</td></tr>
+<tr><td>项目级 allowedTools 放行表</td><td>不注入 <code>allowedTools</code> / <code>disallowedTools</code>；放行集 = 用户已有 settings 的并集</td></tr>
+<tr><td>无 token 的公网开放</td><td>未设 <code>AUTH_TOKEN</code> 只绑 127.0.0.1</td></tr>
+<tr><td>把 CLI transcript 迁入仓库</td><td>控制面在 <code>CCM_DATA_DIR</code>；消息正文仍在 <code>~/.claude</code></td></tr>
+<tr><td>跨实例联邦 / 远程管理 SaaS</td><td>运维面有意克制</td></tr>
+</tbody>
+</table>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>与相邻系统的分界</h2>
+<div class="mermaid">
+flowchart TB
+  CCM["Claude Chat Mobile\n转发 + UI + 审批"]
+  CLI["claude CLI\n执行 · 权限 · MCP · skills"]
+  CF["Cloudflare\n隧道 + Access"]
+  Push["Web Push / ntfy"]
+  UserFS["用户工作区文件"]
+
+  CCM -->|"SDK query"| CLI
+  CLI --> UserFS
+  CF -->|"HTTPS 到 :3000"| CCM
+  CCM --> Push
+</div>
+
+<div class="kv">
+  <div class="row"><div class="key">Claude CLI</div><div class="val">真实执行者；权限策略与登录态的权威在 CLI 侧</div></div>
+  <div class="row"><div class="key">Cloudflare</div><div class="val">可选公网入口与 2FA；项目不内置 cloudflared 生命周期管理</div></div>
+  <div class="row"><div class="key">通知通道</div><div class="val">尽力而为；失败不阻断主对话循环</div></div>
+</div>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>安全相关边界（摘要）</h2>
+<ol class="steps">
+  <li><strong>单用户。</strong>不要当多租户服务部署。</li>
+  <li><strong>无 token 不出本机。</strong></li>
+  <li><strong>权限只继承 CLI。</strong>公网暴露前审查 <code>~/.claude/settings.json</code> 白名单。</li>
+  <li><strong>设备 TOFU。</strong>合法 token 不够；非本机设备须一次性批准。反代到 loopback 会跳过设备层——公网须 Access 或自觉强 token。</li>
+</ol>
+<p>完整叙述见<a href="security-model.html">安全模型</a>与 README 对应章节。</p>
+
+        <nav class="pager"><a class="prev" href="architecture.html"><span class="dir">← 上一篇</span><span class="ttl">系统架构</span></a><a class="next" href="evolution.html"><span class="dir">下一篇 →</span><span class="ttl">架构演进主线</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">做什么</a></li><li class="h2"><a href="#s2">不做什么</a></li><li class="h2"><a href="#s3">与相邻系统的分界</a></li><li class="h2"><a href="#s4">安全相关边界（摘要）</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>会话与历史 · Claude Chat Mobile</title>
+<meta name="description" content="sessions.json、transcript 冷读、worktree 会话发现。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html" class="active"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第四部分 · 核心实现</b> &nbsp;/&nbsp; 会话与历史</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">04</span> 第四部分 · 核心实现</span>
+    <h1>会话与历史</h1>
+    <p class="lead">sessions.json、transcript 冷读、worktree 会话发现。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 12 分钟</span>
+      <span><span class="lbl">第</span> 15 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 src/sessions/</span>
+    </div>
+  </header>
+<p class="lead-extra">会话有两层真相：Web 元数据在 <code>sessions.json</code>；消息正文在 CLI transcript jsonl。混淆两者是接手时最常见的误操作来源。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>双真相源</h2>
+<table>
+<thead><tr><th>层</th><th>路径</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td>元数据 SoT</td><td><code>$CCM_DATA_DIR/sessions.json</code></td><td>currentByCwd、标题、model/effort/permissionMode、隐藏列表、活动时间等</td></tr>
+<tr><td>消息 SoT</td><td><code>~/.claude/projects/&lt;encoded-cwd&gt;/&lt;sessionId&gt;.jsonl</code></td><td>完整 transcript；与 CLI <code>/resume</code> 同源</td></tr>
+</tbody>
+</table>
+
+<div class="callout drift"><div class="body">
+<strong>以代码为准</strong>改 sessions.json 不会改聊天内容。备份 <code>CCM_DATA_DIR</code> 不会带走对话正文；清仓库 <code>data/</code> 可能丢设备信任与指针，但 CLI 历史仍在。
+</div></div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>列表与冷读</h2>
+<ul>
+  <li>列表优先 SDK <code>listSessions</code>，失败回落扫盘；结果可与 sessions.json 元数据增强合并。</li>
+  <li>历史回显走鉴权 socket 事件 <code>session:history</code>，<strong>不开</strong>无鉴权 HTTP 数据端点。</li>
+  <li>冷读上限：<code>HISTORY_MAX_MESSAGES = 2000</code>。</li>
+  <li>CLI 系统噪音行经过滤（isMeta / 系统行启发式），避免污染镜像与尾部判定（如镜像锁释放、尾部 pending）。</li>
+  <li>resume 时可冷读会话末条 assistant 模型作 chip 回落展示（不写入 activeModel 以免误重置）。</li>
+</ul>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong><code>getSessionMessages</code> 返回的是清洗过的 message，不是 JSONL 原行。同步引擎（catch-up / mirror）必须读 jsonl 路径，不能用该 API 当事实源。
+</div></div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>打开路径：FRESH vs resume</h2>
+<table>
+<thead><tr><th>路径</th><th>触发</th><th>档位来源要点</th></tr></thead>
+<tbody>
+<tr><td>FRESH</td><td><code>session:new</code>；空首页首条消息无 resumeId</td><td>不继承 cwd 末实例 permission/effort；来自 CLI settings 默认与 UI pending</td></tr>
+<tr><td>resume</td><td>列表切入；懒开有 saved.id</td><td>sessions.json → transcript 末 mode/model → 继承逻辑；先 <code>prepareSessionForWebResume</code> 释放 CLI bg 锁</td></tr>
+</tbody>
+</table>
+<ul>
+  <li>启动时<strong>不自动 resume</strong>；空首页手选会话。</li>
+  <li>懒开：首条消息且无 live 实例时 <code>dedupedResume</code>（single-flight）。</li>
+  <li>idle reclaim：完全空闲超过 <code>INSTANCE_IDLE_RECLAIM_MS</code>（默认 1800000，0=关）可回收子进程；盘上 transcript 保留，再发会 resume。</li>
+</ul>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>删除分层</h2>
+<ul>
+  <li><strong>L1</strong>：hide（写入隐藏列表），transcript 仍在，列表不可见。</li>
+  <li><strong>L2 永久删除</strong>：动文件；受安静期等守卫（<code>SESSION_DELETE_QUIET_MS</code> 默认 300000）保护，避免误删终端仍在用的会话。</li>
+</ul>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>worktree 会话</h2>
+<p><code>worktree-sessions.js</code> 发现 git worktree 内会话，使 Web 可触达「在 worktree 里跑的 CLI 会话」——终端「cd 进 worktree 即 /resume」的 web 等价方向。实现与 knownWorktrees 注册、列表分组相关（以当前 dev 接线为准）。</p>
+
+<h2 id="s6"><a class="anchor" href="#s6" aria-hidden="true"></a>关键模块</h2>
+<div class="kv">
+  <div class="row"><div class="key">sessions.js</div><div class="val">元数据读写、currentByCwd、隐藏</div></div>
+  <div class="row"><div class="key">history.js</div><div class="val">jsonl 冷读、catchUp、mirror 状态机、尾部分类</div></div>
+  <div class="row"><div class="key">workdirs.js</div><div class="val">白名单与 sessionLimit</div></div>
+  <div class="row"><div class="key">worktree-sessions.js</div><div class="val">worktree 会话发现</div></div>
+  <div class="row"><div class="key">attention.js</div><div class="val">「需要你」类聚合</div></div>
+</div>
+
+        <nav class="pager"><a class="prev" href="events-sync.html"><span class="dir">← 上一篇</span><span class="ttl">事件信封与同步</span></a><a class="next" href="auth-device.html"><span class="dir">下一篇 →</span><span class="ttl">鉴权与设备信赖</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">双真相源</a></li><li class="h2"><a href="#s2">列表与冷读</a></li><li class="h2"><a href="#s3">打开路径：FRESH vs resume</a></li><li class="h2"><a href="#s4">删除分层</a></li><li class="h2"><a href="#s5">worktree 会话</a></li><li class="h2"><a href="#s6">关键模块</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

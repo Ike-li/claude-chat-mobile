@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>前端与 PWA · Claude Chat Mobile</title>
+<meta name="description" content="public/ 分层、Socket 客户端、可安装 PWA。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html" class="active"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第四部分 · 核心实现</b> &nbsp;/&nbsp; 前端与 PWA</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">04</span> 第四部分 · 核心实现</span>
+    <h1>前端与 PWA</h1>
+    <p class="lead">public/ 分层、Socket 客户端、可安装 PWA。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 18 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 public/</span>
+    </div>
+  </header>
+<p class="lead-extra">前端是原生 ESM 的单页 PWA：Express 直接托管 <code>public/</code>，无打包步骤、无 CDN 运行时依赖。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>分层</h2>
+<table>
+<thead><tr><th>路径</th><th>角色</th></tr></thead>
+<tbody>
+<tr><td><code>public/index.html</code></td><td>壳、资源引用、PWA meta</td></tr>
+<tr><td><code>public/css/app.css</code></td><td>样式（配合 Tailwind 运行时配置）</td></tr>
+<tr><td><code>public/js/app.js</code></td><td>编排：socket、UI 状态、子模块装配（大壳）</td></tr>
+<tr><td><code>public/js/logic.js</code></td><td>纯决策函数（禁 DOM / socket）；可被 <code>node:test</code> 直接测</td></tr>
+<tr><td><code>public/js/canonicalize.js</code></td><td>操作规范化；与后端共享白名单文件</td></tr>
+<tr><td><code>public/js/ring-buffer.js</code></td><td>客户端侧缓冲辅助</td></tr>
+<tr><td><code>public/js/app/*</code></td><td>会话、附件、审批、设置、通知、同步、渲染、任务状态等控制器</td></tr>
+<tr><td><code>public/js/sw.js</code> · <code>sw-cleanup.js</code></td><td>Service Worker 与清理</td></tr>
+<tr><td><code>public/vendor/</code></td><td>Tailwind / marked / highlight / DOMPurify / 字体 本地自托管</td></tr>
+<tr><td><code>manifest.webmanifest</code> · <code>icons/</code></td><td>可安装 PWA 与 maskable 图标</td></tr>
+</tbody>
+</table>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong><code>logic.js</code> 红线：只做数据→数据。副作用（DOM、socket、localStorage 写）放在 <code>app/*</code> 控制器。单测优先覆盖 pure 函数。
+</div></div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>连接与 token</h2>
+<ol class="steps">
+  <li>首次通过 URL hash <code>#token=…</code> 注入鉴权密钥。</li>
+  <li>写入 <code>localStorage</code> 后从地址栏清除，避免分享 URL 泄露。</li>
+  <li>设备 token 同样持久化，参与 TOFU 握手。</li>
+  <li>Socket 连接后进入事件分发（<code>event-dispatch</code> 等）；按 <code>viewingInstanceId</code> 分流。</li>
+</ol>
+
+<ul>
+  <li>非当前 viewing 实例的高频 <code>text_delta</code> / <code>thinking_delta</code> 可能不直播到该 tab；切回后靠 <code>sync:since</code> 回放缓冲。</li>
+  <li>重连后携带 lastSeq / epoch；epoch 变化时重置去重基线。</li>
+</ul>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>PWA 与推送前提</h2>
+<ul>
+  <li><code>manifest.webmanifest</code> + maskable 图标，支持「添加到主屏幕」独立显示。</li>
+  <li>iOS Web Push：需先安装到主屏幕且 https；局域网纯 http 场景 Web Push 不可用 → 配 ntfy。</li>
+  <li>Service Worker 负责推送相关与缓存策略（实现以 <code>sw.js</code> 为准）。</li>
+</ul>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>与边界守卫的关系</h2>
+<p><code>public/js</code> 不得 import <code>src/</code>。允许共享的仅白名单：</p>
+<ul>
+  <li><code>public/js/canonicalize.js</code>（后端 <code>fingerprint</code> 等使用）</li>
+  <li><code>public/js/logic.js</code>（允许列表中；后端当前实际主要用 canonicalize，见<a href="drift.html">漂移清单</a>）</li>
+</ul>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>测试方式</h2>
+<p>E2E 使用 Playwright 移动视口 + 仓库内 mock server（零外部 token）。断言基于 DOM 状态，非像素比对。场景注册受 visual mock registry 门禁约束，mock 发出的 <code>agent:event</code> type 不得超出契约。</p>
+
+<p>inventory 中前端源约 21 文件、vendor 约 10、图标为生成资产（<code>scripts/gen-icons.js</code>）。</p>
+
+        <nav class="pager"><a class="prev" href="files-upload.html"><span class="dir">← 上一篇</span><span class="ttl">文件与上传</span></a><a class="next" href="notify-status.html"><span class="dir">下一篇 →</span><span class="ttl">通知与状态栏</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">分层</a></li><li class="h2"><a href="#s2">连接与 token</a></li><li class="h2"><a href="#s3">PWA 与推送前提</a></li><li class="h2"><a href="#s4">与边界守卫的关系</a></li><li class="h2"><a href="#s5">测试方式</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

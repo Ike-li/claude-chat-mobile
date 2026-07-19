@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目总览 · Claude Chat Mobile</title>
+<meta name="description" content="定位、适用场景、技术栈与仓库形态。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html" class="active"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第一部分 · 认识项目</b> &nbsp;/&nbsp; 项目总览</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">01</span> 第一部分 · 认识项目</span>
+    <h1>项目总览</h1>
+    <p class="lead">定位、适用场景、技术栈与仓库形态。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 3 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 README.md · CLAUDE.md</span>
+    </div>
+  </header>
+<p class="lead-extra">项目给已经在终端使用 <code>claude</code> CLI 的人用：在手机上对同一 agent 打字，效果与坐在电脑前等价。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>一句话定位</h2>
+<p>移动端聊天式 Web UI，通过 Claude Agent SDK 驱动<strong>本机已登录的</strong> <code>claude</code> CLI。不打包 Claude，不重实现 agent 循环；继承同一份 <code>CLAUDE.md</code>、MCP、skills、hooks 与会话 transcript。</p>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>适用场景</h2>
+<ul>
+  <li><strong>任务在跑，人离开电脑。</strong>审批与提问推到手机，点允许或拒绝。</li>
+  <li><strong>同一会话，换设备继续。</strong>手机与终端读同一份 CLI 会话记录；路上起头，回家 <code>/resume</code> 接上。</li>
+  <li><strong>多仓库并行。</strong>白名单内切换工作目录，标签页看多个会话进度。</li>
+  <li><strong>手机输入更顺。</strong>斜杠命令、相册附图、长按复制等按触控设计，而非缩小终端。</li>
+</ul>
+<p>若只是偶尔远程看一眼屏幕，远程桌面通常够用。本项目面向「把手机当成终端随身入口」的高频使用。</p>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>技术栈</h2>
+<div class="kv">
+  <div class="row"><div class="key">运行时</div><div class="val">Node ≥20 · ESM · Express · Socket.IO 4 · compression · dotenv</div></div>
+  <div class="row"><div class="key">Agent</div><div class="val"><code>@anthropic-ai/claude-agent-sdk</code> 0.3.201 · 本机 <code>claude</code></div></div>
+  <div class="row"><div class="key">鉴权 / 推送</div><div class="val">jose 6（Access JWT）· web-push（VAPID）· 可选 ntfy</div></div>
+  <div class="row"><div class="key">前端</div><div class="val">原生 ESM PWA；vendor 自托管（Tailwind / marked / highlight.js / DOMPurify）</div></div>
+  <div class="row"><div class="key">测试</div><div class="val"><code>node --test</code> 单测/集成 · Playwright 移动端 E2E · smoke 真 CLI（默认不跑）</div></div>
+  <div class="row"><div class="key">许可</div><div class="val">AGPL-3.0-only · NOTICE Section 7 补充条款</div></div>
+</div>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>仓库形态</h2>
+<table>
+<thead><tr><th>路径</th><th>角色</th></tr></thead>
+<tbody>
+<tr><td><code>server.js</code></td><td>兼容启动器（npm / LaunchAgent / systemd）</td></tr>
+<tr><td><code>src/</code></td><td>服务端实现，按域分包</td></tr>
+<tr><td><code>public/</code></td><td>Express 直接托管的 PWA</td></tr>
+<tr><td><code>scripts/</code></td><td>维护命令，非运行时</td></tr>
+<tr><td><code>tests/</code></td><td>唯一自动化测试根</td></tr>
+<tr><td><code>docs/</code></td><td>极简：deployment + repository-map</td></tr>
+<tr><td><code>deploy/</code></td><td>plist 模板</td></tr>
+</tbody>
+</table>
+
+<p>inventory 分类文件约 <strong>277</strong> 个（见生成的 <code>docs/repository-map.md</code>）。后端源约 44 文件，前端源约 21，单测约 89，E2E 约 30。</p>
+
+<h2 id="s5"><a class="anchor" href="#s5" aria-hidden="true"></a>分支纪律</h2>
+<ul>
+  <li><strong>dev</strong>：日常开发。</li>
+  <li><strong>master</strong>：稳定 / 默认克隆目标；有分支保护；经 <code>scripts/release.sh</code> 从 dev ff 合并并发版。</li>
+  <li><strong>gh-pages</strong>：宣传站孤儿分支（本手册产物所在）。</li>
+  <li><strong>promo</strong>：宣传文案创作区，非产品源码。</li>
+</ul>
+<div class="callout note"><div class="body">
+<strong>附注</strong>仓内 <code>.worktrees/</code> 是其他分支的常驻检出位，不是 dev 源码。在 dev 上搜索/审查应排除该目录。
+</div></div>
+
+<h2 id="s6"><a class="anchor" href="#s6" aria-hidden="true"></a>前置条件</h2>
+<ol class="steps">
+  <li><strong>Node ≥20。</strong><code>node --version</code> 检查。</li>
+  <li><strong>本机可用的 claude CLI。</strong><code>which claude</code> 且能登录对话；项目不自带 CLI。</li>
+  <li><strong>订阅或网关。</strong>官方订阅沿用 CLI 登录态；第三方网关在<strong>启动 server 的 shell</strong> 中 <code>export ANTHROPIC_*</code>（写入 <code>.env</code> 会被剥除）。</li>
+  <li><strong>macOS 或 Linux。</strong></li>
+</ol>
+
+        <nav class="pager"><a class="prev" href="reading-guide.html"><span class="dir">← 上一篇</span><span class="ttl">阅读顺序指南</span></a><a class="next" href="architecture.html"><span class="dir">下一篇 →</span><span class="ttl">系统架构</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">一句话定位</a></li><li class="h2"><a href="#s2">适用场景</a></li><li class="h2"><a href="#s3">技术栈</a></li><li class="h2"><a href="#s4">仓库形态</a></li><li class="h2"><a href="#s5">分支纪律</a></li><li class="h2"><a href="#s6">前置条件</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

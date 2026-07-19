@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目规范 · Claude Chat Mobile</title>
+<meta name="description" content="分支纪律、门禁、worktree 约定、测试分层。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html" class="active"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第七部分 · 参考与规范</b> &nbsp;/&nbsp; 项目规范</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">07</span> 第七部分 · 参考与规范</span>
+    <h1>项目规范</h1>
+    <p class="lead">分支纪律、门禁、worktree 约定、测试分层。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 10 分钟</span>
+      <span><span class="lbl">第</span> 25 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 CLAUDE.md · package.json</span>
+    </div>
+  </header>
+<p class="lead-extra">分支、门禁、测试分层与贡献约定。遵守这些约束，比多写一层文档更能保持仓库可合并。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>分支与 worktree</h2>
+<ul>
+  <li><strong>日常开发在 <code>dev</code></strong>；<code>master</code> 为稳定 / GitHub 默认 / 分支保护。功能完成后由 dev ff 合并 master，发版用 <code>scripts/release.sh</code>。</li>
+  <li>仓内 <code>.worktrees/</code> 是其他分支（promo、gh-pages）的检出位，<strong>不是本分支源码</strong>。搜索与审查排除该目录（裸 <code>grep</code>/<code>find</code> 加 <code>--exclude-dir=.worktrees</code>）。</li>
+  <li>宣传物与 landing 站留在 gh-pages / promo 孤儿线，不回灌 master/dev。</li>
+</ul>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>门禁</h2>
+<pre><code>npm run check
+# ESLint
+# + check-import-boundaries（分层 + 零环依赖）
+# + contract-check（出向 agent:event + 入向 socket）
+# + doc-consistency
+# + visual mock registry / Playwright 禁止模式
+# + inventory:check</code></pre>
+<p>新增、移动、删除入库文件后须 <code>npm run inventory:update</code>，否则 check 红。生成的 <code>docs/repository-map.md</code> 勿手改正文。</p>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>推送带 CI 的仓库前可用 <code>CI=true npm test</code> 模拟 CI。集成在 CI 中常 skip 需 CLI 段；真 Claude turn 用 <code>RUN_CLAUDE_INTEGRATION=1</code>。
+</div></div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>测试分层</h2>
+<table>
+<thead><tr><th>命令</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><code>npm run test:unit</code></td><td>纯逻辑单测，零 token，最快</td></tr>
+<tr><td><code>npm run test:integration</code></td><td>起真 server；需本机 CLI</td></tr>
+<tr><td><code>npm test</code></td><td>unit + 可靠 integration；<code>--test-force-exit</code></td></tr>
+<tr><td><code>npm run test:e2e</code></td><td>Playwright 移动端 UI，mock server，零外部 token</td></tr>
+<tr><td><code>npm run test:smoke</code></td><td>真 Claude 回合；默认不跑，耗 token</td></tr>
+</tbody>
+</table>
+<p>E2E 断言基于 DOM 状态，非像素比对。mock 发出的事件 type 必须 ⊆ 契约 allowlist。</p>
+
+<h2 id="s4"><a class="anchor" href="#s4" aria-hidden="true"></a>工程约定</h2>
+<ul>
+  <li><strong>不引入 TypeScript 编译闸（tsc）</strong>：项目以 Node ESM + ESLint + 契约脚本为门禁。</li>
+  <li><strong><code>src/server/app.js</code> 组装根有意保留</strong>：mirror / catchUp / openInstance 与契约路由共享顶层可变状态；勿为「拆文件」而拆同步引擎，除非有明确边界设计与全量回归。</li>
+  <li><strong>commit 不加 Claude 署名</strong>：不要 Co-Authored-By / Claude-Session 行；说明改了什么、为何、如何验证即可。</li>
+  <li>一次性测试 server 须隔离四件套：<code>PORT</code> / <code>WORK_DIR</code> / <code>CCM_DATA_DIR</code> / <code>AUTH_TOKEN</code>，避免污染生产 data。</li>
+  <li>生产改 <code>.env</code>/代码后须重启常驻进程；例外是 <code>WORK_DIRS_FILE</code> 热加载。</li>
+</ul>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>并发开发同一文件时用 git worktree 隔离，避免互相 reset 冲掉未提交工作。本手册产物在 gh-pages 的 docs-site，不回写 dev 的产品 docs。
+</div></div>
+
+<p>分层规则细节见<a href="contracts-gates.html">契约与工程门禁</a>。</p>
+
+        <nav class="pager"><a class="prev" href="ops-troubleshoot.html"><span class="dir">← 上一篇</span><span class="ttl">运维与排错</span></a><a class="next" href="api-events.html"><span class="dir">下一篇 →</span><span class="ttl">事件与端点参考</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">分支与 worktree</a></li><li class="h2"><a href="#s2">门禁</a></li><li class="h2"><a href="#s3">测试分层</a></li><li class="h2"><a href="#s4">工程约定</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>

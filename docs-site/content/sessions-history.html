@@ -1,0 +1,59 @@
+<p class="lead-extra">会话有两层真相：Web 元数据在 <code>sessions.json</code>；消息正文在 CLI transcript jsonl。混淆两者是接手时最常见的误操作来源。</p>
+
+<h2>双真相源</h2>
+<table>
+<thead><tr><th>层</th><th>路径</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td>元数据 SoT</td><td><code>$CCM_DATA_DIR/sessions.json</code></td><td>currentByCwd、标题、model/effort/permissionMode、隐藏列表、活动时间等</td></tr>
+<tr><td>消息 SoT</td><td><code>~/.claude/projects/&lt;encoded-cwd&gt;/&lt;sessionId&gt;.jsonl</code></td><td>完整 transcript；与 CLI <code>/resume</code> 同源</td></tr>
+</tbody>
+</table>
+
+<div class="callout drift"><div class="body">
+<strong>以代码为准</strong>改 sessions.json 不会改聊天内容。备份 <code>CCM_DATA_DIR</code> 不会带走对话正文；清仓库 <code>data/</code> 可能丢设备信任与指针，但 CLI 历史仍在。
+</div></div>
+
+<h2>列表与冷读</h2>
+<ul>
+  <li>列表优先 SDK <code>listSessions</code>，失败回落扫盘；结果可与 sessions.json 元数据增强合并。</li>
+  <li>历史回显走鉴权 socket 事件 <code>session:history</code>，<strong>不开</strong>无鉴权 HTTP 数据端点。</li>
+  <li>冷读上限：<code>HISTORY_MAX_MESSAGES = 2000</code>。</li>
+  <li>CLI 系统噪音行经过滤（isMeta / 系统行启发式），避免污染镜像与尾部判定（如镜像锁释放、尾部 pending）。</li>
+  <li>resume 时可冷读会话末条 assistant 模型作 chip 回落展示（不写入 activeModel 以免误重置）。</li>
+</ul>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong><code>getSessionMessages</code> 返回的是清洗过的 message，不是 JSONL 原行。同步引擎（catch-up / mirror）必须读 jsonl 路径，不能用该 API 当事实源。
+</div></div>
+
+<h2>打开路径：FRESH vs resume</h2>
+<table>
+<thead><tr><th>路径</th><th>触发</th><th>档位来源要点</th></tr></thead>
+<tbody>
+<tr><td>FRESH</td><td><code>session:new</code>；空首页首条消息无 resumeId</td><td>不继承 cwd 末实例 permission/effort；来自 CLI settings 默认与 UI pending</td></tr>
+<tr><td>resume</td><td>列表切入；懒开有 saved.id</td><td>sessions.json → transcript 末 mode/model → 继承逻辑；先 <code>prepareSessionForWebResume</code> 释放 CLI bg 锁</td></tr>
+</tbody>
+</table>
+<ul>
+  <li>启动时<strong>不自动 resume</strong>；空首页手选会话。</li>
+  <li>懒开：首条消息且无 live 实例时 <code>dedupedResume</code>（single-flight）。</li>
+  <li>idle reclaim：完全空闲超过 <code>INSTANCE_IDLE_RECLAIM_MS</code>（默认 1800000，0=关）可回收子进程；盘上 transcript 保留，再发会 resume。</li>
+</ul>
+
+<h2>删除分层</h2>
+<ul>
+  <li><strong>L1</strong>：hide（写入隐藏列表），transcript 仍在，列表不可见。</li>
+  <li><strong>L2 永久删除</strong>：动文件；受安静期等守卫（<code>SESSION_DELETE_QUIET_MS</code> 默认 300000）保护，避免误删终端仍在用的会话。</li>
+</ul>
+
+<h2>worktree 会话</h2>
+<p><code>worktree-sessions.js</code> 发现 git worktree 内会话，使 Web 可触达「在 worktree 里跑的 CLI 会话」——终端「cd 进 worktree 即 /resume」的 web 等价方向。实现与 knownWorktrees 注册、列表分组相关（以当前 dev 接线为准）。</p>
+
+<h2>关键模块</h2>
+<div class="kv">
+  <div class="row"><div class="key">sessions.js</div><div class="val">元数据读写、currentByCwd、隐藏</div></div>
+  <div class="row"><div class="key">history.js</div><div class="val">jsonl 冷读、catchUp、mirror 状态机、尾部分类</div></div>
+  <div class="row"><div class="key">workdirs.js</div><div class="val">白名单与 sessionLimit</div></div>
+  <div class="row"><div class="key">worktree-sessions.js</div><div class="val">worktree 会话发现</div></div>
+  <div class="row"><div class="key">attention.js</div><div class="val">「需要你」类聚合</div></div>
+</div>

@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>封面与导读 · Claude Chat Mobile</title>
+<meta name="description" content="一句话认识项目，看清这本手册怎么读。">
+<link rel="stylesheet" href="assets/style.css">
+<script>window.__BASE__='';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="index.html" class="active"><span class="idx">00</span><span>封面与导读</span></a><a href="pages/reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="pages/overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="pages/architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="pages/boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="pages/evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="pages/terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="pages/security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="pages/single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="pages/contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="pages/glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="pages/runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="pages/agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="pages/events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="pages/sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="pages/auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="pages/files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="pages/frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="pages/notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="pages/data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="pages/integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="pages/quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="pages/production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="pages/ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="pages/project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="pages/api-events.html"><span class="idx">25</span><span>事件与端点参考</span></a><a href="pages/env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="pages/drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>起点</b> &nbsp;/&nbsp; 封面与导读</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <p class="lead-extra">Claude Chat Mobile 是一层默认上锁的转发层：把你本机已登录的 <code>claude</code> CLI，接到手机浏览器。同一会话、同一份 transcript、同样的权限与配置。</p>
+
+<div class="statband">
+  <div class="stat"><div class="num">1</div><div class="lbl">用户 / 实例</div></div>
+  <div class="stat"><div class="num">0</div><div class="lbl">多租户设计</div></div>
+  <div class="stat"><div class="num">2000</div><div class="lbl">事件环形缓冲</div></div>
+  <div class="stat"><div class="num">28</div><div class="lbl">本手册页数</div></div>
+</div>
+
+<div class="cards">
+  <div class="card"><span class="k">定位</span><h4>终端等价入口</h4><p>不是远程桌面，也不是 Claude 的重新实现。手机上打字，应与坐在终端前等价。</p></div>
+  <div class="card"><span class="k">形态</span><h4>自托管桥</h4><p>Node ≥20 · Express · Socket.IO · Agent SDK 驱动本机 CLI。每实例单用户。</p></div>
+  <div class="card"><span class="k">手册</span><h4>按认知顺序</h4><p>认识 → 演进 → 方法论 → 实现 → 数据 → 运维 → 规范。以 <code>dev</code> 代码为事实基线。</p></div>
+</div>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>这本手册从哪来</h2>
+<p>源码分支为 <strong>dev</strong>（探针时 HEAD <code>8084005</code>）。<code>docs/</code> 在 2026-07-19 后只保留 <code>deployment.md</code> 与生成的 <code>repository-map.md</code>，设计长文已撤。本站按代码与 README / CLAUDE.md 重叙述，不照搬旧文档目录。</p>
+
+<div class="callout warn"><div class="body">
+<strong>事实基线（非自动同步）</strong>手册关键数字与契约以探针时的 dev 代码为准（HEAD <code>8084005</code>）。dev 继续演进后，本站<strong>不会</strong>自动重生成；若行为与手册冲突，以当前代码与 <code>scripts/agent-event-contract.js</code> 为准，并应回写本站或记入漂移清单。
+</div></div>
+
+<div class="callout note"><div class="body">
+<strong>范围</strong>本手册描述产品源码（dev），不是 gh-pages 宣传站本身。产物落在 gh-pages 的 <code>docs-site/</code>，便于与展示站同分支维护。
+</div></div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>三条阅读路线</h2>
+<div class="path">
+  <div class="node"><span class="pnum">主线</span><h4>完整通读 · 约 2–3 小时</h4><p>侧栏从上到下，或一路点「下一页」。适合真要接手或 fork 的人。</p></div>
+  <div class="node"><span class="pnum">速览</span><h4>30 分钟</h4><p>封面 → 总览 → 架构 → 职责边界 → 终端等价 → 安全模型 → 快速开始 → 漂移清单。见<a href="pages/reading-guide.html">阅读顺序指南</a>。</p></div>
+  <div class="node"><span class="pnum">角色</span><h4>按职责切入</h4><p>运维先看第六部分；改同步引擎看「单驾驶员」与「事件信封」；改鉴权看第四部分鉴权页。</p></div>
+</div>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>技术栈一瞥</h2>
+<table>
+<thead><tr><th>层</th><th>选型</th></tr></thead>
+<tbody>
+<tr><td>运行时</td><td>Node ≥20 · ESM · Express · Socket.IO 4</td></tr>
+<tr><td>Agent</td><td><code>@anthropic-ai/claude-agent-sdk</code> 0.3.201 → 本机 <code>claude</code> CLI</td></tr>
+<tr><td>鉴权</td><td><code>AUTH_TOKEN</code> · 设备 TOFU · 可选 Cloudflare Access（jose JWT）</td></tr>
+<tr><td>通知</td><td>web-push（VAPID）· 可选 ntfy</td></tr>
+<tr><td>测试</td><td><code>node --test</code> · Playwright 移动端 E2E（DOM 断言，非像素）</td></tr>
+<tr><td>许可</td><td>AGPL-3.0-only + NOTICE 补充条款</td></tr>
+</tbody>
+</table>
+
+<p>从<a href="pages/reading-guide.html">阅读顺序指南</a>或<a href="pages/overview.html">项目总览</a>继续。</p>
+
+        <nav class="pager"><a class="prev disabled"></a><a class="next" href="pages/reading-guide.html"><span class="dir">下一篇 →</span><span class="ttl">阅读顺序指南</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">这本手册从哪来</a></li><li class="h2"><a href="#s2">三条阅读路线</a></li><li class="h2"><a href="#s3">技术栈一瞥</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="assets/search-index.js"></script>
+
+<script src="assets/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<p class="lead-extra"><code>AgentSession</code>（<code>src/agent/agent.js</code>）是长驻 SDK query 的运行时核心：输入队列、权限闸、事件映射与环形缓冲。</p>
+
+<h2>职责</h2>
+<ul>
+  <li>持有一条到 Agent SDK 的 streaming input 会话（可 resume）。</li>
+  <li>将 SDK 消息 <code>map()</code> 为契约事件并发出信封。</li>
+  <li>通过 <code>canUseTool</code> 实现权限挂起/放行；维护 pending 审批与提问。</li>
+  <li>支持排队、中断、撤回排队消息、切模型 / 权限档；effort 切档由 server 置换实例完成。</li>
+</ul>
+
+<h2>输入与忙碌</h2>
+<div class="kv">
+  <div class="row"><div class="key">queue</div><div class="val">streaming input 队列；busy 时可排队后续消息</div></div>
+  <div class="row"><div class="key">pendingTurns</div><div class="val">在途轮次计数</div></div>
+  <div class="row"><div class="key">isBusy</div><div class="val">pendingTurns &gt; 0 或有后台任务或有 pending 审批/提问</div></div>
+  <div class="row"><div class="key">idle hang</div><div class="val">有 pendingTurns、无审批/提问且静默超过 <code>idleTimeoutMs</code>（默认 600000）则 abort</div></div>
+</div>
+
+<p>实例状态（instance-manager）：permission &gt; busy &gt; aborted/error/done &gt; idle。</p>
+
+<h2>SDK 选项要点</h2>
+<ul>
+  <li><code>cwd</code>、<code>pathToClaudeCodeExecutable</code>、<code>resume</code>、<code>permissionMode</code>、<code>effort</code></li>
+  <li><code>settingSources: ['user','project','local']</code></li>
+  <li><code>canUseTool</code> 统一闸门</li>
+  <li><strong>不</strong>注入 <code>allowedTools</code> / <code>disallowedTools</code></li>
+</ul>
+
+<h2>事件发出</h2>
+<ul>
+  <li><code>emit(type, payload)</code>：分配 <code>seq</code>，写入 cap=<strong>2000</strong> 的环形缓冲，回调 server <code>onEvent</code>。</li>
+  <li><code>emitTransient</code>：不占 seq、不进缓冲（如 <code>task_progress</code>）。</li>
+  <li>信封字段：<code>seq, epoch, sessionId, instanceId, cwd, ts, type, payload</code>。</li>
+</ul>
+
+<h2>map() 映射（摘要）</h2>
+<table>
+<thead><tr><th>SDK 侧</th><th>契约事件</th></tr></thead>
+<tbody>
+<tr><td>流式文本 / 思考</td><td><code>text_delta</code> / <code>thinking_delta</code></td></tr>
+<tr><td>工具调用 / 结果</td><td><code>tool_use</code> / <code>tool_result</code></td></tr>
+<tr><td>白名单外工具</td><td><code>permission_request</code>（挂起）</td></tr>
+<tr><td>AskUserQuestion</td><td><code>question</code></td></tr>
+<tr><td>轮次结束 / 初始化</td><td><code>result</code> / <code>init</code></td></tr>
+<tr><td>压缩上下文等</td><td><code>system</code></td></tr>
+</tbody>
+</table>
+
+<h2>权限闸 canUseTool</h2>
+<ol class="steps">
+  <li>合法档六值：<code>default</code> / <code>plan</code> / <code>acceptEdits</code> / <code>bypassPermissions</code> / <code>dontAsk</code> / <code>auto</code>。</li>
+  <li><code>dontAsk</code> → deny（含 SDK 误调时的防御纵深）；<code>bypassPermissions</code> → 实例记真实 bypass，给 SDK 映射为 <code>default</code>，由 <code>handleCanUseTool</code> 直接 allow。</li>
+  <li>AskUserQuestion 走 question 分支，不是普通 tool 审批卡片。</li>
+  <li>其余：算 fingerprint，写入 pending + 台账，emit <code>permission_request</code>，等待 <code>user:approve</code>。</li>
+  <li>allow 时校验客户端回传 op 指纹，失败则 <code>integrity_mismatch</code>。</li>
+  <li>TTL（<code>approvalTtlMs</code>，默认 1800000）到期自动 deny。</li>
+  <li>进程重启：磁盘 pending 全部 expired（回调已死），fail-closed。</li>
+</ol>
+
+<div class="mermaid">
+sequenceDiagram
+  participant CLI as Claude CLI/SDK
+  participant AS as AgentSession
+  participant S as Server
+  participant UI as Web
+  CLI->>AS: canUseTool
+  AS->>S: permission_request
+  S->>UI: agent:event
+  UI->>S: user:approve
+  S->>AS: resolvePermission
+  AS->>CLI: resolve behavior
+  AS->>UI: request_resolved
+</div>
+
+<h2>排队、中断与撤回</h2>
+<ul>
+  <li>busy 时再发可排队；system 提示「前面还有消息在排队…」。</li>
+  <li><code>user:interrupt</code>：中断当前；kind <code>interrupted</code>；排队可能 <code>queue_dropped</code>。</li>
+  <li><code>user:cancelQueued</code>：撤回排队中的消息；kind <code>queue_cancelled</code>，可带回 clientMessageId。</li>
+  <li>勿靠中文文案字符串匹配终态，用 <code>kind</code> 字段。</li>
+</ul>
+
+<h2>模型与 effort</h2>
+<ul>
+  <li>模型可在发送路径切换；失败可 recoverable error 后用原模型发送。</li>
+  <li><code>effort</code> 仅在 spawn 时注入；SDK <strong>没有</strong>运行时 effort 控制请求。</li>
+  <li>Web <code>user:setEffort</code>：server 在可安全 dispose 时 <strong>silent dispose + dedupedResume</strong> 同 sessionId 新实例（带新 effort）；instanceId / epoch 变化；并发 setEffort 走 single-flight，避免双开 CLI。</li>
+  <li><code>null</code> effort = 模型默认、不传 options.effort。</li>
+</ul>
+
+<p>相关：<a href="events-sync.html">事件信封与同步</a>、<a href="single-driver.html">单驾驶员</a>、<a href="security-model.html">安全模型</a>。</p>

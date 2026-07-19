@@ -1,0 +1,55 @@
+<p class="lead-extra">入向 socket 事件、出向 <code>agent:event</code> 类型，以及鉴权 HTTP 运维端点。权威清单是源码 <code>scripts/agent-event-contract.js</code>（探针时：入向 <strong>32</strong>、出向 type <strong>25</strong>）。历史不走开放 HTTP。</p>
+
+<h2>入向 Socket（客户端 → 服务端）· 32</h2>
+<p><code>INBOUND_SOCKET_EVENTS</code> 完整列表（按字母序与源码 freeze 数组一致）：</p>
+<table>
+<thead><tr><th>分组</th><th>事件（共 32）</th></tr></thead>
+<tbody>
+<tr><td>会话（9）</td><td><code>session:close</code> <code>session:delete</code> <code>session:deletePermanent</code> <code>session:history</code> <code>session:home</code> <code>session:list</code> <code>session:new</code> <code>session:switch</code> <code>worktree:sessions</code></td></tr>
+<tr><td>同步（3）</td><td><code>conn:ping</code> <code>mirror:syncNow</code> <code>sync:since</code></td></tr>
+<tr><td>用户控制（10）</td><td><code>user:answer</code> <code>user:approve</code> <code>user:approveDevice</code> <code>user:cancelQueued</code> <code>user:denyDevice</code> <code>user:interrupt</code> <code>user:message</code> <code>user:setEffort</code> <code>user:setPermissionMode</code> <code>user:setViewing</code></td></tr>
+<tr><td>任务 / 工具（3）</td><td><code>task:stop</code> <code>tool:full</code> <code>tool:preview</code></td></tr>
+<tr><td>文件浏览（2）</td><td><code>browse:list</code> <code>browse:read</code></td></tr>
+<tr><td>运维 / 诊断（5）</td><td><code>dev:restart</code> <code>doctor:run</code> <code>logs:clientError</code> <code>logs:get</code> <code>service:status</code></td></tr>
+</tbody>
+</table>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>历史经 <code>session:history</code>；断线补发用 <code>sync:since</code>。缓冲 cap 2000。<code>user:setEffort</code> 触发 dispose+resume 置换实例，不是 in-place 改活 SDK query。
+</div></div>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>新增入向事件时必须改 <code>INBOUND_SOCKET_EVENTS</code> 与 server 注册面，否则 <code>npm run check</code> / contract-check 失败。本页若与源码不一致，以源码为准。
+</div></div>
+
+<h2>出向 agent:event 类型 · 25</h2>
+<p><code>AGENT_EVENT_TYPES</code> 完整列表：</p>
+<table>
+<thead><tr><th>分组</th><th>type</th></tr></thead>
+<tbody>
+<tr><td>生命周期（6）</td><td><code>init</code> <code>instances</code> <code>result</code> <code>error</code> <code>system</code> <code>session_log</code></td></tr>
+<tr><td>流式 / 历史（4）</td><td><code>text_delta</code> <code>thinking_delta</code> <code>user_message</code> <code>history_append</code></td></tr>
+<tr><td>工具（2）</td><td><code>tool_use</code> <code>tool_result</code></td></tr>
+<tr><td>权限 / 问答（4）</td><td><code>permission_request</code> <code>permission_mode</code> <code>question</code> <code>request_resolved</code></td></tr>
+<tr><td>模型 / 强度（2）</td><td><code>models</code> <code>effort_mode</code></td></tr>
+<tr><td>镜像 / 状态（3）</td><td><code>mirror_state</code> <code>status_line</code> <code>api_retry</code></td></tr>
+<tr><td>设备（2）</td><td><code>device_status</code> <code>pending_devices</code></td></tr>
+<tr><td>后台任务（2）</td><td><code>task_notification</code> <code>task_progress</code></td></tr>
+</tbody>
+</table>
+<p>信封：<code>{ seq, epoch, sessionId, instanceId, cwd, ts, type, payload }</code>。其中 <code>task_progress</code> 等可经 <code>emitTransient</code> 发出（不占 seq、不进缓冲）。</p>
+
+<h2>HTTP</h2>
+<table>
+<thead><tr><th>路径</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>GET /health</code></td><td>健康；鉴权</td></tr>
+<tr><td><code>GET /metrics</code></td><td>指标；鉴权</td></tr>
+<tr><td><code>GET /push/vapid-public-key</code> · <code>POST /push/subscribe</code></td><td>Web Push</td></tr>
+<tr><td>静态 <code>/</code> · <code>/js/*</code></td><td>PWA 资源</td></tr>
+</tbody>
+</table>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>门禁要求：server 注册面与契约双向相等；前端 emit ⊆ 契约；visual mock ⊆ 契约。漏注册或多注册都会红。
+</div></div>

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>事件与端点参考 · Claude Chat Mobile</title>
+<meta name="description" content="入向 socket 事件、agent:event 类型、HTTP 运维端点。">
+<link rel="stylesheet" href="../assets/style.css">
+<script>window.__BASE__='../';</script>
+</head>
+<body>
+<div class="scrim"></div>
+<div class="layout">
+  <aside class="sidebar"><div class="brand"><a href="../index.html">
+    <span class="logo"><span class="mark">LOGO</span>Claude Chat Mobile</span>
+    <span class="sub">项目全景手册 · 把本机 claude CLI 接到手机上</span>
+  </a></div><nav class="nav"><div class="part"><div class="part-label"><span class="pn">◆</span>起点</div><a href="../index.html"><span class="idx">00</span><span>封面与导读</span></a><a href="reading-guide.html"><span class="idx">01</span><span>阅读顺序指南</span></a></div><div class="part"><div class="part-label"><span class="pn">01</span>第一部分 · 认识项目</div><a href="overview.html"><span class="idx">02</span><span>项目总览</span></a><a href="architecture.html"><span class="idx">03</span><span>系统架构</span></a><a href="boundaries.html"><span class="idx">04</span><span>职责边界</span></a></div><div class="part"><div class="part-label"><span class="pn">02</span>第二部分 · 演进历程</div><a href="evolution.html"><span class="idx">05</span><span>架构演进主线</span></a></div><div class="part"><div class="part-label"><span class="pn">03</span>第三部分 · 方法论</div><a href="terminal-parity.html"><span class="idx">06</span><span>终端等价性</span></a><a href="security-model.html"><span class="idx">07</span><span>安全模型</span></a><a href="single-driver.html"><span class="idx">08</span><span>单驾驶员模型</span></a><a href="contracts-gates.html"><span class="idx">09</span><span>契约与工程门禁</span></a><a href="glossary.html"><span class="idx">10</span><span>术语表</span></a></div><div class="part"><div class="part-label"><span class="pn">04</span>第四部分 · 核心实现</div><a href="runtime-assembly.html"><span class="idx">11</span><span>启动与组装根</span></a><a href="agent-session.html"><span class="idx">12</span><span>AgentSession</span></a><a href="events-sync.html"><span class="idx">13</span><span>事件信封与同步</span></a><a href="sessions-history.html"><span class="idx">14</span><span>会话与历史</span></a><a href="auth-device.html"><span class="idx">15</span><span>鉴权与设备信赖</span></a><a href="files-upload.html"><span class="idx">16</span><span>文件与上传</span></a><a href="frontend-pwa.html"><span class="idx">17</span><span>前端与 PWA</span></a><a href="notify-status.html"><span class="idx">18</span><span>通知与状态栏</span></a></div><div class="part"><div class="part-label"><span class="pn">05</span>第五部分 · 数据与集成</div><a href="data-store.html"><span class="idx">19</span><span>数据全景</span></a><a href="integrations.html"><span class="idx">20</span><span>外部集成</span></a></div><div class="part"><div class="part-label"><span class="pn">06</span>第六部分 · 部署与运维</div><a href="quickstart.html"><span class="idx">21</span><span>快速开始</span></a><a href="production-deploy.html"><span class="idx">22</span><span>生产部署</span></a><a href="ops-troubleshoot.html"><span class="idx">23</span><span>运维与排错</span></a></div><div class="part"><div class="part-label"><span class="pn">07</span>第七部分 · 参考与规范</div><a href="project-rules.html"><span class="idx">24</span><span>项目规范</span></a><a href="api-events.html" class="active"><span class="idx">25</span><span>事件与端点参考</span></a><a href="env-reference.html"><span class="idx">26</span><span>环境变量参考</span></a><a href="drift.html"><span class="idx">27</span><span>漂移清单</span></a></div></nav><div class="colophon">手册 v1.0 · dev@8084005 · claude-chat-mobile</div></aside>
+  <script>
+  /* 绘制前恢复侧栏滚动位置：避免跳转后侧栏回到顶部（见 quality-checks.md）*/
+  (function(){try{
+    var sb=document.querySelector('.sidebar');if(!sb)return;
+    var saved=sessionStorage.getItem('docsbook-nav-scroll');
+    var act=sb.querySelector('.nav a.active');
+    function inView(){if(!act)return true;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      return r.top>=s.top&&r.bottom<=s.bottom;}
+    function center(){if(!act)return;var r=act.getBoundingClientRect(),s=sb.getBoundingClientRect();
+      sb.scrollTop+=(r.top-s.top)-(sb.clientHeight/2)+(r.height/2);}
+    if(saved!==null){sb.scrollTop=parseInt(saved,10)||0;if(!inView())center();}
+    else if(act&&!inView())center();
+  }catch(e){}})();
+  </script>
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="菜单">≡</button>
+      <div class="crumbs"><b>第七部分 · 参考与规范</b> &nbsp;/&nbsp; 事件与端点参考</div>
+      <button class="search-trigger" data-search-open>
+        <span>搜索手册</span><span class="k">⌘K</span>
+      </button>
+      <button class="icon-btn" id="themeBtn" aria-label="切换主题" title="切换深浅色 (t)">◐</button>
+      <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+    </header>
+    <div class="content-wrap">
+      <article class="article fade">
+        <header class="page-head">
+    <span class="part-tag"><span class="pn">07</span> 第七部分 · 参考与规范</span>
+    <h1>事件与端点参考</h1>
+    <p class="lead">入向 socket 事件、agent:event 类型、HTTP 运维端点。</p>
+    <div class="meta">
+      <span><span class="lbl">阅读约</span> 12 分钟</span>
+      <span><span class="lbl">第</span> 26 / 28 篇</span>
+      <span class="src" title="原始文档来源">源自 scripts/agent-event-contract.js · src/server/http.js</span>
+    </div>
+  </header>
+<p class="lead-extra">入向 socket 事件、出向 <code>agent:event</code> 类型，以及鉴权 HTTP 运维端点。权威清单是源码 <code>scripts/agent-event-contract.js</code>（探针时：入向 <strong>32</strong>、出向 type <strong>25</strong>）。历史不走开放 HTTP。</p>
+
+<h2 id="s1"><a class="anchor" href="#s1" aria-hidden="true"></a>入向 Socket（客户端 → 服务端）· 32</h2>
+<p><code>INBOUND_SOCKET_EVENTS</code> 完整列表（按字母序与源码 freeze 数组一致）：</p>
+<table>
+<thead><tr><th>分组</th><th>事件（共 32）</th></tr></thead>
+<tbody>
+<tr><td>会话（9）</td><td><code>session:close</code> <code>session:delete</code> <code>session:deletePermanent</code> <code>session:history</code> <code>session:home</code> <code>session:list</code> <code>session:new</code> <code>session:switch</code> <code>worktree:sessions</code></td></tr>
+<tr><td>同步（3）</td><td><code>conn:ping</code> <code>mirror:syncNow</code> <code>sync:since</code></td></tr>
+<tr><td>用户控制（10）</td><td><code>user:answer</code> <code>user:approve</code> <code>user:approveDevice</code> <code>user:cancelQueued</code> <code>user:denyDevice</code> <code>user:interrupt</code> <code>user:message</code> <code>user:setEffort</code> <code>user:setPermissionMode</code> <code>user:setViewing</code></td></tr>
+<tr><td>任务 / 工具（3）</td><td><code>task:stop</code> <code>tool:full</code> <code>tool:preview</code></td></tr>
+<tr><td>文件浏览（2）</td><td><code>browse:list</code> <code>browse:read</code></td></tr>
+<tr><td>运维 / 诊断（5）</td><td><code>dev:restart</code> <code>doctor:run</code> <code>logs:clientError</code> <code>logs:get</code> <code>service:status</code></td></tr>
+</tbody>
+</table>
+
+<div class="callout note"><div class="body">
+<strong>附注</strong>历史经 <code>session:history</code>；断线补发用 <code>sync:since</code>。缓冲 cap 2000。<code>user:setEffort</code> 触发 dispose+resume 置换实例，不是 in-place 改活 SDK query。
+</div></div>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>新增入向事件时必须改 <code>INBOUND_SOCKET_EVENTS</code> 与 server 注册面，否则 <code>npm run check</code> / contract-check 失败。本页若与源码不一致，以源码为准。
+</div></div>
+
+<h2 id="s2"><a class="anchor" href="#s2" aria-hidden="true"></a>出向 agent:event 类型 · 25</h2>
+<p><code>AGENT_EVENT_TYPES</code> 完整列表：</p>
+<table>
+<thead><tr><th>分组</th><th>type</th></tr></thead>
+<tbody>
+<tr><td>生命周期（6）</td><td><code>init</code> <code>instances</code> <code>result</code> <code>error</code> <code>system</code> <code>session_log</code></td></tr>
+<tr><td>流式 / 历史（4）</td><td><code>text_delta</code> <code>thinking_delta</code> <code>user_message</code> <code>history_append</code></td></tr>
+<tr><td>工具（2）</td><td><code>tool_use</code> <code>tool_result</code></td></tr>
+<tr><td>权限 / 问答（4）</td><td><code>permission_request</code> <code>permission_mode</code> <code>question</code> <code>request_resolved</code></td></tr>
+<tr><td>模型 / 强度（2）</td><td><code>models</code> <code>effort_mode</code></td></tr>
+<tr><td>镜像 / 状态（3）</td><td><code>mirror_state</code> <code>status_line</code> <code>api_retry</code></td></tr>
+<tr><td>设备（2）</td><td><code>device_status</code> <code>pending_devices</code></td></tr>
+<tr><td>后台任务（2）</td><td><code>task_notification</code> <code>task_progress</code></td></tr>
+</tbody>
+</table>
+<p>信封：<code>{ seq, epoch, sessionId, instanceId, cwd, ts, type, payload }</code>。其中 <code>task_progress</code> 等可经 <code>emitTransient</code> 发出（不占 seq、不进缓冲）。</p>
+
+<h2 id="s3"><a class="anchor" href="#s3" aria-hidden="true"></a>HTTP</h2>
+<table>
+<thead><tr><th>路径</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>GET /health</code></td><td>健康；鉴权</td></tr>
+<tr><td><code>GET /metrics</code></td><td>指标；鉴权</td></tr>
+<tr><td><code>GET /push/vapid-public-key</code> · <code>POST /push/subscribe</code></td><td>Web Push</td></tr>
+<tr><td>静态 <code>/</code> · <code>/js/*</code></td><td>PWA 资源</td></tr>
+</tbody>
+</table>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong>门禁要求：server 注册面与契约双向相等；前端 emit ⊆ 契约；visual mock ⊆ 契约。漏注册或多注册都会红。
+</div></div>
+
+        <nav class="pager"><a class="prev" href="project-rules.html"><span class="dir">← 上一篇</span><span class="ttl">项目规范</span></a><a class="next" href="env-reference.html"><span class="dir">下一篇 →</span><span class="ttl">环境变量参考</span></a></nav>
+      </article>
+      <aside class="toc"><div class="toc-title">本页目录</div><ul><li class="h2"><a href="#s1">入向 Socket（客户端 → 服务端）· 32</a></li><li class="h2"><a href="#s2">出向 agent:event 类型 · 25</a></li><li class="h2"><a href="#s3">HTTP</a></li></ul></aside>
+    </div>
+  </div>
+</div>
+
+<div class="search-mask"></div>
+<div class="search-box">
+  <input id="searchInput" type="text" placeholder="搜索页面、概念、术语…" autocomplete="off" spellcheck="false">
+  <div class="search-results"></div>
+  <div class="search-hint"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>esc</kbd> 关闭</span></div>
+</div>
+
+<script src="../assets/search-index.js"></script>
+
+<script src="../assets/app.js"></script>
+</body>
+</html>
