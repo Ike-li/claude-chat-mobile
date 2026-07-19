@@ -1,0 +1,9 @@
+{
+  "name": "ccm-promo-toolkit",
+  "private": true,
+  "type": "module",
+  "description": "claude-chat-mobile 宣传素材管线：录屏(make-demo-clips)→图层(gen-cards)→合成(compose)，见 shotlist.md",
+  "devDependencies": {
+    "@playwright/test": "^1.61.1"
+  }
+}

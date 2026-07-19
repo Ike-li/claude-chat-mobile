@@ -1,0 +1,69 @@
+{
+  "name": "horizontal",
+  "note": "横屏 B 站/YouTube 约 3 分钟。narration 数组兼容 ai_video 工作台 make-tts.mjs 输入格式（[{id,title,keyword,clip,text}]）：TTS 逐条出 mp3 并量出真实时长生成 timeline；渲染走 ai_video 的 HyperFrames 工程，本文件只是内容源（旁白定稿即 copy/horizontal.md 的结构化形态）。",
+  "narration": [
+    {
+      "id": "hook",
+      "title": "任务在跑，人不在",
+      "keyword": "看一眼 · 点一下 · 继续",
+      "clip": "approval",
+      "text": "你让 claude 迁移一个模块，然后去开会。二十分钟后它卡在一个问题上：要不要改 tsconfig？它在等你，而你不在电脑前。现在，这个问题会推送到你手机上。看一眼，点一下，它继续干活。"
+    },
+    {
+      "id": "what",
+      "title": "不是另一个 Claude",
+      "keyword": "同一个 agent · 同一份配置 · 同一份会话记录",
+      "clip": "stream",
+      "text": "这是 claude-chat-mobile，一个开源的自托管项目。它不打包 Claude，也不是 Claude 的重新实现——它通过官方 Agent SDK，驱动你电脑上已经登录的 claude CLI。手机上看到的，是同一个 agent：同一份 CLAUDE.md、同样的 MCP 服务器、技能、hooks，和同一份会话记录。在手机上打字，和坐在终端前打字，是等价的。"
+    },
+    {
+      "id": "stream",
+      "title": "流式输出",
+      "keyword": "Markdown · 代码高亮",
+      "clip": "stream",
+      "text": "发一个任务，回复实时流回来，Markdown 和代码高亮都在。"
+    },
+    {
+      "id": "tools",
+      "title": "过程可见",
+      "keyword": "每步一张卡",
+      "clip": "tools",
+      "text": "claude 的每一步操作都渲染成卡片——改了哪个文件、diff 长什么样，点开就看。"
+    },
+    {
+      "id": "approval",
+      "title": "所批即所行",
+      "keyword": "完整命令 · 内容不符自动作废",
+      "clip": "approval",
+      "text": "碰到危险操作，完整命令和所在目录推到手机。你批准的就是它执行的——内容对不上，这次批准自动作废。"
+    },
+    {
+      "id": "question",
+      "title": "拿不准就出选择题",
+      "keyword": "AskUserQuestion → 原生选择器",
+      "clip": "question",
+      "text": "它拿不准的时候会出选择题，点一下就是答案。"
+    },
+    {
+      "id": "details",
+      "title": "细节按手机习惯做",
+      "keyword": "排队可撤回 · 权限五档 · 逐条切模型 · 附件与预览 · 状态栏 · 多仓库并行",
+      "clip": "tabs",
+      "text": "细节也按手机的习惯做了：它忙的时候，你继续发——消息排队，标记看得见，发错了还能撤回重编辑。权限五个档位、模型逐条消息可切、思考强度可调。从相册发截图，历史里的附件点开就能预览；项目文件也能只读浏览，出不了白名单目录。状态栏实时显示 token、花费和上下文余量——心里有数。几个仓库并行跑，标签页各管各的。手机上聊到一半，回电脑终端 resume，接着来。装成 PWA，就是一个 app。"
+    },
+    {
+      "id": "security",
+      "title": "安全模型",
+      "keyword": "单用户实例 · 无 token 不出本机 · 权限只继承 CLI · 设备信赖 TOFU",
+      "clip": "statusline",
+      "text": "这是一条能远程碰到你电脑 shell 的通道，所以安全模型是这么设计的：每个实例只属于你一个人，没有多用户系统。不设 token，服务只绑定本机回环地址，出不了你的电脑。权限不额外注入，只继承你 claude CLI 已有的配置——终端里怎么批，手机上就怎么批。陌生设备要先在电脑上一次性授权，光有 token 进不来。公网部署还可以再加一层 Cloudflare Access 双因素。"
+    },
+    {
+      "id": "cta",
+      "title": "上手与开源",
+      "keyword": "github.com/Ike-li/claude-chat-mobile",
+      "clip": "tabs",
+      "text": "同一个 WiFi 直连就能用；出门用 cloudflared 起个隧道；长期用就固定域名加双因素。开源，AGPL 协议，代码和部署文档都在 GitHub——claude-chat-mobile。"
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "name": "vertical-15s",
+  "canvas": { "w": 1080, "h": 1920, "fps": 30 },
+  "theme": {
+    "bg": "#17130F",
+    "accent": "#D97757",
+    "text": "#F4F3EE",
+    "dim": "#B8AFA3",
+    "font": "'PingFang SC', 'Noto Sans SC', 'Hiragino Sans GB', sans-serif"
+  },
+  "phone": { "x": 195, "y": 230, "w": 690, "h": 1494 },
+  "scenes": [
+    {
+      "id": "hook",
+      "type": "card",
+      "durSec": 3,
+      "title": "claude 在家写代码",
+      "lines": ["我在外面点了个「允许」"]
+    },
+    {
+      "id": "approval",
+      "type": "clip",
+      "clip": "approval",
+      "durSec": 5,
+      "title": "完整命令推到手机",
+      "captions": ["看清楚，再放行"]
+    },
+    {
+      "id": "process",
+      "type": "clip",
+      "clip": "tools",
+      "durSec": 4,
+      "title": "改了什么，随时看",
+      "captions": []
+    },
+    {
+      "id": "end",
+      "type": "card",
+      "durSec": 4,
+      "title": "开源自托管",
+      "lines": ["连你自己的 claude CLI", "GitHub: claude-chat-mobile"]
+    }
+  ]
+}

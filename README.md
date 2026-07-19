@@ -1,6 +1,6 @@
 # promo — 宣传创作区
 
-本分支是 claude-chat-mobile 的**宣传素材创作区**（文案、分镜、脚本草稿），与 `master`/`dev` 开发线**零共同历史**，不参与构建、测试与发布。`git clone` 默认不会拿到本分支。
+本分支是 claude-chat-mobile 的**宣传素材创作区**（文案、分镜、出片管线），与 `master`/`dev` 开发线**零共同历史**，不参与构建、测试与发布。`git clone` 默认不会拿到本分支。
 
 - 产品代码与部署文档：见 [`master`](https://github.com/Ike-li/claude-chat-mobile) 分支
 - 展示站（GitHub Pages）：`gh-pages` 分支 → https://ike-li.github.io/claude-chat-mobile/
@@ -8,8 +8,23 @@
 
 ## 目录
 
-- `copy/vertical.md` — 竖屏短视频文案（抖音 / 朋友圈，静音字幕友好）
-- `copy/horizontal.md` — 横屏长视频文案（B 站 / YouTube，约 3 分钟叙事）
+| 路径 | 内容 |
+|---|---|
+| `copy/vertical.md` | 竖屏短视频文案（抖音 30s / 朋友圈 15s，静音字幕友好） |
+| `copy/horizontal.md` | 横屏长视频文案（B 站 / YouTube，约 3 分钟分镜+旁白） |
+| `timeline/*.json` | 文案的结构化形态：分镜/字幕/时长/画布参数——gen-cards 与 compose 的单一输入源 |
+| `shotlist.md` | 素材录制与出片手册（镜头↔mock 场景映射、全流程命令、人工镜头清单） |
+| `tools/make-demo-clips.js` | 录 6 段手机 UI 素材（对历史检出的 mock server 录屏，零 token） |
+| `tools/gen-cards.mjs` | 生成全屏字幕卡与手机区覆盖层（Playwright 截图） |
+| `tools/compose.mjs` | ffmpeg 三层合成 + 拼接出竖屏成片 |
+
+## 快速出片
+
+```bash
+npm i && cat shotlist.md   # 全流程四条命令在 shotlist.md
+```
+
+产物目录（`clips/` `cards/` `render/`）不进 git；成片留存拷去稳定盘位。
 
 ## 创作纪律
 

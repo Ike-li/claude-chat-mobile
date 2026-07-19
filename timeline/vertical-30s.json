@@ -1,0 +1,60 @@
+{
+  "name": "vertical-30s",
+  "canvas": { "w": 1080, "h": 1920, "fps": 30 },
+  "theme": {
+    "bg": "#17130F",
+    "accent": "#D97757",
+    "text": "#F4F3EE",
+    "dim": "#B8AFA3",
+    "font": "'PingFang SC', 'Noto Sans SC', 'Hiragino Sans GB', sans-serif"
+  },
+  "phone": { "x": 195, "y": 230, "w": 690, "h": 1494 },
+  "scenes": [
+    {
+      "id": "hook",
+      "type": "card",
+      "durSec": 4,
+      "title": "让 claude 改代码",
+      "lines": ["然后，出门"]
+    },
+    {
+      "id": "approval",
+      "type": "clip",
+      "clip": "approval",
+      "durSec": 7,
+      "title": "危险操作？推到手机上",
+      "captions": ["完整命令、哪个目录", "看清楚再放行"]
+    },
+    {
+      "id": "process",
+      "type": "clip",
+      "clip": "tools",
+      "durSec": 7,
+      "title": "它改了什么，实时看",
+      "captions": ["每一步工具调用", "都是一张卡片"]
+    },
+    {
+      "id": "resume",
+      "type": "card",
+      "durSec": 6,
+      "title": "路上手机起的头",
+      "lines": ["回家终端 /resume 接着聊"],
+      "note": "字幕卡版；如需实拍手机+终端分屏画面，人工替换本段"
+    },
+    {
+      "id": "tabs",
+      "type": "clip",
+      "clip": "tabs",
+      "durSec": 4,
+      "title": "几个仓库并行跑",
+      "captions": ["标签页一切，各管各的"]
+    },
+    {
+      "id": "end",
+      "type": "card",
+      "durSec": 4,
+      "title": "开源 · 自托管",
+      "lines": ["驱动你本机登录好的 claude CLI", "GitHub 搜 claude-chat-mobile"]
+    }
+  ]
+}

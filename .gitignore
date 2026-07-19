@@ -1,0 +1,16 @@
+# 依赖
+node_modules/
+
+# 管线产物（可复现：clips=录屏素材 cards=静态图层 render=成片；成片留存拷去稳定盘位）
+clips/
+cards/
+render/
+
+# 媒体二进制兜底
+*.mp4
+*.mov
+*.mp3
+*.wav
+*.gif
+
+.DS_Store
