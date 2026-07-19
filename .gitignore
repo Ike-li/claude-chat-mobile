@@ -13,4 +13,8 @@ render/
 *.wav
 *.gif
 
+# 本机会话配置不入库（.claude/skills/ 是入库源，须保留 tracked）
+.claude/settings.local.json
+.claude/settings.json
+
 .DS_Store
