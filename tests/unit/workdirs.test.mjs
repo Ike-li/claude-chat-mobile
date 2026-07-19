@@ -8,7 +8,7 @@ import { realpathSync } from 'node:fs';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
-  findProjectDirCollisions,
+  findProjectDirCollisions, isAllowedWorkdir,
 } from '../../src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -180,5 +180,27 @@ test.describe('findProjectDirCollisions（SS-004）', () => {
     assert.equal(c.length, 1);
     assert.equal(c[0].encoded, '-tmp-foo');
     assert.deepEqual(c[0].paths.sort(), ['/tmp-foo', '/tmp/foo'].sort());
+  });
+});
+
+test.describe('isAllowedWorkdir（worktree 会话触达：白名单 or 已注册 linked worktree）', () => {
+  const dirs = ['/repo/a', '/repo/b'];
+  test('白名单目录本身 → true（与 isWhitelisted 等价路径）', () => {
+    assert.equal(isAllowedWorkdir('/repo/a', dirs, new Map()), true);
+  });
+  test('已注册 worktree 且所属 repo 在白名单 → true', () => {
+    const wt = new Map([['/repo/a/.worktrees/promo', '/repo/a']]);
+    assert.equal(isAllowedWorkdir('/repo/a/.worktrees/promo', dirs, wt), true);
+  });
+  test('已注册 worktree 但所属 repo 已被热移除 → false（repo 失效即 worktree 随之失效）', () => {
+    const wt = new Map([['/gone/repo/wt', '/gone/repo']]);
+    assert.equal(isAllowedWorkdir('/gone/repo/wt', dirs, wt), false);
+  });
+  test('未注册路径（即使真实存在/伪造 worktree 形态）→ false', () => {
+    assert.equal(isAllowedWorkdir('/repo/a/.worktrees/evil', dirs, new Map()), false);
+  });
+  test('knownWorktrees 缺省/非 Map → 退化为纯白名单判定', () => {
+    assert.equal(isAllowedWorkdir('/repo/a', dirs, undefined), true);
+    assert.equal(isAllowedWorkdir('/repo/a/.worktrees/promo', dirs, undefined), false);
   });
 });

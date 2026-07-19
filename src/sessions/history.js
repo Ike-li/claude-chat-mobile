@@ -580,19 +580,21 @@ async function scanSessionsViaSdk(cwd, limit) {
   const all = await fn({ dir: cwd, limit: fetchLimit });
   const arr = Array.isArray(all) ? all : [];
   const projectDir = join(CLAUDE_DIR, getProjectDir(cwd));
-  const enriched = await Promise.all(arr.map(async s => {
+  const enriched = (await Promise.all(arr.map(async s => {
     const file = join(projectDir, `${s.sessionId}.jsonl`);
+    // 归属过滤（2026-07-19 实测）：SDK listSessions 的 dir 匹配含祖先目录——查 worktree 路径会混入
+    // 主仓（祖先 cwd）的会话。jsonl 不在本 cwd 项目目录 = 非本 cwd 会话，滤掉；与 session:switch 的
+    // sessionFileExists 归属校验同一语义（列表 ≡ 可切换，不出「点了报会话不存在」的幽灵行）。
+    let st;
+    try { st = await stat(file); } catch { return null; }
     let activityAt = null;
-    try {
-      const st = await stat(file);
-      activityAt = await readLastMessageActivityMs(file, st.size);
-    } catch { /* 文件不存在/不可读 → 回落 lastModified */ }
+    try { activityAt = await readLastMessageActivityMs(file, st.size); } catch { /* 读失败 → 回落 lastModified */ }
     return {
       id: s.sessionId,
       title: s.summary || '(无标题)',
       lastUsedAt: Math.round(activityAt ?? s.lastModified),
     };
-  }));
+  }))).filter(Boolean);
   enriched.sort((a, b) => b.lastUsedAt - a.lastUsedAt || String(a.id).localeCompare(String(b.id)));
   // hasMore：重排后仍有未展示项，或 SDK 候选触顶（目录里可能还有更旧/未纳入的会话）
   return {

@@ -53,7 +53,8 @@ import {
 } from './instance-routing.js';
 import { prepareSessionForWebResume } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, isAllowedWorkdir } from '../sessions/workdirs.js';
+import { discoverWorktreeSessions } from '../sessions/worktree-sessions.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -240,9 +241,13 @@ const reselectViewingAfter = (removedCwd, opts = {}) => {
   // 被移除的实例若正被镜像锁，立即清全局锁；落到另一实例后由 catchUpTick 重判
   clearMirrorOnViewChange();
 };
+// worktree 会话触达（对齐 CLI「cd 进 worktree 即可 /resume」）：worktree:sessions handler 以
+// `git worktree list` 权威输出把 worktreePath→repo 写入本表；此后该路径可作合法 cwd（列表/切换/新开）。
+// 客户端伪造路径不会入表；repo 被热移除时其 worktree 随 isAllowedWorkdir 复验立即失效。
+const knownWorktrees = new Map();
 // 白名单校验 + 缺省落 viewingCwd：cwd 维度的事件（setWorkdir/session:list/new）经此解析目标 cwd。
 const routeCwd = cwd => {
-  if (isWhitelisted(cwd, workDirs)) return cwd;
+  if (isAllowedWorkdir(cwd, workDirs, knownWorktrees)) return cwd;
   // FR-23 越界审计信号：显式传了不在白名单的路径 → 记一条检测信号，再安全回退当前查看目录。
   // 不 fail-closed：回退本身已防越权（不访问越界目录），拒绝会破坏“传错自动纠正”顺手性 + #8 热移除回退。
   if (typeof cwd === 'string' && cwd) {
@@ -2109,7 +2114,10 @@ registerSocketConnection(io, socket => {
     // routeCwd 的缺省回退(viewingCwdOf)可能仍是热移除目录（该目录有 live 实例挂着未被归位），不夯一次
     // 白名单会绕过「仅拒新开」——落到非白名单目录后 sessionFileExists 大概率会因该目录下无此 sessionId 而
     // 拒绝（ack 回 '会话不存在'），是安全的失败模式，不会误开其他目录下的会话。
-    const cwd = ensureWhitelisted(routeCwd(payload?.cwd), workDirs);
+    // 已注册 worktree 跳过归位夯平：routeCwd 已按 isAllowedWorkdir 放行（含 repo 仍在白名单的复验），
+    // 再夯会把 worktree 会话误归位到 dirs[0] 落「会话不存在」。
+    const routed = routeCwd(payload?.cwd);
+    const cwd = knownWorktrees.has(routed) ? routed : ensureWhitelisted(routed, workDirs);
     // 归属校验以「jsonl 存在于本 cwd 的 project 目录」为准：既拒跨 cwd / 失效 id，又接纳终端建的会话。
     if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
@@ -2158,6 +2166,23 @@ registerSocketConnection(io, socket => {
     // hiddenIds（FR-20 两级删除 L1）：L1 删除的会话从这里过滤掉，不出现在列表里（transcript 仍在盘上）。
     const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit, hiddenIds: new Set(sessions.getHiddenIds()) });
     ack({ currentSessionId, sessions: list, hasMore: all ? false : hasMore });
+  });
+
+  // worktree 会话发现（CLI「cd 进 worktree 即可 /resume」的 web 等价物）：列 repo 的 linked worktree
+  // 及各自会话（按分支分组，尊重 L1 隐藏）。副作用：worktreePath 以 git 权威输出注册进 knownWorktrees，
+  // 使后续 session:switch/list/new 能以 worktree 为 cwd。repo 限定为白名单目录本身（worktree 传入回空，
+  // 不做递归发现——listRepoWorktrees 以传入路径判主树，传 worktree 会把主树误列为兄弟）。
+  on(socket, 'worktree:sessions', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const repo = routeCwd(payload?.cwd);
+    if (!isWhitelisted(repo, workDirs)) return ack({ groups: [] });
+    const hiddenIds = new Set(sessions.getHiddenIds());
+    const limit = sessionLimitByDir.get(repo) ?? DEFAULT_SESSION_LIMIT;
+    const groups = await discoverWorktreeSessions(repo, {
+      listSessions: p => listSessionsPage(p, { limit, hiddenIds }),
+    });
+    for (const g of groups) knownWorktrees.set(g.worktreePath, repo);
+    ack({ groups });
   });
 
   // 两级删除 L1（FR-20，承接 docs/design.md）：默认删——只从产品可见列表移除，transcript 原样保留在主机磁盘，

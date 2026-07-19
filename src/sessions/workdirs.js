@@ -79,6 +79,16 @@ export function isWhitelisted(cwd, dirs) {
   return typeof cwd === 'string' && cwd !== '' && dirs.includes(cwd);
 }
 
+// worktree 会话触达（对齐 CLI「cd 进 worktree 即可 /resume」）：合法 cwd = 白名单目录本身，
+// 或已注册的 linked worktree 且其所属 repo 仍在白名单（repo 热移除 → worktree 立即随之失效）。
+// knownWorktrees（worktreePath → repo）只能由服务端以 `git worktree list` 权威输出写入——
+// 客户端伪造任意路径不会入表，故本函数不构成白名单绕过面。
+export function isAllowedWorkdir(cwd, dirs, knownWorktrees) {
+  if (isWhitelisted(cwd, dirs)) return true;
+  const repo = knownWorktrees instanceof Map ? knownWorktrees.get(cwd) : undefined;
+  return typeof repo === 'string' && isWhitelisted(repo, dirs);
+}
+
 // SS-004：与 history.getProjectDir / CLI 同规则（非字母数字 → '-'）。
 // 放在本模块避免 workdirs↔history 循环耦合；history 仍是路径编码的 SoT 实现。
 function projectDirKey(cwd) {

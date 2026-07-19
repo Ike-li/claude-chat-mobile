@@ -167,10 +167,12 @@ test('inbound contract flags client emits and mock handlers outside the contract
 });
 
 test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量抽查）', () => {
-  // 31 = user:*(10) + task:stop + session:*(8) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + doctor:run + service:status
+  // 32 = user:*(10) + task:stop + session:*(8) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + doctor:run + service:status
+  //      + worktree:sessions（linked worktree 会话发现，CLI「cd 进 worktree 即 /resume」的 web 等价物）
   // （曾含 usage:get；抽屉额度窗已砍，额度只走 statusline。logs:clientError=前端全局 JS 错误上报落服务端日志；
   //   user:cancelQueued=排队消息撤回，对齐 CLI ESC）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 31);
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 32);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('worktree:sessions'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:cancelQueued'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:deletePermanent'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('doctor:run'));

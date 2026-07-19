@@ -562,6 +562,11 @@ io.on('connection', socket => {
     if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
   });
 
+  // worktree 会话发现：mock 无 worktree 场景，恒回空组（真形态见 src/server/app.js 同名 handler）
+  socket.on('worktree:sessions', (payload, callback) => {
+    if (typeof callback === 'function') callback({ groups: [] });
+  });
+
   // Handle session list request for sidebar directory browsing
   socket.on('session:list', (payload, callback) => {
     const { cwd, all } = payload || {};

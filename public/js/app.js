@@ -4405,6 +4405,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
       // 组装并渲染子树函数
       const populateSubtree = (cwd, container, liveMap, fTabs) => {
+        // worktree 会话分组元素（CLI「cd 进 worktree 即 /resume」的 web 等价）；renderRows 全量重绘
+        // 会清掉它，故重绘末尾总是重挂，与 worktree:sessions ack 的先后到达顺序无关。
+        let wtSection = null;
         // 渲染：无 id 新会话实例 + 会话行 +（若被截断）「显示全部」行
         const renderRows = (sessions, hasMore) => {
           container.innerHTML = '';
@@ -4428,6 +4431,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             };
             container.appendChild(more);
           }
+          if (wtSection) container.appendChild(wtSection);
         };
 
         // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore}）
@@ -4461,6 +4465,24 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           const sessions = state?.sessions || [];
           sessionsCache.set(cwd, { sessions, hasMore: !!state?.hasMore });
           renderRows(sessions, !!state?.hasMore);
+        });
+
+        // 3) worktree 会话分组：linked worktree 的会话按分支列出，行为与普通会话行一致
+        //（点击走 session:switch，cwd=worktreePath——服务端 worktree:sessions 已注册放行该路径）。
+        socket.emit('worktree:sessions', { cwd }, res => {
+          if (!expandedDirs.has(cwd)) return; // 过期守卫（同 session:list）
+          const groups = (res?.groups || []).filter(g => g?.worktreeExists && (g.sessions || []).length);
+          if (!groups.length) { wtSection = null; return; }
+          wtSection = el(`<div data-testid="worktree-groups"></div>`);
+          for (const g of groups) {
+            const head = el(`<div class="pl-6 pr-3 pt-2.5 pb-1 text-[10px] font-sans text-ink-faint border-b border-line-soft/40 truncate"></div>`);
+            head.textContent = `⑂ worktree · ${g.branch}`; // textContent：branch 名来自 git，不作 HTML 插值
+            wtSection.appendChild(head);
+            const liveWt = new Map();
+            for (const inst of (liveByCwd[g.worktreePath] || [])) { if (inst.sessionId) liveWt.set(inst.sessionId, inst); }
+            for (const s of g.sessions) wtSection.appendChild(sessionRow(s, liveWt.get(s.id), g.worktreePath));
+          }
+          container.appendChild(wtSection);
         });
       };
 
