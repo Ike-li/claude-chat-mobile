@@ -2,7 +2,7 @@
 
 > 在手机上用你本机的 `claude` CLI，效果和坐在终端前一样。
 
-**中文** · [English](README.en.md)
+**中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)

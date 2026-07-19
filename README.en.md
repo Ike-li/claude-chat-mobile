@@ -2,7 +2,7 @@
 
 > Use your local `claude` CLI from your phone, with the same effect as typing at your terminal.
 
-[中文](README.md) · **English**
+[中文](README.md) · **English** · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/)
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
