@@ -122,6 +122,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // multiSelect 当前题勾选的下标
   let multiSelectedIndexes = new Set();
   const deleteSessionModal = $('deleteSessionModal'), deleteSessionTitle = $('deleteSessionTitle'), deleteL1Btn = $('deleteL1Btn'), deleteL2Btn = $('deleteL2Btn'), deleteSessionCancel = $('deleteSessionCancel');
+  // 通用确认弹窗（替代原生 confirm，appConfirm 接线见 openSheet/closeSheet 附近）
+  const confirmModal = $('confirmModal'), confirmSheet = $('confirmSheet'), confirmTitle = $('confirmTitle'),
+        confirmBody = $('confirmBody'), confirmOk = $('confirmOk'), confirmCancel = $('confirmCancel');
   const authGate = $('authGate'), authToken = $('authToken'), authSubmit = $('authSubmit'), authError = $('authError'); // 访问令牌输入页
   const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // Access 会话过期重登浮层
   // 远程设备审批 + 访问帮助 UI
@@ -1057,10 +1060,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // 开发者模式：一键重启常驻 server（按钮仅 DEV_MODE=1 时由 setInstances 显示）。
   const btnRestartServer = $('btnRestartServer');
-  if (btnRestartServer) btnRestartServer.onclick = () => {
+  if (btnRestartServer) btnRestartServer.onclick = async () => {
     const busyN = instancesList.filter(i => i.state === 'busy' || i.state === 'permission').length;
-    const warnLine = busyN ? `\n\n⚠️ 当前有 ${busyN} 个会话在运行/待审批，重启会中断它们（含后台任务）。` : '';
-    if (!confirm(`⟳ 重启常驻 server？${warnLine}\n\n服务将优雅退出并由 KeepAlive 自动拉起，页面会自动重连。`)) return;
+    const warnLine = busyN ? `⚠️ 当前有 ${busyN} 个会话在运行/待审批，重启会中断它们（含后台任务）。\n\n` : '';
+    if (!(await appConfirm({
+      title: '⟳ 重启常驻 server？',
+      body: `${warnLine}服务将优雅退出并由 KeepAlive 自动拉起，页面会自动重连。`,
+      okText: '重启',
+      tone: 'danger',
+    }))) return;
     haptic('warning');
     addBar('⟳ 正在重启服务…页面将自动重连', 'text-warning');
     socket.emit('dev:restart', {}, res => {
@@ -2965,7 +2973,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     if (_composeReady) refreshComposeDefaultsSummary();
   }
-  permModeSelect.onchange = () => {
+  permModeSelect.onchange = async () => {
     // 单驾驶员：终端驾驶中（只读锁）设置一并冻结——权限档实际只作用于 web 自己的实例、碰不到终端进程，
     // 此刻切档只会造成「我切了怎么终端没变」的误解；接管后再调。拨回 select 防 UI 与实际档漂移。
     if (mirrorReadonlySid) { permModeSelect.value = currentPermMode; addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; }
@@ -2973,7 +2981,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (mode === currentPermMode) return;
     // bypass 二次危险确认（终端等价：终端首次 bypass 亦需确认）；取消则回退 select
     if (mode === 'bypassPermissions' &&
-        !confirm('⚠️ 切到 bypass（跳过所有审批）\n\nclaude 将无需确认即可改文件、跑命令；一次提示注入即可波及整台机器。\n确定开启？')) {
+        !(await appConfirm({
+          title: '⚠️ 切到 bypass（跳过所有审批）',
+          body: 'claude 将无需确认即可改文件、跑命令；一次提示注入即可波及整台机器。',
+          okText: '开启 bypass',
+          tone: 'danger',
+        }))) {
       permModeSelect.value = currentPermMode;
       return;
     }
@@ -3941,6 +3954,41 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }, 300);
   }
 
+  // ---- 通用确认弹窗（替代原生 confirm，样式/开合对齐项目底部 sheet）----
+  // Promise<boolean>：确定=true，取消按钮/点遮罩=false。已开着时再次调用直接 resolve(false)
+  // （async handler await 期间连点的重入兜底），不排队不叠加。tone 只切三处配色，结构复用同一 DOM。
+  let confirmResolve = null;
+  const CONFIRM_TONES = {
+    default: { border: 'var(--accent)', title: 'text-accent-deep', ok: 'bg-cta' },
+    warning: { border: 'var(--warning)', title: 'text-warning', ok: 'bg-cta' },
+    danger:  { border: 'var(--danger)',  title: 'text-danger',  ok: 'bg-danger' },
+  };
+  function appConfirm({ title, body, okText = '确定', tone = 'default' }) {
+    if (!confirmModal || confirmResolve) return Promise.resolve(false);
+    const t = CONFIRM_TONES[tone] || CONFIRM_TONES.default;
+    confirmSheet.style.borderTopColor = t.border;
+    confirmTitle.className = `${t.title} font-semibold mb-2`;
+    confirmTitle.textContent = title;
+    confirmBody.textContent = body || '';
+    confirmBody.classList.toggle('hidden', !body);
+    confirmOk.className = `flex-1 py-2.5 rounded-lg ${t.ok} text-white active:brightness-95 font-medium`;
+    confirmOk.textContent = okText;
+    return new Promise(resolve => {
+      confirmResolve = resolve;
+      openSheet(confirmModal);
+    });
+  }
+  function settleConfirm(ok) {
+    if (!confirmResolve) return;
+    const r = confirmResolve; confirmResolve = null;
+    closeSheet(confirmModal);
+    r(ok);
+  }
+  if (confirmOk) confirmOk.onclick = () => settleConfirm(true);
+  if (confirmCancel) confirmCancel.onclick = () => settleConfirm(false);
+  // 点遮罩空白处 = 取消（对齐移动端 sheet 习惯；permModal 因审批语义不做，这里是普通确认、可以做）
+  if (confirmModal) confirmModal.addEventListener('click', e => { if (e.target === confirmModal) settleConfirm(false); });
+
   // ---- 两级删除会话（FR-20，docs/design.md）----
   // L1=从产品移除（session:delete，transcript 保留）；L2=彻底删底层文件（session:deletePermanent，二次确认）。
   // 只对「未打开的历史会话」提供入口（见 sessionRow）——已打开的会话先关闭 tab 再删，避免删一个正被本产品
@@ -3961,11 +4009,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       else addBar(res?.error || '移除失败', 'text-danger');
     });
   };
-  if (deleteL2Btn) deleteL2Btn.onclick = () => {
+  if (deleteL2Btn) deleteL2Btn.onclick = async () => {
     if (!deleteTarget) return;
     const t = deleteTarget;
-    // L2 显式二次确认（docs/design.md"显式二次确认删底层 transcript 文件"）——不可恢复，故在 L1 一级弹窗之上再加一道。
-    if (!confirm(`彻底删除会话「${t.title || t.sessionId}」的底层文件？\n\n此操作不可恢复：主机上的会话记录将被真正抹除。`)) return;
+    // L2 显式二次确认（docs/design.md"显式二次确认删底层 transcript 文件"）——不可恢复，故在 L1 一级弹窗之上再加一道（z-50 叠 z-40，取消回到删除 sheet）。
+    if (!(await appConfirm({
+      title: '🗑 彻底删除底层文件？',
+      body: `会话「${t.title || t.sessionId}」在主机上的记录将被真正抹除。\n此操作不可恢复。`,
+      okText: '彻底删除',
+      tone: 'danger',
+    }))) return;
     deleteTarget = null;
     closeSheet(deleteSessionModal);
     socket.emit('session:deletePermanent', { sessionId: t.sessionId, cwd: t.cwd }, res => {
@@ -4176,10 +4229,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         let deleteBtn;
         if (liveInst) {
           deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">关闭</div>`);
-          deleteBtn.onclick = (e) => {
+          deleteBtn.onclick = async (e) => {
             e.stopPropagation();
             haptic('warning');
-            if (confirm(`关闭会话「${s.title || '新会话'}」？\n\n会话将从 tab 列表移除，但历史保留可重新打开。`)) {
+            if (await appConfirm({
+              title: `关闭会话「${s.title || '新会话'}」？`,
+              body: '会话将从 tab 列表移除，但历史保留可重新打开。',
+              okText: '关闭会话',
+            })) {
               socket.emit('session:close', { instanceId: liveInst.instanceId });
               closeLeftSidebar();
             } else {
@@ -4257,10 +4314,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         // 侧滑仍保留作快捷方式，二者并存、互不冲突，都是触发同一个 session:close。
         if (liveInst) {
           const closeBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm">✕</button>`);
-          closeBtn.onclick = e => {
+          closeBtn.onclick = async e => {
             e.stopPropagation();
             haptic('warning');
-            if (confirm(`关闭会话「${s.title || '新会话'}」？\n\n会话将从 tab 列表移除，但历史保留可重新打开。`)) {
+            if (await appConfirm({
+              title: `关闭会话「${s.title || '新会话'}」？`,
+              body: '会话将从 tab 列表移除，但历史保留可重新打开。',
+              okText: '关闭会话',
+            })) {
               socket.emit('session:close', { instanceId: liveInst.instanceId });
               closeLeftSidebar();
             }
@@ -5178,7 +5239,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 运行中点击=排队续接——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行）；
   // 再次点击（按钮已变「取消续接」）可撤销排队。疑似中断点击=确认后立即解锁。
   // 续接后首次发送经 server 陈旧上下文守卫置换实例，吸收终端轮次。
-  function requestMirrorResume() {
+  async function requestMirrorResume() {
     if (!mirrorReadonlySid) return;
     if (armedTakeoverSid === mirrorReadonlySid) { // 取消排队中的续接，回退只读态
       armedTakeoverSid = null;
@@ -5191,7 +5252,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addBar('已请求续接 CLI 会话：终端当前操作完成后自动切换，可点「取消续接」撤销', 'text-ink-faint');
       return;
     }
-    if (!confirm('续接 CLI 会话？\n\n这是电脑终端正在跑的同一条对话。续接不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再续接。')) return;
+    if (!(await appConfirm({
+      title: '续接 CLI 会话？',
+      body: '这是电脑终端正在跑的同一条对话。续接不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再续接。',
+      okText: '仍要续接',
+      tone: 'warning',
+    }))) return;
     mirrorOverriddenSid = mirrorReadonlySid;
     applyMirror(false, mirrorReadonlySid);
     addBar('已续接 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险', 'text-warning');

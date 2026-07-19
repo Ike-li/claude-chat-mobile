@@ -595,23 +595,23 @@ body.ccm-sheet-open #messages {
   }
 }
 
-/* ── 三个底栏弹层的统一滑入滑出过渡 (替代 hidden 硬切) ── */
-#permModal, #questionModal, #consoleModal {
+/* ── 底栏弹层的统一滑入滑出过渡 (替代 hidden 硬切) ── */
+#permModal, #questionModal, #consoleModal, #confirmModal {
     visibility: hidden;
     pointer-events: none;
     opacity: 0;
     transition: opacity .25s ease, visibility .25s ease;
   }
-  #permModal > div, #questionModal > div, #consoleModal > div {
+  #permModal > div, #questionModal > div, #consoleModal > div, #confirmModal > div {
     transform: translateY(100%);
     transition: transform .3s cubic-bezier(0.16, 1, 0.3, 1);
   }
-  #permModal.sheet-open, #questionModal.sheet-open, #consoleModal.sheet-open {
+  #permModal.sheet-open, #questionModal.sheet-open, #consoleModal.sheet-open, #confirmModal.sheet-open {
     visibility: visible;
     pointer-events: auto;
     opacity: 1;
   }
-  #permModal.sheet-open > div, #questionModal.sheet-open > div, #consoleModal.sheet-open > div {
+  #permModal.sheet-open > div, #questionModal.sheet-open > div, #consoleModal.sheet-open > div, #confirmModal.sheet-open > div {
     transform: translateY(0);
   }
   /* UX-003：审批 sheet 弹出后短暂防误触（过渡期按钮不可点） */

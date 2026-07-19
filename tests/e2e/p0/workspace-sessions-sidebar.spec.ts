@@ -100,8 +100,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const backgroundRow = sessionRowByInstance(page, 'inst_2');
     await expect(backgroundRow).toContainText('Another App Concurrency');
 
-    page.once('dialog', dialog => dialog.accept());
     await backgroundRow.locator('button', { hasText: '✕' }).click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#messages')).toContainText('Concurrency Mode Triggered');
@@ -324,8 +325,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       await expandWorkspace(page, ANOTHER_WORKSPACE);
     }
     await expect(currentRow).toBeVisible();
-    page.once('dialog', dialog => dialog.accept());
     await currentRow.locator('button', { hasText: '✕' }).click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
 
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
@@ -352,8 +354,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const currentRow = sessionRowByInstance(page, 'inst_1');
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
 
-    page.once('dialog', dialog => dialog.accept());
     await currentRow.locator('button', { hasText: '✕' }).click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
 
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
@@ -386,8 +389,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
     await expectSessionBadge(page, 'inst_1', '⚠️');
 
-    page.once('dialog', dialog => dialog.accept());
     await currentRow.locator('button', { hasText: '✕' }).click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
 
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
@@ -416,8 +420,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
     await expectSessionBadge(page, 'inst_1', '⚠️');
 
-    page.once('dialog', dialog => dialog.accept());
     await currentRow.locator('button', { hasText: '✕' }).click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
 
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');

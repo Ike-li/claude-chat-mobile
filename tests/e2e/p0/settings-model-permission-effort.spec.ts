@@ -160,8 +160,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillPermText')).toHaveText('Auto');
     await expect(page.locator('#pillEffortText')).toHaveText('max');
 
-    page.once('dialog', dialog => dialog.accept());
     await page.locator('#btnSend').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
     await expect(page.locator('#input')).toBeEnabled();
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
     await expect(page.locator('#pillPermText')).toHaveText('计划模式');

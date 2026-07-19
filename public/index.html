@@ -214,6 +214,20 @@
     </div>
   </div>
 
+  <!-- 通用确认弹窗：替代原生 confirm()，样式对齐 permModal；appConfirm() 接线在 app.js。
+       z-50 以便叠在 deleteSessionModal(z-40) 之上（L2 彻底删除的二次确认场景）。 -->
+  <div id="confirmModal" class="hidden fixed inset-0 z-50 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="确认操作">
+    <div id="confirmSheet" class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">
+      <div class="sheet-handle"></div>
+      <div id="confirmTitle" class="text-accent-deep font-semibold mb-2"></div>
+      <div id="confirmBody" class="text-sm text-ink-soft whitespace-pre-wrap break-words mb-4"></div>
+      <div class="flex gap-2">
+        <button id="confirmCancel" class="flex-1 py-2.5 rounded-lg border border-line text-ink active:bg-sunk font-medium">取消</button>
+        <button id="confirmOk" class="flex-1 py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">确定</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 实时运行日志弹窗 (Slide-Up Console Drawer) -->
   <div id="consoleModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
     <div class="w-full h-[70vh] bg-gray-900/95 backdrop-blur-md rounded-t-2xl flex flex-col safe-bottom border-t border-gray-800" style="box-shadow:var(--shadow-pop)">

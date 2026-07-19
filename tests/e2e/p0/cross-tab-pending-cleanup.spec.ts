@@ -99,8 +99,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(questionRow).toContainText('Visual Sandbox (Main)');
     await expect(questionRow.locator('[data-instance-badge]')).toHaveAttribute('aria-label', '待审批');
 
-    page.once('dialog', dialog => dialog.accept());
     await questionRow.locator('button', { hasText: '✕' }).click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
 
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
@@ -130,8 +131,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(closedRow).toContainText('Visual Sandbox (Main)');
     await expect(closedRow.locator('[data-instance-badge]')).toHaveAttribute('aria-label', '待审批');
 
-    page.once('dialog', dialog => dialog.accept());
     await closedRow.locator('button', { hasText: '✕' }).click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
 
     await expectSidebarClosed(page);
     await expect(page.locator('#messages')).toContainText('Closed-session stale replay finished for current view.', { timeout: 10_000 });
