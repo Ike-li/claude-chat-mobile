@@ -69,42 +69,40 @@ test.describe('serviceStatusBasicRows：基础段四行', () => {
 });
 
 test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () => {
-  test('无失败无重启 → 空数组（接线层渲染「无异常」）', () => {
-    assert.deepEqual(formatServiceNotices({ service: { deliveryFailure: null }, restartChanged: false, now: 1000 }), []);
+  test('无失败 → 空数组（接线层渲染「无异常」）', () => {
+    assert.deepEqual(formatServiceNotices({ service: { deliveryFailure: null }, now: 1000 }), []);
   });
-  test('重启 + 投递失败 → 两行，文案与抽屉一致', () => {
+  test('投递失败 → 一行，文案与抽屉一致', () => {
     const now = 100 * 60_000;
-    const notices = formatServiceNotices({ service: { deliveryFailure: { channel: 'push', at: now - 18 * 60_000, count: 3 } }, restartChanged: true, now });
-    assert.equal(notices.length, 2);
-    assert.match(notices[0], /^🔄 服务自上次连接后已重启/);
-    assert.equal(notices[1], '🔔 推送最近失败于 18 分钟前（push，累计 3 次）');
+    const notices = formatServiceNotices({ service: { deliveryFailure: { channel: 'push', at: now - 18 * 60_000, count: 3 } }, now });
+    assert.deepEqual(notices, ['🔔 推送最近失败于 18 分钟前（push，累计 3 次）']);
   });
   test('限速锁定 → ⛔ 行：多久之前 + 累计次数 + 安全提示（有人在暴力尝试入口）', () => {
     const now = 100 * 60_000;
     assert.deepEqual(
-      formatServiceNotices({ service: { rateLimitLockout: { at: now - 42 * 60_000, count: 2 } }, restartChanged: false, now }),
+      formatServiceNotices({ service: { rateLimitLockout: { at: now - 42 * 60_000, count: 2 } }, now }),
       ['⛔ 登录限速锁定于 42 分钟前（累计 2 次）——可能有人在暴力尝试你的入口']
     );
   });
   test('前端错误 → 🐞 行：多久之前 + 累计次数 + 指向日志面板', () => {
     const now = 100 * 60_000;
     assert.deepEqual(
-      formatServiceNotices({ service: { clientError: { at: now - 3 * 60_000, count: 5 } }, restartChanged: false, now }),
+      formatServiceNotices({ service: { clientError: { at: now - 3 * 60_000, count: 5 } }, now }),
       ['🐞 前端错误发生于 3 分钟前（累计 5 次），详见日志面板']
     );
   });
   test('count 缺失（防御性）→ 不显示累计后缀', () => {
     const now = 100 * 60_000;
     assert.deepEqual(
-      formatServiceNotices({ service: { rateLimitLockout: { at: now - 60_000 } }, restartChanged: false, now }),
+      formatServiceNotices({ service: { rateLimitLockout: { at: now - 60_000 } }, now }),
       ['⛔ 登录限速锁定于 1 分钟前——可能有人在暴力尝试你的入口']
     );
     assert.deepEqual(
-      formatServiceNotices({ service: { clientError: { at: now - 60_000 } }, restartChanged: false, now }),
+      formatServiceNotices({ service: { clientError: { at: now - 60_000 } }, now }),
       ['🐞 前端错误发生于 1 分钟前，详见日志面板']
     );
   });
-  test('全类命中 → 固定顺序：重启 → 限速锁定 → 投递失败 → 前端错误', () => {
+  test('全类命中 → 固定顺序：限速锁定 → 投递失败 → 前端错误', () => {
     const now = 100 * 60_000;
     const notices = formatServiceNotices({
       service: {
@@ -112,18 +110,17 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
         rateLimitLockout: { at: now - 2000, count: 1 },
         clientError: { at: now - 3000, count: 1 },
       },
-      restartChanged: true,
       now,
     });
-    assert.deepEqual(notices.map(l => [...l][0]), ['🔄', '⛔', '🔔', '🐞']);
+    assert.deepEqual(notices.map(l => [...l][0]), ['⛔', '🔔', '🐞']);
   });
   test('旧 server ack 无新字段 → 优雅缺席不报错', () => {
-    assert.deepEqual(formatServiceNotices({ service: { deliveryFailure: null }, restartChanged: false, now: 1000 }), []);
-    assert.deepEqual(formatServiceNotices({ service: {}, restartChanged: false, now: 1000 }), []);
+    assert.deepEqual(formatServiceNotices({ service: { deliveryFailure: null }, now: 1000 }), []);
+    assert.deepEqual(formatServiceNotices({ service: {}, now: 1000 }), []);
   });
   test('at 非数（脏字段）→ 该行跳过', () => {
     assert.deepEqual(
-      formatServiceNotices({ service: { rateLimitLockout: { at: 'bad', count: 1 }, clientError: { count: 2 } }, restartChanged: false, now: 1000 }),
+      formatServiceNotices({ service: { rateLimitLockout: { at: 'bad', count: 1 }, clientError: { count: 2 } }, now: 1000 }),
       []
     );
   });

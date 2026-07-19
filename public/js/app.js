@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -355,11 +355,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   let instancesList = [];               // 最近 instances 事件的实例列表（含 per-instance state）
   let needsYouList = [];                // "等我"聚合（AD-11/§3.2.5，承接 FR-21/FR-22），按 waitingSince 升序（等得越久排越前）
   // 服务状态可见性（第一性原理重新设计，与上面 needsYouList 是不同轴——这条答"服务本身有没有出过岔子"）：
-  // latestServiceHealth = 最近一次 instances 广播里的 service 字段；_serviceRestartNoticeActive 一旦本次
-  // 页面生命周期内命中过重启就保持 true，防止下一次不相关广播里 detectServiceRestart 判回 changed:false
-  // 导致提示瞬间消失——重启提示应持续到用户主动离开/刷新页面，不是那种毫秒级归零的一次性事件。
+  // latestServiceHealth = 最近一次 instances 广播里的 service 字段。
   let latestServiceHealth = null;
-  let _serviceRestartNoticeActive = false;
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
   // P3：面板结构指纹（dirs + 实例集 + viewingInstanceId + viewingCwd）；纯状态变化时不重建面板。
   let _lastPanelStructKey = null;
@@ -990,12 +987,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addRow(basic.lastChild, r.label, r.value, r.alert ? 'text-warning' : null); // 日志开关：SDK 调试开着标黄（忘关观测点）
     }
     serviceStatusBody.appendChild(basic);
-    // 段2 异常告警：与抽屉「服务」小节同一纯函数（文案一致）；重启提示直读广播维护的标记，不二次写基线。
+    // 段2 异常告警：与抽屉「服务」小节同一纯函数（文案一致）。
     // 服务端已按时效窗判定（超窗自动退场），此处只渲染。
     const noticesSection = section('异常告警');
     const notices = formatServiceNotices({
       service: { deliveryFailure: res.deliveryFailure, rateLimitLockout: res.rateLimitLockout, clientError: res.clientError },
-      restartChanged: _serviceRestartNoticeActive,
       now,
     });
     if (!notices.length) {
@@ -3711,7 +3707,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 抽屉不再放 live 实例汇总/状态图例——状态只活在需要你、行角标、主聊天面、底栏。
   function buildServiceSection() {
     const section = el(`<div id="serviceSection"></div>`);
-    const notices = formatServiceNotices({ service: latestServiceHealth, restartChanged: _serviceRestartNoticeActive, now: Date.now() });
+    const notices = formatServiceNotices({ service: latestServiceHealth, now: Date.now() });
     if (!notices.length) { section.classList.add('hidden'); return section; }
     const wrap = el(`<div class="px-3 py-1.5 text-[10px] font-semibold text-warning border-b border-line flex flex-col gap-0.5"></div>`);
     for (const line of notices) {
@@ -3814,17 +3810,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 服务状态可见性（第一性原理重新设计）：与上面 updateSessionsDot（会话待处理，FR-21/注意力不对称）
   // 是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（NFR-15/可维护性），复用 connDotWrap（已有的
   // 服务级 UI 落点，纯连通性的 connDot 内圈继续只管绿/红，环形边框承载这条独立语义）。
-  // 本地基线存 localStorage（跨刷新持久，命名对齐既有 auth_token/device_token 风格）；每设备独立判定。
   function updateServiceNotice(service) {
     latestServiceHealth = service;
-    if (service && typeof service.startedAt === 'number') {
-      const lastSeenRaw = localStorage.getItem('service_started_at');
-      const lastSeen = lastSeenRaw != null ? Number(lastSeenRaw) : null;
-      const { changed, nextStartedAt } = detectServiceRestart({ startedAt: service.startedAt, lastSeenStartedAt: lastSeen });
-      if (nextStartedAt != null) localStorage.setItem('service_started_at', String(nextStartedAt));
-      // 一旦命中过就锁定为 true（不因下一次广播里 changed 判回 false 而让提示瞬间消失，见变量声明处注释）。
-      if (changed) _serviceRestartNoticeActive = true;
-    }
     // 边框由 updateAttentionSignal 统一重算（alert > attention > ok），此处只刷服务文案区。
     refreshServiceSection();
   }

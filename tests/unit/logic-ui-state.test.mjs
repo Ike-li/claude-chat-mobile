@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, detectServiceRestart, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, resolveSheetDragEnd } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, resolveSheetDragEnd } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -445,52 +445,10 @@ test.describe('shouldSendOnEnter（回车是否触发发送——移动端回车
   });
 });
 
-test.describe('detectServiceRestart（服务状态可见性——每设备独立感知，本地基线对比）', () => {
-  test('无本地基线 → 只建立基线，不告警（首次打开/清过 localStorage）', () => {
-    assert.deepEqual(
-      detectServiceRestart({ startedAt: 1000, lastSeenStartedAt: null }),
-      { changed: false, nextStartedAt: 1000 }
-    );
-  });
-
-  test('基线存在且不同 → changed:true（服务确实重启过）', () => {
-    assert.deepEqual(
-      detectServiceRestart({ startedAt: 2000, lastSeenStartedAt: 1000 }),
-      { changed: true, nextStartedAt: 2000 }
-    );
-  });
-
-  test('基线存在且相同 → changed:false（同一进程，非重启）', () => {
-    assert.deepEqual(
-      detectServiceRestart({ startedAt: 1000, lastSeenStartedAt: 1000 }),
-      { changed: false, nextStartedAt: 1000 }
-    );
-  });
-
-  test('startedAt 非法（防御性，字段缺失/坏数据不崩、不误判、不用坏值覆盖基线）', () => {
-    assert.deepEqual(
-      detectServiceRestart({ startedAt: undefined, lastSeenStartedAt: 1000 }),
-      { changed: false, nextStartedAt: 1000 }
-    );
-    assert.deepEqual(
-      detectServiceRestart({ startedAt: 'bad', lastSeenStartedAt: null }),
-      { changed: false, nextStartedAt: null }
-    );
-    assert.deepEqual(detectServiceRestart(), { changed: false, nextStartedAt: null });
-  });
-});
-
 test.describe('formatServiceNotices（服务状态可见性——组装会话面板"服务"小节文案）', () => {
-  test('空 service + 无重启 → []（一切正常，不渲染小节）', () => {
-    assert.deepEqual(formatServiceNotices({ service: null, restartChanged: false, now: 1000 }), []);
+  test('空 service → []（一切正常，不渲染小节）', () => {
+    assert.deepEqual(formatServiceNotices({ service: null, now: 1000 }), []);
     assert.deepEqual(formatServiceNotices(), []);
-  });
-
-  test('仅重启 → 一行固定文案', () => {
-    assert.deepEqual(
-      formatServiceNotices({ service: null, restartChanged: true, now: 1000 }),
-      ['🔄 服务自上次连接后已重启，请确认之前任务是否正常完成']
-    );
   });
 
   test('仅推送失败 → 一行含"多久之前" + 渠道 + 累计次数', () => {
@@ -498,7 +456,6 @@ test.describe('formatServiceNotices（服务状态可见性——组装会话面
     assert.deepEqual(
       formatServiceNotices({
         service: { deliveryFailure: { channel: 'ntfy', at: now - 12 * 60 * 1000, count: 2 } },
-        restartChanged: false,
         now
       }),
       ['🔔 推送最近失败于 12 分钟前（ntfy，累计 2 次）']
@@ -510,25 +467,9 @@ test.describe('formatServiceNotices（服务状态可见性——组装会话面
     assert.deepEqual(
       formatServiceNotices({
         service: { deliveryFailure: { channel: 'push', at: now - 5 * 60 * 1000 } },
-        restartChanged: false,
         now
       }),
       ['🔔 推送最近失败于 5 分钟前（push）']
-    );
-  });
-
-  test('重启 + 推送失败都命中 → 两行，重启在前、顺序稳定', () => {
-    const now = 1_000_000;
-    assert.deepEqual(
-      formatServiceNotices({
-        service: { deliveryFailure: { channel: 'push', at: now - 60 * 1000, count: 1 } },
-        restartChanged: true,
-        now
-      }),
-      [
-        '🔄 服务自上次连接后已重启，请确认之前任务是否正常完成',
-        '🔔 推送最近失败于 1 分钟前（push，累计 1 次）'
-      ]
     );
   });
 
@@ -536,7 +477,7 @@ test.describe('formatServiceNotices（服务状态可见性——组装会话面
     const now = 10_000_000;
     const at = (deltaMs) => now - deltaMs;
     const bodyOf = (deltaMs) => formatServiceNotices({
-      service: { deliveryFailure: { channel: 'push', at: at(deltaMs) } }, restartChanged: false, now
+      service: { deliveryFailure: { channel: 'push', at: at(deltaMs) } }, now
     })[0];
     assert.match(bodyOf(30 * 1000), /^🔔 推送最近失败于 刚刚（push）$/);
     assert.match(bodyOf(45 * 60 * 1000), /^🔔 推送最近失败于 45 分钟前（push）$/);

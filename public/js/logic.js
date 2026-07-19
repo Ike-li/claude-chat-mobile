@@ -1313,17 +1313,6 @@ export function formatApiRetryBanner(payload = {}) {
   return `${kind}${frac}${wait}`;
 }
 
-// 服务状态可见性（见 docs/design.md「用户可观察状态」）：与"需要你(N)"聚合（会话待处理，
-// 论证依据=注意力不对称）是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（NFR-15，论证依据=可维护性），
-// 不复用/不混入会话状态判定。每设备独立感知：本地 localStorage 存上次已知的服务启动时刻，与服务端下发的
-// 当前启动时刻对比，不同即服务重启过（LaunchAgent 静默拉起/意外崩溃恢复），当前设备此前不知情。
-export function detectServiceRestart({ startedAt, lastSeenStartedAt } = {}) {
-  const valid = typeof startedAt === 'number' && Number.isFinite(startedAt);
-  if (!valid) return { changed: false, nextStartedAt: lastSeenStartedAt ?? null }; // 防御：坏数据不覆盖已有基线
-  if (lastSeenStartedAt == null) return { changed: false, nextStartedAt: startedAt }; // 首次见到，只建基线不告警
-  return { changed: startedAt !== lastSeenStartedAt, nextStartedAt: startedAt };
-}
-
 function formatAgo(ms) {
   if (!Number.isFinite(ms) || ms < 60000) return '刚刚';
   const mins = Math.floor(ms / 60000);
@@ -1334,15 +1323,12 @@ function formatAgo(ms) {
 }
 
 // 组装会话面板"服务"小节文案（需要你之后、目录列表之前，仅异常时渲染）。空数组=一切正常。
-// 判定化告警四类，固定顺序：重启 → 限速锁定(⛔ 安全信号) → 投递失败(🔔) → 前端错误(🐞)。
+// 判定化告警三类，固定顺序：限速锁定(⛔ 安全信号) → 投递失败(🔔) → 前端错误(🐞)。
 // 各类均由服务端时效窗判定（超窗自动退场，见 metrics.js recentIncident/recentDeliveryFailure）；
 // 旧 server 无新字段 → 优雅缺席。刻意不吞并/复用"需要你(N)"聚合的展示逻辑——
 // 两条轴分开陈列，不让服务健康看起来像"更多同类待办"。
-export function formatServiceNotices({ service, restartChanged, now } = {}) {
+export function formatServiceNotices({ service, now } = {}) {
   const notices = [];
-  if (restartChanged) {
-    notices.push('🔄 服务自上次连接后已重启，请确认之前任务是否正常完成');
-  }
   const countSuffix = c => (Number.isFinite(c) && c > 0 ? `（累计 ${c} 次）` : '');
   const lockout = service && service.rateLimitLockout;
   if (lockout && typeof lockout.at === 'number') {
