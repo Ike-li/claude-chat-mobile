@@ -29,7 +29,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#messages strong').first()).toContainText('fully visual-oriented');
     await expect(page.locator('[data-testid="assistant-message"]').last().locator('pre')).toBeVisible();
     await expect(page.locator('[data-testid="assistant-message"]').last().locator('pre code')).toContainText('tester');
-    await expect(page.locator('#messages .msg-frame.text-center.text-xs.text-ink-faint').last()).toContainText('$0.0015');
+    // 回合收尾行对齐 CLI turn_duration：✻ <过去式动词> for <时长>（动词随机，累计 cost 不再挂后缀）
+    await expect(page.locator('#messages .msg-frame.text-center.text-xs.text-ink-faint').last())
+      .toHaveText(/^✻ (Baked|Brewed|Churned|Cogitated|Cooked|Crunched|Sautéed|Worked) for \d+s$/);
 
     await expectNoBrowserErrors(page);
   });

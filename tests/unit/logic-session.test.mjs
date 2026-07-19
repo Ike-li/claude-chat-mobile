@@ -66,27 +66,34 @@ test('presentTurnResult: interrupted=true 压过 isError/ede_diagnostic，不画
   assert.equal(ui.haptic, 'warning');
 });
 
-test('presentTurnResult: 真错误仍红条；成功仍完成', () => {
+// 出错分支有意不改 CLI 化：出错时更需要显式秒数+成本，保留中文灰条+红色错误条（用户确认「出错分支不变」）。
+test('presentTurnResult: 真错误仍中文灰条 + 红条（不 CLI 化）', () => {
   const err = presentTurnResult({ isError: true, errors: ['boom'], durationMs: 1200, costUsd: 0.1 });
   assert.equal(err.kind, 'error');
+  assert.match(err.statusBar.text, /^完成 · 1\.2s · \$0\.1000$/);
   assert.equal(err.errorBar.text, '出错：boom');
   assert.equal(err.errorBar.cls, 'text-danger');
   assert.equal(err.notify.title, '⚠️ 任务出错');
   assert.equal(err.failToolsMessage, 'boom');
+});
 
-  const ok = presentTurnResult({ isError: false, durationMs: 3210, costUsd: 1.2 });
+// 成功轮收尾对齐 CLI turn_duration：✻ <过去式动词> for <时长>，累计 cost 移到状态栏、不再挂后缀。
+test('presentTurnResult: 成功轮收尾 CLI 化 ✻ verb for Ns，无 cost 后缀', () => {
+  const ok = presentTurnResult({ isError: false, durationMs: 3210, costUsd: 1.2 }, { rand: () => 3 / 8 });
   assert.equal(ok.kind, 'success');
   assert.equal(ok.errorBar, null);
-  assert.match(ok.statusBar.text, /^完成 · 3\.2s · \$1\.2000$/);
+  assert.equal(ok.statusBar.text, '✻ Cogitated for 3s');
+  assert.equal(ok.statusBar.cls, 'text-ink-faint');
   assert.equal(ok.notify.title, '✅ 任务完成');
+  assert.equal(ok.notify.body, '用时 3.2s'); // 通知仍带精确秒（非聊天流，不属终端等价范围）
   assert.equal(ok.failToolsMessage, null);
 });
 
-test('presentTurnResult: 缺字段安全', () => {
-  const ui = presentTurnResult();
+test('presentTurnResult: 缺字段安全（durationMs 缺省 0 → for 0s）', () => {
+  const ui = presentTurnResult(undefined, { rand: () => 0 });
   assert.equal(ui.kind, 'success');
-  assert.match(ui.statusBar.text, /^完成 · 0\.0s$/);
-  assert.equal(presentTurnResult(null).kind, 'success');
+  assert.equal(ui.statusBar.text, '✻ Baked for 0s');
+  assert.equal(presentTurnResult(null).kind, 'success'); // payload=null 仍安全
 });
 
 // CLI: "Retrying in 4s · attempt 2/10" — web 横幅文案对齐，瞬时覆盖不堆历史条

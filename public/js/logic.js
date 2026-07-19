@@ -1257,7 +1257,8 @@ export function armedTakeoverStep(state = {}, signal = {}) {
 // 轮次 result → 聊天流条/通知/触感/挂起工具收尾。
 // CLI 对用户主动中止只呈现 interrupt，不把 SDK 伴随的 is_error + ede_diagnostic 当红色错误。
 // 后端 agent.js 在 interrupt() 成功后给紧随的 result 打 interrupted=true；此处优先于 isError。
-export function presentTurnResult(payload = {}) {
+// opts.rand 注入过去式动词随机源（默认 Math.random），仅供测试确定化；成功轮收尾行用它。
+export function presentTurnResult(payload = {}, opts = {}) {
   const p = payload && typeof payload === 'object' ? payload : {};
   const durationMs = typeof p.durationMs === 'number' ? p.durationMs : 0;
   const cost = typeof p.costUsd === 'number' ? ` · $${p.costUsd.toFixed(4)}` : '';
@@ -1284,9 +1285,11 @@ export function presentTurnResult(payload = {}) {
       haptic: 'error',
     };
   }
+  // 成功轮收尾对齐 CLI turn_duration 行：✻ <过去式动词> for <时长>。
+  // 累计 cost 不再挂后缀（状态栏 #cliStatus 随时可看），保终端等价的收敛观感。
   return {
     kind: 'success',
-    statusBar: { text: `完成 · ${secs}s${cost}`, cls: 'text-ink-faint' },
+    statusBar: { text: `✻ ${pickTurnDoneVerb(opts.rand)} for ${formatCliDuration(durationMs)}`, cls: 'text-ink-faint' },
     errorBar: null,
     notify: { title: '✅ 任务完成', body: `用时 ${secs}s` },
     failToolsMessage: null,
@@ -1478,6 +1481,33 @@ export const SPINNER_VERBS = Object.freeze(['Accomplishing', 'Actioning', 'Actua
 
 export function pickSpinnerVerb(rand = Math.random) {
   return SPINNER_VERBS[Math.floor(rand() * SPINNER_VERBS.length)] || 'Working';
+}
+
+// 回合收尾行过去式动词表（8 词，逐字取自 CLI 2.1.211 bundle 的 turn_duration 词表 $6s，兜底 "Worked"）。
+// 与活 spinner 的 SPINNER_VERBS 是两套独立词表——CLI 亦如此：spinner 用现在分词、收尾行用过去式。
+export const TURN_DONE_VERBS = Object.freeze(['Baked', 'Brewed', 'Churned', 'Cogitated', 'Cooked', 'Crunched', 'Sautéed', 'Worked']);
+
+export function pickTurnDoneVerb(rand = Math.random) {
+  return TURN_DONE_VERBS[Math.floor(rand() * TURN_DONE_VERBS.length)] || 'Worked';
+}
+
+// 回合收尾行时长格式：移植 CLI Hs（turn_duration 分支，不含 hideTrailingZeros/mostSignificantOnly）。
+// <60s → "8s"（整秒下取整）；更长 "2m 49s" / "1h 2m 3s" / "1d 2h 3m"（秒四舍五入，逢 60 逐位进位；天级不带秒）。
+// 负数/非有限值 → "0s"（turn 时长恒为整数 ms≥0，防御性归零；亚毫秒不可达故不还原 CLI 的 "0.0s" 分支）。
+export function formatCliDuration(ms) {
+  const e = Number(ms);
+  if (!Number.isFinite(e) || e <= 0) return '0s';
+  if (e < 60000) return `${Math.floor(e / 1000)}s`;
+  let d = Math.floor(e / 86400000);
+  let h = Math.floor((e % 86400000) / 3600000);
+  let m = Math.floor((e % 3600000) / 60000);
+  let s = Math.round((e % 60000) / 1000);
+  if (s === 60) { s = 0; m++; }
+  if (m === 60) { m = 0; h++; }
+  if (h === 24) { h = 0; d++; }
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  return `${m}m ${s}s`;
 }
 
 // CLI 式动态状态行组装：✻ Stewing… (55s · ↓ 3.3k tokens · thought for 1s)
