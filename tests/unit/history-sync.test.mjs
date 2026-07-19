@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode } from '../../src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel } from '../../src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -367,6 +367,57 @@ test('readLastPermissionMode: 无记录 / 文件不存在返回 null', async () 
   writeJSONL(dir, 'sess-none', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
   assert.equal(await readLastPermissionMode('sess-none', cwd, { baseDir: BASE }), null);
   assert.equal(await readLastPermissionMode('missing-id', cwd, { baseDir: BASE }), null);
+});
+
+// ── lastAssistantModel / readLastAssistantModel ──────────────────────────────
+// 续接会话时 chip 显示该会话真实用过的模型：resume 后首轮 init 未到前 instances.model 为 null，
+// 前端只能回落 cwd 默认名（可能与会话实际模型不符）。CLI 把每条 assistant 消息的 message.model
+// 落 transcript，故 resume 时冷读末条 assistant 的模型作展示回落（init.model 到达后被权威值覆盖）。
+
+test('lastAssistantModel: 取末条 assistant 的 message.model（多条时后写覆盖）', () => {
+  const model = lastAssistantModel([
+    { type: 'assistant', message: { role: 'assistant', model: 'claude-sonnet-5', content: [{ type: 'text', text: 'a' }] } },
+    { type: 'user', message: { role: 'user', content: 'hi' } },
+    { type: 'assistant', message: { role: 'assistant', model: 'claude-opus-4-8', content: [{ type: 'text', text: 'b' }] } },
+  ]);
+  assert.equal(model, 'claude-opus-4-8');
+});
+
+test('lastAssistantModel: 跳过 sidechain / isMeta / <synthetic>（错误合成条不算真实模型）', () => {
+  const model = lastAssistantModel([
+    { type: 'assistant', message: { role: 'assistant', model: 'claude-opus-4-8', content: [] } },
+    { type: 'assistant', isSidechain: true, message: { role: 'assistant', model: 'claude-haiku-4-5', content: [] } },
+    { type: 'assistant', isMeta: true, message: { role: 'assistant', model: 'claude-haiku-4-5', content: [] } },
+    { type: 'assistant', message: { role: 'assistant', model: '<synthetic>', content: [] } },
+  ]);
+  assert.equal(model, 'claude-opus-4-8');
+});
+
+test('lastAssistantModel: 无 assistant 模型记录 / 脏值返回 null', () => {
+  assert.equal(lastAssistantModel([{ type: 'user', message: { role: 'user', content: 'hi' } }]), null);
+  assert.equal(lastAssistantModel([{ type: 'assistant', message: { role: 'assistant', content: [] } }]), null);
+  assert.equal(lastAssistantModel([{ type: 'assistant', message: { role: 'assistant', model: 123, content: [] } }]), null);
+  assert.equal(lastAssistantModel([]), null);
+});
+
+test('readLastAssistantModel: 从真实 transcript 尾部读回会话模型', async () => {
+  const cwd = '/test/model';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sess-model', [
+    { type: 'user', message: { role: 'user', content: '开始' } },
+    { type: 'assistant', message: { role: 'assistant', model: 'claude-sonnet-5', content: [{ type: 'text', text: 'a' }] } },
+    { type: 'assistant', message: { role: 'assistant', model: 'claude-opus-4-8', content: [{ type: 'text', text: 'b' }] } },
+  ]);
+  assert.equal(await readLastAssistantModel('sess-model', cwd, { baseDir: BASE }), 'claude-opus-4-8');
+});
+
+test('readLastAssistantModel: 无记录 / 文件不存在 / 非法 sessionId（SS-003）返回 null', async () => {
+  const cwd = '/test/model2';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sess-nomodel', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
+  assert.equal(await readLastAssistantModel('sess-nomodel', cwd, { baseDir: BASE }), null);
+  assert.equal(await readLastAssistantModel('missing-id', cwd, { baseDir: BASE }), null);
+  assert.equal(await readLastAssistantModel('../x', cwd, { baseDir: BASE }), null);
 });
 
 // ── 已知架构边界（test.skip 基线，别当新 bug 反复报）─────────────────────────────

@@ -19,7 +19,7 @@ import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { resolveFreshPrefs, defaultsFromEffectiveSettings } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, readLastPermissionMode } from '../sessions/history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import { notificationForEvent, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from '../ops/notifications.js';
 import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
@@ -702,8 +702,10 @@ function instancesPayload() {
       // 当前查看实例 bgActive=false 即隐藏横幅，统一覆盖「切会话/TTL 清/完成/前台轮残留」所有隐藏场景（权威状态驱动，非零散事件）。
       bgActive: a.hasBgTasks?.() || false,
       queueFull: a.pendingTurns >= 2, // 队列已满（1 运行中 + 1 排队），前端据此禁发送按钮
-      // 切 tab 面板同步：携带各实例当前档，前端 setInstances 据此静默刷新顶部 permMode/effort/model select
-      permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || null
+      // 切 tab 面板同步：携带各实例当前档，前端 setInstances 据此静默刷新顶部 permMode/effort/model select。
+      // transcriptModel：resume 冷读的会话末条 assistant 模型（纯展示回落，填 init 未到的空窗；
+      // 不入 activeModel/defaultModel、不参与 setModel 差分）。
+      permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || a.transcriptModel || null
     });
   }
   const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE, needsYou: computeNeedsYou(), service: computeServiceHealth() };
@@ -1247,7 +1249,7 @@ function writeSessionEntrypoint(sessionId, cwd) {
 // 台阶3：显式建一个新实例（分配 instanceId、后台并行存活）。`resumeId` 缺省=新会话；调用方
 // （session:new/switch）负责去重（instanceForSession）与切 viewingInstanceId。返回实例。
 // 同步建（resumeId 由调用方解析，无需 await）——故无台阶2 的「await 让出窗口双实例」重入竞态。
-function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = null }) {
+function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = null, transcriptModel = null }) {
   const id = newInstanceId();
   const saved = resumeId ? (sessions.getSession(resumeId) || { id: resumeId }) : null;
   if (saved?.id) {
@@ -1430,6 +1432,10 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       broadcastInstances(); // 实例退出 → 刷 tab 栏（角标回落 / 该 tab 消失）
     }
   });
+  // resume 冷读的会话末条 assistant 模型：作为最低优先级展示回落挂在实例上（instancesPayload 的
+  // model 取 activeModel > reportedModel > transcriptModel）。不入 activeModel、不参与 setModel 差分——
+  // init 权威模型到达后前二者自然盖过它（见 sessions/history.js lastAssistantModel 注释）。
+  instance.transcriptModel = transcriptModel;
   agents.set(id, instance);
   instance.start();
   return instance;
@@ -1455,8 +1461,11 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
       console.warn('[cli-bg-lock] prepareSessionForWebResume failed:', err?.message || err);
     }
   }
-  const transcriptMode = resumeId ? await readLastPermissionMode(resumeId, cwd) : null;
-  return openInstance({ cwd, resumeId, transcriptMode, ...extra });
+  // 权限档与末条 assistant 模型同为 transcript 尾窗冷读，并行取（模型仅作展示回落，见 lastAssistantModel）。
+  const [transcriptMode, transcriptModel] = resumeId
+    ? await Promise.all([readLastPermissionMode(resumeId, cwd), readLastAssistantModel(resumeId, cwd)])
+    : [null, null];
+  return openInstance({ cwd, resumeId, transcriptMode, transcriptModel, ...extra });
 }
 
 // resume 并发去重：openResumeInstance 内部有 await（读 transcript 权限档），调用方常见写法是

@@ -837,6 +837,47 @@ export async function readLastPermissionMode(sessionId, cwd, { baseDir = CLAUDE_
   }
 }
 
+// 纯函数：给一串已解析 transcript 条目，返回末条真实 assistant 消息的 message.model，无则 null。
+// 跳过 sidechain（子 agent 可能用不同模型）、isMeta 与 `<synthetic>`（错误合成条的占位模型名）。
+// 用途：resume 时 chip 显示该会话实际用过的模型（展示回落，init.model 到达后被权威值覆盖；
+// 绝不入 activeModel/defaultModel——不参与 setModel 差分，防 F1 式误重置）。
+export function lastAssistantModel(entries) {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (!e || e.type !== 'assistant' || e.isSidechain || e.isMeta) continue;
+    const m = e.message?.model;
+    if (typeof m === 'string' && m && m !== '<synthetic>') return m;
+  }
+  return null;
+}
+
+// 从 transcript 尾部读回末条 assistant 模型。尾窗/半行处理与 readLastPermissionMode 同款：
+// 只读末尾 TAIL_READ_BYTES，极端超大会话读不到则返回 null 优雅回落。
+export async function readLastAssistantModel(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
+  if (!isSafeSessionId(sessionId)) return null; // SS-003
+  const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
+  try {
+    const fh = await open(file, 'r');
+    try {
+      if (size == null) ({ size } = await fh.stat());
+      if (size === 0) return null;
+      const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
+      const buf = Buffer.allocUnsafe(size - start);
+      const { bytesRead } = await fh.read(buf, 0, size - start, start);
+      const entries = [];
+      for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+        if (!line.trim()) continue;
+        try { entries.push(JSON.parse(line)); } catch { /* 尾窗起点切中的半行/截断尾行：跳过 */ }
+      }
+      return lastAssistantModel(entries);
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  } catch {
+    return null; // 文件不存在/读失败：回落上层默认
+  }
+}
+
 // 切入预锁 / 疑似中断共用阈值：慢工具（长编译/深度搜索）常见 1-3 分钟零写入，5 分钟大概率真死了。
 // 切入时：尾部 pending 但 lastChainTs 已超此阈值 → 不预锁（陈旧挂起消息，不是活终端）。
 // 驾驶中：锁着 + pending + lastChainTs 超此阈值 → stale 文案「疑似中断、可接管」。
