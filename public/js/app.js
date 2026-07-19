@@ -1,12 +1,12 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, detectServiceRestart, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
 import { createAlertController } from './app/alerts.js';
-import { createAttachmentController } from './app/attachments.js';
+import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
 import { createRttMonitor } from './app/connection-sync.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createAgentEventDispatcher } from './app/event-dispatch.js';
@@ -1638,16 +1638,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             );
             if (alreadyRendered) continue;
             if (!wrap) wrap = el(`<div class="flex flex-wrap gap-2 mt-2"></div>`);
-            if (a.thumb) {
-              const img = el(`<img class="max-w-[8rem] max-h-32 rounded-lg">`);
-              img.src = a.thumb; img.title = a.name || '';
-              wrap.appendChild(img);
-            } else {
-              const chip = el(`<div class="flex items-center gap-1 bg-sunk rounded-lg px-2 py-1 text-xs max-w-[12rem]"><span class="shrink-0">📎</span></div>`);
-              const nm = el(`<span class="truncate"></span>`); nm.textContent = a.name || '附件';
-              chip.appendChild(nm);
-              wrap.appendChild(chip);
-            }
+            wrap.appendChild(buildAttachmentNode(a));
           }
           if (wrap) matchedBubble.appendChild(wrap);
         }
@@ -1674,20 +1665,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         foldLongUserBubble(bubble, p.text);
       }
       if (Array.isArray(p.attachments) && p.attachments.length) {
-        const wrap = el(`<div class="flex flex-wrap gap-2${p.text ? ' mt-2' : ''}"></div>`);
-        for (const a of p.attachments) {
-          if (a.thumb) {
-            const img = el(`<img class="max-w-[8rem] max-h-32 rounded-lg">`);
-            img.src = a.thumb; img.title = a.name || '';
-            wrap.appendChild(img);
-          } else {
-            const chip = el(`<div class="flex items-center gap-1 bg-sunk rounded-lg px-2 py-1 text-xs max-w-[12rem]"><span class="shrink-0">📎</span></div>`);
-            const nm = el(`<span class="truncate"></span>`); nm.textContent = a.name || '附件';
-            chip.appendChild(nm);
-            wrap.appendChild(chip);
-          }
-        }
-        bubble.appendChild(wrap);
+        bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
       if (queuedBubbleState(p).show) addQueuedMarker(bubble, p.clientMessageId); // 排队可见性（FE-004 对齐 CLI Queued）
@@ -2645,22 +2623,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         bubble.appendChild(t);
       }
       
-      // 添加离线待发送的附件缩略 chip/图片预览，让离线体验达到原生级
+      // 添加离线待发送的附件缩略 chip/图片预览，让离线体验达到原生级；
+      // controller items 含完整 data → buildAttachmentNode 点击直开本地预览（无需服务端）
       if (outgoingAttachments && outgoingAttachments.length) {
-        const wrap = el(`<div class="flex flex-wrap gap-2${text ? ' mt-2' : ''}"></div>`);
-        for (const a of attachments.items()) { // controller 中保留 thumb 供气泡预览
-          if (a.thumb) {
-            const img = el(`<img class="max-w-[8rem] max-h-32 rounded-lg">`);
-            img.src = a.thumb; img.title = a.name || '';
-            wrap.appendChild(img);
-          } else {
-            const chip = el(`<div class="flex items-center gap-1 bg-sunk rounded-lg px-2 py-1 text-xs max-w-[12rem]"><span class="shrink-0">📎</span></div>`);
-            const nm = el(`<span class="truncate"></span>`); nm.textContent = a.name || '附件';
-            chip.appendChild(nm);
-            wrap.appendChild(chip);
-          }
-        }
-        bubble.appendChild(wrap);
+        bubble.appendChild(buildAttachmentWrap(attachments.items(), Boolean(text)));
       }
       
       const indicator = el(`<div class="pending-indicator text-[11px] text-ink-faint mt-1 animate-pulse">🕐 正在等待连接...</div>`);
@@ -2801,6 +2767,40 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return false;
     },
   });
+  // E18：气泡附件按需预览——live/历史点击经 browse:read 拉原图，复用托盘灯箱
+  const storedPreview = createStoredPreviewLoader(appContext, {
+    addBar,
+    openPreviewUrl: (name, url) => attachments.openPreviewUrl(name, url),
+  });
+
+  // E18：气泡附件节点（live user_message 两分支 + 离线乐观占位 + 历史回显共用）。点击预览级联：
+  // 本地全量 data（离线占位/发送失败回灌）→ 托盘同款直开；storedName（live meta/历史解析）→ 按需拉原图；
+  // 仅 thumb（滚动升级窗口内的旧 meta）→ 放大缩略图兜底；三者皆无 → 不可点。
+  function buildAttachmentNode(a) {
+    const clickable = Boolean(a.data || a.storedName || a.thumb);
+    let node;
+    if (a.thumb) {
+      node = el(`<img class="max-w-[8rem] max-h-32 rounded-lg${clickable ? ' cursor-pointer active:opacity-80' : ''}">`);
+      node.src = a.thumb;
+      node.title = a.name || '';
+    } else {
+      const isImage = (typeof a.mimeType === 'string' && a.mimeType.startsWith('image/')) || guessImageMime(a.name || a.storedName);
+      node = el(`<div class="flex items-center gap-1 bg-sunk rounded-lg px-2 py-1 text-xs max-w-[12rem]${clickable ? ' cursor-pointer active:scale-[0.98] transition-transform' : ''}"${clickable ? ' title="点击预览"' : ''}><span class="shrink-0">${isImage ? '🖼' : '📎'}</span></div>`);
+      const nm = el(`<span class="truncate"></span>`);
+      nm.textContent = a.name || '附件';
+      node.appendChild(nm);
+    }
+    if (a.data) node.onclick = () => attachments.openPreview(a);
+    else if (a.storedName) node.onclick = () => storedPreview.open({ cwd: currentCwd, storedName: a.storedName, name: a.name, mimeType: a.mimeType, thumb: a.thumb });
+    else if (a.thumb) node.onclick = () => attachments.openPreviewUrl(a.name || '附件', a.thumb);
+    return node;
+  }
+
+  function buildAttachmentWrap(atts, withMargin) {
+    const wrap = el(`<div class="flex flex-wrap gap-2${withMargin ? ' mt-2' : ''}"></div>`);
+    for (const a of atts) wrap.appendChild(buildAttachmentNode(a));
+    return wrap;
+  }
   // ---- 斜杠命令提示 ----
   const hints = el(`<div id="cmdHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)"></div>`);
   inputEl.parentElement.style.position = 'relative';
@@ -5037,7 +5037,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
       injectCodeCopyButtons(bubble);
       if (isUser) foldLongUserBubble(bubble, msg.content || '');
-      appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
+      // E18：历史附件（history.js 解析 [附件] 块所得）→ 可点击 chip，按需拉原图；纯附件消息（content 空）
+      // 渲染 chip-only 气泡、跳过复制按钮（复制空文本无意义）
+      if (isUser && Array.isArray(msg.attachments) && msg.attachments.length) {
+        bubble.appendChild(buildAttachmentWrap(msg.attachments, Boolean(msg.content)));
+      }
+      if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
       frag.appendChild(bubble);
     }
     leaveStartScreen();

@@ -217,4 +217,15 @@ test.describe('toEventMeta', () => {
     assert.equal(meta[0].absPath, undefined);
     assert.equal(meta[0].data, undefined);
   });
+
+  // E18 附件预览：storedName=落盘 basename（如 1784404979078-27ad7f68-image.png）——前端点击气泡缩略图时
+  // 用它经 browse:read 定位 .ccm-uploads 下的原文件。只暴露 basename，完整服务端路径仍不出事件。
+  test('storedName=落盘文件 basename，完整路径仍不泄露', () => {
+    const meta = toEventMeta([
+      { absPath: '/Users/x/proj/.ccm-uploads/1784404979078-27ad7f68-photo.png', name: 'photo.png', mimeType: 'image/png', size: 12345 }
+    ]);
+    assert.equal(meta[0].storedName, '1784404979078-27ad7f68-photo.png');
+    assert.equal(meta[0].absPath, undefined);
+    assert.ok(!JSON.stringify(meta).includes('/Users/x/proj'));
+  });
 });

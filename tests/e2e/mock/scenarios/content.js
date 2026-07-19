@@ -650,5 +650,37 @@ export function createContentScenarios(getContext) {
         });
       },
     },
+    {
+      // E18 附件预览：一次铺出三条点击路径的夹具——
+      //  ① live user_message meta（thumb + storedName）→ 点缩略图按需拉原图；
+      //  ② 历史 [附件] 解析形态（history_append 走 renderHistoryBubbles，无 thumb 只有 chip）→ 点 chip 拉原图；
+      //  ③ 已删文件（storedName 不在 mock fixture 里）→ toast 降级、不开灯箱。
+      command: 'test:attach-preview',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, delay } = getContext();
+        console.log('[mock] Emitting attachment preview fixtures');
+        const thumb = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'user_message', payload: {
+            text: '看看这张实时消息里的图',
+            attachments: [{ name: 'photo.png', mimeType: 'image/png', size: MOCK_PNG_SIZE, thumb, storedName: '1700000000000-abcd1234-photo.png' }]
+          }
+        });
+        await delay(100);
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'history_append', payload: {
+            messages: [
+              { role: 'user', content: '重启后回看的历史附件消息', attachments: [{ name: 'old.png', storedName: '1700000000001-deadbeef-old.png' }] },
+              { role: 'user', content: '文件已被清理的历史附件', attachments: [{ name: 'gone.png', storedName: '1700000000002-99999999-gone.png' }] }
+            ]
+          }
+        });
+      },
+    },
   ];
 }
+
+// 与 server.js MOCK_ATTACH_PNG 字节数一致（1×1 PNG fixture 的解码长度）；仅用于 meta.size 展示，无行为语义。
+const MOCK_PNG_SIZE = 70;

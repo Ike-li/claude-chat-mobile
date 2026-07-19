@@ -432,6 +432,18 @@ export function attachmentDataUrl(att) {
   return `data:${mime};base64,${data}`;
 }
 
+// E18 附件预览：历史消息的附件只有文件名（transcript 不落 mimeType），按扩展名猜 image/*。
+// 非图片扩展名 → null（调用方按「不可预览」处理，不把任意字节当图打开）。SVG 在 <img> 上下文不执行脚本，安全。
+const IMAGE_MIME_BY_EXT = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', avif: 'image/avif', heic: 'image/heic', heif: 'image/heif',
+  bmp: 'image/bmp', svg: 'image/svg+xml',
+};
+export function guessImageMime(name) {
+  const m = /\.([a-z0-9]+)$/i.exec(String(name || ''));
+  return m ? (IMAGE_MIME_BY_EXT[m[1].toLowerCase()] || null) : null;
+}
+
 // 文件类工具卡片预览入口文案：Read 只读文件片段/图片，Edit/Write/… 才是 diff 变更。
 // 后端 tool_use.file.changeKind 已区分（read|edit|write|multiedit|notebook）；changeKind 优先，name 兜底。
 export function toolPreviewLabel(meta) {

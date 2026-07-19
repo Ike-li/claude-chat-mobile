@@ -144,6 +144,8 @@ export function buildPromptText(text, saved) {
 }
 
 // 给 user_message 事件用的元数据（剥掉 absPath 与完整 data，仅留小 thumb——不污染环形缓冲，不泄服务端路径）。
+// E18 附件预览有意放宽：额外带 storedName（落盘文件 basename）——前端点击气泡缩略图时经 browse:read
+// （鉴权+设备门+scope guard）按 `.ccm-uploads/<storedName>` 拉原图。basename 不含目录结构，完整路径仍不出事件。
 export function toEventMeta(saved) {
-  return saved.map(s => ({ name: s.name, mimeType: s.mimeType, size: s.size, thumb: s.thumb }));
+  return saved.map(s => ({ name: s.name, mimeType: s.mimeType, size: s.size, thumb: s.thumb, storedName: basename(s.absPath) }));
 }

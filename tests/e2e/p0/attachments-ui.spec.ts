@@ -247,4 +247,43 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // E18 附件预览：三条点击路径（fixture 由 mock 场景 test:attach-preview + mock browse:read 提供）——
+  // live 气泡缩略图（meta.storedName 按需拉原图）、历史 chip（history.js [附件] 解析形态、无 thumb）、
+  // 已删文件（browse:read ok:false → toast 降级、不开灯箱）。断言基于 DOM 状态非像素。
+  test('P0-18i 点击气泡附件可预览：live 缩略图 / 历史 chip / 已删文件降级', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:attach-preview');
+
+    const modal = page.locator('#attachPreviewModal');
+    const previewImg = page.locator('#attachPreviewImg');
+
+    // ① live user_message：缩略图可点击 → 灯箱开、src 为按需拉取拼装的完整 data:image
+    const liveMsg = page.locator('[data-testid="user-message"]').filter({ hasText: '看看这张实时消息里的图' });
+    await expect(liveMsg.locator('img[title="photo.png"]')).toBeVisible();
+    await liveMsg.locator('img[title="photo.png"]').click();
+    await expect(modal).toBeVisible();
+    await expect(previewImg).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect(page.locator('#attachPreviewName')).toContainText('photo.png');
+    await page.locator('#attachPreviewClose').click();
+    await expect(modal).toBeHidden();
+
+    // ② 历史形态（history_append → renderHistoryBubbles）：无 thumb 的 chip → 点击拉原图开灯箱
+    const histMsg = page.locator('[data-testid="user-message"]').filter({ hasText: '重启后回看的历史附件消息' });
+    await expect(histMsg).toContainText('old.png');
+    await histMsg.getByText('old.png').click();
+    await expect(modal).toBeVisible();
+    await expect(previewImg).toHaveAttribute('src', /^data:image\/png;base64,/);
+    await expect(page.locator('#attachPreviewName')).toContainText('old.png');
+    await page.locator('#attachPreviewClose').click();
+    await expect(modal).toBeHidden();
+
+    // ③ 文件已删：toast 报错、灯箱不开（历史无 thumb，无降级图可放大）
+    const goneMsg = page.locator('[data-testid="user-message"]').filter({ hasText: '文件已被清理的历史附件' });
+    await goneMsg.getByText('gone.png').click();
+    await expect(page.locator('#messages')).toContainText('「gone.png」预览加载失败');
+    await expect(modal).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
 });

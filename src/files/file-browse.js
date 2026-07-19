@@ -75,6 +75,9 @@ export function readFile(cwd, relPath, scopeDirs, opts = {}) {
   if (real === null) return null;
   const offset = Math.max(0, opts.offset || 0);
   const maxBytes = Math.min(opts.maxBytes > 0 ? opts.maxBytes : MAX_BROWSE_BYTES, MAX_BROWSE_BYTES);
+  // E18 附件预览：base64 模式——按字节精确分页返回该片 base64（二进制不拒绝、不做 UTF-8 尾裁剪，
+  // 拼装方是前端 Uint8Array，切在哪都无损）。范围门/硬顶与文本模式完全同权，模式只改编码不改安全。
+  const wantBase64 = opts.encoding === 'base64';
   // TOCTOU 缓解（docs/design.md 登记为残余风险、非绝对防护）：O_NOFOLLOW 挡开时刻叶节点被替换为
   // symlink（ELOOP 直接拒绝）；读后再用 isInScope 复核一次真实落点，缓解 scope 校验与 open 之间的窗口替换。
   const NOFOLLOW = constants.O_NOFOLLOW || 0;
@@ -93,6 +96,15 @@ export function readFile(cwd, relPath, scopeDirs, opts = {}) {
     const buf = Buffer.alloc(len);
     const n = len > 0 ? readSync(fd, buf, 0, len, offset) : 0;
     const binary = buf.subarray(0, n).includes(0); // 二进制判定用完整读取字节，不受下方 UTF-8 边界裁剪影响
+    if (wantBase64) {
+      return {
+        content: buf.subarray(0, n).toString('base64'),
+        truncated: offset + n < totalSize,
+        totalSize,
+        binary,
+        bytesRead: n
+      };
+    }
     // 非二进制且非最后一片时，把切在字符中间的尾字节挪给下一片（trimIncompleteUtf8Tail 头注）；
     // 是最后一片（offset+n>=totalSize）则不裁剪——文件本就到此为止，没有"下一片"接住裁掉的字节。
     const isFinalChunk = offset + n >= totalSize;

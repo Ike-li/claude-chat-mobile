@@ -5,7 +5,7 @@ import test from 'node:test';
 import { createAppContext } from '../../public/js/app/context.js';
 import { createClientLogger } from '../../public/js/app/client-log.js';
 import { createAlertController } from '../../public/js/app/alerts.js';
-import { createAttachmentController } from '../../public/js/app/attachments.js';
+import { createAttachmentController, createStoredPreviewLoader } from '../../public/js/app/attachments.js';
 import { createRttMonitor } from '../../public/js/app/connection-sync.js';
 import { createMessageRenderer } from '../../public/js/app/message-renderer.js';
 import { createAgentEventDispatcher } from '../../public/js/app/event-dispatch.js';
@@ -154,6 +154,123 @@ test('attachment controller remove filters by _id and backfills missing ids on s
   // 保留已有 _id，不重写
   attachments.setItems([{ _id: 'stable', name: 'x.bin', size: 2, data: 'eA==' }]);
   assert.equal(attachments.items()[0]._id, 'stable');
+});
+
+// ── E18 附件预览：createStoredPreviewLoader ──────────────────────────────────────
+// 气泡附件点击 → browse:read base64 分页拉原图 → Blob → FileReader.readAsDataURL → 灯箱。
+// fake FileReader 用真 Blob.arrayBuffer() 还原字节再拼 data URL——端到端验证分片拼装正确性。
+function makePreviewHarness({ fileBytes, chunkBytes = 10, ackOverride = null, deferFirstChunk = false } = {}) {
+  const emits = [];
+  const socket = {
+    emit(event, payload, ack) {
+      emits.push({ event, payload });
+      if (ackOverride) return ackOverride(payload, ack);
+      const offset = payload.offset || 0;
+      const slice = fileBytes.subarray(offset, offset + (payload.maxBytes || chunkBytes));
+      const reply = () => ack({
+        ok: true,
+        content: Buffer.from(slice).toString('base64'),
+        totalSize: fileBytes.length,
+        bytesRead: slice.length,
+        truncated: offset + slice.length < fileBytes.length,
+        binary: true,
+      });
+      if (deferFirstChunk && offset === 0) setTimeout(reply, 5);
+      else reply();
+    },
+  };
+  class FakeFileReader {
+    readAsDataURL(blob) {
+      blob.arrayBuffer().then(buf => {
+        this.result = `data:${blob.type};base64,${Buffer.from(buf).toString('base64')}`;
+        this.onload?.();
+      }, err => this.onerror?.(err));
+    }
+  }
+  const context = createAppContext({ dependencies: { FileReader: FakeFileReader } });
+  context.setSocket(socket);
+  const bars = [];
+  const opened = [];
+  const loader = createStoredPreviewLoader(context, {
+    addBar: (text, cls) => bars.push({ text, cls }),
+    openPreviewUrl: (name, url) => opened.push({ name, url }),
+    chunkBytes,
+  });
+  return { loader, emits, bars, opened };
+}
+
+test('stored preview loader fetches a single-chunk image and opens the lightbox with exact bytes', async () => {
+  const fileBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01]);
+  const { loader, emits, opened, bars } = makePreviewHarness({ fileBytes, chunkBytes: 100 });
+  await loader.open({ cwd: '/w', storedName: '123-abcd1234-p.png', name: 'p.png', mimeType: 'image/png' });
+  assert.equal(emits.length, 1);
+  assert.equal(emits[0].event, 'browse:read');
+  assert.equal(emits[0].payload.relPath, '.ccm-uploads/123-abcd1234-p.png');
+  assert.equal(emits[0].payload.encoding, 'base64');
+  assert.equal(emits[0].payload.cwd, '/w');
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].name, 'p.png');
+  assert.equal(opened[0].url, `data:image/png;base64,${fileBytes.toString('base64')}`);
+  assert.deepEqual(bars.filter(b => b.cls === 'text-danger'), []);
+});
+
+test('stored preview loader reassembles multi-chunk fetches by offset even when acks land out of order', async () => {
+  const fileBytes = Buffer.from(Array.from({ length: 25 }, (_, i) => (i * 7 + 3) % 256));
+  const { loader, emits, opened } = makePreviewHarness({ fileBytes, chunkBytes: 10, deferFirstChunk: true });
+  await loader.open({ cwd: '/w', storedName: '1-aaaaaaaa-x.png', name: 'x.png', mimeType: 'image/png' });
+  assert.equal(emits.length, 3); // 25 字节 / 10 每片 → 3 片
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].url, `data:image/png;base64,${fileBytes.toString('base64')}`);
+});
+
+test('stored preview loader caches by cwd+storedName and skips refetch on second open', async () => {
+  const fileBytes = Buffer.from([1, 2, 3]);
+  const { loader, emits, opened } = makePreviewHarness({ fileBytes, chunkBytes: 100 });
+  await loader.open({ cwd: '/w', storedName: '1-bbbbbbbb-c.png', name: 'c.png', mimeType: 'image/png' });
+  await loader.open({ cwd: '/w', storedName: '1-bbbbbbbb-c.png', name: 'c.png', mimeType: 'image/png' });
+  assert.equal(emits.length, 1); // 第二次走缓存不 emit
+  assert.equal(opened.length, 2);
+  assert.equal(opened[0].url, opened[1].url);
+});
+
+test('stored preview loader rejects oversized files with a toast and no lightbox', async () => {
+  const { loader, emits, opened, bars } = makePreviewHarness({
+    fileBytes: Buffer.alloc(4),
+    ackOverride: (_payload, ack) => ack({ ok: true, content: 'AAAA', totalSize: 11 * 1024 * 1024, bytesRead: 3, truncated: true, binary: true }),
+  });
+  await loader.open({ cwd: '/w', storedName: '1-cccccccc-big.png', name: 'big.png', mimeType: 'image/png' });
+  assert.equal(emits.length, 1); // 只发了首片探测
+  assert.equal(opened.length, 0);
+  assert.ok(bars.some(b => b.text.includes('过大')));
+});
+
+test('stored preview loader falls back to the thumb with a toast when the file is gone', async () => {
+  const { loader, opened, bars } = makePreviewHarness({
+    fileBytes: Buffer.alloc(0),
+    ackOverride: (_payload, ack) => ack({ ok: false, error: '路径不在授权范围内，或不是文件' }),
+  });
+  await loader.open({ cwd: '/w', storedName: '1-dddddddd-gone.png', name: 'gone.png', mimeType: 'image/png', thumb: 'data:image/jpeg;base64,thumb' });
+  assert.ok(bars.some(b => b.cls === 'text-danger'));
+  assert.deepEqual(opened, [{ name: 'gone.png', url: 'data:image/jpeg;base64,thumb' }]); // 降级放大 thumb
+});
+
+test('stored preview loader refuses path-like storedName and non-image types without emitting', async () => {
+  const { loader, emits, opened, bars } = makePreviewHarness({ fileBytes: Buffer.alloc(1) });
+  await loader.open({ cwd: '/w', storedName: '../escape.png', name: 'escape.png', mimeType: 'image/png' });
+  await loader.open({ cwd: '/w', storedName: 'sub/dir.png', name: 'dir.png', mimeType: 'image/png' });
+  await loader.open({ cwd: '/w', storedName: '1-eeeeeeee-doc.pdf', name: 'doc.pdf', mimeType: 'application/pdf' });
+  await loader.open({ cwd: '/w', storedName: '1-ffffffff-noext', name: 'noext' }); // 无 mime 且扩展名猜不出
+  assert.equal(emits.length, 0);
+  assert.equal(opened.length, 0);
+  assert.equal(bars.length, 4);
+});
+
+test('stored preview loader guesses image mime from the file name when meta lacks mimeType', async () => {
+  const fileBytes = Buffer.from([9, 9, 9]);
+  const { loader, opened } = makePreviewHarness({ fileBytes, chunkBytes: 100 });
+  await loader.open({ cwd: '/w', storedName: '1-99999999-shot.webp', name: 'shot.webp' }); // 历史路径无 mimeType
+  assert.equal(opened.length, 1);
+  assert.ok(opened[0].url.startsWith('data:image/webp;base64,'));
 });
 
 test('RTT monitor renders latency through app context and clears stale values', () => {

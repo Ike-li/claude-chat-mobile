@@ -203,3 +203,65 @@ test.describe('readFile', () => {
     assert.equal(res.content, content);
   });
 });
+
+// E18 附件预览：base64 模式——历史消息里点开图片附件时，前端经 browse:read 按片拉原图字节。
+// 契约：encoding:'base64' 时 content=该片字节的 base64（二进制不再拒绝）；分页按【字节精确】切
+// （不做 UTF-8 尾裁剪——那是文本模式防乱码的逻辑，字节流拼装方是前端 Uint8Array，切在哪都无损）；
+// 范围门/硬顶与文本模式完全同权（模式不放松安全与弱网上限）。
+test.describe('readFile base64 模式', () => {
+  const base = mkdtempSync(join(tmpdir(), 'ccm-browse-b64-'));
+  test.after(() => rmSync(base, { recursive: true, force: true }));
+  const cwd = join(base, 'project');
+  const outside = join(base, 'outside');
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  // 伪随机二进制（确定性生成，含 NUL 与全值域字节），2500 字节 → maxBytes=1000 时 3 片
+  const binBytes = Buffer.from(Array.from({ length: 2500 }, (_, i) => (i * 37 + 11) % 256));
+  writeFileSync(join(cwd, 'photo.bin'), binBytes);
+  symlinkSync(outside, join(cwd, 'link-out'));
+  const scopeDirs = [realpathSync(cwd)];
+
+  test('二进制文件分页拉取：每片 content=该片 base64、bytesRead=片字节数，解码拼接与原文件逐字节一致', () => {
+    const maxBytes = 1000;
+    const p1 = readFile(cwd, 'photo.bin', scopeDirs, { maxBytes, encoding: 'base64' });
+    assert.equal(p1.binary, true); // binary 标志仍如实（含 NUL），但不再以此拒绝内容
+    assert.equal(p1.totalSize, 2500);
+    assert.equal(p1.bytesRead, 1000);
+    assert.equal(p1.truncated, true);
+    assert.equal(p1.content, binBytes.subarray(0, 1000).toString('base64'));
+    const p2 = readFile(cwd, 'photo.bin', scopeDirs, { offset: 1000, maxBytes, encoding: 'base64' });
+    const p3 = readFile(cwd, 'photo.bin', scopeDirs, { offset: 2000, maxBytes, encoding: 'base64' });
+    assert.equal(p3.bytesRead, 500);
+    assert.equal(p3.truncated, false);
+    const joined = Buffer.concat([p1, p2, p3].map(p => Buffer.from(p.content, 'base64')));
+    assert.ok(joined.equals(binBytes));
+  });
+
+  test('base64 模式不做 UTF-8 尾裁剪：多字节字符跨界也按请求字节数精确切片', () => {
+    const zh = 'x'.repeat(9) + '中' + 'y'.repeat(9); // 21 字节，"中" 横跨 offset 9-11
+    writeFileSync(join(cwd, 'zh.txt'), zh, 'utf8');
+    const p1 = readFile(cwd, 'zh.txt', scopeDirs, { maxBytes: 10, encoding: 'base64' });
+    assert.equal(p1.bytesRead, 10); // 文本模式会退到 9；base64 模式字节精确
+    const p2 = readFile(cwd, 'zh.txt', scopeDirs, { offset: 10, maxBytes: 20, encoding: 'base64' });
+    const joined = Buffer.concat([Buffer.from(p1.content, 'base64'), Buffer.from(p2.content, 'base64')]);
+    assert.equal(joined.toString('utf8'), zh);
+  });
+
+  test('base64 模式硬顶不放松：maxBytes 超限仍夹到 MAX_BROWSE_BYTES（按解码后字节数计）', () => {
+    const big = Buffer.alloc(MAX_BROWSE_BYTES + 1024, 7);
+    writeFileSync(join(cwd, 'big.bin'), big);
+    const res = readFile(cwd, 'big.bin', scopeDirs, { maxBytes: 999999999, encoding: 'base64' });
+    assert.equal(res.bytesRead, MAX_BROWSE_BYTES);
+    assert.equal(Buffer.from(res.content, 'base64').length, MAX_BROWSE_BYTES);
+  });
+
+  test('base64 模式范围门同权：symlink 越界 → null', () => {
+    assert.equal(readFile(cwd, 'link-out', scopeDirs, { encoding: 'base64' }), null);
+  });
+
+  test('未知 encoding 值按默认文本模式处理（二进制仍拒绝），不抛错', () => {
+    const res = readFile(cwd, 'photo.bin', scopeDirs, { encoding: 'hex' });
+    assert.equal(res.binary, true);
+    assert.equal(res.content, '');
+  });
+});

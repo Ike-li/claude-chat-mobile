@@ -285,6 +285,18 @@ function mainCwdSessions() {
   return sessions;
 }
 
+// E18 附件预览：browse:read base64 分片的上传文件夹 fixture——1×1 PNG，覆盖 live meta（storedName）
+// 与历史 [附件] 解析两条点击路径；不在 Map 里的 storedName 走 ok:false（文件已删降级路径）。
+const MOCK_ATTACH_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64'
+);
+const MOCK_UPLOAD_FILES = new Map([
+  ['1700000000000-abcd1234-photo.png', MOCK_ATTACH_PNG],
+  ['1700000000001-deadbeef-old.png', MOCK_ATTACH_PNG],
+]);
+
+
 io.on('connection', socket => {
   console.log(`[mock-conn] Socket connected: ${socket.id}`);
 
@@ -729,6 +741,26 @@ io.on('connection', socket => {
     } else {
       callback({ messages: [] });
     }
+  });
+
+  // E18 附件预览：browse:read（契约内事件；仅实现 base64 分片路径——文本浏览走真实 server 的集成面）。
+  // 固定 fixture：.ccm-uploads/<storedName> 命中 MOCK_UPLOAD_FILES 才回内容，其余 ok:false（文件已删场景）。
+  socket.on('browse:read', (payload, callback) => {
+    if (typeof callback !== 'function') return;
+    const { relPath, offset = 0, maxBytes = 256 * 1024, encoding } = payload || {};
+    const m = /^\.ccm-uploads\/(.+)$/.exec(String(relPath || ''));
+    const bytes = m && encoding === 'base64' ? MOCK_UPLOAD_FILES.get(m[1]) : null;
+    console.log(`[mock] browse:read relPath=${relPath} offset=${offset} hit=${Boolean(bytes)}`);
+    if (!bytes) return callback({ ok: false, error: '路径不在授权范围内，或不是文件' });
+    const slice = bytes.subarray(offset, offset + maxBytes);
+    callback({
+      ok: true,
+      content: slice.toString('base64'),
+      totalSize: bytes.length,
+      bytesRead: slice.length,
+      truncated: offset + slice.length < bytes.length,
+      binary: true
+    });
   });
 
   // Console modal trace fetch. Production serves persisted per-session interaction logs;

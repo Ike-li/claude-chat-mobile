@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../../public/js/logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../../public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -272,6 +272,27 @@ test('attachmentDataUrl: mime 缺省但 data 在 → 不猜成图片，返回 nu
   // 没有 image/* 类型就不当图片预览，避免把任意 base64 当图打开
   assert.equal(attachmentDataUrl({ data: 'abc' }), null);
   assert.equal(attachmentDataUrl({ mimeType: 'application/octet-stream', data: 'abc' }), null);
+});
+
+// E18 附件预览：历史消息只有文件名（transcript 无 mimeType），前端按扩展名猜 image/*，非图片 → null（不弹灯箱）
+test('guessImageMime: 常见图片扩展名 → image/*，大小写不敏感', () => {
+  assert.equal(guessImageMime('photo.png'), 'image/png');
+  assert.equal(guessImageMime('IMG_0001.JPG'), 'image/jpeg');
+  assert.equal(guessImageMime('a.jpeg'), 'image/jpeg');
+  assert.equal(guessImageMime('anim.gif'), 'image/gif');
+  assert.equal(guessImageMime('shot.webp'), 'image/webp');
+  assert.equal(guessImageMime('modern.avif'), 'image/avif');
+  assert.equal(guessImageMime('ios.heic'), 'image/heic');
+  assert.equal(guessImageMime('pic.bmp'), 'image/bmp');
+  assert.equal(guessImageMime('icon.svg'), 'image/svg+xml');
+});
+
+test('guessImageMime: 非图片扩展名 / 无扩展名 / 非法输入 → null', () => {
+  assert.equal(guessImageMime('doc.pdf'), null);
+  assert.equal(guessImageMime('archive.tar.gz'), null);
+  assert.equal(guessImageMime('noext'), null);
+  assert.equal(guessImageMime(''), null);
+  assert.equal(guessImageMime(null), null);
 });
 
 // 工具卡片预览入口：Read 只读文件、Edit/Write 才是变更——文案不能写死「预览变更」

@@ -359,6 +359,39 @@ function normalizeHistoryText(content) {
 // 历史 thinking 单块上限（字符）：防 always-on 内存被超长推理撑爆；超出截断并标 truncated。
 const HISTORY_THINKING_CAP = 4000;
 
+// ── E18 附件预览：[附件] 块解析 ─────────────────────────────────────────────────
+// web 上传附件的用户消息在 transcript 里 = 原文 + uploads.js buildPromptText 注入的尾部块：
+//   [附件] 已上传到工作目录，可用 FileRead / Read 读取：\n<absPath>…
+// 历史回显把该块剥离出 attachments meta（{name, storedName}）——与 live user_message 事件的
+// displayText/attachments 语义对齐（气泡不显路径、chip 可点击预览），且对改动上线前的旧消息追溯生效。
+// 解析必须保守（防误伤普通用户文本）：只认【尾部】块——从尾往前找 header 行，其后每个非空行都必须是
+// /.ccm-uploads/ 直下的绝对路径；任一行不符 → 整体不解析、原文返回。header 措辞用宽松尾注（可用 .+ 读取：）
+// 兼容将来注入文案微调。name 恢复：storedName 去 `<Date.now()>-<hex8>-` 前缀（saveAttachments 命名约定）。
+const ATTACH_BLOCK_HEADER_RE = /^\[附件\] 已上传到工作目录，可用 .+ 读取：$/;
+const ATTACH_PATH_RE = /^\/.*\/\.ccm-uploads\/([^/\\]+)$/;
+export function splitAttachmentBlock(text) {
+  const raw = String(text ?? '');
+  if (!raw.includes('[附件]')) return { text: raw, attachments: [] }; // 快速路径：绝大多数消息零成本通过
+  const lines = raw.split('\n');
+  let headerIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (ATTACH_BLOCK_HEADER_RE.test(lines[i].trim())) { headerIdx = i; break; }
+  }
+  if (headerIdx === -1) return { text: raw, attachments: [] };
+  const attachments = [];
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    const m = ATTACH_PATH_RE.exec(line);
+    if (!m) return { text: raw, attachments: [] }; // 块后混有非路径行 → 不是注入块，整体不解析
+    const storedName = m[1];
+    const name = storedName.replace(/^\d+-[0-9a-f]{8}-/, '') || storedName;
+    attachments.push({ name, storedName });
+  }
+  if (attachments.length === 0) return { text: raw, attachments: [] }; // 光有 header 无路径行：不解析
+  return { text: lines.slice(0, headerIdx).join('\n').trimEnd(), attachments };
+}
+
 // 把一条 user/assistant JSONL 的 content 展开为前端可渲染条目序列（保序）：
 //   · text → { role, content, timestamp [, isSidechain, parentToolUseId] }
 //   · thinking → { kind:'thinking', role:'assistant', content, timestamp, ... }
@@ -372,9 +405,22 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
     if (opts.parentToolUseId) side.parentToolUseId = String(opts.parentToolUseId);
   }
   const out = [];
+  // E18：主链 user 文本先剥尾部 [附件] 块再走噪音过滤；纯附件消息（剥离后空文本）不得被
+  // normalizeHistoryText 的空判丢条——否则「只发一张图」的历史消息整条消失。sidechain 不解析（只认主链）。
+  const pushText = (raw) => {
+    let body = raw;
+    let attachments = null;
+    if (role === 'user' && !opts.isSidechain) {
+      const split = splitAttachmentBlock(raw);
+      body = split.text;
+      if (split.attachments.length) attachments = split.attachments;
+    }
+    const text = normalizeHistoryText(body);
+    if (text != null) out.push({ role, content: text, timestamp, ...side, ...(attachments ? { attachments } : {}) });
+    else if (attachments) out.push({ role, content: '', timestamp, ...side, attachments });
+  };
   if (typeof content === 'string') {
-    const text = normalizeHistoryText(content);
-    if (text != null) out.push({ role, content: text, timestamp, ...side });
+    pushText(content);
     return out;
   }
   if (!Array.isArray(content)) return out;
@@ -386,8 +432,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
     if (!textBuf.length) return;
     const joined = textBuf.join('\n');
     textBuf = [];
-    const text = normalizeHistoryText(joined);
-    if (text != null) out.push({ role, content: text, timestamp, ...side });
+    pushText(joined);
   };
 
   for (const block of content) {

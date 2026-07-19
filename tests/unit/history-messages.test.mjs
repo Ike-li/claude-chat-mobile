@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES } from '../../src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, splitAttachmentBlock } from '../../src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -405,3 +405,111 @@ test('getSessionHistory: 超上限会话削顶到 HISTORY_MAX_MESSAGES，保留�
 // 依据：CLI 每个动作即时落盘——assistant 发起 tool_use 先落、tool_result 回来再落、最终文本收尾落。
 // 于是消息链最后一条的形态可直接读出「轮次是否完结」，不依赖磁盘静默时间窗猜测（修「长工具调用
 // 期间零写入 >12.5s 被误判成终端停了」）。实测双样本：正在跑的会话判 pending、已结束的判 settled。
+
+// ── E18 附件预览：[附件] 块解析 ────────────────────────────────────────────────
+// transcript 里 web 上传附件的用户消息 = 原文 + buildPromptText 注入的尾部块：
+//   [附件] 已上传到工作目录，可用 FileRead / Read 读取：\n<absPath>…
+// 历史回显把该块剥离出 attachments meta（{name, storedName}），前端据此渲染可点击 chip。
+// 解析必须保守：仅认【尾部】块 + 首行精确形态 + 每个非空行都是 /.ccm-uploads/ 直下绝对路径，防误伤普通文本。
+const ATTACH_HEADER = '[附件] 已上传到工作目录，可用 FileRead / Read 读取：';
+const UP = '/Users/x/proj/.ccm-uploads';
+
+test('splitAttachmentBlock: 文本+附件块 → 剥离原文与 attachments（name 去时间戳-随机串前缀）', () => {
+  const raw = `帮我看这张图\n\n${ATTACH_HEADER}\n${UP}/1784404979078-27ad7f68-photo.png`;
+  const { text, attachments } = splitAttachmentBlock(raw);
+  assert.equal(text, '帮我看这张图');
+  assert.deepEqual(attachments, [{ name: 'photo.png', storedName: '1784404979078-27ad7f68-photo.png' }]);
+});
+
+test('splitAttachmentBlock: 多附件多行路径全部解析', () => {
+  const raw = `两张图\n\n${ATTACH_HEADER}\n${UP}/1784404979078-27ad7f68-a.png\n${UP}/1784404979090-deadbeef-b.jpg`;
+  const { attachments } = splitAttachmentBlock(raw);
+  assert.equal(attachments.length, 2);
+  assert.equal(attachments[0].storedName, '1784404979078-27ad7f68-a.png');
+  assert.equal(attachments[1].name, 'b.jpg');
+});
+
+test('splitAttachmentBlock: 纯附件（无文本）→ text 为空串、attachments 保留', () => {
+  const raw = `${ATTACH_HEADER}\n${UP}/1784404979078-27ad7f68-photo.png`;
+  const { text, attachments } = splitAttachmentBlock(raw);
+  assert.equal(text, '');
+  assert.equal(attachments.length, 1);
+});
+
+test('splitAttachmentBlock: 首行像但后续行不是 .ccm-uploads 路径 → 整体不解析（防误伤）', () => {
+  const raw = `${ATTACH_HEADER}\n/etc/passwd`;
+  const { text, attachments } = splitAttachmentBlock(raw);
+  assert.equal(text, raw);
+  assert.equal(attachments.length, 0);
+});
+
+test('splitAttachmentBlock: 块不在尾部（其后还有正文行）→ 不解析', () => {
+  const raw = `${ATTACH_HEADER}\n${UP}/1784404979078-27ad7f68-a.png\n后面还有正文`;
+  const { text, attachments } = splitAttachmentBlock(raw);
+  assert.equal(text, raw);
+  assert.equal(attachments.length, 0);
+});
+
+test('splitAttachmentBlock: 普通文本毫发无损', () => {
+  const raw = '普通消息，提到 [附件] 二字也不受影响';
+  const { text, attachments } = splitAttachmentBlock(raw);
+  assert.equal(text, raw);
+  assert.equal(attachments.length, 0);
+});
+
+test('splitAttachmentBlock: 前缀不合形态的 storedName → name 原样回退', () => {
+  const raw = `${ATTACH_HEADER}\n${UP}/oddname.png`;
+  const { attachments } = splitAttachmentBlock(raw);
+  assert.deepEqual(attachments, [{ name: 'oddname.png', storedName: 'oddname.png' }]);
+});
+
+test('getSessionHistory: 带附件的用户消息 → content 剥离块、attachments 挂 meta', async () => {
+  const cwd = '/test/attach-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'attach', [
+    { type: 'user', message: { role: 'user', content: `看这张\n\n${ATTACH_HEADER}\n${UP}/1784404979078-27ad7f68-p.png` }, timestamp: '2026-07-19T00:00:00Z' },
+    { type: 'assistant', message: { role: 'assistant', content: '看到了' }, timestamp: '2026-07-19T00:00:01Z' },
+  ]);
+  const msgs = await getSessionHistory('attach', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].content, '看这张');
+  assert.deepEqual(msgs[0].attachments, [{ name: 'p.png', storedName: '1784404979078-27ad7f68-p.png' }]);
+  assert.equal(msgs[1].attachments, undefined);
+});
+
+test('getSessionHistory: 纯附件消息（剥离后空文本）不丢条，content 为空串', async () => {
+  const cwd = '/test/attach-only-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'attachonly', [
+    { type: 'user', message: { role: 'user', content: `${ATTACH_HEADER}\n${UP}/1784404979078-27ad7f68-p.png` } },
+  ]);
+  const msgs = await getSessionHistory('attachonly', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].content, '');
+  assert.equal(msgs[0].attachments.length, 1);
+});
+
+test('getSessionHistory: content 为 text-block 数组形态的附件消息同样解析', async () => {
+  const cwd = '/test/attach-block-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'attachblock', [
+    { type: 'user', message: { role: 'user', content: [{ type: 'text', text: `图\n\n${ATTACH_HEADER}\n${UP}/1784404979078-27ad7f68-p.png` }] } },
+  ]);
+  const msgs = await getSessionHistory('attachblock', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].content, '图');
+  assert.equal(msgs[0].attachments[0].storedName, '1784404979078-27ad7f68-p.png');
+});
+
+test('getSessionHistory: sidechain 用户文本不做附件解析（只认主链）', async () => {
+  const cwd = '/test/attach-side-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  const raw = `${ATTACH_HEADER}\n${UP}/1784404979078-27ad7f68-p.png`;
+  writeJSONL(dir, 'attachside', [
+    { type: 'user', isSidechain: true, parent_tool_use_id: 'tu1', message: { role: 'user', content: raw } },
+  ]);
+  const msgs = await getSessionHistory('attachside', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].content, raw); // 原样保留，不剥离
+  assert.equal(msgs[0].attachments, undefined);
+});

@@ -38,9 +38,10 @@ export function registerFileSocketHandlers({
 
   on(socket, 'browse:read', (payload, ack) => {
     if (typeof ack !== 'function') return;
-    const { cwd: requestedCwd, relPath, offset, maxBytes } = payload || {};
+    const { cwd: requestedCwd, relPath, offset, maxBytes, encoding } = payload || {};
     const cwd = routeCwd(requestedCwd);
-    const result = browseReadFile(cwd, relPath, getWorkDirs(), { offset, maxBytes });
+    // encoding:'base64' → 附件/二进制按片 base64 回传（E18 附件预览）；其余值走默认文本模式
+    const result = browseReadFile(cwd, relPath, getWorkDirs(), { offset, maxBytes, encoding });
     if (result === null) {
       logger.warn(`[scope] 文件浏览越界拒绝（read）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
       audit.recordAudit({
