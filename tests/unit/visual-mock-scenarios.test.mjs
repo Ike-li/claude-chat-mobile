@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createVisualMockScenarioRegistry } from '../e2e/mock/registry.js';
 import { createContentScenarios } from '../e2e/mock/scenarios/content.js';
-import { createDemoScenarios } from '../e2e/mock/scenarios/demo.js';
 import { createStatusScenarios } from '../e2e/mock/scenarios/status.js';
 
 test('visual mock scenario registry dispatches exact and prefix commands', async () => {
@@ -53,7 +52,6 @@ test('visual mock business-domain modules expose their commands through the shar
   const getContext = () => ({});
   const registry = createVisualMockScenarioRegistry([
     ...createContentScenarios(getContext),
-    ...createDemoScenarios(getContext),
     ...createStatusScenarios(getContext),
   ]);
 
@@ -62,5 +60,4 @@ test('visual mock business-domain modules expose their commands through the shar
   assert.ok(commands.includes('test:subagent'));
   assert.ok(commands.includes('test:statusline'));
   assert.ok(commands.includes('test:needsyou'));
-  assert.ok(commands.includes('demo:permission'));
 });

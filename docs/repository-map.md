@@ -36,7 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Configuration template | 1 |
 | Deployment | 3 |
 | Documentation | 4 |
-| E2E test | 31 |
+| E2E test | 30 |
 | Frontend asset | 2 |
 | Frontend source | 21 |
 | Generated asset | 6 |
@@ -54,7 +54,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 89 |
 | Vendored asset | 10 |
 
-Total classified files: **278**.
+Total classified files: **277**.
 
 ## Complete file inventory
 
@@ -184,7 +184,6 @@ Total classified files: **278**.
 | `src/shared/serial-writer.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `tests/e2e/mock/registry.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/mock/scenarios/content.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
-| `tests/e2e/mock/scenarios/demo.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/mock/scenarios/status.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/mock/server.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/mock/transport.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |

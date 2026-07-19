@@ -1,20 +1,10 @@
 import { createVisualMockScenarioRegistry } from './registry.js';
 import { createContentScenarios } from './scenarios/content.js';
-import { createDemoScenarios } from './scenarios/demo.js';
 import { createStatusScenarios } from './scenarios/status.js';
 import { createMockTransport } from './transport.js';
 
 const PORT = process.env.PORT || 3100;
 const { app, httpServer, io } = createMockTransport();
-
-const DEMO_USER_TEXT = {
-  'demo:stream': '梳理一下这个仓库的架构，然后给 README 补一节部署说明',
-  'demo:tool': '修掉登录页在 iOS 上键盘弹起时输入框被遮挡的问题',
-  'demo:permission': '改完了，提交然后推到远程',
-  'demo:question': '这个修复直接发个版吧',
-  'demo:tab': '现在手上有哪些任务在跑？',
-  'demo:statusline': '这轮花了多少？上下文还剩多少？'
-};
 
 // Mock Database States
 let viewingInstanceId = 'inst_1';
@@ -887,26 +877,6 @@ io.on('connection', socket => {
     }
   });
 
-  // demo:* 场景共用小件：广播实例快照 / 中文按块流式（中文无空格分词，按 6 字块推进）
-  const emitInstancesSnapshot = () => {
-    io.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-      type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0]?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
-    });
-  };
-  const streamZh = async (messageId, text, seq0) => {
-    const chunks = text.match(/[\s\S]{1,6}/g) || [];
-    let seq = seq0;
-    for (const chunk of chunks) {
-      socket.emit('agent:event', {
-        seq: seq++, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-        type: 'text_delta', payload: { messageId, text: chunk }
-      });
-      await delay(50);
-    }
-    return seq;
-  };
-
   const scenarioRegistry = createVisualMockScenarioRegistry([
     ...createStatusScenarios(() => ({
       io, socket, activeEpoch, viewingInstanceId, activeModel, permissionMode, mockInstances, delay, addMockSessionLog,
@@ -914,11 +884,6 @@ io.on('connection', socket => {
       setMockServiceIncidents: ({ rateLimitLockout = null, clientError = null } = {}) => {
         mockRateLimitLockout = rateLimitLockout; mockClientError = clientError;
       },
-    })),
-    ...createDemoScenarios(() => ({
-      io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay, emitInstancesSnapshot, streamZh,
-      setPendingPermission: value => { pendingPermission = value; },
-      setPendingQuestion: value => { pendingQuestion = value; },
     })),
     ...createContentScenarios(() => ({
       io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay,
@@ -2408,16 +2373,16 @@ io.on('connection', socket => {
 
     console.log(`[mock] User message received: "${cmd}"`);
 
-    // Always echo user message back（demo:* 回显真实感文案，命令不露出）
+    // Always echo user message back
     // 排队语义镜像真实 server：busy 期间发的消息 queued:true + 透传 clientMessageId（撤回按它定位）
     const echoInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
     const echoQueued = echoInst?.state === 'busy';
     const echoClientMessageId = typeof messagePayload.clientMessageId === 'string' ? messagePayload.clientMessageId : undefined;
-    if (echoQueued && echoClientMessageId) queuedEchoItems.set(echoClientMessageId, { text: DEMO_USER_TEXT[cmd] || cmd });
+    if (echoQueued && echoClientMessageId) queuedEchoItems.set(echoClientMessageId, { text: cmd });
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
       type: 'user_message', payload: {
-        text: DEMO_USER_TEXT[cmd] || cmd, attachments, queued: echoQueued,
+        text: cmd, attachments, queued: echoQueued,
         ...(echoClientMessageId ? { clientMessageId: echoClientMessageId } : {})
       }
     });
@@ -2453,8 +2418,8 @@ io.on('connection', socket => {
       return;
     }
 
-    // Intercept test/demo commands
-    if (cmd.startsWith('test:') || cmd.startsWith('demo:')) {
+    // Intercept test commands
+    if (cmd.startsWith('test:')) {
       activeEpoch = 'mock-epoch-' + cmd.replace(/[^a-zA-Z0-9]/g, '_') + '-' + Date.now();
       const activeInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
       if (activeInst) activeInst.aborted = false; // WS-008：新场景开始，清 abort 标志（interrupt 会置 true 令流式循环提前退出）
