@@ -1487,14 +1487,22 @@ export function acceptMirrorState({ readonly = false, eventInstanceId = null, vi
 
 // 切视图/切工作区时是否应先本地复位只读锁（等 server 按新上下文重判）。
 // viewing 变了必清；空首页内换 cwd（viewing 恒 null）也要清——否则 A 空首页残留的锁会挂到 B 空首页。
+// 例外：同会话静默换实例（externalDirty/effort 触发的 dispose+resume，非用户主动切换）——sessionId
+// 不变，只是 instanceId 换了个身份，不该把用户刚做出的本地接管选择（mirrorOverriddenSid）冲掉，
+// 否则终端只读锁会在这轮忙碌（用户自己发的消息）时被重新广播锁上。sessionId 未知（null）保守仍清。
 export function shouldResetMirrorOnViewChange({
   prevViewing = null,
   nextViewing = null,
   prevCwd = null,
   nextCwd = null,
   cwdSeen = false,
+  prevSessionId = null,
+  nextSessionId = null,
 } = {}) {
-  if (prevViewing !== nextViewing) return true;
+  if (prevViewing !== nextViewing) {
+    const sameSession = prevSessionId != null && nextSessionId != null && prevSessionId === nextSessionId;
+    if (!sameSession) return true;
+  }
   if (cwdSeen && nextCwd && prevCwd && nextCwd !== prevCwd) return true;
   return false;
 }

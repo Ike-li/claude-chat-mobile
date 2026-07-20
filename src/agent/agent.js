@@ -376,6 +376,11 @@ export class AgentSession {
     const cliDropped = (this.cliQueued
       && !toDrop.some(it => it.clientMessageId && it.clientMessageId === this.cliQueued.clientMessageId))
       ? this.cliQueued : null;
+    // 同步摘牌（与 cancelQueued() 的"先摘牌再 await"对称）：above 只是快照读，若不在此清掉
+    // this.cliQueued，await raceInterrupt() 期间并发的 cancelQueued() 会读到同一份非空登记、
+    // 各自独立扣一次 pendingTurns，对同一条消息双扣，制造假性空闲窗口。谁的同步前缀先跑谁摘牌，
+    // 另一方发现槽位已空即知道这条已被别处处理，不再重复计费。
+    if (cliDropped) this.cliQueued = null;
     const droppedIds = [
       ...toDrop.map(it => it.clientMessageId).filter(Boolean),
       ...(cliDropped?.clientMessageId ? [cliDropped.clientMessageId] : []),

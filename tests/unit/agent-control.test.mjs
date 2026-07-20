@@ -515,4 +515,61 @@ test.describe('interrupt() — CLI 队列排队条结算', () => {
     assert.equal(events.find(e => e.type === 'system' && e.payload.kind === 'queue_dropped'), undefined);
     s.dispose();
   });
+
+  // 回归：interrupt() 在 await q.interrupt() 之前同步快照 cliDropped，此前不「摘牌」——
+  // await 期间若 cancelQueued() 并发命中同一条 cliQueued 消息并各自成功，两边都会对它扣一次
+  // pendingTurns，制造假性空闲窗口（真正的主轮 result 还没到）。修复：interrupt() 摘牌与
+  // cancelQueued() 对称，谁的同步前缀先跑谁摘牌，另一方发现槽位已空则不再重复处理/扣减。
+  test('竞态：interrupt() 与 cancelQueued() 并发命中同一条 cliQueued → 不双扣 pendingTurns', async () => {
+    const { s } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });   // pendingTurns=1，主轮在途
+    await s.send('second', null, { clientMessageId: 'c2' });  // pendingTurns=2，c2 登记进 cliQueued
+    s.queue = []; // 模拟贪婪泵已把两条都抽离本地队列
+    assert.equal(s.pendingTurns, 2);
+    assert.equal(s.cliQueued?.clientMessageId, 'c2');
+
+    let releaseInterrupt;
+    // 注意：interrupt() 摘牌先于 cancelQueued 的同步前缀，故 cancelQueued 会在 cliQueued 已空时
+    // 短路返回，根本不会走到 q.cancelAsyncMessage——此处无需为它提供可控 Promise。
+    s.q = { interrupt: () => new Promise(r => { releaseInterrupt = r; }) };
+
+    const pInterrupt = s.interrupt();   // 同步前缀先跑：摘牌 cliQueued、卡在 await q.interrupt()
+    const pCancel = s.cancelQueued('c2'); // 槽位已被摘空，应直接 {ok:false}，不再碰 q.cancelAsyncMessage
+
+    const cancelResult = await pCancel;
+    assert.equal(cancelResult.ok, false, 'interrupt 已摘牌，cancelQueued 不应再对同一条消息生效');
+    assert.equal(s.pendingTurns, 2, 'cancelQueued 落空，账目不动');
+
+    releaseInterrupt();
+    await pInterrupt;
+    assert.equal(s.pendingTurns, 1, '主轮真正的 result 还没到，中间态应是 1（不能被双扣到 0）');
+    s.dispose();
+  });
+
+  test('竞态（反序）：cancelQueued() 先摘牌 → interrupt() 不应对同一条 cliQueued 重复扣减', async () => {
+    const { s } = makeSession();
+    await s.send('first', null, { clientMessageId: 'c1' });
+    await s.send('second', null, { clientMessageId: 'c2' });
+    s.queue = [];
+    assert.equal(s.pendingTurns, 2);
+
+    let releaseInterrupt, releaseCancel;
+    s.q = {
+      interrupt: () => new Promise(r => { releaseInterrupt = r; }),
+      cancelAsyncMessage: () => new Promise(r => { releaseCancel = r; }),
+    };
+
+    const pCancel = s.cancelQueued('c2'); // 同步前缀先摘牌，卡在 await cancelAsyncMessage
+    const pInterrupt = s.interrupt();     // 发现 cliQueued 已空（cancelQueued 已摘牌），cliDropped 应为 null
+
+    releaseCancel(true); // 撤回先落地
+    const cancelResult = await pCancel;
+    assert.equal(cancelResult.ok, true);
+    assert.equal(s.pendingTurns, 1, 'c2 被 cancelQueued 扣掉后，只剩主轮的 1');
+
+    releaseInterrupt(); // 主轮也被中断（成功中断不直接清主轮的 1，留给之后的 result 事件配平）
+    await pInterrupt;
+    assert.equal(s.pendingTurns, 1, 'interrupt 不应对已被 cancelQueued 摘走的 c2 重复扣减，仍是主轮的 1');
+    s.dispose();
+  });
 });

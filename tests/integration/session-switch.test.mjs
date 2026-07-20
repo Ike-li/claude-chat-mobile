@@ -303,14 +303,15 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
       const init1 = client.events.find(e => e.type === 'init');
       const sessionId1 = init1?.payload?.sessionId;
+      assert.ok(sessionId1, '首次发消息应产生带 sessionId 的 init 事件');
       client.clearEvents();
 
       // 发送新消息（应该在同一个会话中）
       client.sendMessage('Second message in same session');
-      await client.waitForEvent('result', 30000);
+      const result2 = await client.waitForEvent('result', 30000);
 
-      // 检查事件是否仍然指向同一个会话
-      console.log(`会话 1 继续消息，sessionId 保持: ${sessionId1}`);
+      // 事件信封本身带 sessionId（agent.js emit()），第二条消息的 result 必须仍归属同一会话，不应静默分叉
+      assert.equal(result2.sessionId, sessionId1, '同会话续发消息，result 事件的 sessionId 不应变化');
     } finally {
       client.disconnect();
     }
@@ -344,9 +345,12 @@ test.describe('会话切换与 resume 集成测试', (process.env.CI || !process
 
       const init1 = client1.events.find(e => e.type === 'init');
       const init2 = client2.events.find(e => e.type === 'init');
+      const sessionId1 = init1?.payload?.sessionId;
+      const sessionId2 = init2?.payload?.sessionId;
 
-      console.log(`并发会话 1: ${init1?.payload?.sessionId}`);
-      console.log(`并发会话 2: ${init2?.payload?.sessionId}`);
+      assert.ok(sessionId1, '客户端 1 应产生带 sessionId 的会话');
+      assert.ok(sessionId2, '客户端 2 应产生带 sessionId 的会话');
+      assert.notEqual(sessionId1, sessionId2, '两个并发客户端各自的会话必须彼此隔离，不能共享同一 sessionId');
     } finally {
       client1.disconnect();
       client2.disconnect();

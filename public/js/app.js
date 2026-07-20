@@ -2677,12 +2677,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 失败时恢复草稿：send 会先清空输入；仅当输入仍空才回填，避免覆盖用户已键入的下一条。
     const restoreDraftOnFail = { text, attachments: outgoingAttachments };
     const sendInFlightTimer = setTimeout(clearSendInFlight, SEND_ACK_FALLBACK_MS); // 兜底：ack 真丢了也不永久卡死
+    // WS-003：捕获发起时的视图目标（代次），对齐 WS-001/WS-002——ack 延迟到达期间用户可能已切到别的
+    // 会话/实例，届时 setBusy/addBar/草稿回填这些「作用于当前视图」的副作用不该套到无关会话上。
+    const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId;
     socket.emit('user:message', { text, model, attachments: outgoingAttachments, instanceId: viewingInstanceId, cwd: currentCwd, clientMessageId }, (ack) => {
       clearSendInFlight();
       const decision = presentOnlineSendAck(ack);
       if (decision.ok) return;
       _pendingSendBusy = false;
       _pendingFirstSend = false;
+      logClientEvent('send', `[WEB_SEND] 在线发送被拒：${decision.message || ack?.error || 'unknown'}`);
+      // WS-003：迟到负 ack 守卫——发起后若已切到别的会话/实例，本次发送的失败反馈不该出现在当前视图上
+      // （错误提示会贴到无关会话、setBusy(false) 会打断无关会话真实在跑的轮次、草稿会覆盖无关会话的输入）。
+      if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
       if (decision.clearBusy) setBusy(false);
       if (decision.message) addBar(decision.message, 'text-danger');
       if (decision.restoreDraft && inputEl && !inputEl.value.trim() && attachments.items().length === 0) {
@@ -2696,7 +2703,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         autosize();
         updateSendButtonState();
       }
-      logClientEvent('send', `[WEB_SEND] 在线发送被拒：${decision.message || ack?.error || 'unknown'}`);
     });
     updateSendButtonState(); // 立即反映在途态，不等下一次外部驱动的刷新
     // F3：不再本地 append 气泡，由 user_message 事件渲染（同时入缓冲，重载可回放）
@@ -3335,6 +3341,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (shouldResetMirrorOnViewChange({
       prevViewing: viewingInstanceId, nextViewing: newViewing,
       prevCwd: currentCwd, nextCwd: newCwd, cwdSeen,
+      // 同会话静默换实例（externalDirty/effort 触发的 dispose+resume）不应清用户刚做的接管选择：
+      // 从新旧 instances 快照按 instanceId 查 sessionId，不依赖可能尚未同步的 currentSessionId。
+      prevSessionId: prevInstances.find(x => x.instanceId === viewingInstanceId)?.sessionId ?? null,
+      nextSessionId: instancesList.find(x => x.instanceId === newViewing)?.sessionId ?? null,
     })) {
       mirrorOverriddenSid = null;
       armedTakeoverSid = null;
