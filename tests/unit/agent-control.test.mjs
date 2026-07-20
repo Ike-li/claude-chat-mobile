@@ -180,15 +180,43 @@ test.describe('interrupt()', () => {
     s.dispose();
   });
 
-  test('SDK interrupt 抛错 → 队列不动、pendingTurns 不动', async () => {
+  test('SDK interrupt 抛错且无在途轮 → 队列不动、pendingTurns 不动', async () => {
     const { s, events } = makeSession();
-    s.pendingTurns = 2;
+    s.pendingTurns = 0;
     s.queue.push({ text: 'msg' });
     s.q = { interrupt() { return Promise.reject(new Error('no task')); } };
     await s.interrupt();
     assert.equal(s.queue.length, 1); // 未清
-    assert.equal(s.pendingTurns, 2); // 未变
+    assert.equal(s.pendingTurns, 0); // 未变
     const sys = events.find(e => e.type === 'system' && e.payload.message === '当前没有可中断的任务');
+    assert.ok(sys);
+    s.dispose();
+  });
+
+  // 限流重试等场景：账面有在途轮但 SDK 拒中断 → 强制收口，否则前端 busy/「正在停止」永挂。
+  test('SDK interrupt 抛错且 pendingTurns>0 → 强制结算并发 interrupted', async () => {
+    const { s, events } = makeSession();
+    s.pendingTurns = 1;
+    s.queue = [];
+    s.q = { interrupt() { return Promise.reject(new Error('no task')); } };
+    await s.interrupt();
+    assert.equal(s.pendingTurns, 0);
+    const sys = events.find(e => e.type === 'system' && e.payload.kind === 'interrupted');
+    assert.ok(sys, '应发 interrupted 让前端清 busy');
+    s.dispose();
+  });
+
+  test('SDK interrupt 超时 → 强制 abort 结算并发 interrupted', async () => {
+    const { s, events } = makeSession();
+    s.pendingTurns = 1;
+    s.interruptTimeoutMs = 20; // 单测加速
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.q = { interrupt() { return new Promise(() => {}); } }; // 永不 resolve
+    await s.interrupt();
+    assert.equal(s.pendingTurns, 0);
+    assert.equal(aborted, true);
+    const sys = events.find(e => e.type === 'system' && e.payload.kind === 'interrupted');
     assert.ok(sys);
     s.dispose();
   });

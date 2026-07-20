@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -149,6 +149,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 这些状态会被早期 socket/DOM 回调触达，必须先于回调注册声明，避免首连事件抢跑触发 TDZ。
   let _busyState = false;
   let interruptPending = false;
+  let interruptPendingTimer = null; // 安全超时：限流重试时 interrupt 可能挂起，超时清位防「正在停止…」永挂
   let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
   // FE-004：只挡"这条消息还没被服务端 ack"的窗口（挡瞬时双击/触屏合成双 click），不挡"忙碌中主动发
   // 第二条"——后者本就由服务端 pendingTurns>=2/_queueFull 承接（服务端设计允许"1 运行 + 1 排队"，见
@@ -1800,6 +1801,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // M7：改用 kind 字段判断中断，不靠字符串匹配（字符串会随 i18n 变化）
     system(p) {
       addBar(p.message, 'text-ink-faint');
+      // 中止成功 / 「无可中断任务」失败回执：都必须清 interruptPending（限流重试中点停止的卡死修复）
+      if (shouldClearInterruptPendingOnSystem(p)) {
+        clearInterruptPending({ keepLiveOverride: p.kind === 'interrupted' });
+      }
       if (p.kind === 'interrupted') {
         finalizeStreams();
         _pendingSendBusy = false;
@@ -2897,6 +2902,22 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   updateSendButtonState();
 
+  function clearInterruptPending({ keepLiveOverride = false } = {}) {
+    if (interruptPendingTimer) {
+      clearTimeout(interruptPendingTimer);
+      interruptPendingTimer = null;
+    }
+    if (!interruptPending) return;
+    interruptPending = false;
+    if (btnStop) btnStop.disabled = false;
+    // 超时/失败清位：去掉「正在停止…」覆盖，恢复 spinner 或空态；result/interrupted 路径会 setBusy(false) 整清
+    if (!keepLiveOverride && liveLine?.override) {
+      liveLine.override = '';
+      renderLiveLine();
+    }
+    updateSendButtonState();
+  }
+
   function requestInterrupt() {
     if (interruptPending) return;
     interruptPending = true;
@@ -2904,6 +2925,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (liveLine) { liveLine.override = formatLiveActivityText('stopping'); renderLiveLine(); }
     else setStreamLiveStatusText(formatLiveActivityText('stopping'));
     updateSendButtonState();
+    // 安全超时：SDK 限流重试中 control_request 可能挂起/回「无可中断」且前端漏清 → 永久卡「正在停止…」
+    if (interruptPendingTimer) clearTimeout(interruptPendingTimer);
+    interruptPendingTimer = setTimeout(() => {
+      interruptPendingTimer = null;
+      if (!interruptPending) return;
+      clearInterruptPending();
+      addBar('停止请求超时，可再试一次', 'text-ink-faint');
+    }, INTERRUPT_PENDING_TIMEOUT_MS);
     socket.emit('user:interrupt', { instanceId: viewingInstanceId }); // 台阶3：中断当前查看 tab 的在途任务
   }
 
@@ -3828,7 +3857,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       startLiveTicker();
       showStreamLiveStatus(renderLiveLineText());
     } else {
-      interruptPending = false;
+      clearInterruptPending({ keepLiveOverride: true }); // setBusy(false) 终态：清 pending/timer；live 整清在下两行
       stopLiveTicker();
       liveLine = null;
       if (btnStop) btnStop.disabled = false;

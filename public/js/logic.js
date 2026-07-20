@@ -248,6 +248,20 @@ export function formatLiveActivityText(kind = 'default') {
   return 'Claude 正在执行任务...';
 }
 
+// 点停止后 interruptPending 的安全超时（ms）。限流重试时 SDK interrupt 可能挂起或不回 interrupted，
+// 超时后前端必须自行清位，否则停止钮永久 disabled + live 行卡「正在停止…」。
+export const INTERRUPT_PENDING_TIMEOUT_MS = 12_000;
+
+// 哪些 system payload 应清掉前端 interruptPending。
+// · kind:interrupted —— 中止成功（主路径）
+// · 「当前没有可中断的任务」—— 后端 interrupt 失败回执（限流重试中常见），也必须清位
+export function shouldClearInterruptPendingOnSystem(payload = {}) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  if (p.kind === 'interrupted') return true;
+  if (typeof p.message === 'string' && p.message.includes('没有可中断的任务')) return true;
+  return false;
+}
+
 // UX-010：横幅优先级仲裁（同屏最多一条）。
 // mirror 状态已迁到 input placeholder + 续接钮，#mirrorBanner 恒隐——不得再压住 task_progress
 // （多子代理/后台任务进度是用户在只读时仍需要看到的）。

@@ -13,6 +13,8 @@ import {
   shouldBindBusyFromBroadcast,
   queuedBubbleState,
   resolveCancelRefill,
+  shouldClearInterruptPendingOnSystem,
+  INTERRUPT_PENDING_TIMEOUT_MS,
 } from '../../public/js/logic.js';
 
 test('resolveComposerPrimaryMode: 空闲空输入 → 禁用发送', () => {
@@ -54,6 +56,28 @@ test('resolveComposerPrimaryMode: 忙碌空 + interruptPending → 停止禁用'
   assert.equal(out.enabled, false);
   assert.match(out.title, /停止/);
   assert.equal(out.ariaLabel, '正在停止');
+});
+
+// 限流重试中点停止：SDK 可能回「无可中断任务」或迟迟不回 interrupted——前端须清 interruptPending，
+// 否则停止钮永久 disabled + live 行卡「正在停止…」（真机复现：限流重试 8/10 时点停止卡死）。
+test('shouldClearInterruptPendingOnSystem: interrupted 清位', () => {
+  assert.equal(shouldClearInterruptPendingOnSystem({ kind: 'interrupted', message: '已中断' }), true);
+});
+
+test('shouldClearInterruptPendingOnSystem: 无可中断任务 清位（失败回执）', () => {
+  assert.equal(shouldClearInterruptPendingOnSystem({ message: '当前没有可中断的任务' }), true);
+});
+
+test('shouldClearInterruptPendingOnSystem: 其它 system 不清位', () => {
+  assert.equal(shouldClearInterruptPendingOnSystem({ message: '正在压缩会话上下文…' }), false);
+  assert.equal(shouldClearInterruptPendingOnSystem({ kind: 'queue_dropped' }), false);
+  assert.equal(shouldClearInterruptPendingOnSystem({}), false);
+});
+
+test('INTERRUPT_PENDING_TIMEOUT_MS 是合理的安全超时（防永久卡死）', () => {
+  assert.equal(typeof INTERRUPT_PENDING_TIMEOUT_MS, 'number');
+  assert.ok(INTERRUPT_PENDING_TIMEOUT_MS >= 5_000);
+  assert.ok(INTERRUPT_PENDING_TIMEOUT_MS <= 30_000);
 });
 
 test('resolveComposerPrimaryMode: 忙碌有内容 + queueFull → 禁用发送 + 排队 title', () => {

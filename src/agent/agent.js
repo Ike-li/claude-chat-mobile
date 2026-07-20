@@ -109,6 +109,9 @@ export class AgentSession {
                                             // ——一次性消费。不能靠嗅探 SDK 的 result.subtype（如 'error_during_execution'）
                                             // 反推"是不是用户中断"：该 subtype 是"执行过程中出错"的泛化分类，与
                                             // error_max_turns/error_max_budget_usd 同级，也可能是真实的独立异常。
+    // await q.interrupt() 安全超时（ms）。限流重试时 control_request 可能挂起；超时后强制 abort 收口。
+    // 可在单测里覆盖为更短值。0/负数 = 不超时（仅测试用）。
+    this.interruptTimeoutMs = typeof this.interruptTimeoutMs === 'number' ? this.interruptTimeoutMs : 10_000;
     this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
     this.pendingQuestions = new Map();   // toolUseID → { resolve, questions, answers, remaining }
     this.denyKinds = new Map();          // toolUseID → 'answered'|'denied'|'cancelled'：deny+message 通道的真实语义，供前端区分 ☑️/🚫（is_error 不足以分辨）
@@ -377,8 +380,54 @@ export class AgentSession {
       ...toDrop.map(it => it.clientMessageId).filter(Boolean),
       ...(cliDropped?.clientMessageId ? [cliDropped.clientMessageId] : []),
     ];
+    // 限流重试时 q.interrupt() 的 control_request 可能永不回包 → await 永挂 → 前端「正在停止…」卡死。
+    // 超时后按失败路径强制收口（见 settleForce / catch）。
+    const raceInterrupt = async () => {
+      const p = this.q?.interrupt?.();
+      if (!p || typeof p.then !== 'function') return;
+      const ms = Number(this.interruptTimeoutMs);
+      if (!(ms > 0)) return p;
+      let timer = null;
+      try {
+        await Promise.race([
+          p,
+          new Promise((_, rej) => {
+            timer = setTimeout(() => rej(new Error('interrupt_timeout')), ms);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    // 强制结算：账面有在途轮但 SDK 拒中断/超时 → 把 pendingTurns 收口并发 interrupted，
+    // 否则前端 busy 与 interruptPending 永挂（限流重试 8/10 点停止复现）。
+    const settleForce = () => {
+      this.pendingTurns = Math.max(0, this.pendingTurns - dropped - (cliDropped ? 1 : 0));
+      // 在途主轮也收掉：SDK 拒中断/超时说明它已无法正常产生 result 配平
+      if (this.pendingTurns > 0) this.pendingTurns = 0;
+      this.cliQueued = null;
+      this._awaitingInterruptResult = false; // 无伴随 result 可消费
+      for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny');
+      for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
+        pending.signal?.removeEventListener('abort', pending.abortHandler);
+        if (pending.expiryTimer) clearTimeout(pending.expiryTimer);
+        this.pendingQuestions.delete(toolUseID);
+        for (let i = 0; i < pending.questions.length; i++) {
+          this.emit('request_resolved', { requestId: `${toolUseID}#${i}`, kind: 'question', outcome: 'aborted' });
+        }
+        this.denyKinds.set(toolUseID, 'cancelled');
+        try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
+      }
+      if (droppedIds.length > 0) {
+        this.emit('system', { message: '排队中的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
+      }
+      this.emit('system', { message: '已中断', kind: 'interrupted' });
+      // 超时路径：再 abort 子进程，防止 CLI 仍在限流重试里挂着
+      this.terminating = true;
+      try { this.abort?.abort(); } catch { /* noop */ }
+    };
     try {
-      await this.q?.interrupt();
+      await raceInterrupt();
       // AG-NEW-004：await 间隙若实例已被 dispose，仍须结算 pending 与 pendingTurns 账面，
       // 再 return——勿静默丢 toDrop 账面/挂起审批；emit 仅在未 dispose 时发（弃用实例无监听者）。
       if (this.disposed) {
@@ -418,13 +467,25 @@ export class AgentSession {
         this.emit('system', { message: '排队中的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
       }
       this.emit('system', { message: '已中断', kind: 'interrupted' }); // M7：kind 字段，勿靠字符串匹配
-    } catch {
-      // SDK 无在途任务 → 不丢消息：把 toDrop 放回队列头部（await 期间新发的接其后），pendingTurns 不动。
-      // AG-NEW-004：若已 dispose 则不必 requeue（实例即弃、无人再 drain）
-      if (!this.disposed) {
-        this.queue = toDrop.concat(this.queue);
-        this.emit('system', { message: '当前没有可中断的任务' });
+    } catch (err) {
+      const timedOut = err && /interrupt_timeout/.test(String(err.message || err));
+      // 账面仍有在途轮 / CLI 排队条（含限流重试挂着）→ 强制收口；纯空闲拒中断才走「无可中断任务」旧路径
+      // 注意：不把 dropped（本地 queue 快照）单独当 in-flight——单测/竞态下 queue 与 pendingTurns 可能脱节，
+      // 旧语义是「SDK 说没任务就把 toDrop 放回」；只有 pendingTurns>0 或 cliQueued 才强制收口。
+      const hadInFlight = this.pendingTurns > 0 || !!cliDropped;
+      if (this.disposed) {
+        this.pendingTurns = Math.max(0, this.pendingTurns - dropped - (cliDropped ? 1 : 0));
+        if (hadInFlight) this.pendingTurns = 0;
+        this.cliQueued = null;
+        return;
       }
+      if (hadInFlight || timedOut) {
+        settleForce();
+        return;
+      }
+      // SDK 无在途任务 → 不丢消息：把 toDrop 放回队列头部（await 期间新发的接其后），pendingTurns 不动。
+      this.queue = toDrop.concat(this.queue);
+      this.emit('system', { message: '当前没有可中断的任务' });
     }
   }
 
