@@ -114,13 +114,14 @@ test('shouldShowBusyWithMirror: 镜像优先隐藏忙碌', () => {
   assert.equal(shouldShowBusyWithMirror({}), false);
 });
 
-test('bannerPriority: mirror > task > subagent > activity > null', () => {
-  assert.equal(bannerPriority({ mirror: true, task: true, subagent: true, activity: true }), 'mirror');
+test('bannerPriority: task 不被 mirror 压掉（镜像态已迁 placeholder，后台进度须可见）', () => {
+  // 旧序 mirror>task 在 #mirrorBanner 恒隐后会误藏 task_progress 横幅
+  assert.equal(bannerPriority({ mirror: true, task: true, subagent: true, activity: true }), 'task');
+  assert.equal(bannerPriority({ mirror: true, task: false, subagent: false, activity: true }), 'activity');
+  assert.equal(bannerPriority({ mirror: true, task: false, subagent: false, activity: false }), 'mirror');
   assert.equal(bannerPriority({ mirror: false, task: true, subagent: true, activity: true }), 'task');
   assert.equal(bannerPriority({ mirror: false, task: false, subagent: true, activity: true }), 'subagent');
-  assert.equal(bannerPriority({ mirror: false, task: false, subagent: false, activity: true }), 'activity');
   assert.equal(bannerPriority({}), null);
-  // 兼容旧名
   assert.equal(pickBannerToShow({ task: true, activity: true }), 'task');
   assert.equal(pickBannerToShow, bannerPriority);
 });

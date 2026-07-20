@@ -15,6 +15,24 @@ const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几
 // ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
 const TOOL_INPUT_TTL_MS = 10 * 60 * 1000; // 缓存 input 存活 10 分钟
+
+// 会话生命周期用户可见文案（可恢复类 error）。统一前缀，避免「会话已结束」歧义：
+// 磁盘会话通常还在，掐掉的是子进程 / 在途轮。前端 error bar 原样展示。
+export function formatLifecycleIdleTimeout(mins) {
+  const n = Math.max(1, Number(mins) || 1);
+  return `任务已中断：静默超过 ${n} 分钟（可重新发送继续）`;
+}
+export function formatLifecycleIdleReclaim(mins) {
+  const n = Math.max(1, Number(mins) || 1);
+  return `进程已回收：会话空闲超过 ${n} 分钟（再发送或切换回来会自动续接）`;
+}
+export function formatLifecycleProcessExited() {
+  return '进程已退出：可重新发送消息继续（会话历史仍在）';
+}
+export function formatLifecycleSessionError(detail) {
+  const d = detail != null ? String(detail).trim() : '';
+  return d ? `进程异常：${d}` : '进程异常：未知错误（可重新发送继续）';
+}
 const TOOL_INPUT_MAX = 40;                // LRU 上限，防内存涨
 const TOOL_CHANGE_KIND = { Edit: 'edit', Write: 'write', Read: 'read', MultiEdit: 'multiedit', NotebookEdit: 'notebook' };
 const toolFilePath = (input) => input?.file_path ?? input?.notebook_path ?? null;
@@ -250,9 +268,9 @@ export class AgentSession {
           recoverable: false
         });
       } else if (caught) {
-        this.emit('error', { message: `会话异常：${sanitize(caught.message)}`, recoverable: true });
+        this.emit('error', { message: formatLifecycleSessionError(sanitize(caught.message)), recoverable: true });
       } else {
-        this.emit('error', { message: 'claude 进程已退出，可重新发送消息继续', recoverable: true });
+        this.emit('error', { message: formatLifecycleProcessExited(), recoverable: true });
       }
     }
     // 清理（无论正常结束/抛错/resume 失败都执行；异常已被上方 catch 收口，不会跳过）
@@ -785,14 +803,23 @@ export class AgentSession {
   }
 
   // ---- 静默看护 + 空闲实例回收 ----
-  // ① 在途轮静默挂死（idleTimeoutMs）：pendingTurns>0 且无审批/提问时，长时间零活动 → abort。
+  // ① 在途轮静默挂死（idleTimeoutMs）：pendingTurns>0 且无审批/提问、且无活后台任务时，
+  //    长时间零活动 → abort。活的 bgTasks（workflow/后台 agent/后台 bash）视为仍在干活，
+  //    刷新 lastActivity 豁免——否则多子代理并行时长主流通零消息会被 10 分钟误杀。
   // ② 空闲真回收（instanceIdleReclaimMs）：完全 !isBusy 且超阈 → abort 释放子进程；会话盘上仍在，
   //    下次发送/切换会 resume 重建。0 = 禁用。等审批/后台任务/提问都算 busy，不回收。
   checkIdle() {
     // 后台任务 TTL 清扫须在下方分支之前——后台任务运行时 pendingTurns 正是 0，
     // 放 return 之后就永远清不到（漏收完成信号的任务会把 ⏳ 永挂）。清出变化即回调重算角标。
+    // 亦保证下方 hasBgTasks() 只认「仍活」的任务（过期的已清）。
     if (this.sweepBgTasks()) this.onBgTaskChange?.();
     if (this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0) {
+      this.lastActivity = Date.now();
+      return;
+    }
+    // 在途轮 + 活后台任务：主流通可长时间无 delta（子代理内部跑），不得按 idleTimeout 误杀。
+    // 与 pendingPermissions 同口径：刷新 lastActivity 后返回（不进静默中断、也不进空闲回收）。
+    if (this.pendingTurns > 0 && this.hasBgTasks()) {
       this.lastActivity = Date.now();
       return;
     }
@@ -802,7 +829,7 @@ export class AgentSession {
       if (this.instanceIdleReclaimMs > 0 && !this.isBusy() && idleFor > this.instanceIdleReclaimMs) {
         const mins = Math.max(1, Math.round(this.instanceIdleReclaimMs / 60000));
         this.emit('error', {
-          message: `会话空闲超过 ${mins} 分钟，已回收子进程（再发送或切换回来会自动续接）`,
+          message: formatLifecycleIdleReclaim(mins),
           recoverable: true
         });
         this.terminating = true;
@@ -812,7 +839,7 @@ export class AgentSession {
     }
     if (idleFor > this.idleTimeoutMs) {
       this.emit('error', {
-        message: `任务静默超过 ${Math.round(this.idleTimeoutMs / 60000)} 分钟，已中断（可重新发送继续）`,
+        message: formatLifecycleIdleTimeout(Math.round(this.idleTimeoutMs / 60000)),
         recoverable: true
       });
       this.terminating = true;

@@ -965,7 +965,24 @@ async function catchUpTickOnce() {
       externalWrite: false, localBusy: true, releaseTicks: mirrorReleaseTicksNeeded(),
     });
     mirrorRelease = rel.state;
-    setMirror(rel.readonly, a.sessionId, false, false, undefined, id);
+    // 仍须重算 stale：写死 false 会在 web 长期 busy（多子代理/bgTasks）时掩盖「主链已 5 分钟无写入」的疑似中断。
+    // 追平仍抑制；只轻读 tail 形态（与正常路径同一 mirrorStaleFlag）。
+    let busyTail = { verdict: 'settled', lastChainTs: null };
+    try { busyTail = await classifyTranscriptTail(a.sessionId, a.cwd); } catch { /* 读失败保守 settled：不误标 stale */ }
+    if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
+    setMirror(
+      rel.readonly,
+      a.sessionId,
+      false,
+      mirrorStaleFlag({
+        readonly: rel.readonly,
+        tailPending: busyTail.verdict === 'pending',
+        lastChainTs: busyTail.lastChainTs,
+        now: Date.now(),
+      }),
+      undefined,
+      id,
+    );
     return;
   }
   let messages, curSize, tail = { verdict: 'settled', lastChainTs: null };

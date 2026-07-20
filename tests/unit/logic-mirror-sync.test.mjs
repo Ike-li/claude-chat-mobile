@@ -48,12 +48,12 @@ test('armedTakeoverStep: armed + 切会话 → disarm', () => {
 
 test.describe('formatMirrorBannerText（只读锁横幅三态）', () => {
   test('armed / stale 优先', () => {
-    assert.match(formatMirrorBannerText({ armed: true }), /已请求续接|等待终端/);
-    assert.match(formatMirrorBannerText({ stale: true }), /疑似中断/);
+    assert.match(formatMirrorBannerText({ armed: true }), /只读镜像.*已请求续接|等待终端/);
+    assert.match(formatMirrorBannerText({ stale: true }), /只读镜像.*疑似中断/);
   });
   test('driving 默认句：状态短句，无秒数倒计时、无点接管指令', () => {
     const t = formatMirrorBannerText({});
-    assert.equal(t, '终端会话运行中，移动端当前只读');
+    assert.equal(t, '只读镜像：终端会话运行中，移动端当前只读');
     assert.doesNotMatch(t, /接管|静默后|点/);
     assert.equal(/\d+\s*s/.test(t), false, '不应展示约 Ns 假精密倒计时');
   });
@@ -64,16 +64,18 @@ test.describe('formatMirrorBannerText（只读锁横幅三态）', () => {
 test.describe('formatMirrorComposerHint（点输入区说明三态）', () => {
   test('armed：等待自动切换 + 可取消', () => {
     const t = formatMirrorComposerHint({ armed: true });
-    assert.match(t, /已请求续接|等待|自动可写/);
+    assert.match(t, /只读镜像.*已请求续接|等待|自动可写/);
     assert.match(t, /取消续接/);
   });
   test('stale：确认终端已停后续接', () => {
     const t = formatMirrorComposerHint({ stale: true });
-    assert.match(t, /疑似中断/);
+    assert.match(t, /只读镜像.*疑似中断/);
     assert.match(t, /续接/);
+    assert.match(t, /历史仍在/);
   });
   test('driving：能/不能/硬要怎么做；无假精密倒计时', () => {
     const t = formatMirrorComposerHint({});
+    assert.match(t, /只读镜像/);
     assert.match(t, /终端会话运行中/);
     assert.match(t, /移动端当前只读/);
     assert.match(t, /不能/);

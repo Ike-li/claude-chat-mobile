@@ -913,7 +913,7 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now } = {}
 // 于是消息链最后一条的形态可直接读出「轮次是否完结」，不依赖磁盘静默时间窗猜测——修「终端长工具
 // 调用（深度搜索/长编译）期间磁盘零写入 >12.5s 被 mirrorReleaseStep 静默窗误判成终端停了、横幅熄灭」。
 // 实测双样本：正在跑的会话（尾=tool_result 等 assistant）判 pending ✓、已结束的（尾=assistant 纯文本）判 settled ✓。
-// 分类表（链条目 = type∈{user,assistant} 且非 isSidechain；倒序取最后一条）：
+// 分类表（链条目 = type∈{user,assistant}；主链跳过 isSidechain，子链只看 isSidechain）：
 //   assistant 含 tool_use            → pending（正在执行工具，结果未落盘）
 //   assistant 含 text（无 tool_use）  → settled（轮次收尾；'No response requested.' 自然覆盖）
 //   assistant 只有 thinking          → pending（流式中间态，text/tool_use 未落）
@@ -923,6 +923,9 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now } = {}
 //   无任何链条目/文件不存在           → settled（新会话/纯 meta：不锁）
 // 注意 settled 有一个已知误判窗：assistant 中途 text 落盘、紧接着还要发 tool_use（多段输出）——落盘间隙
 // 尾部短暂呈 settled。调用方（server catchUpTick）靠 keepAlive（文件增长）判据互补罩住，两者叠加使用。
+//
+// 子链（isSidechain）：主链 settled 后子 agent 仍可能狂写 sidechain——旧逻辑跳过 isSidechain 会
+// 在 ~12.5s 后误解锁、双写分叉。合并判据：主链 pending 或子链 pending → 整体 pending。
 // 该 user 条目之后（更高 index）是否已有本地 slash 的 stdout——/config /model 等本地命令
 // 落盘形态：command-name → local-command-stdout，无 assistant。若只认 command-name 会永远 pending 锁死。
 function hasLocalCommandStdoutAfter(entries, fromIndex) {
@@ -940,12 +943,17 @@ function hasLocalCommandStdoutAfter(entries, fromIndex) {
   return false;
 }
 
-export function classifyTailEntries(entries) {
+// sidechainOnly=false：只看主链；true：只看子链（isSidechain）。
+function classifyChainTail(entries, sidechainOnly) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
     // SS-002：跳过 isMeta 与 CLI 系统噪音行（与 getSessionHistory / lastMessageActivityMs 对齐）。
-    // 否则 settled 轮次后的 <local-command-stdout> 等会把 tail 误判 pending，quietTicks 永清零 → 镜像锁不释放。
-    if (!e || (e.type !== 'user' && e.type !== 'assistant') || e.isSidechain || e.isMeta) continue;
+    if (!e || (e.type !== 'user' && e.type !== 'assistant') || e.isMeta) continue;
+    if (sidechainOnly) {
+      if (!e.isSidechain) continue;
+    } else if (e.isSidechain) {
+      continue;
+    }
     const lastChainTs = e.timestamp ? (Date.parse(e.timestamp) || null) : null;
     const c = e.message?.content;
     const blocks = Array.isArray(c) ? c : null;
@@ -963,14 +971,26 @@ export function classifyTailEntries(entries) {
     const text = typeof c === 'string' ? c : (blocks || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
     if (/^\[Request interrupted by user[^\]]*\]$/.test(text.trim())) return { verdict: 'settled', lastChainTs };
     if (isCliSystemLine(text)) continue; // local-command / bash / ide 噪音：不当链尾
-    // 本地 slash（/config 等）：command-name 后已有 local-command-stdout → 命令已本地跑完，settled。
-    // 项目 slash（/deep-research）仅 command-name、等 assistant → 仍 pending。
-    if (reconstructSlashCommand(text) && hasLocalCommandStdoutAfter(entries, i)) {
+    // 本地 slash 只存在于主链；子链不认 reconstructSlashCommand 收尾。
+    if (!sidechainOnly && reconstructSlashCommand(text) && hasLocalCommandStdoutAfter(entries, i)) {
       return { verdict: 'settled', lastChainTs };
     }
     return { verdict: 'pending', lastChainTs };
   }
-  return { verdict: 'settled', lastChainTs: null }; // 无链条目：不锁
+  return { verdict: 'settled', lastChainTs: null };
+}
+
+export function classifyTailEntries(entries) {
+  const main = classifyChainTail(entries, false);
+  const side = classifyChainTail(entries, true);
+  if (main.verdict === 'pending') return main;
+  if (side.verdict === 'pending') {
+    // 主链已收尾但子 agent 仍在跑：维持 pending，stale 时钟取两者较新时间戳
+    const times = [main.lastChainTs, side.lastChainTs].filter((t) => t != null);
+    const lastChainTs = times.length ? Math.max(...times) : side.lastChainTs;
+    return { verdict: 'pending', lastChainTs };
+  }
+  return main; // 主链 settled（子链无活动或也已 settled）
 }
 
 // IO 包装：读 transcript 尾窗 → 解析 → classifyTailEntries。尾窗/半行处理与 readLastPermissionMode 同款。

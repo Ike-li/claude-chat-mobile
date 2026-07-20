@@ -54,7 +54,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:mirror-readonly');
     await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
     await expect(page.locator('#btnSend')).toHaveText('续接');
     await expect(page.locator('#btnSend')).toBeEnabled();
 
@@ -98,7 +98,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#btnSend')).toBeEnabled();
 
     await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
     await expect(page.locator('#input')).toHaveValue('test:settings-echo');
     await expect(page.locator('#btnSend')).toHaveText('续接');
 
@@ -175,7 +175,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:mirror-armed');
     await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
     await expect(page.locator('#btnSend')).toHaveText('续接');
 
     // 点续接 → 排队（armed），发送位变「取消」，仍只读
@@ -186,7 +186,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 点取消 → 回到只读驾驶态
     await page.locator('#btnSend').click();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
     await expect(page.locator('#btnSend')).toHaveText('续接');
     await expect(page.locator('#input')).toBeDisabled();
 
@@ -204,7 +204,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:mirror');
     await expect(page.locator('#input')).toBeDisabled();
-    await expect(page.locator('#input')).toHaveAttribute('placeholder', '终端会话运行中，移动端当前只读');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '只读镜像：终端会话运行中，移动端当前只读');
     await expect(page.locator('#btnSend')).toHaveText('续接');
 
     const modelBefore = await page.locator('#modelInput').inputValue();

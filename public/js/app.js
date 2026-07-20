@@ -5127,8 +5127,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (mirrorBannerIcon) mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
   }
 
-  // UX-010：横幅优先级仲裁 mirror > task > subagent > activity
-  // mirror 状态已迁到 placeholder + 续接钮，#mirrorBanner 恒隐；仍占仲裁优先级以压住 task/activity。
+  // UX-010：横幅优先级 task > subagent > activity（mirror 已迁 placeholder，不压 task）。
+  // #mirrorBanner 恒隐；只读时仍展示 task_progress，让用户看见后台子代理/Workflow 进度。
   function reconcileBanners() {
     const taskOn = Boolean(taskProgressBanner && !taskProgressBanner.classList.contains('hidden'));
     const activityOn = Boolean(activityBanner && !activityBanner.classList.contains('hidden'));
@@ -5139,9 +5139,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       activity: activityOn,
     });
     if (mirrorBanner) mirrorBanner.classList.add('hidden');
-    if (taskProgressBanner) {
-      if (pick !== 'task' && pick === 'mirror') taskProgressBanner.classList.add('hidden');
-    }
+    // 不再因 mirror 强制 hide taskProgressBanner
     if (activityBanner) {
       if (pick !== 'activity') activityBanner.classList.add('hidden');
     }
@@ -5221,7 +5219,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       btnAttach.disabled = effective;
       btnAttach.classList.toggle('opacity-50', effective);
       btnAttach.classList.toggle('cursor-not-allowed', effective);
-      btnAttach.title = effective ? '终端会话运行中，移动端当前只读——点右侧续接可在手机继续' : '添加附件';
+      btnAttach.title = effective ? '只读镜像：终端会话运行中——点右侧续接可在手机继续' : '添加附件';
     }
     // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
     updateSendButtonState();

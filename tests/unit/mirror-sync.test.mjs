@@ -220,3 +220,16 @@ test('mirrorStaleFlag：锁定 + pending + 零写入超 5 分钟 → stale；未
   assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: false, lastChainTs: over, now }), false, '已收尾 → 非中断');
   assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: null, now }), false, '无时间戳 → 保守非 stale');
 });
+
+// localBusy（web 自己 busy）时 catchUpTick 仍须重算 mirrorStaleFlag，禁止写死 stale=false——
+// 否则多子代理长期 localBusy 会掩盖「主链 5 分钟无写入」的疑似中断。此处锁纯函数契约。
+test('localBusy 路径仍须能标 stale（readonly+pending+超 5 分钟）', () => {
+  const now = 1_000_000;
+  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
+  assert.equal(
+    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }),
+    true,
+    'web busy 期间若只读锁仍挂着且主链陈旧 pending → 必须 stale=true',
+  );
+});
+

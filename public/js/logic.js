@@ -249,12 +249,14 @@ export function formatLiveActivityText(kind = 'default') {
 }
 
 // UX-010：横幅优先级仲裁（同屏最多一条）。
-// bannerPriority = 任务约定名；pickBannerToShow 保留给已接线 app.js import。
+// mirror 状态已迁到 input placeholder + 续接钮，#mirrorBanner 恒隐——不得再压住 task_progress
+// （多子代理/后台任务进度是用户在只读时仍需要看到的）。
+// 序：task > subagent > activity > mirror(占位) > null。
 export function bannerPriority({ mirror = false, task = false, subagent = false, activity = false } = {}) {
-  if (mirror) return 'mirror';
   if (task) return 'task';
   if (subagent) return 'subagent';
   if (activity) return 'activity';
+  if (mirror) return 'mirror';
   return null;
 }
 export const pickBannerToShow = bannerPriority;
@@ -1427,19 +1429,20 @@ export function isToolSummaryTruncated(summary, { truncated } = {}) {
 }
 
 // 只读镜像锁横幅文案（三态：armed / stale / driving）。
-// 主操作在发送钮位「续接 CLI 会话」；横幅只报状态。自动解锁仍由服务端 ~12.5s 静默负责，不写假精密倒计时。
+// 与后端 lifecycle 文案对齐：只读 ≠ 会话结束；stale = 疑似中断（可续接），不是「已结束」。
+// 主操作在发送钮位「续接 CLI 会话」；自动解锁仍由服务端 ~12.5s 静默负责，不写假精密倒计时。
 export function formatMirrorBannerText({ armed = false, stale = false } = {}) {
-  if (armed) return '已请求续接，等待终端当前操作完成…';
-  if (stale) return '终端疑似中断（超 5 分钟无活动）——确认已停可续接';
-  return '终端会话运行中，移动端当前只读';
+  if (armed) return '只读镜像：已请求续接，等待终端当前操作完成…';
+  if (stale) return '只读镜像：终端疑似中断（超 5 分钟无活动）——确认已停可续接';
+  return '只读镜像：终端会话运行中，移动端当前只读';
 }
 
 // 驾驶中点输入区/附件时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
 // 主操作指向发送钮位「续接」。单行 · 分隔：addBar 用 textContent，无 pre-wrap。
 export function formatMirrorComposerHint({ armed = false, stale = false } = {}) {
-  if (armed) return '已请求续接：等终端当前操作完成后自动可写。可点「取消续接」撤销。';
-  if (stale) return '终端疑似中断。确认终端已停后点「续接」即可在手机继续。';
-  return '终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）';
+  if (armed) return '只读镜像：已请求续接——等终端当前操作完成后自动可写。可点「取消续接」撤销。';
+  if (stale) return '只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。';
+  return '只读镜像：终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）';
 }
 
 // 同文案节流：避免用户连点输入框刷一串相同 bar；换文案（armed/stale 切换）立即放行。

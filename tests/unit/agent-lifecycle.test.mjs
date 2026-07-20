@@ -1,6 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  formatLifecycleIdleTimeout,
+  formatLifecycleIdleReclaim,
+  formatLifecycleProcessExited,
+  formatLifecycleSessionError,
+} from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
+
+
+// ---- lifecycle 文案（防「会话已结束」歧义）----
+test.describe('formatLifecycle*', () => {
+  test('idleTimeout / reclaim / processExited / sessionError 前缀稳定', () => {
+    assert.equal(formatLifecycleIdleTimeout(10), '任务已中断：静默超过 10 分钟（可重新发送继续）');
+    assert.equal(formatLifecycleIdleTimeout(0.2), '任务已中断：静默超过 1 分钟（可重新发送继续）');
+    assert.equal(formatLifecycleIdleReclaim(30), '进程已回收：会话空闲超过 30 分钟（再发送或切换回来会自动续接）');
+    assert.equal(formatLifecycleProcessExited(), '进程已退出：可重新发送消息继续（会话历史仍在）');
+    assert.match(formatLifecycleSessionError('boom'), /^进程异常：boom$/);
+    assert.match(formatLifecycleSessionError(''), /进程异常/);
+  });
+});
 
 // ---- dispose() ----
 test.describe('dispose()', () => {
@@ -162,6 +181,46 @@ test.describe('checkIdle()', () => {
     assert.equal(err.payload.recoverable, true);
     s.dispose();
   });
+
+  // 多子代理 / workflow 并行：主流通可长时间零消息，但 bgTasks 仍有心跳。
+  // 旧行为只看 lastActivity，会在 10 分钟把整轮误杀（用户见「任务静默超过 N 分钟」）。
+  test('在途轮 + 活的后台任务 → 不静默中断，并刷新 lastActivity', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0; // 远古静默
+    s.bgTasks.set('bg1', { taskType: 'local_agent', message: '子代理跑', lastSeenAt: Date.now() });
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.checkIdle();
+    assert.equal(s.terminating, false, '有活 bgTasks 时不得 idleTimeout 误杀');
+    assert.equal(aborted, false);
+    assert.ok(s.lastActivity > 0, '应刷新 lastActivity，等同「仍有活动」');
+    assert.equal(events.find(e => e.type === 'error'), undefined);
+    s.bgTasks.clear();
+    s.dispose();
+  });
+
+  test('在途轮 + 后台任务已 TTL 清掉 → 仍按静默超时中断', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    // 过期任务：checkIdle 先 sweep，hasBgTasks 变 false，应走静默中断
+    s.bgTasks.set('stale', {
+      taskType: 'local_agent',
+      message: '已死',
+      lastSeenAt: Date.now() - 180_000 - 1,
+    });
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.checkIdle();
+    assert.equal(s.hasBgTasks(), false, '过期 bg 应被 sweep');
+    assert.equal(s.terminating, true);
+    assert.equal(aborted, true);
+    const err = events.find(e => e.type === 'error');
+    assert.ok(err);
+    assert.ok(err.payload.message.includes('静默'));
+    s.dispose();
+  });
 });
 
 // ---- consume() 退出路径 ----
@@ -267,7 +326,7 @@ test.describe('consume() 退出路径', () => {
     assert.equal(exited, true);
     const err = events.find(e => e.type === 'error' && e.payload.recoverable === true);
     assert.ok(err);
-    assert.ok(err.payload.message.includes('会话异常'));
+    assert.ok(err.payload.message.includes('进程异常'));
     s.dispose();
   });
 
