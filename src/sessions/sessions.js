@@ -47,6 +47,22 @@ function load() {
 
 let state = load();
 
+// 路由代次（按 cwd）：session:new/session:home/session:switch 时前进，供 upsertSession 校验
+// 触发它的实例是否仍是"当前"路由血统——防止 session:new 之后没被 dispose 的旧实例，因后台活动
+// （排队回复/审批续跑/后台任务汇报）再次触发 system/init → onSessionId，把 currentByCwd 悄悄改回旧会话。
+// 不落盘：服务重启后 agents Map 必为空，不存在陈旧后台实例，代次不需要跨重启存活。
+const generationByCwd = new Map();
+
+export function bumpGeneration(cwd) {
+  const next = (generationByCwd.get(cwd) || 0) + 1;
+  generationByCwd.set(cwd, next);
+  return next;
+}
+
+export function getGeneration(cwd) {
+  return generationByCwd.get(cwd) || 0;
+}
+
 // B4：防抖异步写——切 tab 热路径不再阻塞事件循环；200ms 内多次调用只落一次盘。
 // BE-012：防抖窗后的实际写盘经单写者串行原语（createSerialWriter）——串行不乱序 + 在飞合并 + shutdown fence，
 // 消除「两次异步写 rename 乱序把新态覆盖回旧」与「在飞写覆盖同步 flush」两个数据完整性窗口。
@@ -99,7 +115,7 @@ export function setCurrent(cwd, sessionId) {
 // 新会话首次拿到 session_id 时登记；已存在则刷新 model/effort/permissionMode。
 // lastUsedAt：仅新建时写；已有条目【不】在 upsert 时刷新——对齐「最后消息时间」
 // （resume/init 重登记不得把会话顶新）。消息活动走 touchSessionActivity。
-export function upsertSession({ id, title, cwd, model, effort, permissionMode }) {
+export function upsertSession({ id, title, cwd, model, effort, permissionMode, generation }) {
   const existing = state.sessions.find(s => s.id === id);
   if (existing) {
     if (model) existing.model = model;
@@ -124,7 +140,12 @@ export function upsertSession({ id, title, cwd, model, effort, permissionMode })
       lastUsedAt: now
     });
   }
-  state.currentByCwd[cwd] = id; // 台阶2：该 cwd 的当前会话指向新 id
+  // 台阶2：该 cwd 的当前会话指向新 id——但陈旧代次（调用方创建时捕获的代次 ≠ 该 cwd 当前代次）
+  // 不得覆盖：说明触发这次 upsert 的实例是 session:new/home/switch 之前就存在的背景实例，其后台
+  // 活动不应该悄悄复活一个已被用户明确放弃的路由指针。generation 缺省（未传）保留旧行为。
+  if (generation === undefined || generation === getGeneration(cwd)) {
+    state.currentByCwd[cwd] = id;
+  }
   save();
 }
 

@@ -1289,6 +1289,9 @@ function writeSessionEntrypoint(sessionId, cwd) {
 // 同步建（resumeId 由调用方解析，无需 await）——故无台阶2 的「await 让出窗口双实例」重入竞态。
 function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = null, transcriptModel = null }) {
   const id = newInstanceId();
+  // 路由代次快照：本实例的 onSessionId 之后只有在该 cwd 代次未前进（未被 session:new/home/switch 作废）
+  // 时才允许覆写 currentByCwd——防止本实例后台活动复活一个用户已明确放弃的路由指针。
+  const generation = sessions.getGeneration(cwd);
   const saved = resumeId ? (sessions.getSession(resumeId) || { id: resumeId }) : null;
   if (saved?.id) {
     interactionLog.addSessionLog(saved.id, 'sys_info', `[SYS] 启动/连接会话: instanceId=${id}, resumeId=${saved.id}, cwd=${cwd}`);
@@ -1444,7 +1447,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, cwd);
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值（运行时不可改）。web 端续接恢复依赖这两字段。
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd, model, effort: instance.effort, permissionMode: instance.permissionMode });
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd, model, effort: instance.effort, permissionMode: instance.permissionMode, generation });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       recordCwdDefaultModel(cwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 会话已获得 ID: sessionId=${sid}, 标题="${firstMessage || '未命名'}", model=${model || '默认'}`);
@@ -2129,6 +2132,7 @@ registerSocketConnection(io, socket => {
     }
     const wasViewing = viewingInstanceId != null;
     viewingInstanceId = null;
+    sessions.bumpGeneration(viewingCwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
     sessions.setCurrent(viewingCwd, null); // 空首页 compose → FRESH（与 session:new 同；列表进入仍 resume）
     // 回空首页立即清全局 mirror，防 A 工作区 CLI 驾驶锁挂到空首页/下一会话
     clearMirrorOnViewChange();
@@ -2156,6 +2160,7 @@ registerSocketConnection(io, socket => {
     // 目录现有会话不受影响。session:switch / user:message 共用同一份归位逻辑，见其调用点注释。
     const cwd = ensureWhitelisted((payload && typeof payload === 'object') ? routeCwd(payload.cwd) : viewingCwdOf(), workDirs);
     viewingCwd = cwd;
+    sessions.bumpGeneration(cwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
     sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
     viewingInstanceId = null;       // 清查看 tab（**不再 dispose 任何实例**——背景 tab 继续跑），首条消息懒开
     // 新会话空窗口立即清全局 mirror（跨工作区新建最易撞「A 驾驶锁挂到 B」）
@@ -2191,6 +2196,9 @@ registerSocketConnection(io, socket => {
     }
     // 台阶3：打开或聚焦——已 live 实例承载该会话则聚焦不重开（去重，防同会话被两实例并发 resume）；
     // 否则 open 新实例 resume（openResumeInstance 先读 transcript 恢复权限档）。**不再 dispose 同 cwd**（其他 tab 后台继续）。
+    // 必须在 dedupedResume 之前 bump：若下面需要新 spawn 实例，openInstance 内会同步捕获代次快照——
+    // bump 放这之后会让刚 spawn 的、本该是"当前权威"的实例反而捕获到旧代次，被自己后续 onSessionId 误判陈旧。
+    sessions.bumpGeneration(cwd);
     const inst = instanceForSession(sessionId) || await dedupedResume(cwd, sessionId);
     viewingInstanceId = inst.instanceId;
     viewingCwd = cwd;

@@ -127,6 +127,61 @@ test.describe('sessions.js 单元测试', () => {
     assert.equal(S.getCurrent('/proj/f'), 'curr-sync');
   });
 
+  // ── 路由代次：bumpGeneration / getGeneration（防陈旧后台实例复活 currentByCwd）──────
+
+  test('getGeneration: 从未 bump 的 cwd 返回 0', () => {
+    assert.equal(S.getGeneration('/proj/gen-never'), 0);
+  });
+
+  test('bumpGeneration: 调用一次后 getGeneration 变为 1', () => {
+    S.bumpGeneration('/proj/gen-once');
+    assert.equal(S.getGeneration('/proj/gen-once'), 1);
+  });
+
+  test('bumpGeneration: 不同 cwd 互不干扰', () => {
+    S.bumpGeneration('/proj/gen-a');
+    assert.equal(S.getGeneration('/proj/gen-b'), 0);
+  });
+
+  test('upsertSession: 陈旧代次不得覆盖 currentByCwd（防旧后台实例回写路由指针）', () => {
+    const cwd = '/proj/gen-stale';
+    const genAtCreate = S.getGeneration(cwd); // 0：模拟旧实例创建时捕获的代次快照
+    S.upsertSession({ id: 'sess-old', title: 't', cwd, model: null, generation: genAtCreate });
+    assert.equal(S.getCurrent(cwd), 'sess-old'); // 首次建立：代次匹配，正常写入
+
+    S.bumpGeneration(cwd);   // 模拟 session:new：该 cwd 代次前进
+    S.setCurrent(cwd, null); // 模拟 session:new：清空指针，下条消息该懒开 FRESH
+
+    // 模拟旧实例（仍持有创建时捕获的旧 generation）之后又跑了一轮（如后台任务汇报），再次触发 onSessionId
+    S.upsertSession({ id: 'sess-old', title: 't2', cwd, model: null, generation: genAtCreate });
+    assert.equal(S.getCurrent(cwd), null); // 陈旧代次的回写被拒绝，指针没有被复活
+  });
+
+  test('upsertSession: 陈旧代次时元数据字段仍正常刷新（代次守卫只拦指针，不拦元数据）', () => {
+    const cwd = '/proj/gen-stale-meta';
+    const genAtCreate = S.getGeneration(cwd);
+    S.upsertSession({ id: 'sess-old-meta', title: 't', cwd, model: null, generation: genAtCreate });
+    S.bumpGeneration(cwd);
+    S.setCurrent(cwd, null);
+    S.upsertSession({ id: 'sess-old-meta', title: 't', cwd, model: 'new-model', generation: genAtCreate });
+    assert.equal(S.getSession('sess-old-meta').model, 'new-model'); // 指针拒写，但 model 照常更新
+  });
+
+  test('upsertSession: 代次匹配时正常写入 currentByCwd（防守卫过度保守）', () => {
+    const cwd = '/proj/gen-match';
+    S.bumpGeneration(cwd);
+    const cur = S.getGeneration(cwd); // 1
+    S.upsertSession({ id: 'sess-fresh', title: 't', cwd, model: null, generation: cur });
+    assert.equal(S.getCurrent(cwd), 'sess-fresh');
+  });
+
+  test('upsertSession: 未传 generation 时保留旧行为（向后兼容旧调用方）', () => {
+    const cwd = '/proj/gen-legacy';
+    S.bumpGeneration(cwd); // 代次已前进，但下面调用不传 generation
+    S.upsertSession({ id: 'sess-legacy', title: 't', cwd, model: null });
+    assert.equal(S.getCurrent(cwd), 'sess-legacy'); // 不带 generation → 无条件写入，兼容旧调用方
+  });
+
   test('upsertSession: 新会话可带 effort 和 permissionMode', () => {
     S.upsertSession({ id: 'prefs-new', title: '带档位', cwd: '/proj/h', model: 'claude-opus-4-8', effort: 'high', permissionMode: 'plan' });
     const s = S.getSession('prefs-new');

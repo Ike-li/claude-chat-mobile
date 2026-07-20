@@ -4161,6 +4161,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 已在空表面时 viewing 仍 null，instances 广播不会进 bindView，须本地 ensure 切到 compose。
   btnNew.onclick = () => {
     haptic('tap');
+    // 同步本地重置：不等服务端 instances 广播（那要一次网络往返）。JS 单线程保证这行执行完之后，
+    // 无论用户手速多快，ensureEmptySurface()/send() 都只能读到 null，不会残留旧会话 id（Bug A）。
+    viewingInstanceId = null;
     enterComposeReady();
     ensureEmptySurface();
     socket.emit('session:new', { cwd: currentCwd }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
@@ -4235,6 +4238,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         e.stopPropagation();
         closeLeftSidebar();
         haptic('tap');
+        // 同步本地重置（同 btnNew，Bug A）：viewingInstanceId 不等广播落地；currentCwd 同样要立刻
+        // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚点的这个 d。
+        viewingInstanceId = null;
+        currentCwd = d;
         enterComposeReady();
         ensureEmptySurface(); // cwd 可能变了；空表面内 viewing 仍 null 须本地切到 compose
         socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
