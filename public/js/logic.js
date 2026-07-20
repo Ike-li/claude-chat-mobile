@@ -242,9 +242,11 @@ export function resolveCancelRefill({ inputText = '', cancelledText = '' } = {})
 }
 
 // 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
-// spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令），故只剩 stopping/default 两种。
+// spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令）。
+// kind: default | stopping | sending（发送 ack 前的短暂阶段）。
 export function formatLiveActivityText(kind = 'default') {
   if (kind === 'stopping') return '正在停止…';
+  if (kind === 'sending') return '正在发送…';
   return 'Claude 正在执行任务...';
 }
 
@@ -1617,8 +1619,21 @@ export function formatCliDuration(ms) {
   return `${m}m ${s}s`;
 }
 
+// 距上次 agent:event 的安静期提示阈值（秒）。纯前端文案层心理预期管理，
+// 与服务端 agent.js idleTimeoutMs（默认 10 分钟）完全独立，不共享常量、不改服务端判定。
+export const LIVE_STALE_HINT_SEC = 20; // ≥20s 无事件 → 追加「仍在等待响应」
+export const LIVE_STALE_WARN_SEC = 60; // ≥60s 无事件 → 追加更明确的慢响应提示（两级互斥，不叠加）
+
+// 三阶段等待判定：sendInFlight 优先（发送 ack 前）→ 已见 content delta → responding，否则 waiting。
+// waiting/responding 当前共用 formatCliSpinnerLine；安静太久自然衔接到 stale 提示，不另发明文案。
+export function resolveLiveWaitPhase({ sendInFlight = false, sawContentDelta = false } = {}) {
+  if (sendInFlight) return 'sending';
+  return sawContentDelta ? 'responding' : 'waiting';
+}
+
 // CLI 式动态状态行组装：✻ Stewing… (55s · ↓ 3.3k tokens · thought for 1s)
 // thinking = null | { state: 'active'|'done', ms }；outTokens 空/0 省段。
+// sinceLastEventSec：null=不适用（断线等）不追加；≥hint/warn 追加安静期提示。
 // 对齐 CLI 不挂工具后缀段——正在执行的命令由消息流里的工具卡显示，此行只保动词+秒表+tokens+thinking。
 export function formatCliSpinnerLine({
   verb = '',
@@ -1627,6 +1642,7 @@ export function formatCliSpinnerLine({
   thinking = null,
   effort = null,
   glyph = '✻',
+  sinceLastEventSec = null,
 } = {}) {
   const v = String(verb || '').trim() || 'Working';
   const fmtTok = n => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}m` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
@@ -1636,6 +1652,10 @@ export function formatCliSpinnerLine({
     segs.push(effort ? `thinking with ${effort} effort` : 'thinking…');
   } else if (thinking?.state === 'done') {
     segs.push(`thought for ${Math.max(1, Math.round((thinking.ms || 0) / 1000))}s`);
+  }
+  if (Number.isFinite(sinceLastEventSec)) {
+    if (sinceLastEventSec >= LIVE_STALE_WARN_SEC) segs.push('响应较慢，可能是深度思考或网络问题');
+    else if (sinceLastEventSec >= LIVE_STALE_HINT_SEC) segs.push('仍在等待响应');
   }
   return `${glyph} ${v}… (${segs.join(' · ')})`;
 }

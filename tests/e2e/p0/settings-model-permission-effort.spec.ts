@@ -230,4 +230,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // /model default 是 CLI「不 pin」语义：不得把字面量 default 写进 modelInput / 发出去。
+  // 先 /model 具体模型污染，再 /model default 复位，文案/select/pill/回显四端均不得出现字面量 default。
+  test('P0-09j /model default 复位不污染 model 字面量', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    // /model 会剥离 [1m] 进 dataset.fullModel，select value 只留裸名——与 P0-09e 一致
+    await page.locator('#input').fill('/model claude-3-opus[1m]');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#messages')).toContainText('模型已设为 claude-3-opus[1m]（下一条消息生效）');
+    await expect(page.locator('#pillModelText')).toContainText('claude-3-opus[1m]');
+
+    await page.locator('#input').fill('/model default');
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#messages')).toContainText('模型已重置为默认（下一条消息生效）');
+    await expect(page.locator('#messages')).not.toContainText('模型已设为 default');
+    await expect(page.locator('#modelInput')).toHaveValue('');
+    await expect(page.locator('#pillModelText')).toContainText('Default (recommended)');
+
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    const reply = page.locator('[data-testid="assistant-message"]').last();
+    await expect(reply).toContainText('model=未指定(沿用)');
+    await expect(reply).not.toContainText('model=default');
+
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -510,18 +510,25 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // CLI 式动态状态行（终端等价）：✻ Stewing… (55s · ↓ 3.3k tokens · thought for 1s)。
   // 每 turn setBusy(false→true) 时选一次动词并起 1s 秒表；token/秒表权威值来自 status_line.turn
   // （无该数据时退化为本地 Date.now() 从 0 计 + 省略 token 段）；文案组装在 logic.js 纯函数。
-  let liveLine = null;   // { verb, turnStartTs, serverTurnStartedAt, outTokens, thinking:{state,ms,lastTs}|null, override }
+  // lastEventAt / sawContentDelta：等待可观测性——距上次事件多久、是否已见 content delta。
+  let liveLine = null;   // { verb, turnStartTs, serverTurnStartedAt, outTokens, thinking, override, lastEventAt, sawContentDelta }
   let liveTicker = null;
   function renderLiveLineText() {
     if (!liveLine) return formatLiveActivityText('default');
     if (liveLine.override) return liveLine.override;
+    // 发送 ack 前的短暂阶段：独立文案，不走 spinner
+    const phase = resolveLiveWaitPhase({ sendInFlight: _sendInFlight, sawContentDelta: liveLine.sawContentDelta });
+    if (phase === 'sending') return formatLiveActivityText('sending');
     const base = liveLine.serverTurnStartedAt || liveLine.turnStartTs;
+    const sinceLastEventSec = Math.max(0, Math.floor((Date.now() - (liveLine.lastEventAt || base)) / 1000));
     return formatCliSpinnerLine({
       verb: liveLine.verb,
       elapsedSec: Math.max(0, Math.floor((Date.now() - base) / 1000)),
       outTokens: liveLine.outTokens,
       thinking: liveLine.thinking,
       effort: currentEffort,
+      // 断线时不追加「网络问题」提示——顶部已有「连接断开，自动重连中…」，避免重复冲突
+      sinceLastEventSec: socket.connected ? sinceLastEventSec : null,
     });
   }
   // 已挂载时只直写文本节点（不 append/不 scrollBottom——status_line 300ms 一发，走 show 路径会把
@@ -1130,10 +1137,24 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     logger: clientLogger,
     outOfBand: {
       task_notification: onTaskNotification,
-      task_progress: (ev) => onTaskProgress(ev), // let 可后绑 reconcile 包装
-      api_retry: onApiRetry,
+      // outOfBand 不经 handled 分支，相关进度/重试仍刷新 lastEventAt（说明 turn 还活着）
+      task_progress: (ev) => {
+        const relevant = onTaskProgress(ev); // let 可后绑 reconcile 包装
+        if (relevant && liveLine) liveLine.lastEventAt = Date.now();
+        return relevant;
+      },
+      api_retry: (ev) => {
+        onApiRetry(ev);
+        if (liveLine) liveLine.lastEventAt = Date.now();
+      },
       history_append: onHistoryAppend,
       mirror_state: onMirrorState,
+    },
+    // handled 分支统一刷新：已过实例过滤 + epoch/seq 去重，任何本会话事件都说明「还活着」
+    onHandledEvent(ev) {
+      if (!liveLine) return;
+      liveLine.lastEventAt = Date.now();
+      if (ev.type === 'text_delta' || ev.type === 'thinking_delta') liveLine.sawContentDelta = true;
     },
     onEpochReset() {
       permQueue.length = 0;
@@ -2585,10 +2606,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           currentGatewaySuffix = '';
           delete modelInput.dataset.fullModel;
         }
-        ensureModelOption(nakedArg, '手动设置'); // select 候选外的任意名（如网关别名）动态插入
-        modelInput.value = nakedArg;
-        syncModelUI(nakedArg);
-        addModeBar(`模型已设为 ${nakedArg}${currentGatewaySuffix}（下一条消息生效）`, 'text-info');
+        // value=default 是 CLI /model 「不 pin」语义：对齐 tile 点击路径，select 置空，
+        // 不把字面 'default' 写进 select（否则发消息会带 model:'default' 让后端误 setModel 字面值）。
+        if (nakedArg === 'default') {
+          currentGatewaySuffix = '';
+          delete modelInput.dataset.fullModel;
+          modelInput.value = '';
+          syncModelUI('');
+          addModeBar('模型已重置为默认（下一条消息生效）', 'text-info');
+        } else {
+          ensureModelOption(nakedArg, '手动设置'); // select 候选外的任意名（如网关别名）动态插入
+          modelInput.value = nakedArg;
+          syncModelUI(nakedArg);
+          addModeBar(`模型已设为 ${nakedArg}${currentGatewaySuffix}（下一条消息生效）`, 'text-info');
+        }
       } else {
         const pending = modelInput.value.trim();
         const opts = [...modelInput.options].map(o => o.value).filter(Boolean);
@@ -2600,6 +2631,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return;
     }
     let model = modelInput.dataset.fullModel || modelInput.value.trim() || undefined;
+    // CLI「不 pin」哨兵值：任何来源（/model default、models 事件预选）都不该原样发给后端
+    if (model === 'default') model = undefined;
     // S5：仅对「不在 supportedModels 候选里的自设名」(如 /model 手设并剥离了后缀的) 回贴网关后缀。
     // 候选内的值本就是网关合法完整名(裸别名 opus/sonnet 或显式 deepseek-v4-pro[1m])，原样发送——
     // 否则会把上个模型的后缀错贴到用户新选的别的候选(opus→opus[1m]，网关不认)。
@@ -2688,6 +2721,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       _sendInFlight = false;
       clearTimeout(sendInFlightTimer);
       updateSendButtonState();
+      // 让「正在发送…」立刻切回 spinner，不必等下一次 1s ticker
+      if (liveLine) renderLiveLine();
     };
     // 失败时恢复草稿：send 会先清空输入；仅当输入仍空才回填，避免覆盖用户已键入的下一条。
     const restoreDraftOnFail = { text, attachments: outgoingAttachments };
@@ -3877,7 +3912,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (show) {
       if (!interruptPending && btnStop) btnStop.disabled = false;
       // show === _busyState 去重保证每 turn 恰好在此选一次动词、起一次秒表
-      liveLine = { verb: pickSpinnerVerb(), turnStartTs: Date.now(), serverTurnStartedAt: null, outTokens: null, thinking: null, override: '' };
+      const now = Date.now();
+      liveLine = {
+        verb: pickSpinnerVerb(),
+        turnStartTs: now,
+        serverTurnStartedAt: null,
+        outTokens: null,
+        thinking: null,
+        override: '',
+        lastEventAt: now,       // 等待可观测性：初值=turn 起点，收到 agent:event 后刷新
+        sawContentDelta: false, // 本轮是否已见 text_delta/thinking_delta
+      };
       startLiveTicker();
       showStreamLiveStatus(renderLiveLineText());
     } else {

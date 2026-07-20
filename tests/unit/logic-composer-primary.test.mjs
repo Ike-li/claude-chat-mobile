@@ -162,10 +162,12 @@ test('resolveComposerPrimaryMode: sendInFlight 挡双击发送', () => {
 });
 
 // 对齐 CLI：spinner 行不挂工具后缀（'tool'/'thinking' 分支已退役），未知 kind 一律回落 default。
-test('formatLiveActivityText: default / stopping / 未知 kind 回落 default', () => {
+// 'sending' 是发送 ack 前的短暂阶段，与 stopping/default 并列。
+test('formatLiveActivityText: default / stopping / sending / 未知 kind 回落 default', () => {
   assert.equal(formatLiveActivityText('default'), 'Claude 正在执行任务...');
   assert.equal(formatLiveActivityText(), 'Claude 正在执行任务...');
   assert.equal(formatLiveActivityText('stopping'), '正在停止…');
+  assert.equal(formatLiveActivityText('sending'), '正在发送…');
   assert.equal(formatLiveActivityText('thinking'), 'Claude 正在执行任务...');
   assert.equal(formatLiveActivityText('tool', { name: 'Bash', command: 'ls -la' }), 'Claude 正在执行任务...');
 });

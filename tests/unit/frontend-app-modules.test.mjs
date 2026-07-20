@@ -352,6 +352,29 @@ test('agent event dispatcher keeps instance, epoch and sequence boundaries in sh
   assert.equal(state.lastSeq, 1);
 });
 
+// onHandledEvent 仅在 'handled' 分支触发：dropped / duplicate 不触发，handled 触发一次。
+test('agent event dispatcher invokes onHandledEvent only for the handled branch', () => {
+  const handledCalls = [];
+  const state = {
+    viewingInstanceId: 'inst-1',
+    instancesReady: true,
+    curEpoch: null,
+    lastSeq: 0,
+    currentSessionId: null,
+  };
+  const context = createAppContext({ state });
+  const dispatch = createAgentEventDispatcher(context, {
+    handlers: () => ({ text_delta: () => {} }),
+    onHandledEvent: (ev) => handledCalls.push(ev.type),
+  });
+
+  dispatch({ type: 'text_delta', instanceId: 'inst-2', epoch: 'e1', seq: 1 }); // dropped：其他实例
+  dispatch({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 }); // handled
+  dispatch({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 }); // duplicate（同 seq 重放）
+
+  assert.deepEqual(handledCalls, ['text_delta']);
+});
+
 test('file browser formats byte counts consistently for directory and content pages', () => {
   assert.equal(formatFileSize(100), '100B');
   assert.equal(formatFileSize(1536), '1.5KB');

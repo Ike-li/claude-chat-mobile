@@ -5,6 +5,7 @@ export function createAgentEventDispatcher(context, {
   logger = null,
   onEpochReset = () => {},
   onSessionId = () => {},
+  onHandledEvent = () => {}, // 仅 'handled' 分支触发（已过实例过滤 + epoch/seq 去重）
   outOfBand = {},
 } = {}) {
   const log = typeof logger === 'function' ? logger : (logger?.log || (() => {}));
@@ -82,6 +83,7 @@ export function createAgentEventDispatcher(context, {
     }
 
     logEvent(event);
+    onHandledEvent(event);
     handlers()[event.type]?.(event.payload);
     return 'handled';
   };
