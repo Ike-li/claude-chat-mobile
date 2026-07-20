@@ -14,13 +14,17 @@
 <table>
 <thead><tr><th>主题</th><th>代表方向</th></tr></thead>
 <tbody>
-<tr><td>同步 / mirror</td><td>externalDirty、镜像锁自动释放、busy reseed、重连误判修复</td></tr>
-<tr><td>状态可见性</td><td>CLI 式动态状态行、回合收尾行、服务状态面板判定化</td></tr>
+<tr><td>同步 / mirror</td><td>externalDirty、镜像锁自动释放、busy reseed、重连误判修复；2026-07-20：镜像误重锁、catchUpTickOnce 状态提交延后到视图守卫后</td></tr>
+<tr><td>消息子系统</td><td>pendingTurns 双扣修复、send/cancelQueued 视图守卫、pendingSendBusy 跨会话隔离、message-dedup TOCTOU；control_request 超时保护扩到 setModel/setPermissionMode/stopTask/cancelAsyncMessage</td></tr>
+<tr><td>状态可见性</td><td>CLI 式动态状态行、回合收尾行、服务状态面板判定化；限流重试中点停止不再卡「正在停止…」</td></tr>
+<tr><td>后台 / 子代理</td><td>多子代理并行时防 idle 误杀与误解锁；bgTasks 刷新 lastActivity；生命周期文案理顺</td></tr>
+<tr><td>worktree</td><td>会话触达接线；首页「最近活跃」纳入 worktree 会话（冷启动一键续）</td></tr>
 <tr><td>排队与交互</td><td>排队可见、撤回重编辑、原生 confirm 改 sheet</td></tr>
 <tr><td>运维</td><td>日志时间戳、copy-truncate 轮转、客户端错误上报</td></tr>
-<tr><td>仓库边界</td><td>宣传层下线、demo 场景拆除、worktree 会话触达、.worktrees 约定</td></tr>
+<tr><td>仓库边界</td><td>宣传层下线、demo 场景拆除、.worktrees 约定</td></tr>
 </tbody>
 </table>
+<p>手册探针基线：dev@2de707b（自 8084005 起含上述消息子系统审查修复与 worktree 首页）。</p>
 
 <h2>有意保留的「上帝模块」</h2>
 <p><code>src/server/app.js</code> 仍是组装根本体：mirror / catchUp / openInstance 与契约路由共享同一组顶层可变状态（viewing*、mirror*、catchUp*）。域逻辑已下沉，但接线有意不拆成多个上下文穿针——注释与边界守卫共同说明这一点。</p>

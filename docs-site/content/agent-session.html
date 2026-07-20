@@ -11,12 +11,17 @@
 <h2>输入与忙碌</h2>
 <div class="kv">
   <div class="row"><div class="key">queue</div><div class="val">streaming input 队列；busy 时可排队后续消息</div></div>
-  <div class="row"><div class="key">pendingTurns</div><div class="val">在途轮次计数</div></div>
-  <div class="row"><div class="key">isBusy</div><div class="val">pendingTurns &gt; 0 或有后台任务或有 pending 审批/提问</div></div>
-  <div class="row"><div class="key">idle hang</div><div class="val">有 pendingTurns、无审批/提问且静默超过 <code>idleTimeoutMs</code>（默认 600000）则 abort</div></div>
+  <div class="row"><div class="key">pendingTurns</div><div class="val">在途轮次计数；仅由 send(+1) 与 result/中断/撤回路径结算(-1)。封顶语义：≥2 拒再入队</div></div>
+  <div class="row"><div class="key">cliQueued</div><div class="val">已交给 SDK/CLI、可能仍在 CLI 内部队列的一条登记（上限 1；与 pendingTurns 配合）</div></div>
+  <div class="row"><div class="key">isBusy</div><div class="val">pendingTurns &gt; 0 或有后台任务（bgTasks）或有 pending 审批/提问</div></div>
+  <div class="row"><div class="key">idle hang</div><div class="val">有 pendingTurns、无审批/提问、且无活 bgTasks 时，静默超过 <code>idleTimeoutMs</code>（默认 600000）则 abort</div></div>
 </div>
 
 <p>实例状态（instance-manager）：permission &gt; busy &gt; aborted/error/done &gt; idle。</p>
+
+<div class="callout warn"><div class="body">
+<strong>留意</strong><code>pendingTurns</code> 禁止双扣：中断路径与撤回路径若各自对同一条消息减一次，会制造假性空闲窗口。2026-07-20 已修：谁先结算谁摘牌；cancelQueued 成功须补扣（该消息永不产生 result）。
+</div></div>
 
 <h2>SDK 选项要点</h2>
 <ul>
@@ -74,10 +79,25 @@ sequenceDiagram
 
 <h2>排队、中断与撤回</h2>
 <ul>
-  <li>busy 时再发可排队；system 提示「前面还有消息在排队…」。</li>
+  <li>busy 时再发可排队；system 提示「前面还有消息在排队…」；emit 在 pendingTurns++ 之前，用 <code>queued: pendingTurns≥1</code> 标排队可见性。</li>
   <li><code>user:interrupt</code>：中断当前；kind <code>interrupted</code>；排队可能 <code>queue_dropped</code>。</li>
-  <li><code>user:cancelQueued</code>：撤回排队中的消息；kind <code>queue_cancelled</code>，可带回 clientMessageId。</li>
+  <li><code>user:cancelQueued</code>：撤回排队中的消息；kind <code>queue_cancelled</code>，可带回 clientMessageId。若消息已在 CLI 侧（cliQueued），走 <code>cancelAsyncMessage</code>。</li>
   <li>勿靠中文文案字符串匹配终态，用 <code>kind</code> 字段。</li>
+</ul>
+
+<h3>control_request 超时保护</h3>
+<p>SDK 的 control_request 与主消息通道共享底层连接。限流重试时任一 control_request 可能挂起不回包。实现用 <code>_raceControlRequest</code> 给控制调用加安全超时，超时后强制收口，避免前端「正在停止…」卡死。</p>
+<ul>
+  <li>覆盖：<code>interrupt</code>、<code>setModel</code>、<code>setPermissionMode</code>、<code>stopTask</code>、<code>cancelAsyncMessage</code>（2026-07-20 扩面）。</li>
+  <li>超时后：尽量把 pendingTurns 账面收口并 emit interrupted，恢复可操作。</li>
+</ul>
+
+<h3>后台任务与多子代理</h3>
+<ul>
+  <li><code>bgTasks</code>：活的后台任务注册表（task_progress / task_notification / background_tasks_changed 全量快照）。</li>
+  <li>有活 bgTasks 时刷新 lastActivity，避免多子代理并行时主流通零 delta 被 idleTimeout <strong>误杀</strong>。</li>
+  <li><code>stopTask(taskId)</code> 只停单个后台任务，不碰主队列 / pendingTurns。</li>
+  <li>无心跳超过 BG_TASK_TTL（3min）可扫掉；有意搁置：子代理 sidechain 归属的精细划分。</li>
 </ul>
 
 <h2>模型与 effort</h2>

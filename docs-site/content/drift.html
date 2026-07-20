@@ -22,15 +22,19 @@
 </div></div>
 
 <div class="callout drift"><div class="body">
-<strong>数字校验纪律</strong>凡手册或 PR 描述中的计数、默认毫秒、缓冲上限，应用 <code>rg</code> 对照 <code>src/</code> 与 <code>scripts/agent-event-contract.js</code>；不要从记忆或旧 markdown 抄。本手册探针基线：dev @ 8084005。
+<strong>数字校验纪律</strong>凡手册或 PR 描述中的计数、默认毫秒、缓冲上限，应用 <code>rg</code> 对照 <code>src/</code> 与 <code>scripts/agent-event-contract.js</code>；不要从记忆或旧 markdown 抄。本手册探针基线：dev @ 2de707b。
 </div></div>
 
 <div class="callout note"><div class="body">
-<strong>附注</strong>源码探针分支为 dev（HEAD <code>8084005</code>）；产物维护在 gh-pages 的 docs-site。<strong>本站不随 dev 自动重生成</strong>。发现新漂移时优先记入本页，再改叙述，避免静默「修文档盖住代码」。
+<strong>附注</strong>源码探针分支为 dev（HEAD <code>2de707b</code>）；产物维护在 gh-pages 的 docs-site。<strong>本站不随 dev 自动重生成</strong>。发现新漂移时优先记入本页，再改叙述，避免静默「修文档盖住代码」。
 </div></div>
 
 <div class="callout drift"><div class="body">
 <strong>已纠偏（相对初稿）</strong>权限档为六值（含 <code>auto</code>），不是「五种」；effort 不可 in-place 改活进程，须 dispose+resume；doctor 区分 CLI 11 项与 UI 体检；入向 socket 以契约 <strong>32</strong> 个、出向 agent:event 以契约 <strong>25</strong> 个为完整列表（见<a href="api-events.html">事件与端点参考</a>）。
+</div></div>
+
+<div class="callout note"><div class="body">
+<strong>2026-07-20 手册同步</strong>基线自 8084005 抬至 <code>2de707b</code>。增量主题：消息子系统 9 项修复（镜像误重锁 / pendingTurns 双扣 / 视图守卫 / pendingSendBusy / dedup TOCTOU / control_request 超时扩面 / catchUp 提交顺序）、多子代理防误杀、限流停止卡死、首页 worktree 最近活跃。契约事件数未变（入 32 / 出 25）。未 push 的 dev 段以本机 HEAD 为准。
 </div></div>
 
 <h2>本手册自身边界</h2>

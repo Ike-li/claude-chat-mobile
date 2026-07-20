@@ -47,7 +47,12 @@
 </ul>
 
 <h2>worktree 会话</h2>
-<p><code>worktree-sessions.js</code> 发现 git worktree 内会话，使 Web 可触达「在 worktree 里跑的 CLI 会话」——终端「cd 进 worktree 即 /resume」的 web 等价方向。实现与 knownWorktrees 注册、列表分组相关（以当前 dev 接线为准）。</p>
+<p><code>worktree-sessions.js</code> 发现 git worktree 内会话，使 Web 可触达「在 worktree 里跑的 CLI 会话」——终端「cd 进 worktree 即 /resume」的 web 等价方向。实现与 knownWorktrees 注册（仅服务端以 <code>git worktree list</code> 权威写入）、列表分组相关。</p>
+<ul>
+  <li>合法 cwd = 白名单目录本身，或已注册 linked worktree 且所属 repo 仍在白名单（repo 热移除 → worktree 立即失效）。</li>
+  <li>SDK <code>listSessions</code> 的 dir 匹配含祖先目录——查 worktree 会混入父仓会话；代码已加 <strong>jsonl 归属过滤</strong>，只保留真正属于该 worktree 路径的会话。</li>
+  <li>2026-07-20：首页「最近活跃」纳入 worktree 会话，冷启动可一键续（前端 logic + app 列表合并）。</li>
+</ul>
 
 <h2>关键模块</h2>
 <div class="kv">

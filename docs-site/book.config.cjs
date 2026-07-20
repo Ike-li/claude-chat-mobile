@@ -7,7 +7,7 @@ module.exports = {
   subtitle: '项目全景手册',
   tagline: '把本机 claude CLI 接到手机上',
   repo: 'claude-chat-mobile',
-  version: '手册 v1.0 · dev@8084005',
+  version: '手册 v1.0 · dev@2de707b',
   parts: [
     {
       id: 'p0', label: '起点', icon: '◆',

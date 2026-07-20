@@ -24,6 +24,14 @@
 <strong>建议</strong>调试「后台会话像没字」时，先确认是否仅靠 live 流、是否切回后触发了 sync；后台不播高频 delta 是带宽设计，不是丢失。
 </div></div>
 
+<h2>视图守卫与 ack（2026-07-20）</h2>
+<ul>
+  <li>server 对 send / cancelQueued 等写路径的 ack 须校验当前 viewing：切会话后不得把旧会话的 ack/错误刷到新 tab。</li>
+  <li>前端 <code>pendingSendBusy</code> 等发送锁须按会话隔离，禁止跨会话污染（A 在忙导致 B 误显示忙碌）。</li>
+  <li>message-dedup：clientMessageId 幂等提交须防 TOCTOU（检查与 commit 之间并发重复发送）。</li>
+  <li><code>catchUpTickOnce</code>：两分支（有会话 / 无会话）写全局 catchUp/mirror 状态时，须在视图守卫通过之后再提交，防止旧 tick 写脏新 viewing。</li>
+</ul>
+
 <h2>sync:since</h2>
 <ol class="steps">
   <li>客户端发送 <code>{ sessionId, lastSeq, instanceId }</code>。</li>

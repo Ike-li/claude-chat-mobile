@@ -28,9 +28,15 @@
 <tr><td><code>effort</code></td><td>思考强度；spawn 时注入 SDK options。Web 切档经 <code>user:setEffort</code> → dispose+resume，不可 in-place 改活进程。</td></tr>
 <tr><td><code>auto</code>（权限档）</td><td>六合法档之一：SDK 模型分类器自动批/拒；另五档 default / plan / acceptEdits / bypassPermissions / dontAsk。</td></tr>
 <tr><td>CLI doctor vs UI 体检</td><td>CLI：<code>scripts/doctor.js</code> 固定 D1–D11。UI：<code>doctor-runtime.js</code> 另含 Access/设备门/VAPID/白名单等，勿混为一谈。</td></tr>
+<tr><td><code>pendingTurns</code></td><td>在途轮计数；仅 send 与 result/中断/撤回结算。禁止双扣；封顶配合 cliQueued。</td></tr>
+<tr><td><code>cliQueued</code></td><td>已交 CLI 内部队列的一条消息登记；撤回可能走 cancelAsyncMessage。</td></tr>
+<tr><td><code>bgTasks</code></td><td>活后台任务表；多子代理并行时刷新活动、防 idle 误杀；stopTask 只停单个后台任务。</td></tr>
+<tr><td>视图守卫</td><td>写路径 ack / catchUp 提交前校验 viewing 快照未变；防切 tab 后旧响应污染新会话。</td></tr>
+<tr><td><code>pendingSendBusy</code></td><td>前端发送忙碌锁；须按会话隔离，禁止跨会话污染。</td></tr>
+<tr><td><code>_raceControlRequest</code></td><td>control_request 超时赛跑；覆盖 interrupt/setModel/setPermissionMode/stopTask/cancelAsyncMessage。</td></tr>
 </tbody>
 </table>
 
 <div class="callout note"><div class="body">
-<strong>附注</strong>事实基线探针 dev@8084005。契约事件数：入向 32、出向 25——以 <code>scripts/agent-event-contract.js</code> 为准。
+<strong>附注</strong>事实基线探针 dev@2de707b。契约事件数：入向 32、出向 25——以 <code>scripts/agent-event-contract.js</code> 为准。
 </div></div>

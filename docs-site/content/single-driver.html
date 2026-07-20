@@ -26,7 +26,13 @@
   <div class="row"><div class="key">mirrorEntryLock</div><div class="val">切入会话时预锁（尾部 pending）</div></div>
   <div class="row"><div class="key">mirrorReleaseStep</div><div class="val">安静约 12.5s 后自动释放只读锁（文件仍增长则 keepAlive）</div></div>
   <div class="row"><div class="key">cli-mirror-state</div><div class="val">只读观察 CLI 落盘偏好，不写回 Web 实例偏好</div></div>
+  <div class="row"><div class="key">forInstanceId 守卫</div><div class="val">setMirror / catchUp 写入带 viewing 快照；切视图后旧 tick 不得改全局锁</div></div>
+  <div class="row"><div class="key">clearMirrorOnViewChange</div><div class="val">切会话/视图立即 force 清全局 mirror，防 A 会话锁套到 B（跨工作区误锁）</div></div>
 </div>
+
+<div class="callout tip"><div class="body">
+<strong>建议</strong>2026-07-20 修复点：镜像误重锁（解锁后不该被旧逻辑再次锁上）；<code>catchUpTickOnce</code> 两分支的状态提交延后到视图守卫之后，避免切 tab 后旧 tick 写脏全局 mirror / catchUp 状态。
+</div></div>
 
 <div class="callout note"><div class="body">
 <strong>附注</strong>Web resume 是<strong>冷读</strong> transcript，不能 attach 正在运行的 CLI 活进程。正在终端里跑的会话，Web 侧只能镜像或等其结束后再 resume。
@@ -62,8 +68,8 @@ flowchart LR
 
 <h2>已知边界</h2>
 <ul>
-  <li>mirror 全局单值（非 per-连接）；切视图会清理，设计上未做细粒度 per-socket 锁。</li>
-  <li>catchUp 主要盯<strong>当前查看</strong>会话。</li>
+  <li>mirror 全局单值（非 per-连接）；切视图会清理，设计上未做细粒度 per-socket 锁（AD-5 有意保留）。</li>
+  <li>catchUp 主要盯<strong>当前查看</strong>会话；后台 tab 被外部写过、切入后首个 tick 前极速发送，边界上可能不经 dirty 置换（已知）。</li>
   <li>busy→idle 窗口内部分终端写入可能被吸收而不标脏（有意取舍，防重复气泡）。</li>
   <li>环形事件缓冲 2000 与历史消息 2000 上限是不同轴（事件信封 vs transcript 条数）。</li>
 </ul>

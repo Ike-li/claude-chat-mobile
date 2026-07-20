@@ -32,6 +32,10 @@
 <ul>
   <li>非当前 viewing 实例的高频 <code>text_delta</code> / <code>thinking_delta</code> 可能不直播到该 tab；切回后靠 <code>sync:since</code> 回放缓冲。</li>
   <li>重连后携带 lastSeq / epoch；epoch 变化时重置去重基线。</li>
+  <li>发送忙碌锁（pendingSendBusy 等）与消息去重须<strong>按会话隔离</strong>；切会话后不得沿用上一会话的 busy / 重复 clientMessageId 判定。</li>
+  <li>server ack 受视图守卫：切 tab 后旧 send/cancelQueued 的回包不应驱动当前 composer 状态。</li>
+  <li>限流重试中点「停止」：control_request 超时后应收口「正在停止…」，勿永久卡住（2026-07-20）。</li>
+  <li>首页「最近活跃」含 worktree 会话，可冷启动一键续。</li>
 </ul>
 
 <h2>PWA 与推送前提</h2>
