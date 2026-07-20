@@ -2,8 +2,10 @@
 /node_modules/
 
 # 环境变量与密钥（绝不提交）
+# 覆盖 .env / .env.local / .env.production / .env.*.local 等；仅放行模板 .env.example
 .env
-.env.*.local
+.env.*
+!.env.example
 workdirs.json
 
 # 运行时状态（ADR-005：会话元数据，本地生成）
@@ -18,9 +20,11 @@ workdirs.json
 # 常驻 worktree（promo/gh-pages 等分支的仓内检出位，便于 IDE 同窗查看；点目录 ESLint 默认不扫）
 /.worktrees/
 
-# 日志
+# 日志（*.log 文件 + 仓内 logs 目录/文件，防非 .log 后缀落盘被误加）
 *.log
 npm-debug.log*
+/logs
+/logs/**
 
 # 系统/编辑器
 .DS_Store
