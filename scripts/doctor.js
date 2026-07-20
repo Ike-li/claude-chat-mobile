@@ -4,7 +4,7 @@
 //
 // 检查项（11 项）:
 // 1. AUTH_TOKEN 非空且格式合理
-// 2. CLAUDE_BIN 可执行（which claude 或环境变量指向存在）
+// 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
 // 4. PORT 未被占用
 // 5. WEB_STATUSLINE 配置口径（web 自有状态栏默认自包含启用，可用 WEB_STATUSLINE=off 关闭）
@@ -21,8 +21,8 @@ import { homedir, platform } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
-import { isOwnerOnly, fixPermissions } from '../src/files/file-security.js';
-import { normalizeWorkdirEntries, loadWorkdirsFile } from '../src/sessions/workdirs.js';
+import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
+import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import { statuslineBridgeDiagnostic, statuslineConfigDiagnostic } from '../src/ops/doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
@@ -76,10 +76,9 @@ function checkClaudeBin() {
   const explicit = process.env.CLAUDE_BIN;
   let claudePath = explicit;
   if (!claudePath) {
-    try {
-      claudePath = execSync('which claude', { encoding: 'utf8' }).trim();
-    } catch {
-      fail('CLAUDE_BIN', '未设置 CLAUDE_BIN 且 `which claude` 找不到。请确认 Claude Code CLI 已安装并在 PATH 中。');
+    claudePath = resolveExecutableViaPath('claude'); // POSIX which / win32 where
+    if (!claudePath) {
+      fail('CLAUDE_BIN', '未设置 CLAUDE_BIN 且 PATH 查找不到 claude。请确认 Claude Code CLI 已安装并在 PATH 中。');
       return;
     }
   }
@@ -112,7 +111,7 @@ function checkWorkDir() {
   let result;
   const dirsFile = process.env.WORK_DIRS_FILE;
   if (dirsFile) {
-    const filePath = dirsFile.startsWith('/') ? dirsFile : join(HERE, dirsFile);
+    const filePath = resolveWorkdirsFilePath(dirsFile, HERE);
     result = loadWorkdirsFile(filePath);
     if (!result) warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath})`);
   } else {

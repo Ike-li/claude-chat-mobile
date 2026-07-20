@@ -4,8 +4,25 @@
 import { lstatSync, chmodSync, accessSync, constants, writeFileSync, openSync, closeSync, fsyncSync, renameSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { platform } from 'node:os';
+import { execSync } from 'node:child_process';
 
 const isWindows = platform() === 'win32';
+
+/**
+ * 跨平台 PATH 查找：POSIX 用 `which`，win32 用 `where`（cmd.exe/PowerShell 均自带，
+ * `which` 在原生 Windows 上不存在）。找不到或命令执行失败 → 返回空字符串，不抛出。
+ * platform/exec 可注入（测试用，避免依赖真机 which/where 二进制）。
+ */
+export function resolveExecutableViaPath(name, { platform: platformOverride = platform(), exec = execSync } = {}) {
+  const finder = platformOverride === 'win32' ? 'where' : 'which';
+  try {
+    const out = exec(`${finder} ${name}`, { encoding: 'utf8' });
+    // win32 的 where 命中多个时逐行列出，取第一行；POSIX which 恒单行。
+    return out.split(/\r?\n/)[0].trim();
+  } catch {
+    return '';
+  }
+}
 
 /**
  * 检查路径中是否包含可疑的 symlink（用户可写目录中的 symlink）

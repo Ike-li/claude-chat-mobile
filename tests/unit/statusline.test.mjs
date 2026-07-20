@@ -3,7 +3,7 @@
 // ctx 绝对 token 来自 SDK 真值；ctx 百分比优先 getContextUsage、降级 contextWindowSize(model)。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine } from '../../src/ops/statusline.js';
+import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd } from '../../src/ops/statusline.js';
 
 const usage = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
 
@@ -347,5 +347,27 @@ test.describe('buildWebStatusLine：turn 段（per-turn 秒表/输出 token）',
     assert.equal(idle.turn, undefined);
     const legacy = await buildWebStatusLine({ agent: { activeModel: 'm', lastUsage: null }, cwd: undefined });
     assert.equal(legacy.turn, undefined);
+  });
+});
+
+// projectNameFromCwd：状态栏 project 字段的 basename 提取。原 `cwd.split('/').pop()` 手写实现
+// 在 server 跑在 Windows 上时，cwd 是 `C:\...`（无 `/`），split 会拿到整条路径而非文件夹名——
+// 改用 path.win32/path.posix 的 basename，platform 可注入避免依赖宿主 OS。
+test.describe('projectNameFromCwd', () => {
+  test('POSIX 路径 → 取末段目录名', () => {
+    assert.equal(projectNameFromCwd('/Users/x/projects/ccm', { platform: 'linux' }), 'ccm');
+  });
+  test('POSIX 路径带尾斜杠 → 同样正确取末段', () => {
+    assert.equal(projectNameFromCwd('/Users/x/projects/ccm/', { platform: 'linux' }), 'ccm');
+  });
+  test('Windows 路径 → 取末段目录名（原实现会退化成整条路径）', () => {
+    assert.equal(projectNameFromCwd('C:\\Users\\x\\projects\\ccm', { platform: 'win32' }), 'ccm');
+  });
+  test('根路径 → basename 为空串时回退整个 cwd', () => {
+    assert.equal(projectNameFromCwd('/', { platform: 'linux' }), '/');
+  });
+  test('空/undefined cwd → 原样返回', () => {
+    assert.equal(projectNameFromCwd('', { platform: 'linux' }), '');
+    assert.equal(projectNameFromCwd(undefined, { platform: 'linux' }), undefined);
   });
 });

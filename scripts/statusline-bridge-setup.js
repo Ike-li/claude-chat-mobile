@@ -107,7 +107,17 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'"'"'`)}'`;
 }
 
+// CCM_TEST_PLATFORM：仅测试用的平台覆盖开关，任何宿主 OS 上都能验证 win32 分支，不需要真机 Windows。
+function currentPlatform() {
+  return process.env.CCM_TEST_PLATFORM || process.platform;
+}
+
 function bridgeCommand(originalCommand, originalRefreshInterval) {
+  if (currentPlatform() === 'win32') {
+    // wrapper 封装依赖 POSIX shell（/bin/sh）转发原命令，Windows 上不存在。装完看似成功、
+    // 实际 CLI 每次渲染状态栏都会失败——不如在装之前明确拒绝，不留半成品状态。
+    throw new Error('CLI statusline bridge 尚不支持 Windows（原始命令封装依赖 POSIX shell），暂不可安装。');
+  }
   const argv = [process.execPath, RUNNER];
   if (typeof originalRefreshInterval === 'number'
       && Number.isFinite(originalRefreshInterval)

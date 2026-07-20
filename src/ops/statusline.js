@@ -5,6 +5,17 @@
 // uncached·response / cache write·read / 5h·7d / est$·total·api / lines +/− / sid / version。
 // CLI 独有且 SDK 路径不产出或不接的（pid/transcript/session name/PR/wt/think on-off）不硬塞。
 import { execFile } from 'node:child_process';
+import path from 'node:path';
+
+// 状态栏 project 字段：从 cwd 取末段目录名。原 `cwd.split('/').pop()` 手写实现只认 `/`，
+// server 跑在 Windows 上时 cwd 是 `C:\...`（无 `/`），会退化成整条路径。改用 path.win32/posix
+// 的 basename——按实际宿主 OS 选规范（cwd 恒与运行该判断的 OS 同源，两者不会不一致）。
+// platform 可注入供测试跨平台验证，默认 process.platform。
+export function projectNameFromCwd(cwd, { platform = process.platform } = {}) {
+  if (!cwd) return cwd;
+  const impl = platform === 'win32' ? path.win32 : path.posix;
+  return impl.basename(cwd) || cwd;
+}
 
 // ---- 本机 git 段（per-cwd 短 TTL 缓存，避免每次刷新都 spawn git）----
 const GIT_TTL_MS = 5_000;
@@ -166,7 +177,7 @@ export async function buildWebStatusLine({ agent, cwd, versions }) {
   if (agent?.effort) p.effort = agent.effort;
   // per-turn 秒表/输出 token（前端 CLI 式动态状态行 ✻ Verb… (Ns · ↓ tokens) 的权威数据；空闲不带）
   if (agent?.turnStartedAt) p.turn = { startedAt: agent.turnStartedAt, outTokens: agent.turnOutputTokens || 0 };
-  if (cwd) { p.cwd = cwd; p.project = cwd.replace(/\/+$/, '').split('/').pop() || cwd; }
+  if (cwd) { p.cwd = cwd; p.project = projectNameFromCwd(cwd); }
   const git = await gitStatus(cwd);
   if (git) p.git = git;
   const cc = webContextCost({ agent });
@@ -250,7 +261,7 @@ export async function buildCliStatusLine({ snapshot, cwd } = {}) {
   const statusCwd = typeof cwd === 'string' && cwd ? cwd : (typeof s.cwd === 'string' ? s.cwd : '');
   if (statusCwd) {
     p.cwd = statusCwd;
-    p.project = statusCwd.replace(/\/+$/, '').split('/').pop() || statusCwd;
+    p.project = projectNameFromCwd(statusCwd);
     const git = await gitStatus(statusCwd);
     if (git) p.git = git;
   }

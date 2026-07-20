@@ -39,10 +39,10 @@ function writeSettings(home, statusLine) {
   return path;
 }
 
-function runSetup(home, action) {
+function runSetup(home, action, extraEnv = {}) {
   return spawnSync(process.execPath, [SETUP, action], {
     encoding: 'utf8',
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    env: { ...process.env, HOME: home, USERPROFILE: home, ...extraEnv },
   });
 }
 
@@ -119,6 +119,28 @@ test('install：先以 0600 manifest 原子备份原命令/刷新周期，再安
       currentCommand: manifest.installedCommand,
       manifestExists: true,
     });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// install 的 wrapper 封装依赖 POSIX shell（/bin/sh），在 win32 上不存在——原实现此前在 win32
+// 下从未被跑过（上面的 install 测试整体 skip），装完看似成功、实际 CLI 每次渲染状态栏都会失败。
+// 改为在装之前明确拒绝：不留半成品状态。CCM_TEST_PLATFORM 是仅测试用的覆盖开关（见 bridgeCommand），
+// 跑在任何宿主 OS 上都能验证 win32 分支，不需要真机 Windows。
+test('install：win32 下明确拒绝，不写入 manifest/settings', () => {
+  const home = makeHome();
+  try {
+    const originalCommand = 'bash /tmp/original-statusline.sh --compact';
+    const path = writeSettings(home, { type: 'command', command: originalCommand, refreshInterval: 60 });
+    const before = readFileSync(path, 'utf8');
+
+    const result = runSetup(home, 'install', { CCM_TEST_PLATFORM: 'win32' });
+
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Windows/);
+    assert.equal(readFileSync(path, 'utf8'), before, 'settings.json 不应被改写');
+    assert.equal(existsSync(manifestPath(home)), false, '不应写入 manifest');
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

@@ -8,7 +8,7 @@
 import { createServer } from 'node:http';
 import { statSync, readFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync } from 'node:fs';
 import { maskToken } from '../shared/sanitizer.js';
-import { writeOwnerOnlyFile, rejectableSymlinkComponent } from '../files/file-security.js';
+import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -25,7 +25,7 @@ import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
-import { buildWebStatusLine, buildCliStatusLine } from '../ops/statusline.js';
+import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd } from '../ops/statusline.js';
 import { readCliObservedState } from '../agent/cli-mirror-state.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
@@ -53,7 +53,7 @@ import {
 } from './instance-routing.js';
 import { prepareSessionForWebResume } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, isAllowedWorkdir } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, isAllowedWorkdir, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
 import { discoverWorktreeSessions } from '../sessions/worktree-sessions.js';
 import {
   isDeviceTrusted,
@@ -130,7 +130,7 @@ const { pushEnabled, pushNotify, ntfyNotify, savePushSubscription } = notify;
 function readWorkdirSource() {
   const dirsFile = process.env.WORK_DIRS_FILE;
   if (dirsFile) {
-    const filePath = dirsFile.startsWith('/') ? dirsFile : join(HERE, dirsFile);
+    const filePath = resolveWorkdirsFilePath(dirsFile, HERE);
     return loadWorkdirsFile(filePath); // null=读/解析失败
   }
   const raw = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -194,9 +194,8 @@ function preflight() {
   }
   let claudeBin = process.env.CLAUDE_BIN || '';
   if (!claudeBin) {
-    try {
-      claudeBin = execSync('which claude', { encoding: 'utf8' }).trim();
-    } catch {
+    claudeBin = resolveExecutableViaPath('claude'); // POSIX which / win32 where
+    if (!claudeBin) {
       fail('未找到 claude 命令。请先安装 Claude Code，或在 .env 中用 CLAUDE_BIN 指定路径');
     }
   }
@@ -440,7 +439,7 @@ function unlockSocket(socket) {
 // 与 trusted-devices 直接 watch 文件不同：workdirs.json 由人用编辑器改，VS Code/vim 默认原子写(rename 换 inode)
 // 会让对旧 inode 的 watch 永久失聪 → 改为 watch 其目录并过滤 basename（对子文件替换免疫）。300ms 防抖。
 if (process.env.WORK_DIRS_FILE) {
-  const wf = process.env.WORK_DIRS_FILE.startsWith('/') ? process.env.WORK_DIRS_FILE : join(HERE, process.env.WORK_DIRS_FILE);
+  const wf = resolveWorkdirsFilePath(process.env.WORK_DIRS_FILE, HERE);
   const wbase = basename(wf);
   let wtimer = null;
   // mtime 前置守卫：相对路径时 dirname(wf) 可能是整个项目根，且部分平台(Linux/网络 FS)不提供 filename→basename 过滤失效。
@@ -1195,7 +1194,7 @@ async function refreshStatusLine() {
         // CLI 是当前唯一权威但快照缺失/过期：明确不可用，不偷混 SDK 陈值。
         payload = {
           ts: Date.now(), cwd,
-          ...(cwd ? { project: cwd.replace(/\/+$/, '').split('/').pop() || cwd } : {}),
+          ...(cwd ? { project: projectNameFromCwd(cwd) } : {}),
           ...(va.sessionId ? { session: { id: va.sessionId } } : {}),
           source: { kind: 'cli-unavailable', reason: selected.reason, ...(Number.isFinite(selected.ageMs) ? { ageMs: selected.ageMs } : {}) },
         };

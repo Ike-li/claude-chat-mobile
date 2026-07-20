@@ -8,7 +8,7 @@ import { realpathSync } from 'node:fs';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
-  findProjectDirCollisions, isAllowedWorkdir,
+  findProjectDirCollisions, isAllowedWorkdir, resolveWorkdirsFilePath,
 } from '../../src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -202,5 +202,23 @@ test.describe('isAllowedWorkdir（worktree 会话触达：白名单 or 已注册
   test('knownWorktrees 缺省/非 Map → 退化为纯白名单判定', () => {
     assert.equal(isAllowedWorkdir('/repo/a', dirs, undefined), true);
     assert.equal(isAllowedWorkdir('/repo/a/.worktrees/promo', dirs, undefined), false);
+  });
+});
+
+// resolveWorkdirsFilePath：WORK_DIRS_FILE 是否已是绝对路径的判断。原 `startsWith('/')` 写法
+// 在服务端跑在 Windows 上时会把 `C:\...` 误判成相对路径、错误拼进安装目录——改用双规范
+// path.isAbsolute（POSIX + win32 都判一遍），与运行该判断的宿主 OS 无关，两种写法都能识别。
+test.describe('resolveWorkdirsFilePath', () => {
+  test('POSIX 绝对路径原样返回', () => {
+    assert.equal(resolveWorkdirsFilePath('/etc/ccm/workdirs.json', '/app'), '/etc/ccm/workdirs.json');
+  });
+  test('Windows 绝对路径（带盘符）原样返回，不被误判成相对路径', () => {
+    assert.equal(resolveWorkdirsFilePath('C:\\ccm\\workdirs.json', '/app'), 'C:\\ccm\\workdirs.json');
+  });
+  test('Windows UNC 路径原样返回', () => {
+    assert.equal(resolveWorkdirsFilePath('\\\\server\\share\\workdirs.json', '/app'), '\\\\server\\share\\workdirs.json');
+  });
+  test('相对路径与 baseDir 拼接', () => {
+    assert.equal(resolveWorkdirsFilePath('workdirs.json', '/app'), join('/app', 'workdirs.json'));
   });
 });
