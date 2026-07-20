@@ -1,7 +1,7 @@
 // tests/unit/message-dedup.test.mjs —— 客户端消息 ID 去重纯函数单测（承接 REL-01：离线输入幂等）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkAndRecord, isProcessed, commitProcessed, DEDUP_CAP } from '../../src/agent/message-dedup.js';
+import { checkAndRecord, isProcessed, commitProcessed, DEDUP_CAP, isInFlight, claimInFlight, releaseInFlight } from '../../src/agent/message-dedup.js';
 
 test.describe('checkAndRecord', () => {
   test('首次出现的 clientMessageId → 不重复，记录', () => {
@@ -109,5 +109,60 @@ test.describe('isProcessed / commitProcessed（BE-002：查询与提交分离）
     const r2 = checkAndRecord('m1', r1.next);
     assert.equal(r2.duplicate, true);
     assert.equal(r2.next, r1.next);
+  });
+});
+
+// 回归：isProcessed/commitProcessed 之间（校验、resolveTarget、a.send 等多个 await）不是原子的——
+// 断线重连重发可能让同一 clientMessageId 的第二个请求在第一个请求 commit 之前就跑到同一段代码，
+// 两边都会各自调一次 a.send()，造成真实的重复发送（而不仅是重复 ack）。isInFlight/claimInFlight/
+// releaseInFlight 补一层"眼下有没有人正处理这条、尚未落定成败"的临时占用，与 isProcessed/commitProcessed
+// 的"已经处理完的永久记录"是两码事：处理失败也必须 release，否则失败重试会被误判为"仍在处理中"卡死
+// （对称于 commitProcessed 的"失败不 commit"设计，此处是"失败也要 release"）。
+test.describe('isInFlight / claimInFlight / releaseInFlight（并发去重：处理中占用，非永久记录）', () => {
+  test('未声明占用 → isInFlight 为 false', () => {
+    assert.equal(isInFlight('m1', new Set()), false);
+  });
+
+  test('claimInFlight 后 isInFlight 为 true', () => {
+    let s = new Set();
+    s = claimInFlight('m1', s);
+    assert.equal(isInFlight('m1', s), true);
+  });
+
+  test('release 后 isInFlight 恢复 false（无论原处理成功还是失败都应能 release）', () => {
+    let s = new Set();
+    s = claimInFlight('m1', s);
+    s = releaseInFlight('m1', s);
+    assert.equal(isInFlight('m1', s), false);
+  });
+
+  test('claimInFlight 幂等：重复 claim 同一 id 不产生额外状态', () => {
+    let s = claimInFlight('m1', new Set());
+    const s2 = claimInFlight('m1', s);
+    assert.equal(s2, s, '已占用应原样返回引用');
+  });
+
+  test('releaseInFlight 对未占用的 id 是 no-op（原样返回引用）', () => {
+    const s = new Set();
+    assert.equal(releaseInFlight('m1', s), s);
+  });
+
+  test('不同 clientMessageId 互不影响', () => {
+    let s = claimInFlight('m1', new Set());
+    s = claimInFlight('m2', s);
+    assert.equal(isInFlight('m1', s), true);
+    assert.equal(isInFlight('m2', s), true);
+    s = releaseInFlight('m1', s);
+    assert.equal(isInFlight('m1', s), false);
+    assert.equal(isInFlight('m2', s), true, '释放一条不该连带释放另一条');
+  });
+
+  test('缺失/空 clientMessageId（旧客户端）→ 三个原语均不生效，恒 false/原样返回', () => {
+    const s = new Set();
+    assert.equal(isInFlight(undefined, s), false);
+    assert.equal(isInFlight('', s), false);
+    assert.equal(claimInFlight(undefined, s), s);
+    assert.equal(claimInFlight('', s), s);
+    assert.equal(releaseInFlight(undefined, s), s);
   });
 });

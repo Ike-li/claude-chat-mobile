@@ -162,8 +162,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 空首页枢纽默认隐藏底部输入条；仅点 ＋ / session:new 进入 compose 就绪，或进入真实会话后显示。
   // 防「未选项目就直接发消息」歧义（懒开 FRESH 路径仍保留，但入口收窄为显式 ＋）。
   let _composeReady = false;
-  // 在线发送后到 result/error/负 ack 前：同会话静默换实例（externalDirty/effort dispose+resume）也要补 busy
-  let _pendingSendBusy = false;
+  // 在线发送后到 result/error/负 ack 前：同会话静默换实例（externalDirty/effort dispose+resume）也要补 busy。
+  // 记的是"这条乐观 busy 属于哪个 session"（而非裸 boolean）：若发送方会话被用户甩开、从未等到
+  // result/error 就切走，标志不能被之后完全无关的另一个会话自己的同会话换实例误捡（见 shouldRestoreOptimisticBusy）。
+  let _pendingSendBusySessionId = null;
   // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读；
   // armedTakeoverSid=已排队接管、等终端本轮完结/疑似中断再自动放行（见 logic.js armedTakeoverStep）；
   // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「续接 CLI 会话」时判定走排队还是即时确认）。
@@ -1222,7 +1224,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function requestCancelQueued(clientMessageId) {
     if (!clientMessageId || !viewingInstanceId || !socket.connected) return;
     haptic('tap');
+    // WS-003：捕获发起时的视图目标（代次），对齐 send()/loadHistory/requestSync 同款迟到 ack 守卫。
+    const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId;
     socket.emit('user:cancelQueued', { instanceId: viewingInstanceId, clientMessageId }, (ack) => {
+      // 迟到 ack 守卫——发起后若已切到别的会话/实例，本次撤回的反馈不该出现在当前视图上
+      // （提示条/转正气泡会作用于无关会话；成功时的草稿回填还会覆盖无关会话正在输入的内容并抢焦点）。
+      if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
       if (!ack?.ok) {
         // 已开跑/实例没了：就地转正气泡（它不再是排队态），负因走提示条
         addBar(ack?.error || '撤回失败，请重试', 'text-info');
@@ -1744,7 +1751,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       promoteQueuedBubbles(); // 本轮结束=队头排队条开跑，排队标记转正
       // turn-end 文件变更汇总卡（对齐官方「已编辑 N 个文件」；完整 diff 仍走单卡预览）
       flushTurnFileChangesCard();
-      _pendingSendBusy = false;
+      _pendingSendBusySessionId = null;
       setBusy(false);
       hideActivityBanner(); // 会话结束隐藏活动横幅
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
@@ -1780,7 +1787,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       alertCue('error');
       hideLoadingCard(); // resume 失败等路径：避免「正在加载会话…」与红条叠屏
       addBar(`⚠️ ${p.message}`, 'text-danger');
-      _pendingSendBusy = false;
+      _pendingSendBusySessionId = null;
       setBusy(false);
       hideActivityBanner(); // 含 api_retry 横幅
 
@@ -1807,7 +1814,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       if (p.kind === 'interrupted') {
         finalizeStreams();
-        _pendingSendBusy = false;
+        _pendingSendBusySessionId = null;
         setBusy(false);
         hideActivityBanner();
       }
@@ -2684,7 +2691,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       clearSendInFlight();
       const decision = presentOnlineSendAck(ack);
       if (decision.ok) return;
-      _pendingSendBusy = false;
+      // 只清自己这条送出的登记：若这条负 ack 迟到，槽位可能已被之后另一条 send() 的登记顶替
+      // （比如很快切到别的会话又发了一条），不能连带清掉那条仍然合法在途的登记。
+      if (_pendingSendBusySessionId === reqSessionId) _pendingSendBusySessionId = null;
       _pendingFirstSend = false;
       logClientEvent('send', `[WEB_SEND] 在线发送被拒：${decision.message || ack?.error || 'unknown'}`);
       // WS-003：迟到负 ack 守卫——发起后若已切到别的会话/实例，本次发送的失败反馈不该出现在当前视图上
@@ -2713,8 +2722,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     hints.classList.add('hidden');
     autosize();
     setBusy(true);
-    // 发送窗口内 busy 须跨「换实例 bindView→clearView」存活：新会话首发 + 同会话 externalDirty/effort 置换
-    _pendingSendBusy = true;
+    // 发送窗口内 busy 须跨「换实例 bindView→clearView」存活：新会话首发 + 同会话 externalDirty/effort 置换。
+    // 记的是 reqSessionId（这条发送发起时的会话），不是裸 true——供 shouldRestoreOptimisticBusy 认领比对。
+    _pendingSendBusySessionId = reqSessionId;
     // 新会话首发（viewingInstanceId 为空）：服务端将懒开实例并广播 instances，触发 setInstances→bindView→
     // clearView 的 setBusy(false) 冲掉这次乐观 busy；置一次性标志，待 setInstances 绑定到新实例后同步补回。
     if (!viewingInstanceId) _pendingFirstSend = true;
@@ -3403,22 +3413,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         setPermMode(p.defaultPermissionMode || 'default', true);
         setEffortMode(p.defaultEffort ?? null, true);
       }
-      // bindView 内 clearView 前的 displayedSessionId 作 prevSessionId，供同会话静默换实例补 busy
-      const prevSidForBusy = displayedSessionId;
       bindView(target, newViewing); // 空表面→home dashboard / compose 新会话页（工作区名 + 默认档一致刷新）
       // bindView 内已按 shouldRestoreOptimisticBusy 补 busy；此处再补一次防 bindView early-return 路径漏补
       // （首发无 sessionId / 同会话 externalDirty·effort 置换）。session:switch 打开已有会话不补。
       if (shouldRestoreOptimisticBusy({
         pendingFirstSend: _pendingFirstSend,
-        pendingSendBusy: _pendingSendBusy,
+        pendingSendBusySessionId: _pendingSendBusySessionId,
         viewingInstanceId: newViewing,
         sessionId: target?.sessionId,
-        prevSessionId: prevSidForBusy,
       })) {
         setBusy(true);
       }
       _pendingFirstSend = false; // 一次性：进入视图切换即消费，防标志悬留误触发后续绑定
-      // _pendingSendBusy 保留到 result/error/负 ack，覆盖置换后可能的二次 rebind
+      // _pendingSendBusySessionId 保留到 result/error/负 ack，覆盖置换后可能的二次 rebind
       if (consoleModal && consoleModal.classList.contains('sheet-open')) {
         loadConsoleLogs(newViewing);
       }
@@ -3550,10 +3557,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // FE-NEW-004：切入已在跑的 live 实例时 seed busy（instances.state），否则发送钮停在 idle 直到下一条 delta。
     const restoreBusy = shouldRestoreOptimisticBusy({
       pendingFirstSend: _pendingFirstSend,
-      pendingSendBusy: _pendingSendBusy,
+      pendingSendBusySessionId: _pendingSendBusySessionId,
       viewingInstanceId: id,
       sessionId: sid,
-      prevSessionId,
     }) || shouldSeedBusyFromInstanceState(entry?.state);
     if (restoreBusy) setBusy(true);
 
@@ -4583,9 +4589,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
 
   function clearView(sessionId, tip) {
-    // 先读旧 session：发送窗口内同会话静默换实例 / history reload 二次 clearView 须补回 busy
-    // （innerHTML='' 会拆掉 #streamLiveStatus；setBusy(false) 也会 hide）。真切会话则不补。
-    const prevSidForBusy = currentSessionId;
     currentSessionId = sessionId;
     lastSeq = 0;
     curEpoch = null;
@@ -4605,12 +4608,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 附件托盘不再这里无脑清空：bindView 经 planSessionDraftSwap 按会话存/取；
     // 发送成功路径各自清空。否则同会话静默换实例 / 重载历史会误清未发送附件。
     setBusy(false);
+    // 发送窗口内同会话静默换实例 / history reload 二次 clearView 须补回 busy
+    // （innerHTML='' 会拆掉 #streamLiveStatus；setBusy(false) 也会 hide）。真切会话则不补。
     if (shouldRestoreOptimisticBusy({
       pendingFirstSend: _pendingFirstSend,
-      pendingSendBusy: _pendingSendBusy,
+      pendingSendBusySessionId: _pendingSendBusySessionId,
       viewingInstanceId: displayedInstanceId,
       sessionId,
-      prevSessionId: prevSidForBusy,
     })) {
       setBusy(true);
     }

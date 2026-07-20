@@ -42,7 +42,7 @@ import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp } from
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listDir, readFile as browseReadFile } from '../files/file-browse.js';
-import { isProcessed, commitProcessed } from '../agent/message-dedup.js';
+import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
   resolveInstanceTarget,
   reselectViewingTarget,
@@ -110,6 +110,10 @@ let sessionLimitByDir = new Map();
 let notifyThrottleState = new Map(); // per-会话推送节流态（docs/design.md），sessionId → {[category]:{notifiedAt,pending}}；
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
 let messageDedupState = new Map(); // clientMessageId → ts（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
+// isProcessed/commitProcessed 之间横跨多个 await，不是原子的：断线重连重发可能让同一 clientMessageId
+// 的第二个请求在第一个请求 commit 之前就跑到同一段代码，两边各自调一次 a.send() 真实重复发送。
+// 这里补一层"眼下有没有人正处理这条、尚未落定成败"的占用（见 message-dedup.js 的 isInFlight 一族）。
+let messageInFlightIds = new Set();
 
 // ---- 通知发送通道（Web Push E15 + ntfy ②2b）：实现下沉至 ops/notify-channels.js ----
 // onDeliveryFailure 延迟绑定 scheduleBgBroadcast（定义在下方）——真失败时广播服务健康。
@@ -1696,7 +1700,7 @@ registerSocketConnection(io, socket => {
     scheduleStatusRefresh(); // 300ms 后新鲜数据跟上
   }
 
-  on(socket, 'user:message', async (payload, ack) => {
+  on(socket, 'user:message', async (payload, rawAck) => {
     // REL-01 幂等（离线重发/网络抖动可能致同一条消息被处理两次）：clientMessageId 由发送端生成，
     // 已处理过的直接 ack 放行、不重复执行任何副作用（不重发校验提示、不重复调用 a.send）。
     // 无 ID（旧客户端未升级）→ 不去重，向后兼容。
@@ -1705,8 +1709,27 @@ registerSocketConnection(io, socket => {
     // 若在此提前登记（旧 checkAndRecord 行为），校验失败/队满失败的 ID 会被记入，第二次重发命中去重
     // 得到 {ok:true,deduped:true} 被客户端当成功删除 pending → 消息永久丢失（假成功丢消息根因）。
     if (isProcessed(clientMessageId, messageDedupState)) {
-      if (typeof ack === 'function') ack({ ok: true, deduped: true }); return;
+      if (typeof rawAck === 'function') rawAck({ ok: true, deduped: true }); return;
     }
+    // 并发去重：另一个请求（多半断线重连重发撞上原请求仍处理中）正处理同一条、尚未落定成败——
+    // 不重复调用 a.send()，负 ack 可重试，client 既有重试机制稍后会再次命中（那时原请求已
+    // commit/release，走上面的 isProcessed 快路径或正常处理）。
+    if (isInFlight(clientMessageId, messageInFlightIds)) {
+      if (typeof rawAck === 'function') rawAck({ ok: false, error: '正在处理中，请稍后重试', retryable: true });
+      return;
+    }
+    if (clientMessageId) messageInFlightIds = claimInFlight(clientMessageId, messageInFlightIds);
+    // 包一层 ack：本函数下方所有分支都经既有的「ack(...)」调用退出（校验失败/stale/忙碌拒绝/send
+    // 异常/队满/成功），借这层包装统一在【每个】退出点释放上面的 claim，不必逐个分支手动补释放
+    // （手动补容易漏掉未来新增的退出点）。无论成功失败都要 release，否则失败重试会被误判为仍在处理中。
+    let released = false;
+    const ack = (result) => {
+      if (!released) {
+        released = true;
+        if (clientMessageId) messageInFlightIds = releaseInFlight(clientMessageId, messageInFlightIds);
+      }
+      if (typeof rawAck === 'function') rawAck(result);
+    };
 
     const text = typeof payload === 'string' ? payload : payload?.text;
     const attachments = (payload && typeof payload === 'object') ? payload.attachments : undefined;

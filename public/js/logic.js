@@ -803,19 +803,21 @@ export function flattenWorktreeGroupsForRecents(groups) {
 // 1) 新会话首发懒开：pendingFirstSend + 已绑定新实例 + 尚无 sessionId（FRESH、SDK init 未回；
 //    区别于 session:switch 打开的已有会话——有 sessionId 时不得仅凭 pendingFirstSend 补）。
 // 2) 同会话静默换实例：externalDirty / effort 等 dispose+resume（instanceId 变、sessionId 不变），
-//    发送窗口内 pendingSendBusy + prevSessionId===sessionId 才补，避免把 A 的发送态挂到 B。
+//    pendingSendBusySessionId 直接命中当前 sessionId 才补。用"这条乐观 busy 到底属于哪个 session"
+//    （而非旧版"这次切换前后 session 是否一致"）判定，防止发送方 A 被甩开后从未等到 result/error、
+//    标志一直卡 true，之后被无关的 B 自己的同会话换实例误捡到（B 换实例前后 sessionId 天然一致，
+//    旧版比对法看不出这条 busy 其实是 A 的遗留）。
 export function shouldRestoreOptimisticBusy({
   pendingFirstSend,
-  pendingSendBusy,
+  pendingSendBusySessionId,
   viewingInstanceId,
   sessionId,
-  prevSessionId,
 } = {}) {
   if (!viewingInstanceId) return false;
   // 新会话首发：无 sessionId 的懒开实例
   if (pendingFirstSend && !sessionId) return true;
-  // 同会话静默换实例：发送已发出、sessionId 前后一致且非空
-  if (pendingSendBusy && sessionId && sessionId === prevSessionId) return true;
+  // 同会话静默换实例：乐观 busy 的登记会话与当前会话一致才补
+  if (pendingSendBusySessionId && sessionId && pendingSendBusySessionId === sessionId) return true;
   return false;
 }
 

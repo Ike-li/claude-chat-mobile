@@ -328,42 +328,43 @@ test('shouldRestoreOptimisticBusy: 仅新会话首发懒开绑定到新建实例
 });
 
 // externalDirty / effort 等同会话静默换实例：send() 已 setBusy(true)，随后 dispose+resume 换 instanceId、
-// sessionId 不变 → bindView→clearView 冲掉 busy。须靠 pendingSendBusy + 同 sessionId 补回。
+// sessionId 不变 → bindView→clearView 冲掉 busy。须靠 pendingSendBusySessionId 命中当前 sessionId 才补回。
 // 注意：有 sessionId 时不得仅凭 pendingFirstSend 补回（那是 session:switch 打开已有会话的误伤面）。
-test('shouldRestoreOptimisticBusy: 同会话静默换实例且 pendingSendBusy 时补回乐观 busy', () => {
+// pendingSendBusySessionId 直接记录"这条乐观 busy 属于哪个 session"（取代旧版裸 boolean + prevSessionId
+// 比对）：旧版只比较"这次切换前后 session 是否一致"，不追问 busy 标志本身是不是这个 session 的——若 A
+// 发送后用户直接甩开 A（未等 result/error 到达），标志会一直卡 true；用户之后切到完全无关的 B，B 若自己再
+// 触发一次同会话换实例，旧版会因为"B 换实例前后 session 一致"就误把 A 遗留的标志套到 B 头上。
+test('shouldRestoreOptimisticBusy: 同会话静默换实例且 pendingSendBusySessionId 命中当前会话时补回乐观 busy', () => {
   assert.equal(shouldRestoreOptimisticBusy({
-    pendingSendBusy: true,
+    pendingSendBusySessionId: 'sess_1',
     viewingInstanceId: 'inst_new',
     sessionId: 'sess_1',
-    prevSessionId: 'sess_1',
   }), true);
   // 真切到另一会话：不补（避免把 A 的发送态挂到 B）
   assert.equal(shouldRestoreOptimisticBusy({
-    pendingSendBusy: true,
+    pendingSendBusySessionId: 'sess_a',
     viewingInstanceId: 'inst_b',
     sessionId: 'sess_b',
-    prevSessionId: 'sess_a',
   }), false);
-  // 无 pendingSendBusy（纯 effort 切档且用户未在发送窗口）：不补
+  // 回归：陈旧标志属于早已离开、从未等到 result/error 的会话 A；用户之后完全独立地进了会话 B，
+  // B 自己再触发一次同会话换实例（B 的 sessionId 前后一致）——A 的陈旧标志不该被误判命中 B。
   assert.equal(shouldRestoreOptimisticBusy({
-    pendingSendBusy: false,
-    viewingInstanceId: 'inst_new',
-    sessionId: 'sess_1',
-    prevSessionId: 'sess_1',
+    pendingSendBusySessionId: 'sess_a', // 陈旧，属于早被甩开的 A
+    viewingInstanceId: 'inst_b_v2',
+    sessionId: 'sess_b', // B 自己的换实例，前后 sessionId 都是 sess_b，与 A 无关
   }), false);
-  // 缺 prevSessionId：无法判定同会话，不补（bindView 内首发路径也不应误命中 swap 分支）
+  // 无 pendingSendBusySessionId（纯 effort 切档且用户未在发送窗口）：不补
   assert.equal(shouldRestoreOptimisticBusy({
-    pendingSendBusy: true,
+    pendingSendBusySessionId: null,
     viewingInstanceId: 'inst_new',
     sessionId: 'sess_1',
   }), false);
   // pendingFirstSend + 有 sessionId 仍不补（保持 session:switch 护栏）
   assert.equal(shouldRestoreOptimisticBusy({
     pendingFirstSend: true,
-    pendingSendBusy: false,
+    pendingSendBusySessionId: null,
     viewingInstanceId: 'inst_1',
     sessionId: 'sess_1',
-    prevSessionId: 'sess_1',
   }), false);
 });
 

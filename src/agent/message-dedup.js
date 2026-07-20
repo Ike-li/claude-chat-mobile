@@ -33,3 +33,33 @@ export function checkAndRecord(clientMessageId, state = new Map(), cap = DEDUP_C
   if (isProcessed(clientMessageId, state)) return { duplicate: true, next: state };
   return { duplicate: false, next: commitProcessed(clientMessageId, state, cap) };
 }
+
+// ---- 处理中占用（区别于上面「已处理完」的永久记录）----
+// isProcessed/commitProcessed 之间横跨校验、resolveTarget、a.send 等多个 await，不是原子的：断线重连
+// 重发可能让同一 clientMessageId 的第二个请求在第一个请求 commit 之前就跑到同一段代码，两边各自调一次
+// a.send() 造成真实的重复发送（不只是重复 ack）。这里补一层"眼下有没有人正处理这条、尚未落定成败"的
+// 临时占用——处理结束【无论成功失败】都必须 release，否则失败重试会被永久卡在"仍在处理中"（对称于
+// commitProcessed 的"失败不 commit"：这里是"失败也要 release"，调用方应在 try/finally 里 release）。
+
+// 纯函数：是否有人正在处理这条 clientMessageId、尚未 release。
+export function isInFlight(clientMessageId, inFlightSet) {
+  if (!clientMessageId) return false;
+  return inFlightSet.has(clientMessageId);
+}
+
+// 纯函数：声明"我在处理这条了"。已被占用则原样返回（幂等，不产生新引用）。
+export function claimInFlight(clientMessageId, inFlightSet) {
+  if (!clientMessageId) return inFlightSet;
+  if (inFlightSet.has(clientMessageId)) return inFlightSet;
+  const next = new Set(inFlightSet);
+  next.add(clientMessageId);
+  return next;
+}
+
+// 纯函数：释放占用（无论处理成功还是失败都要调用）。未占用则原样返回。
+export function releaseInFlight(clientMessageId, inFlightSet) {
+  if (!clientMessageId || !inFlightSet.has(clientMessageId)) return inFlightSet;
+  const next = new Set(inFlightSet);
+  next.delete(clientMessageId);
+  return next;
+}
