@@ -52,6 +52,21 @@ node scripts/doctor.js --fix  # tighten perms (.env and CCM_DATA_DIR/*.json → 
 npm start                     # http://localhost:3000
 ```
 
+**Faster: hand it to your coding agent** — in the repo directory (or have it clone first), give this to Claude Code / Codex CLI or similar:
+
+```
+Help me install and start claude-chat-mobile for the first time (a web UI that connects my local claude CLI to my phone). This is a fresh, first-time setup, not restarting an already-deployed daemon — the "production deployment: don't manually npm start" warning in CLAUDE.md doesn't apply here. Follow the "Quick Start" section in README.md: install deps, run npm run setup (an interactive wizard — it'll ask for WORK_DIR, check with me on which project directory to mount), run node scripts/doctor.js and fix what it flags, then npm start. Once it's running, tell me how to open it on my phone; if I later want fixed-domain public access, use docs/deployment.md to help me set that up.
+```
+
+Sessions started from the web work out of the box with the SDK status line — no Claude config changes needed. If you also want the web UI to mirror the CLI's model, thinking effort, context, cost, and quota while **read-only viewing a session that's actually running in the CLI**, you can explicitly install the transparent statusline bridge:
+
+```bash
+npm run statusline:status     # read-only check, does not modify ~/.claude
+npm run statusline:install    # explicit opt-in; never run automatically by npm install / npm start
+```
+
+After installing, restart your Claude CLI and the background server; uninstall with `npm run statusline:uninstall`.
+
 Then open it on your phone. The startup log prints usable URLs with the token pre-filled:
 
 - **Same WiFi:** set `AUTH_TOKEN` in `.env` first (required even on your LAN; without it the phone cannot connect), then open the LAN address printed at startup (`http://<lan-ip>:3000/#token=…`). No tunnel needed.
@@ -102,12 +117,12 @@ Background: Anthropic once announced that, starting 2026-06-15, SDK *headless* u
 
 Beyond the core loop above:
 
-- **Five permission modes** (default / plan / acceptEdits / bypassPermissions / dontAsk), switchable at runtime.
+- **Six permission modes** (default / plan / acceptEdits / dontAsk / auto / bypassPermissions), switchable at runtime.
 - **Per-message model switching** (gateway-suffixed names supported).
 - **Multi-repo and multi-session**: switch among allow-listed working directories, run several sessions concurrently in tabs.
 - **File and image upload**, with path injection and traversal protection.
 - **Preview changes on tool cards**: see the diff for Edit / Write or a snippet for Read, confined to allow-listed working directories (three-layer path gate, read-only, never out of bounds).
-- **Thinking-effort control**, a **web-native status line**, and **`AskUserQuestion`** as a native picker.
+- **Thinking-effort control**, a **single-source-of-truth status line** (web-driven sessions read from the SDK; an optional bridge lets CLI-driven sessions mirror a CLI snapshot), and **`AskUserQuestion`** as a native picker.
 - **Web Push / ntfy notifications**: push approvals, questions, and results, with the notification deep-linking back to the session that triggered it (iOS 16.4+ requires Add to Home Screen first; optional ntfy runs self-hosted for more reliable lock-screen delivery).
 - **Installable PWA**: maskable icon + standalone display, "Add to Home Screen" to use it as an app.
 - **Ops & security hardening**: log sanitization, `0600` atomic writes, a `doctor` startup self-check, **a one-tap UI security check-up (redacted, audits the dangerous allowlist)**, optional Cloudflare Access 2FA.
@@ -143,8 +158,8 @@ graph LR
 1. Phone `user:message {text}` → server validates → routes to the target instance `agents.get(instanceId)` (lazy-respawned resume; after `session:new` a FRESH instance is lazily opened only on the first message — stage 3).
 2. The text is pushed into the AgentSession's streaming input → SDK → claude CLI works in `WORK_DIR`.
 3. The SDK message stream flows into `map()`: streaming text → `text_delta`, tool calls → `tool_use`/`tool_result`, off-allow-list actions → `permission_request` (suspended, awaiting allow/deny on the phone).
-4. Each event is wrapped in a `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` envelope → into a 2,000-entry ring buffer → `io.emit` broadcast (the front-end demuxes by `viewingInstanceId`; high-frequency deltas from background tabs are not broadcast to save bandwidth).
-5. Phone reconnects: `sync:since {lastSeq}` replays the buffer; an `epoch` change means the server swapped the instance, so the client resets its dedup baseline automatically.
+4. Each event is wrapped in a `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` envelope → into a 2,000-entry ring buffer → `io.to('approved').emit` broadcast to approved devices only (the front-end demuxes by `viewingInstanceId`; high-frequency deltas from background tabs are not broadcast to save bandwidth).
+5. Phone reconnects: `sync:since {sessionId, lastSeq, instanceId}` replays the buffer; an `epoch` change means the server swapped the instance, so the client resets its dedup baseline automatically.
 
 Runtime dependencies: `@anthropic-ai/claude-agent-sdk`, `express`, `compression`, `socket.io`, `dotenv`, `web-push`, `jose`. Front-end third-party libraries are self-hosted locally in `public/vendor/` (Tailwind/marked/highlight.js/DOMPurify), with no CDN dependency; see [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md).
 

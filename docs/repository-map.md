@@ -9,7 +9,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 - `server.js` is the compatibility launcher used by `npm start`, LaunchAgent, systemd, and integration tests.
 - `src/` contains server-side implementation grouped by domain.
 - `public/` is the native-ESM PWA served directly by Express.
-- `tests/` is the only automated-test root; real Claude turns live under `tests/smoke/` and never run by default.
+- `tests/` is the only automated-test root; real Claude turns happen in `tests/smoke/` (always, on demand) and in select `tests/integration/*` files gated by `RUN_CLAUDE_INTEGRATION=1` — neither runs by default.
 - `scripts/` contains maintainer commands; it is not runtime application code.
 
 ## Ignored local and runtime state
@@ -26,6 +26,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | `playwright-report/`, `test-results/`, `coverage/` | Test reports and coverage output | Regenerable; delete freely |
 | `.DS_Store` | macOS Finder metadata | Delete freely; never commit |
 | `node_modules/` | Installed dependencies | Regenerable from `package-lock.json` |
+| `.worktrees/` | Other branches (e.g. promo, gh-pages) checked out as worktrees — not this branch's source | Excluded from search/review; see CLAUDE.md |
 
 ## Inventory summary
 

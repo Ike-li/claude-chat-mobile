@@ -52,6 +52,12 @@ node scripts/doctor.js --fix  # 收紧权限（.env 与 CCM_DATA_DIR/*.json → 
 npm start                     # http://localhost:3000
 ```
 
+**更快：丢给你的编程 agent 代装**——在仓库目录里（或先让它 clone）把下面这段交给 Claude Code / Codex CLI 之类的编程 agent：
+
+```
+帮我首次安装并启动 claude-chat-mobile（把本机 claude CLI 接到手机的 web UI）。这是全新环境首次安装，不是重启已部署的常驻服务——CLAUDE.md 里「生产部署勿手动 npm start」那条对这次不适用。按 README.md「快速开始」一节操作：装依赖、跑 npm run setup 交互向导（会问 WORK_DIR，需要跟我确认挂哪个项目目录）、跑 node scripts/doctor.js 自检并按提示修好、最后 npm start。全部跑通后告诉我怎么在手机上打开；如果我后续想要公网固定域名访问，参考 docs/deployment.md 帮我配。
+```
+
 Web 自己发起的会话开箱即用 SDK 状态栏，不需要改 Claude 配置。若还要在 Web **只读查看正在 CLI 里运行的会话**时同步 CLI 的模型、思考强度、上下文、成本和额度，可显式安装透明 statusline bridge：
 
 ```bash
@@ -111,7 +117,7 @@ cloudflared tunnel --url http://localhost:3000
 
 在上面的核心循环之外：
 
-- **五种权限档**（default / plan / acceptEdits / bypassPermissions / dontAsk），运行时可切。
+- **六种权限档**（default / plan / acceptEdits / dontAsk / auto / bypassPermissions），运行时可切。
 - **逐条消息切换模型**（支持网关后缀名）。
 - **多 repo 与多会话**：切换白名单内的工作目录，在标签页里并发跑多个会话。
 - **文件与图片上传**，带路径注入与穿越防护。
@@ -153,8 +159,8 @@ graph LR
 1. 手机 `user:message {text}` → server 校验 → 路由到目标实例 `agents.get(instanceId)`（懒重生 resume；`session:new` 后首条消息才懒开 FRESH 实例，台阶3）
 2. 文本 push 进 AgentSession 的 streaming input → SDK → claude CLI 在 `WORK_DIR` 干活
 3. SDK 消息流回 `map()`：流式文本→`text_delta`、工具调用→`tool_use`/`tool_result`、白名单外操作→`permission_request`（挂起等手机点允许/拒绝）
-4. 每个事件套上 `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` 信封 → 进 2000 条环形缓冲 → `io.emit` 广播（前端按 `viewingInstanceId` 分流；后台 tab 的高频 delta 不广播以省带宽）
-5. 手机断线再连：`sync:since {lastSeq}` 补发缓冲；`epoch` 变化 = 服务端换了实例，客户端自动重置去重基线
+4. 每个事件套上 `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` 信封 → 进 2000 条环形缓冲 → `io.to('approved').emit` 广播给已过审设备（前端按 `viewingInstanceId` 分流；后台 tab 的高频 delta 不广播以省带宽）
+5. 手机断线再连：`sync:since {sessionId, lastSeq, instanceId}` 补发缓冲；`epoch` 变化 = 服务端换了实例，客户端自动重置去重基线
 
 
 运行时依赖：`@anthropic-ai/claude-agent-sdk`、`express`、`compression`、`socket.io`、`dotenv`、`web-push`、`jose`。前端第三方库本地自托管到 `public/vendor/`（Tailwind/marked/highlight.js/DOMPurify），不依赖 CDN；见 [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md)。

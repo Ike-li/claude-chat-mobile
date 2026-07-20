@@ -28,6 +28,8 @@ launchctl kickstart -k gui/$(id -u)/<your-server-label>
 systemctl --user restart <your-server-service>
 ```
 
+💡 若已设 `DEV_MODE=1`（见 `.env.example`），web 端齿轮面板会出现「重启服务」按钮，可免上电脑一键 kickstart（优雅退出后由 LaunchAgent/systemd 的 KeepAlive 自动拉起）——生产对外部署建议留空该变量，避免误触重启对外服务。
+
 ## 从零搭建
 
 ### 1. 隧道（Cloudflare Tunnel）
@@ -135,7 +137,7 @@ npm start
 | OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜「Access JWT 校验失败」，核对 `.env` 的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
 | 改了 `.env` 不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
-| 公网 1033 且部署机开着全局代理 | 代理 TUN 劫持了 cloudflared 到 edge 的连接 → 见下方「部署机有全局代理时」 |
+| 公网 1033 且部署机开着全局代理/VPN | 代理的 TUN 模式劫持了 `cloudflared` 到 Cloudflare edge 的出站连接：先临时关闭系统代理/VPN 复测确认；长期共存则在代理软件里给 `cloudflared` 进程或 `*.trycloudflare.com` / `*.cloudflareaccess.com` / 你的隧道域名配置直连(bypass)规则 |
 | 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在启动 shell `export ANTHROPIC_MODEL=<带后缀名>` 后重启，或 web 端 `/model <带后缀名>` 切换（`.env` 里的 `ANTHROPIC_*` 启动期被剥除，配置只能来自 shell） |
 | 回复只有工具卡片、无正文 | 网关可能不流式 → `src/agent/agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
 
