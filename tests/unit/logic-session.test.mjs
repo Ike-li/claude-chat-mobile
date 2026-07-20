@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, mergeRecentSessionsAcrossWorkspaces } from '../../public/js/logic.js';
+import { modelEntryFor, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -238,6 +238,77 @@ test('mergeRecentSessionsAcrossWorkspaces: limit 默认 8，非法 limit 回落'
   assert.equal(mergeRecentSessionsAcrossWorkspaces([many], { limit: 3 }).length, 3);
   // 最新应是 lastUsedAt 最大
   assert.equal(mergeRecentSessionsAcrossWorkspaces([many], { limit: 1 })[0].id, 's11');
+});
+
+// 首页纳入 worktree：entry 可 override workspaceName（branch 而非路径末段），并标 kind 供 UI 选 ⑂/📁。
+test('mergeRecentSessionsAcrossWorkspaces: workspaceName override 优先于 basename；kind 缺省 workspace', () => {
+  const merged = mergeRecentSessionsAcrossWorkspaces([
+    {
+      cwd: '/repo/.worktrees/promo',
+      workspaceName: 'promo',
+      kind: 'worktree',
+      sessions: [{ id: 'wt1', title: '在 wt 里', lastUsedAt: 5000 }],
+    },
+    {
+      cwd: '/repo/main',
+      sessions: [{ id: 'm1', title: '主仓', lastUsedAt: 4000 }],
+    },
+  ], { limit: 5 });
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].id, 'wt1');
+  assert.equal(merged[0].cwd, '/repo/.worktrees/promo');
+  assert.equal(merged[0].workspaceName, 'promo'); // 不是路径末段以外的推导；override 原样
+  assert.equal(merged[0].kind, 'worktree');
+  assert.equal(merged[1].workspaceName, 'main');
+  assert.equal(merged[1].kind, 'workspace'); // 缺省
+  // 空/空白 override 回落 basename
+  const fallback = mergeRecentSessionsAcrossWorkspaces([
+    { cwd: '/x/foo', workspaceName: '  ', sessions: [{ id: 'a', title: 't', lastUsedAt: 1 }] },
+    { cwd: '/x/bar', workspaceName: '', sessions: [{ id: 'b', title: 't', lastUsedAt: 2 }] },
+  ]);
+  assert.equal(fallback.find(s => s.id === 'a').workspaceName, 'foo');
+  assert.equal(fallback.find(s => s.id === 'b').workspaceName, 'bar');
+});
+
+// worktree:sessions groups → merge 入参：只保留存在且有会话的组；workspaceName=branch；kind=worktree。
+test('flattenWorktreeGroupsForRecents: 过滤/命名/cwd=worktreePath；空入参安全', () => {
+  const lists = flattenWorktreeGroupsForRecents([
+    {
+      branch: 'promo',
+      worktreePath: '/repo/.worktrees/promo',
+      worktreeExists: true,
+      sessions: [{ id: 's1', title: '改文案', lastUsedAt: 9 }],
+    },
+    {
+      branch: 'gh-pages',
+      worktreePath: '/repo/.worktrees/gh-pages',
+      worktreeExists: true,
+      sessions: [], // 无会话 → 丢
+    },
+    {
+      branch: 'gone',
+      worktreePath: '/repo/.worktrees/gone',
+      worktreeExists: false, // 不存在 → 丢
+      sessions: [{ id: 's2', title: '幽灵', lastUsedAt: 8 }],
+    },
+    {
+      branch: '(detached)',
+      worktreePath: '/repo/.worktrees/det',
+      worktreeExists: true,
+      sessions: [{ id: 's3', title: '游离', lastUsedAt: 7 }],
+    },
+    null,
+  ]);
+  assert.equal(lists.length, 2);
+  assert.deepEqual(lists.map(e => e.cwd), ['/repo/.worktrees/promo', '/repo/.worktrees/det']);
+  assert.equal(lists[0].workspaceName, 'promo');
+  assert.equal(lists[0].kind, 'worktree');
+  assert.equal(lists[0].sessions[0].id, 's1');
+  assert.equal(lists[1].workspaceName, '(detached)');
+  assert.equal(lists[1].kind, 'worktree');
+  assert.deepEqual(flattenWorktreeGroupsForRecents(null), []);
+  assert.deepEqual(flattenWorktreeGroupsForRecents([]), []);
+  assert.deepEqual(flattenWorktreeGroupsForRecents(undefined), []);
 });
 
 // 新会话首发的乐观 busy（"正在执行任务"）在服务端懒开实例并广播 instances 后，会被 setInstances→bindView→

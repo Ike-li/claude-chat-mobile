@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -4788,7 +4788,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
     container.querySelector('.dash-open-sessions')?.addEventListener('click', openSessions);
 
-    // 跨全部白名单工作区拉最近会话（并行 session:list），合并后展示，便于冷启动/空首页一键切回。
+    // 跨全部白名单工作区 + 其 linked worktree 拉最近会话（并行 session:list / worktree:sessions），
+    // 合并后展示，便于冷启动/空首页一键切回（含 CLI 在 worktree 里开的会话）。
     const recentsSection = container.querySelector('#dashRecentsSection');
     const recentsList = container.querySelector('#dashRecentsList');
     const workspacesSection = container.querySelector('#dashWorkspacesSection');
@@ -4808,6 +4809,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
     const renderDashRecents = (recent) => {
       // 工作区 chips：按最近会话时间去重排序，点 chip → 进入该区最近一条
+      // worktree 用 ⑂ + branch 名（kind）；主仓用 📁 + basename
       if (workspacesSection && workspacesList) {
         const seen = new Set();
         const wsOrder = [];
@@ -4818,11 +4820,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
         workspacesList.innerHTML = '';
         for (const s of wsOrder) {
+          const icon = s.kind === 'worktree' ? '⑂' : '📁';
           const chip = el(`
             <button type="button" class="inline-flex items-center gap-1.5 max-w-full px-3 py-1.5 rounded-full border border-line-soft bg-surface hover:bg-accent-wash/40 hover:border-accent-bright/50 active:scale-[0.98] transition-all text-xs font-semibold text-ink shadow-sm">
-              <span class="shrink-0 opacity-80">📁</span>
+              <span class="shrink-0 opacity-80 dash-ws-icon"></span>
               <span class="truncate max-w-[10rem]"></span>
             </button>`);
+          chip.querySelector('.dash-ws-icon').textContent = icon;
           chip.querySelector('span.truncate').textContent = s.workspaceName;
           chip.title = s.cwd;
           chip.onclick = (e) => {
@@ -4839,12 +4843,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       recentsList.innerHTML = '';
       for (const s of recent) {
         const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : '时间未知';
+        const icon = s.kind === 'worktree' ? '⑂' : '📁';
         const item = el(`
           <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
             <div class="flex-1 min-w-0 pr-3">
               <div class="font-bold text-xs text-ink truncate"></div>
               <div class="text-[10px] text-ink-faint mt-1 flex items-center gap-1.5 min-w-0">
-                <span class="shrink-0">📁</span>
+                <span class="shrink-0 dash-ws-icon"></span>
                 <span class="truncate dash-ws"></span>
                 <span class="shrink-0 opacity-50">·</span>
                 <span class="shrink-0 dash-when"></span>
@@ -4854,6 +4859,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           </div>
         `);
         item.querySelector('.font-bold').textContent = s.title || '无标题会话';
+        item.querySelector('.dash-ws-icon').textContent = icon;
         item.querySelector('.dash-ws').textContent = s.workspaceName;
         item.querySelector('.dash-when').textContent = when;
         item.title = `${s.workspaceName} · ${s.title || '无标题会话'}`;
@@ -4874,14 +4880,26 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
 
     if (recentsSection && recentsList && dirs.length) {
-      Promise.all(dirs.map(cwd => new Promise(resolve => {
+      // 主仓 session:list 与 worktree:sessions 并行；后者副作用注册 knownWorktrees，保证随后 switch 放行
+      const listMain = (cwd) => new Promise(resolve => {
         let settled = false;
         const done = (sessions) => { if (!settled) { settled = true; resolve({ cwd, sessions }); } };
         socket.emit('session:list', { cwd }, state => done(state?.sessions || []));
         setTimeout(() => done([]), 4000); // 单目录超时不挡整表
-      }))).then(dirLists => {
+      });
+      const listWorktrees = (cwd) => new Promise(resolve => {
+        let settled = false;
+        const done = (groups) => { if (!settled) { settled = true; resolve(groups); } };
+        socket.emit('worktree:sessions', { cwd }, res => done(res?.groups || []));
+        setTimeout(() => done([]), 4000);
+      });
+      Promise.all([
+        Promise.all(dirs.map(listMain)),
+        Promise.all(dirs.map(listWorktrees)),
+      ]).then(([mainLists, wtGroupLists]) => {
         if (gen !== _dashRecentsGen) return; // 已换页/重渲
-        const recent = mergeRecentSessionsAcrossWorkspaces(dirLists, { limit: 8 });
+        const wtLists = wtGroupLists.flatMap(flattenWorktreeGroupsForRecents);
+        const recent = mergeRecentSessionsAcrossWorkspaces([...mainLists, ...wtLists], { limit: 8 });
         renderDashRecents(recent); // 空列表也渲 → dashEmptyHint
       });
     } else if (emptyHint) {
