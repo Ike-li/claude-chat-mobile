@@ -111,6 +111,22 @@ test.describe('send()', () => {
     s.dispose();
   });
 
+  // 回归：q.setModel 和 q.interrupt 走同一条 control_request 通道，限流重试期间同样可能永不回包。
+  // 此前只有 interrupt() 有超时保护，setModel 会话起来 send() 直接永久 hang（既不报错也不发出）。
+  // 超时后应等同于 setModel 抛错——优雅降级用原模型发送，而不是把整条 send() 一起挂死。
+  test('setModel 挂起超时 → 优雅降级用原模型发送（不永久 hang），emit error', async () => {
+    const { s, events } = makeSession({ model: 'sonnet' });
+    s.interruptTimeoutMs = 20; // 单测加速：与 interrupt 共用同一超时配置
+    s.q = { setModel() { return new Promise(() => {}); } }; // 永不 resolve
+    const result = await s.send('hi', 'opus');
+    assert.equal(result, true, '超时后仍应继续发送，不是整条卡死');
+    const err = events.find(e => e.type === 'error');
+    assert.ok(err, '应像其它 setModel 失败一样 emit error');
+    assert.ok(err.payload.message.includes('模型切换失败'));
+    assert.equal(s.activeModel, 'sonnet', '切换未完成，保留原模型');
+    s.dispose();
+  });
+
   test('双重检查：setModel await 后 pendingTurns 已达上限 → reject', async () => {
     const { s, events } = makeSession({ model: 'sonnet' });
     // 模拟：await 期间其他 send 把 pendingTurns 推到 2
@@ -341,6 +357,17 @@ test.describe('stopTask()（切片 2b：停单个后台任务，对应终端 Ctr
     s.dispose();
   });
 
+  // 回归：q.stopTask 和 q.interrupt 走同一条 control_request 通道，限流重试期间同样可能永不回包。
+  // 超时后应等同于既有的"SDK 抛错"分支——返回 false、不抛，而不是让 stopTask() 永久 hang。
+  test('SDK stopTask 挂起超时 → 返回 false、不抛（不永久 hang）', async () => {
+    const { s } = makeSession();
+    s.interruptTimeoutMs = 20; // 单测加速：与 interrupt 共用同一超时配置
+    s.q = { stopTask() { return new Promise(() => {}); } }; // 永不 resolve
+    const ok = await s.stopTask('task-1');
+    assert.equal(ok, false);
+    s.dispose();
+  });
+
   test('无 q（实例未 start）→ 返回 false、不抛', async () => {
     const { s } = makeSession();
     s.q = null;
@@ -448,6 +475,21 @@ test.describe('cancelQueued() — 排队消息撤回', () => {
     assert.equal(r.ok, false);
     assert.equal(s.pendingTurns, 2);
     assert.equal(s.cliQueued?.clientMessageId, 'c2');
+    s.dispose();
+  });
+
+  // 回归：q.cancelAsyncMessage 和 q.interrupt 走同一条 control_request 通道，限流重试期间同样可能
+  // 永不回包。超时后应等同于既有的"控制请求失败视同撤回失败"分支——ok:false、不永久 hang（撤回按钮
+  // 此前会因为这里挂起而永远转不出结果）。
+  test('CLI 队列路径：cancelAsyncMessage 挂起超时 → ok:false（不永久 hang）', async () => {
+    const { s } = makeSession();
+    s.interruptTimeoutMs = 20; // 单测加速：与 interrupt 共用同一超时配置
+    await s.send('first', null, { clientMessageId: 'c1' });
+    await s.send('second', null, { clientMessageId: 'c2' });
+    s.queue = [];
+    s.q = { cancelAsyncMessage: () => new Promise(() => {}) }; // 永不 resolve
+    const r = await s.cancelQueued('c2');
+    assert.equal(r.ok, false);
     s.dispose();
   });
 

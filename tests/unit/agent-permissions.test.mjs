@@ -351,6 +351,22 @@ test.describe('权限闸门', () => {
     s.dispose();
   });
 
+  // 回归：q.setPermissionMode 和 q.interrupt 走同一条 control_request 通道，限流重试期间同样可能
+  // 永不回包。超时后应等同于既有的"SDK 抛错"分支——emit error、保留原档、返回 false，而不是让
+  // setPermissionMode()（进而调用方 server 的 socket ack）永久 hang。
+  test('setPermissionMode：SDK 挂起超时 → 优雅降级，保留原档，emit error（不永久 hang）', async () => {
+    const { s, events } = makeSession({ permissionMode: 'default' });
+    s.interruptTimeoutMs = 20; // 单测加速：与 interrupt 共用同一超时配置
+    s.q = { setPermissionMode() { return new Promise(() => {}); } }; // 永不 resolve
+    const ok = await s.setPermissionMode('plan');
+    assert.equal(ok, false);
+    assert.equal(s.permissionMode, 'default', '切换未完成，保留原档');
+    const err = events.find(e => e.type === 'error');
+    assert.ok(err);
+    assert.ok(err.payload.message.includes('权限档切换失败'));
+    s.dispose();
+  });
+
   // 批准内含的模式切换：若 SDK 经 canUseTool 的 suggestions 给出 setMode PermissionUpdate，批准时应始终
   // 应用（非「始终允许」可选项）→ 回传 SDK + 更新本实例档 + emit permission_mode 让 server 同步手机端图标。
   // 注：这是「SDK 主动下发 suggestion」的前向兼容路径——实测当前 SDK 的 ExitPlanMode 并不走这里（见下条），

@@ -319,7 +319,7 @@ export class AgentSession {
     const target = model || this.defaultModel;
     if (target !== this.activeModel) {
       try {
-        await this.q?.setModel(target);
+        await this._raceControlRequest(() => this.q?.setModel(target), 'set_model');
         this.activeModel = target;
       } catch (err) {
         this.emit('error', { message: `模型切换失败（${err.message}），已用原模型发送`, recoverable: true });
@@ -360,6 +360,28 @@ export class AgentSession {
     return true;
   }
 
+  // 与 SDK 的 control_request 通道共享同一条底层连接：限流重试期间任何一个 control_request（不只
+  // interrupt）都可能永不回包。本方法给 promiseFactory() 产生的调用套一层超时，超时后 reject
+  // Error(`${tag}_timeout`)，交给调用方既有的 try/catch 当成一次普通的 SDK 失败处理——不新增分支，
+  // 只是把「永远不 settle」转成「有限时间内必定 settle（成功或超时失败）」。
+  async _raceControlRequest(promiseFactory, tag) {
+    const p = promiseFactory?.();
+    if (!p || typeof p.then !== 'function') return p;
+    const ms = Number(this.interruptTimeoutMs);
+    if (!(ms > 0)) return p;
+    let timer = null;
+    try {
+      return await Promise.race([
+        p,
+        new Promise((_, rej) => {
+          timer = setTimeout(() => rej(new Error(`${tag}_timeout`)), ms);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   async interrupt() {
     this._flushText(); this._flushThink();
     this.pendingAutoTurn = false; // 用户显式停止：作废任何待合成的后台自动汇报轮
@@ -387,23 +409,7 @@ export class AgentSession {
     ];
     // 限流重试时 q.interrupt() 的 control_request 可能永不回包 → await 永挂 → 前端「正在停止…」卡死。
     // 超时后按失败路径强制收口（见 settleForce / catch）。
-    const raceInterrupt = async () => {
-      const p = this.q?.interrupt?.();
-      if (!p || typeof p.then !== 'function') return;
-      const ms = Number(this.interruptTimeoutMs);
-      if (!(ms > 0)) return p;
-      let timer = null;
-      try {
-        await Promise.race([
-          p,
-          new Promise((_, rej) => {
-            timer = setTimeout(() => rej(new Error('interrupt_timeout')), ms);
-          }),
-        ]);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
-    };
+    const raceInterrupt = () => this._raceControlRequest(() => this.q?.interrupt?.(), 'interrupt');
     // 强制结算：账面有在途轮但 SDK 拒中断/超时 → 把 pendingTurns 收口并发 interrupted，
     // 否则前端 busy 与 interruptPending 永挂（限流重试 8/10 点停止复现）。
     const settleForce = () => {
@@ -514,7 +520,7 @@ export class AgentSession {
     if (cq && cq.clientMessageId === clientMessageId && this.q?.cancelAsyncMessage) {
       this.cliQueued = null;
       let cancelled = false;
-      try { cancelled = await this.q.cancelAsyncMessage(cq.uuid); } catch { /* 控制请求失败视同撤回失败 */ }
+      try { cancelled = await this._raceControlRequest(() => this.q.cancelAsyncMessage(cq.uuid), 'cancel_async_message'); } catch { /* 控制请求失败/挂起超时视同撤回失败 */ }
       if (cancelled) {
         this.pendingTurns = Math.max(0, this.pendingTurns - 1);
         this.emit('system', { message: '已撤回排队中的消息', kind: 'queue_cancelled', clientMessageId });
@@ -538,10 +544,10 @@ export class AgentSession {
     if (typeof taskId !== 'string' || !taskId) return false;  // 无有效 taskId 不调 SDK
     if (!this.q?.stopTask) return false;                      // 无 q（实例未 start）/ SDK 无该方法：显式判，勿靠 ?. 静默通过
     try {
-      await this.q.stopTask(taskId);
+      await this._raceControlRequest(() => this.q.stopTask(taskId), 'stop_task');
       return true;
     } catch {
-      return false; // SDK 无该任务 / 已结束：静默吞（幂等）
+      return false; // SDK 无该任务 / 已结束 / 挂起超时：静默吞（幂等）
     }
   }
 
@@ -575,7 +581,7 @@ export class AgentSession {
     if (mode === this.permissionMode) return true; // 差分：无变化不调 SDK
     const sdkMode = mode === 'bypassPermissions' ? 'default' : mode;
     try {
-      await this.q?.setPermissionMode(sdkMode);
+      await this._raceControlRequest(() => this.q?.setPermissionMode(sdkMode), 'set_permission_mode');
       if (this.disposed) return false; // S3：await 间隙实例可能已被 dispose
       this.permissionMode = mode;                  // 实例记真实档（含 bypass），canUseTool 据此放行
       return true;
