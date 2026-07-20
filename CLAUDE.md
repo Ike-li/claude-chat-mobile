@@ -6,7 +6,7 @@
 
 当你不知道怎么处理功能时，CLI 有什么 web 就有什么，请找一找 claude code cli 是怎么实现这个功能的。
 Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重复造轮子
-发送路径(Web→Agent SDK→Claude Code CLI)和接收路径(Claude code CLI→Agent SDK→Web)
+双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 分 25 种，seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存四条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播；离线唤醒走 web-push/ntfy，只唤醒不带内容、socket 在线时不推送。
 
 ## 分支纪律
 

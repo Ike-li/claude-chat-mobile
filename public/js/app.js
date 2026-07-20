@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -4988,7 +4988,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     });
   }
 
-  // 渲染一批历史/追平消息为气泡并追加（loadHistory 与 onHistoryAppend 复用；一次性 fragment 插入 + 空闲高亮）。
+  // 长会话切入分块渲染：块大小/让出间隔是经验起点，真机 DevTools Performance 面板校准。
+  const HISTORY_RENDER_CHUNK_SIZE = 40; // 真机 DevTools Performance 校准起点；2000 条 ≈ 50 块
+  const HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS = 200; // 明显短于下方高亮用的 2000ms——渲染气泡在关键路径上，高亮是锦上添花
+  function scheduleIdle(fn, opts) {
+    if (typeof requestIdleCallback !== 'undefined') requestIdleCallback(fn, opts);
+    else setTimeout(fn, 0);
+  }
+
+  // 渲染一批历史/追平消息为气泡并追加（loadHistory 与 onHistoryAppend 复用；分块让出主线程 + 一次性 fragment 插入 + 空闲高亮）。
   // 支持文本 / thinking / tool_use / tool_result；sidechain（parentToolUseId）收进可折叠子 agent 卡。
   function renderHistoryBubbles(msgs) {
     if (!msgs?.length) return;
@@ -5022,7 +5030,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         frag.appendChild(node);
       }
     };
-    for (const msg of msgs) {
+    function renderOne(msg) {
       if (msg?.kind === 'thinking') {
         const wrap = el(`
           <details class="msg-frame thinking rounded-lg bg-surface border border-line-soft text-xs text-ink-faint">
@@ -5031,7 +5039,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           </details>`);
         wrap.querySelector('.t-body').textContent = msg.content || '';
         appendNode(wrap, msg);
-        continue;
+        return;
       }
       if (msg?.kind === 'tool_use') {
         // UX-002：历史回显与 live 一致——收起态带 inputSummary 截断；Task 清单工具特化
@@ -5063,7 +5071,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           ensureHistSub(msg.toolUseId);
         }
         appendNode(card, msg);
-        continue;
+        return;
       }
       if (msg?.kind === 'tool_result') {
         const card = msg.toolUseId ? histToolCards.get(msg.toolUseId) : null;
@@ -5085,7 +5093,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             codeBlocks.push(code);
           }
           appendNode(orphan, msg);
-          continue;
+          return;
         }
         setStatusIcon(card.querySelector('.t-status'), msg.ok === false ? 'error' : 'ok');
         if (msg.outputSummary) {
@@ -5104,7 +5112,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           const sa = histSubCards.get(msg.toolUseId);
           sa.titleEl.textContent = formatSubagentCardTitle({ running: false });
         }
-        continue;
+        return;
       }
       // 文本气泡（默认路径）
       const isUser = msg.role === 'user';
@@ -5116,7 +5124,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         bubble.textContent = msg.content || '';
         bubble.className = 'msg-body px-0.5 text-ink-soft whitespace-pre-wrap text-xs';
         appendNode(bubble, msg);
-        continue;
+        return;
       }
       bubble.innerHTML = render(msg.content || '');
       bubble.querySelectorAll('pre code').forEach(b => codeBlocks.push(b));
@@ -5130,17 +5138,30 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
       frag.appendChild(bubble);
     }
-    leaveStartScreen();
-    messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow
-    scrollBottom(true);
-    if (codeBlocks.length) {
-      const doHighlight = () => codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
-      if (typeof requestIdleCallback !== 'undefined') {
-        requestIdleCallback(doHighlight, { timeout: 2000 });
-      } else {
-        setTimeout(doHighlight, 0);
+
+    // 中断检查用「渲染发起时 #messages 归属哪个实例」的快照；bindView 是唯一整体改写 #messages 的地方，
+    // displayedInstanceId 代表此刻 DOM 安全可写给谁。分块跨越一次切视图时直接丢弃 frag，不再调度、不
+    // appendChild——frag/codeBlocks/histSubCards/histToolCards 全是本次调用的局部变量，中止后自然被 GC，
+    // 不需要额外清理；用户若切回同一会话，因没有 sessionDomCache 缓存会自然触发一次完整重渲染。
+    const targetInstanceId = displayedInstanceId;
+    let i = 0;
+    function processChunk() {
+      if (displayedInstanceId !== targetInstanceId) return;
+      const { end, done } = nextHistoryRenderChunk({ processed: i, total: msgs.length, chunkSize: HISTORY_RENDER_CHUNK_SIZE });
+      for (; i < end; i++) renderOne(msgs[i]);
+      if (!done) {
+        scheduleIdle(processChunk, { timeout: HISTORY_RENDER_CHUNK_IDLE_TIMEOUT_MS });
+        return;
+      }
+      leaveStartScreen();
+      messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow（分块只让解析让出主线程，插入仍是一次性）
+      scrollBottom(true);
+      if (codeBlocks.length) {
+        const doHighlight = () => codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
+        scheduleIdle(doHighlight, { timeout: 2000 });
       }
     }
+    processChunk();
   }
 
   // 只读「追平」：server 轮询「正在终端 CLI 里跑」的会话 transcript，检测到【外部新落定】消息 → history_append。

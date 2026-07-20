@@ -1026,6 +1026,13 @@ export function urlBase64ToUint8Array(b64) {
   return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
 }
 
+// 长会话切入分块渲染的推进数学：给定已处理条数/总数/块大小，算出这一块的结束位置与是否处理完。
+// chunkSize<=0 防呆到至少推进 1 条，避免调用方传入非法值时死循环。
+export function nextHistoryRenderChunk({ processed, total, chunkSize }) {
+  const end = Math.min(processed + Math.max(1, chunkSize | 0), total);
+  return { end, done: end >= total };
+}
+
 // 连接 RTT 数值段：合法有限非负 number → 整数 ms（≥1000 用 1 位小数 s）。
 // 接线层再拼人话前缀「延迟 …」；非法/未知 → ''，接线层据此隐藏，避免断线残留陈旧数字。
 export function formatRttMs(ms) {
@@ -1430,6 +1437,12 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
     }
   } else if (subsystem === 'queue' && event === 'turn_settled') {
     text = d.wasInterrupted ? '轮次因中断结束' : `轮次结束（${Number.isFinite(d.durationMs) ? d.durationMs + 'ms' : '?'}）`;
+  } else if (subsystem === 'resume' && event === 'settled') {
+    text = d.hadLock ? `续接完成（先释放后台锁，${d.ms}ms）` : `续接完成（${d.ms}ms）`;
+  } else if (subsystem === 'catchup' && event === 'tick') {
+    text = `追平巡检一次（${d.ms}ms）`;
+  } else if (subsystem === 'message' && event === 'enqueued') {
+    text = d.hasAttachments ? `消息已入队（含附件，${d.ms}ms）` : `消息已入队（${d.ms}ms）`;
   } else {
     // 未识别的 (subsystem,event) 组合：兜底渲染，不静默吞掉（延续 agent.js map() 对未映射 SDK 消息的既有原则）
     text = `${subsystem}/${event} ${JSON.stringify(d).slice(0, 200)}`;

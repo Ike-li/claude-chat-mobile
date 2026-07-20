@@ -278,6 +278,13 @@ function mainCwdSessions() {
       model: 'claude-3-5-sonnet',
       lastUsedAt: Date.now() - 900000,
       entrypoint: 'sdk-ts'
+    },
+    {
+      id: 'mock-session-long-history',
+      title: 'Long History Session',
+      model: 'claude-3-5-sonnet',
+      lastUsedAt: Date.now() - 1200000,
+      entrypoint: 'sdk-ts'
     }
   ];
   if (historyOverflowMode) {
@@ -656,6 +663,10 @@ io.on('connection', socket => {
       'mock-session-older-migration': {
         instanceId: 'inst_older_migration',
         title: 'Older Migration Session'
+      },
+      'mock-session-long-history': {
+        instanceId: 'inst_long_history',
+        title: 'Long History Session'
       }
     };
     const meta = knownArchived[sessionId];
@@ -727,6 +738,16 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Older migration history loaded from session:list overflow.' }
         ]
       });
+    } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-long-history') {
+      // Part B：长会话切入分块渲染压测——2000 条触达 HISTORY_MAX_MESSAGES 上限（src/sessions/history.js）
+      const messages = [];
+      for (let i = 0; i < 2000; i++) {
+        messages.push({
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: i === 1999 ? 'Long history final message marker' : `Long history stress message #${i}`
+        });
+      }
+      callback({ messages });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-gap-pending') {
       callback({
         messages: [

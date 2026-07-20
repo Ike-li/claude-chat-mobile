@@ -150,6 +150,23 @@ export async function prepareSessionForWebResume(sessionId, opts = {}) {
   return { attempted: true, log, result };
 }
 
+/**
+ * Resume 前置三路（释放 bg 锁 / 读末条权限档 / 读末条模型)：三者互无数据依赖，
+ * `prepare` 只为其释放锁的副作用，不产出被后两者消费的值，只有调用方最终的
+ * openInstance 需要三者都 settle。原实现是「先 await prepare 再并行 await 另外
+ * 两个」的两段串行，这里改成从入口就三路并发，语义保持不变：`prepare` 失败仍然
+ * 只吞掉（转成 {attempted:false,error}），不拖累另外两路、也不让整体 reject。
+ * @param {{ prepare: () => Promise<any>, readMode: () => Promise<any>, readModel: () => Promise<any> }} fns
+ */
+export async function prepareResumeInParallel({ prepare, readMode, readModel }) {
+  const [prep, transcriptMode, transcriptModel] = await Promise.all([
+    Promise.resolve().then(prepare).catch((error) => ({ attempted: false, log: '', result: null, error })),
+    Promise.resolve().then(readMode),
+    Promise.resolve().then(readModel),
+  ]);
+  return { prep, transcriptMode, transcriptModel };
+}
+
 // ── internals ──────────────────────────────────────────────────────────────
 
 function sleep(ms) {

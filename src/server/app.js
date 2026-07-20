@@ -52,7 +52,7 @@ import {
   canDeleteSessionGuard,
   externalDirtyBusyNack,
 } from './instance-routing.js';
-import { prepareSessionForWebResume } from '../ops/cli-bg-session-lock.js';
+import { prepareSessionForWebResume, prepareResumeInParallel } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, isAllowedWorkdir, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
 import { discoverWorktreeSessions } from '../sessions/worktree-sessions.js';
@@ -1050,8 +1050,13 @@ async function catchUpTickOnce() {
 let catchUpInFlight = null;
 function catchUpTick() {
   if (catchUpInFlight) return catchUpInFlight; // interval + 手动 syncNow 单飞，防旧观察晚到覆盖新状态
+  const t0 = Date.now();
+  const diagKey = agents.get(viewingInstanceId)?.sessionId ?? null; // Part C：仅供计时归档，不参与 catchUp 决策
   const running = catchUpTickOnce();
-  const wrapped = running.finally(() => { if (catchUpInFlight === wrapped) catchUpInFlight = null; });
+  const wrapped = running.finally(() => {
+    diagLog.record(diagKey, 'catchup', 'tick', { ms: Date.now() - t0 });
+    if (catchUpInFlight === wrapped) catchUpInFlight = null;
+  });
   catchUpInFlight = wrapped;
   return wrapped;
 }
@@ -1482,31 +1487,35 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   return instance;
 }
 
+// 本机实测：无锁场景 prepareSessionForWebResume 全程约 290ms，命中锁场景 +约 550ms+。原 4000ms 是
+// 历史遗留的保守兜底值；收紧到 1800ms 仍留约 6× 正常路径余量，只在 `claude agents --json` 真正异常
+// 挂起时才会等满——不改变 listCliAgents 本身「超时/失败即 fail-open」这个既有行为。
+const RESUME_LOCK_CHECK_TIMEOUT_MS = 1800;
+
 // resume 开实例的异步封装：新开前先读 transcript 末条 permission-mode 恢复权限档（纯 CLI 会话 sessions.json
 // 无档时的恢复来源，见 readLastPermissionMode）。openInstance 本身保持同步（避免重入竞态）；读盘只在此异步前置。
 // 仅 resume（resumeId 非空）才读——FRESH 无档可恢复、也不该读；已 live 实例由调用方 instanceForSession 去重、不覆盖运行时档。
 //
 // CLI bg 独占锁：若 session 被 `claude agents` 登记为 background，SDK resume 会立刻失败（「running as a
 // background agent」）。web 续接前自动 SIGTERM 该类后台进程（不动 interactive），保证「CLI 会话 web 能开」。
+// 性能优化：释放锁 / 读末条权限档 / 读末条模型三路互无数据依赖（前者只为释放锁的副作用，不产出后两者
+// 消费的值），原实现「先 await 锁检查再并行读两个 transcript」是可避免的串行，改用 prepareResumeInParallel
+// 三路从入口就并发——不改锁检查本身的判断条件/时序语义，只改它和另外两路的调度关系。
 async function openResumeInstance(cwd, resumeId, extra = {}) {
+  const t0 = Date.now();
+  let prep = { attempted: false }, transcriptMode = null, transcriptModel = null;
   if (resumeId) {
-    try {
-      const prep = await prepareSessionForWebResume(resumeId, {
-        claudeBin,
-        cwd,
-        timeoutMs: 4000,
-        waitMs: 350,
-      });
-      if (prep.log) interactionLog.addSessionLog(resumeId, 'sys_info', prep.log);
-    } catch (err) {
-      console.warn('[cli-bg-lock] prepareSessionForWebResume failed:', err?.message || err);
-    }
+    ({ prep, transcriptMode, transcriptModel } = await prepareResumeInParallel({
+      prepare: () => prepareSessionForWebResume(resumeId, { claudeBin, cwd, timeoutMs: RESUME_LOCK_CHECK_TIMEOUT_MS, waitMs: 350 }),
+      readMode: () => readLastPermissionMode(resumeId, cwd),
+      readModel: () => readLastAssistantModel(resumeId, cwd),
+    }));
+    if (prep.log) interactionLog.addSessionLog(resumeId, 'sys_info', prep.log);
+    else if (prep.error) console.warn('[cli-bg-lock] prepareSessionForWebResume failed:', prep.error?.message || prep.error);
   }
-  // 权限档与末条 assistant 模型同为 transcript 尾窗冷读，并行取（模型仅作展示回落，见 lastAssistantModel）。
-  const [transcriptMode, transcriptModel] = resumeId
-    ? await Promise.all([readLastPermissionMode(resumeId, cwd), readLastAssistantModel(resumeId, cwd)])
-    : [null, null];
-  return openInstance({ cwd, resumeId, transcriptMode, transcriptModel, ...extra });
+  const instance = openInstance({ cwd, resumeId, transcriptMode, transcriptModel, ...extra });
+  diagLog.record(resumeId, 'resume', 'settled', { ms: Date.now() - t0, hadLock: !!prep.attempted }); // Part C：resume 总耗时
+  return instance;
 }
 
 // resume 并发去重：openResumeInstance 内部有 await（读 transcript 权限档），调用方常见写法是
@@ -1730,6 +1739,7 @@ registerSocketConnection(io, socket => {
   }
 
   on(socket, 'user:message', async (payload, rawAck) => {
+    const t0 = Date.now(); // Part C：端到端入队耗时，覆盖去重检查/校验/懒开会话/externalDirty 换实例/附件落盘全链路
     // REL-01 幂等（离线重发/网络抖动可能致同一条消息被处理两次）：clientMessageId 由发送端生成，
     // 已处理过的直接 ack 放行、不重复执行任何副作用（不重发校验提示、不重复调用 a.send）。
     // 无 ID（旧客户端未升级）→ 不去重，向后兼容。
@@ -1901,6 +1911,7 @@ registerSocketConnection(io, socket => {
       if (typeof ack === 'function') ack({ ok: false, error: '前面还有消息在排队，请稍后重试', retryable: true });
       return;
     }
+    diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
     if (viewingInstanceId === a.instanceId && mirrorReadonly) {
       // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续
       // 被旧 mirrorReadonly 锁在 CLI 来源。失败入队不清锁，仍保持终端权威。

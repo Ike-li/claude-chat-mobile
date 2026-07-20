@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ansiToHtml, urlBase64ToUint8Array } from '../../public/js/logic.js';
+import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk } from '../../public/js/logic.js';
 import { createRingBuffer } from '../../public/js/ring-buffer.js';
 
 test('ansiToHtml: 纯文本被 esc', () => {
@@ -111,6 +111,42 @@ test('urlBase64ToUint8Array: 自动补填充', () => {
   const result = urlBase64ToUint8Array('AA');
   assert.equal(result.length, 1);
   assert.equal(result[0], 0);
+});
+
+// ---- nextHistoryRenderChunk：长会话切入分块渲染的推进数学（不碰 DOM，纯计算） ----
+test.describe('nextHistoryRenderChunk', () => {
+  test('整除边界：total 恰好是 chunkSize 的倍数，分两步推进', () => {
+    const step1 = nextHistoryRenderChunk({ processed: 0, total: 80, chunkSize: 40 });
+    assert.deepEqual(step1, { end: 40, done: false });
+    const step2 = nextHistoryRenderChunk({ processed: 40, total: 80, chunkSize: 40 });
+    assert.deepEqual(step2, { end: 80, done: true });
+  });
+
+  test('余数块：95 条、每块 40，推进 40/40/15，最后一步 done', () => {
+    const step1 = nextHistoryRenderChunk({ processed: 0, total: 95, chunkSize: 40 });
+    assert.deepEqual(step1, { end: 40, done: false });
+    const step2 = nextHistoryRenderChunk({ processed: 40, total: 95, chunkSize: 40 });
+    assert.deepEqual(step2, { end: 80, done: false });
+    const step3 = nextHistoryRenderChunk({ processed: 80, total: 95, chunkSize: 40 });
+    assert.deepEqual(step3, { end: 95, done: true });
+  });
+
+  test('total < chunkSize：一步处理完，done=true', () => {
+    const step = nextHistoryRenderChunk({ processed: 0, total: 15, chunkSize: 40 });
+    assert.deepEqual(step, { end: 15, done: true });
+  });
+
+  test('chunkSize<=0 防呆：至少推进 1 条，不死循环', () => {
+    const step = nextHistoryRenderChunk({ processed: 0, total: 3, chunkSize: 0 });
+    assert.equal(step.end, 1);
+    assert.equal(step.done, false);
+    const stepNeg = nextHistoryRenderChunk({ processed: 0, total: 3, chunkSize: -5 });
+    assert.equal(stepNeg.end, 1);
+  });
+
+  test('total=0：一步 done=true，end=0', () => {
+    assert.deepEqual(nextHistoryRenderChunk({ processed: 0, total: 0, chunkSize: 40 }), { end: 0, done: true });
+  });
 });
 
 // ---- pushEnvHint：Web Push 环境判定（E15 / ②2a）——手机「没触发过」多半卡在这几道门 ----

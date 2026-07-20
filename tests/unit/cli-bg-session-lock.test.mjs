@@ -8,6 +8,7 @@ import {
   parseAgentsJson,
   releaseBgLocksForSession,
   prepareSessionForWebResume,
+  prepareResumeInParallel,
 } from '../../src/ops/cli-bg-session-lock.js';
 
 const SID = '2c55ae09-1672-4d7a-9fa7-885a726ad4ab';
@@ -116,5 +117,74 @@ test.describe('prepareSessionForWebResume', () => {
     assert.match(out.log, /web resume 前释放 CLI 后台锁/);
     assert.match(out.log, new RegExp(SID));
     assert.match(out.log, /released=444/);
+  });
+});
+
+test.describe('prepareResumeInParallel（性能优化：resume 前置三路从串行改并行，语义不变）', () => {
+  test('三路在同一批微任务里发起，不等前一路 resolve 才调下一路', async () => {
+    const invoked = [];
+    const deferred = {};
+    const makeDeferred = (name) => () => {
+      invoked.push(name);
+      return new Promise((resolve) => { deferred[name] = resolve; });
+    };
+    const resultPromise = prepareResumeInParallel({
+      prepare: makeDeferred('prepare'),
+      readMode: makeDeferred('readMode'),
+      readModel: makeDeferred('readModel'),
+    });
+    // 让微任务队列跑完当前这几批：三路都应该已经被调用过，但都还没被 resolve。
+    // 若实现退化成「先 await prepare 再顺序调用另外两路」，prepare 的 deferred 还没被我们手动
+    // resolve，readMode/readModel 永远不会被调用到，下面的断言会缺项而失败（不是靠计时赌竞态）。
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.deepEqual([...invoked].sort(), ['prepare', 'readMode', 'readModel']);
+    // 交错 resolve 顺序：先 resolve 后两路，最后才 resolve prepare，验证返回值字段对应关系不受
+    // resolve 顺序影响（Promise.all 保证按位置映射，不是按完成顺序）。
+    deferred.readModel('model-x');
+    deferred.readMode('mode-y');
+    deferred.prepare({ attempted: true, log: 'L' });
+    const result = await resultPromise;
+    assert.deepEqual(result, {
+      prep: { attempted: true, log: 'L' },
+      transcriptMode: 'mode-y',
+      transcriptModel: 'model-x',
+    });
+  });
+
+  test('prepare 失败（reject）不阻塞另外两路，返回 {attempted:false,error} 而不是让整体 reject', async () => {
+    const result = await prepareResumeInParallel({
+      prepare: () => Promise.reject(new Error('spawn boom')),
+      readMode: () => Promise.resolve('mode-a'),
+      readModel: () => Promise.resolve('model-b'),
+    });
+    assert.equal(result.prep.attempted, false);
+    assert.ok(result.prep.error instanceof Error);
+    assert.equal(result.transcriptMode, 'mode-a');
+    assert.equal(result.transcriptModel, 'model-b');
+  });
+
+  test('prepare 同步抛错（而非返回 rejected promise）同样被吞掉，不影响另外两路', async () => {
+    const result = await prepareResumeInParallel({
+      prepare: () => { throw new Error('sync boom'); },
+      readMode: () => Promise.resolve('mode-a'),
+      readModel: () => Promise.resolve('model-b'),
+    });
+    assert.equal(result.prep.attempted, false);
+    assert.equal(result.transcriptMode, 'mode-a');
+    assert.equal(result.transcriptModel, 'model-b');
+  });
+
+  test('三路都正常 resolve → 返回值原样透传', async () => {
+    const result = await prepareResumeInParallel({
+      prepare: () => Promise.resolve({ attempted: true, log: 'released', result: { locks: [1] } }),
+      readMode: () => Promise.resolve('acceptEdits'),
+      readModel: () => Promise.resolve('claude-sonnet-5'),
+    });
+    assert.deepEqual(result, {
+      prep: { attempted: true, log: 'released', result: { locks: [1] } },
+      transcriptMode: 'acceptEdits',
+      transcriptModel: 'claude-sonnet-5',
+    });
   });
 });

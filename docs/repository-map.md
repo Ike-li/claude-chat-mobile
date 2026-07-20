@@ -37,7 +37,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Configuration template | 1 |
 | Deployment | 3 |
 | Documentation | 4 |
-| E2E test | 30 |
+| E2E test | 31 |
 | Frontend asset | 2 |
 | Frontend source | 21 |
 | Generated asset | 6 |
@@ -55,7 +55,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 93 |
 | Vendored asset | 10 |
 
-Total classified files: **282**.
+Total classified files: **283**.
 
 ## Complete file inventory
 
@@ -201,6 +201,7 @@ Total classified files: **282**.
 | `tests/e2e/p0/file-browser.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/goto-mock-error-accumulation.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/input-send-empty.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/long-history-render.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/long-stream-interrupt.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/new-session-first-send.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/pending-snapshot-reconcile.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |

@@ -64,6 +64,32 @@ test.describe('formatDiagLogEntry：判定过的一句话 + severity，不裸吐
     assert.ok(!normal.text.includes('中断'));
   });
 
+  test('resume/settled：hadLock=true/false 各自文案，带 ms', () => {
+    const withLock = formatDiagLogEntry({ ts: 1, subsystem: 'resume', event: 'settled', detail: { hadLock: true, ms: 850 } });
+    assert.ok(withLock.text.includes('850'));
+    assert.ok(withLock.text.includes('锁'));
+
+    const noLock = formatDiagLogEntry({ ts: 1, subsystem: 'resume', event: 'settled', detail: { hadLock: false, ms: 300 } });
+    assert.ok(noLock.text.includes('300'));
+    assert.ok(!noLock.text.includes('锁'));
+  });
+
+  test('catchup/tick：带 ms 的简短文案', () => {
+    const r = formatDiagLogEntry({ ts: 1, subsystem: 'catchup', event: 'tick', detail: { ms: 12 } });
+    assert.ok(r.text.includes('12'));
+    assert.ok(!r.text.includes('{'));
+  });
+
+  test('message/enqueued：hasAttachments=true/false 各自文案，带 ms', () => {
+    const withAttach = formatDiagLogEntry({ ts: 1, subsystem: 'message', event: 'enqueued', detail: { hasAttachments: true, ms: 500 } });
+    assert.ok(withAttach.text.includes('500'));
+    assert.ok(withAttach.text.includes('附件'));
+
+    const noAttach = formatDiagLogEntry({ ts: 1, subsystem: 'message', event: 'enqueued', detail: { hasAttachments: false, ms: 80 } });
+    assert.ok(noAttach.text.includes('80'));
+    assert.ok(!noAttach.text.includes('附件'));
+  });
+
   test('未识别的 (subsystem,event) 组合 → 兜底渲染，不静默吞掉', () => {
     const r = formatDiagLogEntry({ ts: 1, subsystem: 'mirror', event: 'some_future_event', detail: { foo: 'bar' } });
     assert.ok(r.text.includes('mirror'));
