@@ -6,6 +6,7 @@ const ROOT = join(import.meta.dirname, '..');
 export const AGENT_EVENT_TYPES = Object.freeze([
   'api_retry',
   'device_status',
+  'diag_log',
   'effort_mode',
   'error',
   'history_append',

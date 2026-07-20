@@ -47,6 +47,7 @@ let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
 let deniedDeviceRetryPending = false;
 let mockSessionLogsByInstance = new Map();
+let mockDiagLogsByInstance = new Map(); // 镜像/排队/停止诊断时间线（test:diag-sample 注入）
 // 服务状态面板：确定性 startedAt（mock 进程启动时刻）；deliveryFailure 由 test:service-delivery-failure 注入，
 // rateLimitLockout/clientError（判定化告警）由 test:service-incidents 注入
 const MOCK_SERVICE_STARTED_AT = Date.now();
@@ -124,6 +125,22 @@ function addMockSessionLog(instanceId, text, type = 'sys_info') {
     ts: entry.ts,
     type: 'session_log',
     payload: entry
+  });
+  return entry;
+}
+
+// 镜像/排队/停止诊断时间线（真 server: src/agent/diag-log.js）的 mock 同款——同一 seq:0/epoch:'server'
+// 旁路广播，供 test:diag-sample 场景注入合成事件，验证 console modal 三态过滤 + formatDiagLogEntry 渲染。
+function addMockDiagLog(instanceId, subsystem, event, detail = {}) {
+  const inst = mockInstances.find(i => i.instanceId === instanceId);
+  const entry = { ts: Date.now(), subsystem, event, detail };
+  const logs = mockDiagLogsByInstance.get(instanceId) || [];
+  logs.push(entry);
+  if (logs.length > 100) logs.shift();
+  mockDiagLogsByInstance.set(instanceId, logs);
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: inst?.sessionId || null, instanceId, cwd: inst?.cwd,
+    ts: entry.ts, type: 'diag_log', payload: entry
   });
   return entry;
 }
@@ -772,7 +789,8 @@ io.on('connection', socket => {
         model: inst?.model || activeModel,
         effort: inst?.effort || 'model-default',
         permissionMode: inst?.permissionMode || permissionMode
-      }, ...(mockSessionLogsByInstance.get(instanceId) || [])]
+      }, ...(mockSessionLogsByInstance.get(instanceId) || [])],
+      diagLogs: mockDiagLogsByInstance.get(instanceId) || [],
     });
   });
 
@@ -1340,6 +1358,22 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 3, epoch: activeEpoch, sessionId: mirrorSessionId, instanceId: mirrorInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_mirror_observed_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      command: 'test:diag-sample',
+      run: async ({ cmd, activeInst }) => {
+        // 注入覆盖 mirror/queue/interrupt 三个子系统的合成诊断事件，供 P0-16h 断言 console modal
+        // 三态过滤 + formatDiagLogEntry 渲染出人话而非裸 JSON。末尾照常 emit 一条 result 结束本轮，
+        // 否则前端一直停在 busy（#streamLiveStatus 常驻），waitForIdle 永久超时。
+        console.log(`[mock] ${cmd} — 注入诊断时间线合成事件`);
+        addMockDiagLog(activeInst.instanceId, 'mirror', 'state_change', { reason: 'entry_lock', readonly: true, prevReadonly: false, stale: false });
+        addMockDiagLog(activeInst.instanceId, 'interrupt', 'settled', { outcome: 'success', ms: 12, droppedCount: 0, timedOut: false });
+        addMockDiagLog(activeInst.instanceId, 'queue', 'turn_settled', { wasInterrupted: true, durationMs: 340, isError: false });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: activeInst.sessionId, instanceId: activeInst.instanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_diag_sample_1', durationMs: 340, costUsd: 0, isError: false, models: [activeModel] }
         });
       },
     },

@@ -900,6 +900,14 @@ export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = 
   return true;
 }
 
+// 诊断时间线用：把 catchUpTickOnce 已经算出的 mirrorEntryLock 判定打包成一条可读详情，供
+// diag-log 记录展示——不重复判定逻辑本身（locked 由调用方直接传入 mirrorEntryLock 的返回值），
+// 只加一个 agedOutStale 派生字段，让事后回放能看出"这次没锁，是因为陈旧 pending 还是别的原因"。
+export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), locked } = {}) {
+  const agedOutStale = lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS);
+  return { tailVerdict, localBusy, lastChainTs, agedOutStale, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked };
+}
+
 // 疑似中断判定：锁着 + 尾部 PENDING + 最后链条目距今超阈值（期间零写入）→ 终端可能被强杀/断电、轮次没
 // 写完就死了。前端据此从「⏱ 终端驾驶中」转「⚠️ 疑似中断、可接管」文案（仍保持锁、不自动解锁——接管
 // 始终要用户显式确认）。误判代价低——只是提前显示「可接管」引导，不改变锁态。

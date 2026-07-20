@@ -241,7 +241,15 @@
         </div>
         <button id="consoleClose" class="px-2.5 py-1 rounded bg-gray-800 hover:bg-gray-700 active:scale-95 text-xs font-mono text-gray-400">关闭</button>
       </div>
-      
+
+      <!-- 全部/交互/诊断 三态过滤：诊断=镜像/排队/停止状态机的结构化时间线（事后自诊断用），
+           交互=四跳文本日志（原有）。本地内存过滤，切换不重新请求服务端。 -->
+      <div class="px-4 py-1.5 flex items-center gap-1.5 border-b border-gray-800 shrink-0 font-mono text-[10px]">
+        <button id="consoleFilterAll" data-filter="all" class="console-filter-btn px-2 py-0.5 rounded bg-gray-700 text-gray-200">全部</button>
+        <button id="consoleFilterInteraction" data-filter="interaction" class="console-filter-btn px-2 py-0.5 rounded text-gray-500 hover:text-gray-300">交互</button>
+        <button id="consoleFilterDiag" data-filter="diag" class="console-filter-btn px-2 py-0.5 rounded text-gray-500 hover:text-gray-300">诊断</button>
+      </div>
+
       <!-- Drawer Log Stream Area -->
       <div id="consoleLogArea" class="flex-1 overflow-y-auto px-4 py-3 font-mono text-xs leading-relaxed text-gray-300 space-y-2.5 selection:bg-accent/30 selection:text-white">
         <!-- Log rows will go here -->

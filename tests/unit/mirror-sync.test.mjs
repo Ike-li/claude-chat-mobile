@@ -221,6 +221,33 @@ test('mirrorStaleFlag：锁定 + pending + 零写入超 5 分钟 → stale；未
   assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: null, now }), false, '无时间戳 → 保守非 stale');
 });
 
+// describeMirrorEntryLock：诊断时间线用——只打包 catchUpTickOnce 已经算出的 mirrorEntryLock 判定
+// 供诊断记录展示，不重复判定逻辑本身（locked 由调用方传入，这里只加一个 agedOutStale 派生字段）。
+test('describeMirrorEntryLock：打包判定详情 + agedOutStale 派生字段（不重复判定逻辑）', () => {
+  assert.equal(typeof H.describeMirrorEntryLock, 'function', '待实现：describeMirrorEntryLock');
+  const now = 1_800_000_000_000;
+  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
+  const under = now - H.MIRROR_STALE_PENDING_MS + 1000;
+
+  assert.deepEqual(
+    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: under, now, locked: true }),
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: under, agedOutStale: false, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true },
+    '新鲜 pending 且已锁 → agedOutStale=false',
+  );
+
+  assert.deepEqual(
+    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: false }),
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: false },
+    '陈旧 pending 且未锁 → agedOutStale=true，与 mirrorEntryLock 的不锁判定一致',
+  );
+
+  assert.equal(
+    H.describeMirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, locked: false }).agedOutStale,
+    false,
+    '无时间戳 → agedOutStale 保守为 false（无法判断"多陈旧"）',
+  );
+});
+
 // localBusy（web 自己 busy）时 catchUpTick 仍须重算 mirrorStaleFlag，禁止写死 stale=false——
 // 否则多子代理长期 localBusy 会掩盖「主链 5 分钟无写入」的疑似中断。此处锁纯函数契约。
 test('localBusy 路径仍须能标 stale（readonly+pending+超 5 分钟）', () => {

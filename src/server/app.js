@@ -19,7 +19,8 @@ import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { resolveFreshPrefs, defaultsFromEffectiveSettings } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
+import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from '../ops/notifications.js';
 import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
@@ -843,7 +844,7 @@ function mirrorRemainingMs({ readonly = mirrorReadonly, quietTicks = Number(mirr
   const need = mirrorReleaseTicksNeeded(readonly);
   return Math.max(0, (need - quietTicks) * interval);
 }
-function setMirror(readonly, sessionId, force = false, stale = false, observedCli = mirrorObservedCli, forInstanceId = viewingInstanceId) {
+function setMirror(readonly, sessionId, force = false, stale = false, observedCli = mirrorObservedCli, forInstanceId = viewingInstanceId, reason = null) {
   // forInstanceId = 调用方冻结的 viewing 快照（catchUpTick 入口 id）。切视图后旧 tick 不得改全局锁——
   // 否则 A 的解锁会误解锁 B，A 的上锁会以「当下 viewing」重贴到 B（跨工作区误锁根因）。
   // force 仅给 clearMirrorOnViewChange / 接管后显式解锁：允许在 viewing 已变时推权威态。
@@ -859,6 +860,12 @@ function setMirror(readonly, sessionId, force = false, stale = false, observedCl
       && nextSessionId === mirrorSessionId && nextInstanceId === mirrorInstanceId
       && sameMirrorObserved(nextObserved, mirrorObservedCli)
       && remainingMs === (mirrorLastEmittedRemainingMs ?? -1)) return;
+  // 诊断时间线：只在真正要广播状态变化时才记（上面的早退已过滤掉稳态轮询噪音）。
+  // key 优先用目标 sessionId，解锁广播（sessionId=null）时退回当前实例的 sessionId，仍找不到就诚实丢弃。
+  const diagSessionKey = nextSessionId || sessionId || agents.get(forInstanceId)?.sessionId || null;
+  if (diagSessionKey) {
+    diagLog.record(diagSessionKey, 'mirror', 'state_change', { reason, readonly, prevReadonly: mirrorReadonly, stale });
+  }
   // observedCli 也参与变化判定：CLI 在同一只读轮次里 /model 或 /permissions 后，readonly/stale 不变，
   // 仍必须推一条 mirror_state；否则 Web 会永远停在旧模型/模式。
   mirrorReadonly = readonly; mirrorStale = stale; mirrorObservedCli = nextObserved;
@@ -882,7 +889,7 @@ function clearMirrorOnViewChange() {
   catchUpKey = null;
   mirrorRelease = { readonly: false, quietTicks: 0 };
   mirrorLastSize = -1;
-  setMirror(false, null, true, false);
+  setMirror(false, null, true, false, mirrorObservedCli, viewingInstanceId, 'view_cleared');
 }
 let mirrorLastEmittedRemainingMs = -1;
 let catchUpKey = null;                              // `${cwd}\x00${sessionId}`：当前追平的会话
@@ -896,7 +903,7 @@ let mirrorLastSize = -1;                            // 上一 tick 的 transcrip
 async function catchUpTickOnce() {
   const id = viewingInstanceId;
   const a = id ? agents.get(id) : null;
-  if (!a || !a.sessionId) { catchUpKey = null; mirrorRelease = { readonly: false, quietTicks: 0 }; mirrorLastSize = -1; setMirror(false, null, false, false, undefined, id); return; } // 无查看会话：停、复位释放态
+  if (!a || !a.sessionId) { catchUpKey = null; mirrorRelease = { readonly: false, quietTicks: 0 }; mirrorLastSize = -1; setMirror(false, null, false, false, undefined, id, 'no_session'); return; } // 无查看会话：停、复位释放态
   const key = `${a.cwd}\x00${a.sessionId}`;
   const st = instanceState(id);
   const localBusy = st === 'busy' || st === 'permission';
@@ -957,9 +964,12 @@ async function catchUpTickOnce() {
       now: Date.now(),
     });
     mirrorRelease = { readonly: entryLock, quietTicks: 0 };
+    diagLog.record(a.sessionId, 'mirror', 'entry_lock_decision', describeMirrorEntryLock({
+      tailVerdict: tail.verdict, localBusy, lastChainTs: tail.lastChainTs, now: Date.now(), locked: entryLock,
+    }));
     setMirror(entryLock, a.sessionId, true,              // force 清上个会话残留的锁/发权威态
       mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now() }),
-      observedCli, id);
+      observedCli, id, 'entry_lock');
     return;
   }
   if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
@@ -987,6 +997,7 @@ async function catchUpTickOnce() {
       }),
       undefined,
       id,
+      'busy_tail',
     );
     return;
   }
@@ -1034,7 +1045,7 @@ async function catchUpTickOnce() {
   mirrorRelease = rel.state;
   setMirror(rel.readonly, a.sessionId, false,                       // 锁/stale/CLI 观察值任一变化都广播
     mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now() }),
-    observedCli, id);
+    observedCli, id, 'normal_tick');
 }
 let catchUpInFlight = null;
 function catchUpTick() {
@@ -1624,6 +1635,20 @@ interactionLog.setCallback((key, entry) => {
   }
 });
 
+// 镜像/排队/停止诊断时间线：同款 seq:0/epoch:'server' 旁路广播，不占用 AgentSession 的 seq/环形
+// 缓冲（诊断事件不需要参与 eventsSince 重放/gap 披露那套面向"重建聊天 UI"设计的机制）。
+diagLog.setCallback((key, entry) => {
+  for (const [instanceId, a] of agents) {
+    if (a.logKey() === key || a.sessionId === key || diagLog.provisionalKey(instanceId) === key) {
+      io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
+        seq: 0, epoch: 'server', sessionId: a.sessionId || null, instanceId, cwd: a.cwd,
+        ts: entry.ts, type: 'diag_log', payload: entry,
+      });
+      break;
+    }
+  }
+});
+
 registerSocketConnection(io, socket => {
   console.log(`[conn] ${socket.id} 已连接（来自 ${clientIp(socket.handshake.address)}）`);
   // 只读追平：客户端（重）连时请求下一 tick 重定基线——重连会 loadHistory 重渲全量历史，若沿用滞后 baseline
@@ -1878,7 +1903,7 @@ registerSocketConnection(io, socket => {
       // 被旧 mirrorReadonly 锁在 CLI 来源。失败入队不清锁，仍保持终端权威。
       mirrorRelease = { readonly: false, quietTicks: 0 };
       mirrorLastSize = -1;
-      setMirror(false, a.sessionId, true, false);
+      setMirror(false, a.sessionId, true, false, mirrorObservedCli, viewingInstanceId, 'user_takeover');
     }
     // 只在消息真正成功入队后才登记去重 ID（此后同 ID 重发才判 duplicate、幂等）。
     messageDedupState = commitProcessed(clientMessageId, messageDedupState);
@@ -2456,11 +2481,15 @@ registerSocketConnection(io, socket => {
     const id = payload?.instanceId || viewingInstanceId;
     const a = agents.get(id);
     if (!a) {
-      return ack({ logs: [] });
+      // 实例已不存在（tab 已关闭/实例被回收）：诊断记录挂在 sessionId 上不随实例销毁而销毁，
+      // 显式传 sessionId 仍可查——只有 interactionLog 依赖 provisional key 体系，实例没了查不到。
+      const sid = typeof payload?.sessionId === 'string' ? payload.sessionId : null;
+      return ack({ logs: [], diagLogs: sid ? diagLog.getDiagLogs(sid) : [] });
     }
     // FRESH 首轮 sessionId 未到：读 provisional 缓冲；init rebind 后读真 sessionId
     const logs = interactionLog.getSessionLogs(a.logKey());
-    ack({ logs });
+    const diagLogs = diagLog.getDiagLogs(a.logKey());
+    ack({ logs, diagLogs });
   });
 
   // 前端全局 JS 错误上报：手机浏览器无 devtools，前端运行期错误经此落服务端日志。

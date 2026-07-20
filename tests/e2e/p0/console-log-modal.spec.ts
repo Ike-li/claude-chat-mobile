@@ -161,4 +161,33 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-16h Console 诊断时间线：三态过滤 + 人话渲染（非裸 JSON）', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:diag-sample');
+    await waitForIdle(page);
+
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toBeVisible();
+
+    // 「全部」：诊断行与交互行同屏，且诊断行是判定过的人话，不是裸 {"subsystem":...} JSON
+    await expect(page.locator('#consoleFilterAll')).toBeVisible();
+    await expect(page.locator('#consoleLogArea')).toContainText('镜像锁定');
+    await expect(page.locator('#consoleLogArea')).toContainText('停止成功');
+    await expect(page.locator('#consoleLogArea')).toContainText('轮次因中断结束');
+    await expect(page.locator('#consoleLogArea')).not.toContainText('"subsystem"');
+
+    // 「交互」：诊断行消失，仅剩交互日志
+    await page.locator('#consoleFilterInteraction').click();
+    await expect(page.locator('#consoleLogArea')).not.toContainText('镜像锁定');
+    await expect(page.locator('#consoleLogArea')).not.toContainText('停止成功');
+
+    // 「诊断」：只剩诊断行，交互日志（如 MOCK_LOG session trace）消失
+    await page.locator('#consoleFilterDiag').click();
+    await expect(page.locator('#consoleLogArea')).toContainText('镜像锁定');
+    await expect(page.locator('#consoleLogArea')).not.toContainText('MOCK_LOG');
+
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -134,6 +134,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
         consoleLogArea = $('consoleLogArea');
+  const consoleFilterButtons = [$('consoleFilterAll'), $('consoleFilterInteraction'), $('consoleFilterDiag')].filter(Boolean);
   // 项目文件只读浏览（FR-07）
   const fileBrowseModal = $('fileBrowseModal'), fileBrowseBack = $('fileBrowseBack'),
         fileBrowsePath = $('fileBrowsePath'), fileBrowseClose = $('fileBrowseClose'),
@@ -1341,8 +1342,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       setInstances(p);
     },
     session_log(p) {
-      if (consoleModal && consoleModal.classList.contains('sheet-open')) {
+      if (consoleModal && consoleModal.classList.contains('sheet-open') && consoleFilter !== 'diag') {
         appendLogEntry(p);
+      }
+    },
+    // 诊断时间线（镜像/排队/停止）实时推送：与 session_log 同款 seq:0/epoch:'server' 旁路广播，
+    // 抽屉开着且未把过滤切到"仅交互"时才追加——切到"诊断"/"全部"都应看见。
+    diag_log(p) {
+      if (consoleModal && consoleModal.classList.contains('sheet-open') && consoleFilter !== 'interaction') {
+        appendLogEntry(formatDiagLogEntry(p));
       }
     },
     // 可用模型列表由 init 后 fire-and-forget supportedModels() 推送（含重连/重启后的服务端重放）。
@@ -5625,6 +5633,24 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
   }
 
+  // 全部/交互/诊断 过滤：切换态 + 高亮当前按钮 + 本地重渲（数据已在服务端拉取过，无需重新请求）。
+  function updateConsoleFilterButtons() {
+    for (const btn of consoleFilterButtons) {
+      const active = btn.dataset.filter === consoleFilter;
+      btn.classList.toggle('bg-gray-700', active);
+      btn.classList.toggle('text-gray-200', active);
+      btn.classList.toggle('text-gray-500', !active);
+    }
+  }
+  for (const btn of consoleFilterButtons) {
+    btn.onclick = () => {
+      if (btn.dataset.filter === consoleFilter) return;
+      consoleFilter = btn.dataset.filter;
+      updateConsoleFilterButtons();
+      loadConsoleLogs();
+    };
+  }
+
   // 复制到剪贴板：优先 async Clipboard API；局域网 http（非安全上下文）下它不可用，回退隐藏 textarea+execCommand。
   async function copyToClipboard(text) {
     try {
@@ -5663,7 +5689,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 仍渲染它们，否则首页打开日志抽屉一片空白、断连/重连痕迹全丢（logEntryVisibleForInstance 对 client_conn 恒 true）。
       if (consoleLogArea) {
         consoleLogArea.innerHTML = '';
-        renderLogList(clientLogger.entries().filter(e => logEntryVisibleForInstance(e, null)));
+        renderLogList(filterConsoleEntries(clientLogger.entries().filter(e => logEntryVisibleForInstance(e, null)), consoleFilter));
       }
       return;
     }
@@ -5677,10 +5703,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (res && Array.isArray(res.logs)) {
         mergedLogs = [...res.logs];
       }
+      // 诊断时间线（镜像/排队/停止）：原始 {ts,subsystem,event,detail} 经 formatDiagLogEntry 译成
+      // 判定过的一句话，与交互日志同一时间线合并展示，靠 diag_ 前缀 type 供过滤/着色区分。
+      if (res && Array.isArray(res.diagLogs)) {
+        mergedLogs = mergedLogs.concat(res.diagLogs.map(formatDiagLogEntry));
+      }
       // 只合并属于本实例(或连接级恒显)的 client 日志——修切工作区残留上个区日志（clientLogBuffer 全局无隔离）。
       // 服务端日志(res.logs)已按 sessionId 隔离、无 instanceId 字段，不经此过滤。
       mergedLogs = mergedLogs.concat(clientLogger.entries().filter(e => logEntryVisibleForInstance(e, instId)));
       mergedLogs.sort((a, b) => a.ts - b.ts);
+      mergedLogs = filterConsoleEntries(mergedLogs, consoleFilter);
       if (mergedLogs.length > 200) {
         mergedLogs = mergedLogs.slice(mergedLogs.length - 200);
       }
@@ -5688,6 +5720,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     });
   }
 
+  let consoleFilter = 'all'; // 交互日志抽屉过滤态：all|interaction|diag（切换即本地重渲，不重新请求服务端）
   let lastRenderedLogs = []; // 抽屉当前渲染的条目快照——「复制全部」的所见即所得数据源
   // 批量渲染日志：在恢复段(上次会话)与本次会话交界插一条「—— 本次会话 ——」分隔（isRestoredBoundary）。
   // 实时 onEntry 追加的都是本次(非 restored)、永不触发分隔，故分隔只在此批量路径出现。
@@ -5775,11 +5808,36 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         badgeText = 'stream';
         textClass = 'text-teal-100/90';
         break;
+      // 诊断时间线（镜像/排队/停止）：徽标按子系统身份着色，正文按 severity 着色（见下方覆盖），
+      // 不是像上面几类那样身份色/正文色绑死——这样超时/失败这类事件能在一堆中性事件里视觉跳出来。
+      case 'diag_mirror':
+        badgeSpan.className += ' bg-indigo-950/60 text-indigo-400 border border-indigo-800/40';
+        badgeText = 'mirror';
+        textClass = 'text-gray-300';
+        break;
+      case 'diag_queue':
+        badgeSpan.className += ' bg-orange-950/60 text-orange-400 border border-orange-800/40';
+        badgeText = 'queue';
+        textClass = 'text-gray-300';
+        break;
+      case 'diag_interrupt':
+        badgeSpan.className += ' bg-red-950/60 text-red-400 border border-red-800/40';
+        badgeText = 'interrupt';
+        textClass = 'text-gray-300';
+        break;
+      case 'diag_control':
+        badgeSpan.className += ' bg-slate-800 text-slate-400 border border-slate-600/40';
+        badgeText = 'control';
+        textClass = 'text-gray-300';
+        break;
       default:
         badgeSpan.className += ' bg-gray-800 text-gray-400 border border-gray-700';
         badgeText = p.type || 'log';
         textClass = 'text-gray-300';
     }
+    // 诊断事件正文按 severity 覆盖着色（身份色留在徽标上，见上面 diag_* 分支注释）
+    if (p.severity === 'danger') textClass = 'text-red-300';
+    else if (p.severity === 'warning') textClass = 'text-amber-300';
     badgeSpan.textContent = badgeText;
     meta.appendChild(badgeSpan);
 

@@ -1391,6 +1391,61 @@ export function formatServiceNotices({ service, now } = {}) {
   return notices;
 }
 
+// 诊断时间线（镜像/排队/停止）文案模板：每条事件译成判定过的一句话 + severity，不裸吐 detail
+// JSON——折叠会重蹈 logs:clientError 链路"只知道发生过、不知道具体是哪条"的覆辙，这里刻意保留
+// 每条事件的细节和时间顺序；"判定化"精神只用在 severity 着色上，不用在合并/折叠时间线上。
+const DIAG_TAG_LABEL = {
+  interrupt: '停止', stop_task: '停止单任务', cancel_async_message: '撤回排队消息',
+  set_model: '切换模型', set_permission_mode: '切换权限档',
+};
+export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
+  const d = detail && typeof detail === 'object' ? detail : {};
+  let text, severity = 'neutral';
+  if (event === 'race_settle') {
+    const tagLabel = DIAG_TAG_LABEL[d.tag] || d.tag || '控制请求';
+    if (d.ok) {
+      text = `${tagLabel} 成功（${d.ms}ms）`;
+    } else {
+      text = `${tagLabel} 失败：${d.error || 'timeout'}（${d.ms}ms）`;
+      severity = 'danger';
+    }
+  } else if (subsystem === 'mirror' && event === 'state_change') {
+    text = d.readonly ? `🔒 镜像锁定（${d.reason || '未知'}）` : `🔓 镜像解锁（${d.reason || '未知'}）`;
+  } else if (subsystem === 'mirror' && event === 'entry_lock_decision') {
+    text = d.locked
+      ? `🔒 切入即锁定：终端疑似在跑（尾部=${d.tailVerdict}）`
+      : `👀 切入未锁：${d.agedOutStale ? '陈旧挂起，判定已过期' : `尾部=${d.tailVerdict}`}`;
+  } else if (subsystem === 'interrupt' && event === 'settled') {
+    if (d.outcome === 'success') {
+      text = d.droppedCount > 0 ? `⏹ 停止成功（丢弃 ${d.droppedCount} 条排队消息，${d.ms}ms）` : `⏹ 停止成功（${d.ms}ms）`;
+    } else if (d.outcome === 'forced_settle') {
+      text = d.timedOut ? `⏱ 停止超时，已强制收口（${d.ms}ms）` : `⚠️ 停止被拒，已强制收口（${d.ms}ms）`;
+      severity = 'warning';
+    } else if (d.outcome === 'no_task') {
+      text = 'ℹ️ 当前无可中断任务';
+    } else if (d.outcome === 'disposed') {
+      text = '实例已释放，停止请求作废';
+    } else {
+      text = `⏹ 停止：${d.outcome ?? '未知结果'}`;
+    }
+  } else if (subsystem === 'queue' && event === 'turn_settled') {
+    text = d.wasInterrupted ? '轮次因中断结束' : `轮次结束（${Number.isFinite(d.durationMs) ? d.durationMs + 'ms' : '?'}）`;
+  } else {
+    // 未识别的 (subsystem,event) 组合：兜底渲染，不静默吞掉（延续 agent.js map() 对未映射 SDK 消息的既有原则）
+    text = `${subsystem}/${event} ${JSON.stringify(d).slice(0, 200)}`;
+  }
+  return { ts, type: `diag_${subsystem}`, text, severity };
+}
+
+// 交互日志抽屉「全部｜交互｜诊断」三态过滤：诊断行的 type 统一 diag_ 前缀。未知 filter 值保守
+// 原样返回（不误伤显示）。
+export function filterConsoleEntries(entries, filter) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (filter === 'diag') return list.filter(e => String(e?.type || '').startsWith('diag_'));
+  if (filter === 'interaction') return list.filter(e => !String(e?.type || '').startsWith('diag_'));
+  return list;
+}
+
 // 子 agent 事件判定：agent.js 对 parent_tool_use_id 消息分流 emit 时带 parentToolUseId。
 // 前端 text_delta/thinking_delta/tool_use/tool_result 用它决定「嵌进子 agent 卡」vs「主流气泡」。
 // 只认非空字符串——数字/空串都当主流，防脏字段把主对话误收进卡。

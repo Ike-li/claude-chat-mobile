@@ -4,6 +4,7 @@
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { randomUUID } from 'node:crypto';
 import * as interactionLog from './interaction-log.js';
+import * as diagLog from './diag-log.js';
 import { sanitize } from '../shared/sanitizer.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
@@ -15,6 +16,16 @@ const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几
 // ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
 const TOOL_INPUT_TTL_MS = 10 * 60 * 1000; // 缓存 input 存活 10 分钟
+// _raceControlRequest 的 tag → 诊断时间线 subsystem 归类：interrupt/stop_task 属于"停止"，
+// cancel_async_message 属于"排队"，set_model/set_permission_mode 走同一条通道但既非排队也非停止，
+// 归入诚实的第四档 control，不强行塞进另外两类致使语义失真。
+const CONTROL_TAG_SUBSYSTEM = {
+  interrupt: 'interrupt',
+  stop_task: 'interrupt',
+  cancel_async_message: 'queue',
+  set_model: 'control',
+  set_permission_mode: 'control',
+};
 
 // 会话生命周期用户可见文案（可恢复类 error）。统一前缀，避免「会话已结束」歧义：
 // 磁盘会话通常还在，掐掉的是子进程 / 在途轮。前端 error bar 原样展示。
@@ -366,17 +377,27 @@ export class AgentSession {
   // 只是把「永远不 settle」转成「有限时间内必定 settle（成功或超时失败）」。
   async _raceControlRequest(promiseFactory, tag) {
     const p = promiseFactory?.();
-    if (!p || typeof p.then !== 'function') return p;
+    if (!p || typeof p.then !== 'function') return p; // 非 promise 的退化路径：不记录
     const ms = Number(this.interruptTimeoutMs);
-    if (!(ms > 0)) return p;
+    if (!(ms > 0)) return p; // 测试用的"禁用超时"路径：不记录，避免污染大量既有用例
+    const startedAt = Date.now();
     let timer = null;
     try {
-      return await Promise.race([
+      const result = await Promise.race([
         p,
         new Promise((_, rej) => {
           timer = setTimeout(() => rej(new Error(`${tag}_timeout`)), ms);
         }),
       ]);
+      diagLog.record(this.logKey(), CONTROL_TAG_SUBSYSTEM[tag] || 'control', 'race_settle',
+        { tag, ok: true, ms: Date.now() - startedAt });
+      return result;
+    } catch (err) {
+      diagLog.record(this.logKey(), CONTROL_TAG_SUBSYSTEM[tag] || 'control', 'race_settle', {
+        tag, ok: false, ms: Date.now() - startedAt,
+        error: sanitize(String(err?.message || err)).slice(0, 200),
+      });
+      throw err;
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -437,6 +458,9 @@ export class AgentSession {
       this.terminating = true;
       try { this.abort?.abort(); } catch { /* noop */ }
     };
+    const _diagStartedAt = Date.now();
+    let _diagOutcome = null, _diagTimedOut = false;
+    try {
     try {
       await raceInterrupt();
       // AG-NEW-004：await 间隙若实例已被 dispose，仍须结算 pending 与 pendingTurns 账面，
@@ -452,6 +476,7 @@ export class AgentSession {
           this.denyKinds.set(toolUseID, 'cancelled');
           try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
         }
+        _diagOutcome = 'disposed';
         return;
       }
       // 成功中断：丢弃 toDrop（中断前排队的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
@@ -478,8 +503,9 @@ export class AgentSession {
         this.emit('system', { message: '排队中的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
       }
       this.emit('system', { message: '已中断', kind: 'interrupted' }); // M7：kind 字段，勿靠字符串匹配
+      _diagOutcome = 'success';
     } catch (err) {
-      const timedOut = err && /interrupt_timeout/.test(String(err.message || err));
+      _diagTimedOut = !!(err && /interrupt_timeout/.test(String(err.message || err)));
       // 账面仍有在途轮 / CLI 排队条（含限流重试挂着）→ 强制收口；纯空闲拒中断才走「无可中断任务」旧路径
       // 注意：不把 dropped（本地 queue 快照）单独当 in-flight——单测/竞态下 queue 与 pendingTurns 可能脱节，
       // 旧语义是「SDK 说没任务就把 toDrop 放回」；只有 pendingTurns>0 或 cliQueued 才强制收口。
@@ -488,15 +514,24 @@ export class AgentSession {
         this.pendingTurns = Math.max(0, this.pendingTurns - dropped - (cliDropped ? 1 : 0));
         if (hadInFlight) this.pendingTurns = 0;
         this.cliQueued = null;
+        _diagOutcome = 'disposed';
         return;
       }
-      if (hadInFlight || timedOut) {
+      if (hadInFlight || _diagTimedOut) {
+        _diagOutcome = 'forced_settle';
         settleForce();
         return;
       }
       // SDK 无在途任务 → 不丢消息：把 toDrop 放回队列头部（await 期间新发的接其后），pendingTurns 不动。
       this.queue = toDrop.concat(this.queue);
       this.emit('system', { message: '当前没有可中断的任务' });
+      _diagOutcome = 'no_task';
+    }
+    } finally {
+      diagLog.record(this.logKey(), 'interrupt', 'settled', {
+        outcome: _diagOutcome, ms: Date.now() - _diagStartedAt, pendingTurnsAfter: this.pendingTurns,
+        droppedCount: dropped, cliDropped: !!cliDropped, timedOut: _diagTimedOut,
+      });
     }
   }
 
@@ -1582,6 +1617,9 @@ export class AgentSession {
         this.totalApiDurationMs += msg.duration_api_ms || 0;
         const wasInterrupted = this._awaitingInterruptResult; // P1-4：一次性消费，防误标到后续无关的 result
         this._awaitingInterruptResult = false;
+        diagLog.record(this.logKey(), 'queue', 'turn_settled', {
+          pendingTurnsAfter: this.pendingTurns, wasInterrupted, isError: !!msg.is_error, durationMs: msg.duration_ms,
+        });
         this.emit('result', {
           messageId: this.currentMessageId,
           durationMs: msg.duration_ms,
