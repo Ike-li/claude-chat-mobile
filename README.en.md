@@ -9,6 +9,8 @@
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#quick-start)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
+**Claude Code keeps running, but you're not always at your computer.** You ask claude to change code, then leave for a meeting — when it needs permission, a push arrives on your phone; open the app to see details and allow or deny. Back at your desk, `/resume` in the terminal picks up the same session you continued from your phone — same agent, same log, not a new one.
+
 This project is for people who already use the `claude` CLI in a terminal. It does not bundle Claude, and it is not a reimplementation. It drives your logged-in local CLI through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). The phone sees the same agent, the same `CLAUDE.md`, the same MCP servers, skills, hooks, and session logs.
 
 The goal is narrow: **edit code, run commands, approve dangerous actions, and resume earlier conversations from your phone**. Both sides read the same on-disk CLI session log, but this is **not** a screen mirror of your terminal, and **not** a shared TTY where both ends type into the same session at once — only one driver (Web or CLI) writes at a time; the other side is read-only catch-up. While the CLI is running, the Web UI defaults to a read-only mirror; takeover waits for the current turn to finish before writing.
@@ -121,7 +123,7 @@ Pick one for your situation. Commands are in [Quick Start](#quick-start) above a
 
 ## Cost Note
 
-**Currently (as of 2026-06-26): Agent SDK / `claude -p` usage still draws from your subscription quota, in the same pool as interactive use**. On the official subscription path, this project does not incur separate billing.
+**Currently (as of 2026-07-20): Agent SDK / `claude -p` usage still draws from your subscription quota, in the same pool as interactive use**. On the official subscription path, this project does not incur separate billing.
 
 Background: Anthropic once announced that, starting 2026-06-15, SDK *headless* usage would move to a separate credit pool (Max 5x $100/month at API rates), but **that change was paused on the day it shipped and never took effect** ([official Help Center](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)). Anthropic says it will rework the plan and give advance notice. This is a pause, not a cancellation.
 
@@ -205,4 +207,4 @@ In short: you are free to use, study, modify, and self-host this software. But i
 
 ## Friend Links
 
-- [LINUX DO](https://linux.do/)
+- [LINUX DO](https://linux.do/) — a Chinese-language developer community (site is in Chinese)
