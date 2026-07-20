@@ -152,6 +152,19 @@
   .shot h3 { font-size:17px; font-weight:600; margin-bottom:5px; }
   .shot p { font-size:14.5px; color:var(--ink-faint); }
 
+  /* Moments / when it helps */
+  .moments { display:grid; grid-template-columns:repeat(3,1fr); gap:18px; }
+  .moment {
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-lg);
+    padding:22px 20px 20px; box-shadow:var(--shadow-card);
+  }
+  .moment .n { font-family:var(--font-mono); font-size:12px; color:var(--accent); font-weight:600; letter-spacing:.04em; }
+  .moment h3 { font-size:17.5px; font-weight:600; margin:8px 0 8px; line-height:1.3; }
+  .moment p { font-size:14.5px; color:var(--ink-soft); line-height:1.58; }
+  .moments-note {
+    max-width:40em; margin:28px auto 0; text-align:center; font-size:14.5px; color:var(--ink-faint); line-height:1.55;
+  }
+
   /* Features */
   .features { display:grid; grid-template-columns:repeat(2,1fr); gap:20px; }
   .card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius-lg); padding:26px; box-shadow:var(--shadow-card); }
@@ -196,6 +209,7 @@
     .hero .phone { order:-1; }
     .action-grid { grid-template-columns:1fr; gap:30px; }
     .shots { grid-template-columns:1fr; max-width:340px; margin:0 auto; }
+    .moments { grid-template-columns:1fr; max-width:420px; margin:0 auto; }
     .features { grid-template-columns:1fr; }
     .sec-list { grid-template-columns:1fr; }
   }
@@ -266,6 +280,50 @@
         <img src="./demo.gif" loading="lazy" width="600" height="1299" alt="Stream a reply, watch tool cards, then approve a git push from your phone">
       </div>
     </div>
+  </div>
+</section>
+
+<!-- ── When it helps (from promo moments-full scenarios) ── -->
+<section id="moments">
+  <div class="wrap">
+    <div class="sec-head">
+      <div class="kicker" data-i18n="moments.kicker">When it helps</div>
+      <h2 data-i18n="moments.heading">Claude Code is running. You are not always at the desk.</h2>
+      <p data-i18n="moments.sub">Common moments for a pocket entry to your real local CLI—not a remote desktop, not another hosted Claude.</p>
+    </div>
+    <div class="moments">
+      <div class="moment">
+        <div class="n">01</div>
+        <h3 data-i18n="moments.m1t">Approve from a meeting or the road</h3>
+        <p data-i18n="moments.m1b">A long task stalls on a dangerous step or a multiple-choice question. Push reaches your phone with the full command and working directory—tap allow, deny, or an option without walking back to the terminal.</p>
+      </div>
+      <div class="moment">
+        <div class="n">02</div>
+        <h3 data-i18n="moments.m2t">Peek while the desk still drives</h3>
+        <p data-i18n="moments.m2b">CLI is still writing the session; you only want progress, not to interrupt. Open the same session read-only, then take over when you mean to. You follow the transcript—not a live terminal screen mirror.</p>
+      </div>
+      <div class="moment">
+        <div class="n">03</div>
+        <h3 data-i18n="moments.m3t">Start on phone, resume at the desk</h3>
+        <p data-i18n="moments.m3b">Same CLI transcript on both sides. Sketch on the phone, then /resume on the computer—continue the thread, not a second conversation.</p>
+      </div>
+      <div class="moment">
+        <div class="n">04</div>
+        <h3 data-i18n="moments.m4t">Watch several repos at once</h3>
+        <p data-i18n="moments.m4b">Switch whitelisted workspaces and tabs instead of jamming multiple desktop windows onto a phone remote desktop.</p>
+      </div>
+      <div class="moment">
+        <div class="n">05</div>
+        <h3 data-i18n="moments.m5t">Capture an idea with phone-first input</h3>
+        <p data-i18n="moments.m5b">Slash commands you can tap, attach from the photo library or files, long-press to copy. Built for touch—not a shrunk terminal. Not a claim of camera-only “snap and send”.</p>
+      </div>
+      <div class="moment">
+        <div class="n">06</div>
+        <h3 data-i18n="moments.m6t">Stay in the loop on flaky networks</h3>
+        <p data-i18n="moments.m6b">If the instance is online and reachable, reconnect and replay missed output after a drop. That is reconnect—not offline mode in airplane mode.</p>
+      </div>
+    </div>
+    <p class="moments-note" data-i18n="moments.note">Self-hosted, one user per instance. Works where your CLI already works (subscription or gateway). Not multi-tenant SaaS.</p>
   </div>
 </section>
 
@@ -418,6 +476,22 @@ npm start              <span class="c"># http://localhost:3000</span>
       'action.l2': 'Claude streams back, threaded with Read · Edit · Bash(npm test) tool cards.',
       'action.l3': 'You unlock. The page has reconnected and replayed the missed output: tests passed, and one approval is waiting with the full git commit command and working directory. You tap Allow.',
       'action.l4': '"Now add a line to the CHANGELOG." It remembers what it just changed, and picks up right where it left off.',
+      'moments.kicker': 'When it helps',
+      'moments.heading': 'Claude Code is running. You are not always at the desk.',
+      'moments.sub': 'Common moments for a pocket entry to your real local CLI—not a remote desktop, not another hosted Claude.',
+      'moments.m1t': 'Approve from a meeting or the road',
+      'moments.m1b': 'A long task stalls on a dangerous step or a multiple-choice question. Push reaches your phone with the full command and working directory—tap allow, deny, or an option without walking back to the terminal.',
+      'moments.m2t': 'Peek while the desk still drives',
+      'moments.m2b': 'CLI is still writing the session; you only want progress, not to interrupt. Open the same session read-only, then take over when you mean to. You follow the transcript—not a live terminal screen mirror.',
+      'moments.m3t': 'Start on phone, resume at the desk',
+      'moments.m3b': 'Same CLI transcript on both sides. Sketch on the phone, then /resume on the computer—continue the thread, not a second conversation.',
+      'moments.m4t': 'Watch several repos at once',
+      'moments.m4b': 'Switch whitelisted workspaces and tabs instead of jamming multiple desktop windows onto a phone remote desktop.',
+      'moments.m5t': 'Capture an idea with phone-first input',
+      'moments.m5b': 'Slash commands you can tap, attach from the photo library or files, long-press to copy. Built for touch—not a shrunk terminal. Not a claim of camera-only “snap and send”.',
+      'moments.m6t': 'Stay in the loop on flaky networks',
+      'moments.m6b': 'If the instance is online and reachable, reconnect and replay missed output after a drop. That is reconnect—not offline mode in airplane mode.',
+      'moments.note': 'Self-hosted, one user per instance. Works where your CLI already works (subscription or gateway). Not multi-tenant SaaS.',
       'shots.heading': 'A phone UI for the local CLI',
       'shots.t1': 'Streaming', 'shots.p1': 'Markdown · syntax highlight · status line',
       'shots.t2': 'Visible process', 'shots.p2': 'tool calls render as collapsible cards',
@@ -475,6 +549,22 @@ npm start              <span class="c"># http://localhost:3000</span>
       'action.l2': '屏幕流式出现 claude 的回复，夹着 Read · Edit · Bash(npm test) 的工具调用卡片。',
       'action.l3': '你解锁。页面已重连并补上错过的输出：测试通过，一条待批准的权限请求带着完整 git commit 命令和工作目录。你点"允许"。',
       'action.l4': '"再给 CHANGELOG 补一行。" 它记得刚才改了什么，直接续上。',
+      'moments.kicker': '什么时候用得上',
+      'moments.heading': 'Claude Code 在跑，人却不总在电脑前。',
+      'moments.sub': '本机 CLI 的随身入口——不是远程桌面，也不是另一个网页 Claude。',
+      'moments.m1t': '会中 / 出门卡住，手机点一下',
+      'moments.m1b': '长任务卡在危险操作或选择题上。推送到手机：完整命令与工作目录，点允许、拒绝或选项，不必回工位戳终端。',
+      'moments.m2t': '电脑还在跑，只想瞄一眼',
+      'moments.m2b': '终端仍在驾驶时，手机只读追看进度，需要再接管。追的是会话记录，不是把终端活画面实时镜像过来。',
+      'moments.m3t': '同一会话，换设备继续',
+      'moments.m3b': '两端读同一份 CLI transcript。路上手机起头，回家终端 /resume 接上——接着聊，不是另开一个会话。',
+      'moments.m4t': '多仓库并行看',
+      'moments.m4b': '在白名单工作区与标签间切换进度，比手机远程桌面里挤多个窗口更顺。',
+      'moments.m5t': '灵感来了，手机输入更顺',
+      'moments.m5b': '可点的斜杠命令、相册或文件附图、长按复制。触控优先，不是缩小终端。附图来自相册/文件，不是宣传「拍照直传摄像头」。',
+      'moments.m6t': '弱网也能接上，不是离线',
+      'moments.m6b': '实例在线且网络可达时，断线后重连并补发错过的输出。这是重连，不是飞机模式也能深度改代码。',
+      'moments.note': '自托管、每实例单用户。CLI 能跑通的路径（官方订阅或网关），Web 就按同一环境接。不是多租户 SaaS。',
       'shots.heading': '给本机 CLI 做的手机界面',
       'shots.t1': '流式输出', 'shots.p1': 'Markdown · 语法高亮 · 状态行',
       'shots.t2': '过程可见', 'shots.p2': '工具调用渲染成可折叠卡片',
