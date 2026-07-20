@@ -936,10 +936,8 @@ async function catchUpTickOnce() {
     try { seedMsgs = await getSessionHistory(a.sessionId, a.cwd); }
     catch { return; }
     const seedLen = seedMsgs.length;
-    catchUpKey = key;
     // SS-001：seed 时同步 lastTailKey，否则下一 tick 满窗会把「首次记指纹」当滑动误 reload
-    catchUpState = { baseline: seedLen, wasBusy: localBusy, lastTailKey: historyTailKey(seedMsgs) };
-    mirrorLastSize = -1;                                 // 基线未建立：切入首个正常 tick 只记 size、不判增长
+    const seededState = { baseline: seedLen, wasBusy: localBusy, lastTailKey: historyTailKey(seedMsgs) };
     // 切入预判（2026-07-12 单驾驶员）：按尾部形态立即预锁——PENDING=有人正驱动（终端轮次未完结），
     // 堵「切走再切回、终端还在跑但要等下一条 text 落盘才锁」的空窗。旧「切入不预锁」是因为当时唯一
     // 判据 mtime 不可信（web resume 自身刷 mtime）；尾部形态是语义判据、可信。localBusy 豁免见 mirrorEntryLock。
@@ -949,7 +947,10 @@ async function catchUpTickOnce() {
     try { observedCli = await readCliObservedState(a.sessionId, a.cwd); } catch { /* 读失败显未知 */ }
     observedCli = mergeCliObserved(observedCli, a.sessionId, a.cwd);
     if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
-                                                              // await 让出后视图/实例/session 可能已变：旧观察结果全部作废
+                                        // await 让出后视图/实例/session 可能已变：旧观察结果与待提交基线全部作废，不提交
+    catchUpKey = key;
+    catchUpState = seededState;
+    mirrorLastSize = -1;                                 // 基线未建立：切入首个正常 tick 只记 size、不判增长
     const entryLock = mirrorEntryLock({
       tailVerdict: tail.verdict,
       localBusy,
@@ -963,17 +964,18 @@ async function catchUpTickOnce() {
     return;
   }
   if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
-    catchUpState = { baseline: catchUpState.baseline, wasBusy: true, lastTailKey: catchUpState.lastTailKey ?? null };
-    mirrorLastSize = -1;                                             // 作废 size 基线：己方 turn 会写盘涨 size，不能算终端 keep-alive；localBusy 结束后首个正常 tick 重建
     const rel = mirrorReleaseStep(mirrorRelease, {
       externalWrite: false, localBusy: true, releaseTicks: mirrorReleaseTicksNeeded(),
     });
-    mirrorRelease = rel.state;
     // 仍须重算 stale：写死 false 会在 web 长期 busy（多子代理/bgTasks）时掩盖「主链已 5 分钟无写入」的疑似中断。
     // 追平仍抑制；只轻读 tail 形态（与正常路径同一 mirrorStaleFlag）。
     let busyTail = { verdict: 'settled', lastChainTs: null };
     try { busyTail = await classifyTranscriptTail(a.sessionId, a.cwd); } catch { /* 读失败保守 settled：不误标 stale */ }
     if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
+                                        // await 让出后视图/实例/session 可能已变：待提交状态全部作废，不提交
+    catchUpState = { baseline: catchUpState.baseline, wasBusy: true, lastTailKey: catchUpState.lastTailKey ?? null };
+    mirrorLastSize = -1;                                             // 作废 size 基线：己方 turn 会写盘涨 size，不能算终端 keep-alive；localBusy 结束后首个正常 tick 重建
+    mirrorRelease = rel.state;
     setMirror(
       rel.readonly,
       a.sessionId,
