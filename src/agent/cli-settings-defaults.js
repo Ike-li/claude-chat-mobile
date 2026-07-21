@@ -1,13 +1,21 @@
-// cli-settings-defaults.js —— FRESH 会话 / 空首页的配置权威源（L3 CLI settings）纯函数。
+// cli-settings-defaults.js —— 配置权威源纯函数：FRESH 会话/空首页（resolveFreshPrefs）+
+// resume 场景 effort 一项的兜底（resolveResumeEffort，见下方"例外"说明）。
 //
 // 权威源分层（见会话设计结论）：
 //   L0 用户此刻意图（pending by cwd）
 //   L1 活进程（本模块不处理）
-//   L2 会话持久化（resume 路径，本模块不处理）
+//   L2 会话持久化（resume 路径，本模块原则上不处理）
 //   L3 CLI settings 合并结果（resolveSettings().effective）
 //   L4 产品硬默认（mode=default, effort=null）
 //
-// 规则：FRESH 初值 = L0 ?? L3 ?? L4；resume 禁止走本模块。
+// 规则：FRESH 初值 = L0 ?? L3 ?? L4；resume 的 mode/model 禁止走本模块——L2（transcript 末档 /
+// sessions.json 持久值）是比 L3 更权威的历史信号，用今天的全局 CLI settings 覆盖历史事实是错的
+// （mode 见 readLastPermissionMode/ec93a2d；model 见 readLastAssistantModel）。
+// 例外：resume 的 effort 允许走本模块（resolveResumeEffort）。CLI 从不把 effort 落 transcript
+// （ec93a2d 记录的已知边界），sessions.json 里的 effort 又因 onSessionId 每次 init 无条件回写
+// 而无法区分"用户曾显式选模型默认"与"从未有过任何信息"——resume 场景没有比 L3 更权威、可能被
+// L3 误盖掉的历史事实，L3 兜底只是补全"历史事实本就不存在"时的展示/取值，风险与 mode/model
+// 不对称，故单独放行。
 
 /** CCM 支持的权限档（与 server user:setPermissionMode / 前端 select 对齐；含 SDK 的 auto） */
 export const CCM_PERMISSION_MODES = Object.freeze([
@@ -96,4 +104,30 @@ export function resolveFreshPrefs({
     : baseEffort;
 
   return { mode, effort, model: baseModel };
+}
+
+/**
+ * RESUME 会话 effort 兜底链（resume 场景专用；FRESH 走 resolveFreshPrefs，不要混用）。
+ * 权威源优先级：saved（sessions.json 持久值）> inherited（同 cwd 存活实例继承）> L3 CLI settings > null（L4）。
+ *
+ * 三层一律经 normalizeEffortLevel 归一——它把 null/undefined/''/非法档统一收作 null，这天然让
+ * "显式记了 null"与"压根没记"在这条链里等价、一并继续往下兜底，不再被当成"已确定的终值"锁死。
+ * 这是刻意选择：sessions.json 的 effort=null 从第一天起就有两种成因——用户在 user:setEffort 里
+ * 显式选"模型默认"，或某次 resume 冷启动在真无信息时兜底写回的 null——两者落盘后字面完全同形，
+ * 本函数也无意新增字段去区分。这不丢真实语义：null 在本产品里只表示"不强制覆盖，--effort 不传，
+ * 交给 CLI 自己的 settings.effortLevel 决定"（agent.js this.effort 用法），CLI 自己决定的依据正是
+ * L3；用户当下主动选"模型默认"的意图经 openInstance 的显式 effort 参数分支立即生效，不经过、
+ * 也不依赖本函数——本函数只管"当下没有显式意图时，该按什么权威顺序找一个此刻值得展示/采用的档"。
+ *
+ * @param {object} opts
+ * @param {string|null|undefined} [opts.savedEffort] sessions.json 持久值（saved?.effort，键不存在则 undefined）
+ * @param {string|null|undefined} [opts.inheritedEffortValue] 同 cwd 存活实例继承档（inheritedEffort(cwd)）
+ * @param {{ effort?: string|null }|null} [opts.cliDefaults] L3 缓存（cliDefaultsByCwd.get(cwd) || null）
+ * @returns {string|null}
+ */
+export function resolveResumeEffort({ savedEffort, inheritedEffortValue, cliDefaults = null } = {}) {
+  const saved = normalizeEffortLevel(savedEffort);
+  const inherited = normalizeEffortLevel(inheritedEffortValue);
+  const l3 = cliDefaults && 'effort' in cliDefaults ? normalizeEffortLevel(cliDefaults.effort) : null;
+  return saved ?? inherited ?? l3 ?? null;
 }

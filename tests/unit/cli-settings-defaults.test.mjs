@@ -1,5 +1,6 @@
 // tests/unit/cli-settings-defaults.test.mjs —— FRESH/空首页配置权威源纯函数（零 token）。
-// 契约：新会话 L0 pending > L3 CLI settings > L4 硬默认；resume 不走本模块。
+// 契约：新会话 L0 pending > L3 CLI settings > L4 硬默认；resume 的 mode/model 不走本模块，
+// effort 例外（resolveResumeEffort：saved > inherited > L3，见该函数注释）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -7,6 +8,7 @@ import {
   normalizeEffortLevel,
   defaultsFromEffectiveSettings,
   resolveFreshPrefs,
+  resolveResumeEffort,
   CCM_PERMISSION_MODES,
 } from '../../src/agent/cli-settings-defaults.js';
 
@@ -137,6 +139,68 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
     assert.equal(
       resolveFreshPrefs({ cliDefaults: { mode: 'default', effort: null, model: 'sonnet' } }).model,
       'sonnet',
+    );
+  });
+});
+
+test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，全部按归一后 ?? 语义折叠）', () => {
+  const cliHigh = { mode: 'default', effort: 'high', model: undefined };
+
+  test('saved 有非空值 → 直接采用，不看后两层', () => {
+    assert.equal(
+      resolveResumeEffort({ savedEffort: 'low', inheritedEffortValue: 'max', cliDefaults: cliHigh }),
+      'low',
+    );
+  });
+
+  test('saved 缺失（undefined，从未在 web 端记录过）→ 落到 inherited', () => {
+    assert.equal(
+      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: 'max', cliDefaults: cliHigh }),
+      'max',
+    );
+  });
+
+  test('saved 显式 null（陷阱：可能是用户选过模型默认，也可能只是上次冷启动兜底写入）→ 仍继续往下兜底，不当终值', () => {
+    assert.equal(
+      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: 'max', cliDefaults: cliHigh }),
+      'max',
+    );
+  });
+
+  test('saved / inherited 都空 → 落到 L3 CLI settings（本次修复的核心场景：从未碰过 web 的旧会话）', () => {
+    assert.equal(
+      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: null, cliDefaults: cliHigh }),
+      'high',
+    );
+    assert.equal(
+      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: undefined, cliDefaults: cliHigh }),
+      'high',
+    );
+  });
+
+  test('inherited 显式 null（该 cwd 末活实例本身也是模型默认）→ 同样继续往下兜底到 L3', () => {
+    assert.equal(
+      resolveResumeEffort({ savedEffort: undefined, inheritedEffortValue: null, cliDefaults: cliHigh }),
+      'high',
+    );
+  });
+
+  test('三层全空、L3 也未配置 effortLevel → 落回 null（诚实边界，非 bug）', () => {
+    assert.equal(resolveResumeEffort({}), null);
+    assert.equal(
+      resolveResumeEffort({ savedEffort: null, inheritedEffortValue: null, cliDefaults: null }),
+      null,
+    );
+  });
+
+  test('cliDefaults.effort 缺省键 → 视为 null，不把 undefined 当有值', () => {
+    assert.equal(resolveResumeEffort({ cliDefaults: { mode: 'default' } }), null);
+  });
+
+  test('非法档一律归一为 null 再继续兜底', () => {
+    assert.equal(
+      resolveResumeEffort({ savedEffort: 'garbage', inheritedEffortValue: null, cliDefaults: cliHigh }),
+      'high',
     );
   });
 });

@@ -17,7 +17,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
-import { resolveFreshPrefs, defaultsFromEffectiveSettings } from '../agent/cli-settings-defaults.js';
+import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
@@ -1303,11 +1303,14 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   }
   // 档位初值优先级：显式入参（mode/effort 已定义，如 setEffort 置换）>
   //   FRESH: L0 pending > L3 CLI settings（cliDefaultsByCwd）> L4 硬默认 ｜
-  //   RESUME: saved 持久化值 > transcriptMode > 继承该 cwd 末实例档。
+  //   RESUME mode: saved 持久化值 > transcriptMode > 继承该 cwd 末实例档（inheritedMode 兜底 'default'）｜
+  //   RESUME effort: saved 持久化值 > 继承该 cwd 末实例档 > L3 CLI settings > null（resolveResumeEffort）。
   // A1（2026-06-22）：新会话(FRESH)不继承 cwd 末实例档——贴终端等价（新起 claude 是干净默认）。
   // 2026-07-14：FRESH 的「干净默认」= resolveSettings 合并结果，不再写死 default/null。
-  // resume 权限档：saved（sessions.json）> transcriptMode（CLI 末档）> inherited。
-  // effort 无 transcript 对称恢复：CLI 常不落盘 effort → 纯 CLI 续接仍可能回落模型默认（已知边界）。
+  // resume 权限档：saved（sessions.json）> transcriptMode（CLI 末档）> inherited——mode 有 transcript
+  // 这条更权威的历史信号，不读 L3（见 cli-settings-defaults.js 头注）。
+  // resume 思考强度：CLI 无对称 transcript 恢复手段（已知边界），2026-07-21 起 saved/inherited 都空时
+  // 改读 L3 CLI settings 兜底，不再硬 null——effort 没有比 L3 更权威、可能被误盖的历史信号。
   const isFresh = !resumeId;
   const fresh = isFresh
     ? resolveFreshPrefs({
@@ -1332,7 +1335,11 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     eff = fresh.effort;
     pendingEffortByCwd.delete(cwd);
   } else {
-    eff = saved?.effort !== undefined ? saved.effort : inheritedEffort(cwd);
+    eff = resolveResumeEffort({
+      savedEffort: saved?.effort,
+      inheritedEffortValue: inheritedEffort(cwd),
+      cliDefaults: cliDefaultsByCwd.get(cwd) || null,
+    });
   }
   permModeByInstance.set(id, mode);
   effortByInstance.set(id, eff);
@@ -1491,6 +1498,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
 // 历史遗留的保守兜底值；收紧到 1800ms 仍留约 6× 正常路径余量，只在 `claude agents --json` 真正异常
 // 挂起时才会等满——不改变 listCliAgents 本身「超时/失败即 fail-open」这个既有行为。
 const RESUME_LOCK_CHECK_TIMEOUT_MS = 1800;
+// L3 CLI settings（ensureCliDefaults）只为 effort 的 resume 兜底展示/取值服务（resolveResumeEffort），
+// 不是 resume 必须等待的强依赖——SDK resolveSettings 文档标注首次调用可能触发 MDM 查询子进程
+// （macOS plutil / Windows reg.exe），超预算就放弃这次的 L3 值（照旧落 null，即改动前的既有行为），
+// 不能让一次异常慢的 settings 读拖住 resume。超时不取消该 Promise：settle 后仍会写入
+// cliDefaultsByCwd，供同 cwd 下一次 resume 命中缓存。
+const CLI_DEFAULTS_RESUME_BUDGET_MS = 1200;
 
 // resume 开实例的异步封装：新开前先读 transcript 末条 permission-mode 恢复权限档（纯 CLI 会话 sessions.json
 // 无档时的恢复来源，见 readLastPermissionMode）。openInstance 本身保持同步（避免重入竞态）；读盘只在此异步前置。
@@ -1498,18 +1511,24 @@ const RESUME_LOCK_CHECK_TIMEOUT_MS = 1800;
 //
 // CLI bg 独占锁：若 session 被 `claude agents` 登记为 background，SDK resume 会立刻失败（「running as a
 // background agent」）。web 续接前自动 SIGTERM 该类后台进程（不动 interactive），保证「CLI 会话 web 能开」。
-// 性能优化：释放锁 / 读末条权限档 / 读末条模型三路互无数据依赖（前者只为释放锁的副作用，不产出后两者
-// 消费的值），原实现「先 await 锁检查再并行读两个 transcript」是可避免的串行，改用 prepareResumeInParallel
-// 三路从入口就并发——不改锁检查本身的判断条件/时序语义，只改它和另外两路的调度关系。
+// 性能优化：释放锁 / 读末条权限档 / 读末条模型 / L3 CLI settings 兜底四路互无数据依赖（第一路只为释放锁
+// 的副作用，不产出后三路消费的值），全部从入口就并发——不改锁检查本身的判断条件/时序语义，只改调度关系。
 async function openResumeInstance(cwd, resumeId, extra = {}) {
   const t0 = Date.now();
   let prep = { attempted: false }, transcriptMode = null, transcriptModel = null;
   if (resumeId) {
-    ({ prep, transcriptMode, transcriptModel } = await prepareResumeInParallel({
-      prepare: () => prepareSessionForWebResume(resumeId, { claudeBin, cwd, timeoutMs: RESUME_LOCK_CHECK_TIMEOUT_MS, waitMs: 350 }),
-      readMode: () => readLastPermissionMode(resumeId, cwd),
-      readModel: () => readLastAssistantModel(resumeId, cwd),
-    }));
+    const [prepResult] = await Promise.all([
+      prepareResumeInParallel({
+        prepare: () => prepareSessionForWebResume(resumeId, { claudeBin, cwd, timeoutMs: RESUME_LOCK_CHECK_TIMEOUT_MS, waitMs: 350 }),
+        readMode: () => readLastPermissionMode(resumeId, cwd),
+        readModel: () => readLastAssistantModel(resumeId, cwd),
+      }),
+      Promise.race([
+        ensureCliDefaults(cwd),
+        new Promise(resolve => setTimeout(resolve, CLI_DEFAULTS_RESUME_BUDGET_MS)),
+      ]),
+    ]);
+    ({ prep, transcriptMode, transcriptModel } = prepResult);
     if (prep.log) interactionLog.addSessionLog(resumeId, 'sys_info', prep.log);
     else if (prep.error) console.warn('[cli-bg-lock] prepareSessionForWebResume failed:', prep.error?.message || prep.error);
   }
