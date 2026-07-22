@@ -5913,6 +5913,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         badgeText = 'control';
         textClass = 'text-gray-300';
         break;
+      case 'diag_statusline':
+        badgeSpan.className += ' bg-cyan-950/60 text-cyan-400 border border-cyan-800/40';
+        badgeText = 'usage';
+        textClass = 'text-gray-300';
+        break;
       default:
         badgeSpan.className += ' bg-gray-800 text-gray-400 border border-gray-700';
         badgeText = p.type || 'log';

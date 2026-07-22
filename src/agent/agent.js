@@ -151,6 +151,7 @@ export class AgentSession {
 
     // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
     this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
+    this.lastRateUnavailableReason = null; // 额度(5h/7d)不可用原因去重锚点：fetchUsage()/statusline.buildWebStatusLine 协作判断"原因是否变化"，仅变化时才记诊断日志
     // per-turn 秒表/输出 token（CLI 式动态状态行 ✻ Verb… (Ns · ↓ tokens)，经 status_line.turn 透出）：
     this.turnStartedAt = null;    // 本轮开始时间戳（send/合成轮置位，result 无排队轮清 null）
     this.turnOutputTokens = 0;    // 本轮累计输出 token（跨 message 累加）
@@ -590,13 +591,31 @@ export class AgentSession {
   // 超时 / 无 q / 无方法 / 抛错 → null（statusline 字段省略，不崩）。
   // 原始对象交给 statusline.usageBitsForStatusLine 解析；API 标 EXPERIMENTAL_MAY_CHANGE、会漂。
   async fetchUsage(timeoutMs = 1500) {
-    if (typeof this.q?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') return null;
+    if (typeof this.q?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') {
+      this._recordRateUnavailable('rpc_no_method');
+      return null;
+    }
     try {
       return await Promise.race([
         this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
         new Promise((_, rej) => setTimeout(() => rej(new Error('usage timeout')), timeoutMs)),
       ]);
-    } catch { return null; }
+    } catch (err) {
+      this._recordRateUnavailable('rpc_error', {
+        message: String(err?.message || err), timedOut: err?.message === 'usage timeout',
+      });
+      return null;
+    }
+  }
+
+  // 诊断：仅"原因变化"时才记诊断时间线（高频刷新——300ms 防抖/10s 兜底轮询——下同一原因不重复写，
+  // 防止刷屏挤占 100 条环形缓冲、也防止 diagLog 实时广播刷屏诊断面板）。成功路径【不】调用本方法——
+  // 是否已恢复交给下游 statusline.buildWebStatusLine 依据本次 usage 内容接力判定。
+  _recordRateUnavailable(reason, extra = {}) {
+    if (reason === this.lastRateUnavailableReason) return;
+    diagLog.record(this.logKey(), 'statusline', 'rate_reason_change',
+      { reason, previousReason: this.lastRateUnavailableReason, ...extra });
+    this.lastRateUnavailableReason = reason;
   }
 
   // 权限档切换（与 send 的 setModel 同型，差分——仅档位真变才调 SDK）。
@@ -1269,6 +1288,7 @@ export class AgentSession {
           if (this.sessionId && msg.session_id !== this.sessionId) {
             this.firstMessage = null;
             this.lastUsage = null; // E16：换会话上下文清零，旧 ctx% 不得残留显示
+            this.lastRateUnavailableReason = null; // 换会话清零，避免新会话被旧会话的"未变化"误判吞掉首次诊断
             this.lastToolName = null;      // 切换会话清工具名
             this.bgTasks.clear();          // 换会话清空活后台注册表（旧会话后台任务不串到新会话）
             this.subagentTypeByParent.clear(); // 换会话清空子 agent 类型缓存（旧会话子 agent 类型不串到新会话）
@@ -1278,6 +1298,7 @@ export class AgentSession {
           this.sessionId = msg.session_id;
           if (prevLogKey && prevLogKey !== this.sessionId) {
             interactionLog.rebindSessionLogs(prevLogKey, this.sessionId);
+            diagLog.rebindDiagLogs(prevLogKey, this.sessionId);
           }
           // 权限档以 SDK init 上报的 msg.permissionMode 为权威「实际生效档」——这是唯一能证明
           // setPermissionMode/ExitPlanMode 等是否真被 SDK 应用的 SDK 源头凭证（模型同理走 msg.model）。

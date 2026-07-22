@@ -166,6 +166,97 @@ test.describe('interrupt() 整体结果 → diag-log interrupt/settled', () => {
   });
 });
 
+test.describe('fetchUsage() 失败 → diag-log statusline/rate_reason_change（去重防刷屏）', () => {
+  test('无方法首次调用 → 记一条 reason:rpc_no_method，previousReason:null', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-diag-nomethod' });
+    s.q = { interrupt: async () => {} }; // 无 usage_EXPERIMENTAL... 方法
+    await s.fetchUsage();
+    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].event, 'rate_reason_change');
+    assert.equal(entries[0].detail.reason, 'rpc_no_method');
+    assert.equal(entries[0].detail.previousReason, null);
+    s.dispose();
+  });
+
+  test('无方法连续两次调用 → 仅记一条（去重，防高频刷新刷屏）', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-diag-nomethod-dedup' });
+    s.q = { interrupt: async () => {} };
+    await s.fetchUsage();
+    await s.fetchUsage();
+    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 1);
+    s.dispose();
+  });
+
+  test('RPC 抛错 → 记一条 reason:rpc_error，detail.message 含错误信息', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-diag-error' });
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { throw new Error('boom'); } };
+    await s.fetchUsage();
+    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].detail.reason, 'rpc_error');
+    assert.ok(entries[0].detail.message.includes('boom'));
+    assert.equal(entries[0].detail.timedOut, false);
+    s.dispose();
+  });
+
+  test('RPC 超时 → 记一条 reason:rpc_error，detail.timedOut:true', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-diag-timeout' });
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}) };
+    await s.fetchUsage(10);
+    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].detail.reason, 'rpc_error');
+    assert.equal(entries[0].detail.timedOut, true);
+    s.dispose();
+  });
+
+  test('原因切换（无方法→抛错）→ 记两条，reason 依次变化', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-diag-switch' });
+    s.q = { interrupt: async () => {} }; // 无方法
+    await s.fetchUsage();
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { throw new Error('x'); } };
+    await s.fetchUsage();
+    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0].detail.reason, 'rpc_no_method');
+    assert.equal(entries[1].detail.reason, 'rpc_error');
+    assert.equal(entries[1].detail.previousReason, 'rpc_no_method');
+    s.dispose();
+  });
+
+  test('成功调用 → 不新增记录、不清空 lastRateUnavailableReason（恢复判定交给 statusline 层）', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-diag-success-after-fail' });
+    s.q = { interrupt: async () => {} };
+    await s.fetchUsage(); // 记一条 rpc_no_method
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({ rate_limits_available: true }) };
+    await s.fetchUsage(); // 成功：不应记录、不应清空字段
+    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 1);
+    assert.equal(s.lastRateUnavailableReason, 'rpc_no_method');
+    s.dispose();
+  });
+});
+
+test.describe('init 接线 → diagLog.rebindDiagLogs（FRESH 首轮 provisional 记录不丢）', () => {
+  test('init 到达前的诊断记录，init 后仍可用真 sessionId 读到', async () => {
+    const { s } = makeSession({ instanceId: 'rebind-diag-test' });
+    const pk = s.logKey(); // 未定 sessionId：provisional key
+    s.interruptTimeoutMs = 20;
+    s.q = { interrupt() { return new Promise(() => {}); } };
+    await s.interrupt(); // 造一条 provisional 期诊断记录（interrupt/race_settle + interrupt/settled）
+    assert.ok(diagLog.getDiagLogs(pk).length > 0, '前置条件：provisional key 下应已有记录');
+
+    s.map({ type: 'system', subtype: 'init', session_id: 'rebind-real-sid', model: 'opus', cwd: '/tmp/test' });
+
+    assert.equal(s.sessionId, 'rebind-real-sid');
+    assert.deepEqual(diagLog.getDiagLogs(pk), [], 'rebind 后 provisional key 应清空');
+    assert.ok(diagLog.getDiagLogs('rebind-real-sid').length > 0, 'rebind 后应能用真 sessionId 读到 provisional 期记录');
+    s.dispose();
+  });
+});
+
 test.describe('result 分支 → diag-log queue/turn_settled', () => {
   test('正常 result（未中断）→ turn_settled(wasInterrupted:false)', () => {
     const { s } = makeSession();

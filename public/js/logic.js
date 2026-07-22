@@ -1419,6 +1419,14 @@ const DIAG_TAG_LABEL = {
   interrupt: '停止', stop_task: '停止单任务', cancel_async_message: '撤回排队消息',
   set_model: '切换模型', set_permission_mode: '切换权限档',
 };
+// statusline 额度(5h/7d)不可用原因 → 一句话文案。third_party_auth 是预期状态（API Key/Bedrock/
+// Vertex 等本就不带订阅额度），非故障；其余三种代表"本该有却没显示"，值得警觉。
+const RATE_REASON_LABEL = {
+  rpc_no_method: 'Claude Code 版本过旧，暂不支持额度查询接口',
+  rpc_error: 'SDK 额度接口调用失败或超时',
+  third_party_auth: '当前鉴权（API Key / Bedrock / Vertex 等）不提供订阅额度信息',
+  no_valid_window: 'SDK 返回的额度数据缺失或超出正常范围',
+};
 export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
   const d = detail && typeof detail === 'object' ? detail : {};
   let text, severity = 'neutral';
@@ -1457,6 +1465,15 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
     text = `追平巡检一次（${d.ms}ms）`;
   } else if (subsystem === 'message' && event === 'enqueued') {
     text = d.hasAttachments ? `消息已入队（含附件，${d.ms}ms）` : `消息已入队（${d.ms}ms）`;
+  } else if (subsystem === 'statusline' && event === 'rate_reason_change') {
+    if (d.reason) {
+      const label = RATE_REASON_LABEL[d.reason] || d.reason;
+      text = `📊 额度显示不可用：${label}${d.message ? `（${d.message}）` : ''}`;
+      severity = d.reason === 'third_party_auth' ? 'neutral' : 'warning';
+    } else {
+      const prevLabel = RATE_REASON_LABEL[d.previousReason] || d.previousReason || '未知原因';
+      text = `📊 额度显示已恢复（此前：${prevLabel}）`;
+    }
   } else {
     // 未识别的 (subsystem,event) 组合：兜底渲染，不静默吞掉（延续 agent.js map() 对未映射 SDK 消息的既有原则）
     text = `${subsystem}/${event} ${JSON.stringify(d).slice(0, 200)}`;

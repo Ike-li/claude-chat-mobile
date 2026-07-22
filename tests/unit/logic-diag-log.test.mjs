@@ -90,6 +90,31 @@ test.describe('formatDiagLogEntry：判定过的一句话 + severity，不裸吐
     assert.ok(!noAttach.text.includes('附件'));
   });
 
+  test('statusline/rate_reason_change：四种 reason 各自文案，third_party_auth=neutral，其余=warning', () => {
+    const noMethod = formatDiagLogEntry({ ts: 1, subsystem: 'statusline', event: 'rate_reason_change', detail: { reason: 'rpc_no_method', previousReason: null } });
+    assert.equal(noMethod.type, 'diag_statusline');
+    assert.equal(noMethod.severity, 'warning');
+    assert.ok(!noMethod.text.includes('{'));
+
+    const rpcError = formatDiagLogEntry({ ts: 1, subsystem: 'statusline', event: 'rate_reason_change', detail: { reason: 'rpc_error', message: 'usage timeout', previousReason: null } });
+    assert.equal(rpcError.severity, 'warning');
+    assert.ok(rpcError.text.includes('usage timeout'), 'message 应拼进文案');
+
+    const thirdParty = formatDiagLogEntry({ ts: 1, subsystem: 'statusline', event: 'rate_reason_change', detail: { reason: 'third_party_auth', previousReason: null } });
+    assert.equal(thirdParty.severity, 'neutral', '第三方鉴权是预期状态，非故障');
+    assert.ok(thirdParty.text.includes('鉴权'));
+
+    const noWindow = formatDiagLogEntry({ ts: 1, subsystem: 'statusline', event: 'rate_reason_change', detail: { reason: 'no_valid_window', previousReason: null } });
+    assert.equal(noWindow.severity, 'warning');
+    assert.ok(!noWindow.text.includes('{'));
+  });
+
+  test('statusline/rate_reason_change：reason 为空 → 恢复文案，引用 previousReason 对应文案', () => {
+    const recovered = formatDiagLogEntry({ ts: 1, subsystem: 'statusline', event: 'rate_reason_change', detail: { reason: null, previousReason: 'third_party_auth' } });
+    assert.ok(recovered.text.includes('恢复'));
+    assert.ok(recovered.text.includes('鉴权'), '应引用此前 third_party_auth 对应的文案');
+  });
+
   test('未识别的 (subsystem,event) 组合 → 兜底渲染，不静默吞掉', () => {
     const r = formatDiagLogEntry({ ts: 1, subsystem: 'mirror', event: 'some_future_event', detail: { foo: 'bar' } });
     assert.ok(r.text.includes('mirror'));

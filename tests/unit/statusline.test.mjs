@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd } from '../../src/ops/statusline.js';
+import { getDiagLogs } from '../../src/agent/diag-log.js';
 
 const usage = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
 
@@ -289,6 +290,76 @@ test.describe('buildWebStatusLine：fetchUsage 接线（5h/7d + lines）', () =>
       cwd: undefined
     });
     assert.equal(disposed.rate, undefined);
+  });
+});
+
+test.describe('buildWebStatusLine：额度不可用 → diag-log statusline/rate_reason_change（去重）', () => {
+  test('rate_limits_available:false → 记 reason:third_party_auth', async () => {
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: 'test-sid-third-party',
+      lastRateUnavailableReason: null, // 真实 Agent 构造函数里的初始值
+      fetchUsage: async () => ({ rate_limits_available: false, rate_limits: { five_hour: { utilization: 10 } } })
+    };
+    await buildWebStatusLine({ agent, cwd: undefined });
+    const entries = getDiagLogs('test-sid-third-party').filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].detail.reason, 'third_party_auth');
+    assert.equal(entries[0].detail.previousReason, null);
+  });
+
+  test('utilization 越界导致 rate 整段缺失 → 记 reason:no_valid_window', async () => {
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: 'test-sid-no-window',
+      fetchUsage: async () => ({ rate_limits: { five_hour: { utilization: 150 }, seven_day: { utilization: -5 } } })
+    };
+    await buildWebStatusLine({ agent, cwd: undefined });
+    const entries = getDiagLogs('test-sid-no-window').filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].detail.reason, 'no_valid_window');
+  });
+
+  test('同一 agent 连续两次同失败态 → 只记一条（去重）', async () => {
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: 'test-sid-dedup',
+      fetchUsage: async () => ({ rate_limits_available: false })
+    };
+    await buildWebStatusLine({ agent, cwd: undefined });
+    await buildWebStatusLine({ agent, cwd: undefined });
+    const entries = getDiagLogs('test-sid-dedup').filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 1);
+  });
+
+  test('原因切换（third_party_auth → no_valid_window）→ 记两条', async () => {
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: 'test-sid-switch',
+      fetchUsage: async () => ({ rate_limits_available: false })
+    };
+    await buildWebStatusLine({ agent, cwd: undefined });
+    agent.fetchUsage = async () => ({ rate_limits: { five_hour: { utilization: 999 } } });
+    await buildWebStatusLine({ agent, cwd: undefined });
+    const entries = getDiagLogs('test-sid-switch').filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0].detail.reason, 'third_party_auth');
+    assert.equal(entries[1].detail.reason, 'no_valid_window');
+    assert.equal(entries[1].detail.previousReason, 'third_party_auth');
+  });
+
+  test('失败恢复到有效数据 → 记一条恢复（reason:null），再次调用同样健康数据不重复记', async () => {
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: 'test-sid-recover',
+      fetchUsage: async () => ({ rate_limits_available: false })
+    };
+    await buildWebStatusLine({ agent, cwd: undefined });
+    agent.fetchUsage = async () => ({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 20 } } });
+    await buildWebStatusLine({ agent, cwd: undefined });
+    const entries = getDiagLogs('test-sid-recover').filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 2);
+    assert.equal(entries[1].detail.reason, null);
+    assert.equal(entries[1].detail.previousReason, 'third_party_auth');
+
+    await buildWebStatusLine({ agent, cwd: undefined }); // 仍健康：不应再新增
+    const entries2 = getDiagLogs('test-sid-recover').filter(e => e.subsystem === 'statusline');
+    assert.equal(entries2.length, 2);
   });
 });
 
