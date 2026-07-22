@@ -634,6 +634,14 @@
           <div id="doctorReport" class="hidden p-2.5 rounded-xl border border-line bg-surface text-xs space-y-0.5"></div>
           <!-- 服务状态面板入口：运行时长/指标/告警（#serviceStatusModal，接线在 app.js） -->
           <button id="btnServiceStatus" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">📊 服务状态 · 运行时长 / 版本 / 告警 →</button>
+          <!-- GitHub 仓库外链：纯静态 <a>，无需 app.js 接线，浏览器原生新标签页打开 -->
+          <a id="linkGithub" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener noreferrer"
+            class="w-full flex items-center gap-2 text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" aria-label="在浏览器打开 GitHub 仓库">
+            <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.9.57.1.78-.25.78-.55 0-.27-.01-1.13-.02-2.04-3.2.7-3.88-1.35-3.88-1.35-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.5 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.84 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.08.78 2.17 0 1.57-.01 2.83-.01 3.22 0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/>
+            </svg>
+            <span>GitHub 仓库 · 源码 / Issue / Star →</span>
+          </a>
         </div>
       </div>
 
