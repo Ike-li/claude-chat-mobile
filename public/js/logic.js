@@ -926,6 +926,18 @@ export function shouldBindBusyFromBroadcast({ state, bgActive } = {}) {
   return shouldSeedBusyFromInstanceState(state);
 }
 
+// 看门狗：上面单向对齐的代价——终止事件（result/error/interrupted）若被实例路由过滤丢弃或丢包，
+// 本地 liveLine 会永久卡在 busy=true 空转（见 ccm 现场：会话已结束、spinner 仍在跑）。这里补另一半：
+// 服务端 stateOf() 已把后台任务折进 'busy'（instance-manager.js），故此处只看 state 而非 bgActive——
+// 真后台任务期 state 仍是 'busy'，不会被误清。宽限期防止刚发送、服务端 pendingTurns 尚未计入广播的
+// 乐观 busy 窗口被误清（同量级于 app.js 的 SEND_ACK_FALLBACK_MS）。
+export const BUSY_BROADCAST_CLEAR_GRACE_MS = 5000;
+export function shouldForceClearBusyFromBroadcast({ state, localBusy = false, turnStartTs = null, now = 0, graceMs = BUSY_BROADCAST_CLEAR_GRACE_MS } = {}) {
+  if (!localBusy || shouldSeedBusyFromInstanceState(state)) return false;
+  if (!turnStartTs) return true;
+  return (now - turnStartTs) >= graceMs;
+}
+
 // bindView 切视图时是否该清空输入框未发送草稿。思考强度/模型切档在 SDK 层无运行时切换能力，后端 dispose
 // 旧实例 + resume 同会话开新实例（instanceId 变了、sessionId 不变），前端只看 viewingInstanceId 变化就判定
 // 为「切到另一个会话」而清空草稿——这是误伤：用户视角仍在同一个聊天里，只是底层实例被静默替换。

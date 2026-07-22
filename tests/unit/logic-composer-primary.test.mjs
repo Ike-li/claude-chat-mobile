@@ -11,6 +11,8 @@ import {
   shouldSeedBusyFromInstanceState,
   shouldReseedBusyAfterReload,
   shouldBindBusyFromBroadcast,
+  shouldForceClearBusyFromBroadcast,
+  BUSY_BROADCAST_CLEAR_GRACE_MS,
   queuedBubbleState,
   resolveCancelRefill,
   shouldClearInterruptPendingOnSystem,
@@ -320,6 +322,38 @@ test('shouldBindBusyFromBroadcast: 单向绑定，bgActive 门控', () => {
   // {state:'idle'} / {} → false
   assert.equal(shouldBindBusyFromBroadcast({ state: 'idle' }), false);
   assert.equal(shouldBindBusyFromBroadcast({}), false);
+});
+
+// 看门狗：终止事件（result/error/interrupted）丢失时，本地 liveLine 会永久卡在 busy=true（见
+// shouldBindBusyFromBroadcast 的单向设计——broadcast 只能置 true）。这里补另一半：broadcast 权威态
+// 确认不是 busy/permission、且已过宽限期（防止刚发送、服务端 pendingTurns 尚未计入广播的乐观窗口
+// 被误清）时，判定强制清空。
+test('shouldForceClearBusyFromBroadcast: 本地不忙 → 恒 false（无需清）', () => {
+  assert.equal(shouldForceClearBusyFromBroadcast({ state: 'idle', localBusy: false, turnStartTs: 0, now: 999999 }), false);
+});
+
+test('shouldForceClearBusyFromBroadcast: state 仍是 busy/permission → false（真的还在跑，不清）', () => {
+  assert.equal(shouldForceClearBusyFromBroadcast({ state: 'busy', localBusy: true, turnStartTs: 0, now: 999999 }), false);
+  assert.equal(shouldForceClearBusyFromBroadcast({ state: 'permission', localBusy: true, turnStartTs: 0, now: 999999 }), false);
+});
+
+test('shouldForceClearBusyFromBroadcast: state 非 busy 但未过宽限期 → false（防误清刚发送的乐观窗口）', () => {
+  assert.equal(shouldForceClearBusyFromBroadcast({
+    state: 'idle', localBusy: true, turnStartTs: 1000, now: 1000 + BUSY_BROADCAST_CLEAR_GRACE_MS - 1,
+  }), false);
+});
+
+test('shouldForceClearBusyFromBroadcast: state 非 busy 且已过宽限期（含边界 ==）→ true', () => {
+  for (const state of ['idle', 'done', 'error', 'aborted', undefined]) {
+    assert.equal(shouldForceClearBusyFromBroadcast({
+      state, localBusy: true, turnStartTs: 1000, now: 1000 + BUSY_BROADCAST_CLEAR_GRACE_MS,
+    }), true, `state=${state}`);
+  }
+});
+
+test('shouldForceClearBusyFromBroadcast: 缺 turnStartTs（防御性兜底）→ 只要非 busy/permission 就直接放行清空', () => {
+  assert.equal(shouldForceClearBusyFromBroadcast({ state: 'idle', localBusy: true, turnStartTs: null, now: 1 }), true);
+  assert.equal(shouldForceClearBusyFromBroadcast({ state: 'idle', localBusy: true, now: 1 }), true);
 });
 
 // ---- 排队可见性 + 撤回回填（对齐 CLI Queued/ESC）----
