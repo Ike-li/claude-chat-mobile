@@ -4,6 +4,7 @@
 ## Primary
 - https://ike-li.github.io/claude-chat-mobile/
 - https://ike-li.github.io/claude-chat-mobile/en/quickstart.html
+- https://ike-li.github.io/claude-chat-mobile/en/security.html
 - https://github.com/Ike-li/claude-chat-mobile
 
 ## Handbook (Chinese)

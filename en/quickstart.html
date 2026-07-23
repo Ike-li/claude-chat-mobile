@@ -217,7 +217,7 @@ node scripts/doctor.js --fix  # tighten .env and data JSON → 0600</code></pre>
 node scripts/device.js approve &lt;ID&gt;</code></pre>
   <div class="callout warn">
     <strong>Security</strong>
-    This is a remotely reachable code-execution channel into your shell. Single-user per instance. Read the security model before exposing anything beyond your LAN: <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">安全模型</a> (Chinese handbook) or <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md · Security Model</a>.
+    This is a remotely reachable code-execution channel into your shell. Single-user per instance. Read the security model before exposing anything beyond your LAN: <a href="./security.html" hreflang="en">English Security Model</a> · <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">中文安全模型</a> · <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md</a>.
   </div>
 
   <h2 id="iron-rules">Security iron rules (quotable)</h2>
@@ -228,6 +228,7 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
     <li><strong>Device trust (TOFU)</strong> — first non-local client needs <code>device.js approve</code> (Access JWT can skip).</li>
     <li><strong>Not Anthropic’s official app</strong> — independent open source; drives your local CLI via the <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.</li>
   </ol>
+  <p>Full write-up: <a href="./security.html">English Security Model</a>.</p>
 
   <h2 id="troubleshoot">If something fails</h2>
   <table>
@@ -273,6 +274,7 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
 
   <h2 id="next">Next</h2>
   <ul>
+    <li><a href="./security.html">English security model</a></li>
     <li><a href="../">Product landing</a></li>
     <li><a href="../docs-site/" hreflang="zh-CN">Full project handbook (Chinese)</a></li>
     <li><a href="https://github.com/Ike-li/claude-chat-mobile">Source on GitHub</a></li>
@@ -284,7 +286,8 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
     <span>Claude Chat Mobile</span>
     <span aria-hidden="true">·</span>
     <span>Maintained by <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a></span>
-    <a href="../en/quickstart.html" hreflang="en">English quickstart</a>
+    <a href="./quickstart.html" hreflang="en">English quickstart</a>
+    <a href="./security.html" hreflang="en">English security</a>
     <a href="../docs-site/pages/quickstart.html" hreflang="zh-CN">中文快速开始</a>
     <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE">AGPL-3.0-only</a>
     <time datetime="2026-07-23">Updated 2026-07-23</time>

@@ -13,6 +13,12 @@
     <priority>0.9</priority>
   </url>
   <url>
+    <loc>https://ike-li.github.io/claude-chat-mobile/en/security.html</loc>
+    <lastmod>2026-07-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
     <loc>https://ike-li.github.io/claude-chat-mobile/docs-site/</loc>
     <lastmod>2026-07-22</lastmod>
     <changefreq>weekly</changefreq>

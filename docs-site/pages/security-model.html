@@ -6,6 +6,9 @@
 <title>安全模型 · Claude Chat Mobile</title>
 <meta name="description" content="单用户、token 不出本机、权限继承 CLI、设备 TOFU。">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html">
+<link rel="alternate" hreflang="zh-CN" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html">
+<link rel="alternate" hreflang="en" href="https://ike-li.github.io/claude-chat-mobile/en/security.html">
+<link rel="alternate" hreflang="x-default" href="https://ike-li.github.io/claude-chat-mobile/en/security.html">
 <link rel="stylesheet" href="../assets/style.css">
 <script>window.__BASE__='../';</script>
 <script type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Claude Chat Mobile","item":"https://ike-li.github.io/claude-chat-mobile/"},{"@type":"ListItem","position":2,"name":"项目全景手册","item":"https://ike-li.github.io/claude-chat-mobile/docs-site/"},{"@type":"ListItem","position":3,"name":"安全模型","item":"https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html"}]}</script>
@@ -54,6 +57,12 @@
     </div>
   </header>
 <p class="lead-extra">安全模型围绕一句话展开：这是<strong>每实例单用户</strong>的自托管桥，不是多租户 SaaS。任何通过鉴权的请求，都与机主本人坐在本机终端前拥有同等权限。权威叙述在 README「安全模型」节。</p>
+
+<div class="callout note"><div class="body">
+<strong>English</strong> Security model for non-Chinese readers: <a href="../../en/security.html" hreflang="en">English Security Model</a>（与 README.en.md 对齐）。
+</div></div>
+
+
 
 <div class="callout danger"><div class="body">
 <strong>危险</strong>这是一条可远程触达、直通本机 shell 的代码执行通道。暴露到公网前必须完成 token、设备门、CLI 权限与（建议）Cloudflare Access 的审查。

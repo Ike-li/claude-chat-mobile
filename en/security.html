@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Security Model — Claude Chat Mobile</title>
+<meta name="description" content="Security model for Claude Chat Mobile: single-user per instance, AUTH_TOKEN binds loopback when empty, CLI allow-list inheritance, device TOFU. Read before public exposure.">
+<link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/en/security.html">
+<link rel="alternate" hreflang="en" href="https://ike-li.github.io/claude-chat-mobile/en/security.html">
+<link rel="alternate" hreflang="zh-CN" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html">
+<link rel="alternate" hreflang="x-default" href="https://ike-li.github.io/claude-chat-mobile/en/security.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Security Model — Claude Chat Mobile">
+<meta property="og:description" content="Self-hosted bridge into your shell. Single-user, token-gated, CLI permissions, device trust.">
+<meta property="og:url" content="https://ike-li.github.io/claude-chat-mobile/en/security.html">
+<meta property="og:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {"@type":"ListItem","position":1,"name":"Claude Chat Mobile","item":"https://ike-li.github.io/claude-chat-mobile/"},
+    {"@type":"ListItem","position":2,"name":"Security Model","item":"https://ike-li.github.io/claude-chat-mobile/en/security.html"}
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Claude Chat Mobile Security Model",
+  "inLanguage": "en",
+  "description": "Security model for a self-hosted mobile Web UI that drives a real local claude CLI.",
+  "url": "https://ike-li.github.io/claude-chat-mobile/en/security.html",
+  "author": {"@type":"Person","name":"Ike-li","url":"https://github.com/Ike-li"},
+  "isPartOf": {"@type":"SoftwareApplication","name":"Claude Chat Mobile","url":"https://ike-li.github.io/claude-chat-mobile/"}
+}
+</script>
+<style>
+  :root {
+    --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
+    --line:#E3E0D6; --line-soft:#ECEAE1;
+    --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
+    --accent:#C96442; --accent-deep:#AE5238; --accent-wash:#F0E4DD;
+    --warn-bg:#F7EFE4; --warn-ink:#7A4E1E;
+    --ok-bg:#E8F0EA; --ok-ink:#2F5C3A;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --font-read: Georgia, Charter, "Times New Roman", serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --radius:0.625rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas:#121211; --surface:#1C1B1A; --surface-sunk:#161514;
+      --line:#2E2C2A; --line-soft:#242221;
+      --ink:#EEEEEC; --ink-soft:#A3A19D; --ink-faint:#7A7874;
+      --accent:#D97757; --accent-deep:#E2886A; --accent-wash:#2D231E;
+      --warn-bg:#2A2218; --warn-ink:#E0B57A;
+      --ok-bg:#1A2620; --ok-ink:#8FBE9A;
+    }
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    font-family:var(--font-ui); background:var(--canvas); color:var(--ink);
+    line-height:1.65; -webkit-font-smoothing:antialiased;
+  }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  code, pre { font-family:var(--font-mono); }
+  code {
+    background:var(--surface-sunk); border:1px solid var(--line-soft);
+    padding:.08em .35em; border-radius:.28em; font-size:.9em; color:var(--accent-deep);
+  }
+  .wrap { max-width:720px; margin:0 auto; padding:0 22px; }
+  nav {
+    position:sticky; top:0; z-index:20;
+    background:color-mix(in srgb, var(--canvas) 86%, transparent);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line-soft);
+  }
+  .nav-in { display:flex; align-items:center; gap:12px; height:56px; }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:600; color:var(--ink); }
+  .brand:hover { text-decoration:none; }
+  .mark {
+    width:26px; height:26px; border-radius:7px; background:var(--accent); color:#F4F3EE;
+    display:grid; place-items:center; font-family:var(--font-read); font-size:16px;
+  }
+  .nav-spacer { flex:1; }
+  .nav-in a.meta { font-size:14px; color:var(--ink-soft); }
+  header.page { padding:40px 0 18px; }
+  .kicker { font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--accent); letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; }
+  h1 { font-family:var(--font-read); font-size:clamp(28px,4vw,38px); line-height:1.15; font-weight:600; letter-spacing:-.02em; margin-bottom:12px; }
+  .lead { font-size:17.5px; color:var(--ink-soft); margin-bottom:14px; }
+  .alts { font-size:14px; color:var(--ink-faint); margin-bottom:8px; }
+  main { padding-bottom:64px; }
+  h2 { font-family:var(--font-read); font-size:22px; margin:32px 0 12px; font-weight:600; }
+  h3 { font-size:16.5px; margin:18px 0 8px; font-weight:600; }
+  p, li { font-size:15.5px; color:var(--ink); }
+  ul, ol { padding-left:1.25em; margin:8px 0 14px; }
+  li { margin:6px 0; }
+  pre {
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px 16px; overflow:auto; font-size:13.5px; line-height:1.55; margin:12px 0 16px;
+    box-shadow:0 1px 2px rgba(60,50,40,.04);
+  }
+  pre code { background:none; border:0; padding:0; color:var(--ink); font-size:inherit; }
+  table { width:100%; border-collapse:collapse; margin:12px 0 18px; font-size:14.5px; }
+  th, td { border:1px solid var(--line); padding:10px 12px; text-align:left; vertical-align:top; }
+  th { background:var(--surface-sunk); font-weight:600; }
+  .callout {
+    border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; margin:14px 0;
+    background:var(--surface);
+  }
+  .callout.warn { background:var(--warn-bg); border-color:color-mix(in srgb, var(--warn-ink) 25%, var(--line)); color:var(--warn-ink); }
+  .callout.ok { background:var(--ok-bg); border-color:color-mix(in srgb, var(--ok-ink) 25%, var(--line)); color:var(--ok-ink); }
+  .callout.danger {
+    background:color-mix(in srgb, #BC4334 12%, var(--surface));
+    border-color:color-mix(in srgb, #BC4334 35%, var(--line));
+    color:color-mix(in srgb, #BC4334 70%, var(--ink));
+  }
+  @media (prefers-color-scheme: dark) {
+    .callout.danger {
+      background:#2a1816; border-color:#5a302c; color:#e8a59a;
+    }
+  }
+  .callout strong { display:block; margin-bottom:4px; }
+  .steps { counter-reset:step; list-style:none; padding-left:0; }
+  .steps > li {
+    position:relative; padding:14px 14px 14px 52px; margin:0 0 12px;
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  }
+  .steps > li::before {
+    counter-increment:step; content:counter(step);
+    position:absolute; left:14px; top:14px; width:26px; height:26px; border-radius:50%;
+    background:var(--accent-wash); color:var(--accent-deep); font-weight:700; font-size:13px;
+    display:grid; place-items:center;
+  }
+  footer {
+    border-top:1px solid var(--line-soft); padding:22px 0 36px; color:var(--ink-faint); font-size:13.5px;
+  }
+  footer .foot { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="wrap nav-in">
+    <a class="brand" href="../">
+      <span class="mark">C</span>
+      <span>Claude Chat Mobile</span>
+    </a>
+    <div class="nav-spacer"></div>
+    <a class="meta" href="./quickstart.html" hreflang="en">English quickstart</a>
+    <a class="meta" href="../docs-site/pages/security-model.html" hreflang="zh-CN">中文 · 安全模型</a>
+    <a class="meta" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</nav>
+
+<header class="page">
+  <div class="wrap">
+    <div class="kicker">English security path</div>
+    <h1>Security model</h1>
+    <p class="lead">Read this <strong>before</strong> exposing the server beyond your machine. This project is a remotely reachable <strong>code-execution channel into your local shell</strong>—not multi-tenant SaaS, not Anthropic’s official mobile app.</p>
+    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md · Security Model</a> · Chinese handbook: <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">安全模型</a> · <time datetime="2026-07-23">Updated 2026-07-23</time></p>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="callout danger">
+    <strong>Danger</strong>
+    Anyone who passes authentication has the same power you have at a terminal on that host. Do not run a shared instance for multiple people. Do not expose it to the public internet without token, device trust, CLI allow-list review, and (recommended) Cloudflare Access.
+  </div>
+
+  <h2 id="iron-rules">Four iron rules</h2>
+  <ol>
+    <li>
+      <strong>Single-user per instance.</strong>
+      You run your own instance for yourself. There is no multi-user, account, or login system; any request that passes auth has the same power as you at the terminal. Do not treat it as a multi-tenant service.
+    </li>
+    <li>
+      <strong>No token, no leaving the host.</strong>
+      With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only. There is no “empty = open to the world” path. Reaching the public internet <em>requires</em> a token.
+    </li>
+    <li>
+      <strong>CLI permissions are inherited—no second super-allowlist.</strong>
+      This project does not inject its own <code>allowedTools</code> / <code>disallowedTools</code>. Auto-approve is the merged <code>permissions.allow</code> from your existing Claude config:
+      <ul>
+        <li>global <code>~/.claude/settings.json</code></li>
+        <li>project <code>.claude/settings.json</code></li>
+        <li>local <code>.claude/settings.local.json</code></li>
+      </ul>
+      Loaded via the same <code>settingSources</code> path as the terminal. A match is auto-approved; anything else is suspended and pushed to the phone—the <strong>full command and working directory</strong> are visible in the app before you confirm.
+      <div class="callout warn" style="margin-top:12px">
+        <strong>Before public exposure</strong>
+        Audit your <strong>global</strong> <code>~/.claude/settings.json</code> allow-list. Old <code>Bash(...)</code> / <code>Write</code> rules from terminal use will auto-approve here too, without a phone prompt.
+      </div>
+      <p style="margin-top:10px">The Web UI also has runtime permission modes (<code>dontAsk</code> / <code>auto</code> / <code>bypassPermissions</code>, etc.) and approval TTL. That is <strong>not</strong> “phone UI matches interactive terminal step for step.” Shared is the settings allow-list source, not the full interaction surface.</p>
+    </li>
+    <li>
+      <strong>Device trust (TOFU).</strong>
+      A connection that is neither local nor Cloudflare Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough:
+<pre><code>node scripts/device.js list
+node scripts/device.js approve &lt;ID&gt;
+# revoke: node scripts/device.js deny &lt;ID&gt;</code></pre>
+      Loopback connections and public connections that already passed a Cloudflare Access JWT skip this step. Temporary random <code>cloudflared</code> tunnels have <strong>no</strong> Access—you still need <code>device.js approve</code>.
+    </li>
+  </ol>
+
+  <h2 id="quotable">Quotable facts</h2>
+  <ul>
+    <li>Self-hosted bridge to a <strong>real local</strong> <code>claude</code> CLI via the <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.</li>
+    <li>Empty <code>AUTH_TOKEN</code> ⇒ bind <code>127.0.0.1</code> only.</li>
+    <li>One user per instance; not multi-tenant SaaS.</li>
+    <li>Not Anthropic’s official mobile application.</li>
+    <li>License: AGPL-3.0-only.</li>
+  </ul>
+
+  <h2 id="before-public">Checklist before public exposure</h2>
+  <ol>
+    <li>Set a strong non-empty <code>AUTH_TOKEN</code>.</li>
+    <li>Prefer fixed domain + Cloudflare Access 2FA for production (see repo <code>docs/deployment.md</code> / Chinese <a href="../docs-site/pages/production-deploy.html" hreflang="zh-CN">生产部署</a>).</li>
+    <li>Review global and project CLI allow-lists for overly broad <code>Bash</code> / write rules.</li>
+    <li>Approve only devices you control (<code>device.js</code>).</li>
+    <li>Keep the instance single-user—never share credentials across people.</li>
+  </ol>
+
+  <h2 id="next">Next</h2>
+  <ul>
+    <li><a href="./quickstart.html">English quickstart</a> — install and phone access</li>
+    <li><a href="../docs-site/pages/security-model.html" hreflang="zh-CN">Chinese security handbook chapter</a> — deeper ops notes</li>
+    <li><a href="../">Product landing</a></li>
+    <li><a href="https://github.com/Ike-li/claude-chat-mobile">Source on GitHub</a></li>
+  </ul>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span>Claude Chat Mobile</span>
+    <span aria-hidden="true">·</span>
+    <span>Maintained by <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a></span>
+    <a href="./quickstart.html" hreflang="en">English quickstart</a>
+    <a href="./security.html" hreflang="en">English security</a>
+    <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">中文安全模型</a>
+    <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE">AGPL-3.0-only</a>
+    <time datetime="2026-07-23">Updated 2026-07-23</time>
+  </div>
+</footer>
+</body>
+</html>

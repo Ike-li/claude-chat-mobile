@@ -19,6 +19,7 @@ BASE = "https://ike-li.github.io/claude-chat-mobile"
 URLS = [
     f"{BASE}/",
     f"{BASE}/en/quickstart.html",
+    f"{BASE}/en/security.html",
     f"{BASE}/docs-site/",
     f"{BASE}/docs-site/index.html",
     f"{BASE}/docs-site/pages/quickstart.html",

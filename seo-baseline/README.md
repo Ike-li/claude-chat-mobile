@@ -40,7 +40,7 @@ python3 seo-baseline/compare.py
 
 ```bash
 BASE=https://ike-li.github.io/claude-chat-mobile
-for p in /robots.txt /sitemap.xml /llms.txt /en/quickstart.html /docs-site/pages/quickstart.html; do
+for p in /robots.txt /sitemap.xml /llms.txt /en/quickstart.html /en/security.html /docs-site/pages/quickstart.html /docs-site/pages/security-model.html; do
   curl -sS -o /dev/null -w "%{http_code} %{content_type} $p\n" -L --max-time 20 "$BASE$p"
 done
 # 期望：全部 200；robots/llms 为 text/plain；sitemap 为 application/xml（或 text/xml）
@@ -62,8 +62,10 @@ curl -sS -o /dev/null -w "%{http_code} webp sample\n" -L "$BASE/screenshots/03-a
 ```bash
 BASE=https://ike-li.github.io/claude-chat-mobile
 curl -sS -L "$BASE/en/quickstart.html" | grep -E 'canonical|hreflang|Quickstart' | head
+curl -sS -L "$BASE/en/security.html" | grep -E 'canonical|hreflang|Security model|iron rules' | head
 curl -sS -L "$BASE/docs-site/pages/quickstart.html" | grep -E 'hreflang|English Quickstart' | head
-# 期望：EN 页 title/H1/canonical；双方 hreflang 互指；中文页有 English 横幅
+curl -sS -L "$BASE/docs-site/pages/security-model.html" | grep -E 'hreflang|English Security' | head
+# 期望：EN 安装/安全页 title/H1/canonical；中英 hreflang 互指；中文页有 English 横幅
 ```
 
 ### 5. 手册封面 H1 + 面包屑 schema（30 秒）

@@ -165,8 +165,13 @@ function shell(p, bodyHtml, toc) {
     '@type': 'BreadcrumbList',
     itemListElement: breadcrumbItems,
   });
-  const hreflangTags = p.slug === 'quickstart'
-    ? `\n<link rel="alternate" hreflang="zh-CN" href="${canonicalUrl}">\n<link rel="alternate" hreflang="en" href="${siteRoot}en/quickstart.html">\n<link rel="alternate" hreflang="x-default" href="${siteRoot}en/quickstart.html">`
+  const hreflangMap = {
+    quickstart: 'en/quickstart.html',
+    'security-model': 'en/security.html',
+  };
+  const enAlt = hreflangMap[p.slug];
+  const hreflangTags = enAlt
+    ? `\n<link rel="alternate" hreflang="zh-CN" href="${canonicalUrl}">\n<link rel="alternate" hreflang="en" href="${siteRoot}${enAlt}">\n<link rel="alternate" hreflang="x-default" href="${siteRoot}${enAlt}">`
     : '';
   return `<!DOCTYPE html>
 <html lang="zh-CN" data-theme="light">
