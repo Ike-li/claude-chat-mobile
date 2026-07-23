@@ -808,3 +808,17 @@ details.thinking.thinking-live > summary::before {
   animation: unread-anchor-flash 2s ease;
   border-radius: 0.75rem;
 }
+
+/* "以下为新消息"分割线：仿微信两侧横线夹文字，与消息气泡视觉区分开（非对话内容） */
+.unread-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.unread-divider::before,
+.unread-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}

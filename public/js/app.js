@@ -3627,14 +3627,22 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }, { root: messagesEl, threshold: 0.5 });
     unreadAnchorObserver.observe(unreadAnchorNode);
   }
+  // 仿微信"以下为新消息"分割线：插在锚点前，随高亮同一 2s 生命周期出现/消失。data-ephemeral="1"
+  // 复用 stripEphemeralMessageNodes 的既有排除机制（同 streamLiveStatus）——切走该会话时不进
+  // sessionDomCache，故已读结算过的分割线不会在下次缓存恢复时复活。
   function jumpToUnreadAnchor() {
     haptic('tap');
     const anchor = unreadAnchorNode; // ackUnread() 会清空闭包状态，先取局部引用供滚动/高亮用
     ackUnread();
     if (!anchor?.isConnected) return;
+    const divider = el('<div id="unreadDivider" class="msg-frame unread-divider text-center text-xs text-ink-faint" data-ephemeral="1">以下为新消息</div>');
+    anchor.parentNode.insertBefore(divider, anchor);
     anchor.scrollIntoView({ block: 'center', behavior: 'smooth' });
     anchor.classList.add('unread-anchor-flash');
-    setTimeout(() => anchor.classList.remove('unread-anchor-flash'), 2000);
+    setTimeout(() => {
+      anchor.classList.remove('unread-anchor-flash');
+      divider.remove();
+    }, 2000);
   }
   unreadPillEl?.addEventListener('click', jumpToUnreadAnchor);
 
