@@ -1167,6 +1167,19 @@ export function shouldForceScrollAfterReplay({ action, replayed } = {}) {
   return Number.isFinite(replayed) && replayed > 0;
 }
 
+// stick-to-bottom 判定（聊天 messagesEl / 客户端日志 consoleLogArea 共用）：
+// force 总是落底；否则仅当「距底 < threshold」时跟随。上翻读历史时新内容不得拽回。
+// 默认 120 与 app.js 历史 scrollBottom 阈值对齐。
+export function shouldStickScrollToBottom({
+  scrollHeight, scrollTop, clientHeight,
+  force = false,
+  threshold = 120,
+} = {}) {
+  if (force) return true;
+  const dist = Number(scrollHeight) - Number(scrollTop) - Number(clientHeight);
+  return Number.isFinite(dist) && dist < threshold;
+}
+
 // 未读胶囊"跳到第一条未读"定位：未读消息永远是当前已渲染顶层气泡列表的尾部 N 条（N=服务端
 // unreadOnEntry），不需要跨路径消息 ID 贯穿磁盘存储和实时流——渲染完成后对列表做一次位置计算即可。
 // 返回 -1 表示无需定位；unreadCount 超过实际渲染条数时 clamp 到 0（滚到已加载内容最顶部），不越界。

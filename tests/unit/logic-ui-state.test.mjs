@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, resolveSheetDragEnd } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, resolveSheetDragEnd } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -300,6 +300,40 @@ test.describe('shouldForceScrollAfterReplay：keep/none 分支有真实补发内
   });
   test('未知 action → 不误触发（保守）', () => {
     assert.equal(shouldForceScrollAfterReplay({ action: 'unknown', replayed: 5 }), false);
+  });
+});
+
+// 客户端日志/聊天 stick-to-bottom：距底 < threshold 或 force 时才自动落底，上翻阅读时不被新内容拽回。
+// 默认 threshold=120 与 app.js scrollBottom 对齐。
+test.describe('shouldStickScrollToBottom：近底跟随 / 上翻不拽 / force 兜底', () => {
+  // 几何：scrollHeight=1000, clientHeight=400 → 可滚范围 600；scrollTop=600 即贴底（dist=0）
+  const base = { scrollHeight: 1000, clientHeight: 400 };
+
+  test('force=true → 无论距底多远都跟随', () => {
+    assert.equal(shouldStickScrollToBottom({ ...base, scrollTop: 0, force: true }), true);
+    assert.equal(shouldStickScrollToBottom({ ...base, scrollTop: 600, force: true }), true);
+  });
+
+  test('贴底（dist=0）与距底 119 → 跟随', () => {
+    assert.equal(shouldStickScrollToBottom({ ...base, scrollTop: 600 }), true); // dist 0
+    assert.equal(shouldStickScrollToBottom({ ...base, scrollTop: 481 }), true); // dist 119
+  });
+
+  test('距底恰好 120 与更大 → 不跟随（用户在读历史）', () => {
+    assert.equal(shouldStickScrollToBottom({ ...base, scrollTop: 480 }), false); // dist 120
+    assert.equal(shouldStickScrollToBottom({ ...base, scrollTop: 0 }), false);   // dist 600
+  });
+
+  test('缺字段 / NaN 度量（非 force）→ 不跟随，避免误滚', () => {
+    assert.equal(shouldStickScrollToBottom({}), false);
+    assert.equal(shouldStickScrollToBottom({ scrollHeight: NaN, scrollTop: 0, clientHeight: 100 }), false);
+    assert.equal(shouldStickScrollToBottom({ scrollHeight: 100, scrollTop: 'x', clientHeight: 50 }), false);
+  });
+
+  test('自定义 threshold：距底 50 在 threshold=40 时不跟随，在 60 时跟随', () => {
+    const geo = { scrollHeight: 500, scrollTop: 150, clientHeight: 300 }; // dist 50
+    assert.equal(shouldStickScrollToBottom({ ...geo, threshold: 40 }), false);
+    assert.equal(shouldStickScrollToBottom({ ...geo, threshold: 60 }), true);
   });
 });
 
