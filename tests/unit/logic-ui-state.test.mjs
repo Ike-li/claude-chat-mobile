@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, resolveSheetDragEnd } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, resolveSheetDragEnd } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -270,6 +270,36 @@ test.describe('shouldReloadOnEnter：切入会话时该用缓存/活缓冲还是
   });
   test('gap 优先于 hasCache=false 的 reload 分支（有缺口仍 reload，口径一致）', () => {
     assert.equal(shouldReloadOnEnter({ replayed: 9, gap: true, hasCache: false, diskLen: 0, seenDiskLen: 0 }), 'reload');
+  });
+});
+
+// 修「切回会话停在旧位置 + 内容一条条冒出来像重播」：'keep'/'none' 分支恢复的是【离开时缓存的旧内容】
+// 底部，之后离开期间产生的新内容才作为 replay 事件逐条补发（各自走非强制 scrollBottom，未必够到底部）。
+// 'load'/'reload' 分支已由 loadHistory 完成时的 scrollBottom(true) 兜底，不需要再触发一次。
+test.describe('shouldForceScrollAfterReplay：keep/none 分支有真实补发内容时须补一次强制落底', () => {
+  test('bindView 的 keep + 有回放 → 需要强制落底（旧缓存已落到错误的底部）', () => {
+    assert.equal(shouldForceScrollAfterReplay({ action: 'keep', replayed: 5 }), true);
+  });
+  test('requestSync 的 none + 有回放 → 需要强制落底（同一机制的重连路径）', () => {
+    assert.equal(shouldForceScrollAfterReplay({ action: 'none', replayed: 3 }), true);
+  });
+  test('keep 但无回放（replayed=0）→ 不需要，DOM 本就是最新，不产生多余滚动', () => {
+    assert.equal(shouldForceScrollAfterReplay({ action: 'keep', replayed: 0 }), false);
+  });
+  test('load/reload 分支即便带 replayed>0 也不需要——loadHistory 完成时已 scrollBottom(true) 兜底', () => {
+    assert.equal(shouldForceScrollAfterReplay({ action: 'load', replayed: 5 }), false);
+    assert.equal(shouldForceScrollAfterReplay({ action: 'reload', replayed: 5 }), false);
+  });
+  test('reconnect（尚未真正 sync）→ 不需要，届时新一轮 sync 会重新判定', () => {
+    assert.equal(shouldForceScrollAfterReplay({ action: 'reconnect', replayed: 0 }), false);
+  });
+  test('replayed 非法值（undefined/NaN/负数）→ 诚实按无回放处理，不误触发', () => {
+    assert.equal(shouldForceScrollAfterReplay({ action: 'keep', replayed: undefined }), false);
+    assert.equal(shouldForceScrollAfterReplay({ action: 'keep', replayed: NaN }), false);
+    assert.equal(shouldForceScrollAfterReplay({ action: 'keep', replayed: -1 }), false);
+  });
+  test('未知 action → 不误触发（保守）', () => {
+    assert.equal(shouldForceScrollAfterReplay({ action: 'unknown', replayed: 5 }), false);
   });
 });
 

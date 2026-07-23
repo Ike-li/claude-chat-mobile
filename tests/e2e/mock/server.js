@@ -44,6 +44,9 @@ const queuedEchoItems = new Map(); // busy 期回显为 queued 的消息 clientM
 let foregroundSyncReplayMode = false;
 let foregroundFoundMissingMode = false;
 let foregroundFoundMissingHistoryMode = false;
+// P0-SCROLL-1：切走 inst_2 再切回时验证「补发内容后强制落底」——第一次 sync:since 回放固定内容
+// （建 DOM 缓存），第二次（切回）才追加"离开期间产生的新内容"模拟离开期间后台继续产出。
+let switchBackReplayArmed = false;
 let pendingDevices = [];
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
@@ -81,6 +84,7 @@ function resetMockState() {
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
   foregroundFoundMissingHistoryMode = false;
+  switchBackReplayArmed = false;
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
@@ -641,6 +645,13 @@ io.on('connection', socket => {
               model: 'claude-3-5-haiku',
               lastUsedAt: Date.now() - 500,
               entrypoint: 'sdk-ts'
+            },
+            {
+              id: 'mock-session-scroll-replay',
+              title: 'Scroll Replay Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: Date.now() - 300,
+              entrypoint: 'sdk-ts'
             }
           ]
         });
@@ -766,6 +777,17 @@ io.on('connection', socket => {
           { role: 'assistant', content: 'Gap question history after buffer trim.' }
         ]
       });
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-scroll-replay') {
+      // P0-SCROLL-1：首次冷切入内容（30 条，撑满一屏）——不含后续"离开期间产出"的新消息，
+      // 那条只在第二次 sync:since（真正切回）时作为 replay 事件补发，见下方 sync:since handler。
+      const messages = [];
+      for (let i = 0; i < 30; i++) {
+        messages.push({
+          role: i % 2 === 0 ? 'user' : 'assistant',
+          content: `Scroll replay baseline message #${i}`
+        });
+      }
+      callback({ messages });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-another') {
       // TC-7 并发 tab：冷切入 inst_2 时 shouldReloadOnEnter(!hasCache && replayed>0)→reload，
       // 会 clearView 掉 sync:since 活缓冲回放，必须以磁盘 history 为真相源回填（否则 hydrated=0）。
@@ -879,6 +901,35 @@ io.on('connection', socket => {
         type: 'result', payload: { messageId: 'msg_another_1', durationMs: 1000, costUsd: 0.0005, isError: false, models: ['claude-3-5-haiku'] }
       });
       ack(3);
+    } else if (instanceId === 'inst_scroll_replay') {
+      // P0-SCROLL-1：第一次切入（!hasCache）→ shouldReloadOnEnter 走 'reload'，走 loadHistory 拉
+      // session:history 的 30 条基线、不靠这里的回放（同 inst_2 的 TC-7 注释）；这里只 ack(0)。
+      // 第二次切回（hasCache=true）→ 'keep' 分支，推一条"离开期间产生的新内容"验证强制落底。
+      if (!switchBackReplayArmed) {
+        switchBackReplayArmed = true;
+        ack(0);
+      } else {
+        // 补发内容必须实际撑出可观高度（>120px scrollBottom() 的 near 阈值），否则旧代码「侥幸」
+        // 落在 near 判定内也会通过，测不出「不强制补一次落底就停在旧位置」这个真实 bug——单行短
+        // 文本不够，用多行长文本模拟真实的一段长回复。
+        socket.emit('agent:event', {
+          seq: 1, epoch: 'mock-epoch-scroll-replay', sessionId: 'mock-session-scroll-replay', instanceId: 'inst_scroll_replay', ts: Date.now(),
+          type: 'user_message', payload: { text: 'What happened while I was away? Please give me the full detailed status report.' }
+        });
+        socket.emit('agent:event', {
+          seq: 2, epoch: 'mock-epoch-scroll-replay', sessionId: 'mock-session-scroll-replay', instanceId: 'inst_scroll_replay', ts: Date.now(),
+          type: 'text_delta', payload: {
+            messageId: 'msg_scroll_replay_1',
+            text: 'This new message arrived while you were on another tab.\n\n' +
+              Array.from({ length: 12 }, (_, i) => `Line ${i + 1}: a fairly long status update produced while you were away, so this reply spans many lines.`).join('\n\n')
+          }
+        });
+        socket.emit('agent:event', {
+          seq: 3, epoch: 'mock-epoch-scroll-replay', sessionId: 'mock-session-scroll-replay', instanceId: 'inst_scroll_replay', ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_scroll_replay_1', durationMs: 500, costUsd: 0.0002, isError: false, models: ['claude-3-5-sonnet'] }
+        });
+        ack(3);
+      }
     } else if (instanceId === 'inst_gap') {
       socket.emit('agent:event', {
         seq: 1, epoch: 'mock-epoch-gap-partial', sessionId: 'mock-session-gap', instanceId: 'inst_gap', ts: Date.now(),
@@ -1240,6 +1291,33 @@ io.on('connection', socket => {
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      },
+    },
+    {
+      // P0-SCROLL-1：验证「切走再切回、离开期间后台产出新内容」时强制落底到真正的底部，而非停在
+      // 缓存的旧内容底部。inst_scroll_replay 首次冷切入走 loadHistory（session:history 30 条撑满
+      // 一屏，建立 DOM 缓存）；切回主会话后（模拟"离开"）；第二次切回该实例时 sync:since 命中
+      // hasCache=true 分支，推送一条新的补发消息（switchBackReplayArmed 门控，只在第二次触发）。
+      command: 'test:scroll-replay-setup',
+      run: async () => {
+        console.log('[mock] test:scroll-replay-setup — 注册 inst_scroll_replay（长历史，供切走再切回验证强制落底）');
+        if (!mockInstances.some(i => i.instanceId === 'inst_scroll_replay')) {
+          mockInstances.push({
+            instanceId: 'inst_scroll_replay',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-scroll-replay',
+            title: 'Scroll Replay Session',
+            state: 'idle',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-sonnet'
+          });
+        }
+        switchBackReplayArmed = false;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
         });
       },
     },

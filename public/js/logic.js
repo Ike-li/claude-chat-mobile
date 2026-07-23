@@ -1157,6 +1157,16 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seen
   return 'keep';
 }
 
+// 修「切回会话停在旧位置 + 内容一条条冒出来像重播」：shouldReloadOnEnter 的 'keep' / syncAckAction 的
+// 'none' 分支恢复的是【离开时缓存的旧内容】，之后离开期间产生的新内容才作为 sync:since 补发事件逐条
+// 到达，各自走非强制 scrollBottom（未必够到"距底部<120px"的阈值）——视觉上就是先停在旧底部、再被动
+// 跟着新内容一点点往下挪。'load'/'reload' 分支已由 loadHistory 完成时的 scrollBottom(true) 兜底，
+// 无需重复触发；只有 keep/none 且确有真实回放内容时才需要这一次额外的强制落底。
+export function shouldForceScrollAfterReplay({ action, replayed } = {}) {
+  if (action !== 'keep' && action !== 'none') return false;
+  return Number.isFinite(replayed) && replayed > 0;
+}
+
 // 未读胶囊"跳到第一条未读"定位：未读消息永远是当前已渲染顶层气泡列表的尾部 N 条（N=服务端
 // unreadOnEntry），不需要跨路径消息 ID 贯穿磁盘存储和实时流——渲染完成后对列表做一次位置计算即可。
 // 返回 -1 表示无需定位；unreadCount 超过实际渲染条数时 clamp 到 0（滚到已加载内容最顶部），不越界。
