@@ -6072,7 +6072,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   let scrollPending = false;
   function scrollBottom(force) {
-    if (scrollPending) return; // 已有 rAF 待执行，跳过布局读（一定会滚到底，无需再判断）
+    // 已有非强制 rAF 待执行时跳过布局读——但仅限非 force 调用：force 调用方（如切回会话/断线重连
+    // 补发后的强制落底）明确要求"这次必须真正滚到底"，若被这里早退吞掉就成了无效调用。让 force 调用
+    // 总能排上一个新 rAF：按 rAF 规范，帧回调处理期间新排的 rAF 会推迟到下一帧，故它必然在同一批已
+    // 排队的渲染 rAF（如 finalizeStreams 的最终内容渲染）执行完之后才触发，读到的是渲染完成后的真实
+    // 高度（实测：负载低时两种写法都凑巧对，负载高（142 条全量套件后段）时旧写法会被早退吞掉，
+    // 读到渲染完成前的过渡态高度，见 switch-back-scroll.spec.ts 间歇性失败复现）。
+    if (scrollPending && !force) return;
     const near = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 120;
     if (!(near || force)) return;
     scrollPending = true;
