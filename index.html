@@ -161,6 +161,7 @@
     box-shadow:var(--shadow-pop), 0 6px 20px color-mix(in srgb, var(--accent) 22%, transparent);
   }
   .phone .screen { border-radius:29px; overflow:hidden; background:var(--surface); box-shadow:inset 0 0 0 1px rgba(0,0,0,.28); height:471px; }
+  .phone picture { display:block; width:100%; height:100%; }
   .phone img { display:block; width:100%; height:100%; object-fit:cover; object-position:bottom; }
 
   /* ── Sections ── */
@@ -192,6 +193,7 @@
   .shots { display:grid; grid-template-columns:repeat(3,1fr); gap:24px; }
   .shot { text-align:center; }
   .shot .frame { border:1px solid var(--line); border-radius:var(--radius-lg); overflow:hidden; box-shadow:var(--shadow-card); background:var(--surface); margin-bottom:16px; }
+  .shot picture { display:block; }
   .shot img { display:block; width:100%; height:auto; }
   .shot h3 { font-size:17px; font-weight:600; margin-bottom:5px; }
   .shot p { font-size:14.5px; color:var(--ink-faint); }
@@ -301,7 +303,7 @@
       </div>
     </div>
     <div class="phone">
-      <div class="screen"><img data-i18n-img="img.hero" src="./screenshots/03-approval-en.png" width="750" height="1624" alt="Approving a git push from the phone"></div>
+      <div class="screen"><picture data-i18n-img="img.hero"><source type="image/webp" srcset="./screenshots/03-approval-en.webp"><img src="./screenshots/03-approval-en.png" width="750" height="1624" alt="Approving a git push from the phone"></picture></div>
     </div>
   </div>
 </header>
@@ -391,32 +393,32 @@
     </div>
     <div class="shots">
       <div class="shot">
-        <div class="frame"><img data-i18n-img="img.stream" src="./screenshots/01-stream-en.png" loading="lazy" width="750" height="1624" alt="Streaming output with Markdown rendering"></div>
+        <div class="frame"><picture data-i18n-img="img.stream"><source type="image/webp" srcset="./screenshots/01-stream-en.webp"><img src="./screenshots/01-stream-en.png" loading="lazy" width="750" height="1624" alt="Streaming output with Markdown rendering"></picture></div>
         <h3 data-i18n="shots.t1">Streaming</h3>
         <p data-i18n="shots.p1">Markdown · syntax highlight · status line</p>
       </div>
       <div class="shot">
-        <div class="frame"><img data-i18n-img="img.tools" src="./screenshots/02-tools-en.png" loading="lazy" width="750" height="1624" alt="Tool-call cards"></div>
+        <div class="frame"><picture data-i18n-img="img.tools"><source type="image/webp" srcset="./screenshots/02-tools-en.webp"><img src="./screenshots/02-tools-en.png" loading="lazy" width="750" height="1624" alt="Tool-call cards"></picture></div>
         <h3 data-i18n="shots.t2">Visible process</h3>
         <p data-i18n="shots.p2">tool calls render as collapsible cards</p>
       </div>
       <div class="shot">
-        <div class="frame"><img data-i18n-img="img.approval" src="./screenshots/03-approval-en.png" loading="lazy" width="750" height="1624" alt="Dangerous actions approved from the phone"></div>
+        <div class="frame"><picture data-i18n-img="img.approval"><source type="image/webp" srcset="./screenshots/03-approval-en.webp"><img src="./screenshots/03-approval-en.png" loading="lazy" width="750" height="1624" alt="Dangerous actions approved from the phone"></picture></div>
         <h3 data-i18n="shots.t3">Approve on phone</h3>
         <p data-i18n="shots.p3">dangerous actions push full command + cwd</p>
       </div>
       <div class="shot">
-        <div class="frame"><img data-i18n-img="img.workspace" src="./screenshots/04-workspace-en.png" loading="lazy" width="750" height="1624" alt="Multi-repository workspace session switcher"></div>
+        <div class="frame"><picture data-i18n-img="img.workspace"><source type="image/webp" srcset="./screenshots/04-workspace-en.webp"><img src="./screenshots/04-workspace-en.png" loading="lazy" width="750" height="1624" alt="Multi-repository workspace session switcher"></picture></div>
         <h3 data-i18n="shots.t4">Workspace switcher</h3>
         <p data-i18n="shots.p4">Watch and switch multiple repositories</p>
       </div>
       <div class="shot">
-        <div class="frame"><img data-i18n-img="img.settings" src="./screenshots/05-settings-en.png" loading="lazy" width="750" height="1624" alt="Fine-grained settings control"></div>
+        <div class="frame"><picture data-i18n-img="img.settings"><source type="image/webp" srcset="./screenshots/05-settings-en.webp"><img src="./screenshots/05-settings-en.png" loading="lazy" width="750" height="1624" alt="Fine-grained settings control"></picture></div>
         <h3 data-i18n="shots.t5">Settings Panel</h3>
         <p data-i18n="shots.p5">Permission modes and thinking effort</p>
       </div>
       <div class="shot">
-        <div class="frame"><img data-i18n-img="img.console" src="./screenshots/06-console-en.png" loading="lazy" width="750" height="1624" alt="Direct log viewing"></div>
+        <div class="frame"><picture data-i18n-img="img.console"><source type="image/webp" srcset="./screenshots/06-console-en.webp"><img src="./screenshots/06-console-en.png" loading="lazy" width="750" height="1624" alt="Direct log viewing"></picture></div>
         <h3 data-i18n="shots.t6">Real-time Logs</h3>
         <p data-i18n="shots.p6">Inspect process logs and SDK errors</p>
       </div>
@@ -698,7 +700,19 @@ npm start              <span class="c"># http://localhost:3000</span>
     document.documentElement.lang = (lang === 'zh') ? 'zh-CN' : 'en';
     nodes.forEach(el => { const v = dict[el.getAttribute('data-i18n')]; if(v != null) el.textContent = v; });
     htmlNodes.forEach(el => { const v = dict[el.getAttribute('data-i18n-html')]; if(v != null) el.innerHTML = v; });
-    imgNodes.forEach(el => { const v = dict[el.getAttribute('data-i18n-img')]; if(v != null) el.src = v; });
+    imgNodes.forEach(el => {
+      const v = dict[el.getAttribute('data-i18n-img')];
+      if(v == null) return;
+      const webp = v.endsWith('.png') ? v.slice(0, -4) + '.webp' : v;
+      if(el.tagName === 'PICTURE'){
+        const srcEl = el.querySelector('source[type="image/webp"]');
+        const imgEl = el.querySelector('img');
+        if(srcEl) srcEl.setAttribute('srcset', webp);
+        if(imgEl) imgEl.src = v;
+      } else {
+        el.src = v;
+      }
+    });
     ariaNodes.forEach(el => { const v = dict[el.getAttribute('data-i18n-aria')]; if(v != null) el.setAttribute('aria-label', v); });
     buttons.forEach(b => b.classList.toggle('active', b.getAttribute('data-lang') === lang));
     try { localStorage.setItem('ccm-lang', lang); } catch(e){}

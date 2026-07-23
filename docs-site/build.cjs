@@ -143,10 +143,28 @@ function shell(p, bodyHtml, toc) {
   const mermaidTag = needMermaid
     ? `<script src="${b}assets/mermaid.min.js"></script>`
     : '';
-  const siteBase = 'https://ike-li.github.io/claude-chat-mobile/docs-site/';
+  const siteRoot = 'https://ike-li.github.io/claude-chat-mobile/';
+  const siteBase = `${siteRoot}docs-site/`;
   const canonicalUrl = p.home
     ? siteBase
     : `${siteBase}pages/${p.slug}.html`;
+  const breadcrumbItems = [
+    { '@type': 'ListItem', position: 1, name: 'Claude Chat Mobile', item: siteRoot },
+    { '@type': 'ListItem', position: 2, name: '项目全景手册', item: siteBase },
+  ];
+  if (!p.home) {
+    breadcrumbItems.push({
+      '@type': 'ListItem',
+      position: 3,
+      name: p.title,
+      item: canonicalUrl,
+    });
+  }
+  const breadcrumbJson = JSON.stringify({
+    '@context': 'https://schema.org',
+    '@type': 'BreadcrumbList',
+    itemListElement: breadcrumbItems,
+  });
   return `<!DOCTYPE html>
 <html lang="zh-CN" data-theme="light">
 <head>
@@ -157,6 +175,7 @@ function shell(p, bodyHtml, toc) {
 <link rel="canonical" href="${canonicalUrl}">
 <link rel="stylesheet" href="${b}assets/style.css">
 <script>window.__BASE__='${b}';</script>
+<script type="application/ld+json">${breadcrumbJson}</script>
 </head>
 <body>
 <div class="scrim"></div>
