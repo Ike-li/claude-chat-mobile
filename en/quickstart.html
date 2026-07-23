@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quickstart — Claude Chat Mobile</title>
+<meta name="description" content="Install and run Claude Chat Mobile: Node ≥20, local claude CLI, setup, doctor, LAN or temporary tunnel. Self-hosted, single-user per instance.">
+<link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/en/quickstart.html">
+<link rel="alternate" hreflang="en" href="https://ike-li.github.io/claude-chat-mobile/en/quickstart.html">
+<link rel="alternate" hreflang="zh-CN" href="https://ike-li.github.io/claude-chat-mobile/docs-site/pages/quickstart.html">
+<link rel="alternate" hreflang="x-default" href="https://ike-li.github.io/claude-chat-mobile/en/quickstart.html">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
+<meta property="og:type" content="article">
+<meta property="og:title" content="Quickstart — Claude Chat Mobile">
+<meta property="og:description" content="Self-hosted mobile Web UI for your real local claude CLI. Install steps from the project README.">
+<meta property="og:url" content="https://ike-li.github.io/claude-chat-mobile/en/quickstart.html">
+<meta property="og:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    {"@type":"ListItem","position":1,"name":"Claude Chat Mobile","item":"https://ike-li.github.io/claude-chat-mobile/"},
+    {"@type":"ListItem","position":2,"name":"Quickstart","item":"https://ike-li.github.io/claude-chat-mobile/en/quickstart.html"}
+  ]
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Claude Chat Mobile Quickstart",
+  "inLanguage": "en",
+  "description": "Install and run a self-hosted mobile Web UI for a real local claude CLI.",
+  "url": "https://ike-li.github.io/claude-chat-mobile/en/quickstart.html",
+  "author": {"@type":"Person","name":"Ike-li","url":"https://github.com/Ike-li"},
+  "isPartOf": {"@type":"SoftwareApplication","name":"Claude Chat Mobile","url":"https://ike-li.github.io/claude-chat-mobile/"}
+}
+</script>
+<style>
+  :root {
+    --canvas:#F4F3EE; --surface:#FBFAF6; --surface-sunk:#EFEDE4;
+    --line:#E3E0D6; --line-soft:#ECEAE1;
+    --ink:#1F1E1B; --ink-soft:#54514A; --ink-faint:#73706A;
+    --accent:#C96442; --accent-deep:#AE5238; --accent-wash:#F0E4DD;
+    --warn-bg:#F7EFE4; --warn-ink:#7A4E1E;
+    --ok-bg:#E8F0EA; --ok-ink:#2F5C3A;
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --font-read: Georgia, Charter, "Times New Roman", serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+    --radius:0.625rem;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --canvas:#121211; --surface:#1C1B1A; --surface-sunk:#161514;
+      --line:#2E2C2A; --line-soft:#242221;
+      --ink:#EEEEEC; --ink-soft:#A3A19D; --ink-faint:#7A7874;
+      --accent:#D97757; --accent-deep:#E2886A; --accent-wash:#2D231E;
+      --warn-bg:#2A2218; --warn-ink:#E0B57A;
+      --ok-bg:#1A2620; --ok-ink:#8FBE9A;
+    }
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    font-family:var(--font-ui); background:var(--canvas); color:var(--ink);
+    line-height:1.65; -webkit-font-smoothing:antialiased;
+  }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+  code, pre { font-family:var(--font-mono); }
+  code {
+    background:var(--surface-sunk); border:1px solid var(--line-soft);
+    padding:.08em .35em; border-radius:.28em; font-size:.9em; color:var(--accent-deep);
+  }
+  .wrap { max-width:720px; margin:0 auto; padding:0 22px; }
+  nav {
+    position:sticky; top:0; z-index:20;
+    background:color-mix(in srgb, var(--canvas) 86%, transparent);
+    backdrop-filter:blur(10px); border-bottom:1px solid var(--line-soft);
+  }
+  .nav-in { display:flex; align-items:center; gap:12px; height:56px; }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:600; color:var(--ink); }
+  .brand:hover { text-decoration:none; }
+  .mark {
+    width:26px; height:26px; border-radius:7px; background:var(--accent); color:#F4F3EE;
+    display:grid; place-items:center; font-family:var(--font-read); font-size:16px;
+  }
+  .nav-spacer { flex:1; }
+  .nav-in a.meta { font-size:14px; color:var(--ink-soft); }
+  header.page { padding:40px 0 18px; }
+  .kicker { font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--accent); letter-spacing:.06em; text-transform:uppercase; margin-bottom:10px; }
+  h1 { font-family:var(--font-read); font-size:clamp(28px,4vw,38px); line-height:1.15; font-weight:600; letter-spacing:-.02em; margin-bottom:12px; }
+  .lead { font-size:17.5px; color:var(--ink-soft); margin-bottom:14px; }
+  .alts { font-size:14px; color:var(--ink-faint); margin-bottom:8px; }
+  main { padding-bottom:64px; }
+  h2 { font-family:var(--font-read); font-size:22px; margin:32px 0 12px; font-weight:600; }
+  h3 { font-size:16.5px; margin:18px 0 8px; font-weight:600; }
+  p, li { font-size:15.5px; color:var(--ink); }
+  ul, ol { padding-left:1.25em; margin:8px 0 14px; }
+  li { margin:6px 0; }
+  pre {
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px 16px; overflow:auto; font-size:13.5px; line-height:1.55; margin:12px 0 16px;
+    box-shadow:0 1px 2px rgba(60,50,40,.04);
+  }
+  pre code { background:none; border:0; padding:0; color:var(--ink); font-size:inherit; }
+  table { width:100%; border-collapse:collapse; margin:12px 0 18px; font-size:14.5px; }
+  th, td { border:1px solid var(--line); padding:10px 12px; text-align:left; vertical-align:top; }
+  th { background:var(--surface-sunk); font-weight:600; }
+  .callout {
+    border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; margin:14px 0;
+    background:var(--surface);
+  }
+  .callout.warn { background:var(--warn-bg); border-color:color-mix(in srgb, var(--warn-ink) 25%, var(--line)); color:var(--warn-ink); }
+  .callout.ok { background:var(--ok-bg); border-color:color-mix(in srgb, var(--ok-ink) 25%, var(--line)); color:var(--ok-ink); }
+  .callout strong { display:block; margin-bottom:4px; }
+  .steps { counter-reset:step; list-style:none; padding-left:0; }
+  .steps > li {
+    position:relative; padding:14px 14px 14px 52px; margin:0 0 12px;
+    background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+  }
+  .steps > li::before {
+    counter-increment:step; content:counter(step);
+    position:absolute; left:14px; top:14px; width:26px; height:26px; border-radius:50%;
+    background:var(--accent-wash); color:var(--accent-deep); font-weight:700; font-size:13px;
+    display:grid; place-items:center;
+  }
+  footer {
+    border-top:1px solid var(--line-soft); padding:22px 0 36px; color:var(--ink-faint); font-size:13.5px;
+  }
+  footer .foot { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; }
+</style>
+</head>
+<body>
+<nav>
+  <div class="wrap nav-in">
+    <a class="brand" href="../">
+      <span class="mark">C</span>
+      <span>Claude Chat Mobile</span>
+    </a>
+    <div class="nav-spacer"></div>
+    <a class="meta" href="../docs-site/pages/quickstart.html" hreflang="zh-CN">中文手册 · 快速开始</a>
+    <a class="meta" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
+  </div>
+</nav>
+
+<header class="page">
+  <div class="wrap">
+    <div class="kicker">English install path</div>
+    <h1>Quickstart</h1>
+    <p class="lead">Self-hosted mobile Web UI for your <strong>real local</strong> <code>claude</code> CLI—same agent, same <code>CLAUDE.md</code>, same session. Not a remote desktop, not multi-tenant SaaS.</p>
+    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md">README.en.md</a> · Full Chinese handbook: <a href="../docs-site/" hreflang="zh-CN">docs-site</a></p>
+  </div>
+</header>
+
+<main class="wrap">
+  <h2 id="prerequisites">Prerequisites</h2>
+  <ul>
+    <li><strong>Node.js ≥ 20</strong> — <code>node --version</code></li>
+    <li><strong>A working local <code>claude</code> CLI</strong> — installed and logged in (<code>which claude</code>). This project drives <em>your</em> CLI; it does not ship Claude.</li>
+    <li><strong>macOS or Linux</strong> (first-class). Native Windows is experimental; WSL2 is more reliable.</li>
+  </ul>
+  <div class="callout">
+    <strong>Official subscription or third-party gateway</strong>
+    Web inherits provider settings from the <strong>shell that starts the server</strong>. Official subscription: no extra env. Gateway/relay: <code>export</code> the required <code>ANTHROPIC_*</code> in that shell, then start. Values in <code>.env</code> for <code>ANTHROPIC_*</code> are stripped at startup and have no effect.
+  </div>
+
+  <h2 id="install">Install and start</h2>
+  <ol class="steps">
+    <li>
+      <strong>Clone and verify the host.</strong>
+<pre><code>git clone https://github.com/Ike-li/claude-chat-mobile.git
+cd claude-chat-mobile
+node --version           # need Node ≥ 20
+which claude             # must be installed &amp; logged in</code></pre>
+    </li>
+    <li>
+      <strong>Install runtime deps and run setup.</strong>
+<pre><code>npm install --omit=dev   # runtime only; full install if you run UI tests
+npm run setup            # generates AUTH_TOKEN, asks WORK_DIR, writes .env (mode 0600)
+# or: cp .env.example .env and edit by hand</code></pre>
+    </li>
+    <li>
+      <strong>Pre-flight check.</strong>
+<pre><code>node scripts/doctor.js
+node scripts/doctor.js --fix  # tighten .env and data JSON → 0600</code></pre>
+    </li>
+    <li>
+      <strong>Start the server.</strong>
+<pre><code>npm start                 # http://localhost:3000
+# startup log prints usable URLs with #token=…</code></pre>
+    </li>
+  </ol>
+
+  <h2 id="phone">Reach it from your phone</h2>
+  <table>
+    <thead><tr><th>Scenario</th><th>What to do</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Same Wi‑Fi</td>
+        <td>Set a non-empty <code>AUTH_TOKEN</code> in <code>.env</code>, then open the LAN URL from the startup log: <code>http://&lt;lan-ip&gt;:3000/#token=…</code>. Without a token the server binds <code>127.0.0.1</code> only—phones cannot connect (intentional).</td>
+      </tr>
+      <tr>
+        <td>Temporary public / PWA https</td>
+        <td>In another terminal: <code>cloudflared tunnel --url http://localhost:3000</code>. Open the random HTTPS host with <code>#token=</code>. Token is stored in <code>localStorage</code> on first load, then cleared from the address bar.</td>
+      </tr>
+      <tr>
+        <td>Fixed production</td>
+        <td>Named tunnel + Cloudflare Access 2FA + a long-running process. See the Chinese handbook page <a href="../docs-site/pages/production-deploy.html" hreflang="zh-CN">生产部署</a> and repo <code>docs/deployment.md</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 id="tofu">First non-local connection: device trust (TOFU)</h3>
+  <p>A valid token alone is not enough for the first non-loopback client. Approve the device once on the host:</p>
+<pre><code>node scripts/device.js list
+node scripts/device.js approve &lt;ID&gt;</code></pre>
+  <div class="callout warn">
+    <strong>Security</strong>
+    This is a remotely reachable code-execution channel into your shell. Single-user per instance. Read the security model before exposing anything beyond your LAN: <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">安全模型</a> (Chinese handbook) or <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md · Security Model</a>.
+  </div>
+
+  <h2 id="optional">Optional</h2>
+  <ul>
+    <li><strong>Statusline bridge</strong> (CLI-driven sessions mirrored in the Web status line): <code>npm run statusline:install</code> — never auto-run by install/start. Check with <code>npm run statusline:status</code>.</li>
+    <li><strong>Dev loop:</strong> <code>npm run dev</code> · pre-push gate: <code>npm run check</code>.</li>
+  </ul>
+  <div class="callout ok">
+    <strong>Already running a production daemon on port 3000?</strong>
+    Do not start a second <code>npm start</code> against the same port for “just checking.” Use the Chinese ops page <a href="../docs-site/pages/ops-troubleshoot.html" hreflang="zh-CN">运维与排错</a> or stop the daemon first.
+  </div>
+
+  <h2 id="next">Next</h2>
+  <ul>
+    <li><a href="../">Product landing</a></li>
+    <li><a href="../docs-site/" hreflang="zh-CN">Full project handbook (Chinese)</a></li>
+    <li><a href="https://github.com/Ike-li/claude-chat-mobile">Source on GitHub</a></li>
+  </ul>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <span>Claude Chat Mobile</span>
+    <span aria-hidden="true">·</span>
+    <a href="../en/quickstart.html" hreflang="en">English quickstart</a>
+    <a href="../docs-site/pages/quickstart.html" hreflang="zh-CN">中文快速开始</a>
+    <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE">AGPL-3.0-only</a>
+  </div>
+</footer>
+</body>
+</html>

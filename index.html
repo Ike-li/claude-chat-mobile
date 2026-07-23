@@ -298,7 +298,7 @@
       <p class="hero-sub" data-i18n-html="hero.sub">Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.</p>
       <p class="hero-note" data-i18n="hero.note">Approvals, tool output, and resumed sessions stay on the same local Claude path.</p>
       <div class="hero-cta">
-        <a class="btn btn-primary" href="./docs-site/pages/quickstart.html"><span data-i18n="hero.cta1">Quickstart handbook</span> <span aria-hidden="true">▸</span></a>
+        <a class="btn btn-primary" data-i18n-href="hero.cta1Href" href="./en/quickstart.html"><span data-i18n="hero.cta1">English quickstart</span> <span aria-hidden="true">▸</span></a>
         <a class="btn btn-ghost" href="#action" data-i18n="hero.cta2">See it in action</a>
       </div>
     </div>
@@ -492,7 +492,7 @@
     </div>
     <p class="prereq" data-i18n-html="get.prereq"><strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.</p>
     <nav class="start-hub" aria-label="Start here">
-      <a href="./docs-site/pages/quickstart.html" data-i18n="hub.quickstart">Quickstart</a>
+      <a href="./en/quickstart.html" data-i18n-href="hub.quickstartHref" data-i18n="hub.quickstart">Quickstart</a>
       <a href="./docs-site/pages/security-model.html" data-i18n="hub.security">Security model</a>
       <a href="./docs-site/pages/production-deploy.html" data-i18n="hub.deploy">Production deploy</a>
       <a href="./docs-site/pages/overview.html" data-i18n="hub.overview">Project overview</a>
@@ -507,7 +507,7 @@ npm run setup          <span class="c"># generate AUTH_TOKEN + ask WORK_DIR</spa
 npm start              <span class="c"># http://localhost:3000</span>
     </div>
     <div class="get-ctas">
-      <a class="btn btn-primary" href="./docs-site/pages/quickstart.html"><span data-i18n="get.cta">Open quickstart in handbook</span> <span aria-hidden="true">▸</span></a>
+      <a class="btn btn-primary" data-i18n-href="get.ctaHref" href="./en/quickstart.html"><span data-i18n="get.cta">Open English quickstart</span> <span aria-hidden="true">▸</span></a>
       <a class="btn btn-ghost" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener"><span data-i18n="get.ctaGh">GitHub repository</span></a>
     </div>
   </div>
@@ -518,7 +518,7 @@ npm start              <span class="c"># http://localhost:3000</span>
     <span>Claude Chat Mobile</span>
     <span aria-hidden="true">·</span>
     <a href="./docs-site/index.html" data-i18n="nav.docs">Docs</a>
-    <a href="./docs-site/pages/quickstart.html" data-i18n="hub.quickstart">Quickstart</a>
+    <a href="./en/quickstart.html" data-i18n-href="hub.quickstartHref" data-i18n="hub.quickstart">Quickstart</a>
     <a href="./docs-site/pages/security-model.html" data-i18n="hub.security">Security</a>
     <a href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
     <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE" target="_blank" rel="noopener">AGPL-3.0-only</a>
@@ -537,7 +537,10 @@ npm start              <span class="c"># http://localhost:3000</span>
       'hero.title': 'Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span>',
       'hero.sub': 'Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.',
       'hero.note': 'Approvals, tool output, and resumed sessions stay on the same local Claude path.',
-      'hero.cta1': 'Quickstart handbook',
+      'hero.cta1': 'English quickstart',
+      'hero.cta1Href': './en/quickstart.html',
+      'get.ctaHref': './en/quickstart.html',
+      'hub.quickstartHref': './en/quickstart.html',
       'hero.cta2': 'See it in action',
       'hub.quickstart': 'Quickstart',
       'hub.security': 'Security model',
@@ -597,7 +600,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'get.heading': 'Run it on your own machine',
       'get.sub': 'It is self-hosted. There is no shared demo because it drives your own authenticated claude CLI.',
       'get.prereq': '<strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.',
-      'get.cta': 'Open quickstart in handbook',
+      'get.cta': 'Open English quickstart',
       'get.ctaGh': 'GitHub repository',
       'foot.tag': 'Your terminal, in your pocket.',
       'img.hero': './screenshots/03-approval-en.png',
@@ -616,6 +619,9 @@ npm start              <span class="c"># http://localhost:3000</span>
       'hero.sub': '不是远程桌面，也不是复刻实现。它驱动你<strong>本机已登录</strong>的 CLI：同一个 agent、同一份 <code>CLAUDE.md</code>、同一个会话。目标是<strong>终端等价性</strong>：在手机上对 claude 打字，效果和坐在终端前一样。',
       'hero.note': '审批、工具输出、恢复会话都走同一条本机 Claude 路径。',
       'hero.cta1': '打开快速开始手册',
+      'hero.cta1Href': './docs-site/pages/quickstart.html',
+      'get.ctaHref': './docs-site/pages/quickstart.html',
+      'hub.quickstartHref': './docs-site/pages/quickstart.html',
       'hero.cta2': '看实际效果',
       'hub.quickstart': '快速开始',
       'hub.security': '安全模型',
@@ -692,6 +698,7 @@ npm start              <span class="c"># http://localhost:3000</span>
   const htmlNodes = document.querySelectorAll('[data-i18n-html]');
   const imgNodes = document.querySelectorAll('[data-i18n-img]');
   const ariaNodes = document.querySelectorAll('[data-i18n-aria]');
+  const hrefNodes = document.querySelectorAll('[data-i18n-href]');
   const buttons = document.querySelectorAll('.langtoggle button');
 
   function applyLang(lang){
@@ -700,6 +707,7 @@ npm start              <span class="c"># http://localhost:3000</span>
     document.documentElement.lang = (lang === 'zh') ? 'zh-CN' : 'en';
     nodes.forEach(el => { const v = dict[el.getAttribute('data-i18n')]; if(v != null) el.textContent = v; });
     htmlNodes.forEach(el => { const v = dict[el.getAttribute('data-i18n-html')]; if(v != null) el.innerHTML = v; });
+    hrefNodes.forEach(el => { const v = dict[el.getAttribute('data-i18n-href')]; if(v != null) el.setAttribute('href', v); });
     imgNodes.forEach(el => {
       const v = dict[el.getAttribute('data-i18n-img')];
       if(v == null) return;

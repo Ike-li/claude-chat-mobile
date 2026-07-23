@@ -165,6 +165,9 @@ function shell(p, bodyHtml, toc) {
     '@type': 'BreadcrumbList',
     itemListElement: breadcrumbItems,
   });
+  const hreflangTags = p.slug === 'quickstart'
+    ? `\n<link rel="alternate" hreflang="zh-CN" href="${canonicalUrl}">\n<link rel="alternate" hreflang="en" href="${siteRoot}en/quickstart.html">\n<link rel="alternate" hreflang="x-default" href="${siteRoot}en/quickstart.html">`
+    : '';
   return `<!DOCTYPE html>
 <html lang="zh-CN" data-theme="light">
 <head>
@@ -172,7 +175,7 @@ function shell(p, bodyHtml, toc) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${p.title} · ${book.title}</title>
 <meta name="description" content="${(p.lead || '').replace(/"/g, '')}">
-<link rel="canonical" href="${canonicalUrl}">
+<link rel="canonical" href="${canonicalUrl}">${hreflangTags}
 <link rel="stylesheet" href="${b}assets/style.css">
 <script>window.__BASE__='${b}';</script>
 <script type="application/ld+json">${breadcrumbJson}</script>
