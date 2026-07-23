@@ -2,7 +2,7 @@
   "schema_version": 1,
   "site": "https://ike-li.github.io/claude-chat-mobile",
   "label": "post-seo-A-B-ship",
-  "captured_at": "2026-07-23T00:36:27Z",
+  "captured_at": "2026-07-23T00:48:46Z",
   "tool": "seo-baseline/capture.py (curl; Clash-safe)",
   "note": "Official claude-seo drift_baseline.py blocked by Clash fake-IP (198.18.x). This snapshot is the project SoT for drift compare.",
   "pages": [
@@ -13,7 +13,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 51701,
       "sha256": "9675ae7f1c58fc8940489e574cd3d4c5c2862a7fc98fb4ddce36567da2446dbd",
-      "fetched_at": "2026-07-23T00:36:09Z",
+      "fetched_at": "2026-07-23T00:48:29Z",
       "title": "Claude Chat Mobile — your local claude CLI, on your phone",
       "title_len": 57,
       "meta_description": "Self-hosted mobile Web UI for your real local claude CLI. Same agent, CLAUDE.md, and session—terminal-equivalent, not a hosted clone.",
@@ -59,7 +59,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 13517,
       "sha256": "65610be13a34cf152f18613ac1ba0d840cfa63f2b7d0c209d7248365cd37720b",
-      "fetched_at": "2026-07-23T00:36:10Z",
+      "fetched_at": "2026-07-23T00:48:30Z",
       "title": "Quickstart — Claude Chat Mobile",
       "title_len": 31,
       "meta_description": "Install and run Claude Chat Mobile: Node ≥20, local claude CLI, setup, doctor, LAN or temporary tunnel. Self-hosted, single-user per instance.",
@@ -116,7 +116,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 11239,
       "sha256": "acfa514bbc8c4bfbdf460b5f1587e3d464c84728207cbf2999e038433891c9fa",
-      "fetched_at": "2026-07-23T00:36:11Z",
+      "fetched_at": "2026-07-23T00:48:32Z",
       "title": "封面与导读 · Claude Chat Mobile",
       "title_len": 26,
       "meta_description": "一句话认识项目，看清这本手册怎么读。",
@@ -157,7 +157,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 11239,
       "sha256": "acfa514bbc8c4bfbdf460b5f1587e3d464c84728207cbf2999e038433891c9fa",
-      "fetched_at": "2026-07-23T00:36:13Z",
+      "fetched_at": "2026-07-23T00:48:33Z",
       "title": "封面与导读 · Claude Chat Mobile",
       "title_len": 26,
       "meta_description": "一句话认识项目，看清这本手册怎么读。",
@@ -196,9 +196,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/docs-site/pages/quickstart.html",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 11299,
-      "sha256": "3a73cb890a21f82cd1e03f13df956678d5feec30a81269cab626fc8ce884df12",
-      "fetched_at": "2026-07-23T00:36:14Z",
+      "size_bytes": 11494,
+      "sha256": "e79d85e0d870f6765868c2fd92a5c21f0b7e734f4d7234bde0f74801a826161f",
+      "fetched_at": "2026-07-23T00:48:34Z",
       "title": "快速开始 · Claude Chat Mobile",
       "title_len": 25,
       "meta_description": "安装、setup、doctor、局域网与临时隧道。",
@@ -250,9 +250,9 @@
       "final_url": "https://ike-li.github.io/claude-chat-mobile/docs-site/pages/security-model.html",
       "status_code": 200,
       "content_type": "text/html; charset=utf-8",
-      "size_bytes": 13393,
-      "sha256": "8945da95eb590096b44fc05e7a5b54d983ffcc154a39d6782ef5287e2fccaf15",
-      "fetched_at": "2026-07-23T00:36:15Z",
+      "size_bytes": 13646,
+      "sha256": "e17f25315e8cd89fe46182b3ad8add80b737432095c62c97bbc0fac8877e042d",
+      "fetched_at": "2026-07-23T00:48:35Z",
       "title": "安全模型 · Claude Chat Mobile",
       "title_len": 25,
       "meta_description": "单用户、token 不出本机、权限继承 CLI、设备 TOFU。",
@@ -298,7 +298,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 12247,
       "sha256": "5518f0293e100bc3390a3a9bf9693807671c3ddbcebe454d1a04acadad92b557",
-      "fetched_at": "2026-07-23T00:36:17Z",
+      "fetched_at": "2026-07-23T00:48:37Z",
       "title": "项目总览 · Claude Chat Mobile",
       "title_len": 25,
       "meta_description": "定位、适用场景、技术栈与仓库形态。",
@@ -342,7 +342,7 @@
       "content_type": "text/html; charset=utf-8",
       "size_bytes": 12286,
       "sha256": "ff39913f8fba8215f559fc06d78be85971ce52b969c4c67510bdc21a5d3a2be3",
-      "fetched_at": "2026-07-23T00:36:18Z",
+      "fetched_at": "2026-07-23T00:48:38Z",
       "title": "生产部署 · Claude Chat Mobile",
       "title_len": 25,
       "meta_description": "LaunchAgent、命名隧道、Access 2FA、CCM_DATA_DIR。",
@@ -385,7 +385,7 @@
       "content_type": "text/plain; charset=utf-8",
       "size_bytes": 181,
       "sha256": "fc672e4cbfc391922b76fe3bcb367363cbd300942234d8ecd85509a677bf562b",
-      "fetched_at": "2026-07-23T00:36:19Z",
+      "fetched_at": "2026-07-23T00:48:39Z",
       "text_preview": "User-agent: *\nAllow: /\n\n# Fragment HTML (not full handbook pages)\nDisallow: /claude-chat-mobile/docs-site/content/\n\nSitemap: https://ike-li.github.io/claude-chat-mobile/sitemap.xml\n",
       "text_lines": 7,
       "sitemap_ref": [
@@ -399,7 +399,7 @@
       "content_type": "application/xml",
       "size_bytes": 6536,
       "sha256": "74bbd2deb05ea603538ab83010ec633c3099187866bc3492fc7f744ca367057a",
-      "fetched_at": "2026-07-23T00:36:21Z",
+      "fetched_at": "2026-07-23T00:48:41Z",
       "loc_count": 31,
       "locs_sample": [
         "https://ike-li.github.io/claude-chat-mobile/",
@@ -419,7 +419,7 @@
       "content_type": "text/plain; charset=utf-8",
       "size_bytes": 1069,
       "sha256": "528404936387845da613e266d033ac35ad51a89111b394b748fa07de91ecb966",
-      "fetched_at": "2026-07-23T00:36:22Z",
+      "fetched_at": "2026-07-23T00:48:42Z",
       "text_preview": "# Claude Chat Mobile\n> Self-hosted mobile Web UI for a real local claude CLI. Terminal-equivalent, single-user per instance, not multi-tenant SaaS.\n\n## Primary\n- https://ike-li.github.io/claude-chat-mobile/\n- https://ike-li.github.io/claude-chat-mobile/en/quickstart.html\n- https://github.com/Ike-li/claude-chat-mobile\n\n## Handbook (Chinese)\n- https://ike-li.github.io/claude-chat-mobile/docs-site/\n- https://ike-li.github.io/claude-chat-mobile/docs-site/pages/overview.html\n- https://ike-li.github.i",
       "text_lines": 20
     },
@@ -430,7 +430,7 @@
       "content_type": "video/webm",
       "size_bytes": 251574,
       "sha256": "ba28e097acb7a16bd46d579fc7839cce97690795d18f881ee83d0fb8740aca49",
-      "fetched_at": "2026-07-23T00:36:24Z"
+      "fetched_at": "2026-07-23T00:48:44Z"
     },
     {
       "url": "https://ike-li.github.io/claude-chat-mobile/og-image.jpg",
@@ -439,7 +439,7 @@
       "content_type": "image/jpeg",
       "size_bytes": 230223,
       "sha256": "d8348ed656a107d9faed55198eca7f8db22e4d738c81772afd7e57878b7015be",
-      "fetched_at": "2026-07-23T00:36:26Z"
+      "fetched_at": "2026-07-23T00:48:46Z"
     }
   ]
 }
