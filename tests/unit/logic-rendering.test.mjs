@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk } from '../../public/js/logic.js';
+import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk, resolveUnreadAnchorIndex } from '../../public/js/logic.js';
 import { createRingBuffer } from '../../public/js/ring-buffer.js';
 
 test('ansiToHtml: 纯文本被 esc', () => {
@@ -146,6 +146,35 @@ test.describe('nextHistoryRenderChunk', () => {
 
   test('total=0：一步 done=true，end=0', () => {
     assert.deepEqual(nextHistoryRenderChunk({ processed: 0, total: 0, chunkSize: 40 }), { end: 0, done: true });
+  });
+});
+
+// ---- resolveUnreadAnchorIndex：未读胶囊"跳到第一条未读"的定位数学（不碰 DOM，纯计算） ----
+// 未读消息永远是当前已渲染顶层气泡列表的尾部 N 条（N=服务端 unreadOnEntry），不需要跨路径消息 ID，
+// 渲染完成后对列表做一次位置计算即可，越界（未读数超过实际渲染条数）优雅降级为"滚到最顶部"而非报错。
+test.describe('resolveUnreadAnchorIndex', () => {
+  test('正常情况：定位到"倒数第 unreadCount 条"对应的下标', () => {
+    assert.equal(resolveUnreadAnchorIndex(10, 3), 7);
+    assert.equal(resolveUnreadAnchorIndex(5, 1), 4);
+  });
+
+  test('unreadCount 覆盖全部列表：定位到第 0 条（列表顶部）', () => {
+    assert.equal(resolveUnreadAnchorIndex(5, 5), 0);
+  });
+
+  test('unreadCount 超过实际渲染条数（滑窗截断等极端场景）：clamp 到 0，不越界', () => {
+    assert.equal(resolveUnreadAnchorIndex(5, 8), 0);
+  });
+
+  test('unreadCount<=0 或列表为空：返回 -1（无需定位）', () => {
+    assert.equal(resolveUnreadAnchorIndex(10, 0), -1);
+    assert.equal(resolveUnreadAnchorIndex(10, -1), -1);
+    assert.equal(resolveUnreadAnchorIndex(0, 3), -1);
+  });
+
+  test('unreadCount 非有限数（NaN/undefined）：返回 -1，不产生 NaN 下标', () => {
+    assert.equal(resolveUnreadAnchorIndex(10, Number.NaN), -1);
+    assert.equal(resolveUnreadAnchorIndex(10, undefined), -1);
   });
 });
 

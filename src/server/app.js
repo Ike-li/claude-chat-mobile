@@ -80,6 +80,7 @@ import {
   tokenMatches as secureTokenMatches,
 } from './http.js';
 import { createInstanceManager } from './instance-manager.js';
+import { isInstanceBeingWatched, resolveUnreadDelta } from './unread-tracker.js';
 import { createSocketEventRegistrar, registerSocketConnection } from './socket.js';
 import { registerFileSocketHandlers } from './socket-files.js';
 
@@ -393,6 +394,9 @@ function unlockSocket(socket) {
   socket.deviceApproved = true;
   socket.trustBasis = 'device-token'; // SEC-03：待审批→批准走的就是设备信任表，受该表控制（吊销须能断连）
   socket.join('approved'); // SEC-01：批准后补入下行隔离房间，同 io.on('connection') 分支的即时批准路径
+  // 未读角标：不在此 capture——批准另一台设备 ≠ 当前会话「重新进入查看」。
+  // capture 会并入/清零活计数；若 viewing 会话已有未 ack 快照，新设备 join 不应触发多余状态机跳变。
+  // 真正进入查看仍走 setViewing / session:switch / 本 socket 首次 connect 路径。
 
   const deviceToken = socket.handshake.auth?.deviceToken;
   socket.emit('agent:event', {
@@ -612,6 +616,10 @@ const effortByInstance = instanceManager.efforts;
 const doneInstances = instanceManager.done;
 const errorInstances = instanceManager.errors;
 const abortedInstances = instanceManager.aborted;
+const unreadCounts = instanceManager.unreadCounts;
+const unreadSnapshotOnEntry = instanceManager.unreadSnapshotOnEntry;
+const lastCountedTopLevelMessageId = instanceManager.lastCountedTopLevelMessageId;
+const captureUnreadSnapshot = instanceManager.captureUnreadSnapshot;
 const newInstanceId = instanceManager.nextId;
 const permModeOf = instanceManager.permissionModeOf;
 const effortOf = instanceManager.effortOf;
@@ -714,7 +722,8 @@ function instancesPayload() {
       // 切 tab 面板同步：携带各实例当前档，前端 setInstances 据此静默刷新顶部 permMode/effort/model select。
       // transcriptModel：resume 冷读的会话末条 assistant 模型（纯展示回落，填 init 未到的空窗；
       // 不入 activeModel/defaultModel、不参与 setModel 差分）。
-      permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || a.transcriptModel || null
+      permissionMode: permModeOf(id), effort: effortOf(id), model: a.activeModel || a.reportedModel || a.transcriptModel || null,
+      unreadCount: unreadCounts.get(id) || 0, // 未读角标活计数（预留会话列表徽标用；聊天页内胶囊走 sync:since ack 的 unreadOnEntry 冻结快照）
     });
   }
   const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE, needsYou: computeNeedsYou(), service: computeServiceHealth() };
@@ -1378,6 +1387,20 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       if (!_isHighFreqDelta || id === viewingInstanceId) {
         io.to('approved').emit('agent:event', envelope); // SEC-01：主事件流含全部会话内容，仅广播给已批准设备
       }
+      // 未读计数：故意独立于上面的 _isHighFreqDelta 广播闸门之外——后台实例的 text_delta 本就不广播（P2 性能优化），
+      // 但仍要计未读，否则"挂着跑的会话"这个未读角标最核心的场景会永远显示 0。resolveUnreadDelta 判断这条 envelope
+      // 是否算一条新顶层消息（颗粒度=用户消息+assistant文字回复，与前端渲染出的顶层气泡一一对应）；
+      // isInstanceBeingWatched 判断当前是否需要计数（镜像视图架构下，同会话锁屏/断线也判定为未在看，见该函数注释）。
+      {
+        const delta = resolveUnreadDelta({
+          eventType: envelope.type, payload: envelope.payload,
+          lastCountedMessageId: lastCountedTopLevelMessageId.get(id) ?? null,
+        });
+        lastCountedTopLevelMessageId.set(id, delta.lastCountedMessageId);
+        if (delta.counts && !isInstanceBeingWatched(id, viewingInstanceId, io.sockets.adapter.rooms.get('approved')?.size ?? 0)) {
+          unreadCounts.set(id, (unreadCounts.get(id) || 0) + 1);
+        }
+      }
       // E16：仅当前查看 tab 的轮次边界刷新状态行（后台实例的 init/result 不抢占 viewingInstanceId 的 statusline）
       if ((envelope.type === 'init' || envelope.type === 'result') && id === viewingInstanceId) scheduleStatusRefresh();
       // lastUsedAt 对齐消息活动：用户发送 / 轮次结束时刷新（init/onSessionId 的 upsert 不再刷）
@@ -1698,6 +1721,10 @@ registerSocketConnection(io, socket => {
     // SEC-01：批准设备加入下行隔离房间——本函数下方全部 io.emit 已改 io.to('approved').emit，
     // 待审批 socket（deviceApproved===false）不在此房间，故收不到任何敏感广播，只收上面的 device_status。
     socket.join('approved');
+    // 未读角标：覆盖"同一会话内断线重连"场景（镜像视图架构下最常见的"切出去"形态——锁屏/切后台冻结页面
+    // 断开 socket，但 viewingInstanceId 全程不变，前端不会重新 emit user:setViewing）。幂等、null 安全，
+    // 无关紧要的网络抖动重连也可放心无脑调用。
+    captureUnreadSnapshot(viewingInstanceId);
     // 已授权的设备：重放最近 init/models（合成事件惯例：epoch:'server'、sessionId:null，不触发客户端会话切换）
     if (lastInit) {
       // 台阶3：lastInit 是全局最近一次（可能来自后台实例），重放时校正到当前查看 tab——
@@ -2104,11 +2131,22 @@ registerSocketConnection(io, socket => {
     clearMirrorOnViewChange();
     interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 切换当前活动视图 (user:setViewing): instanceId=${id}, sessionId=${a.sessionId || '(pending)'}`);
     doneInstances.delete(id); errorInstances.delete(id); abortedInstances.delete(id);
+    captureUnreadSnapshot(id); // 未读角标：进入查看 → 冻结当前累计值供前端展示 + 清零活计数器
     broadcastInstances();
     pushModelsForCwd(a.cwd); // 切视图到别区 tab：推该区清单刷新模型选择器（避免显另一 tab 工作区的候选）
     pushSlashCommandsForCwd(a.cwd); // 同 models：按区刷新 slash 提示，防别区 skill 残留
     lastStatusLine = null;
     scheduleStatusRefresh();
+  });
+
+  // 未读角标：用户点掉悬浮胶囊 / 手动翻到锚点消息附近时上报，清掉冻结快照。只认「当前正在看的实例」，
+  // 防止误清后台会话（例如迟到的旧 ack、或客户端状态与服务端 viewingInstanceId 短暂不同步）。
+  // 镜像视图架构下多端应一致：清除后 broadcastInstances() 让其他设备的胶囊也同步消失。
+  on(socket, 'user:ackUnread', payload => {
+    const id = payload?.instanceId;
+    if (id == null || id !== viewingInstanceId) return;
+    unreadSnapshotOnEntry.delete(id);
+    broadcastInstances();
   });
 
   on(socket, 'user:answer', payload => {
@@ -2236,6 +2274,9 @@ registerSocketConnection(io, socket => {
     // 切会话立即清全局 mirror；catchUpTick 切换分支会按新会话尾部形态重判预锁
     clearMirrorOnViewChange();
     doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);
+    // 未读角标：与 user:setViewing 对称——首页最近列表/未打开会话走 session:switch 聚焦 live 实例时也要冻结未读，
+    // 否则 sync:since 的 unreadOnEntry 恒 0、胶囊永不出现（侧栏 live 走 setViewing 已有此调用）。
+    captureUnreadSnapshot(inst.instanceId);
     broadcastInstances();
     pushModelsForCwd(cwd); // 切区即时推本区清单（无缓存→空）；随后 resume 实例的真 models 兜底
     pushSlashCommandsForCwd(cwd); // 同 models：切区推本区 slash；无缓存保留前端缓存，resume 真 init 校正
@@ -2468,8 +2509,10 @@ registerSocketConnection(io, socket => {
     // 让重连客户端能据此清屏重载历史（connect 路径不像 bindView 那样先 clearView，无法靠 replayed 自辨）。
     // diskLen=磁盘 transcript 的 history 条数（仅 replayed=0 时读、带回）：供前端切入对账「离开期间被终端外部
     // 写入」的盲区——磁盘比前端已渲染长即清屏全量重载（见 logic.js shouldReloadOnEnter）。
-    const done = (replayed, gap, found = true, pending = null, diskLen = null) => {
-      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen });
+    // unreadOnEntry：进入/回到这个实例时应展示的未读胶囊数字，取自 captureUnreadSnapshot 冻结的快照
+    // （user:setViewing / session:switch / 断线重连 / 设备批准写入）。默认 0（未指定不展示）。
+    const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0) => {
+      if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, unreadOnEntry });
     };
     const a = routeInstance(instanceId); // 台阶3：续传指定 tab 实例的缓冲（缺省 viewingInstanceId）
     if (!a || a.sessionId !== sessionId) { metrics.inc('catch_up_reloads'); return done(0, false, false); } // 无匹配实例：客户端清屏重载历史（NFR-15 重载：仅计后端能确证的触发；前端因 diskLen 盲区的重载后端不可观测、不计）；亦会在下个 live 事件凭 epoch 自愈
@@ -2477,10 +2520,18 @@ registerSocketConnection(io, socket => {
     if (gap) { // #13：有缺口时明确告知，客户端可整段重渲染，不把残缺当完整
       socket.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId, instanceId: a.instanceId, cwd: a.cwd, ts: Date.now(),
-        type: 'system', payload: { message: '部分历史已超出缓冲窗口，可能有缺失' }
+        type: 'system', payload: { message: '部分历史已超出缓冲窗口，可能有缺失' }, replay: true,
       });
     }
-    for (const envelope of events) socket.emit('agent:event', envelope);
+    // replay:true：标记这批是补发而非实时到达，前端 dispatch() 据此置位 isReplayBatch 供 alertCue 静音判断
+    // （防"切回会话把离开期间攒的多轮 result/error 逐条连响"）。必须 clone，不能原地改 envelope——
+    // 该对象存于环形缓冲，可能被其他 socket 的后续 sync:since 调用复用，原地写会互相污染。
+    // 转发已有类型的 envelope（非内联构造新事件），拆成具名变量而非内联字面量，避免 agent-event-contract
+    // 静态扫描器把它误判为"缺 type 字段的新事件类型"（type 其实继承自 envelope.type，已在源头登记过）。
+    for (const envelope of events) {
+      const replayEnvelope = { ...envelope, replay: true };
+      socket.emit('agent:event', replayEnvelope);
+    }
     // replayed 仅计“对话内容”事件：models 是 start() 里 fetchModels 推送的元数据（连接时按 cwd 已重放），
     // 若计入会把“刚 resume/预热、缓冲里只有一条 models”的实例误判为“已有内容”→ 前端 bindView
     // 跳过 loadHistory → 切入后聊天区空白（jsonl 历史从不加载）。排除后这类实例 replayed=0，前端正确回落
@@ -2495,7 +2546,10 @@ registerSocketConnection(io, socket => {
     // 状态对账：随 ack 带回该实例当前未决审批/提问快照。pendingPermissions/pendingQuestions 是权威真相，
     // 原始 permission_request/question 事件可能已被环形缓冲 trim 或切视图时被前端分流丢弃——前端在视图稳定后
     // （所有 clearView 之后，尤其 gap→重载路径）据此重建卡片，杜绝「角标 ⚠️ 待审批但会话内无卡片」。
-    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen);
+    // unreadOnEntry 只在这就是当前查看实例时才有意义——captureUnreadSnapshot 只对 viewingInstanceId 写入，
+    // 非当前查看实例的快照要么不存在要么是上一轮陈旧值，不应被当前这次 sync:since 误报出去。
+    const unreadOnEntry = a.instanceId === viewingInstanceId ? (unreadSnapshotOnEntry.get(a.instanceId) || 0) : 0;
+    done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry);
     // 切入/切回后 clearView 会先把 statusline 藏掉；setViewing/switch 的 300ms 防抖刷新可能已在 clearView
     // 之前发出并被清空。此处在 sync 完成后再强制重发一次（清 lastStatusLine 防 key 去重把「已发过但被 clearView 擦掉」的那次吞掉），
     // 保证冷路径/缓存路径都有 statusline 上屏，不依赖下一次 tool 事件。

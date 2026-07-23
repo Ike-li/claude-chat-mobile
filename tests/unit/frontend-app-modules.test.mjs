@@ -375,6 +375,74 @@ test('agent event dispatcher invokes onHandledEvent only for the handled branch'
   assert.deepEqual(handledCalls, ['text_delta']);
 });
 
+// 未读补发防连响：sync:since 批量补发的事件带 replay:true，dispatch 期间应把 state.isReplayBatch
+// 置为 true 供 alertCue 消费方判断是否静音；实时事件（无 replay 标记）则应为 false。处理完必须复位，
+// 不能污染下一条事件——用不同 seq 各调用一次 dispatch 模拟"补发一条、实时到一条"的真实顺序。
+test('agent event dispatcher marks replay batches in shared state only for the duration of the handler call', () => {
+  const seenDuringHandler = [];
+  const state = {
+    viewingInstanceId: 'inst-1',
+    instancesReady: true,
+    curEpoch: null,
+    lastSeq: 0,
+    currentSessionId: null,
+  };
+  const context = createAppContext({ state });
+  const dispatch = createAgentEventDispatcher(context, {
+    handlers: () => ({ result: () => seenDuringHandler.push(state.isReplayBatch) }),
+  });
+
+  dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 1, replay: true, payload: {} });
+  dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 2, payload: {} });
+
+  assert.deepEqual(seenDuringHandler, [true, false]);
+  assert.equal(state.isReplayBatch, false); // 处理完复位，不遗留污染状态
+});
+
+// 防永久静音：handler 抛错也必须复位 isReplayBatch（与 applyPendingSnapshot 的 try/finally 对称）
+test('agent event dispatcher resets isReplayBatch even when the handler throws', () => {
+  const state = {
+    viewingInstanceId: 'inst-1',
+    instancesReady: true,
+    curEpoch: null,
+    lastSeq: 0,
+    currentSessionId: null,
+  };
+  const context = createAppContext({ state });
+  const dispatch = createAgentEventDispatcher(context, {
+    handlers: () => ({ result: () => { throw new Error('boom'); } }),
+  });
+
+  assert.throws(() => {
+    dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 1, replay: true, payload: {} });
+  }, /boom/);
+  assert.equal(state.isReplayBatch, false);
+});
+
+// outOfBand（task_notification）也要在 handler 期间置 isReplayBatch，否则补发仍连响
+test('agent event dispatcher marks isReplayBatch for out-of-band replay events', () => {
+  const seen = [];
+  const state = {
+    viewingInstanceId: 'inst-1',
+    instancesReady: true,
+    curEpoch: null,
+    lastSeq: 0,
+    currentSessionId: null,
+  };
+  const context = createAppContext({ state });
+  const dispatch = createAgentEventDispatcher(context, {
+    outOfBand: {
+      task_notification: () => { seen.push(state.isReplayBatch); },
+    },
+  });
+
+  dispatch({ type: 'task_notification', instanceId: 'inst-1', epoch: 'e1', seq: 1, replay: true, payload: {} });
+  dispatch({ type: 'task_notification', instanceId: 'inst-1', epoch: 'e1', seq: 2, payload: {} });
+
+  assert.deepEqual(seen, [true, false]);
+  assert.equal(state.isReplayBatch, false);
+});
+
 test('file browser formats byte counts consistently for directory and content pages', () => {
   assert.equal(formatFileSize(100), '100B');
   assert.equal(formatFileSize(1536), '1.5KB');

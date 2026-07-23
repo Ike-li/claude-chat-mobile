@@ -60,3 +60,67 @@ test('instance state priority is permission, busy, aborted, error, done, idle', 
   agent.pendingPermissions.set('p', {});
   assert.equal(manager.stateOf(id), 'permission');
 });
+
+test('captureUnreadSnapshot freezes the live counter into the entry snapshot and zeroes the counter', () => {
+  const manager = createInstanceManager();
+  const id = manager.nextId();
+  manager.unreadCounts.set(id, 5);
+
+  manager.captureUnreadSnapshot(id);
+
+  assert.equal(manager.unreadCounts.has(id), false);
+  assert.equal(manager.unreadSnapshotOnEntry.get(id), 5);
+});
+
+test('captureUnreadSnapshot preserves unacked snapshot when live counter is 0 (reconnect jitter)', () => {
+  const manager = createInstanceManager();
+  const id = manager.nextId();
+  manager.unreadCounts.set(id, 3);
+  manager.captureUnreadSnapshot(id);
+  assert.equal(manager.unreadSnapshotOnEntry.get(id), 3);
+
+  // 断线重连：期间没攒新未读、用户也未 ack → 不得把已冻快照冲成 0（胶囊仍要展示）
+  manager.captureUnreadSnapshot(id);
+  assert.equal(manager.unreadSnapshotOnEntry.get(id), 3);
+});
+
+test('captureUnreadSnapshot folds new live counts into an existing unacked snapshot (additive)', () => {
+  const manager = createInstanceManager();
+  const id = manager.nextId();
+  manager.unreadCounts.set(id, 3);
+  manager.captureUnreadSnapshot(id);
+  // 第一次冻结后、ack 前又离开期间攒了 2 条
+  manager.unreadCounts.set(id, 2);
+  manager.captureUnreadSnapshot(id);
+  assert.equal(manager.unreadSnapshotOnEntry.get(id), 5);
+  assert.equal(manager.unreadCounts.has(id), false);
+});
+
+test('captureUnreadSnapshot ignores a null id (no current viewing instance)', () => {
+  const manager = createInstanceManager();
+  manager.captureUnreadSnapshot(null); // 不应抛错、不应写入任何 key
+  assert.equal(manager.unreadSnapshotOnEntry.size, 0);
+});
+
+test('remove() clears unreadCounts, unreadSnapshotOnEntry and lastCountedTopLevelMessageId alongside the existing latch sets', () => {
+  const manager = createInstanceManager();
+  const agent = {
+    instanceId: manager.nextId(),
+    sessionId: 's-unread',
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
+    pendingTurns: 0,
+    hasBgTasks: () => false,
+    dispose() {},
+  };
+  manager.agents.set(agent.instanceId, agent);
+  manager.unreadCounts.set(agent.instanceId, 4);
+  manager.unreadSnapshotOnEntry.set(agent.instanceId, 2);
+  manager.lastCountedTopLevelMessageId.set(agent.instanceId, 'm9');
+
+  manager.remove(agent.instanceId);
+
+  assert.equal(manager.unreadCounts.has(agent.instanceId), false);
+  assert.equal(manager.unreadSnapshotOnEntry.has(agent.instanceId), false);
+  assert.equal(manager.lastCountedTopLevelMessageId.has(agent.instanceId), false);
+});

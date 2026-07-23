@@ -35,6 +35,8 @@ let pendingQuestion = null;
 let questSeq = 0; // 每次 test:question* 递增，避免 TC-5 答过后 TC-5b 同 requestId 被 answeredQuestionIds 吞掉
 let syncPendingSnapshot = null; // Bug2：模拟真 server sync:since 的 ack.pending 快照（切入时重建待审批卡片）
 let syncPendingSnapshotInstanceId = null;
+let mockUnreadOnEntry = 0; // 未读角标：模拟真 server sync:since 的 ack.unreadOnEntry（切入时展示未读胶囊）
+let mockUnreadOnEntryInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
@@ -71,6 +73,8 @@ function resetMockState() {
   pendingQuestion = null;
   syncPendingSnapshot = null;
   syncPendingSnapshotInstanceId = null;
+  mockUnreadOnEntry = 0;
+  mockUnreadOnEntryInstanceId = null;
   lateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
   busySilentSwitchMode = false;
@@ -845,7 +849,8 @@ io.on('connection', socket => {
     const ack = (replayed, extra = {}) => {
       if (typeof callback === 'function') {
         const pending = (!syncPendingSnapshotInstanceId || syncPendingSnapshotInstanceId === instanceId) ? syncPendingSnapshot : null;
-        callback({ ok: true, replayed, pending, ...extra });
+        const unreadOnEntry = mockUnreadOnEntryInstanceId === instanceId ? mockUnreadOnEntry : 0;
+        callback({ ok: true, replayed, pending, unreadOnEntry, ...extra });
       }
     };
     if (instanceId === 'inst_2') {
@@ -1215,6 +1220,22 @@ io.on('connection', socket => {
           questions: []
         };
         syncPendingSnapshotInstanceId = 'inst_2';
+        viewingInstanceId = 'inst_2';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      },
+    },
+    {
+      // 未读角标：切到 inst_2 时 sync:since ack 带 unreadOnEntry=1，模拟离开期间攒了 1 条未读顶层消息。
+      // inst_2 的默认 sync:since 回放固定是 2 条顶层气泡（user_message + text_delta 各一），
+      // unreadOnEntry=1 应定位到最后一条（resolveUnreadAnchorIndex(2,1)=1）。
+      command: 'test:unread-pill',
+      run: async () => {
+        console.log('[mock] test:unread-pill — inst_2 有 1 条未读，切 viewing 触发 sync:since 展示胶囊');
+        mockUnreadOnEntry = 1;
+        mockUnreadOnEntryInstanceId = 'inst_2';
         viewingInstanceId = 'inst_2';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),

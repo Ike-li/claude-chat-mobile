@@ -139,6 +139,13 @@
   <!-- 消息区 -->
   <main id="messages" class="flex-1 overflow-y-auto overscroll-none px-3 py-3 space-y-3"></main>
 
+  <!-- 未读角标：切回会话时若有未读顶层消息，悬浮于消息区右下角、composer 上方；点击跳转到第一条未读并高亮
+       （app.js jumpToUnreadAnchor）。#messages 的兄弟节点而非子节点——bindView/loadHistory 的整体清空/
+       替换逻辑（clearView、sessionDomCache 贴回等）会连带清掉子节点，故不能挂在 #messages 内部。 -->
+  <button id="unreadPill" type="button" class="hidden flex items-center gap-1 rounded-full bg-cta text-white text-xs font-semibold px-3.5 py-2 active:scale-95" style="box-shadow:var(--shadow-pop)" aria-label="定位到未读消息">
+    <span id="unreadPillCount">0</span> 条未读 ↑
+  </button>
+
   <!-- 权限审批弹窗（底部 sheet） -->
   <div id="permModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="权限请求">
     <div class="w-full bg-surface rounded-t-2xl p-4 safe-bottom" style="box-shadow:var(--shadow-pop);border-top:3px solid var(--accent)">

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -47,6 +47,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop');
+  const unreadPillEl = $('unreadPill'), unreadPillCountEl = $('unreadPillCount'); // 未读角标悬浮胶囊
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
 
@@ -459,7 +460,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') clientLogger.flush(); });
   const alerts = createAlertController(appContext);
   const haptic = alerts.haptic;
-  const alertCue = alerts.cue;
+  // 补发批次（sync:since 一次性追平离开期间积压的多轮 result/error）静音：isReplayBatch 由
+  // dispatchAgentEvent 在 handler 调用期间置位，未读角标本身就是提示，不需要连续响铃。
+  const alertCue = (kind) => { if (!appContext.state.isReplayBatch) alerts.cue(kind); };
   const ensureAlertAudio = alerts.ensureAudio;
   const messageRenderer = createMessageRenderer(appContext, { scrollBottom: () => scrollBottom() });
   const render = messageRenderer.renderMarkdown;
@@ -599,7 +602,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     addBar,
     getToken: () => token,
   });
-  const notify = notifications.notify;
+  // 与 alertCue 对称：sync:since 补发期间静音 OS 通知，避免前台完成通知连弹（result / task_notification）
+  const notify = (title, body, opts) => {
+    if (appContext.state.isReplayBatch) return false;
+    return notifications.notify(title, body, opts);
+  };
   const setupPush = notifications.setup;
   const taskStatus = createTaskStatusController(appContext, {
     addBar,
@@ -707,8 +714,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 先 clearView，loadHistory 是 appendChild 不清空，故重载前必须先 clearView 防重复整段对话。
   const PROBE_MS = 5000; // 探测 ack 超时：远低于 socket.io 被动心跳超时窗口(~45s)，又容忍移动端慢 RTT
   let _probeInFlight = false;
-  function reloadCurrentFromHistory() {
+  function reloadCurrentFromHistory(onDone) {
     if (!displayedSessionId) return;
+    hideUnreadPill(); // 即将清屏重载：旧胶囊指向的 DOM 节点马上失效，先清，onDone 到达后再按新数字重建
     // 与 bindView reload 同理：clearView 前的 lastSeq/curEpoch 可能刚被 sync 回放推进；
     // 归零后若再 sync 会把环形缓冲整段再叠到磁盘历史上。恢复基线，仅丢未落盘的实时中间态。
     const keepSeq = lastSeq;
@@ -720,15 +728,23 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 前台回切/重连 gap→reload 静默窗口无 delta 自愈，运行条被本次清屏永久抹掉 → 按 server 权威 state 重种。
     if (shouldReseedBusyAfterReload({ instances: instancesList, instanceId: displayedInstanceId })) setBusy(true);
     showLoadingCard();
-    loadHistory(displayedSessionId); // cwd 默认 currentCwd
+    loadHistory(displayedSessionId, undefined, onDone); // cwd 默认 currentCwd
   }
   // 状态对账：用 sync:since ack 带回的 pending 快照重建未决审批/提问卡片。走既有 handler（自带 requestId
   // 去重 + 弹窗/通知）。修「角标 ⚠️ 待审批但会话内无卡片」——原始事件可能被环形缓冲 trim 或切视图分流丢弃，
   // pendingPermissions/pendingQuestions 才是权威真相。视图稳定后调用（bindView / connect 两路径）。
   function applyPendingSnapshot(pending) {
     if (!pending) return;
-    for (const p of pending.permissions || []) handle.permission_request(p);
-    for (const q of pending.questions || []) handle.question(q);
+    // 走 sync:since ack 的 pending 字段重建卡片，不经过 dispatchAgentEvent，故不带 event.replay 标记；
+    // 这里单独置位 isReplayBatch 防止环形缓冲被冲出窗口（gap）时，这条旁路漏静音重新弹响。
+    // try/finally：handle.* 会动 DOM，若中途抛错也必须复位，否则 isReplayBatch 卡在 true 会静默吞掉后续所有实时提示音。
+    appContext.state.isReplayBatch = true;
+    try {
+      for (const p of pending.permissions || []) handle.permission_request(p);
+      for (const q of pending.questions || []) handle.question(q);
+    } finally {
+      appContext.state.isReplayBatch = false;
+    }
   }
   function requestSync({ probe }) {
     if (!displayedInstanceId || !displayedSessionId) return;
@@ -741,8 +757,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const a = syncAckAction(err, res);
       if (a === 'reconnect') { if (socket.connected) socket.disconnect(); socket.connect(); return; }
       if (res?.replayed > 0) logClientEvent('recv', `[WEB_RECV] 断线追平补发 ${res.replayed} 条`); // 对账断线期漏收
-      if (a === 'reload') reloadCurrentFromHistory();
-      // 'none'：回放走正常 agent:event 经 epoch/seq 去重增量渲染
+      // 未读胶囊：这是"同一会话内断线重连"路径（镜像视图架构下最常见的"切出去"形态——锁屏/切后台冻结页面
+      // 断开 socket，viewingInstanceId 全程不变，故不会走 bindView，只会走到这里）。DOM 是否就绪同样分叉：
+      // 'reload' 要等 reloadCurrentFromHistory 的 onDone；其余（回放走正常 agent:event 增量渲染）DOM 已稳定。
+      const unreadOnEntry = res?.unreadOnEntry || 0;
+      if (a === 'reload') reloadCurrentFromHistory(() => showUnreadPillIfAny(unreadOnEntry));
+      else showUnreadPillIfAny(unreadOnEntry);
       // 状态对账：重连/probe 补传后用快照重建未决审批卡片（reload 的 clearView 已同步执行完、不被清）；
       // reconnect 已 return——它触发干净重连，届时新一轮 sync 会带新快照。
       applyPendingSnapshot(res?.pending);
@@ -1685,6 +1705,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
 
       const bubble = el(`<div class="msg-frame rounded-xl bg-user text-ink px-3 py-2 text-sm" data-testid="user-message"></div>`);
+      bubble.dataset.topLevel = '1'; // 未读角标锚点定位用：user_message 在线新建分支（离线占位分支在 send() 创建时已挂，这里走 matchedBubble 复用不重复创建）
       // 排队撤回/标记转正都按 clientMessageId 定位气泡（离线占位分支已挂，此处补齐在线新建分支）
       if (p.clientMessageId) bubble.dataset.clientMessageId = p.clientMessageId;
       if (p.text) {
@@ -2059,6 +2080,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!s) {
       // UX-004：直接 msg-body 容器，流式走 innerHTML=render，不再用纯文本 textNode 裸显 markdown
       const wrap = el(`<div class="msg-frame msg-body px-0.5" data-testid="assistant-message" aria-live="polite"></div>`);
+      wrap.dataset.topLevel = '1'; // 未读角标锚点定位用：仅主链 assistant 流式气泡（子agent走 getSubagentStream，不经过这里）
       appendMessage(wrap);
       s = { el: wrap, raw: '', done: false };
       streams.set(key, s);
@@ -2659,6 +2681,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 离线状态：生成乐观消息气泡占位符，保存到离线重发队列，待重连后自动重发
       haptic('tap');
       const bubble = el(`<div class="msg-frame rounded-xl bg-user text-ink px-3 py-2 text-sm opacity-70 transition-opacity"></div>`);
+      // 未读角标锚点定位用：离线占位气泡是唯一"在线 user_message 到达前就存在"的顶层气泡创建点——
+      // matchedBubble 命中时是原地复用这个节点（见 handle.user_message），不会重新创建，故必须在这里打标记。
+      bubble.dataset.topLevel = '1';
       // FE-002：挂 clientMessageId + 附件名指纹，供 user_message 回放精确匹配（含纯附件无文本）
       bubble.dataset.clientMessageId = clientMessageId;
       if (outgoingAttachments?.length) {
@@ -3548,10 +3573,65 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     updateSendButtonState(); // _queueFull 可能随 instances 广播变化，须即时刷新发送按钮禁用态
   }
 
+  // ---- 未读角标：切回会话时若离开期间攒了未读顶层消息，悬浮胶囊显示数量，点击/翻到附近自动确认已读 ----
+  // 只统计顶层气泡（renderOne/getStream/handle.user_message/离线占位气泡创建时打的 dataset.topLevel='1'），
+  // 与服务端 unread-tracker.js#resolveUnreadDelta 的计数颗粒度一致。
+  function topLevelBubbles() {
+    return Array.from(messagesEl.querySelectorAll(':scope > [data-top-level="1"]'));
+  }
+  let unreadAnchorNode = null;
+  let unreadAnchorObserver = null;
+  function hideUnreadPill() {
+    unreadPillEl?.classList.add('hidden');
+    unreadAnchorObserver?.disconnect();
+    unreadAnchorObserver = null;
+    unreadAnchorNode = null;
+  }
+  // 用户点掉胶囊 / 手动翻到锚点附近（IntersectionObserver 命中）均走这里：本地先隐藏，再上报服务端清
+  // 冻结快照（user:ackUnread）——镜像视图架构下多端应一致，其他设备的胶囊会随 broadcastInstances 同步消失。
+  function ackUnread() {
+    const id = viewingInstanceId;
+    hideUnreadPill();
+    if (id != null) socket.emit('user:ackUnread', { instanceId: id });
+  }
+  // count：sync:since ack 带回的 unreadOnEntry（第一次为这个会话结算的权威数字）。必须在渲染真正稳定后调用
+  // （bindView 的 'keep' 分支直接调用；'load'/'reload' 分支要等 loadHistory 的 onDone 回调），否则
+  // topLevelBubbles() 数不全，锚点会算错位置。
+  function showUnreadPillIfAny(count) {
+    hideUnreadPill(); // 先清上一个会话可能残留的胶囊态，防止跨会话串味
+    if (!unreadPillEl || !(count > 0)) return;
+    const list = topLevelBubbles();
+    const idx = resolveUnreadAnchorIndex(list.length, count);
+    if (idx < 0) return;
+    unreadAnchorNode = list[idx];
+    unreadPillCountEl.textContent = count > 99 ? '99+' : String(count);
+    unreadPillEl.classList.remove('hidden');
+    // observe() 触发的第一次回调只是汇报"此刻"的可见状态（短对话/未读消息本来就在一屏内时，锚点从一开始
+    // 就是可见的）——不能当成"用户翻到了"，否则胶囊刚显示就被自己判定为已读并立刻消失。只认后续真正由
+    // 滚动触发的状态变化。
+    let firstReport = true;
+    unreadAnchorObserver = new IntersectionObserver(entries => {
+      if (firstReport) { firstReport = false; return; }
+      if (entries.some(e => e.isIntersecting)) ackUnread();
+    }, { root: messagesEl, threshold: 0.5 });
+    unreadAnchorObserver.observe(unreadAnchorNode);
+  }
+  function jumpToUnreadAnchor() {
+    haptic('tap');
+    const anchor = unreadAnchorNode; // ackUnread() 会清空闭包状态，先取局部引用供滚动/高亮用
+    ackUnread();
+    if (!anchor?.isConnected) return;
+    anchor.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    anchor.classList.add('unread-anchor-flash');
+    setTimeout(() => anchor.classList.remove('unread-anchor-flash'), 2000);
+  }
+  unreadPillEl?.addEventListener('click', jumpToUnreadAnchor);
+
   // aggregateStates 已抽到 logic.js（顶部 import）。
   // 切视图到指定实例（台阶3）：清视图 → sync 活缓冲（重建在途流 + 挂起审批弹窗）→ 无缓冲回退 history。
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
   function bindView(entry, id) {
+    hideUnreadPill(); // 无条件先清上一个会话的残留胶囊——含本函数下方提前 return 的空首页/compose 分支，避免悬浮在无关界面上
     const prevInstanceId = displayedInstanceId; // S1：缓存归属的(外出)实例，供切回时检测实例是否被替换
     const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 planSessionDraftSwap 判 keep/swap
     displayedInstanceId = id;
@@ -3680,8 +3760,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         replayed: res?.replayed, gap: res?.gap, hasCache,
         diskLen: res?.diskLen ?? 0, seenDiskLen: seenDiskLenBySession.get(sid) ?? 0
       });
+      // 未读胶囊：数字随 ack 一次性到达，但 DOM 是否已就绪要看走哪条分支——'load'/'reload' 要等
+      // loadHistory 分块渲染真正落地（onDone）才能查 topLevelBubbles()，'keep' 分支 DOM 已稳定可以直接查。
+      const unreadOnEntry = res?.unreadOnEntry || 0;
       if (action === 'load') {
-        loadHistory(sid, entry.cwd);
+        loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
       } else if (action === 'reload') {
         // 清屏全量重载历史（同重连路径 syncAckAction 的 gap→reload，不把残缺/过期缓存当完整）。
         // sync:since 已把活缓冲事件推进 lastSeq/curEpoch 并渲染进 DOM；clearView 会归零基线——
@@ -3696,9 +3779,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         // 静默窗口（长 Bash 执行中）无 delta 自愈，运行条被本次清屏永久抹掉 → 按 server 权威 state 重种。
         if (shouldReseedBusyAfterReload({ instances: instancesList, instanceId: id, entryState: entry?.state })) setBusy(true);
         showLoadingCard();
-        loadHistory(sid, entry.cwd);
+        loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
       } else {
         hideLoadingCard();
+        showUnreadPillIfAny(unreadOnEntry);
       }
       // 状态对账：视图已稳定（上面所有 clearView 已执行完）→ 用 ack 带回的快照重建未决审批/提问卡片。
       // 放最后而非提前 socket.emit，正为不被 reload 分支的 clearView 清掉（workflow 高频事件常触发 gap）。
@@ -5022,7 +5106,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     messagesEl.appendChild(container);
   }
 
-  function loadHistory(sessionId, cwd = currentCwd) {
+  // onDone：历史渲染真正落地（含 renderHistoryBubbles 内部分块 requestIdleCallback）后触发，供未读胶囊
+  // 判断"此刻 DOM 已稳定、可以查 topLevelBubbles() 定位锚点"——只有 bindView 的 sync:since 回调会传，
+  // onHistoryAppend（只读镜像追平）不传，维持原样不受影响。
+  function loadHistory(sessionId, cwd = currentCwd, onDone) {
     if (!sessionId) return;
     const reqInstanceId = displayedInstanceId; // WS-001：捕获发起时的视图目标（代次）
     socket.emit('session:history', { sessionId, cwd }, res => {
@@ -5033,10 +5120,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const msgs = res?.messages || [];
       if (!msgs.length) {
         if (res?.error) addBar('历史消息加载失败', 'text-ink-faint');
+        onDone?.();
         return;
       }
       addBar(`加载了 ${msgs.length} 条历史消息`, 'text-ink-faint');
-      renderHistoryBubbles(msgs);
+      renderHistoryBubbles(msgs, onDone);
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);
@@ -5053,8 +5141,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // 渲染一批历史/追平消息为气泡并追加（loadHistory 与 onHistoryAppend 复用；分块让出主线程 + 一次性 fragment 插入 + 空闲高亮）。
   // 支持文本 / thinking / tool_use / tool_result；sidechain（parentToolUseId）收进可折叠子 agent 卡。
-  function renderHistoryBubbles(msgs) {
-    if (!msgs?.length) return;
+  function renderHistoryBubbles(msgs, onDone) {
+    if (!msgs?.length) { onDone?.(); return; }
     const frag = document.createDocumentFragment();
     const codeBlocks = [];
     const histToolCards = new Map(); // toolUseId → card（本批内配对 tool_result）
@@ -5191,6 +5279,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         bubble.appendChild(buildAttachmentWrap(msg.attachments, Boolean(msg.content)));
       }
       if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
+      bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
       frag.appendChild(bubble);
     }
 
@@ -5215,6 +5304,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const doHighlight = () => codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
         scheduleIdle(doHighlight, { timeout: 2000 });
       }
+      onDone?.(); // DOM 真正稳定（frag 已插入）之后才通知——未读胶囊的 topLevelBubbles() 查询依赖这个时机
     }
     processChunk();
   }

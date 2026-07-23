@@ -58,13 +58,20 @@ export function createAgentEventDispatcher(context, {
   }
 
   return function dispatch(event) {
+    const state = context.state;
     const bypass = outOfBand[event.type];
     if (bypass) {
-      bypass(event);
+      // 与 handled 分支对称：补发 outOfBand（task_notification）也要静音 alertCue/OS notify，
+      // try/finally 防 handler 抛错把 isReplayBatch 卡在 true。
+      state.isReplayBatch = Boolean(event.replay);
+      try {
+        bypass(event);
+      } finally {
+        state.isReplayBatch = false;
+      }
       return 'out-of-band';
     }
 
-    const state = context.state;
     if (shouldDropAgentEvent(event, state.viewingInstanceId, state.instancesReady)) return 'dropped';
 
     if (event.epoch && event.epoch !== 'server') {
@@ -84,7 +91,13 @@ export function createAgentEventDispatcher(context, {
 
     logEvent(event);
     onHandledEvent(event);
-    handlers()[event.type]?.(event.payload);
+    // sync:since 批量补发标记：仅在 handler 调用期间为真，供 alertCue / OS notify 判断是否静音
+    state.isReplayBatch = Boolean(event.replay);
+    try {
+      handlers()[event.type]?.(event.payload);
+    } finally {
+      state.isReplayBatch = false;
+    }
     return 'handled';
   };
 }

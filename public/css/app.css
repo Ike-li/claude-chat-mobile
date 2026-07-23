@@ -788,3 +788,23 @@ details.thinking.thinking-live > summary::before {
   width: 13px;
   height: 13px;
 }
+
+/* 未读角标胶囊：#messages 的兄弟节点，viewport-fixed 悬浮于 composer 上方（避免依赖父级 position:relative，
+   composer 高度会随输入内容变化，固定偏移量取常见 1~2 行高度 + 安全距离，不追求逐像素贴合）。 */
+#unreadPill {
+  position: fixed;
+  right: 0.75rem;
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  z-index: 15;
+  border: none;
+}
+
+/* 跳到未读锚点后的短暂高亮，与 status-pill-flash（UX-019）同一手法：背景色脉冲一下再淡出 */
+@keyframes unread-anchor-flash {
+  0%, 100% { background-color: transparent; }
+  35% { background-color: var(--accent-wash); }
+}
+.unread-anchor-flash {
+  animation: unread-anchor-flash 2s ease;
+  border-radius: 0.75rem;
+}

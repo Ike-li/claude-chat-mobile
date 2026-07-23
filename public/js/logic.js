@@ -1119,6 +1119,14 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seen
   return 'keep';
 }
 
+// 未读胶囊"跳到第一条未读"定位：未读消息永远是当前已渲染顶层气泡列表的尾部 N 条（N=服务端
+// unreadOnEntry），不需要跨路径消息 ID 贯穿磁盘存储和实时流——渲染完成后对列表做一次位置计算即可。
+// 返回 -1 表示无需定位；unreadCount 超过实际渲染条数时 clamp 到 0（滚到已加载内容最顶部），不越界。
+export function resolveUnreadAnchorIndex(listLength, unreadCount) {
+  if (!Number.isFinite(unreadCount) || unreadCount <= 0 || listLength <= 0) return -1;
+  return Math.max(0, listLength - unreadCount);
+}
+
 // 同 sessionId 的 DOM 缓存恢复策略：已完成的对话/工具卡片按会话不可变，与当前 instanceId 无关。
 // instance 会因 effort/model 切档被 dispose+open 换新（新 epoch/seq 空间），但历史 DOM 仍可秒恢复；
 // 仅当「缓存归属实例 === 当前实例」时才复用 lastSeq/epoch 做增量续传，否则 seq 从 0 跟新实例，
