@@ -46,6 +46,7 @@
     "test:integration": "node --import ./tests/setup/preload-env.mjs --test --test-force-exit tests/integration/*.test.mjs",
     "test:coverage": "node --import ./tests/setup/preload-env.mjs --experimental-test-coverage --test tests/unit/*.test.mjs",
     "test:e2e": "playwright test",
+    "test:e2e:parallel": "node scripts/test-e2e-parallel.js",
     "test:visual": "npm run test:e2e",
     "test:playwright": "npm run test:e2e",
     "test:playwright:p0": "playwright test tests/e2e/p0",

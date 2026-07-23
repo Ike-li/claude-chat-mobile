@@ -38,7 +38,9 @@ reasonix.toml
 # 测试/E2E 视觉回归测试临时截图
 /public/test-snapshots/
 /playwright-report/
+/playwright-report-shard*/
 /test-results/
+/test-results-shard*/
 
 .github/copilot-instructions.md
 .codex/config.toml

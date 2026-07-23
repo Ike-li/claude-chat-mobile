@@ -46,7 +46,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Instructions | 2 |
 | Integration test | 18 |
 | Legal | 2 |
-| Maintainer tooling | 18 |
+| Maintainer tooling | 19 |
 | Project configuration | 4 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
@@ -55,7 +55,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 94 |
 | Vendored asset | 10 |
 
-Total classified files: **287**.
+Total classified files: **288**.
 
 ## Complete file inventory
 
@@ -137,6 +137,7 @@ Total classified files: **287**.
 | `scripts/setup.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/statusline-bridge-setup.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/statusline-bridge.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/test-e2e-parallel.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `SECURITY.md` | Documentation | Security policy and deployment boundary | User or maintainer documentation | Authored and reviewed manually | keep |
 | `server.js` | Runtime entrypoint | Compatibility launcher used by npm and service managers | `node server.js` / `npm start` | Authored and reviewed manually | keep |
 | `src/agent/agent.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
