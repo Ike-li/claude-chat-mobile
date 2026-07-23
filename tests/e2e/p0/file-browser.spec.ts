@@ -8,7 +8,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-21 顶部工作区入口打开文件浏览且侧栏不重复提供入口', async ({ page }) => {
     await gotoMock(page);
 
+    // pill → chooser → 浏览项目文件
     await page.locator('#topContextPill').click();
+    await expect(page.locator('#workspaceChooserModal')).toBeVisible();
+    await page.locator('[data-testid="workspace-chooser-browse"]').click();
+
     await expect(page.locator('#fileBrowseModal')).toBeVisible();
     await expect(page.locator('#fileBrowsePath')).not.toHaveText('');
     await expectSidebarClosed(page);

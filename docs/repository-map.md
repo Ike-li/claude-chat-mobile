@@ -33,13 +33,13 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 1 |
-| Backend source | 46 |
+| Backend source | 47 |
 | Configuration template | 1 |
 | Deployment | 3 |
 | Documentation | 4 |
-| E2E test | 34 |
+| E2E test | 35 |
 | Frontend asset | 2 |
-| Frontend source | 21 |
+| Frontend source | 22 |
 | Generated asset | 6 |
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 94 |
+| Unit test | 95 |
 | Vendored asset | 10 |
 
-Total classified files: **289**.
+Total classified files: **293**.
 
 ## Complete file inventory
 
@@ -95,6 +95,7 @@ Total classified files: **289**.
 | `public/js/app/context.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/event-dispatch.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/file-browser.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/app/git-changes.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/message-renderer.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/notifications.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/session-workspaces.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -157,6 +158,7 @@ Total classified files: **289**.
 | `src/files/file-browse.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/files/file-preview.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/files/file-security.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/files/git-workspace.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/files/uploads.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/files/workdir-scope-guard.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/audit.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -201,6 +203,7 @@ Total classified files: **289**.
 | `tests/e2e/p0/empty-restore-responsive.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/exit-plan-mode.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/file-browser.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/git-changes.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/goto-mock-error-accumulation.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/input-send-empty.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/long-history-render.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
@@ -295,6 +298,7 @@ Total classified files: **289**.
 | `tests/unit/file-security.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/fingerprint.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/frontend-app-modules.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/git-workspace.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-files.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-list.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-messages.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

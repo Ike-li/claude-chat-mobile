@@ -43,6 +43,7 @@ import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp } from
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listDir, readFile as browseReadFile } from '../files/file-browse.js';
+import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
 import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
   resolveInstanceTarget,
@@ -2412,6 +2413,8 @@ registerSocketConnection(io, socket => {
     getWorkDirs: () => workDirs,
     listDir,
     browseReadFile,
+    listGitChanges,
+    readGitDiff,
     audit,
     actorFromSocket,
     routeInstance,

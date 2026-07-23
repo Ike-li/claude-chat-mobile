@@ -11,6 +11,7 @@ import { createRttMonitor } from './app/connection-sync.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createAgentEventDispatcher } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
+import { createGitChangesPanel, createWorkspaceChooser } from './app/git-changes.js';
 import { createSettingsController } from './app/settings.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
@@ -140,6 +141,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const fileBrowseModal = $('fileBrowseModal'), fileBrowseBack = $('fileBrowseBack'),
         fileBrowsePath = $('fileBrowsePath'), fileBrowseClose = $('fileBrowseClose'),
         fileBrowseBody = $('fileBrowseBody');
+  // 工作区 chooser + git 变更面板（只读）
+  const workspaceChooserModal = $('workspaceChooserModal'), workspaceChooserClose = $('workspaceChooserClose'),
+        workspaceChooserBrowse = $('workspaceChooserBrowse'), workspaceChooserChanges = $('workspaceChooserChanges');
+  const gitChangesModal = $('gitChangesModal'), gitChangesBranch = $('gitChangesBranch'),
+        gitChangesRefresh = $('gitChangesRefresh'), gitChangesClose = $('gitChangesClose'),
+        gitChangesBody = $('gitChangesBody');
 
   // ---- 状态 ----
   let currentSessionId = localStorage.getItem('current_session') || null;
@@ -394,6 +401,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       fileBrowsePath,
       fileBrowseClose,
       fileBrowseBody,
+      workspaceChooserModal,
+      workspaceChooserClose,
+      workspaceChooserBrowse,
+      workspaceChooserChanges,
+      gitChangesModal,
+      gitChangesBranch,
+      gitChangesRefresh,
+      gitChangesClose,
+      gitChangesBody,
       btnSettings,
       settingsScrim,
       settingsSheet,
@@ -3459,7 +3475,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (topProjectText) {
       topProjectText.textContent = baseName(currentCwd);
       if (topContextPill) {
-        topContextPill.title = currentCwd ? `浏览项目文件（只读）：${currentCwd}` : '浏览项目文件（只读）';
+        topContextPill.title = currentCwd ? `工作区：浏览或查看改动 · ${currentCwd}` : '工作区：浏览或查看改动';
       }
     }
     // pillWorkspace（📁 状态 pill）显当前工作区名——该 pill 是工作区入口，显 model 名是名实错配（2026-06-21）
@@ -4238,18 +4254,31 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     openSheet,
   });
   const openFileBrowser = fileBrowser.open;
+  const gitChanges = createGitChangesPanel(appContext, {
+    closeSheet,
+    createElement: el,
+    haptic,
+    openSheet,
+  });
+  const openGitChanges = gitChanges.open;
+  const workspaceChooser = createWorkspaceChooser(appContext, {
+    closeSheet,
+    openSheet,
+    haptic,
+    onBrowse: () => openFileBrowser(currentCwd),
+    onChanges: () => openGitChanges(currentCwd),
+  });
   // ---- 设置：抽屉、完成提示偏好和预览由独立 controller 管理 ----
   const settings = createSettingsController(appContext, { alerts, haptic });
   const openSettingsSheet = settings.open;
   if (pillModel) pillModel.onclick = openSettingsSheet; // 点底栏模型 chip → 开「选择模型」格
-  // 顶部 pill 原先只是 btnSessions 的重复代理（两者都调 toggleSessions，纯冗余入口）。
-  // 现改为直接打开当前工作区的只读文件浏览——抽屉只负责会话切换/新建，文件浏览入口唯一在此。
+  // 顶部 pill：工作区入口（chooser → 浏览文件 | 工作区改动）。侧栏不再挂浏览入口。
   if (topContextPill) {
     topContextPill.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
       haptic('tap');
-      openFileBrowser(currentCwd);
+      workspaceChooser.open();
     };
   }
   

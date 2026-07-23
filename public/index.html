@@ -82,7 +82,7 @@
     <!-- Center Section: Elegant top context pill with workspace and status -->
     <div class="flex items-center justify-center flex-1 min-w-0">
       <!-- 默认 hidden：空首页/compose 不显示；进入真实会话后由 app.js syncTopContextPillVisibility 打开 -->
-      <button id="topContextPill" class="top-context-pill select-none cursor-pointer hidden" title="浏览项目文件（只读）" aria-hidden="true" tabindex="-1">
+      <button id="topContextPill" class="top-context-pill select-none cursor-pointer hidden" title="工作区：浏览或查看改动" aria-hidden="true" tabindex="-1">
         <!-- Minimalist folder icon in Accent color -->
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor" class="w-3.5 h-3.5 text-accent shrink-0">
           <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12.75V12A2.25 2.25 0 0 1 4.5 9.75h15A2.25 2.25 0 0 1 21.75 12v.75m-8.69-6.44-2.12-2.12a1.5 1.5 0 0 0-1.061-.44H4.5A2.25 2.25 0 0 0 2.25 6v12a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18V9a2.25 2.25 0 0 0-2.25-2.25h-5.379a1.5 1.5 0 0 1-1.06-.44Z" />
@@ -283,6 +283,49 @@
         <button id="fileBrowseClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0">✕</button>
       </div>
       <div id="fileBrowseBody" class="flex-1 overflow-y-auto"></div>
+    </div>
+  </div>
+
+  <!-- 顶部 pill 选择：浏览文件 / 工作区改动 -->
+  <div id="workspaceChooserModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="工作区">
+    <div class="w-full max-h-[50vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
+      <div class="sheet-handle mt-3 shrink-0"></div>
+      <div class="px-4 pb-2 flex items-center gap-2 border-b border-line shrink-0">
+        <div class="flex-1 min-w-0 text-sm font-semibold text-ink">工作区</div>
+        <button id="workspaceChooserClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
+      </div>
+      <div class="px-3 py-3 space-y-2">
+        <button id="workspaceChooserBrowse" type="button" data-testid="workspace-chooser-browse" class="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl border border-line bg-surface text-left hover:bg-sunk/40 active:opacity-80">
+          <span class="text-lg" aria-hidden="true">📁</span>
+          <span class="min-w-0">
+            <span class="block text-sm font-semibold text-ink">浏览项目文件</span>
+            <span class="block text-[11px] text-ink-faint mt-0.5">只读目录树与文件内容</span>
+          </span>
+        </button>
+        <button id="workspaceChooserChanges" type="button" data-testid="workspace-chooser-changes" class="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl border border-line bg-surface text-left hover:bg-sunk/40 active:opacity-80">
+          <span class="text-lg" aria-hidden="true">📝</span>
+          <span class="min-w-0">
+            <span class="block text-sm font-semibold text-ink">工作区改动</span>
+            <span class="block text-[11px] text-ink-faint mt-0.5">查看 git staged / unstaged / untracked</span>
+          </span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 工作区 git 变更只读面板 -->
+  <div id="gitChangesModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="工作区改动">
+    <div class="w-full h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
+      <div class="sheet-handle mt-3 shrink-0"></div>
+      <div class="px-4 pb-2 flex items-center gap-2 border-b border-line shrink-0">
+        <div class="flex-1 min-w-0">
+          <div class="text-sm font-semibold text-ink">工作区改动</div>
+          <div id="gitChangesBranch" class="text-[11px] font-mono text-ink-faint truncate"></div>
+        </div>
+        <button id="gitChangesRefresh" type="button" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="刷新" aria-label="刷新">↻</button>
+        <button id="gitChangesClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
+      </div>
+      <div id="gitChangesBody" class="flex-1 overflow-y-auto" data-testid="git-changes-body"></div>
     </div>
   </div>
 

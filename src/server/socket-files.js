@@ -1,5 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { basename } from 'node:path';
+import { assertSafeRelPath } from '../files/git-workspace.js';
 
 export function registerFileSocketHandlers({
   socket,
@@ -8,6 +9,8 @@ export function registerFileSocketHandlers({
   getWorkDirs,
   listDir,
   browseReadFile,
+  listGitChanges,
+  readGitDiff,
   audit,
   actorFromSocket,
   routeInstance,
@@ -54,6 +57,101 @@ export function registerFileSocketHandlers({
       return ack({ ok: false, error: '路径不在授权范围内，或不是文件' });
     }
     return ack({ ok: true, ...result });
+  });
+
+  // cwd 是否落在白名单：attributePath 对绝对 cwd 做前缀判定（零 IO）；routeCwd 通常已归位，双闸防缺省。
+  function cwdInWorkDirs(cwd, workDirs) {
+    if (!cwd || !Array.isArray(workDirs)) return false;
+    if (workDirs.includes(cwd)) return true;
+    return Boolean(attributePath(cwd, workDirs, cwd));
+  }
+
+  // 工作区 git 变更列表（只读；与 statusline 三分计数分工）
+  on(socket, 'git:status', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (typeof listGitChanges !== 'function') {
+      return ack({ ok: false, code: 'unavailable', error: 'git 变更列表不可用' });
+    }
+    const { cwd: requestedCwd } = payload || {};
+    const cwd = routeCwd(requestedCwd);
+    const workDirs = getWorkDirs();
+    if (!cwdInWorkDirs(cwd, workDirs)) {
+      logger.warn(`[scope] git status 越界拒绝：cwd=${cwd}`);
+      audit.recordAudit({
+        actor: actorFromSocket(socket),
+        action: 'scope_violation',
+        target: cwd,
+        outcome: 'denied',
+        meta: { via: 'git:status' },
+      });
+      return ack({ ok: false, code: 'scope', error: '路径不在授权范围内' });
+    }
+    const result = await listGitChanges(cwd);
+    if (!result?.ok) {
+      return ack({
+        ok: false,
+        code: result?.code || 'git_error',
+        error: result?.error || 'git status 失败',
+      });
+    }
+    return ack({
+      ok: true,
+      branch: result.branch,
+      staged: result.staged,
+      unstaged: result.unstaged,
+      untracked: result.untracked,
+      truncated: result.truncated || false,
+    });
+  });
+
+  // 单文件 unified patch（staged=diff --cached；unstaged=diff；untracked 走 browse:read）
+  on(socket, 'git:diff', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (typeof readGitDiff !== 'function') {
+      return ack({ ok: false, code: 'unavailable', error: 'git diff 不可用' });
+    }
+    const { cwd: requestedCwd, path: relPath, side } = payload || {};
+    const cwd = routeCwd(requestedCwd);
+    const workDirs = getWorkDirs();
+    if (!cwdInWorkDirs(cwd, workDirs)) {
+      logger.warn(`[scope] git diff 越界拒绝：cwd=${cwd}`);
+      audit.recordAudit({
+        actor: actorFromSocket(socket),
+        action: 'scope_violation',
+        target: cwd,
+        outcome: 'denied',
+        meta: { via: 'git:diff', relPath: typeof relPath === 'string' ? relPath : null },
+      });
+      return ack({ ok: false, code: 'scope', error: '路径不在授权范围内' });
+    }
+    if (!assertSafeRelPath(cwd, relPath)) {
+      logger.warn(`[scope] git diff 路径拒绝：cwd=${cwd} path=${JSON.stringify(relPath)}`);
+      audit.recordAudit({
+        actor: actorFromSocket(socket),
+        action: 'scope_violation',
+        target: cwd,
+        outcome: 'denied',
+        meta: { via: 'git:diff', relPath: typeof relPath === 'string' ? relPath : null },
+      });
+      return ack({ ok: false, code: 'bad_path', error: '路径不合法或不在工作目录内' });
+    }
+    const result = await readGitDiff(cwd, relPath, side);
+    if (!result?.ok) {
+      return ack({
+        ok: false,
+        code: result?.code || 'git_error',
+        error: result?.error || 'git diff 失败',
+      });
+    }
+    return ack({
+      ok: true,
+      path: result.path,
+      side: result.side,
+      patch: result.patch,
+      binary: result.binary || false,
+      truncated: result.truncated || false,
+      empty: result.empty || false,
+    });
   });
 
   on(socket, 'tool:full', ({ instanceId, toolUseId } = {}, ack) => {

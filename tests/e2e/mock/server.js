@@ -802,11 +802,48 @@ io.on('connection', socket => {
     }
   });
 
+  // 工作区 git 变更（只读）：确定性 fixture 供 P0 git-changes E2E
+  socket.on('git:status', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({
+      ok: true,
+      branch: 'dev',
+      staged: [{ path: 'staged.js', xy: 'M ' }],
+      unstaged: [{ path: 'work.js', xy: ' M' }],
+      untracked: [{ path: 'new-file.js' }],
+      truncated: false,
+    });
+  });
+  socket.on('git:diff', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const path = payload?.path || 'file.js';
+    const side = payload?.side === 'staged' ? 'staged' : 'unstaged';
+    ack({
+      ok: true,
+      path,
+      side,
+      patch: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old line\n+new line\n`,
+      binary: false,
+      truncated: false,
+      empty: false,
+    });
+  });
+  // 文件浏览列表：P0-21 选「浏览项目文件」后需可渲染（确定性空页即可）
+  socket.on('browse:list', (_payload, callback) => {
+    if (typeof callback !== 'function') return;
+    callback({ ok: true, entries: [{ name: 'README.md', kind: 'file', size: 12, mtime: Date.now() }], truncated: false, totalCount: 1 });
+  });
+
   // E18 附件预览：browse:read（契约内事件；仅实现 base64 分片路径——文本浏览走真实 server 的集成面）。
   // 固定 fixture：.ccm-uploads/<storedName> 命中 MOCK_UPLOAD_FILES 才回内容，其余 ok:false（文件已删场景）。
   socket.on('browse:read', (payload, callback) => {
     if (typeof callback !== 'function') return;
     const { relPath, offset = 0, maxBytes = 256 * 1024, encoding } = payload || {};
+    // 文本路径：工作区 untracked 预览 fixture
+    if (encoding !== 'base64' && String(relPath || '') === 'new-file.js') {
+      const text = 'console.log("untracked");\n';
+      return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false });
+    }
     const m = /^\.ccm-uploads\/(.+)$/.exec(String(relPath || ''));
     const bytes = m && encoding === 'base64' ? MOCK_UPLOAD_FILES.get(m[1]) : null;
     console.log(`[mock] browse:read relPath=${relPath} offset=${offset} hit=${Boolean(bytes)}`);
