@@ -14,7 +14,7 @@ python3 -m http.server 8765 --directory .
 ## 重新构建
 
 ```bash
-node build.cjs           # 由 content/*.html + book.config.cjs 生成 pages/ 与 index.html
+node build.cjs           # 由 fragments/*.html + book.config.cjs 生成 pages/ 与 index.html
 node verify.cjs          # 链接 / Mermaid / 结构 / emoji 校验
 ```
 
@@ -25,13 +25,13 @@ node verify.cjs          # 链接 / Mermaid / 结构 / emoji 校验
 | 路径 | 说明 |
 |---|---|
 | `book.config.cjs` | 全书骨架（单一事实来源） |
-| `content/` | 各页 HTML 片段 |
+| `fragments/` | 各页 HTML 片段 |
 | `pages/` | 生成页 |
 | `assets/` | style / app / mermaid / 搜索索引 |
 | `build.cjs` / `verify.cjs` | 生成与校验 |
 
 ## 维护约定
 
-- 改结构：先改 `book.config.cjs`，再补 `content/<slug>.html`，然后 `node build.cjs`。
-- 事实以 dev 代码为准；矛盾记入 `content/drift.html`。
+- 改结构：先改 `book.config.cjs`，再补 `fragments/<slug>.html`，然后 `node build.cjs`。
+- 事实以 dev 代码为准；矛盾记入 `fragments/drift.html`。
 - 不要把本手册内容回写进 master/dev 的产品 `docs/`（产品侧保持极简）。

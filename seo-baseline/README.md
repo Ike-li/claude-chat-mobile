@@ -103,3 +103,10 @@ python3 seo-baseline/capture.py
 ## CI 说明
 
 gh-pages 宣传站一般**不**挂 Node 测试 CI；本清单设计为 **push 后本机 5 分钟手跑**。若日后要挂 Actions，需 runner 能直连 `ike-li.github.io`（勿走会把域名解析到 fake-IP 的代理）。
+
+## 技术债修复（2026-07-23）
+
+- 手册源片段目录由 `docs-site/content/` **改名为** `docs-site/fragments/`，避免 GitHub Pages 以 200 提供无壳 HTML。
+- 旧路径 `…/docs-site/content/*` 上线后应 **404**。
+- `fragments/*.html` 自带 `noindex`；`build.cjs` 构建时会剥掉，不进入 `pages/`。
+- sitemap `lastmod` 随发版更新。

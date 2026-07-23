@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /* ══════════════════════════════════════════════════════════════════
-   build.js — 把 content/<slug>.html 片段编译成完整的多页静态站点
+   build.js — 把 fragments/<slug>.html 片段编译成完整的多页静态站点
    用法：node build.js   （在输出目录下运行）
-   依赖：book.config.js（全书结构）、content/<slug>.html（内容片段）
+   依赖：book.config.js（全书结构）、fragments/<slug>.html（内容片段）
    产物：index.html + pages/*.html + assets/{style.css,app.js,search-index.js}
    ══════════════════════════════════════════════════════════════════ */
 const fs = require('fs');
 const path = require('path');
 
 const ROOT = __dirname;
-const CONTENT = path.join(ROOT, 'content');
+const CONTENT = path.join(ROOT, 'fragments');
 const PAGES = path.join(ROOT, 'pages');
 const ASSETS = path.join(ROOT, 'assets');
 const book = require('./book.config.cjs');
@@ -248,6 +248,10 @@ flat.forEach((p) => {
   let frag;
   if (fs.existsSync(fragPath)) {
     frag = fs.readFileSync(fragPath, 'utf8');
+    // fragments may carry noindex for direct-URL safety; never ship into public pages
+    frag = frag
+      .replace(/<!--\s*build fragment[\s\S]*?-->\s*/i, '')
+      .replace(/<meta\s+name=["']robots["'][^>]*>\s*/gi, '');
   } else {
     missing.push(p.slug);
     frag = `<div class="callout warn"><div class="body">
@@ -256,7 +260,7 @@ flat.forEach((p) => {
   }
 
   // ── 内容格式自检：扫描疑似 Markdown 语法 ─────────────────────
-  // content/*.html 应为纯 HTML 片段（build.js 不做 Markdown→HTML 转换）。
+  // fragments/*.html 应为纯 HTML 片段（build.js 不做 Markdown→HTML 转换）。
   // 以下模式若出现在最终页面中将显示为裸文本，在此提前告警。
   const mdWarnings = [];
   const fragLines = frag.split('\n');
@@ -275,7 +279,7 @@ flat.forEach((p) => {
   }
 
   const { html: withIds, toc } = processHeadings(frag);
-  // 封面 content/index.html 自带 page-head（含 H1）；其余章节由 pageHead 注入
+  // 封面 fragments/index.html 自带 page-head（含 H1）；其余章节由 pageHead 注入
   const head = p.home ? '' : pageHead(p);
   const fullBody = (head ? head + '\n' : '') + withIds;
   const outHtml = shell(p, fullBody, tocHtml(toc));

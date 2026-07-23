@@ -26,6 +26,7 @@ URLS = [
     f"{BASE}/docs-site/pages/security-model.html",
     f"{BASE}/docs-site/pages/overview.html",
     f"{BASE}/docs-site/pages/production-deploy.html",
+    f"{BASE}/docs-site/content/overview.html",  # expect 404 after content→fragments
     f"{BASE}/robots.txt",
     f"{BASE}/sitemap.xml",
     f"{BASE}/llms.txt",

@@ -1,7 +1,9 @@
 User-agent: *
 Allow: /
 
-# Fragment HTML (not full handbook pages)
+# Build sources / authoring notes are not public handbook pages
+Disallow: /claude-chat-mobile/docs-site/fragments/
 Disallow: /claude-chat-mobile/docs-site/content/
+Disallow: /claude-chat-mobile/docs-site/AUTHORING-components.html
 
 Sitemap: https://ike-li.github.io/claude-chat-mobile/sitemap.xml

@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const book = require('./book.config.cjs');
 
-const CONTENT = path.join(__dirname, 'content');
+const CONTENT = path.join(__dirname, 'fragments');
 const slugs = new Set();
 book.parts.forEach(p => p.pages.forEach(pg => slugs.add(pg.slug)));
 
