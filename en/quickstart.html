@@ -149,7 +149,7 @@
     <div class="kicker">English install path</div>
     <h1>Quickstart</h1>
     <p class="lead">Self-hosted mobile Web UI for your <strong>real local</strong> <code>claude</code> CLI—same agent, same <code>CLAUDE.md</code>, same session. Not a remote desktop, not multi-tenant SaaS.</p>
-    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md">README.en.md</a> · Full Chinese handbook: <a href="../docs-site/" hreflang="zh-CN">docs-site</a></p>
+    <p class="alts">Source of truth: <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md">README.en.md</a> · Full Chinese handbook: <a href="../docs-site/" hreflang="zh-CN">docs-site</a> · <time datetime="2026-07-23">Updated 2026-07-23</time></p>
   </div>
 </header>
 
@@ -220,6 +220,47 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
     This is a remotely reachable code-execution channel into your shell. Single-user per instance. Read the security model before exposing anything beyond your LAN: <a href="../docs-site/pages/security-model.html" hreflang="zh-CN">安全模型</a> (Chinese handbook) or <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/README.en.md#security-model">README.en.md · Security Model</a>.
   </div>
 
+  <h2 id="iron-rules">Security iron rules (quotable)</h2>
+  <ol>
+    <li><strong>One user per instance</strong> — not multi-tenant SaaS; anyone who passes auth has terminal-equivalent power.</li>
+    <li><strong>No <code>AUTH_TOKEN</code> → bind <code>127.0.0.1</code> only</strong> — phones and tunnels cannot reach it until you set a token.</li>
+    <li><strong>CLI allow-list is inherited</strong> — no second “Web super-allowlist”; audit <code>~/.claude/settings.json</code> before public exposure.</li>
+    <li><strong>Device trust (TOFU)</strong> — first non-local client needs <code>device.js approve</code> (Access JWT can skip).</li>
+    <li><strong>Not Anthropic’s official app</strong> — independent open source; drives your local CLI via the <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.</li>
+  </ol>
+
+  <h2 id="troubleshoot">If something fails</h2>
+  <table>
+    <thead><tr><th>Symptom</th><th>Likely cause</th><th>What to try</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Phone cannot open the page on LAN</td>
+        <td>No <code>AUTH_TOKEN</code> (server on loopback only)</td>
+        <td>Set token in <code>.env</code>, restart, use the URL with <code>#token=…</code> from the log</td>
+      </tr>
+      <tr>
+        <td>Token works but UI stays locked</td>
+        <td>Device TOFU pending</td>
+        <td><code>node scripts/device.js list</code> then <code>approve &lt;ID&gt;</code> on the host</td>
+      </tr>
+      <tr>
+        <td><code>doctor</code> flags gateway / model</td>
+        <td><code>ANTHROPIC_*</code> only in <code>.env</code></td>
+        <td>Export vars in the <strong>same shell</strong> that runs <code>npm start</code></td>
+      </tr>
+      <tr>
+        <td>Port 3000 already in use</td>
+        <td>Existing daemon or old process</td>
+        <td>Do not stack a second <code>npm start</code>; stop the resident service or change <code>PORT</code></td>
+      </tr>
+      <tr>
+        <td><code>claude</code> missing / not logged in</td>
+        <td>Host CLI not ready</td>
+        <td>Fix <code>which claude</code> and open a terminal conversation first</td>
+      </tr>
+    </tbody>
+  </table>
+
   <h2 id="optional">Optional</h2>
   <ul>
     <li><strong>Statusline bridge</strong> (CLI-driven sessions mirrored in the Web status line): <code>npm run statusline:install</code> — never auto-run by install/start. Check with <code>npm run statusline:status</code>.</li>
@@ -242,9 +283,11 @@ node scripts/device.js approve &lt;ID&gt;</code></pre>
   <div class="wrap foot">
     <span>Claude Chat Mobile</span>
     <span aria-hidden="true">·</span>
+    <span>Maintained by <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a></span>
     <a href="../en/quickstart.html" hreflang="en">English quickstart</a>
     <a href="../docs-site/pages/quickstart.html" hreflang="zh-CN">中文快速开始</a>
     <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE">AGPL-3.0-only</a>
+    <time datetime="2026-07-23">Updated 2026-07-23</time>
   </div>
 </footer>
 </body>

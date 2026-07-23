@@ -246,6 +246,10 @@
   footer { border-top:1px solid var(--line-soft); padding:34px 0 46px; color:var(--ink-faint); font-size:14px; }
   .foot-in { display:flex; flex-wrap:wrap; gap:16px 28px; align-items:center; justify-content:center; text-align:center; }
   .foot-in a { color:var(--ink-soft); }
+  .foot-meta {
+    max-width:40em; margin:14px auto 0; text-align:center; font-size:13px; line-height:1.55; color:var(--ink-faint);
+  }
+  .foot-meta a { color:var(--ink-soft); }
 
   /* Responsive */
   @media (max-width:860px) {
@@ -297,6 +301,7 @@
       <h1 class="hero-title" data-i18n-html="hero.title">Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span></h1>
       <p class="hero-sub" data-i18n-html="hero.sub">Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.</p>
       <p class="hero-note" data-i18n="hero.note">Approvals, tool output, and resumed sessions stay on the same local Claude path.</p>
+      <p class="hero-note" style="margin-top:-12px;margin-bottom:22px;" data-i18n-html="hero.notOfficial">Not Anthropic’s official mobile app — an independent, self-hosted open-source project. Spec: <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.</p>
       <div class="hero-cta">
         <a class="btn btn-primary" data-i18n-href="hero.cta1Href" href="./en/quickstart.html"><span data-i18n="hero.cta1">English quickstart</span> <span aria-hidden="true">▸</span></a>
         <a class="btn btn-ghost" href="#action" data-i18n="hero.cta2">See it in action</a>
@@ -526,6 +531,7 @@ npm start              <span class="c"># http://localhost:3000</span>
     <span aria-hidden="true">·</span>
     <span data-i18n="foot.tag">Your terminal, in your pocket.</span>
   </div>
+  <p class="foot-meta wrap" data-i18n-html="foot.meta">Maintained by <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · built from real local <code>claude</code> CLI use · <time datetime="2026-07-23">Updated 2026-07-23</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK docs</a></p>
 </footer>
 
 <script>
@@ -537,6 +543,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'hero.title': 'Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span>',
       'hero.sub': 'Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.',
       'hero.note': 'Approvals, tool output, and resumed sessions stay on the same local Claude path.',
+      'hero.notOfficial': 'Not Anthropic’s official mobile app — an independent, self-hosted open-source project. Spec: <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.',
       'hero.cta1': 'English quickstart',
       'hero.cta1Href': './en/quickstart.html',
       'get.ctaHref': './en/quickstart.html',
@@ -603,6 +610,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'get.cta': 'Open English quickstart',
       'get.ctaGh': 'GitHub repository',
       'foot.tag': 'Your terminal, in your pocket.',
+      'foot.meta': 'Maintained by <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · built from real local <code>claude</code> CLI use · <time datetime="2026-07-23">Updated 2026-07-23</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK docs</a>',
       'img.hero': './screenshots/03-approval-en.png',
       'img.stream': './screenshots/01-stream-en.png',
       'img.tools': './screenshots/02-tools-en.png',
@@ -618,6 +626,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'hero.title': '你本机的 <code>claude</code> CLI，<br><span class="accent">搬到手机上。</span>',
       'hero.sub': '不是远程桌面，也不是复刻实现。它驱动你<strong>本机已登录</strong>的 CLI：同一个 agent、同一份 <code>CLAUDE.md</code>、同一个会话。目标是<strong>终端等价性</strong>：在手机上对 claude 打字，效果和坐在终端前一样。',
       'hero.note': '审批、工具输出、恢复会话都走同一条本机 Claude 路径。',
+      'hero.notOfficial': '不是 Anthropic 官方手机 App——独立的自托管开源项目。规范见 <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>。',
       'hero.cta1': '打开快速开始手册',
       'hero.cta1Href': './docs-site/pages/quickstart.html',
       'get.ctaHref': './docs-site/pages/quickstart.html',
@@ -684,6 +693,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'get.cta': '打开手册「快速开始」',
       'get.ctaGh': 'GitHub 仓库',
       'foot.tag': '你的终端，装进口袋。',
+      'foot.meta': '维护者 <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · 基于本机 <code>claude</code> CLI 真实使用 · <time datetime="2026-07-23">更新于 2026-07-23</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK 文档</a>',
       'img.hero': './screenshots/03-approval-zh.png',
       'img.stream': './screenshots/01-stream-zh.png',
       'img.tools': './screenshots/02-tools-zh.png',
