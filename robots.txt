@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+
+# Fragment HTML (not full handbook pages)
+Disallow: /claude-chat-mobile/docs-site/content/
+
+Sitemap: https://ike-li.github.io/claude-chat-mobile/sitemap.xml

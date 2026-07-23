@@ -6,3 +6,6 @@ node_modules/
 .claude/settings.json
 
 .DS_Store
+
+# Local SEO audit artifacts (not part of the landing site)
+ike-li.github.io-claude-chat-mobile-audit/

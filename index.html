@@ -4,7 +4,8 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Claude Chat Mobile — your local claude CLI, on your phone</title>
-<meta name="description" content="A self-hosted mobile Web UI for your real local claude CLI. Same agent, same CLAUDE.md, same session, with official subscription or third-party gateway support. Not a reimplementation, not a hosted service.">
+<meta name="description" content="Self-hosted mobile Web UI for your real local claude CLI. Same agent, CLAUDE.md, and session—terminal-equivalent, not a hosted clone.">
+<link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
 
 <!-- Open Graph / Twitter -->
@@ -17,6 +18,39 @@
 <meta name="twitter:title" content="Claude Chat Mobile">
 <meta name="twitter:description" content="Your real local claude CLI, driven from your phone. Official subscription or third-party gateway. Self-hosted and locked by default.">
 <meta name="twitter:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Claude Chat Mobile",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "macOS, Linux (self-hosted server); any modern mobile browser (client)",
+  "url": "https://ike-li.github.io/claude-chat-mobile/",
+  "description": "Self-hosted mobile Web UI for a real local claude CLI. Same agent, same CLAUDE.md, same session—terminal-equivalent, single-user per instance.",
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+  "codeRepository": "https://github.com/Ike-li/claude-chat-mobile",
+  "author": {
+    "@type": "Person",
+    "name": "Ike-li",
+    "url": "https://github.com/Ike-li"
+  }
+}
+</script>
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "name": "Claude Chat Mobile",
+  "url": "https://ike-li.github.io/claude-chat-mobile/",
+  "inLanguage": ["en", "zh-CN"]
+}
+</script>
 
 <style>
   /* ── Claude design tokens, copied verbatim from the product (public/index.html) ── */
@@ -142,7 +176,17 @@
   .story .line { font-family:var(--font-read); font-size:17.5px; line-height:1.7; color:var(--ink); margin-bottom:14px; }
   .story .line .t { font-family:var(--font-mono); font-size:14px; color:var(--accent-deep); font-weight:600; margin-right:8px; }
   .gif-frame { border:1px solid var(--line); border-radius:var(--radius-lg); overflow:hidden; box-shadow:var(--shadow-card); background:var(--surface-sunk); max-width:272px; margin:0 auto; }
-  .gif-frame img { display:block; width:100%; height:auto; }
+  .gif-frame img, .gif-frame video { display:block; width:100%; height:auto; vertical-align:top; }
+  .start-hub {
+    display:flex; flex-wrap:wrap; gap:10px; margin:18px 0 22px;
+  }
+  .start-hub a {
+    font-size:14px; font-weight:600; color:var(--ink);
+    background:var(--surface); border:1px solid var(--line); border-radius:999px;
+    padding:8px 14px;
+  }
+  .start-hub a:hover { border-color:var(--accent); text-decoration:none; color:var(--accent-deep); }
+  .get-ctas { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-top:4px; }
 
   /* Screenshots */
   .shots { display:grid; grid-template-columns:repeat(3,1fr); gap:24px; }
@@ -252,7 +296,7 @@
       <p class="hero-sub" data-i18n-html="hero.sub">Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.</p>
       <p class="hero-note" data-i18n="hero.note">Approvals, tool output, and resumed sessions stay on the same local Claude path.</p>
       <div class="hero-cta">
-        <a class="btn btn-primary" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener"><span data-i18n="hero.cta1">Get started on GitHub</span> <span aria-hidden="true">▸</span></a>
+        <a class="btn btn-primary" href="./docs-site/pages/quickstart.html"><span data-i18n="hero.cta1">Quickstart handbook</span> <span aria-hidden="true">▸</span></a>
         <a class="btn btn-ghost" href="#action" data-i18n="hero.cta2">See it in action</a>
       </div>
     </div>
@@ -277,7 +321,19 @@
         </div>
       </div>
       <div class="gif-frame">
-        <img src="./demo.gif" loading="lazy" width="600" height="1299" alt="Stream a reply, watch tool cards, then approve a git push from your phone">
+        <video
+          width="540"
+          height="1170"
+          autoplay
+          muted
+          loop
+          playsinline
+          preload="metadata"
+          poster="./demo-poster.jpg"
+          aria-label="Stream a reply, watch tool cards, then approve a git push from your phone">
+          <source src="./demo.webm" type="video/webm">
+          <source src="./demo.mp4" type="video/mp4">
+        </video>
       </div>
     </div>
   </div>
@@ -433,6 +489,12 @@
       <p data-i18n="get.sub">It is self-hosted. There is no shared demo because it drives your own authenticated claude CLI.</p>
     </div>
     <p class="prereq" data-i18n-html="get.prereq"><strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.</p>
+    <nav class="start-hub" aria-label="Start here">
+      <a href="./docs-site/pages/quickstart.html" data-i18n="hub.quickstart">Quickstart</a>
+      <a href="./docs-site/pages/security-model.html" data-i18n="hub.security">Security model</a>
+      <a href="./docs-site/pages/production-deploy.html" data-i18n="hub.deploy">Production deploy</a>
+      <a href="./docs-site/pages/overview.html" data-i18n="hub.overview">Project overview</a>
+    </nav>
     <div class="clone">
 <span class="c"># clone, install runtime deps, configure, run</span>
 git clone https://github.com/Ike-li/claude-chat-mobile.git
@@ -442,7 +504,10 @@ npm run setup          <span class="c"># generate AUTH_TOKEN + ask WORK_DIR</spa
 <span class="c"># Optional gateway: export ANTHROPIC_* in this shell before starting</span>
 npm start              <span class="c"># http://localhost:3000</span>
     </div>
-    <a class="btn btn-primary" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener"><span data-i18n="get.cta">Read the full guide on GitHub</span> <span aria-hidden="true">▸</span></a>
+    <div class="get-ctas">
+      <a class="btn btn-primary" href="./docs-site/pages/quickstart.html"><span data-i18n="get.cta">Open quickstart in handbook</span> <span aria-hidden="true">▸</span></a>
+      <a class="btn btn-ghost" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener"><span data-i18n="get.ctaGh">GitHub repository</span></a>
+    </div>
   </div>
 </section>
 
@@ -451,6 +516,8 @@ npm start              <span class="c"># http://localhost:3000</span>
     <span>Claude Chat Mobile</span>
     <span aria-hidden="true">·</span>
     <a href="./docs-site/index.html" data-i18n="nav.docs">Docs</a>
+    <a href="./docs-site/pages/quickstart.html" data-i18n="hub.quickstart">Quickstart</a>
+    <a href="./docs-site/pages/security-model.html" data-i18n="hub.security">Security</a>
     <a href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener">GitHub</a>
     <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE" target="_blank" rel="noopener">AGPL-3.0-only</a>
     <a href="https://linux.do/" target="_blank" rel="noopener">LINUX DO</a>
@@ -468,8 +535,12 @@ npm start              <span class="c"># http://localhost:3000</span>
       'hero.title': 'Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span>',
       'hero.sub': 'Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.',
       'hero.note': 'Approvals, tool output, and resumed sessions stay on the same local Claude path.',
-      'hero.cta1': 'Get started on GitHub',
+      'hero.cta1': 'Quickstart handbook',
       'hero.cta2': 'See it in action',
+      'hub.quickstart': 'Quickstart',
+      'hub.security': 'Security model',
+      'hub.deploy': 'Production deploy',
+      'hub.overview': 'Project overview',
       'action.kicker': 'Typical flow',
       'action.heading': 'You leave the desk. The session keeps running.',
       'action.l1': 'You send: "merge the duplicate date helpers in utils into one function, make the tests pass."',
@@ -524,7 +595,8 @@ npm start              <span class="c"># http://localhost:3000</span>
       'get.heading': 'Run it on your own machine',
       'get.sub': 'It is self-hosted. There is no shared demo because it drives your own authenticated claude CLI.',
       'get.prereq': '<strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.',
-      'get.cta': 'Read the full guide on GitHub',
+      'get.cta': 'Open quickstart in handbook',
+      'get.ctaGh': 'GitHub repository',
       'foot.tag': 'Your terminal, in your pocket.',
       'img.hero': './screenshots/03-approval-en.png',
       'img.stream': './screenshots/01-stream-en.png',
@@ -541,8 +613,12 @@ npm start              <span class="c"># http://localhost:3000</span>
       'hero.title': '你本机的 <code>claude</code> CLI，<br><span class="accent">搬到手机上。</span>',
       'hero.sub': '不是远程桌面，也不是复刻实现。它驱动你<strong>本机已登录</strong>的 CLI：同一个 agent、同一份 <code>CLAUDE.md</code>、同一个会话。目标是<strong>终端等价性</strong>：在手机上对 claude 打字，效果和坐在终端前一样。',
       'hero.note': '审批、工具输出、恢复会话都走同一条本机 Claude 路径。',
-      'hero.cta1': '去 GitHub 开始',
+      'hero.cta1': '打开快速开始手册',
       'hero.cta2': '看实际效果',
+      'hub.quickstart': '快速开始',
+      'hub.security': '安全模型',
+      'hub.deploy': '生产部署',
+      'hub.overview': '项目总览',
       'action.kicker': '典型流程',
       'action.heading': '你离开电脑，会话继续跑。',
       'action.l1': '你发消息："把 utils 里重复的日期处理合并成一个函数，跑通测试。"',
@@ -597,7 +673,8 @@ npm start              <span class="c"># http://localhost:3000</span>
       'get.heading': '在你自己的机器上跑起来',
       'get.sub': '它是自托管项目。没有公共 demo，因为它驱动的是你自己已登录的 claude CLI。',
       'get.prereq': '<strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用的 <code>claude</code> CLI。官方订阅无需额外配置；第三方网关 / 中转则在启动 server 的 shell 里 export 所需 <code>ANTHROPIC_*</code>。',
-      'get.cta': '去 GitHub 看完整指南',
+      'get.cta': '打开手册「快速开始」',
+      'get.ctaGh': 'GitHub 仓库',
       'foot.tag': '你的终端，装进口袋。',
       'img.hero': './screenshots/03-approval-zh.png',
       'img.stream': './screenshots/01-stream-zh.png',

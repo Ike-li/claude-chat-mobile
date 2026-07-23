@@ -143,6 +143,10 @@ function shell(p, bodyHtml, toc) {
   const mermaidTag = needMermaid
     ? `<script src="${b}assets/mermaid.min.js"></script>`
     : '';
+  const siteBase = 'https://ike-li.github.io/claude-chat-mobile/docs-site/';
+  const canonicalUrl = p.home
+    ? siteBase
+    : `${siteBase}pages/${p.slug}.html`;
   return `<!DOCTYPE html>
 <html lang="zh-CN" data-theme="light">
 <head>
@@ -150,6 +154,7 @@ function shell(p, bodyHtml, toc) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${p.title} · ${book.title}</title>
 <meta name="description" content="${(p.lead || '').replace(/"/g, '')}">
+<link rel="canonical" href="${canonicalUrl}">
 <link rel="stylesheet" href="${b}assets/style.css">
 <script>window.__BASE__='${b}';</script>
 </head>
@@ -243,7 +248,8 @@ flat.forEach((p) => {
   }
 
   const { html: withIds, toc } = processHeadings(frag);
-  const head = p.home ? '' : pageHead(p);   // 封面页用自带 hero，不套页眉
+  // 封面 content/index.html 自带 page-head（含 H1）；其余章节由 pageHead 注入
+  const head = p.home ? '' : pageHead(p);
   const fullBody = (head ? head + '\n' : '') + withIds;
   const outHtml = shell(p, fullBody, tocHtml(toc));
 
