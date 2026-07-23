@@ -54,28 +54,36 @@ export function shouldEmitModeChangeBar({ emptyStart = false } = {}) {
 }
 
 // UX-018：模型磁贴 displayName 撞车时主标题回退 value，避免整排同名。
+// 网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_*_MODEL）下，SDK supportedModels()
+// 会在 resolvedModel 带出真实 wire id（如 opus → mimo-v2.5-pro-ultraspeed）；标题优先它，
+// 撞车规则与 displayName 对称（resolvedModel 撞车 → 回退 value）。
 export function resolveModelTileDisplay(models) {
   const list = Array.isArray(models) ? models : [];
   const rows = list.map(m => {
     if (typeof m === 'string') {
-      return { value: m, displayName: m, description: '', raw: m };
+      return { value: m, displayName: m, description: '', resolvedModel: '', raw: m };
     }
     const value = m?.value != null ? String(m.value) : '';
     const displayName = (m?.displayName != null && String(m.displayName).trim())
       ? String(m.displayName).trim()
       : value;
+    const resolvedModel = (m?.resolvedModel != null && String(m.resolvedModel).trim())
+      ? String(m.resolvedModel).trim()
+      : '';
     const description = m?.description != null ? String(m.description) : '';
-    return { value, displayName, description, raw: m };
+    return { value, displayName, description, resolvedModel, raw: m };
   });
   const counts = new Map();
   for (const r of rows) {
-    const key = r.displayName || r.value;
+    const key = r.resolvedModel || r.displayName || r.value;
     counts.set(key, (counts.get(key) || 0) + 1);
   }
   return rows.map(r => {
-    const key = r.displayName || r.value;
+    const key = r.resolvedModel || r.displayName || r.value;
     const duplicate = (counts.get(key) || 0) > 1;
-    const title = duplicate ? (r.value || r.displayName || 'model') : (r.displayName || r.value || 'model');
+    const title = duplicate
+      ? (r.value || r.resolvedModel || r.displayName || 'model')
+      : (r.resolvedModel || r.displayName || r.value || 'model');
     const subtitle = r.description || r.value || '';
     return { value: r.value, title, subtitle, duplicate, raw: r.raw };
   });
@@ -618,6 +626,36 @@ export function modelEntryFor(value, modelsList) {
     return (idx === 0 || base[idx - 1] === '-')
       && (after >= base.length || base[after] === '-' || base[after] === '[');
   }) || null;
+}
+
+// 展示层模型名解析：网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_*_MODEL）下，
+// 消息发送 / setModel 仍用档位别名（如 "opus"），但给人看的地方应显示 SDK supportedModels() 解析出的
+// 真实 wire id（resolvedModel，如 "mimo-v2.5-pro-ultraspeed"）——不然 UI 时而显示 opus 时而显示网关模型名。
+// 优先级：resolvedModel > displayName > value > 原始 value（列表未到/未命中时诚实回落，不编造）。
+// 用于磁贴 / select 候选文案：这两处早已有 displayName 回落的既有约定，本函数只是在其前面插入
+// resolvedModel 优先级，不改变无 resolvedModel 时的既有回落行为。
+export function resolveModelDisplayName(value, modelsList) {
+  if (value == null || value === '') return '';
+  const entry = modelEntryFor(value, modelsList);
+  if (entry && typeof entry === 'object') {
+    if (entry.resolvedModel != null && String(entry.resolvedModel).trim()) return String(entry.resolvedModel).trim();
+    if (entry.displayName != null && String(entry.displayName).trim()) return String(entry.displayName).trim();
+    if (entry.value != null && String(entry.value)) return String(entry.value);
+  }
+  return String(value);
+}
+
+// 网关真实模型名探测：仅当候选项确有非空 resolvedModel 时返回它，否则返回空字符串——不回落
+// displayName/value。用于 pill / 交互日志 diag chip 这类历史上只显示"原始值"、从不回落 displayName
+// 的展示位——只解决"网关映射导致显示裸别名"这一个问题，不改变无网关映射时的既有展示契约
+// （P0-09e/P0-09j 锁定了 pill 必须显示用户实际选中的原始值，不能被 displayName 覆盖）。
+export function resolveGatewayModelName(value, modelsList) {
+  if (value == null || value === '') return '';
+  const entry = modelEntryFor(value, modelsList);
+  if (entry && typeof entry === 'object' && entry.resolvedModel != null && String(entry.resolvedModel).trim()) {
+    return String(entry.resolvedModel).trim();
+  }
+  return '';
 }
 
 // effort 档位决策（rebuildEffortOptions 的纯部分；DOM 渲染留在 app.js）。返回 { hidden, levels }：

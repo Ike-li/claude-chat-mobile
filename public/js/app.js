@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -216,11 +216,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function syncModelUI(model) {
     // 底栏模型 chip：显完整真名（含网关后缀 [1m]）；未选具体模型时优先显 CLI 列表里 value=default 的 displayName，
     // 否则回落 scout 探得的 cwd 默认名 /「默认」。不再渲染 Web 自造的「默认模型」磁贴。
+    // 网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_*_MODEL）例外：候选项确有
+    // resolvedModel（真实 wire id，如 mimo-v2.5-pro-ultraspeed）时才覆盖显示它，否则保持显示用户
+    // 实际选中的原始值——不回落 displayName（P0-09e/P0-09j 锁定 pill 必须显示原始值，不能被
+    // displayName 覆盖；resolveGatewayModelName 无命中时返回空串，天然不触发覆盖）。
     const cliDefault = (modelsList || []).find(m => (typeof m === 'string' ? m : m?.value) === 'default');
     const cliDefaultLabel = cliDefault && typeof cliDefault === 'object'
       ? (cliDefault.displayName || 'Default (recommended)')
       : null;
-    const modelPillText = model ? model + currentGatewaySuffix
+    const modelPillText = model
+      ? (resolveGatewayModelName(model + currentGatewaySuffix, modelsList) || (model + currentGatewaySuffix))
       : (cliDefaultLabel
         || (cwdDefaultModel ? cwdDefaultModel.replace(/\[[^\]]+\]$/, '') : '默认'));
     if (pillModelText) pillModelText.textContent = modelPillText;
@@ -1405,8 +1410,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       modelInput.innerHTML = '';
       (p.models || []).forEach(m => {
         const opt = document.createElement('option');
+        // 网关映射场景（resolvedModel）优先显真实模型名，而非档位别名 displayName/value（同 syncModelUI）
         if (typeof m === 'string') { opt.value = m; opt.textContent = m; }
-        else { opt.value = m.value; opt.textContent = m.displayName || m.value; }
+        else { opt.value = m.value; opt.textContent = resolveModelDisplayName(m.value, modelsList); }
         modelInput.appendChild(opt);
       });
       // 预选：有 currentModel 用它；否则 CLI default；再不济留空
@@ -6019,12 +6025,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     badgeSpan.textContent = badgeText;
     meta.appendChild(badgeSpan);
 
-    // 模型 ID 独立 chip（紧邻 type 角标）：仅当 entry 带 model 时渲染；中性配色区别于 type 语义色
+    // 模型 ID 独立 chip（紧邻 type 角标）：仅当 entry 带 model 时渲染；中性配色区别于 type 语义色。
+    // 网关映射场景（同 syncModelUI）：候选项确有 resolvedModel 才覆盖显示真实模型名，否则保留原始
+    // p.model 原样显示，不回落 displayName——诊断日志的价值在于忠实记录"那一刻实际记的值"。
+    // title 悬停在覆盖时补显原始档位名，便于对照 setModel 实际请求的是哪个别名。
     if (p.model) {
+      const gatewayName = resolveGatewayModelName(p.model, modelsList);
+      const displayText = gatewayName || p.model;
       const modelSpan = document.createElement('span');
       modelSpan.className = 'px-1 py-0.5 rounded text-[9px] font-bold shrink-0 bg-slate-800 text-slate-300 border border-slate-600/50 max-w-[120px] truncate';
-      modelSpan.textContent = p.model;
-      modelSpan.title = p.model; // 超长截断时悬停看全名
+      modelSpan.textContent = displayText;
+      modelSpan.title = gatewayName ? `${p.model} → ${gatewayName}` : p.model;
       meta.appendChild(modelSpan);
     }
     // 思考强度 / 权限档 chip（那一刻的档位）：只要 entry 带该字段就渲染，默认值（model-default/default）

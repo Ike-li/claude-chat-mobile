@@ -231,6 +231,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_OPUS_MODEL）：CLI 侧仍报档位别名
+  // 'opus'，但 SDK supportedModels() 在 resolvedModel 带出真实 wire id（如 mimo-v2.5-pro-ultraspeed）。
+  // 底栏 pill、select 候选文案、设置面板磁贴标题都应显示 resolvedModel，而不是停留在裸别名 'opus'——
+  // 这是 resolveModelDisplayName / resolveModelTileDisplay 的端到端验证，不能只靠纯函数单测。
+  test('P0-09k 网关映射模型：pill/select/磁贴显示真实模型名而非档位别名', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:gateway-model-alias');
+    await waitForIdle(page);
+
+    // 底栏 pill：显 resolvedModel，不是裸别名 'opus'
+    await expect(page.locator('#pillModelText')).toHaveText('mimo-v2.5-pro-ultraspeed');
+
+    // 设置面板：select 候选文案 + 磁贴标题同样显 resolvedModel
+    await page.locator('#btnSettings').click();
+    await expect(page.locator('#modelInput')).toHaveValue('opus'); // 发送用的 value 仍是档位别名，不受本次改动影响
+    await expect(page.locator('.model-tile[data-model="opus"]')).toContainText('mimo-v2.5-pro-ultraspeed');
+    await expect(page.locator('.model-tile[data-model="opus"]')).not.toContainText('Opus');
+    await closeSettings(page);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // /model default 是 CLI「不 pin」语义：不得把字面量 default 写进 modelInput / 发出去。
   // 先 /model 具体模型污染，再 /model default 复位，文案/select/pill/回显四端均不得出现字面量 default。
   test('P0-09j /model default 复位不污染 model 字面量', async ({ page }) => {

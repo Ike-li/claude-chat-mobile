@@ -103,6 +103,41 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // 网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_OPUS_MODEL）：CLI 侧仍报档位
+      // 别名 'opus'，但 SDK supportedModels() 在 resolvedModel 带出真实 wire id——UI 展示（pill/select/
+      // 磁贴）都应优先显示 resolvedModel，不得停留在裸别名。
+      command: 'test:gateway-model-alias',
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, mockInstances, permissionMode, delay }) => {
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'init', payload: {
+            model: 'opus',
+            cwd: mockInstances[0].cwd,
+            claudeVersion: '0.1.0-mock',
+            mcpServers: [],
+            skillsCount: 7,
+            permissionMode,
+            slashCommands: [{ name: 'model', description: 'Switch active model' }],
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'models', payload: {
+            models: [
+              { value: 'default', displayName: 'Default (recommended)' },
+              { value: 'opus', displayName: 'Opus', resolvedModel: 'mimo-v2.5-pro-ultraspeed' },
+              { value: 'sonnet', displayName: 'Sonnet', resolvedModel: 'mimo-v2.5-pro' },
+            ],
+          },
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_gateway_model_alias_1', durationMs: 100, costUsd: 0, isError: false, models: ['opus'] },
+        });
+      }),
+    },
+    {
       command: 'test:mirror',
       run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, delay }) => {
         const mirrorEvent = (readonly, stale) => ({

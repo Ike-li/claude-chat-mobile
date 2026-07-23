@@ -55,6 +55,53 @@ test('resolveModelTileDisplay: 无 displayName 时 title=value；缺省安全', 
   assert.equal(resolveModelTileDisplay(['raw'])[0].title, 'raw');
 });
 
+// 网关映射（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_*_MODEL）场景：
+// resolvedModel 是 SDK 解析出的真实 wire id，磁贴标题应显示它而非档位别名 displayName/value。
+test('resolveModelTileDisplay: 有 resolvedModel → 标题用真实模型名而非档位别名', () => {
+  const out = resolveModelTileDisplay([
+    { value: 'opus', displayName: 'Opus', resolvedModel: 'mimo-v2.5-pro-ultraspeed' },
+  ]);
+  assert.equal(out[0].title, 'mimo-v2.5-pro-ultraspeed');
+});
+
+test('resolveModelTileDisplay: resolvedModel 撞车 → 回退 value（与 displayName 撞车规则对称）', () => {
+  const out = resolveModelTileDisplay([
+    { value: 'opus', displayName: 'Opus', resolvedModel: 'mimo-v2.5-pro' },
+    { value: 'sonnet', displayName: 'Sonnet', resolvedModel: 'mimo-v2.5-pro' },
+  ]);
+  assert.equal(out[0].title, 'opus');
+  assert.equal(out[0].duplicate, true);
+  assert.equal(out[1].title, 'sonnet');
+  assert.equal(out[1].duplicate, true);
+});
+
+test('resolveModelTileDisplay: 无 resolvedModel 时行为与现网一致（回归）', () => {
+  const out = resolveModelTileDisplay([
+    { value: 'a', displayName: 'Alpha', description: 'A' },
+  ]);
+  assert.equal(out[0].title, 'Alpha');
+});
+
+test('resolveModelTileDisplay: resolvedModel 与另一行 displayName 撞车 → 跨字段一样判撞车回退 value', () => {
+  const out = resolveModelTileDisplay([
+    { value: 'opus', displayName: 'Opus', resolvedModel: 'mimo-x' },
+    { value: 'other', displayName: 'mimo-x' }, // 无 resolvedModel，但 displayName 与前一行的 resolvedModel 同名
+  ]);
+  assert.equal(out[0].title, 'opus');
+  assert.equal(out[0].duplicate, true);
+  assert.equal(out[1].title, 'other');
+  assert.equal(out[1].duplicate, true);
+});
+
+test('resolveModelTileDisplay: resolvedModel 为空白字符串 → 视同缺省，不影响 subtitle/raw', () => {
+  const out = resolveModelTileDisplay([
+    { value: 'opus', displayName: 'Opus', description: 'desc', resolvedModel: '   ' },
+  ]);
+  assert.equal(out[0].title, 'Opus');
+  assert.equal(out[0].subtitle, 'desc');
+  assert.equal(out[0].value, 'opus');
+});
+
 // UX-020
 test('formatAttachmentChipLabel: 同名 1-based 序号', () => {
   assert.equal(formatAttachmentChipLabel('image.png', 1), 'image.png');
