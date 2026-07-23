@@ -154,15 +154,22 @@
   .hero-note { font-size:15px; color:var(--ink-faint); margin-bottom:30px; }
   .hero-cta { display:flex; gap:14px; flex-wrap:wrap; }
 
-  /* phone mock */
+  /* phone mock — full screenshot, no cover-crop (that shrank UI text to ~4px) */
   .phone {
-    margin:0 auto; width:232px; border-radius:38px; padding:10px;
+    margin:0 auto; width:min(280px, 72vw); border-radius:40px; padding:11px;
     background:linear-gradient(160deg, color-mix(in srgb, var(--ink) 82%, #000), #100c0a);
     box-shadow:var(--shadow-pop), 0 6px 20px color-mix(in srgb, var(--accent) 22%, transparent);
   }
-  .phone .screen { border-radius:29px; overflow:hidden; background:var(--surface); box-shadow:inset 0 0 0 1px rgba(0,0,0,.28); height:471px; }
-  .phone picture { display:block; width:100%; height:100%; }
-  .phone img { display:block; width:100%; height:100%; object-fit:cover; object-position:bottom; }
+  .phone .screen {
+    border-radius:30px; overflow:hidden; background:var(--surface);
+    box-shadow:inset 0 0 0 1px rgba(0,0,0,.28);
+    aspect-ratio:750 / 1624; width:100%; height:auto;
+  }
+  .phone picture { display:block; width:100%; height:auto; line-height:0; }
+  .phone img {
+    display:block; width:100%; height:auto;
+    object-fit:contain; object-position:top center;
+  }
 
   /* ── Sections ── */
   section { padding:60px 0; }
