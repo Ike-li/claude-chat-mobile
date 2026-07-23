@@ -38,7 +38,8 @@
   "author": {
     "@type": "Person",
     "name": "Ike-li",
-    "url": "https://github.com/Ike-li"
+    "url": "https://github.com/Ike-li",
+    "sameAs": ["https://github.com/Ike-li"]
   }
 }
 </script>
@@ -49,6 +50,17 @@
   "name": "Claude Chat Mobile",
   "url": "https://ike-li.github.io/claude-chat-mobile/",
   "inLanguage": ["en", "zh-CN"]
+}
+</script>
+
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Person",
+  "name": "Ike-li",
+  "url": "https://github.com/Ike-li",
+  "sameAs": ["https://github.com/Ike-li"]
 }
 </script>
 
@@ -153,6 +165,20 @@
   .hero-sub { font-size:19px; line-height:1.62; color:var(--ink-soft); max-width:34em; margin-bottom:16px; }
   .hero-note { font-size:15px; color:var(--ink-faint); margin-bottom:30px; }
   .hero-cta { display:flex; gap:14px; flex-wrap:wrap; }
+  .what-is {
+    margin: 8px 0 22px; max-width: 38em; padding: 16px 18px;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius-md); box-shadow: var(--shadow-card);
+  }
+  .what-is h2 {
+    font-family: var(--font-read); font-size: 18px; font-weight: 600;
+    margin: 0 0 10px; letter-spacing: -.01em;
+  }
+  .what-is p { font-size: 15px; line-height: 1.6; color: var(--ink-soft); margin: 0 0 10px; }
+  .what-is p strong { color: var(--ink); }
+  .what-is ul { margin: 0; padding-left: 1.15em; }
+  .what-is li { font-size: 14.5px; line-height: 1.55; color: var(--ink-soft); margin: 4px 0; }
+  .what-is a { font-weight: 600; }
 
   /* phone mock — full screenshot, no cover-crop (that shrank UI text to ~4px) */
   .phone {
@@ -308,7 +334,18 @@
       <h1 class="hero-title" data-i18n-html="hero.title">Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span></h1>
       <p class="hero-sub" data-i18n-html="hero.sub">Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.</p>
       <p class="hero-note" data-i18n="hero.note">Approvals, tool output, and resumed sessions stay on the same local Claude path.</p>
-      <p class="hero-note" style="margin-top:-12px;margin-bottom:22px;" data-i18n-html="hero.notOfficial">Not Anthropic’s official mobile app — an independent, self-hosted open-source project. Spec: <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.</p>
+      <p class="hero-note" style="margin-top:-12px;margin-bottom:14px;" data-i18n-html="hero.notOfficial">Not Anthropic’s official mobile app — an independent, self-hosted open-source project. Spec: <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.</p>
+      <div class="what-is" id="what-is" data-i18n-html="hero.whatIs">
+        <h2>What is Claude Chat Mobile?</h2>
+        <p><strong>Claude Chat Mobile</strong> is a self-hosted mobile Web UI that drives <em>your</em> already-logged-in local <code>claude</code> CLI through the Claude Agent SDK—same agent, same <code>CLAUDE.md</code>, same session log, same tools and permissions path. The goal is <strong>terminal equivalence</strong>: typing on your phone should behave like typing at your terminal—not a remote desktop mirror and not a reimplemented cloud Claude.</p>
+        <p>It is built for people who already use Claude Code at a desk and need approvals, progress, or a continued session from a phone. One operator per instance; lock the host with tokens and device trust before any public URL.</p>
+        <ul>
+          <li>Self-hosted; single-user per instance—not multi-tenant SaaS.</li>
+          <li>With no <code>AUTH_TOKEN</code>, the server binds <code>127.0.0.1</code> only.</li>
+          <li>CLI permissions and allow-lists are inherited; risky actions can be approved on the phone.</li>
+          <li>Independent open source (AGPL)—not Anthropic’s official mobile app. Read the <a href="./en/security.html">security model</a> before public exposure.</li>
+        </ul>
+      </div>
       <div class="hero-cta">
         <a class="btn btn-primary" data-i18n-href="hero.cta1Href" href="./en/quickstart.html"><span data-i18n="hero.cta1">English quickstart</span> <span aria-hidden="true">▸</span></a>
         <a class="btn btn-ghost" href="#action" data-i18n="hero.cta2">See it in action</a>
@@ -551,6 +588,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'hero.sub': 'Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.',
       'hero.note': 'Approvals, tool output, and resumed sessions stay on the same local Claude path.',
       'hero.notOfficial': 'Not Anthropic’s official mobile app — an independent, self-hosted open-source project. Spec: <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.',
+      'hero.whatIs': '<h2>What is Claude Chat Mobile?</h2><p><strong>Claude Chat Mobile</strong> is a self-hosted mobile Web UI that drives <em>your</em> already-logged-in local <code>claude</code> CLI through the Claude Agent SDK—same agent, same <code>CLAUDE.md</code>, same session log, same tools and permissions path. The goal is <strong>terminal equivalence</strong>: typing on your phone should behave like typing at your terminal—not a remote desktop mirror and not a reimplemented cloud Claude.</p><p>It is built for people who already use Claude Code at a desk and need approvals, progress, or a continued session from a phone. One operator per instance; lock the host with tokens and device trust before any public URL.</p><ul><li>Self-hosted; single-user per instance—not multi-tenant SaaS.</li><li>With no <code>AUTH_TOKEN</code>, the server binds <code>127.0.0.1</code> only.</li><li>CLI permissions and allow-lists are inherited; risky actions can be approved on the phone.</li><li>Independent open source (AGPL)—not Anthropic’s official mobile app. Read the <a href="./en/security.html">security model</a> before public exposure.</li></ul>',
       'hero.cta1': 'English quickstart',
       'hero.cta1Href': './en/quickstart.html',
       'get.ctaHref': './en/quickstart.html',
@@ -635,6 +673,7 @@ npm start              <span class="c"># http://localhost:3000</span>
       'hero.sub': '不是远程桌面，也不是复刻实现。它驱动你<strong>本机已登录</strong>的 CLI：同一个 agent、同一份 <code>CLAUDE.md</code>、同一个会话。目标是<strong>终端等价性</strong>：在手机上对 claude 打字，效果和坐在终端前一样。',
       'hero.note': '审批、工具输出、恢复会话都走同一条本机 Claude 路径。',
       'hero.notOfficial': '不是 Anthropic 官方手机 App——独立的自托管开源项目。规范见 <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>。',
+      'hero.whatIs': '<h2>什么是 Claude Chat Mobile？</h2><p><strong>Claude Chat Mobile</strong> 是一层自托管的手机 Web UI：通过 Claude Agent SDK 驱动<strong>你本机已登录</strong>的 <code>claude</code> CLI——同一个 agent、同一份 <code>CLAUDE.md</code>、同一会话记录与权限路径。目标是<strong>终端等价性</strong>：在手机上打字应与坐在终端前一样——不是远程桌面镜像，也不是云端复刻版 Claude。</p><p>面向已经在电脑终端使用 Claude Code、需要在手机上审批、看进度或续接会话的人。每实例单用户；公网暴露前须用 token 与设备信任锁好主机。</p><ul><li>自托管；每实例单用户——不是多租户 SaaS。</li><li>不设 <code>AUTH_TOKEN</code> 时只绑定 <code>127.0.0.1</code>。</li><li>继承 CLI 权限与 allowlist；风险操作可回手机审批。</li><li>独立开源（AGPL）——不是 Anthropic 官方手机 App。公网暴露前请读<a href="./docs-site/pages/security-model.html">安全模型</a>。</li></ul>',
       'hero.cta1': '打开快速开始手册',
       'hero.cta1Href': './docs-site/pages/quickstart.html',
       'get.ctaHref': './docs-site/pages/quickstart.html',
