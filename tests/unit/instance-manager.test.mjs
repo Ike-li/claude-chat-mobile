@@ -38,6 +38,32 @@ test('instance manager owns IDs, per-instance preferences, lookup, and teardown'
   assert.equal(manager.done.has(first.instanceId), false);
 });
 
+// 空闲回收 checkIdle 置 terminating 后、onExit 删 Map 前有竞态窗：session:switch 若仍命中
+// 这份「正在死」的实例，会 bind 到即将消失的 instanceId → 历史分块渲染中途被 reselect 打断 → 空屏。
+test('forSession skips terminating and disposed agents so switch can open a fresh resume', () => {
+  const manager = createInstanceManager();
+  const dying = {
+    instanceId: manager.nextId(),
+    sessionId: 's-dying',
+    terminating: true,
+    disposed: false,
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
+    pendingTurns: 0,
+    hasBgTasks: () => false,
+    dispose() {},
+  };
+  manager.agents.set(dying.instanceId, dying);
+  assert.equal(manager.forSession('s-dying'), null);
+
+  dying.terminating = false;
+  dying.disposed = true;
+  assert.equal(manager.forSession('s-dying'), null);
+
+  dying.disposed = false;
+  assert.equal(manager.forSession('s-dying'), dying);
+});
+
 test('instance state priority is permission, busy, aborted, error, done, idle', () => {
   const manager = createInstanceManager();
   const id = manager.nextId();

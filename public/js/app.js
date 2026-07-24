@@ -5339,6 +5339,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // displayedInstanceId 代表此刻 DOM 安全可写给谁。分块跨越一次切视图时直接丢弃 frag，不再调度、不
     // appendChild——frag/codeBlocks/histSubCards/histToolCards 全是本次调用的局部变量，中止后自然被 GC，
     // 不需要额外清理；用户若切回同一会话，因没有 sessionDomCache 缓存会自然触发一次完整重渲染。
+    //
+    // 注意：不得放宽为「同 sessionId 即可续渲」——同会话 instance 置换时 bindView 会 clearView + 重新
+    // loadHistory，旧 frag 若仍落地会与新一轮历史叠加成重复气泡。跨 instance 一律中断，由新 bindView 负责。
     const targetInstanceId = displayedInstanceId;
     let i = 0;
     function processChunk() {

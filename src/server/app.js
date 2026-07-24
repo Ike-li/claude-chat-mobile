@@ -777,6 +777,12 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
   return p;
 }
 function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 各实例角标状态，合成事件惯例）
+  // 与 viewing 对齐：当前查看实例豁免空闲回收（用户读历史时 lastActivity 不会因 SDK 刷新）。
+  // 放在每次 broadcast 前扫一遍——viewing 变更路径多（switch/setViewing/reselect/lazy open），
+  // 统一在此收敛比在每个赋值点手写 setViewed 更不易漏。
+  for (const [id, a] of agents) {
+    a.setViewed?.(id === viewingInstanceId);
+  }
   io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
     // SRV-NEW-006：信封 cwd 与 payload.viewingCwd 同源（viewingCwdOf），避免 dispose/reselect 窗内裸 viewingCwd 漂移
     seq: 0, epoch: 'server', sessionId: null, instanceId: viewingInstanceId, cwd: viewingCwdOf(), ts: Date.now(),
@@ -2128,6 +2134,8 @@ registerSocketConnection(io, socket => {
     viewingInstanceId = id;
     const a = agents.get(id);
     viewingCwd = a.cwd;
+    // 用户正在看 → 续期空闲看护，避免切入后仍因旧 lastActivity 被 30min 回收清屏
+    a.touchActivity?.();
     // 切视图立即清全局 mirror（否则 catchUpTick 切换分支完成前，A 的锁仍挂着）
     clearMirrorOnViewChange();
     interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 切换当前活动视图 (user:setViewing): instanceId=${id}, sessionId=${a.sessionId || '(pending)'}`);
@@ -2268,10 +2276,13 @@ registerSocketConnection(io, socket => {
     // 必须在 dedupedResume 之前 bump：若下面需要新 spawn 实例，openInstance 内会同步捕获代次快照——
     // bump 放这之后会让刚 spawn 的、本该是"当前权威"的实例反而捕获到旧代次，被自己后续 onSessionId 误判陈旧。
     sessions.bumpGeneration(cwd);
+    // forSession 已跳过 terminating/disposed；命中则是可续用 live，fresh resume 仅在无 live 时。
     const inst = instanceForSession(sessionId) || await dedupedResume(cwd, sessionId);
     viewingInstanceId = inst.instanceId;
     viewingCwd = cwd;
     sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（session:list 的 currentSessionId 等）
+    // 用户打开/切回本会话 → 续期空闲看护（含刚 resume 的新实例，避免随后立刻被旧时钟误判）
+    inst.touchActivity?.();
     // 切会话立即清全局 mirror；catchUpTick 切换分支会按新会话尾部形态重判预锁
     clearMirrorOnViewChange();
     doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);

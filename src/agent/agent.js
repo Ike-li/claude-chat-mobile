@@ -928,12 +928,26 @@ export class AgentSession {
     }
   }
 
+  // 用户显式活动续期：切回/打开本实例（setViewing / session:switch）时调用。
+  // 不进事件流——只刷新 lastActivity。
+  touchActivity() {
+    this.lastActivity = Date.now();
+  }
+
+  // 当前是否为前端 viewing 实例。true 时跳过空闲回收（用户正在看历史也不该被 30min 清屏）。
+  // 在途轮静默超时仍生效（pendingTurns>0 时用户仍需要挂死保护）。
+  setViewed(viewed) {
+    this.viewed = Boolean(viewed);
+    if (this.viewed) this.lastActivity = Date.now();
+  }
+
   // ---- 静默看护 + 空闲实例回收 ----
   // ① 在途轮静默挂死（idleTimeoutMs）：pendingTurns>0 且无审批/提问、且无活后台任务时，
   //    长时间零活动 → abort。活的 bgTasks（workflow/后台 agent/后台 bash）视为仍在干活，
   //    刷新 lastActivity 豁免——否则多子代理并行时长主流通零消息会被 10 分钟误杀。
   // ② 空闲真回收（instanceIdleReclaimMs）：完全 !isBusy 且超阈 → abort 释放子进程；会话盘上仍在，
   //    下次发送/切换会 resume 重建。0 = 禁用。等审批/后台任务/提问都算 busy，不回收。
+  //    当前 viewing 实例（this.viewed）也不回收——用户在读历史时 lastActivity 不会因 SDK 消息刷新。
   checkIdle() {
     // 后台任务 TTL 清扫须在下方分支之前——后台任务运行时 pendingTurns 正是 0，
     // 放 return 之后就永远清不到（漏收完成信号的任务会把 ⏳ 永挂）。清出变化即回调重算角标。
@@ -951,6 +965,8 @@ export class AgentSession {
     }
     const idleFor = Date.now() - this.lastActivity;
     if (this.pendingTurns === 0) {
+      // 用户正查看本实例：不回收（读历史/停在会话页不应被 30min 空闲清屏）
+      if (this.viewed) return;
       // 完全空闲回收：isBusy 还含 bgTasks（刚 sweep 后可能仍有活任务）
       if (this.instanceIdleReclaimMs > 0 && !this.isBusy() && idleFor > this.instanceIdleReclaimMs) {
         const mins = Math.max(1, Math.round(this.instanceIdleReclaimMs / 60000));

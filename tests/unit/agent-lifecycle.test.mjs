@@ -113,6 +113,43 @@ test.describe('checkIdle()', () => {
     s.dispose();
   });
 
+  // 用户正在看会话时不得空闲回收：否则 onExit reselect 会清屏，历史分块渲染的 frag 永远不落地 → 空屏。
+  test('touchActivity 续期 lastActivity → 不触发空闲回收', () => {
+    const { s, events } = makeSession({ instanceIdleReclaimMs: 1 });
+    s.pendingTurns = 0;
+    s.lastActivity = 0;
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.touchActivity();
+    s.checkIdle();
+    assert.equal(s.terminating, false);
+    assert.equal(aborted, false);
+    assert.equal(events.find(e => e.type === 'error'), undefined);
+    s.dispose();
+  });
+
+  test('setViewed(true) → 当前查看实例不走空闲回收（即使用户长时间只读历史）', () => {
+    const { s, events } = makeSession({ instanceIdleReclaimMs: 1 });
+    s.pendingTurns = 0;
+    s.lastActivity = 0;
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.setViewed(true);
+    // 模拟用户读了很久：lastActivity 再变旧
+    s.lastActivity = 0;
+    s.checkIdle();
+    assert.equal(s.terminating, false);
+    assert.equal(aborted, false);
+    assert.equal(events.find(e => e.type === 'error'), undefined);
+    // 切走后可回收
+    s.setViewed(false);
+    s.lastActivity = 0;
+    s.checkIdle();
+    assert.equal(s.terminating, true);
+    assert.equal(aborted, true);
+    s.dispose();
+  });
+
   test('instanceIdleReclaimMs=0 → 禁用空闲回收', () => {
     const { s, events } = makeSession({ instanceIdleReclaimMs: 0 });
     s.pendingTurns = 0;
