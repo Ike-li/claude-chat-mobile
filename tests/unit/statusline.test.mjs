@@ -137,11 +137,32 @@ test('buildCliStatusLine：只把 CLI 快照投影成现有 Web statusline 契�
 test.describe('contextWindowSize：model→上下文窗口大小映射', () => {
   test('[1m] 后缀 → 1M', () => assert.equal(contextWindowSize('claude-opus-4-8[1m]'), 1_000_000));
   test('"1M context" 文案 → 1M', () => assert.equal(contextWindowSize('Opus 4.8 (1M context)'), 1_000_000));
-  test('裸 Claude 模型 → 200k', () => assert.equal(contextWindowSize('claude-opus-4-8'), 200_000));
-  test('sonnet / haiku → 200k', () => {
-    assert.equal(contextWindowSize('claude-sonnet-5'), 200_000);
+
+  test('官方已确认 1M 的当前代模型（裸 ID，无 [1m] 后缀也能判定）→ 1M', () => {
+    assert.equal(contextWindowSize('claude-opus-4-8'), 1_000_000);
+    assert.equal(contextWindowSize('claude-opus-4-7'), 1_000_000);
+    assert.equal(contextWindowSize('claude-opus-4-6'), 1_000_000);
+    assert.equal(contextWindowSize('claude-sonnet-5'), 1_000_000);
+    assert.equal(contextWindowSize('claude-sonnet-4-6'), 1_000_000);
+    assert.equal(contextWindowSize('claude-fable-5'), 1_000_000);
+    assert.equal(contextWindowSize('claude-mythos-5'), 1_000_000);
+  });
+
+  test('haiku 全系 → 200k（官方确认值，含日期后缀变体，不受本次改动影响）', () => {
+    assert.equal(contextWindowSize('claude-haiku-4-5'), 200_000);
     assert.equal(contextWindowSize('claude-haiku-4-5-20251001'), 200_000);
   });
+
+  test('未列入 1M 名单的老模型 → 200k（没有官方确认数值，保守兜底，不能因为正则写宽了而误判成 1M）', () => {
+    assert.equal(contextWindowSize('claude-sonnet-4-5'), 200_000);
+    assert.equal(contextWindowSize('claude-sonnet-4-5-20250929'), 200_000);
+    assert.equal(contextWindowSize('claude-opus-4-5'), 200_000);
+    assert.equal(contextWindowSize('claude-opus-4-1'), 200_000);
+    assert.equal(contextWindowSize('claude-opus-4-0'), 200_000);
+    assert.equal(contextWindowSize('claude-opus-4-20250514'), 200_000);
+    assert.equal(contextWindowSize('claude-sonnet-4-20250514'), 200_000);
+  });
+
   test('认不出的 model → null（前端退回绝对数）', () => {
     assert.equal(contextWindowSize('gpt-4o'), null);
     assert.equal(contextWindowSize(''), null);
@@ -158,8 +179,8 @@ test.describe('buildWebStatusLine：ctx% 由 model→窗口映射推算', () => 
     assert.equal(p.ctx.usedPercent, 40);
   });
 
-  test('裸模型 + tokens=100k → usedPercent=50（100k/200k）', async () => {
-    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-opus-4-8', lastUsage: usageT(100_000) }, cwd: undefined });
+  test('裸模型（haiku，官方确认 200k）+ tokens=100k → usedPercent=50（100k/200k）', async () => {
+    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-haiku-4-5', lastUsage: usageT(100_000) }, cwd: undefined });
     assert.equal(p.ctx.windowSize, 200_000);
     assert.equal(p.ctx.usedPercent, 50);
   });

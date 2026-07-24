@@ -80,14 +80,26 @@ export async function gitStatus(cwd) {
 }
 
 // ---- 上下文窗口大小映射（model → tokens）----
-// SDK 不回报 web 会话的真实窗口大小，只能按 model 名映射：显式 1M 标记（[1m] / "1M context"）→ 1_000_000；
-// 认得出的 Claude 模型 → 200_000；认不出 → null（调用方退回只显绝对 token 数，不显百分比）。
-// 已知边界（有意接受的取舍）：resume 会丢掉 [1m] 后缀，1M 会话被恢复后会被当 200k、ctx% 偏高；
-// 宁可让多数场景有百分比，也不为这个极端边界砍掉整个功能。认不出的第三方模型直接不显 %，不误导。
+// SDK 不回报 web 会话的真实窗口大小，只能按 model 名映射，按下列优先级判定：
+// 1) 显式 1M 标记（[1m] / "1M context"）→ 1_000_000；
+// 2) 官方已确认为 1M 窗口的当前代 Claude 模型（裸 model id，不靠 [1m] 后缀也能判定）：
+//    opus-4-6/4-7/4-8、sonnet-4-6/5、fable-5、mythos-5（依据 Anthropic 官方 claude-api 参考资料，
+//    核实于 2026-06-24）→ 1_000_000。新模型上线后需要在这里同步补充，别漏更新。
+// 3) 其余认得出的 Claude 关键词（claude/opus/sonnet/haiku）→ 200_000。注意这不是"官方确认这些都是
+//    200k"，而是查不到权威数据时的保守兜底——尤其是不在②名单里的更早期 opus/sonnet
+//    （如 opus-4-5/4-1/4-0、sonnet-4-5/4-0），其真实窗口未核实，不要臆测成 1M；haiku 全系目前官方
+//    确认就是 200k，属于确定值而非兜底猜测。
+// 4) 认不出 → null（调用方退回只显绝对 token 数，不显百分比），第三方模型不误导显示 %。
+// 已知边界（有意接受的取舍）：resume 会丢掉网关加的 [1m] 后缀。对②里已确认 1M 的当前代模型，
+// 丢了后缀也无妨——裸 model id 本身就能命中②直接判 1M，不再依赖 [1m] 后缀。这条边界现在只残留在：
+// a) 必须靠 [1m] 后缀才能识别为 1M 的第三方/网关模型；b) ③里保守按 200k 兜底、但未来官方确认其实
+// 是 1M 却还没同步进本表的老模型。宁可让多数场景有正确（或至少不臆测）的百分比，也不为这类边界
+// 砍掉整个功能。
 export function contextWindowSize(model) {
   if (!model) return null;
   const m = String(model).toLowerCase();
   if (/\[1m\]|\b1m\b|1m\s*context|1000000/.test(m)) return 1_000_000;
+  if (/\b(?:opus-4-[678]|sonnet-4-6|sonnet-5|fable-5|mythos-5)\b/.test(m)) return 1_000_000;
   if (/claude|opus|sonnet|haiku/.test(m)) return 200_000;
   return null;
 }
