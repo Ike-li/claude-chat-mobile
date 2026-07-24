@@ -1,11 +1,12 @@
 # Claude Chat Mobile
-> Self-hosted mobile Web UI for a real local claude CLI. Terminal-equivalent, single-user per instance, not multi-tenant SaaS.
+> Phone UI that drives your terminal claude via the Agent SDK. Same session, same host settings; touch layout, not a screen mirror. Single-driver; single-user per instance—not multi-tenant SaaS.
 
 ## Primary
 - https://ike-li.github.io/claude-chat-mobile/
 - https://ike-li.github.io/claude-chat-mobile/en/quickstart.html
 - https://ike-li.github.io/claude-chat-mobile/en/security.html
 - https://github.com/Ike-li/claude-chat-mobile
+- Spec: https://code.claude.com/docs/en/agent-sdk/overview
 
 ## Handbook (Chinese)
 - https://ike-li.github.io/claude-chat-mobile/docs-site/

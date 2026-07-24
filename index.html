@@ -4,19 +4,19 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Claude Chat Mobile — your local claude CLI, on your phone</title>
-<meta name="description" content="Self-hosted mobile Web UI for your real local claude CLI. Same agent, CLAUDE.md, and session—terminal-equivalent, not a hosted clone.">
+<meta name="description" content="Phone UI that drives your terminal claude via the Agent SDK. Same session and host settings; touch layout, not a screen mirror. Self-hosted, single-user.">
 <link rel="canonical" href="https://ike-li.github.io/claude-chat-mobile/">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23C96442'/%3E%3Ctext x='50' y='73' font-size='64' text-anchor='middle' fill='%23F4F3EE' font-family='Georgia,serif'%3EC%3C/text%3E%3C/svg%3E">
 
 <!-- Open Graph / Twitter -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Claude Chat Mobile">
-<meta property="og:description" content="Use your real local claude CLI from your phone with terminal-equivalent behavior. Official subscription or third-party gateway, self-hosted and locked by default.">
+<meta property="og:description" content="Phone UI on the Agent SDK for your terminal claude. Same session, same host settings. Touch layout, not a screen mirror. Self-hosted, locked by default.">
 <meta property="og:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
 <meta property="og:url" content="https://ike-li.github.io/claude-chat-mobile/">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Claude Chat Mobile">
-<meta name="twitter:description" content="Your real local claude CLI, driven from your phone. Official subscription or third-party gateway. Self-hosted and locked by default.">
+<meta name="twitter:description" content="Phone UI drives your terminal claude via the Agent SDK. Same session and host settings. Self-hosted.">
 <meta name="twitter:image" content="https://ike-li.github.io/claude-chat-mobile/og-image.jpg">
 
 <script type="application/ld+json">
@@ -27,7 +27,7 @@
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "macOS, Linux (self-hosted server); any modern mobile browser (client)",
   "url": "https://ike-li.github.io/claude-chat-mobile/",
-  "description": "Self-hosted mobile Web UI for a real local claude CLI. Same agent, same CLAUDE.md, same session—terminal-equivalent, single-user per instance.",
+  "description": "Self-hosted phone UI that drives your terminal claude via the Agent SDK. Same session and host settings; single-user per instance.",
   "offers": {
     "@type": "Offer",
     "price": "0",
@@ -151,6 +151,21 @@
 
   /* ── Hero ── */
   .hero { padding:72px 0 56px; }
+  .hero-banner {
+    display: none;
+    margin: 0 0 28px;
+    border-radius: var(--radius-lg, 16px);
+    overflow: hidden;
+    border: 1px solid var(--line-soft);
+    box-shadow: 0 18px 48px rgba(15, 23, 42, .08);
+  }
+  .hero-banner.is-on { display: block; }
+  .hero-banner img {
+    display: block;
+    width: 100%;
+    height: auto;
+    vertical-align: top;
+  }
   .hero-grid { display:grid; grid-template-columns:1.1fr .9fr; gap:52px; align-items:center; }
   .eyebrow {
     display:inline-flex; align-items:center; gap:9px; font-family:var(--font-mono); font-size:14px;
@@ -158,10 +173,19 @@
   }
   .eyebrow .dot { width:8px; height:8px; border-radius:50%; background:var(--success); box-shadow:0 0 8px var(--success); }
   h1.hero-title {
-    font-family:var(--font-read); font-size:clamp(38px, 5vw, 58px); line-height:1.05;
+    font-family:var(--font-read); font-size:clamp(36px, 4.6vw, 54px); line-height:1.18;
     letter-spacing:-.02em; font-weight:600; margin-bottom:22px;
+    /* 中文大标题：避免「的 / CLI」被 code 芯片拆成三行 */
+    word-break:keep-all; overflow-wrap:normal;
   }
-  h1.hero-title .accent { color:var(--accent); }
+  h1.hero-title .accent { color:var(--accent); display:inline; }
+  h1.hero-title .cli {
+    white-space:nowrap; display:inline;
+  }
+  h1.hero-title code {
+    white-space:nowrap; font-size:.86em; font-weight:600;
+    padding:.06em .32em; vertical-align:0.06em;
+  }
   .hero-sub { font-size:19px; line-height:1.62; color:var(--ink-soft); max-width:34em; margin-bottom:16px; }
   .hero-note { font-size:15px; color:var(--ink-faint); margin-bottom:12px; }
   .hero-note.fine { font-size:13px; margin-bottom:18px; line-height:1.5; }
@@ -342,12 +366,17 @@
 
 <!-- ── Hero ── -->
 <header class="hero">
+  <div class="wrap">
+    <figure class="hero-banner" data-i18n-show="zh" aria-hidden="true">
+      <img src="./hero-zh.png" width="1672" height="941" alt="Claude Chat Mobile — 终端里的 claude，手机上也能用" decoding="async">
+    </figure>
+  </div>
   <div class="wrap hero-grid">
     <div>
       <div class="eyebrow"><span class="dot"></span><span data-i18n="hero.eyebrow">$ claude · on your phone</span></div>
-      <h1 class="hero-title" data-i18n-html="hero.title">Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span></h1>
-      <p class="hero-sub" data-i18n-html="hero.sub">Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.</p>
-      <p class="hero-note" data-i18n="hero.note">Approvals, tool output, and resumed sessions stay on the same local Claude path.</p>
+      <h1 class="hero-title" data-i18n-html="hero.title">Your terminal's<span class="cli"> <code>claude</code> CLI</span>,<br><span class="accent">on your phone too.</span></h1>
+      <p class="hero-sub" data-i18n-html="hero.sub">A phone UI that drives your terminal <code>claude</code> through the <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK</a>—same session, same host settings. Touch layout, not a screen mirror. One driver at a time: when the terminal is writing, the phone is read-only on the transcript until you take over.</p>
+      <p class="hero-note" data-i18n="hero.note">Approvals open in the app with full command + cwd. Push is type-level only (tool name, not the command body).</p>
       <p class="hero-note fine" data-i18n-html="hero.notOfficial">Not Anthropic’s official mobile app — an independent, self-hosted open-source project. Spec: <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.</p>
       <div class="hero-cta">
         <a class="btn btn-primary" data-i18n-href="hero.cta1Href" href="./en/quickstart.html"><span data-i18n="hero.cta1">English quickstart</span> <span aria-hidden="true">▸</span></a>
@@ -356,14 +385,7 @@
       <details class="what-is" id="what-is">
         <summary data-i18n="hero.whatIsTitle">What is Claude Chat Mobile?</summary>
         <div class="what-is-body" data-i18n-html="hero.whatIsBody">
-        <p><strong>Claude Chat Mobile</strong> is a self-hosted mobile Web UI that drives <em>your</em> already-logged-in local <code>claude</code> CLI through the Claude Agent SDK—same agent, same <code>CLAUDE.md</code>, same session log, same tools and permissions path. The goal is <strong>terminal equivalence</strong>: typing on your phone should behave like typing at your terminal—not a remote desktop mirror and not a reimplemented cloud Claude.</p>
-        <p>It is built for people who already use Claude Code at a desk and need approvals, progress, or a continued session from a phone. One operator per instance; lock the host with tokens and device trust before any public URL.</p>
-        <ul>
-          <li>Self-hosted; single-user per instance—not multi-tenant SaaS.</li>
-          <li>With no <code>AUTH_TOKEN</code>, the server binds <code>127.0.0.1</code> only.</li>
-          <li>CLI permissions and allow-lists are inherited; risky actions can be approved on the phone.</li>
-          <li>Independent open source (AGPL)—not Anthropic’s official mobile app. Read the <a href="./en/security.html">security model</a> before public exposure.</li>
-        </ul>
+        <p><strong>Claude Chat Mobile</strong> is a self-hosted <strong>phone UI</strong> that drives <em>your</em> terminal <code>claude</code> through the Claude Agent SDK—same session, same host settings (user/project/local). The interface is rearranged for touch (bubbles, tool cards), not a remote-desktop screen mirror, and not a second cloud Claude or Anthropic’s official mobile app.</p><p>For people who already use Claude Code at a desk and need approvals, progress, or a continued session from a phone. One operator per instance; one writer at a time (single-driver). Lock the host with tokens and device trust before any public URL.</p><ul><li>Self-hosted; single-user per instance—not multi-tenant SaaS.</li><li>With no <code>AUTH_TOKEN</code>, the server binds <code>127.0.0.1</code> only.</li><li>CLI settings allow-lists are inherited; off-list actions suspend and show full command + cwd <em>in the app</em>. Push is type-level (tool name only).</li><li>Independent open source (AGPL). Read the <a href="./en/security.html">security model</a> before public exposure.</li></ul>
         </div>
       </details>
     </div>
@@ -383,7 +405,7 @@
         <div class="story">
           <p class="line"><span class="t">22:30</span><span data-i18n="action.l1">You send: "merge the duplicate date helpers in utils into one function, make the tests pass."</span></p>
           <p class="line"><span class="t">22:30</span><span data-i18n="action.l2">Claude streams back, threaded with Read · Edit · Bash(npm test) tool cards.</span></p>
-          <p class="line"><span class="t">22:39</span><span data-i18n="action.l3">You unlock. The page has reconnected and replayed the missed output: tests passed, and one approval is waiting with the full git commit command and working directory. You tap Allow.</span></p>
+          <p class="line"><span class="t">22:39</span><span data-i18n="action.l3">You unlock. The page has reconnected and replayed missed output from the server buffer: tests passed, and an in-app approval is waiting with the full git commit command and working directory. You tap Allow.</span></p>
           <p class="line"><span class="t">22:40</span><span data-i18n="action.l4">"Now add a line to the CHANGELOG." It remembers what it just changed, and picks up right where it left off.</span></p>
         </div>
       </div>
@@ -412,28 +434,28 @@
     <div class="sec-head">
       <div class="kicker" data-i18n="moments.kicker">When it helps</div>
       <h2 data-i18n="moments.heading">Claude Code is running. You are not always at the desk.</h2>
-      <p data-i18n="moments.sub">Common moments for a pocket entry to your real local CLI—not a remote desktop, not another hosted Claude.</p>
+      <p data-i18n="moments.sub">A phone UI on your terminal claude—not a remote desktop, not another hosted Claude.</p>
     </div>
     <div class="moments">
       <div class="moment">
         <div class="n">01</div>
         <h3 data-i18n="moments.m1t">Approve from a meeting or the road</h3>
-        <p data-i18n="moments.m1b">A long task stalls on a dangerous step or a multiple-choice question. Push reaches your phone with the full command and working directory—tap allow, deny, or an option without walking back to the terminal.</p>
+        <p data-i18n="moments.m1b">A long task stalls on a dangerous step or a multiple-choice question. Push reaches your phone with a type-level hint (e.g. “needs authorization: Edit”)—open the app for the full command and working directory, then allow, deny, or pick an option without walking back to the terminal.</p>
       </div>
       <div class="moment">
         <div class="n">02</div>
         <h3 data-i18n="moments.m2t">Peek while the desk still drives</h3>
-        <p data-i18n="moments.m2b">CLI is still writing the session; you only want progress, not to interrupt. Open the same session read-only, then take over when you mean to. You follow the transcript—not a live terminal screen mirror.</p>
+        <p data-i18n="moments.m2b">While the desk CLI still drives the session, the phone follows the on-disk transcript read-only (catch-up, not attach to the live process). Take over when you mean to—usually after the current turn—so both sides do not write the same session at once.</p>
       </div>
       <div class="moment">
         <div class="n">03</div>
         <h3 data-i18n="moments.m3t">Start on phone, resume at the desk</h3>
-        <p data-i18n="moments.m3b">Same CLI transcript on both sides. Sketch on the phone, then /resume on the computer—continue the thread, not a second conversation.</p>
+        <p data-i18n="moments.m3b">Both sides read the same CLI transcript (same session id). Sketch on the phone, then /resume at the desk—or open a CLI-driven session on the phone as a read-only mirror. Continue the thread, not a second conversation.</p>
       </div>
       <div class="moment">
         <div class="n">04</div>
         <h3 data-i18n="moments.m4t">Watch several repos at once</h3>
-        <p data-i18n="moments.m4b">Switch whitelisted workspaces and tabs instead of jamming multiple desktop windows onto a phone remote desktop.</p>
+        <p data-i18n="moments.m4b">Switch among whitelisted workspaces, the home hub, and session lists (including worktree groups)—not “browser tabs,” and not cramming multiple desktop windows onto a phone remote desktop.</p>
       </div>
       <div class="moment">
         <div class="n">05</div>
@@ -454,7 +476,7 @@
 <section style="background:var(--surface-sunk);border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);">
   <div class="wrap">
     <div class="sec-head">
-      <h2 data-i18n="shots.heading">A phone UI for the local CLI</h2>
+      <h2 data-i18n="shots.heading">Phone layout for the same session</h2>
     </div>
     <div class="shots">
       <div class="shot">
@@ -470,7 +492,7 @@
       <div class="shot">
         <div class="frame"><picture data-i18n-img="img.approval"><source type="image/webp" srcset="./screenshots/03-approval-en.webp"><img src="./screenshots/03-approval-en.png" loading="lazy" width="750" height="1624" alt="Dangerous actions approved from the phone"></picture></div>
         <h3 data-i18n="shots.t3">Approve on phone</h3>
-        <p data-i18n="shots.p3">dangerous actions push full command + cwd</p>
+        <p data-i18n="shots.p3">in-app: full command + cwd; push is type-level only</p>
       </div>
       <div class="shot">
         <div class="frame"><picture data-i18n-img="img.workspace"><source type="image/webp" srcset="./screenshots/04-workspace-en.webp"><img src="./screenshots/04-workspace-en.png" loading="lazy" width="750" height="1624" alt="Multi-repository workspace session switcher"></picture></div>
@@ -496,18 +518,18 @@
   <div class="wrap">
     <div class="sec-head">
       <div class="kicker" data-i18n="features.kicker">What it changes</div>
-      <h2 data-i18n="features.heading">Your local CLI, reachable from the phone</h2>
+      <h2 data-i18n="features.heading">Terminal claude, phone layout</h2>
     </div>
     <div class="features">
-      <div class="card"><div class="n">01</div><h3 data-i18n="features.f1t">Your real CLI, not a clone</h3><p data-i18n-html="features.f1b">It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so it uses the same agent, <code>CLAUDE.md</code>, MCP servers, skills, hooks, logged-in session, and provider setup you use at your desk.</p></div>
-      <div class="card"><div class="n">02</div><h3 data-i18n="features.f2t">Terminal equivalence</h3><p data-i18n="features.f2b">Edit code, run commands, and resume an earlier conversation. Typing on your phone follows the same local Claude path as typing at your computer.</p></div>
-      <div class="card"><div class="n">03</div><h3 data-i18n="features.f3t">Approve risky actions from your phone</h3><p data-i18n="features.f3b">Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. Nothing runs until you allow it.</p></div>
+      <div class="card"><div class="n">01</div><h3 data-i18n="features.f1t">Your terminal claude, not a clone</h3><p data-i18n-html="features.f1b">It ships no Claude of its own. The Agent SDK drives your host <code>claude</code> and filesystem settings (MCP, skills, hooks, allow-lists)—same session path as at the desk. The phone only changes how that stream is laid out.</p></div>
+      <div class="card"><div class="n">02</div><h3 data-i18n="features.f2t">Same session, single driver</h3><p data-i18n="features.f2b">Same session, same host settings; touch layout, not a shrunk terminal. One writer at a time: when the terminal is writing, the phone is read-only on the transcript until you take over.</p></div>
+      <div class="card"><div class="n">03</div><h3 data-i18n="features.f3t">Approve risky actions from your phone</h3><p data-i18n="features.f3b">Off-allowlist actions are suspended. The app shows the full command and working directory; push only names the tool. Nothing runs until you allow it in the app.</p></div>
       <div class="card"><div class="n">04</div><h3 data-i18n="features.f4t">Handles flaky mobile networks</h3><p data-i18n="features.f4b">The task lives server-side, decoupled from the socket. After a dropped mobile connection, the page reconnects and replays missed events.</p></div>
     </div>
     <div class="subfeatures">
-      <span class="pill" data-i18n="sub.p1">5 permission modes</span>
+      <span class="pill" data-i18n="sub.p1">6 permission modes</span>
       <span class="pill" data-i18n="sub.p2">Per-message model switching</span>
-      <span class="pill" data-i18n="sub.p3">Multi-repo · multi-session tabs</span>
+      <span class="pill" data-i18n="sub.p3">Multi-repo · multi-session</span>
       <span class="pill" data-i18n="sub.p4">File &amp; image upload</span>
       <span class="pill" data-i18n="sub.p5">Web Push</span>
       <span class="pill" data-i18n="sub.p6">PWA-installable</span>
@@ -527,7 +549,7 @@
     <div class="sec-list">
       <div class="sec-item"><div class="ico">1</div><div><h3 data-i18n="security.t1">Single-user per instance</h3><p data-i18n="security.b1">You run your own instance for yourself. There are no accounts or multi-user controls; anyone who passes auth has the same power as you at the terminal.</p></div></div>
       <div class="sec-item"><div class="ico">2</div><div><h3 data-i18n="security.t2">No token, no exit</h3><p data-i18n-html="security.b2">With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only. There is no "empty = open to the world" path. Reaching the internet requires a token.</p></div></div>
-      <div class="sec-item"><div class="ico">3</div><div><h3 data-i18n="security.t3">CLI permissions are inherited</h3><p data-i18n="security.b3">The auto-approve set is your existing CLI allowlist. Anything off-list is suspended and sent to your phone for approval.</p></div></div>
+      <div class="sec-item"><div class="ico">3</div><div><h3 data-i18n="security.t3">CLI permissions are inherited</h3><p data-i18n="security.b3">Auto-approve comes from your existing CLI settings allow-list (user/project/local). Off-list actions suspend; the app shows full command + cwd. Push is type-level (tool name only).</p></div></div>
       <div class="sec-item"><div class="ico">4</div><div><h3 data-i18n="security.t4">Device trust (TOFU)</h3><p data-i18n="security.b4">A connection that is neither local nor Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.</p></div></div>
     </div>
     <p class="locked" data-i18n-html="security.locked">No <code>AUTH_TOKEN</code> ⇒ binds <code>127.0.0.1</code> only. It cannot reach the public internet until you deliberately open it.</p>
@@ -542,7 +564,7 @@
       <h2 data-i18n="worth.heading">When it's worth it</h2>
     </div>
     <div class="worth-body">
-      <p data-i18n="worth.b1">This is not "open a remote desktop back to your computer." A remote desktop mirrors a screen. This gives your local claude session a phone UI: approvals, one session picked up across devices, several repos in parallel tabs, photo upload, and long-press copy.</p>
+      <p data-i18n="worth.b1">This is not “open a remote desktop back to your computer.” A remote desktop mirrors a screen. This is a phone UI on your terminal claude session: same session and host settings, touch layout; in-app approvals, single-driver handoff, multi-workspace progress, library/file upload, long-press copy.</p>
       <p class="verdict" data-i18n="worth.b2">If you only glance in remotely now and then, a remote desktop is enough. This project is for using the phone often as a terminal companion.</p>
     </div>
   </div>
@@ -553,7 +575,7 @@
   <div class="wrap get">
     <div class="sec-head">
       <h2 data-i18n="get.heading">Run it on your own machine</h2>
-      <p data-i18n="get.sub">It is self-hosted. There is no shared demo because it drives your own authenticated claude CLI.</p>
+      <p data-i18n="get.sub">Self-hosted. No shared demo: the phone UI drives your own host claude via the Agent SDK.</p>
     </div>
     <p class="prereq" data-i18n-html="get.prereq"><strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.</p>
     <nav class="start-hub" aria-label="Start here">
@@ -589,186 +611,220 @@ npm start              <span class="c"># http://localhost:3000</span>
     <a href="https://github.com/Ike-li/claude-chat-mobile/blob/master/LICENSE" target="_blank" rel="noopener">AGPL-3.0-only</a>
     <a href="https://linux.do/" target="_blank" rel="noopener">LINUX DO</a>
     <span aria-hidden="true">·</span>
-    <span data-i18n="foot.tag">Your terminal, in your pocket.</span>
+    <span data-i18n="foot.tag">Terminal claude—phone UI, not a screen mirror.<code>claude</code>, usable from your phone.</span>
   </div>
   <p class="foot-meta wrap" data-i18n-html="foot.meta">Maintained by <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · built from real local <code>claude</code> CLI use · <time datetime="2026-07-23">Updated 2026-07-23</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK docs</a></p>
 </footer>
 
 <script>
   const I18N = {
-    en: {
-      'nav.docs': 'Docs',
-      'nav.docsAria': 'Project handbook',
-      'hero.eyebrow': '$ claude · on your phone',
-      'hero.title': 'Your local <code>claude</code> CLI,<br><span class="accent">on your phone.</span>',
-      'hero.sub': 'Not a remote desktop, not a reimplementation. It drives your <strong>logged-in local</strong> CLI: same agent, same <code>CLAUDE.md</code>, same session. The goal is <strong>terminal equivalence</strong>: typing to claude on your phone behaves like typing at your terminal.',
-      'hero.note': 'Approvals, tool output, and resumed sessions stay on the same local Claude path.',
-      'hero.notOfficial': 'Not Anthropic’s official mobile app — an independent, self-hosted open-source project. Spec: <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.',
-      'hero.whatIsTitle': 'What is Claude Chat Mobile?',
-      'hero.whatIsBody': '<p><strong>Claude Chat Mobile</strong> is a self-hosted mobile Web UI that drives <em>your</em> already-logged-in local <code>claude</code> CLI through the Claude Agent SDK—same agent, same <code>CLAUDE.md</code>, same session log, same tools and permissions path. The goal is <strong>terminal equivalence</strong>: typing on your phone should behave like typing at your terminal—not a remote desktop mirror and not a reimplemented cloud Claude.</p><p>It is built for people who already use Claude Code at a desk and need approvals, progress, or a continued session from a phone. One operator per instance; lock the host with tokens and device trust before any public URL.</p><ul><li>Self-hosted; single-user per instance—not multi-tenant SaaS.</li><li>With no <code>AUTH_TOKEN</code>, the server binds <code>127.0.0.1</code> only.</li><li>CLI permissions and allow-lists are inherited; risky actions can be approved on the phone.</li><li>Independent open source (AGPL)—not Anthropic’s official mobile app. Read the <a href="./en/security.html">security model</a> before public exposure.</li></ul>',
-      'hero.cta1': 'English quickstart',
-      'hero.cta1Href': './en/quickstart.html',
-      'get.ctaHref': './en/quickstart.html',
-      'hub.quickstartHref': './en/quickstart.html',
-      'hub.securityHref': './en/security.html',
-      'hero.cta2': 'See it in action',
-      'hub.quickstart': 'Quickstart',
-      'hub.security': 'Security model',
-      'hub.deploy': 'Production deploy',
-      'hub.overview': 'Project overview',
-      'action.kicker': 'Typical flow',
-      'action.heading': 'You leave the desk. The session keeps running.',
-      'action.l1': 'You send: "merge the duplicate date helpers in utils into one function, make the tests pass."',
-      'action.l2': 'Claude streams back, threaded with Read · Edit · Bash(npm test) tool cards.',
-      'action.l3': 'You unlock. The page has reconnected and replayed the missed output: tests passed, and one approval is waiting with the full git commit command and working directory. You tap Allow.',
-      'action.l4': '"Now add a line to the CHANGELOG." It remembers what it just changed, and picks up right where it left off.',
-      'moments.kicker': 'When it helps',
-      'moments.heading': 'Claude Code is running. You are not always at the desk.',
-      'moments.sub': 'Common moments for a pocket entry to your real local CLI—not a remote desktop, not another hosted Claude.',
-      'moments.m1t': 'Approve from a meeting or the road',
-      'moments.m1b': 'A long task stalls on a dangerous step or a multiple-choice question. Push reaches your phone with the full command and working directory—tap allow, deny, or an option without walking back to the terminal.',
-      'moments.m2t': 'Peek while the desk still drives',
-      'moments.m2b': 'CLI is still writing the session; you only want progress, not to interrupt. Open the same session read-only, then take over when you mean to. You follow the transcript—not a live terminal screen mirror.',
-      'moments.m3t': 'Start on phone, resume at the desk',
-      'moments.m3b': 'Same CLI transcript on both sides. Sketch on the phone, then /resume on the computer—continue the thread, not a second conversation.',
-      'moments.m4t': 'Watch several repos at once',
-      'moments.m4b': 'Switch whitelisted workspaces and tabs instead of jamming multiple desktop windows onto a phone remote desktop.',
-      'moments.m5t': 'Capture an idea with phone-first input',
-      'moments.m5b': 'Slash commands you can tap, attach from the photo library or files, long-press to copy. Built for touch—not a shrunk terminal. Not a claim of camera-only “snap and send”.',
-      'moments.m6t': 'Stay in the loop on flaky networks',
-      'moments.m6b': 'If the instance is online and reachable, reconnect and replay missed output after a drop. That is reconnect—not offline mode in airplane mode.',
-      'moments.note': 'Self-hosted, one user per instance. Works where your CLI already works (subscription or gateway). Not multi-tenant SaaS.',
-      'shots.heading': 'A phone UI for the local CLI',
-      'shots.t1': 'Streaming', 'shots.p1': 'Markdown · syntax highlight · status line',
-      'shots.t2': 'Visible process', 'shots.p2': 'tool calls render as collapsible cards',
-      'shots.t3': 'Approve on phone', 'shots.p3': 'dangerous actions push full command + cwd',
-      'shots.t4': 'Workspace switcher', 'shots.p4': 'Watch and switch multiple repositories',
-      'shots.t5': 'Settings Panel', 'shots.p5': 'Permission modes and thinking effort',
-      'shots.t6': 'Real-time Logs', 'shots.p6': 'Inspect process logs and SDK errors',
-      'features.kicker': 'What it changes',
-      'features.heading': 'Your local CLI, reachable from the phone',
-      'features.f1t': 'Your real CLI, not a clone',
-      'features.f1b': 'It ships no Claude of its own. It drives your local CLI through the Claude Agent SDK, so it uses the same agent, <code>CLAUDE.md</code>, MCP servers, skills, hooks, logged-in session, and provider setup you use at your desk.',
-      'features.f2t': 'Terminal equivalence',
-      'features.f2b': 'Edit code, run commands, and resume an earlier conversation. Typing on your phone follows the same local Claude path as typing at your computer.',
-      'features.f3t': 'Approve risky actions from your phone',
-      'features.f3b': 'Off-allowlist actions are suspended and pushed to your phone with the full command and working directory. Nothing runs until you allow it.',
-      'features.f4t': 'Handles flaky mobile networks',
-      'features.f4b': 'The task lives server-side, decoupled from the socket. After a dropped mobile connection, the page reconnects and replays missed events.',
-      'sub.p1': '5 permission modes', 'sub.p2': 'Per-message model switching', 'sub.p3': 'Multi-repo · multi-session tabs', 'sub.p4': 'File & image upload', 'sub.p5': 'Web Push', 'sub.p6': 'PWA-installable', 'sub.p7': 'Zero-CDN, self-hosted', 'sub.p8': 'Official or gateway',
-      'security.kicker': 'Security model',
-      'security.heading': 'A code-execution channel into your shell',
-      'security.t1': 'Single-user per instance', 'security.b1': 'You run your own instance for yourself. There are no accounts or multi-user controls; anyone who passes auth has the same power as you at the terminal.',
-      'security.t2': 'No token, no exit', 'security.b2': 'With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only. There is no "empty = open to the world" path. Reaching the internet requires a token.',
-      'security.t3': 'CLI permissions are inherited', 'security.b3': 'The auto-approve set is your existing CLI allowlist. Anything off-list is suspended and sent to your phone for approval.',
-      'security.t4': 'Device trust (TOFU)', 'security.b4': 'A connection that is neither local nor Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.',
-      'security.locked': 'No <code>AUTH_TOKEN</code> ⇒ binds <code>127.0.0.1</code> only. It cannot reach the public internet until you deliberately open it.',
-      'worth.kicker': 'Scope',
-      'worth.heading': "When it's worth it",
-      'worth.b1': 'This is not "open a remote desktop back to your computer." A remote desktop mirrors a screen. This gives your local claude session a phone UI: approvals, one session picked up across devices, several repos in parallel tabs, photo upload, and long-press copy.',
-      'worth.b2': 'If you only glance in remotely now and then, a remote desktop is enough. This project is for using the phone often as a terminal companion.',
-      'get.heading': 'Run it on your own machine',
-      'get.sub': 'It is self-hosted. There is no shared demo because it drives your own authenticated claude CLI.',
-      'get.prereq': '<strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.',
-      'get.cta': 'Open English quickstart',
-      'get.ctaGh': 'GitHub repository',
-      'foot.tag': 'Your terminal, in your pocket.',
-      'foot.meta': 'Maintained by <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · built from real local <code>claude</code> CLI use · <time datetime="2026-07-23">Updated 2026-07-23</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK docs</a>',
-      'img.hero': './screenshots/03-approval-en.png',
-      'img.stream': './screenshots/01-stream-en.png',
-      'img.tools': './screenshots/02-tools-en.png',
-      'img.approval': './screenshots/03-approval-en.png',
-      'img.workspace': './screenshots/04-workspace-en.png',
-      'img.settings': './screenshots/05-settings-en.png',
-      'img.console': './screenshots/06-console-en.png'
-    },
-    zh: {
-      'nav.docs': '手册',
-      'nav.docsAria': '项目全景手册',
-      'hero.eyebrow': '$ claude · 在你手机上',
-      'hero.title': '你本机的 <code>claude</code> CLI，<br><span class="accent">搬到手机上。</span>',
-      'hero.sub': '不是远程桌面，也不是复刻实现。它驱动你<strong>本机已登录</strong>的 CLI：同一个 agent、同一份 <code>CLAUDE.md</code>、同一个会话。目标是<strong>终端等价性</strong>：在手机上对 claude 打字，效果和坐在终端前一样。',
-      'hero.note': '审批、工具输出、恢复会话都走同一条本机 Claude 路径。',
-      'hero.notOfficial': '不是 Anthropic 官方手机 App——独立的自托管开源项目。规范见 <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>。',
-      'hero.whatIsTitle': '什么是 Claude Chat Mobile？',
-      'hero.whatIsBody': '<p><strong>Claude Chat Mobile</strong> 是一层自托管的手机 Web UI：通过 Claude Agent SDK 驱动<strong>你本机已登录</strong>的 <code>claude</code> CLI——同一个 agent、同一份 <code>CLAUDE.md</code>、同一会话记录与权限路径。目标是<strong>终端等价性</strong>：在手机上打字应与坐在终端前一样——不是远程桌面镜像，也不是云端复刻版 Claude。</p><p>面向已经在电脑终端使用 Claude Code、需要在手机上审批、看进度或续接会话的人。每实例单用户；公网暴露前须用 token 与设备信任锁好主机。</p><ul><li>自托管；每实例单用户——不是多租户 SaaS。</li><li>不设 <code>AUTH_TOKEN</code> 时只绑定 <code>127.0.0.1</code>。</li><li>继承 CLI 权限与 allowlist；风险操作可回手机审批。</li><li>独立开源（AGPL）——不是 Anthropic 官方手机 App。公网暴露前请读<a href="./docs-site/pages/security-model.html">安全模型</a>。</li></ul>',
-      'hero.cta1': '打开快速开始手册',
-      'hero.cta1Href': './docs-site/pages/quickstart.html',
-      'get.ctaHref': './docs-site/pages/quickstart.html',
-      'hub.quickstartHref': './docs-site/pages/quickstart.html',
-      'hub.securityHref': './docs-site/pages/security-model.html',
-      'hero.cta2': '看实际效果',
-      'hub.quickstart': '快速开始',
-      'hub.security': '安全模型',
-      'hub.deploy': '生产部署',
-      'hub.overview': '项目总览',
-      'action.kicker': '典型流程',
-      'action.heading': '你离开电脑，会话继续跑。',
-      'action.l1': '你发消息："把 utils 里重复的日期处理合并成一个函数，跑通测试。"',
-      'action.l2': '屏幕流式出现 claude 的回复，夹着 Read · Edit · Bash(npm test) 的工具调用卡片。',
-      'action.l3': '你解锁。页面已重连并补上错过的输出：测试通过，一条待批准的权限请求带着完整 git commit 命令和工作目录。你点"允许"。',
-      'action.l4': '"再给 CHANGELOG 补一行。" 它记得刚才改了什么，直接续上。',
-      'moments.kicker': '什么时候用得上',
-      'moments.heading': 'Claude Code 在跑，人却不总在电脑前。',
-      'moments.sub': '本机 CLI 的随身入口——不是远程桌面，也不是另一个网页 Claude。',
-      'moments.m1t': '会中 / 出门卡住，手机点一下',
-      'moments.m1b': '长任务卡在危险操作或选择题上。推送到手机：完整命令与工作目录，点允许、拒绝或选项，不必回工位戳终端。',
-      'moments.m2t': '电脑还在跑，只想瞄一眼',
-      'moments.m2b': '终端仍在驾驶时，手机只读追看进度，需要再接管。追的是会话记录，不是把终端活画面实时镜像过来。',
-      'moments.m3t': '同一会话，换设备继续',
-      'moments.m3b': '两端读同一份 CLI transcript。路上手机起头，回家终端 /resume 接上——接着聊，不是另开一个会话。',
-      'moments.m4t': '多仓库并行看',
-      'moments.m4b': '在白名单工作区与标签间切换进度，比手机远程桌面里挤多个窗口更顺。',
-      'moments.m5t': '灵感来了，手机输入更顺',
-      'moments.m5b': '可点的斜杠命令、相册或文件附图、长按复制。触控优先，不是缩小终端。附图来自相册/文件，不是宣传「拍照直传摄像头」。',
-      'moments.m6t': '弱网也能接上，不是离线',
-      'moments.m6b': '实例在线且网络可达时，断线后重连并补发错过的输出。这是重连，不是飞机模式也能深度改代码。',
-      'moments.note': '自托管、每实例单用户。CLI 能跑通的路径（官方订阅或网关），Web 就按同一环境接。不是多租户 SaaS。',
-      'shots.heading': '给本机 CLI 做的手机界面',
-      'shots.t1': '流式输出', 'shots.p1': 'Markdown · 语法高亮 · 状态行',
-      'shots.t2': '过程可见', 'shots.p2': '工具调用渲染成可折叠卡片',
-      'shots.t3': '回手机审批', 'shots.p3': '危险操作推送完整命令 + 工作目录',
-      'shots.t4': '多工作区', 'shots.p4': '查看并切换多个本地项目仓库',
-      'shots.t5': '齿轮设置', 'shots.p5': '权限档与模型思考强度',
-      'shots.t6': '运行日志', 'shots.p6': '查看进程日志和 SDK 报错',
-      'features.kicker': '改变了什么',
-      'features.heading': '从手机访问你的本机 CLI',
-      'features.f1t': '你真实的 CLI，不是克隆',
-      'features.f1b': '它不打包任何自己的 Claude。它通过 Claude Agent SDK 驱动你本机的 CLI，所以使用的是你桌面端同一套 agent、<code>CLAUDE.md</code>、MCP 服务、技能、hooks、会话和 provider 配置。',
-      'features.f2t': '终端等价性',
-      'features.f2b': '改代码、跑命令、恢复早先的对话。手机上输入和电脑前输入走的是同一条本机 Claude 路径。',
-      'features.f3t': '风险操作回手机批准',
-      'features.f3b': '不在 allowlist 上的操作会被挂起，连同完整命令和工作目录推到手机上。你允许后才执行。',
-      'features.f4t': '处理移动网络断连',
-      'features.f4b': '任务活在服务端，和 socket 解耦。手机网络断了以后，页面会重连并补发错过的事件。',
-      'sub.p1': '5 种权限模式', 'sub.p2': '逐条消息切模型', 'sub.p3': '多仓库 · 多会话标签', 'sub.p4': '文件与图片上传', 'sub.p5': 'Web Push 推送', 'sub.p6': 'PWA 可安装', 'sub.p7': '零 CDN、自托管', 'sub.p8': '官方或第三方网关',
-      'security.kicker': '安全模型',
-      'security.heading': '一条进入你 shell 的代码执行通道',
-      'security.t1': '每实例单用户', 'security.b1': '你运行自己的实例，给自己用。项目没有账号或多用户控制；任何通过鉴权的请求，权限都和你坐在终端前一样。',
-      'security.t2': '没有 token，出不了本机', 'security.b2': '不设 <code>AUTH_TOKEN</code> 时，server 只绑定 <code>127.0.0.1</code>。没有"空 = 对全世界开放"这条路。要触达公网，必须有 token。',
-      'security.t3': '继承 CLI 权限', 'security.b3': '自动批准集就是你现有的 CLI allowlist。不在其上的操作会被挂起，发到手机上等你批。',
-      'security.t4': '设备信任（TOFU）', 'security.b4': '既非本地、也未经 Access 校验的连接，必须先在你电脑上授权一次才能做任何事。光有合法 token 不够。',
-      'security.locked': '不设 <code>AUTH_TOKEN</code> ⇒ 只绑 <code>127.0.0.1</code>。在你主动开放之前，它触达不了公网。',
-      'worth.kicker': '边界',
-      'worth.heading': '什么时候值得用',
-      'worth.b1': '这不是"从手机开个远程桌面连回电脑"。远程桌面是投屏；这里是给本机 claude 会话做手机界面：审批、跨设备续接、多个仓库标签、照片上传、长按复制。',
-      'worth.b2': '如果你只是偶尔远程看一眼，远程桌面就够了。这个项目适合把手机当成终端的随身入口来高频使用。',
-      'get.heading': '在你自己的机器上跑起来',
-      'get.sub': '它是自托管项目。没有公共 demo，因为它驱动的是你自己已登录的 claude CLI。',
-      'get.prereq': '<strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用的 <code>claude</code> CLI。官方订阅无需额外配置；第三方网关 / 中转则在启动 server 的 shell 里 export 所需 <code>ANTHROPIC_*</code>。',
-      'get.cta': '打开手册「快速开始」',
-      'get.ctaGh': 'GitHub 仓库',
-      'foot.tag': '你的终端，装进口袋。',
-      'foot.meta': '维护者 <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · 基于本机 <code>claude</code> CLI 真实使用 · <time datetime="2026-07-23">更新于 2026-07-23</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK 文档</a>',
-      'img.hero': './screenshots/03-approval-zh.png',
-      'img.stream': './screenshots/01-stream-zh.png',
-      'img.tools': './screenshots/02-tools-zh.png',
-      'img.approval': './screenshots/03-approval-zh.png',
-      'img.workspace': './screenshots/04-workspace-en.png',
-      'img.settings': './screenshots/05-settings-en.png',
-      'img.console': './screenshots/06-console-en.png'
-    }
-  };
+  en: {
+    'nav.docs': 'Docs',
+    'nav.docsAria': 'Project handbook',
+    'hero.eyebrow': '$ claude · on your phone',
+    'hero.title': `Your terminal's<span class="cli"> <code>claude</code> CLI</span>,<br><span class="accent">on your phone too.</span>`,
+    'hero.sub': 'A phone UI that drives your terminal <code>claude</code> through the <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK</a>—same session, same host settings. Touch layout, not a screen mirror. One driver at a time: when the terminal is writing, the phone is read-only on the transcript until you take over.',
+    'hero.note': 'Approvals open in the app with full command + cwd. Push is type-level only (tool name, not the command body).',
+    'hero.notOfficial': 'Not Anthropic’s official mobile app — an independent, self-hosted open-source project. Spec: <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>.',
+    'hero.whatIsTitle': 'What is Claude Chat Mobile?',
+    'hero.whatIsBody': '<p><strong>Claude Chat Mobile</strong> is a self-hosted <strong>phone UI</strong> that drives <em>your</em> terminal <code>claude</code> through the Claude Agent SDK—same session, same host settings (user/project/local). The interface is rearranged for touch (bubbles, tool cards), not a remote-desktop screen mirror, and not a second cloud Claude or Anthropic’s official mobile app.</p><p>For people who already use Claude Code at a desk and need approvals, progress, or a continued session from a phone. One operator per instance; one writer at a time (single-driver). Lock the host with tokens and device trust before any public URL.</p><ul><li>Self-hosted; single-user per instance—not multi-tenant SaaS.</li><li>With no <code>AUTH_TOKEN</code>, the server binds <code>127.0.0.1</code> only.</li><li>CLI settings allow-lists are inherited; off-list actions suspend and show full command + cwd <em>in the app</em>. Push is type-level (tool name only).</li><li>Independent open source (AGPL). Read the <a href="./en/security.html">security model</a> before public exposure.</li></ul>',
+    'hero.cta1': 'English quickstart',
+    'hero.cta1Href': './en/quickstart.html',
+    'get.ctaHref': './en/quickstart.html',
+    'hub.quickstartHref': './en/quickstart.html',
+    'hub.securityHref': './en/security.html',
+    'hero.cta2': 'See it in action',
+    'hub.quickstart': 'Quickstart',
+    'hub.security': 'Security model',
+    'hub.deploy': 'Production deploy',
+    'hub.overview': 'Project overview',
+    'action.kicker': 'Typical flow',
+    'action.heading': 'You leave the desk. The session keeps running.',
+    'action.l1': 'You send: "merge the duplicate date helpers in utils into one function, make the tests pass."',
+    'action.l2': 'Claude streams back, threaded with Read · Edit · Bash(npm test) tool cards.',
+    'action.l3': 'You unlock. The page has reconnected and replayed missed output from the server buffer: tests passed, and an in-app approval is waiting with the full git commit command and working directory. You tap Allow.',
+    'action.l4': '"Now add a line to the CHANGELOG." It remembers what it just changed, and picks up right where it left off.',
+    'moments.kicker': 'When it helps',
+    'moments.heading': 'Claude Code is running. You are not always at the desk.',
+    'moments.sub': 'A phone UI on your terminal claude—not a remote desktop, not another hosted Claude.',
+    'moments.m1t': 'Approve from a meeting or the road',
+    'moments.m1b': 'A long task stalls on a dangerous step or a multiple-choice question. Push reaches your phone with a type-level hint (e.g. “needs authorization: Edit”)—open the app for the full command and working directory, then allow, deny, or pick an option without walking back to the terminal.',
+    'moments.m2t': 'Peek while the desk still drives',
+    'moments.m2b': 'While the desk CLI still drives the session, the phone follows the on-disk transcript read-only (catch-up, not attach to the live process). Take over when you mean to—usually after the current turn—so both sides do not write the same session at once.',
+    'moments.m3t': 'Start on phone, resume at the desk',
+    'moments.m3b': 'Both sides read the same CLI transcript (same session id). Sketch on the phone, then /resume at the desk—or open a CLI-driven session on the phone as a read-only mirror. Continue the thread, not a second conversation.',
+    'moments.m4t': 'Watch several repos at once',
+    'moments.m4b': 'Switch among whitelisted workspaces, the home hub, and session lists (including worktree groups)—not “browser tabs,” and not cramming multiple desktop windows onto a phone remote desktop.',
+    'moments.m5t': 'Capture an idea with phone-first input',
+    'moments.m5b': 'Slash commands you can tap, attach from the photo library or files, long-press to copy. Built for touch—not a shrunk terminal. Not a claim of camera-only “snap and send”.',
+    'moments.m6t': 'Stay in the loop on flaky networks',
+    'moments.m6b': 'If the instance is online and reachable, reconnect and replay missed output after a drop. That is reconnect—not offline mode in airplane mode.',
+    'moments.note': 'Self-hosted, one user per instance. Works where your CLI already works (subscription or gateway). Not multi-tenant SaaS.',
+    'shots.heading': 'Phone layout for the same session',
+    'shots.t1': 'Streaming',
+    'shots.p1': 'Markdown · syntax highlight · status line',
+    'shots.t2': 'Visible process',
+    'shots.p2': 'tool calls render as collapsible cards',
+    'shots.t3': 'Approve on phone',
+    'shots.p3': 'in-app: full command + cwd; push is type-level only',
+    'shots.t4': 'Workspace switcher',
+    'shots.p4': 'Watch and switch multiple repositories',
+    'shots.t5': 'Settings Panel',
+    'shots.p5': 'Permission modes and thinking effort',
+    'shots.t6': 'Real-time Logs',
+    'shots.p6': 'Inspect process logs and SDK errors',
+    'features.kicker': 'What it changes',
+    'features.heading': 'Terminal claude, phone layout',
+    'features.f1t': 'Your terminal claude, not a clone',
+    'features.f1b': 'It ships no Claude of its own. The Agent SDK drives your host <code>claude</code> and filesystem settings (MCP, skills, hooks, allow-lists)—same session path as at the desk. The phone only changes how that stream is laid out.',
+    'features.f2t': 'Same session, single driver',
+    'features.f2b': 'Same session, same host settings; touch layout, not a shrunk terminal. One writer at a time: when the terminal is writing, the phone is read-only on the transcript until you take over.',
+    'features.f3t': 'Approve risky actions from your phone',
+    'features.f3b': 'Off-allowlist actions are suspended. The app shows the full command and working directory; push only names the tool. Nothing runs until you allow it in the app.',
+    'features.f4t': 'Handles flaky mobile networks',
+    'features.f4b': 'The task lives server-side, decoupled from the socket. After a dropped mobile connection, the page reconnects and replays missed events.',
+    'sub.p1': '6 permission modes',
+    'sub.p2': 'Per-message model switching',
+    'sub.p3': 'Multi-repo · multi-session',
+    'sub.p4': 'File & image upload',
+    'sub.p5': 'Web Push',
+    'sub.p6': 'PWA-installable',
+    'sub.p7': 'Zero-CDN, self-hosted',
+    'sub.p8': 'Official or gateway',
+    'security.kicker': 'Security model',
+    'security.heading': 'A code-execution channel into your shell',
+    'security.t1': 'Single-user per instance',
+    'security.b1': 'You run your own instance for yourself. There are no accounts or multi-user controls; anyone who passes auth has the same power as you at the terminal.',
+    'security.t2': 'No token, no exit',
+    'security.b2': 'With no <code>AUTH_TOKEN</code> set, the server binds to <code>127.0.0.1</code> only. There is no "empty = open to the world" path. Reaching the internet requires a token.',
+    'security.t3': 'CLI permissions are inherited',
+    'security.b3': 'Auto-approve comes from your existing CLI settings allow-list (user/project/local). Off-list actions suspend; the app shows full command + cwd. Push is type-level (tool name only).',
+    'security.t4': 'Device trust (TOFU)',
+    'security.b4': 'A connection that is neither local nor Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough.',
+    'security.locked': 'No <code>AUTH_TOKEN</code> ⇒ binds <code>127.0.0.1</code> only. It cannot reach the public internet until you deliberately open it.',
+    'worth.kicker': 'Scope',
+    'worth.heading': "When it's worth it",
+    'worth.b1': 'This is not “open a remote desktop back to your computer.” A remote desktop mirrors a screen. This is a phone UI on your terminal claude session: same session and host settings, touch layout; in-app approvals, single-driver handoff, multi-workspace progress, library/file upload, long-press copy.',
+    'worth.b2': 'If you only glance in remotely now and then, a remote desktop is enough. This project is for using the phone often as a terminal companion.',
+    'get.heading': 'Run it on your own machine',
+    'get.sub': 'Self-hosted. No shared demo: the phone UI drives your own host claude via the Agent SDK.',
+    'get.prereq': '<strong>Prerequisites:</strong> Node.js ≥ 20 on macOS or Linux, and a working <code>claude</code> CLI on the host. Official subscription works out of the box; third-party gateways work by exporting the required <code>ANTHROPIC_*</code> variables in the shell that starts the server.',
+    'get.cta': 'Open English quickstart',
+    'get.ctaGh': 'GitHub repository',
+    'foot.tag': 'Terminal claude—phone UI, not a screen mirror.',
+    'foot.meta': 'Maintained by <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · built from real local <code>claude</code> CLI use · <time datetime="2026-07-23">Updated 2026-07-23</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK docs</a>',
+    'img.hero': './screenshots/03-approval-en.png',
+    'img.stream': './screenshots/01-stream-en.png',
+    'img.tools': './screenshots/02-tools-en.png',
+    'img.approval': './screenshots/03-approval-en.png',
+    'img.workspace': './screenshots/04-workspace-en.png',
+    'img.settings': './screenshots/05-settings-en.png',
+    'img.console': './screenshots/06-console-en.png'
+  },
+  zh: {
+    'nav.docs': '手册',
+    'nav.docsAria': '项目全景手册',
+    'hero.eyebrow': '$ claude · 在你手机上',
+    'hero.title': '终端里的<span class="cli"> <code>claude</code> CLI</span>，<br><span class="accent">手机上也能用。</span>',
+    'hero.sub': '手机 UI 通过 <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK</a> 驱动你终端里的 <code>claude</code>——同一会话、同一套本机配置；界面为触控重排，不是投屏。同一时刻只有一个驾驶员：终端在写时，手机只读追盘，接管后再写。',
+    'hero.note': '审批在 App 内展示完整命令与工作目录；推送只有类型级提示（工具名，不含命令正文）。',
+    'hero.notOfficial': '不是 Anthropic 官方手机 App——独立的自托管开源项目。规范见 <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Claude Agent SDK</a>。',
+    'hero.whatIsTitle': '什么是 Claude Chat Mobile？',
+    'hero.whatIsBody': '<p><strong>Claude Chat Mobile</strong> 是一层自托管的<strong>手机 UI</strong>：通过 Claude Agent SDK 驱动<strong>你终端里的</strong> <code>claude</code>——同一会话、同一套本机配置（user/project/local）。界面为触控重排（气泡、工具卡），不是远程桌面投屏，也不是云端另一套 Claude 或 Anthropic 官方手机 App。</p><p>面向已在电脑终端使用 Claude Code、需要在手机上审批、看进度或续接会话的人。每实例单用户；同一时刻只有一个写端（单驾驶员）。公网暴露前须用 token 与设备信任锁好主机。</p><ul><li>自托管；每实例单用户——不是多租户 SaaS。</li><li>不设 <code>AUTH_TOKEN</code> 时只绑定 <code>127.0.0.1</code>。</li><li>继承 CLI settings 白名单；未命中则挂起，在 <em>App 内</em>展示完整命令与工作目录。推送仅含工具名。</li><li>独立开源（AGPL）。公网暴露前请读<a href="./docs-site/pages/security-model.html">安全模型</a>。</li></ul>',
+    'hero.cta1': '打开快速开始手册',
+    'hero.cta1Href': './docs-site/pages/quickstart.html',
+    'get.ctaHref': './docs-site/pages/quickstart.html',
+    'hub.quickstartHref': './docs-site/pages/quickstart.html',
+    'hub.securityHref': './docs-site/pages/security-model.html',
+    'hero.cta2': '看实际效果',
+    'hub.quickstart': '快速开始',
+    'hub.security': '安全模型',
+    'hub.deploy': '生产部署',
+    'hub.overview': '项目总览',
+    'action.kicker': '典型流程',
+    'action.heading': '你离开电脑，会话继续跑。',
+    'action.l1': '你发消息："把 utils 里重复的日期处理合并成一个函数，跑通测试。"',
+    'action.l2': '屏幕流式出现 claude 的回复，夹着 Read · Edit · Bash(npm test) 的工具调用卡片。',
+    'action.l3': '你解锁。页面已重连，并从服务端缓冲补上错过的输出：测试通过；App 内一条待批请求带着完整 git commit 命令和工作目录。你点「允许」。',
+    'action.l4': '"再给 CHANGELOG 补一行。" 它记得刚才改了什么，直接续上。',
+    'moments.kicker': '什么时候用得上',
+    'moments.heading': 'Claude Code 在跑，人却不总在电脑前。',
+    'moments.sub': '终端 claude 的手机 UI——不是远程桌面，也不是另一个网页 Claude。',
+    'moments.m1t': '会中 / 出门卡住，手机点一下',
+    'moments.m1b': '长任务卡在危险操作或选择题上。推送到手机的是类型级提示（如「需要你授权：Edit」）——点进 App 才能看到完整命令与工作目录，再允许、拒绝或选选项，不必回工位戳终端。',
+    'moments.m2t': '电脑还在跑，只想瞄一眼',
+    'moments.m2b': '终端仍在驾驶时，手机只读追看磁盘 transcript（追盘，不是 attach 到同一个活进程）。需要再接管——通常等本轮结束后再写，避免两端同时写同一会话。',
+    'moments.m3t': '同一会话，换设备继续',
+    'moments.m3b': '两端读同一份 CLI transcript（同一 session id）。路上手机起头，回家终端 /resume 接上；或在手机打开终端正在跑的会话做只读镜像。接着聊，不是另开一个会话。',
+    'moments.m4t': '多仓库并行看',
+    'moments.m4b': '在白名单工作区、首页枢纽与会话列表（含 worktree 分组）间切换进度——不是浏览器多标签心智，也比手机远程桌面里挤多个窗口更顺。',
+    'moments.m5t': '灵感来了，手机输入更顺',
+    'moments.m5b': '可点的斜杠命令、相册或文件附图、长按复制。触控优先，不是缩小终端。附图来自相册/文件，不是宣传「拍照直传摄像头」。',
+    'moments.m6t': '弱网也能接上，不是离线',
+    'moments.m6b': '实例在线且网络可达时，断线后重连并补发错过的输出。这是重连，不是飞机模式也能深度改代码。',
+    'moments.note': '自托管、每实例单用户。CLI 能跑通的路径（官方订阅或网关），Web 就按同一环境接。不是多租户 SaaS。',
+    'shots.heading': '同一会话，手机排版',
+    'shots.t1': '流式输出',
+    'shots.p1': 'Markdown · 语法高亮 · 状态行',
+    'shots.t2': '过程可见',
+    'shots.p2': '工具调用渲染成可折叠卡片',
+    'shots.t3': '回手机审批',
+    'shots.p3': 'App 内完整命令 + cwd；推送仅类型级',
+    'shots.t4': '多工作区',
+    'shots.p4': '查看并切换多个本地项目仓库',
+    'shots.t5': '齿轮设置',
+    'shots.p5': '权限档与模型思考强度',
+    'shots.t6': '运行日志',
+    'shots.p6': '查看进程日志和 SDK 报错',
+    'features.kicker': '改变了什么',
+    'features.heading': '终端里的 claude，手机上的排版',
+    'features.f1t': '终端里的 claude，不是克隆',
+    'features.f1b': '它不打包任何自己的 Claude。Agent SDK 驱动你主机上的 <code>claude</code> 与本机配置（MCP、技能、hooks、白名单）——与桌前同一会话路径。手机只改变这条流的呈现方式。',
+    'features.f2t': '同一会话，单驾驶员',
+    'features.f2b': '同一会话、同一套本机配置；触控重排，不是缩小终端。同一时刻只有一个写端：终端在写时，手机只读追盘，接管后再写。',
+    'features.f3t': '风险操作回手机批准',
+    'features.f3b': '不在 allowlist 上的操作会被挂起。App 内展示完整命令与工作目录；推送只报工具名。你在 App 里允许后才执行。',
+    'features.f4t': '处理移动网络断连',
+    'features.f4b': '任务活在服务端，和 socket 解耦。手机网络断了以后，页面会重连并补发错过的事件。',
+    'sub.p1': '6 种权限模式',
+    'sub.p2': '逐条消息切模型',
+    'sub.p3': '多仓库 · 多会话',
+    'sub.p4': '文件与图片上传',
+    'sub.p5': 'Web Push 推送',
+    'sub.p6': 'PWA 可安装',
+    'sub.p7': '零 CDN、自托管',
+    'sub.p8': '官方或第三方网关',
+    'security.kicker': '安全模型',
+    'security.heading': '一条进入你 shell 的代码执行通道',
+    'security.t1': '每实例单用户',
+    'security.b1': '你运行自己的实例，给自己用。项目没有账号或多用户控制；任何通过鉴权的请求，权限都和你坐在终端前一样。',
+    'security.t2': '没有 token，出不了本机',
+    'security.b2': '不设 <code>AUTH_TOKEN</code> 时，server 只绑定 <code>127.0.0.1</code>。没有"空 = 对全世界开放"这条路。要触达公网，必须有 token。',
+    'security.t3': '继承 CLI 权限',
+    'security.b3': '自动放行来自你现有 CLI settings 的 allowlist（user/project/local）。未命中则挂起；App 内展示完整命令 + cwd。推送只有类型级（工具名）。',
+    'security.t4': '设备信任（TOFU）',
+    'security.b4': '既非本地、也未经 Access 校验的连接，必须先在你电脑上授权一次才能做任何事。光有合法 token 不够。',
+    'security.locked': '不设 <code>AUTH_TOKEN</code> ⇒ 只绑 <code>127.0.0.1</code>。在你主动开放之前，它触达不了公网。',
+    'worth.kicker': '边界',
+    'worth.heading': '什么时候值得用',
+    'worth.b1': '这不是「从手机开个远程桌面连回电脑」。远程桌面是投屏；这里是终端 claude 会话的手机 UI：同一会话与本机配置、触控重排；App 内审批、单驾驶员交接、多工作区进度、相册/文件上传、长按复制。',
+    'worth.b2': '如果你只是偶尔远程看一眼，远程桌面就够了。这个项目适合把手机当成终端的随身入口来高频使用。',
+    'get.heading': '在你自己的机器上跑起来',
+    'get.sub': '自托管。没有公共 demo：手机 UI 通过 Agent SDK 驱动你自己主机上的 claude。',
+    'get.prereq': '<strong>前提：</strong>macOS 或 Linux 上 Node.js ≥ 20，以及主机上一个可用的 <code>claude</code> CLI。官方订阅无需额外配置；第三方网关 / 中转则在启动 server 的 shell 里 export 所需 <code>ANTHROPIC_*</code>。',
+    'get.cta': '打开手册「快速开始」',
+    'get.ctaGh': 'GitHub 仓库',
+    'foot.tag': '终端 claude——手机 UI，不是投屏。',
+    'foot.meta': '维护者 <a href="https://github.com/Ike-li" target="_blank" rel="noopener">Ike-li</a> · 基于终端 <code>claude</code> CLI 真实使用 · <time datetime="2026-07-23">更新于 2026-07-23</time> · <a href="https://code.claude.com/docs/en/agent-sdk/overview" target="_blank" rel="noopener">Agent SDK 文档</a>',
+    'img.hero': './screenshots/03-approval-zh.png',
+    'img.stream': './screenshots/01-stream-zh.png',
+    'img.tools': './screenshots/02-tools-zh.png',
+    'img.approval': './screenshots/03-approval-zh.png',
+    'img.workspace': './screenshots/04-workspace-en.png',
+    'img.settings': './screenshots/05-settings-en.png',
+    'img.console': './screenshots/06-console-en.png'
+  }
+};
 
   const nodes = document.querySelectorAll('[data-i18n]');
   const htmlNodes = document.querySelectorAll('[data-i18n-html]');
@@ -798,6 +854,13 @@ npm start              <span class="c"># http://localhost:3000</span>
       }
     });
     ariaNodes.forEach(el => { const v = dict[el.getAttribute('data-i18n-aria')]; if(v != null) el.setAttribute('aria-label', v); });
+    document.querySelectorAll('[data-i18n-show]').forEach(el => {
+      const want = el.getAttribute('data-i18n-show');
+      const on = want === lang;
+      el.classList.toggle('is-on', on);
+      el.hidden = !on;
+      el.setAttribute('aria-hidden', on ? 'false' : 'true');
+    });
     buttons.forEach(b => b.classList.toggle('active', b.getAttribute('data-lang') === lang));
     try { localStorage.setItem('ccm-lang', lang); } catch(e){}
   }
