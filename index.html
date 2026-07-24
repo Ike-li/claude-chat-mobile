@@ -367,8 +367,11 @@
 <!-- ── Hero ── -->
 <header class="hero">
   <div class="wrap">
-    <figure class="hero-banner" data-i18n-show="zh" aria-hidden="true">
-      <img src="./hero-zh.png" width="3840" height="2160" alt="Claude Chat Mobile — 终端里的 claude，手机上也能用" decoding="async">
+    <figure class="hero-banner" data-i18n-show="zh" hidden aria-hidden="true">
+      <picture>
+        <source type="image/webp" data-srcset="./hero-zh.webp">
+        <img data-src="./hero-zh.jpg" width="1600" height="900" alt="Claude Chat Mobile — 终端里的 claude，手机上也能用" decoding="async" loading="lazy">
+      </picture>
     </figure>
   </div>
   <div class="wrap hero-grid">
@@ -860,6 +863,17 @@ npm start              <span class="c"># http://localhost:3000</span>
       el.classList.toggle('is-on', on);
       el.hidden = !on;
       el.setAttribute('aria-hidden', on ? 'false' : 'true');
+      // Defer heavy banner bytes until Chinese is actually selected
+      if (on) {
+        el.querySelectorAll('source[data-srcset]').forEach(s => {
+          s.setAttribute('srcset', s.getAttribute('data-srcset'));
+          s.removeAttribute('data-srcset');
+        });
+        el.querySelectorAll('img[data-src]').forEach(img => {
+          img.setAttribute('src', img.getAttribute('data-src'));
+          img.removeAttribute('data-src');
+        });
+      }
     });
     buttons.forEach(b => b.classList.toggle('active', b.getAttribute('data-lang') === lang));
     try { localStorage.setItem('ccm-lang', lang); } catch(e){}
