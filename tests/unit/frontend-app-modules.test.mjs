@@ -9,7 +9,7 @@ import { createAttachmentController, createStoredPreviewLoader } from '../../pub
 import { createRttMonitor } from '../../public/js/app/connection-sync.js';
 import { createMessageRenderer } from '../../public/js/app/message-renderer.js';
 import { createAgentEventDispatcher } from '../../public/js/app/event-dispatch.js';
-import { formatFileSize } from '../../public/js/app/file-browser.js';
+import { formatFileSize, cmModeForFileName } from '../../public/js/app/file-browser.js';
 import { createSettingsController } from '../../public/js/app/settings.js';
 import { createNotificationController } from '../../public/js/app/notifications.js';
 import { createTaskStatusController } from '../../public/js/app/task-status.js';
@@ -450,6 +450,21 @@ test('file browser formats byte counts consistently for directory and content pa
   assert.equal(formatFileSize(Number.NaN), '');
 });
 
+test('cmModeForFileName resolves vendored CodeMirror modes and falls back to null', () => {
+  assert.equal(cmModeForFileName('app.js'), 'text/javascript');
+  assert.equal(cmModeForFileName('types.d.ts'), 'application/typescript');
+  assert.equal(cmModeForFileName('Component.tsx'), 'text/typescript-jsx');
+  assert.equal(cmModeForFileName('package.json'), 'application/json');
+  assert.equal(cmModeForFileName('index.html'), 'text/html');
+  assert.equal(cmModeForFileName('README.md'), 'text/markdown');
+  assert.equal(cmModeForFileName('config.YAML'), 'text/x-yaml');
+  assert.equal(cmModeForFileName('deploy.sh'), 'text/x-sh');
+  assert.equal(cmModeForFileName('a.out'), null);
+  assert.equal(cmModeForFileName('Makefile'), null);
+  assert.equal(cmModeForFileName(''), null);
+  assert.equal(cmModeForFileName(null), null);
+});
+
 test('settings controller synchronizes alert preferences when opening the sheet', () => {
   const classes = initial => {
     const values = new Set(initial);
@@ -527,6 +542,54 @@ test('notification controller only raises foreground notifications when explicit
   assert.equal(raised[0].options.tag, 'ccm');
 });
 
+// ⑧ 推送内容预览：subscribe() 把 storage 里的本地偏好一并 POST 给服务端（per-device prefs.preview），
+// 服务端按它决定这条订阅该收 body 还是 previewBody（见 src/ops/notify-channels.js pushNotify）。
+test('notification controller subscribe() includes prefs.preview from storage in the POST body', async () => {
+  const fetchCalls = [];
+  const fakeSubscription = {
+    endpoint: 'https://push.example/abc',
+    toJSON() { return { endpoint: this.endpoint, keys: { p256dh: 'a', auth: 'b' } }; },
+  };
+  const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+  const context = createAppContext({
+    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dependencies: {
+      navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
+      window: {},
+      fetch: async (url, init) => { fetchCalls.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; },
+      storage: { getItem: key => (key === 'ccm_push_preview' ? '1' : null), setItem() {} },
+    },
+  });
+  const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
+
+  const ok = await notifications.subscribe();
+  assert.equal(ok, true);
+  assert.equal(fetchCalls.length, 1);
+  const sentBody = JSON.parse(fetchCalls[0].init.body);
+  assert.equal(sentBody.endpoint, 'https://push.example/abc');
+  assert.deepEqual(sentBody.prefs, { preview: true });
+});
+
+test('notification controller subscribe() defaults prefs.preview to false when storage has no opt-in', async () => {
+  const fetchCalls = [];
+  const fakeSubscription = { endpoint: 'https://push.example/xyz', toJSON() { return { endpoint: this.endpoint, keys: {} }; } };
+  const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+  const context = createAppContext({
+    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dependencies: {
+      navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
+      window: {},
+      fetch: async (url, init) => { fetchCalls.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; },
+      storage: { getItem: () => null, setItem() {} },
+    },
+  });
+  const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
+
+  await notifications.subscribe();
+  const sentBody = JSON.parse(fetchCalls[0].init.body);
+  assert.deepEqual(sentBody.prefs, { preview: false });
+});
+
 test('task status controller ignores other instances and updates the current progress banner', () => {
   const hidden = new Set(['hidden']);
   const banner = {
@@ -550,6 +613,64 @@ test('task status controller ignores other instances and updates the current pro
   assert.equal(hidden.has('hidden'), false);
   assert.equal(status.onProgress({ instanceId: 'inst-1', payload: { taskId: 't2', message: 'another' } }), true);
   assert.equal(textNode.textContent, '2 个运行中');
+});
+
+test('task status controller collapses the multi-task list by default and expands via the toggle button', () => {
+  function fakeNode() {
+    const classes = new Set();
+    const attrs = {};
+    const listeners = {};
+    return {
+      classList: {
+        add: (...names) => names.forEach(n => classes.add(n)),
+        remove: (...names) => names.forEach(n => classes.delete(n)),
+        contains: name => classes.has(name),
+        toggle: (name, force) => {
+          const next = force === undefined ? !classes.has(name) : Boolean(force);
+          if (next) classes.add(name); else classes.delete(name);
+          return next;
+        },
+      },
+      setAttribute: (k, v) => { attrs[k] = String(v); },
+      getAttribute: k => attrs[k],
+      addEventListener: (type, handler) => { listeners[type] = handler; },
+      click: () => listeners.click?.(),
+      append: () => {},
+      appendChild: () => {},
+      replaceChildren: () => {},
+      textContent: '',
+    };
+  }
+
+  const banner = fakeNode();
+  const taskProgressText = { textContent: '' };
+  const btnTaskToggle = fakeNode();
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText, btnTaskToggle },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: fakeNode });
+
+  status.onProgress({ instanceId: 'inst-1', payload: { tasks: [{ taskId: 't1', message: 'one' }] } });
+  assert.equal(taskProgressText.textContent, '运行中');
+  assert.equal(context.dom.taskProgressList.classList.contains('hidden'), false, '单任务恒展开');
+  assert.equal(btnTaskToggle.classList.contains('hidden'), true, '单任务不显示折叠按钮');
+
+  status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [{ taskId: 't1', message: 'one' }, { taskId: 't2', message: 'two' }] },
+  });
+  assert.equal(taskProgressText.textContent, '2 个运行中');
+  assert.equal(context.dom.taskProgressList.classList.contains('hidden'), true, '多任务默认收起');
+  assert.equal(btnTaskToggle.classList.contains('hidden'), false, '多任务显示折叠按钮');
+  assert.equal(btnTaskToggle.getAttribute('aria-expanded'), 'false');
+
+  btnTaskToggle.click();
+  assert.equal(context.dom.taskProgressList.classList.contains('hidden'), false, '点击后展开');
+  assert.equal(btnTaskToggle.getAttribute('aria-expanded'), 'true');
+
+  btnTaskToggle.click();
+  assert.equal(context.dom.taskProgressList.classList.contains('hidden'), true, '再次点击收起');
 });
 
 test('session workspace state exposes isolated caches through app context', () => {

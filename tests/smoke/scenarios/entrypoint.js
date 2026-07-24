@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // 测试 Web UI 创建的会话在 CLI /resume 中的可见性修复
-// 验收：Web UI 新建会话 → 会话文件包含 entrypoint:"cli" → history.js 能读取 → CLI /resume 可见
+// 验收：Web UI 新建会话 → 会话文件含 entrypoint-marker 假行（entrypoint:"cli"）→ CLI /resume 可见。
+// 真机对照实验已证实 CLI /resume 只认 marker 行是否存在，不看真实行的 entrypoint 值（见 7/24 复现记录）；
+// history.js 的 readHeadMeta 已改为跳过 marker 假行、只读真实行——listSessions() 返回的 entrypoint
+// 现在是会话真实来源（sdk-ts），不再是 marker 冒充的 "cli"（那是历史遗留的误判，已修）。
 
 import { readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -80,11 +83,15 @@ const tests = [
         throw new Error('listSessions 未返回该会话');
       }
 
-      if (session.entrypoint !== 'cli') {
-        throw new Error(`readHeadMeta 读取的 entrypoint 是 "${session.entrypoint}"，期望 "cli"`);
+      // readHeadMeta 现在跳过 marker 假行，报真实来源——web 会话不应再读成 marker 冒充的 "cli"。
+      if (session.entrypoint === 'cli') {
+        throw new Error('readHeadMeta 读到的 entrypoint 是 "cli"——疑似又被 entrypoint-marker 假行抢先（回归）');
+      }
+      if (!session.entrypoint) {
+        throw new Error('listSessions 未返回 entrypoint（真实行应带该字段）');
       }
 
-      console.log(`  ✓ history.js 正确读取 entrypoint:"cli"`);
+      console.log(`  ✓ history.js 正确读取真实 entrypoint:"${session.entrypoint}"（非 marker 冒充值）`);
       console.log(`  ✓ 会话 ID: ${sessionId.slice(0, 8)}...`);
 
       // 清理测试会话文件

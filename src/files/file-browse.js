@@ -1,11 +1,17 @@
 // file-browse.js —— FileBrowseHandler（docs/design.md，承接 AD-12/FR-07"浏览项目文件"）
-// 授权目录内的只读文件树与文件内容读取。请求-响应型，不进事件信封/RingBuffer——非会话进展，
-// 断线重来即可，无"错过"概念（server.js 侧以普通 ack 回调接线，不走 broadcast）。
-// 只读铁律：本模块无写/删/改接口；web 侧改文件的唯一路径是"会话内让 claude 改"（经审批链）。
+// 授权目录内的文件树浏览、内容读取，以及（2026-07 起）CodeMirror 编辑器的直写回。请求-响应型，
+// 不进事件信封/RingBuffer——非会话进展，断线重来即可，无"错过"概念（server.js 侧以普通 ack 回调接线，不走 broadcast）。
+// 写路径唯一入口 writeFileInScope（socket 层 files:write）：只改【已存在】的文件（不带 O_CREAT，不新建
+// 不删）、≤MAX_BROWSE_BYTES、baseHash 与磁盘现状不符即拒（防覆盖 Claude 并发改动）、写前后都过范围门，
+// 落盘即审计（server.js audit.recordAudit file_write）；这是机主本人在编辑器里的显式操作，语义等同
+// ssh+vim，不走 agent 行为的审批链（approval-store 是给 canUseTool 设计的，不是给人)。部署方仍可用
+// .env FILE_EDIT=off 整体回到只读（server.js 读取，见其头注）。
 // 透明性权衡（显式抉择，承接 docs/design.md）：范围内内容不做敏感过滤（.env 等照读）——机主即 root +
 // 终端 TUI 语义等同，防线在范围门（WorkdirScopeGuard）不在内容审查，本模块不自作主张加过滤。
-import { readdirSync, lstatSync, fstatSync, openSync, readSync, closeSync, constants } from 'node:fs';
+import { readdirSync, lstatSync, fstatSync, openSync, readSync, writeSync, ftruncateSync, closeSync, constants } from 'node:fs';
+import { isUtf8 } from 'node:buffer';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { isInScope } from './workdir-scope-guard.js';
 
 // docs/design.md 建议值（256KB/片、500 条/页）：本模块把它们同时当默认值与硬顶——弱网上限的含义是"每次最多这么多"，
@@ -110,15 +116,76 @@ export function readFile(cwd, relPath, scopeDirs, opts = {}) {
     const isFinalChunk = offset + n >= totalSize;
     const sliceEnd = (!binary && !isFinalChunk) ? trimIncompleteUtf8Tail(buf.subarray(0, n)) : n;
     const slice = buf.subarray(0, sliceEnd);
+    const truncated = offset + sliceEnd < totalSize;
+    // contentHash 只在"一次性读全"（offset=0 且未截断）且合法 UTF-8 时给：CodeMirror 编辑器据此判定
+    // 该文件是否整份在手、可开编辑态；写回（writeFileInScope）拿它当 baseHash 冲突检测基线。分页读取
+    // 的中间页不给——半份内容不构成有效编辑基线。非法 UTF-8（如 Latin-1/GBK 编码、无 NUL 字节故
+    // binary=false）也不给：toString('utf8') 会把非法字节序列静默换成 U+FFFD，若据此开编辑态再写回，
+    // Buffer.from(content,'utf8') 会把原始字节永久替换掉且哈希校验拦不住（哈希基于原始字节算，換字节
+    // 发生在字符串表示层）——不给编辑基线，仍可只读预览（content 里的 U+FFFD 只是显示层近似）。
+    const contentHash = (!binary && offset === 0 && !truncated && isUtf8(slice))
+      ? createHash('sha256').update(slice).digest('hex')
+      : undefined;
     return {
       content: binary ? '' : slice.toString('utf8'),
-      truncated: offset + sliceEnd < totalSize,
+      truncated,
       totalSize,
       binary,
       // 供分页续读定位下一片起点：不能用 content.length（JS 字符串长度=字符数，多字节 UTF-8 下与
       // 字节数不等）；调用方应以 offset + bytesRead 作为下一次 readFile 的 offset。
-      bytesRead: sliceEnd
+      bytesRead: sliceEnd,
+      ...(contentHash ? { contentHash } : {}),
     };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+// 写回既有文件（不带 O_CREAT——不新建、不改名、不删；新建/删文件仍只能"会话内让 claude 改"）。
+// baseHash 必填：用同一 fd 先读出磁盘现状算 sha256 比对，不符（= 落盘后被外部改过，多半是 Claude
+// 并发在写）即拒并回 conflict，不静默覆盖。O_RDWR 而非分开"读一次、开一次写"，收窄 TOCTOU 窗口
+// （fd 一旦拿到，读到的现状与即将写入的目标是同一个 inode 的同一时刻）；仍非绝对防护——见
+// readFile 头注同款免责声明，另一个进程用不同 fd 仍可能与本次写交错，无 flock。
+export function writeFileInScope(cwd, relPath, content, scopeDirs, { baseHash } = {}) {
+  if (typeof content !== 'string') return { ok: false, code: 'bad_content', error: '内容不合法' };
+  if (typeof baseHash !== 'string' || !baseHash) return { ok: false, code: 'bad_base_hash', error: '缺少基线哈希' };
+  // 范围门必须先于内容大小检查：越界 relPath 配超大 content 时，socket-files.js 只认 code==='scope'
+  // 记 scope_violation 审计（这是无 approval-store 的写路径唯一事后可追溯记录），too_large 抢先会让
+  // 一次真实越界尝试被记成普通 file_write/denied，漏掉本该报警的那条。
+  const real = resolveInScope(cwd, relPath, scopeDirs);
+  if (real === null) return { ok: false, code: 'scope', error: '路径不在授权范围内，或不是文件' };
+  const contentBuf = Buffer.from(content, 'utf8');
+  if (contentBuf.length > MAX_BROWSE_BYTES) {
+    return { ok: false, code: 'too_large', error: `内容超过 ${MAX_BROWSE_BYTES} 字节上限` };
+  }
+
+  const NOFOLLOW = constants.O_NOFOLLOW || 0;
+  let fd;
+  try {
+    fd = openSync(real, constants.O_RDWR | NOFOLLOW); // 无 O_CREAT：目标不存在时按下方 catch 走 not_found
+  } catch (err) {
+    // ENOENT：resolveInScope 通过后、open 前的窗口里文件被删（TOCTOU race，resolveInScope 本身对
+    // 「从未存在」的路径已 fail-closed 判 scope，不会走到这里）。EISDIR：目标是目录——O_RDWR 打开
+    // 目录在 POSIX 上 open() 本身就拒绝（不像 O_RDONLY 那样能开成功再靠 fstat 判断），故在此处兜底；
+    // 下方 fstat 的 isDirectory 检查是跨平台（Windows 语义可能不同）防御，非本条件唯一防线。
+    if (err?.code === 'ENOENT') return { ok: false, code: 'not_found', error: '文件不存在（编辑器仅支持改写已存在的文件）' };
+    if (err?.code === 'EISDIR') return { ok: false, code: 'not_file', error: '目标是目录，不是文件' };
+    return { ok: false, code: 'open_failed', error: err.message || '打开文件失败' };
+  }
+  try {
+    if (!isInScope(real, scopeDirs)) return { ok: false, code: 'scope', error: '路径不在授权范围内' }; // 开后复核
+    const stat = fstatSync(fd);
+    if (stat.isDirectory()) return { ok: false, code: 'not_file', error: '目标是目录，不是文件' };
+    if (stat.size > MAX_BROWSE_BYTES) return { ok: false, code: 'too_large', error: '文件超出可编辑大小上限，无法核对基线' };
+    const existing = Buffer.alloc(stat.size);
+    if (stat.size > 0) readSync(fd, existing, 0, stat.size, 0);
+    const currentHash = createHash('sha256').update(existing).digest('hex');
+    if (currentHash !== baseHash) {
+      return { ok: false, code: 'conflict', error: '文件已被修改（可能是 Claude 正在改），请刷新后重试' };
+    }
+    ftruncateSync(fd, 0);
+    writeSync(fd, contentBuf, 0, contentBuf.length, 0);
+    return { ok: true, contentHash: createHash('sha256').update(contentBuf).digest('hex'), bytesWritten: contentBuf.length };
   } finally {
     closeSync(fd);
   }

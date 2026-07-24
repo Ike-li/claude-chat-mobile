@@ -822,3 +822,25 @@ details.thinking.thinking-live > summary::before {
   height: 1px;
   background: var(--line);
 }
+
+/* 文件浏览器代码查看/编辑（CM5）：贴现有 design token，暗色随 :root 变量自动切换，不单开 media query。
+   viewportMargin:Infinity（见 file-browser.js）令 CM 不做内部虚拟滚动，外层 #fileBrowseBody 统一滚动。 */
+.cm-ccm-viewer,
+.cm-ccm-viewer .CodeMirror {
+  height: auto;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.55;
+  background: transparent;
+  color: var(--ink);
+}
+.cm-ccm-viewer .CodeMirror-gutters { background: transparent; border-right: 1px solid var(--line-soft); }
+.cm-ccm-viewer .CodeMirror-linenumber { color: var(--ink-faint); }
+.cm-ccm-viewer .CodeMirror-cursor { border-left-color: var(--ink); }
+.cm-ccm-viewer .CodeMirror-selected { background: var(--accent-wash); }
+.cm-ccm-viewer .cm-comment { color: var(--ink-faint); }
+.cm-ccm-viewer .cm-string, .cm-ccm-viewer .cm-string-2 { color: var(--success); }
+.cm-ccm-viewer .cm-number, .cm-ccm-viewer .cm-atom { color: var(--accent-deep); }
+.cm-ccm-viewer .cm-keyword { color: var(--info); font-weight: 600; }
+.cm-ccm-viewer .cm-variable-2, .cm-ccm-viewer .cm-property { color: var(--ink-soft); }
+.cm-ccm-viewer .cm-tag, .cm-ccm-viewer .cm-attribute { color: var(--warning); }

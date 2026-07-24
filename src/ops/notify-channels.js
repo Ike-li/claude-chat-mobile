@@ -53,12 +53,16 @@ export function createNotifyChannels({
     persistPushSubscriptions();
   }
 
-  async function pushNotify(title, body, data) {
+  // ⑧ 推送内容预览：previewBody 存在且非空时，按每条订阅自己的 prefs.preview（POST /push/subscribe
+  // 时随订阅一并存的客户端偏好，见 http.js）独立选 body 还是 previewBody——同一次 notify，不同设备可
+  // 收到不同详略的 payload。空 previewBody（该事件本次无可预览内容）一律回落 body，不发空预览。
+  async function pushNotify(title, body, data, previewBody) {
     if (!pushEnabled || pushSubscriptions.length === 0) return;
-    const payload = JSON.stringify(data ? { title, body, data } : { title, body });
     const expired = [];
-    await Promise.all(pushSubscriptions.map(sub =>
-      webpushImpl.sendNotification(sub, payload)
+    await Promise.all(pushSubscriptions.map(sub => {
+      const effectiveBody = (sub.prefs?.preview === true && previewBody) ? previewBody : body;
+      const payload = JSON.stringify(data ? { title, body: effectiveBody, data } : { title, body: effectiveBody });
+      return webpushImpl.sendNotification(sub, payload)
         .then(() => metrics.inc('push_success')) // NFR-15 推送成功率（分子）
         .catch(e => {
           if (e.statusCode === 410 || e.statusCode === 404) expired.push(sub.endpoint); // 过期/注销：订阅生命周期正常结束，非"通知失败"
@@ -66,8 +70,8 @@ export function createNotifyChannels({
             metrics.inc('push_failure'); console.error('[push] 推送失败:', e.statusCode ?? '', e.message); // NFR-15 notify_failed 信号：真失败（非订阅过期）才计
             metrics.gauge('push_failure_last_ts', Date.now()); onDeliveryFailure(); // 服务状态可见性：带时间戳，供 recentDeliveryFailure 判定
           }
-        })
-    ));
+        });
+    }));
     if (expired.length) {                       // 仅剔除失效的那几条，其余设备订阅保留
       pushSubscriptions = pushSubscriptions.filter(s => !expired.includes(s.endpoint));
       persistPushSubscriptions();

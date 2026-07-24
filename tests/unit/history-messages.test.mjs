@@ -42,6 +42,51 @@ test('getSessionHistory: 提取 user / assistant 消息', async () => {
   assert.equal(msgs[1].content, '你好！');
 });
 
+test('getSessionHistory: 文本消息透出 uuid（供「从这里分叉」定位分叉点）', async () => {
+  const cwd = '/test/uuid-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'uuidhist', [
+    { type: 'user', uuid: 'u-1', message: { role: 'user', content: '你好' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'assistant', uuid: 'a-1', message: { role: 'assistant', content: '你好！' }, timestamp: '2024-01-01T00:00:01Z' },
+  ]);
+  const msgs = await getSessionHistory('uuidhist', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].uuid, 'u-1');
+  assert.equal(msgs[1].uuid, 'a-1');
+});
+
+test('getSessionHistory: tool_use/tool_result/thinking 条目不带 uuid（分叉只挂文本类）', async () => {
+  const cwd = '/test/uuid-tool-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'uuidtoolhist', [
+    {
+      type: 'assistant', uuid: 'a-2', timestamp: '2026-07-13T10:00:00.000Z',
+      message: { role: 'assistant', content: [{ type: 'thinking', thinking: '思考中' }, { type: 'tool_use', id: 'x', name: 'Bash', input: { command: 'ls' } }] },
+    },
+  ]);
+  const msgs = await getSessionHistory('uuidtoolhist', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[0].kind, 'thinking');
+  assert.equal(msgs[0].uuid, undefined);
+  assert.equal(msgs[1].kind, 'tool_use');
+  assert.equal(msgs[1].uuid, undefined);
+});
+
+test('getSessionHistory: sidechain（子 agent）文本消息不带 uuid（分叉只挂主链）', async () => {
+  const cwd = '/test/uuid-sidechain-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'uuidsidehist', [
+    {
+      type: 'user', uuid: 'side-1', isSidechain: true, parent_tool_use_id: 'agent-1',
+      message: { role: 'user', content: '子任务提示词' }, timestamp: '2026-07-13T10:00:00.000Z',
+    },
+  ]);
+  const msgs = await getSessionHistory('uuidsidehist', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].isSidechain, true);
+  assert.equal(msgs[0].uuid, undefined);
+});
+
 test('getSessionHistory: isMeta 条目被过滤', async () => {
   const cwd = '/test/meta-hist';
   const dir = join(BASE, getProjectDir(cwd));

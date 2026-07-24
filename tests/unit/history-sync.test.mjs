@@ -107,9 +107,9 @@ test('classifyTranscriptTail: 子 agent 已纯文本收尾 + 主链 settled → 
 test('classifyTranscriptTail: 文件不存在 / 无任何链条目 → settled（不锁），lastChainTs=null', async () => {
   const cwd = '/test/tail-empty';
   const dir = join(BASE, getProjectDir(cwd));
-  assert.deepEqual(await classifyTranscriptTail('nonexistent', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null });
+  assert.deepEqual(await classifyTranscriptTail('nonexistent', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null, autonomous: false });
   writeJSONL(dir, 'tmetaonly', [{ type: 'entrypoint-marker' }, { type: 'queue-operation' }]);
-  assert.deepEqual(await classifyTranscriptTail('tmetaonly', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null });
+  assert.deepEqual(await classifyTranscriptTail('tmetaonly', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null, autonomous: false });
 });
 
 // SS-002：settled 轮次后的 CLI 系统噪音（isMeta=false 的 local-command/bash）不得把 tail 改判 pending。
@@ -152,6 +152,32 @@ test('classifyTranscriptTail: 项目 slash 仅 command-name、尚无 assistant �
     { type: 'user', message: { role: 'user', content: '<command-message>deep-research</command-message>\n<command-name>/deep-research</command-name>\n<command-args>foo</command-args>' }, timestamp: '2026-07-16T22:00:00.000Z' },
   ]);
   assert.equal((await classifyTranscriptTail('tdeep', cwd, { baseDir: BASE })).verdict, 'pending');
+});
+
+// 7/24 真机复现：ScheduleWakeup <<autonomous-loop-dynamic>> / CronCreate <<autonomous-loop>> 定时唤起本会话时，
+// harness 在主链插一条 isMeta:true、文本以 "# Autonomous loop check" 开头的系统行，随后自己继续跑。
+// 尾部形态与「终端接管」在磁盘上完全同构（都是 tool_use 未落 tool_result），但驱动方其实是本会话自己被
+// 定时唤起——autonomous 字段把这种"可确定来源"的情形与"真不知道是谁"的情形分开，供上层选择不同文案。
+test('classifyTranscriptTail: 尾窗内有自主循环 marker + 仍 pending → autonomous:true', async () => {
+  const cwd = '/test/tail-autonomous';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'tauto', [
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '之前一轮已收尾' }] }, timestamp: '2026-07-24T14:17:05.000Z' },
+    { type: 'queue-operation' },
+    { type: 'user', isMeta: true, message: { role: 'user', content: '# Autonomous loop check\n\nYou are being invoked on a timer while the user is away or occupied.' }, timestamp: '2026-07-24T14:17:06.000Z' },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'thinking', thinking: '继续干活' }] }, timestamp: '2026-07-24T14:18:27.000Z' },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] }, timestamp: '2026-07-24T14:18:28.000Z' },
+  ]);
+  const r = await classifyTranscriptTail('tauto', cwd, { baseDir: BASE });
+  assert.equal(r.verdict, 'pending');
+  assert.equal(r.autonomous, true, '尾窗内有 harness 自主循环 marker → 标记为自主驱动，而非未知来源');
+});
+
+test('classifyTranscriptTail: 无自主循环 marker 的 pending → autonomous:false（既有"未知驱动/大概率终端"判定不变）', async () => {
+  const cwd = '/test/tail-tooluse';
+  const r = await classifyTranscriptTail('ttooluse', cwd, { baseDir: BASE }); // 复用上面「assistant 发起 tool_use」场景已写好的文件
+  assert.equal(r.verdict, 'pending');
+  assert.equal(r.autonomous, false);
 });
 
 // ── catchUpStep：只读「追平」状态机 ──────────────────────────────────────────

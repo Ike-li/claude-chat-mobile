@@ -14,6 +14,13 @@ import { basename } from 'node:path';
 //   · permission_request / question / task_notification 无条件推——用户可能锁屏或切到别的 app。
 //
 // task_notification = 后台任务（Workflow / 后台 Agent / 后台 Bash）完成信号（对齐 permission/question 的无条件推）。
+// ⑧ 推送内容预览：previewBody 前 120 字截断（OS 通知栏本就单行/两行显示，不需要更多），超出加 …。
+const PREVIEW_BODY_CAP = 120;
+function truncatePreview(text) {
+  const s = String(text ?? '');
+  return s.length > PREVIEW_BODY_CAP ? `${s.slice(0, PREVIEW_BODY_CAP)}…` : s;
+}
+
 export function notificationForEvent(type, payload = {}, opts = {}) {
   const { hasClients = false, instanceId, sessionId, cwd } = opts;
   const p = payload || {};
@@ -23,29 +30,38 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
     case 'result':
       if (hasClients) return null;
       // 对齐 CLI：interrupt 终态 result 即使 is_error/ede_diagnostic，也是「已中止」不是「出错」
+      // 无 previewBody：result 本身只是轮次终态元数据（耗时/costUsd/isError），没有可预览的正文内容
+      // ——真正的对话内容在 assistant 的 text_delta 流里，不在这个事件上。
       {
         const secs = ((p.durationMs ?? 0) / 1000).toFixed(1);
         const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
         return withData({ title: titleWithCwd(title), body: `用时 ${secs}s` });
       }
-    case 'permission_request':
-      // 最小化（SEC-04）：body 只保留工具名，【不含 input 命令/参数正文】；待批操作回 app 内经鉴权查看。
+    case 'permission_request': {
+      // body 最小化（SEC-04）：只保留工具名，【不含 input 命令/参数正文】；待批操作回 app 内经鉴权查看。
+      // previewBody：用户主动开启预览时才用（见 notify-channels.js pushNotify 按订阅 prefs 选择）。
+      const inputStr = p.input && typeof p.input === 'object' ? JSON.stringify(p.input) : '';
+      const previewBody = truncatePreview(inputStr ? `${p.name ?? '工具'} · ${inputStr}` : (p.name ?? '工具'));
       return withData({
         title: titleWithCwd('⚠️ Claude 请求许可'),
-        body: `需要你授权：${p.name ?? '工具'}`
+        body: `需要你授权：${p.name ?? '工具'}`,
+        previewBody
       });
+    }
     case 'question':
       // 最小化：不含问题正文（消息正文），固定引导文案；正文回 app 内取。
       return withData({
         title: titleWithCwd('❓ Claude 有问题'),
-        body: 'Claude 需要你的回答'
+        body: 'Claude 需要你的回答',
+        previewBody: truncatePreview(p.text)
       });
     case 'task_notification': {
       // 最小化：不含 summary 正文（可能含代码/结果），固定引导文案；成功/失败见 title。
       const failed = p.status === 'failed' || p.status === 'error';
       return withData({
         title: titleWithCwd(failed ? '⚠️ 后台任务失败' : '✅ 后台任务完成'),
-        body: failed ? '后台任务未成功，点开查看' : '后台任务已完成，点开查看'
+        body: failed ? '后台任务未成功，点开查看' : '后台任务已完成，点开查看',
+        previewBody: truncatePreview(p.summary)
       });
     }
     default:

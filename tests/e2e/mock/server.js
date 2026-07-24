@@ -720,6 +720,47 @@ io.on('connection', socket => {
     if (typeof callback === 'function') callback({ ok: true, instanceId: archivedInst.instanceId, sessionId: archivedInst.sessionId });
   });
 
+  // P0-FORK：镜像真实 session:fork handler 的收尾（src/server/app.js）——建/聚焦新实例、广播 instances、ack。
+  // 只认 mock-session-archived → mock-session-forked 这一条固定映射，够验前端长按→confirm→切视图链路。
+  // uuid 白名单只收 assistant 侧（a-archived-*）：user 气泡长按理应解析出前一条 assistant 的 uuid、不是
+  // 自己的（u-archived-*）——若前端解析回归成送自己的 uuid，这里会拒绝，P0-FORKc 能抓到。
+  socket.on('session:fork', (payload, callback) => {
+    const { sessionId, cwd, uuid } = payload || {};
+    console.log(`[mock] session:fork sessionId=${sessionId}, cwd=${cwd}, uuid=${uuid}`);
+    if (typeof callback !== 'function') return;
+    const validUuids = new Set(['a-archived-1', 'a-archived-2']);
+    if (cwd !== '/Users/you/code/claude-chat-mobile' || sessionId !== 'mock-session-archived' || !validUuids.has(uuid)) {
+      callback({ ok: false, error: 'mock fork source not found' });
+      return;
+    }
+    const forkedId = 'inst_forked';
+    let forkedInst = mockInstances.find(i => i.instanceId === forkedId);
+    if (!forkedInst) {
+      forkedInst = {
+        instanceId: forkedId,
+        cwd: '/Users/you/code/claude-chat-mobile',
+        sessionId: 'mock-session-forked',
+        title: 'Archived Planning Session (fork)',
+        state: 'idle',
+        permissionMode: 'default',
+        effort: null,
+        model: 'claude-3-5-sonnet'
+      };
+      mockInstances.push(forkedInst);
+    }
+    viewingInstanceId = forkedInst.instanceId;
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: {
+        viewingInstanceId,
+        viewingCwd: forkedInst.cwd,
+        dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+        instances: mockInstances
+      }
+    });
+    callback({ ok: true, instanceId: forkedInst.instanceId, sessionId: forkedInst.sessionId });
+  });
+
   socket.on('session:history', (payload, callback) => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:history sessionId=${sessionId}, cwd=${cwd}`);
@@ -727,8 +768,21 @@ io.on('connection', socket => {
     if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
       callback({
         messages: [
-          { role: 'user', content: 'Summarize archived plan' },
-          { role: 'assistant', content: 'Archived plan replay from session history.' }
+          // uuid：P0-FORK 长按分叉锚点定位用（expandHistoryEntry 透出，见 src/sessions/history.js）。
+          // 两轮对话：验证长按第二条 user 气泡时前端解析出的是前一条 assistant 的 uuid（a-archived-1），
+          // 不是它自己的 uuid（u-archived-2）——见下方 session:fork handler 只认 assistant uuid。
+          { role: 'user', content: 'Summarize archived plan', uuid: 'u-archived-1' },
+          { role: 'assistant', content: 'Archived plan replay from session history.', uuid: 'a-archived-1' },
+          { role: 'user', content: 'Any follow-up questions?', uuid: 'u-archived-2' },
+          { role: 'assistant', content: 'No further questions needed.', uuid: 'a-archived-2' }
+        ]
+      });
+    } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-forked') {
+      // P0-FORK：session:fork 成功后前端切视图会拉这条会话历史；文案与源会话不同，便于断言真切换了。
+      callback({
+        messages: [
+          { role: 'user', content: 'Summarize archived plan', uuid: 'u-archived-1' },
+          { role: 'assistant', content: 'Forked session ready.', uuid: 'a-forked-1' }
         ]
       });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-visual-test' && foregroundFoundMissingHistoryMode) {
@@ -828,11 +882,26 @@ io.on('connection', socket => {
       empty: false,
     });
   });
-  // 文件浏览列表：P0-21 选「浏览项目文件」后需可渲染（确定性空页即可）
+  // 文件浏览列表：P0-21 选「浏览项目文件」后需可渲染；另两条供 P0-21b 覆盖 CM 查看器命中/回退两路。
   socket.on('browse:list', (_payload, callback) => {
     if (typeof callback !== 'function') return;
-    callback({ ok: true, entries: [{ name: 'README.md', kind: 'file', size: 12, mtime: Date.now() }], truncated: false, totalCount: 1 });
+    callback({
+      ok: true,
+      entries: [
+        { name: 'README.md', kind: 'file', size: 12, mtime: Date.now() },
+        { name: 'demo.js', kind: 'file', size: 48, mtime: Date.now() },
+        { name: 'huge.log', kind: 'file', size: 500_000, mtime: Date.now() },
+        { name: 'conflict.js', kind: 'file', size: 20, mtime: Date.now() },
+      ],
+      truncated: false,
+      totalCount: 4,
+    });
   });
+
+  // P0-EDIT：demo.js 可变内容 + mock "hash"（就用内容本身当哈希——不用跟真 sha256 位对位，
+  // 只要「变了就不同、没变就相同」这个契约成立即可）。per-connection 状态，each gotoMock 一份新的。
+  let mockDemoJsContent = 'function greet(name) {\n  return `Hello, ${name}!`;\n}\n';
+  const mockHashOf = text => `mockhash:${text}`;
 
   // E18 附件预览：browse:read（契约内事件；仅实现 base64 分片路径——文本浏览走真实 server 的集成面）。
   // 固定 fixture：.ccm-uploads/<storedName> 命中 MOCK_UPLOAD_FILES 才回内容，其余 ok:false（文件已删场景）。
@@ -843,6 +912,21 @@ io.on('connection', socket => {
     if (encoding !== 'base64' && String(relPath || '') === 'new-file.js') {
       const text = 'console.log("untracked");\n';
       return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false });
+    }
+    // P0-21b/P0-EDIT：一次性读全的小 .js → 前端应切 CM 查看器；带 contentHash → 可编辑（files:write 基线）。
+    if (encoding !== 'base64' && String(relPath || '') === 'demo.js') {
+      const text = mockDemoJsContent;
+      return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: mockHashOf(text) });
+    }
+    // P0-21b：首页即 truncated（模拟 >256KB）→ 前端须留在 pre 纯文本，不切 CM。
+    if (encoding !== 'base64' && String(relPath || '') === 'huge.log') {
+      const text = 'x'.repeat(1000);
+      return callback({ ok: true, content: text, totalSize: 500_000, bytesRead: text.length, truncated: true, binary: false });
+    }
+    // P0-EDIT：可编辑但保存必冲突的固定 fixture（模拟"编辑期间文件被 Claude 并发改过"，不用真并发编排）。
+    if (encoding !== 'base64' && String(relPath || '') === 'conflict.js') {
+      const text = 'const x = 1;\n';
+      return callback({ ok: true, content: text, totalSize: text.length, bytesRead: text.length, truncated: false, binary: false, contentHash: 'conflict-fixture-hash' });
     }
     const m = /^\.ccm-uploads\/(.+)$/.exec(String(relPath || ''));
     const bytes = m && encoding === 'base64' ? MOCK_UPLOAD_FILES.get(m[1]) : null;
@@ -857,6 +941,36 @@ io.on('connection', socket => {
       truncated: offset + slice.length < bytes.length,
       binary: true
     });
+  });
+
+  // P0-EDIT：编辑器保存。只认 demo.js，镜像真实 writeFileInScope 的 baseHash 冲突语义——
+  // baseHash 不等于当前 mockHashOf(mockDemoJsContent) 即 conflict，不静默覆盖。
+  socket.on('files:write', (payload, callback) => {
+    if (typeof callback !== 'function') return;
+    const { relPath, content, baseHash } = payload || {};
+    console.log(`[mock] files:write relPath=${relPath}`);
+    if (String(relPath || '') === 'conflict.js') {
+      return callback({ ok: false, code: 'conflict', error: '文件已被修改（可能是 Claude 正在改），请刷新后重试' });
+    }
+    if (String(relPath || '') !== 'demo.js') {
+      return callback({ ok: false, code: 'not_found', error: 'mock 只支持写 demo.js' });
+    }
+    if (baseHash !== mockHashOf(mockDemoJsContent)) {
+      return callback({ ok: false, code: 'conflict', error: '文件已被修改（可能是 Claude 正在改），请刷新后重试' });
+    }
+    mockDemoJsContent = String(content || '');
+    callback({ ok: true, contentHash: mockHashOf(mockDemoJsContent), bytesWritten: mockDemoJsContent.length });
+  });
+
+  // P0-MENTION：composer @ 文件引用候选源。固定小候选池 + 简单子串过滤（够验前端触发→防抖→
+  // 渲染 chips→点选回填链路，不用照抄服务端 matchFiles 的完整分档排序算法）。
+  const MOCK_MENTION_FILES = ['src/app.js', 'src/agent/agent.js', 'README.md', 'package.json'];
+  socket.on('files:search', (payload, callback) => {
+    if (typeof callback !== 'function') return;
+    const q = String(payload?.query || '').toLowerCase();
+    console.log(`[mock] files:search query=${q}`);
+    const paths = q ? MOCK_MENTION_FILES.filter(p => p.toLowerCase().includes(q)) : [];
+    callback({ ok: true, paths });
   });
 
   // Console modal trace fetch. Production serves persisted per-session interaction logs;
@@ -1600,6 +1714,35 @@ io.on('connection', socket => {
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_bgtask', durationMs: 2000, costUsd: 0.001, isError: false, models: [activeModel] }
+        });
+      },
+    },
+    {
+      command: 'test:taskprogress-multi',
+      run: async ({ activeInst }) => {
+        // 多任务全量快照（emitBgTasksSnapshot 形态）：验证横幅默认折叠列表 + 折叠按钮展开/收起。
+        console.log('[mock] test:taskprogress-multi — 推送多任务全量快照');
+        const targetInstanceId = activeInst.instanceId;
+        activeInst.state = 'busy';
+        const tasks = [
+          { taskId: 'bg_task_a', taskType: 'local_agent', message: 'Explore：搜索用例' },
+          { taskId: 'bg_task_b', taskType: 'local_bash', message: 'npm test' },
+          { taskId: 'bg_task_c', taskType: 'local_agent', message: 'Synthesize：汇总结果' },
+        ];
+        io.emit('agent:event', {
+          seq: 50, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
+          type: 'task_progress', transient: true,
+          payload: { taskId: tasks[0].taskId, taskType: tasks[0].taskType, message: tasks[0].message, tasks }
+        });
+        await delay(2000);
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 51, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
+          type: 'task_notification', payload: { source: 'system', status: 'completed', summary: '全部后台任务完成', tasks: [] }
+        });
+        socket.emit('agent:event', {
+          seq: 100, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_bgtask_multi', durationMs: 2000, costUsd: 0.001, isError: false, models: [activeModel] }
         });
       },
     },
@@ -2711,6 +2854,33 @@ io.on('connection', socket => {
       return ack({ ok: true, text: 'FULL_TOOL_OUTPUT_LINE\n'.repeat(40).trim() });
     }
     ack({ ok: false, error: '全文不可用（mock 未缓存）' });
+  });
+
+  // P0-DIFF：工具卡「预览变更」（对齐 server tool:preview）。t_fc_edit/t_fc_write 复用
+  // test:file-changes 场景（scenarios/content.js）建的工具卡——点其「预览变更」按钮即可触发。
+  socket.on('tool:preview', ({ toolUseId } = {}, ack) => {
+    if (typeof ack !== 'function') return;
+    if (toolUseId === 't_fc_edit') {
+      // 三行片段只中间一行变：验证前后保留上下文行、只中间 -/+ 各一行（行级 diff，非整块红绿）。
+      return ack({
+        ok: true,
+        name: 'Edit',
+        inWhitelist: true,
+        attribution: { workdirLabel: 'claude-chat-mobile', relPath: 'README.md' },
+        diff: { hunks: [{ old: 'line one\nold middle\nline three', new: 'line one\nnew middle\nline three' }] },
+      });
+    }
+    if (toolUseId === 't_fc_write') {
+      // Write 无 old：维持既有整块绿（不走行级 diff）。
+      return ack({
+        ok: true,
+        name: 'Write',
+        inWhitelist: true,
+        attribution: { workdirLabel: 'claude-chat-mobile', relPath: 'CLAUDE.md' },
+        diff: { added: 'line1\nline2\nline3' },
+      });
+    }
+    ack({ ok: false, error: '预览不可用（mock 未缓存）' });
   });
 
   // Handle user question choice selection (optionIndex / optionIndexes / freeText)

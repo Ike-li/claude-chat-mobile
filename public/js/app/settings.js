@@ -7,6 +7,12 @@ const SHEET_OPEN_CLASS = 'ccm-sheet-open';
 
 export function createSettingsController(context, {
   alerts,
+  // ⑧ 推送内容预览：get/set 由 app.js 注入（读写 localStorage + set 时触发重新订阅，把新偏好带给服务端）。
+  // 独立于 alerts（那是本地提示音/震动，不涉网络）；duck-typed 最小接口，settings.js 不需要认识整个
+  // notifications 控制器。
+  pushPreview = { get: () => false, set: () => {} },
+  // ⑨ 语言偏好：get/set 由 app.js 注入；set 里写 storage + 提示刷新（不做响应式重渲，见 index.html 头注）。
+  langPref = { get: () => 'zh', set: () => {} },
   autoBind = true,
   haptic = () => {},
   // 可注入 document 方便单测；浏览器默认用全局 document
@@ -53,6 +59,8 @@ export function createSettingsController(context, {
     if (dom.prefAlertSound) dom.prefAlertSound.checked = !!preferences.sound;
     if (dom.prefAlertVibrate) dom.prefAlertVibrate.checked = !!preferences.vibrate;
     if (dom.prefAlertForeground) dom.prefAlertForeground.checked = !!preferences.foregroundComplete;
+    if (dom.prefPushPreview) dom.prefPushPreview.checked = !!pushPreview.get();
+    if (dom.prefLang) dom.prefLang.value = langPref.get();
   }
 
   function open() {
@@ -231,6 +239,12 @@ export function createSettingsController(context, {
     bindToggle(dom.prefAlertSound, 'sound');
     bindToggle(dom.prefAlertVibrate, 'vibrate');
     bindToggle(dom.prefAlertForeground, 'foregroundComplete');
+    if (dom.prefPushPreview) {
+      dom.prefPushPreview.onchange = () => pushPreview.set(dom.prefPushPreview.checked);
+    }
+    if (dom.prefLang) {
+      dom.prefLang.onchange = () => langPref.set(dom.prefLang.value);
+    }
     if (dom.btnAlertPreview) {
       dom.btnAlertPreview.onclick = () => {
         alerts.ensureAudio?.();

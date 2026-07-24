@@ -231,13 +231,13 @@ test('describeMirrorEntryLock：打包判定详情 + agedOutStale 派生字段�
 
   assert.deepEqual(
     H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: under, now, locked: true }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: under, agedOutStale: false, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true },
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: under, agedOutStale: false, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false },
     '新鲜 pending 且已锁 → agedOutStale=false',
   );
 
   assert.deepEqual(
     H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: false }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: false },
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: false, autonomous: false },
     '陈旧 pending 且未锁 → agedOutStale=true，与 mirrorEntryLock 的不锁判定一致',
   );
 
@@ -245,6 +245,20 @@ test('describeMirrorEntryLock：打包判定详情 + agedOutStale 派生字段�
     H.describeMirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, locked: false }).agedOutStale,
     false,
     '无时间戳 → agedOutStale 保守为 false（无法判断"多陈旧"）',
+  );
+});
+
+// autonomous：单纯透传 classifyTranscriptTail 算出的「尾窗内是否有自主循环 marker」，不重新判定——
+// 诊断时间线要能看出"这次锁是自主循环还是真不知道来源"，之前查一次真实卡死花了大量取证时间正因为看不到这个。
+test('describeMirrorEntryLock：透传 autonomous（不重新判定，只回显调用方传入值）', () => {
+  assert.equal(
+    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now: 1_800_000_000_000, locked: true, autonomous: true }).autonomous,
+    true,
+  );
+  assert.equal(
+    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now: 1_800_000_000_000, locked: true }).autonomous,
+    false,
+    '未传 autonomous → 默认 false，不影响既有调用方',
   );
 });
 

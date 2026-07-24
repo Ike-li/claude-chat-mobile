@@ -37,6 +37,14 @@ project's own code is MIT-licensed (see root `LICENSE`); that does not relicense
 - 版权与许可同 highlight.js / Copyright and license: same as highlight.js above (BSD-3-Clause)
 - 来源 / Source: https://github.com/highlightjs/highlight.js/tree/main/src/styles
 
+## CodeMirror 5 — `codemirror/codemirror.min.js`, `codemirror/codemirror.min.css`, `codemirror/mode-*.min.js`
+
+- 版本 / Version: 5.65.21
+- 版权 / Copyright: © by Marijn Haverbeke and others
+- 许可 / License: MIT (SPDX: `MIT`)
+- 来源 / Source: https://github.com/codemirror/codemirror5（npm 包 `codemirror@5.65.21`，官方 registry tarball 本地压缩，非第三方 CDN 重建）
+- 说明 / Notes: 仅 vendor 核心 + 9 个语言模式（javascript/xml/htmlmixed/css/markdown/python/shell/yaml/jsx），未含 addon 与其余 ~200 种语言模式；用于文件浏览器的只读代码查看（Phase A）与后续编辑（Phase B）。
+
 ## Tailwind CSS — `tailwind.js`
 
 - 构建 / Build: Tailwind CSS（浏览器内 Play CDN 构建 / browser Play build）

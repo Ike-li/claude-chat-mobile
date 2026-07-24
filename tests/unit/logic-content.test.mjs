@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection } from '../../public/js/logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, pickPasteImageFiles, attachmentDataUrl, guessImageMime, toolPreviewLabel, isFileMutationTool, countContentLines, estimateMutationLineStats, accumulateTurnFileChange, summarizeTurnFileChanges, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS } from '../../public/js/logic.js';
 
 test('esc: 转义 HTML 元字符', () => {
   assert.equal(esc(`&<>"'`), '&amp;&lt;&gt;&quot;&#39;');
@@ -406,4 +406,49 @@ test('resolveEffortSelection: ultracode 档借道 xhigh + 武装关键词，其�
   assert.deepEqual(resolveEffortSelection('low'), { effort: 'low', ultracode: false });
   assert.deepEqual(resolveEffortSelection(''), { effort: null, ultracode: false });
   assert.deepEqual(resolveEffortSelection(null), { effort: null, ultracode: false });
+});
+
+// unifiedDiffLines：Edit/MultiEdit 工具卡「预览变更」的行级 diff（LCS），输出交给 git-changes.js
+// renderPatchLines 复用着色——契约是「同 前缀空白、- 删、+ 增」，行内容前恰一个空格分隔前缀符。
+test.describe('unifiedDiffLines（行级 LCS diff）', () => {
+  test('纯新增：old 空，new 多行 → 全部 + 前缀，不夹带 old 空串产生的空白 - 行（渲染层会多出一条空红行）', () => {
+    assert.deepEqual(unifiedDiffLines('', 'a\nb'), ['+ a', '+ b']);
+  });
+  test('纯删除：new 空，old 多行 → 全部 - 前缀，不夹带 new 空串产生的空白 + 行（渲染层会多出一条空绿行）', () => {
+    assert.deepEqual(unifiedDiffLines('a\nb', ''), ['- a', '- b']);
+  });
+  test('完全相同 → 全部同前缀（两空格），零 +/-', () => {
+    const r = unifiedDiffLines('a\nb\nc', 'a\nb\nc');
+    assert.deepEqual(r, ['  a', '  b', '  c']);
+    assert.ok(r.every(line => !line.startsWith('+') && !line.startsWith('-')));
+  });
+  test('中段改：首尾行不变，只中间一行替换 → 前后保留同前缀，中间 -/+ 各一行', () => {
+    const r = unifiedDiffLines('a\nold\nc', 'a\nnew\nc');
+    assert.deepEqual(r, ['  a', '- old', '+ new', '  c']);
+  });
+  test('两端都空串 → 单条空的同前缀行，不抛错', () => {
+    assert.deepEqual(unifiedDiffLines('', ''), ['  ']);
+  });
+  test('尾部有无换行符差异（split 出的末尾空字符串）→ 体现成新增一个空行，不抛错', () => {
+    const r = unifiedDiffLines('a\nb', 'a\nb\n');
+    assert.deepEqual(r, ['  a', '  b', '+ ']);
+  });
+  test('单行替换（无公共行）→ 一 - 一 +', () => {
+    assert.deepEqual(unifiedDiffLines('foo', 'bar'), ['- foo', '+ bar']);
+  });
+  test('内容本身以 -/+ 开头时前缀符与内容间恰一空格分隔，renderPatchLines 判定不会误吞（不产生 --- 三连）', () => {
+    const r = unifiedDiffLines('-- old comment', '++ new comment');
+    assert.deepEqual(r, ['- -- old comment', '+ ++ new comment']);
+    assert.ok(r.every(line => !line.startsWith('---') && !line.startsWith('+++')));
+  });
+  test('null/undefined 输入按空串处理，不抛错', () => {
+    assert.deepEqual(unifiedDiffLines(null, undefined), ['  ']);
+  });
+  test('中间插入多行（old 少 new 多）→ 首尾同前缀，中段全 +', () => {
+    const r = unifiedDiffLines('a\nz', 'a\nb\nc\nz');
+    assert.deepEqual(r, ['  a', '+ b', '+ c', '  z']);
+  });
+  test('MAX_DIFF_LINES_FOR_LCS 导出为正整数常量，供调用方判断是否退回整块渲染', () => {
+    assert.ok(Number.isInteger(MAX_DIFF_LINES_FOR_LCS) && MAX_DIFF_LINES_FOR_LCS > 0);
+  });
 });

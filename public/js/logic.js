@@ -658,6 +658,30 @@ export function resolveGatewayModelName(value, modelsList) {
   return '';
 }
 
+// 底栏模型 pill / compose 默认档摘要的展示文案。
+// · 已选具体 model：网关 resolvedModel 优先，否则原样（含 [1m] 后缀）——对齐 P0-09e/P0-09j「原始值」契约。
+// · 未选（FRESH / 新会话）：CLI 列表 value=default 的 displayName 优先（/model default 复位仍显示
+//   "Default (recommended)"）；否则用 scout 探得的 cwd 默认名，且必须经 resolveGatewayModelName
+//   解析——cwdDefaultModel 常是档位别名（opus），不解析就只显示裸别名（本次修的 bug）。
+// · 全空回落「默认」。
+export function resolveModelPillText({ model, gatewaySuffix = '', modelsList, cwdDefaultModel, cliDefaultLabel } = {}) {
+  const sfx = gatewaySuffix || '';
+  if (model) {
+    const raw = String(model) + sfx;
+    return resolveGatewayModelName(raw, modelsList) || raw;
+  }
+  if (cliDefaultLabel) return String(cliDefaultLabel);
+  if (cwdDefaultModel) {
+    const full = String(cwdDefaultModel);
+    const naked = full.replace(/\[[^\]]+\]$/, '');
+    // 先桥接裸名（cwdDefault 常是 opus[1m]，候选项 value 是 opus），再试完整值；都无则显裸名。
+    return resolveGatewayModelName(naked, modelsList)
+      || resolveGatewayModelName(full, modelsList)
+      || naked;
+  }
+  return '默认';
+}
+
 // effort 档位决策（rebuildEffortOptions 的纯部分；DOM 渲染留在 app.js）。返回 { hidden, levels }：
 //   · 解析到模型且支持 effort → { hidden:false, levels: 该模型 supportedEffortLevels }
 //   · 解析到但不支持（如 haiku）   → { hidden:true,  levels: [] }（app.js 隐藏整行）
@@ -1318,6 +1342,20 @@ export function writeAlertPref(setItem, key, enabled) {
   return true;
 }
 
+// ⑧ 推送内容预览开关——与上面 ALERT_PREF_KEYS 反极性：默认关，仅显式存 '1' 为开。web-push 通道本身
+// 已是 RFC 8291 端到端加密（push service/FCM 读不到明文），但仍是"锁屏可见明文"的泄露面，默认最小化、
+// 要更详细的通知内容需机主本人主动选择（订阅时随 prefs.preview 一并 POST，见 app/notifications.js）。
+export const PUSH_PREVIEW_PREF_KEY = 'ccm_push_preview';
+export function readPushPreviewPref(getItem) {
+  const g = typeof getItem === 'function' ? getItem : () => null;
+  return g(PUSH_PREVIEW_PREF_KEY) === '1';
+}
+export function writePushPreviewPref(setItem, enabled) {
+  if (typeof setItem !== 'function') return false;
+  setItem(PUSH_PREVIEW_PREF_KEY, enabled ? '1' : '0');
+  return true;
+}
+
 // 统一判定：会话待处理 + 服务异常 → ok | attention | alert（顶栏 connDot 边框 / 注意力信号）。
 // priority: alert > attention > ok。抽屉不再复述计数；状态落在需要你卡、工作区树角标、主聊天面。
 export function whatNeedsAttention({ instances, needsYou, service } = {}) {
@@ -1615,17 +1653,31 @@ export function isToolSummaryTruncated(summary, { truncated } = {}) {
 // 只读镜像锁横幅文案（三态：armed / stale / driving）。
 // 与后端 lifecycle 文案对齐：只读 ≠ 会话结束；stale = 疑似中断（可续接），不是「已结束」。
 // 主操作在发送钮位「续接 CLI 会话」；自动解锁仍由服务端 ~12.5s 静默负责，不写假精密倒计时。
-export function formatMirrorBannerText({ armed = false, stale = false } = {}) {
-  if (armed) return '只读镜像：已请求续接，等待终端当前操作完成…';
-  if (stale) return '只读镜像：终端疑似中断（超 5 分钟无活动）——确认已停可续接';
+// autonomous：server 端 classifyTranscriptTail 能确定这是本会话自己被 ScheduleWakeup/CronCreate 定时
+// 唤起（尾窗内查到 harness 注入的 marker），而非真不知道来源的「大概率终端」——2026-07-24 真机复现过
+// 100% web 发起的会话被自主循环唤起时误显「终端会话运行中」；两者磁盘形态相同、锁本身都该维持，
+// 只是这里换更准确的措辞。查不到 marker（老调用方不传/确实是未知来源）时保持原「终端」文案不变。
+export function formatMirrorBannerText({ armed = false, stale = false, autonomous = false } = {}) {
+  if (armed) return autonomous
+    ? '只读镜像：已请求续接，等待自主循环当前操作完成…'
+    : '只读镜像：已请求续接，等待终端当前操作完成…';
+  if (stale) return autonomous
+    ? '只读镜像：自主循环疑似中断（超 5 分钟无活动）——确认已停可续接'
+    : '只读镜像：终端疑似中断（超 5 分钟无活动）——确认已停可续接';
+  if (autonomous) return '只读镜像：本会话自主循环执行中，移动端当前只读';
   return '只读镜像：终端会话运行中，移动端当前只读';
 }
 
 // 驾驶中点输入区/附件时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
 // 主操作指向发送钮位「续接」。单行 · 分隔：addBar 用 textContent，无 pre-wrap。
-export function formatMirrorComposerHint({ armed = false, stale = false } = {}) {
-  if (armed) return '只读镜像：已请求续接——等终端当前操作完成后自动可写。可点「取消续接」撤销。';
-  if (stale) return '只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。';
+export function formatMirrorComposerHint({ armed = false, stale = false, autonomous = false } = {}) {
+  if (armed) return autonomous
+    ? '只读镜像：已请求续接——等自主循环当前操作完成后自动可写。可点「取消续接」撤销。'
+    : '只读镜像：已请求续接——等终端当前操作完成后自动可写。可点「取消续接」撤销。';
+  if (stale) return autonomous
+    ? '只读镜像：自主循环疑似中断。确认已停后点「续接」即可在手机继续（会话历史仍在）。'
+    : '只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。';
+  if (autonomous) return '只读镜像：本会话自主循环执行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等自主循环静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；有分叉风险）';
   return '只读镜像：终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）';
 }
 
@@ -1681,6 +1733,15 @@ export function shouldResetMirrorOnViewChange({
 export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   const id = typeof taskId === 'string' ? taskId.trim() : '';
   return { canStop: Boolean(id) && bannerVisible !== false, taskId: id || null };
+}
+
+// 后台任务列表是否折叠：单任务恒展开（不挡内容，也不改变既有单任务体验）；
+// 多任务默认收起（避免堆满屏挡聊天内容），用户手动展开/收起后遵从用户选择，直至横幅整体撤下重置。
+export function bgTaskListCollapsed({ count = 0, userExpanded = null } = {}) {
+  if (count <= 1) return false;
+  if (userExpanded === true) return false;
+  if (userExpanded === false) return true;
+  return true;
 }
 
 // CLI 式 spinner 动词表：逐字提取自本机 claude CLI bundle（2.1.211）的本地词表，保终端等价性。
@@ -1912,4 +1973,80 @@ export function formatLogsForCopy(entries) {
 // 交界处（前条 restored、当前非 restored）画一次「—— 本次会话 ——」。全本次或全恢复都不画。
 export function isRestoredBoundary(prevEntry, entry) {
   return !!prevEntry?.restored && !entry?.restored;
+}
+
+// 长按历史气泡「从这里分叉」该发哪条消息的 uuid 给 forkSession（upToMessageId）：
+// assistant 气泡 = 分叉点就是它自己；user 气泡故意不用自身 uuid，而是取它前面最近一条 assistant 的
+// uuid——语义是「从这里开始重新问」（新会话里下一步就是重新打字），而非把这条提问原样复制进新会话末尾。
+// DOM 侧负责找 precedingAssistantUuid（沿 previousElementSibling 回溯），本函数只做决策、不碰 DOM。
+export function resolveForkAnchorUuid({ role, ownUuid = null, precedingAssistantUuid = null } = {}) {
+  if (role === 'assistant') return ownUuid || null;
+  return precedingAssistantUuid || null;
+}
+
+// composer「@ 文件引用」触发检测：光标前文本是否形如「(行首或空白)@query」，query 允许路径字符
+// （字母数字下划线点斜杠短横线，不含空格——一旦打出空格视为已放弃/确认引用，交由下一次 @ 重新触发）。
+// 要求 @ 前是行首或空白（非单词字符），天然不误触 user@host 这类词中 @。传入「光标前」文本（非全文），
+// 故多个 @ 只会命中离光标最近、仍处于「输入中」的那个。
+const AT_MENTION_PATTERN = /(?:^|\s)@([\w./-]*)$/;
+export function detectAtMentionQuery(textBeforeCursor) {
+  const text = typeof textBeforeCursor === 'string' ? textBeforeCursor : '';
+  const m = AT_MENTION_PATTERN.exec(text);
+  if (!m) return null;
+  return { query: m[1], matchStart: m.index + m[0].indexOf('@') };
+}
+
+// 选中候选后重写输入框文本：把 [matchStart, cursorPos) 换成「相对路径 」，光标落在插入内容之后。
+// 尾部若已跟空白（用户在已有文字中间插入引用）则不重复补空格，避免连续两个空格。
+export function applyAtMentionPick(fullText, { matchStart, cursorPos, path } = {}) {
+  const text = typeof fullText === 'string' ? fullText : '';
+  const start = Number(matchStart) || 0;
+  const cursor = Number(cursorPos) || 0;
+  const before = text.slice(0, start);
+  const after = text.slice(cursor);
+  const inserted = /^\s/.test(after) ? String(path) : `${path} `;
+  return { text: before + inserted + after, cursorPos: (before + inserted).length };
+}
+
+// Edit/MultiEdit 工具卡「预览变更」超过这么多行就不值得算 LCS——old/new_string 本是 Claude 挑的
+// 紧凑定位锚点，正常几行到几十行；真撞到这个量级多半是异常输入，调用方应退回整块红/绿块渲染。
+export const MAX_DIFF_LINES_FOR_LCS = 500;
+
+// 行级 unified diff（经典 LCS 动态规划）：把 old_string/new_string 拆成逐行 "  同" / "- 删" / "+ 增"
+// 前缀字符串数组，交给 git-changes.js renderPatchLines 复用着色（它认 +/-/@@ 行首前缀）。片段小
+// （见上）：O(n·m) 无压力，不做 @@ 折叠——Edit 的 old/new 本就局部，摊开比猜"哪段能折叠"更可靠。
+export function unifiedDiffLines(oldStr, newStr) {
+  const oldS = String(oldStr ?? ''), newS = String(newStr ?? '');
+  // 纯新增/纯删除单独短路：''.split('\n') 恒产出 [''] 一个"空行"，若落进下方通用 LCS 会多算出一条
+  // 无对应内容的 - / + 行（渲染层显示成一条空白红/绿条）。只在恰好一侧整体为空串时短路——两侧都空
+  // （degenerate 场景）、或只是尾部多个换行符（如 'a\nb' → 'a\nb\n'，newLines 是 ['a','b','']，
+  // 长度>1 非整体空串）不受影响，仍走通用路径，那些情况的空行是真实变更、该显示。
+  if (oldS === '' && newS !== '') return newS.split('\n').map(l => `+ ${l}`);
+  if (newS === '' && oldS !== '') return oldS.split('\n').map(l => `- ${l}`);
+  const oldLines = oldS.split('\n');
+  const newLines = newS.split('\n');
+  const n = oldLines.length, m = newLines.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = oldLines[i] === newLines[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (oldLines[i] === newLines[j]) {
+      out.push(`  ${oldLines[i]}`);
+      i++; j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push(`- ${oldLines[i]}`);
+      i++;
+    } else {
+      out.push(`+ ${newLines[j]}`);
+      j++;
+    }
+  }
+  while (i < n) { out.push(`- ${oldLines[i]}`); i++; }
+  while (j < m) { out.push(`+ ${newLines[j]}`); j++; }
+  return out;
 }

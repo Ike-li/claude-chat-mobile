@@ -16,7 +16,7 @@ import { createRequire } from 'node:module';
 import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
-import { deleteSession as sdkDeleteSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
+import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
@@ -42,8 +42,9 @@ import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from '..
 import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { listDir, readFile as browseReadFile } from '../files/file-browse.js';
+import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
+import { searchFiles } from '../files/file-search.js';
 import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
   resolveInstanceTarget,
@@ -815,6 +816,11 @@ let mirrorReadonly = false;                         // 当前查看会话是否�
 // （viewing/catchup/mirror 全改 per-(sessionId,connId) + readonly_changed 定向下发）是改动面很广的大改，触发
 // 面窄（仅"同一人多设备同看不同会话"并发），n=1 单用户下不值，保留现状。别再因"AD-5 是改进方向"重启这个大改。
 let mirrorStale = false;                            // stale=疑似终端中断（锁着+尾部 pending+超 MIRROR_STALE_PENDING_MS 零写入），前端换「可接管」文案
+// autonomous=锁是否可确定是本会话自己被 ScheduleWakeup/CronCreate 定时唤起（尾窗内查到 harness 注入
+// 的 "# Autonomous loop check" marker，见 history.js#hasAutonomousLoopMarker），而非真不知道来源的
+// 「大概率终端」——前端据此挑更准确的横幅文案，不改变是否上锁（2026-07-24 真机复现：web-only 会话被
+// 自主循环唤起时尾部形态和终端接管完全同构，横幅误说「终端会话运行中」）。
+let mirrorAutonomous = false;
 let mirrorObservedCli = { model: null, permissionMode: null, effort: null };
 let mirrorSessionId = null, mirrorInstanceId = null; // 锁/观察态的归属；切视图空窗不得把 A 的全局锁套到 B
 function normalizeMirrorObserved(observed, readonly) {
@@ -860,7 +866,7 @@ function mirrorRemainingMs({ readonly = mirrorReadonly, quietTicks = Number(mirr
   const need = mirrorReleaseTicksNeeded(readonly);
   return Math.max(0, (need - quietTicks) * interval);
 }
-function setMirror(readonly, sessionId, force = false, stale = false, observedCli = mirrorObservedCli, forInstanceId = viewingInstanceId, reason = null) {
+function setMirror(readonly, sessionId, force = false, stale = false, observedCli = mirrorObservedCli, forInstanceId = viewingInstanceId, reason = null, autonomous = mirrorAutonomous) {
   // forInstanceId = 调用方冻结的 viewing 快照（catchUpTick 入口 id）。切视图后旧 tick 不得改全局锁——
   // 否则 A 的解锁会误解锁 B，A 的上锁会以「当下 viewing」重贴到 B（跨工作区误锁根因）。
   // force 仅给 clearMirrorOnViewChange / 接管后显式解锁：允许在 viewing 已变时推权威态。
@@ -868,6 +874,7 @@ function setMirror(readonly, sessionId, force = false, stale = false, observedCl
   const nextObserved = normalizeMirrorObserved(observedCli, readonly);
   const nextSessionId = readonly ? (sessionId ?? null) : null;
   const nextInstanceId = readonly ? forInstanceId : null;
+  const nextAutonomous = readonly ? Boolean(autonomous) : false; // 解锁态下这个字段没有意义，归零同 sessionId/instanceId
   const quietTicks = Number(mirrorRelease?.quietTicks) || 0;
   // 用【目标】readonly 算 remaining，勿读旧 mirrorReadonly（上锁瞬间旧值仍是 false 会算成 0）
   const remainingMs = mirrorRemainingMs({ readonly, quietTicks });
@@ -875,16 +882,17 @@ function setMirror(readonly, sessionId, force = false, stale = false, observedCl
   if (!force && readonly === mirrorReadonly && stale === mirrorStale
       && nextSessionId === mirrorSessionId && nextInstanceId === mirrorInstanceId
       && sameMirrorObserved(nextObserved, mirrorObservedCli)
+      && nextAutonomous === mirrorAutonomous
       && remainingMs === (mirrorLastEmittedRemainingMs ?? -1)) return;
   // 诊断时间线：只在真正要广播状态变化时才记（上面的早退已过滤掉稳态轮询噪音）。
   // key 优先用目标 sessionId，解锁广播（sessionId=null）时退回当前实例的 sessionId，仍找不到就诚实丢弃。
   const diagSessionKey = nextSessionId || sessionId || agents.get(forInstanceId)?.sessionId || null;
   if (diagSessionKey) {
-    diagLog.record(diagSessionKey, 'mirror', 'state_change', { reason, readonly, prevReadonly: mirrorReadonly, stale });
+    diagLog.record(diagSessionKey, 'mirror', 'state_change', { reason, readonly, prevReadonly: mirrorReadonly, stale, autonomous: nextAutonomous });
   }
   // observedCli 也参与变化判定：CLI 在同一只读轮次里 /model 或 /permissions 后，readonly/stale 不变，
   // 仍必须推一条 mirror_state；否则 Web 会永远停在旧模型/模式。
-  mirrorReadonly = readonly; mirrorStale = stale; mirrorObservedCli = nextObserved;
+  mirrorReadonly = readonly; mirrorStale = stale; mirrorObservedCli = nextObserved; mirrorAutonomous = nextAutonomous;
   mirrorSessionId = nextSessionId; mirrorInstanceId = nextInstanceId;
   mirrorLastEmittedRemainingMs = remainingMs;
   io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
@@ -892,7 +900,7 @@ function setMirror(readonly, sessionId, force = false, stale = false, observedCl
     instanceId: readonly ? forInstanceId : viewingInstanceId,
     cwd: viewingCwdOf(), // SRV-NEW-006
     ts: Date.now(), type: 'mirror_state',
-    payload: { readonly, stale, observedCli: nextObserved, quietTicks, remainingMs },
+    payload: { readonly, stale, observedCli: nextObserved, quietTicks, remainingMs, autonomous: nextAutonomous },
   });
   scheduleStatusRefresh(); // 驾驶方或 CLI 观察态变化时立即切换/刷新 statusline 来源
   rescheduleCatchUp(); // 锁态变 → 追平间隔在 1s/2.5s 间切换
@@ -981,11 +989,11 @@ async function catchUpTickOnce() {
     });
     mirrorRelease = { readonly: entryLock, quietTicks: 0 };
     diagLog.record(a.sessionId, 'mirror', 'entry_lock_decision', describeMirrorEntryLock({
-      tailVerdict: tail.verdict, localBusy, lastChainTs: tail.lastChainTs, now: Date.now(), locked: entryLock,
+      tailVerdict: tail.verdict, localBusy, lastChainTs: tail.lastChainTs, now: Date.now(), locked: entryLock, autonomous: tail.autonomous,
     }));
     setMirror(entryLock, a.sessionId, true,              // force 清上个会话残留的锁/发权威态
       mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now() }),
-      observedCli, id, 'entry_lock');
+      observedCli, id, 'entry_lock', tail.autonomous);
     return;
   }
   if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
@@ -1061,7 +1069,7 @@ async function catchUpTickOnce() {
   mirrorRelease = rel.state;
   setMirror(rel.readonly, a.sessionId, false,                       // 锁/stale/CLI 观察值任一变化都广播
     mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now() }),
-    observedCli, id, 'normal_tick');
+    observedCli, id, 'normal_tick', tail.autonomous);
 }
 let catchUpInFlight = null;
 function catchUpTick() {
@@ -1473,7 +1481,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
           }
         }
         if (pn) {
-          pushNotify(pn.title, pn.body, pn.data);                              // Web Push（带 data 供 SW 深链）
+          // ⑧ previewBody 只喂 pushNotify（按订阅 prefs.preview 挑）；ntfy 恒收 body 最小化文案——
+          // 第三方明文通道，不因用户开了预览开关就把正文送去 ntfy（SEC-04 红线不因这个开关松动）。
+          pushNotify(pn.title, pn.body, pn.data, pn.previewBody);              // Web Push（带 data 供 SW 深链）
           ntfyNotify(pn.title, pn.body, ntfyMetaFor(envelope.type, pn.data, notify.publicUrl)); // ntfy（click 深链，绕移动端限制）
         }
         broadcastInstances();
@@ -1780,7 +1790,7 @@ registerSocketConnection(io, socket => {
       payload: {
         readonly: mirrorReadonly,
         stale: mirrorReadonly && mirrorStale,
-        ...(mirrorReadonly ? { observedCli: mirrorObservedCli } : {}),
+        ...(mirrorReadonly ? { observedCli: mirrorObservedCli, autonomous: mirrorAutonomous } : {}),
       }
     });
     // 可信端连入时重放当前待审批设备列表，使其可立即在 Web UI 远程审批
@@ -2297,6 +2307,40 @@ registerSocketConnection(io, socket => {
     if (typeof ack === 'function') ack({ ok: true, instanceId: inst.instanceId, sessionId });
   });
 
+  // 从历史消息某点分叉新会话：官方 forkSession 复制 transcript 到新文件（重映射 uuid、保留 parentUuid
+  // 链），upToMessageId 截到该消息为止（inclusive）；之后走与 session:switch 相同的「打开/聚焦」收尾。
+  // 源会话本身不受影响（只读复制），故不需要 session:switch 那样的 liveInstance/resumeInFlight 并发守卫。
+  on(socket, 'session:fork', async (payload, ack) => {
+    const sessionId = payload?.sessionId;
+    const uuid = payload?.uuid;
+    const routed = routeCwd(payload?.cwd);
+    const cwd = knownWorktrees.has(routed) ? routed : ensureWhitelisted(routed, workDirs);
+    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
+      if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
+      return;
+    }
+    if (typeof uuid !== 'string' || !uuid) {
+      if (typeof ack === 'function') ack({ ok: false, error: '缺少分叉锚点' });
+      return;
+    }
+    const { sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: uuid });
+    sessions.bumpGeneration(cwd);
+    const inst = await dedupedResume(cwd, newId);
+    viewingInstanceId = inst.instanceId;
+    viewingCwd = cwd;
+    sessions.setCurrent(cwd, newId);
+    inst.touchActivity?.();
+    clearMirrorOnViewChange();
+    doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);
+    captureUnreadSnapshot(inst.instanceId);
+    broadcastInstances();
+    pushModelsForCwd(cwd);
+    pushSlashCommandsForCwd(cwd);
+    lastStatusLine = null;
+    scheduleStatusRefresh();
+    if (typeof ack === 'function') ack({ ok: true, instanceId: inst.instanceId, sessionId: newId });
+  });
+
   // 台阶3 新增：关闭 tab。dispose 该实例（杀进程、deny 挂起审批、释放配额）；会话留盘可经 session:switch 再开。
   on(socket, 'session:close', (payload, ack) => {
     const id = payload?.instanceId;
@@ -2417,6 +2461,9 @@ registerSocketConnection(io, socket => {
     ack({ ok: true });
   });
 
+  // 保守部署一键回只读：.env FILE_EDIT=off 即不传 writeFileInScope，files:write 走 unavailable
+  // （同 statusOff/statusBridgeOff 的「=== 'off'」既有开关惯例，默认启用）。
+  const fileEditOff = process.env.FILE_EDIT === 'off';
   registerFileSocketHandlers({
     socket,
     on,
@@ -2426,6 +2473,8 @@ registerSocketConnection(io, socket => {
     browseReadFile,
     listGitChanges,
     readGitDiff,
+    searchFiles,
+    writeFileInScope: fileEditOff ? undefined : writeFileInScope,
     audit,
     actorFromSocket,
     routeInstance,

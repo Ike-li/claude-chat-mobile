@@ -33,11 +33,11 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 1 |
-| Backend source | 47 |
+| Backend source | 48 |
 | Configuration template | 1 |
 | Deployment | 3 |
 | Documentation | 4 |
-| E2E test | 35 |
+| E2E test | 37 |
 | Frontend asset | 2 |
 | Frontend source | 22 |
 | Generated asset | 6 |
@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 95 |
-| Vendored asset | 10 |
+| Unit test | 98 |
+| Vendored asset | 21 |
 
-Total classified files: **293**.
+Total classified files: **310**.
 
 ## Complete file inventory
 
@@ -108,6 +108,17 @@ Total classified files: **293**.
 | `public/js/sw.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/tw-config.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/manifest.webmanifest` | Frontend asset | PWA shell or web asset | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/codemirror.min.css` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/codemirror.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/mode-css.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/mode-htmlmixed.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/mode-javascript.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/mode-jsx.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/mode-markdown.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/mode-python.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/mode-shell.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/mode-xml.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/vendor/codemirror/mode-yaml.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/github-dark.min.css` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/github-light.min.css` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/highlight.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -157,6 +168,7 @@ Total classified files: **293**.
 | `src/auth/rate-limiter.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/files/file-browse.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/files/file-preview.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/files/file-search.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/files/file-security.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/files/git-workspace.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/files/uploads.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -194,6 +206,7 @@ Total classified files: **293**.
 | `tests/e2e/mock/server.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/mock/transport.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/ask-user-question.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/at-mention.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/attachments-ui.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/busy-session-switch-back.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/cold-start-hydration.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
@@ -205,6 +218,7 @@ Total classified files: **293**.
 | `tests/e2e/p0/file-browser.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/git-changes.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/goto-mock-error-accumulation.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/history-fork.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/input-send-empty.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/long-history-render.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/long-stream-interrupt.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
@@ -295,6 +309,7 @@ Total classified files: **293**.
 | `tests/unit/doctor-runtime.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/file-browse.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/file-preview.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/file-search.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/file-security.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/fingerprint.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/frontend-app-modules.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
@@ -311,9 +326,11 @@ Total classified files: **293**.
 | `tests/unit/log-time.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-client-error.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-client-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-composer-mention.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-composer-primary.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-content.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-diag-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-history-fork.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-live-status.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-mirror-sync.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-rendering.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

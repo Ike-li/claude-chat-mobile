@@ -9,6 +9,8 @@
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
+![Claude Chat Mobile — 终端里的 claude，手机上也能用](docs/assets/hero-zh.jpg)
+
 **Claude Code 在跑，人却不总在电脑前。** 你让 claude 改代码，然后去开会——它需要权限时，手机收到推送；点进 App 看清命令、允许或拒绝。回家坐到电脑前，终端 `/resume` 接上手机上那个会话继续——同一个 agent、同一份记录，不是另开一个。
 
 这个项目给已经在终端使用 `claude` CLI 的人用。它不打包 Claude，也不是 Claude 的重新实现；它通过 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 驱动你本机已登录的 CLI。手机端拿到的是同一个 agent、同一份 `CLAUDE.md`、同样的 MCP 服务器、技能、hooks 和会话记录。
@@ -120,6 +122,7 @@ node scripts/device.js approve <ID>   # 批准后该设备立即解锁
    node scripts/device.js approve <ID>
    ```
    吊销用 `deny <ID>`。本机 loopback 连接与已通过 Cloudflare Access JWT 的公网连接会跳过这一步。
+5. **文件编辑器直写，不经审批链。** 项目文件浏览器里的「编辑」是你本人在手机上的显式操作，语义等同 `ssh` 进机器后用编辑器改文件——**不**经过 Claude 的 `canUseTool` 审批（那条链路管的是 agent 的自主行为，不是你自己点按钮）。仍有的防线：只能改**已存在**的文件（不会新建/删除）、大小上限 256KB、写前用内容哈希核对磁盘现状（与 Claude 并发改了同一文件会拒并提示冲突，不静默覆盖）、每次写回落审计日志。不想要这个能力就设 `FILE_EDIT=off`，整体退回只读浏览（前几版行为）。
 
 ## 成本提示
 
@@ -140,10 +143,10 @@ node scripts/device.js approve <ID>   # 批准后该设备立即解锁
 - **多 repo 与多会话**：白名单工作目录切换；首页枢纽 / 抽屉并发看多个会话；git worktree 会话可发现并续接。
 - **消息排队可见 + 撤回**（对齐 CLI Queued/ESC）；发送钮双态停止；CLI 式动态状态行与回合收尾行。
 - **子 agent / 后台任务可见**，可停止后台任务；Task 清单工具流内渲染。
-- **文件与图片上传**（含剪贴板粘贴与发送前预览），带路径注入与穿越防护；历史附件可点预览；**项目文件只读浏览**（不越白名单工作目录）。
+- **文件与图片上传**（含剪贴板粘贴与发送前预览），带路径注入与穿越防护；历史附件可点预览；**项目文件浏览**（不越白名单工作目录，语法高亮）；小文件（≤256KB）可**直接在 CodeMirror 里编辑保存**——写前哈希比对防覆盖并发改动，`FILE_EDIT=off` 可整体关闭回到只读，见下方安全模型第 5 条；**composer `@` 文件引用**：候选来自授权目录内枚举，不接受任意路径拼接。
 - **工具卡片预览变更**：Edit / Write 看 diff、Read 看片段；base64 脱敏与 JSON 高亮。
 - **思考强度控制**、**单一来源状态栏**（Web 驾驶取 SDK；可选 bridge 让 CLI 驾驶取 CLI 快照），以及作为原生选择器的 **`AskUserQuestion`**。
-- **Web Push / ntfy 通知**：推送审批、提问与结果的**类型级**提示（不含命令/问题正文），点通知深链回会话（iOS 16.4+ 需先添加到主屏幕；可选配 ntfy 走自托管、锁屏更可靠）；socket 在线时结果类通知不重复推。
+- **Web Push / ntfy 通知**：推送审批、提问与结果的**类型级**提示（不含命令/问题正文），点通知深链回会话（iOS 16.4+ 需先添加到主屏幕；可选配 ntfy 走自托管、锁屏更可靠）；socket 在线时结果类通知不重复推。Web Push 通道设置里可选**开启内容预览**（默认关；payload 本身已 RFC 8291 端到端加密，开启后带问题/工具/任务摘要），ntfy 不受此开关影响、恒最小化。
 - **会话两级删除**（产品移除 / SDK 真删底层文件）；「等我」跨会话聚合。
 - **PWA 可安装**：maskable 图标 + 独立显示，"添加到主屏幕"当 app 用。
 - **运维与安全加固**：日志脱敏、`0600` 原子写、`doctor` 启动自检、**UI 一键安全体检（脱敏，审查危险白名单）**、鉴权限速、可选 Cloudflare Access 2FA、`/metrics` 与服务状态面板。

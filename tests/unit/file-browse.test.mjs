@@ -4,10 +4,13 @@
 // 故本文件不测"过滤"，只测"范围门挡越界 + 弱网上限正确"。真实临时目录测试，同 workdir-scope-guard 惯例。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, realpathSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync, realpathSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { listDir, readFile, MAX_BROWSE_ENTRIES, MAX_BROWSE_BYTES } from '../../src/files/file-browse.js';
+import { createHash } from 'node:crypto';
+import { listDir, readFile, writeFileInScope, MAX_BROWSE_ENTRIES, MAX_BROWSE_BYTES } from '../../src/files/file-browse.js';
+
+const sha256 = s => createHash('sha256').update(s).digest('hex');
 
 test.describe('listDir', () => {
   const base = mkdtempSync(join(tmpdir(), 'ccm-browse-'));
@@ -201,6 +204,150 @@ test.describe('readFile', () => {
     const res = readFile(cwd, 'tail.txt', scopeDirs, { maxBytes: total }); // 一次读满，本身就是最后一片
     assert.equal(res.truncated, false);
     assert.equal(res.content, content);
+  });
+});
+
+test.describe('readFile：contentHash（编辑器可编辑判定 + writeFileInScope 的 baseHash 来源）', () => {
+  const base = mkdtempSync(join(tmpdir(), 'ccm-browse-hash-'));
+  test.after(() => rmSync(base, { recursive: true, force: true }));
+  const cwd = join(base, 'project');
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(cwd, 'small.txt'), 'hello world');
+  writeFileSync(join(cwd, 'binary.dat'), Buffer.from([0x41, 0x42, 0x00, 0x43]));
+  const bigContent = Array.from({ length: 1000 }, (_, i) => String(i).padStart(4, '0')).join('');
+  writeFileSync(join(cwd, 'big.txt'), bigContent);
+  const scopeDirs = [realpathSync(cwd)];
+
+  test('一次性读全（offset=0 未截断）→ 带 contentHash，等于内容的 sha256', () => {
+    const res = readFile(cwd, 'small.txt', scopeDirs);
+    assert.equal(res.contentHash, sha256('hello world'));
+  });
+
+  test('分页读取（截断）→ 不带 contentHash（半份内容不构成有效编辑基线）', () => {
+    const res = readFile(cwd, 'big.txt', scopeDirs, { maxBytes: 1000 });
+    assert.equal(res.truncated, true);
+    assert.equal(res.contentHash, undefined);
+  });
+
+  test('续读的非首页（offset>0）即便这片没截断也不带 contentHash', () => {
+    const res = readFile(cwd, 'big.txt', scopeDirs, { offset: 3000, maxBytes: 1000 });
+    assert.equal(res.truncated, false);
+    assert.equal(res.contentHash, undefined);
+  });
+
+  test('二进制文件不带 contentHash', () => {
+    const res = readFile(cwd, 'binary.dat', scopeDirs);
+    assert.equal(res.contentHash, undefined);
+  });
+
+  test('非法 UTF-8 但无 NUL 字节（如 Latin-1 编码文本）→ binary=false 仍可预览，但不带 contentHash（不可编辑，防写回时 toString/Buffer.from 往返静默腐化原字节）', () => {
+    // 0xE9 单字节在 Latin-1 是 'é'，作为 UTF-8 是非法续接字节起始——toString('utf8') 会静默变 U+FFFD。
+    writeFileSync(join(cwd, 'latin1.txt'), Buffer.from([0x68, 0x69, 0xE9, 0x0A])); // "hi" + é + \n
+    const res = readFile(cwd, 'latin1.txt', scopeDirs);
+    assert.equal(res.binary, false); // 无 NUL 字节，仍走文本预览路径
+    assert.equal(res.contentHash, undefined); // 但不给编辑基线——写回会用损坏后的字符串覆盖原字节
+  });
+});
+
+test.describe('writeFileInScope', () => {
+  const base = mkdtempSync(join(tmpdir(), 'ccm-browse-write-'));
+  test.after(() => rmSync(base, { recursive: true, force: true }));
+  const cwd = join(base, 'project');
+  const outside = join(base, 'outside');
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(outside, { recursive: true });
+  symlinkSync(outside, join(cwd, 'link-out'));
+  const scopeDirs = [realpathSync(cwd)];
+
+  test('baseHash 匹配磁盘现状 → 写入成功，磁盘内容更新，返回新 contentHash', () => {
+    writeFileSync(join(cwd, 'edit-ok.txt'), 'old content');
+    const res = writeFileInScope(cwd, 'edit-ok.txt', 'new content', scopeDirs, { baseHash: sha256('old content') });
+    assert.equal(res.ok, true);
+    assert.equal(res.contentHash, sha256('new content'));
+    assert.equal(readFileSync(join(cwd, 'edit-ok.txt'), 'utf8'), 'new content');
+  });
+
+  test('baseHash 与磁盘现状不符（已被其它进程改过）→ conflict，磁盘内容不变', () => {
+    writeFileSync(join(cwd, 'edit-conflict.txt'), 'v1');
+    const staleHash = sha256('v1');
+    writeFileSync(join(cwd, 'edit-conflict.txt'), 'v2 (changed by someone else)'); // 模拟并发外部写入
+    const res = writeFileInScope(cwd, 'edit-conflict.txt', 'my edit', scopeDirs, { baseHash: staleHash });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'conflict');
+    assert.equal(readFileSync(join(cwd, 'edit-conflict.txt'), 'utf8'), 'v2 (changed by someone else)');
+  });
+
+  test('缺 baseHash → bad_base_hash，不写', () => {
+    writeFileSync(join(cwd, 'edit-nohash.txt'), 'orig');
+    const res = writeFileInScope(cwd, 'edit-nohash.txt', 'x', scopeDirs, {});
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'bad_base_hash');
+    assert.equal(readFileSync(join(cwd, 'edit-nohash.txt'), 'utf8'), 'orig');
+  });
+
+  test('content 非字符串 → bad_content，不写', () => {
+    writeFileSync(join(cwd, 'edit-badcontent.txt'), 'orig');
+    const res = writeFileInScope(cwd, 'edit-badcontent.txt', 123, scopeDirs, { baseHash: sha256('orig') });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'bad_content');
+    assert.equal(readFileSync(join(cwd, 'edit-badcontent.txt'), 'utf8'), 'orig');
+  });
+
+  test('内容超过 MAX_BROWSE_BYTES → too_large，不写', () => {
+    writeFileSync(join(cwd, 'edit-toolarge.txt'), 'orig');
+    const huge = 'x'.repeat(MAX_BROWSE_BYTES + 1);
+    const res = writeFileInScope(cwd, 'edit-toolarge.txt', huge, scopeDirs, { baseHash: sha256('orig') });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'too_large');
+    assert.equal(readFileSync(join(cwd, 'edit-toolarge.txt'), 'utf8'), 'orig');
+  });
+
+  test('越界路径 + 超大内容同时命中 → 判 scope 而非 too_large（审计日志要能认出这是越界尝试，不能被超限吞掉分类）', () => {
+    const huge = 'x'.repeat(MAX_BROWSE_BYTES + 1);
+    const res = writeFileInScope(cwd, '../outside/does-not-exist.txt', huge, scopeDirs, { baseHash: sha256('') });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'scope');
+  });
+
+  test('目标文件从未存在 → scope 拒绝（resolveInScope 对不存在路径的既有 fail-closed 行为，同 readFile/listDir），不新建', () => {
+    const target = join(cwd, 'does-not-exist.txt');
+    const res = writeFileInScope(cwd, 'does-not-exist.txt', 'x', scopeDirs, { baseHash: sha256('') });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'scope');
+    assert.equal(existsSync(target), false);
+  });
+
+  test('目标是目录 → not_file，不写', () => {
+    mkdirSync(join(cwd, 'a-dir'));
+    const res = writeFileInScope(cwd, 'a-dir', 'x', scopeDirs, { baseHash: sha256('') });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'not_file');
+  });
+
+  test('越界路径（symlink 指向范围外）→ scope 拒绝，不写', () => {
+    writeFileSync(join(outside, 'secret.txt'), 'sensitive');
+    const res = writeFileInScope(cwd, 'link-out/secret.txt', 'pwned', scopeDirs, { baseHash: sha256('sensitive') });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'scope');
+    assert.equal(readFileSync(join(outside, 'secret.txt'), 'utf8'), 'sensitive');
+  });
+
+  test('relPath 用 ../ 逃逸范围 → scope 拒绝', () => {
+    writeFileSync(join(outside, 'escape.txt'), 'orig');
+    const res = writeFileInScope(cwd, '../outside/escape.txt', 'pwned', scopeDirs, { baseHash: sha256('orig') });
+    assert.equal(res.ok, false);
+    assert.equal(res.code, 'scope');
+  });
+
+  test('写回后再读一次拿到的 contentHash 与写回响应的 contentHash 一致（可连续编辑）', () => {
+    writeFileSync(join(cwd, 'edit-chain.txt'), 'v1');
+    const w1 = writeFileInScope(cwd, 'edit-chain.txt', 'v2', scopeDirs, { baseHash: sha256('v1') });
+    assert.equal(w1.ok, true);
+    const r = readFile(cwd, 'edit-chain.txt', scopeDirs);
+    assert.equal(r.contentHash, w1.contentHash);
+    const w2 = writeFileInScope(cwd, 'edit-chain.txt', 'v3', scopeDirs, { baseHash: r.contentHash });
+    assert.equal(w2.ok, true);
+    assert.equal(readFileSync(join(cwd, 'edit-chain.txt'), 'utf8'), 'v3');
   });
 });
 

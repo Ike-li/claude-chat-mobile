@@ -120,12 +120,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:workflow-subagents');
-    // mock 推 2 条 task_progress → 标题「2 个运行中」+ 两行明细
+    // mock 推 2 条 task_progress → 标题「2 个运行中」+ 两行明细；多任务默认折叠列表，点折叠按钮展开。
     await expect(page.locator('#taskProgressBanner')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('#taskProgressText')).toContainText('2 个运行中');
     await expect(page.locator('#taskProgressText')).not.toContainText('后台任务 后台任务');
-    await expect(page.locator('[data-testid="bg-task-list"]')).toBeVisible();
+    const taskToggle = page.locator('[data-testid="bg-task-toggle"]');
+    await expect(taskToggle).toBeVisible();
+    await expect(page.locator('[data-testid="bg-task-list"]')).toBeHidden();
     await expect(page.locator('[data-testid="bg-task-row"]')).toHaveCount(2);
+    await taskToggle.click();
+    await expect(page.locator('[data-testid="bg-task-list"]')).toBeVisible();
     await expect(page.locator('[data-testid="bg-task-row"]').first()).toContainText('Explore');
 
     await waitForIdle(page);
@@ -156,6 +160,38 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(card).toContainText('README.md');
     // Read 不进汇总
     await expect(card).not.toContainText('package.json');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-DIFF Edit 工具卡预览变更显示行级 diff（上下文行原样、只改动行标 -/+），Write 维持整块绿', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:file-changes');
+    await waitForIdle(page);
+
+    // Edit（t_fc_edit）：三行片段只中间一行变 → 行级 diff 应拆成 4 个独立 <pre>（同/删/增/同）。
+    // 工具卡默认折叠（<details>），「预览变更」按钮在卡体内——须先展开卡片。
+    const editCard = page.locator('[data-tool-name="Edit"]');
+    await editCard.locator('summary').click();
+    await editCard.locator('.tp-btn').click();
+    const editBody = editCard.locator('.tp-body');
+    await expect(editBody).toBeVisible();
+    await expect(editBody.locator('pre')).toHaveCount(4);
+    await expect(editBody).toContainText('line one');
+    await expect(editBody).toContainText('- old middle');
+    await expect(editBody).toContainText('+ new middle');
+    await expect(editBody).toContainText('line three');
+
+    // Write（t_fc_write）：无 old，维持既有「整块绿」——单个 <pre> 装全部新增内容，不逐行拆分。
+    const writeCard = page.locator('[data-tool-name="Write"]');
+    await writeCard.locator('summary').click();
+    await writeCard.locator('.tp-btn').click();
+    const writeBody = writeCard.locator('.tp-body');
+    await expect(writeBody).toBeVisible();
+    await expect(writeBody.locator('pre')).toHaveCount(1);
+    await expect(writeBody.locator('pre')).toContainText('line1');
+    await expect(writeBody.locator('pre')).toContainText('line3');
 
     await expectNoBrowserErrors(page);
   });

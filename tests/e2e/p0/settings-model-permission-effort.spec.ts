@@ -253,6 +253,22 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 新会话（未选具体模型）+ 网关默认：cwd 默认为档位别名 opus，SDK resolvedModel 带真实 wire id。
+  // 回归 bug「开新会话看不到实际模型名、选了 opus 才显具体名」：currentModel 空时底栏 pill 也应解析出
+  // 真实模型名，而不是停在裸别名 'opus'。（P0-09k 是已选 opus 路径，本例专测未选路径。）
+  test('P0-09l 新会话未选模型：pill 显 cwd 默认的真实模型名而非裸别名', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:gateway-default-fresh');
+    await waitForIdle(page);
+
+    // currentModel 空（未选具体模型），但底栏 pill 已把 cwd 默认别名 opus 解析成真实 wire id，
+    // 不再停在裸别名——正是本次修的 bug。
+    await expect(page.locator('#pillModelText')).toHaveText('mimo-v2.5-pro-ultraspeed');
+    await expect(page.locator('#pillModelText')).not.toHaveText('opus');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // /model default 是 CLI「不 pin」语义：不得把字面量 default 写进 modelInput / 发出去。
   // 先 /model 具体模型污染，再 /model default 复位，文案/select/pill/回显四端均不得出现字面量 default。
   test('P0-09j /model default 复位不污染 model 字面量', async ({ page }) => {
@@ -277,6 +293,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     const reply = page.locator('[data-testid="assistant-message"]').last();
     await expect(reply).toContainText('model=未指定(沿用)');
     await expect(reply).not.toContainText('model=default');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // ⑧ 推送内容预览开关：默认关（与「完成提示」三项默认开相反极性），勾选后持久化到 localStorage，
+  // 重开设置面板仍反映上次选择（syncPreferences 从 storage 读回，见 app/settings.js）。
+  test('P0-09m 推送内容预览开关默认关，勾选后跨面板重开保持', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSettings').click();
+    const toggle = page.locator('#prefPushPreview');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).not.toBeChecked();
+
+    await toggle.click();
+    await expect(toggle).toBeChecked();
+    const stored = await page.evaluate(() => localStorage.getItem('ccm_push_preview'));
+    expect(stored).toBe('1');
+    await closeSettings(page);
+
+    // 重开面板：syncPreferences 从 storage 读回，应仍是勾选态（不是每次都复位成默认关）。
+    await page.locator('#btnSettings').click();
+    await expect(page.locator('#prefPushPreview')).toBeChecked();
 
     await expectNoBrowserErrors(page);
   });

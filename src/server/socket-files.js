@@ -11,6 +11,8 @@ export function registerFileSocketHandlers({
   browseReadFile,
   listGitChanges,
   readGitDiff,
+  searchFiles,
+  writeFileInScope,
   audit,
   actorFromSocket,
   routeInstance,
@@ -152,6 +154,59 @@ export function registerFileSocketHandlers({
       truncated: result.truncated || false,
       empty: result.empty || false,
     });
+  });
+
+  // @ 文件引用候选：query 只做匹配、不拼路径（见 file-search.js 头注），故无需 assertSafeRelPath 复核——
+  // 唯一的越界面是 cwd 本身，与 git:status 同一道闸。
+  on(socket, 'files:search', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (typeof searchFiles !== 'function') {
+      return ack({ ok: false, code: 'unavailable', error: '文件搜索不可用' });
+    }
+    const { cwd: requestedCwd, query, limit } = payload || {};
+    const cwd = routeCwd(requestedCwd);
+    const workDirs = getWorkDirs();
+    if (!cwdInWorkDirs(cwd, workDirs)) {
+      logger.warn(`[scope] files:search 越界拒绝：cwd=${cwd}`);
+      audit.recordAudit({
+        actor: actorFromSocket(socket),
+        action: 'scope_violation',
+        target: cwd,
+        outcome: 'denied',
+        meta: { via: 'files:search' },
+      });
+      return ack({ ok: false, code: 'scope', error: '路径不在授权范围内' });
+    }
+    const paths = await searchFiles(cwd, query, { limit });
+    return ack({ ok: true, paths });
+  });
+
+  // 编辑器保存：V1 只改已存在文件（见 file-browse.js writeFileInScope 头注——不带 O_CREAT）。
+  // writeFileInScope 自带范围门 + baseHash 冲突检测，这里只判「有没有开这个能力」（FILE_EDIT=off 时
+  // app.js 不传 writeFileInScope，走 unavailable）+ 记审计（scope 违规复用标准 action，其余结果落
+  // file_write——机主本人显式操作，不经 approval-store，审计是唯一事后可追溯的记录）。
+  on(socket, 'files:write', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    if (typeof writeFileInScope !== 'function') {
+      return ack({ ok: false, code: 'unavailable', error: '文件编辑未启用' });
+    }
+    const { cwd: requestedCwd, relPath, content, baseHash } = payload || {};
+    const cwd = routeCwd(requestedCwd);
+    const meta = { relPath: typeof relPath === 'string' ? relPath : null };
+    const result = writeFileInScope(cwd, relPath, content, getWorkDirs(), { baseHash });
+    if (!result.ok && result.code === 'scope') {
+      logger.warn(`[scope] 文件写回越界拒绝：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
+      audit.recordAudit({ actor: actorFromSocket(socket), action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'files:write', ...meta } });
+      return ack(result);
+    }
+    audit.recordAudit({
+      actor: actorFromSocket(socket),
+      action: 'file_write',
+      target: cwd,
+      outcome: result.ok ? 'success' : 'denied',
+      meta: result.ok ? meta : { ...meta, code: result.code },
+    });
+    return ack(result);
   });
 
   on(socket, 'tool:full', ({ instanceId, toolUseId } = {}, ack) => {

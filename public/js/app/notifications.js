@@ -1,4 +1,4 @@
-import { pushEnvHint, urlBase64ToUint8Array } from '../logic.js';
+import { pushEnvHint, urlBase64ToUint8Array, readPushPreviewPref } from '../logic.js';
 
 export function createNotificationController(context, {
   addBar = () => {},
@@ -13,6 +13,9 @@ export function createNotificationController(context, {
   const fetchFn = deps.fetch || globalThis.fetch;
   const showAlert = deps.alert || windowRef.alert || (() => {});
   const logger = deps.console || globalThis.console;
+  // ⑧ 推送内容预览偏好：与 app/alerts.js 同款 storage 注入模式（可测、抗 PWA 被杀落盘+重开恢复）。
+  const storage = deps.storage || globalThis.localStorage;
+  const storageGetItem = key => storage?.getItem?.(key) ?? null;
   let vapidKey = null;
 
   function notify(title, body, { force = false } = {}) {
@@ -52,10 +55,13 @@ export function createNotificationController(context, {
       }
       const token = getToken();
       const authQuery = token ? `?token=${encodeURIComponent(token)}` : '';
+      // ⑧ prefs 随订阅一并存（server 端 savePushSubscription 原样落盘，见 notify-channels.js 头注）；
+      // per-device 偏好——同一账号手机开预览、iPad 不开，两条订阅互不影响。
+      const body = JSON.stringify({ ...subscription.toJSON?.() ?? subscription, prefs: { preview: readPushPreviewPref(storageGetItem) } });
       const response = await fetchFn(`/push/subscribe${authQuery}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(subscription),
+        body,
       });
       if (!response.ok) {
         logger?.warn?.('[push] 订阅未保存(HTTP', `${response.status})`);

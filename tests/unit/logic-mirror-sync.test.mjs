@@ -88,6 +88,36 @@ test.describe('formatMirrorComposerHint（点输入区说明三态）', () => {
   });
 });
 
+// 7/24 真机复现：本会话被 ScheduleWakeup/CronCreate 自主循环唤起时，尾部形态和「终端接管」在磁盘上
+// 完全同构，history.js#classifyTranscriptTail 已能算出 autonomous 字段区分两者（见 mirror-sync.test.mjs）。
+// 这里只验证文案层：autonomous=true 时三态都不该再断言"终端"，且不能因为加了这个字段就影响默认行为。
+test.describe('formatMirrorBannerText / formatMirrorComposerHint（autonomous：区分"自主循环"与"真不知道来源"）', () => {
+  test('banner driving 默认句：autonomous=true 不再提终端，改说自主循环', () => {
+    const t = formatMirrorBannerText({ autonomous: true });
+    assert.match(t, /只读镜像/);
+    assert.match(t, /自主循环/);
+    assert.doesNotMatch(t, /终端/);
+  });
+  test('banner armed / stale：autonomous=true 同样换成自主循环措辞', () => {
+    assert.doesNotMatch(formatMirrorBannerText({ armed: true, autonomous: true }), /终端/);
+    assert.match(formatMirrorBannerText({ stale: true, autonomous: true }), /自主循环.*疑似中断|疑似中断.*自主循环/);
+  });
+  test('banner 未传 autonomous（老调用方）→ 行为不变，仍是终端文案', () => {
+    assert.equal(formatMirrorBannerText({}), '只读镜像：终端会话运行中，移动端当前只读');
+  });
+  test('composer hint driving：autonomous=true 不再提终端，能/不能说明仍在', () => {
+    const t = formatMirrorComposerHint({ autonomous: true });
+    assert.match(t, /自主循环/);
+    assert.doesNotMatch(t, /终端/);
+    assert.match(t, /不能/);
+    assert.match(t, /续接/);
+  });
+  test('composer hint 未传 autonomous（老调用方）→ 行为不变', () => {
+    const t = formatMirrorComposerHint({});
+    assert.match(t, /终端会话运行中/);
+  });
+});
+
 test.describe('shouldEmitThrottledHint（同文案节流）', () => {
   test('首次必发', () => {
     assert.equal(shouldEmitThrottledHint({ lastText: '', lastAt: 0, nextText: 'hello', now: 1000, throttleMs: 2500 }), true);

@@ -41,6 +41,23 @@ test('listSessions: 提取 title / model / entrypoint', async () => {
   assert.equal(result[0].entrypoint, 'cli');
 });
 
+// entrypoint-marker 是本仓自己写的假行（伪装 entrypoint:'cli' 骗 CLI /resume 选择器显示 web 会话，
+// 见 src/server/app.js writeSessionEntrypoint），恒在文件头、早于真实消息行。readHeadMeta 不该把它
+// 当成真实来源——否则所有 web 会话的 entrypoint 全部被误判成 cli（数据层面判错，即使当前无 UI 消费）。
+test('listSessions: entrypoint-marker 假行不冒充真实 entrypoint（真实行 sdk-ts 不被 marker 的 cli 抢先）', async () => {
+  const cwd = '/test/marker-shadow';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sess-marker', [
+    { type: 'entrypoint-marker', entrypoint: 'cli' },
+    { type: 'queue-operation' },
+    { type: 'user', entrypoint: 'sdk-ts', message: { role: 'user', content: '你好' } },
+    { type: 'assistant', entrypoint: 'sdk-ts', message: { role: 'assistant', content: 'Hi', model: 'claude-sonnet-4-6' } },
+  ]);
+  const result = await listSessions(cwd, { baseDir: BASE });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].entrypoint, 'sdk-ts');
+});
+
 test('listSessions: ai-title 优先于首条 user 文本', async () => {
   const cwd = '/test/aititle';
   const dir = join(BASE, getProjectDir(cwd));

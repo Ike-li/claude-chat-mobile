@@ -122,6 +122,9 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
         const expanded = expandHistoryEntry(entry.message?.content, role, entry.timestamp, {
           isSidechain: isSide,
           parentToolUseId: isSide ? (parentFromDisk || lastMainAgentToolId || 'sidechain') : null,
+          // 分叉锚点只在主链上有效：sidechain（子 agent）消息的 parentUuid 链是另一条支线，forkSession
+          // 「保留到该 uuid 为止」对子 agent 消息语义不明确；前端也只在主链气泡上挂长按分叉入口。
+          uuid: isSide ? null : entry.uuid,
         });
         for (const item of expanded) {
           // 主链 spawn 工具（Agent/Task/Workflow）：记住 id，供后续无 parent 字段的 sidechain 行挂靠
@@ -407,6 +410,10 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
   const out = [];
   // E18：主链 user 文本先剥尾部 [附件] 块再走噪音过滤；纯附件消息（剥离后空文本）不得被
   // normalizeHistoryText 的空判丢条——否则「只发一张图」的历史消息整条消失。sidechain 不解析（只认主链）。
+  // uuid 只挂文本类展开项（分叉锚点只在真实对话文本上有意义，工具卡/思考块不是可分叉的会话节点）；
+  // 一条 JSONL entry 可能展开出多条文本（罕见，如多段 text block），共享同一 entry uuid——分叉按
+  // entry 粒度切分，语义正确（forkSession 的 upToMessageId 是"保留到该消息为止"，不细分块）。
+  const uuidField = opts.uuid ? { uuid: String(opts.uuid) } : {};
   const pushText = (raw) => {
     let body = raw;
     let attachments = null;
@@ -416,8 +423,8 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       if (split.attachments.length) attachments = split.attachments;
     }
     const text = normalizeHistoryText(body);
-    if (text != null) out.push({ role, content: text, timestamp, ...side, ...(attachments ? { attachments } : {}) });
-    else if (attachments) out.push({ role, content: '', timestamp, ...side, attachments });
+    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...(attachments ? { attachments } : {}) });
+    else if (attachments) out.push({ role, content: '', timestamp, ...side, ...uuidField, attachments });
   };
   if (typeof content === 'string') {
     pushText(content);
@@ -706,7 +713,10 @@ async function readHeadMeta(file, size) {
         if (!line.trim()) continue;
         let entry;
         try { entry = JSON.parse(line); } catch { continue; } // 截断尾行/非 JSON：跳过
-        if (!meta.entrypoint && entry.entrypoint) meta.entrypoint = entry.entrypoint;
+        // entrypoint-marker 是自家写的假行（伪装 entrypoint:'cli' 骗 CLI /resume 选择器显示 web 会话，
+        // 见 app.js writeSessionEntrypoint），恒在头部、早于真实消息行——排除掉，否则所有 web 会话的
+        // entrypoint 全部被它抢先误判成 cli。
+        if (!meta.entrypoint && entry.entrypoint && entry.type !== 'entrypoint-marker') meta.entrypoint = entry.entrypoint;
         if (!meta.model && entry.type === 'assistant' && entry.message?.model) meta.model = entry.message.model;
         if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
           aiTitle = entry.aiTitle.trim(); // 取头窗内最后一次（CLI 会更新，后写更准）
@@ -903,9 +913,9 @@ export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = 
 // 诊断时间线用：把 catchUpTickOnce 已经算出的 mirrorEntryLock 判定打包成一条可读详情，供
 // diag-log 记录展示——不重复判定逻辑本身（locked 由调用方直接传入 mirrorEntryLock 的返回值），
 // 只加一个 agedOutStale 派生字段，让事后回放能看出"这次没锁，是因为陈旧 pending 还是别的原因"。
-export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), locked } = {}) {
+export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), locked, autonomous = false } = {}) {
   const agedOutStale = lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS);
-  return { tailVerdict, localBusy, lastChainTs, agedOutStale, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked };
+  return { tailVerdict, localBusy, lastChainTs, agedOutStale, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked, autonomous };
 }
 
 // 疑似中断判定：锁着 + 尾部 PENDING + 最后链条目距今超阈值（期间零写入）→ 终端可能被强杀/断电、轮次没
@@ -988,30 +998,55 @@ function classifyChainTail(entries, sidechainOnly) {
   return { verdict: 'settled', lastChainTs: null };
 }
 
+// ── 自主循环误判为「终端驱动」的区分 ──────────────────────────────────────────
+// ScheduleWakeup 的 <<autonomous-loop-dynamic>> / CronCreate 的 <<autonomous-loop>> 定时唤起本会话时，
+// harness 会在 transcript 主链插一条 isMeta:true、文本以 "# Autonomous loop check" 开头的系统行，然后
+// 自己继续跑一轮。此时尾部形态和「外部终端接管」在磁盘上完全同构（都是主链 tool_use 未落 tool_result），
+// 但驱动方其实是本会话自己被定时唤起，不是外部终端——上层用这个字段挑更准确的文案，不改变是否上锁
+// （即使能确定是自主循环，仍需要防两边并发写同一 JSONL，锁本身没错，错的只是「终端」这个措辞）。
+// 只看「尾窗内是否存在这条 marker」，不追溯它与当前 pending 是否连续——2026-07-24 真机的已知取舍：
+// 若尾窗内先有一次自主循环完整收尾、又被后来的真终端接过去也写出了 pending，会误标 autonomous=true；
+// 这个组合概率低、代价小（只是文案不够精确，不影响锁本身），换取实现足够简单。
+// 依赖 harness 固定注入的文案前缀，不是本仓库能控制的契约——文案格式变化时这里查不到 marker，静默
+// 退化回旧判定（不报错、不误锁，只是少了这一种更精确的文案）。
+const AUTONOMOUS_LOOP_MARKER_RE = /^#\s*Autonomous loop check\b/;
+function isAutonomousLoopMarkerEntry(e) {
+  if (!e || e.type !== 'user' || e.isMeta !== true) return false;
+  const c = e.message?.content;
+  const text = typeof c === 'string' ? c : Array.isArray(c)
+    ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n')
+    : '';
+  return AUTONOMOUS_LOOP_MARKER_RE.test(text.trim());
+}
+export function hasAutonomousLoopMarker(entries) {
+  return entries.some(isAutonomousLoopMarkerEntry);
+}
+
 export function classifyTailEntries(entries) {
   const main = classifyChainTail(entries, false);
   const side = classifyChainTail(entries, true);
-  if (main.verdict === 'pending') return main;
+  const autonomous = hasAutonomousLoopMarker(entries);
+  if (main.verdict === 'pending') return { ...main, autonomous };
   if (side.verdict === 'pending') {
     // 主链已收尾但子 agent 仍在跑：维持 pending，stale 时钟取两者较新时间戳
     const times = [main.lastChainTs, side.lastChainTs].filter((t) => t != null);
     const lastChainTs = times.length ? Math.max(...times) : side.lastChainTs;
-    return { verdict: 'pending', lastChainTs };
+    return { verdict: 'pending', lastChainTs, autonomous };
   }
-  return main; // 主链 settled（子链无活动或也已 settled）
+  return { ...main, autonomous }; // 主链 settled（子链无活动或也已 settled）
 }
 
 // IO 包装：读 transcript 尾窗 → 解析 → classifyTailEntries。尾窗/半行处理与 readLastPermissionMode 同款。
 // 极端边界：若最后一条链条目距文件尾 >512KB（如超巨型子 agent 尾巴），尾窗里无链条目 → settled（不锁、
 // 不误伤输入；镜像锁的兜底仍有 externalWrite 判据在）。
 export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
-  if (!isSafeSessionId(sessionId)) return { verdict: 'settled', lastChainTs: null }; // SS-003
+  if (!isSafeSessionId(sessionId)) return { verdict: 'settled', lastChainTs: null, autonomous: false }; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
     const fh = await open(file, 'r');
     try {
       if (size == null) ({ size } = await fh.stat());
-      if (size === 0) return { verdict: 'settled', lastChainTs: null };
+      if (size === 0) return { verdict: 'settled', lastChainTs: null, autonomous: false };
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
       const { bytesRead } = await fh.read(buf, 0, size - start, start);
@@ -1025,7 +1060,7 @@ export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_
       await fh.close().catch(() => {});
     }
   } catch {
-    return { verdict: 'settled', lastChainTs: null }; // 文件不存在/读失败：不锁
+    return { verdict: 'settled', lastChainTs: null, autonomous: false }; // 文件不存在/读失败：不锁
   }
 }
 

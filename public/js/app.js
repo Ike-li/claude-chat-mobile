@@ -1,8 +1,9 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
+import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
 import { createAlertController } from './app/alerts.js';
@@ -11,7 +12,7 @@ import { createRttMonitor } from './app/connection-sync.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createAgentEventDispatcher } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
-import { createGitChangesPanel, createWorkspaceChooser } from './app/git-changes.js';
+import { createGitChangesPanel, createWorkspaceChooser, renderPatchLines } from './app/git-changes.js';
 import { createSettingsController } from './app/settings.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
@@ -39,6 +40,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     localStorage.setItem('device_token', deviceToken);
   }
 
+  // ⑨ i18n：module script 已 defer 到 DOM 解析完成后执行，此刻查 [data-i18n] 已安全。阶段性——目前只有
+  // 部分静态串已入词典（见 public/js/i18n.js EN_DICT + roadmap ⑨ 分阶段推进），未收录 key 静默留中文。
+  setLang(resolveInitialLang(k => localStorage.getItem(k), navigator.language));
+  if (getLang() === 'en') {
+    document.documentElement.lang = 'en';
+    document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.textContent); });
+    const inputElForI18n = document.getElementById('input');
+    if (inputElForI18n) inputElForI18n.placeholder = t(inputElForI18n.placeholder);
+  }
+
   // ---- DOM ----
   const $ = id => document.getElementById(id);
   const messagesEl = $('messages'), inputEl = $('input'), statusEl = $('statusLine'), connDot = $('connDot'), connRttEl = $('connRtt'), connDotWrap = $('connDotWrap');
@@ -47,7 +58,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 流内 live 活动行（懒创建 #streamLiveStatus）；composer 顶条 #activeStatusPill 已移除
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
-  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop');
+  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop'), btnTaskToggle = $('btnTaskToggle');
   const unreadPillEl = $('unreadPill'), unreadPillCountEl = $('unreadPillCount'); // 未读角标悬浮胶囊
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
@@ -140,7 +151,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 项目文件只读浏览（FR-07）
   const fileBrowseModal = $('fileBrowseModal'), fileBrowseBack = $('fileBrowseBack'),
         fileBrowsePath = $('fileBrowsePath'), fileBrowseClose = $('fileBrowseClose'),
-        fileBrowseBody = $('fileBrowseBody');
+        fileBrowseBody = $('fileBrowseBody'), fileBrowseEdit = $('fileBrowseEdit'),
+        fileBrowseSave = $('fileBrowseSave'), fileBrowseCancelEdit = $('fileBrowseCancelEdit'),
+        fileBrowseSaveError = $('fileBrowseSaveError');
   // 工作区 chooser + git 变更面板（只读）
   const workspaceChooserModal = $('workspaceChooserModal'), workspaceChooserClose = $('workspaceChooserClose'),
         workspaceChooserBrowse = $('workspaceChooserBrowse'), workspaceChooserChanges = $('workspaceChooserChanges');
@@ -179,6 +192,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // armedTakeoverSid=已排队接管、等终端本轮完结/疑似中断再自动放行（见 logic.js armedTakeoverStep）；
   // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「续接 CLI 会话」时判定走排队还是即时确认）。
   let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
+  // mirrorAutonomousFlag=当前只读锁能否确定是本会话自己被 ScheduleWakeup/CronCreate 定时唤起（server
+  // 端 classifyTranscriptTail 查到 harness marker），而非真不知道来源的「大概率终端」——只影响横幅措辞，
+  // 不影响是否只读（见 logic.js formatMirrorBannerText/formatMirrorComposerHint 的 autonomous 参数）。
+  let mirrorAutonomousFlag = false;
   let mirrorObservedCli = { model: null, permissionMode: null, effort: null };
   let mirrorWebPanelSnapshot = null; // CLI 观察态只负责展示；接管时恢复进入镜像前的 Web 选择，绝不写回实例偏好
   // 点输入区/附件/禁发钮时的说明节流（同文案 2.5s 内不刷屏；换 armed/stale 文案立即放行）
@@ -231,10 +248,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const cliDefaultLabel = cliDefault && typeof cliDefault === 'object'
       ? (cliDefault.displayName || 'Default (recommended)')
       : null;
-    const modelPillText = model
-      ? (resolveGatewayModelName(model + currentGatewaySuffix, modelsList) || (model + currentGatewaySuffix))
-      : (cliDefaultLabel
-        || (cwdDefaultModel ? cwdDefaultModel.replace(/\[[^\]]+\]$/, '') : '默认'));
+    // 空 model（新会话）时 cwdDefaultModel 常是档位别名（opus），须经 resolveGatewayModelName
+    // 解析出真实模型名，否则 pill 停在裸别名——bug：选了模型才显具体名。纯函数 resolveModelPillText 收敛此逻辑。
+    const modelPillText = resolveModelPillText({
+      model,
+      gatewaySuffix: currentGatewaySuffix,
+      modelsList,
+      cwdDefaultModel,
+      cliDefaultLabel,
+    });
     if (pillModelText) pillModelText.textContent = modelPillText;
     if (pillModel) pillModel.title = (model || cliDefaultLabel || cwdDefaultModel) ? modelPillText : '选择模型';
     if (customModelGrid) {
@@ -401,6 +423,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       fileBrowsePath,
       fileBrowseClose,
       fileBrowseBody,
+      fileBrowseEdit,
+      fileBrowseSave,
+      fileBrowseCancelEdit,
+      fileBrowseSaveError,
       workspaceChooserModal,
       workspaceChooserClose,
       workspaceChooserBrowse,
@@ -420,12 +446,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       prefAlertVibrate: $('prefAlertVibrate'),
       prefAlertForeground: $('prefAlertFgComplete'),
       btnAlertPreview: $('btnAlertPreview'),
+      prefPushPreview: $('prefPushPreview'),
+      prefLang: $('prefLang'),
       btnPush,
       activityBanner,
       activityBannerText,
       taskProgressBanner,
       taskProgressText,
       btnTaskStop,
+      btnTaskToggle,
     },
     state: {},
     dependencies: {
@@ -1315,6 +1344,29 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     });
   }
 
+  // 工具卡「预览变更」diff 渲染：Edit/MultiEdit 的 hunks 走行级 unified diff（复用 git-changes.js
+  // renderPatchLines 着色）；超过 MAX_DIFF_LINES_FOR_LCS 行退回整块红/绿块（异常大输入的兜底，不算 LCS）；
+  // Write/NotebookEdit 的 added（无 old）维持既有整块绿。tool_use 工具卡与 turn-end 汇总卡共用本函数。
+  function renderToolDiff(container, diff) {
+    for (const h of (diff?.hunks || [])) {
+      if (h.old === undefined && h.new === undefined) continue;
+      const oldStr = h.old || '', newStr = h.new || '';
+      const tooBig = Math.max(oldStr.split('\n').length, newStr.split('\n').length) > MAX_DIFF_LINES_FOR_LCS;
+      if (tooBig) {
+        if (h.old) { const pre = el(`<pre class="overflow-x-auto whitespace-pre-wrap break-words rounded px-2 py-1"></pre>`); pre.style.background = 'rgba(188,67,52,.12)'; pre.textContent = '- ' + h.old; container.appendChild(pre); }
+        if (h.new) { const pre = el(`<pre class="overflow-x-auto whitespace-pre-wrap break-words rounded px-2 py-1"></pre>`); pre.style.background = 'rgba(61,138,80,.12)'; pre.textContent = '+ ' + h.new; container.appendChild(pre); }
+      } else {
+        container.appendChild(renderPatchLines(unifiedDiffLines(oldStr, newStr).join('\n'), el));
+      }
+    }
+    if (diff?.added !== undefined) {
+      const pre = el(`<pre class="overflow-x-auto whitespace-pre-wrap break-words rounded px-2 py-1"></pre>`);
+      pre.style.background = 'rgba(61,138,80,.12)';
+      pre.textContent = String(diff.added);
+      container.appendChild(pre);
+    }
+  }
+
   const handle = {
     device_status(p) {
       const modal = $('deviceModal');
@@ -1560,13 +1612,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             const lab = el(`<div class="text-ink-faint"></div>`);
             lab.textContent = `📁 ${res.attribution.workdirLabel} / ${res.attribution.relPath}`;  // 路径归属
             tbody.appendChild(lab);
-            const addPre = (txt, bg) => { const pre = el(`<pre class="overflow-x-auto"></pre>`); if (bg) pre.style.background = bg; pre.textContent = txt; tbody.appendChild(pre); };
-            if (res.diff) {  // 变更 diff：old 红底 / new 绿底（textContent 防 XSS）
-              for (const h of (res.diff.hunks || [])) {
-                if (h.old) addPre('- ' + h.old, 'rgba(188,67,52,.12)');
-                if (h.new) addPre('+ ' + h.new, 'rgba(61,138,80,.12)');
-              }
-              if (res.diff.added !== undefined) addPre(res.diff.added, 'rgba(61,138,80,.12)');
+            if (res.diff) {  // 变更 diff：行级 unified（textContent 防 XSS，见 renderToolDiff）
+              renderToolDiff(tbody, res.diff);
             } else if (res.snippet) {  // Read 文件片段：图片 → 缩略图；文本 → 代码高亮
               if (res.snippet.image?.base64 && res.snippet.image?.mimeType) {
                 // 与用户附件气泡同源：data URI + CSP img-src data: 已许
@@ -2296,18 +2343,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             lab.textContent = `📁 ${res.attribution.workdirLabel} / ${res.attribution.relPath}`;
             preview.appendChild(lab);
           }
-          const addPre = (txt, bg) => {
-            const pre = el(`<pre class="overflow-x-auto whitespace-pre-wrap break-words rounded px-2 py-1"></pre>`);
-            if (bg) pre.style.background = bg;
-            pre.textContent = txt;
-            preview.appendChild(pre);
-          };
           if (res.diff) {
-            for (const h of (res.diff.hunks || [])) {
-              if (h.old) addPre('- ' + h.old, 'rgba(188,67,52,.12)');
-              if (h.new) addPre('+ ' + h.new, 'rgba(61,138,80,.12)');
-            }
-            if (res.diff.added !== undefined) addPre(String(res.diff.added), 'rgba(61,138,80,.12)');
+            renderToolDiff(preview, res.diff);
           } else {
             const m = el(`<div class="text-ink-faint"></div>`);
             m.textContent = '无 diff 详情（可到对应工具卡查看）';
@@ -2856,6 +2893,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     // 对齐 CLI ESC：撤回最近一条排队中的消息（物理键盘路径；触屏无 ESC，走气泡「撤回」按钮）
     if (e.key === 'Escape') {
+      if (!atMentionChips?.classList.contains('hidden')) { hideAtMentionChips(); return; }
       const queued = messagesEl.querySelectorAll('.queued-bubble[data-client-message-id]');
       const last = queued[queued.length - 1];
       if (last) {
@@ -2864,6 +2902,68 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     }
   });
+
+  // ---- @ 文件引用（composer 顶边 chips，见 index.html #atMentionChips 头注）----
+  // 对齐 CLI @ 路径补全的 web 等价物：语义上只插相对路径文本，agent 自己 Read（保留审批链可观测性），
+  // 不注入文件内容。移动端不做光标跟随浮层/方向键导航——纯触摸点选（见 roadmap 设计取舍）。
+  const atMentionChips = $('atMentionChips');
+  let atMentionState = null; // { matchStart } —— 当前触发态；null=未触发
+  let atMentionReqId = 0;    // 每次触发/取消自增；files:search ack 里比对，迟到结果直接丢弃
+  let atMentionDebounceTimer = null;
+
+  function hideAtMentionChips() {
+    atMentionState = null;
+    atMentionReqId++;
+    if (atMentionDebounceTimer) { clearTimeout(atMentionDebounceTimer); atMentionDebounceTimer = null; }
+    if (atMentionChips) { atMentionChips.classList.add('hidden'); atMentionChips.innerHTML = ''; }
+  }
+
+  function pickAtMention(path) {
+    if (!atMentionState) return;
+    const cursor = inputEl.selectionStart ?? inputEl.value.length;
+    const { text, cursorPos } = applyAtMentionPick(inputEl.value, { matchStart: atMentionState.matchStart, cursorPos: cursor, path });
+    inputEl.value = text;
+    hideAtMentionChips();
+    inputEl.focus();
+    inputEl.setSelectionRange(cursorPos, cursorPos);
+    autosize();
+    updateSendButtonState();
+  }
+
+  function renderAtMentionChips(paths) {
+    if (!atMentionChips) return;
+    atMentionChips.innerHTML = '';
+    if (!paths?.length) { atMentionChips.classList.add('hidden'); return; }
+    for (const p of paths) {
+      const chip = el('<button type="button" class="status-pill-chip toolbar-pill shrink-0" data-testid="at-mention-chip"></button>');
+      chip.textContent = p;
+      chip.title = p;
+      chip.onclick = () => pickAtMention(p);
+      atMentionChips.appendChild(chip);
+    }
+    atMentionChips.classList.remove('hidden');
+  }
+  // mousedown 先于 click 触发，preventDefault 挡掉浏览器「点按钮前先把当前焦点元素 blur 掉」的默认动作，
+  // 令 inputEl 全程不失焦——避免「点 chip 时 blur 先跑、chips 已被清空、onclick 打空」的经典时序坑。
+  atMentionChips?.addEventListener('mousedown', e => e.preventDefault());
+
+  function checkAtMention() {
+    const cursor = inputEl.selectionStart ?? inputEl.value.length;
+    const hit = detectAtMentionQuery(inputEl.value.slice(0, cursor));
+    if (!hit) { if (atMentionState) hideAtMentionChips(); return; }
+    atMentionState = { matchStart: hit.matchStart };
+    if (atMentionDebounceTimer) clearTimeout(atMentionDebounceTimer);
+    const reqId = ++atMentionReqId;
+    atMentionDebounceTimer = setTimeout(() => {
+      if (!socket) return;
+      socket.emit('files:search', { cwd: currentCwd, query: hit.query }, res => {
+        if (reqId !== atMentionReqId) return; // 迟到 ack：期间已改 query / 取消触发，丢弃
+        renderAtMentionChips(res?.ok ? res.paths : []);
+      });
+    }, 150);
+  }
+  inputEl.addEventListener('input', checkAtMention);
+  inputEl.addEventListener('blur', hideAtMentionChips);
 
   // ---- 输入与附件：状态、读取、预览和 DOM 绑定由独立 controller 管理 ----
   const attachments = createAttachmentController(appContext, {
@@ -4181,7 +4281,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     warning: { border: 'var(--warning)', title: 'text-warning', ok: 'bg-cta' },
     danger:  { border: 'var(--danger)',  title: 'text-danger',  ok: 'bg-danger' },
   };
-  function appConfirm({ title, body, okText = '确定', tone = 'default' }) {
+  // okText 默认值须留在参数默认位置：函数体内 `const t`（色调样式）会遮蔽外层 i18n t()，
+  // 挪进函数体会撞 TDZ；参数默认值求值早于函数体声明，不受影响。
+  function appConfirm({ title, body, okText = t('确定'), tone = 'default' }) {
     if (!confirmModal || confirmResolve) return Promise.resolve(false);
     const t = CONFIRM_TONES[tone] || CONFIRM_TONES.default;
     confirmSheet.style.borderTopColor = t.border;
@@ -4249,6 +4351,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const fileBrowser = createFileBrowser(appContext, {
     baseName,
     closeSheet,
+    confirmDiscardEdit: () => appConfirm({
+      title: '放弃未保存的修改？',
+      body: '编辑内容尚未保存，离开后将丢失。',
+      okText: '放弃修改',
+      tone: 'warning',
+    }),
     createElement: el,
     haptic,
     openSheet,
@@ -4268,8 +4376,29 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     onBrowse: () => openFileBrowser(currentCwd),
     onChanges: () => openGitChanges(currentCwd),
   });
+  // ⑧ 推送内容预览：本地偏好读写 + 改动时（若已授权通知权限）立即重新订阅，把新 prefs.preview 带给服务端
+  // ——不重新订阅的话，服务端那份旧订阅记录的 prefs 就跟本地开关脱节，下次推送还是按旧偏好选 body。
+  const pushPreview = {
+    get: () => readPushPreviewPref(k => localStorage.getItem(k)),
+    set: (enabled) => {
+      writePushPreviewPref((k, v) => localStorage.setItem(k, v), enabled);
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted') void notifications.subscribe();
+    },
+  };
+  // ⑨ 语言偏好：切换后写 storage + 提示刷新（不做响应式重渲——已翻译的静态串只在启动时应用一次，
+  // 运行中改语言若不刷新，会停留在混杂态；appConfirm 走已有的确认 sheet，不新开一套 UI）。
+  const langPref = {
+    // 回显设置面板下拉框用原始存储值（含 auto）；语言渲染/t() 走 getLang() 的运行时折叠值，两者用途不同。
+    get: () => readLangPref(k => localStorage.getItem(k)),
+    set: async (lang) => {
+      writeLangPref((k, v) => localStorage.setItem(k, v), lang);
+      if (await appConfirm({ title: '需要刷新页面才能生效', body: '现在刷新吗？', okText: '刷新' })) {
+        location.reload();
+      }
+    },
+  };
   // ---- 设置：抽屉、完成提示偏好和预览由独立 controller 管理 ----
-  const settings = createSettingsController(appContext, { alerts, haptic });
+  const settings = createSettingsController(appContext, { alerts, haptic, pushPreview, langPref });
   const openSettingsSheet = settings.open;
   if (pillModel) pillModel.onclick = openSettingsSheet; // 点底栏模型 chip → 开「选择模型」格
   // 顶部 pill：工作区入口（chooser → 浏览文件 | 工作区改动）。侧栏不再挂浏览入口。
@@ -4891,11 +5020,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const cliDefaultLabel = cliDefault && typeof cliDefault === 'object'
       ? (cliDefault.displayName || 'Default (recommended)')
       : null;
-    const modelLabel = currentModel
-      ? (currentModel + (currentGatewaySuffix || ''))
-      : (cliDefaultLabel
-        || (cwdDefaultModel ? cwdDefaultModel.replace(/\[[^\]]+\]$/, '') : '')
-        || (pillModelText?.textContent || '').trim());
+    // 与底栏 pill 同源（resolveModelPillText）：新会话空 model 时同样把 cwd 默认别名解析成真实模型名，
+    // 不再各猜一套 / 靠读 pill DOM 文案兜底。
+    const modelLabel = resolveModelPillText({
+      model: currentModel,
+      gatewaySuffix: currentGatewaySuffix,
+      modelsList,
+      cwdDefaultModel,
+      cliDefaultLabel,
+    });
     return {
       modelLabel,
       modeLabel: (pillPermText?.textContent || '').trim(),
@@ -5191,6 +5324,58 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     else setTimeout(fn, 0);
   }
 
+  // 长按历史气泡「从这里分叉新会话」：550ms 触发，touchmove>8px 视为滚动/误触而取消（同侧滑手势阈值，见 sessionRow 侧滑）。
+  // 只绑在带 dataset.uuid 的历史气泡上——live 流气泡不带 uuid，长按天然无效（V1 范围：只做历史气泡入口）。
+  function bindForkLongPress(bubble, role) {
+    let timer = null, sx = 0, sy = 0, moved = false;
+    const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
+    bubble.addEventListener('touchstart', ev => {
+      const t = ev.touches?.[0];
+      if (!t) return;
+      sx = t.clientX; sy = t.clientY; moved = false;
+      cancel();
+      timer = setTimeout(() => { timer = null; if (!moved) requestSessionFork(bubble, role); }, 550);
+    }, { passive: true });
+    bubble.addEventListener('touchmove', ev => {
+      if (!timer) return;
+      const t = ev.touches?.[0];
+      if (!t) return;
+      if (Math.abs(t.clientX - sx) > 8 || Math.abs(t.clientY - sy) > 8) { moved = true; cancel(); }
+    }, { passive: true });
+    bubble.addEventListener('touchend', cancel, { passive: true });
+    bubble.addEventListener('touchcancel', cancel, { passive: true });
+  }
+
+  // 沿 DOM 序回溯找最近一条主链 assistant 气泡的 uuid（工具卡/思考块/子agent卡都没有 dataset.uuid，天然跳过）。
+  function findPrecedingAssistantUuid(bubble) {
+    let node = bubble.previousElementSibling;
+    while (node) {
+      if (node.dataset?.uuid && node.getAttribute('data-testid') === 'assistant-message') return node.dataset.uuid;
+      node = node.previousElementSibling;
+    }
+    return null;
+  }
+
+  async function requestSessionFork(bubble, role) {
+    const anchor = resolveForkAnchorUuid({
+      role,
+      ownUuid: bubble.dataset.uuid || null,
+      precedingAssistantUuid: findPrecedingAssistantUuid(bubble),
+    });
+    if (!anchor) { addBar('这是最早一条消息，前面没有可分叉的起点', 'text-ink-faint'); return; }
+    if (!displayedSessionId) return;
+    const ok = await appConfirm({
+      title: '从这里分叉新会话？',
+      body: '会复制到这条消息为止的对话，创建一个独立的新会话；原会话不受影响。',
+      okText: '分叉',
+    });
+    if (!ok) return;
+    haptic('tap');
+    socket.emit('session:fork', { cwd: currentCwd, sessionId: displayedSessionId, uuid: anchor }, res => {
+      if (!res?.ok) addBar(res?.error || '分叉失败', 'text-danger');
+    });
+  }
+
   // 渲染一批历史/追平消息为气泡并追加（loadHistory 与 onHistoryAppend 复用；分块让出主线程 + 一次性 fragment 插入 + 空闲高亮）。
   // 支持文本 / thinking / tool_use / tool_result；sidechain（parentToolUseId）收进可折叠子 agent 卡。
   function renderHistoryBubbles(msgs, onDone) {
@@ -5332,6 +5517,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       if (msg.content) appendCopyAction(bubble, () => msg.content || '', isUser ? 'right' : 'left');
       bubble.dataset.topLevel = '1'; // 未读角标锚点定位用（jumpToUnreadAnchor）：仅主链用户消息/assistant文字回复计入，子agent/侧链在上面已提前 return
+      if (msg.uuid) {
+        bubble.dataset.uuid = msg.uuid;
+        bindForkLongPress(bubble, isUser ? 'user' : 'assistant');
+      }
       frag.appendChild(bubble);
     }
 
@@ -5392,15 +5581,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // 只读锁：禁用输入 + 发送位「续接」；状态文案写进 input placeholder，不再占单独横幅行。
   // 三态：driving / armed / stale（formatMirrorBannerText）。自动解锁仍在服务端 ~12.5s 静默。
-  const DEFAULT_INPUT_PLACEHOLDER = '给 Claude 发消息...';
   function refreshMirrorComposerCopy() {
     if (!inputEl) return;
     if (!mirrorReadonlySid) {
-      inputEl.placeholder = DEFAULT_INPUT_PLACEHOLDER;
+      inputEl.placeholder = t('给 Claude 发消息...');
       return;
     }
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag });
+    inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag });
     // 兼容：隐藏节点若仍在 DOM，同步文案（不展示）
     if (mirrorBannerText) mirrorBannerText.textContent = inputEl.placeholder;
     if (mirrorBannerIcon) mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
@@ -5440,7 +5628,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function showMirrorComposerHint() {
     if (!mirrorReadonlySid) return;
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    const text = formatMirrorComposerHint({ armed, stale: mirrorStaleFlag });
+    const text = formatMirrorComposerHint({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag });
     const now = Date.now();
     if (!shouldEmitThrottledHint({
       lastText: _mirrorComposerHintLast.text,
@@ -5459,7 +5647,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     } catch { /* scroll/classList 在极端 DOM 下可忽略 */ }
   }
 
-  function applyMirror(readonly, sessionId, stale = false, observedCli) {
+  function applyMirror(readonly, sessionId, stale = false, observedCli, autonomous = false) {
     const wasEffective = Boolean(mirrorReadonlySid);
     const effective = readonly && mirrorOverriddenSid !== sessionId; // 已接管则忽略只读
     if (effective && !wasEffective) {
@@ -5475,6 +5663,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     mirrorReadonlySid = effective ? sessionId : null;
     mirrorStaleFlag = effective && stale;
+    mirrorAutonomousFlag = effective && autonomous;
     if (effective) {
       // observed CLI state 只是镜像展示层，不能写回 Web 实例偏好；未知字段也必须保持未知。
       renderCliPanelState();
@@ -5498,7 +5687,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       btnAttach.disabled = effective;
       btnAttach.classList.toggle('opacity-50', effective);
       btnAttach.classList.toggle('cursor-not-allowed', effective);
-      btnAttach.title = effective ? '只读镜像：终端会话运行中——点右侧续接可在手机继续' : '添加附件';
+      btnAttach.title = effective
+        ? (mirrorAutonomousFlag ? '只读镜像：本会话自主循环执行中——点右侧续接可在手机继续' : '只读镜像：终端会话运行中——点右侧续接可在手机继续')
+        : '添加附件';
     }
     // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
     updateSendButtonState();
@@ -5542,7 +5733,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         return;
       }
     }
-    applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli);
+    applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli, !!ev.payload?.autonomous);
   }
   // 「续接 CLI 会话」（发送钮位 mode=resume / cancel-resume）：
   // 运行中点击=排队续接——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行）；

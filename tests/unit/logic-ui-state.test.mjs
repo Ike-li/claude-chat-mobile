@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, resolveSheetDragEnd } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -56,6 +56,32 @@ test.describe('readAlertPrefs / writeAlertPref：完成提示开关', () => {
       [ALERT_PREF_KEYS.sound]: '0',
       [ALERT_PREF_KEYS.vibrate]: '1',
     });
+  });
+});
+
+// ---- 推送内容预览偏好：⑧ 与完成提示反极性——默认关，仅 '1' 为开（泄露面更大，须显式选） ----
+test.describe('readPushPreviewPref / writePushPreviewPref：推送内容预览开关', () => {
+  test('缺省 / 空存储 → false（默认关，与 ALERT_PREF_KEYS 相反极性）', () => {
+    assert.equal(readPushPreviewPref(() => null), false);
+    assert.equal(readPushPreviewPref(() => undefined), false);
+    assert.equal(readPushPreviewPref(() => ''), false);
+    assert.equal(readPushPreviewPref(() => '0'), false);
+  });
+  test("显式 '1' → true；其它任意值仍为 false（严格等于 '1' 才开）", () => {
+    assert.equal(readPushPreviewPref(() => '1'), true);
+    assert.equal(readPushPreviewPref(() => 'yes'), false);
+    assert.equal(readPushPreviewPref(() => 'true'), false);
+  });
+  test('writePushPreviewPref 写 1/0 到固定 key', () => {
+    const out = {};
+    assert.equal(writePushPreviewPref((k, v) => { out[k] = v; }, true), true);
+    assert.deepEqual(out, { [PUSH_PREVIEW_PREF_KEY]: '1' });
+    assert.equal(writePushPreviewPref((k, v) => { out[k] = v; }, false), true);
+    assert.deepEqual(out, { [PUSH_PREVIEW_PREF_KEY]: '0' });
+  });
+  test('非函数 setItem → 不写、返回 false，不抛错', () => {
+    assert.equal(writePushPreviewPref(null, true), false);
+    assert.doesNotThrow(() => writePushPreviewPref(undefined, true));
   });
 });
 
@@ -643,6 +669,25 @@ test.describe('taskStopUiState（后台任务停止按钮）', () => {
     assert.equal(taskStopUiState({ taskId: '', bannerVisible: true }).canStop, false);
     assert.equal(taskStopUiState({ taskId: 't1', bannerVisible: false }).canStop, false);
     assert.equal(taskStopUiState({}).canStop, false);
+  });
+});
+
+test.describe('bgTaskListCollapsed（后台任务列表折叠）', () => {
+  test('单任务恒展开，不受用户表态影响', () => {
+    assert.equal(bgTaskListCollapsed({ count: 1, userExpanded: null }), false);
+    assert.equal(bgTaskListCollapsed({ count: 1, userExpanded: false }), false);
+    assert.equal(bgTaskListCollapsed({ count: 1, userExpanded: true }), false);
+  });
+  test('多任务默认收起（用户未表态）', () => {
+    assert.equal(bgTaskListCollapsed({ count: 2, userExpanded: null }), true);
+    assert.equal(bgTaskListCollapsed({ count: 5 }), true);
+  });
+  test('多任务时用户表态优先于默认值', () => {
+    assert.equal(bgTaskListCollapsed({ count: 3, userExpanded: true }), false);
+    assert.equal(bgTaskListCollapsed({ count: 3, userExpanded: false }), true);
+  });
+  test('count=0 恒不折叠（横幅本就整体隐藏，值不生效但保持确定性）', () => {
+    assert.equal(bgTaskListCollapsed({ count: 0, userExpanded: null }), false);
   });
 });
 

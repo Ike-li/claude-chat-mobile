@@ -167,15 +167,18 @@ test('inbound contract flags client emits and mock handlers outside the contract
 });
 
 test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量抽查）', () => {
-  // 35 = user:*(11) + task:stop + session:*(8) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + git:status + git:diff + doctor:run + service:status
+  // 38 = user:*(11) + task:stop + session:*(9) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + files:search + files:write + git:status + git:diff + doctor:run + service:status
   //      + worktree:sessions（linked worktree 会话发现，CLI「cd 进 worktree 即 /resume」的 web 等价物）
   // （曾含 usage:get；抽屉额度窗已砍，额度只走 statusline。logs:clientError=前端全局 JS 错误上报落服务端日志；
   //   user:cancelQueued=排队消息撤回，对齐 CLI ESC；user:ackUnread=未读角标确认已读，点掉悬浮胶囊/翻到锚点时上报）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 35);
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 38);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('worktree:sessions'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:cancelQueued'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:ackUnread'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:deletePermanent'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('session:fork'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('files:search'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('files:write'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('doctor:run'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('service:status'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('git:status'));

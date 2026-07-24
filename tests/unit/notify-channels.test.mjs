@@ -13,6 +13,17 @@ function tempDataDir(t) {
 }
 
 const ENV_OFF = {}; // 未配置 VAPID/ntfy → 两通道均优雅缺席
+const ENV_PUSH_ON = { VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv', VAPID_SUBJECT: 'mailto:a@b.com' };
+
+// 假 webpushImpl：只记参数，不真发网络请求（同 fetchImpl 注入手法）。
+function fakeWebpush() {
+  const sent = [];
+  return {
+    sent,
+    setVapidDetails: () => {},
+    sendNotification: async (sub, payloadJson) => { sent.push({ endpoint: sub.endpoint, payload: JSON.parse(payloadJson) }); },
+  };
+}
 
 test.describe('createNotifyChannels · 订阅存储', () => {
   test('旧版单对象订阅文件向后兼容读入为数组', t => {
@@ -101,5 +112,48 @@ test.describe('createNotifyChannels · 通道开关与失败上报', () => {
     });
     await n.ntfyNotify('title', 'body');
     assert.equal(failures, 0);
+  });
+});
+
+// ⑧ 推送内容预览：pushNotify 按每条订阅自己的 prefs.preview 独立选 body/previewBody——
+// 同一次 notify 调用，一台订阅了预览、另一台没订阅，两台应收到不同 payload。
+test.describe('createNotifyChannels · pushNotify 按订阅 prefs 选 body/previewBody', () => {
+  test('无 previewBody 参数（如 result 事件）→ 所有订阅一律收 body，不管 prefs', async t => {
+    const webpush = fakeWebpush();
+    const n = createNotifyChannels({ dataDir: tempDataDir(t), env: ENV_PUSH_ON, webpushImpl: webpush });
+    n.savePushSubscription({ endpoint: 'https://e/preview-on', keys: { p256dh: 'a', auth: 'b' }, prefs: { preview: true } });
+    n.savePushSubscription({ endpoint: 'https://e/preview-off', keys: { p256dh: 'a', auth: 'b' } });
+    await n.pushNotify('标题', '最小化正文');
+    assert.equal(webpush.sent.length, 2);
+    for (const s of webpush.sent) assert.equal(s.payload.body, '最小化正文');
+  });
+
+  test('订阅 prefs.preview=true 且提供 previewBody → 该订阅收 previewBody，未订阅的仍收 body', async t => {
+    const webpush = fakeWebpush();
+    const n = createNotifyChannels({ dataDir: tempDataDir(t), env: ENV_PUSH_ON, webpushImpl: webpush });
+    n.savePushSubscription({ endpoint: 'https://e/preview-on', keys: { p256dh: 'a', auth: 'b' }, prefs: { preview: true } });
+    n.savePushSubscription({ endpoint: 'https://e/preview-off', keys: { p256dh: 'a', auth: 'b' }, prefs: { preview: false } });
+    n.savePushSubscription({ endpoint: 'https://e/no-prefs', keys: { p256dh: 'a', auth: 'b' } });
+    await n.pushNotify('标题', '最小化正文', undefined, '完整问题正文预览');
+    const byEndpoint = Object.fromEntries(webpush.sent.map(s => [s.endpoint, s.payload]));
+    assert.equal(byEndpoint['https://e/preview-on'].body, '完整问题正文预览');
+    assert.equal(byEndpoint['https://e/preview-off'].body, '最小化正文');
+    assert.equal(byEndpoint['https://e/no-prefs'].body, '最小化正文');
+  });
+
+  test('previewBody 为空串（事件类型支持预览但本次无内容）→ 即便订阅了预览也回落 body（空预览没意义）', async t => {
+    const webpush = fakeWebpush();
+    const n = createNotifyChannels({ dataDir: tempDataDir(t), env: ENV_PUSH_ON, webpushImpl: webpush });
+    n.savePushSubscription({ endpoint: 'https://e/preview-on', keys: { p256dh: 'a', auth: 'b' }, prefs: { preview: true } });
+    await n.pushNotify('标题', '最小化正文', undefined, '');
+    assert.equal(webpush.sent[0].payload.body, '最小化正文');
+  });
+
+  test('data 透传不受 preview 选择影响', async t => {
+    const webpush = fakeWebpush();
+    const n = createNotifyChannels({ dataDir: tempDataDir(t), env: ENV_PUSH_ON, webpushImpl: webpush });
+    n.savePushSubscription({ endpoint: 'https://e/preview-on', keys: { p256dh: 'a', auth: 'b' }, prefs: { preview: true } });
+    await n.pushNotify('标题', '正文', { instanceId: 'inst_1' }, '预览');
+    assert.deepEqual(webpush.sent[0].payload.data, { instanceId: 'inst_1' });
   });
 });

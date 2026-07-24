@@ -221,4 +221,36 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-17j 多任务后台横幅默认折叠，点击折叠按钮可展开/收起', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:taskprogress-multi');
+    await expect(page.locator('#taskProgressBanner')).toBeVisible();
+    await expect(page.locator('#taskProgressText')).toContainText('3 个运行中', { timeout: 10_000 });
+
+    // 默认折叠：行已渲染在 DOM（供断言/无障碍），但列表容器不可见。
+    const toggle = page.locator('[data-testid="bg-task-toggle"]');
+    const list = page.locator('[data-testid="bg-task-list"]');
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(list).toBeHidden();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toHaveCount(3);
+
+    // 点开：展开列表，三行任务详情可见。
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(list).toBeVisible();
+    await expect(page.locator('[data-testid="bg-task-row"]').first()).toBeVisible();
+
+    // 再点收起。
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(list).toBeHidden();
+
+    await waitForIdle(page);
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -138,6 +138,51 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // 新会话（未选具体模型）+ 网关默认：CLI 报 cwd 默认为档位别名 opus（instances.defaultModel），SDK
+      // supportedModels() 在 resolvedModel 带出真实 wire id。回归 bug：currentModel 空时底栏 pill 须解析出
+      // 真实模型名，而不是停在裸别名 'opus'——原表现「选了 opus 才显具体名」。models 列表无 default 项，
+      // 故 cliDefaultLabel 为空、pill 回落 cwd 默认名并经 resolveGatewayModelName 桥接。
+      command: 'test:gateway-default-fresh',
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, mockInstances, permissionMode, delay }) => {
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'init', payload: {
+            model: '', // 新会话未选具体模型
+            cwd: mockInstances[0].cwd,
+            claudeVersion: '0.1.0-mock',
+            mcpServers: [],
+            skillsCount: 7,
+            permissionMode,
+            slashCommands: [{ name: 'model', description: 'Switch active model' }],
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'models', payload: {
+            models: [
+              { value: 'opus', displayName: 'Opus', resolvedModel: 'mimo-v2.5-pro-ultraspeed' },
+              { value: 'sonnet', displayName: 'Sonnet', resolvedModel: 'mimo-v2.5-pro' },
+            ],
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances,
+            defaultModel: 'opus', // scout 探得的 cwd 默认（档位别名）
+          },
+        });
+        await delay(300);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_gateway_default_fresh_1', durationMs: 100, costUsd: 0, isError: false, models: [] },
+        });
+      }),
+    },
+    {
       command: 'test:mirror',
       run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, delay }) => {
         const mirrorEvent = (readonly, stale) => ({

@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, resolveModelDisplayName, resolveGatewayModelName, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents } from '../../public/js/logic.js';
+import { modelEntryFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -636,6 +636,58 @@ test('resolveGatewayModelName: 带 [1m] 网关后缀名经桥接后仍能取到 
   assert.equal(resolveGatewayModelName('claude-opus-4-8[1m]', list), 'mimo-v2.5-pro-ultraspeed[1m]');
 });
 
+// resolveModelPillText：底栏 pill / compose 摘要同源。核心回归：新会话 currentModel 空、
+// cwdDefaultModel 是档位别名时，必须解析出真实模型名（否则 pill 只显示 "opus"）。
+test('resolveModelPillText: 已选 model + resolvedModel → 显真实 wire id', () => {
+  const list = [{ value: 'opus', resolvedModel: 'claude-opus-4-8' }];
+  assert.equal(resolveModelPillText({ model: 'opus', modelsList: list }), 'claude-opus-4-8');
+});
+
+test('resolveModelPillText: 已选 model 无 resolvedModel → 原样（含 gateway 后缀）', () => {
+  assert.equal(resolveModelPillText({ model: 'opus', gatewaySuffix: '[1m]', modelsList: [] }), 'opus[1m]');
+});
+
+test('resolveModelPillText: 新会话空 model + cwdDefault 别名有 resolvedModel → 显真实名（本次 bug）', () => {
+  const list = [{ value: 'opus', displayName: 'Opus', resolvedModel: 'claude-opus-4-8' }];
+  assert.equal(resolveModelPillText({
+    model: '',
+    modelsList: list,
+    cwdDefaultModel: 'opus',
+  }), 'claude-opus-4-8');
+});
+
+test('resolveModelPillText: 新会话空 model + cwdDefault 带 [1m] 别名 → 经裸名桥接', () => {
+  const list = [{ value: 'opus', resolvedModel: 'claude-opus-4-8' }];
+  assert.equal(resolveModelPillText({
+    model: '',
+    modelsList: list,
+    cwdDefaultModel: 'opus[1m]',
+  }), 'claude-opus-4-8');
+});
+
+test('resolveModelPillText: 新会话空 model + cwdDefault 无映射 → 显裸 cwd 默认名', () => {
+  assert.equal(resolveModelPillText({
+    model: '',
+    modelsList: [],
+    cwdDefaultModel: 'claude-opus-4-8[1m]',
+  }), 'claude-opus-4-8');
+});
+
+test('resolveModelPillText: cliDefaultLabel 优先于 cwdDefault（/model default 复位契约）', () => {
+  const list = [{ value: 'opus', resolvedModel: 'claude-opus-4-8' }];
+  assert.equal(resolveModelPillText({
+    model: '',
+    modelsList: list,
+    cwdDefaultModel: 'opus',
+    cliDefaultLabel: 'Default (recommended)',
+  }), 'Default (recommended)');
+});
+
+test('resolveModelPillText: 全空 → 「默认」', () => {
+  assert.equal(resolveModelPillText({ model: '', modelsList: [] }), '默认');
+  assert.equal(resolveModelPillText({}), '默认');
+});
+
 test('effortLevelsFor: 模型支持 → 列其档', () => {
   const ml = [{ value: 'opus[1m]', supportedEffortLevels: ['low', 'high', 'max'] }];
   assert.deepEqual(effortLevelsFor('opus[1m]', ml), { hidden: false, levels: ['low', 'high', 'max'] });
@@ -708,3 +760,6 @@ test('resolvePanelState: 接管后整组恢复 Web 偏好，不把 CLI 观察值
     effort: 'high',
   });
 });
+
+// detectAtMentionQuery/applyAtMentionPick → logic-composer-mention.test.mjs；resolveForkAnchorUuid →
+// logic-history-fork.test.mjs（source-layout.test.mjs 800 行硬顶 + 按行为域拆分惯例）。

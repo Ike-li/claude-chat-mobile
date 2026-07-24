@@ -94,6 +94,52 @@ test('task_notification 失败（status=failed/error）→ 「后台任务失败
   assert.equal(notificationForEvent('task_notification', { status: 'error' }, {}).title, '⚠️ 后台任务失败');
 });
 
+// ── previewBody：⑧ 推送内容预览开关（客户端订阅按偏好选 body/previewBody，见 notify-channels.js pushNotify）──
+// body 本身维持最小化不变（上面几条断言已锁死不含正文）；previewBody 是【新增】可选字段，只有用户
+// 主动开启预览的设备才会收到它，ntfy 通道永不用它（第三方明文红线，见 notify-channels.js 头注）。
+
+test('permission_request → previewBody 含工具名 + input 摘要', () => {
+  const n = notificationForEvent('permission_request', { name: 'Bash', input: { command: 'rm -rf /tmp/x' } }, { hasClients: true });
+  assert.match(n.previewBody, /Bash/);
+  assert.match(n.previewBody, /rm -rf/);
+});
+
+test('question → previewBody 是问题正文', () => {
+  const n = notificationForEvent('question', { text: '要删除生产库吗?' }, { hasClients: true });
+  assert.equal(n.previewBody, '要删除生产库吗?');
+});
+
+test('task_notification → previewBody 是 summary', () => {
+  const n = notificationForEvent('task_notification', { status: 'completed', summary: '改了 auth.js 的鉴权分支' }, { hasClients: true });
+  assert.equal(n.previewBody, '改了 auth.js 的鉴权分支');
+});
+
+test('result → 无 previewBody 字段（该事件本身没有正文内容可预览，非"缺省为空"）', () => {
+  const n = notificationForEvent('result', { durationMs: 1000 }, { hasClients: false });
+  assert.equal('previewBody' in n, false);
+});
+
+test('previewBody 超 120 字截断并加省略号', () => {
+  const n = notificationForEvent('question', { text: 'x'.repeat(200) }, { hasClients: true });
+  assert.equal(n.previewBody.length, 121); // 120 + '…'
+  assert.ok(n.previewBody.endsWith('…'));
+});
+
+test('question 缺 text → previewBody 空串（该事件类型支持预览，只是本次没内容——非 result 那种"不适用"）', () => {
+  const n = notificationForEvent('question', {}, { hasClients: true });
+  assert.equal(n.previewBody, '');
+});
+
+test('task_notification 缺 summary → previewBody 空串', () => {
+  const n = notificationForEvent('task_notification', { status: 'completed' }, { hasClients: true });
+  assert.equal(n.previewBody, '');
+});
+
+test('permission_request 缺 input → previewBody 只有工具名', () => {
+  const n = notificationForEvent('permission_request', { name: 'Bash' }, { hasClients: true });
+  assert.equal(n.previewBody, 'Bash');
+});
+
 // ── cwdBase（docs/design.md/OQ-08 已决：默认显示，不设隐藏配置项）——多工作区场景分辨通知来自哪个项目 ──
 
 test('permission_request 带 cwd → title 追加目录尾段（仅 basename，非完整路径）', () => {

@@ -1,4 +1,4 @@
-import { formatApiRetryBanner, formatBgTaskRowLabel, taskStopUiState } from '../logic.js';
+import { bgTaskListCollapsed, formatApiRetryBanner, formatBgTaskRowLabel, taskStopUiState } from '../logic.js';
 
 export function createTaskStatusController(context, {
   addBar = () => {},
@@ -14,6 +14,8 @@ export function createTaskStatusController(context, {
   const tasks = new Map();
   let activeTaskId = null;
   let apiRetryActive = false;
+  // 多任务列表折叠时的用户表态：null=未表态（按阈值走默认折叠）；瞬态，横幅撤下（hideProgress）即重置。
+  let userExpanded = null;
 
   function showActivity(description) {
     if (!dom.activityBanner || !dom.activityBannerText) return;
@@ -82,13 +84,28 @@ export function createTaskStatusController(context, {
   function hideProgress() {
     dom.taskProgressBanner?.classList.add('hidden');
     activeTaskId = null;
+    userExpanded = null;
     tasks.clear();
     const list = taskList();
     if (list) {
       list.replaceChildren();
       list.classList.add('hidden');
     }
+    dom.btnTaskToggle?.classList.add('hidden');
     syncStopButton();
+  }
+
+  function syncToggleButton(collapsed) {
+    if (!dom.btnTaskToggle) return;
+    dom.btnTaskToggle.classList.toggle('hidden', tasks.size <= 1);
+    dom.btnTaskToggle.setAttribute('aria-expanded', String(!collapsed));
+    dom.btnTaskToggle.textContent = collapsed ? '▸' : '▾';
+  }
+
+  function toggleTaskList() {
+    const collapsed = bgTaskListCollapsed({ count: tasks.size, userExpanded });
+    userExpanded = collapsed; // 翻转：当前收起 → 用户表态为「要展开」；当前展开 → 用户表态为「要收起」
+    renderTaskList();
   }
 
   function stopTask(taskId, message) {
@@ -103,10 +120,14 @@ export function createTaskStatusController(context, {
     list.replaceChildren();
     if (tasks.size === 0) {
       list.classList.add('hidden');
+      syncToggleButton(true);
       return;
     }
-    // 始终展开：单任务也给一行详情（标题只写「运行中」，避免复读）
-    list.classList.remove('hidden');
+    // 单任务恒展开（给一行详情，标题只写「运行中」避免复读）；多任务默认折叠，行照常渲染供折叠态下的
+    // 测试断言与即时展开使用，仅用 hidden 类控制可见性。
+    const collapsed = bgTaskListCollapsed({ count: tasks.size, userExpanded });
+    list.classList.toggle('hidden', collapsed);
+    syncToggleButton(collapsed);
     for (const [taskId, task] of tasks) {
       const row = createElement('<div class="rounded-lg border border-warning/25 bg-warning/5 px-2 py-1.5" data-testid="bg-task-row"></div>');
       const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
@@ -244,6 +265,7 @@ export function createTaskStatusController(context, {
       });
       if (ui.canStop) stopTask(ui.taskId, '已请求停止后台任务…');
     });
+    dom.btnTaskToggle?.addEventListener('click', () => toggleTaskList());
   }
 
   if (autoBind) bind();
