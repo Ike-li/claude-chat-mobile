@@ -9,7 +9,7 @@
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-![Claude Chat Mobile — 终端里的 claude，手机上也能用](docs/assets/hero-zh.jpg)
+![Claude Chat Mobile — 终端里的 claude，手机上也能用](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
 
 **Claude Code 在跑，人却不总在电脑前。** 你让 claude 改代码，然后去开会——它需要权限时，手机收到推送；点进 App 看清命令、允许或拒绝。回家坐到电脑前，终端 `/resume` 接上手机上那个会话继续——同一个 agent、同一份记录，不是另开一个。
 
