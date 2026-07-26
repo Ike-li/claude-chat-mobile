@@ -203,7 +203,53 @@ test.describe('checkIdle()', () => {
     s.dispose();
   });
 
-  test('在途轮静默超时 → emit error + terminating=true + abort', () => {
+  // CLI 等价性：CLI 里请求挂死只是报错停在原地（Esc 中断本轮），绝不自杀会话。看门狗超时
+  // 应等价于替用户按 Esc——走 interrupt() 中断在途轮，实例存活可原地重发，兑现
+  // formatLifecycleIdleTimeout 文案里的「可重新发送继续」（旧行为直接 abort 杀实例 →
+  // onExit → 实例被删 → 前端「会话已中断」死路页，与文案自相矛盾）。
+  test('在途轮静默超时 + SDK 可中断 → 自动中断本轮但实例存活（不 abort 不 terminating）', async () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    let interruptCalls = 0;
+    s.q = { interrupt: async () => { interruptCalls++; } };
+    s.checkIdle();
+    await new Promise(r => setTimeout(r, 20)); // interrupt() 异步收尾
+    assert.equal(interruptCalls, 1, '应走 q.interrupt() 而非直接 abort');
+    assert.equal(s.terminating, false, '中断成功不得置 terminating');
+    assert.equal(aborted, false, '中断成功不得 abort 子进程');
+    const err = events.find(e => e.type === 'error');
+    assert.ok(err);
+    assert.ok(err.payload.message.includes('静默'), '仍须发静默超时说明（用户可见原因）');
+    assert.equal(err.payload.recoverable, true);
+    const sys = events.find(e => e.type === 'system' && e.payload.kind === 'interrupted');
+    assert.ok(sys, '应发「已中断」（等价用户按 Esc）');
+    assert.ok(s.lastActivity > 0, '触发后须刷新 lastActivity，防 30s tick 在中断未决期间重复触发');
+    s.dispose();
+  });
+
+  test('在途轮静默超时 + interrupt 被拒 → settleForce 兜底（terminating + abort + 账面收口）', async () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.q = { interrupt: async () => { throw new Error('control lost'); } };
+    s.checkIdle();
+    await new Promise(r => setTimeout(r, 20));
+    assert.equal(s.terminating, true, '控制通道失败 → 保留原强杀兜底');
+    assert.equal(aborted, true);
+    assert.equal(s.pendingTurns, 0, 'settleForce 应收口在途轮账面');
+    const sys = events.find(e => e.type === 'system' && e.payload.kind === 'interrupted');
+    assert.ok(sys);
+    s.dispose();
+  });
+
+  // SDK 不可达（q 缺失/无 interrupt 方法，如启动早期或已半死）：无法「按 Esc」，
+  // 保留直接强杀——否则 q.interrupt?.() 返回 undefined 会被当成功，僵尸实例永不清理。
+  test('在途轮静默超时 + SDK 不可达（无 q.interrupt）→ 兜底 abort 强杀', () => {
     const { s, events } = makeSession({ idleTimeoutMs: 1 });
     s.pendingTurns = 1;
     s.lastActivity = 0;

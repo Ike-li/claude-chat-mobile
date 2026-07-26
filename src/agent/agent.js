@@ -984,8 +984,16 @@ export class AgentSession {
         message: formatLifecycleIdleTimeout(Math.round(this.idleTimeoutMs / 60000)),
         recoverable: true
       });
-      this.terminating = true;
-      try { this.abort?.abort(); } catch { /* noop */ }
+      // 终端等价性：CLI 里请求挂死只是停在原地报错（用户可 Esc 中断本轮），从不自杀会话。
+      // 看门狗替用户按这个「Esc」——q 可达就走 interrupt()（失败/超时它自己的 settleForce
+      // 兜底会强杀），只有 q 本身不可达（启动早期等边缘态，无法发中断请求）才直接强杀防僵尸。
+      this.lastActivity = Date.now(); // 防中断未决期间 30s tick 重复触发
+      if (this.q && typeof this.q.interrupt === 'function') {
+        this.interrupt();
+      } else {
+        this.terminating = true;
+        try { this.abort?.abort(); } catch { /* noop */ }
+      }
     }
   }
 
