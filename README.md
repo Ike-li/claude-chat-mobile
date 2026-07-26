@@ -73,6 +73,17 @@ npm run statusline:install    # 显式安装；不会由 npm install / npm start
 
 安装后重开 Claude CLI，并重启常驻 server；卸载用 `npm run statusline:uninstall`。
 
+在电脑终端直接跑 `claude` 时，回合结束（Stop）与需要你介入（Notification）默认要等最长 2.5 秒轮询才被 Web 发现，也不会推送到手机。装上 CLI hooks 桥即可让 CLI 主动通知：
+
+```bash
+npm run hooks:status     # 只读查看，不改 ~/.claude
+npm run hooks:install    # 显式安装 + 自动回环验证，装完明确告诉你成没成
+npm run hooks:verify     # 随时重跑端到端验证
+npm run hooks:uninstall  # 只摘掉自己的 hook 条目，你已有的 hooks 一字不动
+```
+
+装完**重开终端里的 claude 会话**才会加载 hooks。server 不在时 hook 只是静默落盘，绝不影响 CLI 本身；临时停用在 `.env` 设 `CLI_HOOKS_BRIDGE=off`，不必卸载。
+
 然后在手机上打开。启动日志会打印已带 token 的可用 URL：
 
 - **同一 WiFi：** 先在 `.env` 设 `AUTH_TOKEN`（局域网也必填，不设手机连不上），再打开启动时打印的局域网地址（`http://<lan-ip>:3000/#token=…`）。不需要隧道。

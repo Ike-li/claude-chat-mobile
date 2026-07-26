@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology } from '../../src/ops/doctor-checks.js';
+import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology } from '../../src/ops/doctor-checks.js';
 
 test('statuslineConfigDiagnostic treats web statusline as self-contained', () => {
   const result = statuslineConfigDiagnostic();
@@ -164,4 +164,16 @@ test.describe('classifyDeviceGateTopology（AUTH-003）', () => {
     const r = classifyDeviceGateTopology({ authTokenSet: false, cfEnabled: false });
     assert.equal(r.status, 'ok');
   });
+});
+
+// D12：hooks 桥安装态四分支。与 D6 同款——drifted 不自作主张覆盖，只提示用户自己看。
+test('hooksBridgeDiagnostic：off / 已安装 / 漂移 / 未安装 四态', () => {
+  assert.equal(hooksBridgeDiagnostic({ bridgeOff: true }).status, 'ok');
+  assert.equal(hooksBridgeDiagnostic({ installState: 'installed' }).status, 'ok');
+  const drifted = hooksBridgeDiagnostic({ installState: 'drifted' });
+  assert.equal(drifted.status, 'warn');
+  assert.match(drifted.detail, /勿强行覆盖/);
+  const missing = hooksBridgeDiagnostic({ installState: 'not-installed' });
+  assert.equal(missing.status, 'warn');
+  assert.match(missing.detail, /hooks:install/);
 });

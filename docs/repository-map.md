@@ -33,7 +33,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 1 |
-| Backend source | 50 |
+| Backend source | 52 |
 | Configuration template | 1 |
 | Deployment | 3 |
 | Documentation | 4 |
@@ -46,16 +46,16 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Instructions | 2 |
 | Integration test | 21 |
 | Legal | 2 |
-| Maintainer tooling | 20 |
+| Maintainer tooling | 22 |
 | Project configuration | 4 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 105 |
+| Unit test | 110 |
 | Vendored asset | 21 |
 
-Total classified files: **327**.
+Total classified files: **336**.
 
 ## Complete file inventory
 
@@ -143,6 +143,8 @@ Total classified files: **327**.
 | `scripts/doc-consistency.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/doctor.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/gen-icons.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/hooks-bridge-setup.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/hooks-bridge.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/i18n-check.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/release.sh` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/render-plist.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
@@ -177,6 +179,7 @@ Total classified files: **327**.
 | `src/files/workdir-scope-guard.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/audit.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/cli-bg-session-lock.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/ops/cli-hooks-bridge.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/cli-statusline-bridge.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/client-error-log.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/doctor-checks.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -188,6 +191,7 @@ Total classified files: **327**.
 | `src/ops/usage-snapshot.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/app.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/config.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/server/hooks-inbox.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/http.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/instance-latches.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/instance-manager.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -301,6 +305,7 @@ Total classified files: **327**.
 | `tests/unit/cf-access.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/check-import-boundaries.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cli-bg-session-lock.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/cli-hooks-bridge.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cli-mirror-state.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cli-settings-defaults.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cli-statusline-bridge.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
@@ -328,6 +333,10 @@ Total classified files: **327**.
 | `tests/unit/history-list.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-messages.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-sync.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/hooks-bridge-runner.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/hooks-bridge-setup.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/hooks-decide.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/hooks-inbox.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/i18n-check.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/i18n.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/instance-latches.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

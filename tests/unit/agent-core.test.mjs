@@ -3,10 +3,16 @@ import assert from 'node:assert/strict';
 import { AgentSession, sdkChildEnv } from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 
+// 两个 origin 标记都必须由本函数强制注入、调用方不可覆盖：statusline wrapper 据前者不捕获快照，
+// hooks runner 据后者直接退出——SDK 会话 settingSources 含 'user' 会加载用户全局 hooks，不抑制则
+// web 自己驱动的每轮都被自己的 Stop hook 再推一次通知。
 test('sdkChildEnv：SDK 子进程带项目自有 origin 标记且调用方不能覆盖', () => {
-  assert.deepEqual(sdkChildEnv({ KEEP: 'yes', EMPTY: '', CCM_STATUSLINE_ORIGIN: 'terminal' }), {
+  assert.deepEqual(sdkChildEnv({
+    KEEP: 'yes', EMPTY: '', CCM_STATUSLINE_ORIGIN: 'terminal', CCM_HOOKS_ORIGIN: 'terminal',
+  }), {
     KEEP: 'yes',
     CCM_STATUSLINE_ORIGIN: 'web-sdk',
+    CCM_HOOKS_ORIGIN: 'web-sdk',
   });
 });
 

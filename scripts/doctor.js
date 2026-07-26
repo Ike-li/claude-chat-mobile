@@ -2,7 +2,7 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
-// 检查项（11 项）:
+// 检查项（12 项）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
@@ -14,6 +14,7 @@
 // 9. 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本；防文档间漂移的机械化背书）
 // 10. 前端 JS 语法（递归检查 public/js/**/*.js——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
 // 11. 测试覆盖率门槛
+// 12. CLI hooks 桥安装态（只读 status；不安装、不改 ~/.claude）
 import { config } from 'dotenv';
 import { existsSync, accessSync, constants, mkdirSync, readFileSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
@@ -24,7 +25,7 @@ import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
-import { statuslineBridgeDiagnostic, statuslineConfigDiagnostic } from '../src/ops/doctor-checks.js';
+import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic } from '../src/ops/doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
 
@@ -207,6 +208,36 @@ function checkStatuslineBridge() {
   (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
+// D12: CLI hooks 桥安装态。与 D6 同款：execFileSync 调只读 status 子命令，只消费 state。
+function checkHooksBridge() {
+  const bridgeOff = process.env.CLI_HOOKS_BRIDGE === 'off';
+  let installState;
+  try {
+    const raw = execFileSync(process.execPath, [join(HERE, 'scripts', 'hooks-bridge-setup.js'), 'status'], {
+      cwd: HERE,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 3000,
+    });
+    const parsed = JSON.parse(raw);
+    if (!['installed', 'not-installed', 'drifted'].includes(parsed?.state)) {
+      throw new Error('status 返回了未知状态');
+    }
+    installState = parsed.state;
+  } catch (err) {
+    if (bridgeOff) {
+      const result = hooksBridgeDiagnostic({ bridgeOff, installState: 'not-installed' });
+      ok(result.name, result.detail);
+      return;
+    }
+    const detail = (err?.stderr?.toString() || err?.message || '未知错误').split('\n').filter(Boolean)[0];
+    warn('CLI_HOOKS_BRIDGE', `无法只读检查安装状态：${detail}。运行 \`npm run hooks:status\` 查看详情。`);
+    return;
+  }
+  const result = hooksBridgeDiagnostic({ bridgeOff, installState });
+  (result.status === 'ok' ? ok : warn)(result.name, result.detail);
+}
+
 // D7: 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
 function checkAnthropicEnv() {
   const envPath = EFFECTIVE.envFile; // WS-011：读被诊断的 .env（--env 指定），非硬编码仓库 HERE/.env
@@ -341,7 +372,7 @@ function effectiveConfigFiles() {
   });
 }
 
-// 执行 11 项检查（D4 端口检查是 async，需 await）
+// 执行 12 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
   checkClaudeBin();
@@ -354,6 +385,7 @@ function effectiveConfigFiles() {
   checkDocConsistency();
   checkFrontendSyntax();
   checkCoverageThreshold();
+  checkHooksBridge();
 
   // --fix 选项：自动修复权限
   if (shouldFix) {

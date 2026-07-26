@@ -21,7 +21,9 @@ import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings }
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
-import { notificationForEvent, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
+import { notificationForEvent, notificationForCliHook, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
+import { decideHookEventActions, resolveHookDirs } from '../ops/cli-hooks-bridge.js';
+import { createHooksInbox } from './hooks-inbox.js';
 import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
@@ -349,6 +351,11 @@ const getMetricsPayload = () => {
       pushFailure: counters.push_failure ?? 0,
       ntfyFailure: counters.ntfy_failure ?? 0,
       clientErrors: counters.client_errors ?? 0,
+      // CLI hooks 桥（与 catchUpHits 同属"同步管道健康"）：装了却收不到时，consumed 恒 0 一眼可辨；
+      // ignored 高说明事件多来自工作区白名单外的项目（正常，不是故障）。
+      hookEventsConsumed: counters.hook_events_consumed ?? 0,
+      hookEventsIgnored: counters.hook_events_ignored ?? 0,
+      hookPushes: counters.hook_pushes ?? 0,
     },
     state: metrics.classifyState({ failed, awaiting, notifyFailed, mobileClients }),
     states: { failed, awaiting, notifyFailed, mobileClients },
@@ -1110,6 +1117,46 @@ function rescheduleCatchUp() {
   if (typeof catchUpTimer.unref === 'function') catchUpTimer.unref();
 }
 rescheduleCatchUp();
+
+// ── CLI hooks 投递箱（终端直跑会话的即时信号）──────────────────────────────────────
+// 用户在电脑终端里直接跑 claude 时，ccm 此前只能靠上面这个 2.5s 轮询发现变化。装了 hooks 桥后
+// CLI 会在回合结束（Stop）/ 等你回应（Notification）时主动落一个事件文件，这里监听并即时反应。
+// 定位是**加速器不是新事实源**：轮询照旧跑，watch 失效只是退回原延迟，功能不缺。
+let hooksNotifyThrottleState = new Map();
+function processHookEvents(events) {
+  const viewing = viewingInstanceId ? agents.get(viewingInstanceId) : null;
+  const decision = decideHookEventActions(events, {
+    viewingSessionId: viewing?.sessionId ?? null,
+    viewingCwd: viewing?.cwd ?? null,
+    workDirs,
+    hasForegroundClient: hasForegroundApprovedClient(approvedSocketObjects()),
+    now: Date.now(),
+    throttleState: hooksNotifyThrottleState,
+    throttleMs: notifyThrottleMs,
+  });
+  hooksNotifyThrottleState = decision.nextThrottleState;
+  metrics.inc('hook_events_consumed', events.length);
+  if (decision.ignored) metrics.inc('hook_events_ignored', decision.ignored);
+  for (const cwd of decision.invalidateCwds) invalidateListCache(cwd);
+  if (decision.catchUp) catchUpTick().catch(() => {}); // 单飞已防叠；插队一次，不动轮询节奏
+  for (const push of decision.pushes) {
+    // 深链只在该会话恰好有 live 实例时给得出（纯外部终端会话没有 instanceId）
+    const inst = instanceForSession(push.sessionId);
+    const pn = notificationForCliHook(push.hookEventName, {
+      cwd: push.cwd, sessionId: push.sessionId, instanceId: inst?.instanceId,
+    });
+    if (!pn) continue;
+    metrics.inc('hook_pushes');
+    pushNotify(pn.title, pn.body, pn.data);
+    ntfyNotify(pn.title, pn.body, ntfyMetaFor('result', pn.data, notify.publicUrl));
+  }
+  if (decision.invalidateCwds.length) broadcastInstances(); // 列表徽标/最近列表随之刷新
+}
+const hooksInbox = createHooksInbox({
+  ...resolveHookDirs(process.env), // 与 runner/安装器共用同一份解析，防"事件写 A、server 盯 B"
+  enabled: process.env.CLI_HOOKS_BRIDGE !== 'off',
+  onEvents: processHookEvents,
+});
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']; // 5 档硬编码，漂移由 smoke-effort 的 CLI warning 检测
 // 最近一次 init payload + 按 cwd 归键的 models / slashCommands 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
@@ -2885,6 +2932,7 @@ function shutdown(sig) {
   clearInterval(statusInterval);  // E16：node --watch 的 SIGTERM 重启路径必须清定时器
   clearTimeout(statusDebounce);   // （在途 git execFile 由 2s timeout 与进程退出收割）
   clearTimeout(catchUpTimer);     // 只读追平定时器（.unref 不阻止退出，但清掉避免关闭期间噪音回调）
+  hooksInbox.close();             // 关 hooks 投递箱 watcher + 防抖定时器（同上：避免关闭期间回调）
   // SRV-NEW-007：清 bgBroadcast 合并定时器，防 agents.clear 后仍 fire broadcastInstances
   if (bgBroadcastTimer) { clearTimeout(bgBroadcastTimer); bgBroadcastTimer = null; }
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批

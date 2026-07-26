@@ -104,6 +104,21 @@ export function notificationForBackgroundRunning({ instanceId, sessionId, cwd } 
   return instanceId ? { title, body, data: { instanceId, sessionId, cwd } } : { title, body };
 }
 
+// 终端直跑会话（CLI hooks 桥）的通知：与 notificationForEvent 分开，因为它按 envelope type 键控，
+// 而 hook 事件不是 agent:event。body 同样最小化（SEC-04）：不含正文，只说发生了什么。
+// data（深链）仅在该会话恰好有 live 实例时带——纯外部终端会话没有 instanceId，如实降级为无深链
+// （点开落首页），不编一个点不开的链接。
+export function notificationForCliHook(hookEventName, { cwd, sessionId, instanceId } = {}) {
+  const titleWithCwd = (title) => (cwd ? `${title} · ${basename(cwd)}` : title);
+  let title;
+  if (hookEventName === 'Stop') title = titleWithCwd('✅ 终端会话完成一轮');
+  else if (hookEventName === 'Notification') title = titleWithCwd('⚠️ 终端会话需要你');
+  else return null;
+  const body = hookEventName === 'Stop' ? '电脑上的 claude 跑完了这一轮' : '电脑上的 claude 在等你回应';
+  const base = { title, body };
+  return instanceId ? { ...base, data: { instanceId, sessionId, cwd } } : base;
+}
+
 // ── per-会话推送节流（docs/design.md TriggerPolicy，承接 FR-14"不重复轰炸同一会话"的另一半）──
 // 两层规则：①同一会话同一类别已有未决通知（未被 clearNotifyPending 清除）不重复推——
 // approval/input 需要"被处理"（request_resolved）才算未决解除；finished（result/task_notification）

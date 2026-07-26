@@ -6,7 +6,7 @@
 
 当你不知道怎么处理功能时，CLI 有什么 web 就有什么，请找一找 claude code cli 是怎么实现这个功能的。
 Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重复造轮子
-双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 分 25 种，seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存四条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播；离线唤醒走 web-push/ntfy，只唤醒不带内容、socket 在线时不推送。
+双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 分 25 种，seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存四条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播；终端会话的「回合结束/需要你」可选装 CLI hooks 桥（`npm run hooks:install`，事件走 `~/.claude/ccm/hooks-v1/` 文件投递箱 + server fs.watch，把轮询变即时信号，未装则回落轮询）；离线唤醒走 web-push/ntfy，只唤醒不带内容、socket 在线时不推送。
 
 ## 分支纪律
 
@@ -31,7 +31,7 @@ npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock serve
 npm run test:visual # test:e2e 的兼容别名
 
 # 启动前自检配置
-node scripts/doctor.js              # 11 项自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/CLI statusline bridge 安装态/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率
+node scripts/doctor.js              # 12 项自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/CLI statusline bridge 安装态/CLI hooks 桥安装态/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率
 node scripts/doctor.js --env=prod.env  # 指定 .env 文件
 
 # 设备指纹审批与管理

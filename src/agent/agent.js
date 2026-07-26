@@ -68,6 +68,9 @@ export function sdkChildEnv(base = process.env) {
     ...Object.fromEntries(Object.entries(base || {}).filter(([, value]) => value !== '')),
     // statusline wrapper 据此只转发 renderer、不捕获：防 Web SDK 子进程覆盖真实终端 session 快照。
     CCM_STATUSLINE_ORIGIN: 'web-sdk',
+    // hooks runner 据此直接静默退出。SDK 会话的 settingSources 含 'user'，会加载用户全局 hooks——
+    // 不抑制的话，web 自己驱动的每一轮都会经「SDK result」和「Stop hook」两条路各推一次通知。
+    CCM_HOOKS_ORIGIN: 'web-sdk',
   };
 }
 

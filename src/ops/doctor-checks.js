@@ -26,6 +26,20 @@ export function statuslineBridgeDiagnostic({ webOff = false, bridgeOff = false, 
   return { status: 'warn', name: 'CLI_STATUSLINE_BRIDGE', detail: '未安装；Web 驾驶的 SDK 状态栏可用，但 CLI 镜像 statusline 不同步。运行 `npm run statusline:install` 显式启用。' };
 }
 
+// D12: CLI hooks 桥安装态（同 D6：只消费 status 子命令的 state，不回显任何命令内容）。
+export function hooksBridgeDiagnostic({ bridgeOff = false, installState = 'not-installed' } = {}) {
+  if (bridgeOff) {
+    return { status: 'ok', name: 'CLI_HOOKS_BRIDGE', detail: '已通过 CLI_HOOKS_BRIDGE=off 停用（安装保留，事件不消费）。' };
+  }
+  if (installState === 'installed') {
+    return { status: 'ok', name: 'CLI_HOOKS_BRIDGE', detail: '已安装：终端会话回合结束/需要你时即时刷新并推送。' };
+  }
+  if (installState === 'drifted') {
+    return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: '安装记录与 settings.json 的 hooks 条目已漂移；先运行 `npm run hooks:status` 检查，勿强行覆盖。' };
+  }
+  return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: '未安装；终端直跑的会话仅靠 2.5s 轮询、无推送。运行 `npm run hooks:install` 显式启用。' };
+}
+
 // ④ 安全体检核心：危险白名单判定。解析 permissions.allow 里的 `Tool(specifier)` 规则，判其宽严。
 //   danger = 公网暴露前必须收紧；warn = 偏宽需留意；ok = 有界。识别不了的一律不误报 danger。
 export function classifyPermissionRule(rule) {
