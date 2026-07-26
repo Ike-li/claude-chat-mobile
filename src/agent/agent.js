@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import * as interactionLog from './interaction-log.js';
 import * as diagLog from './diag-log.js';
 import { sanitize } from '../shared/sanitizer.js';
+import { sdkChildEnv } from '../shared/child-env.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
@@ -63,16 +64,6 @@ const BG_TASK_TTL_MS = 180000;       // 活的后台任务（bgTasks）无心跳
 const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 server.js APPROVAL_TTL_MS；
                                           // docs/design.md/OQ-05 已决：不预置具体数值，此为实现落地的合理默认）
 
-export function sdkChildEnv(base = process.env) {
-  return {
-    ...Object.fromEntries(Object.entries(base || {}).filter(([, value]) => value !== '')),
-    // statusline wrapper 据此只转发 renderer、不捕获：防 Web SDK 子进程覆盖真实终端 session 快照。
-    CCM_STATUSLINE_ORIGIN: 'web-sdk',
-    // hooks runner 据此直接静默退出。SDK 会话的 settingSources 含 'user'，会加载用户全局 hooks——
-    // 不抑制的话，web 自己驱动的每一轮都会经「SDK result」和「Stop hook」两条路各推一次通知。
-    CCM_HOOKS_ORIGIN: 'web-sdk',
-  };
-}
 
 // epoch：每个 AgentSession 实例一个跨重启唯一标识。基于 wall-clock + 进程内计数，
 // 保证服务重启后新实例的 epoch 严格大于旧实例 → 客户端据此区分"新流"并重置 seq 去重基线。

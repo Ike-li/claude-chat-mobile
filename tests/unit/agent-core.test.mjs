@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AgentSession, sdkChildEnv } from '../../src/agent/agent.js';
+import { AgentSession } from '../../src/agent/agent.js';
+import { sdkChildEnv } from '../../src/shared/child-env.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 
 // 两个 origin 标记都必须由本函数强制注入、调用方不可覆盖：statusline wrapper 据前者不捕获快照，

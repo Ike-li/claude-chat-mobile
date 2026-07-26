@@ -8,6 +8,8 @@
 
 import { spawn } from 'node:child_process';
 
+import { sdkChildEnv } from '../shared/child-env.js';
+
 /** @typedef {{ id?: string, sessionId?: string, kind?: string, status?: string, state?: string, pid?: number, name?: string, cwd?: string }} CliAgentEntry */
 
 /**
@@ -193,7 +195,9 @@ function defaultRun(bin, args, { timeoutMs = 4000, cwd } = {}) {
     let settled = false;
     const child = spawn(bin, args, {
       cwd: cwd || process.cwd(),
-      env: process.env,
+      // 与 SDK 子进程共用同一个 env 漏斗：ccm 派生的每个 claude 进程都带上 origin 标记，
+      // 否则这个探测进程会被 statusline/hooks 桥当成"真实终端会话"。
+      env: sdkChildEnv(process.env),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     const timer = setTimeout(() => {
