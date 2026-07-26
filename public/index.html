@@ -610,6 +610,16 @@
     </div>
 
     <div id="settingsSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-5">
+      <!-- 0. CLI 配置刷新：下面模型/权限/思考强度三节的默认档都来自 ~/.claude/settings.json，
+           ensureCliDefaults 按 cwd 缓存（只在启动/session:new/session:home 才 force 重读），
+           终端侧改了文件这里不会自己感知——常驻手动兜底入口（新会话页另有一个同源的 ↻）。
+           不放标题栏：#settingsDragZone 绑了下拉关闭手势，按钮进去会和手势打架。 -->
+      <div class="flex items-center justify-end -mb-2">
+        <button id="btnConfigRefresh" type="button" class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] text-ink-faint hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置">
+          <span class="text-xs leading-none" data-spin>↻</span><span>重读 CLI 配置</span>
+        </button>
+      </div>
+
       <!-- 1. 模型选择大磁贴 -->
       <div>
         <div class="text-xs font-semibold text-ink-soft mb-2 flex items-center gap-1">✨ <span>选择模型</span> <span class="text-xs text-ink-faint font-normal">(切换下一条消息起效)</span></div>

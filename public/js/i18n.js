@@ -182,6 +182,7 @@ export const EN_DICT = Object.freeze({
   '⚙️ 配置面板': '⚙️ Settings',
   '下拉或点外侧关闭': 'Pull down or tap outside to close',
   '下拉关闭配置面板': 'Pull down to close settings',
+  '重读 CLI 配置': 'Reload CLI config',
   '选择模型': 'Select model',
   '(切换下一条消息起效)': '(applies from your next message)',
   '🛡️ 权限控制等级': '🛡️ Permission mode',

@@ -320,6 +320,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // ⑦ 续：同一个 config:refresh 的常驻入口。compose 页那个只在新会话页存在——已有会话里想重读
+  // 终端侧改过的 settings.json 一直没有入口（这正是 ⑦ 的原始诉求「配置面板无刷新入口」）。
+  // 两处共用 wireConfigRefreshButton；转圈落在 [data-spin] 图标上，按钮带文字不整块旋转。
+  test('P0-09o 配置面板配置刷新按钮：点击后经历禁用→转圈→恢复', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#btnSettings').click();
+    const refreshBtn = page.locator('[data-testid="settings-config-refresh"]');
+    const spinIcon = refreshBtn.locator('[data-spin]');
+    await expect(refreshBtn).toBeVisible();
+    await expect(refreshBtn).toBeEnabled();
+    await expect(spinIcon).not.toHaveClass(/animate-spin/);
+
+    await refreshBtn.click();
+    await expect(refreshBtn).toBeDisabled();
+    await expect(spinIcon).toHaveClass(/animate-spin/);
+
+    await expect(refreshBtn).toBeEnabled({ timeout: 2000 });
+    await expect(spinIcon).not.toHaveClass(/animate-spin/);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // ⑧ 推送内容预览开关：默认关（与「完成提示」三项默认开相反极性），勾选后持久化到 localStorage，
   // 重开设置面板仍反映上次选择（syncPreferences 从 storage 读回，见 app/settings.js）。
   test('P0-09m 推送内容预览开关默认关，勾选后跨面板重开保持', async ({ page }) => {

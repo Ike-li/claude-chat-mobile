@@ -1109,6 +1109,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     }
   }
+  // 配置面板顶部的 CLI 配置刷新（常驻入口）；新会话页那个同源入口在 showComposeSurface 里接线。
+  // spinEl 取不到时回落按钮本身——|| 而非默认参数：querySelector 返回 null 不会触发默认值。
+  const cfgRefreshBtn = $('btnConfigRefresh');
+  wireConfigRefreshButton(cfgRefreshBtn, cfgRefreshBtn?.querySelector('[data-spin]') || cfgRefreshBtn);
+
   if ($('btnSecurityCheck')) $('btnSecurityCheck').onclick = () => {
     const box = $('doctorReport');
     box.classList.remove('hidden');
@@ -5391,6 +5396,39 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     elSum.textContent = formatComposeDefaultsSummary(currentComposeDefaultsLabels());
   }
 
+  // CLI 配置刷新：用户在终端侧改了 ~/.claude/settings.json 后，web 侧默认档不会自己感知
+  // （ensureCliDefaults 按 cwd 缓存，只在启动/session:new/session:home 才 force 重读）——手动兜底一次
+  // force 重读。ack 前禁用+转圈，ack 后恢复；面板与摘要的文案本身经 instances 广播回来的既有路径
+  // （refreshComposeDefaultsSummary / rebuildCustomModelGrid 等）自动刷新，这里不重复写渲染逻辑。
+  //
+  // 两个入口共用：新会话页摘要行旁的 ↻（只在 compose 页存在）、配置面板顶部的「重读 CLI 配置」
+  // （常驻，已有会话里也能用）。spinEl 单独传是因为后者带文字，整块旋转很怪——只转 [data-spin] 图标。
+  function wireConfigRefreshButton(btn, spinEl = btn) {
+    if (!btn) return;
+    btn.onclick = () => {
+      if (btn.disabled) return;
+      haptic('tap');
+      btn.disabled = true;
+      spinEl.classList.add('animate-spin');
+      let acked = false;
+      const restore = () => {
+        btn.disabled = false;
+        spinEl.classList.remove('animate-spin');
+      };
+      socket.emit('config:refresh', { cwd: currentCwd }, () => {
+        acked = true;
+        restore();
+      });
+      // 兜底：与文件里其它「乐观禁用+超时兜底恢复」操作（session:home/session:switch 等）对齐——
+      // ack 丢了也不能让按钮永久卡在禁用+转圈态。
+      setTimeout(() => {
+        if (acked) return;
+        restore();
+        addBar(t('刷新无响应，请检查网络后重试'), 'text-danger');
+      }, 4000);
+    };
+  }
+
   // 空表面本地分流：viewing 已 null 时 instances 广播不进 bindView，＋/侧栏 ＋ 须直接重渲。
   function ensureEmptySurface() {
     const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId
@@ -5458,33 +5496,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       };
     });
-    // CLI 配置刷新按钮：用户在终端侧改了 ~/.claude/settings.json 后，此处摘要不会自己感知
-    // （ensureCliDefaults 只在启动/session:new/session:home 才 force 重读）——手动兜底一次 force 重读。
-    // ack 前禁用+转圈，ack 后恢复；摘要文案本身经 instances 广播回来的既有路径（refreshComposeDefaultsSummary）
-    // 自动刷新，这里不重复写渲染逻辑。
-    const refreshBtn = container.querySelector('.compose-defaults-refresh');
-    if (refreshBtn) {
-      refreshBtn.onclick = () => {
-        if (refreshBtn.disabled) return;
-        haptic('tap');
-        refreshBtn.disabled = true;
-        refreshBtn.classList.add('animate-spin');
-        let acked = false;
-        socket.emit('config:refresh', { cwd: currentCwd }, () => {
-          acked = true;
-          refreshBtn.disabled = false;
-          refreshBtn.classList.remove('animate-spin');
-        });
-        // 兜底：与文件里其它「乐观禁用+超时兜底恢复」操作（session:home/session:switch 等）对齐——
-        // ack 丢了也不能让按钮永久卡在禁用+转圈态。
-        setTimeout(() => {
-          if (acked) return;
-          refreshBtn.disabled = false;
-          refreshBtn.classList.remove('animate-spin');
-          addBar(t('刷新无响应，请检查网络后重试'), 'text-danger');
-        }, 4000);
-      };
-    }
+    wireConfigRefreshButton(container.querySelector('.compose-defaults-refresh'));
 
     messagesEl.appendChild(container);
     // defaults 可能仍在 L4→L3 途中；微任务再刷一次，兜住刚 setPerm/setEffort 的 pill 文案
