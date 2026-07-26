@@ -104,6 +104,57 @@ test.describe('sw.js — push 事件', () => {
     });
     assert.deepEqual(shownOptions.data, { instanceId: 'i1', sessionId: 's1', cwd: '/r' });
   });
+
+  // ── 应用图标角标（Badging API）：SW 上下文挂在 self.registration 上，不是 navigator.setAppBadge ──
+  test('push 事件：调用 self.registration.setAppBadge()（无参数=系统通用圆点，SW 侧不知道精确未读数不硬造）', async () => {
+    let badgeCalledWithArgs = undefined;
+    let badgeCallCount = 0;
+    const mockSelf = {
+      addEventListener(event, handler) { if (event === 'push') this._pushHandler = handler; },
+      registration: {
+        showNotification() { return Promise.resolve(); },
+        setAppBadge(...args) { badgeCallCount++; badgeCalledWithArgs = args; return Promise.resolve(); },
+      },
+    };
+    runInMock(swSrc, { self: mockSelf });
+    await mockSelf._pushHandler({ data: { json: () => ({ title: 'T', body: 'B' }) }, waitUntil: p => p });
+    assert.equal(badgeCallCount, 1, 'setAppBadge 应被调用恰好一次');
+    assert.deepEqual(badgeCalledWithArgs, [], '不应硬造精确数字，无参数调用');
+  });
+
+  test('push 事件：registration 上没有 setAppBadge（不支持的平台）→ 不抛错，showNotification 仍正常触发', async () => {
+    let shownTitle = null;
+    const mockSelf = {
+      addEventListener(event, handler) { if (event === 'push') this._pushHandler = handler; },
+      registration: { showNotification(t) { shownTitle = t; return Promise.resolve(); } }, // 无 setAppBadge
+    };
+    runInMock(swSrc, { self: mockSelf });
+    // handler 本身不保证返回 Promise（e.waitUntil 内部才是异步的），直接调用——若同步抛错测试自然失败，
+    // 不用 assert.doesNotReject（那要求一个 Promise/返回 Promise 的函数，这里两者都不是）。
+    await mockSelf._pushHandler({ data: { json: () => ({ title: 'T', body: 'B' }) }, waitUntil: p => p });
+    assert.equal(shownTitle, 'T', '角标不支持不应影响通知本身正常显示');
+  });
+
+  // badge API reject 不得毒化 Promise.all：部分平台（权限边界/半支持）setAppBadge 会 reject，
+  // 若不 .catch，waitUntil 整段失败，可能拖累 SW 生命周期。
+  test('push 事件：setAppBadge reject → showNotification 仍成功，waitUntil 不失败', async () => {
+    let shownTitle = null;
+    let waitUntilResult;
+    const mockSelf = {
+      addEventListener(event, handler) { if (event === 'push') this._pushHandler = handler; },
+      registration: {
+        showNotification(t) { shownTitle = t; return Promise.resolve(); },
+        setAppBadge() { return Promise.reject(new Error('badge denied')); },
+      },
+    };
+    runInMock(swSrc, { self: mockSelf });
+    await mockSelf._pushHandler({
+      data: { json: () => ({ title: 'T', body: 'B' }) },
+      waitUntil: (p) => { waitUntilResult = p; return p; },
+    });
+    await assert.doesNotReject(waitUntilResult);
+    assert.equal(shownTitle, 'T');
+  });
 });
 
 // =========================================================================
@@ -204,6 +255,63 @@ test.describe('sw.js — notificationclick 事件', () => {
     await mockSelf._clickHandler(mockEvent);
     assert.match(openedUrl, /#instance=i1/);
     assert.match(openedUrl, /session=s1/);
+  });
+
+  // ── 应用图标角标：用户点开通知即回到 app，角标应清除（self.registration.clearAppBadge，非 navigator）──
+  test('notificationclick：调用 self.registration.clearAppBadge()（用户点开通知即回到 app，角标应清除）', async () => {
+    let clearCallCount = 0;
+    const origin = 'https://chat.example.com';
+    const mockSelf = {
+      location: { origin },
+      addEventListener(e, h) { if (e === 'notificationclick') this._clickHandler = h; },
+      registration: { clearAppBadge() { clearCallCount++; return Promise.resolve(); } },
+    };
+    const mockEvent = { notification: { close: () => {} }, waitUntil: p => p };
+    runInMock(swSrc, { self: mockSelf, clients: { matchAll: () => Promise.resolve([]), openWindow: () => Promise.resolve({}) }, URL });
+    await mockSelf._clickHandler(mockEvent);
+    assert.equal(clearCallCount, 1, 'clearAppBadge 应被调用恰好一次');
+  });
+
+  // 回归保护：sw.js 曾一度写成 self.registration.clearAppBadge?.()（只在方法调用上加 optional chaining，
+  // 未保护 registration 本身）——若 self.registration 整体缺失（旧 mock/不支持角标的实现），
+  // `self.registration.clearAppBadge` 这一步本身就会先抛 TypeError，深链 focus/openWindow 逻辑
+  // 永远执行不到。必须用 self.registration?.clearAppBadge?.()（两段都要 optional chaining）。
+  test('notificationclick：clearAppBadge reject → 深链 openWindow 仍正常触发', async () => {
+    let openedUrl = null;
+    let waitUntilResult;
+    const origin = 'https://chat.example.com';
+    const mockSelf = {
+      location: { origin },
+      addEventListener(e, h) { if (e === 'notificationclick') this._clickHandler = h; },
+      registration: { clearAppBadge() { return Promise.reject(new Error('badge denied')); } },
+    };
+    const mockEvent = {
+      notification: { close: () => {}, data: { instanceId: 'i1' } },
+      waitUntil: (p) => { waitUntilResult = p; return p; },
+    };
+    runInMock(swSrc, {
+      self: mockSelf,
+      clients: { matchAll: () => Promise.resolve([]), openWindow: (u) => { openedUrl = u; return Promise.resolve({}); } },
+      URL, URLSearchParams,
+    });
+    await mockSelf._clickHandler(mockEvent);
+    await assert.doesNotReject(waitUntilResult);
+    assert.match(openedUrl, /#instance=i1/);
+  });
+
+  test('notificationclick：self.registration 整体缺失 → 不抛错，深链 openWindow 仍正常触发', async () => {
+    let openedUrl = null;
+    const origin = 'https://chat.example.com';
+    const mockSelf = {
+      location: { origin },
+      addEventListener(e, h) { if (e === 'notificationclick') this._clickHandler = h; },
+      // 故意不定义 registration，模拟"角标挂点缺失/旧沙箱"场景
+    };
+    const mockEvent = { notification: { close: () => {}, data: { instanceId: 'i1' } }, waitUntil: p => p };
+    runInMock(swSrc, { self: mockSelf, clients: { matchAll: () => Promise.resolve([]), openWindow: (u) => { openedUrl = u; return Promise.resolve({}); } }, URL, URLSearchParams });
+    // 同上一测试：直接调用，同步抛错会让测试自然失败，不套 assert.doesNotReject。
+    await mockSelf._clickHandler(mockEvent);
+    assert.match(openedUrl, /#instance=i1/, 'registration 缺失不应影响深链 openWindow 正常触发');
   });
 });
 

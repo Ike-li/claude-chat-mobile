@@ -3,8 +3,9 @@
 // ctx 绝对 token 来自 SDK 真值；ctx 百分比优先 getContextUsage、降级 contextWindowSize(model)。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd } from '../../src/ops/statusline.js';
+import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate } from '../../src/ops/statusline.js';
 import { getDiagLogs } from '../../src/agent/diag-log.js';
+import { createUsageSnapshotStore, USAGE_SNAPSHOT_TTL_MS } from '../../src/ops/usage-snapshot.js';
 
 const usage = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
 
@@ -118,7 +119,8 @@ test('buildCliStatusLine：只把 CLI 快照投影成现有 Web statusline 契�
     rate: { fiveHour: { usedPercent: 42, resetsAt: 1_784_106_000 } }, cliVersion: '2.1.210',
     secret: 'must-not-leak',
   };
-  const payload = await buildCliStatusLine({ snapshot, cwd: snapshot.cwd });
+  // 显式独立 store：避免写入模块默认单例污染后续 getFallbackUsageRate() 无参断言。
+  const payload = await buildCliStatusLine({ snapshot, cwd: snapshot.cwd, usageStore: createUsageSnapshotStore() });
 
   assert.equal(payload.model, 'Opus 4.8');
   assert.equal(payload.effort, 'max');
@@ -132,6 +134,99 @@ test('buildCliStatusLine：只把 CLI 快照投影成现有 Web statusline 契�
   assert.deepEqual(payload.session, { id: 'cli-session' });
   assert.equal(payload.project, 'not-a-repo');
   assert.equal(payload.secret, undefined);
+});
+
+// ---- 账号级额度快照回落：CLI 路径（owner=cli 时 bridge 快照恰好这一拍没带 rate 字段）----
+test.describe('buildCliStatusLine：额度快照回落（usage-snapshot 接线，与 SDK 路径共享同一账号级快照）', () => {
+  const baseSnapshot = { source: 'claude-cli', capturedAt: 1_000, sessionId: 'cli-session', cwd: '/tmp/not-a-repo' };
+
+  test('本次快照带 rate → 写入快照；下一次快照没带 rate → 回落垫上 + rateFromSnapshot:true', async () => {
+    const store = createUsageSnapshotStore();
+    const withRate = { ...baseSnapshot, rate: { fiveHour: { usedPercent: 60 } } };
+    const first = await buildCliStatusLine({ snapshot: withRate, cwd: withRate.cwd, usageStore: store });
+    assert.equal(first.rate.fiveHour.usedPercent, 60);
+    assert.equal(first.rateFromSnapshot, undefined);
+
+    const withoutRate = { ...baseSnapshot }; // 同一 fresh 快照序列，这一拍恰好没有 rate 字段
+    const second = await buildCliStatusLine({ snapshot: withoutRate, cwd: withoutRate.cwd, usageStore: store });
+    assert.equal(second.rate.fiveHour.usedPercent, 60);
+    assert.equal(second.rateFromSnapshot, true);
+  });
+
+  test('从未写入过（store 为空）+ 快照无 rate → payload 无 rate，无回落', async () => {
+    const store = createUsageSnapshotStore();
+    const p = await buildCliStatusLine({ snapshot: { ...baseSnapshot }, cwd: baseSnapshot.cwd, usageStore: store });
+    assert.equal(p.rate, undefined);
+    assert.equal(p.rateFromSnapshot, undefined);
+  });
+
+  test('越界 utilization（>100）→ 不写入 store，也不回落', async () => {
+    const store = createUsageSnapshotStore();
+    const bad = { ...baseSnapshot, rate: { fiveHour: { usedPercent: 150 } } };
+    const p = await buildCliStatusLine({ snapshot: bad, cwd: bad.cwd, usageStore: store });
+    assert.equal(p.rate, undefined);
+    assert.equal(store.rate, null);
+  });
+
+  test('SDK 路径先写入的快照，CLI 路径这次没拿到 rate → 同样能回落（共享同一账号级 store）', async () => {
+    const store = createUsageSnapshotStore();
+    store.rate = { sevenDay: { usedPercent: 25 } };
+    store.at = Date.now();
+    const p = await buildCliStatusLine({ snapshot: { ...baseSnapshot }, cwd: baseSnapshot.cwd, usageStore: store });
+    assert.equal(p.rate.sevenDay.usedPercent, 25);
+    assert.equal(p.rateFromSnapshot, true);
+  });
+
+  test('快照已超过 TTL → 不回落', async () => {
+    const store = createUsageSnapshotStore();
+    store.rate = { fiveHour: { usedPercent: 77 } };
+    store.at = Date.now() - USAGE_SNAPSHOT_TTL_MS - 1_000;
+    const p = await buildCliStatusLine({ snapshot: { ...baseSnapshot }, cwd: baseSnapshot.cwd, usageStore: store });
+    assert.equal(p.rate, undefined);
+  });
+});
+
+// ---- getFallbackUsageRate：app.js refreshStatusLine() cli-unavailable 分支专用的窄读接口 ----
+// （selectStatusSource 判定 kind!=='cli' 时，buildCliStatusLine 整个不会被调用，两个正常回落点都摸不到；
+//  这个函数是唯一让该分支也能垫上账号级温热额度的入口，不直接导出 usageSnapshotStore 单例本身）。
+test.describe('getFallbackUsageRate：cli-unavailable 分支专用回落读接口', () => {
+  test('store 里有温热快照 → 原样返回 rate', () => {
+    const store = createUsageSnapshotStore();
+    store.rate = { fiveHour: { usedPercent: 55 } };
+    store.at = Date.now();
+    assert.deepEqual(getFallbackUsageRate(Date.now(), store), { fiveHour: { usedPercent: 55 } });
+  });
+
+  test('从未写入过（store.rate 为 null）→ null', () => {
+    const store = createUsageSnapshotStore();
+    assert.equal(getFallbackUsageRate(Date.now(), store), null);
+  });
+
+  test('已超过 TTL → null', () => {
+    const store = createUsageSnapshotStore();
+    store.rate = { fiveHour: { usedPercent: 55 } };
+    store.at = Date.now() - USAGE_SNAPSHOT_TTL_MS - 1_000;
+    assert.equal(getFallbackUsageRate(Date.now(), store), null);
+  });
+
+  test('恰好等于 TTL 边界 → 仍算温热（复用 fallbackUsage 的 `>` 而非 `>=` 语义）', () => {
+    const store = createUsageSnapshotStore();
+    store.rate = { sevenDay: { usedPercent: 10 } };
+    const now = Date.now();
+    store.at = now - USAGE_SNAPSHOT_TTL_MS;
+    assert.deepEqual(getFallbackUsageRate(now, store), { sevenDay: { usedPercent: 10 } });
+  });
+
+  test('显式传入同一 store 时 buildCliStatusLine 与 getFallbackUsageRate 共享数据（不污染模块默认单例）', async () => {
+    // 用独立 store 证明两条 API 能共享同一份数据——绝不往模块默认单例写，避免污染后续测试。
+    const store = createUsageSnapshotStore();
+    const snapshot = { source: 'claude-cli', capturedAt: Date.now(), sessionId: 'gfur-shared-isolated-store', cwd: '/tmp/gfur-shared',
+      rate: { fiveHour: { usedPercent: 91 } } };
+    await buildCliStatusLine({ snapshot, cwd: snapshot.cwd, usageStore: store });
+    assert.equal(getFallbackUsageRate(Date.now(), store).fiveHour.usedPercent, 91);
+    // 模块默认单例应仍为空（本测试未触碰它）
+    assert.equal(getFallbackUsageRate(Date.now()), null);
+  });
 });
 
 test.describe('contextWindowSize：model→上下文窗口大小映射', () => {
@@ -285,7 +380,9 @@ test.describe('usageBitsForStatusLine：5h/7d 额度 + lines +/−（对齐 CLI�
 });
 
 test.describe('buildWebStatusLine：fetchUsage 接线（5h/7d + lines）', () => {
-  test('agent.fetchUsage 返回有效 → p.rate / p.lines', async () => {
+  // 显式传入独立 usageStore：不依赖模块级默认单例——既避免这几个用例互相污染，也避免被同文件
+  // 其它 describe（如下方"额度快照回落"）的写入干扰，用例结果与执行顺序无关。
+  test('agent.fetchUsage 返回有效 → p.rate / p.lines；非回落（rateFromSnapshot 不置位）', async () => {
     const agent = {
       activeModel: 'm', lastUsage: usage(1000), disposed: false,
       fetchUsage: async () => ({
@@ -294,23 +391,129 @@ test.describe('buildWebStatusLine：fetchUsage 接线（5h/7d + lines）', () =>
         session: { total_lines_added: 8, total_lines_removed: 2 }
       })
     };
-    const p = await buildWebStatusLine({ agent, cwd: undefined });
+    const p = await buildWebStatusLine({ agent, cwd: undefined, usageStore: createUsageSnapshotStore() });
     assert.equal(p.rate.fiveHour.usedPercent, 70);
     assert.equal(p.rate.fiveHour.resetsAt, '2026-07-14T18:00:00Z');
     assert.deepEqual(p.lines, { added: 8, removed: 2 });
+    assert.equal(p.rateFromSnapshot, undefined); // 本轮是活数据，不是快照垫的
   });
-  test('fetchUsage 抛错 / disposed → 字段省，不崩', async () => {
+  test('fetchUsage 抛错 / disposed → 字段省，不崩（空 store，无快照可回落）', async () => {
     const boom = await buildWebStatusLine({
       agent: { activeModel: 'm', lastUsage: usage(1), disposed: false, fetchUsage: async () => { throw new Error('rpc'); } },
-      cwd: undefined
+      cwd: undefined, usageStore: createUsageSnapshotStore()
     });
     assert.equal(boom.rate, undefined);
     assert.equal(boom.lines, undefined);
     const disposed = await buildWebStatusLine({
       agent: { activeModel: 'm', lastUsage: usage(1), disposed: true, fetchUsage: async () => ({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 1 } } }) },
-      cwd: undefined
+      cwd: undefined, usageStore: createUsageSnapshotStore()
     });
     assert.equal(disposed.rate, undefined);
+  });
+});
+
+// ---- 账号级额度快照回落（OPS：owner=sdk fetchUsage 超时/owner=cli bridge 快照过期时"时有时无"的根因修复）----
+test.describe('buildWebStatusLine：额度快照回落（usage-snapshot 接线）', () => {
+  test('先成功写入快照，下一轮 fetchUsage 抛错 → 用快照垫上 + rateFromSnapshot:true', async () => {
+    const store = createUsageSnapshotStore();
+    const okAgent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => ({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 33 } } })
+    };
+    const first = await buildWebStatusLine({ agent: okAgent, cwd: undefined, usageStore: store });
+    assert.equal(first.rate.fiveHour.usedPercent, 33);
+    assert.equal(first.rateFromSnapshot, undefined);
+
+    const boomAgent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => { throw new Error('rpc timeout'); }
+    };
+    const second = await buildWebStatusLine({ agent: boomAgent, cwd: undefined, usageStore: store });
+    assert.equal(second.rate.fiveHour.usedPercent, 33); // 垫上刚才那份温热快照
+    assert.equal(second.rateFromSnapshot, true);
+  });
+
+  test('先成功写入快照，下一轮 agent 已 dispose（跳过 fetchUsage）→ 同样回落垫上', async () => {
+    const store = createUsageSnapshotStore();
+    const okAgent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => ({ rate_limits_available: true, rate_limits: { seven_day: { utilization: 12 } } })
+    };
+    await buildWebStatusLine({ agent: okAgent, cwd: undefined, usageStore: store });
+
+    const disposedAgent = { activeModel: 'm', lastUsage: usage(1), disposed: true, fetchUsage: async () => { throw new Error('unreachable'); } };
+    const p = await buildWebStatusLine({ agent: disposedAgent, cwd: undefined, usageStore: store });
+    assert.equal(p.rate.sevenDay.usedPercent, 12);
+    assert.equal(p.rateFromSnapshot, true);
+  });
+
+  test('第三方鉴权账号（rate_limits_available:false）→ 快照从未被写入，回落也为空，payload 无 rate', async () => {
+    const store = createUsageSnapshotStore();
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => ({ rate_limits_available: false, rate_limits: { five_hour: { utilization: 10 } } })
+    };
+    const p = await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    assert.equal(p.rate, undefined);
+    assert.equal(p.rateFromSnapshot, undefined);
+    assert.equal(store.rate, null); // 关键：从未写入过——第三方鉴权账号不该在 store 里留任何痕迹
+  });
+
+  // code review 修复：此前"本轮 RPC 成功但明确无额度"仍会垫上一份 Anthropic 温热快照，
+  // 导致切换到第三方鉴权账号后 statusline 继续显示上一账号的 5h/7d。
+  test('先有 Anthropic 温热快照，下一轮第三方鉴权明确无额度 → 不垫旧值（payload 无 rate）', async () => {
+    const store = createUsageSnapshotStore();
+    const okAgent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => ({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 40 } } })
+    };
+    await buildWebStatusLine({ agent: okAgent, cwd: undefined, usageStore: store });
+    assert.equal(store.rate.fiveHour.usedPercent, 40);
+
+    const thirdParty = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => ({ rate_limits_available: false, rate_limits: { five_hour: { utilization: 10 } } })
+    };
+    const p = await buildWebStatusLine({ agent: thirdParty, cwd: undefined, usageStore: store });
+    assert.equal(p.rate, undefined, '明确无额度时不得垫旧 Anthropic 快照');
+    assert.equal(p.rateFromSnapshot, undefined);
+  });
+
+  test('先有温热快照，下一轮 no_valid_window（越界 utilization）→ 同样不垫旧值', async () => {
+    const store = createUsageSnapshotStore();
+    store.rate = { fiveHour: { usedPercent: 55 } };
+    store.at = Date.now();
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => ({ rate_limits: { five_hour: { utilization: 150 } } })
+    };
+    const p = await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    assert.equal(p.rate, undefined);
+    assert.equal(p.rateFromSnapshot, undefined);
+  });
+
+  test('越界 utilization（no_valid_window）→ 同样不写入、不回落', async () => {
+    const store = createUsageSnapshotStore();
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => ({ rate_limits: { five_hour: { utilization: 150 }, seven_day: { utilization: -5 } } })
+    };
+    const p = await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    assert.equal(p.rate, undefined);
+    assert.equal(store.rate, null);
+  });
+
+  test('快照存在但已超过 TTL → 不回落（payload 无 rate）', async () => {
+    const store = createUsageSnapshotStore();
+    store.rate = { fiveHour: { usedPercent: 90 } };
+    store.at = Date.now() - USAGE_SNAPSHOT_TTL_MS - 1_000; // 手工构造一份"陈旧"快照
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false,
+      fetchUsage: async () => { throw new Error('rpc timeout'); }
+    };
+    const p = await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    assert.equal(p.rate, undefined);
+    assert.equal(p.rateFromSnapshot, undefined);
   });
 });
 
@@ -321,7 +524,9 @@ test.describe('buildWebStatusLine：额度不可用 → diag-log statusline/rate
       lastRateUnavailableReason: null, // 真实 Agent 构造函数里的初始值
       fetchUsage: async () => ({ rate_limits_available: false, rate_limits: { five_hour: { utilization: 10 } } })
     };
-    await buildWebStatusLine({ agent, cwd: undefined });
+    // 独立 store：diag 测试不关心快照，避免成功恢复路径污染模块默认单例。
+    const store = createUsageSnapshotStore();
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
     const entries = getDiagLogs('test-sid-third-party').filter(e => e.subsystem === 'statusline');
     assert.equal(entries.length, 1);
     assert.equal(entries[0].detail.reason, 'third_party_auth');
@@ -333,7 +538,7 @@ test.describe('buildWebStatusLine：额度不可用 → diag-log statusline/rate
       activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: 'test-sid-no-window',
       fetchUsage: async () => ({ rate_limits: { five_hour: { utilization: 150 }, seven_day: { utilization: -5 } } })
     };
-    await buildWebStatusLine({ agent, cwd: undefined });
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: createUsageSnapshotStore() });
     const entries = getDiagLogs('test-sid-no-window').filter(e => e.subsystem === 'statusline');
     assert.equal(entries.length, 1);
     assert.equal(entries[0].detail.reason, 'no_valid_window');
@@ -344,8 +549,9 @@ test.describe('buildWebStatusLine：额度不可用 → diag-log statusline/rate
       activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: 'test-sid-dedup',
       fetchUsage: async () => ({ rate_limits_available: false })
     };
-    await buildWebStatusLine({ agent, cwd: undefined });
-    await buildWebStatusLine({ agent, cwd: undefined });
+    const store = createUsageSnapshotStore();
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
     const entries = getDiagLogs('test-sid-dedup').filter(e => e.subsystem === 'statusline');
     assert.equal(entries.length, 1);
   });
@@ -355,9 +561,10 @@ test.describe('buildWebStatusLine：额度不可用 → diag-log statusline/rate
       activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: 'test-sid-switch',
       fetchUsage: async () => ({ rate_limits_available: false })
     };
-    await buildWebStatusLine({ agent, cwd: undefined });
+    const store = createUsageSnapshotStore();
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
     agent.fetchUsage = async () => ({ rate_limits: { five_hour: { utilization: 999 } } });
-    await buildWebStatusLine({ agent, cwd: undefined });
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
     const entries = getDiagLogs('test-sid-switch').filter(e => e.subsystem === 'statusline');
     assert.equal(entries.length, 2);
     assert.equal(entries[0].detail.reason, 'third_party_auth');
@@ -370,15 +577,16 @@ test.describe('buildWebStatusLine：额度不可用 → diag-log statusline/rate
       activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: 'test-sid-recover',
       fetchUsage: async () => ({ rate_limits_available: false })
     };
-    await buildWebStatusLine({ agent, cwd: undefined });
+    const store = createUsageSnapshotStore();
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
     agent.fetchUsage = async () => ({ rate_limits_available: true, rate_limits: { five_hour: { utilization: 20 } } });
-    await buildWebStatusLine({ agent, cwd: undefined });
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
     const entries = getDiagLogs('test-sid-recover').filter(e => e.subsystem === 'statusline');
     assert.equal(entries.length, 2);
     assert.equal(entries[1].detail.reason, null);
     assert.equal(entries[1].detail.previousReason, 'third_party_auth');
 
-    await buildWebStatusLine({ agent, cwd: undefined }); // 仍健康：不应再新增
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store }); // 仍健康：不应再新增
     const entries2 = getDiagLogs('test-sid-recover').filter(e => e.subsystem === 'statusline');
     assert.equal(entries2.length, 2);
   });

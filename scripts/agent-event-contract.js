@@ -359,6 +359,8 @@ export function formatContractProblems(result) {
 export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'browse:list',
   'browse:read',
+  'client:presence',
+  'config:refresh',
   'conn:ping',
   'dev:restart',
   'doctor:run',

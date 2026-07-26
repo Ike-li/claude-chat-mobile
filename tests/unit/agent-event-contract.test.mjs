@@ -167,11 +167,17 @@ test('inbound contract flags client emits and mock handlers outside the contract
 });
 
 test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量抽查）', () => {
-  // 38 = user:*(11) + task:stop + session:*(9) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + files:search + files:write + git:status + git:diff + doctor:run + service:status
+  // 40 = user:*(11) + task:stop + session:*(9) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + files:search + files:write + git:status + git:diff + doctor:run + service:status
   //      + worktree:sessions（linked worktree 会话发现，CLI「cd 进 worktree 即 /resume」的 web 等价物）
+  //      + config:refresh（CLI 配置刷新按钮：force 重读 ensureCliDefaults + 广播，手动兜底终端侧改了 settings.json 后 compose 摘要不自动感知）
+  //      + client:presence（PWA 前台/后台上报：visibilitychange/pagehide/连接成功时 emit，服务端记 socket.data.hidden，
+  //        供 result 完成通知的 hasClients 改按 hasForegroundApprovedClient 判定——修「PWA 切后台但 socket 未断时
+  //        result 通知被误判『有人在看』而永久吞掉」）
   // （曾含 usage:get；抽屉额度窗已砍，额度只走 statusline。logs:clientError=前端全局 JS 错误上报落服务端日志；
   //   user:cancelQueued=排队消息撤回，对齐 CLI ESC；user:ackUnread=未读角标确认已读，点掉悬浮胶囊/翻到锚点时上报）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 38);
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 40);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('client:presence'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('config:refresh'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('worktree:sessions'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:cancelQueued'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:ackUnread'));

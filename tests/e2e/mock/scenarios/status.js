@@ -45,6 +45,31 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // 额度快照回落（对应 refreshStatusLine 的 cli-unavailable 分支叠加 getFallbackUsageRate()）：
+      // CLI 快照仍缺失/过期，但账号级额度快照温热未超 TTL → payload 额外带 rate + rateFromSnapshot:true。
+      // 前端应在"CLI 状态暂不可用"提示之外，额外展示一行额度回落值并明确标注非实时（P0-10e）。
+      command: 'test:cli-statusline-unavailable-rate',
+      run: run(async ({ io, socket, activeEpoch, viewingInstanceId }) => {
+        const now = Date.now();
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: now,
+          type: 'status_line', payload: {
+            cwd: '/Users/you/code/claude-chat-mobile',
+            source: { kind: 'cli-unavailable', reason: 'stale', ageMs: 180_000 },
+            rate: {
+              fiveHour: { usedPercent: 42, resetsAt: new Date(now + 2 * 3600_000).toISOString() },
+              sevenDay: { usedPercent: 11, resetsAt: new Date(now + 3 * 86400_000).toISOString() },
+            },
+            rateFromSnapshot: true,
+          },
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { text: 'CLI statusline unavailable with rate fallback' },
+        });
+      }),
+    },
+    {
       command: 'test:statusline',
       run: run(async ({ io, socket, activeEpoch, viewingInstanceId, delay }) => {
         const now = Date.now();
@@ -332,6 +357,37 @@ export function createStatusScenarios(getContext) {
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'result', payload: { messageId: 'msg_svc_incident_1', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      }),
+    },
+    {
+      // 修复回归（点停止顿一下直接跳主页）：模拟"中断失败 → agent.js settleForce() 强杀子进程 →
+      // onExit → 该实例从 agents Map 删除、且无同 cwd 存活实例可回退 → viewingInstanceId 广播为 null"
+      // 这条链路的终态广播——不需要真的走完整 SDK abort 链路（那是 src/agent/agent.js
+      // interrupt()/settleForce() 的既有职责，已有单测覆盖），只需要构造出"正在查看的实例从
+      // instances 列表消失 + viewingInstanceId 变 null"这个广播形态，供前端 wasViewingInstanceDestroyed
+      // + resolveEmptySurface（public/js/logic.js）验证：不静默 showDashboard()，而是渲染
+      // "会话已中断"提示。先 emit 一条「已中断」系统消息，对齐真实 settleForce() 的第一步。
+      command: 'test:instance-destroyed',
+      run: run(async ({ io, activeEpoch, viewingInstanceId, mockInstances, setViewingInstanceId }) => {
+        const idx = mockInstances.findIndex(i => i.instanceId === viewingInstanceId);
+        if (idx === -1) return;
+        const destroyed = mockInstances[idx];
+        const removedCwd = destroyed.cwd;
+        io.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: destroyed.sessionId, instanceId: destroyed.instanceId, ts: Date.now(),
+          type: 'system', payload: { message: '已中断', kind: 'interrupted' },
+        });
+        mockInstances.splice(idx, 1);
+        setViewingInstanceId(null);
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId: null,
+            viewingCwd: removedCwd,
+            dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), removedCwd])),
+            instances: mockInstances,
+          },
         });
       }),
     },

@@ -297,6 +297,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // ⑦ CLI 配置刷新按钮：ensureCliDefaults 结果按 cwd 缓存，只在启动/session:new/session:home 才 force
+  // 重读——用户在终端侧改了 ~/.claude/settings.json 后 compose 页摘要不会自动感知，需要手动兜底入口。
+  // 断言按钮点击后经历禁用→转圈→恢复这段瞬态（mock config:refresh 加了 150ms 延迟，见 mock/server.js）。
+  test('P0-09n compose 页配置刷新按钮：点击后经历禁用→转圈→恢复', async ({ page }) => {
+    await gotoMock(page);
+    await page.locator('#btnNew').click();
+    await expect(page.locator('#messages')).toHaveClass(/empty-start/);
+
+    const refreshBtn = page.locator('[data-testid="compose-defaults-refresh"]');
+    await expect(refreshBtn).toBeVisible();
+    await expect(refreshBtn).toBeEnabled();
+    await expect(refreshBtn).not.toHaveClass(/animate-spin/);
+
+    await refreshBtn.click();
+    await expect(refreshBtn).toBeDisabled();
+    await expect(refreshBtn).toHaveClass(/animate-spin/);
+
+    await expect(refreshBtn).toBeEnabled({ timeout: 2000 });
+    await expect(refreshBtn).not.toHaveClass(/animate-spin/);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // ⑧ 推送内容预览开关：默认关（与「完成提示」三项默认开相反极性），勾选后持久化到 localStorage，
   // 重开设置面板仍反映上次选择（syncPreferences 从 storage 读回，见 app/settings.js）。
   test('P0-09m 推送内容预览开关默认关，勾选后跨面板重开保持', async ({ page }) => {

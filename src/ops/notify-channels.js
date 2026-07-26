@@ -1,11 +1,12 @@
 // 通知发送通道（Web Push E15 + ntfy ②2b）：订阅存储 + 两通道发送，从 server/app.js 下沉。
 // 通知是尽力而为：没配则优雅缺席、失败绝不阻断主流程；真失败（非订阅过期）计 metrics
 // 并回调 onDeliveryFailure（app 层用它触发 instances 广播的服务健康可见性）。
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import webpush from 'web-push';
 import { ntfyRequestInit } from './notifications.js';
 import * as metrics from './metrics.js';
+import { writeOwnerOnlyFile } from '../files/file-security.js';
 
 export function createNotifyChannels({
   dataDir,
@@ -40,8 +41,10 @@ export function createNotifyChannels({
     else if (raw?.endpoint) pushSubscriptions = [raw]; // 向后兼容旧单对象格式
   } catch {}
 
+  // 与 sessions/audit/devices 同款：tmp+rename 原子写 + 0600 owner-only。
+  // push-subscription.json 含 p256dh/auth 密钥材料——绝不能裸 writeFileSync（半截 JSON + umask 可读）。
   function persistPushSubscriptions() {
-    try { writeFileSync(pushSubFile, JSON.stringify(pushSubscriptions)); } catch (e) {
+    try { writeOwnerOnlyFile(pushSubFile, JSON.stringify(pushSubscriptions)); } catch (e) {
       console.error('[push] 保存订阅失败:', e.message);
     }
   }

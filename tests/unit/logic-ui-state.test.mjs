@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -334,6 +334,49 @@ test.describe('shouldForceScrollAfterReplay：keep/none 分支有真实补发内
   });
 });
 
+// 修「切会话/重连时离开期间积压的消息像打字机一样逐条蹦出」：sync:since 服务端先逐条 emit
+// agent:event(replay:true) 再 ack，客户端在 emit 前就架起缓冲区（app.js + app/event-dispatch.js 的
+// createReplayBuffer：begin/offer/resolve）把命中该 instanceId 的事件先入队不渲染，ack 到达后用这个
+// 纯函数决定 reload（丢弃、改走 session:history 批量渲染）还是 flush（按序正常派发但抑制中间滚动、
+// 最后一次强制落底）。见 logic.js 顶部注释：优先级 = priorAction 已 reload/load 最高 → busy 恒
+// flush → 其余按 bufferedCount 与阈值比较。
+test.describe('resolveReplayBufferAction：回放缓冲决策（reload 清屏批量 vs flush 抑制滚动增量）', () => {
+  test('priorAction=reload → 恒 reload，无视 bufferedCount/busy（既有判定优先级更高，不需要这层重判）', () => {
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 0, priorAction: 'reload', busy: false }), 'reload');
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 5, priorAction: 'reload', busy: true }), 'reload');
+  });
+  test('priorAction=load → 恒 reload（bindView 冷入场分支，同 reload 口径一并交给既有批量渲染路径）', () => {
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 0, priorAction: 'load', busy: false }), 'reload');
+  });
+  test('busy=true → 恒 flush，即使缓冲远超阈值（进行中的流式内容只在服务端环形缓冲、不在磁盘上，reload 会丢）', () => {
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 9999, priorAction: 'keep', busy: true }), 'flush');
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 9999, priorAction: 'none', busy: true }), 'flush');
+  });
+  test('priorAction=keep（bindView 切视图）+ 未 busy + 缓冲低于阈值 → flush', () => {
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 20, priorAction: 'keep', busy: false }), 'flush');
+  });
+  test('priorAction=none（requestSync 重连/探活）+ 未 busy + 缓冲低于阈值 → flush（两条入口共用同一判定）', () => {
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 20, priorAction: 'none', busy: false }), 'flush');
+  });
+  test('缓冲恰好达到阈值 → reload（边界：>= 才 reload，不是 >）', () => {
+    assert.equal(resolveReplayBufferAction({ bufferedCount: REPLAY_BUFFER_RELOAD_THRESHOLD, priorAction: 'keep', busy: false }), 'reload');
+  });
+  test('缓冲恰好阈值-1 → 仍 flush（边界另一侧，紧邻但不达标）', () => {
+    assert.equal(resolveReplayBufferAction({ bufferedCount: REPLAY_BUFFER_RELOAD_THRESHOLD - 1, priorAction: 'keep', busy: false }), 'flush');
+  });
+  test('缓冲远超阈值（150+，真实"离开期间攒了好几轮回复"场景）→ reload', () => {
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 165, priorAction: 'keep', busy: false }), 'reload');
+  });
+  test('自定义 threshold 覆盖默认导出常量', () => {
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 10, priorAction: 'keep', busy: false, threshold: 5 }), 'reload');
+    assert.equal(resolveReplayBufferAction({ bufferedCount: 4, priorAction: 'keep', busy: false, threshold: 5 }), 'flush');
+  });
+  test('缺省入参不抛，保守回 flush（bufferedCount 默认 0、busy 默认 false、priorAction 未知不当 reload/load）', () => {
+    assert.doesNotThrow(() => resolveReplayBufferAction());
+    assert.equal(resolveReplayBufferAction(), 'flush');
+  });
+});
+
 // 客户端日志/聊天 stick-to-bottom：距底 < threshold 或 force 时才自动落底，上翻阅读时不被新内容拽回。
 // 默认 threshold=120 与 app.js scrollBottom 对齐。
 test.describe('shouldStickScrollToBottom：近底跟随 / 上翻不拽 / force 兜底', () => {
@@ -365,6 +408,36 @@ test.describe('shouldStickScrollToBottom：近底跟随 / 上翻不拽 / force �
     const geo = { scrollHeight: 500, scrollTop: 150, clientHeight: 300 }; // dist 50
     assert.equal(shouldStickScrollToBottom({ ...geo, threshold: 40 }), false);
     assert.equal(shouldStickScrollToBottom({ ...geo, threshold: 60 }), true);
+  });
+});
+
+// 未读胶囊第三条自动确认已读路径（用户手动滚到底部）：与「点击胶囊」「IntersectionObserver 扫到锚点」
+// 并存、互不替代。核心难点——切入积压未读的会话时，回放缓冲落底是"程序性"滚动，不代表用户已经看到
+// 胶囊，必须被排除；withinProgrammaticWindow 由调用方（app.js scrollBottom 维护的时间戳窗口）算好
+// 传入布尔值，这里只消费结果。贴底判断复用 shouldStickScrollToBottom，默认 threshold=120。
+test.describe('shouldAckUnreadOnScroll：未读胶囊「用户手动滚到底部」自动确认已读判定', () => {
+  const atBottom = { scrollHeight: 1000, scrollTop: 600, clientHeight: 400 }; // dist 0，贴底
+  const notAtBottom = { scrollHeight: 1000, scrollTop: 0, clientHeight: 400 }; // dist 600，远离底部
+
+  test('胶囊不可见 → 恒不触发，即使贴底且不在程序性窗口内', () => {
+    assert.equal(shouldAckUnreadOnScroll({ pillVisible: false, withinProgrammaticWindow: false, ...atBottom }), false);
+  });
+
+  test('在程序性滚动窗口内 → 不触发，即使胶囊可见且贴底（回放缓冲落底不算"用户看到了"）', () => {
+    assert.equal(shouldAckUnreadOnScroll({ pillVisible: true, withinProgrammaticWindow: true, ...atBottom }), false);
+  });
+
+  test('窗口外但不贴底 → 不触发（用户还在往上翻历史，没滚到最新消息附近）', () => {
+    assert.equal(shouldAckUnreadOnScroll({ pillVisible: true, withinProgrammaticWindow: false, ...notAtBottom }), false);
+  });
+
+  test('窗口外且贴底 → 触发（唯一应该 ackUnread 的组合：胶囊可见 + 真实用户滚动 + 已到底部）', () => {
+    assert.equal(shouldAckUnreadOnScroll({ pillVisible: true, withinProgrammaticWindow: false, ...atBottom }), true);
+  });
+
+  test('缺省入参不抛，保守回 false（默认 pillVisible/withinProgrammaticWindow 均 false，且几何字段缺失时 shouldStickScrollToBottom 本就判 false）', () => {
+    assert.doesNotThrow(() => shouldAckUnreadOnScroll());
+    assert.equal(shouldAckUnreadOnScroll(), false);
   });
 });
 

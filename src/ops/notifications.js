@@ -21,6 +21,20 @@ function truncatePreview(text) {
   return s.length > PREVIEW_BODY_CAP ? `${s.slice(0, PREVIEW_BODY_CAP)}…` : s;
 }
 
+// PWA 后台推送修复：approved 房间"连着"不等于"看得见"——PWA 切后台后 socket 常常还没断（要等 OS
+// 冻结页面才真正断连），这段窗口期内若仍把 hasClients 判 true，会把 result 完成通知永久吞掉（用户反馈
+// "切后台收不到完成通知，感觉应用像消失了"的根因）。客户端在 visibilitychange/pagehide/连接成功时上报
+// client:presence，服务端记在 socket.data.hidden（见 app.js on(socket,'client:presence',…)）；本函数
+// 据此判定 approved 房间里是否还有"前台"连接。保守默认：未上报过 presence（data.hidden===undefined，
+// 如刚连接尚未来得及上报、或未来的旧版前端）一律视为前台——最坏情况只是退回现状（该连接不解锁推送），
+// 不会因误判后台而重复轰炸用户。
+export function hasForegroundApprovedClient(sockets = []) {
+  for (const s of sockets) {
+    if (s?.data?.hidden !== true) return true;
+  }
+  return false;
+}
+
 export function notificationForEvent(type, payload = {}, opts = {}) {
   const { hasClients = false, instanceId, sessionId, cwd } = opts;
   const p = payload || {};
@@ -67,6 +81,27 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
     default:
       return null;
   }
+}
+
+// PWA「后台运行中」低优先级提示：presence 从"approved 房间还有前台连接"跳变为"再无前台连接"、且此刻
+// 确有实例在跑（busy）时才该推——弥补"切后台锁屏看不到应用还活着"的部分反馈（硬边界见 app.js 调用点
+// 注释：做不到锁屏常驻实时指示，只是任务仍在跑时补一条"别担心，跑完会通知你"）。纯函数、无副作用：
+// 调用方（src/server/app.js on(socket,'client:presence',…)）在真正 mutate socket.data.hidden 前后
+// 各调一次 hasForegroundApprovedClient 喂 hadForeground/hasForeground。天然节流：同一 socket 重复上报
+// hidden:true，或其他事件重触发本判定但状态未变，hadForeground 在第二次判定前已经是 false（该 socket
+// 上一次上报已被计入"非前台"），跳变条件不会再次成立——不需要额外的节流状态机/计时器。
+export function shouldNotifyBackgroundRunning({ hadForeground, hasForeground, hasBusyInstance } = {}) {
+  return hadForeground === true && hasForeground === false && hasBusyInstance === true;
+}
+
+// 「后台运行中」提示文案：与 notificationForEvent 分列为独立函数——触发源是 client:presence 状态跳变，
+// 不是某个 agent:event，混进 notificationForEvent 的 switch 会让"type 对应真实 envelope 类型"这条隐含
+// 契约变模糊（NOTIFY_CATEGORY 也是按 envelope type 键的，这条不属于任何 envelope type）。
+// body 同样最小化（SEC-04）：不含会话内容/工具名，只提示"仍在运行、跑完会通知你"。
+export function notificationForBackgroundRunning({ instanceId, sessionId, cwd } = {}) {
+  const title = cwd ? `⏳ 任务仍在后台运行 · ${basename(cwd)}` : '⏳ 任务仍在后台运行';
+  const body = '运行结束后会通知你';
+  return instanceId ? { title, body, data: { instanceId, sessionId, cwd } } : { title, body };
 }
 
 // ── per-会话推送节流（docs/design.md TriggerPolicy，承接 FR-14"不重复轰炸同一会话"的另一半）──
@@ -120,6 +155,7 @@ const NTFY_TAGS = {
   question: ['question'],
   result: ['white_check_mark'],
   task_notification: ['robot'],
+  background_running: ['hourglass_flowing_sand'],
 };
 export function ntfyMetaFor(type, data = {}, publicUrl = '') {
   const priority = (type === 'permission_request' || type === 'question') ? 5 : 3;

@@ -1,7 +1,7 @@
 // spec: docs/testing.md
 // helpers: tests/helpers/playwright.ts
 
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 import {
   ANOTHER_WORKSPACE,
@@ -17,6 +17,32 @@ import {
   startNewSessionInWorkspace,
   workspaceRow
 } from '../../helpers/p0-ui';
+
+// P3 抽屉局部重建 + SWR 保鲜回归专用：给指定工作区 subtree 下所有会话行元素打一个自定义 JS 属性
+// （不是 DOM attribute）——如果这个目录的 DOM 子树曾被整段拆掉重建，新节点不会带着这个属性，重连
+// 前后对比即可判定"有没有被连坐重建"，不依赖脆弱的像素/时序观测。dirRow 与 subtree 保持相邻兄弟
+// 节点是 workspaceRow/expandWorkspace 已依赖的既有约定（见 helpers/playwright.ts）。
+async function markSessionRows(page: Page, cwd: string) {
+  await page.evaluate((targetCwd) => {
+    const dirRow = Array.from(document.querySelectorAll('#sessionPanel [data-dir]'))
+      .find(el => (el as HTMLElement).dataset.dir === targetCwd);
+    const subtree = dirRow?.nextElementSibling;
+    subtree?.querySelectorAll('[data-testid="session-row"]').forEach(row => {
+      (row as unknown as Record<string, unknown>).__ccmMark = 'preserved';
+    });
+  }, cwd);
+}
+
+async function readSessionRowMarks(page: Page, cwd: string): Promise<(string | null)[]> {
+  return page.evaluate((targetCwd) => {
+    const dirRow = Array.from(document.querySelectorAll('#sessionPanel [data-dir]'))
+      .find(el => (el as HTMLElement).dataset.dir === targetCwd);
+    const subtree = dirRow?.nextElementSibling;
+    if (!subtree) return [];
+    return Array.from(subtree.querySelectorAll('[data-testid="session-row"]'))
+      .map(row => ((row as unknown as Record<string, unknown>).__ccmMark as string | undefined) ?? null);
+  }, cwd);
+}
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-11 多工作区、多会话 tab、sidebar 与 history replay', async ({ page }) => {
@@ -478,6 +504,97 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await row.click();
     await expectSidebarClosed(page);
     await expect(page.locator('#topProjectText')).toHaveText('another-react-project');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P3 抽屉局部重建 + SWR 保鲜（切到后台重连后抽屉卡顿的修复）三条回归：
+  // t 断线重连零变化 → 两个目录 DOM 原样保留、不出现骨架屏；
+  // v 断线期间真实标题变化 → 抽屉必须显示新内容（防缓存优化引入"不刷新"回归）；
+  // w 只有一个目录变化 → 另一个未变化目录的 DOM 不被连坐重建。
+  // 三者共用 test:reconnect-drawer-quiet / test:reconnect-drawer-refresh 两个 mock 夹具（见
+  // tests/e2e/mock/server.js），都靠"[MOCK_INFO] Reconnect drawer settle marker"哨兵消息确定性地
+  // 等到本次重连触发的 instances 广播已处理完，不使用被 npm run check 禁掉的 waitForTimeout。
+  test('P0-11t 断线重连无数据变化：抽屉两个工作区 DOM 子树原样保留，不出现骨架屏', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:reconnect-drawer-quiet');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await expect(sessionButtonByTitle(page, 'Visual Sandbox (Main)')).toBeVisible();
+    await expect(sessionButtonByTitle(page, 'Another App Concurrency')).toBeVisible();
+
+    await markSessionRows(page, MAIN_WORKSPACE);
+    await markSessionRows(page, ANOTHER_WORKSPACE);
+
+    // mock 内部延时 2.5s 后才断线，上面的展开+打标记操作留有充足余量。服务端主动 disconnect(true) 的
+    // reason 是 "io server disconnect"——socket.io 客户端按规范不会自动重连，需要显式触发（同
+    // input-send-empty.spec.ts P0-02d 的既有断线重连套路：派发 online 事件走 app.js reconnectIfNeeded）。
+    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('Reconnect drawer settle marker');
+
+    await expect(page.locator('#sessionPanel .skeleton-loader')).toHaveCount(0);
+    const mainMarks = await readSessionRowMarks(page, MAIN_WORKSPACE);
+    const anotherMarks = await readSessionRowMarks(page, ANOTHER_WORKSPACE);
+    expect(mainMarks.length).toBeGreaterThan(0);
+    expect(mainMarks.every(m => m === 'preserved')).toBe(true);
+    expect(anotherMarks.length).toBeGreaterThan(0);
+    expect(anotherMarks.every(m => m === 'preserved')).toBe(true);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11v 断线期间会话标题真的变了：重连后抽屉必须显示新标题（防缓存优化引入不刷新回归）', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:reconnect-drawer-refresh');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await expect(sessionButtonByTitle(page, 'Visual Sandbox (Main)')).toBeVisible();
+    await expect(sessionButtonByTitle(page, 'Another App Concurrency')).toBeVisible();
+
+    // 服务端主动 disconnect(true) 的 reason 是 "io server disconnect"——socket.io 客户端按规范不会
+    // 自动重连，需要显式触发（同 input-send-empty.spec.ts P0-02d 的既有断线重连套路）。
+    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('Reconnect drawer settle marker');
+
+    await expect(sessionButtonByTitle(page, 'Renamed After Reconnect')).toBeVisible();
+    await expect(page.locator('#sessionPanel')).not.toContainText('Visual Sandbox (Main)');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11w 只有一个工作区数据变化时，另一个未变化工作区的 DOM 子树不被连坐重建', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:reconnect-drawer-refresh');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    await expect(sessionButtonByTitle(page, 'Visual Sandbox (Main)')).toBeVisible();
+    await expect(sessionButtonByTitle(page, 'Another App Concurrency')).toBeVisible();
+
+    await markSessionRows(page, ANOTHER_WORKSPACE);
+
+    // 服务端主动 disconnect(true) 的 reason 是 "io server disconnect"——socket.io 客户端按规范不会
+    // 自动重连，需要显式触发（同 input-send-empty.spec.ts P0-02d 的既有断线重连套路）。
+    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('Reconnect drawer settle marker');
+    // 主工作区新标题落地——它和"另一个目录 DOM 有没有被连带重建"同属一次 setInstances 判定的产物，
+    // 用它做完成信号比额外哨兵更贴近真实回归点（这次判定确实处理过"只有 MAIN 变了"这件事）。
+    await expect(sessionButtonByTitle(page, 'Renamed After Reconnect')).toBeVisible();
+
+    const anotherMarks = await readSessionRowMarks(page, ANOTHER_WORKSPACE);
+    expect(anotherMarks.length).toBeGreaterThan(0);
+    expect(anotherMarks.every(m => m === 'preserved')).toBe(true);
 
     await expectNoBrowserErrors(page);
   });

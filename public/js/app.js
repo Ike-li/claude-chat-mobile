@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -10,7 +10,7 @@ import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
 import { createRttMonitor } from './app/connection-sync.js';
 import { createMessageRenderer } from './app/message-renderer.js';
-import { createAgentEventDispatcher } from './app/event-dispatch.js';
+import { createAgentEventDispatcher, createReplayBuffer } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
 import { createGitChangesPanel, createWorkspaceChooser, renderPatchLines } from './app/git-changes.js';
 import { createSettingsController } from './app/settings.js';
@@ -181,6 +181,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const SEND_ACK_FALLBACK_MS = 5000;
   let _sendInFlight = false;
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
+  // 全新会话首轮点停止后不跳回主页：标记"当前这个 instanceId 是已发过消息、sessionId 仍未到、且刚被
+  // 用户中断"的实例——置位见 system(p) 的 interrupted 分支；清除时机须覆盖全（否则悬留会把其它正常
+  // 场景误判成该显示中断态）：① bindView 里视图切走或该实例已拿到 sessionId ② FE-001 同实例后续补上
+  // sessionId ③ 回主页/新建会话（btnHome/btnNew/目录行 ＋） ④ 该实例从 instances 列表消失。
+  // 只存一个 instanceId（非 Set/Map）：同一时刻只可能有"当前正在看的这一个"处于这个待续档态，
+  // 与 _pendingFirstSend/_pendingSendBusySessionId 这类单值跟踪器同款风格。
+  let freshInterruptedInstanceId = null;
+  // 点停止顿一下跳主页（回归修复）：抽屉「关闭」/侧滑 ✕ 关闭的是当前正在查看的会话时记下其 instanceId，
+  // 供下一次 setInstances 广播里 wasViewingInstanceDestroyed 排除——用户显式关闭自己正在看的唯一会话
+  // 与"被摧毁"广播形态完全相同（服务端都是 viewingInstanceId 变 null + 该实例从列表消失），但这是用户
+  // 自己确认过的操作，不该弹"会话已中断"。一次性：在 setInstances 里消费后立即清空。
+  let explicitCloseInstanceId = null;
   // 空首页枢纽默认隐藏底部输入条；仅点 ＋ / session:new 进入 compose 就绪，或进入真实会话后显示。
   // 防「未选项目就直接发消息」歧义（懒开 FRESH 路径仍保留，但入口收窄为显式 ＋）。
   let _composeReady = false;
@@ -214,6 +226,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   let lastSeq = 0;
   let curEpoch = null;
+  // 回放缓冲（P0-REPLAY-BUFFER）flush 收尾时置位：期间 scrollBottom() 直接返回，抑制缓冲事件逐条
+  // 派发时各自触发的滚动；flushQueue 派发完毕后复位并显式调一次 scrollBottom(true) 落底。
+  // 见 createReplayBuffer（app/event-dispatch.js）withScrollSuppressed 依赖注入点。
+  let _suppressScrollBottom = false;
   let currentModel = '';                // 当前生效模型（init 事件的 model 字段），/model 无参时展示
   let cwdDefaultModel = '';             // 当前 cwd 的 CLI 默认模型（instances.defaultModel，服务端 scout 探得）：
                                         // currentModel 空时默认磁贴显它而非笼统「沿用当前」；只影响标签、不影响发送
@@ -397,8 +413,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // latestServiceHealth = 最近一次 instances 广播里的 service 字段。
   let latestServiceHealth = null;
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
-  // P3：面板结构指纹（dirs + 实例集 + viewingInstanceId + viewingCwd）；纯状态变化时不重建面板。
+  // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
+  // （低频、全量更简单可靠）。纯状态变化、或只是某个目录下实例变化，都不再经它判定——见下方按目录分键。
   let _lastPanelStructKey = null;
+  // P3：按目录分键的实例签名（cwd → 签名片段，见 logic.js buildDirInstanceSignatures）+ diff 出的
+  // "签名变了的目录"只重建那几个目录的 DOM 子树，其余目录保持原样（不撤离滚动位置/侧滑态等本地态）。
+  let _lastDirSignatures = {};
+  // dirRow/subtree 节点引用表（cwd → {dirRow, subtree}），供 rebuildDirSections 定位要替换的旧节点；
+  // 每次 openSessionPanel() 全量重建时重新填充。
+  let dirSectionNodes = new Map();
   let offlineQueue = [];                // 弱网离线发送队列：重连后 processOfflineQueue 逐条补发
 
   // 所有拆出的浏览器模块只通过显式 context 读取共享 DOM、状态和依赖。
@@ -506,8 +529,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const logClientEvent = clientLogger.log;
   // 切后台/被 iOS 杀前把节流窗口内未落盘的日志尾巴强制写入。pagehide 在移动端比 unload 可靠；
   // visibilitychange→hidden 覆盖「切走但未卸载」。flush 幂等（force write）、双挂无害。
-  window.addEventListener('pagehide', () => clientLogger.flush());
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') clientLogger.flush(); });
+  // 同时上报 presence（PWA 后台推送修复）：服务端据此判定 approved 房间里是否还有"前台"连接，解锁
+  // result 完成通知——否则 PWA 切后台后 socket 常常还没断（要等 OS 冻结页面才真正断连），会被误判为
+  // "有人在看"而永久吞掉完成通知。fire-and-forget，无需 ack。
+  window.addEventListener('pagehide', () => {
+    clientLogger.flush();
+    socket.emit('client:presence', { hidden: true }); // 页面即将冻结前兜底再同步一次，双保险
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') clientLogger.flush();
+    socket.emit('client:presence', { hidden: document.hidden });
+  });
   const alerts = createAlertController(appContext);
   const haptic = alerts.haptic;
   // 补发批次（sync:since 一次性追平离开期间积压的多轮 result/error）静音：isReplayBatch 由
@@ -800,22 +832,45 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!displayedInstanceId || !displayedSessionId) return;
     const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId; // WS-002：捕获发起时的视图目标（代次）
     const payload = { instanceId: reqInstanceId, sessionId: reqSessionId, lastSeq };
+    // 回放缓冲句柄：probe/非 probe 分支各自 begin()（见下方），ack 到达后 act() 据判定结果 resolve()。
+    let replayHandle = null;
     const act = (err, res) => {
       // WS-002：迟到 ACK 守卫——发起后若已切到别的会话/实例，丢弃本回调。否则 A 的 sync ACK 会在当前 B 上
       // reload（清空 B）或 applyPendingSnapshot 弹出 A 的审批/问题卡。对齐 bindView 的 sync:since 守卫。
-      if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
+      // 必须先 resolve/discard 本轮缓冲：否则早退会把已入队的 live 事件挂到超时或被后续 begin 无声
+      // discard——若服务端环窗已挤出这些 seq，它们永远不会再被回放（code review 确认的竞态丢事件）。
+      if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) {
+        replayBuffer.resolve(replayHandle, 'discard');
+        return;
+      }
       const a = syncAckAction(err, res);
-      if (a === 'reconnect') { if (socket.connected) socket.disconnect(); socket.connect(); return; }
+      if (a === 'reconnect') {
+        // 整条连接都要重来：缓冲内容从未渲染过，纯丢弃、不推进续传基线——重连后新一轮 sync:since
+        // 会用旧基线重新取，否则这批事件会被当成"已处理过"永久丢失（见 createReplayBuffer resolve 注释）。
+        replayBuffer.resolve(replayHandle, 'discard');
+        if (socket.connected) socket.disconnect(); socket.connect(); return;
+      }
       if (res?.replayed > 0) logClientEvent('recv', `[WEB_RECV] 断线追平补发 ${res.replayed} 条`); // 对账断线期漏收
+      // 回放缓冲二层判定（同 bindView）：a 已是 'reload' 时直接沿用；'none' 时再看缓冲攒了多少条 +
+      // 是否 busy。busy 取 ack 时刻 instances 广播的最新值（该实例此刻正有实时轮次在跑则恒不 reload）。
+      const busy = shouldSeedBusyFromInstanceState(instancesList.find(x => x.instanceId === reqInstanceId)?.state);
+      const bufferAction = resolveReplayBufferAction({ bufferedCount: replayBuffer.bufferedCount(reqInstanceId), priorAction: a, busy });
       // 未读胶囊：这是"同一会话内断线重连"路径（镜像视图架构下最常见的"切出去"形态——锁屏/切后台冻结页面
       // 断开 socket，viewingInstanceId 全程不变，故不会走 bindView，只会走到这里）。DOM 是否就绪同样分叉：
       // 'reload' 要等 reloadCurrentFromHistory 的 onDone；其余（回放走正常 agent:event 增量渲染）DOM 已稳定。
       const unreadOnEntry = res?.unreadOnEntry || 0;
-      if (a === 'reload') reloadCurrentFromHistory(() => showUnreadPillIfAny(unreadOnEntry));
-      else {
+      if (bufferAction === 'reload') {
+        // 丢弃缓冲队列 + 续传基线前移到队列尾（reloadCurrentFromHistory 内部的 keepSeq/keepEpoch
+        // 快照-恢复由此拿到正确值，理由同 bindView 的 reload 分支）。
+        replayBuffer.resolve(replayHandle, 'reload');
+        reloadCurrentFromHistory(() => showUnreadPillIfAny(unreadOnEntry));
+      } else {
+        // flush：缓冲队列（若有）按序正常派发，抑制中间滚动，派发完一次强制落底。
+        replayBuffer.resolve(replayHandle, 'flush');
         showUnreadPillIfAny(unreadOnEntry);
         // 同 bindView 的 keep 分支：'none' 时 DOM 停在断连前的旧内容底部，断连期间产生的新内容随后
-        // 才作为 replay 事件逐条补发，不强制补一次落底会停留在旧位置附近。
+        // 才作为 replay 事件逐条补发，不强制补一次落底会停留在旧位置附近。flushQueue 已在缓冲非空时
+        // 做过一次，这里是冗余但无害的兜底（replayed=0/缓冲为空时仍需要它独立生效）。
         if (shouldForceScrollAfterReplay({ action: a, replayed: res?.replayed })) scrollBottom(true);
       }
       // 状态对账：重连/probe 补传后用快照重建未决审批卡片（reload 的 clearView 已同步执行完、不被清）；
@@ -825,11 +880,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (probe) {
       if (_probeInFlight) return;       // ack 异步，防 200ms debounce 外的并发探测
       _probeInFlight = true;
+      replayHandle = replayBuffer.begin(reqInstanceId);
       socket.timeout(PROBE_MS).emit('sync:since', payload, (err, res) => {
         _probeInFlight = false;
         act(err, res);
       });
     } else {
+      replayHandle = replayBuffer.begin(reqInstanceId);
       socket.emit('sync:since', payload, res => act(null, res));
     }
   }
@@ -858,7 +915,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     initialLoad = false;
     setupPush();
     initDeepLinkOnce();  // ②2c：深链入口（幂等，仅首次 connect 生效）
-    
+    // PWA 后台推送修复：重连后服务端对这个新 socket 的 presence 是全新的（socket.data.hidden 从
+    // undefined 起算），需要重新对齐当前 document.hidden，避免重连瞬间被误判为"前台"或"后台"。
+    socket.emit('client:presence', { hidden: document.hidden });
+
     // 触发离线发送队列重发
     processOfflineQueue();
   });
@@ -1256,7 +1316,33 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     },
   });
-  socket.on('agent:event', dispatchAgentEvent);
+  // 回放缓冲（P0-REPLAY-BUFFER，见 logic.js resolveReplayBufferAction 顶部注释）：bindView 切视图 /
+  // requestSync 重连-探活两条入口共用，emit 'sync:since' 之前先 begin() 架起缓冲，命中该 instanceId
+  // 的事件（含期间穿插的非 replay 实时事件）先入队不渲染；ack 到达后按判定结果 resolve('reload'|'flush')。
+  // scrollBottom/dispatchAgentEvent 是本文件下方的函数声明/上方已构造的 const，此处引用均安全
+  // （函数声明整体提升；dispatchAgentEvent 在本行之前已完成赋值）。
+  const replayBuffer = createReplayBuffer({
+    dispatch: dispatchAgentEvent,
+    scrollBottom,
+    withScrollSuppressed(fn) {
+      _suppressScrollBottom = true;
+      try { fn(); } finally { _suppressScrollBottom = false; }
+    },
+    setSeq: value => { lastSeq = value; },
+    setEpoch: value => { curEpoch = value; },
+    // 超时兜底与 ack 路径同口径：超阈值走 reload 语义（只推进基线，不逐条吐成打字机）；
+    // 未超阈值 flush。busy 在超时点无法可靠取（可能正是半开连接），按非 busy 处理——宁可
+    // 超阈值时丢缓冲改走下次 history/sync，也不要 100+ 条 DOM 抖动。
+    decideTimeoutAction: ({ bufferedCount }) => resolveReplayBufferAction({
+      bufferedCount,
+      priorAction: 'keep',
+      busy: false,
+    }),
+  });
+  socket.on('agent:event', event => {
+    if (replayBuffer.offer(event)) return; // 命中当前缓冲实例的对话流：已入队，不在这里渲染（OOB 不入队）
+    dispatchAgentEvent(event);
+  });
   function failPendingToolCards(message) {
     if (!toolCards.size) return;
     const summary = message || '工具执行已因本轮错误停止';
@@ -1941,6 +2027,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         _pendingSendBusySessionId = null;
         setBusy(false);
         hideActivityBanner();
+        // 全新会话首轮点停止后不跳回主页：sessionId 仍未到（displayedSessionId 空）时被中断，标记当前
+        // 实例——resolveEmptySurface/shouldShowComposer 据此不再把"sessionId 为空"误判成该显启动页。
+        // 已有 sessionId 的正常中断（displayedSessionId 非空）不置位，且顺带清掉任何过期残留。
+        freshInterruptedInstanceId = (displayedInstanceId && !displayedSessionId) ? displayedInstanceId : null;
       }
       // 排队条终态（live + buffer 回放共用同一路径，多设备视图一致）
       if (p.kind === 'queue_dropped' && Array.isArray(p.clientMessageIds)) {
@@ -2004,6 +2094,27 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         });
         return line;
       };
+      // 额度段公共构建（对齐 CLI）：5h X% [reset …] │ 7d Y% [reset …]。抽成函数供两处复用——
+      // 正常态尾段（行B，下方）与 cli-unavailable 分支（账号级回落值展示）共享同一份文案/配色
+      // 规则，避免后续只改一处、漏改另一处。
+      const buildRateSegs = rate => {
+        const segs = [];
+        if (rate?.fiveHour && Number.isFinite(rate.fiveHour.usedPercent)) {
+          const pc = rate.fiveHour.usedPercent;
+          let t = `5h ${Math.round(pc)}%`;
+          const r = fmtReset(rate.fiveHour.resetsAt);
+          if (r) t += ` reset ${r}`;
+          segs.push({ text: t, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
+        }
+        if (rate?.sevenDay && Number.isFinite(rate.sevenDay.usedPercent)) {
+          const pc = rate.sevenDay.usedPercent;
+          let t = `7d ${Math.round(pc)}%`;
+          const r = fmtReset(rate.sevenDay.resetsAt);
+          if (r) t += ` reset ${r}`;
+          segs.push({ text: t, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
+        }
+        return segs;
+      };
       const linesArr = [];
 
       if (p.source?.kind === 'cli-unavailable') {
@@ -2013,9 +2124,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         unavailable.appendChild(span('CLI 状态暂不可用', 'text-warning font-medium'));
         if (p.source.reason) unavailable.appendChild(span(`(${p.source.reason})`, 'text-ink-faint'));
         cliStatusEl.appendChild(unavailable);
-        if (cliSummaryEl) cliSummaryEl.textContent = 'statusline · CLI 暂不可用';
+        // 额度是唯一例外：仅当 rateFromSnapshot 显式标记为账号级快照回落值时才展示，且必须清楚
+        // 标注"非实时"——不能让用户误以为 CLI 状态本身是好的。其余字段（model/git/ctx/token/cache
+        // 等）仍严格遵守下面 return 处的注释、绝不混入陈旧字段，此处不因为顺手展示额度而放宽。
+        const staleRateSegs = (p.rate && p.rateFromSnapshot) ? buildRateSegs(p.rate) : [];
+        if (staleRateSegs.length) {
+          staleRateSegs.push({ text: '(账号级旧值，非实时)', cls: 'text-ink-faint' });
+          const staleRateRow = row(staleRateSegs);
+          if (staleRateRow) cliStatusEl.appendChild(staleRateRow);
+        }
+        if (cliSummaryEl) cliSummaryEl.textContent = staleRateSegs.length ? 'statusline · CLI 暂不可用（额度沿用旧值）' : 'statusline · CLI 暂不可用';
         cliStatusWrapEl?.classList.remove('hidden');
-        return; // CLI owner 缺/陈旧时明确空缺，绝不把上一份 SDK/CLI 字段混进来
+        return; // CLI owner 缺/陈旧时明确空缺，绝不把上一份 SDK/CLI 字段混进来（额度回落值是唯一例外，见上）
       }
 
       // git 段（分支 +暂存 !改动 ?未跟踪 ↑ahead ↓behind）。三分对齐 CLI；陈旧 payload 无三分时回退 ✱changed。
@@ -2073,21 +2193,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         cacheNode.appendChild(document.createTextNode(' '));
         cacheNode.appendChild(span(`write ${fmtTokF(p.ctx.w)} read ${fmtTokF(p.ctx.r)}`, 'text-ink-faint'));
       }
-      // 额度段（对齐 CLI）：5h X% [reset …] │ 7d Y% [reset …]
-      const rateSegs = [];
-      if (p.rate?.fiveHour && Number.isFinite(p.rate.fiveHour.usedPercent)) {
-        const pc = p.rate.fiveHour.usedPercent;
-        let t = `5h ${Math.round(pc)}%`;
-        const r = fmtReset(p.rate.fiveHour.resetsAt);
-        if (r) t += ` reset ${r}`;
-        rateSegs.push({ text: t, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
-      }
-      if (p.rate?.sevenDay && Number.isFinite(p.rate.sevenDay.usedPercent)) {
-        const pc = p.rate.sevenDay.usedPercent;
-        let t = `7d ${Math.round(pc)}%`;
-        const r = fmtReset(p.rate.sevenDay.resetsAt);
-        if (r) t += ` reset ${r}`;
-        rateSegs.push({ text: t, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
+      // 额度段（对齐 CLI）：5h X% [reset …] │ 7d Y% [reset …]。构建逻辑见上方 buildRateSegs
+      // （与 cli-unavailable 分支共用，避免重复实现两遍）。
+      // rateFromSnapshot：正常路径也必须标注"非实时"——否则 SDK/CLI 回落值会看起来像活数据
+      // （code review：此前只在 cli-unavailable 分支加了 disclaimer，正常行漏标）。
+      const rateSegs = buildRateSegs(p.rate);
+      if (rateSegs.length && p.rateFromSnapshot) {
+        rateSegs.push({ text: '(账号级旧值，非实时)', cls: 'text-ink-faint' });
       }
       // 行B（遥测，对齐 CLI 次行）：5h/7d │ uncached/response │ cache%+write/read
       linesArr.push(row([
@@ -3526,11 +3638,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 非 string（含 null=未探到）归一空 → 切到无默认的 cwd 自动清、不残留上区默认。
     const prevDefaultModel = cwdDefaultModel, prevCurrentModel = currentModel;
     cwdDefaultModel = (typeof p?.defaultModel === 'string') ? p.defaultModel : '';
-    // 实例集变化时清除会话缓存，防止关闭的会话以幽灵数据残留
+    // 实例集变化时只标记会话缓存整体"过期"，不整段清空（P3 SWR 保鲜）：openSessionPanel/populateSubtree
+    // 遇到缓存条目仍会立即用它秒开渲染（不管 stale 与否，见 populateSubtree 内 SWR 分支），只是背后会
+    // 再发 session:list 悄悄刷新——避免"清空→骨架屏→等网络往返"这种明明没变化的目录也被连坐重建。
     const prevIds = new Set(prevInstances.map(x => x.instanceId));
     const currIds = new Set(instancesList.map(x => x.instanceId));
     if (prevIds.size !== currIds.size || ![...currIds].every(id => prevIds.has(id))) {
-      sessionsCache.clear();
+      for (const entry of sessionsCache.values()) entry.stale = true;
+    }
+    // 清除④：freshInterrupted 标记的实例从 instances 列表消失（关闭/退出/别处清理），待续档态随之作废。
+    if (freshInterruptedInstanceId && !currIds.has(freshInterruptedInstanceId)) {
+      freshInterruptedInstanceId = null;
     }
     const newStates = aggregateStates(instancesList, availableDirs); // per-cwd 聚合（permission>busy>done>idle）
     const newViewing = p?.viewingInstanceId ?? null;
@@ -3596,6 +3714,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 否则 dashboard 工作区名 + 模型 chip 残留上个工作区（本次修复的 bug 正出于此：两个 null 空首页被判为「视图没变」）
     const startScreenCwdChanged = !newViewing && cwdChanged;
     if (newViewing !== displayedInstanceId || startScreenCwdChanged) {
+      // 点停止顿一下跳主页（回归修复）：须在 displayedInstanceId 被 bindView 覆写之前判定——
+      // prevIds/currIds 是本函数顶部按"这次广播前后的 instancesList"算出的旧/新快照，
+      // displayedInstanceId 此刻仍是"切视图前实际绑定在屏幕上的那个实例"（bindView 内部才会覆写它）。
+      const instanceDestroyed = wasViewingInstanceDestroyed({
+        prevViewingInstanceId: displayedInstanceId,
+        newViewingInstanceId: newViewing,
+        prevIds, currIds,
+        explicitCloseInstanceId,
+      });
+      explicitCloseInstanceId = null; // 一次性：只用于紧接着这一次判定，防止悬留误伤后续无关的摧毁事件
       const target = instancesList.find(x => x.instanceId === newViewing);
       ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）
       adoptPanelState(target);          // 先静默同步顶部面板到新实例档（先于 bindView 的 sync 回放）
@@ -3603,12 +3731,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // ② 权限/思考强度显"下条新会话将用的真实档"
       // （server defaultPermissionMode/defaultEffort = L0 pending > L3 CLI settings > L4 硬默认），
       // silent 同步不上屏——修空首页残留上个会话档（A1，2026-06-22；L3 2026-07-14）。
-      if (!target) {
+      // 注意：实例被摧毁时也不去动模型/权限/思考强度面板显示（用户下一步是先看到中断提示，不是新会话面板）。
+      if (!target && !instanceDestroyed) {
         updateModelAndSuffix(''); if (modelInput) modelInput.value = '';
         setPermMode(p.defaultPermissionMode || 'default', true);
         setEffortMode(p.defaultEffort ?? null, true);
       }
-      bindView(target, newViewing); // 空表面→home dashboard / compose 新会话页（工作区名 + 默认档一致刷新）
+      bindView(target, newViewing, { instanceDestroyed }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
       // bindView 内已按 shouldRestoreOptimisticBusy 补 busy；此处再补一次防 bindView early-return 路径漏补
       // （首发无 sessionId / 同会话 externalDirty·effort 置换）。session:switch 打开已有会话不补。
       if (shouldRestoreOptimisticBusy({
@@ -3632,6 +3761,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         displayedSessionId = target.sessionId;
         updatePillSession(target.sessionId);
         if (topTitleText) topTitleText.textContent = '聊天';
+        // 清除②：同一实例在这条广播里补上了 sessionId——待续档态不再适用（这条路径不经 bindView，
+        // 上面 bindView 内的清除逻辑覆盖不到，须在此单独清）。
+        if (freshInterruptedInstanceId === newViewing) freshInterruptedInstanceId = null;
       }
     } else if (!newViewing) {
       // 空首页视图未变（displayed 已是 null、cwd 也没变），但仍可能收到二次 instances：
@@ -3660,27 +3792,35 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     }
     updateSessionsDot();
-    updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进 _structChanged 分支）
-    // P3 性能优化：仅结构变化时全量重建面板（+ N×session:list 往返）；纯状态变化（busy/done/error）走
-    // 轻量路径 refreshDirBadges()，避免并发流式时反复 innerHTML teardown + socket 往返 + 滚动跳位。
-    // 结构键 = dirs 集合 + 实例集（id/sessionId/title 前20字）+ viewingInstanceId + viewingCwd。
-    // 状态（busy/idle/permission/error）不进键——由更新后的 workdirStates 驱动 refreshDirBadges 实时刷新角标。
-    // expandedDirs 变化由 toggleBtn.onclick 直接调 openSessionPanel()，不经此路径，无需纳入键。
-    const _structKey = (() => {
-      const ids = instancesList.map(x => `${x.instanceId}:${x.sessionId || ''}:${(x.title || '').slice(0, 20)}`).join(',');
-      return `${currentCwd || ''}|${availableDirs.join('|')}|${viewingInstanceId || ''}|${ids}`;
-    })();
-    const _structChanged = _structKey !== _lastPanelStructKey;
-    if (_structChanged) _lastPanelStructKey = _structKey;
+    updateServiceNotice(p?.service ?? null); // 服务健康与实例结构无关，无条件每次广播都刷新（不进下方判定分支）
+    // P3 性能优化（两层判定，故意不合并——关注点不同）：
+    // ① 结构性变化（目录集合本身变化 / viewingInstanceId 变化 / 当前查看 cwd 变化——三者共同决定
+    //   dirRow 高亮与自动展开）仍走全量重建：低频、全量更简单可靠，不做精细化 diff。
+    // ② 其余情况按目录分键 diff（见 logic.js buildDirInstanceSignatures/diffDirSignatures：id/sessionId/
+    //   title 前20字），只重建签名真变化的目录子树，未涉及目录的 DOM 原样不动（不撤离滚动位置/侧滑态/
+    //   "显示全部"展开态）——避免重连等场景下无关工作区被连坐重建（P3 抽屉局部重建）。
+    // 状态（busy/idle/permission/error）不进任何一层——由更新后的 workdirStates 驱动 refreshDirBadges
+    // 实时刷新角标。expandedDirs 变化由 toggleBtn.onclick 直接调 populateSubtree，不经此路径。
+    const _structuralKey = `${availableDirs.join('|')}|${viewingInstanceId || ''}|${currentCwd || ''}`;
+    const _structuralChanged = _structuralKey !== _lastPanelStructKey;
+    _lastPanelStructKey = _structuralKey;
+    const _nextDirSignatures = buildDirInstanceSignatures(instancesList, availableDirs);
+    const _changedDirs = diffDirSignatures(_lastDirSignatures, _nextDirSignatures);
+    _lastDirSignatures = _nextDirSignatures;
     const isDesktop = window.innerWidth >= 1024;
     const isPanelOpen = leftSidebar && !leftSidebar.classList.contains('-translate-x-full');
     if (isDesktop || isPanelOpen) {
-      if (_structChanged) {
+      if (_structuralChanged) {
         openSessionPanel(); // 内含 needsYou/service 区 + 工作区树全量重建，此路径不必再单独 refresh*
-      } else {
+      } else if (_changedDirs.length) {
+        rebuildDirSections(_changedDirs); // 只重建真正变化的目录子树，其余目录 DOM 保持原样
         refreshDirBadges();
         refreshInstanceBadges(); // 实例角标实时刷新（busy 时工具图标细化）
-        refreshNeedsYou(); // "等我"聚合独立于 structKey（新增/清除审批不改变实例集结构），须单独刷新
+        refreshNeedsYou(); // "等我"聚合独立于签名（新增/清除审批不改变实例集结构），须单独刷新
+      } else {
+        refreshDirBadges();
+        refreshInstanceBadges();
+        refreshNeedsYou();
       }
     } else {
       refreshDirBadges();
@@ -3719,6 +3859,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function ackUnread() {
     const id = viewingInstanceId;
     hideUnreadPill();
+    clearAppBadgeSafe(); // 确认已读 → 清应用图标角标（不支持的平台静默跳过）
     if (id != null) socket.emit('user:ackUnread', { instanceId: id });
   }
   // count：sync:since ack 带回的 unreadOnEntry（第一次为这个会话结算的权威数字）。必须在渲染真正稳定后调用
@@ -3733,6 +3874,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     unreadAnchorNode = list[idx];
     unreadPillCountEl.textContent = count > 99 ? '99+' : String(count);
     unreadPillEl.classList.remove('hidden');
+    setAppBadgeSafe(count); // 未读胶囊显示 → 同步置应用图标角标（不支持的平台静默跳过）
     // observe() 触发的第一次回调只是汇报"此刻"的可见状态（短对话/未读消息本来就在一屏内时，锚点从一开始
     // 就是可见的）——不能当成"用户翻到了"，否则胶囊刚显示就被自己判定为已读并立刻消失。只认后续真正由
     // 滚动触发的状态变化。
@@ -3762,16 +3904,49 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   unreadPillEl?.addEventListener('click', jumpToUnreadAnchor);
 
+  // 未读胶囊第三条自动确认已读路径：用户手动滚动贴近底部 → ackUnread()（与上面「点击」「Intersection
+  // Observer 扫到锚点」并存，互不替代——未读很多时锚点在很上面，用户滚到底部锚点早就飘出视口了，
+  // Observer 不会触发，这是本条专门补的场景）。判定交纯函数 shouldAckUnreadOnScroll（logic.js），这里
+  // 只负责取值 + 节流。withinProgrammaticWindow 取自 scrollBottom() 维护的 programmaticScrollUntil
+  // （见下方 scrollBottom 定义）——切入积压会话时回放缓冲的程序性落底不能被误判成"用户看到了"。
+  // 节流：scroll 事件触发频率很高，用 rAF 把同一帧内的多次事件合并成一次检查——回调里读取的是触发时刻
+  // 的最新滚动几何（而非事件里的值），故合并多次事件不会漏判"最终停在哪"，比固定时间间隔的节流更稳。
+  let unreadScrollCheckPending = false;
+  messagesEl.addEventListener('scroll', () => {
+    if (unreadScrollCheckPending) return;
+    unreadScrollCheckPending = true;
+    requestAnimationFrame(() => {
+      unreadScrollCheckPending = false;
+      if (shouldAckUnreadOnScroll({
+        pillVisible: Boolean(unreadPillEl) && !unreadPillEl.classList.contains('hidden'),
+        withinProgrammaticWindow: Date.now() < programmaticScrollUntil,
+        scrollHeight: messagesEl.scrollHeight,
+        scrollTop: messagesEl.scrollTop,
+        clientHeight: messagesEl.clientHeight,
+      })) ackUnread();
+    });
+  }, { passive: true });
+
   // aggregateStates 已抽到 logic.js（顶部 import）。
   // 切视图到指定实例（台阶3）：清视图 → sync 活缓冲（重建在途流 + 挂起审批弹窗）→ 无缓冲回退 history。
   // entry 缺失/无 sessionId（新会话尚未 init）= 空白，事件流入自然渲染。
-  function bindView(entry, id) {
+  function bindView(entry, id, opts = {}) {
     hideUnreadPill(); // 无条件先清上一个会话的残留胶囊——含本函数下方提前 return 的空首页/compose 分支，避免悬浮在无关界面上
+    // 无条件先丢弃上一个实例的回放缓冲——同 hideUnreadPill：含下方提前 return 的空首页/compose/
+    // pendingFirstSend 分支也要清，否则遗留缓冲会静默吞掉那个旧实例后续的实时事件（缓冲一直挂着、
+    // 却再没人来 resolve() 它）。真正切入某个会话时 begin() 自身也会 discard，这里是兜底覆盖全分支。
+    replayBuffer.discard();
     const prevInstanceId = displayedInstanceId; // S1：缓存归属的(外出)实例，供切回时检测实例是否被替换
     const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 planSessionDraftSwap 判 keep/swap
     displayedInstanceId = id;
     const sid = entry?.sessionId || null;
     displayedSessionId = sid;
+    // 清除①②：切到别的实例/空表面（id 变了），或该实例这一刻已经拿到 sessionId（sid 非空）——
+    // 两种情况都意味着"sessionId 未到即被中断"这个待续档态不再适用，须清掉，否则会悬留到下一个
+    // 无关场景把它误判成该显示中断态。
+    if (freshInterruptedInstanceId && (id !== freshInterruptedInstanceId || sid)) {
+      freshInterruptedInstanceId = null;
+    }
 
     // Phase 2: Save DOM nodes of current session to cache before clearing.
     // S1：连同去重基线(lastSeq/epoch)一并缓存——切回时据此「只增量续传缓存之后的新事件」，而非
@@ -3841,11 +4016,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
 
     // ＋ → compose 干净新会话页；🏠 / 冷启动 → home 最近枢纽；有 session → none
+    // freshInterrupted：sessionId 未到但已中断——不落 home/compose，保留已渲染的聊天内容（见上方清除注释）。
+    // instanceDestroyed：点停止顿一下跳主页的回归修复——正在看的实例被摧毁（非用户主动导航），
+    // 不静默落 home，先给用户看"会话已中断"提示，交由其手动选下一步（见 setInstances 调用处）。
     const emptySurface = resolveEmptySurface({
       viewingInstanceId: id,
       sessionId: sid,
       composeReady: _composeReady,
+      freshInterrupted: id === freshInterruptedInstanceId,
+      instanceDestroyed: Boolean(opts.instanceDestroyed),
     });
+    if (emptySurface === 'destroyed') {
+      showInstanceDestroyedSurface();
+      return;
+    }
     if (emptySurface === 'home') {
       showDashboard();
       return;
@@ -3884,8 +4068,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       showLoadingCard();
     }
 
+    // 回放缓冲（P0-REPLAY-BUFFER）：emit 之前先 begin()，期间命中该 instanceId 的 agent:event
+    // 先入队不渲染（见上方 socket.on('agent:event', ...)），修「切会话逐条吐消息像打字机」。
+    const replayHandle = replayBuffer.begin(id);
     socket.emit('sync:since', { instanceId: id, sessionId: sid, lastSeq: resumeFromSeq }, res => {
-      if (displayedInstanceId !== id) return;        // 已切走：丢弃过期回调
+      // 已切走：丢弃过期回调。显式 discard 本轮 handle——后续 bindView 的 begin/discard 通常已顶替，
+      // 但若同一实例被快速 A→B→A 重入，仅靠 displayed 守卫早退而不 resolve，会让中间那批已入队事件
+      // 既不 flush 也不推进基线，最终被第三次 begin 无声丢掉。
+      if (displayedInstanceId !== id) {
+        replayBuffer.resolve(replayHandle, 'discard');
+        return;
+      }
       // S1：hasCache 时已增量续传（resumeFromSeq=缓存位置，回放只含新事件、append 不重复）。
       // 切入决策交纯函数 shouldReloadOnEnter（logic.js，单测覆盖）——活缓冲/DOM 缓存 vs 磁盘全量重载：
       //   'load'   无缓存、聊天区空 → 拉磁盘首次填充（不必清屏）；
@@ -3895,16 +4088,30 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         replayed: res?.replayed, gap: res?.gap, hasCache,
         diskLen: res?.diskLen ?? 0, seenDiskLen: seenDiskLenBySession.get(sid) ?? 0
       });
+      // 回放缓冲二层判定（resolveReplayBufferAction，logic.js）：action 已是 'reload'/'load' 时直接
+      // 沿用（这层不重判）；'keep' 时再看缓冲攒了多少条 + 是否 busy，决定要不要"补"一次 reload。
+      // busy 取 ack 时刻 instances 广播的最新值（同 shouldReseedBusyAfterReload 的口径，优先于入场快照
+      // entry?.state——ack 到达前可能已有更新的 instances 广播）。
+      const busy = shouldSeedBusyFromInstanceState(instancesList.find(x => x.instanceId === id)?.state ?? entry?.state);
+      const bufferAction = resolveReplayBufferAction({ bufferedCount: replayBuffer.bufferedCount(id), priorAction: action, busy });
       // 未读胶囊：数字随 ack 一次性到达，但 DOM 是否已就绪要看走哪条分支——'load'/'reload' 要等
       // loadHistory 分块渲染真正落地（onDone）才能查 topLevelBubbles()，'keep' 分支 DOM 已稳定可以直接查。
       const unreadOnEntry = res?.unreadOnEntry || 0;
       if (action === 'load') {
+        // 缓冲通常本就空（'load' 只在 server replayed===0 时出现）；仍统一走 resolve('reload') 收尾，
+        // 防万一有穿插的实时事件——续传基线前移到缓冲尾，不遗漏、不重复。
+        replayBuffer.resolve(replayHandle, 'reload');
         loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
-      } else if (action === 'reload') {
-        // 清屏全量重载历史（同重连路径 syncAckAction 的 gap→reload，不把残缺/过期缓存当完整）。
-        // sync:since 已把活缓冲事件推进 lastSeq/curEpoch 并渲染进 DOM；clearView 会归零基线——
+      } else if (bufferAction === 'reload') {
+        // 覆盖两种来源：action 本就是 'reload'（gap/外部写入），或 'keep' 但缓冲攒太多被这层升级——
+        // 统一走清屏 + session:history 批量重载（loadHistory/renderHistoryBubbles 本就是一次性 fragment
+        // + 单次落底，见 logic.js resolveReplayBufferAction 顶部注释）。
+        // 丢弃缓冲队列前先把续传基线（lastSeq/curEpoch）前移到队列尾——否则下面 keepSeq/keepEpoch
+        // 会读到"缓冲前"的旧值，下次再进这个会话可能重复播放本次被丢弃的这批事件，或因 seq 跳跃误判 gap。
+        replayBuffer.resolve(replayHandle, 'reload');
+        // sync:since 已把（原本会经缓冲推进的）lastSeq/curEpoch 前移；clearView 会归零基线——
         // 若不恢复，后续 reconnect 以 lastSeq=0 再回放缓冲会与磁盘历史叠成重复气泡。history 不占 seq，
-        // 恢复本轮已推进的基线即可让后续增量从缓冲尾部续。
+        // 恢复前移后的基线即可让后续增量从缓冲尾部续。
         const keepSeq = lastSeq;
         const keepEpoch = curEpoch;
         clearView(sid, null);
@@ -3916,11 +4123,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         showLoadingCard();
         loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
       } else {
+        // flush：缓冲队列（若有）按到达顺序正常派发（走原 handler 增量渲染），抑制中间滚动，派发完
+        // 只做一次强制落底（resolveReplayBufferAction 内部处理，见 createReplayBuffer flushQueue）。
+        replayBuffer.resolve(replayHandle, 'flush');
         hideLoadingCard();
         showUnreadPillIfAny(unreadOnEntry);
         // 修「切回停在旧位置」：'keep' 分支恢复的是离开时缓存的旧内容底部，离开期间产生的新内容随后
         // 才作为 replay 事件逐条补发（各自走非强制 scrollBottom，未必够到阈值）——不强制补一次的话
-        // 视图会停留在旧底部附近，直到某条补发事件恰好触发滚动。
+        // 视图会停留在旧底部附近，直到某条补发事件恰好触发滚动。flushQueue 已在缓冲非空时做过一次
+        // 强制落底，这里是冗余但无害的兜底（replayed=0/缓冲为空时仍需要它独立生效）。
         if (shouldForceScrollAfterReplay({ action, replayed: res?.replayed })) scrollBottom(true);
       }
       // 状态对账：视图已稳定（上面所有 clearView 已执行完）→ 用 ack 带回的快照重建未决审批/提问卡片。
@@ -4015,7 +4226,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     return section;
   }
   // 面板开着时刷新"需要你"区（不重建整个面板）：needsYou 变化（新增/清除审批或提问）不改变 dirs/实例集，
-  // 不会触发 _structKey 变化 → openSessionPanel 不会被调用，须独立刷新（同 refreshDirBadges/refreshInstanceBadges 的定位）。
+  // 不会触发结构性变化或目录签名变化 → openSessionPanel/rebuildDirSections 都不会被调用，须独立刷新
+  // （同 refreshDirBadges/refreshInstanceBadges 的定位）。
   // 面板尚未渲染过（#needsYouSection 不存在）时跳过——首次 openSessionPanel 会用当下 needsYouList 建好。
   function refreshNeedsYou() {
     const old = sessionPanel.querySelector('#needsYouSection');
@@ -4463,6 +4675,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     haptic('tap');
     closeLeftSidebar();
     leaveComposeReady();
+    // 清除③：用户显式回主页——放弃"sessionId 未到即中断"的待续档态，让 shouldShowStartScreen 按
+    // 正常规则判定（不应被 freshInterrupted 拦住，用户就是要去主页）。
+    freshInterruptedInstanceId = null;
     const sid = instancesList.find(x => x.instanceId === viewingInstanceId)?.sessionId || null;
     if (shouldShowStartScreen({ viewingInstanceId, sessionId: sid })) {
       showDashboard();
@@ -4484,6 +4699,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 同步本地重置：不等服务端 instances 广播（那要一次网络往返）。JS 单线程保证这行执行完之后，
     // 无论用户手速多快，ensureEmptySurface()/send() 都只能读到 null，不会残留旧会话 id（Bug A）。
     viewingInstanceId = null;
+    // 清除③：新建会话——放弃上一个实例"sessionId 未到即中断"的待续档态。
+    freshInterruptedInstanceId = null;
     enterComposeReady();
     ensureEmptySurface();
     socket.emit('session:new', { cwd: currentCwd }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
@@ -4503,6 +4720,396 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   btnSessions.onclick = toggleSessions;
 
   // 台阶3 Step B：工作区面板 = 目录树（当前 cwd 展开，其他折叠）——类似 IDE 项目浏览器。
+  // 单个工作区目录的 DOM 子树构建（dirRow 头行 + subtree 展开区）——从 openSessionPanel 抽出以支持
+  // 局部重建（见 rebuildDirSections）：只有这个函数知道"一个目录该怎么画"，openSessionPanel（全量）
+  // 与 rebuildDirSections（局部，只重建按目录签名 diff 出的变化目录）都复用它，两条路径画出来的东西
+  // 保证一致，不会走成两套逻辑。tabs 现读 instancesList（不依赖调用方快照）：局部重建时数据可能比
+  // 上一次 openSessionPanel 更新，直接读最新更正确。
+  function buildDirSection(d) {
+    const isCurrent = d === currentCwd;
+    const isExpanded = expandedDirs.has(d);
+    const tabs = instancesList.filter(inst => inst.instanceId && inst.cwd === d);
+
+    // ---- 目录头行（所有目录均可点击展开/折叠）----
+    const dirRow = el(`<div class="w-full px-3 py-1.5 border-b border-line flex items-center justify-between hover:bg-sunk/30${isCurrent ? ' text-accent' : ' text-ink'}"></div>`);
+    dirRow.dataset.dir = d;
+    dirRow.title = d;
+
+    const toggleBtn = el(`<button class="flex-1 min-w-0 text-left flex items-center gap-2 py-1.5 active:opacity-70"></button>`);
+    const icon = el(`<span class="shrink-0"></span>`); icon.textContent = isExpanded ? '📂' : '📁';
+    // 统一用 "▶" 字符，旋转实现向下效果，平滑过渡
+    const arrow = el(`<span class="shrink-0 text-[9px] w-3 dir-arrow">▶</span>`);
+    if (isExpanded) arrow.classList.add('rotated');
+    const name = el(`<span class="truncate"></span>`); name.textContent = baseName(d);
+    const badge = el(`<span class="dir-badge hidden"></span>`);
+    applyBadge(badge, workdirStates[d]);
+
+    toggleBtn.appendChild(icon);
+    toggleBtn.appendChild(arrow);
+    toggleBtn.appendChild(name);
+    toggleBtn.appendChild(badge);
+    dirRow.appendChild(toggleBtn);
+
+    // 物理热区扩大版 "＋" 新建按钮
+    const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="在此工作区新建会话">＋</button>`);
+    newSessionBtn.onclick = (e) => {
+      e.stopPropagation();
+      closeLeftSidebar();
+      haptic('tap');
+      // 同步本地重置（同 btnNew，Bug A）：viewingInstanceId 不等广播落地；currentCwd 同样要立刻
+      // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚点的这个 d。
+      viewingInstanceId = null;
+      currentCwd = d;
+      // 清除③：新建会话（按目录行 ＋）——放弃上一个实例"sessionId 未到即中断"的待续档态。
+      freshInterruptedInstanceId = null;
+      enterComposeReady();
+      ensureEmptySurface(); // cwd 可能变了；空表面内 viewing 仍 null 须本地切到 compose
+      socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
+    };
+    dirRow.appendChild(newSessionBtn);
+
+    // 文件浏览入口已收归顶部 pill（当前工作区）；抽屉只负责会话切换/新建，不再挂逐行「浏览」按钮。
+
+    // ---- 展开区容器（所有目录均常驻 DOM 以支持 CSS max-height 过渡，仅通过类来控制动画） ----
+    const subtree = el(`<div class="subtree-container"></div>`);
+    if (isExpanded) {
+      subtree.classList.add('expanded');
+    }
+
+    const liveBySession = new Map();        // sessionId → 已打开实例（有 id 的 live tab，用于在 /resume 列表中就地标记）
+    const freshTabs = [];                   // 无 sessionId 的新会话实例（尚未保存，/resume 列表看不到、无时间）
+    for (const inst of tabs) { if (inst.sessionId) liveBySession.set(inst.sessionId, inst); else freshTabs.push(inst); }
+
+    // 统一行：一条会话（session:list 的 s，或无 id 的新会话）→ DOM 行。liveInst 非空 = 已打开为 tab。
+    // 全程 textContent（无 innerHTML 插值用户数据）→ CSP 安全。
+    const sessionRow = (s, liveInst, rowCwd) => {
+      const active = liveInst && liveInst.instanceId === viewingInstanceId;
+
+      // 使用相对定位的包装容器来实现侧滑关闭
+      const container = el(`<div class="relative overflow-hidden w-full select-none swipe-row-container"></div>`);
+
+      // 背景红底“关闭”按钮
+      let deleteBtn;
+      if (liveInst) {
+        deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">关闭</div>`);
+        deleteBtn.onclick = async (e) => {
+          e.stopPropagation();
+          haptic('warning');
+          if (await appConfirm({
+            title: `关闭会话「${s.title || '新会话'}」？`,
+            body: '会话将从 tab 列表移除，但历史保留可重新打开。',
+            okText: '关闭会话',
+          })) {
+            // 点停止顿一下跳主页的回归修复：若关的正是当前正在看的会话，记下 id 供
+            // wasViewingInstanceDestroyed 排除——这是用户自己确认过的主动关闭，不是"被摧毁"。
+            explicitCloseInstanceId = liveInst.instanceId;
+            socket.emit('session:close', { instanceId: liveInst.instanceId });
+            closeLeftSidebar();
+          } else {
+            rowContent.style.transform = 'translateX(0px)';
+            rowSwiped = false;
+          }
+        };
+        container.appendChild(deleteBtn);
+      }
+
+      // 行内容 (可滑动的前景卡片)
+      const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${s.id || ''}" data-instance-id="${liveInst?.instanceId || ''}"></div>`);
+      const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
+      btn.title = s.title || '新会话';
+      const head = el(`<div class="truncate flex items-center gap-1.5"></div>`);
+      const titleSpan = el(`<span class="truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
+      titleSpan.textContent = s.title || '新会话';
+      head.appendChild(titleSpan);
+      if (liveInst) {                        // 已打开标记：状态角标（busy ⏳ / permission ⚠️ / error ❗ / done ✅）
+        // busy 时优先使用工具细化图标（🤖 Agent / 🖥 Bash），其他状态用通用角标
+        const badgeState = liveInst.state;
+        let badgeIcon, badgeCls, badgeTitle;
+        if (badgeState === 'busy' && liveInst.activeTool && TOOL_BADGE[liveInst.activeTool]) {
+          badgeIcon = TOOL_BADGE[liveInst.activeTool];
+          badgeCls = 'text-warning';
+          badgeTitle = `运行中：${liveInst.activeTool}`;
+        } else {
+          const m = DIR_BADGE[badgeState];
+          if (m) {
+            const b = el(`<span data-instance-badge class="shrink-0 status-icon ${m[1]}"></span>`);
+            setStatusIcon(b, m[0]);
+            b.title = m[2];
+            head.appendChild(b);
+            badgeIcon = null; // already appended
+          }
+        }
+        if (badgeIcon) { const b = el(`<span data-instance-badge></span>`); b.textContent = badgeIcon; b.className = `shrink-0 ${badgeCls}`; if (badgeTitle) b.title = badgeTitle; head.appendChild(b); }
+      }
+      btn.appendChild(head);
+      const sub = el(`<div class="text-ink-faint text-[10px]"></div>`);
+      const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : '新会话（未保存）';
+      // 短 session_id（前 8 位）：便于对照 CLI /resume、日志、多设备定位同一会话；无 id 的新会话不显示。
+      const shortId = s.id ? ` · ${s.id.slice(0, 8)}` : '';
+      sub.textContent = when + (liveInst ? ' · 已打开' : '') + shortId;
+      btn.appendChild(sub);
+
+      let rowSwiped = false;
+      btn.onclick = (e) => {
+        // 拦截滑动/滚动导致的误触
+        if (rowContent.getAttribute('data-preventClick') === 'true') {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        if (rowSwiped) {
+          rowContent.style.transform = 'translateX(0px)';
+          rowSwiped = false;
+          return;
+        }
+        haptic('tap');
+        if (liveInst) {                      // 已打开：切视图，不重新 resume
+          if (liveInst.instanceId !== viewingInstanceId) socket.emit('user:setViewing', { instanceId: liveInst.instanceId });
+          closeLeftSidebar();
+        } else {                             // 未打开：resume 打开（同步关面板 + 4s 兜底，不把反馈压在 ack 上）
+          closeLeftSidebar();
+          let acked = false;
+          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) addBar(res?.error || '切换失败', 'text-danger'); });
+          setTimeout(() => { if (!acked) addBar('切换无响应，请刷新页面后重试', 'text-danger'); }, 4000);
+        }
+      };
+      rowContent.appendChild(btn);
+
+      // 原生 x 按钮：桌面/移动端均常显（此前 md:block hidden 只在桌面显示，手机端只能靠不可发现的侧滑
+      // 手势——已打开会话本行没有其它可见按钮，用户体感是"点开会话后这行的图标凭空消失了"）。
+      // 侧滑仍保留作快捷方式，二者并存、互不冲突，都是触发同一个 session:close。
+      if (liveInst) {
+        const closeBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm">✕</button>`);
+        closeBtn.onclick = async e => {
+          e.stopPropagation();
+          haptic('warning');
+          if (await appConfirm({
+            title: `关闭会话「${s.title || '新会话'}」？`,
+            body: '会话将从 tab 列表移除，但历史保留可重新打开。',
+            okText: '关闭会话',
+          })) {
+            // 同上（侧滑关闭按钮走的是另一条 DOM 路径，但同一个 session:close 语义）。
+            explicitCloseInstanceId = liveInst.instanceId;
+            socket.emit('session:close', { instanceId: liveInst.instanceId });
+            closeLeftSidebar();
+          }
+        };
+        rowContent.appendChild(closeBtn);
+      }
+
+      // 未打开的历史会话：两级删除入口（FR-20）。已打开的会话走上面的关闭 tab，不在此重复给删除入口
+      // （删一个正被本产品驱动的会话语义混乱，后端 L2 保护①也会拒）。无 id 的新会话（未落盘）无从删。
+      if (s.id && !liveInst) {
+        const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" title="删除会话">🗑</button>`);
+        delBtn.onclick = e => {
+          e.stopPropagation();
+          haptic('warning');
+          openDeleteSession(s.id, rowCwd, s.title);
+        };
+        rowContent.appendChild(delBtn);
+      }
+
+      container.appendChild(rowContent);
+
+      // 手机端：侧滑触控手势监听 (Swipe left gestures) - 贴合指尖且防点击误触
+      if (liveInst) {
+        let rowStartX = 0, rowStartY = 0;
+        let isDragging = false;
+
+        rowContent.addEventListener('touchstart', ev => {
+          rowStartX = ev.touches[0].clientX;
+          rowStartY = ev.touches[0].clientY;
+          isDragging = true;
+          rowContent.classList.add('swiping'); // 禁用过渡
+        }, { passive: true });
+
+        rowContent.addEventListener('touchmove', ev => {
+          if (!rowStartX || !isDragging) return;
+          const currentX = ev.touches[0].clientX;
+          const currentY = ev.touches[0].clientY;
+          const diffX = currentX - rowStartX;
+          const diffY = currentY - rowStartY;
+
+          // 只要手指发生了明显移动（超过 8px），就标记为拖拽，防止触发点击事件
+          if (Math.abs(diffX) > 8 || Math.abs(diffY) > 8) {
+            rowContent.setAttribute('data-preventClick', 'true');
+          }
+
+          // 横向滑动优势判定
+          if (Math.abs(diffX) > Math.abs(diffY) * 1.2) {
+            let targetX = rowSwiped ? -70 + diffX : diffX;
+            // 边缘阻尼
+            if (targetX > 15) {
+              targetX = 15 * 0.3;
+            } else if (targetX < -100) {
+              targetX = -100 + (targetX + 100) * 0.3;
+            }
+            rowContent.style.transform = `translateX(${targetX}px)`;
+          }
+        }, { passive: true });
+
+        rowContent.addEventListener('touchend', ev => {
+          if (!isDragging) return;
+          isDragging = false;
+          rowContent.classList.remove('swiping'); // 启用过渡
+
+          const currentX = ev.changedTouches[0].clientX;
+          const diffX = currentX - rowStartX;
+
+          let finalSwiped = rowSwiped;
+          if (rowSwiped) {
+            if (diffX > 30) finalSwiped = false;
+          } else {
+            if (diffX < -35) finalSwiped = true;
+          }
+
+          rowSwiped = finalSwiped;
+          if (rowSwiped) {
+            rowContent.style.transform = 'translateX(-70px)';
+            haptic('tap');
+          } else {
+            rowContent.style.transform = 'translateX(0px)';
+          }
+
+          // 延迟清除防误触标志，确保拦截 touchend 后产生的 click 事件
+          setTimeout(() => {
+            rowContent.removeAttribute('data-preventClick');
+          }, 100);
+
+          rowStartX = 0;
+          rowStartY = 0;
+        }, { passive: true });
+      }
+
+      return container;
+    };
+
+    // 组装并渲染子树函数
+    const populateSubtree = (cwd, container, liveMap, fTabs) => {
+      // worktree 会话分组元素（CLI「cd 进 worktree 即 /resume」的 web 等价）；renderRows 全量重绘
+      // 会清掉它，故重绘末尾总是重挂，与 worktree:sessions ack 的先后到达顺序无关。
+      let wtSection = null;
+      // 渲染：无 id 新会话实例 + 会话行 +（若被截断）「显示全部」行
+      const renderRows = (sessions, hasMore) => {
+        container.innerHTML = '';
+        for (const inst of fTabs) {
+          container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+        }
+        for (const s of sessions) {
+          container.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
+        }
+        if (hasMore) {
+          const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">显示全部会话…</button>`);
+          more.onclick = () => {
+            haptic('tap');
+            more.textContent = '加载中…';
+            socket.emit('session:list', { cwd, all: true }, state => {
+              if (!expandedDirs.has(cwd)) return;
+              const all = state?.sessions || [];
+              sessionsCache.set(cwd, { sessions: all, hasMore: false, stale: false });
+              renderRows(all, false);
+            });
+          };
+          container.appendChild(more);
+        }
+        if (wtSection) container.appendChild(wtSection);
+      };
+
+      // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore, stale}；stale 与否都立即渲染——
+      // 过期只决定"要不要再发 session:list 刷新"，不影响"能不能先拿旧数据秒开"）。
+      const cachedEntry = sessionsCache.get(cwd);
+      if (cachedEntry) {
+        renderRows(cachedEntry.sessions || [], cachedEntry.hasMore);
+      } else {
+        container.innerHTML = '';
+        for (const inst of fTabs) {
+          container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+        }
+        // 显示高级骨架屏
+        const skeleton = el(`
+          <div class="skeleton-loader py-1">
+            <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
+              <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-2/3"></div>
+              <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/3"></div>
+            </div>
+            <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
+              <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-1/2"></div>
+              <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/4"></div>
+            </div>
+          </div>
+        `);
+        container.appendChild(skeleton);
+      }
+
+      // 2) 后端异步刷新：仅在"无缓存"或"缓存已标 stale"（实例集变化，见 setInstances）时发
+      // session:list——新鲜缓存跳过网络往返，避免每次展开都打一遍。响应回来后先比对内容签名
+      // （shouldRerenderSessionList，见 logic.js）——没有真变化就只悄悄更新缓存、不重渲染。
+      // stale 在这里真正被消费（code review：此前只写不读）。
+      if (!cachedEntry || cachedEntry.stale) {
+        socket.emit('session:list', { cwd }, state => {
+          if (!expandedDirs.has(cwd)) return; // 过期守卫
+          const sessions = state?.sessions || [];
+          const hasMore = !!state?.hasMore;
+          const prevEntry = sessionsCache.get(cwd);
+          const willRerender = shouldRerenderSessionList({
+            hasPrevEntry: !!prevEntry,
+            prevSessions: prevEntry?.sessions,
+            prevHasMore: prevEntry?.hasMore,
+            nextSessions: sessions,
+            nextHasMore: hasMore,
+          });
+          sessionsCache.set(cwd, { sessions, hasMore, stale: false });
+          if (willRerender) renderRows(sessions, hasMore);
+        });
+      }
+
+      // 3) worktree 会话分组：linked worktree 的会话按分支列出，行为与普通会话行一致
+      //（点击走 session:switch，cwd=worktreePath——服务端 worktree:sessions 已注册放行该路径）。
+      socket.emit('worktree:sessions', { cwd }, res => {
+        if (!expandedDirs.has(cwd)) return; // 过期守卫（同 session:list）
+        const groups = (res?.groups || []).filter(g => g?.worktreeExists && (g.sessions || []).length);
+        if (!groups.length) { wtSection = null; return; }
+        wtSection = el(`<div data-testid="worktree-groups"></div>`);
+        for (const g of groups) {
+          const head = el(`<div class="pl-6 pr-3 pt-2.5 pb-1 text-[10px] font-sans text-ink-faint border-b border-line-soft/40 truncate"></div>`);
+          head.textContent = `⑂ worktree · ${g.branch}`; // textContent：branch 名来自 git，不作 HTML 插值
+          wtSection.appendChild(head);
+          const liveWt = new Map();
+          // liveByCwd 快照已随抽出改为现读 instancesList：worktree ack 是异步回调，用最新数据更正确。
+          for (const inst of instancesList.filter(x => x.instanceId && x.cwd === g.worktreePath)) { if (inst.sessionId) liveWt.set(inst.sessionId, inst); }
+          for (const s of g.sessions) wtSection.appendChild(sessionRow(s, liveWt.get(s.id), g.worktreePath));
+        }
+        container.appendChild(wtSection);
+      });
+    };
+
+    // 如果当前展开，则渲染列表
+    if (isExpanded) {
+      populateSubtree(d, subtree, liveBySession, freshTabs);
+    }
+
+    // 折叠/展开切换：纯 CSS 驱动，不触发重绘全量 DOM
+    toggleBtn.onclick = () => {
+      haptic('tap');
+      if (expandedDirs.has(d)) {
+        expandedDirs.delete(d);
+        try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
+        subtree.classList.remove('expanded');
+        arrow.classList.remove('rotated');
+        icon.textContent = '📁';
+      } else {
+        expandedDirs.add(d);
+        try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
+        subtree.classList.add('expanded');
+        arrow.classList.add('rotated');
+        icon.textContent = '📂';
+        populateSubtree(d, subtree, liveBySession, freshTabs);
+      }
+    };
+
+    return { dirRow, subtree };
+  }
+
   function openSessionPanel() {
     sessionPanel.innerHTML = '';
     // UX-007：当前工作区默认展开 + 记忆用户展开态
@@ -4521,374 +5128,34 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 按 availableDirs 顺序（=WORK_DIR 首位 + WORK_DIRS），每目录一行：
     //   展开：📂 ▼ basename + 角标 → 下方缩进显示该目录会话列表（纯 /resume 时间序，已打开者就地标 ✕/角标）
     //   折叠：📁 ▶ basename + 角标 → 点击展开（若非当前 cwd 则同时切换）
-    const liveByCwd = {};
-    for (const inst of instancesList) {
-      if (!inst.instanceId) continue;
-      if (!liveByCwd[inst.cwd]) liveByCwd[inst.cwd] = [];
-      liveByCwd[inst.cwd].push(inst);
-    }
-
+    dirSectionNodes = new Map();
     for (const d of availableDirs) {
-      const isCurrent = d === currentCwd;
-      const isExpanded = expandedDirs.has(d);
+      const section = buildDirSection(d);
+      sessionPanel.appendChild(section.dirRow);
+      sessionPanel.appendChild(section.subtree);
+      dirSectionNodes.set(d, section);
+    }
+  }
 
-      // ---- 目录头行（所有目录均可点击展开/折叠）----
-      const dirRow = el(`<div class="w-full px-3 py-1.5 border-b border-line flex items-center justify-between hover:bg-sunk/30${isCurrent ? ' text-accent' : ' text-ink'}"></div>`);
-      dirRow.dataset.dir = d;
-      dirRow.title = d;
-
-      const toggleBtn = el(`<button class="flex-1 min-w-0 text-left flex items-center gap-2 py-1.5 active:opacity-70"></button>`);
-      const icon = el(`<span class="shrink-0"></span>`); icon.textContent = isExpanded ? '📂' : '📁';
-      // 统一用 "▶" 字符，旋转实现向下效果，平滑过渡
-      const arrow = el(`<span class="shrink-0 text-[9px] w-3 dir-arrow">▶</span>`);
-      if (isExpanded) arrow.classList.add('rotated');
-      const name = el(`<span class="truncate"></span>`); name.textContent = baseName(d);
-      const badge = el(`<span class="dir-badge hidden"></span>`);
-      applyBadge(badge, workdirStates[d]);
-
-      toggleBtn.appendChild(icon);
-      toggleBtn.appendChild(arrow);
-      toggleBtn.appendChild(name);
-      toggleBtn.appendChild(badge);
-      dirRow.appendChild(toggleBtn);
-
-      // 物理热区扩大版 "＋" 新建按钮
-      const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="在此工作区新建会话">＋</button>`);
-      newSessionBtn.onclick = (e) => {
-        e.stopPropagation();
-        closeLeftSidebar();
-        haptic('tap');
-        // 同步本地重置（同 btnNew，Bug A）：viewingInstanceId 不等广播落地；currentCwd 同样要立刻
-        // 切到 d——否则广播落地前发送会把消息投到当前正看的工作区，而不是刚点的这个 d。
-        viewingInstanceId = null;
-        currentCwd = d;
-        enterComposeReady();
-        ensureEmptySurface(); // cwd 可能变了；空表面内 viewing 仍 null 须本地切到 compose
-        socket.emit('session:new', { cwd: d }); // 模型清单由后端 pushModelsForCwd 主动推、不再前端拉
-      };
-      dirRow.appendChild(newSessionBtn);
-
-      // 文件浏览入口已收归顶部 pill（当前工作区）；抽屉只负责会话切换/新建，不再挂逐行「浏览」按钮。
-
-      sessionPanel.appendChild(dirRow);
-
-      // ---- 展开区容器（所有目录均常驻 DOM 以支持 CSS max-height 过渡，仅通过类来控制动画） ----
-      const subtree = el(`<div class="subtree-container"></div>`);
-      if (isExpanded) {
-        subtree.classList.add('expanded');
+  // P3 抽屉局部重建：只重建 changedDirs 列出的目录（调用方=setInstances，changedDirs 来自
+  // diffDirSignatures），其余目录的 dirRow/subtree 保持原 DOM 节点不动——滚动位置、侧滑态、
+  // "显示全部"展开态等本地态都不受影响，不会像全量重建那样连坐撤离。dirRow 与 subtree 必须保持
+  // 相邻兄弟节点（expandWorkspace 等测试辅助函数按 nextElementSibling 定位 subtree），两次
+  // replaceWith 各自原地替换，不改变整体顺序，故这个不变量始终成立。
+  function rebuildDirSections(changedDirs) {
+    for (const d of changedDirs) {
+      const old = dirSectionNodes.get(d);
+      if (!old || !old.dirRow.isConnected) {
+        // 防御：面板还没针对这个目录做过全量渲染（理论上不应发生——setInstances 里
+        // isDesktop||isPanelOpen 门控保证局部重建只在面板已可见时触发，可见就必然渲染过）。
+        // 自愈：退化为全量重建，好过留下一段不完整的面板。
+        openSessionPanel();
+        return;
       }
-      sessionPanel.appendChild(subtree);
-
-      const tabs = liveByCwd[d] || [];
-      const liveBySession = new Map();        // sessionId → 已打开实例（有 id 的 live tab，用于在 /resume 列表中就地标记）
-      const freshTabs = [];                   // 无 sessionId 的新会话实例（尚未保存，/resume 列表看不到、无时间）
-      for (const inst of tabs) { if (inst.sessionId) liveBySession.set(inst.sessionId, inst); else freshTabs.push(inst); }
-
-      // 统一行：一条会话（session:list 的 s，或无 id 的新会话）→ DOM 行。liveInst 非空 = 已打开为 tab。
-      // 全程 textContent（无 innerHTML 插值用户数据）→ CSP 安全。
-      const sessionRow = (s, liveInst, rowCwd) => {
-        const active = liveInst && liveInst.instanceId === viewingInstanceId;
-        
-        // 使用相对定位的包装容器来实现侧滑关闭
-        const container = el(`<div class="relative overflow-hidden w-full select-none swipe-row-container"></div>`);
-        
-        // 背景红底“关闭”按钮
-        let deleteBtn;
-        if (liveInst) {
-          deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">关闭</div>`);
-          deleteBtn.onclick = async (e) => {
-            e.stopPropagation();
-            haptic('warning');
-            if (await appConfirm({
-              title: `关闭会话「${s.title || '新会话'}」？`,
-              body: '会话将从 tab 列表移除，但历史保留可重新打开。',
-              okText: '关闭会话',
-            })) {
-              socket.emit('session:close', { instanceId: liveInst.instanceId });
-              closeLeftSidebar();
-            } else {
-              rowContent.style.transform = 'translateX(0px)';
-              rowSwiped = false;
-            }
-          };
-          container.appendChild(deleteBtn);
-        }
-
-        // 行内容 (可滑动的前景卡片)
-        const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${s.id || ''}" data-instance-id="${liveInst?.instanceId || ''}"></div>`);
-        const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
-        btn.title = s.title || '新会话';
-        const head = el(`<div class="truncate flex items-center gap-1.5"></div>`);
-        const titleSpan = el(`<span class="truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
-        titleSpan.textContent = s.title || '新会话';
-        head.appendChild(titleSpan);
-        if (liveInst) {                        // 已打开标记：状态角标（busy ⏳ / permission ⚠️ / error ❗ / done ✅）
-          // busy 时优先使用工具细化图标（🤖 Agent / 🖥 Bash），其他状态用通用角标
-          const badgeState = liveInst.state;
-          let badgeIcon, badgeCls, badgeTitle;
-          if (badgeState === 'busy' && liveInst.activeTool && TOOL_BADGE[liveInst.activeTool]) {
-            badgeIcon = TOOL_BADGE[liveInst.activeTool];
-            badgeCls = 'text-warning';
-            badgeTitle = `运行中：${liveInst.activeTool}`;
-          } else {
-            const m = DIR_BADGE[badgeState];
-            if (m) {
-              const b = el(`<span data-instance-badge class="shrink-0 status-icon ${m[1]}"></span>`);
-              setStatusIcon(b, m[0]);
-              b.title = m[2];
-              head.appendChild(b);
-              badgeIcon = null; // already appended
-            }
-          }
-          if (badgeIcon) { const b = el(`<span data-instance-badge></span>`); b.textContent = badgeIcon; b.className = `shrink-0 ${badgeCls}`; if (badgeTitle) b.title = badgeTitle; head.appendChild(b); }
-        }
-        btn.appendChild(head);
-        const sub = el(`<div class="text-ink-faint text-[10px]"></div>`);
-        const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : '新会话（未保存）';
-        // 短 session_id（前 8 位）：便于对照 CLI /resume、日志、多设备定位同一会话；无 id 的新会话不显示。
-        const shortId = s.id ? ` · ${s.id.slice(0, 8)}` : '';
-        sub.textContent = when + (liveInst ? ' · 已打开' : '') + shortId;
-        btn.appendChild(sub);
-        
-        let rowSwiped = false;
-        btn.onclick = (e) => {
-          // 拦截滑动/滚动导致的误触
-          if (rowContent.getAttribute('data-preventClick') === 'true') {
-            e.preventDefault();
-            e.stopPropagation();
-            return;
-          }
-          if (rowSwiped) {
-            rowContent.style.transform = 'translateX(0px)';
-            rowSwiped = false;
-            return;
-          }
-          haptic('tap');
-          if (liveInst) {                      // 已打开：切视图，不重新 resume
-            if (liveInst.instanceId !== viewingInstanceId) socket.emit('user:setViewing', { instanceId: liveInst.instanceId });
-            closeLeftSidebar();
-          } else {                             // 未打开：resume 打开（同步关面板 + 4s 兜底，不把反馈压在 ack 上）
-            closeLeftSidebar();
-            let acked = false;
-            socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) addBar(res?.error || '切换失败', 'text-danger'); });
-            setTimeout(() => { if (!acked) addBar('切换无响应，请刷新页面后重试', 'text-danger'); }, 4000);
-          }
-        };
-        rowContent.appendChild(btn);
-
-        // 原生 x 按钮：桌面/移动端均常显（此前 md:block hidden 只在桌面显示，手机端只能靠不可发现的侧滑
-        // 手势——已打开会话本行没有其它可见按钮，用户体感是"点开会话后这行的图标凭空消失了"）。
-        // 侧滑仍保留作快捷方式，二者并存、互不冲突，都是触发同一个 session:close。
-        if (liveInst) {
-          const closeBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm">✕</button>`);
-          closeBtn.onclick = async e => {
-            e.stopPropagation();
-            haptic('warning');
-            if (await appConfirm({
-              title: `关闭会话「${s.title || '新会话'}」？`,
-              body: '会话将从 tab 列表移除，但历史保留可重新打开。',
-              okText: '关闭会话',
-            })) {
-              socket.emit('session:close', { instanceId: liveInst.instanceId });
-              closeLeftSidebar();
-            }
-          };
-          rowContent.appendChild(closeBtn);
-        }
-
-        // 未打开的历史会话：两级删除入口（FR-20）。已打开的会话走上面的关闭 tab，不在此重复给删除入口
-        // （删一个正被本产品驱动的会话语义混乱，后端 L2 保护①也会拒）。无 id 的新会话（未落盘）无从删。
-        if (s.id && !liveInst) {
-          const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" title="删除会话">🗑</button>`);
-          delBtn.onclick = e => {
-            e.stopPropagation();
-            haptic('warning');
-            openDeleteSession(s.id, rowCwd, s.title);
-          };
-          rowContent.appendChild(delBtn);
-        }
-
-        container.appendChild(rowContent);
-
-        // 手机端：侧滑触控手势监听 (Swipe left gestures) - 贴合指尖且防点击误触
-        if (liveInst) {
-          let rowStartX = 0, rowStartY = 0;
-          let isDragging = false;
-
-          rowContent.addEventListener('touchstart', ev => {
-            rowStartX = ev.touches[0].clientX;
-            rowStartY = ev.touches[0].clientY;
-            isDragging = true;
-            rowContent.classList.add('swiping'); // 禁用过渡
-          }, { passive: true });
-
-          rowContent.addEventListener('touchmove', ev => {
-            if (!rowStartX || !isDragging) return;
-            const currentX = ev.touches[0].clientX;
-            const currentY = ev.touches[0].clientY;
-            const diffX = currentX - rowStartX;
-            const diffY = currentY - rowStartY;
-
-            // 只要手指发生了明显移动（超过 8px），就标记为拖拽，防止触发点击事件
-            if (Math.abs(diffX) > 8 || Math.abs(diffY) > 8) {
-              rowContent.setAttribute('data-preventClick', 'true');
-            }
-
-            // 横向滑动优势判定
-            if (Math.abs(diffX) > Math.abs(diffY) * 1.2) {
-              let targetX = rowSwiped ? -70 + diffX : diffX;
-              // 边缘阻尼
-              if (targetX > 15) {
-                targetX = 15 * 0.3;
-              } else if (targetX < -100) {
-                targetX = -100 + (targetX + 100) * 0.3;
-              }
-              rowContent.style.transform = `translateX(${targetX}px)`;
-            }
-          }, { passive: true });
-
-          rowContent.addEventListener('touchend', ev => {
-            if (!isDragging) return;
-            isDragging = false;
-            rowContent.classList.remove('swiping'); // 启用过渡
-
-            const currentX = ev.changedTouches[0].clientX;
-            const diffX = currentX - rowStartX;
-
-            let finalSwiped = rowSwiped;
-            if (rowSwiped) {
-              if (diffX > 30) finalSwiped = false;
-            } else {
-              if (diffX < -35) finalSwiped = true;
-            }
-
-            rowSwiped = finalSwiped;
-            if (rowSwiped) {
-              rowContent.style.transform = 'translateX(-70px)';
-              haptic('tap');
-            } else {
-              rowContent.style.transform = 'translateX(0px)';
-            }
-
-            // 延迟清除防误触标志，确保拦截 touchend 后产生的 click 事件
-            setTimeout(() => {
-              rowContent.removeAttribute('data-preventClick');
-            }, 100);
-
-            rowStartX = 0;
-            rowStartY = 0;
-          }, { passive: true });
-        }
-
-        return container;
-      };
-
-      // 组装并渲染子树函数
-      const populateSubtree = (cwd, container, liveMap, fTabs) => {
-        // worktree 会话分组元素（CLI「cd 进 worktree 即 /resume」的 web 等价）；renderRows 全量重绘
-        // 会清掉它，故重绘末尾总是重挂，与 worktree:sessions ack 的先后到达顺序无关。
-        let wtSection = null;
-        // 渲染：无 id 新会话实例 + 会话行 +（若被截断）「显示全部」行
-        const renderRows = (sessions, hasMore) => {
-          container.innerHTML = '';
-          for (const inst of fTabs) {
-            container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
-          }
-          for (const s of sessions) {
-            container.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
-          }
-          if (hasMore) {
-            const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">显示全部会话…</button>`);
-            more.onclick = () => {
-              haptic('tap');
-              more.textContent = '加载中…';
-              socket.emit('session:list', { cwd, all: true }, state => {
-                if (!expandedDirs.has(cwd)) return;
-                const all = state?.sessions || [];
-                sessionsCache.set(cwd, { sessions: all, hasMore: false });
-                renderRows(all, false);
-              });
-            };
-            container.appendChild(more);
-          }
-          if (wtSection) container.appendChild(wtSection);
-        };
-
-        // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore}）
-        if (sessionsCache.has(cwd)) {
-          const cached = sessionsCache.get(cwd);
-          renderRows(cached.sessions || [], cached.hasMore);
-        } else {
-          container.innerHTML = '';
-          for (const inst of fTabs) {
-            container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
-          }
-          // 显示高级骨架屏
-          const skeleton = el(`
-            <div class="skeleton-loader py-1">
-              <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
-                <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-2/3"></div>
-                <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/3"></div>
-              </div>
-              <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
-                <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-1/2"></div>
-                <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/4"></div>
-              </div>
-            </div>
-          `);
-          container.appendChild(skeleton);
-        }
-
-        // 2) 后端异步刷新（默认按每工作区 sessionLimit 截断；hasMore 决定是否显示「显示全部」）
-        socket.emit('session:list', { cwd }, state => {
-          if (!expandedDirs.has(cwd)) return; // 过期守卫
-          const sessions = state?.sessions || [];
-          sessionsCache.set(cwd, { sessions, hasMore: !!state?.hasMore });
-          renderRows(sessions, !!state?.hasMore);
-        });
-
-        // 3) worktree 会话分组：linked worktree 的会话按分支列出，行为与普通会话行一致
-        //（点击走 session:switch，cwd=worktreePath——服务端 worktree:sessions 已注册放行该路径）。
-        socket.emit('worktree:sessions', { cwd }, res => {
-          if (!expandedDirs.has(cwd)) return; // 过期守卫（同 session:list）
-          const groups = (res?.groups || []).filter(g => g?.worktreeExists && (g.sessions || []).length);
-          if (!groups.length) { wtSection = null; return; }
-          wtSection = el(`<div data-testid="worktree-groups"></div>`);
-          for (const g of groups) {
-            const head = el(`<div class="pl-6 pr-3 pt-2.5 pb-1 text-[10px] font-sans text-ink-faint border-b border-line-soft/40 truncate"></div>`);
-            head.textContent = `⑂ worktree · ${g.branch}`; // textContent：branch 名来自 git，不作 HTML 插值
-            wtSection.appendChild(head);
-            const liveWt = new Map();
-            for (const inst of (liveByCwd[g.worktreePath] || [])) { if (inst.sessionId) liveWt.set(inst.sessionId, inst); }
-            for (const s of g.sessions) wtSection.appendChild(sessionRow(s, liveWt.get(s.id), g.worktreePath));
-          }
-          container.appendChild(wtSection);
-        });
-      };
-
-      // 如果当前展开，则渲染列表
-      if (isExpanded) {
-        populateSubtree(d, subtree, liveBySession, freshTabs);
-      }
-
-      // 折叠/展开切换：纯 CSS 驱动，不触发重绘全量 DOM
-      toggleBtn.onclick = () => {
-        haptic('tap');
-        if (expandedDirs.has(d)) {
-          expandedDirs.delete(d);
-          try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
-          subtree.classList.remove('expanded');
-          arrow.classList.remove('rotated');
-          icon.textContent = '📁';
-        } else {
-          expandedDirs.add(d);
-          try { localStorage.setItem('ccm_expanded_dirs', JSON.stringify([...expandedDirs])); } catch {}
-          subtree.classList.add('expanded');
-          arrow.classList.add('rotated');
-          icon.textContent = '📂';
-          populateSubtree(d, subtree, liveBySession, freshTabs);
-        }
-      };
+      const next = buildDirSection(d);
+      old.dirRow.replaceWith(next.dirRow);
+      old.subtree.replaceWith(next.subtree);
+      dirSectionNodes.set(d, next);
     }
   }
 
@@ -4982,6 +5249,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       sessionId: sid,
       composeReady: _composeReady,
       pendingFirstSend: _pendingFirstSend,
+      freshInterrupted: viewingInstanceId === freshInterruptedInstanceId,
     });
     if (!composerFooterEl) return;
     composerFooterEl.classList.toggle('hidden', !show);
@@ -5051,6 +5319,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       viewingInstanceId,
       sessionId: sid,
       composeReady: _composeReady,
+      freshInterrupted: Boolean(viewingInstanceId) && viewingInstanceId === freshInterruptedInstanceId,
     });
     if (surface === 'compose') showComposeSurface();
     else if (surface === 'home') showDashboard();
@@ -5078,7 +5347,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             <span class="max-w-[12rem] truncate">${esc(baseName(currentCwd))}</span>
             <span class="text-xs text-ink-faint">⌄</span>
           </button>
-          <div class="mt-2 text-xs text-ink-soft" data-compose-defaults>${esc(defaultsText)}</div>
+          <div class="mt-2 flex items-center justify-center gap-1">
+            <span class="text-xs text-ink-soft" data-compose-defaults>${esc(defaultsText)}</span>
+            <button type="button" class="compose-defaults-refresh shrink-0 w-5 h-5 flex items-center justify-center rounded-full text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 transition-all disabled:opacity-50" data-testid="compose-defaults-refresh" title="重新读取 CLI 配置">
+              <span class="text-sm leading-none">↻</span>
+            </button>
+          </div>
         </div>
         <div class="flex flex-col gap-2 w-full max-w-sm">
           <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="总结当前仓库结构并指出入口文件">💡 总结当前仓库结构</button>
@@ -5102,10 +5376,65 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       };
     });
+    // CLI 配置刷新按钮：用户在终端侧改了 ~/.claude/settings.json 后，此处摘要不会自己感知
+    // （ensureCliDefaults 只在启动/session:new/session:home 才 force 重读）——手动兜底一次 force 重读。
+    // ack 前禁用+转圈，ack 后恢复；摘要文案本身经 instances 广播回来的既有路径（refreshComposeDefaultsSummary）
+    // 自动刷新，这里不重复写渲染逻辑。
+    const refreshBtn = container.querySelector('.compose-defaults-refresh');
+    if (refreshBtn) {
+      refreshBtn.onclick = () => {
+        if (refreshBtn.disabled) return;
+        haptic('tap');
+        refreshBtn.disabled = true;
+        refreshBtn.classList.add('animate-spin');
+        socket.emit('config:refresh', { cwd: currentCwd }, () => {
+          refreshBtn.disabled = false;
+          refreshBtn.classList.remove('animate-spin');
+        });
+      };
+    }
 
     messagesEl.appendChild(container);
     // defaults 可能仍在 L4→L3 途中；微任务再刷一次，兜住刚 setPerm/setEffort 的 pill 文案
     queueMicrotask(() => refreshComposeDefaultsSummary());
+  }
+
+  // 点停止顿一下跳主页的回归修复：正在查看的实例被摧毁（中断失败→settleForce 强杀子进程→onExit→
+  // 无同 cwd 存活实例可回退，见 wasViewingInstanceDestroyed）时的专属提示态——不静默 showDashboard()，
+  // 让用户先看到"发生了什么"，自己决定下一步（回首页 / 新建会话）。不做自动导航（机主已否决"自动
+  // 静默 resume 接管"方案，这里同理：不能因为实现方便就悄悄跳转）。
+  // 视觉语言复用两处既有约定：标题行走 addBar 同款 msg-frame 系统提示条样式（对齐 interrupted/
+  // queue_dropped 的系统提示行）；外层卡片 + 操作按钮走 showDashboard/showComposeSurface 同款
+  // 空表面卡片布局——不引入新的弹窗/模态体系。两个按钮直接复用 btnHome/btnNew 的既有点击处理，
+  // 不重复其内部逻辑（保持行为完全一致，包括 haptic、freshInterruptedInstanceId 清理等副作用）。
+  function showInstanceDestroyedSurface() {
+    messagesEl.innerHTML = '';
+    messagesEl.classList.add('empty-start');
+    if (topTitleText) topTitleText.textContent = '新聊天';
+    if (topProjectText) topProjectText.textContent = baseName(currentCwd);
+    syncComposerVisibility();
+    syncTopContextPillVisibility(null, null); // 无实例可看：顶栏文件夹入口隐藏（同 home/compose）
+
+    const container = el(`
+      <div class="instance-destroyed-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="instance-destroyed-surface">
+        <div class="msg-frame text-center text-xs text-warning font-semibold mb-2">⏹ 会话已中断</div>
+        <p class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2">停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。</p>
+        <div class="flex flex-col gap-2 w-full max-w-xs">
+          <button type="button" class="instance-destroyed-home inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-home">回首页</button>
+          <button type="button" class="instance-destroyed-new inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-new">新建会话</button>
+        </div>
+      </div>`);
+
+    container.querySelector('.instance-destroyed-home').onclick = (e) => {
+      e.stopPropagation();
+      btnHome?.onclick?.();
+    };
+    container.querySelector('.instance-destroyed-new').onclick = (e) => {
+      e.stopPropagation();
+      btnNew.onclick?.();
+    };
+
+    messagesEl.appendChild(container);
   }
 
   function showDashboard() {
@@ -5821,6 +6150,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     } catch { return false; }
   }
 
+  // PWA 应用图标角标（Badging API）：optional chaining 包装，不支持的平台/浏览器（含非 PWA 场景/桌面
+  // Safari 等）静默跳过，不抛错也不影响主流程。挂点见 showUnreadPillIfAny（显示胶囊时置角标）与
+  // ackUnread（确认已读时清角标）。硬边界：这只是"应用图标上的小圆点/数字"，不是锁屏常驻实时指示
+  // （PWA 平台限制，锁屏能否看到运行中→完成的通知接力靠 web-push + sw.js tag 复用，见 notifications.js）。
+  function setAppBadgeSafe(n) { navigator.setAppBadge?.(n).catch(() => {}); }
+  function clearAppBadgeSafe() { navigator.clearAppBadge?.().catch(() => {}); }
+
 
 
   // E18: Redesigned premium utility row under each message block with copy, speak (TTS), and edit capabilities
@@ -6311,7 +6647,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
 
   let scrollPending = false;
+  // 未读胶囊自动确认已读（见上方 messagesEl scroll 监听）要能分辨"这次滚动是不是我自己（scrollBottom）
+  // 造成的"——切入积压未读的会话时，回放缓冲落底会调 scrollBottom(true) 程序性把视图推到最新消息处，
+  // 这次滚动不代表用户已经看到胶囊。窗口时长需要盖住「这次调用 → rAF 真正写 scrollTop → 浏览器异步
+  // 派发原生 scroll 事件」这段延迟（通常 1-2 帧，~16-33ms），留 400ms 是给慢设备/CI 环境的充足余量，
+  // 同时仍远短于人类"程序性落底后又主动继续滚动"两个动作之间的间隔，不会把用户紧随其后的真实滚动
+  // 误判成程序性的。只在真正会发生滚动（下面 shouldStickScrollToBottom 判定通过）时才刷新窗口——
+  // 被早退挡下的调用（含 _suppressScrollBottom 抑制期间的逐条 flush 派发）不算数。
+  const PROGRAMMATIC_SCROLL_WINDOW_MS = 400;
+  let programmaticScrollUntil = 0;
   function scrollBottom(force) {
+    // 回放缓冲 flush 收尾期间抑制：缓冲事件正在按序派发，各自 handler 触发的滚动全部拦下，只留
+    // flushQueue 派发完毕后显式调用的那一次（见 createReplayBuffer withScrollSuppressed）。
+    if (_suppressScrollBottom) return;
     // 已有非强制 rAF 待执行时跳过布局读——但仅限非 force 调用：force 调用方（如切回会话/断线重连
     // 补发后的强制落底）明确要求"这次必须真正滚到底"，若被这里早退吞掉就成了无效调用。让 force 调用
     // 总能排上一个新 rAF：按 rAF 规范，帧回调处理期间新排的 rAF 会推迟到下一帧，故它必然在同一批已
@@ -6326,6 +6674,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       force: !!force,
     })) return;
     scrollPending = true;
+    programmaticScrollUntil = Date.now() + PROGRAMMATIC_SCROLL_WINDOW_MS;
     requestAnimationFrame(() => { scrollPending = false; messagesEl.scrollTop = messagesEl.scrollHeight; });
   }
 

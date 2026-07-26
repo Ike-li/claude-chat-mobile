@@ -21,12 +21,12 @@ import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings }
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
-import { notificationForEvent, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from '../ops/notifications.js';
+import { notificationForEvent, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
 import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
-import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd } from '../ops/statusline.js';
+import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate } from '../ops/statusline.js';
 import { readCliObservedState } from '../agent/cli-mirror-state.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
@@ -705,6 +705,13 @@ function computeServiceHealth() {
     clientError: clientError ? { ...clientError, count: c.client_errors ?? 0 } : null,
   };
 }
+// approved 房间里的实际 Socket 对象（非仅 id/size）：喂给 hasForegroundApprovedClient 判定"前台可见"，
+// 而不只是"连着"。两处复用：onEvent 的 result 完成通知 hasClients 计算 + client:presence 的"跳变检测"
+// （PWA 后台运行中提示）——抽成 helper 防同一段"room ids → 映射真实 socket → 过滤 undefined"逻辑抄两遍走样。
+function approvedSocketObjects() {
+  const ids = io.sockets.adapter.rooms.get('approved');
+  return ids ? [...ids].map(sid => io.sockets.sockets.get(sid)).filter(Boolean) : [];
+}
 function instancesPayload() {
   const list = [];
   for (const [id, a] of agents) {
@@ -1231,12 +1238,18 @@ async function refreshStatusLine() {
           source: { kind: 'cli', capturedAt: selected.value.capturedAt, ageMs: selected.ageMs },
         };
       } else {
-        // CLI 是当前唯一权威但快照缺失/过期：明确不可用，不偷混 SDK 陈值。
+        // CLI 是当前唯一权威但快照缺失/过期：明确不可用，不偷混 SDK 陈值——source.kind 仍诚实报
+        // cli-unavailable，不因为下面垫了 rate 就冒充"可用"。但 buildCliStatusLine 整个没被调用，
+        // 意味着它内部那两个回落点（写入点 B / 回落点）都摸不到：此前这一分支组装的 payload 100%
+        // 没有 rate 字段——即使账号级快照里还留着最近一次温热数据。这里额外叠一层同源回落，
+        // 与 buildWebStatusLine/buildCliStatusLine 共享同一账号级单例（见 statusline.js）。
+        const fallbackRate = getFallbackUsageRate(Date.now());
         payload = {
           ts: Date.now(), cwd,
           ...(cwd ? { project: projectNameFromCwd(cwd) } : {}),
           ...(va.sessionId ? { session: { id: va.sessionId } } : {}),
           source: { kind: 'cli-unavailable', reason: selected.reason, ...(Number.isFinite(selected.ageMs) ? { ageMs: selected.ageMs } : {}) },
+          ...(fallbackRate ? { rate: fallbackRate, rateFromSnapshot: true } : {}),
         };
       }
     }
@@ -1464,11 +1477,19 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         // 先判断"若不考虑节流，本该不该推"（result 仅无客户端连时推等既有规则），
         // 只有确实要推送时才消费节流配额——避免"注定不推"的事件（如有客户端连的 result）白白占用节流窗口，
         // 致真正需要推送时被误判为"最近推过"。
+        // approved 房间里的实际 Socket 对象（非仅 id）：喂给 hasForegroundApprovedClient 判定"前台可见"，
+        // 而不只是"连着"——见下方注释与 PWA 后台推送修复（client:presence）。
+        const approvedSockets = approvedSocketObjects();
         let pn = notificationForEvent(envelope.type, envelope.payload, {
-          // BE-007：能看到 result 的客户端 = 已加入 approved 房间的连接。待审批(deviceApproved=false)设备虽连着
-          // 但没 join approved、看不到会话内容/result，不能算「有人在看」而抑制离线推送——否则唯一在线的是待审批
-          // 设备时，真正该收到完成通知的离线已批准设备反而收不到。permission/question/task_notification 无条件推、不受此影响。
-          hasClients: (io.sockets.adapter.rooms.get('approved')?.size ?? 0) > 0,
+          // BE-007 + PWA 后台推送修复：能看到 result 的客户端 = 已加入 approved 房间【且前台可见】的连接。
+          // 待审批(deviceApproved=false)设备虽连着但没 join approved、看不到会话内容/result，不能算「有人在看」
+          // 而抑制离线推送——否则唯一在线的是待审批设备时，真正该收到完成通知的离线已批准设备反而收不到。
+          // 仅"已加入 approved"仍不够：PWA 切后台后 socket 常常还没断（要等 OS 冻结页面才真正断连），
+          // 单纯按房间是否有 socket 判定会把"背景里还连着但看不见"误判为「有人在看」，把 result 永久吞掉
+          // （用户反馈"切后台收不到完成通知"的根因）。hasForegroundApprovedClient 改按 socket.data.hidden
+          // （client:presence 上报，见上方 on(socket,'client:presence',…)）判定，未上报过的连接保守按前台算。
+          // permission/question/task_notification 无条件推、不受此影响。
+          hasClients: hasForegroundApprovedClient(approvedSockets),
           instanceId: envelope.instanceId, sessionId: envelope.sessionId, cwd: envelope.cwd,
         });
         // P1-5 per-会话节流（docs/design.md）：同一会话同一类别已有未决通知或未过最小间隔 → 抑制，不推送。
@@ -2564,6 +2585,24 @@ registerSocketConnection(io, socket => {
   // 这里给「我要确定是最新的」一个即时按钮）。无 payload、无 ack：结果经既有 history_append/mirror_state 广播。
   on(socket, 'mirror:syncNow', () => { catchUpTick().catch(() => {}); });
 
+  // 「刷新配置」（CLI 配置刷新按钮）：ensureCliDefaults 结果按 cwd 缓存，只在启动预取 / session:new /
+  // session:home 才 force 重读；用户在终端侧改了 ~/.claude/settings.json 后，web 端 compose 页默认档
+  // 摘要不会自动感知——这里给一个手动兜底入口：force 重读该 cwd 的 CLI settings 并广播，前端摘要经
+  // 既有 instances 广播路径（refreshComposeDefaultsSummary）自动刷新，不需要新的渲染逻辑。
+  // ensureCliDefaults 内部已 try/catch 不抛（失败落 L4 硬默认形状），这里的 try/catch 是双重兜底，
+  // 保证 broadcastInstances/ack 本身出岔子时也不把 socket 处理器崩掉。
+  on(socket, 'config:refresh', async (payload, ack) => {
+    const cwd = routeCwd(payload?.cwd); // 缺省/越界回落 viewingCwd（含白名单校验，同 session:history）
+    try {
+      await ensureCliDefaults(cwd, { force: true });
+      broadcastInstances();
+      if (typeof ack === 'function') ack({ ok: true });
+    } catch (err) {
+      console.warn('[cli-settings] config:refresh 失败:', err?.message || err);
+      if (typeof ack === 'function') ack({ ok: false });
+    }
+  });
+
   on(socket, 'sync:since', async (payload, ack) => {
     const { sessionId, lastSeq, instanceId } = payload || {};
     // ack {replayed, gap, found, diskLen}：replayed=0 表示该实例无可回放的缓冲（如刚 open 尚未跑/重启后空），
@@ -2645,6 +2684,46 @@ registerSocketConnection(io, socket => {
     const logs = interactionLog.getSessionLogs(a.logKey());
     const diagLogs = diagLog.getDiagLogs(a.logKey());
     ack({ logs, diagLogs });
+  });
+
+  // PWA 后台推送修复：前台/后台切换时客户端上报 presence（见 public/js/app.js 的 visibilitychange/
+  // pagehide/connect handler），记在 socket.data.hidden，供 result 完成通知判定"approved 房间里是否
+  // 还有前台连接"使用（hasForegroundApprovedClient，src/ops/notifications.js；用法见下方 onEvent 里
+  // 对 hasClients 的计算）。fire-and-forget，无 ack；未上报过 presence 的连接 socket.data.hidden 保持
+  // undefined（按该函数的保守默认视为前台）。
+  //
+  // 「后台运行中」低优先级提示（补"切后台锁屏看不到应用还活着"的部分反馈；硬边界：PWA 做不到锁屏常驻
+  // 实时指示，这里只是有活轮次时补一条"别担心，跑完会通知你"）。只在 hidden:true 上报【恰好】构成
+  // "approved 房间从有前台变为无前台"的跳变、且此刻确有实例在跑（busy）时才推——判定纯函数
+  // shouldNotifyBackgroundRunning（notifications.js，单测覆盖）。天然节流：同一 socket 反复上报
+  // hidden:true 时，第二次调用前 hadForeground 已经因上一次上报而为 false（该 socket 早已不算前台），
+  // 跳变条件不会再次成立，不需要额外的时间窗节流状态机。与 result 完成通知共用 web-push/sw.js 的
+  // tag:'ccm-push'——真正跑完后系统通知栏/锁屏会自动把这条"运行中"替换成"已完成"，这里不需要手动
+  // 撤旧推新。
+  on(socket, 'client:presence', (p) => {
+    const hidden = !!p?.hidden;
+    if (!hidden) { socket.data.hidden = false; return; }
+    const sockets = approvedSocketObjects(); // 真实 Socket 对象，mutate 前后复用同一批引用即可反映跳变前后状态
+    const hadForeground = hasForegroundApprovedClient(sockets);
+    socket.data.hidden = true;
+    const hasForeground = hasForegroundApprovedClient(sockets);
+    const hasBusyInstance = [...agents.keys()].some(id => instanceState(id) === 'busy');
+    if (!shouldNotifyBackgroundRunning({ hadForeground, hasForeground, hasBusyInstance })) return;
+    for (const [id, agent] of agents) {
+      if (instanceState(id) !== 'busy') continue;
+      // 与 result 完成通知同款 per-会话节流：重连/新 socket 会再次构成"有前台→无前台"跳变，
+      // 跳变本身挡不住跨 socket 的重复；ntfy 又没有 web-push 的 tag 覆盖——不节流会在短时间内
+      // 堆多条"仍在运行"。category='background' 走 finished 同款 pending:false，只受最小间隔约束。
+      const sid = agent.sessionId;
+      if (sid) {
+        const r = throttleNotify(sid, 'background', Date.now(), notifyThrottleState, notifyThrottleMs);
+        notifyThrottleState = r.next;
+        if (r.throttled) continue;
+      }
+      const pn = notificationForBackgroundRunning({ instanceId: id, sessionId: agent.sessionId, cwd: agent.cwd });
+      pushNotify(pn.title, pn.body, pn.data);
+      ntfyNotify(pn.title, pn.body, ntfyMetaFor('background_running', pn.data, notify.publicUrl));
+    }
   });
 
   // 前端全局 JS 错误上报：手机浏览器无 devtools，前端运行期错误经此落服务端日志。

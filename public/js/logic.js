@@ -760,17 +760,59 @@ export function projectDisplayName(path) {
 }
 
 // 空会话启动页只在没有可渲染会话流时出现：新建后尚未首发，或还没有 viewing instance。
-export function shouldShowStartScreen({ viewingInstanceId, sessionId } = {}) {
+// freshInterrupted：全新会话首轮（sessionId 尚未由 SDK init 返回）已发过消息且被点停止——用户消息
+// 气泡 + 中断提示已经渲染在屏幕上，不该套用"sessionId 为空 → 显启动页"这条给真正从未发送过消息的
+// 新会话用的既有判据（否则会把已有内容的聊天视图错误地打回主页/新会话页）。要求 viewingInstanceId 非空
+// 才生效——调用方须自行把 freshInterrupted 收窄到"确实是当前正在看的这个实例"（见 app.js
+// freshInterruptedInstanceId），此处只再兜底一次，防止无实例的真空首页被意外绕过。
+export function shouldShowStartScreen({ viewingInstanceId, sessionId, freshInterrupted = false } = {}) {
+  if (viewingInstanceId && freshInterrupted) return false;
   return !viewingInstanceId || !sessionId;
 }
 
+// 点停止后顿一下直接跳主页（回归修复）：中断失败（不限时超时——任何原因 SDK interrupt() reject 都会
+// 走 agent.js settleForce 强杀子进程，见 tests/unit/agent-control.test.mjs）→ 子进程退出 → onExit →
+// 该 instanceId 从 agents Map 删除、且无同 cwd 存活实例可回退（instance-routing.js
+// reselectViewingTarget 默认 allowCrossWorkspace=false）→ viewingInstanceId 广播为 null。
+// 前端旧逻辑把"viewingInstanceId 变 null"一律当"该显示空表面(home/compose)"处理，导致用户刚点停止就
+// 被静默弹回主页，看不到任何"发生了什么"的反馈。
+//
+// 本函数只回答一个问题："这次 viewingInstanceId 变 null，是不是因为我正在看的这个实例真的被摧毁了"，
+// 用于和"用户主动导航离开"（返回主页 / 新建会话 / 切到其他会话）区分：
+//   · 用户主动返回主页/新建会话：原实例仍留在 instances 列表里（只是不再被查看），没有被摧毁——
+//     不会同时满足"曾在列表 + 现在从列表消失"。
+//   · 用户主动切到其他存活会话：newViewingInstanceId 非 null（有下一个可看的目标），不是摧毁。
+//   只有"曾在列表里 + 现在从列表消失 + newViewing 变 null"三者同时成立，才精确对应摧毁场景。
+//
+// explicitCloseInstanceId：用户主动关闭自己正在查看的会话（抽屉「关闭」/侧滑 ✕，无其它存活实例可
+// 回退时）广播形态与"被摧毁"完全相同（服务端 disposeInstance 同样让 viewingInstanceId 变 null +
+// 该实例从列表消失），但这是用户自己确认过的主动操作，不该显示"意外中断"——调用方在点击关闭时
+// 记下这个 id，传入本函数即可排除；id 不匹配（关的是别的实例）时不受影响。
+export function wasViewingInstanceDestroyed({
+  prevViewingInstanceId,
+  newViewingInstanceId,
+  prevIds,
+  currIds,
+  explicitCloseInstanceId = null,
+} = {}) {
+  if (!prevViewingInstanceId) return false; // 本来就没有正在查看的实例——没什么好判的
+  if (newViewingInstanceId != null) return false; // 有下一个可看的目标（哪怕换了别的）——不是摧毁
+  if (explicitCloseInstanceId && explicitCloseInstanceId === prevViewingInstanceId) return false; // 用户主动关闭——不是意外
+  const has = (set, id) => (set instanceof Set ? set.has(id) : Array.isArray(set) && set.includes(id));
+  if (!has(prevIds, prevViewingInstanceId)) return false; // 防御性：声称"之前在看"却不在快照里，不敢断言摧毁
+  return !has(currIds, prevViewingInstanceId); // 曾在列表、现在消失了 → 真被摧毁
+}
+
 // 空表面形态：＋ / 🏠 分流。
+//   destroyed = 正在查看的实例被摧毁（见 wasViewingInstanceDestroyed），需要用户手动确认下一步
 //   none    = 已在真实会话（有 session 流），不渲染空态页
 //   home    = 枢纽（最近工作区/会话），输入条隐藏
 //   compose = 干净新会话页（工作区确认 + 默认档 + 示例 prompt），输入条显示
-// 判定：先 shouldShowStartScreen；再看 composeReady（点 ＋ / session:new）。
-export function resolveEmptySurface({ viewingInstanceId, sessionId, composeReady = false } = {}) {
-  if (!shouldShowStartScreen({ viewingInstanceId, sessionId })) return 'none';
+// 判定：instanceDestroyed 优先于其余三态（这是比常规空表面更需要用户关注的非常规状态）；
+// 其余沿用原判定：先 shouldShowStartScreen；再看 composeReady（点 ＋ / session:new）。
+export function resolveEmptySurface({ viewingInstanceId, sessionId, composeReady = false, freshInterrupted = false, instanceDestroyed = false } = {}) {
+  if (instanceDestroyed) return 'destroyed';
+  if (!shouldShowStartScreen({ viewingInstanceId, sessionId, freshInterrupted })) return 'none';
   return composeReady ? 'compose' : 'home';
 }
 
@@ -795,10 +837,15 @@ export function shouldShowTopContextPill({ viewingInstanceId, sessionId } = {}) 
 //   · 或用户刚点 ＋ / session:new 进入 compose 就绪空窗（composeReady）
 //   · 或新会话首发在途（pendingFirstSend：懒开瞬间 sid 仍空，不能闪藏输入区）
 // 与 shouldShowStartScreen 正交：composeReady 时 resolveEmptySurface='compose'（干净新会话页 + 输入条）。
-export function shouldShowComposer({ viewingInstanceId, sessionId, composeReady = false, pendingFirstSend = false } = {}) {
+// freshInterrupted：见 shouldShowStartScreen 同名参数注释——全新会话首轮被中断后，pendingFirstSend
+// 早已一次性消费为 false，若不加这个例外，输入条会跟着"判定该显启动页"一起被隐藏，用户没法接着发消息。
+export function shouldShowComposer({ viewingInstanceId, sessionId, composeReady = false, pendingFirstSend = false, freshInterrupted = false } = {}) {
   if (sessionId) return true;
   if (pendingFirstSend) return true;
   if (composeReady) return true;
+  // 须仍有 viewingInstanceId 才生效——防调用方把"未设置"(null)当成偶然与空 viewingInstanceId 相等
+  // 而误判命中（例如两者都是 null 时的巧合相等），空首页(无 viewingInstanceId)不能被凭空绕过。
+  if (viewingInstanceId && freshInterrupted) return true;
   // viewingInstanceId 有无都不改变「无 sid 且未 compose」→ 隐藏
   void viewingInstanceId;
   return false;
@@ -1191,6 +1238,47 @@ export function shouldForceScrollAfterReplay({ action, replayed } = {}) {
   return Number.isFinite(replayed) && replayed > 0;
 }
 
+// 回放缓冲决策（修「切会话/重连时离开期间积压的消息像打字机一样逐条蹦出」）：
+// 根因——src/server/app.js 的 'sync:since' handler 是先把该实例环形缓冲里离开期间攒的事件逐条经
+// agent:event 信封（带 replay:true 标记）逐个推给客户端发完，才调用 done()/ack（for 循环在 ack 之前，
+// 顺序不可颠倒，是既有设计）。旧客户端逻辑对 replay 事件走的是和实时消息完全相同的增量渲染路径
+// （text_delta/tool_use/tool_result 等逐条 handler、各自触发一次 scrollBottom），于是"离开期间攒的一长串
+// 消息"会在 ack 到达前就已逐条吐到屏幕上——replay:true 目前只用来静音提示音，不做任何批量合并。
+// 修法：客户端必须在请求续传（sync:since）之前就架起缓冲区（app.js + app/event-dispatch.js 的
+// createReplayBuffer：begin/offer/resolve），把命中该 instanceId 的事件先原样入队不渲染（含期间可能
+// 穿插的非 replay 实时事件，保序），ack 到达后才知道"这次到底缓冲了多少条"，本函数据此二选一：
+//   'reload' —— 丢弃缓冲队列，改走 session:history 的既有批量渲染路径（loadHistory/renderHistoryBubbles
+//                已经是分块解析 + 一次性 fragment 插入 + 单次 scrollBottom(true) 落底，无需改动）；
+//   'flush'  —— 按到达顺序把缓冲事件正常派发（走原有 handler 增量渲染），但抑制每条各自触发的滚动，
+//                全部派发完只做一次强制落底。
+// 优先级（新增独立层，不揉进 shouldReloadOnEnter/syncAckAction 改坏原有语义）：
+//   1) priorAction 已经是 'reload'（shouldReloadOnEnter 切视图 / syncAckAction 重连两条入口共用口径）
+//      或 'load'（shouldReloadOnEnter 冷入场分支）→ 直接 'reload'，这层不再重复判断——磁盘全量重载
+//      已经在路上，缓冲队列本就该被丢弃、无需再单独处理。
+//   2) busy（该实例当前正有实时轮次在跑，调用方按 shouldSeedBusyFromInstanceState 的口径传入）→ 恒
+//      'flush'。进行中的流式内容只活在服务端环形缓冲、尚未落盘，reload 走磁盘 session:history 会把这段
+//      丢掉；哪怕缓冲堆积再多事件，也只能老实 flush（抑制中间滚动，但内容一条不能少）。
+//   3) 其余（priorAction 是 'keep'/'none'，即 shouldReloadOnEnter/syncAckAction 已判定"不用重载"）：
+//      bufferedCount 达到阈值 → 'reload'（补上"但攒太多也该重载"这一判断，是解决"逐条吐消息"问题的
+//      主力路径——积压很多时直接走批量渲染，而不是让几十上百个 DOM mutation 挤在一起抖动）；
+//      未达阈值 → 'flush'（少量补发，正常增量 + 抑制中间滚动 + 收尾强制落底一次，视觉上与"瞬间到达"
+//      无区别，不必为了几条消息就清屏重载）。
+//
+// REPLAY_BUFFER_RELOAD_THRESHOLD=100 的理由：text_delta 按小段流式拆分，一次几十字的单轮回复就可能
+// 有几十个 text_delta 事件（长回复、开思考模式时 thinking_delta，或夹杂 tool_use/tool_result，事件数
+// 还会再往上加），但单轮再长也很少突破百级；真正"离开期间攒了好几轮回复"（本次要修的场景）每轮至少
+// 贡献 user_message + N×text_delta + result 等几十个事件，2-3 轮就能轻松过百。取 100 使两头都不误判：
+// 定低了会让正常的单轮长回复也被判成"积压"走清屏重载——不算错但多余地闪一下，flush 明明能不闪就搞定；
+// 定高了会让真堆积多轮的场景仍在走逐条 flush——几十上百次独立 DOM mutation 挤在一起，观感依然是抖动/
+// 蹦出，正是本次要修的问题本身。
+export const REPLAY_BUFFER_RELOAD_THRESHOLD = 100;
+
+export function resolveReplayBufferAction({ bufferedCount = 0, priorAction, busy = false, threshold = REPLAY_BUFFER_RELOAD_THRESHOLD } = {}) {
+  if (priorAction === 'reload' || priorAction === 'load') return 'reload';
+  if (busy) return 'flush';
+  return bufferedCount >= threshold ? 'reload' : 'flush';
+}
+
 // stick-to-bottom 判定（聊天 messagesEl / 客户端日志 consoleLogArea 共用）：
 // force 总是落底；否则仅当「距底 < threshold」时跟随。上翻读历史时新内容不得拽回。
 // 默认 120 与 app.js 历史 scrollBottom 阈值对齐。
@@ -1210,6 +1298,24 @@ export function shouldStickScrollToBottom({
 export function resolveUnreadAnchorIndex(listLength, unreadCount) {
   if (!Number.isFinite(unreadCount) || unreadCount <= 0 || listLength <= 0) return -1;
   return Math.max(0, listLength - unreadCount);
+}
+
+// 未读胶囊第三条自动确认已读路径（与「点击胶囊」「IntersectionObserver 扫到锚点」并存，见 app.js
+// showUnreadPillIfAny/ackUnread，三条互不替代）：用户手动滚动到贴近底部，视为「已经看到最新消息」。
+// 核心难点——切入积压了很多未读的会话时，回放缓冲（P0-REPLAY-BUFFER）落底会程序性调一次
+// scrollBottom(true) 把视图直接推到最新消息处；这次滚动不代表用户已经看到胶囊、意识到自己错过了
+// 什么，若不排除会让胶囊在用户还没反应过来时就被这次程序性落底误判成"已读"清掉。
+// withinProgrammaticWindow 由调用方（app.js messagesEl 的 scroll 监听）根据 scrollBottom() 内部维护的
+// "程序性滚动窗口"时间戳算出并传入布尔值，这里只消费结果，不关心具体时长/定时器实现。贴底判断直接
+// 复用 shouldStickScrollToBottom（不重新发明一遍阈值逻辑），用它的默认 threshold。
+export function shouldAckUnreadOnScroll({
+  pillVisible = false,
+  withinProgrammaticWindow = false,
+  scrollHeight, scrollTop, clientHeight,
+} = {}) {
+  if (!pillVisible) return false;
+  if (withinProgrammaticWindow) return false;
+  return shouldStickScrollToBottom({ scrollHeight, scrollTop, clientHeight });
 }
 
 // 同 sessionId 的 DOM 缓存恢复策略：已完成的对话/工具卡片按会话不可变，与当前 instanceId 无关。
@@ -2049,4 +2155,55 @@ export function unifiedDiffLines(oldStr, newStr) {
   while (i < n) { out.push(`- ${oldLines[i]}`); i++; }
   while (j < m) { out.push(`+ ${newLines[j]}`); j++; }
   return out;
+}
+
+// ---- P3 工作区抽屉：SWR 缓存保鲜 + 按目录局部重建 ----
+// 断线重连 / 后台实例变化时，旧实现要么整段清空 sessionsCache（哪怕只有一个目录真变了），要么靠单一
+// 全局 structKey 触发 openSessionPanel() 全量重建整个抽屉——即使用户只是切到后台又切回、数据其实没变，
+// 也会"清空→骨架屏→等网络往返"，观感等同"重新拉了一遍数据"。以下两组纯函数把决策拆成两层，故意不
+// 合并成一个函数（关注点不同：一个管缓存内容要不要重渲染，一个管要不要重建 DOM 子树）：
+// ① session:list 响应内容签名比较；② 按目录分键的实例签名 diff。
+
+// session:list 响应回来后，判断内容是否真的变了再决定要不要重渲染该目录的会话行列表——避免"缓存已
+// 秒开正确内容→响应回来后又无条件整段重渲"的多余闪烁/重排。hasPrevEntry=false（此前无缓存，正显示
+// 骨架屏）时恒需要渲染：骨架屏必须被替换，哪怕真实数据恰好是空列表。粒度：id+title(前 40 字)+
+// lastUsedAt 足以代表用户会感知到的变化，不做深度字段比对；hasMore 单独比较（决定"显示全部"按钮的
+// 出现/消失，不影响每一行的签名本身）。
+export function shouldRerenderSessionList({ hasPrevEntry = false, prevSessions, prevHasMore = false, nextSessions, nextHasMore = false } = {}) {
+  if (!hasPrevEntry) return true;
+  if (!!prevHasMore !== !!nextHasMore) return true;
+  const signature = list => (Array.isArray(list) ? list : [])
+    .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}`)
+    .join('|');
+  return signature(prevSessions) !== signature(nextSessions);
+}
+
+// 按目录分键的实例签名：每个 cwd 一段签名片段（id+sessionId+title 前 20 字拼接），代替原先"整个实例
+// 集拼一个全局签名"的做法——粒度对齐原全局 structKey，只是从"任何一个实例变化都命中"改成"命中哪个
+// 目录就只标记哪个目录"。状态字段（busy/idle/permission/error）故意不进签名，那些由 refreshDirBadges/
+// refreshInstanceBadges 独立、更轻量地实时刷新，不需要牵动 DOM 子树重建。
+export function buildDirInstanceSignatures(instances = [], dirs = []) {
+  const byDir = new Map();
+  for (const d of (dirs || [])) byDir.set(d, []);
+  for (const inst of (instances || [])) {
+    if (!inst?.instanceId) continue;
+    if (!byDir.has(inst.cwd)) byDir.set(inst.cwd, []);
+    byDir.get(inst.cwd).push(`${inst.instanceId}:${inst.sessionId || ''}:${(inst.title || '').slice(0, 20)}`);
+  }
+  const out = {};
+  for (const [d, frags] of byDir) out[d] = frags.join(',');
+  return out;
+}
+
+// 比较前后两份"按目录分键的签名"，返回签名变化的 cwd 列表（升序排序，确定性）——调用方只需重建这些
+// 目录的 DOM 子树，其余目录原样不动（不撤离滚动位置/侧滑态/"显示全部"展开态等本地态）。目录集合本身
+// 变化（新增/删除工作区）、viewingInstanceId 变化两类"结构性"场景不经这个函数——调用方应直接全量
+// 重建，不必对这两种低频场景做精细化 diff。
+export function diffDirSignatures(prev = {}, next = {}) {
+  const keys = new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]);
+  const changed = [];
+  for (const k of keys) {
+    if ((prev || {})[k] !== (next || {})[k]) changed.push(k);
+  }
+  return changed.sort();
 }

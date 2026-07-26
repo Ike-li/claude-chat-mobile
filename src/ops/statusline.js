@@ -7,6 +7,7 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import * as diagLog from '../agent/diag-log.js';
+import { createUsageSnapshotStore, rememberUsage, fallbackUsage } from './usage-snapshot.js';
 
 // 状态栏 project 字段：从 cwd 取末段目录名。原 `cwd.split('/').pop()` 手写实现只认 `/`，
 // server 跑在 Windows 上时 cwd 是 `C:\...`（无 `/`），会退化成整条路径。改用 path.win32/posix
@@ -77,6 +78,24 @@ export async function gitStatus(cwd) {
   }
   gitCache.set(cwd, { at: Date.now(), data });
   return data;
+}
+
+// ---- 账号级额度快照单例（OPS：消除 owner=sdk/cli 切换或 RPC 超时/bridge 快照过期造成的"时有时无"）----
+// owner=sdk 走 agent.fetchUsage()（1.5s 超时）、owner=cli 走落盘 bridge 快照（非 fresh 即整段无额度）——
+// 两条路径描述的是同一个 Anthropic 账号，短暂断档时用最近一次温热数据垫上远比整段消失更接近事实。
+// 单例、进程重启清零、不持久化、不分账号（"每实例单用户"，见 CLAUDE.md）；buildWebStatusLine/
+// buildCliStatusLine 都可通过 usageStore 形参覆盖它——仅供单测隔离，生产路径（app.js refreshStatusLine）
+// 从不传入，恒用这份默认单例，故两条路径能互相垫底。详见 usage-snapshot.js。
+const usageSnapshotStore = createUsageSnapshotStore();
+
+// 供 app.js refreshStatusLine() 的 cli-unavailable 分支使用：owner=cli 但 bridge 快照缺失/过期时，
+// selectStatusSource 判定 kind!=='cli'，buildCliStatusLine 整个不会被调用——上面两个写入点/回落点都摸
+// 不到，此前这一分支组装的 payload 100% 没有 rate 字段。这里只开放"读一次回落值"这一个窄接口，
+// 不直接导出 usageSnapshotStore 单例本身（保持封装，调用方不能绕过 fallbackUsage 的 TTL/空值判断
+// 直接读写内部形状）。usageStore 形参默认这份模块单例，与 buildWebStatusLine/buildCliStatusLine
+// 共用同一份数据——三处任一路径写入的温热值，都能被另外两处拿来垫底；单测可传独立 store 隔离。
+export function getFallbackUsageRate(now, usageStore = usageSnapshotStore) {
+  return fallbackUsage(usageStore, now);
 }
 
 // ---- 上下文窗口大小映射（model → tokens）----
@@ -195,7 +214,7 @@ function recordRateReasonIfChanged(agent, usage, bits) {
 // 组装 web 状态栏结构化 payload（全字段可选，缺则省；前端按存在性渲染原生 UI）。
 // 权限档不在此——前端已有独立 pill（pillPerm），避免重复显示；effort 进 statusline 对齐 CLI 文案
 // （底栏 pill 仍保留作切换器）。
-export async function buildWebStatusLine({ agent, cwd, versions }) {
+export async function buildWebStatusLine({ agent, cwd, versions, usageStore = usageSnapshotStore }) {
   const p = { ts: Date.now() };
   // FRESH 会话 activeModel 为空（未显式指定 model）时回退 reportedModel（init 报告的真实运行模型）——
   // 只读显示，不碰 activeModel，不触发 F1（空发 setModel 重置网关模型）。见 agent.js reportedModel。
@@ -244,13 +263,24 @@ export async function buildWebStatusLine({ agent, cwd, versions }) {
   }
   // 账号额度 5h/7d + 会话工具改行 lines：走 SDK usage_EXPERIMENTAL（与独立额度窗同源）。
   // 活跃 agent 才调；失败/第三方 provider → 字段省，不崩 statusline。
+  // allowRateFallback：仅"短暂断档"（RPC 超时/抛错/agent 不可用/disposed）才允许垫快照。
+  // 若本轮 RPC 成功解出 usage 但 bits.rate 为空（第三方鉴权 rate_limits_available:false /
+  // utilization 越界 no_valid_window）——那是"明确无额度"，绝不能垫上一份 Anthropic 温热快照
+  // 冒充还活着（code review：跨鉴权/空窗误垫）。
+  let allowRateFallback = true;
   if (agent && typeof agent.fetchUsage === 'function' && !agent.disposed) {
     try {
       const usage = await agent.fetchUsage();
       const bits = usageBitsForStatusLine(usage);
       Object.assign(p, bits);
       recordRateReasonIfChanged(agent, usage, bits);
-    } catch { /* 静默降级 */ }
+      // 写入点 A：本轮成功拿到额度 → 记进账号级快照，供下次断档时垫上（见 usage-snapshot.js）。
+      if (bits.rate) {
+        rememberUsage(usageStore, bits.rate, Date.now());
+      } else {
+        allowRateFallback = false; // 明确无额度：禁止垫旧值
+      }
+    } catch { /* 静默降级：允许回落 */ }
   }
   // claude CLI 版本（启动时采集，server.js 传入）：取首段裸版本号，去 "(Claude Code)" 等后缀；前端加 v 前缀
   const ver = versions?.cli && versions.cli !== 'unknown' ? String(versions.cli).split(/\s+/)[0] : '';
@@ -258,6 +288,13 @@ export async function buildWebStatusLine({ agent, cwd, versions }) {
   // 会话元数据：sid（ccm 自管 sessionId）。注：CLI statusline 的 "pid" 实为 Claude Code 的 prompt_id、
   // SDK 路径不产出；transcript basename 与 sid 冗余（= <sid>.jsonl），故都不含。
   if (agent?.sessionId) p.session = { id: agent.sessionId };
+  // 回落点：本轮短暂断档（fetchUsage 失败/超时/agent 不可用/disposed）→ 用最近一次温热快照垫上，
+  // 消除"时有时无"的闪断。明确无额度（见上 allowRateFallback=false）不垫。
+  // 从未写入过 / 已超 TTL → fallbackUsage 返回 null，本行为空操作。
+  if (!p.rate && allowRateFallback) {
+    const fallback = fallbackUsage(usageStore, Date.now());
+    if (fallback) { p.rate = fallback; p.rateFromSnapshot = true; }
+  }
   return p;
 }
 
@@ -278,7 +315,7 @@ function copyFinite(source, keys) {
 
 // CLI owner 时只消费 bridge 的白名单快照；与 SDK payload 分开构建，禁止按字段回退/混拼陈旧 Web 数据。
 // git 是当前 cwd 的本机事实，仍即时读取；其余模型、effort、上下文、成本、额度均来自同一份 CLI 快照。
-export async function buildCliStatusLine({ snapshot, cwd } = {}) {
+export async function buildCliStatusLine({ snapshot, cwd, usageStore = usageSnapshotStore } = {}) {
   const s = snapshot && typeof snapshot === 'object' ? snapshot : {};
   const p = { ts: Number.isFinite(s.capturedAt) ? s.capturedAt : Date.now() };
   const model = typeof s.model?.displayName === 'string' && s.model.displayName
@@ -313,9 +350,20 @@ export async function buildCliStatusLine({ snapshot, cwd } = {}) {
     if (resetsAt) window.resetsAt = resetsAt;
     rate[targetKey] = window;
   }
-  if (Object.keys(rate).length) p.rate = rate;
+  // 写入点 B：本次 fresh bridge 快照解出有效额度 → 记进账号级快照——与 SDK 路径共享同一份单例
+  // （两条路径描述的是同一个 Anthropic 账号，谁刚拿到新数据都值得给对方垫底）。
+  if (Object.keys(rate).length) {
+    p.rate = rate;
+    rememberUsage(usageStore, rate, Date.now());
+  }
 
   if (typeof s.cliVersion === 'string' && s.cliVersion) p.version = s.cliVersion.split(/\s+/)[0];
   if (typeof s.sessionId === 'string' && s.sessionId) p.session = { id: s.sessionId };
+  // 回落点：这一拍 fresh 快照本身没带可用额度字段 → 用最近一次温热快照垫上（与 buildWebStatusLine
+  // 同款语义，见其注释）。
+  if (!p.rate) {
+    const fallback = fallbackUsage(usageStore, Date.now());
+    if (fallback) { p.rate = fallback; p.rateFromSnapshot = true; }
+  }
   return p;
 }

@@ -1,7 +1,7 @@
 // tests/unit/notifications.test.mjs —— notificationForEvent 纯映射单测（零副作用，不碰 web-push 传输）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription } from '../../src/ops/notifications.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../../src/ops/notifications.js';
 
 // ── BE-014：push 订阅结构校验（落盘前拦畸形，防 .slice() 抛 500 + 污染后续推送）──────────────
 test.describe('isValidPushSubscription', () => {
@@ -63,6 +63,92 @@ test('result + interrupted（即使 isError）+ 无客户端 → 推「任务已
 
 test('result + 有客户端连接 → 不推（客户端自己看得到）', () => {
   assert.equal(notificationForEvent('result', { durationMs: 3210 }, { hasClients: true }), null);
+});
+
+// ── hasForegroundApprovedClient：PWA 后台推送修复——approved 房间"连着"升级为"前台可见" ──────
+// 背景：hasClients 曾直接取"approved 房间是否有 socket"，但 PWA 切后台后 socket 常常还没断
+// （要等 OS 冻结页面才真正断连），会把"背景里还连着"误判为"有人在看"而吞掉 result 完成通知。
+// 客户端在 visibilitychange/pagehide 时上报 client:presence，服务端记 socket.data.hidden；
+// 本函数判定这批 socket 里是否还有"前台"的——保守默认：未上报过 presence（data.hidden===undefined，
+// 如刚连接尚未上报的连接）一律按前台算，最坏情况是退回现状（不解锁推送），不会因误判后台而重复轰炸。
+test.describe('hasForegroundApprovedClient', () => {
+  test('全部 socket 都 hidden:true（都在后台）→ false（无前台可见客户端）', () => {
+    const sockets = [{ data: { hidden: true } }, { data: { hidden: true } }];
+    assert.equal(hasForegroundApprovedClient(sockets), false);
+  });
+
+  test('至少一个不是 hidden:true（含 undefined/false）→ true', () => {
+    assert.equal(hasForegroundApprovedClient([{ data: { hidden: true } }, { data: { hidden: false } }]), true);
+    assert.equal(hasForegroundApprovedClient([{ data: { hidden: true } }, { data: {} }]), true, '未上报过 presence 的连接保守按前台算');
+    assert.equal(hasForegroundApprovedClient([{ data: {} }]), true);
+  });
+
+  test('空数组（approved 房间无人）→ false', () => {
+    assert.equal(hasForegroundApprovedClient([]), false);
+  });
+
+  test('缺省参数（未传 sockets）→ false，不抛', () => {
+    assert.equal(hasForegroundApprovedClient(), false);
+  });
+
+  test('socket 缺 data 字段 → 视为未上报过 presence，按前台算，不抛', () => {
+    assert.equal(hasForegroundApprovedClient([{}]), true);
+  });
+});
+
+// ── shouldNotifyBackgroundRunning：presence"从有前台变无前台"跳变 + 有 busy 实例 → 后台运行中提示 ──
+// 纯函数，输入是调用方（app.js on(socket,'client:presence',…)）在真正 mutate socket.data.hidden
+// 前后各算一次 hasForegroundApprovedClient 得到的 hadForeground/hasForeground，外加是否有 busy 实例。
+// 天然节流的关键：只有"之前有、现在没了"这个精确跳变才成立，重复上报/无关状态不触发。
+test.describe('shouldNotifyBackgroundRunning', () => {
+  test('之前有前台、现在没有前台、且有 busy 实例 → true（唯一应该推送的情形）', () => {
+    assert.equal(shouldNotifyBackgroundRunning({ hadForeground: true, hasForeground: false, hasBusyInstance: true }), true);
+  });
+
+  test('之前有前台、现在没有前台，但无 busy 实例 → false（没什么在跑，没必要提醒）', () => {
+    assert.equal(shouldNotifyBackgroundRunning({ hadForeground: true, hasForeground: false, hasBusyInstance: false }), false);
+  });
+
+  test('之前就已经没有前台（非跳变时刻，如同一 socket 重复上报 hidden:true）→ false，即使有 busy 实例', () => {
+    assert.equal(shouldNotifyBackgroundRunning({ hadForeground: false, hasForeground: false, hasBusyInstance: true }), false);
+  });
+
+  test('之前有前台、现在仍有前台（如两个已批准连接，一个切后台但另一个还在前台）→ false', () => {
+    assert.equal(shouldNotifyBackgroundRunning({ hadForeground: true, hasForeground: true, hasBusyInstance: true }), false);
+  });
+
+  test('之前无前台、现在反而变成有前台（不构成"变无"跳变，理论上不会发生但防御性验证）→ false', () => {
+    assert.equal(shouldNotifyBackgroundRunning({ hadForeground: false, hasForeground: true, hasBusyInstance: true }), false);
+  });
+
+  test('缺省参数（未传任何字段）→ false，不抛', () => {
+    assert.equal(shouldNotifyBackgroundRunning(), false);
+  });
+});
+
+// ── notificationForBackgroundRunning：「后台运行中」提示文案（presence 跳变触发，非 agent:event）──
+test.describe('notificationForBackgroundRunning', () => {
+  test('无 cwd → 固定标题+低信息量 body，不含会话内容', () => {
+    const n = notificationForBackgroundRunning({ instanceId: 'inst_1', sessionId: 's1' });
+    assert.equal(n.title, '⏳ 任务仍在后台运行');
+    assert.equal(n.body, '运行结束后会通知你');
+    assert.deepEqual(n.data, { instanceId: 'inst_1', sessionId: 's1', cwd: undefined });
+  });
+
+  test('带 cwd → title 追加目录尾段（仅 basename，非完整路径），与 notificationForEvent 的 titleWithCwd 风格一致', () => {
+    const n = notificationForBackgroundRunning({ instanceId: 'inst_1', sessionId: 's1', cwd: '/Users/x/code/proj' });
+    assert.equal(n.title, '⏳ 任务仍在后台运行 · proj');
+  });
+
+  test('不带 instanceId → 无 data 字段（向后兼容 notificationForEvent 同款约定）', () => {
+    const n = notificationForBackgroundRunning({});
+    assert.equal(n.data, undefined);
+  });
+
+  test('缺省参数不抛', () => {
+    const n = notificationForBackgroundRunning();
+    assert.equal(n.title, '⏳ 任务仍在后台运行');
+  });
 });
 
 // ── permission_request / question：无条件推 ──────────────────────────────────
@@ -213,6 +299,23 @@ test('ntfyMetaFor: permission_request → 高优先级 5 + warning 标签', () =
 
 test('ntfyMetaFor: result → 默认优先级 3', () => {
   assert.equal(ntfyMetaFor('result', {}, '').priority, 3);
+});
+
+// background 类别：presence 跳变触发的"仍在运行"提示。pending:false（一次性），只受最小间隔约束——
+// 与 finished 同款，防止重连/新 socket 再次跳变时 ntfy 堆多条（web-push 有 tag 覆盖，ntfy 没有）。
+test('throttleNotify: background 类别受最小间隔约束（跨 socket 重连去重）', () => {
+  const r1 = throttleNotify('s1', 'background', 1000, new Map(), 60000);
+  assert.equal(r1.throttled, false);
+  const r2 = throttleNotify('s1', 'background', 2000, r1.next, 60000); // 1s < 60s
+  assert.equal(r2.throttled, true);
+  const r3 = throttleNotify('s1', 'background', 62000, r1.next, 60000); // 61s > 60s
+  assert.equal(r3.throttled, false);
+});
+
+test('ntfyMetaFor: background_running（presence 跳变触发的后台运行中提示）→ 默认优先级 3 + 专属标签', () => {
+  const m = ntfyMetaFor('background_running', {}, '');
+  assert.equal(m.priority, 3, '低优先级：不需要用户即时响应');
+  assert.deepEqual(m.tags, ['hourglass_flowing_sand']);
 });
 
 test('ntfyMetaFor: click 深链含 instance/session，但【不含完整 cwd】（ntfy 明文第三方，SEC-04）', () => {

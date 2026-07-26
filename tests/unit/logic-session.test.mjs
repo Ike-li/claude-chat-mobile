@@ -130,6 +130,18 @@ test('shouldShowStartScreen: 仅无实例或无 session 的新会话显示启动
   assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: 'abc' }), false);
 });
 
+// 回归（全新会话首轮点停止后不跳回主页）：freshInterrupted=true 时，即使 sessionId 仍为空，也不应
+// 判定为"应显示启动页"——前提是仍有 viewingInstanceId（真正无实例的空首页不受影响，见最后一条）。
+test('shouldShowStartScreen: freshInterrupted 例外——sessionId 未到但已中断且仍在看该实例，不显示启动页', () => {
+  assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: null, freshInterrupted: true }), false);
+  // 有 sessionId 时 freshInterrupted 无关紧要（本就不该显示启动页）
+  assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: 'abc', freshInterrupted: true }), false);
+  // 无 viewingInstanceId（真正的空首页）：freshInterrupted 不能凭空绕过——须仍显示启动页
+  assert.equal(shouldShowStartScreen({ viewingInstanceId: null, sessionId: null, freshInterrupted: true }), true);
+  // 默认值：不传 freshInterrupted 时行为与既有测试完全一致（上一个 test 已覆盖，这里补一条显式对照）
+  assert.equal(shouldShowStartScreen({ viewingInstanceId: 'inst_1', sessionId: null }), true);
+});
+
 // 顶部文件夹 pill：首页/compose 隐藏（页面内已有工作区入口）；进入真实会话后显示（点开文件浏览）。
 test('shouldShowTopContextPill: 与 start screen 互斥', () => {
   assert.equal(shouldShowTopContextPill({ viewingInstanceId: null, sessionId: null }), false);
@@ -149,6 +161,16 @@ test('shouldShowComposer: 空首页隐藏；composeReady/有 session/首发在�
   assert.equal(shouldShowComposer({ viewingInstanceId: 'inst_1', sessionId: 'abc', composeReady: false }), true);
 });
 
+// 回归（全新会话首轮点停止后不跳回主页）：freshInterrupted 时输入条仍应可见——中断后 pendingFirstSend
+// 早已被一次性消费为 false，若不加这个例外，composer 会跟着"判定该显示启动页"一起被隐藏。
+test('shouldShowComposer: freshInterrupted=true 时输入条仍可见（即使 pendingFirstSend 已消费为 false）', () => {
+  assert.equal(shouldShowComposer({ viewingInstanceId: 'inst_1', sessionId: null, freshInterrupted: true }), true);
+  assert.equal(shouldShowComposer({ viewingInstanceId: 'inst_1', sessionId: null, freshInterrupted: false }), false);
+  // 回归：调用方常用 "viewingInstanceId === freshInterruptedInstanceId" 算 freshInterrupted——
+  // 两者都是 null（真空首页、从未中断过）时这个比较会巧合为 true，纯函数自己必须兜住，不能被绕过。
+  assert.equal(shouldShowComposer({ viewingInstanceId: null, sessionId: null, freshInterrupted: true }), false);
+});
+
 // ＋ / 🏠 空表面分流：home=最近枢纽；compose=干净新会话页（无最近列表）；有 session 不进空表面。
 test('resolveEmptySurface: home / compose / none 三分', () => {
   assert.equal(resolveEmptySurface({ viewingInstanceId: null, sessionId: null }), 'home');
@@ -158,6 +180,15 @@ test('resolveEmptySurface: home / compose / none 三分', () => {
   assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: null, composeReady: false }), 'home');
   assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: 'abc', composeReady: true }), 'none');
   assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: 'abc' }), 'none');
+});
+
+// 回归（全新会话首轮点停止后不跳回主页）：freshInterrupted 时无论 composeReady 与否都应是 'none'
+// （保留已渲染的聊天内容，不切去 home/compose 任一空表面）。
+test('resolveEmptySurface: freshInterrupted=true → none（不落 home 也不落 compose）', () => {
+  assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: null, freshInterrupted: true }), 'none');
+  assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: null, composeReady: true, freshInterrupted: true }), 'none');
+  // 无 viewingInstanceId 时 freshInterrupted 不应凭空生效
+  assert.equal(resolveEmptySurface({ viewingInstanceId: null, sessionId: null, freshInterrupted: true }), 'home');
 });
 
 // 新会话页默认档摘要：模型 · 权限 · 思考；缺项跳过；全空回落固定文案。

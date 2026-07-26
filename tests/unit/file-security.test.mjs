@@ -117,34 +117,45 @@ test.describe('isOwnerOnly / fixPermissions / checkPermissions', () => {
   });
 });
 
-// resolveExecutableViaPath：跨平台 PATH 查找（POSIX which / win32 where）。platform+exec 依赖注入，
-// 不依赖真机 which/where 二进制——win32 分支此前从未被测试覆盖过（原 app.js/doctor.js 硬编码 `which`）。
+// resolveExecutableViaPath：跨平台 PATH 查找（POSIX which / win32 where）。
+// platform+execFile 依赖注入，不依赖真机 which/where；execFile 不经 shell，name 先过白名单。
 test.describe('resolveExecutableViaPath', () => {
-  test('非 win32：调用 which，trim 后返回', () => {
-    let calledWith;
-    const exec = cmd => { calledWith = cmd; return '/usr/local/bin/claude\n'; };
-    const result = resolveExecutableViaPath('claude', { platform: 'linux', exec });
-    assert.equal(calledWith, 'which claude');
+  test('非 win32：调用 which（execFile 形参），trim 后返回', () => {
+    let called;
+    const execFile = (bin, args) => { called = { bin, args }; return '/usr/local/bin/claude\n'; };
+    const result = resolveExecutableViaPath('claude', { platform: 'linux', execFile });
+    assert.deepEqual(called, { bin: 'which', args: ['claude'] });
     assert.equal(result, '/usr/local/bin/claude');
   });
 
   test('win32：调用 where 而非 which', () => {
-    let calledWith;
-    const exec = cmd => { calledWith = cmd; return 'C:\\tools\\claude.exe\r\n'; };
-    const result = resolveExecutableViaPath('claude', { platform: 'win32', exec });
-    assert.equal(calledWith, 'where claude');
+    let called;
+    const execFile = (bin, args) => { called = { bin, args }; return 'C:\\tools\\claude.exe\r\n'; };
+    const result = resolveExecutableViaPath('claude', { platform: 'win32', execFile });
+    assert.deepEqual(called, { bin: 'where', args: ['claude'] });
     assert.equal(result, 'C:\\tools\\claude.exe');
   });
 
   test('win32：where 命中多个时取第一行', () => {
-    const exec = () => 'C:\\a\\claude.exe\r\nC:\\b\\claude.exe\r\n';
-    const result = resolveExecutableViaPath('claude', { platform: 'win32', exec });
+    const execFile = () => 'C:\\a\\claude.exe\r\nC:\\b\\claude.exe\r\n';
+    const result = resolveExecutableViaPath('claude', { platform: 'win32', execFile });
     assert.equal(result, 'C:\\a\\claude.exe');
   });
 
-  test('exec 抛异常（命令不存在）→ 返回空字符串，不抛出', () => {
-    const exec = () => { throw new Error('not found'); };
-    const result = resolveExecutableViaPath('claude', { platform: 'linux', exec });
+  test('execFile 抛异常（命令不存在）→ 返回空字符串，不抛出', () => {
+    const execFile = () => { throw new Error('not found'); };
+    const result = resolveExecutableViaPath('claude', { platform: 'linux', execFile });
     assert.equal(result, '');
+  });
+
+  test('危险 name（空格/元字符/空）→ 直接返回空，绝不调用 execFile', () => {
+    let called = false;
+    const execFile = () => { called = true; return '/x'; };
+    assert.equal(resolveExecutableViaPath('claude; rm -rf /', { platform: 'linux', execFile }), '');
+    assert.equal(resolveExecutableViaPath('claude && id', { platform: 'linux', execFile }), '');
+    assert.equal(resolveExecutableViaPath('claude $(id)', { platform: 'linux', execFile }), '');
+    assert.equal(resolveExecutableViaPath('', { platform: 'linux', execFile }), '');
+    assert.equal(resolveExecutableViaPath(null, { platform: 'linux', execFile }), '');
+    assert.equal(called, false);
   });
 });

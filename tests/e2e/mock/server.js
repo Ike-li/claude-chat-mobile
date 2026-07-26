@@ -39,6 +39,12 @@ let mockUnreadOnEntry = 0; // 未读角标：模拟真 server sync:since 的 ack
 let mockUnreadOnEntryInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
+// P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
+// reconnectDrawerTitleChanged 让 mainCwdSessions() 返回改过名的主工作区会话标题，模拟"断线期间被自主
+// 续跑改名"；reconnectSettleMarkerArmed 让下一次 connection handler 在 emitHydration() 之后再追加一条
+// system 哨兵消息——E2E 用它确定性地等到"这次重连的 instances 广播已处理完"，不必用禁用的 waitForTimeout。
+let reconnectDrawerTitleChanged = false;
+let reconnectSettleMarkerArmed = false;
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
 const queuedEchoItems = new Map(); // busy 期回显为 queued 的消息 clientMessageId → {text}：user:cancelQueued 撤回 / interrupt 连带取消 都按它对账
 let foregroundSyncReplayMode = false;
@@ -47,6 +53,17 @@ let foregroundFoundMissingHistoryMode = false;
 // P0-SCROLL-1：切走 inst_2 再切回时验证「补发内容后强制落底」——第一次 sync:since 回放固定内容
 // （建 DOM 缓存），第二次（切回）才追加"离开期间产生的新内容"模拟离开期间后台继续产出。
 let switchBackReplayArmed = false;
+// P0-REPLAY-BUFFER：回放缓冲——inst_replay_flood/inst_replay_small 同 inst_scroll_replay 的两段式
+// 门控，但 sync:since 的"第几次调用"与 session:history 的"第几次调用"是两次独立的 socket 往返
+// （ack 回来后客户端才会另发 session:history），必须用各自独立的 armed 标记，不能共用一个——
+// 否则 sync:since 那次调用早把标记翻成 true，session:history 的"第一次"就会误读成"第二次"。
+let replayFloodSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 165 条积压事件（超阈值 → reload）
+let replayFloodHistoryArmed = false; // false=返回基线 4 条；true=返回 reload 专属标记文案（证明真走了 session:history）
+let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 21 条积压事件（低于阈值 → flush）
+// P0-REPLAY-UNREAD-DISMISS：同 replaySmallSyncArmed 两段式门控，但第二次 ack 额外挂 unreadOnEntry——
+// 验证回放缓冲程序性落底与未读胶囊自动确认已读的协同（不复用 mockUnreadOnEntry* 单例，见下方
+// sync:since handler 内联的 extra.unreadOnEntry，自包含不受测试执行顺序影响）。
+let replayUnreadSyncArmed = false;
 let pendingDevices = [];
 let alwaysAllowedPermissionNamesByInstance = new Map();
 let activeEpoch = 'mock-epoch-init';
@@ -80,11 +97,17 @@ function resetMockState() {
   mockUnreadOnEntryInstanceId = null;
   lateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
+  reconnectDrawerTitleChanged = false;
+  reconnectSettleMarkerArmed = false;
   busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
   foregroundFoundMissingHistoryMode = false;
   switchBackReplayArmed = false;
+  replayFloodSyncArmed = false;
+  replayFloodHistoryArmed = false;
+  replaySmallSyncArmed = false;
+  replayUnreadSyncArmed = false;
   pendingDevices = [];
   alwaysAllowedPermissionNamesByInstance = new Map();
   activeEpoch = 'mock-epoch-init';
@@ -261,7 +284,9 @@ function mainCwdSessions() {
   const sessions = [
     {
       id: 'mock-session-visual-test',
-      title: 'Visual Sandbox (Main)',
+      // P3 抽屉局部重建回归：断线期间"自主续跑"改了标题，reconnect 后 session:list 应该带新标题——
+      // 见 reconnectDrawerTitleChanged 顶部注释 + test:reconnect-drawer-refresh。
+      title: reconnectDrawerTitleChanged ? 'Renamed After Reconnect' : 'Visual Sandbox (Main)',
       model: 'claude-3-5-sonnet',
       lastUsedAt: Date.now() - 10000,
       entrypoint: 'sdk-ts'
@@ -407,6 +432,21 @@ io.on('connection', socket => {
   };
 
   emitHydration();
+
+  // P3 抽屉局部重建回归夹具：本次（re）连接是断线重连测试武装的，emitHydration() 的 instances 广播
+  // 已经在上面同步发出去了——socket.io 单连接内消息严格按发送顺序送达，客户端必然先处理完 instances
+  // 广播才会收到并渲染这条哨兵 system 消息。E2E 等它出现，即可确定性地知道"这次重连触发的面板判定
+  // 已经跑完"，不需要引入被 npm run check 禁掉的 waitForTimeout。一次性：消费后立即回落，避免后续
+  // 普通重连也带上它。seq 必须大于武装它的那条 test:reconnect-drawer-* 命令已用过的最高 seq（该命令
+  // 的 result 事件用了 seq:2，同 epoch 未变）——event-dispatch.js 的去重逻辑按 (epoch, seq) 判定，
+  // seq 不严格递增会被判成"重复/陈旧事件"直接丢弃、客户端根本看不到（曾在此踩坑：用 seq:1 被吞）。
+  if (reconnectSettleMarkerArmed) {
+    reconnectSettleMarkerArmed = false;
+    socket.emit('agent:event', {
+      seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+      type: 'system', payload: { message: '[MOCK_INFO] Reconnect drawer settle marker.' }
+    });
+  }
 
   // Handle setting permission mode
   socket.on('user:setPermissionMode', payload => {
@@ -652,6 +692,32 @@ io.on('connection', socket => {
               model: 'claude-3-5-sonnet',
               lastUsedAt: Date.now() - 300,
               entrypoint: 'sdk-ts'
+            },
+            {
+              // P0-REPLAY-BUFFER：会话面板行由 session:list 驱动（liveInst 只是叠加角标/已打开态，
+              // 见 app.js populateSubtree renderRows——不在这份列表里的 live-only 实例不会出现一行），
+              // 这两条必须与 mockInstances 里 test:replay-buffer-*-setup 注册的 sessionId 对上，
+              // 否则侧栏点不到、测试会卡在 openSessionByTitle 超时（同 mock-session-scroll-replay 的模式）。
+              id: 'mock-session-replay-flood',
+              title: 'Replay Flood Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: Date.now() - 200,
+              entrypoint: 'sdk-ts'
+            },
+            {
+              id: 'mock-session-replay-small',
+              title: 'Replay Small Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: Date.now() - 100,
+              entrypoint: 'sdk-ts'
+            },
+            {
+              // P0-REPLAY-UNREAD-DISMISS：回放缓冲程序性落底 × 未读胶囊自动确认已读协同场景专用。
+              id: 'mock-session-replay-unread',
+              title: 'Replay Unread Session',
+              model: 'claude-3-5-sonnet',
+              lastUsedAt: Date.now() - 50,
+              entrypoint: 'sdk-ts'
             }
           ]
         });
@@ -842,6 +908,43 @@ io.on('connection', socket => {
         });
       }
       callback({ messages });
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-replay-flood') {
+      // P0-REPLAY-BUFFER（大量积压→reload）：第一次冷切入返回一小段基线（建 DOM 缓存）；第二次
+      // （bufferAction='reload' 后 loadHistory 重新拉取）返回"磁盘权威真相"，文案与 sync:since 那 165
+      // 条 live 回放事件（"Flood live reply #N"）完全不同——断言只应看到这里的文案，看不到那边的，
+      // 才能证明真的走了清屏 + session:history 批量渲染，而不是把缓冲事件逐条渲染出来。
+      if (!replayFloodHistoryArmed) {
+        replayFloodHistoryArmed = true;
+        const messages = [];
+        for (let i = 0; i < 4; i++) {
+          messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Flood baseline message #${i}` });
+        }
+        callback({ messages });
+      } else {
+        callback({
+          messages: [
+            { role: 'user', content: 'Flood baseline message #0' },
+            { role: 'assistant', content: 'Flood reload marker: disk history now reflects everything that piled up while away.' }
+          ]
+        });
+      }
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-replay-small') {
+      // P0-REPLAY-BUFFER（少量积压→flush）：flush 路径不清屏、不重拉 session:history，这里恒定返回
+      // 基线内容——若因回归错误地被第二次调用，仍只会重渲染这份基线（不含"Small live reply #N"），
+      // 断言据此能抓到误判成 reload 的回归。
+      const messages = [];
+      for (let i = 0; i < 4; i++) {
+        messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Small baseline message #${i}` });
+      }
+      callback({ messages });
+    } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-replay-unread') {
+      // P0-REPLAY-UNREAD-DISMISS：首次冷切入基线（同 mock-session-replay-small 套路，建 DOM 缓存）；
+      // 第二次切回走 flush（不重拉 session:history），这里恒定返回同一份基线。
+      const messages = [];
+      for (let i = 0; i < 4; i++) {
+        messages.push({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Unread replay baseline message #${i}` });
+      }
+      callback({ messages });
     } else if (cwd === '/Users/you/code/another-react-project' && sessionId === 'mock-session-another') {
       // TC-7 并发 tab：冷切入 inst_2 时 shouldReloadOnEnter(!hasCache && replayed>0)→reload，
       // 会 clearView 掉 sync:since 活缓冲回放，必须以磁盘 history 为真相源回填（否则 hydrated=0）。
@@ -997,6 +1100,17 @@ io.on('connection', socket => {
     if (typeof ack === 'function') ack({ ok: true, t: Date.now() });
   });
 
+  // client:presence（PWA 前台/后台上报，与真 server 对齐）：无 ack，mock 无推送判定逻辑可影响，
+  // no-op 接收即可（仅需满足入向事件契约扫描，见 scripts/agent-event-contract.js）。
+  socket.on('client:presence', () => {});
+
+  // config:refresh（CLI 配置刷新按钮，与真 server 对齐）：mock 无真实 CLI settings 可重读，ack ok 即可；
+  // 小延迟让 E2E 能稳定抓到按钮的禁用→转圈→恢复这段瞬态（真 server 那边 sdkResolveSettings 本身也非零耗时）。
+  socket.on('config:refresh', async (_payload, ack) => {
+    await delay(150);
+    if (typeof ack === 'function') ack({ ok: true });
+  });
+
   // 服务状态面板（与真 server service:status 契约对齐，判定化：不带裸计数器）：确定性 payload 供 E2E 断言；
   // deliveryFailure 由 test:service-delivery-failure 注入，rateLimitLockout/clientError 由 test:service-incidents 注入
   socket.on('service:status', (_payload, ack) => {
@@ -1081,6 +1195,96 @@ io.on('connection', socket => {
         });
         ack(3);
       }
+    } else if (instanceId === 'inst_replay_flood') {
+      // P0-REPLAY-BUFFER（大量积压→reload）：第一次冷入场同 inst_scroll_replay，只 ack(0) 走
+      // loadHistory 建 DOM 缓存。第二次（切回）一口气推 55 轮×3 事件=165 条（user_message+text_delta+
+      // result），远超 REPLAY_BUFFER_RELOAD_THRESHOLD（logic.js，100）——客户端应判定 'reload'：
+      // 丢弃这批缓冲事件、改走上面 session:history 的第二段"权威真相"，故这里的 "Flood live reply #N"
+      // 文案绝不应该出现在最终渲染结果里。
+      if (!replayFloodSyncArmed) {
+        replayFloodSyncArmed = true;
+        ack(0);
+      } else {
+        const epoch = 'mock-epoch-replay-flood';
+        const sid = 'mock-session-replay-flood';
+        for (let i = 0; i < 55; i++) {
+          const mid = `flood_msg_${i}`;
+          const ts = Date.now();
+          socket.emit('agent:event', {
+            seq: i * 3 + 1, epoch, sessionId: sid, instanceId: 'inst_replay_flood', ts,
+            type: 'user_message', payload: { text: `Flood live turn #${i}` }, replay: true
+          });
+          socket.emit('agent:event', {
+            seq: i * 3 + 2, epoch, sessionId: sid, instanceId: 'inst_replay_flood', ts,
+            type: 'text_delta', payload: { messageId: mid, text: `Flood live reply #${i} should never render (reload should discard it)` }, replay: true
+          });
+          socket.emit('agent:event', {
+            seq: i * 3 + 3, epoch, sessionId: sid, instanceId: 'inst_replay_flood', ts,
+            type: 'result', payload: { messageId: mid, durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] }, replay: true
+          });
+        }
+        ack(165);
+      }
+    } else if (instanceId === 'inst_replay_small') {
+      // P0-REPLAY-BUFFER（少量积压→flush）：第二次（切回）推 7 轮×3 事件=21 条，低于阈值——客户端
+      // 应判定 'flush'：按序正常派发（走原 handler），只是抑制中间各自的滚动、派发完一次性强制落底。
+      // 与基线（session:history 建立的 4 条）一起，最终应同时看到基线 + 这 21 条对应的内容。
+      if (!replaySmallSyncArmed) {
+        replaySmallSyncArmed = true;
+        ack(0);
+      } else {
+        const epoch = 'mock-epoch-replay-small';
+        const sid = 'mock-session-replay-small';
+        for (let i = 0; i < 7; i++) {
+          const mid = `small_msg_${i}`;
+          const ts = Date.now();
+          socket.emit('agent:event', {
+            seq: i * 3 + 1, epoch, sessionId: sid, instanceId: 'inst_replay_small', ts,
+            type: 'user_message', payload: { text: `Small live turn #${i}` }, replay: true
+          });
+          socket.emit('agent:event', {
+            seq: i * 3 + 2, epoch, sessionId: sid, instanceId: 'inst_replay_small', ts,
+            type: 'text_delta', payload: { messageId: mid, text: `Small live reply #${i} rendered via flush` }, replay: true
+          });
+          socket.emit('agent:event', {
+            seq: i * 3 + 3, epoch, sessionId: sid, instanceId: 'inst_replay_small', ts,
+            type: 'result', payload: { messageId: mid, durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] }, replay: true
+          });
+        }
+        ack(21);
+      }
+    } else if (instanceId === 'inst_replay_unread') {
+      // P0-REPLAY-UNREAD-DISMISS（回放缓冲程序性落底 × 未读胶囊自动确认已读协同）：同 inst_replay_small
+      // 的两段式门控（第二次切回推 21 条低于阈值的积压事件 → flush + scrollBottom(true) 程序性落底），
+      // 但第二次 ack 额外挂 unreadOnEntry=3——验证"切入积压未读会话时程序性落底不应误清胶囊，只有用户
+      // 后续真实滚动到底部才应该"（app.js shouldAckUnreadOnScroll + scrollBottom 的 programmaticScrollUntil
+      // 窗口）。ack() 默认按 mockUnreadOnEntry/mockUnreadOnEntryInstanceId 单例算出的值恒为 0（本场景不
+      // 设置那对全局字段）——用 extra.unreadOnEntry 直接覆盖，自包含，不与 test:unread-pill（inst_2）
+      // 等其它场景共享可变状态，不受测试执行顺序影响。
+      if (!replayUnreadSyncArmed) {
+        replayUnreadSyncArmed = true;
+        ack(0);
+      } else {
+        const epoch = 'mock-epoch-replay-unread';
+        const sid = 'mock-session-replay-unread';
+        for (let i = 0; i < 7; i++) {
+          const mid = `unread_replay_msg_${i}`;
+          const ts = Date.now();
+          socket.emit('agent:event', {
+            seq: i * 3 + 1, epoch, sessionId: sid, instanceId: 'inst_replay_unread', ts,
+            type: 'user_message', payload: { text: `Unread replay live turn #${i}` }, replay: true
+          });
+          socket.emit('agent:event', {
+            seq: i * 3 + 2, epoch, sessionId: sid, instanceId: 'inst_replay_unread', ts,
+            type: 'text_delta', payload: { messageId: mid, text: `Unread replay live reply #${i} rendered via flush` }, replay: true
+          });
+          socket.emit('agent:event', {
+            seq: i * 3 + 3, epoch, sessionId: sid, instanceId: 'inst_replay_unread', ts,
+            type: 'result', payload: { messageId: mid, durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] }, replay: true
+          });
+        }
+        ack(21, { unreadOnEntry: 3 });
+      }
     } else if (instanceId === 'inst_gap') {
       socket.emit('agent:event', {
         seq: 1, epoch: 'mock-epoch-gap-partial', sessionId: 'mock-session-gap', instanceId: 'inst_gap', ts: Date.now(),
@@ -1135,6 +1339,7 @@ io.on('connection', socket => {
       setMockServiceIncidents: ({ rateLimitLockout = null, clientError = null } = {}) => {
         mockRateLimitLockout = rateLimitLockout; mockClientError = clientError;
       },
+      setViewingInstanceId: value => { viewingInstanceId = value; },
     })),
     ...createContentScenarios(() => ({
       io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay,
@@ -1466,6 +1671,83 @@ io.on('connection', socket => {
           });
         }
         switchBackReplayArmed = false;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      },
+    },
+    {
+      // P0-REPLAY-BUFFER（大量积压→reload）：同 test:scroll-replay-setup 两段式门控，但第二次切回时
+      // sync:since 推 165 条积压事件（远超阈值）——客户端应判定 reload，清屏改走 session:history。
+      command: 'test:replay-buffer-flood-setup',
+      run: async () => {
+        console.log('[mock] test:replay-buffer-flood-setup — 注册 inst_replay_flood（供验证大量积压走 reload 批量渲染）');
+        if (!mockInstances.some(i => i.instanceId === 'inst_replay_flood')) {
+          mockInstances.push({
+            instanceId: 'inst_replay_flood',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-replay-flood',
+            title: 'Replay Flood Session',
+            state: 'idle',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-sonnet'
+          });
+        }
+        replayFloodSyncArmed = false;
+        replayFloodHistoryArmed = false;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      },
+    },
+    {
+      // P0-REPLAY-BUFFER（少量积压→flush）：第二次切回时 sync:since 只推 21 条积压事件（低于阈值）——
+      // 客户端应判定 flush，正常增量派发但抑制中间滚动，不清屏、不重拉 session:history。
+      command: 'test:replay-buffer-small-setup',
+      run: async () => {
+        console.log('[mock] test:replay-buffer-small-setup — 注册 inst_replay_small（供验证少量积压走 flush 增量渲染）');
+        if (!mockInstances.some(i => i.instanceId === 'inst_replay_small')) {
+          mockInstances.push({
+            instanceId: 'inst_replay_small',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-replay-small',
+            title: 'Replay Small Session',
+            state: 'idle',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-sonnet'
+          });
+        }
+        replaySmallSyncArmed = false;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        });
+      },
+    },
+    {
+      // P0-REPLAY-UNREAD-DISMISS：同 test:replay-buffer-small-setup 套路（第二次切回走 flush），但那次
+      // ack 额外带 unreadOnEntry=3——验证回放缓冲程序性落底与未读胶囊自动确认已读的协同（不应被程序性
+      // 落底误清，只应被用户后续真实滚动到底部清除）。
+      command: 'test:replay-buffer-unread-setup',
+      run: async () => {
+        console.log('[mock] test:replay-buffer-unread-setup — 注册 inst_replay_unread（供验证程序性落底不误清未读胶囊）');
+        if (!mockInstances.some(i => i.instanceId === 'inst_replay_unread')) {
+          mockInstances.push({
+            instanceId: 'inst_replay_unread',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-replay-unread',
+            title: 'Replay Unread Session',
+            state: 'idle',
+            permissionMode: 'default',
+            effort: null,
+            model: 'claude-3-5-sonnet'
+          });
+        }
+        replayUnreadSyncArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
@@ -2102,6 +2384,91 @@ io.on('connection', socket => {
       },
     },
     {
+      // P3 抽屉局部重建 + SWR 保鲜回归夹具①：断线重连但数据"零变化"——验证 sessionsCache 不被清空、
+      // openSessionPanel/rebuildDirSections 不做无意义的整段重建：抽屉已展开的目录 DOM 节点应原样
+      // 保留（不出现骨架屏闪现）。先同 test:tab 补一个第二工作区，覆盖"多目录场景下都不受扰动"。
+      command: 'test:reconnect-drawer-quiet',
+      run: async () => {
+        console.log('[mock] test:reconnect-drawer-quiet — 断线重连但数据零变化，验证抽屉 DOM 不被无谓重建');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another',
+            title: 'Another App Concurrency',
+            state: 'idle',
+            permissionMode: 'plan',
+            effort: 'medium',
+            model: 'claude-3-5-haiku'
+          });
+        }
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+        // 尽快结束这一轮（result），不留悬空 busy 态干扰后续断线重连观测。
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_reconnect_quiet_1', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] }
+        });
+        // 给 E2E 测试留足时间在断线前展开两个目录、等 session:list 落地、给行元素打标记——这个窗口
+        // 必须显著大于"展开目录→发 session:list→收到 ack"这段路径可能耗费的真实时间，否则断线可能
+        // 卡在某个目录的 session:list 请求已发出但 ack 还没收到的节点上：那次 ack 永远丢失（socket.io
+        // 断线中的 ack 不会重投），该目录就会一直卡在骨架屏，直到用户手动折叠再展开——2.5s 留足冗余。
+        await delay(2500);
+        reconnectSettleMarkerArmed = true;
+        setTimeout(() => socket.disconnect(true), 50);
+      },
+    },
+    {
+      // P3 抽屉局部重建 + SWR 保鲜回归夹具②：断线期间主工作区会话"真的"被改名（模拟自主续跑产出新
+      // 标题），reconnect 后验证：① 抽屉确实显示新标题（不是缓存钝化的旧内容）；② 未涉及的其它工作区
+      // 目录 DOM 不被连坐重建（按目录分键 diff 只重建真正变化的那一个目录）。
+      command: 'test:reconnect-drawer-refresh',
+      run: async () => {
+        console.log('[mock] test:reconnect-drawer-refresh — 断线期间改主工作区标题，reconnect 后核对局部刷新');
+        if (!mockInstances.some(i => i.instanceId === 'inst_2')) {
+          mockInstances.push({
+            instanceId: 'inst_2',
+            cwd: '/Users/you/code/another-react-project',
+            sessionId: 'mock-session-another',
+            title: 'Another App Concurrency',
+            state: 'idle',
+            permissionMode: 'plan',
+            effort: 'medium',
+            model: 'claude-3-5-haiku'
+          });
+        }
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances
+          }
+        });
+        // 尽快结束这一轮（result），不留悬空 busy 态干扰后续断线重连观测。
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_reconnect_refresh_1', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] }
+        });
+        // 同 test:reconnect-drawer-quiet：2.5s 冗余窗口，避免断线卡在某个目录的 session:list 请求
+        // 已发出但 ack 还没收到的节点上。
+        await delay(2500);
+        reconnectDrawerTitleChanged = true;
+        const mainInst = mockInstances.find(i => i.instanceId === 'inst_1');
+        if (mainInst) mainInst.title = 'Renamed After Reconnect';
+        reconnectSettleMarkerArmed = true;
+        setTimeout(() => socket.disconnect(true), 50);
+      },
+    },
+    {
       command: 'test:tab',
       run: async () => {
         console.log('[mock] Simulating multiple tab concurrency');
@@ -2711,6 +3078,20 @@ io.on('connection', socket => {
     const cmd = text.trim();
 
     console.log(`[mock] User message received: "${cmd}"`);
+
+    // 回归（全新会话首轮点停止后不跳回主页）：test:fresh-interrupt 需要在【回显用户消息之前】就已
+    // 存在懒开的 FRESH 实例（sessionId=null，对齐真实 server 未见 SDK init 的窗口）——否则本函数下方
+    // "Always echo"会先用 viewingInstanceId=null 广播 user_message，随后才广播的 instances 触发前端
+    // bindView→clearView 会把刚回显的气泡一并清空。真实 server 的时序是反过来的：懒开先 broadcastInstances()
+    // 后才 a.send()（才 emit user_message）——此处提前创建，让回显自然带上正确的 instanceId，对齐真实时序。
+    if (cmd === 'test:fresh-interrupt' && viewingInstanceId === null) {
+      console.log('[mock] test:fresh-interrupt — 模拟新会话首发、sessionId 未到即可能被点停止');
+      openFreshMockInstance(requestedModel);
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+      });
+    }
 
     // Always echo user message back
     // 排队语义镜像真实 server：busy 期间发的消息 queued:true + 透传 clientMessageId（撤回按它定位）

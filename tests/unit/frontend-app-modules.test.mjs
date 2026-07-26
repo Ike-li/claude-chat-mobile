@@ -8,7 +8,7 @@ import { createAlertController } from '../../public/js/app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from '../../public/js/app/attachments.js';
 import { createRttMonitor } from '../../public/js/app/connection-sync.js';
 import { createMessageRenderer } from '../../public/js/app/message-renderer.js';
-import { createAgentEventDispatcher } from '../../public/js/app/event-dispatch.js';
+import { createAgentEventDispatcher, createReplayBuffer } from '../../public/js/app/event-dispatch.js';
 import { formatFileSize, cmModeForFileName } from '../../public/js/app/file-browser.js';
 import { createSettingsController } from '../../public/js/app/settings.js';
 import { createNotificationController } from '../../public/js/app/notifications.js';
@@ -441,6 +441,85 @@ test('agent event dispatcher marks isReplayBatch for out-of-band replay events',
 
   assert.deepEqual(seen, [true, false]);
   assert.equal(state.isReplayBatch, false);
+});
+
+// 回放缓冲：OOB 不入队 / 超时按阈值决策 / discard 清队列（code review 修复回归）
+test.describe('createReplayBuffer：OOB 旁路 + 超时决策 + discard', () => {
+  function makeBuffer(opts = {}) {
+    const dispatched = [];
+    const scrolls = [];
+    let seq = 0;
+    let epoch = null;
+    const buf = createReplayBuffer({
+      dispatch: (e) => dispatched.push(e),
+      scrollBottom: (force) => scrolls.push(force),
+      withScrollSuppressed: (fn) => fn(),
+      setSeq: (v) => { seq = v; },
+      setEpoch: (v) => { epoch = v; },
+      timeoutMs: opts.timeoutMs ?? 50,
+      decideTimeoutAction: opts.decideTimeoutAction,
+      isOutOfBand: opts.isOutOfBand,
+    });
+    return { buf, dispatched, scrolls, getSeq: () => seq, getEpoch: () => epoch };
+  }
+
+  test('offer：同 instance 的对话流事件入队；OOB（mirror_state/history_append）不入队', () => {
+    const { buf, dispatched } = makeBuffer({ timeoutMs: 60_000 });
+    buf.begin('inst-1');
+    assert.equal(buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 }), true);
+    assert.equal(buf.offer({ type: 'mirror_state', instanceId: 'inst-1', epoch: 'server', seq: 0 }), false);
+    assert.equal(buf.offer({ type: 'history_append', instanceId: 'inst-1', epoch: 'server', seq: 0 }), false);
+    assert.equal(buf.offer({ type: 'task_notification', instanceId: 'inst-1', epoch: 'e1', seq: 2 }), false);
+    assert.equal(buf.bufferedCount('inst-1'), 1);
+    assert.deepEqual(dispatched, []);
+  });
+
+  test("resolve('reload')：只推进基线、不派发缓冲事件", () => {
+    const { buf, dispatched, getSeq, getEpoch } = makeBuffer({ timeoutMs: 60_000 });
+    const h = buf.begin('inst-1');
+    buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 5 });
+    buf.offer({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 6 });
+    buf.resolve(h, 'reload');
+    assert.deepEqual(dispatched, []);
+    assert.equal(getSeq(), 6);
+    assert.equal(getEpoch(), 'e1');
+    assert.equal(buf.bufferedCount('inst-1'), 0);
+  });
+
+  test('超时：decideTimeoutAction 返回 reload → 只推进基线，不 flush 成打字机', async () => {
+    const { buf, dispatched, getSeq } = makeBuffer({
+      timeoutMs: 20,
+      decideTimeoutAction: ({ bufferedCount }) => (bufferedCount >= 2 ? 'reload' : 'flush'),
+    });
+    buf.begin('inst-1');
+    buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 });
+    buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 2 });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.deepEqual(dispatched, [], '超阈值超时应走 reload，不逐条 dispatch');
+    assert.equal(getSeq(), 2);
+  });
+
+  test('超时：decideTimeoutAction 返回 flush → 按序派发', async () => {
+    const { buf, dispatched } = makeBuffer({
+      timeoutMs: 20,
+      decideTimeoutAction: () => 'flush',
+    });
+    buf.begin('inst-1');
+    buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(dispatched.length, 1);
+    assert.equal(dispatched[0].seq, 1);
+  });
+
+  test("resolve(handle, 'discard')：清队列不推进基线、不派发", () => {
+    const { buf, dispatched, getSeq } = makeBuffer({ timeoutMs: 60_000 });
+    const h = buf.begin('inst-1');
+    buf.offer({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 9 });
+    buf.resolve(h, 'discard');
+    assert.deepEqual(dispatched, []);
+    assert.equal(getSeq(), 0);
+    assert.equal(buf.bufferedCount('inst-1'), 0);
+  });
 });
 
 test('file browser formats byte counts consistently for directory and content pages', () => {

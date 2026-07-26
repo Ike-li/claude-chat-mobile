@@ -76,4 +76,29 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-10e CLI 状态暂不可用时，账号级额度快照回落仍可展示（明确标注非实时）', async ({ page }) => {
+    await gotoMock(page);
+
+    // 1. cli-unavailable + 账号级额度快照回落（rate + rateFromSnapshot:true）：
+    //    "CLI 状态暂不可用" 提示与额度回落行应同时出现，且必须清楚标注非实时，防止用户误判 CLI 状态本身正常。
+    await sendChatMessage(page, 'test:cli-statusline-unavailable-rate');
+    await waitForIdle(page);
+    await page.locator('#cliStatusWrap summary').click();
+    await expect(page.locator('#cliStatus')).toContainText('CLI 状态暂不可用');
+    await expect(page.locator('#cliStatus')).toContainText('5h 42%');
+    await expect(page.locator('#cliStatus')).toContainText('7d 11%');
+    await expect(page.locator('#cliStatus')).toContainText('非实时');
+
+    // 2. 反向场景：cli-unavailable 但没有 rate 字段（本修复前的原始行为）——必须仍是干净的
+    //    "CLI 状态暂不可用"，不能把上一条消息里的额度回落残留下来（防止本次改动引入"清空不彻底"的新 bug）。
+    await sendChatMessage(page, 'test:cli-statusline-unavailable');
+    await waitForIdle(page);
+    await expect(page.locator('#cliStatus')).toContainText('CLI 状态暂不可用');
+    await expect(page.locator('#cliStatus')).not.toContainText('5h');
+    await expect(page.locator('#cliStatus')).not.toContainText('7d');
+    await expect(page.locator('#cliStatus')).not.toContainText('非实时');
+
+    await expectNoBrowserErrors(page);
+  });
 });

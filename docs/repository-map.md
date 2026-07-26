@@ -33,29 +33,29 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 1 |
-| Backend source | 48 |
+| Backend source | 49 |
 | Configuration template | 1 |
 | Deployment | 3 |
 | Documentation | 4 |
-| E2E test | 37 |
+| E2E test | 40 |
 | Frontend asset | 2 |
-| Frontend source | 22 |
+| Frontend source | 23 |
 | Generated asset | 6 |
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
 | Instructions | 2 |
-| Integration test | 18 |
+| Integration test | 21 |
 | Legal | 2 |
-| Maintainer tooling | 19 |
+| Maintainer tooling | 20 |
 | Project configuration | 4 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 98 |
+| Unit test | 103 |
 | Vendored asset | 21 |
 
-Total classified files: **310**.
+Total classified files: **324**.
 
 ## Complete file inventory
 
@@ -102,6 +102,7 @@ Total classified files: **310**.
 | `public/js/app/settings.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/task-status.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/canonicalize.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/i18n.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/logic.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/ring-buffer.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/sw-cleanup.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -142,6 +143,7 @@ Total classified files: **310**.
 | `scripts/doc-consistency.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/doctor.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/gen-icons.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/i18n-check.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/release.sh` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/render-plist.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/repo-inventory.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
@@ -183,6 +185,7 @@ Total classified files: **310**.
 | `src/ops/notifications.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/notify-channels.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/statusline.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/ops/usage-snapshot.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/app.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/config.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/http.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -219,13 +222,16 @@ Total classified files: **310**.
 | `tests/e2e/p0/git-changes.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/goto-mock-error-accumulation.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/history-fork.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/i18n.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/input-send-empty.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/instance-destroyed-notice.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/long-history-render.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/long-stream-interrupt.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/new-session-first-send.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/pending-snapshot-reconcile.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/permission-allow-deny.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/queued-messages.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/replay-buffer.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/security-observable-ui.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/service-status-panel.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/settings-github-link.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
@@ -248,12 +254,15 @@ Total classified files: **310**.
 | `tests/integration/auth-token.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/cf-access-gate.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/claude-lifecycle.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
+| `tests/integration/config-refresh.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/device-approval-isolation.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/device-revoke-symmetry.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/file-browse.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/file-upload.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/message-idempotency.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/metrics-endpoint.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
+| `tests/integration/notification-background-running.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
+| `tests/integration/notification-presence.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/rate-limit.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/server.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/session-delete.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
@@ -318,6 +327,8 @@ Total classified files: **310**.
 | `tests/unit/history-list.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-messages.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-sync.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/i18n-check.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/i18n.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/instance-latches.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/instance-manager.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/instance-routing.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
@@ -331,10 +342,12 @@ Total classified files: **310**.
 | `tests/unit/logic-content.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-diag-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-history-fork.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-instance-destroyed.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-live-status.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-mirror-sync.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-rendering.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-service-status.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-session-panel.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-session.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-ui-state.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-ui-ux-remaining.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
@@ -366,6 +379,7 @@ Total classified files: **310**.
 | `tests/unit/sw.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/unread-tracker.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/uploads.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/usage-snapshot.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/visual-mock-registry-guard.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/visual-mock-scenarios.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/workdir-scope-guard.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
