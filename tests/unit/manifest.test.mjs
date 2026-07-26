@@ -57,3 +57,13 @@ test('index.html theme-color 拆 light/dark 两条 media，暗色值与 :root da
 test('apple-touch-icon 指向 180×180（Apple 推荐尺寸）', () => {
   assert.match(html, /apple-touch-icon[^>]*180/i);
 });
+
+// 主屏短名有两个独立来源（Android 读 manifest.short_name，iOS 读 apple-mobile-web-app-title），
+// 改一处漏另一处会让两端主屏显示不同的名字——这里锁死「同一个值」而非各测各的。
+test('主屏短名 = CCM，且 iOS/Android 两处不分叉', () => {
+  const appleTitle = html.match(
+    /<meta\s+name="apple-mobile-web-app-title"\s+content="([^"]*)"/i,
+  )?.[1];
+  assert.equal(manifest.short_name, 'CCM', 'manifest.short_name（Android 主屏名）');
+  assert.equal(appleTitle, 'CCM', 'apple-mobile-web-app-title（iOS 主屏名）与 short_name 分叉');
+});

@@ -1,6 +1,6 @@
 {
   "name": "Claude Chat Mobile",
-  "short_name": "Claude",
+  "short_name": "CCM",
   "description": "在手机上操作本机的 Claude Code",
   "id": "/",
   "start_url": "/",
