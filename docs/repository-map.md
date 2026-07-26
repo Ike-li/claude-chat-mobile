@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 104 |
+| Unit test | 105 |
 | Vendored asset | 21 |
 
-Total classified files: **326**.
+Total classified files: **327**.
 
 ## Complete file inventory
 
@@ -346,6 +346,7 @@ Total classified files: **326**.
 | `tests/unit/logic-instance-destroyed.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-live-status.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-mirror-sync.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-recents.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-rendering.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-service-status.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-session-panel.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

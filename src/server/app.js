@@ -2298,6 +2298,32 @@ registerSocketConnection(io, socket => {
     if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });
   });
 
+  // session:switch 与 session:fork 的「打开/聚焦」收尾——两者此前是逐行复制的同一段（13 组语句、
+  // 顺序全同），改一处必须记得改另一处。差异只在前半段（fork 多一步 sdkForkSession、用新 id；switch
+  // 有 instanceForSession 去重短路），故只抽收尾，前半段留在各自调用侧。
+  // 注：session:new / session:home 看似也有重复，但它们是「不带实例的空首页」语义（viewingInstanceId=null、
+  // 无 inst 相关调用），且共享的 6 个调用在两处穿插位置不同（new 里夹着 pendingMode 清理与 openScoutInstance），
+  // 合并需重排调用顺序——为观感冒行为风险，有意不动。
+  function finishOpenFocus(inst, cwd, sessionId, ack) {
+    viewingInstanceId = inst.instanceId;
+    viewingCwd = cwd;
+    sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（session:list 的 currentSessionId 等）
+    // 用户打开/切回本会话 → 续期空闲看护（含刚 resume 的新实例，避免随后立刻被旧时钟误判）
+    inst.touchActivity?.();
+    // 切会话立即清全局 mirror；catchUpTick 切换分支会按新会话尾部形态重判预锁
+    clearMirrorOnViewChange();
+    doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);
+    // 未读角标：与 user:setViewing 对称——首页最近列表/未打开会话走这里聚焦 live 实例时也要冻结未读，
+    // 否则 sync:since 的 unreadOnEntry 恒 0、胶囊永不出现（侧栏 live 走 setViewing 已有此调用）。
+    captureUnreadSnapshot(inst.instanceId);
+    broadcastInstances();
+    pushModelsForCwd(cwd); // 切区即时推本区清单（无缓存→空）；随后 resume 实例的真 models 兜底
+    pushSlashCommandsForCwd(cwd); // 同 models：切区推本区 slash；无缓存保留前端缓存，resume 真 init 校正
+    lastStatusLine = null;
+    scheduleStatusRefresh();
+    if (typeof ack === 'function') ack({ ok: true, instanceId: inst.instanceId, sessionId });
+  }
+
   on(socket, 'session:switch', async (payload, ack) => {
     const sessionId = payload?.sessionId;
     // 台阶3：在指定 cwd 内打开/聚焦会话（缺省当前查看实例 cwd）。ensureWhitelisted 同 session:new(#8)：
@@ -2320,23 +2346,7 @@ registerSocketConnection(io, socket => {
     sessions.bumpGeneration(cwd);
     // forSession 已跳过 terminating/disposed；命中则是可续用 live，fresh resume 仅在无 live 时。
     const inst = instanceForSession(sessionId) || await dedupedResume(cwd, sessionId);
-    viewingInstanceId = inst.instanceId;
-    viewingCwd = cwd;
-    sessions.setCurrent(cwd, sessionId); // 记为该 cwd 最后查看会话（session:list 的 currentSessionId 等）
-    // 用户打开/切回本会话 → 续期空闲看护（含刚 resume 的新实例，避免随后立刻被旧时钟误判）
-    inst.touchActivity?.();
-    // 切会话立即清全局 mirror；catchUpTick 切换分支会按新会话尾部形态重判预锁
-    clearMirrorOnViewChange();
-    doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);
-    // 未读角标：与 user:setViewing 对称——首页最近列表/未打开会话走 session:switch 聚焦 live 实例时也要冻结未读，
-    // 否则 sync:since 的 unreadOnEntry 恒 0、胶囊永不出现（侧栏 live 走 setViewing 已有此调用）。
-    captureUnreadSnapshot(inst.instanceId);
-    broadcastInstances();
-    pushModelsForCwd(cwd); // 切区即时推本区清单（无缓存→空）；随后 resume 实例的真 models 兜底
-    pushSlashCommandsForCwd(cwd); // 同 models：切区推本区 slash；无缓存保留前端缓存，resume 真 init 校正
-    lastStatusLine = null;
-    scheduleStatusRefresh();
-    if (typeof ack === 'function') ack({ ok: true, instanceId: inst.instanceId, sessionId });
+    finishOpenFocus(inst, cwd, sessionId, ack);
   });
 
   // 从历史消息某点分叉新会话：官方 forkSession 复制 transcript 到新文件（重映射 uuid、保留 parentUuid
@@ -2358,19 +2368,7 @@ registerSocketConnection(io, socket => {
     const { sessionId: newId } = await sdkForkSession(sessionId, { dir: cwd, upToMessageId: uuid });
     sessions.bumpGeneration(cwd);
     const inst = await dedupedResume(cwd, newId);
-    viewingInstanceId = inst.instanceId;
-    viewingCwd = cwd;
-    sessions.setCurrent(cwd, newId);
-    inst.touchActivity?.();
-    clearMirrorOnViewChange();
-    doneInstances.delete(inst.instanceId); errorInstances.delete(inst.instanceId); abortedInstances.delete(inst.instanceId);
-    captureUnreadSnapshot(inst.instanceId);
-    broadcastInstances();
-    pushModelsForCwd(cwd);
-    pushSlashCommandsForCwd(cwd);
-    lastStatusLine = null;
-    scheduleStatusRefresh();
-    if (typeof ack === 'function') ack({ ok: true, instanceId: inst.instanceId, sessionId: newId });
+    finishOpenFocus(inst, cwd, newId, ack);
   });
 
   // 台阶3 新增：关闭 tab。dispose 该实例（杀进程、deny 挂起审批、释放配额）；会话留盘可经 session:switch 再开。
