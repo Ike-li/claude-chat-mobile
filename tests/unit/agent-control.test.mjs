@@ -265,6 +265,66 @@ test.describe('interrupt()', () => {
     s.dispose();
   });
 
+  // 2026-07-26 现场：web 发 /clear 后账面 pendingTurns 卡在 1，用户点停止 → q.interrupt() 正常
+  // resolve（diag: outcome=success / droppedCount=0 / pendingTurnsAfter=1），但 SDK 侧那一轮早在
+  // 10 分钟前就结束了、不会再产生配对 result → busy 永挂 30min，只能靠 idleTimeoutMs(10min) 兜底，
+  // 而用户每次切进该 tab 都会刷新 lastActivity 给它续命，实际等于无解。
+  // 不对称之处：interrupt 抛错/超时的 catch 分支反有 settleForce() 强制清零 —— 成功路径比失败路径
+  // 更容易卡死。这里给成功路径补一层结算兜底。
+  test('interrupt 成功但配对 result 不到 → 结算兜底清账（且不 abort 子进程）', async () => {
+    const { s, events } = makeSession();
+    s.pendingTurns = 1;
+    s.interruptSettleGraceMs = 20; // 单测加速
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt();
+    assert.equal(s.pendingTurns, 1, '成功路径当下不减：先等 SDK 的终态 result');
+    assert.equal(s._awaitingInterruptResult, true);
+
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(s.pendingTurns, 0, '兜底到期须清账，否则 busy 永挂');
+    assert.equal(s._awaitingInterruptResult, false, '已放弃等待，标记不留悬挂');
+    assert.equal(s.terminating, false, '兜底不杀子进程：SDK 本就空闲，abort 会把可用会话变成「已中断」');
+    // 只发一次 interrupted（成功路径已发过），兜底不重复刷系统条
+    assert.equal(events.filter(e => e.type === 'system' && e.payload.kind === 'interrupted').length, 1);
+    s.dispose();
+  });
+
+  test('interrupt 成功后 result 按时到达 → 兜底撤销，不二次扣账', async () => {
+    const { s } = makeSession();
+    s.pendingTurns = 1;
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt();
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    assert.equal(s.pendingTurns, 0, 'result 正常结算');
+
+    s.pendingTurns = 1; // 模拟兜底撤销后又开了新一轮：悬挂 timer 若未清会把它误清
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(s.pendingTurns, 1, 'result 到达即撤销兜底，不得再动后续轮次的账');
+    s.dispose();
+  });
+
+  test('interrupt 成功且账面已空 → 不武装兜底（无账可清）', async () => {
+    const { s } = makeSession();
+    s.pendingTurns = 0;
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt();
+    assert.equal(s._interruptSettleTimer, null, '没有在途轮就不该起兜底计时');
+    s.dispose();
+  });
+
+  test('dispose 清掉悬挂的结算兜底计时（不留跨实例定时器）', async () => {
+    const { s } = makeSession();
+    s.pendingTurns = 1;
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); } };
+    await s.interrupt();
+    assert.notEqual(s._interruptSettleTimer, null);
+    s.dispose();
+    assert.equal(s._interruptSettleTimer, null);
+  });
+
   test('SDK interrupt 抛错（无可中断任务）→ 不设置标记，后续 result 不受影响', async () => {
     const { s, events } = makeSession();
     s.q = { interrupt() { return Promise.reject(new Error('no task')); } };

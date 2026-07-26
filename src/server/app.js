@@ -1514,6 +1514,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     onUsage: () => { if (id === viewingInstanceId) scheduleStatusRefresh(); },
     // 活后台任务集合变化 → 节流重算会话列表 ⏳（纯后台运行期 pendingTurns=0，这是唯一的 busy 触发源；scout 实例不接、不跑后台任务）
     onBgTaskChange: () => scheduleBgBroadcast(),
+    // 账面被兜底路径就地改写（interrupt 结算看门狗）——无伴随事件流，须显式重播 instances，
+    // 否则前端要等下一次无关广播才知道该实例已不忙，spinner 一直挂着。
+    onStateSettled: () => broadcastInstances(),
     onSessionId: (sid, firstMessage, model) => {
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
       // sessionId 已在 agent.js 先于 emit('init') 赋值 → 下方 init 边界的 broadcastInstances 自然带新 sid/title。

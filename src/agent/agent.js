@@ -84,7 +84,7 @@ function nextEpoch() {
 // 模型「值」本就经 settingSources 与终端 /model 同步，显示层不应再叠加项目默认。终端友好名不再复刻。
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, historicalCostUsd }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -99,6 +99,7 @@ export class AgentSession {
     this.onExit = onExit;             // () => void，进程意外退出/挂死自杀时通知 server 置空
     this.onUsage = onUsage;           // () => void，assistant message（含工具调用间）更新 usage 后触发——驱动 statusline 实时刷 ctx；不进事件流、不占 seq/buffer
     this.onBgTaskChange = onBgTaskChange; // () => void，活的后台任务集合"空↔非空/成员增删"时触发——驱动 server 节流重算会话列表 ⏳ 角标
+    this.onStateSettled = onStateSettled || (() => {}); // () => void，账面被兜底路径就地改写（无伴随事件流）时触发——驱动 server 立刻重播 instances，否则前端只能等下一次无关广播
 
     this.sessionId = resumeId || null;
     this.resumeId = resumeId || null;   // F4：resume 失败检测基准
@@ -123,6 +124,10 @@ export class AgentSession {
     // await q.interrupt() 安全超时（ms）。限流重试时 control_request 可能挂起；超时后强制 abort 收口。
     // 可在单测里覆盖为更短值。0/负数 = 不超时（仅测试用）。
     this.interruptTimeoutMs = typeof this.interruptTimeoutMs === 'number' ? this.interruptTimeoutMs : 10_000;
+    // interrupt() 成功后等待 SDK 配对 result 的宽限期（ms）。到期未等到即就地清账，见
+    // _armInterruptSettleWatchdog。可在单测里覆盖为更短值。
+    this.interruptSettleGraceMs = typeof this.interruptSettleGraceMs === 'number' ? this.interruptSettleGraceMs : 8_000;
+    this._interruptSettleTimer = null;
     this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
     this.pendingQuestions = new Map();   // toolUseID → { resolve, questions, answers, remaining }
     this.denyKinds = new Map();          // toolUseID → 'answered'|'denied'|'cancelled'：deny+message 通道的真实语义，供前端区分 ☑️/🚫（is_error 不足以分辨）
@@ -290,6 +295,7 @@ export class AgentSession {
     }
     // 清理（无论正常结束/抛错/resume 失败都执行；异常已被上方 catch 收口，不会跳过）
     clearInterval(this.idleTimer); this.idleTimer = null;
+    this._clearInterruptSettleWatchdog(); // 实例已终，不留跨实例悬挂计时
     this.pendingTurns = 0;
     this.cliQueued = null;        // 进程已结束，CLI 内部队列不复存在，登记随之作废
     this.pendingAutoTurn = false; // 实例结束不留滞留 flag，防重开实例后残留状态误合成
@@ -404,6 +410,35 @@ export class AgentSession {
     }
   }
 
+  // interrupt() 成功 ≠ SDK 侧真有在途轮。账面 pendingTurns 与 SDK 实际状态脱节时（2026-07-26 现场：
+  // web 发 /clear 后账面卡在 1、SDK 那轮 10 分钟前就结束了），q.interrupt() 照样 resolve，却永不产生
+  // 配对 result → pendingTurns 永挂、前端 busy 反复被 instances 广播拉回，实际无解：idleTimeoutMs
+  // (10min) 是唯一兜底，而用户每次切进该 tab 都会刷新 lastActivity 给它续命。
+  // 这里给成功路径补一层：宽限期内 result 没来就地清账。与 settleForce 的关键区别是【不 abort 子进程】
+  // ——SDK 本就空闲，杀进程会把一个可用会话变成「会话已中断」，代价远大于收益；也不重发 interrupted
+  // （成功路径已发过一次），只补一次广播让 server 把 idle 态推给前端。
+  _armInterruptSettleWatchdog() {
+    this._clearInterruptSettleWatchdog();
+    const ms = Number(this.interruptSettleGraceMs);
+    if (!(ms > 0)) return; // 0/负数 = 禁用（测试用）
+    this._interruptSettleTimer = setTimeout(() => {
+      this._interruptSettleTimer = null;
+      if (this.disposed || !this._awaitingInterruptResult || this.pendingTurns <= 0) return;
+      const stranded = this.pendingTurns;
+      this.pendingTurns = 0;
+      this.cliQueued = null;
+      this._awaitingInterruptResult = false;
+      diagLog.record(this.logKey(), 'interrupt', 'settle_watchdog', { strandedTurns: stranded, graceMs: ms });
+      interactionLog.addSessionLog(this.logKey(), 'sys_info',
+        `[SYS] 中断后 ${Math.round(ms / 1000)}s 未收到配对 result，已就地清账（在途轮 ${stranded} → 0），子进程保留`);
+      this.onStateSettled();
+    }, ms);
+  }
+
+  _clearInterruptSettleWatchdog() {
+    if (this._interruptSettleTimer) { clearTimeout(this._interruptSettleTimer); this._interruptSettleTimer = null; }
+  }
+
   async interrupt() {
     this._flushText(); this._flushThink();
     this.pendingAutoTurn = false; // 用户显式停止：作废任何待合成的后台自动汇报轮
@@ -484,6 +519,7 @@ export class AgentSession {
       this.pendingTurns = Math.max(0, this.pendingTurns - dropped - (cliDropped ? 1 : 0));
       this.cliQueued = null; // 排队登记随中断作废（本地/CLI 两侧队列均已清）
       this._awaitingInterruptResult = true; // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result
+      if (this.pendingTurns > 0) this._armInterruptSettleWatchdog(); // …但"即将"不保证到达，见方法注释
       // AG-004：Stop 应对齐「取消在途工具审批/提问」——不依赖 SDK 是否 abort canUseTool signal。
       // 若 signal 已 abort，abortHandler 会先清 Map，下面 resolve/expire 幂等（pending 不在则 no-op）。
       // 注意：Map.keys() 的元素是字符串，for-of 解构 for (const [id] of keys) 会把 't1' 拆成字符 't'——
@@ -1180,6 +1216,7 @@ export class AgentSession {
     this.pendingAutoTurn = false; // 实例销毁：作废滞留 flag，防重开实例后误合成
     this.notifyInput?.();
     clearInterval(this.idleTimer); this.idleTimer = null;
+    this._clearInterruptSettleWatchdog(); // 实例销毁：不留跨实例悬挂计时
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
     // F2：清理挂起的 AskUserQuestion——与 consume 清理路径一致：先 emit request_resolved 再 resolve，
     // 保证多设备收到问题取消通知（否则前端弹窗永远不消失）
@@ -1662,6 +1699,7 @@ export class AgentSession {
         this.totalApiDurationMs += msg.duration_api_ms || 0;
         const wasInterrupted = this._awaitingInterruptResult; // P1-4：一次性消费，防误标到后续无关的 result
         this._awaitingInterruptResult = false;
+        this._clearInterruptSettleWatchdog(); // 配对 result 已到：撤销兜底，否则悬挂计时会误清后续轮次的账
         diagLog.record(this.logKey(), 'queue', 'turn_settled', {
           pendingTurnsAfter: this.pendingTurns, wasInterrupted, isError: !!msg.is_error, durationMs: msg.duration_ms,
         });

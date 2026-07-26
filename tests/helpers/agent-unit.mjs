@@ -19,6 +19,7 @@ export function makeSession(opts = {}) {
     onExit: opts.onExit || (() => {}),
     onUsage: opts.onUsage || (() => {}),
     onBgTaskChange: opts.onBgTaskChange || (() => {}),
+    onStateSettled: opts.onStateSettled || (() => {}),
   });
   return { s: session, events, dispose: () => session.dispose() };
 }
