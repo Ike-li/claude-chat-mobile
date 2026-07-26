@@ -125,6 +125,36 @@ test.describe('diag-log', () => {
     assert.deepEqual(diag.getDiagLogs('s-empty-diag'), []);
   });
 
+  // 2026-07-26 排查教训：catchup/tick 每 2.5s 一条，几分钟就把 100 条环形缓冲刷满，把真正有诊断
+  // 价值的状态转换记录（queue/turn_settled、interrupt/settled、mirror/state_change）全挤出去——
+  // 那次查 pendingTurns 卡死时，现场 14:07 的 turn_settled 就是这么丢的，根因因此没能闭环。
+  // 心跳类埋点只挤自己人，绝不占用事件级配额。
+  test.describe('心跳类埋点独立限额', () => {
+    test('海量 catchup/tick 不挤掉事件级记录', () => {
+      const key = 'hb-keep-events';
+      diag.record(key, 'queue', 'turn_settled', { pendingTurnsAfter: 0 });
+      diag.record(key, 'interrupt', 'settled', { outcome: 'success' });
+      for (let i = 0; i < 300; i++) diag.record(key, 'catchup', 'tick', { ms: i });
+      const logs = diag.getDiagLogs(key);
+      assert.ok(logs.some(l => l.event === 'turn_settled'), 'turn_settled 不该被心跳挤掉');
+      assert.ok(logs.some(l => l.event === 'settled'), 'interrupt/settled 不该被心跳挤掉');
+    });
+
+    test('心跳自身按 MAX_HEARTBEAT_ENTRIES 收敛（保留最近的）', () => {
+      const key = 'hb-cap';
+      for (let i = 0; i < 50; i++) diag.record(key, 'catchup', 'tick', { ms: i });
+      const ticks = diag.getDiagLogs(key).filter(l => l.subsystem === 'catchup' && l.event === 'tick');
+      assert.equal(ticks.length, diag.MAX_HEARTBEAT_ENTRIES);
+      assert.equal(ticks.at(-1).detail.ms, 49, '保留的应是最近的心跳');
+    });
+
+    test('非心跳事件仍走原环形缓冲上限（回归）', () => {
+      const key = 'hb-normal';
+      for (let i = 0; i < 150; i++) diag.record(key, 'queue', 'enqueued', { i });
+      assert.equal(diag.getDiagLogs(key).length, diag.MAX_ENTRIES_PER_SESSION);
+    });
+  });
+
   // 防 buffers 无界增长：常驻 server 长跑下按 sessionKey 无限累积。放最后：本用例创建
   // 大量 session 触发淘汰，会清掉前面用例的缓冲，须在它们跑完后执行（同 interaction.test.mjs 惯例）。
   test('record：会话数超上限 200 → 最旧会话缓冲被 FIFO 淘汰', () => {
