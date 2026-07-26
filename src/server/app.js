@@ -42,6 +42,7 @@ import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from '..
 import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
+import { readSessionRegistry, registryIndicatesTerminalBusy, listTerminalSessionStates, terminalStateKey } from '../sessions/session-registry.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
 import { searchFiles } from '../files/file-search.js';
@@ -983,6 +984,8 @@ async function catchUpTickOnce() {
     try { tail = await classifyTranscriptTail(a.sessionId, a.cwd); } catch { /* 读失败保守不锁 */ }
     try { observedCli = await readCliObservedState(a.sessionId, a.cwd); } catch { /* 读失败显未知 */ }
     observedCli = mergeCliObserved(observedCli, a.sessionId, a.cwd);
+    // P1（7/26 CCD 调研吸收）：CLI 进程注册表权威自报，比尾部形态猜测强一档；读失败/无条目 fail-open null → 完全回落既有判定
+    const registryBusy = registryIndicatesTerminalBusy(await readSessionRegistry(a.sessionId, a.cwd));
     if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
                                         // await 让出后视图/实例/session 可能已变：旧观察结果与待提交基线全部作废，不提交
     catchUpKey = key;
@@ -993,14 +996,17 @@ async function catchUpTickOnce() {
       localBusy,
       lastChainTs: tail.lastChainTs,
       now: Date.now(),
+      registryBusy,
     });
+    // 注册表证实是活终端在驾驶 → 压制 autonomous 标记（marker 启发式的"同窗口先自主循环后真终端接管"盲区）
+    const entryAutonomous = registryBusy ? false : tail.autonomous;
     mirrorRelease = { readonly: entryLock, quietTicks: 0 };
     diagLog.record(a.sessionId, 'mirror', 'entry_lock_decision', describeMirrorEntryLock({
-      tailVerdict: tail.verdict, localBusy, lastChainTs: tail.lastChainTs, now: Date.now(), locked: entryLock, autonomous: tail.autonomous,
+      tailVerdict: tail.verdict, localBusy, lastChainTs: tail.lastChainTs, now: Date.now(), locked: entryLock, autonomous: entryAutonomous, registryBusy,
     }));
     setMirror(entryLock, a.sessionId, true,              // force 清上个会话残留的锁/发权威态
-      mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now() }),
-      observedCli, id, 'entry_lock', tail.autonomous);
+      mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy }),
+      observedCli, id, 'entry_lock', entryAutonomous);
     return;
   }
   if (localBusy) {                                                    // 己方在跑：抑制追平、免读大文件；释放态保持锁不变、不借己方忙碌攒静默
@@ -1041,6 +1047,8 @@ async function catchUpTickOnce() {
   try { tail = await classifyTranscriptTail(a.sessionId, a.cwd, { size: curSize >= 0 ? curSize : null }); } catch { /* 读失败保守 settled：不多锁 */ }
   try { observedCli = await readCliObservedState(a.sessionId, a.cwd, { size: curSize >= 0 ? curSize : null }); } catch { /* 读失败显未知 */ }
   observedCli = mergeCliObserved(observedCli, a.sessionId, a.cwd);
+  // P1：注册表权威自报（同切入分支）——busy 自报可上锁/维持锁/压制 stale，无条目回落既有判定
+  const registryBusy = registryIndicatesTerminalBusy(await readSessionRegistry(a.sessionId, a.cwd));
   const { emit, state, reload } = catchUpStep(catchUpState, { messages, localBusy: false });
   if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
                                                                     // await 让出后视图/实例/session 可能已变：作废旧 tick，不提交 baseline/size/观察态
@@ -1070,13 +1078,13 @@ async function catchUpTickOnce() {
   }
   const tailPending = tail.verdict === 'pending';
   const rel = mirrorReleaseStep(mirrorRelease, {
-    externalWrite, keepAlive, tailPending, localBusy: false,
+    externalWrite, keepAlive, tailPending, localBusy: false, registryBusy,
     releaseTicks: mirrorReleaseTicksNeeded(),
-  }); // 外部 text 写入→锁；文件仍在长/轮次未完结→维持锁；真静默→累计、达阈值自动解锁
+  }); // 外部 text 写入/注册表自报 busy→锁；文件仍在长/轮次未完结→维持锁；真静默→累计、达阈值自动解锁
   mirrorRelease = rel.state;
   setMirror(rel.readonly, a.sessionId, false,                       // 锁/stale/CLI 观察值任一变化都广播
-    mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now() }),
-    observedCli, id, 'normal_tick', tail.autonomous);
+    mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy }),
+    observedCli, id, 'normal_tick', registryBusy ? false : tail.autonomous);
 }
 let catchUpInFlight = null;
 function catchUpTick() {
@@ -2375,6 +2383,23 @@ registerSocketConnection(io, socket => {
     if (typeof ack === 'function') ack({ ok: true, viewingInstanceId });
   });
 
+  // P1（7/26 CCD 调研吸收）：给会话列表行标注「终端直跑」状态。数据源是 CLI 自报的进程注册表
+  // （~/.claude/sessions/<PID>.json），一次扫盘标注整页——此前纯外部终端会话在列表里没有任何运行
+  // 徽标（徽标只来自 live instances 条目，外部会话无 live 实例即无徽标）。注册表读不动 → 空 Map，
+  // 列表原样返回（fail-open：这是加分信息，绝不能因它影响列表本身）。
+  async function annotateTerminalStates(cwd, list) {
+    if (!Array.isArray(list) || !list.length) return;
+    try {
+      const states = await listTerminalSessionStates();
+      if (!states.size) return;
+      for (const s of list) {
+        if (!s?.id) continue;
+        const state = states.get(terminalStateKey(cwd, s.id));
+        if (state) s.terminal = state;
+      }
+    } catch { /* fail-open */ }
+  }
+
   on(socket, 'session:list', async (payload, maybeAck) => {
     // 兼容两种调用形态：emit('session:list', cb)（app.js 现状）与 emit('session:list', {cwd, all?}, cb)
     const ack = typeof payload === 'function' ? payload : maybeAck;
@@ -2390,6 +2415,7 @@ registerSocketConnection(io, socket => {
     const limit = all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
     // hiddenIds（FR-20 两级删除 L1）：L1 删除的会话从这里过滤掉，不出现在列表里（transcript 仍在盘上）。
     const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit, hiddenIds: new Set(sessions.getHiddenIds()) });
+    await annotateTerminalStates(cwd, list);
     ack({ currentSessionId, sessions: list, hasMore: all ? false : hasMore });
   });
 
@@ -2406,7 +2432,10 @@ registerSocketConnection(io, socket => {
     const groups = await discoverWorktreeSessions(repo, {
       listSessions: p => listSessionsPage(p, { limit, hiddenIds }),
     });
-    for (const g of groups) knownWorktrees.set(g.worktreePath, repo);
+    for (const g of groups) {
+      knownWorktrees.set(g.worktreePath, repo);
+      await annotateTerminalStates(g.worktreePath, g.sessions); // 与 session:list 同款终端徽标
+    }
     ack({ groups });
   });
 

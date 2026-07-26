@@ -287,8 +287,12 @@ export function rebaselineAbsorbedExternal({
 //   但风险低一档（不上锁→绝不误锁死进不去，最坏是终端真停后晚 ~N tick 才解锁）；前端「接管 CLI 会话」手动接管仍是兜底。
 //   ⚠️ 前提：web 纯查看 idle 期间其自身 resume 进程不 append transcript（否则 keepAlive 恒真→退回锁死，靠接管兜）——须 live 验证。
 export const MIRROR_RELEASE_QUIET_TICKS = 5; // 默认 ×2.5s ≈ 12.5s；mirror 提速轮询时由调用方传入更大 releaseTicks 保墙钟
+//   · registryBusy（P1，7/26 CCD 调研吸收）：~/.claude/sessions/<PID>.json 的 status:"busy" 权威自报
+//     （session-registry.js，已含 pid 验活+新鲜度）→ 比 keepAlive/tailPending 强一档：【可上锁也可维持】——
+//     它不是从磁盘形态猜的，是活着的终端进程自己说"我在跑"，堵「终端开跑但首条 text 未落盘」的上锁空窗。
 export function mirrorReleaseStep(state, {
   externalWrite = false, keepAlive = false, tailPending = false, localBusy = false,
+  registryBusy = false,
   releaseTicks = MIRROR_RELEASE_QUIET_TICKS,
 } = {}) {
   const prevReadonly = Boolean(state?.readonly);
@@ -296,6 +300,7 @@ export function mirrorReleaseStep(state, {
   const need = Number(releaseTicks) > 0 ? Number(releaseTicks) : MIRROR_RELEASE_QUIET_TICKS;
   if (externalWrite) return { readonly: true, state: { readonly: true, quietTicks: 0 } };
   if (localBusy) return { readonly: prevReadonly, state: { readonly: prevReadonly, quietTicks: 0 } };
+  if (registryBusy) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 权威自报终端在跑：直接锁（localBusy 豁免在上一行）
   if (!prevReadonly) return { readonly: false, state: { readonly: false, quietTicks: 0 } };
   if (keepAlive || tailPending) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
   const quietTicks = prevQuiet + 1;
@@ -905,8 +910,12 @@ export const MIRROR_STALE_PENDING_MS = 5 * 60_000;
 // 已超 MIRROR_STALE_PENDING_MS（典型：用户发完就走、终端没回、隔天打开 / server 重启后打开）——
 // 此时没有活终端在跑，预锁会立刻叠加 stale 文案「疑似中断、可接管」，每次进工作区都误拦输入。
 // 形态仍是 pending（真若终端还在跑长工具，keepAlive/后续 externalWrite 会再上锁），但切入时不预锁。
-export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now() } = {}) {
-  if (localBusy || tailVerdict !== 'pending') return false;
+// registryBusy（P1）：注册表权威自报优先——无视尾部形态与陈旧豁免直接预锁（新鲜度/pid 验活已由
+// session-registry.js 保证，"陈旧挂起"不可能 registryBusy=true）；localBusy 豁免不变（己方 turn）。
+export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), registryBusy = false } = {}) {
+  if (localBusy) return false;
+  if (registryBusy) return true;
+  if (tailVerdict !== 'pending') return false;
   if (lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS)) return false;
   return true;
 }
@@ -914,16 +923,18 @@ export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = 
 // 诊断时间线用：把 catchUpTickOnce 已经算出的 mirrorEntryLock 判定打包成一条可读详情，供
 // diag-log 记录展示——不重复判定逻辑本身（locked 由调用方直接传入 mirrorEntryLock 的返回值），
 // 只加一个 agedOutStale 派生字段，让事后回放能看出"这次没锁，是因为陈旧 pending 还是别的原因"。
-export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), locked, autonomous = false } = {}) {
+export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), locked, autonomous = false, registryBusy = false } = {}) {
   const agedOutStale = lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS);
-  return { tailVerdict, localBusy, lastChainTs, agedOutStale, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked, autonomous };
+  return { tailVerdict, localBusy, lastChainTs, agedOutStale, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked, autonomous, registryBusy };
 }
 
 // 疑似中断判定：锁着 + 尾部 PENDING + 最后链条目距今超阈值（期间零写入）→ 终端可能被强杀/断电、轮次没
 // 写完就死了。前端据此从「⏱ 终端驾驶中」转「⚠️ 疑似中断、可接管」文案（仍保持锁、不自动解锁——接管
 // 始终要用户显式确认）。误判代价低——只是提前显示「可接管」引导，不改变锁态。
 // 注意：仅在【已上锁】后的驾驶过程中有意义；切入时陈旧 pending 由 mirrorEntryLock 直接不锁，不会走到这里。
-export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now } = {}) {
+// registryBusy（P1）：新鲜自报=终端确定活着，压制「疑似中断」文案（中断的进程写不了 statusUpdatedAt）。
+export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, registryBusy = false } = {}) {
+  if (registryBusy) return false;
   return Boolean(readonly && tailPending && lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS));
 }
 

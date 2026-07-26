@@ -624,4 +624,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // P0-11y（P1，7/26 CCD 调研吸收）：终端直跑的外部会话在列表里必须有徽标。此前这类会话（没有 web
+  // live 实例、只在电脑终端里跑）在抽屉里与已结束会话长得一模一样，只有点进去看只读镜像才知道在跑。
+  // 数据源是 CLI 自报的进程注册表（server 侧 listTerminalSessionStates 标注到 session:list 行上）。
+  test('P0-11y 终端直跑的外部会话在抽屉里显示 ⌨️ 徽标（busy/alive 两态可区分）', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:terminal-badge');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+
+    // busy：终端正在跑一轮 → 警示色徽标
+    const busyRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Planning Session' });
+    const busyBadge = busyRow.locator('[data-terminal-badge]');
+    await expect(busyBadge).toBeVisible();
+    await expect(busyBadge).toHaveAttribute('title', '终端运行中');
+    await expect(busyBadge).toHaveClass(/text-warning/);
+
+    // alive：终端开着但空闲等输入 → 弱化色，不与 busy 混同
+    const aliveRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Gap Session' });
+    const aliveBadge = aliveRow.locator('[data-terminal-badge]');
+    await expect(aliveBadge).toBeVisible();
+    await expect(aliveBadge).toHaveAttribute('title', '终端会话已打开');
+    await expect(aliveBadge).toHaveClass(/text-ink-faint/);
+
+    // 没有终端在跑的会话不得凭空长出徽标
+    const plainRow = page.locator('[data-testid="session-row"]', { hasText: 'Visual Sandbox (Main)' });
+    await expect(plainRow.locator('[data-terminal-badge]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
 });

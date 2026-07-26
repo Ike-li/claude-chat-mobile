@@ -4914,6 +4914,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           }
         }
         if (badgeIcon) { const b = el(`<span data-instance-badge></span>`); b.textContent = badgeIcon; b.className = `shrink-0 ${badgeCls}`; if (badgeTitle) b.title = badgeTitle; head.appendChild(b); }
+      } else if (s.terminal) {
+        // P1：终端直跑的外部会话徽标（数据源 = CLI 自报进程注册表）。此前这类会话在列表里毫无标记，
+        // 只有点进去看镜像才知道终端在跑。busy=正在跑一轮；alive=终端开着但空闲等输入。
+        const b = el(`<span data-terminal-badge class="shrink-0"></span>`);
+        b.textContent = '⌨️';
+        b.className = `shrink-0 ${s.terminal === 'busy' ? 'text-warning' : 'text-ink-faint'}`;
+        b.title = s.terminal === 'busy' ? t('终端运行中') : t('终端会话已打开');
+        head.appendChild(b);
       }
       btn.appendChild(head);
       const sub = el(`<div class="text-ink-faint text-[10px]"></div>`);

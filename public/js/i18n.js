@@ -603,6 +603,8 @@ export const EN_DICT = Object.freeze({
   '只读镜像：终端疑似中断（超 5 分钟无活动）——确认已停可续接': 'Read-only mirror: the terminal looks interrupted (no activity for 5+ min) — confirm it stopped, then resume',
   '只读镜像：本会话自主循环执行中，移动端当前只读': 'Read-only mirror: this session is in an autonomous loop; mobile is read-only for now',
   '只读镜像：终端会话运行中，移动端当前只读': 'Read-only mirror: the terminal session is running; mobile is read-only for now',
+  '终端运行中': 'Running in terminal',
+  '终端会话已打开': 'Open in a terminal',
   '只读镜像：已请求续接——等自主循环当前操作完成后自动可写。可点「取消续接」撤销。': 'Read-only mirror: resume requested — becomes writable once the autonomous loop finishes its current operation. Tap "Cancel resume" to undo.',
   '只读镜像：已请求续接——等终端当前操作完成后自动可写。可点「取消续接」撤销。': 'Read-only mirror: resume requested — becomes writable once the terminal finishes its current operation. Tap "Cancel resume" to undo.',
   '只读镜像：自主循环疑似中断。确认已停后点「续接」即可在手机继续（会话历史仍在）。': 'Read-only mirror: the autonomous loop looks interrupted. Once you have confirmed it stopped, tap "Resume" to continue on your phone (the history is still there).',

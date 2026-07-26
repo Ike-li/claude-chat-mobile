@@ -45,6 +45,10 @@ let historyOverflowMode = false;
 // system 哨兵消息——E2E 用它确定性地等到"这次重连的 instances 广播已处理完"，不必用禁用的 waitForTimeout。
 let reconnectDrawerTitleChanged = false;
 let reconnectSettleMarkerArmed = false;
+// P0-11x（P1）：终端直跑徽标夹具。真 server 由 listTerminalSessionStates 读 CLI 进程注册表
+// （~/.claude/sessions/<PID>.json）给 session:list 行标 terminal:'busy'|'alive'；mock 直接给两条
+// 无 live 实例的会话打上这两态，验证抽屉能区分渲染。
+let terminalBadgeArmed = false;
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
 const queuedEchoItems = new Map(); // busy 期回显为 queued 的消息 clientMessageId → {text}：user:cancelQueued 撤回 / interrupt 连带取消 都按它对账
 let foregroundSyncReplayMode = false;
@@ -99,6 +103,7 @@ function resetMockState() {
   historyOverflowMode = false;
   reconnectDrawerTitleChanged = false;
   reconnectSettleMarkerArmed = false;
+  terminalBadgeArmed = false;
   busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
@@ -296,13 +301,15 @@ function mainCwdSessions() {
       title: 'Archived Planning Session',
       model: 'claude-3-5-sonnet',
       lastUsedAt: Date.now() - 600000,
-      entrypoint: 'sdk-ts'
+      entrypoint: 'sdk-ts',
+      ...(terminalBadgeArmed ? { terminal: 'busy' } : {}),
     },
     {
       id: 'mock-session-gap',
       title: 'Archived Gap Session',
       model: 'claude-3-5-sonnet',
       lastUsedAt: Date.now() - 750000,
+      ...(terminalBadgeArmed ? { terminal: 'alive' } : {}),
       entrypoint: 'sdk-ts'
     },
     {
@@ -1638,6 +1645,14 @@ io.on('connection', socket => {
       // 未读角标：切到 inst_2 时 sync:since ack 带 unreadOnEntry=1，模拟离开期间攒了 1 条未读顶层消息。
       // inst_2 的默认 sync:since 回放固定是 2 条顶层气泡（user_message + text_delta 各一），
       // unreadOnEntry=1 应定位到最后一条（resolveUnreadAnchorIndex(2,1)=1）。
+      // P0-11x：给两条无 live 实例的主工作区会话标上终端直跑态，验证抽屉 ⌨️ 徽标 busy/alive 两态可区分。
+      command: 'test:terminal-badge',
+      run: async () => {
+        console.log('[mock] test:terminal-badge — archived=busy / gap=alive，下次 session:list 带 terminal 字段');
+        terminalBadgeArmed = true;
+      },
+    },
+    {
       command: 'test:unread-pill',
       run: async () => {
         console.log('[mock] test:unread-pill — inst_2 有 1 条未读，切 viewing 触发 sync:since 展示胶囊');

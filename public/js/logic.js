@@ -881,6 +881,7 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
         workspaceName,
         kind,
         entrypoint: s.entrypoint ?? null,
+        terminal: s.terminal ?? null, // 'busy'|'alive'|null：CLI 进程注册表自报的终端直跑态
       });
     }
   }

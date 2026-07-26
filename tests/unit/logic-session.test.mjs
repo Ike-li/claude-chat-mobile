@@ -239,6 +239,22 @@ test('mergeRecentSessionsAcrossWorkspaces: 跨 cwd 合并、按 lastUsedAt 降�
   assert.equal(merged[0].title, '新会话 A');
 });
 
+// P1（7/26）：终端直跑态随行透传——服务端从 CLI 进程注册表标注，前端据此渲染 ⌨️ 徽标。
+// 缺字段的旧数据/mock 必须得到 null 而非 undefined，渲染侧统一走 falsy 分支。
+test('mergeRecentSessionsAcrossWorkspaces: 透传 terminal 状态，缺省为 null', () => {
+  const merged = mergeRecentSessionsAcrossWorkspaces([
+    {
+      cwd: '/x/foo',
+      sessions: [
+        { id: 'busy-one', title: '终端在跑', lastUsedAt: 300, terminal: 'busy' },
+        { id: 'alive-one', title: '终端开着', lastUsedAt: 200, terminal: 'alive' },
+        { id: 'plain', title: '无终端', lastUsedAt: 100 },
+      ],
+    },
+  ], { limit: 10 });
+  assert.deepEqual(merged.map(s => s.terminal), ['busy', 'alive', null]);
+});
+
 test('mergeRecentSessionsAcrossWorkspaces: 缺 lastUsedAt 排后；无 id 跳过；空入参安全', () => {
   const merged = mergeRecentSessionsAcrossWorkspaces([
     {
