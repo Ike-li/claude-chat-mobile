@@ -424,6 +424,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // latestServiceHealth = 最近一次 instances 广播里的 service 字段。
   let latestServiceHealth = null;
   let expandedDirs = new Set();         // 工作区面板中展开的目录（初始空，首 instances 事件填充；切 cwd 重置）
+  // 用户点过「显示全部会话…」的目录。缓存里的 sessions 是"当下拿到的那一份"，记不住用户要看全量这个
+  // 意图——而 populateSubtree 每次都会无条件 revalidate，不带上 all 就会把展开态悄悄打回截断（P0-11x）。
+  const expandedAllDirs = new Set();
   // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
   // （低频、全量更简单可靠）。纯状态变化、或只是某个目录下实例变化，都不再经它判定——见下方按目录分键。
   let _lastPanelStructKey = null;
@@ -3701,14 +3704,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 非 string（含 null=未探到）归一空 → 切到无默认的 cwd 自动清、不残留上区默认。
     const prevDefaultModel = cwdDefaultModel, prevCurrentModel = currentModel;
     cwdDefaultModel = (typeof p?.defaultModel === 'string') ? p.defaultModel : '';
-    // 实例集变化时只标记会话缓存整体"过期"，不整段清空（P3 SWR 保鲜）：openSessionPanel/populateSubtree
-    // 遇到缓存条目仍会立即用它秒开渲染（不管 stale 与否，见 populateSubtree 内 SWR 分支），只是背后会
-    // 再发 session:list 悄悄刷新——避免"清空→骨架屏→等网络往返"这种明明没变化的目录也被连坐重建。
+    // 会话缓存不在这里做失效标记（P3 SWR 保鲜）：populateSubtree 拿缓存秒开渲染的同时恒发一次
+    // session:list 刷新，新鲜度由那条响应负责——不需要谁来"标脏"。既不整段清空（避免"清空→骨架屏
+    // →等网络往返"连坐重建没变化的目录），也不会因为 id 集合没变就把改名/截断变化漏掉。
     const prevIds = new Set(prevInstances.map(x => x.instanceId));
     const currIds = new Set(instancesList.map(x => x.instanceId));
-    if (prevIds.size !== currIds.size || ![...currIds].every(id => prevIds.has(id))) {
-      for (const entry of sessionsCache.values()) entry.stale = true;
-    }
     // 清除④：freshInterrupted 标记的实例从 instances 列表消失（关闭/退出/别处清理），待续档态随之作废。
     if (freshInterruptedInstanceId && !currIds.has(freshInterruptedInstanceId)) {
       freshInterruptedInstanceId = null;
@@ -5079,10 +5079,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           more.onclick = () => {
             haptic('tap');
             more.textContent = t('加载中…');
+            expandedAllDirs.add(cwd); // 记住意图：后续 revalidate 也得按全量拉，否则重建一次就被打回截断
             socket.emit('session:list', { cwd, all: true }, state => {
               if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
               const all = state?.sessions || [];
-              sessionsCache.set(cwd, { sessions: all, hasMore: false, stale: false });
+              sessionsCache.set(cwd, { sessions: all, hasMore: false });
               renderRows(all, false);
             });
           };
@@ -5091,8 +5092,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (wtSection) container.appendChild(wtSection);
       };
 
-      // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore, stale}；stale 与否都立即渲染——
-      // 过期只决定"要不要再发 session:list 刷新"，不影响"能不能先拿旧数据秒开"）。
+      // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore}）：有缓存就先拿旧数据把列表画出来，
+      // 不等网络；新鲜度交给下面那次无条件 revalidate。
       const cachedEntry = sessionsCache.get(cwd);
       if (cachedEntry) {
         renderRows(cachedEntry.sessions || [], cachedEntry.hasMore);
@@ -5117,27 +5118,31 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         container.appendChild(skeleton);
       }
 
-      // 2) 后端异步刷新：仅在"无缓存"或"缓存已标 stale"（实例集变化，见 setInstances）时发
-      // session:list——新鲜缓存跳过网络往返，避免每次展开都打一遍。响应回来后先比对内容签名
-      // （shouldRerenderSessionList，见 logic.js）——没有真变化就只悄悄更新缓存、不重渲染。
-      // stale 在这里真正被消费（code review：此前只写不读）。
-      if (!cachedEntry || cachedEntry.stale) {
-        socket.emit('session:list', { cwd }, state => {
-          if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return; // 过期守卫（含"是否已被更晚一次 populateSubtree 顶替"）
-          const sessions = state?.sessions || [];
-          const hasMore = !!state?.hasMore;
-          const prevEntry = sessionsCache.get(cwd);
-          const willRerender = shouldRerenderSessionList({
-            hasPrevEntry: !!prevEntry,
-            prevSessions: prevEntry?.sessions,
-            prevHasMore: prevEntry?.hasMore,
-            nextSessions: sessions,
-            nextHasMore: hasMore,
-          });
-          sessionsCache.set(cwd, { sessions, hasMore, stale: false });
-          if (willRerender) renderRows(sessions, hasMore);
+      // 2) 后端异步刷新：无条件发 session:list——这就是 SWR 里的 revalidate，缓存只负责"秒开"，
+      // 不负责"够新"。曾经这里加过 `仅当无缓存或已标 stale 才发` 的省流条件，而 stale 只在
+      // 实例集 id 增删时置位，于是「id 集合没变、内容变了」的场景全部刷不出来：会话被改名、
+      // session:list 自身返回值变化（如溢出截断转为 hasMore）都停留在旧数据上（P0-11n/v/w 就是
+      // 为此而写的回归测试）。省下的那次 socket 往返不值这个正确性。
+      //
+      // 频率不必担心：populateSubtree 的调用侧已经被上游收窄——instances 广播只在结构性变化或
+      // 目录签名（id/sessionId/title 前20字）真变时才重建子树，busy/idle 这类状态压根不进签名。
+      // 拿回响应后还有 shouldRerenderSessionList 比对内容签名，没真变化就只更新缓存、不动 DOM，
+      // 因此"重连但数据零变化"依然不会重建 DOM、不闪骨架屏（P0-11t）。
+      socket.emit('session:list', { cwd, all: expandedAllDirs.has(cwd) }, state => {
+        if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return; // 过期守卫（含"是否已被更晚一次 populateSubtree 顶替"）
+        const sessions = state?.sessions || [];
+        const hasMore = !!state?.hasMore;
+        const prevEntry = sessionsCache.get(cwd);
+        const willRerender = shouldRerenderSessionList({
+          hasPrevEntry: !!prevEntry,
+          prevSessions: prevEntry?.sessions,
+          prevHasMore: prevEntry?.hasMore,
+          nextSessions: sessions,
+          nextHasMore: hasMore,
         });
-      }
+        sessionsCache.set(cwd, { sessions, hasMore });
+        if (willRerender) renderRows(sessions, hasMore);
+      });
 
       // 3) worktree 会话分组：linked worktree 的会话按分支列出，行为与普通会话行一致
       //（点击走 session:switch，cwd=worktreePath——服务端 worktree:sessions 已注册放行该路径）。

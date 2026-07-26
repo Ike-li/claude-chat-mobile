@@ -273,6 +273,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // revalidate 改成无条件后新增的守卫：「显示全部会话…」是用户的显式意图，一次全量重建（这里用新增
+  // 工作区触发结构性变化 → openSessionPanel）不该把它悄悄打回截断态。缓存本身不记这件事——记的是
+  // expandedAllDirs，revalidate 得带着 all 一起发。
+  test('P0-11x 点开"显示全部会话…"后遇到全量重建，展开态仍保持（不被 revalidate 打回截断）', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:history-overflow');
+    await waitForIdle(page);
+
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await page.getByRole('button', { name: '显示全部会话…' }).click();
+    await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
+    await page.locator('#sidebarClose').click();
+
+    // 新增第二工作区 → availableDirs 变化 → 结构性变化 → openSessionPanel 全量重建所有展开目录
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+
+    await openSessionsSidebar(page);
+    await expect(workspaceRow(page, ANOTHER_WORKSPACE)).toBeVisible();
+    await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-11k sync gap 后回退 history 且不残留旧会话内容', async ({ page }) => {
     await gotoMock(page);
 
