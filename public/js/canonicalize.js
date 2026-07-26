@@ -19,7 +19,12 @@ function canonicalizeValue(v) {
   if (t === 'string') return JSON.stringify(v.normalize('NFC'));
   if (Array.isArray(v)) return '[' + v.map(canonicalizeValue).join(',') + ']'; // 保序，顺序即语义，不排序
   if (t === 'object') {
-    const keys = Object.keys(v).sort(); // Unicode 码点字典序：本场景 key 均为工具参数名（ASCII），JS 默认字符串比较足够
+    // 按 NFC 归一化后的码点比较排序，避免视觉相同、编码形式不同（NFC/NFD）的 key 排出不同顺序
+    const keys = Object.keys(v).sort((a, b) => {
+      const na = a.normalize('NFC');
+      const nb = b.normalize('NFC');
+      return na < nb ? -1 : na > nb ? 1 : 0;
+    });
     return '{' + keys.map(k => JSON.stringify(k.normalize('NFC')) + ':' + canonicalizeValue(v[k])).join(',') + '}';
   }
   throw new Error(`canonicalize: 不支持的值类型：${t}`);

@@ -40,7 +40,8 @@ export function getLang() {
 
 export function t(zh) {
   if (currentLang !== 'en' || typeof zh !== 'string') return zh;
-  return zh in EN_DICT ? EN_DICT[zh] : zh;
+  // 用 hasOwnProperty 而非 `in`：避免 'constructor'/'toString' 等原型链同名属性被误命中
+  return Object.prototype.hasOwnProperty.call(EN_DICT, zh) ? EN_DICT[zh] : zh;
 }
 
 // 读原始存储偏好（'zh'/'en'/'auto'），不做 navigator 解析——供设置面板回显用户真实选择，

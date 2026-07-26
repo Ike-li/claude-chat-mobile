@@ -341,7 +341,8 @@ export function formatToolCardTitle(toolName, inputSummary, maxLen = 48) {
     } catch { /* 残缺 JSON 原样 */ }
   }
   snippet = snippet.replace(/\s+/g, ' ');
-  const cap = Math.max(8, Number(maxLen) || 48);
+  const n = Number(maxLen);
+  const cap = Math.max(8, Number.isNaN(n) ? 48 : n); // 0 是显式值须夹到下限 8，不当「未传」回落默认
   if (snippet.length > cap) snippet = snippet.slice(0, cap - 1) + '…';
   return `${name} · ${snippet}`;
 }
@@ -690,7 +691,7 @@ export function effortLevelsFor(modelValue, modelsList) {
   const entry = modelEntryFor(modelValue, modelsList);
   const levels = (entry && typeof entry === 'object' && Array.isArray(entry.supportedEffortLevels)) ? entry.supportedEffortLevels : null;
   if (entry && (!levels || !levels.length)) return { hidden: true, levels: [] }; // 明确不支持 effort
-  const show = (levels && levels.length) ? levels
+  const show = (levels && levels.length) ? levels.slice() // 拷贝，避免调用方原地修改污染 modelsList 共享条目
     : [...new Set((modelsList || []).flatMap(m => (m && typeof m === 'object' && Array.isArray(m.supportedEffortLevels)) ? m.supportedEffortLevels : []))];
   return { hidden: false, levels: show };
 }

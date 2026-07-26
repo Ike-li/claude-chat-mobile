@@ -129,6 +129,21 @@ test('listSessions: isMeta 条目不当标题', async () => {
   assert.equal(result[0].title, '真实问题');
 });
 
+// 回归：裸 null 恰好是合法 JSON，JSON.parse 成功但 entry 为 null，若不判空直接访问 entry.entrypoint 会
+// TypeError 逃逸到最外层 catch，把这一行之前已提取的 title/model 全部清空成「(无标题)」。
+test('listSessions: 头窗混入裸 null 行不清空已提取的 title/model', async () => {
+  const cwd = '/test/nullline';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sess-nullline', [
+    { type: 'user', message: { role: 'user', content: '真实问题' } },
+    null,
+    { type: 'assistant', message: { role: 'assistant', content: 'Hi', model: 'claude-sonnet-4-6' } },
+  ]);
+  const result = await listSessions(cwd, { baseDir: BASE });
+  assert.equal(result[0].title, '真实问题');
+  assert.equal(result[0].model, 'claude-sonnet-4-6');
+});
+
 // 回归：web resume / CLI 切档会往 jsonl 追加 mode/permission-mode，刷 mtime 把旧会话顶到抽屉最前。
 // 列表 lastUsedAt 与排序须用最后主链消息时间，忽略这些元数据写盘。
 test('listSessions: lastUsedAt/排序忽略 mode 元数据，按最后 user/assistant 时间', async () => {

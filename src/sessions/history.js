@@ -713,6 +713,7 @@ async function readHeadMeta(file, size) {
         if (!line.trim()) continue;
         let entry;
         try { entry = JSON.parse(line); } catch { continue; } // 截断尾行/非 JSON：跳过
+        if (!entry) continue; // 裸 null 等合法 JSON 但非对象：跳过，否则下面属性访问抛出连累已提取的 meta
         // entrypoint-marker 是自家写的假行（伪装 entrypoint:'cli' 骗 CLI /resume 选择器显示 web 会话，
         // 见 app.js writeSessionEntrypoint），恒在头部、早于真实消息行——排除掉，否则所有 web 会话的
         // entrypoint 全部被它抢先误判成 cli。

@@ -94,6 +94,12 @@ test('formatToolCardTitle: 长摘要按 maxLen 截断加省略号', () => {
   assert.ok(title.length <= 'Write · '.length + 40);
 });
 
+test('formatToolCardTitle: maxLen=0 是显式值，夹到下限 8 而非回落默认 48', () => {
+  const long = 'a'.repeat(80);
+  const title = formatToolCardTitle('Write', long, 0);
+  assert.ok(title.length <= 'Write · '.length + 8);
+});
+
 test('formatToolCardTitle: JSON 摘要取首个可读短字段（path/command 等）', () => {
   assert.equal(
     formatToolCardTitle('Read', JSON.stringify({ file_path: 'src/a.js', offset: 1 })),

@@ -76,14 +76,21 @@ export function parsePorcelainZ(str) {
 
 // staged = X ∈ MADRC；unstaged = Y ∈ MDT；untracked = ??
 // MM 可同时进入 staged 与 unstaged（与 statusline parsePorcelain 语义一致）。
+// 冲突（unmerged）用独立的 XY 组合表示，不落在 MADRC/MDT 分类规则内，须先于其判定单独摘出。
+const CONFLICT_XY = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU']);
 export function classifyGitEntries(entries) {
   const staged = [];
   const unstaged = [];
   const untracked = [];
+  const conflicted = [];
   for (const e of entries || []) {
     const xy = e.xy || '';
     if (xy === '??') {
       untracked.push({ path: e.path, xy });
+      continue;
+    }
+    if (CONFLICT_XY.has(xy)) {
+      conflicted.push({ path: e.path, xy, ...(e.oldPath ? { oldPath: e.oldPath } : {}) });
       continue;
     }
     const X = xy[0] || ' ';
@@ -91,7 +98,7 @@ export function classifyGitEntries(entries) {
     if ('MADRC'.includes(X)) staged.push({ path: e.path, xy, ...(e.oldPath ? { oldPath: e.oldPath } : {}) });
     if ('MDT'.includes(Y)) unstaged.push({ path: e.path, xy, ...(e.oldPath ? { oldPath: e.oldPath } : {}) });
   }
-  return { staged, unstaged, untracked };
+  return { staged, unstaged, untracked, conflicted };
 }
 
 // 相对 path 安全闸：拒绝空/绝对/含 .. 后越出 cwd 的路径。返回 join 后的绝对路径或 null。
@@ -109,9 +116,9 @@ export function assertSafeRelPath(cwd, relPath) {
 }
 
 function isNotGitError(err) {
+  // 退出码 128 也会用于权限不足、索引损坏等其它致命错误，不能单凭 code 判定；只认错误文案。
   const msg = `${err?.message || ''} ${err?.stderr || ''} ${err?.stdout || ''}`.toLowerCase();
-  return /not a git repository|outside repository|致命错误|not a git repo/.test(msg)
-    || err?.code === 128;
+  return /not a git repository|outside repository|致命错误|not a git repo/.test(msg);
 }
 
 /**
@@ -166,8 +173,34 @@ export async function listGitChanges(cwd, opts = {}) {
     staged: classified.staged,
     unstaged: classified.unstaged,
     untracked: classified.untracked,
+    conflicted: classified.conflicted,
     truncated,
   };
+}
+
+// 单 pathspec 的 diff 若判给 relPath 一方的全量新增/删除，可能是重命名的另一端被 pathspec 排除、配不上对；
+// 用不带 pathspec 的 name-status 复核是否命中一条 rename/copy 记录，命中则回传双路径供重新 diff。
+async function findRenamePair(cwd, side, relPath, execOpts) {
+  const args = side === 'staged'
+    ? ['diff', '--cached', '--name-status', '-M', '-z']
+    : ['diff', '--name-status', '-M', '-z'];
+  let out;
+  try {
+    const r = await gitExec(cwd, args, execOpts);
+    out = r.stdout || '';
+  } catch {
+    return null;
+  }
+  const parts = out.split('\0').filter(p => p.length > 0);
+  for (let i = 0; i < parts.length; i++) {
+    const status = parts[i];
+    if (status[0] !== 'R' && status[0] !== 'C') continue;
+    const oldPath = parts[i + 1];
+    const newPath = parts[i + 2];
+    i += 2;
+    if (oldPath === relPath || newPath === relPath) return { oldPath, newPath };
+  }
+  return null;
 }
 
 /**
@@ -207,6 +240,22 @@ export async function readGitDiff(cwd, relPath, side, opts = {}) {
     }
     // git diff 对「无差异」通常 exit 0；其它错误
     return { ok: false, code: 'git_error', error: err.message || 'git diff 失败' };
+  }
+
+  // 疑似整体新增/删除：可能是重命名一端配不上对，复核后带双路径 + -M 重新 diff 还原真实改动。
+  if (/^(new file mode|deleted file mode) /m.test(stdout)) {
+    const pair = await findRenamePair(cwd, side, relPath, { timeoutMs, maxBuffer, execFile });
+    if (pair) {
+      const rediffArgs = side === 'staged'
+        ? ['diff', '--cached', '-M', '--', pair.oldPath, pair.newPath]
+        : ['diff', '-M', '--', pair.oldPath, pair.newPath];
+      try {
+        const r2 = await gitExec(cwd, rediffArgs, { timeoutMs, maxBuffer, execFile });
+        stdout = r2.stdout || '';
+      } catch {
+        // 复核 diff 失败，保留原始 stdout
+      }
+    }
   }
 
   const binary = /Binary files .* differ/i.test(stdout) || stdout.includes('\0');

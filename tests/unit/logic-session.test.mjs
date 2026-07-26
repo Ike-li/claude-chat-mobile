@@ -722,6 +722,7 @@ test('resolveModelPillText: 全空 → 「默认」', () => {
 test('effortLevelsFor: 模型支持 → 列其档', () => {
   const ml = [{ value: 'opus[1m]', supportedEffortLevels: ['low', 'high', 'max'] }];
   assert.deepEqual(effortLevelsFor('opus[1m]', ml), { hidden: false, levels: ['low', 'high', 'max'] });
+  assert.notEqual(effortLevelsFor('opus[1m]', ml).levels, ml[0].supportedEffortLevels); // 拷贝而非原数组引用
 });
 
 test('effortLevelsFor: 桥接后取档', () => {

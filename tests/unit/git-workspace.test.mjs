@@ -59,7 +59,20 @@ describe('classifyGitEntries：三分 staged / unstaged / untracked', () => {
   });
 
   test('空列表', () => {
-    assert.deepEqual(classifyGitEntries([]), { staged: [], unstaged: [], untracked: [] });
+    assert.deepEqual(classifyGitEntries([]), { staged: [], unstaged: [], untracked: [], conflicted: [] });
+  });
+
+  test('冲突码（UU/AA/UD/DD）单独归入 conflicted，不落入 staged/unstaged', () => {
+    const entries = [
+      { xy: 'UU', path: 'uu.js' },
+      { xy: 'AA', path: 'aa.js' },
+      { xy: 'UD', path: 'ud.js' },
+      { xy: 'DD', path: 'dd.js' },
+    ];
+    const c = classifyGitEntries(entries);
+    assert.deepEqual(c.conflicted.map(e => e.path).sort(), ['aa.js', 'dd.js', 'ud.js', 'uu.js']);
+    assert.deepEqual(c.staged, []);
+    assert.deepEqual(c.unstaged, []);
   });
 });
 
@@ -157,6 +170,24 @@ describe('readGitDiff：注入 execFile', () => {
     const r = await readGitDiff('/repo', 'b.js', 'staged', { execFile });
     assert.equal(r.ok, true);
     assert.deepEqual(seen, ['diff', '--cached', '--', 'b.js']);
+  });
+
+  test('重命名（无内容变化）误判整体新增：复核 name-status 命中后带双路径 + -M 重新 diff', async () => {
+    const execFile = (_c, args, _o, cb) => {
+      const gitArgs = args.slice(2);
+      if (gitArgs.includes('--name-status')) {
+        return cb(null, 'R100\0old.js\0new.js\0');
+      }
+      if (gitArgs.includes('-M')) {
+        return cb(null, 'diff --git a/old.js b/new.js\nsimilarity index 100%\nrename from old.js\nrename to new.js\n');
+      }
+      // 首次单路径 diff：误判成整体新增
+      return cb(null, 'diff --git a/new.js b/new.js\nnew file mode 100644\nindex 0000000..1\n--- /dev/null\n+++ b/new.js\n@@ -0,0 +1 @@\n+hello\n');
+    };
+    const r = await readGitDiff('/repo', 'new.js', 'staged', { execFile });
+    assert.equal(r.ok, true);
+    assert.match(r.patch, /rename from old\.js/);
+    assert.doesNotMatch(r.patch, /new file mode/);
   });
 
   test('越界 path → bad_path，不 spawn', async () => {

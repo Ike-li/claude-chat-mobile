@@ -22,7 +22,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
   if (hashMatch) {
-    localStorage.setItem('auth_token', decodeURIComponent(hashMatch[1]));
+    // 畸形转义序列（截断的分享链接等）会让 decodeURIComponent 抛 URIError；此处在全局错误监听器
+    // 注册之前执行，不兜底会直接中止整个 IIFE，后面近全部初始化代码都不会跑（白屏）。
+    try {
+      localStorage.setItem('auth_token', decodeURIComponent(hashMatch[1]));
+    } catch { /* 忽略，回退到已存的 auth_token（若有） */ }
     history.replaceState(null, '', location.pathname);
   }
   let token = localStorage.getItem('auth_token') || '';
@@ -115,6 +119,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
         haptic('tap');
         modelInput.value = value;
+        delete modelInput.dataset.fullModel; // 发送时 dataset.fullModel 优先级高于 value，选中此卡须清掉旧的（同 rebuildCustomModelGrid）
         syncModelUI(value);
       };
       customModelGrid.appendChild(card);
@@ -170,8 +175,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 后者只在切走时 set 一次（DOM 快照），这里要在每次 loadHistory/onHistoryAppend 渲染后累积。
   // 这些状态会被早期 socket/DOM 回调触达，必须先于回调注册声明，避免首连事件抢跑触发 TDZ。
   let _busyState = false;
-  let interruptPending = false;
-  let interruptPendingTimer = null; // 安全超时：限流重试时 interrupt 可能挂起，超时清位防「正在停止…」永挂
+  // instanceId → { timer }：按实例隔离挂起态（曾是裸全局布尔——跨实例的 shouldDropAgentEvent 视图过滤会把
+  // A 会话「停止」的结算事件在切到 B 后丢弃，全局标志卡 true 会连带堵死 B 会话本该独立生效的停止按钮）。
+  // 安全超时：限流重试中 interrupt 可能挂起，超时清位防「正在停止…」永挂。
+  const interruptPendingByInstance = new Map();
   let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
   // FE-004：只挡"这条消息还没被服务端 ack"的窗口（挡瞬时双击/触屏合成双 click），不挡"忙碌中主动发
   // 第二条"——后者本就由服务端 pendingTurns>=2/_queueFull 承接（服务端设计允许"1 运行 + 1 排队"，见
@@ -179,7 +186,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 死；改成用真实 ack 回执判定，不猜时长——ack 都是收到即回、不等整轮 turn，正常网络下近乎瞬时清零。
   // SEND_ACK_FALLBACK_MS 只是兜底：ack 真丢了也不永久卡死发送按钮。
   const SEND_ACK_FALLBACK_MS = 5000;
-  let _sendInFlight = false;
+  // 按会话隔离在途态（曾是裸全局布尔——同 _pendingSendBusySessionId 修过的同类问题，这个姐妹变量当时漏改）：
+  // A 会话 ack 等待窗口内不该阻塞切到 B 会话后的发送按钮。存的是"哪些会话当前有条消息在等 ack"。
+  const _sendInFlightSessionIds = new Set();
   let _pendingFirstSend = false; // 新会话首发乐观 busy 需跨越懒开后的 bindView→clearView(setBusy(false))；见 send()/setInstances
   // 全新会话首轮点停止后不跳回主页：标记"当前这个 instanceId 是已发过消息、sessionId 仍未到、且刚被
   // 用户中断"的实例——置位见 system(p) 的 interrupted 分支；清除时机须覆盖全（否则悬留会把其它正常
@@ -374,6 +383,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 子 agent 可折叠卡：parentToolUseId → { el, body, titleEl, type, running, streams, thinkings }
   // 键 = 主会话 Agent/Task 的 toolUseId（后端 parent_tool_use_id）。默认 <details> 收起。
   const subagentCards = new Map();
+  // renderHistoryBubbles 的 tool_use↔tool_result 配对表：必须持久化跨调用（而非函数内局部变量），因为只读
+  // 镜像追平场景下 catchUpTick 每次只带增量消息——耗时较长的工具 tool_use 落在第 N 个 tick、tool_result
+  // 落在第 N+1 个 tick 才到，若每次调用都用全新空 Map，跨 tick 到达的 tool_result 永远配对失败（走孤儿分支，
+  // 原卡片永久卡在"进行中"）。clearView / onHistoryAppend 的整窗替换分支会显式 clear，代表真正的"从头渲染"。
+  const histToolCards = new Map(); // toolUseId → card
+  const histSubCards = new Map(); // parentToolUseId → { el, body, titleEl }
   // 从工具 inputSummary（可能被 agent.js truncate）中安全提取字段；JSON 解析失败时回退 fallback
   // candidateKeys 按优先级排列，返回第一个非空 key 的值
   function extractInput(inputSummary, candidateKeys, fallback) {
@@ -602,7 +617,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!liveLine) return formatLiveActivityText('default');
     if (liveLine.override) return liveLine.override;
     // 发送 ack 前的短暂阶段：独立文案，不走 spinner
-    const phase = resolveLiveWaitPhase({ sendInFlight: _sendInFlight, sawContentDelta: liveLine.sawContentDelta });
+    const phase = resolveLiveWaitPhase({ sendInFlight: _sendInFlightSessionIds.has(displayedSessionId), sawContentDelta: liveLine.sawContentDelta });
     if (phase === 'sending') return formatLiveActivityText('sending');
     const base = liveLine.serverTurnStartedAt || liveLine.turnStartTs;
     const sinceLastEventSec = Math.max(0, Math.floor((Date.now() - (liveLine.lastEventAt || base)) / 1000));
@@ -741,7 +756,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   
   const OFFLINE_RESEND_ACK_MS = 8000; // 慢移动网络 RTT 留余地（同 cf-access 2s→8s 超时教训，见项目 memory）
   // FE-NEW-001/006：串行重发 + 按 viewing 作用域决定 busy（永久失败/他会话成功不再 sticky busy）。
-  // 在线路径有 _sendInFlight；离线旧实现 for 循环并行 emit 易撞 queueFull，且 setBusy(true) 无配对 clear。
+  // 在线路径有 _sendInFlightSessionIds；离线旧实现 for 循环并行 emit 易撞 queueFull，且 setBusy(true) 无配对 clear。
   let _offlineDrainInFlight = false;
   async function processOfflineQueue() {
     if (_offlineDrainInFlight || offlineQueue.length === 0) return;
@@ -942,6 +957,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     } else {
       setStatus(`连接失败：${err.message}`);
+      // 非 unauthorized 错误（如网络抖动）也要复位登录按钮——仅在它确实还卡在 submitAuth() 置的
+      // 「连接中…」禁用态时才复位，不强制弹出整个 authGate（没打开过登录页时不该无端冒出来）。
+      if (authSubmit && authSubmit.disabled) { authSubmit.disabled = false; authSubmit.textContent = '进入'; }
       // 公网：传输错误攒几次后探测是不是 Access 会话过期（被 302 到登录页），是则提示手动重登。
       if (!isLanOrLocal() && document.body.dataset.cfAccess && ++connectErrorCount >= 3) {
         connectErrorCount = 0;
@@ -1453,16 +1471,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
   }
 
+  let deviceApprovedHideTimer = null; // approved 的淡出隐藏是延迟执行；若 150ms 内又来一个 pending 须作废，否则会把重新弹出的弹窗悄悄关掉
   const handle = {
     device_status(p) {
       const modal = $('deviceModal');
       const modalId = $('deviceModalId');
       const modalCmdId = $('deviceModalCmdId');
+      if (deviceApprovedHideTimer) { clearTimeout(deviceApprovedHideTimer); deviceApprovedHideTimer = null; }
       if (p.status === 'pending') {
         if (modal) {
           if (modalId) modalId.textContent = p.deviceId || '';
           if (modalCmdId) modalCmdId.textContent = p.deviceId || '';
           modal.classList.remove('hidden');
+          modal.style.opacity = ''; // 防陈旧 approved 淡出效果残留把新弹窗带成半透明
         }
         if (inputEl) inputEl.disabled = true;
         updateSendButtonState();
@@ -1470,7 +1491,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (modal) {
           modal.style.transition = 'opacity 0.15s ease-out';
           modal.style.opacity = '0';
-          setTimeout(() => {
+          deviceApprovedHideTimer = setTimeout(() => {
+            deviceApprovedHideTimer = null;
             modal.classList.add('hidden');
             modal.style.opacity = '';
           }, 150);
@@ -1926,6 +1948,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           const idx = permQueue.findIndex(r => r.requestId === requestId);
           if (idx !== -1) permQueue.splice(idx, 1);
         }
+        permIntegrityMismatched.delete(requestId);
         if (!activePerm) showNextPerm();
         updateSendButtonState();
       } else if (kind === 'question') {
@@ -2020,7 +2043,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addBar(p.message, 'text-ink-faint');
       // 中止成功 / 「无可中断任务」失败回执：都必须清 interruptPending（限流重试中点停止的卡死修复）
       if (shouldClearInterruptPendingOnSystem(p)) {
-        clearInterruptPending({ keepLiveOverride: p.kind === 'interrupted' });
+        clearInterruptPending(viewingInstanceId, { keepLiveOverride: p.kind === 'interrupted' });
       }
       if (p.kind === 'interrupted') {
         finalizeStreams();
@@ -2260,6 +2283,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
 
   // ---- 流式气泡 ----
+  // 丢弃 streams（切视图/整窗替换场景，不同于 finalizeStreams 的"收尾定稿"）：必须先清各条目挂着的
+  // _mdTimer 节流定时器再清 Map——否则残留定时器稍后触发，往已不在 #messages 里的旧 DOM 节点写内容，
+  // 还会调用 scrollBottom() 误滚动当前正显示的（无关）会话。
+  function clearStreams() {
+    for (const s of streams.values()) {
+      if (s._mdTimer) { clearTimeout(s._mdTimer); s._mdTimer = null; }
+    }
+    streams.clear();
+  }
   function getStream(id) {
     const key = id || '_';
     let s = streams.get(key);
@@ -2475,6 +2507,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 渲染前（严格说：渲染后异步补验，见下）重算指纹比对服务端锚定的 fp，防传输层篡改（op 被改而 fp
   // 未同步改）。不阻塞卡片显示——真正的执行门槛在后端 resolvePermission（agent.js），这里只是"谨慎
   // 确认"提示，即使因浏览器兼容性等原因未能核验也不影响审批本身仍受后端 fail-closed 保护。
+  // 校验结果不符时记入本集合：请求排队时校验完成（还不是 activePerm）也不丢失判定，
+  // showNextPerm() 晋升它为 activePerm 时据此补显示警示条（而不是要求它重新触发一次异步校验）。
+  const permIntegrityMismatched = new Set();
   async function verifyPermIntegrity(p) {
     if (!p.fp) return; // 服务端理论上总带 fp；防御性跳过，不误判
     if (typeof crypto === 'undefined' || !crypto.subtle) {
@@ -2490,7 +2525,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       console.error('[integrity] 前端预检计算异常，不误判为篡改：', e.message);
       return;
     }
-    if (!ok && activePerm?.requestId === p.requestId) showPermIntegrityWarning();
+    if (!ok) {
+      permIntegrityMismatched.add(p.requestId);
+      if (activePerm?.requestId === p.requestId) showPermIntegrityWarning();
+    }
   }
   function showPermIntegrityWarning() {
     if (permIntegrityWarn) permIntegrityWarn.classList.remove('hidden');
@@ -2502,8 +2540,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     activePerm = permQueue.shift();
     permTool.textContent = activePerm.name;
     permCwd.textContent = `工作目录：${activePerm.cwd}`;
-    // 每张新卡片先重置警示条（上一张若显示过不应带到这张）；verifyPermIntegrity 若判定不符会异步重新显示。
+    // 每张新卡片先重置警示条（上一张若显示过不应带到这张）；若这条请求排队期间已判定过指纹不符
+    // （permIntegrityMismatched），直接补显示——不会再触发一次新的异步校验。
     if (permIntegrityWarn) permIntegrityWarn.classList.add('hidden');
+    if (permIntegrityMismatched.has(activePerm.requestId)) showPermIntegrityWarning();
     // UX-001：ExitPlanMode 计划用 renderMarkdown（DOMPurify）；普通命令去 JSON 引号、mono 纯文本。
     // M1：超 4000 字显示展开按钮，而非截断（防恶意内容藏尾部）
     permExpandBtn?.remove(); permExpandBtn = null;
@@ -2562,6 +2602,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   function answerPerm(decision) {
     if (!activePerm) return;
+    if (!socket.connected) { // 断线瞬间点审批：emit 大概率送不达，不能乐观显示"已处理"却让请求悬空未决
+      addBar('网络未连接，请等待重新连接后再操作', 'text-danger');
+      return;
+    }
     const wasExitPlanMode = activePerm.name === 'ExitPlanMode'; // 下方 activePerm 即置 null，提前捕获
     const payload = {
       requestId: activePerm.requestId,
@@ -2577,6 +2621,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     socket.emit('user:approve', payload);
     const exitNote = (wasExitPlanMode && decision === 'allow') ? ` → ${payload.exitMode}` : '';
     addBar(`${decision === 'allow' ? '✅ 已允许' : '🚫 已拒绝'}：${activePerm.name}${exitNote}`, 'text-ink-faint');
+    permIntegrityMismatched.delete(activePerm.requestId);
     activePerm = null;
     permExpandBtn?.remove(); permExpandBtn = null;
     closeSheet(permModal);
@@ -2695,6 +2740,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   function answerQuestion(index) {
     if (!activeQuestion) return;
+    if (!socket.connected) { addBar('网络未连接，请等待重新连接后再操作', 'text-danger'); return; } // 断线瞬间选择：emit 大概率送不达，不能乐观标记已答
     // 先标记已答再 emit/关窗：紧接的切会话/sync 即使抢在 server resolve 前到达，也不会重弹
     markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndex: index, instanceId: viewingInstanceId }); // 台阶3 路由
@@ -2706,6 +2752,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addBar('请至少选择一项', 'text-info');
       return;
     }
+    if (!socket.connected) { addBar('网络未连接，请等待重新连接后再操作', 'text-danger'); return; }
     const indexes = [...multiSelectedIndexes].sort((a, b) => a - b);
     markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndexes: indexes, instanceId: viewingInstanceId });
@@ -2720,6 +2767,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       questionOtherInput?.focus();
       return;
     }
+    if (!socket.connected) { addBar('网络未连接，请等待重新连接后再操作', 'text-danger'); return; }
     markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: viewingInstanceId });
     finishQuestionUI(`已回答（其他）：${freeText}`);
@@ -2774,7 +2822,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 广播，双击 Send 在首条 ack 前会发出两条不同 clientMessageId。离线入队不走此闸（无在途 SDK
     // turn，本地乐观消息允许多条）。不用 _busyState：那是整段 turn 期间的状态，会连带挡住服务端本
     // 就允许的"忙碌中排第二条"。
-    if (socket.connected && _sendInFlight) {
+    if (socket.connected && _sendInFlightSessionIds.has(displayedSessionId)) {
       return;
     }
     if (activePerm || activeQuestion) {
@@ -2790,9 +2838,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const text = ultracodeArmed ? withUltracodeKeyword(rawText) : rawText; // ultracode 档：每轮注入关键词触发 Workflow
     if (!text && attachments.items().length === 0) return; // E17：纯附件（空文本）也可发
     // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
-    // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传
-    if (/^\/model(\s|$)/.test(text) && !(window.availableSkills || []).includes('model')) {
-      const arg = text.slice(6).trim();
+    // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传。
+    // 测原始 rawText 而非 text：ultracode 档会给 text 加「ultracode 」前缀，测 text 会让本拦截在
+    // ultracode 武装时失效，/model 命令原样当聊天消息发出去。
+    if (/^\/model(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('model')) {
+      const arg = rawText.slice(6).trim();
       if (arg) {
         let nakedArg = arg;
         const match = arg.match(/\[[^\]]+\]$/);
@@ -2916,10 +2966,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // FE-004：发出即置位，ack 一回来（或到点兜底）就解锁——用真实回执判定"这条是否已被服务端收到"，
     // 不猜时长；服务端/mock 的 ack 都是收到就回，不等整轮 turn 跑完，正常网络下几乎瞬时清零。
     // 负 ack 须可见：旧实现把回调当 clearSendInFlight 忽略 payload → 队列满/stale 像「发送失败无反馈」。
-    _sendInFlight = true;
+    // WS-003：捕获发起时的视图目标（代次），对齐 WS-001/WS-002——ack 延迟到达期间用户可能已切到别的
+    // 会话/实例，届时 setBusy/addBar/草稿回填这些「作用于当前视图」的副作用不该套到无关会话上。
+    // 按会话登记在途态（而非裸全局布尔）：切到另一会话发消息不该被这条送出的等待窗口阻塞。
+    const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId;
+    _sendInFlightSessionIds.add(reqSessionId);
     const clearSendInFlight = () => {
-      if (!_sendInFlight) return;
-      _sendInFlight = false;
+      if (!_sendInFlightSessionIds.has(reqSessionId)) return;
+      _sendInFlightSessionIds.delete(reqSessionId);
       clearTimeout(sendInFlightTimer);
       updateSendButtonState();
       // 让「正在发送…」立刻切回 spinner，不必等下一次 1s ticker
@@ -2928,9 +2982,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 失败时恢复草稿：send 会先清空输入；仅当输入仍空才回填，避免覆盖用户已键入的下一条。
     const restoreDraftOnFail = { text, attachments: outgoingAttachments };
     const sendInFlightTimer = setTimeout(clearSendInFlight, SEND_ACK_FALLBACK_MS); // 兜底：ack 真丢了也不永久卡死
-    // WS-003：捕获发起时的视图目标（代次），对齐 WS-001/WS-002——ack 延迟到达期间用户可能已切到别的
-    // 会话/实例，届时 setBusy/addBar/草稿回填这些「作用于当前视图」的副作用不该套到无关会话上。
-    const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId;
     socket.emit('user:message', { text, model, attachments: outgoingAttachments, instanceId: viewingInstanceId, cwd: currentCwd, clientMessageId }, (ack) => {
       clearSendInFlight();
       const decision = presentOnlineSendAck(ack);
@@ -3179,11 +3230,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const state = resolveComposerPrimaryMode({
       busy: _busyState,
       hasContent,
-      interruptPending,
+      interruptPending: interruptPendingByInstance.has(viewingInstanceId),
       queueFull: _queueFull,
       blockedByUserRequest: !!activePerm || !!activeQuestion,
       blockedByDisabledInput: inputEl.disabled,
-      blockedBySendInFlight: socket.connected && _sendInFlight,
+      blockedBySendInFlight: socket.connected && _sendInFlightSessionIds.has(displayedSessionId),
       mirrorReadonly: Boolean(mirrorReadonlySid),
       mirrorArmed,
     });
@@ -3225,13 +3276,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   updateSendButtonState();
 
-  function clearInterruptPending({ keepLiveOverride = false } = {}) {
-    if (interruptPendingTimer) {
-      clearTimeout(interruptPendingTimer);
-      interruptPendingTimer = null;
-    }
-    if (!interruptPending) return;
-    interruptPending = false;
+  // instanceId 默认取当前查看实例——system(p) 结算 handler 本就只在事件属于当前查看实例时才会被派发到，
+  // 故其调用不传 instanceId 天然正确；requestInterrupt 的超时回调则显式传入发起时的 instanceId（届时
+  // 用户可能已切走）。非当前查看实例时只清挂起态本身，不动 btnStop/liveLine 这些视图态。
+  function clearInterruptPending(instanceId = viewingInstanceId, { keepLiveOverride = false } = {}) {
+    const entry = interruptPendingByInstance.get(instanceId);
+    if (entry?.timer) clearTimeout(entry.timer);
+    if (!entry) return;
+    interruptPendingByInstance.delete(instanceId);
+    if (instanceId !== viewingInstanceId) return;
     if (btnStop) btnStop.disabled = false;
     // 超时/失败清位：去掉「正在停止…」覆盖，恢复 spinner 或空态；result/interrupted 路径会 setBusy(false) 整清
     if (!keepLiveOverride && liveLine?.override) {
@@ -3242,21 +3295,22 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
 
   function requestInterrupt() {
-    if (interruptPending) return;
-    interruptPending = true;
+    const instanceId = viewingInstanceId;
+    if (interruptPendingByInstance.has(instanceId)) return;
+    const entry = {};
+    interruptPendingByInstance.set(instanceId, entry);
     if (btnStop) btnStop.disabled = true;
     if (liveLine) { liveLine.override = formatLiveActivityText('stopping'); renderLiveLine(); }
     else setStreamLiveStatusText(formatLiveActivityText('stopping'));
     updateSendButtonState();
     // 安全超时：SDK 限流重试中 control_request 可能挂起/回「无可中断」且前端漏清 → 永久卡「正在停止…」
-    if (interruptPendingTimer) clearTimeout(interruptPendingTimer);
-    interruptPendingTimer = setTimeout(() => {
-      interruptPendingTimer = null;
-      if (!interruptPending) return;
-      clearInterruptPending();
-      addBar('停止请求超时，可再试一次', 'text-ink-faint');
+    entry.timer = setTimeout(() => {
+      if (!interruptPendingByInstance.has(instanceId)) return;
+      clearInterruptPending(instanceId);
+      // 只在仍看着这个会话时提示——若已切走，超时是别的（此刻无关）会话的事，不该冒到当前视图上
+      if (instanceId === viewingInstanceId) addBar('停止请求超时，可再试一次', 'text-ink-faint');
     }, INTERRUPT_PENDING_TIMEOUT_MS);
-    socket.emit('user:interrupt', { instanceId: viewingInstanceId }); // 台阶3：中断当前查看 tab 的在途任务
+    socket.emit('user:interrupt', { instanceId }); // 台阶3：中断当前查看 tab 的在途任务
   }
 
   if (btnStop) btnStop.onclick = requestInterrupt;
@@ -3384,14 +3438,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 先精确 value 命中；否则 alias↔规范名桥接：剥 [Nm] 上下文后缀，候选别名作为 family 子串落在规范名里、
   // 且后缀一致（如 claude-opus-4-8[1m] ↔ opus[1m]）。纯从 SDK 列表派生，不硬编码任何模型名。
   // effort 档位按当前模型动态渲染（CLI/SDK 透传，不硬编码）：决策在 logic.js 的 effortLevelsFor，此处只渲染。
-  function rebuildEffortOptions(modelValue) {
+  // opts.silentClear：仅刷新面板显示、不得触发网络副作用——adoptPanelState 切 tab 查看别的（空闲）实例时传
+  // true。根因：effort 只能在开实例时设定，之后随消息切模型不会跟着清空，二者可脱节而持久化仍非空；
+  // 若在这里无脑 emit user:setEffort(null)，仅仅切一下 tab 查看就会让 server 判定档位不匹配、
+  // 对着一个空闲实例整个 dispose+resume 重开，只有真正的模型切换（onchange/tile 点击/`/model`）才该触发它。
+  function rebuildEffortOptions(modelValue, opts) {
     if (!effortSelect) return;
+    const silentClear = Boolean(opts?.silentClear);
     const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
     const show = withUltracodeTier(baseLevels); // xhigh-capable 模型上追加 ultracode 最高档，镜像 CLI /effort
     if (hidden) {
       // 候选明确声明该模型不支持 effort（区别于“当前 CLI 档未知”）：Web 驾驶时把实例档清回
       // model-default，等服务端 effort_mode 回执再更新 currentEffort；CLI 镜像只读态绝不写回。
-      if (!mirrorReadonlySid && currentEffort !== null) socket.emit('user:setEffort', { level: null });
+      if (!silentClear && !mirrorReadonlySid && currentEffort !== null) socket.emit('user:setEffort', { level: null });
       effortSelect.value = '';
       if (customEffortGrid) customEffortGrid.innerHTML = '';
       effortRow?.classList.add('hidden');
@@ -3489,7 +3548,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (inst.model) {
         ensureModelOption(currentModel);
         modelInput.value = currentModel;
-        rebuildEffortOptions(effortModelValue);
+        rebuildEffortOptions(effortModelValue, { silentClear: true });
       } else {
         modelInput.value = '';
       }
@@ -3497,7 +3556,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     setPermMode(inst.permissionMode || 'default', true);
     setEffortMode(inst.effort ?? null, true);
-    rebuildEffortOptions(effortModelValue);
+    rebuildEffortOptions(effortModelValue, { silentClear: true });
   }
 
   function captureWebPanelState() {
@@ -3633,6 +3692,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     availableDirs = Array.isArray(p?.dirs) ? p.dirs : [];
     const prevInstances = instancesList;
     instancesList = Array.isArray(p?.instances) ? p.instances : [];
+    // 结算兜底（跨实例）：agent:event 层的 shouldDropAgentEvent 只放行当前查看实例的事件，非当前查看
+    // 实例的「停止」结算事件会被丢弃、其 interruptPendingByInstance 挂起态无法经 system(p) 清位。这条
+    // instances 广播不受视图过滤，靠它独立探测每个挂起实例是否已不再 busy，及时补清——防止切视图后
+    // 该实例的停止按钮一直卡死到自身 12s 超时才在无关视图上弹出提示。
+    for (const pendingId of [...interruptPendingByInstance.keys()]) {
+      const pendingInst = instancesList.find(x => x.instanceId === pendingId);
+      if (!pendingInst || pendingInst.state !== 'busy') clearInterruptPending(pendingId);
+    }
     needsYouList = Array.isArray(p?.needsYou) ? p.needsYou : [];
     // cwd 默认模型：捕获旧值 + currentModel（下方 adoptPanelState 会改 currentModel），末尾据此决定是否重建默认磁贴标签。
     // 非 string（含 null=未探到）归一空 → 切到无默认的 cwd 自动清、不残留上区默认。
@@ -4355,7 +4422,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (show === _busyState) return;
     _busyState = show;
     if (show) {
-      if (!interruptPending && btnStop) btnStop.disabled = false;
+      if (!interruptPendingByInstance.has(viewingInstanceId) && btnStop) btnStop.disabled = false;
       // show === _busyState 去重保证每 turn 恰好在此选一次动词、起一次秒表
       const now = Date.now();
       liveLine = {
@@ -4371,7 +4438,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       startLiveTicker();
       showStreamLiveStatus(renderLiveLineText());
     } else {
-      clearInterruptPending({ keepLiveOverride: true }); // setBusy(false) 终态：清 pending/timer；live 整清在下两行
+      clearInterruptPending(viewingInstanceId, { keepLiveOverride: true }); // setBusy(false) 终态：清 pending/timer；live 整清在下两行
       stopLiveTicker();
       liveLine = null;
       if (btnStop) btnStop.disabled = false;
@@ -4398,29 +4465,32 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   if (sidebarScrim) sidebarScrim.onclick = closeLeftSidebar;
 
   // 移动端：边缘滑动呼出侧边栏，向左滑动收起侧边栏
-  let dragStartX = 0, dragStartY = 0;
+  let dragStartX = 0, dragStartY = 0, dragActive = false;
   document.addEventListener('touchstart', e => {
     dragStartX = e.touches[0].clientX;
     dragStartY = e.touches[0].clientY;
+    dragActive = true;
   }, { passive: true });
 
   document.addEventListener('touchmove', e => {
-    if (!dragStartX) return;
+    if (!dragActive) return;
     const currentX = e.touches[0].clientX;
     const currentY = e.touches[0].clientY;
     const diffX = currentX - dragStartX;
     const diffY = currentY - dragStartY;
 
     if (Math.abs(diffX) > Math.abs(diffY) * 1.5) {
-      // 从左边缘起（clientX < 45px）向右滑动呼出
+      // 从左边缘起（clientX < 45px）向右滑动呼出——注意 dragStartX 可以合法为 0（触摸恰好从屏幕最左
+      // 像素开始，正是本手势要覆盖的场景），故"是否在拖拽中"须用独立的 dragActive 判断，不能复用
+      // dragStartX 本身的 falsy 性（0 会被误判成"未在拖拽"）。
       if (leftSidebar.classList.contains('-translate-x-full') && dragStartX < 45 && diffX > 65) {
         openLeftSidebar();
-        dragStartX = 0; // 防止重复触发
+        dragActive = false; // 防止重复触发
       }
       // 向左滑动收起
       else if (!leftSidebar.classList.contains('-translate-x-full') && diffX < -65) {
         closeLeftSidebar();
-        dragStartX = 0; // 防止重复触发
+        dragActive = false; // 防止重复触发
       }
     }
   }, { passive: true });
@@ -4985,7 +5055,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
 
     // 组装并渲染子树函数
+    // subtreeGen：populateSubtree 每次调用递增的代次，供内部各异步 ack 判断"自己是否已被更晚一次调用
+    // 顶替"——expandedDirs.has(cwd) 只答"这个目录还展开着吗"，答不了"这次 ack 属于哪一次调用"。快速
+    // 折叠再展开同一目录（复用同一个 container）时，旧调用的迟到 ack 若只查前者，要么把 worktree 分组
+    // 重复追加一份，要么用 renderRows 整段清空刚渲染好的新内容。
+    let subtreeGen = 0;
     const populateSubtree = (cwd, container, liveMap, fTabs) => {
+      subtreeGen += 1;
+      const myGen = subtreeGen;
       // worktree 会话分组元素（CLI「cd 进 worktree 即 /resume」的 web 等价）；renderRows 全量重绘
       // 会清掉它，故重绘末尾总是重挂，与 worktree:sessions ack 的先后到达顺序无关。
       let wtSection = null;
@@ -5004,7 +5081,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             haptic('tap');
             more.textContent = '加载中…';
             socket.emit('session:list', { cwd, all: true }, state => {
-              if (!expandedDirs.has(cwd)) return;
+              if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
               const all = state?.sessions || [];
               sessionsCache.set(cwd, { sessions: all, hasMore: false, stale: false });
               renderRows(all, false);
@@ -5047,7 +5124,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // stale 在这里真正被消费（code review：此前只写不读）。
       if (!cachedEntry || cachedEntry.stale) {
         socket.emit('session:list', { cwd }, state => {
-          if (!expandedDirs.has(cwd)) return; // 过期守卫
+          if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return; // 过期守卫（含"是否已被更晚一次 populateSubtree 顶替"）
           const sessions = state?.sessions || [];
           const hasMore = !!state?.hasMore;
           const prevEntry = sessionsCache.get(cwd);
@@ -5066,7 +5143,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 3) worktree 会话分组：linked worktree 的会话按分支列出，行为与普通会话行一致
       //（点击走 session:switch，cwd=worktreePath——服务端 worktree:sessions 已注册放行该路径）。
       socket.emit('worktree:sessions', { cwd }, res => {
-        if (!expandedDirs.has(cwd)) return; // 过期守卫（同 session:list）
+        if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return; // 过期守卫（同 session:list）
         const groups = (res?.groups || []).filter(g => g?.worktreeExists && (g.sessions || []).length);
         if (!groups.length) { wtSection = null; return; }
         wtSection = el(`<div data-testid="worktree-groups"></div>`);
@@ -5197,7 +5274,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     localStorage.setItem('current_session', sessionId || '');
     messagesEl.innerHTML = '';
     messagesEl.classList.remove('empty-start');
-    streams.clear(); thinkings.clear(); toolCards.clear();
+    clearStreams(); thinkings.clear(); toolCards.clear();
+    histToolCards.clear(); histSubCards.clear(); // 切会话/清屏：历史配对表也要随 DOM 一起归零，防跨会话误配对
     turnFileChanges = new Map(); // 切会话：丢弃未 flush 的本轮账本
     // UX-008：清视图后若仍无内容（新会话），给极简引导
     queueMicrotask(() => maybeShowEmptySessionGuide());
@@ -5387,10 +5465,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         haptic('tap');
         refreshBtn.disabled = true;
         refreshBtn.classList.add('animate-spin');
+        let acked = false;
         socket.emit('config:refresh', { cwd: currentCwd }, () => {
+          acked = true;
           refreshBtn.disabled = false;
           refreshBtn.classList.remove('animate-spin');
         });
+        // 兜底：与文件里其它「乐观禁用+超时兜底恢复」操作（session:home/session:switch 等）对齐——
+        // ack 丢了也不能让按钮永久卡在禁用+转圈态。
+        setTimeout(() => {
+          if (acked) return;
+          refreshBtn.disabled = false;
+          refreshBtn.classList.remove('animate-spin');
+          addBar('刷新无响应，请检查网络后重试', 'text-danger');
+        }, 4000);
       };
     }
 
@@ -5693,14 +5781,22 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     });
     if (!anchor) { addBar('这是最早一条消息，前面没有可分叉的起点', 'text-ink-faint'); return; }
     if (!displayedSessionId) return;
+    // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 currentCwd/
+    // displayedSessionId（同 loadHistory 的 await 前快照+await 后重新校验模式）——不快照会把 A 会话
+    // 消息的 anchor 和 await 后已变成 B 的 cwd/sessionId 拼到一起发出去。
+    const cwdAtRequest = currentCwd, sessionIdAtRequest = displayedSessionId;
     const ok = await appConfirm({
       title: '从这里分叉新会话？',
       body: '会复制到这条消息为止的对话，创建一个独立的新会话；原会话不受影响。',
       okText: '分叉',
     });
     if (!ok) return;
+    if (currentCwd !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
+      addBar('会话已切换，分叉已取消，请重新发起', 'text-info');
+      return;
+    }
     haptic('tap');
-    socket.emit('session:fork', { cwd: currentCwd, sessionId: displayedSessionId, uuid: anchor }, res => {
+    socket.emit('session:fork', { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: anchor }, res => {
       if (!res?.ok) addBar(res?.error || '分叉失败', 'text-danger');
     });
   }
@@ -5711,9 +5807,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!msgs?.length) { onDone?.(); return; }
     const frag = document.createDocumentFragment();
     const codeBlocks = [];
-    const histToolCards = new Map(); // toolUseId → card（本批内配对 tool_result）
-    const histSubCards = new Map(); // parentToolUseId → { el, body, titleEl }
-    const ensureHistSub = (parentId) => {
+    // histToolCards/histSubCards 是模块级持久 Map（跨 tick 配对，见其声明处注释），本函数只读写不新建。
+    const ensureHistSub = (parentId, subagentType) => {
       let c = histSubCards.get(parentId);
       if (c) return c;
       const wrap = el(`
@@ -5725,8 +5820,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         </details>`);
       wrap.dataset.parentId = parentId;
       const titleEl = wrap.querySelector('.sa-title');
-      titleEl.textContent = formatSubagentCardTitle({ subagentType: null, running: false });
-      c = { el: wrap, body: wrap.querySelector('.sa-body'), titleEl };
+      // 与 live 路径 ensureSubagentCard 对齐：type 来自 inputSummary 的 subagent_type，不硬编码 null——
+      // 否则历史回放/刷新页面后卡片标题从「🤖 Explore」这类具体类型退化成泛泛的「🤖 子 agent」。
+      const type = subagentType != null && String(subagentType).trim() ? String(subagentType).trim() : null;
+      titleEl.textContent = formatSubagentCardTitle({ subagentType: type, running: false });
+      c = { el: wrap, body: wrap.querySelector('.sa-body'), titleEl, type };
       histSubCards.set(parentId, c);
       frag.appendChild(wrap);
       return c;
@@ -5775,9 +5873,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           }
         }
         if (msg.toolUseId) histToolCards.set(msg.toolUseId, card);
-        // 主链 Agent/Task：预建折叠卡（与 live 一致）
+        // 主链 Agent/Task：预建折叠卡（与 live 一致）；type 同 live 路径从 inputSummary 提取
         if (!msg.parentToolUseId && !msg.isSidechain && isSpawnToolName(msg.name) && msg.toolUseId) {
-          ensureHistSub(msg.toolUseId);
+          const subType = extractInput(msg.inputSummary, ['subagent_type', 'subagentType'], '');
+          ensureHistSub(msg.toolUseId, subType || null);
         }
         appendNode(card, msg);
         return;
@@ -5816,10 +5915,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           out.classList.remove('hidden');
         }
         histToolCards.delete(msg.toolUseId);
-        // 主链 Agent 完成 → 子卡标题「已完成」
+        // 主链 Agent 完成 → 子卡标题「已完成」；带上 sa.type，不然会把已提取的具体类型冲成泛泛的「子 agent」
         if (!msg.parentToolUseId && histSubCards.has(msg.toolUseId)) {
           const sa = histSubCards.get(msg.toolUseId);
-          sa.titleEl.textContent = formatSubagentCardTitle({ running: false });
+          sa.titleEl.textContent = formatSubagentCardTitle({ subagentType: sa.type, running: false });
         }
         return;
       }
@@ -5893,10 +5992,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       messagesEl.innerHTML = '';
       messagesEl.classList.remove('empty-start');
       // FE-NEW-005：与 clearView 对齐——replace 全量窗口时清 streams/thinkings，避免 live 节点挂到已拆 DOM
-      streams.clear();
+      clearStreams();
       thinkings.clear();
       toolCards.clear();
       subagentCards.clear();
+      histToolCards.clear(); histSubCards.clear(); // 全量替换=真正的从头渲染，历史配对表也要归零（同 clearView）
       if (msgs.length) renderHistoryBubbles(msgs);
       const sid = ev.sessionId;
       if (sid) seenDiskLenBySession.set(sid, msgs.length);
@@ -6081,12 +6181,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addBar('已请求续接 CLI 会话：终端当前操作完成后自动切换，可点「取消续接」撤销', 'text-ink-faint');
       return;
     }
+    // 快照：确认框等待用户点击期间，一条并发 mirror_state 广播可能把 mirrorReadonlySid 改写成另一
+    // 个会话——await 后须核对未变，否则会解锁/续接一个和确认框文案描述对不上的会话（同 loadHistory
+    // 的 await 前快照+await 后重新校验模式）。
+    const sidAtRequest = mirrorReadonlySid;
     if (!(await appConfirm({
       title: '续接 CLI 会话？',
       body: '这是电脑终端正在跑的同一条对话。续接不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再续接。',
       okText: '仍要续接',
       tone: 'warning',
     }))) return;
+    if (mirrorReadonlySid !== sidAtRequest) {
+      addBar('会话已变化，续接已取消，请重新确认', 'text-info');
+      return;
+    }
     mirrorOverriddenSid = mirrorReadonlySid;
     applyMirror(false, mirrorReadonlySid);
     addBar('已续接 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险', 'text-warning');
@@ -6237,6 +6345,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       </button>
     `);
     speakBtn.onclick = () => {
+      // 特性检测：部分移动端浏览器/内嵌 WebView 不支持 Web Speech API，speechSynthesis 为 undefined
+      // 时直接访问 .speaking 会抛未捕获 TypeError（同 copyText 的 navigator.clipboard && 检测风格）。
+      if (typeof window.speechSynthesis === 'undefined' || typeof SpeechSynthesisUtterance === 'undefined') {
+        addBar('此设备不支持语音朗读', 'text-info');
+        return;
+      }
       if (window.speechSynthesis.speaking && activeSpeechBtn === speakBtn) {
         window.speechSynthesis.cancel();
         speakBtn.innerHTML = `

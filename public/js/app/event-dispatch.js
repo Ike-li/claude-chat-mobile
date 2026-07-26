@@ -80,7 +80,7 @@ export function createAgentEventDispatcher(context, {
         state.lastSeq = 0;
         onEpochReset(event.epoch);
       }
-      if (event.seq <= state.lastSeq) return 'duplicate';
+      if (!Number.isFinite(event.seq) || event.seq <= state.lastSeq) return 'duplicate';
       state.lastSeq = event.seq;
     }
 

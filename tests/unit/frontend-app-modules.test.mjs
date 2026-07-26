@@ -344,6 +344,7 @@ test('agent event dispatcher keeps instance, epoch and sequence boundaries in sh
   assert.equal(dispatch({ type: 'result', instanceId: 'inst-2', epoch: 'e1', seq: 1 }), 'dropped');
   assert.equal(dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 1, sessionId: 's1', payload: { ok: true } }), 'handled');
   assert.equal(dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 1, payload: { ok: false } }), 'duplicate');
+  assert.equal(dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', payload: { ok: false } }), 'duplicate'); // seq 缺失的畸形信封必须判重复，不能永远当新事件
 
   assert.deepEqual(resets, ['e1']);
   assert.deepEqual(sessions, ['s1']);

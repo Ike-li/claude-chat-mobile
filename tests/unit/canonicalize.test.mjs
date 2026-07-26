@@ -47,6 +47,15 @@ test.describe('canonicalizeOp', () => {
     assert.equal(canonicalizeOp(a), canonicalizeOp(b)); // NFC 归一化后应视为等价
   });
 
+  test('key 为 NFC/NFD 两种编码形式的重音字符 → 排序前先归一化，键序一致', () => {
+    const composed = 'á';   // á 单一码点（NFC）
+    const decomposed = 'á'; // a + 组合重音符（NFD），视觉相同、编码不同
+    assert.notEqual(composed, decomposed);
+    const a = { tool: 'X', args: { b: 1, [composed]: 2 }, cwd: '/a' };
+    const b = { tool: 'X', args: { b: 1, [decomposed]: 2 }, cwd: '/a' };
+    assert.equal(canonicalizeOp(a), canonicalizeOp(b));
+  });
+
   test('1.0 与 1 → 同规范化字符串（JS 内部本就是同一 Number 值）', () => {
     const a = { tool: 'X', args: { n: 1.0 }, cwd: '/a' };
     const b = { tool: 'X', args: { n: 1 }, cwd: '/a' };

@@ -22,6 +22,12 @@ test.describe('t()：zh 恒等 + en 查字典回落', () => {
     setLang('en');
     assert.equal(t('尚未翻译的字符串'), '尚未翻译的字符串');
   });
+  test('en locale + 输入撞上 Object.prototype 同名属性 → 仍原样回落，不返回继承函数', () => {
+    setLang('en');
+    assert.equal(t('constructor'), 'constructor');
+    assert.equal(t('toString'), 'toString');
+    assert.equal(t('hasOwnProperty'), 'hasOwnProperty');
+  });
   test('非字符串/空输入安全', () => {
     assert.equal(t(''), '');
     assert.equal(t(null), null);
