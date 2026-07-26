@@ -10,15 +10,15 @@
 
 function canonicalizeValue(v) {
   if (v === null || v === undefined) return 'null';
-  const t = typeof v;
-  if (t === 'boolean') return v ? 'true' : 'false';
-  if (t === 'number') {
+  const kind = typeof v;
+  if (kind === 'boolean') return v ? 'true' : 'false';
+  if (kind === 'number') {
     if (!Number.isFinite(v)) throw new Error('canonicalize: 数值不合法（NaN/Infinity）');
     return String(v); // JS 内部 1.0 与 1 是同一个 Number 值，String() 恒输出 "1"，天然满足"1.0==1"
   }
-  if (t === 'string') return JSON.stringify(v.normalize('NFC'));
+  if (kind === 'string') return JSON.stringify(v.normalize('NFC'));
   if (Array.isArray(v)) return '[' + v.map(canonicalizeValue).join(',') + ']'; // 保序，顺序即语义，不排序
-  if (t === 'object') {
+  if (kind === 'object') {
     // 按 NFC 归一化后的码点比较排序，避免视觉相同、编码形式不同（NFC/NFD）的 key 排出不同顺序
     const keys = Object.keys(v).sort((a, b) => {
       const na = a.normalize('NFC');
@@ -27,7 +27,7 @@ function canonicalizeValue(v) {
     });
     return '{' + keys.map(k => JSON.stringify(k.normalize('NFC')) + ':' + canonicalizeValue(v[k])).join(',') + '}';
   }
-  throw new Error(`canonicalize: 不支持的值类型：${t}`);
+  throw new Error(`canonicalize: 不支持的值类型：${kind}`);
 }
 
 // 词法路径归一化（折叠 ./ 与 ../、去尾斜杠）——刻意不 resolve 符号链接，与 §3.4.1 WorkdirScopeGuard

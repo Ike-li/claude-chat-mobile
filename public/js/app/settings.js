@@ -116,8 +116,8 @@ export function createSettingsController(context, {
     sheet.style.transform = `translateY(${dy}px)`;
     // 下拉时遮罩渐隐（底 0.4 ≈ Tailwind black/40）
     if (dom.settingsScrim) {
-      const t = Math.max(0, 1 - dy / 280);
-      dom.settingsScrim.style.opacity = String(t);
+      const opacity = Math.max(0, 1 - dy / 280);
+      dom.settingsScrim.style.opacity = String(opacity);
     }
   }
 
@@ -145,14 +145,14 @@ export function createSettingsController(context, {
 
   function onDragPointerMove(ev) {
     if (!drag || ev.pointerId !== drag.pointerId) return;
-    const t = now();
+    const nowTs = now();
     const y = ev.clientY;
-    const dt = Math.max(1, t - drag.lastT);
+    const dt = Math.max(1, nowTs - drag.lastT);
     // 瞬时速度（px/ms），EMA 平滑
     const instV = (y - drag.lastY) / dt;
     drag.velocityY = drag.velocityY * 0.6 + instV * 0.4;
     drag.lastY = y;
-    drag.lastT = t;
+    drag.lastT = nowTs;
     // 只允许下拉（正方向）
     const dy = Math.max(0, y - drag.startY);
     drag.dy = dy;

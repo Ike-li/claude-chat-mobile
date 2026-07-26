@@ -3,7 +3,7 @@
 /* global io, marked, DOMPurify, hljs */
 import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
-import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref } from './i18n.js';
+import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
 import { createAlertController } from './app/alerts.js';
@@ -44,15 +44,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     localStorage.setItem('device_token', deviceToken);
   }
 
-  // ⑨ i18n：module script 已 defer 到 DOM 解析完成后执行，此刻查 [data-i18n] 已安全。阶段性——目前只有
-  // 部分静态串已入词典（见 public/js/i18n.js EN_DICT + roadmap ⑨ 分阶段推进），未收录 key 静默留中文。
+  // ⑨ i18n：module script 已 defer 到 DOM 解析完成后执行，整棵静态外壳此刻已就位，且尚未渲染任何
+  // 会话内容——applyI18nToDocument 整树扫文本节点+属性只会碰 index.html 自带的界面文案，不会误伤用户消息。
+  // 静态壳靠整树扫描（免逐句标注、进词典即生效），app.js 运行时生成的模板则各自包 t()。
   setLang(resolveInitialLang(k => localStorage.getItem(k), navigator.language));
-  if (getLang() === 'en') {
-    document.documentElement.lang = 'en';
-    document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = t(el.textContent); });
-    const inputElForI18n = document.getElementById('input');
-    if (inputElForI18n) inputElForI18n.placeholder = t(inputElForI18n.placeholder);
-  }
+  applyI18nToDocument(document);
 
   // ---- DOM ----
   const $ = id => document.getElementById(id);
@@ -114,9 +110,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       card.dataset.model = value;                 // 属性走 dataset，不进 HTML 串
       const [nameDiv, noteDiv] = card.children;   // 两个内层 div，textContent 赋值（自动转义）
       nameDiv.textContent = value;
-      noteDiv.textContent = note || '当前加载模型';
+      noteDiv.textContent = note || t('当前加载模型');
       card.onclick = () => {
-        if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
+        if (mirrorReadonlySid) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; } // 单驾驶员：驾驶期设置冻结
         haptic('tap');
         modelInput.value = value;
         delete modelInput.dataset.fullModel; // 发送时 dataset.fullModel 优先级高于 value，选中此卡须清掉旧的（同 rebuildCustomModelGrid）
@@ -283,7 +279,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       cliDefaultLabel,
     });
     if (pillModelText) pillModelText.textContent = modelPillText;
-    if (pillModel) pillModel.title = (model || cliDefaultLabel || cwdDefaultModel) ? modelPillText : '选择模型';
+    if (pillModel) pillModel.title = (model || cliDefaultLabel || cwdDefaultModel) ? modelPillText : t('选择模型');
     if (customModelGrid) {
       // 空选中时高亮 CLI 的 default 项（与终端 /model 列表一致），不靠 data-model="" 伪项
       const activeVal = model || (cliDefault ? 'default' : '');
@@ -329,7 +325,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const active = val === selectedVal
         || (!!currentModel && val === currentModel)
         || (!currentModel && val === 'default' && selectedVal === 'default');
-      const using = active ? ' · 使用中' : '';
+      const using = active ? t(' · 使用中') : '';
       const card = el(`
         <div data-model="${esc(val)}" class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
           <div class="text-xs font-semibold truncate ${active ? 'text-accent' : 'text-ink'}">${esc(display)}${using ? `<span class="text-[11px] font-normal opacity-80">${esc(using)}</span>` : ''}</div>
@@ -337,7 +333,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         </div>
       `);
       card.onclick = () => {
-        if (mirrorReadonlySid) { addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; }
+        if (mirrorReadonlySid) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
         haptic('tap');
         // value=default 是 CLI /model 「不 pin」语义：select 置空（发消息=undefined→CLI 自选），
         // 不把字面 'default' 写进 select（否则发消息会带 model:'default' 让后端误 setModel 字面值）。
@@ -586,15 +582,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return;
     }
     if (!streamLiveStatusEl?.isConnected) return;
-    const t = streamLiveStatusEl.querySelector('#streamLiveStatusText');
-    if (t) t.textContent = text || formatLiveActivityText('default');
+    const textEl = streamLiveStatusEl.querySelector('#streamLiveStatusText');
+    if (textEl) textEl.textContent = text || formatLiveActivityText('default');
   }
   function showStreamLiveStatus(text) {
     if (!messagesEl) return;
     leaveStartScreen();
     const row = ensureStreamLiveStatus();
-    const t = row.querySelector('#streamLiveStatusText');
-    if (t) t.textContent = text || formatLiveActivityText('default');
+    const textEl = row.querySelector('#streamLiveStatusText');
+    if (textEl) textEl.textContent = text || formatLiveActivityText('default');
     if (row.parentNode !== messagesEl) messagesEl.appendChild(row);
     else if (messagesEl.lastChild !== row) messagesEl.appendChild(row);
     scrollBottom();
@@ -635,8 +631,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 上翻阅读的用户反复拽底）；未挂载且忙碌才走 showStreamLiveStatus 完成挂载+置底。
   function renderLiveLine() {
     if (streamLiveStatusEl?.isConnected) {
-      const t = streamLiveStatusEl.querySelector('#streamLiveStatusText');
-      if (t) { t.textContent = renderLiveLineText(); return; }
+      const textEl = streamLiveStatusEl.querySelector('#streamLiveStatusText');
+      if (textEl) { textEl.textContent = renderLiveLineText(); return; }
     }
     if (_busyState) showStreamLiveStatus(renderLiveLineText());
   }
@@ -763,13 +759,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     _offlineDrainInFlight = true;
     const items = offlineQueue;
     offlineQueue = []; // 本批取出；requeue 的再 push 回
-    addBar(`正在重发离线发送队列中的 ${items.length} 条消息...`, 'text-info');
+    addBar(`${t('正在重发离线发送队列中的')} ${items.length} ${t('条消息...')}`, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息`);
     let hadViewingOk = false;
     try {
       for (const item of items) {
         const indicator = item.bubbleEl?.querySelector('.pending-indicator');
-        if (indicator) indicator.textContent = '🕐 正在发送...';
+        if (indicator) indicator.textContent = t('🕐 正在发送...');
         logClientEvent('send', `[WEB_SEND] 重发离线消息: "${String(item.text || '').slice(0, 100)}" (${String(item.text || '').length} 字符)`);
         // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
         const decision = await new Promise((resolve) => {
@@ -787,10 +783,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           if (indicator) indicator.remove();
           if (targetsViewing) hadViewingOk = true;
         } else if (decision.outcome === 'permanent') {
-          if (indicator) indicator.textContent = `⚠️ ${decision.message || '发送失败'}，已停止重试`;
+          if (indicator) indicator.textContent = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else {
-          if (indicator) indicator.textContent = '🕐 未确认送达，等待重连重试...';
+          if (indicator) indicator.textContent = t('🕐 未确认送达，等待重连重试...');
           offlineQueue.push(item);
           logClientEvent('send', `[WEB_SEND] 离线消息重发未确认，已重新排队`);
         }
@@ -918,9 +914,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (authToken) authToken.value = '';         // 成功后不把令牌留在本地表单状态里
     accessRelogin?.classList.add('hidden');      // 连上即收起重登浮层
     connectErrorCount = 0;
-    if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = '进入'; }
+    if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
     connDot.className = 'w-2 h-2 rounded-full bg-success shrink-0';
-    setStatus('已连接');
+    setStatus(t('已连接'));
     startRttLoop(); // 连上即开始测 RTT（立即一次 + 周期）
     cliStatusWrapEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
     logClientEvent('conn', `连接成功！Socket ID = ${socket.id}。当前使用 token: ${token ? token.slice(0, 4) + '***' : '无（本机/公网）'}`);
@@ -939,7 +935,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   });
   socket.on('disconnect', (reason) => {
     connDot.className = 'w-2 h-2 rounded-full bg-danger shrink-0';
-    setStatus('连接断开，自动重连中…');
+    setStatus(t('连接断开，自动重连中…'));
     stopRttLoop();
     clearRttDisplay();
     cliStatusWrapEl?.classList.add('opacity-40'); // E16：置灰示陈旧（折叠条整体：summary + ANSI 行；内容含 🕐，不另发明离线文案）
@@ -949,17 +945,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     logClientEvent('conn', `连接尝试失败: ${err.message || err}`);
     if (err.message === 'unauthorized') {
       if (isLanOrLocal() || !document.body.dataset.cfAccess) {
-        setStatus('需要访问令牌');
-        showAuthGate(socket.auth?.token ? '令牌无效，请重新输入' : ''); // 有 token 仍失败 = 无效
+        setStatus(t('需要访问令牌'));
+        showAuthGate(socket.auth?.token ? t('令牌无效，请重新输入') : ''); // 有 token 仍失败 = 无效
       } else {
-        setStatus('需要重新登录');                 // 公网无 token 可输，走 Access 重登
+        setStatus(t('需要重新登录'));                 // 公网无 token 可输，走 Access 重登
         maybeAccessRelogin();
       }
     } else {
-      setStatus(`连接失败：${err.message}`);
+      setStatus(`${t('连接失败：')}${err.message}`);
       // 非 unauthorized 错误（如网络抖动）也要复位登录按钮——仅在它确实还卡在 submitAuth() 置的
       // 「连接中…」禁用态时才复位，不强制弹出整个 authGate（没打开过登录页时不该无端冒出来）。
-      if (authSubmit && authSubmit.disabled) { authSubmit.disabled = false; authSubmit.textContent = '进入'; }
+      if (authSubmit && authSubmit.disabled) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
       // 公网：传输错误攒几次后探测是不是 Access 会话过期（被 302 到登录页），是则提示手动重登。
       if (!isLanOrLocal() && document.body.dataset.cfAccess && ++connectErrorCount >= 3) {
         connectErrorCount = 0;
@@ -1057,17 +1053,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       else authError.classList.add('hidden');
     }
     authGate.classList.remove('hidden');
-    if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = '进入'; }
+    if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
     setTimeout(() => authToken?.focus(), 50);
   }
   function submitAuth() {
     const val = authToken?.value.trim();
-    if (!val) { showAuthGate('请输入访问令牌'); return; }
+    if (!val) { showAuthGate(t('请输入访问令牌')); return; }
     localStorage.setItem('auth_token', val);
     token = val;
     socket.auth = { token: val, deviceToken };
     if (authError) authError.classList.add('hidden');
-    if (authSubmit) { authSubmit.disabled = true; authSubmit.textContent = '连接中…'; }
+    if (authSubmit) { authSubmit.disabled = true; authSubmit.textContent = t('连接中…'); }
     socket.connect(); // 用新 auth 重连；成功→connect 收起，失败→connect_error 再次提示
   }
   if (authSubmit) authSubmit.onclick = submitAuth;
@@ -1085,7 +1081,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function renderDoctor(rep, box) {
     box.replaceChildren();
     if (!rep || !Array.isArray(rep.checks)) {
-      const e = el(`<div class="text-danger"></div>`); e.textContent = '体检失败或无响应'; box.appendChild(e); return;
+      const e = el(`<div class="text-danger"></div>`); e.textContent = t('体检失败或无响应'); box.appendChild(e); return;
     }
     const R = { ready: ['✅', 'text-success'], caution: ['⚠️', 'text-warning'], blocked: ['🚫', 'text-danger'] };
     const [ricon, rcls] = R[rep.readiness?.level] || ['', 'text-ink'];
@@ -1114,7 +1110,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const box = $('doctorReport');
     box.classList.remove('hidden');
     box.replaceChildren();
-    const loading = el(`<div class="text-ink-faint"></div>`); loading.textContent = '🔍 体检中…'; box.appendChild(loading);
+    const loading = el(`<div class="text-ink-faint"></div>`); loading.textContent = t('🔍 体检中…'); box.appendChild(loading);
     socket.emit('doctor:run', {}, rep => renderDoctor(rep, box));
   };
 
@@ -1146,21 +1142,21 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
     serviceStatusBody.replaceChildren();
     // 段1 基础：连接状态取自本 socket 与 RTT 监视器（不另发 ping）
-    const basic = section('基础');
+    const basic = section(t('基础'));
     for (const r of serviceStatusBasicRows({ startedAt: res.startedAt, versions: res.versions, connected: socket.connected, rttMs: rttMonitor.last(), now, logging: res.logging })) {
       addRow(basic.lastChild, r.label, r.value, r.alert ? 'text-warning' : null); // 日志开关：SDK 调试开着标黄（忘关观测点）
     }
     serviceStatusBody.appendChild(basic);
     // 段2 异常告警：与抽屉「服务」小节同一纯函数（文案一致）。
     // 服务端已按时效窗判定（超窗自动退场），此处只渲染。
-    const noticesSection = section('异常告警');
+    const noticesSection = section(t('异常告警'));
     const notices = formatServiceNotices({
       service: { deliveryFailure: res.deliveryFailure, rateLimitLockout: res.rateLimitLockout, clientError: res.clientError },
       now,
     });
     if (!notices.length) {
       const okRow = el(`<div class="px-3 py-2.5 text-xs text-success"></div>`);
-      okRow.textContent = '✓ 无异常';
+      okRow.textContent = t('✓ 无异常');
       noticesSection.lastChild.appendChild(okRow);
     } else {
       for (const line of notices) {
@@ -1173,7 +1169,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     serviceStatusBody.appendChild(noticesSection);
     const hint = el(`<div class="text-[10px] text-ink-faint"></div>`);
-    hint.textContent = '数据每 5 秒自动刷新 · 告警超 24 小时自动退场 · 原始计数见 /metrics';
+    hint.textContent = t('数据每 5 秒自动刷新 · 告警超 24 小时自动退场 · 原始计数见 /metrics');
     serviceStatusBody.appendChild(hint);
   }
   function loadServiceStatus() {
@@ -1212,7 +1208,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     haptic('tap');
     try {
       await navigator.clipboard.writeText(currentSessionIdForCopy);
-      addBar(`已复制 session id：${currentSessionIdForCopy}`, 'text-ink-faint');
+      addBar(`${t('已复制 session id：')}${currentSessionIdForCopy}`, 'text-ink-faint');
     } catch {
       addBar(`session id：${currentSessionIdForCopy}`, 'text-ink-faint'); // 剪贴板不可用（非 HTTPS 等）时至少显示全 id
     }
@@ -1222,17 +1218,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const btnRestartServer = $('btnRestartServer');
   if (btnRestartServer) btnRestartServer.onclick = async () => {
     const busyN = instancesList.filter(i => i.state === 'busy' || i.state === 'permission').length;
-    const warnLine = busyN ? `⚠️ 当前有 ${busyN} 个会话在运行/待审批，重启会中断它们（含后台任务）。\n\n` : '';
+    const warnLine = busyN ? `⚠️ ${busyN} ${t('个会话在运行/待审批，重启会中断它们（含后台任务）。')}\n\n` : '';
     if (!(await appConfirm({
-      title: '⟳ 重启常驻 server？',
-      body: `${warnLine}服务将优雅退出并由 KeepAlive 自动拉起，页面会自动重连。`,
-      okText: '重启',
+      title: t('⟳ 重启常驻 server？'),
+      body: `${warnLine}${t('服务将优雅退出并由 KeepAlive 自动拉起，页面会自动重连。')}`,
+      okText: t('重启'),
       tone: 'danger',
     }))) return;
     haptic('warning');
-    addBar('⟳ 正在重启服务…页面将自动重连', 'text-warning');
+    addBar(t('⟳ 正在重启服务…页面将自动重连'), 'text-warning');
     socket.emit('dev:restart', {}, res => {
-      if (res && res.ok === false) addBar(`重启被拒：${res.error || '未知'}`, 'text-danger');
+      if (res && res.ok === false) addBar(`${t('重启被拒：')}${res.error || t('未知')}`, 'text-danger');
     });
   };
 
@@ -1259,7 +1255,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       card.style.boxShadow = 'var(--shadow-pop)';
       const title = document.createElement('div');
       title.className = 'text-sm font-semibold text-ink mb-1.5';
-      title.textContent = '🔔 新设备请求接入';
+      title.textContent = t('🔔 新设备请求接入');
       const meta = document.createElement('div');
       meta.className = 'text-[11px] text-ink-soft leading-snug mb-2.5 break-all';
       const idLine = document.createElement('div'); idLine.textContent = 'ID：' + (d.deviceId || '—');
@@ -1271,12 +1267,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const approve = document.createElement('button');
       approve.type = 'button';
       approve.className = 'flex-1 py-2 rounded-lg bg-cta text-white active:brightness-95 text-xs font-medium';
-      approve.textContent = '✓ 准入';
+      approve.textContent = t('✓ 准入');
       approve.addEventListener('click', () => { socket.emit('user:approveDevice', { deviceId: d.deviceId }); });
       const deny = document.createElement('button');
       deny.type = 'button';
       deny.className = 'flex-1 py-2 rounded-lg bg-sunk text-ink-soft active:bg-line-soft text-xs font-medium';
-      deny.textContent = '✕ 拒绝';
+      deny.textContent = t('✕ 拒绝');
       deny.addEventListener('click', () => { socket.emit('user:denyDevice', { deviceId: d.deviceId }); });
       btns.append(approve, deny);
       card.append(title, meta, btns);
@@ -1330,7 +1326,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (displayedInstanceId && !displayedSessionId && sessionId) {
         displayedSessionId = sessionId;
         updatePillSession(sessionId);
-        if (topTitleText) topTitleText.textContent = '聊天';
+        if (topTitleText) topTitleText.textContent = t('聊天');
       }
     },
   });
@@ -1363,7 +1359,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   });
   function failPendingToolCards(message) {
     if (!toolCards.size) return;
-    const summary = message || '工具执行已因本轮错误停止';
+    const summary = message || t('工具执行已因本轮错误停止');
     for (const card of toolCards.values()) {
       const status = card.querySelector('.t-status');
       if (status) setStatusIcon(status, 'error');
@@ -1391,7 +1387,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     lbl.textContent = queuedBubbleState({ queued: true }).label;
     row.appendChild(lbl);
     if (clientMessageId) { // 无 id（旧客户端发的）没法定位撤回，只显示状态不给按钮
-      const btn = el(`<button type="button" class="underline decoration-dotted" data-testid="queued-cancel">撤回</button>`);
+      const btn = el(`<button type="button" class="underline decoration-dotted" data-testid="queued-cancel">${t('撤回')}</button>`);
       btn.onclick = () => requestCancelQueued(clientMessageId);
       row.appendChild(btn);
     }
@@ -1433,7 +1429,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
       if (!ack?.ok) {
         // 已开跑/实例没了：就地转正气泡（它不再是排队态），负因走提示条
-        addBar(ack?.error || '撤回失败，请重试', 'text-info');
+        addBar(ack?.error || t('撤回失败，请重试'), 'text-info');
         promoteQueuedBubbles();
         return;
       }
@@ -1528,7 +1524,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           }
           renderCliPanelState();
         } else {
-          if (currentModel && m && m !== currentModel) addModeBar(`模型 → ${m}`, 'text-info');
+          if (currentModel && m && m !== currentModel) addModeBar(`${t('模型 →')} ${m}`, 'text-info');
           updateModelAndSuffix(rawM);
           rebuildEffortOptions(currentModel); // 模型变 → effort 档位跟随；空列表也刷（显示默认磁贴，好过整个隐藏）
           rebuildCustomModelGrid(modelsList); // 模型网格用已有缓存重建（models 事件没到也不空白）
@@ -1667,7 +1663,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const card = el(`
         <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
           <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
-            <span class="t-status status-icon shrink-0 text-warning" aria-label="进行中"></span><span class="t-name font-mono font-semibold text-ink truncate">${esc(cardTitle)}</span>
+            <span class="t-status status-icon shrink-0 text-warning" aria-label="${t('进行中')}"></span><span class="t-name font-mono font-semibold text-ink truncate">${esc(cardTitle)}</span>
           </summary>
           <div class="px-3 pb-2 space-y-1">
             <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
@@ -1713,7 +1709,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             tbody.replaceChildren();
             if (!res?.ok) {  // inWhitelist=false → 红字（安全拒绝），其余灰字（过期/读失败）
               const m = el(`<div class="${res?.inWhitelist === false ? 'text-danger' : 'text-ink-faint'}"></div>`);
-              m.textContent = res?.error || '预览不可用';
+              m.textContent = res?.error || t('预览不可用');
               tbody.appendChild(m);
               return;
             }
@@ -1725,17 +1721,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             } else if (res.snippet) {  // Read 文件片段：图片 → 缩略图；文本 → 代码高亮
               if (res.snippet.image?.base64 && res.snippet.image?.mimeType) {
                 // 与用户附件气泡同源：data URI + CSP img-src data: 已许
-                const img = el(`<img class="max-w-full max-h-48 rounded border border-line object-contain bg-sunk" alt="预览">`);
+                const img = el(`<img class="max-w-full max-h-48 rounded border border-line object-contain bg-sunk" alt="${t('预览')}">`);
                 img.src = `data:${res.snippet.image.mimeType};base64,${res.snippet.image.base64}`;
                 tbody.appendChild(img);
                 if (res.snippet.snippet) {
                   const cap = el(`<div class="text-ink-faint text-[11px]"></div>`);
-                  cap.textContent = res.snippet.snippet + (res.snippet.truncated ? ' …（已截断）' : '');
+                  cap.textContent = res.snippet.snippet + (res.snippet.truncated ? t(' …（已截断）') : '');
                   tbody.appendChild(cap);
                 }
               } else {
                 const pre = el(`<pre class="overflow-x-auto whitespace-pre-wrap break-words"><code></code></pre>`);
-                pre.querySelector('code').textContent = res.snippet.snippet + (res.snippet.truncated ? '\n…（已截断）' : '');
+                pre.querySelector('code').textContent = res.snippet.snippet + (res.snippet.truncated ? t('\n…（已截断）') : '');
                 tbody.appendChild(pre);
                 try { hljs.highlightElement(pre.querySelector('code')); } catch { /* 高亮失败不影响显示 */ }
               }
@@ -1915,7 +1911,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       permQueue.push(p);
       showNextPerm();
       // FE-NEW-002：JSON.stringify(undefined) 为 undefined，.slice 抛错会中断 handler（verify 也不跑）
-      notify('⚠️ 等待审批', `${p.name}：${safeJsonPreview(p.input, 80)}`);
+      notify(t('⚠️ 等待审批'), `${p.name}：${safeJsonPreview(p.input, 80)}`);
       verifyPermIntegrity(p); // 异步、不阻塞渲染——NFR-17 协议步骤4，核验结果稍后到达时若仍是当前卡片才提示
     },
     question(p) {
@@ -1928,7 +1924,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       showNextQuestion();
       // FE-003：text 可能缺失/非字符串（畸形 AskUserQuestion / SDK 漂移），slice 会抛并中断 handler。
       const qPreview = typeof p.text === 'string' ? p.text : (p.text == null ? '' : String(p.text));
-      notify('❓ 需要选择', qPreview.slice(0, 80));
+      notify(t('❓ 需要选择'), qPreview.slice(0, 80));
     },
     // M4：审批/选题完成后广播，多设备或重放缓冲时关闭陈旧弹窗
     request_resolved(p) {
@@ -1938,7 +1934,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         // answerPerm() 已乐观显示过"✅ 已允许"（activePerm 早已本地清空，下面的分支找不到它，无从
         // 事后订正）。这里补一条独立提示，避免用户以为操作已生效、实际却被悄悄拦下。
         if (p.outcome === 'integrity_mismatch') {
-          addBar('⚠️ 完整性校验未通过，该操作已被服务端拒绝执行（并非您的选择生效）', 'text-danger');
+          addBar(t('⚠️ 完整性校验未通过，该操作已被服务端拒绝执行（并非您的选择生效）'), 'text-danger');
         }
         if (activePerm?.requestId === requestId) {
           activePerm = null;
@@ -2057,10 +2053,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       // 排队条终态（live + buffer 回放共用同一路径，多设备视图一致）
       if (p.kind === 'queue_dropped' && Array.isArray(p.clientMessageIds)) {
-        markQueuedCancelled(p.clientMessageIds, '已随停止取消，未发送');
+        markQueuedCancelled(p.clientMessageIds, t('已随停止取消，未发送'));
       }
       if (p.kind === 'queue_cancelled' && p.clientMessageId) {
-        markQueuedCancelled([p.clientMessageId], '已撤回，未发送');
+        markQueuedCancelled([p.clientMessageId], t('已撤回，未发送'));
       }
     },
     // E16：web 自有结构化状态（非 ANSI）。摘要去 emoji，展开分段构建 DOM（createElement+textContent，
@@ -2085,9 +2081,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 额度重置倒计时：ISO resets_at → 相对时长（对齐 CLI statusline `reset 2h05m`）
       const fmtReset = iso => {
         if (!iso) return '';
-        const t = Date.parse(iso);
-        if (!Number.isFinite(t)) return '';
-        const rem = Math.max(0, t - Date.now());
+        const parsed = Date.parse(iso);
+        if (!Number.isFinite(parsed)) return '';
+        const rem = Math.max(0, parsed - Date.now());
         if (rem <= 0) return 'now';
         const totalMins = Math.ceil(rem / 60_000);
         const days = Math.floor(totalMins / 1440), hours = Math.floor((totalMins % 1440) / 60), mins = totalMins % 60;
@@ -2124,17 +2120,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const segs = [];
         if (rate?.fiveHour && Number.isFinite(rate.fiveHour.usedPercent)) {
           const pc = rate.fiveHour.usedPercent;
-          let t = `5h ${Math.round(pc)}%`;
+          let label = `5h ${Math.round(pc)}%`;
           const r = fmtReset(rate.fiveHour.resetsAt);
-          if (r) t += ` reset ${r}`;
-          segs.push({ text: t, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
+          if (r) label += ` reset ${r}`;
+          segs.push({ text: label, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
         }
         if (rate?.sevenDay && Number.isFinite(rate.sevenDay.usedPercent)) {
           const pc = rate.sevenDay.usedPercent;
-          let t = `7d ${Math.round(pc)}%`;
+          let label = `7d ${Math.round(pc)}%`;
           const r = fmtReset(rate.sevenDay.resetsAt);
-          if (r) t += ` reset ${r}`;
-          segs.push({ text: t, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
+          if (r) label += ` reset ${r}`;
+          segs.push({ text: label, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-info' });
         }
         return segs;
       };
@@ -2144,7 +2140,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         cliStatusEl.textContent = '';
         const unavailable = document.createElement('div');
         unavailable.className = 'flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5';
-        unavailable.appendChild(span('CLI 状态暂不可用', 'text-warning font-medium'));
+        unavailable.appendChild(span(t('CLI 状态暂不可用'), 'text-warning font-medium'));
         if (p.source.reason) unavailable.appendChild(span(`(${p.source.reason})`, 'text-ink-faint'));
         cliStatusEl.appendChild(unavailable);
         // 额度是唯一例外：仅当 rateFromSnapshot 显式标记为账号级快照回落值时才展示，且必须清楚
@@ -2152,11 +2148,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         // 等）仍严格遵守下面 return 处的注释、绝不混入陈旧字段，此处不因为顺手展示额度而放宽。
         const staleRateSegs = (p.rate && p.rateFromSnapshot) ? buildRateSegs(p.rate) : [];
         if (staleRateSegs.length) {
-          staleRateSegs.push({ text: '(账号级旧值，非实时)', cls: 'text-ink-faint' });
+          staleRateSegs.push({ text: t('(账号级旧值，非实时)'), cls: 'text-ink-faint' });
           const staleRateRow = row(staleRateSegs);
           if (staleRateRow) cliStatusEl.appendChild(staleRateRow);
         }
-        if (cliSummaryEl) cliSummaryEl.textContent = staleRateSegs.length ? 'statusline · CLI 暂不可用（额度沿用旧值）' : 'statusline · CLI 暂不可用';
+        if (cliSummaryEl) cliSummaryEl.textContent = staleRateSegs.length ? t('statusline · CLI 暂不可用（额度沿用旧值）') : t('statusline · CLI 暂不可用');
         cliStatusWrapEl?.classList.remove('hidden');
         return; // CLI owner 缺/陈旧时明确空缺，绝不把上一份 SDK/CLI 字段混进来（额度回落值是唯一例外，见上）
       }
@@ -2222,7 +2218,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // （code review：此前只在 cli-unavailable 分支加了 disclaimer，正常行漏标）。
       const rateSegs = buildRateSegs(p.rate);
       if (rateSegs.length && p.rateFromSnapshot) {
-        rateSegs.push({ text: '(账号级旧值，非实时)', cls: 'text-ink-faint' });
+        rateSegs.push({ text: t('(账号级旧值，非实时)'), cls: 'text-ink-faint' });
       }
       // 行B（遥测，对齐 CLI 次行）：5h/7d │ uncached/response │ cache%+write/read
       linesArr.push(row([
@@ -2258,14 +2254,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function attachToolFullExpand(card, toolUseId) {
     if (!card || !toolUseId || card.querySelector('[data-testid="tool-expand-full"]')) return;
     const host = card.querySelector('.space-y-1') || card;
-    const btn = el(`<button type="button" class="text-info underline text-[11px]" data-testid="tool-expand-full">展开全文</button>`);
+    const btn = el(`<button type="button" class="text-info underline text-[11px]" data-testid="tool-expand-full">${t('展开全文')}</button>`);
     const inst = viewingInstanceId;
     btn.onclick = () => {
       btn.disabled = true;
-      btn.textContent = '加载中…';
+      btn.textContent = t('加载中…');
       socket.emit('tool:full', { instanceId: inst, toolUseId }, res => {
         if (!res?.ok) {
-          btn.textContent = res?.error || '全文不可用';
+          btn.textContent = res?.error || t('全文不可用');
           btn.disabled = false;
           return;
         }
@@ -2329,22 +2325,22 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   function getThinking(id) {
     const key = id || '_';
-    let t = thinkings.get(key);
-    if (!t) {
+    let entry = thinkings.get(key);
+    if (!entry) {
       const wrap = el(`
         <details class="msg-frame thinking rounded-lg bg-surface border border-line-soft text-xs text-ink-faint">
-          <summary class="px-3 py-1.5">💭 思考过程</summary>
+          <summary class="px-3 py-1.5">${t('💭 思考过程')}</summary>
           <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
         </details>`);
       const body = document.createTextNode('');
       wrap.querySelector('.t-body').appendChild(body);
       wrap.classList.add('thinking-live'); // UX-016
       appendMessage(wrap);
-      t = { body, el: wrap };
-      thinkings.set(key, t);
+      entry = { body, el: wrap };
+      thinkings.set(key, entry);
       scrollBottom();
     }
-    return t;
+    return entry;
   }
 
   // ---- 子 agent 可折叠卡（切片 C：默认收起，点头展开看 text/thinking/tool）----
@@ -2412,20 +2408,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   function getSubagentThinking(sa, messageId) {
     const key = messageId || '_';
-    let t = sa.thinkings.get(key);
-    if (!t) {
+    let entry = sa.thinkings.get(key);
+    if (!entry) {
       const wrap = el(`
         <details class="thinking rounded-lg bg-sunk/40 border border-line-soft text-xs text-ink-faint">
-          <summary class="px-2 py-1">💭 思考过程</summary>
+          <summary class="px-2 py-1">${t('💭 思考过程')}</summary>
           <pre class="t-body px-2 pb-1 whitespace-pre-wrap"></pre>
         </details>`);
       const body = document.createTextNode('');
       wrap.querySelector('.t-body').appendChild(body);
       sa.body.appendChild(wrap);
-      t = { body };
-      sa.thinkings.set(key, t);
+      entry = { body };
+      sa.thinkings.set(key, entry);
     }
-    return t;
+    return entry;
   }
 
   // turn-end：把本轮主会话写盘工具聚合成「已编辑 N 个文件」卡（对齐官方汇总；无撤销）。
@@ -2478,7 +2474,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           preview.replaceChildren();
           if (!res?.ok) {
             const m = el(`<div class="${res?.inWhitelist === false ? 'text-danger' : 'text-ink-faint'}"></div>`);
-            m.textContent = res?.error || '预览不可用';
+            m.textContent = res?.error || t('预览不可用');
             preview.appendChild(m);
             return;
           }
@@ -2491,7 +2487,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             renderToolDiff(preview, res.diff);
           } else {
             const m = el(`<div class="text-ink-faint"></div>`);
-            m.textContent = '无 diff 详情（可到对应工具卡查看）';
+            m.textContent = t('无 diff 详情（可到对应工具卡查看）');
             preview.appendChild(m);
           }
         });
@@ -2539,7 +2535,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (activePerm || permQueue.length === 0) return;
     activePerm = permQueue.shift();
     permTool.textContent = activePerm.name;
-    permCwd.textContent = `工作目录：${activePerm.cwd}`;
+    permCwd.textContent = `${t('工作目录：')}${activePerm.cwd}`;
     // 每张新卡片先重置警示条（上一张若显示过不应带到这张）；若这条请求排队期间已判定过指纹不符
     // （permIntegrityMismatched），直接补显示——不会再触发一次新的异步校验。
     if (permIntegrityWarn) permIntegrityWarn.classList.add('hidden');
@@ -2562,7 +2558,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
     if (full.length > 4000) {
       applyPermInput(full.slice(0, 4000));
-      permExpandBtn = el(`<button class="text-xs text-accent mt-1 block">…显示全部（${full.length} 字符）</button>`);
+      permExpandBtn = el(`<button class="text-xs text-accent mt-1 block">${t('…显示全部')} (${full.length} ${t('字符')})</button>`);
       permExpandBtn.onclick = () => { applyPermInput(full); permExpandBtn.remove(); permExpandBtn = null; };
       permInput.after(permExpandBtn);
     } else {
@@ -2603,7 +2599,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function answerPerm(decision) {
     if (!activePerm) return;
     if (!socket.connected) { // 断线瞬间点审批：emit 大概率送不达，不能乐观显示"已处理"却让请求悬空未决
-      addBar('网络未连接，请等待重新连接后再操作', 'text-danger');
+      addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger');
       return;
     }
     const wasExitPlanMode = activePerm.name === 'ExitPlanMode'; // 下方 activePerm 即置 null，提前捕获
@@ -2620,7 +2616,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (wasExitPlanMode && decision === 'allow') payload.exitMode = selectedExitMode || 'default';
     socket.emit('user:approve', payload);
     const exitNote = (wasExitPlanMode && decision === 'allow') ? ` → ${payload.exitMode}` : '';
-    addBar(`${decision === 'allow' ? '✅ 已允许' : '🚫 已拒绝'}：${activePerm.name}${exitNote}`, 'text-ink-faint');
+    addBar(`${decision === 'allow' ? t('✅ 已允许：') : t('🚫 已拒绝：')}${activePerm.name}${exitNote}`, 'text-ink-faint');
     permIntegrityMismatched.delete(activePerm.requestId);
     activePerm = null;
     permExpandBtn?.remove(); permExpandBtn = null;
@@ -2678,7 +2674,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (questionMultiSubmit) {
       questionMultiSubmit.classList.toggle('hidden', !multi);
       questionMultiSubmit.disabled = true;
-      questionMultiSubmit.textContent = '确认选择';
+      questionMultiSubmit.textContent = t('确认选择');
     }
     questionOptions.innerHTML = '';
     resetQuestionOtherUI();
@@ -2696,13 +2692,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         wrap.appendChild(btn);
       }
       if (opt && typeof opt === 'object' && opt.preview) {
-        const prevBtn = el(`<button type="button" class="w-full text-left px-3 pb-2 text-[11px] text-info underline">查看预览</button>`);
+        const prevBtn = el(`<button type="button" class="w-full text-left px-3 pb-2 text-[11px] text-info underline">${t('查看预览')}</button>`);
         const prevBox = el(`<pre class="hidden mx-3 mb-2 p-2 rounded bg-canvas border border-line-soft text-[11px] whitespace-pre-wrap break-words text-ink-soft max-h-40 overflow-y-auto"></pre>`);
         prevBox.textContent = String(opt.preview);
         prevBtn.onclick = (e) => {
           e.stopPropagation();
           prevBox.classList.toggle('hidden');
-          prevBtn.textContent = prevBox.classList.contains('hidden') ? '查看预览' : '收起预览';
+          prevBtn.textContent = prevBox.classList.contains('hidden') ? t('查看预览') : t('收起预览');
         };
         wrap.appendChild(prevBtn);
         wrap.appendChild(prevBox);
@@ -2717,8 +2713,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           if (questionMultiSubmit) {
             questionMultiSubmit.disabled = multiSelectedIndexes.size === 0;
             questionMultiSubmit.textContent = multiSelectedIndexes.size
-              ? `确认选择（${multiSelectedIndexes.size}）`
-              : '确认选择';
+              ? `${t('确认选择')} (${multiSelectedIndexes.size})`
+              : t('确认选择');
           }
         };
       } else {
@@ -2740,37 +2736,37 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   function answerQuestion(index) {
     if (!activeQuestion) return;
-    if (!socket.connected) { addBar('网络未连接，请等待重新连接后再操作', 'text-danger'); return; } // 断线瞬间选择：emit 大概率送不达，不能乐观标记已答
+    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; } // 断线瞬间选择：emit 大概率送不达，不能乐观标记已答
     // 先标记已答再 emit/关窗：紧接的切会话/sync 即使抢在 server resolve 前到达，也不会重弹
     markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndex: index, instanceId: viewingInstanceId }); // 台阶3 路由
     const label = optionLabel(activeQuestion.options[index]);
-    finishQuestionUI(`已选择：${label}`);
+    finishQuestionUI(`${t('已选择：')}${label}`);
   }
   function answerQuestionMulti() {
     if (!activeQuestion || !multiSelectedIndexes.size) {
-      addBar('请至少选择一项', 'text-info');
+      addBar(t('请至少选择一项'), 'text-info');
       return;
     }
-    if (!socket.connected) { addBar('网络未连接，请等待重新连接后再操作', 'text-danger'); return; }
+    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
     const indexes = [...multiSelectedIndexes].sort((a, b) => a - b);
     markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndexes: indexes, instanceId: viewingInstanceId });
     const labels = indexes.map(i => optionLabel(activeQuestion.options[i])).filter(Boolean);
-    finishQuestionUI(`已选择：${labels.join('、')}`);
+    finishQuestionUI(`${t('已选择：')}${labels.join(t('、'))}`);
   }
   function answerQuestionOther() {
     if (!activeQuestion) return;
     const freeText = (questionOtherInput?.value || '').trim();
     if (!freeText) {
-      addBar('请先输入其他答案', 'text-info');
+      addBar(t('请先输入其他答案'), 'text-info');
       questionOtherInput?.focus();
       return;
     }
-    if (!socket.connected) { addBar('网络未连接，请等待重新连接后再操作', 'text-danger'); return; }
+    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
     markQuestionAnswered(activeQuestion.requestId);
     socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: viewingInstanceId });
-    finishQuestionUI(`已回答（其他）：${freeText}`);
+    finishQuestionUI(`${t('已回答（其他）：')}${freeText}`);
   }
   if (questionMultiSubmit) questionMultiSubmit.onclick = () => answerQuestionMulti();
   if (questionOtherToggle) {
@@ -2793,7 +2789,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     questionSkip.onclick = () => {
       if (!activeQuestion) return;
       haptic('tap');
-      addBar('已跳过提问（中止本轮）', 'text-ink-faint');
+      addBar(t('已跳过提问（中止本轮）'), 'text-ink-faint');
       requestInterrupt();
     };
   }
@@ -2802,7 +2798,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     permInterrupt.onclick = () => {
       if (!activePerm) return;
       haptic('tap');
-      addBar('已请求中止本轮', 'text-ink-faint');
+      addBar(t('已请求中止本轮'), 'text-ink-faint');
       requestInterrupt();
     };
   }
@@ -2815,7 +2811,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return;
     }
     if (inputEl.disabled) {
-      addBar('请先完成设备授权或解除只读状态，再发送新消息', 'text-info');
+      addBar(t('请先完成设备授权或解除只读状态，再发送新消息'), 'text-info');
       return;
     }
     // FE-004：上一条还没收到 ack 前挡新的一次触发——_queueFull 只在 pendingTurns>=2 才由 instances
@@ -2826,12 +2822,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return;
     }
     if (activePerm || activeQuestion) {
-      addBar('请先处理当前审批或选择，再发送新消息', 'text-info');
+      addBar(t('请先处理当前审批或选择，再发送新消息'), 'text-info');
       return;
     }
     const rawText = inputEl.value.trim();
     if (ultracodeArmed && !rawText && attachments.items().length === 0) {
-      addBar('ultracode 档需要先输入任务再发送', 'text-info');
+      addBar(t('ultracode 档需要先输入任务再发送'), 'text-info');
       inputEl.focus();
       return;
     }
@@ -2861,17 +2857,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           delete modelInput.dataset.fullModel;
           modelInput.value = '';
           syncModelUI('');
-          addModeBar('模型已重置为默认（下一条消息生效）', 'text-info');
+          addModeBar(t('模型已重置为默认（下一条消息生效）'), 'text-info');
         } else {
-          ensureModelOption(nakedArg, '手动设置'); // select 候选外的任意名（如网关别名）动态插入
+          ensureModelOption(nakedArg, t('手动设置')); // select 候选外的任意名（如网关别名）动态插入
           modelInput.value = nakedArg;
           syncModelUI(nakedArg);
-          addModeBar(`模型已设为 ${nakedArg}${currentGatewaySuffix}（下一条消息生效）`, 'text-info');
+          addModeBar(`${t('模型已设为')} ${nakedArg}${currentGatewaySuffix}${t('（下一条消息生效）')}`, 'text-info');
         }
       } else {
         const pending = modelInput.value.trim();
         const opts = [...modelInput.options].map(o => o.value).filter(Boolean);
-        addBar(`当前模型：${currentModel || '默认'}${currentGatewaySuffix}${pending && pending !== currentModel ? `；下一条消息起：${pending}${currentGatewaySuffix}` : ''}${opts.length ? `；可选：${opts.join('、')}` : ''}`, 'text-info');
+        addBar(`${t('当前模型：')}${currentModel || t('默认')}${currentGatewaySuffix}${pending && pending !== currentModel ? `${t('；下一条消息起：')}${pending}${currentGatewaySuffix}` : ''}${opts.length ? `${t('；可选：')}${opts.join(t('、'))}` : ''}`, 'text-info');
       }
       inputEl.value = '';
       hints.classList.add('hidden');
@@ -2898,7 +2894,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // BE-002：长度预检必须在离线入队【之前】——否则离线时超长消息也会进 offlineQueue，重连重发被服务端拒，
     // 反复无法送达。提前拦下，超长消息根本不入队（在线分支原来的重复校验已随之移到这里）。
     if (typeof text === 'string' && text.length > 50000) {
-      addBar(`消息过长（${text.length}/50000），未发送`, 'text-danger');
+      addBar(`${t('消息过长')} (${text.length}/50000)${t('，未发送')}`, 'text-danger');
       return;
     }
 
@@ -2916,11 +2912,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         bubble.dataset.attNames = outgoingAttachments.map(a => a?.name).filter(Boolean).sort().join('\0');
       }
       if (text) {
-        const t = el(`<div class="whitespace-pre-wrap"></div>`);
-        t.textContent = text;
+        const textNode = el(`<div class="whitespace-pre-wrap"></div>`);
+        textNode.textContent = text;
         // 离线乐观占位符气泡也折叠（与已确认气泡一致，长指令发出去那刻就折）
-        foldLongUserText(t, text);
-        bubble.appendChild(t);
+        foldLongUserText(textNode, text);
+        bubble.appendChild(textNode);
       }
       
       // 添加离线待发送的附件缩略 chip/图片预览，让离线体验达到原生级；
@@ -2929,7 +2925,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         bubble.appendChild(buildAttachmentWrap(attachments.items(), Boolean(text)));
       }
       
-      const indicator = el(`<div class="pending-indicator text-[11px] text-ink-faint mt-1 animate-pulse">🕐 正在等待连接...</div>`);
+      const indicator = el(`<div class="pending-indicator text-[11px] text-ink-faint mt-1 animate-pulse">${t('🕐 正在等待连接...')}</div>`);
       bubble.appendChild(indicator);
       appendMessage(bubble);
       
@@ -2955,7 +2951,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return;
     }
 
-    if (text.startsWith('/')) addBar(`⚡ 命令：${text}`, 'text-info');
+    if (text.startsWith('/')) addBar(`${t('⚡ 命令：')}${text}`, 'text-info');
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
     }
@@ -3160,14 +3156,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       node.title = a.name || '';
     } else {
       const isImage = (typeof a.mimeType === 'string' && a.mimeType.startsWith('image/')) || guessImageMime(a.name || a.storedName);
-      node = el(`<div class="flex items-center gap-1 bg-sunk rounded-lg px-2 py-1 text-xs max-w-[12rem]${clickable ? ' cursor-pointer active:scale-[0.98] transition-transform' : ''}"${clickable ? ' title="点击预览"' : ''}><span class="shrink-0">${isImage ? '🖼' : '📎'}</span></div>`);
+      node = el(`<div class="flex items-center gap-1 bg-sunk rounded-lg px-2 py-1 text-xs max-w-[12rem]${clickable ? ' cursor-pointer active:scale-[0.98] transition-transform' : ''}"${clickable ? ` title="${t('点击预览')}"` : ''}><span class="shrink-0">${isImage ? '🖼' : '📎'}</span></div>`);
       const nm = el(`<span class="truncate"></span>`);
-      nm.textContent = a.name || '附件';
+      nm.textContent = a.name || t('附件');
       node.appendChild(nm);
     }
     if (a.data) node.onclick = () => attachments.openPreview(a);
     else if (a.storedName) node.onclick = () => storedPreview.open({ cwd: currentCwd, storedName: a.storedName, name: a.name, mimeType: a.mimeType, thumb: a.thumb });
-    else if (a.thumb) node.onclick = () => attachments.openPreviewUrl(a.name || '附件', a.thumb);
+    else if (a.thumb) node.onclick = () => attachments.openPreviewUrl(a.name || t('附件'), a.thumb);
     return node;
   }
 
@@ -3251,7 +3247,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         (state.mode === 'cancel-resume'
           ? ' border border-line text-ink-soft bg-surface hover:bg-sunk active:scale-95'
           : ' bg-cta text-white hover:brightness-95 active:scale-95');
-      if (modeChanged) btnSend.textContent = state.label || (state.mode === 'cancel-resume' ? '取消' : '续接');
+      if (modeChanged) btnSend.textContent = state.label || (state.mode === 'cancel-resume' ? t('取消') : t('续接'));
       else if (btnSend.textContent !== state.label) btnSend.textContent = state.label;
     } else if (state.mode === 'stop') {
       btnSend.className = 'flex items-center justify-center w-9 h-9 rounded-full shrink-0 transition-all duration-200 shadow-sm' +
@@ -3308,7 +3304,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (!interruptPendingByInstance.has(instanceId)) return;
       clearInterruptPending(instanceId);
       // 只在仍看着这个会话时提示——若已切走，超时是别的（此刻无关）会话的事，不该冒到当前视图上
-      if (instanceId === viewingInstanceId) addBar('停止请求超时，可再试一次', 'text-ink-faint');
+      if (instanceId === viewingInstanceId) addBar(t('停止请求超时，可再试一次'), 'text-ink-faint');
     }, INTERRUPT_PENDING_TIMEOUT_MS);
     socket.emit('user:interrupt', { instanceId }); // 台阶3：中断当前查看 tab 的在途任务
   }
@@ -3319,12 +3315,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // setPermMode 仅由 init/permission_mode 服务端事件驱动（权威回执，函数声明有提升），onchange 不再
   // 乐观调用——故上屏的系统条 = 服务端已确认切换。程序设 select.value 不触发 onchange，无回声循环。
   const PERM_LABEL = {
-    default: '默认（白名单外弹窗审批）',
-    plan: '计划模式',
-    acceptEdits: '自动接受编辑',
-    dontAsk: '免打扰（白名单外直接拒）',
-    auto: 'Auto（LLM 自动判批/拒权限）',
-    bypassPermissions: '⚠️ bypass（跳过所有审批）'
+    default: t('默认（白名单外弹窗审批）'),
+    plan: t('计划模式'),
+    acceptEdits: t('自动接受编辑'),
+    dontAsk: t('免打扰（白名单外直接拒）'),
+    auto: t('Auto（LLM 自动判批/拒权限）'),
+    bypassPermissions: t('⚠️ bypass（跳过所有审批）')
   };
   function clearCliUnknownPermissionOption() {
     permModeSelect?.querySelector('option[data-cli-observed-unknown]')?.remove();
@@ -3334,7 +3330,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     clearCliUnknownPermissionOption();
     if (!silent && permModeSeen && mode !== currentPermMode) {
       // UX-019：空态不打条（胶囊高亮）；有消息后保留「权限档 → X」留痕
-      addModeBar(`权限档 → ${PERM_LABEL[mode] || mode}`,
+      addModeBar(`${t('权限档 →')} ${PERM_LABEL[mode] || mode}`,
         mode === 'bypassPermissions' ? 'text-danger' : 'text-ink-faint');
     }
     permModeSeen = true;
@@ -3348,10 +3344,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // Sync Pill Display Text
     if (pillPermText) {
       const labels = {
-        default: '默认审批',
-        plan: '计划模式',
-        acceptEdits: '自动接受编辑',
-        dontAsk: '免打扰',
+        default: t('默认审批'),
+        plan: t('计划模式'),
+        acceptEdits: t('自动接受编辑'),
+        dontAsk: t('免打扰'),
         auto: 'Auto',
         bypassPermissions: 'Bypass'
       };
@@ -3378,15 +3374,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   permModeSelect.onchange = async () => {
     // 单驾驶员：终端驾驶中（只读锁）设置一并冻结——权限档实际只作用于 web 自己的实例、碰不到终端进程，
     // 此刻切档只会造成「我切了怎么终端没变」的误解；接管后再调。拨回 select 防 UI 与实际档漂移。
-    if (mirrorReadonlySid) { permModeSelect.value = currentPermMode; addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; }
+    if (mirrorReadonlySid) { permModeSelect.value = currentPermMode; addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
     const mode = permModeSelect.value;
     if (mode === currentPermMode) return;
     // bypass 二次危险确认（终端等价：终端首次 bypass 亦需确认）；取消则回退 select
     if (mode === 'bypassPermissions' &&
         !(await appConfirm({
-          title: '⚠️ 切到 bypass（跳过所有审批）',
-          body: 'claude 将无需确认即可改文件、跑命令；一次提示注入即可波及整台机器。',
-          okText: '开启 bypass',
+          title: t('⚠️ 切到 bypass（跳过所有审批）'),
+          body: t('claude 将无需确认即可改文件、跑命令；一次提示注入即可波及整台机器。'),
+          okText: t('开启 bypass'),
           tone: 'danger',
         }))) {
       permModeSelect.value = currentPermMode;
@@ -3404,7 +3400,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const val = level || null; // 空串/undefined 归一为 null（模型默认）
     // ultracode 档借道 xhigh：后端只回 xhigh，用本地 ultracodeArmed 决定呈现名
     if (!silent && effortSeen && val !== currentEffort) {
-      addModeBar(`思考强度 → ${ultracodeArmed ? 'ultracode' : (val || '模型默认')}（下一条消息生效）`, 'text-ink-faint');
+      addModeBar(`${t('思考强度 →')} ${ultracodeArmed ? 'ultracode' : (val || t('模型默认'))}${t('（下一条消息生效）')}`, 'text-ink-faint');
     }
     effortSeen = true;
     currentEffort = val;
@@ -3412,7 +3408,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
     // Sync Pill Display Text（武装 ultracode 时显 ultracode，而非后端真值 xhigh）
     if (pillEffortText) {
-      pillEffortText.textContent = ultracodeArmed ? 'ultracode' : (val || '默认思考');
+      pillEffortText.textContent = ultracodeArmed ? 'ultracode' : (val || t('默认思考'));
     }
 
     // Sync Custom Effort Tiles Selection Styling（武装 ultracode 时高亮最高档，而非后端真值 xhigh）
@@ -3488,7 +3484,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const active = currentVal === lv;
         const isUltra = lv === 'ultracode';
         // UX-014：副文案增量信息，非「思考等级: low」同义反复
-        const sub = effortLevelSubtitle(lv) || (isUltra ? 'xhigh + 多 agent · 最彻底' : '');
+        const sub = effortLevelSubtitle(lv) || (isUltra ? t('xhigh + 多 agent · 最彻底') : '');
         const lvTile = el(`
           <div data-level="${esc(lv)}" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
             <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${esc(lv)}</div>
@@ -3512,7 +3508,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   effortSelect.onchange = () => {
     // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例、
     // 往终端正在写的 transcript 里插 mode 记录行，驾驶期间尤其不该发生。拨回防漂移。
-    if (mirrorReadonlySid) { effortSelect.value = currentEffort || ''; addBar('终端驾驶中，设置已冻结——接管后可调', 'text-info'); return; }
+    if (mirrorReadonlySid) { effortSelect.value = currentEffort || ''; addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
     // ultracode 档在 SDK 层不存在：解析成「借道 xhigh + 武装关键词」。effort 始终是后端认得的合法值。
     const { effort, ultracode } = resolveEffortSelection(effortSelect.value || null);
     const armedChanged = ultracode !== ultracodeArmed;
@@ -3520,13 +3516,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (effort !== currentEffort) {
       socket.emit('user:setEffort', { level: effort });
       // 体感：置换实例有冷启动延迟；server 也会 emit kind:resuming system，这里立刻本地提示一次
-      addModeBar('正在切换思考强度并续接会话…', 'text-ink-faint');
+      addModeBar(t('正在切换思考强度并续接会话…'), 'text-ink-faint');
       // 不乐观更新：成功则 effort_mode 广播拨档 + 上屏（setEffortMode 读 ultracodeArmed 决定显名）；
       // busy/非法档则 server 发 system 提示并单发当前档拨回本设备 select
     } else if (armedChanged) {
       // effort 未变、仅 ultracode 武装态翻转（xhigh ↔ ultracode）：无后端往返、免会话重建，本地即时刷新
       setEffortMode(currentEffort, true);
-      addModeBar(ultracode ? 'ultracode：xhigh + 多 agent workflow（更彻底，更慢更费额度）' : `思考强度 → ${currentEffort || '模型默认'}`, 'text-ink-faint');
+      addModeBar(ultracode ? t('ultracode：xhigh + 多 agent workflow（更彻底，更慢更费额度）') : `${t('思考强度 →')} ${currentEffort || t('模型默认')}`, 'text-ink-faint');
     }
   };
 
@@ -3579,13 +3575,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     clearCliUnknownPermissionOption();
     const unknown = document.createElement('option');
     unknown.value = '';
-    unknown.textContent = 'CLI 当前模式未知';
+    unknown.textContent = t('CLI 当前模式未知');
     unknown.disabled = true;
     unknown.dataset.cliObservedUnknown = '1';
     permModeSelect?.prepend(unknown);
     currentPermMode = '';
     if (permModeSelect) permModeSelect.value = '';
-    if (pillPermText) pillPermText.textContent = 'CLI 模式未知';
+    if (pillPermText) pillPermText.textContent = t('CLI 模式未知');
     permModeSelect?.classList.remove('ring-1', 'ring-danger', 'text-danger');
     customPermGrid?.querySelectorAll('.perm-tile').forEach(tile => {
       tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
@@ -3604,12 +3600,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (modelInput) {
       delete modelInput.dataset.fullModel;
       if (rawModel) {
-        ensureModelOption(currentModel, 'CLI 当前模型');
+        ensureModelOption(currentModel, t('CLI 当前模型'));
         modelInput.value = currentModel;
       } else {
         modelInput.value = '';
-        if (pillModelText) pillModelText.textContent = 'CLI 模型未知';
-        if (pillModel) pillModel.title = 'CLI 当前模型未知';
+        if (pillModelText) pillModelText.textContent = t('CLI 模型未知');
+        if (pillModel) pillModel.title = t('CLI 当前模型未知');
         customModelGrid?.querySelectorAll('.model-tile').forEach(tile => {
           tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
           const title = tile.querySelector('.text-xs');
@@ -3663,7 +3659,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     } else if (r.action === 'switch') {
       closeLeftSidebar();
       socket.emit('session:switch', { sessionId: r.sessionId, cwd: r.cwd }, res => {
-        if (!res?.ok) addBar(res?.error || '深链目标会话已不可用', 'text-warning');
+        if (!res?.ok) addBar(res?.error || t('深链目标会话已不可用'), 'text-warning');
       });
     } else {
       openLeftSidebar(); // 定位不到（缺 sessionId / 无 instanceId）→ 打开会话列表让用户手选
@@ -3744,7 +3740,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     viewingInstanceId = newViewing;
     cwdSeen = true;
     instancesReady = true; // 视图状态已知：此后 shouldDropAgentEvent 按 viewingInstanceId 精确分流（含 null 空窗口）
-    if (pendingDeepLink) { const t = pendingDeepLink; pendingDeepLink = null; applyDeepLink(t); } // ②2c：instances 到齐后消费暂存深链
+    if (pendingDeepLink) { const link = pendingDeepLink; pendingDeepLink = null; applyDeepLink(link); } // ②2c：instances 到齐后消费暂存深链
 
     // 进度横幅可见性收敛（权威状态驱动，替代零散事件隐藏）：当前查看实例无活的后台任务（bgActive=false）即隐藏横幅——
     // 统一覆盖「切会话到别的会话 / 后台任务 TTL 清 / 完成 / 前台轮残留」所有隐藏场景。显示仍由 onTaskProgress
@@ -3760,7 +3756,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (topProjectText) {
       topProjectText.textContent = baseName(currentCwd);
       if (topContextPill) {
-        topContextPill.title = currentCwd ? `工作区：浏览或查看改动 · ${currentCwd}` : '工作区：浏览或查看改动';
+        topContextPill.title = currentCwd ? `${t('工作区：浏览或查看改动')} · ${currentCwd}` : t('工作区：浏览或查看改动');
       }
     }
     // pillWorkspace（📁 状态 pill）显当前工作区名——该 pill 是工作区入口，显 model 名是名实错配（2026-06-21）
@@ -3771,7 +3767,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 短 session_id 状态胶囊：显示当前查看会话的前 8 位；无会话（空首页/未获 id）隐藏
     updatePillSession(instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
     if (topTitleText) {
-      topTitleText.textContent = shouldShowStartScreen({ viewingInstanceId: newViewing, sessionId: instancesList.find(x => x.instanceId === newViewing)?.sessionId }) ? '新聊天' : '聊天';
+      topTitleText.textContent = shouldShowStartScreen({ viewingInstanceId: newViewing, sessionId: instancesList.find(x => x.instanceId === newViewing)?.sessionId }) ? t('新聊天') : t('聊天');
     }
     // 顶栏文件夹 pill：首页/compose 隐藏（页内已有工作区入口）；进入真实会话后显示
     syncTopContextPillVisibility(newViewing, instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
@@ -3827,7 +3823,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (target?.sessionId) {
         displayedSessionId = target.sessionId;
         updatePillSession(target.sessionId);
-        if (topTitleText) topTitleText.textContent = '聊天';
+        if (topTitleText) topTitleText.textContent = t('聊天');
         // 清除②：同一实例在这条广播里补上了 sessionId——待续档态不再适用（这条路径不经 bindView，
         // 上面 bindView 内的清除逻辑覆盖不到，须在此单独清）。
         if (freshInterruptedInstanceId === newViewing) freshInterruptedInstanceId = null;
@@ -3960,7 +3956,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const anchor = unreadAnchorNode; // ackUnread() 会清空闭包状态，先取局部引用供滚动/高亮用
     ackUnread();
     if (!anchor?.isConnected) return;
-    const divider = el('<div id="unreadDivider" class="msg-frame unread-divider text-center text-xs text-ink-faint" data-ephemeral="1">以下为新消息</div>');
+    const divider = el(`<div id="unreadDivider" class="msg-frame unread-divider text-center text-xs text-ink-faint" data-ephemeral="1">${t('以下为新消息')}</div>`);
     anchor.parentNode.insertBefore(divider, anchor);
     anchor.scrollIntoView({ block: 'center', behavior: 'smooth' });
     anchor.classList.add('unread-anchor-flash');
@@ -4214,9 +4210,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (d === viewCwd) continue;                   // 查看中的 cwd 走内联渲染，不通知
       const prev = workdirStates[d], cur = newStates[d];
       if (cur === prev) continue;
-      if (cur === 'permission') notify('⚠️ 后台需要审批', baseName(d));
-      else if (cur === 'error') notify('⚠️ 后台任务出错', baseName(d));
-      else if (cur === 'done') notify('✅ 后台任务完成', baseName(d));
+      if (cur === 'permission') notify(t('⚠️ 后台需要审批'), baseName(d));
+      else if (cur === 'error') notify(t('⚠️ 后台任务出错'), baseName(d));
+      else if (cur === 'done') notify(t('✅ 后台任务完成'), baseName(d));
     }
   }
 
@@ -4224,11 +4220,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // [emoji, 颜色类, 语义 title]——title 消除「不知道图标/颜色对应什么状态」
   // UI-007：角标 kind → SVG；第三元为 title/aria
   const DIR_BADGE = {
-    busy: ['busy', 'text-warning', '运行中'],
-    permission: ['warn', 'text-danger', '待审批'],
-    error: ['error', 'text-danger', '出错'],
-    done: ['ok', 'text-success', '已完成'],
-    aborted: ['aborted', 'text-warning', '已中止'],
+    busy: ['busy', 'text-warning', t('运行中')],
+    permission: ['warn', 'text-danger', t('待审批')],
+    error: ['error', 'text-danger', t('出错')],
+    done: ['ok', 'text-success', t('已完成')],
+    aborted: ['aborted', 'text-warning', t('已中止')],
   };
   // 工具角标细化：busy 时仍用工具 emoji（低频）；主状态走 SVG
   const TOOL_BADGE = { Agent: '🤖', Task: '🤖', Bash: '🖥', Write: '📝', Edit: '✏️', Read: '👁' };
@@ -4251,10 +4247,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function formatWaitingDuration(waitingSince) {
     if (typeof waitingSince !== 'number') return '';
     const mins = Math.max(0, Math.floor((Date.now() - waitingSince) / 60000));
-    if (mins < 1) return '已等待 <1 分钟';
-    if (mins < 60) return `已等待 ${mins} 分钟`;
+    if (mins < 1) return t('已等待 <1 分钟');
+    if (mins < 60) return `${t('已等待')} ${mins} ${t('分钟')}`;
     const h = Math.floor(mins / 60), m = mins % 60;
-    return `已等待 ${h} 小时${m ? m + ' 分钟' : ''}`;
+    return `${t('已等待')} ${h} ${t('小时')}${m ? ' ' + m + ' ' + t('分钟') : ''}`;
   }
   // 单条"需要你"行：点击深链跳转（复用 FR-14 applyDeepLink，同通知点击的落地逻辑）。
   // 全程 textContent 插值动态数据（title/cwd/toolName 均可能含用户数据）→ CSP 安全，同现有行渲染惯例。
@@ -4266,9 +4262,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     row.appendChild(icon);
     const body = el(`<div class="flex-1 min-w-0"></div>`);
     const head = el(`<div class="truncate text-xs font-medium text-ink"></div>`);
-    head.textContent = item.title || '新会话';
+    head.textContent = item.title || t('新会话');
     const sub = el(`<div class="truncate text-[10px] text-ink-faint"></div>`);
-    const reasonLabel = isApproval ? '等待审批' : '等待输入';
+    const reasonLabel = isApproval ? t('等待审批') : t('等待输入');
     const toolSuffix = isApproval && item.toolName ? `（${item.toolName}）` : '';
     sub.textContent = `${baseName(item.cwd)} · ${reasonLabel}${toolSuffix} · ${formatWaitingDuration(item.waitingSince)}`;
     body.appendChild(head);
@@ -4287,7 +4283,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const section = el(`<div id="needsYouSection"></div>`);
     if (!needsYouList.length) { section.classList.add('hidden'); return section; }
     const header = el(`<div class="px-3 py-1.5 text-[10px] font-semibold text-warning border-b border-line"></div>`);
-    header.textContent = `需要你 (${needsYouList.length})`;
+    header.textContent = `${t('需要你')} (${needsYouList.length})`;
     section.appendChild(header);
     for (const item of needsYouList) section.appendChild(needsYouRow(item));
     return section;
@@ -4338,11 +4334,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       connDotWrap.classList.add('border-danger');
       // 保留 RTT/连接 title 前缀语义：追加注意力说明
       const base = connDotWrap.title || '';
-      if (!base.includes('服务告警')) connDotWrap.title = (base ? base + ' · ' : '') + '服务告警（推送失败等）';
+      // 同下：去重 key 与追加文案必须同语言，且译文须保持「t('服务告警') 是长句译文的前缀」这层关系。
+      if (!base.includes(t('服务告警'))) connDotWrap.title = (base ? base + ' · ' : '') + t('服务告警（推送失败等）');
     } else if (level === 'attention') {
       connDotWrap.classList.add('border-warning');
       const base = connDotWrap.title || '';
-      if (!base.includes('需要你')) connDotWrap.title = (base ? base + ' · ' : '') + `需要你 (${needsYouList.length || '…'})`;
+      // 幂等去重靠 includes 比对，故追加的文案必须与被比对的 key 同语言——这里拼 t('需要你') 而非
+      // 写死中文，否则 en 下 includes 永不命中，每刷新一次就往 title 里再追加一段。
+      if (!base.includes(t('需要你'))) connDotWrap.title = (base ? base + ' · ' : '') + `${t('需要你')} (${needsYouList.length || '…'})`;
     } else {
       connDotWrap.classList.add('border-line-soft');
     }
@@ -4397,7 +4396,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       sessionsDot.classList.remove('hidden');
       sessionsDot.classList.add('status-icon');
       setStatusIcon(sessionsDot, m[0]);
-      sessionsDot.title = `其他工作区${m[2]}`;
+      sessionsDot.title = `${t('其他工作区')}${m[2]}`;
       // 小点位：保持紧凑
       sessionsDot.classList.add(m[1]);
     } else {
@@ -4563,17 +4562,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     warning: { border: 'var(--warning)', title: 'text-warning', ok: 'bg-cta' },
     danger:  { border: 'var(--danger)',  title: 'text-danger',  ok: 'bg-danger' },
   };
-  // okText 默认值须留在参数默认位置：函数体内 `const t`（色调样式）会遮蔽外层 i18n t()，
-  // 挪进函数体会撞 TDZ；参数默认值求值早于函数体声明，不受影响。
   function appConfirm({ title, body, okText = t('确定'), tone = 'default' }) {
     if (!confirmModal || confirmResolve) return Promise.resolve(false);
-    const t = CONFIRM_TONES[tone] || CONFIRM_TONES.default;
-    confirmSheet.style.borderTopColor = t.border;
-    confirmTitle.className = `${t.title} font-semibold mb-2`;
+    const toneStyle = CONFIRM_TONES[tone] || CONFIRM_TONES.default;
+    confirmSheet.style.borderTopColor = toneStyle.border;
+    confirmTitle.className = `${toneStyle.title} font-semibold mb-2`;
     confirmTitle.textContent = title;
     confirmBody.textContent = body || '';
     confirmBody.classList.toggle('hidden', !body);
-    confirmOk.className = `flex-1 py-2.5 rounded-lg ${t.ok} text-white active:brightness-95 font-medium`;
+    confirmOk.className = `flex-1 py-2.5 rounded-lg ${toneStyle.ok} text-white active:brightness-95 font-medium`;
     confirmOk.textContent = okText;
     return new Promise(resolve => {
       confirmResolve = resolve;
@@ -4604,28 +4601,30 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   if (deleteSessionCancel) deleteSessionCancel.onclick = () => { deleteTarget = null; closeSheet(deleteSessionModal); };
   if (deleteL1Btn) deleteL1Btn.onclick = () => {
     if (!deleteTarget) return;
-    const t = deleteTarget; deleteTarget = null;
+    // 局部变量不叫 t：i18n 的 t() 在本文件里到处都要用，同名会静默遮蔽成「t is not a function」，
+    // 而 ESLint 看不出问题（t 确实有定义）。
+    const target = deleteTarget; deleteTarget = null;
     closeSheet(deleteSessionModal);
-    socket.emit('session:delete', { sessionId: t.sessionId, cwd: t.cwd }, res => {
-      if (res?.ok) { addBar(`已从列表移除：${t.title || t.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
-      else addBar(res?.error || '移除失败', 'text-danger');
+    socket.emit('session:delete', { sessionId: target.sessionId, cwd: target.cwd }, res => {
+      if (res?.ok) { addBar(`${t('已从列表移除：')}${target.title || target.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
+      else addBar(res?.error || t('移除失败'), 'text-danger');
     });
   };
   if (deleteL2Btn) deleteL2Btn.onclick = async () => {
     if (!deleteTarget) return;
-    const t = deleteTarget;
+    const target = deleteTarget;
     // L2 显式二次确认（docs/design.md"显式二次确认删底层 transcript 文件"）——不可恢复，故在 L1 一级弹窗之上再加一道（z-50 叠 z-40，取消回到删除 sheet）。
     if (!(await appConfirm({
-      title: '🗑 彻底删除底层文件？',
-      body: `会话「${t.title || t.sessionId}」在主机上的记录将被真正抹除。\n此操作不可恢复。`,
-      okText: '彻底删除',
+      title: t('🗑 彻底删除底层文件？'),
+      body: `${t('会话「')}${target.title || target.sessionId}${t('」在主机上的记录将被真正抹除。')}\n${t('此操作不可恢复。')}`,
+      okText: t('彻底删除'),
       tone: 'danger',
     }))) return;
     deleteTarget = null;
     closeSheet(deleteSessionModal);
-    socket.emit('session:deletePermanent', { sessionId: t.sessionId, cwd: t.cwd }, res => {
-      if (res?.ok) { addBar(`已彻底删除：${t.title || t.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
-      else addBar(res?.error || '彻底删除失败', 'text-danger');
+    socket.emit('session:deletePermanent', { sessionId: target.sessionId, cwd: target.cwd }, res => {
+      if (res?.ok) { addBar(`${t('已彻底删除：')}${target.title || target.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
+      else addBar(res?.error || t('彻底删除失败'), 'text-danger');
     });
   };
 
@@ -4634,9 +4633,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     baseName,
     closeSheet,
     confirmDiscardEdit: () => appConfirm({
-      title: '放弃未保存的修改？',
-      body: '编辑内容尚未保存，离开后将丢失。',
-      okText: '放弃修改',
+      title: t('放弃未保存的修改？'),
+      body: t('编辑内容尚未保存，离开后将丢失。'),
+      okText: t('放弃修改'),
       tone: 'warning',
     }),
     createElement: el,
@@ -4674,7 +4673,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     get: () => readLangPref(k => localStorage.getItem(k)),
     set: async (lang) => {
       writeLangPref((k, v) => localStorage.setItem(k, v), lang);
-      if (await appConfirm({ title: '需要刷新页面才能生效', body: '现在刷新吗？', okText: '刷新' })) {
+      if (await appConfirm({ title: t('需要刷新页面才能生效'), body: t('现在刷新吗？'), okText: t('刷新') })) {
         location.reload();
       }
     },
@@ -4756,9 +4755,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     let acked = false;
     socket.emit('session:home', {}, res => {
       acked = true;
-      if (res && res.ok === false) addBar(res.error || '回首页失败', 'text-danger');
+      if (res && res.ok === false) addBar(res.error || t('回首页失败'), 'text-danger');
     });
-    setTimeout(() => { if (!acked) addBar('回首页无响应，请刷新后重试', 'text-danger'); }, 4000);
+    setTimeout(() => { if (!acked) addBar(t('回首页无响应，请刷新后重试'), 'text-danger'); }, 4000);
   };
 
   // 台阶3：新建会话 = 在当前 cwd 开 compose 页（旧 tab 后台继续、**不中断**），等首条消息懒开。
@@ -4821,7 +4820,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     dirRow.appendChild(toggleBtn);
 
     // 物理热区扩大版 "＋" 新建按钮
-    const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="在此工作区新建会话">＋</button>`);
+    const newSessionBtn = el(`<button class="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center border border-line text-ink-soft hover:text-accent hover:border-accent hover:bg-accent-wash active:scale-90 text-sm font-bold shadow-sm transition-all" title="${t('在此工作区新建会话')}">＋</button>`);
     newSessionBtn.onclick = (e) => {
       e.stopPropagation();
       closeLeftSidebar();
@@ -4861,14 +4860,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 背景红底“关闭”按钮
       let deleteBtn;
       if (liveInst) {
-        deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">关闭</div>`);
+        deleteBtn = el(`<div class="absolute inset-y-0 right-0 w-[70px] bg-danger text-white flex items-center justify-center font-sans font-semibold text-xs active:opacity-90 cursor-pointer select-none" style="z-index: 10;">${t('关闭')}</div>`);
         deleteBtn.onclick = async (e) => {
           e.stopPropagation();
           haptic('warning');
           if (await appConfirm({
-            title: `关闭会话「${s.title || '新会话'}」？`,
-            body: '会话将从 tab 列表移除，但历史保留可重新打开。',
-            okText: '关闭会话',
+            title: `${t('关闭会话「')}${s.title || t('新会话')}${t('」？')}`,
+            body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
+            okText: t('关闭会话'),
           })) {
             // 点停止顿一下跳主页的回归修复：若关的正是当前正在看的会话，记下 id 供
             // wasViewingInstanceDestroyed 排除——这是用户自己确认过的主动关闭，不是"被摧毁"。
@@ -4886,10 +4885,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 行内容 (可滑动的前景卡片)
       const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${s.id || ''}" data-instance-id="${liveInst?.instanceId || ''}"></div>`);
       const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
-      btn.title = s.title || '新会话';
+      btn.title = s.title || t('新会话');
       const head = el(`<div class="truncate flex items-center gap-1.5"></div>`);
       const titleSpan = el(`<span class="truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
-      titleSpan.textContent = s.title || '新会话';
+      titleSpan.textContent = s.title || t('新会话');
       head.appendChild(titleSpan);
       if (liveInst) {                        // 已打开标记：状态角标（busy ⏳ / permission ⚠️ / error ❗ / done ✅）
         // busy 时优先使用工具细化图标（🤖 Agent / 🖥 Bash），其他状态用通用角标
@@ -4898,7 +4897,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (badgeState === 'busy' && liveInst.activeTool && TOOL_BADGE[liveInst.activeTool]) {
           badgeIcon = TOOL_BADGE[liveInst.activeTool];
           badgeCls = 'text-warning';
-          badgeTitle = `运行中：${liveInst.activeTool}`;
+          badgeTitle = `${t('运行中：')}${liveInst.activeTool}`;
         } else {
           const m = DIR_BADGE[badgeState];
           if (m) {
@@ -4913,10 +4912,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       btn.appendChild(head);
       const sub = el(`<div class="text-ink-faint text-[10px]"></div>`);
-      const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : '新会话（未保存）';
+      const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('新会话（未保存）');
       // 短 session_id（前 8 位）：便于对照 CLI /resume、日志、多设备定位同一会话；无 id 的新会话不显示。
       const shortId = s.id ? ` · ${s.id.slice(0, 8)}` : '';
-      sub.textContent = when + (liveInst ? ' · 已打开' : '') + shortId;
+      sub.textContent = when + (liveInst ? t(' · 已打开') : '') + shortId;
       btn.appendChild(sub);
 
       let rowSwiped = false;
@@ -4939,8 +4938,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         } else {                             // 未打开：resume 打开（同步关面板 + 4s 兜底，不把反馈压在 ack 上）
           closeLeftSidebar();
           let acked = false;
-          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) addBar(res?.error || '切换失败', 'text-danger'); });
-          setTimeout(() => { if (!acked) addBar('切换无响应，请刷新页面后重试', 'text-danger'); }, 4000);
+          socket.emit('session:switch', { sessionId: s.id, cwd: rowCwd }, res => { acked = true; if (!res?.ok) addBar(res?.error || t('切换失败'), 'text-danger'); });
+          setTimeout(() => { if (!acked) addBar(t('切换无响应，请刷新页面后重试'), 'text-danger'); }, 4000);
         }
       };
       rowContent.appendChild(btn);
@@ -4954,9 +4953,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           e.stopPropagation();
           haptic('warning');
           if (await appConfirm({
-            title: `关闭会话「${s.title || '新会话'}」？`,
-            body: '会话将从 tab 列表移除，但历史保留可重新打开。',
-            okText: '关闭会话',
+            title: `${t('关闭会话「')}${s.title || t('新会话')}${t('」？')}`,
+            body: t('会话将从 tab 列表移除，但历史保留可重新打开。'),
+            okText: t('关闭会话'),
           })) {
             // 同上（侧滑关闭按钮走的是另一条 DOM 路径，但同一个 session:close 语义）。
             explicitCloseInstanceId = liveInst.instanceId;
@@ -4970,7 +4969,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 未打开的历史会话：两级删除入口（FR-20）。已打开的会话走上面的关闭 tab，不在此重复给删除入口
       // （删一个正被本产品驱动的会话语义混乱，后端 L2 保护①也会拒）。无 id 的新会话（未落盘）无从删。
       if (s.id && !liveInst) {
-        const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" title="删除会话">🗑</button>`);
+        const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" title="${t('删除会话')}">🗑</button>`);
         delBtn.onclick = e => {
           e.stopPropagation();
           haptic('warning');
@@ -5076,10 +5075,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           container.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
         }
         if (hasMore) {
-          const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">显示全部会话…</button>`);
+          const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">${t('显示全部会话…')}</button>`);
           more.onclick = () => {
             haptic('tap');
-            more.textContent = '加载中…';
+            more.textContent = t('加载中…');
             socket.emit('session:list', { cwd, all: true }, state => {
               if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
               const all = state?.sessions || [];
@@ -5246,12 +5245,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (_composeReady) return; // compose 页由 showComposeSurface 渲染
     const guide = el(`
       <div class="empty-session-guide flex flex-col items-center justify-center py-10 px-4 text-center select-none" data-testid="empty-session-guide">
-        <div class="text-base font-medium text-ink mb-1">新会话已就绪</div>
-        <div class="text-xs text-ink-soft mb-4">工作区 <span class="font-semibold text-ink">${esc(baseName(currentCwd) || '…')}</span>${currentModel ? ` · 模型 <span class="font-semibold">${esc(currentModel)}</span>` : ''}</div>
+        <div class="text-base font-medium text-ink mb-1">${t('新会话已就绪')}</div>
+        <div class="text-xs text-ink-soft mb-4">${t('工作区')} <span class="font-semibold text-ink">${esc(baseName(currentCwd) || '…')}</span>${currentModel ? ` · ${t('模型')} <span class="font-semibold">${esc(currentModel)}</span>` : ''}</div>
         <div class="flex flex-col gap-2 w-full max-w-sm">
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="总结当前仓库结构并指出入口文件">💡 总结当前仓库结构</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="帮我写一个最小改动的修复计划">🛠 写一个最小修复计划</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="运行相关测试并解读失败">🧪 运行测试并解读</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('运行相关测试并解读失败')}">${t('🧪 运行测试并解读')}</button>
         </div>
       </div>`);
     guide.querySelectorAll('.esg-prompt').forEach(btn => {
@@ -5407,7 +5406,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function showComposeSurface() {
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
-    if (topTitleText) topTitleText.textContent = '新聊天';
+    if (topTitleText) topTitleText.textContent = t('新聊天');
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
     syncTopContextPillVisibility(null, null); // compose 页：隐藏顶栏文件夹（页内已有工作区 pill）
@@ -5416,9 +5415,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const container = el(`
       <div class="compose-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="compose-surface">
         <div class="text-center mb-5 w-full">
-          <h1 class="text-xl md:text-2xl font-bold tracking-tight text-ink mb-2 leading-tight">新会话已就绪</h1>
-          <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1">将在此工作区开新 CLI 会话</div>
-          <button type="button" class="compose-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="点击打开会话列表（按工作区浏览）">
+          <h1 class="text-xl md:text-2xl font-bold tracking-tight text-ink mb-2 leading-tight">${t('新会话已就绪')}</h1>
+          <div class="text-[10px] text-ink-faint uppercase tracking-wider mb-1">${t('将在此工作区开新 CLI 会话')}</div>
+          <button type="button" class="compose-project-pill inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="${t('点击打开会话列表（按工作区浏览）')}">
             <svg class="w-4 h-4 shrink-0 text-accent opacity-90" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M3 7.5A2.5 2.5 0 015.5 5h4.25l2 2H18.5A2.5 2.5 0 0121 9.5v7A2.5 2.5 0 0118.5 19h-13A2.5 2.5 0 013 16.5v-9z" />
             </svg>
@@ -5427,15 +5426,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           </button>
           <div class="mt-2 flex items-center justify-center gap-1">
             <span class="text-xs text-ink-soft" data-compose-defaults>${esc(defaultsText)}</span>
-            <button type="button" class="compose-defaults-refresh shrink-0 w-5 h-5 flex items-center justify-center rounded-full text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 transition-all disabled:opacity-50" data-testid="compose-defaults-refresh" title="重新读取 CLI 配置">
+            <button type="button" class="compose-defaults-refresh shrink-0 w-5 h-5 flex items-center justify-center rounded-full text-ink-faint hover:text-ink hover:bg-sunk active:scale-90 transition-all disabled:opacity-50" data-testid="compose-defaults-refresh" title="${t('重新读取 CLI 配置')}">
               <span class="text-sm leading-none">↻</span>
             </button>
           </div>
         </div>
         <div class="flex flex-col gap-2 w-full max-w-sm">
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="总结当前仓库结构并指出入口文件">💡 总结当前仓库结构</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="帮我写一个最小改动的修复计划">🛠 写一个最小修复计划</button>
-          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="运行相关测试并解读失败">🧪 运行测试并解读</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('总结当前仓库结构并指出入口文件')}">${t('💡 总结当前仓库结构')}</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('帮我写一个最小改动的修复计划')}">${t('🛠 写一个最小修复计划')}</button>
+          <button type="button" class="esg-prompt text-left text-xs px-3 py-2 rounded-xl border border-line bg-surface text-ink-soft active:bg-sunk" data-p="${t('运行相关测试并解读失败')}">${t('🧪 运行测试并解读')}</button>
         </div>
       </div>`);
 
@@ -5477,7 +5476,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           if (acked) return;
           refreshBtn.disabled = false;
           refreshBtn.classList.remove('animate-spin');
-          addBar('刷新无响应，请检查网络后重试', 'text-danger');
+          addBar(t('刷新无响应，请检查网络后重试'), 'text-danger');
         }, 4000);
       };
     }
@@ -5498,18 +5497,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function showInstanceDestroyedSurface() {
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
-    if (topTitleText) topTitleText.textContent = '新聊天';
+    if (topTitleText) topTitleText.textContent = t('新聊天');
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
     syncTopContextPillVisibility(null, null); // 无实例可看：顶栏文件夹入口隐藏（同 home/compose）
 
     const container = el(`
       <div class="instance-destroyed-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="instance-destroyed-surface">
-        <div class="msg-frame text-center text-xs text-warning font-semibold mb-2">⏹ 会话已中断</div>
-        <p class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2">停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。</p>
+        <div class="msg-frame text-center text-xs text-warning font-semibold mb-2">${t('⏹ 会话已中断')}</div>
+        <p class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2">${t('停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。')}</p>
         <div class="flex flex-col gap-2 w-full max-w-xs">
-          <button type="button" class="instance-destroyed-home inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-home">回首页</button>
-          <button type="button" class="instance-destroyed-new inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-new">新建会话</button>
+          <button type="button" class="instance-destroyed-home inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-home">${t('回首页')}</button>
+          <button type="button" class="instance-destroyed-new inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-new">${t('新建会话')}</button>
         </div>
       </div>`);
 
@@ -5528,18 +5527,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function showDashboard() {
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
-    if (topTitleText) topTitleText.textContent = '新聊天';
+    if (topTitleText) topTitleText.textContent = t('新聊天');
     if (topProjectText) topProjectText.textContent = baseName(currentCwd);
     syncComposerVisibility();
     syncTopContextPillVisibility(null, null); // 首页：顶栏文件夹隐藏
 
     const hour = new Date().getHours();
     let greeting;
-    if (hour < 5) greeting = '夜深了，有什么需要我帮忙的吗？';
-    else if (hour < 11) greeting = '上午好，今天我能帮您做什么？';
-    else if (hour < 13) greeting = '中午好，今天我能帮您做什么？';
-    else if (hour < 18) greeting = '下午好，今天我能帮您做什么？';
-    else greeting = '晚上好，今天我能帮您做什么？';
+    if (hour < 5) greeting = t('夜深了，有什么需要我帮忙的吗？');
+    else if (hour < 11) greeting = t('上午好，今天我能帮您做什么？');
+    else if (hour < 13) greeting = t('中午好，今天我能帮您做什么？');
+    else if (hour < 18) greeting = t('下午好，今天我能帮您做什么？');
+    else greeting = t('晚上好，今天我能帮您做什么？');
 
     // 首页 = 枢纽：问候 + 最近工作区/会话；不标「当前工作区」
     // （＋ 仍用 currentCwd 默认区；要先选区 → 侧栏或最近 chip）
@@ -5547,13 +5546,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       <div class="dashboard-container flex flex-col items-center w-full max-w-xl mx-auto py-6 px-3 select-none" data-testid="home-dashboard">
         <div class="text-center mb-6 w-full">
           <h1 class="text-2xl md:text-3xl font-bold tracking-tight text-ink mb-1 leading-tight" id="dashGreeting">${esc(greeting)}</h1>
-          <p class="text-xs text-ink-faint">从最近会话继续，或点 ＋ 新建</p>
+          <p class="text-xs text-ink-faint">${t('从最近会话继续，或点 ＋ 新建')}</p>
         </div>
 
         <div id="dashWorkspacesSection" class="w-full hidden mb-5">
           <div class="text-[10.5px] font-bold text-ink-faint uppercase tracking-wider mb-2 px-1 flex items-center gap-1">
             <span>📁</span>
-            <span>最近活跃工作区</span>
+            <span>${t('最近活跃工作区')}</span>
           </div>
           <div id="dashWorkspacesList" class="flex flex-wrap gap-2 w-full px-0.5"></div>
         </div>
@@ -5561,19 +5560,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         <div id="dashRecentsSection" class="w-full hidden">
           <div class="text-[10.5px] font-bold text-ink-faint uppercase tracking-wider mb-3 px-1 flex items-center gap-1">
             <span>⏱️</span>
-            <span>最近活跃会话</span>
+            <span>${t('最近活跃会话')}</span>
           </div>
           <div id="dashRecentsList" class="flex flex-col gap-2 w-full"></div>
         </div>
 
         <div id="dashEmptyHint" class="w-full hidden text-center mt-2">
-          <p class="text-xs text-ink-faint mb-3">还没有最近会话</p>
-          <button type="button" class="dash-open-sessions inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="打开会话列表">
-            打开工作区与会话列表
+          <p class="text-xs text-ink-faint mb-3">${t('还没有最近会话')}</p>
+          <button type="button" class="dash-open-sessions inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" title="${t('打开会话列表')}">
+            ${t('打开工作区与会话列表')}
           </button>
         </div>
 
-        <button id="dashHelpLink" class="mt-6 text-xs text-ink-faint hover:text-accent underline underline-offset-2 transition-colors" type="button">❓ 如何连接与使用</button>
+        <button id="dashHelpLink" class="mt-6 text-xs text-ink-faint hover:text-accent underline underline-offset-2 transition-colors" type="button">${t('❓ 如何连接与使用')}</button>
       </div>`);
 
     // 绑定使用引导入口 → 访问帮助页（showAccessHelp）
@@ -5601,9 +5600,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       let acked = false;
       socket.emit('session:switch', { sessionId: s.id, cwd: s.cwd }, res => {
         acked = true;
-        if (!res?.ok) addBar(res?.error || '切换失败', 'text-danger');
+        if (!res?.ok) addBar(res?.error || t('切换失败'), 'text-danger');
       });
-      setTimeout(() => { if (!acked) addBar('切换无响应，请刷新页面后重试', 'text-danger'); }, 4000);
+      setTimeout(() => { if (!acked) addBar(t('切换无响应，请刷新页面后重试'), 'text-danger'); }, 4000);
     };
 
     const renderDashRecents = (recent) => {
@@ -5641,7 +5640,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
       recentsList.innerHTML = '';
       for (const s of recent) {
-        const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : '时间未知';
+        const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('时间未知');
         const icon = s.kind === 'worktree' ? '⑂' : '📁';
         const item = el(`
           <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
@@ -5654,14 +5653,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
                 <span class="shrink-0 dash-when"></span>
               </div>
             </div>
-            <div class="text-xs text-accent font-bold shrink-0">进入 ➔</div>
+            <div class="text-xs text-accent font-bold shrink-0">${t('进入 ➔')}</div>
           </div>
         `);
-        item.querySelector('.font-bold').textContent = s.title || '无标题会话';
+        item.querySelector('.font-bold').textContent = s.title || t('无标题会话');
         item.querySelector('.dash-ws-icon').textContent = icon;
         item.querySelector('.dash-ws').textContent = s.workspaceName;
         item.querySelector('.dash-when').textContent = when;
-        item.title = `${s.workspaceName} · ${s.title || '无标题会话'}`;
+        item.title = `${s.workspaceName} · ${s.title || t('无标题会话')}`;
         item.onclick = (e) => {
           e.stopPropagation();
           haptic('tap');
@@ -5721,11 +5720,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       hideLoadingCard();
       const msgs = res?.messages || [];
       if (!msgs.length) {
-        if (res?.error) addBar('历史消息加载失败', 'text-ink-faint');
+        if (res?.error) addBar(t('历史消息加载失败'), 'text-ink-faint');
         onDone?.();
         return;
       }
-      addBar(`加载了 ${msgs.length} 条历史消息`, 'text-ink-faint');
+      addBar(`${t('加载了')} ${msgs.length} ${t('条历史消息')}`, 'text-ink-faint');
       renderHistoryBubbles(msgs, onDone);
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
@@ -5747,17 +5746,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     let timer = null, sx = 0, sy = 0, moved = false;
     const cancel = () => { if (timer) { clearTimeout(timer); timer = null; } };
     bubble.addEventListener('touchstart', ev => {
-      const t = ev.touches?.[0];
-      if (!t) return;
-      sx = t.clientX; sy = t.clientY; moved = false;
+      const touch = ev.touches?.[0];
+      if (!touch) return;
+      sx = touch.clientX; sy = touch.clientY; moved = false;
       cancel();
       timer = setTimeout(() => { timer = null; if (!moved) requestSessionFork(bubble, role); }, 550);
     }, { passive: true });
     bubble.addEventListener('touchmove', ev => {
       if (!timer) return;
-      const t = ev.touches?.[0];
-      if (!t) return;
-      if (Math.abs(t.clientX - sx) > 8 || Math.abs(t.clientY - sy) > 8) { moved = true; cancel(); }
+      const touch = ev.touches?.[0];
+      if (!touch) return;
+      if (Math.abs(touch.clientX - sx) > 8 || Math.abs(touch.clientY - sy) > 8) { moved = true; cancel(); }
     }, { passive: true });
     bubble.addEventListener('touchend', cancel, { passive: true });
     bubble.addEventListener('touchcancel', cancel, { passive: true });
@@ -5779,25 +5778,25 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       ownUuid: bubble.dataset.uuid || null,
       precedingAssistantUuid: findPrecedingAssistantUuid(bubble),
     });
-    if (!anchor) { addBar('这是最早一条消息，前面没有可分叉的起点', 'text-ink-faint'); return; }
+    if (!anchor) { addBar(t('这是最早一条消息，前面没有可分叉的起点'), 'text-ink-faint'); return; }
     if (!displayedSessionId) return;
     // 快照：确认框等待用户点击期间，任何与本地操作无关的 instances 广播都可能改写 currentCwd/
     // displayedSessionId（同 loadHistory 的 await 前快照+await 后重新校验模式）——不快照会把 A 会话
     // 消息的 anchor 和 await 后已变成 B 的 cwd/sessionId 拼到一起发出去。
     const cwdAtRequest = currentCwd, sessionIdAtRequest = displayedSessionId;
     const ok = await appConfirm({
-      title: '从这里分叉新会话？',
-      body: '会复制到这条消息为止的对话，创建一个独立的新会话；原会话不受影响。',
-      okText: '分叉',
+      title: t('从这里分叉新会话？'),
+      body: t('会复制到这条消息为止的对话，创建一个独立的新会话；原会话不受影响。'),
+      okText: t('分叉'),
     });
     if (!ok) return;
     if (currentCwd !== cwdAtRequest || displayedSessionId !== sessionIdAtRequest) {
-      addBar('会话已切换，分叉已取消，请重新发起', 'text-info');
+      addBar(t('会话已切换，分叉已取消，请重新发起'), 'text-info');
       return;
     }
     haptic('tap');
     socket.emit('session:fork', { cwd: cwdAtRequest, sessionId: sessionIdAtRequest, uuid: anchor }, res => {
-      if (!res?.ok) addBar(res?.error || '分叉失败', 'text-danger');
+      if (!res?.ok) addBar(res?.error || t('分叉失败'), 'text-danger');
     });
   }
 
@@ -5841,7 +5840,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (msg?.kind === 'thinking') {
         const wrap = el(`
           <details class="msg-frame thinking rounded-lg bg-surface border border-line-soft text-xs text-ink-faint">
-            <summary class="px-3 py-1.5">💭 思考过程</summary>
+            <summary class="px-3 py-1.5">${t('💭 思考过程')}</summary>
             <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
           </details>`);
         wrap.querySelector('.t-body').textContent = msg.content || '';
@@ -5854,7 +5853,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const card = el(`
           <details class="msg-frame toolcard rounded-lg bg-surface border border-line text-xs">
             <summary class="px-3 py-2 flex items-center gap-2 min-w-0">
-              <span class="t-status status-icon shrink-0 text-warning" aria-label="进行中"></span><span class="t-name font-mono font-semibold text-ink truncate">${esc(histTitle)}</span>
+              <span class="t-status status-icon shrink-0 text-warning" aria-label="${t('进行中')}"></span><span class="t-name font-mono font-semibold text-ink truncate">${esc(histTitle)}</span>
             </summary>
             <div class="px-3 pb-2 space-y-1">
               <pre class="t-in overflow-x-auto whitespace-pre-wrap break-words text-ink-soft"><code></code></pre>
@@ -6117,8 +6116,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       btnAttach.classList.toggle('opacity-50', effective);
       btnAttach.classList.toggle('cursor-not-allowed', effective);
       btnAttach.title = effective
-        ? (mirrorAutonomousFlag ? '只读镜像：本会话自主循环执行中——点右侧续接可在手机继续' : '只读镜像：终端会话运行中——点右侧续接可在手机继续')
-        : '添加附件';
+        ? (mirrorAutonomousFlag ? t('只读镜像：本会话自主循环执行中——点右侧续接可在手机继续') : t('只读镜像：终端会话运行中——点右侧续接可在手机继续'))
+        : t('添加附件');
     }
     // 镜像/解锁都走主按钮状态机：镜像时 mode=resume，解锁恢复 send/stop
     updateSendButtonState();
@@ -6155,8 +6154,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         mirrorOverriddenSid = ev.sessionId;
         applyMirror(false, ev.sessionId);
         addBar(step.action === 'unlock-focus'
-          ? '已续接 CLI 会话：终端本轮已完结，安全切换'
-          : '已续接 CLI 会话：终端疑似中断，自动完成续接——若终端仍在跑同一会话，并发发送有分叉风险',
+          ? t('已续接 CLI 会话：终端本轮已完结，安全切换')
+          : t('已续接 CLI 会话：终端疑似中断，自动完成续接——若终端仍在跑同一会话，并发发送有分叉风险'),
           step.action === 'unlock-focus' ? 'text-ink-faint' : 'text-warning');
         inputEl?.focus();
         return;
@@ -6178,7 +6177,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!mirrorStaleFlag) { // 运行中：排队等待，零风险故无需确认弹窗
       armedTakeoverSid = mirrorReadonlySid;
       applyMirror(true, mirrorReadonlySid, false);
-      addBar('已请求续接 CLI 会话：终端当前操作完成后自动切换，可点「取消续接」撤销', 'text-ink-faint');
+      addBar(t('已请求续接 CLI 会话：终端当前操作完成后自动切换，可点「取消续接」撤销'), 'text-ink-faint');
       return;
     }
     // 快照：确认框等待用户点击期间，一条并发 mirror_state 广播可能把 mirrorReadonlySid 改写成另一
@@ -6186,18 +6185,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 的 await 前快照+await 后重新校验模式）。
     const sidAtRequest = mirrorReadonlySid;
     if (!(await appConfirm({
-      title: '续接 CLI 会话？',
-      body: '这是电脑终端正在跑的同一条对话。续接不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再续接。',
-      okText: '仍要续接',
+      title: t('续接 CLI 会话？'),
+      body: t('这是电脑终端正在跑的同一条对话。续接不会停止终端进程——两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n建议先到终端 Ctrl+C 或等它跑完再续接。'),
+      okText: t('仍要续接'),
       tone: 'warning',
     }))) return;
     if (mirrorReadonlySid !== sidAtRequest) {
-      addBar('会话已变化，续接已取消，请重新确认', 'text-info');
+      addBar(t('会话已变化，续接已取消，请重新确认'), 'text-info');
       return;
     }
     mirrorOverriddenSid = mirrorReadonlySid;
     applyMirror(false, mirrorReadonlySid);
-    addBar('已续接 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险', 'text-warning');
+    addBar(t('已续接 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险'), 'text-warning');
     inputEl?.focus();
   }
   // 兼容：旧隐藏按钮若仍被外部点到，转发到同一路径
@@ -6205,7 +6204,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   btnMirrorSync?.addEventListener('click', () => {
     haptic('tap');
     socket.emit('mirror:syncNow');
-    addBar('已请求刷新：拉取终端最新消息', 'text-ink-faint');
+    addBar(t('已请求刷新：拉取终端最新消息'), 'text-ink-faint');
   });
 
   // E18: 为代码块注入复制按钮（per-block，hover 时浮现）
@@ -6217,11 +6216,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       pre.parentNode.insertBefore(wrap, pre);
       wrap.appendChild(pre);
       const btn = el(`
-        <button class="code-copy-btn" title="复制代码">
+        <button class="code-copy-btn" title="${t('复制代码')}">
           <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
           </svg>
-          <span>复制</span>
+          <span>${t('复制')}</span>
         </button>
       `);
       btn.onclick = async (e) => {
@@ -6231,8 +6230,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const text = code ? code.textContent : pre.textContent;
         const ok = await copyText(text);
         const span = btn.querySelector('span');
-        if (span) span.textContent = ok ? '已复制' : '失败';
-        setTimeout(() => { if (span) span.textContent = '复制'; }, 1500);
+        if (span) span.textContent = ok ? t('已复制') : t('失败');
+        setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
       };
       wrap.appendChild(btn);
     });
@@ -6275,28 +6274,28 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (align === 'right') {
       const row = el(`<div class="mt-1 text-right msg-action-bar justify-end"></div>`);
       const btn = el(`
-        <button class="msg-action-btn hit-44" title="复制消息">
+        <button class="msg-action-btn hit-44" title="${t('复制消息')}">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
           </svg>
-          <span>复制</span>
+          <span>${t('复制')}</span>
         </button>
       `);
       btn.onclick = async () => {
         haptic('tap');
         const ok = await copyText(getText());
         const span = btn.querySelector('span');
-        if (span) span.textContent = ok ? '已复制' : '失败';
-        setTimeout(() => { if (span) span.textContent = '复制'; }, 1500);
+        if (span) span.textContent = ok ? t('已复制') : t('失败');
+        setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
       };
       row.appendChild(btn);
       // UX-012：改写重发放在用户气泡，操作对象与位置一致
       const rewrite = el(`
-        <button class="msg-action-btn hit-44" title="改写后重发">
+        <button class="msg-action-btn hit-44" title="${t('改写后重发')}">
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
           </svg>
-          <span>改写重发</span>
+          <span>${t('改写重发')}</span>
         </button>
       `);
       rewrite.onclick = () => {
@@ -6319,36 +6318,36 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     
     // 1. Copy Button
     const copyBtn = el(`
-      <button class="msg-action-btn" title="复制消息">
+      <button class="msg-action-btn" title="${t('复制消息')}">
         <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
         </svg>
-        <span>复制</span>
+        <span>${t('复制')}</span>
       </button>
     `);
     copyBtn.onclick = async () => {
       haptic('tap');
       const ok = await copyText(getText());
       const span = copyBtn.querySelector('span');
-      if (span) span.textContent = ok ? '已复制' : '失败';
-      setTimeout(() => { if (span) span.textContent = '复制'; }, 1500);
+      if (span) span.textContent = ok ? t('已复制') : t('失败');
+      setTimeout(() => { if (span) span.textContent = t('复制'); }, 1500);
     };
     bar.appendChild(copyBtn);
 
     // 2. Speak (TTS) Button using browser-native Web Speech API
     const speakBtn = el(`
-      <button class="msg-action-btn" title="语音朗读">
+      <button class="msg-action-btn" title="${t('语音朗读')}">
         <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
         </svg>
-        <span>朗读</span>
+        <span>${t('朗读')}</span>
       </button>
     `);
     speakBtn.onclick = () => {
       // 特性检测：部分移动端浏览器/内嵌 WebView 不支持 Web Speech API，speechSynthesis 为 undefined
       // 时直接访问 .speaking 会抛未捕获 TypeError（同 copyText 的 navigator.clipboard && 检测风格）。
       if (typeof window.speechSynthesis === 'undefined' || typeof SpeechSynthesisUtterance === 'undefined') {
-        addBar('此设备不支持语音朗读', 'text-info');
+        addBar(t('此设备不支持语音朗读'), 'text-info');
         return;
       }
       if (window.speechSynthesis.speaking && activeSpeechBtn === speakBtn) {
@@ -6357,7 +6356,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
           </svg>
-          <span>朗读</span>
+          <span>${t('朗读')}</span>
         `;
         activeSpeechBtn = null;
         return;
@@ -6370,7 +6369,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
             </svg>
-            <span>朗读</span>
+            <span>${t('朗读')}</span>
           `;
         }
       }
@@ -6387,7 +6386,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
           </svg>
-          <span>朗读</span>
+          <span>${t('朗读')}</span>
         `;
         if (activeSpeechBtn === speakBtn) activeSpeechBtn = null;
       };
@@ -6396,7 +6395,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         <svg class="w-3.5 h-3.5 text-danger animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
         </svg>
-        <span class="text-danger font-semibold">停止</span>
+        <span class="text-danger font-semibold">${t('停止')}</span>
       `;
       activeSpeechBtn = speakBtn;
       window.speechSynthesis.speak(utterance);
@@ -6417,12 +6416,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!fold) return;
     textEl.classList.add('overflow-hidden');
     textEl.style.maxHeight = '8rem';
-    const btn = el(`<button class="text-xs text-accent mt-1 block">展开</button>`);
+    const btn = el(`<button class="text-xs text-accent mt-1 block">${t('展开')}</button>`);
     let expanded = false;
     btn.onclick = () => {
       expanded = !expanded;
-      if (expanded) { textEl.style.maxHeight = 'none'; btn.textContent = '收起'; textEl.classList.remove('overflow-hidden'); }
-      else { textEl.style.maxHeight = '8rem'; btn.textContent = '展开'; textEl.classList.add('overflow-hidden'); }
+      if (expanded) { textEl.style.maxHeight = 'none'; btn.textContent = t('收起'); textEl.classList.remove('overflow-hidden'); }
+      else { textEl.style.maxHeight = '8rem'; btn.textContent = t('展开'); textEl.classList.add('overflow-hidden'); }
     };
     textEl.after(btn);
   }
@@ -6437,12 +6436,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const wrap = el(`<div class="overflow-hidden" style="max-height:8rem"></div>`);
     while (bubble.firstChild) wrap.appendChild(bubble.firstChild);
     bubble.appendChild(wrap);
-    const btn = el(`<button class="text-xs text-accent mt-1 block">展开</button>`);
+    const btn = el(`<button class="text-xs text-accent mt-1 block">${t('展开')}</button>`);
     let expanded = false;
     btn.onclick = () => {
       expanded = !expanded;
-      if (expanded) { wrap.style.maxHeight = 'none'; wrap.classList.remove('overflow-hidden'); btn.textContent = '收起'; }
-      else { wrap.style.maxHeight = '8rem'; wrap.classList.add('overflow-hidden'); btn.textContent = '展开'; }
+      if (expanded) { wrap.style.maxHeight = 'none'; wrap.classList.remove('overflow-hidden'); btn.textContent = t('收起'); }
+      else { wrap.style.maxHeight = '8rem'; wrap.classList.add('overflow-hidden'); btn.textContent = t('展开'); }
     };
     wrap.after(btn);
   }
@@ -6455,7 +6454,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
         </svg>
-        <div class="text-xs font-semibold text-ink-soft tracking-wide">正在加载会话...</div>
+        <div class="text-xs font-semibold text-ink-soft tracking-wide">${t('正在加载会话...')}</div>
       </div>
     `);
     appendMessage(card);
@@ -6546,7 +6545,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (!text) return;
       const ok = await copyToClipboard(text);
       const orig = consoleCopy.textContent;
-      consoleCopy.textContent = ok ? '已复制' : '复制失败';
+      consoleCopy.textContent = ok ? t('已复制') : t('复制失败');
       setTimeout(() => { consoleCopy.textContent = orig; }, 1500);
     };
   }
@@ -6601,7 +6600,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (isRestoredBoundary(prev, entry)) {
         const sep = document.createElement('div');
         sep.className = 'text-center text-[10px] text-gray-600 select-none py-1';
-        sep.textContent = '—— 本次会话 ——';
+        sep.textContent = t('—— 本次会话 ——');
         consoleLogArea.appendChild(sep);
       }
       appendLogEntry(entry); // 批量路径每条 soft；循环后一次 force 落底（打开抽屉/切换过滤）

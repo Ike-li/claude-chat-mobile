@@ -3,7 +3,7 @@
 // 未收录 key 静默回落中文（渐进式覆盖，不是"未翻译就报错"）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, LANG_STORAGE_KEY, EN_DICT } from '../../public/js/i18n.js';
+import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, LANG_STORAGE_KEY, EN_DICT, translateTextNodeValue, I18N_ATTRS } from '../../public/js/i18n.js';
 
 test.afterEach(() => setLang('zh')); // 每个用例后复位，测试间不串扰全局 currentLang
 
@@ -34,6 +34,37 @@ test.describe('t()：zh 恒等 + en 查字典回落', () => {
     assert.equal(t(undefined), undefined);
     setLang('en');
     assert.equal(t(''), '');
+  });
+});
+
+// index.html 不逐个标 data-i18n，改为启动时整树扫文本节点按词典替换（见 i18n.js applyI18nToDocument）。
+// 文本节点带原始缩进/换行，key 却是 trim 后的净文案——这里锁的就是"按 trim 后查典、按原空白回填"。
+test.describe('translateTextNodeValue：文本节点整树扫描的翻译单元', () => {
+  test('zh locale → 恒等，连空白都不动', () => {
+    assert.equal(translateTextNodeValue('\n      取消\n    '), '\n      取消\n    ');
+  });
+  test('en locale + 命中 → 只换净文案，前后缩进/换行原样保留', () => {
+    setLang('en');
+    assert.equal(translateTextNodeValue('\n      取消\n    '), '\n      Cancel\n    ');
+    assert.equal(translateTextNodeValue(' 取消 '), ' Cancel ');
+    assert.equal(translateTextNodeValue('取消'), 'Cancel');
+  });
+  test('en locale + 未命中 → 原样返回（含空白），不留占位符', () => {
+    setLang('en');
+    assert.equal(translateTextNodeValue('\n  尚未翻译的字符串\n'), '\n  尚未翻译的字符串\n');
+  });
+  test('纯空白 / 空串 / 非字符串 → 原样返回，不进词典查询', () => {
+    setLang('en');
+    assert.equal(translateTextNodeValue('\n      \n'), '\n      \n');
+    assert.equal(translateTextNodeValue(''), '');
+    assert.equal(translateTextNodeValue(null), null);
+    assert.equal(translateTextNodeValue(undefined), undefined);
+  });
+});
+
+test.describe('I18N_ATTRS：需要翻译的属性白名单', () => {
+  test('覆盖 title / placeholder / aria-label / alt（纯装饰的 aria-hidden 元素不在此列）', () => {
+    assert.deepEqual([...I18N_ATTRS].sort(), ['alt', 'aria-label', 'placeholder', 'title']);
   });
 });
 

@@ -84,7 +84,7 @@ export function createFileBrowser(context, {
     context.socket.emit('browse:list', { cwd, relPath: requestedPath, offset }, response => {
       if (mode !== 'list' || relativePath() !== requestedPath) return;
       if (!response?.ok) {
-        showMessage(`无法加载：${response?.error || '未知错误'}`, 'text-danger');
+        showMessage(`${t('无法加载：')}${response?.error || t('未知错误')}`, 'text-danger');
         return;
       }
       listEntries = listEntries.concat(response.entries);
@@ -134,7 +134,7 @@ export function createFileBrowser(context, {
     }
     if (listTruncated) {
       const more = createElement('<button class="w-full p-3 text-center text-[11px] text-accent hover:bg-sunk/30 active:opacity-70"></button>');
-      more.textContent = `加载更多（已显示 ${listEntries.length}/${listTotal}）`;
+      more.textContent = `${t('加载更多（已显示')} ${listEntries.length}/${listTotal}）`;
       more.onclick = () => {
         haptic('tap');
         fetchListPage(relativePath(), listOffset);
@@ -175,11 +175,11 @@ export function createFileBrowser(context, {
       const currentPath = segments.concat(fileName || '').join('/');
       if (mode !== 'content' || currentPath !== requestedPath) return;
       if (!response?.ok) {
-        showMessage(`无法加载：${response?.error || '未知错误'}`, 'text-danger');
+        showMessage(`${t('无法加载：')}${response?.error || t('未知错误')}`, 'text-danger');
         return;
       }
       if (response.binary) {
-        showMessage(`二进制文件（${formatFileSize(response.totalSize)}），不支持预览`);
+        showMessage(`${t('二进制文件（')}${formatFileSize(response.totalSize)}${t('），不支持预览')}`);
         return;
       }
       contentText += response.content;
@@ -253,7 +253,7 @@ export function createFileBrowser(context, {
       // 迟到 ack 守卫：保存在途时用户已切走这个文件/关了浏览器，别把结果套到当前视图上。
       if (mode !== 'content' || segments.concat(fileName).join('/') !== path) return;
       if (!response?.ok) {
-        showSaveError(response?.error || '保存失败'); // 留在编辑态：冲突/超限等需要用户自己决定下一步，不擅自丢改动
+        showSaveError(response?.error || t('保存失败')); // 留在编辑态：冲突/超限等需要用户自己决定下一步，不擅自丢改动
         return;
       }
       contentText = newContent; // 基线随保存前移：取消编辑不会丢刚保存成功的内容
@@ -296,7 +296,7 @@ export function createFileBrowser(context, {
     dom.fileBrowseBody.appendChild(pre);
     if (truncated) {
       const more = createElement('<button class="w-full p-3 text-center text-[11px] text-accent hover:bg-sunk/30 active:opacity-70 border-t border-line-soft"></button>');
-      more.textContent = `加载更多（已显示 ${formatFileSize(contentOffset)}/${formatFileSize(totalSize)}）`;
+      more.textContent = `${t('加载更多（已显示')} ${formatFileSize(contentOffset)}/${formatFileSize(totalSize)}）`;
       more.onclick = () => {
         haptic('tap');
         usedPagination = true; // 哪怕这一页恰好读完全文（truncated 转 false），后续也不再切 CM

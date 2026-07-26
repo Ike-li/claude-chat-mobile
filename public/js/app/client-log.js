@@ -21,11 +21,11 @@ export function createClientLogger(context, { capacity = 500, onEntry = null, st
 
   function persist(force = false) {
     if (!storage) return;
-    const t = now();
-    if (!force && !shouldPersistLog(lastPersistTs, t, persistIntervalMs)) return;
+    const nowTs = now();
+    if (!force && !shouldPersistLog(lastPersistTs, nowTs, persistIntervalMs)) return;
     try {
       storage.setItem(STORAGE_KEY, serializeClientLogs(buffer.toArray()));
-      lastPersistTs = t;
+      lastPersistTs = nowTs;
     } catch { /* 配额满/隐私模式：忽略，日志非关键、不反噬主流程 */ }
   }
 

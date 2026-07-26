@@ -3,6 +3,7 @@
 // 目的：让 app.js（浏览器 import）与 tests/unit/logic.test.mjs（node:test）共用同一份逻辑，零依赖、零构建。
 
 // HTML 转义。app.js 多处复用（审批命令、工具参数摘要）+ ansiToHtml 内部。
+import { t } from './i18n.js';
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
@@ -15,8 +16,8 @@ export function formatToolSummary(summary) {
   if (typeof summary !== 'string') return String(summary);
   const s = summary;
   if (!s) return '';
-  const t = s.trim();
-  if (!t || (t[0] !== '{' && t[0] !== '[')) return s;
+  const trimmed = s.trim();
+  if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return s;
   try {
     return JSON.stringify(JSON.parse(s), null, 2);
   } catch {
@@ -91,7 +92,7 @@ export function resolveModelTileDisplay(models) {
 
 // UX-020：同名附件序号；可选大小。
 export function formatAttachmentChipLabel(name, occurrence = 1, sizeBytes) {
-  const base = (name != null && String(name).trim()) ? String(name).trim() : '附件';
+  const base = (name != null && String(name).trim()) ? String(name).trim() : t('附件');
   const n = Math.max(1, Number(occurrence) || 1);
   let label = n > 1 ? `${base} (${n})` : base;
   if (sizeBytes != null && Number.isFinite(Number(sizeBytes))) {
@@ -117,13 +118,13 @@ export function formatCachePercent(ratio) {
 export function effortLevelSubtitle(level) {
   const lv = String(level || '').toLowerCase();
   const map = {
-    low: '更快更省',
-    medium: '均衡',
-    med: '均衡',
-    high: '更深入',
-    xhigh: '很深入更慢',
-    max: '最深入更慢更贵',
-    ultracode: 'xhigh + 多 agent workflow · 最彻底',
+    low: t('更快更省'),
+    medium: t('均衡'),
+    med: t('均衡'),
+    high: t('更深入'),
+    xhigh: t('很深入更慢'),
+    max: t('最深入更慢更贵'),
+    ultracode: t('xhigh + 多 agent workflow · 最彻底'),
   };
   return map[lv] || '';
 }
@@ -154,33 +155,33 @@ export function resolveComposerPrimaryMode({
         mode: 'cancel-resume',
         enabled: true,
         // 钮面短文案，完整语义在 aria/title——避免宽按钮挤掉底栏齿轮
-        label: '取消',
-        title: '取消排队中的续接，继续只读追平',
-        ariaLabel: '取消续接',
+        label: t('取消'),
+        title: t('取消排队中的续接，继续只读追平'),
+        ariaLabel: t('取消续接'),
       };
     }
     return {
       mode: 'resume',
       enabled: true,
-      label: '续接',
-      title: '续接 CLI 会话：运行中会排队等本轮结束，疑似中断需确认',
-      ariaLabel: '续接 CLI 会话',
+      label: t('续接'),
+      title: t('续接 CLI 会话：运行中会排队等本轮结束，疑似中断需确认'),
+      ariaLabel: t('续接 CLI 会话'),
     };
   }
   if (blockedByUserRequest) {
     return {
       mode: 'send',
       enabled: false,
-      title: '请先处理当前审批或选择',
-      ariaLabel: '发送',
+      title: t('请先处理当前审批或选择'),
+      ariaLabel: t('发送'),
     };
   }
   if (blockedByDisabledInput) {
     return {
       mode: 'send',
       enabled: false,
-      title: '请先完成设备授权或解除只读状态',
-      ariaLabel: '发送',
+      title: t('请先完成设备授权或解除只读状态'),
+      ariaLabel: t('发送'),
     };
   }
   // busy 且输入空 → 停止（queueFull 不挡中止）
@@ -189,15 +190,15 @@ export function resolveComposerPrimaryMode({
       return {
         mode: 'stop',
         enabled: false,
-        title: '正在停止…',
-        ariaLabel: '正在停止',
+        title: t('正在停止…'),
+        ariaLabel: t('正在停止'),
       };
     }
     return {
       mode: 'stop',
       enabled: true,
-      title: '停止',
-      ariaLabel: '停止',
+      title: t('停止'),
+      ariaLabel: t('停止'),
     };
   }
   // 发送路径（含 busy+有内容 排队）
@@ -205,16 +206,16 @@ export function resolveComposerPrimaryMode({
     return {
       mode: 'send',
       enabled: false,
-      title: '前面已有消息在排队，请等当前任务结束',
-      ariaLabel: '发送',
+      title: t('前面已有消息在排队，请等当前任务结束'),
+      ariaLabel: t('发送'),
     };
   }
   if (blockedBySendInFlight) {
     return {
       mode: 'send',
       enabled: false,
-      title: '请稍候…',
-      ariaLabel: '发送',
+      title: t('请稍候…'),
+      ariaLabel: t('发送'),
     };
   }
   if (hasContent) {
@@ -222,14 +223,14 @@ export function resolveComposerPrimaryMode({
       mode: 'send',
       enabled: true,
       title: '',
-      ariaLabel: '发送',
+      ariaLabel: t('发送'),
     };
   }
   return {
     mode: 'send',
     enabled: false,
     title: '',
-    ariaLabel: '发送',
+    ariaLabel: t('发送'),
   };
 }
 
@@ -237,7 +238,7 @@ export function resolveComposerPrimaryMode({
 // 本轮 result 到达时转正；被撤回/随停止取消时由 system{queue_cancelled/queue_dropped} 落终态。
 export function queuedBubbleState({ queued = false } = {}) {
   if (!queued) return { show: false, label: '' };
-  return { show: true, label: '⏳ 排队中 · 本轮结束后发送' };
+  return { show: true, label: t('⏳ 排队中 · 本轮结束后发送') };
 }
 
 // 撤回回填决策（对齐 CLI ESC 撤回→内容回编辑器）：输入框为空 → 直接回填；
@@ -253,9 +254,9 @@ export function resolveCancelRefill({ inputText = '', cancelledText = '' } = {})
 // spinner 行——对齐 CLI 不报具体工具（工具卡自会显示命令）。
 // kind: default | stopping | sending（发送 ack 前的短暂阶段）。
 export function formatLiveActivityText(kind = 'default') {
-  if (kind === 'stopping') return '正在停止…';
-  if (kind === 'sending') return '正在发送…';
-  return 'Claude 正在执行任务...';
+  if (kind === 'stopping') return t('正在停止…');
+  if (kind === 'sending') return t('正在发送…');
+  return t('Claude 正在执行任务...');
 }
 
 // 点停止后 interruptPending 的安全超时（ms）。限流重试时 SDK interrupt 可能挂起或不回 interrupted，
@@ -268,7 +269,7 @@ export const INTERRUPT_PENDING_TIMEOUT_MS = 12_000;
 export function shouldClearInterruptPendingOnSystem(payload = {}) {
   const p = payload && typeof payload === 'object' ? payload : {};
   if (p.kind === 'interrupted') return true;
-  if (typeof p.message === 'string' && p.message.includes('没有可中断的任务')) return true;
+  if (typeof p.message === 'string' && p.message.includes(t('没有可中断的任务'))) return true;
   return false;
 }
 
@@ -304,6 +305,8 @@ const STATUS_ICON_PATHS = {
   answered: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M8 12.5l2.5 2.5L16 9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
   aborted: '<rect x="4" y="4" width="16" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 9h6v6H9z" fill="currentColor"/>',
 };
+// 下面几张查表存中文原文、到取用点才 t()：模块顶层常量在 import 阶段求值，那时 app.js 还没跑到
+// setLang()，直接在表里 t() 会把这些标签永久钉死成中文。
 const STATUS_ICON_LABELS = {
   pending: '进行中',
   busy: '运行中',
@@ -317,7 +320,7 @@ const STATUS_ICON_LABELS = {
 export function statusIconSpec(kind) {
   const k = STATUS_ICON_PATHS[kind] ? kind : 'pending';
   const path = STATUS_ICON_PATHS[k];
-  const label = STATUS_ICON_LABELS[k] || STATUS_ICON_LABELS.pending;
+  const label = t(STATUS_ICON_LABELS[k] || STATUS_ICON_LABELS.pending);
   const html = `<svg class="status-svg" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" focusable="false">${path}</svg>`;
   return { html, label, kind: k };
 }
@@ -356,10 +359,10 @@ const taskStatusIcon = s => TASK_STATUS_ICONS[s] ?? `[${s}]`;
 
 function parseJsonObject(raw) {
   if (typeof raw !== 'string') return null;
-  const t = raw.trim();
-  if (t[0] !== '{') return null;
+  const trimmed = raw.trim();
+  if (trimmed[0] !== '{') return null;
   try {
-    const parsed = JSON.parse(t);
+    const parsed = JSON.parse(trimmed);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
   } catch { return null; } // agent 端截断的残缺 JSON → null，调用方走通用路径
 }
@@ -394,16 +397,16 @@ export function renderTaskToolResultText(toolName, outputSummary) {
   if (name === 'TaskList') {
     if (out) {
       if (!Array.isArray(out.tasks)) return null;
-      if (out.tasks.length === 0) return '（无任务）';
-      return out.tasks.map(t => {
-        const id = t?.id != null ? `#${t.id} ` : '';
-        const subject = typeof t?.subject === 'string' ? t.subject : '';
-        const blocked = Array.isArray(t?.blockedBy) && t.blockedBy.length
-          ? `（被 ${t.blockedBy.map(b => `#${b}`).join(' ')} 阻塞）` : '';
-        return `${taskStatusIcon(String(t?.status ?? 'pending'))} ${id}${subject}${blocked}`.trimEnd();
+      if (out.tasks.length === 0) return t('（无任务）');
+      return out.tasks.map(task => {
+        const id = task?.id != null ? `#${task.id} ` : '';
+        const subject = typeof task?.subject === 'string' ? task.subject : '';
+        const blocked = Array.isArray(task?.blockedBy) && task.blockedBy.length
+          ? `${t('（被')} ${task.blockedBy.map(b => `#${b}`).join(' ')}${t(' 阻塞）')}` : '';
+        return `${taskStatusIcon(String(task?.status ?? 'pending'))} ${id}${subject}${blocked}`.trimEnd();
       }).join('\n');
     }
-    if (outputSummary.trim() === 'No tasks found') return '（无任务）';
+    if (outputSummary.trim() === 'No tasks found') return t('（无任务）');
     // 历史文本形态逐行转图标；整体不匹配则交还通用路径
     const lines = outputSummary.trim().split('\n');
     const converted = lines.map(l => {
@@ -416,16 +419,16 @@ export function renderTaskToolResultText(toolName, outputSummary) {
   if (name === 'TaskCreate') {
     if (out.task?.id == null) return null;
     const subject = typeof out.task.subject === 'string' && out.task.subject ? `：${out.task.subject}` : '';
-    return `☐ 已建任务 #${out.task.id}${subject}`;
+    return `${t('☐ 已建任务')} #${out.task.id}${subject}`;
   }
   if (name === 'TaskUpdate') {
-    if (out.success === false) return `更新失败：${out.error || '未知原因'}`;
+    if (out.success === false) return `${t('更新失败：')}${out.error || t('未知原因')}`;
     if (out.taskId == null) return null;
     const sc = out.statusChange;
     if (sc?.from && sc?.to) return `${taskStatusIcon(sc.to)} #${out.taskId} ${sc.from} → ${sc.to}`;
     const fields = Array.isArray(out.updatedFields) && out.updatedFields.length
       ? `（${out.updatedFields.join(', ')}）` : '';
-    return `#${out.taskId} 已更新${fields}`;
+    return `#${out.taskId} ${t('已更新')}${fields}`;
   }
   return null; // TaskGet 详情信息量大，保留通用 JSON 展示
 }
@@ -478,7 +481,7 @@ export function toolPreviewLabel(meta) {
   const kind = m.changeKind != null ? String(m.changeKind) : '';
   const name = m.name != null ? String(m.name) : '';
   const isRead = kind === 'read' || (!kind && name === 'Read');
-  return isRead ? '📄 预览文件' : '📄 预览变更';
+  return isRead ? t('📄 预览文件') : t('📄 预览变更');
 }
 
 // 是否「会改盘」的文件工具（进 turn-end 变更汇总；Read 排除）。
@@ -578,7 +581,7 @@ export function summarizeTurnFileChanges(map) {
     added,
     removed,
     files,
-    title: `已编辑 ${files.length} 个文件`,
+    title: `${t('已编辑')} ${files.length} ${t('个文件')}`,
     statsLabel: `+${added} -${removed}`,
   };
 }
@@ -587,9 +590,9 @@ export function summarizeTurnFileChanges(map) {
 // SDK 的 effort flag 只认 low..max、不认 ultracode，故 web 借道「xhigh effort + 每轮注入本关键词」复现：
 // 关键词触发 CLI 的 ultracodeKeywordTrigger → 该轮 opt into Workflow 工具。已有关键词时保持原文，避免叠加。
 export function withUltracodeKeyword(text) {
-  const t = String(text ?? '').trim();
-  if (!t) return 'ultracode';
-  return /^ultracode(?:\s|$)/i.test(t) ? t : `ultracode ${t}`;
+  const trimmed = String(text ?? '').trim();
+  if (!trimmed) return 'ultracode';
+  return /^ultracode(?:\s|$)/i.test(trimmed) ? trimmed : `ultracode ${trimmed}`;
 }
 
 // 思考档位列表拼装：ultracode 仅在模型支持 xhigh 时作为最高档追加（CLI:"Requires an xhigh-capable model"）。
@@ -680,7 +683,7 @@ export function resolveModelPillText({ model, gatewaySuffix = '', modelsList, cw
       || resolveGatewayModelName(full, modelsList)
       || naked;
   }
-  return '默认';
+  return t('默认');
 }
 
 // effort 档位决策（rebuildEffortOptions 的纯部分；DOM 渲染留在 app.js）。返回 { hidden, levels }：
@@ -705,10 +708,10 @@ export function effortUiState(level, supportedLevels, { mirrorReadonly = false }
   return {
     level: normalized,
     selected,
-    label: normalized || (mirrorReadonly ? 'CLI 档位未知' : '默认思考'),
+    label: normalized || (mirrorReadonly ? t('CLI 档位未知') : t('默认思考')),
     placeholder: normalized
-      ? `${normalized}（当前模型不可选）`
-      : (mirrorReadonly ? 'CLI 当前档未知' : '模型默认'),
+      ? `${normalized}${t('（当前模型不可选）')}`
+      : (mirrorReadonly ? t('CLI 当前档未知') : t('模型默认')),
   };
 }
 
@@ -756,8 +759,8 @@ export function summarizeOtherWorkspaces(workdirStates, availableDirs, currentCw
 // 顶部/空状态展示名：路径仍作为运行时事实保留，移动端 UI 只露出项目末段。
 export function projectDisplayName(path) {
   const s = String(path || '').replace(/\/+$/, '');
-  if (!s) return '无项目';
-  return s.split('/').pop() || '无项目';
+  if (!s) return t('无项目');
+  return s.split('/').pop() || t('无项目');
 }
 
 // 空会话启动页只在没有可渲染会话流时出现：新建后尚未首发，或还没有 viewing instance。
@@ -823,7 +826,7 @@ export function formatComposeDefaultsSummary({ modelLabel, modeLabel, effortLabe
   const parts = [modelLabel, modeLabel, effortLabel]
     .map(s => (typeof s === 'string' ? s.trim() : ''))
     .filter(Boolean);
-  return parts.length ? parts.join(' · ') : '使用工作区默认配置';
+  return parts.length ? parts.join(' · ') : t('使用工作区默认配置');
 }
 
 // 顶部工作区 pill（点开文件浏览）可见性：空首页/compose 枢纽已自有工作区入口，
@@ -872,7 +875,7 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
       if (!s || typeof s.id !== 'string' || !s.id) continue;
       rows.push({
         id: s.id,
-        title: s.title || '无标题会话',
+        title: s.title || t('无标题会话'),
         lastUsedAt: s.lastUsedAt ?? null,
         cwd,
         workspaceName,
@@ -949,15 +952,15 @@ export function presentOnlineSendAck(ack) {
   }
   const error = (ack && typeof ack.error === 'string' && ack.error.trim())
     ? ack.error.trim()
-    : '发送失败';
+    : t('发送失败');
   const permanent = Boolean(ack?.permanent);
   const retryable = Boolean(ack?.retryable) || (!permanent && !ack?.stale);
   const stale = Boolean(ack?.stale);
   let message = error;
   if (error === 'stale_instance' || stale) {
-    message = '目标会话已关闭，请刷新后重发';
-  } else if (!message.startsWith('发送') && !message.includes('失败')) {
-    message = `发送失败：${message}`;
+    message = t('目标会话已关闭，请刷新后重发');
+  } else if (!message.startsWith(t('发送')) && !message.includes(t('失败'))) {
+    message = `${t('发送失败：')}${message}`;
   }
   return {
     ok: false,
@@ -978,7 +981,7 @@ export function presentOfflineResendAck(err, ack) {
     return { outcome: 'ok', permanent: false, requeue: false, clearBusyIfViewing: false, message: '' };
   }
   if (!err && ack && ack.ok === false && ack.permanent) {
-    const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : '发送失败';
+    const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : t('发送失败');
     return { outcome: 'permanent', permanent: true, requeue: false, clearBusyIfViewing: true, message: error };
   }
   // 超时 / 可重试失败 / 畸形 ack
@@ -987,7 +990,7 @@ export function presentOfflineResendAck(err, ack) {
     permanent: false,
     requeue: true,
     clearBusyIfViewing: false,
-    message: err ? '未确认送达' : ((ack && typeof ack.error === 'string' && ack.error.trim()) || '发送失败'),
+    message: err ? t('未确认送达') : ((ack && typeof ack.error === 'string' && ack.error.trim()) || t('发送失败')),
   };
 }
 
@@ -1389,9 +1392,9 @@ export function consoleLogEntryLayout() {
 export function defaultModelTileLabel({ currentModel, cwdDefaultModel } = {}) {
   if (!currentModel && cwdDefaultModel) {
     const naked = String(cwdDefaultModel).replace(/\[[^\]]+\]$/, '');
-    return { title: '默认模型', subtitle: naked, showsName: true };
+    return { title: t('默认模型'), subtitle: naked, showsName: true };
   }
-  return { title: '沿用当前模型', subtitle: '不指定特定模型', showsName: false };
+  return { title: t('沿用当前模型'), subtitle: t('不指定特定模型'), showsName: false };
 }
 
 // 用户气泡长消息折叠决策（纯函数）。
@@ -1473,7 +1476,7 @@ export function whatNeedsAttention({ instances, needsYou, service } = {}) {
       items.push({
         kind: n.reason === 'awaiting_input' ? 'awaiting_input' : 'awaiting_approval',
         ref: n.instanceId || n.sessionId || null,
-        summary: n.title || n.toolName || n.reason || '需要你',
+        summary: n.title || n.toolName || n.reason || t('需要你'),
       });
     }
   }
@@ -1484,7 +1487,7 @@ export function whatNeedsAttention({ instances, needsYou, service } = {}) {
         items.push({
           kind: 'awaiting_approval',
           ref: inst.instanceId || null,
-          summary: inst.title || '待审批',
+          summary: inst.title || t('待审批'),
         });
       }
     }
@@ -1494,7 +1497,7 @@ export function whatNeedsAttention({ instances, needsYou, service } = {}) {
     items.push({
       kind: 'delivery_failure',
       ref: df.channel || null,
-      summary: `推送失败（${df.channel || 'push'}）`,
+      summary: `${t('推送失败（')}${df.channel || 'push'}${t('）')}`,
     });
     return { level: 'alert', items };
   }
@@ -1547,20 +1550,20 @@ export function presentTurnResult(payload = {}, opts = {}) {
   if (p.interrupted) {
     return {
       kind: 'aborted',
-      statusBar: { text: `已中止 · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      statusBar: { text: `${t('已中止')} · ${secs}s${cost}`, cls: 'text-ink-faint' },
       errorBar: null,
-      notify: { title: '⏹ 任务已中止', body: `用时 ${secs}s` },
-      failToolsMessage: '已中止',
+      notify: { title: t('⏹ 任务已中止'), body: `${t('用时')} ${secs}s` },
+      failToolsMessage: t('已中止'),
       haptic: 'warning',
     };
   }
   if (p.isError) {
     return {
       kind: 'error',
-      statusBar: { text: `完成 · ${secs}s${cost}`, cls: 'text-ink-faint' },
-      errorBar: errorText ? { text: `出错：${errorText}`, cls: 'text-danger' } : null,
-      notify: { title: '⚠️ 任务出错', body: errorText.slice(0, 80) || `用时 ${secs}s` },
-      failToolsMessage: errorText || '工具执行已因本轮错误停止',
+      statusBar: { text: `${t('完成')} · ${secs}s${cost}`, cls: 'text-ink-faint' },
+      errorBar: errorText ? { text: `${t('出错：')}${errorText}`, cls: 'text-danger' } : null,
+      notify: { title: t('⚠️ 任务出错'), body: errorText.slice(0, 80) || `${t('用时')} ${secs}s` },
+      failToolsMessage: errorText || t('工具执行已因本轮错误停止'),
       haptic: 'error',
     };
   }
@@ -1570,7 +1573,7 @@ export function presentTurnResult(payload = {}, opts = {}) {
     kind: 'success',
     statusBar: { text: `✻ ${pickTurnDoneVerb(opts.rand)} for ${formatCliDuration(durationMs)}`, cls: 'text-ink-faint' },
     errorBar: null,
-    notify: { title: '✅ 任务完成', body: `用时 ${secs}s` },
+    notify: { title: t('✅ 任务完成'), body: `${t('用时')} ${secs}s` },
     failToolsMessage: null,
     haptic: 'success',
   };
@@ -1586,19 +1589,19 @@ export function formatApiRetryBanner(payload = {}) {
   const hasMax = Number.isFinite(maxRetries) && maxRetries > 0;
   const secs = Number.isFinite(delayMs) && delayMs > 0 ? Math.ceil(delayMs / 1000) : 0;
   const err = typeof p.error === 'string' ? p.error : '';
-  const kind = err === 'rate_limit' ? '限流重试中' : err === 'overloaded' ? '过载重试中' : '重试中';
-  const frac = hasAttempt && hasMax ? ` · ${attempt}/${maxRetries}` : (hasAttempt ? ` · 第 ${attempt} 次` : '');
-  const wait = secs > 0 ? ` · ${secs}s 后` : '';
+  const kind = err === 'rate_limit' ? t('限流重试中') : err === 'overloaded' ? t('过载重试中') : t('重试中');
+  const frac = hasAttempt && hasMax ? ` · ${attempt}/${maxRetries}` : (hasAttempt ? ` · ${t('第 N 次').replace('N', String(attempt))}` : '');
+  const wait = secs > 0 ? ` · ${secs}s ${t('后')}` : '';
   return `${kind}${frac}${wait}`;
 }
 
 function formatAgo(ms) {
-  if (!Number.isFinite(ms) || ms < 60000) return '刚刚';
+  if (!Number.isFinite(ms) || ms < 60000) return t('刚刚');
   const mins = Math.floor(ms / 60000);
-  if (mins < 60) return `${mins} 分钟前`;
+  if (mins < 60) return `${mins} ${t('分钟前')}`;
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  return `${Math.floor(hours / 24)} 天前`;
+  if (hours < 24) return `${hours} ${t('小时前')}`;
+  return `${Math.floor(hours / 24)} ${t('天前')}`;
 }
 
 // 组装会话面板"服务"小节文案（需要你之后、目录列表之前，仅异常时渲染）。空数组=一切正常。
@@ -1608,20 +1611,20 @@ function formatAgo(ms) {
 // 两条轴分开陈列，不让服务健康看起来像"更多同类待办"。
 export function formatServiceNotices({ service, now } = {}) {
   const notices = [];
-  const countSuffix = c => (Number.isFinite(c) && c > 0 ? `（累计 ${c} 次）` : '');
+  const countSuffix = c => (Number.isFinite(c) && c > 0 ? `${t('（累计')} ${c} ${t('次）')}` : '');
   const lockout = service && service.rateLimitLockout;
   if (lockout && typeof lockout.at === 'number') {
-    notices.push(`⛔ 登录限速锁定于 ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}——可能有人在暴力尝试你的入口`);
+    notices.push(`${t('⛔ 登录限速锁定于')} ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}${t('——可能有人在暴力尝试你的入口')}`);
   }
   const df = service && service.deliveryFailure;
   if (df && typeof df.at === 'number') {
     const channelLabel = df.channel === 'ntfy' ? 'ntfy' : 'push';
-    const cnt = Number.isFinite(df.count) && df.count > 0 ? `，累计 ${df.count} 次` : '';
-    notices.push(`🔔 推送最近失败于 ${formatAgo(now - df.at)}（${channelLabel}${cnt}）`);
+    const cnt = Number.isFinite(df.count) && df.count > 0 ? `${t('，累计')} ${df.count} ${t('次')}` : '';
+    notices.push(`${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）`);
   }
   const ce = service && service.clientError;
   if (ce && typeof ce.at === 'number') {
-    notices.push(`🐞 前端错误发生于 ${formatAgo(now - ce.at)}${countSuffix(ce.count)}，详见日志面板`);
+    notices.push(`${t('🐞 前端错误发生于')} ${formatAgo(now - ce.at)}${countSuffix(ce.count)}${t('，详见日志面板')}`);
   }
   return notices;
 }
@@ -1645,48 +1648,48 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
   const d = detail && typeof detail === 'object' ? detail : {};
   let text, severity = 'neutral';
   if (event === 'race_settle') {
-    const tagLabel = DIAG_TAG_LABEL[d.tag] || d.tag || '控制请求';
+    const tagLabel = t(DIAG_TAG_LABEL[d.tag]) || d.tag || t('控制请求');
     if (d.ok) {
-      text = `${tagLabel} 成功（${d.ms}ms）`;
+      text = `${tagLabel} ${t('成功（')}${d.ms}ms）`;
     } else {
-      text = `${tagLabel} 失败：${d.error || 'timeout'}（${d.ms}ms）`;
+      text = `${tagLabel} ${t('失败：')}${d.error || 'timeout'}（${d.ms}ms）`;
       severity = 'danger';
     }
   } else if (subsystem === 'mirror' && event === 'state_change') {
-    text = d.readonly ? `🔒 镜像锁定（${d.reason || '未知'}）` : `🔓 镜像解锁（${d.reason || '未知'}）`;
+    text = d.readonly ? `${t('🔒 镜像锁定（')}${d.reason || t('未知')}）` : `${t('🔓 镜像解锁（')}${d.reason || t('未知')}）`;
   } else if (subsystem === 'mirror' && event === 'entry_lock_decision') {
     text = d.locked
-      ? `🔒 切入即锁定：终端疑似在跑（尾部=${d.tailVerdict}）`
-      : `👀 切入未锁：${d.agedOutStale ? '陈旧挂起，判定已过期' : `尾部=${d.tailVerdict}`}`;
+      ? `${t('🔒 切入即锁定：终端疑似在跑（尾部=')}${d.tailVerdict}）`
+      : `${t('👀 切入未锁：')}${d.agedOutStale ? t('陈旧挂起，判定已过期') : `${t('尾部=')}${d.tailVerdict}`}`;
   } else if (subsystem === 'interrupt' && event === 'settled') {
     if (d.outcome === 'success') {
-      text = d.droppedCount > 0 ? `⏹ 停止成功（丢弃 ${d.droppedCount} 条排队消息，${d.ms}ms）` : `⏹ 停止成功（${d.ms}ms）`;
+      text = d.droppedCount > 0 ? `${t('⏹ 停止成功（丢弃')} ${d.droppedCount} ${t('条排队消息，')}${d.ms}ms）` : `${t('⏹ 停止成功（')}${d.ms}ms）`;
     } else if (d.outcome === 'forced_settle') {
-      text = d.timedOut ? `⏱ 停止超时，已强制收口（${d.ms}ms）` : `⚠️ 停止被拒，已强制收口（${d.ms}ms）`;
+      text = d.timedOut ? `${t('⏱ 停止超时，已强制收口（')}${d.ms}ms）` : `${t('⚠️ 停止被拒，已强制收口（')}${d.ms}ms）`;
       severity = 'warning';
     } else if (d.outcome === 'no_task') {
-      text = 'ℹ️ 当前无可中断任务';
+      text = t('ℹ️ 当前无可中断任务');
     } else if (d.outcome === 'disposed') {
-      text = '实例已释放，停止请求作废';
+      text = t('实例已释放，停止请求作废');
     } else {
-      text = `⏹ 停止：${d.outcome ?? '未知结果'}`;
+      text = `${t('⏹ 停止：')}${d.outcome ?? t('未知结果')}`;
     }
   } else if (subsystem === 'queue' && event === 'turn_settled') {
-    text = d.wasInterrupted ? '轮次因中断结束' : `轮次结束（${Number.isFinite(d.durationMs) ? d.durationMs + 'ms' : '?'}）`;
+    text = d.wasInterrupted ? t('轮次因中断结束') : `${t('轮次结束（')}${Number.isFinite(d.durationMs) ? d.durationMs + 'ms' : '?'}）`;
   } else if (subsystem === 'resume' && event === 'settled') {
-    text = d.hadLock ? `续接完成（先释放后台锁，${d.ms}ms）` : `续接完成（${d.ms}ms）`;
+    text = d.hadLock ? `${t('续接完成（先释放后台锁，')}${d.ms}ms）` : `${t('续接完成（')}${d.ms}ms）`;
   } else if (subsystem === 'catchup' && event === 'tick') {
-    text = `追平巡检一次（${d.ms}ms）`;
+    text = `${t('追平巡检一次（')}${d.ms}ms）`;
   } else if (subsystem === 'message' && event === 'enqueued') {
-    text = d.hasAttachments ? `消息已入队（含附件，${d.ms}ms）` : `消息已入队（${d.ms}ms）`;
+    text = d.hasAttachments ? `${t('消息已入队（含附件，')}${d.ms}ms）` : `${t('消息已入队（')}${d.ms}ms）`;
   } else if (subsystem === 'statusline' && event === 'rate_reason_change') {
     if (d.reason) {
-      const label = RATE_REASON_LABEL[d.reason] || d.reason;
-      text = `📊 额度显示不可用：${label}${d.message ? `（${d.message}）` : ''}`;
+      const label = t(RATE_REASON_LABEL[d.reason]) || d.reason;
+      text = `${t('📊 额度显示不可用：')}${label}${d.message ? `（${d.message}）` : ''}`;
       severity = d.reason === 'third_party_auth' ? 'neutral' : 'warning';
     } else {
-      const prevLabel = RATE_REASON_LABEL[d.previousReason] || d.previousReason || '未知原因';
-      text = `📊 额度显示已恢复（此前：${prevLabel}）`;
+      const prevLabel = t(RATE_REASON_LABEL[d.previousReason]) || d.previousReason || t('未知原因');
+      text = `${t('📊 额度显示已恢复（此前：')}${prevLabel}）`;
     }
   } else {
     // 未识别的 (subsystem,event) 组合：兜底渲染，不静默吞掉（延续 agent.js map() 对未映射 SDK 消息的既有原则）
@@ -1725,16 +1728,16 @@ export function formatBgTaskRowLabel({ taskType, message, taskId, subagentType }
   if (!msg && typeof taskId === 'string' && taskId && !taskId.startsWith('__notask_')) {
     msg = taskId.slice(0, 12);
   }
-  if (!msg) msg = '后台任务';
+  if (!msg) msg = t('后台任务');
   // 洗掉「Search: search:」类重复段（workflow 阶段名 + last_tool 同词）
   msg = msg.replace(/^([A-Za-z一-鿿]{2,24})\s*[:：]\s*\1\s*[:：]\s*/i, '$1：');
-  const t = taskType != null ? String(taskType).trim() : '';
-  if (t === 'local_agent' || t === 'agent') {
+  const kind = taskType != null ? String(taskType).trim() : '';
+  if (kind === 'local_agent' || kind === 'agent') {
     if (/^🤖/.test(msg)) return msg;
     if (/^[^\s：:]{2,40}[：:]/.test(msg)) return `🤖 ${msg}`;
     return `🤖 ${msg}`;
   }
-  if (t === 'local_bash' || t === 'bash') {
+  if (kind === 'local_bash' || kind === 'bash') {
     return msg.startsWith('🖥') ? msg : `🖥 ${msg}`;
   }
   return msg;
@@ -1745,8 +1748,8 @@ export function formatBgTaskRowLabel({ taskType, message, taskId, subagentType }
 // 类型缺失时兜底「子 agent」（stream_event 首批 delta 可能早于带 subagent_type 的 assistant）。
 export function formatSubagentCardTitle({ subagentType, running = true } = {}) {
   const raw = subagentType != null ? String(subagentType).trim() : '';
-  const type = raw || '子 agent';
-  return running ? `🤖 ${type} 运行中` : `🤖 ${type} 已完成`;
+  const type = raw || t('子 agent');
+  return running ? `🤖 ${type} ${t('运行中')}` : `🤖 ${type} ${t('已完成')}`;
 }
 
 // 工具摘要是否已被 agent/history 截断（口径：尾缀「 …（已截断）」——见 agent.js truncate）。
@@ -1754,7 +1757,7 @@ export function formatSubagentCardTitle({ subagentType, running = true } = {}) {
 export function isToolSummaryTruncated(summary, { truncated } = {}) {
   if (truncated === true) return true;
   if (truncated === false) return false;
-  return typeof summary === 'string' && summary.includes('…（已截断）');
+  return typeof summary === 'string' && summary.includes(t('…（已截断）'));
 }
 
 // 只读镜像锁横幅文案（三态：armed / stale / driving）。
@@ -1766,26 +1769,26 @@ export function isToolSummaryTruncated(summary, { truncated } = {}) {
 // 只是这里换更准确的措辞。查不到 marker（老调用方不传/确实是未知来源）时保持原「终端」文案不变。
 export function formatMirrorBannerText({ armed = false, stale = false, autonomous = false } = {}) {
   if (armed) return autonomous
-    ? '只读镜像：已请求续接，等待自主循环当前操作完成…'
-    : '只读镜像：已请求续接，等待终端当前操作完成…';
+    ? t('只读镜像：已请求续接，等待自主循环当前操作完成…')
+    : t('只读镜像：已请求续接，等待终端当前操作完成…');
   if (stale) return autonomous
-    ? '只读镜像：自主循环疑似中断（超 5 分钟无活动）——确认已停可续接'
-    : '只读镜像：终端疑似中断（超 5 分钟无活动）——确认已停可续接';
-  if (autonomous) return '只读镜像：本会话自主循环执行中，移动端当前只读';
-  return '只读镜像：终端会话运行中，移动端当前只读';
+    ? t('只读镜像：自主循环疑似中断（超 5 分钟无活动）——确认已停可续接')
+    : t('只读镜像：终端疑似中断（超 5 分钟无活动）——确认已停可续接');
+  if (autonomous) return t('只读镜像：本会话自主循环执行中，移动端当前只读');
+  return t('只读镜像：终端会话运行中，移动端当前只读');
 }
 
 // 驾驶中点输入区/附件时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
 // 主操作指向发送钮位「续接」。单行 · 分隔：addBar 用 textContent，无 pre-wrap。
 export function formatMirrorComposerHint({ armed = false, stale = false, autonomous = false } = {}) {
   if (armed) return autonomous
-    ? '只读镜像：已请求续接——等自主循环当前操作完成后自动可写。可点「取消续接」撤销。'
-    : '只读镜像：已请求续接——等终端当前操作完成后自动可写。可点「取消续接」撤销。';
+    ? t('只读镜像：已请求续接——等自主循环当前操作完成后自动可写。可点「取消续接」撤销。')
+    : t('只读镜像：已请求续接——等终端当前操作完成后自动可写。可点「取消续接」撤销。');
   if (stale) return autonomous
-    ? '只读镜像：自主循环疑似中断。确认已停后点「续接」即可在手机继续（会话历史仍在）。'
-    : '只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。';
-  if (autonomous) return '只读镜像：本会话自主循环执行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等自主循环静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；有分叉风险）';
-  return '只读镜像：终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）';
+    ? t('只读镜像：自主循环疑似中断。确认已停后点「续接」即可在手机继续（会话历史仍在）。')
+    : t('只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。');
+  if (autonomous) return t('只读镜像：本会话自主循环执行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等自主循环静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；有分叉风险）');
+  return t('只读镜像：终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）');
 }
 
 // 同文案节流：避免用户连点输入框刷一串相同 bar；换文案（armed/stale 切换）立即放行。
@@ -1920,8 +1923,8 @@ export function formatCliSpinnerLine({
     segs.push(`thought for ${Math.max(1, Math.round((thinking.ms || 0) / 1000))}s`);
   }
   if (Number.isFinite(sinceLastEventSec)) {
-    if (sinceLastEventSec >= LIVE_STALE_WARN_SEC) segs.push('响应较慢，可能是深度思考或网络问题');
-    else if (sinceLastEventSec >= LIVE_STALE_HINT_SEC) segs.push('仍在等待响应');
+    if (sinceLastEventSec >= LIVE_STALE_WARN_SEC) segs.push(t('响应较慢，可能是深度思考或网络问题'));
+    else if (sinceLastEventSec >= LIVE_STALE_HINT_SEC) segs.push(t('仍在等待响应'));
   }
   return `${glyph} ${v}… (${segs.join(' · ')})`;
 }
@@ -1956,12 +1959,12 @@ export function resolveSheetDragEnd({
 export function formatUptime(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';
   const secs = Math.floor(ms / 1000);
-  if (secs < 60) return `${secs} 秒`;
+  if (secs < 60) return `${secs} ${t('秒')}`;
   const mins = Math.floor(secs / 60);
-  if (mins < 60) return `${mins} 分钟`;
+  if (mins < 60) return `${mins} ${t('分钟')}`;
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours} 小时 ${mins % 60} 分`;
-  return `${Math.floor(hours / 24)} 天 ${hours % 24} 小时`;
+  if (hours < 24) return `${hours} ${t('小时')} ${mins % 60} ${t('分')}`;
+  return `${Math.floor(hours / 24)} ${t('天')} ${hours % 24} ${t('小时')}`;
 }
 
 // 基础段四行。versions 缺失字段显 unknown（升级半途/旧 server 也能渲染）；
@@ -1969,7 +1972,7 @@ export function formatUptime(ms) {
 export function serviceStatusBasicRows({ startedAt, versions, connected, rttMs, now, logging } = {}) {
   const startedValid = typeof startedAt === 'number' && Number.isFinite(startedAt) && startedAt > 0;
   const uptime = startedValid ? formatUptime(now - startedAt) : '';
-  let startedLabel = '未知';
+  let startedLabel = t('未知');
   if (startedValid) {
     const d = new Date(startedAt);
     const two = n => String(n).padStart(2, '0');
@@ -1979,18 +1982,18 @@ export function serviceStatusBasicRows({ startedAt, versions, connected, rttMs, 
   const pick = key => (typeof v[key] === 'string' && v[key] ? v[key] : 'unknown');
   const rtt = formatRttMs(rttMs);
   const rows = [
-    { label: '运行时长', value: uptime || '未知' },
-    { label: '启动于', value: startedLabel },
-    { label: '版本', value: `server ${pick('server')} · CLI ${pick('cli')} · SDK ${pick('sdk')}` },
-    { label: '连接', value: connected ? `已连接${rtt ? ` · 延迟 ${rtt}` : ''}` : '未连接' },
+    { label: t('运行时长'), value: uptime || t('未知') },
+    { label: t('启动于'), value: startedLabel },
+    { label: t('版本'), value: `server ${pick('server')} · CLI ${pick('cli')} · SDK ${pick('sdk')}` },
+    { label: t('连接'), value: connected ? `${t('已连接')}${rtt ? ` · ${t('延迟')} ${rtt}` : ''}` : t('未连接') },
   ];
   // 日志开关可见性：DEBUG_SDK_MESSAGES 曾长开半月把日志刷到 149M，此前没有任何界面能看到
   // "调试开关开着"这个事实。sdkDebug 开着标 alert（接线层标黄）；旧 server ack 无 logging → 优雅缺席。
   if (logging && typeof logging === 'object') {
-    const sw = v => (v ? '开' : '关');
+    const sw = v => (v ? t('开') : t('关'));
     rows.push({
-      label: '日志开关',
-      value: `交互日志 ${sw(logging.interactions)} · SDK 调试 ${sw(logging.sdkDebug)} · stderr ${sw(logging.stderr)}`,
+      label: t('日志开关'),
+      value: `${t('交互日志')} ${sw(logging.interactions)} · ${t('SDK 调试')} ${sw(logging.sdkDebug)} · stderr ${sw(logging.stderr)}`,
       alert: !!logging.sdkDebug,
     });
   }
@@ -2018,7 +2021,7 @@ export function buildClientErrorReport(kind, info = {}) {
   }
   const payload = {
     kind: kind === 'unhandledrejection' ? 'unhandledrejection' : 'error',
-    message: clampStr(String(message ?? ''), CLIENT_ERROR_CAPS.message) || '(无错误信息)',
+    message: clampStr(String(message ?? ''), CLIENT_ERROR_CAPS.message) || t('(无错误信息)'),
     source: clampStr(info.source, CLIENT_ERROR_CAPS.source),
     line: Number.isFinite(info.line) ? info.line : null,
     col: Number.isFinite(info.col) ? info.col : null,
@@ -2070,9 +2073,9 @@ export function shouldPersistLog(lastTs, now, intervalMs = 2000) {
 export function formatLogsForCopy(entries) {
   if (!Array.isArray(entries) || !entries.length) return '';
   return entries.map(e => {
-    const t = e?.ts ? new Date(e.ts).toLocaleTimeString() : '';
+    const time = e?.ts ? new Date(e.ts).toLocaleTimeString() : '';
     const type = String(e?.type ?? '').replace(/^client_/, '');
-    return `[${t}] ${type} ${e?.text ?? ''}`.trim();
+    return `[${time}] ${type} ${e?.text ?? ''}`.trim();
   }).join('\n');
 }
 

@@ -1,4 +1,5 @@
 import { attachmentDataUrl, pickPasteImageFiles, formatAttachmentChipLabel, guessImageMime } from '../logic.js';
+import { t } from '../i18n.js';
 
 const MAX_FILE = 10 * 1024 * 1024;
 const MAX_TOTAL = 20 * 1024 * 1024;
@@ -117,16 +118,16 @@ export function createAttachmentController(context, options = {}) {
     for (const file of list) {
       if (!file) continue;
       if (pending.length >= MAX_COUNT) {
-        addBar(`附件数量已达上限（${MAX_COUNT}）`, 'text-danger');
+        addBar(`${t('附件数量已达上限（')}${MAX_COUNT}）`, 'text-danger');
         break;
       }
       if (file.size > MAX_FILE) {
-        addBar(`「${file.name || '附件'}」超过 10MB，未添加`, 'text-danger');
+        addBar(`「${file.name || t('附件')}」${t('超过 10MB，未添加')}`, 'text-danger');
         continue;
       }
       const total = pending.reduce((sum, attachment) => sum + attachment.size, 0);
       if (total + file.size > MAX_TOTAL) {
-        addBar('附件总量将超过 20MB，未添加', 'text-danger');
+        addBar(t('附件总量将超过 20MB，未添加'), 'text-danger');
         break;
       }
       try {
@@ -145,7 +146,7 @@ export function createAttachmentController(context, options = {}) {
         });
         notifyChange();
       } catch {
-        addBar(`「${file.name || '附件'}」读取失败`, 'text-danger');
+        addBar(`「${file.name || t('附件')}」${t('读取失败')}`, 'text-danger');
       }
     }
   }
@@ -168,7 +169,7 @@ export function createAttachmentController(context, options = {}) {
   function openPreview(attachment) {
     const url = attachmentDataUrl(attachment);
     if (!url) {
-      addBar(attachment?.name ? `「${attachment.name}」不是可预览图片` : '该附件不可预览', 'text-ink-faint');
+      addBar(attachment?.name ? `「${attachment.name}」${t('不是可预览图片')}` : t('该附件不可预览'), 'text-ink-faint');
       return;
     }
     openPreviewUrl(attachment.name, url);
@@ -185,7 +186,7 @@ export function createAttachmentController(context, options = {}) {
     // UX-020：同名序号 + 可选大小；优先缩略图
     const nameCount = new Map();
     for (const attachment of pending) {
-      const base = attachment.name || '附件';
+      const base = attachment.name || t('附件');
       nameCount.set(base, (nameCount.get(base) || 0) + 1);
       attachment._nameOcc = nameCount.get(base);
     }
@@ -288,13 +289,13 @@ export function createStoredPreviewLoader(context, options = {}) {
     return new Promise((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
-        if (!settled) { settled = true; reject(new Error('读取超时')); }
+        if (!settled) { settled = true; reject(new Error(t('读取超时'))); }
       }, PREVIEW_CHUNK_TIMEOUT_MS);
       context.socket?.emit('browse:read', { cwd, relPath, offset, maxBytes: chunkBytes, encoding: 'base64' }, res => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
-        if (!res?.ok) return reject(new Error(res?.error || '读取失败'));
+        if (!res?.ok) return reject(new Error(res?.error || t('读取失败')));
         resolve(res);
       });
     });
@@ -313,24 +314,24 @@ export function createStoredPreviewLoader(context, options = {}) {
     return new Promise((resolve, reject) => {
       const reader = new FileReaderCtor();
       reader.onload = () => resolve(String(reader.result));
-      reader.onerror = () => reject(reader.error || new Error('附件读取失败'));
+      reader.onerror = () => reject(reader.error || new Error(t('附件读取失败')));
       reader.readAsDataURL(blob);
     });
   }
 
   async function open({ cwd, storedName, name, mimeType, thumb } = {}) {
-    const label = name || storedName || '附件';
+    const label = name || storedName || t('附件');
     // 只预览图片：meta 带 image/* 直接用；历史路径无 mimeType 按文件名扩展名猜
     const mime = (typeof mimeType === 'string' && mimeType.startsWith('image/'))
       ? mimeType
       : guessImageMime(name || storedName);
     if (!mime) {
-      addBar(`「${label}」不是可预览图片`, 'text-ink-faint');
+      addBar(`「${label}」${t('不是可预览图片')}`, 'text-ink-faint');
       return;
     }
     // storedName 只能是裸文件名（服务端 scope guard 兜底，这里先挡明显异常，省一次往返）
     if (typeof storedName !== 'string' || !storedName || /[/\\]/.test(storedName) || storedName.startsWith('.')) {
-      addBar('该附件不可预览', 'text-ink-faint');
+      addBar(t('该附件不可预览'), 'text-ink-faint');
       return;
     }
     const key = `${cwd || ''}\u0000${storedName}`;
@@ -347,9 +348,9 @@ export function createStoredPreviewLoader(context, options = {}) {
       const relPath = `.ccm-uploads/${storedName}`;
       const first = await readChunk(cwd, relPath, 0);
       const totalSize = first.totalSize;
-      if (!Number.isFinite(totalSize) || totalSize <= 0) throw new Error('附件为空');
+      if (!Number.isFinite(totalSize) || totalSize <= 0) throw new Error(t('附件为空'));
       if (totalSize > maxTotalBytes) {
-        addBar(`「${label}」过大（${(totalSize / 1048576).toFixed(1)}MB），不支持预览`, 'text-danger');
+        addBar(`「${label}」${t('过大（')}${(totalSize / 1048576).toFixed(1)}${t('MB），不支持预览')}`, 'text-danger');
         return;
       }
       const bytes = new Uint8Array(totalSize);
@@ -370,14 +371,14 @@ export function createStoredPreviewLoader(context, options = {}) {
         }
       };
       await Promise.all(Array.from({ length: Math.min(concurrency, offsets.length) }, worker));
-      if (received !== totalSize) throw new Error('读取不完整（文件可能正被改写）');
+      if (received !== totalSize) throw new Error(t('读取不完整（文件可能正被改写）'));
       const BlobCtor = deps.Blob || globalThis.Blob;
       const dataUrl = await blobToDataUrl(new BlobCtor([bytes], { type: mime }));
       cache.set(key, dataUrl);
       if (cache.size > cacheMax) cache.delete(cache.keys().next().value);
       openPreviewUrl(label, dataUrl);
     } catch (err) {
-      addBar(`「${label}」预览加载失败：${err?.message || err}`, 'text-danger');
+      addBar(`「${label}」${t('预览加载失败：')}${err?.message || err}`, 'text-danger');
       if (thumb) openPreviewUrl(label, thumb); // 降级：放大缩略图（live meta 才有；历史无 thumb 仅 toast）
     } finally {
       inflight.delete(key);

@@ -1,4 +1,5 @@
 import { pushEnvHint, urlBase64ToUint8Array, readPushPreviewPref } from '../logic.js';
+import { t } from '../i18n.js';
 
 export function createNotificationController(context, {
   addBar = () => {},
@@ -107,34 +108,34 @@ export function createNotificationController(context, {
   async function requestSubscription() {
     const hint = pushEnvHint(environment());
     if (hint === 'need-https') {
-      explain('⚠️ 推送需 HTTPS：局域网 http 下浏览器会拦截通知订阅。请用 https 隧道（cloudflared 等）访问本站。', 'text-warning');
+      explain(t('⚠️ 推送需 HTTPS：局域网 http 下浏览器会拦截通知订阅。请用 https 隧道（cloudflared 等）访问本站。'), 'text-warning');
       return;
     }
     if (hint === 'ios-add-home') {
-      explain('📲 iOS 收推送需先「添加到主屏幕」：点底部分享按钮 → 添加到主屏幕，再从主屏图标打开本站开启通知。', 'text-info');
+      explain(t('📲 iOS 收推送需先「添加到主屏幕」：点底部分享按钮 → 添加到主屏幕，再从主屏图标打开本站开启通知。'), 'text-info');
       return;
     }
     if (hint === 'unsupported') {
-      explain('🚫 当前浏览器不支持 Web Push（iOS 需 16.4+ 且已加主屏）。', 'text-warning');
+      explain(t('🚫 当前浏览器不支持 Web Push（iOS 需 16.4+ 且已加主屏）。'), 'text-warning');
       return;
     }
     if (!vapidKey) {
-      explain('⚠️ 订阅失败：服务端未启用/配置 Web Push 密钥，或当前未加载成功密钥。请检查 VAPID 环境变量并重启服务。', 'text-danger');
+      explain(t('⚠️ 订阅失败：服务端未启用/配置 Web Push 密钥，或当前未加载成功密钥。请检查 VAPID 环境变量并重启服务。'), 'text-danger');
       return;
     }
     try {
-      if (!NotificationApi) throw new Error('当前浏览器/环境不支持 Notification API');
+      if (!NotificationApi) throw new Error(t('当前浏览器/环境不支持 Notification API'));
       const permission = await NotificationApi.requestPermission();
       if (permission === 'granted') {
         const ok = await subscribe();
-        if (ok) explain('🔔 成功订阅推送通知！', 'text-success');
-        else explain('⚠️ 订阅未成功，请稍后重试', 'text-warning');
+        if (ok) explain(t('🔔 成功订阅推送通知！'), 'text-success');
+        else explain(t('⚠️ 订阅未成功，请稍后重试'), 'text-warning');
       } else {
-        explain('🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许', 'text-warning');
+        explain(t('🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许'), 'text-warning');
         context.dom.btnPush?.classList.add('hidden');
       }
     } catch (error) {
-      explain(`❌ 订阅出错: ${error.message}`, 'text-danger');
+      explain(`${t('❌ 订阅出错:')} ${error.message}`, 'text-danger');
     }
   }
 

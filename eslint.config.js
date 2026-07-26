@@ -52,6 +52,22 @@ export default [
   {
     files: ['public/js/**/*.js'],
     languageOptions: { globals: { ...globals.browser } },
+    rules: {
+      // `t` 在前端专属 i18n（public/js/i18n.js）。把它当临时变量名会静默遮蔽成
+      // 「t is not a function」——页面运行时才炸，而 no-undef 看不出问题（t 确实有定义）。
+      // 这类 bug 只有真跑 E2E 才会暴露，代价太高，所以在这里一次性拦掉。
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: 'VariableDeclarator > Identifier[name="t"]',
+          message: '别用 t 作局部变量名：会遮蔽 i18n 的 t()，运行时报 "t is not a function"。换个名字（textEl / entry / touch …）。',
+        },
+        {
+          selector: ':matches(FunctionDeclaration, FunctionExpression, ArrowFunctionExpression) > Identifier.params[name="t"]',
+          message: '别用 t 作参数名：会遮蔽 i18n 的 t()，运行时报 "t is not a function"。换个名字。',
+        },
+      ],
+    },
   },
   // 经典 <script>（非 ESM）：tw-config 写入 tailwind 全局、sw-cleanup 操作 navigator
   {

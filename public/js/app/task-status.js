@@ -1,4 +1,5 @@
 import { bgTaskListCollapsed, formatApiRetryBanner, formatBgTaskRowLabel, taskStopUiState } from '../logic.js';
+import { t } from '../i18n.js';
 
 export function createTaskStatusController(context, {
   addBar = () => {},
@@ -76,7 +77,7 @@ export function createTaskStatusController(context, {
       dom.taskProgressText.textContent = '';
       return;
     }
-    dom.taskProgressText.textContent = n > 1 ? `${n} 个运行中` : '运行中';
+    dom.taskProgressText.textContent = n > 1 ? `${n} ${t('个运行中')}` : t('运行中');
     dom.taskProgressBanner.classList.remove('hidden');
     syncStopButton();
   }
@@ -140,11 +141,11 @@ export function createTaskStatusController(context, {
       label.textContent = title.slice(0, 72);
       label.title = task.message || taskId;
       const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
-      stop.onclick = () => stopTask(taskId, `已请求停止后台任务 ${String(taskId).slice(0, 8)}…`);
+      stop.onclick = () => stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`);
       top.append(label, stop);
 
       const metaParts = [];
-      if (task.lastToolName) metaParts.push(`工具 ${task.lastToolName}`);
+      if (task.lastToolName) metaParts.push(`${t('工具')} ${task.lastToolName}`);
       if (task.subagentType && !(task.message || '').includes(String(task.subagentType))) {
         metaParts.push(String(task.subagentType));
       }
@@ -169,15 +170,15 @@ export function createTaskStatusController(context, {
     if (list) {
       // 权威全量快照（task_progress / background_tasks_changed 经后端 emitBgTasksSnapshot）
       tasks.clear();
-      for (const t of list) {
-        const id = t?.taskId ?? t?.task_id;
+      for (const item of list) {
+        const id = item?.taskId ?? item?.task_id;
         if (typeof id !== 'string' || !id) continue;
         tasks.set(id, {
-          message: t.message || t.description || '',
-          taskType: t.taskType ?? t.task_type ?? null,
-          lastToolName: t.lastToolName ?? t.last_tool_name ?? null,
-          description: t.description ?? null,
-          subagentType: t.subagentType ?? t.subagent_type ?? null,
+          message: item.message || item.description || '',
+          taskType: item.taskType ?? item.task_type ?? null,
+          lastToolName: item.lastToolName ?? item.last_tool_name ?? null,
+          description: item.description ?? null,
+          subagentType: item.subagentType ?? item.subagent_type ?? null,
         });
       }
       if (typeof payload.taskId === 'string' && payload.taskId && tasks.has(payload.taskId)) {
@@ -222,8 +223,8 @@ export function createTaskStatusController(context, {
     const payload = event.payload || {};
     const failed = payload.status === 'failed' || payload.status === 'error';
     notify(
-      failed ? '🔔 后台任务失败' : '🔔 后台任务完成',
-      (payload.summary || 'Claude 即将汇报结果').slice(0, 80),
+      failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成'),
+      (payload.summary || t('Claude 即将汇报结果')).slice(0, 80),
       { force: alerts?.preferences?.().foregroundComplete },
     );
     if (event.instanceId !== context.state.viewingInstanceId) return false;
@@ -249,10 +250,10 @@ export function createTaskStatusController(context, {
     }
     alertCue(failed ? 'warning' : 'success');
     if (payload.source === 'user_injection') {
-      addBar('🔔 后台任务完成，Claude 正在汇报结果…', 'text-info');
+      addBar(t('🔔 后台任务完成，Claude 正在汇报结果…'), 'text-info');
     } else {
       const tail = payload.summary ? `：${payload.summary}` : '';
-      addBar(`🔔 后台任务${failed ? '失败' : '完成'}${tail}`, failed ? 'text-danger' : 'text-info');
+      addBar(`${failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成')}${tail}`, failed ? 'text-danger' : 'text-info');
     }
     return true;
   }
@@ -263,7 +264,7 @@ export function createTaskStatusController(context, {
         taskId: activeTaskId,
         bannerVisible: dom.taskProgressBanner && !dom.taskProgressBanner.classList.contains('hidden'),
       });
-      if (ui.canStop) stopTask(ui.taskId, '已请求停止后台任务…');
+      if (ui.canStop) stopTask(ui.taskId, t('已请求停止后台任务…'));
     });
     dom.btnTaskToggle?.addEventListener('click', () => toggleTaskList());
   }
