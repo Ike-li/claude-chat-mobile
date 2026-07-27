@@ -2653,6 +2653,10 @@ registerSocketConnection(io, socket => {
       cwd: HERE, timeout: 20000, maxBuffer: 256 * 1024,
     }, (err, stdout, stderr) => {
       const state = refreshHooksInstallState();
+      // 服务端留痕：这是 server 唯一会改用户全局 ~/.claude/settings.json 的动作，只有前端弹报告
+      // 不够——事后想查"这台机器上的 hooks 是谁什么时候装的"，得能在服务日志里翻到。
+      console.log(`[hooks] 经 UI ${action} ${err ? '失败' : '完成'}，当前安装态=${state}`
+        + (err ? `：${String(err.message || err).split('\n')[0]}` : ''));
       broadcastInstances(); // 安装态变了 → 面板/镜像提示即时跟上
       // 报告直接回传安装器的人类可读输出（含四种结局文案），前端原样展示，不在两处各写一套话术
       const report = String(stdout || '').split('\n').filter(l => l && !l.trim().startsWith('{')).join('\n').trim();
