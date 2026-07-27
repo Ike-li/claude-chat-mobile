@@ -35,6 +35,53 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 卡片栈是 fixed 覆盖层（容器 pointer-events-none，卡片自身 auto）。它曾从 top-0 起铺开，
+  // 在窄屏上 max-w-sm 占满宽度、高约 130px，把 57px 高的 header 整条盖住——有待批设备时
+  // 侧栏/首页/日志/＋ 全部点不到，用户只能先处理掉卡片才能做别的事。
+  test('P0-15g 待批设备卡片悬浮在顶栏之下，不吃掉 header 的点击', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:devicerequests');
+    await waitForIdle(page);
+    await expect(page.locator('[data-testid="device-card"]')).toHaveCount(2);
+
+    // 几何上就不该重叠：卡片栈顶边不高于 header 底边
+    const gap = await page.evaluate(() => {
+      const header = document.querySelector('header')!.getBoundingClientRect();
+      const cards = document.querySelector('#deviceRequests')!.getBoundingClientRect();
+      return cards.top - header.bottom;
+    });
+    expect(gap).toBeGreaterThanOrEqual(0);
+
+    // 顶栏三个入口在卡片存在时依然可点（点击超时即为遮挡回归）
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
+    await page.locator('#sidebarClose').click();
+
+    await page.locator('#btnConsole').click();
+    await expect(page.locator('#consoleModal')).toBeVisible();
+    await page.locator('#consoleClose').click();
+
+    await page.locator('#btnNew').click();
+    await expect(page.locator('#input')).toBeVisible();
+
+    // 卡片是页面级提示，不能压过模态层——否则弹窗的关闭钮被盖住就出不来了
+    const layers = await page.evaluate(() => {
+      const z = (sel: string) => Number(getComputedStyle(document.querySelector(sel)!).zIndex);
+      return { header: z('header'), cards: z('#deviceRequests'), modal: z('#consoleModal'), blocking: z('#deviceDenied') };
+    });
+    expect(layers.header).toBeLessThan(layers.cards);
+    expect(layers.cards).toBeLessThan(layers.modal);
+    expect(layers.modal).toBeLessThanOrEqual(layers.blocking);
+
+    // 卡片本身仍可操作（下移不能把它推出视口或让它失去点击）
+    await expect(page.locator('[data-testid="device-card"]')).toHaveCount(2);
+    await page.locator('[data-testid="device-card"]').first().getByRole('button', { name: /准入/ }).click();
+    await expect(page.locator('[data-testid="device-card"]')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-15b pending device request 准入/拒绝后卡片即时更新', async ({ page }) => {
     await gotoMock(page);
 

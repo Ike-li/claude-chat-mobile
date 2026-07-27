@@ -1288,6 +1288,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!deviceRequests) return;
     deviceRequests.textContent = '';
     if (!devices.length) { deviceRequests.classList.add('hidden'); return; }
+    // 让开顶栏：卡片栈是 fixed 覆盖层，容器虽 pointer-events-none，卡片本身却是 auto，且窄屏下
+    // max-w-sm 占满宽度、高约 130px——从 top:0 铺开会把整条 header 盖死，有待批设备时侧栏/首页/
+    // 日志/＋ 一个都点不到，用户只能先处理掉卡片才能干别的。
+    // 必须实测而不是写常量：header 的上 padding 是 max(1.25rem, env(safe-area-inset-top))
+    // （app.css 移动端 header 规则），高度随刘海/横竖屏变，任何静态值都会在某类设备上错。
+    const headerEl = document.querySelector('header');
+    if (headerEl) deviceRequests.style.top = `${headerEl.offsetHeight}px`;
     deviceRequests.classList.remove('hidden');
     for (const d of devices) {
       const card = document.createElement('div');

@@ -548,8 +548,16 @@
   </div>
 
   <!-- 已信任设备远程审批——待审批设备请求卡片栈（收 pending_devices 事件，app.js 动态填充）。
-       仅“已登录的可信设备”会收到，点准入/拒绝即发 user:approveDevice/denyDevice，免去上电脑终端。 -->
-  <div id="deviceRequests" class="hidden fixed top-0 inset-x-0 z-50 p-3 space-y-2 pointer-events-none safe-top"></div>
+       仅“已登录的可信设备”会收到，点准入/拒绝即发 user:approveDevice/denyDevice，免去上电脑终端。
+       top 由 app.js 按 header 实测高度写 inline style（见 renderDeviceRequests）：卡片必须让开顶栏，
+       否则有待批设备时侧栏/首页/日志/＋ 全被盖住点不到。这里的 top-0 只是 JS 跑到前的初值。
+       不加 safe-top：header 自己已吃掉 safe-area（app.css 移动端 header padding），卡片在它下方，
+       再补一次会让 p-3 的间距失效。
+       z-30 而非 z-50：这是页面级提示，不该压过模态层（permModal/questionModal/consoleModal 等
+       z-40 是当前焦点，被卡片盖住关闭钮就出不来了）。层序：header 20 < 本卡片/scrim 30
+       < 弹窗 40 < 全屏遮罩 50（deviceModal/deviceDenied 必须盖住它——本设备都没获批，
+       没有“替别人审批”这回事）。 -->
+  <div id="deviceRequests" class="hidden fixed top-0 inset-x-0 z-30 p-3 space-y-2 pointer-events-none"></div>
 
   <!-- 本设备被机主拒绝时的说明遮罩（替代原生 alert，与其它访问页风格一致）。 -->
   <div id="deviceDenied" class="hidden fixed inset-0 z-50 bg-canvas flex items-center justify-center p-6">
