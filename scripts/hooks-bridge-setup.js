@@ -272,8 +272,12 @@ function verify(home = homedir()) {
 
   const verifyId = `${HOOK_VERIFY_PREFIX}${randomUUID()}`;
   const input = JSON.stringify({ hook_event_name: 'Stop', session_id: verifyId, cwd: ROOT });
+  // 必须显式清掉 CCM_HOOKS_ORIGIN：本步是**模拟一次真实终端触发**，而安装器自己可能正跑在 ccm 的
+  // SDK 子进程里（用户让 web 端的 claude 执行 npm run hooks:install 就是这种情形），继承下来会让
+  // runner 按抑制规则静默退出，验证于是恒报"文件级失败"——把好功能误判成坏的。实测踩到。
+  const verifyEnv = { ...process.env, CCM_HOOKS_ORIGIN: '' };
   const run = spawnSync('/bin/sh', ['-c', manifest.installedCommand], {
-    input, encoding: 'utf8', timeout: VERIFY_FILE_TIMEOUT_MS,
+    input, encoding: 'utf8', timeout: VERIFY_FILE_TIMEOUT_MS, env: verifyEnv,
   });
 
   // L1 文件级：事件文件是否真的落盘（server 不在也能验）
@@ -301,7 +305,7 @@ function verify(home = homedir()) {
   let serviceLevel = 'skipped';
   const port = resolvePort();
   if (probeServerAlive(port)) {
-    spawnSync('/bin/sh', ['-c', manifest.installedCommand], { input, encoding: 'utf8', timeout: VERIFY_FILE_TIMEOUT_MS });
+    spawnSync('/bin/sh', ['-c', manifest.installedCommand], { input, encoding: 'utf8', timeout: VERIFY_FILE_TIMEOUT_MS, env: verifyEnv });
     serviceLevel = 'unconsumed';
     const ackDeadline = Date.now() + VERIFY_ACK_TIMEOUT_MS;
     while (Date.now() < ackDeadline) {

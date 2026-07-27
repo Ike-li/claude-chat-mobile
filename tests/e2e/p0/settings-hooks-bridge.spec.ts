@@ -55,4 +55,19 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // P0-27：点齿轮打开面板后，推送订阅状态行必须真的渲染出来。
+  // 这条是真机截图逼出来的——首版把渲染挂在 app.js 自己的 openSettingsSheet 包装上，可齿轮按钮是
+  // settings 控制器 autoBind 到它自己的 open() 的，包装从不生效，于是整行在真机上永远空白。
+  test('P0-27 点齿轮打开配置面板 → 推送订阅状态行渲染出来（不是空 div）', async ({ page }) => {
+    await gotoMock(page);
+    await waitForIdle(page);
+
+    await page.locator('#btnSettings').click();
+    const row = page.locator('#pushStatusRow');
+    await expect(row).not.toBeEmpty();
+    await expect(row).toContainText(/未开启|已开启|不可用|已被拒绝|未完成订阅/);
+
+    await expectNoBrowserErrors(page);
+  });
 });

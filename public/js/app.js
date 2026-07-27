@@ -4456,7 +4456,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!pushStatusRowEl) return;
     let subscribed = false;
     try {
-      const reg = await navigator.serviceWorker?.ready;
+      // ⚠️ navigator.serviceWorker.ready 在「没有任何 SW 注册」时**永远不 resolve**（不是 reject）。
+      // 直接 await 会让本函数挂住，整行永远不渲染——正是"界面上什么都没有"的那类静默失败。
+      const reg = await Promise.race([
+        navigator.serviceWorker?.ready,
+        new Promise(r => setTimeout(() => r(null), 1500)),
+      ]);
       subscribed = !!(await reg?.pushManager?.getSubscription());
     } catch { /* 不支持/未注册 SW：按未订阅渲染，由 hint 解释原因 */ }
     // 没订阅时「推送带内容预览」是空转的——把这件事说出来，别让人勾了以为生效
@@ -4804,9 +4809,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     },
   };
   // ---- 设置：抽屉、完成提示偏好和预览由独立 controller 管理 ----
-  const settings = createSettingsController(appContext, { alerts, haptic, pushPreview, langPref });
-  // 打开面板时刷新推送订阅状态（权限可能在系统设置里被改过，静态渲染一次会过期）
-  const openSettingsSheet = () => { settings.open(); renderPushStatusRow(); };
+  const settings = createSettingsController(appContext, { alerts, haptic, pushPreview, langPref, onOpen: () => renderPushStatusRow() });
+  const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen（齿轮按钮不经这里）
   if (pillModel) pillModel.onclick = openSettingsSheet; // 点底栏模型 chip → 开「选择模型」格
   // 顶部 pill：工作区入口（chooser → 浏览文件 | 工作区改动）。侧栏不再挂浏览入口。
   if (topContextPill) {

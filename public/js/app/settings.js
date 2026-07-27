@@ -14,6 +14,10 @@ export function createSettingsController(context, {
   // ⑨ 语言偏好：get/set 由 app.js 注入；set 里写 storage + 提示刷新（不做响应式重渲，见 index.html 头注）。
   langPref = { get: () => 'zh', set: () => {} },
   autoBind = true,
+  // 面板打开时的回调：给需要"每次打开重算"的动态段用（如推送订阅状态——权限可能在系统设置里被
+  // 改过，渲染一次会过期）。**必须挂在这里而不是包装 open()**：齿轮按钮由下方 autoBind 直接绑到
+  // 本控制器的 open，任何在 app.js 侧包装 open 的做法都不会被齿轮触发（真机上整行空白的成因）。
+  onOpen = () => {},
   haptic = () => {},
   // 可注入 document 方便单测；浏览器默认用全局 document
   doc = typeof document !== 'undefined' ? document : null,
@@ -74,6 +78,7 @@ export function createSettingsController(context, {
     dom.settingsSheet?.classList.remove('translate-y-full');
     dom.settingsScrim?.classList.remove('hidden');
     lockBackgroundScroll();
+    try { onOpen(); } catch { /* 动态段渲染失败不能让面板打不开 */ }
   }
 
   function close() {

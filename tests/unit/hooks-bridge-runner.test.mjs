@@ -16,7 +16,10 @@ const CWD = '/Users/you/code/demo';
 function runHook(input, { env = {}, dir } = {}) {
   return new Promise(resolve => {
     const child = spawn(process.execPath, [RUNNER], {
-      env: { ...process.env, CLI_HOOKS_DIR: dir ?? '', ...env },
+      // CCM_HOOKS_ORIGIN 必须显式清空再由用例按需覆盖：跑测试的这个 shell 自己可能就在 ccm 的 SDK
+      // 子进程里（机主从手机端驱动本会话时就是如此），继承下来会让 runner 按设计静默退出，
+      // 于是所有"应当写事件"的用例集体变红——环境泄漏进测试的经典形态，实测踩到。
+      env: { ...process.env, CCM_HOOKS_ORIGIN: '', CLI_HOOKS_DIR: dir ?? '', ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';
