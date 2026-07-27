@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk, resolveUnreadAnchorIndex } from '../../public/js/logic.js';
+import { ansiToHtml, urlBase64ToUint8Array, nextHistoryRenderChunk, resolveUnreadAnchorIndex, formatPushStatusRow } from '../../public/js/logic.js';
 import { createRingBuffer } from '../../public/js/ring-buffer.js';
 
 test('ansiToHtml: 纯文本被 esc', () => {
@@ -179,3 +179,46 @@ test.describe('resolveUnreadAnchorIndex', () => {
 });
 
 // ---- pushEnvHint：Web Push 环境判定（E15 / ②2a）——手机「没触发过」多半卡在这几道门 ----
+
+
+// 推送订阅状态行：这一整段是"我从来没收到过推送、界面上却看不出任何异常"逼出来的——
+// 实测机主机器上 push-subscription.json 压根不存在（从未订阅），而 UI 里没有任何地方显示这件事，
+// 铃铛按钮在"权限被拒"时还会永久隐藏。状态必须能被看见，且看得出下一步该做什么。
+test.describe('formatPushStatusRow：推送订阅状态可见化', () => {
+  test('已订阅 → ok 态、无动作按钮', () => {
+    const r = formatPushStatusRow({ hint: 'ready', permission: 'granted', subscribed: true });
+    assert.equal(r.tone, 'ok');
+    assert.match(r.value, /已开启/);
+    assert.equal(r.action, null);
+  });
+
+  test('未授权（default）→ 给「开启」按钮', () => {
+    const r = formatPushStatusRow({ hint: 'ready', permission: 'default', subscribed: false });
+    assert.equal(r.action, 'subscribe');
+    assert.match(r.value, /未开启/);
+  });
+
+  test('权限被拒 → 必须仍然可见并说清怎么恢复（此前按钮直接隐藏、成死路）', () => {
+    const r = formatPushStatusRow({ hint: 'ready', permission: 'denied', subscribed: false });
+    assert.equal(r.tone, 'warn');
+    assert.match(r.value, /已被拒绝|被拒/);
+    assert.match(r.hint, /浏览器|设置/);
+  });
+
+  test('已授权却没订阅上 → 报出来并给重试（此前是彻底静默）', () => {
+    const r = formatPushStatusRow({ hint: 'ready', permission: 'granted', subscribed: false });
+    assert.equal(r.tone, 'warn');
+    assert.equal(r.action, 'subscribe');
+    assert.match(r.value, /未完成|未订阅/);
+  });
+
+  test('环境不满足：iOS 未加主屏 / 非 HTTPS / 不支持 → 说明具体门槛，不给无效按钮', () => {
+    const ios = formatPushStatusRow({ hint: 'ios-add-home', permission: 'default', subscribed: false });
+    assert.match(ios.hint, /主屏/);
+    assert.equal(ios.action, null);
+    const http = formatPushStatusRow({ hint: 'need-https', permission: 'default', subscribed: false });
+    assert.match(http.hint, /HTTPS/i);
+    assert.equal(http.action, null);
+    assert.equal(formatPushStatusRow({ hint: 'unsupported', permission: 'default', subscribed: false }).action, null);
+  });
+});

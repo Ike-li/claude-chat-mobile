@@ -1429,6 +1429,37 @@ export function pushEnvHint({ isSecureContext, isIOS, isStandalone, hasPushManag
   return 'ready';
 }
 
+// 推送订阅状态行（配置面板「推送内容」段上方）。
+// 为什么需要它：推送不通时此前界面上**没有任何痕迹**——铃铛按钮本身在"权限被拒"时会被隐藏、
+// 在"已授权但订阅失败"时压根不出现，用户只会得出"这功能没用"的结论（实测机主机器上
+// push-subscription.json 从未存在过，而 UI 一个字都没说）。状态必须看得见，且看得出下一步做什么。
+export function formatPushStatusRow({ hint = 'ready', permission = 'default', subscribed = false } = {}) {
+  const label = t('推送通知');
+  if (hint === 'need-https') {
+    return { label, value: t('不可用'), tone: 'warn', action: null,
+      hint: t('浏览器只在 HTTPS 下允许订阅推送。用隧道域名（https）打开本站即可。') };
+  }
+  if (hint === 'ios-add-home') {
+    return { label, value: t('不可用'), tone: 'warn', action: null,
+      hint: t('iOS 必须先「添加到主屏幕」，再从主屏图标打开本站才能订阅推送。') };
+  }
+  if (hint === 'unsupported') {
+    return { label, value: t('不可用'), tone: 'warn', action: null,
+      hint: t('当前浏览器不支持 Web Push（iOS 需 16.4+ 且已加主屏）。') };
+  }
+  if (permission === 'denied') {
+    return { label, value: t('已被拒绝'), tone: 'warn', action: null,
+      hint: t('此前拒绝过通知权限。需在浏览器/系统的站点设置里改回「允许」，再回来开启。') };
+  }
+  if (subscribed) {
+    return { label, value: t('已开启'), tone: 'ok', action: null };
+  }
+  // 已授权却没订阅上 = 订阅请求失败过（此前这条路彻底静默，用户永远不知道）
+  const value = permission === 'granted' ? t('未完成订阅') : t('未开启');
+  return { label, value, tone: 'warn', action: 'subscribe', actionText: t('开启'),
+    hint: t('开启后，需要你审批、有提问、任务完成时手机会收到通知') };
+}
+
 // 完成提示（提示音 / 震动 / 前台系统通知）本地偏好——默认全开，仅显式存 '0' 为关。
 // storage 键与 localStorage 对齐；纯函数便于单测，不直接碰 window。
 export const ALERT_PREF_KEYS = Object.freeze({

@@ -711,6 +711,9 @@
            但仍是"锁屏可见明文"的物理偷窥面，默认最小化；开启后通知带问题/工具/任务摘要，不再只是"有新消息"。 -->
       <div>
         <div class="text-xs font-semibold text-ink-soft mb-2">📬 <span>推送内容</span> <span class="text-xs text-ink-faint font-normal">(默认关，可开)</span></div>
+        <!-- 订阅状态行：推送不通时此前界面上没有任何痕迹（铃铛在权限被拒/订阅失败时都不显示），
+             用户只会以为"这功能没用"。这里把状态摆出来，并给出下一步。 -->
+        <div id="pushStatusRow" class="mb-2"></div>
         <div class="space-y-2">
           <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
             <span class="min-w-0">

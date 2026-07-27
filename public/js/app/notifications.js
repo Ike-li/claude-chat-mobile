@@ -94,8 +94,14 @@ export function createNotificationController(context, {
       return;
     }
     if (NotificationApi?.permission === 'granted') {
-      void subscribe();
-    } else if (NotificationApi?.permission !== 'denied') {
+      // 订阅失败时也要把入口露出来：此前 subscribe() 返回 false 就没下文了，用户既收不到推送、
+      // 界面上也没有任何痕迹（实测机主机器上从未有过 push-subscription.json 却毫不知情）。
+      void subscribe().then(ok => {
+        if (!ok) context.dom.btnPush?.classList.remove('hidden');
+      });
+    } else {
+      // denied 也显示：点它会解释"去浏览器站点设置里改回允许"。此前 denied 直接隐藏＝死路一条，
+      // 用户永远查不出自己为什么收不到推送。
       context.dom.btnPush?.classList.remove('hidden');
     }
   }
