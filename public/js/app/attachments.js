@@ -76,39 +76,44 @@ export function createAttachmentController(context, options = {}) {
     });
   }
 
+  // 缩略图中间态也必须是 data: URL。CSP img-src 只许 'self' data:——createObjectURL 产出的
+  // blob: 会被拦，Image.onerror → thumb=null，选图后气泡没预览却不报错（真机 console 可见 CSP）。
+  // 与下方 stored preview / 灯箱同一契约：FileReader.readAsDataURL，不引入 blob:。
   function makeThumb(file) {
     return new Promise(resolve => {
       if (!file.type?.startsWith('image/')) return resolve(null);
-      const URLApi = deps.URL || globalThis.URL;
+      const FileReaderCtor = deps.FileReader || globalThis.FileReader;
       const ImageCtor = deps.Image || globalThis.Image;
       const doc = deps.document || globalThis.document;
-      const url = URLApi.createObjectURL(file);
-      const image = new ImageCtor();
-      image.onload = () => {
-        let width = image.width;
-        let height = image.height;
-        const max = 320;
-        if (width > height && width > max) {
-          height = Math.round(height * max / width);
-          width = max;
-        } else if (height >= width && height > max) {
-          width = Math.round(width * max / height);
-          height = max;
-        }
-        const canvas = doc.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        canvas.getContext('2d').drawImage(image, 0, 0, width, height);
-        URLApi.revokeObjectURL(url);
-        let output = null;
-        try { output = canvas.toDataURL('image/jpeg', 0.6); } catch { /* optional preview */ }
-        resolve(output);
+      const reader = new FileReaderCtor();
+      reader.onerror = () => resolve(null);
+      reader.onload = () => {
+        const dataUrl = String(reader.result || '');
+        if (!dataUrl.startsWith('data:')) return resolve(null);
+        const image = new ImageCtor();
+        image.onload = () => {
+          let width = image.width;
+          let height = image.height;
+          const max = 320;
+          if (width > height && width > max) {
+            height = Math.round(height * max / width);
+            width = max;
+          } else if (height >= width && height > max) {
+            width = Math.round(width * max / height);
+            height = max;
+          }
+          const canvas = doc.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d').drawImage(image, 0, 0, width, height);
+          let output = null;
+          try { output = canvas.toDataURL('image/jpeg', 0.6); } catch { /* optional preview */ }
+          resolve(output);
+        };
+        image.onerror = () => resolve(null);
+        image.src = dataUrl;
       };
-      image.onerror = () => {
-        URLApi.revokeObjectURL(url);
-        resolve(null);
-      };
-      image.src = url;
+      reader.readAsDataURL(file);
     });
   }
 

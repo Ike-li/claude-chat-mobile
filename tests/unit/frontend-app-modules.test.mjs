@@ -155,6 +155,77 @@ test('attachment controller remove filters by _id and backfills missing ids on s
   assert.equal(attachments.items()[0]._id, 'stable');
 });
 
+// makeThumb 曾用 createObjectURL → image.src = blob:…，被 CSP img-src 'self' data: 拦下，
+// 缩略图静默失败（onerror→null）。灯箱路径已走 data URL；缩略图必须同一契约，禁止 blob:。
+test('attachment makeThumb loads via data URL and never creates a blob: object URL', async () => {
+  const objectUrlCalls = [];
+  class FakeFileReader {
+    readAsDataURL(blob) {
+      // 真 File 在 node 测试里用 plain object 模拟；按 type 拼一条最小 data URL
+      const mime = blob?.type || 'application/octet-stream';
+      queueMicrotask(() => {
+        this.result = `data:${mime};base64,AA==`;
+        this.onload?.();
+      });
+    }
+  }
+  class FakeImage {
+    set src(value) {
+      this._src = value;
+      // 模拟浏览器：data: 可加载；blob: 会被 CSP 打成 error（本测试也禁止走到这条路径）
+      queueMicrotask(() => {
+        if (String(value).startsWith('data:')) {
+          this.width = 640;
+          this.height = 480;
+          this.onload?.();
+        } else {
+          this.onerror?.();
+        }
+      });
+    }
+    get src() { return this._src; }
+  }
+  const fakeUrl = {
+    createObjectURL(blob) {
+      objectUrlCalls.push(blob);
+      return `blob:http://127.0.0.1/${objectUrlCalls.length}`;
+    },
+    revokeObjectURL() {},
+  };
+  const context = createAppContext({
+    dependencies: {
+      FileReader: FakeFileReader,
+      Image: FakeImage,
+      URL: fakeUrl,
+      document: {
+        createElement(tag) {
+          assert.equal(tag, 'canvas');
+          return {
+            width: 0,
+            height: 0,
+            getContext() {
+              return { drawImage() {} };
+            },
+            toDataURL(type) {
+              return `data:${type};base64,thumbJPEG`;
+            },
+          };
+        },
+      },
+      now: () => 42,
+      random: () => 0.5,
+    },
+  });
+  const attachments = createAttachmentController(context, { autoBind: false });
+  await attachments.addFiles([{ name: 'shot.png', type: 'image/png', size: 12 }]);
+
+  assert.equal(objectUrlCalls.length, 0, 'CSP 禁 blob:，makeThumb 不得 createObjectURL');
+  const [item] = attachments.items();
+  assert.ok(item, '图片应成功入队');
+  assert.equal(item.thumb, 'data:image/jpeg;base64,thumbJPEG');
+  assert.equal(item.data, 'AA=='); // readBase64 剥 data: 前缀
+});
+
 // ── E18 附件预览：createStoredPreviewLoader ──────────────────────────────────────
 // 气泡附件点击 → browse:read base64 分页拉原图 → Blob → FileReader.readAsDataURL → 灯箱。
 // fake FileReader 用真 Blob.arrayBuffer() 还原字节再拼 data URL——端到端验证分片拼装正确性。
