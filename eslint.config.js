@@ -79,7 +79,7 @@ export default [
   },
   // Service Worker 上下文
   {
-    files: ['public/js/sw.js'],
+    files: ['public/sw.js'],
     languageOptions: {
       sourceType: 'script',
       globals: { ...globals.serviceworker },

@@ -1,14 +1,19 @@
 // tests/unit/sw.test.mjs —— Service Worker & Push 辅助逻辑单测（零浏览器依赖）
-// 覆盖：sw.js push/notificationclick 事件行为、sw-cleanup.js 自愈注销流程。
+// 覆盖：sw.js push/notificationclick 事件行为、sw-cleanup.js 自愈注销流程、SW 注册 scope。
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Script, createContext } from 'node:vm';
+import { createAppContext } from '../../public/js/app/context.js';
+import { createNotificationController } from '../../public/js/app/notifications.js';
 
 const HERE = import.meta.dirname;
-const swSrc = readFileSync(join(HERE, '..', '..', 'public', 'js', 'sw.js'), 'utf8');
+// sw.js 住在 public/ 根而不是 public/js/：SW 的默认 scope 就是脚本所在目录，放根目录才能控制整站。
+// 放 /js/ 下就得靠服务端发 Service-Worker-Allowed 头提权，而那个头会被 CDN 缓存吃掉（2026-07-27
+// 真机实测：Cloudflare 后面浏览器只看到 max scope '/js/'，注册直接失败）。少一个中间层依赖 = 少一个故障点。
+const swSrc = readFileSync(join(HERE, '..', '..', 'public', 'sw.js'), 'utf8');
 const cleanupSrc = readFileSync(join(HERE, '..', '..', 'public', 'js', 'sw-cleanup.js'), 'utf8');
 
 // ---- 辅助：在 mock 环境中执行脚本 ----
@@ -371,7 +376,7 @@ test.describe('sw-cleanup.js — 自愈注销', () => {
     assert.equal(reloaded, false, 'reload 不应被调用');
   });
 
-  test('只有当前 push SW（/js/sw.js）→ 放过，不注销、不 reload', async () => {
+  test('只有当前 push SW（/sw.js）→ 放过，不注销、不 reload', async () => {
     let unregistered = 0;
     let reloaded = false;
 
@@ -379,7 +384,7 @@ test.describe('sw-cleanup.js — 自愈注销', () => {
       navigator: {
         serviceWorker: {
           getRegistrations: () => Promise.resolve([
-            { active: { scriptURL: 'https://host/js/sw.js' }, unregister: () => { unregistered++; return Promise.resolve(true); } },
+            { active: { scriptURL: 'https://host/sw.js' }, unregister: () => { unregistered++; return Promise.resolve(true); } },
           ]),
         },
       },
@@ -403,8 +408,8 @@ test.describe('sw-cleanup.js — 自愈注销', () => {
       navigator: {
         serviceWorker: {
           getRegistrations: () => Promise.resolve([
-            { active: { scriptURL: 'https://host/js/sw.js?v=2' }, unregister: () => { unregistered++; return Promise.resolve(true); } },
-            { active: { scriptURL: 'https://host/js/sw.js#x' }, unregister: () => { unregistered++; return Promise.resolve(true); } },
+            { active: { scriptURL: 'https://host/sw.js?v=2' }, unregister: () => { unregistered++; return Promise.resolve(true); } },
+            { active: { scriptURL: 'https://host/sw.js#x' }, unregister: () => { unregistered++; return Promise.resolve(true); } },
           ]),
         },
       },
@@ -420,7 +425,9 @@ test.describe('sw-cleanup.js — 自愈注销', () => {
     assert.equal(reloaded, false);
   });
 
-  test('混合：遗留 SW + push SW → 只注销遗留、放过 push、reload', async () => {
+  // 旧路径 /js/sw.js 现在正是"遗留"：脚本迁到站点根后，手机上那个 scope=/js/ 的旧注册
+  // 会被这里自动注销掉——省掉一次手工清理，也避免两个 registration 并存。
+  test('混合：遗留 SW（旧 /js/sw.js） + push SW → 只注销遗留、放过 push、reload', async () => {
     const unregistered = [];
     let reloaded = false;
 
@@ -428,8 +435,8 @@ test.describe('sw-cleanup.js — 自愈注销', () => {
       navigator: {
         serviceWorker: {
           getRegistrations: () => Promise.resolve([
-            { active: { scriptURL: 'https://host/sw.js' }, unregister: () => { unregistered.push('legacy'); return Promise.resolve(true); } },
-            { active: { scriptURL: 'https://host/js/sw.js' }, unregister: () => { unregistered.push('push'); return Promise.resolve(true); } },
+            { active: { scriptURL: 'https://host/js/sw.js' }, unregister: () => { unregistered.push('legacy'); return Promise.resolve(true); } },
+            { active: { scriptURL: 'https://host/sw.js' }, unregister: () => { unregistered.push('push'); return Promise.resolve(true); } },
           ]),
         },
       },
@@ -462,5 +469,119 @@ test.describe('sw-cleanup.js — 自愈注销', () => {
     await new Promise(r => setTimeout(r, 100));
     // 只要不抛错就通过
     assert.ok(true);
+  });
+});
+
+// =========================================================================
+// SW 注册路径 —— 推送订阅静默挂死的根因（2026-07-27 真机实测）
+// =========================================================================
+// 脚本原先在 /js/ 下，浏览器默认把 scope 限死在脚本所在目录，于是 registration 只覆盖 /js/、
+// 控制不到页面所在的 /。而 navigator.serviceWorker.ready 的语义是"等**控制当前页面**的
+// registration 激活"——scope 不覆盖页面时它**永不 resolve 也永不 reject**，subscribe() 就
+// 挂死在那个 await 上：按钮 disabled 后不恢复、一个错误提示都不弹，推送从未订阅成功过。
+//
+// 试过用服务端发 Service-Worker-Allowed: / 提权，origin 上实测有这个头，但浏览器在 Cloudflare
+// 后面只看到 "max scope allowed ('/js/')" —— 头被 CDN 缓存层吃掉了。改为把脚本放到站点根：
+// 默认 scope 即 '/'，不再需要任何头，也就没有中间层能破坏它。
+test.describe('subscribe() 的 SW 注册路径', () => {
+  test('注册站点根下的 /sw.js（默认 scope 即 /，不依赖任何响应头）', async () => {
+    const registerCalls = [];
+    const fakeSubscription = {
+      endpoint: 'https://push.example/scope',
+      toJSON() { return { endpoint: this.endpoint, keys: { p256dh: 'a', auth: 'b' } }; },
+    };
+    const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+    const context = createAppContext({
+      dom: { btnPush: { classList: { add() {}, remove() {} } } },
+      dependencies: {
+        navigator: {
+          serviceWorker: {
+            register: async (url, opts) => { registerCalls.push({ url, opts }); return registration; },
+            ready: Promise.resolve(registration),
+          },
+        },
+        window: {},
+        fetch: async () => ({ ok: true, json: async () => ({ ok: true }) }),
+        storage: { getItem: () => null, setItem() {} },
+      },
+    });
+    const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
+
+    await notifications.subscribe();
+    assert.equal(registerCalls.length, 1);
+    assert.equal(
+      registerCalls[0].url,
+      '/sw.js',
+      'SW 必须在站点根——放 /js/ 下就得靠 Service-Worker-Allowed 头提权，而那个头会被 CDN 吃掉',
+    );
+  });
+});
+
+// =========================================================================
+// 订阅失败必须说清为什么 —— 2026-07-27 真机：只弹"请稍后重试"，排查无从下手
+// =========================================================================
+// subscribe() 的两条失败路径原先都只写 console.warn 就 return false，UI 一律显示同一句
+// "⚠️ 订阅未成功，请稍后重试"。手机上看不到 console，机主和我都拿不到任何线索。
+// 失败原因（FCM 连不上 / VAPID 无效 / POST 被鉴权拦）必须出现在用户看得见的地方。
+// 仅需能被 urlBase64ToUint8Array 解码（合法 base64url 字符集即可）——mock 的 pushManager
+// 不校验它。绝不要贴真实 VAPID 公钥：本仓库是 public，生产配置值不该进版本库。
+const VAPID_SAMPLE = 'test-vapid-public-key-not-a-real-secret';
+
+function pushReadyContext({ serviceWorker, fetch: fetchFn, alerts }) {
+  return createAppContext({
+    dom: { btnPush: { classList: { add() {}, remove() {} } } },
+    dependencies: {
+      navigator: { serviceWorker, userAgent: 'Mozilla/5.0 (Linux; Android 14)' },
+      window: { isSecureContext: true, PushManager: function () {} },
+      Notification: { permission: 'default', requestPermission: async () => 'granted' },
+      fetch: fetchFn,
+      alert: message => alerts.push(message),
+      console: { warn() {}, log() {}, error() {} },
+      storage: { getItem: () => null, setItem() {} },
+    },
+  });
+}
+
+test.describe('订阅失败的可诊断性', () => {
+  test('pushManager.subscribe 抛错时，原因出现在用户可见的提示里', async () => {
+    const alerts = [];
+    const registration = {
+      pushManager: {
+        getSubscription: async () => null,
+        subscribe: async () => { throw new Error('Registration failed - push service error'); },
+      },
+    };
+    const context = pushReadyContext({
+      serviceWorker: { register: async () => registration, ready: Promise.resolve(registration) },
+      fetch: async () => ({ ok: true, json: async () => ({ key: VAPID_SAMPLE }) }),
+      alerts,
+    });
+    const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
+
+    await notifications.setup();
+    await notifications.requestSubscription();
+
+    const shown = alerts.join('\n');
+    assert.match(shown, /push service error/, `真实错误必须带到 UI，实际提示：${shown}`);
+  });
+
+  test('POST /push/subscribe 返回非 2xx 时，HTTP 状态码出现在提示里', async () => {
+    const alerts = [];
+    const fakeSubscription = { endpoint: 'https://push.example/a', toJSON() { return { endpoint: this.endpoint, keys: { p256dh: 'a', auth: 'b' } }; } };
+    const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
+    const context = pushReadyContext({
+      serviceWorker: { register: async () => registration, ready: Promise.resolve(registration) },
+      fetch: async url => (String(url).includes('vapid')
+        ? { ok: true, json: async () => ({ key: VAPID_SAMPLE }) }
+        : { ok: false, status: 403, json: async () => ({}) }),
+      alerts,
+    });
+    const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
+
+    await notifications.setup();
+    await notifications.requestSubscription();
+
+    const shown = alerts.join('\n');
+    assert.match(shown, /403/, `HTTP 状态码必须带到 UI，实际提示：${shown}`);
   });
 });

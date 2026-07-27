@@ -3,15 +3,16 @@
 <head>
   <meta charset="UTF-8">
   <!-- 自愈脚本：注销残留的 v1 缓存型 service worker（旧 PWA 会喂陈旧外壳致「未连接」），
-       但放过当前合法的 /js/sw.js（E15 Web Push，无缓存/offline，见 sw-cleanup.js 头注释）。
+       但放过当前合法的 /sw.js（E15 Web Push，无缓存/offline，见 sw-cleanup.js 头注释）。
        外置文件而非内联，以保持 CSP script-src 'self'（不放开 'unsafe-inline'）。 -->
   <script src="/js/sw-cleanup.js"></script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F3EE">
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#121211">
   <title>Claude Chat Mobile</title>
-  <!-- PWA 可安装壳：manifest + 图标 + E15 Web Push 用的 /js/sw.js（零缓存逻辑，非 offline 方案——
-       §6 非目标指的是"缓存/离线可用"，不含 push 所需的最小 SW，见 public/js/sw.js） -->
+  <!-- PWA 可安装壳：manifest + 图标 + E15 Web Push 用的 /sw.js（零缓存逻辑，非 offline 方案——
+       §6 非目标指的是"缓存/离线可用"，不含 push 所需的最小 SW，见 public/sw.js。
+       放站点根而非 /js/ 下：SW 默认 scope 即脚本所在目录，只有根目录才能控制整站） -->
   <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
   <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png">

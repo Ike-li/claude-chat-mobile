@@ -38,8 +38,8 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Deployment | 3 |
 | Documentation | 4 |
 | E2E test | 41 |
-| Frontend asset | 2 |
-| Frontend source | 23 |
+| Frontend asset | 3 |
+| Frontend source | 22 |
 | Generated asset | 6 |
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
@@ -106,9 +106,9 @@ Total classified files: **340**.
 | `public/js/logic.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/ring-buffer.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/sw-cleanup.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
-| `public/js/sw.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/tw-config.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/manifest.webmanifest` | Frontend asset | PWA shell or web asset | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/sw.js` | Frontend asset | PWA shell or web asset | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/codemirror/codemirror.min.css` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/codemirror/codemirror.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/vendor/codemirror/mode-css.min.js` | Vendored asset | Pinned browser-side third-party dependency | Served by Express and consumed by the browser | Authored and reviewed manually | keep |

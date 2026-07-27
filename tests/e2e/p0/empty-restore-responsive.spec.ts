@@ -86,7 +86,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       expect(response.headers()['content-type']).toContain(icon.type);
     }
 
-    const serviceWorker = await page.request.get('/js/sw.js');
+    // 站点根而非 /js/ 下：SW 的默认 scope 即脚本所在目录，只有根目录的脚本能控制整站（订阅流程依赖它）
+    const serviceWorker = await page.request.get('/sw.js');
     expect(serviceWorker.ok()).toBe(true);
     expect(serviceWorker.headers()['content-type']).toContain('javascript');
 

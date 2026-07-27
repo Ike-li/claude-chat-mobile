@@ -184,6 +184,8 @@ export function configureHttpShell({
   const publicDir = join(projectRoot, 'public');
   const vendorDir = join(publicDir, 'vendor');
   const selfJsDir = join(publicDir, 'js');
+  // SW 必须在站点根才能拿到覆盖 / 的 scope（见 public/sw.js 与 app/notifications.js 的注释）
+  const swScriptPath = join(publicDir, 'sw.js');
   const assetVersion = computeAssetVersion(selfJsDir, publicDir, selfJsFiles);
 
   let indexHtml = null;
@@ -230,6 +232,9 @@ export function configureHttpShell({
   app.use(express.static(publicDir, {
     setHeaders: (res, filePath) => {
       if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-store');
+      // SW 脚本恒回源：它是推送链路的根，被任何中间层（CDN/浏览器）缓存住就会让修复送不到设备。
+      // 2026-07-27 实测过一次同类事故——Cloudflare 缓存让 Service-Worker-Allowed 头到不了浏览器。
+      else if (filePath === swScriptPath) res.setHeader('Cache-Control', 'no-store');
       else if (filePath.startsWith(selfJsDir) && filePath.endsWith('.js')) res.setHeader('Cache-Control', 'no-cache');
       else if (filePath.startsWith(vendorDir)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
     },

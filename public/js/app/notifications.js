@@ -18,6 +18,9 @@ export function createNotificationController(context, {
   const storage = deps.storage || globalThis.localStorage;
   const storageGetItem = key => storage?.getItem?.(key) ?? null;
   let vapidKey = null;
+  // subscribe() 的失败原因。手机上看不到 console，只说"请稍后重试"等于什么都没说——
+  // FCM 连不上、VAPID 无效、POST 被鉴权拦，对用户是完全不同的三件事，得说出是哪一件。
+  let lastSubscribeError = '';
 
   function notify(title, body, { force = false } = {}) {
     if ((!force && !documentRef?.hidden) || !NotificationApi || NotificationApi.permission !== 'granted') return false;
@@ -44,8 +47,15 @@ export function createNotificationController(context, {
   }
 
   async function subscribe() {
+    lastSubscribeError = '';
     try {
-      const registration = await navigatorRef.serviceWorker.register('/js/sw.js');
+      // 脚本必须在站点根：SW 的默认 scope 就是脚本所在目录，只有根目录的脚本才能控制页面所在的 /。
+      // 放 /js/ 下时 registration 只覆盖 /js/，下面这行 ready（等"控制当前页面"的 registration
+      // 激活）就永不 resolve 也永不 reject——整个订阅流程静默挂死，按钮 disabled 后不恢复、
+      // 一个提示都不弹。真机上推送因此从未订阅成功过。
+      // 试过用服务端 Service-Worker-Allowed 头提权，但那个头在 CDN 后面到不了浏览器（实测 Cloudflare
+      // 下报 max scope '/js/'）。放根目录不依赖任何响应头，少一个中间层就少一个故障点。
+      const registration = await navigatorRef.serviceWorker.register('/sw.js');
       await navigatorRef.serviceWorker.ready;
       let subscription = await registration.pushManager.getSubscription();
       if (!subscription) {
@@ -65,13 +75,15 @@ export function createNotificationController(context, {
         body,
       });
       if (!response.ok) {
+        lastSubscribeError = `HTTP ${response.status}`;
         logger?.warn?.('[push] 订阅未保存(HTTP', `${response.status})`);
         return false;
       }
       context.dom.btnPush?.classList.add('hidden');
       return true;
     } catch (error) {
-      logger?.warn?.('[push] 订阅失败:', error.message);
+      lastSubscribeError = error?.message || String(error);
+      logger?.warn?.('[push] 订阅失败:', lastSubscribeError);
       return false;
     }
   }
@@ -135,7 +147,8 @@ export function createNotificationController(context, {
       if (permission === 'granted') {
         const ok = await subscribe();
         if (ok) explain(t('🔔 成功订阅推送通知！'), 'text-success');
-        else explain(t('⚠️ 订阅未成功，请稍后重试'), 'text-warning');
+        // 带上真实原因：手机上没有 console，笼统的"稍后重试"让人（和排查的人）无从下手。
+        else explain(`${t('⚠️ 订阅未成功：')}${lastSubscribeError || t('原因未知')}`, 'text-warning');
       } else {
         explain(t('🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许'), 'text-warning');
         context.dom.btnPush?.classList.add('hidden');

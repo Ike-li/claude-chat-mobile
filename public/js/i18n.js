@@ -706,7 +706,8 @@ export const EN_DICT = Object.freeze({
   '⚠️ 订阅失败：服务端未启用/配置 Web Push 密钥，或当前未加载成功密钥。请检查 VAPID 环境变量并重启服务。': '⚠️ Subscription failed: the server has Web Push keys disabled or misconfigured, or they didn\'t load. Check the VAPID environment variables and restart the service.',
   '当前浏览器/环境不支持 Notification API': 'This browser/environment doesn\'t support the Notification API',
   '🔔 成功订阅推送通知！': '🔔 Subscribed to push notifications!',
-  '⚠️ 订阅未成功，请稍后重试': '⚠️ Subscription didn\'t go through — try again later',
+  '⚠️ 订阅未成功：': '⚠️ Subscription failed: ',
+  '原因未知': 'reason unknown',
   '🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许': '🚫 Notification permission was denied — re-allow it from the settings to the left of the address bar',
   '❌ 订阅出错:': '❌ Subscription error:',
 });
