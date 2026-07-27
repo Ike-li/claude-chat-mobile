@@ -62,6 +62,41 @@ cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
    ```
 5. **登录有效期（Session Duration）**：过一次 OTP 后多久内免重复验（默认约 24h）。改法：Zero Trust → Access → Applications → 选中该应用 → **Configure / Edit → Session Duration**，下拉选 15 分钟 ~ 1 个月，或「No duration, expires immediately」每次都验；某条 Policy 内也能单独设，覆盖应用级。
    > 换浏览器 / 无痕窗口 / 清除站点数据都会**重新触发 OTP**——Access 会话是按浏览器隔离的 `CF_Authorization` cookie，与这个时长无关（同浏览器、没清数据、未过期才免验）。
+6. **给 PWA 图标开 Bypass**，否则 Android 装出来的是快捷方式而不是真应用（见下方「Android PWA 装成快捷方式」）。
+
+### 2b. Android PWA：图标必须对匿名可达
+
+装到 Android 主屏有两种结果，差别很大：
+
+| | WebAPK（真应用） | Shortcut（快捷方式） |
+|---|---|---|
+| 长按图标 | 有 ⓘ 应用信息 | 只有「移除」 |
+| 系统设置里 | 独立条目 | 点进去是 Chrome |
+| 通知 / 存储 | 独立管理 | 全归 Chrome 名下 |
+
+**WebAPK 不是本地生成的**：Chrome 把 manifest 和**图标 URL** 交给 Google 的云端 minting server，由它打包签名一个真 APK 再装回来。这台服务器是匿名的、不可能有 `CF_Authorization` cookie——所以只要 Access 拦住了 `/icons/*`，它抓到的就是一张 HTML 登录页而非 PNG，打包失败，Chrome **静默回退**成 shortcut，不报任何错。
+
+判断当前处于哪种状态（这比看长按菜单权威）：
+
+```bash
+# 部署机上跑，模拟 Google 服务器视角。要的是 image/png；
+# 返回 text/html 就是被 Access 拦了 → 现在装出来必然是 shortcut
+curl -sSL -o /dev/null -w "%{http_code} %{content_type}\n" https://<your-domain>/icons/icon-192.png
+```
+
+手机侧：Chrome 地址栏输 `chrome://webapks`，列表里有本应用才是 WebAPK。
+
+**修法**——给图标建一条 Bypass 应用（Access 按最长路径优先，它会覆盖根应用的 2FA 策略，其余路径不受影响）：
+
+Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<your-domain>`、Path 填 `icons`，策略选 **Bypass / Everyone**。路径应用自动覆盖其下所有子路径，不用写 `/*`。
+
+> 策略生效有**传播延迟**：刚建完立刻 `curl` 多半还是 `text/html`，等几十秒到一两分钟再测。别据此以为没配对。
+
+> **暴露面**：公网能拿到的只有那几张图标（外加你若一并放行 `manifest.webmanifest` 时的应用名与主题色）。不涉及任何数据、会话或 API 通道。代价是站点用途对外可见——域名本身已能从 CT log 查到，实际增量很小。
+>
+> `manifest.webmanifest` 一般**不必**放行：Chrome 读它时带 cookie（`index.html` 里 `<link rel="manifest" crossorigin="use-credentials">` 就是干这个的），只有图标是服务器去抓的。先只放行 `icons`，仍失败再补。
+
+改完必须**删掉主屏图标重新安装**——Chrome 缓存了失败结果，不会自己重试。
 
 ### 3. 常驻（macOS LaunchAgent 示例）
 
@@ -136,6 +171,7 @@ npm start
 | 公网 502 / 1033 | server 没跑：看 server 日志、重启；或隧道挂了：看 tunnel 日志 |
 | OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜「Access JWT 校验失败」，核对 `.env` 的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
+| Android 装的 PWA 长按只有「移除」、系统设置点进去是 Chrome | 装成了 shortcut 而非 WebAPK：Access 拦了 `/icons/*`，Google 打包服务器抓不到图标。见 §2b，给图标加 Bypass 后删图标重装 |
 | 改了 `.env` 不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
 | 公网 1033 且部署机开着全局代理/VPN | 代理的 TUN 模式劫持了 `cloudflared` 到 Cloudflare edge 的出站连接：先临时关闭系统代理/VPN 复测确认；长期共存则在代理软件里给 `cloudflared` 进程或 `*.trycloudflare.com` / `*.cloudflareaccess.com` / 你的隧道域名配置直连(bypass)规则 |
 | 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在启动 shell `export ANTHROPIC_MODEL=<带后缀名>` 后重启，或 web 端 `/model <带后缀名>` 切换（`.env` 里的 `ANTHROPIC_*` 启动期被剥除，配置只能来自 shell） |
