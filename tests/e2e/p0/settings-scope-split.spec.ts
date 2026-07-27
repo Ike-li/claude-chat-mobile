@@ -1,18 +1,19 @@
-// spec: 配置面板按作用域拆分——齿轮=会话设置（模型/权限/思考强度/会话ID）、侧栏底部入口=通用设置
+// spec: 配置面板按作用域拆分——底栏 chip=会话设置（模型/权限/思考强度/会话ID）、侧栏底部入口=通用设置
 // （📱 本机偏好 + 🖥 主机与服务 + 🔑 访问与帮助）。核心回归点是**可达性**：通用设置的那几段与会话
-// 无关，却曾因唯一入口 #btnSettings 挂在 #composerFooter 内、首页把整个 footer 设 hidden 而一起失联。
+// 无关，却曾因唯一入口挂在 #composerFooter 内、首页把整个 footer 设 hidden 而一起失联。
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
 import { gotoMock, expectNoBrowserErrors } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
-  test('P0-28 首页无会话时通用设置仍可达（齿轮随 composer 隐藏，侧栏入口不受影响）', async ({ page }) => {
+  test('P0-28 首页无会话时通用设置仍可达（会话设置 chip 随 composer 隐藏，侧栏入口不受影响）', async ({ page }) => {
     await gotoMock(page);
     await page.locator('#btnHome').click();
 
-    // 前提：首页确实没有齿轮——这正是本用例存在的理由，若哪天 composer 常驻了此断言会提醒重新评估
-    await expect(page.locator('#btnSettings')).toBeHidden();
+    // 前提：首页确实没有会话设置入口（chip 随 composer 隐藏）——这正是本用例存在的理由，
+    // 若哪天 composer 常驻了此断言会提醒重新评估
+    await expect(page.locator('#pillModel')).toBeHidden();
 
     await page.locator('#btnSessions').click();
     await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
@@ -42,10 +43,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-28b 齿轮面板收窄为会话级：留模型/权限/思考强度/会话ID，本机与主机项已迁出', async ({ page }) => {
+  test('P0-28b 会话设置面板收窄为会话级：留模型/权限/思考强度/会话ID，本机与主机项已迁出', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
 
     // 会话级留守
@@ -69,7 +70,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-28c 每段带作用域说明，用户看得出这条设置影响谁', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     await expect(page.locator('[data-scope-note="session"]')).toBeVisible();
     await page.keyboard.press('Escape');
 
@@ -81,11 +82,58 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 可达性的另一半：会话页里侧栏入口同样在，不必先回首页。齿轮与侧栏入口是两条并行通道，
-  // 不是「首页走这条、会话页走那条」的互斥分支。
-  test('P0-28d 会话页里侧栏设置入口同样可达，且与齿轮面板互不干扰', async ({ page }) => {
+  // 齿轮已删：它与底栏三个 chip（模型/权限/思考强度）打开的是同一个会话设置 sheet，
+  // 纯重复入口。sheet 的全部内容（含会话 ID 行）从任一 chip 进都可达。
+  test('P0-28f composer 无齿轮按钮；会话设置从模型 chip 仍可达（含会话 ID 行）', async ({ page }) => {
     await gotoMock(page);
-    await expect(page.locator('#btnSettings')).toBeVisible();
+
+    await expect(page.locator('#btnSettings')).toHaveCount(0);
+
+    await page.locator('#pillModel').click();
+    await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+    // 非折叠块内容（会话 ID 行）不因入口变化而失联
+    await expect(page.locator('#settingsSheetBody #settingsSessionRow')).toHaveCount(1);
+
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 推送铃铛与通用设置同理：它是本机推送健康的告警信号，跟会话无关，挂在 composer 里
+  // 首页整个 footer 一藏就失联。迁到侧栏底部固定条后，任何页面都能从侧栏看到它。
+  test('P0-28e 推送铃铛在侧栏底部而非 composer；点击→收侧栏+开通用设置', async ({ page }) => {
+    // 真机视口（<768px）：历史上 app.css 的 @media 移动端块里有条 display:flex !important
+    // 盖过 .hidden 把铃铛永远钉出来，桌面视口的 E2E 抓不到——显隐断言必须在窄屏下跑。
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+
+    // 已迁出 composer 动作区
+    await expect(page.locator('#composerActions #btnPush')).toHaveCount(0);
+    // 落点：侧栏底部固定条（#sessionPanel 的兄弟层，免遭 innerHTML='' 清空），默认隐藏——推送健康时不打扰
+    await expect(page.locator('#leftSidebar #btnPush')).toHaveCount(1);
+    await expect(page.locator('#btnPush')).toBeHidden();
+
+    // 模拟「推送未接通」露出态（真实路径：notifications.setup() 在订阅失败/被拒时 remove hidden）
+    await page.evaluate(() => document.getElementById('btnPush')?.classList.remove('hidden'));
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#btnPush')).toBeVisible();
+
+    // 点击 = 带去权威解释处：先收侧栏再弹通用设置（两者同 z-40，叠着会打架）
+    await page.locator('#btnPush').click();
+    await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
+    await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+    await expect(page.locator('#generalSheetBody #pushStatusRow')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 可达性的另一半：会话页里侧栏入口同样在，不必先回首页。会话设置 chip 与侧栏入口是两条并行通道，
+  // 不是「首页走这条、会话页走那条」的互斥分支。
+  test('P0-28d 会话页里侧栏设置入口同样可达，且与会话设置面板互不干扰', async ({ page }) => {
+    await gotoMock(page);
+    await expect(page.locator('#pillModel')).toBeVisible();
 
     await page.locator('#btnSessions').click();
     await page.locator('#btnGeneralSettings').click();
@@ -96,8 +144,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
 
-    // 关掉通用设置后齿轮照常可用
-    await page.locator('#btnSettings').click();
+    // 关掉通用设置后会话设置 chip 照常可用
+    await page.locator('#pillModel').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
 
     await expectNoBrowserErrors(page);

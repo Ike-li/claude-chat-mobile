@@ -138,8 +138,8 @@ export const EN_DICT = Object.freeze({
   '权限模式': 'Permission mode',
   '思考强度': 'Thinking effort',
   '添加附件': 'Add attachment',
-  '接收推送通知': 'Enable push notifications',
-  '打开设置面板': 'Open settings',
+  '推送未接通': 'Push not connected',
+  '推送未接通，查看推送状态': 'Push not connected — view push status',
   '发送': 'Send',
 
   // —— 设备授权 / 访问帮助 ——

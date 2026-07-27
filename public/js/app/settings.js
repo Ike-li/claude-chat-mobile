@@ -3,7 +3,7 @@
 // 关法：点遮罩 / Escape / 把手区下拉（位移或快甩）。
 //
 // 本控制器驱动两个同构的底部 sheet（配置按作用域拆开后）：
-//   会话设置 #settingsSheet（齿轮，模型/权限/思考强度，随 composer 显隐）
+//   会话设置 #settingsSheet（入口=底栏模型/权限/思考强度三个 chip，随 composer 显隐）
 //   通用设置 #generalSheet（侧栏底部入口，本机偏好 + 主机与服务，全局可达）
 // 二者的开合/手势/滚动锁完全一样，故只参数化 DOM key，不复制第二份实现。
 import { resolveSheetDragEnd } from '../logic.js';
@@ -38,8 +38,8 @@ export function createSettingsController(context, {
   langPref = { get: () => 'zh', set: () => {} },
   autoBind = true,
   // 面板打开时的回调：给需要"每次打开重算"的动态段用（如推送订阅状态——权限可能在系统设置里被
-  // 改过，渲染一次会过期）。**必须挂在这里而不是包装 open()**：齿轮按钮由下方 autoBind 直接绑到
-  // 本控制器的 open，任何在 app.js 侧包装 open 的做法都不会被齿轮触发（真机上整行空白的成因）。
+  // 改过，渲染一次会过期）。**必须挂在这里而不是包装 open()**：trigger 按钮由下方 autoBind 直接绑到
+  // 本控制器的 open，任何在 app.js 侧包装 open 的做法都不会被 trigger 触发（真机上整行空白的成因）。
   onOpen = () => {},
   haptic = () => {},
   // 可注入 document 方便单测；浏览器默认用全局 document

@@ -65,7 +65,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // ---- 极简触觉交互及抽屉式元素 DOM 绑定 ----
   const sidebarScrim = $('sidebarScrim'), leftSidebar = $('leftSidebar'), sidebarClose = $('sidebarClose');
-  const btnSettings = $('btnSettings'), settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsSheetBody = $('settingsSheetBody'), settingsDragZone = $('settingsDragZone'), settingsClose = $('settingsClose');
+  const settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsSheetBody = $('settingsSheetBody'), settingsDragZone = $('settingsDragZone'), settingsClose = $('settingsClose');
   // 通用设置 sheet（本机偏好 + 主机与服务）：与会话设置同构、同一个控制器驱动，入口在侧栏底部
   const btnGeneralSettings = $('btnGeneralSettings'), generalScrim = $('generalScrim'), generalSheet = $('generalSheet'), generalSheetBody = $('generalSheetBody'), generalDragZone = $('generalDragZone');
   const pillModel = $('pillModel'), pillModelText = $('pillModelText');
@@ -489,7 +489,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       gitChangesRefresh,
       gitChangesClose,
       gitChangesBody,
-      btnSettings,
       settingsScrim,
       settingsSheet,
       settingsSheetBody,
@@ -721,7 +720,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 铃铛只当「未订阅」的可见信号，不自己解释——把人带到通用设置的推送段，
     // 那里的 #pushStatusRow 才说得全（当前状态 + 为什么 + 下一步点哪）。两套解释各说各话
     // 是这块历史上真出过问题的地方。general 在文件后段才定义，靠闭包延迟到点击时求值。
+    // 铃铛住在侧栏底部固定条：先收侧栏再弹 sheet（两者同 z-40，同 btnGeneralSettings 的顺序约束）。
     bellAction: () => {
+      closeLeftSidebar();
       general.open();
       $('pushStatusRow')?.scrollIntoView({ block: 'center' });
     },
@@ -4913,10 +4914,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     },
   };
   // ---- 设置：两个同构 sheet，由同一个 controller 按作用域分工 ----
-  // 会话设置（齿轮，随 composer 显隐）：模型 / 权限档 / 思考强度 / 会话 ID。syncPrefs=false——
+  // 会话设置（入口=底栏三个 chip，随 composer 显隐）：模型 / 权限档 / 思考强度 / 会话 ID。
+  // 原独立齿轮与 chip 打开同一个 sheet、纯重复，已删——DEFAULT_KEYS.trigger 指向的 btnSettings
+  // 不再注入 dom，controller bind 对缺失 trigger 安全跳过。syncPrefs=false——
   // 本机偏好那批 DOM 已迁到通用设置，两个控制器都去绑会互相覆盖 onchange（后建的赢，静默难查）。
-  // onOpen：齿轮进来 = 「看一眼当前配置」，不预设想改哪项，故三块全收起 + 回填当前值。
-  // 从底栏 chip 进来的走 openSettingsSectionFor，它在 open 之后再展开对应块（顺序不能反）。
+  // onOpen 三块全收起 + 回填当前值；chip 入口走 openSettingsSectionFor，
+  // 它在 open 之后再展开对应块（顺序不能反）。
   const settings = createSettingsController(appContext, {
     alerts, haptic, syncPrefs: false,
     onOpen: () => { collapseAllFolds(); syncFoldValues(); },
@@ -4938,7 +4941,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 推送订阅状态每次打开重算：权限可能在系统设置里被改过，渲染一次会过期。
     onOpen: () => renderPushStatusRow(),
   });
-  const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen（齿轮按钮不经这里）
+  const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen
   if (pillModel) pillModel.onclick = () => openSettingsSectionFor(modelSection); // 点底栏模型 chip → 直达模型块
   // 顶部 pill：工作区入口（chooser → 浏览文件 | 工作区改动）。侧栏不再挂浏览入口。
   if (topContextPill) {
@@ -6444,7 +6447,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   document.querySelector('.chat-input-pill')?.addEventListener('pointerdown', (ev) => {
     if (!mirrorReadonlySid) return;
     // 设置 chip 已有自己的「设置已冻结」提示；续接主按钮自行处理
-    if (ev.target?.closest?.('#pillModel, #pillPerm, #pillEffort, #btnSettings, #btnSend')) return;
+    if (ev.target?.closest?.('#pillModel, #pillPerm, #pillEffort, #btnSend')) return;
     showMirrorComposerHint();
   }, { capture: true });
   function onMirrorState(ev) {

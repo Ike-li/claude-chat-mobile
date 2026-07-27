@@ -23,7 +23,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#btnSend')).toBeVisible();
     await expect(page.locator('#btnSend')).toBeDisabled();
     await expect(page.locator('#btnAttach')).toBeVisible();
-    await expect(page.locator('#btnSettings')).toBeVisible();
     await expect(page.locator('#pillModelText')).not.toHaveText('');
     await expect(page.locator('#pillPermText')).toContainText('默认审批');
 

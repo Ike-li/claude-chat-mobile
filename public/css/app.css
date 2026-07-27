@@ -421,11 +421,6 @@ body.ccm-sheet-open #messages {
 .scrollbar-none::-webkit-scrollbar { display: none; }
 .scrollbar-none { -ms-overflow-style: none; scrollbar-width: none; }
 
-/* Ensure #btnPush with .hidden class is always completely hidden, even overriding mobile display overrides */
-#btnPush.hidden {
-  display: none !important;
-}
-
 @media (max-width: 767px) {
   header {
     padding: max(1.25rem, env(safe-area-inset-top)) 1rem 0.5rem !important;
@@ -493,7 +488,7 @@ body.ccm-sheet-open #messages {
     opacity: 0.7;
   }
   #pillModelText {
-    max-width: min(6.5rem, 32vw); /* 窄屏：截断模型名，动作区（齿轮/发送）钉死不挤 */
+    max-width: min(6.5rem, 32vw); /* 窄屏：截断模型名，动作区（附件/发送）钉死不挤 */
   }
   #pillPermText {
     max-width: min(4.5rem, 24vw);
@@ -528,17 +523,6 @@ body.ccm-sheet-open #messages {
     min-height: 32px !important;
     padding: 0.25rem 0.5rem !important;
     font-size: 16px !important;
-  }
-  #btnSettings,
-  #btnPush {
-    display: flex !important;
-    width: 32px !important;
-    height: 32px !important;
-    border-radius: 0.5rem !important;
-    background: transparent !important;
-    border: none !important;
-    box-shadow: none !important;
-    color: var(--ink-soft) !important;
   }
   #btnSend,
   #btnStop {

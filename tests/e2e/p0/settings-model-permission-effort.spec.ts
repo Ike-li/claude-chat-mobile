@@ -10,7 +10,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
 
     // 1. 打开配置面板，检查模型、权限、思考强度入口。
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
     await expect(page.locator('#modelSection summary')).toContainText('模型');
     await expect(page.locator('.model-tile')).toContainText(['Default (recommended)', 'Claude 3.5 Sonnet', 'Claude 3.5 Haiku', 'Claude 3 Opus', 'Claude 3 Opus (1m Context)']);
@@ -35,15 +35,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 会话设置三块（模型/强度/权限）折叠成紧凑列表：平时每块只占一行「标题 + 当前值 + ⌄」，
   // 点开才出磁贴。此前一打开面板就是 5 个模型磁贴（还带 max-h-48 内部滚动）+ 6 个权限磁贴，
   // 权限和强度被挤到屏外。手风琴（同时只展开一块）保证列表始终是紧凑的。
-  test('P0-09q 三块折叠成紧凑列表：默认收起显当前值，展开互斥，选完即收', async ({ page }) => {
+  test('P0-09q 三块折叠成紧凑列表：chip 入口只开目标块，展开互斥，选完即收', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
-    await page.locator('#btnSettings').click();
+    // 齿轮已删，入口即三个 chip：进门只展开目标块，其余保持收起（紧凑列表）
+    await page.locator('#pillPerm').click();
 
-    // 默认全收起，每行显示当前值
+    await expect(page.locator('#permSection')).toHaveJSProperty('open', true);
     await expect(page.locator('#modelSection')).toHaveJSProperty('open', false);
     await expect(page.locator('#effortSection')).toHaveJSProperty('open', false);
-    await expect(page.locator('#permSection')).toHaveJSProperty('open', false);
     await expect(page.locator('#permFoldValue')).toContainText('默认审批');
     await expect(page.locator('.model-tile[data-model="claude-3-5-sonnet"]')).toBeHidden();
 
@@ -95,7 +95,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09p 思考强度从属于所选模型：标题带模型名，不支持时就地说明而非整块消失', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
 
     // 支持 effort 的模型：区块说清这是「谁的」档位
     await openSettingsSection(page, 'model');
@@ -127,7 +127,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
@@ -153,7 +153,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     await openSettingsSection(page, 'effort');
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#effortSelect')).toHaveValue('high');
@@ -184,7 +184,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#btnNew').click();
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
 
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
     await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
@@ -242,7 +242,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#input')).toBeDisabled();
     await expect(page.locator('#pillEffortText')).toHaveText('CLI 档位未知', { timeout: 800 });
 
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     await expect(page.locator('#effortSelect')).toHaveValue('');
     await expect(page.locator('#effortSelect option:checked')).toHaveText('CLI 当前档未知');
 
@@ -253,7 +253,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
     await openSettingsSection(page, 'model');
@@ -302,38 +302,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-09i 超长模型名不挤掉设置齿轮与发送钮', async ({ page }) => {
-    // 窄屏 + 长模型名：齿轮/发送钉在右侧动作区，不被 chip 滚动层盖住
+  test('P0-09i 超长模型名不挤掉附件与发送钮', async ({ page }) => {
+    // 窄屏 + 长模型名：附件/发送钉在右侧动作区，不被 chip 滚动层盖住
     await page.setViewportSize({ width: 320, height: 700 });
     await gotoMock(page);
     await sendChatMessage(page, 'test:longmodel');
     await waitForIdle(page);
 
-    await expect(page.locator('#btnSettings')).toBeVisible();
+    await expect(page.locator('#btnAttach')).toBeVisible();
     await expect(page.locator('#btnSend')).toBeVisible();
     const geometry = await page.evaluate(() => {
-      const settings = document.querySelector('#btnSettings')?.getBoundingClientRect();
+      const attach = document.querySelector('#btnAttach')?.getBoundingClientRect();
       const send = document.querySelector('#btnSend')?.getBoundingClientRect();
       const model = document.querySelector('#pillModelText') as HTMLElement | null;
-      if (!settings || !send) return null;
+      if (!attach || !send) return null;
       return {
-        settingsLeft: settings.left,
-        settingsRight: settings.right,
-        sendLeft: send.left,
-        sendRight: send.right,
         viewportW: window.innerWidth,
         modelTruncated: Boolean(model && model.scrollWidth > model.clientWidth + 0.5),
-        // 齿轮完全在视口内，且不与发送钮重叠（允许 1px 亚像素）
-        settingsInView: settings.left >= 0 && settings.right <= window.innerWidth + 1,
-        noOverlap: settings.right <= send.left + 1,
+        // 附件钮完全在视口内，且不与发送钮重叠（允许 1px 亚像素）
+        attachInView: attach.left >= 0 && attach.right <= window.innerWidth + 1,
+        noOverlap: attach.right <= send.left + 1,
       };
     });
     expect(geometry).not.toBeNull();
-    expect(geometry!.settingsInView).toBe(true);
+    expect(geometry!.attachInView).toBe(true);
     expect(geometry!.noOverlap).toBe(true);
     expect(geometry!.modelTruncated).toBe(true);
-    // 仍可点开设置
-    await page.locator('#btnSettings').click();
+    // 长名 chip 与动作区并存时，chip 入口仍可点开会话设置
+    await page.locator('#pillModel').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
 
     await expectNoBrowserErrors(page);
@@ -352,7 +348,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillModelText')).toHaveText('mimo-v2.5-pro-ultraspeed');
 
     // 设置面板：select 候选文案 + 磁贴标题同样显 resolvedModel
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     await expect(page.locator('#modelInput')).toHaveValue('opus'); // 发送用的 value 仍是档位别名，不受本次改动影响
     await expect(page.locator('.model-tile[data-model="opus"]')).toContainText('mimo-v2.5-pro-ultraspeed');
     await expect(page.locator('.model-tile[data-model="opus"]')).not.toContainText('Opus');
@@ -435,7 +431,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#btnSettings').click();
+    await page.locator('#pillModel').click();
     const refreshBtn = page.locator('[data-testid="settings-config-refresh"]');
     const spinIcon = refreshBtn.locator('[data-spin]');
     await expect(refreshBtn).toBeVisible();

@@ -37,7 +37,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     for (const viewport of [{ width: 320, height: 700 }, { width: 812, height: 375 }]) {
       await page.setViewportSize(viewport);
       await expect(page.locator('#input')).toBeVisible();
-      await page.locator('#btnSettings').click();
+      await page.locator('#pillModel').click();
       await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
       await closeSettings(page);
       await page.locator('#btnSessions').click();
@@ -101,7 +101,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     for (const viewport of [{ width: 320, height: 700 }, { width: 812, height: 375 }]) {
       await page.setViewportSize(viewport);
 
-      await page.locator('#btnSettings').click();
+      await page.locator('#pillModel').click();
       await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
       // 内容区内部滚动；标题栏固定在 sheet 顶部，背后主页面被 ccm-sheet-open 锁住
       await page.locator('#settingsSheetBody').evaluate(el => { el.scrollTop = el.scrollHeight; });
