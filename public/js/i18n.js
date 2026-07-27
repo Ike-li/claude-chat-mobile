@@ -606,6 +606,7 @@ export const EN_DICT = Object.freeze({
   '终端运行中': 'Running in terminal',
   '终端会话已打开': 'Open in a terminal',
   '终端会话推送': 'Terminal session alerts',
+  '只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。': 'Affects only sessions you start by running claude yourself in a computer terminal — those could never send notifications before. Sessions started from your phone or the web already notify you and are unaffected by this switch.',
   '✓ 已刷新': '✓ Refreshed',
   '电脑终端里跑的会话，完成或需要你时通知手机': 'Sessions running in your computer terminal notify your phone when they finish or need you',
   '下面的模型 / 权限 / 命令来自 CLI 配置，终端改了不会自动感知': 'Models / permissions / commands below come from your CLI config; changes made in the terminal are not picked up automatically',
