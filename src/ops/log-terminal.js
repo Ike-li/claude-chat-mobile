@@ -59,11 +59,29 @@ export function buildOpenScript(command) {
 }
 
 // windowId 强制转数字：这个值来自状态文件（磁盘），绝不能原样拼进 AppleScript。
+//
+// 实测（2026-07-28）：server 关停时直接 close window，而窗口里的看门狗多数时候卡在
+// `while kill -0 $pid; do sleep 1; done` 的前台 sleep 上（最多近 1 秒才轮到下一次检测）——
+// Terminal 见窗口仍有活跃子进程（tail + 看门狗的 sleep），弹出系统级「是否终止正在运行的进程」
+// 确认框，只能鼠标点掉，不会自动关。
+// 修法：close 前先给窗口发一发 Ctrl-C（ASCII 3）。这走的是 pty 驱动层的 SIGINT，直接送前台
+// 进程组，不依赖 shell 正在等待输入——看门狗卡在 sleep 里一样能被打断（不是等它下次读 stdin）。
+// 打断后紧跟 `kill $TP 2>/dev/null; exit; exit`：杀掉后台 tail（万一还没被看门狗自己收掉）再退出
+// shell——退出两次是因为真机复测过一版只 exit 一次仍会弹框，弹的是 zsh 自己的
+// 「zsh: you have running jobs.」：kill 信号刚发出，zsh 的 job table 还没收到子进程死亡的 SIGCHLD
+// 就跑到了 exit，zsh 见 job 表里 tail 还"在"就只警告不退出——这是 zsh 交互 shell 对未清空 job
+// 的既定保护（警告一次，紧接着再退一次即强制退），不是能从外部一次调用绕开的竞态，只能顺着它的
+// 规则再退一次。空 shell 真退出后 Terminal 不会再问，仍保留 close 兜底（万一某个 Terminal 版本/
+// 偏好不自动关，或用户默认 shell不是 zsh 导致行为不同）。
 export function buildCloseScript(windowId) {
+  const id = Number(windowId) || 0;
   return [
     'tell application "Terminal"',
     '  try',
-    `    close window id ${Number(windowId) || 0}`,
+    `    do script (ASCII character 3) & "kill $TP 2>/dev/null; exit; exit" in window id ${id}`,
+    '  end try',
+    '  try',
+    `    close window id ${id}`,
     '  end try',
     'end tell',
   ].join('\n');

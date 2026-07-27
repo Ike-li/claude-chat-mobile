@@ -65,6 +65,26 @@ test('buildOpenScript / buildCloseScript：AppleScript 字符串转义 + windowI
   assert.match(buildCloseScript(undefined), /close window id 0/);
 });
 
+// 实测（2026-07-28）：server 关停时 stopLogTerminalSync 立刻调 close window，而窗口里的看门狗
+// 是 `while kill -0 $pid; do sleep 1; done` 轮询，最多有近 1 秒还卡在前台的 sleep/tail 上——
+// 直接 close 撞上 Terminal「是否终止正在运行的进程（sleep, tail）」系统确认框，只能鼠标点掉。
+// 修法一版：close 前发 Ctrl-C（ASCII 3，走 pty 驱动层直接送 SIGINT，不依赖 shell 正在等输入，
+// 前台卡在 sleep 里一样能打断）+ kill 掉后台 tail + exit。真机复测仍会弹框，但内容变了——
+// 这次是 zsh 自己的「you have running jobs.」拦截：kill 信号刚发出、zsh job table 还没来得及
+// 收到子进程死亡的 SIGCHLD 就跑到了 exit，zsh 见 job 表里 tail 还"在"，第一次 exit 只警告不退出
+// （zsh 对未处理完的 job 退出保护是「警告一次，紧接着再退一次就强制退」，这是 zsh 交互 shell
+// 的既定行为，不是我们能从外部一次性绕开的竞态）。修法二版：注入串尾巴再加一个 exit——
+// 第一个 exit 吃掉警告，第二个 exit 无视残留 job 强制退出。shell 退出后 Terminal 才不会再问。
+test('buildCloseScript：close 前发 Ctrl-C 打断看门狗 + 杀 tail + 退出两次（吃掉 zsh 的 running-jobs 警告）', () => {
+  const script = buildCloseScript(5220);
+  assert.match(script, /ASCII character 3/, '必须真发 Ctrl-C（SIGINT）才能打断前台卡在 sleep 里的看门狗循环');
+  assert.match(script, /do script[\s\S]*kill \$TP 2>\/dev\/null; exit; exit[\s\S]*in window id 5220/,
+    'exit 两次：zsh 对刚杀掉、job table 还没收到 SIGCHLD 的残留 job 会在第一次 exit 时只警告不退出');
+  assert.match(script, /close window id 5220/, '仍保留 close 兜底——万一 Terminal 没有自动收掉空 shell 窗口');
+  // windowId 消毒规则不能因为新增内容而失守
+  assert.match(buildCloseScript('5220; do shell script "rm -rf /"'), /in window id 0/);
+});
+
 test('状态文件：记录窗口 id 供下次启动关掉遗留窗口（server 被 kill -9 时没机会自清）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-logterm-'));
   const path = join(dir, 'log-terminal.json');
