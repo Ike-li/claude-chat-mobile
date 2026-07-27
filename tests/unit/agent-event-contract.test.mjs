@@ -167,7 +167,7 @@ test('inbound contract flags client emits and mock handlers outside the contract
 });
 
 test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量抽查）', () => {
-  // 40 = user:*(11) + task:stop + session:*(9) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + files:search + files:write + git:status + git:diff + doctor:run + service:status
+  // 41 = user:*(11) + task:stop + session:*(9) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + files:search + files:write + git:status + git:diff + doctor:run + service:status
   //      + worktree:sessions（linked worktree 会话发现，CLI「cd 进 worktree 即 /resume」的 web 等价物）
   //      + config:refresh（CLI 配置刷新按钮：force 重读 ensureCliDefaults + 广播，手动兜底终端侧改了 settings.json 后 compose 摘要不自动感知）
   //      + client:presence（PWA 前台/后台上报：visibilitychange/pagehide/连接成功时 emit，服务端记 socket.data.hidden，
@@ -175,7 +175,11 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        result 通知被误判『有人在看』而永久吞掉」）
   // （曾含 usage:get；抽屉额度窗已砍，额度只走 statusline。logs:clientError=前端全局 JS 错误上报落服务端日志；
   //   user:cancelQueued=排队消息撤回，对齐 CLI ESC；user:ackUnread=未读角标确认已读，点掉悬浮胶囊/翻到锚点时上报）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 40);
+  //      + hooks:setup（服务状态面板的「终端会话推送」一键开关：server 唯一会写用户全局
+  //        ~/.claude/settings.json 的路径，且只在已鉴权设备显式点击时 spawn 安装器；手机上跑不了
+  //        npm 命令，只留 CLI 入口等于让移动端用户永远发现不了这个能力）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 41);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('hooks:setup'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('client:presence'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('config:refresh'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('worktree:sessions'));

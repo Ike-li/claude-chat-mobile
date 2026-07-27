@@ -1605,6 +1605,34 @@ function formatAgo(ms) {
   return `${Math.floor(hours / 24)} ${t('天前')}`;
 }
 
+// 服务状态面板「终端会话推送」行：CLI hooks 桥的安装态 + 该给什么按钮。
+// 这是手机上唯一能开关它的入口（npm 命令只能在电脑终端跑），所以文案要说清"开了能多得到什么"。
+// 两处刻意不给按钮：① env 停用时——正解是改 .env 重启，给按钮等于误导；② 漂移时——用户自己动过
+// settings.json，一键覆盖会踩掉他的改动，交给他自己 hooks:status 决断。
+// 旧 server 不带 hooksBridge / 读不出状态 → 返回 null 整段不渲染，宁可缺席也不误报"未安装"。
+export function formatHooksBridgeRow(hooksBridge) {
+  const state = hooksBridge?.state;
+  if (!state || state === 'unknown') return null;
+  const label = t('终端会话推送');
+  if (hooksBridge.off) {
+    return { label, value: t('已停用（CLI_HOOKS_BRIDGE=off）'), tone: 'muted', action: null };
+  }
+  if (state === 'installed') {
+    return { label, value: t('已启用'), tone: 'ok', action: 'uninstall', actionText: t('关闭') };
+  }
+  if (state === 'drifted') {
+    return { label, value: t('配置已被改动'), tone: 'warn', action: null };
+  }
+  return {
+    label,
+    value: t('未启用'),
+    tone: 'muted',
+    action: 'install',
+    actionText: t('开启'),
+    hint: t('开启后，你在电脑终端里跑的会话完成或需要你时，手机会收到通知'),
+  };
+}
+
 // 组装会话面板"服务"小节文案（需要你之后、目录列表之前，仅异常时渲染）。空数组=一切正常。
 // 判定化告警三类，固定顺序：限速锁定(⛔ 安全信号) → 投递失败(🔔) → 前端错误(🐞)。
 // 各类均由服务端时效窗判定（超窗自动退场，见 metrics.js recentIncident/recentDeliveryFailure）；

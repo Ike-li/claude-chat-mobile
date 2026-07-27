@@ -49,6 +49,8 @@ let reconnectSettleMarkerArmed = false;
 // （~/.claude/sessions/<PID>.json）给 session:list 行标 terminal:'busy'|'alive'；mock 直接给两条
 // 无 live 实例的会话打上这两态，验证抽屉能区分渲染。
 let terminalBadgeArmed = false;
+// 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
+let mockHooksState = 'not-installed';
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
 const queuedEchoItems = new Map(); // busy 期回显为 queued 的消息 clientMessageId → {text}：user:cancelQueued 撤回 / interrupt 连带取消 都按它对账
 let foregroundSyncReplayMode = false;
@@ -104,6 +106,7 @@ function resetMockState() {
   reconnectDrawerTitleChanged = false;
   reconnectSettleMarkerArmed = false;
   terminalBadgeArmed = false;
+  mockHooksState = 'not-installed';
   busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
   foregroundFoundMissingMode = false;
@@ -1120,6 +1123,16 @@ io.on('connection', socket => {
 
   // 服务状态面板（与真 server service:status 契约对齐，判定化：不带裸计数器）：确定性 payload 供 E2E 断言；
   // deliveryFailure 由 test:service-delivery-failure 注入，rateLimitLockout/clientError 由 test:service-incidents 注入
+  // 一键开关（真 server 会 spawn 安装器写 ~/.claude/settings.json；mock 只翻状态位并回同款报告）
+  socket.on('hooks:setup', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const action = payload?.action;
+    if (!['install', 'uninstall', 'verify'].includes(action)) return ack({ ok: false, error: '未知操作' });
+    if (action === 'install') mockHooksState = 'installed';
+    if (action === 'uninstall') mockHooksState = 'not-installed';
+    ack({ ok: true, state: mockHooksState, report: action === 'install' ? '✅ 安装成功，端到端验证通过。' : '已移除。' });
+  });
+
   socket.on('service:status', (_payload, ack) => {
     if (typeof ack !== 'function') return;
     ack({
@@ -1129,6 +1142,8 @@ io.on('connection', socket => {
       deliveryFailure: mockDeliveryFailure,
       rateLimitLockout: mockRateLimitLockout,
       clientError: mockClientError,
+      // 「终端会话推送」段夹具：默认未安装（新用户初见的形态，也是最需要被引导的那一态）
+      hooksBridge: { state: mockHooksState, off: false },
       logging: { interactions: true, sdkDebug: false, stderr: true },
       timestamp: Date.now(),
     });
@@ -1646,6 +1661,13 @@ io.on('connection', socket => {
       // inst_2 的默认 sync:since 回放固定是 2 条顶层气泡（user_message + text_delta 各一），
       // unreadOnEntry=1 应定位到最后一条（resolveUnreadAnchorIndex(2,1)=1）。
       // P0-11x：给两条无 live 实例的主工作区会话标上终端直跑态，验证抽屉 ⌨️ 徽标 busy/alive 两态可区分。
+      command: 'test:hooks-installed',
+      run: async () => {
+        console.log('[mock] test:hooks-installed — 服务状态面板「终端会话推送」显示已启用');
+        mockHooksState = 'installed';
+      },
+    },
+    {
       command: 'test:terminal-badge',
       run: async () => {
         console.log('[mock] test:terminal-badge — archived=busy / gap=alive，下次 session:list 带 terminal 字段');

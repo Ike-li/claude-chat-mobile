@@ -6,6 +6,7 @@
 //   公网固定部署（Cloudflare Access 2FA / 隧道 / 常驻）不在向导内，见 docs/deployment.md。
 //   界面语言按环境 locale 自动选：zh_* → 中文，其余 → 英文。
 import { randomBytes } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
@@ -54,6 +55,10 @@ export const MESSAGES = {
     stepDoctor: '# 预检配置',
     stepStart: '# 启动；日志会打印手机可用的局域网地址',
     publicNote: '公网访问（固定域名 / Cloudflare Access 2FA / 常驻）见 docs/deployment.md。',
+    hooksPrompt: '安装 CLI hooks 桥? 让你在电脑终端直接跑的 claude 会话也能推送到手机 [Y/n] ',
+    hooksInstalling: '正在安装并验证…',
+    hooksSkipped: '已跳过。随时可跑 npm run hooks:install 补装。',
+    hooksFailed: '安装未成功（见上方输出）。不影响其余配置；稍后可跑 npm run hooks:install 重试。',
   },
   en: {
     title: '⚙  Claude Chat Mobile — setup wizard',
@@ -70,6 +75,10 @@ export const MESSAGES = {
     stepDoctor: '# pre-flight your config',
     stepStart: '# start; the log prints a LAN URL you can open on your phone',
     publicNote: 'Public access (fixed domain / Cloudflare Access 2FA / daemon): see docs/deployment.md.',
+    hooksPrompt: 'Install the CLI hooks bridge? Lets sessions you run in your own terminal push to your phone [Y/n] ',
+    hooksInstalling: 'Installing and verifying…',
+    hooksSkipped: 'Skipped. Run npm run hooks:install anytime.',
+    hooksFailed: 'Install did not complete (see output above). Your other config is fine; retry with npm run hooks:install.',
   },
 };
 
@@ -127,6 +136,21 @@ async function main() {
       console.error(`\n⚠️  .env.example 模板格式有变，AUTH_TOKEN 未能自动写入！请手动在 ${envPath} 里加一行：\nAUTH_TOKEN=${token}`);
     }
     console.log(`\n${c.green('✓')} ${t.wroteLabel} ${c.bold(envPath)} ${c.dim(t.permNote)}`);
+
+    // CLI hooks 桥：默认装（终端直跑的会话唯有装了它才能推到手机——轮询只能在你已经打开
+    // app 时追平镜像，永远不会主动叫你）。默认 Y 但必须问：它写的是用户全局 ~/.claude/settings.json。
+    // 此刻 server 通常还没起，安装器的服务级验证会显示"跳过"，文件级验证仍然真跑一遍。
+    const hooksAns = (await rl.question(`\n${t.hooksPrompt}`)).trim().toLowerCase();
+    if (hooksAns === '' || hooksAns === 'y' || hooksAns === 'yes') {
+      console.log(c.dim(t.hooksInstalling));
+      const r = spawnSync(process.execPath, [join(HERE, 'scripts', 'hooks-bridge-setup.js'), 'install'], {
+        stdio: 'inherit',
+      });
+      if (r.status !== 0) console.log(c.dim(t.hooksFailed));
+    } else {
+      console.log(c.dim(t.hooksSkipped));
+    }
+
     console.log(c.bold(`\n${t.nextSteps}`));
     console.log(`  ${c.accent('node scripts/doctor.js')}   ${c.dim(t.stepDoctor)}`);
     console.log(`  ${c.accent('npm start')}                ${c.dim(t.stepStart)}`);

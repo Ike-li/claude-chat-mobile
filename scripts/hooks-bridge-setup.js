@@ -28,26 +28,28 @@ import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  HOOK_EVENT_LIST,
+  HOOK_TIMEOUT_SEC,
   HOOK_VERIFY_PREFIX,
+  hooksInstalledStateMatches,
+  hooksPathsForHome,
+  matchingHookIndexes,
+  readClaudeSettings,
   readHookVerifyAck,
+  readHooksManifest,
   resolveHookDirs,
   scanHookEvents,
 } from '../src/ops/cli-hooks-bridge.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const RUNNER = join(ROOT, 'scripts', 'hooks-bridge.js');
-const HOOK_EVENTS = ['Stop', 'Notification'];
-const HOOK_TIMEOUT_SEC = 10;  // CLI 侧硬保险；runner 自带 2s 看门狗，正常 <100ms
 const VERIFY_FILE_TIMEOUT_MS = 5000;
 const VERIFY_ACK_TIMEOUT_MS = 3000;
 const VERIFY_POLL_MS = 50;
 
-function pathsForHome(home = homedir()) {
-  return {
-    settings: join(home, '.claude', 'settings.json'),
-    manifest: join(home, '.claude', 'ccm', 'hooks-v1', 'install-manifest.json'),
-  };
-}
+// 路径与安装态判定全部复用 src/ops/cli-hooks-bridge.js——server 侧（启动日志 / UI 按钮）也要判
+// 同一件事，两处各写一份迟早分叉。
+const pathsForHome = hooksPathsForHome;
 
 // 与 server inbox / runner 共用同一份路径解析
 const eventsDir = () => resolveHookDirs(process.env).eventsDir;
@@ -77,31 +79,7 @@ function assertNoInstallerSymlinks(home, paths) {
   }
 }
 
-// settings.json 不存在是合法起点（新装 claude 的用户可能还没有这个文件）——按 {} 处理并创建。
-// 这与 statusline 安装器"必须已有 statusLine 配置"的前置不同：那边要包裹用户已有的命令，
-// 这边是纯追加，无所依赖。
-function readSettings(path) {
-  const stat = lstatIfPresent(path);
-  if (!stat) return {};
-  const parsed = JSON.parse(readFileSync(path, 'utf8'));
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('Claude settings must be a JSON object');
-  }
-  return parsed;
-}
 
-function readManifest(path) {
-  const stat = lstatIfPresent(path);
-  if (!stat) return null;
-  if (stat.isSymbolicLink()) throw new Error(`hooks bridge refused symbolic link path: ${path}`);
-  const parsed = JSON.parse(readFileSync(path, 'utf8'));
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
-      || typeof parsed.installedCommand !== 'string'
-      || !Array.isArray(parsed.events)) {
-    throw new Error('hooks bridge manifest is invalid');
-  }
-  return parsed;
-}
 
 function atomicWriteJson(path, value, { privateParent = false } = {}) {
   const parent = dirname(path);
@@ -158,33 +136,15 @@ function entriesOf(settings, event) {
   return Array.isArray(list) ? list : null;
 }
 
-function matchingIndexes(settings, event, installedCommand) {
-  const list = entriesOf(settings, event) || [];
-  const hits = [];
-  list.forEach((entry, index) => {
-    const hooks = Array.isArray(entry?.hooks) ? entry.hooks : [];
-    if (hooks.length === 1 && hooks[0]?.type === 'command'
-        && hooks[0]?.command === installedCommand && hooks[0]?.timeout === HOOK_TIMEOUT_SEC
-        && !Object.hasOwn(entry, 'matcher')) {
-      hits.push(index);
-    }
-  });
-  return hits;
-}
 
-// 已安装 = manifest 记录的每个事件下【恰好一条】完全吻合的条目。多于一条 / 被改 / 缺失都算漂移，
-// 由用户自己决断（我们不猜、不强行覆盖）。
-function installedStateMatches(settings, manifest) {
-  return manifest.events.every(event => matchingIndexes(settings, event, manifest.installedCommand).length === 1);
-}
 
 function status(home = homedir()) {
   const paths = pathsForHome(home);
   assertNoInstallerSymlinks(home, paths);
-  const settings = readSettings(paths.settings);
-  const manifest = readManifest(paths.manifest);
+  const settings = readClaudeSettings(paths.settings);
+  const manifest = readHooksManifest(paths.manifest);
   return {
-    state: manifest && installedStateMatches(settings, manifest) ? 'installed'
+    state: manifest && hooksInstalledStateMatches(settings, manifest) ? 'installed'
       : manifest ? 'drifted'
         : 'not-installed',
     manifestExists: manifest !== null,
@@ -203,7 +163,7 @@ function applyInstall(settings, installedCommand, events) {
     createdArray[event] = existing === undefined;
     if (createdArray[event]) settings.hooks[event] = [];
     // 追加而非覆盖：用户既有 hook 条目原样保留
-    if (!matchingIndexes(settings, event, installedCommand).length) {
+    if (!matchingHookIndexes(settings, event, installedCommand).length) {
       settings.hooks[event].push(hookEntryFor(installedCommand));
     }
   }
@@ -213,11 +173,11 @@ function applyInstall(settings, installedCommand, events) {
 function install(home = homedir()) {
   const paths = pathsForHome(home);
   assertNoInstallerSymlinks(home, paths);
-  const settings = readSettings(paths.settings);
-  const existingManifest = readManifest(paths.manifest);
+  const settings = readClaudeSettings(paths.settings);
+  const existingManifest = readHooksManifest(paths.manifest);
 
   if (existingManifest) {
-    if (installedStateMatches(settings, existingManifest)) {
+    if (hooksInstalledStateMatches(settings, existingManifest)) {
       return { state: 'installed', idempotent: true, installedCommand: existingManifest.installedCommand };
     }
     // manifest 在、settings 里却没有（或不完整）——中断的安装，按 manifest 补完。
@@ -229,7 +189,7 @@ function install(home = homedir()) {
   }
 
   const installedCommand = bridgeHookCommand();
-  for (const event of HOOK_EVENTS) {
+  for (const event of HOOK_EVENT_LIST) {
     const list = entriesOf(settings, event) || [];
     if (list.some(entry => (entry?.hooks || []).some(h => looksLikeHooksBridge(h?.command)))) {
       throw new Error('install refused: a hooks-bridge entry already exists without its manifest');
@@ -237,10 +197,10 @@ function install(home = homedir()) {
   }
   // 先在内存里套用（非法形态在此抛出，settings/manifest 都还没落盘 → 零改写）
   const draft = JSON.parse(JSON.stringify(settings));
-  const containers = applyInstall(draft, installedCommand, HOOK_EVENTS);
+  const containers = applyInstall(draft, installedCommand, HOOK_EVENT_LIST);
   // 写序：manifest 先落盘。中断在此 → 下次 install 走上面的 recovered 分支补完；
   // 反序（先改 settings）中断会留下一条无主 hook，卸载无从下手。
-  atomicWriteJson(paths.manifest, { installedCommand, events: HOOK_EVENTS, ...containers }, { privateParent: true });
+  atomicWriteJson(paths.manifest, { installedCommand, events: HOOK_EVENT_LIST, ...containers }, { privateParent: true });
   atomicWriteJson(paths.settings, draft);
   return { state: 'installed', idempotent: false, installedCommand };
 }
@@ -248,16 +208,16 @@ function install(home = homedir()) {
 function uninstall(home = homedir()) {
   const paths = pathsForHome(home);
   assertNoInstallerSymlinks(home, paths);
-  const manifest = readManifest(paths.manifest);
+  const manifest = readHooksManifest(paths.manifest);
   if (!manifest) throw new Error('uninstall refused: hooks bridge manifest is missing');
-  const settings = readSettings(paths.settings);
-  if (!installedStateMatches(settings, manifest)) {
+  const settings = readClaudeSettings(paths.settings);
+  if (!hooksInstalledStateMatches(settings, manifest)) {
     throw new Error('uninstall CAS refused: hooks entries no longer match the installed state');
   }
   for (const event of manifest.events) {
     const list = entriesOf(settings, event);
     if (!list) continue;
-    const [index] = matchingIndexes(settings, event, manifest.installedCommand);
+    const [index] = matchingHookIndexes(settings, event, manifest.installedCommand);
     list.splice(index, 1);
     // 只回收我们自己创建的空容器；用户原本就有的空数组保持原样
     if (!list.length && manifest.createdArray?.[event]) delete settings.hooks[event];
@@ -303,10 +263,10 @@ function resolvePort() {
 // （node 路径、脚本路径、目录可建可写、权限正确），不是"我们以为写对了"。
 function verify(home = homedir()) {
   const paths = pathsForHome(home);
-  const manifest = readManifest(paths.manifest);
+  const manifest = readHooksManifest(paths.manifest);
   if (!manifest) throw new Error('尚未安装（没有 install-manifest.json）——先跑 npm run hooks:install');
-  const settings = readSettings(paths.settings);
-  if (!installedStateMatches(settings, manifest)) {
+  const settings = readClaudeSettings(paths.settings);
+  if (!hooksInstalledStateMatches(settings, manifest)) {
     throw new Error('安装状态已漂移：settings.json 里的 hook 条目与安装记录不一致，先跑 npm run hooks:status 检查');
   }
 

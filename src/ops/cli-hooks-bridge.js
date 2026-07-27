@@ -98,8 +98,11 @@ export function isVerifyEvent(event) {
 }
 
 // server 启动时自建投递箱目录：目录存在 watch 才建得起来，否则"装完 hooks 得重启 server 才生效"。
-// 注意这只创建 ccm 自己命名空间下的目录（~/.claude/ccm/hooks-v1/），与"server 永不自动写
-// ~/.claude/settings.json"那条红线无关——写用户 CLI 配置仍然只能由用户显式跑安装器。
+// 注意这只创建 ccm 自己命名空间下的目录（~/.claude/ccm/hooks-v1/）。
+// 写用户 CLI 配置（~/.claude/settings.json）的红线是：**只在用户显式动作时写**——CLI 侧跑安装器，
+// 或已鉴权设备在服务状态面板点「开启终端会话推送」（socket hooks:setup，2026-07-26 机主批准开的口子，
+// 理由：手机上跑不了 npm，只留 CLI 入口等于让移动端用户永远发现不了这个能力）。
+// 启动、连接、任何后台时机一律不写。
 export function ensureHooksDirectory(dir) {
   return ensurePrivateDirectory(dir);
 }
@@ -234,6 +237,84 @@ export function sweepHookEvents({ dir = DEFAULT_CLI_HOOKS_EVENTS_DIR } = {}) {
     }
   } catch { /* 目录不存在 */ }
   return removed;
+}
+
+// ── 安装态（读侧）─────────────────────────────────────────────────────────────
+// 判定逻辑放在 ops 而非安装器脚本里：server 也要知道装没装（启动日志、UI 提示、一键安装按钮），
+// 而模块边界守卫禁止运行时源码 import scripts/。安装器改为复用这里，保证两边判定永不分叉。
+export const HOOK_EVENT_LIST = ['Stop', 'Notification'];
+export const HOOK_TIMEOUT_SEC = 10; // CLI 侧硬保险；runner 自带 2s 看门狗，正常 <100ms
+
+export function hooksPathsForHome(home = homedir()) {
+  return {
+    settings: join(home, '.claude', 'settings.json'),
+    manifest: join(home, '.claude', 'ccm', 'hooks-v1', 'install-manifest.json'),
+  };
+}
+
+function lstatIfPresent(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+// settings.json 不存在是合法起点（新装 claude 的用户可能还没这个文件）→ 视作 {}。
+export function readClaudeSettings(path) {
+  const stat = lstatIfPresent(path);
+  if (!stat) return {};
+  const parsed = JSON.parse(readFileSync(path, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Claude settings must be a JSON object');
+  }
+  return parsed;
+}
+
+export function readHooksManifest(path) {
+  const stat = lstatIfPresent(path);
+  if (!stat) return null;
+  if (stat.isSymbolicLink()) throw new Error(`hooks bridge refused symbolic link path: ${path}`);
+  const parsed = JSON.parse(readFileSync(path, 'utf8'));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+      || typeof parsed.installedCommand !== 'string' || !Array.isArray(parsed.events)) {
+    throw new Error('hooks bridge manifest is invalid');
+  }
+  return parsed;
+}
+
+// 我们自己写的条目长什么样（形状完全吻合才算，多一个 matcher 都不算——那是用户自己加的）
+export function matchingHookIndexes(settings, event, installedCommand) {
+  const list = Array.isArray(settings?.hooks?.[event]) ? settings.hooks[event] : [];
+  const hits = [];
+  list.forEach((entry, index) => {
+    const hooks = Array.isArray(entry?.hooks) ? entry.hooks : [];
+    if (hooks.length === 1 && hooks[0]?.type === 'command'
+        && hooks[0]?.command === installedCommand && hooks[0]?.timeout === HOOK_TIMEOUT_SEC
+        && !Object.hasOwn(entry, 'matcher')) {
+      hits.push(index);
+    }
+  });
+  return hits;
+}
+
+// 已安装 = manifest 记录的每个事件下【恰好一条】完全吻合的条目。多于一条 / 被改 / 缺失都算漂移，
+// 交给用户决断（不猜、不强行覆盖）。
+export function hooksInstalledStateMatches(settings, manifest) {
+  return manifest.events.every(e => matchingHookIndexes(settings, e, manifest.installedCommand).length === 1);
+}
+
+// 三态安装状态；任何读失败一律按 'unknown' 上报，绝不让它影响调用方主流程。
+export function readHooksInstallState({ home = homedir() } = {}) {
+  try {
+    const paths = hooksPathsForHome(home);
+    const manifest = readHooksManifest(paths.manifest);
+    if (!manifest) return 'not-installed';
+    return hooksInstalledStateMatches(readClaudeSettings(paths.settings), manifest) ? 'installed' : 'drifted';
+  } catch {
+    return 'unknown';
+  }
 }
 
 // 节流类别：**必须**是 pending:false 的一次性类别，绝不能复用 'approval'/'input'——后两者被

@@ -11,7 +11,7 @@ import { maskToken } from '../shared/sanitizer.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFile } from 'node:child_process';
 import { createRequire } from 'node:module';
 import express from 'express';
 import { Server } from 'socket.io';
@@ -22,7 +22,7 @@ import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
-import { decideHookEventActions, resolveHookDirs } from '../ops/cli-hooks-bridge.js';
+import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
 import { createHooksInbox } from './hooks-inbox.js';
 import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
@@ -711,7 +711,17 @@ function computeServiceHealth() {
       : null,
     rateLimitLockout: lockout ? { ...lockout, count: c.rate_limit_lockouts ?? 0 } : null,
     clientError: clientError ? { ...clientError, count: c.client_errors ?? 0 } : null,
+    // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
+    // 这个值只在用户装/卸时变，而 instances 广播很频繁。
+    hooksBridge: { state: hooksInstallState, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
   };
+}
+
+// 安装态缓存：启动时读一次，装/卸后由 refreshHooksInstallState 主动刷新。
+let hooksInstallState = 'unknown';
+function refreshHooksInstallState() {
+  hooksInstallState = readHooksInstallState();
+  return hooksInstallState;
 }
 // approved 房间里的实际 Socket 对象（非仅 id/size）：喂给 hasForegroundApprovedClient 判定"前台可见"，
 // 而不只是"连着"。两处复用：onEvent 的 result 完成通知 hasClients 计算 + client:presence 的"跳变检测"
@@ -1157,6 +1167,18 @@ const hooksInbox = createHooksInbox({
   enabled: process.env.CLI_HOOKS_BRIDGE !== 'off',
   onEvents: processHookEvents,
 });
+// 启动时把安装态说清楚。这一行专治"装了 hooks 却跑着旧 server"——那种情况下 CLI 一直往投递箱写、
+// 没人消费，用户只看到"装了没反应"；升级重启后这行日志就是接上了的凭据。
+refreshHooksInstallState();
+if (process.env.CLI_HOOKS_BRIDGE === 'off') {
+  console.log('[hooks] CLI hooks 桥已由 CLI_HOOKS_BRIDGE=off 停用（事件不消费）');
+} else if (hooksInstallState === 'installed') {
+  console.log('[hooks] CLI hooks 桥已安装，投递箱监听中——终端会话回合结束/需要你会即时刷新并推送');
+} else if (hooksInstallState === 'drifted') {
+  console.log('[hooks] ⚠️ CLI hooks 桥安装记录与 ~/.claude/settings.json 已漂移，运行 npm run hooks:status 检查');
+} else {
+  console.log('[hooks] CLI hooks 桥未安装：终端直跑的会话仅靠轮询、无推送（npm run hooks:install 或在设置面板一键启用）');
+}
 
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']; // 5 档硬编码，漂移由 smoke-effort 的 CLI warning 检测
 // 最近一次 init payload + 按 cwd 归键的 models / slashCommands 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
@@ -2616,6 +2638,31 @@ registerSocketConnection(io, socket => {
 
   // ④ UI 安全体检：6 项运行时检查 + 全局危险白名单审查。走 on() 鉴权闸（deviceApproved fail-closed）。
   // 全程脱敏（runDoctor 只出布尔/计数/危险规则串，绝不回显明文 token/绝对路径/AUD/密钥）。
+  // CLI hooks 桥的一键安装/卸载。**这是 server 唯一会写用户全局 ~/.claude/settings.json 的路径**，
+  // 且只在已鉴权设备显式点击时执行——绝不在启动、连接或任何后台时机自动触发。
+  // 之所以开这个口子：ccm 的主界面在手机上，而 npm 命令只能在电脑终端跑；只留 CLI 入口等于让手机
+  // 用户永远发现不了这个功能（它又恰恰是终端会话能推手机的唯一通道）。
+  // 实现上不复用内存里的函数，而是 spawn 安装器脚本：安装器已有全套纪律（symlink fail-closed /
+  // 原子写 / 先 manifest 后 settings / 幂等 / CAS 卸载 / 回环验证），进程隔离也保证它崩了不掀翻 server。
+  on(socket, 'hooks:setup', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const action = payload?.action;
+    if (!['install', 'uninstall', 'verify'].includes(action)) return ack({ ok: false, error: '未知操作' });
+    execFile(process.execPath, [join(HERE, 'scripts', 'hooks-bridge-setup.js'), action], {
+      cwd: HERE, timeout: 20000, maxBuffer: 256 * 1024,
+    }, (err, stdout, stderr) => {
+      const state = refreshHooksInstallState();
+      broadcastInstances(); // 安装态变了 → 面板/镜像提示即时跟上
+      // 报告直接回传安装器的人类可读输出（含四种结局文案），前端原样展示，不在两处各写一套话术
+      const report = String(stdout || '').split('\n').filter(l => l && !l.trim().startsWith('{')).join('\n').trim();
+      ack({
+        ok: !err,
+        state,
+        report: report || String(stderr || '').trim().split('\n').slice(-3).join('\n') || (err ? '执行失败' : ''),
+      });
+    });
+  });
+
   on(socket, 'doctor:run', (_payload, ack) => {
     if (typeof ack !== 'function') return;
     ack(runDoctor({
@@ -2647,6 +2694,7 @@ registerSocketConnection(io, socket => {
       deliveryFailure: health.deliveryFailure,
       rateLimitLockout: health.rateLimitLockout,
       clientError: health.clientError,
+      hooksBridge: health.hooksBridge, // 面板「终端会话推送」段：显示安装态 + 一键安装/卸载
       // 日志开关可见性：DEBUG_SDK_MESSAGES 长开曾把日志刷到 149M 而无任何界面可见——
       // 面板「日志开关」行据此渲染（sdkDebug 开着标黄）。env 启动时定死，ack 时读即最新。
       logging: {

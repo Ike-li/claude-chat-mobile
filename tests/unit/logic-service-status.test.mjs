@@ -3,7 +3,7 @@
 // 裸计数器段已判定化撤除（serviceMetricsRows 删除）：原始计数留 /metrics 巡检端点。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatUptime, serviceStatusBasicRows, formatServiceNotices } from '../../public/js/logic.js';
+import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatHooksBridgeRow } from '../../public/js/logic.js';
 
 test.describe('formatUptime：运行时长分档', () => {
   test('非法/负 → 空串（接线层据此显「未知」）', () => {
@@ -124,4 +124,28 @@ test.describe('告警段复用 formatServiceNotices（ack 形状入参）', () =
       []
     );
   });
+});
+
+// 「终端会话推送」段：唯一暴露 CLI hooks 桥安装态的界面（手机上没法跑 npm，这是唯一入口）。
+// 旧 server 不带 hooksBridge 字段 → 整段优雅缺席，不显示误导性的"未安装"。
+test('formatHooksBridgeRow：四态文案 + 按钮动作，旧 server 缺字段则不渲染', () => {
+  assert.equal(formatHooksBridgeRow(undefined), null, '旧 server 无此字段 → 不渲染整段');
+  assert.equal(formatHooksBridgeRow({ state: 'unknown' }), null, '读不出安装态 → 宁可不显示，也不误报未装');
+
+  const off = formatHooksBridgeRow({ state: 'installed', off: true });
+  assert.match(off.value, /已停用|off/i);
+  assert.equal(off.action, null, '被 env 停用时不给按钮——改 .env 才是正确解法，点按钮解决不了');
+
+  const installed = formatHooksBridgeRow({ state: 'installed' });
+  assert.match(installed.value, /已启用/);
+  assert.equal(installed.action, 'uninstall');
+  assert.equal(installed.tone, 'ok');
+
+  const missing = formatHooksBridgeRow({ state: 'not-installed' });
+  assert.match(missing.value, /未启用/);
+  assert.equal(missing.action, 'install');
+
+  const drifted = formatHooksBridgeRow({ state: 'drifted' });
+  assert.equal(drifted.tone, 'warn');
+  assert.equal(drifted.action, null, '漂移时不给一键覆盖——用户自己动过配置，得他自己决断');
 });

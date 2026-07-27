@@ -85,4 +85,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // P0-22d（hooks 采纳缺口）：「终端会话推送」是 CLI hooks 桥在手机上的唯一开关入口——npm 命令只能在
+  // 电脑终端跑，没有这个面板，移动端用户永远发现不了这个能力（而它恰恰是终端会话唯一能推手机的通道）。
+  test('P0-22d 终端会话推送段：未装显示开启按钮 → 点击后翻为已启用', async ({ page }) => {
+    await gotoMock(page);
+    await waitForIdle(page);
+
+    await page.locator('#btnSettings').click();
+    await page.locator('#btnServiceStatus').click();
+    const body = page.locator('#serviceStatusBody');
+    await expect(body).toContainText('终端会话推送');
+    await expect(body).toContainText('未启用');
+    await expect(body).toContainText('手机会收到通知');
+
+    // 写用户全局 ~/.claude/settings.json 之前必须先确认——这是 server 唯一会动那个文件的路径
+    await body.getByRole('button', { name: '开启' }).click();
+    await expect(page.locator('#confirmSheet')).toBeVisible();
+    await expect(page.locator('#confirmSheet')).toContainText('~/.claude/settings.json');
+    await page.locator('#confirmOk').click();
+
+    await expect(body).toContainText('已启用');
+    await expect(body.getByRole('button', { name: '关闭' })).toBeVisible();
+    await expectNoBrowserErrors(page);
+  });
 });

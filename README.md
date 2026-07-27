@@ -82,6 +82,8 @@ npm run hooks:verify     # 随时重跑端到端验证
 npm run hooks:uninstall  # 只摘掉自己的 hook 条目，你已有的 hooks 一字不动
 ```
 
+也可以在手机上开：**设置 → 服务状态 → 终端会话推送 → 开启**（确认后由 server 代跑安装器，同样只在你点击时才写配置）。首次跑 `npm run setup` 向导时也会问一次，默认装。
+
 装完**重开终端里的 claude 会话**才会加载 hooks。server 不在时 hook 只是静默落盘，绝不影响 CLI 本身；临时停用在 `.env` 设 `CLI_HOOKS_BRIDGE=off`，不必卸载。
 
 然后在手机上打开。启动日志会打印已带 token 的可用 URL：

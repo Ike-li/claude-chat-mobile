@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -1176,10 +1176,57 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     }
     serviceStatusBody.appendChild(noticesSection);
+    // 段3 终端会话推送：CLI hooks 桥开关。放在服务状态面板而非会话设置里——它是主机级能力
+    // （影响这台机器上所有终端会话），不属于"当前这个会话"的档位。旧 server 无字段 → 整段不渲染。
+    const hooksRow = formatHooksBridgeRow(res.hooksBridge);
+    if (hooksRow) {
+      const sec = section(t('终端会话推送'));
+      const row = el(`<div class="flex items-center justify-between gap-3 px-3 py-2.5 text-xs"><span class="text-ink-soft font-medium shrink-0"></span></div>`);
+      row.firstChild.textContent = hooksRow.value;
+      const toneCls = { ok: 'text-success', warn: 'text-warning', muted: 'text-ink-faint' }[hooksRow.tone];
+      if (toneCls) row.firstChild.classList.add(toneCls);
+      if (hooksRow.action) {
+        const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70"></button>`);
+        btn.textContent = hooksRow.actionText;
+        btn.onclick = () => runHooksSetup(hooksRow.action, btn);
+        row.appendChild(btn);
+      }
+      sec.lastChild.appendChild(row);
+      if (hooksRow.hint) {
+        const h = el(`<div class="px-3 pb-2.5 text-[10px] text-ink-faint border-t border-line-soft pt-2"></div>`);
+        h.textContent = hooksRow.hint;
+        sec.lastChild.appendChild(h);
+      }
+      serviceStatusBody.appendChild(sec);
+    }
     const hint = el(`<div class="text-[10px] text-ink-faint"></div>`);
     hint.textContent = t('数据每 5 秒自动刷新 · 告警超 24 小时自动退场 · 原始计数见 /metrics');
     serviceStatusBody.appendChild(hint);
   }
+  // 一键安装/卸载 hooks 桥。安装要写用户全局 ~/.claude/settings.json，所以先明确确认——
+  // 这是 server 唯一会动那个文件的路径，必须让用户知道自己在批准什么。
+  // 报告直接回显安装器输出（含四种结局文案），不在前端另写一套话术。
+  async function runHooksSetup(action, btn) {
+    const installing = action === 'install';
+    const okConfirm = await appConfirm({
+      title: installing ? t('开启终端会话推送？') : t('关闭终端会话推送？'),
+      body: installing
+        ? t('会往 ~/.claude/settings.json 追加两个 hook（你已有的配置原样保留）。已在跑的终端会话需重开才生效。')
+        : t('会移除本项目添加的那两个 hook 条目，你已有的 hooks 不受影响。'),
+      okText: installing ? t('开启') : t('关闭'),
+      tone: installing ? 'default' : 'warn',
+    });
+    if (!okConfirm) return;
+    btn.disabled = true;
+    btn.textContent = t('处理中…');
+    socket.timeout(25000).emit('hooks:setup', { action }, (err, res) => {
+      btn.disabled = false;
+      if (err || !res) { addBar(t('操作超时，请重试'), 'text-danger'); loadServiceStatus(); return; }
+      addBar(res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok ? 'text-ink-faint' : 'text-danger');
+      loadServiceStatus(); // 重拉刷新本段状态
+    });
+  }
+
   function loadServiceStatus() {
     if (!serviceStatusModal || !serviceStatusModal.classList.contains('sheet-open')) return;
     socket.timeout(3000).emit('service:status', {}, (err, res) => {
@@ -6034,6 +6081,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // 只读锁：禁用输入 + 发送位「续接」；状态文案写进 input placeholder，不再占单独横幅行。
   // 三态：driving / armed / stale（formatMirrorBannerText）。自动解锁仍在服务端 ~12.5s 静默。
+  // 只读镜像页（= 正在看一个终端驾驶的会话）是"终端会话推送"价值最直观的时刻：用户此刻正盯着
+  // 别处在跑的东西。未装 hooks 时在这里提示一次——只提示一次并永久记住，不做成每次都弹的噪音。
+  const HOOKS_HINT_KEY = 'ccm.hooksHintDismissed';
+  function maybeHintHooksBridge() {
+    if (!mirrorReadonlySid) return;
+    const hb = latestServiceHealth?.hooksBridge;
+    if (!hb || hb.off || hb.state !== 'not-installed') return;
+    try {
+      if (localStorage.getItem(HOOKS_HINT_KEY) === '1') return;
+      localStorage.setItem(HOOKS_HINT_KEY, '1');
+    } catch { return; } // 隐私模式下 localStorage 不可用 → 干脆不提示，也不每次都弹
+    addBar(t('提示：开启「终端会话推送」后，电脑终端里的会话跑完会通知你手机（设置 → 服务状态）'), 'text-ink-faint');
+  }
+
   function refreshMirrorComposerCopy() {
     if (!inputEl) return;
     if (!mirrorReadonlySid) {
@@ -6042,6 +6103,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     const armed = armedTakeoverSid === mirrorReadonlySid;
     inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag });
+    maybeHintHooksBridge();
     // 兼容：隐藏节点若仍在 DOM，同步文案（不展示）
     if (mirrorBannerText) mirrorBannerText.textContent = inputEl.placeholder;
     if (mirrorBannerIcon) mirrorBannerIcon.textContent = armed ? '⏳' : (mirrorStaleFlag ? '⚠️' : '⏱');
