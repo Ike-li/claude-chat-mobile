@@ -632,6 +632,21 @@ export function modelEntryFor(value, modelsList) {
   }) || null;
 }
 
+// 模型的「给人看的名字」：用于会话设置里折叠头的当前值、以及思考强度区块的归属标签。
+// 走与 effortLevelsFor 同一条 modelEntryFor 桥接路径——两处若各解析一套，会出现标题写着 A、
+// 档位却是 B 的错位。取 displayName 与模型磁贴主标题同源，无则回落 value，解析不到则诚实回落原值。
+// ⚠️ 与底栏 model chip 是**两套有意不同**的展示：chip 显原始 value（P0-09e/P0-09j 锁定它不得被
+// displayName 覆盖，用户选了 opus 就得看到 opus）；这里替代的是磁贴列表，故随磁贴用 displayName。
+// 空模型（CLI「不 pin」语义）返回空串：没有具体模型可归属时，由调用方给「当前模型」的兜底文案，
+// 不能把 'default' 这种内部字面量摆给用户看。
+export function modelLabelFor(modelValue, modelsList) {
+  if (!modelValue) return '';
+  const entry = modelEntryFor(modelValue, modelsList);
+  if (entry && typeof entry === 'object') return entry.displayName || entry.value || modelValue;
+  if (typeof entry === 'string' && entry) return entry;
+  return modelValue;
+}
+
 // 展示层模型名解析：网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_*_MODEL）下，
 // 消息发送 / setModel 仍用档位别名（如 "opus"），但给人看的地方应显示 SDK supportedModels() 解析出的
 // 真实 wire id（resolvedModel，如 "mimo-v2.5-pro-ultraspeed"）——不然 UI 时而显示 opus 时而显示网关模型名。

@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Locator, type Page } from '@playwright/test';
-import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 async function expectWithinViewport(page: Page, locator: Locator) {
   await expect(locator).toBeVisible();
@@ -106,9 +106,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       // 内容区内部滚动；标题栏固定在 sheet 顶部，背后主页面被 ccm-sheet-open 锁住
       await page.locator('#settingsSheetBody').evaluate(el => { el.scrollTop = el.scrollHeight; });
       await expectWithinViewport(page, page.locator('#settingsSheetTitle'));
-      await expectWithinViewport(page, page.locator('#accessHelpOpen'));
+      await expectWithinViewport(page, page.locator('#permSection summary'));
       await closeSettings(page);
       await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
+
+      // 通用设置是两个 sheet 里更长的那个（本机 + 主机 + 访问帮助三节），底部控件最容易被顶出视口
+      await openGeneralSettings(page);
+      await page.locator('#generalSheetBody').evaluate(el => { el.scrollTop = el.scrollHeight; });
+      await expectWithinViewport(page, page.locator('#generalSheetTitle'));
+      await expectWithinViewport(page, page.locator('#accessHelpOpen'));
+      await closeGeneralSettings(page);
+      await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
 
       await page.locator('#btnConsole').click();
       await expect(page.locator('#consoleModal')).toBeVisible();

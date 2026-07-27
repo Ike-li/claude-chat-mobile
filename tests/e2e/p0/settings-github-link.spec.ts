@@ -2,14 +2,13 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { gotoMock, expectNoBrowserErrors } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, openGeneralSettings } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-23 设置面板：GitHub 仓库入口指向正确地址且新标签页打开', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#btnSettings').click();
-    await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+    await openGeneralSettings(page);
 
     const link = page.locator('#linkGithub');
     await expect(link).toBeVisible();

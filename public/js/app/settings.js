@@ -1,11 +1,34 @@
 // 打开配置面板时锁住背后主页面滚动（#messages / body），避免上滑把聊天内容顶穿面板。
 // 关闭时还原；body 上挂 class 便于 CSS 兜底 + 测试探测。
 // 关法：点遮罩 / Escape / 把手区下拉（位移或快甩）。
+//
+// 本控制器驱动两个同构的底部 sheet（配置按作用域拆开后）：
+//   会话设置 #settingsSheet（齿轮，模型/权限/思考强度，随 composer 显隐）
+//   通用设置 #generalSheet（侧栏底部入口，本机偏好 + 主机与服务，全局可达）
+// 二者的开合/手势/滚动锁完全一样，故只参数化 DOM key，不复制第二份实现。
 import { resolveSheetDragEnd } from '../logic.js';
 
 const SHEET_OPEN_CLASS = 'ccm-sheet-open';
 
+// 默认指向会话设置那套 id——现有调用点与单测因此零改动。
+const DEFAULT_KEYS = {
+  sheet: 'settingsSheet',
+  body: 'settingsSheetBody',
+  scrim: 'settingsScrim',
+  dragZone: 'settingsDragZone',
+  close: 'settingsClose',
+  trigger: 'btnSettings',
+};
+
 export function createSettingsController(context, {
+  // 本控制器操作哪一组 DOM（见 DEFAULT_KEYS）。
+  keys: keyOverrides = null,
+  // 本 sheet 是否承载「提示音/震动/前台通知/推送预览/语言」这套本机偏好。拆分后它们全在通用设置里，
+  // 会话设置传 false 跳过回填与开关绑定（那些 DOM 根本不在它的子树内）。
+  syncPrefs = true,
+  // 打开前的钩子：通用设置用它收掉可能还开着的会话设置，避免两层 sheet 叠着。
+  // **必须走这个参数而不是在 app.js 侧包装 open()**，理由同下方 onOpen 的头注。
+  beforeOpen = () => {},
   alerts,
   // ⑧ 推送内容预览：get/set 由 app.js 注入（读写 localStorage + set 时触发重新订阅，把新偏好带给服务端）。
   // 独立于 alerts（那是本地提示音/震动，不涉网络）；duck-typed 最小接口，settings.js 不需要认识整个
@@ -25,6 +48,9 @@ export function createSettingsController(context, {
   now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now()),
 } = {}) {
   const dom = context.dom;
+  const keys = { ...DEFAULT_KEYS, ...(keyOverrides || {}) };
+  const sheetEl = () => dom[keys.sheet];
+  const scrimEl = () => dom[keys.scrim];
 
   /** @type {null | {
    *   pointerId: number,
@@ -47,7 +73,7 @@ export function createSettingsController(context, {
   }
 
   function resetSheetMotion() {
-    const sheet = dom.settingsSheet;
+    const sheet = sheetEl();
     if (!sheet) return;
     sheet.classList?.remove?.('is-dragging');
     // 单测 mock 可能无 style 对象
@@ -55,10 +81,11 @@ export function createSettingsController(context, {
       sheet.style.transform = '';
       sheet.style.transition = '';
     }
-    if (dom.settingsScrim?.style) dom.settingsScrim.style.opacity = '';
+    if (scrimEl()?.style) scrimEl().style.opacity = '';
   }
 
   function syncPreferences() {
+    if (!syncPrefs) return;
     const preferences = alerts.preferences();
     if (dom.prefAlertSound) dom.prefAlertSound.checked = !!preferences.sound;
     if (dom.prefAlertVibrate) dom.prefAlertVibrate.checked = !!preferences.vibrate;
@@ -68,15 +95,16 @@ export function createSettingsController(context, {
   }
 
   function open() {
+    try { beforeOpen(); } catch { /* 收另一个 sheet 失败不能让本面板打不开 */ }
     haptic('tap');
     alerts.ensureAudio?.();
     syncPreferences();
     // 内容区每次打开滚回顶部，避免上次停在底部再打开时「像丢了半截」
-    if (dom.settingsSheetBody) dom.settingsSheetBody.scrollTop = 0;
-    else if (dom.settingsSheet) dom.settingsSheet.scrollTop = 0;
+    if (dom[keys.body]) dom[keys.body].scrollTop = 0;
+    else if (sheetEl()) sheetEl().scrollTop = 0;
     resetSheetMotion();
-    dom.settingsSheet?.classList.remove('translate-y-full');
-    dom.settingsScrim?.classList.remove('hidden');
+    sheetEl()?.classList.remove('translate-y-full');
+    scrimEl()?.classList.remove('hidden');
     lockBackgroundScroll();
     try { onOpen(); } catch { /* 动态段渲染失败不能让面板打不开 */ }
   }
@@ -85,8 +113,8 @@ export function createSettingsController(context, {
     haptic('tap');
     drag = null;
     resetSheetMotion();
-    dom.settingsSheet?.classList.add('translate-y-full');
-    dom.settingsScrim?.classList.add('hidden');
+    sheetEl()?.classList.add('translate-y-full');
+    scrimEl()?.classList.add('hidden');
     unlockBackgroundScroll();
   }
 
@@ -103,7 +131,8 @@ export function createSettingsController(context, {
   }
 
   function isOpen() {
-    return Boolean(dom.settingsSheet && !dom.settingsSheet.classList.contains('translate-y-full'));
+    const sheet = sheetEl();
+    return Boolean(sheet && !sheet.classList.contains('translate-y-full'));
   }
 
   function onKeydown(ev) {
@@ -116,21 +145,21 @@ export function createSettingsController(context, {
   // ── 把手区下拉关闭 ──────────────────────────────────────────
   // 只在 handle + 标题头（#settingsDragZone）启动；内容区滚动不受影响。
   function applyDragVisual(dy) {
-    const sheet = dom.settingsSheet;
+    const sheet = sheetEl();
     if (!sheet) return;
     sheet.style.transform = `translateY(${dy}px)`;
     // 下拉时遮罩渐隐（底 0.4 ≈ Tailwind black/40）
-    if (dom.settingsScrim) {
+    if (scrimEl()) {
       const opacity = Math.max(0, 1 - dy / 280);
-      dom.settingsScrim.style.opacity = String(opacity);
+      scrimEl().style.opacity = String(opacity);
     }
   }
 
   function onDragPointerDown(ev) {
     if (!isOpen()) return;
     if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-    const sheet = dom.settingsSheet;
-    const zone = dom.settingsDragZone;
+    const sheet = sheetEl();
+    const zone = dom[keys.dragZone];
     if (!sheet || !zone) return;
     // 只认主触点
     if (drag) return;
@@ -168,8 +197,8 @@ export function createSettingsController(context, {
   function endDrag(ev) {
     if (!drag) return;
     if (ev && ev.pointerId !== drag.pointerId) return;
-    const sheet = dom.settingsSheet;
-    const zone = dom.settingsDragZone;
+    const sheet = sheetEl();
+    const zone = dom[keys.dragZone];
     const { dy, velocityY, pointerId } = drag;
     drag = null;
     try { zone?.releasePointerCapture?.(pointerId); } catch { /* ignore */ }
@@ -181,9 +210,9 @@ export function createSettingsController(context, {
       sheet.classList.remove('is-dragging');
       sheet.style.transition = 'transform 0.22s ease-out';
       sheet.style.transform = 'translateY(100%)';
-      if (dom.settingsScrim) {
-        dom.settingsScrim.style.transition = 'opacity 0.22s ease-out';
-        dom.settingsScrim.style.opacity = '0';
+      if (scrimEl()) {
+        scrimEl().style.transition = 'opacity 0.22s ease-out';
+        scrimEl().style.opacity = '0';
       }
       let finished = false;
       const finish = () => {
@@ -200,9 +229,9 @@ export function createSettingsController(context, {
     sheet.classList.remove('is-dragging');
     sheet.style.transition = 'transform 0.2s ease-out';
     sheet.style.transform = 'translateY(0)';
-    if (dom.settingsScrim) {
-      dom.settingsScrim.style.transition = 'opacity 0.2s ease-out';
-      dom.settingsScrim.style.opacity = '1';
+    if (scrimEl()) {
+      scrimEl().style.transition = 'opacity 0.2s ease-out';
+      scrimEl().style.opacity = '1';
     }
     const clear = () => {
       sheet.removeEventListener('transitionend', clear);
@@ -210,9 +239,9 @@ export function createSettingsController(context, {
       if (!drag) {
         sheet.style.transform = '';
         sheet.style.transition = '';
-        if (dom.settingsScrim) {
-          dom.settingsScrim.style.opacity = '';
-          dom.settingsScrim.style.transition = '';
+        if (scrimEl()) {
+          scrimEl().style.opacity = '';
+          scrimEl().style.transition = '';
         }
       }
     };
@@ -221,12 +250,12 @@ export function createSettingsController(context, {
   }
 
   function bindDragZone() {
-    const zone = dom.settingsDragZone
-      || dom.settingsSheet?.querySelector?.('#settingsDragZone, .settings-drag-zone, .sheet-handle')
+    const zone = dom[keys.dragZone]
+      || sheetEl()?.querySelector?.(`#${keys.dragZone}, .settings-drag-zone, .sheet-handle`)
       || null;
     if (!zone) return;
     // 缓存到 dom 以便 close/end 复用
-    if (!dom.settingsDragZone) dom.settingsDragZone = zone;
+    if (!dom[keys.dragZone]) dom[keys.dragZone] = zone;
     zone.addEventListener('pointerdown', onDragPointerDown);
     zone.addEventListener('pointermove', onDragPointerMove);
     zone.addEventListener('pointerup', endDrag);
@@ -235,12 +264,17 @@ export function createSettingsController(context, {
   }
 
   function bind() {
-    if (dom.btnSettings) dom.btnSettings.onclick = open;
+    // 包一层箭头函数而非直接 `= open`：onclick 会把 PointerEvent 当首参塞进来，未来给 open 加选项
+    // 参数时会被事件对象污染。
+    if (dom[keys.trigger]) dom[keys.trigger].onclick = () => open();
     // 关法：点遮罩 / Escape / 把手下拉；「完成」已去掉（改档即时生效，无需确认）
-    if (dom.settingsScrim) dom.settingsScrim.onclick = close;
-    if (dom.settingsClose) dom.settingsClose.onclick = close;
+    if (scrimEl()) scrimEl().onclick = close;
+    if (dom[keys.close]) dom[keys.close].onclick = close;
     doc?.addEventListener?.('keydown', onKeydown);
     bindDragZone();
+    // 本机偏好这套开关只存在于通用设置里；会话设置的控制器 syncPrefs=false，不去抢绑同一批 DOM
+    // （两个控制器都绑会互相覆盖 onchange，后建的赢——静默且难查）。
+    if (!syncPrefs) return;
     bindToggle(dom.prefAlertSound, 'sound');
     bindToggle(dom.prefAlertVibrate, 'vibrate');
     bindToggle(dom.prefAlertForeground, 'foregroundComplete');

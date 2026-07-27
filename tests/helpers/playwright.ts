@@ -54,6 +54,35 @@ export async function closeSettings(page: Page) {
   await expect(sheet).toHaveClass(/translate-y-full/);
 }
 
+/**
+ * 展开会话设置里的某一折叠块（模型 / 思考强度 / 权限）。
+ * 三块默认收起（紧凑列表 + 手风琴），磁贴要先展开才点得到。调用方须已打开 #settingsSheet。
+ */
+export async function openSettingsSection(page: Page, key: 'model' | 'effort' | 'perm') {
+  const section = page.locator(`#${key}Section`);
+  if (await section.evaluate((el: HTMLDetailsElement) => el.open).catch(() => false)) return;
+  await section.locator('summary').click();
+  await expect(section).toHaveJSProperty('open', true);
+}
+
+/**
+ * 打开通用设置（📱 本机偏好 + 🖥 主机与服务 + 🔑 访问与帮助）。
+ * 入口在侧栏底部而非 composer——那几段跟会话无关，不该随 composer 一起隐藏（见 P0-28）。
+ */
+export async function openGeneralSettings(page: Page) {
+  await page.locator('#btnSessions').click();
+  await page.locator('#btnGeneralSettings').click();
+  await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+}
+
+/** 关闭通用设置，同 closeSettings 的理由走 Escape。 */
+export async function closeGeneralSettings(page: Page) {
+  const sheet = page.locator('#generalSheet');
+  if (await sheet.evaluate(el => el.classList.contains('translate-y-full')).catch(() => true)) return;
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveClass(/translate-y-full/);
+}
+
 export async function sendChatMessage(page: Page, text: string) {
   await ensureComposerReady(page);
   const input = page.locator('#input');

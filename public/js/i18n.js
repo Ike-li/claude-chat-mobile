@@ -178,14 +178,30 @@ export const EN_DICT = Object.freeze({
   '🔄 连不上怎么办': "🔄 If you can't connect",
   '多半是令牌被清——重输即可。切后台/息屏断开会在回到前台时自动重连，无需手动刷新。': 'Most often the token was cleared — just enter it again. Disconnects from backgrounding or screen-off reconnect on their own when you come back; no manual refresh needed.',
 
-  // —— 配置面板 ——
-  '⚙️ 配置面板': '⚙️ Settings',
+  // —— 设置面板（按作用域拆两个：会话设置 / 通用设置）——
+  '⚙️ 会话设置': '⚙️ Session settings',
+  '⚙️ 设置': '⚙️ Settings',
+  '设置': 'Settings',
+  '打开设置': 'Open settings',
   '下拉或点外侧关闭': 'Pull down or tap outside to close',
   '下拉关闭配置面板': 'Pull down to close settings',
+  '下拉关闭设置': 'Pull down to close settings',
+  '只影响当前这个会话；模型 / 思考强度的切换在下一条消息起效。': 'Applies to this session only; model and thinking-effort changes take effect from your next message.',
+  '这台手机': 'This phone',
+  '只影响此设备 / 浏览器上的提醒与显示，换一台设备要重新设一次。': 'Affects alerts and display on this device/browser only — set it again on another device.',
+  '这台电脑': 'This computer',
+  '影响整台电脑上的所有会话（含你在终端里自己敲 claude 起的那些），换手机看也是同一份。': 'Affects every session on this computer (including ones you start by typing claude in a terminal); the same settings show up on any phone.',
+  '会话标识': 'Session ID',
+  // '诊断' 已在上方（服务状态那组）收录，此处复用同一条，勿重复添加
+  '访问与帮助': 'Access & help',
   '重读 CLI 配置': 'Reload CLI config',
-  '选择模型': 'Select model',
-  '(切换下一条消息起效)': '(applies from your next message)',
-  '🛡️ 权限控制等级': '🛡️ Permission mode',
+  '选择模型': 'Select model', // 仍用于底栏 model chip 的 title
+  // 三块折叠行的标题：收起时只占一行，故用最短的名词（展开区内另有说明句）。
+  // '模型' 已在下方（服务状态那组）收录，此处复用同一条。
+  '权限': 'Permissions',
+  '切换在下一条消息起效': 'Applies from your next message',
+  '不可调': 'Not adjustable',
+  '属于': 'for',
   '敏感操作弹窗确认': 'Prompts before sensitive actions',
   '计划模式': 'Plan mode',
   '只读预览不执行修改': 'Read-only preview, changes nothing',
@@ -195,7 +211,10 @@ export const EN_DICT = Object.freeze({
   '白名单外直接拒、不弹窗': 'Rejects outside the allowlist, no prompt',
   'LLM 自动判批/拒权限': 'LLM approves or denies permissions',
   '免审飞控（高危）': 'No approvals at all (dangerous)',
-  '🧠 思考强度等级': '🧠 Thinking effort',
+  // 思考强度挂在所选模型之下（父子而非并列），故标题不再是「等级」而是带归属的短语。
+  // '思考强度' 已在上方（底栏 chip 那组）收录，此处复用同一条。
+  ' 不支持调节思考强度，按模型默认执行。': " doesn't support thinking-effort control; it runs at the model default.",
+  '当前模型不支持调节思考强度，按模型默认执行。': "The current model doesn't support thinking-effort control; it runs at the model default.",
   '完成提示': 'Completion alerts',
   '(默认开，可关)': '(on by default)',
   '提示音': 'Sound',
@@ -212,7 +231,6 @@ export const EN_DICT = Object.freeze({
   '语言': 'Language',
   '跟随浏览器 / Auto-detect': 'Auto-detect',
   '切换后请刷新页面生效。': 'Refresh the page for the switch to take effect.',
-  '访问与设备': 'Access & devices',
   '当前会话': 'Current session',
   '点按复制完整 session id': 'Tap to copy the full session id',
   '新设备怎么批 · 令牌在哪 · 连不上怎么办 →': 'Approving devices · where the token is · connection help →',

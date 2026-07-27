@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings, openSettingsSection, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀', async ({ page }) => {
@@ -12,13 +12,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 1. 打开配置面板，检查模型、权限、思考强度入口。
     await page.locator('#btnSettings').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
-    await expect(page.locator('#settingsSheet')).toContainText('选择模型');
+    await expect(page.locator('#modelSection summary')).toContainText('模型');
     await expect(page.locator('.model-tile')).toContainText(['Default (recommended)', 'Claude 3.5 Sonnet', 'Claude 3.5 Haiku', 'Claude 3 Opus', 'Claude 3 Opus (1m Context)']);
     await expect(page.locator('.perm-tile')).toHaveCount(6); // 含 CLI/SDK 支持但终端交互菜单不直接暴露的 auto
 
     // 2. 选择计划模式、[1m] 模型后缀和 high effort。
+    await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
+    await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await openSettingsSection(page, 'effort');
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
@@ -29,14 +32,108 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 会话设置三块（模型/强度/权限）折叠成紧凑列表：平时每块只占一行「标题 + 当前值 + ⌄」，
+  // 点开才出磁贴。此前一打开面板就是 5 个模型磁贴（还带 max-h-48 内部滚动）+ 6 个权限磁贴，
+  // 权限和强度被挤到屏外。手风琴（同时只展开一块）保证列表始终是紧凑的。
+  test('P0-09q 三块折叠成紧凑列表：默认收起显当前值，展开互斥，选完即收', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.locator('#btnSettings').click();
+
+    // 默认全收起，每行显示当前值
+    await expect(page.locator('#modelSection')).toHaveJSProperty('open', false);
+    await expect(page.locator('#effortSection')).toHaveJSProperty('open', false);
+    await expect(page.locator('#permSection')).toHaveJSProperty('open', false);
+    await expect(page.locator('#permFoldValue')).toContainText('默认审批');
+    await expect(page.locator('.model-tile[data-model="claude-3-5-sonnet"]')).toBeHidden();
+
+    // 展开模型 → 磁贴出现；选一个后自动收起，折叠头显示新值
+    await page.locator('#modelSection summary').click();
+    await expect(page.locator('#modelSection')).toHaveJSProperty('open', true);
+    await page.locator('.model-tile[data-model="claude-3-5-sonnet"]').click();
+    await expect(page.locator('#modelSection')).toHaveJSProperty('open', false);
+    await expect(page.locator('#modelFoldValue')).toContainText('Claude 3.5 Sonnet');
+
+    // 手风琴：展开权限时，先前展开的块收起
+    await page.locator('#effortSection summary').click();
+    await expect(page.locator('#effortSection')).toHaveJSProperty('open', true);
+    await page.locator('#permSection summary').click();
+    await expect(page.locator('#permSection')).toHaveJSProperty('open', true);
+    await expect(page.locator('#effortSection')).toHaveJSProperty('open', false);
+
+    // 权限选完同样自动收起并回填值（此时 permSection 已由上面的手风琴断言展开着）
+    await page.locator('.perm-tile[data-mode="plan"]').click();
+    await expect(page.locator('#permSection')).toHaveJSProperty('open', false);
+    await expect(page.locator('#permFoldValue')).toContainText('计划模式');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 底栏 chip 是「我要改这一项」的意图表达。此前点它只是打开整个面板 + 给对应磁贴闪 1.5 秒高亮圈
+  // （自己找），那个闪烁本就是在补偿「把你丢进大面板」；折叠后可以直接展开对应块，意图落到实处。
+  test('P0-09r 底栏 chip 直达对应折叠块，不再靠闪一下高亮圈让人自己找', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#pillPerm').click();
+    await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+    await expect(page.locator('#permSection')).toHaveJSProperty('open', true);
+    await expect(page.locator('#modelSection')).toHaveJSProperty('open', false);
+    await page.keyboard.press('Escape');
+
+    await page.locator('#pillModel').click();
+    await expect(page.locator('#modelSection')).toHaveJSProperty('open', true);
+    await expect(page.locator('#permSection')).toHaveJSProperty('open', false);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 思考强度在数据上本就是模型的属性（logic.js effortLevelsFor 读 entry.supportedEffortLevels），
+  // 但 UI 上长期是与「选择模型」并列的独立区块——切到不支持的模型时整块无声消失，用户只看到
+  // 刚才还在的一栏没了，不给任何解释；而模型条目查不到时展示的又是全部模型档位的并集，
+  // 并列摆着容易被当成「这些都能选」。改为从属表达：标题指明是谁的档，不支持时就地说明。
+  test('P0-09p 思考强度从属于所选模型：标题带模型名，不支持时就地说明而非整块消失', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await page.locator('#btnSettings').click();
+
+    // 支持 effort 的模型：区块说清这是「谁的」档位
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-5-sonnet"]').click();
+    await expect(page.locator('#customEffortGroup')).not.toHaveClass(/hidden/);
+    await expect(page.locator('#effortOwnerModel')).toContainText('Claude 3.5 Sonnet');
+    await expect(page.locator('#effortUnsupported')).toHaveClass(/hidden/);
+    await expect(page.locator('.effort-tile[data-level="high"]')).toHaveCount(1);
+
+    // 不支持的模型：区块留在原地并解释原因，不再凭空消失
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-5-haiku"]').click();
+    await expect(page.locator('#customEffortGroup')).not.toHaveClass(/hidden/);
+    await expect(page.locator('#effortUnsupported')).not.toHaveClass(/hidden/);
+    await expect(page.locator('#effortUnsupported')).toContainText('Claude 3.5 Haiku');
+    await expect(page.locator('.effort-tile')).toHaveCount(0);
+
+    // 换回支持的模型，档位回来且说明收起
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await expect(page.locator('#effortOwnerModel')).toContainText('Claude 3 Opus (1m Context)');
+    await expect(page.locator('#effortUnsupported')).toHaveClass(/hidden/);
+    await expect(page.locator('.effort-tile[data-level="high"]')).toHaveCount(1);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-09b 设置选择会随下一条消息发送并可见回显', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
     await page.locator('#btnSettings').click();
+    await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await openSettingsSection(page, 'effort');
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
     await expect(page.locator('#effortSelect')).toHaveValue('high');
@@ -57,12 +154,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
 
     await page.locator('#btnSettings').click();
+    await openSettingsSection(page, 'effort');
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#effortSelect')).toHaveValue('high');
 
+    await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="claude-3-5-haiku"]').click();
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-5-haiku');
-    await expect(page.locator('#customEffortGroup')).toHaveClass(/hidden/);
+    // 档位区块留在原地并说明原因（见 P0-09p）；底栏 pill 仍隐藏——没有档位可显示，空 chip 是噪音。
+    // 行为契约不变：档位清回 model-default，隐藏的兼容 select 置空。
+    await expect(page.locator('.effort-tile')).toHaveCount(0);
+    await expect(page.locator('#pillEffort')).toHaveClass(/hidden/);
     await expect(page.locator('#effortRow')).toHaveClass(/hidden/);
     await expect(page.locator('#effortSelect')).toHaveValue('');
     await closeSettings(page);
@@ -84,8 +186,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#btnSettings').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+    await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
+    await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await openSettingsSection(page, 'effort');
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
@@ -149,8 +254,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
 
     await page.locator('#btnSettings').click();
+    await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
+    await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await openSettingsSection(page, 'effort');
     await page.locator('.effort-tile[data-level="ultracode"]').click();
     await closeSettings(page);
 
@@ -350,7 +458,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#btnSettings').click();
+    // 推送预览是本机偏好，按作用域拆分后住在通用设置（侧栏入口）里，不再随齿轮开合
+    await openGeneralSettings(page);
     const toggle = page.locator('#prefPushPreview');
     await expect(toggle).toBeVisible();
     await expect(toggle).not.toBeChecked();
@@ -359,10 +468,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(toggle).toBeChecked();
     const stored = await page.evaluate(() => localStorage.getItem('ccm_push_preview'));
     expect(stored).toBe('1');
-    await closeSettings(page);
+    await closeGeneralSettings(page);
 
     // 重开面板：syncPreferences 从 storage 读回，应仍是勾选态（不是每次都复位成默认关）。
-    await page.locator('#btnSettings').click();
+    await openGeneralSettings(page);
     await expect(page.locator('#prefPushPreview')).toBeChecked();
 
     await expectNoBrowserErrors(page);

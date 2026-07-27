@@ -6,14 +6,14 @@
 // 没找到——位置错了，遂移到通知这一组（与提示音/震动同一心智）。
 
 import { test, expect } from '@playwright/test';
-import { gotoMock, expectNoBrowserErrors, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-25 终端会话推送：未装显示开启按钮 → 二次确认 → 翻为已启用', async ({ page }) => {
     await gotoMock(page);
     await waitForIdle(page);
 
-    await page.locator('#btnSettings').click();
+    await openGeneralSettings(page);
     const section = page.locator('#hooksBridgeSection');
     await expect(section).toBeVisible();
     await expect(section).toContainText('未启用');
@@ -36,7 +36,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 注：test: 夹具命令不产生正常回合终态，不能用 waitForIdle 收口（会一直等 #streamLiveStatus 消失）
     await sendChatMessage(page, 'test:hooks-installed');
 
-    await page.locator('#btnSettings').click();
+    await openGeneralSettings(page);
     const section = page.locator('#hooksBridgeSection');
     await expect(section).toContainText('已启用');
 
@@ -49,7 +49,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await waitForIdle(page);
 
-    await page.locator('#btnSettings').click();
+    await openGeneralSettings(page);
     await page.locator('#btnPushTest').click();
     await expect(page.locator('#messages')).toContainText('还没订阅推送');
 
@@ -63,7 +63,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await waitForIdle(page);
 
-    await page.locator('#btnSettings').click();
+    await openGeneralSettings(page);
     const row = page.locator('#pushStatusRow');
     await expect(row).not.toBeEmpty();
     await expect(row).toContainText(/未开启|已开启|不可用|已被拒绝|未完成订阅/);

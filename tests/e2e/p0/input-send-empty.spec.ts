@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02 输入框、发送按钮与空输入边界', async ({ page }) => {
@@ -141,6 +141,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#btnSettings').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+    await openSettingsSection(page, 'effort');
     await expect(page.locator('.effort-tile[data-level="ultracode"]')).toBeVisible();
     await page.locator('.effort-tile[data-level="ultracode"]').click();
     await expect(page.locator('#pillEffortText')).toContainText('ultracode');

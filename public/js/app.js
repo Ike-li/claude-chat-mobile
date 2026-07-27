@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -66,6 +66,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // ---- 极简触觉交互及抽屉式元素 DOM 绑定 ----
   const sidebarScrim = $('sidebarScrim'), leftSidebar = $('leftSidebar'), sidebarClose = $('sidebarClose');
   const btnSettings = $('btnSettings'), settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsSheetBody = $('settingsSheetBody'), settingsDragZone = $('settingsDragZone'), settingsClose = $('settingsClose');
+  // 通用设置 sheet（本机偏好 + 主机与服务）：与会话设置同构、同一个控制器驱动，入口在侧栏底部
+  const btnGeneralSettings = $('btnGeneralSettings'), generalScrim = $('generalScrim'), generalSheet = $('generalSheet'), generalSheetBody = $('generalSheetBody'), generalDragZone = $('generalDragZone');
   const pillModel = $('pillModel'), pillModelText = $('pillModelText');
   const pillPerm = $('pillPerm'), pillPermText = $('pillPermText'), pillEffort = $('pillEffort'), pillEffortText = $('pillEffortText');
 
@@ -74,6 +76,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   const topContextPill = $('topContextPill'), topTitleText = $('topTitleText'), topProjectText = $('topProjectText');
   const customModelGrid = $('customModelGrid'), customPermGrid = $('customPermGrid'), customEffortGrid = $('customEffortGrid'), customEffortGroup = $('customEffortGroup');
+  // 强度区块挂在模型下：归属标签 + 不支持时的就地说明（替代原先整块消失）
+  const effortOwnerModel = $('effortOwnerModel'), effortOwnerWrap = $('effortOwnerWrap'), effortUnsupported = $('effortUnsupported');
+  // 三块折叠行（模型 / 思考强度 / 权限）：<details> 的 open 即状态，值由下方 syncFoldValues 回填
+  const modelSection = $('modelSection'), effortSection = $('effortSection'), permSection = $('permSection');
+  const modelFoldValue = $('modelFoldValue'), effortFoldValue = $('effortFoldValue'), permFoldValue = $('permFoldValue');
 
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
@@ -309,6 +316,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       });
     }
     // compose 页默认档摘要与底栏同源；模型 chip 变了就地刷
+    syncFoldValues();
     if (_composeReady) refreshComposeDefaultsSummary();
   }
 
@@ -352,6 +360,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           syncModelUI(val);
         }
         rebuildEffortOptions(val === 'default' ? (cwdDefaultModel || currentModel) : val);
+        // 选完即收：折叠列表的常态是收起，留着展开会把下面两块顶出屏外
+        if (modelSection) modelSection.open = false;
       };
       customModelGrid.appendChild(card);
     });
@@ -485,6 +495,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       settingsSheetBody,
       settingsDragZone,
       settingsClose,
+      btnGeneralSettings,
+      generalScrim,
+      generalSheet,
+      generalSheetBody,
+      generalDragZone,
       prefAlertSound: $('prefAlertSound'),
       prefAlertVibrate: $('prefAlertVibrate'),
       prefAlertForeground: $('prefAlertFgComplete'),
@@ -703,6 +718,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const notifications = createNotificationController(appContext, {
     addBar,
     getToken: () => token,
+    // 铃铛只当「未订阅」的可见信号，不自己解释——把人带到通用设置的推送段，
+    // 那里的 #pushStatusRow 才说得全（当前状态 + 为什么 + 下一步点哪）。两套解释各说各话
+    // 是这块历史上真出过问题的地方。general 在文件后段才定义，靠闭包延迟到点击时求值。
+    bellAction: () => {
+      general.open();
+      $('pushStatusRow')?.scrollIntoView({ block: 'center' });
+    },
   });
   // 与 alertCue 对称：sync:since 补发期间静音 OS 通知，避免前台完成通知连弹（result / task_notification）
   const notify = (title, body, opts) => {
@@ -1229,7 +1251,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   if ($('btnServiceStatus')) $('btnServiceStatus').onclick = () => {
     if (!serviceStatusModal) return;
-    settings.close(); // 从设置面板切入：先收设置 sheet 再弹状态 sheet
+    general.close(); // 从通用设置切入：先收设置 sheet 再弹状态 sheet（服务状态属 🖥 主机那节）
     openSheet(serviceStatusModal);
     loadServiceStatus();
     if (serviceStatusTimer) clearInterval(serviceStatusTimer);
@@ -3374,6 +3396,41 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function clearCliUnknownPermissionOption() {
     permModeSelect?.querySelector('option[data-cli-observed-unknown]')?.remove();
   }
+  // ---- 会话设置的三块折叠行（模型 / 思考强度 / 权限）----
+  // 折叠头的当前值与底栏 chip **同源**（pillXxxText 已由 setPermMode/setEffortMode/syncModelUI 维护）。
+  // 不另算一套：两处各算会在 CLI 镜像态、网关别名映射这类边角上悄悄漂移，而那正是最难查的一类 bug。
+  const foldSections = [modelSection, effortSection, permSection].filter(Boolean);
+  function syncFoldValues() {
+    if (modelFoldValue) {
+      // 折叠头替代的是磁贴列表 → 随磁贴用 displayName；未选具体模型时回落底栏 chip 文案
+      // （那里已处理「CLI default 项 / cwd 默认别名解析」两种兜底）。
+      modelFoldValue.textContent = modelLabelFor(currentModel, modelsList)
+        || pillModelText?.textContent || '';
+    }
+    if (permFoldValue && pillPermText) permFoldValue.textContent = pillPermText.textContent || '';
+    if (effortFoldValue) {
+      // 模型不支持 effort 时底栏 chip 整个隐藏，此处不能跟着显示上一个模型的残值
+      effortFoldValue.textContent = pillEffort?.classList.contains('hidden')
+        ? t('不可调')
+        : (pillEffortText?.textContent || '');
+    }
+  }
+  // 手风琴：同时只展开一块——折叠形态的意义就是列表始终紧凑，几块同时摊开就白折叠了。
+  for (const sec of foldSections) {
+    sec.addEventListener('toggle', () => {
+      if (!sec.open) return;
+      for (const other of foldSections) if (other !== sec) other.open = false;
+    });
+  }
+  function collapseAllFolds() { for (const sec of foldSections) sec.open = false; }
+  // 底栏 chip = 「我要改这一项」的意图。此前点它只是打开面板 + 给对应磁贴闪 1.5 秒高亮圈让人自己找，
+  // 那个闪烁本就是在补偿「把你丢进一个大面板」；折叠后直接展开对应块，意图落到实处。
+  function openSettingsSectionFor(section) {
+    openSettingsSheet();
+    collapseAllFolds();
+    if (section) section.open = true;
+  }
+
   function setPermMode(mode, silent = false) {
     if (!permModeSelect || !mode) return;
     clearCliUnknownPermissionOption();
@@ -3418,6 +3475,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       });
     }
+    syncFoldValues();
     if (_composeReady) refreshComposeDefaultsSummary();
   }
   permModeSelect.onchange = async () => {
@@ -3477,6 +3535,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       });
     }
+    syncFoldValues();
     if (_composeReady) refreshComposeDefaultsSummary();
   }
   // 把当前模型（init.model 规范名）桥接到 models 候选项（取其 supportedEffortLevels）。
@@ -3492,6 +3551,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     const silentClear = Boolean(opts?.silentClear);
     const { hidden, levels: baseLevels } = effortLevelsFor(modelValue, modelsList);
     const show = withUltracodeTier(baseLevels); // xhigh-capable 模型上追加 ultracode 最高档，镜像 CLI /effort
+    // 强度是所选模型的下级：标题挂上模型名，档位才有归属。用 displayName 而非裸 value，
+    // 与模型磁贴主标题同源。空 modelValue（CLI「不 pin」）回落到 cwd 默认/当前模型——部分调用点
+    // 已自带这个回落，这里统一兜一次，免得某条路径漏了就显示成无主的档位。
+    const ownerLabel = modelLabelFor(modelValue || cwdDefaultModel || currentModel, modelsList);
+    if (effortOwnerModel) effortOwnerModel.textContent = ownerLabel;
+    effortOwnerWrap?.classList.toggle('hidden', !ownerLabel);
+    effortOwnerWrap?.classList.toggle('inline-flex', Boolean(ownerLabel));
     if (hidden) {
       // 候选明确声明该模型不支持 effort（区别于“当前 CLI 档未知”）：Web 驾驶时把实例档清回
       // model-default，等服务端 effort_mode 回执再更新 currentEffort；CLI 镜像只读态绝不写回。
@@ -3500,12 +3566,22 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (customEffortGrid) customEffortGrid.innerHTML = '';
       effortRow?.classList.add('hidden');
       pillEffort?.classList.add('hidden');
-      customEffortGroup?.classList.add('hidden');
+      // 整段不再消失——凭空少一栏用户只会以为界面坏了。就地说明「这个模型没有这档可调」，
+      // 底栏 pill 仍隐藏（确实没有档位可显示，留个空 chip 反而是噪音）。
+      customEffortGroup?.classList.remove('hidden');
+      if (effortUnsupported) {
+        effortUnsupported.textContent = ownerLabel
+          ? `${ownerLabel}${t(' 不支持调节思考强度，按模型默认执行。')}`
+          : t('当前模型不支持调节思考强度，按模型默认执行。');
+        effortUnsupported.classList.remove('hidden');
+      }
+      syncFoldValues();
       return;
     }
     effortRow?.classList.remove('hidden');
     pillEffort?.classList.remove('hidden');
     customEffortGroup?.classList.remove('hidden');
+    effortUnsupported?.classList.add('hidden');
 
     // 候选列表只决定「能选什么」，不得改写当前档事实。CLI 镜像拿不到档位时保留 null/未知，
     // 不能因为候选第一项是 low 就谎报 low；FRESH settings=low 会由服务端明确下发，仍正常选中。
@@ -3544,6 +3620,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           haptic('tap');
           effortSelect.value = lv;
           effortSelect.onchange();
+          if (effortSection) effortSection.open = false; // 选完即收，同模型块
         };
         customEffortGrid.appendChild(lvTile);
       }
@@ -4835,10 +4912,34 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     },
   };
-  // ---- 设置：抽屉、完成提示偏好和预览由独立 controller 管理 ----
-  const settings = createSettingsController(appContext, { alerts, haptic, pushPreview, langPref, onOpen: () => renderPushStatusRow() });
+  // ---- 设置：两个同构 sheet，由同一个 controller 按作用域分工 ----
+  // 会话设置（齿轮，随 composer 显隐）：模型 / 权限档 / 思考强度 / 会话 ID。syncPrefs=false——
+  // 本机偏好那批 DOM 已迁到通用设置，两个控制器都去绑会互相覆盖 onchange（后建的赢，静默难查）。
+  // onOpen：齿轮进来 = 「看一眼当前配置」，不预设想改哪项，故三块全收起 + 回填当前值。
+  // 从底栏 chip 进来的走 openSettingsSectionFor，它在 open 之后再展开对应块（顺序不能反）。
+  const settings = createSettingsController(appContext, {
+    alerts, haptic, syncPrefs: false,
+    onOpen: () => { collapseAllFolds(); syncFoldValues(); },
+  });
+  // 侧栏与 sheet 同为 z-40：不先收侧栏，弹出的面板会和左侧抽屉叠在一起。
+  // 必须抢在下面 createSettingsController 的 bind() 之前注册——listener 按注册顺序触发，
+  // 这样是「先收侧栏、再弹面板」而不是反过来闪一帧。也**不能**改写 btnGeneralSettings.onclick
+  // （那是控制器 bind 的落点，覆盖掉 open 就没了）。
+  if (btnGeneralSettings) btnGeneralSettings.addEventListener('click', closeLeftSidebar);
+  // 通用设置（侧栏底部入口，全局可达）：📱 本机偏好 + 🖥 主机与服务 + 🔑 访问与帮助。
+  // beforeOpen 收掉可能还开着的会话设置——两个 sheet 同为 z-40，叠着会露出下面那层的边。
+  const general = createSettingsController(appContext, {
+    keys: {
+      sheet: 'generalSheet', body: 'generalSheetBody', scrim: 'generalScrim',
+      dragZone: 'generalDragZone', close: 'generalClose', trigger: 'btnGeneralSettings',
+    },
+    alerts, haptic, pushPreview, langPref,
+    beforeOpen: () => { if (settings.isOpen()) settings.close(); },
+    // 推送订阅状态每次打开重算：权限可能在系统设置里被改过，渲染一次会过期。
+    onOpen: () => renderPushStatusRow(),
+  });
   const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen（齿轮按钮不经这里）
-  if (pillModel) pillModel.onclick = openSettingsSheet; // 点底栏模型 chip → 开「选择模型」格
+  if (pillModel) pillModel.onclick = () => openSettingsSectionFor(modelSection); // 点底栏模型 chip → 直达模型块
   // 顶部 pill：工作区入口（chooser → 浏览文件 | 工作区改动）。侧栏不再挂浏览入口。
   if (topContextPill) {
     topContextPill.onclick = (e) => {
@@ -4849,25 +4950,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
   }
   
-  if (pillPerm) {
-    pillPerm.onclick = () => {
-      openSettingsSheet();
-      if (customPermGrid) {
-        customPermGrid.classList.add('ring-2', 'ring-accent');
-        setTimeout(() => customPermGrid.classList.remove('ring-2', 'ring-accent'), 1500);
-      }
-    };
-  }
+  if (pillPerm) pillPerm.onclick = () => openSettingsSectionFor(permSection);
   
-  if (pillEffort) {
-    pillEffort.onclick = () => {
-      openSettingsSheet();
-      if (customEffortGrid) {
-        customEffortGrid.classList.add('ring-2', 'ring-accent');
-        setTimeout(() => customEffortGrid.classList.remove('ring-2', 'ring-accent'), 1500);
-      }
-    };
-  }
+  if (pillEffort) pillEffort.onclick = () => openSettingsSectionFor(effortSection);
 
   const pillWorkspace = $('pillWorkspace');
   if (pillWorkspace) {
@@ -4882,6 +4967,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       tile.onclick = () => {
         haptic('tap');
         const mode = tile.dataset.mode;
+        // 点已选中的档也收起：用户的意图已经表达完了（「就它，不改」），留着展开没道理
+        if (permSection) permSection.open = false;
         if (mode === currentPermMode) return;
         permModeSelect.value = mode;
         permModeSelect.onchange();

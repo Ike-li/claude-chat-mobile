@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner } from '../../public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -584,6 +584,31 @@ test('resolveModelPillText: cliDefaultLabel 优先于 cwdDefault（/model defaul
 test('resolveModelPillText: 全空 → 「默认」', () => {
   assert.equal(resolveModelPillText({ model: '', modelsList: [] }), '默认');
   assert.equal(resolveModelPillText({}), '默认');
+});
+
+// 强度档挂在模型下展示，标题要说清是「谁的」档。与磁贴主标题同源用 displayName，
+// 桥接路径与 effortLevelsFor 一致（都走 modelEntryFor），避免两处各解析一套导致标题与档位对不上。
+test('modelLabelFor: 取 displayName，桥接别名与 [1m] 后缀', () => {
+  const ml = [
+    { value: 'opus[1m]', displayName: 'Claude 3 Opus (1m Context)', supportedEffortLevels: ['low'] },
+    { value: 'haiku', displayName: 'Claude 3.5 Haiku' },
+  ];
+  assert.equal(modelLabelFor('opus[1m]', ml), 'Claude 3 Opus (1m Context)');
+  assert.equal(modelLabelFor('claude-opus-4-8[1m]', ml), 'Claude 3 Opus (1m Context)'); // 别名桥接
+  assert.equal(modelLabelFor('haiku', ml), 'Claude 3.5 Haiku'); // 不支持 effort 的也要有名字可说
+});
+
+test('modelLabelFor: 无 displayName 回退 value；解析不到回退原值', () => {
+  assert.equal(modelLabelFor('sonnet', [{ value: 'sonnet' }]), 'sonnet');
+  assert.equal(modelLabelFor('unknown-model', [{ value: 'sonnet', displayName: 'S' }]), 'unknown-model');
+});
+
+// 空模型 = CLI「不 pin」语义（value:"default"），此时没有具体模型可归属，返回空串让调用方
+// 走「当前模型」的兜底文案，不能硬塞一个 'default' 字面量给用户看。
+test('modelLabelFor: 空值不伪造名字', () => {
+  assert.equal(modelLabelFor('', [{ value: 'sonnet', displayName: 'S' }]), '');
+  assert.equal(modelLabelFor(null, []), '');
+  assert.equal(modelLabelFor(undefined, undefined), '');
 });
 
 test('effortLevelsFor: 模型支持 → 列其档', () => {

@@ -5,6 +5,10 @@ export function createNotificationController(context, {
   addBar = () => {},
   autoBind = true,
   getToken = () => '',
+  // 点铃铛做什么。默认就地订阅（保底行为，也是单测里的默认路径）；app.js 注入的是「打开通用设置
+  // 并滚到推送段」——那里的 #pushStatusRow 才是完整的权威版本（状态 + 原因 + 订阅按钮），
+  // 铃铛只负责把人带过去，不再自己维护第二套解释分支。
+  bellAction = null,
 } = {}) {
   const deps = context.dependencies;
   const documentRef = deps.document || globalThis.document;
@@ -150,14 +154,16 @@ export function createNotificationController(context, {
         // 带上真实原因：手机上没有 console，笼统的"稍后重试"让人（和排查的人）无从下手。
         else explain(`${t('⚠️ 订阅未成功：')}${lastSubscribeError || t('原因未知')}`, 'text-warning');
       } else {
+        // 被拒后**不隐藏**铃铛：那正是用户最需要这个入口的时刻（点它能看到状态与下一步）。
+        // 此前这里 add('hidden') 与 setup() 里 denied 时 remove('hidden') 直接打架——
+        // 点一下铃铛就消失、刷新才回来，等于把唯一的排查入口藏了起来。
         explain(t('🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许'), 'text-warning');
-        context.dom.btnPush?.classList.add('hidden');
       }
     } catch (error) {
       explain(`${t('❌ 订阅出错:')} ${error.message}`, 'text-danger');
     }
   }
 
-  if (autoBind && context.dom.btnPush) context.dom.btnPush.onclick = requestSubscription;
+  if (autoBind && context.dom.btnPush) context.dom.btnPush.onclick = bellAction || requestSubscription;
   return { environment, notify, requestSubscription, setup, subscribe };
 }

@@ -147,6 +147,17 @@
     </div>
     <!-- 会话列表容器 (复用 sessionPanel 以完美兼容现有 JS) -->
     <div id="sessionPanel" class="flex-1 overflow-y-auto"></div>
+    <!-- 通用设置常驻入口。必须是 #sessionPanel 的**兄弟**节点：openSessionPanel() 开头就
+         sessionPanel.innerHTML=''，放进去每次重建都会被清掉（同 #unreadPill 相对 #messages 的约束）。
+         放侧栏而不是 composer：本机偏好/主机与服务那几段跟会话无关，不该随 composer 一起隐藏——
+         首页、compose 页、会话已中断页都得能改语言、查推送为什么不通。 -->
+    <div class="shrink-0 border-t border-line bg-surface safe-bottom">
+      <button id="btnGeneralSettings" type="button" class="w-full flex items-center gap-2 px-4 py-3 text-sm text-ink hover:bg-sunk active:scale-[0.99] transition-all" data-testid="general-settings-entry" aria-label="打开设置">
+        <span aria-hidden="true">⚙️</span>
+        <span class="flex-1 text-left font-medium">设置</span>
+        <span class="text-ink-faint" aria-hidden="true">→</span>
+      </button>
+    </div>
   </aside>
 
   <!-- 消息区 -->
@@ -602,23 +613,33 @@
     </div>
   </div>
 
-  <!-- 触觉配置面板遮罩 scrim -->
+  <!-- 会话设置遮罩 scrim -->
   <div id="settingsScrim" class="hidden fixed inset-0 z-30 bg-black/40 transition-opacity duration-300"></div>
 
-  <!-- 触觉配置面板大底栏 (Bottom Settings Sheet Drawer)
+  <!-- 会话设置大底栏 (Bottom Settings Sheet Drawer)
        标题固定 + 内容区内部滚动；关法=点遮罩 / Escape / 把手区下拉（无「完成」）。
-       打开时 body.ccm-sheet-open 锁住背后主页面滚动，避免上滑把聊天内容顶穿面板。 -->
+       打开时 body.ccm-sheet-open 锁住背后主页面滚动，避免上滑把聊天内容顶穿面板。
+
+       ⚠️ 只放**会话级**配置。本机偏好（提示音/语言/推送）与主机级（终端会话推送/服务状态/重启）
+       在 #generalSheet 里——它们跟会话无关，不能跟着 composer 一起隐藏（本面板入口 #btnSettings
+       在 #composerFooter 内，首页 syncComposerVisibility 会把整个 footer 设 hidden）。 -->
   <div id="settingsSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col max-h-[85vh] overflow-hidden safe-bottom" style="border-top-color:var(--accent)" role="dialog" aria-modal="true" aria-labelledby="settingsSheetTitle">
     <!-- 下拉关闭热区：把手 + 标题（内容区滚动不绑手势） -->
     <div id="settingsDragZone" class="settings-drag-zone shrink-0 select-none" aria-label="下拉关闭配置面板">
       <div class="sheet-handle"></div>
       <div class="px-4 pt-0.5 pb-2 border-b border-line-soft bg-surface">
-        <div id="settingsSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 配置面板</div>
+        <div id="settingsSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 会话设置</div>
         <div class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭</div>
       </div>
     </div>
 
     <div id="settingsSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-5">
+      <!-- 作用域说明：面板里每一档影响谁，此前完全看不出来（模型/权限是会话级，而同一面板里还混着
+           本机偏好和整机设置）。拆分后每个面板/分节顶部固定说明一句。 -->
+      <div data-scope-note="session" class="text-[10px] text-ink-faint leading-relaxed px-0.5 -mb-2">
+        只影响当前这个会话；模型 / 思考强度的切换在下一条消息起效。
+      </div>
+
       <!-- 0. CLI 配置刷新：下面模型/权限/思考强度三节的默认档都来自 ~/.claude/settings.json，
            ensureCliDefaults 按 cwd 缓存（只在启动/session:new/session:home 才 force 重读），
            终端侧改了文件这里不会自己感知——常驻手动兜底入口（新会话页另有一个同源的 ↻）。
@@ -631,17 +652,61 @@
         </button>
       </div>
 
-      <!-- 1. 模型选择大磁贴 -->
-      <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2 flex items-center gap-1">✨ <span>选择模型</span> <span class="text-xs text-ink-faint font-normal">(切换下一条消息起效)</span></div>
-        <div id="customModelGrid" class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
-          <!-- 动态生成的模型卡片 -->
+      <!-- 1/2/3. 模型 · 该模型的思考强度 · 权限档，三块折叠成紧凑列表。
+           每块平时只占一行「标题 + 当前值 + ⌄」，点开才出磁贴；手风琴（同时只展开一块，见 app.js
+           的 toggle 协调）保证列表始终紧凑。此前一打开面板就是 5 个模型磁贴（还带 max-h-48 内部滚动）
+           ＋6 个权限磁贴，权限和强度被挤到屏外。
+           强度仍是模型的下级：缩进 + 左竖线 + 紧邻模型行，父子关系由位置表达（数据上它本就是
+           模型的 supportedEffortLevels，见 logic.js effortLevelsFor）。
+           用原生 <details>：折叠态是 open 属性、无障碍自带、零 JS 开合；去三角的 CSS 已有先例。 -->
+      <details id="modelSection" class="settings-fold">
+        <summary class="settings-fold-head">
+          <span class="shrink-0">✨</span>
+          <span class="shrink-0 text-xs font-semibold text-ink-soft">模型</span>
+          <span id="modelFoldValue" class="flex-1 min-w-0 truncate text-right text-xs text-ink font-medium"></span>
+          <span class="fold-arrow shrink-0 text-xs text-ink-faint">⌄</span>
+        </summary>
+        <div class="pt-2">
+          <div class="text-[10px] text-ink-faint mb-1.5 px-0.5">切换在下一条消息起效</div>
+          <div id="customModelGrid" class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+            <!-- 动态生成的模型卡片 -->
+          </div>
         </div>
+      </details>
+
+      <div id="customEffortGroup" class="pl-3 border-l-2 border-line-soft">
+        <details id="effortSection" class="settings-fold">
+          <summary class="settings-fold-head">
+            <span class="shrink-0">🧠</span>
+            <span class="shrink-0 text-xs font-semibold text-ink-soft">思考强度</span>
+            <span id="effortFoldValue" class="flex-1 min-w-0 truncate text-right text-xs text-ink font-medium"></span>
+            <span class="fold-arrow shrink-0 text-xs text-ink-faint">⌄</span>
+          </summary>
+          <div class="pt-2">
+            <!-- 归属模型名：折叠列表里位置已表达父子，展开时再点名一次，免得磁贴看着无主。
+                 解析不出具体模型时整块收起，不留一个孤零零的「·」在那。 -->
+            <div id="effortOwnerWrap" class="hidden items-center gap-1 min-w-0 mb-1.5 px-0.5">
+              <span class="text-[10px] text-ink-faint">属于</span>
+              <span id="effortOwnerModel" class="text-[10px] text-accent font-semibold truncate max-w-[14rem]"></span>
+            </div>
+            <div id="customEffortGrid" class="flex flex-wrap gap-2">
+              <!-- 动态生成的思考强度按钮 -->
+            </div>
+            <!-- 不支持时就地说明，替代原先的「整块消失」 -->
+            <div id="effortUnsupported" class="hidden text-xs text-ink-soft leading-relaxed"></div>
+          </div>
+        </details>
       </div>
 
-      <!-- 2. 权限档大磁贴 -->
-      <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2">🛡️ 权限控制等级</div>
+      <!-- 3. 权限档大磁贴（同上折叠） -->
+      <details id="permSection" class="settings-fold">
+        <summary class="settings-fold-head">
+          <span class="shrink-0">🛡️</span>
+          <span class="shrink-0 text-xs font-semibold text-ink-soft">权限</span>
+          <span id="permFoldValue" class="flex-1 min-w-0 truncate text-right text-xs text-ink font-medium"></span>
+          <span class="fold-arrow shrink-0 text-xs text-ink-faint">⌄</span>
+        </summary>
+        <div class="pt-2">
         <div id="customPermGrid" class="grid grid-cols-2 gap-2">
           <div data-mode="default" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
             <div class="text-xs font-semibold text-ink">默认审批</div>
@@ -668,14 +733,46 @@
             <div class="text-xs text-red-500/80 mt-0.5">免审飞控（高危）</div>
           </div>
         </div>
-      </div>
-
-      <!-- 3. 思考强度大磁贴 -->
-      <div id="customEffortGroup" class="hidden">
-        <div class="text-xs font-semibold text-ink-soft mb-2">🧠 思考强度等级</div>
-        <div id="customEffortGrid" class="flex flex-wrap gap-2">
-          <!-- 动态生成的思考强度按钮 -->
         </div>
+      </details>
+
+      <!-- 4. 当前会话 ID（会话级，故留在本面板；原先误放在「访问与设备」那组里，与令牌/设备审批
+           这类主机级条目混在一起）。 -->
+      <div>
+        <div class="text-xs font-semibold text-ink-soft mb-2">🆔 <span>会话标识</span></div>
+        <div id="settingsSessionRow" class="hidden p-2.5 rounded-xl border border-line bg-surface flex items-center justify-between text-xs text-ink transition-all">
+          <span class="text-ink-soft font-medium">当前会话</span>
+          <button id="pillSession" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-sunk hover:bg-line-soft active:scale-95 text-ink-soft transition-all font-mono" title="点按复制完整 session id">
+            <svg class="w-3.5 h-3.5 text-ink-soft" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
+            </svg>
+            <span id="pillSessionText" class="font-mono"></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 通用设置遮罩 scrim（与会话设置各用一个，两个 sheet 零隐式耦合） -->
+  <div id="generalScrim" class="hidden fixed inset-0 z-30 bg-black/40 transition-opacity duration-300"></div>
+
+  <!-- 通用设置大底栏：入口在侧栏底部（#btnGeneralSettings），全局可达。
+       与 #settingsSheet 同构，由同一个 createSettingsController 驱动（只换一组 DOM key）。
+       分节按作用域：📱 本机（存 localStorage，换设备要重设）/ 🖥 主机（影响整台电脑上的所有会话）。 -->
+  <div id="generalSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col max-h-[85vh] overflow-hidden safe-bottom" style="border-top-color:var(--accent)" role="dialog" aria-modal="true" aria-labelledby="generalSheetTitle">
+    <div id="generalDragZone" class="settings-drag-zone shrink-0 select-none" aria-label="下拉关闭设置">
+      <div class="sheet-handle"></div>
+      <div class="px-4 pt-0.5 pb-2 border-b border-line-soft bg-surface">
+        <div id="generalSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 设置</div>
+        <div class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭</div>
+      </div>
+    </div>
+
+    <div id="generalSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-5">
+      <!-- ═══ 📱 这台手机 ═══ 存 localStorage，只作用于当前设备/浏览器 -->
+      <div class="text-xs font-bold text-ink flex items-center gap-1.5 pt-0.5">📱 <span>这台手机</span></div>
+      <div data-scope-note="device" class="text-[10px] text-ink-faint leading-relaxed px-0.5 -mt-3">
+        只影响此设备 / 浏览器上的提醒与显示，换一台设备要重新设一次。
       </div>
 
       <!-- 3b. 完成提示（默认开，可关）——轮次完成 / 需要你时的音与震 -->
@@ -705,15 +802,6 @@
           </label>
           <button id="btnAlertPreview" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">▶ 试听提示音 / 试震一下</button>
         </div>
-      </div>
-
-      <!-- 3b-2. 终端会话推送（CLI hooks 桥）——放在通知这一组而不是服务状态诊断页：对用户而言它就是
-           "电脑终端里跑的会话要不要通知我"，与上面的提示音/震动同一心智。整段由 app.js 按安装态渲染
-           （未装/已装/被 env 停用/配置漂移四态），旧 server 无此字段时整段不出现。 -->
-      <div id="hooksBridgeSection" class="hidden">
-        <div class="text-xs font-semibold text-ink-soft mb-2">⌨️ <span>终端会话推送</span> <span class="text-xs text-ink-faint font-normal">(默认关，可开)</span></div>
-        <div id="hooksBridgeBody" class="space-y-2"></div>
-        <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
       </div>
 
       <!-- 3c. 推送内容预览（默认关）——web-push payload 本身已 RFC 8291 端到端加密（push service 读不到），
@@ -754,41 +842,49 @@
         </div>
       </div>
 
-      <!-- 4. 访问与设备（常驻入口）-->
+      <!-- ═══ 🖥 这台电脑 ═══ 落在主机上（~/.claude/settings.json、常驻 server），跨设备共享 -->
+      <div class="text-xs font-bold text-ink flex items-center gap-1.5 pt-1">🖥 <span>这台电脑</span></div>
+      <div data-scope-note="host" class="text-[10px] text-ink-faint leading-relaxed px-0.5 -mt-3">
+        影响整台电脑上的所有会话（含你在终端里自己敲 claude 起的那些），换手机看也是同一份。
+      </div>
+
+      <!-- 终端会话推送（CLI hooks 桥）：对用户而言就是"电脑终端里跑的会话要不要通知我"。整段由 app.js
+           按安装态渲染（未装/已装/被 env 停用/配置漂移四态），旧 server 无此字段时整段不出现。 -->
+      <div id="hooksBridgeSection" class="hidden">
+        <div class="text-xs font-semibold text-ink-soft mb-2">⌨️ <span>终端会话推送</span> <span class="text-xs text-ink-faint font-normal">(默认关，可开)</span></div>
+        <div id="hooksBridgeBody" class="space-y-2"></div>
+        <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
+      </div>
+
       <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2">🔑 <span>访问与设备</span></div>
+        <div class="text-xs font-semibold text-ink-soft mb-2">🩺 <span>诊断</span></div>
         <div class="space-y-2">
-          <!-- 会话 ID 卡片 -->
-          <div id="settingsSessionRow" class="hidden p-2.5 rounded-xl border border-line bg-surface flex items-center justify-between text-xs text-ink transition-all">
-            <span class="text-ink-soft font-medium">当前会话</span>
-            <button id="pillSession" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-sunk hover:bg-line-soft active:scale-95 text-ink-soft transition-all font-mono" title="点按复制完整 session id">
-              <svg class="w-3.5 h-3.5 text-ink-soft" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 17.25v3.375c0 .621-.504 1.125-1.125 1.125h-9.75a1.125 1.125 0 01-1.125-1.125V7.875c0-.621.504-1.125 1.125-1.125H6.75a9.06 9.06 0 011.5.124m7.5 10.376h3.375c.621 0 1.125-.504 1.125-1.125V11.25c0-4.46-3.243-8.161-7.5-8.876a9.06 9.06 0 00-1.5-.124H9.375c-.621 0-1.125.504-1.125 1.125v3.5m7.5 10.375H9.375a1.125 1.125 0 01-1.125-1.125v-9.25m12 6.625v-1.875a3.375 3.375 0 00-3.375-3.375h-1.5a1.125 1.125 0 01-1.125-1.125v-1.5a3.375 3.375 0 00-3.375-3.375H9.75" />
-              </svg>
-              <span id="pillSessionText" class="font-mono"></span>
-            </button>
-          </div>
-          <button id="accessHelpOpen" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">新设备怎么批 · 令牌在哪 · 连不上怎么办 →</button>
           <!-- ④ UI 安全体检：公网暴露前一键自查（token/白名单/CF/设备…）-->
           <button id="btnSecurityCheck" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">🔍 安全体检 · 公网暴露前自查 →</button>
           <div id="doctorReport" class="hidden p-2.5 rounded-xl border border-line bg-surface text-xs space-y-0.5"></div>
           <!-- 服务状态面板入口：运行时长/指标/告警（#serviceStatusModal，接线在 app.js） -->
           <button id="btnServiceStatus" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">📊 服务状态 · 运行时长 / 版本 / 告警 →</button>
-          <!-- GitHub 仓库外链：纯静态 <a>，无需 app.js 接线，浏览器原生新标签页打开 -->
-          <a id="linkGithub" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener noreferrer"
-            class="w-full flex items-center gap-2 text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" aria-label="在浏览器打开 GitHub 仓库">
-            <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-              <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.9.57.1.78-.25.78-.55 0-.27-.01-1.13-.02-2.04-3.2.7-3.88-1.35-3.88-1.35-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.5 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.84 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.08.78 2.17 0 1.57-.01 2.83-.01 3.22 0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/>
-            </svg>
-            <span>GitHub 仓库 · 源码 / Issue / Star →</span>
-          </a>
         </div>
       </div>
 
-      <!-- 5. 开发者模式：一键重启常驻 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
+      <!-- 开发者模式：一键重启常驻 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
       <div id="devModeGroup" class="hidden">
         <div class="text-xs font-semibold text-ink-soft mb-2">🛠 开发者</div>
         <button id="btnRestartServer" type="button" class="w-full text-left p-2.5 rounded-xl border border-warning/40 bg-warning/5 active:bg-warning/10 text-xs text-warning">⟳ 重启服务（改代码/.env 后生效）</button>
+      </div>
+
+      <!-- ═══ 🔑 访问与帮助 ═══ 无作用域可言（一个说明页 + 一个外链），单列一节免得挂错层 -->
+      <div class="text-xs font-bold text-ink flex items-center gap-1.5 pt-1">🔑 <span>访问与帮助</span></div>
+      <div class="space-y-2 -mt-2">
+        <button id="accessHelpOpen" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">新设备怎么批 · 令牌在哪 · 连不上怎么办 →</button>
+        <!-- GitHub 仓库外链：纯静态 <a>，无需 app.js 接线，浏览器原生新标签页打开 -->
+        <a id="linkGithub" href="https://github.com/Ike-li/claude-chat-mobile" target="_blank" rel="noopener noreferrer"
+          class="w-full flex items-center gap-2 text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" aria-label="在浏览器打开 GitHub 仓库">
+          <svg class="w-4 h-4 shrink-0" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.9.57.1.78-.25.78-.55 0-.27-.01-1.13-.02-2.04-3.2.7-3.88-1.35-3.88-1.35-.53-1.33-1.29-1.68-1.29-1.68-1.05-.72.08-.71.08-.71 1.17.08 1.78 1.2 1.78 1.2 1.03 1.77 2.71 1.26 3.37.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.68 0-1.25.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.04 0 0 .97-.31 3.18 1.18a11.05 11.05 0 0 1 5.79 0c2.21-1.5 3.18-1.18 3.18-1.18.63 1.58.23 2.75.11 3.04.74.81 1.19 1.84 1.19 3.09 0 4.41-2.69 5.39-5.25 5.67.41.36.78 1.08.78 2.17 0 1.57-.01 2.83-.01 3.22 0 .3.2.66.79.55A11.5 11.5 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5z"/>
+          </svg>
+          <span>GitHub 仓库 · 源码 / Issue / Star →</span>
+        </a>
       </div>
     </div>
   </div>

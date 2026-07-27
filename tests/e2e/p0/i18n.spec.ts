@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings } from '../../helpers/playwright';
 
 // zh 原文即词典 key 的运行时 t()，en locale 查表、未收录静默回落中文。本 spec 是唯一跑 en 的用例，
 // 其余 P0 spec 全部保持 zh 断言不变（见 public/js/i18n.js 头注 + scripts/i18n-check.js 孤儿扫描）。
@@ -19,8 +19,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('#btnSettings').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
-    await expect(page.locator('#settingsSheet')).toContainText('Select model');
-    await expect(page.locator('#settingsSheet')).toContainText('Sound');
+    await expect(page.locator('#modelSection summary')).toContainText('Model');
+    await page.keyboard.press('Escape');
+
+    // 提示音等本机偏好在通用设置里（按作用域拆分后），两个 sheet 的静态壳都要覆盖到
+    await openGeneralSettings(page);
+    await expect(page.locator('#generalSheet')).toContainText('Sound');
+    await expect(page.locator('#generalSheet')).toContainText('This phone');
 
     await expectNoBrowserErrors(page);
   });
@@ -40,9 +45,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 权限档磁贴：index.html 里是裸文本节点，且中英分属不同分组文案
     await expect(page.locator('#customPermGrid')).toContainText('Plan mode');
     await expect(page.locator('#customPermGrid')).toContainText('Accept edits');
-    await expect(page.locator('#settingsSheet')).toContainText('Access & devices');
+    await page.keyboard.press('Escape');
+
+    await openGeneralSettings(page);
+    await expect(page.locator('#generalSheet')).toContainText('Access & help');
     // 混排句（文本节点被 <code>/<strong> 切碎）也要拼得成句，不能留半截中文
-    await expect(page.locator('#settingsSheet')).not.toContainText('访问与设备');
+    await expect(page.locator('#generalSheet')).not.toContainText('访问与帮助');
+    // 作用域说明行是本次新增的长句，同样走整树扫描，不能漏翻
+    await expect(page.locator('[data-scope-note="host"]')).toContainText('this computer');
 
     await expectNoBrowserErrors(page);
   });

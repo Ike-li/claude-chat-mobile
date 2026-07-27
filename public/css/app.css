@@ -96,6 +96,22 @@ body { font-family: var(--font-ui); -webkit-font-smoothing: antialiased; text-re
 details.thinking > summary, details.toolcard > summary, #cliStatusWrap > summary { cursor: pointer; user-select: none; list-style: none; }
 details > summary::-webkit-details-marker { display: none; }
 #cliStatusWrap[open] .cli-arrow { transform: rotate(180deg); }
+
+/* 会话设置的折叠行（模型 / 思考强度 / 权限）：收起时只占一行「标题 + 当前值 + ⌄」。
+   触点整行 ≥40px，别只让那个小箭头可点——拇指够不准。 */
+.settings-fold > summary {
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  min-height: 40px;
+  padding: .25rem .1rem;
+}
+.settings-fold > summary:active { opacity: .7; }
+.settings-fold .fold-arrow { transition: transform .2s ease; }
+.settings-fold[open] .fold-arrow { transform: rotate(180deg); }
 /* 工具卡片：左竖条标记 agent 动作（Claude 风格） */
 .toolcard { border-left: 3px solid var(--accent-bright) !important; }
 /* 思考块：内心独白——serif 斜体淡色 */

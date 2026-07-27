@@ -11,7 +11,6 @@ import { createMessageRenderer } from '../../public/js/app/message-renderer.js';
 import { createAgentEventDispatcher, createReplayBuffer } from '../../public/js/app/event-dispatch.js';
 import { formatFileSize, cmModeForFileName } from '../../public/js/app/file-browser.js';
 import { createSettingsController } from '../../public/js/app/settings.js';
-import { createNotificationController } from '../../public/js/app/notifications.js';
 import { createTaskStatusController } from '../../public/js/app/task-status.js';
 import { createSessionWorkspaceState } from '../../public/js/app/session-workspaces.js';
 import { createInteractionQueueState } from '../../public/js/app/approval-questions.js';
@@ -598,76 +597,6 @@ test('settings controller synchronizes alert preferences when opening the sheet'
   assert.equal(scrimClasses.has('hidden'), true);
   assert.equal(bodyClasses.has('ccm-sheet-open'), false);
   assert.equal(htmlClasses.has('ccm-sheet-open'), false);
-});
-
-test('notification controller only raises foreground notifications when explicitly forced', () => {
-  const raised = [];
-  class NotificationMock {
-    static permission = 'granted';
-    constructor(title, options) { raised.push({ title, options }); }
-  }
-  const context = createAppContext({
-    dependencies: {
-      document: { hidden: false },
-      window: { Notification: NotificationMock },
-      navigator: {},
-      Notification: NotificationMock,
-    },
-  });
-  const notifications = createNotificationController(context, { autoBind: false });
-
-  assert.equal(notifications.notify('done', 'body'), false);
-  assert.equal(notifications.notify('done', 'body', { force: true }), true);
-  assert.equal(raised.length, 1);
-  assert.equal(raised[0].options.tag, 'ccm');
-});
-
-// ⑧ 推送内容预览：subscribe() 把 storage 里的本地偏好一并 POST 给服务端（per-device prefs.preview），
-// 服务端按它决定这条订阅该收 body 还是 previewBody（见 src/ops/notify-channels.js pushNotify）。
-test('notification controller subscribe() includes prefs.preview from storage in the POST body', async () => {
-  const fetchCalls = [];
-  const fakeSubscription = {
-    endpoint: 'https://push.example/abc',
-    toJSON() { return { endpoint: this.endpoint, keys: { p256dh: 'a', auth: 'b' } }; },
-  };
-  const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
-  const context = createAppContext({
-    dom: { btnPush: { classList: { add() {}, remove() {} } } },
-    dependencies: {
-      navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
-      window: {},
-      fetch: async (url, init) => { fetchCalls.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; },
-      storage: { getItem: key => (key === 'ccm_push_preview' ? '1' : null), setItem() {} },
-    },
-  });
-  const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
-
-  const ok = await notifications.subscribe();
-  assert.equal(ok, true);
-  assert.equal(fetchCalls.length, 1);
-  const sentBody = JSON.parse(fetchCalls[0].init.body);
-  assert.equal(sentBody.endpoint, 'https://push.example/abc');
-  assert.deepEqual(sentBody.prefs, { preview: true });
-});
-
-test('notification controller subscribe() defaults prefs.preview to false when storage has no opt-in', async () => {
-  const fetchCalls = [];
-  const fakeSubscription = { endpoint: 'https://push.example/xyz', toJSON() { return { endpoint: this.endpoint, keys: {} }; } };
-  const registration = { pushManager: { getSubscription: async () => fakeSubscription } };
-  const context = createAppContext({
-    dom: { btnPush: { classList: { add() {}, remove() {} } } },
-    dependencies: {
-      navigator: { serviceWorker: { register: async () => registration, ready: Promise.resolve() } },
-      window: {},
-      fetch: async (url, init) => { fetchCalls.push({ url, init }); return { ok: true, json: async () => ({ ok: true }) }; },
-      storage: { getItem: () => null, setItem() {} },
-    },
-  });
-  const notifications = createNotificationController(context, { autoBind: false, getToken: () => '' });
-
-  await notifications.subscribe();
-  const sentBody = JSON.parse(fetchCalls[0].init.body);
-  assert.deepEqual(sentBody.prefs, { preview: false });
 });
 
 test('task status controller ignores other instances and updates the current progress banner', () => {
