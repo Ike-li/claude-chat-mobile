@@ -607,6 +607,7 @@ export const EN_DICT = Object.freeze({
   '终端会话已打开': 'Open in a terminal',
   '终端会话推送': 'Terminal session alerts',
   '推送通知': 'Push notifications',
+  '未开启上方的推送通知前，这个开关不产生任何效果（偏好只存在本机）。': 'Until push notifications above are turned on, this switch has no effect (the preference stays on this device only).',
   '不可用': 'Unavailable',
   '已被拒绝': 'Blocked',
   '已开启': 'On',

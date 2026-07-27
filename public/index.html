@@ -722,6 +722,9 @@
             </span>
             <input id="prefPushPreview" type="checkbox" class="w-4 h-4 accent-[var(--accent)] shrink-0">
           </label>
+          <!-- 没有订阅时这个开关是空转的（偏好跟着订阅存在服务端，没订阅就没地方存、也没通知可改）。
+               不禁用它——只说明，免得用户勾了半天以为生效了。 -->
+          <div id="pushPreviewInertNote" class="hidden text-[10px] text-ink-faint px-1">未开启上方的推送通知前，这个开关不产生任何效果（偏好只存在本机）。</div>
         </div>
       </div>
 

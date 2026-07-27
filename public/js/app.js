@@ -4451,7 +4451,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   // 配置面板「推送内容」段顶部的订阅状态行。推送不通时此前 UI 上零痕迹——铃铛按钮在权限被拒或
   // 订阅失败时都不显示，用户查不出自己为什么收不到（实测：机主机器上从未订阅成功过而毫不知情）。
-  const pushStatusRowEl = $('pushStatusRow');
+  const pushStatusRowEl = $('pushStatusRow'), pushPreviewInertNote = $('pushPreviewInertNote');
   async function renderPushStatusRow() {
     if (!pushStatusRowEl) return;
     let subscribed = false;
@@ -4459,6 +4459,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const reg = await navigator.serviceWorker?.ready;
       subscribed = !!(await reg?.pushManager?.getSubscription());
     } catch { /* 不支持/未注册 SW：按未订阅渲染，由 hint 解释原因 */ }
+    // 没订阅时「推送带内容预览」是空转的——把这件事说出来，别让人勾了以为生效
+    pushPreviewInertNote?.classList.toggle('hidden', subscribed);
     const row = formatPushStatusRow({
       hint: pushEnvHint(notifications.environment()),
       permission: typeof Notification !== 'undefined' ? Notification.permission : 'default',
