@@ -51,6 +51,15 @@ let reconnectSettleMarkerArmed = false;
 let terminalBadgeArmed = false;
 // 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
 let mockHooksState = 'not-installed';
+// 真 server 的 instances 广播恒带 service 字段；mock 此前完全没带，导致依赖它的前端段落（如
+// 配置面板「终端会话推送」）在 mock 下永远不渲染。这里补齐同形 payload。
+const mockServicePayload = () => ({
+  startedAt: MOCK_SERVICE_STARTED_AT,
+  deliveryFailure: mockDeliveryFailure,
+  rateLimitLockout: mockRateLimitLockout,
+  clientError: mockClientError,
+  hooksBridge: { state: mockHooksState, off: false },
+});
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
 const queuedEchoItems = new Map(); // busy 期回显为 queued 的消息 clientMessageId → {text}：user:cancelQueued 撤回 / interrupt 连带取消 都按它对账
 let foregroundSyncReplayMode = false;
@@ -423,7 +432,7 @@ io.on('connection', socket => {
         viewingInstanceId,
         viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-        instances: mockInstances
+        instances: mockInstances, service: mockServicePayload()
       }
     });
 
@@ -479,7 +488,7 @@ io.on('connection', socket => {
           viewingInstanceId,
           viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
           dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-          instances: mockInstances,
+          instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
           defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
         }
@@ -507,7 +516,7 @@ io.on('connection', socket => {
         viewingInstanceId,
         viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-        instances: mockInstances,
+        instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
         defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
       }
@@ -533,7 +542,7 @@ io.on('connection', socket => {
           viewingInstanceId,
           viewingCwd: inst?.cwd || mockInstances[0].cwd,
           dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-          instances: mockInstances
+          instances: mockInstances, service: mockServicePayload()
         }
       });
     }
@@ -572,7 +581,7 @@ io.on('connection', socket => {
           viewingInstanceId,
           viewingCwd,
           dirs: Array.from(new Set([...mockInstances.map(i => i.cwd), viewingCwd])),
-          instances: mockInstances,
+          instances: mockInstances, service: mockServicePayload(),
           defaultPermissionMode: viewingInstanceId === null ? pendingFreshPermissionOrDefault() : undefined,
           defaultEffort: viewingInstanceId === null ? pendingFreshEffortOrDefault() : undefined
         }
@@ -607,7 +616,7 @@ io.on('connection', socket => {
         viewingInstanceId: null,
         viewingCwd,
         dirs,
-        instances: mockInstances,
+        instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
         defaultEffort: pendingFreshEffortOrDefault()
       }
@@ -636,7 +645,7 @@ io.on('connection', socket => {
         viewingInstanceId: null,
         viewingCwd,
         dirs,
-        instances: mockInstances,
+        instances: mockInstances, service: mockServicePayload(),
         defaultPermissionMode: pendingFreshPermissionOrDefault(),
         defaultEffort: pendingFreshEffortOrDefault()
       }
@@ -790,7 +799,7 @@ io.on('connection', socket => {
         viewingInstanceId,
         viewingCwd: archivedInst.cwd,
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-        instances: mockInstances
+        instances: mockInstances, service: mockServicePayload()
       }
     });
     if (typeof callback === 'function') callback({ ok: true, instanceId: archivedInst.instanceId, sessionId: archivedInst.sessionId });
@@ -831,7 +840,7 @@ io.on('connection', socket => {
         viewingInstanceId,
         viewingCwd: forkedInst.cwd,
         dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-        instances: mockInstances
+        instances: mockInstances, service: mockServicePayload()
       }
     });
     callback({ ok: true, instanceId: forkedInst.instanceId, sessionId: forkedInst.sessionId });
@@ -1131,6 +1140,16 @@ io.on('connection', socket => {
     if (action === 'install') mockHooksState = 'installed';
     if (action === 'uninstall') mockHooksState = 'not-installed';
     ack({ ok: true, state: mockHooksState, report: action === 'install' ? '✅ 安装成功，端到端验证通过。' : '已移除。' });
+    // 与真 server 一致：装/卸后广播新的安装态（前端另有 ack 回填兜底，两条都要保真）
+    io.emit('agent:event', {
+      seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+      type: 'instances', payload: {
+        viewingInstanceId,
+        viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+        dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+        instances: mockInstances, service: mockServicePayload(),
+      },
+    });
   });
 
   socket.on('service:status', (_payload, ack) => {
@@ -1374,7 +1393,7 @@ io.on('connection', socket => {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
         socket.emit('agent:event', {
@@ -1395,7 +1414,7 @@ io.on('connection', socket => {
         activeInst.state = 'permission';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
         pendingQuestion = {
@@ -1424,7 +1443,7 @@ io.on('connection', socket => {
           activeInst.state = 'idle';
           io.emit('agent:event', {
             seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
           });
           socket.emit('agent:event', {
             seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -1451,7 +1470,7 @@ io.on('connection', socket => {
           activeInst.state = 'idle';
           io.emit('agent:event', {
             seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
           });
           socket.emit('agent:event', {
             seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -1468,7 +1487,7 @@ io.on('connection', socket => {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
         socket.emit('agent:event', {
@@ -1496,7 +1515,7 @@ io.on('connection', socket => {
           activeInst.state = 'idle';
           io.emit('agent:event', {
             seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
           });
           socket.emit('agent:event', {
             seq: 5, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -1508,7 +1527,7 @@ io.on('connection', socket => {
         activeInst.state = 'permission';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
         pendingPermission = {
@@ -1535,7 +1554,7 @@ io.on('connection', socket => {
           activeInst.state = 'idle';
           io.emit('agent:event', {
             seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
           });
           socket.emit('agent:event', {
             seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -1562,7 +1581,7 @@ io.on('connection', socket => {
           activeInst.state = 'idle';
           io.emit('agent:event', {
             seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+            type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
           });
           socket.emit('agent:event', {
             seq: 7, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -1580,7 +1599,7 @@ io.on('connection', socket => {
         const freshInst = openFreshMockInstance(requestedModel);
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
         const effectiveModel = requestedModel || '未指定(沿用)';
@@ -1597,7 +1616,7 @@ io.on('connection', socket => {
         freshInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: freshInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: null, instanceId: freshInst.instanceId, ts: Date.now(),
@@ -1612,7 +1631,7 @@ io.on('connection', socket => {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
         const effectiveModel = requestedModel || '未指定(沿用)';
@@ -1630,7 +1649,7 @@ io.on('connection', socket => {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -1652,7 +1671,7 @@ io.on('connection', socket => {
         viewingInstanceId = 'inst_2';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -1663,8 +1682,17 @@ io.on('connection', socket => {
       // P0-11x：给两条无 live 实例的主工作区会话标上终端直跑态，验证抽屉 ⌨️ 徽标 busy/alive 两态可区分。
       command: 'test:hooks-installed',
       run: async () => {
-        console.log('[mock] test:hooks-installed — 服务状态面板「终端会话推送」显示已启用');
+        console.log('[mock] test:hooks-installed — 配置面板「终端会话推送」显示已启用');
         mockHooksState = 'installed';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances, service: mockServicePayload(),
+          },
+        });
       },
     },
     {
@@ -1683,7 +1711,7 @@ io.on('connection', socket => {
         viewingInstanceId = 'inst_2';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === 'inst_2')?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -1710,7 +1738,7 @@ io.on('connection', socket => {
         switchBackReplayArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -1736,7 +1764,7 @@ io.on('connection', socket => {
         replayFloodHistoryArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -1761,7 +1789,7 @@ io.on('connection', socket => {
         replaySmallSyncArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -1787,7 +1815,7 @@ io.on('connection', socket => {
         replayUnreadSyncArmed = false;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -1839,7 +1867,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: inst.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
       },
@@ -1868,7 +1896,7 @@ io.on('connection', socket => {
         if (inst) inst.state = 'permission';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst?.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -1917,7 +1945,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: inst.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
       },
@@ -2083,7 +2111,7 @@ io.on('connection', socket => {
         };
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -2109,7 +2137,7 @@ io.on('connection', socket => {
         const freshId = freshInst.instanceId;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         // 关键窗口：模拟 SDK 启动慢，此后约 1.1s 不发任何 delta。E2E 在此窗口断言 pill 仍可见
         // （修复前已被 clearView 冲掉 → fail；修复后由 setInstances 补回 → pass）。
@@ -2123,7 +2151,7 @@ io.on('connection', socket => {
         if (fInst) fInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         socket.emit('agent:event', {
           seq: 100, epoch: activeEpoch, sessionId: null, instanceId: freshId, ts: Date.now(),
@@ -2139,7 +2167,7 @@ io.on('connection', socket => {
         activeInst.queueFull = true;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
         socket.emit('agent:event', {
@@ -2152,7 +2180,7 @@ io.on('connection', socket => {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -2167,7 +2195,7 @@ io.on('connection', socket => {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
         await delay(100);
@@ -2179,7 +2207,7 @@ io.on('connection', socket => {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -2195,7 +2223,7 @@ io.on('connection', socket => {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
 
         await delay(100);
@@ -2207,7 +2235,7 @@ io.on('connection', socket => {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -2247,7 +2275,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: activeInst.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
         socket.emit('agent:event', {
@@ -2285,7 +2313,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: activeInst.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
         socket.emit('agent:event', {
@@ -2345,7 +2373,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: activeInst.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
         socket.emit('agent:event', {
@@ -2383,7 +2411,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: activeInst.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
         await delay(200);
@@ -2445,7 +2473,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
         // 尽快结束这一轮（result），不留悬空 busy 态干扰后续断线重连观测。
@@ -2487,7 +2515,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
         // 尽快结束这一轮（result），不留悬空 busy 态干扰后续断线重连观测。
@@ -2528,7 +2556,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
 
@@ -2569,7 +2597,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
 
@@ -2611,7 +2639,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
         // 当前视图（inst_1）收尾 → waitForIdle 可用；inst_2 的 busy 只体现在 instances.state。
@@ -2667,7 +2695,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: inst1.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
         socket.emit('agent:event', {
@@ -2722,7 +2750,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: inst1.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
         socket.emit('agent:event', {
@@ -2749,7 +2777,7 @@ io.on('connection', socket => {
         inst1ct.state = 'permission';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst1ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst1ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         pendingPermission = { requestId: 'req_perm_cross_tab', toolUseId: 't_cross', messageId: 'msg_cross_1', name: 'run_command', input: 'git push origin main', cwd: inst1ct.cwd };
         syncPendingSnapshot = {
@@ -2771,7 +2799,7 @@ io.on('connection', socket => {
         console.log('[mock] test:permCrossTab — 自动切 viewing → inst_2（应触发前端 clearView 清弹窗）');
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -2791,7 +2819,7 @@ io.on('connection', socket => {
         inst1ct.state = 'permission';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst1ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst1ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         pendingQuestion = {
           requestId: 'req_question_cross_tab#0',
@@ -2826,7 +2854,7 @@ io.on('connection', socket => {
         const inst2ct = mockInstances.find(i => i.instanceId === 'inst_2');
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: inst2ct.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
       },
     },
@@ -2874,7 +2902,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: inst2.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
       },
@@ -2926,7 +2954,7 @@ io.on('connection', socket => {
             viewingInstanceId,
             viewingCwd: inst2.cwd,
             dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
-            instances: mockInstances
+            instances: mockInstances, service: mockServicePayload()
           }
         });
       },
@@ -2996,7 +3024,7 @@ io.on('connection', socket => {
         activeInst.state = 'busy';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         await delay(200);
 
@@ -3010,7 +3038,7 @@ io.on('connection', socket => {
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+          type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
         });
         await delay(300);
         socket.emit('agent:event', {
@@ -3126,7 +3154,7 @@ io.on('connection', socket => {
       openFreshMockInstance(requestedModel);
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
     }
 
@@ -3154,7 +3182,7 @@ io.on('connection', socket => {
       activeInst.state = 'busy';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
 
       await delay(150);
@@ -3166,7 +3194,7 @@ io.on('connection', socket => {
       activeInst.state = 'idle';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
       socket.emit('agent:event', {
         seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
@@ -3195,7 +3223,7 @@ io.on('connection', socket => {
       activeInst.state = 'busy';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
 
       // Broadcast resolved
@@ -3248,7 +3276,7 @@ io.on('connection', socket => {
       activeInst.state = 'idle';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
 
       socket.emit('agent:event', {
@@ -3311,7 +3339,7 @@ io.on('connection', socket => {
       activeInst.state = 'busy';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
 
       const free = typeof freeText === 'string' ? freeText.trim() : '';
@@ -3358,7 +3386,7 @@ io.on('connection', socket => {
       activeInst.state = 'idle';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
 
       socket.emit('agent:event', {
@@ -3420,7 +3448,7 @@ io.on('connection', socket => {
       activeInst.state = 'idle';
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
-        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances }
+        type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
     }
     // 镜像真 server：interrupt 连带丢弃 CLI 队列里的排队条 → queue_dropped（前端据此把气泡标「已随停止取消」）

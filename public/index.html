@@ -614,9 +614,11 @@
            ensureCliDefaults 按 cwd 缓存（只在启动/session:new/session:home 才 force 重读），
            终端侧改了文件这里不会自己感知——常驻手动兜底入口（新会话页另有一个同源的 ↻）。
            不放标题栏：#settingsDragZone 绑了下拉关闭手势，按钮进去会和手势打架。 -->
-      <div class="flex items-center justify-end -mb-2">
-        <button id="btnConfigRefresh" type="button" class="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] text-ink-faint hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置">
-          <span class="text-xs leading-none" data-spin>↻</span><span>重读 CLI 配置</span>
+      <!-- 左侧说明填掉原先的空白：孤零零一个右对齐小链接看不出它管什么、点完也不知道有没有生效。 -->
+      <div class="flex items-center justify-between gap-2 -mb-1">
+        <span class="text-[10px] text-ink-faint min-w-0">下面的模型 / 权限 / 命令来自 CLI 配置，终端改了不会自动感知</span>
+        <button id="btnConfigRefresh" type="button" class="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-line text-[10px] text-ink-soft hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置">
+          <span class="text-xs leading-none" data-spin>↻</span><span data-label>重读 CLI 配置</span>
         </button>
       </div>
 
@@ -694,6 +696,14 @@
           </label>
           <button id="btnAlertPreview" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">▶ 试听提示音 / 试震一下</button>
         </div>
+      </div>
+
+      <!-- 3b-2. 终端会话推送（CLI hooks 桥）——放在通知这一组而不是服务状态诊断页：对用户而言它就是
+           "电脑终端里跑的会话要不要通知我"，与上面的提示音/震动同一心智。整段由 app.js 按安装态渲染
+           （未装/已装/被 env 停用/配置漂移四态），旧 server 无此字段时整段不出现。 -->
+      <div id="hooksBridgeSection" class="hidden">
+        <div class="text-xs font-semibold text-ink-soft mb-2">⌨️ <span>终端会话推送</span> <span class="text-xs text-ink-faint font-normal">(默认关，可开)</span></div>
+        <div id="hooksBridgeBody" class="space-y-2"></div>
       </div>
 
       <!-- 3c. 推送内容预览（默认关）——web-push payload 本身已 RFC 8291 端到端加密（push service 读不到），

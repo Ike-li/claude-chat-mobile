@@ -1176,29 +1176,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     }
     serviceStatusBody.appendChild(noticesSection);
-    // 段3 终端会话推送：CLI hooks 桥开关。放在服务状态面板而非会话设置里——它是主机级能力
-    // （影响这台机器上所有终端会话），不属于"当前这个会话"的档位。旧 server 无字段 → 整段不渲染。
-    const hooksRow = formatHooksBridgeRow(res.hooksBridge);
-    if (hooksRow) {
-      const sec = section(t('终端会话推送'));
-      const row = el(`<div class="flex items-center justify-between gap-3 px-3 py-2.5 text-xs"><span class="text-ink-soft font-medium shrink-0"></span></div>`);
-      row.firstChild.textContent = hooksRow.value;
-      const toneCls = { ok: 'text-success', warn: 'text-warning', muted: 'text-ink-faint' }[hooksRow.tone];
-      if (toneCls) row.firstChild.classList.add(toneCls);
-      if (hooksRow.action) {
-        const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70"></button>`);
-        btn.textContent = hooksRow.actionText;
-        btn.onclick = () => runHooksSetup(hooksRow.action, btn);
-        row.appendChild(btn);
-      }
-      sec.lastChild.appendChild(row);
-      if (hooksRow.hint) {
-        const h = el(`<div class="px-3 pb-2.5 text-[10px] text-ink-faint border-t border-line-soft pt-2"></div>`);
-        h.textContent = hooksRow.hint;
-        sec.lastChild.appendChild(h);
-      }
-      serviceStatusBody.appendChild(sec);
-    }
     const hint = el(`<div class="text-[10px] text-ink-faint"></div>`);
     hint.textContent = t('数据每 5 秒自动刷新 · 告警超 24 小时自动退场 · 原始计数见 /metrics');
     serviceStatusBody.appendChild(hint);
@@ -1221,9 +1198,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     btn.textContent = t('处理中…');
     socket.timeout(25000).emit('hooks:setup', { action }, (err, res) => {
       btn.disabled = false;
+      // 用 ack 自带的 state 立刻回填再重渲：只等 instances 广播的话，按钮会一直卡在「处理中…」
+      // （广播若没来或迟到，这段就再也不会重画）。广播随后到达只是二次确认，不是唯一依赖。
+      if (res?.state && latestServiceHealth?.hooksBridge) latestServiceHealth.hooksBridge.state = res.state;
+      renderHooksBridgeSection();
       if (err || !res) { addBar(t('操作超时，请重试'), 'text-danger'); loadServiceStatus(); return; }
       addBar(res.report || (res.ok ? t('已完成') : t('操作失败')), res.ok ? 'text-ink-faint' : 'text-danger');
-      loadServiceStatus(); // 重拉刷新本段状态
+      loadServiceStatus(); // 服务状态页开着时顺带刷新
     });
   }
 
@@ -4465,6 +4446,34 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     latestServiceHealth = service;
     // 边框由 updateAttentionSignal 统一重算（alert > attention > ok），此处只刷服务文案区。
     refreshServiceSection();
+    renderHooksBridgeSection(); // 安装态随广播刷新：面板开着时点完开关能立刻看到变化
+  }
+
+  // 配置面板的「终端会话推送」段（CLI hooks 桥）。放在通知这一组、而不是服务状态诊断页：对用户
+  // 而言这就是"电脑终端里跑的会话要不要通知我"，与提示音/震动同一心智——埋进诊断页没人找得到。
+  const hooksBridgeSection = $('hooksBridgeSection'), hooksBridgeBody = $('hooksBridgeBody');
+  function renderHooksBridgeSection() {
+    if (!hooksBridgeSection || !hooksBridgeBody) return;
+    const row = formatHooksBridgeRow(latestServiceHealth?.hooksBridge);
+    if (!row) { hooksBridgeSection.classList.add('hidden'); return; } // 旧 server / 读不出状态 → 整段缺席
+    hooksBridgeSection.classList.remove('hidden');
+    hooksBridgeBody.replaceChildren();
+    const card = el(`<div class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface text-xs text-ink"><span class="min-w-0"></span></div>`);
+    const label = el(`<span class="font-semibold block"></span>`);
+    label.textContent = row.value;
+    const toneCls = { ok: 'text-success', warn: 'text-warning', muted: 'text-ink-soft' }[row.tone];
+    if (toneCls) label.classList.add(toneCls);
+    card.firstChild.appendChild(label);
+    const desc = el(`<span class="text-xs text-ink-soft"></span>`);
+    desc.textContent = row.hint || t('电脑终端里跑的会话，完成或需要你时通知手机');
+    card.firstChild.appendChild(desc);
+    if (row.action) {
+      const btn = el(`<button class="shrink-0 px-3 py-1.5 rounded-lg border border-line text-xs active:opacity-70" data-testid="hooks-bridge-action"></button>`);
+      btn.textContent = row.actionText;
+      btn.onclick = () => runHooksSetup(row.action, btn);
+      card.appendChild(btn);
+    }
+    hooksBridgeBody.appendChild(card);
   }
 
   function setBusy(b) {
@@ -5473,6 +5482,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       socket.emit('config:refresh', { cwd: currentCwd }, () => {
         acked = true;
         restore();
+        // 成功也要有反馈：此前只有失败才提示，成功时图标一闪即停，用户完全看不出刷没刷
+        // （面板还盖着消息流，addBar 在这个场景也看不见）——就地把按钮文案改成"✓ 已刷新"两秒。
+        const labelEl = btn.querySelector('[data-label]');
+        if (!labelEl || labelEl.dataset.reverting === '1') return;
+        const original = labelEl.textContent;
+        labelEl.dataset.reverting = '1';
+        labelEl.textContent = t('✓ 已刷新');
+        setTimeout(() => {
+          labelEl.textContent = original;
+          delete labelEl.dataset.reverting;
+        }, 2000);
       });
       // 兜底：与文件里其它「乐观禁用+超时兜底恢复」操作（session:home/session:switch 等）对齐——
       // ack 丢了也不能让按钮永久卡在禁用+转圈态。
