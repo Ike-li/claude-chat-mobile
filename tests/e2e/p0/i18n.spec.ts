@@ -17,9 +17,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('html')).toHaveAttribute('lang', 'en');
     await expect(page.locator('#input')).toHaveAttribute('placeholder', 'Message Claude...');
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
-    await expect(page.locator('#modelSection summary')).toContainText('Model');
+    await expect(page.locator('#modelSection')).toContainText('Model');
+    await expect(page.locator('.model-tile').first()).toBeVisible();
     await page.keyboard.press('Escape');
 
     // 提示音等本机偏好在通用设置里（按作用域拆分后），两个 sheet 的静态壳都要覆盖到
@@ -41,7 +42,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#btnHome')).toHaveAttribute('aria-label', 'Home');
     await expect(page.locator('#pillPermText')).toHaveText('Default');
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     // 权限档磁贴：index.html 里是裸文本节点，且中英分属不同分组文案
     await expect(page.locator('#customPermGrid')).toContainText('Plan mode');
     await expect(page.locator('#customPermGrid')).toContainText('Accept edits');

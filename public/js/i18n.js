@@ -135,8 +135,8 @@ export const EN_DICT = Object.freeze({
   '默认': 'Default',
   '默认审批': 'Default',
   '思考默认': 'Thinking: default',
-  '权限模式': 'Permission mode',
   '思考强度': 'Thinking effort',
+  '会话设置': 'Session settings',
   '添加附件': 'Add attachment',
   '推送未接通': 'Push not connected',
   '推送未接通，查看推送状态': 'Push not connected — view push status',
@@ -195,12 +195,9 @@ export const EN_DICT = Object.freeze({
   // '诊断' 已在上方（服务状态那组）收录，此处复用同一条，勿重复添加
   '访问与帮助': 'Access & help',
   '重读 CLI 配置': 'Reload CLI config',
-  '选择模型': 'Select model', // 仍用于底栏 model chip 的 title
-  // 三块折叠行的标题：收起时只占一行，故用最短的名词（展开区内另有说明句）。
-  // '模型' 已在下方（服务状态那组）收录，此处复用同一条。
+  // 设置分块标题：'模型' 已在下方（服务状态那组）收录，此处复用同一条。
   '权限': 'Permissions',
   '切换在下一条消息起效': 'Applies from your next message',
-  '不可调': 'Not adjustable',
   '属于': 'for',
   '敏感操作弹窗确认': 'Prompts before sensitive actions',
   '计划模式': 'Plan mode',
@@ -441,7 +438,6 @@ export const EN_DICT = Object.freeze({
   'CLI 模式未知': 'CLI mode unknown',
   'CLI 当前模型': 'Current CLI model',
   'CLI 模型未知': 'CLI model unknown',
-  'CLI 当前模型未知': 'Current CLI model unknown',
   'CLI 档位未知': 'CLI level unknown',
   'CLI 当前档未知': 'Current CLI level unknown',
 

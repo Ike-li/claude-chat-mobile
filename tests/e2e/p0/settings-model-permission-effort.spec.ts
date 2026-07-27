@@ -10,9 +10,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
 
     // 1. 打开配置面板，检查模型、权限、思考强度入口。
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
-    await expect(page.locator('#modelSection summary')).toContainText('模型');
+    await expect(page.locator('#modelSection')).toContainText('模型');
     await expect(page.locator('.model-tile')).toContainText(['Default (recommended)', 'Claude 3.5 Sonnet', 'Claude 3.5 Haiku', 'Claude 3 Opus', 'Claude 3 Opus (1m Context)']);
     await expect(page.locator('.perm-tile')).toHaveCount(6); // 含 CLI/SDK 支持但终端交互菜单不直接暴露的 auto
 
@@ -32,58 +32,47 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 会话设置三块（模型/强度/权限）折叠成紧凑列表：平时每块只占一行「标题 + 当前值 + ⌄」，
-  // 点开才出磁贴。此前一打开面板就是 5 个模型磁贴（还带 max-h-48 内部滚动）+ 6 个权限磁贴，
-  // 权限和强度被挤到屏外。手风琴（同时只展开一块）保证列表始终是紧凑的。
-  test('P0-09q 三块折叠成紧凑列表：chip 入口只开目标块，展开互斥，选完即收', async ({ page }) => {
+  // 方案 A：去掉折叠壳，打开即见三块磁贴；当前项 ring 框选；选完不收。
+  // 底栏三条 chip 合并为 #pillDefaults 一条「模型 · 权限 · 思考」摘要。
+  test('P0-09q 打开会话设置即见三块磁贴，选完保持展开并用框标当前项', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
-    // 齿轮已删，入口即三个 chip：进门只展开目标块，其余保持收起（紧凑列表）
-    await page.locator('#pillPerm').click();
+    await page.locator('#pillDefaults').click();
 
-    await expect(page.locator('#permSection')).toHaveJSProperty('open', true);
-    await expect(page.locator('#modelSection')).toHaveJSProperty('open', false);
-    await expect(page.locator('#effortSection')).toHaveJSProperty('open', false);
-    await expect(page.locator('#permFoldValue')).toContainText('默认审批');
-    await expect(page.locator('.model-tile[data-model="claude-3-5-sonnet"]')).toBeHidden();
+    await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+    // 三块始终可见，不再靠 summary open
+    await expect(page.locator('.model-tile[data-model="claude-3-5-sonnet"]')).toBeVisible();
+    await expect(page.locator('.perm-tile[data-mode="default"]')).toBeVisible();
+    await expect(page.locator('#effortSection')).toBeVisible();
 
-    // 展开模型 → 磁贴出现；选一个后自动收起，折叠头显示新值
-    await page.locator('#modelSection summary').click();
-    await expect(page.locator('#modelSection')).toHaveJSProperty('open', true);
     await page.locator('.model-tile[data-model="claude-3-5-sonnet"]').click();
-    await expect(page.locator('#modelSection')).toHaveJSProperty('open', false);
-    await expect(page.locator('#modelFoldValue')).toContainText('Claude 3.5 Sonnet');
+    // 选完不收：磁贴仍在，当前项带 ring
+    await expect(page.locator('.model-tile[data-model="claude-3-5-sonnet"]')).toBeVisible();
+    await expect(page.locator('.model-tile[data-model="claude-3-5-sonnet"]')).toHaveClass(/ring-accent/);
+    // pill 显原始 value（非 displayName）；磁贴标题才是 Claude 3.5 Sonnet
+    await expect(page.locator('#pillModelText')).toContainText('claude-3-5-sonnet');
 
-    // 手风琴：展开权限时，先前展开的块收起
-    await page.locator('#effortSection summary').click();
-    await expect(page.locator('#effortSection')).toHaveJSProperty('open', true);
-    await page.locator('#permSection summary').click();
-    await expect(page.locator('#permSection')).toHaveJSProperty('open', true);
-    await expect(page.locator('#effortSection')).toHaveJSProperty('open', false);
-
-    // 权限选完同样自动收起并回填值（此时 permSection 已由上面的手风琴断言展开着）
     await page.locator('.perm-tile[data-mode="plan"]').click();
-    await expect(page.locator('#permSection')).toHaveJSProperty('open', false);
-    await expect(page.locator('#permFoldValue')).toContainText('计划模式');
+    await expect(page.locator('.perm-tile[data-mode="plan"]')).toHaveClass(/ring-accent/);
+    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    // 摘要 chip 连写
+    await expect(page.locator('#pillDefaults')).toContainText('计划模式');
 
     await expectNoBrowserErrors(page);
   });
 
-  // 底栏 chip 是「我要改这一项」的意图表达。此前点它只是打开整个面板 + 给对应磁贴闪 1.5 秒高亮圈
-  // （自己找），那个闪烁本就是在补偿「把你丢进大面板」；折叠后可以直接展开对应块，意图落到实处。
-  test('P0-09r 底栏 chip 直达对应折叠块，不再靠闪一下高亮圈让人自己找', async ({ page }) => {
+  // 底栏只剩一条摘要 chip：点一次打开会话设置，三块磁贴都在，不再分入口。
+  test('P0-09r 底栏摘要 chip 打开会话设置，三块磁贴同时可见', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#pillPerm').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
-    await expect(page.locator('#permSection')).toHaveJSProperty('open', true);
-    await expect(page.locator('#modelSection')).toHaveJSProperty('open', false);
-    await page.keyboard.press('Escape');
-
-    await page.locator('#pillModel').click();
-    await expect(page.locator('#modelSection')).toHaveJSProperty('open', true);
-    await expect(page.locator('#permSection')).toHaveJSProperty('open', false);
+    await expect(page.locator('#modelSection')).toBeVisible();
+    await expect(page.locator('#permSection')).toBeVisible();
+    await expect(page.locator('#effortSection')).toBeVisible();
+    await expect(page.locator('.model-tile').first()).toBeVisible();
+    await expect(page.locator('.perm-tile').first()).toBeVisible();
 
     await expectNoBrowserErrors(page);
   });
@@ -95,7 +84,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09p 思考强度从属于所选模型：标题带模型名，不支持时就地说明而非整块消失', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
 
     // 支持 effort 的模型：区块说清这是「谁的」档位
     await openSettingsSection(page, 'model');
@@ -127,7 +116,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
     await expect(page.locator('#pillPermText')).toContainText('计划模式');
@@ -153,7 +142,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await openSettingsSection(page, 'effort');
     await page.locator('.effort-tile[data-level="high"]').click();
     await expect(page.locator('#effortSelect')).toHaveValue('high');
@@ -184,7 +173,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#btnNew').click();
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
     await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
@@ -242,7 +231,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#input')).toBeDisabled();
     await expect(page.locator('#pillEffortText')).toHaveText('CLI 档位未知', { timeout: 800 });
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#effortSelect')).toHaveValue('');
     await expect(page.locator('#effortSelect option:checked')).toHaveText('CLI 当前档未知');
 
@@ -253,7 +242,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
     await openSettingsSection(page, 'model');
@@ -279,25 +268,24 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-09h 超长模型名在底栏单行省略且保留完整 title', async ({ page }) => {
+  test('P0-09h 超长模型名在摘要 chip 内单行省略且 title 含完整名', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:longmodel');
     await waitForIdle(page);
 
     await expect(page.locator('#pillModelText')).toHaveText('mimo-v2.5-pro-ultraspeed');
-    await expect(page.locator('#pillModel')).toHaveAttribute('title', 'mimo-v2.5-pro-ultraspeed');
-    const layout = await page.locator('#pillModel').evaluate((chip) => {
+    // 合并 chip 的 title 是「模型 · 权限 · 思考」摘要，须含完整模型名
+    await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /mimo-v2\.5-pro-ultraspeed/);
+    const layout = await page.locator('#pillDefaults').evaluate((chip) => {
       const text = chip.querySelector('#pillModelText') as HTMLElement | null;
-      const permission = document.querySelector('#pillPerm') as HTMLElement | null;
       return {
         truncated: Boolean(text && text.scrollWidth > text.clientWidth),
         chipHeight: (chip as HTMLElement).offsetHeight,
-        permissionHeight: permission?.offsetHeight || 0,
       };
     });
     expect(layout.truncated).toBe(true);
-    expect(layout.chipHeight).toBe(layout.permissionHeight);
+    expect(layout.chipHeight).toBe(28);
 
     await expectNoBrowserErrors(page);
   });
@@ -329,7 +317,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     expect(geometry!.noOverlap).toBe(true);
     expect(geometry!.modelTruncated).toBe(true);
     // 长名 chip 与动作区并存时，chip 入口仍可点开会话设置
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
 
     await expectNoBrowserErrors(page);
@@ -348,7 +336,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillModelText')).toHaveText('mimo-v2.5-pro-ultraspeed');
 
     // 设置面板：select 候选文案 + 磁贴标题同样显 resolvedModel
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#modelInput')).toHaveValue('opus'); // 发送用的 value 仍是档位别名，不受本次改动影响
     await expect(page.locator('.model-tile[data-model="opus"]')).toContainText('mimo-v2.5-pro-ultraspeed');
     await expect(page.locator('.model-tile[data-model="opus"]')).not.toContainText('Opus');
@@ -431,7 +419,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     const refreshBtn = page.locator('[data-testid="settings-config-refresh"]');
     const spinIcon = refreshBtn.locator('[data-spin]');
     await expect(refreshBtn).toBeVisible();
@@ -448,17 +436,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 折叠头「模型」值与底栏 pill **同源**是明文约定（syncFoldValues 头注）：切一次模型、发一条消息
-  // 落定 currentModel 后，再切另一个模型但不发消息——折叠头必须跟着新选择走，不能停在上一轮已生效的
-  // 旧模型上。回归点：card.onclick 直接调 syncModelUI(val) 而非 updateModelAndSuffix(val)，不改闭包里的
-  // currentModel；syncFoldValues 却优先读 currentModel（modelLabelFor 非空就不回落 pillModelText），
-  // 于是「已生效模型非空」时 fold 头会卡在旧值，即便 pill/磁贴高亮都已正确跳到新选择。
-  test('P0-09s 已有生效模型后再切模型（不发送）：折叠头随即跟上新选择，不停在上一轮旧值', async ({ page }) => {
+  // 已有生效模型后再切模型（不发送）：底栏摘要 / 磁贴高亮必须立刻跟新选择，不能停在上一轮
+  // 已生效的旧模型。回归点：card.onclick 写 modelInput + syncModelUI，不依赖 currentModel 回执。
+  test('P0-09s 已有生效模型后再切模型（不发送）：摘要与磁贴随即跟上新选择', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    // 先让 claude-3-opus[1m] 经一次真实回合落定为「已生效模型」（currentModel 非空的必要前提）
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
     await closeSettings(page);
@@ -466,36 +450,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await waitForIdle(page);
     await expect(page.locator('#pillModelText')).toContainText('claude-3-opus[1m]');
 
-    // 不发消息，直接切到另一个模型
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="claude-3-5-haiku"]').click();
 
-    // pill 与折叠头必须一致地指向新选择，而非停在刚生效的 claude-3-opus[1m]
     await expect(page.locator('#pillModelText')).toHaveText('claude-3-5-haiku');
-    await expect(page.locator('#modelFoldValue')).toContainText('Claude 3.5 Haiku');
+    await expect(page.locator('.model-tile[data-model="claude-3-5-haiku"]')).toHaveClass(/ring-accent/);
+    await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /claude-3-5-haiku/);
 
     await expectNoBrowserErrors(page);
   });
 
-  // 同一处 stale-currentModel 缺口的另一面：切回「default」磁贴时，pillModelText 的覆盖赋值发生在
-  // syncModelUI('') 调用之后（syncFoldValues 已经先跑完），折叠头会读到覆盖前的旧文案，而不是
-  // 「Default (recommended)」。
-  test('P0-09t 切回 default 磁贴：折叠头立即显示 Default (recommended)，不停在上一个具体模型', async ({ page }) => {
+  // 切回 default 磁贴：displayOverride 必须在 syncModelUI 内、赶在摘要 title 刷新前写好 pill 文案。
+  test('P0-09t 切回 default 磁贴：摘要立即显示 Default (recommended)', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="claude-3-5-haiku"]').click();
-    await expect(page.locator('#modelFoldValue')).toContainText('Claude 3.5 Haiku');
+    await expect(page.locator('#pillModelText')).toContainText('claude-3-5-haiku');
 
-    // sheet 还开着（选完即收只收折叠块），直接重开模型块，不必再点 pillModel
-    await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="default"]').click();
 
     await expect(page.locator('#pillModelText')).toContainText('Default (recommended)');
-    await expect(page.locator('#modelFoldValue')).toContainText('Default (recommended)');
+    await expect(page.locator('.model-tile[data-model="default"]')).toHaveClass(/ring-accent/);
+    await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /Default \(recommended\)/);
 
     await expectNoBrowserErrors(page);
   });

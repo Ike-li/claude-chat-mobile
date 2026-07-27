@@ -58,11 +58,20 @@ export async function closeSettings(page: Page) {
  * 展开会话设置里的某一折叠块（模型 / 思考强度 / 权限）。
  * 三块默认收起（紧凑列表 + 手风琴），磁贴要先展开才点得到。调用方须已打开 #settingsSheet。
  */
+/** 会话设置入口：底栏合并摘要 chip（模型 · 权限 · 思考）。 */
+export async function openSessionSettings(page: Page) {
+  await page.locator('#pillDefaults').click();
+  await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+}
+
+/**
+ * 滚到会话设置里的对应分区。方案 A 后三块始终展开磁贴，不再点 summary 开合；
+ * 保留此 helper 是为了既有用例「先定位到某块再点磁贴」的可读性。
+ */
 export async function openSettingsSection(page: Page, key: 'model' | 'effort' | 'perm') {
   const section = page.locator(`#${key}Section`);
-  if (await section.evaluate((el: HTMLDetailsElement) => el.open).catch(() => false)) return;
-  await section.locator('summary').click();
-  await expect(section).toHaveJSProperty('open', true);
+  await section.scrollIntoViewIfNeeded();
+  await expect(section).toBeVisible();
 }
 
 /**

@@ -478,32 +478,24 @@
         <input type="file" id="fileInput" multiple class="hidden">
 
         <!-- Bottom Row: Toolbar
-             可变宽 chip（模型/权限/思考）单独横向滚动；附件/发送钉在右侧 shrink-0，
-             模型名再长也挤不掉动作区——不整行缩放（保 32px 触控）。CLI 镜像态靠 placeholder + 发送位续接。
-             会话设置 sheet 的入口就是三个 chip 本身（openSettingsSectionFor 直达对应块），
-             原独立齿轮与之纯重复、已删。 -->
+             会话档摘要 chip（模型 · 权限 · 思考）一条连着显示；点开即会话设置。
+             附件/发送钉在右侧 shrink-0，长摘要也挤不掉动作区。CLI 镜像态靠 placeholder + 发送位续接。
+             原三个独立 chip + 独立齿轮已收敛为此入口（#pillSession 是设置里复制 session id 的胶囊，别撞名）。 -->
         <div class="composer-toolbar flex items-center gap-1 w-full pt-1.5 border-t border-line-soft/30 px-1">
-          <!-- 可滚动 chip 区：只放会变长的胶囊 -->
+          <!-- 可滚动 chip 区：摘要可能很长，横向滚；动作区不进滚动 -->
           <div id="composerChips" class="composer-chips flex items-center gap-1 min-w-0 flex-1 overflow-x-auto scrollbar-none">
-            <div id="pillModel" class="status-pill-chip toolbar-pill" title="选择模型">
+            <div id="pillDefaults" class="status-pill-chip toolbar-pill" title="会话设置" data-testid="pill-defaults">
               <svg class="w-3.5 h-3.5 text-accent shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z" />
               </svg>
-              <span id="pillModelText">默认</span>
-            </div>
-
-            <div id="pillPerm" class="status-pill-chip toolbar-pill" title="权限模式">
-              <svg class="w-3.5 h-3.5 text-ink-soft shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-              </svg>
-              <span id="pillPermText">默认审批</span>
-            </div>
-
-            <div id="pillEffort" class="status-pill-chip toolbar-pill hidden" title="思考强度">
-              <svg class="w-3.5 h-3.5 text-ink-soft shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-              </svg>
-              <span id="pillEffortText">思考默认</span>
+              <span id="pillModelText" class="pill-defaults-part">默认</span>
+              <span class="pill-defaults-sep" aria-hidden="true">·</span>
+              <span id="pillPermText" class="pill-defaults-part">默认审批</span>
+              <!-- 模型不支持 effort 时整段（分隔点+文案）隐藏，避免留下孤零零的「·」 -->
+              <span id="pillEffort" class="pill-effort-inline hidden">
+                <span class="pill-defaults-sep" aria-hidden="true">·</span>
+                <span id="pillEffortText" class="pill-defaults-part">思考默认</span>
+              </span>
             </div>
           </div>
 
@@ -617,8 +609,8 @@
        打开时 body.ccm-sheet-open 锁住背后主页面滚动，避免上滑把聊天内容顶穿面板。
 
        ⚠️ 只放**会话级**配置。本机偏好（提示音/语言/推送）与主机级（终端会话推送/服务状态/重启）
-       在 #generalSheet 里——它们跟会话无关，不能跟着 composer 一起隐藏（本面板入口是底栏三个
-       chip（模型/权限/思考强度），都在 #composerFooter 内，首页 syncComposerVisibility 会把整个
+       在 #generalSheet 里——它们跟会话无关，不能跟着 composer 一起隐藏（本面板入口是底栏摘要
+       chip #pillDefaults，在 #composerFooter 内，首页 syncComposerVisibility 会把整个
        footer 设 hidden）。 -->
   <div id="settingsSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col max-h-[85vh] overflow-hidden safe-bottom" style="border-top-color:var(--accent)" role="dialog" aria-modal="true" aria-labelledby="settingsSheetTitle">
     <!-- 下拉关闭热区：把手 + 标题（内容区滚动不绑手势） -->
@@ -649,61 +641,46 @@
         </button>
       </div>
 
-      <!-- 1/2/3. 模型 · 该模型的思考强度 · 权限档，三块折叠成紧凑列表。
-           每块平时只占一行「标题 + 当前值 + ⌄」，点开才出磁贴；手风琴（同时只展开一块，见 app.js
-           的 toggle 协调）保证列表始终紧凑。此前一打开面板就是 5 个模型磁贴（还带 max-h-48 内部滚动）
-           ＋6 个权限磁贴，权限和强度被挤到屏外。
-           强度仍是模型的下级：缩进 + 左竖线 + 紧邻模型行，父子关系由位置表达（数据上它本就是
-           模型的 supportedEffortLevels，见 logic.js effortLevelsFor）。
-           用原生 <details>：折叠态是 open 属性、无障碍自带、零 JS 开合；去三角的 CSS 已有先例。 -->
-      <details id="modelSection" class="settings-fold">
-        <summary class="settings-fold-head">
+      <!-- 1/2/3. 模型 · 该模型的思考强度 · 权限档：始终展开磁贴，当前项 ring 框选（方案 A）。
+           不再用 <details> 折叠——多一层 summary 点击，且「选完即收」把框选藏起来，体感像坏了。
+           模型区保留 max-h 内滚，避免候选很多时把权限顶出屏外。
+           强度仍是模型的下级：缩进 + 左竖线 + 紧邻模型块（数据上是 supportedEffortLevels）。 -->
+      <section id="modelSection" class="settings-block">
+        <div class="settings-block-head">
           <span class="shrink-0">✨</span>
           <span class="shrink-0 text-xs font-semibold text-ink-soft">模型</span>
-          <span id="modelFoldValue" class="flex-1 min-w-0 truncate text-right text-xs text-ink font-medium"></span>
-          <span class="fold-arrow shrink-0 text-xs text-ink-faint">⌄</span>
-        </summary>
-        <div class="pt-2">
-          <div class="text-[10px] text-ink-faint mb-1.5 px-0.5">切换在下一条消息起效</div>
-          <div id="customModelGrid" class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
-            <!-- 动态生成的模型卡片 -->
-          </div>
         </div>
-      </details>
+        <div class="text-[10px] text-ink-faint mb-1.5 px-0.5">切换在下一条消息起效</div>
+        <div id="customModelGrid" class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+          <!-- 动态生成的模型卡片 -->
+        </div>
+      </section>
 
-      <div id="customEffortGroup" class="pl-3 border-l-2 border-line-soft">
-        <details id="effortSection" class="settings-fold">
-          <summary class="settings-fold-head">
+      <section id="customEffortGroup" class="pl-3 border-l-2 border-line-soft">
+        <div id="effortSection" class="settings-block">
+          <div class="settings-block-head">
             <span class="shrink-0">🧠</span>
             <span class="shrink-0 text-xs font-semibold text-ink-soft">思考强度</span>
-            <span id="effortFoldValue" class="flex-1 min-w-0 truncate text-right text-xs text-ink font-medium"></span>
-            <span class="fold-arrow shrink-0 text-xs text-ink-faint">⌄</span>
-          </summary>
-          <div class="pt-2">
-            <!-- 归属模型名：折叠列表里位置已表达父子，展开时再点名一次，免得磁贴看着无主。
+            <!-- 归属模型名：位置已表达父子，标题旁再点名一次，免得磁贴看着无主。
                  解析不出具体模型时整块收起，不留一个孤零零的「·」在那。 -->
-            <div id="effortOwnerWrap" class="hidden items-center gap-1 min-w-0 mb-1.5 px-0.5">
+            <div id="effortOwnerWrap" class="hidden items-center gap-1 min-w-0 ml-auto">
               <span class="text-[10px] text-ink-faint">属于</span>
               <span id="effortOwnerModel" class="text-[10px] text-accent font-semibold truncate max-w-[14rem]"></span>
             </div>
-            <div id="customEffortGrid" class="flex flex-wrap gap-2">
-              <!-- 动态生成的思考强度按钮 -->
-            </div>
-            <!-- 不支持时就地说明，替代原先的「整块消失」 -->
-            <div id="effortUnsupported" class="hidden text-xs text-ink-soft leading-relaxed"></div>
           </div>
-        </details>
-      </div>
+          <div id="customEffortGrid" class="flex flex-wrap gap-2">
+            <!-- 动态生成的思考强度按钮 -->
+          </div>
+          <!-- 不支持时就地说明，替代原先的「整块消失」 -->
+          <div id="effortUnsupported" class="hidden text-xs text-ink-soft leading-relaxed"></div>
+        </div>
+      </section>
 
-      <!-- 3. 权限档大磁贴（同上折叠） -->
-      <details id="permSection" class="settings-fold">
-        <summary class="settings-fold-head">
+      <section id="permSection" class="settings-block">
+        <div class="settings-block-head">
           <span class="shrink-0">🛡️</span>
           <span class="shrink-0 text-xs font-semibold text-ink-soft">权限</span>
-          <span id="permFoldValue" class="flex-1 min-w-0 truncate text-right text-xs text-ink font-medium"></span>
-          <span class="fold-arrow shrink-0 text-xs text-ink-faint">⌄</span>
-        </summary>
-        <div class="pt-2">
+        </div>
         <div id="customPermGrid" class="grid grid-cols-2 gap-2">
           <div data-mode="default" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
             <div class="text-xs font-semibold text-ink">默认审批</div>
@@ -730,8 +707,7 @@
             <div class="text-xs text-red-500/80 mt-0.5">免审飞控（高危）</div>
           </div>
         </div>
-        </div>
-      </details>
+      </section>
 
       <!-- 4. 当前会话 ID（会话级，故留在本面板；原先误放在「访问与设备」那组里，与令牌/设备审批
            这类主机级条目混在一起）。 -->

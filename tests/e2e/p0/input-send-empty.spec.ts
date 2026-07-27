@@ -139,7 +139,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
     await openSettingsSection(page, 'effort');
     await expect(page.locator('.effort-tile[data-level="ultracode"]')).toBeVisible();

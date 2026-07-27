@@ -13,7 +13,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 前提：首页确实没有会话设置入口（chip 随 composer 隐藏）——这正是本用例存在的理由，
     // 若哪天 composer 常驻了此断言会提醒重新评估
-    await expect(page.locator('#pillModel')).toBeHidden();
+    await expect(page.locator('#pillDefaults')).toBeHidden();
 
     await page.locator('#btnSessions').click();
     await expect(page.locator('#leftSidebar')).not.toHaveClass(/-translate-x-full/);
@@ -46,7 +46,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-28b 会话设置面板收窄为会话级：留模型/权限/思考强度/会话ID，本机与主机项已迁出', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
 
     // 会话级留守
@@ -70,7 +70,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-28c 每段带作用域说明，用户看得出这条设置影响谁', async ({ page }) => {
     await gotoMock(page);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('[data-scope-note="session"]')).toBeVisible();
     await page.keyboard.press('Escape');
 
@@ -89,7 +89,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expect(page.locator('#btnSettings')).toHaveCount(0);
 
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
     // 非折叠块内容（会话 ID 行）不因入口变化而失联
     await expect(page.locator('#settingsSheetBody #settingsSessionRow')).toHaveCount(1);
@@ -133,7 +133,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   // 不是「首页走这条、会话页走那条」的互斥分支。
   test('P0-28d 会话页里侧栏设置入口同样可达，且与会话设置面板互不干扰', async ({ page }) => {
     await gotoMock(page);
-    await expect(page.locator('#pillModel')).toBeVisible();
+    await expect(page.locator('#pillDefaults')).toBeVisible();
 
     await page.locator('#btnSessions').click();
     await page.locator('#btnGeneralSettings').click();
@@ -145,7 +145,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#generalSheet')).toHaveClass(/translate-y-full/);
 
     // 关掉通用设置后会话设置 chip 照常可用
-    await page.locator('#pillModel').click();
+    await page.locator('#pillDefaults').click();
     await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
 
     await expectNoBrowserErrors(page);

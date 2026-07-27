@@ -68,8 +68,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsSheetBody = $('settingsSheetBody'), settingsDragZone = $('settingsDragZone'), settingsClose = $('settingsClose');
   // 通用设置 sheet（本机偏好 + 主机与服务）：与会话设置同构、同一个控制器驱动，入口在侧栏底部
   const btnGeneralSettings = $('btnGeneralSettings'), generalScrim = $('generalScrim'), generalSheet = $('generalSheet'), generalSheetBody = $('generalSheetBody'), generalDragZone = $('generalDragZone');
-  const pillModel = $('pillModel'), pillModelText = $('pillModelText');
-  const pillPerm = $('pillPerm'), pillPermText = $('pillPermText'), pillEffort = $('pillEffort'), pillEffortText = $('pillEffortText');
+  // 底栏会话档摘要 chip：一条连写「模型 · 权限 · 思考」。#pillSession 是设置里复制 session id 的胶囊，别撞。
+  const pillDefaults = $('pillDefaults');
+  const pillModelText = $('pillModelText'), pillPermText = $('pillPermText');
+  const pillEffort = $('pillEffort'), pillEffortText = $('pillEffortText');
 
   // UX-009 已废弃：不再注入「终端驾驶中」合并胶囊；驾驶态靠 input placeholder + 发送位「续接」
   // （pillMirrorMerged 已从 DOM/CSS 移除）
@@ -78,9 +80,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const customModelGrid = $('customModelGrid'), customPermGrid = $('customPermGrid'), customEffortGrid = $('customEffortGrid'), customEffortGroup = $('customEffortGroup');
   // 强度区块挂在模型下：归属标签 + 不支持时的就地说明（替代原先整块消失）
   const effortOwnerModel = $('effortOwnerModel'), effortOwnerWrap = $('effortOwnerWrap'), effortUnsupported = $('effortUnsupported');
-  // 三块折叠行（模型 / 思考强度 / 权限）：<details> 的 open 即状态，值由下方 syncFoldValues 回填
-  const modelSection = $('modelSection'), effortSection = $('effortSection'), permSection = $('permSection');
-  const modelFoldValue = $('modelFoldValue'), effortFoldValue = $('effortFoldValue'), permFoldValue = $('permFoldValue');
+  // 三块始终展开的设置分区 id 留在 HTML（#modelSection / #effortSection / #permSection）供滚动与 E2E，JS 不握引用。
 
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
@@ -284,9 +284,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       : null;
     // 空 model（新会话）时 cwdDefaultModel 常是档位别名（opus），须经 resolveGatewayModelName
     // 解析出真实模型名，否则 pill 停在裸别名——bug：选了模型才显具体名。纯函数 resolveModelPillText 收敛此逻辑。
-    // displayOverride：磁贴点了「default」项时用磁贴自己的 displayName（如「Default (recommended)」）——
-    // 必须在这里赋值、赶在下方 syncFoldValues() 之前，否则折叠头会读到覆盖前的旧 pill 文案
-    // （此前调用方在 syncModelUI() 返回之后才补写 pillModelText，那时 syncFoldValues 早跑完了）。
+    // displayOverride：磁贴点了「default」项时用磁贴自己的 displayName（如「Default (recommended)」）。
     const modelPillText = displayOverride || resolveModelPillText({
       model,
       gatewaySuffix: currentGatewaySuffix,
@@ -295,7 +293,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       cliDefaultLabel,
     });
     if (pillModelText) pillModelText.textContent = modelPillText;
-    if (pillModel) pillModel.title = (model || cliDefaultLabel || cwdDefaultModel) ? modelPillText : t('选择模型');
     if (customModelGrid) {
       // 空选中时高亮 CLI 的 default 项（与终端 /model 列表一致），不靠 data-model="" 伪项
       const activeVal = model || (cliDefault ? 'default' : '');
@@ -318,8 +315,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       });
     }
-    // compose 页默认档摘要与底栏同源；模型 chip 变了就地刷
-    syncFoldValues();
+    // compose 页默认档摘要与底栏同源；模型段变了就地刷 title
+    syncDefaultsPillTitle();
     if (_composeReady) refreshComposeDefaultsSummary();
   }
 
@@ -358,8 +355,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         delete modelInput.dataset.fullModel;
         syncModelUI(val === 'default' ? '' : val, val === 'default' ? display : undefined);
         rebuildEffortOptions(val === 'default' ? (cwdDefaultModel || currentModel) : val);
-        // 选完即收：折叠列表的常态是收起，留着展开会把下面两块顶出屏外
-        if (modelSection) modelSection.open = false;
       };
       customModelGrid.appendChild(card);
     });
@@ -692,7 +687,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 审批留痕（已允许/已拒绝）必须直接走 addBar，不经此闸。
   let pillFlashTimer = null;
   function flashStatusPills() {
-    const pills = [pillModel, pillPerm, pillEffort].filter(p => p && !p.classList.contains('hidden'));
+    // 底栏只剩一条摘要 chip；空态档位变更靠它闪一下反馈
+    const pills = [pillDefaults].filter(p => p && !p.classList.contains('hidden'));
     for (const p of pills) {
       p.classList.remove('status-pill-flash');
       void p.offsetWidth;
@@ -3395,44 +3391,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function clearCliUnknownPermissionOption() {
     permModeSelect?.querySelector('option[data-cli-observed-unknown]')?.remove();
   }
-  // ---- 会话设置的三块折叠行（模型 / 思考强度 / 权限）----
-  // 折叠头的当前值与底栏 chip **同源**（pillXxxText 已由 setPermMode/setEffortMode/syncModelUI 维护）。
-  // 不另算一套：两处各算会在 CLI 镜像态、网关别名映射这类边角上悄悄漂移，而那正是最难查的一类 bug。
-  const foldSections = [modelSection, effortSection, permSection].filter(Boolean);
-  function syncFoldValues() {
-    if (modelFoldValue) {
-      // 折叠头替代的是磁贴列表 → 随磁贴用 displayName。用 modelInput.value（待发送的选中值）而非
-      // currentModel：后者只在下一条消息真正发出、服务端 init 回执落地后才更新，选中磁贴到发消息
-      // 之间有一段「已选但未生效」的间隙——此处若读 currentModel 会在这段间隙里停在上一轮已生效的
-      // 旧模型上，即便磁贴高亮和底栏 pill 都已正确跳到新选择（真实症状：见交互日志排查记录）。
-      // 未选具体模型（modelInput 空，如刚点了 default 磁贴）时回落底栏 chip 文案——那里已处理
-      // 「CLI default 项 / cwd 默认别名解析」两种兜底，且 syncModelUI 保证调用顺序上 pillModelText
-      // 已经是最终值。
-      modelFoldValue.textContent = modelLabelFor(modelInput?.value, modelsList)
-        || pillModelText?.textContent || '';
-    }
-    if (permFoldValue && pillPermText) permFoldValue.textContent = pillPermText.textContent || '';
-    if (effortFoldValue) {
-      // 模型不支持 effort 时底栏 chip 整个隐藏，此处不能跟着显示上一个模型的残值
-      effortFoldValue.textContent = pillEffort?.classList.contains('hidden')
-        ? t('不可调')
-        : (pillEffortText?.textContent || '');
-    }
-  }
-  // 手风琴：同时只展开一块——折叠形态的意义就是列表始终紧凑，几块同时摊开就白折叠了。
-  for (const sec of foldSections) {
-    sec.addEventListener('toggle', () => {
-      if (!sec.open) return;
-      for (const other of foldSections) if (other !== sec) other.open = false;
+  // ---- 底栏会话档摘要 chip title（与 compose 页 formatComposeDefaultsSummary 同源）----
+  // 三段文案由 setPermMode / setEffortMode / syncModelUI 各自维护 pillXxxText；title 只拼不另算，
+  // 避免 CLI 镜像 / 网关别名边上两套文案漂移。
+  function syncDefaultsPillTitle() {
+    if (!pillDefaults) return;
+    const summary = formatComposeDefaultsSummary({
+      modelLabel: (pillModelText?.textContent || '').trim(),
+      modeLabel: (pillPermText?.textContent || '').trim(),
+      effortLabel: pillEffort?.classList.contains('hidden')
+        ? ''
+        : (pillEffortText?.textContent || '').trim(),
     });
-  }
-  function collapseAllFolds() { for (const sec of foldSections) sec.open = false; }
-  // 底栏 chip = 「我要改这一项」的意图。此前点它只是打开面板 + 给对应磁贴闪 1.5 秒高亮圈让人自己找，
-  // 那个闪烁本就是在补偿「把你丢进一个大面板」；折叠后直接展开对应块，意图落到实处。
-  function openSettingsSectionFor(section) {
-    openSettingsSheet();
-    collapseAllFolds();
-    if (section) section.open = true;
+    pillDefaults.title = summary || t('会话设置');
   }
 
   function setPermMode(mode, silent = false) {
@@ -3479,7 +3450,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       });
     }
-    syncFoldValues();
+    syncDefaultsPillTitle();
     if (_composeReady) refreshComposeDefaultsSummary();
   }
   permModeSelect.onchange = async () => {
@@ -3539,7 +3510,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       });
     }
-    syncFoldValues();
+    syncDefaultsPillTitle();
     if (_composeReady) refreshComposeDefaultsSummary();
   }
   // 把当前模型（init.model 规范名）桥接到 models 候选项（取其 supportedEffortLevels）。
@@ -3579,7 +3550,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           : t('当前模型不支持调节思考强度，按模型默认执行。');
         effortUnsupported.classList.remove('hidden');
       }
-      syncFoldValues();
+      syncDefaultsPillTitle();
       return;
     }
     effortRow?.classList.remove('hidden');
@@ -3624,7 +3595,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           haptic('tap');
           effortSelect.value = lv;
           effortSelect.onchange();
-          if (effortSection) effortSection.open = false; // 选完即收，同模型块
         };
         customEffortGrid.appendChild(lvTile);
       }
@@ -3633,6 +3603,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (pillEffortText) {
       pillEffortText.textContent = ultracodeArmed ? 'ultracode' : ui.label;
     }
+    syncDefaultsPillTitle();
     if (_composeReady) refreshComposeDefaultsSummary();
   }
   effortSelect.onchange = () => {
@@ -3712,6 +3683,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     currentPermMode = '';
     if (permModeSelect) permModeSelect.value = '';
     if (pillPermText) pillPermText.textContent = t('CLI 模式未知');
+    syncDefaultsPillTitle();
     permModeSelect?.classList.remove('ring-1', 'ring-danger', 'text-danger');
     customPermGrid?.querySelectorAll('.perm-tile').forEach(tile => {
       tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
@@ -3735,7 +3707,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       } else {
         modelInput.value = '';
         if (pillModelText) pillModelText.textContent = t('CLI 模型未知');
-        if (pillModel) pillModel.title = t('CLI 当前模型未知');
+        syncDefaultsPillTitle();
         customModelGrid?.querySelectorAll('.model-tile').forEach(tile => {
           tile.classList.remove('ring-1', 'ring-accent', 'border-accent', 'text-accent', 'bg-accent-wash/30');
           const title = tile.querySelector('.text-xs');
@@ -4917,15 +4889,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     },
   };
   // ---- 设置：两个同构 sheet，由同一个 controller 按作用域分工 ----
-  // 会话设置（入口=底栏三个 chip，随 composer 显隐）：模型 / 权限档 / 思考强度 / 会话 ID。
-  // 原独立齿轮与 chip 打开同一个 sheet、纯重复，已删——DEFAULT_KEYS.trigger 指向的 btnSettings
-  // 不再注入 dom，controller bind 对缺失 trigger 安全跳过。syncPrefs=false——
+  // 会话设置（入口=底栏 #pillDefaults 摘要 chip，随 composer 显隐）：模型 / 权限 / 思考 / 会话 ID。
+  // 原独立齿轮与三 chip 打开同一个 sheet、纯重复，已收敛为一条摘要。DEFAULT_KEYS.trigger 的
+  // btnSettings 不再注入 dom，controller bind 对缺失 trigger 安全跳过。syncPrefs=false——
   // 本机偏好那批 DOM 已迁到通用设置，两个控制器都去绑会互相覆盖 onchange（后建的赢，静默难查）。
-  // onOpen 三块全收起 + 回填当前值；chip 入口走 openSettingsSectionFor，
-  // 它在 open 之后再展开对应块（顺序不能反）。
+  // 面板内三块始终展开磁贴（方案 A），onOpen 只需回填摘要 title。
   const settings = createSettingsController(appContext, {
     alerts, haptic, syncPrefs: false,
-    onOpen: () => { collapseAllFolds(); syncFoldValues(); },
+    onOpen: () => { syncDefaultsPillTitle(); },
   });
   // 侧栏与 sheet 同为 z-40：不先收侧栏，弹出的面板会和左侧抽屉叠在一起。
   // 必须抢在下面 createSettingsController 的 bind() 之前注册——listener 按注册顺序触发，
@@ -4945,7 +4916,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     onOpen: () => renderPushStatusRow(),
   });
   const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen
-  if (pillModel) pillModel.onclick = () => openSettingsSectionFor(modelSection); // 点底栏模型 chip → 直达模型块
+  if (pillDefaults) pillDefaults.onclick = () => openSettingsSheet(); // 点摘要 chip → 会话设置（三块磁贴已展开）
   // 顶部 pill：工作区入口（chooser → 浏览文件 | 工作区改动）。侧栏不再挂浏览入口。
   if (topContextPill) {
     topContextPill.onclick = (e) => {
@@ -4955,10 +4926,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       workspaceChooser.open();
     };
   }
-  
-  if (pillPerm) pillPerm.onclick = () => openSettingsSectionFor(permSection);
-  
-  if (pillEffort) pillEffort.onclick = () => openSettingsSectionFor(effortSection);
 
   const pillWorkspace = $('pillWorkspace');
   if (pillWorkspace) {
@@ -4973,8 +4940,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       tile.onclick = () => {
         haptic('tap');
         const mode = tile.dataset.mode;
-        // 点已选中的档也收起：用户的意图已经表达完了（「就它，不改」），留着展开没道理
-        if (permSection) permSection.open = false;
         if (mode === currentPermMode) return;
         permModeSelect.value = mode;
         permModeSelect.onchange();
@@ -5569,7 +5534,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       cliStatusWrapEl.removeAttribute('open'); // Fold <details> element
       cliStatusWrapEl.classList.add('hidden'); // Hide the wrapper
     }
-    pillModel?.classList.remove('hidden'); // 恢复底栏模型 chip（statusLine 隐藏时）
+    pillDefaults?.classList.remove('hidden'); // 恢复底栏会话档摘要 chip（statusLine 隐藏时）
     if (tip) addBar(tip, 'text-ink-faint');
   }
 
@@ -6450,7 +6415,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   document.querySelector('.chat-input-pill')?.addEventListener('pointerdown', (ev) => {
     if (!mirrorReadonlySid) return;
     // 设置 chip 已有自己的「设置已冻结」提示；续接主按钮自行处理
-    if (ev.target?.closest?.('#pillModel, #pillPerm, #pillEffort, #btnSend')) return;
+    if (ev.target?.closest?.('#pillDefaults, #btnSend')) return;
     showMirrorComposerHint();
   }, { capture: true });
   function onMirrorState(ev) {

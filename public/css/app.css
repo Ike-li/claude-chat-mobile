@@ -97,21 +97,15 @@ details.thinking > summary, details.toolcard > summary, #cliStatusWrap > summary
 details > summary::-webkit-details-marker { display: none; }
 #cliStatusWrap[open] .cli-arrow { transform: rotate(180deg); }
 
-/* 会话设置的折叠行（模型 / 思考强度 / 权限）：收起时只占一行「标题 + 当前值 + ⌄」。
-   触点整行 ≥40px，别只让那个小箭头可点——拇指够不准。 */
-.settings-fold > summary {
-  cursor: pointer;
-  user-select: none;
-  list-style: none;
+/* 会话设置分块头（模型 / 思考强度 / 权限）：始终展开磁贴，这里只做分区标签。 */
+.settings-block-head {
   display: flex;
   align-items: center;
   gap: .4rem;
-  min-height: 40px;
-  padding: .25rem .1rem;
+  min-height: 28px;
+  margin-bottom: .35rem;
+  padding: .1rem .1rem;
 }
-.settings-fold > summary:active { opacity: .7; }
-.settings-fold .fold-arrow { transition: transform .2s ease; }
-.settings-fold[open] .fold-arrow { transform: rotate(180deg); }
 /* 工具卡片：左竖条标记 agent 动作（Claude 风格） */
 .toolcard { border-left: 3px solid var(--accent-bright) !important; }
 /* 思考块：内心独白——serif 斜体淡色 */
@@ -270,10 +264,12 @@ body.ccm-sheet-open #messages {
   height: 0.85rem;
   opacity: 0.75;
 }
-/* 模型名过长：ellipsis 截断，完整名仍在 title；不整行缩放、不挤钉死动作区 */
-#pillModelText,
-#pillPermText,
-#pillEffortText {
+/* 会话档摘要 chip：模型 · 权限 · 思考 连写；各段可截断，完整串在 #pillDefaults title */
+#pillDefaults {
+  max-width: min(100%, 72vw);
+  gap: 0.25rem;
+}
+.pill-defaults-part {
   display: inline-block;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -282,14 +278,27 @@ body.ccm-sheet-open #messages {
   min-width: 0;
 }
 #pillModelText {
-  /* 约 8 字宽 + 窄屏 vw 上限：长名截断，齿轮永远在右侧可见 */
-  max-width: min(7.5rem, 36vw);
+  max-width: min(7.5rem, 32vw);
 }
 #pillPermText {
-  max-width: min(5rem, 28vw);
+  max-width: min(5rem, 22vw);
 }
 #pillEffortText {
-  max-width: min(4.5rem, 24vw);
+  max-width: min(4.5rem, 18vw);
+}
+.pill-defaults-sep {
+  color: var(--ink-faint);
+  flex-shrink: 0;
+  user-select: none;
+}
+.pill-effort-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+}
+.pill-effort-inline.hidden {
+  display: none;
 }
 /* 底栏工具条：chip 区可滚，动作区不缩 */
 .composer-toolbar {
@@ -487,14 +496,17 @@ body.ccm-sheet-open #messages {
     height: 0.85rem;
     opacity: 0.7;
   }
+  #pillDefaults {
+    max-width: min(100%, 68vw);
+  }
   #pillModelText {
-    max-width: min(6.5rem, 32vw); /* 窄屏：截断模型名，动作区（附件/发送）钉死不挤 */
+    max-width: min(6.5rem, 28vw); /* 窄屏：截断模型名，动作区（附件/发送）钉死不挤 */
   }
   #pillPermText {
-    max-width: min(4.5rem, 24vw);
+    max-width: min(4.5rem, 20vw);
   }
   #pillEffortText {
-    max-width: min(4rem, 20vw);
+    max-width: min(4rem, 16vw);
   }
   .chat-input-pill {
     min-height: auto !important;
