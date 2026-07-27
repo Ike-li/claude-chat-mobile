@@ -271,7 +271,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
   }
 
-  function syncModelUI(model) {
+  function syncModelUI(model, displayOverride) {
     // 底栏模型 chip：显完整真名（含网关后缀 [1m]）；未选具体模型时优先显 CLI 列表里 value=default 的 displayName，
     // 否则回落 scout 探得的 cwd 默认名 /「默认」。不再渲染 Web 自造的「默认模型」磁贴。
     // 网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_*_MODEL）例外：候选项确有
@@ -284,7 +284,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       : null;
     // 空 model（新会话）时 cwdDefaultModel 常是档位别名（opus），须经 resolveGatewayModelName
     // 解析出真实模型名，否则 pill 停在裸别名——bug：选了模型才显具体名。纯函数 resolveModelPillText 收敛此逻辑。
-    const modelPillText = resolveModelPillText({
+    // displayOverride：磁贴点了「default」项时用磁贴自己的 displayName（如「Default (recommended)」）——
+    // 必须在这里赋值、赶在下方 syncFoldValues() 之前，否则折叠头会读到覆盖前的旧 pill 文案
+    // （此前调用方在 syncModelUI() 返回之后才补写 pillModelText，那时 syncFoldValues 早跑完了）。
+    const modelPillText = displayOverride || resolveModelPillText({
       model,
       gatewaySuffix: currentGatewaySuffix,
       modelsList,
@@ -353,12 +356,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         // 不把字面 'default' 写进 select（否则发消息会带 model:'default' 让后端误 setModel 字面值）。
         modelInput.value = val === 'default' ? '' : val;
         delete modelInput.dataset.fullModel;
-        if (val === 'default') {
-          syncModelUI('');
-          if (pillModelText && display) pillModelText.textContent = display;
-        } else {
-          syncModelUI(val);
-        }
+        syncModelUI(val === 'default' ? '' : val, val === 'default' ? display : undefined);
         rebuildEffortOptions(val === 'default' ? (cwdDefaultModel || currentModel) : val);
         // 选完即收：折叠列表的常态是收起，留着展开会把下面两块顶出屏外
         if (modelSection) modelSection.open = false;
@@ -3403,9 +3401,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const foldSections = [modelSection, effortSection, permSection].filter(Boolean);
   function syncFoldValues() {
     if (modelFoldValue) {
-      // 折叠头替代的是磁贴列表 → 随磁贴用 displayName；未选具体模型时回落底栏 chip 文案
-      // （那里已处理「CLI default 项 / cwd 默认别名解析」两种兜底）。
-      modelFoldValue.textContent = modelLabelFor(currentModel, modelsList)
+      // 折叠头替代的是磁贴列表 → 随磁贴用 displayName。用 modelInput.value（待发送的选中值）而非
+      // currentModel：后者只在下一条消息真正发出、服务端 init 回执落地后才更新，选中磁贴到发消息
+      // 之间有一段「已选但未生效」的间隙——此处若读 currentModel 会在这段间隙里停在上一轮已生效的
+      // 旧模型上，即便磁贴高亮和底栏 pill 都已正确跳到新选择（真实症状：见交互日志排查记录）。
+      // 未选具体模型（modelInput 空，如刚点了 default 磁贴）时回落底栏 chip 文案——那里已处理
+      // 「CLI default 项 / cwd 默认别名解析」两种兜底，且 syncModelUI 保证调用顺序上 pillModelText
+      // 已经是最终值。
+      modelFoldValue.textContent = modelLabelFor(modelInput?.value, modelsList)
         || pillModelText?.textContent || '';
     }
     if (permFoldValue && pillPermText) permFoldValue.textContent = pillPermText.textContent || '';

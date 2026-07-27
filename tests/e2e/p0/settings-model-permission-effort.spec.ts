@@ -448,6 +448,58 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 折叠头「模型」值与底栏 pill **同源**是明文约定（syncFoldValues 头注）：切一次模型、发一条消息
+  // 落定 currentModel 后，再切另一个模型但不发消息——折叠头必须跟着新选择走，不能停在上一轮已生效的
+  // 旧模型上。回归点：card.onclick 直接调 syncModelUI(val) 而非 updateModelAndSuffix(val)，不改闭包里的
+  // currentModel；syncFoldValues 却优先读 currentModel（modelLabelFor 非空就不回落 pillModelText），
+  // 于是「已生效模型非空」时 fold 头会卡在旧值，即便 pill/磁贴高亮都已正确跳到新选择。
+  test('P0-09s 已有生效模型后再切模型（不发送）：折叠头随即跟上新选择，不停在上一轮旧值', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    // 先让 claude-3-opus[1m] 经一次真实回合落定为「已生效模型」（currentModel 非空的必要前提）
+    await page.locator('#pillModel').click();
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
+    await closeSettings(page);
+    await sendChatMessage(page, 'test:settings-echo');
+    await waitForIdle(page);
+    await expect(page.locator('#pillModelText')).toContainText('claude-3-opus[1m]');
+
+    // 不发消息，直接切到另一个模型
+    await page.locator('#pillModel').click();
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-5-haiku"]').click();
+
+    // pill 与折叠头必须一致地指向新选择，而非停在刚生效的 claude-3-opus[1m]
+    await expect(page.locator('#pillModelText')).toHaveText('claude-3-5-haiku');
+    await expect(page.locator('#modelFoldValue')).toContainText('Claude 3.5 Haiku');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 同一处 stale-currentModel 缺口的另一面：切回「default」磁贴时，pillModelText 的覆盖赋值发生在
+  // syncModelUI('') 调用之后（syncFoldValues 已经先跑完），折叠头会读到覆盖前的旧文案，而不是
+  // 「Default (recommended)」。
+  test('P0-09t 切回 default 磁贴：折叠头立即显示 Default (recommended)，不停在上一个具体模型', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#pillModel').click();
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="claude-3-5-haiku"]').click();
+    await expect(page.locator('#modelFoldValue')).toContainText('Claude 3.5 Haiku');
+
+    // sheet 还开着（选完即收只收折叠块），直接重开模型块，不必再点 pillModel
+    await openSettingsSection(page, 'model');
+    await page.locator('.model-tile[data-model="default"]').click();
+
+    await expect(page.locator('#pillModelText')).toContainText('Default (recommended)');
+    await expect(page.locator('#modelFoldValue')).toContainText('Default (recommended)');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // ⑧ 推送内容预览开关：默认关（与「完成提示」三项默认开相反极性），勾选后持久化到 localStorage，
   // 重开设置面板仍反映上次选择（syncPreferences 从 storage 读回，见 app/settings.js）。
   test('P0-09m 推送内容预览开关默认关，勾选后跨面板重开保持', async ({ page }) => {
