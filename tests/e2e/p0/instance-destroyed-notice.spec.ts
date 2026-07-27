@@ -40,6 +40,10 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
     const newBtn = page.locator('[data-testid="instance-destroyed-new"]');
     await expect(homeBtn).toBeVisible();
     await expect(newBtn).toBeVisible();
+    // 反向守卫（P0-DESTROY-6 引入「继续此会话」后）：单实例被摧毁（非 server 重启，广播不带
+    // service.startedAt 变化）不该出现重启专属的「继续此会话」按钮——SDK 子进程被强杀后
+    // 不能引导用户一键 resume（机主已否决该场景的自动/快捷 resume）。
+    await expect(page.locator('[data-testid="instance-destroyed-resume"]')).toHaveCount(0);
 
     // 点击后能正常导航到主页——不是死胡同。
     await homeBtn.click();
@@ -106,6 +110,51 @@ test.describe('P0 停止在跑会话后误跳主页（回归修复）', () => {
   // "被摧毁"完全相同（viewingInstanceId 变 null + 该实例从列表消失），但这是用户自己确认过的操作，
   // 不该显示"会话已中断"。前端在点击时记录 explicitCloseInstanceId（app.js）供
   // wasViewingInstanceDestroyed 排除；本测试验证按钮真实点击路径（不止纯函数单测）。
+  // server 重启误报修复：整机重启（常驻服务部署后重启是机主的常规操作）时 agents Map/viewingInstanceId
+  // 全部归零，重连后首条 instances 广播形态与「实例被单独摧毁」完全同构——修复前每次重启都弹
+  // 「停止操作未能正常结束」（用户根本没点停止，纯误导）。区分信号 = 广播恒带的 service.startedAt
+  //（进程级常量，重启必变），前端 detectServerRestart（public/js/logic.js）识别后换准确文案 +
+  // 「继续此会话」一键重开（走既有 session:switch 打开路径；不自动切换，尊重「重启后不自动
+  // session:switch」的既有产品决策——按钮是用户主动点的）。
+  test('P0-DESTROY-6 server 重启：显示「服务已重启」提示 + 「继续此会话」按钮，而非误导性的停止失败文案', async ({ page }) => {
+    await gotoMock(page);
+    await expect(page.locator('[data-testid="instance-destroyed-surface"]')).toHaveCount(0);
+
+    await sendChatMessage(page, 'test:server-restart');
+
+    const destroyedSurface = page.locator('[data-testid="instance-destroyed-surface"]');
+    await expect(destroyedSurface).toBeVisible({ timeout: 10_000 });
+    // 准确文案：说的是「服务已重启」，不是「停止操作未能正常结束」（用户没点停止）。
+    await expect(destroyedSurface).toContainText('服务已重启');
+    await expect(destroyedSurface).not.toContainText('停止操作未能正常结束');
+    await expect(destroyedSurface).not.toContainText('会话已中断');
+    // 三个入口都在：继续此会话（重启专属）/ 回首页 / 新建会话。
+    await expect(page.locator('[data-testid="instance-destroyed-resume"]')).toBeVisible();
+    await expect(page.locator('[data-testid="instance-destroyed-home"]')).toBeVisible();
+    await expect(page.locator('[data-testid="instance-destroyed-new"]')).toBeVisible();
+    // 不自动跳转：仍停在提示页，没有静默变成 dashboard。
+    await expect(page.locator('[data-testid="home-dashboard"]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-DESTROY-6b server 重启后点「继续此会话」→ 走 session:switch 重开原会话，回到之前的聊天内容', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:server-restart');
+
+    const destroyedSurface = page.locator('[data-testid="instance-destroyed-surface"]');
+    await expect(destroyedSurface).toBeVisible({ timeout: 10_000 });
+
+    await page.locator('[data-testid="instance-destroyed-resume"]').click();
+    // 重开成功：提示页消失，回到原会话——重启前发出的那条消息气泡（test:server-restart）重新可见
+    //（DOM 缓存秒恢复或磁盘 history 回填，两条路径都以「用户能看到之前的内容」为准）。
+    await expect(destroyedSurface).toHaveCount(0, { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('test:server-restart');
+    await expect(page.locator('[data-testid="home-dashboard"]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-DESTROY-5 反向场景：用户主动关闭自己正在看的唯一会话 → 正常回落主页，不误判为摧毁', async ({ page }) => {
     await gotoMock(page);
     await openSessionsSidebar(page);

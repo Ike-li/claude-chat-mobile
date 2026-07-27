@@ -54,7 +54,7 @@ let mockHooksState = 'not-installed';
 // 真 server 的 instances 广播恒带 service 字段；mock 此前完全没带，导致依赖它的前端段落（如
 // 配置面板「终端会话推送」）在 mock 下永远不渲染。这里补齐同形 payload。
 const mockServicePayload = () => ({
-  startedAt: MOCK_SERVICE_STARTED_AT,
+  startedAt: mockServiceStartedAtOverride ?? MOCK_SERVICE_STARTED_AT,
   deliveryFailure: mockDeliveryFailure,
   rateLimitLockout: mockRateLimitLockout,
   clientError: mockClientError,
@@ -88,11 +88,16 @@ let mockDiagLogsByInstance = new Map(); // 镜像/排队/停止诊断时间线�
 // 服务状态面板：确定性 startedAt（mock 进程启动时刻）；deliveryFailure 由 test:service-delivery-failure 注入，
 // rateLimitLockout/clientError（判定化告警）由 test:service-incidents 注入
 const MOCK_SERVICE_STARTED_AT = Date.now();
+// P0-DESTROY-6（server 重启误报「会话已中断」修复）：test:server-restart 用它把 service.startedAt
+// 拨到另一个值，模拟「重连后是另一个 server 进程」——前端 detectServerRestart 据此把「实例全部
+// 消失」判为整机重启而非单实例被摧毁。null = 未拨（正常返回进程级常量）。
+let mockServiceStartedAtOverride = null;
 let mockDeliveryFailure = null;
 let mockRateLimitLockout = null;
 let mockClientError = null;
 
 function resetMockState() {
+  mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
   mockClientError = null;
@@ -752,6 +757,12 @@ io.on('connection', socket => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:switch sessionId=${sessionId}, cwd=${cwd}`);
     const knownArchived = {
+      // P0-DESTROY-6b：server 重启摧毁 inst_1 后，「继续此会话」按钮走 session:switch 重开原会话
+      // （真 server 语义 = 从磁盘 transcript 懒 resume，得到新实例；mock 复用同 id 够验前端链路）。
+      'mock-session-visual-test': {
+        instanceId: 'inst_1',
+        title: 'Visual Sandbox (Main)'
+      },
       'mock-session-archived': {
         instanceId: 'inst_archived',
         title: 'Archived Planning Session'
@@ -1387,6 +1398,10 @@ io.on('connection', socket => {
         mockRateLimitLockout = rateLimitLockout; mockClientError = clientError;
       },
       setViewingInstanceId: value => { viewingInstanceId = value; },
+      // test:server-restart：把 service.startedAt 拨到另一个值（模拟重连到重启后的新 server 进程）
+      // + 广播时带上同形 service payload（真 server 的 instances 广播恒带 service 字段）。
+      bumpServiceStartedAt: () => { mockServiceStartedAtOverride = (mockServiceStartedAtOverride ?? MOCK_SERVICE_STARTED_AT) + 60_000; },
+      mockServicePayload,
     })),
     ...createContentScenarios(() => ({
       io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay,

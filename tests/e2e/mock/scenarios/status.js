@@ -391,5 +391,32 @@ export function createStatusScenarios(getContext) {
         });
       }),
     },
+    {
+      // 修「server 重启都会跳'会话已中断'页」误报：整机重启时 agents Map/viewingInstanceId 全部归零
+      //（纯内存态），重连后首条 instances 广播形态（实例从列表消失 + viewing 变 null）与上面
+      // test:instance-destroyed 完全同构——唯一区分信号是广播恒带的 service.startedAt（进程级常量，
+      // 重启必变）。本场景构造这个终态：清空全部实例 + 拨 startedAt + 带 service 的 instances 广播，
+      // 供前端 detectServerRestart（public/js/logic.js）验证：显示「服务已重启」提示 +「继续此会话」
+      // 一键重开（走既有 session:switch 打开路径），而非误导性的「停止操作未能正常结束」。
+      command: 'test:server-restart',
+      run: run(async ({ io, viewingInstanceId, mockInstances, setViewingInstanceId, bumpServiceStartedAt, mockServicePayload }) => {
+        const removedCwd = mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd
+          ?? '/Users/you/code/claude-chat-mobile';
+        const dirs = Array.from(new Set(mockInstances.map(i => i.cwd)));
+        mockInstances.length = 0; // 重启 = 所有 live 实例消失（不只正在看的那个）
+        setViewingInstanceId(null);
+        bumpServiceStartedAt();
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId: null,
+            viewingCwd: removedCwd,
+            dirs,
+            instances: mockInstances,
+            service: mockServicePayload(),
+          },
+        });
+      }),
+    },
   ];
 }

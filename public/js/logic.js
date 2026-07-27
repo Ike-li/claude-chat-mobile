@@ -807,6 +807,17 @@ export function wasViewingInstanceDestroyed({
   return !has(currIds, prevViewingInstanceId); // 曾在列表、现在消失了 → 真被摧毁
 }
 
+// server 重启检测：整机重启时 agents Map/viewingInstanceId 全部归零（纯内存态，不从磁盘恢复），
+// 重连后首条 instances 广播的形态（正在看的实例从列表消失 + viewing 变 null）与「实例被单独摧毁」
+// 完全同构——wasViewingInstanceDestroyed 三条件全部命中，无法自辨，会把每次重启都误报成
+// 「停止操作未能正常结束」。区分信号 = 广播恒带的 service.startedAt（服务端进程级常量
+// SERVICE_STARTED_AT，重启必变）：前后两条广播的 startedAt 都在且不同 → server 重启。
+// 任一侧缺失（首条广播无基线 / 旧服务端·mock 手工 payload 不带 service）保守不判，
+// 回落既有 destroyed 行为——缺字段不能当"变了"。
+export function detectServerRestart({ prevStartedAt = null, newStartedAt = null } = {}) {
+  return prevStartedAt != null && newStartedAt != null && prevStartedAt !== newStartedAt;
+}
+
 // 空表面形态：＋ / 🏠 分流。
 //   destroyed = 正在查看的实例被摧毁（见 wasViewingInstanceDestroyed），需要用户手动确认下一步
 //   none    = 已在真实会话（有 session 流），不渲染空态页

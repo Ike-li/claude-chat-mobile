@@ -9,7 +9,7 @@
 // (home/compose)"处理，导致用户刚点停止就被静默弹回主页。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveEmptySurface, wasViewingInstanceDestroyed } from '../../public/js/logic.js';
+import { detectServerRestart, resolveEmptySurface, wasViewingInstanceDestroyed } from '../../public/js/logic.js';
 
 test('wasViewingInstanceDestroyed: 实例真的被摧毁（曾在列表、现从列表消失、newViewing 变 null）→ 命中', () => {
   const prevIds = new Set(['inst_1']);
@@ -72,6 +72,33 @@ test('wasViewingInstanceDestroyed: explicitCloseInstanceId 命中同一实例—
     prevViewingInstanceId: 'inst_1', newViewingInstanceId: null, prevIds, currIds,
     explicitCloseInstanceId: 'inst_other',
   }), true);
+});
+
+// server 重启检测（「server 重启都会跳'会话已中断'页」误判修复）：整机重启时 agents Map/viewingInstanceId
+// 全部归零，重连后首条 instances 广播的形态（正在看的实例从列表消失 + viewing 变 null）与「实例被单独
+// 摧毁」完全同构，wasViewingInstanceDestroyed 无法自辨。区分信号 = 广播恒带的 service.startedAt
+// （src/server/app.js SERVICE_STARTED_AT，进程级常量，重启必变）：前后两条广播的 startedAt 不同 → 重启。
+test('detectServerRestart: 前后两条广播 startedAt 都在且不同 → 命中重启', () => {
+  assert.equal(detectServerRestart({ prevStartedAt: 1000, newStartedAt: 2000 }), true);
+});
+
+test('detectServerRestart: startedAt 相同（同一 server 进程存活）→ 不命中', () => {
+  assert.equal(detectServerRestart({ prevStartedAt: 1000, newStartedAt: 1000 }), false);
+});
+
+// 首条广播（刚开页无基线）不可判重启——否则冷启动第一条广播就误报。
+test('detectServerRestart: 无 prev 基线（首条广播）→ 不命中', () => {
+  assert.equal(detectServerRestart({ prevStartedAt: null, newStartedAt: 2000 }), false);
+  assert.equal(detectServerRestart({ newStartedAt: 2000 }), false);
+});
+
+// 广播缺 service.startedAt（旧服务端 / mock 场景手工构造的 payload 不带 service）→ 保守不判，
+// 回落既有 destroyed 行为，不能把缺字段当"变了"。
+test('detectServerRestart: 新广播缺 startedAt → 不命中', () => {
+  assert.equal(detectServerRestart({ prevStartedAt: 1000, newStartedAt: null }), false);
+  assert.equal(detectServerRestart({ prevStartedAt: 1000 }), false);
+  assert.equal(detectServerRestart({}), false);
+  assert.equal(detectServerRestart(), false);
 });
 
 // resolveEmptySurface 接线：instanceDestroyed=true 时应优先于 home/compose/none 判断，返回 'destroyed'。

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -198,6 +198,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 与"被摧毁"广播形态完全相同（服务端都是 viewingInstanceId 变 null + 该实例从列表消失），但这是用户
   // 自己确认过的操作，不该弹"会话已中断"。一次性：在 setInstances 里消费后立即清空。
   let explicitCloseInstanceId = null;
+  // server 重启检测基线：上一条 instances 广播携带的 service.startedAt（进程级常量，重启必变）。
+  // 整机重启后重连的首条广播形态（实例从列表消失 + viewing 变 null）与「实例被单独摧毁」完全同构，
+  // wasViewingInstanceDestroyed 无法自辨——靠 startedAt 变化区分（见 setInstances 的 detectServerRestart），
+  // 否则每次重启都误弹「停止操作未能正常结束」。广播缺 service 字段（旧服务端/mock 手工 payload）时
+  // 保持旧基线不清空，缺字段不能当"变了"。
+  let lastServiceStartedAt = null;
   // 空首页枢纽默认隐藏底部输入条；仅点 ＋ / session:new 进入 compose 就绪，或进入真实会话后显示。
   // 防「未选项目就直接发消息」歧义（懒开 FRESH 路径仍保留，但入口收窄为显式 ＋）。
   let _composeReady = false;
@@ -3742,6 +3748,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // →等网络往返"连坐重建没变化的目录），也不会因为 id 集合没变就把改名/截断变化漏掉。
     const prevIds = new Set(prevInstances.map(x => x.instanceId));
     const currIds = new Set(instancesList.map(x => x.instanceId));
+    // server 重启检测（每条广播都要过账，与下方视图切换分支无关——基线必须持续跟进，否则重启前
+    // 最后一条广播的 startedAt 会因为中间隔了几条无关广播而失真）。
+    const newServiceStartedAt = p?.service?.startedAt ?? null;
+    const serverRestarted = detectServerRestart({ prevStartedAt: lastServiceStartedAt, newStartedAt: newServiceStartedAt });
+    if (newServiceStartedAt != null) lastServiceStartedAt = newServiceStartedAt;
     // 清除④：freshInterrupted 标记的实例从 instances 列表消失（关闭/退出/别处清理），待续档态随之作废。
     if (freshInterruptedInstanceId && !currIds.has(freshInterruptedInstanceId)) {
       freshInterruptedInstanceId = null;
@@ -3820,6 +3831,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         explicitCloseInstanceId,
       });
       explicitCloseInstanceId = null; // 一次性：只用于紧接着这一次判定，防止悬留误伤后续无关的摧毁事件
+      // server 重启细分：同一条广播里 startedAt 变了 + 正在看的实例消失 = 整机重启把所有内存实例带走了，
+      // 不是这个实例被单独摧毁——提示页换准确文案 +「继续此会话」一键重开（会话 transcript 在磁盘上，
+      // 走既有 session:switch 打开路径懒 resume）。resume 目标从旧快照取：instanceDestroyed=true 的
+      // 前提就是该实例在 prevInstances 里（见 wasViewingInstanceDestroyed 的 prevIds 防御分支）。
+      const destroyedByRestart = instanceDestroyed && serverRestarted;
+      const restartPrevEntry = destroyedByRestart ? prevInstances.find(x => x.instanceId === displayedInstanceId) : null;
+      const destroyedResume = restartPrevEntry?.sessionId && restartPrevEntry?.cwd
+        ? { sessionId: restartPrevEntry.sessionId, cwd: restartPrevEntry.cwd }
+        : null;
       const target = instancesList.find(x => x.instanceId === newViewing);
       ultracodeArmed = false;           // ultracode 档不跨实例（CLI: never persist）；切会话/工作区一律回落（含切到空首页 target=null）
       adoptPanelState(target);          // 先静默同步顶部面板到新实例档（先于 bindView 的 sync 回放）
@@ -3833,7 +3853,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         setPermMode(p.defaultPermissionMode || 'default', true);
         setEffortMode(p.defaultEffort ?? null, true);
       }
-      bindView(target, newViewing, { instanceDestroyed }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
+      bindView(target, newViewing, { instanceDestroyed, destroyedByRestart, destroyedResume }); // 空表面→home dashboard / compose 新会话页 / destroyed 中断提示
       // bindView 内已按 shouldRestoreOptimisticBusy 补 busy；此处再补一次防 bindView early-return 路径漏补
       // （首发无 sessionId / 同会话 externalDirty·effort 置换）。session:switch 打开已有会话不补。
       if (shouldRestoreOptimisticBusy({
@@ -4123,7 +4143,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       instanceDestroyed: Boolean(opts.instanceDestroyed),
     });
     if (emptySurface === 'destroyed') {
-      showInstanceDestroyedSurface();
+      showInstanceDestroyedSurface({ byRestart: Boolean(opts.destroyedByRestart), resume: opts.destroyedResume || null });
       return;
     }
     if (emptySurface === 'home') {
@@ -5655,7 +5675,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // queue_dropped 的系统提示行）；外层卡片 + 操作按钮走 showDashboard/showComposeSurface 同款
   // 空表面卡片布局——不引入新的弹窗/模态体系。两个按钮直接复用 btnHome/btnNew 的既有点击处理，
   // 不重复其内部逻辑（保持行为完全一致，包括 haptic、freshInterruptedInstanceId 清理等副作用）。
-  function showInstanceDestroyedSurface() {
+  // byRestart：server 整机重启细分（见 setInstances 的 detectServerRestart）——不是这个实例被单独
+  // 摧毁，文案换成准确的「服务已重启」，并加「继续此会话」一键重开（resume={sessionId,cwd} 走既有
+  // session:switch 打开路径懒 resume，与侧栏/最近列表点击同源）。不自动切换：尊重「重启后不自动
+  // session:switch」的既有产品决策（见 _dashRecentsGen 注释），按钮是用户主动点的。
+  function showInstanceDestroyedSurface({ byRestart = false, resume = null } = {}) {
     messagesEl.innerHTML = '';
     messagesEl.classList.add('empty-start');
     if (topTitleText) topTitleText.textContent = t('新聊天');
@@ -5663,16 +5687,38 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     syncComposerVisibility();
     syncTopContextPillVisibility(null, null); // 无实例可看：顶栏文件夹入口隐藏（同 home/compose）
 
+    const title = byRestart ? t('🔄 服务已重启') : t('⏹ 会话已中断');
+    const body = byRestart
+      ? t('服务已重启，之前的会话进程随之退出。会话记录仍保存在磁盘上，可以继续此会话，也可以回首页或新建一个会话。')
+      : t('停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。');
+    const canResume = byRestart && resume?.sessionId && resume?.cwd;
     const container = el(`
       <div class="instance-destroyed-surface flex flex-col items-center w-full max-w-xl mx-auto py-8 px-3 select-none" data-testid="instance-destroyed-surface">
-        <div class="msg-frame text-center text-xs text-warning font-semibold mb-2">${t('⏹ 会话已中断')}</div>
-        <p class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2">${t('停止操作未能正常结束，后台会话进程已意外退出，无法直接继续。可以回首页，或在此工作区新建一个会话。')}</p>
+        <div class="msg-frame text-center text-xs text-warning font-semibold mb-2">${title}</div>
+        <p class="text-xs text-ink-faint text-center mb-6 max-w-sm leading-relaxed px-2">${body}</p>
         <div class="flex flex-col gap-2 w-full max-w-xs">
+          ${canResume ? `<button type="button" class="instance-destroyed-resume inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-resume">${t('继续此会话')}</button>` : ''}
           <button type="button" class="instance-destroyed-home inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-home">${t('回首页')}</button>
           <button type="button" class="instance-destroyed-new inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-full border border-line-soft bg-surface text-ink hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="instance-destroyed-new">${t('新建会话')}</button>
         </div>
       </div>`);
 
+    if (canResume) {
+      const resumeBtn = container.querySelector('.instance-destroyed-resume');
+      resumeBtn.onclick = (e) => {
+        e.stopPropagation();
+        haptic('tap');
+        // 乐观禁用 + ack/超时兜底恢复：对齐 dashboard 最近列表 switchToSession 的既有约定。
+        // 成功路径不必手动导航——服务端广播新 viewingInstanceId，setInstances→bindView 自然接管。
+        resumeBtn.disabled = true;
+        let acked = false;
+        socket.emit('session:switch', { sessionId: resume.sessionId, cwd: resume.cwd }, res => {
+          acked = true;
+          if (!res?.ok) { resumeBtn.disabled = false; addBar(res?.error || t('切换失败'), 'text-danger'); }
+        });
+        setTimeout(() => { if (!acked) { resumeBtn.disabled = false; addBar(t('切换无响应，请刷新页面后重试'), 'text-danger'); } }, 4000);
+      };
+    }
     container.querySelector('.instance-destroyed-home').onclick = (e) => {
       e.stopPropagation();
       btnHome?.onclick?.();
