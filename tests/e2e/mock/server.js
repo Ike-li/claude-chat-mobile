@@ -1152,6 +1152,12 @@ io.on('connection', socket => {
     });
   });
 
+  // 测试推送：mock 默认无订阅（与真机初见形态一致，也是最需要被说清的那一态）
+  socket.on('push:test', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({ ok: true, sent: 0, failed: 0, subscribed: false });
+  });
+
   socket.on('service:status', (_payload, ack) => {
     if (typeof ack !== 'function') return;
     ack({

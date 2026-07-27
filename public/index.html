@@ -725,6 +725,9 @@
           <!-- 没有订阅时这个开关是空转的（偏好跟着订阅存在服务端，没订阅就没地方存、也没通知可改）。
                不禁用它——只说明，免得用户勾了半天以为生效了。 -->
           <div id="pushPreviewInertNote" class="hidden text-[10px] text-ink-faint px-1">未开启上方的推送通知前，这个开关不产生任何效果（偏好只存在本机）。</div>
+          <!-- 与「▶ 试听提示音」同一心智：那个验本地提示音，这个验远端推送链路。
+               没有它就只能等真事件才知道通不通——本项目真实踩过这个坑。 -->
+          <button id="btnPushTest" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink" data-testid="push-test">🔔 发一条测试推送</button>
         </div>
       </div>
 

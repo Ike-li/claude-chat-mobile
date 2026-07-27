@@ -2668,6 +2668,22 @@ registerSocketConnection(io, socket => {
     });
   });
 
+  // 测试推送：自己验"推送到底通不通"，不必等真事件。今晚的教训——机主一直以为推送在工作，
+  // 实际上从未订阅成功过，而界面上没有任何办法自证。与「▶ 试听提示音」同一心智（那个验本地
+  // 提示音，这个验远端推送链路）。没有订阅时如实回报"没有收件人"，这本身就是最有用的诊断。
+  on(socket, 'push:test', async (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const before = metrics.snapshot().counters;
+    const title = '🔔 测试推送 · ccm';
+    await pushNotify(title, '如果你看到这条，推送链路是通的');
+    ntfyNotify(title, '如果你看到这条，推送链路是通的', ntfyMetaFor('result', {}, notify.publicUrl));
+    const after = metrics.snapshot().counters;
+    const sent = (after.push_success ?? 0) - (before.push_success ?? 0);
+    const failed = (after.push_failure ?? 0) - (before.push_failure ?? 0);
+    console.log(`[push] 测试推送：成功 ${sent} 条、失败 ${failed} 条`);
+    ack({ ok: true, sent, failed, subscribed: sent + failed > 0 });
+  });
+
   on(socket, 'doctor:run', (_payload, ack) => {
     if (typeof ack !== 'function') return;
     ack(runDoctor({

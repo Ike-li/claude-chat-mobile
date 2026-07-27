@@ -42,4 +42,17 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // 「发一条测试推送」：今晚这条链路的教训——用户没有任何办法自证推送通不通，只能等真事件，
+  // 于是"从未订阅成功"被误当成"这功能没用"。未订阅时必须明说，而不是假装发出去了。
+  test('P0-26 测试推送：未订阅时如实告知没有收件人，不谎报成功', async ({ page }) => {
+    await gotoMock(page);
+    await waitForIdle(page);
+
+    await page.locator('#btnSettings').click();
+    await page.locator('#btnPushTest').click();
+    await expect(page.locator('#messages')).toContainText('还没订阅推送');
+
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -4492,6 +4492,27 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     pushStatusRowEl.appendChild(card);
   }
 
+  // 「发一条测试推送」：自证推送链路，不必等真事件。结果如实回报——发出去几条、失败几条、
+  // 有没有收件人。"没有订阅"是最常见也最容易被误当成"功能坏了"的情况，要说清楚。
+  if ($('btnPushTest')) $('btnPushTest').onclick = () => {
+    const btn = $('btnPushTest');
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = t('发送中…');
+    socket.timeout(8000).emit('push:test', {}, (err, res) => {
+      btn.disabled = false;
+      btn.textContent = original;
+      if (err || !res?.ok) { addBar(t('测试推送失败，请检查网络'), 'text-danger'); return; }
+      if (!res.subscribed) {
+        addBar(t('这台设备还没订阅推送——先点上方的「开启」'), 'text-warning');
+      } else if (res.failed > 0) {
+        addBar(`${t('测试推送发送失败')} ${res.failed} ${t('条（订阅可能已过期，重新开启一次）')}`, 'text-danger');
+      } else {
+        addBar(`${t('已发出测试推送')} ${res.sent} ${t('条——若手机没响，检查系统通知权限')}`, 'text-success');
+      }
+    });
+  };
+
   // 配置面板的「终端会话推送」段（CLI hooks 桥）。放在通知这一组、而不是服务状态诊断页：对用户
   // 而言这就是"电脑终端里跑的会话要不要通知我"，与提示音/震动同一心智——埋进诊断页没人找得到。
   const hooksBridgeSection = $('hooksBridgeSection'), hooksBridgeBody = $('hooksBridgeBody');
