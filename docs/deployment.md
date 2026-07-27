@@ -152,3 +152,19 @@ cloudflared tunnel --url http://localhost:3000
 ```
 
 此时不启用 Access（`CF_ACCESS_*` 留空），鉴权纯靠 `AUTH_TOKEN`。
+
+## 日志窗口（可选，macOS）
+
+常驻部署的日志写进文件（`~/Library/Logs/ccm-server.log`），要看得先自己 `tail -f`。在 `.env` 设
+`LOG_TERMINAL=on` 后，server 每次启动会自动开一个 Terminal 窗口跟随该日志，停止/重启时自动关掉它：
+
+```bash
+LOG_TERMINAL=on        # 默认关闭
+LOG_FILE=              # 留空 = ~/Library/Logs/ccm-server.log
+```
+
+- **仅 macOS**（靠 osascript 驱动 Terminal.app）；Linux 留空即可，设了会打一行"已跳过"。
+- **首次会弹系统「自动化」授权框**，需允许控制「终端」；拒绝后 server 照常跑，只是开不出窗口（日志会提示怎么开）。
+- 只关自己开的那个窗口（按窗口 id 记在 `<CCM_DATA_DIR>/log-terminal.json`），绝不碰你自己的终端窗口。
+- 窗口里带一个看门狗：server 被 `kill -9` 或崩掉时，窗口内的 `tail` 会自行退出并留一行「server 已停止」，
+  不会假装还在跑；那个窗口会在下次启动时被清掉。

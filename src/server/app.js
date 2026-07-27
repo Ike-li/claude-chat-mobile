@@ -23,6 +23,7 @@ import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
+import { startLogTerminal, stopLogTerminalSync } from '../ops/log-terminal.js';
 import { createHooksInbox } from './hooks-inbox.js';
 import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
@@ -2925,6 +2926,10 @@ expireOrphanedPending();
 startApprovalRetentionSweep();
 
 httpServer.listen(port, host, () => {
+  // 常驻部署的日志窗口（LOG_TERMINAL=on 才开）：停止/重启时由 shutdown() 关掉。
+  // **必须放在绑定成功之后**：早于此处会给一个根本没起来的 server（如端口被占）开出窗口，
+  // 而那条路径退出太快、状态文件还没写完就没了，留下关不掉的孤儿窗口（实测踩到）。
+  startLogTerminal({ home: homedir(), dataDir: DATA_DIR }).catch(() => {});
   console.log('========================================');
   console.log('  Claude Chat Mobile v2');
   console.log(`  工作目录: ${WORK_DIR}${workDirs.length > 1 ? `  (可切换 ${workDirs.length} 个: ${workDirs.join(', ')})` : ''}`);
@@ -2981,6 +2986,7 @@ function shutdown(sig) {
   clearTimeout(statusDebounce);   // （在途 git execFile 由 2s timeout 与进程退出收割）
   clearTimeout(catchUpTimer);     // 只读追平定时器（.unref 不阻止退出，但清掉避免关闭期间噪音回调）
   hooksInbox.close();             // 关 hooks 投递箱 watcher + 防抖定时器（同上：避免关闭期间回调）
+  stopLogTerminalSync({ dataDir: DATA_DIR }); // 同步关日志窗口：下面就 process.exit，异步来不及
   // SRV-NEW-007：清 bgBroadcast 合并定时器，防 agents.clear 后仍 fire broadcastInstances
   if (bgBroadcastTimer) { clearTimeout(bgBroadcastTimer); bgBroadcastTimer = null; }
   for (const a of agents.values()) a.dispose(); // 台阶2：遍历所有目录实例——各自杀子进程、deny 挂起审批
@@ -2996,6 +3002,9 @@ function shutdown(sig) {
 }
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+// 兜底：端口被占、未捕获异常等路径不走 shutdown()，日志窗口会留到下次启动才被清。
+// 'exit' 只允许同步收尾，stopLogTerminalSync 正好是同步的；与 shutdown() 里那次幂等（状态文件已清则直接返回）。
+process.on('exit', () => { try { stopLogTerminalSync({ dataDir: DATA_DIR, log: { log() {} } }); } catch { /* 退出中，尽力而为 */ } });
 
 // 导出供集成测试使用
 export { httpServer, io, port };

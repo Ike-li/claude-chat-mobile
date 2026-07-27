@@ -33,7 +33,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 1 |
-| Backend source | 53 |
+| Backend source | 54 |
 | Configuration template | 1 |
 | Deployment | 3 |
 | Documentation | 4 |
@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 110 |
+| Unit test | 111 |
 | Vendored asset | 21 |
 
-Total classified files: **337**.
+Total classified files: **339**.
 
 ## Complete file inventory
 
@@ -184,6 +184,7 @@ Total classified files: **337**.
 | `src/ops/client-error-log.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/doctor-checks.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/doctor-runtime.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/ops/log-terminal.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/metrics.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/notifications.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/notify-channels.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -345,6 +346,7 @@ Total classified files: **337**.
 | `tests/unit/instance-routing.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/interaction.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/lan-ipv4s.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/log-terminal.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/log-time.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-client-error.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-client-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
