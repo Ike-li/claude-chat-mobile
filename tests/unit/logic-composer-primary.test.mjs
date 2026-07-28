@@ -8,8 +8,13 @@ import {
   shouldShowComposerDiscoverHint,
   formatLiveActivityText,
   presentOnlineSendAck,
+  presentOnlineSendTransport,
   presentOfflineResendAck,
   shouldBusyAfterOfflineBatch,
+  planOutboxEnqueue,
+  parseDurableOutbox,
+  dumpDurableOutbox,
+  OUTBOX_MAX_ITEMS,
   safeJsonPreview,
   shouldSeedBusyFromInstanceState,
   shouldReseedBusyAfterReload,
@@ -210,12 +215,13 @@ test('presentOnlineSendAck: ok → 仅确认成功，不清 busy', () => {
   assert.equal(out.message, '');
 });
 
-test('presentOnlineSendAck: 可重试失败 → 清 busy + 文案 + 恢复草稿', () => {
+test('presentOnlineSendAck: 可重试失败 → 清 busy + 入 outbox（不回填草稿）', () => {
   const out = presentOnlineSendAck({ ok: false, error: '前面还有消息在排队，请稍后重试', retryable: true });
   assert.equal(out.ok, false);
   assert.equal(out.clearBusy, true);
-  assert.equal(out.restoreDraft, true);
   assert.equal(out.retryable, true);
+  assert.equal(out.requeue, true, '可重试应入 outbox 自动重试');
+  assert.equal(out.restoreDraft, false, '入队后不回填，避免与 outbox 双份');
   assert.match(out.message, /排队|重试/);
 });
 
@@ -224,6 +230,7 @@ test('presentOnlineSendAck: 永久失败 / stale → 清 busy + 恢复草稿', (
   assert.equal(permanent.ok, false);
   assert.equal(permanent.clearBusy, true);
   assert.equal(permanent.restoreDraft, true);
+  assert.equal(permanent.requeue, false);
   assert.equal(permanent.permanent, true);
   assert.match(permanent.message, /过长|失败/);
 
@@ -231,6 +238,7 @@ test('presentOnlineSendAck: 永久失败 / stale → 清 busy + 恢复草稿', (
   assert.equal(stale.ok, false);
   assert.equal(stale.clearBusy, true);
   assert.equal(stale.stale, true);
+  assert.equal(stale.requeue, false);
   assert.ok(stale.message.length > 0);
 });
 
@@ -239,6 +247,46 @@ test('presentOnlineSendAck: 缺省/畸形 ack 当失败', () => {
   assert.equal(presentOnlineSendAck(undefined).ok, false);
   assert.equal(presentOnlineSendAck({}).ok, false);
   assert.equal(presentOnlineSendAck({ ok: false }).clearBusy, true);
+});
+
+test('presentOnlineSendTransport: timeout/err → requeue', () => {
+  const out = presentOnlineSendTransport(new Error('timeout'), undefined);
+  assert.equal(out.ok, false);
+  assert.equal(out.requeue, true);
+  assert.equal(out.restoreDraft, false);
+  assert.match(out.message, /排队|重试|确认/);
+});
+
+test('presentOnlineSendTransport: 无 err 委托 presentOnlineSendAck', () => {
+  assert.equal(presentOnlineSendTransport(null, { ok: true }).ok, true);
+  assert.equal(presentOnlineSendTransport(null, { ok: false, retryable: true }).requeue, true);
+});
+
+test('outbox: enqueue 去重同 clientMessageId + 超 cap 丢最旧', () => {
+  let q = [];
+  ({ queue: q } = planOutboxEnqueue(q, { clientMessageId: 'a', text: '1' }, { maxItems: 2 }));
+  ({ queue: q } = planOutboxEnqueue(q, { clientMessageId: 'b', text: '2' }, { maxItems: 2 }));
+  const r = planOutboxEnqueue(q, { clientMessageId: 'c', text: '3' }, { maxItems: 2 });
+  assert.equal(r.queue.length, 2);
+  assert.equal(r.dropped.length, 1);
+  assert.equal(r.queue[0].clientMessageId, 'b');
+  assert.equal(r.queue[1].clientMessageId, 'c');
+  // 同 id 覆盖不涨长度
+  const r2 = planOutboxEnqueue(r.queue, { clientMessageId: 'c', text: '3b' }, { maxItems: 2 });
+  assert.equal(r2.queue.length, 2);
+  assert.equal(r2.queue.find(x => x.clientMessageId === 'c').text, '3b');
+});
+
+test('outbox: durable dump/parse 剥 bubbleEl', () => {
+  const raw = dumpDurableOutbox([{ clientMessageId: 'x', text: 'hi', bubbleEl: { fake: true } }]);
+  assert.ok(!raw.includes('bubbleEl'));
+  const items = parseDurableOutbox(raw);
+  assert.equal(items.length, 1);
+  assert.equal(items[0].clientMessageId, 'x');
+  assert.equal(items[0].text, 'hi');
+  assert.equal(items[0].bubbleEl, undefined);
+  assert.deepEqual(parseDurableOutbox('not-json'), []);
+  assert.ok(OUTBOX_MAX_ITEMS >= 1);
 });
 
 // FE-NEW-001 / FE-NEW-006：离线重发 ack 与批后 busy

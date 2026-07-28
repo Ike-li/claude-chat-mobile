@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, normalizeTranscriptViewMode, cycleTranscriptViewMode, transcriptViewLabel, transcriptViewTitle, transcriptViewMessagesClass, transcriptDetailsOpenByDefault, readTranscriptViewPref, writeTranscriptViewPref, formatCtxPillText, ctxPillTone, resolveTurnEndScroll } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, normalizeTranscriptViewMode, cycleTranscriptViewMode, transcriptViewLabel, transcriptViewTitle, transcriptViewMessagesClass, transcriptDetailsOpenByDefault, readTranscriptViewPref, writeTranscriptViewPref, formatCtxPillText, ctxPillTone, resolveTurnEndScroll } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -482,7 +482,30 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // dirRow/subtree 节点引用表（cwd → {dirRow, subtree}），供 rebuildDirSections 定位要替换的旧节点；
   // 每次 openSessionPanel() 全量重建时重新填充。
   let dirSectionNodes = new Map();
-  let offlineQueue = [];                // 弱网离线发送队列：重连后 processOfflineQueue 逐条补发
+  // 发送 outbox（在线 timeout/retryable + 离线共用）：内存队列 + localStorage 耐久。
+  // bubbleEl 仅内存；落盘只写可序列化字段（见 dumpDurableOutbox）。PWA 杀进程后靠 clientMessageId 恢复重试。
+  let offlineQueue = [];
+  try {
+    offlineQueue = parseDurableOutbox(localStorage.getItem(OUTBOX_STORAGE_KEY));
+  } catch { offlineQueue = []; }
+  function persistOutbox() {
+    try { localStorage.setItem(OUTBOX_STORAGE_KEY, dumpDurableOutbox(offlineQueue)); } catch { /* quota */ }
+  }
+  function enqueueOutbox(item) {
+    const { queue, dropped } = planOutboxEnqueue(offlineQueue, item, { maxItems: OUTBOX_MAX_ITEMS });
+    offlineQueue = queue;
+    persistOutbox();
+    if (dropped.length) {
+      logClientEvent('send', `[WEB_SEND] outbox 超上限丢弃 ${dropped.length} 条最旧消息`);
+    }
+    return offlineQueue;
+  }
+  window.addEventListener('pagehide', () => { try { persistOutbox(); } catch { /* noop */ } });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      try { persistOutbox(); } catch { /* noop */ }
+    }
+  });
 
   // 所有拆出的浏览器模块只通过显式 context 读取共享 DOM、状态和依赖。
   const appContext = createAppContext({
@@ -825,7 +848,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (_offlineDrainInFlight || offlineQueue.length === 0) return;
     _offlineDrainInFlight = true;
     const items = offlineQueue;
-    offlineQueue = []; // 本批取出；requeue 的再 push 回
+    offlineQueue = []; // 本批取出；requeue 的再 enqueue
+    persistOutbox();
     addBar(`${t('正在重发离线发送队列中的')} ${items.length} ${t('条消息...')}`, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息`);
     let hadViewingOk = false;
@@ -854,12 +878,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
         } else {
           if (indicator) indicator.textContent = t('🕐 未确认送达，等待重连重试...');
-          offlineQueue.push(item);
+          enqueueOutbox(item);
           logClientEvent('send', `[WEB_SEND] 离线消息重发未确认，已重新排队`);
         }
       }
     } finally {
       _offlineDrainInFlight = false;
+      persistOutbox();
       // 批后 busy：仅 viewing 相关 in-flight/成功才抬；永久失败且无剩余 viewing 队列 → clear
       setBusy(shouldBusyAfterOfflineBatch({
         viewingInstanceId,
@@ -3057,7 +3082,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       bubble.appendChild(indicator);
       appendMessage(bubble);
       
-      offlineQueue.push({
+      enqueueOutbox({
         text,
         model,
         attachments: outgoingAttachments,
@@ -3068,7 +3093,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         instanceId: viewingInstanceId,
         cwd: currentCwd
       });
-      
+
       inputEl.value = '';
       // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
       if (currentSessionId) sessionDraftCache.delete(currentSessionId);
@@ -3094,6 +3119,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 会话/实例，届时 setBusy/addBar/草稿回填这些「作用于当前视图」的副作用不该套到无关会话上。
     // 按会话登记在途态（而非裸全局布尔）：切到另一会话发消息不该被这条送出的等待窗口阻塞。
     const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId;
+    const reqCwd = currentCwd;
+    const reqViewingInstanceId = viewingInstanceId;
     _sendInFlightSessionIds.add(reqSessionId);
     const clearSendInFlight = () => {
       if (!_sendInFlightSessionIds.has(reqSessionId)) return;
@@ -3104,17 +3131,39 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (liveLine) renderLiveLine();
     };
     // 失败时恢复草稿：send 会先清空输入；仅当输入仍空才回填，避免覆盖用户已键入的下一条。
+    // requeue 路径不回填（消息进 outbox）。
     const restoreDraftOnFail = { text, attachments: outgoingAttachments };
+    const outboxPayload = {
+      text,
+      model,
+      attachments: outgoingAttachments,
+      clientMessageId,
+      instanceId: reqViewingInstanceId,
+      cwd: reqCwd,
+    };
     const sendInFlightTimer = setTimeout(clearSendInFlight, SEND_ACK_FALLBACK_MS); // 兜底：ack 真丢了也不永久卡死
-    socket.emit('user:message', { text, model, attachments: outgoingAttachments, instanceId: viewingInstanceId, cwd: currentCwd, clientMessageId }, (ack) => {
+    // 在线也走 timeout：half-open / 中途断连时 err 回调 → 入 outbox，不再静默丢字
+    socket.timeout(SEND_ACK_FALLBACK_MS).emit(
+      'user:message',
+      { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId },
+      (err, ack) => {
       clearSendInFlight();
-      const decision = presentOnlineSendAck(ack);
+      const decision = presentOnlineSendTransport(err, ack);
       if (decision.ok) return;
       // 只清自己这条送出的登记：若这条负 ack 迟到，槽位可能已被之后另一条 send() 的登记顶替
       // （比如很快切到别的会话又发了一条），不能连带清掉那条仍然合法在途的登记。
       if (_pendingSendBusySessionId === reqSessionId) _pendingSendBusySessionId = null;
       _pendingFirstSend = false;
-      logClientEvent('send', `[WEB_SEND] 在线发送被拒：${decision.message || ack?.error || 'unknown'}`);
+      logClientEvent('send', `[WEB_SEND] 在线发送未确认：${decision.message || ack?.error || err?.message || 'unknown'}`);
+      if (decision.requeue) {
+        enqueueOutbox(outboxPayload);
+        // 视图仍在本会话时提示已排队；切走则静默入队，靠 reconnect drain
+        if (displayedInstanceId === reqInstanceId && displayedSessionId === reqSessionId) {
+          if (decision.clearBusy) setBusy(false);
+          if (decision.message) addBar(decision.message, 'text-danger');
+        }
+        return;
+      }
       // WS-003：迟到负 ack 守卫——发起后若已切到别的会话/实例，本次发送的失败反馈不该出现在当前视图上
       // （错误提示会贴到无关会话、setBusy(false) 会打断无关会话真实在跑的轮次、草稿会覆盖无关会话的输入）。
       if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
@@ -4340,7 +4389,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       const nodes = stripEphemeralMessageNodes(Array.from(messagesEl.childNodes));
       if (nodes.length === 0) { /* 仅有 ephemeral 时不缓存空壳 */ }
       else sessionDomCache.set(currentSessionId, { nodes, lastSeq, epoch: curEpoch, instanceId: prevInstanceId });
-      if (sessionDomCache.size > 40) {
+      // 最多 8 棵完整 DOM 树：长会话 tool 卡很重，40 在中低端机易顶 RAM
+      if (sessionDomCache.size > 8) {
         const oldestKey = sessionDomCache.keys().next().value;
         sessionDomCache.delete(oldestKey);
       }

@@ -1190,6 +1190,7 @@ export function presentOnlineSendAck(ack) {
       retryable: false,
       permanent: false,
       stale: false,
+      requeue: false,
       message: '',
     };
   }
@@ -1205,15 +1206,88 @@ export function presentOnlineSendAck(ack) {
   } else if (!message.startsWith(t('发送')) && !message.includes(t('失败'))) {
     message = `${t('发送失败：')}${message}`;
   }
+  // retryable 且非 permanent/stale → 入 outbox 自动重试（与离线路径对齐）；此时不回填草稿，避免与队列双份
+  const requeue = retryable && !permanent && !stale;
   return {
     ok: false,
     clearBusy: true,
-    restoreDraft: true,
+    restoreDraft: !requeue,
     retryable,
     permanent,
     stale,
+    requeue,
     message,
   };
+}
+
+// 在线发送 transport 层（socket.timeout err 或 ack）决策——与 presentOfflineResendAck 对齐。
+// err 非空 = 超时/断连；无 err 时委托 presentOnlineSendAck。
+export function presentOnlineSendTransport(err, ack) {
+  if (err) {
+    return {
+      ok: false,
+      clearBusy: true,
+      restoreDraft: false,
+      retryable: true,
+      permanent: false,
+      stale: false,
+      requeue: true,
+      message: t('未确认送达，已排队重试'),
+    };
+  }
+  return presentOnlineSendAck(ack);
+}
+
+// ---- 发送 outbox（在线/离线统一耐久队列的纯决策）----
+// 条目可序列化字段不含 bubbleEl；app.js 用 clientMessageId 回挂 DOM。
+export const OUTBOX_MAX_ITEMS = 20;
+export const OUTBOX_STORAGE_KEY = 'ccm-outbox-v1';
+
+export function serializeOutboxItem(item) {
+  if (!item || typeof item !== 'object') return null;
+  const clientMessageId = typeof item.clientMessageId === 'string' ? item.clientMessageId : '';
+  if (!clientMessageId) return null;
+  return {
+    text: item.text == null ? '' : String(item.text),
+    model: item.model == null ? null : item.model,
+    attachments: Array.isArray(item.attachments) ? item.attachments : undefined,
+    clientMessageId,
+    instanceId: item.instanceId == null ? null : item.instanceId,
+    cwd: item.cwd == null ? null : item.cwd,
+  };
+}
+
+// 有界入队：超 maxItems 丢最旧。返回 { queue, dropped }。
+export function planOutboxEnqueue(queue, item, { maxItems = OUTBOX_MAX_ITEMS } = {}) {
+  const base = Array.isArray(queue) ? queue.slice() : [];
+  const row = serializeOutboxItem(item);
+  if (!row) return { queue: base, dropped: [] };
+  // 同 clientMessageId 去重：后写覆盖前（重试路径可能重复 push）
+  const without = base.filter(x => x?.clientMessageId !== row.clientMessageId);
+  without.push({ ...row, ...(item.bubbleEl ? { bubbleEl: item.bubbleEl } : {}) });
+  if (without.length <= maxItems) return { queue: without, dropped: [] };
+  const overflow = without.length - maxItems;
+  return { queue: without.slice(overflow), dropped: without.slice(0, overflow) };
+}
+
+export function parseDurableOutbox(raw) {
+  if (raw == null || raw === '') return [];
+  let data;
+  try { data = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return []; }
+  if (!Array.isArray(data)) return [];
+  const out = [];
+  for (const row of data) {
+    const s = serializeOutboxItem(row);
+    if (s) out.push(s);
+  }
+  return out;
+}
+
+export function dumpDurableOutbox(queue) {
+  const items = (Array.isArray(queue) ? queue : [])
+    .map(serializeOutboxItem)
+    .filter(Boolean);
+  return JSON.stringify(items);
 }
 
 // 离线队列单条重发 ack 决策（FE-NEW-001）。与在线不同：不恢复草稿（气泡已在消息流）、
@@ -1450,9 +1524,10 @@ export function syncAckAction(err, res) {
 // 旧逻辑信缓存不拉盘 → 永远看不到外部写入。故此处比对 server 报的磁盘 history 条数 diskLen 与前端上次为该
 // 会话渲染到的 seenDiskLen：磁盘更长 = 被外部写过 = 当作一种 gap，清屏全量重载磁盘（唯一真相源、清屏天然无重复）。
 // 要害盲区②（PWA 下拉刷新 / 整页 reload）：sessionDomCache 是内存态，硬刷新后 hasCache=false；server 实例仍在，
-// sync:since(0) 回放环形缓冲（BUFFER_CAP=500 事件）。旧逻辑见 replayed>0 就 keep → 永远不拉 session:history，
-// 只剩缓冲里能拼出的最近一两轮（流式 text_delta 很快填满 500 槽；且 gap 要求 lastSeq>0，硬刷新 lastSeq=0 永远
-// 判不出缺口）。故「无 DOM 缓存」必须优先走磁盘全量——有缓冲回放过时用 reload（先清再装，避免缓冲片段叠历史）。
+// sync:since(0) 回放环形缓冲（BUFFER_CAP=2000 事件，见 src/agent/agent.js）。旧逻辑见 replayed>0 就 keep →
+// 永远不拉 session:history，只剩缓冲里能拼出的最近几轮（流式 text_delta 仍可填满 cap；且 gap 要求 lastSeq>0，
+// 硬刷新 lastSeq=0 永远判不出缺口）。故「无 DOM 缓存」必须优先走磁盘全量——有缓冲回放过时用 reload
+// （先清再装，避免缓冲片段叠历史）。
 //   gap → 'reload'（缓冲超窗，同 syncAckAction）；
 //   !hasCache && replayed>0 → 'reload'（冷入场：缓冲片段 ≠ 全量历史，清屏拉盘）；
 //   !hasCache → 'load'（聊天区空、拉磁盘首次填充，不必再清）；
