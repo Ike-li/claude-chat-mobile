@@ -60,7 +60,7 @@ describe('matchFiles：纯匹配排序', () => {
   });
 
   test('limit 截断（默认 FILE_SEARCH_LIMIT）', () => {
-    const many = Array.from({ length: 30 }, (_, i) => `file${i}.js`);
+    const many = Array.from({ length: FILE_SEARCH_LIMIT + 20 }, (_, i) => `file${i}.js`);
     assert.equal(matchFiles(many, 'file').length, FILE_SEARCH_LIMIT);
     assert.equal(matchFiles(many, 'file', { limit: 5 }).length, 5);
   });

@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
-export const FILE_SEARCH_LIMIT = 20;
+export const FILE_SEARCH_LIMIT = 50;
 export const FILE_SEARCH_MAX_CANDIDATES = 5000;
 export const FILE_SEARCH_MAX_DEPTH = 6;
 export const FILE_SEARCH_CACHE_TTL_MS = 5_000;
