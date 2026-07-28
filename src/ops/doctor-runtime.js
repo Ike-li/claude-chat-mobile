@@ -17,17 +17,27 @@ export const CONFIG_FILE_NAMES = [
   join('data', 'cf-access-certs.json'),
   join('data', 'approval-requests.json'),
   join('data', 'audit-records.json'),
+  // 含 p256dh/auth 推送密钥材料（notify-channels.js 自己写着「绝不能裸 writeFileSync」），
+  // 却一直不在权限清单里 —— CLI doctor 查不到、--fix 也修不了。
+  join('data', 'push-subscription.json'),
 ];
 
 // BE-013：统计权限过宽（非 0600）的配置文件数，供 UI doctor 传入 runDoctor。
 // 返回 number（已检查，0=全干净）或 null（平台无 POSIX 权限位、无法检查）。
 // 关键：Windows 下 isOwnerOnly 恒 true 会把「无法检查」伪装成「0 处过宽」→ 假绿；故此处先按平台短路返回 null，
 // 让 runDoctor 显 warn/未知而非 ok。rootDir 缺省项目根（server 侧传 import.meta.dirname）。
-export function countConfigPermProblems(rootDir, { platform = process.platform } = {}) {
+export function countConfigPermProblems(rootDir, { platform = process.platform, dataDir = null } = {}) {
   if (platform === 'win32') return null; // 无法真正检查 → 不可假报 0
+  // 清单项以【项目根】为基准（'data/sessions.json'），但生产部署普遍用 CCM_DATA_DIR 把数据目录移出仓库。
+  // 必须剥掉 data/ 前缀再挂到真实数据目录上——此前 server 侧直接把 CCM_DATA_DIR 当 rootDir 传入，拼出
+  // <CCM_DATA_DIR>/data/sessions.json 这个永不存在的路径，一个文件都扫不到 → 恒 0 → 体检恒报绿（BE-013 假绿）。
+  // CLI doctor（scripts/doctor.js effectiveConfigFiles）一直用同一套剥前缀逻辑，这里与它对齐。
+  const dataRoot = dataDir || join(rootDir, 'data');
   let problems = 0;
   for (const name of CONFIG_FILE_NAMES) {
-    const p = join(rootDir, name);
+    const p = name === '.env'
+      ? join(rootDir, name)
+      : join(dataRoot, name.replace(/^data[/\\]/, ''));
     if (!existsSync(p)) continue;      // 文件不存在不算问题
     if (!isOwnerOnly(p)) problems++;   // 存在但非 0600 → 过宽
   }

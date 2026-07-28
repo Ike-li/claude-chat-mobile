@@ -190,3 +190,21 @@ test('sanitizePath: 非字符串返回空串', () => {
   assert.equal(sanitizePath(null), '');
   assert.equal(sanitizePath(undefined), '');
 });
+
+// ReDoS：#6/#7/#16/#17 的字段名部分是无锚点贪婪量词（[A-Za-z_]*），对纯字母串每个起始位都要 O(n)
+// 回溯 → 整体二次方。实测（修复前）：2k→31ms · 10k→866ms · 20k→2.8s · 50k→10.5s，而同长度真实源码只要 4ms。
+// 可达性：interaction-log.fmt() 先脱敏后截断、且不受 LOG_INTERACTIONS 开关保护，同一条文本要过三次
+// （userMessageIn / userMessageOut / agentSend）。user:message 上限恰是 50000 字符 —— 一条纯字母长串
+// 就能把单进程 Node 的事件循环连续阻塞数十秒：所有会话、socket、/health、catchUpTick 全部停摆。
+test('sanitize 对超长纯字母串不退化成二次方回溯', () => {
+  for (const n of [10000, 50000]) {
+    const t0 = process.hrtime.bigint();
+    sanitize('a'.repeat(n));
+    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+    assert.ok(ms < 300, `${n} 字符纯字母串耗时 ${ms.toFixed(0)}ms，应远低于 300ms（修复前 50k 需 ~10s）`);
+  }
+  // 大写形态（#6）同构
+  const t1 = process.hrtime.bigint();
+  sanitize('A'.repeat(50000));
+  assert.ok(Number(process.hrtime.bigint() - t1) / 1e6 < 300, '大写形态同样不得退化');
+});

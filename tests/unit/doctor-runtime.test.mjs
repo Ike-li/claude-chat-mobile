@@ -114,6 +114,34 @@ test.describe('countConfigPermProblems：真实权限检查（BE-013 数据源�
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  // BE-013 假绿：CONFIG_FILE_NAMES 的项以【项目根】为基准（'data/sessions.json'），而生产部署普遍用
+  // CCM_DATA_DIR 把数据目录移出仓库。server 侧把 CCM_DATA_DIR 当 rootDir 传进来 → 拼出
+  // <CCM_DATA_DIR>/data/sessions.json 这个永不存在的路径 → 一个文件都扫不到 → 恒返回 0 →
+  // runDoctor 恒输出「配置文件权限 0600 ok」。CLI doctor 用 name.replace(/^data[/\\]/,'') 一直是对的。
+  test('数据目录被 CCM_DATA_DIR 移出仓库时仍能扫到过宽文件', { skip: process.platform === 'win32' }, () => {
+    const root = mkdtempSync(join(tmpdir(), 'ccm-root-'));
+    const dataDir = mkdtempSync(join(tmpdir(), 'ccm-data-'));
+    try {
+      const env = join(root, '.env');
+      writeFileSync(env, 'AUTH_TOKEN=x');
+      chmodSync(env, 0o600);
+      const sessions = join(dataDir, 'sessions.json');
+      writeFileSync(sessions, '{}');
+      chmodSync(sessions, 0o644); // 过宽，必须被发现
+      const trusted = join(dataDir, 'trusted-devices.json');
+      writeFileSync(trusted, '[]');
+      chmodSync(trusted, 0o600); // 干净
+
+      assert.equal(countConfigPermProblems(root, { dataDir }), 1, '数据目录里过宽的 sessions.json 必须被计');
+
+      chmodSync(trusted, 0o644);
+      assert.equal(countConfigPermProblems(root, { dataDir }), 2, '两个过宽文件都要计');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
 });
 
 test.describe('SONNET-BUG-1：同一危险规则跨 scope 时聚合所有 scope', () => {

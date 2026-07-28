@@ -19,7 +19,7 @@ import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel, externalGrowthWhilePaused } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
 import { notificationForEvent, notificationForCliHook, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
@@ -169,7 +169,11 @@ function reloadWorkdirs() {
   // 被移除目录的已开实例保留运行、新开被拒；但若 viewingCwd 停在已移除目录且其上无实例，
   // 缺省路由(routeCwd)会把新会话仍落进已移除目录 → 归位到首个白名单目录。
   const viewingHasInstance = agents.get(viewingInstanceId)?.cwd === viewingCwd;
-  if (!workDirs.includes(viewingCwd) && !viewingHasInstance) viewingCwd = workDirs[0];
+  // 合法性判据必须与全局一致（isAllowedWorkdir 含 knownWorktrees）：worktree 路径永远不在 workDirs 里，
+  // 裸 includes 会把「正停在某个 worktree 空首页」的 viewingCwd 静默夯回主仓 —— 用户以为还在 worktree
+  // 分支上，发出的第一条消息却把新会话建在主仓。同文件的 session:new / session:home / user:message
+  // 都已改用 ensureAllowedWorkdir，只有这条热加载路径漏了。
+  if (!isAllowedWorkdir(viewingCwd, workDirs, knownWorktrees) && !viewingHasInstance) viewingCwd = workDirs[0];
   if (workDirs.join('|') !== prevKey) console.log(`[workdirs] 热加载生效：${workDirs.length} 个工作区`);
   broadcastInstances(); // dirs 变化 → 前端 structKey 变 → 目录面板全量重建（免重启）
 }
@@ -291,6 +295,11 @@ configureHttpShell({
 const tokenMatches = provided => secureTokenMatches(AUTH_TOKEN, provided);
 // 鉴权限速状态（socket + HTTP 共用，AUTH-001）。NFR-03：仅鉴权门口，重启清零可接受。
 const rlStates = new Map(); // sourceKey → RateLimitState
+// 有界上限。这张表由【未鉴权的公网流量】驱动：服务挂在固定域名上，任何扫描器请求一次 /health
+// （成功或 401 都写）就永久占一条，而全仓只有 get/set、没有任何 delete/TTL 清扫，decayMs 到期也不回收。
+// 常驻 LaunchAgent 跑数月即单调增长。仓内其他表都有明确上限（NOTIFY_THROTTLE_CAP=500、MAX_SESSIONS=200
+// 等），只有这里没有。淘汰最坏只是让那个来源重新从 0 计数——与「重启即清零」的既有语义同级。
+const RL_STATES_CAP = 5000;
 const httpAuth = createHttpAuth({
   authToken: AUTH_TOKEN,
   isPublicHost,
@@ -312,7 +321,14 @@ const httpAuth = createHttpAuth({
       );
     },
     getState: (key) => rlStates.get(key),
-    setState: (key, st) => { rlStates.set(key, st); },
+    setState: (key, st) => {
+      // Map 保持插入顺序：超限时从最早的开始淘汰（近似 FIFO，足够——限速状态本就是短时的）
+      if (!rlStates.has(key) && rlStates.size >= RL_STATES_CAP) {
+        const oldest = rlStates.keys().next().value;
+        if (oldest !== undefined) rlStates.delete(oldest);
+      }
+      rlStates.set(key, st);
+    },
     onResult: onAuthResult,
     onLocked: (key, r) => {
       console.warn(`[http-auth] 连续鉴权失败达阈值 → 锁定 ${Math.ceil((r.retryAfterMs || 0) / 1000)}s（source=${key}）`);
@@ -383,6 +399,13 @@ registerOperationalRoutes({
     saveSubscription: savePushSubscription,
   },
   isDeviceTrusted,
+  // 与 socket 握手侧 io.use 完全同源的 bypass 判据（CF Access 已验 / 真本机直连）。缺了它，
+  // 走这两条路进来的设备因为从不进待审列表而永远无法被批准，/push/subscribe 恒 403。
+  bypassDeviceApproval: req => shouldBypassDeviceApproval({
+    accessEnabled: req.ccmAccessEnabled === true,
+    peerAddress: req.socket?.remoteAddress || '',
+    hostHeader: req.headers?.host || '',
+  }, clientIp),
 });
 
 // Historical replay stays on the authenticated session:history socket event;
@@ -1041,11 +1064,27 @@ async function catchUpTickOnce() {
     // 仍须重算 stale：写死 false 会在 web 长期 busy（多子代理/bgTasks）时掩盖「主链已 5 分钟无写入」的疑似中断。
     // 追平仍抑制；只轻读 tail 形态（与正常路径同一 mirrorStaleFlag）。
     let busyTail = { verdict: 'settled', lastChainTs: null };
-    try { busyTail = await classifyTranscriptTail(a.sessionId, a.cwd); } catch { /* 读失败保守 settled：不误标 stale */ }
+    let busySize = -1;
+    let busyRegistryBusy = false;
+    // permission 态下 web 侧不写盘，故并行取一次 size 作为「终端是否在写」的判据（见 externalGrowthWhilePaused）。
+    // registryBusy 与切入/正常两个分支同口径：缺了它，注册表证明终端活着时这里仍可能把长编译误判成 stale。
+    try {
+      [busyTail, busySize, busyRegistryBusy] = await Promise.all([
+        classifyTranscriptTail(a.sessionId, a.cwd).catch(() => ({ verdict: 'settled', lastChainTs: null })),
+        sessionFileSize(a.sessionId, a.cwd).catch(() => -1),
+        readSessionRegistry(a.sessionId, a.cwd).then(registryIndicatesTerminalBusy).catch(() => false),
+      ]);
+    } catch { /* 读失败保守 settled：不误标 stale */ }
     if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
                                         // await 让出后视图/实例/session 可能已变：待提交状态全部作废，不提交
+    // 等审批（可长达 APPROVAL_TTL_MS 30min）期间 web 不写盘 → 磁盘长大必是终端写的，必须标脏，
+    // 否则下一条手机消息会送进停在 30 分钟前的 SDK 子进程、从旧 parentUuid 分叉出第二条链。
+    if (externalGrowthWhilePaused({ state: st, prevSize: mirrorLastSize, curSize: busySize })) {
+      a.externalDirty = true;
+    }
     catchUpState = { baseline: catchUpState.baseline, wasBusy: true, lastTailKey: catchUpState.lastTailKey ?? null };
-    mirrorLastSize = -1;                                             // 作废 size 基线：己方 turn 会写盘涨 size，不能算终端 keep-alive；localBusy 结束后首个正常 tick 重建
+    // busy（己方 turn 在写盘）作废 size 基线；permission（己方不写盘）维持基线，供下一 tick 判终端增长
+    mirrorLastSize = st === 'permission' && busySize >= 0 ? busySize : -1;
     mirrorRelease = rel.state;
     setMirror(
       rel.readonly,
@@ -1056,6 +1095,8 @@ async function catchUpTickOnce() {
         tailPending: busyTail.verdict === 'pending',
         lastChainTs: busyTail.lastChainTs,
         now: Date.now(),
+        registryBusy: busyRegistryBusy,
+        serverStartedAt: SERVICE_STARTED_AT, // 与切入/正常分支同口径，否则文案在两态间闪烁
       }),
       undefined,
       id,
@@ -1536,7 +1577,9 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
           lastCountedMessageId: lastCountedTopLevelMessageId.get(id) ?? null,
         });
         lastCountedTopLevelMessageId.set(id, delta.lastCountedMessageId);
-        if (delta.counts && !isInstanceBeingWatched(id, viewingInstanceId, io.sockets.adapter.rooms.get('approved')?.size ?? 0)) {
+        // 判据与推送侧统一为「有没有【前台可见】的连接」：只看房间连接数会把 PWA 切后台后
+        // 那段 socket 未断的窗口误判成「有人在看」，于是收到了完成推送、回来却是 0 未读。
+        if (delta.counts && !isInstanceBeingWatched(id, viewingInstanceId, hasForegroundApprovedClient(approvedSocketObjects()))) {
           unreadCounts.set(id, (unreadCounts.get(id) || 0) + 1);
         }
       }
@@ -1600,7 +1643,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
           // （用户反馈"切后台收不到完成通知"的根因）。hasForegroundApprovedClient 改按 socket.data.hidden
           // （client:presence 上报，见上方 on(socket,'client:presence',…)）判定，未上报过的连接保守按前台算。
           // permission/question/task_notification 无条件推、不受此影响。
-          hasClients: hasForegroundApprovedClient(approvedSockets),
+          // 还要限定「看的是不是【这条】会话」：hasForegroundApprovedClient 是全局判定（房间里任一
+          // 前台连接即为真），而投递是 per-订阅的，粒度不匹配。document.hidden 只表示标签页可见性、
+          // 不含窗口焦点，所以电脑上一个被 IDE 盖住、但标签页处于活动状态的窗口就恒为「前台」——
+          // 于是人拿着手机出门、PWA 切后台，会话跑完的 result 被判成「有人在看」而一条都不推。
+          // 那正是本项目的主用例。限定到 viewingInstanceId 后，至少只有「确实在看这条会话」才抑制。
+          hasClients: hasForegroundApprovedClient(approvedSockets) && viewingInstanceId === envelope.instanceId,
           instanceId: envelope.instanceId, sessionId: envelope.sessionId, cwd: envelope.cwd,
         });
         // P1-5 per-会话节流（docs/design.md）：同一会话同一类别已有未决通知或未过最小间隔 → 抑制，不推送。
@@ -2349,7 +2397,13 @@ registerSocketConnection(io, socket => {
   // 停单个后台任务（子 agent / 后台 Bash），对应终端 Ctrl+X Ctrl+K；按 instanceId 路由。taskId 来自
   // task_notification / task_progress / background_tasks_changed 事件。stopTask 内部 disposed / 无效
   // taskId / 无 q / SDK 抛错均幂等吞掉（返回 false 不抛），故无实例（routeInstance→null）时 ?. 安全 no-op。
-  on(socket, 'task:stop', payload => routeInstance(payload?.instanceId)?.stopTask(payload?.taskId));
+  // 回 ack：agent.stopTask 在 disposed / 无 taskId / 无 q / control_request 超时（10s）时返回 false，
+  // 而此前这个返回值无处可去 —— 前端无条件打「已请求停止后台任务…」，任务已结束或停不掉时同样谎报成功，
+  // 行继续挂到 BG_TASK_TTL_MS(180s)。ack 可选：旧客户端不传回调时行为不变。
+  on(socket, 'task:stop', async (payload, ack) => {
+    const ok = await routeInstance(payload?.instanceId)?.stopTask(payload?.taskId);
+    if (typeof ack === 'function') ack({ ok: ok === true });
+  });
 
   // 回空首页枢纽（与 session:new 分工）：
   //   home = 去看最近列表 / 换会话；live tab 全保留；**不**重置 pending mode/effort；
@@ -2625,6 +2679,11 @@ registerSocketConnection(io, socket => {
       return ack({ ok: false, error: `已从列表移除，但底层文件删除失败：${err.message}` });
     }
     sessions.unhideSession(sessionId); // 文件已真删，隐藏名单不必再为它长期占位
+    // 必须【再失效一次】：上面那次 invalidate 发生在 sdkDeleteSession 之前，而真删要跑 git worktree list
+    // 子进程、耗时可观。这段窗口里任何一次 session:list（另一台设备的 SWR revalidate、首页跨工作区聚合）
+    // 都会把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache——那次响应因 hiddenIds 还在而看不出异常，
+    // 但 unhideSession 之后隐藏名单没了，缓存里的它就变成正常行返回，点开报「会话不存在」。
+    invalidateListCache(cwd);
     audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
     ack({ ok: true });
   });
@@ -2746,7 +2805,9 @@ registerSocketConnection(io, socket => {
       pushEnabled,
       trustedDevices: getTrustedCount(),
       pendingDevices: getPendingDevices().length,
-      configPermsProblems: countConfigPermProblems(process.env.CCM_DATA_DIR || HERE), // BE-013/L1：扫实际数据目录，勿只扫源码根 data/
+      // BE-013/L1：.env 在项目根、data/*.json 在实际数据目录（CCM_DATA_DIR 可把它移出仓库）——两者必须分开传。
+      // 早前把 CCM_DATA_DIR 当 rootDir 传，拼出 <CCM_DATA_DIR>/data/... 永不存在 → 扫 0 个文件 → 恒报绿。
+      configPermsProblems: countConfigPermProblems(HERE, { dataDir: process.env.CCM_DATA_DIR || null }),
     }));
   });
 

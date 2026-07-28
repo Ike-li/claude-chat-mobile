@@ -7,9 +7,14 @@
 // setInstances() 的跟随切换逻辑——任意设备收到不一致的 viewingInstanceId 广播就会自动切过去），但只比较
 // id 不够：同一会话锁屏/切后台会断开 socket、但 viewingInstanceId 全程不变，必须叠加"approved 房间是否
 // 还有活连接"，否则这个最常见的"离开"场景会被误判为"仍在看"、未读永远不计。
-export function isInstanceBeingWatched(id, viewingInstanceId, approvedRoomSize) {
+// 第三参数是「approved 房间里还有【前台可见】的连接吗」（hasForegroundApprovedClient 的结果），
+// 不是房间连接数。二者的差别正是 PWA 的常态：切后台后 socket 往往还连着（要等 OS 冻结页面才真断），
+// 只看「有没有连接」会把这段窗口判成「有人在看」→ 一条未读都不计。而推送侧早已按 socket.data.hidden
+// 判前台（见 src/ops/notifications.js 的同名修复），两边判据不一致就会出现最难解释的组合：
+// 手机收到了「✅ 任务完成」推送，点回去却是 0 未读、没有「以下为新消息」分割线。
+export function isInstanceBeingWatched(id, viewingInstanceId, hasForegroundClient) {
   if (id == null || id !== viewingInstanceId) return false;
-  return approvedRoomSize > 0;
+  return hasForegroundClient === true;
 }
 
 // 这条 envelope 是否代表一条新出现的"顶层消息"（未读计数的颗粒度：用户消息 + assistant 文字回复，

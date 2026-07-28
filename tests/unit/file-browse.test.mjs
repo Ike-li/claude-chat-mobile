@@ -4,7 +4,8 @@
 // 故本文件不测"过滤"，只测"范围门挡越界 + 弱网上限正确"。真实临时目录测试，同 workdir-scope-guard 惯例。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync, realpathSync, unlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, rmSync, realpathSync, unlinkSync, chmodSync, lstatSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -411,4 +412,53 @@ test.describe('readFile base64 模式', () => {
     assert.equal(res.binary, true);
     assert.equal(res.content, '');
   });
+});
+
+// FIFO / 字符设备 / unix socket：POSIX 下 open(FIFO, O_RDONLY) 在无 writer 时【无限阻塞】，O_NOFOLLOW
+// 不改变这一点，也没有超时；fstat 的类型检查在 open 之后才跑，救不了。单进程 Node 卡在这个同步调用上
+// = 所有会话/socket/catchUpTick//health 全停摆，无自愈，只能人工杀进程。
+// 注：这条修复前无法用常规红测试演示——测试进程本身会被 openSync 同步卡死（timeout 打断不了同步调用），
+// 故先实现闸门再以本测试锁定行为；修复前后的差异用隔离子进程实测过。
+test('readFile/writeFileInScope 拒绝 FIFO：open 前挡住，绝不阻塞事件循环', { skip: process.platform === 'win32' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-fifo-'));
+  const scope = [realpathSync(dir)];
+  try {
+    execFileSync('mkfifo', [join(dir, 'pipe')]);
+
+    const listed = listDir(dir, '.', scope);
+    const pipeEntry = listed.entries.find(e => e.name === 'pipe');
+    assert.equal(pipeEntry.kind, 'special', 'FIFO 不得被归类成可点读的 file');
+
+    assert.equal(readFile(dir, 'pipe', scope), null, '读 FIFO 必须直接拒绝');
+
+    const emptyHash = createHash('sha256').update(Buffer.alloc(0)).digest('hex');
+    const w = writeFileInScope(dir, 'pipe', 'pwned', scope, { baseHash: emptyHash });
+    assert.equal(w.ok, false);
+    assert.equal(w.code, 'not_file', 'FIFO 的 size 恒 0，空串哈希会误过基线校验');
+    assert.equal(lstatSync(join(dir, 'pipe')).isFIFO(), true, 'FIFO 不得被普通文件顶替');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// rename 是「新 inode 顶替」：不显式给 mode 就落成 0o666 & ~umask（通常 0644）。手机上改一行 shell
+// 脚本保存后静默丢掉 +x；0600 的敏感文件被放宽到 0644。同仓 writeOwnerOnlyFile 一直做对了。
+test('writeFileInScope 保留原文件权限位（0755 不丢 +x，0600 不被放宽）', { skip: process.platform === 'win32' }, () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-mode-'));
+  const scope = [realpathSync(dir)];
+  try {
+    for (const [name, mode] of [['run.sh', 0o755], ['secret.env', 0o600]]) {
+      const p = join(dir, name);
+      writeFileSync(p, 'old\n');
+      chmodSync(p, mode);
+      const baseHash = createHash('sha256').update(readFileSync(p)).digest('hex');
+
+      const r = writeFileInScope(dir, name, 'new\n', scope, { baseHash });
+      assert.equal(r.ok, true, `${name} 应写入成功`);
+      assert.equal(readFileSync(p, 'utf8'), 'new\n');
+      assert.equal(lstatSync(p).mode & 0o777, mode, `${name} 权限位必须原样保留`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

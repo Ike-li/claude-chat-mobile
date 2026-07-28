@@ -146,6 +146,11 @@ export class AgentSession {
     // interrupt() 成功后等待 SDK 配对 result 的宽限期（ms）。到期未等到即就地清账，见
     // _armInterruptSettleWatchdog。可在单测里覆盖为更短值。
     this.interruptSettleGraceMs = typeof this.interruptSettleGraceMs === 'number' ? this.interruptSettleGraceMs : 8_000;
+    // force 槽的存活上限（ms）。force 槽是留给「迟到 result」的占位，但 watchdog 的触发前提恰恰是配对
+    // result 永不到达——那种情况下槽会永久堵在队首、把此后每一轮真 result 都吸收掉，pendingTurns 再也回
+    // 不到 0（恒 busy + 恒排队 + 发送禁用，且每次静默 interrupt 再造一个，自我复现）。给它一个宽于任何真实
+    // SDK 迟到（秒级）、又远窄于用户可感知卡死的 TTL；过期即回收。可在单测里覆盖为更短值。
+    this.forceSlotTtlMs = typeof this.forceSlotTtlMs === 'number' ? this.forceSlotTtlMs : 60_000;
     this._interruptSettleTimer = null;
     this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
     this.pendingQuestions = new Map();   // toolUseID → { resolve, questions, answers, remaining }
@@ -447,7 +452,8 @@ export class AgentSession {
   }
 
   _forceSettleOpenTurns() {
-    for (const t of this._openTurns) t.forceSettled = true;
+    const at = Date.now();
+    for (const t of this._openTurns) { t.forceSettled = true; t.forceSettledAt = at; }
   }
 
   // 取消/丢弃不会产生 result 的在途槽（从队尾摘非 force 槽，对齐排队条后进先消）。
@@ -463,6 +469,16 @@ export class AgentSession {
 
   // result 到达时结算一槽。返回 { applied, forceSettled }：applied=true 表示本次对 pendingTurns 做了 --。
   _settleOneResultTurn() {
+    // 回收过期 force 槽：它只是「等一个可能到来的迟到 result」的占位，而 watchdog 的触发前提就是那个
+    // result 永不到达。超过 TTL 仍没被消耗 = 它不会再来了，此时必须让位，否则真 result 全被它吸收成
+    // applied:false，pendingTurns 永挂（回归见 agent-control「迟到 result 永不到达」）。
+    const now = Date.now();
+    while (this._openTurns.length
+        && this._openTurns[0].forceSettled
+        && this._openTurns[0].forceSettledAt != null
+        && now - this._openTurns[0].forceSettledAt > this.forceSlotTtlMs) {
+      this._openTurns.shift();
+    }
     const t = this._openTurns.shift();
     if (!t) {
       // 无槽（旧单测只改 pendingTurns / SDK 多吐 result）：回落旧语义，防负值
@@ -753,6 +769,13 @@ export class AgentSession {
     mode = normalized;
     if (mode === this.permissionMode) return true; // 差分：无变化不调 SDK
     const sdkMode = mode === 'bypassPermissions' ? 'default' : mode;
+    // 从 bypassPermissions 降出去必须【立即】本地生效，不等 SDK 回包：闸门读的就是 this.permissionMode，
+    // 而 _raceControlRequest 最长可挂 interruptTimeoutMs(10s)（限流重试时常见），且本方法没有 busy 守卫、
+    // 轮次进行中可被调用。这段窗口里模型发起的任何工具仍会命中 bypass 分支零弹窗放行 —— 用户主动降权的
+    // 意图被推迟最多 10 秒。其余方向（升权 / 切 dontAsk）保持「SDK 确认后才生效」，那些方向的在飞窗口是
+    // fail-safe。失败也不回滚：用户的意图是降权，退回宽档比停在严档危险。
+    const leavingBypass = this.permissionMode === 'bypassPermissions' && mode !== 'bypassPermissions';
+    if (leavingBypass) this.permissionMode = mode;
     try {
       await this._raceControlRequest(() => this.q?.setPermissionMode(sdkMode), 'set_permission_mode');
       if (this.disposed) return false; // S3：await 间隙实例可能已被 dispose
@@ -920,10 +943,17 @@ export class AgentSession {
   // ---- AskUserQuestion（F2）：实验证明 deny+message 通道有效（2026-06-11）----
   // 模型将 tool_result 的 error content 识别为答案（is_error:true, content:'用户选择了：「…」'）
   handleQuestion(input, { signal, toolUseID }) {
-    const questions = input?.questions;
-    if (!Array.isArray(questions) || questions.length === 0) {
+    const rawQuestions = input?.questions;
+    if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
       return { behavior: 'allow', updatedInput: input };
     }
+    // 归一 + 过滤空 label 只做【一次】，下发与回读共用同一份。此前 emit 用过滤后的数组、resolveQuestion
+    // 却回读原始数组：模型只要给出一个不带 label 的选项（normalizeQuestionOption 产出 ''），后续所有项
+    // 下标整体前移，两侧下标空间错位 —— 用户点「取消」，模型收到「删除全部」。multiSelect 与快照重建同源。
+    const questions = rawQuestions.map(q => ({
+      ...q,
+      options: (q?.options || []).map(normalizeQuestionOption).filter(o => o.label),
+    }));
     return new Promise(resolve => {
       const answers = new Array(questions.length).fill(null);
       let remaining = questions.length;
@@ -950,7 +980,7 @@ export class AgentSession {
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
         // 对齐 CLI：保留 header / multiSelect / option.description|preview，前端才能完整呈现
-        const options = (q.options || []).map(normalizeQuestionOption).filter(o => o.label);
+        const options = q.options; // 已在入口归一+过滤，与 resolveQuestion 回读的是同一份
         this.emit('question', {
           requestId: `${toolUseID}#${i}`,
           text: q.question,
@@ -1960,7 +1990,9 @@ function estimateMutationLineStats(name, input = {}) {
 // 空白或标点，故不会误伤 Edit/Write 预览 diff。脱敏须在 truncate() 之前，否则大 base64 会把
 // TOOL_SUMMARY_CAP 截断额度提前占满，挤掉真正有用的字段。
 const BASE64_REDACT_MIN_LEN = 500;
-const BASE64_ONLY_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+// 兼容 URL-safe 变体（-_ 代替 +/）：原正则不匹配它，走摘要路径时后面还有 truncate 兜底看不出来，
+// 但 tool:full「展开全文」没有兜底 —— 一个漏判的 base64 图片就是整串原样进 DOM。
+const BASE64_ONLY_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 function redactBase64(value) {
   if (typeof value === 'string') {
     if (value.length >= BASE64_REDACT_MIN_LEN && BASE64_ONLY_RE.test(value)) {

@@ -231,6 +231,13 @@ export function registerFileSocketHandlers({
     if (typeof toolUseId !== 'string' || !toolUseId) return ack({ ok: false, error: '缺少 toolUseId' });
     const text = agent.getToolOutput(toolUseId);
     if (text == null) return ack({ ok: false, error: '全文不可用（已过期或未缓存）' });
+    // 上限：缓存的是「脱敏后、截断前」的全文，live 卡片走 600/2000 截断，只有这条「展开全文」是裸全文。
+    // 客户端拿到后要同步做 JSON pretty + hljs 高亮（都无长度闸），几 MB 的 Write 内容足以打爆手机标签页。
+    // 与 file-preview 的 64KB 读片上限同量级，超出部分截断并明确告知，不静默丢。
+    const MAX_TOOL_FULL_BYTES = 512 * 1024;
+    if (text.length > MAX_TOOL_FULL_BYTES) {
+      return ack({ ok: true, text: text.slice(0, MAX_TOOL_FULL_BYTES), truncated: true, totalLength: text.length });
+    }
     return ack({ ok: true, text });
   });
 

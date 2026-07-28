@@ -361,6 +361,41 @@ test.describe('interrupt()', () => {
     s.dispose();
   });
 
+  // 回归（上一条的对偶）：watchdog 的触发【前提】就是「配对 result 永不到达」（见 _armInterruptSettleWatchdog
+  // 注释：q.interrupt() 照样 resolve，却永不产生配对 result）。这种情况下只标记不移除的 force 槽会永久堵在
+  // 队首，把此后每一轮真 result 都吸收成 applied:false → pendingTurns 再也回不到 0：
+  // stateOf 恒 busy（spinner/停止按钮不消失）、queued 恒 true（每条新消息标排队）、queueFull 恒真（发送禁用）。
+  // 且每次 10min 静默看门狗又 interrupt 一次、再造一个 force 槽 —— 自我复现不自愈。
+  test('watchdog force 清账后迟到 result 永不到达 → 过期 force 槽不得吃掉后续真 result', async () => {
+    const { s } = makeSession();
+    s.interruptSettleGraceMs = 20;
+    s.forceSlotTtlMs = 30; // 单测加速；生产默认宽于任何真实 SDK 迟到
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+    assert.equal(await s.send('old'), true);
+    s.queue = [];
+    await s.interrupt();
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(s.pendingTurns, 0, 'watchdog 已 force 清账');
+    assert.equal(s._openTurns.length, 1, 'force 槽留下等迟到 result');
+
+    // 迟到 result 始终没来，等过 TTL：这个槽已经不可能再被消耗
+    await new Promise(r => setTimeout(r, 40));
+
+    assert.equal(await s.send('turn A'), true);
+    assert.equal(s.pendingTurns, 1);
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    assert.equal(s.pendingTurns, 0, '过期 force 槽必须被回收，真 result 要能把账减到 0');
+    assert.equal(s.isBusy(), false, '否则 stateOf 恒 busy：spinner 与停止按钮永不消失');
+
+    // 再来一轮，确认稳态不残留
+    assert.equal(await s.send('turn B'), true);
+    assert.equal(s.pendingTurns, 1);
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    assert.equal(s.pendingTurns, 0, '稳态不得卡在 1');
+    assert.equal(s._openTurns.length, 0);
+    s.dispose();
+  });
+
   test('SDK interrupt 抛错（无可中断任务）→ 不设置标记，后续 result 不受影响', async () => {
     const { s, events } = makeSession();
     s.q = { interrupt() { return Promise.reject(new Error('no task')); } };

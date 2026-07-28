@@ -7,21 +7,29 @@ import { isInstanceBeingWatched, resolveUnreadDelta } from '../../src/server/unr
 
 test.describe('isInstanceBeingWatched', () => {
   test('非当前查看实例：无论房间是否有人都判定为未在看', () => {
-    assert.equal(isInstanceBeingWatched('inst-2', 'inst-1', 3), false);
-    assert.equal(isInstanceBeingWatched('inst-2', 'inst-1', 0), false);
+    assert.equal(isInstanceBeingWatched('inst-2', 'inst-1', true), false);
+    assert.equal(isInstanceBeingWatched('inst-2', 'inst-1', false), false);
   });
 
-  test('是当前查看实例但 approved 房间无活连接（同会话锁屏/断线场景）：判定为未在看', () => {
-    assert.equal(isInstanceBeingWatched('inst-1', 'inst-1', 0), false);
+  test('是当前查看实例但无前台连接（同会话锁屏/断线场景）：判定为未在看', () => {
+    assert.equal(isInstanceBeingWatched('inst-1', 'inst-1', false), false);
   });
 
-  test('是当前查看实例且 approved 房间有活连接：判定为在看', () => {
-    assert.equal(isInstanceBeingWatched('inst-1', 'inst-1', 1), true);
+  test('是当前查看实例且有【前台可见】连接：判定为在看', () => {
+    assert.equal(isInstanceBeingWatched('inst-1', 'inst-1', true), true);
+  });
+
+  // 判据从「房间连接数 > 0」改为「有没有前台可见的连接」（hasForegroundApprovedClient）。
+  // PWA 切后台后 socket 往往还连着（要等 OS 冻结页面才真断），旧判据把这段窗口当成「有人在看」→
+  // 一条未读都不计；而推送侧早已按 socket.data.hidden 判前台，两边不一致就会出现最难解释的组合：
+  // 手机收到「✅ 任务完成」推送，点回去却是 0 未读、没有「以下为新消息」分割线。
+  test('连着但全在后台（socket 未断）：必须计未读，与推送判据一致', () => {
+    assert.equal(isInstanceBeingWatched('inst-1', 'inst-1', false), false);
   });
 
   test('viewingInstanceId 为 null（空首页）：不判定为在看任何实例', () => {
-    assert.equal(isInstanceBeingWatched(null, null, 1), false);
-    assert.equal(isInstanceBeingWatched('inst-1', null, 1), false);
+    assert.equal(isInstanceBeingWatched(null, null, true), false);
+    assert.equal(isInstanceBeingWatched('inst-1', null, true), false);
   });
 });
 

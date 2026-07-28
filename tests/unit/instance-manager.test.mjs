@@ -150,3 +150,32 @@ test('remove() clears unreadCounts, unreadSnapshotOnEntry and lastCountedTopLeve
   assert.equal(manager.unreadSnapshotOnEntry.has(agent.instanceId), false);
   assert.equal(manager.lastCountedTopLevelMessageId.has(agent.instanceId), false);
 });
+
+// bypassPermissions 是唯一需要前端二次确认才能进入的档（app.js 的 user:setPermissionMode 路径），
+// 而 RESUME 走 `saved?.permissionMode || transcriptMode || inheritedMode(cwd)` 时没有任何确认。
+// FRESH 已在 2026-06-22（A1）刻意取消继承，RESUME 保留了它且没对 bypass 做例外：
+// 同 cwd 下 A 会话切到 bypass 并保持存活 → 点开同目录一条纯 CLI 建的老会话（sessions.getSession 返回
+// null、transcript 无 permission-mode 条目）→ 继承 bypass 从第一个工具起零弹窗全放行；随后 onSessionId
+// 把它 upsert 进 sessions.json，此后 saved?.permissionMode 恒胜出，永久固化。
+test('inheritedMode never propagates bypassPermissions to another session', () => {
+  const manager = createInstanceManager();
+  const agent = {
+    instanceId: manager.nextId(),
+    sessionId: 's1',
+    cwd: '/repo',
+    permissionMode: 'bypassPermissions',
+    pendingPermissions: new Map(),
+    pendingQuestions: new Map(),
+    pendingTurns: 0,
+    hasBgTasks: () => false,
+    dispose: () => {},
+  };
+  manager.agents.set(agent.instanceId, agent);
+
+  assert.equal(manager.inheritedMode('/repo'), 'default', 'bypass 绝不隐式继承，降级到 default');
+
+  agent.permissionMode = 'acceptEdits';
+  assert.equal(manager.inheritedMode('/repo'), 'acceptEdits', '其余档位照常继承');
+
+  assert.equal(manager.inheritedMode('/other'), 'default', '无同 cwd 实例 → 兜底 default');
+});

@@ -33,7 +33,11 @@ export function createInstanceManager() {
     for (const agent of agents.values()) {
       if (agent.cwd === cwd) mode = agent.permissionMode;
     }
-    return mode;
+    // bypassPermissions 绝不隐式继承。它是唯一需要前端二次确认才能进入的档，而 RESUME 路径
+    // （saved > transcriptMode > inheritedMode）不带任何确认：同 cwd 开着一个 bypass 会话时，点开
+    // 该目录下一条纯 CLI 建的老会话就会零弹窗全放行，且随后被 upsert 进 sessions.json 永久固化。
+    // FRESH 早已完全取消继承（A1 2026-06-22），这里对 RESUME 补上同等级别的安全下限。
+    return mode === 'bypassPermissions' ? 'default' : mode;
   }
 
   function inheritedEffort(cwd) {

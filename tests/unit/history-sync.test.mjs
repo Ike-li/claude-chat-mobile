@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel } from '../../src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused } from '../../src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -476,4 +476,24 @@ test.skip('[边界] CLI 不把 effort/thinking 档落 transcript → web 续接�
   // permission-mode 有 transcript 记录可恢复（见上 readLastPermissionMode），但 effort/thinking 档 CLI 完全不落盘：
   // transcript 里只有 assistant 的 thinking 内容块、无「档位」字段（low/med/high/xhigh/max）。故续接纯 CLI 会话
   // 「默认思考」是诚实回退、无从恢复；只有 web 侧驱动过该会话，updateSessionPrefs 才持久化 effort。留基线防误报。
+});
+
+test.describe('externalGrowthWhilePaused：等审批期间的终端写入必须被标脏', () => {
+  test('permission 态 + 磁盘变长 → 判为外部写入', () => {
+    assert.equal(externalGrowthWhilePaused({ state: 'permission', prevSize: 100, curSize: 240 }), true);
+  });
+  test('permission 态但磁盘没变 → 不标', () => {
+    assert.equal(externalGrowthWhilePaused({ state: 'permission', prevSize: 240, curSize: 240 }), false);
+  });
+  test('busy 态不适用：己方 turn 也在写盘，size 增长不能归给终端', () => {
+    assert.equal(externalGrowthWhilePaused({ state: 'busy', prevSize: 100, curSize: 240 }), false);
+  });
+  test('基线未建立（-1）或读取失败 → 保守不标', () => {
+    assert.equal(externalGrowthWhilePaused({ state: 'permission', prevSize: -1, curSize: 240 }), false);
+    assert.equal(externalGrowthWhilePaused({ state: 'permission', prevSize: 100, curSize: -1 }), false);
+  });
+  test('缺参不抛', () => {
+    assert.doesNotThrow(() => externalGrowthWhilePaused());
+    assert.equal(externalGrowthWhilePaused(), false);
+  });
 });

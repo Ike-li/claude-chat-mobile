@@ -21,10 +21,10 @@ const PATTERNS = [
   [/Bearer\s+[A-Za-z0-9._-]{20,}/g, 'Bearer ***'],
 
   // 6. 环境变量赋值（大写严格匹配，避免误杀）
-  [/([A-Z_]*(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)[A-Z_]*\s*=\s*)\S+/g, '$1***'],
+  [/\b([A-Z_]{0,40}(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)[A-Z_]{0,40}\s*=\s*)\S+/g, '$1***'],
 
   // 7. 环境变量赋值（混合大小写，要求值 ≥8 字符）
-  [/([A-Za-z_]*(key|secret|token|password|passwd|credential)[A-Za-z_]*\s*=\s*)\S{8,}/gi, '$1***'],
+  [/\b([A-Za-z_]{0,40}(key|secret|token|password|passwd|credential)[A-Za-z_]{0,40}\s*=\s*)\S{8,}/gi, '$1***'],
 
   // 8. AWS session tokens
   [/\b(aws_session_token|AWS_SESSION_TOKEN)\s*=\s*\S+/gi, '***'],
@@ -52,11 +52,11 @@ const PATTERNS = [
 
   // 16. JSON 形态密钥字段（"key":"value"，覆盖 JSON.stringify 后的日志文本——#6/#7 只认 key=value 语法，
   // 分隔符是 : 而不是 = 时会漏过）。同 #6/#7 的取舍：字段名子串命中也保守脱敏，宁枉勿纵。
-  [/(["']?[A-Za-z_]*(?:key|secret|token|password|passwd|credential)[A-Za-z_]*["']?\s*:\s*)["'][^"']*["']/gi, '$1"***"'],
+  [/(["']?[A-Za-z_]{0,40}(?:key|secret|token|password|passwd|credential)[A-Za-z_]{0,40}["']?\s*:\s*)["'][^"']*["']/gi, '$1"***"'],
 
   // 17. SH-002：无引号 colon 形态（api_key: value / x-api-key: … / client_secret: …），
   // #16 只盖 JSON 引号值，header 风格裸值会漏到 LOG_INTERACTIONS/LOG_STDERR。
-  [/\b([A-Za-z_]*(?:key|secret|token|password|passwd|credential)[A-Za-z_]*)\s*:\s*([^\s"'`,;]{8,})/gi, '$1: ***'],
+  [/\b([A-Za-z_]{0,40}(?:key|secret|token|password|passwd|credential)[A-Za-z_]{0,40})\s*:\s*([^\s"'`,;]{8,})/gi, '$1: ***'],
 ];
 
 // ANSI 转义序列正则（CSI/OSC/C1 控制字符）

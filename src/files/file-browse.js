@@ -8,7 +8,7 @@
 // .env FILE_EDIT=off 整体回到只读（server.js 读取，见其头注）。
 // 透明性权衡（显式抉择，承接 docs/design.md）：范围内内容不做敏感过滤（.env 等照读）——机主即 root +
 // 终端 TUI 语义等同，防线在范围门（WorkdirScopeGuard）不在内容审查，本模块不自作主张加过滤。
-import { readdirSync, lstatSync, fstatSync, openSync, readSync, closeSync, renameSync, unlinkSync, writeFileSync, constants } from 'node:fs';
+import { readdirSync, lstatSync, fstatSync, openSync, readSync, closeSync, renameSync, unlinkSync, writeFileSync, chmodSync, fsyncSync, constants } from 'node:fs';
 import { isUtf8 } from 'node:buffer';
 import { join, dirname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -24,6 +24,21 @@ export const MAX_BROWSE_BYTES = 256 * 1024;
 function resolveInScope(cwd, relPath, scopeDirs) {
   const candidate = join(cwd, relPath || '.');
   return isInScope(candidate, scopeDirs) ? candidate : null;
+}
+
+// 特殊文件闸，必须在 open 【之前】跑。POSIX 下 open(FIFO, O_RDONLY) 在没有 writer 时【无限阻塞】，
+// O_NOFOLLOW 不改变这一点，也没有任何超时；而下方 fstat 的类型检查在 open 之后才执行，救不了。
+// 单进程 Node 一旦卡在这个同步调用上，所有会话、socket、statusline、catchUpTick、/health 全部停摆，
+// 无自愈路径，只能人工上机杀进程重启。触发不需要攻击者——工作目录里存在一个 mkfifo 出来的管道，
+// 用户在文件浏览器里点一下即可（listDir 此前把它归类成普通 file）。字符设备与 unix socket 同理。
+// lstat 不跟随 symlink：symlink 目标仍由 O_NOFOLLOW 负责拒绝，此处只放行 symlink 自身与常规文件。
+function isOpenableTarget(real) {
+  try {
+    const st = lstatSync(real);
+    return st.isFile() || st.isSymbolicLink();
+  } catch {
+    return false;
+  }
 }
 
 // 按固定字节数分片读取文本文件时，分片边界可能恰好切在一个多字节 UTF-8 字符中间（中文/emoji 等）——
@@ -67,7 +82,11 @@ export function listDir(cwd, relPath, scopeDirs, opts = {}) {
       // lstat 不 follow：symlink 条目如实标注自身（kind:'symlink'），不解析成其指向的类型——
       // 递归进入 symlink 走用户下一次 listDir 调用，届时 isInScope 会重新校验真实落点。
       const st = lstatSync(join(real, name));
-      const kind = st.isSymbolicLink() ? 'symlink' : st.isDirectory() ? 'dir' : 'file';
+      // 'special' = FIFO / 字符设备 / unix socket：它们不是可读文件，读它们会卡死整个服务（见
+      // isOpenableTarget）。前端对未知 kind 显示 ❔ 且不进入可点读分支，天然不可达。
+      const kind = st.isSymbolicLink() ? 'symlink'
+        : st.isDirectory() ? 'dir'
+          : st.isFile() ? 'file' : 'special';
       entries.push({ name, kind, size: st.size, mtime: st.mtimeMs });
     } catch {
       /* skip vanished/unreadable entry */
@@ -79,6 +98,7 @@ export function listDir(cwd, relPath, scopeDirs, opts = {}) {
 export function readFile(cwd, relPath, scopeDirs, opts = {}) {
   const real = resolveInScope(cwd, relPath, scopeDirs);
   if (real === null) return null;
+  if (!isOpenableTarget(real)) return null; // FIFO/设备/socket：open 会永久阻塞，必须在 open 前挡
   const offset = Math.max(0, opts.offset || 0);
   const maxBytes = Math.min(opts.maxBytes > 0 ? opts.maxBytes : MAX_BROWSE_BYTES, MAX_BROWSE_BYTES);
   // E18 附件预览：base64 模式——按字节精确分页返回该片 base64（二进制不拒绝、不做 UTF-8 尾裁剪，
@@ -154,6 +174,9 @@ export function writeFileInScope(cwd, relPath, content, scopeDirs, { baseHash } 
   // 一次真实越界尝试被记成普通 file_write/denied，漏掉本该报警的那条。
   const real = resolveInScope(cwd, relPath, scopeDirs);
   if (real === null) return { ok: false, code: 'scope', error: '路径不在授权范围内，或不是文件' };
+  // 写路径同样要在 open 前挡特殊文件：O_RDWR 打开 FIFO 一样会阻塞；且此前只有 isDirectory 一道闸，
+  // FIFO/socket 的 size 恒 0（基线哈希= 空串 sha256），能被 rename 顶替成普通文件、销毁正在用的管道。
+  if (!isOpenableTarget(real)) return { ok: false, code: 'not_file', error: '目标不是常规文件' };
   const contentBuf = Buffer.from(content, 'utf8');
   if (contentBuf.length > MAX_BROWSE_BYTES) {
     return { ok: false, code: 'too_large', error: `内容超过 ${MAX_BROWSE_BYTES} 字节上限` };
@@ -186,8 +209,21 @@ export function writeFileInScope(cwd, relPath, content, scopeDirs, { baseHash } 
     // 先写同目录临时文件再 rename：避免 ftruncate(0) 后 write 失败把已有内容清空（I4）。
     // 仍先 O_RDWR|O_NOFOLLOW 打开目标做 scope/类型/baseHash 校验；临时文件不带 O_CREAT 到目标 inode。
     const tmp = join(dirname(real), `.ccm-edit-${basename(real)}.${process.pid}.${Date.now()}.tmp`);
+    // 保留原文件权限位：rename 是「新 inode 顶替」，不显式给 mode 就落成 0o666 & ~umask（通常 0644）——
+    // 手机上改一行 shell 脚本/git hook，保存后静默丢掉 +x（0755→0644）；0600 的敏感文件被放宽到 0644，
+    // 且 tmp 在 rename 前就已用 0644 承载明文。同仓 writeOwnerOnlyFile 一直做对了，这条写回路径漏了。
+    // umask 只能清位不能加位，故 open 的 mode 之外再显式 chmod 一次，保证精确保留。
+    const prevMode = stat.mode & 0o777;
     try {
-      writeFileSync(tmp, contentBuf, { flag: 'wx' }); // wx：不覆盖已有 tmp
+      let tfd;
+      try {
+        tfd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, prevMode); // EXCL≙wx
+        writeFileSync(tfd, contentBuf);
+        fsyncSync(tfd); // 先落盘再 rename：否则掉电后 rename 可能先于数据持久化，留下空/截断文件
+      } finally {
+        if (tfd !== undefined) closeSync(tfd);
+      }
+      chmodSync(tmp, prevMode);
       renameSync(tmp, real); // 同卷原子替换
     } catch (err) {
       try { unlinkSync(tmp); } catch { /* tmp 可能未创建或已 rename */ }

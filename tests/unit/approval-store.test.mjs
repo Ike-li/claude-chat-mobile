@@ -126,3 +126,39 @@ test.describe('approval-store.js 单元测试', () => {
     rmSync(badDir, { recursive: true, force: true });
   });
 });
+
+// reqId 在跨进程/跨实例时会重复：toolUseID 由 SDK 给，而回落分支 `perm_${++this.permSeq}` 更是
+// 每实例从 0 起的计数器。终态记录留存 90 天（purgeTerminalOlderThan 之前一直在数组里），而
+// recordDecided 用 find 取【首个】匹配 = 最旧的那条 —— 于是用户这次的批准被写到一条早已 expired 的
+// 历史记录上，本次真实的新记录永远停在 pending。事后审计张冠李戴：查不到谁批准了什么。
+// 这条在本次代码审查里真实触发过（绕过测试隔离写进生产台账的旧 store-t1 被新请求命中）。
+test('recordDecided 落到仍 pending 的那条，不改写同 reqId 的历史终态', async () => {
+  // 隔离方式与 purge 用例一致：先建独立临时文件并改 env，再缓存穿透 import —— 顺序反了的话新实例
+  // 仍会读到共享文件里其它用例的记录。
+  const isoDir = mkdtempSync(join(tmpdir(), 'ccm-approval-store-dup-iso-'));
+  const prevFile = process.env.CCM_APPROVAL_STORE_FILE;
+  process.env.CCM_APPROVAL_STORE_FILE = join(isoDir, 'approval-requests.json');
+  const iso = await import('../../src/agent/approval-store.js?t=dup-reqid-iso');
+  try {
+    const reqId = 'dup-reqid';
+    const base = { reqId, sessionId: 's1', tool: 'Bash', args: { command: 'ls' }, cwd: '/tmp/p', fingerprint: 'fp', createdAt: 1, expiresAt: 9_999_999_999_999 };
+
+    iso.recordCreated(base);                                        // 上一进程遗留的同 reqId 记录
+    iso.expireAllPending({ decidedBy: 'system:restart', decidedAt: 2 });
+    iso.recordCreated({ ...base, sessionId: 's2', createdAt: 3 });  // 本次新请求，reqId 撞上了
+
+    iso.recordDecided(reqId, { status: 'allow', decidedBy: 'user', decidedAt: 4 });
+
+    const rows = iso.getAll().filter(r => r.reqId === reqId);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].status, 'expired', '历史终态不得被改写成 allow');
+    assert.equal(rows[0].decidedBy, 'system:restart');
+    assert.equal(rows[1].status, 'allow', '真正落定的必须是本次那条 pending');
+    assert.equal(rows[1].decidedBy, 'user');
+  } finally {
+    iso.flushSaveSync();
+    if (prevFile === undefined) delete process.env.CCM_APPROVAL_STORE_FILE;
+    else process.env.CCM_APPROVAL_STORE_FILE = prevFile;
+    rmSync(isoDir, { recursive: true, force: true });
+  }
+});

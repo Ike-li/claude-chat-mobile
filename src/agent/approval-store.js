@@ -76,7 +76,17 @@ export function recordCreated({ reqId, sessionId, tool, args, cwd, fingerprint, 
 // 供 resolvePermission 调用：终态落定（allow/deny/expired/integrity_mismatch）。找不到对应 reqId 静默忽略
 // （防御性——理论上 recordCreated 必先于 recordDecided，但台账是辅助记录，找不到不应影响审批流程本身）。
 export function recordDecided(reqId, { status, decidedBy, decidedAt }) {
-  const existing = state.requests.find(r => r.reqId === reqId);
+  // 从末尾往前找【仍 pending】的那条。reqId 跨进程/跨实例会重复：toolUseID 由 SDK 给，回落分支的
+  // `perm_${++permSeq}` 更是每实例从 0 起的计数器；而终态记录留存 90 天（purgeTerminalOlderThan
+  // 之前一直在数组里）。原来的 find 取首个匹配 = 最旧那条，于是用户这次的批准被写到一条早已 expired
+  // 的历史记录上，本次真实的新记录永远停在 pending —— 台账张冠李戴，事后查不出谁批准了什么。
+  let existing = null;
+  for (let i = state.requests.length - 1; i >= 0; i--) {
+    const r = state.requests[i];
+    if (r.reqId !== reqId) continue;
+    if (r.status === 'pending') { existing = r; break; }
+    if (!existing) existing = r; // 无 pending 时回落最近一条，保持「找得到就记」的旧语义
+  }
   if (!existing) return;
   existing.status = status;
   existing.decidedBy = decidedBy ?? null;

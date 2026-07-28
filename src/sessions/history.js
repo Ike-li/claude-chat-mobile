@@ -328,7 +328,9 @@ function extractContent(content) {
 // 历史回显摘要：与 agent.js live 工具卡片同口径的截断/脱敏（本模块独立实现，避免 history↔agent 循环依赖）。
 const HISTORY_TOOL_SUMMARY_CAP = 600;
 const HISTORY_BASE64_REDACT_MIN_LEN = 500;
-const HISTORY_BASE64_ONLY_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+// 兼容 URL-safe 变体（-_ 代替 +/）：原正则不匹配它，走摘要路径时后面还有 truncate 兜底看不出来，
+// 但 tool:full「展开全文」没有兜底 —— 一个漏判的 base64 图片就是整串原样进 DOM。
+const HISTORY_BASE64_ONLY_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 function histTruncate(s, cap = HISTORY_TOOL_SUMMARY_CAP) {
   if (typeof s !== 'string') return '';
   return s.length > cap ? s.slice(0, cap) + ' …（已截断）' : s;
@@ -1129,4 +1131,16 @@ export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } 
   } catch {
     return -1;
   }
+}
+
+// localBusy 分支的外部写入判据（单驾驶员防分叉）。instanceState 的 'permission' 与 'busy' 语义不同：
+//   permission = canUseTool 挂起等用户点审批，可长达 APPROVAL_TTL_MS（默认 30min），web 侧【根本不写盘】
+//                → 这段时间磁盘长大，必然是终端写的；
+//   busy       = 己方轮次/后台任务真在跑，自己也在写盘 → size 增长不能归给终端。
+// 原实现把两者并进同一个 localBusy，一起抑制追平 + 上锁 + 标脏，于是「手机上弹着审批卡片、人走到电脑前
+// 用终端继续同一会话」这 30 分钟里：终端的回合不上屏、手机没有只读横幅、externalDirty 也不置位 ——
+// 下一条手机消息直接送进停在 30 分钟前的 SDK 子进程，从旧 parentUuid 写出第二条链（transcript 分叉）。
+export function externalGrowthWhilePaused({ state, prevSize, curSize } = {}) {
+  if (state !== 'permission') return false;
+  return Number(prevSize) >= 0 && Number(curSize) >= 0 && Number(curSize) > Number(prevSize);
 }

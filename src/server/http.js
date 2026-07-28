@@ -29,6 +29,11 @@ export function setSecurityHeaders(res) {
     "connect-src 'self' ws: wss:",
     "font-src 'self'",
     "frame-ancestors 'none'",
+    // form-action 与 base-uri 都【不】回落到 default-src（CSP 规范），不显式声明即完全无限制：
+    // 注入的 <form action="https://evil/"> 提交是导航、不走 connect-src，script-src 同样拦不住，
+    // 用户被诱导填进去的 AUTH_TOKEN 会直接 POST 到外域。<base> 目前被 DOMPurify 剥掉，base-uri 是纵深。
+    "form-action 'self'",
+    "base-uri 'none'",
   ].join('; '));
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -74,6 +79,10 @@ export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateL
       if (publicHost) {
         await verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
         authPassed = true;
+        // 供下游 handler 判「设备审批 bypass」：与 socket 侧 io.use 的 shouldBypassDeviceApproval
+        // 同源判据（accessEnabled）。CF Access 已是更强的边界（2FA），走它进来的设备结构上不可能
+        // 出现在待审列表里，见 /push/subscribe 的说明。
+        req.ccmAccessEnabled = true;
       } else if (
         !authToken
         || tokenMatches(authToken, req.query.token)
@@ -250,6 +259,9 @@ export function registerOperationalRoutes({
   getMetrics,
   push,
   isDeviceTrusted, // optional (token)=>bool；提供时 /push/subscribe 须绑已信任设备（A1）
+  // optional (req)=>bool：该请求是否属于「设备审批 bypass」级信任（CF Access 已验 / 真本机直连）。
+  // 与 socket 握手侧同源，见 /push/subscribe 里的说明。
+  bypassDeviceApproval = null,
 }) {
   app.get('/health', httpAuth, (_req, res) => res.json(getHealth()));
   app.get('/metrics', httpAuth, (_req, res) => res.json(getMetrics()));
@@ -263,7 +275,13 @@ export function registerOperationalRoutes({
     if (!push.enabled) return res.status(503).json({ error: 'push not configured' });
     if (!push.isValidSubscription(req.body)) return res.status(400).json({ error: 'invalid subscription' });
     // 第二因子：仅已批准设备可登记推送（A1）。deviceToken 来自身体或头，与 socket auth 同源。
-    if (typeof isDeviceTrusted === 'function') {
+    // bypass 级信任必须同样放行 —— 否则这道 fail-closed 用错了地方：socket 侧 io.use 对
+    // 「CF Access 已验」与「真本机直连」走 bypass 分支，那条分支【不调 addPendingDevice】，于是这类设备
+    // 永远进不了待审列表；而 approveDevice 的三个入口都要求先在待审列表里，机主在 UI/CLI 上根本看不到它、
+    // 无从批准。结果：只从公网装 PWA 的手机（deployment.md 主推拓扑）POST /push/subscribe 恒 403，
+    // 前端只把 'HTTP 403' 写进日志、按钮无提示 —— 推送在旗舰拓扑下静默失效。纯 localhost 部署同理。
+    const bypassTrusted = typeof bypassDeviceApproval === 'function' && bypassDeviceApproval(req) === true;
+    if (typeof isDeviceTrusted === 'function' && !bypassTrusted) {
       const deviceToken = (req.body && req.body.deviceToken)
         || req.get('x-device-token')
         || '';
