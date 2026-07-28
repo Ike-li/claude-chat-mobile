@@ -3110,7 +3110,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // composition 状态追踪作为旧浏览器（Safari <14、部分 Android WebView）的后备兜底
   let composing = false;
   inputEl.addEventListener('compositionstart', () => { composing = true; });
-  inputEl.addEventListener('compositionend', () => { composing = false; });
+  // compositionend：组字落定后立刻跑 @ 检测（中文输入法常见路径）
+  inputEl.addEventListener('compositionend', () => {
+    composing = false;
+    checkAtMention();
+  });
   inputEl.addEventListener('keydown', e => {
     if (e.key === 'Enter' && !e.isComposing && e.keyCode !== 229 && !composing && shouldSendOnEnter({ shiftKey: e.shiftKey, isTouchDevice })) {
       e.preventDefault();
@@ -3155,10 +3159,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     updateSendButtonState();
   }
 
-  function renderAtMentionChips(paths) {
+  function renderAtMentionChips(paths, { emptyHint = '' } = {}) {
     if (!atMentionChips) return;
     atMentionChips.innerHTML = '';
-    if (!paths?.length) { atMentionChips.classList.add('hidden'); return; }
+    if (!paths?.length) {
+      if (emptyHint) {
+        const hint = el('<span class="text-[10px] text-ink-faint px-1 shrink-0" data-testid="at-mention-empty"></span>');
+        hint.textContent = emptyHint;
+        atMentionChips.appendChild(hint);
+        atMentionChips.classList.remove('hidden');
+      } else {
+        atMentionChips.classList.add('hidden');
+      }
+      return;
+    }
     for (const p of paths) {
       const chip = el('<button type="button" class="status-pill-chip toolbar-pill shrink-0" data-testid="at-mention-chip"></button>');
       chip.textContent = p;
@@ -3168,22 +3182,45 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     atMentionChips.classList.remove('hidden');
   }
+
+  function renderAtMentionLoading() {
+    if (!atMentionChips) return;
+    atMentionChips.innerHTML = '';
+    const hint = el('<span class="text-[10px] text-ink-faint px-1 shrink-0" data-testid="at-mention-loading"></span>');
+    hint.textContent = t('查找文件…');
+    atMentionChips.appendChild(hint);
+    atMentionChips.classList.remove('hidden');
+  }
   // mousedown 先于 click 触发，preventDefault 挡掉浏览器「点按钮前先把当前焦点元素 blur 掉」的默认动作，
   // 令 inputEl 全程不失焦——避免「点 chip 时 blur 先跑、chips 已被清空、onclick 打空」的经典时序坑。
   atMentionChips?.addEventListener('mousedown', e => e.preventDefault());
 
   function checkAtMention() {
+    // IME 组字中不触发（避免中文输入半成品误搜）；compositionend 再跑一次
+    if (composing) return;
     const cursor = inputEl.selectionStart ?? inputEl.value.length;
     const hit = detectAtMentionQuery(inputEl.value.slice(0, cursor));
     if (!hit) { if (atMentionState) hideAtMentionChips(); return; }
     atMentionState = { matchStart: hit.matchStart };
     if (atMentionDebounceTimer) clearTimeout(atMentionDebounceTimer);
     const reqId = ++atMentionReqId;
+    // 立刻给反馈，避免「打 @ 像没反应」（空 query 也会出候选列表）
+    renderAtMentionLoading();
     atMentionDebounceTimer = setTimeout(() => {
-      if (!socket) return;
+      if (!socket?.connected) {
+        if (reqId === atMentionReqId) renderAtMentionChips([], { emptyHint: t('未连接，无法搜索文件') });
+        return;
+      }
       socket.emit('files:search', { cwd: currentCwd, query: hit.query }, res => {
         if (reqId !== atMentionReqId) return; // 迟到 ack：期间已改 query / 取消触发，丢弃
-        renderAtMentionChips(res?.ok ? res.paths : []);
+        if (!res?.ok) {
+          renderAtMentionChips([], { emptyHint: res?.error || t('文件搜索失败') });
+          return;
+        }
+        const paths = Array.isArray(res.paths) ? res.paths : [];
+        renderAtMentionChips(paths, {
+          emptyHint: paths.length ? '' : t('无匹配文件'),
+        });
       });
     }, 150);
   }

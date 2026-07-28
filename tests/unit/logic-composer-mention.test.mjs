@@ -13,6 +13,11 @@ test.describe('detectAtMentionQuery（composer @ 文件引用触发检测）', (
   test('@ 后为空（刚打完 @）→ 命中，query 空串', () => {
     assert.deepEqual(detectAtMentionQuery('hello @'), { query: '', matchStart: 6 });
   });
+  test('全角 ＠（部分中文输入法）与 ASCII @ 等价', () => {
+    // 「看下 」2 汉字 + 空格 → index 2 起匹配「 ＠app」，＠ 在 match[0] 偏移 1 → matchStart=3
+    assert.deepEqual(detectAtMentionQuery('看下 ＠app'), { query: 'app', matchStart: 3 });
+    assert.deepEqual(detectAtMentionQuery('＠'), { query: '', matchStart: 0 });
+  });
   test('query 含路径字符（. / -）', () => {
     assert.deepEqual(detectAtMentionQuery('see @src/app-v2.js'), { query: 'src/app-v2.js', matchStart: 4 });
   });

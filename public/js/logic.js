@@ -2308,12 +2308,15 @@ export function resolveForkAnchorUuid({ role, ownUuid = null, precedingAssistant
 // （字母数字下划线点斜杠短横线，不含空格——一旦打出空格视为已放弃/确认引用，交由下一次 @ 重新触发）。
 // 要求 @ 前是行首或空白（非单词字符），天然不误触 user@host 这类词中 @。传入「光标前」文本（非全文），
 // 故多个 @ 只会命中离光标最近、仍处于「输入中」的那个。
-const AT_MENTION_PATTERN = /(?:^|\s)@([\w./-]*)$/;
+// 全角 ＠（U+FF20，部分中文输入法）与 ASCII @ 等价。
+const AT_MENTION_PATTERN = /(?:^|\s)[@＠]([\w./-]*)$/;
 export function detectAtMentionQuery(textBeforeCursor) {
   const text = typeof textBeforeCursor === 'string' ? textBeforeCursor : '';
   const m = AT_MENTION_PATTERN.exec(text);
   if (!m) return null;
-  return { query: m[1], matchStart: m.index + m[0].indexOf('@') };
+  // matchStart 指向 @/＠ 本身（不是 match 起点，可能含前导空白）
+  const atIdx = Math.max(m[0].lastIndexOf('@'), m[0].lastIndexOf('＠'));
+  return { query: m[1], matchStart: m.index + atIdx };
 }
 
 // 选中候选后重写输入框文本：把 [matchStart, cursorPos) 换成「相对路径 」，光标落在插入内容之后。

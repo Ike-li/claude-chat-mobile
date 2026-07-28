@@ -1100,9 +1100,12 @@ io.on('connection', socket => {
   const MOCK_MENTION_FILES = ['src/app.js', 'src/agent/agent.js', 'README.md', 'package.json'];
   socket.on('files:search', (payload, callback) => {
     if (typeof callback !== 'function') return;
-    const q = String(payload?.query || '').toLowerCase();
+    const q = String(payload?.query || '').toLowerCase().trim();
     console.log(`[mock] files:search query=${q}`);
-    const paths = q ? MOCK_MENTION_FILES.filter(p => p.toLowerCase().includes(q)) : [];
+    // 空 query：对齐真服务 / CLI @ 补全，返回全部候选（不筛）
+    const paths = q
+      ? MOCK_MENTION_FILES.filter(p => p.toLowerCase().includes(q))
+      : MOCK_MENTION_FILES.slice();
     callback({ ok: true, paths });
   });
 

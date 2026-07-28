@@ -92,10 +92,17 @@ function isSubsequence(needle, haystack) {
 }
 
 // 纯匹配：子串命中优先于 subsequence（fzf 式）兜底；同档内 basename 命中排在路径其它段命中之前。
-// 大小写不敏感；query/paths 为空 → []。
+// 大小写不敏感。
+// 空 query（刚打完 @）：对齐 CLI @ 补全，返回候选前 limit 条（路径字典序），不是 []——否则 Web 上「打 @ 无反应」。
+// paths 空 → []。
 export function matchFiles(paths, query, { limit = FILE_SEARCH_LIMIT } = {}) {
+  if (!Array.isArray(paths) || !paths.length) return [];
   const q = String(query || '').trim().toLowerCase();
-  if (!q || !Array.isArray(paths) || !paths.length) return [];
+  const lim = Math.max(1, Number(limit) || FILE_SEARCH_LIMIT);
+  // 空 query：浏览式列表（git ls-files / walk 顺序稳定后字典序截断）
+  if (!q) {
+    return paths.map(p => String(p)).filter(Boolean).sort((a, b) => a.localeCompare(b)).slice(0, lim);
+  }
   const scored = [];
   for (const raw of paths) {
     const path = String(raw);
@@ -110,7 +117,7 @@ export function matchFiles(paths, query, { limit = FILE_SEARCH_LIMIT } = {}) {
     scored.push({ path, tier, len: path.length });
   }
   scored.sort((a, b) => a.tier - b.tier || a.len - b.len || a.path.localeCompare(b.path));
-  return scored.slice(0, limit).map(s => s.path);
+  return scored.slice(0, lim).map(s => s.path);
 }
 
 export async function searchFiles(cwd, query, opts = {}) {

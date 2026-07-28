@@ -25,6 +25,19 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-MENTIONd 仅打 @（空 query）也应出候选列表，对齐 CLI', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#input').fill('@');
+    // 空 query 时 matchFiles 返回前 N 条路径，不应再「无反应」
+    const chips = page.locator('[data-testid="at-mention-chip"]');
+    await expect(chips.first()).toBeVisible({ timeout: 3_000 });
+    await expect(chips).not.toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-MENTIONb 打完空格后引用视为已确认，chips 收起', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);

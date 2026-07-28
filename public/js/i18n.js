@@ -141,6 +141,11 @@ export const EN_DICT = Object.freeze({
   '推送未接通': 'Push not connected',
   '推送未接通，查看推送状态': 'Push not connected — view push status',
   '发送': 'Send',
+  // —— @ 文件引用 ——
+  '查找文件…': 'Finding files…',
+  '无匹配文件': 'No matching files',
+  '文件搜索失败': 'File search failed',
+  '未连接，无法搜索文件': 'Not connected — cannot search files',
 
   // —— 设备授权 / 访问帮助 ——
   '🔒 等待授权': '🔒 Waiting for approval',

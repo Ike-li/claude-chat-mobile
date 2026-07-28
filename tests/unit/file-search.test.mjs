@@ -42,10 +42,21 @@ describe('matchFiles：纯匹配排序', () => {
     assert.deepEqual(matchFiles(paths, 'zzz-nope'), []);
   });
 
-  test('空 query / 空 paths → 空数组', () => {
-    assert.deepEqual(matchFiles(paths, ''), []);
+  test('空 query：对齐 CLI @ 补全，返回路径字典序前 limit 条（不是空数组）', () => {
+    const r = matchFiles(paths, '');
+    assert.ok(r.length > 0);
+    assert.ok(r.length <= FILE_SEARCH_LIMIT);
+    // 字典序
+    const sorted = [...r].sort((a, b) => a.localeCompare(b));
+    assert.deepEqual(r, sorted);
+    // null / 空白 query 同空
+    assert.deepEqual(matchFiles(paths, null), matchFiles(paths, ''));
+    assert.deepEqual(matchFiles(paths, '   '), matchFiles(paths, ''));
+  });
+
+  test('空 paths → 空数组', () => {
     assert.deepEqual(matchFiles([], 'app'), []);
-    assert.deepEqual(matchFiles(paths, null), []);
+    assert.deepEqual(matchFiles([], ''), []);
   });
 
   test('limit 截断（默认 FILE_SEARCH_LIMIT）', () => {
