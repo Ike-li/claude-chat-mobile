@@ -43,7 +43,8 @@ export async function ensureComposerReady(page: Page) {
   if (await input.isVisible()) return;
   await page.locator('#btnNew').click();
   await expect(input).toBeVisible();
-  await expect(page.locator('#btnSend')).toBeVisible();
+  // Composer C：空闲无内容时 #btnSend 可能 hidden，附件钮始终在
+  await expect(page.locator('#btnAttach')).toBeVisible();
 }
 
 /** 关闭配置面板。勿点 #settingsScrim 中心——面板盖住中部会拦截点击；Escape / 遮罩顶部空白均可。 */
@@ -96,14 +97,16 @@ export async function sendChatMessage(page: Page, text: string) {
   await ensureComposerReady(page);
   const input = page.locator('#input');
   await input.fill(text);
+  // Composer C：空闲无内容时发送钮 .hidden；确保 input 事件把钮露出后再点
+  await expect(page.locator('#btnSend')).toBeVisible({ timeout: 5_000 });
   await expect(page.locator('#btnSend')).toBeEnabled();
   await page.locator('#btnSend').click();
 }
 
 export async function waitForIdle(page: Page) {
-  // busy 结束：流内 live 行移除，发送钮不再处于 stop 模式
+  // busy 结束：流内 live 行移除，发送钮不再处于 stop 模式（空闲后钮可能 hidden，仍可读 data-mode）
   await expect(page.locator('#streamLiveStatus')).toHaveCount(0, { timeout: 20_000 });
-  await expect(page.locator('#btnSend')).not.toHaveAttribute('data-mode', 'stop');
+  await expect(page.locator('#btnSend')).not.toHaveAttribute('data-mode', 'stop', { timeout: 20_000 });
 }
 
 export async function expectNoBrowserErrors(page: Page) {

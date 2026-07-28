@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -3279,7 +3279,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       closeLeftSidebar();
   });
 
-  const SEND_ICON_HTML = `<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>`;
+  const SEND_ICON_HTML = `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>`;
   const STOP_ICON_HTML = `<span class="btn-send-stop-icon" aria-hidden="true"></span>`;
   let _btnSendMode = null; // 仅 mode 变化时换图标，避免按键 thrash
 
@@ -3307,28 +3307,48 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // title 用 resolve 结果（空串=无额外提示）；aria-label 才是可访问名
     btnSend.title = state.title;
     btnSend.setAttribute('aria-label', state.ariaLabel);
+    // C：空闲无内容隐藏灰发送（无语音）；stop/resume/有内容仍显示
+    const hideSend = shouldHideComposerSendButton({
+      mode: state.mode,
+      enabled: state.enabled,
+      hasContent,
+    });
     if (state.mode === 'resume' || state.mode === 'cancel-resume') {
       // 短文案 pill：宽度贴近「发送」圆钮，不挤左侧芯片/齿轮；完整名在 aria-label/title
-      btnSend.className = 'flex items-center justify-center h-9 px-2.5 rounded-full shrink-0 transition-all duration-200 shadow-sm text-xs font-semibold whitespace-nowrap' +
+      btnSend.className = 'flex items-center justify-center h-10 px-2.5 rounded-full shrink-0 transition-all duration-200 shadow-sm text-xs font-semibold whitespace-nowrap' +
         (state.mode === 'cancel-resume'
           ? ' border border-line text-ink-soft bg-surface hover:bg-sunk active:scale-95'
           : ' bg-cta text-white hover:brightness-95 active:scale-95');
       if (modeChanged) btnSend.textContent = state.label || (state.mode === 'cancel-resume' ? t('取消') : t('续接'));
       else if (btnSend.textContent !== state.label) btnSend.textContent = state.label;
     } else if (state.mode === 'stop') {
-      btnSend.className = 'flex items-center justify-center w-9 h-9 rounded-full shrink-0 transition-all duration-200 shadow-sm' +
+      btnSend.className = 'flex items-center justify-center w-10 h-10 rounded-full shrink-0 transition-all duration-200 shadow-sm' +
         (state.enabled
           ? ' hover:brightness-95 active:scale-95'
           : ' opacity-55 cursor-not-allowed');
       if (modeChanged) btnSend.innerHTML = STOP_ICON_HTML;
     } else if (state.enabled) {
-      // UI-002：激活态品牌 cta 底白箭头
-      btnSend.className = 'flex items-center justify-center w-9 h-9 rounded-full bg-cta text-white hover:brightness-95 active:scale-95 shadow-sm transition-all duration-200 shrink-0';
+      // UI-002：激活态品牌 cta 底白箭头（与回形针同级 40px）
+      btnSend.className = 'flex items-center justify-center w-10 h-10 rounded-full bg-cta text-white hover:brightness-95 active:scale-95 shadow-sm transition-all duration-200 shrink-0';
       if (modeChanged) btnSend.innerHTML = SEND_ICON_HTML;
     } else {
-      btnSend.className = 'flex items-center justify-center w-9 h-9 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0';
+      btnSend.className = 'flex items-center justify-center w-10 h-10 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0';
       if (modeChanged) btnSend.innerHTML = SEND_ICON_HTML;
     }
+    btnSend.classList.toggle('hidden', hideSend);
+    syncComposerDiscoverHint();
+  }
+
+  function syncComposerDiscoverHint() {
+    const hint = $('composerDiscoverHint');
+    if (!hint || !inputEl) return;
+    const hasContent = inputEl.value.trim().length > 0 || attachments.items().length > 0;
+    const show = shouldShowComposerDiscoverHint({
+      focused: document.activeElement === inputEl,
+      hasContent,
+      mirrorReadonly: Boolean(mirrorReadonlySid),
+    });
+    hint.classList.toggle('hidden', !show);
   }
 
   function autosize() {
@@ -3336,6 +3356,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     inputEl.style.height = Math.min(inputEl.scrollHeight, 144) + 'px';
     updateSendButtonState();
   }
+  inputEl.addEventListener('focus', syncComposerDiscoverHint);
+  inputEl.addEventListener('blur', () => {
+    // 延后一帧：点 slash 提示等时 activeElement 可能已迁走，避免闪一下
+    setTimeout(syncComposerDiscoverHint, 0);
+  });
   updateSendButtonState();
 
   // instanceId 默认取当前查看实例——system(p) 结算 handler 本就只在事件属于当前查看实例时才会被派发到，
@@ -3454,9 +3479,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     permModeSelect.classList.toggle('ring-danger', danger);
     permModeSelect.classList.toggle('text-danger', danger);
 
-    // Sync Pill Display Text（文案来自 SDK 磁贴规格，未知档回落 mode 字面）
+    // Sync Pill Display Text（CLI 英文档名；Bypass 仅权限段标红，非整颗 chip）
     if (pillPermText) {
       pillPermText.textContent = PERM_PILL_LABEL[mode] || mode;
+      const tone = pillPermTone(mode);
+      pillPermText.classList.toggle('text-danger', tone === 'danger');
+      pillPermText.classList.toggle('pill-perm-plan', tone === 'plan');
     }
 
     // Sync Custom Perm Tiles Selection Styling

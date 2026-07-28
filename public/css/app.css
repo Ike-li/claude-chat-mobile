@@ -249,10 +249,10 @@ body.ccm-sheet-open #messages {
   box-shadow: 0 1px 2px rgba(0,0,0,0.02);
   white-space: nowrap;
 }
-/* 并入输入框底栏后的紧凑 chip（模型/权限/思考） */
+/* 并入输入框底栏后的紧凑 chip（模型/权限/思考）；高度与动作钮热区更协调 */
 .status-pill-chip.toolbar-pill {
-  min-height: 28px;
-  height: 28px;
+  min-height: 36px;
+  height: 36px;
   padding: 0 0.5rem;
   font-size: 10.5px;
   flex-shrink: 0;
@@ -264,10 +264,12 @@ body.ccm-sheet-open #messages {
   height: 0.85rem;
   opacity: 0.75;
 }
-/* 会话档摘要 chip：模型 · 权限 · 思考 连写；各段可截断，完整串在 #pillDefaults title */
+/* 会话档摘要 chip：模型优先完整；权限/思考短标少截断；完整串在 #pillDefaults title */
 #pillDefaults {
   max-width: min(100%, 72vw);
   gap: 0.25rem;
+  min-height: 36px;
+  height: 36px;
 }
 .pill-defaults-part {
   display: inline-block;
@@ -277,14 +279,31 @@ body.ccm-sheet-open #messages {
   vertical-align: middle;
   min-width: 0;
 }
+/* A3：模型段吃宽；权限/思考短标尽量不截 */
 #pillModelText {
-  max-width: min(7.5rem, 32vw);
+  max-width: min(11rem, 46vw);
+  flex: 1 1 auto;
 }
 #pillPermText {
-  max-width: min(5rem, 22vw);
+  max-width: min(6rem, 26vw);
+  flex: 0 1 auto;
 }
 #pillEffortText {
   max-width: min(4.5rem, 18vw);
+  flex: 0 1 auto;
+}
+/* A1：仅权限段着色（Bypass danger / Plan 次强调） */
+#pillPermText.pill-perm-plan {
+  color: var(--info, #3b82f6);
+}
+.composer-discover-hint {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--ink-faint);
+  opacity: 0.75;
+  padding: 0 0.25rem;
+  white-space: nowrap;
+  pointer-events: none;
 }
 .pill-defaults-sep {
   color: var(--ink-faint);
@@ -508,15 +527,17 @@ body.ccm-sheet-open #messages {
   }
   #pillDefaults {
     max-width: min(100%, 68vw);
+    min-height: 36px;
+    height: 36px;
   }
   #pillModelText {
-    max-width: min(6.5rem, 28vw); /* 窄屏：截断模型名，动作区（附件/发送）钉死不挤 */
+    max-width: min(9.5rem, 42vw); /* 窄屏：模型优先；动作区（附件/发送）钉死不挤 */
   }
   #pillPermText {
-    max-width: min(4.5rem, 20vw);
+    max-width: min(5.5rem, 22vw);
   }
   #pillEffortText {
-    max-width: min(4rem, 16vw);
+    max-width: min(3.75rem, 14vw);
   }
   .chat-input-pill {
     min-height: auto !important;
@@ -527,16 +548,21 @@ body.ccm-sheet-open #messages {
     width: 100%;
     padding: 0.5rem !important;
   }
+  /* 回形针放大：40×40 视觉 + 既有 .chat-input-pill button::after 扩热区；位置仍在发送左侧 */
   #btnAttach {
     position: relative !important;
     transform: none !important;
-    width: 32px !important;
-    height: 32px !important;
-    border-radius: 0.5rem !important;
+    width: 40px !important;
+    height: 40px !important;
+    border-radius: 0.75rem !important;
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
     color: var(--ink-soft) !important;
+  }
+  #btnAttach svg {
+    width: 1.5rem !important;
+    height: 1.5rem !important;
   }
   #btnAttach:active {
     transform: scale(0.92) !important;
@@ -548,8 +574,12 @@ body.ccm-sheet-open #messages {
   }
   #btnSend,
   #btnStop {
-    width: 32px !important;
-    height: 32px !important;
+    width: 40px !important;
+    height: 40px !important;
+  }
+  #btnSend svg {
+    width: 1.25rem !important;
+    height: 1.25rem !important;
   }
 }
 

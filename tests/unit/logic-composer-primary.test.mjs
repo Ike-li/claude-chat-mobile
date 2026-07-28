@@ -3,6 +3,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveComposerPrimaryMode,
+  shouldHideComposerSendButton,
+  pillPermTone,
+  shouldShowComposerDiscoverHint,
   formatLiveActivityText,
   presentOnlineSendAck,
   presentOfflineResendAck,
@@ -24,6 +27,29 @@ test('resolveComposerPrimaryMode: 空闲空输入 → 禁用发送', () => {
   assert.equal(out.mode, 'send');
   assert.equal(out.enabled, false);
   assert.equal(out.ariaLabel, '发送');
+});
+
+test('shouldHideComposerSendButton: 空闲无内容隐藏；有内容/停止/续接显示', () => {
+  assert.equal(shouldHideComposerSendButton({ mode: 'send', enabled: false, hasContent: false }), true);
+  assert.equal(shouldHideComposerSendButton({ mode: 'send', enabled: true, hasContent: true }), false);
+  assert.equal(shouldHideComposerSendButton({ mode: 'send', enabled: false, hasContent: true }), false); // 排队满等
+  assert.equal(shouldHideComposerSendButton({ mode: 'stop', enabled: true, hasContent: false }), false);
+  assert.equal(shouldHideComposerSendButton({ mode: 'resume', enabled: true, hasContent: false }), false);
+});
+
+test('pillPermTone: 仅 bypass → danger，plan → plan，其余 neutral', () => {
+  assert.equal(pillPermTone('bypassPermissions'), 'danger');
+  assert.equal(pillPermTone('plan'), 'plan');
+  assert.equal(pillPermTone('default'), 'neutral');
+  assert.equal(pillPermTone('acceptEdits'), 'neutral');
+  assert.equal(pillPermTone('auto'), 'neutral');
+});
+
+test('shouldShowComposerDiscoverHint: 聚焦且空且非镜像 → 显示', () => {
+  assert.equal(shouldShowComposerDiscoverHint({ focused: true, hasContent: false }), true);
+  assert.equal(shouldShowComposerDiscoverHint({ focused: false, hasContent: false }), false);
+  assert.equal(shouldShowComposerDiscoverHint({ focused: true, hasContent: true }), false);
+  assert.equal(shouldShowComposerDiscoverHint({ focused: true, hasContent: false, mirrorReadonly: true }), false);
 });
 
 test('resolveComposerPrimaryMode: 空闲有内容 → 启用发送', () => {

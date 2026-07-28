@@ -331,6 +331,26 @@ export function resolveComposerPrimaryMode({
   };
 }
 
+/**
+ * Composer 发送钮可见性：空闲无内容时隐藏灰发送（避免「点了没反应」）；
+ * stop / resume / 有内容可发或可排队 均显示。无语音输入。
+ */
+export function shouldHideComposerSendButton({ mode, enabled, hasContent = false } = {}) {
+  return mode === 'send' && !enabled && !hasContent;
+}
+
+/** 底栏权限段着色：仅 Bypass 标 danger（非整颗 chip） */
+export function pillPermTone(mode) {
+  if (mode === 'bypassPermissions') return 'danger';
+  if (mode === 'plan') return 'plan';
+  return 'neutral';
+}
+
+/** 空聚焦且无内容时是否展示 / @ 发现 hint */
+export function shouldShowComposerDiscoverHint({ focused = false, hasContent = false, mirrorReadonly = false } = {}) {
+  return Boolean(focused) && !hasContent && !mirrorReadonly;
+}
+
 // 排队可见性（对齐 CLI「Queued」态）：user_message.queued=true 的气泡挂排队标记，
 // 本轮 result 到达时转正；被撤回/随停止取消时由 system{queue_cancelled/queue_dropped} 落终态。
 export function queuedBubbleState({ queued = false } = {}) {

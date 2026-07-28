@@ -20,9 +20,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#composerFooter')).toBeVisible();
     await expect(page.locator('#input')).toBeVisible();
     await expect(page.locator('#input')).toHaveAttribute('placeholder', /给 Claude 发消息/);
-    await expect(page.locator('#btnSend')).toBeVisible();
-    await expect(page.locator('#btnSend')).toBeDisabled();
+    // Composer C：空闲无内容隐藏灰发送；附件仍在
+    await expect(page.locator('#btnSend')).toBeHidden();
     await expect(page.locator('#btnAttach')).toBeVisible();
+    await page.locator('#input').fill('x');
+    await expect(page.locator('#btnSend')).toBeVisible();
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await page.locator('#input').fill('');
+    await expect(page.locator('#btnSend')).toBeHidden();
     await expect(page.locator('#pillModelText')).not.toHaveText('');
     await expect(page.locator('#pillPermText')).toContainText('Manual');
 
@@ -44,8 +49,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('.dashboard-container')).toHaveCount(0);
     await expect(page.locator('#composerFooter')).toBeVisible();
     await expect(page.locator('#input')).toBeVisible();
-    await expect(page.locator('#btnSend')).toBeVisible();
-    await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toBeHidden(); // 空输入不露灰发送
+    await expect(page.locator('#btnAttach')).toBeVisible();
     await expect(page.locator('#topContextPill')).toBeHidden();
     await expect(page.locator('#pillPermText')).toContainText('Manual');
     // 页内默认档摘要至少带上权限文案（与底栏 pill 同源）

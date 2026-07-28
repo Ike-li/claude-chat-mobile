@@ -285,7 +285,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
       };
     });
     expect(layout.truncated).toBe(true);
-    expect(layout.chipHeight).toBe(28);
+    expect(layout.chipHeight).toBe(36); // 与动作钮热区协调（Composer A）
 
     await expectNoBrowserErrors(page);
   });
@@ -297,6 +297,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:longmodel');
     await waitForIdle(page);
 
+    // 空闲无内容时发送钮隐藏（Composer C）；填一字露出发送再测几何
+    await page.locator('#input').fill('x');
     await expect(page.locator('#btnAttach')).toBeVisible();
     await expect(page.locator('#btnSend')).toBeVisible();
     const geometry = await page.evaluate(() => {

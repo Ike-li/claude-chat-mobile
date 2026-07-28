@@ -483,22 +483,24 @@
               <svg class="w-3.5 h-3.5 text-accent shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25zm.75-12h9v9h-9v-9z" />
               </svg>
-              <span id="pillModelText" class="pill-defaults-part">默认</span>
+              <span id="pillModelText" class="pill-defaults-part pill-model">默认</span>
               <span class="pill-defaults-sep" aria-hidden="true">·</span>
-              <span id="pillPermText" class="pill-defaults-part">Manual</span>
+              <span id="pillPermText" class="pill-defaults-part pill-perm">Manual</span>
               <!-- 模型不支持 effort 时整段（分隔点+文案）隐藏，避免留下孤零零的「·」 -->
               <span id="pillEffort" class="pill-effort-inline hidden">
                 <span class="pill-defaults-sep" aria-hidden="true">·</span>
-                <span id="pillEffortText" class="pill-defaults-part">思考默认</span>
+                <span id="pillEffortText" class="pill-defaults-part pill-effort">思考默认</span>
               </span>
             </div>
+            <!-- C：空聚焦时淡显 / @ 发现；有字或失焦即藏；不挡键盘 -->
+            <span id="composerDiscoverHint" class="hidden composer-discover-hint select-none" data-testid="composer-discover-hint" aria-hidden="true">/ · @</span>
           </div>
 
           <!-- 钉死动作区：附件 / 发送——永不进横向滚动、不被长模型名挤没 -->
           <div id="composerActions" class="composer-actions flex items-center gap-0.5 shrink-0">
-            <!-- E17：附件按钮 -->
-            <button id="btnAttach" class="flex items-center justify-center w-8 h-8 rounded-lg hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="添加附件">
-              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+            <!-- E17：附件按钮——位置仍在发送左侧；视觉加大便于单手点（系统 file picker 不变） -->
+            <button id="btnAttach" class="flex items-center justify-center w-10 h-10 rounded-xl hover:bg-sunk active:scale-95 text-ink-soft shrink-0 transition-all" title="添加附件" aria-label="添加附件">
+              <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
               </svg>
             </button>
@@ -506,8 +508,9 @@
             <!-- 兼容性保留：隐藏的原 btnStop -->
             <button id="btnStop" class="hidden pointer-events-none w-0 h-0" style="display: none !important;"></button>
 
-            <button id="btnSend" class="flex items-center justify-center w-8 h-8 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0" title="发送" disabled>
-              <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6">
+            <!-- 空闲无内容时 JS 加 .hidden（C）；busy 停止 / 有内容发送 / 续接 均显示；无语音 -->
+            <button id="btnSend" class="hidden flex items-center justify-center w-10 h-10 rounded-full bg-transparent text-ink-faint opacity-60 cursor-not-allowed transition-all duration-200 shrink-0" title="发送" disabled>
+              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" />
               </svg>
             </button>
