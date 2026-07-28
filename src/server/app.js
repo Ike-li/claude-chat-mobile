@@ -42,7 +42,7 @@ import {
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
 import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from '../auth/cf-access.js';
-import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp } from '../auth/rate-limiter.js';
+import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { readSessionRegistry, registryIndicatesTerminalBusy, listTerminalSessionStates, terminalStateKey } from '../sessions/session-registry.js';
@@ -579,10 +579,15 @@ io.use(async (socket, next) => {
     }
 
     // 鉴权通过后，执行设备审批过滤（纵深防御）
-    const isLocal = ['localhost', '127.0.0.1', '::1'].includes(clientIp(socket.handshake.address));
-    if (accessEnabled || isLocal) {
+    // 反代 loopback：peer=127.0.0.1 但 Host 公网 → 仍须 deviceToken（见 shouldBypassDeviceApproval）
+    const bypassDevice = shouldBypassDeviceApproval({
+      accessEnabled,
+      peerAddress: socket.handshake.address,
+      hostHeader: socket.handshake.headers.host,
+    }, clientIp);
+    if (bypassDevice) {
       socket.deviceApproved = true;
-      socket.trustBasis = 'bypass'; // SEC-03：本机/CF Access 直接批准，不受 trusted-devices.json 信任表控制——
+      socket.trustBasis = 'bypass'; // SEC-03：真本机/CF Access 直接批准，不受 trusted-devices.json 信任表控制——
                                      // CLI 吊销某 deviceToken 时绝不能因此误断这类连接（它们与该表无关）
     } else {
       const deviceToken = socket.handshake.auth?.deviceToken;
@@ -1056,17 +1061,29 @@ async function catchUpTickOnce() {
     );
     return;
   }
-  let messages, curSize, tail = { verdict: 'settled', lastChainTs: null };
-  let observedCli = { model: null, permissionMode: null };
-  try { messages = await getSessionHistory(a.sessionId, a.cwd); } catch { return; }
-  try { curSize = await sessionFileSize(a.sessionId, a.cwd); } catch { curSize = -1; }
-  // 尾部形态（2026-07-12 单驾驶员核心判据）：轮次未完结(pending)期间维持锁——罩住「终端卡在一条几分钟的
-  // 长工具上、磁盘零写入」窗（keepAlive 罩不住，原 12.5s 静默窗在此误判解锁、横幅熄灭="感觉没在跑"真实报障）。
-  try { tail = await classifyTranscriptTail(a.sessionId, a.cwd, { size: curSize >= 0 ? curSize : null }); } catch { /* 读失败保守 settled：不多锁 */ }
-  try { observedCli = await readCliObservedState(a.sessionId, a.cwd, { size: curSize >= 0 ? curSize : null }); } catch { /* 读失败显未知 */ }
-  observedCli = mergeCliObserved(observedCli, a.sessionId, a.cwd);
-  // P1：注册表权威自报（同切入分支）——busy 自报可上锁/维持锁/压制 stale，无条目回落既有判定
-  const registryBusy = registryIndicatesTerminalBusy(await readSessionRegistry(a.sessionId, a.cwd));
+  // 并行读：history / size / registry 互相独立；size 先取供 tail 读者共用，避免串行堆叠事件循环延迟
+  let messages;
+  let curSize;
+  let tail;
+  let observedCli;
+  let registryBusy;
+  try {
+    const sizeP = sessionFileSize(a.sessionId, a.cwd).catch(() => -1);
+    const histP = getSessionHistory(a.sessionId, a.cwd);
+    const regP = readSessionRegistry(a.sessionId, a.cwd).catch(() => null);
+    curSize = await sizeP;
+    const sizeOpt = { size: curSize >= 0 ? curSize : null };
+    // 尾部形态（2026-07-12 单驾驶员核心判据）：轮次未完结(pending)期间维持锁——罩住「终端卡在一条几分钟的
+    // 长工具上、磁盘零写入」窗（keepAlive 罩不住，原 12.5s 静默窗在此误判解锁、横幅熄灭="感觉没在跑"真实报障）。
+    const tailP = classifyTranscriptTail(a.sessionId, a.cwd, sizeOpt).catch(() => ({ verdict: 'settled', lastChainTs: null }));
+    const cliP = readCliObservedState(a.sessionId, a.cwd, sizeOpt).catch(() => ({ model: null, permissionMode: null }));
+    messages = await histP;
+    tail = await tailP;
+    observedCli = mergeCliObserved(await cliP, a.sessionId, a.cwd);
+    registryBusy = registryIndicatesTerminalBusy(await regP);
+  } catch {
+    return; // history 失败则整 tick 放弃（与旧 try/catch return 一致）
+  }
   const { emit, state, reload } = catchUpStep(catchUpState, { messages, localBusy: false });
   if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
                                                                     // await 让出后视图/实例/session 可能已变：作废旧 tick，不提交 baseline/size/观察态

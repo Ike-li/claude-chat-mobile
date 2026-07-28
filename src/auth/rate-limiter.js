@@ -77,3 +77,21 @@ export function shouldTrustCfConnectingIp({ publicHost, peerAddress }, normalize
   const ip = String(normalizeIp(peerAddress || '') || '').toLowerCase();
   return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
 }
+
+// 设备审批 bypass（SEC 第二因子）：仅当 CF Access 已验，或「真·本机直连」才跳过 deviceToken。
+// 反代/隧道（cloudflared/nginx/SSH）终止后 peer 常为 127.0.0.1，但 Host 是公网域名——旧逻辑
+// 只看 peer loopback 会把「拿到 AUTH_TOKEN 的远程客户端」当成已设备审批。必须同时满足 Host 本机样。
+// accessEnabled=true：JWT 已过，bypass 有意保留（与 CF Access 作为边界的设计一致）。
+export function shouldBypassDeviceApproval({
+  accessEnabled = false,
+  peerAddress = '',
+  hostHeader = '',
+} = {}, normalizeIp = (x) => x) {
+  if (accessEnabled) return true;
+  const ip = String(normalizeIp(peerAddress || '') || '').toLowerCase();
+  const peerLocal = ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
+  if (!peerLocal) return false;
+  const host = String(hostHeader || '').split(':')[0].toLowerCase();
+  // 空 Host 视为本机工具/健康探针；公网域名（含 tunnel）不 bypass
+  return host === '' || host === 'localhost' || host === '127.0.0.1' || host === '::1';
+}

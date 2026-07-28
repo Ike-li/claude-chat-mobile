@@ -6,6 +6,7 @@ import {
   freshState,
   rlSourceKey,
   shouldTrustCfConnectingIp,
+  shouldBypassDeviceApproval,
   DEFAULT_RATE_LIMIT_CONFIG as CFG,
 } from '../../src/auth/rate-limiter.js';
 
@@ -151,5 +152,37 @@ test.describe('shouldTrustCfConnectingIp（AUTH-NEW-2）', () => {
   test('公网 Host + LAN peer（Host spoof）→ 不信', () => {
     assert.equal(shouldTrustCfConnectingIp({ publicHost: true, peerAddress: '10.0.0.8' }, norm), false);
     assert.equal(shouldTrustCfConnectingIp({ publicHost: true, peerAddress: '192.168.1.10' }, norm), false);
+  });
+});
+
+// 设备审批 bypass：反代 loopback 不得仅因 peer=127.0.0.1 跳过 deviceToken
+test.describe('shouldBypassDeviceApproval', () => {
+  const norm = (x) => (x || '').replace(/^::ffff:/, '');
+
+  test('CF Access 已验 → bypass', () => {
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: true, peerAddress: '10.0.0.1', hostHeader: 'ccm.example.com',
+    }, norm), true);
+  });
+
+  test('真本机：peer loopback + Host localhost → bypass', () => {
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: false, peerAddress: '127.0.0.1', hostHeader: 'localhost:3000',
+    }, norm), true);
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: false, peerAddress: '::1', hostHeader: '127.0.0.1',
+    }, norm), true);
+  });
+
+  test('隧道：peer loopback + 公网 Host → 不 bypass（须 deviceToken）', () => {
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: false, peerAddress: '127.0.0.1', hostHeader: 'ccm.example.com',
+    }, norm), false);
+  });
+
+  test('LAN 直连 → 不 bypass', () => {
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: false, peerAddress: '192.168.1.20', hostHeader: '192.168.1.20:3000',
+    }, norm), false);
   });
 });
