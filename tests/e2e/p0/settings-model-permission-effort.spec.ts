@@ -23,7 +23,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
     await openSettingsSection(page, 'effort');
     await page.locator('.effort-tile[data-level="high"]').click();
-    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
     await expect(page.locator('#effortSelect')).toHaveValue('high');
     await closeSettings(page);
@@ -54,9 +54,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.locator('.perm-tile[data-mode="plan"]').click();
     await expect(page.locator('.perm-tile[data-mode="plan"]')).toHaveClass(/ring-accent/);
-    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
     // 摘要 chip 连写
-    await expect(page.locator('#pillDefaults')).toContainText('计划模式');
+    await expect(page.locator('#pillDefaults')).toContainText('Plan');
 
     await expectNoBrowserErrors(page);
   });
@@ -119,7 +119,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#pillDefaults').click();
     await openSettingsSection(page, 'perm');
     await page.locator('.perm-tile[data-mode="plan"]').click();
-    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
     await openSettingsSection(page, 'model');
     await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
     await openSettingsSection(page, 'effort');
@@ -181,7 +181,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('.model-tile[data-model="claude-3-opus[1m]"]').click();
     await openSettingsSection(page, 'effort');
     await page.locator('.effort-tile[data-level="high"]').click();
-    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
     await expect(page.locator('#effortSelect')).toHaveValue('high');
     // UX-019：empty-start 下档位变更不打居中系统条（胶囊承载）
@@ -262,7 +262,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#confirmOk').click();
     await expect(page.locator('#input')).toBeEnabled();
     await expect(page.locator('#modelInput')).toHaveValue('claude-3-opus[1m]');
-    await expect(page.locator('#pillPermText')).toHaveText('计划模式');
+    await expect(page.locator('#pillPermText')).toHaveText('Plan');
     await expect(page.locator('#effortSelect')).toHaveValue('ultracode');
 
     await expectNoBrowserErrors(page);

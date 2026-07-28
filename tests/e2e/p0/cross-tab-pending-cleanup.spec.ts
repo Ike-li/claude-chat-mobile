@@ -25,7 +25,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 2. 当前视图不保留 inst_1 的审批弹窗，不应可见地解决旧请求。
     await page.evaluate(() => document.getElementById('permAllow')?.click());
     await expect(page.locator('#permModal')).toBeHidden();
-    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
 
     await expectNoBrowserErrors(page);
   });
@@ -37,13 +37,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permModal')).toBeVisible();
     await expect(page.locator('#permTool')).toHaveText('run_command');
     await expect(page.locator('#permModal')).toBeHidden({ timeout: 8_000 });
-    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
 
     await openSessionsSidebar(page);
     await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
 
     await expectSidebarClosed(page);
-    await expect(page.locator('#pillPermText')).toContainText('默认审批');
+    await expect(page.locator('#pillPermText')).toContainText('Manual');
     await expect(page.locator('#permModal')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#permCwd')).toContainText('/Users/you/code/claude-chat-mobile');
     await expect(page.locator('#permInput')).toContainText('git push origin main');
@@ -51,7 +51,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#permDeny').click();
     await expect(page.locator('#permModal')).toBeHidden();
     await waitForIdle(page);
-    await expect(page.locator('#pillPermText')).toContainText('默认审批');
+    await expect(page.locator('#pillPermText')).toContainText('Manual');
 
     await expectNoBrowserErrors(page);
   });
@@ -67,13 +67,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.evaluate(() => document.querySelector('#questionOptions button')?.click());
     await expect(page.locator('#questionModal')).toBeHidden();
-    await expect(page.locator('#pillPermText')).toContainText('计划模式');
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
 
     await openSessionsSidebar(page);
     await openWorkspaceSession(page, MAIN_WORKSPACE, 'Visual Sandbox (Main)');
 
     await expectSidebarClosed(page);
-    await expect(page.locator('#pillPermText')).toContainText('默认审批');
+    await expect(page.locator('#pillPermText')).toContainText('Manual');
     await expect(page.locator('#questionModal')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('#questionText')).toContainText('Which branch should be our target publish destination?');
 

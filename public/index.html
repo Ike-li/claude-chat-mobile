@@ -196,10 +196,11 @@
       <!-- ExitPlanMode：对齐 CLI plan-exit，批准时可选手 default / acceptEdits / bypass -->
       <div id="permExitModeWrap" class="hidden mb-3">
         <div class="text-xs text-ink-soft mb-1.5">退出计划后权限档（对齐 CLI）</div>
+        <!-- 档名固定 CLI 英文，不走 i18n -->
         <div id="permExitMode" class="grid grid-cols-3 gap-1.5 text-xs">
-          <button type="button" data-exit-mode="default" class="perm-exit-mode py-2 rounded-lg border border-accent bg-accent-wash text-ink font-medium">默认</button>
-          <button type="button" data-exit-mode="acceptEdits" class="perm-exit-mode py-2 rounded-lg border border-line text-ink-soft font-medium">自动接受编辑</button>
-          <button type="button" data-exit-mode="bypassPermissions" class="perm-exit-mode py-2 rounded-lg border border-danger text-danger font-medium">⚠️ Bypass</button>
+          <button type="button" data-exit-mode="default" class="perm-exit-mode py-2 rounded-lg border border-accent bg-accent-wash text-ink font-medium">Manual</button>
+          <button type="button" data-exit-mode="acceptEdits" class="perm-exit-mode py-2 rounded-lg border border-line text-ink-soft font-medium">Accept edits</button>
+          <button type="button" data-exit-mode="bypassPermissions" class="perm-exit-mode py-2 rounded-lg border border-danger text-danger font-medium">Bypass</button>
         </div>
       </div>
       <div class="flex gap-2">
@@ -415,14 +416,8 @@
         <select id="modelInput">
           <option value="">不指定（沿用当前）</option>
         </select>
-        <select id="permModeSelect">
-          <option value="default">默认（白名单外弹窗审批）</option>
-          <option value="plan">计划模式（只规划、不执行）</option>
-          <option value="acceptEdits">自动接受编辑（命令仍审批）</option>
-          <option value="dontAsk">免打扰（白名单外直接拒、不弹窗）</option>
-          <option value="auto">Auto（LLM 自动判批/拒权限）</option>
-          <option value="bypassPermissions">⚠️ bypass（跳过所有审批）</option>
-        </select>
+        <!-- 选项由 app.js rebuildPermissionModeUi 按 SDK PermissionMode 清单填充 -->
+        <select id="permModeSelect"></select>
         <div id="effortRow">
           <select id="effortSelect">
             <option value="">（模型默认）</option>
@@ -490,7 +485,7 @@
               </svg>
               <span id="pillModelText" class="pill-defaults-part">默认</span>
               <span class="pill-defaults-sep" aria-hidden="true">·</span>
-              <span id="pillPermText" class="pill-defaults-part">默认审批</span>
+              <span id="pillPermText" class="pill-defaults-part">Manual</span>
               <!-- 模型不支持 effort 时整段（分隔点+文案）隐藏，避免留下孤零零的「·」 -->
               <span id="pillEffort" class="pill-effort-inline hidden">
                 <span class="pill-defaults-sep" aria-hidden="true">·</span>
@@ -681,32 +676,8 @@
           <span class="shrink-0">🛡️</span>
           <span class="shrink-0 text-xs font-semibold text-ink-soft">权限</span>
         </div>
-        <div id="customPermGrid" class="grid grid-cols-2 gap-2">
-          <div data-mode="default" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
-            <div class="text-xs font-semibold text-ink">默认审批</div>
-            <div class="text-xs text-ink-soft mt-0.5">敏感操作弹窗确认</div>
-          </div>
-          <div data-mode="plan" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
-            <div class="text-xs font-semibold text-ink">计划模式</div>
-            <div class="text-xs text-ink-soft mt-0.5">只读预览不执行修改</div>
-          </div>
-          <div data-mode="acceptEdits" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
-            <div class="text-xs font-semibold text-ink">自动接受编辑</div>
-            <div class="text-xs text-ink-soft mt-0.5">文件修改直通，命令审批</div>
-          </div>
-          <div data-mode="dontAsk" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
-            <div class="text-xs font-semibold text-ink">免打扰</div>
-            <div class="text-xs text-ink-soft mt-0.5">白名单外直接拒、不弹窗</div>
-          </div>
-          <div data-mode="auto" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
-            <div class="text-xs font-semibold text-ink">Auto</div>
-            <div class="text-xs text-ink-soft mt-0.5">LLM 自动判批/拒权限</div>
-          </div>
-          <div data-mode="bypassPermissions" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all text-danger">
-            <div class="text-xs font-semibold text-danger">⚠️ Bypass</div>
-            <div class="text-xs text-red-500/80 mt-0.5">免审飞控（高危）</div>
-          </div>
-        </div>
+        <!-- 磁贴由 app.js rebuildPermissionModeUi 按 SDK PermissionMode 清单动态填充（与后端 CCM_PERMISSION_MODES 同源） -->
+        <div id="customPermGrid" class="grid grid-cols-2 gap-2" data-testid="perm-grid"></div>
       </section>
 
       <!-- 4. 当前会话 ID（会话级，故留在本面板；原先误放在「访问与设备」那组里，与令牌/设备审批

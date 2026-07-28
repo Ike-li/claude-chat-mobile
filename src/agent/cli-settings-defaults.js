@@ -17,9 +17,17 @@
 // L3 误盖掉的历史事实，L3 兜底只是补全"历史事实本就不存在"时的展示/取值，风险与 mode/model
 // 不对称，故单独放行。
 
-/** CCM 支持的权限档（与 server user:setPermissionMode / 前端 select 对齐；含 SDK 的 auto） */
+/**
+ * CCM / SDK 支持的权限档（与 @anthropic-ai/claude-agent-sdk PermissionMode 集合一致）。
+ * 展示顺序：安全档在前，bypassPermissions 置底。集合由 tests/unit/permission-modes-sdk-sync 锁住。
+ */
 export const CCM_PERMISSION_MODES = Object.freeze([
-  'default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk', 'auto',
+  'default',
+  'plan',
+  'acceptEdits',
+  'dontAsk',
+  'auto',
+  'bypassPermissions',
 ]);
 
 /** CCM / SDK Options.effort 合法档（settings.effortLevel 通常无 max，但归一时放行） */

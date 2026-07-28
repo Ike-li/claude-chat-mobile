@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -86,7 +86,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
   const cliStatusWrapEl = $('cliStatusWrap'); // E16：状态栏折叠包裹（<details>，揭示=去 hidden）
   const cliSummaryEl = $('cliSummary'); // E16：折叠条一行摘要（客户端据 status_line 字段拼出）
-  const permModeSelect = $('permModeSelect');  // 权限档切换器（6 档：default/plan/acceptEdits/dontAsk/auto/bypass；dontAsk+auto 终端交互切不到，属 setPermissionMode/agent 能力）
+  const permModeSelect = $('permModeSelect');  // 权限档切换器：选项/磁贴由 rebuildPermissionModeUi 按 SDK PermissionMode 填充
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
   const btnAttach = $('btnAttach'), fileInput = $('fileInput'), attachTray = $('attachTray'); // E17：附件
@@ -3377,17 +3377,49 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
   if (btnStop) btnStop.onclick = requestInterrupt;
 
-  // ---- 权限档切换（6 档；dontAsk/auto 非交互档，终端只切得到 default/plan/acceptEdits/bypass）----
+  // ---- 权限档切换：清单 = SDK PermissionMode（SDK_PERMISSION_MODES / 后端 CCM_PERMISSION_MODES）----
+  // 磁贴与 hidden select 均由 rebuildPermissionModeUi 动态填充，禁止 HTML 写死档位。
+  // 文案 = CLI/桌面英文原名（Manual / Accept edits / …），不走 t()/i18n——与终端等价。
   // setPermMode 仅由 init/permission_mode 服务端事件驱动（权威回执，函数声明有提升），onchange 不再
   // 乐观调用——故上屏的系统条 = 服务端已确认切换。程序设 select.value 不触发 onchange，无回声循环。
-  const PERM_LABEL = {
-    default: t('默认（白名单外弹窗审批）'),
-    plan: t('计划模式'),
-    acceptEdits: t('自动接受编辑'),
-    dontAsk: t('免打扰（白名单外直接拒）'),
-    auto: t('Auto（LLM 自动判批/拒权限）'),
-    bypassPermissions: t('⚠️ bypass（跳过所有审批）')
-  };
+  const _permTileSpecs = permissionModeTileSpecs();
+  const PERM_LABEL = Object.fromEntries(_permTileSpecs.map(s => [s.id, s.bar]));
+  const PERM_PILL_LABEL = Object.fromEntries(_permTileSpecs.map(s => [s.id, s.pill]));
+
+  function rebuildPermissionModeUi() {
+    const specs = permissionModeTileSpecs();
+    if (permModeSelect) {
+      const prev = permModeSelect.value;
+      permModeSelect.innerHTML = '';
+      for (const s of specs) {
+        const opt = document.createElement('option');
+        opt.value = s.id;
+        opt.textContent = s.selectLabel; // CLI 原名，不 t()
+        permModeSelect.appendChild(opt);
+      }
+      if (prev && specs.some(s => s.id === prev)) permModeSelect.value = prev;
+      else if (specs[0]) permModeSelect.value = specs[0].id;
+    }
+    if (customPermGrid) {
+      customPermGrid.innerHTML = '';
+      for (const s of specs) {
+        const dangerCls = s.danger ? ' text-danger' : '';
+        const titleCls = s.danger ? 'text-danger' : 'text-ink';
+        const descCls = s.danger ? 'text-red-500/80' : 'text-ink-soft';
+        const card = el(`
+          <div data-mode="${esc(s.id)}" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all${dangerCls}">
+            <div class="text-xs font-semibold ${titleCls}">${esc(s.title)}</div>
+            <div class="text-xs ${descCls} mt-0.5">${esc(s.desc)}</div>
+          </div>
+        `);
+        customPermGrid.appendChild(card);
+      }
+      // 重建后按当前档重画选中框
+      if (currentPermMode) setPermMode(currentPermMode, true);
+    }
+  }
+  rebuildPermissionModeUi();
+
   function clearCliUnknownPermissionOption() {
     permModeSelect?.querySelector('option[data-cli-observed-unknown]')?.remove();
   }
@@ -3422,17 +3454,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     permModeSelect.classList.toggle('ring-danger', danger);
     permModeSelect.classList.toggle('text-danger', danger);
 
-    // Sync Pill Display Text
+    // Sync Pill Display Text（文案来自 SDK 磁贴规格，未知档回落 mode 字面）
     if (pillPermText) {
-      const labels = {
-        default: t('默认审批'),
-        plan: t('计划模式'),
-        acceptEdits: t('自动接受编辑'),
-        dontAsk: t('免打扰'),
-        auto: 'Auto',
-        bypassPermissions: 'Bypass'
-      };
-      pillPermText.textContent = labels[mode] || mode;
+      pillPermText.textContent = PERM_PILL_LABEL[mode] || mode;
     }
 
     // Sync Custom Perm Tiles Selection Styling
@@ -4927,15 +4951,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
   }
 
+  // 事件委托：磁贴由 rebuildPermissionModeUi 动态生成，不能一次性绑死
   if (customPermGrid) {
-    customPermGrid.querySelectorAll('.perm-tile').forEach(tile => {
-      tile.onclick = () => {
-        haptic('tap');
-        const mode = tile.dataset.mode;
-        if (mode === currentPermMode) return;
-        permModeSelect.value = mode;
-        permModeSelect.onchange();
-      };
+    customPermGrid.addEventListener('click', (ev) => {
+      const tile = ev.target.closest?.('.perm-tile');
+      if (!tile || !customPermGrid.contains(tile)) return;
+      haptic('tap');
+      const mode = tile.dataset.mode;
+      if (!mode || mode === currentPermMode) return;
+      if (permModeSelect) permModeSelect.value = mode;
+      permModeSelect?.onchange?.();
     });
   }
 

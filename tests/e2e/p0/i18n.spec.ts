@@ -40,11 +40,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expect(page.locator('#btnNew')).toHaveAttribute('title', 'New session');
     await expect(page.locator('#btnHome')).toHaveAttribute('aria-label', 'Home');
-    await expect(page.locator('#pillPermText')).toHaveText('Default');
+    // 权限档文案固定 CLI 英文（不走 i18n），en/zh 一致
+    await expect(page.locator('#pillPermText')).toHaveText('Manual');
 
     await page.locator('#pillDefaults').click();
-    // 权限档磁贴：index.html 里是裸文本节点，且中英分属不同分组文案
-    await expect(page.locator('#customPermGrid')).toContainText('Plan mode');
+    await expect(page.locator('#customPermGrid')).toContainText('Plan');
     await expect(page.locator('#customPermGrid')).toContainText('Accept edits');
     await page.keyboard.press('Escape');
 
@@ -83,7 +83,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
 
     await expect(page.locator('#input')).toHaveAttribute('placeholder', '给 Claude 发消息...');
-    await expect(page.locator('#pillPermText')).toHaveText('默认审批');
+    await expect(page.locator('#pillPermText')).toHaveText('Manual');
     await expect(page.locator('#btnNew')).toHaveAttribute('title', '创建新会话');
 
     await expectNoBrowserErrors(page);

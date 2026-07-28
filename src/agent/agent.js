@@ -10,6 +10,7 @@ import { sdkChildEnv } from '../shared/child-env.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
+import { normalizePermissionMode } from './cli-settings-defaults.js';
 
 const BUFFER_CAP = 2000;      // 环形缓冲条数（抬高：长 ultracode/多工具轮少 gap 闪屏；transient 仍不进 buffer）
 const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要默认截断；permission_request 永不截断（4a）
@@ -657,11 +658,13 @@ export class AgentSession {
   }
 
   async setPermissionMode(mode) {
-    const VALID = ['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk', 'auto']; // 'auto'：SDK 用模型分类器自动批准/拒绝权限请求
-    if (!VALID.includes(mode)) {
+    // 白名单 = SDK PermissionMode（CCM_PERMISSION_MODES）；manual → default 见 normalizePermissionMode
+    const normalized = normalizePermissionMode(mode);
+    if (!normalized) {
       this.emit('error', { message: `未知权限档：${mode}`, recoverable: true });
       return false;
     }
+    mode = normalized;
     if (mode === this.permissionMode) return true; // 差分：无变化不调 SDK
     const sdkMode = mode === 'bypassPermissions' ? 'default' : mode;
     try {

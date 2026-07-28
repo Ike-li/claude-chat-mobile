@@ -17,7 +17,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
-import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings } from '../agent/cli-settings-defaults.js';
+import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
@@ -2153,9 +2153,10 @@ registerSocketConnection(io, socket => {
   // 台阶3：切权限档（作用于指定实例，缺省 viewingInstanceId）。即时切（成功才落库 + 广播，失败
   // 时 agent 已 emit error）。无实例则 echo 当前档拨回该 socket，不存储。bypassPermissions 已由前端二次确认。
   on(socket, 'user:setPermissionMode', async payload => {
-    const mode = payload?.mode;
-    if (!['default', 'plan', 'acceptEdits', 'bypassPermissions', 'dontAsk', 'auto'].includes(mode)) {
-      return sysTo(socket, `未知权限档：${mode}`, true);
+    // 白名单 = SDK PermissionMode（CCM_PERMISSION_MODES）；manual 别名 → default
+    const mode = normalizePermissionMode(payload?.mode);
+    if (!mode) {
+      return sysTo(socket, `未知权限档：${payload?.mode}`, true);
     }
     const id = resolveInstanceId(payload?.instanceId); // 台阶3：作用实例（缺省 viewingInstanceId）
     const a = agents.get(id);
