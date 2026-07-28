@@ -325,6 +325,42 @@ test.describe('interrupt()', () => {
     assert.equal(s._interruptSettleTimer, null);
   });
 
+  // 回归：watchdog force 清账后用户又发一轮，迟到的旧 result 不得把新轮 pendingTurns 扣成 0（假 idle）。
+  // 场景要模拟「消息已泵出 this.queue 进 CLI」：queue 空、pendingTurns=1、openTurns 有槽；
+  // 若消息仍在 queue，interrupt 会当排队丢弃并 _dropOpenTurnSlots，不会武装 watchdog。
+  test('watchdog force 清账后新发一轮 + 迟到旧 result → 新轮 pendingTurns 仍为 1', async () => {
+    const { s } = makeSession();
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+    assert.equal(await s.send('old'), true);
+    assert.equal(s.pendingTurns, 1);
+    assert.equal(s._openTurns.length, 1);
+    s.queue = []; // 已泵进 CLI：中断收口靠配对 result / watchdog，而非 queue 丢弃
+    await s.interrupt();
+    assert.equal(s._awaitingInterruptResult, true);
+    assert.equal(s.pendingTurns, 1, '成功路径当下不减：先等 SDK 的终态 result');
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(s.pendingTurns, 0, 'watchdog 已 force 清账');
+    assert.equal(s._openTurns.length, 1, 'force 槽仍在，等迟到 result 出槽');
+    assert.equal(s._openTurns[0].forceSettled, true);
+
+    assert.equal(await s.send('new after force'), true);
+    assert.equal(s.pendingTurns, 1, '新轮在途');
+    assert.equal(s._openTurns.length, 2);
+
+    // 迟到的中断轮 result：只消耗 force 槽，不得 -- 新轮
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    assert.equal(s.pendingTurns, 1, '迟到 result 不得把新轮扣成假 idle');
+    assert.equal(s._openTurns.length, 1);
+    assert.equal(s._openTurns[0].forceSettled, false);
+
+    // 新轮真正结束
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    assert.equal(s.pendingTurns, 0);
+    assert.equal(s._openTurns.length, 0);
+    s.dispose();
+  });
+
   test('SDK interrupt 抛错（无可中断任务）→ 不设置标记，后续 result 不受影响', async () => {
     const { s, events } = makeSession();
     s.q = { interrupt() { return Promise.reject(new Error('no task')); } };
