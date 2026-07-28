@@ -79,7 +79,7 @@ function nextEpoch() {
 // 模型「值」本就经 settingSources 与终端 /model 同步，显示层不应再叠加项目默认。终端友好名不再复刻。
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -157,7 +157,10 @@ export class AgentSession {
     this.permissionMode = permissionMode || 'default';
     // 思考强度档（spawn 时注入 --effort），null=模型默认不传。运行时不可改——
     // SDK 无 effort 控制请求，切档由 server 置换实例（dispose + 下条消息懒重生 resume）
-    this.effort = effort || null;
+    // ultracode：CLI /effort 菜单最高档；SDK Options.effort 不认该字面量——正式路径是
+    // Settings.ultracode + effort xhigh（会话级 flag，不落盘），禁止改写用户消息塞关键词。
+    this.ultracode = Boolean(ultracode);
+    this.effort = this.ultracode ? 'xhigh' : (effort || null);
 
     // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
     this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
@@ -224,7 +227,10 @@ export class AgentSession {
         abortController: this.abort,
         includePartialMessages: true,                        // E4 流式
         forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id），移动端才看得到子 agent 活动；默认 false 只给 tool_use 心跳
-        effort: this.effort || undefined,                    // SDK 0.3+ 一等 Options.effort（low/medium/high/xhigh/max，与终端 /effort 同旋钮）。null=模型默认不传
+        effort: this.effort || undefined,                    // SDK 0.3+ 一等 Options.effort（low/medium/high/xhigh/max）。null=模型默认不传
+        // ultracode 会话 flag（Settings.ultracode）：flag settings 叠加，不替代 user/project/local。
+        // 与 CLI /effort 选 ultracode 同语义（xhigh + standing workflow）；不改写用户正文。
+        ...(this.ultracode ? { settings: { ultracode: true } } : {}),
         permissionMode: this.sdkPermissionMode(),            // bypass 映射为 SDK default（bypass 放行由 handleCanUseTool 自实现）
         // 不注入 options.allowedTools（2026-06-22 解耦）：放行白名单完全交给 settingSources 加载的
         // .claude/settings.json 的 permissions.allow（与终端 claude 同源、用户自管），投屏层不再耦合自家白名单。
@@ -1855,7 +1861,8 @@ export class AgentSession {
   logMeta() {
     return {
       model: this.activeModel || this.reportedModel || this.defaultModel || 'default',
-      effort: this.effort || 'model-default',
+      // UI/日志显 ultracode；SDK 实际 effort 仍是 this.effort（xhigh）
+      effort: this.ultracode ? 'ultracode' : (this.effort || 'model-default'),
       permissionMode: this.permissionMode || 'default'
     };
   }

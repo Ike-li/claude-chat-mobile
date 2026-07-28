@@ -328,30 +328,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 中转站：CLI 给什么展示什么。init 报 opus → pill 是 opus；磁贴 data-model 仍是档位 value。
-  test('P0-09k 模型列表/当前模型原样展示 CLI 值', async ({ page }) => {
+  // 条数=SDK；标题=真实 wire；data-model 仍是 SDK value（opus）
+  test('P0-09k 网关映射：磁贴标题为真实 wire，条数保留档位 value', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:gateway-model-alias');
     await waitForIdle(page);
 
-    await expect(page.locator('#pillModelText')).toHaveText('opus');
+    await expect(page.locator('#pillModelText')).toHaveText('mimo-v2.5-pro-ultraspeed');
 
     await page.locator('#pillDefaults').click();
-    await expect(page.locator('.model-tile[data-model="opus"]')).toBeVisible();
-    await expect(page.locator('.model-tile[data-model="opus"]')).toHaveClass(/ring-accent/);
+    // data-model 仍是 opus（与 TUI 条目对应），主文案是真实 id
+    const opusTile = page.locator('.model-tile[data-model="opus"]');
+    await expect(opusTile).toBeVisible();
+    await expect(opusTile).toContainText('mimo-v2.5-pro-ultraspeed');
+    await expect(opusTile).toHaveClass(/ring-accent/);
     await closeSettings(page);
 
     await expectNoBrowserErrors(page);
   });
 
-  // 新会话未选：pill 用 cwd 默认裸名（原样），不擅自改写成 resolvedModel。
-  test('P0-09l 新会话未选模型：pill 显 cwd 默认原样', async ({ page }) => {
+  test('P0-09l 新会话未选模型：pill 显 cwd 默认的 wire', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:gateway-default-fresh');
     await waitForIdle(page);
 
-    // mock 的 cwd 默认是 opus；中转站原样显示
-    await expect(page.locator('#pillModelText')).toHaveText('opus');
+    await expect(page.locator('#pillModelText')).toHaveText('mimo-v2.5-pro-ultraspeed');
+    await expect(page.locator('#pillModelText')).not.toHaveText(/^opus$/);
 
     await expectNoBrowserErrors(page);
   });

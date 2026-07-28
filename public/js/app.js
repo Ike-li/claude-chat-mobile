@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -354,13 +354,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       || (modelInput?.value || '')
       || (hasCliDefault ? 'default' : '');
 
-    // CLI 列表原样渲染：一条 models 一项磁贴，不按 resolved 去重/改名
+    // 条数 = SDK 列表；标题 = 真实 wire id（resolvedModel），value 仍用 SDK 档位 id
     const tiles = resolveModelTileDisplay(list);
+    const wireOf = (v) => {
+      if (!v || v === 'default') return v || '';
+      return resolveGatewayModelName(v, list) || String(v);
+    };
     tiles.forEach(({ value: val, title, subtitle }) => {
       const display = title;
       const active = val === selectedVal
         || (!!currentModel && val === currentModel)
-        || (!currentModel && val === 'default' && selectedVal === 'default');
+        || (!!currentModel && wireOf(currentModel) && wireOf(currentModel) === wireOf(val))
+        || (!!selectedVal && selectedVal !== 'default' && wireOf(selectedVal) === wireOf(val))
+        || (!currentModel && val === 'default' && (selectedVal === 'default' || !selectedVal));
       const using = active ? t(' · 使用中') : '';
       const card = el(`
         <div data-model="${esc(val)}" class="model-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
@@ -371,9 +377,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       card.onclick = () => {
         if (mirrorReadonlySid) { addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
         haptic('tap');
-        // value=default：select 置空（发送 model=undefined，CLI 自选）
+        // value 保持 SDK 条目 id；发送时 resolveSendModel 再 pin wire
         modelInput.value = val === 'default' ? '' : val;
         delete modelInput.dataset.fullModel;
+        if (val !== 'default') ensureModelOption(val);
         syncModelUI(val === 'default' ? '' : val);
         rebuildEffortOptions(val === 'default' ? (cwdDefaultModel || currentModel) : val);
       };
@@ -2961,17 +2968,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return;
     }
     const rawText = inputEl.value.trim();
-    if (ultracodeArmed && !rawText && attachments.items().length === 0) {
-      addBar(t('ultracode 档需要先输入任务再发送'), 'text-info');
-      inputEl.focus();
-      return;
-    }
-    const text = ultracodeArmed ? withUltracodeKeyword(rawText) : rawText; // ultracode 档：每轮注入关键词触发 Workflow
+    // ultracode 走 SDK Settings.ultracode + xhigh，不再往用户正文塞关键词（透传）
+    const text = rawText;
     if (!text && attachments.items().length === 0) return; // E17：纯附件（空文本）也可发
     // /model 前端拦截——TUI 命令不可透传，映射到 F1 模型切换通道（下一条消息经 setModel 生效）。
     // 纯本地操作，置于断线检查之前；若未来 CLI 把 model 纳入 slash_commands 则让位透传。
-    // 测原始 rawText 而非 text：ultracode 档会给 text 加「ultracode 」前缀，测 text 会让本拦截在
-    // ultracode 武装时失效，/model 命令原样当聊天消息发出去。
     if (/^\/model(\s|$)/.test(rawText) && !(window.availableSkills || []).includes('model')) {
       const arg = rawText.slice(6).trim();
       if (arg) {
@@ -3013,6 +3014,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     let model = resolveSendModel({
       selectValue: modelInput.value,
       fullModel: modelInput.dataset.fullModel || '',
+      modelsList,
     });
     // S5：仅对「不在 supportedModels 候选里的自设名」(如 /model 手设并剥离了后缀的) 回贴网关后缀。
     // 候选内的值本就是网关合法完整名(裸别名 opus/sonnet 或显式 deepseek-v4-pro[1m])，原样发送——
@@ -3679,27 +3681,26 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 失败则 agent 发 error 红条且不广播，下轮 init 拨回 select
   };
 
-  // ---- 思考强度切换（5 档对应终端 /effort；切档=实例置换、下条消息生效）----
+  // ---- 思考强度切换（CLI /effort：五档 + ultracode；切档=实例置换、下条消息生效）----
   // setEffortMode 仅由 effort_mode 服务端事件驱动（成功回执广播 / 拒切拨回单发），onchange 不乐观更新。
+  // 后端可直接回 level=ultracode（Settings.ultracode 会话 flag），不再靠本地「只武装不重建」偷换。
   function setEffortMode(level, silent = false) {
     if (!effortSelect) return;
     const val = level || null; // 空串/undefined 归一为 null（模型默认）
-    // ultracode 档借道 xhigh：后端只回 xhigh，用本地 ultracodeArmed 决定呈现名
+    ultracodeArmed = val === 'ultracode';
     if (!silent && effortSeen && val !== currentEffort) {
-      addModeBar(`${t('思考强度 →')} ${ultracodeArmed ? 'ultracode' : (val || t('模型默认'))}${t('（下一条消息生效）')}`, 'text-ink-faint');
+      addModeBar(`${t('思考强度 →')} ${val || t('模型默认')}${t('（下一条消息生效）')}`, 'text-ink-faint');
     }
     effortSeen = true;
     currentEffort = val;
     effortSelect.value = val || '';
 
-    // Sync Pill Display Text（武装 ultracode 时显 ultracode，而非后端真值 xhigh）
     if (pillEffortText) {
-      pillEffortText.textContent = ultracodeArmed ? 'ultracode' : (val || t('默认思考'));
+      pillEffortText.textContent = val || t('默认思考');
     }
 
-    // Sync Custom Effort Tiles Selection Styling（武装 ultracode 时高亮最高档，而非后端真值 xhigh）
     if (customEffortGrid) {
-      const activeLevel = ultracodeArmed ? 'ultracode' : (val || '');
+      const activeLevel = val || '';
       customEffortGrid.querySelectorAll('.effort-tile').forEach(tile => {
         const tileVal = tile.dataset.level || '';
         const isCurrent = activeLevel === tileVal;
@@ -3811,24 +3812,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (_composeReady) refreshComposeDefaultsSummary();
   }
   effortSelect.onchange = () => {
-    // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例、
-    // 往终端正在写的 transcript 里插 mode 记录行，驾驶期间尤其不该发生。拨回防漂移。
+    // 单驾驶员：终端驾驶中设置冻结（同 permModeSelect.onchange）——effort 切档还会 dispose+重开实例。
     if (mirrorReadonlySid) { effortSelect.value = currentEffort || ''; addBar(t('终端驾驶中，设置已冻结——接管后可调'), 'text-info'); return; }
-    // ultracode 档在 SDK 层不存在：解析成「借道 xhigh + 武装关键词」。effort 始终是后端认得的合法值。
-    const { effort, ultracode } = resolveEffortSelection(effortSelect.value || null);
-    const armedChanged = ultracode !== ultracodeArmed;
-    ultracodeArmed = ultracode;
-    if (effort !== currentEffort) {
-      socket.emit('user:setEffort', { level: effort });
-      // 体感：置换实例有冷启动延迟；server 也会 emit kind:resuming system，这里立刻本地提示一次
-      addModeBar(t('正在切换思考强度并续接会话…'), 'text-ink-faint');
-      // 不乐观更新：成功则 effort_mode 广播拨档 + 上屏（setEffortMode 读 ultracodeArmed 决定显名）；
-      // busy/非法档则 server 发 system 提示并单发当前档拨回本设备 select
-    } else if (armedChanged) {
-      // effort 未变、仅 ultracode 武装态翻转（xhigh ↔ ultracode）：无后端往返、免会话重建，本地即时刷新
-      setEffortMode(currentEffort, true);
-      addModeBar(ultracode ? t('ultracode：xhigh + 多 agent workflow（更彻底，更慢更费额度）') : `${t('思考强度 →')} ${currentEffort || t('模型默认')}`, 'text-ink-faint');
-    }
+    // 原样发 UI 档（含 ultracode）；server 映射 xhigh+Settings.ultracode 并置换实例。xhigh↔ultracode 也必须重建。
+    const uiLevel = effortSelect.value || null;
+    if (uiLevel === currentEffort) return;
+    socket.emit('user:setEffort', { level: uiLevel });
+    addModeBar(t('正在切换思考强度并续接会话…'), 'text-ink-faint');
   };
 
   // ---- 工作目录切换（台阶1：多目录单并发）----

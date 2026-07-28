@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner } from '../../public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -454,80 +454,66 @@ test('modelEntryFor: 子串误匹配防护——mBase 在 base 中间出现但�
   assert.equal(modelEntryFor('deepseek-v3', list), list[0], '精确命中照常');
 });
 
-// 中转站：displayName 优先，不把 resolvedModel 抬成展示名
-test('resolveModelDisplayName: 有 displayName → 用 displayName（忽略 resolvedModel）', () => {
+// select 文案：displayName 优先（方案 B 磁贴用 wire，select 仍可显档位名）
+test('resolveModelDisplayName: 有 displayName → 用 displayName', () => {
   const list = [{ value: 'opus', displayName: 'Opus', resolvedModel: 'mimo-v2.5-pro-ultraspeed' }];
   assert.equal(resolveModelDisplayName('opus', list), 'Opus');
 });
 
-test('resolveModelDisplayName: 无 displayName → 回落 value', () => {
-  const list = [{ value: 'sonnet' }];
-  assert.equal(resolveModelDisplayName('sonnet', list), 'sonnet');
+test('resolveModelDisplayName: 无 displayName → value', () => {
+  assert.equal(resolveModelDisplayName('sonnet', [{ value: 'sonnet' }]), 'sonnet');
 });
 
-test('resolveModelDisplayName: 列表为空/未命中 → 诚实回落原始 value', () => {
-  assert.equal(resolveModelDisplayName('opus', []), 'opus');
-  assert.equal(resolveModelDisplayName('opus', null), 'opus');
-  assert.equal(resolveModelDisplayName('opus', [{ value: 'other' }]), 'opus');
-});
-
-test('resolveModelDisplayName: 空 value → 空字符串', () => {
-  assert.equal(resolveModelDisplayName('', [{ value: 'opus' }]), '');
-  assert.equal(resolveModelDisplayName(null, [{ value: 'opus' }]), '');
-});
-
-test('resolveModelDisplayName: displayName 为空字符串 → 回落 value', () => {
-  const list = [{ value: 'opus', displayName: '', resolvedModel: 'x' }];
-  assert.equal(resolveModelDisplayName('opus', list), 'opus');
-});
-
-test('resolveModelDisplayName: 纯字符串数组 → 精确命中原样', () => {
-  assert.equal(resolveModelDisplayName('opus', ['opus', 'sonnet']), 'opus');
-});
-
-// resolveGatewayModelName 仍可供诊断用；展示主路径不依赖它改写
-test('resolveGatewayModelName: 有 resolvedModel → 返回真实模型名', () => {
-  const list = [{ value: 'opus', displayName: 'Opus', resolvedModel: 'mimo-v2.5-pro-ultraspeed' }];
+test('resolveGatewayModelName: 有 resolvedModel → wire', () => {
+  const list = [{ value: 'opus', resolvedModel: 'mimo-v2.5-pro-ultraspeed' }];
   assert.equal(resolveGatewayModelName('opus', list), 'mimo-v2.5-pro-ultraspeed');
 });
 
-test('resolveGatewayModelName: 无 resolvedModel → 空串', () => {
-  const list = [{ value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)' }];
-  assert.equal(resolveGatewayModelName('claude-3-opus[1m]', list), '');
+// 方案 B pill：优先 wire
+test('resolveModelPillText: 已选 + resolved → 显 wire', () => {
+  const list = [{ value: 'opus', resolvedModel: 'grok-4.5' }];
+  assert.equal(resolveModelPillText({ model: 'opus', modelsList: list }), 'grok-4.5');
 });
 
-// pill / 发送：原样，不映射
-test('resolveModelPillText: 已选 model → 原样（含 gateway 后缀）', () => {
-  assert.equal(resolveModelPillText({ model: 'opus', modelsList: [{ value: 'opus', resolvedModel: 'x' }] }), 'opus');
+test('resolveModelPillText: 已选无 resolved → 原样+后缀', () => {
   assert.equal(resolveModelPillText({ model: 'opus', gatewaySuffix: '[1m]', modelsList: [] }), 'opus[1m]');
 });
 
-test('resolveModelPillText: 空 model + cliDefaultLabel 优先', () => {
+test('resolveModelPillText: 空选 + default.resolved → wire', () => {
+  const list = [
+    { value: 'default', displayName: 'Default (recommended)', resolvedModel: 'grok-4.5[1m]' },
+  ];
   assert.equal(resolveModelPillText({
     model: '',
-    cwdDefaultModel: 'opus',
+    modelsList: list,
+    cliDefaultLabel: 'Default (recommended)',
+  }), 'grok-4.5[1m]');
+});
+
+test('resolveModelPillText: 空选无 wire → cliDefaultLabel', () => {
+  assert.equal(resolveModelPillText({
+    model: '',
+    modelsList: [{ value: 'default', displayName: 'Default (recommended)' }],
     cliDefaultLabel: 'Default (recommended)',
   }), 'Default (recommended)');
 });
 
-test('resolveModelPillText: 空 model + cwdDefault → 裸名', () => {
-  assert.equal(resolveModelPillText({
-    model: '',
-    modelsList: [],
-    cwdDefaultModel: 'claude-opus-4-8[1m]',
-  }), 'claude-opus-4-8');
-});
-
 test('resolveModelPillText: 全空 → 「默认」', () => {
-  assert.equal(resolveModelPillText({ model: '', modelsList: [] }), '默认');
   assert.equal(resolveModelPillText({}), '默认');
 });
 
-test('resolveSendModel: 空/default → undefined；其它原样转发', () => {
-  assert.equal(resolveSendModel({ selectValue: '' }), undefined);
-  assert.equal(resolveSendModel({ selectValue: 'default' }), undefined);
-  assert.equal(resolveSendModel({ selectValue: 'opus' }), 'opus');
-  assert.equal(resolveSendModel({ fullModel: 'claude-3-opus[1m]', selectValue: 'opus' }), 'claude-3-opus[1m]');
+test('resolveSendModel: 空/default pin default wire；档位选中 pin 其 wire', () => {
+  const list = [
+    { value: 'default', resolvedModel: 'grok-4.5' },
+    { value: 'opus', resolvedModel: 'grok-4.5' },
+  ];
+  assert.equal(defaultResolvedModel(list), 'grok-4.5');
+  assert.equal(resolveSendModel({ selectValue: '', modelsList: list }), 'grok-4.5');
+  assert.equal(resolveSendModel({ selectValue: 'default', modelsList: list }), 'grok-4.5');
+  assert.equal(resolveSendModel({ selectValue: 'opus', modelsList: list }), 'grok-4.5'); // pin wire
+  assert.equal(resolveSendModel({ selectValue: 'grok-4.5', modelsList: list }), 'grok-4.5');
+  assert.equal(resolveSendModel({ selectValue: 'haiku', modelsList: [] }), 'haiku'); // 无列表原样
+  assert.equal(resolveSendModel({ selectValue: '', modelsList: [] }), undefined);
 });
 
 // 强度档挂在模型下展示，标题要说清是「谁的」档。与磁贴主标题同源用 displayName，

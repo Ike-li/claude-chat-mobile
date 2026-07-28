@@ -151,44 +151,92 @@ export function shouldEmitModeChangeBar({ emptyStart = false } = {}) {
   return !emptyStart;
 }
 
-// UX-018：模型磁贴 = CLI/SDK supportedModels 原样搬运（value 不改、不按 resolved 去重、不重写标题）。
-// 标题用 CLI 的 displayName；撞车时回退 value 以免整排同名。副标题用 description。
-// resolvedModel 是 SDK 附带元数据，不拿来改写展示或发送——映射交给 CLI/网关，本站只中转。
+// 模型磁贴：条数与 SDK/TUI supportedModels 一一对应（不去重合并）。
+// 标题优先真实 wire id（resolvedModel）；无则 displayName/value。
+// value 仍用 SDK 的 value（default/opus/…）保证可区分；发送时 resolveSendModel 再 pin wire。
 export function resolveModelTileDisplay(models) {
   const list = Array.isArray(models) ? models : [];
   const rows = list.map(m => {
     if (typeof m === 'string') {
-      return { value: m, displayName: m, description: '', raw: m };
+      return { value: m, displayName: m, description: '', resolvedModel: '', raw: m };
     }
     const value = m?.value != null ? String(m.value) : '';
     const displayName = (m?.displayName != null && String(m.displayName).trim())
       ? String(m.displayName).trim()
       : value;
+    const resolvedModel = (m?.resolvedModel != null && String(m.resolvedModel).trim())
+      ? String(m.resolvedModel).trim()
+      : '';
     const description = m?.description != null ? String(m.description) : '';
-    return { value, displayName, description, raw: m };
+    return { value, displayName, description, resolvedModel, raw: m };
   });
-  const counts = new Map();
+
+  // 标题撞车计数（多个档位映射同一 wire 时标题相同，靠副标题档位名区分）
+  const titleKey = (r) => r.resolvedModel || r.displayName || r.value;
+  const titleCounts = new Map();
   for (const r of rows) {
-    const key = r.displayName || r.value;
-    counts.set(key, (counts.get(key) || 0) + 1);
+    const k = titleKey(r);
+    titleCounts.set(k, (titleCounts.get(k) || 0) + 1);
   }
+
   return rows.map(r => {
-    const key = r.displayName || r.value;
-    const duplicate = (counts.get(key) || 0) > 1;
-    const title = duplicate
-      ? (r.value || r.displayName || 'model')
-      : (r.displayName || r.value || 'model');
-    const subtitle = r.description || r.value || '';
-    return { value: r.value, title, subtitle, duplicate, raw: r.raw };
+    const wire = r.resolvedModel;
+    const title = wire || r.displayName || r.value || 'model';
+    // 有 wire：副标题用档位 value/displayName（TUI 档名），便于同 wire 多卡区分
+    // 无 wire：description 或 value
+    let subtitle;
+    if (wire) {
+      if (r.value === 'default') {
+        subtitle = r.displayName && r.displayName !== wire
+          ? r.displayName
+          : (r.description || 'default');
+      } else if (r.value && r.value !== wire) {
+        subtitle = r.displayName && r.displayName !== wire && r.displayName !== r.value
+          ? `${r.value} · ${r.displayName}`
+          : r.value;
+      } else {
+        subtitle = r.description || r.displayName || '';
+      }
+    } else {
+      subtitle = r.description || r.value || '';
+    }
+    const duplicate = (titleCounts.get(titleKey(r)) || 0) > 1;
+    return {
+      value: r.value, // 保持 SDK 条目 id，不与其它卡撞 data-model
+      title,
+      subtitle,
+      duplicate,
+      raw: r.raw,
+    };
   });
 }
 
-// 发送用模型 ID：原样转发 select / fullModel；空与字面 "default" → undefined（CLI 不 pin 自选）。
-// 不读 resolvedModel、不替用户改模型名。
-export function resolveSendModel({ selectValue = '', fullModel = '' } = {}) {
+/** value=default 条目的 resolvedModel（wire），无则 '' */
+export function defaultResolvedModel(modelsList) {
+  if (!Array.isArray(modelsList)) return '';
+  const def = modelsList.find(m => (typeof m === 'string' ? m : m?.value) === 'default');
+  if (!def || typeof def === 'string') return '';
+  return def.resolvedModel != null ? String(def.resolvedModel).trim() : '';
+}
+
+/** 选中 value 对应的 wire；无则 '' */
+export function resolvedModelForValue(value, modelsList) {
+  if (value == null || value === '' || !Array.isArray(modelsList)) return '';
+  const entry = modelsList.find(m => (typeof m === 'string' ? m : m?.value) === value);
+  if (!entry || typeof entry === 'string') return '';
+  return entry.resolvedModel != null ? String(entry.resolvedModel).trim() : '';
+}
+
+// 发送：优先 pin 真实 wire（resolvedModel）；default/空 → default 的 wire，否则 undefined 让 CLI 自选
+export function resolveSendModel({ selectValue = '', fullModel = '', modelsList = [] } = {}) {
   const raw = String(fullModel || selectValue || '').trim();
-  if (!raw || raw === 'default') return undefined;
-  return raw;
+  if (!raw || raw === 'default') {
+    return defaultResolvedModel(modelsList) || undefined;
+  }
+  // 已是 wire 或档位别名：有 resolved 用 wire，否则原样
+  const wire = resolvedModelForValue(raw, modelsList)
+    || resolveGatewayModelName(raw, modelsList);
+  return wire || raw;
 }
 
 // UX-020：同名附件序号；可选大小。
@@ -728,25 +776,24 @@ export function summarizeTurnFileChanges(map) {
   };
 }
 
-// ultracode = CLI /effort 菜单 xhigh 之上的最高档（= xhigh effort + dynamic workflow 编排）。
-// SDK 的 effort flag 只认 low..max、不认 ultracode，故 web 借道「xhigh effort + 每轮注入本关键词」复现：
-// 关键词触发 CLI 的 ultracodeKeywordTrigger → 该轮 opt into Workflow 工具。已有关键词时保持原文，避免叠加。
+// ultracode = CLI /effort 菜单最高档（会话 Settings.ultracode + effort xhigh）。
+// SDK Options.effort 只认 low..max；UI 在 xhigh-capable 上追加 ultracode 菜单项（与 CLI 对齐），
+// spawn 时 server 映射为 effort=xhigh + settings:{ultracode:true}，不改写用户正文。
+// withUltracodeKeyword：仅当用户自己在消息里写 ultracode 时仍原样发送（CLI 关键词 trigger）；Web 切档不自动注入。
 export function withUltracodeKeyword(text) {
   const trimmed = String(text ?? '').trim();
   if (!trimmed) return 'ultracode';
   return /^ultracode(?:\s|$)/i.test(trimmed) ? trimmed : `ultracode ${trimmed}`;
 }
 
-// 思考档位列表拼装：ultracode 仅在模型支持 xhigh 时作为最高档追加（CLI:"Requires an xhigh-capable model"）。
-// 幂等——列表已含 ultracode 则不重复（防 rebuildEffortOptions 反复渲染叠加）。
+// 思考档位列表：ultracode 仅在模型支持 xhigh 时追加（对齐 CLI /effort），幂等。
 export function withUltracodeTier(levels) {
   const arr = Array.isArray(levels) ? levels : [];
   if (!arr.includes('xhigh') || arr.includes('ultracode')) return arr;
   return [...arr, 'ultracode'];
 }
 
-// 选中思考档 → { effort, ultracode }：ultracode 档在 SDK 层不存在，借道 xhigh + 武装每轮关键词；
-// 其余档原样发 effort（空/未选归 null=模型默认）、不武装。effort 值始终是后端白名单认得的合法值。
+// UI 档 → SDK 参数：ultracode → { effort:'xhigh', ultracode:true }；其余原样。
 export function resolveEffortSelection(uiLevel) {
   if (uiLevel === 'ultracode') return { effort: 'xhigh', ultracode: true };
   return { effort: uiLevel || null, ultracode: false };
@@ -813,16 +860,24 @@ export function resolveGatewayModelName(value, modelsList) {
   return '';
 }
 
-// 底栏模型 pill / compose 摘要：原样展示当前/默认，不做 resolved 改写。
-// · 已选 model：value + 网关后缀（若有）
-// · 未选：CLI default 的 displayName，否则 cwd 默认裸名，否则「默认」
-export function resolveModelPillText({ model, gatewaySuffix = '', modelsList: _modelsList, cwdDefaultModel, cliDefaultLabel } = {}) {
+// 底栏 pill：网关场景优先显示 wire（resolvedModel），与磁贴方案 B 一致。
+// · 已选：resolveGatewayModelName 或 value+后缀
+// · 未选：default.resolved → cliDefaultLabel → cwd 默认（经网关解析）→「默认」
+export function resolveModelPillText({ model, gatewaySuffix = '', modelsList, cwdDefaultModel, cliDefaultLabel } = {}) {
   const sfx = gatewaySuffix || '';
-  if (model) return String(model) + sfx;
+  if (model) {
+    const raw = String(model) + sfx;
+    return resolveGatewayModelName(raw, modelsList) || raw;
+  }
+  const defWire = defaultResolvedModel(modelsList);
+  if (defWire) return defWire;
   if (cliDefaultLabel) return String(cliDefaultLabel);
   if (cwdDefaultModel) {
     const full = String(cwdDefaultModel);
-    return full.replace(/\[[^\]]+\]$/, '') || full;
+    const naked = full.replace(/\[[^\]]+\]$/, '');
+    return resolveGatewayModelName(naked, modelsList)
+      || resolveGatewayModelName(full, modelsList)
+      || naked;
   }
   return t('默认');
 }

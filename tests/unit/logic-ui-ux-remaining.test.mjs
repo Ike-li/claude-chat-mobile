@@ -13,63 +13,59 @@ import {
   statusIconSpec,
 } from '../../public/js/logic.js';
 
-// UX-018：CLI 列表原样搬运
-test('resolveModelTileDisplay: 无撞车用 displayName', () => {
+// 条数 = SDK 条数；标题 = 真实 wire id
+test('resolveModelTileDisplay: 无 resolved 时标题用 displayName，value 原样', () => {
   const out = resolveModelTileDisplay([
     { value: 'a', displayName: 'Alpha', description: 'A' },
     { value: 'b', displayName: 'Beta' },
   ]);
+  assert.equal(out.length, 2);
   assert.equal(out[0].value, 'a');
   assert.equal(out[0].title, 'Alpha');
   assert.equal(out[0].subtitle, 'A');
-  assert.equal(out[0].duplicate, false);
   assert.equal(out[1].title, 'Beta');
-  assert.equal(out[1].subtitle, 'b');
-  assert.equal(out[1].duplicate, false);
 });
 
-test('resolveModelTileDisplay: displayName 撞车回退 value', () => {
-  const out = resolveModelTileDisplay([
-    { value: 'grok-4.5-fast', displayName: 'grok-4.5', description: 'fast' },
-    { value: 'grok-4.5', displayName: 'grok-4.5', description: 'base' },
-    { value: 'other', displayName: 'Other' },
-  ]);
-  assert.equal(out[0].title, 'grok-4.5-fast');
-  assert.equal(out[0].subtitle, 'fast');
-  assert.equal(out[0].duplicate, true);
-  assert.equal(out[1].title, 'grok-4.5');
-  assert.equal(out[1].subtitle, 'base');
-  assert.equal(out[1].duplicate, true);
-  assert.equal(out[2].title, 'Other');
-  assert.equal(out[2].duplicate, false);
-});
-
-test('resolveModelTileDisplay: 无 displayName 时 title=value；缺省安全', () => {
-  const out = resolveModelTileDisplay([{ value: 'sonnet' }]);
-  assert.equal(out[0].title, 'sonnet');
-  assert.equal(out[0].subtitle, 'sonnet');
-  assert.equal(out[0].duplicate, false);
+test('resolveModelTileDisplay: 缺省安全', () => {
   assert.deepEqual(resolveModelTileDisplay(null), []);
-  assert.deepEqual(resolveModelTileDisplay(undefined), []);
-  assert.equal(resolveModelTileDisplay(['raw']).length, 1);
   assert.equal(resolveModelTileDisplay(['raw'])[0].title, 'raw');
+  assert.equal(resolveModelTileDisplay(['raw'])[0].value, 'raw');
 });
 
-test('resolveModelTileDisplay: 有 resolvedModel 也不改写——一条 SDK 项一张磁贴、value 原样', () => {
+test('resolveModelTileDisplay: 多档同 wire → 仍 N 张卡，标题都是真实 ID，副标题档位名', () => {
   const out = resolveModelTileDisplay([
     { value: 'default', displayName: 'Default (recommended)', description: 'Use default', resolvedModel: 'grok-4.5[1m]' },
-    { value: 'opus', displayName: 'Custom Opus model', resolvedModel: 'grok-4.5[1m]' },
-    { value: 'sonnet', displayName: 'Custom Sonnet model', resolvedModel: 'grok-4.5[1m]' },
-    { value: 'fable', displayName: 'Custom Fable model', resolvedModel: 'grok-4.5[1m]' },
+    { value: 'opus', displayName: 'Custom Opus model', resolvedModel: 'grok-4.5' },
+    { value: 'sonnet', displayName: 'Custom Sonnet model', resolvedModel: 'grok-4.5' },
+    { value: 'fable', displayName: 'Custom Fable model', resolvedModel: 'grok-4.5' },
+    { value: 'haiku', displayName: 'Custom Haiku model', resolvedModel: 'grok-4.5' },
+    { value: 'grok-4.5-build', displayName: '当前加载模型' },
   ]);
-  assert.equal(out.length, 4);
+  assert.equal(out.length, 6); // 与 TUI/SDK 条数一致，不去重
   assert.equal(out[0].value, 'default');
-  assert.equal(out[0].title, 'Default (recommended)');
-  assert.equal(out[0].subtitle, 'Use default');
+  assert.equal(out[0].title, 'grok-4.5[1m]'); // 真实 ID
+  assert.match(out[0].subtitle, /Default|default/i);
   assert.equal(out[1].value, 'opus');
-  assert.equal(out[1].title, 'Custom Opus model');
+  assert.equal(out[1].title, 'grok-4.5');
+  // 有 wire 时副标题 = 档位 id · displayName（同 wire 多卡靠此区分）
+  assert.equal(out[1].subtitle, 'opus · Custom Opus model');
+  assert.equal(out[2].title, 'grok-4.5');
   assert.equal(out[2].value, 'sonnet');
-  assert.equal(out[3].value, 'fable');
+  assert.equal(out[2].subtitle, 'sonnet · Custom Sonnet model');
+  assert.equal(out[5].value, 'grok-4.5-build');
+  assert.equal(out[5].title, '当前加载模型'); // 无 resolved → displayName
+});
+
+test('resolveModelTileDisplay: 不同 wire 各一张，标题=各自真实 ID', () => {
+  const out = resolveModelTileDisplay([
+    { value: 'opus', resolvedModel: 'mimo-pro' },
+    { value: 'sonnet', resolvedModel: 'mimo-fast' },
+  ]);
+  assert.equal(out.length, 2);
+  assert.equal(out[0].value, 'opus');
+  assert.equal(out[0].title, 'mimo-pro');
+  assert.equal(out[1].value, 'sonnet');
+  assert.equal(out[1].title, 'mimo-fast');
 });
 
 // UX-020

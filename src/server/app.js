@@ -1198,7 +1198,21 @@ if (process.env.CLI_HOOKS_BRIDGE === 'off') {
   console.log('[hooks] CLI hooks 桥未安装：终端直跑的会话仅靠轮询、无推送（npm run hooks:install 或在设置面板一键启用）');
 }
 
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']; // 5 档硬编码，漂移由 smoke-effort 的 CLI warning 检测
+// SDK Options.effort 五档；ultracode 是 CLI /effort 菜单项（→ xhigh + Settings.ultracode），非 effort 枚举字面量
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// UI 合法档 = SDK 五档 + ultracode + null（模型默认）
+function normalizeEffortUiLevel(level) {
+  if (level === null || level === undefined || level === '') {
+    return { ui: null, sdk: null, ultracode: false };
+  }
+  if (level === 'ultracode') {
+    return { ui: 'ultracode', sdk: 'xhigh', ultracode: true };
+  }
+  if (EFFORT_LEVELS.includes(level)) {
+    return { ui: level, sdk: level, ultracode: false };
+  }
+  return null; // 非法
+}
 // 最近一次 init payload + 按 cwd 归键的 models / slashCommands 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
 // 持久化到 data/init-cache.json 跨重启读回（CLI 收到首条消息前不输出 init——init 是轮次开始信号，
 // 预热 spawn 也等不来；缓存可能陈旧但每轮 init 覆盖刷新，文件可随时删除，损坏即当作没有）。
@@ -1443,6 +1457,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   // 这条更权威的历史信号，不读 L3（见 cli-settings-defaults.js 头注）。
   // resume 思考强度：CLI 无对称 transcript 恢复手段（已知边界），2026-07-21 起 saved/inherited 都空时
   // 改读 L3 CLI settings 兜底，不再硬 null——effort 没有比 L3 更权威、可能被误盖的历史信号。
+  // effort 入参/存储可为 UI 档 ultracode（会话 flag，不落 sessions.json 为 ultracode 字面量）。
   const isFresh = !resumeId;
   const fresh = isFresh
     ? resolveFreshPrefs({
@@ -1461,20 +1476,23 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       mode = saved?.permissionMode || transcriptMode || inheritedMode(cwd);
     }
   }
-  let eff;
-  if (effort !== undefined) eff = effort;
+  let effUi;
+  if (effort !== undefined) effUi = effort;
   else if (isFresh) {
-    eff = fresh.effort;
+    effUi = fresh.effort;
     pendingEffortByCwd.delete(cwd);
   } else {
-    eff = resolveResumeEffort({
+    effUi = resolveResumeEffort({
       savedEffort: saved?.effort,
       inheritedEffortValue: inheritedEffort(cwd),
       cliDefaults: cliDefaultsByCwd.get(cwd) || null,
     });
   }
+  // resume 持久化不会保存 ultracode（CLI never persist）→ 规范化后 SDK effort + flag
+  const effNorm = normalizeEffortUiLevel(effUi === undefined ? null : effUi)
+    || { ui: null, sdk: null, ultracode: false };
   permModeByInstance.set(id, mode);
-  effortByInstance.set(id, eff);
+  effortByInstance.set(id, effNorm.ui); // 广播/UI 用（可含 ultracode）
   // 模型：resume 用会话指针；FRESH 仅当 L3 settings.model 有值才 pin（多数环境无此键 → undefined=CLI 自选）
   const startModel = saved?.model || (isFresh ? fresh?.model : undefined) || undefined;
   const instance = new AgentSession({
@@ -1485,7 +1503,8 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // resume 时回传会话原模型名（CLI 自身恢复的是规范化裸名，部分网关不认）——来源仅会话指针
     model: startModel,
     permissionMode: mode,
-    effort: eff,
+    effort: effNorm.sdk,
+    ultracode: effNorm.ultracode,
     idleTimeoutMs,
     instanceIdleReclaimMs,
     approvalTtlMs,
@@ -2201,19 +2220,19 @@ registerSocketConnection(io, socket => {
     });
   });
 
-  // 台阶3：切思考强度档（作用于指定实例）。SDK 无 effort 运行时控制 → 置换该实例（dispose +
-  // open resume 同会话带新 --effort，迁移 viewingInstanceId），一次冷启动。busy（在途轮>0，含审批挂起）
-  // 拒切不杀任务；拒切/非法/无实例 单发当前档拨回该 socket。
+  // 台阶3：切思考强度档。SDK 无 effort 运行时控制 → 置换实例（dispose+resume）。
+  // level：SDK 五档 | ultracode（→ xhigh + Settings.ultracode，不落盘）| null（模型默认）。
   on(socket, 'user:setEffort', async payload => {
-    const level = payload?.level ?? null;
-    const id = resolveInstanceId(payload?.instanceId); // 台阶3：作用实例（缺省 viewingInstanceId）
-    const a = agents.get(id);
-    if (level !== null && !EFFORT_LEVELS.includes(level)) {
-      sysTo(socket, `未知思考强度档：${level}`, true);
+    const rawLevel = payload?.level ?? null;
+    const norm = normalizeEffortUiLevel(rawLevel);
+    if (!norm) {
+      sysTo(socket, `未知思考强度档：${rawLevel}`, true);
       return effortTo(socket);
     }
+    const { ui: level, sdk: sdkEffort, ultracode } = norm;
+    const id = resolveInstanceId(payload?.instanceId);
+    const a = agents.get(id);
     if (!a) {
-      // 新会话懒创建期：暂存 pending effort（按 viewingCwd）+ echo 新档。null（模型默认）合法。
       if (viewingInstanceId === null) {
         pendingEffortByCwd.set(viewingCwd, level);
         socket.emit('agent:event', {
@@ -2222,25 +2241,21 @@ registerSocketConnection(io, socket => {
         });
         return;
       }
-      return effortTo(socket);           // 其他无实例情形：echo 拨回
+      return effortTo(socket);
     }
-    if (level === effortOf(id)) return;  // 幂等：同档不置换实例、不广播
-    // BE-008：后台任务(Workflow/后台 Agent/Bash)运行期 pendingTurns 为 0、挂起审批/问题同理，只查 pendingTurns
-    // 会在这些非 turn 活动进行时 disposeInstance→abort 误杀。改用 isBusy() 综合判定：完全 idle 才允许置换实例。
+    if (level === effortOf(id)) return; // UI 档幂等（xhigh ↔ ultracode 不同，须置换）
     if (a.isBusy()) {
       sysTo(socket, '当前有任务在运行，请等结束后再切思考强度', true);
       return effortTo(socket);
     }
     const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, disposedId = id;
-    interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}, 正在置换实例...`);
-    if (sid) sessions.updateSessionPrefs(sid, { effort: level }); // 持久化，resume 恢复用（先于 dispose，防崩溃丢档）
-    // 体感：effort 换实例是冷启动，先推 system 让前端立刻显「正在续接」
+    interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
+    // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
+    if (sid) sessions.updateSessionPrefs(sid, { effort: sdkEffort });
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: sid, instanceId: id, ts: Date.now(),
       type: 'system', payload: { message: '正在切换思考强度并续接会话…', kind: 'resuming' }
     });
-    // SRV-NEW-003：silent dispose + dedupedResume（single-flight），避免并发 setEffort 双开 CLI；
-    // claim 用 shouldClaimViewingAfterSwap，同步 viewingCwd（旧实现只改 instanceId）。
     disposeInstance(disposedId, { reselect: false });
     const ni = await dedupedResume(cwd, sid, { mode, effort: level });
     if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
@@ -2249,7 +2264,7 @@ registerSocketConnection(io, socket => {
     } else if (viewingInstanceId === disposedId) {
       reselectViewingAfter(cwd);
     }
-    io.to('approved').emit('agent:event', { // SEC-01：仅广播给已批准设备
+    io.to('approved').emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: ni.instanceId, ts: Date.now(),
       type: 'effort_mode', payload: { level }
     });

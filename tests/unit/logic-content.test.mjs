@@ -406,7 +406,7 @@ test('withUltracodeTier: 含 xhigh 才追加 ultracode 最高档（镜像 CLI /e
   assert.deepEqual(withUltracodeTier(null), []);
 });
 
-test('resolveEffortSelection: ultracode 档借道 xhigh + 武装关键词，其余档不武装', () => {
+test('resolveEffortSelection: ultracode → xhigh + flag；其余档不武装', () => {
   assert.deepEqual(resolveEffortSelection('ultracode'), { effort: 'xhigh', ultracode: true });
   assert.deepEqual(resolveEffortSelection('xhigh'), { effort: 'xhigh', ultracode: false });
   assert.deepEqual(resolveEffortSelection('low'), { effort: 'low', ultracode: false });

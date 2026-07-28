@@ -135,7 +135,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-02e ultracode 快捷发送只注入一次关键词', async ({ page }) => {
+  test('P0-02e ultracode 档不改写用户正文（Settings.ultracode 会话 flag）', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);
 
@@ -148,18 +148,19 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await closeSettings(page);
     await expect(page.locator('#settingsSheet')).toHaveClass(/translate-y-full/);
 
+    // 正文保持用户原样，不再自动注入 ultracode 前缀
     await sendChatMessage(page, 'test:workflow-echo');
-    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('ultracode test:workflow-echo');
+    await waitForIdle(page);
     const firstText = await page.locator('[data-testid="user-message"]').last().innerText();
-    expect(firstText.match(/\bultracode\b/g)).toHaveLength(1);
-    await waitForIdle(page);
-    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('ultracode mock response');
+    expect(firstText).toContain('test:workflow-echo');
+    expect(firstText.match(/\bultracode\b/g) || []).toHaveLength(0);
 
+    // 用户自行写 ultracode 关键词仍原样发送（CLI 关键词 trigger）
     await sendChatMessage(page, 'ultracode test:workflow-echo');
-    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('ultracode test:workflow-echo');
-    const secondText = await page.locator('[data-testid="user-message"]').last().innerText();
-    expect(secondText.match(/\bultracode\b/g)).toHaveLength(1);
     await waitForIdle(page);
+    const secondText = await page.locator('[data-testid="user-message"]').last().innerText();
+    expect(secondText).toContain('ultracode test:workflow-echo');
+    expect(secondText.match(/\bultracode\b/g)).toHaveLength(1);
 
     await expectNoBrowserErrors(page);
   });
