@@ -8,9 +8,9 @@
 // .env FILE_EDIT=off 整体回到只读（server.js 读取，见其头注）。
 // 透明性权衡（显式抉择，承接 docs/design.md）：范围内内容不做敏感过滤（.env 等照读）——机主即 root +
 // 终端 TUI 语义等同，防线在范围门（WorkdirScopeGuard）不在内容审查，本模块不自作主张加过滤。
-import { readdirSync, lstatSync, fstatSync, openSync, readSync, writeSync, ftruncateSync, closeSync, constants } from 'node:fs';
+import { readdirSync, lstatSync, fstatSync, openSync, readSync, closeSync, renameSync, unlinkSync, writeFileSync, constants } from 'node:fs';
 import { isUtf8 } from 'node:buffer';
-import { join } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import { isInScope } from './workdir-scope-guard.js';
 
@@ -183,8 +183,16 @@ export function writeFileInScope(cwd, relPath, content, scopeDirs, { baseHash } 
     if (currentHash !== baseHash) {
       return { ok: false, code: 'conflict', error: '文件已被修改（可能是 Claude 正在改），请刷新后重试' };
     }
-    ftruncateSync(fd, 0);
-    writeSync(fd, contentBuf, 0, contentBuf.length, 0);
+    // 先写同目录临时文件再 rename：避免 ftruncate(0) 后 write 失败把已有内容清空（I4）。
+    // 仍先 O_RDWR|O_NOFOLLOW 打开目标做 scope/类型/baseHash 校验；临时文件不带 O_CREAT 到目标 inode。
+    const tmp = join(dirname(real), `.ccm-edit-${basename(real)}.${process.pid}.${Date.now()}.tmp`);
+    try {
+      writeFileSync(tmp, contentBuf, { flag: 'wx' }); // wx：不覆盖已有 tmp
+      renameSync(tmp, real); // 同卷原子替换
+    } catch (err) {
+      try { unlinkSync(tmp); } catch { /* tmp 可能未创建或已 rename */ }
+      return { ok: false, code: 'write_failed', error: err?.message || '写入失败' };
+    }
     return { ok: true, contentHash: createHash('sha256').update(contentBuf).digest('hex'), bytesWritten: contentBuf.length };
   } finally {
     closeSync(fd);

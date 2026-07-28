@@ -398,6 +398,38 @@ test.describe('per-turn turnStartedAt / turnOutputTokens', () => {
     s.dispose();
   });
 
+  // 真 bug：流式 message_delta 常只带 output_tokens；整对象覆盖会把上一轮 input/cache 抹成 0，
+  // statusline 出现 uncached 0 / left 1.0m/1.0m。合并只更新出现的有限数字段。
+  test('message_delta 残缺 usage 合并 lastUsage，不得抹掉 input/cache', async () => {
+    const { s } = makeSession();
+    await s.send('hi');
+    s.lastUsage = {
+      input_tokens: 12_000,
+      output_tokens: 100,
+      cache_creation_input_tokens: 3_000,
+      cache_read_input_tokens: 8_000,
+    };
+    s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } });
+    s.map({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 50 } } });
+    assert.equal(s.lastUsage.input_tokens, 12_000);
+    assert.equal(s.lastUsage.cache_creation_input_tokens, 3_000);
+    assert.equal(s.lastUsage.cache_read_input_tokens, 8_000);
+    assert.equal(s.lastUsage.output_tokens, 50);
+    // 完整帧可覆盖 input；未出现的 cache 字段仍保留
+    s.map({
+      type: 'stream_event',
+      event: {
+        type: 'message_delta',
+        usage: { input_tokens: 13_000, output_tokens: 80, cache_read_input_tokens: 9_000 },
+      },
+    });
+    assert.equal(s.lastUsage.input_tokens, 13_000);
+    assert.equal(s.lastUsage.output_tokens, 80);
+    assert.equal(s.lastUsage.cache_read_input_tokens, 9_000);
+    assert.equal(s.lastUsage.cache_creation_input_tokens, 3_000);
+    s.dispose();
+  });
+
   test('流式路径 assistant 收尾同 usage 不重复计；非流式网关 assistant 兜底累计', async () => {
     const { s } = makeSession();
     await s.send('hi');

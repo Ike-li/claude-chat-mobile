@@ -99,6 +99,14 @@ export function isAllowedWorkdir(cwd, dirs, knownWorktrees) {
   return typeof repo === 'string' && isWhitelisted(repo, dirs);
 }
 
+// 新开/首发归位：已注册 worktree 保留；否则与 ensureWhitelisted 同——越界/热移除夯到 dirs[0]。
+// session:switch 已有 knownWorktrees.has 例外；session:new/user:message 原先只 ensureWhitelisted，
+// 会把 worktree 新建夯回主仓（K1）。
+export function ensureAllowedWorkdir(cwd, dirs, knownWorktrees) {
+  if (isAllowedWorkdir(cwd, dirs, knownWorktrees)) return cwd;
+  return Array.isArray(dirs) && dirs.length ? dirs[0] : cwd;
+}
+
 // SS-004：与 history.getProjectDir / CLI 同规则（非字母数字 → '-'）。
 // 放在本模块避免 workdirs↔history 循环耦合；history 仍是路径编码的 SoT 实现。
 function projectDirKey(cwd) {

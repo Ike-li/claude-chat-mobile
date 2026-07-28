@@ -171,9 +171,16 @@ const NTFY_TAGS = {
   result: ['white_check_mark'],
   task_notification: ['robot'],
   background_running: ['hourglass_flowing_sand'],
+  // CLI hooks 桥：Stop=完成；Notification=需要你（不得误用 result 的 checkmark + priority 3，J3）
+  cli_hook_stop: ['white_check_mark'],
+  cli_hook_notification: ['warning', 'bell'],
 };
 export function ntfyMetaFor(type, data = {}, publicUrl = '') {
-  const priority = (type === 'permission_request' || type === 'question') ? 5 : 3;
+  const priority = (
+    type === 'permission_request'
+    || type === 'question'
+    || type === 'cli_hook_notification'
+  ) ? 5 : 3;
   const tags = NTFY_TAGS[type] || [];
   let click;
   if (publicUrl && data && data.instanceId) {

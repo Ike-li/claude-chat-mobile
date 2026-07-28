@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -765,6 +765,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const notifications = createNotificationController(appContext, {
     addBar,
     getToken: () => token,
+    getDeviceToken: () => deviceToken,
     // 铃铛只当「未订阅」的可见信号，不自己解释——把人带到通用设置的推送段，
     // 那里的 #pushStatusRow 才说得全（当前状态 + 为什么 + 下一步点哪）。两套解释各说各话
     // 是这块历史上真出过问题的地方。general 在文件后段才定义，靠闭包延迟到点击时求值。
@@ -937,7 +938,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         replayBuffer.resolve(replayHandle, 'discard');
         return;
       }
-      const a = syncAckAction(err, res);
+      const a = syncAckAction(err, res, {
+        seenDiskLen: seenDiskLenBySession.get(reqSessionId) ?? 0,
+      });
       if (a === 'reconnect') {
         // 整条连接都要重来：缓冲内容从未渲染过，纯丢弃、不推进续传基线——重连后新一轮 sync:since
         // 会用旧基线重新取，否则这批事件会被当成"已处理过"永久丢失（见 createReplayBuffer resolve 注释）。
@@ -1715,8 +1718,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         else { opt.value = m.value; opt.textContent = resolveModelDisplayName(m.value, modelsList); }
         modelInput.appendChild(opt);
       });
-      // 预选：有 currentModel 用它；否则 CLI default；再不济留空
-      if (currentModel) {
+      // 预选：若用户已选「下一条才生效」的待发模型，保留 modelInput（H2）；
+      // 否则 currentModel → CLI default → 空。
+      const pendingSend = (modelInput.dataset.fullModel || modelInput.value || '').trim();
+      const pendingIsIntentional = !!(pendingSend && pendingSend !== 'default' && pendingSend !== (currentModel || ''));
+      if (pendingIsIntentional) {
+        ensureModelOption(pendingSend);
+        modelInput.value = pendingSend;
+        rebuildCustomModelGrid(modelsList);
+      } else if (currentModel) {
         ensureModelOption(currentModel);
         modelInput.value = currentModel;
         syncModelUI(currentModel);
@@ -2175,6 +2185,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       if (p.kind === 'interrupted') {
         finalizeStreams();
+        // E3：interrupt 成功/settleForce 走 system interrupted 时没有 result，须收口工具卡与子 agent 卡
+        failPendingToolCards(t('已中止'));
+        markAllSubagentCardsDone();
         _pendingSendBusySessionId = null;
         setBusy(false);
         hideActivityBanner();
@@ -2207,9 +2220,23 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       // 空启动页采用极简底部：模型/权限/思考 chips 即可，statusLine 进入消息流后再显示。
       if (messagesEl.classList.contains('empty-start')) return;
-      const fmtTok = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n);
+      // 与 statuslineFmtTok 同边界：round 到 k 后 ≥1000 抬 m，避免 1000k
+      const fmtTok = n => {
+        if (n >= 1e6) return (n / 1e6).toFixed(1) + 'm';
+        if (n >= 1e3) { const k = Math.round(n / 1e3); return k >= 1000 ? (k / 1000).toFixed(1) + 'm' : k + 'k'; }
+        return String(n);
+      };
       const fmtMs = ms => { const s = Math.floor(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}h${String(m).padStart(2, '0')}m` : m ? `${m}m${String(x).padStart(2, '0')}s` : `${x}s`; };
-      const fmtTokF = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'm' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n); // 带 1 位小数（token 明细，匹配 cli 的 2.1k/199.6k）
+      // F2：带 1 位小数；≥1000.0k 抬 m，避免 1000.0k
+      const fmtTokF = n => {
+        if (n >= 1e6) return (n / 1e6).toFixed(1) + 'm';
+        if (n >= 1e3) {
+          const k = n / 1e3;
+          if (k >= 1000) return (k / 1000).toFixed(1) + 'm';
+          return k.toFixed(1) + 'k';
+        }
+        return String(n);
+      };
       // 额度重置倒计时：ISO resets_at → 相对时长（对齐 CLI statusline `reset 2h05m`）
       const fmtReset = iso => {
         if (!iso) return '';
@@ -2308,11 +2335,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         gitNode = span(b, 'text-accent font-medium');
       }
       // ctx 段：有 usedPercent → 'ctx X% · left Y/Z'（Y=剩余 Z=窗口总量，对齐本机 CLI statusline.sh 里
-      // elif 分支已用的 '/' 记法，这里扩展到有百分比的分支）；否则退回绝对 token 数（认不出 model 的窗口）
+      // elif 分支已用的 '/' 记法，这里扩展到有百分比的分支）；否则退回绝对 token 数（认不出 model 的窗口）。
+      // left 走 formatStatuslineCtxLeft：优先 totalTokens（与 usedPercent 同源），避免 lastUsage=0 假 1.0m/1.0m。
       let ctxSeg = null;
       if (p.ctx && Number.isFinite(p.ctx.usedPercent)) {
         let txt = `ctx ${p.ctx.usedPercent}%`;
-        if (Number.isFinite(p.ctx.windowSize)) txt += ` · left ${fmtTok(Math.max(0, p.ctx.windowSize - p.ctx.tokens))}/${fmtTok(p.ctx.windowSize)}`;
+        const left = formatStatuslineCtxLeft(p.ctx);
+        if (left) txt += ` · ${left}`;
         const pc = p.ctx.usedPercent; // 蓝(健康)→橙(≥70)→红(≥90) 三段警示
         ctxSeg = { text: txt, cls: pc >= 90 ? 'text-danger' : pc >= 70 ? 'text-warning' : 'text-ink-soft' }; // UI-011 数据色非链接蓝
       } else if (p.ctx && Number.isFinite(p.ctx.tokens)) {
@@ -3143,11 +3172,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       logClientEvent('send', `[WEB_SEND] 在线发送未确认：${decision.message || ack?.error || err?.message || 'unknown'}`);
       if (decision.requeue) {
         enqueueOutbox(outboxPayload);
-        // 视图仍在本会话时提示已排队；切走则静默入队，靠 reconnect drain
+        // 视图仍在本会话时提示已排队；切走则静默入队
         if (displayedInstanceId === reqInstanceId && displayedSessionId === reqSessionId) {
           if (decision.clearBusy) setBusy(false);
           if (decision.message) addBar(decision.message, 'text-danger');
         }
+        // 长连接 timeout 入队后若仍 connected，不能只等 reconnect（J1）
+        if (socket.connected) setTimeout(() => { try { processOfflineQueue(); } catch { /* noop */ } }, 500);
         return;
       }
       // WS-003：迟到负 ack 守卫——发起后若已切到别的会话/实例，本次发送的失败反馈不该出现在当前视图上
@@ -5817,8 +5848,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       : null;
     // 与底栏 pill 同源（resolveModelPillText）：新会话空 model 时同样把 cwd 默认别名解析成真实模型名，
     // 不再各猜一套 / 靠读 pill DOM 文案兜底。
+    // H3：compose 摘要与底栏 pill 同源——优先待发 modelInput（下一条才生效），否则 currentModel
+    const pendingModel = (modelInput?.dataset?.fullModel || modelInput?.value || '').trim();
+    const modelForSummary = (pendingModel && pendingModel !== 'default') ? pendingModel : currentModel;
     const modelLabel = resolveModelPillText({
-      model: currentModel,
+      model: modelForSummary,
       gatewaySuffix: currentGatewaySuffix,
       modelsList,
       cwdDefaultModel,
@@ -6696,12 +6730,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!mirrorReadonlySid) return;
     if (armedTakeoverSid === mirrorReadonlySid) { // 取消排队中的续接，回退只读态
       armedTakeoverSid = null;
-      applyMirror(true, mirrorReadonlySid, false);
+      // 保留 autonomous 标志，避免本地 apply 把「自主循环」文案抹成「终端会话」（C1）
+      applyMirror(true, mirrorReadonlySid, false, undefined, mirrorAutonomousFlag);
       return;
     }
     if (!mirrorStaleFlag) { // 运行中：排队等待，零风险故无需确认弹窗
       armedTakeoverSid = mirrorReadonlySid;
-      applyMirror(true, mirrorReadonlySid, false);
+      applyMirror(true, mirrorReadonlySid, false, undefined, mirrorAutonomousFlag);
       addBar(t('已请求续接 CLI 会话：终端当前操作完成后自动切换，可点「取消续接」撤销'), 'text-ink-faint');
       return;
     }

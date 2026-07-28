@@ -8,7 +8,7 @@ import { realpathSync } from 'node:fs';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
-  findProjectDirCollisions, isAllowedWorkdir, resolveWorkdirsFilePath,
+  findProjectDirCollisions, isAllowedWorkdir, ensureAllowedWorkdir, resolveWorkdirsFilePath,
 } from '../../src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -220,5 +220,18 @@ test.describe('resolveWorkdirsFilePath', () => {
   });
   test('相对路径与 baseDir 拼接', () => {
     assert.equal(resolveWorkdirsFilePath('workdirs.json', '/app'), join('/app', 'workdirs.json'));
+  });
+});
+
+
+test.describe('ensureAllowedWorkdir（worktree 新建不夯回主仓，K1）', () => {
+  test('已注册 worktree 保留', () => {
+    const dirs = ['/repo/a'];
+    const wt = new Map([['/repo/a/.worktrees/promo', '/repo/a']]);
+    assert.equal(ensureAllowedWorkdir('/repo/a/.worktrees/promo', dirs, wt), '/repo/a/.worktrees/promo');
+  });
+  test('未注册路径夯到 dirs[0]', () => {
+    const dirs = ['/repo/a', '/repo/b'];
+    assert.equal(ensureAllowedWorkdir('/elsewhere', dirs, new Map()), '/repo/a');
   });
 });

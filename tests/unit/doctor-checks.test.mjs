@@ -190,11 +190,12 @@ test.describe('classifyDeviceGateTopology（AUTH-003）', () => {
     assert.equal(r.status, 'ok');
     assert.equal(r.safe.risk, 'none');
   });
-  test('有 AUTH_TOKEN 无 CF Access → warn tunnel_skips_device_gate', () => {
+  test('有 AUTH_TOKEN 无 CF Access → ok（Host 感知设备门，A2 不再误报 tunnel 跳过）', () => {
     const r = classifyDeviceGateTopology({ authTokenSet: true, cfEnabled: false });
-    assert.equal(r.status, 'warn');
-    assert.equal(r.safe.risk, 'tunnel_skips_device_gate');
-    assert.match(r.detail, /设备指纹|CF Access/);
+    assert.equal(r.status, 'ok');
+    assert.equal(r.safe.risk, 'none');
+    assert.equal(r.safe.note, 'host_aware_device_gate');
+    assert.match(r.detail, /设备门|CF Access/);
   });
   test('无 AUTH_TOKEN → ok（仅本机）', () => {
     const r = classifyDeviceGateTopology({ authTokenSet: false, cfEnabled: false });

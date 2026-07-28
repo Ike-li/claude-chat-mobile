@@ -249,6 +249,7 @@ export function registerOperationalRoutes({
   getHealth,
   getMetrics,
   push,
+  isDeviceTrusted, // optional (token)=>bool；提供时 /push/subscribe 须绑已信任设备（A1）
 }) {
   app.get('/health', httpAuth, (_req, res) => res.json(getHealth()));
   app.get('/metrics', httpAuth, (_req, res) => res.json(getMetrics()));
@@ -261,8 +262,19 @@ export function registerOperationalRoutes({
   app.post('/push/subscribe', httpAuth, express.json({ limit: '4kb' }), (req, res) => {
     if (!push.enabled) return res.status(503).json({ error: 'push not configured' });
     if (!push.isValidSubscription(req.body)) return res.status(400).json({ error: 'invalid subscription' });
-    push.saveSubscription(req.body);
-    console.log('[push] 订阅已保存:', req.body.endpoint.slice(0, 60) + '…');
+    // 第二因子：仅已批准设备可登记推送（A1）。deviceToken 来自身体或头，与 socket auth 同源。
+    if (typeof isDeviceTrusted === 'function') {
+      const deviceToken = (req.body && req.body.deviceToken)
+        || req.get('x-device-token')
+        || '';
+      if (!isDeviceTrusted(deviceToken)) {
+        return res.status(403).json({ error: 'device not trusted' });
+      }
+    }
+    // 不把 deviceToken 写入订阅文件（非 web-push 字段）
+    const { deviceToken: _dt, ...sub } = req.body && typeof req.body === 'object' ? req.body : {};
+    push.saveSubscription(sub.endpoint ? sub : req.body);
+    console.log('[push] 订阅已保存:', (req.body.endpoint || '').slice(0, 60) + '…');
     return res.json({ ok: true });
   });
 }

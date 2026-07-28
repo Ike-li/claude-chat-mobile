@@ -16,7 +16,7 @@ export function createStatusScenarios(getContext) {
             ts: now,
             model: 'Opus 4.8', effort: 'max', thinking: { enabled: true },
             project: 'claude-chat-mobile', cwd: '/Users/you/code/claude-chat-mobile',
-            ctx: { tokens: 45_000, in: 2_000, out: 1_500, w: 22_000, r: 21_000, usedPercent: 23, windowSize: 200_000 },
+            ctx: { tokens: 45_000, totalTokens: 45_000, in: 2_000, out: 1_500, w: 22_000, r: 21_000, usedPercent: 23, windowSize: 200_000 },
             session: { id: '784e20b1-a550-45d1-874b-13b5f55eeb46' },
             version: '2.1.210',
             source: { kind: 'cli', capturedAt: now, ageMs: 25 },
@@ -82,7 +82,7 @@ export function createStatusScenarios(getContext) {
             project: 'claude-chat-mobile',
             cwd: '/Users/you/code/claude-chat-mobile',
             git: { branch: 'feature/visual-testing', changed: 3, staged: 2, modified: 1, untracked: 0, ahead: 2, behind: 0, repo: 'Ike-li/claude-chat-mobile' },
-            ctx: { tokens: 45000, cacheHitPct: 45, in: 2000, out: 1500, w: 22000, r: 21000, usedPercent: 23, windowSize: 200000 },
+            ctx: { tokens: 45000, totalTokens: 45000, cacheHitPct: 45, in: 2000, out: 1500, w: 22000, r: 21000, usedPercent: 23, windowSize: 200000 },
             rate: {
               fiveHour: { usedPercent: 42, resetsAt: new Date(now + 2 * 3600_000).toISOString() },
               sevenDay: { usedPercent: 11, resetsAt: new Date(now + 3 * 86400_000).toISOString() },

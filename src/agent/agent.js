@@ -78,6 +78,20 @@ function nextEpoch() {
 // 理由：手维护的映射会跑偏（曾把裸 claude-opus-4-8 误标「(1M context)」与真 [1m] 变体撞车成双 Opus）；
 // 模型「值」本就经 settingSources 与终端 /model 同步，显示层不应再叠加项目默认。终端友好名不再复刻。
 
+// message_delta 常只带 output_tokens；整对象覆盖会抹掉 input/cache → statusline uncached 0。
+// 白名单合并：只写入下一帧里出现的非负有限数字段，保留 prev 其余字段。
+const MESSAGE_USAGE_KEYS = Object.freeze([
+  'input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens',
+]);
+export function mergeMessageUsage(prev, next) {
+  if (!next || typeof next !== 'object') return prev && typeof prev === 'object' ? { ...prev } : null;
+  const out = prev && typeof prev === 'object' ? { ...prev } : {};
+  for (const k of MESSAGE_USAGE_KEYS) {
+    if (Number.isFinite(next[k]) && next[k] >= 0) out[k] = next[k];
+  }
+  return out;
+}
+
 export class AgentSession {
   constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
@@ -626,7 +640,7 @@ export class AgentSession {
       }
       // SDK 无在途任务 → 不丢消息：把 toDrop 放回队列头部（await 期间新发的接其后），pendingTurns 不动。
       this.queue = toDrop.concat(this.queue);
-      this.emit('system', { message: '当前没有可中断的任务' });
+      this.emit('system', { kind: 'no_interruptible_task', message: '当前没有可中断的任务' });
       _diagOutcome = 'no_task';
     }
     } finally {
@@ -1613,10 +1627,11 @@ export class AgentSession {
             }
           }
         } else if (ev.type === 'message_delta' && ev.usage) {
-          // E16：流式模式下从 message_delta 提取 usage（SDK 在此事件返回 input/cache/output tokens）
-          this.lastUsage = ev.usage;
+          // E16：流式 message_delta 的 usage 常只有 output_tokens（见 agent-events 单测 fixture）。
+          // 合并进 lastUsage，禁止整对象覆盖把 input/cache 抹成 0（statusline uncached 0 / left 假满窗）。
+          this.lastUsage = mergeMessageUsage(this.lastUsage, ev.usage);
           // per-turn 输出 token：message 内 usage.output_tokens 是累计值，对水位取增量（防同 message 重复计）
-          const out = ev.usage.output_tokens || 0;
+          const out = Number.isFinite(ev.usage.output_tokens) ? ev.usage.output_tokens : 0;
           this.turnOutputTokens += Math.max(0, out - this._msgOutBase);
           this._msgOutBase = Math.max(this._msgOutBase, out);
           // 此处只更新 lastUsage 供 ctx% 即时刷新（不等 assistant 边界）
@@ -1636,15 +1651,47 @@ export class AgentSession {
           // 记住该子 agent 的类型：后续 stream_event（delta）/ user（tool_result）都不带 subagent_type，靠此缓存补标签。
           // 非 null 保护：一旦记住有效类型，不被后续不带 subagent_type 的同 parent 消息抹成 null。
           if (subType != null) this.subagentTypeByParent.set(msg.parent_tool_use_id, subType);
+          // msg.error：子 agent 自身 API 失败仍不冒泡主会话（P0 守卫）；也不把错误正文当 text_delta。
+          // 非流式成功路径：assistant 上的 text/thinking 须兜底 emit（E1），否则折叠卡 body 空白。
+          if (msg.error) break;
           for (const block of msg.message?.content ?? []) {
-            if (block.type === 'tool_use') {
+            if (block.type === 'text' && block.text) {
+              this.emit('text_delta', {
+                messageId: msg.uuid,
+                text: block.text,
+                parentToolUseId: msg.parent_tool_use_id,
+                subagentType: subType,
+              });
+            } else if (block.type === 'thinking' && block.thinking) {
+              this.emit('thinking_delta', {
+                messageId: msg.uuid,
+                text: block.thinking,
+                parentToolUseId: msg.parent_tool_use_id,
+                subagentType: subType,
+              });
+            } else if (block.type === 'tool_use') {
               this.rememberToolName(block.id, block.name);
+              let file; // E2：子 agent 内文件工具也要缓存 input + file 字段，否则嵌套预览永不可用
+              if (FILE_TOOLS.has(block.name)) {
+                const pth = toolFilePath(block.input);
+                if (pth) {
+                  this.cacheToolInput(block.id, block.name, block.input);
+                  const stats = estimateMutationLineStats(block.name, block.input);
+                  file = {
+                    path: truncate(String(pth), 1024),
+                    changeKind: TOOL_CHANGE_KIND[block.name],
+                    added: stats.added,
+                    removed: stats.removed,
+                  };
+                }
+              }
               this.emit('tool_use', {
                 toolUseId: block.id,
                 name: block.name,
                 inputSummary: truncate(stringify(redactBase64(block.input)), TOOL_SUMMARY_CAP),
                 parentToolUseId: msg.parent_tool_use_id,
                 subagentType: subType,
+                ...(file ? { file } : {}),
               });
             }
           }
@@ -1669,7 +1716,8 @@ export class AgentSession {
         // E16：单次 API 调用口径的 usage（stream_event 在非流式网关缺席、result.usage 轮内聚合高估 ctx）；
         // subagent 消息已被上方 parent_tool_use_id 守卫排除
         if (msg.message?.usage) {
-          this.lastUsage = msg.message.usage; // 单轮口径（ctx% / in:out:w:r:）
+          // 完整帧通常带齐字段；仍走合并，避免网关残缺帧抹掉此前 cache 读/写
+          this.lastUsage = mergeMessageUsage(this.lastUsage, msg.message.usage); // 单轮口径（ctx% / in:out:w:r:）
           // per-turn 输出 token 兜底：非流式网关无 message_delta，在 assistant 边界补增量；
           // 流式路径 message_delta 已计到同水位 → 增量为 0 不双计。message 收尾，水位归零。
           const out = msg.message.usage.output_tokens || 0;

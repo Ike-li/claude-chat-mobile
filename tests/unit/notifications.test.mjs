@@ -439,3 +439,17 @@ test.describe('clearNotifyPending', () => {
     assert.equal(r2.throttled, true, 'clear 只清未决标记，不重置最小间隔计时');
   });
 });
+
+
+test('ntfyMetaFor: CLI Notification hook → priority 5 + warning（J3，非 result checkmark）', () => {
+  const m = ntfyMetaFor('cli_hook_notification', {}, 'https://ex.example');
+  assert.equal(m.priority, 5);
+  assert.ok(m.tags.includes('warning'));
+  assert.equal(m.tags.includes('white_check_mark'), false);
+});
+
+test('ntfyMetaFor: CLI Stop hook → priority 3 + checkmark', () => {
+  const m = ntfyMetaFor('cli_hook_stop', {});
+  assert.equal(m.priority, 3);
+  assert.ok(m.tags.includes('white_check_mark'));
+});

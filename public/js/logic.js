@@ -459,7 +459,9 @@ export const INTERRUPT_PENDING_TIMEOUT_MS = 12_000;
 export function shouldClearInterruptPendingOnSystem(payload = {}) {
   const p = payload && typeof payload === 'object' ? payload : {};
   if (p.kind === 'interrupted') return true;
-  if (typeof p.message === 'string' && p.message.includes(t('没有可中断的任务'))) return true;
+  // 后端 kind（优先）或固定中文原文（agent 现写死中文，勿经 t()——en locale 会匹配失败卡 12s，D1）
+  if (p.kind === 'no_interruptible_task') return true;
+  if (typeof p.message === 'string' && p.message.includes('没有可中断的任务')) return true;
   return false;
 }
 
@@ -931,9 +933,22 @@ export function aggregateStates(instances, dirs) {
   const rank = { idle: 0, done: 1, aborted: 2, busy: 3, error: 4, permission: 5 };
   const out = {};
   for (const d of (dirs || [])) out[d] = 'idle';
+  // worktree 实例 cwd 不在白名单 dirs 时，归入最长前缀父仓，使父工作区角标/sessionsDot 可见（K2）
+  function parentDir(cwd) {
+    if (!cwd) return null;
+    if (cwd in out) return cwd;
+    let best = null;
+    for (const d of Object.keys(out)) {
+      if (cwd === d || cwd.startsWith(d.endsWith('/') ? d : d + '/')) {
+        if (!best || d.length > best.length) best = d;
+      }
+    }
+    return best;
+  }
   for (const x of instances || []) {
-    if (!(x.cwd in out)) out[x.cwd] = 'idle';
-    if ((rank[x.state] ?? 0) > (rank[out[x.cwd]] ?? 0)) out[x.cwd] = x.state;
+    const key = parentDir(x.cwd) || x.cwd;
+    if (!(key in out)) out[key] = 'idle';
+    if ((rank[x.state] ?? 0) > (rank[out[key]] ?? 0)) out[key] = x.state;
   }
   return out;
 }
@@ -1482,10 +1497,13 @@ export function foregroundReconnectAction(connected) {
 //     无法靠 replayed 自辨「实例没了」与「实例还在只是无新事件」，靠 found 区分）；
 //   其余（有回放 / 无新事件 / 实例还在）→ 'none'：交给正常 agent:event 经 epoch/seq 去重增量渲染。
 // 普通 connect 路径无 timeout、err 恒 null → 不会误判 reconnect。
-export function syncAckAction(err, res) {
+export function syncAckAction(err, res, { seenDiskLen = 0 } = {}) {
   if (err) return 'reconnect';
   if (res && res.found === false) return 'reload';
   if (res && res.gap) return 'reload'; // 缓冲超窗、中间有缺口 → 清屏全量重载历史，否则残缺需手刷
+  // 同会话重连/probe：活缓冲可能有回放，但 CLI 外部写盘只增 diskLen——必须比 seenDiskLen（G1）
+  const diskLen = res && Number.isFinite(res.diskLen) ? res.diskLen : 0;
+  if (diskLen > seenDiskLen) return 'reload';
   return 'none';
 }
 
@@ -1517,8 +1535,9 @@ export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seen
   if (gap) return 'reload';
   // 冷入场（整页刷新/无 DOM 缓存）优先于「有缓冲就 keep」——缓冲只保最近事件，不是全量历史。
   if (!hasCache) return (replayed > 0) ? 'reload' : 'load';
-  if (replayed > 0) return 'keep';
+  // 磁盘 ahead 优先于 replayed>0 keep：外部 CLI 写盘不进活缓冲，切回/同会话有回放时仍可能漏显（G1/G2）。
   if (diskLen > seenDiskLen) return 'reload';
+  if (replayed > 0) return 'keep';
   return 'keep';
 }
 
@@ -2263,7 +2282,16 @@ export function formatCliSpinnerLine({
   sinceLastEventSec = null,
 } = {}) {
   const v = String(verb || '').trim() || 'Working';
-  const fmtTok = n => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}m` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
+  // 秒表行 token 带 1 位小数；≥1000.0k 抬 m（对齐 statuslineFmtTok 边界）
+  const fmtTok = n => {
+    if (n >= 1e6) return `${(n / 1e6).toFixed(1)}m`;
+    if (n >= 1e3) {
+      const k = n / 1e3;
+      if (k >= 1000) return `${(k / 1000).toFixed(1)}m`;
+      return `${k.toFixed(1)}k`;
+    }
+    return String(n);
+  };
   const segs = [`${Math.max(0, Math.floor(Number(elapsedSec) || 0))}s`];
   if (Number.isFinite(outTokens) && outTokens > 0) segs.push(`↓ ${fmtTok(outTokens)} tokens`);
   if (thinking?.state === 'active') {
@@ -2473,10 +2501,15 @@ export function applyAtMentionPick(fullText, { matchStart, cursorPos, path } = {
 // ---- statusline 折叠摘要 / 剪贴板（纯数据，DOM 在 app.js）----
 // 折叠态只放 git + ctx：模型/effort/权限已在底栏 pill，勿重复；展开仍有 CLI 级全量。
 
-function statuslineFmtTok(n) {
+/** token 短格式：1.0m / 13k / 42；round 到 k 后 ≥1000 抬升 m，避免 1000k */
+export function statuslineFmtTok(n) {
   if (!Number.isFinite(n)) return '';
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}m`;
-  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
+  if (n >= 1e3) {
+    const k = Math.round(n / 1e3);
+    if (k >= 1000) return `${(k / 1000).toFixed(1)}m`;
+    return `${k}k`;
+  }
   return String(n);
 }
 
@@ -2502,6 +2535,35 @@ export function formatStatuslineCtxBrief(ctx) {
   if (Number.isFinite(ctx.usedPercent)) return `ctx ${Math.round(ctx.usedPercent)}%`;
   if (Number.isFinite(ctx.tokens)) return `ctx ${statuslineFmtTok(ctx.tokens)}`;
   return '';
+}
+
+/**
+ * ctx left Y/Z：剩余 / 窗口。占用优先级（必须与 usedPercent 同源，禁 lastUsage 单轮假 remaining）：
+ * 1) totalTokens（SDK getContextUsage 全量）
+ * 2) usedPercent×window（有 % 时；即使 tokens 非 0 也不信单轮 lastUsage）
+ * 3) tokens（仅无 %：CLI total_input / 静态路径）
+ * 4) 明确 0 占用 → left=window
+ * 无 windowSize → ''。
+ */
+export function formatStatuslineCtxLeft(ctx) {
+  if (!ctx || typeof ctx !== 'object') return '';
+  const win = ctx.windowSize;
+  if (!Number.isFinite(win) || win <= 0) return '';
+  let used;
+  if (Number.isFinite(ctx.totalTokens) && ctx.totalTokens > 0) used = ctx.totalTokens;
+  else if (Number.isFinite(ctx.usedPercent) && ctx.usedPercent > 0) {
+    used = Math.round(win * Math.min(100, Math.max(0, ctx.usedPercent)) / 100);
+  } else if (Number.isFinite(ctx.tokens) && ctx.tokens > 0) used = ctx.tokens;
+  else if (
+    (Number.isFinite(ctx.totalTokens) && ctx.totalTokens === 0)
+    || (Number.isFinite(ctx.usedPercent) && ctx.usedPercent === 0)
+    || (Number.isFinite(ctx.tokens) && ctx.tokens === 0)
+  ) {
+    used = 0;
+  } else {
+    return '';
+  }
+  return `left ${statuslineFmtTok(Math.max(0, win - used))}/${statuslineFmtTok(win)}`;
 }
 
 /**
@@ -2594,8 +2656,9 @@ export function unifiedDiffLines(oldStr, newStr) {
 export function shouldRerenderSessionList({ hasPrevEntry = false, prevSessions, prevHasMore = false, nextSessions, nextHasMore = false } = {}) {
   if (!hasPrevEntry) return true;
   if (!!prevHasMore !== !!nextHasMore) return true;
+  // terminal 进签名：CLI 进程 busy/alive 徽标变化必须重渲（K3），否则 ⌨️ 陈旧
   const signature = list => (Array.isArray(list) ? list : [])
-    .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}`)
+    .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}:${s?.terminal || ''}`)
     .join('|');
   return signature(prevSessions) !== signature(nextSessions);
 }

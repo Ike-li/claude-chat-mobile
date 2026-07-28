@@ -7,6 +7,7 @@ export function registerFileSocketHandlers({
   on,
   routeCwd,
   getWorkDirs,
+  getKnownWorktrees, // optional () => Map worktreePath→repo；缺省时仅 workDirs（向后兼容）
   listDir,
   browseReadFile,
   listGitChanges,
@@ -20,13 +21,14 @@ export function registerFileSocketHandlers({
   rejectableSymlinkComponent,
   buildDiff,
   readPreview,
+  isAllowedWorkdir, // optional (cwd, dirs, knownWt) → bool
   logger = console,
 }) {
   on(socket, 'browse:list', (payload, ack) => {
     if (typeof ack !== 'function') return;
     const { cwd: requestedCwd, relPath, offset, maxEntries } = payload || {};
     const cwd = routeCwd(requestedCwd);
-    const result = listDir(cwd, relPath, getWorkDirs(), { offset, maxEntries });
+    const result = listDir(cwd, relPath, scopeDirsFor(cwd, getWorkDirs()), { offset, maxEntries });
     if (result === null) {
       logger.warn(`[scope] 文件浏览越界拒绝（list）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
       audit.recordAudit({
@@ -46,7 +48,7 @@ export function registerFileSocketHandlers({
     const { cwd: requestedCwd, relPath, offset, maxBytes, encoding } = payload || {};
     const cwd = routeCwd(requestedCwd);
     // encoding:'base64' → 附件/二进制按片 base64 回传（E18 附件预览）；其余值走默认文本模式
-    const result = browseReadFile(cwd, relPath, getWorkDirs(), { offset, maxBytes, encoding });
+    const result = browseReadFile(cwd, relPath, scopeDirsFor(cwd, getWorkDirs()), { offset, maxBytes, encoding });
     if (result === null) {
       logger.warn(`[scope] 文件浏览越界拒绝（read）：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
       audit.recordAudit({
@@ -61,11 +63,23 @@ export function registerFileSocketHandlers({
     return ack({ ok: true, ...result });
   });
 
-  // cwd 是否落在白名单：attributePath 对绝对 cwd 做前缀判定（零 IO）；routeCwd 通常已归位，双闸防缺省。
+  // cwd 是否授权：白名单目录本身，或已注册 linked worktree（repo 仍在白名单）。
+  // 旧实现只认 workDirs → worktree 被 routeCwd 放行后 git/search 仍全拒（I3）。
   function cwdInWorkDirs(cwd, workDirs) {
     if (!cwd || !Array.isArray(workDirs)) return false;
     if (workDirs.includes(cwd)) return true;
+    if (typeof isAllowedWorkdir === 'function') {
+      const wt = typeof getKnownWorktrees === 'function' ? getKnownWorktrees() : undefined;
+      if (isAllowedWorkdir(cwd, workDirs, wt)) return true;
+    }
     return Boolean(attributePath(cwd, workDirs, cwd));
+  }
+
+  // browse/write 的 scopeDirs：白名单 + 当前已授权 worktree cwd（否则 listDir/write 仍拒 worktree 内路径）
+  function scopeDirsFor(cwd, workDirs) {
+    if (!Array.isArray(workDirs)) return workDirs;
+    if (cwd && !workDirs.includes(cwd) && cwdInWorkDirs(cwd, workDirs)) return [...workDirs, cwd];
+    return workDirs;
   }
 
   // 工作区 git 变更列表（只读；与 statusline 三分计数分工）
@@ -102,6 +116,7 @@ export function registerFileSocketHandlers({
       staged: result.staged,
       unstaged: result.unstaged,
       untracked: result.untracked,
+      conflicted: result.conflicted || [],
       truncated: result.truncated || false,
     });
   });
@@ -193,7 +208,7 @@ export function registerFileSocketHandlers({
     const { cwd: requestedCwd, relPath, content, baseHash } = payload || {};
     const cwd = routeCwd(requestedCwd);
     const meta = { relPath: typeof relPath === 'string' ? relPath : null };
-    const result = writeFileInScope(cwd, relPath, content, getWorkDirs(), { baseHash });
+    const result = writeFileInScope(cwd, relPath, content, scopeDirsFor(cwd, getWorkDirs()), { baseHash });
     if (!result.ok && result.code === 'scope') {
       logger.warn(`[scope] 文件写回越界拒绝：cwd=${cwd} relPath=${JSON.stringify(relPath)}`);
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'files:write', ...meta } });

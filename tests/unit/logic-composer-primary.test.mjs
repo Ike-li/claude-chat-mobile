@@ -101,6 +101,10 @@ test('shouldClearInterruptPendingOnSystem: 无可中断任务 清位（失败回
   assert.equal(shouldClearInterruptPendingOnSystem({ message: '当前没有可中断的任务' }), true);
 });
 
+test('shouldClearInterruptPendingOnSystem: kind=no_interruptible_task 清位（语言无关，D1）', () => {
+  assert.equal(shouldClearInterruptPendingOnSystem({ kind: 'no_interruptible_task', message: 'Nothing to interrupt' }), true);
+});
+
 test('shouldClearInterruptPendingOnSystem: 其它 system 不清位', () => {
   assert.equal(shouldClearInterruptPendingOnSystem({ message: '正在压缩会话上下文…' }), false);
   assert.equal(shouldClearInterruptPendingOnSystem({ kind: 'queue_dropped' }), false);

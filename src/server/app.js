@@ -29,7 +29,7 @@ import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
-import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate } from '../ops/statusline.js';
+import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy } from '../ops/statusline.js';
 import { readCliObservedState } from '../agent/cli-mirror-state.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
@@ -60,7 +60,7 @@ import {
 } from './instance-routing.js';
 import { prepareSessionForWebResume, prepareResumeInParallel } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, isAllowedWorkdir, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, ensureAllowedWorkdir, isWhitelisted, isAllowedWorkdir, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
 import { discoverWorktreeSessions } from '../sessions/worktree-sessions.js';
 import {
   isDeviceTrusted,
@@ -382,6 +382,7 @@ registerOperationalRoutes({
     isValidSubscription: isValidPushSubscription,
     saveSubscription: savePushSubscription,
   },
+  isDeviceTrusted,
 });
 
 // Historical replay stays on the authenticated session:history socket event;
@@ -1176,7 +1177,9 @@ function processHookEvents(events) {
     if (!pn) continue;
     metrics.inc('hook_pushes');
     pushNotify(pn.title, pn.body, pn.data);
-    ntfyNotify(pn.title, pn.body, ntfyMetaFor('result', pn.data, notify.publicUrl));
+    const ntfyType = push.hookEventName === 'Notification' ? 'cli_hook_notification'
+      : push.hookEventName === 'Stop' ? 'cli_hook_stop' : 'result';
+    ntfyNotify(pn.title, pn.body, ntfyMetaFor(ntfyType, pn.data, notify.publicUrl));
   }
   if (decision.invalidateCwds.length) broadcastInstances(); // 列表徽标/最近列表随之刷新
 }
@@ -1278,7 +1281,8 @@ function pushSlashCommandsForCwd(cwd) {
 const statusOff = process.env.WEB_STATUSLINE === 'off'; // 禁用开关（默认启用，零 UI 痕迹）
 let lastStatusLine = null;                             // 仅内存：结构化 payload，瞬时数据不持久化
 let statusDebounce = null, statusInterval = null;
-let isStatusRefreshing = false;                        // 防并发重叠锁
+// 防并发重叠 + 忙时排队（noteStatusRefreshBusy）：await getContextUsage 期间丢刷新会让 ctx 停更到 10s tick
+let statusRefreshState = { busy: false, queued: false };
 
 function statusOwnerFor(agent, instanceId = viewingInstanceId) {
   if (statusBridgeOff || !agent?.sessionId) return 'sdk';
@@ -1309,8 +1313,8 @@ function replayStatusLineTo(socket) {
 
 async function refreshStatusLine() {
   if (statusOff || io.engine.clientsCount === 0) return; // 禁用 / 无人连接零开销
-  if (isStatusRefreshing) return;
-  isStatusRefreshing = true;
+  statusRefreshState = noteStatusRefreshBusy(statusRefreshState, 'enter');
+  if (!statusRefreshState.proceed) return; // 忙：已记 queued，leave 时补跑
   try {
     const currentInstanceId = viewingInstanceId;
     const currentCwd = viewingCwd;
@@ -1370,7 +1374,8 @@ async function refreshStatusLine() {
       type: 'status_line', payload: { ...payload, instanceId: currentInstanceId } // 供 status_line handler 安全校验
     });
   } finally {
-    isStatusRefreshing = false;
+    statusRefreshState = noteStatusRefreshBusy(statusRefreshState, 'leave');
+    if (statusRefreshState.reschedule) scheduleStatusRefresh(); // 忙时排队的那次补跑
   }
 }
 function scheduleStatusRefresh() {                     // 300ms 防抖（合并高频 onUsage/init/result 触发）
@@ -1429,6 +1434,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   // 路由代次快照：本实例的 onSessionId 之后只有在该 cwd 代次未前进（未被 session:new/home/switch 作废）
   // 时才允许覆写 currentByCwd——防止本实例后台活动复活一个用户已明确放弃的路由指针。
   const generation = sessions.getGeneration(cwd);
+  // B1：可被 session:switch 聚焦 live 时刷新；闭包 const 无法在 switch 后对齐 getGeneration
   const saved = resumeId ? (sessions.getSession(resumeId) || { id: resumeId }) : null;
   if (saved?.id) {
     interactionLog.addSessionLog(saved.id, 'sys_info', `[SYS] 启动/连接会话: instanceId=${id}, resumeId=${saved.id}, cwd=${cwd}`);
@@ -1475,7 +1481,10 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     });
   }
   // resume 持久化不会保存 ultracode（CLI never persist）→ 规范化后 SDK effort + flag
-  const effNorm = normalizeEffortUiLevel(effUi === undefined ? null : effUi)
+  // FRESH pending ultracode：resolveFreshPrefs 已拆 sdk+flag；effUi 可能是 sdk 五档或仍带 ui 字面量
+  const freshUltra = isFresh && fresh?.ultracode === true;
+  const rawEffForNorm = freshUltra ? 'ultracode' : (effUi === undefined ? null : effUi);
+  const effNorm = normalizeEffortUiLevel(rawEffForNorm)
     || { ui: null, sdk: null, ultracode: false };
   permModeByInstance.set(id, mode);
   effortByInstance.set(id, effNorm.ui); // 广播/UI 用（可含 ultracode）
@@ -1623,7 +1632,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, cwd);
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值（运行时不可改）。web 端续接恢复依赖这两字段。
-      sessions.upsertSession({ id: sid, title: firstMessage, cwd, model, effort: instance.effort, permissionMode: instance.permissionMode, generation });
+      sessions.upsertSession({ id: sid, title: firstMessage, cwd, model, effort: instance.effort, permissionMode: instance.permissionMode, generation: instance.routeGeneration });
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       recordCwdDefaultModel(cwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 会话已获得 ID: sessionId=${sid}, 标题="${firstMessage || '未命名'}", model=${model || '默认'}`);
@@ -1653,6 +1662,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   // model 取 activeModel > reportedModel > transcriptModel）。不入 activeModel、不参与 setModel 差分——
   // init 权威模型到达后前二者自然盖过它（见 sessions/history.js lastAssistantModel 注释）。
   instance.transcriptModel = transcriptModel;
+  instance.routeGeneration = generation; // B1：switch 聚焦 live 可刷新
   agents.set(id, instance);
   instance.start();
   return instance;
@@ -1997,7 +2007,7 @@ registerSocketConnection(io, socket => {
     if (!a) {
       // ensureWhitelisted 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
       // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
-      const cwd = ensureWhitelisted(routeCwd(payload && typeof payload === 'object' ? payload.cwd : undefined), workDirs);
+      const cwd = ensureAllowedWorkdir(routeCwd(payload && typeof payload === 'object' ? payload.cwd : undefined), workDirs, knownWorktrees);
       // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
       const viewingAtStart = viewingInstanceId;
       const saved = await currentSessionForCwd(cwd);
@@ -2235,6 +2245,17 @@ registerSocketConnection(io, socket => {
       return effortTo(socket);
     }
     const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, disposedId = id;
+    // B3：FRESH 尚无 sessionId 时 dispose+resume(null) 会丢掉在途首条/半开实例——只记 pending，等懒开消费
+    if (!sid) {
+      pendingEffortByCwd.set(cwd, level);
+      effortByInstance.set(id, level);
+      socket.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, instanceId: id, ts: Date.now(),
+        type: 'effort_mode', payload: { level }
+      });
+      sysTo(socket, '会话尚未分配 ID，思考强度将在下一条消息生效', false);
+      return;
+    }
     interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 切换思考强度 (user:setEffort): level=${level || '模型默认'}${ultracode ? ' (Settings.ultracode)' : ''}, 正在置换实例...`);
     // 持久化只存 SDK effort；ultracode 不落盘（CLI: interactive toggles never persist）
     if (sid) sessions.updateSessionPrefs(sid, { effort: sdkEffort });
@@ -2265,6 +2286,8 @@ registerSocketConnection(io, socket => {
     viewingInstanceId = id;
     const a = agents.get(id);
     viewingCwd = a.cwd;
+    // B2：列表/tab 聚焦也要更新 currentByCwd（此前只 session:switch/finishOpenFocus 写指针）
+    if (a.sessionId) sessions.setCurrent(a.cwd, a.sessionId);
     // 用户正在看 → 续期空闲看护，避免切入后仍因旧 lastActivity 被 30min 回收清屏
     a.touchActivity?.();
     // 切视图立即清全局 mirror（否则 catchUpTick 切换分支完成前，A 的锁仍挂着）
@@ -2336,7 +2359,7 @@ registerSocketConnection(io, socket => {
     const obj = payload && typeof payload === 'object' ? payload : {};
     // 可选 cwd：在指定工作区上下文下开空首页（白名单内）；默认保留当前 viewingCwd。
     if (typeof obj.cwd === 'string' && obj.cwd) {
-      viewingCwd = ensureWhitelisted(routeCwd(obj.cwd), workDirs);
+      viewingCwd = ensureAllowedWorkdir(routeCwd(obj.cwd), workDirs, knownWorktrees);
     }
     const wasViewing = viewingInstanceId != null;
     viewingInstanceId = null;
@@ -2366,7 +2389,8 @@ registerSocketConnection(io, socket => {
     // （reloadWorkdirs 有实例时不归位），routeCwd 缺省回退又会返回它 → 新会话仍落非白名单目录。
     // ensureWhitelisted 归位到白名单首位（同 reloadWorkdirs 无实例时的归位）。只挡新建；继续查看/读取该
     // 目录现有会话不受影响。session:switch / user:message 共用同一份归位逻辑，见其调用点注释。
-    const cwd = ensureWhitelisted((payload && typeof payload === 'object') ? routeCwd(payload.cwd) : viewingCwdOf(), workDirs);
+    // worktree 新建：routeCwd 已放行 knownWorktrees，不可再 ensureWhitelisted 夯回 dirs[0]（K1）
+    const cwd = ensureAllowedWorkdir((payload && typeof payload === 'object') ? routeCwd(payload.cwd) : viewingCwdOf(), workDirs, knownWorktrees);
     viewingCwd = cwd;
     sessions.bumpGeneration(cwd); // 该 cwd 路由代次前进：未 dispose 的旧实例后续活动不得复活指针
     sessions.setCurrent(cwd, null); // 台阶3：清该 cwd 当前指针 → 下条消息懒开为 FRESH 会话（非 resume）
@@ -2435,6 +2459,8 @@ registerSocketConnection(io, socket => {
     sessions.bumpGeneration(cwd);
     // forSession 已跳过 terminating/disposed；命中则是可续用 live，fresh resume 仅在无 live 时。
     const inst = instanceForSession(sessionId) || await dedupedResume(cwd, sessionId);
+    // B1：live 复用时把代次快照拉到当前——否则 /clear 后 onSessionId 因 generation 陈旧不写 currentByCwd
+    if (inst) inst.routeGeneration = sessions.getGeneration(cwd);
     finishOpenFocus(inst, cwd, sessionId, ack);
   });
 
@@ -2609,6 +2635,8 @@ registerSocketConnection(io, socket => {
     on,
     routeCwd,
     getWorkDirs: () => workDirs,
+    getKnownWorktrees: () => knownWorktrees,
+    isAllowedWorkdir,
     listDir,
     browseReadFile,
     listGitChanges,
@@ -2716,7 +2744,7 @@ registerSocketConnection(io, socket => {
       pushEnabled,
       trustedDevices: getTrustedCount(),
       pendingDevices: getPendingDevices().length,
-      configPermsProblems: countConfigPermProblems(HERE), // BE-013：实际检查配置文件权限（number/null），不再缺省当 0 假绿
+      configPermsProblems: countConfigPermProblems(process.env.CCM_DATA_DIR || HERE), // BE-013/L1：扫实际数据目录，勿只扫源码根 data/
     }));
   });
 

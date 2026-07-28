@@ -5,6 +5,7 @@ export function createNotificationController(context, {
   addBar = () => {},
   autoBind = true,
   getToken = () => '',
+  getDeviceToken = () => '', // A1：订阅须绑已信任设备
   // 点铃铛做什么。默认就地订阅（保底行为，也是单测里的默认路径）；app.js 注入的是「打开通用设置
   // 并滚到推送段」——那里的 #pushStatusRow 才是完整的权威版本（状态 + 原因 + 订阅按钮），
   // 铃铛只负责把人带过去，不再自己维护第二套解释分支。
@@ -29,7 +30,7 @@ export function createNotificationController(context, {
   function notify(title, body, { force = false } = {}) {
     if ((!force && !documentRef?.hidden) || !NotificationApi || NotificationApi.permission !== 'granted') return false;
     try {
-      new NotificationApi(title, { body, icon: '/icons/icon-192.png', tag: 'ccm' });
+      new NotificationApi(title, { body, icon: '/icons/icon-192.png', tag: 'ccm-push' });
       return true;
     } catch {
       return false;
@@ -72,10 +73,18 @@ export function createNotificationController(context, {
       const authQuery = token ? `?token=${encodeURIComponent(token)}` : '';
       // ⑧ prefs 随订阅一并存（server 端 savePushSubscription 原样落盘，见 notify-channels.js 头注）；
       // per-device 偏好——同一账号手机开预览、iPad 不开，两条订阅互不影响。
-      const body = JSON.stringify({ ...subscription.toJSON?.() ?? subscription, prefs: { preview: readPushPreviewPref(storageGetItem) } });
+      const deviceToken = typeof getDeviceToken === 'function' ? (getDeviceToken() || '') : '';
+      const body = JSON.stringify({
+        ...subscription.toJSON?.() ?? subscription,
+        prefs: { preview: readPushPreviewPref(storageGetItem) },
+        ...(deviceToken ? { deviceToken } : {}),
+      });
       const response = await fetchFn(`/push/subscribe${authQuery}`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(deviceToken ? { 'x-device-token': deviceToken } : {}),
+        },
         body,
       });
       if (!response.ok) {

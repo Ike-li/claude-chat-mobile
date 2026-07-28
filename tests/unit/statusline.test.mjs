@@ -3,7 +3,7 @@
 // ctx 绝对 token 来自 SDK 真值；ctx 百分比优先 getContextUsage、降级 contextWindowSize(model)。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate } from '../../src/ops/statusline.js';
+import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy } from '../../src/ops/statusline.js';
 import { getDiagLogs } from '../../src/agent/diag-log.js';
 import { createUsageSnapshotStore, USAGE_SNAPSHOT_TTL_MS } from '../../src/ops/usage-snapshot.js';
 
@@ -315,13 +315,28 @@ test.describe('getContextUsageSafe：安全取 Agent SDK 上下文用量（Part2
 test.describe('buildWebStatusLine：ctx% 优先 SDK getContextUsage、降级 contextWindowSize（Part2 修 5x bug）', () => {
   const usageC = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
   test('活跃会话（q.getContextUsage 返回权威值）→ windowSize/usedPercent 来自 SDK；categories 不透传', async () => {
-    // 关键 bug 场景：model 是 haiku（静态映射猜 200k），但 SDK 实报 maxTokens=1M → ctx% 不再偏高 5x
+    // 真 bug 场景：model 是 haiku（静态映射猜 200k），但 SDK 实报 maxTokens=1M → ctx% 不再偏高 5x
     const cats = [{ name: 'Skills', tokens: 5000, color: '#abc' }, { name: 'Free space', tokens: 995000, color: '#def' }];
-    const q = { getContextUsage: async () => ({ maxTokens: 1_000_000, percentage: 23, categories: cats }) };
+    const q = { getContextUsage: async () => ({ maxTokens: 1_000_000, percentage: 23, totalTokens: 230_000, categories: cats }) };
     const p = await buildWebStatusLine({ agent: { activeModel: 'claude-haiku-4-5', lastUsage: usageC(50_000), q, disposed: false }, cwd: undefined });
     assert.equal(p.ctx.windowSize, 1_000_000);   // SDK 权威，非静态 200k
     assert.equal(p.ctx.usedPercent, 23);         // 官方 percentage，非 tokens/win 自算
+    assert.equal(p.ctx.totalTokens, 230_000);   // 与 percentage 同源；left 用它，别用 lastUsage
+    assert.equal(p.ctx.tokens, 50_000);         // lastUsage 仍留给 uncached/cache 明细
     assert.equal(p.ctx.categories, undefined);   // 对齐 CLI statusline：categories 不进 statusline
+  });
+  test('SDK 权威路径：lastUsage 全 0 时仍透传 totalTokens（修 left 1.0m/1.0m 与 ctx 13% 分叉）', async () => {
+    // 真机回归：中途刷新 lastUsage 可能是 0（第三方/网关中间消息无 usage），但 getContextUsage
+    // 仍报 percentage=13 + totalTokens≈130k。若 left 用 windowSize-tokens → 假 1.0m/1.0m。
+    const q = { getContextUsage: async () => ({ maxTokens: 1_000_000, percentage: 13, totalTokens: 130_000, categories: [] }) };
+    const p = await buildWebStatusLine({
+      agent: { activeModel: 'grok-4.5[1m]', lastUsage: usageC(0), q, disposed: false },
+      cwd: undefined,
+    });
+    assert.equal(p.ctx.windowSize, 1_000_000);
+    assert.equal(p.ctx.usedPercent, 13);
+    assert.equal(p.ctx.tokens, 0);            // lastUsage 真值保留
+    assert.equal(p.ctx.totalTokens, 130_000); // left 的权威占用
   });
   test('disposed 会话（q 存在但 disposed）→ 不调 SDK、降级 contextWindowSize', async () => {
     let called = false;
@@ -669,5 +684,64 @@ test.describe('projectNameFromCwd', () => {
   test('空/undefined cwd → 原样返回', () => {
     assert.equal(projectNameFromCwd('', { platform: 'linux' }), '');
     assert.equal(projectNameFromCwd(undefined, { platform: 'linux' }), undefined);
+  });
+});
+
+
+test.describe('buildWebStatusLine：fetchUsage null 断档可回落（F1）', () => {
+  test('fetchUsage 返回 null → 允许账号级快照垫上', async () => {
+    const store = createUsageSnapshotStore();
+    await buildWebStatusLine({
+      agent: {
+        activeModel: 'm', lastUsage: usage(1), disposed: false,
+        fetchUsage: async () => ({
+          rate_limits_available: true,
+          rate_limits: { five_hour: { utilization: 40 } },
+        }),
+      },
+      cwd: undefined, usageStore: store,
+    });
+    const p = await buildWebStatusLine({
+      agent: {
+        activeModel: 'm', lastUsage: usage(1), disposed: false,
+        fetchUsage: async () => null,
+      },
+      cwd: undefined, usageStore: store,
+    });
+    assert.equal(p.rate?.fiveHour?.usedPercent, 40);
+    assert.equal(p.rateFromSnapshot, true);
+  });
+});
+
+test.describe('noteStatusRefreshBusy：忙时排队、结束后补跑', () => {
+  test('enter 空闲 → proceed；enter 忙 → queued 不 proceed', () => {
+    let s = noteStatusRefreshBusy({}, 'enter');
+    assert.equal(s.proceed, true);
+    assert.equal(s.busy, true);
+    assert.equal(s.queued, false);
+    s = noteStatusRefreshBusy(s, 'enter');
+    assert.equal(s.proceed, false);
+    assert.equal(s.busy, true);
+    assert.equal(s.queued, true);
+  });
+  test('leave 有 queued → reschedule；leave 无 queued → 不 reschedule', () => {
+    let s = noteStatusRefreshBusy({ busy: true, queued: true }, 'leave');
+    assert.equal(s.busy, false);
+    assert.equal(s.queued, false);
+    assert.equal(s.reschedule, true);
+    s = noteStatusRefreshBusy({ busy: true, queued: false }, 'leave');
+    assert.equal(s.reschedule, false);
+  });
+});
+
+test.describe('buildWebStatusLine：无 lastUsage 仍可用 getContextUsage 出 ctx%', () => {
+  test('lastUsage 缺省 + 活 q → 只有 window/percent/totalTokens，无 in/out 明细', async () => {
+    const q = { getContextUsage: async () => ({ maxTokens: 1_000_000, percentage: 13, totalTokens: 130_000, categories: [] }) };
+    const p = await buildWebStatusLine({ agent: { activeModel: 'grok-4.5[1m]', q, disposed: false }, cwd: undefined });
+    assert.equal(p.ctx.windowSize, 1_000_000);
+    assert.equal(p.ctx.usedPercent, 13);
+    assert.equal(p.ctx.totalTokens, 130_000);
+    assert.equal(p.ctx.tokens, undefined);
+    assert.equal(p.ctx.in, undefined);
   });
 });

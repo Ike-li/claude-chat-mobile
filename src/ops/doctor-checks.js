@@ -152,10 +152,12 @@ export function classifyDeviceGateTopology({ authTokenSet, cfEnabled } = {}) {
     };
   }
   if (authTokenSet) {
+    // 与 shouldBypassDeviceApproval 对齐（A2）：peer loopback 且 Host 为公网域名时**不会** bypass 设备门；
+    // 仅「真本机直连」(Host 本机样) 或 CF Access 已验才跳过。旧文案夸大了隧道跳过风险。
     return {
-      status: 'warn',
-      detail: 'AUTH_TOKEN 已设但未开 CF Access：cloudflared/SSH/nginx 反代到 127.0.0.1 时会跳过设备指纹审批，公网只靠 token。建议开 CF Access，或勿把未批设备暴露到公网',
-      safe: { risk: 'tunnel_skips_device_gate', cfEnabled: false, authTokenSet: true },
+      status: 'ok',
+      detail: 'AUTH_TOKEN 已设；设备门对公网 Host（含 tunnel 反代到 127.0.0.1）仍生效，仅本机直连或 CF Access 跳过。未开 CF Access 时公网仍建议加 2FA 加深防护',
+      safe: { risk: 'none', cfEnabled: false, authTokenSet: true, note: 'host_aware_device_gate' },
     };
   }
   return {

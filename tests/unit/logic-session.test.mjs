@@ -21,6 +21,16 @@ test('aggregateStates: 空/未定义入参安全', () => {
   assert.deepEqual(aggregateStates([], ['/a']), { '/a': 'idle' });
 });
 
+test('aggregateStates: worktree cwd 归入最长前缀父仓（K2 角标）', () => {
+  const dirs = ['/repo/a', '/repo/b'];
+  const r = aggregateStates(
+    [{ cwd: '/repo/a/.worktrees/promo', state: 'busy' }],
+    dirs,
+  );
+  assert.equal(r['/repo/a'], 'busy');
+  assert.equal(r['/repo/b'], 'idle');
+});
+
 test('summarizeOtherWorkspaces: 空/未定义入参 → null', () => {
   assert.equal(summarizeOtherWorkspaces(undefined, undefined, '/cur'), null);
   assert.equal(summarizeOtherWorkspaces({}, [], '/cur'), null);

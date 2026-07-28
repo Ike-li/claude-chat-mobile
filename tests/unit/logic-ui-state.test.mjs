@@ -263,6 +263,10 @@ test.describe('foregroundReconnectAction / syncAckAction', () => {
   test('消歧边角：实例还在但无新事件（replayed=0, found=true）→ none，不误 reload', () => {
     assert.equal(syncAckAction(null, { replayed: 0, gap: false, found: true }), 'none');
   });
+  test('syncAckAction：diskLen > seenDiskLen → reload（G1 同会话重连）', () => {
+    assert.equal(syncAckAction(null, { found: true, gap: false, diskLen: 12 }, { seenDiskLen: 5 }), 'reload');
+    assert.equal(syncAckAction(null, { found: true, gap: false, diskLen: 5 }, { seenDiskLen: 5 }), 'none');
+  });
 
   test('err 优先于 res：超时即便带 res 也判 reconnect', () => {
     assert.equal(syncAckAction(new Error('timeout'), { found: false }), 'reconnect');
@@ -274,8 +278,11 @@ test.describe('foregroundReconnectAction / syncAckAction', () => {
 });
 
 test.describe('shouldReloadOnEnter：切入会话时该用缓存/活缓冲还是磁盘全量重载', () => {
-  test('有 DOM 缓存 + replayed>0（切 tab 秒恢复）→ keep，不重载以免丢实时 thinking', () => {
-    assert.equal(shouldReloadOnEnter({ replayed: 5, gap: false, hasCache: true, diskLen: 99, seenDiskLen: 0 }), 'keep');
+  test('有 DOM 缓存 + replayed>0 + 磁盘未 ahead → keep（切 tab 秒恢复）', () => {
+    assert.equal(shouldReloadOnEnter({ replayed: 5, gap: false, hasCache: true, diskLen: 10, seenDiskLen: 10 }), 'keep');
+  });
+  test('有 DOM 缓存 + replayed>0 但磁盘 ahead → reload（G2：外部 CLI 写盘不可被 keep 吞）', () => {
+    assert.equal(shouldReloadOnEnter({ replayed: 5, gap: false, hasCache: true, diskLen: 99, seenDiskLen: 0 }), 'reload');
   });
   test('整页刷新/无 DOM 缓存：replayed>0 仍须 reload（活缓冲≠全量历史，BUFFER_CAP 外全丢）', () => {
     // 复刻 PWA 下拉刷新 bug：hard reload 后 sessionDomCache 清空(hasCache=false)，server 实例仍在、

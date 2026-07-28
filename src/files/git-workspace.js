@@ -106,6 +106,9 @@ export function classifyGitEntries(entries) {
 export function assertSafeRelPath(cwd, relPath) {
   if (typeof relPath !== 'string' || !relPath || !cwd) return null;
   if (isAbsolute(relPath)) return null;
+  // 拒绝 git pathspec magic / 空字节：否则 git:diff pathspec 可读出 cwd 外同仓文件（I1）。
+  // 正常工具/编辑器路径是普通相对路径，不含 : * ? [ ] \ NUL。
+  if (/[\0*?[\]\\:]/.test(relPath)) return null;
   // 规范化后相对路径仍含 .. 或指到 cwd 外 → 拒绝
   const resolved = resolve(cwd, relPath);
   const rel = relative(cwd, resolved);

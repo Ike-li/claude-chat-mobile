@@ -105,3 +105,11 @@ test('diffDirSignatures: 空/未定义入参安全', () => {
   assert.deepEqual(diffDirSignatures(), []);
   assert.deepEqual(diffDirSignatures({ '/a': 'x' }, undefined), ['/a']);
 });
+
+
+test('shouldRerenderSessionList: terminal 徽标变化需要重渲染（K3）', () => {
+  const prev = [{ id: 'a', title: 'A', lastUsedAt: 1, terminal: null }];
+  const next = [{ id: 'a', title: 'A', lastUsedAt: 1, terminal: 'busy' }];
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: prev, nextSessions: next }), true);
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: next, nextSessions: next }), false);
+});

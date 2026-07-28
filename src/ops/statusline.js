@@ -163,6 +163,23 @@ export async function getContextUsageSafe(q, timeoutMs = 1500) {
 // 从 agent.fetchUsage()（SDK usage_EXPERIMENTAL…）提取 statusline 需要对齐 CLI 的字段：
 // 5h/7d 额度窗 + 会话工具改行 lines +/−。失败/不可用 → 空对象（字段省）。
 // 防御性：不绑固定 schema；rate_limits_available===false 时不吐额度。
+
+// refreshStatusLine 并发锁状态机（纯函数，供 server 接线 + 单测）：
+// enter：busy 则只记 queued、不 proceed；否则 proceed 并 busy。
+// leave：清 busy；若 queued 则 reschedule（补跑一次，避免 await getContextUsage 期间丢刷新）。
+export function noteStatusRefreshBusy(state = {}, phase) {
+  const busy = !!state.busy;
+  const queued = !!state.queued;
+  if (phase === 'enter') {
+    if (busy) return { busy: true, queued: true, proceed: false };
+    return { busy: true, queued: false, proceed: true };
+  }
+  if (phase === 'leave') {
+    return { busy: false, queued: false, reschedule: queued };
+  }
+  return { busy, queued, proceed: false, reschedule: false };
+}
+
 export function usageBitsForStatusLine(usage) {
   const out = {};
   if (!usage || typeof usage !== 'object') return out;
@@ -228,6 +245,7 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
   const git = await gitStatus(cwd);
   if (git) p.git = git;
   const cc = webContextCost({ agent });
+  // lastUsage 单轮明细（可缺）；getContextUsage 全量权威可在无 lastUsage 时独立出 ctx%。
   if (cc.context && Number.isFinite(cc.context.totalInputTokens)) {
     const u = cc.context.usage;
     // in/out/w/r：input / output / cache 写(creation) / cache 读（cli 口径 uncached/response/write/read）
@@ -240,20 +258,24 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
     };
     const total = u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens;
     if (total > 0) p.ctx.cacheHitPct = Math.round(u.cache_read_input_tokens / total * 100); // 瞬时：本轮命中率
-    // ctx 百分比：优先 Agent SDK getContextUsage() 的【运行时权威】maxTokens/percentage（活跃会话）；
-    // 无活 q（idle/历史/dispose）/ RPC 超时 / 抛错 → 降级回 contextWindowSize(model) 静态映射猜测。
-    // 修真 bug：静态映射把 1M beta 会话当 200k、ctx% 偏高 5 倍；SDK 反映真实窗口。percentage 用官方口径
-    //（对 compact buffer / skills 基线另有折算），勿自算 tokens/maxTokens，免与 CLI /context 显示分叉。
-    const sdkCtx = (agent?.q && !agent.disposed) ? await getContextUsageSafe(agent.q) : null;
-    if (sdkCtx && Number.isFinite(sdkCtx.maxTokens) && sdkCtx.maxTokens > 0) {
-      p.ctx.windowSize = sdkCtx.maxTokens;
-      p.ctx.usedPercent = Math.min(100, Math.max(0, Math.round(sdkCtx.percentage || 0)));
-    } else {
-      const win = contextWindowSize(model);
-      if (win && p.ctx.tokens > 0) {
-        p.ctx.windowSize = win;
-        p.ctx.usedPercent = Math.min(100, Math.round(p.ctx.tokens / win * 100));
-      }
+  }
+  // ctx 百分比：优先 Agent SDK getContextUsage() 的【运行时权威】maxTokens/percentage（活跃会话）；
+  // 无活 q（idle/历史/dispose）/ RPC 超时 / 抛错 → 降级回 contextWindowSize(model) 静态映射猜测。
+  // 无 lastUsage 时仍可只出 window/percent/totalTokens（修首包/清零后 ctx 整段缺席）。
+  const sdkCtx = (agent?.q && !agent.disposed) ? await getContextUsageSafe(agent.q) : null;
+  if (sdkCtx && Number.isFinite(sdkCtx.maxTokens) && sdkCtx.maxTokens > 0) {
+    p.ctx = p.ctx || {};
+    p.ctx.windowSize = sdkCtx.maxTokens;
+    p.ctx.usedPercent = Math.min(100, Math.max(0, Math.round(sdkCtx.percentage || 0)));
+    // totalTokens 与 percentage 同源（全量上下文占用）；p.ctx.tokens 仍是 lastUsage 单轮口径。
+    if (Number.isFinite(sdkCtx.totalTokens) && sdkCtx.totalTokens >= 0) {
+      p.ctx.totalTokens = sdkCtx.totalTokens;
+    }
+  } else if (p.ctx && Number.isFinite(p.ctx.tokens) && p.ctx.tokens > 0) {
+    const win = contextWindowSize(model);
+    if (win) {
+      p.ctx.windowSize = win;
+      p.ctx.usedPercent = Math.min(100, Math.round(p.ctx.tokens / win * 100));
     }
   }
   if (cc.cost) {
@@ -271,14 +293,20 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
   if (agent && typeof agent.fetchUsage === 'function' && !agent.disposed) {
     try {
       const usage = await agent.fetchUsage();
-      const bits = usageBitsForStatusLine(usage);
-      Object.assign(p, bits);
-      recordRateReasonIfChanged(agent, usage, bits);
-      // 写入点 A：本轮成功拿到额度 → 记进账号级快照，供下次断档时垫上（见 usage-snapshot.js）。
-      if (bits.rate) {
-        rememberUsage(usageStore, bits.rate, Date.now());
+      // fetchUsage 超时/不可用常回 null：属短暂断档，应允许账号级快照垫上（F1）。
+      // 只有拿到 usage 对象且 bits.rate 为空（第三方/越界）才是「明确无额度」。
+      if (usage == null) {
+        // 保持 allowRateFallback=true；不写 reason 变化（无对象可判）
       } else {
-        allowRateFallback = false; // 明确无额度：禁止垫旧值
+        const bits = usageBitsForStatusLine(usage);
+        Object.assign(p, bits);
+        recordRateReasonIfChanged(agent, usage, bits);
+        // 写入点 A：本轮成功拿到额度 → 记进账号级快照，供下次断档时垫上（见 usage-snapshot.js）。
+        if (bits.rate) {
+          rememberUsage(usageStore, bits.rate, Date.now());
+        } else {
+          allowRateFallback = false; // 明确无额度：禁止垫旧值
+        }
       }
     } catch { /* 静默降级：允许回落 */ }
   }

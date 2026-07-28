@@ -90,6 +90,8 @@ describe('assertSafeRelPath：拒绝绝对路径与 .. 逃逸', () => {
     assert.equal(assertSafeRelPath(cwd, 'a/../../outside'), null);
     assert.equal(assertSafeRelPath(cwd, ''), null);
     assert.equal(assertSafeRelPath(cwd, null), null);
+    assert.equal(assertSafeRelPath(cwd, ':(top)etc/passwd'), null, 'git pathspec magic');
+    assert.equal(assertSafeRelPath(cwd, 'src/*.js'), null, 'glob magic');
   });
 });
 

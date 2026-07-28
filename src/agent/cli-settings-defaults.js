@@ -139,11 +139,22 @@ export function resolveFreshPrefs({
     ? (normalizePermissionMode(pendingMode) ?? 'default')
     : baseMode;
 
-  const effort = hasPendingEffort
-    ? normalizeEffortLevel(pendingEffort)
-    : baseEffort;
+  // pending 是 UI 档（可含 ultracode）；L3 base 仍是 SDK 五档（settings 不认 ultracode）。
+  // 旧逻辑 normalizeEffortLevel(pendingEffort) 把 ultracode 剥成 null → FRESH 首条无 Settings.ultracode（H1）。
+  let effort = baseEffort;
+  let ultracode = false;
+  if (hasPendingEffort) {
+    const ui = normalizeEffortUiLevel(pendingEffort);
+    if (ui) {
+      effort = ui.sdk;
+      ultracode = ui.ultracode;
+    } else {
+      effort = null;
+      ultracode = false;
+    }
+  }
 
-  return { mode, effort, model: baseModel };
+  return { mode, effort, ultracode, model: baseModel };
 }
 
 /**

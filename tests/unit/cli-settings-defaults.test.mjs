@@ -85,13 +85,13 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
 
   test('无 pending、无 cli → L4 硬默认', () => {
     assert.deepEqual(resolveFreshPrefs({}), {
-      mode: 'default', effort: null, model: undefined,
+      mode: 'default', effort: null, ultracode: false, model: undefined,
     });
   });
 
   test('无 pending、有 cli → 用 L3', () => {
     assert.deepEqual(resolveFreshPrefs({ cliDefaults: cliLow }), {
-      mode: 'acceptEdits', effort: 'low', model: undefined,
+      mode: 'acceptEdits', effort: 'low', ultracode: false, model: undefined,
     });
   });
 
@@ -102,7 +102,7 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
         pendingMode: 'plan',
         cliDefaults: cliLow,
       }),
-      { mode: 'plan', effort: 'low', model: undefined },
+      { mode: 'plan', effort: 'low', ultracode: false, model: undefined },
     );
   });
 
@@ -113,7 +113,7 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
         pendingEffort: null,
         cliDefaults: cliLow,
       }),
-      { mode: 'acceptEdits', effort: null, model: undefined },
+      { mode: 'acceptEdits', effort: null, ultracode: false, model: undefined },
     );
   });
 
@@ -131,11 +131,22 @@ test.describe('resolveFreshPrefs（L0 > L3 > L4）', () => {
   test('cliDefaults.effort 缺省键 → null，不把 undefined 当有值', () => {
     assert.deepEqual(
       resolveFreshPrefs({ cliDefaults: { mode: 'default' } }),
-      { mode: 'default', effort: null, model: undefined },
+      { mode: 'default', effort: null, ultracode: false, model: undefined },
     );
   });
 
-  test('cli model 透传（仅当字符串非空）', () => {
+  test('pending ultracode → sdk xhigh + ultracode flag（H1，不得被 normalizeEffortLevel 剥掉）', () => {
+    assert.deepEqual(
+      resolveFreshPrefs({
+        hasPendingEffort: true,
+        pendingEffort: 'ultracode',
+        cliDefaults: cliLow,
+      }),
+      { mode: 'acceptEdits', effort: 'xhigh', ultracode: true, model: undefined },
+    );
+  });
+
+    test('cli model 透传（仅当字符串非空）', () => {
     assert.equal(
       resolveFreshPrefs({ cliDefaults: { mode: 'default', effort: null, model: 'sonnet' } }).model,
       'sonnet',
