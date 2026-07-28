@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, normalizeTranscriptViewMode, cycleTranscriptViewMode, transcriptViewLabel, transcriptViewTitle, transcriptViewMessagesClass, transcriptDetailsOpenByDefault, readTranscriptViewPref, writeTranscriptViewPref, formatCtxPillText, ctxPillTone, resolveTurnEndScroll } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -72,13 +72,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const pillDefaults = $('pillDefaults');
   const pillModelText = $('pillModelText'), pillPermText = $('pillPermText');
   const pillEffort = $('pillEffort'), pillEffortText = $('pillEffortText');
-  // Transcript 三档 + ctx 常显（P0 抄 Desktop Code / 手机扫读）
-  const pillTranscriptView = $('pillTranscriptView'), pillTranscriptViewText = $('pillTranscriptViewText');
-  const pillCtx = $('pillCtx'), pillCtxText = $('pillCtxText');
-  let transcriptViewMode = readTranscriptViewPref(k => {
-    try { return localStorage.getItem(k); } catch { return null; }
-  });
-
   // UX-009 已废弃：不再注入「终端驾驶中」合并胶囊；驾驶态靠 input placeholder + 发送位「续接」
   // （pillMirrorMerged 已从 DOM/CSS 移除）
 
@@ -1198,7 +1191,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     }
   }
-  // 配置面板顶部的 CLI 配置刷新（常驻入口）；新会话页那个同源入口在 showComposeSurface 里接线。
+  // 会话设置标题行右侧 ↻（常驻）；新会话页摘要旁那个同源入口在 showComposeSurface 里接线。
   // spinEl 取不到时回落按钮本身——|| 而非默认参数：querySelector 返回 null 不会触发默认值。
   const cfgRefreshBtn = $('btnConfigRefresh');
   wireConfigRefreshButton(cfgRefreshBtn, cfgRefreshBtn?.querySelector('[data-spin]') || cfgRefreshBtn);
@@ -1802,7 +1795,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
           </div>
         </details>`);
-      if (transcriptDetailsOpenByDefault(transcriptViewMode)) card.open = true;
       setStatusIcon(card.querySelector('.t-status'), 'pending');
       card.dataset.toolName = p.name || ''; // tool_result 无 name，结果特化渲染从卡上取
       const inCode = card.querySelector('.t-in code');
@@ -2236,7 +2228,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 折叠摘要：git · ctx（模型/effort 已在底栏 pill）；展开仍有 CLI 全量
       lastStatusLinePayload = p;
       if (cliSummaryEl) cliSummaryEl.textContent = formatStatuslineCollapsedSummary(p);
-      updateCtxPill(p?.ctx); // P0：toolbar 常显 ctx
       // 展开详情：CLI 密集风、分段着色、纯 DOM 构建。seg = {text,cls} 或 {node}。配色用项目语义色 token
       // （随明/暗主题），不硬塞 CLI 的 Catppuccin。每个非首段把分隔符 │ 与内容打包成一个不可拆的 cell，
       // 这样窄屏 flex-wrap 折行时 │ 永远跟着它后面的值走、不会被孤零零甩到行尾。
@@ -2473,7 +2464,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     let entry = thinkings.get(key);
     if (!entry) {
       const wrap = el(`
-        <details class="msg-frame thinking rounded-lg bg-surface border border-line-soft text-xs text-ink-faint"${transcriptDetailsOpenByDefault(transcriptViewMode) ? ' open' : ''}>
+        <details class="msg-frame thinking rounded-lg bg-surface border border-line-soft text-xs text-ink-faint">
           <summary class="px-3 py-1.5">${t('💭 思考过程')}</summary>
           <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
         </details>`);
@@ -3492,7 +3483,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     syncComposerPlaceholder(); // busy / queueFull / 镜像 共用 placeholder
   }
 
-  // 运行中纠偏：busy 时 placeholder 提示「可排队、不必先停止」；镜像态仍走 mirror 文案。
+  // placeholder：busy 仍用「给 Claude 发消息...」；镜像态走 mirror 文案；队满另提示。
   function syncComposerPlaceholder() {
     if (!inputEl) return;
     if (mirrorReadonlySid) {
@@ -3505,51 +3496,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       mirrorReadonly: false,
       idleText: t('给 Claude 发消息...'),
     });
-  }
-
-  // Transcript 三档：挂 class 到 #messages + 套用 details.open（verbose 全开 / 其余收起）
-  function applyTranscriptViewMode(mode, { persist = false } = {}) {
-    const m = normalizeTranscriptViewMode(mode);
-    transcriptViewMode = m;
-    if (persist) {
-      writeTranscriptViewPref((k, v) => {
-        try { localStorage.setItem(k, v); } catch { /* quota */ }
-      }, m);
-    }
-    if (messagesEl) {
-      messagesEl.classList.remove('transcript-view-normal', 'transcript-view-verbose', 'transcript-view-summary');
-      messagesEl.classList.add(transcriptViewMessagesClass(m));
-      const open = transcriptDetailsOpenByDefault(m);
-      for (const d of messagesEl.querySelectorAll('details.toolcard, details.thinking, details.subagent-card')) {
-        d.open = open;
-      }
-    }
-    if (pillTranscriptViewText) pillTranscriptViewText.textContent = transcriptViewLabel(m);
-    if (pillTranscriptView) {
-      pillTranscriptView.title = transcriptViewTitle(m);
-      pillTranscriptView.setAttribute('aria-label', transcriptViewTitle(m));
-      pillTranscriptView.dataset.mode = m;
-    }
-  }
-
-  function updateCtxPill(ctx) {
-    if (!pillCtx || !pillCtxText) return;
-    const text = formatCtxPillText(ctx);
-    if (!text) {
-      pillCtx.classList.add('hidden');
-      pillCtx.hidden = true;
-      return;
-    }
-    pillCtxText.textContent = text;
-    const tone = ctxPillTone(ctx?.usedPercent);
-    pillCtx.classList.remove('ctx-tone-ok', 'ctx-tone-warn', 'ctx-tone-danger');
-    pillCtx.classList.add(`ctx-tone-${tone}`);
-    pillCtx.classList.remove('hidden');
-    pillCtx.hidden = false;
-    const left = Number.isFinite(ctx?.windowSize) && Number.isFinite(ctx?.tokens)
-      ? ` · left ${Math.max(0, ctx.windowSize - ctx.tokens)}`
-      : '';
-    pillCtx.title = `${text}${left}${t(' · 点按查看 statusline 明细')}`;
   }
 
   function syncComposerDiscoverHint() {
@@ -4496,7 +4442,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         lastSeq = 0;
       }
       resumeFromSeq = cachePlan.resumeFromSeq;
-      applyTranscriptViewMode(transcriptViewMode); // 缓存 DOM 的 details.open 可能与当前档不一致
       scrollBottom(true);
       hasCache = true;
     } else {
@@ -5199,25 +5144,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   });
   const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen
   if (pillDefaults) pillDefaults.onclick = () => openSettingsSheet(); // 点摘要 chip → 会话设置（三块磁贴已展开）
-  // Transcript 三档：点按循环 标准 → 详细 → 摘要（偏好 localStorage）
-  if (pillTranscriptView) {
-    pillTranscriptView.onclick = () => {
-      haptic('tap');
-      applyTranscriptViewMode(cycleTranscriptViewMode(transcriptViewMode), { persist: true });
-      addBar(`${t('显示：')}${transcriptViewLabel(transcriptViewMode)}`, 'text-ink-faint');
-    };
-  }
-  // ctx 常显 pill：点按展开 statusline 明细
-  if (pillCtx) {
-    pillCtx.onclick = () => {
-      haptic('tap');
-      if (cliStatusWrapEl) {
-        cliStatusWrapEl.open = true;
-        try { cliStatusWrapEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { /* ignore */ }
-      }
-    };
-  }
-  applyTranscriptViewMode(transcriptViewMode); // 启动时套用偏好 class + 芯片文案
   // 顶部 pill：工作区入口（chooser → 浏览文件 | 工作区改动）。侧栏不再挂浏览入口。
   if (topContextPill) {
     topContextPill.onclick = (e) => {
@@ -5932,8 +5858,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // force 重读。ack 前禁用+转圈，ack 后恢复；面板与摘要的文案本身经 instances 广播回来的既有路径
   // （refreshComposeDefaultsSummary / rebuildCustomModelGrid 等）自动刷新，这里不重复写渲染逻辑。
   //
-  // 两个入口共用：新会话页摘要行旁的 ↻（只在 compose 页存在）、配置面板顶部的「重读 CLI 配置」
-  // （常驻，已有会话里也能用）。spinEl 单独传是因为后者带文字，整块旋转很怪——只转 [data-spin] 图标。
+  // 两个入口共用：新会话页摘要行旁的 ↻（只在 compose 页存在）、会话设置标题行右侧 ↻
+  // （常驻，已有会话里也能用）。spinEl 单独传：只转图标，避免整块按钮旋转。
   function wireConfigRefreshButton(btn, spinEl = btn) {
     if (!btn) return;
     btn.onclick = () => {
@@ -5949,16 +5875,26 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       socket.emit('config:refresh', { cwd: currentCwd }, () => {
         acked = true;
         restore();
-        // 成功也要有反馈：此前只有失败才提示，成功时图标一闪即停，用户完全看不出刷没刷
-        // （面板还盖着消息流，addBar 在这个场景也看不见）——就地把按钮文案改成"✓ 已刷新"两秒。
+        // 成功反馈：有 [data-label] 就改文案；图标按钮则改 title 两秒（面板盖住消息流时 addBar 看不见）。
         const labelEl = btn.querySelector('[data-label]');
-        if (!labelEl || labelEl.dataset.reverting === '1') return;
-        const original = labelEl.textContent;
-        labelEl.dataset.reverting = '1';
-        labelEl.textContent = t('✓ 已刷新');
+        if (labelEl) {
+          if (labelEl.dataset.reverting === '1') return;
+          const original = labelEl.textContent;
+          labelEl.dataset.reverting = '1';
+          labelEl.textContent = t('✓ 已刷新');
+          setTimeout(() => {
+            labelEl.textContent = original;
+            delete labelEl.dataset.reverting;
+          }, 2000);
+          return;
+        }
+        if (btn.dataset.titleReverting === '1') return;
+        const originalTitle = btn.getAttribute('title') || '';
+        btn.dataset.titleReverting = '1';
+        btn.setAttribute('title', t('✓ 已刷新'));
         setTimeout(() => {
-          labelEl.textContent = original;
-          delete labelEl.dataset.reverting;
+          btn.setAttribute('title', originalTitle);
+          delete btn.dataset.titleReverting;
         }, 2000);
       });
       // 兜底：与文件里其它「乐观禁用+超时兜底恢复」操作（session:home/session:switch 等）对齐——
@@ -6428,7 +6364,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             <summary class="px-3 py-1.5">${t('💭 思考过程')}</summary>
             <pre class="t-body px-3 pb-2 whitespace-pre-wrap"></pre>
           </details>`);
-        if (transcriptDetailsOpenByDefault(transcriptViewMode)) wrap.open = true;
         wrap.querySelector('.t-body').textContent = msg.content || '';
         appendNode(wrap, msg);
         return;
@@ -6446,7 +6381,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
               <pre class="t-out overflow-x-auto whitespace-pre-wrap break-words text-ink-faint hidden"><code></code></pre>
             </div>
           </details>`);
-        if (transcriptDetailsOpenByDefault(transcriptViewMode)) card.open = true;
         setStatusIcon(card.querySelector('.t-status'), 'pending');
         card.dataset.toolName = msg.name || ''; // tool_result 无 name，结果特化渲染从卡上取
         const inCode = card.querySelector('.t-in code');

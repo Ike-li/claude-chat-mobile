@@ -53,7 +53,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#settingsSheetBody #customModelGrid')).toHaveCount(1);
     await expect(page.locator('#settingsSheetBody #customPermGrid')).toHaveCount(1);
     await expect(page.locator('#settingsSheetBody #customEffortGroup')).toHaveCount(1);
-    await expect(page.locator('#settingsSheetBody #btnConfigRefresh')).toHaveCount(1);
+    // CLI 重读在标题行右侧（不占 body 纵向），仍属会话设置面板
+    await expect(page.locator('#settingsSheet #btnConfigRefresh')).toHaveCount(1);
     // 会话 ID 是会话级，从原「访问与设备」段迁入
     await expect(page.locator('#settingsSheetBody #settingsSessionRow')).toHaveCount(1);
 
@@ -67,11 +68,13 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-28c 每段带作用域说明，用户看得出这条设置影响谁', async ({ page }) => {
+  test('P0-28c 通用设置带作用域说明（会话设置已去说明条，靠面板标题本身）', async ({ page }) => {
     await gotoMock(page);
 
+    // 会话设置：不再放「只影响当前会话…」说明条（省纵向、少废话）
     await page.locator('#pillDefaults').click();
-    await expect(page.locator('[data-scope-note="session"]')).toBeVisible();
+    await expect(page.locator('#settingsSheet')).not.toHaveClass(/translate-y-full/);
+    await expect(page.locator('[data-scope-note="session"]')).toHaveCount(0);
     await page.keyboard.press('Escape');
 
     await page.locator('#btnSessions').click();

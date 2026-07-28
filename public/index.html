@@ -496,14 +496,6 @@
                 <span id="pillEffortText" class="pill-defaults-part pill-effort">思考默认</span>
               </span>
             </div>
-            <!-- Transcript 三档（对齐 Desktop Code）：点按循环 标准 → 详细 → 摘要 -->
-            <button type="button" id="pillTranscriptView" class="status-pill-chip toolbar-pill" data-testid="pill-transcript-view" title="标准：工具卡折叠为摘要（默认）" aria-label="会话显示密度">
-              <span id="pillTranscriptViewText">标准</span>
-            </button>
-            <!-- ctx 常显：status_line 有用量时显示，点按展开 cli statusline 明细 -->
-            <button type="button" id="pillCtx" class="status-pill-chip toolbar-pill hidden" data-testid="pill-ctx" title="上下文用量" aria-label="上下文用量" hidden>
-              <span id="pillCtxText">ctx</span>
-            </button>
             <!-- C：空聚焦时淡显 / @ 发现；有字或失焦即藏；不挡键盘 -->
             <span id="composerDiscoverHint" class="hidden composer-discover-hint select-none" data-testid="composer-discover-hint" aria-hidden="true">/ · @</span>
           </div>
@@ -623,36 +615,29 @@
        chip #pillDefaults，在 #composerFooter 内，首页 syncComposerVisibility 会把整个
        footer 设 hidden）。 -->
   <div id="settingsSheet" class="fixed inset-x-0 bottom-0 z-40 rounded-t-2xl bg-surface border-t-3 border-accent shadow-pop transform translate-y-full transition-transform duration-300 flex flex-col max-h-[85vh] overflow-hidden safe-bottom" style="border-top-color:var(--accent)" role="dialog" aria-modal="true" aria-labelledby="settingsSheetTitle">
-    <!-- 下拉关闭热区：把手 + 标题（内容区滚动不绑手势） -->
-    <div id="settingsDragZone" class="settings-drag-zone shrink-0 select-none" aria-label="下拉关闭配置面板">
-      <div class="sheet-handle"></div>
-      <div class="px-4 pt-0.5 pb-2 border-b border-line-soft bg-surface">
-        <div id="settingsSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 会话设置</div>
-        <div class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭</div>
+    <!-- 标题行：左侧拖关热区 + 右侧 CLI 重读（图标，不占内容区纵向） -->
+    <div class="shrink-0 border-b border-line-soft bg-surface flex items-start">
+      <div id="settingsDragZone" class="settings-drag-zone flex-1 min-w-0 select-none" aria-label="下拉关闭配置面板">
+        <div class="sheet-handle"></div>
+        <div class="px-4 pt-0.5 pb-2">
+          <div id="settingsSheetTitle" class="text-sm font-bold text-ink" style="font-family:var(--font-read)">⚙️ 会话设置</div>
+        </div>
       </div>
+      <!-- 终端改了 settings 后手动重读；与 compose 页 ↻ 同源 config:refresh -->
+      <button id="btnConfigRefresh" type="button" class="shrink-0 mt-2.5 mr-3 w-8 h-8 flex items-center justify-center rounded-lg text-ink-soft hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置" aria-label="重新读取 CLI 配置">
+        <span class="text-base leading-none" data-spin>↻</span>
+      </button>
     </div>
 
-    <!-- 方案 A：纵向预算——压模型区高度与分节间距，让权限 6 格尽量落在首屏（常切 model/perm/effort） -->
     <div id="settingsSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3 space-y-3">
-      <!-- 作用域 + CLI 重读合并一行，省掉原先两行说明的纵向占用 -->
-      <div class="flex items-start justify-between gap-2">
-        <div class="min-w-0 text-[10px] text-ink-faint leading-snug px-0.5">
-          <div data-scope-note="session">只影响当前会话；模型 / 思考强度下一条消息起效。</div>
-          <div class="mt-0.5 truncate" title="下面的模型 / 权限 / 命令来自 CLI 配置，终端改了不会自动感知">CLI 配置不自动同步 · 改终端后点右侧重读</div>
-        </div>
-        <button id="btnConfigRefresh" type="button" class="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-line text-[10px] text-ink-soft hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置">
-          <span class="text-xs leading-none" data-spin>↻</span><span data-label>重读</span>
-        </button>
-      </div>
-
-      <!-- 1/2/3. 模型 · 思考强度 · 权限：始终展开；模型 max-h 内滚，把首屏让给强度+权限 -->
+      <!-- 1/2/3. 模型 · 思考强度 · 权限：始终展开；模型区不设内滚，整表自然排开 -->
       <section id="modelSection" class="settings-block">
         <div class="settings-block-head">
           <span class="shrink-0">✨</span>
           <span class="shrink-0 text-xs font-semibold text-ink-soft">模型</span>
           <span class="text-[10px] text-ink-faint ml-1">下一条消息起效</span>
         </div>
-        <div id="customModelGrid" class="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
+        <div id="customModelGrid" class="grid grid-cols-2 gap-1.5">
           <!-- 动态生成的模型卡片 -->
         </div>
       </section>

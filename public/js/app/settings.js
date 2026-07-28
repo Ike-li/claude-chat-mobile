@@ -158,6 +158,8 @@ export function createSettingsController(context, {
   function onDragPointerDown(ev) {
     if (!isOpen()) return;
     if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+    // 标题行旁按钮（如 CLI 重读）不启动拖关，避免吞掉 click
+    if (ev.target?.closest?.('button, a, input, select, textarea, [role="button"]')) return;
     const sheet = sheetEl();
     const zone = dom[keys.dragZone];
     if (!sheet || !zone) return;

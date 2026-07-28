@@ -359,10 +359,11 @@ export function queuedBubbleState({ queued = false } = {}) {
   return { show: true, label: t('⏳ 排队中 · 当前步骤后发送') };
 }
 
-// Composer placeholder：busy 时提示可纠偏排队（输入区 busy 时不 disabled，见 FE-004）。
+// Composer placeholder：busy 与否都用 idle 文案（「给 Claude 发消息...」），不改成「纠偏」提示。
+// 可排队发送的能力保留，只是不在 placeholder 上教育用户。busy 参数仍接受（调用方透传），仅不改变文案。
 // mirrorReadonly 优先（镜像态整框只读，placeholder 由镜像文案接管）。
 export function resolveComposerPlaceholder({
-  busy = false,
+  busy: _busy = false,
   queueFull = false,
   mirrorReadonly = false,
   mirrorText = '',
@@ -370,79 +371,7 @@ export function resolveComposerPlaceholder({
 } = {}) {
   if (mirrorReadonly) return mirrorText || idleText;
   if (queueFull) return t('前面已有消息在排队，请等当前任务结束');
-  if (busy) return t('输入纠偏，当前步骤后发送…');
   return idleText;
-}
-
-// ---- Transcript 三档密度（对齐 Claude Desktop Code Transcript view）----
-// 同一 DOM 用 CSS class + details.open 切换；不重写后端 / 不丢事件。
-export const TRANSCRIPT_VIEW_MODES = Object.freeze(['normal', 'verbose', 'summary']);
-export const TRANSCRIPT_VIEW_STORAGE_KEY = 'ccm_transcript_view';
-
-export function normalizeTranscriptViewMode(mode) {
-  return TRANSCRIPT_VIEW_MODES.includes(mode) ? mode : 'normal';
-}
-
-export function cycleTranscriptViewMode(mode) {
-  const cur = normalizeTranscriptViewMode(mode);
-  const i = TRANSCRIPT_VIEW_MODES.indexOf(cur);
-  return TRANSCRIPT_VIEW_MODES[(i + 1) % TRANSCRIPT_VIEW_MODES.length];
-}
-
-/** 芯片短文案 */
-export function transcriptViewLabel(mode) {
-  switch (normalizeTranscriptViewMode(mode)) {
-    case 'verbose': return t('详细');
-    case 'summary': return t('摘要');
-    default: return t('标准');
-  }
-}
-
-/** title / aria 完整说明 */
-export function transcriptViewTitle(mode) {
-  switch (normalizeTranscriptViewMode(mode)) {
-    case 'verbose': return t('详细：展开全部工具与思考（调试用）');
-    case 'summary': return t('摘要：只看对话与改动汇总（扫结果）');
-    default: return t('标准：工具卡折叠为摘要（默认）');
-  }
-}
-
-export function transcriptViewMessagesClass(mode) {
-  return `transcript-view-${normalizeTranscriptViewMode(mode)}`;
-}
-
-/** verbose 新建/套用时 details 默认 open */
-export function transcriptDetailsOpenByDefault(mode) {
-  return normalizeTranscriptViewMode(mode) === 'verbose';
-}
-
-export function readTranscriptViewPref(getItem) {
-  try {
-    return normalizeTranscriptViewMode(typeof getItem === 'function' ? getItem(TRANSCRIPT_VIEW_STORAGE_KEY) : null);
-  } catch {
-    return 'normal';
-  }
-}
-
-export function writeTranscriptViewPref(setItem, mode) {
-  const m = normalizeTranscriptViewMode(mode);
-  try {
-    if (typeof setItem === 'function') setItem(TRANSCRIPT_VIEW_STORAGE_KEY, m);
-  } catch { /* quota / 隐私模式 */ }
-  return m;
-}
-
-// ---- ctx 常显 pill（statusline 折叠条之外的 toolbar 捷径）----
-export function formatCtxPillText(ctx) {
-  return formatStatuslineCtxBrief(ctx);
-}
-
-/** 与 statusline ctx 段同阈值：≥90 danger · ≥70 warn · 其余 ok */
-export function ctxPillTone(usedPercent) {
-  if (!Number.isFinite(usedPercent)) return 'ok';
-  if (usedPercent >= 90) return 'danger';
-  if (usedPercent >= 70) return 'warn';
-  return 'ok';
 }
 
 // 回合末滚动：有文件汇总卡则锚定到卡（手机扫结果）；否则落底。
