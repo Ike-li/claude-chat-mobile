@@ -1029,7 +1029,8 @@ async function catchUpTickOnce() {
       tailVerdict: tail.verdict, localBusy, lastChainTs: tail.lastChainTs, now: Date.now(), locked: entryLock, autonomous: entryAutonomous, registryBusy,
     }));
     setMirror(entryLock, a.sessionId, true,              // force 清上个会话残留的锁/发权威态
-      mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy }),
+      // serverStartedAt：pending 尾部若落盘于本进程启动前 → 是被服务重启腰斩的残留，不是活驾驶员（见 mirrorStaleFlag）
+      mirrorStaleFlag({ readonly: entryLock, tailPending: tail.verdict === 'pending', lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy, serverStartedAt: SERVICE_STARTED_AT }),
       observedCli, id, 'entry_lock', entryAutonomous);
     return;
   }
@@ -1119,7 +1120,8 @@ async function catchUpTickOnce() {
   }); // 外部 text 写入/注册表自报 busy→锁；文件仍在长/轮次未完结→维持锁；真静默→累计、达阈值自动解锁
   mirrorRelease = rel.state;
   setMirror(rel.readonly, a.sessionId, false,                       // 锁/stale/CLI 观察值任一变化都广播
-    mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy }),
+    // serverStartedAt 必须与切入分支同口径：只在切入传会让下一 tick 把「服务重启腰斩」的 stale 覆盖回「驾驶中」文案闪烁
+    mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy, serverStartedAt: SERVICE_STARTED_AT }),
     observedCli, id, 'normal_tick', registryBusy ? false : tail.autonomous);
 }
 let catchUpInFlight = null;

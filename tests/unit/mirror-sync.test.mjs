@@ -314,6 +314,36 @@ test('mirrorStaleFlag：registryBusy=true 压制"疑似中断"（新鲜自报=�
   assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: over, now }), true, '不传 → 既有 stale 行为不变');
 });
 
+// 服务重启腰斩（2026-07-28 真机 b06fb05d）：web 自己的回合跑到一半，server 被重启，SDK 子进程随之
+// 被杀——transcript 永远停在 tool_result（形态 pending），但没有任何驾驶员还活着。重启后几十秒内打开
+// 该会话时：陈旧豁免（5 分钟）还没生效 → mirrorEntryLock 预锁；registryBusy 只认 entrypoint=cli 的
+// status 自报，web 自己的 sdk-ts 条目不背书 → 回落尾部形态 → 横幅说「终端会话运行中」（说谎，终端从没
+// 参与过），且 mirrorReleaseStep 的 tailPending 分支使锁永不自动释放。
+// 判据：pending 尾部落盘于本 server 进程启动【之前】 + 注册表不背书 ⇒ 这条 pending 不可能是本进程
+// 期间的活动产生的 → 直接判 stale，让前端出「可续接」文案与入口，不必干等 5 分钟。
+// 锁态刻意不改（仍 readonly）：真终端跑旧版 CLI（不写注册表）时误判的代价只是提前显示接管引导。
+test('mirrorStaleFlag：pending 尾部早于本次 server 启动 + 注册表不背书 → 立即 stale（服务重启腰斩）', () => {
+  const now = 1_800_000_000_000;
+  const serverStartedAt = now - 40_000;           // server 40 秒前启动
+  const beforeRestart = serverStartedAt - 14_000; // 末条落盘比启动早 14 秒（真机实测差值）
+  const afterRestart = serverStartedAt + 5_000;   // 启动之后才落盘 = 真有人在驾驶
+  assert.equal(
+    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: beforeRestart, now, serverStartedAt }),
+    true, '腰斩残留：未超 5 分钟也应判 stale');
+  assert.equal(
+    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: afterRestart, now, serverStartedAt }),
+    false, '本进程启动后仍在写 → 真驾驶中，不得误标中断');
+  assert.equal(
+    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: beforeRestart, now, serverStartedAt, registryBusy: true }),
+    false, 'registryBusy 权威自报优先：终端确实活着（长工具卡住）→ 压制');
+  assert.equal(
+    H.mirrorStaleFlag({ readonly: false, tailPending: true, lastChainTs: beforeRestart, now, serverStartedAt }),
+    false, '未锁 → stale 无意义（与既有语义一致）');
+  assert.equal(
+    H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: beforeRestart, now }),
+    false, '不传 serverStartedAt → 既有行为不变（未超阈值不 stale）');
+});
+
 test('describeMirrorEntryLock：透传 registryBusy 供诊断时间线回放', () => {
   assert.equal(
     H.describeMirrorEntryLock({ tailVerdict: 'settled', locked: true, registryBusy: true }).registryBusy,

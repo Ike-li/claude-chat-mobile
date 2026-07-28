@@ -2139,9 +2139,11 @@ export function formatMirrorBannerText({ armed = false, stale = false, autonomou
   if (armed) return autonomous
     ? t('只读镜像：已请求续接，等待自主循环当前操作完成…')
     : t('只读镜像：已请求续接，等待终端当前操作完成…');
+  // 不写「超 5 分钟无活动」：stale 有两条触发路径，服务重启腰斩那条（mirrorStaleFlag 的 serverStartedAt
+  // 判据）几十秒就会置位，写死时长会说谎。文案只讲判定结论「疑似中断、可续接」。
   if (stale) return autonomous
-    ? t('只读镜像：自主循环疑似中断（超 5 分钟无活动）——确认已停可续接')
-    : t('只读镜像：终端疑似中断（超 5 分钟无活动）——确认已停可续接');
+    ? t('只读镜像：自主循环疑似中断——确认已停可续接')
+    : t('只读镜像：终端疑似中断——确认已停可续接');
   if (autonomous) return t('只读镜像：本会话自主循环执行中，移动端当前只读');
   return t('只读镜像：终端会话运行中，移动端当前只读');
 }

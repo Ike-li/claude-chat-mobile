@@ -938,9 +938,18 @@ export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastCh
 // 始终要用户显式确认）。误判代价低——只是提前显示「可接管」引导，不改变锁态。
 // 注意：仅在【已上锁】后的驾驶过程中有意义；切入时陈旧 pending 由 mirrorEntryLock 直接不锁，不会走到这里。
 // registryBusy（P1）：新鲜自报=终端确定活着，压制「疑似中断」文案（中断的进程写不了 statusUpdatedAt）。
-export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, registryBusy = false } = {}) {
+// serverStartedAt（2026-07-28 真机 b06fb05d）：web 自己的回合被 server 重启腰斩后，transcript 永远
+// 停在 tool_result（形态 pending）却没有任何驾驶员活着；重启后几十秒内打开时 5 分钟陈旧豁免尚未生效，
+// 横幅会说「终端会话运行中」——终端从没参与过这个会话，纯属说谎，且 mirrorReleaseStep 的 tailPending
+// 分支让锁永不自动释放。判据：pending 尾部落盘于【本 server 进程启动之前】⇒ 它不可能是本进程期间的
+// 活动产生的 ⇒ 立即判 stale（前端出「可续接」文案与入口），不必干等 5 分钟。
+// 刻意只改文案态、不改锁态：真终端跑旧版 CLI（不写注册表 → registryBusy 恒 false）且卡在跨越重启的
+// 长工具上时会被误标，代价仅是提前显示接管引导——与本函数既有的「误判代价低」取舍同档。
+export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, registryBusy = false, serverStartedAt = null } = {}) {
   if (registryBusy) return false;
-  return Boolean(readonly && tailPending && lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS));
+  if (!readonly || !tailPending || lastChainTs == null) return false;
+  if (now - lastChainTs > MIRROR_STALE_PENDING_MS) return true;
+  return serverStartedAt != null && lastChainTs < serverStartedAt;
 }
 
 // ── 尾部形态判定（单驾驶员模型核心判据，2026-07-12 本机实验实证）────────────────────────────
