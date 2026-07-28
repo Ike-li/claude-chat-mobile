@@ -17,7 +17,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
-import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode } from '../agent/cli-settings-defaults.js';
+import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
@@ -1198,21 +1198,7 @@ if (process.env.CLI_HOOKS_BRIDGE === 'off') {
   console.log('[hooks] CLI hooks 桥未安装：终端直跑的会话仅靠轮询、无推送（npm run hooks:install 或在设置面板一键启用）');
 }
 
-// SDK Options.effort 五档；ultracode 是 CLI /effort 菜单项（→ xhigh + Settings.ultracode），非 effort 枚举字面量
-const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
-// UI 合法档 = SDK 五档 + ultracode + null（模型默认）
-function normalizeEffortUiLevel(level) {
-  if (level === null || level === undefined || level === '') {
-    return { ui: null, sdk: null, ultracode: false };
-  }
-  if (level === 'ultracode') {
-    return { ui: 'ultracode', sdk: 'xhigh', ultracode: true };
-  }
-  if (EFFORT_LEVELS.includes(level)) {
-    return { ui: level, sdk: level, ultracode: false };
-  }
-  return null; // 非法
-}
+// effort UI 归一：normalizeEffortUiLevel（cli-settings-defaults.js）——ultracode → xhigh + Settings.ultracode。
 // 最近一次 init payload + 按 cwd 归键的 models / slashCommands 缓存：新连接重放，免发消息即得加载摘要、命令列表与模型候选。
 // 持久化到 data/init-cache.json 跨重启读回（CLI 收到首条消息前不输出 init——init 是轮次开始信号，
 // 预热 spawn 也等不来；缓存可能陈旧但每轮 init 覆盖刷新，文件可随时删除，损坏即当作没有）。

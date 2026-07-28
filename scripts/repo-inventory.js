@@ -31,6 +31,7 @@ const ROOT_FILES = new Map([
   // docs/ 手写文档逐篇显式登记（无 .md 通配）：往 docs/ 新增文档必须先在此声明用途，
   // 否则 inventory:check 拒绝——挡住审计报告/进度笔记/提案等一次性产物悄悄回堆。
   ['docs/deployment.md', ['Documentation', 'Persistent service, tunnel, and Cloudflare Access operations guide', 'keep']],
+  ['docs/display-contracts.md', ['Documentation', 'Display contracts: model / effort / statusline TUI–SDK–FE rules and test anchors', 'keep']],
 ]);
 
 const PREFIX_RULES = [

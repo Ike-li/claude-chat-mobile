@@ -36,6 +36,15 @@ export const CCM_EFFORT_LEVELS = Object.freeze([
 ]);
 
 /**
+ * UI 合法思考档 = SDK 五档 + ultracode。
+ * ultracode 是 CLI /effort 菜单项，不是 Options.effort 字面量。
+ */
+export const UI_EFFORT_LEVELS = Object.freeze([
+  ...CCM_EFFORT_LEVELS,
+  'ultracode',
+]);
+
+/**
  * 把 settings / 入参里的权限档归一成 CCM 可识别值。
  * - 'manual' → 'default'（SDK 文档：manual 是 default 别名）
  * - 其余非白名单档 → null（调用方回落 L4）
@@ -51,10 +60,33 @@ export function normalizePermissionMode(mode) {
  * 把 settings.effortLevel / 入参归一成 CCM effort 档。
  * null/undefined/'' → null（= 模型默认，合法）。
  * 非法字符串 → null（不当真值透传）。
+ * 注意：不认 ultracode——那是 UI 档，见 normalizeEffortUiLevel。
  */
 export function normalizeEffortLevel(level) {
   if (level == null || level === '') return null;
   if (CCM_EFFORT_LEVELS.includes(level)) return level;
+  return null;
+}
+
+/**
+ * UI → SDK effort 归一（user:setEffort / openInstance 入参）。
+ * · null/'' → { ui:null, sdk:null, ultracode:false }（模型默认）
+ * · ultracode → { ui:'ultracode', sdk:'xhigh', ultracode:true }（Settings.ultracode + xhigh）
+ * · SDK 五档 → { ui, sdk 同值, ultracode:false }
+ * · 非法 → null（调用方拒切/回落）
+ *
+ * 契约：docs/display-contracts.md §Effort；tests/unit/display-contracts.test.mjs 锁住。
+ */
+export function normalizeEffortUiLevel(level) {
+  if (level === null || level === undefined || level === '') {
+    return { ui: null, sdk: null, ultracode: false };
+  }
+  if (level === 'ultracode') {
+    return { ui: 'ultracode', sdk: 'xhigh', ultracode: true };
+  }
+  if (CCM_EFFORT_LEVELS.includes(level)) {
+    return { ui: level, sdk: level, ultracode: false };
+  }
   return null;
 }
 

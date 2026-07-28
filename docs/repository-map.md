@@ -36,7 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 54 |
 | Configuration template | 1 |
 | Deployment | 3 |
-| Documentation | 4 |
+| Documentation | 5 |
 | E2E test | 42 |
 | Frontend asset | 3 |
 | Frontend source | 22 |
@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 115 |
+| Unit test | 116 |
 | Vendored asset | 21 |
 
-Total classified files: **345**.
+Total classified files: **347**.
 
 ## Complete file inventory
 
@@ -71,6 +71,7 @@ Total classified files: **345**.
 | `deploy/server.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/tunnel.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `docs/deployment.md` | Documentation | Persistent service, tunnel, and Cloudflare Access operations guide | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/display-contracts.md` | Documentation | Display contracts: model / effort / statusline TUI–SDK–FE rules and test anchors | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/repository-map.md` | Generated documentation | Exhaustive repository file map | README, documentation site, or maintainer reference | `npm run inventory:update` | generated |
 | `eslint.config.js` | Project configuration | ESLint flat config (npm run check static gate) | `npm run check` / `npm run lint` | Authored and reviewed manually | keep |
 | `LICENSE` | Legal | Project license | Referenced by maintainers | Authored and reviewed manually | keep |
@@ -323,6 +324,7 @@ Total classified files: **345**.
 | `tests/unit/device-gate.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/devices.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/diag-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/display-contracts.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/doc-consistency.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/doctor-checks.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/doctor-runtime.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
