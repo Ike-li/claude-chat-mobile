@@ -739,6 +739,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     return addBar(text, className);
   }
+  // 通用设置打开后可选滚到指定 id（推送铃铛）；须在 notifications 之前声明，bellAction 闭包写入
+  let generalScrollToId = null;
+  let general = null; // 后段 createSettingsController 赋值；bellAction 点击时再 open
   const notifications = createNotificationController(appContext, {
     addBar,
     getToken: () => token,
@@ -748,8 +751,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 铃铛住在侧栏底部固定条：先收侧栏再弹 sheet（两者同 z-40，同 btnGeneralSettings 的顺序约束）。
     bellAction: () => {
       closeLeftSidebar();
-      general.open();
-      $('pushStatusRow')?.scrollIntoView({ block: 'center' });
+      // open() 会把 body scrollTop 置 0；用 pending 标记在 onOpen 后 rAF 再滚到推送段
+      generalScrollToId = 'pushStatusRow';
+      general?.open();
     },
   });
   // 与 alertCue 对称：sync:since 补发期间静音 OS 通知，避免前台完成通知连弹（result / task_notification）
@@ -5022,9 +5026,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 这样是「先收侧栏、再弹面板」而不是反过来闪一帧。也**不能**改写 btnGeneralSettings.onclick
   // （那是控制器 bind 的落点，覆盖掉 open 就没了）。
   if (btnGeneralSettings) btnGeneralSettings.addEventListener('click', closeLeftSidebar);
+  function applyGeneralScrollTarget() {
+    const id = generalScrollToId;
+    generalScrollToId = null;
+    if (!id) return;
+    // 等 sheet 动画与 push 状态行渲染完再滚，否则 bounding box 还是 0
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.getElementById(id)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      });
+    });
+  }
   // 通用设置（侧栏底部入口，全局可达）：📱 本机偏好 + 🖥 主机与服务 + 🔑 访问与帮助。
   // beforeOpen 收掉可能还开着的会话设置——两个 sheet 同为 z-40，叠着会露出下面那层的边。
-  const general = createSettingsController(appContext, {
+  general = createSettingsController(appContext, {
     keys: {
       sheet: 'generalSheet', body: 'generalSheetBody', scrim: 'generalScrim',
       dragZone: 'generalDragZone', close: 'generalClose', trigger: 'btnGeneralSettings',
@@ -5032,7 +5047,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     alerts, haptic, pushPreview, langPref,
     beforeOpen: () => { if (settings.isOpen()) settings.close(); },
     // 推送订阅状态每次打开重算：权限可能在系统设置里被改过，渲染一次会过期。
-    onOpen: () => renderPushStatusRow(),
+    onOpen: () => {
+      renderPushStatusRow();
+      applyGeneralScrollTarget();
+    },
+  });
+  // 顶部分段锚点：本机 / 主机 / 帮助
+  generalSheetBody?.querySelectorAll?.('[data-scroll-to]')?.forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const id = btn.getAttribute('data-scroll-to');
+      if (!id) return;
+      document.getElementById(id)?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
   });
   const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen
   if (pillDefaults) pillDefaults.onclick = () => openSettingsSheet(); // 点摘要 chip → 会话设置（三块磁贴已展开）

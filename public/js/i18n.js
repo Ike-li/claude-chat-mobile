@@ -50,6 +50,12 @@ export const EN_DICT = Object.freeze({
   '查看会话日志': 'View session log',
   '创建新会话': 'New session',
   '工作区与会话': 'Workspaces & sessions',
+  '偏好与通知': 'Preferences & notifications',
+  '本机提醒 · 推送 · 语言 · 诊断': 'Alerts · push · language · diagnostics',
+  '打开偏好与通知': 'Open preferences & notifications',
+  '推送未接通': 'Push offline',
+  '去开启': 'Set up',
+  '下拉或点外侧关闭 · 非会话模型/权限': 'Swipe down or tap outside · not session model/permissions',
   '定位到未读消息': 'Jump to unread messages',
   '条未读 ↑': 'unread ↑',
 

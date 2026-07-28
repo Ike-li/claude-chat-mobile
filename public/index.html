@@ -152,17 +152,20 @@
          放侧栏而不是 composer：本机偏好/主机与服务那几段跟会话无关，不该随 composer 一起隐藏——
          首页、compose 页、会话已中断页都得能改语言、查推送为什么不通。 -->
     <div class="shrink-0 border-t border-line bg-surface safe-bottom">
-      <!-- E15：推送告警入口（原 composer 铃铛迁入）。默认隐藏，notifications.setup() 只在推送
-           未接通（环境不支持/权限被拒/订阅失败）时露出；点击带去通用设置的 #pushStatusRow——
-           那里才是权威解释处（当前状态 + 为什么 + 下一步），铃铛自己不弹解释。 -->
-      <button id="btnPush" type="button" class="hidden w-full flex items-center gap-2 px-4 py-3 text-sm text-accent hover:bg-sunk active:scale-[0.99] transition-all border-b border-line-soft/50" data-testid="push-alert-entry" aria-label="推送未接通，查看推送状态">
+      <!-- E15：推送告警入口。默认隐藏；未接通时 accent-wash 更醒目。点→收侧栏+通用设置并滚到 #pushStatusRow -->
+      <button id="btnPush" type="button" class="hidden w-full flex items-center gap-2 px-4 py-3 text-sm text-accent bg-accent-wash/40 hover:bg-accent-wash active:scale-[0.99] transition-all border-b border-accent/20" data-testid="push-alert-entry" aria-label="推送未接通，查看推送状态">
         <span aria-hidden="true">🔔</span>
         <span class="flex-1 text-left font-medium">推送未接通</span>
+        <span class="text-[10px] text-accent/80 shrink-0">去开启</span>
         <span class="text-ink-faint" aria-hidden="true">→</span>
       </button>
-      <button id="btnGeneralSettings" type="button" class="w-full flex items-center gap-2 px-4 py-3 text-sm text-ink hover:bg-sunk active:scale-[0.99] transition-all" data-testid="general-settings-entry" aria-label="打开设置">
+      <!-- 命名与底栏「会话设置」区分：本机偏好 / 通知 / 主机诊断，不是 model·perm·effort -->
+      <button id="btnGeneralSettings" type="button" class="w-full flex items-center gap-2 px-4 py-3 text-sm text-ink-soft hover:bg-sunk active:scale-[0.99] transition-all" data-testid="general-settings-entry" aria-label="打开偏好与通知">
         <span aria-hidden="true">⚙️</span>
-        <span class="flex-1 text-left font-medium">设置</span>
+        <span class="flex-1 text-left min-w-0">
+          <span class="font-medium text-ink block">偏好与通知</span>
+          <span class="text-[10px] text-ink-faint block">本机提醒 · 推送 · 语言 · 诊断</span>
+        </span>
         <span class="text-ink-faint" aria-hidden="true">→</span>
       </button>
     </div>
@@ -701,16 +704,23 @@
     <div id="generalDragZone" class="settings-drag-zone shrink-0 select-none" aria-label="下拉关闭设置">
       <div class="sheet-handle"></div>
       <div class="px-4 pt-0.5 pb-2 border-b border-line-soft bg-surface">
-        <div id="generalSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 设置</div>
-        <div class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭</div>
+        <div id="generalSheetTitle" class="text-sm font-bold text-ink flex items-center gap-1.5" style="font-family:var(--font-read)">⚙️ 偏好与通知</div>
+        <div class="text-[10px] text-ink-faint mt-0.5">下拉或点外侧关闭 · 非会话模型/权限</div>
       </div>
     </div>
 
-    <div id="generalSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-5">
+    <div id="generalSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3 space-y-4">
+      <!-- 分段锚点：长面板快速跳到本机 / 主机 / 帮助 -->
+      <div class="flex flex-wrap gap-1.5 sticky top-0 z-[1] bg-surface py-1 -mx-0.5" data-testid="general-section-nav">
+        <button type="button" class="general-nav-chip px-2.5 py-1 rounded-full border border-line text-[11px] text-ink-soft active:bg-sunk" data-scroll-to="generalSectionDevice">📱 本机</button>
+        <button type="button" class="general-nav-chip px-2.5 py-1 rounded-full border border-line text-[11px] text-ink-soft active:bg-sunk" data-scroll-to="generalSectionHost">🖥 主机</button>
+        <button type="button" class="general-nav-chip px-2.5 py-1 rounded-full border border-line text-[11px] text-ink-soft active:bg-sunk" data-scroll-to="generalSectionHelp">🔑 帮助</button>
+      </div>
+
       <!-- ═══ 📱 这台手机 ═══ 存 localStorage，只作用于当前设备/浏览器 -->
-      <div class="text-xs font-bold text-ink flex items-center gap-1.5 pt-0.5">📱 <span>这台手机</span></div>
-      <div data-scope-note="device" class="text-[10px] text-ink-faint leading-relaxed px-0.5 -mt-3">
-        只影响此设备 / 浏览器上的提醒与显示，换一台设备要重新设一次。
+      <div id="generalSectionDevice" class="text-xs font-bold text-ink flex items-center gap-1.5 pt-0.5 scroll-mt-8">📱 <span>这台手机</span></div>
+      <div data-scope-note="device" class="text-[10px] text-ink-faint leading-snug px-0.5 -mt-2">
+        只影响此设备 / 浏览器；换机需重设。
       </div>
 
       <!-- 3b. 完成提示（默认开，可关）——轮次完成 / 需要你时的音与震 -->
@@ -742,12 +752,9 @@
         </div>
       </div>
 
-      <!-- 3c. 推送内容预览（默认关）——web-push payload 本身已 RFC 8291 端到端加密（push service 读不到），
-           但仍是"锁屏可见明文"的物理偷窥面，默认最小化；开启后通知带问题/工具/任务摘要，不再只是"有新消息"。 -->
-      <div>
+      <!-- 3c. 推送（#pushStatusRow 为铃铛/侧栏入口深链目标） -->
+      <div id="generalSectionPush" class="scroll-mt-8">
         <div class="text-xs font-semibold text-ink-soft mb-2">📬 <span>推送内容</span> <span class="text-xs text-ink-faint font-normal">(默认关，可开)</span></div>
-        <!-- 订阅状态行：推送不通时此前界面上没有任何痕迹（铃铛在权限被拒/订阅失败时都不显示），
-             用户只会以为"这功能没用"。这里把状态摆出来，并给出下一步。 -->
         <div id="pushStatusRow" class="mb-2"></div>
         <div class="space-y-2">
           <label class="flex items-center justify-between gap-3 p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink cursor-pointer">
@@ -781,9 +788,9 @@
       </div>
 
       <!-- ═══ 🖥 这台电脑 ═══ 落在主机上（~/.claude/settings.json、常驻 server），跨设备共享 -->
-      <div class="text-xs font-bold text-ink flex items-center gap-1.5 pt-1">🖥 <span>这台电脑</span></div>
-      <div data-scope-note="host" class="text-[10px] text-ink-faint leading-relaxed px-0.5 -mt-3">
-        影响整台电脑上的所有会话（含你在终端里自己敲 claude 起的那些），换手机看也是同一份。
+      <div id="generalSectionHost" class="text-xs font-bold text-ink flex items-center gap-1.5 pt-1 scroll-mt-8">🖥 <span>这台电脑</span></div>
+      <div data-scope-note="host" class="text-[10px] text-ink-faint leading-snug px-0.5 -mt-2">
+        影响整机所有会话（含终端 claude），换手机看也是同一份。
       </div>
 
       <!-- 终端会话推送（CLI hooks 桥）：对用户而言就是"电脑终端里跑的会话要不要通知我"。整段由 app.js
@@ -794,16 +801,15 @@
         <div class="text-[10px] text-ink-faint px-1 mt-1.5">只影响你在电脑终端里自己敲 claude 起的会话——那类会话在开启前从来收不到通知。手机/网页发起的会话本来就会推送，不受此开关影响。</div>
       </div>
 
-      <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2">🩺 <span>诊断</span></div>
-        <div class="space-y-2">
-          <!-- ④ UI 安全体检：公网暴露前一键自查（token/白名单/CF/设备…）-->
+      <!-- 诊断默认折叠：非常用路径，省首屏高度 -->
+      <details id="generalDiagDetails" class="rounded-xl border border-line bg-surface">
+        <summary class="px-2.5 py-2 text-xs font-semibold text-ink-soft cursor-pointer select-none">🩺 <span>诊断</span> <span class="text-[10px] text-ink-faint font-normal">体检 · 服务状态</span></summary>
+        <div class="space-y-2 px-2.5 pb-2.5">
           <button id="btnSecurityCheck" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">🔍 安全体检 · 公网暴露前自查 →</button>
           <div id="doctorReport" class="hidden p-2.5 rounded-xl border border-line bg-surface text-xs space-y-0.5"></div>
-          <!-- 服务状态面板入口：运行时长/指标/告警（#serviceStatusModal，接线在 app.js） -->
           <button id="btnServiceStatus" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">📊 服务状态 · 运行时长 / 版本 / 告警 →</button>
         </div>
-      </div>
+      </details>
 
       <!-- 开发者模式：一键重启常驻 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
       <div id="devModeGroup" class="hidden">
@@ -811,8 +817,8 @@
         <button id="btnRestartServer" type="button" class="w-full text-left p-2.5 rounded-xl border border-warning/40 bg-warning/5 active:bg-warning/10 text-xs text-warning">⟳ 重启服务（改代码/.env 后生效）</button>
       </div>
 
-      <!-- ═══ 🔑 访问与帮助 ═══ 无作用域可言（一个说明页 + 一个外链），单列一节免得挂错层 -->
-      <div class="text-xs font-bold text-ink flex items-center gap-1.5 pt-1">🔑 <span>访问与帮助</span></div>
+      <!-- ═══ 🔑 访问与帮助 ═══ -->
+      <div id="generalSectionHelp" class="text-xs font-bold text-ink flex items-center gap-1.5 pt-1 scroll-mt-8">🔑 <span>访问与帮助</span></div>
       <div class="space-y-2 -mt-2">
         <button id="accessHelpOpen" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">新设备怎么批 · 令牌在哪 · 连不上怎么办 →</button>
         <!-- GitHub 仓库外链：纯静态 <a>，无需 app.js 接线，浏览器原生新标签页打开 -->

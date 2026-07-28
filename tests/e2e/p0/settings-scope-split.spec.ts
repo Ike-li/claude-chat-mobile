@@ -125,6 +125,25 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#leftSidebar')).toHaveClass(/-translate-x-full/);
     await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
     await expect(page.locator('#generalSheetBody #pushStatusRow')).toHaveCount(1);
+    // 深链：推送段应滚进视口（不卡在面板顶部「完成提示」）
+    await expect(page.locator('#pushStatusRow')).toBeInViewport({ timeout: 3_000 });
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-28g 侧栏入口文案为「偏好与通知」；顶部分段锚点可跳到主机/帮助', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await gotoMock(page);
+    await page.locator('#btnSessions').click();
+    await expect(page.locator('#btnGeneralSettings')).toContainText('偏好与通知');
+    await page.locator('#btnGeneralSettings').click();
+    await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
+    await expect(page.locator('[data-testid="general-section-nav"]')).toBeVisible();
+    await page.locator('[data-scroll-to="generalSectionHelp"]').click();
+    await expect(page.locator('#generalSectionHelp')).toBeInViewport({ timeout: 3_000 });
+    await expect(page.locator('#generalDiagDetails')).toBeVisible();
+    // 诊断默认折叠（无 open 属性）
+    await expect(page.locator('#generalDiagDetails')).toHaveJSProperty('open', false);
 
     await expectNoBrowserErrors(page);
   });
