@@ -461,11 +461,9 @@
            busy 态：发送钮双态（空输入→停止 / 有内容→排队发送）；live 状态迁到消息流 #streamLiveStatus，不再占 pill 顶行。
            CLI 镜像：placeholder 显示「终端运行中 · 只读追平」等，发送位变「续接 CLI 会话」。-->
       <div class="chat-input-pill flex flex-col gap-1 p-2 bg-surface shadow-md border border-line">
-        <!-- @ 文件引用候选：composer 顶边水平横滑 chips（对齐 CLI @ 路径补全的 web 等价物）；
-             打 "@" 触发，files:search 拉候选，点选把 @query 换成相对路径文本，agent 自己 Read。 -->
-        <div id="atMentionChips" class="hidden composer-chips flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-none px-1 pb-1" data-testid="at-mention-chips"></div>
-        <!-- Top Row: Full-width Textarea -->
-        <div class="w-full flex items-start">
+        <!-- Top Row: Full-width Textarea
+             @ 文件引用候选不再横滑 chips：与 / 斜杠提示同款纵向浮层（#atMentionHints，JS 挂到 input 父级 absolute bottom-full） -->
+        <div class="w-full flex items-start relative">
           <textarea id="input" rows="1" placeholder="给 Claude 发消息..." enterkeyhint="send"
             class="flex-1 resize-none bg-transparent border-0 ring-0 outline-none focus:ring-0 focus:border-transparent px-2.5 py-2 text-sm text-ink placeholder-ink-faint max-h-36 min-h-[36px] leading-relaxed"></textarea>
         </div>

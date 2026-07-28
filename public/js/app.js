@@ -3122,7 +3122,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     // 对齐 CLI ESC：撤回最近一条排队中的消息（物理键盘路径；触屏无 ESC，走气泡「撤回」按钮）
     if (e.key === 'Escape') {
-      if (!atMentionChips?.classList.contains('hidden')) { hideAtMentionChips(); return; }
+      if (atMentionList && !atMentionList.classList.contains('hidden')) { hideAtMentionList(); return; }
+      const cmdHintsEl = document.getElementById('cmdHints');
+      if (cmdHintsEl && !cmdHintsEl.classList.contains('hidden')) { cmdHintsEl.classList.add('hidden'); return; }
       const queued = messagesEl.querySelectorAll('.queued-bubble[data-client-message-id]');
       const last = queued[queued.length - 1];
       if (last) {
@@ -3132,75 +3134,69 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
   });
 
-  // ---- @ 文件引用（composer 顶边 chips，见 index.html #atMentionChips 头注）----
-  // 对齐 CLI @ 路径补全的 web 等价物：语义上只插相对路径文本，agent 自己 Read（保留审批链可观测性），
-  // 不注入文件内容。移动端不做光标跟随浮层/方向键导航——纯触摸点选（见 roadmap 设计取舍）。
-  const atMentionChips = $('atMentionChips');
+  // ---- @ 文件引用：与 / 斜杠同款纵向浮层（absolute bottom-full），不再横滑 chips ----
+  // 语义只插相对路径文本，agent 自己 Read；移动端纯触摸点选。
+  // 面板挂在 input 父级（与 #cmdHints 同层），见下方 slash 提示初始化。
+  let atMentionList = null; // 延迟到 slash hints 同批创建
   let atMentionState = null; // { matchStart } —— 当前触发态；null=未触发
   let atMentionReqId = 0;    // 每次触发/取消自增；files:search ack 里比对，迟到结果直接丢弃
   let atMentionDebounceTimer = null;
 
-  function hideAtMentionChips() {
+  function hideAtMentionList() {
     atMentionState = null;
     atMentionReqId++;
     if (atMentionDebounceTimer) { clearTimeout(atMentionDebounceTimer); atMentionDebounceTimer = null; }
-    if (atMentionChips) { atMentionChips.classList.add('hidden'); atMentionChips.innerHTML = ''; }
+    if (atMentionList) { atMentionList.classList.add('hidden'); atMentionList.innerHTML = ''; }
   }
+  // 兼容旧名（Escape / 其它调用）
+  const hideAtMentionChips = hideAtMentionList;
 
   function pickAtMention(path) {
     if (!atMentionState) return;
     const cursor = inputEl.selectionStart ?? inputEl.value.length;
     const { text, cursorPos } = applyAtMentionPick(inputEl.value, { matchStart: atMentionState.matchStart, cursorPos: cursor, path });
     inputEl.value = text;
-    hideAtMentionChips();
+    hideAtMentionList();
     inputEl.focus();
     inputEl.setSelectionRange(cursorPos, cursorPos);
     autosize();
     updateSendButtonState();
   }
 
-  function renderAtMentionChips(paths, { emptyHint = '' } = {}) {
-    if (!atMentionChips) return;
-    atMentionChips.innerHTML = '';
+  function renderAtMentionList(paths, { emptyHint = '' } = {}) {
+    if (!atMentionList) return;
+    // 与 / 互斥：出文件列表时收起斜杠提示（hints 在下方初始化，调用时已就绪）
+    document.getElementById('cmdHints')?.classList.add('hidden');
+    atMentionList.innerHTML = '';
     if (!paths?.length) {
       if (emptyHint) {
-        const hint = el('<span class="text-[10px] text-ink-faint px-1 shrink-0" data-testid="at-mention-empty"></span>');
-        hint.textContent = emptyHint;
-        atMentionChips.appendChild(hint);
-        atMentionChips.classList.remove('hidden');
+        atMentionList.innerHTML = `<div class="px-3 py-2 text-xs text-ink-faint" data-testid="at-mention-empty">${esc(emptyHint)}</div>`;
+        atMentionList.classList.remove('hidden');
       } else {
-        atMentionChips.classList.add('hidden');
+        atMentionList.classList.add('hidden');
       }
       return;
     }
-    for (const p of paths) {
-      const chip = el('<button type="button" class="status-pill-chip toolbar-pill shrink-0" data-testid="at-mention-chip"></button>');
-      chip.textContent = p;
-      chip.title = p;
-      chip.onclick = () => pickAtMention(p);
-      atMentionChips.appendChild(chip);
-    }
-    atMentionChips.classList.remove('hidden');
+    atMentionList.innerHTML = paths.map(p => {
+      const safe = esc(p);
+      return `<div class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono truncate" data-testid="at-mention-chip" data-path="${safe}" title="${safe}">${safe}</div>`;
+    }).join('');
+    atMentionList.classList.remove('hidden');
   }
 
   function renderAtMentionLoading() {
-    if (!atMentionChips) return;
-    atMentionChips.innerHTML = '';
-    const hint = el('<span class="text-[10px] text-ink-faint px-1 shrink-0" data-testid="at-mention-loading"></span>');
-    hint.textContent = t('查找文件…');
-    atMentionChips.appendChild(hint);
-    atMentionChips.classList.remove('hidden');
+    if (!atMentionList) return;
+    document.getElementById('cmdHints')?.classList.add('hidden');
+    atMentionList.innerHTML = `<div class="px-3 py-2 text-xs text-ink-faint" data-testid="at-mention-loading">${esc(t('查找文件…'))}</div>`;
+    atMentionList.classList.remove('hidden');
   }
-  // mousedown 先于 click 触发，preventDefault 挡掉浏览器「点按钮前先把当前焦点元素 blur 掉」的默认动作，
-  // 令 inputEl 全程不失焦——避免「点 chip 时 blur 先跑、chips 已被清空、onclick 打空」的经典时序坑。
-  atMentionChips?.addEventListener('mousedown', e => e.preventDefault());
 
   function checkAtMention() {
     // IME 组字中不触发（避免中文输入半成品误搜）；compositionend 再跑一次
     if (composing) return;
     const cursor = inputEl.selectionStart ?? inputEl.value.length;
     const hit = detectAtMentionQuery(inputEl.value.slice(0, cursor));
-    if (!hit) { if (atMentionState) hideAtMentionChips(); return; }
+    if (!hit) { if (atMentionState) hideAtMentionList(); return; }
     atMentionState = { matchStart: hit.matchStart };
     if (atMentionDebounceTimer) clearTimeout(atMentionDebounceTimer);
     const reqId = ++atMentionReqId;
@@ -3208,24 +3204,24 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     renderAtMentionLoading();
     atMentionDebounceTimer = setTimeout(() => {
       if (!socket?.connected) {
-        if (reqId === atMentionReqId) renderAtMentionChips([], { emptyHint: t('未连接，无法搜索文件') });
+        if (reqId === atMentionReqId) renderAtMentionList([], { emptyHint: t('未连接，无法搜索文件') });
         return;
       }
       socket.emit('files:search', { cwd: currentCwd, query: hit.query }, res => {
         if (reqId !== atMentionReqId) return; // 迟到 ack：期间已改 query / 取消触发，丢弃
         if (!res?.ok) {
-          renderAtMentionChips([], { emptyHint: res?.error || t('文件搜索失败') });
+          renderAtMentionList([], { emptyHint: res?.error || t('文件搜索失败') });
           return;
         }
         const paths = Array.isArray(res.paths) ? res.paths : [];
-        renderAtMentionChips(paths, {
+        renderAtMentionList(paths, {
           emptyHint: paths.length ? '' : t('无匹配文件'),
         });
       });
     }, 150);
   }
   inputEl.addEventListener('input', checkAtMention);
-  inputEl.addEventListener('blur', hideAtMentionChips);
+  inputEl.addEventListener('blur', hideAtMentionList);
 
   // ---- 输入与附件：状态、读取、预览和 DOM 绑定由独立 controller 管理 ----
   const attachments = createAttachmentController(appContext, {
@@ -3275,16 +3271,25 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     for (const a of atts) wrap.appendChild(buildAttachmentNode(a));
     return wrap;
   }
-  // ---- 斜杠命令提示 ----
-  const hints = el(`<div id="cmdHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)"></div>`);
+  // ---- 斜杠命令提示 + @ 文件引用列表（同款纵向浮层，互斥显示）----
+  const hints = el(`<div id="cmdHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)" data-testid="cmd-hints"></div>`);
+  atMentionList = el(`<div id="atMentionHints" class="hidden absolute bottom-full left-0 mb-1 bg-surface border border-line rounded-lg max-h-60 overflow-y-auto w-full z-50" style="box-shadow:var(--shadow-pop)" data-testid="at-mention-chips"></div>`);
   inputEl.parentElement.style.position = 'relative';
   inputEl.parentElement.appendChild(hints);
+  inputEl.parentElement.appendChild(atMentionList);
+  // mousedown 防 blur 清空列表（点选行时 input 不失焦）
+  atMentionList.addEventListener('mousedown', e => e.preventDefault());
+  atMentionList.addEventListener('click', e => {
+    const row = e.target.closest?.('[data-path]');
+    if (row?.dataset?.path) pickAtMention(row.dataset.path);
+  });
   // 前端本地拦截命令（不透传后端），并入提示列表
   const LOCAL_COMMANDS = ['model'];
 
   inputEl.addEventListener('input', () => {
     const val = inputEl.value;
     if (val.startsWith('/')) {
+      hideAtMentionList(); // 与 @ 互斥
       const base = (window.availableSkills || []).map(slashCommandName).filter(Boolean);
       const cands = base.concat(LOCAL_COMMANDS.filter(c => !base.includes(c)));
       const prefix = val.slice(1).toLowerCase();
@@ -3294,7 +3299,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (matches.length > 0) {
         hints.innerHTML = matches.map(cmd => {
           const safe = esc(cmd);
-          return `<div class="px-3 py-2 hover:bg-sunk cursor-pointer text-sm font-mono" data-cmd="/${safe}">/${safe}</div>`;
+          return `<div class="px-3 py-2.5 hover:bg-sunk active:bg-sunk cursor-pointer text-sm font-mono" data-cmd="/${safe}">/${safe}</div>`;
         }).join('');
         hints.classList.remove('hidden');
       } else {
@@ -3312,10 +3317,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   });
   document.addEventListener('click', e => {
     if (!hints.contains(e.target) && e.target !== inputEl) hints.classList.add('hidden');
+    if (atMentionList && !atMentionList.contains(e.target) && e.target !== inputEl) hideAtMentionList();
     if (!leftSidebar.classList.contains('-translate-x-full') && !leftSidebar.contains(e.target) && !btnSessions.contains(e.target) && !(topContextPill && topContextPill.contains(e.target)) && e.target.isConnected)
       closeLeftSidebar();
   });
-
   const SEND_ICON_HTML = `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>`;
   const STOP_ICON_HTML = `<span class="btn-send-stop-icon" aria-hidden="true"></span>`;
   let _btnSendMode = null; // 仅 mode 变化时换图标，避免按键 thrash
