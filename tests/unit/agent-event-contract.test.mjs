@@ -61,6 +61,35 @@ test('agent event contract reports mock event types that real paths do not emit'
   assert.equal(result.problems[0].type, 'mock_only');
 });
 
+// 出向扫描面此前是手写两文件清单（agent.js + server/app.js），而真实仓库里 src/auth/device-gate.js
+// 与 src/server/socket.js 也在发 agent:event —— 它们完全在门禁视野外。对比：入向检查用 serverDirs=['src']
+// 递归扫描，注释还写着「新增模块自动纳入扫描面，不靠手工登记文件清单」。出向没享受到同一待遇：
+// 在 src/ 下新建模块发一个未登记 type，npm run check 全绿，前端 dispatcher 收到未知 type 静默丢弃。
+test('出向扫描面递归覆盖 src/：手写清单外的模块发未登记 type 也要被拦', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-agent-event-scan-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'src/agent/agent.js', `
+    class AgentSession { run() { this.emit('init', {}); } }
+  `);
+  await writeFixture(root, 'src/server/app.js', `
+    io.emit('agent:event', { type: 'init', payload: {} });
+  `);
+  // 既不是 agent.js 也不是 server/app.js —— 真实仓库里 device-gate.js 就是这种位置
+  await writeFixture(root, 'src/auth/device-gate.js', `
+    socket.emit('agent:event', { type: 'device_locked', payload: {} });
+  `);
+
+  const result = checkAgentEventContract({
+    rootDir: root,
+    contractTypes: new Set(AGENT_EVENT_TYPES), // device_locked 不在契约里
+    mockSources: [],
+  });
+
+  const codes = result.problems.map(p => p.code);
+  assert.ok(codes.includes('real_type_not_contract'), `未登记 type 必须被拦，实际 problems=${JSON.stringify(result.problems)}`);
+});
+
 // SEC-01：server.js 用 io.to('approved').emit('agent:event', ...) 做下行隔离（房间过滤），
 // 这是合法的链式广播调用、非动态类型——静态扫描须识别，否则会把仍在真实发出的类型误判为「real 不再发出」。
 test('agent event contract 识别 io.to(room).emit("agent:event", ...) 链式调用', async t => {

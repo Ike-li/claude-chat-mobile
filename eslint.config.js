@@ -66,8 +66,43 @@ export default [
           selector: ':matches(FunctionDeclaration, FunctionExpression, ArrowFunctionExpression) > Identifier.params[name="t"]',
           message: '别用 t 作参数名：会遮蔽 i18n 的 t()，运行时报 "t is not a function"。换个名字。',
         },
+        // 上面两条都要求节点【恰好是裸 Identifier】，于是解构 / catch / rest / 默认值 / 函数声明
+        // 这些同样会绑定 t 的形式全部放行 —— 规则给出的安全感高于实际覆盖。实测漏网：
+        // const { t } = o · const [t] = a · catch (t) · function f(...t) · function f({ t })
+        // · function f(t = 1) · function t() {} · class t {}。补齐。
+        {
+          selector: 'ObjectPattern > Property > Identifier.value[name="t"]',
+          message: '别用 t 作解构目标名：会遮蔽 i18n 的 t()，运行时报 "t is not a function"。改用 `{ t: tt }` 之类重命名。',
+        },
+        {
+          selector: 'ArrayPattern > Identifier[name="t"]',
+          message: '别用 t 作数组解构目标名：会遮蔽 i18n 的 t()。换个名字。',
+        },
+        {
+          selector: 'CatchClause > Identifier.param[name="t"]',
+          message: '别用 t 作 catch 参数名：会遮蔽 i18n 的 t()。用 err / e。',
+        },
+        {
+          selector: 'RestElement > Identifier[name="t"]',
+          message: '别用 t 作 rest 参数名：会遮蔽 i18n 的 t()。换个名字。',
+        },
+        {
+          selector: 'AssignmentPattern > Identifier.left[name="t"]',
+          message: '别用 t 作带默认值的参数名：会遮蔽 i18n 的 t()。换个名字。',
+        },
+        {
+          // i18n.js 自身是 t() 的定义处，由下方独立 block 豁免。
+          selector: ':matches(FunctionDeclaration, ClassDeclaration) > Identifier.id[name="t"]',
+          message: '别把函数/类命名为 t：会遮蔽 i18n 的 t()。换个名字。',
+        },
       ],
     },
+  },
+  // i18n.js 是 t() 的【定义处】，上面那组「别用 t 作标识符」的规则对它不适用（否则
+  // `export function t(zh)` 自己就被判违规）。只豁免这一个文件，其余 public/js/** 照常受管。
+  {
+    files: ['public/js/i18n.js'],
+    rules: { 'no-restricted-syntax': 'off' },
   },
   // 经典 <script>（非 ESM）：tw-config 写入 tailwind 全局、sw-cleanup 操作 navigator
   {

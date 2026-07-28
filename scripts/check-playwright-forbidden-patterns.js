@@ -12,6 +12,10 @@ const FORBIDDEN = [
   { pattern: /\btest\.only\s*\(/, label: 'test.only(' },
   { pattern: /\btest\.skip\s*\(/, label: 'test.skip(' },
   { pattern: /\btest\.fixme\s*\(/, label: 'test.fixme(' },
+  // test.describe.only 比 test.only 破坏面更大：前者让 Playwright 全项目只跑那一个 describe、
+  // 其余 190+ 用例静默不执行而报告全绿；后者只排除同文件其余用例。`\btest\.only\s*\(` 中间隔着
+  // `.describe` 匹配不到，此前整类漏网。
+  { pattern: /\btest\.describe\.(?:only|skip|fixme)\s*\(/, label: 'test.describe.only/skip/fixme(' },
   { pattern: /\bnetworkidle\b/, label: 'networkidle' },
   { pattern: /\bwaitForTimeout\s*\(/, label: 'waitForTimeout(' },
 ];

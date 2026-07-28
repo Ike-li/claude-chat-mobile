@@ -32,10 +32,18 @@ export const AGENT_EVENT_TYPES = Object.freeze([
   'user_message',
 ]);
 
-const REAL_SOURCES = Object.freeze([
-  { path: 'src/agent/agent.js', kind: 'agent-session' },
-  { path: 'src/server/app.js', kind: 'agent-event-emit' },
-]);
+// 出向真实发射面。agent.js 走 agent-session 提取器（AgentSession 的 this.emit(...)）；其余一律按
+// `xxx.emit('agent:event', {...})` 提取。**目录递归而非手写文件清单**——与入向 serverDirs=['src'] 同口径。
+// 手写清单的代价是实测出来的：src/auth/device-gate.js（device_status/pending_devices）与
+// src/server/socket.js（error）一直在发 agent:event，却完全在门禁视野外；在 src/ 下新建模块发一个未登记
+// type，npm run check 照样全绿，而前端 dispatcher 对未知 type 是静默丢弃——正是这道门禁存在的理由。
+const REAL_SESSION_SOURCE = Object.freeze({ path: 'src/agent/agent.js', kind: 'agent-session' });
+const REAL_EMIT_DIRS = Object.freeze(['src']);
+
+function defaultRealSources(rootDir) {
+  const emitFiles = REAL_EMIT_DIRS.flatMap(dir => listJsFiles(rootDir, dir));
+  return [REAL_SESSION_SOURCE, ...emitFiles.map(path => ({ path, kind: 'agent-event-emit' }))];
+}
 
 const MOCK_SOURCES = Object.freeze([
   { path: 'tests/e2e/mock/server.js', kind: 'agent-event-emit' },
@@ -216,7 +224,9 @@ function extractAgentEventObjectTypes(source, file) {
   const result = { types: new Set(), locations: [], dynamic: [] };
   // (?:\.to\([^)]*\))? 容许中间插入一次 .to(room)（SEC-01：io.to('approved').emit(...) 房间过滤广播，
   // 与 io.emit(...) 同为真实广播路径，静态扫描须一视同仁，否则会把仍在发出的类型误判为"real 不再发出"。
-  const emitPattern = /\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?(?:\.to\([^)]*\))?\.emit\s*\(\s*(['"])agent:event\1\s*,/g;
+  // .in(room) 是 socket.io 里 .to(room) 的精确别名，同为真实广播路径；接收者允许多段（this.io.sockets）
+  // 与可选链（socket?.emit）——这几种写法此前都会静默不匹配，等于把该文件的全部 type 从 real 集合里抹掉。
+  const emitPattern = /\b[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*(?:\.(?:to|in)\([^)]*\))?\??\.emit\s*\(\s*(['"])agent:event\1\s*,/g;
   while (emitPattern.exec(source)) {
     const cursor = skipWhitespace(source, emitPattern.lastIndex);
     if (source[cursor] !== '{') continue;
@@ -297,11 +307,11 @@ function addUnknownTypeProblems(problems, side, observedTypes, contractTypes) {
 export function checkAgentEventContract({
   rootDir = ROOT,
   contractTypes = new Set(AGENT_EVENT_TYPES),
-  realSources = REAL_SOURCES,
+  realSources = null,
   mockSources = MOCK_SOURCES,
 } = {}) {
   const normalizedContractTypes = new Set(contractTypes);
-  const real = collectTypes(rootDir, realSources);
+  const real = collectTypes(rootDir, realSources || defaultRealSources(rootDir));
   const mock = collectTypes(rootDir, mockSources);
   const problems = [];
 

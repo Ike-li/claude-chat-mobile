@@ -1,4 +1,6 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { resolve } from 'node:path';
 
 const DEFAULT_TARGET = 'tests/e2e/mock/server.js';
 const REGISTRY_DISPATCH = 'if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;';
@@ -35,7 +37,11 @@ export function checkVisualMockRegistry(targetPath = DEFAULT_TARGET) {
   throw new Error(`Found test command fallback branches after scenarioRegistry.run(). Move them into the visual mock scenario registry.\n${details}`);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// 用 fileURLToPath + resolve 而不是字符串拼 `file://${argv[1]}`：import.meta.url 是 percent-encoded
+// 的 file URL，argv[1] 是裸路径。仓库被 clone 到含空格/中文的目录（或 CI 工作目录含空格）时两者永不
+// 相等，这道闸就变成【静默 no-op】——不打印任何东西、exit 0，&& 链照常往下走。仓内其余 6 个门禁脚本
+// 用的都是这个健壮写法，只有这一个是字符串拼接。
+if (fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   try {
     checkVisualMockRegistry(process.argv[2]);
     console.log('visual mock registry guard OK');
