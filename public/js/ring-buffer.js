@@ -12,26 +12,39 @@
 
 export function createRingBuffer(cap) {
   const max = Math.max(0, cap | 0);
-  const buf = [];
+  // 真环形：固定数组 + head/len，驱逐 O(1)，避免 Array.shift 的 O(n)
+  const slots = max > 0 ? new Array(max) : null;
+  let head = 0;
+  let len = 0;
 
   return {
     push(item) {
       if (max === 0) return;
-      buf.push(item);
-      while (buf.length > max) buf.shift();
+      if (len < max) {
+        slots[(head + len) % max] = item;
+        len++;
+      } else {
+        slots[head] = item;
+        head = (head + 1) % max;
+      }
     },
 
-    toArray() { return [...buf]; },
+    toArray() {
+      if (!len) return [];
+      const out = new Array(len);
+      for (let i = 0; i < len; i++) out[i] = slots[(head + i) % max];
+      return out;
+    },
 
-    head() { return buf.length ? buf[0] : undefined; },
+    head() { return len ? slots[head] : undefined; },
 
-    tail() { return buf.length ? buf[buf.length - 1] : undefined; },
+    tail() { return len ? slots[(head + len - 1) % max] : undefined; },
 
-    size() { return buf.length; },
+    size() { return len; },
 
-    isEmpty() { return buf.length === 0; },
+    isEmpty() { return len === 0; },
 
-    clear() { buf.length = 0; },
+    clear() { head = 0; len = 0; if (slots) slots.fill(undefined); },
 
     capacity() { return max; },
   };

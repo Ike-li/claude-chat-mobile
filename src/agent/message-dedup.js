@@ -19,12 +19,12 @@ export function isProcessed(clientMessageId, state) {
 export function commitProcessed(clientMessageId, state, cap = DEDUP_CAP) {
   if (!clientMessageId) return state;
   if (state.has(clientMessageId)) return state;
-  const next = new Map(state);
-  next.set(clientMessageId, Date.now());
-  if (next.size > cap) {
-    next.delete(next.keys().next().value); // 最旧的一条（插入序首位）
+  // 原地写入：热路径避免每条消息 clone Map；调用方持有同一引用即可（仍返回 state 保持链式 API）
+  state.set(clientMessageId, Date.now());
+  if (state.size > cap) {
+    state.delete(state.keys().next().value); // 最旧的一条（插入序首位）
   }
-  return next;
+  return state;
 }
 
 // 查询 + 提交耦合成一步的旧原语（保留给不区分成败的调用方）。等价于 isProcessed 后 commitProcessed。
@@ -51,15 +51,13 @@ export function isInFlight(clientMessageId, inFlightSet) {
 export function claimInFlight(clientMessageId, inFlightSet) {
   if (!clientMessageId) return inFlightSet;
   if (inFlightSet.has(clientMessageId)) return inFlightSet;
-  const next = new Set(inFlightSet);
-  next.add(clientMessageId);
-  return next;
+  inFlightSet.add(clientMessageId);
+  return inFlightSet;
 }
 
-// 纯函数：释放占用（无论处理成功还是失败都要调用）。未占用则原样返回。
+// 释放占用（无论处理成功还是失败都要调用）。未占用则原样返回。
 export function releaseInFlight(clientMessageId, inFlightSet) {
   if (!clientMessageId || !inFlightSet.has(clientMessageId)) return inFlightSet;
-  const next = new Set(inFlightSet);
-  next.delete(clientMessageId);
-  return next;
+  inFlightSet.delete(clientMessageId);
+  return inFlightSet;
 }

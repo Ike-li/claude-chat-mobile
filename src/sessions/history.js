@@ -83,7 +83,12 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   // B6：mtime 未变 = 内容未变，直接返回缓存。缓存的是封顶到 HISTORY_MAX_MESSAGES 的尾部消息，按 limit 取尾再返回
   // （stat ~1ms，远快于重新流式读盘 + 解析）。
   const cached = _histCache.get(historyFile);
-  if (cached && cached.mtimeMs === mtimeMs) return cached.messages.slice(-limit);
+  if (cached && cached.mtimeMs === mtimeMs) {
+    // 真 LRU：命中后移到 Map 末尾，避免热会话被冷扫挤掉
+    _histCache.delete(historyFile);
+    _histCache.set(historyFile, cached);
+    return cached.messages.slice(-limit);
+  }
 
   const messages = [];
   // 同 uuid 去重：真实 transcript 存在「interrupt+queue 竞态导致同一消息重复落盘」（同 uuid 写两次）→

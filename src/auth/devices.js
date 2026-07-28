@@ -34,8 +34,8 @@ export function loadTrustedDevices() {
       trustedDevices = new Set();
     }
   } catch (err) {
-    console.error('[devices] 读取 trusted-devices.json 失败:', err.message);
-    trustedDevices = new Set();
+    // 保留 last-good：瞬时读失败不把全部设备当未信任（flap 锁死机主机）
+    console.error('[devices] 读取 trusted-devices.json 失败（保留内存 last-good）:', err.message);
   }
 }
 
@@ -93,8 +93,10 @@ export function savePendingDevices() {
   try {
     mkdirSync(dirname(PENDING_DEVICES_FILE), { recursive: true });
     writeOwnerOnlyFile(PENDING_DEVICES_FILE, JSON.stringify(pendingDevices, null, 2));
+    return true;
   } catch (err) {
     console.error('[devices] 保存 pending-devices.json 失败:', err.message);
+    return false;
   }
 }
 

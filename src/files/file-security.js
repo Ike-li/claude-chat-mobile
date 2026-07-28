@@ -1,7 +1,7 @@
 // file-security.js —— 文件安全守卫
 // 功能：symlink 穿越防御 + owner-only 权限检查与修复。
 // 用途：配置文件写入、doctor 权限检查、上传文件防护。
-import { lstatSync, chmodSync, accessSync, constants, writeFileSync, openSync, closeSync, fsyncSync, renameSync } from 'node:fs';
+import { lstatSync, chmodSync, accessSync, constants, writeFileSync, openSync, closeSync, fsyncSync, renameSync, unlinkSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { platform } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -112,17 +112,27 @@ export function writeOwnerOnlyFile(path, content) {
     return;
   }
 
-  const tmp = `${path}.tmp`;
+  // 唯一 tmp：并发写同一 path 时固定 `${path}.tmp` 会互相 trunc；pid+时间+随机与 sessions 写盘同款
+  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 10)}.tmp`;
   let fd;
   try {
     // mode 0o600 = rw-------（umask 只能清权限位，0600 不受影响）
     fd = openSync(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC, 0o600);
     writeFileSync(fd, content);
     fsyncSync(fd); // 先落盘再 rename，防掉电后 rename 先于数据持久化
-  } finally {
-    if (fd !== undefined) closeSync(fd);
+  } catch (err) {
+    try { if (fd !== undefined) closeSync(fd); } catch { /* noop */ }
+    try { unlinkSync(tmp); } catch { /* noop */ }
+    throw err;
   }
-  renameSync(tmp, path);
+  try {
+    closeSync(fd);
+    fd = undefined;
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* noop */ }
+    throw err;
+  }
 
   // 二次确认权限（某些文件系统可能忽略 mode）
   fixPermissions(path, false);
