@@ -200,6 +200,7 @@ export const EN_DICT = Object.freeze({
   // '诊断' 已在上方（服务状态那组）收录，此处复用同一条，勿重复添加
   '访问与帮助': 'Access & help',
   '重读 CLI 配置': 'Reload CLI config',
+  '重读': 'Reload',
   // 设置分块标题：'模型' 已在下方（服务状态那组）收录，此处复用同一条。
   '权限': 'Permissions',
   '切换在下一条消息起效': 'Applies from your next message',
@@ -438,6 +439,11 @@ export const EN_DICT = Object.freeze({
   '(账号级旧值，非实时)': '(account-level stale value, not live)',
   'statusline · CLI 暂不可用（额度沿用旧值）': 'statusline · CLI unavailable (usage shows stale values)',
   'statusline · CLI 暂不可用': 'statusline · CLI unavailable',
+  '复制状态摘要': 'Copy status summary',
+  '已复制状态摘要': 'Status summary copied',
+  '暂无状态可复制': 'Nothing to copy yet',
+  '复制失败': 'Copy failed',
+  '复制': 'Copy',
   'CLI 当前模式未知': 'Current CLI mode unknown',
   'CLI 模式未知': 'CLI mode unknown',
   'CLI 当前模型': 'Current CLI model',

@@ -72,6 +72,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#permSection')).toBeVisible();
     await expect(page.locator('#effortSection')).toBeVisible();
     await expect(page.locator('.model-tile').first()).toBeVisible();
+    // 方案 A：常见手机高度下打开即见权限尾格（Bypass），无需先滑 sheet body
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.locator('.perm-tile[data-mode="bypassPermissions"]')).toBeInViewport();
     await expect(page.locator('.perm-tile').first()).toBeVisible();
 
     await expectNoBrowserErrors(page);

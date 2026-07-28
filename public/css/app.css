@@ -102,9 +102,18 @@ details > summary::-webkit-details-marker { display: none; }
   display: flex;
   align-items: center;
   gap: .4rem;
-  min-height: 28px;
-  margin-bottom: .35rem;
-  padding: .1rem .1rem;
+  min-height: 24px;
+  margin-bottom: .25rem;
+  padding: .05rem .1rem;
+}
+/* 方案 A：会话设置纵向预算——磁贴略紧，副文案最多两行，避免权限被顶出首屏 */
+#settingsSheetBody .model-tile .text-xs,
+#settingsSheetBody .perm-tile .text-xs {
+  line-height: 1.25;
+}
+#settingsSheetBody .effort-tile {
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
 }
 /* 工具卡片：左竖条标记 agent 动作（Claude 风格） */
 .toolcard { border-left: 3px solid var(--accent-bright) !important; }

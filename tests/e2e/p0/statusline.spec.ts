@@ -12,8 +12,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await sendChatMessage(page, 'test:statusline');
     await waitForIdle(page);
     await expect(page.locator('#cliStatusWrap')).toBeVisible();
-    // 折叠条只显 'statusline' 一词；全部数据在展开态（CLI 密集风）
-    await expect(page.locator('#cliSummary')).toContainText('statusline');
+    // 折叠摘要：git · ctx（不重复 pill 上的 model/effort）
+    await expect(page.locator('#cliSummary')).toContainText('feature/visual-testing');
+    await expect(page.locator('#cliSummary')).toContainText('ctx 23%');
     await page.locator('#cliStatusWrap summary').click();
     await expect(page.locator('#cliStatus')).toContainText('feature/visual-testing');
     await expect(page.locator('#cliStatus')).toContainText('+2 !1');          // git 三分

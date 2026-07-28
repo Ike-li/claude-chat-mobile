@@ -395,14 +395,17 @@
     <div class="max-w-2xl mx-auto flex flex-col">
       <!-- web 状态栏（E16）：自有 SDK 数据 + git 结构化渲染，默认折叠为一行摘要 -->
       <details id="cliStatusWrap" class="hidden bg-surface border border-line rounded-xl mb-2 overflow-hidden shadow-sm">
-        <summary class="px-3 py-2 text-xs text-ink-soft bg-sunk/40 cursor-pointer select-none flex items-center justify-between border-b border-line-soft">
-          <span class="flex items-center gap-1.5">
-            <svg class="w-3.5 h-3.5 text-ink-faint" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <summary class="px-3 py-2 text-xs text-ink-soft bg-sunk/40 cursor-pointer select-none flex items-center justify-between gap-2 border-b border-line-soft">
+          <span class="flex items-center gap-1.5 min-w-0 flex-1">
+            <svg class="w-3.5 h-3.5 text-ink-faint shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
-            <span id="cliSummary" class="font-medium">statusline</span>
+            <!-- 折叠摘要：git · ctx（app.js formatStatuslineCollapsedSummary）；点 summary 展开明细 -->
+            <span id="cliSummary" class="font-medium truncate min-w-0" data-testid="cli-summary">statusline</span>
           </span>
-          <span class="cli-arrow text-xs text-ink-faint opacity-60 transition-transform duration-200">▼</span>
+          <!-- 点按复制：独立按钮，stopPropagation 避免误触展开/折叠 -->
+          <button type="button" id="cliStatusCopy" class="shrink-0 px-1.5 py-0.5 rounded text-[10px] text-ink-faint hover:text-ink hover:bg-sunk active:scale-95" data-testid="cli-status-copy" title="复制状态摘要" aria-label="复制状态摘要">复制</button>
+          <span class="cli-arrow text-xs text-ink-faint opacity-60 transition-transform duration-200 shrink-0">▼</span>
         </summary>
         <div id="cliStatus" class="px-3 py-2 text-xs leading-relaxed bg-surface text-ink-soft space-y-1"></div>
       </details>
@@ -618,36 +621,27 @@
       </div>
     </div>
 
-    <div id="settingsSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4 space-y-5">
-      <!-- 作用域说明：面板里每一档影响谁，此前完全看不出来（模型/权限是会话级，而同一面板里还混着
-           本机偏好和整机设置）。拆分后每个面板/分节顶部固定说明一句。 -->
-      <div data-scope-note="session" class="text-[10px] text-ink-faint leading-relaxed px-0.5 -mb-2">
-        只影响当前这个会话；模型 / 思考强度的切换在下一条消息起效。
-      </div>
-
-      <!-- 0. CLI 配置刷新：下面模型/权限/思考强度三节的默认档都来自 ~/.claude/settings.json，
-           ensureCliDefaults 按 cwd 缓存（只在启动/session:new/session:home 才 force 重读），
-           终端侧改了文件这里不会自己感知——常驻手动兜底入口（新会话页另有一个同源的 ↻）。
-           不放标题栏：#settingsDragZone 绑了下拉关闭手势，按钮进去会和手势打架。 -->
-      <!-- 左侧说明填掉原先的空白：孤零零一个右对齐小链接看不出它管什么、点完也不知道有没有生效。 -->
-      <div class="flex items-center justify-between gap-2 -mb-1">
-        <span class="text-[10px] text-ink-faint min-w-0">下面的模型 / 权限 / 命令来自 CLI 配置，终端改了不会自动感知</span>
-        <button id="btnConfigRefresh" type="button" class="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-line text-[10px] text-ink-soft hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置">
-          <span class="text-xs leading-none" data-spin>↻</span><span data-label>重读 CLI 配置</span>
+    <!-- 方案 A：纵向预算——压模型区高度与分节间距，让权限 6 格尽量落在首屏（常切 model/perm/effort） -->
+    <div id="settingsSheetBody" class="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-3 space-y-3">
+      <!-- 作用域 + CLI 重读合并一行，省掉原先两行说明的纵向占用 -->
+      <div class="flex items-start justify-between gap-2">
+        <div class="min-w-0 text-[10px] text-ink-faint leading-snug px-0.5">
+          <div data-scope-note="session">只影响当前会话；模型 / 思考强度下一条消息起效。</div>
+          <div class="mt-0.5 truncate" title="下面的模型 / 权限 / 命令来自 CLI 配置，终端改了不会自动感知">CLI 配置不自动同步 · 改终端后点右侧重读</div>
+        </div>
+        <button id="btnConfigRefresh" type="button" class="shrink-0 inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-line text-[10px] text-ink-soft hover:text-ink hover:bg-sunk active:scale-95 transition-all disabled:opacity-50" data-testid="settings-config-refresh" title="重新读取 CLI 配置">
+          <span class="text-xs leading-none" data-spin>↻</span><span data-label>重读</span>
         </button>
       </div>
 
-      <!-- 1/2/3. 模型 · 该模型的思考强度 · 权限档：始终展开磁贴，当前项 ring 框选（方案 A）。
-           不再用 <details> 折叠——多一层 summary 点击，且「选完即收」把框选藏起来，体感像坏了。
-           模型区保留 max-h 内滚，避免候选很多时把权限顶出屏外。
-           强度仍是模型的下级：缩进 + 左竖线 + 紧邻模型块（数据上是 supportedEffortLevels）。 -->
+      <!-- 1/2/3. 模型 · 思考强度 · 权限：始终展开；模型 max-h 内滚，把首屏让给强度+权限 -->
       <section id="modelSection" class="settings-block">
         <div class="settings-block-head">
           <span class="shrink-0">✨</span>
           <span class="shrink-0 text-xs font-semibold text-ink-soft">模型</span>
+          <span class="text-[10px] text-ink-faint ml-1">下一条消息起效</span>
         </div>
-        <div class="text-[10px] text-ink-faint mb-1.5 px-0.5">切换在下一条消息起效</div>
-        <div id="customModelGrid" class="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+        <div id="customModelGrid" class="grid grid-cols-2 gap-1.5 max-h-36 overflow-y-auto">
           <!-- 动态生成的模型卡片 -->
         </div>
       </section>
@@ -664,7 +658,7 @@
               <span id="effortOwnerModel" class="text-[10px] text-accent font-semibold truncate max-w-[14rem]"></span>
             </div>
           </div>
-          <div id="customEffortGrid" class="flex flex-wrap gap-2">
+          <div id="customEffortGrid" class="flex flex-wrap gap-1.5">
             <!-- 动态生成的思考强度按钮 -->
           </div>
           <!-- 不支持时就地说明，替代原先的「整块消失」 -->
@@ -678,14 +672,13 @@
           <span class="shrink-0 text-xs font-semibold text-ink-soft">权限</span>
         </div>
         <!-- 磁贴由 app.js rebuildPermissionModeUi 按 SDK PermissionMode 清单动态填充（与后端 CCM_PERMISSION_MODES 同源） -->
-        <div id="customPermGrid" class="grid grid-cols-2 gap-2" data-testid="perm-grid"></div>
+        <div id="customPermGrid" class="grid grid-cols-2 gap-1.5" data-testid="perm-grid"></div>
       </section>
 
-      <!-- 4. 当前会话 ID（会话级，故留在本面板；原先误放在「访问与设备」那组里，与令牌/设备审批
-           这类主机级条目混在一起）。 -->
-      <div>
-        <div class="text-xs font-semibold text-ink-soft mb-2">🆔 <span>会话标识</span></div>
-        <div id="settingsSessionRow" class="hidden p-2.5 rounded-xl border border-line bg-surface flex items-center justify-between text-xs text-ink transition-all">
+      <!-- 4. 当前会话 ID（会话级；放最底，非首屏关键路径） -->
+      <div class="pt-0.5">
+        <div class="text-xs font-semibold text-ink-soft mb-1.5">🆔 <span>会话标识</span></div>
+        <div id="settingsSessionRow" class="hidden p-2 rounded-xl border border-line bg-surface flex items-center justify-between text-xs text-ink transition-all">
           <span class="text-ink-soft font-medium">当前会话</span>
           <button id="pillSession" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-sunk hover:bg-line-soft active:scale-95 text-ink-soft transition-all font-mono" title="点按复制完整 session id">
             <svg class="w-3.5 h-3.5 text-ink-soft" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">

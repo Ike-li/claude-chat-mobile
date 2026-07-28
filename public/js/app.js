@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeKeyword, withUltracodeTier, resolveEffortSelection, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendAck, presentOfflineResendAck, shouldBusyAfterOfflineBatch, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -85,7 +85,38 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const modelInput = $('modelInput');   // 模型 select：候选由 models 事件填充；任意名走 /model 拦截动态插入
   const cliStatusEl = $('cliStatus');   // E16：web 状态栏容器（status_line 事件填充，原生 DOM 结构化渲染非 ANSI）
   const cliStatusWrapEl = $('cliStatusWrap'); // E16：状态栏折叠包裹（<details>，揭示=去 hidden）
-  const cliSummaryEl = $('cliSummary'); // E16：折叠条一行摘要（客户端据 status_line 字段拼出）
+  const cliSummaryEl = $('cliSummary'); // E16：折叠条摘要 git · ctx（formatStatuslineCollapsedSummary）
+  const cliStatusCopyBtn = $('cliStatusCopy'); // 点按复制（不触发展开）
+  let lastStatusLinePayload = null; // 最近一次 status_line，供复制
+  if (cliStatusCopyBtn) {
+    // mousedown 也拦截：部分浏览器在 summary 内点按钮会先 toggle details
+    cliStatusCopyBtn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const text = formatStatuslineCopyText(lastStatusLinePayload)
+        || (cliSummaryEl?.textContent || '').trim();
+      if (!text || text === 'statusline') {
+        addBar(t('暂无状态可复制'), 'text-ink-faint');
+        return;
+      }
+      try {
+        if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+        else {
+          const ta = document.createElement('textarea');
+          ta.value = text;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          ta.remove();
+        }
+        addBar(t('已复制状态摘要'), 'text-success');
+      } catch {
+        addBar(t('复制失败'), 'text-danger');
+      }
+    });
+  }
   const permModeSelect = $('permModeSelect');  // 权限档切换器：选项/磁贴由 rebuildPermissionModeUi 按 SDK PermissionMode 填充
   const effortSelect = $('effortSelect');      // 思考强度档切换器（档位按当前模型 supportedEffortLevels 动态渲染）
   const effortRow = $('effortRow');            // effort 整行容器：当前模型不支持 effort（如 haiku）时隐藏
@@ -109,7 +140,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 插进 CSS selector 或 HTML 串。
     if (customModelGrid && !customModelGrid.querySelector(`[data-model="${CSS.escape(value)}"]`)) {
       const card = el(`
-        <div class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
+        <div class="model-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all">
           <div class="text-xs font-semibold truncate text-ink"></div>
           <div class="text-[9.5px] text-ink-soft truncate mt-0.5"></div>
         </div>
@@ -341,7 +372,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         || (!currentModel && val === 'default' && selectedVal === 'default');
       const using = active ? t(' · 使用中') : '';
       const card = el(`
-        <div data-model="${esc(val)}" class="model-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
+        <div data-model="${esc(val)}" class="model-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
           <div class="text-xs font-semibold truncate ${active ? 'text-accent' : 'text-ink'}">${esc(display)}${using ? `<span class="text-[11px] font-normal opacity-80">${esc(using)}</span>` : ''}</div>
           <div class="text-xs text-ink-soft truncate mt-0.5">${esc(subtitle || val)}</div>
         </div>
@@ -2157,8 +2188,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (hours > 0) return `${hours}h${String(mins).padStart(2, '0')}m`;
         return `${mins}m`;
       };
-      // 折叠条只显 'statusline' 一词；全部数据在展开态（CLI 密集风、│ 分隔、分段着色）
-      if (cliSummaryEl) cliSummaryEl.textContent = 'statusline';
+      // 折叠摘要：git · ctx（模型/effort 已在底栏 pill）；展开仍有 CLI 全量
+      lastStatusLinePayload = p;
+      if (cliSummaryEl) cliSummaryEl.textContent = formatStatuslineCollapsedSummary(p);
       // 展开详情：CLI 密集风、分段着色、纯 DOM 构建。seg = {text,cls} 或 {node}。配色用项目语义色 token
       // （随明/暗主题），不硬塞 CLI 的 Catppuccin。每个非首段把分隔符 │ 与内容打包成一个不可拆的 cell，
       // 这样窄屏 flex-wrap 折行时 │ 永远跟着它后面的值走、不会被孤零零甩到行尾。
@@ -2218,6 +2250,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           const staleRateRow = row(staleRateSegs);
           if (staleRateRow) cliStatusEl.appendChild(staleRateRow);
         }
+        lastStatusLinePayload = p;
         if (cliSummaryEl) cliSummaryEl.textContent = staleRateSegs.length ? t('statusline · CLI 暂不可用（额度沿用旧值）') : t('statusline · CLI 暂不可用');
         cliStatusWrapEl?.classList.remove('hidden');
         return; // CLI owner 缺/陈旧时明确空缺，绝不把上一份 SDK/CLI 字段混进来（额度回落值是唯一例外，见上）
@@ -3474,9 +3507,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         const titleCls = s.danger ? 'text-danger' : 'text-ink';
         const descCls = s.danger ? 'text-red-500/80' : 'text-ink-soft';
         const card = el(`
-          <div data-mode="${esc(s.id)}" class="perm-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all${dangerCls}">
-            <div class="text-xs font-semibold ${titleCls}">${esc(s.title)}</div>
-            <div class="text-xs ${descCls} mt-0.5">${esc(s.desc)}</div>
+          <div data-mode="${esc(s.id)}" class="perm-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all${dangerCls}">
+            <div class="text-xs font-semibold ${titleCls} leading-snug">${esc(s.title)}</div>
+            <div class="text-[11px] ${descCls} mt-0.5 leading-snug line-clamp-2">${esc(s.desc)}</div>
           </div>
         `);
         customPermGrid.appendChild(card);
@@ -3680,7 +3713,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         // UX-014：副文案增量信息，非「思考等级: low」同义反复
         const sub = effortLevelSubtitle(lv) || (isUltra ? t('xhigh + 多 agent · 最彻底') : '');
         const lvTile = el(`
-          <div data-level="${esc(lv)}" class="effort-tile p-2.5 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
+          <div data-level="${esc(lv)}" class="effort-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all ${active ? 'ring-1 ring-accent border-accent text-accent bg-accent-wash/30' : ''}">
             <div class="text-xs font-semibold ${active ? 'text-accent' : 'text-ink'}">${esc(lv)}</div>
             ${sub ? `<div class="text-xs text-ink-soft mt-0.5">${esc(sub)}</div>` : ''}
           </div>

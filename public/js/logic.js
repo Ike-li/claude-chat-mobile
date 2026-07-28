@@ -2331,6 +2331,72 @@ export function applyAtMentionPick(fullText, { matchStart, cursorPos, path } = {
   return { text: before + inserted + after, cursorPos: (before + inserted).length };
 }
 
+// ---- statusline 折叠摘要 / 剪贴板（纯数据，DOM 在 app.js）----
+// 折叠态只放 git + ctx：模型/effort/权限已在底栏 pill，勿重复；展开仍有 CLI 级全量。
+
+function statuslineFmtTok(n) {
+  if (!Number.isFinite(n)) return '';
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}m`;
+  if (n >= 1e3) return `${Math.round(n / 1e3)}k`;
+  return String(n);
+}
+
+/** git 短文案：branch +暂存 !改动 ?未跟踪 ↑ahead ↓behind（对齐展开态） */
+export function formatStatuslineGitBrief(git) {
+  if (!git?.branch) return '';
+  let b = String(git.branch);
+  if (git.staged || git.modified || git.untracked) {
+    if (git.staged) b += ` +${git.staged}`;
+    if (git.modified) b += ` !${git.modified}`;
+    if (git.untracked) b += ` ?${git.untracked}`;
+  } else if (git.changed) {
+    b += ` ✱${git.changed}`;
+  }
+  if (git.ahead) b += ` ↑${git.ahead}`;
+  if (git.behind) b += ` ↓${git.behind}`;
+  return b;
+}
+
+/** ctx 短文案：优先百分比，否则绝对 token */
+export function formatStatuslineCtxBrief(ctx) {
+  if (!ctx || typeof ctx !== 'object') return '';
+  if (Number.isFinite(ctx.usedPercent)) return `ctx ${Math.round(ctx.usedPercent)}%`;
+  if (Number.isFinite(ctx.tokens)) return `ctx ${statuslineFmtTok(ctx.tokens)}`;
+  return '';
+}
+
+/**
+ * 折叠 summary：git · ctx；皆无时回落 'statusline'（CLI 不可用态由调用方另写）。
+ */
+export function formatStatuslineCollapsedSummary(p) {
+  const parts = [];
+  const git = formatStatuslineGitBrief(p?.git);
+  const ctx = formatStatuslineCtxBrief(p?.ctx);
+  if (git) parts.push(git);
+  if (ctx) parts.push(ctx);
+  return parts.length ? parts.join(' · ') : 'statusline';
+}
+
+/**
+ * 点按复制用的多行纯文本（git/ctx/model/cost/sid/source…），便于粘到 issue。
+ */
+export function formatStatuslineCopyText(p) {
+  if (!p || typeof p !== 'object') return '';
+  const lines = [];
+  const summary = formatStatuslineCollapsedSummary(p);
+  if (summary && summary !== 'statusline') lines.push(summary);
+  if (p.model) lines.push(`model ${p.model}`);
+  if (p.effort) lines.push(`effort ${p.effort}`);
+  if (p.project) lines.push(`project ${p.project}`);
+  if (p.git?.repo) lines.push(`repo ${p.git.repo}`);
+  if (Number.isFinite(p.cost)) lines.push(`est $${Number(p.cost).toFixed(2)}`);
+  if (p.session?.id) lines.push(`sid ${p.session.id}`);
+  if (p.source?.kind === 'cli') lines.push('source CLI');
+  if (p.source?.kind === 'sdk') lines.push('source Web SDK');
+  if (p.version) lines.push(`v${p.version}`);
+  return lines.join('\n');
+}
+
 // Edit/MultiEdit 工具卡「预览变更」超过这么多行就不值得算 LCS——old/new_string 本是 Claude 挑的
 // 紧凑定位锚点，正常几行到几十行；真撞到这个量级多半是异常输入，调用方应退回整块红/绿块渲染。
 export const MAX_DIFF_LINES_FOR_LCS = 500;
