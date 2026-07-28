@@ -328,6 +328,23 @@ body.ccm-sheet-open #messages {
 .pill-effort-inline.hidden {
   display: none;
 }
+
+/* Transcript 三档密度（#messages 上挂 transcript-view-*；对齐 Desktop Code） */
+#messages.transcript-view-summary > .toolcard,
+#messages.transcript-view-summary > .thinking,
+#messages.transcript-view-summary > .subagent-card {
+  display: none !important;
+}
+/* summary 下回合文件汇总更醒目 */
+#messages.transcript-view-summary > .turn-file-changes {
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* ctx 常显 pill 着色（与 statusline ctx 阈值一致） */
+#pillCtx.ctx-tone-ok #pillCtxText { color: var(--info, #3b82f6); }
+#pillCtx.ctx-tone-warn #pillCtxText { color: var(--warning, #d97706); }
+#pillCtx.ctx-tone-danger #pillCtxText { color: var(--danger, #dc2626); font-weight: 600; }
+}
 /* 底栏工具条：chip 区可滚，动作区不缩 */
 .composer-toolbar {
   min-width: 0;

@@ -496,6 +496,14 @@
                 <span id="pillEffortText" class="pill-defaults-part pill-effort">思考默认</span>
               </span>
             </div>
+            <!-- Transcript 三档（对齐 Desktop Code）：点按循环 标准 → 详细 → 摘要 -->
+            <button type="button" id="pillTranscriptView" class="status-pill-chip toolbar-pill" data-testid="pill-transcript-view" title="标准：工具卡折叠为摘要（默认）" aria-label="会话显示密度">
+              <span id="pillTranscriptViewText">标准</span>
+            </button>
+            <!-- ctx 常显：status_line 有用量时显示，点按展开 cli statusline 明细 -->
+            <button type="button" id="pillCtx" class="status-pill-chip toolbar-pill hidden" data-testid="pill-ctx" title="上下文用量" aria-label="上下文用量" hidden>
+              <span id="pillCtxText">ctx</span>
+            </button>
             <!-- C：空聚焦时淡显 / @ 发现；有字或失焦即藏；不挡键盘 -->
             <span id="composerDiscoverHint" class="hidden composer-discover-hint select-none" data-testid="composer-discover-hint" aria-hidden="true">/ · @</span>
           </div>

@@ -315,12 +315,13 @@ export function resolveComposerPrimaryMode({
       ariaLabel: t('发送'),
     };
   }
+  // 有内容：空闲发送 / busy 排队纠偏（对齐 Desktop Code：当前步骤后吸收，不必先 Stop）
   if (hasContent) {
     return {
       mode: 'send',
       enabled: true,
-      title: '',
-      ariaLabel: t('发送'),
+      title: busy ? t('当前步骤后发送（可纠偏，不必先停止）') : '',
+      ariaLabel: busy ? t('排队发送') : t('发送'),
     };
   }
   return {
@@ -351,11 +352,102 @@ export function shouldShowComposerDiscoverHint({ focused = false, hasContent = f
   return Boolean(focused) && !hasContent && !mirrorReadonly;
 }
 
-// 排队可见性（对齐 CLI「Queued」态）：user_message.queued=true 的气泡挂排队标记，
-// 本轮 result 到达时转正；被撤回/随停止取消时由 system{queue_cancelled/queue_dropped} 落终态。
+// 排队可见性（对齐 CLI「Queued」态 + Desktop 运行中纠偏）：user_message.queued=true 的气泡挂排队标记，
+// 当前步骤/本轮结束后转正；被撤回/随停止取消时由 system{queue_cancelled/queue_dropped} 落终态。
 export function queuedBubbleState({ queued = false } = {}) {
   if (!queued) return { show: false, label: '' };
-  return { show: true, label: t('⏳ 排队中 · 本轮结束后发送') };
+  return { show: true, label: t('⏳ 排队中 · 当前步骤后发送') };
+}
+
+// Composer placeholder：busy 时提示可纠偏排队（输入区 busy 时不 disabled，见 FE-004）。
+// mirrorReadonly 优先（镜像态整框只读，placeholder 由镜像文案接管）。
+export function resolveComposerPlaceholder({
+  busy = false,
+  queueFull = false,
+  mirrorReadonly = false,
+  mirrorText = '',
+  idleText = '给 Claude 发消息...',
+} = {}) {
+  if (mirrorReadonly) return mirrorText || idleText;
+  if (queueFull) return t('前面已有消息在排队，请等当前任务结束');
+  if (busy) return t('输入纠偏，当前步骤后发送…');
+  return idleText;
+}
+
+// ---- Transcript 三档密度（对齐 Claude Desktop Code Transcript view）----
+// 同一 DOM 用 CSS class + details.open 切换；不重写后端 / 不丢事件。
+export const TRANSCRIPT_VIEW_MODES = Object.freeze(['normal', 'verbose', 'summary']);
+export const TRANSCRIPT_VIEW_STORAGE_KEY = 'ccm_transcript_view';
+
+export function normalizeTranscriptViewMode(mode) {
+  return TRANSCRIPT_VIEW_MODES.includes(mode) ? mode : 'normal';
+}
+
+export function cycleTranscriptViewMode(mode) {
+  const cur = normalizeTranscriptViewMode(mode);
+  const i = TRANSCRIPT_VIEW_MODES.indexOf(cur);
+  return TRANSCRIPT_VIEW_MODES[(i + 1) % TRANSCRIPT_VIEW_MODES.length];
+}
+
+/** 芯片短文案 */
+export function transcriptViewLabel(mode) {
+  switch (normalizeTranscriptViewMode(mode)) {
+    case 'verbose': return t('详细');
+    case 'summary': return t('摘要');
+    default: return t('标准');
+  }
+}
+
+/** title / aria 完整说明 */
+export function transcriptViewTitle(mode) {
+  switch (normalizeTranscriptViewMode(mode)) {
+    case 'verbose': return t('详细：展开全部工具与思考（调试用）');
+    case 'summary': return t('摘要：只看对话与改动汇总（扫结果）');
+    default: return t('标准：工具卡折叠为摘要（默认）');
+  }
+}
+
+export function transcriptViewMessagesClass(mode) {
+  return `transcript-view-${normalizeTranscriptViewMode(mode)}`;
+}
+
+/** verbose 新建/套用时 details 默认 open */
+export function transcriptDetailsOpenByDefault(mode) {
+  return normalizeTranscriptViewMode(mode) === 'verbose';
+}
+
+export function readTranscriptViewPref(getItem) {
+  try {
+    return normalizeTranscriptViewMode(typeof getItem === 'function' ? getItem(TRANSCRIPT_VIEW_STORAGE_KEY) : null);
+  } catch {
+    return 'normal';
+  }
+}
+
+export function writeTranscriptViewPref(setItem, mode) {
+  const m = normalizeTranscriptViewMode(mode);
+  try {
+    if (typeof setItem === 'function') setItem(TRANSCRIPT_VIEW_STORAGE_KEY, m);
+  } catch { /* quota / 隐私模式 */ }
+  return m;
+}
+
+// ---- ctx 常显 pill（statusline 折叠条之外的 toolbar 捷径）----
+export function formatCtxPillText(ctx) {
+  return formatStatuslineCtxBrief(ctx);
+}
+
+/** 与 statusline ctx 段同阈值：≥90 danger · ≥70 warn · 其余 ok */
+export function ctxPillTone(usedPercent) {
+  if (!Number.isFinite(usedPercent)) return 'ok';
+  if (usedPercent >= 90) return 'danger';
+  if (usedPercent >= 70) return 'warn';
+  return 'ok';
+}
+
+// 回合末滚动：有文件汇总卡则锚定到卡（手机扫结果）；否则落底。
+export function resolveTurnEndScroll({ hasFileChangesCard = false } = {}) {
+  return hasFileChangesCard ? 'file-changes' : 'bottom';
 }
 
 // 撤回回填决策（对齐 CLI ESC 撤回→内容回编辑器）：输入框为空 → 直接回填；
