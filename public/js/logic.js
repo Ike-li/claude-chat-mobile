@@ -861,6 +861,13 @@ export function shouldShowTopContextPill({ viewingInstanceId, sessionId } = {}) 
   return !shouldShowStartScreen({ viewingInstanceId, sessionId });
 }
 
+// 顶栏 RTT 芯片：好网（good/ok）隐藏，只在 warn/bad 时出现——正常时顶栏安静，异常才说话。
+// 连接点 title / 状态行仍可由接线层带延迟数字，不依赖芯片可见。
+export function shouldShowRttChip(ms) {
+  const tone = rttToneClass(ms);
+  return tone === 'warn' || tone === 'bad';
+}
+
 // 底部输入条（composer）可见性：空首页枢纽只做「选工作区/会话」，不提供直接发消息入口——
 // 避免未选项目就打字、懒开新会话的歧义路径。显示条件：
 //   · 已进入可渲染会话（有 sessionId）

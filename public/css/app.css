@@ -337,11 +337,16 @@ body.ccm-sheet-open #messages {
   align-items: center;
   gap: 0.4rem;
   box-shadow: 0 1px 2px rgba(0,0,0,0.02);
-  max-width: 90%;
+  /* 中间身份区尽量吃宽：两侧按钮让路，减少 claude-chat-m… 这种无信息截断 */
+  max-width: min(100%, 58vw);
   overflow: hidden;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   cursor: pointer !important;
   pointer-events: auto !important;
+}
+#topProjectText {
+  min-width: 0;
+  max-width: 100%;
 }
 /* 顶栏左侧延迟胶囊：比中间 project pill 更小一号，同 sunk/软边/圆角语汇；
    不做成按钮（无 hover scale），避免与工作区入口抢主操作。色阶由 JS 叠 text-*。 */
@@ -450,6 +455,11 @@ body.ccm-sheet-open #messages {
   }
   #headerActions {
     display: flex !important;
+    min-width: 0 !important;
+    gap: 0.35rem !important;
+  }
+  .top-context-pill {
+    max-width: min(100%, 46vw);
   }
 
   #messages {

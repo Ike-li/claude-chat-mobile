@@ -1,7 +1,8 @@
-import { formatRttMs, rttToneClass } from '../logic.js';
+import { formatRttMs, rttToneClass, shouldShowRttChip } from '../logic.js';
 import { t } from '../i18n.js';
 
 // good/ok 都用中性 ink-soft：健康延迟不与绿点抢 success 色；仅 warn/bad 上色告警。
+// 芯片本身仅 warn/bad 显示（shouldShowRttChip）；好网数字仍写进连接点 title / 状态行。
 const TONE_CLASSES = {
   good: 'text-ink-soft',
   ok: 'text-ink-soft',
@@ -46,13 +47,20 @@ export function createRttMonitor(context, {
       return '';
     }
     lastMs = milliseconds;
+    // 连接点 title + 状态行始终带延迟（排障用）；芯片只在差网出现，好网顶栏保持安静。
+    if (context.dom.connDotWrap) context.dom.connDotWrap.title = `${t('已连接')} · ${t('延迟')} ${label}`;
+    setStatus(`${t('已连接')} · ${t('延迟')} ${label}`);
+    if (!shouldShowRttChip(milliseconds)) {
+      rtt.textContent = '';
+      rtt.title = `${t('手机到主机往返延迟')} ${label}`;
+      rtt.className = `hidden ${RTT_CHIP_BASE}`;
+      return label;
+    }
     const toneClass = TONE_CLASSES[rttToneClass(milliseconds)] || 'text-ink-soft';
     // 人话前缀「延迟」：主界面可读；formatRttMs 仍只产出数值（42ms / 1.2s），便于单测与复用。
     rtt.textContent = `${t('延迟')} ${label}`;
     rtt.className = `${toneClass} ${RTT_CHIP_BASE}`;
     rtt.title = `${t('手机到主机往返延迟')} ${label}`;
-    if (context.dom.connDotWrap) context.dom.connDotWrap.title = `${t('已连接')} · ${t('延迟')} ${label}`;
-    setStatus(`${t('已连接')} · ${t('延迟')} ${label}`);
     return label;
   }
 

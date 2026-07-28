@@ -292,8 +292,7 @@ export const EN_DICT = Object.freeze({
   '✕ 拒绝': '✕ Deny',
 
   // —— 顶栏 / 会话标题 ——
-  '聊天': 'Chat',
-  '新会话': 'New session',
+    '新会话': 'New session',
   '新建会话': 'New session',
   '新会话（未保存）': 'New session (unsaved)',
   '无标题会话': 'Untitled session',

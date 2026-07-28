@@ -328,6 +328,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await startNewSessionInWorkspace(page, ANOTHER_WORKSPACE);
 
     await expectSidebarClosed(page);
+    // compose 页顶栏 pill 隐藏；#topProjectText 仍写工作区 basename
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     // 侧栏 ＋ → compose 干净新会话页（不再是带「当前工作区」的首页枢纽）
@@ -411,6 +412,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#confirmOk').click();
 
     await expectSidebarClosed(page);
+    // 首页 pill 隐藏；文案仍是工作区 basename
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#messages')).toHaveClass(/empty-start/);
     // 关掉当前会话 → 回首页枢纽（无「当前工作区」pill）
@@ -505,6 +507,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:fresh-settings-echo');
     await waitForIdle(page);
+    // 首发后仍在其它工作区（不回跳默认仓）
     await expect(page.locator('#topProjectText')).toContainText('another-react-project');
     await expect(page.locator('#messages')).toContainText('新会话设置回显');
 
@@ -529,6 +532,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await row.click();
     await expectSidebarClosed(page);
+    // 深链到待审批会话：顶栏仍显工作区名（会话标题在侧栏）
     await expect(page.locator('#topProjectText')).toHaveText('another-react-project');
 
     await expectNoBrowserErrors(page);

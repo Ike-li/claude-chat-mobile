@@ -1392,7 +1392,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (displayedInstanceId && !displayedSessionId && sessionId) {
         displayedSessionId = sessionId;
         updatePillSession(sessionId);
-        if (topTitleText) topTitleText.textContent = t('聊天');
+        syncTopContextLabel();
       }
     },
   });
@@ -3856,13 +3856,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 发送按钮禁用态：随 instances 广播的权威 queueFull 字段驱动（undefined/旧服务端=保守 false 不误禁）。
     _queueFull = viewedInst?.queueFull === true;
 
-    // REDESIGN: Update active workspace text pill
-    if (topProjectText) {
-      topProjectText.textContent = baseName(currentCwd);
-      if (topContextPill) {
-        topContextPill.title = currentCwd ? `${t('工作区：浏览或查看改动')} · ${currentCwd}` : t('工作区：浏览或查看改动');
-      }
-    }
+    // 顶栏主 pill：标题优先 / 无则工作区；title 挂 cwd 供长按辨认
+    syncTopContextLabel();
     // pillWorkspace（📁 状态 pill）显当前工作区名——该 pill 是工作区入口，显 model 名是名实错配（2026-06-21）
     if ($('pillWorkspaceText')) $('pillWorkspaceText').textContent = baseName(currentCwd);
     // 开发者模式：DEV_MODE=1 时显示齿轮面板「重启服务」组（生产默认隐藏，防误触重启对外服务）
@@ -3870,9 +3865,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (devGroup) devGroup.classList.toggle('hidden', !p?.devMode);
     // 短 session_id 状态胶囊：显示当前查看会话的前 8 位；无会话（空首页/未获 id）隐藏
     updatePillSession(instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
-    if (topTitleText) {
-      topTitleText.textContent = shouldShowStartScreen({ viewingInstanceId: newViewing, sessionId: instancesList.find(x => x.instanceId === newViewing)?.sessionId }) ? t('新聊天') : t('聊天');
-    }
     // 顶栏文件夹 pill：首页/compose 隐藏（页内已有工作区入口）；进入真实会话后显示
     syncTopContextPillVisibility(newViewing, instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
     // 保持纯手动展开折叠，不自动展开任何工作区目录
@@ -3936,7 +3928,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (target?.sessionId) {
         displayedSessionId = target.sessionId;
         updatePillSession(target.sessionId);
-        if (topTitleText) topTitleText.textContent = t('聊天');
+        syncTopContextLabel();
         // 清除②：同一实例在这条广播里补上了 sessionId——待续档态不再适用（这条路径不经 bindView，
         // 上面 bindView 内的清除逻辑覆盖不到，须在此单独清）。
         if (freshInterruptedInstanceId === newViewing) freshInterruptedInstanceId = null;
@@ -5572,6 +5564,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 隐藏时不可聚焦，避免读屏仍读到「浏览项目文件」
     topContextPill.tabIndex = show ? 0 : -1;
     topContextPill.setAttribute('aria-hidden', show ? 'false' : 'true');
+  }
+  // 顶栏主 pill 文案：固定工作区 basename（机主拍板不要会话标题——同仓多会话靠侧栏区分）。
+  // #topTitleText 仍 hidden；title 挂完整 cwd 供长按辨认。
+  function syncTopContextLabel() {
+    const project = baseName(currentCwd);
+    if (topProjectText) topProjectText.textContent = project || '…';
+    if (topContextPill) {
+      topContextPill.title = currentCwd
+        ? `${t('工作区：浏览或查看改动')} · ${currentCwd}`
+        : t('工作区：浏览或查看改动');
+    }
   }
   function enterComposeReady() {
     _composeReady = true;

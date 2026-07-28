@@ -106,16 +106,16 @@
       </button>
     </div>
 
-    <!-- Right Section: Home / Log / New Session -->
-    <div id="headerActions" class="flex items-center justify-end gap-1.5 min-w-[70px]">
-      <!-- 回空首页（最近工作区/会话枢纽；不清会话指针，与 ＋ 新建分工） -->
+    <!-- Right Section: Home / Log / New Session（三钮同材质，＋ 不单独上色） -->
+    <div id="headerActions" class="flex items-center justify-end gap-1 min-w-0 shrink-0">
+      <!-- 回空首页（最近工作区与会话枢纽；不清会话指针，与 ＋ 新建分工） -->
       <button id="btnHome" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="回首页（最近工作区与会话）" aria-label="回首页">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12 12 2.25 21.75 12M4.5 10.5v9.75a.75.75 0 00.75.75h4.5v-6h4.5v6h4.5a.75.75 0 00.75-.75V10.5" />
         </svg>
       </button>
 
-      <!-- 会话运行日志：终端窗线稿，与 btnHome/btnNew 同材质同线宽 -->
+      <!-- 会话运行日志：排障高频保留在顶栏 -->
       <button id="btnConsole" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="查看当前会话运行日志" aria-label="查看会话日志">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5" aria-hidden="true">
           <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 5.25A1.5 1.5 0 016 3.75h12A1.5 1.5 0 0119.5 5.25v13.5A1.5 1.5 0 0118 20.25H6A1.5 1.5 0 014.5 18.75V5.25z" />
@@ -123,7 +123,7 @@
         </svg>
       </button>
 
-      <!-- 新会话 ＋：与 btnHome/btnConsole 同色同线宽，不单独用 accent 抢视觉 -->
+      <!-- 新会话 ＋：与 home/日志同材质 -->
       <button id="btnNew" class="w-9 h-9 flex items-center justify-center rounded-xl text-ink-soft hover:bg-sunk active:scale-95 transition-all select-none border border-line-soft bg-surface shadow-sm" title="创建新会话" aria-label="创建新会话">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.2" stroke="currentColor" class="w-5 h-5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
