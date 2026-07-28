@@ -328,40 +328,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // 网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_OPUS_MODEL）：CLI 侧仍报档位别名
-  // 'opus'，但 SDK supportedModels() 在 resolvedModel 带出真实 wire id（如 mimo-v2.5-pro-ultraspeed）。
-  // 底栏 pill、select 候选文案、设置面板磁贴标题都应显示 resolvedModel，而不是停留在裸别名 'opus'——
-  // 这是 resolveModelDisplayName / resolveModelTileDisplay 的端到端验证，不能只靠纯函数单测。
-  test('P0-09k 网关映射模型：pill/select/磁贴显示真实模型名而非档位别名', async ({ page }) => {
+  // 中转站：CLI 给什么展示什么。init 报 opus → pill 是 opus；磁贴 data-model 仍是档位 value。
+  test('P0-09k 模型列表/当前模型原样展示 CLI 值', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:gateway-model-alias');
     await waitForIdle(page);
 
-    // 底栏 pill：显 resolvedModel，不是裸别名 'opus'
-    await expect(page.locator('#pillModelText')).toHaveText('mimo-v2.5-pro-ultraspeed');
+    await expect(page.locator('#pillModelText')).toHaveText('opus');
 
-    // 设置面板：select 候选文案 + 磁贴标题同样显 resolvedModel
     await page.locator('#pillDefaults').click();
-    await expect(page.locator('#modelInput')).toHaveValue('opus'); // 发送用的 value 仍是档位别名，不受本次改动影响
-    await expect(page.locator('.model-tile[data-model="opus"]')).toContainText('mimo-v2.5-pro-ultraspeed');
-    await expect(page.locator('.model-tile[data-model="opus"]')).not.toContainText('Opus');
+    await expect(page.locator('.model-tile[data-model="opus"]')).toBeVisible();
+    await expect(page.locator('.model-tile[data-model="opus"]')).toHaveClass(/ring-accent/);
     await closeSettings(page);
 
     await expectNoBrowserErrors(page);
   });
 
-  // 新会话（未选具体模型）+ 网关默认：cwd 默认为档位别名 opus，SDK resolvedModel 带真实 wire id。
-  // 回归 bug「开新会话看不到实际模型名、选了 opus 才显具体名」：currentModel 空时底栏 pill 也应解析出
-  // 真实模型名，而不是停在裸别名 'opus'。（P0-09k 是已选 opus 路径，本例专测未选路径。）
-  test('P0-09l 新会话未选模型：pill 显 cwd 默认的真实模型名而非裸别名', async ({ page }) => {
+  // 新会话未选：pill 用 cwd 默认裸名（原样），不擅自改写成 resolvedModel。
+  test('P0-09l 新会话未选模型：pill 显 cwd 默认原样', async ({ page }) => {
     await gotoMock(page);
     await sendChatMessage(page, 'test:gateway-default-fresh');
     await waitForIdle(page);
 
-    // currentModel 空（未选具体模型），但底栏 pill 已把 cwd 默认别名 opus 解析成真实 wire id，
-    // 不再停在裸别名——正是本次修的 bug。
-    await expect(page.locator('#pillModelText')).toHaveText('mimo-v2.5-pro-ultraspeed');
-    await expect(page.locator('#pillModelText')).not.toHaveText('opus');
+    // mock 的 cwd 默认是 opus；中转站原样显示
+    await expect(page.locator('#pillModelText')).toHaveText('opus');
 
     await expectNoBrowserErrors(page);
   });

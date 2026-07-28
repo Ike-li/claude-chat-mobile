@@ -4,7 +4,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { isOwnerOnly } from '../files/file-security.js';
-import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, computeReadiness, classifyDeviceGateTopology } from './doctor-checks.js';
+import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic } from './doctor-checks.js';
 
 // 敏感配置文件清单（相对项目根）——CLI doctor（scripts/doctor.js）与本运行时 doctor 共用同一事实源，
 // 防两处各自维护再漏同步。列表新增项须同时被 CLI 检查/自动修复与 UI 体检覆盖。
@@ -55,6 +55,44 @@ export function readMergedPermissions({ home, workDirs = [] } = {}) {
   return { allow, sources };
 }
 
+// 读 user / 各 workDir 的 project+local 里 model 与 ANTHROPIC_DEFAULT_*_MODEL（只抽字段，不回显 token）。
+export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
+  const parseFile = (file) => {
+    try {
+      return JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      return null;
+    }
+  };
+  const collectDefaults = (j, into) => {
+    const env = j?.env && typeof j.env === 'object' ? j.env : null;
+    if (!env) return;
+    for (const [k, v] of Object.entries(env)) {
+      if (!/^ANTHROPIC_DEFAULT_.+_MODEL$/i.test(k)) continue;
+      const t = v != null ? String(v).trim() : '';
+      if (t) into.push(t);
+    }
+  };
+  let userModel = '';
+  const defaultEnvTargets = [];
+  if (home) {
+    const uj = parseFile(join(home, '.claude', 'settings.json'));
+    if (uj?.model != null && String(uj.model).trim()) userModel = String(uj.model).trim();
+    collectDefaults(uj, defaultEnvTargets);
+  }
+  let localModel = '';
+  let projectModel = '';
+  for (const dir of workDirs || []) {
+    const pj = parseFile(join(dir, '.claude', 'settings.json'));
+    const lj = parseFile(join(dir, '.claude', 'settings.local.json'));
+    if (!projectModel && pj?.model != null && String(pj.model).trim()) projectModel = String(pj.model).trim();
+    if (!localModel && lj?.model != null && String(lj.model).trim()) localModel = String(lj.model).trim();
+    collectDefaults(pj, defaultEnvTargets);
+    collectDefaults(lj, defaultEnvTargets);
+  }
+  return { userModel, localModel, projectModel, defaultEnvTargets };
+}
+
 // 编排 6 项运行时安全检查 + 危险白名单审查，产出【已脱敏】报告。
 export function runDoctor(ctx = {}) {
   const checks = [];
@@ -90,6 +128,21 @@ export function runDoctor(ctx = {}) {
   checks.push({ id: 'PUSH_VAPID', status: ctx.pushEnabled ? 'ok' : 'warn', detail: ctx.pushEnabled ? '已配置' : '未配置（推送优雅缺席）', safe: { enabled: !!ctx.pushEnabled } }); // 密钥仅布尔
 
   checks.push({ id: 'DEVICES', status: (ctx.pendingDevices || 0) > 0 ? 'warn' : 'ok', detail: `信任 ${ctx.trustedDevices || 0} 台 / 待批 ${ctx.pendingDevices || 0} 台`, safe: { trusted: ctx.trustedDevices || 0, pending: ctx.pendingDevices || 0 } });
+
+  // 模型设置冲突：全局 model vs local ANTHROPIC_DEFAULT_*（不回显 env 密钥，只报 model 名与映射目标）
+  const modelSnap = readModelSettingsSnapshot({ home: ctx.home, workDirs: ctx.workDirs || [] });
+  const modelDiag = modelSettingsConflictDiagnostic(modelSnap);
+  checks.push({
+    id: 'MODEL_SETTINGS',
+    status: modelDiag.status,
+    detail: modelDiag.detail,
+    safe: {
+      userModel: modelSnap.userModel || null,
+      localModel: modelSnap.localModel || null,
+      projectModel: modelSnap.projectModel || null,
+      defaultEnvTargetCount: modelSnap.defaultEnvTargets.length,
+    },
+  });
 
   // 危险白名单：读合并 permissions.allow，危险条附 scope（让用户知道改哪个文件），非危险不列。
   const merged = readMergedPermissions({ home: ctx.home, workDirs: ctx.workDirs || [] });

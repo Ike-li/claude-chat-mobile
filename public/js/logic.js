@@ -151,40 +151,44 @@ export function shouldEmitModeChangeBar({ emptyStart = false } = {}) {
   return !emptyStart;
 }
 
-// UX-018：模型磁贴 displayName 撞车时主标题回退 value，避免整排同名。
-// 网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_*_MODEL）下，SDK supportedModels()
-// 会在 resolvedModel 带出真实 wire id（如 opus → mimo-v2.5-pro-ultraspeed）；标题优先它，
-// 撞车规则与 displayName 对称（resolvedModel 撞车 → 回退 value）。
+// UX-018：模型磁贴 = CLI/SDK supportedModels 原样搬运（value 不改、不按 resolved 去重、不重写标题）。
+// 标题用 CLI 的 displayName；撞车时回退 value 以免整排同名。副标题用 description。
+// resolvedModel 是 SDK 附带元数据，不拿来改写展示或发送——映射交给 CLI/网关，本站只中转。
 export function resolveModelTileDisplay(models) {
   const list = Array.isArray(models) ? models : [];
   const rows = list.map(m => {
     if (typeof m === 'string') {
-      return { value: m, displayName: m, description: '', resolvedModel: '', raw: m };
+      return { value: m, displayName: m, description: '', raw: m };
     }
     const value = m?.value != null ? String(m.value) : '';
     const displayName = (m?.displayName != null && String(m.displayName).trim())
       ? String(m.displayName).trim()
       : value;
-    const resolvedModel = (m?.resolvedModel != null && String(m.resolvedModel).trim())
-      ? String(m.resolvedModel).trim()
-      : '';
     const description = m?.description != null ? String(m.description) : '';
-    return { value, displayName, description, resolvedModel, raw: m };
+    return { value, displayName, description, raw: m };
   });
   const counts = new Map();
   for (const r of rows) {
-    const key = r.resolvedModel || r.displayName || r.value;
+    const key = r.displayName || r.value;
     counts.set(key, (counts.get(key) || 0) + 1);
   }
   return rows.map(r => {
-    const key = r.resolvedModel || r.displayName || r.value;
+    const key = r.displayName || r.value;
     const duplicate = (counts.get(key) || 0) > 1;
     const title = duplicate
-      ? (r.value || r.resolvedModel || r.displayName || 'model')
-      : (r.resolvedModel || r.displayName || r.value || 'model');
+      ? (r.value || r.displayName || 'model')
+      : (r.displayName || r.value || 'model');
     const subtitle = r.description || r.value || '';
     return { value: r.value, title, subtitle, duplicate, raw: r.raw };
   });
+}
+
+// 发送用模型 ID：原样转发 select / fullModel；空与字面 "default" → undefined（CLI 不 pin 自选）。
+// 不读 resolvedModel、不替用户改模型名。
+export function resolveSendModel({ selectValue = '', fullModel = '' } = {}) {
+  const raw = String(fullModel || selectValue || '').trim();
+  if (!raw || raw === 'default') return undefined;
+  return raw;
 }
 
 // UX-020：同名附件序号；可选大小。
@@ -785,17 +789,11 @@ export function modelLabelFor(modelValue, modelsList) {
   return modelValue;
 }
 
-// 展示层模型名解析：网关映射场景（.claude/settings.local.json 的 ANTHROPIC_DEFAULT_*_MODEL）下，
-// 消息发送 / setModel 仍用档位别名（如 "opus"），但给人看的地方应显示 SDK supportedModels() 解析出的
-// 真实 wire id（resolvedModel，如 "mimo-v2.5-pro-ultraspeed"）——不然 UI 时而显示 opus 时而显示网关模型名。
-// 优先级：resolvedModel > displayName > value > 原始 value（列表未到/未命中时诚实回落，不编造）。
-// 用于磁贴 / select 候选文案：这两处早已有 displayName 回落的既有约定，本函数只是在其前面插入
-// resolvedModel 优先级，不改变无 resolvedModel 时的既有回落行为。
+// select / 文案：CLI displayName 优先，否则 value。不把 resolvedModel 抬成展示名（中转站不重写）。
 export function resolveModelDisplayName(value, modelsList) {
   if (value == null || value === '') return '';
   const entry = modelEntryFor(value, modelsList);
   if (entry && typeof entry === 'object') {
-    if (entry.resolvedModel != null && String(entry.resolvedModel).trim()) return String(entry.resolvedModel).trim();
     if (entry.displayName != null && String(entry.displayName).trim()) return String(entry.displayName).trim();
     if (entry.value != null && String(entry.value)) return String(entry.value);
   }
@@ -815,26 +813,16 @@ export function resolveGatewayModelName(value, modelsList) {
   return '';
 }
 
-// 底栏模型 pill / compose 默认档摘要的展示文案。
-// · 已选具体 model：网关 resolvedModel 优先，否则原样（含 [1m] 后缀）——对齐 P0-09e/P0-09j「原始值」契约。
-// · 未选（FRESH / 新会话）：CLI 列表 value=default 的 displayName 优先（/model default 复位仍显示
-//   "Default (recommended)"）；否则用 scout 探得的 cwd 默认名，且必须经 resolveGatewayModelName
-//   解析——cwdDefaultModel 常是档位别名（opus），不解析就只显示裸别名（本次修的 bug）。
-// · 全空回落「默认」。
-export function resolveModelPillText({ model, gatewaySuffix = '', modelsList, cwdDefaultModel, cliDefaultLabel } = {}) {
+// 底栏模型 pill / compose 摘要：原样展示当前/默认，不做 resolved 改写。
+// · 已选 model：value + 网关后缀（若有）
+// · 未选：CLI default 的 displayName，否则 cwd 默认裸名，否则「默认」
+export function resolveModelPillText({ model, gatewaySuffix = '', modelsList: _modelsList, cwdDefaultModel, cliDefaultLabel } = {}) {
   const sfx = gatewaySuffix || '';
-  if (model) {
-    const raw = String(model) + sfx;
-    return resolveGatewayModelName(raw, modelsList) || raw;
-  }
+  if (model) return String(model) + sfx;
   if (cliDefaultLabel) return String(cliDefaultLabel);
   if (cwdDefaultModel) {
     const full = String(cwdDefaultModel);
-    const naked = full.replace(/\[[^\]]+\]$/, '');
-    // 先桥接裸名（cwdDefault 常是 opus[1m]，候选项 value 是 opus），再试完整值；都无则显裸名。
-    return resolveGatewayModelName(naked, modelsList)
-      || resolveGatewayModelName(full, modelsList)
-      || naked;
+    return full.replace(/\[[^\]]+\]$/, '') || full;
   }
   return t('默认');
 }

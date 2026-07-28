@@ -1,3 +1,53 @@
+// 模型配置「永不打架」体检：user/global 的 model 字段 vs local 的 ANTHROPIC_DEFAULT_*_MODEL 映射。
+// local 只写 env 映射、不写 model 时，CLI 默认仍用全局 model 全名，网关常不认 → 重试失败；
+// 与 UI 上 default.resolvedModel 显示成映射目标叠在一起会误导。
+// 入参均为已脱敏的字符串 / 对象（doctor-runtime 读盘后只传必要字段）。
+export function modelSettingsConflictDiagnostic({
+  userModel = '',
+  localModel = '',
+  projectModel = '',
+  defaultEnvTargets = [], // local env 里 ANTHROPIC_DEFAULT_*_MODEL 的去重目标列表
+} = {}) {
+  const u = String(userModel || '').trim();
+  const l = String(localModel || '').trim();
+  const p = String(projectModel || '').trim();
+  const targets = [...new Set((defaultEnvTargets || []).map(x => String(x || '').trim()).filter(Boolean))];
+  // local/project 已 pin 明确 model → 覆盖链清晰，不告警
+  if (l || p) {
+    return {
+      status: 'ok',
+      name: 'MODEL_SETTINGS',
+      detail: l
+        ? `项目 local 已设 model=${l}（覆盖全局默认）`
+        : `项目 project 已设 model=${p}`,
+    };
+  }
+  if (!u || !targets.length) {
+    return {
+      status: 'ok',
+      name: 'MODEL_SETTINGS',
+      detail: targets.length
+        ? '已配置 ANTHROPIC_DEFAULT_* 映射，全局未设 model（CLI 自选）'
+        : '未检测到 model / ANTHROPIC_DEFAULT_* 冲突信号',
+    };
+  }
+  // 全局 model 已是映射目标之一（或以其为前缀，如 grok-4.5 vs grok-4.5[1m]）→ 对齐
+  const aligned = targets.some(t => u === t || u.startsWith(t) || t.startsWith(u.replace(/\[[^\]]+\]$/, '')));
+  if (aligned) {
+    return {
+      status: 'ok',
+      name: 'MODEL_SETTINGS',
+      detail: `全局 model=${u} 与 DEFAULT 映射目标一致`,
+    };
+  }
+  const sample = targets.slice(0, 3).join(', ');
+  return {
+    status: 'warn',
+    name: 'MODEL_SETTINGS',
+    detail: `全局 model=${u}，但 local 的 ANTHROPIC_DEFAULT_* 映射到 ${sample}；Default/不 pin 仍用全局 ID。请在 .claude/settings.local.json 写 "model": "${targets[0]}" 或改全局 model。`,
+  };
+}
+
 // off：调用方传入的 `process.env.WEB_STATUSLINE === 'off'`（本模块不直接读 env，保持纯函数可测）。
 // 两态都是合法配置、非风险，status 恒 ok；detail 如实反映当前生效状态，不再是恒定文案。
 export function statuslineConfigDiagnostic(off = false) {

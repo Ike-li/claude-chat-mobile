@@ -1,6 +1,42 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology } from '../../src/ops/doctor-checks.js';
+import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic } from '../../src/ops/doctor-checks.js';
+
+test('modelSettingsConflictDiagnostic: local 已写 model → ok', () => {
+  const r = modelSettingsConflictDiagnostic({
+    userModel: 'claude-fable-5[1m]',
+    localModel: 'grok-4.5',
+    defaultEnvTargets: ['grok-4.5'],
+  });
+  assert.equal(r.status, 'ok');
+  assert.match(r.detail, /local/);
+});
+
+test('modelSettingsConflictDiagnostic: 全局 model 与 DEFAULT 映射不一致且 local 无 model → warn', () => {
+  const r = modelSettingsConflictDiagnostic({
+    userModel: 'claude-fable-5[1m]',
+    localModel: '',
+    projectModel: '',
+    defaultEnvTargets: ['grok-4.5', 'grok-4.5'],
+  });
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /claude-fable-5/);
+  assert.match(r.detail, /grok-4\.5/);
+  assert.match(r.detail, /settings\.local\.json/);
+});
+
+test('modelSettingsConflictDiagnostic: 全局 model 已是映射目标 → ok', () => {
+  const r = modelSettingsConflictDiagnostic({
+    userModel: 'grok-4.5',
+    defaultEnvTargets: ['grok-4.5'],
+  });
+  assert.equal(r.status, 'ok');
+});
+
+test('modelSettingsConflictDiagnostic: 无 DEFAULT 映射 → ok（无冲突信号）', () => {
+  assert.equal(modelSettingsConflictDiagnostic({ userModel: 'claude-fable-5[1m]' }).status, 'ok');
+  assert.equal(modelSettingsConflictDiagnostic({}).status, 'ok');
+});
 
 test('statuslineConfigDiagnostic treats web statusline as self-contained', () => {
   const result = statuslineConfigDiagnostic();

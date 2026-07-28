@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner } from '../../public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -454,116 +454,63 @@ test('modelEntryFor: 子串误匹配防护——mBase 在 base 中间出现但�
   assert.equal(modelEntryFor('deepseek-v3', list), list[0], '精确命中照常');
 });
 
-test('resolveModelDisplayName: 有 resolvedModel → 显示网关真实模型名而非档位别名', () => {
+// 中转站：displayName 优先，不把 resolvedModel 抬成展示名
+test('resolveModelDisplayName: 有 displayName → 用 displayName（忽略 resolvedModel）', () => {
   const list = [{ value: 'opus', displayName: 'Opus', resolvedModel: 'mimo-v2.5-pro-ultraspeed' }];
-  assert.equal(resolveModelDisplayName('opus', list), 'mimo-v2.5-pro-ultraspeed');
-});
-
-test('resolveModelDisplayName: 无 resolvedModel → 回落 displayName', () => {
-  const list = [{ value: 'opus', displayName: 'Opus' }];
   assert.equal(resolveModelDisplayName('opus', list), 'Opus');
 });
 
-test('resolveModelDisplayName: 无 displayName/resolvedModel → 回落 value', () => {
+test('resolveModelDisplayName: 无 displayName → 回落 value', () => {
   const list = [{ value: 'sonnet' }];
   assert.equal(resolveModelDisplayName('sonnet', list), 'sonnet');
 });
 
-test('resolveModelDisplayName: 列表为空/未命中 → 诚实回落原始 value，不编造', () => {
+test('resolveModelDisplayName: 列表为空/未命中 → 诚实回落原始 value', () => {
   assert.equal(resolveModelDisplayName('opus', []), 'opus');
   assert.equal(resolveModelDisplayName('opus', null), 'opus');
   assert.equal(resolveModelDisplayName('opus', [{ value: 'other' }]), 'opus');
 });
 
-test('resolveModelDisplayName: 空 value → 空字符串（不摸黑猜测）', () => {
+test('resolveModelDisplayName: 空 value → 空字符串', () => {
   assert.equal(resolveModelDisplayName('', [{ value: 'opus' }]), '');
   assert.equal(resolveModelDisplayName(null, [{ value: 'opus' }]), '');
 });
 
-test('resolveModelDisplayName: 已是真实模型名（value 自身即 resolvedModel 目标）→ 原样返回', () => {
-  const list = [{ value: 'mimo-v2.5-pro-ultraspeed', displayName: 'Mimo Ultraspeed' }];
-  assert.equal(resolveModelDisplayName('mimo-v2.5-pro-ultraspeed', list), 'Mimo Ultraspeed');
-});
-
-test('resolveModelDisplayName: 网关后缀名经 modelEntryFor 桥接后取 resolvedModel', () => {
-  const list = [{ value: 'opus[1m]', resolvedModel: 'mimo-v2.5-pro-ultraspeed[1m]' }];
-  assert.equal(resolveModelDisplayName('claude-opus-4-8[1m]', list), 'mimo-v2.5-pro-ultraspeed[1m]');
-});
-
-test('resolveModelDisplayName: resolvedModel 为空白字符串 → 视同缺省，回落 displayName', () => {
-  const list = [{ value: 'opus', displayName: 'Opus', resolvedModel: '   ' }];
-  assert.equal(resolveModelDisplayName('opus', list), 'Opus');
-});
-
-test('resolveModelDisplayName: displayName 为空字符串 → 视同缺省，回落 value', () => {
-  const list = [{ value: 'opus', displayName: '', resolvedModel: '' }];
+test('resolveModelDisplayName: displayName 为空字符串 → 回落 value', () => {
+  const list = [{ value: 'opus', displayName: '', resolvedModel: 'x' }];
   assert.equal(resolveModelDisplayName('opus', list), 'opus');
 });
 
-test('resolveModelDisplayName: modelsList 为纯字符串数组（无 resolvedModel 可言）→ 精确命中原样返回该字符串', () => {
+test('resolveModelDisplayName: 纯字符串数组 → 精确命中原样', () => {
   assert.equal(resolveModelDisplayName('opus', ['opus', 'sonnet']), 'opus');
 });
 
-// resolveGatewayModelName：用于 pill / diag chip 这类只显示"原始值"、不回落 displayName 的位置。
-// 与 resolveModelDisplayName 的区别：无 resolvedModel 时返回空串而非回落 displayName/value——
-// 调用方据此判断"要不要覆盖显示"，不是直接拿它当最终文案用。
+// resolveGatewayModelName 仍可供诊断用；展示主路径不依赖它改写
 test('resolveGatewayModelName: 有 resolvedModel → 返回真实模型名', () => {
   const list = [{ value: 'opus', displayName: 'Opus', resolvedModel: 'mimo-v2.5-pro-ultraspeed' }];
   assert.equal(resolveGatewayModelName('opus', list), 'mimo-v2.5-pro-ultraspeed');
 });
 
-test('resolveGatewayModelName: 无 resolvedModel（即便有 displayName）→ 空串，不回落', () => {
+test('resolveGatewayModelName: 无 resolvedModel → 空串', () => {
   const list = [{ value: 'claude-3-opus[1m]', displayName: 'Claude 3 Opus (1m Context)' }];
   assert.equal(resolveGatewayModelName('claude-3-opus[1m]', list), '');
 });
 
-test('resolveGatewayModelName: 未命中候选 / 空列表 / 空 value → 空串', () => {
-  assert.equal(resolveGatewayModelName('opus', []), '');
-  assert.equal(resolveGatewayModelName('opus', null), '');
-  assert.equal(resolveGatewayModelName('opus', [{ value: 'other', resolvedModel: 'x' }]), '');
-  assert.equal(resolveGatewayModelName('', [{ value: 'opus', resolvedModel: 'x' }]), '');
-});
-
-test('resolveGatewayModelName: resolvedModel 为空白字符串 → 视同缺省，空串', () => {
-  const list = [{ value: 'opus', displayName: 'Opus', resolvedModel: '   ' }];
-  assert.equal(resolveGatewayModelName('opus', list), '');
-});
-
-test('resolveGatewayModelName: 带 [1m] 网关后缀名经桥接后仍能取到 resolvedModel', () => {
-  const list = [{ value: 'opus[1m]', resolvedModel: 'mimo-v2.5-pro-ultraspeed[1m]' }];
-  assert.equal(resolveGatewayModelName('claude-opus-4-8[1m]', list), 'mimo-v2.5-pro-ultraspeed[1m]');
-});
-
-// resolveModelPillText：底栏 pill / compose 摘要同源。核心回归：新会话 currentModel 空、
-// cwdDefaultModel 是档位别名时，必须解析出真实模型名（否则 pill 只显示 "opus"）。
-test('resolveModelPillText: 已选 model + resolvedModel → 显真实 wire id', () => {
-  const list = [{ value: 'opus', resolvedModel: 'claude-opus-4-8' }];
-  assert.equal(resolveModelPillText({ model: 'opus', modelsList: list }), 'claude-opus-4-8');
-});
-
-test('resolveModelPillText: 已选 model 无 resolvedModel → 原样（含 gateway 后缀）', () => {
+// pill / 发送：原样，不映射
+test('resolveModelPillText: 已选 model → 原样（含 gateway 后缀）', () => {
+  assert.equal(resolveModelPillText({ model: 'opus', modelsList: [{ value: 'opus', resolvedModel: 'x' }] }), 'opus');
   assert.equal(resolveModelPillText({ model: 'opus', gatewaySuffix: '[1m]', modelsList: [] }), 'opus[1m]');
 });
 
-test('resolveModelPillText: 新会话空 model + cwdDefault 别名有 resolvedModel → 显真实名（本次 bug）', () => {
-  const list = [{ value: 'opus', displayName: 'Opus', resolvedModel: 'claude-opus-4-8' }];
+test('resolveModelPillText: 空 model + cliDefaultLabel 优先', () => {
   assert.equal(resolveModelPillText({
     model: '',
-    modelsList: list,
     cwdDefaultModel: 'opus',
-  }), 'claude-opus-4-8');
+    cliDefaultLabel: 'Default (recommended)',
+  }), 'Default (recommended)');
 });
 
-test('resolveModelPillText: 新会话空 model + cwdDefault 带 [1m] 别名 → 经裸名桥接', () => {
-  const list = [{ value: 'opus', resolvedModel: 'claude-opus-4-8' }];
-  assert.equal(resolveModelPillText({
-    model: '',
-    modelsList: list,
-    cwdDefaultModel: 'opus[1m]',
-  }), 'claude-opus-4-8');
-});
-
-test('resolveModelPillText: 新会话空 model + cwdDefault 无映射 → 显裸 cwd 默认名', () => {
+test('resolveModelPillText: 空 model + cwdDefault → 裸名', () => {
   assert.equal(resolveModelPillText({
     model: '',
     modelsList: [],
@@ -571,19 +518,16 @@ test('resolveModelPillText: 新会话空 model + cwdDefault 无映射 → 显裸
   }), 'claude-opus-4-8');
 });
 
-test('resolveModelPillText: cliDefaultLabel 优先于 cwdDefault（/model default 复位契约）', () => {
-  const list = [{ value: 'opus', resolvedModel: 'claude-opus-4-8' }];
-  assert.equal(resolveModelPillText({
-    model: '',
-    modelsList: list,
-    cwdDefaultModel: 'opus',
-    cliDefaultLabel: 'Default (recommended)',
-  }), 'Default (recommended)');
-});
-
 test('resolveModelPillText: 全空 → 「默认」', () => {
   assert.equal(resolveModelPillText({ model: '', modelsList: [] }), '默认');
   assert.equal(resolveModelPillText({}), '默认');
+});
+
+test('resolveSendModel: 空/default → undefined；其它原样转发', () => {
+  assert.equal(resolveSendModel({ selectValue: '' }), undefined);
+  assert.equal(resolveSendModel({ selectValue: 'default' }), undefined);
+  assert.equal(resolveSendModel({ selectValue: 'opus' }), 'opus');
+  assert.equal(resolveSendModel({ fullModel: 'claude-3-opus[1m]', selectValue: 'opus' }), 'claude-3-opus[1m]');
 });
 
 // 强度档挂在模型下展示，标题要说清是「谁的」档。与磁贴主标题同源用 displayName，

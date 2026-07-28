@@ -56,10 +56,11 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
-  test('report 含 10 项 checks + readiness（含 DEVICE_GATE / AUTH-003）', () => {
+  test('report 含 11 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS）', () => {
     const rep = runDoctor({ home: '/nonexistent-ccm', workDirs: [] });
-    assert.equal(rep.checks.length, 10);
+    assert.equal(rep.checks.length, 11);
     assert.ok(rep.checks.some(c => c.id === 'DEVICE_GATE'));
+    assert.ok(rep.checks.some(c => c.id === 'MODEL_SETTINGS'));
     assert.ok(['ready', 'caution', 'blocked'].includes(rep.readiness.level));
   });
 });
