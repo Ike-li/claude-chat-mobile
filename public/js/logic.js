@@ -1851,7 +1851,13 @@ export function whatNeedsAttention({ instances, needsYou, service } = {}) {
 //   list       = 都定位不到（缺 sessionId 或无 instanceId）→ 打开会话列表让用户手选
 export function resolveDeepLinkTarget(target, instances = []) {
   if (!target || !target.instanceId) return { action: 'list' };
-  const live = Array.isArray(instances) && instances.some(i => i && i.instanceId === target.instanceId);
+  // instanceId 是【进程内计数器】（instance-manager 的 `inst_${++counter}`，server 重启即从 inst_1 重新发号），
+  // 所以「同号」不等于「同一个会话」。重启后点一条留在通知栏的旧通知，很可能落进另一个项目的会话——
+  // 用户以为自己在 A、实际在 B，在 B 里发消息/授权都是错投，比点不开严重得多。通知 data 里本来就带了
+  // sessionId，这里一并校验：对不上就不当 live，回落到下面按 sessionId 懒 resume 的 switch 分支。
+  const live = Array.isArray(instances) && instances.some(i => i
+    && i.instanceId === target.instanceId
+    && (!target.sessionId || !i.sessionId || i.sessionId === target.sessionId));
   if (live) return { action: 'setViewing', instanceId: target.instanceId };
   if (target.sessionId) return { action: 'switch', sessionId: target.sessionId, cwd: target.cwd };
   return { action: 'list' };
@@ -2212,7 +2218,12 @@ export function shouldResetMirrorOnViewChange({
 // 后台任务停止按钮态：有非空 taskId 且横幅可见才可点（对齐 SDK stopTask(taskId)）。
 export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   const id = typeof taskId === 'string' ? taskId.trim() : '';
-  return { canStop: Boolean(id) && bannerVisible !== false, taskId: id || null };
+  // 合成键（agent.js 在 SDK 未给 task_id 时用 `__notask_${taskType}` 占位）不是真实 taskId：
+  // 它在 SDK 侧根本不存在，q.stopTask('__notask_local_agent') 必然静默失败，而 UI 仍会打一条
+  // 「已请求停止…」，任务行挂到 BG_TASK_TTL_MS(180s) 才消失。同文件的行标签渲染早就知道要排除
+  // 这个前缀（task-status.js 里 `!taskId.startsWith('__notask_')` 才显示 #shortId），停止按钮漏了。
+  const synthetic = id.startsWith('__notask_');
+  return { canStop: Boolean(id) && !synthetic && bannerVisible !== false, taskId: synthetic ? null : (id || null) };
 }
 
 // 后台任务列表是否折叠：单任务恒展开（不挡内容，也不改变既有单任务体验）；
@@ -2693,4 +2704,19 @@ export function diffDirSignatures(prev = {}, next = {}) {
     if ((prev || {})[k] !== (next || {})[k]) changed.push(k);
   }
   return changed.sort();
+}
+
+// 发送前的网关后缀回贴。S5 原意：只对「不在 supportedModels 候选里的自设名」（如用户 /model 手设并
+// 剥离了后缀的）补回网关后缀；候选内的值本就是网关合法完整名，原样发送。
+// 回归（7febabc）：resolveSendModel 自那次改成返回 **wire**（entry.resolvedModel），而守卫仍只比
+// m.value（档位别名）。wire 按设计就不等于任何条目的 value，于是 .some() 恒 false → 后缀必贴，
+// 网关工作区里每一次显式选模型都送出 `grok-4.5[1m][1m]` 这种非法名，setModel 抛错或整轮 API 失败。
+// 判据必须同时认 value 与 resolvedModel —— 两者都是「候选内的合法名」。
+export function applyGatewaySuffix(model, gatewaySuffix = '', modelsList = []) {
+  if (!model || !gatewaySuffix) return model;
+  const list = Array.isArray(modelsList) ? modelsList : [];
+  const known = list.some(m => (typeof m === 'string'
+    ? m === model
+    : m?.value === model || m?.resolvedModel === model));
+  return known ? model : model + gatewaySuffix;
 }

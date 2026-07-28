@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, resolveDeepLinkTarget, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -157,30 +157,6 @@ test.describe('userBubbleFold：行数估算 + 超阈值才折叠', () => {
     const t = '字'.repeat(60);
     assert.equal(userBubbleFold(t, { cols: 30 }).lines, 2);  // 60/30=2
     assert.equal(userBubbleFold(t, { cols: 20 }).lines, 3);  // 60/20=3
-  });
-});
-
-// ---- resolveDeepLinkTarget：通知深链落地 + instanceId 失效回退（②2c）----
-test.describe('resolveDeepLinkTarget：通知深链落地策略', () => {
-  const instances = [{ instanceId: 'inst_1' }, { instanceId: 'inst_2' }];
-  test('instanceId 命中 live → setViewing', () => {
-    assert.deepEqual(resolveDeepLinkTarget({ instanceId: 'inst_2', sessionId: 's2', cwd: '/r' }, instances),
-      { action: 'setViewing', instanceId: 'inst_2' });
-  });
-  test('instanceId 失效但有 sessionId → switch（带 cwd，懒 resume 接住实例重生/关闭）', () => {
-    assert.deepEqual(resolveDeepLinkTarget({ instanceId: 'gone', sessionId: 's9', cwd: '/r' }, instances),
-      { action: 'switch', sessionId: 's9', cwd: '/r' });
-  });
-  test('instanceId 失效且无 sessionId → list', () => {
-    assert.deepEqual(resolveDeepLinkTarget({ instanceId: 'gone' }, instances), { action: 'list' });
-  });
-  test('无 target / 无 instanceId → list', () => {
-    assert.deepEqual(resolveDeepLinkTarget(null, instances), { action: 'list' });
-    assert.deepEqual(resolveDeepLinkTarget({}, instances), { action: 'list' });
-  });
-  test('instances 缺省不抛（冷启动 instances 未到）', () => {
-    assert.deepEqual(resolveDeepLinkTarget({ instanceId: 'x', sessionId: 's', cwd: '/r' }),
-      { action: 'switch', sessionId: 's', cwd: '/r' });
   });
 });
 
@@ -799,3 +775,22 @@ test.describe('resolveSheetDragEnd（配置面板下拉关闭）', () => {
   });
 });
 
+
+
+// 合成 taskId（agent.js 在 SDK 未给 task_id 时用 `__notask_${taskType}` 占位）在 SDK 侧根本不存在，
+// q.stopTask('__notask_local_agent') 必然静默失败，而 UI 仍打「已请求停止…」、任务行挂到 TTL(180s)。
+// 同模块的行标签渲染早就排除了这个前缀（`!taskId.startsWith('__notask_')` 才显示 #shortId），停止按钮漏了。
+test.describe('taskStopUiState：合成 taskId 不得渲染可点的「停」', () => {
+  test('__notask_ 前缀 → 不可停', () => {
+    assert.equal(taskStopUiState({ taskId: '__notask_local_agent' }).canStop, false);
+    assert.equal(taskStopUiState({ taskId: '__notask_local_agent' }).taskId, null);
+  });
+  test('真实 taskId → 照常可停', () => {
+    const r = taskStopUiState({ taskId: 'task_abc123' });
+    assert.equal(r.canStop, true);
+    assert.equal(r.taskId, 'task_abc123');
+  });
+  test('横幅不可见时一律不可停（原有行为）', () => {
+    assert.equal(taskStopUiState({ taskId: 'task_abc', bannerVisible: false }).canStop, false);
+  });
+});

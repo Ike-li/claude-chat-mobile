@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner } from '../../public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, applyGatewaySuffix } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -627,3 +627,28 @@ test('resolvePanelState: 接管后整组恢复 Web 偏好，不把 CLI 观察值
 
 // detectAtMentionQuery/applyAtMentionPick → logic-composer-mention.test.mjs；resolveForkAnchorUuid →
 // logic-history-fork.test.mjs（source-layout.test.mjs 800 行硬顶 + 按行为域拆分惯例）。
+
+// 7febabc 回归：resolveSendModel 改成返回 wire（entry.resolvedModel）后，app.js 的后缀守卫仍比 m.value，
+// 而 wire 按设计不等于任何条目的 value → 守卫恒失效 → 每次显式选模型都送出重复后缀的非法模型名。
+// fixture 口径与 tests/unit/display-contracts.test.mjs 一致。
+test.describe('applyGatewaySuffix：候选内的 wire 不得被二次贴后缀', () => {
+  const list = [
+    { value: 'default', resolvedModel: 'grok-4.5[1m]' },
+    { value: 'opus', resolvedModel: 'grok-4.5' },
+  ];
+  test('wire 已是候选的 resolvedModel → 原样发送', () => {
+    assert.equal(applyGatewaySuffix('grok-4.5[1m]', '[1m]', list), 'grok-4.5[1m]');
+    assert.equal(applyGatewaySuffix('grok-4.5', '[1m]', list), 'grok-4.5');
+  });
+  test('候选内的裸别名 → 原样发送（S5 原有行为）', () => {
+    assert.equal(applyGatewaySuffix('opus', '[1m]', list), 'opus');
+  });
+  test('不在候选里的自设名 → 仍回贴后缀（S5 的目标场景）', () => {
+    assert.equal(applyGatewaySuffix('deepseek-v4', '[1m]', list), 'deepseek-v4[1m]');
+  });
+  test('无后缀 / 无模型 → 原样返回', () => {
+    assert.equal(applyGatewaySuffix('grok-4.5', '', list), 'grok-4.5');
+    assert.equal(applyGatewaySuffix('', '[1m]', list), '');
+    assert.equal(applyGatewaySuffix(undefined, '[1m]', list), undefined);
+  });
+});

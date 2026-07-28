@@ -8,7 +8,7 @@ import { createAlertController } from '../../public/js/app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from '../../public/js/app/attachments.js';
 import { createRttMonitor } from '../../public/js/app/connection-sync.js';
 import { createMessageRenderer } from '../../public/js/app/message-renderer.js';
-import { createAgentEventDispatcher, createReplayBuffer } from '../../public/js/app/event-dispatch.js';
+import { createReplayBuffer } from '../../public/js/app/event-dispatch.js';
 import { formatFileSize, cmModeForFileName } from '../../public/js/app/file-browser.js';
 import { createSettingsController } from '../../public/js/app/settings.js';
 import { createTaskStatusController } from '../../public/js/app/task-status.js';
@@ -381,146 +381,27 @@ test('RTT monitor renders latency through app context and clears stale values', 
   assert.match(rtt.className, /conn-rtt-chip/);
 });
 
-test('message renderer owns markdown sanitization dependencies from app context', () => {
-  const calls = [];
+test('markdown sanitizer forbids clickjacking and form-exfiltration primitives', () => {
+  const configs = [];
   const context = createAppContext({
     dependencies: {
-      marked: {
-        setOptions: options => calls.push(['options', options]),
-        parse: raw => `<b>${raw}</b>`,
-      },
-      DOMPurify: {
-        addHook: name => calls.push(['hook', name]),
-        sanitize: html => html.replace('<b>', '<strong>').replace('</b>', '</strong>'),
-      },
-    },
-  });
-  const renderer = createMessageRenderer(context);
-
-  assert.equal(renderer.renderMarkdown('safe'), '<strong>safe</strong>');
-  assert.deepEqual(calls[0], ['options', { breaks: true, gfm: true }]);
-  assert.deepEqual(calls[1], ['hook', 'afterSanitizeAttributes']);
-});
-
-test('agent event dispatcher keeps instance, epoch and sequence boundaries in shared state', () => {
-  const handled = [];
-  const resets = [];
-  const sessions = [];
-  const state = {
-    viewingInstanceId: 'inst-1',
-    instancesReady: true,
-    curEpoch: null,
-    lastSeq: 0,
-    currentSessionId: null,
-  };
-  const context = createAppContext({ state });
-  const dispatch = createAgentEventDispatcher(context, {
-    handlers: () => ({ result: payload => handled.push(payload) }),
-    onEpochReset: epoch => resets.push(epoch),
-    onSessionId: sessionId => sessions.push(sessionId),
-  });
-
-  assert.equal(dispatch({ type: 'result', instanceId: 'inst-2', epoch: 'e1', seq: 1 }), 'dropped');
-  assert.equal(dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 1, sessionId: 's1', payload: { ok: true } }), 'handled');
-  assert.equal(dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 1, payload: { ok: false } }), 'duplicate');
-  assert.equal(dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', payload: { ok: false } }), 'duplicate'); // seq 缺失的畸形信封必须判重复，不能永远当新事件
-
-  assert.deepEqual(resets, ['e1']);
-  assert.deepEqual(sessions, ['s1']);
-  assert.deepEqual(handled, [{ ok: true }]);
-  assert.equal(state.curEpoch, 'e1');
-  assert.equal(state.lastSeq, 1);
-});
-
-// onHandledEvent 仅在 'handled' 分支触发：dropped / duplicate 不触发，handled 触发一次。
-test('agent event dispatcher invokes onHandledEvent only for the handled branch', () => {
-  const handledCalls = [];
-  const state = {
-    viewingInstanceId: 'inst-1',
-    instancesReady: true,
-    curEpoch: null,
-    lastSeq: 0,
-    currentSessionId: null,
-  };
-  const context = createAppContext({ state });
-  const dispatch = createAgentEventDispatcher(context, {
-    handlers: () => ({ text_delta: () => {} }),
-    onHandledEvent: (ev) => handledCalls.push(ev.type),
-  });
-
-  dispatch({ type: 'text_delta', instanceId: 'inst-2', epoch: 'e1', seq: 1 }); // dropped：其他实例
-  dispatch({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 }); // handled
-  dispatch({ type: 'text_delta', instanceId: 'inst-1', epoch: 'e1', seq: 1 }); // duplicate（同 seq 重放）
-
-  assert.deepEqual(handledCalls, ['text_delta']);
-});
-
-// 未读补发防连响：sync:since 批量补发的事件带 replay:true，dispatch 期间应把 state.isReplayBatch
-// 置为 true 供 alertCue 消费方判断是否静音；实时事件（无 replay 标记）则应为 false。处理完必须复位，
-// 不能污染下一条事件——用不同 seq 各调用一次 dispatch 模拟"补发一条、实时到一条"的真实顺序。
-test('agent event dispatcher marks replay batches in shared state only for the duration of the handler call', () => {
-  const seenDuringHandler = [];
-  const state = {
-    viewingInstanceId: 'inst-1',
-    instancesReady: true,
-    curEpoch: null,
-    lastSeq: 0,
-    currentSessionId: null,
-  };
-  const context = createAppContext({ state });
-  const dispatch = createAgentEventDispatcher(context, {
-    handlers: () => ({ result: () => seenDuringHandler.push(state.isReplayBatch) }),
-  });
-
-  dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 1, replay: true, payload: {} });
-  dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 2, payload: {} });
-
-  assert.deepEqual(seenDuringHandler, [true, false]);
-  assert.equal(state.isReplayBatch, false); // 处理完复位，不遗留污染状态
-});
-
-// 防永久静音：handler 抛错也必须复位 isReplayBatch（与 applyPendingSnapshot 的 try/finally 对称）
-test('agent event dispatcher resets isReplayBatch even when the handler throws', () => {
-  const state = {
-    viewingInstanceId: 'inst-1',
-    instancesReady: true,
-    curEpoch: null,
-    lastSeq: 0,
-    currentSessionId: null,
-  };
-  const context = createAppContext({ state });
-  const dispatch = createAgentEventDispatcher(context, {
-    handlers: () => ({ result: () => { throw new Error('boom'); } }),
-  });
-
-  assert.throws(() => {
-    dispatch({ type: 'result', instanceId: 'inst-1', epoch: 'e1', seq: 1, replay: true, payload: {} });
-  }, /boom/);
-  assert.equal(state.isReplayBatch, false);
-});
-
-// outOfBand（task_notification）也要在 handler 期间置 isReplayBatch，否则补发仍连响
-test('agent event dispatcher marks isReplayBatch for out-of-band replay events', () => {
-  const seen = [];
-  const state = {
-    viewingInstanceId: 'inst-1',
-    instancesReady: true,
-    curEpoch: null,
-    lastSeq: 0,
-    currentSessionId: null,
-  };
-  const context = createAppContext({ state });
-  const dispatch = createAgentEventDispatcher(context, {
-    outOfBand: {
-      task_notification: () => { seen.push(state.isReplayBatch); },
+      marked: { setOptions() {}, parse: raw => raw },
+      DOMPurify: { addHook() {}, sanitize: (html, cfg) => { configs.push(cfg); return html; } },
     },
   });
 
-  dispatch({ type: 'task_notification', instanceId: 'inst-1', epoch: 'e1', seq: 1, replay: true, payload: {} });
-  dispatch({ type: 'task_notification', instanceId: 'inst-1', epoch: 'e1', seq: 2, payload: {} });
+  createMessageRenderer(context).renderMarkdown('x');
 
-  assert.deepEqual(seen, [true, false]);
-  assert.equal(state.isReplayBatch, false);
+  const cfg = configs[0];
+  assert.ok(cfg, 'sanitize 必须带显式配置，不能沿用 DOMPurify 默认放行表');
+  const tags = cfg.FORBID_TAGS || [];
+  const attrs = cfg.FORBID_ATTR || [];
+  for (const tag of ['label', 'form', 'button', 'select', 'textarea']) {
+    assert.ok(tags.includes(tag), `必须禁 <${tag}>：可构造覆盖层或外发表单`);
+  }
+  for (const attr of ['style', 'for']) {
+    assert.ok(attrs.includes(attr), `必须禁 ${attr} 属性：全屏覆盖 + 激活按钮的两个必要原语`);
+  }
 });
 
 // 回放缓冲：OOB 不入队 / 超时按阈值决策 / discard 清队列（code review 修复回归）

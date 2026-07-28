@@ -6,6 +6,8 @@ export function createAgentEventDispatcher(context, {
   onEpochReset = () => {},
   onSessionId = () => {},
   onHandledEvent = () => {}, // 仅 'handled' 分支触发（已过实例过滤 + epoch/seq 去重）
+  // handler 抛异常时的上报口。默认吞掉也比让异常冒出去强——见 dispatch 里的说明。
+  onHandlerError = () => {},
   outOfBand = {},
 } = {}) {
   const log = typeof logger === 'function' ? logger : (logger?.log || (() => {}));
@@ -95,6 +97,12 @@ export function createAgentEventDispatcher(context, {
     state.isReplayBatch = Boolean(event.replay);
     try {
       handlers()[event.type]?.(event.payload);
+    } catch (err) {
+      // 异常绝不能冒出去：lastSeq 在上面就已前移，这条事件已经不可能被 sync:since 补回（服务端
+      // eventsSince 按 lastSeq 过滤），若再让异常中断整条派发链，同批后续事件会一起丢 —— 手机上
+      // 表现为「对话缺了一段」且永不自愈，而用户没有 devtools 可查。回放 flush 路径一直是包着
+      // try/catch 的（flushQueue），这里补齐同等待遇，并把异常交给调用方上报（logs:clientError）。
+      onHandlerError(err, event);
     } finally {
       state.isReplayBatch = false;
     }

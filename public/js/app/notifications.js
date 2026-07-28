@@ -27,10 +27,16 @@ export function createNotificationController(context, {
   // FCM 连不上、VAPID 无效、POST 被鉴权拦，对用户是完全不同的三件事，得说出是哪一件。
   let lastSubscribeError = '';
 
-  function notify(title, body, { force = false } = {}) {
+  // sensitive=true：正文含工具入参/问题原文（Bash 的 command、Write 的 file_path/content 头部）。
+  // 这条页面内 new Notification 的旁路此前完全不看「推送内容预览」开关——而 Web Push 侧
+  // （notify-channels 按 sub.prefs.preview 挑 body）与 ntfy 侧（恒最小化）都做对了。结果是：用户在设置里
+  // 把预览关着、UI 也显示关，PWA 切后台（socket 未断）时命令正文照样弹上锁屏。内容没离开设备，但开关的
+  // 用户可见语义失效。开关关闭时只保留标题（「⚠️ 等待审批」本身不含正文，仍能起到唤醒作用）。
+  function notify(title, body, { force = false, sensitive = false, tag = '' } = {}) {
     if ((!force && !documentRef?.hidden) || !NotificationApi || NotificationApi.permission !== 'granted') return false;
+    const safeBody = sensitive && !readPushPreviewPref(storageGetItem) ? '' : body;
     try {
-      new NotificationApi(title, { body, icon: '/icons/icon-192.png', tag: 'ccm-push' });
+      new NotificationApi(title, { body: safeBody, icon: '/icons/icon-192.png', tag: tag || 'ccm-push' });
       return true;
     } catch {
       return false;

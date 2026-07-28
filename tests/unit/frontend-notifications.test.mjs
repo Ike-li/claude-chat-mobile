@@ -27,7 +27,42 @@ test('notification controller only raises foreground notifications when explicit
   assert.equal(notifications.notify('done', 'body'), false);
   assert.equal(notifications.notify('done', 'body', { force: true }), true);
   assert.equal(raised.length, 1);
-  assert.equal(raised[0].options.tag, 'ccm');
+  assert.equal(raised[0].options.tag, 'ccm-push');
+});
+
+// 隐私：页面自己 new Notification 这条旁路此前完全不读「推送内容预览」开关（只判 document.hidden 与
+// permission），而调用点直接传 safeJsonPreview(p.input, 80) —— Bash 的 command 原文、Write 的
+// file_path/content 头部。开关默认关、设置面板也显示关，命令正文照样出现在锁屏上。
+// Web Push（notify-channels 按 sub.prefs.preview 挑 body）与 ntfy（恒最小化）两条路径都做对了。
+test('notification controller strips sensitive body when content preview is off', () => {
+  const raised = [];
+  class NotificationMock {
+    static permission = 'granted';
+    constructor(title, options) { raised.push({ title, options }); }
+  }
+  const store = new Map();
+  const makeCtl = () => createNotificationController(createAppContext({
+    dependencies: {
+      document: { hidden: true },
+      window: { Notification: NotificationMock },
+      navigator: {},
+      Notification: NotificationMock,
+      storage: { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) },
+    },
+  }), { autoBind: false });
+
+  // 默认关：敏感正文必须被剥掉，只留标题
+  makeCtl().notify('⚠️ 等待审批', 'Bash：{"command":"gh auth token | pbcopy"}', { sensitive: true });
+  assert.equal(raised.at(-1).options.body, '', '开关关闭时不得把命令正文放上锁屏');
+
+  // 非敏感文案不受影响
+  makeCtl().notify('✅ 任务完成', '用时 3.2s');
+  assert.equal(raised.at(-1).options.body, '用时 3.2s');
+
+  // 显式开启预览后才带正文
+  store.set('ccm_push_preview', '1');
+  makeCtl().notify('⚠️ 等待审批', 'Bash：{"command":"ls"}', { sensitive: true });
+  assert.match(raised.at(-1).options.body, /ls/, '用户显式开启预览后应带正文');
 });
 
 // ⑧ 推送内容预览：subscribe() 把 storage 里的本地偏好一并 POST 给服务端（per-device prefs.preview），

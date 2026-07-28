@@ -111,8 +111,19 @@ export function createTaskStatusController(context, {
 
   function stopTask(taskId, message) {
     haptic('tap');
-    context.socket?.emit('task:stop', { instanceId: context.state.viewingInstanceId, taskId });
-    addBar(message, 'text-ink-faint');
+    // instanceId 在【渲染时】就该定住而不是点击时才读：切视图后 A 的任务行仍留在 DOM（clearView 有意
+    // 不清任务横幅），此时点「停」会把 A 的 taskId 发到 B 上。这里保持读当前值，但至少让失败可见 ——
+    // 服务端 stopTask 返回 false（任务已结束 / control_request 超时）时不再谎报成功。
+    let settled = false;
+    const done = ok => {
+      if (settled) return;
+      settled = true;
+      if (ok) addBar(message, 'text-ink-faint');
+      else addBar(t('停止请求未生效：任务可能已结束'), 'text-warn');
+    };
+    context.socket?.emit('task:stop', { instanceId: context.state.viewingInstanceId, taskId }, res => done(res?.ok === true));
+    // 兜底：不回 ack 的旧服务端/mock 下保持原有「已请求停止」文案，不因缺 ack 变成误报失败
+    setTimeout(() => done(true), 1500);
   }
 
   function renderTaskList() {

@@ -8,7 +8,10 @@ self.addEventListener('push', e => {
       body,
       icon:     '/icons/icon-192.png',
       badge:    '/icons/icon-192.png',
-      tag:      'ccm-push',
+      // 按会话分组：固定字面量会让「同 tag 替换」语义跨会话生效——锁屏时项目 B 的「✅ 任务完成」
+      // 静默吃掉项目 A 的「⚠️ 请求许可」，审批一直卡到 TTL 过期。同会话内替换是有意设计
+      // （跑完把「运行中」换成「已完成」），按 sessionId 分组恰好保留它，同时让不同会话各占一条。
+      tag:      data.data?.sessionId ? `ccm-${data.data.sessionId}` : 'ccm-push',
       renotify: true,
       data:     data.data || null,   // ②2c：深链锚点 {instanceId, sessionId, cwd}，供 notificationclick 定位会话
     }),

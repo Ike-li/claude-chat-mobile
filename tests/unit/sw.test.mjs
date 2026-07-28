@@ -63,8 +63,35 @@ test.describe('sw.js — push 事件', () => {
     assert.equal(shownTitle, '审批请求');
     assert.equal(shownOptions.body, '需要你的批准');
     assert.equal(shownOptions.icon, '/icons/icon-192.png');
-    assert.equal(shownOptions.tag, 'ccm-push');
+    assert.equal(shownOptions.tag, 'ccm-push'); // 无 sessionId 时的兜底
     assert.equal(shownOptions.renotify, true);
+  });
+
+  // 固定字面量 tag 让「同 tag 替换」语义跨会话生效：锁屏时项目 B 的「✅ 任务完成」会静默吃掉项目 A 的
+  // 「⚠️ 请求许可」，用户只看到「完成了」就把手机放下，A 的审批一直卡到 TTL 过期。同会话内替换是有意
+  // 设计（跑完把「运行中」换成「已完成」，见 app.js 注释），按 sessionId 分组正好保留它。
+  test('push 事件：带 sessionId → tag 按会话分组，跨会话不互相覆盖', async () => {
+    const shown = [];
+    const mockSelf = {
+      addEventListener(type, handler) { if (type === 'push') this._pushHandler = handler; },
+      registration: {
+        showNotification(title, options) { shown.push({ title, options }); return Promise.resolve(); },
+      },
+    };
+    runInMock(swSrc, { self: mockSelf });
+
+    await mockSelf._pushHandler({
+      data: { json: () => ({ title: 'A', body: 'x', data: { sessionId: 'sess-a', instanceId: 'inst_1' } }) },
+      waitUntil: p => p,
+    });
+    await mockSelf._pushHandler({
+      data: { json: () => ({ title: 'B', body: 'y', data: { sessionId: 'sess-b', instanceId: 'inst_2' } }) },
+      waitUntil: p => p,
+    });
+
+    assert.equal(shown[0].options.tag, 'ccm-sess-a');
+    assert.equal(shown[1].options.tag, 'ccm-sess-b');
+    assert.notEqual(shown[0].options.tag, shown[1].options.tag, '不同会话必须占不同 tag');
   });
 
   test('push 事件：空 data → 兜底标题 "Claude"、空正文', async () => {
