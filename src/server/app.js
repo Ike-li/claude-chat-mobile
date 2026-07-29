@@ -666,7 +666,7 @@ const instanceState = instanceManager.stateOf;
 const pendingModeByCwd = new Map();           // cwd → 待应用权限档（新会话懒创建期，L0）
 const pendingEffortByCwd = new Map();         // cwd → 待应用思考强度档（同上；null 合法）
 // L3：按 cwd 缓存的 CLI settings 默认（resolveSettings 合并 user/project/local）。失败不缓存以便重试。
-const cliDefaultsByCwd = new Map();           // cwd → { mode, effort, model }
+const cliDefaultsByCwd = new Map();           // cwd → { mode, effort, model, env }
 const cliDefaultsInflight = new Map();        // cwd → Promise（并发去重）
 // 台阶3 Step B 角标：doneInstances = 后台（≠viewingInstanceId）完成但未查看的实例 latch
 // （后台轮次 result 置位；该实例新活动 init/审批 或被切为 viewingInstanceId 时清）。instanceState 由实例
@@ -816,7 +816,7 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
       return d;
     } catch (err) {
       console.warn(`[cli-settings] resolveSettings 失败 (${cwd}):`, err?.message || err);
-      return { mode: 'default', effort: null, model: undefined };
+      return { mode: 'default', effort: null, model: undefined, env: undefined };
     } finally {
       if (cliDefaultsInflight.get(cwd) === p) cliDefaultsInflight.delete(cwd);
     }
@@ -1548,6 +1548,8 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   effortByInstance.set(id, effNorm.ui); // 广播/UI 用（可含 ultracode）
   // 模型：resume 用会话指针；FRESH 不 pin——让 CLI 按原生优先级自行解析
   // （/model > --model > ANTHROPIC_MODEL > settings.model），不再用 effective.model 覆盖。
+  // resolvedEnv 可含 ANTHROPIC_MODEL（worktree 的 settings.local.json env 块），
+  // CLI 会自动采纳（优先级在 --model 之下、settings.model 之上），与 startModel=undefined 不冲突。
   const startModel = saved?.model || undefined;
   const instance = new AgentSession({
     instanceId: id,
@@ -1563,6 +1565,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     instanceIdleReclaimMs,
     approvalTtlMs,
     historicalCostUsd: saved?.cost || 0,
+    resolvedEnv: cliDefaultsByCwd.get(cwd)?.env, // worktree env 块，注入子进程环境
     onEvent: envelope => {
       metrics.inc('events'); // NFR-15 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
       if (envelope.type === 'init') {
@@ -1813,6 +1816,7 @@ function openScoutInstance(cwd) {
     instanceId: id, resumeId: null, cwd, claudeBin,
     model: undefined, permissionMode: 'default', effort: null, idleTimeoutMs, instanceIdleReclaimMs: 0, approvalTtlMs,
     historicalCostUsd: 0,
+    resolvedEnv: cliDefaultsByCwd.get(cwd)?.env, // worktree env 块，scout 也须注入才能拿到正确网关的模型列表
     onEvent: envelope => {
       if (envelope.type === 'models') {
         // 真模型到达：按 cwd 缓存 → 推送所有前端 → 清理
