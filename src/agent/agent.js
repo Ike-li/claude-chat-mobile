@@ -33,7 +33,9 @@ const CONTROL_TAG_SUBSYSTEM = {
 // 磁盘会话通常还在，掐掉的是子进程 / 在途轮。前端 error bar 原样展示。
 export function formatLifecycleIdleTimeout(mins) {
   const n = Math.max(1, Number(mins) || 1);
-  return `任务已中断：静默超过 ${n} 分钟（可重新发送继续）`;
+  // 判定口径：consume() 任意 SDK 消息（含 thinking_tokens）都会刷 lastActivity；
+  // 触发 = 在途轮期间连续 N 分钟「零消息」——不是「模型想得久」，是「进程无任何输出」。
+  return `任务已中断：超过 ${n} 分钟未收到 Claude 的任何消息（含思考/工具进度），已按挂死中断（可重新发送继续）`;
 }
 export function formatLifecycleIdleReclaim(mins) {
   const n = Math.max(1, Number(mins) || 1);

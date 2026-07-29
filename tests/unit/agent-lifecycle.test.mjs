@@ -12,8 +12,14 @@ import { makeSession } from '../helpers/agent-unit.mjs';
 // ---- lifecycle 文案（防「会话已结束」歧义）----
 test.describe('formatLifecycle*', () => {
   test('idleTimeout / reclaim / processExited / sessionError 前缀稳定', () => {
-    assert.equal(formatLifecycleIdleTimeout(10), '任务已中断：静默超过 10 分钟（可重新发送继续）');
-    assert.equal(formatLifecycleIdleTimeout(0.2), '任务已中断：静默超过 1 分钟（可重新发送继续）');
+    assert.equal(
+      formatLifecycleIdleTimeout(10),
+      '任务已中断：超过 10 分钟未收到 Claude 的任何消息（含思考/工具进度），已按挂死中断（可重新发送继续）',
+    );
+    assert.equal(
+      formatLifecycleIdleTimeout(0.2),
+      '任务已中断：超过 1 分钟未收到 Claude 的任何消息（含思考/工具进度），已按挂死中断（可重新发送继续）',
+    );
     assert.equal(formatLifecycleIdleReclaim(30), '进程已回收：会话空闲超过 30 分钟（再发送或切换回来会自动续接）');
     assert.equal(formatLifecycleProcessExited(), '进程已退出：可重新发送消息继续（会话历史仍在）');
     assert.match(formatLifecycleSessionError('boom'), /^进程异常：boom$/);
@@ -222,7 +228,7 @@ test.describe('checkIdle()', () => {
     assert.equal(aborted, false, '中断成功不得 abort 子进程');
     const err = events.find(e => e.type === 'error');
     assert.ok(err);
-    assert.ok(err.payload.message.includes('静默'), '仍须发静默超时说明（用户可见原因）');
+    assert.ok(err.payload.message.includes('未收到 Claude 的任何消息'), '仍须发 idle 超时说明（用户可见原因）');
     assert.equal(err.payload.recoverable, true);
     const sys = events.find(e => e.type === 'system' && e.payload.kind === 'interrupted');
     assert.ok(sys, '应发「已中断」（等价用户按 Esc）');
@@ -260,13 +266,13 @@ test.describe('checkIdle()', () => {
     assert.equal(aborted, true);
     const err = events.find(e => e.type === 'error');
     assert.ok(err);
-    assert.ok(err.payload.message.includes('静默'));
+    assert.ok(err.payload.message.includes('未收到 Claude 的任何消息'));
     assert.equal(err.payload.recoverable, true);
     s.dispose();
   });
 
   // 多子代理 / workflow 并行：主流通可长时间零消息，但 bgTasks 仍有心跳。
-  // 旧行为只看 lastActivity，会在 10 分钟把整轮误杀（用户见「任务静默超过 N 分钟」）。
+  // 旧行为只看 lastActivity，会在 10 分钟把整轮误杀（用户见 idle 零消息中断文案）。
   test('在途轮 + 活的后台任务 → 不静默中断，并刷新 lastActivity', () => {
     const { s, events } = makeSession({ idleTimeoutMs: 1 });
     s.pendingTurns = 1;
@@ -302,7 +308,7 @@ test.describe('checkIdle()', () => {
     assert.equal(aborted, true);
     const err = events.find(e => e.type === 'error');
     assert.ok(err);
-    assert.ok(err.payload.message.includes('静默'));
+    assert.ok(err.payload.message.includes('未收到 Claude 的任何消息'));
     s.dispose();
   });
 });
