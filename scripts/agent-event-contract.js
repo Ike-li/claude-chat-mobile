@@ -408,7 +408,6 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'user:setEffort',
   'user:setPermissionMode',
   'user:setViewing',
-  'worktree:sessions',
 ]);
 
 // socket.io 内建连接生命周期事件：属传输层而非业务契约

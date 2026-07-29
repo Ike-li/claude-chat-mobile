@@ -1084,12 +1084,12 @@ export function shouldShowComposer({ viewingInstanceId, sessionId, composeReady 
   return false;
 }
 
-// 空首页「最近活跃」：把各 workdir（及 linked worktree）的 session 列表摊平，按 lastUsedAt 降序取 topN。
-// 每条附 cwd + workspaceName + kind，前端可一键 session:switch，不必先开侧栏目录树。
-// dirLists: Array<{ cwd, sessions, workspaceName?, kind? }>
-//   - workspaceName 非空字符串时优先于 projectDisplayName(cwd)（worktree 用 branch）
-//   - kind === 'worktree' 原样保留，否则 'workspace'（UI 选 ⑂/📁）
+// 空首页「最近活跃」：把各显式 workdir 的 session 列表摊平，按 lastUsedAt 降序取 topN。
+// 每条附 cwd + workspaceName，前端可一键 session:switch，不必先开侧栏目录树。
+// dirLists: Array<{ cwd, sessions, workspaceName? }>
+//   - workspaceName 非空字符串时优先于 projectDisplayName(cwd)
 // 无 id 的行跳过；缺 lastUsedAt 的排最后（仍可点开）；非法 limit 回落默认 8。
+// git worktree 路径若要用，须写入 workdirs.json 成为独立 workdir，不再有自动分组通道。
 export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}) {
   const cap = Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 8;
   const rows = [];
@@ -1098,7 +1098,6 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
     const cwd = entry.cwd;
     const override = typeof entry.workspaceName === 'string' ? entry.workspaceName.trim() : '';
     const workspaceName = override || projectDisplayName(cwd);
-    const kind = entry.kind === 'worktree' ? 'worktree' : 'workspace';
     const sessions = Array.isArray(entry.sessions) ? entry.sessions : [];
     for (const s of sessions) {
       if (!s || typeof s.id !== 'string' || !s.id) continue;
@@ -1108,7 +1107,6 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
         lastUsedAt: s.lastUsedAt ?? null,
         cwd,
         workspaceName,
-        kind,
         entrypoint: s.entrypoint ?? null,
         terminal: s.terminal ?? null, // 'busy'|'alive'|null：CLI 进程注册表自报的终端直跑态
       });
@@ -1120,27 +1118,6 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
     return tb - ta;
   });
   return rows.slice(0, cap);
-}
-
-// 把 worktree:sessions 的 groups 摊成 mergeRecentSessionsAcrossWorkspaces 入参。
-// 只保留 worktreeExists 且 sessions 非空的组；cwd=worktreePath；workspaceName=branch（纯名，图标由 kind 决定）。
-// 空/非法入参 → []。
-export function flattenWorktreeGroupsForRecents(groups) {
-  const out = [];
-  for (const g of Array.isArray(groups) ? groups : []) {
-    if (!g || g.worktreeExists !== true) continue;
-    if (typeof g.worktreePath !== 'string' || !g.worktreePath) continue;
-    const sessions = Array.isArray(g.sessions) ? g.sessions : [];
-    if (!sessions.length) continue;
-    const branch = (typeof g.branch === 'string' && g.branch.trim()) ? g.branch.trim() : '(unknown)';
-    out.push({
-      cwd: g.worktreePath,
-      sessions,
-      workspaceName: branch,
-      kind: 'worktree',
-    });
-  }
-  return out;
 }
 
 // 乐观 busy（send() 的 setBusy(true)）会被「服务端换实例 → 广播 instances → setInstances →

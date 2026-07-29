@@ -1,9 +1,10 @@
 // tests/unit/logic-recents.test.mjs —— 空首页「最近活跃」列表的纯逻辑：跨工作区合并/排序/截断、
-// worktree 组摊平、以及随行透传给行渲染的元信息（entrypoint / terminal 直跑态）。
+// 以及随行透传给行渲染的元信息（entrypoint / terminal 直跑态）。
 // 从 logic-session.test.mjs 拆出（source-layout 闸门：单测文件按行为域拆分，不重新长成巨石）。
+// worktree 不再自动分组：每个路径须是显式 workdir，recents 只合并各 workdir 的 session:list。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents } from '../../public/js/logic.js';
+import { mergeRecentSessionsAcrossWorkspaces } from '../../public/js/logic.js';
 
 // 空首页「最近活跃」：跨全部 workdir 的 session:list 结果合并后按 lastUsedAt 降序取 topN，
 // 每条带 cwd + workspaceName，方便一键 session:switch 到任意工作区会话（不必先展开侧栏目录树）。
@@ -83,27 +84,25 @@ test('mergeRecentSessionsAcrossWorkspaces: limit 默认 8，非法 limit 回落'
   assert.equal(mergeRecentSessionsAcrossWorkspaces([many], { limit: 1 })[0].id, 's11');
 });
 
-// 首页纳入 worktree：entry 可 override workspaceName（branch 而非路径末段），并标 kind 供 UI 选 ⑂/📁。
-test('mergeRecentSessionsAcrossWorkspaces: workspaceName override 优先于 basename；kind 缺省 workspace', () => {
+// 显式 workdir（含把 git worktree 路径手写进 workdirs.json 的情况）走同一合并通道；
+// workspaceName 可 override；无 kind 区分（一律 workspace，UI 用 📁 + 名）。
+test('mergeRecentSessionsAcrossWorkspaces: workspaceName override 优先于 basename', () => {
   const merged = mergeRecentSessionsAcrossWorkspaces([
     {
-      cwd: '/repo/.worktrees/promo',
+      cwd: '/Users/you/code/claude-chat-mobile-promo',
       workspaceName: 'promo',
-      kind: 'worktree',
-      sessions: [{ id: 'wt1', title: '在 wt 里', lastUsedAt: 5000 }],
+      sessions: [{ id: 'wt1', title: '在 promo workdir 里', lastUsedAt: 5000 }],
     },
     {
-      cwd: '/repo/main',
+      cwd: '/Users/you/code/claude-chat-mobile',
       sessions: [{ id: 'm1', title: '主仓', lastUsedAt: 4000 }],
     },
   ], { limit: 5 });
   assert.equal(merged.length, 2);
   assert.equal(merged[0].id, 'wt1');
-  assert.equal(merged[0].cwd, '/repo/.worktrees/promo');
-  assert.equal(merged[0].workspaceName, 'promo'); // 不是路径末段以外的推导；override 原样
-  assert.equal(merged[0].kind, 'worktree');
-  assert.equal(merged[1].workspaceName, 'main');
-  assert.equal(merged[1].kind, 'workspace'); // 缺省
+  assert.equal(merged[0].cwd, '/Users/you/code/claude-chat-mobile-promo');
+  assert.equal(merged[0].workspaceName, 'promo');
+  assert.equal(merged[1].workspaceName, 'claude-chat-mobile');
   // 空/空白 override 回落 basename
   const fallback = mergeRecentSessionsAcrossWorkspaces([
     { cwd: '/x/foo', workspaceName: '  ', sessions: [{ id: 'a', title: 't', lastUsedAt: 1 }] },
@@ -111,45 +110,4 @@ test('mergeRecentSessionsAcrossWorkspaces: workspaceName override 优先于 base
   ]);
   assert.equal(fallback.find(s => s.id === 'a').workspaceName, 'foo');
   assert.equal(fallback.find(s => s.id === 'b').workspaceName, 'bar');
-});
-
-// worktree:sessions groups → merge 入参：只保留存在且有会话的组；workspaceName=branch；kind=worktree。
-test('flattenWorktreeGroupsForRecents: 过滤/命名/cwd=worktreePath；空入参安全', () => {
-  const lists = flattenWorktreeGroupsForRecents([
-    {
-      branch: 'promo',
-      worktreePath: '/repo/.worktrees/promo',
-      worktreeExists: true,
-      sessions: [{ id: 's1', title: '改文案', lastUsedAt: 9 }],
-    },
-    {
-      branch: 'gh-pages',
-      worktreePath: '/repo/.worktrees/gh-pages',
-      worktreeExists: true,
-      sessions: [], // 无会话 → 丢
-    },
-    {
-      branch: 'gone',
-      worktreePath: '/repo/.worktrees/gone',
-      worktreeExists: false, // 不存在 → 丢
-      sessions: [{ id: 's2', title: '幽灵', lastUsedAt: 8 }],
-    },
-    {
-      branch: '(detached)',
-      worktreePath: '/repo/.worktrees/det',
-      worktreeExists: true,
-      sessions: [{ id: 's3', title: '游离', lastUsedAt: 7 }],
-    },
-    null,
-  ]);
-  assert.equal(lists.length, 2);
-  assert.deepEqual(lists.map(e => e.cwd), ['/repo/.worktrees/promo', '/repo/.worktrees/det']);
-  assert.equal(lists[0].workspaceName, 'promo');
-  assert.equal(lists[0].kind, 'worktree');
-  assert.equal(lists[0].sessions[0].id, 's1');
-  assert.equal(lists[1].workspaceName, '(detached)');
-  assert.equal(lists[1].kind, 'worktree');
-  assert.deepEqual(flattenWorktreeGroupsForRecents(null), []);
-  assert.deepEqual(flattenWorktreeGroupsForRecents([]), []);
-  assert.deepEqual(flattenWorktreeGroupsForRecents(undefined), []);
 });

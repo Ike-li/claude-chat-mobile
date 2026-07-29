@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, flattenWorktreeGroupsForRecents, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -5529,16 +5529,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 组装并渲染子树函数
     // subtreeGen：populateSubtree 每次调用递增的代次，供内部各异步 ack 判断"自己是否已被更晚一次调用
     // 顶替"——expandedDirs.has(cwd) 只答"这个目录还展开着吗"，答不了"这次 ack 属于哪一次调用"。快速
-    // 折叠再展开同一目录（复用同一个 container）时，旧调用的迟到 ack 若只查前者，要么把 worktree 分组
-    // 重复追加一份，要么用 renderRows 整段清空刚渲染好的新内容。
+    // 折叠再展开同一目录（复用同一个 container）时，旧调用的迟到 ack 若只查前者，可能用 renderRows
+    // 整段清空刚渲染好的新内容。
     let subtreeGen = 0;
     const populateSubtree = (cwd, container, liveMap, fTabs) => {
       subtreeGen += 1;
       const myGen = subtreeGen;
-      // worktree 会话分组元素（CLI「cd 进 worktree 即 /resume」的 web 等价）；renderRows 全量重绘
-      // 会清掉它，故重绘末尾总是重挂，与 worktree:sessions ack 的先后到达顺序无关。
-      let wtSection = null;
       // 渲染：无 id 新会话实例 + 会话行 +（若被截断）「显示全部」行
+      // git worktree 不再嵌套在本目录下自动分组——须作为独立 workdir 出现在 availableDirs。
       const renderRows = (sessions, hasMore) => {
         container.innerHTML = '';
         for (const inst of fTabs) {
@@ -5562,7 +5560,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           };
           container.appendChild(more);
         }
-        if (wtSection) container.appendChild(wtSection);
       };
 
       // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore}）：有缓存就先拿旧数据把列表画出来，
@@ -5615,25 +5612,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         });
         sessionsCache.set(cwd, { sessions, hasMore });
         if (willRerender) renderRows(sessions, hasMore);
-      });
-
-      // 3) worktree 会话分组：linked worktree 的会话按分支列出，行为与普通会话行一致
-      //（点击走 session:switch，cwd=worktreePath——服务端 worktree:sessions 已注册放行该路径）。
-      socket.emit('worktree:sessions', { cwd }, res => {
-        if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return; // 过期守卫（同 session:list）
-        const groups = (res?.groups || []).filter(g => g?.worktreeExists && (g.sessions || []).length);
-        if (!groups.length) { wtSection = null; return; }
-        wtSection = el(`<div data-testid="worktree-groups"></div>`);
-        for (const g of groups) {
-          const head = el(`<div class="pl-6 pr-3 pt-2.5 pb-1 text-[10px] font-sans text-ink-faint border-b border-line-soft/40 truncate"></div>`);
-          head.textContent = `⑂ worktree · ${g.branch}`; // textContent：branch 名来自 git，不作 HTML 插值
-          wtSection.appendChild(head);
-          const liveWt = new Map();
-          // liveByCwd 快照已随抽出改为现读 instancesList：worktree ack 是异步回调，用最新数据更正确。
-          for (const inst of instancesList.filter(x => x.instanceId && x.cwd === g.worktreePath)) { if (inst.sessionId) liveWt.set(inst.sessionId, inst); }
-          for (const s of g.sessions) wtSection.appendChild(sessionRow(s, liveWt.get(s.id), g.worktreePath));
-        }
-        container.appendChild(wtSection);
       });
     };
 
@@ -6132,8 +6110,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
     container.querySelector('.dash-open-sessions')?.addEventListener('click', openSessions);
 
-    // 跨全部白名单工作区 + 其 linked worktree 拉最近会话（并行 session:list / worktree:sessions），
-    // 合并后展示，便于冷启动/空首页一键切回（含 CLI 在 worktree 里开的会话）。
+    // 跨全部白名单工作区拉最近会话（并行 session:list），合并后展示，便于冷启动/空首页一键切回。
+    // git worktree 须作为独立 workdir 写入 workdirs.json，才会出现在 availableDirs 里被扫到。
     const recentsSection = container.querySelector('#dashRecentsSection');
     const recentsList = container.querySelector('#dashRecentsList');
     const workspacesSection = container.querySelector('#dashWorkspacesSection');
@@ -6153,7 +6131,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
     const renderDashRecents = (recent) => {
       // 工作区 chips：按最近会话时间去重排序，点 chip → 进入该区最近一条
-      // worktree 用 ⑂ + branch 名（kind）；主仓用 📁 + basename
       if (workspacesSection && workspacesList) {
         const seen = new Set();
         const wsOrder = [];
@@ -6164,13 +6141,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
         workspacesList.innerHTML = '';
         for (const s of wsOrder) {
-          const icon = s.kind === 'worktree' ? '⑂' : '📁';
           const chip = el(`
             <button type="button" class="inline-flex items-center gap-1.5 max-w-full px-3 py-1.5 rounded-full border border-line-soft bg-surface hover:bg-accent-wash/40 hover:border-accent-bright/50 active:scale-[0.98] transition-all text-xs font-semibold text-ink shadow-sm">
               <span class="shrink-0 opacity-80 dash-ws-icon"></span>
               <span class="truncate max-w-[10rem]"></span>
             </button>`);
-          chip.querySelector('.dash-ws-icon').textContent = icon;
+          chip.querySelector('.dash-ws-icon').textContent = '📁';
           chip.querySelector('span.truncate').textContent = s.workspaceName;
           chip.title = s.cwd;
           chip.onclick = (e) => {
@@ -6187,7 +6163,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       recentsList.innerHTML = '';
       for (const s of recent) {
         const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('时间未知');
-        const icon = s.kind === 'worktree' ? '⑂' : '📁';
         const item = el(`
           <div class="dash-recent-item flex items-center justify-between p-3 bg-surface hover:bg-accent-wash/30 border border-line-soft hover:border-accent-bright/50 rounded-xl cursor-pointer transition-all active:scale-[0.99]">
             <div class="flex-1 min-w-0 pr-3">
@@ -6203,7 +6178,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
           </div>
         `);
         item.querySelector('.font-bold').textContent = s.title || t('无标题会话');
-        item.querySelector('.dash-ws-icon').textContent = icon;
+        item.querySelector('.dash-ws-icon').textContent = '📁';
         item.querySelector('.dash-ws').textContent = s.workspaceName;
         item.querySelector('.dash-when').textContent = when;
         item.title = `${s.workspaceName} · ${s.title || t('无标题会话')}`;
@@ -6224,26 +6199,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
 
     if (recentsSection && recentsList && dirs.length) {
-      // 主仓 session:list 与 worktree:sessions 并行；后者副作用注册 knownWorktrees，保证随后 switch 放行
       const listMain = (cwd) => new Promise(resolve => {
         let settled = false;
         const done = (sessions) => { if (!settled) { settled = true; resolve({ cwd, sessions }); } };
         socket.emit('session:list', { cwd }, state => done(state?.sessions || []));
         setTimeout(() => done([]), 4000); // 单目录超时不挡整表
       });
-      const listWorktrees = (cwd) => new Promise(resolve => {
-        let settled = false;
-        const done = (groups) => { if (!settled) { settled = true; resolve(groups); } };
-        socket.emit('worktree:sessions', { cwd }, res => done(res?.groups || []));
-        setTimeout(() => done([]), 4000);
-      });
-      Promise.all([
-        Promise.all(dirs.map(listMain)),
-        Promise.all(dirs.map(listWorktrees)),
-      ]).then(([mainLists, wtGroupLists]) => {
+      Promise.all(dirs.map(listMain)).then((mainLists) => {
         if (gen !== _dashRecentsGen) return; // 已换页/重渲
-        const wtLists = wtGroupLists.flatMap(flattenWorktreeGroupsForRecents);
-        const recent = mergeRecentSessionsAcrossWorkspaces([...mainLists, ...wtLists], { limit: 8 });
+        const recent = mergeRecentSessionsAcrossWorkspaces(mainLists, { limit: 8 });
         renderDashRecents(recent); // 空列表也渲 → dashEmptyHint
       });
     } else if (emptyHint) {

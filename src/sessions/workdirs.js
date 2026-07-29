@@ -86,26 +86,9 @@ export function ensureWhitelisted(cwd, dirs) {
 
 // 精确白名单判定（单一事实源）：cwd 是否为白名单内目录。供 routeCwd 做越界检测 + 审计信号（FR-23）。
 // 与 ensureWhitelisted 的区别：本函数只回答“在不在范围内”（不做归位），让调用方决定越界时如何处理（回退 + 记审计）。
+// git linked worktree 若要用，须把其绝对路径显式写入 workdirs.json，与其它工作区同级——无自动探测、无隐式放行。
 export function isWhitelisted(cwd, dirs) {
   return typeof cwd === 'string' && cwd !== '' && dirs.includes(cwd);
-}
-
-// worktree 会话触达（对齐 CLI「cd 进 worktree 即可 /resume」）：合法 cwd = 白名单目录本身，
-// 或已注册的 linked worktree 且其所属 repo 仍在白名单（repo 热移除 → worktree 立即随之失效）。
-// knownWorktrees（worktreePath → repo）只能由服务端以 `git worktree list` 权威输出写入——
-// 客户端伪造任意路径不会入表，故本函数不构成白名单绕过面。
-export function isAllowedWorkdir(cwd, dirs, knownWorktrees) {
-  if (isWhitelisted(cwd, dirs)) return true;
-  const repo = knownWorktrees instanceof Map ? knownWorktrees.get(cwd) : undefined;
-  return typeof repo === 'string' && isWhitelisted(repo, dirs);
-}
-
-// 新开/首发归位：已注册 worktree 保留；否则与 ensureWhitelisted 同——越界/热移除夯到 dirs[0]。
-// session:switch 已有 knownWorktrees.has 例外；session:new/user:message 原先只 ensureWhitelisted，
-// 会把 worktree 新建夯回主仓（K1）。
-export function ensureAllowedWorkdir(cwd, dirs, knownWorktrees) {
-  if (isAllowedWorkdir(cwd, dirs, knownWorktrees)) return cwd;
-  return Array.isArray(dirs) && dirs.length ? dirs[0] : cwd;
 }
 
 // SS-004：与 history.getProjectDir / CLI 同规则（非字母数字 → '-'）。

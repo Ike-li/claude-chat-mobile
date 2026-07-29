@@ -7,7 +7,6 @@ export function registerFileSocketHandlers({
   on,
   routeCwd,
   getWorkDirs,
-  getKnownWorktrees, // optional () => Map worktreePath→repo；缺省时仅 workDirs（向后兼容）
   listDir,
   browseReadFile,
   listGitChanges,
@@ -21,7 +20,6 @@ export function registerFileSocketHandlers({
   rejectableSymlinkComponent,
   buildDiff,
   readPreview,
-  isAllowedWorkdir, // optional (cwd, dirs, knownWt) → bool
   logger = console,
 }) {
   on(socket, 'browse:list', (payload, ack) => {
@@ -63,22 +61,16 @@ export function registerFileSocketHandlers({
     return ack({ ok: true, ...result });
   });
 
-  // cwd 是否授权：白名单目录本身，或已注册 linked worktree（repo 仍在白名单）。
-  // 旧实现只认 workDirs → worktree 被 routeCwd 放行后 git/search 仍全拒（I3）。
+  // cwd 是否授权：仅 workdirs 白名单本身（git worktree 路径须显式列入）。
+  // attributePath 覆盖「cwd 是白名单子路径」的边角（例如临时落到子目录）。
   function cwdInWorkDirs(cwd, workDirs) {
     if (!cwd || !Array.isArray(workDirs)) return false;
     if (workDirs.includes(cwd)) return true;
-    if (typeof isAllowedWorkdir === 'function') {
-      const wt = typeof getKnownWorktrees === 'function' ? getKnownWorktrees() : undefined;
-      if (isAllowedWorkdir(cwd, workDirs, wt)) return true;
-    }
     return Boolean(attributePath(cwd, workDirs, cwd));
   }
 
-  // browse/write 的 scopeDirs：白名单 + 当前已授权 worktree cwd（否则 listDir/write 仍拒 worktree 内路径）
-  function scopeDirsFor(cwd, workDirs) {
-    if (!Array.isArray(workDirs)) return workDirs;
-    if (cwd && !workDirs.includes(cwd) && cwdInWorkDirs(cwd, workDirs)) return [...workDirs, cwd];
+  // browse/write 的 scopeDirs：白名单即可（显式 workdir 已在列表内）。
+  function scopeDirsFor(_cwd, workDirs) {
     return workDirs;
   }
 

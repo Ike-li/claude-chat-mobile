@@ -137,7 +137,7 @@ Beyond the core loop above:
 - **Single-driver model**: Web and CLI take turns writing the same session; while the CLI drives, the Web is a read-only mirror (transcript catch-up). Takeover queues until the current turn finishes to avoid concurrent write forks.
 - **Six permission modes** (default / plan / acceptEdits / dontAsk / auto / bypassPermissions), switchable at runtime; approvals carry TTL and integrity binding.
 - **Per-message model switching** (gateway-suffixed names supported); resume can fall back to the last assistant model in the session.
-- **Multi-repo and multi-session**: switch among allow-listed working directories; watch several sessions from the home hub / drawer; discover and resume git worktree sessions.
+- **Multi-repo and multi-session**: switch among allow-listed working directories; watch several sessions from the home hub / drawer. To use a git worktree, add its absolute path to `workdirs.json` as its own workspace (hot-reloaded, no restart).
 - **Visible message queue + withdraw** (aligned with CLI Queued/ESC); dual-state stop on the send button; CLI-style live status line and turn-done line.
 - **Visible sub-agents / background tasks**, with stop for background tasks; Task-list tools rendered inline.
 - **File and image upload** (including clipboard paste and pre-send preview), with path injection and traversal protection; historical attachments open on tap; **read-only project file browse** (never outside allow-listed workdirs).

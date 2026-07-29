@@ -8,7 +8,7 @@ import { realpathSync } from 'node:fs';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
-  findProjectDirCollisions, isAllowedWorkdir, ensureAllowedWorkdir, resolveWorkdirsFilePath,
+  findProjectDirCollisions, resolveWorkdirsFilePath,
 } from '../../src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -183,25 +183,22 @@ test.describe('findProjectDirCollisions（SS-004）', () => {
   });
 });
 
-test.describe('isAllowedWorkdir（worktree 会话触达：白名单 or 已注册 linked worktree）', () => {
-  const dirs = ['/repo/a', '/repo/b'];
-  test('白名单目录本身 → true（与 isWhitelisted 等价路径）', () => {
-    assert.equal(isAllowedWorkdir('/repo/a', dirs, new Map()), true);
+// 工作区 cwd 合法性：只认 workdirs 白名单本身。git linked worktree 若要用，须显式写入 workdirs.json
+// 成为独立条目——不再有「父仓下自动挂载 worktree 路径」的隐式放行。
+test.describe('isWhitelisted / ensureWhitelisted（显式 workdir 白名单，无 worktree 隐式放行）', () => {
+  const dirs = ['/repo/a', '/repo/b', '/repo/a-wt-promo'];
+  test('白名单目录本身 → true', () => {
+    assert.equal(isWhitelisted('/repo/a', dirs), true);
+    assert.equal(isWhitelisted('/repo/a-wt-promo', dirs), true);
   });
-  test('已注册 worktree 且所属 repo 在白名单 → true', () => {
-    const wt = new Map([['/repo/a/.worktrees/promo', '/repo/a']]);
-    assert.equal(isAllowedWorkdir('/repo/a/.worktrees/promo', dirs, wt), true);
+  test('形似 worktree 但未列入白名单 → false（须手动加进 workdirs.json）', () => {
+    assert.equal(isWhitelisted('/repo/a/.worktrees/promo', dirs), false);
+    assert.equal(isWhitelisted('/repo/a/.claude/worktrees/feat', dirs), false);
   });
-  test('已注册 worktree 但所属 repo 已被热移除 → false（repo 失效即 worktree 随之失效）', () => {
-    const wt = new Map([['/gone/repo/wt', '/gone/repo']]);
-    assert.equal(isAllowedWorkdir('/gone/repo/wt', dirs, wt), false);
-  });
-  test('未注册路径（即使真实存在/伪造 worktree 形态）→ false', () => {
-    assert.equal(isAllowedWorkdir('/repo/a/.worktrees/evil', dirs, new Map()), false);
-  });
-  test('knownWorktrees 缺省/非 Map → 退化为纯白名单判定', () => {
-    assert.equal(isAllowedWorkdir('/repo/a', dirs, undefined), true);
-    assert.equal(isAllowedWorkdir('/repo/a/.worktrees/promo', dirs, undefined), false);
+  test('ensureWhitelisted：在册路径原样保留；越界夯到 dirs[0]', () => {
+    assert.equal(ensureWhitelisted('/repo/a-wt-promo', dirs), '/repo/a-wt-promo');
+    assert.equal(ensureWhitelisted('/elsewhere', dirs), '/repo/a');
+    assert.equal(ensureWhitelisted('/repo/a/.worktrees/promo', dirs), '/repo/a');
   });
 });
 
@@ -220,18 +217,5 @@ test.describe('resolveWorkdirsFilePath', () => {
   });
   test('相对路径与 baseDir 拼接', () => {
     assert.equal(resolveWorkdirsFilePath('workdirs.json', '/app'), join('/app', 'workdirs.json'));
-  });
-});
-
-
-test.describe('ensureAllowedWorkdir（worktree 新建不夯回主仓，K1）', () => {
-  test('已注册 worktree 保留', () => {
-    const dirs = ['/repo/a'];
-    const wt = new Map([['/repo/a/.worktrees/promo', '/repo/a']]);
-    assert.equal(ensureAllowedWorkdir('/repo/a/.worktrees/promo', dirs, wt), '/repo/a/.worktrees/promo');
-  });
-  test('未注册路径夯到 dirs[0]', () => {
-    const dirs = ['/repo/a', '/repo/b'];
-    assert.equal(ensureAllowedWorkdir('/elsewhere', dirs, new Map()), '/repo/a');
   });
 });
