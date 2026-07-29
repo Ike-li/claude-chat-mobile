@@ -80,6 +80,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  test('P0-09u 底栏会话摘要从模型名开始，不显示前置图标', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await expect(page.locator('#pillDefaults > svg')).toHaveCount(0);
+    await expect(page.locator('#pillDefaults > :first-child')).toHaveAttribute('id', 'pillModelText');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // 思考强度在数据上本就是模型的属性（logic.js effortLevelsFor 读 entry.supportedEffortLevels），
   // 但 UI 上长期是与「选择模型」并列的独立区块——切到不支持的模型时整块无声消失，用户只看到
   // 刚才还在的一栏没了，不给任何解释；而模型条目查不到时展示的又是全部模型档位的并集，

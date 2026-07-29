@@ -268,11 +268,6 @@ body.ccm-sheet-open #messages {
   box-shadow: none;
   max-width: 100%;
 }
-.status-pill-chip.toolbar-pill svg {
-  width: 0.85rem;
-  height: 0.85rem;
-  opacity: 0.75;
-}
 /* 会话档摘要 chip：模型优先完整；权限/思考短标少截断；完整串在 #pillDefaults title */
 #pillDefaults {
   max-width: min(100%, 72vw);
