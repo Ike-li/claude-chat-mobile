@@ -6546,7 +6546,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return;
     }
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag });
+    inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, isWebInitiated: true });
     maybeHintHooksBridge();
     // 兼容：隐藏节点若仍在 DOM，同步文案（不展示）
     if (mirrorBannerText) mirrorBannerText.textContent = inputEl.placeholder;
@@ -6587,7 +6587,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function showMirrorComposerHint() {
     if (!mirrorReadonlySid) return;
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    const text = formatMirrorComposerHint({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag });
+    const text = formatMirrorComposerHint({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, isWebInitiated: true });
     const now = Date.now();
     if (!shouldEmitThrottledHint({
       lastText: _mirrorComposerHintLast.text,

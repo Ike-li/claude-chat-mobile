@@ -2118,7 +2118,12 @@ export function isToolSummaryTruncated(summary, { truncated } = {}) {
 // 唤起（尾窗内查到 harness 注入的 marker），而非真不知道来源的「大概率终端」——2026-07-24 真机复现过
 // 100% web 发起的会话被自主循环唤起时误显「终端会话运行中」；两者磁盘形态相同、锁本身都该维持，
 // 只是这里换更准确的措辞。查不到 marker（老调用方不传/确实是未知来源）时保持原「终端」文案不变。
-export function formatMirrorBannerText({ armed = false, stale = false, autonomous = false } = {}) {
+export function formatMirrorBannerText({ armed = false, stale = false, autonomous = false, isWebInitiated = false } = {}) {
+  if (isWebInitiated) {
+    return autonomous
+      ? t('只读镜像：本会话自主循环执行中，移动端当前只读')
+      : t('只读镜像：终端会话运行中，移动端当前只读');
+  }
   if (armed) return autonomous
     ? t('只读镜像：已请求续接，等待自主循环当前操作完成…')
     : t('只读镜像：已请求续接，等待终端当前操作完成…');
@@ -2133,7 +2138,12 @@ export function formatMirrorBannerText({ armed = false, stale = false, autonomou
 
 // 驾驶中点输入区/附件时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
 // 主操作指向发送钮位「续接」。单行 · 分隔：addBar 用 textContent，无 pre-wrap。
-export function formatMirrorComposerHint({ armed = false, stale = false, autonomous = false } = {}) {
+export function formatMirrorComposerHint({ armed = false, stale = false, autonomous = false, isWebInitiated = false } = {}) {
+  if (isWebInitiated) {
+    return autonomous
+      ? t('只读镜像：本会话自主循环执行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等自主循环静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；有分叉风险）')
+      : t('只读镜像：终端会话运行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等终端静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；疑似中断可立即续接，有分叉风险）');
+  }
   // 等待上界「最长约 5 分钟」锚定 server 端 history.js MIRROR_STALE_PENDING_MS（注册表负证据命中时
   // 秒级；这里写保守上界）——2026-07-28 真机：用户杀掉 CLI 后以为排队永远不放行，点了重启服务。
   if (armed) return autonomous
