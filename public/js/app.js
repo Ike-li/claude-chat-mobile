@@ -6730,6 +6730,30 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     applyMirror(readonly, ev.sessionId, stale, ev.payload?.observedCli, !!ev.payload?.autonomous);
   }
+  // 排队续接的「强制立即续接」入口（2026-07-28 真机 b06fb05d）：用户刚亲手杀掉终端时，他比判定链
+  // 更早知道终端已死——排队只承诺「最长约 5 分钟」自动判定，这里给一条不等判定的显式出口（须确认
+  // 分叉风险）。挂在排队 bar 内而非改发送钮语义：发送钮位的「取消续接」既有行为不动。
+  function appendForceResumeAction(bar, sid) {
+    if (!bar) return;
+    const btn = el(`<button type="button" class="flex mx-auto mt-1.5 items-center justify-center gap-1.5 px-3.5 py-1.5 rounded-full border border-line-soft bg-surface text-warning hover:bg-sunk active:scale-[0.98] transition-all text-xs font-semibold shadow-sm" data-testid="mirror-force-resume">${t('强制立即续接')}</button>`);
+    btn.onclick = async () => {
+      haptic('tap');
+      if (armedTakeoverSid !== sid || mirrorReadonlySid !== sid) return; // 已放行/已取消/已换会话：入口作废
+      if (!(await appConfirm({
+        title: t('强制立即续接？'),
+        body: t('尚未判定终端已停止。若终端其实还在跑同一会话，两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n请确认终端确实已关闭再继续。'),
+        okText: t('强制立即续接'),
+        tone: 'warning',
+      }))) return;
+      if (armedTakeoverSid !== sid || mirrorReadonlySid !== sid) return; // 确认框等待期间态可能已变（同 requestMirrorResume 的快照+复验模式）
+      armedTakeoverSid = null;
+      mirrorOverriddenSid = sid;
+      applyMirror(false, sid);
+      addBar(t('已续接 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险'), 'text-warning');
+      inputEl?.focus();
+    };
+    bar.appendChild(btn);
+  }
   // 「续接 CLI 会话」（发送钮位 mode=resume / cancel-resume）：
   // 运行中点击=排队续接——不立即解锁（零并发写盘风险，静候终端本轮完结/转疑似中断自动放行）；
   // 再次点击（按钮已变「取消续接」）可撤销排队。疑似中断点击=确认后立即解锁。
@@ -6745,7 +6769,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!mirrorStaleFlag) { // 运行中：排队等待，零风险故无需确认弹窗
       armedTakeoverSid = mirrorReadonlySid;
       applyMirror(true, mirrorReadonlySid, false, undefined, mirrorAutonomousFlag);
-      addBar(t('已请求续接 CLI 会话：终端当前操作完成后自动切换，可点「取消续接」撤销'), 'text-ink-faint');
+      const bar = addBar(t('已请求续接 CLI 会话：终端当前操作完成后自动切换；若终端已被关闭，最长约 5 分钟自动判定中断并完成续接。可点「取消续接」撤销'), 'text-ink-faint');
+      appendForceResumeAction(bar, mirrorReadonlySid);
       return;
     }
     // 快照：确认框等待用户点击期间，一条并发 mirror_state 广播可能把 mirrorReadonlySid 改写成另一

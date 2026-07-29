@@ -9,6 +9,7 @@ import {
   registryIndicatesTerminalBusy,
   listTerminalSessionStates,
   terminalStateKey,
+  cliPresenceStep,
   REGISTRY_BUSY_FRESH_MS,
 } from '../../src/sessions/session-registry.js';
 
@@ -128,6 +129,20 @@ test('listTerminalSessionStates：按 cwd+sessionId 归键返回 busy/alive，�
 test('listTerminalSessionStates：目录不存在 → 空 Map（fail-open，列表不受影响）', async () => {
   const map = await listTerminalSessionStates({ dir: join(tmpdir(), 'ccm-sreg-absent-2'), isAlive: () => true });
   assert.equal(map.size, 0);
+});
+
+// 负证据（2026-07-28 真机 b06fb05d：杀掉 CLI 后 web 排队续接卡满 5 分钟）：注册表条目「曾观测到
+// entrypoint=cli 的活条目 → 现在没有了」是终端进程已死/已退的强信号——被杀进程不会自己留遗言，
+// 但它的注册表条目会消失（正常退出删文件；强杀留陈尸文件但 pid 验活过不了）。调用方逐 tick 喂
+// 本次 readSessionRegistry 结果，vanished=true 时 mirrorStaleFlag 立即判 stale，不必干等 5 分钟。
+test('cliPresenceStep：曾见 cli 条目→消失/仅剩 sdk = vanished；未曾见/仍在 → 非', () => {
+  assert.equal(typeof cliPresenceStep, 'function', '待实现：cliPresenceStep');
+  assert.deepEqual(cliPresenceStep(false, null), { seen: false, vanished: false }, '从未见过 → 无证据');
+  assert.deepEqual(cliPresenceStep(false, { entrypoint: 'cli' }), { seen: true, vanished: false }, '首次观测 cli → 记住');
+  assert.deepEqual(cliPresenceStep(true, null), { seen: true, vanished: true }, '曾见→条目没了 = 死亡强证据');
+  assert.deepEqual(cliPresenceStep(true, { entrypoint: 'sdk-ts' }), { seen: true, vanished: true }, '只剩 ccm 自己的 sdk 条目 = cli 已死');
+  assert.deepEqual(cliPresenceStep(true, { entrypoint: 'cli' }), { seen: true, vanished: false }, 'cli 还在 → 无负证据');
+  assert.deepEqual(cliPresenceStep(false, { entrypoint: 'sdk-ts' }), { seen: false, vanished: false }, 'sdk 条目不算 seen');
 });
 
 test('registryIndicatesTerminalBusy：cli+busy+新鲜 → true；其余组合 → false', () => {

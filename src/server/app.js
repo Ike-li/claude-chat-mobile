@@ -45,7 +45,7 @@ import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from '..
 import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { readSessionRegistry, registryIndicatesTerminalBusy, listTerminalSessionStates, terminalStateKey } from '../sessions/session-registry.js';
+import { readSessionRegistry, registryIndicatesTerminalBusy, listTerminalSessionStates, terminalStateKey, cliPresenceStep } from '../sessions/session-registry.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
 import { searchFiles } from '../files/file-search.js';
@@ -986,6 +986,7 @@ let catchUpRebaselineRequested = false;             // BE-009：客户端（重�
 // 「本 tick 有无外部写入 / web 是否在跑」推进 quietTicks：终端静默足够久（idle 且连续 N tick 无外部写入）自动解锁。
 let mirrorRelease = { readonly: false, quietTicks: 0 };
 let mirrorLastSize = -1;                            // 上一 tick 的 transcript 字节大小（keep-alive 判文件增长）；-1=基线未建立（切入 / localBusy 后首个正常 tick 只记 size 不判增长）
+let mirrorCliSeen = false;                          // 负证据槽（session-registry cliPresenceStep）：观察期内是否见过 entrypoint=cli 的活注册表条目；「曾见→消失」= 终端已死，喂 mirrorStaleFlag 立即判 stale；切会话在 entry 分支重置
 async function catchUpTickOnce() {
   const id = viewingInstanceId;
   const a = id ? agents.get(id) : null;
@@ -1039,11 +1040,13 @@ async function catchUpTickOnce() {
     try { observedCli = await readCliObservedState(a.sessionId, a.cwd); } catch { /* 读失败显未知 */ }
     observedCli = mergeCliObserved(observedCli, a.sessionId, a.cwd);
     // P1（7/26 CCD 调研吸收）：CLI 进程注册表权威自报，比尾部形态猜测强一档；读失败/无条目 fail-open null → 完全回落既有判定
-    const registryBusy = registryIndicatesTerminalBusy(await readSessionRegistry(a.sessionId, a.cwd));
+    const entryRegistryEntry = await readSessionRegistry(a.sessionId, a.cwd).catch(() => null);
+    const registryBusy = registryIndicatesTerminalBusy(entryRegistryEntry);
     if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
                                         // await 让出后视图/实例/session 可能已变：旧观察结果与待提交基线全部作废，不提交
     catchUpKey = key;
     catchUpState = seededState;
+    mirrorCliSeen = cliPresenceStep(false, entryRegistryEntry).seen; // 切入=负证据观察期重开：只记本次是否见到 cli，vanished 从此往后才可能成立
     mirrorLastSize = -1;                                 // 基线未建立：切入首个正常 tick 只记 size、不判增长
     const entryLock = mirrorEntryLock({
       tailVerdict: tail.verdict,
@@ -1072,18 +1075,21 @@ async function catchUpTickOnce() {
     // 追平仍抑制；只轻读 tail 形态（与正常路径同一 mirrorStaleFlag）。
     let busyTail = { verdict: 'settled', lastChainTs: null };
     let busySize = -1;
-    let busyRegistryBusy = false;
+    let busyRegistryEntry = null;
     // permission 态下 web 侧不写盘，故并行取一次 size 作为「终端是否在写」的判据（见 externalGrowthWhilePaused）。
     // registryBusy 与切入/正常两个分支同口径：缺了它，注册表证明终端活着时这里仍可能把长编译误判成 stale。
     try {
-      [busyTail, busySize, busyRegistryBusy] = await Promise.all([
+      [busyTail, busySize, busyRegistryEntry] = await Promise.all([
         classifyTranscriptTail(a.sessionId, a.cwd).catch(() => ({ verdict: 'settled', lastChainTs: null })),
         sessionFileSize(a.sessionId, a.cwd).catch(() => -1),
-        readSessionRegistry(a.sessionId, a.cwd).then(registryIndicatesTerminalBusy).catch(() => false),
+        readSessionRegistry(a.sessionId, a.cwd).catch(() => null),
       ]);
     } catch { /* 读失败保守 settled：不误标 stale */ }
+    const busyRegistryBusy = registryIndicatesTerminalBusy(busyRegistryEntry);
     if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
                                         // await 让出后视图/实例/session 可能已变：待提交状态全部作废，不提交
+    const busyCliPresence = cliPresenceStep(mirrorCliSeen, busyRegistryEntry);
+    mirrorCliSeen = busyCliPresence.seen;
     // 等审批（可长达 APPROVAL_TTL_MS 30min）期间 web 不写盘 → 磁盘长大必是终端写的，必须标脏，
     // 否则下一条手机消息会送进停在 30 分钟前的 SDK 子进程、从旧 parentUuid 分叉出第二条链。
     if (externalGrowthWhilePaused({ state: st, prevSize: mirrorLastSize, curSize: busySize })) {
@@ -1104,6 +1110,7 @@ async function catchUpTickOnce() {
         now: Date.now(),
         registryBusy: busyRegistryBusy,
         serverStartedAt: SERVICE_STARTED_AT, // 与切入/正常分支同口径，否则文案在两态间闪烁
+        cliRegistryVanished: busyCliPresence.vanished,
       }),
       undefined,
       id,
@@ -1116,6 +1123,7 @@ async function catchUpTickOnce() {
   let curSize;
   let tail;
   let observedCli;
+  let registryEntry;
   let registryBusy;
   try {
     const sizeP = sessionFileSize(a.sessionId, a.cwd).catch(() => -1);
@@ -1130,7 +1138,8 @@ async function catchUpTickOnce() {
     messages = await histP;
     tail = await tailP;
     observedCli = mergeCliObserved(await cliP, a.sessionId, a.cwd);
-    registryBusy = registryIndicatesTerminalBusy(await regP);
+    registryEntry = await regP;
+    registryBusy = registryIndicatesTerminalBusy(registryEntry);
   } catch {
     return; // history 失败则整 tick 放弃（与旧 try/catch return 一致）
   }
@@ -1138,6 +1147,8 @@ async function catchUpTickOnce() {
   if (viewingInstanceId !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
                                                                     // await 让出后视图/实例/session 可能已变：作废旧 tick，不提交 baseline/size/观察态
   catchUpState = state;                                              // 视图仍在才提交 baseline——移到切走判断之后，防切走瞬间污染 baseline 致那段外部写入在 catchUp 路径漏推
+  const cliPresence = cliPresenceStep(mirrorCliSeen, registryEntry); // 负证据推进也在守卫后：切走瞬间的旧观察不得污染新会话的 seen 槽
+  mirrorCliSeen = cliPresence.seen;
   // keep-alive：transcript 文件比上 tick 大 = 终端在写盘（含跑工具/思考的 tool_use/tool_result，被 text-only 过滤挡在 catchUpStep len 外）。
   // 仅基线已建立(lastSize≥0)时判增长；切入 / localBusy 后首 tick 只记 size 不判（避免把切入前既有体量或己方写盘误当终端活跃）。
   const keepAlive = mirrorLastSize >= 0 && curSize > mirrorLastSize;
@@ -1169,7 +1180,7 @@ async function catchUpTickOnce() {
   mirrorRelease = rel.state;
   setMirror(rel.readonly, a.sessionId, false,                       // 锁/stale/CLI 观察值任一变化都广播
     // serverStartedAt 必须与切入分支同口径：只在切入传会让下一 tick 把「服务重启腰斩」的 stale 覆盖回「驾驶中」文案闪烁
-    mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy, serverStartedAt: SERVICE_STARTED_AT }),
+    mirrorStaleFlag({ readonly: rel.readonly, tailPending, lastChainTs: tail.lastChainTs, now: Date.now(), registryBusy, serverStartedAt: SERVICE_STARTED_AT, cliRegistryVanished: cliPresence.vanished }),
     observedCli, id, 'normal_tick', registryBusy ? false : tail.autonomous);
 }
 let catchUpInFlight = null;

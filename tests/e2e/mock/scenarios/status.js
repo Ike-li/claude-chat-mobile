@@ -244,6 +244,22 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      command: 'test:mirror-armed-force',
+      run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, delay }) => {
+        // 本轮立即收尾，再挂终端驾驶锁且【不自动放行】——「强制立即续接」（P0-17j）必须由用户按钮
+        // 触发才解锁；若像 test:mirror-armed 那样 3 秒自动放行，强制路径没被验证到测试也会绿。
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_mirror_force_1', durationMs: 100, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        await delay(200);
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'mirror_state', payload: { readonly: true, stale: false },
+        });
+      }),
+    },
+    {
       command: 'test:console-log-after-clear',
       run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, addMockSessionLog, delay }) => {
         addMockSessionLog(viewingInstanceId, '[MOCK_LOG_AFTER_CLEAR] New trace after clear for test:console-log-after-clear');

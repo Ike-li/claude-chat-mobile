@@ -947,9 +947,13 @@ export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastCh
 // 活动产生的 ⇒ 立即判 stale（前端出「可续接」文案与入口），不必干等 5 分钟。
 // 刻意只改文案态、不改锁态：真终端跑旧版 CLI（不写注册表 → registryBusy 恒 false）且卡在跨越重启的
 // 长工具上时会被误标，代价仅是提前显示接管引导——与本函数既有的「误判代价低」取舍同档。
-export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, registryBusy = false, serverStartedAt = null } = {}) {
+// cliRegistryVanished（2026-07-28 真机 b06fb05d 续集）：注册表负证据——cli 条目「曾在→消失」
+// （session-registry.js cliPresenceStep）说明写下 pending 尾部的终端进程已死/已退，立即判 stale，
+// 不必干等 5 分钟；registryBusy（终端关了又开新进程）是更新的活证据，仍然优先压制。
+export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, registryBusy = false, serverStartedAt = null, cliRegistryVanished = false } = {}) {
   if (registryBusy) return false;
   if (!readonly || !tailPending || lastChainTs == null) return false;
+  if (cliRegistryVanished) return true;
   if (now - lastChainTs > MIRROR_STALE_PENDING_MS) return true;
   return serverStartedAt != null && lastChainTs < serverStartedAt;
 }

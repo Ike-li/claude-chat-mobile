@@ -221,6 +221,19 @@ test('mirrorStaleFlag：锁定 + pending + 零写入超 5 分钟 → stale；未
   assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: null, now }), false, '无时间戳 → 保守非 stale');
 });
 
+test('mirrorStaleFlag：cli 注册表负证据（曾在→消失）→ 立即 stale 不等 5 分钟；registryBusy 仍压制', () => {
+  // 2026-07-28 真机 b06fb05d：用户杀掉 CLI 后 web 点续接，排队卡在「等终端当前操作完成」——
+  // 尾部 pending 与「长工具零写盘」形态相同，唯一能提前区分的是注册表负证据（条目曾在→消失）。
+  const now = 1_800_000_000_000;
+  const under = now - 60_000; // 仅 1 分钟前，远未到 5 分钟阈值
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now, cliRegistryVanished: true }), true, '负证据 → 立即 stale');
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now, cliRegistryVanished: false }), false, '无负证据 → 维持 5 分钟保守窗');
+  // 终端关了又开新进程（busy 新鲜自报）→ 活驾驶员优先于历史负证据
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: true, lastChainTs: under, now, cliRegistryVanished: true, registryBusy: true }), false, '新活终端压制');
+  assert.equal(H.mirrorStaleFlag({ readonly: false, tailPending: true, lastChainTs: under, now, cliRegistryVanished: true }), false, '未锁 → 无意义');
+  assert.equal(H.mirrorStaleFlag({ readonly: true, tailPending: false, lastChainTs: under, now, cliRegistryVanished: true }), false, '已收尾 → 非中断');
+});
+
 // describeMirrorEntryLock：诊断时间线用——只打包 catchUpTickOnce 已经算出的 mirrorEntryLock 判定
 // 供诊断记录展示，不重复判定逻辑本身（locked 由调用方传入，这里只加一个 agedOutStale 派生字段）。
 test('describeMirrorEntryLock：打包判定详情 + agedOutStale 派生字段（不重复判定逻辑）', () => {

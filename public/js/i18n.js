@@ -649,8 +649,8 @@ export const EN_DICT = Object.freeze({
   '处理中…': 'Working…',
   '操作超时，请重试': 'Timed out — please retry',
   '操作失败': 'Operation failed',
-  '只读镜像：已请求续接——等自主循环当前操作完成后自动可写。可点「取消续接」撤销。': 'Read-only mirror: resume requested — becomes writable once the autonomous loop finishes its current operation. Tap "Cancel resume" to undo.',
-  '只读镜像：已请求续接——等终端当前操作完成后自动可写。可点「取消续接」撤销。': 'Read-only mirror: resume requested — becomes writable once the terminal finishes its current operation. Tap "Cancel resume" to undo.',
+  '只读镜像：已请求续接——等自主循环当前操作完成后自动可写；若它已停止，最长约 5 分钟自动判定中断并完成续接。可点「取消续接」撤销。': 'Read-only mirror: resume requested — becomes writable once the autonomous loop finishes its current operation; if it has stopped, interruption is auto-detected within ~5 minutes and resume completes. Tap "Cancel resume" to undo.',
+  '只读镜像：已请求续接——等终端当前操作完成后自动可写；若终端已被关闭，最长约 5 分钟自动判定中断并完成续接。可点「取消续接」撤销。': 'Read-only mirror: resume requested — becomes writable once the terminal finishes its current operation; if the terminal was closed, interruption is auto-detected within ~5 minutes and resume completes. Tap "Cancel resume" to undo.',
   '只读镜像：自主循环疑似中断。确认已停后点「续接」即可在手机继续（会话历史仍在）。': 'Read-only mirror: the autonomous loop looks interrupted. Once you have confirmed it stopped, tap "Resume" to continue on your phone (the history is still there).',
   '只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。': 'Read-only mirror: the terminal looks interrupted. Once you have confirmed the terminal stopped, tap "Resume" to continue on your phone (the history is still there).',
   '只读镜像：本会话自主循环执行中，移动端当前只读 · 不能：打字/发图/改模型权限思考 · 能：看消息、等自主循环静默后自动可写 · 硬要手机继续：点右侧「续接」（等本轮结束再放行；有分叉风险）': 'Read-only mirror: this session is in an autonomous loop; mobile is read-only · Cannot: type, send images, change model/permissions/thinking · Can: read messages, and writing unlocks once the loop goes quiet · To force it on your phone: tap "Resume" on the right (waits for this turn to end; risks forking)',
@@ -662,7 +662,10 @@ export const EN_DICT = Object.freeze({
   '已续接 CLI 会话：终端本轮已完结，安全切换': 'Resumed the CLI session: the terminal had finished its turn, so this was a clean handover',
   '已续接 CLI 会话：终端疑似中断，自动完成续接——若终端仍在跑同一会话，并发发送有分叉风险': 'Resumed the CLI session: the terminal looked interrupted so the handover completed automatically — if it is still on the same session, sending from both sides risks forking it',
   '已续接 CLI 会话：若终端仍在跑同一会话，并发发送有分叉风险': 'Resumed the CLI session: if the terminal is still on the same session, sending from both sides risks forking it',
-  '已请求续接 CLI 会话：终端当前操作完成后自动切换，可点「取消续接」撤销': 'CLI session resume requested: it switches over once the terminal finishes its current operation — tap "Cancel resume" to undo',
+  '已请求续接 CLI 会话：终端当前操作完成后自动切换；若终端已被关闭，最长约 5 分钟自动判定中断并完成续接。可点「取消续接」撤销': 'CLI session resume requested: it switches over once the terminal finishes its current operation; if the terminal was closed, interruption is auto-detected within ~5 minutes and resume completes. Tap "Cancel resume" to undo',
+  '强制立即续接': 'Force resume now',
+  '强制立即续接？': 'Force resume now?',
+  '尚未判定终端已停止。若终端其实还在跑同一会话，两边同时发消息会造成会话分叉（对方的消息在后续会话中可能不可见）。\n\n请确认终端确实已关闭再继续。': 'The terminal has not been determined to be stopped yet. If it is actually still running this session, sending from both sides will fork the conversation (the other side\'s messages may become invisible downstream).\n\nMake sure the terminal is really closed before continuing.',
   '已请求刷新：拉取终端最新消息': 'Refresh requested: pulling the terminal\'s latest messages',
 
   // —— 附件 ——

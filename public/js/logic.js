@@ -2157,9 +2157,11 @@ export function formatMirrorBannerText({ armed = false, stale = false, autonomou
 // 驾驶中点输入区/附件时的可操作说明（比横幅短句更完整：能/不能/硬要怎么做）。
 // 主操作指向发送钮位「续接」。单行 · 分隔：addBar 用 textContent，无 pre-wrap。
 export function formatMirrorComposerHint({ armed = false, stale = false, autonomous = false } = {}) {
+  // 等待上界「最长约 5 分钟」锚定 server 端 history.js MIRROR_STALE_PENDING_MS（注册表负证据命中时
+  // 秒级；这里写保守上界）——2026-07-28 真机：用户杀掉 CLI 后以为排队永远不放行，点了重启服务。
   if (armed) return autonomous
-    ? t('只读镜像：已请求续接——等自主循环当前操作完成后自动可写。可点「取消续接」撤销。')
-    : t('只读镜像：已请求续接——等终端当前操作完成后自动可写。可点「取消续接」撤销。');
+    ? t('只读镜像：已请求续接——等自主循环当前操作完成后自动可写；若它已停止，最长约 5 分钟自动判定中断并完成续接。可点「取消续接」撤销。')
+    : t('只读镜像：已请求续接——等终端当前操作完成后自动可写；若终端已被关闭，最长约 5 分钟自动判定中断并完成续接。可点「取消续接」撤销。');
   if (stale) return autonomous
     ? t('只读镜像：自主循环疑似中断。确认已停后点「续接」即可在手机继续（会话历史仍在）。')
     : t('只读镜像：终端疑似中断。确认终端已停后点「续接」即可在手机继续（会话历史仍在）。');

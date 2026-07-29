@@ -199,6 +199,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 2026-07-28 真机 b06fb05d：用户亲手杀掉 CLI 后排队续接——他比判定链更早知道终端已死，
+  // 但排队只承诺「最长约 5 分钟」自动判定，且当时没有任何不等判定的出口，逼得他去重启服务。
+  test('P0-17j 排队续接给「强制立即续接」入口：确认分叉风险后立即解锁，不等自动判定', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:mirror-armed-force');
+    await expect(page.locator('#input')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toHaveText('续接');
+
+    // 排队 → 提示条内出现强制入口
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', /已请求续接|等待终端/);
+    const forceBtn = page.locator('[data-testid="mirror-force-resume"]');
+    await expect(forceBtn).toBeVisible();
+
+    // 点强制 → 项目风格确认 sheet → 确认后立即解锁 + 分叉风险警示留痕（mock 不放行，解锁只能来自强制路径）
+    await forceBtn.click();
+    await page.locator('#confirmOk').click();
+    await expect(page.locator('#input')).toBeEnabled();
+    await expect(page.locator('#messages')).toContainText('分叉风险');
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-17i 终端只读镜像经历驾驶、疑似中断与自动解锁三态', async ({ page }) => {
     await gotoMock(page);
 

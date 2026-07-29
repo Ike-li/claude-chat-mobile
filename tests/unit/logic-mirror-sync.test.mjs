@@ -86,6 +86,12 @@ test.describe('formatMirrorComposerHint（点输入区说明三态）', () => {
   test('armed 优先于 stale', () => {
     assert.match(formatMirrorComposerHint({ armed: true, stale: true }), /已请求续接|取消续接/);
   });
+  // 2026-07-28 真机 b06fb05d：用户杀掉 CLI 后排队续接，文案只说「等终端当前操作完成」——没人告诉他
+  // 这个等待有上界（负证据秒级 / 最长约 5 分钟陈旧判定），他以为永远卡死，点了重启服务。
+  test('armed：文案带自动判定中断的等待上界（约 5 分钟），终端/自主循环两变体都要', () => {
+    assert.match(formatMirrorComposerHint({ armed: true }), /5 分钟/);
+    assert.match(formatMirrorComposerHint({ armed: true, autonomous: true }), /5 分钟/);
+  });
 });
 
 // 7/24 真机复现：本会话被 ScheduleWakeup/CronCreate 自主循环唤起时，尾部形态和「终端接管」在磁盘上
