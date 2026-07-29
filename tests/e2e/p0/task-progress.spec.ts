@@ -277,4 +277,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-17k 点击任务行展开详情面板显示进度历史，再次点击收起', async ({ page }) => {
+    await gotoMock(page);
+
+    // 发送 test:taskprogress，mock 推送 3 条 task_progress 心跳
+    await sendChatMessage(page, 'test:taskprogress');
+    await expect(page.locator('#taskProgressBanner')).toBeVisible();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('步骤 3/3', { timeout: 10_000 });
+
+    // 点击任务行 → 详情面板展开，显示进度历史条目
+    await page.locator('[data-testid="bg-task-row"]').first().click();
+    await expect(page.locator('[data-testid="task-detail-panel"]')).toBeVisible();
+    // 3 条 progress 应对应 3 行历史记录
+    const entries = page.locator('[data-testid="task-detail-panel"] div.flex');
+    await expect(entries).toHaveCount(3, { timeout: 5_000 });
+
+    // 再次点击同一行 → 详情面板收起
+    await page.locator('[data-testid="bg-task-row"]').first().click();
+    await expect(page.locator('[data-testid="task-detail-panel"]')).toBeHidden();
+
+    // 完成后横幅撤下
+    await waitForIdle(page);
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
 });

@@ -59,6 +59,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
   const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop'), btnTaskToggle = $('btnTaskToggle');
+  const taskDetailPanel = $('taskDetailPanel'), taskDetailContent = $('taskDetailContent');
   const unreadPillEl = $('unreadPill'), unreadPillCountEl = $('unreadPillCount'); // 未读角标悬浮胶囊
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
@@ -556,6 +557,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       taskProgressText,
       btnTaskStop,
       btnTaskToggle,
+      taskDetailPanel,
+      taskDetailContent,
     },
     state: {},
     dependencies: {

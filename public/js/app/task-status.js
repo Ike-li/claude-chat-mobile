@@ -1,4 +1,4 @@
-import { bgTaskListCollapsed, formatApiRetryBanner, formatBgTaskRowLabel, taskStopUiState } from '../logic.js';
+import { bgTaskListCollapsed, formatApiRetryBanner, formatBgTaskRowLabel, formatProgressHistoryEntry, taskStopUiState } from '../logic.js';
 import { t } from '../i18n.js';
 
 export function createTaskStatusController(context, {
@@ -17,6 +17,11 @@ export function createTaskStatusController(context, {
   let apiRetryActive = false;
   // 多任务列表折叠时的用户表态：null=未表态（按阈值走默认折叠）；瞬态，横幅撤下（hideProgress）即重置。
   let userExpanded = null;
+  // 详情面板：累积 task_progress 历史 + 当前展开的任务
+  /** @type {Map<string, Array<{ts: number, description: string, lastToolName: string|null, summary: string|null}>>} */
+  const progressHistory = new Map();
+  const HISTORY_CAP = 20; // 每任务最多保留 20 条历史
+  let activeDetailId = null;
 
   function showActivity(description) {
     if (!dom.activityBanner || !dom.activityBannerText) return;
@@ -87,13 +92,21 @@ export function createTaskStatusController(context, {
     activeTaskId = null;
     userExpanded = null;
     tasks.clear();
+    progressHistory.clear();
+    activeDetailId = null;
     const list = taskList();
     if (list) {
       list.replaceChildren();
       list.classList.add('hidden');
     }
     dom.btnTaskToggle?.classList.add('hidden');
+    hideDetail();
     syncStopButton();
+  }
+
+  function hideDetail() {
+    if (dom.taskDetailPanel) dom.taskDetailPanel.classList.add('hidden');
+    if (dom.taskDetailContent) dom.taskDetailContent.replaceChildren();
   }
 
   function syncToggleButton(collapsed) {
@@ -141,7 +154,9 @@ export function createTaskStatusController(context, {
     list.classList.toggle('hidden', collapsed);
     syncToggleButton(collapsed);
     for (const [taskId, task] of tasks) {
-      const row = createElement('<div class="rounded-lg border border-warning/25 bg-warning/5 px-2 py-1.5" data-testid="bg-task-row"></div>');
+      const histLen = (progressHistory.get(taskId) || []).length;
+      const isActive = taskId === activeDetailId;
+      const row = createElement(`<div class="rounded-lg border border-warning/25 bg-warning/5 px-2 py-1.5 cursor-pointer${isActive ? ' ring-1 ring-warning/50' : ''}" data-testid="bg-task-row"></div>`);
       const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
       const label = createElement('<span class="truncate flex-1 min-w-0 text-ink font-medium"></span>');
       const title = formatBgTaskRowLabel({
@@ -149,10 +164,11 @@ export function createTaskStatusController(context, {
         message: task.message,
         taskId,
       });
-      label.textContent = title.slice(0, 72);
+      const histTag = histLen > 0 ? ` · ${histLen}条` : '';
+      label.textContent = `${title.slice(0, 72 - histTag.length)}${histTag}`;
       label.title = task.message || taskId;
       const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
-      stop.onclick = () => stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`);
+      stop.onclick = (e) => { e.stopPropagation(); stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`); };
       top.append(label, stop);
 
       const metaParts = [];
@@ -172,8 +188,65 @@ export function createTaskStatusController(context, {
       } else {
         row.append(top);
       }
+      // 点击行文本区域 → 展开/收起详情面板
+      row.addEventListener('click', () => toggleDetail(taskId));
       list.appendChild(row);
     }
+  }
+
+  // ---- 详情面板：累积 task_progress 历史，点击任务行展开 ----
+
+  function recordProgress(taskId, payload) {
+    if (!taskId) return;
+    const desc = payload?.description || payload?.message || '';
+    const summary = payload?.summary || null;
+    const tool = payload?.lastToolName || payload?.last_tool_name || null;
+    // 无实质内容不记录（防空白行）
+    if (!desc && !summary) return;
+    // 去重：连续相同 description+summary 不重复记录
+    const hist = progressHistory.get(taskId) || [];
+    const last = hist[hist.length - 1];
+    if (last && last.description === desc && last.summary === summary) return;
+    hist.push({ ts: Date.now(), description: desc, lastToolName: tool, summary });
+    if (hist.length > HISTORY_CAP) hist.splice(0, hist.length - HISTORY_CAP);
+    progressHistory.set(taskId, hist);
+  }
+
+  function toggleDetail(taskId) {
+    if (activeDetailId === taskId) {
+      // 再次点击同任务 → 收起
+      activeDetailId = null;
+      hideDetail();
+    } else {
+      activeDetailId = taskId;
+      renderDetail(taskId);
+    }
+    // 刷新行高亮态
+    renderTaskList();
+  }
+
+  function renderDetail(taskId) {
+    if (!dom.taskDetailPanel || !dom.taskDetailContent) return;
+    const hist = progressHistory.get(taskId) || [];
+    if (hist.length === 0) {
+      hideDetail();
+      return;
+    }
+    dom.taskDetailContent.replaceChildren();
+    for (const entry of hist) {
+      const { time, text, hasSummary } = formatProgressHistoryEntry(entry);
+      const row = createElement('<div class="flex items-start gap-2"></div>');
+      const ts = createElement('<span class="text-[10px] text-ink-faint shrink-0 tabular-nums w-12 text-right"></span>');
+      ts.textContent = time;
+      const icon = createElement(`<span class="shrink-0">${hasSummary ? '✦' : '▸'}</span>`);
+      const body = createElement('<span class="flex-1 min-w-0 text-ink-soft break-words"></span>');
+      body.textContent = text;
+      row.append(ts, icon, body);
+      dom.taskDetailContent.appendChild(row);
+    }
+    dom.taskDetailPanel.classList.remove('hidden');
+    // 新条目到达时自动滚动到底部
+    dom.taskDetailContent.scrollTop = dom.taskDetailContent.scrollHeight;
   }
 
   function applyTasksFromPayload(payload) {
@@ -220,6 +293,11 @@ export function createTaskStatusController(context, {
   function onProgress(event) {
     if (event.instanceId && event.instanceId !== context.state.viewingInstanceId) return false;
     const payload = event.payload || {};
+    // 累积进度历史（全量快照中的主任务 + 单条 payload）
+    if (Array.isArray(payload.tasks)) {
+      for (const item of payload.tasks) recordProgress(item?.taskId ?? item?.task_id, item);
+    }
+    recordProgress(payload.taskId, payload);
     applyTasksFromPayload(payload);
     if (tasks.size === 0) {
       hideProgress();
@@ -227,6 +305,10 @@ export function createTaskStatusController(context, {
     }
     showBanner();
     renderTaskList();
+    // 详情面板正在查看的任务有新进度时自动刷新
+    if (activeDetailId && progressHistory.has(activeDetailId)) {
+      renderDetail(activeDetailId);
+    }
     return true;
   }
 
