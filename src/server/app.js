@@ -656,7 +656,6 @@ const captureUnreadSnapshot = instanceManager.captureUnreadSnapshot;
 const newInstanceId = instanceManager.nextId;
 const permModeOf = instanceManager.permissionModeOf;
 const effortOf = instanceManager.effortOf;
-const inheritedMode = instanceManager.inheritedMode;
 const inheritedEffort = instanceManager.inheritedEffort;
 const instanceForSession = instanceManager.forSession;
 const instanceState = instanceManager.stateOf;
@@ -667,7 +666,7 @@ const instanceState = instanceManager.stateOf;
 const pendingModeByCwd = new Map();           // cwd → 待应用权限档（新会话懒创建期，L0）
 const pendingEffortByCwd = new Map();         // cwd → 待应用思考强度档（同上；null 合法）
 // L3：按 cwd 缓存的 CLI settings 默认（resolveSettings 合并 user/project/local）。失败不缓存以便重试。
-const cliDefaultsByCwd = new Map();           // cwd → { mode, effort, model }
+const cliDefaultsByCwd = new Map();           // cwd → { mode, effort, model, env }
 const cliDefaultsInflight = new Map();        // cwd → Promise（并发去重）
 // 台阶3 Step B 角标：doneInstances = 后台（≠viewingInstanceId）完成但未查看的实例 latch
 // （后台轮次 result 置位；该实例新活动 init/审批 或被切为 viewingInstanceId 时清）。instanceState 由实例
@@ -817,7 +816,7 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
       return d;
     } catch (err) {
       console.warn(`[cli-settings] resolveSettings 失败 (${cwd}):`, err?.message || err);
-      return { mode: 'default', effort: null, model: undefined };
+      return { mode: 'default', effort: null, model: undefined, env: undefined };
     } finally {
       if (cliDefaultsInflight.get(cwd) === p) cliDefaultsInflight.delete(cwd);
     }
@@ -1498,12 +1497,14 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   }
   // 档位初值优先级：显式入参（mode/effort 已定义，如 setEffort 置换）>
   //   FRESH: L0 pending > L3 CLI settings（cliDefaultsByCwd）> L4 硬默认 ｜
-  //   RESUME mode: saved 持久化值 > transcriptMode > 继承该 cwd 末实例档（inheritedMode 兜底 'default'）｜
+  //   RESUME mode: saved 持久化值 > transcriptMode > L4 硬默认（不继承 cwd 末实例档——CLI 原生无此层）｜
   //   RESUME effort: saved 持久化值 > 继承该 cwd 末实例档 > L3 CLI settings > null（resolveResumeEffort）。
   // A1（2026-06-22）：新会话(FRESH)不继承 cwd 末实例档——贴终端等价（新起 claude 是干净默认）。
   // 2026-07-14：FRESH 的「干净默认」= resolveSettings 合并结果，不再写死 default/null。
-  // resume 权限档：saved（sessions.json）> transcriptMode（CLI 末档）> inherited——mode 有 transcript
-  // 这条更权威的历史信号，不读 L3（见 cli-settings-defaults.js 头注）。
+  // resume 权限档：saved（sessions.json）> transcriptMode（CLI 末档）> L4 硬默认。
+  // 2026-07-29：删除 inheritedMode——CLI 新起 claude --resume 不从别的活进程继承 mode，
+  // transcriptMode 已覆盖"这个会话上次用什么档"场景，inherited 只在 transcript 无 mode 时触发
+  // （极窄窗口），且与 CLI 行为不对齐（用户在终端跑 plan、Web resume 另一个旧会话会意外继承 plan）。
   // resume 思考强度：CLI 无对称 transcript 恢复手段（已知边界），2026-07-21 起 saved/inherited 都空时
   // 改读 L3 CLI settings 兜底，不再硬 null——effort 没有比 L3 更权威、可能被误盖的历史信号。
   // effort 入参/存储可为 UI 档 ultracode（会话 flag，不落 sessions.json 为 ultracode 字面量）。
@@ -1522,7 +1523,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       mode = fresh.mode;
       pendingModeByCwd.delete(cwd); // 消费 L0（无 pending 时 delete 无害）
     } else {
-      mode = saved?.permissionMode || transcriptMode || inheritedMode(cwd);
+      mode = saved?.permissionMode || transcriptMode || 'default';
     }
   }
   let effUi;
@@ -1545,8 +1546,11 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     || { ui: null, sdk: null, ultracode: false };
   permModeByInstance.set(id, mode);
   effortByInstance.set(id, effNorm.ui); // 广播/UI 用（可含 ultracode）
-  // 模型：resume 用会话指针；FRESH 仅当 L3 settings.model 有值才 pin（多数环境无此键 → undefined=CLI 自选）
-  const startModel = saved?.model || (isFresh ? fresh?.model : undefined) || undefined;
+  // 模型：resume 用会话指针；FRESH 不 pin——让 CLI 按原生优先级自行解析
+  // （/model > --model > ANTHROPIC_MODEL > settings.model），不再用 effective.model 覆盖。
+  // resolvedEnv 可含 ANTHROPIC_MODEL（worktree 的 settings.local.json env 块），
+  // CLI 会自动采纳（优先级在 --model 之下、settings.model 之上），与 startModel=undefined 不冲突。
+  const startModel = saved?.model || undefined;
   const instance = new AgentSession({
     instanceId: id,
     resumeId: saved?.id,
@@ -1561,6 +1565,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     instanceIdleReclaimMs,
     approvalTtlMs,
     historicalCostUsd: saved?.cost || 0,
+    resolvedEnv: cliDefaultsByCwd.get(cwd)?.env, // worktree env 块，注入子进程环境
     onEvent: envelope => {
       metrics.inc('events'); // NFR-15 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
       if (envelope.type === 'init') {
@@ -1799,12 +1804,19 @@ function dedupedResume(cwd, resumeId, extra = {}) {
 // session:new / setWorkdir 到无缓存工作区时，没有活实例调 supportedModels()→前端无模型可选。
 // scout 以「不留任何痕迹」的方式临时启动 CLI：模型一到即缓存 → 推送前端 → dispose → 删除 CLI 残留文件。
 // 与缓存关系：缓存加速后续（免重复 spawn），但第一次靠 scout 保证确定性——不用猜、不等实例、不靠上区残留。
+const activeScouts = new Map(); // cwd → AgentSession：去重，防连点刷新/并发触发重复 spawn
+function disposeScoutFor(cwd) { // config:refresh 用：清除旧 scout 再起新的（旧 scout 的 CLI 用旧 settings spawn，模型会过期）
+  const old = activeScouts.get(cwd);
+  if (old) { try { old.dispose(); } finally { activeScouts.delete(cwd); } }
+}
 function openScoutInstance(cwd) {
+  if (activeScouts.has(cwd)) return activeScouts.get(cwd); // 已有同 cwd scout 在跑，复用
   const id = newInstanceId();
   const instance = new AgentSession({
     instanceId: id, resumeId: null, cwd, claudeBin,
     model: undefined, permissionMode: 'default', effort: null, idleTimeoutMs, instanceIdleReclaimMs: 0, approvalTtlMs,
     historicalCostUsd: 0,
+    resolvedEnv: cliDefaultsByCwd.get(cwd)?.env, // worktree env 块，scout 也须注入才能拿到正确网关的模型列表
     onEvent: envelope => {
       if (envelope.type === 'models') {
         // 真模型到达：按 cwd 缓存 → 推送所有前端 → 清理
@@ -1831,7 +1843,9 @@ function openScoutInstance(cwd) {
   });
 
   function cleanup() {
+    if (instance.disposed) { activeScouts.delete(cwd); return; } // 仍清 Map 防泄漏
     clearTimeout(timer);
+    activeScouts.delete(cwd);
     const sid = instance._scoutSid;
     instance.dispose();
     // dispose 触发 abort → CLI 进程退出。CLI 启动时已在 ~/.claude/projects/<projectDir>/
@@ -1855,6 +1869,7 @@ function openScoutInstance(cwd) {
     cleanup();
   }, 20_000);
 
+  activeScouts.set(cwd, instance); // 去重：同 cwd 并发请求复用此实例
   instance.start();
   return instance;
 }
@@ -2838,8 +2853,22 @@ registerSocketConnection(io, socket => {
     const cwd = routeCwd(payload?.cwd); // 缺省/越界回落 viewingCwd（含白名单校验，同 session:history）
     try {
       await ensureCliDefaults(cwd, { force: true });
+      // 模型缓存也须刷新：modelsCache / defaultModelByCwd / init-cache.json 可能因终端侧改 settings 而过期。
+      // 先清旧缓存（前端立即知道模型列表不可用），再由活跃 agent fetchModels 或 scout 补新值。
+      modelsCache.delete(cwd);
+      defaultModelByCwd.delete(cwd);
+      saveInitCache();
+      // 有活跃 agent → 调其 fetchModels 刷新；无 → 先清除旧 scout（其 CLI 用旧 settings spawn），再起新 scout
+      // fetchModels 是 fire-and-forget（agent.js:307 静默吞错），失败时缓存永久空——5s 后兜底检查，
+      // 若缓存仍空则启动 scout 补救（scout 20s 超时，不依赖活跃 agent 的 SDK 调用）。
+      let usedAgent = false;
+      for (const a of agents.values()) {
+        if (a.cwd === cwd && !a.disposed) { a.fetchModels(); usedAgent = true; break; }
+      }
+      if (!usedAgent) { disposeScoutFor(cwd); openScoutInstance(cwd); }
+      else setTimeout(() => { if (!modelsCache.get(cwd)) { disposeScoutFor(cwd); openScoutInstance(cwd); } }, 5000);
       broadcastInstances();
-      if (typeof ack === 'function') ack({ ok: true });
+      if (typeof ack === 'function') ack({ ok: true }); // ack 表示「刷新已启动」，模型可能数秒后才到达（scout/agent 异步）
     } catch (err) {
       console.warn('[cli-settings] config:refresh 失败:', err?.message || err);
       if (typeof ack === 'function') ack({ ok: false });

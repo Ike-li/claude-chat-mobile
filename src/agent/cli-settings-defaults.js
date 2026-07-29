@@ -91,8 +91,12 @@ export function normalizeEffortUiLevel(level) {
 }
 
 /**
- * 从 resolveSettings().effective 抽出 L3 三字段（未归一前的原始意图 + 归一后的可用值）。
+ * 从 resolveSettings().effective 抽出 L3 三字段（未归一前的原始意图 + 归一后的可用值）+ env 块。
  * 不抛；effective 缺失时返回硬默认形状。
+ *
+ * env 块：worktree 场景下 CLI 的 local source 解析到主 checkout（2.1.211+ 行为），
+ * 但 SDK resolveSettings 按 cwd 正确读到 worktree 的 settings.local.json。
+ * 缓存后供 AgentSession 注入子进程环境，使每个 worktree 生效各自的网关/模型映射。
  */
 export function defaultsFromEffectiveSettings(effective) {
   const rawMode = effective?.permissions?.defaultMode ?? null;
@@ -100,11 +104,16 @@ export function defaultsFromEffectiveSettings(effective) {
   const rawModel = typeof effective?.model === 'string' && effective.model
     ? effective.model
     : undefined;
+  // env 块：浅拷贝防外部修改污染缓存；非对象安全忽略
+  const env = (effective?.env && typeof effective.env === 'object' && !Array.isArray(effective.env))
+    ? { ...effective.env }
+    : undefined;
   return {
     mode: normalizePermissionMode(rawMode) ?? 'default',
     effort: normalizeEffortLevel(rawEffort),
     // model：settings 有顶层 model 才 pin；多数环境无此键 → undefined（交给 CLI 自选 + scout/init）
     model: rawModel,
+    env,
   };
 }
 

@@ -78,7 +78,7 @@ export function buildAgentQueryOptions(session, env = process.env) {
     canUseTool: (name, input, opts) => session.handleCanUseTool(name, input, opts),
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code' },
-    env: sdkChildEnv(env),
+    env: { ...sdkChildEnv(env), ...session.resolvedEnv },
     stderr: data => { if (env.LOG_STDERR) console.error('[claude]', sanitize(data)); },
   };
 }
@@ -136,7 +136,7 @@ export function mergeMessageUsage(prev, next) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd, resolvedEnv }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -152,6 +152,10 @@ export class AgentSession {
     this.onUsage = onUsage;           // () => void，assistant message（含工具调用间）更新 usage 后触发——驱动 statusline 实时刷 ctx；不进事件流、不占 seq/buffer
     this.onBgTaskChange = onBgTaskChange; // () => void，活的后台任务集合"空↔非空/成员增删"时触发——驱动 server 节流重算会话列表 ⏳ 角标
     this.onStateSettled = onStateSettled || (() => {}); // () => void，账面被兜底路径就地改写（无伴随事件流）时触发——驱动 server 立刻重播 instances，否则前端只能等下一次无关广播
+    // worktree 场景：CLI 的 local source 解析到主 checkout（2.1.211+），但 SDK resolveSettings 按 cwd
+    // 正确读到 worktree 的 settings.local.json。resolvedEnv 缓存其 env 块，注入子进程环境使各 worktree
+    // 生效各自的网关/模型映射。由 server ensureCliDefaults → defaultsFromEffectiveSettings 产出。
+    this.resolvedEnv = resolvedEnv || undefined;
 
     this.sessionId = resumeId || null;
     this.resumeId = resumeId || null;   // F4：resume 失败检测基准

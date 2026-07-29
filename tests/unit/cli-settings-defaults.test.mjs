@@ -54,15 +54,15 @@ test.describe('defaultsFromEffectiveSettings（L3 抽取）', () => {
         permissions: { defaultMode: 'default' },
         effortLevel: 'low',
       }),
-      { mode: 'default', effort: 'low', model: undefined },
+      { mode: 'default', effort: 'low', model: undefined, env: undefined },
     );
   });
   test('缺字段 → L4 形状（mode=default, effort=null）', () => {
     assert.deepEqual(defaultsFromEffectiveSettings(undefined), {
-      mode: 'default', effort: null, model: undefined,
+      mode: 'default', effort: null, model: undefined, env: undefined,
     });
     assert.deepEqual(defaultsFromEffectiveSettings({}), {
-      mode: 'default', effort: null, model: undefined,
+      mode: 'default', effort: null, model: undefined, env: undefined,
     });
   });
   test('顶层 model 有值才 pin', () => {
@@ -77,6 +77,18 @@ test.describe('defaultsFromEffectiveSettings（L3 抽取）', () => {
       defaultsFromEffectiveSettings({ permissions: { defaultMode: 'auto' } }).mode,
       'auto',
     );
+  });
+  test('env 块有值时缓存（浅拷贝）', () => {
+    const envIn = { ANTHROPIC_BASE_URL: 'https://gateway.example.com', ANTHROPIC_MODEL: 'opus' };
+    const d = defaultsFromEffectiveSettings({ env: envIn });
+    assert.deepEqual(d.env, envIn);
+    assert.notEqual(d.env, envIn, '应浅拷贝，不直接引用原对象');
+  });
+  test('env 块缺失/非对象 → undefined', () => {
+    assert.equal(defaultsFromEffectiveSettings({}).env, undefined);
+    assert.equal(defaultsFromEffectiveSettings({ env: null }).env, undefined);
+    assert.equal(defaultsFromEffectiveSettings({ env: 'string' }).env, undefined);
+    assert.equal(defaultsFromEffectiveSettings({ env: [1, 2] }).env, undefined);
   });
 });
 

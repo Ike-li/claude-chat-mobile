@@ -133,4 +133,23 @@ test.describe('config:refresh（CLI 配置刷新按钮）', process.env.CI ? { s
       client.disconnect();
     }
   });
+
+  test('config:refresh 后应触发模型缓存刷新（models 事件或 scout）', async () => {
+    const client = createClient();
+    try {
+      await client.waitForConnect();
+      await client.waitForEvent('instances');
+      client.clearEvents();
+
+      const ack = await client.emitAck('config:refresh', {});
+      assert.equal(ack.ok, true);
+
+      // models 事件应在数秒内到达（由活跃 agent fetchModels 或 scout 触发）
+      // 超时 10s 给 CLI 启动足够时间
+      const modelsEvent = await client.waitForEvent('models', null, 10000);
+      assert.ok(modelsEvent.payload, 'models 事件应携带 payload');
+    } finally {
+      client.disconnect();
+    }
+  });
 });
