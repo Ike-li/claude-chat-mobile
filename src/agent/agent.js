@@ -1208,13 +1208,15 @@ export class AgentSession {
     const key = taskId ?? `__notask_${taskType ?? 'x'}`; // taskId 缺失用稳定合成键，避免 null 键互相覆盖多任务
     const prev = this.bgTasks.get(key);
     const type = taskType ?? null;
+    const descRaw = meta.description ?? prev?.description ?? null;
     this.bgTasks.set(key, {
       taskType: type,
       message: message ?? '',
       lastSeenAt: Date.now(),
       lastToolName: meta.lastToolName ?? prev?.lastToolName ?? null,
-      description: meta.description ?? prev?.description ?? null,
+      description: descRaw,
       subagentType: meta.subagentType ?? prev?.subagentType ?? null,
+      truncated: meta.truncated || prev?.truncated || false,
     });
     // 新任务 或 taskType 变化才回调重算角标（稳态同 id 同 type 心跳只刷 message/lastSeenAt、不广播——节流关键）。
     // taskType 变化也回调：同一任务首条无 subagent_type（→null→⏳）、后续带（→local_agent→🤖）时会话列表图标需随之刷新。
@@ -1262,13 +1264,18 @@ export class AgentSession {
       const desc = t.description ?? t.message ?? prev?.description ?? '';
       const lastTool = t.last_tool_name ?? t.lastToolName ?? prev?.lastToolName ?? null;
       const subType = t.subagent_type ?? t.subagentType ?? prev?.subagentType ?? null;
+      const msgStr = String(desc || prev?.message || '');
+      const descStr = desc ? String(desc) : '';
+      const messageTruncated = msgStr.length > TOOL_SUMMARY_CAP;
+      const descTruncated = descStr.length > TOOL_SUMMARY_CAP;
       this.bgTasks.set(id, {
         taskType: t.task_type ?? t.taskType ?? (subType ? 'local_agent' : prev?.taskType) ?? null,
-        message: truncate(String(desc || prev?.message || ''), TOOL_SUMMARY_CAP),
+        message: truncate(msgStr, TOOL_SUMMARY_CAP),
         lastSeenAt: Date.now(),
         lastToolName: lastTool,
-        description: desc ? truncate(String(desc), TOOL_SUMMARY_CAP) : prev?.description ?? null,
+        description: desc ? truncate(descStr, TOOL_SUMMARY_CAP) : prev?.description ?? null,
         subagentType: subType,
+        truncated: messageTruncated || descTruncated || prev?.truncated || false,
       });
     }
     for (const k of [...this.bgTasks.keys()]) if (!seen.has(k)) this.bgTasks.delete(k);
@@ -1288,6 +1295,7 @@ export class AgentSession {
       description: latest?.description ?? null,
       lastToolName: latest?.lastToolName ?? null,
       subagentType: latest?.subagentType ?? null,
+      truncated: latest?.truncated || false,
       tasks, // 全量明细：前端以它为准 reconcile
       ...extra,
     });
@@ -1317,6 +1325,7 @@ export class AgentSession {
         lastToolName: t.lastToolName ?? null,
         description: t.description ?? null,
         subagentType: t.subagentType ?? null,
+        truncated: t.truncated || false,
       }))
       .sort((a, b) => b.lastSeenAt - a.lastSeenAt);
   }
@@ -1361,7 +1370,8 @@ export class AgentSession {
     return { name: e.name, input: e.input };
   }
 
-  // 工具完整输出缓存（脱敏后、截断前）：live 卡片只推 600 字摘要，点「展开全文」经 tool:full 取此处。
+  // 工具完整输出缓存（原文，未截断未红线）：live 卡片只推 600 字摘要，点「展开全文」经 tool:full 取此处。
+  // base64 图片等大载荷在摘要层被 redactBase64 替换，但缓存保留原文供展开恢复。
   // 与 toolInputs 同 TTL/LRU；非文件工具也能展开（Bash/MCP 长输出是主场景）。
   cacheToolOutput(id, fullText) {
     if (!id || typeof fullText !== 'string') return;
@@ -1626,10 +1636,12 @@ export class AgentSession {
             || bgAiSummary
             || '';
           const bgMessage = truncate(bgSubagent ? `${bgSubagent}：${bgDesc}` : bgDesc, TOOL_SUMMARY_CAP);
+          const bgDescTruncated = String(bgDesc).length > TOOL_SUMMARY_CAP;
           this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage, {
             lastToolName: bgLastTool,
             description: bgDesc ? truncate(String(bgDesc), TOOL_SUMMARY_CAP) : null,
             subagentType: bgSubagent,
+            truncated: bgDescTruncated,
           });
           // 附带全量 tasks 快照：前端据此画「跑了哪些任务 + 每条详情」，而非只显示最新一句
           this.emitBgTasksSnapshot({
@@ -1858,16 +1870,17 @@ export class AgentSession {
           for (const block of asArray(msg.message?.content)) {
             if (block?.type === 'tool_result') {
               const raw = msg.tool_use_result ?? block.content;
-              const full = stringify(redactBase64(raw));
-              this.cacheToolOutput(block.tool_use_id, full);
+              const fullOriginal = stringify(raw);
+              this.cacheToolOutput(block.tool_use_id, fullOriginal); // 缓存原文（含 base64），展开可恢复
+              const fullRedacted = stringify(redactBase64(raw));     // 红线在结构层（非 stringify 后），递归替换嵌套 base64
               const cap = toolResultCap(this.toolNames.get(block.tool_use_id));
               this.toolNames.delete(block.tool_use_id);
-              const outputSummary = truncate(full, cap);
+              const outputSummary = truncate(fullRedacted, cap);
               this.emit('tool_result', {
                 toolUseId: block.tool_use_id,
                 ok: !block.is_error,
                 outputSummary,
-                truncated: full.length > cap,
+                truncated: fullRedacted.length > cap,
                 parentToolUseId: msg.parent_tool_use_id,
                 subagentType: subType,
               });
@@ -1908,16 +1921,17 @@ export class AgentSession {
             // 这类结果 is_error=true 但非工具报错——前端据此显 ☑️/🚫 并剥 "Error:" 前缀，不靠字符串匹配。
             const denyKind = this.denyKinds.get(block.tool_use_id);
             this.denyKinds.delete(block.tool_use_id);
-            const full = stringify(redactBase64(raw));
-            this.cacheToolOutput(block.tool_use_id, full);
+            const fullOriginal = stringify(raw);
+            this.cacheToolOutput(block.tool_use_id, fullOriginal); // 缓存原文（含 base64），展开可恢复
+            const fullRedacted = stringify(redactBase64(raw));     // 红线在结构层（非 stringify 后），递归替换嵌套 base64
             const cap = toolResultCap(this.toolNames.get(block.tool_use_id));
             this.toolNames.delete(block.tool_use_id);
-            const outputSummary = truncate(full, cap);
+            const outputSummary = truncate(fullRedacted, cap);
             this.emit('tool_result', {
               toolUseId: block.tool_use_id,
               ok: !block.is_error,
               outputSummary,
-              truncated: full.length > cap,
+              truncated: fullRedacted.length > cap,
               denyKind
             });
           }
