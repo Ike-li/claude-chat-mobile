@@ -1275,7 +1275,7 @@ export class AgentSession {
         lastToolName: lastTool,
         description: desc ? truncate(descStr, TOOL_SUMMARY_CAP) : prev?.description ?? null,
         subagentType: subType,
-        truncated: messageTruncated || descTruncated || prev?.truncated || false,
+        truncated: messageTruncated || descTruncated || false,
       });
     }
     for (const k of [...this.bgTasks.keys()]) if (!seen.has(k)) this.bgTasks.delete(k);
@@ -1370,12 +1370,16 @@ export class AgentSession {
     return { name: e.name, input: e.input };
   }
 
-  // 工具完整输出缓存（原文，未截断未红线）：live 卡片只推 600 字摘要，点「展开全文」经 tool:full 取此处。
-  // base64 图片等大载荷在摘要层被 redactBase64 替换，但缓存保留原文供展开恢复。
+  // 工具完整输出缓存：缓存原始结构（raw），返回时红线。live 卡片只推 600 字摘要，
+  // 点「展开全文」经 tool:full 取此处。base64 图片等大载荷在返回时被 redactBase64 替换，
+  // 防止整串原样进 DOM 打爆手机标签页；纯文本工具输出不受影响。
   // 与 toolInputs 同 TTL/LRU；非文件工具也能展开（Bash/MCP 长输出是主场景）。
-  cacheToolOutput(id, fullText) {
-    if (!id || typeof fullText !== 'string') return;
-    this.toolOutputs.set(id, { text: fullText, ts: Date.now() });
+  cacheToolOutput(id, raw) {
+    if (!id || raw == null) return;
+    // 超大载荷（如 base64 图片）不缓存：摘要层已红线，展开也无法展示有意义内容
+    const str = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    if (str.length > 256 * 1024) return;
+    this.toolOutputs.set(id, { raw, ts: Date.now() });
     if (this.toolOutputs.size > TOOL_INPUT_MAX) {
       this.toolOutputs.delete(this.toolOutputs.keys().next().value);
     }
@@ -1384,7 +1388,8 @@ export class AgentSession {
     const e = this.toolOutputs.get(id);
     if (!e) return null;
     if (Date.now() - e.ts > TOOL_INPUT_TTL_MS) { this.toolOutputs.delete(id); return null; }
-    return e.text;
+    // 返回时红线：纯文本不受影响（BASE64_REDACT_MIN_LEN=500），base64 载荷被替换
+    return stringify(redactBase64(e.raw));
   }
 
   dispose() {
@@ -1870,9 +1875,8 @@ export class AgentSession {
           for (const block of asArray(msg.message?.content)) {
             if (block?.type === 'tool_result') {
               const raw = msg.tool_use_result ?? block.content;
-              const fullOriginal = stringify(raw);
-              this.cacheToolOutput(block.tool_use_id, fullOriginal); // 缓存原文（含 base64），展开可恢复
-              const fullRedacted = stringify(redactBase64(raw));     // 红线在结构层（非 stringify 后），递归替换嵌套 base64
+              this.cacheToolOutput(block.tool_use_id, raw);        // 缓存原始结构，getToolOutput 返回时红线
+              const fullRedacted = stringify(redactBase64(raw));    // 摘要层红线（结构层递归替换嵌套 base64）
               const cap = toolResultCap(this.toolNames.get(block.tool_use_id));
               this.toolNames.delete(block.tool_use_id);
               const outputSummary = truncate(fullRedacted, cap);
@@ -1921,9 +1925,8 @@ export class AgentSession {
             // 这类结果 is_error=true 但非工具报错——前端据此显 ☑️/🚫 并剥 "Error:" 前缀，不靠字符串匹配。
             const denyKind = this.denyKinds.get(block.tool_use_id);
             this.denyKinds.delete(block.tool_use_id);
-            const fullOriginal = stringify(raw);
-            this.cacheToolOutput(block.tool_use_id, fullOriginal); // 缓存原文（含 base64），展开可恢复
-            const fullRedacted = stringify(redactBase64(raw));     // 红线在结构层（非 stringify 后），递归替换嵌套 base64
+            this.cacheToolOutput(block.tool_use_id, raw);        // 缓存原始结构，getToolOutput 返回时红线
+            const fullRedacted = stringify(redactBase64(raw));    // 摘要层红线（结构层递归替换嵌套 base64）
             const cap = toolResultCap(this.toolNames.get(block.tool_use_id));
             this.toolNames.delete(block.tool_use_id);
             const outputSummary = truncate(fullRedacted, cap);
