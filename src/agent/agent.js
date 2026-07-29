@@ -208,6 +208,10 @@ export class AgentSession {
     this.disposed = false;
     this.assistantResponseBuffer = '';
     this.terminating = false;
+    // 最终退出确认：dispose/abort 后等待 consume 自然结束（SDK/CLI 子进程真正退出）才 resolve。
+    // 生产 shutdown 用它等最终退出确认，避免 process.exit 时留下孤儿 CLI 子进程。
+    this.exitPromise = new Promise(resolve => { this._exitResolve = resolve; });
+
     // F1：defaultModel = 启动时配置的模型（会话原模型，sessions.json 指针——唯一来源）。
     // 消息不带 model（"默认"）时 target 回退到它，而非 SDK 裸默认——否则空选择会把
     // 配置的网关模型 setModel(undefined) 重置掉（实测：init 从 mimo 变成 opus 并报错）。

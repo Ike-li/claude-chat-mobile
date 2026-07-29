@@ -9,6 +9,7 @@ import { isAbsolute as isAbsoluteWin32 } from 'node:path/win32';
 
 export const DEFAULT_SESSION_LIMIT = 6;   // 未指定时每工作区历史会话默认显示条数
 export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与 server.js history:list all 分支直接 import 本常量（= 前端「显示全部」的服务端硬顶）
+export const MAX_LIVE_SESSIONS = 20;      // 全局硬上限：live 会话实例数量，防止有意保留过多 CLI 子进程
 
 // 校验 sessionLimit：必须是 [1, MAX] 的整数。非法（含缺省交由调用方判断）→ 返回 { value, warning }。
 function validateSessionLimit(raw, path) {

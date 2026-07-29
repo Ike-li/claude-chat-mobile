@@ -60,7 +60,7 @@ import {
 } from './instance-routing.js';
 import { prepareSessionForWebResume, prepareResumeInParallel } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, ensureAllowedWorkdir, isWhitelisted, isAllowedWorkdir, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, ensureAllowedWorkdir, isWhitelisted, isAllowedWorkdir, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
 import { discoverWorktreeSessions } from '../sessions/worktree-sessions.js';
 import {
   isDeviceTrusted,
@@ -1491,8 +1491,11 @@ function writeSessionEntrypoint(sessionId, cwd) {
 // （session:new/switch）负责去重（instanceForSession）与切 viewingInstanceId。返回实例。
 // 同步建（resumeId 由调用方解析，无需 await）——故无台阶2 的「await 让出窗口双实例」重入竞态。
 function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = null, transcriptModel = null }) {
-  const id = newInstanceId();
-  // 路由代次快照：本实例的 onSessionId 之后只有在该 cwd 代次未前进（未被 session:new/home/switch 作废）
+  if (agents.size >= MAX_LIVE_SESSIONS) {
+	    throw new Error(`超过最大活跃会话数量 ${MAX_LIVE_SESSIONS}，请关闭一些会话后再尝试`);
+	  }
+	  const id = newInstanceId();
+	  // 路由代次快照：本实例的 onSessionId 之后只有在该 cwd 代次未前进（未被 session:new/home/switch 作废）
   // 时才允许覆写 currentByCwd——防止本实例后台活动复活一个用户已明确放弃的路由指针。
   const generation = sessions.getGeneration(cwd);
   // B1：可被 session:switch 聚焦 live 时刷新；闭包 const 无法在 switch 后对齐 getGeneration
