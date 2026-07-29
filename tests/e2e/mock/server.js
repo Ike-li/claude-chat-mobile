@@ -2062,7 +2062,7 @@ io.on('connection', socket => {
           await delay(600);
           io.emit('agent:event', {
             seq: 50, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
-            type: 'task_progress', transient: true, payload: { taskId: 'bg_task_1', taskType: 'local_agent', message }
+            type: 'task_progress', transient: true, payload: { taskId: 'bg_task_1', taskType: 'local_agent', message, description: message, lastToolName: 'Bash' }
           });
         }
         await delay(600);

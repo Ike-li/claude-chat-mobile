@@ -453,6 +453,10 @@
           <button type="button" id="btnTaskStop" class="hidden shrink-0 px-2 py-1 rounded-lg border border-warning text-warning font-semibold hover:bg-warning hover:text-surface active:scale-95 transition-all" data-testid="task-stop-btn" title="停止该后台任务">停止</button>
         </div>
       </div>
+      <!-- 后台任务详情面板（点击任务行展开，累积展示 task_progress 历史） -->
+      <div id="taskDetailPanel" class="hidden shrink-0 mb-1 overflow-hidden" data-testid="task-detail-panel">
+        <div id="taskDetailContent" class="max-h-[40vh] overflow-y-auto rounded-xl border border-warning/30 bg-sunk p-2 space-y-1.5 text-xs"></div>
+      </div>
 
       <!-- 只读镜像：状态写进 #input placeholder（替换「给 Claude 发消息...」），主操作在发送钮「续接 CLI 会话」。
            #mirrorBanner 及旧按钮 id 仅兼容保留，恒 hidden。 -->
