@@ -49,10 +49,8 @@ test.describe('/metrics 端点（NFR-15）', process.env.CI ? { skip: 'CI 无本
   test.before(async () => { await startServer(); });
   test.after(async () => { await cleanup(); });
 
-  test('鉴权保护：无 token → 401，不泄露运行数据', async () => {
-    const { status } = await get('/metrics');
-    assert.equal(status, 401);
-  });
+  // 「无 token → 401」故意触发一次鉴权失败，会被 rate-limiter 记入退避窗口（阻塞后续同 sourceKey
+  // 请求，见 src/auth/rate-limiter.js「统一门」设计），因此放最后一个跑，避免误伤前面的正常路径用例。
 
   test('带正确 token → 200 + 指标最小集结构完整', async () => {
     const { status, body } = await get('/metrics', TOKEN);
@@ -78,7 +76,11 @@ test.describe('/metrics 端点（NFR-15）', process.env.CI ? { skip: 'CI 无本
 
   test('有已批准移动端连接后 state 不再是 mobile_offline，mobileClients 反映连接数', async () => {
     const socket = ioClient(`http://127.0.0.1:${port}`, { auth: { token: TOKEN }, transports: ['websocket'], reconnection: false });
-    await new Promise(resolve => socket.once('connect', resolve));
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('socket connect 超时（3s）——握手被拒绝且未走 connect_error？')), 3000);
+      socket.once('connect', () => { clearTimeout(timer); resolve(); });
+      socket.once('connect_error', err => { clearTimeout(timer); reject(err); });
+    });
     await sleep(200); // 等 join approved room（本机 isLocal → 直接批准）
 
     const { body } = await get('/metrics', TOKEN);
@@ -87,5 +89,10 @@ test.describe('/metrics 端点（NFR-15）', process.env.CI ? { skip: 'CI 无本
     assert.equal(typeof body.metrics.events, 'number');
 
     socket.disconnect();
+  });
+
+  test('鉴权保护：无 token → 401，不泄露运行数据', async () => {
+    const { status } = await get('/metrics');
+    assert.equal(status, 401);
   });
 });
