@@ -15,7 +15,7 @@
       "type": "card",
       "durSec": 3,
       "title": "claude 在家写代码",
-      "lines": ["我在外面点了个「允许」"]
+      "lines": ["我在外面点了允许"]
     },
     {
       "id": "approval",
@@ -37,8 +37,8 @@
       "id": "end",
       "type": "card",
       "durSec": 4,
-      "title": "开源自托管",
-      "lines": ["连你自己的 claude CLI", "GitHub: claude-chat-mobile"]
+      "title": "开源 · 自托管",
+      "lines": ["连本机 claude CLI"]
     }
   ]
 }

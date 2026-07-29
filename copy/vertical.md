@@ -2,108 +2,138 @@
 
 > 形态：1080×1920 竖屏 · 静音可看（字幕承担全部信息）· 画面 = 真实手机 UI 录屏
 > 每镜给出【画面】与【字幕】；字幕单句 ≤ 15 字，一屏最多两行。
-> 事实源：主仓 dev @ 8084005（2026-07-19）。主张只写代码实证存在的能力。
+> 叙事：解决问题优先——Claude Code 在跑，人却不总在电脑前。
+> 事实终审：主仓 dev @ 8084005。主张只写代码实证存在的能力。
 
 ---
 
 ## 主版 · 30 秒（抖音）
 
-### 镜 1 · Hook（0:00–0:04）
+### 镜 1 · 问题（0:00–0:04）
 
-【画面】电脑工位一闪而过（claude 在跑长任务）；切到手机锁屏，推送横幅弹出——「Claude 请求批准」类审批通知
+【画面】电脑工位一闪（claude 在跑）→ 人起身离开 / 会场或通勤碎片画面一闪 → 切手机
 【字幕】
-> 让它改代码
-> 人先出门
+> Claude Code 在跑
+> 人不在电脑前
 
-### 镜 2 · 审批（0:04–0:11）
+### 镜 2 · 会中点板（0:04–0:11）
 
-【画面】点开推送进入审批卡：完整命令 + 工作目录清晰可见，底部「允许 / 拒绝」；手指点「允许」
+【画面】手机锁屏/推送弹出审批或提问 → 点开：完整命令或选项 → 点「允许」或选项
 【字幕】
-> 危险操作推到手机
-> 看清命令，再放行
+> 会中卡住了？
+> 手机看清，点一下
 
-### 镜 3 · 过程可见（0:11–0:18）
+### 镜 3 · 瞄一眼别插嘴（0:11–0:17）
 
-【画面】聊天流实时滚动：Markdown / 代码高亮；工具调用折叠成卡片，点开一张 Edit/Write 看 diff
+【画面】手机打开同一会话：进度/气泡在更新，输入区呈只读或「终端驾驶中」态（勿拍成活终端画面镜像）
 【字幕】
-> 改了什么，实时看
-> 一步操作，一张卡片
+> 电脑还在跑
+> 手机只读瞄一眼
 
-### 镜 4 · 换端续接（0:18–0:24）
+### 镜 4 · 随时看与聊（0:17–0:22）
 
-【画面】分屏示意：左边手机同一会话气泡，右边电脑终端输入 `/resume`，同一段对话接上（非活终端画面镜像）
+【画面】沙发/路上拿手机发一条短指令或续看会话；弱网闪一下重连补上（可选）
+【字幕】
+> 实例在线就能看
+> 也能聊、也能批
+
+### 镜 5 · 换端续接（0:22–0:27）
+
+【画面】分屏示意：左手机同一会话，右终端 `/resume` 接上（同一 transcript，非活画面镜像）
 【字幕】
 > 路上手机起的头
 > 回家终端接着聊
 
-### 镜 5 · 多仓并行（0:24–0:28）
+### 镜 6 · 身份 + CTA（0:27–0:32）
 
-【画面】顶部工作区/标签在两个仓库间切换；侧栏会话列表可见「worktree · 分支」分组一行
+【画面】结尾卡：claude-chat-mobile · 开源自托管 · 接本机 Claude Code · GitHub 地址
 【字幕】
-> 几个仓库并行跑
-> 标签一切，各管各的
-
-### 镜 6 · CTA（0:28–0:32）
-
-【画面】结尾卡：大字项目名 claude-chat-mobile + GitHub 地址 github.com/Ike-li/claude-chat-mobile
-【字幕】
-> 开源 · 自托管
-> 连本机 claude CLI
+> 随身入口，不是远程桌面
+> 开源 · 连本机 CLI
 
 ---
 
 ## 精简版 · 15 秒（朋友圈）
 
-> 朋友圈默认静音自动播，前 3 秒定生死；只保留「推送审批」一个记忆点。
+> 默认静音自动播；前 3 秒定生死。只保留一个记忆点：**会中 / 出门卡住 → 手机点板**。
 
-### 镜 1 · Hook（0:00–0:03）
+### 镜 1 · 问题（0:00–0:03）
 
-【画面】锁屏推送弹出：「Claude 请求批准」
+【画面】离开工位 / 会场一闪 → 锁屏推送「请求批准」类横幅
 【字幕】
-> claude 在家写代码
-> 我在外面点了允许
+> 任务在跑
+> 人已经出门
 
-### 镜 2 · 审批（0:03–0:08）
+### 镜 2 · 点板（0:03–0:09）
 
-【画面】审批卡全貌：完整命令 + 目录 + 允许/拒绝
+【画面】审批卡：完整命令 + 目录 + 允许/拒绝；手指点「允许」
 【字幕】
-> 完整命令推到手机
-> 看清楚，再放行
+> 卡住了，推到手机
+> 看清命令，再放行
 
-### 镜 3 · 过程（0:08–0:12）
+### 镜 3 · 续看（0:09–0:12）
 
-【画面】流式输出 + 工具卡片快速滚动
+【画面】流式/工具卡快速扫过，表示「还能接着看进度」
 【字幕】
-> 改了什么，随时看
+> 进度随时能看
 
 ### 镜 4 · CTA（0:12–0:16）
 
-【画面】结尾卡：项目名 claude-chat-mobile + GitHub 地址
+【画面】结尾卡：项目名 + GitHub
 【字幕】
 > 开源 · 自托管
-> 连本机 claude CLI
+> 连本机 Claude Code
+
+---
+
+## 旁白备忘（竖屏默认静音；若加 VO 可选用）
+
+> 不进成片字幕层，仅口播/横转竖加长版备用。
+
+**30s VO 骨架（约 70–90 字，可拆镜）：**  
+Claude Code 在跑，你却不总在电脑前。会中卡住了，手机看清命令点一下。电脑还在驾，手机只读瞄一眼，别插嘴。实例在线，随时看、聊、批。路上起的头，回家终端接着聊。开源自托管，接的是你本机 Claude Code——随身入口，不是远程桌面。
+
+**15s VO 骨架：**  
+任务在跑，人已经出门。卡住了推到手机，看清再放行。进度随时能看。开源，连本机 Claude Code。
 
 ---
 
 ## 能力核查表（主张 → 代码证据）
 
-| 文案主张 | 证据（当前 dev 分支 @ 8084005） |
+| 文案主张 | 证据（当前 dev @ 8084005） |
 |---|---|
-| 在手机上用本机 `claude` CLI，效果等价终端 | `README.md` 标题/开篇；`package.json` description |
-| 任务在跑、人离开后可手机处理审批 | `README.md`「适用场景」；`src/ops/notifications.js`（`permission_request` 推送） |
-| 审批卡展示完整命令与工作目录，允许/拒绝 | `tests/e2e/p0/permission-allow-deny.spec.ts`；`public/js/app.js` `permission_request` |
-| 可配置 Web Push / ntfy 推送审批（非开箱必达） | `src/ops/notify-channels.js`；`src/ops/notifications.js` |
-| 流式输出，Markdown / 代码高亮 | `tests/e2e/p0/stream-markdown-thinking-result.spec.ts`；README 消息流程 |
-| 工具调用折叠为卡片，Edit/Write 可看 diff | `tests/e2e/p0/tool-cards.spec.ts`；`src/files/file-preview.js`；README「特性」 |
-| 手机起的会话，电脑终端 `/resume` 续同一 CLI 会话记录 | `README.md`「适用场景」；`src/sessions/history.js` 会话列表/续接 |
-| 多仓库 / 多会话标签切换并行看进度 | `README.md`「特性」；`src/sessions/workdirs.js`；`tests/e2e/p0/workspace-sessions-sidebar.spec.ts` |
-| 会话列表可见 linked worktree 按分支分组 | `src/sessions/worktree-sessions.js`；`public/js/app.js` `worktree:sessions`；commit `8084005` |
-| 开源、自托管、驱动本机已登录 CLI（非另一 Claude） | `README.md` 开篇 + 许可证；`LICENSE` AGPL-3.0-only |
-| GitHub：Ike-li/claude-chat-mobile | `package.json` repository；README 友链/站点 |
+| Claude Code 在跑、人离开电脑后仍要继续交互（问题定位） | `README.md`「适用场景」开篇对比（随身入口 vs 远程桌面） |
+| 审批/提问推到手机，看清命令或选项后允许/拒绝 | `README.md`「适用场景」；`src/ops/notifications.js`（`permission_request`）；`tests/e2e/p0/permission-allow-deny.spec.ts`；`tests/e2e/p0/ask-user-question.spec.ts` |
+| 可配置推送（Web Push / ntfy），非开箱必达 | `src/ops/notify-channels.js`；`src/ops/notifications.js` |
+| 终端驾驶时手机只读追看进度，需要时再接管 | `src/sessions/history.js`（独立 resume，不能 attach 活进程）；`public/js/logic.js` mirrorReadonly；`src/ops/cli-statusline-bridge.js` |
+| 实例在线、网络可达时可续看/发消息/处理审批 | `README.md`「适用场景」；Socket 会话 + 重连路径 |
+| 弱网重连补发（若画面采用；非离线可用） | `README.md`「适用场景」；`public/js/app.js` offlineQueue；`public/js/sw.js`（Push only, no offline） |
+| 同一会话换端：手机起头，终端 `/resume` | `README.md`「适用场景」；`src/sessions/history.js`（`~/.claude/projects` 同源） |
+| 流式/工具过程可见（精简版「进度随时能看」） | `tests/e2e/p0/stream-markdown-thinking-result.spec.ts`；`tests/e2e/p0/tool-cards.spec.ts` |
+| 开源自托管，驱动本机已登录 Claude Code CLI | `README.md` 开篇；`package.json` description；`LICENSE` AGPL-3.0-only |
+| 不是远程桌面，是会话随身入口 | `README.md`「适用场景」对比段 |
+| 仓库地址 Ike-li/claude-chat-mobile | `package.json` repository |
 
-**有意不写**（代码不支持或有架构限制，禁止出现在任何成片）：
+**本竖版有意不展开（留给横屏/文档，避免变功能表）：**  
+权限多档、三方网关配置细节、多仓/worktree、PWA、TOFU/Access、状态栏——叙事上已收敛为「解决问题」，细节不进 30s 主记忆点。
 
-- 实时镜像正在终端里跑的活会话画面（Web 是独立 resume/追平，不能 attach 活进程画面）
-- 离线可用（`public/js/sw.js`：Web Push only，无缓存离线）
-- 语音输入（无语音识别输入路径）
-- 拍照直传（附件来自相册/文件选择，无 `capture` 拍照主路径）
+**有意不写**（禁止出现在任何成片）：
+
+- 实时镜像正在终端跑的活会话画面（只读追平 ≠ attach 活进程画面）
+- 离线可用
+- 语音输入
+- 拍照直传
+- 多租户 / SaaS / 账号体系
+- 防封号 / 藏时区 / 对抗官方 App
+
+---
+
+## 与上一版竖屏文案的差异（摘要）
+
+| 旧倾向 | 本版 |
+|--------|------|
+| 功能串烧（工具卡、多仓、自托管口号） | **问题优先**：人不在电脑前 |
+| Hook「让它改代码 / 人先出门」 | Hook 直接点题 Claude Code 在跑 |
+| 主记忆点偏「审批 + 工具可见」 | 主记忆点 **会中点板** + **只读别插嘴** + 换端 |
+| 少讲单驾驶员诚实边界 | 单独一镜「瞄一眼别插嘴」，并注明非活画面镜像 |
+| 网关/订阅未进竖屏 | 竖屏仍不展开（防变参数说明书）；完整场景文见横屏/README 向文案 |
