@@ -4079,8 +4079,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (pendingDeepLink) { const link = pendingDeepLink; pendingDeepLink = null; applyDeepLink(link); } // ②2c：instances 到齐后消费暂存深链
 
     // 进度横幅可见性收敛（权威状态驱动，替代零散事件隐藏）：当前查看实例无活的后台任务（bgActive=false）即隐藏横幅——
-    // 统一覆盖「切会话到别的会话 / 后台任务 TTL 清 / 完成 / 前台轮残留」所有隐藏场景。显示仍由 onTaskProgress
-    // 逐心跳 showTaskProgress 驱动（仅当前查看实例）。修复：删 result 的 hideTaskProgress 后横幅只靠 task_notification 隐藏的缺口。
+    // 统一覆盖「切会话到别的会话 / 后台任务 TTL 清 / 完成 / 前台轮残留」所有隐藏场景。
+    // 显示：onTaskProgress 心跳 + scheduleBgBroadcast/sync:since 的 emitBgTasksSnapshot 复亮；
+    // bgActive===true 时【不】在此主动 hide——避免「权威仍有任务但前端曾误清」被再次压暗且无数据可重建。
     const viewedInst = instancesList.find(x => x.instanceId === newViewing);
     // 严格 === false（非 falsy）：仅服务端明确「无活后台任务」或当前无查看实例（切到空会话）才隐藏；
     // bgActive 缺失（旧服务端 / 视觉 mock 不带该字段）时保守不隐藏，保留 showTaskProgress 逐心跳驱动的原行为。

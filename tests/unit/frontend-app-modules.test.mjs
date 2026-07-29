@@ -585,6 +585,49 @@ test('task status controller ignores other instances and updates the current pro
   assert.equal(textNode.textContent, '2 个运行中');
 });
 
+test('task status onComplete：未知 taskId 不整清横幅（对齐服务端 bgTaskDone no-op）', () => {
+  const hidden = new Set(['hidden']);
+  const banner = {
+    classList: {
+      contains: name => hidden.has(name),
+      add: name => hidden.add(name),
+      remove: name => hidden.delete(name),
+    },
+  };
+  const textNode = { textContent: '' };
+  const bars = [];
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText: textNode },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, {
+    autoBind: false,
+    addBar: (msg) => bars.push(msg),
+  });
+
+  status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [{ taskId: 'still-running', message: 'npm run test:e2e', taskType: 'local_bash' }] },
+  });
+  assert.equal(hidden.has('hidden'), false, '横幅应亮');
+
+  // 快任务完成 id 从未进前端 map（或与心跳 id 不一致）——旧逻辑走 else hideProgress 误灭仍在跑者
+  status.onComplete({
+    instanceId: 'inst-1',
+    payload: { taskId: 'orphan-fast-task', status: 'completed', summary: '快任务完成' },
+  });
+  assert.equal(hidden.has('hidden'), false, '未知 taskId 不得整清横幅');
+  assert.equal(textNode.textContent, '运行中');
+  assert.ok(bars.some(b => String(b).includes('后台任务完成') || String(b).includes('快任务')), '完成条仍应写入');
+
+  // 匹配 id 精确删 → 表空才藏
+  status.onComplete({
+    instanceId: 'inst-1',
+    payload: { taskId: 'still-running', status: 'completed', summary: 'e2e done' },
+  });
+  assert.equal(hidden.has('hidden'), true, '匹配完成且无剩余任务才撤横幅');
+});
+
 test('task status controller collapses the multi-task list by default and expands via the toggle button', () => {
   function fakeNode() {
     const classes = new Set();

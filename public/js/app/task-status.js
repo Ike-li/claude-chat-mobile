@@ -256,7 +256,12 @@ export function createTaskStatusController(context, {
         showBanner();
         renderTaskList();
       }
+    } else if (typeof taskId === 'string' && taskId) {
+      // 有明确 id 但不在前端表：对齐服务端 bgTaskDone「id 不在表 → no-op」。
+      // 旧逻辑走 else hideProgress 会把仍在跑的横幅整清（快任务未心跳、id 不一致、TTL 后迟到通知）。
+      // 完成条/通知仍照常写，只不动进度横幅。
     } else {
+      // 无 taskId（null/undefined）或畸形：与服务端「真无 id 才整清兜底」对称，撤横幅。
       hideProgress();
     }
     alertCue(failed ? 'warning' : 'success');

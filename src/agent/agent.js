@@ -46,6 +46,33 @@ export function formatLifecycleSessionError(detail) {
   const d = detail != null ? String(detail).trim() : '';
   return d ? `进程异常：${d}` : '进程异常：未知错误（可重新发送继续）';
 }
+
+// SDK query options 纯函数（可单测）：集中「与 CLI 对齐的桥接开关」，避免 start() 内联大对象难测。
+// agentProgressSummaries：默认开——子 agent ~30s AI 进度写 task_progress.summary，刷新 lastSeenAt + 横幅文案；
+// 关：CCM_AGENT_PROGRESS_SUMMARIES=0（省 fork token；静默期只靠 tool description 变化）。
+export function buildAgentQueryOptions(session, env = process.env) {
+  const progressOn = env.CCM_AGENT_PROGRESS_SUMMARIES !== '0';
+  return {
+    cwd: session.cwd,
+    pathToClaudeCodeExecutable: session.claudeBin, // E9：用本机 claude，不用 SDK 捆绑副本
+    model: session.activeModel || undefined,
+    resume: session.sessionId || undefined,
+    abortController: session.abort,
+    includePartialMessages: true,                        // E4 流式
+    forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id）
+    agentProgressSummaries: progressOn,                  // ~30s AI 进度 → task_progress.summary（默认开）
+    effort: session.effort || undefined,                 // SDK 0.3+ 一等 Options.effort；null=模型默认不传
+    // ultracode 会话 flag：flag settings 叠加，不替代 user/project/local（与 CLI /effort ultracode 同语义）
+    ...(session.ultracode ? { settings: { ultracode: true } } : {}),
+    permissionMode: session.sdkPermissionMode(),         // bypass 映射为 SDK default
+    // 不注入 options.allowedTools：放行白名单完全交给 settingSources 的 permissions.allow
+    canUseTool: (name, input, opts) => session.handleCanUseTool(name, input, opts),
+    settingSources: ['user', 'project', 'local'],
+    systemPrompt: { type: 'preset', preset: 'claude_code' },
+    env: sdkChildEnv(env),
+    stderr: data => { if (env.LOG_STDERR) console.error('[claude]', sanitize(data)); },
+  };
+}
 const TOOL_INPUT_MAX = 40;                // LRU 上限，防内存涨
 const TOOL_CHANGE_KIND = { Edit: 'edit', Write: 'write', Read: 'read', MultiEdit: 'multiedit', NotebookEdit: 'notebook' };
 const toolFilePath = (input) => input?.file_path ?? input?.notebook_path ?? null;
@@ -60,8 +87,15 @@ function normalizeQuestionOption(o) {
 }
 const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn 的有效期（2min）：宽于任何真实自动汇报延迟、
                                      // 窄于长尾——超时不合成，防滞留 flag 被无关的 message_start（如 auto-compact fork）误触发。
-const BG_TASK_TTL_MS = 180000;       // 活的后台任务（bgTasks）无心跳的失效期（3min）：SDK getProgressMessage 无增量时不推，
-                                     // 心跳可能稀疏——取值须宽于最大真实心跳间隔，防误清仍在跑的静默任务。漏收完成信号时它是主力清除。
+// 后台任务 TTL 分两档（按 key 是否为真实 SDK task_id，而非 taskType）：
+// · 合成键 __notask_*（progress 缺 task_id）→ 短 TTL：无完成通道可对账，3min 无刷新即清孤儿。
+// · 真实 task_id（bash/agent/workflow）→ 长兜底 2h：完成权威是 background_tasks_changed（CLI 文档：
+//   membership 变化才发的 level signal）+ task_notification。task_progress 本身非 membership 心跳；
+//   默认另开 agentProgressSummaries（~30s AI summary）刷新 lastSeenAt。2h 仅防漏完成信号时 ⏳ 永挂。
+const BG_TASK_ORPHAN_TTL_MS = 180000;           // 合成键孤儿 3min
+const BG_TASK_LIFECYCLE_TTL_MS = 2 * 60 * 60 * 1000; // 真实 task_id 2h 兜底
+// 旧名别名：单测/注释若仍引用 BG_TASK_TTL_MS 语义=孤儿短 TTL
+const BG_TASK_TTL_MS = BG_TASK_ORPHAN_TTL_MS;
 const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 server.js APPROVAL_TTL_MS；
                                           // docs/design.md/OQ-05 已决：不预置具体数值，此为实现落地的合理默认）
 
@@ -239,28 +273,7 @@ export class AgentSession {
     this.abort = new AbortController();
     const q = query({
       prompt: this.inputStream(),
-      options: {
-        cwd: this.cwd,
-        pathToClaudeCodeExecutable: this.claudeBin, // E9：用本机 claude，不用 SDK 捆绑副本
-        model: this.activeModel || undefined,
-        resume: this.sessionId || undefined,
-        abortController: this.abort,
-        includePartialMessages: true,                        // E4 流式
-        forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id），移动端才看得到子 agent 活动；默认 false 只给 tool_use 心跳
-        effort: this.effort || undefined,                    // SDK 0.3+ 一等 Options.effort（low/medium/high/xhigh/max）。null=模型默认不传
-        // ultracode 会话 flag（Settings.ultracode）：flag settings 叠加，不替代 user/project/local。
-        // 与 CLI /effort 选 ultracode 同语义（xhigh + standing workflow）；不改写用户正文。
-        ...(this.ultracode ? { settings: { ultracode: true } } : {}),
-        permissionMode: this.sdkPermissionMode(),            // bypass 映射为 SDK default（bypass 放行由 handleCanUseTool 自实现）
-        // 不注入 options.allowedTools（2026-06-22 解耦）：放行白名单完全交给 settingSources 加载的
-        // .claude/settings.json 的 permissions.allow（与终端 claude 同源、用户自管），投屏层不再耦合自家白名单。
-        // 实测 SDK 把 settings 的 allow 当「自动放行、不触发 canUseTool」的第一层；未命中即触发下方 canUseTool。
-        canUseTool: (name, input, opts) => this.handleCanUseTool(name, input, opts), // 白名单外统一闸门
-        settingSources: ['user', 'project', 'local'],        // 加载"我的"全部配置
-        systemPrompt: { type: 'preset', preset: 'claude_code' },
-        env: sdkChildEnv(process.env),
-        stderr: data => { if (process.env.LOG_STDERR) console.error('[claude]', sanitize(data)); }
-      }
+      options: buildAgentQueryOptions(this),
     });
     this.q = q;
     this.idleTimer = setInterval(() => this.checkIdle(), 30_000);
@@ -1100,9 +1113,17 @@ export class AgentSession {
   //    当前 viewing 实例（this.viewed）也不回收——用户在读历史时 lastActivity 不会因 SDK 消息刷新。
   checkIdle() {
     // 后台任务 TTL 清扫须在下方分支之前——后台任务运行时 pendingTurns 正是 0，
-    // 放 return 之后就永远清不到（漏收完成信号的任务会把 ⏳ 永挂）。清出变化即回调重算角标。
+    // 放 return 之后就永远清不到（漏收完成信号的任务会把 ⏳ 永挂）。清出变化即回调重算角标 +
+    // 推全量快照（含空表），前端列表与 bgActive 立刻对齐（不必等下拍心跳 / 仅靠 instances hide）。
     // 亦保证下方 hasBgTasks() 只认「仍活」的任务（过期的已清）。
-    if (this.sweepBgTasks()) this.onBgTaskChange?.();
+    if (this.sweepBgTasks()) {
+      this.onBgTaskChange?.();
+      this.emitBgTasksSnapshot();
+    } else if (this.hasBgTasks()) {
+      // 活任务 30s tick 软补推全量快照：task_progress 是 transient，前端可能因切视图/误清丢横幅；
+      // 不刷新 lastSeenAt（完成权威仍靠 lifecycle；补推只修展示粘性）。
+      this.emitBgTasksSnapshot();
+    }
     if (this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0) {
       this.lastActivity = Date.now();
       return;
@@ -1148,10 +1169,9 @@ export class AgentSession {
   }
 
   // ---- 活的后台任务注册表（Workflow / 后台 Agent / 后台 Bash）----
-  // SDK 对每个 running 后台任务周期性推 task_progress 心跳（实测 ~5-10s/次）→ upsert 刷新 lastSeenAt；
-  // 完成走 system task_notification / <task-notification> user 注入 → bgTaskDone。实测（生产日志）完成信号可靠带 task_id、
-  // 且与心跳 id 一致（含 workflow 用自身启动 id 报进度与完成）→ 精确删是主力清除。TTL(sweepBgTasks) 为兜底：清「未及心跳
-  // 就完成的快任务」（其完成 id 不在表→bgTaskDone 天然 no-op）与漏收的完成信号。size 变化才回调 onBgTaskChange（稳态同 id 心跳只刷时间戳、不广播——节流关键）。
+  // task_progress：tool description/last_tool 变化时推；agentProgressSummaries 开时另有 ~30s AI summary。
+  // upsert 刷新 lastSeenAt。完成走 task_notification / user 注入 → bgTaskDone。TTL 兜底见 sweepBgTasks。
+  // size 变化才回调 onBgTaskChange（稳态同 id progress 只刷时间戳、不广播——节流关键）。
   // meta: { lastToolName?, description?, subagentType? } — 供前端任务明细行展示（不进角标判定）
   bgTaskUpsert(taskId, taskType, message, meta = {}) {
     const key = taskId ?? `__notask_${taskType ?? 'x'}`; // taskId 缺失用稳定合成键，避免 null 键互相覆盖多任务
@@ -1176,18 +1196,24 @@ export class AgentSession {
     // delete 自然 no-op——【绝不能】"id 不在表就整清"，否则每个快任务完成都误清其他仍在跑者的 ⏳（频繁闪断）。孤儿由 TTL 兜底。
     // 用 `!= null` 而非真值判断：空串 '' 是畸形/空 <task-id> 标签，delete('') 天然 no-op 不误清；仅真 null/undefined 才整清。
     if (taskId != null) this.bgTasks.delete(taskId);
-    else this.bgTasks.clear(); // 仅 null/undefined（真无 id 注入）才整清兜底：仍在跑者下拍心跳（≤~10s）即复亮，比 180s TTL 收敛快
+    else this.bgTasks.clear(); // 仅 null/undefined（真无 id 注入）才整清兜底：仍在跑者下拍 progress 即复亮，比长兜底 TTL 收敛快
     if (this.bgTasks.size !== had) {
       this.onBgTaskChange?.();
       // 完成/停止后推全量，前端列表立刻去掉该行（不必等下一拍心跳）
       this.emitBgTasksSnapshot();
     }
   }
-  sweepBgTasks() { // 惰性 TTL：超 BG_TASK_TTL_MS 无心跳即判失效清除。由 checkIdle 的 30s tick 驱动，返回是否清出过
+  sweepBgTasks() {
+    // 惰性 TTL：超阈无刷新即判失效。由 checkIdle 的 30s tick 驱动，返回是否清出过。
+    // 分档见文件顶 BG_TASK_ORPHAN_TTL_MS / BG_TASK_LIFECYCLE_TTL_MS：真实 id 走长兜底，合成键走短清。
     if (this.bgTasks.size === 0) return false;
     const now = Date.now();
     let removed = false;
-    for (const [k, t] of this.bgTasks) if (now - t.lastSeenAt > BG_TASK_TTL_MS) { this.bgTasks.delete(k); removed = true; }
+    for (const [k, t] of this.bgTasks) {
+      const orphan = typeof k === 'string' && k.startsWith('__notask_');
+      const ttl = orphan ? BG_TASK_ORPHAN_TTL_MS : BG_TASK_LIFECYCLE_TTL_MS;
+      if (now - t.lastSeenAt > ttl) { this.bgTasks.delete(k); removed = true; }
+    }
     return removed;
   }
   // background_tasks_changed 全量快照 → 同步 bgTasks：快照内 upsert、快照外删除。
@@ -1554,19 +1580,20 @@ export class AgentSession {
           });
           this.bgTaskDone(msg.task_id ?? msg.taskId ?? null); // 完成：从活后台注册表清除（id 不匹配/缺失则整清，见 bgTaskDone）
         } else if (msg.subtype === 'task_progress') {
-          // 后台任务「进行中」的周期性进度心跳（SDK 对每个 running 任务持续推送，高频）。
-          // 瞬时广播给前端原地刷新进度横幅——走 emitTransient 而非 emit：不进 replay buffer、不占 seq
-          // （高频，进 buffer 会挤爆环形缓冲 / seq 空洞误判 gap）；不武装 pendingAutoTurn（进度不启汇报轮，
-          // 完成信号仍走上面的 task_notification）；更不落下面的 else 记「未映射」。
-          // 实测生产日志（DEBUG_SDK_MESSAGES）真实投递字段 = task_id / description / subagent_type / last_tool_name / usage，
-          // 【无 task_type、无 message】。旧代码读 msg.message → 恒 undefined → 进度横幅恒空（"看不到活动"的第二元凶）。
-          // 故文案优先真实 description（如 "Reading app.js" / "Synthesize: synthesize"，正是用户想看的"在干嘛"）；
-          // 字段名两读兼容内部/旧形状（taskId/message/task_type）防投递层版本差异。
+          // 后台任务进行中进度。瞬时广播——emitTransient 不进 buffer、不占 seq；不武装 pendingAutoTurn。
+          // 字段：description/last_tool_name（tool 活动）+ summary（agentProgressSummaries 时 ~30s AI 短句）。
+          // 文案优先：description（即时 tool 态）> message > last_tool > summary（静默期 AI 兜底）。
+          // 字段名两读兼容内部/旧形状（taskId/message/task_type）。
           const bgTaskId = msg.task_id ?? msg.taskId ?? null;
           const bgSubagent = msg.subagent_type ?? null;
           const bgTaskType = msg.task_type ?? msg.taskType ?? (bgSubagent ? 'local_agent' : null); // 无 task_type：有 subagent_type 即代理任务 → 🤖
           const bgLastTool = msg.last_tool_name ?? msg.lastToolName ?? null;
-          const bgDesc = msg.description || (msg.message != null ? stringify(msg.message) : '') || bgLastTool || stringify(msg.summary) || '';
+          const bgAiSummary = msg.summary != null ? stringify(msg.summary).trim() : '';
+          const bgDesc = msg.description
+            || (msg.message != null ? stringify(msg.message) : '')
+            || bgLastTool
+            || bgAiSummary
+            || '';
           const bgMessage = truncate(bgSubagent ? `${bgSubagent}：${bgDesc}` : bgDesc, TOOL_SUMMARY_CAP);
           this.bgTaskUpsert(bgTaskId, bgTaskType, bgMessage, {
             lastToolName: bgLastTool,

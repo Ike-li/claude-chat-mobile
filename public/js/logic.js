@@ -2220,7 +2220,7 @@ export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   const id = typeof taskId === 'string' ? taskId.trim() : '';
   // 合成键（agent.js 在 SDK 未给 task_id 时用 `__notask_${taskType}` 占位）不是真实 taskId：
   // 它在 SDK 侧根本不存在，q.stopTask('__notask_local_agent') 必然静默失败，而 UI 仍会打一条
-  // 「已请求停止…」，任务行挂到 BG_TASK_TTL_MS(180s) 才消失。同文件的行标签渲染早就知道要排除
+  // 「已请求停止…」，任务行挂到 BG_TASK_ORPHAN_TTL_MS(3min) 才消失。同文件的行标签渲染早就知道要排除
   // 这个前缀（task-status.js 里 `!taskId.startsWith('__notask_')` 才显示 #shortId），停止按钮漏了。
   const synthetic = id.startsWith('__notask_');
   return { canStop: Boolean(id) && !synthetic && bannerVisible !== false, taskId: synthetic ? null : (id || null) };

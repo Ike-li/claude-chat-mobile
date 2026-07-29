@@ -287,8 +287,9 @@ test.describe('checkIdle()', () => {
     const { s, events } = makeSession({ idleTimeoutMs: 1 });
     s.pendingTurns = 1;
     s.lastActivity = 0;
-    // 过期任务：checkIdle 先 sweep，hasBgTasks 变 false，应走静默中断
-    s.bgTasks.set('stale', {
+    // 过期孤儿（合成键，3min 短 TTL）：checkIdle 先 sweep，hasBgTasks 变 false，应走静默中断。
+    // 真实 task_id 走 2h 长兜底，不能再用 3min 模拟「已死」——见 agent.js BG_TASK_ORPHAN_TTL_MS。
+    s.bgTasks.set('__notask_stale', {
       taskType: 'local_agent',
       message: '已死',
       lastSeenAt: Date.now() - 180_000 - 1,
@@ -296,7 +297,7 @@ test.describe('checkIdle()', () => {
     let aborted = false;
     s.abort = { abort() { aborted = true; } };
     s.checkIdle();
-    assert.equal(s.hasBgTasks(), false, '过期 bg 应被 sweep');
+    assert.equal(s.hasBgTasks(), false, '过期孤儿 bg 应被 sweep');
     assert.equal(s.terminating, true);
     assert.equal(aborted, true);
     const err = events.find(e => e.type === 'error');

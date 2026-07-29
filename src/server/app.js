@@ -847,10 +847,17 @@ function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 
 }
 // 后台任务集合变化 → 会话列表 ⏳ 重算的 500ms 合并节流：agent 侧 onBgTaskChange 只在"空↔非空/成员增删"时回调（稳态高频心跳不触发），
 // 这里再合并同一 tick 内的多次变化（TTL 批量清 + 新任务同时到）成一次 broadcastInstances，避免重复全量广播。单飞：已排期则忽略。
+// 顺带对【当前查看】实例补推 task_progress 全量快照：instances 只带 bgActive 布尔、横幅明细靠 transient，
+// 集合变化后若前端横幅被误藏/未建，靠这次快照复亮（与 sync:since 切入补推同契约）。
 let bgBroadcastTimer = null;
 function scheduleBgBroadcast() {
   if (bgBroadcastTimer) return;
-  bgBroadcastTimer = setTimeout(() => { bgBroadcastTimer = null; broadcastInstances(); }, 500);
+  bgBroadcastTimer = setTimeout(() => {
+    bgBroadcastTimer = null;
+    broadcastInstances();
+    const a = agents.get(viewingInstanceId);
+    if (a?.hasBgTasks?.()) a.emitBgTasksSnapshot();
+  }, 500);
 }
 
 // 只读「追平」：web 端续接「正在终端 CLI 里跑」的会话时，另起的 resume 进程无法 attach 终端活进程，
@@ -2399,7 +2406,7 @@ registerSocketConnection(io, socket => {
   // taskId / 无 q / SDK 抛错均幂等吞掉（返回 false 不抛），故无实例（routeInstance→null）时 ?. 安全 no-op。
   // 回 ack：agent.stopTask 在 disposed / 无 taskId / 无 q / control_request 超时（10s）时返回 false，
   // 而此前这个返回值无处可去 —— 前端无条件打「已请求停止后台任务…」，任务已结束或停不掉时同样谎报成功，
-  // 行继续挂到 BG_TASK_TTL_MS(180s)。ack 可选：旧客户端不传回调时行为不变。
+  // 行继续挂到生命周期兜底（真实 id 2h / 合成键 3min）。ack 可选：旧客户端不传回调时行为不变。
   on(socket, 'task:stop', async (payload, ack) => {
     const ok = await routeInstance(payload?.instanceId)?.stopTask(payload?.taskId);
     if (typeof ack === 'function') ack({ ok: ok === true });

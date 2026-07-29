@@ -1,7 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getSessionLogs } from '../../src/agent/interaction-log.js';
+import { buildAgentQueryOptions } from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
+
+test.describe('buildAgentQueryOptions — 后台进度加强开关', () => {
+  test('默认 agentProgressSummaries=true（~30s AI 进度 summary）', () => {
+    const { s } = makeSession();
+    s.abort = new AbortController();
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.equal(opts.agentProgressSummaries, true);
+    assert.equal(opts.forwardSubagentText, true);
+    assert.equal(opts.includePartialMessages, true);
+    s.dispose();
+  });
+
+  test('CCM_AGENT_PROGRESS_SUMMARIES=0 可关（省 fork token）', () => {
+    const { s } = makeSession();
+    s.abort = new AbortController();
+    const opts = buildAgentQueryOptions(s, { ...process.env, CCM_AGENT_PROGRESS_SUMMARIES: '0' });
+    assert.equal(opts.agentProgressSummaries, false);
+    s.dispose();
+  });
+});
 
 test.describe('map() — 后台任务通知（task_notification）', () => {
   test('system/task_notification → emit(source:system) + 武装 pendingAutoTurn，pendingTurns 不变', () => {
@@ -320,6 +341,37 @@ test.describe('map() — 活的后台任务注册表（bgTasks，驱动纯后台
     s.dispose();
   });
 
+  test('agentProgressSummaries：无 description 时用 summary（~30s AI 短句）作横幅文案', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 'a1', subagent_type: 'Explore',
+      summary: 'Analyzing authentication module', usage: { tool_uses: 3, total_tokens: 1, duration_ms: 1000 } });
+    assert.equal(s.bgTaskSummary().message, 'Explore：Analyzing authentication module');
+    const prog = events.find(e => e.type === 'task_progress');
+    assert.equal(prog.payload.message, 'Explore：Analyzing authentication module');
+    s.dispose();
+  });
+
+  test('description 优先于 summary（tool 即时态 > AI 30s 摘要）', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'task_progress', task_id: 'a1', subagent_type: 'Plan',
+      description: 'Reading app.js', summary: 'Thinking about structure' });
+    assert.equal(s.bgTaskSummary().message, 'Plan：Reading app.js');
+    s.dispose();
+  });
+
+  test('checkIdle：有活任务且未 sweep 时软补推 task_progress 快照（前端粘性）', () => {
+    const { s, events } = makeSession();
+    s.map(prog('live1', 'local_agent', 'still going'));
+    const before = events.filter(e => e.type === 'task_progress').length;
+    s.checkIdle();
+    const after = events.filter(e => e.type === 'task_progress');
+    assert.ok(after.length > before, '应软补推一次全量快照');
+    assert.equal(after[after.length - 1].payload.tasks.length, 1);
+    assert.equal(after[after.length - 1].payload.tasks[0].taskId, 'live1');
+    assert.equal(s.hasBgTasks(), true, '软补推不改 lastSeenAt / 不清表');
+    s.dispose();
+  });
+
   test('多任务 task_progress：payload.tasks 含全部在跑 id', () => {
     const { s, events } = makeSession();
     s.map({ type: 'system', subtype: 'task_progress', task_id: 's1', description: 'Search A' });
@@ -425,25 +477,64 @@ test.describe('map() — 活的后台任务注册表（bgTasks，驱动纯后台
     s.dispose();
   });
 
-  test('TTL sweep：超 BG_TASK_TTL_MS 无心跳者被清、未过期者留', () => {
+  test('TTL sweep：合成键 __notask_* 超短 TTL 被清；真实 id 3min 静默保留', () => {
     const { s } = makeSession();
-    s.map(prog('old')); s.map(prog('fresh'));
-    s.bgTasks.get('old').lastSeenAt = Date.now() - 180000 - 1; // 造过期，不真等 3min
-    assert.equal(s.sweepBgTasks(), true, '有过期任务被清 → 返回 true');
-    assert.equal(s.bgTasks.has('old'), false, '过期被清');
-    assert.equal(s.bgTasks.has('fresh'), true, '未过期保留');
+    s.map(prog(null, 'local_agent', 'orphan-a')); // → __notask_local_agent
+    s.map(prog('real1', 'local_agent', 'alive'));
+    const orphanKey = [...s.bgTasks.keys()].find(k => String(k).startsWith('__notask_'));
+    assert.ok(orphanKey, '无 task_id 应合成 __notask_ 键');
+    s.bgTasks.get(orphanKey).lastSeenAt = Date.now() - 180000 - 1;
+    s.bgTasks.get('real1').lastSeenAt = Date.now() - 180000 - 1;
+    assert.equal(s.sweepBgTasks(), true, '孤儿应被清');
+    assert.equal(s.bgTasks.has(orphanKey), false, '合成键走 3min 短 TTL');
+    assert.equal(s.bgTasks.has('real1'), true, '真实 task_id 3min 静默不误清（完成靠 lifecycle 通道）');
     s.dispose();
   });
 
-  test('checkIdle 惰性清扫：pendingTurns=0 下过期任务仍被清 + 回调（提前 return 前清扫）', () => {
+  test('TTL sweep：真实 id 的 bash/agent/workflow 3min 静默均不误清', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'background_tasks_changed',
+      tasks: [
+        { task_id: 'bash1', task_type: 'local_bash', description: 'npm run test:e2e' },
+        { task_id: 'agent1', task_type: 'local_agent', description: 'Plan：long think' },
+        { task_id: 'wf1', task_type: 'local_workflow', description: 'Synthesize' },
+      ] });
+    for (const id of ['bash1', 'agent1', 'wf1']) {
+      s.bgTasks.get(id).lastSeenAt = Date.now() - 180000 - 1;
+    }
+    assert.equal(s.sweepBgTasks(), false, '全员真实 id → 3min 静默不触发清扫');
+    assert.equal(s.bgTasks.size, 3);
+    s.dispose();
+  });
+
+  test('TTL sweep：真实 id 超 2h 兜底仍清（漏完成信号安全网）', () => {
+    const { s } = makeSession();
+    s.map({ type: 'system', subtype: 'background_tasks_changed',
+      tasks: [{ task_id: 'bash1', task_type: 'local_bash', description: 'stuck' }] });
+    s.map(prog('agent1', 'local_agent', 'stuck-agent'));
+    s.bgTasks.get('bash1').lastSeenAt = Date.now() - (2 * 60 * 60 * 1000) - 1;
+    s.bgTasks.get('agent1').lastSeenAt = Date.now() - (2 * 60 * 60 * 1000) - 1;
+    assert.equal(s.sweepBgTasks(), true);
+    assert.equal(s.bgTasks.has('bash1'), false, 'bash 2h 兜底清');
+    assert.equal(s.bgTasks.has('agent1'), false, 'agent 2h 兜底清');
+    s.dispose();
+  });
+
+  test('checkIdle 惰性清扫：合成键过期仍被清 + 回调 + 推全量快照', () => {
     let calls = 0;
-    const { s } = makeSession({ onBgTaskChange: () => { calls++; } });
-    s.map(prog('t1'));                              // calls=1（空→非空）
-    s.bgTasks.get('t1').lastSeenAt = Date.now() - 180000 - 1;
+    const { s, events } = makeSession({ onBgTaskChange: () => { calls++; } });
+    s.map(prog(null, 'local_agent', 'orphan'));     // calls=1（空→非空）
+    const orphanKey = [...s.bgTasks.keys()][0];
+    s.bgTasks.get(orphanKey).lastSeenAt = Date.now() - 180000 - 1;
     assert.equal(s.pendingTurns, 0, '后台运行期 pendingTurns 正是 0');
+    const before = events.filter(e => e.type === 'task_progress').length;
     s.checkIdle();
-    assert.equal(s.hasBgTasks(), false, 'checkIdle 须在 pendingTurns===0 提前返回前清过期任务');
+    assert.equal(s.hasBgTasks(), false, 'checkIdle 须在 pendingTurns===0 提前返回前清过期孤儿');
     assert.equal(calls, 2, '清出变化触发回调重算角标');
+    const afterProg = events.filter(e => e.type === 'task_progress');
+    assert.ok(afterProg.length > before, 'TTL 清扫后须 emitBgTasksSnapshot 让前端立刻对齐（含空表收横幅）');
+    const last = afterProg[afterProg.length - 1];
+    assert.equal(last.payload?.tasks?.length, 0, '空表快照 tasks=[]');
     s.dispose();
   });
 
