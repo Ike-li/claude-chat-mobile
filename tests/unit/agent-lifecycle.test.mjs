@@ -5,6 +5,7 @@ import {
   formatLifecycleIdleReclaim,
   formatLifecycleProcessExited,
   formatLifecycleSessionError,
+  formatLifecycleGatewayStall,
 } from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 
@@ -24,6 +25,13 @@ test.describe('formatLifecycle*', () => {
     assert.equal(formatLifecycleProcessExited(), '进程已退出：可重新发送消息继续（会话历史仍在）');
     assert.match(formatLifecycleSessionError('boom'), /^进程异常：boom$/);
     assert.match(formatLifecycleSessionError(''), /进程异常/);
+  });
+  test('gatewayStall：报静默秒数 + 自动中断上界 + 可操作建议，不宣称已中断', () => {
+    const msg = formatLifecycleGatewayStall(95, 10);
+    assert.match(msg, /95 秒/);
+    assert.match(msg, /10 分钟/);
+    assert.match(msg, /停止|重发|换模型/);
+    assert.equal(/已中断|已按挂死/.test(msg), false, '只是告警，本轮仍在等待');
   });
 });
 
@@ -269,6 +277,43 @@ test.describe('checkIdle()', () => {
     assert.ok(err.payload.message.includes('未收到 Claude 的任何消息'));
     assert.equal(err.payload.recoverable, true);
     s.dispose();
+  });
+
+  // A. 网关挂起早期告警（2026-07-28 真机 b06fb05d 前情）：web 消息进 SDK 后第三方网关零响应，
+  // 到 idleTimeoutMs（默认 10 分钟）中断前用户全程零反馈——真机用户等 3 分钟就被逼去终端接手了。
+  // 早期告警只提示不中断：在途轮静默超 90s 即 emit 可见告警；同段静默只告一次，新静默段可再告。
+  test('在途轮静默超 90s（未到中断阈值）→ 发一次网关无响应告警且不中断；同段静默不重复，新静默段可再告', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.lastActivity = Date.now() - 100_000; // 100s 静默：过告警线、远未到 10 分钟
+    s.checkIdle();
+    assert.equal(s.terminating, false, '只告警不中断');
+    const warns = () => events.filter(e => e.type === 'error' && /无响应/.test(e.payload.message));
+    assert.equal(warns().length, 1);
+    assert.equal(warns()[0].payload.recoverable, true);
+    s.checkIdle(); // 同段静默再 tick → 不刷屏
+    assert.equal(warns().length, 1, '同段静默只告一次');
+    s.lastActivity = Date.now() - 95_000; // 有过新消息后再次挂起 → 新静默段
+    s.checkIdle();
+    assert.equal(warns().length, 2, '新静默段可再告');
+    s.dispose();
+  });
+  test('在途轮静默未到 90s → 不告警；idleTimeoutMs 配得比告警线还短 → 只走既有中断不叠告警', () => {
+    const fresh = makeSession({ idleTimeoutMs: 600_000 });
+    fresh.s.pendingTurns = 1;
+    fresh.s.lastActivity = Date.now() - 30_000;
+    fresh.s.checkIdle();
+    assert.equal(fresh.events.filter(e => e.type === 'error').length, 0, '30s 静默不告警');
+    fresh.s.dispose();
+    const tight = makeSession({ idleTimeoutMs: 1 }); // 中断阈值 < 告警线
+    tight.s.pendingTurns = 1;
+    tight.s.lastActivity = Date.now() - 100_000;
+    tight.s.abort = { abort() {} };
+    tight.s.checkIdle();
+    const errs = tight.events.filter(e => e.type === 'error');
+    assert.equal(errs.length, 1, '只有中断文案，无叠加告警');
+    assert.match(errs[0].payload.message, /未收到 Claude 的任何消息/);
+    tight.s.dispose();
   });
 
   // 多子代理 / workflow 并行：主流通可长时间零消息，但 bgTasks 仍有心跳。

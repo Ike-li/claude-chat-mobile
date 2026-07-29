@@ -41,6 +41,13 @@ export function formatLifecycleIdleReclaim(mins) {
   const n = Math.max(1, Number(mins) || 1);
   return `进程已回收：会话空闲超过 ${n} 分钟（再发送或切换回来会自动续接）`;
 }
+// 网关挂起早期告警（2026-07-28 真机 b06fb05d 前情：第三方网关零响应，用户等到 idleTimeoutMs 中断前
+// 全程零反馈）。只告警不中断——本轮继续等，给用户「停止重发/换模型」的主动权。
+export function formatLifecycleGatewayStall(seconds, timeoutMins) {
+  const s = Math.max(1, Math.round(Number(seconds) || 1));
+  const m = Math.max(1, Number(timeoutMins) || 1);
+  return `模型网关已 ${s} 秒无响应（本轮继续等待，${m} 分钟仍零消息将自动中断）——多为第三方网关限流/挂起，可点「停止」后重发，或换模型再试`;
+}
 export function formatLifecycleProcessExited() {
   return '进程已退出：可重新发送消息继续（会话历史仍在）';
 }
@@ -96,10 +103,10 @@ const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn
 //   默认另开 agentProgressSummaries（~30s AI summary）刷新 lastSeenAt。2h 仅防漏完成信号时 ⏳ 永挂。
 const BG_TASK_ORPHAN_TTL_MS = 180000;           // 合成键孤儿 3min
 const BG_TASK_LIFECYCLE_TTL_MS = 2 * 60 * 60 * 1000; // 真实 task_id 2h 兜底
-// 旧名别名：单测/注释若仍引用 BG_TASK_TTL_MS 语义=孤儿短 TTL
-const BG_TASK_TTL_MS = BG_TASK_ORPHAN_TTL_MS;
 const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 server.js APPROVAL_TTL_MS；
                                           // docs/design.md/OQ-05 已决：不预置具体数值，此为实现落地的合理默认）
+const GATEWAY_STALL_WARN_MS = 90_000;     // 在途轮静默早期告警线（只提示不中断，见 formatLifecycleGatewayStall）：
+                                          // 宽于正常首 token 延迟 + 30s checkIdle tick 粒度，远窄于 idleTimeoutMs 中断阈
 
 
 // epoch：每个 AgentSession 实例一个跨重启唯一标识。基于 wall-clock + 进程内计数，
@@ -167,6 +174,8 @@ export class AgentSession {
                                        // 轮次真正开始（message_start/assistant）时合成 pendingTurns=1，让 busy/看护/角标接回。
                                        // 只武装 flag 不直接 ++：N 条通知未必对应 N 轮（合并轮会卡死 busy → checkIdle 误杀）。
     this.pendingAutoTurnAt = 0;        // flag 武装时刻（Date.now）：合成前校验未超 AUTO_TURN_ARM_TTL_MS，防滞留 flag 长尾误触发。
+    this.stallWarnedForActivity = 0;   // 网关挂起告警去重锚：告警时记当时的 lastActivity——同段静默不重复告，
+                                       // 有新消息（lastActivity 前移）后的新静默段可再告。不动 lastActivity 本身（那会推迟真中断）。
     this._awaitingInterruptResult = false; // P1-4：interrupt() 成功后置真，标记"下一条 result 是这次中断的终态确认"
                                             // ——一次性消费。不能靠嗅探 SDK 的 result.subtype（如 'error_during_execution'）
                                             // 反推"是不是用户中断"：该 subtype 是"执行过程中出错"的泛化分类，与
@@ -1167,6 +1176,18 @@ export class AgentSession {
         this.terminating = true;
         try { this.abort?.abort(); } catch { /* noop */ }
       }
+    } else if (
+      // 网关挂起早期告警（只提示不中断）：idleTimeoutMs 中断前用户原本全程零反馈，真机（2026-07-28
+      // b06fb05d）等 3 分钟就被逼去终端接手。idleTimeoutMs 配得比告警线短时不叠告警（直接走上面中断）。
+      idleFor > GATEWAY_STALL_WARN_MS
+      && GATEWAY_STALL_WARN_MS < this.idleTimeoutMs
+      && this.stallWarnedForActivity !== this.lastActivity
+    ) {
+      this.stallWarnedForActivity = this.lastActivity;
+      this.emit('error', {
+        message: formatLifecycleGatewayStall(Math.round(idleFor / 1000), Math.round(this.idleTimeoutMs / 60000)),
+        recoverable: true
+      });
     }
   }
 
