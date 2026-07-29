@@ -45,6 +45,10 @@ export function createServerSpawner({
         CCM_BUILD_NONCE: buildNonce,
         // 让 config 保留调用方明确传入的空 AUTH/CF 值直到 dotenv 结束，防主 .env 回填测试认证配置。
         CCM_TEST_PRESERVE_EMPTY_ENV: '1',
+        // 桌面日志窗（osascript→Terminal.app）：测试永不启。机主 .env 的 LOG_TERMINAL=on 会经
+        // ...process.env 继承；关窗依赖优雅退出，SIGKILL/zsh job 确认框下常留窗。放在 overrides 之后，
+        // 调用方也不能误开。用非空 'off'（只认 'on' 才启用）——空串在 dotenv 规整路径可能被清掉后回填。
+        LOG_TERMINAL: 'off',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
       cwd: process.cwd()

@@ -144,6 +144,8 @@ async function runScenario(name, model) {
     WORK_DIRS: workDir,
     CCM_DATA_DIR: dataDir,
     CCM_SMOKE_URL: `http://127.0.0.1:${port}`,
+    // 同集成测 _spawn-server：禁桌面日志窗，防 smoke 起服堆 Terminal.app
+    LOG_TERMINAL: 'off',
   };
   let server = null;
 

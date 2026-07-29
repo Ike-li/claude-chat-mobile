@@ -240,7 +240,15 @@ async function runE2E() {
 async function run() {
   server = spawn('node', ['server.js'], {
     cwd: ROOT,
-    env: { ...process.env, AUTH_TOKEN: '', PORT: String(APP_PORT), WORK_DIR: dirA, WORK_DIRS: `${dirA},${dirB}`, CCM_DATA_DIR: DATA_DIR },
+    env: {
+      ...process.env,
+      AUTH_TOKEN: '',
+      PORT: String(APP_PORT),
+      WORK_DIR: dirA,
+      WORK_DIRS: `${dirA},${dirB}`,
+      CCM_DATA_DIR: DATA_DIR,
+      LOG_TERMINAL: 'off', // 禁桌面日志窗，防 smoke 堆 Terminal.app
+    },
     stdio: ['ignore', 'pipe', 'pipe']
   });
   server.stdout.on('data', d => { serverLog += d; if (process.env.DEBUG_SERVER) process.stdout.write(d); });

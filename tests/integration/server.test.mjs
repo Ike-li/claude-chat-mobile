@@ -51,7 +51,10 @@ test.before(async () => {
       CCM_BUILD_NONCE: buildNonce, // TC-008：本轮启动身份，/health 回显以确认连的是本轮 server
       // 显式关 DEV_MODE：机主 .env 里 DEV_MODE=1(dogfooding)会被子进程 dotenv 读到,
       // 致 dev:restart 测试真的触发重启、裸进程直接死→后续测试级联崩。钉 '0' 隔离之。
-      DEV_MODE: '0', HOME: process.env.HOME, PATH: process.env.PATH },
+      DEV_MODE: '0',
+      // 同 _spawn-server：禁桌面日志窗，防集成测堆 Terminal.app（机主 .env 常 LOG_TERMINAL=on）。
+      LOG_TERMINAL: 'off',
+      HOME: process.env.HOME, PATH: process.env.PATH },
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd: process.cwd()
   });

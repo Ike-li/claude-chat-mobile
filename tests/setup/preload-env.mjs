@@ -24,3 +24,6 @@ process.env.CCM_APPROVAL_STORE_FILE = join(dir, 'approval-requests.json');
 process.env.CCM_AUDIT_FILE = join(dir, 'audit-records.json');
 process.env.CCM_TRUSTED_DEVICES_FILE = join(dir, 'trusted-devices.json');
 process.env.CCM_PENDING_DEVICES_FILE = join(dir, 'pending-devices.json');
+// 桌面日志窗：集成测 in-process import server.js 时也会走 startLogTerminal。
+// 机主 .env 常 LOG_TERMINAL=on；dotenv 不覆盖已存在的非空 key，钉 'off' 挡住回填（见 _spawn-server）。
+process.env.LOG_TERMINAL = 'off';
