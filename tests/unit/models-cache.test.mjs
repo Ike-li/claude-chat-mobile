@@ -67,6 +67,25 @@ test.describe('models-cache：按 cwd 归键、不跨工作区泄漏', () => {
     c.load({ models: [] }); // 旧 c.models 单全局格式（无 cwd 键）——values 是 payload 但 key 不是真 cwd
     assert.ok(c.get('/ws/a') === null); // 不会把旧格式误当某 cwd 的清单泄漏给真实 cwd
   });
+
+  test('delete 移除指定 cwd 条目', () => {
+    const c = createModelsCache();
+    c.set('/ws/a', DS);
+    c.set('/ws/b', REAL);
+    assert.equal(c.size, 2);
+    c.delete('/ws/a');
+    assert.equal(c.get('/ws/a'), null);
+    assert.deepEqual(c.get('/ws/b'), REAL);
+    assert.equal(c.size, 1);
+  });
+
+  test('delete 不存在的 cwd 不抛', () => {
+    const c = createModelsCache();
+    c.delete('/nonexistent');
+    c.delete('');
+    c.delete(null);
+    assert.equal(c.size, 0);
+  });
 });
 
 // isCwdDefaultModel：判断某次启动上报的 init.model 是否 = cwd 真实默认模型，可否入 defaultModelByCwd 缓存。

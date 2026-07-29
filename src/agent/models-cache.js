@@ -36,7 +36,8 @@ export function createCwdKeyedCache({ max = 32 } = {}) {
         for (const [cwd, payload] of Object.entries(obj)) this.set(cwd, payload);
       }
     },
-    get size() { return byCwd.size; }
+    get size() { return byCwd.size; },
+    delete(cwd) { byCwd.delete(cwd); },
   };
 }
 

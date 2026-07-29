@@ -152,11 +152,10 @@ test('remove() clears unreadCounts, unreadSnapshotOnEntry and lastCountedTopLeve
 });
 
 // bypassPermissions 是唯一需要前端二次确认才能进入的档（app.js 的 user:setPermissionMode 路径），
-// 而 RESUME 走 `saved?.permissionMode || transcriptMode || inheritedMode(cwd)` 时没有任何确认。
-// FRESH 已在 2026-06-22（A1）刻意取消继承，RESUME 保留了它且没对 bypass 做例外：
-// 同 cwd 下 A 会话切到 bypass 并保持存活 → 点开同目录一条纯 CLI 建的老会话（sessions.getSession 返回
-// null、transcript 无 permission-mode 条目）→ 继承 bypass 从第一个工具起零弹窗全放行；随后 onSessionId
-// 把它 upsert 进 sessions.json，此后 saved?.permissionMode 恒胜出，永久固化。
+// 而 RESUME 走 `saved?.permissionMode || transcriptMode || 'default'` 时没有 bypass 确认。
+// 2026-07-29：删除 inheritedMode 层——CLI 新起 claude --resume 不从别的活进程继承 mode，
+// transcriptMode 已覆盖"这个会话上次用什么档"场景。inheritedMode 仍保留给 effort 侧使用。
+// bypass 安全：transcriptMode 已过滤 bypassPermissions（cli-hooks-bridge.js readLastPermissionMode）。
 test('inheritedMode never propagates bypassPermissions to another session', () => {
   const manager = createInstanceManager();
   const agent = {
