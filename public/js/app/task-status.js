@@ -263,6 +263,7 @@ export function createTaskStatusController(context, {
           lastToolName: item.lastToolName ?? item.last_tool_name ?? null,
           description: item.description ?? null,
           subagentType: item.subagentType ?? item.subagent_type ?? null,
+          truncated: item.truncated || false,
         });
       }
       if (typeof payload.taskId === 'string' && payload.taskId && tasks.has(payload.taskId)) {
@@ -284,6 +285,7 @@ export function createTaskStatusController(context, {
         lastToolName: payload?.lastToolName ?? prev.lastToolName ?? null,
         description: payload?.description ?? prev.description ?? null,
         subagentType: payload?.subagentType ?? prev.subagentType ?? null,
+        truncated: payload?.truncated || prev.truncated || false,
       });
       return true;
     }
