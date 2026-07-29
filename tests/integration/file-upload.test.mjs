@@ -14,8 +14,8 @@
 // 直接在 spawn 的子进程 env 里显式传空字符串即可（dotenv 默认不覆盖已存在的 env key，即便是空串）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { validateAttachments, saveAttachments, sanitizeName } from '../../src/files/uploads.js';
@@ -31,8 +31,8 @@ async function startServer() {
     WORK_DIR: dataDir,
     CCM_DATA_DIR: dataDir,
     IDLE_TIMEOUT_MS: '10000',
-    // 空串而非 delete：dotenv 默认不覆盖已存在（即便是空串）的 env key，确保不受机主真实 .env 里
-    // CF_ACCESS_* 配置影响，本文件的用例不需要 CF Access。
+    // 空串而非 delete：_spawn-server 注入测试标记，使 config 在 dotenv 前保留这些空值，
+    // 防机主真实 .env 回填 AUTH/CF 配置；本文件不启用 AUTH_TOKEN 或 CF Access。
     CF_ACCESS_HOSTNAME: '',
     CF_ACCESS_TEAM: '',
     CF_ACCESS_AUD: '',
@@ -224,7 +224,7 @@ test.describe('文件上传安全集成测试', process.env.CI ? { skip: 'CI 无
       const saved = await saveAttachments(workDir, attachments);
 
       assert.equal(saved.length, 1);
-      assert.ok(saved[0].absPath.startsWith(join(workDir, '.ccm-uploads')));
+      assert.equal(dirname(saved[0].absPath), join(realpathSync(workDir), '.ccm-uploads'));
       assert.equal(saved[0].name, 'test.txt');
       assert.equal(saved[0].size, 5);
     } finally {

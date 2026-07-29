@@ -44,7 +44,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
 | Instructions | 2 |
-| Integration test | 21 |
+| Integration test | 22 |
 | Legal | 2 |
 | Maintainer tooling | 22 |
 | Project configuration | 4 |
@@ -55,7 +55,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 120 |
 | Vendored asset | 21 |
 
-Total classified files: **351**.
+Total classified files: **352**.
 
 ## Complete file inventory
 
@@ -258,6 +258,7 @@ Total classified files: **351**.
 | `tests/helpers/p0-ui.ts` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/helpers/playwright.ts` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/integration/_spawn-server.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
+| `tests/integration/_spawn-server.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/aborted-state.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/approval-integrity.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/approval-restart-recovery.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |

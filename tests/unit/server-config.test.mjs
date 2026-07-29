@@ -51,6 +51,37 @@ test('loadRuntimeEnvironment：shell 空串 AUTH_TOKEN/CCM_DATA_DIR 不挡 .env 
   }
 });
 
+test('loadRuntimeEnvironment：测试 child 的显式空认证配置不被 .env 回填', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-env-test-empty-'));
+  try {
+    const envFile = join(dir, '.env');
+    writeFileSync(envFile, [
+      'AUTH_TOKEN=from-dotenv-token',
+      'CF_ACCESS_HOSTNAME=chat.example.com',
+      'CF_ACCESS_TEAM=test-team',
+      'CF_ACCESS_AUD=test-aud',
+      'CLAUDE_BIN=/from-dotenv/claude',
+    ].join('\n'));
+    const env = {
+      CCM_TEST_PRESERVE_EMPTY_ENV: '1',
+      AUTH_TOKEN: '',
+      CF_ACCESS_HOSTNAME: '',
+      CF_ACCESS_TEAM: '',
+      CF_ACCESS_AUD: '',
+    };
+
+    loadRuntimeEnvironment(env, { envFile, quiet: true });
+
+    assert.equal(env.AUTH_TOKEN, undefined);
+    assert.equal(env.CF_ACCESS_HOSTNAME, undefined);
+    assert.equal(env.CF_ACCESS_TEAM, undefined);
+    assert.equal(env.CF_ACCESS_AUD, undefined);
+    assert.equal(env.CLAUDE_BIN, '/from-dotenv/claude');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('loadRuntimeEnvironment：shell 空串 ANTHROPIC_* 不应被 .env 填入（SH-001 回归）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-env-empty-anthropic-'));
   try {
