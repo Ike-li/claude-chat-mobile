@@ -56,6 +56,16 @@ export function formatLifecycleSessionError(detail) {
   return d ? `进程异常：${d}` : '进程异常：未知错误（可重新发送继续）';
 }
 
+// resolvedEnv 白名单：只放行网关/模型相关变量，防 worktree settings 覆盖 PORT/AUTH_TOKEN/CCM_DATA_DIR 等服务端关键变量。
+function filterSafeResolvedEnv(env) {
+  if (!env || typeof env !== 'object') return undefined;
+  const out = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (k.startsWith('ANTHROPIC_') || k.startsWith('CLAUDE_CODE_')) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 // SDK query options 纯函数（可单测）：集中「与 CLI 对齐的桥接开关」，避免 start() 内联大对象难测。
 // agentProgressSummaries：默认开——子 agent ~30s AI 进度写 task_progress.summary，刷新 lastSeenAt + 横幅文案；
 // 关：CCM_AGENT_PROGRESS_SUMMARIES=0（省 fork token；静默期只靠 tool description 变化）。
@@ -78,7 +88,7 @@ export function buildAgentQueryOptions(session, env = process.env) {
     canUseTool: (name, input, opts) => session.handleCanUseTool(name, input, opts),
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code' },
-    env: { ...sdkChildEnv(env), ...session.resolvedEnv },
+    env: { ...sdkChildEnv(env), ...filterSafeResolvedEnv(session.resolvedEnv) },
     stderr: data => { if (env.LOG_STDERR) console.error('[claude]', sanitize(data)); },
   };
 }
