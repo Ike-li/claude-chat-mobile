@@ -136,7 +136,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 | `effort` | agent.effort 有则带 | snapshot.effort | 有则显 |
 | `ctx.tokens` / in out w r | `lastUsage` 真值（单轮口径；可缺） | context_window | 绝对 token 不猜；**不**单独拿来算 left；`message_delta` 残缺帧须 `mergeMessageUsage` |
 | `ctx.totalTokens` | SDK `getContextUsage().totalTokens`（全量占用） | —（CLI 无此字段，mock 可补） | left 最优先；与 usedPercent 同源 |
-| `ctx.usedPercent` / windowSize | **优先** `getContextUsage()`（**无 lastUsage 也可**）；失败 → `contextWindowSize(model)` 静态映射 | CLI 给的 used_percentage / size | 第三方模型映射失败则只显绝对 token；`left` 见 `formatStatuslineCtxLeft`（totalTokens → %×window → tokens；有 % 时**禁止**用 lastUsage 单轮 tokens） |
+| `ctx.usedPercent` / windowSize | **只认真值**：`getContextUsage()`（**无 lastUsage 也可**）→ 失败则垫会话缓存 `agent.ctxWindowCache`（同 model 才有效）；**不按模型名猜** | CLI 给的 used_percentage / size | 两级真值都没有则只显绝对 token（不编造分母）；`left` 见 `formatStatuslineCtxLeft`（totalTokens → %×window → tokens；有 % 时**禁止**用 lastUsage 单轮 tokens） |
 | `cost` / `duration` | 会话累计 | snapshot.cost | est $ / 时长 |
 | `rate` 5h/7d | `fetchUsage` rate_limits | snapshot.rate | 颜色阈值；可标 snapshot |
 | `git` | 本机 `git status` 三分 | 同（cwd 事实） | `+staged !mod ?untracked ↑↓` |
@@ -203,4 +203,4 @@ transcript 事实            stream / control / usage     status_line 组装    
 | Effort 不猜 low | `effortUiState` | `logic-session` |
 | Statusline 双源不混拼 | `buildWeb*` `buildCli*` `selectStatusSource` | `statusline.test` · smoke statusline |
 | 折叠摘要 | `formatStatuslineCollapsedSummary` | `logic-statusline-summary` |
-| ctx 窗口 | `contextWindowSize` `getContextUsageSafe` | `statusline.test` |
+| ctx 窗口只认真值 | `getContextUsageSafe` `readCachedCtxWindow` `cacheCtxWindow` | `statusline.test` |

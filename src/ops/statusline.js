@@ -98,34 +98,34 @@ export function getFallbackUsageRate(now, usageStore = usageSnapshotStore) {
   return fallbackUsage(usageStore, now);
 }
 
-// ---- 上下文窗口大小映射（model → tokens）----
-// SDK 不回报 web 会话的真实窗口大小，只能按 model 名映射，按下列优先级判定：
-// 1) 显式 1M 标记（[1m] / "1M context"）→ 1_000_000；
-// 2) 官方已确认为 1M 窗口的当前代 Claude 模型（裸 model id，不靠 [1m] 后缀也能判定）：
-//    opus-4-6/4-7/4-8、sonnet-4-6/5、fable-5、mythos-5（依据 Anthropic 官方 claude-api 参考资料，
-//    核实于 2026-06-24）→ 1_000_000。新模型上线后需要在这里同步补充，别漏更新。
-// 3) 其余认得出的 Claude 关键词（claude/opus/sonnet/haiku）→ 200_000。注意这不是"官方确认这些都是
-//    200k"，而是查不到权威数据时的保守兜底——尤其是不在②名单里的更早期 opus/sonnet
-//    （如 opus-4-5/4-1/4-0、sonnet-4-5/4-0），其真实窗口未核实，不要臆测成 1M；haiku 全系目前官方
-//    确认就是 200k，属于确定值而非兜底猜测。
-// 4) 认不出 → null（调用方退回只显绝对 token 数，不显百分比），第三方模型不误导显示 %。
-// 已知边界（有意接受的取舍）：resume 会丢掉网关加的 [1m] 后缀。对②里已确认 1M 的当前代模型，
-// 丢了后缀也无妨——裸 model id 本身就能命中②直接判 1M，不再依赖 [1m] 后缀。这条边界现在只残留在：
-// a) 必须靠 [1m] 后缀才能识别为 1M 的第三方/网关模型；b) ③里保守按 200k 兜底、但未来官方确认其实
-// 是 1M 却还没同步进本表的老模型。宁可让多数场景有正确（或至少不臆测）的百分比，也不为这类边界
-// 砍掉整个功能。
-export function contextWindowSize(model) {
-  if (!model) return null;
-  const m = String(model).toLowerCase();
-  if (/\[1m\]|\b1m\b|1m\s*context|1000000/.test(m)) return 1_000_000;
-  if (/\b(?:opus-4-[678]|sonnet-4-6|sonnet-5|fable-5|mythos-5)\b/.test(m)) return 1_000_000;
-  if (/claude|opus|sonnet|haiku/.test(m)) return 200_000;
-  return null;
+// ---- 上下文窗口大小：只认运行时真值，绝不按 model 名猜 ----
+// 曾经这里有一张 model→窗口 的静态映射表做降级兜底，已删除（2026-07-29）。它猜错一次的代价是
+// 真机上 ctx 在「532k/1M=53%」和「532k/200k 封顶 100%」之间来回跳：表里漏了 opus-5，SDK RPC 一
+// 超时就回落到 200k。静态表有三个不可修复的缺陷：新模型上线要人工补表（漏一个就误报）、窗口升级
+// （2M）要改代码、第三方网关的模型别名（可能叫 claude-opus-4-5，也可能乱贴 [1m] 后缀）根本无从判断。
+// 现在的判定链只有两级，都是真值：
+//   1) q.getContextUsage() 的 maxTokens —— CLI 内部上下文账本，权威；拿到即写进会话缓存
+//   2) 会话缓存（本会话此前拿到过的真值）—— 覆盖 RPC 超时/busy/dispose 等短暂断档
+// 两级都没有 → 不出 windowSize/usedPercent，前端退回只显绝对 token（见 formatStatuslineCtxBrief）。
+// 宁可短暂看不到百分比，也不显示一个错的。
+//
+// 缓存挂 agent 实例并带 model 指纹：模型一变立即作废（opus-5 的 1M 若沿用到 haiku 会算出假百分比）。
+// 已知边界：同一 model 名在不同 provider 下窗口可能不同（切网关）。切 provider 要改 .env + 重启
+// 常驻 server，agent 实例随之重建、缓存自然清空，故不额外处理。
+export function readCachedCtxWindow(agent, model) {
+  const c = agent?.ctxWindowCache;
+  if (!c || !Number.isFinite(c.maxTokens) || c.maxTokens <= 0) return null;
+  if ((c.model || '') !== (model || '')) return null;
+  return c.maxTokens;
+}
+
+export function cacheCtxWindow(agent, model, maxTokens) {
+  if (!agent || !Number.isFinite(maxTokens) || maxTokens <= 0) return;
+  agent.ctxWindowCache = { model: model || '', maxTokens };
 }
 
 // web 会话自己的 ctx/cost（口径：assistant.message.usage，非 result.usage 轮内聚合避免高估）。
-// 本函数只回 SDK 真值（token 绝对数）；ctx 百分比在 buildWebStatusLine 里用 contextWindowSize(model)
-// 事后推算——SDK / 会话 jsonl / 快照都不暴露 web 会话真实 context window 大小，只能按 model 名映射。
+// 本函数只回 SDK 真值（token 绝对数）；ctx 百分比在 buildWebStatusLine 里按上面的两级真值链算。
 export function webContextCost({ agent }) {
   const r = {};
   const u = agent?.lastUsage;
@@ -148,7 +148,7 @@ export function webContextCost({ agent }) {
 
 // Part2（§6）：安全取 Agent SDK 上下文用量。活跃会话（调用方已确认 agent.q 存在且未 dispose）调 q.getContextUsage()
 // 取【运行时权威】maxTokens/percentage；RPC 超时（默认 1.5s，cold ~3.8s 但不阻塞——先发陈旧值/回来补发）
-// 或抛错 → 返回 null 让调用方降级回 contextWindowSize(model) 静态映射。本函数只兜 RPC 层（延迟/异常），不判生命周期。
+// 或抛错 → 返回 null 让调用方垫会话缓存的窗口真值。本函数只兜 RPC 层（延迟/异常），不判生命周期。
 // 不再透传 categories（那是 CLI /context 分解，非 CLI statusline 字段；web statusline 对齐 CLI statusline 故不含）。
 export async function getContextUsageSafe(q, timeoutMs = 1500) {
   if (!q?.getContextUsage) return null;
@@ -259,11 +259,13 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
     const total = u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens;
     if (total > 0) p.ctx.cacheHitPct = Math.round(u.cache_read_input_tokens / total * 100); // 瞬时：本轮命中率
   }
-  // ctx 百分比：优先 Agent SDK getContextUsage() 的【运行时权威】maxTokens/percentage（活跃会话）；
-  // 无活 q（idle/历史/dispose）/ RPC 超时 / 抛错 → 降级回 contextWindowSize(model) 静态映射猜测。
+  // ctx 百分比：优先 Agent SDK getContextUsage() 的【运行时权威】maxTokens/percentage（活跃会话），
+  // 拿到就把窗口真值写进会话缓存；无活 q（idle/历史/dispose）/ RPC 超时 / 抛错 → 垫缓存里的真值。
+  // 两级都没有 → 不设 windowSize/usedPercent（不按模型名猜），前端退回只显绝对 token。
   // 无 lastUsage 时仍可只出 window/percent/totalTokens（修首包/清零后 ctx 整段缺席）。
   const sdkCtx = (agent?.q && !agent.disposed) ? await getContextUsageSafe(agent.q) : null;
   if (sdkCtx && Number.isFinite(sdkCtx.maxTokens) && sdkCtx.maxTokens > 0) {
+    cacheCtxWindow(agent, model, sdkCtx.maxTokens);
     p.ctx = p.ctx || {};
     p.ctx.windowSize = sdkCtx.maxTokens;
     p.ctx.usedPercent = Math.min(100, Math.max(0, Math.round(sdkCtx.percentage || 0)));
@@ -272,9 +274,11 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
       p.ctx.totalTokens = sdkCtx.totalTokens;
     }
   } else if (p.ctx && Number.isFinite(p.ctx.tokens) && p.ctx.tokens > 0) {
-    const win = contextWindowSize(model);
+    const win = readCachedCtxWindow(agent, model);
     if (win) {
       p.ctx.windowSize = win;
+      // 缓存路径的占用是 lastUsage 单轮口径（cache_read 覆盖整个上下文，近似全量），
+      // 非 SDK 的权威 totalTokens；故这里自算百分比且不写 totalTokens。
       p.ctx.usedPercent = Math.min(100, Math.round(p.ctx.tokens / win * 100));
     }
   }

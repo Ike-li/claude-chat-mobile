@@ -1,9 +1,10 @@
 // tests/unit/statusline.test.mjs —— statusline.js 纯函数单测（零 token）
 // statusLine 为 web 自有状态栏：自包含组装、不调脚本/快照。显示面目标对齐 CLI statusline。
-// ctx 绝对 token 来自 SDK 真值；ctx 百分比优先 getContextUsage、降级 contextWindowSize(model)。
+// ctx 绝对 token 与窗口大小一律来自运行时真值（getContextUsage / CLI 自报）+ 会话内缓存；
+// 绝不按模型名猜窗口——猜错会把 532k/1M(53%) 显示成 532k/200k(封顶 100%)。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, contextWindowSize, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy } from '../../src/ops/statusline.js';
+import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy } from '../../src/ops/statusline.js';
 import { getDiagLogs } from '../../src/agent/diag-log.js';
 import { createUsageSnapshotStore, USAGE_SNAPSHOT_TTL_MS } from '../../src/ops/usage-snapshot.js';
 
@@ -229,67 +230,56 @@ test.describe('getFallbackUsageRate：cli-unavailable 分支专用回落读接�
   });
 });
 
-test.describe('contextWindowSize：model→上下文窗口大小映射', () => {
-  test('[1m] 后缀 → 1M', () => assert.equal(contextWindowSize('claude-opus-4-8[1m]'), 1_000_000));
-  test('"1M context" 文案 → 1M', () => assert.equal(contextWindowSize('Opus 4.8 (1M context)'), 1_000_000));
-
-  test('官方已确认 1M 的当前代模型（裸 ID，无 [1m] 后缀也能判定）→ 1M', () => {
-    assert.equal(contextWindowSize('claude-opus-4-8'), 1_000_000);
-    assert.equal(contextWindowSize('claude-opus-4-7'), 1_000_000);
-    assert.equal(contextWindowSize('claude-opus-4-6'), 1_000_000);
-    assert.equal(contextWindowSize('claude-sonnet-5'), 1_000_000);
-    assert.equal(contextWindowSize('claude-sonnet-4-6'), 1_000_000);
-    assert.equal(contextWindowSize('claude-fable-5'), 1_000_000);
-    assert.equal(contextWindowSize('claude-mythos-5'), 1_000_000);
-  });
-
-  test('haiku 全系 → 200k（官方确认值，含日期后缀变体，不受本次改动影响）', () => {
-    assert.equal(contextWindowSize('claude-haiku-4-5'), 200_000);
-    assert.equal(contextWindowSize('claude-haiku-4-5-20251001'), 200_000);
-  });
-
-  test('未列入 1M 名单的老模型 → 200k（没有官方确认数值，保守兜底，不能因为正则写宽了而误判成 1M）', () => {
-    assert.equal(contextWindowSize('claude-sonnet-4-5'), 200_000);
-    assert.equal(contextWindowSize('claude-sonnet-4-5-20250929'), 200_000);
-    assert.equal(contextWindowSize('claude-opus-4-5'), 200_000);
-    assert.equal(contextWindowSize('claude-opus-4-1'), 200_000);
-    assert.equal(contextWindowSize('claude-opus-4-0'), 200_000);
-    assert.equal(contextWindowSize('claude-opus-4-20250514'), 200_000);
-    assert.equal(contextWindowSize('claude-sonnet-4-20250514'), 200_000);
-  });
-
-  test('认不出的 model → null（前端退回绝对数）', () => {
-    assert.equal(contextWindowSize('gpt-4o'), null);
-    assert.equal(contextWindowSize(''), null);
-    assert.equal(contextWindowSize(null), null);
-  });
-});
-
-test.describe('buildWebStatusLine：ctx% 由 model→窗口映射推算', () => {
+test.describe('buildWebStatusLine：ctx 窗口只认运行时真值 + 会话内缓存（绝不按模型名猜）', () => {
   const usageT = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+  const sdkQ = maxTokens => ({ getContextUsage: async () => ({ maxTokens, percentage: 7, totalTokens: 1, categories: [] }) });
 
-  test('[1m] 模型 + tokens=400k → usedPercent=40 · windowSize=1M', async () => {
-    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-opus-4-8[1m]', lastUsage: usageT(400_000) }, cwd: undefined });
-    assert.equal(p.ctx.windowSize, 1_000_000);
-    assert.equal(p.ctx.usedPercent, 40);
+  test('无 SDK 真值且无缓存 → 不出 windowSize/usedPercent，只保留绝对 token', async () => {
+    // 治根前这里会按模型名猜 200k 并算出封顶 100%；现在宁可不显示 %，也不编造分母。
+    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-opus-5', lastUsage: usageT(532_000) }, cwd: undefined });
+    assert.equal(p.ctx.windowSize, undefined);
+    assert.equal(p.ctx.usedPercent, undefined);
+    assert.equal(p.ctx.tokens, 532_000);
   });
 
-  test('裸模型（haiku，官方确认 200k）+ tokens=100k → usedPercent=50（100k/200k）', async () => {
-    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-haiku-4-5', lastUsage: usageT(100_000) }, cwd: undefined });
-    assert.equal(p.ctx.windowSize, 200_000);
-    assert.equal(p.ctx.usedPercent, 50);
+  test('SDK 真值落库缓存：同模型下次 RPC 失败仍用真值窗口（治 ctx 100%↔53% 跳变）', async () => {
+    const agent = { activeModel: 'claude-opus-5', lastUsage: usageT(532_000), q: sdkQ(1_000_000), disposed: false };
+    const live = await buildWebStatusLine({ agent, cwd: undefined });
+    assert.equal(live.ctx.windowSize, 1_000_000);
+    // 下一次刷新撞上 busy 子进程 → RPC 抛错/超时；此时必须垫会话真值，不得回落成猜测
+    agent.q = { getContextUsage: async () => { throw new Error('rpc fail'); } };
+    const degraded = await buildWebStatusLine({ agent, cwd: undefined });
+    assert.equal(degraded.ctx.windowSize, 1_000_000);
+    assert.equal(degraded.ctx.usedPercent, 53); // 532k/1M，而非 532k/200k 封顶 100
   });
 
-  test('usedPercent 封顶 100（tokens 超窗口）', async () => {
-    const p = await buildWebStatusLine({ agent: { activeModel: 'claude-opus-4-8[1m]', lastUsage: usageT(1_200_000) }, cwd: undefined });
+  test('模型切换 → 旧窗口缓存作废（opus-5 的 1M 不得算到 haiku 头上）', async () => {
+    const agent = { activeModel: 'claude-opus-5', lastUsage: usageT(100_000), q: sdkQ(1_000_000), disposed: false };
+    await buildWebStatusLine({ agent, cwd: undefined });
+    agent.activeModel = 'claude-haiku-4-5';
+    agent.q = null;
+    const p = await buildWebStatusLine({ agent, cwd: undefined });
+    assert.equal(p.ctx.windowSize, undefined);
+    assert.equal(p.ctx.usedPercent, undefined);
+    assert.equal(p.ctx.tokens, 100_000);
+  });
+
+  test('缓存路径 usedPercent 封顶 100（占用超窗口）', async () => {
+    const agent = { activeModel: 'm', lastUsage: usageT(1_200_000), q: sdkQ(1_000_000), disposed: false };
+    await buildWebStatusLine({ agent, cwd: undefined });
+    agent.q = null;
+    const p = await buildWebStatusLine({ agent, cwd: undefined });
     assert.equal(p.ctx.usedPercent, 100);
   });
 
-  test('认不出的 model → 无 usedPercent/windowSize，仍保留绝对 token', async () => {
-    const p = await buildWebStatusLine({ agent: { activeModel: 'some-unknown-model', lastUsage: usageT(100_000) }, cwd: undefined });
-    assert.equal(p.ctx.usedPercent, undefined);
-    assert.equal(p.ctx.windowSize, undefined);
-    assert.equal(p.ctx.tokens, 100_000);
+  test('窗口真值随模型升级自动跟随（2M 模型无需改代码即可正确显示）', async () => {
+    const agent = { activeModel: 'future-model-2m', lastUsage: usageT(500_000), q: sdkQ(2_000_000), disposed: false };
+    const live = await buildWebStatusLine({ agent, cwd: undefined });
+    assert.equal(live.ctx.windowSize, 2_000_000);
+    agent.q = null;
+    const degraded = await buildWebStatusLine({ agent, cwd: undefined });
+    assert.equal(degraded.ctx.windowSize, 2_000_000);
+    assert.equal(degraded.ctx.usedPercent, 25); // 500k/2M
   });
 });
 
@@ -312,10 +302,10 @@ test.describe('getContextUsageSafe：安全取 Agent SDK 上下文用量（Part2
   });
 });
 
-test.describe('buildWebStatusLine：ctx% 优先 SDK getContextUsage、降级 contextWindowSize（Part2 修 5x bug）', () => {
+test.describe('buildWebStatusLine：ctx% 只认 SDK getContextUsage 真值（Part2 修 5x bug）', () => {
   const usageC = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
   test('活跃会话（q.getContextUsage 返回权威值）→ windowSize/usedPercent 来自 SDK；categories 不透传', async () => {
-    // 真 bug 场景：model 是 haiku（静态映射猜 200k），但 SDK 实报 maxTokens=1M → ctx% 不再偏高 5x
+    // 真 bug 场景：model 名看着像 200k 的 haiku，但 SDK 实报 maxTokens=1M → ctx% 不再偏高 5x
     const cats = [{ name: 'Skills', tokens: 5000, color: '#abc' }, { name: 'Free space', tokens: 995000, color: '#def' }];
     const q = { getContextUsage: async () => ({ maxTokens: 1_000_000, percentage: 23, totalTokens: 230_000, categories: cats }) };
     const p = await buildWebStatusLine({ agent: { activeModel: 'claude-haiku-4-5', lastUsage: usageC(50_000), q, disposed: false }, cwd: undefined });
@@ -338,18 +328,20 @@ test.describe('buildWebStatusLine：ctx% 优先 SDK getContextUsage、降级 con
     assert.equal(p.ctx.tokens, 0);            // lastUsage 真值保留
     assert.equal(p.ctx.totalTokens, 130_000); // left 的权威占用
   });
-  test('disposed 会话（q 存在但 disposed）→ 不调 SDK、降级 contextWindowSize', async () => {
+  test('disposed 会话（q 存在但 disposed）→ 不调 SDK；无缓存则不出 %', async () => {
     let called = false;
     const q = { getContextUsage: async () => { called = true; return { maxTokens: 1e6, percentage: 5, categories: [] }; } };
     const p = await buildWebStatusLine({ agent: { activeModel: 'claude-haiku-4-5', lastUsage: usageC(50_000), q, disposed: true }, cwd: undefined });
     assert.equal(called, false);                 // disposed → 不调 SDK
-    assert.equal(p.ctx.windowSize, 200_000);     // 降级静态映射
-    assert.equal(p.ctx.usedPercent, 25);         // 50k/200k
+    assert.equal(p.ctx.windowSize, undefined);   // 无会话真值可垫 → 不编造分母
+    assert.equal(p.ctx.usedPercent, undefined);
+    assert.equal(p.ctx.tokens, 50_000);          // 绝对 token 仍显示
   });
-  test('无 q（idle/历史）→ 降级 contextWindowSize', async () => {
+  test('无 q（idle/历史冷读）→ 无缓存则不出 %，只留绝对 token', async () => {
     const p = await buildWebStatusLine({ agent: { activeModel: 'claude-opus-4-8[1m]', lastUsage: usageC(400_000) }, cwd: undefined });
-    assert.equal(p.ctx.windowSize, 1_000_000);   // 静态映射 [1m]→1M
-    assert.equal(p.ctx.usedPercent, 40);
+    assert.equal(p.ctx.windowSize, undefined);   // [1m] 后缀也不再当窗口依据（网关可能乱贴）
+    assert.equal(p.ctx.usedPercent, undefined);
+    assert.equal(p.ctx.tokens, 400_000);
   });
 });
 

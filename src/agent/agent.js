@@ -183,6 +183,7 @@ export class AgentSession {
 
     // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
     this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
+    this.ctxWindowCache = null;   // {model, maxTokens}：本会话拿到过的上下文窗口【真值】(getContextUsage)，供 RPC 短暂不可用时垫底；带 model 指纹，模型一变即作废。绝不按模型名猜窗口，见 statusline.js readCachedCtxWindow
     this.lastRateUnavailableReason = null; // 额度(5h/7d)不可用原因去重锚点：fetchUsage()/statusline.buildWebStatusLine 协作判断"原因是否变化"，仅变化时才记诊断日志
     // per-turn 秒表/输出 token（CLI 式动态状态行 ✻ Verb… (Ns · ↓ tokens)，经 status_line.turn 透出）：
     this.turnStartedAt = null;    // 本轮开始时间戳（send/合成轮置位，result 无排队轮清 null）

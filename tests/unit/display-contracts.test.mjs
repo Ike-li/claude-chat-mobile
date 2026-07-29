@@ -21,7 +21,6 @@ import {
   UI_EFFORT_LEVELS,
 } from '../../src/agent/cli-settings-defaults.js';
 import {
-  contextWindowSize,
   buildWebStatusLine,
   buildCliStatusLine,
 } from '../../src/ops/statusline.js';
@@ -162,12 +161,14 @@ test.describe('契约 §3 Statusline：结构化对齐；ctx 不误导；折叠�
     assert.equal(formatStatuslineCtxBrief({ tokens: 12_500 }), 'ctx 13k');
   });
 
-  test('contextWindowSize：1M 标记 / 当代 id → 1M；认不出 → null（不硬造 %）', () => {
-    assert.equal(contextWindowSize('foo[1m]'), 1_000_000);
-    assert.equal(contextWindowSize('claude-opus-4-8'), 1_000_000);
-    assert.equal(contextWindowSize('claude-haiku-4'), 200_000);
-    assert.equal(contextWindowSize('grok-4.5'), null);
-    assert.equal(contextWindowSize(''), null);
+  test('ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）', async () => {
+    const p = await buildWebStatusLine({
+      agent: { activeModel: 'claude-opus-5', lastUsage: { input_tokens: 532_000, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } },
+      cwd: undefined,
+    });
+    assert.equal(p.ctx.windowSize, undefined);
+    assert.equal(p.ctx.usedPercent, undefined);
+    assert.equal(p.ctx.tokens, 532_000);
   });
 
   test('buildWebStatusLine：effort 有值才带；null 不放字段', async () => {
