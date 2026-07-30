@@ -95,8 +95,9 @@ export function normalizeEffortUiLevel(level) {
  * 不抛；effective 缺失时返回硬默认形状。
  *
  * env 块：worktree 场景下 CLI 的 local source 解析到主 checkout（2.1.211+ 行为），
- * 但 SDK resolveSettings 按 cwd 正确读到 worktree 的 settings.local.json。
- * 缓存后供 AgentSession 注入子进程环境，使每个 worktree 生效各自的网关/模型映射。
+ * 但 SDK resolveSettings 按 cwd 正确读到 worktree 的 settings.local.json——所以这里拿到的是权威值。
+ * 注意（2026-07-30 实证更正）：把它注入子进程环境**并不能**让 worktree 生效各自的网关映射，
+ * CLI 的 settings.env 优先级更高。网关隔离走 buildWorktreeGatewayEnv + flag settings。
  */
 export function defaultsFromEffectiveSettings(effective) {
   const rawMode = effective?.permissions?.defaultMode ?? null;
@@ -115,6 +116,72 @@ export function defaultsFromEffectiveSettings(effective) {
     model: rawModel,
     env,
   };
+}
+
+/**
+ * 从 linked worktree 的 `.git` 文件内容定位 canonical repo root（= CLI 会误读 settings.local.json 的目录）。
+ * git 规范：linked worktree 的 .git 是文本文件，内容形如 `gitdir: <主仓库>/.git/worktrees/<名>`；
+ * 主 checkout 的 .git 是目录，压根不会走到这里。submodule 指针（.git/modules/…）不是 worktree → null。
+ *
+ * @param {string|null|undefined} dotGitContent worktree 根下 .git 文件的文本内容
+ * @returns {string|null} canonical repo root 绝对路径；不是 worktree 指针则 null
+ */
+export function parseWorktreeCanonicalRoot(dotGitContent) {
+  const m = /^gitdir:\s*(.+?)\s*$/m.exec(String(dotGitContent ?? ''));
+  if (!m) return null;
+  const marker = '/.git/worktrees/';
+  const i = m[1].indexOf(marker);
+  return i > 0 ? m[1].slice(0, i) : null;
+}
+
+// 网关/模型类 env 的白名单前缀。与 agent.js filterSafeResolvedEnv 同一安全边界：
+// 只碰 ANTHROPIC_*/CLAUDE_CODE_*，绝不触碰 PORT/AUTH_TOKEN/CCM_DATA_DIR 等服务端关键变量
+// （中和一个服务端变量的破坏力，比放过一个网关变量更大）。
+const GATEWAY_ENV_PREFIXES = ['ANTHROPIC_', 'CLAUDE_CODE_'];
+const isGatewayEnvKey = (k) => GATEWAY_ENV_PREFIXES.some(p => k.startsWith(p));
+
+// 已实证见过的「纯偏好」键：与网关/模型路由无关，中和它们只会让 worktree 会话平白丢掉
+// 主 checkout 配的 CLI 偏好。为什么用排除清单而不是正向枚举网关键——两种错误代价不对称：
+// 漏掉一个网关变量 = 污染照旧、503 复现；多清一个偏好只是小损失。故保留前缀（新网关变量自动
+// 覆盖），只把确认无关的键摘出来。新键按需追加，别凭印象扩充清单。
+const NON_ROUTING_ENV_KEYS = new Set([
+  'CLAUDE_CODE_ATTRIBUTION_HEADER',           // commit 署名头
+  'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC', // 遥测开关
+  'CLAUDE_CODE_EFFORT_LEVEL',                 // 思考档：ccm 自己经 Options.effort 传，不由 env 决定
+]);
+// 只用于「中和」侧：worktree 自己显式配的同名键仍照常下发（排除清单挡的是继承，不是本意）。
+const shouldNeutralizeEnvKey = (k) => isGatewayEnvKey(k) && !NON_ROUTING_ENV_KEYS.has(k);
+
+/**
+ * worktree 网关隔离：产出 flag settings（SDK Options.settings）用的 env 块。
+ *
+ * 背景（2026-07-30 实证复现，非推断）：CLI 2.1.211+ 在 linked worktree 里把 local settings source
+ * 解析到 **canonical repo root**（bundle 原文：「it resolves localSettings to the canonical repo
+ * root」），于是主 checkout 的 .claude/settings.local.json 的 env 块会污染**所有** worktree 的会话——
+ * worktree 自己的 settings.local.json 根本不被 CLI 读。真实症状：third-party 的会话打到主 checkout
+ * 配的第三方网关，pin 的 claude-opus-5 在该网关分组无渠道 → 503 No available channel。
+ *
+ * 两条设计都由实证锁死，改动前先重跑对照：
+ *  · **压不过**：往子进程注入 env 无效（CLI 的 settings.env 优先级高于继承环境），只能走 flag settings；
+ *  · **擦不掉**：传空 env 块 `{env:{}}` 或空 settings `{}` 都无效，必须对「canonical 有而 worktree
+ *    没有」的键**逐键显式写空串**中和。
+ *
+ * @param {object|undefined} worktreeEnv  SDK resolveSettings({cwd}) 按 worktree 正确读出的 env 块（权威）
+ * @param {object|undefined} canonicalEnv canonical repo root 的 env 块（CLI 实际会误读到的那份）
+ * @returns {object|undefined} flag settings 的 env；无需干预时 undefined（调用方据此不传 settings.env）
+ */
+export function buildWorktreeGatewayEnv(worktreeEnv, canonicalEnv) {
+  const pick = (o) => (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+  const out = {};
+  // 先中和 canonical 的网关键（CLI 会误读这份）；纯偏好键不动，让 worktree 会话照常继承
+  for (const k of Object.keys(pick(canonicalEnv))) {
+    if (shouldNeutralizeEnvKey(k)) out[k] = '';
+  }
+  // 再让 worktree 自己显式配的网关覆盖回来——隔离不等于禁用，各 worktree 仍可各走各的网关
+  for (const [k, v] of Object.entries(pick(worktreeEnv))) {
+    if (isGatewayEnvKey(k)) out[k] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**

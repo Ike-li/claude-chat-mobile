@@ -655,3 +655,57 @@ test.describe('map() — background_tasks_changed 全量 reconcile bgTasks（CLI
     s.dispose();
   });
 });
+
+// worktree 网关隔离（2026-07-30 实证）：主 checkout 的 settings.local.json env 块会经 CLI 的
+// canonical-repo-root 解析污染所有 worktree 会话。修复必须走 flag settings——实测往子进程注入
+// options.env 压不过 CLI 自己的 settings.env（那正是 resolvedEnv 机制一直没生效的原因）。
+// 但 flag settings 的**对象**形式会被 SDK 序列化成 `--settings <json>` 拼进子进程 argv（ps 可见明文），
+// 故 env 一律走「settings 文件路径」形式下发，对象形式只保留给不含机密的 ultracode。
+test.describe('buildAgentQueryOptions — worktree 网关隔离经 settings 文件下发', () => {
+  test('有 worktreeSettingsPath → options.settings 是该路径字符串', () => {
+    const { s } = makeSession();
+    s.abort = new AbortController();
+    s.worktreeSettingsPath = '/tmp/ccm-test/worktree-settings/abc.json';
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.equal(opts.settings, '/tmp/ccm-test/worktree-settings/abc.json');
+    s.dispose();
+  });
+
+  test('settings 里绝不出现明文 env（凭据不得进子进程 argv）', () => {
+    const { s } = makeSession();
+    s.abort = new AbortController();
+    s.worktreeSettingsPath = '/tmp/ccm-test/worktree-settings/abc.json';
+    s.ultracode = true;
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.equal(typeof opts.settings, 'string', 'settings 必须是文件路径而非内联对象');
+    assert.equal(JSON.stringify(opts).includes('ANTHROPIC_AUTH_TOKEN'), false);
+    s.dispose();
+  });
+
+  test('ultracode 与文件路径并存时用路径（ultracode 已写在文件里，不能因此退回对象形式）', () => {
+    const { s } = makeSession();
+    s.abort = new AbortController();
+    s.ultracode = true;
+    s.worktreeSettingsPath = '/tmp/ccm-test/worktree-settings/abc-uc.json';
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.equal(opts.settings, '/tmp/ccm-test/worktree-settings/abc-uc.json');
+    s.dispose();
+  });
+
+  test('两者都无 → 完全不传 settings（保持现状，不给 CLI 平添一层 flag settings）', () => {
+    const { s } = makeSession();
+    s.abort = new AbortController();
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.equal('settings' in opts, false);
+    s.dispose();
+  });
+
+  test('只有 ultracode（非 worktree 工作区）→ settings 仍是 {ultracode:true} 对象，既有行为不回归', () => {
+    const { s } = makeSession();
+    s.abort = new AbortController();
+    s.ultracode = true;
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.deepEqual(opts.settings, { ultracode: true });
+    s.dispose();
+  });
+});

@@ -71,6 +71,16 @@ function filterSafeResolvedEnv(env) {
 // 关：CCM_AGENT_PROGRESS_SUMMARIES=0（省 fork token；静默期只靠 tool description 变化）。
 export function buildAgentQueryOptions(session, env = process.env) {
   const progressOn = env.CCM_AGENT_PROGRESS_SUMMARIES !== '0';
+  // flag settings 两个来源，二者形式不同（2026-07-30 实证）：
+  //  · worktree 网关隔离的 env → 只能走 flag settings（往 options.env 注入压不过 CLI 自己的
+  //    settings.env），但**必须用文件路径形式**：对象形式会被 SDK 序列化成 `--settings <json>`
+  //    拼进子进程 argv，worktree 自配的 ANTHROPIC_AUTH_TOKEN 会在 ps 输出里明文可见。
+  //    该文件由 server worktreeSettingsFileFor 落成 0600，且已把 ultracode 一并写入。
+  //  · ultracode 会话 flag → 不含机密，无 worktree 文件时按老样子内联对象下发。
+  const flagSettings = {};
+  if (session.ultracode) flagSettings.ultracode = true;
+  const settings = session.worktreeSettingsPath
+    || (Object.keys(flagSettings).length ? flagSettings : undefined);
   return {
     cwd: session.cwd,
     pathToClaudeCodeExecutable: session.claudeBin, // E9：用本机 claude，不用 SDK 捆绑副本
@@ -81,8 +91,8 @@ export function buildAgentQueryOptions(session, env = process.env) {
     forwardSubagentText: true,                           // 子 agent 正文/thinking 转发进主流（带 parent_tool_use_id）
     agentProgressSummaries: progressOn,                  // ~30s AI 进度 → task_progress.summary（默认开）
     effort: session.effort || undefined,                 // SDK 0.3+ 一等 Options.effort；null=模型默认不传
-    // ultracode 会话 flag：flag settings 叠加，不替代 user/project/local（与 CLI /effort ultracode 同语义）
-    ...(session.ultracode ? { settings: { ultracode: true } } : {}),
+    // flag settings 叠加，不替代 user/project/local（与 CLI /effort ultracode 同语义）；两者皆无则整个不传
+    ...(settings ? { settings } : {}),
     permissionMode: session.sdkPermissionMode(),         // bypass 映射为 SDK default
     // 不注入 options.allowedTools：放行白名单完全交给 settingSources 的 permissions.allow
     canUseTool: (name, input, opts) => session.handleCanUseTool(name, input, opts),
@@ -146,7 +156,7 @@ export function mergeMessageUsage(prev, next) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd, resolvedEnv }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd, resolvedEnv, worktreeSettingsPath }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -162,10 +172,15 @@ export class AgentSession {
     this.onUsage = onUsage;           // () => void，assistant message（含工具调用间）更新 usage 后触发——驱动 statusline 实时刷 ctx；不进事件流、不占 seq/buffer
     this.onBgTaskChange = onBgTaskChange; // () => void，活的后台任务集合"空↔非空/成员增删"时触发——驱动 server 节流重算会话列表 ⏳ 角标
     this.onStateSettled = onStateSettled || (() => {}); // () => void，账面被兜底路径就地改写（无伴随事件流）时触发——驱动 server 立刻重播 instances，否则前端只能等下一次无关广播
-    // worktree 场景：CLI 的 local source 解析到主 checkout（2.1.211+），但 SDK resolveSettings 按 cwd
-    // 正确读到 worktree 的 settings.local.json。resolvedEnv 缓存其 env 块，注入子进程环境使各 worktree
-    // 生效各自的网关/模型映射。由 server ensureCliDefaults → defaultsFromEffectiveSettings 产出。
+    // worktree 的 settings.local.json env 块（SDK resolveSettings 按 cwd 正确读出，CLI 自己读不到）。
+    // 注意边界（2026-07-30 实证更正）：注入子进程环境**管不住网关**——CLI 的 settings.env 优先级高于
+    // 继承环境，它从 canonical repo root 误读到的 ANTHROPIC_BASE_URL 等会盖掉这里注入的同名值。
+    // 网关/模型映射的隔离改走 worktreeSettingsPath（flag settings 文件），见 buildAgentQueryOptions。
     this.resolvedEnv = resolvedEnv || undefined;
+    // worktree 网关隔离的 flag settings **文件路径**（0600，由 server worktreeSettingsFileFor 落盘）。
+    // 内含中和后的 env（canonical 独有的网关键置空串，worktree 自配的照常生效）+ ultracode。
+    // 走文件而非内联对象，是因为对象形式会被 SDK 拼进子进程 argv、令自配凭据在 ps 里明文可见。
+    this.worktreeSettingsPath = worktreeSettingsPath || undefined;
 
     this.sessionId = resumeId || null;
     this.resumeId = resumeId || null;   // F4：resume 失败检测基准

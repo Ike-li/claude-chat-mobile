@@ -6,6 +6,7 @@
 // mirror/catchUp 同步引擎、openInstance 生命周期、契约路由共享同一组顶层可变状态
 // （viewing*/mirror*/catchUp*），拆开只会把耦合变成上下文对象穿针——有意保留为组装根本体。
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { statSync, readFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync } from 'node:fs';
 import { maskToken } from '../shared/sanitizer.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
@@ -17,7 +18,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
-import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel } from '../agent/cli-settings-defaults.js';
+import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileSize, sessionFileMtime, getProjectDir, invalidateListCache, catchUpStep, historyTailKey, rebaselineAbsorbedExternal, mirrorReleaseStep, classifyTranscriptTail, mirrorEntryLock, mirrorStaleFlag, describeMirrorEntryLock, readLastPermissionMode, readLastAssistantModel, externalGrowthWhilePaused } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
@@ -798,6 +799,54 @@ function instancesPayload() {
   return payload;
 }
 
+// worktree 网关隔离的 IO 层：定位 canonical repo root 并补读它的 settings，算出「要中和哪些网关键」。
+// 为什么需要：CLI 2.1.211+ 在 linked worktree 里把 local settings source 解析到 canonical repo root，
+// 主 checkout 的 .claude/settings.local.json 的 env 块会污染所有 worktree 的会话（2026-07-30 实证复现：
+// third-party 的会话打到主 checkout 配的第三方网关 → 503）。判定与中和规则见 buildWorktreeGatewayEnv。
+// 非 linked worktree（.git 是目录）直接返回 undefined——不给普通工作区平添一次 resolveSettings。
+async function resolveWorktreeGatewayEnv(cwd, worktreeEnv) {
+  let canonicalRoot = null;
+  try {
+    const dotGit = join(cwd, '.git');
+    if (statSync(dotGit).isFile()) canonicalRoot = parseWorktreeCanonicalRoot(readFileSync(dotGit, 'utf8'));
+  } catch { /* 非 git 仓 / .git 读不到：按非 worktree 处理，保持既有行为 */ }
+  if (!canonicalRoot || canonicalRoot === cwd) return undefined;
+  // 优先复用 canonical root 已解析过的 L3（主 checkout 常已被启动预取/访问过）：这第二次 resolveSettings
+  // 是串在 ensureCliDefaults 里的，会挤占 resume/FRESH 路径的 CLI_DEFAULTS_RESUME_BUDGET_MS 预算。
+  const cachedCanonical = cliDefaultsByCwd.get(canonicalRoot);
+  if (cachedCanonical) return buildWorktreeGatewayEnv(worktreeEnv, cachedCanonical.env);
+  try {
+    const canon = await sdkResolveSettings({ cwd: canonicalRoot, settingSources: ['user', 'project', 'local'] });
+    return buildWorktreeGatewayEnv(worktreeEnv, defaultsFromEffectiveSettings(canon?.effective).env);
+  } catch (err) {
+    // 读不到 canonical settings 就不中和（退回既有行为），绝不因此拖垮开实例
+    console.warn(`[cli-settings] canonical root 读取失败 (${canonicalRoot}):`, err?.message || err);
+    return undefined;
+  }
+}
+
+// 网关隔离的下发载体：0600 settings 文件。
+// 为什么不内联对象：SDK 会把 options.settings 的对象形式 JSON.stringify 成 `--settings <json>` 拼进
+// 子进程 argv（实测 ps -ax 可读到明文），而这个块可能含 worktree 自配的 ANTHROPIC_AUTH_TOKEN。
+// SDK 的 Options.settings 同时接受「settings 文件路径」，改用它把暴露面收回到文件权限位。
+// 按 cwd + ultracode 归键：每工作区最多两个文件、总数随 workdirs 有界，每次开实例覆盖写
+// （settings 变更由 ensureCliDefaults 的 force 刷新带出），因而不需要任何生命周期清理。
+const WORKTREE_SETTINGS_DIR = join(DATA_DIR, 'worktree-settings');
+function worktreeSettingsFileFor(cwd, gatewayEnv, ultracode = false) {
+  if (!gatewayEnv) return undefined; // 非 worktree / 无需中和：不落文件，settings 走原对象路径
+  try {
+    mkdirSync(WORKTREE_SETTINGS_DIR, { recursive: true });
+    const key = createHash('sha256').update(cwd).digest('hex').slice(0, 16) + (ultracode ? '-uc' : '');
+    const path = join(WORKTREE_SETTINGS_DIR, `${key}.json`);
+    writeOwnerOnlyFile(path, JSON.stringify({ ...(ultracode ? { ultracode: true } : {}), env: gatewayEnv }));
+    return path;
+  } catch (err) {
+    // 写不成就放弃本次隔离（退回未修复行为），绝不改用会泄漏进 argv 的内联对象兜底
+    console.warn('[cli-settings] worktree settings 文件写入失败，本次放弃网关隔离:', err?.message || err);
+    return undefined;
+  }
+}
+
 // L3：解析 cwd 的 CLI settings 默认并缓存。force 时强制重读（session:new 后拾取磁盘变更）。
 // 不 spawn CLI；与 AgentSession 的 settingSources 一致。失败返回 L4 形状且不写入缓存。
 async function ensureCliDefaults(cwd, { force = false } = {}) {
@@ -812,6 +861,7 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
         settingSources: ['user', 'project', 'local'],
       });
       const d = defaultsFromEffectiveSettings(resolved?.effective);
+      d.gatewayEnv = await resolveWorktreeGatewayEnv(cwd, d.env);
       cliDefaultsByCwd.set(cwd, d);
       return d;
     } catch (err) {
@@ -1566,6 +1616,8 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     approvalTtlMs,
     historicalCostUsd: saved?.cost || 0,
     resolvedEnv: cliDefaultsByCwd.get(cwd)?.env, // worktree env 块，注入子进程环境
+    // worktree 网关隔离：经 0600 settings 文件下发，压住 CLI 从 canonical repo root 误读的网关配置
+    worktreeSettingsPath: worktreeSettingsFileFor(cwd, cliDefaultsByCwd.get(cwd)?.gatewayEnv, effNorm.ultracode),
     onEvent: envelope => {
       metrics.inc('events'); // NFR-15 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
       if (envelope.type === 'init') {
@@ -1774,6 +1826,14 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
     ({ prep, transcriptMode, transcriptModel } = prepResult);
     if (prep.log) interactionLog.addSessionLog(resumeId, 'sys_info', prep.log);
     else if (prep.error) console.warn('[cli-bg-lock] prepareSessionForWebResume failed:', prep.error?.message || prep.error);
+  } else {
+    // FRESH 也要等 L3 落定：worktreeGatewayEnv 只在 AgentSession 构造时读一次，冷缓存下不等的话
+    // 该会话整个生命周期都拿不到 worktree 网关隔离（正是 503 的原场景：重启后首次切到 worktree 就发消息）。
+    // 同样套 resume 的预算上限，绝不让一次异常慢的 settings 读拖住首条消息。
+    await Promise.race([
+      ensureCliDefaults(cwd),
+      new Promise(resolve => setTimeout(resolve, CLI_DEFAULTS_RESUME_BUDGET_MS)),
+    ]);
   }
   const instance = openInstance({ cwd, resumeId, transcriptMode, transcriptModel, ...extra });
   diagLog.record(resumeId, 'resume', 'settled', { ms: Date.now() - t0, hadLock: !!prep.attempted }); // Part C：resume 总耗时
@@ -1817,6 +1877,8 @@ function openScoutInstance(cwd) {
     model: undefined, permissionMode: 'default', effort: null, idleTimeoutMs, instanceIdleReclaimMs: 0, approvalTtlMs,
     historicalCostUsd: 0,
     resolvedEnv: cliDefaultsByCwd.get(cwd)?.env, // worktree env 块，scout 也须注入才能拿到正确网关的模型列表
+    // 同上：scout 的模型清单也须来自隔离后的网关（scout 不走 ultracode）
+    worktreeSettingsPath: worktreeSettingsFileFor(cwd, cliDefaultsByCwd.get(cwd)?.gatewayEnv),
     onEvent: envelope => {
       if (envelope.type === 'models') {
         // 真模型到达：按 cwd 缓存 → 推送所有前端 → 清理
@@ -2485,11 +2547,15 @@ registerSocketConnection(io, socket => {
     broadcastInstances(); // 先推一帧（可能仍是 L4 或旧 L3 缓存）；下方 force 刷新 L3 后再补广播
     pushModelsForCwd(cwd); // 有缓存即时推（快速路径），无缓存由下方 scout 补发
     pushSlashCommandsForCwd(cwd); // 有缓存即时推 slash 提示；无缓存保留前端 localStorage，首条消息真 init 校正
-    if (!viewingInstanceId) openScoutInstance(cwd); // 无实例：scout 获取真实模型（不留幽灵会话）
-    // L3：强制重读 CLI settings，空首页 defaultPermissionMode/defaultEffort 与终端对齐；完成后若仍停在本 cwd 空视图则补广播
-    ensureCliDefaults(cwd, { force: true }).then(() => {
-      if (viewingCwdOf() === cwd && !viewingInstanceId) broadcastInstances();
-    }).catch(err => console.warn('[cli-settings] session:new 刷新失败:', err?.message || err));
+    // L3：强制重读 CLI settings，空首页 defaultPermissionMode/defaultEffort 与终端对齐；完成后若仍停在本 cwd 空视图则补广播。
+    // scout 必须等 L3 落定后再起（对齐 config:refresh 的既有写法）：worktreeGatewayEnv 在 AgentSession
+    // 构造时一次性读取、事后补不回来，冷缓存下先起 scout 会让它用被污染的网关去探模型清单。
+    ensureCliDefaults(cwd, { force: true })
+      .catch(err => console.warn('[cli-settings] session:new 刷新失败:', err?.message || err))
+      .finally(() => {
+        if (!viewingInstanceId) openScoutInstance(cwd); // 无实例：scout 获取真实模型（不留幽灵会话）
+        if (viewingCwdOf() === cwd && !viewingInstanceId) broadcastInstances();
+      });
     lastStatusLine = null;
     scheduleStatusRefresh();
     if (typeof ack === 'function') ack({ ok: true, instanceId: null, sessionId: null });

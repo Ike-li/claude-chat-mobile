@@ -9,6 +9,8 @@ import {
   defaultsFromEffectiveSettings,
   resolveFreshPrefs,
   resolveResumeEffort,
+  buildWorktreeGatewayEnv,
+  parseWorktreeCanonicalRoot,
   CCM_PERMISSION_MODES,
 } from '../../src/agent/cli-settings-defaults.js';
 
@@ -225,5 +227,134 @@ test.describe('resolveResumeEffort（resume 专用：saved > inherited > L3，�
       resolveResumeEffort({ savedEffort: 'garbage', inheritedEffortValue: null, cliDefaults: cliHigh }),
       'high',
     );
+  });
+});
+
+// ── worktree 网关隔离（2026-07-30 实证复现） ─────────────────────────────────────
+// CLI 2.1.211+ 在 linked worktree 里把 local settings source 解析到 canonical repo root，
+// 于是主 checkout 的 .claude/settings.local.json 的 env 块污染所有 worktree 会话
+// （真实症状：third-party 的会话打到主 checkout 配的 amux 网关 → 503 No available channel）。
+// 实证结论决定本函数的两条设计：
+//   · 该污染压不过——子进程 env 注入无效（CLI 的 settings.env 优先级更高），只能走 flag settings；
+//   · 空 env 块擦不掉——必须对「canonical 有而 worktree 没有」的键显式写空串中和。
+test.describe('buildWorktreeGatewayEnv（worktree 网关隔离）', () => {
+  test('worktree 无 env、canonical 配了网关 → 逐键显式空串中和', () => {
+    const out = buildWorktreeGatewayEnv(undefined, {
+      ANTHROPIC_BASE_URL: 'https://api.amux.ai',
+      ANTHROPIC_AUTH_TOKEN: 'sk-xxx',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.5',
+    });
+    assert.deepEqual(out, {
+      ANTHROPIC_BASE_URL: '',
+      ANTHROPIC_AUTH_TOKEN: '',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: '',
+    });
+  });
+
+  test('worktree 有自己的网关 → 原样生效；canonical 独有的键仍被中和', () => {
+    const out = buildWorktreeGatewayEnv(
+      { ANTHROPIC_BASE_URL: 'https://own.example.com' },
+      { ANTHROPIC_BASE_URL: 'https://api.amux.ai', ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.5' },
+    );
+    assert.equal(out.ANTHROPIC_BASE_URL, 'https://own.example.com');
+    assert.equal(out.ANTHROPIC_DEFAULT_OPUS_MODEL, '', 'canonical 独有的模型映射必须中和，否则别名仍被改写');
+  });
+
+  test('canonical 无 env 且 worktree 无 env → undefined（无需干预，保持现状不传 settings）', () => {
+    assert.equal(buildWorktreeGatewayEnv(undefined, undefined), undefined);
+    assert.equal(buildWorktreeGatewayEnv({}, {}), undefined);
+  });
+
+  test('canonical 无 env、worktree 有 env → 原样下发（worktree 自己的映射要生效）', () => {
+    const out = buildWorktreeGatewayEnv({ ANTHROPIC_BASE_URL: 'https://own.example.com' }, undefined);
+    assert.deepEqual(out, { ANTHROPIC_BASE_URL: 'https://own.example.com' });
+  });
+
+  test('非白名单 key 一律不进结果（不中和 PORT/AUTH_TOKEN，安全边界同 filterSafeResolvedEnv）', () => {
+    const out = buildWorktreeGatewayEnv(
+      { PORT: '9999' },
+      { PORT: '3000', AUTH_TOKEN: 'real', CCM_DATA_DIR: '/real', ANTHROPIC_BASE_URL: 'https://api.amux.ai' },
+    );
+    assert.equal('PORT' in out, false, 'PORT 不该被中和——那会打断服务端/子进程的正常变量');
+    assert.equal('AUTH_TOKEN' in out, false);
+    assert.equal('CCM_DATA_DIR' in out, false);
+    assert.equal(out.ANTHROPIC_BASE_URL, '');
+  });
+
+  test('小写同名 key 不认（与白名单大小写敏感一致）', () => {
+    const out = buildWorktreeGatewayEnv(undefined, { anthropic_base_url: 'https://evil.example.com' });
+    assert.equal(out, undefined);
+  });
+
+  test('__proto__ 不污染原型', () => {
+    const canonical = JSON.parse('{"__proto__": {"polluted": "yes"}, "ANTHROPIC_BASE_URL": "https://api.amux.ai"}');
+    const out = buildWorktreeGatewayEnv(undefined, canonical);
+    assert.equal({}.polluted, undefined);
+    assert.equal(out.ANTHROPIC_BASE_URL, '');
+  });
+});
+
+// linked worktree 的 .git 是文本文件（`gitdir: <主仓库>/.git/worktrees/<名>`），据此定位 canonical
+// repo root——就是 CLI 会误读 settings.local.json 的那个目录。主 checkout 的 .git 是目录，不走这里。
+test.describe('parseWorktreeCanonicalRoot（从 .git 指针定位 canonical repo root）', () => {
+  test('标准 worktree 指针 → 主 checkout 路径', () => {
+    assert.equal(
+      parseWorktreeCanonicalRoot('gitdir: /Users/you/code/proj/.git/worktrees/feat\n'),
+      '/Users/you/code/proj',
+    );
+  });
+
+  test('容忍多余空白与无结尾换行', () => {
+    assert.equal(
+      parseWorktreeCanonicalRoot('gitdir:   /Users/you/code/proj/.git/worktrees/feat  '),
+      '/Users/you/code/proj',
+    );
+  });
+
+  test('submodule 指针（.git/modules/…）不是 worktree → null', () => {
+    assert.equal(parseWorktreeCanonicalRoot('gitdir: /Users/you/code/proj/.git/modules/sub'), null);
+  });
+
+  test('空/非字符串/无 gitdir 前缀 → null（不抛）', () => {
+    assert.equal(parseWorktreeCanonicalRoot(''), null);
+    assert.equal(parseWorktreeCanonicalRoot(null), null);
+    assert.equal(parseWorktreeCanonicalRoot(undefined), null);
+    assert.equal(parseWorktreeCanonicalRoot('ref: refs/heads/main'), null);
+  });
+});
+
+// 白名单收窄（review #5/#6）：前缀通配会连带中和纯偏好类键，令 worktree 会话丢失主 checkout 里
+// 与网关无关的 CLI 偏好。取舍：漏掉一个网关变量 = 污染照旧 + 503 复现，多清一个偏好只是小损失，
+// 两种错误代价不对称——故保留前缀（新网关变量自动覆盖），只显式排除已实证见过的非路由键。
+test.describe('buildWorktreeGatewayEnv — 非路由类偏好不中和', () => {
+  test('CLAUDE_CODE_ATTRIBUTION_HEADER / DISABLE_NONESSENTIAL_TRAFFIC / EFFORT_LEVEL 保留给 worktree 会话', () => {
+    const out = buildWorktreeGatewayEnv(undefined, {
+      ANTHROPIC_BASE_URL: 'https://api.amux.ai',
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EFFORT_LEVEL: 'max',
+    });
+    assert.equal(out.ANTHROPIC_BASE_URL, '', '网关键仍须中和');
+    assert.equal('CLAUDE_CODE_ATTRIBUTION_HEADER' in out, false);
+    assert.equal('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC' in out, false);
+    assert.equal('CLAUDE_CODE_EFFORT_LEVEL' in out, false);
+  });
+
+  test('未知的 ANTHROPIC_/CLAUDE_CODE_ 键仍按网关处理（宁可多中和，不可漏网关）', () => {
+    const out = buildWorktreeGatewayEnv(undefined, {
+      ANTHROPIC_SOME_FUTURE_GATEWAY_VAR: 'x',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+    });
+    assert.equal(out.ANTHROPIC_SOME_FUTURE_GATEWAY_VAR, '');
+    assert.equal(out.CLAUDE_CODE_USE_BEDROCK, '');
+  });
+
+  test('worktree 自己显式配了非路由键 → 照常下发（排除清单只挡「中和」，不挡 worktree 自己的意图）', () => {
+    const out = buildWorktreeGatewayEnv(
+      { CLAUDE_CODE_ATTRIBUTION_HEADER: '1' },
+      { ANTHROPIC_BASE_URL: 'https://api.amux.ai' },
+    );
+    assert.equal(out.CLAUDE_CODE_ATTRIBUTION_HEADER, '1');
+    assert.equal(out.ANTHROPIC_BASE_URL, '');
   });
 });
