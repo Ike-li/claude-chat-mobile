@@ -817,6 +817,22 @@ details.thinking.thinking-live > summary::before {
 /* 驾驶态：底栏模型/权限/思考 chip 保持可见（只读冻结由 JS 拦截）；
    驾驶提示仅靠上方 #mirrorBanner，不再隐藏设置 chip、不再注入「终端驾驶中」合并胶囊。 */
 
+/* 工作区抽屉状态：文字是主语义，颜色仅辅助；会话行与目录行共用同一紧凑 chip。 */
+.drawer-status-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 18px;
+  padding: 0 0.38rem;
+  border: 1px solid var(--line-soft);
+  border-radius: 9999px;
+  background: var(--surface-sunk);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 /* UI-007：状态 SVG 图标 */
 .status-icon {
   display: inline-flex;

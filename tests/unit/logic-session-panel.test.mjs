@@ -107,9 +107,13 @@ test('diffDirSignatures: 空/未定义入参安全', () => {
 });
 
 
-test('shouldRerenderSessionList: terminal 徽标变化需要重渲染（K3）', () => {
-  const prev = [{ id: 'a', title: 'A', lastUsedAt: 1, terminal: null }];
-  const next = [{ id: 'a', title: 'A', lastUsedAt: 1, terminal: 'busy' }];
-  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: prev, nextSessions: next }), true);
-  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: next, nextSessions: next }), false);
+test('shouldRerenderSessionList: terminal 状态出现、切换或消失都需要重渲染（K3）', () => {
+  const plain = [{ id: 'a', title: 'A', lastUsedAt: 1 }];
+  const busy = [{ id: 'a', title: 'A', lastUsedAt: 1, terminal: 'busy' }];
+  const alive = [{ id: 'a', title: 'A', lastUsedAt: 1, terminal: 'alive' }];
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: plain, nextSessions: busy }), true);
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: busy, nextSessions: alive }), true);
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: busy, nextSessions: plain }), true);
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: alive, nextSessions: plain }), true);
+  assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: busy, nextSessions: busy }), false);
 });

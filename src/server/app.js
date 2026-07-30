@@ -45,7 +45,7 @@ import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from '..
 import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { readSessionRegistry, registryIndicatesTerminalBusy, listTerminalSessionStates, terminalStateKey, cliPresenceStep } from '../sessions/session-registry.js';
+import { readSessionRegistry, registryIndicatesTerminalBusy, listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, cliPresenceStep } from '../sessions/session-registry.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
 import { searchFiles } from '../files/file-search.js';
@@ -2579,18 +2579,16 @@ registerSocketConnection(io, socket => {
   // P1（7/26 CCD 调研吸收）：给会话列表行标注「终端直跑」状态。数据源是 CLI 自报的进程注册表
   // （~/.claude/sessions/<PID>.json），一次扫盘标注整页——此前纯外部终端会话在列表里没有任何运行
   // 徽标（徽标只来自 live instances 条目，外部会话无 live 实例即无徽标）。注册表读不动 → 空 Map，
-  // 列表原样返回（fail-open：这是加分信息，绝不能因它影响列表本身）。
+  // 返回不带 terminal 的克隆列表（fail-open，且不污染 listSessionsPage 的缓存对象）。
   async function annotateTerminalStates(cwd, list) {
-    if (!Array.isArray(list) || !list.length) return;
+    let states = new Map();
     try {
-      const states = await listTerminalSessionStates();
-      if (!states.size) return;
-      for (const s of list) {
-        if (!s?.id) continue;
-        const state = states.get(terminalStateKey(cwd, s.id));
-        if (state) s.terminal = state;
-      }
+      states = await listTerminalSessionStates();
     } catch { /* fail-open */ }
+    return {
+      list: applyTerminalStatesToSessions(cwd, list, states),
+      terminalBusy: hasBusyTerminalSessionForCwd(cwd, states),
+    };
   }
 
   on(socket, 'session:list', async (payload, maybeAck) => {
@@ -2608,8 +2606,8 @@ registerSocketConnection(io, socket => {
     const limit = all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
     // hiddenIds（FR-20 两级删除 L1）：L1 删除的会话从这里过滤掉，不出现在列表里（transcript 仍在盘上）。
     const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit, hiddenIds: new Set(sessions.getHiddenIds()) });
-    await annotateTerminalStates(cwd, list);
-    ack({ currentSessionId, sessions: list, hasMore: all ? false : hasMore });
+    const terminal = await annotateTerminalStates(cwd, list);
+    ack({ currentSessionId, sessions: terminal.list, terminalBusy: terminal.terminalBusy, hasMore: all ? false : hasMore });
   });
 
   // 两级删除 L1（FR-20，承接 docs/design.md）：默认删——只从产品可见列表移除，transcript 原样保留在主机磁盘，

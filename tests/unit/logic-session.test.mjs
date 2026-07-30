@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, applyGatewaySuffix } from '../../public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, applyGatewaySuffix } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -31,6 +31,22 @@ test('aggregateStates: worktree cwd 归入最长前缀父仓（K2 角标）', ()
   assert.equal(r['/repo/b'], 'idle');
 });
 
+test('resolveDrawerStatus: 需要你/出错优先于 Web 或终端运行态', () => {
+  assert.equal(resolveDrawerStatus({ liveState: 'permission', terminalState: 'busy' }), 'permission');
+  assert.equal(resolveDrawerStatus({ liveState: 'error', terminalState: 'busy' }), 'error');
+  assert.equal(resolveDrawerStatus({ liveState: 'busy', terminalState: 'alive' }), 'busy');
+});
+
+test('resolveDrawerStatus: terminal busy 不被 idle/done live 实例遮蔽；普通终态不显示主状态', () => {
+  assert.equal(resolveDrawerStatus({ liveState: 'idle', terminalState: 'busy' }), 'busy');
+  assert.equal(resolveDrawerStatus({ liveState: 'done', terminalState: 'busy' }), 'busy');
+  assert.equal(resolveDrawerStatus({ terminalState: 'busy' }), 'busy');
+  assert.equal(resolveDrawerStatus({ terminalState: 'alive' }), null);
+  assert.equal(resolveDrawerStatus({ liveState: 'done' }), null);
+  assert.equal(resolveDrawerStatus({ liveState: 'aborted' }), null);
+  assert.equal(resolveDrawerStatus(), null);
+});
+
 test('summarizeOtherWorkspaces: 空/未定义入参 → null', () => {
   assert.equal(summarizeOtherWorkspaces(undefined, undefined, '/cur'), null);
   assert.equal(summarizeOtherWorkspaces({}, [], '/cur'), null);
@@ -43,11 +59,12 @@ test('summarizeOtherWorkspaces: 排除 current，单个其他目录取其状态'
   assert.equal(summarizeOtherWorkspaces({ '/cur': 'permission' }, ['/cur'], '/cur'), null);
 });
 
-test('summarizeOtherWorkspaces: 跨目录优先级 permission>error>done>busy', () => {
+test('summarizeOtherWorkspaces: 只汇总需要关注的 permission>error>busy，忽略正常终态', () => {
   const dirs = ['/a', '/b'];
   assert.equal(summarizeOtherWorkspaces({ '/a': 'busy', '/b': 'permission' }, dirs, '/cur'), 'permission');
   assert.equal(summarizeOtherWorkspaces({ '/a': 'done', '/b': 'error' }, dirs, '/cur'), 'error');
-  assert.equal(summarizeOtherWorkspaces({ '/a': 'busy', '/b': 'done' }, dirs, '/cur'), 'done'); // done 压过 busy（与按钮汇总语义一致）
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'busy', '/b': 'done' }, dirs, '/cur'), 'busy');
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'done', '/b': 'aborted' }, dirs, '/cur'), null);
 });
 
 // P1-4：已中止独立状态——前端聚合函数须认识新状态值，否则被当未知状态（rank 缺省 0）静默吞掉
@@ -121,9 +138,9 @@ test('formatApiRetryBanner: overloaded / 缺字段 / 非数字安全', () => {
   assert.equal(formatApiRetryBanner(null), '重试中');
 });
 
-test('summarizeOtherWorkspaces: 认识 aborted（介于 done 与 error 之间）', () => {
+test('summarizeOtherWorkspaces: aborted 不点亮顶部，但不遮蔽 error', () => {
   const dirs = ['/a', '/b'];
-  assert.equal(summarizeOtherWorkspaces({ '/a': 'done', '/b': 'aborted' }, dirs, '/cur'), 'aborted');
+  assert.equal(summarizeOtherWorkspaces({ '/a': 'done', '/b': 'aborted' }, dirs, '/cur'), null);
   assert.equal(summarizeOtherWorkspaces({ '/a': 'aborted', '/b': 'error' }, dirs, '/cur'), 'error');
 });
 

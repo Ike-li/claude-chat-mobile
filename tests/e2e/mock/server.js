@@ -45,10 +45,18 @@ let historyOverflowMode = false;
 // system 哨兵消息——E2E 用它确定性地等到"这次重连的 instances 广播已处理完"，不必用禁用的 waitForTimeout。
 let reconnectDrawerTitleChanged = false;
 let reconnectSettleMarkerArmed = false;
-// P0-11x（P1）：终端直跑徽标夹具。真 server 由 listTerminalSessionStates 读 CLI 进程注册表
+// P0-11y（P1）：终端直跑状态夹具。真 server 由 listTerminalSessionStates 读 CLI 进程注册表
 // （~/.claude/sessions/<PID>.json）给 session:list 行标 terminal:'busy'|'alive'；mock 直接给两条
-// 无 live 实例的会话打上这两态，验证抽屉能区分渲染。
+// 无 live 实例的会话打上这两态，验证抽屉文字状态与来源副文本。
 let terminalBadgeArmed = false;
+// P0-11z：抽屉保持打开时，第二次 session:list 才出现 terminal=busy；期间不发 instances，
+// 验证前端低频 revalidate 能独立刷新 CLI 状态。
+let terminalRefreshArmed = false;
+let terminalRefreshListCount = 0;
+let terminalSummaryOtherArmed = false;
+let terminalRaceArmed = false;
+let terminalRaceListCount = 0;
+let terminalCloseRaceOtherArmed = false;
 // 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
 let mockHooksState = 'not-installed';
 // 真 server 的 instances 广播恒带 service 字段；mock 此前完全没带，导致依赖它的前端段落（如
@@ -120,6 +128,12 @@ function resetMockState() {
   reconnectDrawerTitleChanged = false;
   reconnectSettleMarkerArmed = false;
   terminalBadgeArmed = false;
+  terminalRefreshArmed = false;
+  terminalRefreshListCount = 0;
+  terminalSummaryOtherArmed = false;
+  terminalRaceArmed = false;
+  terminalRaceListCount = 0;
+  terminalCloseRaceOtherArmed = false;
   mockHooksState = 'not-installed';
   busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
@@ -311,7 +325,8 @@ function mainCwdSessions() {
       title: reconnectDrawerTitleChanged ? 'Renamed After Reconnect' : 'Visual Sandbox (Main)',
       model: 'claude-3-5-sonnet',
       lastUsedAt: Date.now() - 10000,
-      entrypoint: 'sdk-ts'
+      entrypoint: 'sdk-ts',
+      ...(terminalBadgeArmed ? { terminal: 'busy' } : {}),
     },
     {
       id: 'mock-session-archived',
@@ -665,15 +680,79 @@ io.on('connection', socket => {
     if (cwd === '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') {
         const sessions = mainCwdSessions();
+        if (terminalRaceArmed) {
+          terminalRaceListCount += 1;
+          if (terminalRaceListCount === 2) {
+            const staleSessions = sessions.map(s => ({ ...s }));
+            const target = staleSessions.find(s => s.id === 'mock-session-archived');
+            if (target) target.terminal = 'busy';
+            setTimeout(() => {
+              callback({
+                currentSessionId: 'mock-session-visual-test',
+                sessions: staleSessions,
+                terminalBusy: true,
+                hasMore: false,
+              });
+              io.emit('agent:event', {
+                seq: 1,
+                epoch: 'mock-epoch-terminal-race',
+                sessionId: 'mock-session-visual-test',
+                instanceId: 'inst_1',
+                ts: Date.now(),
+                type: 'system',
+                payload: { message: '[MOCK_INFO] Delayed stale session list delivered.' },
+              });
+            }, 600);
+            return;
+          }
+        }
+        if (terminalRefreshArmed) {
+          terminalRefreshListCount += 1;
+          if (terminalRefreshListCount >= 2) {
+            const target = sessions.find(s => s.id === 'mock-session-archived');
+            if (target) target.terminal = 'busy';
+          }
+        }
         const visibleSessions = historyOverflowMode && !all ? sessions.slice(0, 3) : sessions;
         callback({
           currentSessionId: 'mock-session-visual-test',
           sessions: visibleSessions,
+          terminalBusy: terminalBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
           hasMore: historyOverflowMode && !all
         });
+        if (terminalRefreshArmed && terminalRefreshListCount === 1) {
+          const live = mockInstances.find(i => i.instanceId === 'inst_1');
+          if (live) live.state = 'permission';
+          io.emit('agent:event', {
+            seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+            type: 'instances', payload: {
+              viewingInstanceId,
+              viewingCwd: '/Users/you/code/claude-chat-mobile',
+              dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+              instances: mockInstances,
+              service: mockServicePayload(),
+            },
+          });
+        }
       }
     } else if (cwd === '/Users/you/code/another-react-project') {
       if (typeof callback === 'function') {
+        if (terminalCloseRaceOtherArmed) {
+          terminalCloseRaceOtherArmed = false;
+          setTimeout(() => {
+            callback({ currentSessionId: null, sessions: [], terminalBusy: true, hasMore: false });
+            io.emit('agent:event', {
+              seq: 1,
+              epoch: 'mock-epoch-terminal-close-race',
+              sessionId: 'mock-session-visual-test',
+              instanceId: 'inst_1',
+              ts: Date.now(),
+              type: 'system',
+              payload: { message: '[MOCK_INFO] Delayed closed-drawer session list delivered.' },
+            });
+          }, 600);
+          return;
+        }
         callback({
           currentSessionId: 'mock-session-another',
           sessions: [
@@ -738,7 +817,8 @@ io.on('connection', socket => {
               lastUsedAt: Date.now() - 50,
               entrypoint: 'sdk-ts'
             }
-          ]
+          ],
+          terminalBusy: terminalSummaryOtherArmed,
         });
       }
     } else {
@@ -1719,6 +1799,56 @@ io.on('connection', socket => {
       run: async () => {
         console.log('[mock] test:terminal-badge — archived=busy / gap=alive，下次 session:list 带 terminal 字段');
         terminalBadgeArmed = true;
+      },
+    },
+    {
+      command: 'test:terminal-refresh',
+      run: async () => {
+        console.log('[mock] test:terminal-refresh — 第二次 session:list 才给 archived 标 terminal=busy，不发 instances');
+        terminalRefreshArmed = true;
+        terminalRefreshListCount = 0;
+      },
+    },
+    {
+      command: 'test:terminal-summary',
+      run: async () => {
+        console.log('[mock] test:terminal-summary — 另一工作区仅 terminalBusy 汇总为 true，返回行均无 terminal');
+        terminalSummaryOtherArmed = true;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: '/Users/you/code/claude-chat-mobile',
+            dirs: ['/Users/you/code/claude-chat-mobile', '/Users/you/code/another-react-project'],
+            instances: mockInstances,
+            service: mockServicePayload(),
+          },
+        });
+      },
+    },
+    {
+      command: 'test:terminal-race',
+      run: async () => {
+        console.log('[mock] test:terminal-race — 第二次 session:list 延迟返回旧 busy，第三次立即返回无 terminal');
+        terminalRaceArmed = true;
+        terminalRaceListCount = 0;
+      },
+    },
+    {
+      command: 'test:terminal-close-race',
+      run: async () => {
+        console.log('[mock] test:terminal-close-race — 另一工作区 session:list 关闭抽屉后才回 terminalBusy=true');
+        terminalCloseRaceOtherArmed = true;
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            viewingInstanceId,
+            viewingCwd: '/Users/you/code/claude-chat-mobile',
+            dirs: ['/Users/you/code/claude-chat-mobile', '/Users/you/code/another-react-project'],
+            instances: mockInstances,
+            service: mockServicePayload(),
+          },
+        });
       },
     },
     {
