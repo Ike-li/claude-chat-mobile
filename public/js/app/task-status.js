@@ -1,4 +1,4 @@
-import { bgTaskListCollapsed, formatApiRetryBanner, formatBgTaskRowLabel, formatProgressHistoryEntry, taskStopUiState } from '../logic.js';
+import { bgTaskListCollapsed, formatApiRetryBanner, formatBgTaskRowLabel, formatProgressHistoryEntry, taskDetailState, taskStopUiState } from '../logic.js';
 import { t } from '../i18n.js';
 
 export function createTaskStatusController(context, {
@@ -109,6 +109,20 @@ export function createTaskStatusController(context, {
     if (dom.taskDetailContent) dom.taskDetailContent.replaceChildren();
   }
 
+  // tasks 收缩后（单个任务完成删除，或全量快照重建）同步清理 progressHistory：否则已消失任务的历史
+  // 会一直留到「全部任务清零」才被 hideProgress 整体清空，长会话里持续有任务在跑会无界累积。
+  // 若详情面板正显示的任务恰好消失，必须一并关闭——否则面板停留在陈旧数据上，且该任务行已不在
+  // 列表里，用户点不到任何行去关闭它。
+  function pruneStaleProgressHistory() {
+    for (const id of progressHistory.keys()) {
+      if (!tasks.has(id)) progressHistory.delete(id);
+    }
+    if (activeDetailId && !tasks.has(activeDetailId)) {
+      activeDetailId = null;
+      hideDetail();
+    }
+  }
+
   function syncToggleButton(collapsed) {
     if (!dom.btnTaskToggle) return;
     dom.btnTaskToggle.classList.toggle('hidden', tasks.size <= 1);
@@ -155,7 +169,7 @@ export function createTaskStatusController(context, {
     syncToggleButton(collapsed);
     for (const [taskId, task] of tasks) {
       const histLen = (progressHistory.get(taskId) || []).length;
-      const isActive = taskId === activeDetailId;
+      const isActive = taskDetailState({ taskId, activeDetailId }).visible;
       const row = createElement(`<div class="rounded-lg border border-warning/25 bg-warning/5 px-2 py-1.5 cursor-pointer${isActive ? ' ring-1 ring-warning/50' : ''}" data-testid="bg-task-row"></div>`);
       const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
       const label = createElement('<span class="truncate flex-1 min-w-0 text-ink font-medium"></span>');
@@ -301,6 +315,7 @@ export function createTaskStatusController(context, {
     }
     recordProgress(payload.taskId, payload);
     applyTasksFromPayload(payload);
+    pruneStaleProgressHistory();
     if (tasks.size === 0) {
       hideProgress();
       return true;
@@ -327,6 +342,7 @@ export function createTaskStatusController(context, {
     const taskId = payload.taskId;
     if (typeof taskId === 'string' && taskId && tasks.has(taskId)) {
       tasks.delete(taskId);
+      pruneStaleProgressHistory();
       if (activeTaskId === taskId) activeTaskId = tasks.size ? [...tasks.keys()][0] : null;
       if (tasks.size === 0) hideProgress();
       else {
@@ -335,6 +351,7 @@ export function createTaskStatusController(context, {
       }
     } else if (Array.isArray(payload.tasks)) {
       applyTasksFromPayload(payload);
+      pruneStaleProgressHistory();
       if (tasks.size === 0) hideProgress();
       else {
         showBanner();

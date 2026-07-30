@@ -1386,9 +1386,10 @@ export class AgentSession {
   // 与 toolInputs 同 TTL/LRU；非文件工具也能展开（Bash/MCP 长输出是主场景）。
   cacheToolOutput(id, raw) {
     if (!id || raw == null) return;
-    // 超大载荷（如 base64 图片）不缓存：摘要层已红线，展开也无法展示有意义内容
-    const str = typeof raw === 'string' ? raw : JSON.stringify(raw);
-    if (str.length > 256 * 1024) return;
+    // 超大载荷（如 base64 图片）不缓存：摘要层已红线，展开也无法展示有意义内容。
+    // 用 stringify()（try/catch 兜底）而非裸 JSON.stringify——raw 结构不受本项目控制（MCP/SDK 工具
+    // 输出），循环引用等不可序列化值绝不能让这条体积检查抛错打断 map() 消息泵。
+    if (stringify(raw).length > 256 * 1024) return;
     this.toolOutputs.set(id, { raw, ts: Date.now() });
     if (this.toolOutputs.size > TOOL_INPUT_MAX) {
       this.toolOutputs.delete(this.toolOutputs.keys().next().value);
@@ -2079,17 +2080,21 @@ const BASE64_REDACT_MIN_LEN = 500;
 // 兼容 URL-safe 变体（-_ 代替 +/）：原正则不匹配它，走摘要路径时后面还有 truncate 兜底看不出来，
 // 但 tool:full「展开全文」没有兜底 —— 一个漏判的 base64 图片就是整串原样进 DOM。
 const BASE64_ONLY_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
-function redactBase64(value) {
+// seen：循环引用兜底（raw 结构不受本项目控制，MCP/SDK 工具输出可能自引用）——不加会在遇到循环
+// 结构时无限递归直到栈溢出，和裸 JSON.stringify 一样能打断整条正在处理的消息。
+function redactBase64(value, seen = new WeakSet()) {
   if (typeof value === 'string') {
     if (value.length >= BASE64_REDACT_MIN_LEN && BASE64_ONLY_RE.test(value)) {
       return `（base64 数据，约 ${Math.ceil(value.length / 1024)}KB，已省略）`;
     }
     return value;
   }
-  if (Array.isArray(value)) return value.map(redactBase64);
   if (value && typeof value === 'object') {
+    if (seen.has(value)) return '（循环引用，已省略）';
+    seen.add(value);
+    if (Array.isArray(value)) return value.map(v => redactBase64(v, seen));
     const out = {};
-    for (const k of Object.keys(value)) out[k] = redactBase64(value[k]);
+    for (const k of Object.keys(value)) out[k] = redactBase64(value[k], seen);
     return out;
   }
   return value;

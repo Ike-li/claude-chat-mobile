@@ -295,6 +295,53 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  // e7efb98 fix(fidelity): cacheToolOutput 缓存原始结构（未脱敏），getToolOutput 取出时才脱敏——
+  // 与 outputSummary 走的即时脱敏路径（fullRedacted）是两条独立代码路径，缺一条都会让「展开全文」
+  // 绕开 base64 红线（65390cc 曾引入过这个回归）。本用例锁住取出路径本身，不能只测 outputSummary。
+  test('tool_result：getToolOutput 取出缓存的 base64 载荷时也须脱敏（不只是 outputSummary 即时脱敏）', () => {
+    const { s } = makeSession();
+    const bigBase64 = 'C'.repeat(50000);
+    s.map({ type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'tool-cache-img', is_error: false,
+        content: [{ type: 'image', file: { base64: bigBase64 } }] }
+    ] } });
+    const full = s.getToolOutput('tool-cache-img');
+    assert.ok(full, '未超 256KB 的载荷应被缓存、可取出');
+    assert.ok(!full.includes(bigBase64.slice(0, 300)), '展开全文不得原样吐出缓存的 base64');
+    assert.match(full, /已省略/);
+    s.dispose();
+  });
+
+  // 回归防线：cacheToolOutput 的体积检查必须用与其它落点一致的安全 stringify（try/catch 兜底），
+  // 不能用裸 JSON.stringify——同文件「绝不让诊断插桩反噬主消息泵」的既有教训：不可序列化的 raw
+  // （如循环引用，MCP/SDK 工具输出结构不受本项目控制）会让裸 JSON.stringify 同步抛错，
+  // 而这条调用没有被 map() 外层保护，会直接打断整条正在处理的消息。
+  test('tool_result：raw 含循环引用（不可 JSON 序列化）不得抛错、不得打断消息泵', () => {
+    const { s, events } = makeSession();
+    const circular = { note: 'mcp 工具可能返回任意结构' };
+    circular.self = circular;
+    assert.doesNotThrow(() => {
+      s.map({ type: 'user', tool_use_result: circular, message: { content: [
+        { type: 'tool_result', tool_use_id: 'tool-circular', is_error: false, content: 'ok' }
+      ] } });
+    });
+    const tr = events.find(e => e.type === 'tool_result' && e.payload.toolUseId === 'tool-circular');
+    assert.ok(tr, '循环引用不得让整条 tool_result 事件都发不出来');
+    s.dispose();
+  });
+
+  // 256KB 上限：超大载荷不缓存（摘要层已红线，展开也无意义内容），getToolOutput 回落 null。
+  test('tool_result：超过 256KB 的载荷不被缓存，getToolOutput 返回 null', () => {
+    const { s } = makeSession();
+    const huge = 'line of tool output with spaces.\n'.repeat(8000); // > 256KB，非 base64 字符集不会被提前脱敏省略
+    assert.ok(huge.length > 256 * 1024);
+    s.map({ type: 'user', message: { content: [
+      { type: 'tool_result', tool_use_id: 'tool-huge', is_error: false, content: huge }
+    ] } });
+    assert.equal(s.getToolOutput('tool-huge'), null, '超 256KB 不缓存，展开全文应回落 null');
+    s.dispose();
+  });
+
   test('base64 脱敏不误伤真实长代码（保护 Edit/Write 预览 diff，含换行大括号不会被判成二进制）', () => {
     const { s, events } = makeSession();
     const longCode = 'function foo() {\n  return 1;\n}\n'.repeat(50);
