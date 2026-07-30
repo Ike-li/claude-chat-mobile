@@ -2704,7 +2704,7 @@ export function shouldRerenderSessionList({ hasPrevEntry = false, prevSessions, 
 // 按目录分键的实例签名：每个 cwd 一段签名片段（id+sessionId+title 前 20 字拼接），代替原先"整个实例
 // 集拼一个全局签名"的做法——粒度对齐原全局 structKey，只是从"任何一个实例变化都命中"改成"命中哪个
 // 目录就只标记哪个目录"。状态字段（busy/idle/permission/error）故意不进签名，那些由 refreshDirBadges/
-// refreshInstanceBadges 独立、更轻量地实时刷新，不需要牵动 DOM 子树重建。
+// refreshSessionStatusChips 独立、更轻量地实时刷新，不需要牵动 DOM 子树重建。
 export function buildDirInstanceSignatures(instances = [], dirs = []) {
   const byDir = new Map();
   for (const d of (dirs || [])) byDir.set(d, []);
