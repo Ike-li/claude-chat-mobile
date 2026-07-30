@@ -88,6 +88,19 @@ test.describe('send()', () => {
     s.dispose();
   });
 
+  // F1 回归：FRESH 会话不 pin 模型（server 端 startModel=undefined，让 CLI 按原生优先级自行解析），
+  // 用户又没选模型时前端发 model:null → target 为空。此时绝不能下发 setModel(undefined)——
+  // CLI 会把网关模型重置成裸默认（实测：init 从 mimo 变成 opus 并报错，见 agent.js F1 注释）。
+  test('target 为空（FRESH 空发）→ 绝不调 setModel', async () => {
+    const { s } = makeSession(); // model 缺省 → defaultModel/activeModel 均为 undefined
+    let setModelCalls = 0;
+    s.q = { setModel() { setModelCalls++; return Promise.resolve(); } };
+    const result = await s.send('hi', null);
+    assert.equal(result, true);
+    assert.equal(setModelCalls, 0, 'FRESH 空发不得下发 setModel(undefined) 重置网关模型');
+    s.dispose();
+  });
+
   test('model 变化 → 调 setModel + activeModel 更新', async () => {
     const { s } = makeSession({ model: 'sonnet' });
     let setModelCalled = null;
@@ -99,22 +112,23 @@ test.describe('send()', () => {
     s.dispose();
   });
 
-  test('setModel 抛错 → 不崩、emit error', async () => {
+  test('setModel 抛错 → 不崩、emit error、activeModel 不谎报', async () => {
     const { s, events } = makeSession({ model: 'sonnet' });
     s.q = { setModel() { return Promise.reject(new Error('model not found')); } };
     const result = await s.send('hi', 'unknown-model');
     assert.equal(result, true); // 仍然发送（用原模型）
     const err = events.find(e => e.type === 'error');
     assert.ok(err);
-    assert.ok(err.payload.message.includes('模型切换失败'));
-    assert.equal(s.activeModel, 'sonnet'); // 未变
+    assert.ok(err.payload.message.includes('模型切换失败'), '明确 reject=确定没切，文案说"失败"');
+    assert.equal(s.activeModel, 'sonnet', '切换没成功 → activeModel 不推进（前端显示的是真生效模型）');
+    assert.equal(s.attemptedModel, 'unknown-model', '已尝试过 → 差分基准推进，同一目标不再重试');
     s.dispose();
   });
 
   // 回归：q.setModel 和 q.interrupt 走同一条 control_request 通道，限流重试期间同样可能永不回包。
   // 此前只有 interrupt() 有超时保护，setModel 会话起来 send() 直接永久 hang（既不报错也不发出）。
-  // 超时后应等同于 setModel 抛错——优雅降级用原模型发送，而不是把整条 send() 一起挂死。
-  test('setModel 挂起超时 → 优雅降级用原模型发送（不永久 hang），emit error', async () => {
+  // 超时后应等同于 setModel 抛错——优雅降级继续发送，而不是把整条 send() 一起挂死。
+  test('setModel 挂起超时 → 优雅降级继续发送，activeModel 不谎报', async () => {
     const { s, events } = makeSession({ model: 'sonnet' });
     s.interruptTimeoutMs = 20; // 单测加速：与 interrupt 共用同一超时配置
     s.q = { setModel() { return new Promise(() => {}); } }; // 永不 resolve
@@ -122,8 +136,33 @@ test.describe('send()', () => {
     assert.equal(result, true, '超时后仍应继续发送，不是整条卡死');
     const err = events.find(e => e.type === 'error');
     assert.ok(err, '应像其它 setModel 失败一样 emit error');
-    assert.ok(err.payload.message.includes('模型切换失败'));
-    assert.equal(s.activeModel, 'sonnet', '切换未完成，保留原模型');
+    assert.ok(err.payload.message.includes('模型切换未确认'), '超时=可能切了也可能没切，文案说"未确认"');
+    assert.equal(s.activeModel, 'sonnet', '未确认生效 → 不推进 activeModel');
+    s.dispose();
+  });
+
+  // 真机 2026-07-30：set_model 恒超时的第三方网关下，若失败后不推进差分基准，
+  // 每条消息都会重下发一次 setModel → 每轮白等 interruptTimeoutMs(10s) 并重复弹错。
+  test('setModel 失败后同一目标不再重试（防每轮白等超时）', async () => {
+    const { s, events } = makeSession({ model: 'sonnet' });
+    s.interruptTimeoutMs = 20;
+    let setModelCalls = 0;
+    s.q = { setModel() { setModelCalls++; return new Promise(() => {}); } }; // 永不 resolve
+    await s.send('hi', 'opus');
+    assert.equal(setModelCalls, 1, '第一次 send 尝试下发');
+    await s.send('hi again', 'opus'); // pendingTurns=1 < 2，无需重置内部状态即可再发
+    assert.equal(setModelCalls, 1, '同一目标已尝试过 → 不再重复下发');
+    assert.equal(events.filter(e => e.type === 'error').length, 1, '错误只提示一次，不每轮刷屏');
+    s.dispose();
+  });
+
+  test('setModel 失败后切到别的模型 → 允许重新尝试', async () => {
+    const { s } = makeSession({ model: 'sonnet' });
+    const calls = [];
+    s.q = { setModel(m) { calls.push(m); return Promise.reject(new Error('model not found')); } };
+    await s.send('hi', 'bad-model');
+    await s.send('hi again', 'other-model');
+    assert.deepEqual(calls, ['bad-model', 'other-model'], '目标变了就该重新下发，不因上次失败被永久锁死');
     s.dispose();
   });
 

@@ -245,9 +245,15 @@ export class AgentSession {
     // 消息不带 model（"默认"）时 target 回退到它，而非 SDK 裸默认——否则空选择会把
     // 配置的网关模型 setModel(undefined) 重置掉（实测：init 从 mimo 变成 opus 并报错）。
     this.defaultModel = model || undefined;
-    this.activeModel = model || undefined;   // 当前生效模型，差分决定是否调 setModel
-    // A5：init 报告的真实运行模型名，仅供交互日志显示真实生效模型（不入 activeModel——否则 fresh 会话
-    // 下条空发会 target=undefined≠activeModel → setModel(undefined) 把网关模型重置，即 F1 事故）
+    this.activeModel = model || undefined;   // 已确认生效的模型（仅 setModel 成功后推进）——UI/日志显示用
+    // 最近一次已「尝试下发」的目标（成功或失败都记）——差分基准，与 activeModel 分离：
+    // setModel 失败/超时时 activeModel 不动（不对前端谎报未生效的模型），但 attemptedModel 已推进，
+    // 同一目标不再每轮重试。否则遇到 set_model 恒超时的第三方网关，每条消息都白等
+    // interruptTimeoutMs(10s) 并重复弹错（真机 2026-07-30）。
+    this.attemptedModel = model || undefined;
+    // A5：init 报告的真实运行模型名，仅供交互日志/statusline 显示真实生效模型。
+    // 绝不入 activeModel/attemptedModel：它只是「init 那一刻」的快照，用户切过模型后即 stale，
+    // 拿它当差分依据会让「切走再切回」被误判为无变化而跳过 setModel（真切不回去）。
     this.reportedModel = null;
     // 当前权限档（default/plan/acceptEdits/bypassPermissions/dontAsk），可运行时切；差分决定是否调 setPermissionMode
     // dontAsk = 非交互严格档：白名单外终端层直接 deny、不走 canUseTool（手机不弹窗），sdkPermissionMode 原样透传（不映射）
@@ -424,14 +430,26 @@ export class AgentSession {
     const displayText = opts.displayText ?? text;
 
     // 空选择（"默认"）回退到 defaultModel，不是 SDK 裸默认——只有真正切换才调 setModel。
+    // F1：target 为空（FRESH 会话不 pin 模型 + 用户没选）时绝不下发——setModel(undefined) 会把
+    // 网关模型重置成 CLI 裸默认（实测：init 从 mimo 变成 opus 并报错）。
+    // 差分基准是 attemptedModel 而非 activeModel：失败/超时后同一目标不再每轮重试（见构造函数注释）。
     // setModel 是 await 让出点，之后须重检 disposed/pendingTurns（S3 + 双重检查）。
     const target = model || this.defaultModel;
-    if (target !== this.activeModel) {
+    if (target !== undefined && target !== this.attemptedModel) {
+      this.attemptedModel = target; // await 之前置位：并发 send 不重复下发，失败也不再重试
       try {
         await this._raceControlRequest(() => this.q?.setModel(target), 'set_model');
         this.activeModel = target;
       } catch (err) {
-        this.emit('error', { message: `模型切换失败（${err.message}），已用原模型发送`, recoverable: true });
+        // 区分两类失败：超时=CLI 侧可能已切也可能没切（诚实说"未确认"）；
+        // 明确 reject（如 model not found）=确定没切，原模型继续。两者都不动 activeModel。
+        const timedOut = /_timeout$/.test(String(err?.message || ''));
+        this.emit('error', {
+          message: timedOut
+            ? `模型切换未确认（${err.message}），已继续发送`
+            : `模型切换失败（${err.message}），已用原模型发送`,
+          recoverable: true,
+        });
       }
     }
 
