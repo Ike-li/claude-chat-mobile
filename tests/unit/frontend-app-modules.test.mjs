@@ -686,6 +686,69 @@ test('task status controller collapses the multi-task list by default and expand
   assert.equal(context.dom.taskProgressList.classList.contains('hidden'), true, '再次点击收起');
 });
 
+test('task status onComplete：清理已完成任务的 progressHistory，若详情面板正显示该任务则自动关闭', () => {
+  function fakeNode() {
+    const classes = new Set();
+    const attrs = {};
+    const listeners = {};
+    const children = [];
+    return {
+      classList: {
+        add: (...names) => names.forEach(n => classes.add(n)),
+        remove: (...names) => names.forEach(n => classes.delete(n)),
+        contains: name => classes.has(name),
+        toggle: (name, force) => {
+          const next = force === undefined ? !classes.has(name) : Boolean(force);
+          if (next) classes.add(name); else classes.delete(name);
+          return next;
+        },
+      },
+      setAttribute: (k, v) => { attrs[k] = String(v); },
+      getAttribute: k => attrs[k],
+      addEventListener: (type, handler) => { listeners[type] = handler; },
+      click: () => listeners.click?.(),
+      append: (...nodes) => children.push(...nodes),
+      appendChild: (n) => { children.push(n); return n; },
+      replaceChildren: () => { children.length = 0; },
+      children,
+      textContent: '',
+      title: '',
+    };
+  }
+
+  const banner = fakeNode();
+  const taskProgressText = { textContent: '' };
+  const taskDetailPanel = fakeNode();
+  const taskDetailContent = fakeNode();
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText, taskDetailPanel, taskDetailContent },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: fakeNode });
+
+  status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [
+      { taskId: 't1', message: 'one', description: 'doing one' },
+      { taskId: 't2', message: 'two', description: 'doing two' },
+    ] },
+  });
+
+  // 点击 t1 所在行 → 展开详情面板（renderTaskList 按 Map 插入序渲染行，t1 是第一行）
+  const rows = context.dom.taskProgressList.children;
+  assert.equal(rows.length, 2);
+  rows[0].click();
+  assert.equal(taskDetailPanel.classList.contains('hidden'), false, '详情面板应展开');
+  assert.ok(taskDetailContent.children.length > 0, '应渲染出历史条目');
+
+  // t1 完成、t2 仍在跑：不整清横幅，但正开着的 t1 详情必须自动关闭——否则面板停留在陈旧数据上，
+  // 且 t1 行已从列表消失，用户点不到任何行去关闭它。
+  status.onComplete({ instanceId: 'inst-1', payload: { taskId: 't1', status: 'completed' } });
+
+  assert.equal(taskDetailPanel.classList.contains('hidden'), true, 't1 完成后详情面板须自动关闭');
+  assert.equal(taskDetailContent.children.length, 0, '详情内容须清空，不留陈旧历史');
+});
+
 test('session workspace state exposes isolated caches through app context', () => {
   const firstContext = createAppContext();
   const secondContext = createAppContext();
