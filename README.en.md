@@ -173,7 +173,7 @@ Beyond the core loop above:
 - **Six permission modes** (default / plan / acceptEdits / dontAsk / auto / bypassPermissions), switchable at runtime; approvals carry TTL and integrity binding.
 - **Per-message model switching** (gateway-suffixed names supported); resume can fall back to the last assistant model in the session.
 - **Multi-repo and multi-session**: switch among allow-listed working directories; watch several sessions from the home hub / drawer. To use a git worktree, add its absolute path to `workdirs.json` as its own workspace (hot-reloaded, no restart).
-- **Visible message queue + withdraw** (aligned with CLI Queued/ESC); dual-state stop on the send button; CLI-style live status line and turn-done line.
+- **One turn at a time**: no new messages while a task runs (the input stays typable for drafts; the send slot becomes a stop button with a persistent hint); CLI-style live status line and turn-done line.
 - **Visible sub-agents / background tasks**, with stop for background tasks; Task-list tools rendered inline.
 - **File and image upload** (including clipboard paste and pre-send preview), with path injection and traversal protection; historical attachments open on tap; **read-only project file browse** (never outside allow-listed workdirs).
 - **Preview changes on tool cards**: diff for Edit / Write, snippet for Read; base64 redaction and JSON highlighting.

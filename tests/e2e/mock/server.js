@@ -69,7 +69,6 @@ const mockServicePayload = () => ({
   hooksBridge: { state: mockHooksState, off: false },
 });
 let busySilentSwitchMode = false; // test:busy-silent-switch：inst_2 sync 只回放 user_message（触发 reload）、不发 result（模拟静默窗口）
-const queuedEchoItems = new Map(); // busy 期回显为 queued 的消息 clientMessageId → {text}：user:cancelQueued 撤回 / interrupt 连带取消 都按它对账
 let foregroundSyncReplayMode = false;
 let foregroundFoundMissingMode = false;
 let foregroundFoundMissingHistoryMode = false;
@@ -2309,11 +2308,13 @@ io.on('connection', socket => {
       },
     },
     {
-      command: 'test:queuefull',
+      // 排队已移除：模拟「一轮在跑」——发送闸关上（turnRunning）、主按钮变停止钮、常驻提示行出现。
+      // 1.2s 后轮次结束自动解锁，供 spec 断言恢复可发送。
+      command: 'test:turn-running',
       run: async ({ activeInst }) => {
-        console.log('[mock] Simulating full foreground turn queue');
+        console.log('[mock] Simulating an in-flight turn (send gate closed)');
         activeInst.state = 'busy';
-        activeInst.queueFull = true;
+        activeInst.turnRunning = true;
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
           type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
@@ -2321,11 +2322,11 @@ io.on('connection', socket => {
 
         socket.emit('agent:event', {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'system', payload: { message: '[MOCK_INFO] Foreground turn queue is full; hold the draft until the active task drains.' }
+          type: 'system', payload: { message: '[MOCK_INFO] A turn is running; new messages are refused until it finishes.' }
         });
 
         await delay(1200);
-        activeInst.queueFull = false;
+        activeInst.turnRunning = false;
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
@@ -2333,7 +2334,7 @@ io.on('connection', socket => {
         });
         socket.emit('agent:event', {
           seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'result', payload: { messageId: 'msg_queue_full_1', durationMs: 1200, costUsd: 0, isError: false, models: [activeModel] }
+          type: 'result', payload: { messageId: 'msg_turn_running_1', durationMs: 1200, costUsd: 0, isError: false, models: [activeModel] }
         });
       },
     },
@@ -3274,6 +3275,16 @@ io.on('connection', socket => {
 
   // Handle custom trigger command inputs
   socket.on('user:message', async (payload, ack) => {
+    // 在途轮拒收（排队已移除）：镜像真 server 的 busy 负 ack。判据用 turnRunning 而非 state==='busy'——
+    // 只有显式模拟在途轮的场景（test:turn-running）才置它，别的 busy 场景仍走 mock 的"总是成功"语义。
+    const gateInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
+    if (gateInst?.turnRunning === true) {
+      console.log('[mock] user:message refused — turn running');
+      if (typeof ack === 'function') {
+        ack({ ok: false, error: '当前任务运行中，请等待完成后再发送', busy: true, retryable: false });
+      }
+      return;
+    }
     // REL-01：真实 server.js 现支持 ack（离线重发路径用 socket.timeout().emit(...,ack)）；
     // mock 本就是"总是成功"语义，无需等分支处理完才 ack，此处立即回，避免离线重发场景在 mock 下永远超时。
     if (typeof ack === 'function') ack({ ok: true });
@@ -3308,15 +3319,11 @@ io.on('connection', socket => {
     }
 
     // Always echo user message back
-    // 排队语义镜像真实 server：busy 期间发的消息 queued:true + 透传 clientMessageId（撤回按它定位）
-    const echoInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
-    const echoQueued = echoInst?.state === 'busy';
     const echoClientMessageId = typeof messagePayload.clientMessageId === 'string' ? messagePayload.clientMessageId : undefined;
-    if (echoQueued && echoClientMessageId) queuedEchoItems.set(echoClientMessageId, { text: cmd });
     socket.emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
       type: 'user_message', payload: {
-        text: cmd, attachments, queued: echoQueued,
+        text: cmd, attachments,
         ...(echoClientMessageId ? { clientMessageId: echoClientMessageId } : {})
       }
     });
@@ -3570,23 +3577,6 @@ io.on('connection', socket => {
   // 否则「跳过此问题」只能发出 interrupt 却关不掉弹窗（前端故意不乐观关窗）。
   // 注意：agent:event 带 activeEpoch 时 seq 必须单调递增——前端 `ev.seq <= lastSeq` 会丢弃回退 seq，
   // 所以这里绝不能发 seq:0（question 已是 seq:3 时会把 resolved 整条滤掉）。
-  // 撤回排队中的消息（镜像真 server user:cancelQueued：命中→ok+text+system queue_cancelled；未命中→负 ack）
-  socket.on('user:cancelQueued', (payload, ack) => {
-    const id = typeof payload?.clientMessageId === 'string' ? payload.clientMessageId : '';
-    const item = queuedEchoItems.get(id);
-    console.log(`[mock] User cancelQueued received: clientMessageId=${id}, hit=${Boolean(item)}`);
-    if (!item) {
-      if (typeof ack === 'function') ack({ ok: false, error: '该消息已开始处理，无法撤回' });
-      return;
-    }
-    queuedEchoItems.delete(id);
-    if (typeof ack === 'function') ack({ ok: true, text: item.text });
-    socket.emit('agent:event', {
-      seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-      type: 'system', payload: { message: '已撤回排队中的消息', kind: 'queue_cancelled', clientMessageId: id }
-    });
-  });
-
   socket.on('user:interrupt', payload => {
     const { instanceId } = payload || {};
     const targetId = instanceId || viewingInstanceId;
@@ -3600,16 +3590,6 @@ io.on('connection', socket => {
         type: 'instances', payload: { viewingInstanceId, viewingCwd: activeInst.cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
     }
-    // 镜像真 server：interrupt 连带丢弃 CLI 队列里的排队条 → queue_dropped（前端据此把气泡标「已随停止取消」）
-    if (queuedEchoItems.size > 0) {
-      const droppedIds = [...queuedEchoItems.keys()];
-      queuedEchoItems.clear();
-      socket.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: targetId, ts: Date.now(),
-        type: 'system', payload: { message: '排队中的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds }
-      });
-    }
-
     // 挂起的 AskUserQuestion：按真实 abort 路径关闭
     // 真实 agent 对每道题 emit request_resolved({ requestId: `${toolUseID}#${i}`, outcome:'aborted' })
     // ——requestId 用带 #i 的完整 id，前端 matchQ 直接相等命中；seq 接在 question(seq:3) 之后。

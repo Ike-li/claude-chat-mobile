@@ -95,12 +95,20 @@ export async function closeGeneralSettings(page: Page) {
 
 export async function sendChatMessage(page: Page, text: string) {
   await ensureComposerReady(page);
+  // 排队已移除（2026-07-30）：在途轮期间发不出新消息，主按钮此时是【停止钮】——
+  // 不先等本轮结束就点，等于点了停止，消息根本没发出去（静默失败，断言要到很后面才炸）。
+  // 只在确实处于 stop 态时才等，避免给每次发送都套上 20s 超时窗。
+  // 镜像态（data-mode=resume/cancel-resume）不在此等：那是「续接」语义，由各 spec 自行驱动。
+  const btnSend = page.locator('#btnSend');
+  if (await btnSend.getAttribute('data-mode') === 'stop') {
+    await expect(btnSend).not.toHaveAttribute('data-mode', 'stop', { timeout: 20_000 });
+  }
   const input = page.locator('#input');
   await input.fill(text);
   // Composer C：空闲无内容时发送钮 .hidden；确保 input 事件把钮露出后再点
-  await expect(page.locator('#btnSend')).toBeVisible({ timeout: 5_000 });
-  await expect(page.locator('#btnSend')).toBeEnabled();
-  await page.locator('#btnSend').click();
+  await expect(btnSend).toBeVisible({ timeout: 5_000 });
+  await expect(btnSend).toBeEnabled();
+  await btnSend.click();
 }
 
 export async function waitForIdle(page: Page) {

@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';
 import * as diagLog from '../../src/agent/diag-log.js';
 
-test.describe('_raceControlRequest → diag-log race_settle（5 个共享通道调用点）', () => {
+test.describe('_raceControlRequest → diag-log race_settle（4 个共享通道调用点）', () => {
   test('set_model 成功 → control/race_settle(ok:true)', async () => {
     const { s } = makeSession({ model: 'sonnet' });
     s.q = { setModel() { return Promise.resolve(); } };
@@ -66,21 +66,6 @@ test.describe('_raceControlRequest → diag-log race_settle（5 个共享通道�
     const diag = diagLog.getDiagLogs(s.logKey()).at(-1);
     assert.equal(diag.subsystem, 'interrupt');
     assert.equal(diag.detail.tag, 'stop_task');
-    assert.equal(diag.detail.ok, false);
-    s.dispose();
-  });
-
-  test('cancel_async_message 挂起超时 → queue/race_settle(tag:cancel_async_message, ok:false)', async () => {
-    const { s } = makeSession();
-    s.interruptTimeoutMs = 20;
-    await s.send('first', null, { clientMessageId: 'c1' });
-    await s.send('second', null, { clientMessageId: 'c2' });
-    s.queue = [];
-    s.q = { cancelAsyncMessage: () => new Promise(() => {}) };
-    await s.cancelQueued('c2');
-    const diag = diagLog.getDiagLogs(s.logKey()).at(-1);
-    assert.equal(diag.subsystem, 'queue');
-    assert.equal(diag.detail.tag, 'cancel_async_message');
     assert.equal(diag.detail.ok, false);
     s.dispose();
   });

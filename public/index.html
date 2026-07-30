@@ -452,8 +452,14 @@
       <button id="btnMirrorSync" type="button" class="hidden" tabindex="-1" aria-hidden="true">刷新消息</button>
       <button id="btnMirrorOverride" type="button" class="hidden" tabindex="-1" aria-hidden="true">续接 CLI 会话</button>
 
+      <!-- 在途轮常驻提示（排队已于 2026-07-30 移除）：运行中发不出新消息，但输入框仍可打字存草稿。
+           placeholder 在打字时看不见、移动端也没有 hover title，所以单列一行小字说明原因与出路。
+           由 app.js syncComposerBusyHint() 按 _turnRunning 显隐。-->
+      <div id="composerBusyHint" class="hidden px-1 pb-1 text-[11px] text-ink-faint select-none" data-testid="composer-busy-hint"></div>
+
       <!-- Unified Premium Input Pill Container
-           busy 态：发送钮双态（空输入→停止 / 有内容→排队发送）；live 状态迁到消息流 #streamLiveStatus，不再占 pill 顶行。
+           busy 态：发送钮恒为停止钮（草稿保留在输入框，发送闸由 #composerBusyHint 说明）；
+           live 状态迁到消息流 #streamLiveStatus，不再占 pill 顶行。
            CLI 镜像：placeholder 显示「终端运行中 · 只读追平」等，发送位变「续接 CLI 会话」。-->
       <div class="chat-input-pill flex flex-col gap-1 p-2 bg-surface shadow-md border border-line">
         <!-- Top Row: Full-width Textarea

@@ -6,7 +6,6 @@ import {
   resolveTurnEndScroll,
   resolveComposerPlaceholder,
   resolveComposerPrimaryMode,
-  queuedBubbleState,
 } from '../../public/js/logic.js';
 
 test('resolveTurnEndScroll：有文件汇总卡 → 锚定卡；否则落底', () => {
@@ -15,11 +14,13 @@ test('resolveTurnEndScroll：有文件汇总卡 → 锚定卡；否则落底', (
   assert.equal(resolveTurnEndScroll({}), 'bottom');
 });
 
-test('resolveComposerPlaceholder：busy 仍用 idle 文案；queueFull / mirror 优先', () => {
+// busy 与 turnRunning 分开：busy 含后台任务/待审批，发送闸只认在途轮——
+// 挂着后台任务时 placeholder 不该谎称「发不出去」。
+test('resolveComposerPlaceholder：turnRunning 提示不可发送；busy 单独不改文案；mirror 优先', () => {
   assert.equal(resolveComposerPlaceholder({ busy: true }), '给 Claude 发消息...');
-  assert.match(resolveComposerPlaceholder({ busy: true, queueFull: true }), /排队/);
+  assert.match(resolveComposerPlaceholder({ turnRunning: true }), /运行中/);
   assert.equal(
-    resolveComposerPlaceholder({ busy: true, mirrorReadonly: true, mirrorText: '终端运行中' }),
+    resolveComposerPlaceholder({ turnRunning: true, mirrorReadonly: true, mirrorText: '终端运行中' }),
     '终端运行中',
   );
   assert.equal(resolveComposerPlaceholder({}), '给 Claude 发消息...');
@@ -33,17 +34,9 @@ test('resolveComposerPlaceholder：busy 仍用 idle 文案；queueFull / mirror 
   );
 });
 
-test('resolveComposerPrimaryMode: 忙碌有内容 → 发送启用 + 纠偏 title', () => {
-  const out = resolveComposerPrimaryMode({ busy: true, hasContent: true });
-  assert.equal(out.mode, 'send');
+test('resolveComposerPrimaryMode: 在途轮 + 有内容 → 停止钮（排队已移除）', () => {
+  const out = resolveComposerPrimaryMode({ busy: true, turnRunning: true, hasContent: true });
+  assert.equal(out.mode, 'stop');
   assert.equal(out.enabled, true);
-  assert.match(out.title, /步骤|纠偏|排队/);
-  assert.match(out.ariaLabel, /发送|排队/);
-});
-
-test('queuedBubbleState: 文案保留排队语义并暗示步骤后生效', () => {
-  const st = queuedBubbleState({ queued: true });
-  assert.equal(st.show, true);
-  assert.match(st.label, /排队/);
-  assert.match(st.label, /步骤|结束|发送/);
+  assert.equal(out.ariaLabel, '停止');
 });

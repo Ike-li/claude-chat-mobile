@@ -19,12 +19,11 @@ const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
 const TOOL_INPUT_TTL_MS = 10 * 60 * 1000; // 缓存 input 存活 10 分钟
 // _raceControlRequest 的 tag → 诊断时间线 subsystem 归类：interrupt/stop_task 属于"停止"，
-// cancel_async_message 属于"排队"，set_model/set_permission_mode 走同一条通道但既非排队也非停止，
-// 归入诚实的第四档 control，不强行塞进另外两类致使语义失真。
+// set_model/set_permission_mode 走同一条通道但不属于停止，归入诚实的第三档 control，
+// 不强行塞进"停止"致使语义失真。
 const CONTROL_TAG_SUBSYSTEM = {
   interrupt: 'interrupt',
   stop_task: 'interrupt',
-  cancel_async_message: 'queue',
   set_model: 'control',
   set_permission_mode: 'control',
 };
@@ -284,11 +283,10 @@ export class AgentSession {
     // （无 tool_use、只走 stream_event）的卡片永远没有 🤖 类型名。换会话/dispose 清空，不跨会话/实例串标签。
     this.subagentTypeByParent = new Map();
 
+    // SDK 输入泵（inputStream）的缓冲，不是"消息排队"：排队已于 2026-07-30 移除，在途轮期间
+    // send() 直接拒收。SDK 泵是贪婪拉取（实证 2026-07-18 探针），send 后消息几乎立即被取走，
+    // 故这里通常长度 ≤1，只在 send 完成到泵取走之间的窄窗内非空。
     this.queue = [];
-    // 已交给 SDK/CLI、可能仍在 CLI 内部队列等候开跑的排队条登记（上限恒 1：pendingTurns 封顶 2）。
-    // SDK 输入泵是贪婪拉取（实证 2026-07-18 探针）：send 后消息几乎立即离开 this.queue 进 CLI 队列，
-    // 撤回（cancelQueued）与中断结算（interrupt 丢弃 CLI 队列条不产生 result）都靠这份登记对账。
-    this.cliQueued = null;        // { clientMessageId, uuid, displayText } | null
     this.notifyInput = null;
     this.inputEnded = false;
 
@@ -309,7 +307,7 @@ export class AgentSession {
           message: { role: 'user', content: [{ type: 'text', text: item.text }] },
           parent_tool_use_id: null,
           session_id: this.sessionId || '',
-          uuid: item.uuid // CLI 用它索引内部队列，供 cancelQueued 按 uuid 撤回（实证 CLI 认自打 uuid）
+          uuid: item.uuid // CLI 用它索引内部队列（实证 CLI 认自打 uuid）
           // 注：SDKUserMessage 上的 model 字段被 CLI 完全忽略（F1 根因）；模型切换走 q.setModel()
         };
       }
@@ -395,7 +393,6 @@ export class AgentSession {
     this.pendingTurns = 0;
     this._openTurns = [];
     this.queue = [];
-    this.cliQueued = null;        // 进程已结束，CLI 内部队列不复存在，登记随之作废
     this.pendingAutoTurn = false; // 实例结束不留滞留 flag，防重开实例后残留状态误合成
     this._awaitingInterruptResult = false;
     this.bgTasks.clear();         // 实例结束清空活后台注册表，防残留误亮 ⏳
@@ -424,9 +421,10 @@ export class AgentSession {
   // F1：model 变化时调 setModel()（SDKUserMessage.model 被 CLI 忽略，此为唯一有效切换路径）
   // E17：opts.displayText/attachments——附件场景下 text=注入路径后的 promptText（送 SDK），
   // displayText=原文（气泡 + 会话标题，不含路径），attachments=去完整 data 的元数据（含小 thumb）。
+  // 排队已移除（2026-07-30）：一轮跑完才收下一条。三层各一道闸——前端提示 / 服务端拒绝 / 这里兜底。
   async send(text, model, opts = {}) {
-    if (this.pendingTurns >= 2) {
-      this.emit('system', { message: '前面还有消息在排队，请等当前任务结束' });
+    if (this.pendingTurns >= 1) {
+      this.emit('system', { message: '当前任务运行中，请等待完成' });
       return false;
     }
     const displayText = opts.displayText ?? text;
@@ -456,9 +454,9 @@ export class AgentSession {
     }
 
     if (this.disposed) return false; // S3：setModel 的 await 间隙实例可能已被 dispose，勿再往弃用实例排队
-    // 双重检查：setModel await 期间其他 send 可能已把 pendingTurns 推到上限
-    if (this.pendingTurns >= 2) {
-      this.emit('system', { message: '前面还有消息在排队，请等当前任务结束' });
+    // 双重检查：setModel 是 await 让出点，间隙内其他 send 可能已经开了一轮
+    if (this.pendingTurns >= 1) {
+      this.emit('system', { message: '当前任务运行中，请等待完成' });
       return false;
     }
 
@@ -469,7 +467,6 @@ export class AgentSession {
     this.emit('user_message', {
       text: displayText,
       attachments: opts.attachments,
-      queued: this.pendingTurns >= 1, // 排队可见性：emit 在 pendingTurns++ 之前，≥1=前面有在途轮、这条在排队
       ...(opts.clientMessageId ? { clientMessageId: opts.clientMessageId } : {}),
     }); // F3 + E17：入缓冲并广播，多设备/重载后均可回放
     // 日志模型/effort/perm 走统一 logMeta()（消除 send vs result 的模型解析漂移，见 logMeta 注释）。
@@ -478,13 +475,12 @@ export class AgentSession {
     interactionLog.userMessageOut(this.logKey(), displayText, metaModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
     this._openTurnSlot();
     this.pendingTurns++;
-    if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表（排队第二轮不覆盖在途轮基准）
+    if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表
     // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
     interactionLog.agentSend(this.logKey(), text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
-    // uuid 随消息透传 CLI（SDKUserMessage.uuid），CLI 以它索引内部队列——撤回（cancel_async_message）按此定位
+    // uuid 随消息透传 CLI（SDKUserMessage.uuid），CLI 以它索引内部队列
     const msgUuid = randomUUID();
     this.queue.push({ text, clientMessageId: opts.clientMessageId || null, uuid: msgUuid, displayText });
-    if (this.pendingTurns >= 2) this.cliQueued = { clientMessageId: opts.clientMessageId || null, uuid: msgUuid, displayText };
     this.notifyInput?.();
     this.lastActivity = Date.now(); // 续期静默看护：send 是用户活动，防 idle 误判
     return true;
@@ -589,7 +585,6 @@ export class AgentSession {
       const stranded = this.pendingTurns;
       this._forceSettleOpenTurns();
       this.pendingTurns = 0;
-      this.cliQueued = null;
       this._awaitingInterruptResult = false;
       diagLog.record(this.logKey(), 'interrupt', 'settle_watchdog', { strandedTurns: stranded, graceMs: ms });
       interactionLog.addSessionLog(this.logKey(), 'sys_info',
@@ -609,38 +604,25 @@ export class AgentSession {
     // 「点停止后、中断未完成」时又发消息，该消息会 push 进新队列，不被本次中断卷入丢弃；
     // toDrop 才是本次要丢的「中断发起时已排队」。修原竞态：旧实现 await 后才 this.queue=[]，
     // 会连 await 间隙新发的一起清空（静默丢消息）+ pendingTurns 按旧 dropped 少扣。
+    // 排队移除后 toDrop 最多 1 条：send 完成到 SDK 输入泵取走之间的窄窗。它已记账（pendingTurns++）
+    // 却还没送达 SDK，停止时必须丢弃并补扣，否则账面泄漏 1、busy 卡到 idle 看护兜底才清。
     const toDrop = this.queue;
     const dropped = toDrop.length;
     this.queue = [];
-    // CLI 侧排队条结算（幽灵 busy 修复）：贪婪泵下排队条通常已离开 this.queue 进 CLI 内部队列，
-    // interrupt 会把它一并丢弃且【不产生 result】（实证：2026-07-18 探针场景2）——若不在此补扣
-    // pendingTurns 会泄漏 1，停止后 busy 卡到 idle 看护兜底。仍在 toDrop 里（竞态窗）则账随 dropped 走，防双扣。
-    const cliDropped = (this.cliQueued
-      && !toDrop.some(it => it.clientMessageId && it.clientMessageId === this.cliQueued.clientMessageId))
-      ? this.cliQueued : null;
-    // 同步摘牌（与 cancelQueued() 的"先摘牌再 await"对称）：above 只是快照读，若不在此清掉
-    // this.cliQueued，await raceInterrupt() 期间并发的 cancelQueued() 会读到同一份非空登记、
-    // 各自独立扣一次 pendingTurns，对同一条消息双扣，制造假性空闲窗口。谁的同步前缀先跑谁摘牌，
-    // 另一方发现槽位已空即知道这条已被别处处理，不再重复计费。
-    if (cliDropped) this.cliQueued = null;
-    const droppedIds = [
-      ...toDrop.map(it => it.clientMessageId).filter(Boolean),
-      ...(cliDropped?.clientMessageId ? [cliDropped.clientMessageId] : []),
-    ];
+    const droppedIds = toDrop.map(it => it.clientMessageId).filter(Boolean);
     // 限流重试时 q.interrupt() 的 control_request 可能永不回包 → await 永挂 → 前端「正在停止…」卡死。
     // 超时后按失败路径强制收口（见 settleForce / catch）。
     const raceInterrupt = () => this._raceControlRequest(() => this.q?.interrupt?.(), 'interrupt');
     // 强制结算：账面有在途轮但 SDK 拒中断/超时 → 把 pendingTurns 收口并发 interrupted，
     // 否则前端 busy 与 interruptPending 永挂（限流重试 8/10 点停止复现）。
     const settleForce = () => {
-      this.pendingTurns = Math.max(0, this.pendingTurns - dropped - (cliDropped ? 1 : 0));
-      this._dropOpenTurnSlots(dropped + (cliDropped ? 1 : 0));
+      this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
+      this._dropOpenTurnSlots(dropped);
       // 在途主轮也收掉：SDK 拒中断/超时说明它已无法正常产生 result 配平
       if (this.pendingTurns > 0) {
         this._forceSettleOpenTurns();
         this.pendingTurns = 0;
       }
-      this.cliQueued = null;
       this._awaitingInterruptResult = false; // 无伴随 result 可消费
       for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny');
       for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
@@ -654,7 +636,7 @@ export class AgentSession {
         try { pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true }); } catch { /* noop */ }
       }
       if (droppedIds.length > 0) {
-        this.emit('system', { message: '排队中的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
+        this.emit('system', { message: '尚未送达的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
       }
       this.emit('system', { message: '已中断', kind: 'interrupted' });
       // 超时路径：再 abort 子进程，防止 CLI 仍在限流重试里挂着
@@ -669,9 +651,8 @@ export class AgentSession {
       // AG-NEW-004：await 间隙若实例已被 dispose，仍须结算 pending 与 pendingTurns 账面，
       // 再 return——勿静默丢 toDrop 账面/挂起审批；emit 仅在未 dispose 时发（弃用实例无监听者）。
       if (this.disposed) {
-        this.pendingTurns = Math.max(0, this.pendingTurns - dropped - (cliDropped ? 1 : 0));
-        this._dropOpenTurnSlots(dropped + (cliDropped ? 1 : 0));
-        this.cliQueued = null;
+        this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
+        this._dropOpenTurnSlots(dropped);
         for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny');
         for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
           pending.signal?.removeEventListener('abort', pending.abortHandler);
@@ -683,10 +664,9 @@ export class AgentSession {
         _diagOutcome = 'disposed';
         return;
       }
-      // 成功中断：丢弃 toDrop（中断前排队的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
-      this.pendingTurns = Math.max(0, this.pendingTurns - dropped - (cliDropped ? 1 : 0));
-      this._dropOpenTurnSlots(dropped + (cliDropped ? 1 : 0));
-      this.cliQueued = null; // 排队登记随中断作废（本地/CLI 两侧队列均已清）
+      // 成功中断：丢弃 toDrop（尚未送达 SDK 的），pendingTurns 减 dropped；await 期间新发的留在 this.queue。
+      this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
+      this._dropOpenTurnSlots(dropped);
       this._awaitingInterruptResult = true; // 真中断了在途任务：SDK 消息流即将吐出对应的终态 result
       if (this.pendingTurns > 0) this._armInterruptSettleWatchdog(); // …但"即将"不保证到达，见方法注释
       // AG-004：Stop 应对齐「取消在途工具审批/提问」——不依赖 SDK 是否 abort canUseTool signal。
@@ -704,26 +684,25 @@ export class AgentSession {
         this.denyKinds.set(toolUseID, 'cancelled');
         pending.resolve({ behavior: 'deny', message: '问题已取消', interrupt: true });
       }
-      // 排队条被丢弃的可见性：前端据 clientMessageIds 把对应气泡标「已取消」（含 buffer 回放收敛）
+      // 被丢弃消息的可见性：前端据 clientMessageIds 把对应气泡标「已取消」（含 buffer 回放收敛）
       if (droppedIds.length > 0) {
-        this.emit('system', { message: '排队中的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
+        this.emit('system', { message: '尚未送达的消息已随停止取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
       }
       this.emit('system', { message: '已中断', kind: 'interrupted' }); // M7：kind 字段，勿靠字符串匹配
       _diagOutcome = 'success';
     } catch (err) {
       _diagTimedOut = !!(err && /interrupt_timeout/.test(String(err.message || err)));
-      // 账面仍有在途轮 / CLI 排队条（含限流重试挂着）→ 强制收口；纯空闲拒中断才走「无可中断任务」旧路径
+      // 账面仍有在途轮（含限流重试挂着）→ 强制收口；纯空闲拒中断才走「无可中断任务」旧路径。
       // 注意：不把 dropped（本地 queue 快照）单独当 in-flight——单测/竞态下 queue 与 pendingTurns 可能脱节，
-      // 旧语义是「SDK 说没任务就把 toDrop 放回」；只有 pendingTurns>0 或 cliQueued 才强制收口。
-      const hadInFlight = this.pendingTurns > 0 || !!cliDropped;
+      // 旧语义是「SDK 说没任务就把 toDrop 放回」；只有 pendingTurns>0 才强制收口。
+      const hadInFlight = this.pendingTurns > 0;
       if (this.disposed) {
-        this.pendingTurns = Math.max(0, this.pendingTurns - dropped - (cliDropped ? 1 : 0));
-        this._dropOpenTurnSlots(dropped + (cliDropped ? 1 : 0));
+        this.pendingTurns = Math.max(0, this.pendingTurns - dropped);
+        this._dropOpenTurnSlots(dropped);
         if (hadInFlight) {
           this._forceSettleOpenTurns();
           this.pendingTurns = 0;
         }
-        this.cliQueued = null;
         _diagOutcome = 'disposed';
         return;
       }
@@ -740,44 +719,9 @@ export class AgentSession {
     } finally {
       diagLog.record(this.logKey(), 'interrupt', 'settled', {
         outcome: _diagOutcome, ms: Date.now() - _diagStartedAt, pendingTurnsAfter: this.pendingTurns,
-        droppedCount: dropped, cliDropped: !!cliDropped, timedOut: _diagTimedOut,
+        droppedCount: dropped, timedOut: _diagTimedOut,
       });
     }
-  }
-
-  // 撤回排队中的消息（对齐 CLI ESC 撤回）。返回 { ok, text? }：ok=true 时 text=displayText 供前端回填输入框。
-  // 主路径 = CLI cancel_async_message：SDK 输入泵贪婪拉取，消息几乎立即离开 this.queue 进 CLI 内部队列，
-  // 「已开始执行则撤回失败（false）」由 CLI 判定，天然无竞态。this.queue splice 仅覆盖 setModel await
-  // 间隙等罕见竞态窗。账目：撤成功的消息永不产生 result（实证），须在此补扣 pendingTurns。
-  async cancelQueued(clientMessageId) {
-    if (typeof clientMessageId !== 'string' || !clientMessageId) return { ok: false };
-    // ① 竞态窗：尚未被泵走 → 直接从本地队列摘
-    const idx = this.queue.findIndex(it => it.clientMessageId === clientMessageId);
-    if (idx !== -1) {
-      const [it] = this.queue.splice(idx, 1);
-      this.pendingTurns = Math.max(0, this.pendingTurns - 1);
-      this._dropOpenTurnSlots(1); // 撤回永不产生 result，必须出槽
-      if (this.cliQueued?.clientMessageId === clientMessageId) this.cliQueued = null;
-      this.emit('system', { message: '已撤回排队中的消息', kind: 'queue_cancelled', clientMessageId });
-      return { ok: true, text: it.displayText ?? it.text };
-    }
-    // ② 已入 CLI 队列：按 uuid 撤。先摘牌再 await——防间隙里 interrupt/二次撤回对同一条重复结算
-    const cq = this.cliQueued;
-    if (cq && cq.clientMessageId === clientMessageId && this.q?.cancelAsyncMessage) {
-      this.cliQueued = null;
-      let cancelled = false;
-      try { cancelled = await this._raceControlRequest(() => this.q.cancelAsyncMessage(cq.uuid), 'cancel_async_message'); } catch { /* 控制请求失败/挂起超时视同撤回失败 */ }
-      if (cancelled) {
-        this.pendingTurns = Math.max(0, this.pendingTurns - 1);
-        this._dropOpenTurnSlots(1);
-        this.emit('system', { message: '已撤回排队中的消息', kind: 'queue_cancelled', clientMessageId });
-        return { ok: true, text: cq.displayText };
-      }
-      // 已被 CLI 取走开跑（no-op）→ 放回登记；若 await 间隙已有 result/interrupt 清账则让位（不覆盖）
-      if (!this.disposed && this.cliQueued === null && this.pendingTurns >= 2) this.cliQueued = cq;
-      return { ok: false };
-    }
-    return { ok: false };
   }
 
   // 停止单个运行中的后台任务（子 agent / 后台 Bash），对应终端 Ctrl+X Ctrl+K 停某个任务。
@@ -1451,7 +1395,6 @@ export class AgentSession {
     this.pendingTurns = 0;
     this._openTurns = [];
     this.queue = [];
-    this.cliQueued = null;
     this._awaitingInterruptResult = false;
     this.notifyInput?.();
     clearInterval(this.idleTimer); this.idleTimer = null;
@@ -1992,8 +1935,7 @@ export class AgentSession {
         this._flushText(); this._flushThink();
         // settle 槽优先：forceSettled 迟到 result 不 --pendingTurns（watchdog/settleForce 已清账）
         this._settleOneResultTurn();
-        this.cliQueued = null; // 排队条要么此刻被 CLI 取走开跑（其账留给它自己的 result）要么全部结清——登记作废
-        // 本轮收表：还有排队轮 → 立即为下一轮重开；否则清零（status_line 不再带 turn 段）
+        // 本轮收表：账面仍有在途轮（后台任务合成轮等）→ 立即重开；否则清零（status_line 不再带 turn 段）
         if (this.pendingTurns > 0) { this.turnStartedAt = Date.now(); } else { this.turnStartedAt = null; }
         this.turnOutputTokens = 0;
         this._msgOutBase = 0;

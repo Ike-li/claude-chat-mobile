@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -214,11 +214,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // A 会话「停止」的结算事件在切到 B 后丢弃，全局标志卡 true 会连带堵死 B 会话本该独立生效的停止按钮）。
   // 安全超时：限流重试中 interrupt 可能挂起，超时清位防「正在停止…」永挂。
   const interruptPendingByInstance = new Map();
-  let _queueFull = false;        // 当前查看实例队列已满（pendingTurns>=2），发送按钮禁用；由 setInstances 按 queueFull 字段驱动
-  // FE-004：只挡"这条消息还没被服务端 ack"的窗口（挡瞬时双击/触屏合成双 click），不挡"忙碌中主动发
-  // 第二条"——后者本就由服务端 pendingTurns>=2/_queueFull 承接（服务端设计允许"1 运行 + 1 排队"，见
-  // app.js:649）。早先版本借用整段 turn 期间的 _busyState 做这道闸，会把服务端本该放行的第二条一起堵
-  // 死；改成用真实 ack 回执判定，不猜时长——ack 都是收到即回、不等整轮 turn，正常网络下近乎瞬时清零。
+  // 当前查看实例有在途轮（服务端 pendingTurns>0）→ 发不出新消息（排队已于 2026-07-30 移除）。
+  // 由 setInstances 按广播的 turnRunning 字段驱动 + 发送 ack 成功后本地乐观置位（关掉广播未到的窄窗）。
+  // 与 _busyState 分开：后者含后台任务/待审批，而发送闸只认在途轮——挂着后台任务时仍可发送。
+  let _turnRunning = false;
+  // 只挡"这条消息还没被服务端 ack"的窗口（挡瞬时双击/触屏合成双 click）。与 _turnRunning 分工：
+  // 那道闸认服务端权威状态，这道闸认本端在途请求，覆盖 ack 尚未回来的那几十毫秒。
   // SEND_ACK_FALLBACK_MS 只是兜底：ack 真丢了也不永久卡死发送按钮。
   const SEND_ACK_FALLBACK_MS = 5000;
   // 按会话隔离在途态（曾是裸全局布尔——同 _pendingSendBusySessionId 修过的同类问题，这个姐妹变量当时漏改）：
@@ -841,8 +842,46 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   
   const OFFLINE_RESEND_ACK_MS = 8000; // 慢移动网络 RTT 留余地（同 cf-access 2s→8s 超时教训，见项目 memory）
   // FE-NEW-001/006：串行重发 + 按 viewing 作用域决定 busy（永久失败/他会话成功不再 sticky busy）。
-  // 在线路径有 _sendInFlightSessionIds；离线旧实现 for 循环并行 emit 易撞 queueFull，且 setBusy(true) 无配对 clear。
+  // 在线路径有 _sendInFlightSessionIds；离线旧实现 for 循环并行 emit 易撞在途轮闸，且 setBusy(true) 无配对 clear。
   let _offlineDrainInFlight = false;
+  // 单条投递：批量重发与「重发」按钮共用，避免两份 emit 参数各自漂移。
+  function deliverOutboxItem(item) {
+    return new Promise((resolve) => {
+      socket.timeout(OFFLINE_RESEND_ACK_MS).emit('user:message', {
+        text: item.text,
+        model: item.model,
+        attachments: item.attachments,
+        instanceId: item.instanceId,
+        cwd: item.cwd,
+        clientMessageId: item.clientMessageId,
+      }, (err, ack) => resolve(presentOfflineResendAck(err, ack)));
+    });
+  }
+
+  // 撞上在途轮（排队已移除）：不再 requeue 空转，落「未发送」终态 + 一个手动「重发」按钮。
+  // 同一 clientMessageId 可直接复用——服务端在 busy 拒绝路径上没有 commit 去重 ID。
+  function markOutboxBlocked(item, message) {
+    const indicator = item.bubbleEl?.querySelector('.pending-indicator');
+    if (!indicator) return;
+    indicator.classList.remove('animate-pulse');
+    indicator.textContent = '';
+    const label = el(`<span></span>`);
+    label.textContent = `⏸ ${message || t('未发送 · 任务运行中')}`;
+    indicator.appendChild(label);
+    const btn = el(`<button type="button" class="ml-2 underline decoration-dotted" data-testid="outbox-resend">${t('重发')}</button>`);
+    btn.onclick = async () => {
+      btn.disabled = true;
+      label.textContent = `🕐 ${t('正在发送...')}`;
+      const d = await deliverOutboxItem(item);
+      if (d.outcome === 'ok') { indicator.remove(); return; }
+      btn.disabled = false;
+      label.textContent = d.outcome === 'blocked'
+        ? `⏸ ${d.message || t('未发送 · 任务运行中')}`
+        : `⚠️ ${d.message || t('发送失败')}`;
+    };
+    indicator.appendChild(btn);
+  }
+
   async function processOfflineQueue() {
     if (_offlineDrainInFlight || offlineQueue.length === 0) return;
     _offlineDrainInFlight = true;
@@ -858,16 +897,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (indicator) indicator.textContent = t('🕐 正在发送...');
         logClientEvent('send', `[WEB_SEND] 重发离线消息: "${String(item.text || '').slice(0, 100)}" (${String(item.text || '').length} 字符)`);
         // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
-        const decision = await new Promise((resolve) => {
-          socket.timeout(OFFLINE_RESEND_ACK_MS).emit('user:message', {
-            text: item.text,
-            model: item.model,
-            attachments: item.attachments,
-            instanceId: item.instanceId,
-            cwd: item.cwd,
-            clientMessageId: item.clientMessageId,
-          }, (err, ack) => resolve(presentOfflineResendAck(err, ack)));
-        });
+        const decision = await deliverOutboxItem(item);
         const targetsViewing = item.instanceId != null && item.instanceId === viewingInstanceId;
         if (decision.outcome === 'ok') {
           if (indicator) indicator.remove();
@@ -875,6 +905,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         } else if (decision.outcome === 'permanent') {
           if (indicator) indicator.textContent = `⚠️ ${decision.message || t('发送失败')}${t('，已停止重试')}`;
           logClientEvent('send', `[WEB_SEND] 离线消息被服务端永久拒绝（${decision.message || ''}），停止重试`);
+        } else if (decision.outcome === 'blocked') {
+          // 队列首条发出去就开跑，其后各条必被拒——继续 requeue 会空转成客户端排队。
+          markOutboxBlocked(item, decision.message);
+          if (targetsViewing) _turnRunning = true;
+          logClientEvent('send', `[WEB_SEND] 离线消息撞上在途轮，落未发送终态待手动重发`);
         } else {
           if (indicator) indicator.textContent = t('🕐 未确认送达，等待重连重试...');
           enqueueOutbox(item);
@@ -911,6 +946,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // clearView 内部只补乐观 busy（shouldRestoreOptimisticBusy），不含 state seed——
     // 前台回切/重连 gap→reload 静默窗口无 delta 自愈，运行条被本次清屏永久抹掉 → 按 server 权威 state 重种。
     if (shouldReseedBusyAfterReload({ instances: instancesList, instanceId: displayedInstanceId })) setBusy(true);
+    // 发送闸同理：clearView 把 _turnRunning 清了，按广播的权威字段重种，否则 reload 后停止钮消失
+    if (instancesList.find(x => x?.instanceId === displayedInstanceId)?.turnRunning === true) _turnRunning = true;
     showLoadingCard();
     loadHistory(displayedSessionId, undefined, onDone); // cwd 默认 currentCwd
   }
@@ -1515,72 +1552,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     hideActivityBanner();
   }
 
-  // ---- 排队可见性 + 撤回（FE-004 对齐 CLI Queued/ESC；标记转正/落终态均事件驱动，buffer 回放可收敛）----
-  // 排队气泡淡显走内联 style（不用 .opacity-70：那是离线占位匹配选择器，语义是「等连接」不是「排队」）
-  function addQueuedMarker(bubble, clientMessageId) {
-    if (bubble.querySelector('.queued-indicator')) return; // 幂等：sync 回放可能重复喂同一条
-    bubble.classList.add('queued-bubble');
-    bubble.style.opacity = '0.8';
-    const row = el(`<div class="queued-indicator flex items-center gap-2 text-[11px] text-ink-faint mt-1"></div>`);
-    const lbl = el(`<span class="animate-pulse"></span>`);
-    lbl.textContent = queuedBubbleState({ queued: true }).label;
-    row.appendChild(lbl);
-    if (clientMessageId) { // 无 id（旧客户端发的）没法定位撤回，只显示状态不给按钮
-      const btn = el(`<button type="button" class="underline decoration-dotted" data-testid="queued-cancel">${t('撤回')}</button>`);
-      btn.onclick = () => requestCancelQueued(clientMessageId);
-      row.appendChild(btn);
-    }
-    bubble.appendChild(row);
-  }
-
-  // 本轮 result 到达 = 队头排队条开跑：摘标记转正（上限 1 条，全清即可）
-  function promoteQueuedBubbles() {
-    for (const b of messagesEl.querySelectorAll('.queued-bubble')) {
-      b.classList.remove('queued-bubble');
-      b.style.opacity = '';
-      b.querySelector('.queued-indicator')?.remove();
-    }
-  }
-
-  // 撤回/随停止取消：气泡落灰色终态（不删除——与 buffer 回放、多设备视图一致）
-  function markQueuedCancelled(ids, label) {
+  // 停止时丢弃「尚未送达 SDK」的消息（send 完成到输入泵取走之间的窄窗）：气泡落灰色终态而非删除，
+  // 与 buffer 回放、多设备视图一致。排队已移除，故这里只剩 queue_dropped 一个来源。
+  // 按 data-client-message-id 定位——顶层气泡创建时就带这个属性（离线占位与在线渲染都打）。
+  function markMessageDropped(ids, label) {
     for (const id of ids) {
-      const b = messagesEl.querySelector(`.queued-bubble[data-client-message-id="${CSS.escape(id)}"]`);
+      const b = messagesEl.querySelector(`[data-client-message-id="${CSS.escape(id)}"]`);
       if (!b) continue;
-      b.classList.remove('queued-bubble');
       b.style.opacity = '0.55';
-      const row = b.querySelector('.queued-indicator');
-      if (row) {
-        row.textContent = label;
-        row.classList.remove('animate-pulse');
-      }
+      if (b.querySelector('.dropped-indicator')) continue; // 幂等：sync 回放可能重复喂同一条
+      const row = el(`<div class="dropped-indicator text-[11px] text-ink-faint mt-1"></div>`);
+      row.textContent = label;
+      b.appendChild(row);
     }
-  }
-
-  function requestCancelQueued(clientMessageId) {
-    if (!clientMessageId || !viewingInstanceId || !socket.connected) return;
-    haptic('tap');
-    // WS-003：捕获发起时的视图目标（代次），对齐 send()/loadHistory/requestSync 同款迟到 ack 守卫。
-    const reqInstanceId = displayedInstanceId, reqSessionId = displayedSessionId;
-    socket.emit('user:cancelQueued', { instanceId: viewingInstanceId, clientMessageId }, (ack) => {
-      // 迟到 ack 守卫——发起后若已切到别的会话/实例，本次撤回的反馈不该出现在当前视图上
-      // （提示条/转正气泡会作用于无关会话；成功时的草稿回填还会覆盖无关会话正在输入的内容并抢焦点）。
-      if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
-      if (!ack?.ok) {
-        // 已开跑/实例没了：就地转正气泡（它不再是排队态），负因走提示条
-        addBar(ack?.error || t('撤回失败，请重试'), 'text-info');
-        promoteQueuedBubbles();
-        return;
-      }
-      // 气泡终态交给广播的 system{queue_cancelled}（多设备一致）；这里只负责把文本还回输入框
-      const d = resolveCancelRefill({ inputText: inputEl.value, cancelledText: ack.text || '' });
-      inputEl.value = d.value;
-      inputEl.dispatchEvent(new Event('input'));
-      autosize();
-      inputEl.focus();
-      updateSendButtonState();
-      logClientEvent('send', `[WEB_SEND] 撤回排队消息成功: clientMessageId=${clientMessageId}`);
-    });
   }
 
   // 工具卡「预览变更」diff 渲染：Edit/MultiEdit 的 hunks 走行级 unified diff（复用 git-changes.js
@@ -2022,8 +2006,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (p.text && !matchedBubble.querySelector('[data-copy-action]')) {
           appendCopyAction(matchedBubble, () => p.text, 'right');
         }
-        // 离线占位转正后若这条实际在排队（重连时另一轮已在跑）→ 同样挂排队标记
-        if (queuedBubbleState(p).show) addQueuedMarker(matchedBubble, p.clientMessageId);
         scrollBottom(true);
         return; // 匹配成功，直接返回，避免生成重复聊天气泡
       }
@@ -2046,7 +2028,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
-      if (queuedBubbleState(p).show) addQueuedMarker(bubble, p.clientMessageId); // 排队可见性（FE-004 对齐 CLI Queued）
       appendMessage(bubble);
       scrollBottom(true);
     },
@@ -2125,11 +2106,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       finalizeStreams();
       markAllSubagentCardsDone(); // 主轮结束：仍 running 的子 agent 卡标「已完成」（防 tool_result 漏标）
-      promoteQueuedBubbles(); // 本轮结束=队头排队条开跑，排队标记转正
       // turn-end 文件变更汇总卡（对齐官方「已编辑 N 个文件」；完整 diff 仍走单卡预览）
       const fileChangesCard = flushTurnFileChangesCard();
       _pendingSendBusySessionId = null;
       setBusy(false);
+      // 发送闸解锁：事件流是权威且必达的那条通道，instances 广播只作校正。
+      // 只靠广播清会留死锁——广播丢一次/某条路径压根不广播，用户就永远发不出下一条了。
+      _turnRunning = false;
+      updateSendButtonState();
       hideActivityBanner(); // 会话结束隐藏活动横幅
       // 不在此隐藏后台任务进度横幅：后台任务（Workflow/后台 Agent/Bash）跨轮次存活，轮次 result ≠ 后台完成。
       // 横幅生命周期交给 task_progress（下拍心跳 showTaskProgress 重现）与 task_notification（完成时 hideTaskProgress）自洽驱动。
@@ -2205,18 +2189,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         markAllSubagentCardsDone();
         _pendingSendBusySessionId = null;
         setBusy(false);
+        _turnRunning = false; // 中止也是轮次终点：与 result 同样解锁发送闸，不等 instances 广播
+        updateSendButtonState();
         hideActivityBanner();
         // 全新会话首轮点停止后不跳回主页：sessionId 仍未到（displayedSessionId 空）时被中断，标记当前
         // 实例——resolveEmptySurface/shouldShowComposer 据此不再把"sessionId 为空"误判成该显启动页。
         // 已有 sessionId 的正常中断（displayedSessionId 非空）不置位，且顺带清掉任何过期残留。
         freshInterruptedInstanceId = (displayedInstanceId && !displayedSessionId) ? displayedInstanceId : null;
       }
-      // 排队条终态（live + buffer 回放共用同一路径，多设备视图一致）
+      // 停止时尚未送达 SDK 的消息落终态（live + buffer 回放共用同一路径，多设备视图一致）
       if (p.kind === 'queue_dropped' && Array.isArray(p.clientMessageIds)) {
-        markQueuedCancelled(p.clientMessageIds, t('已随停止取消，未发送'));
-      }
-      if (p.kind === 'queue_cancelled' && p.clientMessageId) {
-        markQueuedCancelled([p.clientMessageId], t('已撤回，未发送'));
+        markMessageDropped(p.clientMessageIds, t('已随停止取消，未发送'));
       }
     },
     // E16：web 自有结构化状态（非 ANSI）。摘要去 emoji，展开分段构建 DOM（createElement+textContent，
@@ -3006,11 +2989,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addBar(t('请先完成设备授权或解除只读状态，再发送新消息'), 'text-info');
       return;
     }
-    // FE-004：上一条还没收到 ack 前挡新的一次触发——_queueFull 只在 pendingTurns>=2 才由 instances
-    // 广播，双击 Send 在首条 ack 前会发出两条不同 clientMessageId。离线入队不走此闸（无在途 SDK
-    // turn，本地乐观消息允许多条）。不用 _busyState：那是整段 turn 期间的状态，会连带挡住服务端本
-    // 就允许的"忙碌中排第二条"。
+    // 上一条还没收到 ack 前挡新的一次触发：双击 Send 在首条 ack 前会发出两条不同 clientMessageId。
+    // 离线入队不走此闸（无在途 SDK turn，本地乐观消息允许多条）。
     if (socket.connected && _sendInFlightSessionIds.has(displayedSessionId)) {
+      return;
+    }
+    // 在途轮拒收（排队已移除）：正常路径下按钮已是停止钮点不到这里，这道闸兜住键盘回车/竞态。
+    if (_turnRunning) {
+      addBar(t('当前任务运行中，完成后可发送'), 'text-info');
       return;
     }
     if (activePerm || activeQuestion) {
@@ -3184,7 +3170,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       (err, ack) => {
       clearSendInFlight();
       const decision = presentOnlineSendTransport(err, ack);
-      if (decision.ok) return;
+      if (decision.ok) {
+        // 乐观置位：服务端已收下这条、轮次即将开跑，但 instances 广播还在路上。
+        // 不等广播就锁住发送闸，关掉「ack 已回、广播未到」这个还能再发一条的窄窗。
+        if (displayedInstanceId === reqInstanceId && displayedSessionId === reqSessionId) {
+          _turnRunning = true;
+          updateSendButtonState();
+        }
+        return;
+      }
       // 只清自己这条送出的登记：若这条负 ack 迟到，槽位可能已被之后另一条 send() 的登记顶替
       // （比如很快切到别的会话又发了一条），不能连带清掉那条仍然合法在途的登记。
       if (_pendingSendBusySessionId === reqSessionId) _pendingSendBusySessionId = null;
@@ -3205,7 +3199,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // （错误提示会贴到无关会话、setBusy(false) 会打断无关会话真实在跑的轮次、草稿会覆盖无关会话的输入）。
       if (displayedInstanceId !== reqInstanceId || displayedSessionId !== reqSessionId) return;
       if (decision.clearBusy) setBusy(false);
-      if (decision.message) addBar(decision.message, 'text-danger');
+      // busy 拒收：服务端说那边有轮在跑——同步锁上发送闸（本端 _turnRunning 可能因广播未到而滞后）
+      if (decision.busy) {
+        _turnRunning = true;
+        updateSendButtonState();
+      }
+      if (decision.message) addBar(decision.message, decision.busy ? 'text-info' : 'text-danger');
       if (decision.restoreDraft && inputEl && !inputEl.value.trim() && attachments.items().length === 0) {
         if (restoreDraftOnFail.text) {
           inputEl.value = restoreDraftOnFail.text;
@@ -3268,17 +3267,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       e.preventDefault();
       send();
     }
-    // 对齐 CLI ESC：撤回最近一条排队中的消息（物理键盘路径；触屏无 ESC，走气泡「撤回」按钮）
+    // ESC 关候选浮层（排队撤回已随排队功能一并移除，ESC 不再有第三个语义）
     if (e.key === 'Escape') {
       if (atMentionList && !atMentionList.classList.contains('hidden')) { hideAtMentionList(); return; }
       const cmdHintsEl = document.getElementById('cmdHints');
       if (cmdHintsEl && !cmdHintsEl.classList.contains('hidden')) { cmdHintsEl.classList.add('hidden'); return; }
-      const queued = messagesEl.querySelectorAll('.queued-bubble[data-client-message-id]');
-      const last = queued[queued.length - 1];
-      if (last) {
-        e.preventDefault();
-        requestCancelQueued(last.dataset.clientMessageId);
-      }
     }
   });
 
@@ -3476,13 +3469,14 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (!btnSend) return;
     const hasContent = inputEl.value.trim().length > 0 || attachments.items().length > 0;
     const mirrorArmed = Boolean(mirrorReadonlySid && armedTakeoverSid === mirrorReadonlySid);
-    // FE-004：busy 不直接禁发送；有内容时仍可排队。空内容 + busy → 停止。
+    // 排队已移除：在途轮期间主按钮恒为停止钮（有无草稿都一样），发送位不再承担「排队发送」。
+    // turnRunning 与 busy 都要传：前者是发送闸的权威判据，后者只在空输入时兜底（见 resolveComposerPrimaryMode 注释）。
     // CLI 镜像：mirrorReadonly 优先 → mode resume/cancel-resume，发送位变成「续接 CLI 会话」。
     const state = resolveComposerPrimaryMode({
       busy: _busyState,
+      turnRunning: _turnRunning,
       hasContent,
       interruptPending: interruptPendingByInstance.has(viewingInstanceId),
-      queueFull: _queueFull,
       blockedByUserRequest: !!activePerm || !!activeQuestion,
       blockedByDisabledInput: inputEl.disabled,
       blockedBySendInFlight: socket.connected && _sendInFlightSessionIds.has(displayedSessionId),
@@ -3526,10 +3520,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     btnSend.classList.toggle('hidden', hideSend);
     syncComposerDiscoverHint();
-    syncComposerPlaceholder(); // busy / queueFull / 镜像 共用 placeholder
+    syncComposerPlaceholder(); // turnRunning / 镜像 共用 placeholder
+    syncComposerBusyHint();
   }
 
-  // placeholder：busy 仍用「给 Claude 发消息...」；镜像态走 mirror 文案；队满另提示。
+  // placeholder：镜像态走 mirror 文案；在途轮提示「运行中」；其余用「给 Claude 发消息...」。
   function syncComposerPlaceholder() {
     if (!inputEl) return;
     if (mirrorReadonlySid) {
@@ -3538,10 +3533,22 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     inputEl.placeholder = resolveComposerPlaceholder({
       busy: _busyState,
-      queueFull: _queueFull,
+      turnRunning: _turnRunning,
       mirrorReadonly: false,
       idleText: t('给 Claude 发消息...'),
     });
+  }
+
+  // 在途轮常驻提示：placeholder 在用户打字时看不见（草稿保留是有意为之），移动端又无 hover title，
+  // 故单独一行小字告诉用户「为什么发不出去 + 什么时候能发」。
+  function syncComposerBusyHint() {
+    const hint = $('composerBusyHint');
+    if (!hint) return;
+    const show = _turnRunning && !mirrorReadonlySid;
+    hint.classList.toggle('hidden', !show);
+    if (show && hint.textContent !== t('⏳ 当前任务运行中，完成后可发送')) {
+      hint.textContent = t('⏳ 当前任务运行中，完成后可发送');
+    }
   }
 
   function syncComposerDiscoverHint() {
@@ -4099,8 +4106,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 严格 === false（非 falsy）：仅服务端明确「无活后台任务」或当前无查看实例（切到空会话）才隐藏；
     // bgActive 缺失（旧服务端 / 视觉 mock 不带该字段）时保守不隐藏，保留 showTaskProgress 逐心跳驱动的原行为。
     if (!viewedInst || viewedInst.bgActive === false) hideTaskProgress();
-    // 发送按钮禁用态：随 instances 广播的权威 queueFull 字段驱动（undefined/旧服务端=保守 false 不误禁）。
-    _queueFull = viewedInst?.queueFull === true;
+    // 发送闸：随 instances 广播的权威 turnRunning 字段驱动（undefined/旧服务端=保守 false 不误禁）。
+    _turnRunning = viewedInst?.turnRunning === true;
 
     // 顶栏主 pill：标题优先 / 无则工作区；title 挂 cwd 供长按辨认
     syncTopContextLabel();
@@ -4251,7 +4258,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       rebuildCustomModelGrid(modelsList); // 磁贴标签
       syncModelUI(currentModel);          // 底栏 chip「默认 · <真名>」（rebuild 不碰 chip）
     }
-    updateSendButtonState(); // _queueFull 可能随 instances 广播变化，须即时刷新发送按钮禁用态
+    updateSendButtonState(); // _turnRunning 可能随 instances 广播变化，须即时刷新发送闸与提示行
   }
 
   // ---- 未读角标：切回会话时若离开期间攒了未读顶层消息，悬浮胶囊显示数量，点击/翻到附近自动确认已读 ----
@@ -4420,6 +4427,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       sessionId: sid,
     }) || shouldSeedBusyFromInstanceState(entry?.state);
     if (restoreBusy) setBusy(true);
+    // 发送闸同样要重种：clearView 刚把 _turnRunning 清零，而 setInstances 对它的赋值发生在 bindView 之前，
+    // 会被那次清零冲掉——切回一个正在跑的会话时闸就失准了（停止钮不出现、发送反被服务端拒）。
+    // 取 instances 广播的权威 turnRunning（查不到则保持 clearView 后的 false，不猜）。
+    const liveEntry = instancesList.find(x => x?.instanceId === id);
+    if (liveEntry?.turnRunning === true) _turnRunning = true;
 
     // 新会话首发懒开：实例已建、sessionId 未由 SDK init 返回。此刻回落 dashboard 会「闪首页」——
     // 到首个 user_message 经 leaveStartScreen 切回聊天前的几百 ms 用户看见首页再弹回。
@@ -4535,6 +4547,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         // clearView 内部只补乐观 busy（shouldRestoreOptimisticBusy），不含 state seed——
         // 静默窗口（长 Bash 执行中）无 delta 自愈，运行条被本次清屏永久抹掉 → 按 server 权威 state 重种。
         if (shouldReseedBusyAfterReload({ instances: instancesList, instanceId: id, entryState: entry?.state })) setBusy(true);
+        // 发送闸同理：clearView 把 _turnRunning 清了，按广播的权威字段重种，否则 reload 后停止钮消失
+        if (instancesList.find(x => x?.instanceId === id)?.turnRunning === true) _turnRunning = true;
         showLoadingCard();
         loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(unreadOnEntry));
       } else {
@@ -5824,6 +5838,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 附件托盘不再这里无脑清空：bindView 经 planSessionDraftSwap 按会话存/取；
     // 发送成功路径各自清空。否则同会话静默换实例 / 重载历史会误清未发送附件。
     setBusy(false);
+    // 发送闸同理乐观清零：切到别的会话时不该把上一个会话的「运行中」提示带过去。
+    // 随后的 setInstances 会按新实例的 turnRunning 校正（与 setBusy 同一套「先清、广播再定」哲学）。
+    _turnRunning = false;
     // 发送窗口内同会话静默换实例 / history reload 二次 clearView 须补回 busy
     // （innerHTML='' 会拆掉 #streamLiveStatus；setBusy(false) 也会 hide）。真切会话则不补。
     if (shouldRestoreOptimisticBusy({
@@ -5833,6 +5850,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       sessionId,
     })) {
       setBusy(true);
+      _turnRunning = true; // 同会话静默换实例：那条刚发出的消息仍在跑，闸不能松
     }
     hideActivityBanner(); // WS-005：清 activity 横幅（含 api_retry——二者共用 activityBanner + apiRetryBannerActive），否则 A 的活动/重试态残留到空闲的 B（task-progress 已由 setInstances 按实例处理）
 
@@ -6633,10 +6651,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function refreshMirrorComposerCopy() {
     if (!inputEl) return;
     if (!mirrorReadonlySid) {
-      // 非镜像：走 busy/queueFull 纠偏 placeholder（勿在此写死 idle，否则 setBusy 后被镜像刷新冲掉）
+      // 非镜像：走 turnRunning placeholder（勿在此写死 idle，否则 setBusy 后被镜像刷新冲掉）
       inputEl.placeholder = resolveComposerPlaceholder({
         busy: _busyState,
-        queueFull: _queueFull,
+        turnRunning: _turnRunning,
         mirrorReadonly: false,
         idleText: t('给 Claude 发消息...'),
       });

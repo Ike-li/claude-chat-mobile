@@ -491,24 +491,21 @@ test.describe('per-turn turnStartedAt / turnOutputTokens', () => {
     s.dispose();
   });
 
-  test('result 收轮：无排队轮 → 清 null/0；有排队轮 → 立即重开表', async () => {
+  // 排队已移除：result 后账面归零、秒表清空；下一条消息发出时才重新开表。
+  test('result 收轮 → 清 null/0；下一轮 send 重新开表', async () => {
     const { s } = makeSession();
     await s.send('a');
     s.map({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1' } } });
     s.map({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 99 } } });
     s.map({ type: 'result', subtype: 'success', duration_ms: 5, modelUsage: {} });
+    assert.equal(s.pendingTurns, 0);
     assert.equal(s.turnStartedAt, null);
     assert.equal(s.turnOutputTokens, 0);
-    // 排队两轮：第一轮 result 后第二轮立即重开表
+
     await s.send('b');
-    const firstStart = s.turnStartedAt;
-    await s.send('c');
-    assert.equal(s.pendingTurns, 2);
-    s.map({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 10 } } });
-    s.map({ type: 'result', subtype: 'success', duration_ms: 5, modelUsage: {} });
     assert.equal(s.pendingTurns, 1);
-    assert.ok(s.turnStartedAt >= firstStart, '第二轮重开表');
-    assert.equal(s.turnOutputTokens, 0, '第二轮 token 归零');
+    assert.ok(s.turnStartedAt != null, '下一轮 send 重新开表');
+    assert.equal(s.turnOutputTokens, 0, '新一轮 token 归零');
     s.dispose();
   });
 

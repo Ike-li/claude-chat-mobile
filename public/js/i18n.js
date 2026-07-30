@@ -293,10 +293,7 @@ export const EN_DICT = Object.freeze({
 
   // —— 消息流 / 工具卡 / 思考 ——
   '工具执行已因本轮错误停止': 'Tool execution stopped by an error this turn',
-  '撤回': 'Withdraw',
-  '撤回失败，请重试': 'Withdraw failed — try again',
   '已随停止取消，未发送': 'Cancelled with the stop — not sent',
-  '已撤回，未发送': 'Withdrawn — not sent',
   '进行中': 'In progress',
   '预览': 'Preview',
   '预览不可用': 'Preview unavailable',
@@ -357,7 +354,7 @@ export const EN_DICT = Object.freeze({
   '已跳过提问（中止本轮）': 'Question skipped (turn interrupted)',
   '已请求中止本轮': 'Interrupt requested',
 
-  // —— 发送 / 排队 / 停止 ——
+  // —— 发送 / 停止 ——
   '请先完成设备授权或解除只读状态，再发送新消息': 'Finish device approval or leave read-only mode before sending',
   '请先完成设备授权或解除只读状态': 'Finish device approval or leave read-only mode first',
   '请先处理当前审批或选择，再发送新消息': 'Handle the pending approval or choice before sending',
@@ -365,11 +362,12 @@ export const EN_DICT = Object.freeze({
   '消息过长': 'Message too long',
   '，未发送': ' — not sent',
   '⚡ 命令：': '⚡ Command: ',
-  '前面已有消息在排队，请等当前任务结束': 'A message is already queued — wait for the current task to finish',
-  '⏳ 排队中 · 当前步骤后发送': '⏳ Queued · sends after the current step',
-  '当前步骤后发送（可纠偏，不必先停止）': 'Sends after the current step (steer without stopping first)',
-  '排队发送': 'Queue send',
-  // 「前面已有消息在排队…」已在上方 FE-004 段定义，勿重复 key
+  // 排队已于 2026-07-30 移除：在途轮期间发不出新消息，输入框仍可打字存草稿
+  '当前任务运行中，完成后可发送': 'Task running — you can send once it finishes',
+  '⏳ 当前任务运行中，完成后可发送': '⏳ Task running — you can send once it finishes',
+  '未发送 · 任务运行中': 'Not sent · task running',
+  '重发': 'Resend',
+  '正在发送...': 'Sending...',
   '正在发送…': 'Sending…',
   '正在停止…': 'Stopping…',
   '正在停止': 'Stopping',
@@ -496,7 +494,6 @@ export const EN_DICT = Object.freeze({
   '已拒绝': 'Denied',
   '已回答': 'Answered',
   '停止单任务': 'Stop one task',
-  '撤回排队消息': 'Withdraw queued message',
   '切换模型': 'Switch model',
   '切换权限档': 'Switch permission mode',
   'Claude Code 版本过旧，暂不支持额度查询接口': 'Claude Code is too old to support the usage-query interface',
@@ -513,7 +510,7 @@ export const EN_DICT = Object.freeze({
   '陈旧挂起，判定已过期': 'stale hang, verdict expired',
   '尾部=': 'tail=',
   '⏹ 停止成功（丢弃': '⏹ Stopped (dropped',
-  '条排队消息，': 'queued message(s), ',
+  '条未送达消息，': 'undelivered message(s), ',
   '⏹ 停止成功（': '⏹ Stopped (',
   '⏱ 停止超时，已强制收口（': '⏱ Stop timed out, force-settled (',
   '⚠️ 停止被拒，已强制收口（': '⚠️ Stop refused, force-settled (',

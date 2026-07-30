@@ -25,14 +25,30 @@ test.describe('logMeta()', () => {
 
 // ---- send() ----
 test.describe('send()', () => {
-  test('pendingTurns >= 2 → reject + emit system', async () => {
+  // 排队已移除（2026-07-30）：在途轮期间不再接受新消息，闸门从「封顶 2」收紧到「有轮就拒」。
+  test('pendingTurns >= 1 → reject + emit system', async () => {
     const { s, events } = makeSession();
-    s.pendingTurns = 2;
+    s.pendingTurns = 1;
     const result = await s.send('hello');
     assert.equal(result, false);
     const sys = events.find(e => e.type === 'system');
     assert.ok(sys);
-    assert.ok(sys.payload.message.includes('排队'));
+    assert.ok(sys.payload.message.includes('运行中'));
+    s.dispose();
+  });
+
+  // 被拒时不得留下任何副作用：气泡已上屏但消息没进 SDK = 用户以为发了、实际石沉大海。
+  test('在途轮期间被拒 → 不 emit user_message、不入 queue、不动在途轮账目', async () => {
+    const { s, events } = makeSession();
+    await s.send('first');
+    const queueLenAfterFirst = s.queue.length;
+    events.length = 0;
+
+    const result = await s.send('second');
+    assert.equal(result, false);
+    assert.equal(events.filter(e => e.type === 'user_message').length, 0, '被拒的消息不该有气泡');
+    assert.equal(s.queue.length, queueLenAfterFirst, '被拒的消息不该进输入泵队列');
+    assert.equal(s.pendingTurns, 1, '被拒不该改动在途轮记账');
     s.dispose();
   });
 
@@ -51,15 +67,13 @@ test.describe('send()', () => {
     s.dispose();
   });
 
-  // 排队可见性：user_message.queued 标记「这条发出时前面已有在途轮」（emit 在 pendingTurns++ 之前，≥1 即排队）
-  test('queued 字段：空闲首条 false、busy 第二条 true', async () => {
+  // 排队移除后 user_message 不再带 queued 字段（前端已无排队气泡态可渲染）
+  test('user_message 不再带 queued 字段', async () => {
     const { s, events } = makeSession();
     await s.send('first');
-    await s.send('second');
-    const ums = events.filter(e => e.type === 'user_message');
-    assert.equal(ums.length, 2);
-    assert.equal(ums[0].payload.queued, false);
-    assert.equal(ums[1].payload.queued, true);
+    const um = events.find(e => e.type === 'user_message');
+    assert.ok(um);
+    assert.equal('queued' in um.payload, false);
     s.dispose();
   });
 
@@ -150,7 +164,8 @@ test.describe('send()', () => {
     s.q = { setModel() { setModelCalls++; return new Promise(() => {}); } }; // 永不 resolve
     await s.send('hi', 'opus');
     assert.equal(setModelCalls, 1, '第一次 send 尝试下发');
-    await s.send('hi again', 'opus'); // pendingTurns=1 < 2，无需重置内部状态即可再发
+    s.pendingTurns = 0; // 排队已移除：须先结算上一轮才收得下第二条
+    await s.send('hi again', 'opus');
     assert.equal(setModelCalls, 1, '同一目标已尝试过 → 不再重复下发');
     assert.equal(events.filter(e => e.type === 'error').length, 1, '错误只提示一次，不每轮刷屏');
     s.dispose();
@@ -161,25 +176,26 @@ test.describe('send()', () => {
     const calls = [];
     s.q = { setModel(m) { calls.push(m); return Promise.reject(new Error('model not found')); } };
     await s.send('hi', 'bad-model');
+    s.pendingTurns = 0; // 排队已移除：须先结算上一轮才收得下第二条
     await s.send('hi again', 'other-model');
     assert.deepEqual(calls, ['bad-model', 'other-model'], '目标变了就该重新下发，不因上次失败被永久锁死');
     s.dispose();
   });
 
-  test('双重检查：setModel await 后 pendingTurns 已达上限 → reject', async () => {
+  test('双重检查：setModel await 后已有在途轮 → reject', async () => {
     const { s, events } = makeSession({ model: 'sonnet' });
-    // 模拟：await 期间其他 send 把 pendingTurns 推到 2
+    // 模拟：await 期间其他 send 已开了一轮（setModel 是让出点，这道二次检查仍必要）
     let resolveSetModel;
     s.q = { setModel() { return new Promise(r => { resolveSetModel = r; }); } };
     const sendPromise = s.send('hi', 'opus');
     // 此时 send 在 await setModel 中
-    s.pendingTurns = 2; // 模拟并发推满
+    s.pendingTurns = 1; // 模拟并发开轮
     resolveSetModel();
     const result = await sendPromise;
     assert.equal(result, false);
     const sys = events.find(e => e.type === 'system');
     assert.ok(sys);
-    assert.ok(sys.payload.message.includes('排队'));
+    assert.ok(sys.payload.message.includes('运行中'));
     // #2：双重检查拒绝路径不应已把 user_message 气泡推上屏（否则用户以为发了、实际被拒）
     assert.equal(events.find(e => e.type === 'user_message'), undefined, '拒绝时不应已 emit user_message');
     s.dispose();
@@ -201,14 +217,16 @@ test.describe('send()', () => {
 
 // ---- interrupt() ----
 test.describe('interrupt()', () => {
+  // 排队移除后 this.queue 最多 1 条（send 完成到 SDK 输入泵取走之间的窄竞态窗），
+  // 它仍是「已记账但未送达 SDK」，停止时必须丢弃并配平。
   test('SDK interrupt 成功 → 队列清空、pendingTurns 调整、emit system(kind:interrupted)', async () => {
     const { s, events } = makeSession();
-    s.pendingTurns = 3;
-    s.queue.push({ text: 'a' }, { text: 'b' });
+    s.pendingTurns = 1;
+    s.queue.push({ text: 'a' });
     s.q = { interrupt() { return Promise.resolve(); } };
     await s.interrupt();
     assert.equal(s.queue.length, 0);
-    assert.equal(s.pendingTurns, 1); // 3 - 2 = 1（飞行中的那轮仍在）
+    assert.equal(s.pendingTurns, 0); // 1 - 1 = 0（唯一那条尚未送达 SDK，随停止丢弃）
     const sys = events.find(e => e.type === 'system' && e.payload.kind === 'interrupted');
     assert.ok(sys);
     assert.equal(sys.payload.message, '已中断');
@@ -460,18 +478,20 @@ test.describe('interrupt()', () => {
   // 回归：await q.interrupt() 是让出点。原实现在 await 之后才 this.queue=[]，若用户在「点停止后、
   // 中断未完成」时又发一条消息，该消息会 push 进 queue 随后被整体清空（静默丢失）+ pendingTurns
   // 按旧 dropped 少扣。修复后 await 期间新发的消息应保留、不被吞。
-  test('竞态：interrupt 的 await 期间新发的消息不被吞、不丢失', async () => {
+  // 排队移除后这个竞态窗被闸门堵死：interrupt 尚未结算前 pendingTurns 仍 >0，此时 send 直接被拒。
+  // 断言的价值在于「拒得干净」——不能出现「进了 queue 又被本次 interrupt 卷走」的静默丢字。
+  test('竞态：interrupt 的 await 期间发消息 → 被拒且不入队（不静默丢字）', async () => {
     const { s } = makeSession();
-    s.pendingTurns = 1;                 // 1 个在途轮、无排队（interrupt 发起时 dropped=0）
+    s.pendingTurns = 1;                 // 1 个在途轮（interrupt 发起时 dropped=0）
     let release;
     s.q = { interrupt: () => new Promise(r => { release = r; }) }; // 可控延迟的中断
     const p = s.interrupt();            // 卡在 await q.interrupt()
-    await s.send('after-interrupt');    // await 间隙用户又发一条（不切模型→同步入队）
-    assert.equal(s.queue.length, 1, '新消息已入队');
+    const sent = await s.send('after-interrupt'); // await 间隙用户又发一条
+    assert.equal(sent, false, '在途轮未结算前不收新消息');
+    assert.equal(s.queue.length, 0, '被拒的消息不入队，也就无从被 interrupt 卷走');
     release();                          // 释放中断
     await p;
-    assert.equal(s.queue.length, 1, 'await 期间新发的消息不应被 interrupt 清空');
-    assert.equal(s.queue[0]?.text, 'after-interrupt', '保留的正是那条新消息');
+    assert.equal(s.queue.length, 0);
     s.dispose();
   });
 });
@@ -489,12 +509,12 @@ test.describe('stopTask()（切片 2b：停单个后台任务，对应终端 Ctr
 
   test('stopTask 不动主队列 / pendingTurns（与 interrupt 停整轮不同）', async () => {
     const { s } = makeSession();
-    s.pendingTurns = 2;
+    s.pendingTurns = 1;
     s.queue.push({ text: 'a' });
     s.q = { stopTask() { return Promise.resolve(); } };
     await s.stopTask('task-1');
     assert.equal(s.queue.length, 1, '停单个后台任务不清主队列');
-    assert.equal(s.pendingTurns, 2, '不动 pendingTurns');
+    assert.equal(s.pendingTurns, 1, '不动 pendingTurns');
     s.dispose();
   });
 
@@ -580,208 +600,6 @@ test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC +
     const { s } = makeSession();
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}) }; // 永不 resolve
     assert.equal(await s.fetchUsage(10), null); // 10ms 超时
-    s.dispose();
-  });
-});
-
-// ---- cancelQueued() / 排队撤回（CLI cancel_async_message 对齐）----
-// SDK 泵是贪婪拉取（实证 2026-07-18 探针）：send 的消息几乎立即离开 this.queue 进 CLI 内部队列。
-// 撤回主路径 = cancelAsyncMessage(uuid)；this.queue splice 仅覆盖罕见竞态窗（setModel await 间隙等）。
-test.describe('cancelQueued() — 排队消息撤回', () => {
-  test('排队第二条：queue 项带 clientMessageId/uuid/displayText，cliQueued 登记（首条不登记）', async () => {
-    const { s } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });
-    assert.equal(s.cliQueued, null);
-    await s.send('/tmp/x.txt second', null, { clientMessageId: 'c2', displayText: 'second' });
-    assert.equal(s.queue.length, 2);
-    assert.equal(s.queue[1].clientMessageId, 'c2');
-    assert.ok(s.queue[1].uuid, 'queue 项须带 uuid 供 CLI 队列撤回');
-    assert.equal(s.queue[1].displayText, 'second');
-    assert.equal(s.cliQueued?.clientMessageId, 'c2');
-    assert.equal(s.cliQueued?.uuid, s.queue[1].uuid);
-    s.dispose();
-  });
-
-  test('竞态窗路径：消息仍在 this.queue → splice + pendingTurns-- + 回 displayText + emit queue_cancelled', async () => {
-    const { s, events } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });
-    await s.send('prompt-with-path', null, { clientMessageId: 'c2', displayText: 'raw text' });
-    assert.equal(s.pendingTurns, 2);
-    const r = await s.cancelQueued('c2');
-    assert.deepEqual(r, { ok: true, text: 'raw text' });
-    assert.equal(s.queue.length, 1);
-    assert.equal(s.pendingTurns, 1);
-    assert.equal(s.cliQueued, null);
-    const ev = events.find(e => e.type === 'system' && e.payload.kind === 'queue_cancelled');
-    assert.ok(ev, '须 emit queue_cancelled 供前端（含 buffer 回放）标记气泡');
-    assert.equal(ev.payload.clientMessageId, 'c2');
-    s.dispose();
-  });
-
-  test('CLI 队列路径：queue 已被泵空 → cancelAsyncMessage(uuid)=true → pendingTurns-- + ok', async () => {
-    const { s, events } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });
-    await s.send('second', null, { clientMessageId: 'c2' });
-    const u2 = s.cliQueued.uuid;
-    s.queue = []; // 模拟贪婪泵已抽走
-    let calledWith = null;
-    s.q = { cancelAsyncMessage: async u => { calledWith = u; return true; } };
-    const r = await s.cancelQueued('c2');
-    assert.equal(calledWith, u2);
-    assert.deepEqual(r, { ok: true, text: 'second' });
-    assert.equal(s.pendingTurns, 1);
-    assert.equal(s.cliQueued, null);
-    assert.ok(events.find(e => e.type === 'system' && e.payload.kind === 'queue_cancelled'));
-    s.dispose();
-  });
-
-  test('CLI 队列路径：cancelled=false（已开始执行）→ ok:false、账目不动、cliQueued 放回', async () => {
-    const { s } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });
-    await s.send('second', null, { clientMessageId: 'c2' });
-    s.queue = [];
-    s.q = { cancelAsyncMessage: async () => false };
-    const r = await s.cancelQueued('c2');
-    assert.equal(r.ok, false);
-    assert.equal(s.pendingTurns, 2);
-    assert.equal(s.cliQueued?.clientMessageId, 'c2');
-    s.dispose();
-  });
-
-  // 回归：q.cancelAsyncMessage 和 q.interrupt 走同一条 control_request 通道，限流重试期间同样可能
-  // 永不回包。超时后应等同于既有的"控制请求失败视同撤回失败"分支——ok:false、不永久 hang（撤回按钮
-  // 此前会因为这里挂起而永远转不出结果）。
-  test('CLI 队列路径：cancelAsyncMessage 挂起超时 → ok:false（不永久 hang）', async () => {
-    const { s } = makeSession();
-    s.interruptTimeoutMs = 20; // 单测加速：与 interrupt 共用同一超时配置
-    await s.send('first', null, { clientMessageId: 'c1' });
-    await s.send('second', null, { clientMessageId: 'c2' });
-    s.queue = [];
-    s.q = { cancelAsyncMessage: () => new Promise(() => {}) }; // 永不 resolve
-    const r = await s.cancelQueued('c2');
-    assert.equal(r.ok, false);
-    s.dispose();
-  });
-
-  test('未命中（无此 id / 已处理）→ ok:false 账目不动', async () => {
-    const { s } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });
-    const r = await s.cancelQueued('nope');
-    assert.equal(r.ok, false);
-    assert.equal(s.pendingTurns, 1);
-    s.dispose();
-  });
-
-  test('result 到达 → cliQueued 清（排队条要么已开跑要么已结清，不再可撤）', async () => {
-    const { s } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });
-    await s.send('second', null, { clientMessageId: 'c2' });
-    s.map({ type: 'result', subtype: 'success', duration_ms: 10, modelUsage: {} });
-    assert.equal(s.cliQueued, null);
-    assert.equal(s.pendingTurns, 1);
-    s.dispose();
-  });
-});
-
-// ---- interrupt() 对 CLI 队列排队条的结算（幽灵 busy 修复）----
-// 实证（探针场景2）：CLI interrupt 会丢弃其内部队列的排队消息且不产生 result——若不补扣
-// pendingTurns 会泄漏 1（停止后 busy 卡到 idle 看护兜底）。
-test.describe('interrupt() — CLI 队列排队条结算', () => {
-  test('queue 已泵空 + cliQueued 存在 → 补扣 1 + queue_dropped(clientMessageIds) + cliQueued 清', async () => {
-    const { s, events } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });
-    await s.send('second', null, { clientMessageId: 'c2' });
-    s.queue = []; // 贪婪泵已抽走
-    s.q = { interrupt: async () => {} };
-    await s.interrupt();
-    assert.equal(s.pendingTurns, 1, '在途轮的 1 留给 result 扣，排队条的 1 此处补扣');
-    assert.equal(s.cliQueued, null);
-    const ev = events.find(e => e.type === 'system' && e.payload.kind === 'queue_dropped');
-    assert.ok(ev);
-    assert.deepEqual(ev.payload.clientMessageIds, ['c2']);
-    s.dispose();
-  });
-
-  test('竞态窗：排队条仍在 this.queue（toDrop 卷走）→ 不双扣，queue_dropped 仍含其 id', async () => {
-    const { s, events } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });
-    await s.send('second', null, { clientMessageId: 'c2' });
-    s.queue.shift(); // 只模拟首条被泵走，第二条仍在本地队列
-    s.q = { interrupt: async () => {} };
-    await s.interrupt();
-    assert.equal(s.pendingTurns, 1, 'toDrop=1 扣一次，不得再按 cliQueued 双扣');
-    assert.equal(s.cliQueued, null);
-    const ev = events.find(e => e.type === 'system' && e.payload.kind === 'queue_dropped');
-    assert.ok(ev);
-    assert.deepEqual(ev.payload.clientMessageIds, ['c2']);
-    s.dispose();
-  });
-
-  test('无排队条 → 不发 queue_dropped、账目照旧', async () => {
-    const { s, events } = makeSession();
-    await s.send('only', null, { clientMessageId: 'c1' });
-    s.queue = [];
-    s.q = { interrupt: async () => {} };
-    await s.interrupt();
-    assert.equal(s.pendingTurns, 1);
-    assert.equal(events.find(e => e.type === 'system' && e.payload.kind === 'queue_dropped'), undefined);
-    s.dispose();
-  });
-
-  // 回归：interrupt() 在 await q.interrupt() 之前同步快照 cliDropped，此前不「摘牌」——
-  // await 期间若 cancelQueued() 并发命中同一条 cliQueued 消息并各自成功，两边都会对它扣一次
-  // pendingTurns，制造假性空闲窗口（真正的主轮 result 还没到）。修复：interrupt() 摘牌与
-  // cancelQueued() 对称，谁的同步前缀先跑谁摘牌，另一方发现槽位已空则不再重复处理/扣减。
-  test('竞态：interrupt() 与 cancelQueued() 并发命中同一条 cliQueued → 不双扣 pendingTurns', async () => {
-    const { s } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });   // pendingTurns=1，主轮在途
-    await s.send('second', null, { clientMessageId: 'c2' });  // pendingTurns=2，c2 登记进 cliQueued
-    s.queue = []; // 模拟贪婪泵已把两条都抽离本地队列
-    assert.equal(s.pendingTurns, 2);
-    assert.equal(s.cliQueued?.clientMessageId, 'c2');
-
-    let releaseInterrupt;
-    // 注意：interrupt() 摘牌先于 cancelQueued 的同步前缀，故 cancelQueued 会在 cliQueued 已空时
-    // 短路返回，根本不会走到 q.cancelAsyncMessage——此处无需为它提供可控 Promise。
-    s.q = { interrupt: () => new Promise(r => { releaseInterrupt = r; }) };
-
-    const pInterrupt = s.interrupt();   // 同步前缀先跑：摘牌 cliQueued、卡在 await q.interrupt()
-    const pCancel = s.cancelQueued('c2'); // 槽位已被摘空，应直接 {ok:false}，不再碰 q.cancelAsyncMessage
-
-    const cancelResult = await pCancel;
-    assert.equal(cancelResult.ok, false, 'interrupt 已摘牌，cancelQueued 不应再对同一条消息生效');
-    assert.equal(s.pendingTurns, 2, 'cancelQueued 落空，账目不动');
-
-    releaseInterrupt();
-    await pInterrupt;
-    assert.equal(s.pendingTurns, 1, '主轮真正的 result 还没到，中间态应是 1（不能被双扣到 0）');
-    s.dispose();
-  });
-
-  test('竞态（反序）：cancelQueued() 先摘牌 → interrupt() 不应对同一条 cliQueued 重复扣减', async () => {
-    const { s } = makeSession();
-    await s.send('first', null, { clientMessageId: 'c1' });
-    await s.send('second', null, { clientMessageId: 'c2' });
-    s.queue = [];
-    assert.equal(s.pendingTurns, 2);
-
-    let releaseInterrupt, releaseCancel;
-    s.q = {
-      interrupt: () => new Promise(r => { releaseInterrupt = r; }),
-      cancelAsyncMessage: () => new Promise(r => { releaseCancel = r; }),
-    };
-
-    const pCancel = s.cancelQueued('c2'); // 同步前缀先摘牌，卡在 await cancelAsyncMessage
-    const pInterrupt = s.interrupt();     // 发现 cliQueued 已空（cancelQueued 已摘牌），cliDropped 应为 null
-
-    releaseCancel(true); // 撤回先落地
-    const cancelResult = await pCancel;
-    assert.equal(cancelResult.ok, true);
-    assert.equal(s.pendingTurns, 1, 'c2 被 cancelQueued 扣掉后，只剩主轮的 1');
-
-    releaseInterrupt(); // 主轮也被中断（成功中断不直接清主轮的 1，留给之后的 result 事件配平）
-    await pInterrupt;
-    assert.equal(s.pendingTurns, 1, 'interrupt 不应对已被 cancelQueued 摘走的 c2 重复扣减，仍是主轮的 1');
     s.dispose();
   });
 });

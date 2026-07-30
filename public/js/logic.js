@@ -284,14 +284,21 @@ export function shouldShowBusyWithMirror({ mirrorReadonly = false, busy = false 
   return Boolean(busy);
 }
 
-// 输入区主按钮：CLI 镜像只读 → 续接/取消续接；否则 busy 且无内容 → 停止；有内容时优先发送/排队（FE-004）。
-// 审批/提问 sheet、输入禁用、queueFull、sendInFlight 仍按原闸挡发送；sheet 打开时不 morph 停止（中止走 sheet 逃生口）。
+// 输入区主按钮：CLI 镜像只读 → 续接/取消续接；否则 busy → 停止（不论输入框有无草稿）；空闲有内容 → 发送。
+// 审批/提问 sheet、输入禁用、sendInFlight 仍按原闸挡发送；sheet 打开时不 morph 停止（中止走 sheet 逃生口）。
 // mirrorReadonly 优先于 blockedByDisabledInput：镜像时 input 仍 disabled，但主按钮要可点「续接」。
+// 2026-07-30 移除消息排队：在途轮期间不再接受新消息，此时主按钮恒为停止钮——若只在空输入时给停止钮，
+// 「想插队 → 先清空输入框才看得到停止钮」这步极反直觉。草稿留在输入框里不动，运行中仍可继续打字。
+// ★停止态判据必须是 turnRunning 而非 busy：busy 是粗粒度的（stateOf 把 hasBgTasks 也折进 'busy'，
+// 且 bindView/loadHistory 用 shouldSeedBusyFromInstanceState 播种时并不排除 bgActive）。若用 busy，
+// 纯后台任务挂着时主按钮会恒为停止钮，而移动端回车不发送、只能点这个钮 —— 用户彻底发不出消息，
+// 违反「后台任务挂着不锁」。busy && !hasContent 这一支保留作兜底：turnRunning 靠广播/ack 驱动，
+// 万一漏种而实际在跑，空输入时仍要能停；有草稿才说明用户想发，那时才让位给发送。
 export function resolveComposerPrimaryMode({
   busy = false,
+  turnRunning = false,
   hasContent = false,
   interruptPending = false,
-  queueFull = false,
   blockedByUserRequest = false,
   blockedByDisabledInput = false,
   blockedBySendInFlight = false,
@@ -333,8 +340,9 @@ export function resolveComposerPrimaryMode({
       ariaLabel: t('发送'),
     };
   }
-  // busy 且输入空 → 停止（queueFull 不挡中止）
-  if (busy && !hasContent) {
+  // 在途轮 → 停止（有无草稿都一样：这期间发不出去，把主位让给唯一有用的操作）；
+  // busy 但无在途轮（纯后台任务）→ 仅空输入时兜底给停止，有草稿则放行发送。
+  if (turnRunning || (busy && !hasContent)) {
     if (interruptPending) {
       return {
         mode: 'stop',
@@ -350,15 +358,6 @@ export function resolveComposerPrimaryMode({
       ariaLabel: t('停止'),
     };
   }
-  // 发送路径（含 busy+有内容 排队）
-  if (queueFull) {
-    return {
-      mode: 'send',
-      enabled: false,
-      title: t('前面已有消息在排队，请等当前任务结束'),
-      ariaLabel: t('发送'),
-    };
-  }
   if (blockedBySendInFlight) {
     return {
       mode: 'send',
@@ -367,13 +366,13 @@ export function resolveComposerPrimaryMode({
       ariaLabel: t('发送'),
     };
   }
-  // 有内容：空闲发送 / busy 排队纠偏（对齐 Desktop Code：当前步骤后吸收，不必先 Stop）
+  // 空闲有内容 → 发送（busy 已在上面走停止分支）
   if (hasContent) {
     return {
       mode: 'send',
       enabled: true,
-      title: busy ? t('当前步骤后发送（可纠偏，不必先停止）') : '',
-      ariaLabel: busy ? t('排队发送') : t('发送'),
+      title: '',
+      ariaLabel: t('发送'),
     };
   }
   return {
@@ -404,40 +403,24 @@ export function shouldShowComposerDiscoverHint({ focused = false, hasContent = f
   return Boolean(focused) && !hasContent && !mirrorReadonly;
 }
 
-// 排队可见性（对齐 CLI「Queued」态 + Desktop 运行中纠偏）：user_message.queued=true 的气泡挂排队标记，
-// 当前步骤/本轮结束后转正；被撤回/随停止取消时由 system{queue_cancelled/queue_dropped} 落终态。
-export function queuedBubbleState({ queued = false } = {}) {
-  if (!queued) return { show: false, label: '' };
-  return { show: true, label: t('⏳ 排队中 · 当前步骤后发送') };
-}
-
-// Composer placeholder：busy 与否都用 idle 文案（「给 Claude 发消息...」），不改成「纠偏」提示。
-// 可排队发送的能力保留，只是不在 placeholder 上教育用户。busy 参数仍接受（调用方透传），仅不改变文案。
+// Composer placeholder：在途轮期间说明发不出去（输入框仍可打字、草稿保留）。
 // mirrorReadonly 优先（镜像态整框只读，placeholder 由镜像文案接管）。
+// busy 与 turnRunning 分开：busy 含后台任务/待审批，而发送闸只认在途轮——挂着后台任务时仍可发送。
 export function resolveComposerPlaceholder({
   busy: _busy = false,
-  queueFull = false,
+  turnRunning = false,
   mirrorReadonly = false,
   mirrorText = '',
   idleText = '给 Claude 发消息...',
 } = {}) {
   if (mirrorReadonly) return mirrorText || idleText;
-  if (queueFull) return t('前面已有消息在排队，请等当前任务结束');
+  if (turnRunning) return t('当前任务运行中，完成后可发送');
   return idleText;
 }
 
 // 回合末滚动：有文件汇总卡则锚定到卡（手机扫结果）；否则落底。
 export function resolveTurnEndScroll({ hasFileChangesCard = false } = {}) {
   return hasFileChangesCard ? 'file-changes' : 'bottom';
-}
-
-// 撤回回填决策（对齐 CLI ESC 撤回→内容回编辑器）：输入框为空 → 直接回填；
-// 已有未发内容 → 撤回文本置于其上（空行分隔）——零丢失、无隐藏暂存，比覆盖/丢弃都诚实。
-export function resolveCancelRefill({ inputText = '', cancelledText = '' } = {}) {
-  const cur = typeof inputText === 'string' ? inputText : '';
-  const back = typeof cancelledText === 'string' ? cancelledText : '';
-  if (!cur.trim()) return { mode: 'fill', value: back };
-  return { mode: 'prepend', value: `${back}\n\n${cur}` };
 }
 
 // 流内 live 活动行兜底文案（不写 disk/history）。busy 主形态是 formatCliSpinnerLine 的 CLI 式
@@ -1169,6 +1152,22 @@ export function presentOnlineSendAck(ack) {
   const error = (ack && typeof ack.error === 'string' && ack.error.trim())
     ? ack.error.trim()
     : t('发送失败');
+  // 在途轮拒收（排队已移除）：被拒的是【这条新消息】，不是正在跑的那轮——
+  // clearBusy 必须 false，否则会把在跑那轮的状态行/停止钮一起清掉；也不 requeue，
+  // 自动重发等于把排队搬到客户端。文字回填输入框（send 已清空它）。
+  if (ack?.busy === true) {
+    return {
+      ok: false,
+      busy: true,
+      clearBusy: false,
+      restoreDraft: true,
+      retryable: false,
+      permanent: false,
+      stale: false,
+      requeue: false,
+      message: error,
+    };
+  }
   const permanent = Boolean(ack?.permanent);
   const retryable = Boolean(ack?.retryable) || (!permanent && !ack?.stale);
   const stale = Boolean(ack?.stale);
@@ -1264,10 +1263,16 @@ export function dumpDurableOutbox(queue) {
 
 // 离线队列单条重发 ack 决策（FE-NEW-001）。与在线不同：不恢复草稿（气泡已在消息流）、
 // permanent 必停重试；timeout/err 与非 permanent 负 ack 一律 requeue。
-// outcome: 'ok' | 'permanent' | 'requeue'
+// outcome: 'ok' | 'permanent' | 'requeue' | 'blocked'
+// blocked = 撞上在途轮（排队已移除）：队列首条发出去就开跑，其后各条必被拒。继续 requeue 会空转成
+// 客户端排队，故落终态由用户手动重发。与 permanent 的区别：blocked 稍后重发能成功，不是死信。
 export function presentOfflineResendAck(err, ack) {
   if (!err && ack && ack.ok === true) {
     return { outcome: 'ok', permanent: false, requeue: false, clearBusyIfViewing: false, message: '' };
+  }
+  if (!err && ack && ack.ok === false && ack.busy === true) {
+    const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : t('当前任务运行中，完成后可发送');
+    return { outcome: 'blocked', permanent: false, requeue: false, clearBusyIfViewing: false, message: error };
   }
   if (!err && ack && ack.ok === false && ack.permanent) {
     const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : t('发送失败');
@@ -1988,11 +1993,11 @@ export function formatServiceNotices({ service, now } = {}) {
   return notices;
 }
 
-// 诊断时间线（镜像/排队/停止）文案模板：每条事件译成判定过的一句话 + severity，不裸吐 detail
+// 诊断时间线（镜像/轮次/停止）文案模板：每条事件译成判定过的一句话 + severity，不裸吐 detail
 // JSON——折叠会重蹈 logs:clientError 链路"只知道发生过、不知道具体是哪条"的覆辙，这里刻意保留
 // 每条事件的细节和时间顺序；"判定化"精神只用在 severity 着色上，不用在合并/折叠时间线上。
 const DIAG_TAG_LABEL = {
-  interrupt: '停止', stop_task: '停止单任务', cancel_async_message: '撤回排队消息',
+  interrupt: '停止', stop_task: '停止单任务',
   set_model: '切换模型', set_permission_mode: '切换权限档',
 };
 // statusline 额度(5h/7d)不可用原因 → 一句话文案。third_party_auth 是预期状态（API Key/Bedrock/
@@ -2022,7 +2027,8 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
       : `${t('👀 切入未锁：')}${d.agedOutStale ? t('陈旧挂起，判定已过期') : `${t('尾部=')}${d.tailVerdict}`}`;
   } else if (subsystem === 'interrupt' && event === 'settled') {
     if (d.outcome === 'success') {
-      text = d.droppedCount > 0 ? `${t('⏹ 停止成功（丢弃')} ${d.droppedCount} ${t('条排队消息，')}${d.ms}ms）` : `${t('⏹ 停止成功（')}${d.ms}ms）`;
+      // droppedCount = 停止时尚未送达 SDK 的消息数（send 后数毫秒的窄竞态窗），排队移除后通常恒 0
+      text = d.droppedCount > 0 ? `${t('⏹ 停止成功（丢弃')} ${d.droppedCount} ${t('条未送达消息，')}${d.ms}ms）` : `${t('⏹ 停止成功（')}${d.ms}ms）`;
     } else if (d.outcome === 'forced_settle') {
       text = d.timedOut ? `${t('⏱ 停止超时，已强制收口（')}${d.ms}ms）` : `${t('⚠️ 停止被拒，已强制收口（')}${d.ms}ms）`;
       severity = 'warning';

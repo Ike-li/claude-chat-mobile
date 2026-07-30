@@ -61,23 +61,28 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-02c 队列已满时保留草稿并禁用发送按钮', async ({ page }) => {
+  // 排队已移除（2026-07-30）：在途轮期间不收新消息。输入框仍可打字存草稿，主按钮恒为停止钮，
+  // 常驻提示行说明为什么发不出去；轮次结束后自动解锁，草稿原样还在、可直接发出。
+  test('P0-02c 任务运行中保留草稿、禁止发送并常驻提示', async ({ page }) => {
     await gotoMock(page);
 
-    await sendChatMessage(page, 'test:queuefull');
-    // 发送后输入空 + busy：主钮为停止；queueFull 只在有内容时挡发送（FE-004）
+    await sendChatMessage(page, 'test:turn-running');
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
+    await expect(page.locator('[data-testid="composer-busy-hint"]')).toBeVisible();
+    await expect(page.locator('[data-testid="composer-busy-hint"]')).toContainText('运行中');
+
+    // 输入框仍可打字（草稿能力保留），但主按钮不变回发送——运行中发不出去
+    await page.locator('#input').fill('message after the turn finishes');
+    await expect(page.locator('#input')).toHaveValue('message after the turn finishes');
     await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
 
-    await page.locator('#input').fill('message after queue drains');
-    await expect(page.locator('#input')).toHaveValue('message after queue drains');
+    // 轮次结束 → 提示行消失、主按钮回到发送态，草稿原样保留
+    await expect(page.locator('[data-testid="composer-busy-hint"]')).toBeHidden({ timeout: 10_000 });
     await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'send');
-    await expect(page.locator('#btnSend')).toBeDisabled();
-    await expect(page.locator('#btnSend')).toHaveAttribute('title', '前面已有消息在排队，请等当前任务结束');
-
-    await expect(page.locator('#btnSend')).toBeEnabled({ timeout: 10_000 });
-    await expect(page.locator('#btnSend')).toHaveAttribute('title', '');
+    await expect(page.locator('#btnSend')).toBeEnabled();
+    await expect(page.locator('#input')).toHaveValue('message after the turn finishes');
     await page.locator('#btnSend').click();
-    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('message after queue drains');
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('message after the turn finishes');
     await expect(page.locator('#input')).toHaveValue('');
 
     await expectNoBrowserErrors(page);

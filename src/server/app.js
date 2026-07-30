@@ -768,7 +768,9 @@ function instancesPayload() {
       // 是否有活的后台任务（≠ busy：前台轮 busy 但无后台任务时为 false）——前端据此收敛进度横幅可见性：
       // 当前查看实例 bgActive=false 即隐藏横幅，统一覆盖「切会话/TTL 清/完成/前台轮残留」所有隐藏场景（权威状态驱动，非零散事件）。
       bgActive: a.hasBgTasks?.() || false,
-      queueFull: a.pendingTurns >= 2, // 队列已满（1 运行中 + 1 排队），前端据此禁发送按钮
+      // 排队已移除（2026-07-30）：有在途轮就不收新消息，前端据此禁发送按钮 + 出「运行中」提示。
+      // 判据刻意只认在途轮而非 isBusy()——后台任务挂着时仍可发送，否则长任务会让人永远发不出字。
+      turnRunning: a.pendingTurns > 0,
       // 切 tab 面板同步：携带各实例当前档，前端 setInstances 据此静默刷新顶部 permMode/effort/model select。
       // transcriptModel：resume 冷读的会话末条 assistant 模型（纯展示回落，填 init 未到的空窗；
       // 不入 activeModel/defaultModel、不参与 setModel 差分）。
@@ -2242,6 +2244,16 @@ registerSocketConnection(io, socket => {
       }
       broadcastInstances();
     }
+    // 在途轮拒收（排队已移除 2026-07-30）：判据只认在途轮，不用 isBusy()——后台任务挂着仍可发送。
+    // 放在 send() 之前而非依赖其返回值，是为了让拒绝理由精确：send() 返回 false 还covers disposed
+    // 与窄竞态，那些是可重试的，而"任务运行中"要的是【不】自动重试（否则等于把排队搬到客户端）。
+    // 不 commit 去重 ID、不记 userMessageIn：同一 clientMessageId 稍后重发必须还能成功。
+    if (a.pendingTurns > 0) {
+      if (typeof ack === 'function') {
+        ack({ ok: false, error: '当前任务运行中，请等待完成后再发送', busy: true, retryable: false });
+      }
+      return;
+    }
     // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
     interactionLog.userMessageIn(a.logKey(), cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
     let sent;
@@ -2268,11 +2280,12 @@ registerSocketConnection(io, socket => {
       if (typeof ack === 'function') ack({ ok: false, error: msg, permanent, retryable: !permanent });
       return;
     }
-    // BE-002：send 返回 false = 队列已满或实例已弃用（可重试的临时失败），消息【未】入队。
+    // BE-002：send 返回 false = 实例已弃用，或上面那道在途轮闸到 send 之间的窄竞态（setModel await
+    // 让出点里另一条抢先开了轮）——都是可重试的临时失败，消息【未】入队。
     // 必须回传 ok:false + retryable 让客户端保留 pending、稍后重连重试，且【不能】commit 去重 ID——
     // 否则下次重发命中去重被假成功丢弃。旧代码无条件 ack{ok:true} 且忽略 send 返回值是「假成功丢消息」根因。
     if (!sent) {
-      if (typeof ack === 'function') ack({ ok: false, error: '前面还有消息在排队，请稍后重试', retryable: true });
+      if (typeof ack === 'function') ack({ ok: false, error: '发送失败，请重试', retryable: true });
       return;
     }
     diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
@@ -2285,8 +2298,8 @@ registerSocketConnection(io, socket => {
     }
     // 只在消息真正成功入队后才登记去重 ID（此后同 ID 重发才判 duplicate、幂等）。
     messageDedupState = commitProcessed(clientMessageId, messageDedupState);
-    // 队列满（pendingTurns 1→2）时立即广播，前端禁发送按钮无延迟。
-    if (a.pendingTurns >= 2) broadcastInstances();
+    // 入队即在跑：立即广播 turnRunning=true，多端禁发送按钮无延迟（本端已乐观置位，这条管其它端）。
+    broadcastInstances();
     if (typeof ack === 'function') ack({ ok: true, instanceId: a.instanceId });
   });
 
@@ -2494,23 +2507,6 @@ registerSocketConnection(io, socket => {
   });
 
   on(socket, 'user:interrupt', payload => routeInstance(payload?.instanceId)?.interrupt()); // 台阶3：按 instanceId 路由
-  // 撤回排队中的消息（对齐 CLI ESC 撤回）：路由到实例 cancelQueued（CLI cancel_async_message 主路径 +
-  // 本地队列竞态窗兜底，账目配平在 agent 内）。成功须立即广播 instances——queueFull true→false 解锁发送按钮；
-  // 失败（已开始处理/无此条）回结构化负 ack，前端就地把气泡转正并提示。
-  on(socket, 'user:cancelQueued', async (payload, ack) => {
-    const a = routeInstance(payload?.instanceId);
-    if (!a) {
-      if (typeof ack === 'function') ack({ ok: false, error: '会话实例不存在或已关闭' });
-      return;
-    }
-    const r = await a.cancelQueued(typeof payload?.clientMessageId === 'string' ? payload.clientMessageId : '');
-    if (r.ok) {
-      broadcastInstances();
-      if (typeof ack === 'function') ack({ ok: true, text: r.text ?? '' });
-    } else if (typeof ack === 'function') {
-      ack({ ok: false, error: '该消息已开始处理，无法撤回' });
-    }
-  });
   // 停单个后台任务（子 agent / 后台 Bash），对应终端 Ctrl+X Ctrl+K；按 instanceId 路由。taskId 来自
   // task_notification / task_progress / background_tasks_changed 事件。stopTask 内部 disposed / 无效
   // taskId / 无 q / SDK 抛错均幂等吞掉（返回 false 不抛），故无实例（routeInstance→null）时 ?. 安全 no-op。

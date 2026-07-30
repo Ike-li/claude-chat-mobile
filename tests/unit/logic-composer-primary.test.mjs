@@ -21,8 +21,6 @@ import {
   shouldBindBusyFromBroadcast,
   shouldForceClearBusyFromBroadcast,
   BUSY_BROADCAST_CLEAR_GRACE_MS,
-  queuedBubbleState,
-  resolveCancelRefill,
   shouldClearInterruptPendingOnSystem,
   INTERRUPT_PENDING_TIMEOUT_MS,
 } from '../../public/js/logic.js';
@@ -37,7 +35,7 @@ test('resolveComposerPrimaryMode: 空闲空输入 → 禁用发送', () => {
 test('shouldHideComposerSendButton: 空闲无内容隐藏；有内容/停止/续接显示', () => {
   assert.equal(shouldHideComposerSendButton({ mode: 'send', enabled: false, hasContent: false }), true);
   assert.equal(shouldHideComposerSendButton({ mode: 'send', enabled: true, hasContent: true }), false);
-  assert.equal(shouldHideComposerSendButton({ mode: 'send', enabled: false, hasContent: true }), false); // 排队满等
+  assert.equal(shouldHideComposerSendButton({ mode: 'send', enabled: false, hasContent: true }), false); // 审批中等禁用态
   assert.equal(shouldHideComposerSendButton({ mode: 'stop', enabled: true, hasContent: false }), false);
   assert.equal(shouldHideComposerSendButton({ mode: 'resume', enabled: true, hasContent: false }), false);
 });
@@ -73,9 +71,29 @@ test('resolveComposerPrimaryMode: 忙碌空输入 → 停止启用', () => {
   assert.equal(out.ariaLabel, '停止');
 });
 
-test('resolveComposerPrimaryMode: 忙碌有内容 → 仍发送（FE-004 排队）', () => {
-  const out = resolveComposerPrimaryMode({ busy: true, hasContent: true });
+// 排队已移除：在途轮期间不接受新消息，主按钮恒为停止钮（不管输入框有没有草稿）——
+// 否则「想插队 → 先清空输入框才能看到停止钮」这步极反直觉。草稿保留在输入框里。
+test('resolveComposerPrimaryMode: 在途轮 + 有内容 → 停止（不再排队发送）', () => {
+  const out = resolveComposerPrimaryMode({ busy: true, turnRunning: true, hasContent: true });
+  assert.equal(out.mode, 'stop');
+  assert.equal(out.enabled, true);
+  assert.equal(out.ariaLabel, '停止');
+});
+
+// ★决策②「后台任务挂着不锁」：busy 是粗粒度的（stateOf 把 hasBgTasks 也折进 'busy'，
+// 且 bindView/loadHistory 用 shouldSeedBusyFromInstanceState 播种时并不排除 bgActive）。
+// 发送闸只认在途轮——纯后台任务期主按钮若恒为停止钮，移动端（回车不发送、只能点钮）就彻底发不出消息了。
+test('resolveComposerPrimaryMode: 纯后台任务 busy（无在途轮）+ 有内容 → 仍可发送', () => {
+  const out = resolveComposerPrimaryMode({ busy: true, turnRunning: false, hasContent: true });
   assert.equal(out.mode, 'send');
+  assert.equal(out.enabled, true);
+});
+
+// 兜底逃生口：turnRunning 靠广播/ack 驱动，万一漏种而实际在跑，空输入时仍要能停。
+// 与上一条并不冲突——有草稿才说明用户想发，那时才让位给发送。
+test('resolveComposerPrimaryMode: busy + 空输入 → 停止（turnRunning 漏种时的兜底）', () => {
+  const out = resolveComposerPrimaryMode({ busy: true, turnRunning: false, hasContent: false });
+  assert.equal(out.mode, 'stop');
   assert.equal(out.enabled, true);
 });
 
@@ -117,25 +135,15 @@ test('INTERRUPT_PENDING_TIMEOUT_MS 是合理的安全超时（防永久卡死）
   assert.ok(INTERRUPT_PENDING_TIMEOUT_MS <= 30_000);
 });
 
-test('resolveComposerPrimaryMode: 忙碌有内容 + queueFull → 禁用发送 + 排队 title', () => {
+test('resolveComposerPrimaryMode: 在途轮 + 有内容 + interruptPending → 停止禁用（草稿不影响）', () => {
   const out = resolveComposerPrimaryMode({
     busy: true,
+    turnRunning: true,
     hasContent: true,
-    queueFull: true,
-  });
-  assert.equal(out.mode, 'send');
-  assert.equal(out.enabled, false);
-  assert.match(out.title, /排队/);
-});
-
-test('resolveComposerPrimaryMode: 忙碌空 + queueFull → 仍可停止', () => {
-  const out = resolveComposerPrimaryMode({
-    busy: true,
-    hasContent: false,
-    queueFull: true,
+    interruptPending: true,
   });
   assert.equal(out.mode, 'stop');
-  assert.equal(out.enabled, true);
+  assert.equal(out.enabled, false);
 });
 
 test('resolveComposerPrimaryMode: 审批/提问打开 → 禁用发送（不走 morph 停止）', () => {
@@ -220,13 +228,32 @@ test('presentOnlineSendAck: ok → 仅确认成功，不清 busy', () => {
 });
 
 test('presentOnlineSendAck: 可重试失败 → 清 busy + 入 outbox（不回填草稿）', () => {
-  const out = presentOnlineSendAck({ ok: false, error: '前面还有消息在排队，请稍后重试', retryable: true });
+  const out = presentOnlineSendAck({ ok: false, error: '发送失败，请重试', retryable: true });
   assert.equal(out.ok, false);
   assert.equal(out.clearBusy, true);
   assert.equal(out.retryable, true);
   assert.equal(out.requeue, true, '可重试应入 outbox 自动重试');
   assert.equal(out.restoreDraft, false, '入队后不回填，避免与 outbox 双份');
-  assert.match(out.message, /排队|重试/);
+  assert.match(out.message, /重试/);
+});
+
+// 排队移除后的核心新分支：在途轮期间服务端拒收。
+// · clearBusy 必须为 false —— 被拒的是【新消息】，正在跑的那轮 busy 不能被清掉（否则状态行消失、停止钮变发送钮）
+// · requeue 必须为 false —— 自动重发等于把排队搬到客户端，与移除排队的初衷相左
+// · restoreDraft 为 true —— send() 已清空输入框，文字要还给用户
+test('presentOnlineSendAck: busy 拒收 → 不清 busy、不入 outbox、回填草稿', () => {
+  const out = presentOnlineSendAck({
+    ok: false,
+    error: '当前任务运行中，请等待完成后再发送',
+    busy: true,
+    retryable: false,
+  });
+  assert.equal(out.ok, false);
+  assert.equal(out.busy, true);
+  assert.equal(out.clearBusy, false, '在跑那轮的 busy 不能被新消息的负 ack 清掉');
+  assert.equal(out.requeue, false, '不自动重发——那就是客户端排队');
+  assert.equal(out.restoreDraft, true, '文字要还回输入框');
+  assert.match(out.message, /运行中/);
 });
 
 test('presentOnlineSendAck: 永久失败 / stale → 清 busy + 恢复草稿', () => {
@@ -434,39 +461,22 @@ test('shouldForceClearBusyFromBroadcast: 缺 turnStartTs（防御性兜底）→
   assert.equal(shouldForceClearBusyFromBroadcast({ state: 'idle', localBusy: true, now: 1 }), true);
 });
 
-// ---- 排队可见性 + 撤回回填（对齐 CLI Queued/ESC）----
-test.describe('queuedBubbleState', () => {
-  test('queued=true → 显示排队标记与文案', () => {
-    const st = queuedBubbleState({ queued: true });
-    assert.equal(st.show, true);
-    assert.ok(st.label.includes('排队中'));
+// ---- 离线 outbox 重发撞上在途轮 ----
+// 排队移除后，重连重发可能撞上「已经有一轮在跑」（比如队列首条刚发出去就开跑，第 2/3 条紧随其后）。
+// 这类消息不能再 requeue 空转（那就是客户端排队），落 blocked 终态由用户手动重发。
+test.describe('presentOfflineResendAck: busy 拒收', () => {
+  test('busy 负 ack → outcome=blocked，不重新入队', () => {
+    const out = presentOfflineResendAck(null, {
+      ok: false,
+      error: '当前任务运行中，请等待完成后再发送',
+      busy: true,
+      retryable: false,
+    });
+    assert.equal(out.outcome, 'blocked');
+    assert.match(out.message, /运行中/);
   });
-  test('queued 缺省/false → 不显示', () => {
-    assert.equal(queuedBubbleState({}).show, false);
-    assert.equal(queuedBubbleState({ queued: false }).show, false);
-    assert.equal(queuedBubbleState().show, false);
-  });
-});
-
-test.describe('resolveCancelRefill', () => {
-  test('输入框为空 → 直接回填撤回文本', () => {
-    assert.deepEqual(
-      resolveCancelRefill({ inputText: '', cancelledText: 'hello' }),
-      { mode: 'fill', value: 'hello' },
-    );
-    assert.deepEqual(
-      resolveCancelRefill({ inputText: '   ', cancelledText: 'hello' }),
-      { mode: 'fill', value: 'hello' },
-    );
-  });
-  test('输入框已有未发内容 → 撤回文本置于其上（空行分隔），零丢失', () => {
-    assert.deepEqual(
-      resolveCancelRefill({ inputText: 'draft', cancelledText: 'hello' }),
-      { mode: 'prepend', value: 'hello\n\ndraft' },
-    );
-  });
-  test('畸形入参 → 不抛、按空串兜底', () => {
-    assert.deepEqual(resolveCancelRefill(), { mode: 'fill', value: '' });
-    assert.deepEqual(resolveCancelRefill({ inputText: null, cancelledText: null }), { mode: 'fill', value: '' });
+  test('普通可重试失败仍走 requeue（与 blocked 区分）', () => {
+    const out = presentOfflineResendAck(null, { ok: false, error: '发送失败', retryable: true });
+    assert.equal(out.outcome, 'requeue');
   });
 });
