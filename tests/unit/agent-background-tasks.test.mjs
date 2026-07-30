@@ -24,6 +24,54 @@ test.describe('buildAgentQueryOptions — 后台进度加强开关', () => {
   });
 });
 
+// 2270453 fix(security): resolvedEnv（worktree settings.local.json 的 env 块）曾不加过滤直接 spread 进
+// 子进程环境，能覆盖 PORT/AUTH_TOKEN/CCM_DATA_DIR 等服务端关键变量；白名单只放行 ANTHROPIC_*/CLAUDE_CODE_*。
+test.describe('buildAgentQueryOptions — resolvedEnv 白名单（防 worktree settings 覆盖服务端关键变量）', () => {
+  test('PORT/AUTH_TOKEN/CCM_DATA_DIR 等非白名单 key 被过滤，不覆盖服务端原值', () => {
+    const { s } = makeSession();
+    s.resolvedEnv = { PORT: '9999', AUTH_TOKEN: 'stolen', CCM_DATA_DIR: '/evil' };
+    const opts = buildAgentQueryOptions(s, { PORT: '3000', AUTH_TOKEN: 'real-secret', CCM_DATA_DIR: '/real' });
+    assert.equal(opts.env.PORT, '3000', 'worktree resolvedEnv 不得覆盖服务端 PORT');
+    assert.equal(opts.env.AUTH_TOKEN, 'real-secret', 'worktree resolvedEnv 不得覆盖服务端 AUTH_TOKEN');
+    assert.equal(opts.env.CCM_DATA_DIR, '/real', 'worktree resolvedEnv 不得覆盖服务端 CCM_DATA_DIR');
+    s.dispose();
+  });
+
+  test('ANTHROPIC_*/CLAUDE_CODE_* 前缀正常放行（worktree 网关/模型映射的预期用途）', () => {
+    const { s } = makeSession();
+    s.resolvedEnv = { ANTHROPIC_BASE_URL: 'https://gateway.example.com', CLAUDE_CODE_FOO: 'bar' };
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.equal(opts.env.ANTHROPIC_BASE_URL, 'https://gateway.example.com');
+    assert.equal(opts.env.CLAUDE_CODE_FOO, 'bar');
+    s.dispose();
+  });
+
+  test('大小写不绕过：小写前缀不视为合法 key', () => {
+    const { s } = makeSession();
+    s.resolvedEnv = { anthropic_base_url: 'https://evil.example.com' };
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.equal(opts.env.anthropic_base_url, undefined, '小写前缀不应被放行');
+    s.dispose();
+  });
+
+  test('空/undefined resolvedEnv 安全，不影响 env', () => {
+    const { s } = makeSession();
+    s.resolvedEnv = undefined;
+    const opts = buildAgentQueryOptions(s, { ...process.env, PORT: '3000' });
+    assert.equal(opts.env.PORT, '3000');
+    s.dispose();
+  });
+
+  test('原型污染键（JSON.parse 出的 __proto__ 自有属性）不生效、不污染 Object.prototype', () => {
+    const { s } = makeSession();
+    s.resolvedEnv = JSON.parse('{"__proto__": {"polluted": "yes"}, "ANTHROPIC_API_KEY": "ok"}');
+    const opts = buildAgentQueryOptions(s, { ...process.env });
+    assert.equal(({}).polluted, undefined, 'Object.prototype 不应被污染');
+    assert.equal(opts.env.ANTHROPIC_API_KEY, 'ok', '合法 key 仍正常放行');
+    s.dispose();
+  });
+});
+
 test.describe('map() — 后台任务通知（task_notification）', () => {
   test('system/task_notification → emit(source:system) + 武装 pendingAutoTurn，pendingTurns 不变', () => {
     const { s, events } = makeSession();
