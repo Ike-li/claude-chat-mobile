@@ -8,6 +8,8 @@ import {
   readSessionRegistry,
   registryIndicatesTerminalBusy,
   listTerminalSessionStates,
+  applyTerminalStatesToSessions,
+  hasBusyTerminalSessionForCwd,
   terminalStateKey,
   cliPresenceStep,
   REGISTRY_BUSY_FRESH_MS,
@@ -129,6 +131,53 @@ test('listTerminalSessionStates：按 cwd+sessionId 归键返回 busy/alive，�
 test('listTerminalSessionStates：目录不存在 → 空 Map（fail-open，列表不受影响）', async () => {
   const map = await listTerminalSessionStates({ dir: join(tmpdir(), 'ccm-sreg-absent-2'), isAlive: () => true });
   assert.equal(map.size, 0);
+});
+
+test('applyTerminalStatesToSessions：克隆行、注入当前状态并清除旧 terminal，不污染缓存对象', () => {
+  const sessions = [
+    { id: 'sid-busy', title: 'Busy', terminal: 'alive' },
+    { id: 'sid-alive', title: 'Alive' },
+    { id: 'sid-gone', title: 'Gone', terminal: 'busy' },
+    { id: 'sid-other-cwd', title: 'Other cwd', terminal: 'busy' },
+  ];
+  const before = structuredClone(sessions);
+  const states = new Map([
+    [terminalStateKey(CWD, 'sid-busy'), 'busy'],
+    [terminalStateKey(CWD, 'sid-alive'), 'alive'],
+    [terminalStateKey('/Users/you/other', 'sid-other-cwd'), 'busy'],
+  ]);
+
+  const result = applyTerminalStatesToSessions(CWD, sessions, states);
+
+  assert.notEqual(result, sessions);
+  result.forEach((row, i) => assert.notEqual(row, sessions[i]));
+  assert.deepEqual(result, [
+    { id: 'sid-busy', title: 'Busy', terminal: 'busy' },
+    { id: 'sid-alive', title: 'Alive', terminal: 'alive' },
+    { id: 'sid-gone', title: 'Gone' },
+    { id: 'sid-other-cwd', title: 'Other cwd' },
+  ]);
+  assert.deepEqual(sessions, before, '输入行不得被原地写入，避免污染 listSessionsPage 缓存');
+});
+
+test('applyTerminalStatesToSessions：空状态/空输入安全，旧 terminal 仍会被清除', () => {
+  assert.deepEqual(
+    applyTerminalStatesToSessions(CWD, [{ id: SID, terminal: 'busy' }], new Map()),
+    [{ id: SID }],
+  );
+  assert.deepEqual(applyTerminalStatesToSessions(CWD, undefined, new Map()), []);
+});
+
+test('hasBusyTerminalSessionForCwd：独立于分页行判断整个 cwd 是否有 busy CLI', () => {
+  const states = new Map([
+    [terminalStateKey(CWD, 'older-session-outside-page'), 'busy'],
+    [terminalStateKey(CWD, 'idle-session'), 'alive'],
+    [terminalStateKey('/Users/you/other', 'other-busy'), 'busy'],
+  ]);
+  assert.equal(hasBusyTerminalSessionForCwd(CWD, states), true);
+  assert.equal(hasBusyTerminalSessionForCwd('/Users/you/other', states), true);
+  assert.equal(hasBusyTerminalSessionForCwd('/Users/you/none', states), false);
+  assert.equal(hasBusyTerminalSessionForCwd(CWD, undefined), false);
 });
 
 // 负证据（2026-07-28 真机 b06fb05d：杀掉 CLI 后 web 排队续接卡满 5 分钟）：注册表条目「曾观测到

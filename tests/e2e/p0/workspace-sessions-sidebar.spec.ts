@@ -7,7 +7,8 @@ import {
   ANOTHER_WORKSPACE,
   MAIN_WORKSPACE,
   expandWorkspace,
-  expectSessionBadge,
+  expectNoSessionStatusChip,
+  expectSessionStatusChip,
   expectSidebarClosed,
   openSessionByTitle,
   openSessionsSidebar,
@@ -140,24 +141,21 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-11c 后台工作区完成态显示顶部和侧栏角标', async ({ page }) => {
+  test('P0-11c 后台工作区完成态不持续占用抽屉状态提示', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:background-done');
     await waitForIdle(page);
-    await expect(page.locator('#sessionsDot')).toBeVisible();
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '成功');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区已完成');
+    await expect(page.locator('#sessionsDot')).toBeHidden();
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
-    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('aria-label', '成功');
-    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '已完成');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveClass(/hidden/);
 
     await backgroundDir.locator('button').first().click();
     const backgroundRow = sessionRowByInstance(page, 'inst_2');
     await expect(backgroundRow).toContainText('Another App Concurrency');
-    await expectSessionBadge(page, 'inst_2', '✅');
+    await expectNoSessionStatusChip(page, 'inst_2');
 
     await expectNoBrowserErrors(page);
   });
@@ -170,45 +168,45 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
     await expect(page.locator('#sessionsDot')).toBeVisible();
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '出错');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区出错');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 出错');
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
+    await expect(backgroundDir.locator('.dir-badge')).toHaveText('出错');
     await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('aria-label', '出错');
-    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '出错');
 
     await backgroundDir.locator('button').first().click();
     const backgroundRow = sessionRowByInstance(page, 'inst_2');
     await expect(backgroundRow).toContainText('Another App Concurrency');
-    await expectSessionBadge(page, 'inst_2', '❗', '出错');
+    await expectSessionStatusChip(page, 'inst_2', '出错');
 
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-11j 后台同工作区多状态优先显示待审批', async ({ page }) => {
+  test('P0-11j 后台同工作区多状态优先显示需要你，运行态使用文字 chip', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:background-priority');
     await waitForIdle(page);
     await expect(page.locator('#topProjectText')).toContainText('claude-chat-mobile');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '待审批');
-    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区待审批');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '需要你');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 需要你');
 
     await openSessionsSidebar(page);
     const backgroundDir = workspaceRow(page, ANOTHER_WORKSPACE);
-    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('aria-label', '待审批');
-    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('title', '待审批');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveText('需要你');
+    await expect(backgroundDir.locator('.dir-badge')).toHaveAttribute('aria-label', '需要你');
 
     await backgroundDir.locator('button').first().click();
     const doneRow = sessionRowByInstance(page, 'inst_2');
     const busyRow = sessionRowByInstance(page, 'inst_3');
     const permissionRow = sessionRowByInstance(page, 'inst_4');
     await expect(doneRow).toContainText('Background Done Result');
-    await expectSessionBadge(page, 'inst_2', '✅');
+    await expectNoSessionStatusChip(page, 'inst_2');
     await expect(busyRow).toContainText('Background Task Running');
-    await expectSessionBadge(page, 'inst_3', '🤖');
+    await expectSessionStatusChip(page, 'inst_3', '运行中');
     await expect(permissionRow).toContainText('Background Needs Approval');
-    await expectSessionBadge(page, 'inst_4', '⚠️', '待审批');
+    await expectSessionStatusChip(page, 'inst_4', '需要你');
 
     await expectNoBrowserErrors(page);
   });
@@ -441,7 +439,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expandWorkspace(page, MAIN_WORKSPACE);
     const currentRow = sessionRowByInstance(page, 'inst_1');
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
-    await expectSessionBadge(page, 'inst_1', '⚠️');
+    await expectSessionStatusChip(page, 'inst_1', '需要你');
 
     await currentRow.locator('button', { hasText: '✕' }).click();
     await expect(page.locator('#confirmModal')).toBeVisible();
@@ -472,7 +470,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expandWorkspace(page, MAIN_WORKSPACE);
     const currentRow = sessionRowByInstance(page, 'inst_1');
     await expect(currentRow).toContainText('Visual Sandbox (Main)');
-    await expectSessionBadge(page, 'inst_1', '⚠️');
+    await expectSessionStatusChip(page, 'inst_1', '需要你');
 
     await currentRow.locator('button', { hasText: '✕' }).click();
     await expect(page.locator('#confirmModal')).toBeVisible();
@@ -629,33 +627,116 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // P0-11y（P1，7/26 CCD 调研吸收）：终端直跑的外部会话在列表里必须有徽标。此前这类会话（没有 web
-  // live 实例、只在电脑终端里跑）在抽屉里与已结束会话长得一模一样，只有点进去看只读镜像才知道在跑。
-  // 数据源是 CLI 自报的进程注册表（server 侧 listTerminalSessionStates 标注到 session:list 行上）。
-  test('P0-11y 终端直跑的外部会话在抽屉里显示 ⌨️ 徽标（busy/alive 两态可区分）', async ({ page }) => {
+  // P0-11y：CLI 与 Web 共用一套可读状态。terminal busy 即使与 idle live 实例并存也不能被遮蔽；
+  // terminal alive 只是来源/占用信息，放副文本而不占主状态位。
+  test('P0-11y CLI busy 统一显示运行中，alive 仅显示终端已打开', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:terminal-badge');
     await openSessionsSidebar(page);
-    await expandWorkspace(page, MAIN_WORKSPACE);
+    const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
 
-    // busy：终端正在跑一轮 → 警示色徽标
+    await expect(mainDir.locator('.dir-badge')).toHaveText('运行中');
+
+    // 同一会话已有 idle Web live 实例时，terminal busy 仍应显示，不能被 liveInst 分支遮蔽。
+    const overlapRow = sessionRowByInstance(page, 'inst_1');
+    await expectSessionStatusChip(page, 'inst_1', '运行中');
+    await expect(overlapRow).toContainText('终端');
+
+    // 纯终端 busy：使用同一个“运行中”文字 chip，来源放在副文本。
     const busyRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Planning Session' });
-    const busyBadge = busyRow.locator('[data-terminal-badge]');
-    await expect(busyBadge).toBeVisible();
-    await expect(busyBadge).toHaveAttribute('title', '终端运行中');
-    await expect(busyBadge).toHaveClass(/text-warning/);
+    await expect(busyRow.locator('[data-session-status]')).toHaveText('运行中');
+    await expect(busyRow).toContainText('终端');
 
-    // alive：终端开着但空闲等输入 → 弱化色，不与 busy 混同
+    // alive：终端开着但空闲，不显示主状态 chip，只显示明确副文本。
     const aliveRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Gap Session' });
-    const aliveBadge = aliveRow.locator('[data-terminal-badge]');
-    await expect(aliveBadge).toBeVisible();
-    await expect(aliveBadge).toHaveAttribute('title', '终端会话已打开');
-    await expect(aliveBadge).toHaveClass(/text-ink-faint/);
+    await expect(aliveRow.locator('[data-session-status]')).toHaveCount(0);
+    await expect(aliveRow).toContainText('终端会话已打开');
 
-    // 没有终端在跑的会话不得凭空长出徽标
-    const plainRow = page.locator('[data-testid="session-row"]', { hasText: 'Visual Sandbox (Main)' });
-    await expect(plainRow.locator('[data-terminal-badge]')).toHaveCount(0);
+    // 没有终端状态的普通历史会话不凭空长出状态。
+    const plainRow = page.locator('[data-testid="session-row"]', { hasText: 'Deleted Remote Session' });
+    await expect(plainRow.locator('[data-session-status]')).toHaveCount(0);
+    await expect(page.locator('[data-terminal-badge]')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11z 抽屉保持打开时低频刷新 CLI 运行态，无需 instances 结构变化', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:terminal-refresh');
+    await openSessionsSidebar(page);
+    const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = page.locator('[data-testid="session-row"]', { hasText: 'Archived Planning Session' });
+
+    // 首次 session:list 尚无 terminal；随后 instances 只改 live 状态、不重建目录子树。
+    await expect(row.locator('[data-session-status]')).toHaveCount(0);
+    await expectSessionStatusChip(page, 'inst_1', '需要你');
+
+    // 第二次列表刷新让另一行出现 terminal busy 并触发整段 rows 重画；live 行仍必须读最新 instances 状态。
+    await expect(row.locator('[data-session-status]')).toHaveText('运行中', { timeout: 18_000 });
+    await expect(row).toContainText('终端');
+    await expectSessionStatusChip(page, 'inst_1', '需要你');
+    await expect(mainDir.locator('.dir-badge')).toHaveText('需要你');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11aa 页外 CLI busy 仍点亮工作区汇总，关闭抽屉后不残留陈旧提示', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:terminal-summary');
+    await openSessionsSidebar(page);
+    const otherDir = await expandWorkspace(page, ANOTHER_WORKSPACE);
+
+    // 返回会话行都没有 terminal 字段，运行态只来自 session:list 的 cwd 级 terminalBusy 汇总。
+    await expect(otherDir.locator('.dir-badge')).toHaveText('运行中');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '运行中');
+    await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 运行中');
+    const otherSubtree = otherDir.locator('xpath=following-sibling::*[1]');
+    await expect(otherSubtree.locator('[data-session-status]')).toHaveCount(0);
+
+    await page.locator('#sidebarClose').click();
+    await expectSidebarClosed(page);
+    await expect(page.locator('#sessionsDot')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11ab 迟到的旧 session:list 不得覆盖较新的 terminal 状态', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:terminal-race');
+    await openSessionsSidebar(page);
+    const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = page.locator('[data-testid="session-row"]', { hasText: 'Archived Planning Session' });
+    await expect(row.locator('[data-session-status]')).toHaveCount(0);
+
+    // visibility 恢复路径会立即 revalidate；连续触发两次制造两个同 cwd 并发请求。
+    await page.evaluate(() => {
+      document.dispatchEvent(new Event('visibilitychange'));
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await expect(page.locator('#messages')).toContainText('Delayed stale session list delivered.', { timeout: 5_000 });
+
+    // 第二个新响应已确认无 terminal；随后到达的第一个旧 busy 响应必须被 request generation 丢弃。
+    await expect(row.locator('[data-session-status]')).toHaveCount(0);
+    await expect(mainDir.locator('.dir-badge')).toHaveClass(/hidden/);
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11ac 关闭抽屉后才返回的 terminalBusy 不得重新点亮顶部', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:terminal-close-race');
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE); // 发出延迟 session:list
+    await page.locator('#sidebarClose').click();
+    await expectSidebarClosed(page);
+
+    await expect(page.locator('#messages')).toContainText('Delayed closed-drawer session list delivered.', { timeout: 5_000 });
+    await expect(page.locator('#sessionsDot')).toBeHidden();
 
     await expectNoBrowserErrors(page);
   });

@@ -926,6 +926,15 @@ export function resolvePanelState({ mirrorReadonly = false, observedCli, web } =
   };
 }
 
+// 工作区抽屉只显示需要用户理解/处理的三态。terminal 独立于 live 实例合并，避免 idle/done live tab
+// 遮住同会话正在运行的终端进程；done/aborted/idle 都是普通终态，不占抽屉主状态位。
+export function resolveDrawerStatus({ liveState, terminalState } = {}) {
+  if (liveState === 'permission') return 'permission';
+  if (liveState === 'error') return 'error';
+  if (liveState === 'busy' || terminalState === 'busy') return 'busy';
+  return null;
+}
+
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
 // aborted（P1-4 已中止独立状态）介于 done 与 busy 之间：比顺利完成更值得回头看一眼（为什么被中止），但
 // 已是终态，不该盖过仍在运行的其它会话。
@@ -953,18 +962,17 @@ export function aggregateStates(instances, dirs) {
   return out;
 }
 
-// 汇总「其他工作区」状态给左上角按钮角标：跨目录取最高优先级，返回单个 state（或 null=无动静）。
-// 注意：这里 done>busy（完成=有结果待看，比在跑更该提示），与 aggregateStates 的 busy>done 有意不同——
-// 那是 per-cwd 聚合、这是按钮汇总；且排除 currentCwd（当前工作区自身动静在聊天视图内呈现，不点亮汇总角标）。
+// 汇总「其他工作区」状态给左上角按钮角标：只提示需要你/出错/运行中三态；完成、中止、空闲
+// 都是普通终态，不持续点亮入口。排除 currentCwd（当前工作区动静在聊天视图内呈现）。
 export function summarizeOtherWorkspaces(workdirStates, availableDirs, currentCwd) {
-  const rank = { busy: 1, done: 2, aborted: 3, error: 4, permission: 5 };
+  const rank = { busy: 1, error: 2, permission: 3 };
   let top = null, topRank = 0;
   for (const d of (availableDirs || [])) {
     if (d === currentCwd) continue;
     const st = workdirStates && workdirStates[d];
     if ((rank[st] || 0) > topRank) { topRank = rank[st]; top = st; }
   }
-  return top; // 'permission'|'error'|'aborted'|'done'|'busy'|null
+  return top; // 'permission'|'error'|'busy'|null
 }
 
 // 顶部/空状态展示名：路径仍作为运行时事实保留，移动端 UI 只露出项目末段。
@@ -2686,7 +2694,7 @@ export function unifiedDiffLines(oldStr, newStr) {
 export function shouldRerenderSessionList({ hasPrevEntry = false, prevSessions, prevHasMore = false, nextSessions, nextHasMore = false } = {}) {
   if (!hasPrevEntry) return true;
   if (!!prevHasMore !== !!nextHasMore) return true;
-  // terminal 进签名：CLI 进程 busy/alive 徽标变化必须重渲（K3），否则 ⌨️ 陈旧
+  // terminal 进签名：CLI 进程 busy/alive 状态或副文本变化必须重渲，否则抽屉会陈旧。
   const signature = list => (Array.isArray(list) ? list : [])
     .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}:${s?.terminal || ''}`)
     .join('|');
@@ -2696,7 +2704,7 @@ export function shouldRerenderSessionList({ hasPrevEntry = false, prevSessions, 
 // 按目录分键的实例签名：每个 cwd 一段签名片段（id+sessionId+title 前 20 字拼接），代替原先"整个实例
 // 集拼一个全局签名"的做法——粒度对齐原全局 structKey，只是从"任何一个实例变化都命中"改成"命中哪个
 // 目录就只标记哪个目录"。状态字段（busy/idle/permission/error）故意不进签名，那些由 refreshDirBadges/
-// refreshInstanceBadges 独立、更轻量地实时刷新，不需要牵动 DOM 子树重建。
+// refreshSessionStatusChips 独立、更轻量地实时刷新，不需要牵动 DOM 子树重建。
 export function buildDirInstanceSignatures(instances = [], dirs = []) {
   const byDir = new Map();
   for (const d of (dirs || [])) byDir.set(d, []);

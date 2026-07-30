@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -465,6 +465,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // 用户点过「显示全部会话…」的目录。缓存里的 sessions 是"当下拿到的那一份"，记不住用户要看全量这个
   // 意图——而 populateSubtree 每次都会无条件 revalidate，不带上 all 就会把展开态悄悄打回截断（P0-11x）。
   const expandedAllDirs = new Set();
+  // session:list 附带的 CLI registry 快照：每个 cwd 是否至少有一条 terminal=busy。与 Web workdirStates
+  // 独立保存并在抽屉显示层合并，避免 live idle/done 遮住终端运行态。
+  const terminalBusyByDir = new Map();
+  const SESSION_PANEL_REVALIDATE_MS = 12_000;
+  let sessionPanelRevalidateTimer = null;
   // P3：面板"结构性"指纹（dirs 集合 + viewingInstanceId）；只有这两者变化才全量重建整个面板
   // （低频、全量更简单可靠）。纯状态变化、或只是某个目录下实例变化，都不再经它判定——见下方按目录分键。
   let _lastPanelStructKey = null;
@@ -4219,16 +4224,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       } else if (_changedDirs.length) {
         rebuildDirSections(_changedDirs); // 只重建真正变化的目录子树，其余目录 DOM 保持原样
         refreshDirBadges();
-        refreshInstanceBadges(); // 实例角标实时刷新（busy 时工具图标细化）
+        refreshSessionStatusChips(); // 会话文字状态实时刷新
         refreshNeedsYou(); // "等我"聚合独立于签名（新增/清除审批不改变实例集结构），须单独刷新
       } else {
         refreshDirBadges();
-        refreshInstanceBadges();
+        refreshSessionStatusChips();
         refreshNeedsYou();
       }
     } else {
       refreshDirBadges();
-      refreshInstanceBadges();
+      refreshSessionStatusChips();
       refreshNeedsYou();
     }
     updateAttentionSignal(); // 顶栏 connDotWrap 边框：alert/attention/ok（与连通性内圈绿/红分轴）
@@ -4558,31 +4563,48 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
   }
 
-  // 角标视觉：busy ⏳ / permission ⚠️ / error ❗ / done ✅；idle 隐藏。挂在目录行内、ml-auto 右对齐。
-  // [emoji, 颜色类, 语义 title]——title 消除「不知道图标/颜色对应什么状态」
-  // UI-007：角标 kind → SVG；第三元为 title/aria
-  const DIR_BADGE = {
-    busy: ['busy', 'text-warning', t('运行中')],
-    permission: ['warn', 'text-danger', t('待审批')],
-    error: ['error', 'text-danger', t('出错')],
-    done: ['ok', 'text-success', t('已完成')],
-    aborted: ['aborted', 'text-warning', t('已中止')],
+  // 抽屉主状态只保留三种可见文字：需要你 / 出错 / 运行中。工具类型、终端来源、正常终态不再
+  // 抢占状态位；文字是主要语义，颜色仅辅助。顶部极小点位仍复用 icon 字段。
+  const DRAWER_STATUS_META = {
+    busy: { icon: 'busy', tone: 'text-accent', label: '运行中' },
+    permission: { icon: 'warn', tone: 'text-warning', label: '需要你' },
+    error: { icon: 'error', tone: 'text-danger', label: '出错' },
   };
-  // 工具角标细化：busy 时仍用工具 emoji（低频）；主状态走 SVG
-  const TOOL_BADGE = { Agent: '🤖', Task: '🤖', Bash: '🖥', Write: '📝', Edit: '✏️', Read: '👁' };
+  function drawerStatusMeta(state) {
+    const meta = DRAWER_STATUS_META[state];
+    return meta ? { ...meta, label: t(meta.label) } : null;
+  }
+  function drawerStateForDir(cwd) {
+    return resolveDrawerStatus({
+      liveState: workdirStates[cwd],
+      terminalState: terminalBusyByDir.get(cwd) ? 'busy' : null,
+    });
+  }
   function applyBadge(badge, state) {
-    const m = DIR_BADGE[state];
-    if (m) {
-      badge.className = `dir-badge status-icon ml-auto shrink-0 ${m[1]}`;
-      badge.title = m[2];
-      setStatusIcon(badge, m[0]);
+    const meta = drawerStatusMeta(state);
+    if (meta) {
+      badge.className = `dir-badge drawer-status-chip ml-auto shrink-0 ${meta.tone}`;
+      badge.textContent = meta.label;
+      badge.title = meta.label;
+      badge.setAttribute('aria-label', meta.label);
       badge.classList.remove('hidden');
     } else {
       badge.textContent = '';
-      badge.innerHTML = '';
       badge.className = 'dir-badge hidden';
       badge.title = '';
+      badge.removeAttribute('aria-label');
     }
+  }
+  function appendSessionStatusChip(head, liveState, terminalState) {
+    head.querySelector('[data-session-status]')?.remove();
+    const state = resolveDrawerStatus({ liveState, terminalState });
+    const meta = drawerStatusMeta(state);
+    if (!meta) return;
+    const chip = el(`<span data-session-status class="drawer-status-chip shrink-0 ${meta.tone}"></span>`);
+    chip.textContent = meta.label;
+    chip.title = meta.label;
+    chip.setAttribute('aria-label', meta.label);
+    head.appendChild(chip);
   }
   // "已等待"文案（FR-22，与 needsYouList 共享 waitingSince 数据源）：按分钟粒度，不做秒级实时动画——
   // 该区块只在 instances 广播到达时重渲（同 refreshNeedsYou 触发时机），文案本就是"上次广播时刻"的快照。
@@ -4632,7 +4654,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   }
   // 面板开着时刷新"需要你"区（不重建整个面板）：needsYou 变化（新增/清除审批或提问）不改变 dirs/实例集，
   // 不会触发结构性变化或目录签名变化 → openSessionPanel/rebuildDirSections 都不会被调用，须独立刷新
-  // （同 refreshDirBadges/refreshInstanceBadges 的定位）。
+  // （同 refreshDirBadges/refreshSessionStatusChips 的定位）。
   // 面板尚未渲染过（#needsYouSection 不存在）时跳过——首次 openSessionPanel 会用当下 needsYouList 建好。
   function refreshNeedsYou() {
     const old = sessionPanel.querySelector('#needsYouSection');
@@ -4688,63 +4710,55 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       connDotWrap.classList.add('border-line-soft');
     }
   }
-  // 面板开着时仅更新已渲染目录行的角标（不重发 session:list）
+  function updateTerminalBusyForDir(cwd, sessions, terminalBusy) {
+    // 新服务端给出完整 registry 的 cwd 汇总，避免默认分页漏掉页外 busy；旧服务端回落当前返回行。
+    const next = typeof terminalBusy === 'boolean'
+      ? terminalBusy
+      : Array.isArray(sessions) && sessions.some(s => s?.terminal === 'busy');
+    const prev = terminalBusyByDir.get(cwd) === true;
+    if (next === prev) return;
+    if (next) terminalBusyByDir.set(cwd, true);
+    else terminalBusyByDir.delete(cwd);
+    refreshDirBadges();
+    updateSessionsDot();
+  }
+  // 面板开着时仅更新已渲染目录行的文字状态（不重发 session:list）
   function refreshDirBadges() {
     sessionPanel.querySelectorAll('[data-dir]').forEach(row => {
       const badge = row.querySelector('.dir-badge');
-      if (badge) applyBadge(badge, workdirStates[row.dataset.dir]);
+      if (badge) applyBadge(badge, drawerStateForDir(row.dataset.dir));
     });
   }
-  // 面板开着时仅更新已渲染实例行的角标（busy 时细化工具图标）
-  function refreshInstanceBadges() {
+  // 初次绘制和 instances 增量广播共用同一个状态 resolver/builder，避免两套角标语义分叉。
+  function refreshSessionStatusChips() {
     const instMap = new Map(instancesList.map(x => [x.instanceId, x]));
-    sessionPanel.querySelectorAll('[data-instance-id]').forEach(row => {
-      const instId = row.dataset.instanceId;
-      if (!instId) return;
-      const inst = instMap.get(instId);
-      if (!inst) return;
-      const head = row.querySelector('.truncate');
+    sessionPanel.querySelectorAll('[data-testid="session-row"]').forEach(row => {
+      const inst = row.dataset.instanceId ? instMap.get(row.dataset.instanceId) : null;
+      const head = row.querySelector('[data-session-head]');
       if (!head) return;
-      const oldBadge = head.querySelector('[data-instance-badge]');
-      if (oldBadge) oldBadge.remove();
-      if (inst.state === 'busy') {
-        const badgeIcon = (inst.activeTool && TOOL_BADGE[inst.activeTool]) || '⏳';
-        const badgeCls = 'text-warning';
-        const b = document.createElement('span');
-        b.className = `shrink-0 ${badgeCls}`;
-        b.setAttribute('data-instance-badge', '');
-        b.textContent = badgeIcon;
-        head.appendChild(b);
-      } else {
-        const m = DIR_BADGE[inst.state];
-        if (m) {
-          const b = document.createElement('span');
-          b.className = `shrink-0 status-icon ${m[1]}`;
-          b.setAttribute('data-instance-badge', '');
-          setStatusIcon(b, m[0]);
-          head.appendChild(b);
-        }
-      }
+      appendSessionStatusChip(head, inst?.state, row.dataset.terminalState || null);
     });
   }
-  // 会话按钮汇总角标：非查看目录有动静即亮，用与面板同款 emoji（⏳/⚠️/❗/✅）而非裸色——消除「不知道颜色对应什么状态」。
-  // 定位/底色样式常驻在 index.html 的 #sessionsDot base 类里，这里只切 hidden + 换 emoji/title。
-  // 优先级 permission>error>done>busy 由 summarizeOtherWorkspaces 决定（纯逻辑、可单测；已排除 currentCwd）。
+  // 顶部点位空间极小，继续用 SVG；但只汇总需要你/出错/运行中，正常完成和中止不再持续点亮。
   function updateSessionsDot() {
     if (!sessionsDot) return;
-    const top = summarizeOtherWorkspaces(workdirStates, availableDirs, currentCwd);
-    const m = top && DIR_BADGE[top]; // [kind, 颜色类, 中文名]
-    if (m) {
+    const drawerStates = {};
+    for (const cwd of availableDirs) drawerStates[cwd] = drawerStateForDir(cwd);
+    const top = summarizeOtherWorkspaces(drawerStates, availableDirs, currentCwd);
+    const meta = drawerStatusMeta(top);
+    sessionsDot.classList.remove('text-accent', 'text-warning', 'text-danger', 'text-success', 'text-ink-faint');
+    if (meta) {
       sessionsDot.classList.remove('hidden');
-      sessionsDot.classList.add('status-icon');
-      setStatusIcon(sessionsDot, m[0]);
-      sessionsDot.title = `${t('其他工作区')}${m[2]}`;
-      // 小点位：保持紧凑
-      sessionsDot.classList.add(m[1]);
+      sessionsDot.classList.add('status-icon', meta.tone);
+      setStatusIcon(sessionsDot, meta.icon);
+      sessionsDot.setAttribute('aria-label', meta.label);
+      sessionsDot.title = `${t('其他工作区')} · ${meta.label}`;
     } else {
       sessionsDot.innerHTML = '';
       sessionsDot.textContent = '';
       sessionsDot.title = '';
+      sessionsDot.removeAttribute('aria-label');
+      sessionsDot.classList.remove('status-icon', 't-status');
       sessionsDot.classList.add('hidden');
     }
   }
@@ -4897,6 +4911,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (window.innerWidth >= 1024) return; // No-op on desktop
     leftSidebar.classList.add('-translate-x-full');
     sidebarScrim.classList.add('hidden');
+    stopSessionPanelRevalidator();
   }
 
   if (sidebarClose) sidebarClose.onclick = closeLeftSidebar;
@@ -5245,7 +5260,12 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function toggleSessions() {
     haptic('tap');
     if (window.innerWidth >= 1024) {
-      document.body.classList.toggle('sidebar-collapsed');
+      const collapsed = document.body.classList.toggle('sidebar-collapsed');
+      if (collapsed) stopSessionPanelRevalidator();
+      else {
+        openSessionPanel(); // 用已剥离 terminal 的 SWR 缓存重画，避免展开时闪旧 CLI 状态
+        startSessionPanelRevalidator({ immediate: true });
+      }
       return;
     }
     if (leftSidebar.classList.contains('-translate-x-full')) {
@@ -5265,7 +5285,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function buildDirSection(d) {
     const isCurrent = d === currentCwd;
     const isExpanded = expandedDirs.has(d);
-    const tabs = instancesList.filter(inst => inst.instanceId && inst.cwd === d);
 
     // ---- 目录头行（所有目录均可点击展开/折叠）----
     const dirRow = el(`<div class="w-full px-3 py-1.5 border-b border-line flex items-center justify-between hover:bg-sunk/30${isCurrent ? ' text-accent' : ' text-ink'}"></div>`);
@@ -5279,7 +5298,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (isExpanded) arrow.classList.add('rotated');
     const name = el(`<span class="truncate"></span>`); name.textContent = baseName(d);
     const badge = el(`<span class="dir-badge hidden"></span>`);
-    applyBadge(badge, workdirStates[d]);
+    applyBadge(badge, drawerStateForDir(d));
 
     toggleBtn.appendChild(icon);
     toggleBtn.appendChild(arrow);
@@ -5313,9 +5332,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       subtree.classList.add('expanded');
     }
 
-    const liveBySession = new Map();        // sessionId → 已打开实例（有 id 的 live tab，用于在 /resume 列表中就地标记）
-    const freshTabs = [];                   // 无 sessionId 的新会话实例（尚未保存，/resume 列表看不到、无时间）
-    for (const inst of tabs) { if (inst.sessionId) liveBySession.set(inst.sessionId, inst); else freshTabs.push(inst); }
+    // 状态-only instances 广播不会重建目录子树；每次 renderRows 都必须现读 instancesList，不能捕获
+    // buildDirSection 当时的旧 state，否则后续 terminal revalidate 重画 rows 会把最新 Web 状态倒退。
+    const currentLiveRows = () => {
+      const liveMap = new Map();
+      const freshTabs = [];
+      for (const inst of instancesList) {
+        if (!inst.instanceId || inst.cwd !== d) continue;
+        if (inst.sessionId) liveMap.set(inst.sessionId, inst);
+        else freshTabs.push(inst);
+      }
+      return { liveMap, freshTabs };
+    };
 
     // 统一行：一条会话（session:list 的 s，或无 id 的新会话）→ DOM 行。liveInst 非空 = 已打开为 tab。
     // 全程 textContent（无 innerHTML 插值用户数据）→ CSP 安全。
@@ -5352,46 +5380,23 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
       // 行内容 (可滑动的前景卡片)
       const rowContent = el(`<div class="row-content relative flex items-center gap-2 pl-6 pr-3 py-2.5 border-b border-line-soft transition-transform duration-200 cursor-pointer${active ? ' bg-accent-wash' : ' bg-surface'}" style="z-index: 20;" data-testid="session-row" data-session-id="${esc(s.id || '')}" data-instance-id="${esc(liveInst?.instanceId || '')}"></div>`);
+      rowContent.dataset.terminalState = s.terminal || '';
       const btn = el(`<button class="flex-1 min-w-0 text-left text-xs active:opacity-70"></button>`);
       btn.title = s.title || t('新会话');
-      const head = el(`<div class="truncate flex items-center gap-1.5"></div>`);
-      const titleSpan = el(`<span class="truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
+      const head = el(`<div data-session-head class="flex items-center gap-1.5 min-w-0"></div>`);
+      const titleSpan = el(`<span class="flex-1 min-w-0 truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
       titleSpan.textContent = s.title || t('新会话');
       head.appendChild(titleSpan);
-      if (liveInst) {                        // 已打开标记：状态角标（busy ⏳ / permission ⚠️ / error ❗ / done ✅）
-        // busy 时优先使用工具细化图标（🤖 Agent / 🖥 Bash），其他状态用通用角标
-        const badgeState = liveInst.state;
-        let badgeIcon, badgeCls, badgeTitle;
-        if (badgeState === 'busy' && liveInst.activeTool && TOOL_BADGE[liveInst.activeTool]) {
-          badgeIcon = TOOL_BADGE[liveInst.activeTool];
-          badgeCls = 'text-warning';
-          badgeTitle = `${t('运行中：')}${liveInst.activeTool}`;
-        } else {
-          const m = DIR_BADGE[badgeState];
-          if (m) {
-            const b = el(`<span data-instance-badge class="shrink-0 status-icon ${m[1]}"></span>`);
-            setStatusIcon(b, m[0]);
-            b.title = m[2];
-            head.appendChild(b);
-            badgeIcon = null; // already appended
-          }
-        }
-        if (badgeIcon) { const b = el(`<span data-instance-badge></span>`); b.textContent = badgeIcon; b.className = `shrink-0 ${badgeCls}`; if (badgeTitle) b.title = badgeTitle; head.appendChild(b); }
-      } else if (s.terminal) {
-        // P1：终端直跑的外部会话徽标（数据源 = CLI 自报进程注册表）。此前这类会话在列表里毫无标记，
-        // 只有点进去看镜像才知道终端在跑。busy=正在跑一轮；alive=终端开着但空闲等输入。
-        const b = el(`<span data-terminal-badge class="shrink-0"></span>`);
-        b.textContent = '⌨️';
-        b.className = `shrink-0 ${s.terminal === 'busy' ? 'text-warning' : 'text-ink-faint'}`;
-        b.title = s.terminal === 'busy' ? t('终端运行中') : t('终端会话已打开');
-        head.appendChild(b);
-      }
+      appendSessionStatusChip(head, liveInst?.state, s.terminal);
       btn.appendChild(head);
-      const sub = el(`<div class="text-ink-faint text-[10px]"></div>`);
+      const sub = el(`<div class="truncate text-ink-faint text-[10px]"></div>`);
       const when = s.lastUsedAt ? new Date(s.lastUsedAt).toLocaleString() : t('新会话（未保存）');
+      let subText = when + (liveInst ? t(' · 已打开') : '');
+      if (s.terminal === 'busy') subText += ` · ${t('终端')}`;
+      else if (s.terminal === 'alive') subText += ` · ${t('终端会话已打开')}`;
       // 短 session_id（前 8 位）：便于对照 CLI /resume、日志、多设备定位同一会话；无 id 的新会话不显示。
-      const shortId = s.id ? ` · ${s.id.slice(0, 8)}` : '';
-      sub.textContent = when + (liveInst ? t(' · 已打开') : '') + shortId;
+      if (s.id) subText += ` · ${s.id.slice(0, 8)}`;
+      sub.textContent = subText;
       btn.appendChild(sub);
 
       let rowSwiped = false;
@@ -5535,14 +5540,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // 折叠再展开同一目录（复用同一个 container）时，旧调用的迟到 ack 若只查前者，可能用 renderRows
     // 整段清空刚渲染好的新内容。
     let subtreeGen = 0;
-    const populateSubtree = (cwd, container, liveMap, fTabs) => {
-      subtreeGen += 1;
+    let sessionListRequestGen = 0;
+    const populateSubtree = (cwd, container, { background = false } = {}) => {
+      // 后台保鲜不使现有 renderRows /「显示全部」闭包失效；首次（折叠目录尚未画过）仍建立代次。
+      if (!background || subtreeGen === 0) subtreeGen += 1;
       const myGen = subtreeGen;
       // 渲染：无 id 新会话实例 + 会话行 +（若被截断）「显示全部」行
       // git worktree 不再嵌套在本目录下自动分组——须作为独立 workdir 出现在 availableDirs。
       const renderRows = (sessions, hasMore) => {
+        const { liveMap, freshTabs } = currentLiveRows();
         container.innerHTML = '';
-        for (const inst of fTabs) {
+        for (const inst of freshTabs) {
           container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
         }
         for (const s of sessions) {
@@ -5554,9 +5562,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
             haptic('tap');
             more.textContent = t('加载中…');
             expandedAllDirs.add(cwd); // 记住意图：后续 revalidate 也得按全量拉，否则重建一次就被打回截断
+            const requestGen = ++sessionListRequestGen;
             socket.emit('session:list', { cwd, all: true }, state => {
+              if (requestGen !== sessionListRequestGen) return;
+              if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
               if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
               const all = state?.sessions || [];
+              updateTerminalBusyForDir(cwd, all, state?.terminalBusy);
               sessionsCache.set(cwd, { sessions: all, hasMore: false });
               renderRows(all, false);
             });
@@ -5565,30 +5577,32 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         }
       };
 
-      // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore}）：有缓存就先拿旧数据把列表画出来，
-      // 不等网络；新鲜度交给下面那次无条件 revalidate。
-      const cachedEntry = sessionsCache.get(cwd);
-      if (cachedEntry) {
-        renderRows(cachedEntry.sessions || [], cachedEntry.hasMore);
-      } else {
-        container.innerHTML = '';
-        for (const inst of fTabs) {
-          container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+      if (!background) {
+        // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore}）：有缓存就先拿旧数据把列表画出来，
+        // 不等网络；新鲜度交给下面那次无条件 revalidate。
+        const cachedEntry = sessionsCache.get(cwd);
+        if (cachedEntry) {
+          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore);
+        } else {
+          container.innerHTML = '';
+          for (const inst of currentLiveRows().freshTabs) {
+            container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+          }
+          // 显示高级骨架屏
+          const skeleton = el(`
+            <div class="skeleton-loader py-1">
+              <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
+                <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-2/3"></div>
+                <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/3"></div>
+              </div>
+              <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
+                <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-1/2"></div>
+                <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/4"></div>
+              </div>
+            </div>
+          `);
+          container.appendChild(skeleton);
         }
-        // 显示高级骨架屏
-        const skeleton = el(`
-          <div class="skeleton-loader py-1">
-            <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
-              <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-2/3"></div>
-              <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/3"></div>
-            </div>
-            <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
-              <div class="h-3.5 bg-sunk/60 skeleton-shimmer rounded w-1/2"></div>
-              <div class="h-2 bg-sunk/40 skeleton-shimmer rounded w-1/4"></div>
-            </div>
-          </div>
-        `);
-        container.appendChild(skeleton);
       }
 
       // 2) 后端异步刷新：无条件发 session:list——这就是 SWR 里的 revalidate，缓存只负责"秒开"，
@@ -5597,14 +5611,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // session:list 自身返回值变化（如溢出截断转为 hasMore）都停留在旧数据上（P0-11n/v/w 就是
       // 为此而写的回归测试）。省下的那次 socket 往返不值这个正确性。
       //
-      // 频率不必担心：populateSubtree 的调用侧已经被上游收窄——instances 广播只在结构性变化或
-      // 目录签名（id/sessionId/title 前20字）真变时才重建子树，busy/idle 这类状态压根不进签名。
-      // 拿回响应后还有 shouldRerenderSessionList 比对内容签名，没真变化就只更新缓存、不动 DOM，
-      // 因此"重连但数据零变化"依然不会重建 DOM、不闪骨架屏（P0-11t）。
+      // 常规调用仍由结构变化/展开动作收窄；另有仅在抽屉可见时每 12 秒一次的 background revalidate，
+      // 用来跟进 CLI registry 的 busy/alive。响应回来后由 shouldRerenderSessionList 比对内容签名，
+      // 没真变化只更新缓存、不动 DOM，因此不会重画列表或闪骨架屏（P0-11t/P0-11z）。
+      if (background && !socket.connected) return;
+      const requestGen = ++sessionListRequestGen;
       socket.emit('session:list', { cwd, all: expandedAllDirs.has(cwd) }, state => {
-        if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return; // 过期守卫（含"是否已被更晚一次 populateSubtree 顶替"）
+        if (requestGen !== sessionListRequestGen) return;
+        if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
+        if (myGen !== subtreeGen) return;
+        if (!background && !expandedDirs.has(cwd)) return;
         const sessions = state?.sessions || [];
         const hasMore = !!state?.hasMore;
+        updateTerminalBusyForDir(cwd, sessions, state?.terminalBusy);
         const prevEntry = sessionsCache.get(cwd);
         const willRerender = shouldRerenderSessionList({
           hasPrevEntry: !!prevEntry,
@@ -5620,7 +5639,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
 
     // 如果当前展开，则渲染列表
     if (isExpanded) {
-      populateSubtree(d, subtree, liveBySession, freshTabs);
+      populateSubtree(d, subtree);
     }
 
     // 折叠/展开切换：纯 CSS 驱动，不触发重绘全量 DOM
@@ -5638,11 +5657,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         subtree.classList.add('expanded');
         arrow.classList.add('rotated');
         icon.textContent = '📂';
-        populateSubtree(d, subtree, liveBySession, freshTabs);
+        populateSubtree(d, subtree);
       }
     };
 
-    return { dirRow, subtree };
+    return {
+      dirRow,
+      subtree,
+      revalidate: () => populateSubtree(d, subtree, { background: true }),
+    };
   }
 
   function openSessionPanel() {
@@ -5670,6 +5693,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       sessionPanel.appendChild(section.subtree);
       dirSectionNodes.set(d, section);
     }
+    startSessionPanelRevalidator();
   }
 
   // P3 抽屉局部重建：只重建 changedDirs 列出的目录（调用方=setInstances，changedDirs 来自
@@ -5693,6 +5717,59 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       dirSectionNodes.set(d, next);
     }
   }
+
+  function isSessionPanelRevalidateActive() {
+    if (!leftSidebar || document.visibilityState !== 'visible') return false;
+    if (window.innerWidth >= 1024) return !document.body.classList.contains('sidebar-collapsed');
+    return !leftSidebar.classList.contains('-translate-x-full');
+  }
+  function stopSessionPanelRevalidator() {
+    if (sessionPanelRevalidateTimer) clearTimeout(sessionPanelRevalidateTimer);
+    sessionPanelRevalidateTimer = null;
+    // 抽屉不可见时不再刷新 CLI registry；与其让顶部/目录无限保留旧 busy，不如撤下这条临时信号。
+    if (terminalBusyByDir.size) {
+      terminalBusyByDir.clear();
+      refreshDirBadges();
+      updateSessionsDot();
+    }
+    // SWR 缓存仍保留标题/时间以便下次秒开，但 terminal 是短时活体状态，关闭后必须剥掉，避免重开时
+    // 先画一帧已经结束的“终端运行中”。
+    for (const [cwd, entry] of sessionsCache) {
+      let changed = false;
+      const sessions = (entry?.sessions || []).map(session => {
+        if (!session?.terminal) return session;
+        changed = true;
+        const copy = { ...session };
+        delete copy.terminal;
+        return copy;
+      });
+      if (changed) sessionsCache.set(cwd, { ...entry, sessions });
+    }
+  }
+  function revalidateSessionPanelDirs() {
+    if (!isSessionPanelRevalidateActive()) { stopSessionPanelRevalidator(); return; }
+    if (socket.connected) {
+      for (const cwd of availableDirs) dirSectionNodes.get(cwd)?.revalidate?.();
+    }
+    scheduleSessionPanelRevalidate();
+  }
+  function scheduleSessionPanelRevalidate(delay = SESSION_PANEL_REVALIDATE_MS) {
+    if (sessionPanelRevalidateTimer || !isSessionPanelRevalidateActive()) return;
+    sessionPanelRevalidateTimer = setTimeout(() => {
+      sessionPanelRevalidateTimer = null;
+      revalidateSessionPanelDirs();
+    }, delay);
+  }
+  function startSessionPanelRevalidator({ immediate = false } = {}) {
+    if (!isSessionPanelRevalidateActive()) { stopSessionPanelRevalidator(); return; }
+    if (immediate) revalidateSessionPanelDirs();
+    else scheduleSessionPanelRevalidate();
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') startSessionPanelRevalidator({ immediate: true });
+    else stopSessionPanelRevalidator();
+  });
+  window.addEventListener('pagehide', stopSessionPanelRevalidator);
 
   // 清视图层（DOM + 去重基线 + 弹窗队列），不加载历史——加载由调用方决定（台阶3：bindView 切 tab 时
   // 先 sync 活缓冲、无缓冲再 history）。
