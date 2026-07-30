@@ -1045,9 +1045,14 @@ async function catchUpTickOnce() {
   // 撞上己方 turn 还在跑或后台任务未完，磁盘变长其实是自己写出来的，却被无条件标 externalDirty：忙碌时命中
   // externalDirtyBusyNack 硬拒绝发送（不排队、不重试）、空闲时则触发一次没必要的 dispose+resume 冷启动。现把
   // localBusy 传给 rebaselineAbsorbedExternal，与下面「己方在跑不算终端 keep-alive」对齐同一判据。
+  // 同会话重连重定基线（非真切换）：下面靠 catchUpKey=null 复用切入分支，但切入分支的「陈旧 pending
+  // 豁免」是为"隔天打开无人管的会话"设的——同会话连续观察不该走它，否则终端跑长工具跨过 5 分钟时，
+  // 手机息屏/断网/刷新任一触发的一次重连就把已维持的锁清掉且再也建不回来（见 mirrorEntryLock）。
+  let rebaselineSameSession = false;
   if (catchUpRebaselineRequested) {
     catchUpRebaselineRequested = false;
     if (key === catchUpKey) {                                        // 同一会话重连（非真切换）
+      rebaselineSameSession = true;
       // SS-NEW-002：保留 messages 算 tailKey——满窗滑动时 length 不变，仅比 length 会漏标 externalDirty
       const curMsgs = await getSessionHistory(a.sessionId, a.cwd).catch(() => null);
       const curLen = Array.isArray(curMsgs) ? curMsgs.length : -1;
@@ -1090,18 +1095,23 @@ async function catchUpTickOnce() {
     catchUpState = seededState;
     mirrorCliSeen = cliPresenceStep(false, entryRegistryEntry).seen; // 切入=负证据观察期重开：只记本次是否见到 cli，vanished 从此往后才可能成立
     mirrorLastSize = -1;                                 // 基线未建立：切入首个正常 tick 只记 size、不判增长
+    // prevReadonly 只在同会话重连时给：真会话切换必须重新判定（不得把 A 的锁带到 B），
+    // 重连则是同一会话的连续观察，上一刻锁着且形态仍 pending 就维持。
+    const entryPrevReadonly = rebaselineSameSession && Boolean(mirrorRelease?.readonly);
     const entryLock = mirrorEntryLock({
       tailVerdict: tail.verdict,
       localBusy,
       lastChainTs: tail.lastChainTs,
       now: Date.now(),
       registryBusy,
+      prevReadonly: entryPrevReadonly,
     });
     // 注册表证实是活终端在驾驶 → 压制 autonomous 标记（marker 启发式的"同窗口先自主循环后真终端接管"盲区）
     const entryAutonomous = registryBusy ? false : tail.autonomous;
     mirrorRelease = { readonly: entryLock, quietTicks: 0 };
     diagLog.record(a.sessionId, 'mirror', 'entry_lock_decision', describeMirrorEntryLock({
       tailVerdict: tail.verdict, localBusy, lastChainTs: tail.lastChainTs, now: Date.now(), locked: entryLock, autonomous: entryAutonomous, registryBusy,
+      prevReadonly: entryPrevReadonly,
     }));
     setMirror(entryLock, a.sessionId, true,              // force 清上个会话残留的锁/发权威态
       // serverStartedAt：pending 尾部若落盘于本进程启动前 → 是被服务重启腰斩的残留，不是活驾驶员（见 mirrorStaleFlag）

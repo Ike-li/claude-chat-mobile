@@ -917,12 +917,21 @@ export const MIRROR_STALE_PENDING_MS = 5 * 60_000;
 // 已超 MIRROR_STALE_PENDING_MS（典型：用户发完就走、终端没回、隔天打开 / server 重启后打开）——
 // 此时没有活终端在跑，预锁会立刻叠加 stale 文案「疑似中断、可接管」，每次进工作区都误拦输入。
 // 形态仍是 pending（真若终端还在跑长工具，keepAlive/后续 externalWrite 会再上锁），但切入时不预锁。
-// registryBusy（P1）：注册表权威自报优先——无视尾部形态与陈旧豁免直接预锁（新鲜度/pid 验活已由
-// session-registry.js 保证，"陈旧挂起"不可能 registryBusy=true）；localBusy 豁免不变（己方 turn）。
-export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), registryBusy = false } = {}) {
+// registryBusy（P1）：注册表权威自报优先——无视尾部形态与陈旧豁免直接预锁（pid 验活由
+// session-registry.js 保证；自 7/29 起不再校验 statusUpdatedAt 新鲜度，理由见那边的注释）；
+// localBusy 豁免不变（己方 turn）。
+//
+// prevReadonly（2026-07-29）：本函数被两类调用方共用——真会话切换、以及「同一会话 socket 重连
+// 触发的重定基线」（server 置 catchUpRebaselineRequested → catchUpKey=null → 复用切入分支）。
+// 对后者，陈旧豁免会把终端正卡在超 5 分钟长工具上时【已经维持着】的锁清掉，而 mirrorReleaseStep
+// 的 tailPending 只能维持锁造不出锁 → 手机息屏/断网/刷新一次就永久丢锁。豁免本意是「隔天打开一个
+// 早就没人管的会话别误锁」，prevReadonly=true 表示同会话连续观察且上一刻锁着，不属于该情形 → 维持。
+// 仍然只在形态仍 pending 时维持：settled 说明终端真收工了，该把写权交回手机侧。
+export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), registryBusy = false, prevReadonly = false } = {}) {
   if (localBusy) return false;
   if (registryBusy) return true;
   if (tailVerdict !== 'pending') return false;
+  if (prevReadonly) return true;
   if (lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS)) return false;
   return true;
 }
@@ -930,9 +939,11 @@ export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = 
 // 诊断时间线用：把 catchUpTickOnce 已经算出的 mirrorEntryLock 判定打包成一条可读详情，供
 // diag-log 记录展示——不重复判定逻辑本身（locked 由调用方直接传入 mirrorEntryLock 的返回值），
 // 只加一个 agedOutStale 派生字段，让事后回放能看出"这次没锁，是因为陈旧 pending 还是别的原因"。
-export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), locked, autonomous = false, registryBusy = false } = {}) {
+// prevReadonly 也记进来：同会话重连维持锁那条路径会出现 agedOutStale=true 且 locked=true，
+// 不记它的话事后读诊断时间线会觉得两字段自相矛盾、看不出锁是被谁维持的。
+export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), locked, autonomous = false, registryBusy = false, prevReadonly = false } = {}) {
   const agedOutStale = lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS);
-  return { tailVerdict, localBusy, lastChainTs, agedOutStale, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked, autonomous, registryBusy };
+  return { tailVerdict, localBusy, lastChainTs, agedOutStale, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked, autonomous, registryBusy, prevReadonly };
 }
 
 // 疑似中断判定：锁着 + 尾部 PENDING + 最后链条目距今超阈值（期间零写入）→ 终端可能被强杀/断电、轮次没
