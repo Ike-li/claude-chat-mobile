@@ -33,10 +33,18 @@ export function createSocketEventRegistrar({ logger = console } = {}) {
             recoverable: true,
           },
         });
-        // SRV-NEW-005：结构化负 ack（retryable——未知错误客户端可重试）；ack 本身抛错不掩盖主路径
+        // SRV-NEW-005：结构化负 ack（默认 retryable——未知错误客户端可重试）；ack 本身抛错不掩盖主路径。
+        // error.permanent=true 的错误（如活跃会话数已达上限）重试多少次都是同一结果，须显式标不可重试，
+        // 否则客户端离线队列会空转重试——与上面未授权设备走的 permanent 语义一致。
         if (ack) {
+          const permanent = error?.permanent === true;
           try {
-            ack({ ok: false, error: error?.message || String(error), retryable: true });
+            ack({
+              ok: false,
+              error: error?.message || String(error),
+              retryable: !permanent,
+              ...(permanent ? { permanent: true } : {}),
+            });
           } catch { /* 忽略 */ }
         }
       }

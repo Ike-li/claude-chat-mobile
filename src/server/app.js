@@ -1534,10 +1534,13 @@ function writeSessionEntrypoint(sessionId, cwd) {
 // 同步建（resumeId 由调用方解析，无需 await）——故无台阶2 的「await 让出窗口双实例」重入竞态。
 function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = null, transcriptModel = null }) {
   if (agents.size >= MAX_LIVE_SESSIONS) {
-	    throw new Error(`超过最大活跃会话数量 ${MAX_LIVE_SESSIONS}，请关闭一些会话后再尝试`);
-	  }
-	  const id = newInstanceId();
-	  // 路由代次快照：本实例的 onSessionId 之后只有在该 cwd 代次未前进（未被 session:new/home/switch 作废）
+    // permanent：重试多少次都还是满，标不可重试，免得客户端离线队列空转（见 socket.js 负 ack）
+    const err = new Error(`超过最大活跃会话数量 ${MAX_LIVE_SESSIONS}，请关闭一些会话后再尝试`);
+    err.permanent = true;
+    throw err;
+  }
+  const id = newInstanceId();
+  // 路由代次快照：本实例的 onSessionId 之后只有在该 cwd 代次未前进（未被 session:new/home/switch 作废）
   // 时才允许覆写 currentByCwd——防止本实例后台活动复活一个用户已明确放弃的路由指针。
   const generation = sessions.getGeneration(cwd);
   // B1：可被 session:switch 聚焦 live 时刷新；闭包 const 无法在 switch 后对齐 getGeneration
@@ -1867,7 +1870,8 @@ function dedupedResume(cwd, resumeId, extra = {}) {
 const activeScouts = new Map(); // cwd → AgentSession：去重，防连点刷新/并发触发重复 spawn
 function disposeScoutFor(cwd) { // config:refresh 用：清除旧 scout 再起新的（旧 scout 的 CLI 用旧 settings spawn，模型会过期）
   const old = activeScouts.get(cwd);
-  if (old) { try { old.dispose(); } finally { activeScouts.delete(cwd); } }
+  // 走 scout 自己的 cleanup 而非裸 dispose：后者不清 20s 兜底定时器、也不删 CLI 建的 <sid>.jsonl 残留。
+  if (old) { try { (old._scoutCleanup || (() => old.dispose()))(); } finally { activeScouts.delete(cwd); } }
 }
 function openScoutInstance(cwd) {
   if (activeScouts.has(cwd)) return activeScouts.get(cwd); // 已有同 cwd scout 在跑，复用
@@ -1904,12 +1908,18 @@ function openScoutInstance(cwd) {
     // 不设 onExit：cleanup 显式调 dispose，consume 循环以 disposed=true 结束并跳过 onExit。
   });
 
+  // 防重入：models 事件与 20s 兜底定时器都可能进来，只做一次。
+  // 旧实现用 `if (instance.disposed) return` 当重入闸，但 disposeScoutFor（config:refresh 换 scout）
+  // 走的是 instance.dispose() 而非本函数——定时器没被清，20s 后照常进来，此时 disposed 已为 true
+  // 便早早返回，连带跳过下面的 transcript 残留清理，留下这段注释自己声明要防的「(无标题)」幽灵条目。
+  let cleanedUp = false;
   function cleanup() {
-    if (instance.disposed) { activeScouts.delete(cwd); return; } // 仍清 Map 防泄漏
+    if (cleanedUp) return;
+    cleanedUp = true;
     clearTimeout(timer);
     activeScouts.delete(cwd);
     const sid = instance._scoutSid;
-    instance.dispose();
+    if (!instance.disposed) instance.dispose();
     // dispose 触发 abort → CLI 进程退出。CLI 启动时已在 ~/.claude/projects/<projectDir>/
     // 创建了 <sid>.jsonl 文件（含 init 系统消息等）；留之会在 listSessions 中出现「(无标题)」幽灵条目。
     // 异步延迟删除：给 CLI 进程一个信号处理的窗口，避免 unlink 与 CLI 写文件竞争。
@@ -1924,6 +1934,8 @@ function openScoutInstance(cwd) {
       }, 300);
     }
   }
+
+  instance._scoutCleanup = cleanup; // 供 disposeScoutFor 走完整清理（清定时器 + 删 transcript 残留）
 
   // 20s 超时：CLI 卡死时释放资源 + 清理残留文件，避免僵尸实例/文件常驻
   const timer = setTimeout(() => {

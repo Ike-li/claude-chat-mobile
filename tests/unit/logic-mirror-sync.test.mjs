@@ -232,3 +232,43 @@ test.describe('shouldResetMirrorOnViewChange（切视图/工作区先本地清�
     }), false);
   });
 });
+
+// ── isWebInitiated 与 armed 的优先级（2092778 回归） ────────────────────────────
+// 2092778 的本意只是「web 发起的会话刷新后别误报『终端疑似中断』」，但它用提前 return 实现，
+// 把 armed 也一并吞了；而 app.js 两个调用点都硬编码 isWebInitiated:true，于是「已请求续接」
+// 文案在生产里完全不可达——用户点了续接却看不到任何文案变化（图标却会变成 ⏳，自相矛盾）。
+// armed 是用户刚刚的显式操作，任何来源都必须如实反馈；被抑制的只应是 stale 这类推断态。
+test.describe('formatMirrorBannerText / ComposerHint — armed 不被 isWebInitiated 吞掉', () => {
+  test('armed + isWebInitiated → 仍显示「已请求续接」', () => {
+    assert.match(
+      formatMirrorBannerText({ armed: true, isWebInitiated: true }),
+      /已请求续接/,
+    );
+    assert.match(
+      formatMirrorComposerHint({ armed: true, isWebInitiated: true }),
+      /已请求续接/,
+    );
+  });
+
+  test('armed + isWebInitiated + autonomous → 用自主循环措辞的续接文案', () => {
+    assert.match(
+      formatMirrorBannerText({ armed: true, isWebInitiated: true, autonomous: true }),
+      /已请求续接.*自主循环/,
+    );
+  });
+
+  test('stale + isWebInitiated → 仍抑制「疑似中断」（保留 2092778 的本意，不推翻）', () => {
+    const banner = formatMirrorBannerText({ stale: true, isWebInitiated: true });
+    assert.doesNotMatch(banner, /疑似中断/);
+    assert.match(banner, /只读镜像/);
+    const hint = formatMirrorComposerHint({ stale: true, isWebInitiated: true });
+    assert.doesNotMatch(hint, /疑似中断。/);
+  });
+
+  test('armed 优先于 stale（同时为真时显示续接进行中，而非疑似中断）', () => {
+    assert.match(
+      formatMirrorBannerText({ armed: true, stale: true, isWebInitiated: true }),
+      /已请求续接/,
+    );
+  });
+});
