@@ -811,13 +811,22 @@ async function resolveWorktreeGatewayEnv(cwd, worktreeEnv) {
     if (statSync(dotGit).isFile()) canonicalRoot = parseWorktreeCanonicalRoot(readFileSync(dotGit, 'utf8'));
   } catch { /* 非 git 仓 / .git 读不到：按非 worktree 处理，保持既有行为 */ }
   if (!canonicalRoot || canonicalRoot === cwd) return undefined;
-  // 优先复用 canonical root 已解析过的 L3（主 checkout 常已被启动预取/访问过）：这第二次 resolveSettings
-  // 是串在 ensureCliDefaults 里的，会挤占 resume/FRESH 路径的 CLI_DEFAULTS_RESUME_BUDGET_MS 预算。
-  const cachedCanonical = cliDefaultsByCwd.get(canonicalRoot);
-  if (cachedCanonical) return buildWorktreeGatewayEnv(worktreeEnv, cachedCanonical.env);
+  // canonical 的 settings **每次实时读，绝不复用 cliDefaultsByCwd 的缓存**：它是污染源，必须准确。
+  // 曾为省这一次调用而复用缓存，结果引入一整类静默失效——缓存里的 env 若为空/过期，
+  // buildWorktreeGatewayEnv(worktreeEnv, undefined) 会返回 undefined，隔离静默不生效且零日志。
+  // 实测这次调用仅 ~2ms（远小于 CLI_DEFAULTS_RESUME_BUDGET_MS=1200ms），省它换正确性风险不划算。
   try {
     const canon = await sdkResolveSettings({ cwd: canonicalRoot, settingSources: ['user', 'project', 'local'] });
-    return buildWorktreeGatewayEnv(worktreeEnv, defaultsFromEffectiveSettings(canon?.effective).env);
+    const canonEnv = defaultsFromEffectiveSettings(canon?.effective).env;
+    const gatewayEnv = buildWorktreeGatewayEnv(worktreeEnv, canonEnv);
+    // 可观测性：worktree 场景算不出中和块，多半意味着「本该隔离却没隔离」。此前这条路径完全静默，
+    // 排查时只能靠事后翻 data/worktree-settings 目录空不空来倒推，代价极高。
+    if (!gatewayEnv) {
+      console.warn(`[cli-settings] worktree ${cwd} 未产出网关中和块`
+        + `（canonical=${canonicalRoot}, canonical env 键数=${canonEnv ? Object.keys(canonEnv).length : 0}）`
+        + '——该 worktree 的会话将不做网关隔离');
+    }
+    return gatewayEnv;
   } catch (err) {
     // 读不到 canonical settings 就不中和（退回既有行为），绝不因此拖垮开实例
     console.warn(`[cli-settings] canonical root 读取失败 (${canonicalRoot}):`, err?.message || err);
