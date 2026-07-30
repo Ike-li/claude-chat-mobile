@@ -54,6 +54,8 @@ which claude             # 本项目驱动的 CLI——必须已安装并登录
 npm install --omit=dev   # 仅运行依赖——不含 Playwright/浏览器。要跑 UI 测试用完整 npm install。
 npm run setup            # 交互式向导：自动生成 AUTH_TOKEN（头号门槛）+ 询问 WORK_DIR，写入 .env（权限 0600）
                          # 推荐用它，免去手搓；想直接用原始模板：cp .env.example .env
+                         # 脚本/agent 代跑用非交互模式（向导需要 TTY）：
+                         #   node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--force]
 
 # 推荐：启动前自检配置（端口占用、CLAUDE_BIN 路径、网关环境、文件权限）
 node scripts/doctor.js        # 检查配置
@@ -65,7 +67,30 @@ npm start                     # http://localhost:3000
 **更快：丢给你的编程 agent 代装**——在仓库目录里（或先让它 clone）把下面这段交给 Claude Code / Codex CLI 之类的编程 agent：
 
 ```
-帮我首次安装并启动 claude-chat-mobile（把本机 claude CLI 接到手机的 web UI）。这是全新环境首次安装，不是重启已部署的常驻服务——CLAUDE.md 里「生产部署勿手动 npm start」那条对这次不适用。按 README.md「快速开始」一节操作：装依赖、跑 npm run setup 交互向导（会问 WORK_DIR，需要跟我确认挂哪个项目目录）、跑 node scripts/doctor.js 自检并按提示修好、最后 npm start。全部跑通后告诉我怎么在手机上打开；如果我后续想要公网固定域名访问，参考 docs/deployment.md 帮我配。
+帮我首次安装并启动 claude-chat-mobile（把本机 claude CLI 接到手机的 web UI）。这是全新环境首次安装，
+不是重启已部署的常驻服务——CLAUDE.md 里「生产部署勿手动 npm start」那条对这次不适用。
+
+按顺序做，每步确认结果再进下一步：
+
+1. 前置校验：node --version 要 ≥ 20；which claude 要能找到且已登录（项目驱动的就是这个 CLI，
+   它不自带）。任一不满足就停下来告诉我，别自己装 claude。
+2. npm install --omit=dev
+3. 先跟我确认两件事再往下：
+   (a) WORK_DIR 挂哪个目录——给绝对路径。这是我在手机上能让 claude 读写的范围，别用我的整个家目录。
+   (b) 要不要装 CLI hooks 桥——装了以后我在电脑终端直接跑的 claude 会话也能推送到手机，
+       代价是会写我的全局 ~/.claude/settings.json。
+4. 用非交互模式写配置，不要跑交互向导（你的 shell 没有 TTY，向导会卡在提问上、静默什么都不做还退出 0）：
+   node scripts/setup.js --yes --work-dir=<第3步的绝对路径> --hooks=<on 或 off>
+5. node scripts/doctor.js 自检，按提示修（权限类问题可用 node scripts/doctor.js --fix）。
+6. 后台启动 server，别在前台跑（会一直阻塞你）。起来后用
+   curl -s "http://127.0.0.1:3000/health?token=<.env 里的 AUTH_TOKEN>"
+   拿到 JSON 才算启动成功，别只看进程在不在。
+7. 告诉我怎么在手机上打开：给我启动日志里那条带 token 的局域网地址。注意 AUTH_TOKEN 是密钥
+   （拿到它就等于拿到我这台机器的 shell），它存在 .env（权限 0600），别写进任何会外传的地方。
+8. 我手机第一次连进来会卡在设备指纹审批（光有 token 不够）。到时帮我跑 node scripts/device.js list，
+   确认是我的手机后 node scripts/device.js approve <ID>。
+
+如果我后续想要公网固定域名访问，参考 docs/deployment.md 帮我配。
 ```
 
 Web 自己发起的会话开箱即用 SDK 状态栏，不需要改 Claude 配置。若还要在 Web **只读查看正在 CLI 里运行的会话**时同步 CLI 的模型、思考强度、上下文、成本和额度，可显式安装透明 statusline bridge：

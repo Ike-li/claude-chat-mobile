@@ -52,6 +52,8 @@ which claude             # the CLI this project drives — must be installed & l
 npm install --omit=dev   # runtime deps only — no Playwright/browser. Use a full install for UI tests.
 npm run setup            # interactive wizard: generates AUTH_TOKEN (the #1 gotcha) + asks for WORK_DIR, writes .env (0600)
                          # prefer this over hand-editing; to use the raw template instead: cp .env.example .env
+                         # for scripts/agents, use non-interactive mode (the wizard needs a TTY):
+                         #   node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--force]
 
 # Recommended: pre-flight your config (port in use, CLAUDE_BIN path, gateway env, file perms)
 node scripts/doctor.js        # check config
@@ -63,7 +65,36 @@ npm start                     # http://localhost:3000
 **Faster: hand it to your coding agent** — in the repo directory (or have it clone first), give this to Claude Code / Codex CLI or similar:
 
 ```
-Help me install and start claude-chat-mobile for the first time (a web UI that connects my local claude CLI to my phone). This is a fresh, first-time setup, not restarting an already-deployed daemon — the "production deployment: don't manually npm start" warning in CLAUDE.md doesn't apply here. Follow the "Quick Start" section in README.md: install deps, run npm run setup (an interactive wizard — it'll ask for WORK_DIR, check with me on which project directory to mount), run node scripts/doctor.js and fix what it flags, then npm start. Once it's running, tell me how to open it on my phone; if I later want fixed-domain public access, use docs/deployment.md to help me set that up.
+Help me install and start claude-chat-mobile for the first time (a web UI that connects my local claude CLI
+to my phone). This is a fresh, first-time setup, not restarting an already-deployed daemon — the "production
+deployment: don't manually npm start" warning in CLAUDE.md doesn't apply here.
+
+Do these in order, confirming each step before moving on:
+
+1. Prerequisites: node --version must be >= 20; which claude must resolve and be logged in (that CLI is what
+   this project drives — it ships none of its own). If either fails, stop and tell me; don't install claude
+   yourself.
+2. npm install --omit=dev
+3. Check two things with me before continuing:
+   (a) Which directory to mount as WORK_DIR — give an absolute path. This is what I'll be able to let claude
+       read and write from my phone, so don't use my whole home directory.
+   (b) Whether to install the CLI hooks bridge — it lets sessions I run in my own terminal push to my phone,
+       at the cost of writing to my global ~/.claude/settings.json.
+4. Write the config non-interactively; do NOT run the interactive wizard (your shell has no TTY, so it stalls
+   on a prompt, silently does nothing, and still exits 0):
+   node scripts/setup.js --yes --work-dir=<the absolute path from step 3> --hooks=<on or off>
+5. node scripts/doctor.js and fix what it flags (permission issues: node scripts/doctor.js --fix).
+6. Start the server in the background, not in the foreground (it would block you forever). Once up, confirm
+   with curl -s "http://127.0.0.1:3000/health?token=<AUTH_TOKEN from .env>" and require real JSON back —
+   don't just check that a process exists.
+7. Tell me how to open it on my phone: give me the LAN URL with the token from the startup log. Note that
+   AUTH_TOKEN is a secret (holding it is equivalent to shell access on this machine); it lives in .env
+   (mode 0600), so don't put it anywhere that leaves this machine.
+8. The first time my phone connects it will be blocked on device-fingerprint approval (a valid token is not
+   enough). When that happens, run node scripts/device.js list, confirm it's my phone, then
+   node scripts/device.js approve <ID>.
+
+If I later want fixed-domain public access, use docs/deployment.md to help me set that up.
 ```
 
 Sessions started from the web work out of the box with the SDK status line — no Claude config changes needed. If you also want the web UI to mirror the CLI's model, thinking effort, context, cost, and quota while **read-only viewing a session that's actually running in the CLI**, you can explicitly install the transparent statusline bridge:
