@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, queuedBubbleState, resolveCancelRefill, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -12,7 +12,7 @@ import { createRttMonitor } from './app/connection-sync.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createAgentEventDispatcher, createReplayBuffer } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
-import { createGitChangesPanel, createWorkspaceChooser, renderPatchLines } from './app/git-changes.js';
+import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createSettingsController } from './app/settings.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
@@ -77,6 +77,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // （pillMirrorMerged 已从 DOM/CSS 移除）
 
   const topContextPill = $('topContextPill'), topTitleText = $('topTitleText'), topProjectText = $('topProjectText');
+  const topContextChanges = $('topContextChanges'); // 未提交改动数角标（status_line.git 驱动）
   const customModelGrid = $('customModelGrid'), customPermGrid = $('customPermGrid'), customEffortGrid = $('customEffortGrid'), customEffortGroup = $('customEffortGroup');
   // 强度区块挂在模型下：归属标签 + 不支持时的就地说明（替代原先整块消失）
   const effortOwnerModel = $('effortOwnerModel'), effortOwnerWrap = $('effortOwnerWrap'), effortUnsupported = $('effortUnsupported');
@@ -187,18 +188,18 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
         consoleLogArea = $('consoleLogArea');
   const consoleFilterButtons = [$('consoleFilterAll'), $('consoleFilterInteraction'), $('consoleFilterDiag')].filter(Boolean);
-  // 项目文件只读浏览（FR-07）
-  const fileBrowseModal = $('fileBrowseModal'), fileBrowseBack = $('fileBrowseBack'),
-        fileBrowsePath = $('fileBrowsePath'), fileBrowseClose = $('fileBrowseClose'),
+  // 工作区面板外壳（文件 / 改动两 tab 同壳）
+  const workspaceModal = $('workspaceModal'), workspaceClose = $('workspaceClose'),
+        workspaceTabFiles = $('workspaceTabFiles'), workspaceTabChanges = $('workspaceTabChanges');
+  // 项目文件只读浏览（FR-07）——文件 tab
+  const fileBrowseTools = $('fileBrowseTools'), fileBrowseBack = $('fileBrowseBack'),
+        fileBrowsePath = $('fileBrowsePath'),
         fileBrowseBody = $('fileBrowseBody'), fileBrowseEdit = $('fileBrowseEdit'),
         fileBrowseSave = $('fileBrowseSave'), fileBrowseCancelEdit = $('fileBrowseCancelEdit'),
         fileBrowseSaveError = $('fileBrowseSaveError');
-  // 工作区 chooser + git 变更面板（只读）
-  const workspaceChooserModal = $('workspaceChooserModal'), workspaceChooserClose = $('workspaceChooserClose'),
-        workspaceChooserBrowse = $('workspaceChooserBrowse'), workspaceChooserChanges = $('workspaceChooserChanges');
-  const gitChangesModal = $('gitChangesModal'), gitChangesBranch = $('gitChangesBranch'),
-        gitChangesRefresh = $('gitChangesRefresh'), gitChangesClose = $('gitChangesClose'),
-        gitChangesBody = $('gitChangesBody');
+  // git 变更（只读）——改动 tab
+  const gitChangesTools = $('gitChangesTools'), gitChangesBranch = $('gitChangesBranch'),
+        gitChangesRefresh = $('gitChangesRefresh'), gitChangesBody = $('gitChangesBody');
 
   // ---- 状态 ----
   let currentSessionId = localStorage.getItem('current_session') || null;
@@ -521,23 +522,21 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       attachPreviewImg,
       attachPreviewName,
       attachPreviewClose,
-      fileBrowseModal,
+      workspaceModal,
+      workspaceClose,
+      workspaceTabFiles,
+      workspaceTabChanges,
+      fileBrowseTools,
       fileBrowseBack,
       fileBrowsePath,
-      fileBrowseClose,
       fileBrowseBody,
       fileBrowseEdit,
       fileBrowseSave,
       fileBrowseCancelEdit,
       fileBrowseSaveError,
-      workspaceChooserModal,
-      workspaceChooserClose,
-      workspaceChooserBrowse,
-      workspaceChooserChanges,
-      gitChangesModal,
+      gitChangesTools,
       gitChangesBranch,
       gitChangesRefresh,
-      gitChangesClose,
       gitChangesBody,
       settingsScrim,
       settingsSheet,
@@ -2223,11 +2222,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // E16：web 自有结构化状态（非 ANSI）。摘要去 emoji，展开分段构建 DOM（createElement+textContent，
     // 不经 innerHTML/DOMPurify，天然 XSS 安全）；服务端未启用则此事件不来，容器恒 hidden
     status_line(p) {
-      if (!cliStatusEl || !p || typeof p !== 'object') return;
+      if (!p || typeof p !== 'object') return;
       // 守护：如果 payload 里的 instanceId 与前端当前的 viewingInstanceId 不一致，则丢弃渲染（防止旧 tab 覆盖）
       if (p.instanceId && viewingInstanceId && p.instanceId !== viewingInstanceId) return;
       // 兼容陈旧重放：老 payload 可能没有 instanceId，但仍带 cwd；用 cwd 兜底防止别的工作区状态线覆盖当前视图。
       if (!p.instanceId && p.cwd && currentCwd && p.cwd !== currentCwd) return;
+      // 顶栏 pill 改动角标：复用上面两道同源守护（防跨工作区串号），但**必须在下面两处早退之前**更新
+      // ——`!cliStatusEl`（statusline 容器缺失）与 `empty-start`（空启动页）都与角标无关，角标挂在顶栏
+      // 而非状态栏里，不该被状态栏的存在与否绑架。
+      updateWorkspaceChangeBadge(p.git);
+      if (!cliStatusEl) return;
       // per-turn 权威秒表/token（agent.turnStartedAt/turnOutputTokens）：刷新/切实例回来后 live 行恢复真值
       if (p.turn && liveLine) {
         liveLine.serverTurnStartedAt = Number(p.turn.startedAt) || null;
@@ -2629,7 +2633,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     if (gitBtn) {
       gitBtn.onclick = () => {
         haptic('tap');
-        if (typeof openGitChanges === 'function' && currentCwd) openGitChanges(currentCwd);
+        // 上下文直达：本轮刚改完文件，直接落到「改动」tab（而非默认的「文件」tab）
+        if (typeof openWorkspacePanel === 'function' && currentCwd) openWorkspacePanel(currentCwd, 'changes');
       };
     }
     const statsEl = card.querySelector('.tfc-stats');
@@ -5085,7 +5090,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // ---- 项目文件只读浏览：传输回调、分页状态和 DOM 渲染由独立 controller 管理 ----
   const fileBrowser = createFileBrowser(appContext, {
     baseName,
-    closeSheet,
     confirmDiscardEdit: () => appConfirm({
       title: t('放弃未保存的修改？'),
       body: t('编辑内容尚未保存，离开后将丢失。'),
@@ -5094,23 +5098,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }),
     createElement: el,
     haptic,
-    openSheet,
   });
-  const openFileBrowser = fileBrowser.open;
   const gitChanges = createGitChangesPanel(appContext, {
-    closeSheet,
     createElement: el,
     haptic,
-    openSheet,
   });
-  const openGitChanges = gitChanges.open;
-  const workspaceChooser = createWorkspaceChooser(appContext, {
+  // 两个子控制器只管各自半边的数据；sheet 开合与 tab 切换归 workspacePanel 统一持有
+  const workspacePanel = createWorkspacePanel(appContext, {
     closeSheet,
     openSheet,
     haptic,
-    onBrowse: () => openFileBrowser(currentCwd),
-    onChanges: () => openGitChanges(currentCwd),
+    fileBrowser,
+    gitChanges,
   });
+  const openWorkspacePanel = workspacePanel.open;
   // ⑧ 推送内容预览：本地偏好读写 + 改动时（若已授权通知权限）立即重新订阅，把新 prefs.preview 带给服务端
   // ——不重新订阅的话，服务端那份旧订阅记录的 prefs 就跟本地开关脱节，下次推送还是按旧偏好选 body。
   const pushPreview = {
@@ -5184,13 +5185,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   });
   const openSettingsSheet = settings.open; // 刷新动态段走控制器的 onOpen
   if (pillDefaults) pillDefaults.onclick = () => openSettingsSheet(); // 点摘要 chip → 会话设置（三块磁贴已展开）
-  // 顶部 pill：工作区入口（chooser → 浏览文件 | 工作区改动）。侧栏不再挂浏览入口。
+  // 顶部 pill：工作区入口，直接落到「文件」tab（「改动」tab 就在同一行，无需先选一次）。侧栏不再挂浏览入口。
   if (topContextPill) {
     topContextPill.onclick = (e) => {
       e.preventDefault();
       e.stopPropagation();
       haptic('tap');
-      workspaceChooser.open();
+      openWorkspacePanel(currentCwd, 'files');
     };
   }
 
@@ -5877,15 +5878,31 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       ?? null;
     const show = shouldShowTopContextPill({ viewingInstanceId: viewingId, sessionId: sid });
     topContextPill.classList.toggle('hidden', !show);
-    // 隐藏时不可聚焦，避免读屏仍读到「浏览项目文件」
+    // 隐藏时不可聚焦，避免读屏仍读到工作区入口
     topContextPill.tabIndex = show ? 0 : -1;
     topContextPill.setAttribute('aria-hidden', show ? 'false' : 'true');
+  }
+  /**
+   * 顶栏 pill 的未提交改动角标。数据源是 status_line 事件里现成的 git 段——不发 git:status、不加轮询。
+   * 角标记住自己属于哪个 cwd（dataset.cwd），供 syncTopContextLabel 判断换区后是否该清零。
+   */
+  function updateWorkspaceChangeBadge(git) {
+    if (!topContextChanges) return;
+    const text = formatWorkspaceChangeBadge(git);
+    topContextChanges.textContent = text;
+    topContextChanges.classList.toggle('hidden', !text);
+    topContextChanges.dataset.cwd = currentCwd || '';
   }
   // 顶栏主 pill 文案：固定工作区 basename（机主拍板不要会话标题——同仓多会话靠侧栏区分）。
   // #topTitleText 仍 hidden；title 挂完整 cwd 供长按辨认。
   function syncTopContextLabel() {
     const project = baseName(currentCwd);
     if (topProjectText) topProjectText.textContent = project || '…';
+    // 换工作区即清角标：别让上个工作区的数字挂在新工作区名旁边（下一条 status_line 会填新值）。
+    // 判据用 cwd 归属而非「每次调用都清」——本函数随 instances 广播高频触发，无条件清会让角标反复闪。
+    if (topContextChanges && topContextChanges.dataset.cwd !== (currentCwd || '')) {
+      updateWorkspaceChangeBadge(null);
+    }
     if (topContextPill) {
       topContextPill.title = currentCwd
         ? `${t('工作区：浏览或查看改动')} · ${currentCwd}`

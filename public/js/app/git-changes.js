@@ -1,5 +1,7 @@
-// git-changes.js —— 工作区 git 变更只读面板（staged / unstaged / untracked）
-// 与 file-browser 同骨架：bottom sheet + 懒加载详情；diff 用 textContent 防 XSS。
+// git-changes.js —— 工作区 git 变更只读面板（staged / unstaged / untracked）+ 承载两者的面板外壳。
+// 与 file-browser 同骨架：懒加载详情；diff 用 textContent 防 XSS。
+// 两个导出分工：createGitChangesPanel = 「改动」tab 的数据与渲染；createWorkspacePanel = 外壳
+// （#workspaceModal 的开合 + 文件/改动 tab 切换），后者同时驱动 file-browser.js 那半边。
 import { t } from '../i18n.js';
 
 // title 存中文原文、到渲染时才 t()：模块顶层常量在 import 阶段就求值，那时 app.js 还没跑到 setLang()，
@@ -31,10 +33,8 @@ export function renderPatchLines(patch, createElement) {
 }
 
 export function createGitChangesPanel(context, {
-  closeSheet = () => {},
   createElement,
   haptic = () => {},
-  openSheet = () => {},
 } = {}) {
   const dom = context.dom;
   const documentRef = context.dependencies.document || globalThis.document;
@@ -192,70 +192,90 @@ export function createGitChangesPanel(context, {
     });
   }
 
+  // 进入改动 tab 并拉一次 git:status。**不负责开合 sheet**——见 file-browser.js open 同款说明。
   function open(nextCwd) {
     cwd = nextCwd;
-    openSheet(dom.gitChangesModal);
     load();
   }
 
-  function close() {
-    closeSheet(dom.gitChangesModal);
-  }
-
-  if (dom.gitChangesClose) dom.gitChangesClose.onclick = () => close();
   if (dom.gitChangesRefresh) {
     dom.gitChangesRefresh.onclick = () => {
       haptic('tap');
       load();
     };
   }
-  if (dom.gitChangesModal) {
-    dom.gitChangesModal.onclick = event => {
-      if (event.target === dom.gitChangesModal) close();
-    };
-  }
 
-  return { open, close, load };
+  return { open, load };
 }
 
-export function createWorkspaceChooser(context, {
+/**
+ * 工作区面板外壳：持有 #workspaceModal 的开合与「文件 / 改动」两 tab 的切换。
+ *
+ * 取代了原先的 workspaceChooser（一层只负责二选一的菜单 sheet）。合并的理由见 index.html
+ * #workspaceModal 处注释：chooser 那层零信息量，且互切要关面板重走一遍。
+ *
+ * 两个子控制器只提供 open(cwd)（＝载入自己那半边的数据），不碰 sheet；
+ * 编辑态守卫 confirmLeaveIfEditing 由 file-browser 提供，关闭与切 tab 都必须先过。
+ */
+export function createWorkspacePanel(context, {
   closeSheet = () => {},
   openSheet = () => {},
   haptic = () => {},
-  onBrowse = () => {},
-  onChanges = () => {},
+  fileBrowser,
+  gitChanges,
 } = {}) {
   const dom = context.dom;
+  let activeTab = null;   // 'files' | 'changes'
+  let cwd = null;
 
-  function open() {
-    openSheet(dom.workspaceChooserModal);
+  function paintTab(tab) {
+    activeTab = tab;
+    const files = tab === 'files';
+    dom.workspaceTabFiles?.setAttribute('aria-selected', String(files));
+    dom.workspaceTabChanges?.setAttribute('aria-selected', String(!files));
+    dom.fileBrowseTools?.classList.toggle('hidden', !files);
+    dom.fileBrowseBody?.classList.toggle('hidden', !files);
+    dom.gitChangesTools?.classList.toggle('hidden', files);
+    dom.gitChangesBody?.classList.toggle('hidden', files);
+    // 保存错误条属于文件 tab：切到改动 tab 时一并收起，否则它会浮在 git 列表上方
+    if (!files) dom.fileBrowseSaveError?.classList.add('hidden');
   }
 
-  function close() {
-    closeSheet(dom.workspaceChooserModal);
+  // 切 tab 前必须放行编辑态确认——切个 tab 就丢掉未保存的编辑是本次合并最容易踩的坑。
+  async function selectTab(tab) {
+    if (tab === activeTab) return;
+    if (activeTab === 'files' && !(await fileBrowser?.confirmLeaveIfEditing?.())) return;
+    paintTab(tab);
+    if (tab === 'files') fileBrowser?.open?.(cwd);
+    else gitChanges?.open?.(cwd);
   }
 
-  if (dom.workspaceChooserClose) dom.workspaceChooserClose.onclick = () => close();
-  if (dom.workspaceChooserBrowse) {
-    dom.workspaceChooserBrowse.onclick = () => {
-      haptic('tap');
-      close();
-      // 等 sheet 收合动画后再开下一层，避免两层叠闪
-      setTimeout(() => onBrowse(), 50);
+  function open(nextCwd, tab = 'files') {
+    cwd = nextCwd;
+    activeTab = null;               // 强制重载：同一 tab 再次点开也要拉最新数据
+    openSheet(dom.workspaceModal);
+    paintTab(tab);
+    if (tab === 'files') fileBrowser?.open?.(cwd);
+    else gitChanges?.open?.(cwd);
+  }
+
+  async function close() {
+    if (activeTab === 'files' && !(await fileBrowser?.confirmLeaveIfEditing?.())) return;
+    closeSheet(dom.workspaceModal);
+  }
+
+  if (dom.workspaceTabFiles) {
+    dom.workspaceTabFiles.onclick = () => { haptic('tap'); selectTab('files'); };
+  }
+  if (dom.workspaceTabChanges) {
+    dom.workspaceTabChanges.onclick = () => { haptic('tap'); selectTab('changes'); };
+  }
+  if (dom.workspaceClose) dom.workspaceClose.onclick = () => close();
+  if (dom.workspaceModal) {
+    dom.workspaceModal.onclick = event => {
+      if (event.target === dom.workspaceModal) close();
     };
   }
-  if (dom.workspaceChooserChanges) {
-    dom.workspaceChooserChanges.onclick = () => {
-      haptic('tap');
-      close();
-      setTimeout(() => onChanges(), 50);
-    };
-  }
-  if (dom.workspaceChooserModal) {
-    dom.workspaceChooserModal.onclick = event => {
-      if (event.target === dom.workspaceChooserModal) close();
-    };
-  }
 
-  return { open, close };
+  return { open, close, selectTab };
 }

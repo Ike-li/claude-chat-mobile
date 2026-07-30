@@ -7,6 +7,7 @@ import {
   formatStatuslineCtxLeft,
   formatStatuslineCollapsedSummary,
   formatStatuslineCopyText,
+  formatWorkspaceChangeBadge,
   statuslineFmtTok,
 } from '../../public/js/logic.js';
 
@@ -17,6 +18,42 @@ test('formatStatuslineGitBrief：分支 + 三分 + ahead', () => {
   );
   assert.equal(formatStatuslineGitBrief({ branch: 'main', changed: 3 }), 'main ✱3');
   assert.equal(formatStatuslineGitBrief(null), '');
+});
+
+// 顶栏 pill 的「未提交改动数」角标：让工作区入口自己招手，用户不必先点进去才知道有「改动」这一功能。
+// 口径取 changed（porcelain 行数，一文件一条）而非 staged+modified+untracked 之和——三分不互斥，
+// `MM`（既暂存又有新改动）会被双计，见 src/ops/statusline.js parsePorcelain。
+test('formatWorkspaceChangeBadge：有改动显数字', () => {
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: 3 }), '3');
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: 1 }), '1');
+});
+
+test('formatWorkspaceChangeBadge：不取三分之和（MM 双计）', () => {
+  // 同一文件 MM：staged=1 且 modified=1，但 porcelain 只有一行 → 角标必须是 1 不是 2
+  assert.equal(
+    formatWorkspaceChangeBadge({ branch: 'dev', changed: 1, staged: 1, modified: 1, untracked: 0 }),
+    '1',
+  );
+});
+
+test('formatWorkspaceChangeBadge：干净/缺席一律隐藏（空串）', () => {
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: 0 }), '');   // 工作区干净
+  assert.equal(formatWorkspaceChangeBadge({ changed: 5 }), '');                  // 无 branch＝非 git 仓库
+  assert.equal(formatWorkspaceChangeBadge(null), '');                            // git 段缺席（statusline 关/git 不可用）
+  assert.equal(formatWorkspaceChangeBadge(undefined), '');
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev' }), '');               // 无 changed 字段
+});
+
+test('formatWorkspaceChangeBadge：超 99 截断为 99+（pill 空间有限）', () => {
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: 99 }), '99');
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: 100 }), '99+');
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: 1234 }), '99+');
+});
+
+test('formatWorkspaceChangeBadge：非法 changed 不渲染 NaN', () => {
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: NaN }), '');
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: -1 }), '');
+  assert.equal(formatWorkspaceChangeBadge({ branch: 'dev', changed: '3' }), '');
 });
 
 test('formatStatuslineCtxBrief：优先百分比', () => {

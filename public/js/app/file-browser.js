@@ -35,13 +35,11 @@ export function cmModeForFileName(name) {
 
 export function createFileBrowser(context, {
   baseName = path => String(path || '').split('/').filter(Boolean).pop() || '',
-  closeSheet = () => {},
-  // 编辑态下经返回/关闭/点背景退出前的二次确认（由 app.js 注入 appConfirm 包装）；默认放行，
+  // 编辑态下经返回/关闭/切 tab/点背景退出前的二次确认（由 app.js 注入 appConfirm 包装）；默认放行，
   // 免得忘注入时既有测试/调用方静默卡住——真实拦截行为完全靠调用方是否传入靠谱实现。
   confirmDiscardEdit = async () => true,
   createElement,
   haptic = () => {},
-  openSheet = () => {},
 } = {}) {
   const dom = context.dom;
   const documentRef = context.dependencies.document || globalThis.document;
@@ -337,13 +335,14 @@ export function createFileBrowser(context, {
     }
   }
 
+  // 进入文件 tab 并从根目录重新载入。**不负责开合 sheet**——外壳（#workspaceModal）的开关与 tab
+  // 切换归 createWorkspacePanel 统一持有，本控制器只管自己那半边的数据与渲染。
   function open(nextCwd) {
     cwd = nextCwd;
     segments = [];
     mode = 'list';
     fileName = null;
     resetEditState();
-    openSheet(dom.fileBrowseModal);
     loadList();
   }
 
@@ -351,19 +350,8 @@ export function createFileBrowser(context, {
   if (dom.fileBrowseEdit) dom.fileBrowseEdit.onclick = enterEditMode;
   if (dom.fileBrowseSave) dom.fileBrowseSave.onclick = saveEdit;
   if (dom.fileBrowseCancelEdit) dom.fileBrowseCancelEdit.onclick = exitEditMode;
-  if (dom.fileBrowseClose) {
-    dom.fileBrowseClose.onclick = async () => {
-      if (!(await confirmLeaveIfEditing())) return;
-      closeSheet(dom.fileBrowseModal);
-    };
-  }
-  if (dom.fileBrowseModal) {
-    dom.fileBrowseModal.onclick = async event => {
-      if (event.target !== dom.fileBrowseModal) return;
-      if (!(await confirmLeaveIfEditing())) return;
-      closeSheet(dom.fileBrowseModal);
-    };
-  }
 
-  return { back, open };
+  // confirmLeaveIfEditing 外露：关闭面板与**切到「改动」tab**都要先过这道未保存确认，
+  // 否则切个 tab 就把用户没保存的编辑静默丢了。
+  return { back, open, confirmLeaveIfEditing };
 }

@@ -103,6 +103,12 @@
         <span id="topTitleText" class="hidden text-xs font-semibold text-ink-soft shrink-0">新聊天</span>
         <span class="hidden text-ink-faint text-xs select-none shrink-0">•</span>
         <span id="topProjectText" class="text-xs font-bold text-ink truncate">...</span>
+        <!-- 未提交改动数角标：数据取 status_line 事件现成的 git 段（零新增调用），非 git 仓库 /
+             工作区干净 / WEB_STATUSLINE=off 一律隐藏。让工作区入口在有改动时自己招手，
+             用户不必先点进去才知道背后有「改动」这一功能。文案由 formatWorkspaceChangeBadge 产出。 -->
+        <span id="topContextChanges" class="hidden inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full bg-cta text-white text-[10px] font-bold leading-none tabular-nums shrink-0" data-testid="top-context-changes" aria-hidden="true"></span>
+        <!-- 可点信号：pill 显示的是工作区名，天然读起来像面包屑；补个 › 表明这里能点开 -->
+        <span class="text-ink-faint text-xs leading-none shrink-0 select-none -ml-0.5" aria-hidden="true">›</span>
       </button>
     </div>
 
@@ -309,11 +315,26 @@
     </div>
   </div>
 
-  <!-- 项目文件只读浏览（FR-07，docs/design.md FileBrowseHandler）——全屏抽屉，结构同 consoleModal -->
-  <div id="fileBrowseModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end">
+  <!-- 工作区面板：文件浏览（FR-07，docs/design.md FileBrowseHandler）+ git 改动，两个 tab 同壳。
+       原先是「顶栏 pill → chooser 二选一 sheet → 目标面板」三层，chooser 那层零信息量：用户点开
+       之前无从知晓背后有什么，点开后还要再点一次；从「文件」切到「改动」得关面板重走一遍。
+       合并成 tab 后点一次 pill 就同时看见两个能力，互切零成本。
+       两个 tab 各自的工具行与 body 保留原 id——file-browser.js / git-changes.js 两个控制器只操作
+       自己的那几个节点，换壳对它们透明；开合与 tab 切换权归 createWorkspacePanel 统一持有。 -->
+  <div id="workspaceModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="工作区">
     <div class="w-full h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle mt-3 shrink-0"></div>
-      <div class="px-4 pb-2 flex items-center gap-2 border-b border-line shrink-0">
+      <!-- tab 行：两个能力平铺可见，不再需要"先发现再选择" -->
+      <div class="px-3 pb-2 flex items-center gap-2 border-b border-line shrink-0">
+        <div class="flex items-center gap-1 flex-1 min-w-0" role="tablist" aria-label="工作区">
+          <button id="workspaceTabFiles" type="button" role="tab" aria-controls="fileBrowseBody" data-testid="workspace-tab-files" class="workspace-tab px-3 py-1.5 rounded-lg text-xs font-semibold border border-line text-ink-soft active:scale-95 shrink-0">📁 文件</button>
+          <button id="workspaceTabChanges" type="button" role="tab" aria-controls="gitChangesBody" data-testid="workspace-tab-changes" class="workspace-tab px-3 py-1.5 rounded-lg text-xs font-semibold border border-line text-ink-soft active:scale-95 shrink-0">📝 改动</button>
+        </div>
+        <button id="workspaceClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
+      </div>
+
+      <!-- 文件 tab 工具行 -->
+      <div id="fileBrowseTools" class="px-4 pb-2 pt-2 flex items-center gap-2 border-b border-line shrink-0">
         <button id="fileBrowseBack" class="hidden w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="返回上一级">←</button>
         <div id="fileBrowsePath" class="flex-1 min-w-0 text-xs font-mono text-ink-soft truncate"></div>
         <!-- CodeMirror 编辑+写回（files:write，见 file-browse.js writeFileInScope）：只在整份小文件在手
@@ -321,58 +342,22 @@
         <button id="fileBrowseEdit" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-accent hover:bg-sunk active:scale-95" data-testid="file-edit-btn">编辑</button>
         <button id="fileBrowseSave" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium bg-cta text-white active:brightness-95 disabled:opacity-50" data-testid="file-save-btn">保存</button>
         <button id="fileBrowseCancelEdit" class="hidden shrink-0 px-2 py-1 rounded-lg text-[11px] font-medium text-ink-soft hover:bg-sunk active:scale-95" data-testid="file-cancel-edit-btn">取消</button>
-        <button id="fileBrowseClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0">✕</button>
       </div>
       <div id="fileBrowseSaveError" class="hidden px-4 py-1.5 text-[11px] text-danger bg-danger/5 border-b border-line shrink-0" data-testid="file-save-error"></div>
-      <div id="fileBrowseBody" class="flex-1 overflow-y-auto"></div>
-    </div>
-  </div>
 
-  <!-- 顶部 pill 选择：浏览文件 / 工作区改动 -->
-  <div id="workspaceChooserModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="工作区">
-    <div class="w-full max-h-[50vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
-      <div class="sheet-handle mt-3 shrink-0"></div>
-      <div class="px-4 pb-2 flex items-center gap-2 border-b border-line shrink-0">
-        <div class="flex-1 min-w-0 text-sm font-semibold text-ink">工作区</div>
-        <button id="workspaceChooserClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
-      </div>
-      <div class="px-3 py-3 space-y-2">
-        <button id="workspaceChooserBrowse" type="button" data-testid="workspace-chooser-browse" class="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl border border-line bg-surface text-left hover:bg-sunk/40 active:opacity-80">
-          <span class="text-lg" aria-hidden="true">📁</span>
-          <span class="min-w-0">
-            <span class="block text-sm font-semibold text-ink">浏览项目文件</span>
-            <span class="block text-[11px] text-ink-faint mt-0.5">只读目录树与文件内容</span>
-          </span>
-        </button>
-        <button id="workspaceChooserChanges" type="button" data-testid="workspace-chooser-changes" class="w-full flex items-center gap-3 px-4 py-3.5 rounded-xl border border-line bg-surface text-left hover:bg-sunk/40 active:opacity-80">
-          <span class="text-lg" aria-hidden="true">📝</span>
-          <span class="min-w-0">
-            <span class="block text-sm font-semibold text-ink">工作区改动</span>
-            <span class="block text-[11px] text-ink-faint mt-0.5">查看 git staged / unstaged / untracked</span>
-          </span>
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 工作区 git 变更只读面板 -->
-  <div id="gitChangesModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="工作区改动">
-    <div class="w-full h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
-      <div class="sheet-handle mt-3 shrink-0"></div>
-      <div class="px-4 pb-2 flex items-center gap-2 border-b border-line shrink-0">
-        <div class="flex-1 min-w-0">
-          <div class="text-sm font-semibold text-ink">工作区改动</div>
-          <div id="gitChangesBranch" class="text-[11px] font-mono text-ink-faint truncate"></div>
-        </div>
+      <!-- 改动 tab 工具行 -->
+      <div id="gitChangesTools" class="hidden px-4 pb-2 pt-2 flex items-center gap-2 border-b border-line shrink-0">
+        <div id="gitChangesBranch" class="flex-1 min-w-0 text-[11px] font-mono text-ink-faint truncate"></div>
         <button id="gitChangesRefresh" type="button" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-sm shrink-0" title="刷新" aria-label="刷新">↻</button>
-        <button id="gitChangesClose" class="hit-44 w-7 h-7 rounded-lg flex items-center justify-center text-ink-soft hover:bg-sunk active:scale-95 text-base shrink-0" aria-label="关闭">✕</button>
       </div>
-      <div id="gitChangesBody" class="flex-1 overflow-y-auto" data-testid="git-changes-body"></div>
+
+      <div id="fileBrowseBody" role="tabpanel" aria-labelledby="workspaceTabFiles" class="flex-1 overflow-y-auto"></div>
+      <div id="gitChangesBody" role="tabpanel" aria-labelledby="workspaceTabChanges" class="hidden flex-1 overflow-y-auto" data-testid="git-changes-body"></div>
     </div>
   </div>
 
   <!-- 服务状态面板（NFR-15 可见性）：设置「访问与设备」组入口 → 两段式（基础/异常告警，判定化：裸计数留 /metrics）。
-       数据走鉴权 service:status ack，面板开着时 5s 定时重拉；结构同 fileBrowseModal，开合走 openSheet/closeSheet。 -->
+       数据走鉴权 service:status ack，面板开着时 5s 定时重拉；结构同 workspaceModal，开合走 openSheet/closeSheet。 -->
   <div id="serviceStatusModal" class="hidden fixed inset-0 z-40 bg-black/40 flex items-end" role="dialog" aria-modal="true" aria-label="服务状态">
     <div class="w-full max-h-[85vh] bg-surface rounded-t-2xl flex flex-col safe-bottom" style="box-shadow:var(--shadow-pop)">
       <div class="sheet-handle mt-3 shrink-0"></div>

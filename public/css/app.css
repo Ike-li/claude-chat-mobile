@@ -372,6 +372,13 @@ body.ccm-sheet-open #messages {
   min-width: 0;
   max-width: 100%;
 }
+/* 工作区面板 tab（文件 / 改动）：选中态走 accent 语汇，与权限磁贴等既有选中态同源。
+   用 aria-selected 而非额外的 .active 类驱动，样式与无障碍状态天然同步、不会各说各话。 */
+.workspace-tab[aria-selected="true"] {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+  color: var(--accent-deep);
+}
 /* 顶栏左侧延迟胶囊：比中间 project pill 更小一号，同 sunk/软边/圆角语汇；
    不做成按钮（无 hover scale），避免与工作区入口抢主操作。色阶由 JS 叠 text-*。 */
 .conn-rtt-chip {
