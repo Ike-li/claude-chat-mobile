@@ -23,17 +23,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-21 顶部工作区入口打开文件浏览且侧栏不重复提供入口', async ({ page }) => {
     await gotoMock(page);
 
-    // pill → chooser → 浏览项目文件
+    // pill → 工作区面板，直接落在「文件」tab（合并前还要先过一层 chooser 二选一）
     await page.locator('#topContextPill').click();
-    await expect(page.locator('#workspaceChooserModal')).toBeVisible();
-    await page.locator('[data-testid="workspace-chooser-browse"]').click();
-
-    await expect(page.locator('#fileBrowseModal')).toBeVisible();
+    await expect(page.locator('#workspaceModal')).toBeVisible();
+    await expect(page.locator('#fileBrowseBody')).toBeVisible();
     await expect(page.locator('#fileBrowsePath')).not.toHaveText('');
     await expectSidebarClosed(page);
 
-    await page.locator('#fileBrowseClose').click();
-    await expect(page.locator('#fileBrowseModal')).toBeHidden();
+    await page.locator('#workspaceClose').click();
+    await expect(page.locator('#workspaceModal')).toBeHidden();
 
     await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel button[title*="浏览项目文件"]')).toHaveCount(0);
@@ -45,8 +43,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await page.locator('#topContextPill').click();
-    await page.locator('[data-testid="workspace-chooser-browse"]').click();
-    await expect(page.locator('#fileBrowseModal')).toBeVisible();
+    await expect(page.locator('#workspaceModal')).toBeVisible();
 
     await page.locator('[data-testid="browse-entry"]', { hasText: 'demo.js' }).click();
     await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror')).toBeVisible();
@@ -65,7 +62,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-EDIT 编辑并保存，重新打开后内容确实持久化', async ({ page }) => {
     await gotoMock(page);
     await page.locator('#topContextPill').click();
-    await page.locator('[data-testid="workspace-chooser-browse"]').click();
     await page.locator('[data-testid="browse-entry"]', { hasText: 'demo.js' }).click();
     await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror')).toBeVisible();
 
@@ -101,7 +97,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-EDITb 取消编辑丢弃改动，CM 内容还原', async ({ page }) => {
     await gotoMock(page);
     await page.locator('#topContextPill').click();
-    await page.locator('[data-testid="workspace-chooser-browse"]').click();
     await page.locator('[data-testid="browse-entry"]', { hasText: 'demo.js' }).click();
     await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror')).toBeVisible();
 
@@ -120,7 +115,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-EDITd 编辑态退出（返回/关闭/点背景）未保存改动需二次确认，取消确认不丢改动', async ({ page }) => {
     await gotoMock(page);
     await page.locator('#topContextPill').click();
-    await page.locator('[data-testid="workspace-chooser-browse"]').click();
     await page.locator('[data-testid="browse-entry"]', { hasText: 'demo.js' }).click();
     await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror')).toBeVisible();
 
@@ -139,7 +133,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#fileBrowseBack').click();
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.locator('#confirmOk').click();
-    await expect(page.locator('#fileBrowseModal')).toBeVisible(); // 仍在浏览器 sheet 内，只是回到列表
+    await expect(page.locator('#workspaceModal')).toBeVisible(); // 仍在浏览器 sheet 内，只是回到列表
     await expect(page.locator('[data-testid="browse-entry"]').first()).toBeVisible({ timeout: 3_000 });
     await expect(page.locator('#fileBrowseEdit')).toBeHidden(); // 编辑按钮组是 content 视图独有，回列表应隐藏
 
@@ -147,10 +141,44 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('[data-testid="browse-entry"]', { hasText: 'demo.js' }).click();
     await page.locator('#fileBrowseEdit').click();
     await setCmValue(page, '// another unsaved edit\n');
-    await page.locator('#fileBrowseClose').click();
+    await page.locator('#workspaceClose').click();
     await expect(page.locator('#confirmModal')).toBeVisible();
     await page.locator('#confirmOk').click();
-    await expect(page.locator('#fileBrowseModal')).toBeHidden();
+    await expect(page.locator('#workspaceModal')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 面板合并（chooser → 文件/改动 tab）引入的新退出路径。原先两个功能各是一个 sheet，从文件跳到
+  // 改动必然经过「关闭」这道已有守卫；合并后多了一条「不关面板、直接切 tab」的路，若不接同一道
+  // confirmLeaveIfEditing，用户切个 tab 就把未保存的编辑静默丢了。
+  test('P0-EDITe 编辑态切到「改动」tab 需二次确认，取消确认不丢改动', async ({ page }) => {
+    await gotoMock(page);
+    await page.locator('#topContextPill').click();
+    await page.locator('[data-testid="browse-entry"]', { hasText: 'demo.js' }).click();
+    await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror')).toBeVisible();
+
+    await page.locator('#fileBrowseEdit').click();
+    await setCmValue(page, '// unsaved edit, tab switch must not silently drop this\n');
+
+    // 切 tab：弹确认，点「取消」→ 留在文件 tab、仍是编辑态、改动还在
+    await page.locator('[data-testid="workspace-tab-changes"]').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmCancel').click();
+    await expect(page.locator('#confirmModal')).toBeHidden();
+    await expect(page.locator('#fileBrowseBody')).toBeVisible();
+    await expect(page.locator('#gitChangesBody')).toBeHidden();
+    await expect(page.locator('[data-testid="workspace-tab-files"]')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('#fileBrowseSave')).toBeVisible();
+    await expect.poll(() => getCmValue(page)).toContain('unsaved edit');
+
+    // 再切一次并确认放弃：这次真的切到改动 tab
+    await page.locator('[data-testid="workspace-tab-changes"]').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.locator('#confirmOk').click();
+    await expect(page.locator('#gitChangesBody')).toBeVisible();
+    await expect(page.locator('#fileBrowseBody')).toBeHidden();
+    await expect(page.locator('[data-testid="workspace-tab-changes"]')).toHaveAttribute('aria-selected', 'true');
 
     await expectNoBrowserErrors(page);
   });
@@ -158,7 +186,6 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-EDITc 保存冲突时显示错误、不丢改动、仍留在编辑态', async ({ page }) => {
     await gotoMock(page);
     await page.locator('#topContextPill').click();
-    await page.locator('[data-testid="workspace-chooser-browse"]').click();
     await page.locator('[data-testid="browse-entry"]', { hasText: 'conflict.js' }).click();
     await expect(page.locator('#fileBrowseBody .cm-ccm-viewer .CodeMirror')).toBeVisible();
 

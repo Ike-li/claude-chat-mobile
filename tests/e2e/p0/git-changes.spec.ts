@@ -1,19 +1,19 @@
 // helpers: tests/helpers/playwright.ts
-// 顶部 pill → chooser → 工作区改动面板（git:status / git:diff mock）
+// 顶部 pill → 工作区面板「改动」tab（git:status / git:diff mock）
 
 import { test, expect } from '@playwright/test';
 import { expectNoBrowserErrors, gotoMock } from '../../helpers/playwright';
 import { openSessionsSidebar } from '../../helpers/p0-ui';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
-  test('P0-GIT-1 顶部 pill 打开 chooser → 工作区改动 → 列表与 diff', async ({ page }) => {
+  test('P0-GIT-1 顶部 pill → 切「改动」tab → 列表与 diff', async ({ page }) => {
     await gotoMock(page);
 
     await page.locator('#topContextPill').click();
-    await expect(page.locator('#workspaceChooserModal')).toBeVisible();
+    await expect(page.locator('#workspaceModal')).toBeVisible();
 
-    await page.locator('[data-testid="workspace-chooser-changes"]').click();
-    await expect(page.locator('#gitChangesModal')).toBeVisible();
+    await page.locator('[data-testid="workspace-tab-changes"]').click();
+    await expect(page.locator('#gitChangesBody')).toBeVisible();
     await expect(page.locator('#gitChangesBranch')).toContainText('dev');
 
     const body = page.locator('#gitChangesBody');
@@ -31,22 +31,35 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(preview).toContainText('-old line');
     await expect(preview).toContainText('+new line');
 
-    await page.locator('#gitChangesClose').click();
-    await expect(page.locator('#gitChangesModal')).toBeHidden();
+    await page.locator('#workspaceClose').click();
+    await expect(page.locator('#workspaceModal')).toBeHidden();
 
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-GIT-2 chooser 浏览文件仍打开 fileBrowseModal', async ({ page }) => {
+  test('P0-GIT-2 pill 直接落在「文件」tab，两个 tab 同屏可见且可互切', async ({ page }) => {
     await gotoMock(page);
 
+    // 合并前这里要先过一层 chooser 二选一；现在点一次即到，且「改动」tab 同屏可见
     await page.locator('#topContextPill').click();
-    await page.locator('[data-testid="workspace-chooser-browse"]').click();
-    await expect(page.locator('#fileBrowseModal')).toBeVisible();
+    await expect(page.locator('#workspaceModal')).toBeVisible();
+    await expect(page.locator('#fileBrowseBody')).toBeVisible();
     await expect(page.locator('#fileBrowsePath')).not.toHaveText('');
+    await expect(page.locator('[data-testid="workspace-tab-files"]')).toHaveAttribute('aria-selected', 'true');
+    await expect(page.locator('[data-testid="workspace-tab-changes"]')).toBeVisible();
 
-    await page.locator('#fileBrowseClose').click();
-    await expect(page.locator('#fileBrowseModal')).toBeHidden();
+    // 互切零成本：不必关面板重开
+    await page.locator('[data-testid="workspace-tab-changes"]').click();
+    await expect(page.locator('#gitChangesBody')).toBeVisible();
+    await expect(page.locator('#fileBrowseBody')).toBeHidden();
+    await expect(page.locator('[data-testid="workspace-tab-changes"]')).toHaveAttribute('aria-selected', 'true');
+
+    await page.locator('[data-testid="workspace-tab-files"]').click();
+    await expect(page.locator('#fileBrowseBody')).toBeVisible();
+    await expect(page.locator('#gitChangesBody')).toBeHidden();
+
+    await page.locator('#workspaceClose').click();
+    await expect(page.locator('#workspaceModal')).toBeHidden();
 
     await openSessionsSidebar(page);
     await expect(page.locator('#sessionPanel button[title*="浏览项目文件"]')).toHaveCount(0);

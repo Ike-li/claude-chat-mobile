@@ -110,10 +110,9 @@ export const EN_DICT = Object.freeze({
   '（空目录）': '(empty directory)',
   '加载中…': 'Loading…',
   '工作区': 'Workspace',
-  '浏览项目文件': 'Browse project files',
-  '只读目录树与文件内容': 'Read-only file tree and contents',
-  '工作区改动': 'Workspace changes',
-  '查看 git staged / unstaged / untracked': 'View git staged / unstaged / untracked',
+  // 工作区面板两 tab（原 chooser 的「浏览项目文件 / 工作区改动」两张大卡已随 chooser 层一并删除）
+  '📁 文件': '📁 Files',
+  '📝 改动': '📝 Changes',
   '刷新': 'Refresh',
   '📊 服务状态': '📊 Service status',
   '服务状态': 'Service status',

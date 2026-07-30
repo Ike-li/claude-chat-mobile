@@ -58,6 +58,30 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 顶栏工作区 pill 的改动角标：让「工作区改动」这个功能在有改动时自己招手，而不是等用户点进去才发现。
+  // 数据源是 status_line 事件里现成的 git 段——无独立请求，故本用例复用 test:statusline 的 fixture
+  // （git.changed = 3）。角标挂在顶栏而非状态栏内，须与 #cliStatus 的展开/折叠完全无关。
+  test('P0-10f 顶栏工作区 pill 显示未提交改动数角标，切到无 git 的工作区即消失', async ({ page }) => {
+    await gotoMock(page);
+
+    const badge = page.locator('[data-testid="top-context-changes"]');
+    await sendChatMessage(page, 'test:statusline');
+    await waitForIdle(page);
+
+    await expect(page.locator('#topContextPill')).toBeVisible();
+    await expect(badge).toBeVisible();
+    await expect(badge).toHaveText('3');
+    // 角标不依赖状态栏展开——此处从未点开 #cliStatusWrap，角标已在
+    await expect(page.locator('#cliStatus')).not.toBeVisible();
+
+    // cli-statusline 的 payload 无 git 段（非 git 仓库 / statusline 关闭同理）→ 优雅缺席，不留旧数字
+    await sendChatMessage(page, 'test:cli-statusline');
+    await waitForIdle(page);
+    await expect(badge).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-10d CLI 镜像状态线标明唯一来源，快照不可用时不回退 SDK 陈值', async ({ page }) => {
     await gotoMock(page);
 

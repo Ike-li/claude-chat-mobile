@@ -2562,6 +2562,22 @@ export function formatStatuslineGitBrief(git) {
   return b;
 }
 
+/**
+ * 顶栏工作区 pill 的「未提交改动数」角标文案（空串＝隐藏）。
+ * 存在的理由：工作区面板（文件/改动）此前全靠用户主动点 pill 才能发现；有改动时让入口自己招手。
+ *
+ * 口径取 changed（`git status --porcelain` 行数，一文件一条），**不取 staged+modified+untracked 之和**
+ * ——三分不互斥，`MM`（既暂存又有新改动）会被双计，见 src/ops/statusline.js parsePorcelain。
+ * 数据源是 status_line 事件里现成的 git 段，不额外发 git:status；git 段缺席（非 git 仓库 /
+ * WEB_STATUSLINE=off / git 不可用）即隐藏，与 gitStatus 自身「优雅缺席」的口径一致。
+ */
+export function formatWorkspaceChangeBadge(git) {
+  if (!git?.branch) return '';                          // 非 git 仓库 / git 段缺席
+  const n = git.changed;
+  if (!Number.isInteger(n) || n <= 0) return '';        // 干净、缺字段、NaN、负数、字符串一律隐藏
+  return n > 99 ? '99+' : String(n);                    // pill 空间有限，超 99 截断
+}
+
 /** ctx 短文案：优先百分比，否则绝对 token */
 export function formatStatuslineCtxBrief(ctx) {
   if (!ctx || typeof ctx !== 'object') return '';
