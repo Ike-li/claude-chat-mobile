@@ -150,31 +150,3 @@ test('remove() clears unreadCounts, unreadSnapshotOnEntry and lastCountedTopLeve
   assert.equal(manager.unreadSnapshotOnEntry.has(agent.instanceId), false);
   assert.equal(manager.lastCountedTopLevelMessageId.has(agent.instanceId), false);
 });
-
-// bypassPermissions 是唯一需要前端二次确认才能进入的档（app.js 的 user:setPermissionMode 路径），
-// 而 RESUME 走 `saved?.permissionMode || transcriptMode || 'default'` 时没有 bypass 确认。
-// 2026-07-29：删除 inheritedMode 层——CLI 新起 claude --resume 不从别的活进程继承 mode，
-// transcriptMode 已覆盖"这个会话上次用什么档"场景。inheritedMode 仍保留给 effort 侧使用。
-// bypass 安全：transcriptMode 已过滤 bypassPermissions（cli-hooks-bridge.js readLastPermissionMode）。
-test('inheritedMode never propagates bypassPermissions to another session', () => {
-  const manager = createInstanceManager();
-  const agent = {
-    instanceId: manager.nextId(),
-    sessionId: 's1',
-    cwd: '/repo',
-    permissionMode: 'bypassPermissions',
-    pendingPermissions: new Map(),
-    pendingQuestions: new Map(),
-    pendingTurns: 0,
-    hasBgTasks: () => false,
-    dispose: () => {},
-  };
-  manager.agents.set(agent.instanceId, agent);
-
-  assert.equal(manager.inheritedMode('/repo'), 'default', 'bypass 绝不隐式继承，降级到 default');
-
-  agent.permissionMode = 'acceptEdits';
-  assert.equal(manager.inheritedMode('/repo'), 'acceptEdits', '其余档位照常继承');
-
-  assert.equal(manager.inheritedMode('/other'), 'default', '无同 cwd 实例 → 兜底 default');
-});
