@@ -12,6 +12,7 @@ import {
   hasBusyTerminalSessionForCwd,
   terminalStateKey,
   cliPresenceStep,
+  findBlockingLiveAgent,
 } from '../../src/sessions/session-registry.js';
 
 const CWD = '/Users/you/code/demo';
@@ -235,4 +236,54 @@ test('registryIndicatesTerminalBusy：cli+busy → true；非 cli / idle / 空�
   assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli' }), false);
   // null 条目
   assert.equal(registryIndicatesTerminalBusy(null), false);
+});
+
+// ── findBlockingLiveAgent：resume 会被 CLI 拒绝的占用者 ────────────────────────
+// 判据逐条对齐 CLI 2.1.220 内部的 `_Pe`（resume 前置检查）：
+//   listAllLiveSessions() 里 sessionId 相同 && pid 非自己 && kind 存在 && kind !== 'interactive'
+// 命中即 CLI 报 "Session X is currently running as a background agent (kind)" 并拒绝 resume。
+
+test('findBlockingLiveAgent：同 sessionId 上 bg 与 interactive 并存 → 仍认出 bg 占用者', async () => {
+  const dir = tempDir();
+  try {
+    // 7/30 实测形态：一个 sessionId 同时挂着 CLI 后台任务与 interactive 条目
+    writeEntry(dir, 89876, { kind: 'interactive', entrypoint: 'sdk-ts' });
+    writeEntry(dir, 57573, { kind: 'bg', jobId: '4f485e1c', name: '排查模型网关超时问题' });
+    const got = await findBlockingLiveAgent(SID, { dir, isAlive: () => true });
+    assert.deepEqual(got, { pid: 57573, kind: 'bg', jobId: '4f485e1c', name: '排查模型网关超时问题' });
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('findBlockingLiveAgent：只有 interactive 驾驶者 → null（CLI 不拒 resume，只读镜像照常）', async () => {
+  const dir = tempDir();
+  try {
+    writeEntry(dir, 91622, { kind: 'interactive', status: 'busy' });
+    assert.equal(await findBlockingLiveAgent(SID, { dir, isAlive: () => true }), null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('findBlockingLiveAgent：bg 条目 pid 已死（陈尸文件）→ null', async () => {
+  const dir = tempDir();
+  try {
+    writeEntry(dir, 57573, { kind: 'bg' });
+    assert.equal(await findBlockingLiveAgent(SID, { dir, isAlive: () => false }), null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('findBlockingLiveAgent：不按 cwd 过滤——CLI 侧 _Pe 全量扫，筛 cwd 会漏判致白 spawn', async () => {
+  const dir = tempDir();
+  try {
+    writeEntry(dir, 57573, { kind: 'bg', cwd: '/some/other/worktree' });
+    const got = await findBlockingLiveAgent(SID, { dir, isAlive: () => true });
+    assert.equal(got?.pid, 57573);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('findBlockingLiveAgent：无 kind 字段的条目不背书（对齐 _Pe 的 r.kind 存在性判据）', async () => {
+  const dir = tempDir();
+  try {
+    writeEntry(dir, 57573, { kind: undefined });
+    assert.equal(await findBlockingLiveAgent(SID, { dir, isAlive: () => true }), null);
+    assert.equal(await findBlockingLiveAgent('', { dir, isAlive: () => true }), null);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

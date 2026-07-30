@@ -46,7 +46,7 @@ import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from '..
 import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
-import { readSessionRegistry, registryIndicatesTerminalBusy, listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, cliPresenceStep } from '../sessions/session-registry.js';
+import { readSessionRegistry, registryIndicatesTerminalBusy, listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, cliPresenceStep, findBlockingLiveAgent } from '../sessions/session-registry.js';
 import { listDir, readFile as browseReadFile, writeFileInScope } from '../files/file-browse.js';
 import { listGitChanges, readGitDiff } from '../files/git-workspace.js';
 import { searchFiles } from '../files/file-search.js';
@@ -59,7 +59,7 @@ import {
   canDeleteSessionGuard,
   externalDirtyBusyNack,
 } from './instance-routing.js';
-import { prepareSessionForWebResume, prepareResumeInParallel } from '../ops/cli-bg-session-lock.js';
+import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
 import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
 import {
@@ -1811,10 +1811,6 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
   return instance;
 }
 
-// 本机实测：无锁场景 prepareSessionForWebResume 全程约 290ms，命中锁场景 +约 550ms+。原 4000ms 是
-// 历史遗留的保守兜底值；收紧到 1800ms 仍留约 6× 正常路径余量，只在 `claude agents --json` 真正异常
-// 挂起时才会等满——不改变 listCliAgents 本身「超时/失败即 fail-open」这个既有行为。
-const RESUME_LOCK_CHECK_TIMEOUT_MS = 1800;
 // L3 CLI settings（ensureCliDefaults）只为 effort 的 resume 兜底展示/取值服务（resolveResumeEffort），
 // 不是 resume 必须等待的强依赖——SDK resolveSettings 文档标注首次调用可能触发 MDM 查询子进程
 // （macOS plutil / Windows reg.exe），超预算就放弃这次的 L3 值（照旧落 null，即改动前的既有行为），
@@ -1826,28 +1822,27 @@ const CLI_DEFAULTS_RESUME_BUDGET_MS = 1200;
 // 无档时的恢复来源，见 readLastPermissionMode）。openInstance 本身保持同步（避免重入竞态）；读盘只在此异步前置。
 // 仅 resume（resumeId 非空）才读——FRESH 无档可恢复、也不该读；已 live 实例由调用方 instanceForSession 去重、不覆盖运行时档。
 //
-// CLI bg 独占锁：若 session 被 `claude agents` 登记为 background，SDK resume 会立刻失败（「running as a
-// background agent」）。web 续接前自动 SIGTERM 该类后台进程（不动 interactive），保证「CLI 会话 web 能开」。
-// 性能优化：释放锁 / 读末条权限档 / 读末条模型 / L3 CLI settings 兜底四路互无数据依赖（第一路只为释放锁
-// 的副作用，不产出后三路消费的值），全部从入口就并发——不改锁检查本身的判断条件/时序语义，只改调度关系。
+// 2026-07-30：这里曾在 resume 前无条件 SIGTERM（350ms 后升级 SIGKILL）掉 `claude agents` 里同 sessionId
+// 的 background 条目，理由是「CLI 拒绝 resume 被 bg 占用的会话 → 先释放锁，保证 CLI 会话 web 能开」。
+// 该做法已整体删除，因为它把「点开看一眼」变成了破坏性操作：判据只看 sessionId+kind，不看那个后台任务
+// 是否正在干活（实测杀中过 state=working 的真实任务），CLI 侧表现为会话被中断。
+// 现在的契约：resume 前不碰任何 CLI 进程。被占用的会话由 session:switch 前置判定后明说打不开
+//（findBlockingLiveAgent + formatSessionLockError），漏网的走 agent.js F4 的 resume 失败兜底文案。
+// CLI 官方给的出路是 `claude agents` attach 或 `--fork-session` 分叉副本，杀掉占用者不在其中。
 async function openResumeInstance(cwd, resumeId, extra = {}) {
   const t0 = Date.now();
-  let prep = { attempted: false }, transcriptMode = null, transcriptModel = null;
+  let transcriptMode = null, transcriptModel = null;
   if (resumeId) {
-    const [prepResult] = await Promise.all([
-      prepareResumeInParallel({
-        prepare: () => prepareSessionForWebResume(resumeId, { claudeBin, cwd, timeoutMs: RESUME_LOCK_CHECK_TIMEOUT_MS, waitMs: 350 }),
-        readMode: () => readLastPermissionMode(resumeId, cwd),
-        readModel: () => readLastAssistantModel(resumeId, cwd),
-      }),
+    // 读末条权限档 / 读末条模型 / L3 CLI settings 兜底三路互无数据依赖，从入口就并发。
+    const [[mode, model]] = await Promise.all([
+      Promise.all([readLastPermissionMode(resumeId, cwd), readLastAssistantModel(resumeId, cwd)]),
       Promise.race([
         ensureCliDefaults(cwd),
         new Promise(resolve => setTimeout(resolve, CLI_DEFAULTS_RESUME_BUDGET_MS)),
       ]),
     ]);
-    ({ prep, transcriptMode, transcriptModel } = prepResult);
-    if (prep.log) interactionLog.addSessionLog(resumeId, 'sys_info', prep.log);
-    else if (prep.error) console.warn('[cli-bg-lock] prepareSessionForWebResume failed:', prep.error?.message || prep.error);
+    transcriptMode = mode;
+    transcriptModel = model;
   } else {
     // FRESH 也要等 L3 落定：worktreeGatewayEnv 只在 AgentSession 构造时读一次，冷缓存下不等的话
     // 该会话整个生命周期都拿不到 worktree 网关隔离（正是 503 的原场景：重启后首次切到 worktree 就发消息）。
@@ -1858,7 +1853,7 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
     ]);
   }
   const instance = openInstance({ cwd, resumeId, transcriptMode, transcriptModel, ...extra });
-  diagLog.record(resumeId, 'resume', 'settled', { ms: Date.now() - t0, hadLock: !!prep.attempted }); // Part C：resume 总耗时
+  diagLog.record(resumeId, 'resume', 'settled', { ms: Date.now() - t0 }); // Part C：resume 总耗时
   return instance;
 }
 
@@ -2630,13 +2625,25 @@ registerSocketConnection(io, socket => {
       if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
       return;
     }
+    // forSession 已跳过 terminating/disposed；命中则是可续用 live，fresh resume 仅在无 live 时。
+    const live = instanceForSession(sessionId);
+    // 被 CLI 后台任务占用的会话：明说打不开，不 spawn、更不杀占用者（2026-07-30，见 openResumeInstance 注释）。
+    // 只在需要新 spawn 时查——已 live 说明 ccm 早就开着这个会话，此刻只是切视图，与占用无关。
+    // 判据与 CLI 的 resume 前置检查同源，所以这里拒绝的正是 CLI 那边同样会拒绝的集合：不新增拦截面，
+    // 只是把「白 spawn 一个必然失败的进程、再从 stderr 反解原因」提前成一次读注册表。
+    if (!live) {
+      const blocker = await findBlockingLiveAgent(sessionId).catch(() => null); // fail-open：读不动注册表照旧尝试
+      if (blocker) {
+        if (typeof ack === 'function') ack({ ok: false, error: formatSessionLockError(blocker) });
+        return;
+      }
+    }
     // 台阶3：打开或聚焦——已 live 实例承载该会话则聚焦不重开（去重，防同会话被两实例并发 resume）；
     // 否则 open 新实例 resume（openResumeInstance 先读 transcript 恢复权限档）。**不再 dispose 同 cwd**（其他 tab 后台继续）。
     // 必须在 dedupedResume 之前 bump：若下面需要新 spawn 实例，openInstance 内会同步捕获代次快照——
     // bump 放这之后会让刚 spawn 的、本该是"当前权威"的实例反而捕获到旧代次，被自己后续 onSessionId 误判陈旧。
     sessions.bumpGeneration(cwd);
-    // forSession 已跳过 terminating/disposed；命中则是可续用 live，fresh resume 仅在无 live 时。
-    const inst = instanceForSession(sessionId) || await dedupedResume(cwd, sessionId);
+    const inst = live || await dedupedResume(cwd, sessionId);
     // B1：live 复用时把代次快照拉到当前——否则 /clear 后 onSessionId 因 generation 陈旧不写 currentByCwd
     if (inst) inst.routeGeneration = sessions.getGeneration(cwd);
     finishOpenFocus(inst, cwd, sessionId, ack);

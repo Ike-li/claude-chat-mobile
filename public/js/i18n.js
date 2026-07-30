@@ -523,7 +523,6 @@ export const EN_DICT = Object.freeze({
   '⏹ 停止：': '⏹ Stop: ',
   '轮次因中断结束': 'Turn ended by interrupt',
   '轮次结束（': 'Turn ended (',
-  '续接完成（先释放后台锁，': 'Resume complete (background lock released first, ',
   '续接完成（': 'Resume complete (',
   '追平巡检一次（': 'Catch-up tick (',
   '消息已入队（含附件，': 'Message queued (with attachments, ',

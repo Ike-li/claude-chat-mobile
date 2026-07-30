@@ -2036,7 +2036,7 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
   } else if (subsystem === 'queue' && event === 'turn_settled') {
     text = d.wasInterrupted ? t('轮次因中断结束') : `${t('轮次结束（')}${Number.isFinite(d.durationMs) ? d.durationMs + 'ms' : '?'}）`;
   } else if (subsystem === 'resume' && event === 'settled') {
-    text = d.hadLock ? `${t('续接完成（先释放后台锁，')}${d.ms}ms）` : `${t('续接完成（')}${d.ms}ms）`;
+    text = `${t('续接完成（')}${d.ms}ms）`;
   } else if (subsystem === 'catchup' && event === 'tick') {
     text = `${t('追平巡检一次（')}${d.ms}ms）`;
   } else if (subsystem === 'message' && event === 'enqueued') {

@@ -64,14 +64,16 @@ test.describe('formatDiagLogEntry：判定过的一句话 + severity，不裸吐
     assert.ok(!normal.text.includes('中断'));
   });
 
-  test('resume/settled：hadLock=true/false 各自文案，带 ms', () => {
-    const withLock = formatDiagLogEntry({ ts: 1, subsystem: 'resume', event: 'settled', detail: { hadLock: true, ms: 850 } });
-    assert.ok(withLock.text.includes('850'));
-    assert.ok(withLock.text.includes('锁'));
-
-    const noLock = formatDiagLogEntry({ ts: 1, subsystem: 'resume', event: 'settled', detail: { hadLock: false, ms: 300 } });
-    assert.ok(noLock.text.includes('300'));
-    assert.ok(!noLock.text.includes('锁'));
+  // 2026-07-30：resume 不再释放（SIGTERM）CLI 后台锁，hadLock 这一路连同「先释放后台锁」文案一并撤掉。
+  // 若哪天又冒出「锁」字样，说明那套破坏性逻辑被加回来了——见 src/ops/cli-bg-session-lock.js 头注释。
+  test('resume/settled：带 ms 的简短文案，不再提「锁」', () => {
+    const r = formatDiagLogEntry({ ts: 1, subsystem: 'resume', event: 'settled', detail: { ms: 850 } });
+    assert.ok(r.text.includes('850'));
+    assert.ok(!r.text.includes('锁'));
+    // 陈旧 detail（老 server 推的 hadLock）不得让文案退回去
+    const legacy = formatDiagLogEntry({ ts: 1, subsystem: 'resume', event: 'settled', detail: { hadLock: true, ms: 300 } });
+    assert.ok(legacy.text.includes('300'));
+    assert.ok(!legacy.text.includes('锁'));
   });
 
   test('catchup/tick：带 ms 的简短文案', () => {

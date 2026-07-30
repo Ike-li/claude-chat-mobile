@@ -371,7 +371,9 @@ export class AgentSession {
         const reason = caught?.message ? sanitize(String(caught.message)).slice(0, 200) : '';
         let message;
         if (/background agent/i.test(reason)) {
-          message = formatSessionLockError({ kind: 'background', rawMessage: reason });
+          // 只透传 stderr 原文，不硬塞 kind：这里唯一的证据就是那句报错，占用者的真实 kind
+          // （注册表口径 'bg' / agents 口径 'background'）在此不可知，塞死会让文案说得比证据更满。
+          message = formatSessionLockError({ rawMessage: reason });
         } else if (reason) {
           message = `无法恢复会话：${reason.slice(0, 120)}。请新建会话或从列表选择其他会话`;
         } else {
