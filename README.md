@@ -6,8 +6,12 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+[![Agent SDK](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FIke-li%2Fclaude-chat-mobile%2Fmaster%2Fpackage.json&query=%24.dependencies%5B%22%40anthropic-ai%2Fclaude-agent-sdk%22%5D&label=Agent%20SDK&color=blue)](https://code.claude.com/docs/en/agent-sdk/overview)
+[![tested with claude CLI](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FIke-li%2Fclaude-chat-mobile%2Fmaster%2Fpackage.json&query=%24.verifiedWith.claudeCli&label=tested%20with%20claude%20CLI&color=blue)](#前置条件)
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
+
+> 上面两个版本徽章直接读 `master` 上的 `package.json`，不是手写的：Agent SDK 取 `dependencies`，claude CLI 取 `verifiedWith.claudeCli`（发版时由 `scripts/release.sh` 记录）。**claude CLI 那条是「上个发布版验证于哪个版本」，不是版本要求**——本项目驱动的是你本机那个 CLI，用什么版本由你决定。
 
 ![Claude Chat Mobile — 终端里的 claude，手机上也能用](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
 

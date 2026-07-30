@@ -6,8 +6,12 @@
 
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D20-brightgreen.svg)](package.json)
+[![Agent SDK](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FIke-li%2Fclaude-chat-mobile%2Fmaster%2Fpackage.json&query=%24.dependencies%5B%22%40anthropic-ai%2Fclaude-agent-sdk%22%5D&label=Agent%20SDK&color=blue)](https://code.claude.com/docs/en/agent-sdk/overview)
+[![tested with claude CLI](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FIke-li%2Fclaude-chat-mobile%2Fmaster%2Fpackage.json&query=%24.verifiedWith.claudeCli&label=tested%20with%20claude%20CLI&color=blue)](#prerequisites)
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#quick-start)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
+
+> The two version badges read `master`'s `package.json` directly — they are not hand-maintained: Agent SDK comes from `dependencies`, claude CLI from `verifiedWith.claudeCli` (recorded by `scripts/release.sh` at release time). **The claude CLI one says "which version the last release was verified against", not a requirement** — this project drives *your* local CLI, and which version you run is your call.
 
 **Claude Code keeps running, but you're not always at your computer.** You ask claude to change code, then leave for a meeting — when it needs permission, a push arrives on your phone; open the app to see details and allow or deny. Back at your desk, `/resume` in the terminal picks up the same session you continued from your phone — same agent, same log, not a new one.
 

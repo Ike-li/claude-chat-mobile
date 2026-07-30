@@ -74,6 +74,21 @@ say "▶ 发版前模拟 CI：CI=true npm test …"
 CI=true npm test >/tmp/release-citest.log 2>&1 || { tail -20 /tmp/release-citest.log; die "CI 模拟未通过，中止（详见 /tmp/release-citest.log）"; }
 say "  ✓ CI 模拟通过"
 
+# ── 采集验证环境（本项目的行为全取决于这两个外部件，出问题时要能对账）──────
+# CLI 版本是【外部事实】：它属于跑发版的这台机器，不属于仓库。所以只声称"验证于"，绝不写成
+# "需要/使用"。取不到不中止——下方"展示计划 + [y/N] 确认"那道闸就是这里的守卫：维护者会先
+# 看到 unknown 再决定要不要按 y。
+# 只取第一个 token：`claude --version` 输出形如 "2.1.220 (Claude Code)"，与 src/ops/statusline.js
+# 对 versions.cli 的切法保持同一约定。
+CLI_BIN="${CLAUDE_BIN:-$(command -v claude || true)}"
+CLI_VER="unknown"
+if [ -n "$CLI_BIN" ]; then
+  CLI_VER="$("$CLI_BIN" --version 2>/dev/null | awk '{print $1}')"
+  [ -n "$CLI_VER" ] || CLI_VER="unknown"
+fi
+[ "$CLI_VER" = "unknown" ] && say "⚠️  取不到 claude CLI 版本（CLAUDE_BIN/PATH 里没有可用的 claude），发布说明里会记 unknown"
+SDK_VER="$(node -p "require('./package.json').dependencies['@anthropic-ai/claude-agent-sdk']")"
+
 # ── 算版本号 + 生成发布说明 ───────────────────────────
 LAST_TAG="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 # 仓库名从本地 remote 解析，不打 GitHub API（GraphQL 在代理下会 EOF）
@@ -84,9 +99,24 @@ NEW_VER="$(node -p "require('./package.json').version")"
 TAG="v$NEW_VER"
 git rev-parse "$TAG" >/dev/null 2>&1 && die "tag $TAG 已存在"
 
+# 把 CLI 版本写回 package.json：这是全仓库【唯一】记录它的地方，README 的动态徽章直接读它，
+# 因此不存在"两处版本号各写各的"的漂移面。用 node 读写不用 sed（同 render-plist.js 的纪律：
+# 裸 sed 遇到特殊字符会生成非法内容）。trap 里已有的 `git checkout -- package.json` 会在任何
+# 非成功路径连同这次写入一并还原。
+CLI_VER="$CLI_VER" node -e '
+  const fs = require("fs");
+  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  pkg.verifiedWith = { ...pkg.verifiedWith, claudeCli: process.env.CLI_VER };
+  fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+'
+
 NOTES="$(mktemp)"
 {
   [ -n "$LAST_TAG" ] && echo "Changes since $LAST_TAG." || echo "Initial release."
+  echo
+  echo "### Verified environment"
+  echo "- claude CLI: $CLI_VER"
+  echo "- Agent SDK: @anthropic-ai/claude-agent-sdk $SDK_VER"
   echo
   RANGE="${LAST_TAG:+$LAST_TAG..}HEAD"
   feats="$(git log --no-merges --pretty='- %s' "$RANGE" | grep -E '^- feat' || true)"
