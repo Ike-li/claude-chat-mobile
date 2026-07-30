@@ -209,6 +209,31 @@ test('mirrorEntryLock：陈旧 pending（lastChainTs 超 5 分钟）→ 切入�
   assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: null, now }), true, '无时间戳 → 保守预锁（形态仍 pending）');
 });
 
+// 2026-07-29：陈旧 pending 豁免撞上「重连必重评」= 长回合期间一次网络抖动就永久丢锁。
+// 链路：手机息屏/断网/刷新 → socket 重连 → server 置 catchUpRebaselineRequested → 下一 tick
+// catchUpKey=null → 复用【切入分支】重评 mirrorEntryLock。终端此刻正卡在一条超过 5 分钟的长工具上
+// （形态 pending、主链零写入，本来靠 mirrorReleaseStep 的 tailPending 维持锁），重评撞上陈旧豁免
+// 返回 false，切入分支又是 force 强推 → 锁被清掉；而 mirrorReleaseStep 里 tailPending 只能【维持】
+// 锁造不出锁（`if (!prevReadonly) return false` 排在它前面）→ 锁再也回不来，直到终端落下一条 text。
+// 豁免的本意是「隔天打开一个早就没人管的会话别误锁」；prevReadonly=true 说明是同一会话的连续观察、
+// 上一刻还锁着，那就不是"隔天打开"，应当维持。stale 文案照旧由 mirrorStaleFlag 给（锁着但提示可接管）。
+test('mirrorEntryLock：同会话重连重评时 prevReadonly 维持已有锁，不被陈旧 pending 豁免清掉', () => {
+  const now = 1_800_000_000_000;
+  const over = now - H.MIRROR_STALE_PENDING_MS - 1;
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, prevReadonly: true }),
+    true, '上一刻锁着 + 形态仍 pending → 维持锁（长工具跨过 5 分钟不该丢锁）');
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, prevReadonly: false }),
+    false, '真会话切换（无前序锁）→ 陈旧豁免照旧生效，不误锁');
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: over, now, prevReadonly: true }),
+    false, '形态已收尾 → 即便上一刻锁着也不维持（终端真收工了，交回写权）');
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: true, lastChainTs: over, now, prevReadonly: true }),
+    false, 'localBusy 豁免优先级不变：己方 turn 的 pending 形态不算外部驾驶');
+});
+
 test('mirrorStaleFlag：锁定 + pending + 零写入超 5 分钟 → stale；未超/未锁/已收尾/无时间戳 → 非 stale', () => {
   assert.equal(typeof H.mirrorStaleFlag, 'function', '待实现：mirrorStaleFlag');
   assert.equal(typeof H.MIRROR_STALE_PENDING_MS, 'number');
@@ -244,14 +269,22 @@ test('describeMirrorEntryLock：打包判定详情 + agedOutStale 派生字段�
 
   assert.deepEqual(
     H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: under, now, locked: true }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: under, agedOutStale: false, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false },
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: under, agedOutStale: false, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: false },
     '新鲜 pending 且已锁 → agedOutStale=false',
   );
 
   assert.deepEqual(
     H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: false }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: false, autonomous: false, registryBusy: false },
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: false, autonomous: false, registryBusy: false, prevReadonly: false },
     '陈旧 pending 且未锁 → agedOutStale=true，与 mirrorEntryLock 的不锁判定一致',
+  );
+
+  // 同会话重连维持锁的那条路径：agedOutStale=true 却 locked=true，若不记 prevReadonly，
+  // 事后读诊断时间线会觉得两个字段自相矛盾、看不出锁是被谁维持的。
+  assert.deepEqual(
+    H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: true, prevReadonly: true }),
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: true },
+    '陈旧 pending 但同会话重连维持锁 → prevReadonly=true 解释了 locked 与 agedOutStale 并存',
   );
 
   assert.equal(
@@ -289,14 +322,14 @@ test('localBusy 路径仍须能标 stale（readonly+pending+超 5 分钟）', ()
 
 
 // ── P1（7/26 CCD 调研吸收）：注册表自报 registryBusy 并入三个锁判定 ─────────────────
-// ~/.claude/sessions/<PID>.json 的 status:"busy" 是 CLI 权威自报（见 session-registry.js），
+// ~/.claude/sessions/<PID>.json 的 status:"busy"/"shell" 是 CLI 权威自报（见 session-registry.js），
 // 比尾部形态猜测强一档：可直接上锁/维持锁/压制 stale。默认 false → 既有调用方零行为变化。
 
 test('mirrorEntryLock：registryBusy=true 时无视尾部形态与陈旧豁免直接预锁（localBusy 仍豁免）', () => {
   const now = 1_800_000_000_000;
   // 尾部 settled（长工具首刻常见形态）也锁——注册表说终端在跑
   assert.equal(H.mirrorEntryLock({ tailVerdict: 'settled', localBusy: false, lastChainTs: null, now, registryBusy: true }), true);
-  // 陈旧 pending 豁免被覆盖：注册表新鲜度已保证活终端
+  // 陈旧 pending 豁免被覆盖：注册表自报 + pid 验活已证实终端活着
   const over = now - H.MIRROR_STALE_PENDING_MS - 1;
   assert.equal(H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, registryBusy: true }), true);
   // web 自己在跑：己方 turn 不因注册表误锁

@@ -12,7 +12,6 @@ import {
   hasBusyTerminalSessionForCwd,
   terminalStateKey,
   cliPresenceStep,
-  REGISTRY_BUSY_FRESH_MS,
 } from '../../src/sessions/session-registry.js';
 
 const CWD = '/Users/you/code/demo';
@@ -115,14 +114,18 @@ test('listTerminalSessionStates：按 cwd+sessionId 归键返回 busy/alive，�
   try {
     put(1, 'sid-busy', { status: 'busy', statusUpdatedAt: now - 500 });
     put(2, 'sid-idle', { status: 'idle', statusUpdatedAt: now - 500 });
-    // busy 但自报已过期 → 降级 alive（进程还活着，但"在跑"不再可信）
-    put(3, 'sid-stale', { status: 'busy', statusUpdatedAt: now - REGISTRY_BUSY_FRESH_MS - 1 });
+    // 陈旧的 busy 仍算 busy：statusUpdatedAt 不是心跳，长回合期间它本就不会刷新（7/29 实证）
+    put(3, 'sid-longrun', { status: 'busy', statusUpdatedAt: now - 20 * 60_000 });
     put(4, 'sid-sdk', { entrypoint: 'sdk-ts' });
     put(5, 'sid-dead', { status: 'busy', statusUpdatedAt: now });
-    const map = await listTerminalSessionStates({ dir, now, isAlive: pid => pid !== 5 });
+    put(6, 'sid-shell', { status: 'shell', statusUpdatedAt: now - 500 }); // 跑命令中
+    put(7, 'sid-nostatus', {});                                          // cli 活着但无自报
+    const map = await listTerminalSessionStates({ dir, isAlive: pid => pid !== 5 });
     assert.equal(map.get(terminalStateKey(CWD, 'sid-busy')), 'busy');
     assert.equal(map.get(terminalStateKey(CWD, 'sid-idle')), 'alive');
-    assert.equal(map.get(terminalStateKey(CWD, 'sid-stale')), 'alive');
+    assert.equal(map.get(terminalStateKey(CWD, 'sid-longrun')), 'busy');
+    assert.equal(map.get(terminalStateKey(CWD, 'sid-shell')), 'busy');
+    assert.equal(map.get(terminalStateKey(CWD, 'sid-nostatus')), 'alive');
     assert.equal(map.has(terminalStateKey(CWD, 'sid-sdk')), false, 'sdk 系条目不进结果');
     assert.equal(map.has(terminalStateKey(CWD, 'sid-dead')), false, '陈尸 pid 不进结果');
   } finally { rmSync(dir, { recursive: true, force: true }); }
@@ -194,17 +197,42 @@ test('cliPresenceStep：曾见 cli 条目→消失/仅剩 sdk = vanished；未�
   assert.deepEqual(cliPresenceStep(false, { entrypoint: 'sdk-ts' }), { seen: false, vanished: false }, 'sdk 条目不算 seen');
 });
 
-test('registryIndicatesTerminalBusy：cli+busy+新鲜 → true；其余组合 → false', () => {
+// 2026-07-29 pty 实证（CLI 2.1.220，四轮）：终端跑 Bash / 等后台子代理期间 CLI 自报的是
+// status:"shell" 而不是 "busy"（TUI 侧 `eu==="idle" && 有 shell 活动 ? "shell" : eu`）。只认
+// "busy" 会让整段「终端正在跑长命令/后台子代理」的窗口 registryBusy 恒假——那正是主链 transcript
+// 零增长、尾部形态又已 settled 的窗口，四条判据同时失效 → 只读镜像不上锁、手机侧可写、有分叉风险。
+test('registryIndicatesTerminalBusy：status:"shell"（终端在跑命令）同样构成终端 busy', () => {
   const now = 1_785_000_200_000;
-  const fresh = { entrypoint: 'cli', status: 'busy', statusUpdatedAt: now - 1000 };
-  assert.equal(registryIndicatesTerminalBusy(fresh, { now }), true);
-  // 过期：超过 REGISTRY_BUSY_FRESH_MS 不再信任，回落尾部判定（宁可回落不可误锁）
-  assert.equal(registryIndicatesTerminalBusy(
-    { ...fresh, statusUpdatedAt: now - REGISTRY_BUSY_FRESH_MS - 1 }, { now }), false);
-  // sdk-ts 条目（无 status 字段）：不构成终端 busy
-  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'sdk-ts', kind: 'interactive' }, { now }), false);
-  // cli 但 idle
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli', status: 'shell', statusUpdatedAt: now - 1000 }, { now }), true);
+  // 仍不放过非 cli 条目：sdk 系是 ccm 自己的实例，生灭与终端无关
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'sdk-ts', status: 'shell', statusUpdatedAt: now }, { now }), false);
+});
+
+// 同一轮实证：CLI 只在 status【值变化】时写一次 statusUpdatedAt（源码侧 useEffect 依赖数组只有
+// [status, waitingFor]），跑 sleep 75 期间 age 从 0.7s 单调涨到 72s 从不复位——它不是心跳。原先的
+// 30s 新鲜度窗因此把【任何超过 30 秒的回合】判成"自报过期"，这条本该最权威的通道对长回合恒假。
+// 改判据为「pid 存活（调用方已验）+ status ∈ {busy, shell}」：CLI 回合结束时一定会写 idle
+// （四轮实证均如此），所以陈旧的 busy/shell 是可信的；进程崩溃由 pid 验活挡掉。
+test('registryIndicatesTerminalBusy：陈旧的 busy/shell 仍可信——statusUpdatedAt 不是心跳', () => {
+  const now = 1_785_000_200_000;
+  const old = now - 20 * 60_000; // 20 分钟前写下的 busy：长回合的常态，不是"过期"
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli', status: 'busy', statusUpdatedAt: old }, { now }), true);
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli', status: 'shell', statusUpdatedAt: old }, { now }), true);
+  // statusUpdatedAt 缺失也不再是否决理由（判据已不依赖它）
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli', status: 'busy' }, { now }), true);
+  // idle 仍然是 idle：CLI 收尾时会主动写它，这是解锁的正路
   assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli', status: 'idle', statusUpdatedAt: now }, { now }), false);
+});
+
+test('registryIndicatesTerminalBusy：cli+busy → true；非 cli / idle / 空条目 → false', () => {
+  const now = 1_785_000_200_000;
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli', status: 'busy', statusUpdatedAt: now - 1000 }), true);
+  // sdk-ts 条目（无 status 字段）：不构成终端 busy
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'sdk-ts', kind: 'interactive' }), false);
+  // cli 但 idle
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli', status: 'idle', statusUpdatedAt: now }), false);
+  // cli 活着但完全无自报（老版本 / 尚未写过 status）：不背书，回落尾部判定
+  assert.equal(registryIndicatesTerminalBusy({ entrypoint: 'cli' }), false);
   // null 条目
-  assert.equal(registryIndicatesTerminalBusy(null, { now }), false);
+  assert.equal(registryIndicatesTerminalBusy(null), false);
 });
