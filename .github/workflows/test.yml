@@ -5,6 +5,11 @@ on:
     branches: [master, dev]
   pull_request:
 
+# 两个 job 都只做 checkout/setup-node/npm/upload-artifact，不写回仓库任何东西，
+# 所以把 GITHUB_TOKEN 收到最小面。（upload-artifact 走 ACTIONS_RUNTIME_TOKEN，不吃这里的权限。）
+permissions:
+  contents: read
+
 jobs:
   unit-test:
     runs-on: ubuntu-latest
