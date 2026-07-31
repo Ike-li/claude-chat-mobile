@@ -30,6 +30,7 @@ npm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+.qoder/
 
 .reasonix
 .codegraph
