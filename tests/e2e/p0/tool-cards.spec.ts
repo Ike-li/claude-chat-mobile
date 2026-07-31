@@ -120,7 +120,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:workflow-subagents');
-    // mock 推 2 条 task_progress → 标题「2 个运行中」+ 两行明细；多任务默认折叠列表，点折叠按钮展开。
+    // mock 推 2 条 task_progress → 标题「2 个运行中」+ 两行明细；多任务默认折叠列表，点横幅头行展开。
     await expect(page.locator('#taskProgressBanner')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('#taskProgressText')).toContainText('2 个运行中');
     await expect(page.locator('#taskProgressText')).not.toContainText('后台任务 后台任务');

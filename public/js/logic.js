@@ -2244,13 +2244,14 @@ export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   return { canStop: Boolean(id) && !synthetic && bannerVisible !== false, taskId: synthetic ? null : (id || null) };
 }
 
-// 后台任务列表是否折叠：单任务恒展开（不挡内容，也不改变既有单任务体验）；
-// 多任务默认收起（避免堆满屏挡聊天内容），用户手动展开/收起后遵从用户选择，直至横幅整体撤下重置。
+// 后台任务列表是否折叠：默认单任务展开（不挡内容）、多任务收起（避免堆满屏挡聊天内容）；
+// 用户手动展开/收起后一律遵从用户选择，直至横幅整体撤下重置。
+// 用户表态对单任务同样生效——折叠热区是整条横幅头行，任何任务数下点了都必须有反应，否则是死点击。
 export function bgTaskListCollapsed({ count = 0, userExpanded = null } = {}) {
-  if (count <= 1) return false;
+  if (count <= 0) return false; // 无任务：列表整体不存在，值不生效但保持确定性
   if (userExpanded === true) return false;
   if (userExpanded === false) return true;
-  return true;
+  return count > 1;
 }
 
 // 后台任务详情面板：进度历史条目格式化。

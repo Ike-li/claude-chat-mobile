@@ -2229,7 +2229,7 @@ io.on('connection', socket => {
       },
     },
     {
-      commands: ['test:taskprogress', 'test:taskprogress-failed'],
+      commands: ['test:taskprogress', 'test:taskprogress-failed', 'test:taskprogress-hold'],
       run: async ({ cmd, activeInst }) => {
         // Mirrors transient SDK background task heartbeats without adding buffered events.
         console.log(`[mock] ${cmd} — 推送后台任务进度心跳序列 + 完成/失败通知`);
@@ -2249,7 +2249,9 @@ io.on('connection', socket => {
             type: 'task_progress', transient: true, payload: { taskId: 'bg_task_1', taskType: 'local_agent', message, description: message, lastToolName: 'Bash' }
           });
         }
-        await delay(600);
+        // -hold 变体：三拍心跳后长驻 8s 再收尾。默认变体从「步骤 3/3」到撤横幅只有 600ms 窗口，
+        // 装不下折叠/详情联动这类多步断言（会随机在断言中途被 task_notification 撤掉横幅）。
+        await delay(cmd === 'test:taskprogress-hold' ? 8000 : 600);
         io.emit('agent:event', {
           seq: 51, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),
           type: 'task_notification', payload: {

@@ -246,7 +246,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  test('P0-17j 多任务后台横幅默认折叠，点击折叠按钮可展开/收起', async ({ page }) => {
+  test('P0-17j 多任务后台横幅默认折叠，点击横幅头行可展开/收起', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:taskprogress-multi');
@@ -254,7 +254,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#taskProgressText')).toContainText('3 个运行中', { timeout: 10_000 });
 
     // 默认折叠：行已渲染在 DOM（供断言/无障碍），但列表容器不可见。
+    // 折叠热区是整条头行（无三角按钮），恒可见；右侧「停止」在多任务下隐藏（每行自带「停」）。
     const toggle = page.locator('[data-testid="bg-task-toggle"]');
+    await expect(page.locator('[data-testid="task-stop-btn"]')).toBeHidden();
     const list = page.locator('[data-testid="bg-task-list"]');
     await expect(toggle).toBeVisible();
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -290,7 +292,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('[data-testid="bg-task-row"]').first().click();
     await expect(page.locator('[data-testid="task-detail-panel"]')).toBeVisible();
     // 3 条 progress 应对应 3 行历史记录
-    const entries = page.locator('[data-testid="task-detail-panel"] div.flex');
+    const entries = page.locator('[data-testid="task-detail-entry"]');
     await expect(entries).toHaveCount(3, { timeout: 5_000 });
 
     // 再次点击同一行 → 详情面板收起
@@ -298,6 +300,44 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('[data-testid="task-detail-panel"]')).toBeHidden();
 
     // 完成后横幅撤下
+    await waitForIdle(page);
+    await expect(page.locator('#taskProgressBanner')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-17m 详情内联在任务卡片里：不冒泡收起，且随整列表折叠一起隐藏', async ({ page }) => {
+    await gotoMock(page);
+
+    // -hold 变体：三拍心跳后长驻 8s，够跑完下面的多步联动断言
+    await sendChatMessage(page, 'test:taskprogress-hold');
+    await expect(page.locator('#taskProgressBanner')).toBeVisible();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('步骤 3/3', { timeout: 10_000 });
+
+    const list = page.locator('[data-testid="bg-task-list"]');
+    const detail = page.locator('[data-testid="task-detail-panel"]');
+    const toggle = page.locator('[data-testid="bg-task-toggle"]');
+
+    await page.locator('[data-testid="bg-task-row"]').first().click();
+    // 详情必须落在任务列表**内部**（旧实现挂在横幅外的兄弟节点上，这条会红）
+    await expect(list.locator('[data-testid="task-detail-panel"]')).toHaveCount(1);
+
+    // 点详情自身不冒泡回任务行，不会误收起
+    await page.locator('[data-testid="task-detail-entry"]').first().click();
+    await expect(detail).toBeVisible();
+
+    // 折叠整列表 → 详情随卡片一起隐藏（旧实现下详情继续显示且再也点不到）
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(list).toBeHidden();
+    await expect(detail).toBeHidden();
+
+    // 重新展开 → 详情保持原展开态，且仍可点行收起
+    await toggle.click();
+    await expect(detail).toBeVisible();
+    await page.locator('[data-testid="bg-task-row"]').first().click();
+    await expect(detail).toBeHidden();
+
     await waitForIdle(page);
     await expect(page.locator('#taskProgressBanner')).toBeHidden();
 

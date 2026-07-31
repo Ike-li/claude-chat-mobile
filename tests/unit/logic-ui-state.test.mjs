@@ -739,9 +739,10 @@ test.describe('taskStopUiState（后台任务停止按钮）', () => {
 });
 
 test.describe('bgTaskListCollapsed（后台任务列表折叠）', () => {
-  test('单任务恒展开，不受用户表态影响', () => {
+  test('单任务默认展开，但用户可手动收起', () => {
     assert.equal(bgTaskListCollapsed({ count: 1, userExpanded: null }), false);
-    assert.equal(bgTaskListCollapsed({ count: 1, userExpanded: false }), false);
+    // 头行整块可点后，折叠热区在任何任务数下都存在——单任务时点了必须有反应，否则是死点击。
+    assert.equal(bgTaskListCollapsed({ count: 1, userExpanded: false }), true);
     assert.equal(bgTaskListCollapsed({ count: 1, userExpanded: true }), false);
   });
   test('多任务默认收起（用户未表态）', () => {

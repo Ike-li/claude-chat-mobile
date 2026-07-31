@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 121 |
+| Unit test | 122 |
 | Vendored asset | 21 |
 
-Total classified files: **351**.
+Total classified files: **352**.
 
 ## Complete file inventory
 
@@ -337,6 +337,7 @@ Total classified files: **351**.
 | `tests/unit/frontend-event-dispatch.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/frontend-message-renderer.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/frontend-notifications.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/frontend-task-status.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/git-workspace.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-files.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-list.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

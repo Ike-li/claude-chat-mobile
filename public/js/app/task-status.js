@@ -53,10 +53,13 @@ export function createTaskStatusController(context, {
     return true;
   }
 
+  // 唯一的滚动容器：详情已内联进任务卡片，若列表不封顶，6 个任务 × 20 条历史会把 composer footer
+  // 撑到吃满整屏（#messages 是 flex-1 overflow-y-auto，最小尺寸算 0，挡不住）。上限放这一层、
+  // 卡片内不再套第二层滚动，避免移动端嵌套滚动抢手势。
   function taskList() {
     if (dom.taskProgressList) return dom.taskProgressList;
     if (!createElement || !dom.taskProgressBanner) return null;
-    dom.taskProgressList = createElement('<div id="taskProgressList" class="mt-1.5 space-y-1 hidden" data-testid="bg-task-list"></div>');
+    dom.taskProgressList = createElement('<div id="taskProgressList" class="mt-1.5 space-y-1 max-h-[45vh] overflow-y-auto overscroll-contain hidden" data-testid="bg-task-list"></div>');
     dom.taskProgressBanner.appendChild(dom.taskProgressList);
     return dom.taskProgressList;
   }
@@ -99,35 +102,24 @@ export function createTaskStatusController(context, {
       list.replaceChildren();
       list.classList.add('hidden');
     }
-    dom.btnTaskToggle?.classList.add('hidden');
-    hideDetail();
+    syncBannerToggle(true);
     syncStopButton();
-  }
-
-  function hideDetail() {
-    if (dom.taskDetailPanel) dom.taskDetailPanel.classList.add('hidden');
-    if (dom.taskDetailContent) dom.taskDetailContent.replaceChildren();
   }
 
   // tasks 收缩后（单个任务完成删除，或全量快照重建）同步清理 progressHistory：否则已消失任务的历史
   // 会一直留到「全部任务清零」才被 hideProgress 整体清空，长会话里持续有任务在跑会无界累积。
-  // 若详情面板正显示的任务恰好消失，必须一并关闭——否则面板停留在陈旧数据上，且该任务行已不在
-  // 列表里，用户点不到任何行去关闭它。
+  // 详情正显示的任务若恰好消失，一并撤掉 activeDetailId——DOM 由随后的 renderTaskList 跟随。
   function pruneStaleProgressHistory() {
     for (const id of progressHistory.keys()) {
       if (!tasks.has(id)) progressHistory.delete(id);
     }
-    if (activeDetailId && !tasks.has(activeDetailId)) {
-      activeDetailId = null;
-      hideDetail();
-    }
+    if (activeDetailId && !tasks.has(activeDetailId)) activeDetailId = null;
   }
 
-  function syncToggleButton(collapsed) {
-    if (!dom.btnTaskToggle) return;
-    dom.btnTaskToggle.classList.toggle('hidden', tasks.size <= 1);
-    dom.btnTaskToggle.setAttribute('aria-expanded', String(!collapsed));
-    dom.btnTaskToggle.textContent = collapsed ? '▸' : '▾';
+  // 折叠热区是整条横幅头行（#taskBannerToggle），恒可见、恒可点——不再有单独的 ▸/▾ 三角按钮，
+  // 也不再按任务数隐藏它（单任务同样可折叠）。这里只同步无障碍状态。
+  function syncBannerToggle(collapsed) {
+    dom.taskBannerToggle?.setAttribute('aria-expanded', String(!collapsed));
   }
 
   function toggleTaskList() {
@@ -156,21 +148,28 @@ export function createTaskStatusController(context, {
   function renderTaskList() {
     const list = taskList();
     if (!list) return;
+    // list 是滚动容器：replaceChildren 会把 scrollTop 归零，心跳重绘时先存后还，否则每拍跳回顶部。
+    const prevScroll = list.scrollTop;
     list.replaceChildren();
     if (tasks.size === 0) {
       list.classList.add('hidden');
-      syncToggleButton(true);
+      syncBannerToggle(true);
       return;
     }
-    // 单任务恒展开（给一行详情，标题只写「运行中」避免复读）；多任务默认折叠，行照常渲染供折叠态下的
-    // 测试断言与即时展开使用，仅用 hidden 类控制可见性。
+    // 单任务默认展开（给一行详情，标题只写「运行中」避免复读）；多任务默认折叠。两种情况下行都照常
+    // 渲染供折叠态下的测试断言与即时展开使用，仅用 hidden 类控制可见性。
     const collapsed = bgTaskListCollapsed({ count: tasks.size, userExpanded });
     list.classList.toggle('hidden', collapsed);
-    syncToggleButton(collapsed);
+    syncBannerToggle(collapsed);
     for (const [taskId, task] of tasks) {
       const histLen = (progressHistory.get(taskId) || []).length;
       const isActive = taskDetailState({ taskId, activeDetailId }).visible;
-      const row = createElement(`<div class="rounded-lg border border-warning/25 bg-warning/5 px-2 py-1.5 cursor-pointer${isActive ? ' ring-1 ring-warning/50' : ''}" data-testid="bg-task-row"></div>`);
+      // 卡片承载边框，data-testid="bg-task-row" 留在**高度恒定**的头行上：详情展开后卡片变高，
+      // 若把 testid 挂到卡片上，点击（打元素中心点）会落进详情区，"再点一次收起"永远不触发。
+      // 详情作为头行的兄弟而非后代，点它也不会冒泡回头行——不需要 stopPropagation。
+      // 配色只用无 alpha 的语义 token：tw-config 把颜色映射为裸 var(--x)，`/NN` 修饰符生成不出 utility。
+      const card = createElement(`<div class="rounded-lg border ${isActive ? 'border-warning' : 'border-line-soft'} bg-sunk overflow-hidden"></div>`);
+      const row = createElement('<div class="px-2 py-1.5 cursor-pointer select-none" data-testid="bg-task-row"></div>');
       const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
       const label = createElement('<span class="truncate flex-1 min-w-0 text-ink font-medium"></span>');
       const title = formatBgTaskRowLabel({
@@ -202,10 +201,16 @@ export function createTaskStatusController(context, {
       } else {
         row.append(top);
       }
-      // 点击行文本区域 → 展开/收起详情面板
+      // 点击行文本区域 → 展开/收起该任务自己的详情
       row.addEventListener('click', () => toggleDetail(taskId));
-      list.appendChild(row);
+      card.appendChild(row);
+      if (isActive) {
+        const panel = buildDetailPanel(taskId);
+        if (panel) card.appendChild(panel);
+      }
+      list.appendChild(card);
     }
+    list.scrollTop = prevScroll;
   }
 
   // ---- 详情面板：累积 task_progress 历史，点击任务行展开 ----
@@ -227,40 +232,31 @@ export function createTaskStatusController(context, {
   }
 
   function toggleDetail(taskId) {
-    if (activeDetailId === taskId) {
-      // 再次点击同任务 → 收起
-      activeDetailId = null;
-      hideDetail();
-    } else {
-      activeDetailId = taskId;
-      renderDetail(taskId);
-    }
-    // 刷新行高亮态
+    const expanding = activeDetailId !== taskId; // 再次点击同任务 → 收起
+    activeDetailId = expanding ? taskId : null;
     renderTaskList();
+    // 长列表里新展开的详情可能落在滚动视口外，带它进视野（真实 DOM 才有这两个 API）
+    if (expanding) taskList()?.querySelector?.('[data-testid="task-detail-panel"]')?.scrollIntoView?.({ block: 'nearest' });
   }
 
-  function renderDetail(taskId) {
-    if (!dom.taskDetailPanel || !dom.taskDetailContent) return;
+  // 详情块：该任务的进度历史，作为头行的兄弟渲染在同一张卡片内（共用卡片边框，border-t 作分隔线）。
+  // 历史为空返回 null（不渲染空框），activeDetailId 保留——下一拍心跳有内容了自然显示出来。
+  function buildDetailPanel(taskId) {
     const hist = progressHistory.get(taskId) || [];
-    if (hist.length === 0) {
-      hideDetail();
-      return;
-    }
-    dom.taskDetailContent.replaceChildren();
+    if (hist.length === 0) return null;
+    const panel = createElement('<div class="border-t border-line-soft px-2 py-1.5 space-y-1.5 text-[11px] cursor-default" data-testid="task-detail-panel"></div>');
     for (const entry of hist) {
       const { time, text, hasSummary } = formatProgressHistoryEntry(entry);
-      const row = createElement('<div class="flex items-start gap-2"></div>');
+      const row = createElement('<div class="flex items-start gap-2" data-testid="task-detail-entry"></div>');
       const ts = createElement('<span class="text-[10px] text-ink-faint shrink-0 tabular-nums w-12 text-right"></span>');
       ts.textContent = time;
       const icon = createElement(`<span class="shrink-0">${hasSummary ? '✦' : '▸'}</span>`);
       const body = createElement('<span class="flex-1 min-w-0 text-ink-soft break-words"></span>');
       body.textContent = text;
       row.append(ts, icon, body);
-      dom.taskDetailContent.appendChild(row);
+      panel.appendChild(row);
     }
-    dom.taskDetailPanel.classList.remove('hidden');
-    // 新条目到达时自动滚动到底部
-    dom.taskDetailContent.scrollTop = dom.taskDetailContent.scrollHeight;
+    return panel;
   }
 
   function applyTasksFromPayload(payload) {
@@ -320,12 +316,9 @@ export function createTaskStatusController(context, {
       hideProgress();
       return true;
     }
+    // 详情已内联进卡片，renderTaskList 一并重绘正在查看的那份历史，无需第二条刷新路径
     showBanner();
     renderTaskList();
-    // 详情面板正在查看的任务有新进度时自动刷新
-    if (activeDetailId && progressHistory.has(activeDetailId)) {
-      renderDetail(activeDetailId);
-    }
     return true;
   }
 
@@ -383,7 +376,15 @@ export function createTaskStatusController(context, {
       });
       if (ui.canStop) stopTask(ui.taskId, t('已请求停止后台任务…'));
     });
-    dom.btnTaskToggle?.addEventListener('click', () => toggleTaskList());
+    // 折叠热区 = 横幅头行（不含右侧「停止」按钮，两者是兄弟元素）。用结构而非 stopPropagation 隔离：
+    // stopPropagation 挡不住 keydown（焦点在「停止」上按 Enter 会同时停任务 + 折叠），且 role="button"
+    // 是 Children Presentational，套住 <button> 会让辅助技术读不到「停止」。
+    dom.taskBannerToggle?.addEventListener('click', () => toggleTaskList());
+    dom.taskBannerToggle?.addEventListener('keydown', (ev) => {
+      if (ev?.key !== 'Enter' && ev?.key !== ' ') return;
+      ev.preventDefault?.();
+      toggleTaskList();
+    });
   }
 
   if (autoBind) bind();
