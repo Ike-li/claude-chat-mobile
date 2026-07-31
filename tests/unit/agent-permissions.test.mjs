@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeSession } from '../helpers/agent-unit.mjs';
+import { makeSession, awaitTtlSettled } from '../helpers/agent-unit.mjs';
 
 // ---- 权限闸门 ----
 test.describe('权限闸门', () => {
@@ -130,7 +130,9 @@ test.describe('权限闸门', () => {
     // 纯靠到期 timer 结算：全程【不】调用 resolvePermission，模拟无人处理审批的场景。
     const promise = s.askPermission('Bash', { command: 'sleep 999' }, { signal: ac.signal, toolUseID: 't1' });
     assert.equal(s.pendingPermissions.size, 1, '刚请求时应挂起');
-    const result = await promise; // 无到期 timer 时此处永不 resolve（靠 test timeout 兜底红）
+    // 同 agent-questions 的 AG-001：expiryTimer 是 unref 的，此处仅靠 approvalStore 落盘 I/O
+    // 侥幸撑住事件循环，不是保证 —— 用 helper 显式还原前提。无到期 timer 时此处永不 resolve（靠 test timeout 兜底红）。
+    const result = await awaitTtlSettled(promise);
     assert.equal(result.behavior, 'deny', '到期后 fail-closed deny');
     assert.equal(result.interrupt, false, 'expired 不 interrupt 在途轮');
     assert.equal(s.pendingPermissions.size, 0, '到期后 pending 清空，不再悬置');
@@ -286,7 +288,8 @@ test.describe('权限闸门', () => {
       const ac = new AbortController();
       const promise = s.askPermission('Bash', { command: 'ls' }, { signal: ac.signal, toolUseID: 'store-t5' });
       // BE-003：到期由 timer 主动结算（不再依赖有人提交才惰性发现过期）——await 到 Promise 被 timer resolve。
-      const result = await promise;
+      // expiryTimer 是 unref 的，同上用 helper 撑住事件循环。
+      const result = await awaitTtlSettled(promise);
       assert.equal(result.behavior, 'deny', '过期 fail-closed deny');
       assert.equal(AS.getByReqId('store-t5').status, 'expired', '台账记 expired');
       // 过期后再提交（即便 allow）扑空——已被 timer 结算，返回 undefined，绝不放行（fail-closed 保证仍在）。

@@ -4,7 +4,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeSession } from '../helpers/agent-unit.mjs';
+import { makeSession, awaitTtlSettled } from '../helpers/agent-unit.mjs';
 
 // ---- AskUserQuestion ----
 test.describe('AskUserQuestion', () => {
@@ -208,7 +208,7 @@ test.describe('AskUserQuestion', () => {
       { signal: ac.signal, toolUseID: 'q1' },
     );
     assert.equal(s.pendingQuestions.size, 1);
-    const result = await promise;
+    const result = await awaitTtlSettled(promise); // 见 helper 注释：expiryTimer 是 unref 的
     assert.equal(result.behavior, 'deny');
     assert.equal(result.interrupt, false);
     assert.equal(s.pendingQuestions.size, 0);
