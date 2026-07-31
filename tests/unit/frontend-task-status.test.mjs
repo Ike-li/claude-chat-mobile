@@ -94,6 +94,9 @@ test('task status controller collapses the multi-task list by default and expand
       getAttribute: k => attrs[k],
       addEventListener: (type, handler) => { listeners[type] = handler; },
       click: () => listeners.click?.(),
+      // role="button" 的键盘等价路径：直接喂 keydown handler（fakeNode 不模拟冒泡，
+      // 「按钮上的 Enter 不冒泡到折叠热区」由 E2E P0-17n 守）
+      press: key => { const ev = { key, prevented: false, preventDefault() { this.prevented = true; } }; listeners.keydown?.(ev); return ev; },
       append: () => {},
       appendChild: () => {},
       replaceChildren: () => {},
@@ -129,6 +132,21 @@ test('task status controller collapses the multi-task list by default and expand
 
   taskBannerToggle.click();
   assert.equal(context.dom.taskProgressList.classList.contains('hidden'), true, '再次点击收起');
+
+  // 折叠热区是 role="button" 的 div，没有原生键盘语义——Enter/Space 必须自己接，且要 preventDefault
+  // 挡掉 Space 的滚动页面默认行为。其它键一律放行，不能吃掉。
+  const enter = taskBannerToggle.press('Enter');
+  assert.equal(context.dom.taskProgressList.classList.contains('hidden'), false, 'Enter 展开');
+  assert.equal(taskBannerToggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(enter.prevented, true, 'Enter 须 preventDefault');
+
+  const space = taskBannerToggle.press(' ');
+  assert.equal(context.dom.taskProgressList.classList.contains('hidden'), true, 'Space 收起');
+  assert.equal(space.prevented, true, 'Space 须 preventDefault，否则会滚动页面');
+
+  const tab = taskBannerToggle.press('Tab');
+  assert.equal(context.dom.taskProgressList.classList.contains('hidden'), true, 'Tab 不得改变折叠态');
+  assert.equal(tab.prevented, false, 'Tab 须放行，不能吃掉焦点移动');
 });
 
 // 记录型 fakeNode：把 createElement 收到的 HTML 串留在 .html 上，才能断言「详情块渲染在哪张卡片里」。

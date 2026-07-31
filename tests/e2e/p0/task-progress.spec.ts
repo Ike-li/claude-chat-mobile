@@ -343,4 +343,40 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  test('P0-17n 折叠热区可键盘操作，且「停止」按钮上的 Enter 不连带折叠', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:taskprogress-hold');
+    await expect(page.locator('#taskProgressBanner')).toBeVisible();
+    await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('步骤 3/3', { timeout: 10_000 });
+
+    const toggle = page.locator('[data-testid="bg-task-toggle"]');
+    const list = page.locator('[data-testid="bg-task-list"]');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+    // 折叠热区是 role="button" 的 div，没有原生键盘语义，Enter/Space 全靠自己接
+    await toggle.press('Enter');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(list).toBeHidden();
+
+    await toggle.press(' ');
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(list).toBeVisible();
+
+    // 「停止」是热区的**兄弟**而非后代：聚焦它按 Enter 只触发停止，不得连带折叠。
+    // 反向验证过（把按钮挪进热区内部）这条会红，且后果比"连带折叠"更重：热区 keydown 里的
+    // preventDefault() 会把原生 button 的 Enter→click 激活整个吃掉，「停止」根本发不出去——
+    // 所以下面这条先炸的是「已请求停止后台任务」缺失。看到它红，先查 index.html 的父子结构。
+    const stopBtn = page.locator('[data-testid="task-stop-btn"]');
+    await expect(stopBtn).toBeVisible();
+    await stopBtn.press('Enter');
+    // 停止确实发出（mock 不回 ack，前端 1.5s 兜底写完成条）——以它为时序锚点，再断言折叠态没被连带翻转
+    await expect(page.locator('#messages')).toContainText('已请求停止后台任务', { timeout: 5_000 });
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(list).toBeVisible();
+
+    await waitForIdle(page);
+    await expectNoBrowserErrors(page);
+  });
 });
