@@ -40,12 +40,15 @@ export function formatLifecycleIdleReclaim(mins) {
   const n = Math.max(1, Number(mins) || 1);
   return `进程已回收：会话空闲超过 ${n} 分钟（再发送或切换回来会自动续接）`;
 }
-// 网关挂起早期告警（2026-07-28 真机 b06fb05d 前情：第三方网关零响应，用户等到 idleTimeoutMs 中断前
+// 模型静默早期告警（2026-07-28 真机 b06fb05d 前情：第三方网关零响应，用户等到 idleTimeoutMs 中断前
 // 全程零反馈）。只告警不中断——本轮继续等，给用户「停止重发/换模型」的主动权。
+// 归因收敛（2026-07-30 排查 0f82d2e7）：旧文案断言「多为第三方网关限流/挂起」，而真机 6 次触发全是
+// 本地前台工具在跑（那批误报已由 hasRunningForegroundTool 豁免修掉）。看门狗只知道「没收到消息」、
+// 不知道为什么——文案只陈述观测事实与可操作项，不替它猜因。
 export function formatLifecycleGatewayStall(seconds, timeoutMins) {
   const s = Math.max(1, Math.round(Number(seconds) || 1));
   const m = Math.max(1, Number(timeoutMins) || 1);
-  return `模型网关已 ${s} 秒无响应（本轮继续等待，${m} 分钟仍零消息将自动中断）——多为第三方网关限流/挂起，可点「停止」后重发，或换模型再试`;
+  return `模型已 ${s} 秒无响应（本轮继续等待，${m} 分钟仍零消息将自动中断）——可点「停止」后重发，或换模型再试`;
 }
 export function formatLifecycleProcessExited() {
   return '进程已退出：可重新发送消息继续（会话历史仍在）';
@@ -126,6 +129,13 @@ const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部
                                           // docs/design.md/OQ-05 已决：不预置具体数值，此为实现落地的合理默认）
 const GATEWAY_STALL_WARN_MS = 90_000;     // 在途轮静默早期告警线（只提示不中断，见 formatLifecycleGatewayStall）：
                                           // 宽于正常首 token 延迟 + 30s checkIdle tick 粒度，远窄于 idleTimeoutMs 中断阈
+// 前台工具在途豁免上限（2026-07-30 排查真机会话 0f82d2e7）：tool_use 发出到 tool_result 回来之间 SDK 流
+// 零消息，lastActivity 冻结——跑 E2E/测试套的前台 Bash 因此被误告「模型无响应」（该会话一小时内 6 次，
+// 最长 602s；同期等模型方向的空档一次都没到 60s）。更险的是前台 Bash 硬超时 600s ≈ idleTimeoutMs 600s，
+// 30s tick 相位一偏就会 interrupt 掉一个本来好好的轮次。
+// 上限而非无限豁免：工具真挂死（进程僵死、tool_result 永不回）时看护必须能接回来。15min 宽于 CLI 侧
+// Bash 600s 硬超时的最坏情况（含转后台收尾），窄到不会让挂死会话空转太久。
+const FOREGROUND_TOOL_GRACE_MS = 15 * 60 * 1000;
 
 
 // epoch：每个 AgentSession 实例一个跨重启唯一标识。基于 wall-clock + 进程内计数，
@@ -202,6 +212,9 @@ export class AgentSession {
                                        // 轮次真正开始（message_start/assistant）时合成 pendingTurns=1，让 busy/看护/角标接回。
                                        // 只武装 flag 不直接 ++：N 条通知未必对应 N 轮（合并轮会卡死 busy → checkIdle 误杀）。
     this.pendingAutoTurnAt = 0;        // flag 武装时刻（Date.now）：合成前校验未超 AUTO_TURN_ARM_TTL_MS，防滞留 flag 长尾误触发。
+    this.pendingToolUses = new Map();   // toolUseId → startedAt：主会话在途前台工具（tool_use 发出、tool_result 未回）。
+                                       // 静默看护据此豁免——工具在跑就是本轮在推进，只是 SDK 流此刻无消息。
+                                       // 只记主会话：子 agent 内部工具由父 Task 的 tool_use 代表（见 map 子分支）。
     this.stallWarnedForActivity = 0;   // 网关挂起告警去重锚：告警时记当时的 lastActivity——同段静默不重复告，
                                        // 有新消息（lastActivity 前移）后的新静默段可再告。不动 lastActivity 本身（那会推迟真中断）。
     this._awaitingInterruptResult = false; // P1-4：interrupt() 成功后置真，标记"下一条 result 是这次中断的终态确认"
@@ -1137,8 +1150,9 @@ export class AgentSession {
       return;
     }
     // 在途轮 + 活后台任务：主流通可长时间无 delta（子代理内部跑），不得按 idleTimeout 误杀。
+    // 前台工具同理：tool_use 到 tool_result 之间 SDK 流零消息，但本轮正在推进（见 FOREGROUND_TOOL_GRACE_MS）。
     // 与 pendingPermissions 同口径：刷新 lastActivity 后返回（不进静默中断、也不进空闲回收）。
-    if (this.pendingTurns > 0 && this.hasBgTasks()) {
+    if (this.pendingTurns > 0 && (this.hasBgTasks() || this.hasRunningForegroundTool())) {
       this.lastActivity = Date.now();
       return;
     }
@@ -1291,6 +1305,18 @@ export class AgentSession {
   }
 
   hasBgTasks() { return this.bgTasks.size > 0; }
+
+  // 是否有仍在跑的主会话前台工具（超 FOREGROUND_TOOL_GRACE_MS 的不再算「在干活」，见常量注释）。
+  // 顺带清掉超限条目：它们已不影响判定，留着只会在长会话里堆成垃圾。
+  hasRunningForegroundTool() {
+    const now = Date.now();
+    let alive = false;
+    for (const [id, startedAt] of this.pendingToolUses) {
+      if (now - startedAt < FOREGROUND_TOOL_GRACE_MS) alive = true;
+      else this.pendingToolUses.delete(id);
+    }
+    return alive;
+  }
   // BE-008：实例是否处于「不可安全 dispose」的活动态——供 effort 切档等需置换实例（dispose+resume）的操作判定。
   // 后台任务(bgTasks)、挂起审批(pendingPermissions)、挂起问题(pendingQuestions)都【不】计入 pendingTurns，
   // 只查 pendingTurns 会在这些非 turn 活动进行时 disposeInstance→abort 误杀它们。
@@ -1561,6 +1587,7 @@ export class AgentSession {
             this.lastRateUnavailableReason = null; // 换会话清零，避免新会话被旧会话的"未变化"误判吞掉首次诊断
             this.lastToolName = null;      // 切换会话清工具名
             this.bgTasks.clear();          // 换会话清空活后台注册表（旧会话后台任务不串到新会话）
+            this.pendingToolUses.clear();  // 同理：旧会话在途工具账不串新会话（否则新会话首轮被无依据豁免看护）
             this.subagentTypeByParent.clear(); // 换会话清空子 agent 类型缓存（旧会话子 agent 类型不串到新会话）
           }
           // FRESH 首轮：init 前的日志写在 provisionalKey(instanceId) 下，先并入真 sessionId 再记后续 sys_info。
@@ -1839,6 +1866,7 @@ export class AgentSession {
               }
             }
             this.rememberToolName(block.id, block.name);
+            this.pendingToolUses.set(block.id, Date.now()); // 静默看护豁免起点：工具在跑 = 本轮在推进
             this.emit('tool_use', {
               toolUseId: block.id,
               name: block.name,
@@ -1918,6 +1946,7 @@ export class AgentSession {
             const fullRedacted = stringify(redactBase64(raw));    // 摘要层红线（结构层递归替换嵌套 base64）
             const cap = toolResultCap(this.toolNames.get(block.tool_use_id));
             this.toolNames.delete(block.tool_use_id);
+            this.pendingToolUses.delete(block.tool_use_id); // 工具收工，豁免销账
             const outputSummary = truncate(fullRedacted, cap);
             this.emit('tool_result', {
               toolUseId: block.tool_use_id,
@@ -1940,6 +1969,9 @@ export class AgentSession {
         this.turnOutputTokens = 0;
         this._msgOutBase = 0;
         this.lastToolName = null; // 清空工具名跟踪
+        // 在途前台工具随本轮收尾清账：工具不可能跨轮存活。中断/审批取消时 tool_result 可能永不回来，
+        // 只靠上面的 delete 会留下残条目，让下一轮被无依据地豁免看护。
+        this.pendingToolUses.clear();
         if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
         this.totalDurationMs += msg.duration_ms || 0;
         this.totalApiDurationMs += msg.duration_api_ms || 0;

@@ -32,6 +32,10 @@ test.describe('formatLifecycle*', () => {
     assert.match(msg, /10 分钟/);
     assert.match(msg, /停止|重发|换模型/);
     assert.equal(/已中断|已按挂死/.test(msg), false, '只是告警，本轮仍在等待');
+    // 归因收敛（2026-07-30）：旧文案断言「多为第三方网关限流/挂起」，但真机 6 次触发全是
+    // 本地前台工具在跑（误报，已由前台工具豁免修掉）。剩余场景也未必是网关——可能是网络或
+    // 长 prefill。看门狗只知道「没收到消息」，不知道为什么，文案不得替它猜。
+    assert.equal(/第三方网关|限流/.test(msg), false, '不得断言未经证实的归因');
   });
 });
 
@@ -354,6 +358,109 @@ test.describe('checkIdle()', () => {
     const err = events.find(e => e.type === 'error');
     assert.ok(err);
     assert.ok(err.payload.message.includes('未收到 Claude 的任何消息'));
+    s.dispose();
+  });
+
+  // B. 前台长跑工具豁免（2026-07-30 排查真机会话 0f82d2e7）：前台 Bash 跑 E2E/测试期间，
+  // tool_use 发出到 tool_result 回来之间 SDK 流零消息 → lastActivity 冻结 → 90s 后误告
+  // 「模型网关无响应」（该会话一小时内 6 次，全是 playwright/单测；等模型方向从没超过 60s）。
+  // 更严重：前台 Bash 硬超时 600s ≈ idleTimeoutMs 600s，30s tick 相位一偏就会误中断好好的一轮。
+  // 豁免口径与 bgTasks 一致（刷新 lastActivity 后 return），但设独立上限防工具真挂死后永失保护。
+  const toolUseMsg = (id, name = 'Bash') => ({
+    type: 'assistant',
+    message: { content: [{ type: 'tool_use', id, name, input: { command: 'npm run test:e2e' } }] },
+  });
+  const toolResultMsg = (id) => ({
+    type: 'user',
+    message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'done' }] },
+  });
+
+  test('在途轮 + 前台工具在途 → 不告警不中断，并刷新 lastActivity', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.map(toolUseMsg('tu1'));
+    assert.equal(s.hasRunningForegroundTool(), true, 'tool_use 后应记为在途前台工具');
+    s.lastActivity = Date.now() - 100_000; // map 不刷 lastActivity（那是 consume 的活）：造 100s 静默
+    let aborted = false;
+    s.abort = { abort() { aborted = true; } };
+    s.checkIdle();
+    assert.equal(s.terminating, false, '前台工具在跑不得中断');
+    assert.equal(aborted, false);
+    assert.ok(s.lastActivity > Date.now() - 1000, '应刷新 lastActivity，等同「仍有活动」');
+    assert.equal(events.find(e => e.type === 'error'), undefined, '不得发网关无响应告警');
+    s.dispose();
+  });
+
+  test('前台工具 tool_result 已回 → 豁免解除，恢复静默告警', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.map(toolUseMsg('tu1'));
+    s.map(toolResultMsg('tu1'));
+    assert.equal(s.hasRunningForegroundTool(), false, 'tool_result 到达应销账');
+    s.lastActivity = Date.now() - 100_000;
+    s.checkIdle();
+    const warns = events.filter(e => e.type === 'error' && /无响应/.test(e.payload.message));
+    assert.equal(warns.length, 1, '工具已回、真在等模型 → 该告警');
+    s.dispose();
+  });
+
+  test('前台工具在途超 15 分钟上限 → 不再豁免（防真挂死后永失保护）', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.map(toolUseMsg('tu1'));
+    s.pendingToolUses.set('tu1', Date.now() - 900_000 - 1); // 越过 15min 上限
+    assert.equal(s.hasRunningForegroundTool(), false, '超上限的在途工具不再算「在干活」');
+    s.lastActivity = Date.now() - 100_000;
+    s.checkIdle();
+    const warns = events.filter(e => e.type === 'error' && /无响应/.test(e.payload.message));
+    assert.equal(warns.length, 1, '超上限后恢复告警');
+    s.dispose();
+  });
+
+  test('多工具并行：只要还有一个未超上限就仍豁免', () => {
+    const { s } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.map(toolUseMsg('old'));
+    s.map(toolUseMsg('fresh'));
+    s.pendingToolUses.set('old', Date.now() - 900_000 - 1);
+    assert.equal(s.hasRunningForegroundTool(), true, '新工具仍在跑 → 继续豁免');
+    s.dispose();
+  });
+
+  // 工具被中断/审批取消时 tool_result 可能永不回来 → 在途集合会残留并永久豁免看护。
+  // result（本轮收尾）是权威边界：工具不可能跨轮存活。
+  test('result 到达 → 清空在途前台工具集合（防残留永久豁免）', () => {
+    const { s } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.map(toolUseMsg('tu1'));
+    s.map({ type: 'result', subtype: 'success', duration_ms: 1, is_error: false });
+    assert.equal(s.hasRunningForegroundTool(), false, '轮次收尾必须清账');
+    s.dispose();
+  });
+
+  // /clear 等换会话：与同处的 bgTasks.clear() 同理由——旧会话的在途工具账不得串到新会话，
+  // 否则新会话首轮会被无依据地豁免看护（result 通常会先清，但换会话不保证走到 result）。
+  test('换会话 → 清空在途前台工具集合（旧会话的账不串新会话）', () => {
+    const { s } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.sessionId = 'old-session';
+    s.map(toolUseMsg('tu1'));
+    s.map({ type: 'system', subtype: 'init', session_id: 'new-session' });
+    assert.equal(s.hasRunningForegroundTool(), false, '换会话须清账');
+    s.dispose();
+  });
+
+  // 子 agent（Task 内部）工具不单独记账：父 Task 的 tool_use 已在主分支占位，
+  // 重复记账会让子 agent 的 tool_result 提前把父级销掉。
+  test('子 agent 内部工具不进在途集合', () => {
+    const { s } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.map({
+      type: 'assistant',
+      parent_tool_use_id: 'parent-task',
+      message: { content: [{ type: 'tool_use', id: 'child1', name: 'Read', input: {} }] },
+    });
+    assert.equal(s.pendingToolUses.has('child1'), false);
     s.dispose();
   });
 });
