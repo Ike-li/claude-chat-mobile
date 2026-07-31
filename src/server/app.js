@@ -1119,13 +1119,15 @@ async function catchUpTickOnce() {
       now: Date.now(),
       registryBusy,
       prevReadonly: entryPrevReadonly,
+      // 谁写下这条 pending 尾部（磁盘自报）：sdk-ts=己方残留、不是终端驾驶 → 不预锁（见 mirrorEntryLock）
+      tailEntrypoint: tail.lastChainEntrypoint,
     });
     // 注册表证实是活终端在驾驶 → 压制 autonomous 标记（marker 启发式的"同窗口先自主循环后真终端接管"盲区）
     const entryAutonomous = registryBusy ? false : tail.autonomous;
     mirrorRelease = { readonly: entryLock, quietTicks: 0 };
     diagLog.record(a.sessionId, 'mirror', 'entry_lock_decision', describeMirrorEntryLock({
       tailVerdict: tail.verdict, localBusy, lastChainTs: tail.lastChainTs, now: Date.now(), locked: entryLock, autonomous: entryAutonomous, registryBusy,
-      prevReadonly: entryPrevReadonly,
+      prevReadonly: entryPrevReadonly, tailEntrypoint: tail.lastChainEntrypoint,
     }));
     setMirror(entryLock, a.sessionId, true,              // force 清上个会话残留的锁/发权威态
       // serverStartedAt：pending 尾部若落盘于本进程启动前 → 是被服务重启腰斩的残留，不是活驾驶员（见 mirrorStaleFlag）

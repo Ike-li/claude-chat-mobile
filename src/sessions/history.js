@@ -927,10 +927,20 @@ export const MIRROR_STALE_PENDING_MS = 5 * 60_000;
 // 的 tailPending 只能维持锁造不出锁 → 手机息屏/断网/刷新一次就永久丢锁。豁免本意是「隔天打开一个
 // 早就没人管的会话别误锁」，prevReadonly=true 表示同会话连续观察且上一刻锁着，不属于该情形 → 维持。
 // 仍然只在形态仍 pending 时维持：settled 说明终端真收工了，该把写权交回手机侧。
-export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), registryBusy = false, prevReadonly = false } = {}) {
+//
+// tailEntrypoint（2026-07-30 真机 5ed3eb8c）：写下这条 pending 尾部的进程【自报】的 entrypoint——CLI 写
+// 'cli'，本项目 SDK 写 'sdk-ts'。是 sdk-ts 就说明这个 pending 是己方残留（回合被上游错误/中断打断，
+// assistant 没落盘），终端从没参与过这个会话，锁它等于凭空拦死手机输入并谎称「终端会话运行中」。
+// 白名单只认 sdk-ts：未知/新增取值一律回落既有判定（最坏维持今天的行为），绝不因认错来源而误放行
+// 造成两端并发写分叉——误锁可由用户点「续接」化解，误放行造成的 transcript 分叉不可逆。
+// 位置在 registryBusy 之后（活着的 CLI 自报在跑压过一切磁盘推断）、prevReadonly 之前（这类锁本就
+// 不该建立，同会话重连不得把它续下去）。
+const SDK_TAIL_ENTRYPOINTS = new Set(['sdk-ts']);
+export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), registryBusy = false, prevReadonly = false, tailEntrypoint = null } = {}) {
   if (localBusy) return false;
   if (registryBusy) return true;
   if (tailVerdict !== 'pending') return false;
+  if (SDK_TAIL_ENTRYPOINTS.has(tailEntrypoint)) return false;
   if (prevReadonly) return true;
   if (lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS)) return false;
   return true;
@@ -941,9 +951,9 @@ export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = 
 // 只加一个 agedOutStale 派生字段，让事后回放能看出"这次没锁，是因为陈旧 pending 还是别的原因"。
 // prevReadonly 也记进来：同会话重连维持锁那条路径会出现 agedOutStale=true 且 locked=true，
 // 不记它的话事后读诊断时间线会觉得两字段自相矛盾、看不出锁是被谁维持的。
-export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), locked, autonomous = false, registryBusy = false, prevReadonly = false } = {}) {
+export function describeMirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), locked, autonomous = false, registryBusy = false, prevReadonly = false, tailEntrypoint = null } = {}) {
   const agedOutStale = lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS);
-  return { tailVerdict, localBusy, lastChainTs, agedOutStale, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked, autonomous, registryBusy, prevReadonly };
+  return { tailVerdict, localBusy, lastChainTs, agedOutStale, staleThresholdMs: MIRROR_STALE_PENDING_MS, locked, autonomous, registryBusy, prevReadonly, tailEntrypoint };
 }
 
 // 疑似中断判定：锁着 + 尾部 PENDING + 最后链条目距今超阈值（期间零写入）→ 终端可能被强杀/断电、轮次没
@@ -987,12 +997,33 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, regis
 //
 // 子链（isSidechain）：主链 settled 后子 agent 仍可能狂写 sidechain——旧逻辑跳过 isSidechain 会
 // 在 ~12.5s 后误解锁、双写分叉。合并判据：主链 pending 或子链 pending → 整体 pending。
-// 该 user 条目之后（更高 index）是否已有本地 slash 的 stdout——/config /model 等本地命令
+// web 侧 slash 的裸文本形态：SDK 把用户输入原样落盘，没有 CLI 的 <command-name> 包装（真机 5ed3eb8c
+// 落的就是 "/code-review max 整个分支代码库，最多同时 3 个子代理"）。要求命令名后紧跟空白或行尾，
+// 才不会把 "/Users/raylee/code" 这类以斜杠开头的普通文本误当命令（首段后面是 /，不是空白）。
+const WEB_BARE_SLASH_RE = /^\/[a-zA-Z][\w:-]*(\s|$)/;
+
+// 该 user 条目之后（更高 index）是否已有本地命令的 stdout——/config /model 等本地命令
 // 落盘形态：command-name → local-command-stdout，无 assistant。若只认 command-name 会永远 pending 锁死。
+// 两种落盘形态都要认（2026-07-30 真机 5ed3eb8c）：
+//   · CLI 形态：{ type:'user', message.content:"<local-command-stdout>…" }（历史实现只认这个）
+//   · web 形态：{ type:'system', subtype:'local_command', content:"…" }——content 是顶层字段、不在
+//     message 里，且 type 不是 user，故被原实现整条跳过。上游 503 打断 web 回合时错误正文正是这个
+//     形态，漏认 → 主链停在光秃秃的 user 文本 → 永久 pending（见 classifyChainTail 处的说明）。
+// system 行同样必须校验 <local-command-stdout|stderr> 标签，不能只看 subtype：同一个 subtype 下还落
+// 【命令名回显】{ content:"<command-name>/status</command-name>…" }，那是命令【开始】的记录、不是输出。
+// 真实反例 -Users-raylee-ai-work-mbp/f0483015… idx 879：只认 subtype 会把回显当收尾，把正在进行的
+// 终端回合判成 settled → 解锁 → 双写分叉（2026-07-30 子代理审查在真盘上抓到）。
 function hasLocalCommandStdoutAfter(entries, fromIndex) {
   for (let j = fromIndex + 1; j < entries.length; j++) {
     const e = entries[j];
-    if (!e || e.type !== 'user' || e.isSidechain) continue;
+    if (!e) continue;
+    if (e.type === 'system') {
+      if (e.subtype !== 'local_command' || typeof e.content !== 'string') continue;
+      const t = e.content.trim();
+      if (/^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t)) return true;
+      continue;
+    }
+    if (e.type !== 'user' || e.isSidechain) continue;
     const c = e.message?.content;
     const text = typeof c === 'string' ? c : Array.isArray(c)
       ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n')
@@ -1005,6 +1036,8 @@ function hasLocalCommandStdoutAfter(entries, fromIndex) {
 }
 
 // sidechainOnly=false：只看主链；true：只看子链（isSidechain）。
+// lastChainEntrypoint：链尾那条记录【自报】的写入方（CLI 写 'cli'、本项目 SDK 写 'sdk-ts'）。判「这条
+// pending 是谁留下的」用它——磁盘上的硬证据，比注册表可靠（旧版 CLI 不写注册表）。见 mirrorEntryLock。
 function classifyChainTail(entries, sidechainOnly) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
@@ -1016,29 +1049,38 @@ function classifyChainTail(entries, sidechainOnly) {
       continue;
     }
     const lastChainTs = e.timestamp ? (Date.parse(e.timestamp) || null) : null;
+    const lastChainEntrypoint = typeof e.entrypoint === 'string' ? e.entrypoint : null;
     const c = e.message?.content;
     const blocks = Array.isArray(c) ? c : null;
     if (e.type === 'assistant') {
-      if (blocks?.some(b => b?.type === 'tool_use')) return { verdict: 'pending', lastChainTs };
+      if (blocks?.some(b => b?.type === 'tool_use')) return { verdict: 'pending', lastChainTs, lastChainEntrypoint };
       if (blocks ? blocks.some(b => b?.type === 'text') : typeof c === 'string') {
         const text = typeof c === 'string' ? c : (blocks || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
         if (isCliSystemLine(text)) continue; // "No response requested." 等助手噪音：跳过继续往前找真链
-        return { verdict: 'settled', lastChainTs };
+        return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
       }
-      return { verdict: 'pending', lastChainTs }; // 只有 thinking / 空内容：流式中间态
+      return { verdict: 'pending', lastChainTs, lastChainEntrypoint }; // 只有 thinking / 空内容：流式中间态
     }
     // user
-    if (blocks?.some(b => b?.type === 'tool_result')) return { verdict: 'pending', lastChainTs };
+    if (blocks?.some(b => b?.type === 'tool_result')) return { verdict: 'pending', lastChainTs, lastChainEntrypoint };
     const text = typeof c === 'string' ? c : (blocks || []).filter(b => b?.type === 'text').map(b => b.text).join('\n');
-    if (/^\[Request interrupted by user[^\]]*\]$/.test(text.trim())) return { verdict: 'settled', lastChainTs };
+    if (/^\[Request interrupted by user[^\]]*\]$/.test(text.trim())) return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
     if (isCliSystemLine(text)) continue; // local-command / bash / ide 噪音：不当链尾
-    // 本地 slash 只存在于主链；子链不认 reconstructSlashCommand 收尾。
-    if (!sidechainOnly && reconstructSlashCommand(text) && hasLocalCommandStdoutAfter(entries, i)) {
-      return { verdict: 'settled', lastChainTs };
+    // 本地命令只存在于主链；子链不认这条收尾。收尾成立的前提是【链尾这条 user 自己就是那条 slash】——
+    // 本地命令的输出只能给它自己的调用收尾，不能给任意一条 user 消息收尾，否则「终端发了真实请求、
+    // assistant 还没回、期间用户又敲了个 /status」会被判成 settled → 解锁 → 双写分叉（真实反例见
+    // hasLocalCommandStdoutAfter 上方注释）。放宽的只是【slash 的书写形态】，不是这个前提本身：
+    //   · CLI 形态：<command-name>/foo</command-name> 包装 → reconstructSlashCommand
+    //   · web 形态：裸文本 "/code-review max …"（SDK 原样落盘，无包装）→ WEB_BARE_SLASH_RE
+    // 至于「普通消息（毫无 slash 特征）被上游 503 打断」——它与上面那个分叉场景在磁盘上完全同构，
+    // 无法靠形态区分，故这里刻意【不】判 settled，改由 mirrorEntryLock 的 tailEntrypoint 判据兜底。
+    if (!sidechainOnly && (reconstructSlashCommand(text) || WEB_BARE_SLASH_RE.test(text.trim()))
+        && hasLocalCommandStdoutAfter(entries, i)) {
+      return { verdict: 'settled', lastChainTs, lastChainEntrypoint };
     }
-    return { verdict: 'pending', lastChainTs };
+    return { verdict: 'pending', lastChainTs, lastChainEntrypoint };
   }
-  return { verdict: 'settled', lastChainTs: null };
+  return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null };
 }
 
 // ── 自主循环误判为「终端驱动」的区分 ──────────────────────────────────────────
@@ -1071,10 +1113,11 @@ export function classifyTailEntries(entries) {
   const autonomous = hasAutonomousLoopMarker(entries);
   if (main.verdict === 'pending') return { ...main, autonomous };
   if (side.verdict === 'pending') {
-    // 主链已收尾但子 agent 仍在跑：维持 pending，stale 时钟取两者较新时间戳
+    // 主链已收尾但子 agent 仍在跑：维持 pending，stale 时钟取两者较新时间戳；entrypoint 取子链的
+    // ——此时「谁在驾驶」由子 agent 那条记录自报，主链那条早已不是最后写盘的人。
     const times = [main.lastChainTs, side.lastChainTs].filter((t) => t != null);
     const lastChainTs = times.length ? Math.max(...times) : side.lastChainTs;
-    return { verdict: 'pending', lastChainTs, autonomous };
+    return { verdict: 'pending', lastChainTs, lastChainEntrypoint: side.lastChainEntrypoint, autonomous };
   }
   return { ...main, autonomous }; // 主链 settled（子链无活动或也已 settled）
 }
@@ -1083,13 +1126,13 @@ export function classifyTailEntries(entries) {
 // 极端边界：若最后一条链条目距文件尾 >512KB（如超巨型子 agent 尾巴），尾窗里无链条目 → settled（不锁、
 // 不误伤输入；镜像锁的兜底仍有 externalWrite 判据在）。
 export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_DIR, size = null } = {}) {
-  if (!isSafeSessionId(sessionId)) return { verdict: 'settled', lastChainTs: null, autonomous: false }; // SS-003
+  if (!isSafeSessionId(sessionId)) return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false }; // SS-003
   const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
   try {
     const fh = await open(file, 'r');
     try {
       if (size == null) ({ size } = await fh.stat());
-      if (size === 0) return { verdict: 'settled', lastChainTs: null, autonomous: false };
+      if (size === 0) return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false };
       const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
       const buf = Buffer.allocUnsafe(size - start);
       const { bytesRead } = await fh.read(buf, 0, size - start, start);
@@ -1103,7 +1146,7 @@ export async function classifyTranscriptTail(sessionId, cwd, { baseDir = CLAUDE_
       await fh.close().catch(() => {});
     }
   } catch {
-    return { verdict: 'settled', lastChainTs: null, autonomous: false }; // 文件不存在/读失败：不锁
+    return { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false }; // 文件不存在/读失败：不锁
   }
 }
 

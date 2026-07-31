@@ -269,13 +269,13 @@ test('describeMirrorEntryLock：打包判定详情 + agedOutStale 派生字段�
 
   assert.deepEqual(
     H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: under, now, locked: true }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: under, agedOutStale: false, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: false },
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: under, agedOutStale: false, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: false, tailEntrypoint: null },
     '新鲜 pending 且已锁 → agedOutStale=false',
   );
 
   assert.deepEqual(
     H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: false }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: false, autonomous: false, registryBusy: false, prevReadonly: false },
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: false, autonomous: false, registryBusy: false, prevReadonly: false, tailEntrypoint: null },
     '陈旧 pending 且未锁 → agedOutStale=true，与 mirrorEntryLock 的不锁判定一致',
   );
 
@@ -283,7 +283,7 @@ test('describeMirrorEntryLock：打包判定详情 + agedOutStale 派生字段�
   // 事后读诊断时间线会觉得两个字段自相矛盾、看不出锁是被谁维持的。
   assert.deepEqual(
     H.describeMirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: over, now, locked: true, prevReadonly: true }),
-    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: true },
+    { tailVerdict: 'pending', localBusy: false, lastChainTs: over, agedOutStale: true, staleThresholdMs: H.MIRROR_STALE_PENDING_MS, locked: true, autonomous: false, registryBusy: false, prevReadonly: true, tailEntrypoint: null },
     '陈旧 pending 但同会话重连维持锁 → prevReadonly=true 解释了 locked 与 agedOutStale 并存',
   );
 
@@ -396,4 +396,116 @@ test('describeMirrorEntryLock：透传 registryBusy 供诊断时间线回放', (
     true,
   );
   assert.equal(H.describeMirrorEntryLock({ tailVerdict: 'pending', locked: true }).registryBusy, false);
+});
+
+// ── web 回合失败后「续接」永久卡死（2026-07-30 真机 5ed3eb8c）───────────────────────────────
+// 100% web 发起的会话，一条 slash 回合被上游 503 打断：assistant 一条都没落盘，transcript 主链停在
+// 光秃秃的 user 文本，错误正文以 { type:'system', subtype:'local_command' } 落盘。于是：
+//   · classifyChainTail 只把 type∈{user,assistant} 当链条目 → system 行跳过 → 落到 user 兜底 pending；
+//   · 本该救场的两道「本地命令已收尾」豁免都只认 CLI 的落盘形态，对不上 web 的：
+//       reconstructSlashCommand 只认 <command-name> 包装，web 发的是裸文本 "/code-review …" → null；
+//       hasLocalCommandStdoutAfter 只扫 type==='user' 的条目，这次 stdout 在 type==='system' → false；
+//   · pending 恒真 → 切入 mirrorEntryLock 预锁，之后 mirrorReleaseStep 的 tailPending 分支永久维持，
+//     没有任何自动解锁路径 → 输入框永远「只读镜像：终端会话运行中」+「续接」（终端从没碰过这个会话）。
+// 判据修正：链尾 user 之后若已落 local_command 输出（user 形态或 system 形态皆可）⇒ 该回合已终结
+// （正常 slash 输出、或以错误告终），不是「等 assistant 回复」。刻意不再要求文本是 slash——普通消息
+// 被 503 打断是完全同构的形态，只认 slash 会漏掉它。settled 的已知误判窗（判 settled 后终端马上又
+// 开跑）仍由 keepAlive / registryBusy 两条判据互补罩住，与本函数既有取舍同档。
+const LOCAL_CMD_STDOUT = '<local-command-stdout>API Error: 503 Gateway Error: 没有可用的内网节点.</local-command-stdout>';
+const webEntry = (over) => ({ isSidechain: false, entrypoint: 'sdk-ts', timestamp: '2026-07-31T03:25:10.930Z', ...over });
+
+test('classifyTailEntries：web 回合被 503 打断（user 裸 slash + system/local_command 输出）→ settled，不当终端驾驶', () => {
+  const entries = [
+    webEntry({ type: 'user', message: { role: 'user', content: '/code-review max 整个分支代码库，最多同时 3 个子代理' } }),
+    webEntry({ type: 'system', subtype: 'local_command', isMeta: false, content: LOCAL_CMD_STDOUT, timestamp: '2026-07-31T03:28:17.905Z' }),
+  ];
+  assert.equal(H.classifyTailEntries(entries).verdict, 'settled', '回合已以错误告终 → 不得判成「终端轮次未完结」');
+});
+
+// 分叉红线（2026-07-30 子代理审查在真实盘上抓到）：本地命令输出只能给【它自己那条 slash】收尾，绝不能
+// 给任意一条 user 消息收尾。真实反例 ~/.claude/projects/-Users-raylee-ai-work-mbp/f0483015…jsonl idx 877-880：
+// 终端用户发了真实请求（"把 CF 优选相关的都去掉…"，entrypoint=cli），assistant 还没回，90 秒后用户又敲了
+// 个 /status——于是 idx 879/880 落下 command-name 回显与 stdout。若把「链尾 user 之后有 local_command
+// 输出」一律当收尾，这条【正在进行的终端回合】就被判 settled → 镜像不锁 → 手机可写 → 双写分叉。
+// 这里 tailEntrypoint 完全救不了：verdict 一旦是 settled，mirrorEntryLock 第三行就短路返回 false，
+// 白名单判据根本不参与。故收尾判据必须要求链尾 user 文本【自己就是】那条 slash。
+test('classifyTailEntries：终端真实请求未回复 + 期间敲了别的本地命令 → 仍 pending（分叉红线）', () => {
+  const cliEntry = (over) => ({ isSidechain: false, entrypoint: 'cli', timestamp: '2026-07-16T00:42:14.086Z', ...over });
+  const entries = [
+    cliEntry({ type: 'user', message: { role: 'user', content: '把 CF 优选相关的都去掉，只保留项目记忆和历史文档' } }),
+    cliEntry({ type: 'system', subtype: 'local_command', content: '<command-name>/status</command-name>', timestamp: '2026-07-16T00:43:40.565Z' }),
+    cliEntry({ type: 'system', subtype: 'local_command', content: '<local-command-stdout>Settings dialog dismissed</local-command-stdout>', timestamp: '2026-07-16T00:43:40.565Z' }),
+  ];
+  assert.equal(H.classifyTailEntries(entries).verdict, 'pending', '终端回合仍在进行 → 必须维持锁，否则双写分叉');
+});
+
+test('classifyTailEntries：本地命令的 command-name 回显不算收尾（只有 stdout/stderr 才是输出）', () => {
+  const entries = [
+    webEntry({ type: 'user', message: { role: 'user', content: '/status' } }),
+    webEntry({ type: 'system', subtype: 'local_command', content: '<command-name>/status</command-name>' }),
+  ];
+  assert.equal(H.classifyTailEntries(entries).verdict, 'pending', '只回显了命令名、输出还没落 → 轮次未完结');
+});
+
+// 普通消息（非 slash）被 503 打断：形态与上面的分叉红线【无法区分】，故这里刻意【不】判 settled——
+// 该场景由切口 2（tailEntrypoint=sdk-ts 不预锁）兜底，两个判据分工明确，不拿分叉风险换它。
+test('classifyTailEntries：普通消息被打断仍 pending（与终端场景无法区分），交给 tailEntrypoint 兜底', () => {
+  const entries = [
+    webEntry({ type: 'user', message: { role: 'user', content: '你好' } }),
+    webEntry({ type: 'system', subtype: 'local_command', isMeta: false, content: LOCAL_CMD_STDOUT }),
+  ];
+  const r = H.classifyTailEntries(entries);
+  assert.equal(r.verdict, 'pending', '不得靠放宽形态判据来修它——那会打穿单驾驶员模型');
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: r.verdict, localBusy: false, lastChainTs: Date.now(), now: Date.now(), tailEntrypoint: r.lastChainEntrypoint }),
+    false, '己方 SDK 写下的 pending → 由切口 2 拦住，不预锁');
+});
+
+test('classifyTailEntries：user 文本之后【没有】本地命令输出 → 仍 pending（不得放宽成「user 尾一律收尾」）', () => {
+  const entries = [webEntry({ type: 'user', message: { role: 'user', content: '你好' } })];
+  assert.equal(H.classifyTailEntries(entries).verdict, 'pending', '等 assistant 回复中：这是真 pending，必须保留');
+});
+
+test('classifyTailEntries：回传链尾条目自报的 entrypoint（谁写下这条 pending）', () => {
+  const cliTail = [webEntry({ type: 'user', entrypoint: 'cli', message: { role: 'user', content: '继续' } })];
+  assert.equal(H.classifyTailEntries(cliTail).lastChainEntrypoint, 'cli');
+  const sdkTail = [webEntry({ type: 'user', message: { role: 'user', content: '继续' } })];
+  assert.equal(H.classifyTailEntries(sdkTail).lastChainEntrypoint, 'sdk-ts');
+  assert.equal(H.classifyTailEntries([]).lastChainEntrypoint, null, '无链条目 → null（回落既有判定）');
+});
+
+// 纵深防御（切口 2）：即便将来又冒出一种「web 自己写出 pending 尾部」的新形态（切口 1 的形态判据
+// 覆盖不到），也不该把它当成「终端在驾驶」而锁死手机输入。判据取磁盘上的硬证据——写下链尾那条
+// 记录的进程【自报】的 entrypoint：CLI 写 'cli'，本项目 SDK 写 'sdk-ts'。用白名单只认 sdk-ts：
+// 未知/新取值静默退化回既有判定（最坏回到今天的行为，绝不因认错而误放行造成两端并发写分叉）。
+// registryBusy 仍然优先（活着的 CLI 自报在跑，压过一切磁盘推断）；localBusy 豁免不变。
+test('mirrorEntryLock：pending 尾部由本项目 SDK 自己写下（entrypoint=sdk-ts）→ 不预锁（终端从没参与）', () => {
+  const now = 1_800_000_000_000;
+  const fresh = now - 10_000; // 新鲜 pending：陈旧豁免够不着，只有本判据能拦
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'sdk-ts' }),
+    false, 'sdk-ts 写的 pending = 己方残留，不是终端驾驶');
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'cli' }),
+    true, 'CLI 写的 pending → 照旧预锁');
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now }),
+    true, '不传 → 既有行为不变');
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'claude-desktop' }),
+    true, '白名单外的未知来源 → 保守预锁（宁可误锁不可误放行）');
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'sdk-ts', registryBusy: true }),
+    true, 'registryBusy：活着的 CLI 自报在跑 → 压过磁盘推断');
+  assert.equal(
+    H.mirrorEntryLock({ tailVerdict: 'pending', localBusy: false, lastChainTs: fresh, now, tailEntrypoint: 'sdk-ts', prevReadonly: true }),
+    false, '压过 prevReadonly：锁本就不该存在，同会话重连不得把它续下去');
+});
+
+test('describeMirrorEntryLock：透传 tailEntrypoint（事后回放能看出「这次没锁是因为尾部是己方写的」）', () => {
+  assert.equal(
+    H.describeMirrorEntryLock({ tailVerdict: 'pending', locked: false, tailEntrypoint: 'sdk-ts' }).tailEntrypoint,
+    'sdk-ts',
+  );
+  assert.equal(H.describeMirrorEntryLock({ tailVerdict: 'pending', locked: true }).tailEntrypoint, null);
 });

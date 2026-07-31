@@ -42,7 +42,7 @@ test('isSafeSessionId + 路径构建函数对穿越 id 安全（SS-003）', asyn
   assert.equal(isSafeSessionId('../x'), false);
   assert.equal(isSafeSessionId('good-id_01'), true);
   assert.deepEqual(await getSessionHistory('../etc/passwd', '/cwd', 10, { baseDir: BASE }), []);
-  assert.deepEqual(await classifyTranscriptTail('../x', '/cwd', { baseDir: BASE }), { verdict: 'settled', lastChainTs: null, autonomous: false });
+  assert.deepEqual(await classifyTranscriptTail('../x', '/cwd', { baseDir: BASE }), { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false });
   assert.equal(await readLastPermissionMode('../x', '/cwd', { baseDir: BASE }), null);
 });
 

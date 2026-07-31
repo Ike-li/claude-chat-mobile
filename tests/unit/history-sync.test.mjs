@@ -107,9 +107,9 @@ test('classifyTranscriptTail: 子 agent 已纯文本收尾 + 主链 settled → 
 test('classifyTranscriptTail: 文件不存在 / 无任何链条目 → settled（不锁），lastChainTs=null', async () => {
   const cwd = '/test/tail-empty';
   const dir = join(BASE, getProjectDir(cwd));
-  assert.deepEqual(await classifyTranscriptTail('nonexistent', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null, autonomous: false });
+  assert.deepEqual(await classifyTranscriptTail('nonexistent', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false });
   writeJSONL(dir, 'tmetaonly', [{ type: 'entrypoint-marker' }, { type: 'queue-operation' }]);
-  assert.deepEqual(await classifyTranscriptTail('tmetaonly', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null, autonomous: false });
+  assert.deepEqual(await classifyTranscriptTail('tmetaonly', cwd, { baseDir: BASE }), { verdict: 'settled', lastChainTs: null, lastChainEntrypoint: null, autonomous: false });
 });
 
 // SS-002：settled 轮次后的 CLI 系统噪音（isMeta=false 的 local-command/bash）不得把 tail 改判 pending。
