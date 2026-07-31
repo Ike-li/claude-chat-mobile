@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import compression from 'compression';
 import express from 'express';
 
@@ -223,20 +223,24 @@ export function configureHttpShell({
     return res.type('application/javascript').send(appJs);
   });
   // 子模块也改写相对 import 的 ?v=，避免 connection-sync 拉到未戳版本的 logic.js 双实例。
+  // 与上面的 indexHtml/appJs 一样启动时读完，请求期只查表：这条路由排在鉴权之前（静态资源必须
+  // 登录前可取），每请求 readFileSync 会让未鉴权的高频请求同步阻塞事件循环。
+  // 「改了 js 要重启」不是新增约束——assetVersion 本就是启动时哈希算的，不重启 ?v= 也不换。
+  const selfJsSources = new Map();
+  for (const path of listJsFilesRecursive(selfJsDir)) {
+    const rel = relative(selfJsDir, path).split(sep).join('/');
+    try {
+      selfJsSources.set(rel, rewriteAppModuleImports(readFileSync(path, 'utf8'), assetVersion));
+    } catch { /* 单个文件读不出就当它不存在，落到下面的 static 404 */ }
+  }
   app.get(/^\/js\/.+\.js$/, (req, res, next) => {
     if (req.path === '/js/app.js') return next(); // 上面专用路由已处理
     const rel = req.path.replace(/^\/js\//, '');
     if (rel.includes('..')) return res.status(400).end();
-    try {
-      const source = rewriteAppModuleImports(
-        readFileSync(join(selfJsDir, rel), 'utf8'),
-        assetVersion,
-      );
-      res.setHeader('Cache-Control', 'no-cache');
-      return res.type('application/javascript').send(source);
-    } catch {
-      return next(); // 交给 static 404
-    }
+    const source = selfJsSources.get(rel);
+    if (source === undefined) return next(); // 交给 static 404
+    res.setHeader('Cache-Control', 'no-cache');
+    return res.type('application/javascript').send(source);
   });
   app.use(express.static(publicDir, {
     setHeaders: (res, filePath) => {

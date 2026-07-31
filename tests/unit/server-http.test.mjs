@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import {
+  configureHttpShell,
   createHttpAuth,
   rewriteAppModuleImports,
   rewriteIndexAssetUrls,
@@ -263,5 +267,74 @@ test.describe('/push/subscribe 的第二因子：bypass 级信任必须与信任
     const { run, saved } = mount({ isDeviceTrusted: () => true, bypassDeviceApproval: () => false });
     assert.equal(run().status, 200);
     assert.equal(saved.length, 1);
+  });
+});
+
+// /js/** 子模块路由：源码在启动时读完并做完 ?v= 改写，请求期只查表。
+// 每请求 readFileSync 是同步阻塞事件循环的磁盘访问，而这条路由在鉴权之前（静态资源必须登录前可取），
+// 与同文件里 indexHtml/appJs 的启动预读也不一致。「改了 js 要重启」不是新约束——assetVersion 本就是
+// 启动时哈希算的，不重启 ?v= 也不换。
+test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
+  const roots = [];
+  test.after(() => { for (const dir of roots) rmSync(dir, { recursive: true, force: true }); });
+
+  function mount() {
+    const root = mkdtempSync(join(tmpdir(), 'ccm-http-shell-'));
+    roots.push(root);
+    mkdirSync(join(root, 'public/js/app'), { recursive: true });
+    writeFileSync(join(root, 'public/index.html'), '<body ><script src="/js/app.js"></script></body>');
+    writeFileSync(join(root, 'public/js/app.js'), "import './app/sub.js';\n");
+    writeFileSync(
+      join(root, 'public/js/app/sub.js'),
+      "import { esc } from '../logic.js';\nexport const BUILD = 'startup';\n",
+    );
+
+    const routes = new Map();
+    const app = { use: () => {}, get: (p, ...h) => routes.set(String(p), h) };
+    configureHttpShell({ app, projectRoot: root, isAccessEnabled: () => false });
+
+    const handlers = routes.get(String(/^\/js\/.+\.js$/));
+    assert.ok(handlers, '未注册 /js/** 子模块路由');
+    const run = path => {
+      const out = { status: 200, body: null, headers: new Map(), nextCalled: false };
+      const res = {
+        status(c) { out.status = c; return this; },
+        setHeader(k, v) { out.headers.set(k, v); return this; },
+        type() { return this; },
+        send(b) { out.body = b; return this; },
+        end() { return this; },
+      };
+      handlers[handlers.length - 1]({ path }, res, () => { out.nextCalled = true; });
+      return out;
+    };
+    return { root, run };
+  }
+
+  test('请求期零磁盘访问：启动后改盘，路由仍发启动时那份（且相对 import 已戳版本）', () => {
+    const { root, run } = mount();
+    writeFileSync(join(root, 'public/js/app/sub.js'), "export const BUILD = 'mutated-after-boot';\n");
+
+    const out = run('/js/app/sub.js');
+    assert.equal(out.status, 200);
+    assert.match(out.body, /BUILD = 'startup'/);
+    assert.doesNotMatch(out.body, /mutated-after-boot/, '请求期又去读盘了');
+    assert.match(out.body, /from '\.\.\/logic\.js\?v=[0-9a-f]{8}'/);
+    assert.equal(out.headers.get('Cache-Control'), 'no-cache');
+  });
+
+  test('路径穿越照旧 400（显式防线不因查表而失效）', () => {
+    const out = mount().run('/js/../../etc/passwd.js');
+    assert.equal(out.status, 400);
+    assert.equal(out.nextCalled, false);
+  });
+
+  test('表里没有的子模块交给 static 去 404', () => {
+    const out = mount().run('/js/never-existed.js');
+    assert.equal(out.nextCalled, true);
+    assert.equal(out.body, null);
+  });
+
+  test('/js/app.js 让给上面的专用路由', () => {
+    assert.equal(mount().run('/js/app.js').nextCalled, true);
   });
 });
