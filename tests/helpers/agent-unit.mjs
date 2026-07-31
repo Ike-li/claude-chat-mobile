@@ -36,11 +36,25 @@ export function makeSession(opts = {}) {
 // 则是 approvalStore.recordCreated 的异步落盘 I/O 恰好撑住了事件循环。两者都不是保证。
 //
 // 真实 server 靠 listening socket 撑着事件循环，这里用一个 ref'd interval 还原同一前提。
-export async function awaitTtlSettled(promise) {
-  const keepAlive = setInterval(() => {}, 1000);
+//
+// ★ keepAlive 必须有界。若 TTL 真的回归、promise 永不 settle（正是这些用例要抓的失败），
+// 控制流到不了 finally，这个 ref'd interval 就永不清除：node:test 照常报 per-test timeout，
+// 但进程被它吊住不退出，job 一路挂到 CI 的 timeout-minutes。实测过——测试 1s 就判失败，
+// 进程 20s 后仍在，得靠外部杀。等于把几秒的局部失败换成挂死的 job。
+// 所以用 budgetMs 兜底：到点主动 reject，finally 清掉 handle，进程照常退出，
+// 且错误信息比 node:test 的泛型 timeout 更能指认病灶。budgetMs 需小于用例自己的 timeout。
+export async function awaitTtlSettled(promise, budgetMs = 2000) {
+  const keepAlive = setInterval(() => {}, 50);
+  let bail;
   try {
-    return await promise;
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        bail = setTimeout(() => reject(new Error(`TTL 未在 ${budgetMs}ms 内结算——到期 timer 没触发`)), budgetMs);
+      }),
+    ]);
   } finally {
     clearInterval(keepAlive);
+    clearTimeout(bail);
   }
 }
