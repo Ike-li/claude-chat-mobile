@@ -10,7 +10,16 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 ## 分支纪律
 
-**日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`）。
+**日常开发在 `feature/xxx` 分支上，经 PR 进 `dev`；`dev`/`master` 都不要直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到）。两层的规矩不一样：
+
+- **`feature/xxx` → `dev`**：从 `dev` 拉分支 → push → 开 PR → 等四个 check（`quality` / `unit-test (20)` / `unit-test (24)` / `e2e`）全绿 → **网页点合并，三种按钮都行**。这一层只往 `dev` 顶端追加 commit，不影响下面那条祖先关系。
+- **`dev` → `master`**：**不开 PR**，这是发版动作，跑 `scripts/release.sh`（bump 版本 → ff 合并 → 打 tag → 建 GitHub Release → 推两分支）。唯一硬约束是 `master` 必须是 `dev` 的祖先，由脚本自己做 ff 来保证。
+
+⚠️ 别用网页按钮合 `dev` → `master`：GitHub 的 "Rebase and merge" 总是生成新 commit SHA（官方文档明写），产物不是 `dev` 的后代，`master` 与 `dev` 就此分叉、只能靠强推 `dev` 收场；GitHub 全站没有 fast-forward-only 选项。真要走网页得先开 `allow_merge_commit`，且每次合完在本地补一句 `git checkout dev && git pull --ff-only origin master && git push origin dev`。
+
+⚠️ 两个分支的 `enforce_admins` 都是 `false`，所以分支保护**拦不住机主本人**——直接 push 只会回显 `Bypassed rule violations` 然后照常推上去。发版的真正闸门是 `release.sh` 里的 `CI=true npm test` 预检（红了 die 中止），不是分支保护。
+
+⚠️ 改 workflow 的 job 名（含加/减矩阵维度——矩阵会把名字变成 `unit-test (20)` 这种形式）必须**同步更新两个分支的 `required_status_checks.contexts`**，否则会造出永不上报的必需检查，PR 恒卡 pending。定 contexts 前先让 CI 真跑一次，照抄 `gh run view <id> --json jobs -q '.jobs[].name'`，不要凭记忆写。
 
 其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`，如 `claude-chat-mobile-promo`=宣传创作区、`claude-chat-mobile-gh-pages`=展示站、`claude-chat-mobile-third-party`=三方代理专用），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
 
