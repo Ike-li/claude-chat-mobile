@@ -13,8 +13,6 @@
 
 > The Agent SDK and claude CLI badges read `package.json` on `master`. The CLI badge records the environment used to verify the latest release; it is not a minimum version requirement.
 
-![Claude Chat Mobile — use your terminal claude from your phone](https://ike-li.github.io/claude-chat-mobile/assets/hero-en.jpg)
-
 Claude Code may keep running while you are away from your computer. Claude Chat Mobile drives your locally authenticated CLI through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), so you can keep editing code, running commands, answering questions, and approving actions from your phone. It does not bundle Claude or create a separate account or session system.
 
 ## Who it is for
