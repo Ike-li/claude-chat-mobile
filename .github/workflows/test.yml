@@ -12,10 +12,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npm test
+      # 不跑 `npm test`（= unit + integration 且带 --test-force-exit）。force-exit 是为集成测试
+      # 加的（起真 server，挂死过），但它会与单测里 await 真实 timer 的异步用例竞态：一旦文件调度
+      # 让那个文件落到尾部，进程就在它跑完前退出，整个 suite 变 cancelledByParent —— 报出来是
+      # 「fail 0 但 cancelled 5」，exit 1。7/30 起 CI 连红即此，与被测代码无关。
+      # test:unit 本就不带该 flag，拆开跑即可，防挂死保护仍留在 integration 上。
+      - run: npm run test:unit
+      - run: npm run test:integration
 
   e2e:
     runs-on: ubuntu-latest
@@ -24,7 +30,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: npm
 
       - run: npm ci
