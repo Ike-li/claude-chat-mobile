@@ -152,4 +152,28 @@ test.describe('P0 回放缓冲：切会话/离开期间积压消息不逐条吐�
 
     await expectNoBrowserErrors(page);
   });
+
+  // P0-NOSID（2026-07-30 真机 bc29ccc2）：web 发起 /code-review max，CLI 因第三方网关故障 31 分钟没吐
+  // system/init——实例活着、事件在实时流、手机上看得见内容，但 server 侧还没有 sessionId，磁盘
+  // transcript 也一条主链消息都没有（CLI 的 stdout 流与它自己的落盘是两条独立通道，前者永远更新）。
+  // 此时整页刷新走 !hasCache && replayed>0 → 'reload'：清屏后拿 session:history 换回「会话不存在」
+  // → 白屏，把 CLI 已经给过的内容自己扔了。修复是 shouldReloadOnEnter / syncAckAction /
+  // resolveReplayBufferAction 各加一条 hasSessionId 闸（logic.js，均有单测）。
+  // 这条 E2E 保的是【接线】——纯函数单测抓不到 app.js 把参数传错/漏传。
+  // 判据用内容标记法（同上面两个用例）：缓冲回放的文案必须出现，磁盘那段必须不出现。
+  test('P0-NOSID 无 sessionId 的活实例：整页刷新后保留缓冲回放，不清屏换空磁盘', async ({ page }) => {
+    await gotoMock(page); // 内部会 POST /__reset，故武装必须在它之后
+    await page.request.post('/__arm-no-session-id');
+
+    await page.reload();
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+
+    // 核心断言 1：缓冲回放的内容渲染出来了——修复前这里是空白（clearView 清屏 + 磁盘拿不到）。
+    await expect(page.locator('#messages')).toContainText('NOSID_LIVE_FROM_BUFFER', { timeout: 10_000 });
+    // 核心断言 2：绝不能出现磁盘文案。它一旦出现就说明前端仍在清屏改走 session:history——
+    // 真实环境下那条路换回来的是「会话不存在」，即白屏。
+    await expect(page.locator('#messages')).not.toContainText('NOSID_DISK_MUST_NOT_APPEAR');
+
+    await expectNoBrowserErrors(page);
+  });
 });

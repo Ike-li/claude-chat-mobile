@@ -971,8 +971,13 @@ export function projectDisplayName(path) {
 // 新会话用的既有判据（否则会把已有内容的聊天视图错误地打回主页/新会话页）。要求 viewingInstanceId 非空
 // 才生效——调用方须自行把 freshInterrupted 收窄到"确实是当前正在看的这个实例"（见 app.js
 // freshInterruptedInstanceId），此处只再兜底一次，防止无实例的真空首页被意外绕过。
-export function shouldShowStartScreen({ viewingInstanceId, sessionId, freshInterrupted = false } = {}) {
+// live：该实例此刻正在跑（在途轮 / busy）。sessionId 还没到不代表没内容可看——CLI 的实时输出经 SDK
+// 一路推到前端，与它自己往 transcript 落盘是两条独立通道，前者永远更早。真机 2026-07-30 bc29ccc2：
+// CLI 因第三方网关故障 31 分钟没吐 system/init，期间实例活着、事件在流，旧判据却把它判成「空首页」，
+// bindView 当场 return，服务端环形缓冲里那 31 分钟内容一条都到不了屏幕。
+export function shouldShowStartScreen({ viewingInstanceId, sessionId, freshInterrupted = false, live = false } = {}) {
   if (viewingInstanceId && freshInterrupted) return false;
+  if (viewingInstanceId && live) return false;
   return !viewingInstanceId || !sessionId;
 }
 
@@ -1027,9 +1032,9 @@ export function detectServerRestart({ prevStartedAt = null, newStartedAt = null 
 //   compose = 干净新会话页（工作区确认 + 默认档 + 示例 prompt），输入条显示
 // 判定：instanceDestroyed 优先于其余三态（这是比常规空表面更需要用户关注的非常规状态）；
 // 其余沿用原判定：先 shouldShowStartScreen；再看 composeReady（点 ＋ / session:new）。
-export function resolveEmptySurface({ viewingInstanceId, sessionId, composeReady = false, freshInterrupted = false, instanceDestroyed = false } = {}) {
+export function resolveEmptySurface({ viewingInstanceId, sessionId, composeReady = false, freshInterrupted = false, instanceDestroyed = false, live = false } = {}) {
   if (instanceDestroyed) return 'destroyed';
-  if (!shouldShowStartScreen({ viewingInstanceId, sessionId, freshInterrupted })) return 'none';
+  if (!shouldShowStartScreen({ viewingInstanceId, sessionId, freshInterrupted, live })) return 'none';
   return composeReady ? 'compose' : 'home';
 }
 
@@ -1487,8 +1492,11 @@ export function foregroundReconnectAction(connected) {
 //     无法靠 replayed 自辨「实例没了」与「实例还在只是无新事件」，靠 found 区分）；
 //   其余（有回放 / 无新事件 / 实例还在）→ 'none'：交给正常 agent:event 经 epoch/seq 去重增量渲染。
 // 普通 connect 路径无 timeout、err 恒 null → 不会误判 reconnect。
-export function syncAckAction(err, res, { seenDiskLen = 0 } = {}) {
+export function syncAckAction(err, res, { seenDiskLen = 0, hasSessionId = true } = {}) {
   if (err) return 'reconnect';
+  // 无 sessionId（CLI 未吐 init）：'reload' 会清屏后拿 session:history 换回「会话不存在」→ 白屏。
+  // 同 shouldReloadOnEnter 的首条闸；息屏回前台 / 断网重连不经 bindView，只走这条路径，故两处都要有。
+  if (!hasSessionId) return 'none';
   if (res && res.found === false) return 'reload';
   if (res && res.gap) return 'reload'; // 缓冲超窗、中间有缺口 → 清屏全量重载历史，否则残缺需手刷
   // 同会话重连/probe：活缓冲可能有回放，但 CLI 外部写盘只增 diskLen——必须比 seenDiskLen（G1）
@@ -1521,7 +1529,15 @@ export function syncAckAction(err, res, { seenDiskLen = 0 } = {}) {
 //   数据丢失(正是 #1 盲区)。宁可闪一下、不可漏消息，故保留。
 // ⚠️ 冷入场 reload 的代价：环形缓冲里尚未落盘的实时 thinking/在跑工具卡会被 clearView 清掉；硬刷新本就是
 //   用户主动重入，可接受——后续 live 事件与 pending 快照仍会接上。
-export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seenDiskLen = 0 } = {}) {
+export function shouldReloadOnEnter({ replayed, gap, hasCache, diskLen = 0, seenDiskLen = 0, hasSessionId = true } = {}) {
+  // 实例还没拿到 sessionId（CLI 未吐 system/init）：session:history 无从查起——server 端 handler 的
+  // sessionFileExists 守卫会直接回「会话不存在」，清屏换来的必定是白屏。此时服务端环形缓冲里的回放
+  // 是唯一能看到的内容（它就是 CLI 经 stdout 实时吐出来的那份），宁可残缺也不能清空。
+  // 真机 2026-07-30 bc29ccc2：web 发起 /code-review max，CLI 因第三方网关故障 31 分钟没吐 init，
+  // 期间整页刷新 → 走 !hasCache && replayed>0 → 'reload' → 清屏后拿不回任何东西 → 白屏。
+  // 判据用「有没有 sessionId」而非 diskLen：后者在 replayed>0 时 server 根本不读（恒 null，见
+  // src/server/app.js 的 sync:since），拿 null 当 0 会把整页刷新一律变成 keep，毁掉冷入场拉盘的修复。
+  if (!hasSessionId) return 'keep';
   if (gap) return 'reload';
   // 冷入场（整页刷新/无 DOM 缓存）优先于「有缓冲就 keep」——缓冲只保最近事件，不是全量历史。
   if (!hasCache) return (replayed > 0) ? 'reload' : 'load';
@@ -1576,8 +1592,12 @@ export function shouldForceScrollAfterReplay({ action, replayed } = {}) {
 // 蹦出，正是本次要修的问题本身。
 export const REPLAY_BUFFER_RELOAD_THRESHOLD = 100;
 
-export function resolveReplayBufferAction({ bufferedCount = 0, priorAction, busy = false, threshold = REPLAY_BUFFER_RELOAD_THRESHOLD } = {}) {
+export function resolveReplayBufferAction({ bufferedCount = 0, priorAction, busy = false, hasSessionId = true, threshold = REPLAY_BUFFER_RELOAD_THRESHOLD } = {}) {
   if (priorAction === 'reload' || priorAction === 'load') return 'reload';
+  // 无 sessionId：同 shouldReloadOnEnter 的首条闸——一层已判 'keep'，这层不能因为「积压超阈值」
+  // 就把它升级回 reload，那同样是清屏换一个拿不到的磁盘。busy 分支只覆盖「轮次进行中」，
+  // 轮次结束后再刷新 busy=false，只剩这条闸兜着。
+  if (!hasSessionId) return 'flush';
   if (busy) return 'flush';
   return bufferedCount >= threshold ? 'reload' : 'flush';
 }

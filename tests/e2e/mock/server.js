@@ -57,6 +57,12 @@ let terminalSummaryOtherArmed = false;
 let terminalRaceArmed = false;
 let terminalRaceListCount = 0;
 let terminalCloseRaceOtherArmed = false;
+// P0-NOSID（2026-07-30 真机 bc29ccc2）：CLI 迟迟不吐 system/init 时，实例活着、事件在实时流，但
+// server 侧还没有 sessionId，磁盘 transcript 也一条主链消息都没有。此时整页刷新若清屏改走
+// session:history，换回来的是「会话不存在」→ 白屏。武装后 inst_1 的 sessionId 变 null（刷新后
+// hydration 广播的还是它，故 flag 必须是模块级、不随连接重置），sync:since 照常回放 live 事件。
+// 用 HTTP 端点而非 test:* 消息武装：整页刷新前后都得生效，且不需要先有一个能发消息的会话。
+let noSessionIdMode = false;
 // 服务状态面板「终端会话推送」段：安装态夹具（test:hooks-installed 拨到已装）
 let mockHooksState = 'not-installed';
 // 真 server 的 instances 广播恒带 service 字段；mock 此前完全没带，导致依赖它的前端段落（如
@@ -133,6 +139,7 @@ function resetMockState() {
   terminalRaceArmed = false;
   terminalRaceListCount = 0;
   terminalCloseRaceOtherArmed = false;
+  noSessionIdMode = false;
   mockHooksState = 'not-installed';
   busySilentSwitchMode = false;
   foregroundSyncReplayMode = false;
@@ -265,6 +272,14 @@ function emitPendingDevices() {
 
 app.post('/__reset', (_req, res) => {
   resetMockState();
+  res.json({ ok: true });
+});
+
+// P0-NOSID：把当前查看实例拨成「活着但还没有 sessionId」（CLI 未吐 init）。见 noSessionIdMode 注释。
+app.post('/__arm-no-session-id', (_req, res) => {
+  noSessionIdMode = true;
+  const inst = mockInstances.find(i => i.instanceId === 'inst_1');
+  if (inst) { inst.sessionId = null; inst.state = 'busy'; }
   res.json({ ok: true });
 });
 
@@ -935,6 +950,12 @@ io.on('connection', socket => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:history sessionId=${sessionId}, cwd=${cwd}`);
     if (typeof callback !== 'function') return;
+    // P0-NOSID 区分度标记：真 server 在无 sessionId 时压根查不到（回「会话不存在」）。这里故意返回一段
+    // 可识别文案——只要它出现在页面上，就说明前端仍然清屏改走了磁盘，即修复失效。断言它「不出现」。
+    if (noSessionIdMode) {
+      callback({ messages: [{ role: 'assistant', content: 'NOSID_DISK_MUST_NOT_APPEAR', uuid: 'a-nosid-disk' }] });
+      return;
+    }
     if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
       callback({
         messages: [
@@ -1275,6 +1296,21 @@ io.on('connection', socket => {
         callback({ ok: true, replayed, pending, unreadOnEntry, ...extra });
       }
     };
+    // P0-NOSID：无 sessionId 的活实例——回放 live 事件（replayed>0），模拟「事件在流、磁盘还没有」。
+    // 前端此时若走 reload 就会清屏拉 session:history（下面那条 handler 会返回一段绝不该出现的文案），
+    // 正确行为是保留缓冲回放。放在 inst_2 分支之前：它按 instanceId 分流，不会互相干扰。
+    if (noSessionIdMode && instanceId === 'inst_1') {
+      socket.emit('agent:event', {
+        seq: 1, epoch: 'mock-epoch-nosid', sessionId: null, instanceId: 'inst_1', ts: Date.now(),
+        type: 'user_message', payload: { text: 'NOSID_USER_ASK' }
+      });
+      socket.emit('agent:event', {
+        seq: 2, epoch: 'mock-epoch-nosid', sessionId: null, instanceId: 'inst_1', ts: Date.now(),
+        type: 'text_delta', payload: { messageId: 'msg_nosid_1', text: 'NOSID_LIVE_FROM_BUFFER' }
+      });
+      ack(2);
+      return;
+    }
     if (instanceId === 'inst_2') {
       if (busySilentSwitchMode) {
         // 静默窗口：只回放 user_message（replayed=1 → !hasCache 触发 reload 分支），

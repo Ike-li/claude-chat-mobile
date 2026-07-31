@@ -988,6 +988,8 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
       const a = syncAckAction(err, res, {
         seenDiskLen: seenDiskLenBySession.get(reqSessionId) ?? 0,
+        // 无 sessionId = session:history 无从查起，清屏必然换来白屏（见 logic.js 该闸注释）
+        hasSessionId: Boolean(reqSessionId),
       });
       if (a === 'reconnect') {
         // 整条连接都要重来：缓冲内容从未渲染过，纯丢弃、不推进续传基线——重连后新一轮 sync:since
@@ -999,7 +1001,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       // 回放缓冲二层判定（同 bindView）：a 已是 'reload' 时直接沿用；'none' 时再看缓冲攒了多少条 +
       // 是否 busy。busy 取 ack 时刻 instances 广播的最新值（该实例此刻正有实时轮次在跑则恒不 reload）。
       const busy = shouldSeedBusyFromInstanceState(instancesList.find(x => x.instanceId === reqInstanceId)?.state);
-      const bufferAction = resolveReplayBufferAction({ bufferedCount: replayBuffer.bufferedCount(reqInstanceId), priorAction: a, busy });
+      const bufferAction = resolveReplayBufferAction({ bufferedCount: replayBuffer.bufferedCount(reqInstanceId), priorAction: a, busy, hasSessionId: Boolean(reqSessionId) });
       // 未读胶囊：这是"同一会话内断线重连"路径（镜像视图架构下最常见的"切出去"形态——锁屏/切后台冻结页面
       // 断开 socket，viewingInstanceId 全程不变，故不会走 bindView，只会走到这里）。DOM 是否就绪同样分叉：
       // 'reload' 要等 reloadCurrentFromHistory 的 onDone；其余（回放走正常 agent:event 增量渲染）DOM 已稳定。
@@ -1531,6 +1533,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       bufferedCount,
       priorAction: 'keep',
       busy: false,
+      // 无 sessionId 时这里的 'reload' 语义是「丢弃缓冲队列只推进基线」——但磁盘上没有任何东西能补回来，
+      // 丢了就是永久丢失，只能 flush 把它们渲染出来（见 logic.js 该闸注释）。
+      hasSessionId: Boolean(displayedSessionId),
     }),
   });
   socket.on('agent:event', event => {
@@ -4443,6 +4448,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       composeReady: _composeReady,
       freshInterrupted: id === freshInterruptedInstanceId,
       instanceDestroyed: Boolean(opts.instanceDestroyed),
+      // sessionId 未到但实例正在跑：不落空首页，继续往下走 sync:since——服务端环形缓冲里有 CLI 已经
+      // 实时吐出来的内容，早退就等于把它们扔了（见 logic.js shouldShowStartScreen 的 live 注释）。
+      live: shouldSeedBusyFromInstanceState(entry?.state) || entry?.turnRunning === true,
     });
     if (emptySurface === 'destroyed') {
       showInstanceDestroyedSurface({ byRestart: Boolean(opts.destroyedByRestart), resume: opts.destroyedResume || null });
@@ -4504,14 +4512,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       //   'keep'   缓存/活缓冲即最新真相 → 直接收尾，保留 DOM 秒恢复。
       const action = shouldReloadOnEnter({
         replayed: res?.replayed, gap: res?.gap, hasCache,
-        diskLen: res?.diskLen ?? 0, seenDiskLen: seenDiskLenBySession.get(sid) ?? 0
+        diskLen: res?.diskLen ?? 0, seenDiskLen: seenDiskLenBySession.get(sid) ?? 0,
+        // 无 sessionId = session:history 无从查起，清屏必然换来白屏（见 logic.js 该闸注释）
+        hasSessionId: Boolean(sid),
       });
       // 回放缓冲二层判定（resolveReplayBufferAction，logic.js）：action 已是 'reload'/'load' 时直接
       // 沿用（这层不重判）；'keep' 时再看缓冲攒了多少条 + 是否 busy，决定要不要"补"一次 reload。
       // busy 取 ack 时刻 instances 广播的最新值（同 shouldReseedBusyAfterReload 的口径，优先于入场快照
       // entry?.state——ack 到达前可能已有更新的 instances 广播）。
       const busy = shouldSeedBusyFromInstanceState(instancesList.find(x => x.instanceId === id)?.state ?? entry?.state);
-      const bufferAction = resolveReplayBufferAction({ bufferedCount: replayBuffer.bufferedCount(id), priorAction: action, busy });
+      const bufferAction = resolveReplayBufferAction({ bufferedCount: replayBuffer.bufferedCount(id), priorAction: action, busy, hasSessionId: Boolean(sid) });
       // 未读胶囊：数字随 ack 一次性到达，但 DOM 是否已就绪要看走哪条分支——'load'/'reload' 要等
       // loadHistory 分块渲染真正落地（onDone）才能查 topLevelBubbles()，'keep' 分支 DOM 已稳定可以直接查。
       const unreadOnEntry = res?.unreadOnEntry || 0;

@@ -251,6 +251,7 @@ test.describe('foregroundReconnectAction / syncAckAction', () => {
   test('普通 connect 路径 err=null + res 缺省 → none（无 ack 内容不误动作）', () => {
     assert.equal(syncAckAction(null, undefined), 'none');
   });
+
 });
 
 test.describe('shouldReloadOnEnter：切入会话时该用缓存/活缓冲还是磁盘全量重载', () => {

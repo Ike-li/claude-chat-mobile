@@ -110,3 +110,24 @@ test("resolveEmptySurface: instanceDestroyed=true → 'destroyed'（优先于 ho
   assert.equal(resolveEmptySurface({ viewingInstanceId: null, sessionId: null, instanceDestroyed: false }), 'home');
   assert.equal(resolveEmptySurface({ viewingInstanceId: null, sessionId: null }), 'home');
 });
+
+// live 豁免（2026-07-30 真机 bc29ccc2）：web 发起 /code-review max，CLI 因第三方网关故障 31 分钟没吐
+// system/init——实例活着、轮次在跑、事件在实时流，但还没有 sessionId。旧判据 `!sessionId → 空首页`
+// 把它判成「没有会话可显示」，bindView 当场 showDashboard() 就 return，压根走不到 sync:since，
+// 于是服务端环形缓冲里那 31 分钟的内容一条都到不了屏幕上（用户看到的是空首页叠着实时告警条）。
+// 「实例在跑」是比「有没有 sessionId」更贴近用户认知的判据：正在跑就说明有东西可看。
+test("resolveEmptySurface: 无 sessionId 但实例在跑(live) → 'none'（不落空首页，让 bindView 继续走会话流）", () => {
+  assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: null, live: true }), 'none');
+  // composeReady 也不得把它拽回 compose——正在跑的实例优先于「点了 ＋ 想新建」的意图
+  assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: null, composeReady: true, live: true }), 'none');
+});
+test("resolveEmptySurface: live 需要 viewingInstanceId 兜底（没有实例可看时仍落 home）", () => {
+  assert.equal(resolveEmptySurface({ viewingInstanceId: null, sessionId: null, live: true }), 'home');
+});
+test("resolveEmptySurface: instanceDestroyed 仍优先于 live（被摧毁要用户确认，不能被当成在跑）", () => {
+  assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: null, live: true, instanceDestroyed: true }), 'destroyed');
+});
+test("resolveEmptySurface: live 缺省 false → 无 sessionId 仍落 home（不连坐既有行为）", () => {
+  assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: null }), 'home');
+  assert.equal(resolveEmptySurface({ viewingInstanceId: 'inst_1', sessionId: null, composeReady: true }), 'compose');
+});
