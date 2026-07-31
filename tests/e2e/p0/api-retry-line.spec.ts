@@ -37,6 +37,28 @@ test.describe('P0 API 重试与 SDK 提示的可见性', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 刷新后从磁盘读回来的 API Error 此前退化成普通助手气泡（正文里那句 "API Error:" 是唯一线索）。
+  // 后端带出 isApiErrorMessage/apiErrorStatus 的部分已用真实 transcript 验证；这里锁前端渲染。
+  test('P0-30c 历史里的 API Error 渲染成错误条，不退化为普通助手气泡', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await sendChatMessage(page, 'test:history-apierror');
+
+    // 错误条：与 live 侧 error 事件同一语义色（含 ⚠️ 前缀），不是 assistant 气泡
+    const errBars = page.locator('#messages .msg-frame.text-danger');
+    await expect(errBars).toHaveCount(2, { timeout: 20_000 });
+    await expect(errBars.nth(0)).toContainText('⚠️ API Error: 503');
+    // 第二条 apiErrorStatus=null（连接错误无 HTTP 响应，真实高频形态）——同样要标成错误
+    await expect(errBars.nth(1)).toContainText('流式连接异常中断');
+    // 同一批历史里的普通助手消息仍走气泡，不被连坐
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('普通回复不受影响');
+    // 关键回归：错误条不得同时是 assistant 气泡（那就是没走差异化分支）
+    await expect(page.locator('[data-testid="assistant-message"]').filter({ hasText: 'API Error: 503' })).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-30b SDK 自由文本提示（notice）按级别上屏，不再蒸发进日志', async ({ page }) => {
     await gotoMock(page);
     await ensureComposerReady(page);

@@ -90,6 +90,44 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // 历史里的 API Error 差异化渲染。走 history_append（前端 onHistoryAppend → renderHistoryBubbles，
+      // 与刷新后 loadHistory 同一渲染器），字段形态复刻 src/sessions/history.js 真实产出：
+      // isApiErrorMessage/apiErrorStatus/apiError 只挂文本条。apiErrorStatus 有 null 的真形态
+      // （连接错误无 HTTP 响应），这里两种都给。
+      command: 'test:history-apierror',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId } = getContext();
+        console.log('[mock] Starting test:history-apierror sequence');
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'history_append',
+          payload: {
+            external: true,
+            messages: [
+              { role: 'user', content: '继续', uuid: 'u-apierr-1' },
+              {
+                role: 'assistant',
+                content: 'API Error: 503 Gateway Error: 没有可用的内网节点',
+                uuid: 'a-apierr-1',
+                isApiErrorMessage: true,
+                apiErrorStatus: 503,
+                apiError: 'server_error',
+              },
+              {
+                role: 'assistant',
+                content: 'API Error: Gateway Error: 流式连接异常中断',
+                uuid: 'a-apierr-2',
+                isApiErrorMessage: true,
+                apiErrorStatus: null,
+                apiError: 'unknown',
+              },
+              { role: 'assistant', content: '普通回复不受影响', uuid: 'a-apierr-3' },
+            ],
+          },
+        });
+      },
+    },
+    {
       command: 'test:tool',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
