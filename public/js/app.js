@@ -7246,31 +7246,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
   }
 
-  // 复制到剪贴板：优先 async Clipboard API；局域网 http（非安全上下文）下它不可用，回退隐藏 textarea+execCommand。
-  async function copyToClipboard(text) {
-    try {
-      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
-    } catch { /* 权限拒绝/非安全上下文：落到回退 */ }
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      return ok;
-    } catch { return false; }
-  }
-
   // 「复制全部」：把当前抽屉可见日志拼成多行文本，发给电脑 / 贴给 Claude 排障——手机端唯一带走途径。
   const consoleCopy = $('consoleCopy');
   if (consoleCopy) {
     consoleCopy.onclick = async () => {
       const text = formatLogsForCopy(lastRenderedLogs);
       if (!text) return;
-      const ok = await copyToClipboard(text);
+      const ok = await copyText(text);
       const orig = consoleCopy.textContent;
       consoleCopy.textContent = ok ? t('已复制') : t('复制失败');
       setTimeout(() => { consoleCopy.textContent = orig; }, 1500);
