@@ -448,6 +448,18 @@ export function shouldClearInterruptPendingOnSystem(payload = {}) {
   return false;
 }
 
+// system 条的语义色。kind:'notice' 承载 SDK 的一批自由文本（informational / mirror_error /
+// notification / model_refusal_* / compact_error / 额度耗尽 / 子 agent 报错），按 level 分级；
+// 其余既有 system（已中断、上下文已压缩、排队回执…）恒中性灰。
+// level 只在 notice 语义下生效——防止别处误带 level 把中性回执染色。
+export function systemBarClass(payload = {}) {
+  const p = payload && typeof payload === 'object' ? payload : {};
+  if (p.kind !== 'notice') return 'text-ink-faint';
+  if (p.level === 'error') return 'text-danger';
+  if (p.level === 'warning') return 'text-warning';
+  return 'text-ink-faint';
+}
+
 // UX-010：横幅优先级仲裁（同屏最多一条）。
 // mirror 状态已迁到 input placeholder + 续接钮，#mirrorBanner 恒隐——不得再压住 task_progress
 // （多子代理/后台任务进度是用户在只读时仍需要看到的）。
@@ -1935,22 +1947,6 @@ export function presentTurnResult(payload = {}, opts = {}) {
   };
 }
 
-// CLI "Retrying in 4s · attempt 2/10" 的 web 横幅文案。字段来自 SDK system/api_retry 经 agent 归一后的 payload。
-export function formatApiRetryBanner(payload = {}) {
-  const p = payload && typeof payload === 'object' ? payload : {};
-  const attempt = Number(p.attempt);
-  const maxRetries = Number(p.maxRetries ?? p.max_retries);
-  const delayMs = Number(p.delayMs ?? p.retry_delay_ms);
-  const hasAttempt = Number.isFinite(attempt) && attempt > 0;
-  const hasMax = Number.isFinite(maxRetries) && maxRetries > 0;
-  const secs = Number.isFinite(delayMs) && delayMs > 0 ? Math.ceil(delayMs / 1000) : 0;
-  const err = typeof p.error === 'string' ? p.error : '';
-  const kind = err === 'rate_limit' ? t('限流重试中') : err === 'overloaded' ? t('过载重试中') : t('重试中');
-  const frac = hasAttempt && hasMax ? ` · ${attempt}/${maxRetries}` : (hasAttempt ? ` · ${t('第 N 次').replace('N', String(attempt))}` : '');
-  const wait = secs > 0 ? ` · ${secs}s ${t('后')}` : '';
-  return `${kind}${frac}${wait}`;
-}
-
 function formatAgo(ms) {
   if (!Number.isFinite(ms) || ms < 60000) return t('刚刚');
   const mins = Math.floor(ms / 60000);
@@ -2364,6 +2360,37 @@ export function formatCliSpinnerLine({
     else if (sinceLastEventSec >= LIVE_STALE_HINT_SEC) segs.push(t('仍在等待响应'));
   }
   return `${glyph} ${v}… (${segs.join(' · ')})`;
+}
+
+// CLI 式 API 重试行：✻ API 错误 503 · 4s 后重试 · 第 2/10 次
+// 整行顶替 spinner——CLI 亦如此（retryStatus ? 重试行 : spinner 行 的二选一，而非往括号里加段；
+// CLI spinner 括号只有 suffix/elapsed/tokens/thinking 四个槽，没有错误位）。
+// errorStatus 为 null 是真实高频形态（连接超时无 HTTP 响应，见 sdk.d.ts SDKAPIRetryMessage 注释），
+// 走「等待 API 响应 … 检查网络」分支，对齐 CLI 的 stalled 文案，绝不显示 undefined。
+// 边界：SDK 的 api_retry payload 只给状态码 + 错误枚举，没有上游报文原文；原文只能等重试耗尽后的
+// 终态 error 事件（agent.js 从 assistant.error 的 message.content 透传）。此行不伪造原文。
+export function formatCliRetryLine({
+  attempt = null,
+  maxRetries = null,
+  remainingSec = null,
+  errorStatus = null,
+  glyph = '✻',
+} = {}) {
+  const status = Number(errorStatus);
+  const hasStatus = Number.isFinite(status) && status > 0;
+  const head = hasStatus ? `${t('API 错误')} ${status}` : t('等待 API 响应');
+  const segs = [];
+  // null/undefined 表示「没有倒计时数据」→ 省略段；0 是真实状态（马上重试）→ 照显
+  const rs = remainingSec === null || remainingSec === undefined || remainingSec === '' ? NaN : Number(remainingSec);
+  if (Number.isFinite(rs)) segs.push(t('Ns 后重试').replace('N', String(Math.max(0, Math.floor(rs)))));
+  const a = Number(attempt);
+  const m = Number(maxRetries);
+  const hasAttempt = Number.isFinite(a) && a > 0;
+  const hasMax = Number.isFinite(m) && m > 0;
+  if (hasAttempt && hasMax) segs.push(t('第 A/B 次').replace('A', String(a)).replace('B', String(m)));
+  else if (hasAttempt) segs.push(t('第 N 次').replace('N', String(a)));
+  if (!hasStatus) segs.push(t('检查网络'));
+  return segs.length ? `${glyph} ${head} · ${segs.join(' · ')}` : `${glyph} ${head}`;
 }
 
 // thinking 秒数 burst 累计：delta 间隔 ≤ gapMs 计入时长，超 gap 视为新 burst 不补空档；首帧只记 lastTs。

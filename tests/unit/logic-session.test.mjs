@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, formatApiRetryBanner, applyGatewaySuffix } from '../../public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -121,21 +121,6 @@ test('presentTurnResult: 缺字段安全（durationMs 缺省 0 → for 0s）', (
   assert.equal(ui.kind, 'success');
   assert.equal(ui.statusBar.text, '✻ Baked for 0s');
   assert.equal(presentTurnResult(null).kind, 'success'); // payload=null 仍安全
-});
-
-// CLI: "Retrying in 4s · attempt 2/10" — web 横幅文案对齐，瞬时覆盖不堆历史条
-test('formatApiRetryBanner: 限流 + 次数 + 等待秒数', () => {
-  assert.equal(
-    formatApiRetryBanner({ attempt: 2, maxRetries: 10, delayMs: 4000, error: 'rate_limit' }),
-    '限流重试中 · 2/10 · 4s 后',
-  );
-});
-
-test('formatApiRetryBanner: overloaded / 缺字段 / 非数字安全', () => {
-  assert.equal(formatApiRetryBanner({ attempt: 1, maxRetries: 3, delayMs: 500, error: 'overloaded' }), '过载重试中 · 1/3 · 1s 后');
-  assert.equal(formatApiRetryBanner({ attempt: 2, delayMs: 0 }), '重试中 · 第 2 次');
-  assert.equal(formatApiRetryBanner({}), '重试中');
-  assert.equal(formatApiRetryBanner(null), '重试中');
 });
 
 test('summarizeOtherWorkspaces: aborted 不点亮顶部，但不遮蔽 error', () => {

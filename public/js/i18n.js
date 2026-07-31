@@ -453,12 +453,15 @@ export const EN_DICT = Object.freeze({
   '⏹ 任务已中止': '⏹ Task interrupted',
   '⚠️ 任务出错': '⚠️ Task failed',
   '✅ 任务完成': '✅ Task done',
-  '限流重试中': 'Rate-limited, retrying',
-  '过载重试中': 'Overloaded, retrying',
-  '重试中': 'Retrying',
-  // 占位符 N 由调用方 replace 填数：整句进词典才能各自成句，避免「次」在不同语境下打架。
+  // API 重试行（整行顶替 spinner，对齐 CLI "✻ API error · Retrying in 4s · attempt 2/10"）。
+  // errorStatus 为 null（连接超时无 HTTP 响应）走「等待 API 响应 … 检查网络」分支。
+  'API 错误': 'API error',
+  '等待 API 响应': 'Waiting for API response',
+  '检查网络': 'check your network',
+  // 占位符 N / A、B 由调用方 replace 填数：整句进词典才能各自成句，避免「次」在不同语境下打架。
+  'Ns 后重试': 'retrying in Ns',
+  '第 A/B 次': 'attempt A/B',
   '第 N 次': 'attempt N',
-  '后': 'later',
   '响应较慢，可能是深度思考或网络问题': 'Slow response — could be deep thinking, or the network',
   '仍在等待响应': 'Still waiting for a response',
 

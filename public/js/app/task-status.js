@@ -1,4 +1,4 @@
-import { bgTaskListCollapsed, formatApiRetryBanner, formatBgTaskRowLabel, formatProgressHistoryEntry, taskDetailState, taskStopUiState } from '../logic.js';
+import { bgTaskListCollapsed, formatBgTaskRowLabel, formatProgressHistoryEntry, taskDetailState, taskStopUiState } from '../logic.js';
 import { t } from '../i18n.js';
 
 export function createTaskStatusController(context, {
@@ -14,7 +14,6 @@ export function createTaskStatusController(context, {
   /** @type {Map<string, { message: string, taskType: string|null, lastToolName?: string|null, description?: string|null, subagentType?: string|null }>} */
   const tasks = new Map();
   let activeTaskId = null;
-  let apiRetryActive = false;
   // 多任务列表折叠时的用户表态：null=未表态（按阈值走默认折叠）；瞬态，横幅撤下（hideProgress）即重置。
   let userExpanded = null;
   // 详情面板：累积 task_progress 历史 + 当前展开的任务
@@ -23,34 +22,18 @@ export function createTaskStatusController(context, {
   const HISTORY_CAP = 20; // 每任务最多保留 20 条历史
   let activeDetailId = null;
 
+  // 活动横幅只服务子 agent/Workflow 启动。API 重试**不**走这里——它已迁到流内状态行
+  // （app.js liveLine.retry，对齐 CLI 的整行顶替）；旧实现与这里共用 DOM，既会互相摧毁文案，
+  // 又被 reconcileBanners 的 task 优先级必现压掉。
   function showActivity(description) {
     if (!dom.activityBanner || !dom.activityBannerText) return;
-    apiRetryActive = false;
     const text = String(description || '');
     dom.activityBannerText.textContent = text.length > 80 ? `${text.slice(0, 77)}...` : text;
     dom.activityBanner.classList.remove('hidden');
   }
 
   function hideActivity() {
-    apiRetryActive = false;
     dom.activityBanner?.classList.add('hidden');
-  }
-
-  function showApiRetry(text) {
-    if (!dom.activityBanner || !dom.activityBannerText) return;
-    apiRetryActive = true;
-    dom.activityBannerText.textContent = text.length > 80 ? `${text.slice(0, 77)}...` : text;
-    dom.activityBanner.classList.remove('hidden');
-  }
-
-  function clearApiRetry() {
-    if (apiRetryActive) hideActivity();
-  }
-
-  function onApiRetry(event) {
-    if (event.instanceId && event.instanceId !== context.state.viewingInstanceId) return false;
-    showApiRetry(formatApiRetryBanner(event.payload || {}));
-    return true;
   }
 
   // 唯一的滚动容器：详情已内联进任务卡片，若列表不封顶，6 个任务 × 20 条历史会把 composer footer
@@ -389,10 +372,8 @@ export function createTaskStatusController(context, {
 
   if (autoBind) bind();
   return {
-    clearApiRetry,
     hideActivity,
     hideProgress,
-    onApiRetry,
     onComplete,
     onProgress,
     showActivity,

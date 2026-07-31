@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, pickSpinnerVerb, formatCliSpinnerLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
+import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
 import { verifyIntegrity } from './canonicalize.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
@@ -688,6 +688,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function renderLiveLineText() {
     if (!liveLine) return formatLiveActivityText('default');
     if (liveLine.override) return liveLine.override;
+    // API 重试期间整行顶替 spinner（对齐 CLI 的 retryStatus ? 重试行 : spinner 行 二选一）。
+    // 排在 override 之后：用户点了「停止」时「正在停止…」优先，重试信息已无意义。
+    if (liveLine.retry) {
+      const { deadline } = liveLine.retry;
+      return formatCliRetryLine({
+        ...liveLine.retry,
+        remainingSec: deadline ? Math.max(0, Math.ceil((deadline - Date.now()) / 1000)) : null,
+      });
+    }
     // 发送 ack 前的短暂阶段：独立文案，不走 spinner
     const phase = resolveLiveWaitPhase({ sendInFlight: _sendInFlightSessionIds.has(displayedSessionId), sawContentDelta: liveLine.sawContentDelta });
     if (phase === 'sending') return formatLiveActivityText('sending');
@@ -711,6 +720,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (textEl) { textEl.textContent = renderLiveLineText(); return; }
     }
     if (_busyState) showStreamLiveStatus(renderLiveLineText());
+  }
+  // 重试已过、流恢复 → 撤掉重试行，回落普通 spinner。由 text_delta/thinking_delta/tool_use 三处驱动
+  // （任一到达都说明这一轮的 API 请求真的通了）；setBusy(false) 会整清 liveLine，无需在此重复。
+  function clearLiveRetry() {
+    if (!liveLine?.retry) return;
+    liveLine.retry = null;
+    renderLiveLine();
   }
   function startLiveTicker() {
     if (liveTicker) return;
@@ -802,8 +818,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   });
   let showActivityBanner = taskStatus.showActivity;
   let hideActivityBanner = taskStatus.hideActivity;
-  const clearApiRetryBanner = taskStatus.clearApiRetry;
-  const onApiRetry = taskStatus.onApiRetry;
   let onTaskProgress = taskStatus.onProgress;
   let hideTaskProgress = taskStatus.hideProgress;
   const onTaskNotification = taskStatus.onComplete;
@@ -1471,9 +1485,23 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (relevant && liveLine) liveLine.lastEventAt = Date.now();
         return relevant;
       },
+      // API 重试：CLI 把整条 spinner 行顶替成 "✻ API error · Retrying in 4s · attempt 2/10"，
+      // web 对齐同一语义——写进 liveLine.retry 由 renderLiveLineText 整行顶替。不再走底部横幅：
+      // 旧横幅与后台任务/子 agent 争抢同一 DOM，且被 reconcileBanners 的 task 优先级必现压掉。
+      // deadline 存绝对时刻而非 delayMs——已有的 1s ticker 据此重算，倒计时才走得动。
       api_retry: (ev) => {
-        onApiRetry(ev);
-        if (liveLine) liveLine.lastEventAt = Date.now();
+        if (ev.instanceId && viewingInstanceId && ev.instanceId !== viewingInstanceId) return;
+        if (!liveLine) return;
+        liveLine.lastEventAt = Date.now();
+        const p = ev.payload || {};
+        const delayMs = Number(p.delayMs ?? p.retry_delay_ms);
+        liveLine.retry = {
+          attempt: Number(p.attempt) || null,
+          maxRetries: Number(p.maxRetries ?? p.max_retries) || null,
+          deadline: Number.isFinite(delayMs) && delayMs > 0 ? Date.now() + delayMs : null,
+          errorStatus: p.errorStatus ?? p.error_status ?? null,
+        };
+        renderLiveLine();
       },
       history_append: onHistoryAppend,
       mirror_state: onMirrorState,
@@ -1744,7 +1772,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (_composeReady) refreshComposeDefaultsSummary();
     },
     text_delta(p) {
-      clearApiRetryBanner(); // 重试已过，流恢复——撤掉「重试中 n/m」横幅
+      clearLiveRetry(); // 重试已过，流恢复——状态行从重试态回落普通 spinner
       // 子 agent 正文：嵌进可折叠卡（不污染主流气泡）；parentToolUseId = 主 Agent/Task 的 toolUseId
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
@@ -1773,7 +1801,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     },
     thinking_delta(p) {
-      clearApiRetryBanner();
+      clearLiveRetry();
       if (isSubagentPayload(p)) {
         const sa = ensureSubagentCard(p.parentToolUseId, p.subagentType);
         getSubagentThinking(sa, p.messageId).body.appendData(p.text);
@@ -1791,7 +1819,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     },
     tool_use(p) {
-      clearApiRetryBanner();
+      clearLiveRetry();
       // 工具卡片摘要：formatToolSummary 把紧凑 JSON pretty 成缩进文本，再套 hljs（与预览变更/聊天代码块同源）。
       // pre 用 whitespace-pre-wrap break-words：手机窄屏允许换行，不再强制横向滚一整行。
       // UX-002：收起态标题「工具名 · inputSummary 截断」，扫读不必逐张展开；Task 清单工具特化
@@ -2162,7 +2190,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addBar(`⚠️ ${p.message}`, 'text-danger');
       _pendingSendBusySessionId = null;
       setBusy(false);
-      hideActivityBanner(); // 含 api_retry 横幅
+      hideActivityBanner();
       if (resolveTurnEndScroll({ hasFileChangesCard: Boolean(errFileCard) }) === 'file-changes' && errFileCard?.isConnected) {
         try { errFileCard.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); } catch { scrollBottom(true); }
       }
@@ -2183,7 +2211,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     },
     // M7：改用 kind 字段判断中断，不靠字符串匹配（字符串会随 i18n 变化）
     system(p) {
-      addBar(p.message, 'text-ink-faint');
+      addBar(p.message, systemBarClass(p));
       // 中止成功 / 「无可中断任务」失败回执：都必须清 interruptPending（限流重试中点停止的卡死修复）
       if (shouldClearInterruptPendingOnSystem(p)) {
         clearInterruptPending(viewingInstanceId, { keepLiveOverride: p.kind === 'interrupted' });
@@ -5867,7 +5895,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       setBusy(true);
       _turnRunning = true; // 同会话静默换实例：那条刚发出的消息仍在跑，闸不能松
     }
-    hideActivityBanner(); // WS-005：清 activity 横幅（含 api_retry——二者共用 activityBanner + apiRetryBannerActive），否则 A 的活动/重试态残留到空闲的 B（task-progress 已由 setInstances 按实例处理）
+    hideActivityBanner(); // WS-005：清 activity 横幅，否则 A 的子 agent 活动态残留到空闲的 B（task-progress 已由 setInstances 按实例处理；API 重试态随 liveLine 一起销毁）
 
     // Clear stale status line and hide details row to prevent latency layout flashes
     if (cliStatusEl) cliStatusEl.innerHTML = '';
@@ -6477,6 +6505,15 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     };
     function renderOne(msg) {
+      // API 报错条：live 侧走 error 事件渲染成红条，刷新后从磁盘读回来须保持同一视觉语义，
+      // 否则退化成看不出异常的普通助手气泡（正文里那句 "API Error:" 是唯一线索）。
+      // 标记只挂文本条（见 history.js apiErrorField），故不会与 thinking/工具卡分支相撞。
+      if (msg?.isApiErrorMessage) {
+        const bar = el('<div class="msg-frame text-center text-xs text-danger"></div>');
+        bar.textContent = `⚠️ ${msg.content || ''}`;
+        appendNode(bar, msg);
+        return;
+      }
       if (msg?.kind === 'thinking') {
         const wrap = el(`
           <details class="msg-frame thinking rounded-lg bg-surface border border-line-soft text-xs text-ink-faint">

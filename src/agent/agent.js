@@ -13,6 +13,16 @@ import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { normalizePermissionMode } from './cli-settings-defaults.js';
 
 const BUFFER_CAP = 2000;      // 环形缓冲条数（抬高：长 ultracode/多工具轮少 gap 闪屏；transient 仍不进 buffer）
+// 额度类型标签：语义逐条对齐 CLI bundle 的同源映射表（five_hour="session limit" 等），
+// 保终端等价性；未知枚举回落「用量」而非把裸枚举名甩给用户。
+const RATE_LIMIT_LABELS = Object.freeze({
+  five_hour: '会话额度',
+  seven_day: '周额度',
+  seven_day_opus: 'Opus 周额度',
+  seven_day_sonnet: 'Sonnet 周额度',
+  seven_day_overage_included: 'Fable 5 额度',
+  overage: '用量信用额度',
+});
 const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要默认截断；permission_request 永不截断（4a）
 const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几行
 // ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
@@ -1492,6 +1502,18 @@ export class AgentSession {
     this.onEvent(envelope);
   }
 
+  // SDK 里一批带用户可见正文的 system 子类型（informational / mirror_error / notification /
+  // model_refusal_* / status.compact_error）统一收敛到 system + kind:'notice' + level。
+  // 【为什么不用 error 事件】前端 error(p) 会 finalizeStreams + failPendingToolCards + setBusy(false)，
+  // 把这些非终态提示当成回合终点，会错杀正在跑的轮次。notice 只落一条按 level 配色的条。
+  // 【为什么不新增 event type】26 种契约表不必为「一段文本 + 一个级别」再开一路；system 已有 kind 分流位。
+  // 空正文直接丢弃——宁可无声，也不产一条空白条。
+  emitNotice(message, level = 'info') {
+    const text = truncate(stringify(message).trim(), TOOL_SUMMARY_CAP);
+    if (!text) return;
+    this.emit('system', { message: text, kind: 'notice', level });
+  }
+
   // 瞬时事件旁路：广播给前端做即时 UI 更新，但【不进 replay buffer、不递增 seq】。
   // 用于后台任务进度这类高频心跳——进 buffer 会挤爆环形缓冲、占 seq 会制造空洞被 eventsSince 误判为 gap。
   // 语义：重连不重放（进度是瞬时的、旧进度无回放价值；前端按 transient 标志带外分流、不更新 lastSeq）。
@@ -1623,7 +1645,8 @@ export class AgentSession {
           });
           // F1：fire-and-forget 拉取模型列表（init 到达时兜底；start 中已提前调用，此轮通常幂等）
           this.fetchModels();
-        } else if (msg.subtype === 'status' && msg.status === 'compacting') {
+        } else if (msg.subtype === 'status' && msg.status === 'compacting' && !msg.compact_error) {
+          // !compact_error：万一同一条消息既报 compacting 又带失败原因，别把失败截胡成「正在压缩…」
           this.emit('system', { message: '正在压缩会话上下文…' });
         } else if (msg.subtype === 'compact_boundary') {
           this.emit('system', { message: '上下文已压缩' });
@@ -1696,6 +1719,27 @@ export class AgentSession {
             errorStatus: msg.error_status == null ? null : msg.error_status,
             error: msg.error ?? null,
           });
+        } else if (msg.subtype === 'informational') {
+          // 通用文本横幅（level: info/notice/suggestion/warning）。CLI 会在终端显示，web 同步。
+          this.emitNotice(msg.content, msg.level === 'warning' ? 'warning' : 'info');
+        } else if (msg.subtype === 'mirror_error') {
+          // transcript 落盘失败：不影响本轮对话，但会让「刷新后历史缺失」，属必须让用户知道的降级。
+          this.emitNotice(msg.error, 'warning');
+        } else if (msg.subtype === 'notification') {
+          // 严重度只认 color，【不能用 priority 推】——实测 CLI bundle 里两者正交：priority:"immediate"
+          // 出现 53 次仅 5 次带 color（大量是「Fast mode is now available」这类普通公告），
+          // priority:"high" 26 次一次都不带 color，反而 priority:"medium" 有带 color:"warning" 的。
+          // sdk.d.ts 亦写明 priority 属「REPL notification queue (key/priority/timeout)」的队列语义。
+          this.emitNotice(msg.text, msg.color === 'error' ? 'error' : (msg.color === 'warning' ? 'warning' : 'info'));
+        } else if (msg.subtype === 'model_refusal_fallback' || msg.subtype === 'model_refusal_no_fallback') {
+          // 拒绝原因（api_refusal_explanation）是关键诊断信息——user-facing content 常常只说「已回落」。
+          this.emitNotice(
+            [stringify(msg.content).trim(), stringify(msg.api_refusal_explanation).trim()].filter(Boolean).join('：'),
+            'warning',
+          );
+        } else if (msg.subtype === 'status' && msg.compact_error) {
+          // 压缩失败。上面的 compacting 分支判据是 status==='compacting'，compact_result:'failed' 会漏掉。
+          this.emitNotice(msg.compact_error, 'warning');
         } else if (typeof msg.subtype === 'string' && (msg.subtype.startsWith('hook_') || msg.subtype === 'thinking_tokens')) {
           // 已知生命周期/进度噪声——显式识别后静默吞，不落交互日志抽屉（否则连续刷屏）、
           // 不进 buffer、不启轮、不广播。这不违背下面「不静默蒸发」的初衷：那条是给【未知】子类型兜底的，
@@ -1773,9 +1817,19 @@ export class AgentSession {
           // 记住该子 agent 的类型：后续 stream_event（delta）/ user（tool_result）都不带 subagent_type，靠此缓存补标签。
           // 非 null 保护：一旦记住有效类型，不被后续不带 subagent_type 的同 parent 消息抹成 null。
           if (subType != null) this.subagentTypeByParent.set(msg.parent_tool_use_id, subType);
-          // msg.error：子 agent 自身 API 失败仍不冒泡主会话（P0 守卫）；也不把错误正文当 text_delta。
-          // 非流式成功路径：assistant 上的 text/thinking 须兜底 emit（E1），否则折叠卡 body 空白。
-          if (msg.error) break;
+          // msg.error：子 agent 自身 API 失败【仍不发 error 事件】——前端 error(p) 会 setBusy(false)，
+          // 会把主轮次一起杀掉（这就是这道 P0 守卫的由来）。但也不能像从前那样整条吞掉：子 agent 被限流
+          // 时手机端会完全无感，只看到卡片停在那里。改走 notice（只落一条带级别的条，不动 busy 态），
+          // 正文透传上游原文（SDK 已加 "API Error:" 前缀），枚举桶仅在 content 缺失时兜底。
+          // 也不把错误正文当 text_delta 灌进折叠卡 body。
+          if (msg.error) {
+            const detail = asArray(msg.message?.content)
+              .filter(b => b?.type === 'text' && b.text)
+              .map(b => b.text).join('\n').trim();
+            const who = subType ? `子 agent ${subType}` : '子 agent';
+            this.emitNotice(`${who}：${detail || `API 错误：${msg.error}`}`, 'warning');
+            break;
+          }
           for (const block of msg.message?.content ?? []) {
             if (block.type === 'text' && block.text) {
               this.emit('text_delta', {
@@ -1998,6 +2052,16 @@ export class AgentSession {
         this.assistantResponseBuffer = '';
         this.currentMessageId = null;
         this.sawTextDelta = false;
+        break;
+      }
+
+      case 'rate_limit_event': {
+        // 只有 rejected 才上屏——额度真耗尽、下一条消息发不出去，用户必须知道。
+        // allowed / allowed_warning 的额度百分比已有 status_line.rate 专用通道，重复上屏是噪音。
+        const info = msg.rate_limit_info || {};
+        if (info.status === 'rejected') {
+          this.emitNotice(`已达${RATE_LIMIT_LABELS[info.rateLimitType] || '用量'}上限`, 'warning');
+        }
         break;
       }
 

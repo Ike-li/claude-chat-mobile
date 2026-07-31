@@ -287,6 +287,77 @@ test('getSessionHistory: 形似系统行的真实消息不被误伤；API Error 
   assert.ok(msgs[2].content.startsWith('API Error:'));
 });
 
+// live 侧 API 报错走 error 事件、渲染成红条；刷新后同一条从磁盘读回来若只剩正文，就退化成普通助手
+// 气泡、看不出是错误。transcript 有现成的三个顶层字段（实测样本 521 条），带出来供前端差异化渲染。
+test('getSessionHistory: API Error 条带出 isApiErrorMessage / apiErrorStatus / error 供差异化渲染', async () => {
+  const cwd = '/test/api-error-flags';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'apierr', [
+    { type: 'user', message: { role: 'user', content: '继续' } },
+    // 真实落盘形态：普通 assistant 条 + model:'<synthetic>' + 三个顶层字段
+    {
+      type: 'assistant',
+      message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'API Error: 503 no available channel' }] },
+      error: 'server_error',
+      isApiErrorMessage: true,
+      apiErrorStatus: 503,
+    },
+  ]);
+  const msgs = await getSessionHistory('apierr', cwd, 50, { baseDir: BASE });
+  const err = msgs.find(m => String(m.content).startsWith('API Error:'));
+  assert.ok(err, 'API Error 条仍须保留');
+  assert.equal(err.isApiErrorMessage, true);
+  assert.equal(err.apiErrorStatus, 503);
+  assert.equal(err.apiError, 'server_error');
+  // 普通消息不得被污染（前端据此判分支）
+  assert.equal(msgs[0].isApiErrorMessage, undefined);
+});
+
+test('getSessionHistory: apiErrorStatus 为 null（连接错误无 HTTP 响应）仍标记为错误', async () => {
+  const cwd = '/test/api-error-nostatus';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'nostatus', [
+    {
+      type: 'assistant',
+      message: { role: 'assistant', content: 'API Error: Unable to connect to API (ECONNRESET)' },
+      error: 'unknown',
+      isApiErrorMessage: true,
+      apiErrorStatus: null,
+    },
+  ]);
+  const msgs = await getSessionHistory('nostatus', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs[0].isApiErrorMessage, true);
+  assert.equal(msgs[0].apiErrorStatus, null, '无状态码不影响错误标记本身');
+});
+
+test('getSessionHistory: 错误标记只挂文本条，不污染同 entry 的工具卡/思考块', async () => {
+  const cwd = '/test/api-error-blocks';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'blocks', [
+    {
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: '想一下' },
+          { type: 'text', text: 'API Error: 429 rate limited' },
+          { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } },
+        ],
+      },
+      error: 'rate_limit',
+      isApiErrorMessage: true,
+      apiErrorStatus: 429,
+    },
+  ]);
+  const msgs = await getSessionHistory('blocks', cwd, 50, { baseDir: BASE });
+  const text = msgs.find(m => !m.kind);
+  const thinking = msgs.find(m => m.kind === 'thinking');
+  const tool = msgs.find(m => m.kind === 'tool_use');
+  assert.equal(text.isApiErrorMessage, true);
+  assert.equal(thinking?.isApiErrorMessage, undefined, 'thinking 块不该被标成错误');
+  assert.equal(tool?.isApiErrorMessage, undefined, 'tool_use 块不该被标成错误');
+});
+
 test('getSessionHistory: IDE 集成 / bash 模式注入行（isMeta 缺失）被过滤（实证 code-review #4 漏网）', async () => {
   // 实证：真实 transcript（234 会话）里 CLI 的 IDE 集成注入 <ide_opened_file>/<ide_selection> 与 `!` bash
   // 模式注入 <bash-input>/<bash-stdout>(常内嵌 <bash-stderr>) 共漏 21 条——均 role=user、isMeta 缺失(undefined)、

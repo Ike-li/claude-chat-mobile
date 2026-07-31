@@ -22,6 +22,7 @@ import {
   shouldForceClearBusyFromBroadcast,
   BUSY_BROADCAST_CLEAR_GRACE_MS,
   shouldClearInterruptPendingOnSystem,
+  systemBarClass,
   INTERRUPT_PENDING_TIMEOUT_MS,
 } from '../../public/js/logic.js';
 
@@ -121,6 +122,30 @@ test('shouldClearInterruptPendingOnSystem: 无可中断任务 清位（失败回
 
 test('shouldClearInterruptPendingOnSystem: kind=no_interruptible_task 清位（语言无关，D1）', () => {
   assert.equal(shouldClearInterruptPendingOnSystem({ kind: 'no_interruptible_task', message: 'Nothing to interrupt' }), true);
+});
+
+// system/notice 承载一批 SDK 自由文本（informational/mirror_error/notification/model_refusal_*/
+// compact_error/额度耗尽/子 agent 报错）。级别决定配色——警告类不能和「已中断」这种中性回执同色，
+// 否则用户扫不出「这条要处理」。
+test('systemBarClass: warning → text-warning，error → text-danger', () => {
+  assert.equal(systemBarClass({ kind: 'notice', level: 'warning' }), 'text-warning');
+  assert.equal(systemBarClass({ kind: 'notice', level: 'error' }), 'text-danger');
+});
+
+test('systemBarClass: info / 未知 level / 无 level 一律中性灰', () => {
+  assert.equal(systemBarClass({ kind: 'notice', level: 'info' }), 'text-ink-faint');
+  assert.equal(systemBarClass({ kind: 'notice', level: 'brand_new' }), 'text-ink-faint');
+  assert.equal(systemBarClass({ kind: 'notice' }), 'text-ink-faint');
+});
+
+test('systemBarClass: 非 notice 的既有 system 恒中性灰（不回归）', () => {
+  assert.equal(systemBarClass({ kind: 'interrupted', message: '已中断' }), 'text-ink-faint');
+  assert.equal(systemBarClass({ kind: 'queue_dropped' }), 'text-ink-faint');
+  assert.equal(systemBarClass({ message: '上下文已压缩' }), 'text-ink-faint');
+  assert.equal(systemBarClass({}), 'text-ink-faint');
+  assert.equal(systemBarClass(), 'text-ink-faint');
+  // 防串味：非 notice 即便误带 level 也不变色（level 只在 notice 语义下有效）
+  assert.equal(systemBarClass({ kind: 'interrupted', level: 'warning' }), 'text-ink-faint');
 });
 
 test('shouldClearInterruptPendingOnSystem: 其它 system 不清位', () => {

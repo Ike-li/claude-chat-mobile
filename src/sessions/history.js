@@ -130,6 +130,11 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
           // 分叉锚点只在主链上有效：sidechain（子 agent）消息的 parentUuid 链是另一条支线，forkSession
           // 「保留到该 uuid 为止」对子 agent 消息语义不明确；前端也只在主链气泡上挂长按分叉入口。
           uuid: isSide ? null : entry.uuid,
+          // API 报错条（CLI 落盘为普通 assistant + model:'<synthetic>' + 这三个顶层字段）。
+          // 不带出来的话，刷新后 live 侧的红条会退化成看不出异常的普通助手气泡。
+          isApiErrorMessage: entry.isApiErrorMessage === true,
+          apiErrorStatus: entry.apiErrorStatus ?? null,
+          apiError: entry.error ?? null,
         });
         for (const item of expanded) {
           // 主链 spawn 工具（Agent/Task/Workflow）：记住 id，供后续无 parent 字段的 sidechain 行挂靠
@@ -426,6 +431,11 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
   // 一条 JSONL entry 可能展开出多条文本（罕见，如多段 text block），共享同一 entry uuid——分叉按
   // entry 粒度切分，语义正确（forkSession 的 upToMessageId 是"保留到该消息为止"，不细分块）。
   const uuidField = opts.uuid ? { uuid: String(opts.uuid) } : {};
+  // 错误标记同样只挂文本类展开项：报错正文在 text 块里，同 entry 的 thinking/工具卡不是错误本身。
+  // apiErrorStatus 恒带（含 null——连接超时无 HTTP 响应是真实高频形态，不代表「不是错误」）。
+  const apiErrorField = opts.isApiErrorMessage
+    ? { isApiErrorMessage: true, apiErrorStatus: opts.apiErrorStatus ?? null, apiError: opts.apiError ?? null }
+    : {};
   const pushText = (raw) => {
     let body = raw;
     let attachments = null;
@@ -435,7 +445,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
       if (split.attachments.length) attachments = split.attachments;
     }
     const text = normalizeHistoryText(body);
-    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...(attachments ? { attachments } : {}) });
+    if (text != null) out.push({ role, content: text, timestamp, ...side, ...uuidField, ...apiErrorField, ...(attachments ? { attachments } : {}) });
     else if (attachments) out.push({ role, content: '', timestamp, ...side, ...uuidField, attachments });
   };
   if (typeof content === 'string') {

@@ -32,6 +32,64 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // API 重试态：CLI 会把整条 spinner 行顶替成 "✻ API error · Retrying in 4s · attempt 2/10"。
+      // 【必须是独立命令，绝不并进 test:stream / test:question / test:exitplan】——那三条的 spec 用
+      // /^✻ .+… \(\d+s/ 锚定普通 spinner 形态，而重试行不含 "… ("，混进去会把它们一起打红。
+      command: 'test:api-retry',
+      run: async ({ activeInst }) => {
+        const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
+        console.log('[mock] Starting test:api-retry sequence');
+        const instancesPayload = () => ({
+          viewingInstanceId,
+          viewingCwd: activeInst.cwd,
+          dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+          instances: mockInstances,
+        });
+        activeInst.state = 'busy';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: instancesPayload(),
+        });
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'thinking_delta', payload: { messageId: 'msg_retry_1', text: 'Requesting the model...' },
+        });
+        await delay(400);
+
+        // 网关 503 → 进入重试。复刻 emitTransient 语义：复用当前 seq 不递增、带 transient 标志。
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'api_retry', transient: true,
+          payload: { attempt: 2, maxRetries: 10, delayMs: 4000, errorStatus: 503, error: 'overloaded' },
+        });
+        await delay(2500);
+
+        // 重试成功：正文开流 → 状态行从重试态回落普通 spinner
+        socket.emit('agent:event', {
+          seq: 2, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'text_delta', payload: { messageId: 'msg_retry_1', text: 'Retry succeeded, continuing.' },
+        });
+        await delay(600);
+
+        // SDK 自由文本 notice（informational / mirror_error / … 经 agent.emitNotice 归一后的形态）。
+        // 放在 result【之前】：stream 用例靠 .last() 断言收尾行，落在 result 之后会顶掉那个选择器语义。
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'system', payload: { message: 'transcript write failed: EACCES', kind: 'notice', level: 'warning' },
+        });
+
+        activeInst.state = 'idle';
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: instancesPayload(),
+        });
+        socket.emit('agent:event', {
+          seq: 4, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_retry_1', durationMs: 3000, costUsd: 0, isError: false, models: [activeModel] },
+        });
+      },
+    },
+    {
       command: 'test:tool',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();

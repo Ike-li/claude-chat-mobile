@@ -6,6 +6,7 @@ import {
   SPINNER_VERBS,
   pickSpinnerVerb,
   formatCliSpinnerLine,
+  formatCliRetryLine,
   advanceThinkingClock,
   TURN_DONE_VERBS,
   pickTurnDoneVerb,
@@ -130,6 +131,72 @@ test('formatCliSpinnerLine: sinceLastEventSec≥warn 追加「响应较慢…」
   // 不含 hint 文案
   assert.ok(
     !formatCliSpinnerLine({ verb: 'Stewing', elapsedSec: 90, sinceLastEventSec: 60 }).includes('仍在等待响应'),
+  );
+});
+
+// API 重试态：CLI 会把整条 spinner 行顶替成 "✻ API error · Retrying in 4s · attempt 2/10"
+// （retryStatus ? 重试行 : spinner 行 的二选一，不是往括号里加段）。web 对齐同一语义。
+// 注意 SDK 的 api_retry payload 只有状态码+错误枚举、没有上游报文原文——原文只能等终态 error 事件。
+test('formatCliRetryLine: 有 errorStatus → API 错误 + 状态码 + 活倒计时 + 尝试次数', () => {
+  assert.equal(
+    formatCliRetryLine({ attempt: 2, maxRetries: 10, remainingSec: 4, errorStatus: 503 }),
+    '✻ API 错误 503 · 4s 后重试 · 第 2/10 次',
+  );
+  assert.equal(
+    formatCliRetryLine({ attempt: 1, maxRetries: 10, remainingSec: 1, errorStatus: 429 }),
+    '✻ API 错误 429 · 1s 后重试 · 第 1/10 次',
+  );
+});
+
+// errorStatus 为 null 是真实高频形态（连接超时无 HTTP 响应），须走独立文案而非显示 undefined。
+test('formatCliRetryLine: 无 errorStatus → 等待 API 响应，并追加「检查网络」', () => {
+  assert.equal(
+    formatCliRetryLine({ attempt: 2, maxRetries: 10, remainingSec: 8, errorStatus: null }),
+    '✻ 等待 API 响应 · 8s 后重试 · 第 2/10 次 · 检查网络',
+  );
+  assert.equal(
+    formatCliRetryLine({ attempt: 2, maxRetries: 10, remainingSec: 8 }),
+    '✻ 等待 API 响应 · 8s 后重试 · 第 2/10 次 · 检查网络',
+  );
+});
+
+test('formatCliRetryLine: 倒计时归零仍显示（马上重试），负数钳到 0', () => {
+  assert.equal(
+    formatCliRetryLine({ attempt: 3, maxRetries: 10, remainingSec: 0, errorStatus: 500 }),
+    '✻ API 错误 500 · 0s 后重试 · 第 3/10 次',
+  );
+  assert.equal(
+    formatCliRetryLine({ attempt: 3, maxRetries: 10, remainingSec: -2, errorStatus: 500 }),
+    '✻ API 错误 500 · 0s 后重试 · 第 3/10 次',
+  );
+});
+
+test('formatCliRetryLine: remainingSec 缺失 → 省略倒计时段（不伪造 0s）', () => {
+  assert.equal(
+    formatCliRetryLine({ attempt: 2, maxRetries: 10, errorStatus: 503 }),
+    '✻ API 错误 503 · 第 2/10 次',
+  );
+});
+
+test('formatCliRetryLine: attempt/maxRetries 缺失降级', () => {
+  // 只有 attempt → 第 N 次
+  assert.equal(
+    formatCliRetryLine({ attempt: 2, remainingSec: 4, errorStatus: 503 }),
+    '✻ API 错误 503 · 4s 后重试 · 第 2 次',
+  );
+  // 都没有 → 省略该段
+  assert.equal(
+    formatCliRetryLine({ remainingSec: 4, errorStatus: 503 }),
+    '✻ API 错误 503 · 4s 后重试',
+  );
+  // 全空防御
+  assert.equal(formatCliRetryLine(), '✻ 等待 API 响应 · 检查网络');
+});
+
+test('formatCliRetryLine: 非数字 errorStatus 按无状态码处理', () => {
+  assert.equal(
+    formatCliRetryLine({ attempt: 1, maxRetries: 10, remainingSec: 2, errorStatus: 'boom' }),
+    '✻ 等待 API 响应 · 2s 后重试 · 第 1/10 次 · 检查网络',
   );
 });
 

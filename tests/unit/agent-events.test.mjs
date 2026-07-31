@@ -403,7 +403,12 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     // 子 agent（Task 工具内部）自己的一次 API 报错（如限流），不是主会话级别的失败。
     s.map({ type: 'assistant', error: 'rate_limit', parent_tool_use_id: 'parent-1',
       message: { content: [{ type: 'text', text: 'API Error: 429 Too Many Requests' }] } });
-    assert.equal(events.length, 0, '子 agent 自己的 API 报错不应外露为主会话 error 事件');
+    // P0 不变量：不发 error（前端 error(p) 会 setBusy(false) 把主轮次一起杀掉），
+    // 也不把错误正文当 text_delta 灌进折叠卡正文。
+    assert.equal(events.filter(e => e.type === 'error').length, 0, '子 agent 报错不应外露为主会话 error 事件');
+    assert.equal(events.filter(e => e.type === 'text_delta').length, 0, '错误正文不应混进子 agent 正文流');
+    // 正文本身改走 system/notice 让用户可见（否则子 agent 被限流时手机端完全无感）——
+    // 详见 tests/unit/agent-system-subtypes.test.mjs 的「子 agent 的 API 报错」describe。
     s.dispose();
   });
 
