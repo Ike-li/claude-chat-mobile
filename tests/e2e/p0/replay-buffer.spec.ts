@@ -176,4 +176,28 @@ test.describe('P0 回放缓冲：切会话/离开期间积压消息不逐条吐�
 
     await expectNoBrowserErrors(page);
   });
+
+  // P0-NOSID-B（真机 c1ccd055 续）：上一条修好「刷新后看得到内容」之后，机主发现输入条再也不出现，
+  // 而换个浏览器新开页面却是正常的。根因：CLI 迟到的 init 只会让 instances 广播多出一个 sessionId，
+  // viewingInstanceId 没变 → setInstances 的 `newViewing !== displayedInstanceId` 不成立 → 不重新
+  // bindView。而 setInstances 里 updatePillSession / syncTopContextPillVisibility 都是无条件同步的，
+  // 唯独 syncComposerVisibility 漏了，只能靠 bindView 间接触发——于是 composer 永远停在隐藏。
+  // 新开页面走的是完整 bindView（displayedInstanceId 从 null 变过来），所以看着正常。
+  test('P0-NOSID-B 迟到的 sessionId：实例不变也要把输入条同步出来', async ({ page }) => {
+    await gotoMock(page);
+    await page.request.post('/__arm-no-session-id');
+    await page.reload();
+    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await expect(page.locator('#messages')).toContainText('NOSID_LIVE_FROM_BUFFER', { timeout: 10_000 });
+    // 前置状态：还没有 sessionId，输入条按既有判定隐藏（shouldShowComposer 首条就是 `if (sessionId)`）
+    await expect(page.locator('#composerFooter')).toBeHidden();
+
+    // CLI 吐出 init：同一个实例、同一个 viewingInstanceId，只是广播里多了 sessionId
+    await page.request.post('/__resolve-session-id');
+
+    // 核心断言：输入条必须出现。修复前它永远不出现——只有切走再切回或换浏览器才恢复。
+    await expect(page.locator('#composerFooter')).toBeVisible({ timeout: 10_000 });
+
+    await expectNoBrowserErrors(page);
+  });
 });

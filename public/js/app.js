@@ -4116,6 +4116,11 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     updatePillSession(instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
     // 顶栏文件夹 pill：首页/compose 隐藏（页内已有工作区入口）；进入真实会话后显示
     syncTopContextPillVisibility(newViewing, instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
+    // 输入条同上：必须无条件同步，不能只靠下面 bindView 那条路。CLI 迟到的 init 只会让广播多出一个
+    // sessionId，viewingInstanceId 并没变 → 下面 `newViewing !== displayedInstanceId` 不成立 → 不
+    // 重新 bindView → 输入条会永远停在隐藏（真机 c1ccd055：内容回来了但发不了消息，换个浏览器新开
+    // 页面却正常，因为那是完整 bindView）。syncComposerVisibility 自身读 instancesList 取最新 sid，幂等。
+    syncComposerVisibility();
     // 保持纯手动展开折叠，不自动展开任何工作区目录
 
     // 切视图：viewingInstanceId 变了重载；空首页内换工作区（newViewing 恒 null、cwd 变了）也重渲——

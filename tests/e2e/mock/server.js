@@ -283,6 +283,25 @@ app.post('/__arm-no-session-id', (_req, res) => {
   res.json({ ok: true });
 });
 
+// P0-NOSID 后半段：CLI 终于吐了 init——实例还是同一个（viewingInstanceId 不变，前端不会重新 bindView），
+// 只是 instances 广播里多了 sessionId。验证前端此时把 composer 同步出来（真机 c1ccd055：内容回来了但
+// 输入条再也不出现，因为 setInstances 里只有 pill 两处是无条件同步的，composer 漏了）。
+app.post('/__resolve-session-id', (_req, res) => {
+  noSessionIdMode = false; // 之后 session:history 恢复常规分支（磁盘此时也已落盘）
+  const inst = mockInstances.find(i => i.instanceId === 'inst_1');
+  if (inst) inst.sessionId = 'mock-session-visual-test';
+  io.emit('agent:event', {
+    seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+    type: 'instances', payload: {
+      viewingInstanceId,
+      viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+      dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+      instances: mockInstances, service: mockServicePayload()
+    }
+  });
+  res.json({ ok: true });
+});
+
 // Helper to delay executions to simulate streaming behavior
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
