@@ -1,0 +1,275 @@
+# Getting Started
+
+> Goal: start with a computer where `claude` already works, run Claude Chat Mobile, and send the first message from your phone.
+
+[中文](getting-started.md) · [Back to README](../README.en.md)
+
+## What you will have
+
+- A Claude Chat Mobile server running only on your computer.
+- A phone entrypoint protected by `AUTH_TOKEN`, a workspace allowlist, and device approval.
+- A Web UI that shares configuration, tools, and persisted session history with your local `claude` CLI.
+
+This guide covers a first installation. If LaunchAgent or systemd already keeps the app running, do not start a second copy with `npm start`; restart it through the [deployment guide](deployment.md) instead.
+
+## 1. Check the prerequisites
+
+```bash
+node --version
+which claude
+claude --version
+```
+
+You need:
+
+- Node.js 20 or newer.
+- A local `claude` command that `which` can find.
+- An authenticated CLI that can start a normal terminal conversation.
+- macOS or Linux. Native Windows is experimental; WSL2 is recommended.
+
+The project does not bundle, install, or sign in to Claude for you.
+
+### Claude subscriptions and third-party gateways
+
+- Claude subscription: make sure the local account that will start the server is already signed in to `claude`; no extra API key is needed.
+- Third-party gateway: export the required `ANTHROPIC_*` values in the **shell that will start the server**, then start the project.
+- Do not put `ANTHROPIC_*` in the project's `.env`. Startup strips those values so a project file cannot override the CLI/provider environment.
+
+## 2. Get the code and install dependencies
+
+```bash
+git clone https://github.com/Ike-li/claude-chat-mobile.git
+cd claude-chat-mobile
+npm install --omit=dev
+```
+
+`--omit=dev` installs only runtime dependencies and does not download Playwright browsers. Use a full `npm install` when you need to develop or run tests.
+
+## 3. Create local configuration
+
+### Interactive wizard
+
+Run this in a real terminal:
+
+```bash
+npm run setup
+```
+
+The wizard:
+
+1. Creates a random `AUTH_TOKEN`, writes it to `.env`, and sets mode `0600`.
+2. Asks for `WORK_DIR`. Choose a specific project directory instead of exposing your whole home directory for convenience.
+3. Asks whether to install the CLI hooks bridge. Installation is the default, but it writes `~/.claude/settings.json` only after you confirm.
+
+If `.env` already exists, the wizard does not overwrite it by default.
+
+### Non-interactive mode
+
+A coding agent, CI shell, or any environment without a TTY must be explicit:
+
+```bash
+node scripts/setup.js \
+  --yes \
+  --work-dir=/absolute/path/to/project \
+  --hooks=off
+```
+
+- `--work-dir` is required and never silently falls back to `$HOME`.
+- `--hooks` accepts only `on` or `off`; `on` changes user-level Claude hooks configuration.
+- If `.env` exists, the command refuses to overwrite it. Add `--force` only after deciding to replace its current token and configuration.
+- Use `--env <path>` to target another environment file.
+
+For multiple workspaces, set `WORK_DIRS_FILE=workdirs.json` in `.env` and use an array of absolute paths:
+
+```json
+[
+  "/Users/you/code/project-a",
+  {
+    "path": "/Users/you/code/project-b",
+    "sessionLimit": 10
+  }
+]
+```
+
+`workdirs.json` hot-reloads. A git worktree must also be listed as its own absolute path; the project never discovers or authorizes it implicitly.
+
+## 4. Run the preflight checks
+
+```bash
+node scripts/doctor.js
+```
+
+The doctor checks the token, CLI path, workspaces, port, gateway environment, file permissions, bridge state, and documentation/front-end consistency.
+
+For permission-only repairs:
+
+```bash
+node scripts/doctor.js --fix
+```
+
+`--fix` tightens permissions on `.env` and control-plane JSON files. Read the diagnosis before deciding to use it.
+
+## 5. Start the server
+
+For a first local trial:
+
+```bash
+npm start
+```
+
+The default port is `3000`. The startup log should show:
+
+- that the server is listening;
+- a redacted token status;
+- a LAN URL that can be opened on your phone;
+- bridge and pending-device status.
+
+When `AUTH_TOKEN` is set, the health endpoint also requires authentication:
+
+```bash
+curl -sS "http://127.0.0.1:3000/health?token=<AUTH_TOKEN>"
+```
+
+The server is ready when it returns JSON containing `status`, `versions`, `buildNonce`, and `timestamp`. Treat `AUTH_TOKEN` as a key to your local shell: never paste the real value into issues, chat logs, or screenshots.
+
+If LaunchAgent or systemd already runs this checkout, port 3000 is probably occupied. Do not start a second server; use the [operations quick reference](deployment.md#运维速查) to restart the existing service.
+
+## 6. Open it on your phone
+
+### Same Wi-Fi
+
+Open the address printed at startup:
+
+```text
+http://<lan-ip>:3000/#token=<AUTH_TOKEN>
+```
+
+After the first load, the browser stores the token in `localStorage` and removes it from the address bar.
+
+### Temporary HTTPS
+
+PWA installation and Web Push require HTTPS. For a temporary trial, run this in another terminal:
+
+```bash
+cloudflared tunnel --url http://localhost:3000
+```
+
+Then open:
+
+```text
+https://<random>.trycloudflare.com/#token=<AUTH_TOKEN>
+```
+
+A quick tunnel is for testing: its hostname may change on every start and it has no Cloudflare Access layer, so device approval still applies. For a fixed domain, Access 2FA, and a persistent service, use the [deployment guide](deployment.md).
+
+## 7. Approve the phone
+
+The first non-local connection waits for device approval. On the computer, run:
+
+```bash
+node scripts/device.js list
+node scripts/device.js approve <ID>
+```
+
+Check the pending device ID before approving it. The page unlocks immediately afterward; the token does not need to be entered again.
+
+To revoke a mistaken approval or a lost device:
+
+```bash
+node scripts/device.js deny <ID>
+```
+
+Local loopback connections and requests already validated by Cloudflare Access JWT skip device approval. Normal LAN access and temporary quick tunnels do not.
+
+## 8. Complete the first-run check
+
+On the phone, verify:
+
+1. The expected workspace appears on the home screen.
+2. A new session can send a harmless prompt such as “Reply with OK only.”
+3. The response streams and reaches a finished-turn state.
+4. Settings show model, permission mode, effort, and service status.
+5. If Web Push is enabled, use “Send a test push” now instead of discovering a broken path during a real approval.
+
+The minimum path is now complete. Both bridges below are optional enhancements and are not required for Web-originated sessions.
+
+## Optional: CLI statusline bridge
+
+Web-driven sessions have an SDK status line out of the box. Install this bridge only if you also want a **read-only view of a terminal-driven session** to show the CLI model, effort, context, cost, and quota.
+
+```bash
+npm run statusline:status
+npm run statusline:install
+```
+
+- `status` is read-only and does not modify `~/.claude`.
+- `install` is explicit opt-in and wraps an existing Claude CLI statusline command. The installer refuses when no statusline is configured.
+- Reopen the terminal Claude CLI and restart the persistent server after installation.
+- `npm run statusline:uninstall` restores the original command from its manifest and refuses to overwrite drifted configuration.
+
+## Optional: CLI hooks bridge
+
+Without hooks, the server still polls the transcript every 2.5 seconds, but terminal Stop / Notification events cannot proactively wake the phone. With the bridge, the CLI writes those events to a private file inbox that the server consumes immediately and routes through notification settings.
+
+```bash
+npm run hooks:status
+npm run hooks:install
+npm run hooks:verify
+npm run hooks:uninstall
+```
+
+- `status` is read-only.
+- `install` appends only its own hook entries, preserves existing hooks, and performs a loopback verification.
+- Open a new terminal Claude CLI session after installation; an existing process does not reload hooks.
+- If the server is offline, the hook writes its file and exits quietly without blocking the CLI.
+- Set `CLI_HOOKS_BRIDGE=off` in `.env` to pause server consumption without removing global configuration.
+
+The phone UI can also install or remove the bridge explicitly under Settings → Service status → Terminal session notifications.
+
+<details>
+<summary>Delegate first installation to a coding agent</summary>
+
+Give the following prompt to Claude Code, Codex CLI, or another local coding agent from the repository directory:
+
+```text
+Install and start claude-chat-mobile for the first time. It connects my local claude CLI to a phone Web UI.
+This is a clean first installation, not a restart of an already deployed persistent service.
+
+Follow these steps in order and verify each result before continuing:
+1. Check that node --version is at least 20, which claude finds the command, and claude is authenticated.
+   Stop and tell me if any check fails; do not install or sign in to claude yourself.
+2. Run npm install --omit=dev.
+3. Ask me for the absolute WORK_DIR and whether to install the CLI hooks bridge.
+   Do not use my whole home directory. hooks=on changes ~/.claude/settings.json.
+4. Your shell has no TTY, so do not run the interactive wizard. Use:
+   node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
+   If .env already exists, stop instead of adding --force yourself.
+5. Run node scripts/doctor.js. Use --fix only when its output calls for a safe permission repair.
+6. Confirm no persistent service owns the port, then start the server in the background. Verify authenticated
+   /health JSON; do not rely only on the process existing.
+7. Give me the LAN phone URL from startup logs, but never write AUTH_TOKEN into any file or report that may leave
+   this machine.
+8. After my phone connects, run node scripts/device.js list. Let me verify the device before running approve.
+Use docs/deployment.md for a fixed public domain or persistent service. Do not change system services on your own.
+```
+
+</details>
+
+## Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| No phone URL in startup logs | `AUTH_TOKEN` is unset; rerun setup or correct `.env`, then restart |
+| An agent ran setup but wrote nothing | Interactive mode was used without a TTY; use `--yes --work-dir=... --hooks=...` |
+| `EADDRINUSE :3000` | A persistent service or another process owns the port; do not blindly start another |
+| The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
+| A third-party gateway is ignored | `ANTHROPIC_*` must come from the server's startup shell, not `.env` |
+| CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |
+| Android installs only a browser shortcut | Cloudflare Access may block PWA icons; see the [deployment guide](deployment.md#2b-android-pwa图标必须对匿名可达) |
+
+## Next steps
+
+- Long-term public access: [Deployment and operations](deployment.md) (Chinese)
+- Understand the Web/CLI paths: [Architecture](architecture.en.md)
+- Understand model, effort, and statusline sources: [Display contracts](display-contracts.md) (Chinese)
+- Review every environment variable: [`.env.example`](../.env.example)

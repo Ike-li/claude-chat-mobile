@@ -36,7 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 53 |
 | Configuration template | 1 |
 | Deployment | 3 |
-| Documentation | 5 |
+| Documentation | 9 |
 | E2E test | 42 |
 | Frontend asset | 3 |
 | Frontend source | 22 |
@@ -55,7 +55,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 123 |
 | Vendored asset | 21 |
 
-Total classified files: **354**.
+Total classified files: **358**.
 
 ## Complete file inventory
 
@@ -70,8 +70,12 @@ Total classified files: **354**.
 | `deploy/log-rotate.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/server.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/tunnel.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
+| `docs/architecture.en.md` | Documentation | English explanation of Web/CLI data paths, ownership, and replay | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/architecture.md` | Documentation | Chinese explanation of Web/CLI data paths, ownership, and replay | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/deployment.md` | Documentation | Persistent service, tunnel, and Cloudflare Access operations guide | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/display-contracts.md` | Documentation | Display contracts: model / effort / statusline TUI–SDK–FE rules and test anchors | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/getting-started.en.md` | Documentation | English first-run tutorial from installation through phone validation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/getting-started.md` | Documentation | Chinese first-run tutorial from installation through phone validation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/repository-map.md` | Generated documentation | Exhaustive repository file map | README, documentation site, or maintainer reference | `npm run inventory:update` | generated |
 | `eslint.config.js` | Project configuration | ESLint flat config (npm run check static gate) | `npm run check` / `npm run lint` | Authored and reviewed manually | keep |
 | `LICENSE` | Legal | Project license | Referenced by maintainers | Authored and reviewed manually | keep |

@@ -1,6 +1,6 @@
 # Claude Chat Mobile
 
-> 把本机 `claude` CLI 接到手机：同一 agent、同一会话记录、同一权限与工具配置——不是远程桌面，也不是共享实时 TTY。
+> 把本机 `claude` CLI 接到手机：沿用同一套项目配置、工具与会话记录，但不是远程桌面，也不是共享实时 TTY。
 
 **中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/)
 
@@ -11,36 +11,52 @@
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-> 上面两个版本徽章直接读 `master` 上的 `package.json`，不是手写的：Agent SDK 取 `dependencies`，claude CLI 取 `verifiedWith.claudeCli`（发版时由 `scripts/release.sh` 记录）。**claude CLI 那条是「上个发布版验证于哪个版本」，不是版本要求**——本项目驱动的是你本机那个 CLI，用什么版本由你决定。
+> Agent SDK 与 claude CLI 徽章直接读取 `master` 上的 `package.json`。CLI 徽章表示上个发布版的验证环境，不是最低版本要求。
 
 ![Claude Chat Mobile — 终端里的 claude，手机上也能用](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
 
-**Claude Code 在跑，人却不总在电脑前。** 你让 claude 改代码，然后去开会——它需要权限时，手机收到推送；点进 App 看清命令、允许或拒绝。回家坐到电脑前，终端 `/resume` 接上手机上那个会话继续——同一个 agent、同一份记录，不是另开一个。
+Claude Code 在跑，人却不总在电脑前。Claude Chat Mobile 通过 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 驱动你本机已登录的 CLI，让你在手机上继续改代码、跑命令、回答问题和审批操作。它不打包 Claude，也不建立第二套账号或会话系统。
 
-这个项目给已经在终端使用 `claude` CLI 的人用。它不打包 Claude，也不是 Claude 的重新实现；它通过 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 驱动你本机已登录的 CLI。手机端拿到的是同一个 agent、同一份 `CLAUDE.md`、同样的 MCP 服务器、技能、hooks 和会话记录。
+## 适合谁
 
-目标很窄：**在手机上改代码、跑命令、审批危险操作、续上之前的对话**。两端读的是同一份 CLI 会话落盘，但**不是**把终端屏幕镜像过来，也**不是**两端同时往同一会话里打字的共享 TTY——同一时刻只有一个驾驶员（Web 或 CLI），另一端只读追平；CLI 正在跑时 Web 默认只读镜像，接管默认等本轮结束后再写。
+- 已经在 macOS 或 Linux 终端使用 `claude`，希望离开电脑后继续查看和处理任务。
+- 需要在多个仓库、多个会话之间切换，并在手机上查看工具调用、diff、后台任务和错误状态。
+- 希望危险操作或问题能主动通知到手机，而不是一直盯着终端。
 
-## 适用场景
+同一时刻只有一个驾驶员：Web 驾驶时消息经 Agent SDK 进入本机 CLI；终端 CLI 驾驶时，Web 只读追平落盘记录。它不是远程桌面，也不能让手机和终端同时向同一个实时进程输入。
 
-> 它不是手机远程桌面。远程桌面镜像电脑屏幕；这里是给本机 `claude` 会话做一个手机入口。差异主要体现在这些场景：
->
-> - **任务在跑，人离开了电脑。** 你让 claude 改代码，然后去开会。它需要许可时，手机收到推送（类型级提示，如「需要你授权：Edit」——**不含**完整命令正文；点进 App 才能看详情并允许/拒绝）。不用让电脑屏幕亮着，也不用远程戳进终端。
-> - **同一个会话，换设备继续。** 路上用手机起个头，到家后在电脑终端 `/resume` 接上——两端读的是同一份 CLI 会话记录，不是各开一个会话。反过来也行：终端里跑着时，手机可打开同一会话做**只读镜像**（磁盘 transcript 追平，可能有短暂空窗/延迟，不是 attach 到同一个活进程）；要在手机上继续写，等本轮结束后接管。地铁信号差时 Web 页会重连并补发缓冲内的输出。
-> - **多个仓库并行看。** claude 可以同时在两个项目里跑不同任务；在手机的首页枢纽 / 工作区抽屉 / 会话列表之间切换进度（不是浏览器多标签页心智）。一块远程桌面屏幕在手机上很难做到这一点。
-> - **手机输入更顺。** 输入 `/` 弹出可点的命令列表，从相册发截图给 claude，长按复制长输出。这些都按手机交互做，而不是把终端缩小。
->
-> 如果只是偶尔远程看一眼，远程桌面就够了。这个项目适合把手机当成终端的随身入口来高频使用。
+## 核心能力
+
+### 会话与工作区
+
+- 续接、分叉和两级删除 CLI 会话；跨会话聚合“需要你”的任务。
+- 多工作区、多会话并行查看。git worktree 必须把绝对路径显式加入 `workdirs.json`，不会自动探测或隐式放行。
+- 一轮一条：任务运行时输入可继续写草稿，但发送键切换为停止键，不会积压待发消息。
+
+### 手机交互
+
+- 流式 Markdown、代码高亮、工具卡片、Edit/Write diff、Read 片段、`AskUserQuestion` 原生选择器。
+- 上传图片与文件、粘贴截图、历史附件预览，以及 composer `@` 文件引用。
+- 在授权工作区内浏览项目文件；不超过 256KB 的现有文本文件可用 CodeMirror 编辑，写前用内容哈希阻止并发覆盖。
+
+### 通知与可见性
+
+- Web Push / ntfy 通知审批、提问和结果；默认只发类型级提示，可测试推送链路并选择是否开启 Web Push 内容预览。
+- 可选 CLI hooks bridge，让终端会话的 Stop / Notification 从轮询升级为即时信号。
+- API 错误、重试倒计时、SDK 提示、子 agent 与后台任务进度直接显示在界面中，不再只藏在服务端日志。
+
+### 可靠性与运维
+
+- `seq + epoch` 事件去重与断线补发；状态栏按当前驾驶方选择 SDK 或 CLI 快照作为事实源。
+- `doctor` 启动自检、UI 安全体检、日志脱敏、鉴权限速、服务状态面板和鉴权后的 `/health`、`/metrics`。
+- 可安装 PWA，完整中英文界面；前端依赖均随项目自托管，不依赖 CDN。
 
 ## 前置条件
 
-- **Node.js ≥ 20**——用 `node --version` 检查。
-- **本机有一个可用的 `claude` CLI。** 本项目驱动*你的*本机 CLI，不自带。先确认 `claude` 能在终端跑起来（`which claude`，再开一次对话确认已登录）；web UI 继承的就是这个 CLI、你的 `CLAUDE.md`、MCP 服务器、技能、hooks 和 shell 环境。
-- **官方订阅、第三方网关 / 中转 API 都支持。** web 端沿用**启动 server 的那个 shell** 里的 provider / 网关 / 模型：
-  - 用**官方订阅**（`claude` 已登录）：无需额外配置。
-  - 用**第三方网关 / 中转**：在启动 server 的 shell 里 `export` 你网关所需的 `ANTHROPIC_*`（通常是 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL`，以你网关的文档为准），再启动 server。
-  - ⚠️ `ANTHROPIC_*` 写进 `.env` **无效**：启动期会剥除这些变量，只读取启动 server 的 shell 环境。
-- **macOS 或 Linux（一等支持）。** 部分路径/权限逻辑对 Windows 做了兼容修补，但**不是**官方支持平台；原生 Windows 请当实验路径，更稳的是 WSL2。
+- **Node.js ≥ 20**。
+- **本机已安装并登录 `claude` CLI**；先确认 `which claude` 能找到命令，并能在终端正常开始对话。
+- **macOS 或 Linux** 为一等支持平台；原生 Windows 属实验路径，推荐使用 WSL2。
+- 官方订阅和第三方网关都可用。网关相关 `ANTHROPIC_*` 必须存在于**启动 server 的 shell 环境**；写进 `.env` 会被剥除。
 
 ## 快速开始
 
@@ -48,207 +64,80 @@
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 
-node --version           # 需 Node ≥ 20
-which claude             # 本项目驱动的 CLI——必须已安装并登录
-
-npm install --omit=dev   # 仅运行依赖——不含 Playwright/浏览器。要跑 UI 测试用完整 npm install。
-npm run setup            # 交互式向导：自动生成 AUTH_TOKEN（头号门槛）+ 询问 WORK_DIR，写入 .env（权限 0600）
-                         # 推荐用它，免去手搓；想直接用原始模板：cp .env.example .env
-                         # 脚本/agent 代跑用非交互模式（向导需要 TTY）：
-                         #   node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--force]
-
-# 推荐：启动前自检配置（端口占用、CLAUDE_BIN 路径、网关环境、文件权限）
-node scripts/doctor.js        # 检查配置
-node scripts/doctor.js --fix  # 收紧权限（.env 与 CCM_DATA_DIR/*.json → 0600）
-
-npm start                     # http://localhost:3000
+node --version
+which claude
+npm install --omit=dev
+npm run setup
+node scripts/doctor.js
+npm start
 ```
 
-**更快：丢给你的编程 agent 代装**——在仓库目录里（或先让它 clone）把下面这段交给 Claude Code / Codex CLI 之类的编程 agent：
+`setup` 会生成 `AUTH_TOKEN`、询问允许 Claude 操作的 `WORK_DIR`，并明确询问是否安装 CLI hooks bridge。启动日志会打印带 token 的局域网地址，在手机上打开即可。
 
-```
-帮我首次安装并启动 claude-chat-mobile（把本机 claude CLI 接到手机的 web UI）。这是全新环境首次安装，
-不是重启已部署的常驻服务——CLAUDE.md 里「生产部署勿手动 npm start」那条对这次不适用。
-
-按顺序做，每步确认结果再进下一步：
-
-1. 前置校验：node --version 要 ≥ 20；which claude 要能找到且已登录（项目驱动的就是这个 CLI，
-   它不自带）。任一不满足就停下来告诉我，别自己装 claude。
-2. npm install --omit=dev
-3. 先跟我确认两件事再往下：
-   (a) WORK_DIR 挂哪个目录——给绝对路径。这是我在手机上能让 claude 读写的范围，别用我的整个家目录。
-   (b) 要不要装 CLI hooks 桥——装了以后我在电脑终端直接跑的 claude 会话也能推送到手机，
-       代价是会写我的全局 ~/.claude/settings.json。
-4. 用非交互模式写配置，不要跑交互向导（你的 shell 没有 TTY，向导会卡在提问上、静默什么都不做还退出 0）：
-   node scripts/setup.js --yes --work-dir=<第3步的绝对路径> --hooks=<on 或 off>
-5. node scripts/doctor.js 自检，按提示修（权限类问题可用 node scripts/doctor.js --fix）。
-6. 后台启动 server，别在前台跑（会一直阻塞你）。起来后用
-   curl -s "http://127.0.0.1:3000/health?token=<.env 里的 AUTH_TOKEN>"
-   拿到 JSON 才算启动成功，别只看进程在不在。
-7. 告诉我怎么在手机上打开：给我启动日志里那条带 token 的局域网地址。注意 AUTH_TOKEN 是密钥
-   （拿到它就等于拿到我这台机器的 shell），它存在 .env（权限 0600），别写进任何会外传的地方。
-8. 我手机第一次连进来会卡在设备指纹审批（光有 token 不够）。到时帮我跑 node scripts/device.js list，
-   确认是我的手机后 node scripts/device.js approve <ID>。
-
-如果我后续想要公网固定域名访问，参考 docs/deployment.md 帮我配。
-```
-
-Web 自己发起的会话开箱即用 SDK 状态栏，不需要改 Claude 配置。若还要在 Web **只读查看正在 CLI 里运行的会话**时同步 CLI 的模型、思考强度、上下文、成本和额度，可显式安装透明 statusline bridge：
+手机首次从非本机路径连接时，还要在电脑上批准设备：
 
 ```bash
-npm run statusline:status     # 只读查看，不改 ~/.claude
-npm run statusline:install    # 显式安装；不会由 npm install / npm start 自动执行
+node scripts/device.js list
+node scripts/device.js approve <ID>
 ```
 
-安装后重开 Claude CLI，并重启常驻 server；卸载用 `npm run statusline:uninstall`。
+完整的首次安装、非交互 setup、可复制的编程 agent 安装提示、PWA 和 bridge 配置见 [首次使用指南](docs/getting-started.md)。
 
-在电脑终端直接跑 `claude` 时，回合结束（Stop）与需要你介入（Notification）默认要等最长 2.5 秒轮询才被 Web 发现，也不会推送到手机。装上 CLI hooks 桥即可让 CLI 主动通知：
+## 运行方式
 
-```bash
-npm run hooks:status     # 只读查看，不改 ~/.claude
-npm run hooks:install    # 显式安装 + 自动回环验证，装完明确告诉你成没成
-npm run hooks:verify     # 随时重跑端到端验证
-npm run hooks:uninstall  # 只摘掉自己的 hook 条目，你已有的 hooks 一字不动
-```
-
-也可以在手机上开：**设置 → 服务状态 → 终端会话推送 → 开启**（确认后由 server 代跑安装器，同样只在你点击时才写配置）。首次跑 `npm run setup` 向导时也会问一次，默认装。
-
-装完**重开终端里的 claude 会话**才会加载 hooks。server 不在时 hook 只是静默落盘，绝不影响 CLI 本身；临时停用在 `.env` 设 `CLI_HOOKS_BRIDGE=off`，不必卸载。
-
-然后在手机上打开。启动日志会打印已带 token 的可用 URL：
-
-- **同一 WiFi：** 先在 `.env` 设 `AUTH_TOKEN`（局域网也必填，不设手机连不上），再打开启动时打印的局域网地址（`http://<lan-ip>:3000/#token=…`）。不需要隧道。
-- **公网 / 安装为 PWA**（PWA 需要 https）：在另一个终端跑隧道：
-
-```bash
-cloudflared tunnel --url http://localhost:3000
-# 手机打开 https://<random>.trycloudflare.com/#token=<你的 AUTH_TOKEN>
-# token 首次加载存入 localStorage，随后从地址栏清除
-```
-
-手机首次从非本机路径连入时，**光有 token 不够**：电脑上还要批一次设备指纹（TOFU）：
-
-```bash
-node scripts/device.js list           # 看待确认设备
-node scripts/device.js approve <ID>   # 批准后该设备立即解锁
-```
-
-> ⚠️ 不设 `AUTH_TOKEN` 时，服务只绑定 `127.0.0.1`。同 WiFi 的手机和隧道都连不上，这是有意为之。
->
-> 📌 上面是最简配置：临时随机隧道，只适合测试。固定域名、Cloudflare Access 双因素和后台常驻部署见 [docs/deployment.md](docs/deployment.md)。经 Cloudflare Access 验证的公网连接可跳过设备指纹这一步；临时 `cloudflared` 随机隧道**没有** Access，仍要走 `device.js approve`。
->
-> ⚠️ 这是一条可远程触达、直通你本机 shell 的代码执行通道。暴露到公网前，先读下面的[安全模型](#安全模型)。
-
-## 运行方式(三选一)
-
-按你的场景选一种。具体命令见上方[「快速开始」](#快速开始)与 [docs/deployment.md](docs/deployment.md):
-
-| 方式 | 适合 | 代价 |
+| 方式 | 适合 | 注意事项 |
 |---|---|---|
-| **同 WiFi 局域网直连**：`http://<lan-ip>:3000/#token=` | 在家、手机和电脑同一网络 | 出门用不了；无隧道，最省事 |
-| **临时公网**：`cloudflared tunnel --url`（随机域名） | 临时试用 / 演示 | 地址每次重启都变；官方标注仅测试用；仍要设备审批 |
-| **固定生产**：固定域名 + Cloudflare Access 2FA + 常驻进程 | 长期、随时随地用 | 一次性 DevOps 搭建，见 [docs/deployment.md](docs/deployment.md) |
+| 同 WiFi：`http://<lan-ip>:3000/#token=…` | 家中或办公室局域网 | 最省事，离开当前网络后不可用 |
+| 临时公网：`cloudflared tunnel --url http://localhost:3000` | 试用、演示 | 随机域名会变化；没有 Access，仍需设备审批 |
+| 固定生产：固定域名 + Cloudflare Access + 常驻服务 | 长期随时访问 | 需要一次性部署与运维，见 [部署指南](docs/deployment.md) |
+
+PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先“添加到主屏幕”。
 
 ## 安全模型
 
-> **暴露到公网前务必先读。** 这是一条可远程触达、直通你本机 shell 的代码执行通道：
+> 这是一个可远程触达、直通本机 shell 的代码执行入口。暴露到公网前，请先理解这些边界。
 
-1. **每实例单用户。** 你运行自己的实例，给自己用。项目没有多用户、账号或登录系统；任何通过鉴权的请求，都和你本人坐在终端前拥有同样的权限。不要把它当多租户服务。
-2. **没有 token 就不出本机。** 未设置 `AUTH_TOKEN` 时，服务只绑定 `127.0.0.1`。不存在"留空 = 对全世界开放"的路径。要投送到公网，必须有 token。
-3. **自动放行集继承 CLI，不另造白名单。** 本项目不注入自己的 `allowedTools` / `disallowedTools`。自动放行 = 你已有 claude 配置里 `permissions.allow` 的合并结果：全局 `~/.claude/settings.json`、项目 `.claude/settings.json`、本地 `.claude/settings.local.json` 三处一并生效（经 `settingSources` 加载，与终端同源）。命中即放行；未命中就挂起，把审批请求推到手机——**App 内**可见完整命令与工作目录后再确认。
-   - Web 另有运行时权限档（含 `dontAsk` / `auto` / `bypassPermissions` 等）与审批 TTL 等行为，**不等于**「手机 UI 与交互式终端逐行为一致」；同源的是 settings 白名单来源，不是整套交互。
-   - ⚠️ **公网暴露前，审查你的全局 `~/.claude/settings.json` 白名单**。终端里多年累积的 `Bash(...)` / `Write` 等规则在这里也会自动放行，不会再弹手机。要收紧的不只项目那份配置。
-4. **设备信赖（TOFU）。** 既非本机、也未经 Cloudflare Access 验证的连接，必须先在电脑上一次性授权该设备才能操作。合法 token 本身不够。在电脑上执行：
-   ```bash
-   node scripts/device.js list
-   node scripts/device.js approve <ID>
-   ```
-   吊销用 `deny <ID>`。本机 loopback 连接与已通过 Cloudflare Access JWT 的公网连接会跳过这一步。
-5. **文件编辑器直写，不经审批链。** 项目文件浏览器里的「编辑」是你本人在手机上的显式操作，语义等同 `ssh` 进机器后用编辑器改文件——**不**经过 Claude 的 `canUseTool` 审批（那条链路管的是 agent 的自主行为，不是你自己点按钮）。仍有的防线：只能改**已存在**的文件（不会新建/删除）、大小上限 256KB、写前用内容哈希核对磁盘现状（与 Claude 并发改了同一文件会拒并提示冲突，不静默覆盖）、每次写回落审计日志。不想要这个能力就设 `FILE_EDIT=off`，整体退回只读浏览（前几版行为）。
+1. **单用户，权限等同机主。** 项目没有多用户或租户隔离；通过鉴权的操作拥有启动 `claude` 的本机账号权限。
+2. **无 token 不出本机。** 未设置 `AUTH_TOKEN` 时只监听 `127.0.0.1`；需要手机或隧道访问时必须设置强 token。
+3. **工作目录必须收窄。** `WORK_DIR` / `workdirs.json` 是文件、会话和 git 操作的范围门。不要为了省事把整个家目录交给远程入口。
+4. **自动放行继承 CLI 配置。** `~/.claude/settings.json`、项目 `.claude/settings.json` 和 `.claude/settings.local.json` 中的 `permissions.allow` 会同源生效；公网使用前应审查累积的 Bash/Write 等规则。
+5. **设备信任是第二道门。** 除本机直连或已通过 Cloudflare Access JWT 的连接外，合法 token 仍需一次性设备审批；可用 `node scripts/device.js deny <ID>` 吊销。
+6. **文件编辑器是用户直写。** 它不经过 Agent 的工具审批链，只允许修改已存在、≤256KB 的文件，并做范围校验、哈希冲突检测和审计记录；设 `FILE_EDIT=off` 可退回只读。
 
-## 成本提示
+漏洞请通过 [GitHub Security Advisories](SECURITY.md) 私下报告，不要公开提交 issue。
 
-**当前（截至 2026-07-20）：Agent SDK / `claude -p` 用量仍吃订阅额度，与交互式同池**。本项目走官方订阅路径时，不产生独立计费。
+## Web 与 CLI 如何协作
 
-背景：Anthropic 曾公告自 2026-06-15 起把 SDK *headless* 用量挪到独立 credit 池（Max 5x $100/月、按 API 价），但**该变更已于上线当天暂停、从未生效**（[官方 Help Center](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)）。Anthropic 称会重做方案并提前通知；现在是暂停，不是取消。
-
-- **潜在风险**：若政策复活，本项目的 SDK 用量会从订阅额度移出、可能撞独立 credit 上限。作者个人路径曾按 API 价粗算约 **~$716/月** 等效——**仅个人实测、非产品 SLA 或典型用户指标**；届时请用你自己的用量再预算。
-- **走第三方网关**（shell export 的 `ANTHROPIC_*`）：与此无关，按网关自己费率付费。
-
-## 特性
-
-在上面的核心循环之外：
-
-- **单驾驶员模型**：Web 与 CLI 轮流写同一会话；CLI 驾驶时 Web 只读镜像（transcript 追平），接管默认排队等本轮完结，避免并发写盘分叉。
-- **六种权限档**（default / plan / acceptEdits / dontAsk / auto / bypassPermissions），运行时可切；审批带 TTL 与完整性绑定。
-- **逐条消息切换模型**（支持网关后缀名）；resume 可回落展示会话末条模型。
-- **多 repo 与多会话**：白名单工作目录切换；首页枢纽 / 抽屉并发看多个会话。git worktree 若要用，把其绝对路径写入 `workdirs.json` 作为独立工作区（热加载，无需重启）。
-- **一轮一条**：任务运行中不接受新消息（输入框仍可打字存草稿，发送位变停止钮并常驻提示）；CLI 式动态状态行与回合收尾行。
-- **子 agent / 后台任务可见**，可停止后台任务；Task 清单工具流内渲染。
-- **文件与图片上传**（含剪贴板粘贴与发送前预览），带路径注入与穿越防护；历史附件可点预览；**项目文件浏览**（不越白名单工作目录，语法高亮）；小文件（≤256KB）可**直接在 CodeMirror 里编辑保存**——写前哈希比对防覆盖并发改动，`FILE_EDIT=off` 可整体关闭回到只读，见下方安全模型第 5 条；**composer `@` 文件引用**：候选来自授权目录内枚举，不接受任意路径拼接。
-- **工具卡片预览变更**：Edit / Write 看 diff、Read 看片段；base64 脱敏与 JSON 高亮。
-- **思考强度控制**、**单一来源状态栏**（Web 驾驶取 SDK；可选 bridge 让 CLI 驾驶取 CLI 快照），以及作为原生选择器的 **`AskUserQuestion`**。
-- **Web Push / ntfy 通知**：推送审批、提问与结果的**类型级**提示（不含命令/问题正文），点通知深链回会话（iOS 16.4+ 需先添加到主屏幕；可选配 ntfy 走自托管、锁屏更可靠）；socket 在线时结果类通知不重复推。Web Push 通道设置里可选**开启内容预览**（默认关；payload 本身已 RFC 8291 端到端加密，开启后带问题/工具/任务摘要），ntfy 不受此开关影响、恒最小化。
-- **会话两级删除**（产品移除 / SDK 真删底层文件）；「等我」跨会话聚合。
-- **PWA 可安装**：maskable 图标 + 独立显示，"添加到主屏幕"当 app 用。
-- **运维与安全加固**：日志脱敏、`0600` 原子写、`doctor` 启动自检、**UI 一键安全体检（脱敏，审查危险白名单）**、鉴权限速、可选 Cloudflare Access 2FA、`/metrics` 与服务状态面板。
-
-## 内部实现（想读代码 / fork 才看）
-
-内部是一层默认上锁的转发层：把你本机的 claude CLI（带着你的 CLAUDE.md/MCP/skills/登录态）接到手机浏览器。会话连续，过程可见，危险操作回手机审批。双通道并存：**Web 驾驶**走 SDK 流式；**CLI 驾驶**写磁盘 transcript，Web 只读追平。
-
-```mermaid
-graph LR
-    subgraph 手机
-        UI[public/ 单页<br/>聊天气泡·工具卡片·审批弹窗]
-    end
-    subgraph 公网
-        CF[Cloudflare Tunnel]
-    end
-    subgraph 本机
-        S[src/server/ + server.js 薄入口<br/>Express 静态 + Socket.IO 契约层<br/>鉴权 · 启动预检 · 设备信赖 · handler 兜底]
-        A[src/agent/agent.js · AgentSession<br/>长驻 SDK query · 权限闸门<br/>事件信封 seq+epoch · 环形缓冲]
-        J[(CCM_DATA_DIR/sessions.json<br/>会话元数据)]
-        H[catchUpTick<br/>只读镜像追平]
-        SDK[claude-agent-sdk]
-        CLI[本机 claude CLI<br/>完整加载你的配置]
-        T[(CLI transcript<br/>~/.claude/projects)]
-        FS[(你的项目文件<br/>WORK_DIR)]
-    end
-    UI <-->|"agent:event 信封 / user:* 事件<br/>(事件契约, WebSocket)"| CF <--> S
-    S <--> A
-    A <-->|streaming input<br/>Web 驾驶| SDK <-->|spawn| CLI
-    CLI --> FS
-    CLI -->|CLI 驾驶直写| T
-    T -->|轮询追平| H --> S
-    S --- J
+```text
+Web 驾驶：手机 → Socket.io → AgentSession → Agent SDK → 本机 claude CLI → 工作区
+CLI 驾驶：终端 claude → transcript / hooks → server → 手机只读镜像
 ```
 
-### 消息流程
+两条路径共享 CLI 的落盘会话记录，但不共享一个实时 TTY。CLI 驾驶时，Web 只能看到已经落盘的内容；hooks 负责加速“回合结束/需要你”信号，不会把终端进程变成可双向附着的会话。Web 接管前会等待终端回合结束，并在发送前吸收磁盘上的外部增长。
 
-**Web 驾驶（手机发消息）：**
+完整组件图、消息流、单驾驶员状态转换与断线回放见 [架构说明](docs/architecture.md)。
 
-1. 手机 `user:message {text}` → server 校验 → 路由到目标实例 `agents.get(instanceId)`（懒重生 resume；`session:new` 后首条消息才懒开 FRESH 实例）
-2. 若磁盘相对 SDK 内存有外部增长（CLI 写过），先 dispose+resume 吸收，再发送——防上下文分叉
-3. 文本 push 进 AgentSession 的 streaming input → SDK → claude CLI 在 `WORK_DIR` 干活
-4. SDK 消息流回 `map()`：流式文本→`text_delta`、工具调用→`tool_use`/`tool_result`、白名单外操作→`permission_request`（挂起等手机点允许/拒绝）
-5. 每个事件套上 `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` 信封 → 进 2000 条环形缓冲 → `io.to('approved').emit` 广播给已过审设备（前端按 `viewingInstanceId` 分流；后台会话的高频 delta 不广播以省带宽）
-6. 手机断线再连：`sync:since {sessionId, lastSeq, instanceId}` 补发缓冲；`epoch` 变化 = 服务端换了实例，客户端自动重置去重基线
+## 文档导航
 
-**CLI 驾驶（终端直开，Web 只读）：**
+- [首次使用指南](docs/getting-started.md)：从 clone 到手机发出第一条消息。
+- [部署与运维](docs/deployment.md)：Cloudflare Tunnel、Access、LaunchAgent 与 systemd。
+- [架构说明](docs/architecture.md)：Web/CLI 双通道、事件信封与接管边界。
+- [展示契约](docs/display-contracts.md)：模型、思考强度和状态栏的事实源。
+- [仓库地图](docs/repository-map.md)：入口、目录职责与完整文件清单。
+- [环境变量模板](.env.example)：所有运行时配置及默认值。
+- [安全策略](SECURITY.md)：漏洞报告方式。
 
-1. 你在电脑终端里对 `claude` 打字；CLI **不**经过本项目的 Agent SDK 子进程
-2. 输出写入 `~/.claude/projects/` 下 transcript
-3. server 的 `catchUpTick` 轮询磁盘，把新落定消息以只读镜像推到已打开该会话的 Web 客户端
-4. 镜像锁定期间 Web 输入受限（发送钮变为续接/说明态）；终端静默一段时间后自动解锁，Web 可接管
+## 用量与兼容性
 
-运行时依赖：`@anthropic-ai/claude-agent-sdk`、`express`、`compression`、`socket.io`、`dotenv`、`web-push`、`jose`。前端第三方库本地自托管到 `public/vendor/`（Tailwind/marked/highlight.js/DOMPurify），不依赖 CDN；见 [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md)。
+截至 **2026-07-31**，Agent SDK、`claude -p` 和第三方 Agent SDK 应用仍使用 Claude 订阅额度；Anthropic 曾公布的独立 credit 方案处于暂停状态。政策可能变化，请以 [官方说明](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) 为准。
+
+使用 API key 或第三方网关时，费用与限额由对应平台决定。项目记录的 claude CLI 版本只是发布验证环境；升级前可查看 [Releases](https://github.com/Ike-li/claude-chat-mobile/releases)。
 
 ## 许可证
 
 [GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li，附带 Section 7 补充条款；见 [NOTICE](NOTICE)。
 
-简单说：你可以自由使用、研究、修改并自托管本软件。但如果你把修改后的版本作为网络服务对外提供，AGPL 要求你同样以 AGPL 开源你的源代码；补充条款还要求你保留原作者署名、不得歪曲项目来源。若有无法满足上述条件的使用需求，请开 issue 沟通。
+你可以使用、研究、修改并自托管本软件。若把修改后的版本作为网络服务对外提供，AGPL 要求开放对应源代码；补充条款还要求保留原作者署名、不得歪曲项目来源。
 
 ## 友链
 

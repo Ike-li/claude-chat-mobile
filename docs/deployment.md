@@ -4,6 +4,8 @@
 >
 > 下文用占位符 `<your-domain>`、`<your-team>`、`<UUID>` 等，替换为你自己的值。Linux/systemd 用户把 LaunchAgent 部分换成 systemd unit，思路一致。
 
+首次本地安装先看[首次使用指南](getting-started.md)；Web/CLI 双通道与单驾驶员边界见[架构说明](architecture.md)。
+
 ## 架构
 
 ```
@@ -15,7 +17,7 @@
   - server：`node server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致。
   - tunnel：`cloudflared` 命名隧道，把 `:3000` 投到公网域名。
 - **鉴权分层**：公网走 Access JWT（服务端 `src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
-  > ⚠️ **反代拓扑会静默关掉设备审批层**。设备指纹审批按 socket 直连 peer 的 IP 判定「本机」。本配方里 Cloudflare 隧道在 `localhost:3000` 落地，连接显成 `127.0.0.1`，但公网路径已由 Access JWT 兜底，所以可接受。**若你换成任何在本机落地的其他反代**（nginx/Caddy 的 `proxy_pass localhost`、SSH 端口转发、frp 等），所有客户端都会显成本机，设备审批层会被跳过，**防线只剩 `AUTH_TOKEN`**。这类拓扑下务必设强 `AUTH_TOKEN`，不要指望设备审批纵深。
+  > 设备审批不会只凭 socket peer 是 loopback 就跳过：server 还会检查 Host。公网 Host（含 cloudflared/nginx/SSH 反代到 `127.0.0.1`）仍需设备 token；只有真实本机 Host，或已经通过 Cloudflare Access JWT 的连接，才跳过这层。
 
 ## ⚠️ 最容易忘的一点
 

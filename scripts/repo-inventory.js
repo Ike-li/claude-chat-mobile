@@ -30,8 +30,12 @@ const ROOT_FILES = new Map([
   ['.nvmrc', ['Project configuration', 'Recommended Node major version', 'keep']],
   // docs/ 手写文档逐篇显式登记（无 .md 通配）：往 docs/ 新增文档必须先在此声明用途，
   // 否则 inventory:check 拒绝——挡住审计报告/进度笔记/提案等一次性产物悄悄回堆。
+  ['docs/architecture.en.md', ['Documentation', 'English explanation of Web/CLI data paths, ownership, and replay', 'keep']],
+  ['docs/architecture.md', ['Documentation', 'Chinese explanation of Web/CLI data paths, ownership, and replay', 'keep']],
   ['docs/deployment.md', ['Documentation', 'Persistent service, tunnel, and Cloudflare Access operations guide', 'keep']],
   ['docs/display-contracts.md', ['Documentation', 'Display contracts: model / effort / statusline TUI–SDK–FE rules and test anchors', 'keep']],
+  ['docs/getting-started.en.md', ['Documentation', 'English first-run tutorial from installation through phone validation', 'keep']],
+  ['docs/getting-started.md', ['Documentation', 'Chinese first-run tutorial from installation through phone validation', 'keep']],
 ]);
 
 const PREFIX_RULES = [

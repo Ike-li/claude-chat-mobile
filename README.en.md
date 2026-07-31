@@ -1,6 +1,6 @@
 # Claude Chat Mobile
 
-> Bridge your local `claude` CLI to your phone: same agent, same session log, same permissions and tools — not a remote desktop, and not a shared live TTY.
+> Connect your local `claude` CLI to your phone. It keeps the same project configuration, tools, and session history, but it is not remote desktop software or a shared live TTY.
 
 [中文](README.md) · **English** · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/)
 
@@ -11,34 +11,52 @@
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#quick-start)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-> The two version badges read `master`'s `package.json` directly — they are not hand-maintained: Agent SDK comes from `dependencies`, claude CLI from `verifiedWith.claudeCli` (recorded by `scripts/release.sh` at release time). **The claude CLI one says "which version the last release was verified against", not a requirement** — this project drives *your* local CLI, and which version you run is your call.
+> The Agent SDK and claude CLI badges read `package.json` on `master`. The CLI badge records the environment used to verify the latest release; it is not a minimum version requirement.
 
-**Claude Code keeps running, but you're not always at your computer.** You ask claude to change code, then leave for a meeting — when it needs permission, a push arrives on your phone; open the app to see details and allow or deny. Back at your desk, `/resume` in the terminal picks up the same session you continued from your phone — same agent, same log, not a new one.
+![Claude Chat Mobile — use your terminal claude from your phone](https://ike-li.github.io/claude-chat-mobile/assets/hero-en.jpg)
 
-This project is for people who already use the `claude` CLI in a terminal. It does not bundle Claude, and it is not a reimplementation. It drives your logged-in local CLI through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). The phone sees the same agent, the same `CLAUDE.md`, the same MCP servers, skills, hooks, and session logs.
+Claude Code may keep running while you are away from your computer. Claude Chat Mobile drives your locally authenticated CLI through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), so you can keep editing code, running commands, answering questions, and approving actions from your phone. It does not bundle Claude or create a separate account or session system.
 
-The goal is narrow: **edit code, run commands, approve dangerous actions, and resume earlier conversations from your phone**. Both sides read the same on-disk CLI session log, but this is **not** a screen mirror of your terminal, and **not** a shared TTY where both ends type into the same session at once — only one driver (Web or CLI) writes at a time; the other side is read-only catch-up. While the CLI is running, the Web UI defaults to a read-only mirror; takeover waits for the current turn to finish before writing.
+## Who it is for
 
-## When it's worth it
+- People who already use `claude` in a macOS or Linux terminal and want to follow or handle work away from the desk.
+- People who need to switch between repositories and sessions while seeing tool calls, diffs, background tasks, and errors on a phone.
+- People who want approvals and questions to reach the phone instead of watching a terminal continuously.
 
-> This is not a phone remote desktop. A remote desktop mirrors your computer screen; this gives your local `claude` session a phone entry point. The difference shows up in situations like these:
->
-> - **A task is running and you have left the computer.** You ask claude to change code, then leave for a meeting. When it needs permission, a push arrives on your phone (type-level copy such as "needs your approval: Edit" — **not** the full command text; open the app to see details and allow/deny). No need to keep the computer screen awake or open a remote terminal.
-> - **One session, picked up across devices.** Start something from your phone on the way out; resume it at your desk with `/resume` — both sides read the same CLI session log, not two separate conversations. The other way works too: while a session runs in the terminal, the phone can open it as a **read-only mirror** (catch-up from the on-disk transcript; short blank windows or delay are normal — it does not attach to the live process). To keep writing from the phone, take over after the current turn ends. On a flaky subway connection the Web page reconnects and replays buffered output.
-> - **Several repos in parallel.** claude can run different tasks in two projects at once. Switch among them via the phone home hub / workspace drawer / session list (not a browser multi-tab mental model). A single remote-desktop screen is awkward for that on a phone.
-> - **Phone-native input.** Type `/` for a tappable command list, send a photo from your library to claude, or long-press to copy a long output. These interactions fit a phone better than a tiny terminal.
->
-> If you only need to glance at the machine now and then, a remote desktop is enough. This project is for using the phone often as a terminal companion.
+Only one side drives a session at a time. Web-driven messages travel through the Agent SDK into the local CLI. When the terminal CLI is driving, the Web app follows the persisted transcript in read-only mode. This is not screen sharing, and the phone and terminal cannot both type into one live process.
+
+## Core capabilities
+
+### Sessions and workspaces
+
+- Resume, fork, and remove CLI sessions at two levels, with a cross-session “needs you” view.
+- Monitor multiple workspaces and sessions. A git worktree must be added to `workdirs.json` by absolute path; it is never auto-discovered or implicitly authorized.
+- One message per turn: while a task runs, you can keep a draft, but the send control becomes Stop instead of queuing another message.
+
+### Mobile interaction
+
+- Streaming Markdown, syntax highlighting, tool cards, Edit/Write diffs, Read excerpts, and a native `AskUserQuestion` picker.
+- Image and file uploads, pasted screenshots, historical attachment previews, and composer `@` file references.
+- Browse files inside approved workspaces. Existing text files up to 256KB can be edited in CodeMirror, with content-hash checks preventing concurrent overwrites.
+
+### Notifications and visibility
+
+- Web Push / ntfy notifications for approvals, questions, and results. Notifications default to type-only text; you can test the delivery path and optionally enable content previews for Web Push.
+- An optional CLI hooks bridge turns terminal Stop / Notification events into immediate signals instead of waiting for polling.
+- API errors, retry countdowns, SDK notices, subagents, and background-task progress are visible in the UI rather than only in server logs.
+
+### Reliability and operations
+
+- `seq + epoch` event deduplication and reconnect replay. The status line selects either SDK or CLI snapshots according to the current driver.
+- Startup checks with `doctor`, an in-app security check, redacted logs, auth rate limits, a service-status panel, and authenticated `/health` and `/metrics` endpoints.
+- An installable PWA with complete Chinese and English UI coverage. Browser dependencies are self-hosted with the project instead of loaded from a CDN.
 
 ## Prerequisites
 
-- **Node.js ≥ 20** — check with `node --version`.
-- **A working `claude` CLI on the host.** This project drives *your* local CLI; it ships nothing of its own. Confirm `claude` runs in your terminal first (`which claude`, then open a conversation to confirm you are logged in). The web UI inherits that CLI, your `CLAUDE.md`, MCP servers, skills, hooks, and shell environment.
-- **Official subscription, or a third-party gateway / relay API — both work.** The web side inherits the provider / gateway / model from **the shell that starts the server**:
-  - **Official subscription** (`claude` already logged in): no extra setup.
-  - **Third-party gateway / relay**: `export` the `ANTHROPIC_*` your gateway needs (typically `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL`, per your gateway's docs) in the shell that starts the server, then launch it.
-  - ⚠️ Putting `ANTHROPIC_*` in `.env` has **no effect**. They are stripped at startup; only the server's shell environment is read.
-- **macOS or Linux (first-class).** Some path/permission logic has Windows-oriented fixes, but Windows is **not** an officially supported platform. Treat native Windows as experimental; WSL2 is the more reliable path.
+- **Node.js 20 or newer.**
+- **A locally installed and authenticated `claude` CLI.** Confirm that `which claude` finds it and that a terminal conversation works.
+- **macOS or Linux** are first-class platforms. Native Windows is experimental; WSL2 is the safer route.
+- Claude subscriptions and third-party gateways are both supported. Gateway `ANTHROPIC_*` variables must exist in the **shell that starts the server**; values placed in `.env` are stripped.
 
 ## Quick Start
 
@@ -46,200 +64,81 @@ The goal is narrow: **edit code, run commands, approve dangerous actions, and re
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 
-node --version           # need Node ≥ 20
-which claude             # the CLI this project drives — must be installed & logged in
-
-npm install --omit=dev   # runtime deps only — no Playwright/browser. Use a full install for UI tests.
-npm run setup            # interactive wizard: generates AUTH_TOKEN (the #1 gotcha) + asks for WORK_DIR, writes .env (0600)
-                         # prefer this over hand-editing; to use the raw template instead: cp .env.example .env
-                         # for scripts/agents, use non-interactive mode (the wizard needs a TTY):
-                         #   node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--force]
-
-# Recommended: pre-flight your config (port in use, CLAUDE_BIN path, gateway env, file perms)
-node scripts/doctor.js        # check config
-node scripts/doctor.js --fix  # tighten perms (.env and CCM_DATA_DIR/*.json → 0600)
-
-npm start                     # http://localhost:3000
+node --version
+which claude
+npm install --omit=dev
+npm run setup
+node scripts/doctor.js
+npm start
 ```
 
-**Faster: hand it to your coding agent** — in the repo directory (or have it clone first), give this to Claude Code / Codex CLI or similar:
+`setup` creates an `AUTH_TOKEN`, asks which `WORK_DIR` Claude may access, and explicitly asks whether to install the CLI hooks bridge. The startup log prints a tokenized LAN URL that you can open on your phone.
 
-```
-Help me install and start claude-chat-mobile for the first time (a web UI that connects my local claude CLI
-to my phone). This is a fresh, first-time setup, not restarting an already-deployed daemon — the "production
-deployment: don't manually npm start" warning in CLAUDE.md doesn't apply here.
-
-Do these in order, confirming each step before moving on:
-
-1. Prerequisites: node --version must be >= 20; which claude must resolve and be logged in (that CLI is what
-   this project drives — it ships none of its own). If either fails, stop and tell me; don't install claude
-   yourself.
-2. npm install --omit=dev
-3. Check two things with me before continuing:
-   (a) Which directory to mount as WORK_DIR — give an absolute path. This is what I'll be able to let claude
-       read and write from my phone, so don't use my whole home directory.
-   (b) Whether to install the CLI hooks bridge — it lets sessions I run in my own terminal push to my phone,
-       at the cost of writing to my global ~/.claude/settings.json.
-4. Write the config non-interactively; do NOT run the interactive wizard (your shell has no TTY, so it stalls
-   on a prompt, silently does nothing, and still exits 0):
-   node scripts/setup.js --yes --work-dir=<the absolute path from step 3> --hooks=<on or off>
-5. node scripts/doctor.js and fix what it flags (permission issues: node scripts/doctor.js --fix).
-6. Start the server in the background, not in the foreground (it would block you forever). Once up, confirm
-   with curl -s "http://127.0.0.1:3000/health?token=<AUTH_TOKEN from .env>" and require real JSON back —
-   don't just check that a process exists.
-7. Tell me how to open it on my phone: give me the LAN URL with the token from the startup log. Note that
-   AUTH_TOKEN is a secret (holding it is equivalent to shell access on this machine); it lives in .env
-   (mode 0600), so don't put it anywhere that leaves this machine.
-8. The first time my phone connects it will be blocked on device-fingerprint approval (a valid token is not
-   enough). When that happens, run node scripts/device.js list, confirm it's my phone, then
-   node scripts/device.js approve <ID>.
-
-If I later want fixed-domain public access, use docs/deployment.md to help me set that up.
-```
-
-Sessions started from the web work out of the box with the SDK status line — no Claude config changes needed. If you also want the web UI to mirror the CLI's model, thinking effort, context, cost, and quota while **read-only viewing a session that's actually running in the CLI**, you can explicitly install the transparent statusline bridge:
+The first connection from a non-local device also requires approval on the computer:
 
 ```bash
-npm run statusline:status     # read-only check, does not modify ~/.claude
-npm run statusline:install    # explicit opt-in; never run automatically by npm install / npm start
+node scripts/device.js list
+node scripts/device.js approve <ID>
 ```
 
-After installing, restart your Claude CLI and the background server; uninstall with `npm run statusline:uninstall`.
-
-Then open it on your phone. The startup log prints usable URLs with the token pre-filled:
-
-- **Same WiFi:** set `AUTH_TOKEN` in `.env` first (required even on your LAN; without it the phone cannot connect), then open the LAN address printed at startup (`http://<lan-ip>:3000/#token=…`). No tunnel needed.
-- **Public internet / install as a PWA** (PWA needs https): run a tunnel in another terminal:
-
-```bash
-cloudflared tunnel --url http://localhost:3000
-# On your phone open https://<random>.trycloudflare.com/#token=<YOUR_AUTH_TOKEN>
-# The token is stored in localStorage on first load, then cleared from the address bar.
-```
-
-The first time a phone connects from a non-local path, **a valid token alone is not enough** — approve the device fingerprint once on the computer (TOFU):
-
-```bash
-node scripts/device.js list           # list pending devices
-node scripts/device.js approve <ID>   # unlock that device immediately
-```
-
-> ⚠️ With no `AUTH_TOKEN` set, the server binds to `127.0.0.1` only. Neither your phone on the same LAN nor a tunnel can reach it. This is deliberate.
->
-> 📌 The above is the minimal setup: a temporary random tunnel for testing. For a fixed domain, Cloudflare Access two-factor, and a background daemon, see [docs/deployment.md](docs/deployment.md). Connections that pass Cloudflare Access skip the device-fingerprint step; a temporary random `cloudflared` tunnel has **no** Access, so you still need `device.js approve`.
->
-> ⚠️ This is a remotely reachable code-execution channel into your local shell. Read the [Security Model](#security-model) below before exposing it to the public internet.
+For the complete first-run flow, non-interactive setup, a copyable coding-agent prompt, PWA setup, and bridge configuration, see the [Getting Started guide](docs/getting-started.en.md).
 
 ## Three ways to run it
 
-Pick one for your situation. Commands are in [Quick Start](#quick-start) above and [docs/deployment.md](docs/deployment.md):
-
-| Mode | Good for | Cost |
+| Mode | Best for | Notes |
 |---|---|---|
-| **LAN, same WiFi**: `http://<lan-ip>:3000/#token=` | At home, phone and computer on one network | Useless when out; no tunnel, least fuss |
-| **Temporary public**: `cloudflared tunnel --url` (random domain) | Quick trial / demo | Address changes on every restart; testing-only per Cloudflare; device approval still required |
-| **Fixed production**: fixed domain + Cloudflare Access 2FA + daemon | Long-term, anywhere access | One-time DevOps setup; see [docs/deployment.md](docs/deployment.md) |
+| Same Wi-Fi: `http://<lan-ip>:3000/#token=…` | Home or office LAN | Simplest option; unavailable after leaving that network |
+| Temporary public URL: `cloudflared tunnel --url http://localhost:3000` | Trials and demos | Random hostname changes; no Access layer, so device approval still applies |
+| Fixed production deployment: domain + Cloudflare Access + service manager | Long-term access from anywhere | Requires one-time operations setup; see the [deployment guide](docs/deployment.md) |
+
+PWA installation and Web Push require HTTPS. On iOS, Web Push also requires iOS 16.4+ and installing the site on the Home Screen first.
 
 ## Security Model
 
-> **Read this before exposing it to the public internet.** This is a remotely reachable code-execution channel into your local shell:
+> This is a remotely reachable code-execution path into your local shell. Understand these boundaries before exposing it publicly.
 
-1. **Single-user per instance.** You run your own instance for yourself. There is no multi-user, account, or login system; any request that passes auth has the same power as you at the terminal. Do not treat it as a multi-tenant service.
-2. **No token, no leaving the host.** With no `AUTH_TOKEN` set, the server binds to `127.0.0.1` only. There is no "empty = open to the world" path. Reaching the public internet *requires* a token.
-3. **The auto-approve set inherits the CLI; no second allow-list is injected.** This project does not inject its own `allowedTools` / `disallowedTools`. Auto-approve is exactly the merged `permissions.allow` from your existing claude config: global `~/.claude/settings.json`, project `.claude/settings.json`, and local `.claude/settings.local.json` (loaded via `settingSources`, same source as your terminal). A match is auto-approved; anything else is suspended and pushed to the phone — the **full command and working directory are visible inside the app** before you confirm.
-   - The Web UI also has runtime permission modes (including `dontAsk` / `auto` / `bypassPermissions`) and approval TTL behavior; that is **not** "phone UI matches interactive terminal step for step." What is shared is the settings allow-list source, not the full interaction surface.
-   - ⚠️ **Before exposing publicly, audit your global `~/.claude/settings.json` allow-list**. Old `Bash(...)` / `Write` rules from terminal use will auto-approve here too, without a phone prompt. Tighten more than just the project-local config.
-4. **Device trust (TOFU).** A connection that is neither local nor Cloudflare Access-verified must be authorized once on your computer before it can do anything. A valid token alone is not enough. On the computer:
-   ```bash
-   node scripts/device.js list
-   node scripts/device.js approve <ID>
-   ```
-   Revoke with `deny <ID>`. Loopback connections and public connections that already passed a Cloudflare Access JWT skip this step.
+1. **Single-user, owner-level access.** There is no multi-user or tenant isolation. An authenticated operation has the permissions of the local account that started `claude`.
+2. **No token means loopback only.** Without `AUTH_TOKEN`, the server listens only on `127.0.0.1`. Phone or tunnel access requires a strong token.
+3. **Keep workspace scope narrow.** `WORK_DIR` and `workdirs.json` are the scope gate for files, sessions, and git operations. Do not expose your whole home directory for convenience.
+4. **Automatic approval inherits CLI configuration.** `permissions.allow` rules from `~/.claude/settings.json`, project `.claude/settings.json`, and `.claude/settings.local.json` apply here too. Review accumulated Bash/Write rules before public use.
+5. **Device trust is a second gate.** Except for local connections or requests validated by Cloudflare Access JWT, a valid token still needs one-time device approval. Revoke a device with `node scripts/device.js deny <ID>`.
+6. **The file editor is a direct user write.** It does not pass through the Agent tool-approval chain. It can only modify existing files up to 256KB and applies scope checks, content-hash conflict detection, and audit logging. Set `FILE_EDIT=off` for read-only browsing.
 
-## Cost Note
+Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.md), not a public issue.
 
-**Currently (as of 2026-07-20): Agent SDK / `claude -p` usage still draws from your subscription quota, in the same pool as interactive use**. On the official subscription path, this project does not incur separate billing.
+## How Web and CLI work together
 
-Background: Anthropic once announced that, starting 2026-06-15, SDK *headless* usage would move to a separate credit pool (Max 5x $100/month at API rates), but **that change was paused on the day it shipped and never took effect** ([official Help Center](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)). Anthropic says it will rework the plan and give advance notice. This is a pause, not a cancellation.
-
-- **Potential risk**: if the policy is revived, this project's SDK usage would move out of the subscription quota and could hit a separate credit cap. On the author's own path, a rough API-rate equivalent was about **~$716/month** — **personal measurement only, not a product SLA or typical-user figure**; budget from your own usage if the policy returns.
-- **Via a third-party gateway** (`ANTHROPIC_*` exported in the shell): unaffected — you pay the gateway's own rates.
-
-## Features
-
-Beyond the core loop above:
-
-- **Single-driver model**: Web and CLI take turns writing the same session; while the CLI drives, the Web is a read-only mirror (transcript catch-up). Takeover queues until the current turn finishes to avoid concurrent write forks.
-- **Six permission modes** (default / plan / acceptEdits / dontAsk / auto / bypassPermissions), switchable at runtime; approvals carry TTL and integrity binding.
-- **Per-message model switching** (gateway-suffixed names supported); resume can fall back to the last assistant model in the session.
-- **Multi-repo and multi-session**: switch among allow-listed working directories; watch several sessions from the home hub / drawer. To use a git worktree, add its absolute path to `workdirs.json` as its own workspace (hot-reloaded, no restart).
-- **One turn at a time**: no new messages while a task runs (the input stays typable for drafts; the send slot becomes a stop button with a persistent hint); CLI-style live status line and turn-done line.
-- **Visible sub-agents / background tasks**, with stop for background tasks; Task-list tools rendered inline.
-- **File and image upload** (including clipboard paste and pre-send preview), with path injection and traversal protection; historical attachments open on tap; **read-only project file browse** (never outside allow-listed workdirs).
-- **Preview changes on tool cards**: diff for Edit / Write, snippet for Read; base64 redaction and JSON highlighting.
-- **Thinking-effort control**, a **single-source-of-truth status line** (web-driven sessions read from the SDK; an optional bridge lets CLI-driven sessions mirror a CLI snapshot), and **`AskUserQuestion`** as a native picker.
-- **Web Push / ntfy notifications**: type-level prompts for approvals, questions, and results (**no** command/question body); the notification deep-links back to the session (iOS 16.4+ requires Add to Home Screen first; optional ntfy runs self-hosted for more reliable lock-screen delivery). Result-class pushes are skipped while a socket is already online.
-- **Two-level session delete** (remove from product / truly delete underlying files via SDK); cross-session "needs you" aggregation.
-- **Installable PWA**: maskable icon + standalone display, "Add to Home Screen" to use it as an app.
-- **Ops & security hardening**: log sanitization, `0600` atomic writes, a `doctor` startup self-check, **a one-tap UI security check-up (redacted, audits the dangerous allowlist)**, auth rate limiting, optional Cloudflare Access 2FA, `/metrics` and a service-status panel.
-
-## How it works (read only if you want to read or fork the code)
-
-Internally this is a default-locked relay: it connects your local claude CLI, including your CLAUDE.md / MCP / skills / login state, to a phone browser. Sessions stay continuous, the process is visible, and dangerous actions bounce back to the phone for approval. Two paths coexist: **Web-driven** traffic streams through the SDK; **CLI-driven** traffic writes the on-disk transcript and the Web catches up read-only.
-
-```mermaid
-graph LR
-    subgraph Phone
-        UI[public/ single page<br/>chat bubbles · tool cards · approval sheet]
-    end
-    subgraph Internet
-        CF[Cloudflare Tunnel]
-    end
-    subgraph Host
-        S[src/server/ + thin server.js launcher<br/>Express static + Socket.IO contract layer<br/>auth · preflight · device trust · handler guard]
-        A[src/agent/agent.js · AgentSession<br/>long-lived SDK query · permission gate<br/>event envelope seq+epoch · ring buffer]
-        J[(CCM_DATA_DIR/sessions.json<br/>session metadata)]
-        H[catchUpTick<br/>read-only mirror catch-up]
-        SDK[claude-agent-sdk]
-        CLI[local claude CLI<br/>loads your full config]
-        T[(CLI transcript<br/>~/.claude/projects)]
-        FS[(your project files<br/>WORK_DIR)]
-    end
-    UI <-->|"agent:event envelope / user:* events<br/>(event contract, WebSocket)"| CF <--> S
-    S <--> A
-    A <-->|streaming input<br/>Web-driven| SDK <-->|spawn| CLI
-    CLI --> FS
-    CLI -->|CLI-driven direct write| T
-    T -->|poll catch-up| H --> S
-    S --- J
+```text
+Web driver: phone → Socket.io → AgentSession → Agent SDK → local claude CLI → workspace
+CLI driver:  terminal claude → transcript / hooks → server → read-only phone mirror
 ```
 
-### Message flow
+Both paths share persisted CLI session history, not a live TTY. While the terminal CLI is driving, the Web app can only see content that has reached disk. Hooks accelerate “turn ended / needs you” signals; they do not make the terminal process a bidirectionally attached session. Before Web takes over, it waits for the terminal turn to end and absorbs external transcript growth before sending.
 
-**Web-driven (phone sends a message):**
+See the [architecture guide](docs/architecture.en.md) for the component diagram, message flow, single-driver transitions, and reconnect replay.
 
-1. Phone `user:message {text}` → server validates → routes to the target instance `agents.get(instanceId)` (lazy-respawned resume; after `session:new` a FRESH instance is lazily opened only on the first message).
-2. If the disk grew outside the SDK process (the CLI wrote), dispose+resume first to absorb it — prevents context forks.
-3. The text is pushed into the AgentSession's streaming input → SDK → claude CLI works in `WORK_DIR`.
-4. The SDK message stream flows into `map()`: streaming text → `text_delta`, tool calls → `tool_use`/`tool_result`, off-allow-list actions → `permission_request` (suspended, awaiting allow/deny on the phone).
-5. Each event is wrapped in a `{seq, epoch, sessionId, instanceId, cwd, ts, type, payload}` envelope → into a 2,000-entry ring buffer → `io.to('approved').emit` broadcast to approved devices only (the front-end demuxes by `viewingInstanceId`; high-frequency deltas from background sessions are not broadcast to save bandwidth).
-6. Phone reconnects: `sync:since {sessionId, lastSeq, instanceId}` replays the buffer; an `epoch` change means the server swapped the instance, so the client resets its dedup baseline automatically.
+## Documentation
 
-**CLI-driven (terminal owns the session; Web is read-only):**
+- [Getting Started](docs/getting-started.en.md): from clone to the first message sent from your phone.
+- [Deployment and operations](docs/deployment.md) (Chinese): Cloudflare Tunnel, Access, LaunchAgent, and systemd.
+- [Architecture](docs/architecture.en.md): Web/CLI paths, event envelopes, and takeover boundaries.
+- [Display contracts](docs/display-contracts.md) (Chinese): sources of truth for model, effort, and status-line display.
+- [Repository map](docs/repository-map.md): entrypoints, directory roles, and the complete file inventory.
+- [Environment template](.env.example): every runtime setting and its default.
+- [Security policy](SECURITY.md): private vulnerability-reporting instructions.
 
-1. You type to `claude` in a computer terminal; that path does **not** go through this project's Agent SDK child process.
-2. Output is written to the transcript under `~/.claude/projects/`.
-3. The server's `catchUpTick` polls the disk and pushes newly settled messages as a read-only mirror to Web clients that have the session open.
-4. While the mirror lock is held, Web input is restricted (send button becomes resume/explain state); after the terminal is quiet for a while the lock releases and the Web can take over.
+## Usage and compatibility
 
-Runtime dependencies: `@anthropic-ai/claude-agent-sdk`, `express`, `compression`, `socket.io`, `dotenv`, `web-push`, `jose`. Front-end third-party libraries are self-hosted locally in `public/vendor/` (Tailwind/marked/highlight.js/DOMPurify), with no CDN dependency; see [public/vendor/THIRD-PARTY-NOTICES.md](public/vendor/THIRD-PARTY-NOTICES.md).
+As of **2026-07-31**, Agent SDK, `claude -p`, and third-party Agent SDK apps still draw from Claude subscription usage. Anthropic's previously announced separate-credit plan is paused. This policy may change; check the [official notice](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
+
+API-key and third-party-gateway costs and limits are set by their providers. The recorded claude CLI version is only a release-verification environment; check [Releases](https://github.com/Ike-li/claude-chat-mobile/releases) before upgrading.
 
 ## License
 
-[GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li, with additional terms under Section 7; see [NOTICE](NOTICE).
+[GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li, with Section 7 additional terms; see [NOTICE](NOTICE).
 
-In short: you are free to use, study, modify, and self-host this software. But if you run a modified version as a network service, the AGPL requires you to release your source under the AGPL as well, and the additional terms require you to preserve the original author attribution and not misrepresent the project's origin. For any use that cannot meet these conditions, please open an issue to discuss.
+You may use, study, modify, and self-host this software. If you offer a modified version as a network service, the AGPL requires you to make the corresponding source available. The additional terms also require attribution and prohibit misrepresenting the project's origin.
 
 ## Friend Links
 
-- [LINUX DO](https://linux.do/) — a Chinese-language developer community (site is in Chinese)
+- [LINUX DO](https://linux.do/)
