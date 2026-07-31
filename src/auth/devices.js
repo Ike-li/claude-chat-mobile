@@ -1,12 +1,11 @@
 // devices.js —— 管理受信任和等待确认的设备指纹列表。
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
+import { resolveDataDir } from '../shared/data-dir.js';
 
-const HERE = import.meta.dirname || dirname(fileURLToPath(import.meta.url));
 // CCM_DATA_DIR 是受支持的状态根：生产可把控制面数据移出仓库，测试也用它隔离真实状态。
-const DATA_DIR = process.env.CCM_DATA_DIR || join(HERE, '..', '..', 'data');
+const DATA_DIR = resolveDataDir();
 // 文件级重定向（TC-001，对称 approval-store 的 CCM_APPROVAL_STORE_FILE / sessions 的 CCM_SESSIONS_FILE）：
 // 优先级 CCM_*_DEVICES_FILE > CCM_DATA_DIR > data/。让单测 preload 把设备文件重定向到临时目录、彻底不碰
 // 生产 data/（避免 devices.test 的 rename 备份中断留残留 / 触发生产 watcher），又不动 CCM_DATA_DIR（不干扰集成测试）。

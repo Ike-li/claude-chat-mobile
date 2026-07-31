@@ -7,6 +7,7 @@ import * as interactionLog from './interaction-log.js';
 import * as diagLog from './diag-log.js';
 import { sanitize } from '../shared/sanitizer.js';
 import { sdkChildEnv } from '../shared/child-env.js';
+import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP } from '../shared/tool-summary.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
@@ -23,7 +24,6 @@ const RATE_LIMIT_LABELS = Object.freeze({
   seven_day_overage_included: 'Fable 5 额度',
   overage: '用量信用额度',
 });
-const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要默认截断；permission_request 永不截断（4a）
 const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几行
 // ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
@@ -2106,20 +2106,10 @@ export class AgentSession {
   }
 }
 
-function truncate(s, cap = TOOL_SUMMARY_CAP) {
-  if (typeof s !== 'string') return '';
-  return s.length > cap ? s.slice(0, cap) + ' …（已截断）' : s;
-}
 function toolResultCap(name) {
   const n = String(name || '');
   if (n === 'Bash' || n === 'bash' || n === 'run_command' || n === 'Shell') return TOOL_SUMMARY_CAP_BASH;
   return TOOL_SUMMARY_CAP;
-}
-
-function stringify(v) {
-  if (v == null) return '';
-  if (typeof v === 'string') return v;
-  try { return JSON.stringify(v); } catch { return String(v); }
 }
 
 // 从完整 tool input 估 +/- 行（与前端 summarize 同源口径：块级行数，非精细 diff）。
@@ -2142,35 +2132,6 @@ function estimateMutationLineStats(name, input = {}) {
   if (name === 'Write') return { added: lines(input?.content), removed: 0 };
   if (name === 'NotebookEdit') return { added: lines(input?.new_source), removed: 0 };
   return { added: 0, removed: 0 };
-}
-
-// 长 base64/二进制载荷脱敏（Read 读图片等场景，tool_result 会带回原始字节供模型"看见"图片）：
-// 不猜 SDK 具体字段名（同 file-preview.js 的二进制探测思路，防 SDK 版本漂移改字段名致失效）——
-// 整串纯 base64 字符集且达到阈值长度才判定；真实代码/路径/命令几乎不可能连续 500+ 字符不含
-// 空白或标点，故不会误伤 Edit/Write 预览 diff。脱敏须在 truncate() 之前，否则大 base64 会把
-// TOOL_SUMMARY_CAP 截断额度提前占满，挤掉真正有用的字段。
-const BASE64_REDACT_MIN_LEN = 500;
-// 兼容 URL-safe 变体（-_ 代替 +/）：原正则不匹配它，走摘要路径时后面还有 truncate 兜底看不出来，
-// 但 tool:full「展开全文」没有兜底 —— 一个漏判的 base64 图片就是整串原样进 DOM。
-const BASE64_ONLY_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
-// seen：循环引用兜底（raw 结构不受本项目控制，MCP/SDK 工具输出可能自引用）——不加会在遇到循环
-// 结构时无限递归直到栈溢出，和裸 JSON.stringify 一样能打断整条正在处理的消息。
-function redactBase64(value, seen = new WeakSet()) {
-  if (typeof value === 'string') {
-    if (value.length >= BASE64_REDACT_MIN_LEN && BASE64_ONLY_RE.test(value)) {
-      return `（base64 数据，约 ${Math.ceil(value.length / 1024)}KB，已省略）`;
-    }
-    return value;
-  }
-  if (value && typeof value === 'object') {
-    if (seen.has(value)) return '（循环引用，已省略）';
-    seen.add(value);
-    if (Array.isArray(value)) return value.map(v => redactBase64(v, seen));
-    const out = {};
-    for (const k of Object.keys(value)) out[k] = redactBase64(value[k], seen);
-    return out;
-  }
-  return value;
 }
 
 function asArray(v) {

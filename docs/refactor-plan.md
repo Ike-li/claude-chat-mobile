@@ -59,7 +59,8 @@
 **目标**：`CCM_DATA_DIR` 解析收敛单点；消灭已分叉的三件套复制。
 
 1. **新建 `src/shared/data-dir.js`**（叶子模块，只准 import node 内置）：导出如 `resolveDataDir()` / `dataFile(name)`。真实解析点盘点（2026-07-31 grep 实测）：
-   - **改造对象——7 处 `process.env.CCM_DATA_DIR ||` 解析表达式**：5 个域模块在模块求值期固化（`src/sessions/sessions.js:14`、`src/agent/approval-store.js:17`、`src/ops/audit.js:20`、`src/auth/devices.js:9`、`src/auth/cf-access.js:14`）+ `src/server/config.js:67`（`parseServerConfig` 调用期解析）+ `src/server/app.js:2915` 一处内联 env 读（doctor 接线）。
+   - **改造对象——6 处**：5 个域模块在模块求值期固化（`src/sessions/sessions.js:14`、`src/agent/approval-store.js:17`、`src/ops/audit.js:20`、`src/auth/devices.js:9`、`src/auth/cf-access.js:14`）+ `src/server/config.js:67`（`parseServerConfig` 调用期解析，必须走带参重载 `resolveDataDir(env, projectRoot)` 才能保住它的可注入纯度与既有单测）。
+   - **`src/server/app.js:2915` 排除**（执行期实测订正）：该处 `process.env.CCM_DATA_DIR || null` 的 `null` 兜底有语义，`src/ops/doctor-runtime.js:31-33` 靠它判「未覆盖」，换成统一解析会改行为。
    - **不要动的**：`src/server/app.js` 主体（init-cache、worktree-settings 等）与 `notify-channels`、`device-gate`、`log-terminal` 已经通过 `parseServerConfig().dataDir` 单源注入（app.js:107 解构后下发）——这正是目标形态，保持注入模式不变。
    - **时序红线**：`src/server/config.js` 在 .env 加载**之前**就被求值（`server.js` 须先 import 它才能调 `loadRuntimeEnvironment`）。`data-dir.js` 一旦被 config.js import，**模块顶层不得读 env**，必须调用期解析（函数体内读 `process.env`）。5 个域模块把顶层 `const` 改为调用 `dataFile('xxx.json')`——其模块求值发生在 .env 加载后，时机不变。
    - **优先级保持**：各模块的 `CCM_*_FILE` 文件级覆盖（`tests/setup/preload-env.mjs` 靠它隔离单测）优先级不变，目标形态 `process.env.CCM_SESSIONS_FILE || dataFile('sessions.json')`。

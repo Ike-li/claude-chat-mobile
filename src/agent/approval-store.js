@@ -8,13 +8,13 @@
 // 写入失败不应、也不会阻塞审批流程本身（各调用点仅捕获日志，不向上抛）。
 import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
 import { createSerialWriter } from '../shared/serial-writer.js';
+import { dataFile } from '../shared/data-dir.js';
 
 // 优先级同 sessions.js：CCM_APPROVAL_STORE_FILE（仅测试）> CCM_DATA_DIR > data/ 默认。
-const FILE = process.env.CCM_APPROVAL_STORE_FILE
-  || join(process.env.CCM_DATA_DIR || join(import.meta.dirname, '..', '..', 'data'), 'approval-requests.json');
+const FILE = process.env.CCM_APPROVAL_STORE_FILE || dataFile('approval-requests.json');
 
 const EMPTY = () => ({ requests: [] });
 

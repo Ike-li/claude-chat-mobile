@@ -1,5 +1,5 @@
 import dotenv from 'dotenv';
-import { join } from 'node:path';
+import { resolveDataDir } from '../shared/data-dir.js';
 
 const positiveNumber = (value, fallback) => {
   const number = Number(value);
@@ -64,6 +64,8 @@ export function parseServerConfig(env, {
     sessionDeleteQuietMs: positiveNumber(env.SESSION_DELETE_QUIET_MS, 300_000),
     devMode: env.DEV_MODE === '1',
     workDir: env.WORK_DIR || home,
-    dataDir: env.CCM_DATA_DIR || join(projectRoot, 'data'),
+    // 走带参重载而非无参形式：本函数是可注入纯函数（单测传 projectRoot 断言回落），
+    // 且它在 .env 加载前就被求值，绝不能让状态根解析退化成读 process.env。
+    dataDir: resolveDataDir(env, projectRoot),
   };
 }

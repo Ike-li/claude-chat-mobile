@@ -2,16 +2,16 @@
 // 只存元数据（id/title/cwd/model/permissionMode/effort/时间戳），永不存消息内容——内容事实源是 claude 自己的 session。
 import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
 import { createSerialWriter } from '../shared/serial-writer.js';
+import { dataFile } from '../shared/data-dir.js';
 
 // #14：锚定模块目录而非 process.cwd()，从任何目录启动 server 都读写同一份状态。
 // CCM_SESSIONS_FILE 覆盖路径——仅测试用，让单测指向临时文件、永不碰真实 data/sessions.json（防 npm test 污染生产状态）。
 // 次优先 CCM_DATA_DIR（server.js/devices.js 同款）：E2E 设一个 CCM_DATA_DIR 即把 sessions 连同其余状态文件
 // 一并重定向到临时根，无需逐个设环境变量。优先级：CCM_SESSIONS_FILE > CCM_DATA_DIR/sessions.json > data/sessions.json。
-const FILE = process.env.CCM_SESSIONS_FILE
-  || join(process.env.CCM_DATA_DIR || join(import.meta.dirname, '..', '..', 'data'), 'sessions.json');
+const FILE = process.env.CCM_SESSIONS_FILE || dataFile('sessions.json');
 
 // 台阶2：当前会话指针由全局单指针 currentSessionId 升为 currentByCwd（每工作目录一个）。
 // hiddenSessionIds（FR-20 两级删除 L1，承接 docs/design.md）：session:list 的数据源是直接扫
