@@ -364,7 +364,6 @@ export const EN_DICT = Object.freeze({
   '⚡ 命令：': '⚡ Command: ',
   // 排队已于 2026-07-30 移除：在途轮期间发不出新消息，输入框仍可打字存草稿
   '当前任务运行中，完成后可发送': 'Task running — you can send once it finishes',
-  '⏳ 当前任务运行中，完成后可发送': '⏳ Task running — you can send once it finishes',
   '未发送 · 任务运行中': 'Not sent · task running',
   '重发': 'Resend',
   '正在发送...': 'Sending...',

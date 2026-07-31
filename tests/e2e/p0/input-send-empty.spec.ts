@@ -62,22 +62,23 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   });
 
   // 排队已移除（2026-07-30）：在途轮期间不收新消息。输入框仍可打字存草稿，主按钮恒为停止钮，
-  // 常驻提示行说明为什么发不出去；轮次结束后自动解锁，草稿原样还在、可直接发出。
-  test('P0-02c 任务运行中保留草稿、禁止发送并常驻提示', async ({ page }) => {
+  // placeholder 说明为什么发不出去（唯一提示点，不再另起一行小字）；轮次结束后自动解锁，草稿原样还在、可直接发出。
+  test('P0-02c 任务运行中保留草稿、禁止发送并由 placeholder 提示', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:turn-running');
     await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
-    await expect(page.locator('[data-testid="composer-busy-hint"]')).toBeVisible();
-    await expect(page.locator('[data-testid="composer-busy-hint"]')).toContainText('运行中');
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', /运行中/);
+    // 同一句话只说一次：composer 上方不再有重复的小字提示行
+    await expect(page.locator('[data-testid="composer-busy-hint"]')).toHaveCount(0);
 
     // 输入框仍可打字（草稿能力保留），但主按钮不变回发送——运行中发不出去
     await page.locator('#input').fill('message after the turn finishes');
     await expect(page.locator('#input')).toHaveValue('message after the turn finishes');
     await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
 
-    // 轮次结束 → 提示行消失、主按钮回到发送态，草稿原样保留
-    await expect(page.locator('[data-testid="composer-busy-hint"]')).toBeHidden({ timeout: 10_000 });
+    // 轮次结束 → placeholder 回到空闲文案、主按钮回到发送态，草稿原样保留
+    await expect(page.locator('#input')).toHaveAttribute('placeholder', '给 Claude 发消息...', { timeout: 10_000 });
     await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'send');
     await expect(page.locator('#btnSend')).toBeEnabled();
     await expect(page.locator('#input')).toHaveValue('message after the turn finishes');

@@ -3525,7 +3525,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     btnSend.classList.toggle('hidden', hideSend);
     syncComposerDiscoverHint();
     syncComposerPlaceholder(); // turnRunning / 镜像 共用 placeholder
-    syncComposerBusyHint();
   }
 
   // placeholder：镜像态走 mirror 文案；在途轮提示「运行中」；其余用「给 Claude 发消息...」。
@@ -3541,18 +3540,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       mirrorReadonly: false,
       idleText: t('给 Claude 发消息...'),
     });
-  }
-
-  // 在途轮常驻提示：placeholder 在用户打字时看不见（草稿保留是有意为之），移动端又无 hover title，
-  // 故单独一行小字告诉用户「为什么发不出去 + 什么时候能发」。
-  function syncComposerBusyHint() {
-    const hint = $('composerBusyHint');
-    if (!hint) return;
-    const show = _turnRunning && !mirrorReadonlySid;
-    hint.classList.toggle('hidden', !show);
-    if (show && hint.textContent !== t('⏳ 当前任务运行中，完成后可发送')) {
-      hint.textContent = t('⏳ 当前任务运行中，完成后可发送');
-    }
   }
 
   function syncComposerDiscoverHint() {
