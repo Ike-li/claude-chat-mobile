@@ -159,7 +159,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('[data-testid="user-message"]')).toHaveCount(1);
 
     await page.locator('#input').fill('draft while approving');
-    await page.locator('#permModal').click({ position: { x: 12, y: 12 } });
+    // 取点避开顶栏：审批/提问挂起时导航层抬到 sheet 之上（body.nav-escape），左上角 (12,12)
+    // 已归 header —— 那里点下去是切会话，不再是「被遮罩吞掉」。y=140 落在遮罩空白区。
+    await page.locator('#permModal').click({ position: { x: 12, y: 140 } });
 
     await expect(page.locator('#permModal')).toBeVisible();
     await expect(page.locator('#permInput')).toContainText('git push origin main');

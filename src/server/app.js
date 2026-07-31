@@ -1015,7 +1015,10 @@ function setMirror(readonly, sessionId, force = false, stale = false, observedCl
     instanceId: readonly ? forInstanceId : viewingInstanceId,
     cwd: viewingCwdOf(), // SRV-NEW-006
     ts: Date.now(), type: 'mirror_state',
-    payload: { readonly, stale, observedCli: nextObserved, quietTicks, remainingMs, autonomous: nextAutonomous },
+    // cliSeen：本次观察期内是否见过 entrypoint=cli 的活注册表条目（cliPresenceStep 的 seen 槽）——
+    // 即「确实有终端进程在/曾在驾驶」这一事实。false 时锁是靠 transcript 尾部形态【推断】出来的，
+    // 前端据此决定 stale 要不要说成「终端疑似中断」：没见过终端就别断言终端，只说只读。
+    payload: { readonly, stale, observedCli: nextObserved, quietTicks, remainingMs, autonomous: nextAutonomous, cliSeen: mirrorCliSeen },
   });
   scheduleStatusRefresh(); // 驾驶方或 CLI 观察态变化时立即切换/刷新 statusline 来源
   rescheduleCatchUp(); // 锁态变 → 追平间隔在 1s/2.5s 间切换

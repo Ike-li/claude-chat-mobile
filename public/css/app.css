@@ -924,3 +924,14 @@ details.thinking.thinking-live > summary::before {
 .cm-ccm-viewer .cm-keyword { color: var(--info); font-weight: 600; }
 .cm-ccm-viewer .cm-variable-2, .cm-ccm-viewer .cm-property { color: var(--ink-soft); }
 .cm-ccm-viewer .cm-tag, .cm-ccm-viewer .cm-attribute { color: var(--warning); }
+
+/* ── 导航逃生层（2026-07-30）──────────────────────────────────────────────
+   审批 / 提问 sheet 是「等你答复」而不是「阻断一切」：它们的 z-40 全屏遮罩原本连顶栏也盖住，
+   于是 A 会话一弹审批就再也切不到 B 会话——而多会话并发正是这个产品的核心场景。
+   挂起期间（body.nav-escape，由 openSheet/closeSheet 同步）把顶栏与侧栏抬到 sheet 之上，
+   答复完自动落回。刻意不改静态层级：deviceRequests 等页面级提示的 header < cards < modal
+   契约（P0-15g 钉住）保持原样；登录门 / 确认弹窗（z-50）仍在最上，导航压不过它们。
+   注：≥1024px 桌面布局另有一套 !important 层级，未随此调整。 */
+body.nav-escape header { z-index: 45; }
+body.nav-escape #sidebarScrim { z-index: 46; }
+body.nav-escape #leftSidebar { z-index: 47; }

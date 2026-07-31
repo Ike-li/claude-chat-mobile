@@ -212,7 +212,9 @@ export function createStatusScenarios(getContext) {
       run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, delay }) => {
         const mirrorEvent = (readonly, stale) => ({
           seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'mirror_state', payload: { readonly, stale },
+          // cliSeen:true —— 这些场景模拟的就是「终端在驾驶」，如实带上 server 的负证据槽，
+          // 否则前端会保守当成「没见过终端」而不敢把 stale 说成「终端疑似中断」。
+          type: 'mirror_state', payload: { readonly, stale, cliSeen: true },
         });
         socket.emit('agent:event', mirrorEvent(true, false));
         await delay(1500);
@@ -233,7 +235,9 @@ export function createStatusScenarios(getContext) {
       run: run(async ({ socket, activeEpoch, viewingInstanceId, activeModel, delay }) => {
         const mirrorEvent = (readonly, stale) => ({
           seq: 0, epoch: 'server', sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
-          type: 'mirror_state', payload: { readonly, stale },
+          // cliSeen:true —— 这些场景模拟的就是「终端在驾驶」，如实带上 server 的负证据槽，
+          // 否则前端会保守当成「没见过终端」而不敢把 stale 说成「终端疑似中断」。
+          type: 'mirror_state', payload: { readonly, stale, cliSeen: true },
         });
         socket.emit('agent:event', mirrorEvent(true, false));
         await delay(3000);

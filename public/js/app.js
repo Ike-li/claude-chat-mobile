@@ -255,6 +255,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   // armedTakeoverSid=已排队接管、等终端本轮完结/疑似中断再自动放行（见 logic.js armedTakeoverStep）；
   // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「续接 CLI 会话」时判定走排队还是即时确认）。
   let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
+  // server 侧 cliPresenceStep 的 seen 槽：本次观察期是否见过 entrypoint=cli 的活注册表条目。
+  // 决定 stale 该说「终端疑似中断」还是只说只读——没见过终端就别把推断说成事实（原先两个调用点
+  // 硬编码 isWebInitiated:true，等于恒不说，「疑似中断」文案在 composer 上完全不可达）。
+  let mirrorCliSeenFlag = false;
   // mirrorAutonomousFlag=当前只读锁能否确定是本会话自己被 ScheduleWakeup/CronCreate 定时唤起（server
   // 端 classifyTranscriptTail 查到 harness marker），而非真不知道来源的「大概率终端」——只影响横幅措辞，
   // 不影响是否只读（见 logic.js formatMirrorBannerText/formatMirrorComposerHint 的 autonomous 参数）。
@@ -5001,6 +5005,17 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
     };
     document.addEventListener('keydown', sheetKeyHandler, true);
+    syncNavEscapeLayer();
+  }
+  // 审批/提问挂起时把导航层（顶栏 + 侧栏）抬到 sheet 之上——这两类 sheet 是「等你答复」而不是
+  // 「阻断一切」：A 会话弹审批就切不到 B 会话，等于把多会话并发这个核心场景锁死。
+  // 只在挂起期间临时抬升，不动静态层级——deviceRequests 等页面级提示的既有层级契约
+  // （header < cards < modal，P0-15g）因此不受影响。
+  function syncNavEscapeLayer() {
+    const blocking = Boolean(
+      permModal?.classList.contains('sheet-open') || questionModal?.classList.contains('sheet-open'),
+    );
+    document.body.classList.toggle('nav-escape', blocking);
   }
   function closeSheet(el) {
     haptic('tap');
@@ -5016,6 +5031,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     }
     const prev = sheetFocusPrev;
     sheetFocusPrev = null;
+    syncNavEscapeLayer(); // sheet-open 刚摘掉：若已无审批/提问挂起，导航层落回既有层级
     // Delay adding hidden class to let slide-down animation finish,
     // which takes around 300ms. E2E wait tasks wait up to 15s so 300ms is perfect.
     setTimeout(() => {
@@ -6661,7 +6677,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       return;
     }
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, isWebInitiated: true });
+    inputEl.placeholder = formatMirrorBannerText({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, isWebInitiated: !mirrorCliSeenFlag });
     maybeHintHooksBridge();
     // 兼容：隐藏节点若仍在 DOM，同步文案（不展示）
     if (mirrorBannerText) mirrorBannerText.textContent = inputEl.placeholder;
@@ -6702,7 +6718,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   function showMirrorComposerHint() {
     if (!mirrorReadonlySid) return;
     const armed = armedTakeoverSid === mirrorReadonlySid;
-    const text = formatMirrorComposerHint({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, isWebInitiated: true });
+    const text = formatMirrorComposerHint({ armed, stale: mirrorStaleFlag, autonomous: mirrorAutonomousFlag, isWebInitiated: !mirrorCliSeenFlag });
     const now = Date.now();
     if (!shouldEmitThrottledHint({
       lastText: _mirrorComposerHintLast.text,
@@ -6788,6 +6804,9 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     //   （承接 docs/design.md；2026-07-12 机主确认 Phase 8 不做此 per-socket 大改、保留现状，见 server.js setMirror 登记。）
     const readonly = !!ev.payload?.readonly;
     const stale = !!ev.payload?.stale;
+    // server 是否见过真实 CLI 注册表条目（entrypoint=cli）。缺省（旧服务端/视觉 mock 不带）保守当
+    // 「没见过」→ 不断言「终端」，只说只读；见到了才允许 stale 说成「终端疑似中断」。
+    mirrorCliSeenFlag = !!ev.payload?.cliSeen;
     if (!acceptMirrorState({
       readonly,
       eventInstanceId: ev.instanceId ?? null,
