@@ -10,10 +10,10 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await ensureComposerReady(page);
 
     // 1. 起始状态/假设：fresh state，已连接，输入框为空。
+    // Composer C：空闲且无内容时发送钮整颗隐藏（shouldHideComposerSendButton），避免「点了没反应」——
+    // 所以这里不再点它（隐藏元素连 force click 都点不动），只断言它不可点且不可见，空态不产生任何消息。
     await expect(page.locator('#btnSend')).toBeDisabled();
-    // UI-002：disabled 约 60% 不透明（可见发送位）
-    await expect(page.locator('#btnSend')).toHaveClass(/opacity-60/);
-    await page.locator('#btnSend').click({ force: true });
+    await expect(page.locator('#btnSend')).toBeHidden();
     await expect(page.locator('[data-testid="user-message"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="assistant-message"]')).toHaveCount(0);
 

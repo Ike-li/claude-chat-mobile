@@ -85,6 +85,18 @@ export async function openGeneralSettings(page: Page) {
   await expect(page.locator('#generalSheet')).not.toHaveClass(/translate-y-full/);
 }
 
+/**
+ * 通用设置里的「🩺 诊断」段是 <details>，默认折叠（产品有意：非常用路径，省首屏高度）——
+ * 折叠时 <details> 内容是 display:none，安全体检 / 服务状态按钮在 DOM 里但点不到。
+ * 幂等：已展开则不点，否则 summary 的 toggle 语义会把它重新折上。
+ */
+export async function openGeneralDiagSection(page: Page) {
+  const details = page.locator('#generalDiagDetails');
+  const alreadyOpen = await details.evaluate(el => (el as HTMLDetailsElement).open).catch(() => false);
+  if (!alreadyOpen) await details.locator('summary').click();
+  await expect(page.locator('#btnServiceStatus')).toBeVisible();
+}
+
 /** 关闭通用设置，同 closeSettings 的理由走 Escape。 */
 export async function closeGeneralSettings(page: Page) {
   const sheet = page.locator('#generalSheet');

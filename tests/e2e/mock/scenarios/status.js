@@ -217,7 +217,9 @@ export function createStatusScenarios(getContext) {
         socket.emit('agent:event', mirrorEvent(true, false));
         await delay(1500);
         socket.emit('agent:event', mirrorEvent(true, true));
-        await delay(1500);
+        // stale（疑似中断）阶段要足够长：P0-17i 在检查这一态之前还要点模型 tile、等「设置已冻结」，
+        // 原先 1500ms 的窗口常在那些步骤跑完前就过去了，断言便永远等不到——是窗口太窄，不是产品坏了。
+        await delay(5000);
         socket.emit('agent:event', mirrorEvent(false, false));
         await delay(200);
         socket.emit('agent:event', {

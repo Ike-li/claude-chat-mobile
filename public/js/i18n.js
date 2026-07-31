@@ -616,6 +616,9 @@ export const EN_DICT = Object.freeze({
   '已发出测试推送': 'Sent a test notification to',
   '条——若手机没响，检查系统通知权限': 'subscription(s) — if your phone stayed silent, check its system notification permission',
   '未开启上方的推送通知前，这个开关不产生任何效果（偏好只存在本机）。': 'Until push notifications above are turned on, this switch has no effect (the preference stays on this device only).',
+  // 通用设置的两条作用域说明（data-scope-note）：整树扫描按 trim 后的原文查典，漏收就永远不翻
+  '只影响此设备 / 浏览器；换机需重设。': 'Affects this device / browser only; set it again on another phone.',
+  '影响整机所有会话（含终端 claude），换手机看也是同一份。': 'Affects every session on this computer (including terminal claude); the same values show from any phone.',
   '不可用': 'Unavailable',
   '已被拒绝': 'Blocked',
   '已开启': 'On',
