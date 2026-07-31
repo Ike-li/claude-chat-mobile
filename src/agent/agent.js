@@ -8,10 +8,22 @@ import * as diagLog from './diag-log.js';
 import { sanitize } from '../shared/sanitizer.js';
 import { sdkChildEnv } from '../shared/child-env.js';
 import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP } from '../shared/tool-summary.js';
+import { AGENT_EVENT_TYPES } from '../shared/protocol.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { normalizePermissionMode } from './cli-settings-defaults.js';
+
+// 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
+// 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
+// 只负责让问题在日志里可见；拦截等于让一个登记疏漏直接吃掉用户的一条消息，代价不对等。
+// 覆盖面仅限经 AgentSession 发出的 17 型；device_status/instances/mirror_state 等 9 型走 src/server/*
+// 与 src/auth/device-gate.js 的服务端广播路径，不经过本类，仍只由门禁静态扫描把关。
+const KNOWN_EVENT_TYPES = new Set(AGENT_EVENT_TYPES);
+function assertKnownEventType(type) {
+  if (KNOWN_EVENT_TYPES.has(type)) return;
+  console.error(`[event-contract] 未登记的 agent:event type「${type}」：仍照常发出，但前端多半没有对应 handler；请补进 src/shared/protocol.js`);
+}
 
 const BUFFER_CAP = 2000;      // 环形缓冲条数（抬高：长 ultracode/多工具轮少 gap 闪屏；transient 仍不进 buffer）
 // 额度类型标签：语义逐条对齐 CLI bundle 的同源映射表（five_hour="session limit" 等），
@@ -1488,6 +1500,7 @@ export class AgentSession {
   }
 
   emit(type, payload) {
+    assertKnownEventType(type);
     const envelope = {
       seq: ++this.seq,
       epoch: this.epoch,
@@ -1518,6 +1531,7 @@ export class AgentSession {
   // 用于后台任务进度这类高频心跳——进 buffer 会挤爆环形缓冲、占 seq 会制造空洞被 eventsSince 误判为 gap。
   // 语义：重连不重放（进度是瞬时的、旧进度无回放价值；前端按 transient 标志带外分流、不更新 lastSeq）。
   emitTransient(type, payload) {
+    assertKnownEventType(type);
     this.onEvent({
       seq: this.seq,            // 复用当前值、不递增：不占序列
       epoch: this.epoch,
