@@ -10,14 +10,46 @@ on:
 permissions:
   contents: read
 
+# 连推时取消同分支的旧 run，只留最新一次的反馈。
+# master 例外：发版那次的完整 run 记录要留着，被后续推送腰斩就查不了了。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
-  unit-test:
+  # npm run check 从 e2e 里拆出来独立成 job：它是零 token、本机几秒跑完的静态闸，
+  # 此前却排在 `playwright install --with-deps chromium` 之后，语法错也要等浏览器装完才报。
+  # 拆开后 quality 先红，省掉整轮 e2e 的等待。
+  # ★ 拆走后 e2e 不再跑 check —— master 分支保护的 required contexts 必须含 quality，
+  #   否则出现「check 红了 PR 照样能合」。改这个 job 名必须同步改分支保护。
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  unit-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      # engines 声明 ">=20"（给自托管用户的承诺：Ubuntu/Debian 仓库里常见的就是 20），
+      # 但 7/31 修 force-exit 竞态时把 CI 从 20 升到了 24，此后 20 再没被验证过。
+      # 矩阵补回这个缺口：engines 承诺什么，CI 就得跑什么。
+      # fail-fast: false —— 20 挂了也要看到 24 的结果，才能区分「只有旧版挂」和「全挂」。
+      fail-fast: false
+      matrix:
+        node: ['20', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
       # 不跑 `npm test`（= unit + integration 且带 --test-force-exit）。force-exit 是为集成测试
@@ -26,10 +58,14 @@ jobs:
       # 「fail 0 但 cancelled 5」，exit 1。7/30 起 CI 连红即此，与被测代码无关。
       # test:unit 本就不带该 flag，拆开跑即可，防挂死保护仍留在 integration 上。
       - run: npm run test:unit
+      # 注：CI 上这一步几乎全被 skip（21 个集成文件多数带 `process.env.CI ? {skip}`，实测
+      # 30 suites 只出 3 tests）—— runner 上没有本机 claude CLI，这是有意的设计边界，
+      # 不是疏漏。真实集成覆盖靠本机 `npm test` 与 `npm run test:smoke`。
       - run: npm run test:integration
 
   e2e:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -42,10 +78,6 @@ jobs:
 
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
-
-      # 顺带把 npm run check（语法/文档一致性/mock registry guard/TC-007 test.fixme 等禁止模式硬闸）
-      # 接入 CI——此前它只在本机跑，CI 从未验证过。
-      - run: npm run check
 
       - name: Run Playwright E2E
         run: npm run test:e2e
