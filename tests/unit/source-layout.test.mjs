@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 const layout = {
@@ -66,14 +66,11 @@ test('root server.js is only a compatibility launcher for src/server/app.js', ()
   assert.doesNotMatch(source, /export\s*\{[^}]+\}\s*from\s*['"]\.\/src\/server\/app\.js/);
 });
 
+// 行数上限已移除：拆分判据是行为域的归属，不是文件尺寸。按尺寸强制拆分会把一个内聚的
+// 行为域劈成两半（读一个行为要跨文件），而放任一个多职责文件长到 799 行却一路绿灯——
+// 尺寸既不充分也不必要。这里只保留三个曾经的单体不得复活的正向断言。
 test('unit tests stay split by behavior domain instead of regrowing monoliths', () => {
   for (const obsolete of ['agent.test.mjs', 'history.test.mjs', 'logic.test.mjs']) {
     assert.equal(existsSync(`tests/unit/${obsolete}`), false, `${obsolete} must remain split`);
-  }
-
-  for (const entry of readdirSync('tests/unit')) {
-    if (!entry.endsWith('.test.mjs')) continue;
-    const lines = readFileSync(`tests/unit/${entry}`, 'utf8').split('\n').length;
-    assert.ok(lines <= 800, `${entry} has ${lines} lines; split it by behavior domain`);
   }
 });

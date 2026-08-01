@@ -39,7 +39,7 @@
 - 不改任何 `agent:event` 的事件序列语义与信封字段；不改「单驾驶员模型」语义（web 发消息前检测外部写入 → dispose 旧 SDK 子进程 → resume 吸收）。
 - 局部变量不得命名 `t`（ESLint 门禁，i18n 遮蔽）；模块顶层常量不得调用 `t()`（import 期早于 setLang）。
 
-**基线参考数字**（衡量成效用，非硬指标）：前端 app.js 7521 行 / 225 个模块级变量；后端 app.js 3259 行 / 约 35 个共享可变量。预期 P3 完成后前端 app.js 降至 ~5000 行以内，P4 完成后后端 app.js 降至 ~2800 行以内，且两者顶层不再新增业务状态。
+**成效判据**：不看行数，看**两个 app.js 顶层还剩多少业务状态**——基线为前端约 60 个业务态（225 个模块级变量中的可变业务部分）、后端约 35 个共享可变量。终点标志是两者顶层只剩装配代码、零业务状态；行数下降只是副产品，不作指标。
 
 ---
 
@@ -83,13 +83,32 @@
 
 **验收**：`npm run contract:check`（输出应仍为 real 26 / server 40 全对齐）、`npm run check`、`npm test` 全绿。
 
+## 4.5 切块前必做的测量（替代行数判据）
+
+行数不是判据。动手拆任何一块之前，先量三个数，用它们决定该块值不值得拆、边界画在哪：
+
+1. **注入面**：该块引用了多少个所属文件的模块级符号（函数 + 稳定引用 + 可变状态）。
+2. **可搬状态数**：其中的可变状态里，有几个在块外零引用（能真正随模块走）。
+3. **跨用度**：剩下的可变状态各自在块外被引用多少次（决定是需要 getter 桥、setter 桥，还是该改成方法调用）。
+
+判据：**「可搬状态数 / 注入面」越高越值得拆**。实测对照（2026-07-31）：
+
+| 候选块 | 注入面 | 可搬状态 | 结论 |
+|---|---|---|---|
+| 事件 handler 表（约 826 行） | 98 | 1 | **否决**——搬 824 行只减 1 个共享状态，等于把耦合换成上下文对象穿针 |
+| 审批/选择题子系统（约 304 行） | 14 | 7 + 17 个独占 DOM 引用 | **已执行**（P3-3a） |
+
+测量方法：抽出块的行范围 → 剥掉注释与字符串 → 取标识符集合 → 与所属文件的模块级声明求交；再对交集里的每个可变状态分别统计块内写次数与块外引用次数。
+
+外部调用点的改写方向：**不要暴露状态，要暴露动词**。P3-3a 的实证是外部 7 处引用最终收敛成 4 个动词（判重 / 入队 / 按 id 解决 / 全清 + 一个只读查询），app.js 从此拿不到也改不了那 7 个状态。
+
 ## 5. P3 前端 app.js 续拆（中风险，按块推进）
 
 **目标**：把 `public/js/app.js` 剩余两块状态密集区按已验证的 `app/` 模式外迁。模式样板：`public/js/app/event-dispatch.js`（依赖全注入）、`public/js/app/task-status.js`（工厂 + context）；跨模块状态通道只有 `app/context.js` + `Object.defineProperties` getter 桥（app.js 约 585–595 行），**不得开第二条后门、不得新增 window 全局**。
 
 **3a. 事件 handler 表**（约 826 行，`const handle = {` 在 app.js:1628 起，含 `renderToolDiff` 与工具卡渲染）→ `public/js/app/event-handlers.js`，导出 `createEventHandlers(context)`。接线点：dispatcher 已惰性取 `handlers: () => handle`（app.js 1470–1627 接线区），改取工厂产物。状态迁移原则：仅 handler 族使用的集合（`streams`/`thinkings`/`toolCards`/`subagentCards` 等 Map）随模块走；被外部读写的经 context 暴露。
 
-**3b. 会话大区**（约 1691 行，app.js 5276–6966）→ 建议拆两个模块，粒度执行者可调，单模块以 ≤800 行为宜：
+**3b. 会话大区**（app.js 5276–6966 一带）→ 按状态归属定块，不按行数切；先量依赖面（见下「切块前必做的测量」）再决定拆成几个模块：
 - `public/js/app/session-panel.js`：会话面板/目录分节/`buildDirSection`/SWR 重校验器；
 - `public/js/app/history-view.js`：`loadHistory`/`renderHistoryBubbles`/长按 fork/mirror 接管 UI。
 `sessionDomCache` 等 LRU 缓存已在 `public/js/app/session-workspaces.js` 托管，迁移时保持其所有权不变。
@@ -111,7 +130,7 @@
 - 依赖注入进构造器：广播回调、`src/sessions/history.js` 规则函数、`src/agent/diag-log.js`。**实测补充**（2026-07-31 对 `catchUpTickOnce` 1046–1253 行扫描）：函数体还引用 `registryBusy`（12 次，session-registry 判活）、`viewingInstanceId`（5 次，视图态）、`agents.get`（5 次，实例注册表）、`io.to`（2 次）——窄接口除广播回调外**必须注入视图态读取器与实例注册表访问器**，遗漏会迫使引擎反向 import app.js（边界规则直接红）。
 - 行为不变判据：`mirror_state`/`diag_log` 事件序列不变（契约门禁 + E2E 镜像 spec 锚定）；`data/` 无新持久化。
 
-**4b. 规则迁入**：`src/sessions/history.js` 中与「读历史」无关的镜像状态机纯函数簇迁到引擎侧（同文件或平级 `mirror-rules.js`）：`catchUpStep`(211)、`mirrorReleaseStep`(303)、`mirrorEntryLock`(949)、`mirrorStaleFlag`(984)、`classifyTailEntries`(1120)，及同簇的 `classifyChainTail`、`externalGrowthWhilePaused`、`hasAutonomousLoopMarker`、`rebaselineAbsorbedExternal`、`describeMirrorEntryLock`。对应单测同步搬迁改 import 路径（注意单测文件 800 行上限与 inventory 登记）。history.js 回归「读 transcript + 历史重建」单一职责。
+**4b. 规则迁入**：`src/sessions/history.js` 中与「读历史」无关的镜像状态机纯函数簇迁到引擎侧（同文件或平级 `mirror-rules.js`）：`catchUpStep`(211)、`mirrorReleaseStep`(303)、`mirrorEntryLock`(949)、`mirrorStaleFlag`(984)、`classifyTailEntries`(1120)，及同簇的 `classifyChainTail`、`externalGrowthWhilePaused`、`hasAutonomousLoopMarker`、`rebaselineAbsorbedExternal`、`describeMirrorEntryLock`。对应单测同步搬迁改 import 路径（注意 inventory 登记）。history.js 回归「读 transcript + 历史重建」单一职责。
 
 **提交与回退**：4a、4b 分开提交，出问题按提交粒度 revert。
 
@@ -139,7 +158,7 @@
 - **commit**：不加 Claude 署名（含 Co-Authored-By / Claude-Session 行）；push 前先 `CI=true npm test` 模拟 CI。
 - **测试隔离**：任何一次性起 server 的测试/脚本必须带隔离四件套 `PORT` / `WORK_DIR` / `CCM_DATA_DIR` / `AUTH_TOKEN`，否则会污染生产 `data/`。不要绕过 `tests/setup/preload-env.mjs` 直接 `node --test 单文件`。
 - **新文件**：任何新增源码/测试/文档文件必须 `npm run inventory:update`，否则 `npm run check` 红。
-- **单测文件 800 行硬上限**；E2E mock 零 import `src/`（只改 src/ 时 E2E 红不是你引起的——先 stash 对照基线确认归属）。
+- E2E mock 零 import `src/`（只改 src/ 时 E2E 红不是你引起的——先 stash 对照基线确认归属）。
 - **前端改动**：必须重启常驻 server 才生效（启动期预读 + assetVersion 改写）；生产是 LaunchAgent/systemd 常驻服务，**勿手动 `npm start`**（撞 3000 端口）。
 - **E2E**：禁 `test.only/skip/fixme`、`networkidle`、`waitForTimeout`（门禁强制）；判断元素显隐查 `classList` 不查 `textContent`。
 - **沙箱**：不使用绕沙箱的执行方式；git/npm/doctor 普通模式即可。
