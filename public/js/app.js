@@ -1,8 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatPermInputDisplay, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
-import { verifyIntegrity } from './canonicalize.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix } from './logic.js';
 import { t, setLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -17,7 +16,10 @@ import { createSettingsController } from './app/settings.js';
 import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
 import { createSessionWorkspaceState } from './app/session-workspaces.js';
-import { createInteractionQueueState } from './app/approval-questions.js';
+import { createInteractionQueueState, createApprovalController } from './app/approval-questions.js';
+import { createSheetController } from './app/sheets.js';
+import { createDrawerController } from './app/drawer.js';
+import { createSessionDeleteController } from './app/session-delete.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -64,7 +66,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
 
   // ---- 极简触觉交互及抽屉式元素 DOM 绑定 ----
-  const sidebarScrim = $('sidebarScrim'), leftSidebar = $('leftSidebar'), sidebarClose = $('sidebarClose');
+  const leftSidebar = $('leftSidebar'); // scrim/close 按钮已随 app/drawer.js 迁出
   const settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsSheetBody = $('settingsSheetBody'), settingsDragZone = $('settingsDragZone'), settingsClose = $('settingsClose');
   // 通用设置 sheet（本机偏好 + 主机与服务）：与会话设置同构、同一个控制器驱动，入口在侧栏底部
   const btnGeneralSettings = $('btnGeneralSettings'), generalScrim = $('generalScrim'), generalSheet = $('generalSheet'), generalSheetBody = $('generalSheetBody'), generalDragZone = $('generalDragZone');
@@ -159,24 +161,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       customModelGrid.appendChild(card);
     }
   }
-  const permModal = $('permModal'), permTool = $('permTool'), permCwd = $('permCwd'),
-        permInput = $('permInput'), permAlways = $('permAlways'), permIntegrityWarn = $('permIntegrityWarn'),
-        permExitModeWrap = $('permExitModeWrap');
-  const questionModal = $('questionModal'), questionText = $('questionText'), questionOptions = $('questionOptions'),
-        questionHeader = $('questionHeader'), questionMultiHint = $('questionMultiHint'),
-        questionMultiSubmit = $('questionMultiSubmit'),
-        questionSkip = $('questionSkip'), questionOtherToggle = $('questionOtherToggle'),
-        questionOtherPanel = $('questionOtherPanel'), questionOtherInput = $('questionOtherInput'),
-        questionOtherSubmit = $('questionOtherSubmit');
-  const permInterrupt = $('permInterrupt');
-  // ExitPlanMode 退出后权限档（对齐 CLI plan-exit）；默认 default
-  let selectedExitMode = 'default';
-  // multiSelect 当前题勾选的下标
-  let multiSelectedIndexes = new Set();
-  const deleteSessionModal = $('deleteSessionModal'), deleteSessionTitle = $('deleteSessionTitle'), deleteL1Btn = $('deleteL1Btn'), deleteL2Btn = $('deleteL2Btn'), deleteSessionCancel = $('deleteSessionCancel');
-  // 通用确认弹窗（替代原生 confirm，appConfirm 接线见 openSheet/closeSheet 附近）
-  const confirmModal = $('confirmModal'), confirmSheet = $('confirmSheet'), confirmTitle = $('confirmTitle'),
-        confirmBody = $('confirmBody'), confirmOk = $('confirmOk'), confirmCancel = $('confirmCancel');
+  // 两个弹窗容器留在 app.js：通用 sheet 开关与视图切换仍要用；其余 perm*/question* DOM 引用
+  // 连同 selectedExitMode / multiSelectedIndexes 等状态已归 app/approval-questions.js 所有。
+  const permModal = $('permModal'), questionModal = $('questionModal');
+  // 两级删除会话与通用确认弹窗的 DOM 引用已随各自模块迁出（app/session-delete.js、app/sheets.js）。
   const authGate = $('authGate'), authToken = $('authToken'), authSubmit = $('authSubmit'), authError = $('authError'); // 访问令牌输入页
   const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // Access 会话过期重登浮层
   // 远程设备审批 + 访问帮助 UI
@@ -438,9 +426,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     for (const k of candidateKeys) { if (parsed[k] != null && parsed[k] !== '') return parsed[k]; }
     return fallback;
   }
-  let activePerm = null;
-  let permExpandBtn = null;             // M1：展开按钮引用，showNextPerm 前清除
-  let activeQuestion = null;
   // 本端已答/已决提问 requestId（含整组 toolUseID）。乐观作答后 sync 竞态或缓冲回放时防重弹；
   // server eventsSince 已过滤已答项，此集合补作答→ack 窗口与 request_resolved 关窗标记。
   let currentPermMode = 'default';      // 当前权限档；onchange 取消时回退、避免重复 emit
@@ -602,11 +587,6 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     sessionsCache,
   } = sessionWorkspaceState;
   const interactionState = createInteractionQueueState(appContext);
-  const {
-    permissionQueue: permQueue,
-    questionQueue,
-    markQuestionAnswered,
-  } = interactionState;
   const clientLogger = createClientLogger(appContext, {
     storage: (typeof localStorage !== 'undefined' ? localStorage : null), // 抗 PWA 被杀：落盘+重开恢复
     onEntry(entry) {
@@ -636,6 +616,20 @@ import { createInteractionQueueState } from './app/approval-questions.js';
   const messageRenderer = createMessageRenderer(appContext, { scrollBottom: () => scrollBottom() });
   const render = messageRenderer.renderMarkdown;
   const el = messageRenderer.createElement;
+  // sheet 开合原语 + 通用确认弹窗。接线必须早于审批模块（那边以值的形式接收 openSheet/closeSheet），
+  // 故落在 haptic/el 就绪之后的最早位置。两个「等你答复」型弹窗以取值函数注入，模块本身不认识它们。
+  const sheets = createSheetController(appContext, {
+    $, haptic,
+    blockingSheets: () => [permModal, questionModal],
+    onClosed: (elm) => {
+      // UX-003：关闭审批弹窗时清防误触 arming（计时器归审批模块所有）。
+      if (elm === permModal) {
+        elm.classList.remove('sheet-arming');
+        appContext.state.approvals?.cancelPermArming();
+      }
+    },
+  });
+  const { openSheet, closeSheet, appConfirm } = sheets;
   const setStatus = messageRenderer.setStatus;
   const leaveStartScreen = () => {
     messageRenderer.leaveStartScreen();
@@ -1513,18 +1507,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       if (ev.type === 'text_delta' || ev.type === 'thinking_delta') liveLine.sawContentDelta = true;
     },
     onEpochReset() {
-      permQueue.length = 0;
-      if (activePerm) {
-        activePerm = null;
-        closeSheet(permModal);
-        permExpandBtn?.remove();
-        permExpandBtn = null;
-      }
-      questionQueue.length = 0;
-      if (activeQuestion) {
-        activeQuestion = null;
-        closeSheet(questionModal);
-      }
+      approvals.clearAll();
     },
     onSessionId(sessionId) {
       localStorage.setItem('current_session', sessionId);
@@ -2067,24 +2050,21 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     },
     permission_request(p) {
       // 幂等：sync:since 切入补发的 pending 快照可能与 buffer 回放的原始事件同 requestId → 只保留一份
-      if (activePerm?.requestId === p.requestId || permQueue.some(r => r.requestId === p.requestId)) return;
+      if (approvals.isDuplicatePermission(p.requestId)) return;
       alertCue('need');
-      permQueue.push(p);
-      showNextPerm();
+      approvals.enqueuePermission(p);
       // FE-NEW-002：JSON.stringify(undefined) 为 undefined，.slice 抛错会中断 handler（verify 也不跑）
       // sensitive：正文是工具入参原文（Bash 的 command、Write 的 file_path/content 头部）。
       // 预览开关关闭时 notify 只保留标题，与 Web Push / ntfy 两条通道的隐私口径对齐。
       notify(t('⚠️ 等待审批'), `${p.name}：${safeJsonPreview(p.input, 80)}`, { sensitive: true });
-      verifyPermIntegrity(p); // 异步、不阻塞渲染——NFR-17 协议步骤4，核验结果稍后到达时若仍是当前卡片才提示
+      approvals.verifyPermIntegrity(p); // 异步、不阻塞渲染——NFR-17 协议步骤4，核验结果稍后到达时若仍是当前卡片才提示
     },
     question(p) {
       // 幂等：同上（快照补发 vs buffer 回放去重），按 requestId
-      if (activeQuestion?.requestId === p.requestId || questionQueue.some(q => q.requestId === p.requestId)) return;
-      // 已本地作答/已收 request_resolved：忽略重放（切会话、probe、整页刷新后的 sync）
-      if (interactionState.isQuestionAnswered(p.requestId)) return;
+      // 含「已本地作答/已收 request_resolved」判定：忽略重放（切会话、probe、整页刷新后的 sync）
+      if (approvals.isDuplicateQuestion(p.requestId)) return;
       alertCue('need');
-      questionQueue.push(p);
-      showNextQuestion();
+      approvals.enqueueQuestion(p);
       // FE-003：text 可能缺失/非字符串（畸形 AskUserQuestion / SDK 漂移），slice 会抛并中断 handler。
       const qPreview = typeof p.text === 'string' ? p.text : (p.text == null ? '' : String(p.text));
       notify(t('❓ 需要选择'), qPreview.slice(0, 80), { sensitive: true }); // 问题正文同属预览开关管辖
@@ -2099,35 +2079,10 @@ import { createInteractionQueueState } from './app/approval-questions.js';
         if (p.outcome === 'integrity_mismatch') {
           addBar(t('⚠️ 完整性校验未通过，该操作已被服务端拒绝执行（并非您的选择生效）'), 'text-danger');
         }
-        if (activePerm?.requestId === requestId) {
-          activePerm = null;
-          closeSheet(permModal);
-          permExpandBtn?.remove(); permExpandBtn = null;
-        } else {
-          const idx = permQueue.findIndex(r => r.requestId === requestId);
-          if (idx !== -1) permQueue.splice(idx, 1);
-        }
-        permIntegrityMismatched.delete(requestId);
-        if (!activePerm) showNextPerm();
+        approvals.resolvePermission(requestId);
         updateSendButtonState();
       } else if (kind === 'question') {
-        // question requestId 格式 '${toolUseID}#i'；单题 resolved 用 '#i'，整组终态用 toolUseID
-        const matchQ = qId => qId === requestId || qId.startsWith(requestId + '#');
-        markQuestionAnswered(requestId); // 整组 toolUseID 也入库 → isAnsweredQuestionId 覆盖所有 #i
-        if (activeQuestion && matchQ(activeQuestion.requestId)) {
-          markQuestionAnswered(activeQuestion.requestId);
-          activeQuestion = null;
-          closeSheet(questionModal);
-        } else {
-          // 可能一次终态清掉队列里同 tool 的多题
-          for (let i = questionQueue.length - 1; i >= 0; i--) {
-            if (matchQ(questionQueue[i].requestId)) {
-              markQuestionAnswered(questionQueue[i].requestId);
-              questionQueue.splice(i, 1);
-            }
-          }
-        }
-        if (!activeQuestion) showNextQuestion();
+        approvals.resolveQuestion(requestId);
         updateSendButtonState();
       }
     },
@@ -2168,17 +2123,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
 
       // 防御性清理当前 tab 的挂起提问和审批
-      permQueue.length = 0;
-      if (activePerm) {
-        activePerm = null;
-        closeSheet(permModal);
-        permExpandBtn?.remove(); permExpandBtn = null;
-      }
-      questionQueue.length = 0;
-      if (activeQuestion) {
-        activeQuestion = null;
-        closeSheet(questionModal);
-      }
+      approvals.clearAll();
       updateSendButtonState();
     },
     error(p) {
@@ -2196,17 +2141,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       }
 
       // 防御性清理当前 tab 的挂起提问和审批
-      permQueue.length = 0;
-      if (activePerm) {
-        activePerm = null;
-        closeSheet(permModal);
-        permExpandBtn?.remove(); permExpandBtn = null;
-      }
-      questionQueue.length = 0;
-      if (activeQuestion) {
-        activeQuestion = null;
-        closeSheet(questionModal);
-      }
+      approvals.clearAll();
       updateSendButtonState();
     },
     // M7：改用 kind 字段判断中断，不靠字符串匹配（字符串会随 i18n 变化）
@@ -2708,309 +2643,16 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     return card;
   }
 
-  // ---- 审批完整性预检（NFR-17，承接 docs/design.md 协议步骤4）----
-  // 渲染前（严格说：渲染后异步补验，见下）重算指纹比对服务端锚定的 fp，防传输层篡改（op 被改而 fp
-  // 未同步改）。不阻塞卡片显示——真正的执行门槛在后端 resolvePermission（agent.js），这里只是"谨慎
-  // 确认"提示，即使因浏览器兼容性等原因未能核验也不影响审批本身仍受后端 fail-closed 保护。
-  // 校验结果不符时记入本集合：请求排队时校验完成（还不是 activePerm）也不丢失判定，
-  // showNextPerm() 晋升它为 activePerm 时据此补显示警示条（而不是要求它重新触发一次异步校验）。
-  const permIntegrityMismatched = new Set();
-  async function verifyPermIntegrity(p) {
-    if (!p.fp) return; // 服务端理论上总带 fp；防御性跳过，不误判
-    if (typeof crypto === 'undefined' || !crypto.subtle) {
-      // 非安全上下文（纯局域网 http:// 访问）：Web Crypto 不可用，前端预检优雅降级——
-      // 后端完整性校验不受影响，仍是真正生效的门槛。
-      console.warn('[integrity] crypto.subtle 不可用（非安全上下文），跳过前端预检');
-      return;
-    }
-    let ok;
-    try {
-      ok = await verifyIntegrity(p.fp, { tool: p.name, args: p.input, cwd: p.cwd });
-    } catch (e) {
-      console.error('[integrity] 前端预检计算异常，不误判为篡改：', e.message);
-      return;
-    }
-    if (!ok) {
-      permIntegrityMismatched.add(p.requestId);
-      if (activePerm?.requestId === p.requestId) showPermIntegrityWarning();
-    }
-  }
-  function showPermIntegrityWarning() {
-    if (permIntegrityWarn) permIntegrityWarn.classList.remove('hidden');
-  }
-
-  // ---- 审批弹窗（4a：完整命令 + cwd）----
-  function showNextPerm() {
-    if (activePerm || permQueue.length === 0) return;
-    activePerm = permQueue.shift();
-    permTool.textContent = activePerm.name;
-    permCwd.textContent = `${t('工作目录：')}${activePerm.cwd}`;
-    // 每张新卡片先重置警示条（上一张若显示过不应带到这张）；若这条请求排队期间已判定过指纹不符
-    // （permIntegrityMismatched），直接补显示——不会再触发一次新的异步校验。
-    if (permIntegrityWarn) permIntegrityWarn.classList.add('hidden');
-    if (permIntegrityMismatched.has(activePerm.requestId)) showPermIntegrityWarning();
-    // UX-001：ExitPlanMode 计划用 renderMarkdown（DOMPurify）；普通命令去 JSON 引号、mono 纯文本。
-    // M1：超 4000 字显示展开按钮，而非截断（防恶意内容藏尾部）
-    permExpandBtn?.remove(); permExpandBtn = null;
-    const display = formatPermInputDisplay(activePerm.name, activePerm.input);
-    const full = display.text || '';
-    const applyPermInput = (text) => {
-      if (display.mode === 'markdown') {
-        permInput.classList.remove('font-mono', 'whitespace-pre-wrap');
-        permInput.classList.add('msg-body', 'perm-input-md');
-        permInput.innerHTML = render(text);
-      } else {
-        permInput.classList.remove('msg-body', 'perm-input-md');
-        permInput.classList.add('font-mono', 'whitespace-pre-wrap');
-        permInput.textContent = text;
-      }
-    };
-    if (full.length > 4000) {
-      applyPermInput(full.slice(0, 4000));
-      permExpandBtn = el(`<button class="text-xs text-accent mt-1 block">${t('…显示全部')} (${full.length} ${t('字符')})</button>`);
-      permExpandBtn.onclick = () => { applyPermInput(full); permExpandBtn.remove(); permExpandBtn = null; };
-      permInput.after(permExpandBtn);
-    } else {
-      applyPermInput(full);
-    }
-    permAlways.checked = false;
-    // ExitPlanMode：展示退出后权限档选择（对齐 CLI plan-exit）；其它工具隐藏
-    selectedExitMode = 'default';
-    if (permExitModeWrap) {
-      const isExit = activePerm.name === 'ExitPlanMode';
-      permExitModeWrap.classList.toggle('hidden', !isExit);
-      if (isExit) {
-        permExitModeWrap.querySelectorAll('.perm-exit-mode').forEach(btn => {
-          const on = btn.getAttribute('data-exit-mode') === selectedExitMode;
-          btn.classList.toggle('border-accent', on);
-          btn.classList.toggle('bg-accent-wash', on);
-          btn.classList.toggle('text-ink', on);
-          btn.classList.toggle('border-line', !on);
-          btn.classList.toggle('text-ink-soft', !on);
-        });
-      }
-    }
-    openSheet(permModal);
-    // UX-003：弹出后 350ms 内按钮不可点，防拇指热区误触授权
-    armPermSheetButtons(350);
-    updateSendButtonState();
-  }
-  let permArmTimer = null;
-  function armPermSheetButtons(ms = 350) {
-    if (!permModal) return;
-    permModal.classList.add('sheet-arming');
-    if (permArmTimer) clearTimeout(permArmTimer);
-    permArmTimer = setTimeout(() => {
-      permModal.classList.remove('sheet-arming');
-      permArmTimer = null;
-    }, ms);
-  }
-  function answerPerm(decision) {
-    if (!activePerm) return;
-    if (!socket.connected) { // 断线瞬间点审批：emit 大概率送不达，不能乐观显示"已处理"却让请求悬空未决
-      addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger');
-      return;
-    }
-    const wasExitPlanMode = activePerm.name === 'ExitPlanMode'; // 下方 activePerm 即置 null，提前捕获
-    const payload = {
-      requestId: activePerm.requestId,
-      decision,
-      alwaysThisSession: permAlways.checked,
-      instanceId: viewingInstanceId, // 台阶3：路由到当前查看 tab 实例（切过去后审批的本就是该实例）
-      // op：回传本卡片渲染时所见的确切操作（承接 docs/design.md NFR-17 审批完整性绑定协议步骤5）——
-      // 服务端用它重算指纹比对 canUseTool 时锚定的 fp，不一致 fail-closed 拒绝（agent.js#resolvePermission）。
-      op: { tool: activePerm.name, args: activePerm.input, cwd: activePerm.cwd }
-    };
-    // 仅 ExitPlanMode 批准时带 exitMode；拒绝/其它工具不传
-    if (wasExitPlanMode && decision === 'allow') payload.exitMode = selectedExitMode || 'default';
-    socket.emit('user:approve', payload);
-    const exitNote = (wasExitPlanMode && decision === 'allow') ? ` → ${payload.exitMode}` : '';
-    addBar(`${decision === 'allow' ? t('✅ 已允许：') : t('🚫 已拒绝：')}${activePerm.name}${exitNote}`, 'text-ink-faint');
-    permIntegrityMismatched.delete(activePerm.requestId);
-    activePerm = null;
-    permExpandBtn?.remove(); permExpandBtn = null;
-    closeSheet(permModal);
-    showNextPerm();
-    updateSendButtonState();
-  }
-  $('permAllow').onclick = () => answerPerm('allow');
-  $('permDeny').onclick = () => answerPerm('deny');
-  // ExitPlanMode 档位 chip 点选
-  if (permExitModeWrap) {
-    permExitModeWrap.querySelectorAll('.perm-exit-mode').forEach(btn => {
-      btn.onclick = () => {
-        selectedExitMode = btn.getAttribute('data-exit-mode') || 'default';
-        permExitModeWrap.querySelectorAll('.perm-exit-mode').forEach(b => {
-          const on = b.getAttribute('data-exit-mode') === selectedExitMode;
-          b.classList.toggle('border-accent', on);
-          b.classList.toggle('bg-accent-wash', on);
-          b.classList.toggle('text-ink', on);
-          b.classList.toggle('border-line', !on);
-          b.classList.toggle('text-ink-soft', !on);
-        });
-      };
-    });
-  }
-
-  // ---- 选择题弹窗（E7：AskUserQuestion）----
-  function resetQuestionOtherUI() {
-    if (questionOtherPanel) questionOtherPanel.classList.add('hidden');
-    if (questionOtherInput) questionOtherInput.value = '';
-  }
-  function optionLabel(opt) {
-    if (opt == null) return '';
-    if (typeof opt === 'string') return opt;
-    return opt.label || '';
-  }
-  function paintMultiOption(btn, selected) {
-    btn.classList.toggle('border-accent', selected);
-    btn.classList.toggle('bg-accent-wash', selected);
-    btn.classList.toggle('border-line', !selected);
-    btn.classList.toggle('bg-sunk', !selected);
-  }
-  function showNextQuestion() {
-    if (activeQuestion || questionQueue.length === 0) return;
-    activeQuestion = questionQueue.shift();
-    multiSelectedIndexes = new Set();
-    const multi = Boolean(activeQuestion.multiSelect);
-    if (questionHeader) {
-      const h = activeQuestion.header ? String(activeQuestion.header) : '';
-      questionHeader.textContent = h;
-      questionHeader.classList.toggle('hidden', !h);
-    }
-    questionText.textContent = activeQuestion.text;
-    if (questionMultiHint) questionMultiHint.classList.toggle('hidden', !multi);
-    if (questionMultiSubmit) {
-      questionMultiSubmit.classList.toggle('hidden', !multi);
-      questionMultiSubmit.disabled = true;
-      questionMultiSubmit.textContent = t('确认选择');
-    }
-    questionOptions.innerHTML = '';
-    resetQuestionOtherUI();
-    (activeQuestion.options || []).forEach((opt, i) => {
-      const wrap = el(`<div class="rounded-lg border border-line bg-sunk overflow-hidden"></div>`);
-      const btn = el(`<button type="button" class="w-full py-2.5 px-3 text-ink text-sm text-left"></button>`);
-      const label = optionLabel(opt);
-      btn.textContent = multi ? `☐ ${label}` : label;
-      if (opt && typeof opt === 'object' && opt.description) {
-        const desc = el(`<div class="px-3 pb-2 text-[11px] text-ink-faint leading-snug"></div>`);
-        desc.textContent = opt.description;
-        wrap.appendChild(btn);
-        wrap.appendChild(desc);
-      } else {
-        wrap.appendChild(btn);
-      }
-      if (opt && typeof opt === 'object' && opt.preview) {
-        const prevBtn = el(`<button type="button" class="w-full text-left px-3 pb-2 text-[11px] text-info underline">${t('查看预览')}</button>`);
-        const prevBox = el(`<pre class="hidden mx-3 mb-2 p-2 rounded bg-canvas border border-line-soft text-[11px] whitespace-pre-wrap break-words text-ink-soft max-h-40 overflow-y-auto"></pre>`);
-        prevBox.textContent = String(opt.preview);
-        prevBtn.onclick = (e) => {
-          e.stopPropagation();
-          prevBox.classList.toggle('hidden');
-          prevBtn.textContent = prevBox.classList.contains('hidden') ? t('查看预览') : t('收起预览');
-        };
-        wrap.appendChild(prevBtn);
-        wrap.appendChild(prevBox);
-      }
-      if (multi) {
-        btn.onclick = () => {
-          if (multiSelectedIndexes.has(i)) multiSelectedIndexes.delete(i);
-          else multiSelectedIndexes.add(i);
-          const on = multiSelectedIndexes.has(i);
-          btn.textContent = `${on ? '☑' : '☐'} ${label}`;
-          paintMultiOption(wrap, on);
-          if (questionMultiSubmit) {
-            questionMultiSubmit.disabled = multiSelectedIndexes.size === 0;
-            questionMultiSubmit.textContent = multiSelectedIndexes.size
-              ? `${t('确认选择')} (${multiSelectedIndexes.size})`
-              : t('确认选择');
-          }
-        };
-      } else {
-        btn.onclick = () => answerQuestion(i);
-      }
-      questionOptions.appendChild(wrap);
-    });
-    openSheet(questionModal);
-    updateSendButtonState();
-  }
-  function finishQuestionUI(barText) {
-    activeQuestion = null;
-    multiSelectedIndexes = new Set();
-    closeSheet(questionModal);
-    resetQuestionOtherUI();
-    showNextQuestion();
-    if (barText) addBar(barText, 'text-ink-faint');
-    updateSendButtonState();
-  }
-  function answerQuestion(index) {
-    if (!activeQuestion) return;
-    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; } // 断线瞬间选择：emit 大概率送不达，不能乐观标记已答
-    // 先标记已答再 emit/关窗：紧接的切会话/sync 即使抢在 server resolve 前到达，也不会重弹
-    markQuestionAnswered(activeQuestion.requestId);
-    socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndex: index, instanceId: viewingInstanceId }); // 台阶3 路由
-    const label = optionLabel(activeQuestion.options[index]);
-    finishQuestionUI(`${t('已选择：')}${label}`);
-  }
-  function answerQuestionMulti() {
-    if (!activeQuestion || !multiSelectedIndexes.size) {
-      addBar(t('请至少选择一项'), 'text-info');
-      return;
-    }
-    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
-    const indexes = [...multiSelectedIndexes].sort((a, b) => a - b);
-    markQuestionAnswered(activeQuestion.requestId);
-    socket.emit('user:answer', { requestId: activeQuestion.requestId, optionIndexes: indexes, instanceId: viewingInstanceId });
-    const labels = indexes.map(i => optionLabel(activeQuestion.options[i])).filter(Boolean);
-    finishQuestionUI(`${t('已选择：')}${labels.join(t('、'))}`);
-  }
-  function answerQuestionOther() {
-    if (!activeQuestion) return;
-    const freeText = (questionOtherInput?.value || '').trim();
-    if (!freeText) {
-      addBar(t('请先输入其他答案'), 'text-info');
-      questionOtherInput?.focus();
-      return;
-    }
-    if (!socket.connected) { addBar(t('网络未连接，请等待重新连接后再操作'), 'text-danger'); return; }
-    markQuestionAnswered(activeQuestion.requestId);
-    socket.emit('user:answer', { requestId: activeQuestion.requestId, freeText, instanceId: viewingInstanceId });
-    finishQuestionUI(`${t('已回答（其他）：')}${freeText}`);
-  }
-  if (questionMultiSubmit) questionMultiSubmit.onclick = () => answerQuestionMulti();
-  if (questionOtherToggle) {
-    questionOtherToggle.onclick = () => {
-      if (!questionOtherPanel) return;
-      questionOtherPanel.classList.toggle('hidden');
-      if (!questionOtherPanel.classList.contains('hidden')) questionOtherInput?.focus();
-    };
-  }
-  if (questionOtherSubmit) questionOtherSubmit.onclick = () => answerQuestionOther();
-  if (questionOtherInput) {
-    questionOtherInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); answerQuestionOther(); }
-    });
-  }
-  // 跳过/中止：复用 user:interrupt。后端 handleQuestion 已监听 abort → deny「问题已取消」；
-  // 弹窗内必须自带此入口——遮罩盖住输入区「停止」时否则无路可走。
-  // 不在本地乐观关窗：等 request_resolved(aborted) / result 走既有清理，避免多设备/重放分叉。
-  if (questionSkip) {
-    questionSkip.onclick = () => {
-      if (!activeQuestion) return;
-      haptic('tap');
-      addBar(t('已跳过提问（中止本轮）'), 'text-ink-faint');
-      requestInterrupt();
-    };
-  }
-  // 权限弹窗内「中止本轮」：对齐 CLI Esc，遮罩盖住输入区停止键时仍可中止
-  if (permInterrupt) {
-    permInterrupt.onclick = () => {
-      if (!activePerm) return;
-      haptic('tap');
-      addBar(t('已请求中止本轮'), 'text-ink-faint');
-      requestInterrupt();
-    };
-  }
+  // 审批 / 选择题两个弹窗的完整状态机（当前卡片、展开按钮、ExitPlanMode 档位、多选下标、指纹不符集合
+  // 与两窗自己的 DOM 引用）已整体归 app/approval-questions.js 所有；此处只做接线。
+  // 落位保持在原代码位置：addBar/render/el/haptic 都是 const，须在其声明之后接线。
+  const approvals = createApprovalController(appContext, {
+    queues: interactionState,
+    $, el, render, addBar, haptic, socket,
+    permModal, questionModal,
+    openSheet, closeSheet, requestInterrupt, updateSendButtonState,
+    getViewingInstanceId: () => viewingInstanceId,
+  });
 
   // ---- 发送 / 停止 ----
   function send() {
@@ -3033,7 +2675,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       addBar(t('当前任务运行中，完成后可发送'), 'text-info');
       return;
     }
-    if (activePerm || activeQuestion) {
+    if (approvals.hasPending()) {
       addBar(t('请先处理当前审批或选择，再发送新消息'), 'text-info');
       return;
     }
@@ -3511,7 +3153,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
       turnRunning: _turnRunning,
       hasContent,
       interruptPending: interruptPendingByInstance.has(viewingInstanceId),
-      blockedByUserRequest: !!activePerm || !!activeQuestion,
+      blockedByUserRequest: approvals.hasPending(),
       blockedByDisabledInput: inputEl.disabled,
       blockedBySendInFlight: socket.connected && _sendInFlightSessionIds.has(displayedSessionId),
       mirrorReadonly: Boolean(mirrorReadonlySid),
@@ -4949,200 +4591,19 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     updateSendButtonState(); // FE-004 / 停止 morph：busy 变化即时刷新主按钮；内含纠偏 placeholder
   }
 
-  // ---- 抽屉式侧边栏控制器 (Left Drawer Sidebar Controllers) ----
-  function openLeftSidebar() {
-    if (window.innerWidth >= 1024) return; // No-op on desktop
-    haptic('tap');
-    leftSidebar.classList.remove('-translate-x-full');
-    sidebarScrim.classList.remove('hidden');
-    openSessionPanel();
-  }
-  function closeLeftSidebar() {
-    if (window.innerWidth >= 1024) return; // No-op on desktop
-    leftSidebar.classList.add('-translate-x-full');
-    sidebarScrim.classList.add('hidden');
-    stopSessionPanelRevalidator();
-  }
+  // 左抽屉的开合与边缘手势归 app/drawer.js；sheet 开合原语与通用确认弹窗归 app/sheets.js
+  // （两者的接线分别在下方与文件上部，此处仅留位置说明）。
+  const drawer = createDrawerController(appContext, {
+    $, haptic,
+    onOpened: () => openSessionPanel(),
+    onClosed: () => stopSessionPanelRevalidator(),
+  });
+  const { openLeftSidebar, closeLeftSidebar } = drawer;
 
-  if (sidebarClose) sidebarClose.onclick = closeLeftSidebar;
-  if (sidebarScrim) sidebarScrim.onclick = closeLeftSidebar;
-
-  // 移动端：边缘滑动呼出侧边栏，向左滑动收起侧边栏
-  let dragStartX = 0, dragStartY = 0, dragActive = false;
-  document.addEventListener('touchstart', e => {
-    dragStartX = e.touches[0].clientX;
-    dragStartY = e.touches[0].clientY;
-    dragActive = true;
-  }, { passive: true });
-
-  document.addEventListener('touchmove', e => {
-    if (!dragActive) return;
-    const currentX = e.touches[0].clientX;
-    const currentY = e.touches[0].clientY;
-    const diffX = currentX - dragStartX;
-    const diffY = currentY - dragStartY;
-
-    if (Math.abs(diffX) > Math.abs(diffY) * 1.5) {
-      // 从左边缘起（clientX < 45px）向右滑动呼出——注意 dragStartX 可以合法为 0（触摸恰好从屏幕最左
-      // 像素开始，正是本手势要覆盖的场景），故"是否在拖拽中"须用独立的 dragActive 判断，不能复用
-      // dragStartX 本身的 falsy 性（0 会被误判成"未在拖拽"）。
-      if (leftSidebar.classList.contains('-translate-x-full') && dragStartX < 45 && diffX > 65) {
-        openLeftSidebar();
-        dragActive = false; // 防止重复触发
-      }
-      // 向左滑动收起
-      else if (!leftSidebar.classList.contains('-translate-x-full') && diffX < -65) {
-        closeLeftSidebar();
-        dragActive = false; // 防止重复触发
-      }
-    }
-  }, { passive: true });
-
-  // UI-012：sheet 焦点管理（打开移焦、关闭还焦、Tab 陷阱）
-  let sheetFocusPrev = null;
-  let sheetKeyHandler = null;
-  function sheetFocusables(root) {
-    return [...root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
-      .filter(n => !n.disabled && n.offsetParent !== null);
-  }
-  function openSheet(el) {
-    haptic('tap');
-    sheetFocusPrev = document.activeElement;
-    el.classList.remove('hidden');
-    // Force reflow
-    el.offsetHeight;
-    el.classList.add('sheet-open');
-    if (!el.getAttribute('role')) el.setAttribute('role', 'dialog');
-    if (!el.getAttribute('aria-modal')) el.setAttribute('aria-modal', 'true');
-    // 移焦到首个可聚焦控件（arming 结束后用户仍可 Tab）
-    requestAnimationFrame(() => {
-      const list = sheetFocusables(el);
-      (list[0] || el).focus?.();
-    });
-    if (sheetKeyHandler) document.removeEventListener('keydown', sheetKeyHandler, true);
-    sheetKeyHandler = (e) => {
-      if (e.key !== 'Tab' || !el.classList.contains('sheet-open')) return;
-      const list = sheetFocusables(el);
-      if (!list.length) return;
-      const first = list[0], last = list[list.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault(); last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault(); first.focus();
-      }
-    };
-    document.addEventListener('keydown', sheetKeyHandler, true);
-    syncNavEscapeLayer();
-  }
-  // 审批/提问挂起时把导航层（顶栏 + 侧栏）抬到 sheet 之上——这两类 sheet 是「等你答复」而不是
-  // 「阻断一切」：A 会话弹审批就切不到 B 会话，等于把多会话并发这个核心场景锁死。
-  // 只在挂起期间临时抬升，不动静态层级——deviceRequests 等页面级提示的既有层级契约
-  // （header < cards < modal，P0-15g）因此不受影响。
-  function syncNavEscapeLayer() {
-    const blocking = Boolean(
-      permModal?.classList.contains('sheet-open') || questionModal?.classList.contains('sheet-open'),
-    );
-    document.body.classList.toggle('nav-escape', blocking);
-  }
-  function closeSheet(el) {
-    haptic('tap');
-    el.classList.remove('sheet-open');
-    // UX-003：关闭时清防误触 arming，避免下次打开残留
-    if (el === permModal) {
-      el.classList.remove('sheet-arming');
-      if (permArmTimer) { clearTimeout(permArmTimer); permArmTimer = null; }
-    }
-    if (sheetKeyHandler) {
-      document.removeEventListener('keydown', sheetKeyHandler, true);
-      sheetKeyHandler = null;
-    }
-    const prev = sheetFocusPrev;
-    sheetFocusPrev = null;
-    syncNavEscapeLayer(); // sheet-open 刚摘掉：若已无审批/提问挂起，导航层落回既有层级
-    // Delay adding hidden class to let slide-down animation finish,
-    // which takes around 300ms. E2E wait tasks wait up to 15s so 300ms is perfect.
-    setTimeout(() => {
-      if (!el.classList.contains('sheet-open')) {
-        el.classList.add('hidden');
-        try { prev?.focus?.({ preventScroll: true }); } catch { /* ignore */ }
-      }
-    }, 300);
-  }
-
-  // ---- 通用确认弹窗（替代原生 confirm，样式/开合对齐项目底部 sheet）----
-  // Promise<boolean>：确定=true，取消按钮/点遮罩=false。已开着时再次调用直接 resolve(false)
-  // （async handler await 期间连点的重入兜底），不排队不叠加。tone 只切三处配色，结构复用同一 DOM。
-  let confirmResolve = null;
-  const CONFIRM_TONES = {
-    default: { border: 'var(--accent)', title: 'text-accent-deep', ok: 'bg-cta' },
-    warning: { border: 'var(--warning)', title: 'text-warning', ok: 'bg-cta' },
-    danger:  { border: 'var(--danger)',  title: 'text-danger',  ok: 'bg-danger' },
-  };
-  function appConfirm({ title, body, okText = t('确定'), tone = 'default' }) {
-    if (!confirmModal || confirmResolve) return Promise.resolve(false);
-    const toneStyle = CONFIRM_TONES[tone] || CONFIRM_TONES.default;
-    confirmSheet.style.borderTopColor = toneStyle.border;
-    confirmTitle.className = `${toneStyle.title} font-semibold mb-2`;
-    confirmTitle.textContent = title;
-    confirmBody.textContent = body || '';
-    confirmBody.classList.toggle('hidden', !body);
-    confirmOk.className = `flex-1 py-2.5 rounded-lg ${toneStyle.ok} text-white active:brightness-95 font-medium`;
-    confirmOk.textContent = okText;
-    return new Promise(resolve => {
-      confirmResolve = resolve;
-      openSheet(confirmModal);
-    });
-  }
-  function settleConfirm(ok) {
-    if (!confirmResolve) return;
-    const r = confirmResolve; confirmResolve = null;
-    closeSheet(confirmModal);
-    r(ok);
-  }
-  if (confirmOk) confirmOk.onclick = () => settleConfirm(true);
-  if (confirmCancel) confirmCancel.onclick = () => settleConfirm(false);
-  // 点遮罩空白处 = 取消（对齐移动端 sheet 习惯；permModal 因审批语义不做，这里是普通确认、可以做）
-  if (confirmModal) confirmModal.addEventListener('click', e => { if (e.target === confirmModal) settleConfirm(false); });
-
-  // ---- 两级删除会话（FR-20，docs/design.md）----
-  // L1=从产品移除（session:delete，transcript 保留）；L2=彻底删底层文件（session:deletePermanent，二次确认）。
-  // 只对「未打开的历史会话」提供入口（见 sessionRow）——已打开的会话先关闭 tab 再删，避免删一个正被本产品
-  // 驱动的会话（后端 L2 保护①也会拒，但前端不给入口更清晰）。此块只执行一次（IIFE 顶层），非每次渲染。
-  let deleteTarget = null; // { sessionId, cwd, title }
-  function openDeleteSession(sessionId, cwd, title) {
-    deleteTarget = { sessionId, cwd, title };
-    deleteSessionTitle.textContent = title || sessionId;
-    openSheet(deleteSessionModal);
-  }
-  if (deleteSessionCancel) deleteSessionCancel.onclick = () => { deleteTarget = null; closeSheet(deleteSessionModal); };
-  if (deleteL1Btn) deleteL1Btn.onclick = () => {
-    if (!deleteTarget) return;
-    // 局部变量不叫 t：i18n 的 t() 在本文件里到处都要用，同名会静默遮蔽成「t is not a function」，
-    // 而 ESLint 看不出问题（t 确实有定义）。
-    const target = deleteTarget; deleteTarget = null;
-    closeSheet(deleteSessionModal);
-    socket.emit('session:delete', { sessionId: target.sessionId, cwd: target.cwd }, res => {
-      if (res?.ok) { addBar(`${t('已从列表移除：')}${target.title || target.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
-      else addBar(res?.error || t('移除失败'), 'text-danger');
-    });
-  };
-  if (deleteL2Btn) deleteL2Btn.onclick = async () => {
-    if (!deleteTarget) return;
-    const target = deleteTarget;
-    // L2 显式二次确认（docs/design.md"显式二次确认删底层 transcript 文件"）——不可恢复，故在 L1 一级弹窗之上再加一道（z-50 叠 z-40，取消回到删除 sheet）。
-    if (!(await appConfirm({
-      title: t('🗑 彻底删除底层文件？'),
-      body: `${t('会话「')}${target.title || target.sessionId}${t('」在主机上的记录将被真正抹除。')}\n${t('此操作不可恢复。')}`,
-      okText: t('彻底删除'),
-      tone: 'danger',
-    }))) return;
-    deleteTarget = null;
-    closeSheet(deleteSessionModal);
-    socket.emit('session:deletePermanent', { sessionId: target.sessionId, cwd: target.cwd }, res => {
-      if (res?.ok) { addBar(`${t('已彻底删除：')}${target.title || target.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
-      else addBar(res?.error || t('彻底删除失败'), 'text-danger');
-    });
-  };
+  const { openDeleteSession } = createSessionDeleteController(appContext, {
+    $, socket, addBar, appConfirm, openSheet, closeSheet,
+    onDeleted: () => openSessionPanel(),
+  });
 
   // ---- 项目文件只读浏览：传输回调、分页状态和 DOM 渲染由独立 controller 管理 ----
   const fileBrowser = createFileBrowser(appContext, {
@@ -5873,11 +5334,7 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     // UX-008：清视图后若仍无内容（新会话），给极简引导
     queueMicrotask(() => maybeShowEmptySessionGuide());
     subagentCards.clear(); // 切会话/清屏：丢弃子 agent 卡状态（DOM 已随 messagesEl 清空）
-    permQueue.length = 0; activePerm = null;
-    permExpandBtn?.remove(); permExpandBtn = null;
-    closeSheet(permModal);
-    questionQueue.length = 0; activeQuestion = null;
-    closeSheet(questionModal);
+    approvals.clearAll();
     // 附件托盘不再这里无脑清空：bindView 经 planSessionDraftSwap 按会话存/取；
     // 发送成功路径各自清空。否则同会话静默换实例 / 重载历史会误清未发送附件。
     setBusy(false);
@@ -7246,31 +6703,13 @@ import { createInteractionQueueState } from './app/approval-questions.js';
     };
   }
 
-  // 复制到剪贴板：优先 async Clipboard API；局域网 http（非安全上下文）下它不可用，回退隐藏 textarea+execCommand。
-  async function copyToClipboard(text) {
-    try {
-      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
-    } catch { /* 权限拒绝/非安全上下文：落到回退 */ }
-    try {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      return ok;
-    } catch { return false; }
-  }
-
   // 「复制全部」：把当前抽屉可见日志拼成多行文本，发给电脑 / 贴给 Claude 排障——手机端唯一带走途径。
   const consoleCopy = $('consoleCopy');
   if (consoleCopy) {
     consoleCopy.onclick = async () => {
       const text = formatLogsForCopy(lastRenderedLogs);
       if (!text) return;
-      const ok = await copyToClipboard(text);
+      const ok = await copyText(text);
       const orig = consoleCopy.textContent;
       consoleCopy.textContent = ok ? t('已复制') : t('复制失败');
       setTimeout(() => { consoleCopy.textContent = orig; }, 1500);

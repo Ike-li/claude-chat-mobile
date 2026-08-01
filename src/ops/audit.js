@@ -12,12 +12,12 @@
 // 的显式抉择：防线在写入点自律，不在这里做黑名单式内容审查）。
 import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
 import { createSerialWriter } from '../shared/serial-writer.js';
+import { dataFile } from '../shared/data-dir.js';
 
-const FILE = process.env.CCM_AUDIT_FILE
-  || join(process.env.CCM_DATA_DIR || join(import.meta.dirname, '..', '..', 'data'), 'audit-records.json');
+const FILE = process.env.CCM_AUDIT_FILE || dataFile('audit-records.json');
 
 // NFR-16：环形上限，可配（默认 5000，同 docs/design.md 建议值）。
 const CAP = Number(process.env.AUDIT_RECORD_CAP) > 0 ? Number(process.env.AUDIT_RECORD_CAP) : 5000;

@@ -58,7 +58,6 @@ export const BOUNDARY_RULES = [
 // 收窄到具体文件而非目录，避免变成「随便跨界」的后门。
 export const SHARED_ALLOWLIST = new Set([
   'public/js/canonicalize.js', // src/auth/fingerprint.js 与浏览器共用规范化
-  'public/js/logic.js', // src/server 与浏览器共用纯决策逻辑（node:test 直接覆盖）
 ]);
 
 function listFiles(root) {

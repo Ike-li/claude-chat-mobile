@@ -1,36 +1,14 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
+// 契约真相源在 src/shared/protocol.js（运行时也 import 同一份，出向 emit 据此自检）。这里 import 后
+// 原样再导出：既有 import 面不变（tests/unit/agent-event-contract.test.mjs 直接从本模块取用），
+// 本文件内部两个 check 的默认参数也仍拿得到本地绑定。
+import { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS } from '../src/shared/protocol.js';
+
+export { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS };
 
 const ROOT = join(import.meta.dirname, '..');
 
-export const AGENT_EVENT_TYPES = Object.freeze([
-  'api_retry',
-  'device_status',
-  'diag_log',
-  'effort_mode',
-  'error',
-  'history_append',
-  'init',
-  'instances',
-  'mirror_state',
-  'models',
-  'pending_devices',
-  'permission_mode',
-  'permission_request',
-  'question',
-  'request_resolved',
-  'result',
-  'session_log',
-  'status_line',
-  'system',
-  'task_notification',
-  'task_progress',
-  'text_delta',
-  'thinking_delta',
-  'tool_result',
-  'tool_use',
-  'user_message',
-]);
 
 // 出向真实发射面。agent.js 走 agent-session 提取器（AgentSession 的 this.emit(...)）；其余一律按
 // `xxx.emit('agent:event', {...})` 提取。**目录递归而非手写文件清单**——与入向 serverDirs=['src'] 同口径。
@@ -365,49 +343,7 @@ export function formatContractProblems(result) {
 // 出向 agent:event 的 type 有上方 allowlist 机器校验；入向事件名此前只活在
 // docs/interfaces.md 的手写表格里，漂移无人拦——本节把它升级为同等保真：
 // server 注册面 = 契约（双向相等）、前端 emit 面 ⊆ 契约、visual mock 注册面 ⊆ 契约。
-
-export const INBOUND_SOCKET_EVENTS = Object.freeze([
-  'browse:list',
-  'browse:read',
-  'client:presence',
-  'config:refresh',
-  'conn:ping',
-  'dev:restart',
-  'doctor:run',
-  'files:search',
-  'files:write',
-  'git:diff',
-  'git:status',
-  'hooks:setup',
-  'push:test',
-  'logs:clientError',
-  'logs:get',
-  'mirror:syncNow',
-  'service:status',
-  'session:close',
-  'session:delete',
-  'session:deletePermanent',
-  'session:fork',
-  'session:history',
-  'session:home',
-  'session:list',
-  'session:new',
-  'session:switch',
-  'sync:since',
-  'task:stop',
-  'tool:full',
-  'tool:preview',
-  'user:ackUnread',
-  'user:answer',
-  'user:approve',
-  'user:approveDevice',
-  'user:denyDevice',
-  'user:interrupt',
-  'user:message',
-  'user:setEffort',
-  'user:setPermissionMode',
-  'user:setViewing',
-]);
+// 清单本身已上移至 src/shared/protocol.js（见文件头）。
 
 // socket.io 内建连接生命周期事件：属传输层而非业务契约
 const BUILTIN_SOCKET_EVENTS = new Set([

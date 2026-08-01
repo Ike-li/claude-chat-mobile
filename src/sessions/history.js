@@ -7,6 +7,9 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { listSessions as sdkListSessions } from '@anthropic-ai/claude-agent-sdk';
 import { MAX_SESSION_LIMIT } from './workdirs.js';
+// 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
+// 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
+import { toolSummary } from '../shared/tool-summary.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
@@ -330,40 +333,6 @@ function extractContent(content) {
   return '';
 }
 
-// 历史回显摘要：与 agent.js live 工具卡片同口径的截断/脱敏（本模块独立实现，避免 history↔agent 循环依赖）。
-const HISTORY_TOOL_SUMMARY_CAP = 600;
-const HISTORY_BASE64_REDACT_MIN_LEN = 500;
-// 兼容 URL-safe 变体（-_ 代替 +/）：原正则不匹配它，走摘要路径时后面还有 truncate 兜底看不出来，
-// 但 tool:full「展开全文」没有兜底 —— 一个漏判的 base64 图片就是整串原样进 DOM。
-const HISTORY_BASE64_ONLY_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
-function histTruncate(s, cap = HISTORY_TOOL_SUMMARY_CAP) {
-  if (typeof s !== 'string') return '';
-  return s.length > cap ? s.slice(0, cap) + ' …（已截断）' : s;
-}
-function histStringify(v) {
-  if (v == null) return '';
-  if (typeof v === 'string') return v;
-  try { return JSON.stringify(v); } catch { return String(v); }
-}
-function histRedactBase64(value) {
-  if (typeof value === 'string') {
-    if (value.length >= HISTORY_BASE64_REDACT_MIN_LEN && HISTORY_BASE64_ONLY_RE.test(value)) {
-      return `（base64 数据，约 ${Math.ceil(value.length / 1024)}KB，已省略）`;
-    }
-    return value;
-  }
-  if (Array.isArray(value)) return value.map(histRedactBase64);
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const k of Object.keys(value)) out[k] = histRedactBase64(value[k]);
-    return out;
-  }
-  return value;
-}
-function histToolSummary(value) {
-  return histTruncate(histStringify(histRedactBase64(value)));
-}
-
 // 过滤文本类噪音（task-notification / CLI 系统行）；slash 命令重建为 "/name args"。
 // 返回 null = 整条丢弃；字符串 = 保留（可能已重建）。
 function normalizeHistoryText(content) {
@@ -496,7 +465,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
         role: 'assistant',
         toolUseId: String(id),
         name: String(block.name),
-        inputSummary: histToolSummary(block.input ?? {}),
+        inputSummary: toolSummary(block.input ?? {}),
         timestamp,
         ...side,
       });
@@ -511,7 +480,7 @@ function expandHistoryEntry(content, role, timestamp, opts = {}) {
         role: 'user',
         toolUseId: String(id),
         ok: !block.is_error,
-        outputSummary: histToolSummary(block.content ?? ''),
+        outputSummary: toolSummary(block.content ?? ''),
         timestamp,
         ...side,
       });

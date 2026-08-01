@@ -33,13 +33,13 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 1 |
-| Backend source | 53 |
+| Backend source | 57 |
 | Configuration template | 1 |
 | Deployment | 3 |
-| Documentation | 9 |
+| Documentation | 10 |
 | E2E test | 42 |
 | Frontend asset | 3 |
-| Frontend source | 22 |
+| Frontend source | 25 |
 | Generated asset | 6 |
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 123 |
+| Unit test | 126 |
 | Vendored asset | 21 |
 
-Total classified files: **358**.
+Total classified files: **369**.
 
 ## Complete file inventory
 
@@ -76,6 +76,7 @@ Total classified files: **358**.
 | `docs/display-contracts.md` | Documentation | Display contracts: model / effort / statusline TUI–SDK–FE rules and test anchors | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/getting-started.en.md` | Documentation | English first-run tutorial from installation through phone validation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/getting-started.md` | Documentation | Chinese first-run tutorial from installation through phone validation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
+| `docs/refactor-plan.md` | Documentation | Staged refactor plan (P0-P5): state-ownership consolidation, contract source of truth, frontend split | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/repository-map.md` | Generated documentation | Exhaustive repository file map | README, documentation site, or maintainer reference | `npm run inventory:update` | generated |
 | `eslint.config.js` | Project configuration | ESLint flat config (npm run check static gate) | `npm run check` / `npm run lint` | Authored and reviewed manually | keep |
 | `LICENSE` | Legal | Project license | Referenced by maintainers | Authored and reviewed manually | keep |
@@ -98,13 +99,16 @@ Total classified files: **358**.
 | `public/js/app/client-log.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/connection-sync.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/context.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/app/drawer.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/event-dispatch.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/file-browser.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/git-changes.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/message-renderer.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/notifications.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/app/session-delete.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/session-workspaces.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/settings.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/app/sheets.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/task-status.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/canonicalize.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/i18n.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -202,6 +206,7 @@ Total classified files: **358**.
 | `src/server/instance-latches.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/instance-manager.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/instance-routing.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/server/mirror-engine.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/socket-files.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/socket.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/unread-tracker.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -211,9 +216,12 @@ Total classified files: **358**.
 | `src/sessions/sessions.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/sessions/workdirs.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/shared/child-env.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/shared/data-dir.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/shared/log-time.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/shared/protocol.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/shared/sanitizer.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/shared/serial-writer.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/shared/tool-summary.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `tests/e2e/mock/registry.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/mock/scenarios/content.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/mock/scenarios/status.js` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
@@ -301,6 +309,7 @@ Total classified files: **358**.
 | `tests/unit/agent-core.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/agent-diag-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/agent-event-contract.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/agent-event-type-guard.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/agent-events.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/agent-lifecycle.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/agent-permissions.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
@@ -406,12 +415,14 @@ Total classified files: **358**.
 | `tests/unit/session-registry.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/sessions.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/setup.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/shared-data-dir.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/smoke-runner.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/source-layout.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/statusline-bridge-runner.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/statusline-bridge-setup.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/statusline.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/sw.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/tool-summary.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/unread-tracker.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/uploads.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/usage-snapshot.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
