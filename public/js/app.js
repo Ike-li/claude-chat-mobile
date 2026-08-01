@@ -17,6 +17,9 @@ import { createNotificationController } from './app/notifications.js';
 import { createTaskStatusController } from './app/task-status.js';
 import { createSessionWorkspaceState } from './app/session-workspaces.js';
 import { createInteractionQueueState, createApprovalController } from './app/approval-questions.js';
+import { createSheetController } from './app/sheets.js';
+import { createDrawerController } from './app/drawer.js';
+import { createSessionDeleteController } from './app/session-delete.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -63,7 +66,7 @@ import { createInteractionQueueState, createApprovalController } from './app/app
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
 
   // ---- 极简触觉交互及抽屉式元素 DOM 绑定 ----
-  const sidebarScrim = $('sidebarScrim'), leftSidebar = $('leftSidebar'), sidebarClose = $('sidebarClose');
+  const leftSidebar = $('leftSidebar'); // scrim/close 按钮已随 app/drawer.js 迁出
   const settingsScrim = $('settingsScrim'), settingsSheet = $('settingsSheet'), settingsSheetBody = $('settingsSheetBody'), settingsDragZone = $('settingsDragZone'), settingsClose = $('settingsClose');
   // 通用设置 sheet（本机偏好 + 主机与服务）：与会话设置同构、同一个控制器驱动，入口在侧栏底部
   const btnGeneralSettings = $('btnGeneralSettings'), generalScrim = $('generalScrim'), generalSheet = $('generalSheet'), generalSheetBody = $('generalSheetBody'), generalDragZone = $('generalDragZone');
@@ -161,10 +164,7 @@ import { createInteractionQueueState, createApprovalController } from './app/app
   // 两个弹窗容器留在 app.js：通用 sheet 开关与视图切换仍要用；其余 perm*/question* DOM 引用
   // 连同 selectedExitMode / multiSelectedIndexes 等状态已归 app/approval-questions.js 所有。
   const permModal = $('permModal'), questionModal = $('questionModal');
-  const deleteSessionModal = $('deleteSessionModal'), deleteSessionTitle = $('deleteSessionTitle'), deleteL1Btn = $('deleteL1Btn'), deleteL2Btn = $('deleteL2Btn'), deleteSessionCancel = $('deleteSessionCancel');
-  // 通用确认弹窗（替代原生 confirm，appConfirm 接线见 openSheet/closeSheet 附近）
-  const confirmModal = $('confirmModal'), confirmSheet = $('confirmSheet'), confirmTitle = $('confirmTitle'),
-        confirmBody = $('confirmBody'), confirmOk = $('confirmOk'), confirmCancel = $('confirmCancel');
+  // 两级删除会话与通用确认弹窗的 DOM 引用已随各自模块迁出（app/session-delete.js、app/sheets.js）。
   const authGate = $('authGate'), authToken = $('authToken'), authSubmit = $('authSubmit'), authError = $('authError'); // 访问令牌输入页
   const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // Access 会话过期重登浮层
   // 远程设备审批 + 访问帮助 UI
@@ -616,6 +616,20 @@ import { createInteractionQueueState, createApprovalController } from './app/app
   const messageRenderer = createMessageRenderer(appContext, { scrollBottom: () => scrollBottom() });
   const render = messageRenderer.renderMarkdown;
   const el = messageRenderer.createElement;
+  // sheet 开合原语 + 通用确认弹窗。接线必须早于审批模块（那边以值的形式接收 openSheet/closeSheet），
+  // 故落在 haptic/el 就绪之后的最早位置。两个「等你答复」型弹窗以取值函数注入，模块本身不认识它们。
+  const sheets = createSheetController(appContext, {
+    $, haptic,
+    blockingSheets: () => [permModal, questionModal],
+    onClosed: (elm) => {
+      // UX-003：关闭审批弹窗时清防误触 arming（计时器归审批模块所有）。
+      if (elm === permModal) {
+        elm.classList.remove('sheet-arming');
+        appContext.state.approvals?.cancelPermArming();
+      }
+    },
+  });
+  const { openSheet, closeSheet, appConfirm } = sheets;
   const setStatus = messageRenderer.setStatus;
   const leaveStartScreen = () => {
     messageRenderer.leaveStartScreen();
@@ -4577,202 +4591,19 @@ import { createInteractionQueueState, createApprovalController } from './app/app
     updateSendButtonState(); // FE-004 / 停止 morph：busy 变化即时刷新主按钮；内含纠偏 placeholder
   }
 
-  // ---- 抽屉式侧边栏控制器 (Left Drawer Sidebar Controllers) ----
-  function openLeftSidebar() {
-    if (window.innerWidth >= 1024) return; // No-op on desktop
-    haptic('tap');
-    leftSidebar.classList.remove('-translate-x-full');
-    sidebarScrim.classList.remove('hidden');
-    openSessionPanel();
-  }
-  function closeLeftSidebar() {
-    if (window.innerWidth >= 1024) return; // No-op on desktop
-    leftSidebar.classList.add('-translate-x-full');
-    sidebarScrim.classList.add('hidden');
-    stopSessionPanelRevalidator();
-  }
+  // 左抽屉的开合与边缘手势归 app/drawer.js；sheet 开合原语与通用确认弹窗归 app/sheets.js
+  // （两者的接线分别在下方与文件上部，此处仅留位置说明）。
+  const drawer = createDrawerController(appContext, {
+    $, haptic,
+    onOpened: () => openSessionPanel(),
+    onClosed: () => stopSessionPanelRevalidator(),
+  });
+  const { openLeftSidebar, closeLeftSidebar } = drawer;
 
-  if (sidebarClose) sidebarClose.onclick = closeLeftSidebar;
-  if (sidebarScrim) sidebarScrim.onclick = closeLeftSidebar;
-
-  // 移动端：边缘滑动呼出侧边栏，向左滑动收起侧边栏
-  let dragStartX = 0, dragStartY = 0, dragActive = false;
-  document.addEventListener('touchstart', e => {
-    dragStartX = e.touches[0].clientX;
-    dragStartY = e.touches[0].clientY;
-    dragActive = true;
-  }, { passive: true });
-
-  document.addEventListener('touchmove', e => {
-    if (!dragActive) return;
-    const currentX = e.touches[0].clientX;
-    const currentY = e.touches[0].clientY;
-    const diffX = currentX - dragStartX;
-    const diffY = currentY - dragStartY;
-
-    if (Math.abs(diffX) > Math.abs(diffY) * 1.5) {
-      // 从左边缘起（clientX < 45px）向右滑动呼出——注意 dragStartX 可以合法为 0（触摸恰好从屏幕最左
-      // 像素开始，正是本手势要覆盖的场景），故"是否在拖拽中"须用独立的 dragActive 判断，不能复用
-      // dragStartX 本身的 falsy 性（0 会被误判成"未在拖拽"）。
-      if (leftSidebar.classList.contains('-translate-x-full') && dragStartX < 45 && diffX > 65) {
-        openLeftSidebar();
-        dragActive = false; // 防止重复触发
-      }
-      // 向左滑动收起
-      else if (!leftSidebar.classList.contains('-translate-x-full') && diffX < -65) {
-        closeLeftSidebar();
-        dragActive = false; // 防止重复触发
-      }
-    }
-  }, { passive: true });
-
-  // UI-012：sheet 焦点管理（打开移焦、关闭还焦、Tab 陷阱）
-  let sheetFocusPrev = null;
-  let sheetKeyHandler = null;
-  function sheetFocusables(root) {
-    return [...root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
-      .filter(n => !n.disabled && n.offsetParent !== null);
-  }
-  function openSheet(el) {
-    haptic('tap');
-    sheetFocusPrev = document.activeElement;
-    el.classList.remove('hidden');
-    // Force reflow
-    el.offsetHeight;
-    el.classList.add('sheet-open');
-    if (!el.getAttribute('role')) el.setAttribute('role', 'dialog');
-    if (!el.getAttribute('aria-modal')) el.setAttribute('aria-modal', 'true');
-    // 移焦到首个可聚焦控件（arming 结束后用户仍可 Tab）
-    requestAnimationFrame(() => {
-      const list = sheetFocusables(el);
-      (list[0] || el).focus?.();
-    });
-    if (sheetKeyHandler) document.removeEventListener('keydown', sheetKeyHandler, true);
-    sheetKeyHandler = (e) => {
-      if (e.key !== 'Tab' || !el.classList.contains('sheet-open')) return;
-      const list = sheetFocusables(el);
-      if (!list.length) return;
-      const first = list[0], last = list[list.length - 1];
-      if (e.shiftKey && document.activeElement === first) {
-        e.preventDefault(); last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
-        e.preventDefault(); first.focus();
-      }
-    };
-    document.addEventListener('keydown', sheetKeyHandler, true);
-    syncNavEscapeLayer();
-  }
-  // 审批/提问挂起时把导航层（顶栏 + 侧栏）抬到 sheet 之上——这两类 sheet 是「等你答复」而不是
-  // 「阻断一切」：A 会话弹审批就切不到 B 会话，等于把多会话并发这个核心场景锁死。
-  // 只在挂起期间临时抬升，不动静态层级——deviceRequests 等页面级提示的既有层级契约
-  // （header < cards < modal，P0-15g）因此不受影响。
-  function syncNavEscapeLayer() {
-    const blocking = Boolean(
-      permModal?.classList.contains('sheet-open') || questionModal?.classList.contains('sheet-open'),
-    );
-    document.body.classList.toggle('nav-escape', blocking);
-  }
-  function closeSheet(el) {
-    haptic('tap');
-    el.classList.remove('sheet-open');
-    // UX-003：关闭时清防误触 arming，避免下次打开残留
-    if (el === permModal) {
-      el.classList.remove('sheet-arming');
-      // arming 计时器归审批模块所有；经 context 桥取用（closeSheet 是 hoisted 函数，
-      // 直接引用模块返回值会有 TDZ 风险）。
-      appContext.state.approvals?.cancelPermArming();
-    }
-    if (sheetKeyHandler) {
-      document.removeEventListener('keydown', sheetKeyHandler, true);
-      sheetKeyHandler = null;
-    }
-    const prev = sheetFocusPrev;
-    sheetFocusPrev = null;
-    syncNavEscapeLayer(); // sheet-open 刚摘掉：若已无审批/提问挂起，导航层落回既有层级
-    // Delay adding hidden class to let slide-down animation finish,
-    // which takes around 300ms. E2E wait tasks wait up to 15s so 300ms is perfect.
-    setTimeout(() => {
-      if (!el.classList.contains('sheet-open')) {
-        el.classList.add('hidden');
-        try { prev?.focus?.({ preventScroll: true }); } catch { /* ignore */ }
-      }
-    }, 300);
-  }
-
-  // ---- 通用确认弹窗（替代原生 confirm，样式/开合对齐项目底部 sheet）----
-  // Promise<boolean>：确定=true，取消按钮/点遮罩=false。已开着时再次调用直接 resolve(false)
-  // （async handler await 期间连点的重入兜底），不排队不叠加。tone 只切三处配色，结构复用同一 DOM。
-  let confirmResolve = null;
-  const CONFIRM_TONES = {
-    default: { border: 'var(--accent)', title: 'text-accent-deep', ok: 'bg-cta' },
-    warning: { border: 'var(--warning)', title: 'text-warning', ok: 'bg-cta' },
-    danger:  { border: 'var(--danger)',  title: 'text-danger',  ok: 'bg-danger' },
-  };
-  function appConfirm({ title, body, okText = t('确定'), tone = 'default' }) {
-    if (!confirmModal || confirmResolve) return Promise.resolve(false);
-    const toneStyle = CONFIRM_TONES[tone] || CONFIRM_TONES.default;
-    confirmSheet.style.borderTopColor = toneStyle.border;
-    confirmTitle.className = `${toneStyle.title} font-semibold mb-2`;
-    confirmTitle.textContent = title;
-    confirmBody.textContent = body || '';
-    confirmBody.classList.toggle('hidden', !body);
-    confirmOk.className = `flex-1 py-2.5 rounded-lg ${toneStyle.ok} text-white active:brightness-95 font-medium`;
-    confirmOk.textContent = okText;
-    return new Promise(resolve => {
-      confirmResolve = resolve;
-      openSheet(confirmModal);
-    });
-  }
-  function settleConfirm(ok) {
-    if (!confirmResolve) return;
-    const r = confirmResolve; confirmResolve = null;
-    closeSheet(confirmModal);
-    r(ok);
-  }
-  if (confirmOk) confirmOk.onclick = () => settleConfirm(true);
-  if (confirmCancel) confirmCancel.onclick = () => settleConfirm(false);
-  // 点遮罩空白处 = 取消（对齐移动端 sheet 习惯；permModal 因审批语义不做，这里是普通确认、可以做）
-  if (confirmModal) confirmModal.addEventListener('click', e => { if (e.target === confirmModal) settleConfirm(false); });
-
-  // ---- 两级删除会话（FR-20，docs/design.md）----
-  // L1=从产品移除（session:delete，transcript 保留）；L2=彻底删底层文件（session:deletePermanent，二次确认）。
-  // 只对「未打开的历史会话」提供入口（见 sessionRow）——已打开的会话先关闭 tab 再删，避免删一个正被本产品
-  // 驱动的会话（后端 L2 保护①也会拒，但前端不给入口更清晰）。此块只执行一次（IIFE 顶层），非每次渲染。
-  let deleteTarget = null; // { sessionId, cwd, title }
-  function openDeleteSession(sessionId, cwd, title) {
-    deleteTarget = { sessionId, cwd, title };
-    deleteSessionTitle.textContent = title || sessionId;
-    openSheet(deleteSessionModal);
-  }
-  if (deleteSessionCancel) deleteSessionCancel.onclick = () => { deleteTarget = null; closeSheet(deleteSessionModal); };
-  if (deleteL1Btn) deleteL1Btn.onclick = () => {
-    if (!deleteTarget) return;
-    // 局部变量不叫 t：i18n 的 t() 在本文件里到处都要用，同名会静默遮蔽成「t is not a function」，
-    // 而 ESLint 看不出问题（t 确实有定义）。
-    const target = deleteTarget; deleteTarget = null;
-    closeSheet(deleteSessionModal);
-    socket.emit('session:delete', { sessionId: target.sessionId, cwd: target.cwd }, res => {
-      if (res?.ok) { addBar(`${t('已从列表移除：')}${target.title || target.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
-      else addBar(res?.error || t('移除失败'), 'text-danger');
-    });
-  };
-  if (deleteL2Btn) deleteL2Btn.onclick = async () => {
-    if (!deleteTarget) return;
-    const target = deleteTarget;
-    // L2 显式二次确认（docs/design.md"显式二次确认删底层 transcript 文件"）——不可恢复，故在 L1 一级弹窗之上再加一道（z-50 叠 z-40，取消回到删除 sheet）。
-    if (!(await appConfirm({
-      title: t('🗑 彻底删除底层文件？'),
-      body: `${t('会话「')}${target.title || target.sessionId}${t('」在主机上的记录将被真正抹除。')}\n${t('此操作不可恢复。')}`,
-      okText: t('彻底删除'),
-      tone: 'danger',
-    }))) return;
-    deleteTarget = null;
-    closeSheet(deleteSessionModal);
-    socket.emit('session:deletePermanent', { sessionId: target.sessionId, cwd: target.cwd }, res => {
-      if (res?.ok) { addBar(`${t('已彻底删除：')}${target.title || target.sessionId}`, 'text-ink-faint'); openSessionPanel(); }
-      else addBar(res?.error || t('彻底删除失败'), 'text-danger');
-    });
-  };
+  const { openDeleteSession } = createSessionDeleteController(appContext, {
+    $, socket, addBar, appConfirm, openSheet, closeSheet,
+    onDeleted: () => openSessionPanel(),
+  });
 
   // ---- 项目文件只读浏览：传输回调、分页状态和 DOM 渲染由独立 controller 管理 ----
   const fileBrowser = createFileBrowser(appContext, {
