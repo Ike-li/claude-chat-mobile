@@ -108,10 +108,30 @@
 
 **3a. 事件 handler 表**（约 826 行，`const handle = {` 在 app.js:1628 起，含 `renderToolDiff` 与工具卡渲染）→ `public/js/app/event-handlers.js`，导出 `createEventHandlers(context)`。接线点：dispatcher 已惰性取 `handlers: () => handle`（app.js 1470–1627 接线区），改取工厂产物。状态迁移原则：仅 handler 族使用的集合（`streams`/`thinkings`/`toolCards`/`subagentCards` 等 Map）随模块走；被外部读写的经 context 暴露。
 
-**3b. 会话大区**（app.js 5276–6966 一带）→ 按状态归属定块，不按行数切；先量依赖面（见下「切块前必做的测量」）再决定拆成几个模块：
-- `public/js/app/session-panel.js`：会话面板/目录分节/`buildDirSection`/SWR 重校验器；
-- `public/js/app/history-view.js`：`loadHistory`/`renderHistoryBubbles`/长按 fork/mirror 接管 UI。
-`sessionDomCache` 等 LRU 缓存已在 `public/js/app/session-workspaces.js` 托管，迁移时保持其所有权不变。
+**3b（原方案已否决）**：计划书初稿写「外迁会话大区（app.js 5276–6966，约 1691 行）」。2026-07-31 实测：**注入面 143、可搬状态仅 1、需桥接 36**——与被否决的 handler 表同属一类，照做只会把耦合换成上下文对象穿针。会话大区要拆，须先在其内部找到自带状态的子系统（如 SWR 重校验器、历史渲染分块器各自的私有状态），逐个按 4.5 节测量后再定，**不要整块搬**。
+
+**已执行的块**（均为零桥接/低注入面）：
+- P3-3a `app/approval-questions.js`：审批/选择题子系统（注入面 14，搬走 7 个状态 + 17 个独占 DOM 引用）
+- `app/sheets.js`：sheet 开合原语 + 通用确认弹窗（3 个状态；顺带去掉「通用原语认识具体业务弹窗」的泄漏）
+- `app/drawer.js`：左抽屉 + 边缘手势（3 个状态）
+- `app/session-delete.js`：两级删除会话（1 个状态）
+
+**app.js 剩余候选的实测数据**（2026-07-31，按 4.5 节口径；行号会漂移，用区块横幅定位）：
+
+| 区块 | 注入面 | 可搬状态 | 需桥接 | 判断 |
+|---|---:|---:|---:|---|
+| @ 文件引用浮层 | 14 | 3 | 3 | 值得做，次优先 |
+| 工具函数区 | 15 | 1 | 3 | 可做，收益小 |
+| 设置 sheet 接线 | 22 | 0 | 4 | 无状态收益，不做 |
+| 子 agent 折叠卡 | 31 | 0 | 3 | 不做 |
+| 斜杠命令 + @ 列表 | 35 | 1 | 7 | 不做 |
+| 权限档/会话档/effort | 34 | 0 | 10 | 不做 |
+| 发送 / 停止 | 48 | 0 | 14 | 不做 |
+| 工作目录切换 | 81 | 2 | 31 | 不做 |
+| 未读角标 + bindView | 94 | 3 | 21 | 不做 |
+| 会话大区 | 143 | 1 | 36 | 不做（见上） |
+
+「不做」不代表这些代码没问题，而是**按当前形态搬迁无法减少共享状态**——它们要改善，得先在 app.js 内部把状态本身重新归属（例如把 `currentModel`/`currentCwd`/`viewingInstanceId` 这类被 30–50 处引用的视图态收敛成一个显式的视图状态模块），那是比搬迁更大的一步，需单独立项。
 
 **硬要求**：
 - 每块独立提交；**每块完成后 E2E 全绿 + 真机回归通过，才动下一块**。
