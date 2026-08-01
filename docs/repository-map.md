@@ -33,7 +33,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 1 |
-| Backend source | 56 |
+| Backend source | 57 |
 | Configuration template | 1 |
 | Deployment | 3 |
 | Documentation | 10 |
@@ -55,7 +55,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 126 |
 | Vendored asset | 21 |
 
-Total classified files: **368**.
+Total classified files: **369**.
 
 ## Complete file inventory
 
@@ -206,6 +206,7 @@ Total classified files: **368**.
 | `src/server/instance-latches.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/instance-manager.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/instance-routing.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/server/mirror-engine.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/socket-files.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/socket.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/server/unread-tracker.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
