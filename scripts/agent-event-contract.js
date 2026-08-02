@@ -282,11 +282,16 @@ function addUnknownTypeProblems(problems, side, observedTypes, contractTypes) {
   }
 }
 
+// 真实侧发得出、但 visual mock 有意不产出的 type。清单为空即"两侧必须完全对齐"；
+// 每加一条都要写清为什么 E2E 覆盖不了它，否则这道闸就退化成许愿池。
+const MOCK_EXEMPT_TYPES = Object.freeze(new Set([]));
+
 export function checkAgentEventContract({
   rootDir = ROOT,
   contractTypes = new Set(AGENT_EVENT_TYPES),
   realSources = null,
   mockSources = MOCK_SOURCES,
+  mockExemptTypes = MOCK_EXEMPT_TYPES,
 } = {}) {
   const normalizedContractTypes = new Set(contractTypes);
   const real = collectTypes(rootDir, realSources || defaultRealSources(rootDir));
@@ -302,6 +307,20 @@ export function checkAgentEventContract({
       code: 'mock_type_not_real',
       type,
       message: `visual mock emits agent:event type "${type}" that real server/agent paths do not emit`,
+    });
+  }
+
+  // 反向同样要查。此前只有 mock ⊆ real 一个方向：real 新增第 N+1 个 type 时 mock 停在 N 条，
+  // npm run check 照样全绿，于是那类事件【永远进不了 E2E 视野】且无人知道——而前端 dispatcher
+  // 对未知 type 是静默丢弃，正是这道门禁存在的理由。2026-08-02 补：两侧当时恰好都是 26，
+  // 对齐纯属巧合，没有任何机制守着。
+  // 确实不该由 mock 覆盖的 type 放进 MOCK_EXEMPT_TYPES 并写清理由，别改判据。
+  for (const type of [...real.types].sort()) {
+    if (mock.types.has(type) || mockExemptTypes.has(type)) continue;
+    problems.push({
+      code: 'real_type_not_mock',
+      type,
+      message: `real server/agent emits agent:event type "${type}" that the visual mock never produces — E2E can't cover it`,
     });
   }
 
@@ -411,12 +430,27 @@ function collectInboundEvents(rootDir, dirs, kind) {
   return { events, locations };
 }
 
+// 契约内、但 visual mock 有意不实现 handler 的入向事件 → 为什么。
+// 加进来就等于声明「这条入向路径在 E2E 里没有往返验证」，所以必须写明它被什么别的东西覆盖着。
+// 清单之外的任何契约事件缺 handler 一律报错——这是 2026-08-02 补的：此前入向只查
+// mock ⊆ contract（mock 不许发明事件），不查 contract ⊆ mock，于是"少实现"永远静默。
+const MOCK_INBOUND_EXEMPT = Object.freeze({
+  'dev:restart': '真重启进程，mock server 无法在自己身上模拟；拒绝路径由 server.test.mjs「DEV_MODE 关闭时拒绝」覆盖',
+  'doctor:run': '跑本机自检（读真实 .env / CLI / 权限位），mock 没有可自检的运行时；逻辑由 doctor-checks/doctor-runtime 单测覆盖',
+  'mirror:syncNow': '手动催一次 catchUp 追平，依赖真实 transcript 轮询；mock 无磁盘镜像，判定链由 mirror-engine 单测覆盖',
+  'session:delete': '两级删除要真删磁盘 transcript；由 session-delete.test.mjs 集成测试覆盖',
+  'session:deletePermanent': '同 session:delete',
+  'logs:clientError': '前端错误上报是 fire-and-forget，无回执可断言；E2E 侧改用 expectNoBrowserErrors 直接断言"没有前端错误"',
+  'user:ackUnread': '已读确认无回执；unread-pill.spec.ts 直接嗅 socket.io 出向 WS 帧断言前端确实发了这条（往返未验，见该文件注释）',
+});
+
 export function checkInboundSocketContract({
   rootDir = ROOT,
   contractEvents = new Set(INBOUND_SOCKET_EVENTS),
   serverDirs = ['src'],
   clientDirs = ['public/js'],
   mockDirs = ['tests/e2e/mock'],
+  mockExemptEvents = MOCK_INBOUND_EXEMPT,
 } = {}) {
   const contract = new Set(contractEvents);
   const server = collectInboundEvents(rootDir, serverDirs, 'socket-server');
@@ -456,9 +490,30 @@ export function checkInboundSocketContract({
       message: `visual mock registers uncontracted inbound socket event "${event}"`,
     });
   }
+  for (const event of [...contract].sort()) {
+    if (mock.events.has(event) || Object.hasOwn(mockExemptEvents, event)) continue;
+    // 服务端根本没注册的契约事件已由 contract_inbound_not_registered 报过——那是"契约里有个
+    // 没人实现的死名字"，要求 mock 去接它没有意义，只会为同一个根因报两条。
+    if (!server.events.has(event)) continue;
+    problems.push({
+      code: 'contract_inbound_not_mocked',
+      event,
+      message: `contract lists inbound socket event "${event}" that the visual mock never handles — add a mock handler, or list it in MOCK_INBOUND_EXEMPT with the reason it can't be E2E-covered`,
+    });
+  }
+  // 豁免清单本身也要跟着契约走：事件改名/下线后残留的豁免会静默放行一个不存在的名字。
+  for (const event of Object.keys(mockExemptEvents).sort()) {
+    if (contract.has(event)) continue;
+    problems.push({
+      code: 'stale_mock_exempt',
+      event,
+      message: `MOCK_INBOUND_EXEMPT lists "${event}" which is no longer an inbound contract event — remove it`,
+    });
+  }
 
   return {
     problems,
+    exemptEvents: new Set(Object.keys(mockExemptEvents)),
     contractEvents: contract,
     serverEvents: server.events,
     clientEvents: client.events,
@@ -476,7 +531,10 @@ export function formatInboundContractProblems(result) {
       `inbound socket contract OK`,
       `server events: ${result.serverEvents.size}`,
       `client emits: ${result.clientEvents.size}`,
-      `mock handlers: ${result.mockEvents.size}`,
+      // 带上分母与豁免数：裸的 "mock handlers: 33" 读起来像"覆盖了 33 个"，
+      // 实际是"40 个里少 7 个"——数字必须自己说清楚缺口，别让人误读成安全。
+      `mock handlers: ${result.mockEvents.size}/${result.contractEvents.size}`
+        + `（${result.exemptEvents?.size ?? 0} 项显式豁免，见 MOCK_INBOUND_EXEMPT）`,
     ].join('\n');
   }
 

@@ -107,6 +107,7 @@ test('agent event contract 识别 io.to(room).emit("agent:event", ...) 链式调
     io.to('approved').emit('agent:event', { type: 'session_log', payload: {} });
   `);
   await writeFixture(root, 'tests/e2e/mock/server.js', `
+    io.emit('agent:event', { type: 'init', payload: {} });
     io.emit('agent:event', { type: 'session_log', payload: {} });
   `);
 
@@ -153,6 +154,7 @@ test('inbound contract flags server registrations missing from the contract', as
   const result = checkInboundSocketContract({
     rootDir: root,
     contractEvents: new Set(['user:message']),
+    mockExemptEvents: {}, // 夹具契约只有一个事件，别让真实仓库的豁免清单漏进来
   });
 
   assert.deepEqual(result.problems.map(p => p.code), ['real_inbound_not_contract']);
@@ -170,6 +172,7 @@ test('inbound contract flags stale contract entries no longer registered by the 
   const result = checkInboundSocketContract({
     rootDir: root,
     contractEvents: new Set(['user:message', 'user:ghost']),
+    mockExemptEvents: {},
   });
 
   assert.deepEqual(result.problems.map(p => p.code), ['contract_inbound_not_registered']);
@@ -182,11 +185,13 @@ test('inbound contract flags client emits and mock handlers outside the contract
 
   await writeFixture(root, 'src/server/app.js', `on(socket, 'user:message', () => {});`);
   await writeFixture(root, 'public/js/app/extra.js', `sock.emit('user:unhandled', {});`);
-  await writeFixture(root, 'tests/e2e/mock/server.js', `socket.on('mock:invented', () => {});`);
+  await writeFixture(root, 'tests/e2e/mock/server.js', `socket.on('user:message', () => {});
+socket.on('mock:invented', () => {});`);
 
   const result = checkInboundSocketContract({
     rootDir: root,
     contractEvents: new Set(['user:message']),
+    mockExemptEvents: {},
   });
 
   assert.deepEqual(result.problems.map(p => p.code).sort(), [
@@ -228,4 +233,94 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   assert.ok(INBOUND_SOCKET_EVENTS.includes('git:status'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('git:diff'));
   assert.equal(INBOUND_SOCKET_EVENTS.includes('usage:get'), false);
+});
+
+// ── 2026-08-02 补的两个反向闸 ───────────────────────────────────────────────
+// 此前两侧都只查「不许多」（mock ⊆ real、mock ⊆ contract），不查「不许少」。于是真实侧新增一个
+// 事件类型 / 入向事件时，mock 停在原地照样全绿——那类事件从此永远进不了 E2E 视野且无人知道，
+// 而前端 dispatcher 对未知 type 是静默丢弃。下面三条钉住新增的方向。
+
+test('出向：real 发得出而 mock 从不产出的 type 要被拦（real ⊆ mock 方向）', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-real-not-mock-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFixture(root, 'src/agent/agent.js', "this.emit('init', {});\nthis.emit('brand_new_type', {});\n");
+  await writeFixture(root, 'tests/e2e/mock/server.js', "io.emit('agent:event', { type: 'init' });\n");
+
+  const result = checkAgentEventContract({
+    rootDir: root,
+    contractTypes: new Set(['init', 'brand_new_type']),
+    realSources: [{ path: 'src/agent/agent.js', kind: 'agent-session' }],
+    mockSources: [{ path: 'tests/e2e/mock/server.js', kind: 'agent-event-emit' }],
+  });
+
+  assert.deepEqual(
+    result.problems.map(p => [p.code, p.type]),
+    [['real_type_not_mock', 'brand_new_type']],
+    'mock 没跟上新增 type 时必须报，否则 E2E 覆盖缺口静默扩大',
+  );
+});
+
+test('出向：显式豁免的 type 不再报（豁免清单生效）', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-real-not-mock-exempt-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFixture(root, 'src/agent/agent.js', "this.emit('init', {});\nthis.emit('brand_new_type', {});\n");
+  await writeFixture(root, 'tests/e2e/mock/server.js', "io.emit('agent:event', { type: 'init' });\n");
+
+  const result = checkAgentEventContract({
+    rootDir: root,
+    contractTypes: new Set(['init', 'brand_new_type']),
+    realSources: [{ path: 'src/agent/agent.js', kind: 'agent-session' }],
+    mockSources: [{ path: 'tests/e2e/mock/server.js', kind: 'agent-event-emit' }],
+    mockExemptTypes: new Set(['brand_new_type']),
+  });
+
+  assert.deepEqual(result.problems, []);
+});
+
+test('入向：契约里有、mock 没 handler 又没登记豁免 → 报；豁免登记后放行', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-inbound-not-mocked-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFixture(root, 'src/server/socket.js', "socket.on('user:message', () => {});\nsocket.on('ops:only', () => {});\n");
+  await writeFixture(root, 'public/js/app.js', "socket.emit('user:message', {});\nsocket.emit('ops:only', {});\n");
+  await writeFixture(root, 'tests/e2e/mock/server.js', "socket.on('user:message', () => {});\n");
+  const args = { rootDir: root, contractEvents: new Set(['user:message', 'ops:only']) };
+
+  const flagged = checkInboundSocketContract({ ...args, mockExemptEvents: {} });
+  assert.deepEqual(
+    flagged.problems.map(p => [p.code, p.event]),
+    [['contract_inbound_not_mocked', 'ops:only']],
+  );
+
+  const exempted = checkInboundSocketContract({ ...args, mockExemptEvents: { 'ops:only': '理由' } });
+  assert.deepEqual(exempted.problems, []);
+});
+
+test('入向：豁免清单里残留已下线的事件名 → 报（防豁免变许愿池）', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-stale-exempt-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await writeFixture(root, 'src/server/socket.js', "socket.on('user:message', () => {});\n");
+  await writeFixture(root, 'public/js/app.js', "socket.emit('user:message', {});\n");
+  await writeFixture(root, 'tests/e2e/mock/server.js', "socket.on('user:message', () => {});\n");
+
+  const result = checkInboundSocketContract({
+    rootDir: root,
+    contractEvents: new Set(['user:message']),
+    mockExemptEvents: { 'session:renamed-away': '事件早已改名，豁免却留着' },
+  });
+
+  assert.deepEqual(
+    result.problems.map(p => [p.code, p.event]),
+    [['stale_mock_exempt', 'session:renamed-away']],
+  );
+});
+
+test('真实仓库的入向豁免清单每条都写了理由，且都还在契约里', () => {
+  const result = checkInboundSocketContract();
+  assert.deepEqual(result.problems, []);
+  for (const event of result.exemptEvents) {
+    assert.ok(result.contractEvents.has(event), `豁免项 ${event} 应仍是契约事件`);
+  }
+  // 缺口必须可见：豁免数就是「E2E 没有往返验证的入向路径」条数
+  assert.equal(result.mockEvents.size + result.exemptEvents.size, result.contractEvents.size,
+    'mock handler 数 + 豁免数应恰好等于契约数——不等说明有事件既没实现也没登记');
 });
