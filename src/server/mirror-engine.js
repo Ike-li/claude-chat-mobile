@@ -30,7 +30,17 @@ export function createMirrorEngine({
   scheduleStatusRefresh,
   readCliSnapshotForSession,   // 与 app.js statusline 路由共用同一份读取器
   statusBridgeOff = false,
+  // 夹具根注入（仅单测用；生产两者恒为 null → 下面展开成 {}，各 reader 用自己的默认根，行为零变化）。
+  // 与 history.js 既有约定同款（"baseDir 仅供单测注入临时夹具；生产用默认 CLAUDE_DIR"）。
+  // 没有这个口子，本模块的四条 tick 分支（切入预锁 / localBusy / 正常追平 / 无会话）就只能靠写
+  // 真实 ~/.claude/projects 与 ~/.claude/sessions 来测——那会污染机主的 CLI 目录，且往
+  // ~/.claude/sessions 塞活 pid 条目会让机主正在跑的 server 看到幻影「终端会话」。
+  transcriptBaseDir = null,
+  sessionRegistryDir = null,
 } = {}) {
+  // 展开进各 reader 的 options；null 时为空对象 = 走 reader 自己的默认根。
+  const diskOpts = transcriptBaseDir ? { baseDir: transcriptBaseDir } : {};
+  const registryOpts = sessionRegistryDir ? { dir: sessionRegistryDir } : {};
   // 只能轮询磁盘 transcript，把终端【已落定】的新消息追加到 web。单定时器自适配当前查看会话（切会话即重置基线），
   // 决策交纯函数 catchUpStep（history.js，单测覆盖）。看不到实时 thinking / 在跑子 agent——它们不落盘（已知边界）。
   const CATCH_UP_INTERVAL_MS = 2500;          // 常态追平间隔
@@ -179,7 +189,7 @@ export function createMirrorEngine({
       if (key === catchUpKey) {                                        // 同一会话重连（非真切换）
         rebaselineSameSession = true;
         // SS-NEW-002：保留 messages 算 tailKey——满窗滑动时 length 不变，仅比 length 会漏标 externalDirty
-        const curMsgs = await getSessionHistory(a.sessionId, a.cwd).catch(() => null);
+        const curMsgs = await getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts).catch(() => null);
         const curLen = Array.isArray(curMsgs) ? curMsgs.length : -1;
         const curTailKey = Array.isArray(curMsgs) ? historyTailKey(curMsgs) : null;
         if (getViewingInstanceId() === id && agents.get(id) === a && `${a.cwd}\x00${a.sessionId}` === key
@@ -198,7 +208,7 @@ export function createMirrorEngine({
     }
     if (key !== catchUpKey) {                                           // 切了会话：以现有历史长度定基线，本 tick 不推
       let seedMsgs;
-      try { seedMsgs = await getSessionHistory(a.sessionId, a.cwd); }
+      try { seedMsgs = await getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts); }
       catch { return; }
       const seedLen = seedMsgs.length;
       // SS-001：seed 时同步 lastTailKey，否则下一 tick 满窗会把「首次记指纹」当滑动误 reload
@@ -208,11 +218,11 @@ export function createMirrorEngine({
       // 判据 mtime 不可信（web resume 自身刷 mtime）；尾部形态是语义判据、可信。localBusy 豁免见 mirrorEntryLock。
       let tail = { verdict: 'settled', lastChainTs: null };
       let observedCli = { model: null, permissionMode: null };
-      try { tail = await classifyTranscriptTail(a.sessionId, a.cwd); } catch { /* 读失败保守不锁 */ }
-      try { observedCli = await readCliObservedState(a.sessionId, a.cwd); } catch { /* 读失败显未知 */ }
+      try { tail = await classifyTranscriptTail(a.sessionId, a.cwd, diskOpts); } catch { /* 读失败保守不锁 */ }
+      try { observedCli = await readCliObservedState(a.sessionId, a.cwd, diskOpts); } catch { /* 读失败显未知 */ }
       observedCli = mergeCliObserved(observedCli, a.sessionId, a.cwd);
       // P1（7/26 CCD 调研吸收）：CLI 进程注册表权威自报，比尾部形态猜测强一档；读失败/无条目 fail-open null → 完全回落既有判定
-      const entryRegistryEntry = await readSessionRegistry(a.sessionId, a.cwd).catch(() => null);
+      const entryRegistryEntry = await readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null);
       const registryBusy = registryIndicatesTerminalBusy(entryRegistryEntry);
       if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
                                           // await 让出后视图/实例/session 可能已变：旧观察结果与待提交基线全部作废，不提交
@@ -259,9 +269,9 @@ export function createMirrorEngine({
       // registryBusy 与切入/正常两个分支同口径：缺了它，注册表证明终端活着时这里仍可能把长编译误判成 stale。
       try {
         [busyTail, busySize, busyRegistryEntry] = await Promise.all([
-          classifyTranscriptTail(a.sessionId, a.cwd).catch(() => ({ verdict: 'settled', lastChainTs: null })),
-          sessionFileSize(a.sessionId, a.cwd).catch(() => -1),
-          readSessionRegistry(a.sessionId, a.cwd).catch(() => null),
+          classifyTranscriptTail(a.sessionId, a.cwd, diskOpts).catch(() => ({ verdict: 'settled', lastChainTs: null })),
+          sessionFileSize(a.sessionId, a.cwd, diskOpts).catch(() => -1),
+          readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null),
         ]);
       } catch { /* 读失败保守 settled：不误标 stale */ }
       const busyRegistryBusy = registryIndicatesTerminalBusy(busyRegistryEntry);
@@ -305,11 +315,11 @@ export function createMirrorEngine({
     let registryEntry;
     let registryBusy;
     try {
-      const sizeP = sessionFileSize(a.sessionId, a.cwd).catch(() => -1);
-      const histP = getSessionHistory(a.sessionId, a.cwd);
-      const regP = readSessionRegistry(a.sessionId, a.cwd).catch(() => null);
+      const sizeP = sessionFileSize(a.sessionId, a.cwd, diskOpts).catch(() => -1);
+      const histP = getSessionHistory(a.sessionId, a.cwd, undefined, diskOpts);
+      const regP = readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null);
       curSize = await sizeP;
-      const sizeOpt = { size: curSize >= 0 ? curSize : null };
+      const sizeOpt = { ...diskOpts, size: curSize >= 0 ? curSize : null };
       // 尾部形态（2026-07-12 单驾驶员核心判据）：轮次未完结(pending)期间维持锁——罩住「终端卡在一条几分钟的
       // 长工具上、磁盘零写入」窗（keepAlive 罩不住，原 12.5s 静默窗在此误判解锁、横幅熄灭="感觉没在跑"真实报障）。
       const tailP = classifyTranscriptTail(a.sessionId, a.cwd, sizeOpt).catch(() => ({ verdict: 'settled', lastChainTs: null }));
