@@ -50,6 +50,22 @@ const CONTROL_TAG_SUBSYSTEM = {
   set_permission_mode: 'control',
 };
 
+// fetchUsage 节流窗。SDK get_usage 不是"读一个内存里的百分比"：CLI 2.1.220 实测，它在 CLI 侧
+// = 一次真实网络请求 + 一次全量 transcript 扫盘（includeBehaviors 默认 true，SDK 侧无参数可传），
+// 而我们只用其中的 rate_limits 百分比与 session.lines。CLI 自己的 statusline 走的是另一条路：
+// 从 API 响应头 anthropic-ratelimit-unified-* 解析进内存后同步读，成本为零。
+// 既然拿不到便宜那条，就把昂贵这条的频率压到与数据变化率匹配——5h/7d 窗口按分钟变化，
+// 而 statusline 每 10s 兜底轮询 + 每个 assistant usage 边界都会拉起它。
+// 代价：同一次 RPC 带回的 session.lines(+A/−R) 一并滞后 ≤60s（会话累计计数器，只在展开面板可见）。
+export const USAGE_MIN_INTERVAL_MS = 60_000;
+
+// 第三方鉴权（API Key / Bedrock / Vertex / 代理网关）档：那边根本没有 claude 订阅额度可显示，
+// 常规频率纯属白问。判据用 CLI 自己的权威自报 rate_limits_available:false——不猜
+// ANTHROPIC_BASE_URL（既盖不住 Bedrock/Vertex，也可能指向仍走 OAuth 的官方代理）。
+// 不硬熔断到零的两个理由：同一次 RPC 还带回 session.lines(+A/−B)，且鉴权换回订阅时要能
+// 自动感知、不必等 agent 实例重建（切工作区/切 effort/resume/server 重启才会重建）。
+export const USAGE_THIRD_PARTY_INTERVAL_MS = 10 * 60 * 1000;
+
 // 会话生命周期用户可见文案（可恢复类 error）。统一前缀，避免「会话已结束」歧义：
 // 磁盘会话通常还在，掐掉的是子进程 / 在途轮。前端 error bar 原样展示。
 export function formatLifecycleIdleTimeout(mins) {
@@ -302,7 +318,12 @@ export class AgentSession {
     // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
     this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
     this.ctxWindowCache = null;   // {model, maxTokens}：本会话拿到过的上下文窗口【真值】(getContextUsage)，供 RPC 短暂不可用时垫底；带 model 指纹，模型一变即作废。绝不按模型名猜窗口，见 statusline.js readCachedCtxWindow
-    this.lastRateUnavailableReason = null; // 额度(5h/7d)不可用原因去重锚点：fetchUsage()/statusline.buildWebStatusLine 协作判断"原因是否变化"，仅变化时才记诊断日志
+    this.lastRateUnavailableReason = null; // 额度(5h/7d)不可用原因去重锚点。【唯一写者 = ops/statusline.js】——判定要看快照回落后 p.rate 的最终值，本层看不到
+    this.lastUsageFetchFailure = null;     // 最近一次 fetchUsage 失败的结构化原因 {reason,message,timedOut,ms}，供 statusline 判定；本身不写日志
+    this.lastUsageOkMs = null;             // 最近一次 fetchUsage 成功耗时：get_usage 在 CLI 侧含网络请求+全量 transcript 扫盘，给"超时值是否太紧"留实测依据
+    this._usageFetchAt = 0;                // 节流窗起点（见 USAGE_MIN_INTERVAL_MS）
+    this._usageCached = null;              // 节流窗内复用的上次结果
+    this._usageThirdParty = false;         // 上次 CLI 自报 rate_limits_available:false（无订阅额度）→ 降到 USAGE_THIRD_PARTY_INTERVAL_MS 档
     // per-turn 秒表/输出 token（CLI 式动态状态行 ✻ Verb… (Ns · ↓ tokens)，经 status_line.turn 透出）：
     this.turnStartedAt = null;    // 本轮开始时间戳（send/合成轮置位，result 无排队轮清 null）
     this.turnOutputTokens = 0;    // 本轮累计输出 token（跨 message 累加）
@@ -780,32 +801,45 @@ export class AgentSession {
   // statusline 5h/7d 额度 + 会话 lines 数据源：SDK 实验性 usage RPC（与 CLI /usage 同源）。
   // 超时 / 无 q / 无方法 / 抛错 → null（statusline 字段省略，不崩）。
   // 原始对象交给 statusline.usageBitsForStatusLine 解析；API 标 EXPERIMENTAL_MAY_CHANGE、会漂。
-  async fetchUsage(timeoutMs = 1500) {
+  // 本方法只留【结构化事实】（lastUsageFetchFailure / lastUsageOkMs），自己不写 diag——
+  // "额度是否不可用"要看用户在状态栏上有没有看见 5h/7d（含快照回落），那个结果只有下游
+  // statusline.buildWebStatusLine 才知道。判定点见 ops/statusline.js#resolveRateReason。
+  async fetchUsage(timeoutMs = 1500, { minIntervalMs, now = Date.now() } = {}) {
     if (typeof this.q?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') {
-      this._recordRateUnavailable('rpc_no_method');
+      this.lastUsageFetchFailure = { reason: 'rpc_no_method' };
       return null;
     }
+    // 显式传参优先（测试绕开节流用 0）；否则按上次 CLI 自报的鉴权类型选档。
+    const windowMs = minIntervalMs
+      ?? (this._usageThirdParty ? USAGE_THIRD_PARTY_INTERVAL_MS : USAGE_MIN_INTERVAL_MS);
+    // 成败都占用节流窗：RPC 挂住时更不该继续给同一条 stdio control 通道加压。
+    // 窗内早退不碰 lastUsageFetchFailure——沿用上次判定依据，与快照回落配合保持状态稳定。
+    if (this._usageFetchAt && now - this._usageFetchAt < windowMs) return this._usageCached;
+    this._usageFetchAt = now;
+    const startedAt = Date.now();
+    let timer = null;
     try {
-      return await Promise.race([
+      const usage = await Promise.race([
         this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('usage timeout')), timeoutMs)),
+        new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('usage timeout')), timeoutMs); }),
       ]);
+      this.lastUsageFetchFailure = null;
+      this.lastUsageOkMs = Date.now() - startedAt;
+      this._usageCached = usage;
+      // 鉴权类型双向自适应：CLI 说没有订阅额度就降档，说有就回常规档。只读 CLI 的权威自报，
+      // 不做展示层判定（额度到底显不显示仍由 ops/statusline.js#resolveRateReason 决定）。
+      this._usageThirdParty = usage?.rate_limits_available === false;
+      return usage;
     } catch (err) {
-      this._recordRateUnavailable('rpc_error', {
-        message: String(err?.message || err), timedOut: err?.message === 'usage timeout',
-      });
+      this.lastUsageFetchFailure = {
+        reason: 'rpc_error', message: String(err?.message || err),
+        timedOut: err?.message === 'usage timeout', ms: Date.now() - startedAt,
+      };
+      this._usageCached = null;
       return null;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-  }
-
-  // 诊断：仅"原因变化"时才记诊断时间线（高频刷新——300ms 防抖/10s 兜底轮询——下同一原因不重复写，
-  // 防止刷屏挤占 100 条环形缓冲、也防止 diagLog 实时广播刷屏诊断面板）。成功路径【不】调用本方法——
-  // 是否已恢复交给下游 statusline.buildWebStatusLine 依据本次 usage 内容接力判定。
-  _recordRateUnavailable(reason, extra = {}) {
-    if (reason === this.lastRateUnavailableReason) return;
-    diagLog.record(this.logKey(), 'statusline', 'rate_reason_change',
-      { reason, previousReason: this.lastRateUnavailableReason, ...extra });
-    this.lastRateUnavailableReason = reason;
   }
 
   // 权限档切换（与 send 的 setModel 同型，差分——仅档位真变才调 SDK）。

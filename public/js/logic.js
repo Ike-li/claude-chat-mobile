@@ -2066,7 +2066,10 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
   } else if (subsystem === 'statusline' && event === 'rate_reason_change') {
     if (d.reason) {
       const label = t(RATE_REASON_LABEL[d.reason]) || d.reason;
-      text = `${t('📊 额度显示不可用：')}${label}${d.message ? `（${d.message}）` : ''}`;
+      // 耗时只在故障那一刻出现：SDK get_usage 在 CLI 侧含网络请求 + 全量 transcript 扫盘，
+      // 「本次 Nms／上次成功 Nms」是判断 1500ms 阈值是否太紧、扫盘是否在变慢的唯一实测依据。
+      const timing = `${Number.isFinite(d.ms) ? `，${d.ms}ms` : ''}${Number.isFinite(d.lastOkMs) ? `${t('／上次成功 ')}${d.lastOkMs}ms` : ''}`;
+      text = `${t('📊 额度显示不可用：')}${label}${d.message ? `（${d.message}）` : ''}${timing}`;
       severity = d.reason === 'third_party_auth' ? 'neutral' : 'warning';
     } else {
       const prevLabel = t(RATE_REASON_LABEL[d.previousReason]) || d.previousReason || t('未知原因');
