@@ -3,6 +3,7 @@
 // 这个工具本身要回答「测试会不会开口」，所以它自己更不能是空过的。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   maskCodePositions,
   parseUncoveredLines,
@@ -201,4 +202,11 @@ test('generateMutants：同一行多个变异点用 column 区分（否则报告
   assert.equal(mutants.length, 2);
   assert.deepEqual(mutants.map(m => m.column), [src.indexOf('||') + 1, src.lastIndexOf('||') + 1]);
   assert.ok(mutants.every(m => m.line === 1));
+});
+
+test('自动关联只取单测：集成测试起真 server、会把变异循环吊死，要用就 --tests= 显式点名', () => {
+  const source = readFileSync(new URL('../../scripts/mutate.js', import.meta.url), 'utf8');
+  const listFn = source.slice(source.indexOf('function listTestFiles'), source.indexOf('function listTestFiles') + 300);
+  assert.ok(listFn.includes("'tests/unit'"));
+  assert.ok(!listFn.includes('tests/integration'), '自动关联面不得包含集成测试目录');
 });

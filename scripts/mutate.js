@@ -183,9 +183,12 @@ export function inferTestFiles(targetPath, testFiles, read) {
 
 // ── 编排 ────────────────────────────────────────────────────────────────────
 
+// 只自动关联【单测】。集成测试起真 server、动辄分钟级，且不带 --test-force-exit 时会吊住整个
+// 变异循环（2026-08-02 实测：history.js 把 session-delete 集成测试卷进来后直接挂死 10 分钟）。
+// 变异检查要的是秒级反馈。确实想拿集成测试杀变异体，用 --tests= 显式点名。
 function listTestFiles(rootDir) {
   const out = [];
-  for (const dir of ['tests/unit', 'tests/integration']) {
+  for (const dir of ['tests/unit']) {
     let entries;
     try { entries = readdirSync(join(rootDir, dir)); } catch { continue; }
     for (const name of entries) if (name.endsWith('.test.mjs')) out.push(`${dir}/${name}`);
