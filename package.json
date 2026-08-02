@@ -58,7 +58,8 @@
     "test:playwright": "npm run test:e2e",
     "test:playwright:p0": "playwright test tests/e2e/p0",
     "test:smoke": "node tests/smoke/runner.js",
-    "contract:check": "node scripts/contract-check.js"
+    "contract:check": "node scripts/contract-check.js",
+    "mutate": "node scripts/mutate.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.201",
