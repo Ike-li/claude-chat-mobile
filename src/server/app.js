@@ -18,7 +18,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
-import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv } from '../agent/cli-settings-defaults.js';
+import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
@@ -805,14 +805,26 @@ function instancesPayload() {
 // 为什么需要：CLI 2.1.211+ 在 linked worktree 里把 local settings source 解析到 canonical repo root，
 // 主 checkout 的 .claude/settings.local.json 的 env 块会污染所有 worktree 的会话（2026-07-30 实证复现：
 // third-party 的会话打到主 checkout 配的第三方网关 → 503）。判定与中和规则见 buildWorktreeGatewayEnv。
-// 非 linked worktree（.git 是目录）直接返回 undefined——不给普通工作区平添一次 resolveSettings。
+// 非 linked worktree（.git 是目录）直接返回空结果——不给普通工作区平添一次 resolveSettings。
+//
+// 返回 `{ env, settled }` 而非光秃秃的 env：settled=false 表示「这次判不出来」（IO 失败），
+// 与 settled=true + env=undefined 的「判定为无需隔离」是两回事。调用方据此决定要不要动磁盘上的
+// 隔离文件——把前者误当后者，会在一次瞬时失败里删掉仍有效的中和文件，见 decideWorktreeSettingsAction。
 async function resolveWorktreeGatewayEnv(cwd, worktreeEnv) {
   let canonicalRoot = null;
   try {
     const dotGit = join(cwd, '.git');
     if (statSync(dotGit).isFile()) canonicalRoot = parseWorktreeCanonicalRoot(readFileSync(dotGit, 'utf8'));
-  } catch { /* 非 git 仓 / .git 读不到：按非 worktree 处理，保持既有行为 */ }
-  if (!canonicalRoot || canonicalRoot === cwd) return undefined;
+  } catch (err) {
+    // ENOENT/ENOTDIR = 没有 .git（非 git 仓）或父路径不是目录：绝大多数工作区的正常形态，
+    // 是确定的「不是 worktree」，settled 照常为真。
+    if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return { env: undefined, settled: true };
+    // 其余（EACCES/EIO…）= .git 在却读不到，worktree 判定被整个跳过、隔离静默失效——这才是
+    // 「本该生效却没生效」的分支，既要留痕也不能让调用方据此清文件。
+    console.warn(`[cli-settings] 读取 ${cwd}/.git 失败，本次跳过 worktree 网关判定:`, err?.message || err);
+    return { env: undefined, settled: false };
+  }
+  if (!canonicalRoot || canonicalRoot === cwd) return { env: undefined, settled: true };
   // canonical 的 settings **每次实时读，绝不复用 cliDefaultsByCwd 的缓存**：它是污染源，必须准确。
   // 曾为省这一次调用而复用缓存，结果引入一整类静默失效——缓存里的 env 若为空/过期，
   // buildWorktreeGatewayEnv(worktreeEnv, undefined) 会返回 undefined，隔离静默不生效且零日志。
@@ -821,18 +833,23 @@ async function resolveWorktreeGatewayEnv(cwd, worktreeEnv) {
     const canon = await sdkResolveSettings({ cwd: canonicalRoot, settingSources: ['user', 'project', 'local'] });
     const canonEnv = defaultsFromEffectiveSettings(canon?.effective).env;
     const gatewayEnv = buildWorktreeGatewayEnv(worktreeEnv, canonEnv);
-    // 可观测性：worktree 场景算不出中和块，多半意味着「本该隔离却没隔离」。此前这条路径完全静默，
-    // 排查时只能靠事后翻 data/worktree-settings 目录空不空来倒推，代价极高。
-    if (!gatewayEnv) {
-      console.warn(`[cli-settings] worktree ${cwd} 未产出网关中和块`
-        + `（canonical=${canonicalRoot}, canonical env 键数=${canonEnv ? Object.keys(canonEnv).length : 0}）`
-        + '——该 worktree 的会话将不做网关隔离');
+    // canonical 干净时算不出中和块是**正常**的（没东西要中和）。此前这里一律 warn，等于每开一次
+    // 会话就刷一条假告警（2026-08-01 实测：canonical 的 env 块清空后就一直在报）。
+    // 下面这条是**哨兵**，按当前实现不可达——countNeutralizableGatewayKeys 与 buildWorktreeGatewayEnv
+    // 共用 shouldNeutralizeEnvKey，polluting>0 必然产出非空中和块（等价性由
+    // cli-settings-defaults.test.mjs「判据一致」一例锁住）。留着是为了那条等价性哪天被改断时能出声，
+    // 而不是靠人重新读一遍两个函数。真正的失效路径是本函数的两个 settled=false 分支，那里各有日志。
+    const polluting = countNeutralizableGatewayKeys(canonEnv);
+    if (!gatewayEnv && polluting) {
+      console.warn(`[cli-settings] worktree ${cwd} 的 canonical 有 ${polluting} 个网关键却未产出中和块`
+        + `（canonical=${canonicalRoot}）——该 worktree 的会话将不做网关隔离，可能被主 checkout 的网关污染`);
     }
-    return gatewayEnv;
+    return { env: gatewayEnv, settled: true };
   } catch (err) {
-    // 读不到 canonical settings 就不中和（退回既有行为），绝不因此拖垮开实例
+    // 读不到 canonical settings：本次判不出来，绝不因此拖垮开实例，也绝不让调用方据此清掉
+    // 上一次算对的隔离文件——settled=false 就是这个意思。
     console.warn(`[cli-settings] canonical root 读取失败 (${canonicalRoot}):`, err?.message || err);
-    return undefined;
+    return { env: undefined, settled: false };
   }
 }
 
@@ -841,15 +858,39 @@ async function resolveWorktreeGatewayEnv(cwd, worktreeEnv) {
 // 子进程 argv（实测 ps -ax 可读到明文），而这个块可能含 worktree 自配的 ANTHROPIC_AUTH_TOKEN。
 // SDK 的 Options.settings 同时接受「settings 文件路径」，改用它把暴露面收回到文件权限位。
 // 按 cwd + ultracode 归键：每工作区最多两个文件、总数随 workdirs 有界，每次开实例覆盖写
-// （settings 变更由 ensureCliDefaults 的 force 刷新带出），因而不需要任何生命周期清理。
+// （settings 变更由 ensureCliDefaults 的 force 刷新带出）。
 const WORKTREE_SETTINGS_DIR = join(DATA_DIR, 'worktree-settings');
-function worktreeSettingsFileFor(cwd, gatewayEnv, ultracode = false) {
-  if (!gatewayEnv) return undefined; // 非 worktree / 无需中和：不落文件，settings 走原对象路径
+const worktreeSettingsKeyFor = (cwd) => createHash('sha256').update(cwd).digest('hex').slice(0, 16);
+
+// 入参是 cliDefaultsByCwd 的整条记录而非光秃秃的 gatewayEnv：三态判断（write/prune/skip）交给
+// decideWorktreeSettingsAction 这个纯函数，它有单测锁着——尤其是「判定失败必须 skip 而非 prune」
+// 那条，靠可选链隐式表达时曾在 review 里被抓出会误删有效隔离文件。
+function worktreeSettingsFileFor(cwd, defaults, ultracode = false) {
+  const action = decideWorktreeSettingsAction(defaults);
+  if (action === 'skip') return undefined;
+  // 该 cwd 已无需隔离：把旧文件删干净。此前这里只 return，一份含明文 ANTHROPIC_AUTH_TOKEN 的快照
+  // 会在 worktree 撤掉网关配置后永久躺在磁盘上，没有任何东西再清理它（2026-08-01 实测残留）。
+  // 两档一起清（plain + -uc）——隔离既然不需要，两个档都不该留；写分支则不碰另一档，那是并存的另一档。
+  // 已 spawn 的会话在子进程启动时就读完了文件，事后删除不影响它；新会话此时本就不传 settings。
+  if (action === 'prune') {
+    for (const suffix of ['', '-uc']) {
+      try {
+        unlinkSync(join(WORKTREE_SETTINGS_DIR, `${worktreeSettingsKeyFor(cwd)}${suffix}.json`));
+      } catch (err) {
+        // ENOENT = 本来就没有，已达终态。其余（EACCES/EPERM/EBUSY…）意味着含明文 token 的快照
+        // 删不掉却无人知晓——与上面 .git 那条同一口径：留痕，别把失败伪装成成功。
+        if (err?.code !== 'ENOENT') {
+          console.warn(`[cli-settings] 清理 ${cwd} 的旧 worktree settings 失败（明文快照可能仍在磁盘上）:`, err?.message || err);
+        }
+      }
+    }
+    return undefined;
+  }
   try {
     mkdirSync(WORKTREE_SETTINGS_DIR, { recursive: true });
-    const key = createHash('sha256').update(cwd).digest('hex').slice(0, 16) + (ultracode ? '-uc' : '');
+    const key = worktreeSettingsKeyFor(cwd) + (ultracode ? '-uc' : '');
     const path = join(WORKTREE_SETTINGS_DIR, `${key}.json`);
-    writeOwnerOnlyFile(path, JSON.stringify({ ...(ultracode ? { ultracode: true } : {}), env: gatewayEnv }));
+    writeOwnerOnlyFile(path, JSON.stringify({ ...(ultracode ? { ultracode: true } : {}), env: defaults.gatewayEnv }));
     return path;
   } catch (err) {
     // 写不成就放弃本次隔离（退回未修复行为），绝不改用会泄漏进 argv 的内联对象兜底
@@ -872,7 +913,12 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
         settingSources: ['user', 'project', 'local'],
       });
       const d = defaultsFromEffectiveSettings(resolved?.effective);
-      d.gatewayEnv = await resolveWorktreeGatewayEnv(cwd, d.env);
+      // settled 必须一并落缓存：本函数的 catch 只兜得住「worktree 自己的 settings 读失败」，
+      // canonical 侧的失败在 resolveWorktreeGatewayEnv 内部就被吞了、照样会走到这里写缓存，
+      // 只有 settled 能让下游区分「已判定无需隔离」与「这次没判出来」。
+      const gw = await resolveWorktreeGatewayEnv(cwd, d.env);
+      d.gatewayEnv = gw.env;
+      d.gatewayEnvSettled = gw.settled;
       cliDefaultsByCwd.set(cwd, d);
       return d;
     } catch (err) {
@@ -1308,7 +1354,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     historicalCostUsd: saved?.cost || 0,
     resolvedEnv: cliDefaultsByCwd.get(cwd)?.env, // worktree env 块，注入子进程环境
     // worktree 网关隔离：经 0600 settings 文件下发，压住 CLI 从 canonical repo root 误读的网关配置
-    worktreeSettingsPath: worktreeSettingsFileFor(cwd, cliDefaultsByCwd.get(cwd)?.gatewayEnv, effNorm.ultracode),
+    worktreeSettingsPath: worktreeSettingsFileFor(cwd, cliDefaultsByCwd.get(cwd), effNorm.ultracode),
     onEvent: envelope => {
       metrics.inc('events'); // NFR-15 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
       if (envelope.type === 'init') {
@@ -1565,7 +1611,7 @@ function openScoutInstance(cwd) {
     historicalCostUsd: 0,
     resolvedEnv: cliDefaultsByCwd.get(cwd)?.env, // worktree env 块，scout 也须注入才能拿到正确网关的模型列表
     // 同上：scout 的模型清单也须来自隔离后的网关（scout 不走 ultracode）
-    worktreeSettingsPath: worktreeSettingsFileFor(cwd, cliDefaultsByCwd.get(cwd)?.gatewayEnv),
+    worktreeSettingsPath: worktreeSettingsFileFor(cwd, cliDefaultsByCwd.get(cwd)),
     onEvent: envelope => {
       if (envelope.type === 'models') {
         // 真模型到达：按 cwd 缓存 → 推送所有前端 → 清理
