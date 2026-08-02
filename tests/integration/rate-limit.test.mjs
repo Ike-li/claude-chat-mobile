@@ -8,8 +8,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
+import { waitForServerReady } from './_spawn-server.mjs';
 
-const sleep = ms => new Promise(res => setTimeout(res, ms));
 let port, dataDir, httpServer, io;
 
 async function startServer(authToken = 'secret-token') {
@@ -30,7 +30,7 @@ async function startServer(authToken = 'secret-token') {
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   const cfAccess = await import('../../src/auth/cf-access.js');
   cfAccess.initCfAccess();
-  await sleep(500);
+  await waitForServerReady(port, authToken);
 }
 
 function connectExpectError(token, timeout = 5000) {
@@ -63,7 +63,7 @@ async function cleanup() {
   if (dataDir) { try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ } dataDir = null; }
 }
 
-test.describe('鉴权限速接线集成测试', process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : {}, () => {
+test.describe('鉴权限速接线集成测试', () => {
   test.before(async () => { await startServer('secret-token'); });
   test.after(async () => { await cleanup(); });
 

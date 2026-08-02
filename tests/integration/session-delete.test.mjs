@@ -14,8 +14,8 @@ import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { getProjectDir } from '../../src/sessions/history.js';
+import { waitForServerReady } from './_spawn-server.mjs';
 
-const sleep = ms => new Promise(res => setTimeout(res, ms));
 const PROJECTS_ROOT = join(homedir(), '.claude', 'projects'); // 真实 CLI transcript 根（SDK deleteSession 与 history 同源）
 // 显式测试专用 token（客户端握手带上它）：不能用 delete AUTH_TOKEN 假装无鉴权——dotenv 在 import
 // server.js 时会从 .env 重新注入真实 AUTH_TOKEN，client 不带 token 就握手失败（rate-limit.test.mjs 同款）。
@@ -69,7 +69,7 @@ async function startServer() {
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   const cfAccess = await import('../../src/auth/cf-access.js');
   cfAccess.initCfAccess();
-  await sleep(500);
+  await waitForServerReady(port, TOKEN);
 }
 
 function emitAck(socket, event, payload) {
@@ -87,7 +87,6 @@ async function cleanup() {
 
 test.describe(
   '两级删除（FR-20）',
-  process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : {},
   () => {
     test.before(async () => { sweepStaleTestDirs(); await startServer(); });
     test.after(async () => { await cleanup(); });

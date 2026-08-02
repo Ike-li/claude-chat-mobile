@@ -100,7 +100,7 @@ function approvedSockets() {
   return [...ids].map(id => io.sockets.sockets.get(id)).filter(Boolean);
 }
 
-test.describe('client:presence 上报解锁 result 完成通知（PWA 后台推送）', process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : {}, () => {
+test.describe('client:presence 上报解锁 result 完成通知（PWA 后台推送）', () => {
   test.before(async () => { await startServer(); });
   test.after(async () => { await cleanup(); });
 

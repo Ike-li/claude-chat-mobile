@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
+import { waitForServerReady } from './_spawn-server.mjs';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 let port, dataDir, httpServer, io, devicesModule;
@@ -49,7 +50,7 @@ async function startServer(authToken = 'secret-token') {
   const cfAccess = await import('../../src/auth/cf-access.js');
   cfAccess.initCfAccess();
   devicesModule = await import('../../src/auth/devices.js');
-  await sleep(500);
+  await waitForServerReady(port, authToken);
 }
 
 function connectAndCollect(url, auth) {
@@ -92,7 +93,7 @@ async function cleanup() {
 
 test.describe(
   'CLI 吊销对称断连（SEC-03）',
-  process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : (LAN_IP ? {} : { skip: '本机无可用 LAN 网卡，无法真实触发 device-token 信任分支，跳过' }),
+  (LAN_IP ? {} : { skip: '本机无可用 LAN 网卡，无法真实触发 device-token 信任分支，跳过' }),
   () => {
     test.before(async () => { await startServer('secret-token'); });
     test.after(async () => { await cleanup(); });

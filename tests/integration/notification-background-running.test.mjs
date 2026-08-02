@@ -104,7 +104,7 @@ function approvedSockets() {
   return [...ids].map(id => io.sockets.sockets.get(id)).filter(Boolean);
 }
 
-test.describe('presence 跳变触发「后台运行中」提示的判定链（PWA 切后台锁屏可见性）', process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : {}, () => {
+test.describe('presence 跳变触发「后台运行中」提示的判定链（PWA 切后台锁屏可见性）', () => {
   test.before(async () => { await startServer(); });
   test.after(async () => { await cleanup(); });
 

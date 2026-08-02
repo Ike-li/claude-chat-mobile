@@ -10,7 +10,27 @@
 // kill 掉旧进程、spawn 新进程即为真重启/真重配置，无需依赖 ESM 模块缓存行为。
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
+import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
+
+// 端口选择：向 OS 要一个当前空闲的端口（listen(0) 拿到后立刻释放），而不是从 30000-40000 里随机抽签。
+//
+// 抽签在启动数少时够用，但 2026-08-02 把 auth-token / cf-access-gate 改成「每用例一台 server」后，
+// 一次 test:integration 的启动数从 ~6 台涨到 ~25 台。生日问题：25 台在 10000 个槽里至少撞一次的
+// 概率 ≈ 1 - exp(-25×24/20000) ≈ 3%，而实测就是 29 轮里飘红 1 次（≈3.4%）——量级对得上。
+// listen(0) 之后仍有 TOCTOU 窗口（拿到端口到子进程 bind 之间），但窗口是微秒级，且 OS 在临时端口
+// 段内是递增分配、不会把同一个端口同时发给两个并发请求者——比抽签低几个数量级。
+function reserveFreePort() {
+  return new Promise((resolve, reject) => {
+    const probe = createServer();
+    probe.unref();
+    probe.on('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(err => (err ? reject(err) : resolve(port)));
+    });
+  });
+}
 
 function httpGet(url) {
   return new Promise((resolve, reject) => {
@@ -32,9 +52,11 @@ export function createServerSpawner({
   requestHealth = httpGet,
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   maxAttempts = 40,
+  pickPort = reserveFreePort,
 } = {}) {
   return async function spawnServer(envOverrides = {}) {
-    const port = envOverrides.PORT ? Number(envOverrides.PORT) : 30000 + Math.floor(Math.random() * 10000);
+    // 调用方显式传 PORT 时一律照用（如 WS-6 要求「重启后端口不变」），只有不传时才向 OS 要空闲端口。
+    const port = envOverrides.PORT ? Number(envOverrides.PORT) : await pickPort();
     const buildNonce = `inttest-${randomUUID()}`;
     const proc = spawnProcess('node', ['server.js'], {
       env: {
@@ -95,6 +117,37 @@ function waitForExit(proc, timeoutMs) {
     proc.once('exit', onExit);
     timer = setTimeout(() => finish(false), timeoutMs);
   });
+}
+
+// 通用条件等待。原本活在 tests/helpers/integration.mjs 里，但那个文件自 9cd8a21 起【零 import 者】
+// —— 于是现役集成测试一直在用裸 sleep(N) 猜时序（2026-08-02 盘点：33 处 / 16 个文件）。删死文件时把这个
+// 正确的原语搬过来扶正。fn 可同步可异步；真值即通过，超时抛带 label 的错（比 node:test 的泛型超时好查）。
+export async function waitForCondition(fn, { timeoutMs = 5000, intervalMs = 50, label = 'condition' } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError = null;
+  for (;;) {
+    try {
+      const value = await fn();
+      if (value) return value;
+    } catch (err) {
+      lastError = err; // 探测期的瞬时失败（连接被拒等）不算失败，超时才报最后一次原因
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`等待「${label}」超时（${timeoutMs}ms）${lastError ? `：${lastError.message}` : ''}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+}
+
+// in-process 起 server 的测试文件（await import('../../server.js')）此前一律用 `await sleep(500)` 当就绪
+// 信号——既是猜（慢机器上可能不够）又是浪费（快机器上白等）。改成探真 /health：设了 AUTH_TOKEN 时必须
+// 带上，否则一路 401 被当成「还没起来」空等到超时。
+export async function waitForServerReady(port, token = null, { timeoutMs = 10_000 } = {}) {
+  const url = `http://127.0.0.1:${port}/health${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  return waitForCondition(
+    async () => JSON.parse(await httpGet(url)).status === 'ok',
+    { timeoutMs, label: `server ${port} /health` },
+  );
 }
 
 export async function killServer(proc) {

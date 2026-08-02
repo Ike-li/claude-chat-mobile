@@ -53,6 +53,7 @@ const PREFIX_RULES = [
   ['tests/integration/', 'Integration test', 'Isolated server or protocol integration test', 'keep'],
   ['tests/e2e/', 'E2E test', 'Zero-token Playwright browser test or mock', 'keep'],
   ['tests/smoke/', 'Smoke test', 'Explicit real Claude CLI scenario', 'keep'],
+  ['tests/fixtures/', 'Test support', 'Test fixture binary or data file', 'keep'],
   ['tests/helpers/', 'Test support', 'Shared test helper', 'keep'],
   ['tests/setup/', 'Test support', 'Test environment preload or setup', 'keep'],
   ['scripts/', 'Maintainer tooling', 'Project maintenance or verification command', 'keep'],

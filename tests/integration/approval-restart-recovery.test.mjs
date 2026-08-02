@@ -66,7 +66,7 @@ async function cleanup() {
   if (dataDir) { try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ } dataDir = null; }
 }
 
-test.describe('重启后 pending 审批 fail-closed 处置（Phase 4）', process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : {}, () => {
+test.describe('重启后 pending 审批 fail-closed 处置（Phase 4）', () => {
   test.before(async () => { await startServerWithSeededPendingApproval(); });
   test.after(async () => { await cleanup(); });
 

@@ -264,8 +264,8 @@ Total classified files: **369**.
 | `tests/e2e/p0/tool-cards.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/unread-pill.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/workspace-sessions-sidebar.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/fixtures/fake-claude.sh` | Test support | Test fixture binary or data file | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/helpers/agent-unit.mjs` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
-| `tests/helpers/integration.mjs` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/helpers/p0-ui.ts` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/helpers/playwright.ts` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/integration/_spawn-server.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
