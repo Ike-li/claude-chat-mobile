@@ -66,7 +66,14 @@ const settledTail = (ts, text = '答完了') => ([
 
 // 引擎 + 全部注入面的可控替身。构造后立刻 stop()：createMirrorEngine 在构造期就 rescheduleCatchUp()
 // 起了定时器，测试要自己驱动 catchUpTick，不能让后台 tick 插进来改状态。
-function makeEngine({ cwd = '/tmp/ccm-mirror-ws', serviceStartedAt = Date.now(), roots = makeRoots() } = {}) {
+function makeEngine({
+  cwd = '/tmp/ccm-mirror-ws',
+  serviceStartedAt = Date.now(),
+  roots = makeRoots(),
+  // 默认「读不到 CLI 快照」——多数用例不关心 statusline 桥。要测 mergeCliObserved 的 fresh 路径就传进来。
+  cliSnapshot = { state: 'missing', snapshot: null },
+  statusBridgeOff = false,
+} = {}) {
   const emitted = [];
   const agents = new Map();
   const states = new Map();
@@ -82,7 +89,8 @@ function makeEngine({ cwd = '/tmp/ccm-mirror-ws', serviceStartedAt = Date.now(),
     viewingCwdOf: () => viewingCwd,
     serviceStartedAt,
     scheduleStatusRefresh: () => { statusRefreshes += 1; },
-    readCliSnapshotForSession: () => ({ state: 'missing', snapshot: null }),
+    readCliSnapshotForSession: () => cliSnapshot,
+    statusBridgeOff,
     ...roots,
   });
   engine.stop();
@@ -414,4 +422,253 @@ test('requestRebaseline 时磁盘已被终端写长 → 标脏（BE-009 防分�
   await h.engine.catchUpTick();
 
   assert.equal(a.externalDirty, true, '被 rebaseline 吸收的外部增长必须标脏，否则下条手机消息从旧位置分叉');
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 以下用例由 `npm run mutate -- src/server/mirror-engine.js` 反推补齐（2026-08-02）。
+// 上面那批用例首轮全绿，但变异检查显示 129 个变异体里存活 67 个——存活的意思是「这行被
+// 执行到了，改掉之后却没有任何测试变红」。下面只挑其中**行为上真有意义**的那些补，
+// 不追求把等价变异（默认参数、立刻被覆盖的初值、值本就是 null 的 ??）也清零：为杀变异体
+// 而写的断言就是我们一开始想避免的那种测试。
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── 归属守卫的另外两个析取项 ────────────────────────────────────────────────
+// 守卫是 `viewing 变了 || 实例对象被换了 || 该实例的 cwd\0sessionId 变了` 三选一。
+// 上面那条只触发第一项，于是把 `||` 整体翻成 `&&` 照样全绿（要三个同时成立才 return）。
+// 后两项都是真实路径：dispose+resume 会换掉实例对象；CLI 迟到的 init 会让 sessionId 变。
+
+test('归属守卫②：tick 期间实例对象被换掉（dispose+resume）→ 旧观察不得提交', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-a');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-a', pendingTail(Date.now() - 5_000));
+
+  const inflight = h.engine.catchUpTick();
+  // viewing 不变，但实例被换成新对象（web 发送前 dispose 旧 SDK 子进程再 resume 吸收外部写入）
+  h.agents.set('inst-A', { sessionId: 'sess-a', cwd: a.cwd, externalDirty: false });
+  await inflight;
+
+  assert.equal(h.engine.isReadonly(), false, '观察结果属于已被替换掉的那个实例，不得落到新实例上');
+  assert.equal(h.engine.mirrorOwnedBy('sess-a', 'inst-A'), false);
+});
+
+test('归属守卫③：tick 期间同一实例的 sessionId 变了 → 旧会话的增量不得推给新会话', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-old');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-old', settledTail(base));
+  await h.engine.catchUpTick();                       // 切入定基线
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-old', [
+    ...settledTail(base),
+    { type: 'user', message: { role: 'user', content: '旧会话的外部增量' }, timestamp: iso(base + 5_000) },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'OLD_SESSION_CONTENT' }] }, timestamp: iso(base + 6_000) },
+  ]);
+  const inflight = h.engine.catchUpTick();
+  a.sessionId = 'sess-new';                           // CLI 迟到的 init / 会话切换：同一实例换了会话
+  await inflight;
+
+  assert.equal(h.historyAppends().length, 0,
+    '这一 tick 观察的是 sess-old，提交时已经是 sess-new —— 内容不得跨会话串台');
+  assert.equal(a.externalDirty, false);
+});
+
+// ── localBusy 分支：此前只有一条「不推 history_append」的否定断言 ───────────
+// 否定断言在分支【提前 return】时同样成立，所以整片 localBusy 逻辑其实没被检查。
+
+test('permission 挂起期间磁盘长大 → 必然是终端写的，标脏防分叉（30 分钟审批窗）', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-perm');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-perm', settledTail(base));
+  await h.engine.catchUpTick();                       // 切入
+
+  h.setState('inst-A', 'permission');                 // 手机上弹着审批卡片，web 侧根本不写盘
+  await h.engine.catchUpTick();                       // 这一 tick 只记 size，不判增长
+  assert.equal(a.externalDirty, false, '基线刚建立，不该凭空标脏');
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-perm', [
+    ...settledTail(base),
+    { type: 'user', message: { role: 'user', content: '人走到电脑前用终端继续了' }, timestamp: iso(base + 5_000) },
+  ]);
+  await h.engine.catchUpTick();
+
+  assert.equal(a.externalDirty, true,
+    '不标脏的话，下一条手机消息会送进停在 30 分钟前的 SDK 子进程、从旧 parentUuid 分叉');
+});
+
+test('busy 期间磁盘长大是己方 turn 写的 → 不得标脏（与 permission 相反）', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-busy2');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-busy2', settledTail(base));
+  await h.engine.catchUpTick();
+
+  h.setState('inst-A', 'busy');
+  await h.engine.catchUpTick();
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-busy2', [
+    ...settledTail(base),
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '己方 turn 的输出' }] }, timestamp: iso(base + 5_000) },
+  ]);
+  await h.engine.catchUpTick();
+
+  assert.equal(a.externalDirty, false, 'busy = 自己也在写盘，size 增长不能归给终端');
+});
+
+test('busy 期间主链久无写入且尾部未收尾 → 仍要重算 stale（不能因为 web 忙就掩盖终端疑似中断）', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-busystale');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-busystale',
+    pendingTail(Date.now() - MIRROR_STALE_PENDING_MS - 60_000));
+  await h.engine.catchUpTick();                       // 陈旧 pending → 切入不预锁
+
+  h.setState('inst-A', 'busy');
+  await h.engine.catchUpTick();
+
+  const m = h.lastMirror();
+  assert.equal(m.payload.readonly, false, '陈旧 pending 本就没锁，busy 分支不得凭空造锁');
+  assert.equal(m.payload.stale, false, 'stale 只在锁着时才有意义');
+});
+
+// ── keepAlive 与自动解锁 ────────────────────────────────────────────────────
+// keepAlive = 「文件还在长」的弱判据，只延缓解锁、不造锁。原实现上锁后【没有任何自动释放
+// 路径】，终端写一次就把移动端输入锁死到手动接管为止——这两条钉住释放这条命脉。
+
+test('终端仍在写盘（文件在长但没有新文本落定）→ 维持只读锁，不解锁', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-keepalive');
+  const ts = Date.now() - 5_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-keepalive', pendingTail(ts));
+  await h.engine.catchUpTick();                       // 切入预锁
+  assert.equal(h.engine.isReadonly(), true);
+
+  await h.engine.catchUpTick();                       // 建立 size 基线
+  for (let i = 0; i < 15; i += 1) {
+    // 追加不进主链文本的条目（tool_use/tool_result 往返）：文件在长，但 catchUpStep 不会 emit
+    writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-keepalive', [
+      ...pendingTail(ts),
+      ...Array.from({ length: i + 1 }, (_, k) => (
+        { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `t${k}`, content: 'ok' }] }, timestamp: iso(ts + k) }
+      )),
+    ]);
+    await h.engine.catchUpTick();
+  }
+
+  assert.equal(h.engine.isReadonly(), true,
+    '文件一直在长 = 终端还在跑（卡在长工具上），静默窗不得把锁解掉');
+});
+
+test('终端真静默够久 → 自动解锁，把写权交回手机侧（原实现锁死到手动接管为止）', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-release');
+  const ts = Date.now() - 5_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-release', pendingTail(ts));
+  await h.engine.catchUpTick();
+  assert.equal(h.engine.isReadonly(), true, '前置：先真的锁上');
+
+  // 终端收工：尾部转为已收尾，此后文件不再变化
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-release', settledTail(ts + 1_000));
+  for (let i = 0; i < 20 && h.engine.isReadonly(); i += 1) await h.engine.catchUpTick();
+
+  assert.equal(h.engine.isReadonly(), false, '静默累计到阈值必须自动解锁');
+  assert.equal(h.lastMirror().payload.readonly, false, '解锁要广播出去，前端才会恢复输入');
+});
+
+// ── statusline 桥：mergeCliObserved 的 fresh 路径 ───────────────────────────
+// 此前 readCliSnapshotForSession 恒返回 missing，整条分支从没被执行判定过。
+
+test('CLI 快照 fresh → model 取快照、effort 走 statusline 桥（transcript 只给 permissionMode）', async () => {
+  const h = makeEngine({ cliSnapshot: { state: 'fresh', snapshot: { model: { id: 'claude-opus-4-5' }, effort: 'high' } } });
+  const a = h.view('inst-A', 'sess-bridge');
+  const ts = Date.now() - 5_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-bridge', [
+    { type: 'permission-mode', permissionMode: 'acceptEdits', timestamp: iso(ts - 3000) },
+    ...pendingTail(ts),
+  ]);
+
+  await h.engine.catchUpTick();
+
+  assert.deepEqual(h.engine.snapshot().observedCli,
+    { model: 'claude-opus-4-5', permissionMode: 'acceptEdits', effort: 'high' });
+});
+
+test('statusBridgeOff → effort 恒 null，只用 transcript 观察值（桥没装时不许瞎报）', async () => {
+  const h = makeEngine({
+    statusBridgeOff: true,
+    cliSnapshot: { state: 'fresh', snapshot: { model: { id: 'claude-opus-4-5' }, effort: 'high' } },
+  });
+  const a = h.view('inst-A', 'sess-nobridge');
+  const ts = Date.now() - 5_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-nobridge', [
+    { type: 'permission-mode', permissionMode: 'plan', timestamp: iso(ts - 3000) },
+    { type: 'user', message: { role: 'user', content: '提问' }, timestamp: iso(ts - 1000) },
+    { type: 'assistant', message: { role: 'assistant', model: 'transcript-model', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }] }, timestamp: iso(ts) },
+  ]);
+
+  await h.engine.catchUpTick();
+
+  assert.deepEqual(h.engine.snapshot().observedCli,
+    { model: 'transcript-model', permissionMode: 'plan', effort: null },
+    '桥关掉时 model 回落 transcript、effort 必须是 null 而不是快照里的值');
+});
+
+// ── 正常 tick 的抑重 ────────────────────────────────────────────────────────
+
+test('未上锁的稳态下反复 tick 不重复广播（正常分支的 force=false）', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-quiet');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-quiet', settledTail(Date.now() - 20_000));
+  await h.engine.catchUpTick();                       // 切入（settled → 不锁）
+  await h.engine.catchUpTick();                       // 第一个正常 tick
+  const settled = h.mirrorStates().length;
+
+  await h.engine.catchUpTick();
+  await h.engine.catchUpTick();
+
+  assert.equal(h.mirrorStates().length, settled,
+    '状态没变还每 2.5s 推一条 mirror_state，等于把广播通道当心跳用');
+});
+
+// 归属守卫共三处（切入 / localBusy / 正常），代码相同但保护的东西不同。上面两条各打了一处，
+// 变异检查显示另两处的「实例被换掉」这一析取项仍未被触发过——补齐，因为 dispose+resume 在
+// 任何一个 tick 中途都可能发生，而正常分支那处一旦失守就是把旧会话内容推进新视图。
+
+test('归属守卫：正常追平 tick 中途实例被换掉 → 旧会话的增量不得推给新实例', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-swap');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-swap', settledTail(base));
+  await h.engine.catchUpTick();                       // 切入定基线
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-swap', [
+    ...settledTail(base),
+    { type: 'user', message: { role: 'user', content: '终端写的' }, timestamp: iso(base + 5_000) },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'SWAPPED_AWAY' }] }, timestamp: iso(base + 6_000) },
+  ]);
+  const inflight = h.engine.catchUpTick();
+  h.agents.set('inst-A', { sessionId: 'sess-swap', cwd: a.cwd, externalDirty: false });
+  await inflight;
+
+  assert.equal(h.historyAppends().length, 0, '观察归属的实例已被替换，这一 tick 整体作废');
+  assert.equal(a.externalDirty, false, '已被 dispose 的旧实例不该再被写状态');
+});
+
+test('归属守卫：localBusy tick 中途实例被换掉 → 不得把观察结果记到旧实例上', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-busyswap');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-busyswap', settledTail(base));
+  await h.engine.catchUpTick();
+
+  h.setState('inst-A', 'permission');
+  await h.engine.catchUpTick();                       // 建立 size 基线
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-busyswap', [
+    ...settledTail(base),
+    { type: 'user', message: { role: 'user', content: '审批挂起期间终端写的' }, timestamp: iso(base + 5_000) },
+  ]);
+
+  const inflight = h.engine.catchUpTick();            // 这一 tick 本会把 a 标脏
+  h.agents.set('inst-A', { sessionId: 'sess-busyswap', cwd: a.cwd, externalDirty: false });
+  await inflight;
+
+  assert.equal(a.externalDirty, false, '守卫应在提交前 return，旧实例上不留这一 tick 的痕迹');
 });
