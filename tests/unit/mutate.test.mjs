@@ -210,3 +210,26 @@ test('自动关联只取单测：集成测试起真 server、会把变异循环�
   assert.ok(listFn.includes("'tests/unit'"));
   assert.ok(!listFn.includes('tests/integration'), '自动关联面不得包含集成测试目录');
 });
+
+// ── 破坏性隔离（2026-08-02 真实事故的回归）─────────────────────────────────
+// 变异体会把"算路径的代码"改成算出别的路径，而测试会拿那个路径去 rmSync。
+// 当时：getProjectDir 里的 `String(cwd || '')` 被算子改成 `String(cwd && '')` ⇒ 恒返回 ''，
+// session-delete.test.mjs 的 projectDir 塌成 ~/.claude/projects 本身，它的 cleanup 把整棵树删了。
+
+test('变异运行必须换一次性 HOME：靠 os.homedir() 推路径的代码算歪了也够不到真实数据', () => {
+  const source = readFileSync(new URL('../../scripts/mutate.js', import.meta.url), 'utf8');
+  assert.match(source, /HOME: home/, 'runTests 必须能覆盖子进程的 HOME');
+  const baselineCall = source.match(/runTests\(testFiles, \{ coverage: true[^)]*\)/)?.[0] ?? '';
+  assert.match(baselineCall, /home: sandboxHome/, '基线运行也要走沙箱 HOME —— 真有测试依赖真实 HOME 就该在基线阶段红出来');
+  const mutantCall = source.match(/runTests\(testFiles, \{ timeoutMs[^)]*\)/)?.[0] ?? '';
+  assert.match(mutantCall, /home: sandboxHome/, '每个变异体运行都要走沙箱 HOME');
+});
+
+test('sandboxHome 必须先于 restore 声明：restore 是 exit 处理器，撞 TDZ 会把还原本身炸掉', () => {
+  const source = readFileSync(new URL('../../scripts/mutate.js', import.meta.url), 'utf8');
+  const declared = source.indexOf('const sandboxHome');
+  const restore = source.indexOf('const restore =');
+  assert.ok(declared > 0 && restore > 0);
+  assert.ok(declared < restore,
+    'restore 引用 sandboxHome；若声明在后，任何早退路径都会 ReferenceError，源文件就还原不回来了');
+});

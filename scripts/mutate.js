@@ -20,7 +20,8 @@
 // 【存活 ≠ bug】等价变异体（改了但语义不变）、纯日志、防御性兜底都会存活。存活是一个问句：
 // 「这里改了你会在意吗？」——在意就补断言，不在意就放过。工具不替你判断。
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -201,7 +202,20 @@ function listTestFiles(rootDir) {
 //   而 spawnSync 阻塞事件循环，此时 SIGINT/SIGTERM 处理器根本没机会跑 —— 整个工具连同"退出时
 //   还原源文件"的保护一起卡死，把变异后的代码留在了工作树里（2026-08-02 实际踩到）。
 //   超时即判"杀死"：把代码改坏到测试跑不完，本来就属于被测试发现了。
-function runTests(testFiles, { coverage = false, timeoutMs } = {}) {
+// ★★ 变异体会把「算路径的代码」改成算出【别的路径】，而测试会拿那个路径去 rmSync。
+// 2026-08-02 真实事故：对 src/sessions/history.js 跑变异时，算子把 getProjectDir 里的
+//   `String(cwd || '')` 改成 `String(cwd && '')` ⇒ 对任意 cwd 恒返回 ''，于是
+//   session-delete.test.mjs 的 `projectDir = join(PROJECTS_ROOT, getProjectDir(workDir))`
+//   塌成 PROJECTS_ROOT 本身，它的 cleanup 再 `rmSync(projectDir, {recursive, force})`
+//   —— 整个 ~/.claude/projects 被递归删除，机主积累的 104 个 memory 文件一起没了（靠 APFS 快照才捞回来）。
+//
+// 两层防护，缺一不可：
+//   ① 自动关联只取 tests/unit（见 listTestFiles）——真正碰真实目录的是集成测试。
+//   ② 【这里】给每次测试运行换一个临时 HOME。凡是靠 os.homedir() 推路径的（~/.claude/projects、
+//      ~/.claude/sessions 都是），变异算歪了也只能砸到一个一次性空目录，够不到真实数据。
+// 基线运行也走同一个 HOME：真有测试依赖真实 HOME 的话，会在【基线阶段】就红出来并中止，
+// 而不是等到某个变异体把它变成破坏性操作。
+function runTests(testFiles, { coverage = false, timeoutMs, home } = {}) {
   return spawnSync(process.execPath, [
     '--import', './tests/setup/preload-env.mjs',
     ...(coverage ? ['--experimental-test-coverage'] : []),
@@ -210,6 +224,7 @@ function runTests(testFiles, { coverage = false, timeoutMs } = {}) {
     cwd: ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    ...(home ? { env: { ...process.env, HOME: home } } : {}),
     ...(timeoutMs ? { timeout: timeoutMs, killSignal: 'SIGKILL' } : {}),
   });
 }
@@ -258,17 +273,22 @@ function main() {
 
   const original = readFileSync(targetAbs, 'utf8');
   writeFileSync(backup, original);
+  // 一次性 HOME：见 runTests 上方那段事故说明。必须在 restore 之前声明——restore 被注册成
+  // process.on('exit') 处理器，若它引用一个尚未初始化的 const，任何早退路径都会撞 TDZ ReferenceError，
+  // 把「还原源文件」这条命脉本身炸掉。
+  const sandboxHome = mkdtempSync(join(tmpdir(), 'ccm-mutate-home-'));
   // 任何退出路径都要还原——包括 Ctrl-C 和未捕获异常。绝不能把变异后的代码留在工作树里。
   const restore = () => {
     try { writeFileSync(targetAbs, original); } catch { /* 尽力而为 */ }
     try { if (existsSync(backup)) unlinkSync(backup); } catch { /* 尽力而为 */ }
+    try { rmSync(sandboxHome, { recursive: true, force: true }); } catch { /* 尽力而为 */ }
   };
   process.on('exit', restore);
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { restore(); process.exit(130); });
 
   // 基线：测试本来就红的话，后面每个变异体都会被判"杀死"，整轮结论全是假的。
   const baselineStart = Date.now();
-  const baseline = runTests(testFiles, { coverage: true });
+  const baseline = runTests(testFiles, { coverage: true, home: sandboxHome });
   const baselineMs = Date.now() - baselineStart;
   if (baseline.status !== 0) {
     console.error('基线测试未通过，变异检查无意义——先把测试跑绿。');
@@ -307,7 +327,7 @@ function main() {
   let timedOut = 0;
   mutants.forEach((mutant, index) => {
     writeFileSync(targetAbs, mutant.mutated);
-    const result = runTests(testFiles, { timeoutMs: perRunTimeoutMs });
+    const result = runTests(testFiles, { timeoutMs: perRunTimeoutMs, home: sandboxHome });
     writeFileSync(targetAbs, original);
     if (result.error?.code === 'ETIMEDOUT') timedOut += 1;
     if (!isKilled(result)) survivors.push(mutant);
