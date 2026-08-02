@@ -1662,7 +1662,17 @@ export class AgentSession {
           }
           // FRESH 首轮：init 前的日志写在 provisionalKey(instanceId) 下，先并入真 sessionId 再记后续 sys_info。
           const prevLogKey = this.logKey();
-          this.sessionId = msg.session_id;
+          // sessionId 是【前端分流的路由键】，也是 transcript 落盘路径与日志归档键。SDK 若报来非字符串
+          // （对象/数组/数字），它会原样进入每一条 agent:event 信封——前端按它分流就静默串台，而下游
+          // 那些 isSafeSessionId 守卫只挡路径穿越、不管这里。宁可维持旧值并留痕，也不接受一个不可用的键。
+          // 2026-08-02 由属性测试实测复现（tests/unit/agent-sdk-message-fuzz.test.mjs）。
+          if (typeof msg.session_id === 'string' && msg.session_id) {
+            this.sessionId = msg.session_id;
+          } else {
+            console.warn(`[sdk-contract] init 上报的 session_id 不是非空字符串（${typeof msg.session_id}），维持原 sessionId`);
+            interactionLog.addSessionLog(this.logKey(), 'sys_info',
+              `[SYS] ⚠️ SDK init 的 session_id 非法（${typeof msg.session_id}），已忽略、维持原会话标识`);
+          }
           if (prevLogKey && prevLogKey !== this.sessionId) {
             interactionLog.rebindSessionLogs(prevLogKey, this.sessionId);
             diagLog.rebindDiagLogs(prevLogKey, this.sessionId);
@@ -1803,6 +1813,14 @@ export class AgentSession {
 
       case 'stream_event': {
         const ev = msg.event;
+        // SDK 契约上 stream_event 必带 event，但 SDK 是会在我们脚下变的外部依赖、消息形状不归我们定。
+        // 真缺了的话下面 `ev.type` 直接抛 TypeError，而本方法的调用方是消息泵的 for-await 循环，
+        // 它的外层 catch 把抛出【当成流错误、中断整个会话】（见本文件 map() 调用点上方那段注释：
+        // DEBUG_SDK_MESSAGES 的插桩专门包了 try/catch 就是防这个）——即一条畸形消息掀翻一整个会话。
+        // 同一个 ev 在下面子 agent 分支里本来就写成 `ev?.type`，主路径漏了，是疏漏不是有意的契约假设。
+        // 2026-08-02 由属性测试实测复现（tests/unit/agent-sdk-message-fuzz.test.mjs，seed=1 case=40）。
+        // 缺 event 时按「无可识别的流事件」处理：什么都不做，与收到未知 ev.type 同一归宿。
+        if (!ev || typeof ev !== 'object') break;
         if (msg.parent_tool_use_id) {
           // 子 agent 流式增量：独立 emit（带 parentToolUseId），【不碰主 agent buffer/state】防污染主线正文。
           // forwardSubagentText:true 下 SDK 才投递子 agent 的 text/thinking delta——移动端子 agent 可见的实时来源。
@@ -1878,7 +1896,11 @@ export class AgentSession {
             this.emitNotice(`${who}：${detail || `API 错误：${msg.error}`}`, 'warning');
             break;
           }
-          for (const block of msg.message?.content ?? []) {
+          // 同上一处（主 agent 那条 content 循环）的理由：`?? []` 挡不住"非数组的对象"，for-of 会抛。
+          // 讽刺的是正上方 msg.error 分支写的就是 asArray(...).filter(b => b?.type ...) —— 防御写法在
+          // 同一个 case 里隔了六行就没铺过来。
+          for (const block of asArray(msg.message?.content)) {
+            if (!block || typeof block !== 'object') continue;
             if (block.type === 'text' && block.text) {
               this.emit('text_delta', {
                 messageId: msg.uuid,
@@ -1950,7 +1972,13 @@ export class AgentSession {
           this.onUsage?.(); // E16：assistant 边界即刷 statusline ctx（不等 result/10s tick）
         }
         const mid = this.currentMessageId || msg.uuid;
-        for (const block of msg.message?.content ?? []) {
+        // asArray 而非 `?? []`：content 若是【非数组的对象】，?? 不兜底（它不是 null/undefined），
+        // for-of 直接抛 "object is not iterable"，一条畸形消息掀翻整个会话（见本 case 上方 map()
+        // 调用点的流错误说明）。同一函数里错误分支本来就用的 asArray(msg.message?.content)。
+        // block 同理逐个防：content 数组里混进 null 时 `block.type` 会抛，而下面错误分支写的是 `b?.type`。
+        // 两处都是同一函数内已有的写法没铺到这里，2026-08-02 由属性测试实测复现。
+        for (const block of asArray(msg.message?.content)) {
+          if (!block || typeof block !== 'object') continue; // 非对象不可能是合法 content block
           if (block.type === 'tool_use') {
             this.lastToolName = block.name; // 跟踪最后使用的工具名，供后台 tab 角标细化
             let file; // ③：文件类工具附未截断 path + changeKind + 行统计，并缓存完整 input 供预览
