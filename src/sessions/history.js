@@ -978,7 +978,7 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, regis
 // 在 ~12.5s 后误解锁、双写分叉。合并判据：主链 pending 或子链 pending → 整体 pending。
 // web 侧 slash 的裸文本形态：SDK 把用户输入原样落盘，没有 CLI 的 <command-name> 包装（真机 5ed3eb8c
 // 落的就是 "/code-review max 整个分支代码库，最多同时 3 个子代理"）。要求命令名后紧跟空白或行尾，
-// 才不会把 "/Users/raylee/code" 这类以斜杠开头的普通文本误当命令（首段后面是 /，不是空白）。
+// 才不会把 "/Users/you/code" 这类以斜杠开头的普通文本误当命令（首段后面是 /，不是空白）。
 const WEB_BARE_SLASH_RE = /^\/[a-zA-Z][\w:-]*(\s|$)/;
 
 // 该 user 条目之后（更高 index）是否已有本地命令的 stdout——/config /model 等本地命令
@@ -990,7 +990,7 @@ const WEB_BARE_SLASH_RE = /^\/[a-zA-Z][\w:-]*(\s|$)/;
 //     形态，漏认 → 主链停在光秃秃的 user 文本 → 永久 pending（见 classifyChainTail 处的说明）。
 // system 行同样必须校验 <local-command-stdout|stderr> 标签，不能只看 subtype：同一个 subtype 下还落
 // 【命令名回显】{ content:"<command-name>/status</command-name>…" }，那是命令【开始】的记录、不是输出。
-// 真实反例 -Users-raylee-ai-work-mbp/f0483015… idx 879：只认 subtype 会把回显当收尾，把正在进行的
+// 真实反例（另一仓的 f0483015… 会话）idx 879：只认 subtype 会把回显当收尾，把正在进行的
 // 终端回合判成 settled → 解锁 → 双写分叉（2026-07-30 子代理审查在真盘上抓到）。
 function hasLocalCommandStdoutAfter(entries, fromIndex) {
   for (let j = fromIndex + 1; j < entries.length; j++) {

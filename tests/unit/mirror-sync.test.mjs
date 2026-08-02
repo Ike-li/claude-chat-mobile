@@ -423,7 +423,7 @@ test('classifyTailEntries：web 回合被 503 打断（user 裸 slash + system/l
 });
 
 // 分叉红线（2026-07-30 子代理审查在真实盘上抓到）：本地命令输出只能给【它自己那条 slash】收尾，绝不能
-// 给任意一条 user 消息收尾。真实反例 ~/.claude/projects/-Users-raylee-ai-work-mbp/f0483015…jsonl idx 877-880：
+// 给任意一条 user 消息收尾。真实反例 ~/.claude/projects/<另一仓>/f0483015…jsonl idx 877-880：
 // 终端用户发了真实请求（"把 CF 优选相关的都去掉…"，entrypoint=cli），assistant 还没回，90 秒后用户又敲了
 // 个 /status——于是 idx 879/880 落下 command-name 回显与 stdout。若把「链尾 user 之后有 local_command
 // 输出」一律当收尾，这条【正在进行的终端回合】就被判 settled → 镜像不锁 → 手机可写 → 双写分叉。
