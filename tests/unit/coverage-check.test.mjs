@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { unitTestFiles, findUnloadedProductionFiles } from '../../scripts/coverage-check.js';
+import { unitTestFiles, findUnloadedProductionFiles, summarizeCoverageGap } from '../../scripts/coverage-check.js';
 
 test('coverage check expands unit test files without relying on shell globs', () => {
   const files = unitTestFiles();
@@ -40,14 +40,72 @@ test('findUnloadedProductionFiles：报告里出现过的文件不算缺口，�
 });
 
 test('findUnloadedProductionFiles：全部加载过时返回空（不制造假缺口）', () => {
-  const report = 'ℹ  a.js | 100.00 | 100.00 | 100.00 |\nℹ  b.js |  50.00 |  50.00 |  50.00 |';
+  const report = [
+    'ℹ src                       |        |          |         | ',
+    'ℹ  a.js                     | 100.00 |   100.00 |  100.00 | ',
+    'ℹ  nested                   |        |          |         | ',
+    'ℹ   b.js                    |  50.00 |    50.00 |   50.00 | 3',
+  ].join('\n');
   const listFiles = (_root, dir) => (dir === 'src' ? ['src/a.js', 'src/nested/b.js'] : []);
 
   assert.deepEqual(findUnloadedProductionFiles(report, '/fake', listFiles), []);
 });
 
+// 报告是目录树、叶子行只有 basename。按 basename 判「加载过没有」会让同名文件互相顶替：
+// src/server/app.js 一旦有了首个单测，public/js/app.js（全仓最大的 0% 覆盖文件）就会从缺口
+// 名单里静默消失——而这个函数存在的唯一理由就是"别把漂亮的百分比读成安全"。
+test('findUnloadedProductionFiles：同名文件不互相顶替（只加载了一个 app.js，另一个仍算缺口）', () => {
+  const report = [
+    'ℹ src                       |        |          |         | ',
+    'ℹ  server                   |        |          |         | ',
+    'ℹ   app.js                  |  20.00 |    20.00 |   20.00 | 7',
+    'ℹ all files                 |  20.00 |    20.00 |   20.00 | ',
+  ].join('\n');
+  const listFiles = (_root, dir) => ({
+    src: ['src/server/app.js'],
+    'public/js': ['public/js/app.js'],
+  }[dir] ?? []);
+
+  assert.deepEqual(
+    findUnloadedProductionFiles(report, '/fake', listFiles),
+    ['public/js/app.js'],
+    'src/server/app.js 被加载过，不该把同名的 public/js/app.js 一起算成已加载',
+  );
+});
+
 test('缺口扫描真的接进主流程并会打印（算了不说等于没算）', () => {
   const source = readFileSync(new URL('../../scripts/coverage-check.js', import.meta.url), 'utf8');
-  assert.match(source, /findUnloadedProductionFiles\(stdout\)/, '主流程必须真的调用缺口扫描');
+  assert.match(source, /summarizeCoverageGap\(stdout\)/, '主流程必须真的调用缺口扫描');
   assert.match(source, /从未被任何单测加载/, '缺口必须打印出来，不能只算不说');
+  assert.match(source, /覆盖面: 分母含/, '覆盖面是那个百分比的限定条件，必须恒打印');
+});
+
+// 只列文件名不够：「12 个文件没进分母」听着像零头，「= 生产代码的 35.7%」才说得清那个百分比
+// 在描述多小的一块。2026-08-03：此前文件头还宣称可以用 --test-coverage-include 把它们计入分母，
+// 实测那个标志只是过滤报告里【已加载】的文件，补不上缺口——所以只能把限定条件说清楚。
+test('summarizeCoverageGap：把分母覆盖面按文件数与行数一起算出来', () => {
+  const report = [
+    'ℹ src                       |        |          |         | ',
+    'ℹ  agent.js                 |  95.66 |    87.28 |   92.24 | 358-374',
+    'ℹ all files                 |  77.51 |    81.91 |   74.22 | ',
+  ].join('\n');
+  const listFiles = (_root, dir) => (dir === 'src' ? ['src/agent.js', 'src/huge-untested.js'] : []);
+  const countLines = (_root, file) => ({ 'src/agent.js': 100, 'src/huge-untested.js': 300 }[file] ?? 0);
+
+  const gap = summarizeCoverageGap(report, { rootDir: '/fake', listFiles, countLines });
+
+  assert.deepEqual(gap.unloaded, ['src/huge-untested.js']);
+  assert.equal(gap.loadedFiles, 1);
+  assert.equal(gap.totalFiles, 2);
+  assert.equal(gap.gapLines, 300);
+  assert.equal(gap.gapPercent, 75, '400 行里 300 行在分母外 → 75%');
+});
+
+test('summarizeCoverageGap：算不出行数时 gapPercent 是 null，不是 0（别让「不知道」伪装成「没缺口」）', () => {
+  const listFiles = (_root, dir) => (dir === 'src' ? ['src/a.js'] : []);
+  const gap = summarizeCoverageGap('', { rootDir: '/fake', listFiles, countLines: () => 0 });
+
+  assert.equal(gap.gapPercent, null);
+  assert.equal(gap.gapLines, 0);
+  assert.deepEqual(gap.unloaded, ['src/a.js']);
 });

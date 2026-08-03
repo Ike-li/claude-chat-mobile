@@ -47,27 +47,49 @@ test('maskCodePositions：行注释与块注释内部不算代码', () => {
 });
 
 // ── 覆盖率报告解析 ──────────────────────────────────────────────────────────
+// node --experimental-test-coverage 的报告是【目录树】，叶子行只有 basename：
+//   ℹ src        |  …
+//   ℹ  server    |  …
+//   ℹ   app.js   |  …
+// 所以判据必须按缩进深度还原出完整相对路径。只比 basename 会在同名文件上取到错的那一行，
+// 而本仓 app.js（src/server + public/js）与 notifications.js（src/ops + public/js/app）各有两份。
+
+// 一份贴着真实形态的报告：两个 app.js 分处两棵子树，未覆盖行故意不同。
+const TREE_REPORT = [
+  'ℹ start of coverage report',
+  'ℹ file                        | line % | branch % | funcs % | uncovered lines',
+  'ℹ public                      |        |          |         | ',
+  'ℹ  js                         |        |          |         | ',
+  'ℹ   app.js                    |  10.00 |   10.00 |   10.00 | 1-3',
+  'ℹ src                         |        |          |         | ',
+  'ℹ  server                     |        |          |         | ',
+  'ℹ   app.js                    |  20.00 |   20.00 |   20.00 | 7 9-10',
+  'ℹ   mirror-engine.js          |  97.18 |   76.19 |   66.67 | 285-286 333-334 394',
+  'ℹ   full.js                   | 100.00 |  100.00 |  100.00 | ',
+  'ℹ all files                   |  77.51 |   81.91 |   74.22 | ',
+  'ℹ end of coverage report',
+].join('\n');
 
 test('parseUncoveredLines：从报告里取出目标文件的未覆盖行（含区间展开）', () => {
-  const report = [
-    'ℹ   other.js                 |  90.00 |  80.00 |  70.00 | 5 9-11',
-    'ℹ   mirror-engine.js         |  97.18 |  76.19 |  66.67 | 285-286 333-334 394',
-    'ℹ all files                  |  77.51 |  81.91 |  74.22 | ',
-  ].join('\n');
-
-  const uncovered = parseUncoveredLines(report, 'mirror-engine.js');
+  const uncovered = parseUncoveredLines(TREE_REPORT, 'src/server/mirror-engine.js');
 
   assert.deepEqual([...uncovered].sort((a, b) => a - b), [285, 286, 333, 334, 394]);
 });
 
+test('parseUncoveredLines：同名文件按完整路径区分，不会取到另一棵子树那一行', () => {
+  // 取错行 = 变异体生成在错的行集合上：要么全存活（假警报），要么跳过真被覆盖的行（假绿）。
+  assert.deepEqual([...parseUncoveredLines(TREE_REPORT, 'public/js/app.js')], [1, 2, 3]);
+  assert.deepEqual([...parseUncoveredLines(TREE_REPORT, 'src/server/app.js')], [7, 9, 10]);
+});
+
 test('parseUncoveredLines：目标文件不在报告里 → null（表示「不知道」，不是「全覆盖」）', () => {
-  const report = 'ℹ   other.js | 90.00 | 80.00 | 70.00 | 5';
-  assert.equal(parseUncoveredLines(report, 'missing.js'), null);
+  assert.equal(parseUncoveredLines(TREE_REPORT, 'src/server/missing.js'), null);
+  // basename 撞上了但路径不同，同样是「不知道」——绝不能拿另一棵子树的行冒充
+  assert.equal(parseUncoveredLines(TREE_REPORT, 'src/ops/app.js'), null);
 });
 
 test('parseUncoveredLines：文件 100% 覆盖（未覆盖列为空）→ 空集合而非 null', () => {
-  const report = 'ℹ   full.js                   | 100.00 | 100.00 | 100.00 | ';
-  const uncovered = parseUncoveredLines(report, 'full.js');
+  const uncovered = parseUncoveredLines(TREE_REPORT, 'src/server/full.js');
   assert.ok(uncovered instanceof Set);
   assert.equal(uncovered.size, 0);
 });

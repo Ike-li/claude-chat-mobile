@@ -24,6 +24,7 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync,
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseCoverageRows } from './coverage-check.js';
 
 const ROOT = join(import.meta.dirname, '..');
 
@@ -67,13 +68,16 @@ export function maskCodePositions(source) {
 
 // ── 覆盖率报告解析 ──────────────────────────────────────────────────────────
 // 返回未覆盖行号集合；目标文件不在报告里返回 null —— 那是「不知道」，绝不能当成「全覆盖」。
-export function parseUncoveredLines(reportText, fileName) {
-  for (const raw of reportText.split('\n')) {
-    const cells = raw.replace(/^ℹ\s?/, '').split('|');
-    if (cells.length < 5) continue;
-    if (cells[0].trim() !== fileName) continue;
+//
+// ★ filePath 是【仓库相对路径】，不是 basename。报告是目录树、叶子行只有文件名，按 basename
+// 匹配会在同名文件上认错人（本仓 app.js / notifications.js 各有两份），而且那个「不在报告里
+// → null → 改为全文件变异」的诚实回落会因为总能撞上同名兄弟而永远不触发。
+// 路径还原见 coverage-check.js#parseCoverageRows。
+export function parseUncoveredLines(reportText, filePath) {
+  for (const row of parseCoverageRows(reportText)) {
+    if (row.path !== filePath) continue;
     const lines = new Set();
-    for (const token of cells[4].trim().split(/\s+/).filter(Boolean)) {
+    for (const token of row.cells[4].trim().split(/\s+/).filter(Boolean)) {
       const [from, to] = token.split('-').map(Number);
       if (!Number.isInteger(from)) continue;
       for (let n = from; n <= (Number.isInteger(to) ? to : from); n += 1) lines.add(n);
@@ -297,8 +301,8 @@ function main() {
     return;
   }
 
-  const fileName = targetRel.split('/').pop();
-  const uncovered = parseUncoveredLines(baseline.stdout, fileName);
+  // 传完整相对路径而非 basename：报告是目录树，同名文件按 basename 会取到另一棵子树那一行。
+  const uncovered = parseUncoveredLines(baseline.stdout, targetRel);
   if (uncovered === null) {
     console.log('注：覆盖率报告里没有这个文件（关联测试没真正加载它？），改为全文件变异。\n');
   }
