@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, utimesSync, realpathSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { getProjectDir } from '../../src/sessions/history.js';
@@ -80,7 +80,17 @@ async function cleanup() {
   if (httpServer) { httpServer.close(); httpServer = null; }
   if (io) { io.close(); io = null; }
   for (const d of [dataDir, workDir, projectDir]) {
-    if (d) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
+    if (!d) continue;
+    // ★ projectDir 是 join(PROJECTS_ROOT, getProjectDir(workDir))——【被测代码算出来的】。
+    // getProjectDir 一旦返回 ''，它就塌成 PROJECTS_ROOT 本身，下面这个 recursive+force 会把机主
+    // 所有项目的 transcript 与 memory 一次删光。2026-08-02 真实发生过：变异检查把 getProjectDir 的
+    // `String(cwd || '')` 改成 `&&` ⇒ 恒返回 ''，整棵 ~/.claude/projects 没了（靠 APFS 快照恢复）。
+    // 同型第二处在 tests/unit/history-list.test.mjs（那边是单测也照样碰真实目录）。
+    // 护栏放在执行删除的那一刻：不管路径为什么塌（变异、bug、上游改编码规则），这里都拦得住。
+    if (resolve(d) === resolve(PROJECTS_ROOT)) {
+      throw new Error(`拒绝删除 PROJECTS_ROOT 本身（getProjectDir 返回了空值？）: ${d}`);
+    }
+    try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
   }
   dataDir = workDir = projectDir = null;
 }

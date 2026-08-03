@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, appendFileSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getProjectDir, listSessions, listSessionsPage, sessionFileMtime, __setSdkListSessionsForTest } from '../../src/sessions/history.js';
 
@@ -252,6 +252,24 @@ import { homedir } from 'node:os';
 import { MAX_SESSION_LIMIT } from '../../src/sessions/workdirs.js';
 const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
 
+// ★ 这一段是【本仓唯一在真实 ~/.claude/projects 上写删的单测】（快路径要求 baseDir === CLAUDE_DIR，
+// 真值硬取得）。删除目标 `join(CLAUDE_DIR, getProjectDir(cwd))` 是【被测代码算出来的】——
+// getProjectDir 一旦返回 ''，它就塌成 CLAUDE_DIR 本身，recursive+force 会把机主所有项目的
+// transcript 与 memory 一次删光。
+//
+// 这不是假设：2026-08-02 真实发生过。变异检查把 getProjectDir 里的 `String(cwd || '')` 改成
+// `String(cwd && '')` ⇒ 恒返回 ''，整棵 ~/.claude/projects 没了（靠 APFS 快照恢复）。
+// 同型第二处在 tests/integration/session-delete.test.mjs。
+//
+// 所以护栏放在【执行删除的那一刻】，而不是只在上游堵：不管路径为什么塌（变异、bug、上游改编码规则），
+// 这里都拦得住。宁可让测试红着报错，也不能悄悄把根目录删了。
+function rmProjectDir(dir) {
+  if (!dir || resolve(dir) === resolve(CLAUDE_DIR)) {
+    throw new Error(`拒绝删除 CLAUDE_DIR 本身（getProjectDir 返回了空值？）: ${JSON.stringify(dir)}`);
+  }
+  rmSync(dir, { recursive: true, force: true });
+}
+
 test('SDK 快路径: 字段映射 id/title/lastUsedAt，dir 传原始 cwd，不返回 model/entrypoint', async () => {
   const cwd = '/sdk/quick';
   const dir = join(CLAUDE_DIR, getProjectDir(cwd));
@@ -286,7 +304,7 @@ test('SDK 快路径: 字段映射 id/title/lastUsedAt，dir 传原始 cwd，不�
     assert.equal(s1.entrypoint, undefined);
   } finally {
     __setSdkListSessionsForTest(undefined);
-    rmSync(dir, { recursive: true, force: true });
+    rmProjectDir(dir);
   }
 });
 
@@ -303,7 +321,7 @@ test('SDK 快路径: 重排后 hasMore——候选多于 limit 为 true；恰好
     assert.equal((await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 4 })).hasMore, false); // 4=4
   } finally {
     __setSdkListSessionsForTest(undefined);
-    rmSync(dir, { recursive: true, force: true });
+    rmProjectDir(dir);
   }
 });
 
@@ -336,7 +354,7 @@ test('SDK 快路径: 按消息时间重排——lastModified 更新但消息旧�
     assert.equal(sessions[1].lastUsedAt, Date.parse(oldTs));
   } finally {
     __setSdkListSessionsForTest(undefined);
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败不挡测 */ }
+    try { rmProjectDir(dir); } catch { /* 清理失败不挡测 */ }
   }
 });
 
