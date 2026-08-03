@@ -26,7 +26,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | `playwright-report/`, `test-results/`, `coverage/` | Test reports and coverage output | Regenerable; delete freely |
 | `.DS_Store` | macOS Finder metadata | Delete freely; never commit |
 | `node_modules/` | Installed dependencies | Regenerable from `package-lock.json` |
-| `.worktrees/` | Other branches (e.g. promo, gh-pages) checked out as worktrees — not this branch's source | Excluded from search/review; see CLAUDE.md |
+| `.worktrees/` | Legacy guard — other branches are now checked out as sibling directories outside the repo, not here | Kept only in case a worktree is ever created in-tree |
 
 ## Inventory summary
 
@@ -46,16 +46,16 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Instructions | 2 |
 | Integration test | 22 |
 | Legal | 2 |
-| Maintainer tooling | 24 |
+| Maintainer tooling | 25 |
 | Project configuration | 4 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 130 |
+| Unit test | 132 |
 | Vendored asset | 21 |
 
-Total classified files: **376**.
+Total classified files: **379**.
 
 ## Complete file inventory
 
@@ -143,6 +143,7 @@ Total classified files: **376**.
 | `README.en.md` | Documentation | English project entry | User or maintainer documentation | Authored and reviewed manually | keep |
 | `README.md` | Documentation | Primary Chinese project entry | User or maintainer documentation | Authored and reviewed manually | keep |
 | `scripts/agent-event-contract.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/check-destructive-tests.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-import-boundaries.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-playwright-forbidden-patterns.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-visual-mock-registry.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
@@ -327,6 +328,7 @@ Total classified files: **376**.
 | `tests/unit/audit.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/canonicalize.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cf-access.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/check-destructive-tests.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/check-import-boundaries.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cli-bg-session-lock.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cli-hooks-bridge.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
@@ -359,6 +361,7 @@ Total classified files: **376**.
 | `tests/unit/frontend-task-status.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/git-workspace.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-files.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/history-list-sdk-fastpath.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-list.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-messages.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/history-sync.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
