@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/check-destructive-tests.js —— 测试里的递归删除，目标必须是一次性目录
+// scripts/check-destructive-deletes.js —— 测试里的递归删除，目标必须是一次性目录
 //
 // 【为什么有这条闸】2026-08-02 出过一次真实数据丢失：变异检查把 src/sessions/history.js 的
 // getProjectDir 改成恒返回 ''，而 tests/unit/history-list.test.mjs 与
@@ -22,9 +22,19 @@ import { join, relative } from 'node:path';
 import { maskCodePositions } from './mutate.js';
 
 const ROOT = join(import.meta.dirname, '..');
-const SCAN_DIRS = ['tests'];
+const TEST_DIRS = ['tests'];
+const SRC_DIRS = ['src', 'scripts'];
+const SRC_FILES = ['server.js'];
+// 「真实数据根」的来源标记：从用户家目录推出来的路径。生产代码删的是真实文件，
+// 判据不能是 mkdtemp（那是测试的判据），只能是"这条路径的基目录是不是用户真实数据"。
+const REAL_ROOT_SOURCE = /\bhomedir\s*\(/;
 const SAFE_SOURCE = /\bmkdtemp(Sync)?\b|\btmpdir\s*\(/;
-const EXEMPT_MARKER = /\/\/\s*safe-rm:\s*(.+)/;
+// ★ 两条规则用【两种】标记，不能共用一个。
+// 第一版共用 safe-rm，结果为「单文件删除、目录段算出来」写的豁免，把同一行改成
+// rmSync(recursive) 之后照样放行——负向验证当场抓到：那张纸条成了永久通行证。
+// 豁免必须绑定到"当初批准的是哪件事"上：批的是有界的单文件删除，就不该覆盖无界的递归删除。
+const EXEMPT_MARKER = /\/\/\s*safe-rm:\s*(.+)/;          // 递归删除的豁免
+const PATH_EXEMPT_MARKER = /\/\/\s*safe-path:\s*(.+)/;   // 「目录段由代码算出」的豁免
 
 // 递归收集测试目录下的 js/mjs
 export function collectFiles(dir, out = []) {
@@ -194,41 +204,173 @@ export function checkFile(rawSource, relPath) {
 }
 
 // 从调用行开始向上找豁免标记：本行行尾注释，或紧邻其上的连续注释块内任意一行。
-export function isExempt(lines, callLine) {
-  if (EXEMPT_MARKER.test(lines[callLine - 1] ?? '')) return true;
+export function isExempt(lines, callLine, marker = EXEMPT_MARKER) {
+  if (marker.test(lines[callLine - 1] ?? '')) return true;
   for (let i = callLine - 2; i >= 0; i -= 1) {
     const text = (lines[i] ?? '').trim();
     if (!text.startsWith('//')) break;      // 越过注释块就停，不无限上溯
-    if (EXEMPT_MARKER.test(text)) return true;
+    if (marker.test(text)) return true;
   }
   return false;
 }
 
+// 追出「基目录来自用户家目录」的标识符（PROJECTS_ROOT / CLAUDE_DIR / WORKTREE_SETTINGS_DIR 这类）。
+export function collectRealRootIdentifiers(source) {
+  const origins = collectOrigins(source);
+  const real = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, exprs] of origins) {
+      if (real.has(name)) continue;
+      for (const expr of exprs) {
+        const base = pathBase(expr);
+        if (!REAL_ROOT_SOURCE.test(base) && !(base.match(/[A-Za-z_$][\w$]*/g) || []).some(id => real.has(id))) continue;
+        real.add(name); changed = true; break;
+      }
+    }
+  }
+  return real;
+}
+
+// 单文件删除（unlinkSync / 不带 recursive 的 rm）。它删不动整棵树，所以【不是】必须报的东西——
+// 但如果它的路径是「真实数据根 + 被测代码算出来的段」，那就是事故形态的哑火版本：
+// 今天无害只因为恰好用的是 unlinkSync，哪天为了删子目录改成 rmSync(recursive) 就地变成实弹。
+// 要求写一行 safe-rm 说明，等于强制在改成 recursive 之前先看见这条注释。
+export function findSingleFileDeletes(source) {
+  const lines = source.split('\n');
+  const calls = [];
+  for (const m of source.matchAll(/\b(unlinkSync|unlink|rmSync|rm)\s*\(/g)) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0, close = -1;
+    for (let i = open; i < source.length; i += 1) {
+      if ('([{'.includes(source[i])) depth += 1;
+      else if (')]}'.includes(source[i])) { depth -= 1; if (depth === 0) { close = i; break; } }
+    }
+    if (close === -1) continue;
+    const args = splitArgs(source.slice(open + 1, close));
+    if (args.length > 1 && /recursive\s*:\s*true/.test(args[1])) continue; // 递归的归上一条规则管
+    const line = source.slice(0, m.index).split('\n').length;
+    calls.push({ line, fn: m[1], arg: args[0] ?? '', text: lines[line - 1]?.trim() ?? '' });
+  }
+  return calls;
+}
+
+// 把「裸标识符」展开成它真正的路径表达式：unlinkSync(file) 里的 file，其 join(...) 写在赋值那行。
+// 第一版忘了这一跳，于是对 app.js 那个正是事故形态的调用点【零命中】——闸看着全绿其实什么都没查。
+export function resolvePathExpr(expr, origins, depth = 0) {
+  const e = String(expr).trim();
+  if (depth > 4) return e;
+  if (!/^[A-Za-z_$][\w$]*$/.test(e)) return e;
+  const srcs = origins.get(e);
+  if (!srcs || srcs.length === 0) return e;
+  // 多个赋值点时取第一个用于展示；判定走 resolveAll。
+  return resolvePathExpr(srcs[0], origins, depth + 1);
+}
+
+// 一个标识符在大文件里常有多个赋值点（app.js 的 projectDir 就是）。判"是不是代码算出来的"
+// 必须看【全部】来源——只看唯一来源的写法会在真实代码上直接失效（第一版就是这么漏掉 app.js 的）。
+export function resolveAllOrigins(expr, origins, depth = 0, seen = new Set()) {
+  const e = String(expr).trim();
+  if (depth > 4 || seen.has(e)) return [e];
+  seen.add(e);
+  if (!/^[A-Za-z_$][\w$]*$/.test(e)) return [e];
+  const srcs = origins.get(e);
+  if (!srcs || srcs.length === 0) return [e];
+  return srcs.flatMap(src => resolveAllOrigins(src, origins, depth + 1, seen));
+}
+
+export function checkSourceFile(rawSource, relPath) {
+  const source = stripNonCode(rawSource);
+  const lines = rawSource.split('\n');
+  const violations = [];
+  // ★ 调用点从【屏蔽后】的文本找（注释里的示例不算调用），但路径表达式要从【原文】取：
+  // stripNonCode 会把模板串连同 `${worktreeSettingsKeyFor(cwd)}` 这样的插值一起抹成空格，
+  // 而插值里正是"代码算出来的那一段"。在屏蔽后的文本上分析路径 = 把要找的东西先删掉了。
+
+  // 规则一：生产代码里的 recursive 删除，判据与测试一致（可追溯到一次性目录，或显式豁免）。
+  violations.push(...checkFile(rawSource, relPath));
+
+  // 规则二：单文件删除，路径 =「真实数据根」+「调用算出来的段」→ 要 safe-rm 说明。
+  const origins = collectOrigins(rawSource);
+  const factories = collectSafeFactories(rawSource);
+  const tempSafe = resolveSafeIdentifiers(origins, factories);
+  for (const call of findSingleFileDeletes(source)) {
+    const expr = resolvePathExpr(call.arg, origins);
+    // 追得到一次性目录 ⇒ 不是真实数据，跳过；追不到 ⇒ 按真实数据处理。
+    if (isSafeExpr(expr, tempSafe, factories)) continue;
+    // ★ 只看【目录段】被算出来的情况，不看文件名段。这个区分是本规则的全部价值所在：
+    //   join(根, 算出来的目录, '固定名')  ← 目录段塌掉 ⇒ 打到【另一个目录】，正是事故形态
+    //   join(根, 固定目录, `${算出来的名字}`) ← 只是同目录下删错一个名字，代价有界
+    // 实测本仓 12 处生产删除里，只有前者 1 处；不做这个区分会一次报 10 处，
+    // 而那 10 处全是"删自己刚建的临时文件"——规则一吵，标记就会被反射性地加上，从此不再有意义。
+    //
+    // 「算出来」也不限于字面上的函数调用：projectDir 是裸标识符、真正的 getProjectDir(cwd) 写在它
+    // 的赋值里；模板串 `${f(x)}` 的调用藏在插值里。都要展开后再判，且一个标识符可能有多个赋值点。
+    const segments = splitArgs((/^(?:join|resolve)\s*\(([\s\S]*)\)$/.exec(expr.trim())?.[1]) ?? '');
+    const dirSegments = segments.slice(1, -1); // 去掉基目录与最后的文件名段
+    const hasComputedSegment = dirSegments.some(seg =>
+      /\$\{[^}]*\(/.test(seg)
+      || resolveAllOrigins(seg, origins).some(r => /[A-Za-z_$][\w$]*\s*\(/.test(r)));
+    if (!hasComputedSegment) continue;
+    if (isExempt(lines, call.line, PATH_EXEMPT_MARKER)) continue;
+    violations.push({
+      file: relPath, line: call.line, arg: expr, text: call.text,
+      kind: 'computed-under-real-root',
+    });
+  }
+  return violations;
+}
+
 function main() {
-  const files = SCAN_DIRS.flatMap(d => {
+  const gather = dirs => dirs.flatMap(d => {
     const p = join(ROOT, d);
     try { statSync(p); } catch { return []; }
     return collectFiles(p);
   });
+  const testFiles = gather(TEST_DIRS);
+  const srcFiles = [...gather(SRC_DIRS), ...SRC_FILES.map(f => join(ROOT, f)).filter(f => { try { statSync(f); return true; } catch { return false; } })];
   const all = [];
-  for (const file of files) {
+  for (const file of testFiles) {
     all.push(...checkFile(readFileSync(file, 'utf8'), relative(ROOT, file)));
   }
+  for (const file of srcFiles) {
+    all.push(...checkSourceFile(readFileSync(file, 'utf8'), relative(ROOT, file)));
+  }
+  const files = [...testFiles, ...srcFiles];
   if (all.length === 0) {
     console.log(`✅ 破坏性删除检查：${files.length} 个测试文件，递归删除目标全部可追溯到一次性目录`);
     return;
   }
-  console.error('❌ 破坏性删除检查未通过：以下递归删除的目标无法追溯到 mkdtemp/tmpdir\n');
-  for (const v of all) {
-    console.error(`  ${v.file}:${v.line}`);
-    console.error(`      ${v.text}`);
-    console.error(`      删除目标「${v.arg}」来路不明——它可能被算成任意路径（含真实数据目录）。`);
+  const recursive = all.filter(v => v.kind !== 'computed-under-real-root');
+  const computed = all.filter(v => v.kind === 'computed-under-real-root');
+
+  if (recursive.length) {
+    console.error('❌ 递归删除的目标无法追溯到一次性目录：\n');
+    for (const v of recursive) {
+      console.error(`  ${v.file}:${v.line}`);
+      console.error(`      ${v.text}`);
+      console.error(`      删除目标「${v.arg}」来路不明——它可能被算成任意路径（含真实数据目录）。`);
+    }
+    console.error('\n  改法二选一：');
+    console.error('    ① 让删除目标来自 mkdtemp/tmpdir（首选——从根上不可能炸到真实数据）');
+    console.error('    ② 确有理由删别处：写 `// safe-rm: <理由>` 显式豁免，并在删除点加护栏');
+    console.error('       （如 resolve(d) === resolve(ROOT) 就抛错）。\n');
   }
-  console.error('\n改法二选一：');
-  console.error('  ① 让删除目标来自 mkdtemp/tmpdir（首选——从根上不可能炸到真实数据）');
-  console.error('  ② 确有理由删别处：在该行或上一行写 `// safe-rm: <理由>` 显式豁免，');
-  console.error('     并在删除点加护栏（如 resolve(d) === resolve(ROOT) 就抛错）。');
-  console.error('\n背景：2026-08-02 正是这种形态删掉了机主 70 个项目的 transcript 与 memory。');
+
+  if (computed.length) {
+    console.error('❌ 真实数据目录下、【目录段由代码算出】的删除，需要显式说明：\n');
+    for (const v of computed) {
+      console.error(`  ${v.file}:${v.line}`);
+      console.error(`      ${v.text}`);
+      console.error(`      路径「${v.arg}」里有一段目录是代码算出来的。`);
+      console.error('      那一段一旦算成空串，删除就打到【另一个目录】上去了。');
+    }
+    console.error('\n  这类调用【今天多半是安全的】——单文件删除代价有界。要求写一行');
+    console.error('  `// safe-path: <为什么这段目录不会算错 / 算错了为什么无害>`，');
+    console.error('  是为了让下一个把它改成 rmSync(recursive) 的人先看见这句话：');
+    console.error('  2026-08-02 删掉机主 70 个项目的，就是同一个形态的递归版本。\n');
+  }
   process.exitCode = 1;
 }
 
