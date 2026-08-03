@@ -2,6 +2,10 @@
 //
 // 这个钩子判错的两种代价不对称：漏放（该拦没拦）＝ 上次那种删库可能重演；
 // 误拦（不该拦却拦）＝ 多按一次确认。所以判据可以偏保守，但【漏放必须逐条钉死】。
+//
+// 2026-08-03 判据反转：从「列出危险模式」改成「测试域内只放行白名单」。
+// 黑名单要求每遇到一个新命令都正确归类，而 8/2 那次事故的失败点正是归类那一步——
+// 用黑名单去防归类失败，判据和它自己宣称的原则是反的（CLAUDE.md 讲的一直是白名单）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { decide } from '../../scripts/guard-host-tests.js';
@@ -37,15 +41,41 @@ test('拦: 绕开 npm 脚本直接跑集成测试文件', () => {
   blocked('node --import ./tests/setup/preload-env.mjs --test tests/integration/foo.test.mjs');
 });
 
+// ★ 白名单反转补上的第一个洞。记忆里明确踩过：直接 `node --test 单文件` 绕过 preload-env，
+// 会把 approval-store / audit / devices 的落盘打到【真实 data/】上——那几个模块的路径是
+// 模块级常量、在 import 求值那一刻就锁定了，只有 --import 预加载能改。
+// 旧黑名单只认 tests/integration，对这条形态恒放行。
+test('拦: 裸 node --test 跑单测（没有 preload-env，会写真实 data/）', () => {
+  blocked('node --test tests/unit/history-list.test.mjs');
+  blocked('node --test tests/unit/agent-core.test.mjs tests/unit/mutate.test.mjs');
+});
+
+// ★ 第二个洞：旧实现只要命令里【任何位置】出现 docker 就整条放行，
+// 文件头自己都写了 `echo docker && npm run mutate` 能绕过。改成按段判定后不再成立。
+test('拦: 借 docker 字样蒙混过关（判定按段做，不看整条命令）', () => {
+  blocked('echo docker && npm run mutate -- src/x.js');
+  blocked('docker ps && npm test');
+  blocked('npm run check && npm test');
+});
+
+// 域内没见过的形态一律要确认——这正是白名单相对黑名单的全部价值：
+// 不需要预先想到它，也不会漏放。
+test('拦: 测试域内、但不在白名单上的形态', () => {
+  blocked('npm run test:coverage');
+  blocked('npm run test:integration -- --only foo');
+});
+
 // ── 不该拦（误拦多了就会被嫌烦而关掉，那等于没有）──────────────────────────
-test('放行: CLAUDE.md 白名单里的三条', () => {
+test('放行: CLAUDE.md 白名单里的四条', () => {
   allowed('npm run lint');
   allowed('npm run check');
   allowed('npm run test:unit');
+  allowed('npm run test:e2e');
   allowed('npm run test:unit 2>&1 | grep fail');
+  allowed('npm run check && npm run test:unit');
 });
 
-// ★ 命令里出现 docker = 已经在容器里跑，容器 HOME 是一次性目录，够不到宿主机家目录。
+// ★ 命令里出现 docker = 那一段在容器里跑，容器 HOME 是一次性目录，够不到宿主机家目录。
 test('放行: 已经走容器的形态', () => {
   allowed('npm run test:docker');
   allowed('npm run test:docker:e2e');
@@ -53,11 +83,20 @@ test('放行: 已经走容器的形态', () => {
   allowed('docker compose -f docker-compose.test.yml run --rm test npm run test:integration');
 });
 
+// TDD 单文件循环必须留出来，否则「写一个失败测试→最小实现」这一步会被钩子逐次打断，
+// 而它带着 preload-env、只碰 tests/unit，隔离与 npm run test:unit 完全同款。
+test('放行: 带 preload-env 的单测单文件跑法（TDD 循环）', () => {
+  allowed('node --import ./tests/setup/preload-env.mjs --test tests/unit/mutate.test.mjs');
+  allowed('node --import ./tests/setup/preload-env.mjs --test tests/unit/a.test.mjs tests/unit/b.test.mjs');
+  allowed('node --import ./tests/setup/preload-env.mjs --experimental-test-coverage --test tests/unit/x.test.mjs');
+});
+
 test('放行: 与测试无关的日常命令', () => {
   allowed('git status');
   allowed('ls -la');
-  allowed('node --test tests/unit/history-list.test.mjs');
   allowed('npm run inventory:update');
+  allowed('npm run doctor');
+  allowed('grep -rn "test" src/');
 });
 
 test('放行: 空命令 / 非字符串不误判', () => {
@@ -67,9 +106,17 @@ test('放行: 空命令 / 非字符串不误判', () => {
   assert.equal(decide(null), null);
 });
 
-// test:unit 里含 "test:"，别被前缀匹配误伤——这条是 npm test 那个正则最容易写错的地方。
+// test:unit 里含 "test:"，别被前缀匹配误伤——这条是 `npm test` 那个正则最容易写错的地方。
 test('边界: test:unit / test:docker 不被 `npm test` 规则误伤', () => {
   allowed('npm run test:unit');
   allowed('npm run test:e2e');
   allowed('npm run test:visual');
+});
+
+// 拦下时给的理由要点名到文件和形态：8/2 的根因是归类判断失败，而"包含集成测试那一档"
+// 这种抽象说法帮不上归类——看的人还是得自己去查它到底碰什么。
+test('理由必须具体到可判断，不是一句「有风险」', () => {
+  assert.match(decide('npm test'), /session-delete|~\/\.claude/);
+  assert.match(decide('node --test tests/unit/x.test.mjs'), /preload-env/);
+  assert.match(decide('npm run mutate -- src/x.js'), /改坏/);
 });
