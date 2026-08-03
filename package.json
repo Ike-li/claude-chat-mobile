@@ -43,7 +43,7 @@
     "hooks:uninstall": "node scripts/hooks-bridge-setup.js uninstall",
     "hooks:verify": "node scripts/hooks-bridge-setup.js verify",
     "dev": "node --watch server.js",
-    "check": "eslint . && node scripts/check-import-boundaries.js && node scripts/contract-check.js && node scripts/doc-consistency.js && node scripts/i18n-check.js && node scripts/check-visual-mock-registry.js && node scripts/check-playwright-forbidden-patterns.js && npm run inventory:check",
+    "check": "eslint . && node scripts/check-import-boundaries.js && node scripts/contract-check.js && node scripts/doc-consistency.js && node scripts/i18n-check.js && node scripts/check-destructive-deletes.js && node scripts/check-visual-mock-registry.js && node scripts/check-playwright-forbidden-patterns.js && npm run inventory:check",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "inventory:update": "node scripts/repo-inventory.js --write",
@@ -60,7 +60,13 @@
     "test:smoke": "node tests/smoke/runner.js",
     "contract:check": "node scripts/contract-check.js",
     "watch:upstream": "node scripts/upstream-watch.js",
-    "mutate": "node scripts/mutate.js"
+    "mutate": "node scripts/mutate.js",
+    "docker:build": "docker compose -f docker-compose.test.yml build",
+    "test:docker": "docker compose -f docker-compose.test.yml run --rm test sh -lc \"npm run test:unit && npm run test:integration\"",
+    "test:docker:unit": "docker compose -f docker-compose.test.yml run --rm test npm run test:unit",
+    "test:docker:e2e": "docker compose -f docker-compose.test.yml run --rm test npm run test:e2e",
+    "test:docker:sh": "docker compose -f docker-compose.test.yml run --rm test bash",
+    "mutate:docker": "docker compose -f docker-compose.test.yml run --rm test npm run mutate --"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.201",

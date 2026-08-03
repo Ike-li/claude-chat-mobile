@@ -31,7 +31,18 @@ test('repository map records entry path and generation source for every file', (
   assert.match(rendered, /`src\/server\/app\.js`[^\n]+Imported by the runtime/);
 });
 
-test('repository inventory classifies every tracked or unignored project file', () => {
+// 本用例靠 `git ls-files` 取文件清单，因此【只在 git 能用时才有意义】。
+// 隔离测试容器里 .git 是 worktree 指针文件、指向宿主机路径（gitdir: /Users/.../.git/worktrees/xxx），
+// 容器里解析不到 → git 报 "not a git repository" → 用例失败。但那不是仓库清单出了问题，
+// 是环境没有 git 视图；判成 fail 会让容器里的整轮测试红在一个与被测行为无关的事上。
+// 从 tarball 解压跑测试也是同一情况。所以：git 不可用就 skip 并说清楚原因，别假装通过、也别误报失败。
+const gitUsable = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], {
+  cwd: process.cwd(), encoding: 'utf8',
+}).status === 0;
+
+test('repository inventory classifies every tracked or unignored project file', {
+  skip: gitUsable ? false : '本用例需要可用的 git 工作树（容器/tarball 环境下 git 视图不可用）',
+}, () => {
   const result = spawnSync(
     process.execPath,
     ['scripts/repo-inventory.js', '--check'],

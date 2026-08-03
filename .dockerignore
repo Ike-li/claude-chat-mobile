@@ -1,0 +1,15 @@
+# 构建镜像时只需要 package.json + package-lock.json（源码是运行时挂进去的）。
+# 这里排除的东西即使被挂载也不该进镜像层，尤其是凭据与平台相关的二进制。
+node_modules
+.git
+.env
+.env.*
+data
+logs
+*.log
+coverage
+playwright-report
+test-results
+.DS_Store
+.claude
+.worktrees

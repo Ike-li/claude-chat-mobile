@@ -1,6 +1,6 @@
 // 推送通知控制器（public/js/app/notifications.js）的行为域单测。
-// 从 frontend-app-modules.test.mjs 分出来：那个文件按行为域拆分是硬门禁（tests/unit/source-layout.test.mjs
-// 限 800 行），通知这一域已自成一块——订阅 POST 体、前台通知门槛、铃铛显隐与去向。
+// 从 frontend-app-modules.test.mjs 分出来：按行为域拆分是硬门禁（见 tests/unit/source-layout.test.mjs），
+// 通知这一域已自成一块——订阅 POST 体、前台通知门槛、铃铛显隐与去向。
 
 import assert from 'node:assert/strict';
 import test from 'node:test';

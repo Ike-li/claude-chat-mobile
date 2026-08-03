@@ -1,0 +1,26 @@
+# docker-compose.test.yml —— 在隔离容器里跑测试，别在宿主机跑
+#
+# 用法见 package.json 的 test:docker* 脚本；直接用也行：
+#   docker compose -f docker-compose.test.yml run --rm test            # 默认 test:unit
+#   docker compose -f docker-compose.test.yml run --rm test npm run check
+#   docker compose -f docker-compose.test.yml run --rm test npm run mutate -- src/x.js
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      # 源码挂进来：改一行代码不用重建镜像。
+      - .:/app
+      # ★ 匿名卷把镜像里那份 node_modules 盖在挂载之上。不这么做的话，宿主机（macOS/arm64）
+      # 的 node_modules 会盖住容器里的——原生模块与 Playwright 浏览器二进制平台不对，直接跑不起来。
+      - /app/node_modules
+    working_dir: /app
+    # init：容器里会 spawn 真 server 与 claude stub 子进程，没有 init 进程收尸就会攒僵尸。
+    init: true
+    environment:
+      # 与 CI 同款：让 7 个需要真 turn 的文件按既有门控跳过（它们判的是 CI || !RUN_CLAUDE_INTEGRATION）。
+      CI: "true"
+      CLAUDE_BIN: /app/tests/fixtures/fake-claude.sh
+    # 集成测试起的 server 只在容器内自连自测，不需要往宿主机暴露端口。
+    network_mode: bridge

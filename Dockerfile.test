@@ -1,0 +1,42 @@
+# Dockerfile.test —— 跑测试用的隔离环境
+#
+# 【为什么要有它】2026-08-02：npm run mutate 把变异后的 src/sessions/history.js 与测试一起跑，
+# getProjectDir 被改成恒返回 ''，测试里的 rmSync 目标塌成 ~/.claude/projects 本身，
+# 机主 70 个项目的 transcript 与 memory 一次删光。
+#
+# 仓库里已经补了三层防护（沙箱 HOME / 删除点护栏 / check-destructive-tests 门禁），但它们都在
+# 【代码层】——防的是已知机制。容器防的是另一件事：**测试进程根本够不到宿主机的家目录**。
+# 判据不依赖任何代码正确性，所以下一个还没想到的形态也一起挡住了。
+#
+# 【零 token】实测本仓 99% 的测试不需要任何凭据：
+#   单测 2431 + 集成 94 + E2E 218 全部离线可跑（集成层靠 tests/fixtures/fake-claude.sh 过 preflight）。
+#   只有 7 个 RUN_CLAUDE_INTEGRATION 门控的文件 + test:smoke 需要真 claude turn，那两档【不进容器】，
+#   要跑就在宿主机上单独跑、单独授权。
+#
+# 基础镜像用 Playwright 官方版：自带浏览器与系统依赖，tag 必须与 package.json 里的
+# @playwright/test 实际版本一致（当前 1.61.1），版本错开会报 "Executable doesn't exist"。
+FROM mcr.microsoft.com/playwright:v1.61.1-noble
+
+WORKDIR /app
+
+# 只 COPY 依赖清单、不 COPY 源码：源码运行时挂进来，镜像就不会因为改一行代码而失效。
+# npm ci 严格按 lock 装，与 CI 一致。
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# HOME 指向容器内的一次性目录——这是本文件存在的全部意义所在。
+# ~/.claude/projects 这类路径在容器里解析到 /home/ccm-test/.claude/projects，
+# 就算被测代码把路径算歪、rmSync 打到根上，炸掉的也只是这个空壳。
+ENV HOME=/home/ccm-test
+RUN mkdir -p "${HOME}/.claude/projects"
+
+# 集成测试的 preflight 只要求 CLAUDE_BIN 指向一个存在、能应答 --version 的文件。
+# 指向 stub：不需要真 turn 的接线类测试照常跑，需要真 turn 的另有 RUN_CLAUDE_INTEGRATION 把门。
+ENV CLAUDE_BIN=/app/tests/fixtures/fake-claude.sh
+
+# 显式不给：容器里不该存在任何真实凭据。带了反而可能让本该跳过的测试真去打网络。
+ENV ANTHROPIC_API_KEY="" \
+    ANTHROPIC_AUTH_TOKEN="" \
+    RUN_CLAUDE_INTEGRATION=""
+
+CMD ["npm", "run", "test:unit"]

@@ -1,5 +1,5 @@
 // tests/unit/logic-deeplink.test.mjs —— 通知深链落地策略（②2c）的行为域单测。
-// 从 logic-ui-state.test.mjs 分出：那个文件按行为域拆分是硬门禁（source-layout.test.mjs 限 800 行），
+// 从 logic-ui-state.test.mjs 分出：按行为域拆分是硬门禁（见 source-layout.test.mjs），
 // 深链这一域已自成一块——instanceId 命中 / 失效回退 / sessionId 兜底。
 
 import assert from 'node:assert/strict';

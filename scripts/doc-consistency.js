@@ -15,9 +15,13 @@ export const DEFAULT_DOC_GLOBS = Object.freeze([
   'docs/*.md',
 ]);
 
-const RENAMED = Object.freeze([
-  '需求文档-v2.md',
-  '斜杠命令普查-2026-06-12.md',
+// 文档里会写出版本号的依赖。只列 CLAUDE.md 技术栈行对外宣称的那几个——升 major 时最容易
+// 忘了改文档，而读者会按文档里的版本去查 API。其余依赖文档从不提版本，列进来只会空转。
+const DOCUMENTED_DEPENDENCIES = Object.freeze([
+  '@anthropic-ai/claude-agent-sdk',
+  'express',
+  'socket.io',
+  'jose',
 ]);
 
 function fileExists(rootDir, relPath) {
@@ -101,24 +105,6 @@ function checkLinks({ rootDir, docFiles }) {
   return problems;
 }
 
-function checkRenamedReferences({ rootDir, docFiles }) {
-  const problems = [];
-  for (const rel of docFiles) {
-    if (rel.endsWith('CHANGELOG.md')) continue;
-    const text = readText(rootDir, rel);
-    for (const oldName of RENAMED) {
-      if (!text.includes(oldName)) continue;
-      problems.push({
-        code: 'stale_filename',
-        file: rel,
-        target: oldName,
-        message: `${rel} still references old filename ${oldName}`,
-      });
-    }
-  }
-  return problems;
-}
-
 function checkNpmScriptReferences({ rootDir, docFiles, packageJson }) {
   const problems = [];
   const packageScripts = new Set(Object.keys(packageJson.scripts || {}));
@@ -145,19 +131,24 @@ function checkDocumentedDependencyVersions({ rootDir, docFiles, packageJson }) {
     ...(packageJson.dependencies || {}),
     ...(packageJson.devDependencies || {}),
   };
-  const dependencyNames = ['@anthropic-ai/claude-agent-sdk'];
-
   for (const rel of docFiles) {
     const text = readText(rootDir, rel);
-    for (const name of dependencyNames) {
+    for (const name of DOCUMENTED_DEPENDENCIES) {
       const actual = deps[name];
       if (!actual) continue;
       const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const versionRe = new RegExp(`${escaped}\\\`?\\s*(?:v)?(\\d+\\.\\d+(?:\\.\\d+)?(?:\\+)?)(?=\\b|[^\\d.])`, 'g');
+      // 'i' flag：文档写的是 `Express 5` / `Socket.io 4`，package 名是全小写。
+      // 版本段允许只写 major（`Express 5`），不再强制两段——CLAUDE.md 技术栈行就是这么写的。
+      const versionRe = new RegExp(`${escaped}\\\`?\\s*(?:v)?(\\d+(?:\\.\\d+){0,2}(?:\\+)?)(?=\\b|[^\\d.])`, 'gi');
       let match;
       while ((match = versionRe.exec(text))) {
         const documented = match[1].replace(/\+$/, '');
         if (documented === actual) continue;
+        // 文档写几段就比几段：`Express 5` 只校验 major，`SDK 0.3.201` 校验到 patch。
+        // package.json 侧先剥掉 ^ / ~ / >= 这类 range 前缀，否则 '5' 永远不等于 '^5.0.0'。
+        const actualSegments = actual.replace(/^[^\d]*/, '').split('.');
+        const actualPrefix = actualSegments.slice(0, documented.split('.').length).join('.');
+        if (documented === actualPrefix) continue;
         problems.push({
           code: 'dependency_version_drift',
           file: rel,
@@ -181,7 +172,6 @@ export function checkDocConsistency({
   const docFiles = expandDocGlobs(rootDir, docGlobs);
   const problems = [
     ...checkLinks({ rootDir, docFiles }),
-    ...checkRenamedReferences({ rootDir, docFiles }),
     ...checkNpmScriptReferences({ rootDir, docFiles, packageJson }),
     ...checkDocumentedDependencyVersions({ rootDir, docFiles, packageJson }),
   ];

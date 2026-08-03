@@ -1,5 +1,5 @@
 // tests/unit/agent-questions.test.mjs —— AskUserQuestion（F2）行为域单测。
-// 从 agent-permissions.test.mjs 分出：那个文件按行为域拆分是硬门禁（source-layout.test.mjs 限 800 行），
+// 从 agent-permissions.test.mjs 分出：按行为域拆分是硬门禁（见 source-layout.test.mjs），
 // 提问这一域已自成一块——下发/作答下标对齐、TTL 过期、abort、multiSelect、快照重建。
 
 import test from 'node:test';

@@ -1,10 +1,10 @@
 // tests/unit/history.test.mjs —— history.js 单测（tmpdir 注入，零网络/零真实 claude 目录）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, appendFileSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, listSessions, listSessionsPage, sessionFileMtime, __setSdkListSessionsForTest } from '../../src/sessions/history.js';
+import { getProjectDir, listSessions, listSessionsPage, sessionFileMtime } from '../../src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -244,117 +244,5 @@ test('listSessionsPage: 不传 hiddenIds（或空 Set）→ 不过滤，行为�
   assert.equal(withEmptySet.sessions.length, 1);
 });
 
-// ── SDK 快路径（生产 baseDir === CLAUDE_DIR）：用 __setSdkListSessionsForTest 注入替身 ────
-// 注入替身验证三契约：① dir 传原始 cwd（非编码路径）；② 小 limit 仍取到 LIST_LIMIT+1 做重排候选；
-// ③ 字段映射 id←sessionId / title←summary / lastUsedAt←transcript 末条消息时间（无文件回落 lastModified），
-// 不返回 model/entrypoint（死重）。baseDir 须 = CLAUDE_DIR 才命中快路径——真值硬取得、隔离用 BASE 走兜底。
-import { homedir } from 'node:os';
-import { MAX_SESSION_LIMIT } from '../../src/sessions/workdirs.js';
-const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
-
-test('SDK 快路径: 字段映射 id/title/lastUsedAt，dir 传原始 cwd，不返回 model/entrypoint', async () => {
-  const cwd = '/sdk/quick';
-  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
-  // sid-1/sid-2 写真实 jsonl（归属本 cwd）；sid-ghost 不写——模拟 SDK dir 匹配混入的祖先目录会话
-  writeJSONL(dir, 'sid-1', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
-  writeJSONL(dir, 'sid-2', [{ type: 'user', message: { role: 'user', content: 'yo' } }]);
-  let captured;
-  __setSdkListSessionsForTest(async (opts) => {
-    captured = opts;
-    return [
-      { sessionId: 'sid-1', summary: 'CLI /resume 同款标题', lastModified: 1784098212405 },
-      { sessionId: 'sid-2', summary: '', lastModified: 1784098212400 },
-      { sessionId: 'sid-ghost', summary: '祖先目录混入的幽灵', lastModified: 1784098212500 },
-    ];
-  });
-  try {
-    const { sessions } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
-    // ① dir 传原始 cwd（铁证坑：传编码路径会让 SDK 返回空）
-    assert.equal(captured.dir, cwd);
-    // 小 limit 也按硬顶+1 取候选，便于按消息时间重排（默认 6 条时 resume 刷 mtime 的旧会话不占满窗口）
-    assert.equal(captured.limit, MAX_SESSION_LIMIT + 1);
-    // ③ 归属过滤：jsonl 不在本 cwd 项目目录的会话滤掉（SDK dir 匹配含祖先目录——worktree 查询会混入
-    //    主仓会话；与 session:switch 的 sessionFileExists 归属校验同一语义，列表≡可切换）
-    assert.equal(sessions.length, 2);
-    assert.deepEqual(sessions.map(s => s.id).sort(), ['sid-1', 'sid-2']);
-    const s1 = sessions.find(s => s.id === 'sid-1');
-    assert.equal(s1.title, 'CLI /resume 同款标题');
-    // 空 summary 兜底 '(无标题)'
-    assert.equal(sessions.find(s => s.id === 'sid-2').title, '(无标题)');
-    // deadweight 字段快路径不返回（前端不消费、SDK 也不给）
-    assert.equal(s1.model, undefined);
-    assert.equal(s1.entrypoint, undefined);
-  } finally {
-    __setSdkListSessionsForTest(undefined);
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('SDK 快路径: 重排后 hasMore——候选多于 limit 为 true；恰好等于则 false', async () => {
-  const cwd = '/sdk/hasmore';
-  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
-  for (let i = 0; i < 4; i++) writeJSONL(dir, `s${i}`, [{ type: 'user', message: { role: 'user', content: `m${i}` } }]);
-  __setSdkListSessionsForTest(async (opts) => {
-    const n = Math.min(opts.limit, 4); // 模拟磁盘共 4 条
-    return Array.from({ length: n }, (_, i) => ({ sessionId: `s${i}`, summary: `t${i}`, lastModified: 1000 + i }));
-  });
-  try {
-    assert.equal((await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 3 })).hasMore, true);  // 4>3
-    assert.equal((await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 4 })).hasMore, false); // 4=4
-  } finally {
-    __setSdkListSessionsForTest(undefined);
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('SDK 快路径: 按消息时间重排——lastModified 更新但消息旧的不应压过真近会话', async () => {
-  const cwd = '/sdk/rerank-activity';
-  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
-  mkdirSync(dir, { recursive: true });
-  const oldTs = '2020-01-01T00:00:00.000Z';
-  const newTs = '2026-07-01T00:00:00.000Z';
-  // 写到真实 CLAUDE_DIR 下的隔离子目录（cwd 编码路径），测完清理
-  writeJSONL(dir, 'old-sid', [
-    { type: 'user', timestamp: oldTs, message: { role: 'user', content: 'old' } },
-    { type: 'assistant', timestamp: oldTs, message: { role: 'assistant', content: 'old-a' } },
-  ]);
-  writeJSONL(dir, 'new-sid', [
-    { type: 'user', timestamp: newTs, message: { role: 'user', content: 'new' } },
-    { type: 'assistant', timestamp: newTs, message: { role: 'assistant', content: 'new-a' } },
-  ]);
-  appendFileSync(join(dir, 'old-sid.jsonl'), JSON.stringify({ type: 'mode', mode: 'default' }) + '\n');
-  __setSdkListSessionsForTest(async () => [
-    // SDK 按 lastModified 把 old 排前（模拟 resume 刷 mtime）
-    { sessionId: 'old-sid', summary: '旧', lastModified: Date.now() },
-    { sessionId: 'new-sid', summary: '新', lastModified: Date.now() - 60_000 },
-  ]);
-  try {
-    const { sessions } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
-    assert.equal(sessions[0].id, 'new-sid');
-    assert.equal(sessions[1].id, 'old-sid');
-    assert.equal(sessions[0].lastUsedAt, Date.parse(newTs));
-    assert.equal(sessions[1].lastUsedAt, Date.parse(oldTs));
-  } finally {
-    __setSdkListSessionsForTest(undefined);
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* 清理失败不挡测 */ }
-  }
-});
-
-test('SDK 快路径: SDK 抛错不走 fail-closed，回落兜底扫盘正常出列表', async () => {
-  // 用 BASE 做 baseDir 命中兜底路径——但此处验证的是"快路径 SDK 异常回落"，故须 baseDir=CLAUDE_DIR 且
-  // 注入一个会抛错的替身；同时磁盘上真实 ~/.claude/projects 下按 baseDir=CLAUDE_DIR 兜底会读到真会话。
-  // 为隔离真磁盘副作用，改注一个 fallback 钩子不现实——退而用：注入会抛错的替身 + 期望回落兜底 readdir
-  // 真扫 CLAUDE_DIR。n=1 单用户真目录必有会话，故 sessions.length>0 即证回落成功、未卡死空返回。
-  const cwd = '/sdk/throw';
-  __setSdkListSessionsForTest(async () => { throw new Error('SDK boom'); });
-  try {
-    const { sessions } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 5 });
-    // 兜底 readdir 真扫 ~/.claude/projects/-sdk-throw（该目录不存在→[]）= 证明 try/catch 接住异常无崩溃
-    // （真 fallback 到 readHeadMeta 路径而非抛出）。此断言锁的是"不抛、安静回落"契约，非数据多少。
-    assert.ok(Array.isArray(sessions));
-  } finally {
-    __setSdkListSessionsForTest(undefined);
-  }
-});
 
 // ── getSessionHistory ──────────────────────────────────────────────────────

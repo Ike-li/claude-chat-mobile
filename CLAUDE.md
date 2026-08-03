@@ -16,6 +16,35 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`，如 `claude-chat-mobile-promo`=宣传创作区、`claude-chat-mobile-gh-pages`=展示站、`claude-chat-mobile-third-party`=三方代理专用），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
 
+## 测试跑在哪：宿主机只跑白名单，其余进容器
+
+**宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`。
+前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
+已核实不碰 `~/.claude`）。
+
+**其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑单测 + 集成）、
+`npm run test:docker:e2e`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
+（拉 Playwright 镜像 + npm ci，约 7 分钟）。
+
+> `test:docker` 不含 `check`：`inventory:check` 要 `git ls-files`，而 worktree 检出的 `.git` 是指向
+> 宿主机路径的指针文件，容器里解析不到。`check` 本来就在宿主机白名单里，留在宿主机跑即可。
+
+> **为什么是白名单，不是"危险命令清单"**
+> 2026-08-02 那次把机主 `~/.claude/projects` 整棵树删光（70 个项目 / 291 memory / 2990 transcript），
+> 根因不是没看见警告，是**没把 `npm run mutate` 归类成破坏性操作**——它会故意把源码改坏再跑测试，
+> 而被改坏的恰恰可能是算删除路径的代码（当时 `getProjectDir` 被改成恒返回 `''`，
+> `join(真实根, '')` 塌成真实根本身，测试的 `rmSync` 就打上去了）。
+>
+> 黑名单要求"每遇到一个新命令都正确归类"，而那正是失败的那一步。白名单反过来：
+> **不在名单上的默认进容器**，判断错了顶多多跑一次容器，代价不对称地小。
+
+容器里 `HOME` 是一次性目录，`~/.claude/projects` 解析到容器内空壳——这道防线**不依赖任何代码正确性**，
+和仓库里那三层代码级防护（`mutate` 的沙箱 HOME、删除点护栏、`check-destructive-deletes` 门禁）是不同的轴。
+
+**两档例外不进容器**（需要真凭据，得单独授权）：
+`RUN_CLAUDE_INTEGRATION=1`（7 个需真 agent turn 的文件）与 `npm run test:smoke`。
+其余全部零 token——集成层靠 `tests/fixtures/fake-claude.sh` 过 preflight。
+
 ## 常用命令
 
 > ⚠️ **生产部署 = 常驻服务**（macOS LaunchAgent / Linux systemd 占着 3000 端口，固定公网域名 + Cloudflare Access 2FA）：**勿手动 `npm start`**（会撞端口）；改 `.env`/代码后须**重启常驻 server 进程**才生效。**例外**：`workdirs.json` 支持热加载，改完即生效、免重启（server 监听文件变化，被移除目录上的已开会话继续运行、仅拒新开）。
@@ -23,12 +52,12 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 ```bash
 npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
-npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性 + i18n 词典孤儿 key 扫描 + visual mock registry guard + 禁止模式 + inventory（零 token、最快）
+npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性 + i18n 词典孤儿 key 扫描 + 破坏性删除守卫（测试里的 recursive 删除必须可追溯到 mkdtemp，否则写 `// safe-rm: 理由`；生产代码里「真实数据根下、目录段由代码算出」的删除要写 `// safe-path: 理由`——两种标记不通用，为单文件删除批的豁免不放行递归删除）+ visual mock registry guard + 禁止模式 + inventory（零 token、最快）
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
-npm test           # 单测 + 可靠集成(server/auth/upload)；claude-turn 集成默认跳过；--test-force-exit 保证退出。CI 里集成整体 skip
+npm test           # 单测 + 可靠集成(server/auth/upload)；claude-turn 集成默认跳过；--test-force-exit 保证退出。CI 不跑本条(force-exit 会腰斩异步单测)，拆成 test:unit + test:integration 两步
 npm run test:unit  # node --test tests/unit/*.test.mjs：仅纯逻辑单测（零 token、最快）
-npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）
-RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测试一起跑(慢/耗 token/不稳；共 7 个文件：claude-lifecycle/session-switch/websocket-events/aborted-state/message-idempotency 整份 + approval-integrity/file-upload 各一个 describe)
+npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）。CI 里靠 CLAUDE_BIN 指向 tests/fixtures/fake-claude.sh 过 preflight，接线类用例真跑
+RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测试一起跑(慢/耗 token/不稳；共 7 个文件：claude-lifecycle/session-switch/websocket-events/aborted-state/message-idempotency/approval-integrity 整份 + file-upload 一个 describe)
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）
 npm run test:visual # test:e2e 的兼容别名
 

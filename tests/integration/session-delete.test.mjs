@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, utimesSync, realpathSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { getProjectDir } from '../../src/sessions/history.js';
@@ -27,6 +27,9 @@ function sweepStaleTestDirs() {
   try {
     for (const name of readdirSync(PROJECTS_ROOT)) {
       if (name.includes('ccm-session-delete-wd')) {
+        // safe-rm: name 来自 readdirSync(PROJECTS_ROOT) 的真实目录名，且已被上面这行按
+        // 'ccm-session-delete-wd' 过滤——只可能命中本测试自己 mkdtemp 出来的一次性 workDir
+        // 编码名。它不是被测代码算出来的路径，塌不了。
         try { rmSync(join(PROJECTS_ROOT, name), { recursive: true, force: true }); } catch { /* ignore */ }
       }
     }
@@ -80,7 +83,19 @@ async function cleanup() {
   if (httpServer) { httpServer.close(); httpServer = null; }
   if (io) { io.close(); io = null; }
   for (const d of [dataDir, workDir, projectDir]) {
-    if (d) { try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
+    if (!d) continue;
+    // ★ projectDir 是 join(PROJECTS_ROOT, getProjectDir(workDir))——【被测代码算出来的】。
+    // getProjectDir 一旦返回 ''，它就塌成 PROJECTS_ROOT 本身，下面这个 recursive+force 会把机主
+    // 所有项目的 transcript 与 memory 一次删光。2026-08-02 真实发生过：变异检查把 getProjectDir 的
+    // `String(cwd || '')` 改成 `&&` ⇒ 恒返回 ''，整棵 ~/.claude/projects 没了（靠 APFS 快照恢复）。
+    // 同型第二处在 tests/unit/history-list.test.mjs（那边是单测也照样碰真实目录）。
+    // 护栏放在执行删除的那一刻：不管路径为什么塌（变异、bug、上游改编码规则），这里都拦得住。
+    if (resolve(d) === resolve(PROJECTS_ROOT)) {
+      throw new Error(`拒绝删除 PROJECTS_ROOT 本身（getProjectDir 返回了空值？）: ${d}`);
+    }
+    // safe-rm: projectDir 确实由被测代码算出（无法避免——SDK deleteSession 只认真实根），
+    // 但正上方已有护栏挡住「塌成 PROJECTS_ROOT 本身」这唯一的危险形态。
+    try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
   }
   dataDir = workDir = projectDir = null;
 }

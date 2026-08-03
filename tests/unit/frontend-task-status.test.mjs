@@ -1,5 +1,5 @@
-// 后台任务横幅/列表/详情的行为单测（从 frontend-app-modules 拆出：那个文件已顶到 800 行上限，
-// 而这一组测试自成一个行为域——横幅可见性、列表折叠、详情内联在任务卡片内）。
+// 后台任务横幅/列表/详情的行为单测（从 frontend-app-modules 拆出：这一组测试自成一个
+// 行为域——横幅可见性、列表折叠、详情内联在任务卡片内）。
 import assert from 'node:assert/strict';
 import test from 'node:test';
 

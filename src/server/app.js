@@ -1657,6 +1657,14 @@ function openScoutInstance(cwd) {
         try {
           const projectDir = getProjectDir(cwd);
           const file = join(homedir(), '.claude', 'projects', projectDir, `${sid}.jsonl`);
+          // safe-path: projectDir 这一段【目录】是 getProjectDir(cwd) 算出来的。它若返回空串，
+          // 路径就从 <根>/<项目>/<sid>.jsonl 塌成 <根>/<sid>.jsonl——打到 projects 根目录下。
+          // 今天无害的唯一理由是这里用的是 unlinkSync（单文件）：目标不存在就抛、被 catch 吞掉，
+          // 且它对目录会直接抛 EISDIR，删不动任何一棵树。
+          // ⚠️ 谁要把这里改成 rmSync(..., { recursive: true })（比如为了顺带删子 agent 的 transcript
+          // 子目录），先想清楚这一段：2026-08-02 删掉机主 70 个项目 / 291 memory / 2990 transcript 的，
+          // 就是同一形态的递归版本——同一个 getProjectDir 被变异成恒返回 ''，join 塌成真实根本身。
+          // 真要递归，必须先在删除点加护栏：resolve(target) === resolve(根) 就抛错。
           unlinkSync(file);
           invalidateListCache(cwd);
         } catch { /* 文件可能已被 CLI 清理或不存在——非致命 */ }

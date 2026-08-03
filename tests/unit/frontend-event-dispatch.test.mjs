@@ -1,5 +1,5 @@
 // tests/unit/frontend-event-dispatch.test.mjs —— agent:event 派发器的行为域单测。
-// 从 frontend-app-modules.test.mjs 分出：那个文件按行为域拆分是硬门禁（source-layout.test.mjs 限 800 行）。
+// 从 frontend-app-modules.test.mjs 分出：按行为域拆分是硬门禁（见 source-layout.test.mjs）。
 // 覆盖：实例/epoch/seq 边界、onHandledEvent 分支、isReplayBatch 语义、handler 异常隔离。
 
 import assert from 'node:assert/strict';
