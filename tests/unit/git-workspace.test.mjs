@@ -31,8 +31,10 @@ describe('parsePorcelainZ：解析 git status --porcelain=v1 -z', () => {
   });
 
   test('rename：双路径，path 取新路径，保留 oldPath', () => {
-    // porcelain -z：XY + space + ORIG\0PATH\0
-    assert.deepEqual(parsePorcelainZ('R  old.js\0new.js\0'), [
+    // porcelain -z 的字段顺序是 XY + space + PATH\0ORIG_PATH\0 —— 新路径在前，与非 -z 格式
+    // 的 `XY ORIG -> PATH` 恰好相反（git 的历史怪异之处）。下面这串是 `git mv old.js new.js`
+    // 后 `git status --porcelain=v1 -z` 的逐字节实测输出，不是构造值。
+    assert.deepEqual(parsePorcelainZ('R  new.js\0old.js\0'), [
       { xy: 'R ', path: 'new.js', oldPath: 'old.js' },
     ]);
   });
@@ -189,6 +191,26 @@ describe('readGitDiff：注入 execFile', () => {
     const r = await readGitDiff('/repo', 'new.js', 'staged', { execFile });
     assert.equal(r.ok, true);
     assert.match(r.patch, /rename from old\.js/);
+    assert.doesNotMatch(r.patch, /new file mode/);
+  });
+
+  test('复核：以 R/C 开头的普通文件名不得被当成状态码，吃掉其后的真 rename 记录', async () => {
+    const execFile = (_c, args, _o, cb) => {
+      const gitArgs = args.slice(2);
+      if (gitArgs.includes('--name-status')) {
+        // 实测格式：非-rename 条目占两段（`M\0path\0`），rename 占三段（`R100\0old\0new\0`）。
+        // README.md 首字母是 R —— 遍历若不按条目长度推进，就会把这个【路径段】当成下一个
+        // 状态码，连吃两段，真正的 rename 记录整条被跳过（README/CHANGELOG 类文件名极常见）。
+        return cb(null, 'M\0README.md\0R100\0src/old.js\0src/new.js\0');
+      }
+      if (gitArgs.includes('-M')) {
+        return cb(null, 'diff --git a/src/old.js b/src/new.js\nsimilarity index 100%\nrename from src/old.js\nrename to src/new.js\n');
+      }
+      return cb(null, 'diff --git a/src/new.js b/src/new.js\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.js\n');
+    };
+    const r = await readGitDiff('/repo', 'src/new.js', 'staged', { execFile });
+    assert.equal(r.ok, true);
+    assert.match(r.patch, /rename from src\/old\.js/);
     assert.doesNotMatch(r.patch, /new file mode/);
   });
 

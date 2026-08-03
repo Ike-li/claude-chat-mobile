@@ -62,11 +62,13 @@ export function parsePorcelainZ(str) {
     const xy = rec.slice(0, 2);
     const rest = rec.slice(3); // skip XY + space
     if (xy[0] === 'R' || xy[0] === 'C') {
-      // rename/copy：当前 rest 是 oldPath，下一段是 newPath
-      const oldPath = rest;
-      const newPath = parts[i + 1] || '';
-      if (newPath) i += 1;
-      out.push({ xy, path: newPath || oldPath, oldPath });
+      // rename/copy：rest 是【新】路径，紧跟的下一段才是原路径。-z 格式的顺序与非 -z 的
+      // `XY ORIG -> PATH` 恰好相反（git 文档：`XY PATH\0ORIG_PATH\0`），别照非 -z 的直觉写。
+      // 截断输出（缺第二段）时 oldPath 为空串，classifyGitEntries 按 falsy 略去该字段。
+      const newPath = rest;
+      const oldPath = parts[i + 1] || '';
+      if (oldPath) i += 1;
+      out.push({ xy, path: newPath, oldPath });
     } else {
       out.push({ xy, path: rest });
     }
@@ -195,13 +197,22 @@ async function findRenamePair(cwd, side, relPath, execOpts) {
     return null;
   }
   const parts = out.split('\0').filter(p => p.length > 0);
-  for (let i = 0; i < parts.length; i++) {
+  // `--name-status -z` 是状态码与路径交替的定长记录：普通条目占 2 段（`M\0path\0`），
+  // rename/copy 占 3 段（`R100\0old\0new\0`）。必须【按条目长度】整条推进——只 `continue`
+  // 会让下一轮把【路径段】当状态码读，而 README.md / CHANGELOG.md 这类首字母是 R/C 的
+  // 常见文件名会因此被误判成 rename 状态码，连吃两段、把真正的 rename 记录整条跳过。
+  // 注：本函数读的是 diff 的 name-status，old 在前 new 在后；与 parsePorcelainZ 读的
+  // status --porcelain（新在前）顺序相反，两处别互相"对齐"。
+  for (let i = 0; i < parts.length;) {
     const status = parts[i];
-    if (status[0] !== 'R' && status[0] !== 'C') continue;
-    const oldPath = parts[i + 1];
-    const newPath = parts[i + 2];
-    i += 2;
-    if (oldPath === relPath || newPath === relPath) return { oldPath, newPath };
+    if (status[0] === 'R' || status[0] === 'C') {
+      const oldPath = parts[i + 1];
+      const newPath = parts[i + 2];
+      if (oldPath === relPath || newPath === relPath) return { oldPath, newPath };
+      i += 3;
+    } else {
+      i += 2; // 状态码 + 路径
+    }
   }
   return null;
 }
