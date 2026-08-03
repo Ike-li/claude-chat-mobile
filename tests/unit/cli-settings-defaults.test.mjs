@@ -10,6 +10,8 @@ import {
   resolveFreshPrefs,
   resolveResumeEffort,
   buildWorktreeGatewayEnv,
+  countNeutralizableGatewayKeys,
+  decideWorktreeSettingsAction,
   parseWorktreeCanonicalRoot,
   CCM_PERMISSION_MODES,
 } from '../../src/agent/cli-settings-defaults.js';
@@ -356,5 +358,96 @@ test.describe('buildWorktreeGatewayEnv — 非路由类偏好不中和', () => {
     );
     assert.equal(out.CLAUDE_CODE_ATTRIBUTION_HEADER, '1');
     assert.equal(out.ANTHROPIC_BASE_URL, '');
+  });
+});
+
+// 日志判据（2026-08-01）：buildWorktreeGatewayEnv 返回 undefined 曾被当成「本该隔离却没隔离」而 warn，
+// 但那个分支恰恰只在「两边都没有网关键」时到达——报的是正常状态，每开一次会话刷一次噪音。
+// 本函数把「canonical 是否真有污染源」单独提出来，让调用方只对真故障报警。
+test.describe('countNeutralizableGatewayKeys（污染源计数：只数会污染 worktree 的键）', () => {
+  test('无 env / 空 env / 非对象 → 0', () => {
+    assert.equal(countNeutralizableGatewayKeys(undefined), 0);
+    assert.equal(countNeutralizableGatewayKeys(null), 0);
+    assert.equal(countNeutralizableGatewayKeys({}), 0);
+    assert.equal(countNeutralizableGatewayKeys('nope'), 0);
+    assert.equal(countNeutralizableGatewayKeys(['ANTHROPIC_BASE_URL']), 0);
+  });
+
+  test('网关键逐个计数', () => {
+    assert.equal(countNeutralizableGatewayKeys({
+      ANTHROPIC_BASE_URL: 'https://api.amux.ai',
+      ANTHROPIC_AUTH_TOKEN: 'sk-xxx',
+    }), 2);
+  });
+
+  test('只有非路由偏好键 → 0（canonical 只配了 CLI 偏好同样属于「无需隔离」，不该报警）', () => {
+    assert.equal(countNeutralizableGatewayKeys({
+      CLAUDE_CODE_ATTRIBUTION_HEADER: '0',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CLAUDE_CODE_EFFORT_LEVEL: 'max',
+    }), 0);
+  });
+
+  test('非白名单键不计（安全边界同 buildWorktreeGatewayEnv：绝不碰服务端变量）', () => {
+    assert.equal(countNeutralizableGatewayKeys({
+      PORT: '3000', AUTH_TOKEN: 'real', CCM_DATA_DIR: '/real', anthropic_base_url: 'https://evil',
+    }), 0);
+  });
+
+  test('与 buildWorktreeGatewayEnv 判据一致：计数 > 0 ⟺ 一定产出中和块（等价性一旦被打破，app.js 的哨兵 warn 就会响）', () => {
+    const cases = [
+      { ANTHROPIC_BASE_URL: 'x' },
+      { CLAUDE_CODE_ATTRIBUTION_HEADER: '0' },
+      { CLAUDE_CODE_ATTRIBUTION_HEADER: '0', ANTHROPIC_DEFAULT_OPUS_MODEL: 'grok-4.5' },
+      { PORT: '3000' },
+      {},
+    ];
+    for (const canonical of cases) {
+      assert.equal(
+        countNeutralizableGatewayKeys(canonical) > 0,
+        buildWorktreeGatewayEnv(undefined, canonical) !== undefined,
+        `判据漂移：${JSON.stringify(canonical)}`,
+      );
+    }
+  });
+});
+
+// 隔离文件的处置决策（2026-08-01 code review 抓出的真 bug 促成）：
+// 「判定失败」与「判定为无需隔离」在 resolveWorktreeGatewayEnv 里同为 undefined 返回，
+// 而两者动作相反——前者必须什么都不做，后者才该清文件。不区分就会在 canonical settings
+// 读取瞬时失败那一次，把一份仍然有效的中和文件删掉，隔离静默失效直到下次 force 刷新，
+// 期间 worktree 会话重新被主 checkout 的网关污染（正是 7/30 那个 503）。
+test.describe('decideWorktreeSettingsAction（write / prune / skip 三态）', () => {
+  test('记录缺失（尚未判定 / ensureCliDefaults 未写缓存）→ skip', () => {
+    assert.equal(decideWorktreeSettingsAction(undefined), 'skip');
+    assert.equal(decideWorktreeSettingsAction(null), 'skip');
+  });
+
+  test('★判定失败（settled=false）→ skip，绝不 prune——这一条正是防误删有效隔离文件', () => {
+    assert.equal(decideWorktreeSettingsAction({ gatewayEnvSettled: false }), 'skip');
+    assert.equal(
+      decideWorktreeSettingsAction({ gatewayEnvSettled: false, gatewayEnv: undefined }),
+      'skip',
+      'canonical settings 读失败时 gatewayEnv 同样是 undefined，只能靠 settled 区分',
+    );
+  });
+
+  test('缺 settled 字段的旧形状 → skip（保守：宁可留残留，不可误删）', () => {
+    assert.equal(decideWorktreeSettingsAction({ mode: 'default', gatewayEnv: undefined }), 'skip');
+  });
+
+  test('已判定 + 有中和块 → write', () => {
+    assert.equal(
+      decideWorktreeSettingsAction({ gatewayEnvSettled: true, gatewayEnv: { ANTHROPIC_BASE_URL: '' } }),
+      'write',
+    );
+  });
+
+  test('已判定 + 无需隔离 → prune（清掉旧的明文快照）', () => {
+    assert.equal(decideWorktreeSettingsAction({ gatewayEnvSettled: true, gatewayEnv: undefined }), 'prune');
+  });
+
+  test('空对象按无需隔离处理（buildWorktreeGatewayEnv 不会返回它，但空 env 写进文件毫无意义）', () => {
+    assert.equal(decideWorktreeSettingsAction({ gatewayEnvSettled: true, gatewayEnv: {} }), 'prune');
   });
 });

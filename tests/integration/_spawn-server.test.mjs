@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { createServerSpawner } from './_spawn-server.mjs';
+import { createServerSpawner, waitForCondition } from './_spawn-server.mjs';
 
 test('readiness 超时：先终止已 spawn 的 server，再抛启动错误', async () => {
   const child = new EventEmitter();
@@ -107,4 +107,101 @@ test('spawn 强制 LOG_TERMINAL=off：隔离机主 .env，且忽略 envOverrides
   }
   // 非空非 on：挡住 dotenv 回填（空串在非 PRESERVE 路径会被清掉，.env 的 on 会灌回来）
   assert.equal(spawnOptions.env.LOG_TERMINAL, 'off');
+});
+
+// waitForCondition 是 2026-08-02 从死掉的 tests/helpers/integration.mjs 里扶正过来的等待原语
+// （现役集成测试此前用 33 处裸 sleep(N) 猜时序）。它自己是测试基建，得有自己的回归。
+test('waitForCondition：条件转真即返回该真值，不空等满超时', async () => {
+  let calls = 0;
+  const started = Date.now();
+  const value = await waitForCondition(() => (++calls >= 3 ? 'ready' : false), { intervalMs: 1, timeoutMs: 2000 });
+  assert.equal(value, 'ready');
+  assert.equal(calls, 3);
+  assert.ok(Date.now() - started < 1000, '应在条件满足时立刻返回，而不是等到 timeoutMs');
+});
+
+test('waitForCondition：探测期抛错不算失败，超时才报，且带 label 与最后一次原因', async () => {
+  await assert.rejects(
+    () => waitForCondition(() => { throw new Error('ECONNREFUSED'); }, { intervalMs: 1, timeoutMs: 30, label: '/health' }),
+    err => {
+      assert.match(err.message, /等待「\/health」超时/);
+      assert.match(err.message, /ECONNREFUSED/, '超时错误须带上最后一次探测失败原因，否则只剩泛型超时不好查');
+      return true;
+    },
+  );
+});
+
+test('waitForCondition：条件恒假（不抛错）也会超时，错误里不硬塞原因', async () => {
+  await assert.rejects(
+    () => waitForCondition(() => false, { intervalMs: 1, timeoutMs: 30, label: '恒假条件' }),
+    /等待「恒假条件」超时（30ms）$/u,
+  );
+});
+
+// 端口选择：抽签换成向 OS 要空闲端口（见 _spawn-server.mjs reserveFreePort 的算术）。
+// 调用方显式钉 PORT 的既有用法（WS-6「重启后端口不变」）不能被这个改动带偏。
+test('不传 PORT 时向 OS 要空闲端口，而不是随机抽签', async () => {
+  const child = new EventEmitter();
+  child.exitCode = null; child.signalCode = null; child.kill = () => true;
+  let spawnOptions;
+  let pickCalls = 0;
+
+  const spawnServer = createServerSpawner({
+    spawnProcess: (_c, _a, options) => { spawnOptions = options; return child; },
+    requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: spawnOptions.env.CCM_BUILD_NONCE }),
+    sleep: async () => {},
+    maxAttempts: 1,
+    pickPort: async () => { pickCalls += 1; return 45678; },
+  });
+
+  const result = await spawnServer({ AUTH_TOKEN: '', WORK_DIR: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
+
+  assert.equal(pickCalls, 1, '未指定 PORT 时必须问 OS 要，不能自己抽');
+  assert.equal(result.port, 45678);
+  assert.equal(spawnOptions.env.PORT, '45678');
+});
+
+test('显式传 PORT 时照用，不去问 OS（重启同端口的用法不能被带偏）', async () => {
+  const child = new EventEmitter();
+  child.exitCode = null; child.signalCode = null; child.kill = () => true;
+  let spawnOptions;
+  let pickCalls = 0;
+
+  const spawnServer = createServerSpawner({
+    spawnProcess: (_c, _a, options) => { spawnOptions = options; return child; },
+    requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: spawnOptions.env.CCM_BUILD_NONCE }),
+    sleep: async () => {},
+    maxAttempts: 1,
+    pickPort: async () => { pickCalls += 1; return 45678; },
+  });
+
+  const result = await spawnServer({ PORT: '31999', AUTH_TOKEN: '', WORK_DIR: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
+
+  assert.equal(pickCalls, 0);
+  assert.equal(result.port, 31999);
+  assert.equal(spawnOptions.env.PORT, '31999');
+});
+
+test('reserveFreePort 真的给出可立即绑定的空闲端口（不是占着不放）', async () => {
+  const spawnServer = createServerSpawner({
+    spawnProcess: () => {
+      const c = new EventEmitter();
+      c.exitCode = null; c.signalCode = null;
+      // 必须真的响应 SIGTERM：否则 killServer 会走满 3s+3s 两轮超时，这条用例白耗 6 秒。
+      c.kill = () => { queueMicrotask(() => { c.exitCode = 0; c.emit('exit', 0, 'SIGTERM'); }); return true; };
+      return c;
+    },
+    requestHealth: async () => { throw new Error('不探测'); },
+    sleep: async () => {},
+    maxAttempts: 0,
+  });
+  // maxAttempts=0 直接走超时分支，但端口已由真实 reserveFreePort 选出并写进错误信息
+  await assert.rejects(
+    spawnServer({ AUTH_TOKEN: '', WORK_DIR: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' }),
+    err => {
+      const port = Number(err.message.match(/端口 (\d+)/)?.[1]);
+      assert.ok(Number.isInteger(port) && port > 1024, `应拿到合法端口，得到 ${port}`);
+      return true;
+    },
+  );
 });

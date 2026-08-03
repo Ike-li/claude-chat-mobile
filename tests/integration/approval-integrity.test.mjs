@@ -22,8 +22,8 @@ import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, realpathSync 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
+import { waitForServerReady } from './_spawn-server.mjs';
 
-const sleep = ms => new Promise(res => setTimeout(res, ms));
 let port, dataDir, dirA, dirB, httpServer, io;
 
 async function startServer(authToken = 'nfr17-test-token') {
@@ -49,7 +49,7 @@ async function startServer(authToken = 'nfr17-test-token') {
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   const cfAccess = await import('../../src/auth/cf-access.js');
   cfAccess.initCfAccess();
-  await sleep(500);
+  await waitForServerReady(port, authToken);
 }
 
 function createClient(token) {

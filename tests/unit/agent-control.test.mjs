@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';
+import { USAGE_MIN_INTERVAL_MS, USAGE_THIRD_PARTY_INTERVAL_MS } from '../../src/agent/agent.js';
 
 test.describe('logMeta()', () => {
   test('全空 → 兜底 default / model-default / default', () => {
@@ -599,7 +600,79 @@ test.describe('fetchUsage()（statusline 5h/7d 数据源：实验性 usage RPC +
   test('RPC 超时 → null（不阻塞，照 statusline getContextUsageSafe 1500ms 模式）', async () => {
     const { s } = makeSession();
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}) }; // 永不 resolve
-    assert.equal(await s.fetchUsage(10), null); // 10ms 超时
+    assert.equal(await s.fetchUsage(10, { minIntervalMs: 0 }), null); // 10ms 超时
+    s.dispose();
+  });
+});
+
+// SDK get_usage 在 CLI 侧不是"读一个内存里的百分比"：CLI 2.1.220 实测，它 = 一次真实网络请求
+// + 一次全量 transcript 扫盘（includeBehaviors 默认 true，SDK 侧无参数可传）。而 statusline 每
+// 10s 兜底轮询 + 每个 assistant usage 边界都会把它拉起。额度是 5h/7d 窗口、按分钟变化——
+// 频率与数据变化率严重失配，是 1500ms 偶发超时的结构性来源。now 注入而非假时钟：纯函数式、零 flake。
+test.describe('fetchUsage() 节流（昂贵 RPC 的调用频率对齐数据变化率）', () => {
+  test('节流窗内重复调用 → RPC 只打一次，返回同一份缓存', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    const fake = { rate_limits_available: true, rate_limits: {} };
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { calls++; return fake; } };
+    const a = await s.fetchUsage(1500, { now: 1_000 });
+    const b = await s.fetchUsage(1500, { now: 5_000 });
+    assert.equal(calls, 1);
+    assert.equal(a, fake);
+    assert.equal(b, fake); // 窗内复用，不重打
+    s.dispose();
+  });
+
+  test('超过节流窗 → 再打一次', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { calls++; return { n: calls }; } };
+    await s.fetchUsage(1500, { now: 1_000 });
+    const second = await s.fetchUsage(1500, { now: 1_000 + USAGE_MIN_INTERVAL_MS });
+    assert.equal(calls, 2);
+    assert.deepEqual(second, { n: 2 });
+    s.dispose();
+  });
+
+  test('失败同样占用节流窗 → 窗内不重打（挂住的通道更不该加压），返回 null', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { calls++; throw new Error('boom'); } };
+    assert.equal(await s.fetchUsage(1500, { now: 1_000 }), null);
+    assert.equal(await s.fetchUsage(1500, { now: 5_000 }), null);
+    assert.equal(calls, 1);
+    s.dispose();
+  });
+
+  // 第三方鉴权（API Key / Bedrock / Vertex / 代理网关）根本没有 claude 订阅额度可显示。
+  // 判据用 CLI 自己的权威自报 rate_limits_available:false，不猜 ANTHROPIC_BASE_URL——
+  // 那个 env 既盖不住 Bedrock/Vertex，也可能指向仍走 OAuth 的官方代理。
+  // 不硬熔断到零：同一次 RPC 还带回 session.lines(+A/−B)，且鉴权换回订阅时要能自动感知。
+  test('CLI 报 rate_limits_available:false → 节流窗自动拉长到第三方档', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { calls++; return { rate_limits_available: false }; } };
+    await s.fetchUsage(1500, { now: 1_000 });
+    assert.equal(calls, 1);
+    await s.fetchUsage(1500, { now: 1_000 + USAGE_MIN_INTERVAL_MS + 1 }); // 过了常规窗，仍在第三方窗内
+    assert.equal(calls, 1);
+    await s.fetchUsage(1500, { now: 1_000 + USAGE_THIRD_PARTY_INTERVAL_MS + 1 });
+    assert.equal(calls, 2);
+    s.dispose();
+  });
+
+  test('鉴权换回订阅 → 节流窗回到常规档（双向自适应，不必等实例重建）', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    let available = false;
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { calls++; return { rate_limits_available: available }; } };
+    await s.fetchUsage(1500, { now: 1_000 });                                  // 判为第三方
+    available = true;
+    await s.fetchUsage(1500, { now: 1_000 + USAGE_THIRD_PARTY_INTERVAL_MS + 1 }); // 第三方窗到期，拿到订阅数据
+    assert.equal(calls, 2);
+    const base = 1_000 + USAGE_THIRD_PARTY_INTERVAL_MS + 1;
+    await s.fetchUsage(1500, { now: base + USAGE_MIN_INTERVAL_MS + 1 });        // 已回常规窗
+    assert.equal(calls, 3);
     s.dispose();
   });
 });

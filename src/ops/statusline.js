@@ -213,18 +213,30 @@ export function usageBitsForStatusLine(usage) {
   return out;
 }
 
-// usage=null（RPC 层失败）已由 agent.fetchUsage()/_recordRateUnavailable 自行判定+记录，这里不重复；
-// 只接力处理拿到 usage 对象之后的三态：第三方鉴权(third_party_auth) / 数据异常(no_valid_window，越界或缺失)
-// / 恢复正常(reason=null)。与 fetchUsage() 共用同一个 agent.lastRateUnavailableReason 字段做变化去重
-// （高频刷新——300ms 防抖/10s 兜底轮询——下同一原因不重复写，防刷屏）。
-function recordRateReasonIfChanged(agent, usage, bits) {
-  if (!usage || typeof usage !== 'object') return;
-  const reason = usage.rate_limits_available === false ? 'third_party_auth' : (bits.rate ? null : 'no_valid_window');
+// 额度不可用原因的【唯一】判定点与写入点（agent.fetchUsage 只留结构化事实、自己不写 diag）。
+// 判定必须落在下面的快照回落点【之后】——谓词是「用户在状态栏上到底有没有看见 5h/7d」，
+// 不是「这一拍 RPC 成不成功」。此前失败侧判定在 agent 层，那一层看不到回落结果，于是单拍
+// 超时即翻转 rpc_error、下一拍成功再翻回 null：一次瞬时抖动放大成两条醒目日志，而那一刻
+// 额度其实一直显示着（rateFromSnapshot 标「非实时」）。
+// 也因此不需要另造消抖器：15 分钟快照 TTL 只在成功时写入，天然就是滞回窗口——抖动被垫住
+// 从而静默，持续故障则在快照过期（额度真消失）那一刻记一条。
+function resolveRateReason(hasRate, usage, failure) {
+  if (hasRate) return null;                                                   // UI 上有数 → 不许报「不可用」
+  if (usage && typeof usage === 'object') {
+    return usage.rate_limits_available === false ? 'third_party_auth' : 'no_valid_window';
+  }
+  return failure?.reason || null;                                             // usage==null：用 fetchUsage 留下的原因
+}
+
+// 与 agent.lastRateUnavailableReason 做变化去重（高频刷新——300ms 防抖/10s 兜底轮询——下
+// 同一原因不重复写，防刷屏）。reason=null（恢复）同样是一个原因值，同样参与去重。
+function recordRateReasonIfChanged(agent, reason, extra = {}) {
   if (reason === agent.lastRateUnavailableReason) return;
   // agent.logKey?.() 降级读法：既有测试 mock 多是裸对象、无 logKey 方法；缺 sessionId 时
   // diagLog.record 内部 `if (!sessionKey) return;` 会安全吞掉，不影响调用方。
   const key = typeof agent.logKey === 'function' ? agent.logKey() : agent.sessionId;
-  diagLog.record(key, 'statusline', 'rate_reason_change', { reason, previousReason: agent.lastRateUnavailableReason });
+  diagLog.record(key, 'statusline', 'rate_reason_change',
+    { reason, previousReason: agent.lastRateUnavailableReason, ...(reason ? extra : {}) });
   agent.lastRateUnavailableReason = reason;
 }
 
@@ -294,17 +306,19 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
   // utilization 越界 no_valid_window）——那是"明确无额度"，绝不能垫上一份 Anthropic 温热快照
   // 冒充还活着（code review：跨鉴权/空窗误垫）。
   let allowRateFallback = true;
+  let rateAttempted = false;   // 只有真调过才判定原因；disposed / 无 fetchUsage 的路径保持静默
+  let usageForReason = null;
+  let thrownFailure = null;
   if (agent && typeof agent.fetchUsage === 'function' && !agent.disposed) {
+    rateAttempted = true;
     try {
       const usage = await agent.fetchUsage();
+      usageForReason = usage;
       // fetchUsage 超时/不可用常回 null：属短暂断档，应允许账号级快照垫上（F1）。
       // 只有拿到 usage 对象且 bits.rate 为空（第三方/越界）才是「明确无额度」。
-      if (usage == null) {
-        // 保持 allowRateFallback=true；不写 reason 变化（无对象可判）
-      } else {
+      if (usage != null) {
         const bits = usageBitsForStatusLine(usage);
         Object.assign(p, bits);
-        recordRateReasonIfChanged(agent, usage, bits);
         // 写入点 A：本轮成功拿到额度 → 记进账号级快照，供下次断档时垫上（见 usage-snapshot.js）。
         if (bits.rate) {
           rememberUsage(usageStore, bits.rate, Date.now());
@@ -312,7 +326,10 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
           allowRateFallback = false; // 明确无额度：禁止垫旧值
         }
       }
-    } catch { /* 静默降级：允许回落 */ }
+    } catch (err) {
+      // 真实 fetchUsage 不抛（内部已 try/catch 回 null）；兜住意外抛出，否则下面会把「异常」误判成「恢复」。
+      thrownFailure = { reason: 'rpc_error', message: String(err?.message || err), timedOut: false };
+    }
   }
   // claude CLI 版本（启动时采集，server.js 传入）：取首段裸版本号，去 "(Claude Code)" 等后缀；前端加 v 前缀
   const ver = versions?.cli && versions.cli !== 'unknown' ? String(versions.cli).split(/\s+/)[0] : '';
@@ -326,6 +343,12 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
   if (!p.rate && allowRateFallback) {
     const fallback = fallbackUsage(usageStore, Date.now());
     if (fallback) { p.rate = fallback; p.rateFromSnapshot = true; }
+  }
+  // 唯一判定点，且必须在回落【之后】：此刻 p.rate 才是"用户实际看到的东西"（见 resolveRateReason）。
+  if (rateAttempted) {
+    const f = thrownFailure || agent.lastUsageFetchFailure;
+    recordRateReasonIfChanged(agent, resolveRateReason(!!p.rate, usageForReason, f),
+      f ? { message: f.message, timedOut: f.timedOut, ms: f.ms, lastOkMs: agent.lastUsageOkMs } : {});
   }
   return p;
 }

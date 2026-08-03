@@ -7,6 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
+import { waitForServerReady } from './_spawn-server.mjs';
 
 const sleep = ms => new Promise(res => setTimeout(res, ms));
 const TOKEN = 'metrics-test-token';
@@ -30,7 +31,7 @@ async function startServer() {
   for (const k of ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD']) delete process.env[k];
   const cfAccess = await import('../../src/auth/cf-access.js');
   cfAccess.initCfAccess();
-  await sleep(500);
+  await waitForServerReady(port, TOKEN);
 }
 
 async function get(path, token) {
@@ -45,7 +46,7 @@ async function cleanup() {
   if (dataDir) { try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ } dataDir = null; }
 }
 
-test.describe('/metrics 端点（NFR-15）', process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : {}, () => {
+test.describe('/metrics 端点（NFR-15）', () => {
   test.before(async () => { await startServer(); });
   test.after(async () => { await cleanup(); });
 

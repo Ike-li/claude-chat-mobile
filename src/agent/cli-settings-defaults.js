@@ -152,6 +152,45 @@ const NON_ROUTING_ENV_KEYS = new Set([
 // 只用于「中和」侧：worktree 自己显式配的同名键仍照常下发（排除清单挡的是继承，不是本意）。
 const shouldNeutralizeEnvKey = (k) => isGatewayEnvKey(k) && !NON_ROUTING_ENV_KEYS.has(k);
 
+const pickEnvObject = (o) => (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
+
+/**
+ * canonical settings 里「会污染 worktree、必须被中和」的键数——即真实污染源的规模。
+ *
+ * 只服务于日志判据。buildWorktreeGatewayEnv 返回 undefined 曾被调用方当作「本该隔离却没隔离」而 warn，
+ * 但那条分支恰恰只在两边都没有网关键时到达，报的是「无隔离可做」这个正常状态（2026-08-01 实测：
+ * canonical 的 env 块清空后，每开一次会话就刷一条假告警）。有了本函数，调用方能把「canonical 干净」
+ * 与「有污染源却没产出中和块」分开，只对后者报警。
+ *
+ * 判据刻意复用 shouldNeutralizeEnvKey：非路由偏好键（NON_ROUTING_ENV_KEYS）不算污染源，
+ * 与 buildWorktreeGatewayEnv 同源，两者不会各自漂移。
+ *
+ * @param {object|undefined} canonicalEnv canonical repo root 的 env 块
+ * @returns {number} 需要中和的键数；无 env / 非对象 → 0
+ */
+export function countNeutralizableGatewayKeys(canonicalEnv) {
+  return Object.keys(pickEnvObject(canonicalEnv)).filter(shouldNeutralizeEnvKey).length;
+}
+
+/**
+ * 隔离文件（<CCM_DATA_DIR>/worktree-settings/*.json）该怎么处置。
+ *
+ * ★为什么必须有 settled 这一维：resolveWorktreeGatewayEnv 对「判定为无需隔离」和「判定失败」
+ * （canonical settings 读不到、.git 读不到）返回的都是 undefined，但两者动作完全相反——
+ * 后者只能什么都不做。若把它当成「无需隔离」去清文件，就会在一次瞬时 IO 失败里删掉仍然有效的
+ * 中和文件，且因 cliDefaultsByCwd 命中缓存而一直失效到下次 force 刷新，期间 worktree 会话
+ * 重新被主 checkout 的网关污染（= 2026-07-30 那个 503 从新的门回来）。2026-08-01 code review
+ * 实测抓出，此前是靠 `?.gatewayEnv` 一个可选链隐式表达三态，无法区分。
+ *
+ * @param {{gatewayEnv?: object, gatewayEnvSettled?: boolean}|null|undefined} defaults
+ *        cliDefaultsByCwd 的整条记录（缺失 = 尚未判定）
+ * @returns {'write'|'prune'|'skip'}
+ */
+export function decideWorktreeSettingsAction(defaults) {
+  if (!defaults || defaults.gatewayEnvSettled !== true) return 'skip';
+  return Object.keys(pickEnvObject(defaults.gatewayEnv)).length ? 'write' : 'prune';
+}
+
 /**
  * worktree 网关隔离：产出 flag settings（SDK Options.settings）用的 env 块。
  *
@@ -171,14 +210,13 @@ const shouldNeutralizeEnvKey = (k) => isGatewayEnvKey(k) && !NON_ROUTING_ENV_KEY
  * @returns {object|undefined} flag settings 的 env；无需干预时 undefined（调用方据此不传 settings.env）
  */
 export function buildWorktreeGatewayEnv(worktreeEnv, canonicalEnv) {
-  const pick = (o) => (o && typeof o === 'object' && !Array.isArray(o)) ? o : {};
   const out = {};
   // 先中和 canonical 的网关键（CLI 会误读这份）；纯偏好键不动，让 worktree 会话照常继承
-  for (const k of Object.keys(pick(canonicalEnv))) {
+  for (const k of Object.keys(pickEnvObject(canonicalEnv))) {
     if (shouldNeutralizeEnvKey(k)) out[k] = '';
   }
   // 再让 worktree 自己显式配的网关覆盖回来——隔离不等于禁用，各 worktree 仍可各走各的网关
-  for (const [k, v] of Object.entries(pick(worktreeEnv))) {
+  for (const [k, v] of Object.entries(pickEnvObject(worktreeEnv))) {
     if (isGatewayEnvKey(k)) out[k] = v;
   }
   return Object.keys(out).length ? out : undefined;

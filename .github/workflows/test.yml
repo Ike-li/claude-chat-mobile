@@ -58,10 +58,14 @@ jobs:
       # 「fail 0 但 cancelled 5」，exit 1。7/30 起 CI 连红即此，与被测代码无关。
       # test:unit 本就不带该 flag，拆开跑即可，防挂死保护仍留在 integration 上。
       - run: npm run test:unit
-      # 注：CI 上这一步几乎全被 skip（21 个集成文件多数带 `process.env.CI ? {skip}`，实测
-      # 30 suites 只出 3 tests）—— runner 上没有本机 claude CLI，这是有意的设计边界，
-      # 不是疏漏。真实集成覆盖靠本机 `npm test` 与 `npm run test:smoke`。
+      # 集成测试是【唯一执行真实 src/server/app.js 的一层】：quality 是纯静态、test:unit 从不加载
+      # 那个文件、e2e 打的是 tests/e2e/mock/server.js 而非真 server。此前它在 CI 里被整体 skip
+      # （21 个文件全带 `process.env.CI ? {skip}`，实测 30 suites 只出 3 tests），于是仓库最大的
+      # 两个文件在 CI 零执行。2026-08-02 改：CLAUDE_BIN 指向 stub 让 preflight 过关，接线类测试
+      # 照常跑；真需要 agent turn 的仍由各文件自己的 RUN_CLAUDE_INTEGRATION 门跳过（不受这里影响）。
       - run: npm run test:integration
+        env:
+          CLAUDE_BIN: ${{ github.workspace }}/tests/fixtures/fake-claude.sh
 
   e2e:
     runs-on: ubuntu-latest

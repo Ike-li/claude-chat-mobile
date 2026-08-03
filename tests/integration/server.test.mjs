@@ -17,9 +17,13 @@ const AUTH_TOKEN = 'srvtest-token';
 let serverProc;
 let tmpDir;
 
-// CI runner 无本机 claude CLI（server.js preflight 会 exit(1)），本文件起真 server 子进程、
-// scout 等用例需真 claude 行为——CI 跳过整个文件，本机（有真 claude）照常全跑。
-const CI_SKIP = process.env.CI ? { skip: 'CI 无本机 claude CLI；server 集成测试仅本机跑' } : {};
+// 本文件起真 server 子进程。CI 上 CLAUDE_BIN 指向 tests/fixtures/fake-claude.sh（见 workflow），
+// preflight 因此过关，HTTP/socket 接线用例照常跑——这是 CI 里唯一执行真实 src/server/app.js 的路径。
+// 唯一例外是 scout：它要真 claude 才能拉到模型清单，stub 给不了，单独用 REAL_CLI_ONLY 挡住。
+const CI_SKIP = {};
+const REAL_CLI_ONLY = process.env.CI
+  ? { skip: 'scout 需真 claude CLI 拉模型清单；CI 用的是 tests/fixtures/fake-claude.sh stub' }
+  : {};
 
 function url(path) {
   const sep = path.includes('?') ? '&' : '?';
@@ -35,7 +39,6 @@ function connectSocket(opts = {}) {
 }
 
 test.before(async () => {
-  if (process.env.CI) return;
   tmpDir = await mkdtemp(join(tmpdir(), 'ccm-srv-test-'));
   // TC-008：本轮启动身份 nonce——防连到固定端口 3199 上残留的【旧 checkout / 其它 server】。就绪判定不再只看
   // status:ok，还要求 /health 回显本 nonce（确认是本轮 spawn 的 server）；并监听子进程 early exit（bind 失败等）
@@ -77,7 +80,6 @@ test.before(async () => {
 });
 
 test.after(async () => {
-  if (process.env.CI) return;
   if (serverProc) {
     serverProc.kill('SIGTERM');
     // 等待进程退出（最多 3s，超时则 SIGKILL）
@@ -244,7 +246,7 @@ test.describe('dev:restart — DEV_MODE 关闭时拒绝', CI_SKIP, () => {
   });
 });
 
-test.describe('session:new — scout 获取真实模型清单', CI_SKIP, () => {
+test.describe('session:new — scout 获取真实模型清单', REAL_CLI_ONLY, () => {
   // session:new 时无活实例 → openScoutInstance 临时创建 AgentSession 调 supportedModels()，
   // 获取真实模型清单后推送前端 + 写入缓存 + 立即 dispose（不留幽灵会话）。
   // 不再依赖缓存猜测或上区旧模型——scout 保证确定性。

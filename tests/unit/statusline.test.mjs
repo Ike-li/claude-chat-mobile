@@ -599,6 +599,125 @@ test.describe('buildWebStatusLine：额度不可用 → diag-log statusline/rate
   });
 });
 
+// 判定谓词是「用户在状态栏上到底有没有看见 5h/7d」（含快照垫底），不是「这一拍 RPC 成不成功」。
+// 失败侧原本判定在 agent.fetchUsage 内部，那一层看不到下游的快照回落结果，于是单拍超时即翻转
+// 成 rpc_error、下一拍成功再翻回 null——一次瞬时抖动被放大成两条醒目日志，而那一刻状态栏上的
+// 额度其实一直在（只是标了「非实时」）。判定统一收敛到本层、且必须落在回落点之后。
+// fetchUsage 现在只留结构化事实（agent.lastUsageFetchFailure），自己不写任何 diag。
+test.describe('buildWebStatusLine：额度不可用判定以「UI 上有没有数」为准', () => {
+  // 真实 fetchUsage 失败时的行为：自报结构化原因 + 返回 null（SDK RPC 是外部边界，可以 mock）
+  const failing = (message = 'usage timeout', extra = {}) => async function () {
+    this.lastUsageFetchFailure = { reason: 'rpc_error', message, timedOut: message === 'usage timeout', ...extra };
+    return null;
+  };
+  const ok = utilization => async function () {
+    this.lastUsageFetchFailure = null;
+    return { rate_limits: { five_hour: { utilization } } };
+  };
+
+  test('单拍超时但快照垫住 → 一条都不记（截图里那 4 对乒乓归零）', async () => {
+    const sid = 'test-sid-flap-suppressed';
+    const store = createUsageSnapshotStore();
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: sid,
+      lastRateUnavailableReason: null, lastUsageFetchFailure: null, fetchUsage: ok(40),
+    };
+    const first = await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    assert.equal(first.rate.fiveHour.usedPercent, 40); // 前置：本拍成功，快照已温热
+
+    agent.fetchUsage = failing();
+    const second = await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    assert.equal(second.rate.fiveHour.usedPercent, 40); // 状态栏上额度并没消失……
+    assert.equal(second.rateFromSnapshot, true);        // ……只是标了「非实时」
+
+    agent.fetchUsage = ok(41);
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+
+    assert.equal(getDiagLogs(sid).filter(e => e.subsystem === 'statusline').length, 0);
+  });
+
+  test('超时且无温热快照（额度真消失）→ 从本层记一条 rpc_error', async () => {
+    const sid = 'test-sid-cold-timeout';
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: sid,
+      lastRateUnavailableReason: null, lastUsageFetchFailure: null, fetchUsage: failing('usage timeout', { ms: 1502 }),
+    };
+    const p = await buildWebStatusLine({ agent, cwd: undefined, usageStore: createUsageSnapshotStore() });
+    assert.equal(p.rate, undefined); // 前置：UI 上确实没有额度了
+
+    const entries = getDiagLogs(sid).filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].detail.reason, 'rpc_error');
+    assert.equal(entries[0].detail.timedOut, true);
+    assert.equal(entries[0].detail.ms, 1502); // 耗时透出，供判断「1500ms 是不是太紧」
+  });
+
+  test('快照过 TTL 后仍失败 → 恰在额度真消失那一刻记一条', async () => {
+    const sid = 'test-sid-snapshot-expired';
+    const store = createUsageSnapshotStore();
+    store.rate = { fiveHour: { usedPercent: 90 } };
+    store.at = Date.now() - USAGE_SNAPSHOT_TTL_MS - 1_000; // 手工构造陈旧快照
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: sid,
+      lastRateUnavailableReason: null, lastUsageFetchFailure: null, fetchUsage: failing(),
+    };
+    const p = await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    assert.equal(p.rate, undefined);
+    assert.equal(getDiagLogs(sid).filter(e => e.subsystem === 'statusline').length, 1);
+  });
+
+  // 去重只看 reason 字符串相等，与它来自 usage 对象还是 failure 无关。这两条把该通用性钉死：
+  // 判定收敛前，「连续失败去重」「失败原因之间切换」是 agent 层测的，随契约反转一并移交本层。
+  test('连续两次 usage==null 失败 → 只记一条（去重不因原因来自哪个分支而异）', async () => {
+    const sid = 'test-sid-consecutive-null-failures';
+    const store = createUsageSnapshotStore();
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: sid,
+      lastRateUnavailableReason: null, lastUsageFetchFailure: null, fetchUsage: failing(),
+    };
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    assert.equal(getDiagLogs(sid).filter(e => e.subsystem === 'statusline').length, 1);
+  });
+
+  test('失败原因之间切换（rpc_no_method → rpc_error）→ 记两条', async () => {
+    const sid = 'test-sid-failure-reason-switch';
+    const store = createUsageSnapshotStore();
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: sid,
+      lastRateUnavailableReason: null, lastUsageFetchFailure: null,
+      fetchUsage: async function () { this.lastUsageFetchFailure = { reason: 'rpc_no_method' }; return null; },
+    };
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    agent.fetchUsage = failing();
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+
+    const entries = getDiagLogs(sid).filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0].detail.reason, 'rpc_no_method');
+    assert.equal(entries[1].detail.reason, 'rpc_error');
+    assert.equal(entries[1].detail.previousReason, 'rpc_no_method');
+  });
+
+  test('冷启动失败后恢复 → 记「不可用」+「已恢复」各一条（首次断档属实，不抑制）', async () => {
+    const sid = 'test-sid-cold-then-recover';
+    const store = createUsageSnapshotStore();
+    const agent = {
+      activeModel: 'm', lastUsage: usage(1), disposed: false, sessionId: sid,
+      lastRateUnavailableReason: null, lastUsageFetchFailure: null, fetchUsage: failing(),
+    };
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+    agent.fetchUsage = ok(20);
+    await buildWebStatusLine({ agent, cwd: undefined, usageStore: store });
+
+    const entries = getDiagLogs(sid).filter(e => e.subsystem === 'statusline');
+    assert.equal(entries.length, 2);
+    assert.equal(entries[0].detail.reason, 'rpc_error');
+    assert.equal(entries[1].detail.reason, null);
+    assert.equal(entries[1].detail.previousReason, 'rpc_error');
+  });
+});
+
 test.describe('buildWebStatusLine：session 元数据（sid）', () => {
   test('agent.sessionId → p.session={id}（transcript 与 sid 冗余，不含）', async () => {
     const id = '784e20b1-a550-45d1-874b-13b5f55eeb46';

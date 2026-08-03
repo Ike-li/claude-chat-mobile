@@ -526,6 +526,7 @@ export const EN_DICT = Object.freeze({
   '消息已入队（含附件，': 'Message queued (with attachments, ',
   '消息已入队（': 'Message queued (',
   '📊 额度显示不可用：': '📊 Usage display unavailable: ',
+  '／上次成功 ': ' / last success ',
   '📊 额度显示已恢复（此前：': '📊 Usage display restored (was: ',
 
   // —— 会话管理（删除 / 关闭 / 分叉 / 首页）——

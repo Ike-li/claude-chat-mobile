@@ -5,13 +5,13 @@
 
 import { decodeProtectedHeader, jwtVerify, createLocalJWKSet } from 'jose';
 import { readFileSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
+import { dataFile } from '../shared/data-dir.js';
 
-const HERE = import.meta.dirname;
 // CCM_DATA_DIR 是受支持的状态根——同 devices.js/sessions.js；生产迁出仓库，测试/探测隔离真实证书缓存。
 // （否则任何跑 initCfAccess 的测试会真发网络拉取并覆盖生产 cf-access-certs.json）。
-const CACHE_FILE = join(process.env.CCM_DATA_DIR || join(HERE, '..', '..', 'data'), 'cf-access-certs.json');
+const CACHE_FILE = dataFile('cf-access-certs.json');
 
 let hostname = '';   // 公网主机名（小写、无端口）
 let issuer = '';     // https://<team>.cloudflareaccess.com

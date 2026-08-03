@@ -151,75 +151,55 @@ test.describe('interrupt() 整体结果 → diag-log interrupt/settled', () => {
   });
 });
 
-test.describe('fetchUsage() 失败 → diag-log statusline/rate_reason_change（去重防刷屏）', () => {
-  test('无方法首次调用 → 记一条 reason:rpc_no_method，previousReason:null', async () => {
-    const { s } = makeSession({ instanceId: 'fetchusage-diag-nomethod' });
+// 契约反转（2026-08-01）：fetchUsage 此前自己写 statusline/rate_reason_change，但 agent 层看不到
+// 下游的快照回落结果，只能以「这一拍 RPC 成不成功」为准——单拍超时即翻转、下一拍成功再翻回，
+// 一次瞬时抖动被放大成两条醒目日志，而那一刻状态栏上的额度其实一直在（rateFromSnapshot 垫底）。
+// 判定与写入现已【整体上移】到 src/ops/statusline.js#resolveRateReason / recordRateReasonIfChanged，
+// 那里能看到 p.rate 的最终值。本层只留结构化事实，不写任何 diag。别把判定挪回来。
+test.describe('fetchUsage() 只留结构化事实，自己不写 diag（判定已上移 statusline 层）', () => {
+  const statuslineEntries = s => diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
+
+  test('无 usage 方法 → 不写 diag，原因留在 lastUsageFetchFailure', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-fact-nomethod' });
     s.q = { interrupt: async () => {} }; // 无 usage_EXPERIMENTAL... 方法
-    await s.fetchUsage();
-    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0].event, 'rate_reason_change');
-    assert.equal(entries[0].detail.reason, 'rpc_no_method');
-    assert.equal(entries[0].detail.previousReason, null);
+    assert.equal(await s.fetchUsage(), null);
+    assert.equal(statuslineEntries(s).length, 0);
+    assert.equal(s.lastUsageFetchFailure.reason, 'rpc_no_method');
     s.dispose();
   });
 
-  test('无方法连续两次调用 → 仅记一条（去重，防高频刷新刷屏）', async () => {
-    const { s } = makeSession({ instanceId: 'fetchusage-diag-nomethod-dedup' });
-    s.q = { interrupt: async () => {} };
-    await s.fetchUsage();
-    await s.fetchUsage();
-    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
-    assert.equal(entries.length, 1);
-    s.dispose();
-  });
-
-  test('RPC 抛错 → 记一条 reason:rpc_error，detail.message 含错误信息', async () => {
-    const { s } = makeSession({ instanceId: 'fetchusage-diag-error' });
+  test('RPC 抛错 → 不写 diag，lastUsageFetchFailure 含 message 且 timedOut:false', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-fact-error' });
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { throw new Error('boom'); } };
-    await s.fetchUsage();
-    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0].detail.reason, 'rpc_error');
-    assert.ok(entries[0].detail.message.includes('boom'));
-    assert.equal(entries[0].detail.timedOut, false);
+    assert.equal(await s.fetchUsage(), null);
+    assert.equal(statuslineEntries(s).length, 0);
+    assert.equal(s.lastUsageFetchFailure.reason, 'rpc_error');
+    assert.ok(s.lastUsageFetchFailure.message.includes('boom'));
+    assert.equal(s.lastUsageFetchFailure.timedOut, false);
     s.dispose();
   });
 
-  test('RPC 超时 → 记一条 reason:rpc_error，detail.timedOut:true', async () => {
-    const { s } = makeSession({ instanceId: 'fetchusage-diag-timeout' });
+  test('RPC 超时 → 不写 diag，timedOut:true 且带耗时 ms（判断 1500ms 是否太紧的实测依据）', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-fact-timeout' });
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => new Promise(() => {}) };
-    await s.fetchUsage(10);
-    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0].detail.reason, 'rpc_error');
-    assert.equal(entries[0].detail.timedOut, true);
+    assert.equal(await s.fetchUsage(10), null);
+    assert.equal(statuslineEntries(s).length, 0);
+    assert.equal(s.lastUsageFetchFailure.reason, 'rpc_error');
+    assert.equal(s.lastUsageFetchFailure.timedOut, true);
+    assert.ok(Number.isFinite(s.lastUsageFetchFailure.ms));
     s.dispose();
   });
 
-  test('原因切换（无方法→抛错）→ 记两条，reason 依次变化', async () => {
-    const { s } = makeSession({ instanceId: 'fetchusage-diag-switch' });
-    s.q = { interrupt: async () => {} }; // 无方法
-    await s.fetchUsage();
+  test('成功 → 清空 lastUsageFetchFailure、记录 lastUsageOkMs，仍不写 diag', async () => {
+    const { s } = makeSession({ instanceId: 'fetchusage-fact-success' });
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { throw new Error('x'); } };
     await s.fetchUsage();
-    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
-    assert.equal(entries.length, 2);
-    assert.equal(entries[0].detail.reason, 'rpc_no_method');
-    assert.equal(entries[1].detail.reason, 'rpc_error');
-    assert.equal(entries[1].detail.previousReason, 'rpc_no_method');
-    s.dispose();
-  });
-
-  test('成功调用 → 不新增记录、不清空 lastRateUnavailableReason（恢复判定交给 statusline 层）', async () => {
-    const { s } = makeSession({ instanceId: 'fetchusage-diag-success-after-fail' });
-    s.q = { interrupt: async () => {} };
-    await s.fetchUsage(); // 记一条 rpc_no_method
+    assert.equal(s.lastUsageFetchFailure.reason, 'rpc_error');
     s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => ({ rate_limits_available: true }) };
-    await s.fetchUsage(); // 成功：不应记录、不应清空字段
-    const entries = diagLog.getDiagLogs(s.logKey()).filter(e => e.subsystem === 'statusline');
-    assert.equal(entries.length, 1);
-    assert.equal(s.lastRateUnavailableReason, 'rpc_no_method');
+    await s.fetchUsage(1500, { minIntervalMs: 0 }); // 绕开节流窗，直取本拍结果
+    assert.equal(statuslineEntries(s).length, 0);
+    assert.equal(s.lastUsageFetchFailure, null);
+    assert.ok(Number.isFinite(s.lastUsageOkMs));
     s.dispose();
   });
 });

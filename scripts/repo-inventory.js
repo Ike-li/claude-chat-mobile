@@ -36,6 +36,7 @@ const ROOT_FILES = new Map([
   ['docs/display-contracts.md', ['Documentation', 'Display contracts: model / effort / statusline TUI–SDK–FE rules and test anchors', 'keep']],
   ['docs/getting-started.en.md', ['Documentation', 'English first-run tutorial from installation through phone validation', 'keep']],
   ['docs/getting-started.md', ['Documentation', 'Chinese first-run tutorial from installation through phone validation', 'keep']],
+  ['docs/refactor-plan.md', ['Documentation', 'Staged refactor plan (P0-P5): state-ownership consolidation, contract source of truth, frontend split', 'keep']],
 ]);
 
 const PREFIX_RULES = [
@@ -52,6 +53,7 @@ const PREFIX_RULES = [
   ['tests/integration/', 'Integration test', 'Isolated server or protocol integration test', 'keep'],
   ['tests/e2e/', 'E2E test', 'Zero-token Playwright browser test or mock', 'keep'],
   ['tests/smoke/', 'Smoke test', 'Explicit real Claude CLI scenario', 'keep'],
+  ['tests/fixtures/', 'Test support', 'Test fixture binary or data file', 'keep'],
   ['tests/helpers/', 'Test support', 'Shared test helper', 'keep'],
   ['tests/setup/', 'Test support', 'Test environment preload or setup', 'keep'],
   ['scripts/', 'Maintainer tooling', 'Project maintenance or verification command', 'keep'],

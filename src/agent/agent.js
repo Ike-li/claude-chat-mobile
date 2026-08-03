@@ -7,10 +7,23 @@ import * as interactionLog from './interaction-log.js';
 import * as diagLog from './diag-log.js';
 import { sanitize } from '../shared/sanitizer.js';
 import { sdkChildEnv } from '../shared/child-env.js';
+import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP } from '../shared/tool-summary.js';
+import { AGENT_EVENT_TYPES } from '../shared/protocol.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { normalizePermissionMode } from './cli-settings-defaults.js';
+
+// 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
+// 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
+// 只负责让问题在日志里可见；拦截等于让一个登记疏漏直接吃掉用户的一条消息，代价不对等。
+// 覆盖面仅限经 AgentSession 发出的 17 型；device_status/instances/mirror_state 等 9 型走 src/server/*
+// 与 src/auth/device-gate.js 的服务端广播路径，不经过本类，仍只由门禁静态扫描把关。
+const KNOWN_EVENT_TYPES = new Set(AGENT_EVENT_TYPES);
+function assertKnownEventType(type) {
+  if (KNOWN_EVENT_TYPES.has(type)) return;
+  console.error(`[event-contract] 未登记的 agent:event type「${type}」：仍照常发出，但前端多半没有对应 handler；请补进 src/shared/protocol.js`);
+}
 
 const BUFFER_CAP = 2000;      // 环形缓冲条数（抬高：长 ultracode/多工具轮少 gap 闪屏；transient 仍不进 buffer）
 // 额度类型标签：语义逐条对齐 CLI bundle 的同源映射表（five_hour="session limit" 等），
@@ -23,7 +36,6 @@ const RATE_LIMIT_LABELS = Object.freeze({
   seven_day_overage_included: 'Fable 5 额度',
   overage: '用量信用额度',
 });
-const TOOL_SUMMARY_CAP = 600; // 工具卡片摘要默认截断；permission_request 永不截断（4a）
 const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几行
 // ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
@@ -37,6 +49,22 @@ const CONTROL_TAG_SUBSYSTEM = {
   set_model: 'control',
   set_permission_mode: 'control',
 };
+
+// fetchUsage 节流窗。SDK get_usage 不是"读一个内存里的百分比"：CLI 2.1.220 实测，它在 CLI 侧
+// = 一次真实网络请求 + 一次全量 transcript 扫盘（includeBehaviors 默认 true，SDK 侧无参数可传），
+// 而我们只用其中的 rate_limits 百分比与 session.lines。CLI 自己的 statusline 走的是另一条路：
+// 从 API 响应头 anthropic-ratelimit-unified-* 解析进内存后同步读，成本为零。
+// 既然拿不到便宜那条，就把昂贵这条的频率压到与数据变化率匹配——5h/7d 窗口按分钟变化，
+// 而 statusline 每 10s 兜底轮询 + 每个 assistant usage 边界都会拉起它。
+// 代价：同一次 RPC 带回的 session.lines(+A/−R) 一并滞后 ≤60s（会话累计计数器，只在展开面板可见）。
+export const USAGE_MIN_INTERVAL_MS = 60_000;
+
+// 第三方鉴权（API Key / Bedrock / Vertex / 代理网关）档：那边根本没有 claude 订阅额度可显示，
+// 常规频率纯属白问。判据用 CLI 自己的权威自报 rate_limits_available:false——不猜
+// ANTHROPIC_BASE_URL（既盖不住 Bedrock/Vertex，也可能指向仍走 OAuth 的官方代理）。
+// 不硬熔断到零的两个理由：同一次 RPC 还带回 session.lines(+A/−B)，且鉴权换回订阅时要能
+// 自动感知、不必等 agent 实例重建（切工作区/切 effort/resume/server 重启才会重建）。
+export const USAGE_THIRD_PARTY_INTERVAL_MS = 10 * 60 * 1000;
 
 // 会话生命周期用户可见文案（可恢复类 error）。统一前缀，避免「会话已结束」歧义：
 // 磁盘会话通常还在，掐掉的是子进程 / 在途轮。前端 error bar 原样展示。
@@ -290,7 +318,12 @@ export class AgentSession {
     // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
     this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
     this.ctxWindowCache = null;   // {model, maxTokens}：本会话拿到过的上下文窗口【真值】(getContextUsage)，供 RPC 短暂不可用时垫底；带 model 指纹，模型一变即作废。绝不按模型名猜窗口，见 statusline.js readCachedCtxWindow
-    this.lastRateUnavailableReason = null; // 额度(5h/7d)不可用原因去重锚点：fetchUsage()/statusline.buildWebStatusLine 协作判断"原因是否变化"，仅变化时才记诊断日志
+    this.lastRateUnavailableReason = null; // 额度(5h/7d)不可用原因去重锚点。【唯一写者 = ops/statusline.js】——判定要看快照回落后 p.rate 的最终值，本层看不到
+    this.lastUsageFetchFailure = null;     // 最近一次 fetchUsage 失败的结构化原因 {reason,message,timedOut,ms}，供 statusline 判定；本身不写日志
+    this.lastUsageOkMs = null;             // 最近一次 fetchUsage 成功耗时：get_usage 在 CLI 侧含网络请求+全量 transcript 扫盘，给"超时值是否太紧"留实测依据
+    this._usageFetchAt = 0;                // 节流窗起点（见 USAGE_MIN_INTERVAL_MS）
+    this._usageCached = null;              // 节流窗内复用的上次结果
+    this._usageThirdParty = false;         // 上次 CLI 自报 rate_limits_available:false（无订阅额度）→ 降到 USAGE_THIRD_PARTY_INTERVAL_MS 档
     // per-turn 秒表/输出 token（CLI 式动态状态行 ✻ Verb… (Ns · ↓ tokens)，经 status_line.turn 透出）：
     this.turnStartedAt = null;    // 本轮开始时间戳（send/合成轮置位，result 无排队轮清 null）
     this.turnOutputTokens = 0;    // 本轮累计输出 token（跨 message 累加）
@@ -768,32 +801,45 @@ export class AgentSession {
   // statusline 5h/7d 额度 + 会话 lines 数据源：SDK 实验性 usage RPC（与 CLI /usage 同源）。
   // 超时 / 无 q / 无方法 / 抛错 → null（statusline 字段省略，不崩）。
   // 原始对象交给 statusline.usageBitsForStatusLine 解析；API 标 EXPERIMENTAL_MAY_CHANGE、会漂。
-  async fetchUsage(timeoutMs = 1500) {
+  // 本方法只留【结构化事实】（lastUsageFetchFailure / lastUsageOkMs），自己不写 diag——
+  // "额度是否不可用"要看用户在状态栏上有没有看见 5h/7d（含快照回落），那个结果只有下游
+  // statusline.buildWebStatusLine 才知道。判定点见 ops/statusline.js#resolveRateReason。
+  async fetchUsage(timeoutMs = 1500, { minIntervalMs, now = Date.now() } = {}) {
     if (typeof this.q?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== 'function') {
-      this._recordRateUnavailable('rpc_no_method');
+      this.lastUsageFetchFailure = { reason: 'rpc_no_method' };
       return null;
     }
+    // 显式传参优先（测试绕开节流用 0）；否则按上次 CLI 自报的鉴权类型选档。
+    const windowMs = minIntervalMs
+      ?? (this._usageThirdParty ? USAGE_THIRD_PARTY_INTERVAL_MS : USAGE_MIN_INTERVAL_MS);
+    // 成败都占用节流窗：RPC 挂住时更不该继续给同一条 stdio control 通道加压。
+    // 窗内早退不碰 lastUsageFetchFailure——沿用上次判定依据，与快照回落配合保持状态稳定。
+    if (this._usageFetchAt && now - this._usageFetchAt < windowMs) return this._usageCached;
+    this._usageFetchAt = now;
+    const startedAt = Date.now();
+    let timer = null;
     try {
-      return await Promise.race([
+      const usage = await Promise.race([
         this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('usage timeout')), timeoutMs)),
+        new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('usage timeout')), timeoutMs); }),
       ]);
+      this.lastUsageFetchFailure = null;
+      this.lastUsageOkMs = Date.now() - startedAt;
+      this._usageCached = usage;
+      // 鉴权类型双向自适应：CLI 说没有订阅额度就降档，说有就回常规档。只读 CLI 的权威自报，
+      // 不做展示层判定（额度到底显不显示仍由 ops/statusline.js#resolveRateReason 决定）。
+      this._usageThirdParty = usage?.rate_limits_available === false;
+      return usage;
     } catch (err) {
-      this._recordRateUnavailable('rpc_error', {
-        message: String(err?.message || err), timedOut: err?.message === 'usage timeout',
-      });
+      this.lastUsageFetchFailure = {
+        reason: 'rpc_error', message: String(err?.message || err),
+        timedOut: err?.message === 'usage timeout', ms: Date.now() - startedAt,
+      };
+      this._usageCached = null;
       return null;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-  }
-
-  // 诊断：仅"原因变化"时才记诊断时间线（高频刷新——300ms 防抖/10s 兜底轮询——下同一原因不重复写，
-  // 防止刷屏挤占 100 条环形缓冲、也防止 diagLog 实时广播刷屏诊断面板）。成功路径【不】调用本方法——
-  // 是否已恢复交给下游 statusline.buildWebStatusLine 依据本次 usage 内容接力判定。
-  _recordRateUnavailable(reason, extra = {}) {
-    if (reason === this.lastRateUnavailableReason) return;
-    diagLog.record(this.logKey(), 'statusline', 'rate_reason_change',
-      { reason, previousReason: this.lastRateUnavailableReason, ...extra });
-    this.lastRateUnavailableReason = reason;
   }
 
   // 权限档切换（与 send 的 setModel 同型，差分——仅档位真变才调 SDK）。
@@ -1488,6 +1534,7 @@ export class AgentSession {
   }
 
   emit(type, payload) {
+    assertKnownEventType(type);
     const envelope = {
       seq: ++this.seq,
       epoch: this.epoch,
@@ -1518,6 +1565,7 @@ export class AgentSession {
   // 用于后台任务进度这类高频心跳——进 buffer 会挤爆环形缓冲、占 seq 会制造空洞被 eventsSince 误判为 gap。
   // 语义：重连不重放（进度是瞬时的、旧进度无回放价值；前端按 transient 标志带外分流、不更新 lastSeq）。
   emitTransient(type, payload) {
+    assertKnownEventType(type);
     this.onEvent({
       seq: this.seq,            // 复用当前值、不递增：不占序列
       epoch: this.epoch,
@@ -1614,7 +1662,17 @@ export class AgentSession {
           }
           // FRESH 首轮：init 前的日志写在 provisionalKey(instanceId) 下，先并入真 sessionId 再记后续 sys_info。
           const prevLogKey = this.logKey();
-          this.sessionId = msg.session_id;
+          // sessionId 是【前端分流的路由键】，也是 transcript 落盘路径与日志归档键。SDK 若报来非字符串
+          // （对象/数组/数字），它会原样进入每一条 agent:event 信封——前端按它分流就静默串台，而下游
+          // 那些 isSafeSessionId 守卫只挡路径穿越、不管这里。宁可维持旧值并留痕，也不接受一个不可用的键。
+          // 2026-08-02 由属性测试实测复现（tests/unit/agent-sdk-message-fuzz.test.mjs）。
+          if (typeof msg.session_id === 'string' && msg.session_id) {
+            this.sessionId = msg.session_id;
+          } else {
+            console.warn(`[sdk-contract] init 上报的 session_id 不是非空字符串（${typeof msg.session_id}），维持原 sessionId`);
+            interactionLog.addSessionLog(this.logKey(), 'sys_info',
+              `[SYS] ⚠️ SDK init 的 session_id 非法（${typeof msg.session_id}），已忽略、维持原会话标识`);
+          }
           if (prevLogKey && prevLogKey !== this.sessionId) {
             interactionLog.rebindSessionLogs(prevLogKey, this.sessionId);
             diagLog.rebindDiagLogs(prevLogKey, this.sessionId);
@@ -1755,6 +1813,14 @@ export class AgentSession {
 
       case 'stream_event': {
         const ev = msg.event;
+        // SDK 契约上 stream_event 必带 event，但 SDK 是会在我们脚下变的外部依赖、消息形状不归我们定。
+        // 真缺了的话下面 `ev.type` 直接抛 TypeError，而本方法的调用方是消息泵的 for-await 循环，
+        // 它的外层 catch 把抛出【当成流错误、中断整个会话】（见本文件 map() 调用点上方那段注释：
+        // DEBUG_SDK_MESSAGES 的插桩专门包了 try/catch 就是防这个）——即一条畸形消息掀翻一整个会话。
+        // 同一个 ev 在下面子 agent 分支里本来就写成 `ev?.type`，主路径漏了，是疏漏不是有意的契约假设。
+        // 2026-08-02 由属性测试实测复现（tests/unit/agent-sdk-message-fuzz.test.mjs，seed=1 case=40）。
+        // 缺 event 时按「无可识别的流事件」处理：什么都不做，与收到未知 ev.type 同一归宿。
+        if (!ev || typeof ev !== 'object') break;
         if (msg.parent_tool_use_id) {
           // 子 agent 流式增量：独立 emit（带 parentToolUseId），【不碰主 agent buffer/state】防污染主线正文。
           // forwardSubagentText:true 下 SDK 才投递子 agent 的 text/thinking delta——移动端子 agent 可见的实时来源。
@@ -1830,7 +1896,11 @@ export class AgentSession {
             this.emitNotice(`${who}：${detail || `API 错误：${msg.error}`}`, 'warning');
             break;
           }
-          for (const block of msg.message?.content ?? []) {
+          // 同上一处（主 agent 那条 content 循环）的理由：`?? []` 挡不住"非数组的对象"，for-of 会抛。
+          // 讽刺的是正上方 msg.error 分支写的就是 asArray(...).filter(b => b?.type ...) —— 防御写法在
+          // 同一个 case 里隔了六行就没铺过来。
+          for (const block of asArray(msg.message?.content)) {
+            if (!block || typeof block !== 'object') continue;
             if (block.type === 'text' && block.text) {
               this.emit('text_delta', {
                 messageId: msg.uuid,
@@ -1902,7 +1972,13 @@ export class AgentSession {
           this.onUsage?.(); // E16：assistant 边界即刷 statusline ctx（不等 result/10s tick）
         }
         const mid = this.currentMessageId || msg.uuid;
-        for (const block of msg.message?.content ?? []) {
+        // asArray 而非 `?? []`：content 若是【非数组的对象】，?? 不兜底（它不是 null/undefined），
+        // for-of 直接抛 "object is not iterable"，一条畸形消息掀翻整个会话（见本 case 上方 map()
+        // 调用点的流错误说明）。同一函数里错误分支本来就用的 asArray(msg.message?.content)。
+        // block 同理逐个防：content 数组里混进 null 时 `block.type` 会抛，而下面错误分支写的是 `b?.type`。
+        // 两处都是同一函数内已有的写法没铺到这里，2026-08-02 由属性测试实测复现。
+        for (const block of asArray(msg.message?.content)) {
+          if (!block || typeof block !== 'object') continue; // 非对象不可能是合法 content block
           if (block.type === 'tool_use') {
             this.lastToolName = block.name; // 跟踪最后使用的工具名，供后台 tab 角标细化
             let file; // ③：文件类工具附未截断 path + changeKind + 行统计，并缓存完整 input 供预览
@@ -2106,20 +2182,10 @@ export class AgentSession {
   }
 }
 
-function truncate(s, cap = TOOL_SUMMARY_CAP) {
-  if (typeof s !== 'string') return '';
-  return s.length > cap ? s.slice(0, cap) + ' …（已截断）' : s;
-}
 function toolResultCap(name) {
   const n = String(name || '');
   if (n === 'Bash' || n === 'bash' || n === 'run_command' || n === 'Shell') return TOOL_SUMMARY_CAP_BASH;
   return TOOL_SUMMARY_CAP;
-}
-
-function stringify(v) {
-  if (v == null) return '';
-  if (typeof v === 'string') return v;
-  try { return JSON.stringify(v); } catch { return String(v); }
 }
 
 // 从完整 tool input 估 +/- 行（与前端 summarize 同源口径：块级行数，非精细 diff）。
@@ -2142,35 +2208,6 @@ function estimateMutationLineStats(name, input = {}) {
   if (name === 'Write') return { added: lines(input?.content), removed: 0 };
   if (name === 'NotebookEdit') return { added: lines(input?.new_source), removed: 0 };
   return { added: 0, removed: 0 };
-}
-
-// 长 base64/二进制载荷脱敏（Read 读图片等场景，tool_result 会带回原始字节供模型"看见"图片）：
-// 不猜 SDK 具体字段名（同 file-preview.js 的二进制探测思路，防 SDK 版本漂移改字段名致失效）——
-// 整串纯 base64 字符集且达到阈值长度才判定；真实代码/路径/命令几乎不可能连续 500+ 字符不含
-// 空白或标点，故不会误伤 Edit/Write 预览 diff。脱敏须在 truncate() 之前，否则大 base64 会把
-// TOOL_SUMMARY_CAP 截断额度提前占满，挤掉真正有用的字段。
-const BASE64_REDACT_MIN_LEN = 500;
-// 兼容 URL-safe 变体（-_ 代替 +/）：原正则不匹配它，走摘要路径时后面还有 truncate 兜底看不出来，
-// 但 tool:full「展开全文」没有兜底 —— 一个漏判的 base64 图片就是整串原样进 DOM。
-const BASE64_ONLY_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
-// seen：循环引用兜底（raw 结构不受本项目控制，MCP/SDK 工具输出可能自引用）——不加会在遇到循环
-// 结构时无限递归直到栈溢出，和裸 JSON.stringify 一样能打断整条正在处理的消息。
-function redactBase64(value, seen = new WeakSet()) {
-  if (typeof value === 'string') {
-    if (value.length >= BASE64_REDACT_MIN_LEN && BASE64_ONLY_RE.test(value)) {
-      return `（base64 数据，约 ${Math.ceil(value.length / 1024)}KB，已省略）`;
-    }
-    return value;
-  }
-  if (value && typeof value === 'object') {
-    if (seen.has(value)) return '（循环引用，已省略）';
-    seen.add(value);
-    if (Array.isArray(value)) return value.map(v => redactBase64(v, seen));
-    const out = {};
-    for (const k of Object.keys(value)) out[k] = redactBase64(value[k], seen);
-    return out;
-  }
-  return value;
 }
 
 function asArray(v) {

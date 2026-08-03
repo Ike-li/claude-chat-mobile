@@ -96,7 +96,7 @@ async function cleanup() {
   if (dataDir) { try { rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ } dataDir = null; }
 }
 
-test.describe('config:refresh（CLI 配置刷新按钮）', process.env.CI ? { skip: 'CI 无本机 claude CLI；集成测试仅本机跑' } : {}, () => {
+test.describe('config:refresh（CLI 配置刷新按钮）', () => {
   test.before(async () => { await startServer(); });
   test.after(async () => { await cleanup(); });
 
@@ -134,7 +134,11 @@ test.describe('config:refresh（CLI 配置刷新按钮）', process.env.CI ? { s
     }
   });
 
-  test('config:refresh 后应触发模型缓存刷新（models 事件或 scout）', async () => {
+  // models 事件由 scout 真起 claude 拉模型清单产出，stub（tests/fixtures/fake-claude.sh）给不了 →
+  // CI 上必然 10s 超时。同文件其余两个用例只测 settings 重读与 cwd 回落，不碰 CLI，照常在 CI 跑。
+  test('config:refresh 后应触发模型缓存刷新（models 事件或 scout）', process.env.CI
+    ? { skip: 'models 事件需真 claude scout 拉模型清单；CI 用的是 tests/fixtures/fake-claude.sh stub' }
+    : {}, async () => {
     const client = createClient();
     try {
       await client.waitForConnect();

@@ -1,11 +1,11 @@
 # 第三方组件与许可证 / Third-Party Notices
 
 本目录（`public/vendor/`）打包并随项目分发以下第三方组件。它们各自的版权与许可证如下，
-分发时须保留本文件。项目自身代码以 MIT 许可（见仓库根 `LICENSE`），不改变下列组件的许可。
+分发时须保留本文件。项目自身代码以 AGPL-3.0-only 许可（见仓库根 `LICENSE`），不改变下列组件的许可。
 
 This directory bundles and redistributes the third-party components listed below. Their
 respective copyrights and licenses apply and must be preserved on redistribution. The
-project's own code is MIT-licensed (see root `LICENSE`); that does not relicense these.
+project's own code is licensed under AGPL-3.0-only (see root `LICENSE`); that does not relicense these.
 
 ---
 
