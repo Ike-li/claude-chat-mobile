@@ -32,7 +32,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 
 | Category | Files |
 | --- | ---: |
-| Automation | 1 |
+| Automation | 2 |
 | Backend source | 57 |
 | Configuration template | 1 |
 | Deployment | 3 |
@@ -46,16 +46,16 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Instructions | 2 |
 | Integration test | 22 |
 | Legal | 2 |
-| Maintainer tooling | 23 |
+| Maintainer tooling | 24 |
 | Project configuration | 4 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
 | Test configuration | 1 |
 | Test support | 5 |
-| Unit test | 129 |
+| Unit test | 130 |
 | Vendored asset | 21 |
 
-Total classified files: **373**.
+Total classified files: **376**.
 
 ## Complete file inventory
 
@@ -63,6 +63,7 @@ Total classified files: **373**.
 | --- | --- | --- | --- | --- | --- |
 | `.env.example` | Configuration template | Documented runtime environment variables | `scripts/setup.js` and runtime configuration | Authored and reviewed manually | keep |
 | `.github/workflows/test.yml` | Automation | GitHub workflow | GitHub Actions | Authored and reviewed manually | keep |
+| `.github/workflows/upstream-watch.yml` | Automation | GitHub workflow | GitHub Actions | Authored and reviewed manually | keep |
 | `.gitignore` | Project configuration | Generated and secret file exclusions | Referenced by maintainers | Authored and reviewed manually | keep |
 | `.nvmrc` | Project configuration | Recommended Node major version | Referenced by maintainers | Authored and reviewed manually | keep |
 | `AGENTS.md` | Instructions | Codex project instructions symlink | Claude Code and Codex project instruction loader | Authored and reviewed manually | keep |
@@ -164,6 +165,7 @@ Total classified files: **373**.
 | `scripts/statusline-bridge-setup.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/statusline-bridge.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/test-e2e-parallel.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/upstream-watch.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `SECURITY.md` | Documentation | Security policy and deployment boundary | User or maintainer documentation | Authored and reviewed manually | keep |
 | `server.js` | Runtime entrypoint | Compatibility launcher used by npm and service managers | `node server.js` / `npm start` | Authored and reviewed manually | keep |
 | `src/agent/agent.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -429,6 +431,7 @@ Total classified files: **373**.
 | `tests/unit/tool-summary.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/unread-tracker.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/uploads.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/upstream-watch.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/usage-snapshot.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/visual-mock-registry-guard.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/visual-mock-scenarios.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

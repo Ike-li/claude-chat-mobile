@@ -52,3 +52,7 @@ reasonix.toml
 # scripts/mutate.js 运行期的源文件备份（崩溃时靠它还原）。
 # 必须忽略：否则会被 git ls-files --others 扫到，污染 repo-inventory / doc 一致性等按文件清单工作的门禁。
 *.mutate-backup
+
+# scripts/upstream-watch.js 产出的 issue 正文，workflow 拿它当 --body-file 用完即弃。
+# 同上：不忽略会被按文件清单工作的门禁扫到。
+upstream-issue.md
