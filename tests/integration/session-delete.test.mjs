@@ -10,7 +10,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, utimesSync, realpathSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
 import { getProjectDir } from '../../src/sessions/history.js';
@@ -83,18 +83,31 @@ async function cleanup() {
   if (httpServer) { httpServer.close(); httpServer = null; }
   if (io) { io.close(); io = null; }
   for (const d of [dataDir, workDir, projectDir]) {
-    if (!d) continue;
+    if (!d || !existsSync(d)) continue;
     // ★ projectDir 是 join(PROJECTS_ROOT, getProjectDir(workDir))——【被测代码算出来的】。
     // getProjectDir 一旦返回 ''，它就塌成 PROJECTS_ROOT 本身，下面这个 recursive+force 会把机主
     // 所有项目的 transcript 与 memory 一次删光。2026-08-02 真实发生过：变异检查把 getProjectDir 的
     // `String(cwd || '')` 改成 `&&` ⇒ 恒返回 ''，整棵 ~/.claude/projects 没了（靠 APFS 快照恢复）。
-    // 同型第二处在 tests/unit/history-list.test.mjs（那边是单测也照样碰真实目录）。
+    // 同型第二处在 tests/unit/history-list-sdk-fastpath.test.mjs（那边另外还跑在假 HOME 下）。
     // 护栏放在执行删除的那一刻：不管路径为什么塌（变异、bug、上游改编码规则），这里都拦得住。
-    if (resolve(d) === resolve(PROJECTS_ROOT)) {
-      throw new Error(`拒绝删除 PROJECTS_ROOT 本身（getProjectDir 返回了空值？）: ${d}`);
+    //
+    // 判据是「必须【严格位于】允许的根之下」，不是「不等于 PROJECTS_ROOT」。只比相等的写法恰好
+    // 只挡得住 getProjectDir 返回 '' 这一种塌法：返回 '..' 会落到 ~/.claude（PROJECTS_ROOT 的父
+    // 目录）上，相等判据放行、rmSync 把整个 CLI 配置连同所有项目一起删掉。今天 getProjectDir 的
+    // 实现产不出 '..'，但这条护栏的立身之本就是"不依赖被测代码今天长什么样"（2026-08-03 review）。
+    //
+    // 两侧都过 realpath 再比：macOS 的 tmpdir() 是 /var/folders/…，而 workDir 建好后做过
+    // realpathSync 变成 /private/var/folders/…，不归一化的话前缀判据会把正常清理也拦下来。
+    const real = p => { try { return resolve(realpathSync(p)); } catch { return resolve(p); } };
+    const target = real(d);
+    const inside = [PROJECTS_ROOT, tmpdir()]
+      .map(real)
+      .some(base => target !== base && target.startsWith(base + sep));
+    if (!inside) {
+      throw new Error(`拒绝删除：目标不在 PROJECTS_ROOT / tmpdir 之下（路径塌了？）: ${d}`);
     }
     // safe-rm: projectDir 确实由被测代码算出（无法避免——SDK deleteSession 只认真实根），
-    // 但正上方已有护栏挡住「塌成 PROJECTS_ROOT 本身」这唯一的危险形态。
+    // 但正上方的护栏要求它严格位于 PROJECTS_ROOT / tmpdir 之下，塌到根上或根之外都会抛错。
     try { rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ }
   }
   dataDir = workDir = projectDir = null;

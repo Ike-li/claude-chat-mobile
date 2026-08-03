@@ -25,9 +25,6 @@ const ROOT = join(import.meta.dirname, '..');
 const TEST_DIRS = ['tests'];
 const SRC_DIRS = ['src', 'scripts'];
 const SRC_FILES = ['server.js'];
-// 「真实数据根」的来源标记：从用户家目录推出来的路径。生产代码删的是真实文件，
-// 判据不能是 mkdtemp（那是测试的判据），只能是"这条路径的基目录是不是用户真实数据"。
-const REAL_ROOT_SOURCE = /\bhomedir\s*\(/;
 const SAFE_SOURCE = /\bmkdtemp(Sync)?\b|\btmpdir\s*\(/;
 // ★ 两条规则用【两种】标记，不能共用一个。
 // 第一版共用 safe-rm，结果为「单文件删除、目录段算出来」写的豁免，把同一行改成
@@ -214,29 +211,10 @@ export function isExempt(lines, callLine, marker = EXEMPT_MARKER) {
   return false;
 }
 
-// 追出「基目录来自用户家目录」的标识符（PROJECTS_ROOT / CLAUDE_DIR / WORKTREE_SETTINGS_DIR 这类）。
-export function collectRealRootIdentifiers(source) {
-  const origins = collectOrigins(source);
-  const real = new Set();
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const [name, exprs] of origins) {
-      if (real.has(name)) continue;
-      for (const expr of exprs) {
-        const base = pathBase(expr);
-        if (!REAL_ROOT_SOURCE.test(base) && !(base.match(/[A-Za-z_$][\w$]*/g) || []).some(id => real.has(id))) continue;
-        real.add(name); changed = true; break;
-      }
-    }
-  }
-  return real;
-}
-
 // 单文件删除（unlinkSync / 不带 recursive 的 rm）。它删不动整棵树，所以【不是】必须报的东西——
-// 但如果它的路径是「真实数据根 + 被测代码算出来的段」，那就是事故形态的哑火版本：
-// 今天无害只因为恰好用的是 unlinkSync，哪天为了删子目录改成 rmSync(recursive) 就地变成实弹。
-// 要求写一行 safe-rm 说明，等于强制在改成 recursive 之前先看见这条注释。
+// 但如果它的路径「追不到一次性目录」（⇒ 按真实数据处理）「且目录段是代码算出来的」，那就是事故形态
+// 的哑火版本：今天无害只因为恰好用的是 unlinkSync，哪天为了删子目录改成 rmSync(recursive) 就地变成实弹。
+// 要求写一行 safe-path 说明，等于强制在改成 recursive 之前先看见这条注释。
 export function findSingleFileDeletes(source) {
   const lines = source.split('\n');
   const calls = [];
@@ -291,7 +269,10 @@ export function checkSourceFile(rawSource, relPath) {
   // 规则一：生产代码里的 recursive 删除，判据与测试一致（可追溯到一次性目录，或显式豁免）。
   violations.push(...checkFile(rawSource, relPath));
 
-  // 规则二：单文件删除，路径 =「真实数据根」+「调用算出来的段」→ 要 safe-rm 说明。
+  // 规则二：单文件删除，路径「追不到一次性目录」+「目录段由代码算出」→ 要 safe-path 说明。
+  // 注意判据里【没有】"基目录必须来自 homedir()"这一维：一度写过一个 collectRealRootIdentifiers
+  // 来判它，但那个函数从未被接进来（2026-08-03 review 抓出，已删）。现在的判据是"追不到一次性
+  // 目录就按真实数据处理"——比 homedir() 那版更宽（DATA_DIR 下的删除也会被看住），不是漏网。
   const origins = collectOrigins(rawSource);
   const factories = collectSafeFactories(rawSource);
   const tempSafe = resolveSafeIdentifiers(origins, factories);
@@ -337,9 +318,9 @@ function main() {
   for (const file of srcFiles) {
     all.push(...checkSourceFile(readFileSync(file, 'utf8'), relative(ROOT, file)));
   }
-  const files = [...testFiles, ...srcFiles];
   if (all.length === 0) {
-    console.log(`✅ 破坏性删除检查：${files.length} 个测试文件，递归删除目标全部可追溯到一次性目录`);
+    console.log(`✅ 破坏性删除检查：${testFiles.length} 个测试文件 + ${srcFiles.length} 个生产文件，`
+      + '递归删除目标全部可追溯到一次性目录');
     return;
   }
   const recursive = all.filter(v => v.kind !== 'computed-under-real-root');
@@ -359,7 +340,7 @@ function main() {
   }
 
   if (computed.length) {
-    console.error('❌ 真实数据目录下、【目录段由代码算出】的删除，需要显式说明：\n');
+    console.error('❌ 追不到一次性目录、且【目录段由代码算出】的删除，需要显式说明：\n');
     for (const v of computed) {
       console.error(`  ${v.file}:${v.line}`);
       console.error(`      ${v.text}`);
