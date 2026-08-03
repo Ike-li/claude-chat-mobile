@@ -1,6 +1,6 @@
 // tests/unit/logic-instance-destroyed.test.mjs —— 点停止顿一下直接跳主页（回归修复）的纯逻辑单测。
 // 覆盖 wasViewingInstanceDestroyed / resolveEmptySurface 的 instanceDestroyed 接线（见 public/js/logic.js
-// 对应函数注释）。同域拆分惯例：logic-session.test.mjs 已 800 行硬顶，新行为域另起文件。
+// 对应函数注释）。同域拆分惯例：新行为域另起文件，不往 logic-session.test.mjs 里塞。
 //
 // 背景：中断失败（不限时超时——任何原因 SDK interrupt() reject 都会走 agent.js settleForce 强杀子进程）
 // → 子进程退出 → onExit → 该 instanceId 从 agents Map 删除、且无同 cwd 存活实例可回退

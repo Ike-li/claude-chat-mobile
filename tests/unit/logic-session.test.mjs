@@ -628,7 +628,7 @@ test('resolvePanelState: 接管后整组恢复 Web 偏好，不把 CLI 观察值
 });
 
 // detectAtMentionQuery/applyAtMentionPick → logic-composer-mention.test.mjs；resolveForkAnchorUuid →
-// logic-history-fork.test.mjs（source-layout.test.mjs 800 行硬顶 + 按行为域拆分惯例）。
+// logic-history-fork.test.mjs（按行为域拆分惯例，见 source-layout.test.mjs）。
 
 // 7febabc 回归：resolveSendModel 改成返回 wire（entry.resolvedModel）后，app.js 的后缀守卫仍比 m.value，
 // 而 wire 按设计不等于任何条目的 value → 守卫恒失效 → 每次显式选模型都送出重复后缀的非法模型名。

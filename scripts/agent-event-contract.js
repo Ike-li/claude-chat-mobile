@@ -324,6 +324,24 @@ export function checkAgentEventContract({
     });
   }
 
+  // 第五个方向：契约 ⊆ real。前四个方向合起来仍漏一种情况——契约表里挂着一个【谁都不发】的 type：
+  // real 不发它，所以 real ⊆ contract 过；mock 不发它，所以 mock ⊆ contract 与 mock ⊆ real 都过；
+  // real ⊆ mock 只遍历 real，压根看不见它。于是 type 下线或改名后残留的死名字永远静默全绿，而
+  // AGENT_EVENT_TYPES 是给人读的权威清单，读表的人会以为它还活着。入向侧早有对称的
+  // contract_inbound_not_registered，出向缺这一条是历史遗留，不是有意取舍。
+  for (const type of [...normalizedContractTypes].sort()) {
+    if (real.types.has(type)) continue;
+    // mock 还在发的 type 已由 mock_type_not_real 报过——那是"mock 发明了 real 没有的事件"，
+    // 与这里的"契约挂着死名字"是同一个根因（real 不发它）、同一个修复动作。同入向
+    // contract_inbound_not_mocked 跳过未注册事件的理由：一个根因不报两条。
+    if (mock.types.has(type)) continue;
+    problems.push({
+      code: 'contract_type_not_real',
+      type,
+      message: `contract lists agent:event type "${type}" that no real server/agent path emits — remove it from AGENT_EVENT_TYPES, or wire the emitter`,
+    });
+  }
+
   for (const dynamic of [...real.dynamic, ...mock.dynamic]) {
     problems.push({
       code: 'dynamic_type',

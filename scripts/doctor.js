@@ -329,11 +329,16 @@ function checkFrontendSyntax() {
   }
 }
 
-// D11: 测试覆盖率门槛（npm test --experimental-test-coverage 行覆盖率 ≥ 65%）
+// D11: 测试覆盖率门槛（npm test --experimental-test-coverage）。
+// 门槛与实测值都从子进程输出里读，不在这里复述常量——此处曾写死「≥ 65%」，而
+// scripts/coverage-check.js 的默认门槛早已是 75，doctor 于是对着用户报了一个不存在的数字。
+// 覆盖率是会持续变的量，任何抄写都会再次漂移，只能转述真实输出。
 function checkCoverageThreshold() {
   try {
-    execSync('node scripts/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 });
-    ok('测试覆盖率', '行覆盖率 ≥ 65%');
+    const stdout = execSync('node scripts/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 }).toString();
+    const actual = stdout.match(/行覆盖率:\s*([\d.]+)%/)?.[1];
+    const threshold = stdout.match(/门槛:\s*([\d.]+)%/)?.[1];
+    ok('测试覆盖率', actual && threshold ? `行覆盖率 ${actual}%（门槛 ${threshold}%）` : '达标');
   } catch (err) {
     const msg = (err.stderr?.toString() || err.message || '').split('\n').filter(Boolean).slice(-3).join(' | ');
     warn('测试覆盖率', `覆盖率检查未通过: ${msg || '超时或无法运行'}`);

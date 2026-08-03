@@ -53,7 +53,9 @@ test('agent event contract reports mock event types that real paths do not emit'
 
   const result = checkAgentEventContract({
     rootDir: root,
-    contractTypes: new Set([...AGENT_EVENT_TYPES, 'mock_only']),
+    // 只声明夹具真正用到的 type（同入向夹具的写法）。传全量 AGENT_EVENT_TYPES 会让 contract ⊆ real
+    // 把另外 20 多个真实契约 type 全报成「夹具没发」——夹具本就不该背真实契约表。
+    contractTypes: new Set(['init', 'mock_only']),
     mockSources: [{ path: 'tests/e2e/mock/server.js', kind: 'agent-event-emit' }],
   });
 
@@ -82,7 +84,7 @@ test('出向扫描面递归覆盖 src/：手写清单外的模块发未登记 ty
 
   const result = checkAgentEventContract({
     rootDir: root,
-    contractTypes: new Set(AGENT_EVENT_TYPES), // device_locked 不在契约里
+    contractTypes: new Set(['init']), // device_locked 不在契约里
     mockSources: [],
   });
 
@@ -113,12 +115,39 @@ test('agent event contract 识别 io.to(room).emit("agent:event", ...) 链式调
 
   const result = checkAgentEventContract({
     rootDir: root,
-    contractTypes: new Set([...AGENT_EVENT_TYPES, 'session_log']),
+    contractTypes: new Set(['init', 'session_log']),
     mockSources: [{ path: 'tests/e2e/mock/server.js', kind: 'agent-event-emit' }],
   });
 
   assert.deepEqual(result.problems, [], 'io.to(room).emit 里的 session_log 应被识别为 real 已发出，不应报 mock_type_not_real');
   assert.ok(result.realTypes.has('session_log'));
+});
+
+// 出向此前有四个方向（real⊆contract、mock⊆contract、mock⊆real、real⊆mock），唯独缺 contract⊆real：
+// 契约表里挂一个谁都不发的死 type 会永远静默全绿。入向侧早有对称的 contract_inbound_not_registered
+// （见下方「inbound contract flags contract events no server registers」），出向没有——两侧不对称
+// 是历史遗留而非有意取舍。type 下线/改名后残留在 AGENT_EVENT_TYPES 里，读表的人会以为它还活着。
+test('出向契约里没人发的死 type 必须被拦（contract ⊆ real）', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-agent-event-dead-type-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'src/agent/agent.js', `
+    class AgentSession { run() { this.emit('init', {}); } }
+  `);
+  await writeFixture(root, 'tests/e2e/mock/server.js', `
+    io.emit('agent:event', { type: 'init', payload: {} });
+  `);
+
+  const result = checkAgentEventContract({
+    rootDir: root,
+    contractTypes: new Set(['init', 'ghost_type']), // ghost_type 谁都不发
+    mockSources: [{ path: 'tests/e2e/mock/server.js', kind: 'agent-event-emit' }],
+  });
+
+  // 只报一条：real 都没发的 type，再要求 mock 去产出它没有意义（同入向 contract_inbound_not_mocked
+  // 跳过未注册事件的理由——同一个根因不报两遍）。
+  assert.deepEqual(result.problems.map(p => p.code), ['contract_type_not_real']);
+  assert.equal(result.problems[0].type, 'ghost_type');
 });
 
 // ---- 入向 socket 事件契约（客户端 → 服务端）----
@@ -233,6 +262,13 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   assert.ok(INBOUND_SOCKET_EVENTS.includes('git:status'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('git:diff'));
   assert.equal(INBOUND_SOCKET_EVENTS.includes('usage:get'), false);
+});
+
+// 出向侧对称的数量锚点。CLAUDE.md:11 对外宣称「type 分 26 种」，但此前全仓没有任何断言盯着
+// AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向的 40 早有上面那条断言守着，
+// 出向没有纯属遗漏。数字变动时请连同 CLAUDE.md:11 一起改。
+test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 26 种一致', () => {
+  assert.equal(AGENT_EVENT_TYPES.length, 26);
 });
 
 // ── 2026-08-02 补的两个反向闸 ───────────────────────────────────────────────

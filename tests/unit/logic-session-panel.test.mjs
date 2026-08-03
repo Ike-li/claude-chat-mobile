@@ -1,6 +1,6 @@
 // tests/unit/logic-session-panel.test.mjs —— 工作区抽屉 SWR 保鲜 + 按目录局部重建的纯逻辑单测。
 // 覆盖 shouldRerenderSessionList / buildDirInstanceSignatures / diffDirSignatures（见 public/js/logic.js
-// 对应函数注释）。同域拆分惯例：logic-session.test.mjs 已 800 行硬顶，新行为域另起文件。
+// 对应函数注释）。同域拆分惯例：新行为域另起文件，不往 logic-session.test.mjs 里塞。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures } from '../../public/js/logic.js';

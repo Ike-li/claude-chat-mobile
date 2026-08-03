@@ -1,7 +1,7 @@
 // tests/unit/agent-diag-log.test.mjs —— 验证 agent.js 的排队/停止/控制操作正确记入
 // diag-log.js 诊断时间线。独立于 agent-control.test.mjs/agent-permissions.test.mjs
 // （behavior domain 各自聚焦"操作本身对不对"，这里聚焦"操作是否被诊断时间线正确记录"），
-// 避免把断言塞进那两个已逼近 800 行门禁的文件（见 tests/unit/source-layout.test.mjs）。
+// 避免把断言塞进那两个已各自成域的文件（拆分判据见 tests/unit/source-layout.test.mjs）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';

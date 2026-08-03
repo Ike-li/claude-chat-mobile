@@ -1,4 +1,4 @@
-// SDK system 子类型的自由文本打通（从 agent-events.test.mjs 拆出：那个文件已逼近 800 行门禁）。
+// SDK system 子类型的自由文本打通（从 agent-events.test.mjs 拆出：事件映射与 system 子类型是两个行为域）。
 //
 // 背景：这批子类型全带用户可见正文（informational.content / mirror_error.error / notification.text /
 // model_refusal_*.content / status.compact_error），此前一律撞 map() 的 else 兜底，只在交互日志里留

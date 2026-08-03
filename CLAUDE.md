@@ -25,10 +25,10 @@ npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
 npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性 + i18n 词典孤儿 key 扫描 + visual mock registry guard + 禁止模式 + inventory（零 token、最快）
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
-npm test           # 单测 + 可靠集成(server/auth/upload)；claude-turn 集成默认跳过；--test-force-exit 保证退出。CI 里集成整体 skip
+npm test           # 单测 + 可靠集成(server/auth/upload)；claude-turn 集成默认跳过；--test-force-exit 保证退出。CI 不跑本条(force-exit 会腰斩异步单测)，拆成 test:unit + test:integration 两步
 npm run test:unit  # node --test tests/unit/*.test.mjs：仅纯逻辑单测（零 token、最快）
-npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）
-RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测试一起跑(慢/耗 token/不稳；共 7 个文件：claude-lifecycle/session-switch/websocket-events/aborted-state/message-idempotency 整份 + approval-integrity/file-upload 各一个 describe)
+npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）。CI 里靠 CLAUDE_BIN 指向 tests/fixtures/fake-claude.sh 过 preflight，接线类用例真跑
+RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测试一起跑(慢/耗 token/不稳；共 7 个文件：claude-lifecycle/session-switch/websocket-events/aborted-state/message-idempotency/approval-integrity 整份 + file-upload 一个 describe)
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）
 npm run test:visual # test:e2e 的兼容别名
 

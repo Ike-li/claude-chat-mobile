@@ -17,7 +17,8 @@ workdirs.json
 # Claude Code 会话产物（plan、skill 历史等，非项目资产）
 /.claude/
 
-# 常驻 worktree（promo/gh-pages 等分支的仓内检出位，便于 IDE 同窗查看；点目录 ESLint 默认不扫）
+# 历史遗留守卫：常驻 worktree 现已改为仓库外的平级兄弟目录（../claude-chat-mobile-<分支名>，
+# 见 CLAUDE.md 分支纪律），本目录不再使用。留着以防日后有人在仓内建 worktree。
 /.worktrees/
 
 # 日志（*.log 文件 + 仓内 logs 目录/文件，防非 .log 后缀落盘被误加）

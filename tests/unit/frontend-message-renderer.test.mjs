@@ -1,5 +1,5 @@
 // tests/unit/frontend-message-renderer.test.mjs —— markdown 渲染与消毒的行为域单测。
-// 从 frontend-app-modules.test.mjs 分出：那个文件按行为域拆分是硬门禁（source-layout.test.mjs 限 800 行）。
+// 从 frontend-app-modules.test.mjs 分出：按行为域拆分是硬门禁（见 source-layout.test.mjs）。
 
 import assert from 'node:assert/strict';
 import test from 'node:test';

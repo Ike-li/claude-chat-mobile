@@ -178,7 +178,7 @@ export function renderRepositoryMap(files) {
     '| `playwright-report/`, `test-results/`, `coverage/` | Test reports and coverage output | Regenerable; delete freely |',
     '| `.DS_Store` | macOS Finder metadata | Delete freely; never commit |',
     '| `node_modules/` | Installed dependencies | Regenerable from `package-lock.json` |',
-    '| `.worktrees/` | Other branches (e.g. promo, gh-pages) checked out as worktrees — not this branch\'s source | Excluded from search/review; see CLAUDE.md |',
+    '| `.worktrees/` | Legacy guard — other branches are now checked out as sibling directories outside the repo, not here | Kept only in case a worktree is ever created in-tree |',
     '',
     '## Inventory summary',
     '',
