@@ -22,7 +22,9 @@ const DANGEROUS = [
   { re: /\bnpm\s+run\s+test:integration\b/, why: '集成测试会起真 server 并 spawn claude，且有用例按设计操作真实 ~/.claude/projects' },
   { re: /\bnpm\s+run\s+test:smoke\b/, why: '冒烟测试真实调用 claude，消耗额度' },
   { re: /\bRUN_CLAUDE_INTEGRATION\b/, why: '会跑 7 个需要真 agent turn 的文件：慢、耗 token、不稳' },
-  { re: /\bnpm\s+(test|t)\b(?!:)/, why: 'npm test 包含集成测试那一档（CLAUDE.md 白名单里只有 lint / check / test:unit）' },
+  // 理由必须点名到文件和形态：8/2 那次的根因是【归类判断失败】，而"包含集成测试那一档"这种抽象
+  // 说法帮不上归类——看的人还是得自己去查它到底碰什么。写死具体形态，确认框才是可判断的。
+  { re: /\bnpm\s+(test|t)\b(?!:)/, why: 'npm test 会跑 tests/integration/session-delete.test.mjs——它在真实 ~/.claude/projects 下做 recursive rmSync，且目录段【由被测代码算出】，与 8/2 删库同形态（宿主机白名单只有 lint / check / test:unit / test:e2e）' },
   // 不枚举 node 的中间参数：--import ./tests/setup/preload-env.mjs 这类非 `--x` 形态的参数会把
   // 逐个匹配的写法卡断（第一版就栽在这）。只要求 node ... --test ... tests/integration 依次出现。
   { re: /\bnode\b[^|&;]*--test\b[^|&;]*tests\/integration/, why: '直接跑集成测试文件，绕过了 npm 脚本但风险相同' },
