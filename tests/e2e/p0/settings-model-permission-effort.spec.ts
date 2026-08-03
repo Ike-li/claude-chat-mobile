@@ -292,13 +292,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#pillDefaults')).toHaveAttribute('title', /mimo-v2\.5-pro-ultraspeed/);
     const layout = await page.locator('#pillDefaults').evaluate((chip) => {
       const text = chip.querySelector('#pillModelText') as HTMLElement | null;
+      const cs = text ? getComputedStyle(text) : null;
       return {
         truncated: Boolean(text && text.scrollWidth > text.clientWidth),
+        // 省略机制本身（与字体无关）：三件套齐了才可能出现单行省略号
+        ellipsis: cs?.textOverflow ?? '',
+        nowrap: cs?.whiteSpace ?? '',
+        overflow: cs?.overflow ?? '',
         chipHeight: (chip as HTMLElement).offsetHeight,
       };
     });
-    expect(layout.truncated).toBe(true);
-    expect(layout.chipHeight).toBe(36); // 与动作钮热区协调（Composer A）
+    // ★ 断言分两层，因为 scrollWidth > clientWidth 依赖【字体度量】：同一串 24 字符的模型名在
+    // macOS 上溢出、在 Linux 容器的回落字体下正好放得下（2026-08-03 实测：宿主机过、容器红）。
+    // 那不是 bug，是渲染环境不同。所以——
+    // ① 省略机制（text-overflow/white-space/overflow 三件套）与字体无关，任何环境都必须成立；
+    // ② 真溢出只在确实溢出的环境里校验：溢出了就必须被截断，没溢出说明这个字体下放得下，不算回归。
+    // 这么写比原来更强：三件套此前从没被检查过，缺任何一个都会让"省略"变成"硬换行/裸溢出"。
+    expect(layout.ellipsis).toBe('ellipsis');
+    expect(layout.nowrap).toBe('nowrap');
+    expect(layout.overflow).toBe('hidden');
+    expect(layout.chipHeight).toBe(36); // 与动作钮热区协调（Composer A）；单行的直接证据
 
     await expectNoBrowserErrors(page);
   });

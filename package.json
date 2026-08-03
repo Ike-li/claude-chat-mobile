@@ -62,7 +62,7 @@
     "watch:upstream": "node scripts/upstream-watch.js",
     "mutate": "node scripts/mutate.js",
     "docker:build": "docker compose -f docker-compose.test.yml build",
-    "test:docker": "docker compose -f docker-compose.test.yml run --rm test sh -lc \"npm run check && npm run test:unit && npm run test:integration\"",
+    "test:docker": "docker compose -f docker-compose.test.yml run --rm test sh -lc \"npm run test:unit && npm run test:integration\"",
     "test:docker:unit": "docker compose -f docker-compose.test.yml run --rm test npm run test:unit",
     "test:docker:e2e": "docker compose -f docker-compose.test.yml run --rm test npm run test:e2e",
     "test:docker:sh": "docker compose -f docker-compose.test.yml run --rm test bash",

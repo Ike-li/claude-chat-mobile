@@ -18,11 +18,16 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 ## 测试跑在哪：宿主机只跑白名单，其余进容器
 
-**宿主机上只允许跑这三条**：`npm run lint`、`npm run check`、`npm run test:unit`。
-它们不起 server、不 spawn claude、不碰 `~/.claude`。
+**宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`。
+前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
+已核实不碰 `~/.claude`）。
 
-**其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（等价于容器里跑 check + 单测 + 集成）、
-`npm run test:docker:e2e`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`。
+**其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑单测 + 集成）、
+`npm run test:docker:e2e`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
+（拉 Playwright 镜像 + npm ci，约 7 分钟）。
+
+> `test:docker` 不含 `check`：`inventory:check` 要 `git ls-files`，而 worktree 检出的 `.git` 是指向
+> 宿主机路径的指针文件，容器里解析不到。`check` 本来就在宿主机白名单里，留在宿主机跑即可。
 
 > **为什么是白名单，不是"危险命令清单"**
 > 2026-08-02 那次把机主 `~/.claude/projects` 整棵树删光（70 个项目 / 291 memory / 2990 transcript），

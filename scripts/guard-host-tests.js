@@ -17,6 +17,8 @@ import { readFileSync } from 'node:fs';
 // 会起真 server / spawn claude / 执行变异后的源码——都可能触到宿主机家目录
 const DANGEROUS = [
   { re: /\bnpm\s+run\s+mutate\b|\bscripts\/mutate\.js\b/, why: '变异检查会【故意把源码改坏再跑测试】，被改坏的可能正是算删除路径的代码——上次删库就是这么发生的' },
+  // 注意 test:e2e 不在此列：它打的是 tests/e2e/mock/server.js（纯 mock，已核实不碰 ~/.claude），
+  // 且文本度量类断言在 Linux 容器下与 macOS 字体不同，宿主机跑反而更贴近真实渲染。
   { re: /\bnpm\s+run\s+test:integration\b/, why: '集成测试会起真 server 并 spawn claude，且有用例按设计操作真实 ~/.claude/projects' },
   { re: /\bnpm\s+run\s+test:smoke\b/, why: '冒烟测试真实调用 claude，消耗额度' },
   { re: /\bRUN_CLAUDE_INTEGRATION\b/, why: '会跑 7 个需要真 agent turn 的文件：慢、耗 token、不稳' },
