@@ -278,7 +278,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
   const roots = [];
   test.after(() => { for (const dir of roots) rmSync(dir, { recursive: true, force: true }); });
 
-  function mount() {
+  function mount(options = {}) {
     const root = mkdtempSync(join(tmpdir(), 'ccm-http-shell-'));
     roots.push(root);
     mkdirSync(join(root, 'public/js/app'), { recursive: true });
@@ -291,7 +291,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
 
     const routes = new Map();
     const app = { use: () => {}, get: (p, ...h) => routes.set(String(p), h) };
-    configureHttpShell({ app, projectRoot: root, isAccessEnabled: () => false });
+    configureHttpShell({ app, projectRoot: root, isAccessEnabled: () => false, ...options });
 
     const handlers = routes.get(String(/^\/js\/.+\.js$/));
     assert.ok(handlers, '未注册 /js/** 子模块路由');
@@ -310,8 +310,10 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
     return { root, run };
   }
 
+  // 生产档显式传 hotReloadJs:false —— 默认值读的是 process.env.ASSET_HOT_RELOAD，
+  // 让断言依赖跑测试那台机器的环境变量，就是在制造只有某些机器才红的用例。
   test('请求期零磁盘访问：启动后改盘，路由仍发启动时那份（且相对 import 已戳版本）', () => {
-    const { root, run } = mount();
+    const { root, run } = mount({ hotReloadJs: false });
     writeFileSync(join(root, 'public/js/app/sub.js'), "export const BUILD = 'mutated-after-boot';\n");
 
     const out = run('/js/app/sub.js');
@@ -336,5 +338,58 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
 
   test('/js/app.js 让给上面的专用路由', () => {
     assert.equal(mount().run('/js/app.js').nextCalled, true);
+  });
+
+  // 开发期必须能改完就刷新看到。启动预读是 2026-08-02 为"请求期零磁盘访问"加的，但它把
+  // public/js 下【除 app.js 外的 23 个子模块】从"逐请求读盘"变成了启动冻结（index.html 与
+  // app.js 本来就是启动读的，子模块不是）。而 `npm run dev` 的 node --watch 只监视被 import
+  // 的模块，public/js/** 不在服务端的 import 图里 → 改完刷新拿到的还是旧代码、且零提示。
+  test('hotReloadJs：开发期逐请求读盘，改完刷新即生效（且相对 import 照样戳版本）', () => {
+    const { root, run } = mount({ hotReloadJs: true });
+    writeFileSync(
+      join(root, 'public/js/app/sub.js'),
+      "import { esc } from '../logic.js';\nexport const BUILD = 'edited-after-boot';\n",
+    );
+
+    const out = run('/js/app/sub.js');
+    assert.equal(out.status, 200);
+    assert.match(out.body, /BUILD = 'edited-after-boot'/, '开发期还在发启动时那份');
+    assert.match(out.body, /from '\.\.\/logic\.js\?v=[0-9a-f]{8}'/, '热读路径漏了 ?v= 改写会造出双实例');
+  });
+
+  test('hotReloadJs：启动后新建的子模块也能取到（生产走表、这里走盘）', () => {
+    const { root, run } = mount({ hotReloadJs: true });
+    writeFileSync(join(root, 'public/js/app/born-later.js'), "export const N = 1;\n");
+
+    const out = run('/js/app/born-later.js');
+    assert.equal(out.status, 200);
+    assert.match(out.body, /export const N = 1/);
+    assert.equal(out.nextCalled, false);
+  });
+
+  test('hotReloadJs：读不到仍旧交给 static，不把异常抛进请求链', () => {
+    assert.equal(mount({ hotReloadJs: true }).run('/js/never-existed.js').nextCalled, true);
+  });
+
+  // 判据必须是专用开关，不能是 DEV_MODE：机主的生产 .env 里 DEV_MODE=1（.env.example 明确说
+  // dogfooding 常驻部署可以开），复用它等于在生产把启动预读悄悄撤回去。
+  test('默认档跟随 ASSET_HOT_RELOAD，且不受 DEV_MODE 影响', () => {
+    const saved = { hot: process.env.ASSET_HOT_RELOAD, dev: process.env.DEV_MODE };
+    const bodyOf = () => {
+      const { root, run } = mount(); // 不传 hotReloadJs → 走默认推导
+      writeFileSync(join(root, 'public/js/app/sub.js'), "export const BUILD = 'edited-after-boot';\n");
+      return run('/js/app/sub.js').body;
+    };
+    try {
+      process.env.DEV_MODE = '1';
+      delete process.env.ASSET_HOT_RELOAD;
+      assert.match(bodyOf(), /BUILD = 'startup'/, 'DEV_MODE 不该打开静态资源热读');
+
+      process.env.ASSET_HOT_RELOAD = '1';
+      assert.match(bodyOf(), /BUILD = 'edited-after-boot'/, 'ASSET_HOT_RELOAD=1 应打开热读');
+    } finally {
+      if (saved.hot === undefined) delete process.env.ASSET_HOT_RELOAD; else process.env.ASSET_HOT_RELOAD = saved.hot;
+      if (saved.dev === undefined) delete process.env.DEV_MODE; else process.env.DEV_MODE = saved.dev;
+    }
   });
 });

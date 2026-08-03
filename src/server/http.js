@@ -183,6 +183,14 @@ export function configureHttpShell({
   isAccessEnabled,
   // 默认 null：哈希 public/js 全树 + css/app.css。传数组则仅哈希这些相对 selfJsDir 的路径（单测用）。
   selfJsFiles = null,
+  // /js/** 子模块是否逐请求读盘（开发期改完刷新即生效）。默认关，专用开关 ASSET_HOT_RELOAD=1 打开。
+  //
+  // 为什么另起一个变量而不复用 DEV_MODE：① DEV_MODE 还管着 dev:restart（远程重启常驻服务），
+  // 静态资源热读不该顺带把那个能力面一起打开；② 本仓 .env.example 把 DEV_MODE 定位成
+  // 「dogfooding 常驻部署也可以开」，机主的生产 .env 里就是 1 —— 拿它当判据等于在生产悄悄
+  // 把启动预读撤回去，那正是这次优化想避免的。
+  // 也不去嗅 node --watch：实测 --watch 被 node 自己消费掉，子进程的 process.execArgv 是空数组。
+  hotReloadJs = process.env.ASSET_HOT_RELOAD === '1',
 }) {
   app.use(compression());
   app.use((_req, res, next) => {
@@ -225,19 +233,37 @@ export function configureHttpShell({
   // 子模块也改写相对 import 的 ?v=，避免 connection-sync 拉到未戳版本的 logic.js 双实例。
   // 与上面的 indexHtml/appJs 一样启动时读完，请求期只查表：这条路由排在鉴权之前（静态资源必须
   // 登录前可取），每请求 readFileSync 会让未鉴权的高频请求同步阻塞事件循环。
-  // 「改了 js 要重启」不是新增约束——assetVersion 本就是启动时哈希算的，不重启 ?v= 也不换。
-  const selfJsSources = new Map();
-  for (const path of listJsFilesRecursive(selfJsDir)) {
-    const rel = relative(selfJsDir, path).split(sep).join('/');
+  //
+  // ★ 这【是】新增约束，别照 2026-08-02 那版注释理解：index.html 与 /js/app.js 本来就是启动时
+  // 读的，但 public/js 下另外那 23 个子模块（logic.js / i18n.js / app/*.js）此前是逐请求读盘的，
+  // 改完刷新就生效。冻结之后，`npm run dev` 也救不了——node --watch 只监视被 import 的模块，
+  // public/js/** 不在服务端的 import 图里。所以开发档必须留个热读口子（hotReloadJs），
+  // 且生产启动时把冻结这件事说出来，别让人对着旧代码调半天。
+  const readSelfJsSource = (rel) => {
     try {
-      selfJsSources.set(rel, rewriteAppModuleImports(readFileSync(path, 'utf8'), assetVersion));
-    } catch { /* 单个文件读不出就当它不存在，落到下面的 static 404 */ }
+      return rewriteAppModuleImports(readFileSync(join(selfJsDir, rel), 'utf8'), assetVersion);
+    } catch {
+      return undefined; // 读不出就当它不存在，落到下面的 static 404
+    }
+  };
+  const selfJsSources = new Map();
+  if (!hotReloadJs) {
+    for (const path of listJsFilesRecursive(selfJsDir)) {
+      const rel = relative(selfJsDir, path).split(sep).join('/');
+      const source = readSelfJsSource(rel);
+      // 读失败不能静默：那个文件此后会一路落到 static 被原样发出（相对 import 没戳 ?v=，
+      // 正是本段要防的双实例形态），而没有任何东西会再提起它。
+      if (source === undefined) console.warn(`[assets] 预读 /js/${rel} 失败，该子模块将由 static 原样发出（相对 import 不带 ?v=）`);
+      else selfJsSources.set(rel, source);
+    }
+    console.log(`[assets] /js/** ${selfJsSources.size} 个子模块已在启动时读入并戳版本 ${assetVersion}；`
+      + '改前端源码需重启本进程才生效（开发期设 ASSET_HOT_RELOAD=1 可改为逐请求读盘）');
   }
   app.get(/^\/js\/.+\.js$/, (req, res, next) => {
     if (req.path === '/js/app.js') return next(); // 上面专用路由已处理
     const rel = req.path.replace(/^\/js\//, '');
     if (rel.includes('..')) return res.status(400).end();
-    const source = selfJsSources.get(rel);
+    const source = hotReloadJs ? readSelfJsSource(rel) : selfJsSources.get(rel);
     if (source === undefined) return next(); // 交给 static 404
     res.setHeader('Cache-Control', 'no-cache');
     return res.type('application/javascript').send(source);
