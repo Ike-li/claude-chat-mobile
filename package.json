@@ -60,7 +60,13 @@
     "test:smoke": "node tests/smoke/runner.js",
     "contract:check": "node scripts/contract-check.js",
     "watch:upstream": "node scripts/upstream-watch.js",
-    "mutate": "node scripts/mutate.js"
+    "mutate": "node scripts/mutate.js",
+    "docker:build": "docker compose -f docker-compose.test.yml build",
+    "test:docker": "docker compose -f docker-compose.test.yml run --rm test sh -lc \"npm run check && npm run test:unit && npm run test:integration\"",
+    "test:docker:unit": "docker compose -f docker-compose.test.yml run --rm test npm run test:unit",
+    "test:docker:e2e": "docker compose -f docker-compose.test.yml run --rm test npm run test:e2e",
+    "test:docker:sh": "docker compose -f docker-compose.test.yml run --rm test bash",
+    "mutate:docker": "docker compose -f docker-compose.test.yml run --rm test npm run mutate --"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.201",

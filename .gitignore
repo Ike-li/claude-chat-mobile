@@ -15,7 +15,14 @@ workdirs.json
 .ccm-uploads/
 
 # Claude Code 会话产物（plan、skill 历史等，非项目资产）
-/.claude/
+# ★ 写成 /.claude/* 而不是 /.claude/：git 对【被排除的目录】不再往里看，下面那条 ! 例外就永远不生效
+# （"It is not possible to re-include a file if a parent directory of that file is excluded"）。
+# 排除目录内容、而非目录本身，例外才有机会命中。
+/.claude/*
+# 例外：settings.json 是项目级安全配置（PreToolUse 钩子拦破坏性命令），必须入库——
+# 它若只存在于某一个 worktree，其余 worktree（含生产 server 所在的主树）就毫无防护。
+# 入库后 git 会把它带到每个 worktree 与每次 clone。settings.local.json 仍不入库（个人/凭据）。
+!/.claude/settings.json
 
 # 历史遗留守卫：常驻 worktree 现已改为仓库外的平级兄弟目录（../claude-chat-mobile-<分支名>，
 # 见 CLAUDE.md 分支纪律），本目录不再使用。留着以防日后有人在仓内建 worktree。

@@ -16,6 +16,30 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`，如 `claude-chat-mobile-promo`=宣传创作区、`claude-chat-mobile-gh-pages`=展示站、`claude-chat-mobile-third-party`=三方代理专用），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
 
+## 测试跑在哪：宿主机只跑白名单，其余进容器
+
+**宿主机上只允许跑这三条**：`npm run lint`、`npm run check`、`npm run test:unit`。
+它们不起 server、不 spawn claude、不碰 `~/.claude`。
+
+**其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（等价于容器里跑 check + 单测 + 集成）、
+`npm run test:docker:e2e`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`。
+
+> **为什么是白名单，不是"危险命令清单"**
+> 2026-08-02 那次把机主 `~/.claude/projects` 整棵树删光（70 个项目 / 291 memory / 2990 transcript），
+> 根因不是没看见警告，是**没把 `npm run mutate` 归类成破坏性操作**——它会故意把源码改坏再跑测试，
+> 而被改坏的恰恰可能是算删除路径的代码（当时 `getProjectDir` 被改成恒返回 `''`，
+> `join(真实根, '')` 塌成真实根本身，测试的 `rmSync` 就打上去了）。
+>
+> 黑名单要求"每遇到一个新命令都正确归类"，而那正是失败的那一步。白名单反过来：
+> **不在名单上的默认进容器**，判断错了顶多多跑一次容器，代价不对称地小。
+
+容器里 `HOME` 是一次性目录，`~/.claude/projects` 解析到容器内空壳——这道防线**不依赖任何代码正确性**，
+和仓库里那三层代码级防护（`mutate` 的沙箱 HOME、删除点护栏、`check-destructive-tests` 门禁）是不同的轴。
+
+**两档例外不进容器**（需要真凭据，得单独授权）：
+`RUN_CLAUDE_INTEGRATION=1`（7 个需真 agent turn 的文件）与 `npm run test:smoke`。
+其余全部零 token——集成层靠 `tests/fixtures/fake-claude.sh` 过 preflight。
+
 ## 常用命令
 
 > ⚠️ **生产部署 = 常驻服务**（macOS LaunchAgent / Linux systemd 占着 3000 端口，固定公网域名 + Cloudflare Access 2FA）：**勿手动 `npm start`**（会撞端口）；改 `.env`/代码后须**重启常驻 server 进程**才生效。**例外**：`workdirs.json` 支持热加载，改完即生效、免重启（server 监听文件变化，被移除目录上的已开会话继续运行、仅拒新开）。
