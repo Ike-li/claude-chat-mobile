@@ -1,0 +1,91 @@
+name: upstream-watch
+
+# 每天查一次本仓库钉的 Agent SDK / claude CLI 有没有落后上游，落后就开 issue（GitHub 发成邮件）。
+# 本项目与这两个上游强绑定，此前没有任何机制知道上游发了新版——SDK 曾无人察觉地落后 19 版近三周。
+on:
+  schedule:
+    # 01:17 UTC。故意避开整点：整点是全球高峰，GitHub 会延迟数十分钟甚至丢弃这次触发。
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+
+# ⚠️ schedule 与 workflow_dispatch 都只认**默认分支**上的 workflow 文件
+# （官方原文：This event will only trigger a workflow run if the workflow file exists on the
+# default branch）。本文件必须进 master 才会开始跑，留在 dev/feature 分支上一次都不会触发。
+
+permissions:
+  contents: read   # 只读本仓库代码（package.json 是对比基准）
+  issues: write    # 开 / 更新 / 关闭那一条 issue
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+env:
+  ISSUE_LABEL: upstream-version
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      # 不装依赖：upstream-watch.js 零依赖（Node 内置 fetch），单测也只用 node --test。
+      # 省掉 npm ci 的一分钟。
+      - name: 自检（逻辑坏了要在发通知之前就知道）
+        run: node --test tests/unit/upstream-watch.test.mjs
+
+      - name: 查上游版本
+        id: watch
+        run: node scripts/upstream-watch.js
+
+      # 通知节奏：靠「标题是否变化」判断。标题只含落后版数，不含日期——
+      # · 新建 issue      → 发邮件（这是新情况）
+      # · 落后版数前进了  → 改标题 + 评论一条 → 发邮件（上游又动了，值得知道）
+      # · 落后版数没变    → 只静默更新正文 → 不发邮件（别天天打扰）
+      - name: 开 / 更新 issue
+        if: steps.watch.outputs.behind == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: ${{ steps.watch.outputs.issue_title }}
+        run: |
+          set -euo pipefail
+          # label 幂等创建：不存在时 gh issue create --label 会直接失败。
+          gh label create "$ISSUE_LABEL" --description "上游 SDK/CLI 版本落后提醒" --color FBCA04 2>/dev/null || true
+
+          existing=$(gh issue list --label "$ISSUE_LABEL" --state open --limit 1 --json number,title)
+          number=$(echo "$existing" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8'))[0]?.number ?? ''")
+          old_title=$(echo "$existing" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8'))[0]?.title ?? ''")
+
+          if [ -z "$number" ]; then
+            gh issue create --title "$ISSUE_TITLE" --body-file upstream-issue.md --label "$ISSUE_LABEL"
+            echo "已新建 issue"
+          elif [ "$old_title" != "$ISSUE_TITLE" ]; then
+            gh issue edit "$number" --title "$ISSUE_TITLE" --body-file upstream-issue.md
+            gh issue comment "$number" --body "上游又前进了：**$old_title** → **$ISSUE_TITLE**。正文已更新为最新的变更摘录。"
+            echo "已更新 issue #$number 并评论（落后版数变化）"
+          else
+            gh issue edit "$number" --body-file upstream-issue.md
+            echo "issue #$number 落后版数未变，静默更新正文，不打扰"
+          fi
+
+      # 升级 package.json 后自动收尾：不需要谁记得回来手工关这条 issue。
+      - name: 追平则关闭 issue
+        if: steps.watch.outputs.behind == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          number=$(gh issue list --label "$ISSUE_LABEL" --state open --limit 1 --json number \
+            | node -p "JSON.parse(require('fs').readFileSync(0,'utf8'))[0]?.number ?? ''")
+          if [ -n "$number" ]; then
+            gh issue close "$number" --comment "已追平上游，本 issue 由 upstream-watch 自动关闭。"
+            echo "已关闭 issue #$number"
+          else
+            echo "无落后、也没有待关闭的 issue"
+          fi

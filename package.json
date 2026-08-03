@@ -59,6 +59,7 @@
     "test:playwright:p0": "playwright test tests/e2e/p0",
     "test:smoke": "node tests/smoke/runner.js",
     "contract:check": "node scripts/contract-check.js",
+    "watch:upstream": "node scripts/upstream-watch.js",
     "mutate": "node scripts/mutate.js"
   },
   "dependencies": {
