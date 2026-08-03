@@ -73,6 +73,10 @@ function makeEngine({
   // 默认「读不到 CLI 快照」——多数用例不关心 statusline 桥。要测 mergeCliObserved 的 fresh 路径就传进来。
   cliSnapshot = { state: 'missing', snapshot: null },
   statusBridgeOff = false,
+  // tick 内探针：instanceState 是每个 tick 必调、且在第一个 await 之【前】的注入点，故被它调用
+  // 的那一刻 = 「tick 已开始、尚未结束」。测 stop() 与在飞 tick 的竞态需要精确卡在这个时刻。
+  // 收 getEngine 而非 engine：探针在 createMirrorEngine 返回之前就可能被调到（构造期 tick）。
+  onTickProbe = null,
 } = {}) {
   const emitted = [];
   const agents = new Map();
@@ -84,7 +88,10 @@ function makeEngine({
   const engine = createMirrorEngine({
     io: { to: room => ({ emit: (event, envelope) => emitted.push({ room, event, ...envelope }) }) },
     agents,
-    instanceState: id => states.get(id) ?? 'idle',
+    instanceState: id => {
+      onTickProbe?.(() => engine);
+      return states.get(id) ?? 'idle';
+    },
     getViewingInstanceId: () => viewing,
     viewingCwdOf: () => viewingCwd,
     serviceStartedAt,
@@ -389,6 +396,29 @@ test('stop() 后定时器不再自驱；start() 能重新起来', async () => {
 
   h.engine.start();
   h.engine.stop(); // 立刻停掉，避免把定时器泄漏给后续用例
+});
+
+test('stop() 在 in-flight tick 期间也要停住：tick 收尾不得把定时器重排回来', async () => {
+  // 上一个用例手动调 catchUpTick()，走不到「定时器回调 → tick → 收尾重排」那条链，
+  // 因而漏掉了这个竞态：shutdown 恰好撞上一个在飞的 tick 时，stop() 会被它的收尾覆盖掉。
+  let ticks = 0;
+  let stopRequested = false;
+  const h = makeEngine({
+    onTickProbe: getEngine => {
+      ticks += 1;
+      if (!stopRequested) { stopRequested = true; getEngine().stop(); } // 卡在 tick 飞行中停
+    },
+  });
+  const a = h.view('inst-A', 'sess-stop-inflight');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-stop-inflight', settledTail(Date.now() - 5_000));
+
+  h.engine.start();
+  // 常态追平间隔 2.5s：先等它驱动出首个 tick（探针在其中 stop），再多等一个完整间隔——
+  // 若 stop() 被 tick 收尾重排回来，第二个 tick 会在这个窗口内发生。
+  await new Promise(r => setTimeout(r, 5_600));
+  h.engine.stop();
+
+  assert.equal(ticks, 1, 'stop() 之后不应再有自驱 tick');
 });
 
 test('requestRebaseline 后同会话重连不重复推历史（只重定基线，不当外部增量）', async () => {

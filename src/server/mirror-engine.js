@@ -387,8 +387,14 @@ export function createMirrorEngine({
   }
   // 动态追平调度：mirror 只读时 1s，常态 2.5s（墙钟解锁仍按 MIRROR_RELEASE_MS≈12.5s）
   let catchUpTimer = null;
+  // stop() 是否已请求停机。没有这个闸时 stop() 拦不住「已在飞的 tick」——它的 .finally 收尾
+  // （以及 tick 内 setMirror 换挡时）会无条件 rescheduleCatchUp()，把刚被清掉的定时器排回来，
+  // 于是 shutdown 撞上在飞 tick 时引擎继续读盘 + io.emit，正是 app.js 调 stop() 想避免的噪音。
+  let catchUpStopped = false;
   function rescheduleCatchUp() {
     if (catchUpTimer) clearTimeout(catchUpTimer);
+    catchUpTimer = null;
+    if (catchUpStopped) return;
     const ms = catchUpIntervalMs();
     catchUpTimer = setTimeout(() => {
       catchUpTick().catch(() => {}).finally(() => rescheduleCatchUp());
@@ -398,8 +404,8 @@ export function createMirrorEngine({
   rescheduleCatchUp();
   return {
     // 定时器启停：app.js 在装配末尾调 start()，shutdown 调 stop()。
-    start() { rescheduleCatchUp(); },
-    stop() { if (catchUpTimer) { clearTimeout(catchUpTimer); catchUpTimer = null; } },
+    start() { catchUpStopped = false; rescheduleCatchUp(); },
+    stop() { catchUpStopped = true; if (catchUpTimer) { clearTimeout(catchUpTimer); catchUpTimer = null; } },
     // 主循环（定时器 / hooks 插队 / 前端 mirror:syncNow 三处驱动，内部单飞）
     catchUpTick,
     // 只读查询：statusline 路由与重连快照用
