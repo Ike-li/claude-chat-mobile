@@ -433,6 +433,11 @@ export function createApprovalController(context, {
       dropActivePerm();
       questionQueue.length = 0;
       dropActiveQuestion();
+      // 指纹不符集合也归零：requestId 在 toolUseID 缺失时回落成 `perm_${++permSeq}`，而 permSeq 是
+      // AgentSession 的实例字段、构造期归零（src/agent/agent.js）——dispose+resume / 切会话都会造出
+      // 新实例、重新从 perm_1 发号。而本 Set 活在页面生命周期里，不清就会让一次真实的指纹不符
+      // 之后、后面同号的【正常】审批卡被误挂"内容可能被篡改"。
+      permIntegrityMismatched.clear();
     },
     // 通用 sheet 关闭路径（背板/手势关窗）复用：清掉防误触 arming 计时器，避免下次打开残留。
     cancelPermArming() {
