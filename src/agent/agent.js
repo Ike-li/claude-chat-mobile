@@ -9,6 +9,7 @@ import { sanitize } from '../shared/sanitizer.js';
 import { sdkChildEnv } from '../shared/child-env.js';
 import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP } from '../shared/tool-summary.js';
 import { AGENT_EVENT_TYPES } from '../shared/protocol.js';
+import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
@@ -188,6 +189,21 @@ function nextEpoch() {
 // 理由：手维护的映射会跑偏（曾把裸 claude-opus-4-8 误标「(1M context)」与真 [1m] 变体撞车成双 Opus）；
 // 模型「值」本就经 settingSources 与终端 /model 同步，显示层不应再叠加项目默认。终端友好名不再复刻。
 
+// 「slash 命令静默长跑」提示的两个参数（用法见 _armSlashQuietNotice）。
+// 20s：够长，秒回类命令（/context、/usage）在这之前早就有事件、撤了表；够短，用户还没开始怀疑卡死。
+const SLASH_QUIET_NOTICE_MS = 20_000;
+// 撤表事件 = 「用户能看出有动静」的那些。刻意不含 status_line / session_log / diag_log / init / models /
+// effort_mode / permission_mode / user_message：它们在整轮静默期间照样会来（status_line 尤其是每拍都有），
+// 拿它们撤表等于这条提示永远不会发出。
+// ★ 撤表检查必须同时挂在 emit() 与 emitTransient() 两条出向路径上：task_progress / api_retry 走的是
+// 后者（瞬时旁路，不进 buffer、不占 seq），只在 emit() 里查的话这两项列了也白列——注释说它们算「有动静」、
+// 代码却从不生效。api_retry 尤其要紧：上游限流重试期间本来就长时间没有别的事件，那是「在动」不是「卡死」。
+const SLASH_QUIET_BREAKERS = new Set([
+  'text_delta', 'thinking_delta', 'tool_use', 'tool_result',
+  'result', 'error', 'question', 'permission_request',
+  'task_progress', 'task_notification', 'api_retry', 'system',
+]);
+
 // message_delta 常只带 output_tokens；整对象覆盖会抹掉 input/cache → statusline uncached 0。
 // 白名单合并：只写入下一帧里出现的非负有限数字段，保留 prev 其余字段。
 const MESSAGE_USAGE_KEYS = Object.freeze([
@@ -203,7 +219,7 @@ export function mergeMessageUsage(prev, next) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd, resolvedEnv, worktreeSettingsPath }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd, resolvedEnv, worktreeSettingsPath }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -213,6 +229,8 @@ export class AgentSession {
     // 完全空闲（!isBusy）超过此阈值则回收子进程；0/负数 = 禁用。与 idleTimeoutMs（在途轮静默挂死）正交。
     this.instanceIdleReclaimMs = Number(instanceIdleReclaimMs) > 0 ? Number(instanceIdleReclaimMs) : 0;
     this.approvalTtlMs = Number(approvalTtlMs) > 0 ? Number(approvalTtlMs) : DEFAULT_APPROVAL_TTL_MS; // 审批悬置上限（部署可配置）
+    // slash 命令静默多久才提示「不是卡死」（见 _armSlashQuietNotice）。仅单测注入短值，生产不配。
+    this.slashQuietNoticeMs = Number(slashQuietNoticeMs) > 0 ? Number(slashQuietNoticeMs) : SLASH_QUIET_NOTICE_MS;
     this.onEvent = onEvent;           // (envelope) => void，由 server 广播
     this.onSessionId = onSessionId;   // (sessionId, firstMessage, model) => void，登记 sessions.json
     this.onExit = onExit;             // () => void，进程意外退出/挂死自杀时通知 server 置空
@@ -351,6 +369,7 @@ export class AgentSession {
     this._textTimer = null;
     this._thinkBuf = '';
     this._thinkTimer = null;
+    this._slashQuietTimer = null; // slash 命令静默长跑提示表（见 _armSlashQuietNotice）
   }
 
   // ---- streaming input：用户消息队列 → AsyncIterable<SDKUserMessage> ----
@@ -532,6 +551,7 @@ export class AgentSession {
     this._openTurnSlot();
     this.pendingTurns++;
     if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表
+    this._armSlashQuietNotice(text); // slash 命令可能整轮静默（fork 上下文），到点提示一次「不是卡死」
     // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
     interactionLog.agentSend(this.logKey(), text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
     // uuid 随消息透传 CLI（SDKUserMessage.uuid），CLI 以它索引内部队列
@@ -1481,6 +1501,7 @@ export class AgentSession {
     this.notifyInput?.();
     clearInterval(this.idleTimer); this.idleTimer = null;
     this._clearInterruptSettleWatchdog(); // 实例销毁：不留跨实例悬挂计时
+    this._clearSlashQuietNotice();        // 同上：实例没了就别再往它身上发提示
     if (this._textTimer) { clearTimeout(this._textTimer); this._textTimer = null; }
     if (this._thinkTimer) { clearTimeout(this._thinkTimer); this._thinkTimer = null; }
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
@@ -1535,6 +1556,9 @@ export class AgentSession {
 
   emit(type, payload) {
     assertKnownEventType(type);
+    // 本轮有动静了 → 撤掉「静默长跑」提示。emit 是热路径（流式 delta 每 20ms 一次），
+    // 先看表在不在（绝大多数时候不在，一次 null 检查了事）再查 Set。
+    if (this._slashQuietTimer && SLASH_QUIET_BREAKERS.has(type)) this._clearSlashQuietNotice();
     const envelope = {
       seq: ++this.seq,
       epoch: this.epoch,
@@ -1561,11 +1585,37 @@ export class AgentSession {
     this.emit('system', { message: text, kind: 'notice', level });
   }
 
+  // 「slash 命令静默长跑」提示：CLI 内置 skill 的 getContext() 在非交互（SDK）会话下恒返回 "fork"
+  // ——整条命令跑在一个独立 fork 上下文里，主链一条消息都不投。真机上 /code-review 就这样静默跑了
+  // 13 分钟，用户两次以为卡死点了停止（2026-08-03）。结果本身现在能上屏（见 map() 的
+  // local_command_output 分支），但「等待期间什么都没有」这件事得说出来，否则用户仍会在结果到达前掐掉。
+  //
+  // 只对 slash 命令起表：普通消息长思考同样可能久无输出，那是正常形态、不该提示。任何一条有内容的
+  // 事件到达即撤表（见 emit 里的 SLASH_QUIET_BREAKERS），所以秒回的 /context、/usage 不会看到它。
+  _armSlashQuietNotice(text) {
+    this._clearSlashQuietNotice();
+    if (!WEB_BARE_SLASH_RE.test(String(text ?? '').trim())) return;
+    this._slashQuietTimer = setTimeout(() => {
+      this._slashQuietTimer = null; // 先置空：下面 emitNotice 走 emit，会回头调 _clearSlashQuietNotice
+      this.emitNotice('该命令可能在独立上下文中运行，完成前不会有中间输出。可以继续等待，或点停止取消。', 'info');
+    }, this.slashQuietNoticeMs);
+    this._slashQuietTimer.unref?.(); // 20s 的提示表不该拖住 server 退出
+  }
+
+  _clearSlashQuietNotice() {
+    if (!this._slashQuietTimer) return;
+    clearTimeout(this._slashQuietTimer);
+    this._slashQuietTimer = null;
+  }
+
   // 瞬时事件旁路：广播给前端做即时 UI 更新，但【不进 replay buffer、不递增 seq】。
   // 用于后台任务进度这类高频心跳——进 buffer 会挤爆环形缓冲、占 seq 会制造空洞被 eventsSince 误判为 gap。
   // 语义：重连不重放（进度是瞬时的、旧进度无回放价值；前端按 transient 标志带外分流、不更新 lastSeq）。
   emitTransient(type, payload) {
     assertKnownEventType(type);
+    // 与 emit() 同一道撤表检查：task_progress / api_retry 只走这条路，漏了这行它们在
+    // SLASH_QUIET_BREAKERS 里就是死条目（详见该常量上方注释）。
+    if (this._slashQuietTimer && SLASH_QUIET_BREAKERS.has(type)) this._clearSlashQuietNotice();
     this.onEvent({
       seq: this.seq,            // 复用当前值、不递增：不占序列
       epoch: this.epoch,
@@ -1798,6 +1848,24 @@ export class AgentSession {
         } else if (msg.subtype === 'status' && msg.compact_error) {
           // 压缩失败。上面的 compacting 分支判据是 status==='compacting'，compact_result:'failed' 会漏掉。
           this.emitNotice(msg.compact_error, 'warning');
+        } else if (msg.subtype === 'local_command_output') {
+          // 本地 slash 命令（/code-review、/usage、/context、/insights…）的输出。sdk.d.ts 的
+          // SDKLocalCommandOutputMessage 注释原话：「Displayed as assistant-style text in the transcript」
+          // ——它就该进气泡流，和助手正文同一形态。
+          //
+          // 【为什么不走 emitNotice】那条会 truncate 到 TOOL_SUMMARY_CAP(600)，前端 system(p) 又渲染成
+          // 单行系统横条；而这里的正文可达数 KB markdown+JSON。真机上 /code-review 跑满 13 分钟、结果
+          // 完整落盘，web 端因为没有这一支（撞下面的 else 兜底、只留一行「未映射」日志）全程零显示，
+          // 被判成「slash 命令不能用」（2026-08-03）。截断等于没修，见单测里那条 5000 字用例。
+          //
+          // 独立合成 messageId，不并进主 agent 的 assistantResponseBuffer/currentMessageId：
+          // 前端按 messageId 分气泡，result(p) 的权威全文覆盖也按 messageId 匹配，两边天然不撞。
+          const out = parseLocalCommandOutput(msg.content);
+          if (out) {
+            this.emit('text_delta', { messageId: `local-cmd-${msg.uuid || randomUUID()}`, text: out.text });
+            // 正文已完整上屏，这条只负责把「失败」这个判定摆出来（横条配色/告警走 notice 通道）。
+            if (out.isError) this.emitNotice('本地命令执行失败（详见上方输出）', 'warning');
+          }
         } else if (typeof msg.subtype === 'string' && (msg.subtype.startsWith('hook_') || msg.subtype === 'thinking_tokens')) {
           // 已知生命周期/进度噪声——显式识别后静默吞，不落交互日志抽屉（否则连续刷屏）、
           // 不进 buffer、不启轮、不广播。这不违背下面「不静默蒸发」的初衷：那条是给【未知】子类型兜底的，

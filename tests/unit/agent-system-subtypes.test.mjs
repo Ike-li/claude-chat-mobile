@@ -158,6 +158,179 @@ test.describe('map() — system 子类型的自由文本打通', () => {
   });
 });
 
+// SDK 的 SDKLocalCommandOutputMessage（sdk.d.ts）契约原话：「Output from a local slash command
+// (e.g. /voice, /usage). Displayed as assistant-style text in the transcript.」
+//
+// 真机病灶（2026-08-03）：手机上发 /code-review，命令实际跑满 13 分钟、结果完整落盘（46 commits /
+// 110 文件），web 端却全程零显示——这条子类型撞了 map() 的 else 兜底，只留一行「未映射」交互日志，
+// 于是被判成「slash 命令不能用」。同一条路上还有 /usage、/context、/insights 等一大批本地命令。
+//
+// 为什么不走 system/notice：emitNotice 会 truncate 到 TOOL_SUMMARY_CAP(600)，前端 system(p) 又渲染成
+// 单行系统横条——而这里的正文可达数 KB 的 markdown + JSON。走 text_delta 才有气泡 + markdown 渲染 +
+// 复制按钮，正合 SDK 那句 "assistant-style text"。
+test.describe('map() — local_command_output（本地 slash 命令输出）', () => {
+  const bubbles = events => events.filter(e => e.type === 'text_delta');
+
+  test('stdout 包装被剥掉，正文进气泡流（主链，不落子 agent 卡）', () => {
+    const { s, events } = makeSession();
+    s.map({
+      type: 'system', subtype: 'local_command_output', uuid: 'u1',
+      content: '<local-command-stdout>命令输出正文</local-command-stdout>',
+    });
+
+    const [b] = bubbles(events);
+    assert.ok(b, '应发出 text_delta');
+    assert.equal(b.payload.text, '命令输出正文');
+    assert.ok(!b.payload.parentToolUseId, '属主链，不能被 isSubagentPayload 收进折叠卡');
+    s.dispose();
+  });
+
+  test('两条输出落两个独立气泡，不串成一条', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'local_command_output', uuid: 'u1', content: '<local-command-stdout>第一条</local-command-stdout>' });
+    s.map({ type: 'system', subtype: 'local_command_output', uuid: 'u2', content: '<local-command-stdout>第二条</local-command-stdout>' });
+
+    const [a, b] = bubbles(events);
+    assert.notEqual(a.payload.messageId, b.payload.messageId, '不同命令输出须是不同气泡');
+    s.dispose();
+  });
+
+  // 这条守着「不能改回 emitNotice」：600 是 TOOL_SUMMARY_CAP，code-review 的结果远超它。
+  test('长正文完整送达，不被 TOOL_SUMMARY_CAP 截断', () => {
+    const { s, events } = makeSession();
+    const long = 'x'.repeat(5000);
+    s.map({ type: 'system', subtype: 'local_command_output', uuid: 'u1', content: `<local-command-stdout>${long}</local-command-stdout>` });
+
+    assert.equal(bubbles(events)[0].payload.text.length, 5000, 'review 结果是数 KB 的，截断等于没修');
+    s.dispose();
+  });
+
+  test('stderr：正文照样上屏，另叠一条 warning 让失败可见', () => {
+    const { s, events } = makeSession();
+    s.map({
+      type: 'system', subtype: 'local_command_output', uuid: 'u1',
+      content: '<local-command-stderr>命令失败：EACCES</local-command-stderr>',
+    });
+
+    assert.ok(bubbles(events)[0].payload.text.includes('EACCES'), '失败正文也要能看到全文');
+    const [n] = notices(events);
+    assert.ok(n, 'stderr 应额外标一条 warning');
+    assert.equal(n.payload.level, 'warning');
+    s.dispose();
+  });
+
+  // sdk.d.ts 只保证 content 是 string，没保证一定带包装标签
+  test('无包装标签的裸正文原样上屏，且不当成失败', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'local_command_output', uuid: 'u1', content: '裸正文' });
+    assert.equal(bubbles(events)[0].payload.text, '裸正文');
+    // 无包装 ≠ 失败。判错了每条这样的输出都会多挂一条「执行失败」警告条（变异检查抓到的空过点）。
+    assert.equal(notices(events).length, 0);
+    s.dispose();
+  });
+
+  test('空正文 / 只有空包装 → 不产空气泡', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'local_command_output', uuid: 'u1', content: '<local-command-stdout>   </local-command-stdout>' });
+    s.map({ type: 'system', subtype: 'local_command_output', uuid: 'u2', content: '' });
+    s.map({ type: 'system', subtype: 'local_command_output', uuid: 'u3' });
+    assert.equal(bubbles(events).length, 0);
+    s.dispose();
+  });
+
+  test('不再落「未映射」交互日志', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'system', subtype: 'local_command_output', uuid: 'u1', content: '<local-command-stdout>x</local-command-stdout>' });
+    assert.equal(
+      events.filter(e => e.type === 'session_log' && String(e.payload?.text || '').includes('未映射')).length,
+      0,
+    );
+    s.dispose();
+  });
+});
+
+// 「静默长跑」提示：CLI 内置 skill 的 getContext() 在非交互会话恒返回 "fork"，整条命令跑在独立上下文里、
+// 主链一条消息都不投。真机上 /code-review 静默跑了 13 分钟，用户两次以为卡死点了停止（2026-08-03）。
+test.describe('slash 命令静默长跑提示', () => {
+  const quiet = events => notices(events).filter(n => n.payload.message.includes('独立上下文'));
+  const tick = ms => new Promise(r => setTimeout(r, ms));
+
+  test('slash 命令整轮零事件 → 到点提示一次', async () => {
+    const { s, events } = makeSession({ slashQuietNoticeMs: 20 });
+    await s.send('/code-review 看看这个分支');
+    await tick(60);
+
+    assert.equal(quiet(events).length, 1, '静默轮该提示');
+    assert.equal(quiet(events)[0].payload.level, 'info', '这不是错误，别用告警色吓人');
+    s.dispose();
+  });
+
+  test('普通消息不提示（长思考是正常形态）', async () => {
+    const { s, events } = makeSession({ slashQuietNoticeMs: 20 });
+    await s.send('帮我看看这段代码');
+    await tick(60);
+    assert.equal(quiet(events).length, 0);
+    s.dispose();
+  });
+
+  test('本轮有内容事件到达 → 撤表，不提示（秒回的 /context 等看不到它）', async () => {
+    const { s, events } = makeSession({ slashQuietNoticeMs: 40 });
+    await s.send('/context');
+    s.map({ type: 'system', subtype: 'local_command_output', uuid: 'u1', content: '<local-command-stdout>上下文用量…</local-command-stdout>' });
+    await tick(90);
+    assert.equal(quiet(events).length, 0);
+    s.dispose();
+  });
+
+  // task_progress / api_retry 走 emitTransient（瞬时旁路，不进 buffer、不占 seq），压根不经过 emit()。
+  // 撤表检查只挂在 emit() 上的话，它们在 SLASH_QUIET_BREAKERS 里就是死条目——注释说算「有动静」、
+  // 代码从不生效。api_retry 尤其要紧：上游限流重试期间本来就久无别的事件，那是在动不是卡死。
+  test('瞬时旁路事件（api_retry / task_progress）同样撤表', async () => {
+    const { s, events } = makeSession({ slashQuietNoticeMs: 40 });
+    await s.send('/code-review');
+    s.emitTransient('api_retry', { attempt: 1 });
+    await tick(90);
+    assert.equal(quiet(events).length, 0, '上游在重试 ≠ 卡死，不该提示');
+    s.dispose();
+  });
+
+  test('瞬时旁路的 task_progress 也撤表（后台任务在动）', async () => {
+    const { s, events } = makeSession({ slashQuietNoticeMs: 40 });
+    await s.send('/code-review');
+    s.emitTransient('task_progress', { taskId: 't1' });
+    await tick(90);
+    assert.equal(quiet(events).length, 0);
+    s.dispose();
+  });
+
+  // status_line 在整轮静默期间照样每拍都来；拿它撤表这条提示就永远发不出去
+  test('status_line 这类纯状态事件不算「有动静」，不撤表', async () => {
+    const { s, events } = makeSession({ slashQuietNoticeMs: 30 });
+    await s.send('/code-review');
+    s.emit('status_line', { turn: { startedAt: Date.now() } });
+    await tick(80);
+    assert.equal(quiet(events).length, 1);
+    s.dispose();
+  });
+
+  test('dispose 后不再发提示（实例没了别往它身上发）', async () => {
+    const { s, events } = makeSession({ slashQuietNoticeMs: 20 });
+    await s.send('/code-review');
+    s.dispose();
+    await tick(60);
+    assert.equal(quiet(events).length, 0);
+  });
+
+  // "/Users/you/code 这个目录" 首段后面是 /，不是空白 —— 不该被当命令
+  test('以斜杠开头的普通文本（路径）不误判成命令', async () => {
+    const { s, events } = makeSession({ slashQuietNoticeMs: 20 });
+    await s.send('/Users/you/code 这个目录里有什么');
+    await tick(60);
+    assert.equal(quiet(events).length, 0);
+    s.dispose();
+  });
+});
+
 test.describe('map() — rate_limit_event 顶层类型', () => {
   test('status=rejected → notice，额度类型用 CLI 同源标签', () => {
     const { s, events } = makeSession();

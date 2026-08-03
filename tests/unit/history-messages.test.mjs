@@ -629,3 +629,74 @@ test('getSessionHistory: sidechain 用户文本不做附件解析（只认主链
   assert.equal(msgs[0].content, raw); // 原样保留，不剥离
   assert.equal(msgs[0].attachments, undefined);
 });
+
+// ---- 本地 slash 命令输出的回显（web 形态：type:'system' + subtype:'local_command'）----
+// 真机病灶（2026-08-03）：/code-review 的结果落在这个形态上，而 getSessionHistory 原先只收
+// user/assistant，system 条目整条跳过 → 刷新后历史里那条结果凭空消失，与 live 侧一起造成
+// 「slash 命令不能用」的观感。live 侧走 agent.js 的 local_command_output 分支，两边同一口径。
+test('getSessionHistory: system/local_command 的 stdout 作为助手消息回显', async () => {
+  const cwd = '/test/localcmd-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'localcmd', [
+    { type: 'user', message: { role: 'user', content: '/code-review 看看这个分支' }, timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'system', subtype: 'local_command', isMeta: false, uuid: 's-1',
+      content: '<local-command-stdout>发现 3 处问题：\n1. ...</local-command-stdout>', timestamp: '2024-01-01T00:10:00Z' },
+  ]);
+  const msgs = await getSessionHistory('localcmd', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 2);
+  assert.equal(msgs[1].role, 'assistant');
+  assert.equal(msgs[1].content, '发现 3 处问题：\n1. ...', '包装标签要剥掉，与 live 气泡同形');
+});
+
+// history.js:991 记录的真实反例：同一个 subtype 下还落命令名回显，那是命令【开始】的记录、不是输出。
+// 只看 subtype 就会把它当结果渲染出来（并在 settle 判定那侧造成过双写分叉）。
+test('getSessionHistory: system/local_command 的命令名回显不当输出回显', async () => {
+  const cwd = '/test/localcmd-echo-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'localcmdecho', [
+    { type: 'system', subtype: 'local_command', isMeta: false, uuid: 's-1',
+      content: '<command-name>/status</command-name>', timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'system', subtype: 'local_command', isMeta: false, uuid: 's-2',
+      content: '<local-command-stdout>真正的输出</local-command-stdout>', timestamp: '2024-01-01T00:00:01Z' },
+  ]);
+  const msgs = await getSessionHistory('localcmdecho', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 1, `只有输出该回显：${JSON.stringify(msgs)}`);
+  assert.equal(msgs[0].content, '真正的输出');
+});
+
+test('getSessionHistory: 其它 system 子类型仍整条跳过（不放宽成收所有 system）', async () => {
+  const cwd = '/test/localcmd-other-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'localcmdother', [
+    { type: 'system', subtype: 'stop_hook_summary', isMeta: false, uuid: 's-1', content: '钩子摘要', timestamp: '2024-01-01T00:00:00Z' },
+    { type: 'system', subtype: 'local_command', isMeta: true, uuid: 's-2',
+      content: '<local-command-stdout>meta 条目仍跳过</local-command-stdout>', timestamp: '2024-01-01T00:00:01Z' },
+  ]);
+  const msgs = await getSessionHistory('localcmdother', cwd, 50, { baseDir: BASE });
+  assert.deepEqual(msgs, []);
+});
+
+// 判据是「type 是 system 且 subtype 是 local_command」两条都要，不是任一。别的 system 子类型底下
+// 也可能带同款包装（钩子输出等），放宽成「或」就会把它们一并当成命令输出渲染出来。
+test('getSessionHistory: 别的 system 子类型即便带同款包装也不收', async () => {
+  const cwd = '/test/localcmd-wrapped-other-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'localcmdwrapped', [
+    { type: 'system', subtype: 'hook_response', isMeta: false, uuid: 's-1',
+      content: '<local-command-stdout>钩子的输出，不是用户命令的结果</local-command-stdout>', timestamp: '2024-01-01T00:00:00Z' },
+  ]);
+  const msgs = await getSessionHistory('localcmdwrapped', cwd, 50, { baseDir: BASE });
+  assert.deepEqual(msgs, []);
+});
+
+// 严格档（requireWrapper）的意义：这个 subtype 是个大杂烩，只认「整段就是一个完整包装」的确定形态。
+// 放宽成宽松档，同 subtype 下任何裸文本都会被当成命令输出上屏。
+test('getSessionHistory: local_command 下的裸文本（无包装）不当输出回显', async () => {
+  const cwd = '/test/localcmd-bare-hist';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'localcmdbare', [
+    { type: 'system', subtype: 'local_command', isMeta: false, uuid: 's-1', content: '某条没有包装的杂项文本', timestamp: '2024-01-01T00:00:00Z' },
+  ]);
+  const msgs = await getSessionHistory('localcmdbare', cwd, 50, { baseDir: BASE });
+  assert.deepEqual(msgs, []);
+});

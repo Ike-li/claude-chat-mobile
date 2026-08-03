@@ -12,6 +12,7 @@ export function makeSession(opts = {}) {
     idleTimeoutMs: opts.idleTimeoutMs ?? 60_000,
     instanceIdleReclaimMs: opts.instanceIdleReclaimMs,
     approvalTtlMs: opts.approvalTtlMs,
+    slashQuietNoticeMs: opts.slashQuietNoticeMs,
     resumeId: opts.resumeId || null,
     historicalCostUsd: opts.historicalCostUsd || 0,
     onEvent(event) { events.push(event); },

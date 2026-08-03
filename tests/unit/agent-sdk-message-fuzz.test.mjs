@@ -47,7 +47,7 @@ const SUBTYPES = [
   'init', 'status', 'compact_boundary', 'task_notification', 'task_progress',
   'background_tasks_changed', 'task_started', 'task_updated', 'api_retry', 'informational',
   'mirror_error', 'notification', 'model_refusal_fallback', 'model_refusal_no_fallback',
-  'thinking_tokens', null, undefined, '', 0, {}, [],
+  'thinking_tokens', 'local_command_output', null, undefined, '', 0, {}, [],
 ];
 const NASTY = [
   null, undefined, '', 0, -1, NaN, Infinity, true, false, [], {},

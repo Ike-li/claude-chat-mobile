@@ -10,6 +10,8 @@ import { MAX_SESSION_LIMIT } from './workdirs.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
 import { toolSummary } from '../shared/tool-summary.js';
+// 本地 slash 命令输出的解析口径同样与 live 侧（agent.js）共用，防两边形态漂移。
+import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
@@ -100,6 +102,15 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   const seenUuids = new Set();
   // 主链最近 Agent/Task toolUseId：sidechain 行常无 parent_tool_use_id 落盘，靠此挂到折叠卡
   let lastMainAgentToolId = null;
+  // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
+  // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
+  // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
+  const pushCapped = (item) => {
+    messages.push(item);
+    if (messages.length > HISTORY_MAX_MESSAGES * 2) {
+      messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
+    }
+  };
   try {
     // 逐行读、不一次性 buffer 整个文件——会话可增长到数十 MB，流式读才稳、不阻塞事件循环
     // （取代原「尾部 1MB」截断方案）。累积数组下方封顶到 HISTORY_MAX_MESSAGES，内存不随会话无限增长。
@@ -146,13 +157,34 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
               && item.toolUseId) {
             lastMainAgentToolId = item.toolUseId;
           }
-          messages.push(item);
-          // 防爆：流式累积只保留尾部 HISTORY_MAX_MESSAGES 条——返回上限同时是内存上限。否则超大会话会把
-          // 【全量】user/assistant 文本+工具常驻进 always-on 进程（再被 _histCache LRU=10 放大），落空本服务
-          // 「always-on 要稳」的目标。超 2× 才批量 splice → 均摊 O(1)、不每条 shift。
-          if (messages.length > HISTORY_MAX_MESSAGES * 2) {
-            messages.splice(0, messages.length - HISTORY_MAX_MESSAGES);
-          }
+          pushCapped(item);
+        }
+        continue;
+      }
+
+      // 本地 slash 命令的输出（web 形态）：{ type:'system', subtype:'local_command',
+      // content:'<local-command-stdout>…</local-command-stdout>' }——content 是顶层字段、不在 message 里，
+      // 故被上面那道 user/assistant 闸整条跳过。/code-review 的结果正落在这个形态上：真机跑满 13 分钟、
+      // 结果完整落盘，刷新后历史里却什么都没有（2026-08-03）。live 侧同一段正文走 agent.js 的
+      // local_command_output 分支，两边共用 parseLocalCommandOutput，形态一致（否则刷新前后两个样）。
+      // requireWrapper：这个 subtype 下还落命令名回显等非输出条目，只认整段是完整包装的那种。
+      //
+      // 【为什么 CLI 形态不一并放开】终端里同样的输出以 type:'user' + <local-command-stdout> 落盘，被
+      // isCliSystemLine 当噪音丢弃（实测切 model/effort 的会话里这类回执可占回显 ~30%），那条判断保持不动：
+      // CLI 形态的输出用户在终端里当场看过、web 只是只读回看；web 形态的输出则是用户从没见过的那一份。
+      if (entry.type === 'system' && entry.subtype === 'local_command') {
+        const out = parseLocalCommandOutput(entry.content, { requireWrapper: true });
+        if (!out) continue;
+        if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
+        // 【out.isError 有意不用】live 侧 stderr 会另发一条 notice 标失败，这里不复刻：notice 是瞬时通道，
+        // 整个通道的内容（informational/mirror_error/notification/compact_error…）刷新后一律不回显，
+        // 不为本地命令一家单开历史标记。正文本身两侧一字不差，失败信息在正文里。
+        // 也不能借 isApiErrorMessage：那个标记在前端渲染成【居中小红条】（app.js renderOne），
+        // 是给一句 "API Error: 503" 用的，几 KB 的命令输出塞进去会整段变成挤在中间的小红字。
+        //
+        // 剥掉包装再交给 expandHistoryEntry：带包装的原文会被 isCliSystemLine 判成噪音丢掉。
+        for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: entry.uuid })) {
+          pushCapped(item);
         }
       }
     }
@@ -976,10 +1008,8 @@ export function mirrorStaleFlag({ readonly, tailPending, lastChainTs, now, regis
 //
 // 子链（isSidechain）：主链 settled 后子 agent 仍可能狂写 sidechain——旧逻辑跳过 isSidechain 会
 // 在 ~12.5s 后误解锁、双写分叉。合并判据：主链 pending 或子链 pending → 整体 pending。
-// web 侧 slash 的裸文本形态：SDK 把用户输入原样落盘，没有 CLI 的 <command-name> 包装（真机 5ed3eb8c
-// 落的就是 "/code-review max 整个分支代码库，最多同时 3 个子代理"）。要求命令名后紧跟空白或行尾，
-// 才不会把 "/Users/you/code" 这类以斜杠开头的普通文本误当命令（首段后面是 /，不是空白）。
-const WEB_BARE_SLASH_RE = /^\/[a-zA-Z][\w:-]*(\s|$)/;
+// web 侧 slash 的裸文本形态判据 WEB_BARE_SLASH_RE 已上移到 src/shared/local-command.js
+// （agent.js 的「长跑静默提示」要用同一条判据，两处各写一份必然漂移）。
 
 // 该 user 条目之后（更高 index）是否已有本地命令的 stdout——/config /model 等本地命令
 // 落盘形态：command-name → local-command-stdout，无 assistant。若只认 command-name 会永远 pending 锁死。
