@@ -50,7 +50,10 @@ function gitExec(cwd, gitArgs, { timeoutMs, maxBuffer, execFile } = {}) {
 
 // 解析 `git status --porcelain=v1 -z`。
 // 普通条目：XY + space + path + \0
-// rename/copy：XY + space + oldPath + \0 + newPath + \0
+// rename/copy：XY + space + 【新】path + \0 + 【原】path + \0
+//   ——即 `XY PATH\0ORIG_PATH\0`，与非 -z 的 `XY ORIG -> PATH` 顺序【相反】（git 文档明写
+//   "the field order is reversed"）。别照非 -z 的直觉写，也别为「一致性」去对齐 parseNameStatusZ
+//   （那个读的是 diff --name-status，old 在前）——两处顺序天生相反，见该函数注释。
 export function parsePorcelainZ(str) {
   if (str == null || str === '') return [];
   const raw = String(str);
