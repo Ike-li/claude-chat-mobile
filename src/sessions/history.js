@@ -196,7 +196,7 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
     return []; // 读取失败
   }
 
-  // B6：缓存消息（FIFO 淘汰：Map 按插入序，命中时不移到末尾——超上限淘汰最旧插入的）；已在流式阶段封顶到
+  // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
   // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
   // 既防一次性撑爆前端，也防全量常驻 server 内存。mtime 失效保证一致性——被淘汰条目下次 mtime 未变即重入。
   if (_histCache.size >= HIST_CACHE_MAX) {
@@ -770,6 +770,7 @@ async function readHeadMeta(file, size) {
             if (!line.trim()) continue;
             let entry;
             try { entry = JSON.parse(line); } catch { continue; }
+            if (!entry) continue; // 字面 "null" 行合法 parse 为 null，不判空会抛 TypeError 连累整个尾窗（头窗同款守卫）
             if (entry.type === 'ai-title' && typeof entry.aiTitle === 'string' && entry.aiTitle.trim()) {
               aiTitle = entry.aiTitle.trim(); // 尾窗内最后一次 = 最新
             }

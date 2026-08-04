@@ -246,3 +246,21 @@ test('listSessionsPage: 不传 hiddenIds（或空 Set）→ 不过滤，行为�
 
 
 // ── getSessionHistory ──────────────────────────────────────────────────────
+
+// 2026-08-03 review：readHeadMeta 的尾窗循环缺 `if (!entry) continue`（头窗有）——JSON.parse("null")
+// 合法返回 null、不进 catch，下一行 entry.type 抛 TypeError，被外层「尾窗补读失败」catch 吞掉，
+// 该文件的 ai-title 静默降级回退 firstUser。transcript 里混入字面 null 行即触发。
+test('listSessions: 尾窗内混入字面 null 行不吞掉其后的 ai-title', async () => {
+  const cwd = '/test/aititle-null-line';
+  const dir = join(BASE, getProjectDir(cwd));
+  const filler = 'n'.repeat(120 * 1024);
+  writeJSONL(dir, 'aititle-null', [
+    { type: 'user', message: { role: 'user', content: '首条问题' } },
+    { type: 'assistant', message: { role: 'assistant', content: filler } }, // 撑出 64KB 头窗
+    null,                                                                   // 字面 "null" 行（JSON 合法、parse 为 null）
+    { type: 'ai-title', aiTitle: 'null行之后的AI标题' },
+    { type: 'assistant', message: { role: 'assistant', content: '尾' } },
+  ]);
+  const result = await listSessions(cwd, { baseDir: BASE });
+  assert.equal(result[0].title, 'null行之后的AI标题');
+});
