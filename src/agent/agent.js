@@ -1716,7 +1716,8 @@ export class AgentSession {
           // （对象/数组/数字），它会原样进入每一条 agent:event 信封——前端按它分流就静默串台，而下游
           // 那些 isSafeSessionId 守卫只挡路径穿越、不管这里。宁可维持旧值并留痕，也不接受一个不可用的键。
           // 2026-08-02 由属性测试实测复现（tests/unit/agent-sdk-message-fuzz.test.mjs）。
-          if (typeof msg.session_id === 'string' && msg.session_id) {
+          const sidValid = typeof msg.session_id === 'string' && !!msg.session_id;
+          if (sidValid) {
             this.sessionId = msg.session_id;
           } else {
             console.warn(`[sdk-contract] init 上报的 session_id 不是非空字符串（${typeof msg.session_id}），维持原 sessionId`);
@@ -1741,7 +1742,10 @@ export class AgentSession {
             this.permissionMode = sdkMode;
           }
           if (msg.model) this.reportedModel = msg.model; // A5：交互日志显真实运行模型，不再记 'default'
-          this.onSessionId?.(msg.session_id, this.firstMessage, msg.model);
+          // 非法 session_id 的防御须贯彻到回调（F4，2026-08-03）：上面维持了 this.sessionId，
+          // 这里若仍透传原始值，app.js 会拿它 writeSessionEntrypoint（写出 undefined.jsonl）+
+          // upsertSession（sessions.json 垃圾条目，重启 load 才清洗）。不调即不产生下游副作用。
+          if (sidValid) this.onSessionId?.(msg.session_id, this.firstMessage, msg.model);
           this.emit('init', {
             model: msg.model,
             cwd: msg.cwd,

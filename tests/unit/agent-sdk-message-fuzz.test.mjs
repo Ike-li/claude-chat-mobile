@@ -159,3 +159,34 @@ test('SDK 消息转译：重复投递同一条畸形消息，第二次同样不�
   }
   assert.deepEqual(violations, [], `\n${violations.join('\n')}\n`);
 });
+
+// F4（2026-08-03 review）：init 的 session_id 非法时，1719 行的守卫只护住 this.sessionId，
+// onSessionId 却仍透传原始非法值——下游 app.js 会拿它 writeSessionEntrypoint（写出
+// `undefined.jsonl` 垃圾文件）+ upsertSession（sessions.json 垃圾条目）。防御必须贯彻到回调。
+test('SDK 消息转译：init 的 session_id 非法时不得调用 onSessionId', () => {
+  for (const bad of [undefined, null, '', 123, {}, [], ['a']]) {
+    const calls = [];
+    const { s, dispose } = makeSession({ onSessionId: (...a) => calls.push(a) });
+    try {
+      s.map({ type: 'system', subtype: 'init', session_id: bad, model: 'm1' });
+      assert.equal(calls.length, 0,
+        `session_id=${JSON.stringify(bad)} 时 onSessionId 不应被调用（收到 ${JSON.stringify(calls)}）`);
+    } finally {
+      try { dispose(); } catch { /* noop */ }
+    }
+  }
+});
+
+// 防修过头：合法 session_id 照常触发（含参数原样透传）。
+test('SDK 消息转译：init 的 session_id 合法时 onSessionId 照常触发', () => {
+  const calls = [];
+  const { s, dispose } = makeSession({ onSessionId: (...a) => calls.push(a) });
+  try {
+    s.map({ type: 'system', subtype: 'init', session_id: 'sid-legit-1', model: 'm1' });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], 'sid-legit-1');
+    assert.equal(calls[0][2], 'm1');
+  } finally {
+    try { dispose(); } catch { /* noop */ }
+  }
+});
