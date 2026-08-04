@@ -65,6 +65,43 @@ test('拦: 测试域内、但不在白名单上的形态', () => {
   blocked('npm run test:integration -- --only foo');
 });
 
+// ★ 第三个洞（2026-08-04 code review 实测）：分段正则 /\|\||&&|[|;\n]/ 里没有【单个 &】，
+// 于是 `npm run test:unit & npm run mutate` 整条只有一段；而白名单又只取段内【第一个】
+// npm run 脚本名，命中 test:unit 就 return null——8/2 删库那条命令原样放行。
+test('拦: 单个 & 背景符不能让后半段蒙混过关', () => {
+  blocked('npm run test:unit & npm run mutate -- src/sessions/history.js');
+  blocked('npm run lint & npm run mutate -- src/x.js');
+  blocked('npm run check & npm test');
+});
+
+// ★ 第四个洞：白名单只认脚本名，完全不看 `--` 之后的参数。npm 会把它们原样追加到
+// 命令行，于是白名单脚本可以承载任意非白名单测试文件——而 preload-env.mjs 自己的
+// 头注释写明「transcript 目录（~/.claude/projects）不在此隔离」。
+test('拦: 借白名单脚本承载非白名单测试路径', () => {
+  blocked('npm run test:unit -- tests/integration/session-delete.test.mjs');
+  blocked('npm run test:e2e -- tests/integration/foo.test.mjs');
+});
+
+// ★ 第五个洞：容器豁免判的是「段内任何位置出现 docker」，于是参数里提一句就整段放行。
+test('拦: docker 只在命令头/脚本名里才算进了容器', () => {
+  blocked('npm run mutate -- scripts/docker-check.js');
+  blocked('npm test -- --test-name-pattern docker');
+});
+
+// ★ 第六个洞：isIsolatedUnitRun 只做 startsWith('tests/unit/')，不消解 ..
+test('拦: tests/unit/../integration 路径穿越', () => {
+  blocked('node --import ./tests/setup/preload-env.mjs --test tests/unit/../integration/session-delete.test.mjs');
+});
+
+// ★ 反向代价：域判据在【整段文本】上匹配，不区分命令头与参数，于是只读命令仅仅因为
+// 提到某个脚本路径或变量名就被拦。钩子挂在每一次 Bash 上，误拦一次就是一轮人工确认。
+test('放行: 只读命令仅仅提到测试脚本名 / 变量名', () => {
+  allowed('grep -rn RUN_CLAUDE_INTEGRATION src/');
+  allowed('git diff -- scripts/mutate.js');
+  allowed('cat scripts/mutate.js');
+  allowed('wc -l tests/integration/session-delete.test.mjs');
+});
+
 // ── 不该拦（误拦多了就会被嫌烦而关掉，那等于没有）──────────────────────────
 test('放行: CLAUDE.md 白名单里的四条', () => {
   allowed('npm run lint');

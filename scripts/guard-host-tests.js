@@ -61,33 +61,93 @@ const REASONS = [
 const FALLBACK_REASON = '这一段落在「会跑测试 / 会执行被改坏的源码」的范围内，但不在宿主机白名单上'
   + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit 单文件跑法）';
 
+// 会跑测试的解释器。域判定【只认命令头】，不认参数里出现的同名字样——否则
+// `grep -rn RUN_CLAUDE_INTEGRATION src/`、`git diff -- scripts/mutate.js` 这类纯只读命令
+// 都会落进闸里要人确认（2026-08-04 实测，本钩子挂在每一次 Bash 上，误拦即一轮人工往返）。
+const TEST_RUNNERS = new Set(['npm', 'npx', 'node', 'pnpm', 'yarn', 'bun']);
+
+// 取这一段真正被调用的可执行文件名：跳过 `VAR=value` 前缀与重定向，再取 basename。
+// 这一步是「域判据锚到命令头」的实现，也是 docker 豁免不再被参数字样触发的前提。
+function commandHead(segment) {
+  for (const tok of segment.trim().split(/\s+/).filter(Boolean)) {
+    if (/^[A-Za-z_]\w*=/.test(tok)) continue;          // env 前缀：CI=true npm test
+    if (/^\d*[<>]/.test(tok)) continue;                // 重定向：2> / >out
+    return tok.replace(/^.*\//, '');                   // ./node_modules/.bin/x → x
+  }
+  return '';
+}
+
+// 相对路径规范化，消解 . 与 ..——否则 `tests/unit/../integration/x.test.mjs` 满足
+// startsWith('tests/unit/')，穿越回集成测试而判定仍以为在单测目录里。
+function normalizeRel(p) {
+  const out = [];
+  for (const seg of p.replace(/^\.\//, '').split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { out.pop(); continue; }
+    out.push(seg);
+  }
+  return out.join('/');
+}
+
+// 段内点名的测试文件路径（tests/setup/ 是预加载器本身，不算靶子）。
+function testTargets(text) {
+  return (text.match(/\btests\/[\w./-]+/g) || [])
+    .map(normalizeRel)
+    .filter(t => !t.startsWith('tests/setup/'));
+}
+
+// 白名单脚本各自允许承载的测试目录。npm 会把 `-- ` 之后的参数原样追加到脚本命令行上，
+// 所以只看脚本名等于不看它到底跑了什么：`npm run test:unit -- tests/integration/session-delete.test.mjs`
+// 会在真实 ~/.claude/projects 上跑那个删除用例（preload-env 明确不隔离 transcript 目录）。
+const SCRIPT_TEST_SCOPE = {
+  'test:unit': 'tests/unit/',
+  'test:e2e': 'tests/e2e/', 'test:visual': 'tests/e2e/',
+  'test:playwright': 'tests/e2e/', 'test:playwright:p0': 'tests/e2e/',
+};
+
+function whitelistedRun(segment, script) {
+  if (!script || !HOST_ALLOWED_SCRIPTS.has(script)) return false;
+  const extra = segment.split(/\s--\s/).slice(1).join(' ');
+  if (!extra) return true;                             // 无附加参数 → 就是白名单那条命令本身
+  const scope = SCRIPT_TEST_SCOPE[script];
+  const targets = testTargets(extra);
+  if (!targets.length) return true;                    // 附加参数没点名测试文件（--grep 之类）
+  return Boolean(scope) && targets.every(t => t.startsWith(scope));
+}
+
 // 这一段是不是在容器里跑。容器里 HOME 是一次性目录，够不到宿主机家目录。
-const IN_CONTAINER = /\bdocker\b/;
+// 只认「命令头就是 docker」或「npm 脚本名里带 docker」两种——参数里提一句 docker 不算
+// （旧实现按段内任意位置匹配，`npm run mutate -- scripts/docker-check.js` 整段被豁免）。
+function inContainer(head, script) {
+  return head === 'docker' || (script ? /docker/.test(script) : false);
+}
 
 // 带 preload-env、且只碰 tests/unit 的单文件跑法：隔离与 npm run test:unit 完全同款，
 // 必须放行——否则 TDD 的「写一个失败测试 → 最小实现」每一步都会被确认框打断。
 function isIsolatedUnitRun(segment) {
   if (!/--import\s+\S*tests\/setup\/preload-env\.mjs/.test(segment)) return false;
-  const targets = segment.match(/\btests\/[\w./-]+/g) || [];
-  const specs = targets.filter(t => !t.includes('tests/setup/'));
+  const specs = testTargets(segment);
   return specs.length > 0 && specs.every(t => t.startsWith('tests/unit/'));
 }
 
 function segmentReason(segment) {
   if (!segment.trim()) return null;
-  if (IN_CONTAINER.test(segment)) return null;                       // 这一段已进容器
-  if (!TEST_DOMAIN.some(re => re.test(segment))) return null;        // 不归本钩子管
+  const head = commandHead(segment);
+  if (!TEST_RUNNERS.has(head)) return null;                          // 命令头不是解释器 → 不归本钩子管
   const script = segment.match(/\bnpm\s+run\s+([\w:.-]+)/)?.[1];
-  if (script && HOST_ALLOWED_SCRIPTS.has(script)) return null;
+  if (inContainer(head, script)) return null;                        // 这一段已进容器
+  if (!TEST_DOMAIN.some(re => re.test(segment))) return null;        // 域外（npm run inventory:update 等）
+  if (whitelistedRun(segment, script)) return null;
   if (!script && isIsolatedUnitRun(segment)) return null;
   return REASONS.find(({ re }) => re.test(segment))?.why ?? FALLBACK_REASON;
 }
 
 function decide(command) {
   if (typeof command !== 'string' || !command.trim()) return null;
-  // 切段：管道与逻辑连接符。`2>&1` 只有单个 &，不会被 && 切开。
-  // 切碎一点是安全方向——多切出来的片段要么不在域内（放行），要么进白名单判定。
-  for (const segment of command.split(/\|\||&&|[|;\n]/)) {
+  // 切段：管道、逻辑连接符，以及【单个 &】（后台符）。少切一种 8/2 那条命令就能整条蒙混——
+  // `npm run test:unit & npm run mutate -- x` 不切就是一段，而白名单只取段内第一个脚本名。
+  // 切碎是安全方向：多切出来的片段（`2>&1` 会被切成 `2>` 和 `1`）命令头都不是解释器，自然放行。
+  for (const segment of command.split(/\|\||&&|[|;&\n]/)) {
     const why = segmentReason(segment);
     if (why) return why;
   }
