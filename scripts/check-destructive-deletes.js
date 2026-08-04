@@ -154,7 +154,10 @@ export function isSafeExpr(expr, safe, factories) {
 export function findDestructiveCalls(source) {
   const lines = source.split('\n');
   const calls = [];
-  for (const m of source.matchAll(/\b(rmSync|rm)\s*\(/g)) {
+  // rmdirSync/rmdir 带 recursive:true 与 rmSync 删除力等价（deprecated 但可用）——不列进来
+  // 谁用它就整条绕过门禁（2026-08-03 review 抓出的扫描面缺口）。非递归 rmdir 只能删空目录，
+  // 破坏力有界，仍由下方 recursive:true 判据自然排除。
+  for (const m of source.matchAll(/\b(rmSync|rm|rmdirSync|rmdir)\s*\(/g)) {
     const open = m.index + m[0].length - 1;
     let depth = 0, close = -1;
     for (let i = open; i < source.length; i += 1) {
@@ -166,6 +169,30 @@ export function findDestructiveCalls(source) {
     if (args.length < 2 || !/recursive\s*:\s*true/.test(args[1])) continue;
     const line = source.slice(0, m.index).split('\n').length;
     calls.push({ line, fn: m[1], arg: args[0], text: lines[line - 1]?.trim() ?? '' });
+  }
+  return calls;
+}
+
+// shell 层删除（execSync('rm -rf …') 一族）完全绕过 fs 层扫描，且它的删除目标就在字符串参数里、
+// 会被 stripNonCode 抹掉——必须单独在【原文】上查。防套娃误报的关键：调用头（exec*( ）从
+// 【掩码后】文本找（测试夹具里写在模板串中的样例，其 execSync 头也被抹掉，天然不命中），
+// 参数区间按掩码文本括号配平后回【原文】同区间查 `rm -r…`。shell 删除天然追溯不到 mkdtemp，
+// 一律要求 `// safe-rm: <理由>` 显式豁免。
+export function findShellDeletes(maskedSource, rawSource) {
+  const lines = rawSource.split('\n');
+  const calls = [];
+  for (const m of maskedSource.matchAll(/\b(execSync|execFileSync|exec|execFile|spawnSync|spawn)\s*\(/g)) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0, close = -1;
+    for (let i = open; i < maskedSource.length; i += 1) {
+      if ('([{'.includes(maskedSource[i])) depth += 1;
+      else if (')]}'.includes(maskedSource[i])) { depth -= 1; if (depth === 0) { close = i; break; } }
+    }
+    if (close === -1) continue;
+    const rawArgs = rawSource.slice(open + 1, close);
+    if (!/\brm\s+-[A-Za-z]*r/.test(rawArgs)) continue; // 只盯递归形态（-r/-rf/-fr…）；非递归 rm 单文件级
+    const line = maskedSource.slice(0, m.index).split('\n').length;
+    calls.push({ line, fn: m[1], arg: rawArgs.trim().slice(0, 80), text: lines[line - 1]?.trim() ?? '' });
   }
   return calls;
 }
@@ -194,6 +221,10 @@ export function checkFile(rawSource, relPath) {
     // 豁免标记必须在【原文】里找——stripNonCode 会把注释抹成空格，在屏蔽后的文本里
     // 永远找不到 safe-rm，那样豁免机制等于不存在（本闸自己踩过这个坑）。
     // 向上逐行回看，只要还是注释行就继续找：理由常常写成好几行的注释块。
+    if (isExempt(lines, call.line)) continue;
+    violations.push({ file: relPath, line: call.line, arg: call.arg, text: call.text });
+  }
+  for (const call of findShellDeletes(source, rawSource)) {
     if (isExempt(lines, call.line)) continue;
     violations.push({ file: relPath, line: call.line, arg: call.arg, text: call.text });
   }

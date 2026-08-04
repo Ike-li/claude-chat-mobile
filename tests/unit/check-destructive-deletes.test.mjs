@@ -207,3 +207,34 @@ test('生产: 递归删除给了 safe-rm 才放行', () => {
     rmSync(dir, { recursive: true, force: true });
   `), []);
 });
+
+// ── 2026-08-03 review：扫描面缺口 ─────────────────────────────────────────────
+// findDestructiveCalls 的正则只认 rmSync|rm——`rmdirSync(p, {recursive:true})` 与它删除力完全
+// 等价（deprecated 但可用），谁用它就整条绕过门禁。shell 删除同理（execSync('rm -rf …')），
+// 且参数是字符串、会被 stripNonCode 抹掉，必须在原文上单独扫。
+test('反向: rmdirSync(recursive:true) 与 rmSync 同等管辖，来路不明必须报', () => {
+  const v = check(`
+    const p = join(REAL_ROOT, encode(cwd));
+    rmdirSync(p, { recursive: true });
+  `);
+  assert.equal(v.length, 1, 'rmdirSync 递归删除不在扫描面 = 门禁可被整条绕过');
+});
+
+test('正向: rmdirSync 目标来自 mkdtemp 不报', () => {
+  assert.deepEqual(check(`
+    const d = mkdtempSync(join(tmpdir(), 'a-'));
+    rmdirSync(d, { recursive: true });
+  `), []);
+});
+
+test('反向: execSync 里的 shell rm -rf 必须报（字符串参数不被 stripNonCode 豁免）', () => {
+  const v = check("execSync('rm -rf ' + target);");
+  assert.equal(v.length, 1, 'shell 删除完全绕过 fs 层扫描，必须单独抓');
+});
+
+test('豁免: shell rm 可用 safe-rm 放行', () => {
+  assert.deepEqual(check(`
+    // safe-rm: 容器内一次性环境，路径为常量
+    execSync('rm -rf /tmp/fixed-ci-dir');
+  `), []);
+});
