@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES } from '../../src/ops/doctor-runtime.js';
+import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot } from '../../src/ops/doctor-runtime.js';
+import { modelSettingsConflictDiagnostic } from '../../src/ops/doctor-checks.js';
 
 test.describe('readMergedPermissions：合并 global/project/local + 容错', () => {
   test('合并三层 + scope 标注；坏 JSON / 缺文件 skip 不抛', () => {
@@ -174,4 +175,52 @@ test.describe('SONNET-BUG-1：同一危险规则跨 scope 时聚合所有 scope'
       rmSync(home, { recursive: true, force: true });
     }
   });
+});
+
+// ── 2026-08-04 code review：按目录分组重写时把用户级 env 采集整条丢了 ─────────────
+// CLI 会把 ~/.claude/settings.json 的 env 合并进【每个】目录，所以「全局配一个网关、
+// 各项目不单独配」这个最常见布局下，每个 dir 的 tierTargets 都该带上全局那份映射。
+// 丢掉它的后果是双向的：全局配网关 → 整条检查恒绿假 OK；全局+目录混合布局 → 反过来误报 warn。
+test('readModelSettingsSnapshot：用户级 settings.json 的 env 映射对每个 workDir 生效', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ccm-doc-home-'));
+  mkdirSync(join(home, '.claude'), { recursive: true });
+  writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+    model: 'claude-opus-5',
+    env: { ANTHROPIC_BASE_URL: 'https://gw.example', ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.5' },
+  }));
+  const wd = mkdtempSync(join(tmpdir(), 'ccm-doc-wd-'));
+  mkdirSync(join(wd, '.claude'), { recursive: true });
+  writeFileSync(join(wd, '.claude', 'settings.local.json'), JSON.stringify({}));
+
+  const snap = readModelSettingsSnapshot({ home, workDirs: [wd] });
+  assert.equal(snap.dirs[0].tierTargets.sonnet, 'grok-4.5', '全局网关映射必须下沉到每个 workDir');
+
+  const diag = modelSettingsConflictDiagnostic(snap);
+  assert.equal(diag.status, 'warn', '全局配了网关 + model 写全名 = 正该 warn 的配置，不能报 ok');
+  assert.match(diag.detail, /全名/);
+
+  rmSync(home, { recursive: true, force: true });   // safe-rm: mkdtemp 一次性目录
+  rmSync(wd, { recursive: true, force: true });     // safe-rm: mkdtemp 一次性目录
+});
+
+test('readModelSettingsSnapshot：目录级映射覆盖同档位的用户级映射', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ccm-doc-home2-'));
+  mkdirSync(join(home, '.claude'), { recursive: true });
+  writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({
+    model: 'sonnet',
+    env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'grok-4.5', ANTHROPIC_DEFAULT_OPUS_MODEL: 'glm-5.2' },
+  }));
+  const wd = mkdtempSync(join(tmpdir(), 'ccm-doc-wd2-'));
+  mkdirSync(join(wd, '.claude'), { recursive: true });
+  writeFileSync(join(wd, '.claude', 'settings.local.json'), JSON.stringify({
+    env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'mimo-v2.5-pro' },
+  }));
+
+  const snap = readModelSettingsSnapshot({ home, workDirs: [wd] });
+  assert.equal(snap.dirs[0].tierTargets.sonnet, 'mimo-v2.5-pro', '目录级优先');
+  assert.equal(snap.dirs[0].tierTargets.opus, 'glm-5.2', '目录没覆盖的档位保留全局值');
+  assert.equal(modelSettingsConflictDiagnostic(snap).status, 'ok');
+
+  rmSync(home, { recursive: true, force: true });   // safe-rm: mkdtemp 一次性目录
+  rmSync(wd, { recursive: true, force: true });     // safe-rm: mkdtemp 一次性目录
 });

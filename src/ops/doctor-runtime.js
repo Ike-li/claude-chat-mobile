@@ -44,63 +44,80 @@ export function countConfigPermProblems(rootDir, { platform = process.platform, 
   return problems;
 }
 
+// CLI 的 settings 三层链：user(global) → 各 workDir 的 project → 同目录的 local（后者覆盖前者）。
+// 权限合并与模型体检【共用这一份】：两处各写一套遍历时，链一变化（CLI 新增作用域、要支持
+// managed-settings）只会有一个被更新，另一个继续基于陈旧视图出报告——而 doctor 的职责恰恰是
+// 告诉用户配置是否自洽。本次「模型体检丢了用户级 env」正是重复遍历的直接产物。
+// 容错：读/解析失败的源 json 为 null（比照 workdirs.js 的「坏配置不清空」），坏 JSON 不让体检崩。
+export function readSettingsChain({ home, workDirs = [] } = {}) {
+  const parse = (file) => {
+    try {
+      return JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      return null;                       // 缺文件 / 坏 JSON → skip
+    }
+  };
+  const out = [];
+  if (home) {
+    const file = join(home, '.claude', 'settings.json');
+    out.push({ scope: 'global', dir: null, file, json: parse(file) });
+  }
+  for (const dir of workDirs || []) {
+    for (const [scope, name] of [['project', 'settings.json'], ['local', 'settings.local.json']]) {
+      const file = join(dir, '.claude', name);
+      out.push({ scope, dir, file, json: parse(file) });
+    }
+  }
+  return out;
+}
+
 // 读并合并 permissions.allow（~/.claude/settings.json + 各 workDir 的 .claude/settings.json[.local]），标注 scope。
-// 容错：读/解析失败的源 skip（比照 workdirs.js 的「坏配置不清空」），坏 JSON 不让体检崩。
 export function readMergedPermissions({ home, workDirs = [] } = {}) {
   const sources = [];
-  const read = (file, scope) => {
-    try {
-      const j = JSON.parse(readFileSync(file, 'utf8'));
-      const rules = j?.permissions?.allow;
-      if (Array.isArray(rules)) sources.push({ scope, file, rules });
-    } catch { /* 缺文件 / 坏 JSON → skip */ }
-  };
-  if (home) read(join(home, '.claude', 'settings.json'), 'global');
-  for (const dir of workDirs || []) {
-    read(join(dir, '.claude', 'settings.json'), 'project');
-    read(join(dir, '.claude', 'settings.local.json'), 'local');
+  for (const { scope, file, json } of readSettingsChain({ home, workDirs })) {
+    const rules = json?.permissions?.allow;
+    if (Array.isArray(rules)) sources.push({ scope, file, rules });
   }
   const allow = [];
   for (const s of sources) for (const rule of s.rules) allow.push({ rule, scope: s.scope, file: s.file });
   return { allow, sources };
 }
 
-// 读 user / 各 workDir 的 project+local 里 model 与 ANTHROPIC_DEFAULT_*_MODEL（只抽字段，不回显 token）。
+// 读 user 的 model + 各 workDir 的 project/local 里 model 与 ANTHROPIC_DEFAULT_<档位>_MODEL（只抽字段，不回显 token）。
+// 按目录分组返回：多网关并存时（本机 9 个目录各配各的），混成一个扁平数组比对会让归属随机、
+// 建议指向错误的目录。档位名从 env key 提取，值只用于判「该档位是否已映射」。
 export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
-  const parseFile = (file) => {
-    try {
-      return JSON.parse(readFileSync(file, 'utf8'));
-    } catch {
-      return null;
-    }
-  };
-  const collectDefaults = (j, into) => {
+  const collectTiers = (j, into) => {
     const env = j?.env && typeof j.env === 'object' ? j.env : null;
-    if (!env) return;
+    if (!env) return into;
     for (const [k, v] of Object.entries(env)) {
-      if (!/^ANTHROPIC_DEFAULT_.+_MODEL$/i.test(k)) continue;
+      const m = /^ANTHROPIC_DEFAULT_(.+)_MODEL$/i.exec(k);
+      if (!m) continue;
       const t = v != null ? String(v).trim() : '';
-      if (t) into.push(t);
+      if (t) into[m[1].toLowerCase()] = t;
     }
+    return into;
   };
-  let userModel = '';
-  const defaultEnvTargets = [];
-  if (home) {
-    const uj = parseFile(join(home, '.claude', 'settings.json'));
-    if (uj?.model != null && String(uj.model).trim()) userModel = String(uj.model).trim();
-    collectDefaults(uj, defaultEnvTargets);
+  const modelOf = (j) => (j?.model != null ? String(j.model).trim() : '');
+
+  const chain = readSettingsChain({ home, workDirs });
+  const global = chain.find(s => s.scope === 'global');
+  const userModel = modelOf(global?.json);
+  // 用户级 env 是【每个目录的基底】：CLI 把 ~/.claude/settings.json 的 env 合并进所有目录，
+  // 所以「全局配一个网关、各项目不单独配」这个最常见布局下，每个 dir 都带着这份映射。
+  // 漏掉它是双向错的——全局配网关时整条检查恒绿假 OK，全局+目录混合时反过来误报 warn。
+  const userTiers = collectTiers(global?.json, {});
+
+  const byDir = new Map();
+  for (const { scope, dir, json } of chain) {
+    if (!dir) continue;
+    if (!byDir.has(dir)) byDir.set(dir, { dir, projectModel: '', localModel: '', tierTargets: { ...userTiers } });
+    const entry = byDir.get(dir);
+    collectTiers(json, entry.tierTargets);               // project 覆盖 global，local 再覆盖 project
+    if (scope === 'project') entry.projectModel = modelOf(json);
+    if (scope === 'local') entry.localModel = modelOf(json);
   }
-  let localModel = '';
-  let projectModel = '';
-  for (const dir of workDirs || []) {
-    const pj = parseFile(join(dir, '.claude', 'settings.json'));
-    const lj = parseFile(join(dir, '.claude', 'settings.local.json'));
-    if (!projectModel && pj?.model != null && String(pj.model).trim()) projectModel = String(pj.model).trim();
-    if (!localModel && lj?.model != null && String(lj.model).trim()) localModel = String(lj.model).trim();
-    collectDefaults(pj, defaultEnvTargets);
-    collectDefaults(lj, defaultEnvTargets);
-  }
-  return { userModel, localModel, projectModel, defaultEnvTargets };
+  return { userModel, dirs: [...byDir.values()] };
 }
 
 // 编排 6 项运行时安全检查 + 危险白名单审查，产出【已脱敏】报告。
@@ -148,9 +165,9 @@ export function runDoctor(ctx = {}) {
     detail: modelDiag.detail,
     safe: {
       userModel: modelSnap.userModel || null,
-      localModel: modelSnap.localModel || null,
-      projectModel: modelSnap.projectModel || null,
-      defaultEnvTargetCount: modelSnap.defaultEnvTargets.length,
+      // 不回显路径/映射目标值：只出「配了网关的目录数」与「目录内是否 pin 了 model」的计数。
+      gatewayDirCount: modelSnap.dirs.filter(d => Object.keys(d.tierTargets).length > 0).length,
+      pinnedDirCount: modelSnap.dirs.filter(d => d.localModel || d.projectModel).length,
     },
   });
 

@@ -1,50 +1,82 @@
-// 模型配置「永不打架」体检：user/global 的 model 字段 vs local 的 ANTHROPIC_DEFAULT_*_MODEL 映射。
-// local 只写 env 映射、不写 model 时，CLI 默认仍用全局 model 全名，网关常不认 → 重试失败；
-// 与 UI 上 default.resolvedModel 显示成映射目标叠在一起会误导。
-// 入参均为已脱敏的字符串 / 对象（doctor-runtime 读盘后只传必要字段）。
-export function modelSettingsConflictDiagnostic({
-  userModel = '',
-  localModel = '',
-  projectModel = '',
-  defaultEnvTargets = [], // local env 里 ANTHROPIC_DEFAULT_*_MODEL 的去重目标列表
-} = {}) {
-  const u = String(userModel || '').trim();
-  const l = String(localModel || '').trim();
-  const p = String(projectModel || '').trim();
-  const targets = [...new Set((defaultEnvTargets || []).map(x => String(x || '').trim()).filter(Boolean))];
-  // local/project 已 pin 明确 model → 覆盖链清晰，不告警
-  if (l || p) {
+// 模型配置「永不打架」体检：settings 的 model 字段 vs 各工作目录的 ANTHROPIC_DEFAULT_*_MODEL 网关映射。
+//
+// 判据来自实测（2026-08-04，CLI 2.1.221，本地假网关抓 /v1/messages 请求体）：
+//   全局 sonnet + 目录映射 SONNET  → 发出 grok-4.5       （映射生效）
+//   全局 sonnet + 目录只映射 OPUS  → 发出 claude-sonnet-5（该档位无映射 ⇒ 退回官方全名，网关不认）
+//   全局 claude-opus-5 + 全套映射  → 发出 claude-opus-5  （全名不走档位表 ⇒ 绕过映射）
+//   全局不设 model + 全套映射      → 发出 glm-5.2        （CLI 自选档位，映射生效）
+// ⇒ 决定映射是否命中的是「model 解析出的**档位**是否在**该目录**被映射」。
+//    旧实现比对的是「model 字符串是否等于/前缀匹配某个映射目标」，把最常见且完全正确的
+//    `model: "sonnet"` 判成冲突（别名恰恰是映射生效的前提），且把所有工作目录的映射目标混成
+//    一个扁平数组比对——多网关并存时归属随机，给出的修复建议会把无网关的项目钉死到别人的模型名。
+//
+// 入参 dirs：[{ dir, localModel, projectModel, tierTargets:{ sonnet:'grok-4.5', ... } }]，
+// 由 doctor-runtime 读盘后按目录组装（只抽必要字段，不回显 token）。
+
+// 单档位别名。opusplan 走「计划用 opus、执行用 sonnet」，两档都得映射才算命中。
+const TIER_ALIASES = { sonnet: ['sonnet'], opus: ['opus'], haiku: ['haiku'], fable: ['fable'], opusplan: ['opus', 'sonnet'] };
+// 未 pin model 时 CLI 自选档位，事先无法预知选哪档 —— 要求主档位齐全才算安全，
+// 这样判据不依赖「当前版本默认走 opus」这个会随版本变的事实。fable 不列入：属新增档位，
+// 9 个真实网关目录里仅 2 个映射了它，要求齐全会把正常配置整片判红。
+const MAIN_TIERS = ['sonnet', 'opus', 'haiku'];
+const stripCtxSuffix = (s) => String(s || '').trim().replace(/\[[^\]]+\]$/, '');
+
+// model 字符串 → 需要命中的档位集合。knownTiers 让配置里出现的新档位（如将来的 ANTHROPIC_DEFAULT_XXX_MODEL）
+// 自动被认作别名，无需改这张表。返回 null = 全名（不走档位表）。
+function resolveTiers(model, knownTiers) {
+  const bare = stripCtxSuffix(model).toLowerCase();
+  if (!bare || bare === 'default') return MAIN_TIERS;
+  // 必须 hasOwn：裸 `TIER_ALIASES[bare]` 对 'constructor' / '__proto__' 会经原型链返回真值非数组，
+  // 下游 tiers.filter 抛 TypeError 冲出 runDoctor，整份体检报告挂掉而不是降级成一行 warn。
+  if (Object.hasOwn(TIER_ALIASES, bare)) return TIER_ALIASES[bare];
+  if (knownTiers.has(bare)) return [bare];
+  return null;
+}
+
+// 单目录判定。effectiveModel 按 CLI 的 settings 优先级 local > project > user 取。
+function diagnoseDir({ dir, localModel, projectModel, tierTargets }, userModel) {
+  const targets = tierTargets && typeof tierTargets === 'object' ? tierTargets : {};
+  const mapped = new Set(Object.entries(targets).filter(([, v]) => String(v || '').trim()).map(([k]) => k.toLowerCase()));
+  const name = String(dir || '').split(/[\\/]/).filter(Boolean).pop() || String(dir || '');
+  if (!mapped.size) return null;                       // 该目录没配网关映射 → 全名/别名都合法
+  const effective = String(localModel || '').trim() || String(projectModel || '').trim() || String(userModel || '').trim();
+  const pinnedHere = !!(String(localModel || '').trim() || String(projectModel || '').trim());
+  const tiers = resolveTiers(effective, mapped);
+  if (tiers === null) {
+    // 全名：目录内已显式 pin（含直接 pin 成网关模型名）视为有意为之，覆盖链清晰不告警；
+    // 只有「目录自己没 pin、被外层全名默认值罩住」才是会真失败的那种配置。
+    if (pinnedHere) return null;
+    return { name, reason: `全局 model=${effective} 是模型全名，不走档位映射表，会原样发给网关` };
+  }
+  const missing = tiers.filter(t => !mapped.has(t));
+  if (!missing.length) return null;
+  return { name, reason: `档位 ${missing.join('/')} 在此目录无 ANTHROPIC_DEFAULT_*_MODEL 映射，会退回官方全名` };
+}
+
+export function modelSettingsConflictDiagnostic({ userModel = '', dirs = [] } = {}) {
+  const list = Array.isArray(dirs) ? dirs : [];
+  const withGateway = list.filter(d => {
+    const t = d?.tierTargets;
+    return t && typeof t === 'object' && Object.values(t).some(v => String(v || '').trim());
+  });
+  if (!withGateway.length) {
+    return { status: 'ok', name: 'MODEL_SETTINGS', detail: '未检测到 ANTHROPIC_DEFAULT_* 网关映射，无 model 冲突信号' };
+  }
+  const problems = list.map(d => diagnoseDir(d, userModel)).filter(Boolean);
+  if (!problems.length) {
+    const u = String(userModel || '').trim();
     return {
       status: 'ok',
       name: 'MODEL_SETTINGS',
-      detail: l
-        ? `项目 local 已设 model=${l}（覆盖全局默认）`
-        : `项目 project 已设 model=${p}`,
+      detail: `${withGateway.length} 个目录配了网关映射，档位解析均命中（全局 model=${u || '未设，CLI 自选'}）`,
     };
   }
-  if (!u || !targets.length) {
-    return {
-      status: 'ok',
-      name: 'MODEL_SETTINGS',
-      detail: targets.length
-        ? '已配置 ANTHROPIC_DEFAULT_* 映射，全局未设 model（CLI 自选）'
-        : '未检测到 model / ANTHROPIC_DEFAULT_* 冲突信号',
-    };
-  }
-  // 全局 model 已是映射目标之一（或以其为前缀，如 grok-4.5 vs grok-4.5[1m]）→ 对齐
-  const aligned = targets.some(t => u === t || u.startsWith(t) || t.startsWith(u.replace(/\[[^\]]+\]$/, '')));
-  if (aligned) {
-    return {
-      status: 'ok',
-      name: 'MODEL_SETTINGS',
-      detail: `全局 model=${u} 与 DEFAULT 映射目标一致`,
-    };
-  }
-  const sample = targets.slice(0, 3).join(', ');
+  const shown = problems.slice(0, 3).map(p => `${p.name}（${p.reason}）`).join('；');
+  const more = problems.length > 3 ? `；等 ${problems.length} 个目录` : '';
   return {
     status: 'warn',
     name: 'MODEL_SETTINGS',
-    detail: `全局 model=${u}，但 local 的 ANTHROPIC_DEFAULT_* 映射到 ${sample}；Default/不 pin 仍用全局 ID。请在 .claude/settings.local.json 写 "model": "${targets[0]}" 或改全局 model。`,
+    detail: `${shown}${more}。修法：在该目录的 .claude/settings.local.json 补上缺失档位的 ANTHROPIC_DEFAULT_*_MODEL，或写 "model" 为已映射的档位别名（sonnet/opus/haiku）。`,
   };
 }
 

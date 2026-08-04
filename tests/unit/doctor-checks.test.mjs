@@ -2,40 +2,109 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic } from '../../src/ops/doctor-checks.js';
 
-test('modelSettingsConflictDiagnostic: local 已写 model → ok', () => {
+// 判据依据（2026-08-04 用本地假网关抓 /v1/messages 请求体实测，CLI 2.1.221）：
+//   全局 sonnet + 目录映射 SONNET      → 发出 grok-4.5      （映射生效）
+//   全局 sonnet + 目录只映射 OPUS      → 发出 claude-sonnet-5（退回官方全名，网关不认）
+//   全局 claude-opus-5 + 全套映射      → 发出 claude-opus-5  （全名绕过映射）
+//   全局不设 model + 全套映射          → 发出 glm-5.2        （CLI 自选档位，映射生效）
+// ⇒ 决定映射是否命中的是「model 解析出的档位是否在该目录被映射」，不是 model 字符串是否等于映射目标。
+const dirOf = (dir, tierTargets, extra = {}) => ({ dir, localModel: '', projectModel: '', tierTargets, ...extra });
+const GW = { sonnet: 'grok-4.5', opus: 'glm-5.2', haiku: 'mimo-v2.5' };
+
+test('modelSettingsConflictDiagnostic: 全局 model 是档位别名且该档位已映射 → ok（不得误报）', () => {
   const r = modelSettingsConflictDiagnostic({
-    userModel: 'claude-fable-5[1m]',
-    localModel: 'grok-4.5',
-    defaultEnvTargets: ['grok-4.5'],
+    userModel: 'sonnet',
+    dirs: [dirOf('/w/gh-pages', GW)],
   });
   assert.equal(r.status, 'ok');
-  assert.match(r.detail, /local/);
 });
 
-test('modelSettingsConflictDiagnostic: 全局 model 与 DEFAULT 映射不一致且 local 无 model → warn', () => {
+test('modelSettingsConflictDiagnostic: 别名带 [1m] 后缀仍按档位解析 → ok', () => {
+  const r = modelSettingsConflictDiagnostic({
+    userModel: 'opus[1m]',
+    dirs: [dirOf('/w/gh-pages', GW)],
+  });
+  assert.equal(r.status, 'ok');
+});
+
+test('modelSettingsConflictDiagnostic: 全局 model 是全名 → warn，且点名出问题的目录', () => {
   const r = modelSettingsConflictDiagnostic({
     userModel: 'claude-fable-5[1m]',
-    localModel: '',
-    projectModel: '',
-    defaultEnvTargets: ['grok-4.5', 'grok-4.5'],
+    dirs: [dirOf('/w/gh-pages', GW)],
   });
   assert.equal(r.status, 'warn');
   assert.match(r.detail, /claude-fable-5/);
-  assert.match(r.detail, /grok-4\.5/);
-  assert.match(r.detail, /settings\.local\.json/);
+  assert.match(r.detail, /gh-pages/);
 });
 
-test('modelSettingsConflictDiagnostic: 全局 model 已是映射目标 → ok', () => {
+test('modelSettingsConflictDiagnostic: 别名档位在该目录未映射 → warn（会退回官方全名）', () => {
   const r = modelSettingsConflictDiagnostic({
-    userModel: 'grok-4.5',
-    defaultEnvTargets: ['grok-4.5'],
+    userModel: 'sonnet',
+    dirs: [dirOf('/w/only-opus', { opus: 'glm-5.2' })],
+  });
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /only-opus/);
+  // 必须判成「档位缺映射」而非「全名绕过」：两种 warn 的修法不同（补映射 vs 改 model），
+  // 且只断言 detail 含 "sonnet" 会被「全名」文案一并满足 —— 变异检查 M3 实测到的空过。
+  assert.match(r.detail, /档位 sonnet/);
+  assert.ok(!/全名，不走档位映射表/.test(r.detail), 'sonnet 是别名，不该被判成模型全名');
+});
+
+test('modelSettingsConflictDiagnostic: opusplan 需 opus+sonnet 两档，缺一即 warn', () => {
+  assert.equal(modelSettingsConflictDiagnostic({
+    userModel: 'opusplan',
+    dirs: [dirOf('/w/both', { opus: 'glm-5.2', sonnet: 'grok-4.5' })],
+  }).status, 'ok');
+  const r = modelSettingsConflictDiagnostic({
+    userModel: 'opusplan',
+    dirs: [dirOf('/w/only-opus', { opus: 'glm-5.2' })],
+  });
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /档位 sonnet/);
+});
+
+test('modelSettingsConflictDiagnostic: 混合目录下，无网关映射的目录不被连坐点名', () => {
+  const r = modelSettingsConflictDiagnostic({
+    userModel: 'claude-fable-5[1m]',
+    dirs: [dirOf('/w/official-no-gateway', {}), dirOf('/w/has-gateway', GW)],
+  });
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /has-gateway/);
+  assert.ok(!/official-no-gateway/.test(r.detail), '无映射的目录用全名完全合法，不该被点名');
+});
+
+test('modelSettingsConflictDiagnostic: 多目录只点名真冲突的那个，自洽目录不连坐', () => {
+  const r = modelSettingsConflictDiagnostic({
+    userModel: 'sonnet',
+    dirs: [dirOf('/w/good', GW), dirOf('/w/bad', { opus: 'glm-5.2' })],
+  });
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /bad/);
+  assert.ok(!/good/.test(r.detail), '自洽目录不该出现在告警里');
+});
+
+test('modelSettingsConflictDiagnostic: 目录 local 已 pin 网关模型全名 → ok（覆盖链清晰）', () => {
+  const r = modelSettingsConflictDiagnostic({
+    userModel: 'claude-fable-5[1m]',
+    dirs: [dirOf('/w/gh-pages', GW, { localModel: 'grok-4.5' })],
   });
   assert.equal(r.status, 'ok');
 });
 
-test('modelSettingsConflictDiagnostic: 无 DEFAULT 映射 → ok（无冲突信号）', () => {
-  assert.equal(modelSettingsConflictDiagnostic({ userModel: 'claude-fable-5[1m]' }).status, 'ok');
+test('modelSettingsConflictDiagnostic: 目录无任何 DEFAULT 映射 → ok（无网关，全名合法）', () => {
+  const r = modelSettingsConflictDiagnostic({
+    userModel: 'claude-fable-5[1m]',
+    dirs: [dirOf('/w/official', {})],
+  });
+  assert.equal(r.status, 'ok');
   assert.equal(modelSettingsConflictDiagnostic({}).status, 'ok');
+});
+
+test('modelSettingsConflictDiagnostic: 未设 model 时主档位齐全 → ok，缺档 → warn', () => {
+  assert.equal(modelSettingsConflictDiagnostic({ userModel: '', dirs: [dirOf('/w/full', GW)] }).status, 'ok');
+  const r = modelSettingsConflictDiagnostic({ userModel: '', dirs: [dirOf('/w/partial', { sonnet: 'grok-4.5' })] });
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /partial/);
 });
 
 test('statuslineConfigDiagnostic treats web statusline as self-contained', () => {
@@ -238,4 +307,19 @@ test('hooksBridgeDiagnostic：off / 已安装 / 漂移 / 未安装 四态', () =
   const missing = hooksBridgeDiagnostic({ installState: 'not-installed' });
   assert.equal(missing.status, 'warn');
   assert.match(missing.detail, /hooks:install/);
+});
+
+// ── 2026-08-04 code review：本次改动自身的两个洞（实测确认）────────────────────
+// 洞一：resolveTiers 用 `TIER_ALIASES[bare]` 做计算属性查找，`constructor` / `__proto__`
+// 经原型链返回真值非数组 → 下游 tiers.filter 抛 TypeError，冲出 runDoctor 打死整份体检报告
+// （不是降级成一行 warn，是整个诊断面板挂掉）。
+test('modelSettingsConflictDiagnostic: 原型链键名不得让整份体检崩掉', () => {
+  for (const evil of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty']) {
+    const r = modelSettingsConflictDiagnostic({
+      userModel: evil,
+      dirs: [dirOf('/w/gw', GW)],
+    });
+    assert.ok(r && typeof r.status === 'string', `model=${evil} 必须返回正常结果而非抛异常`);
+    assert.equal(r.status, 'warn', `${evil} 不是档位别名，应按模型全名判 warn`);
+  }
 });
