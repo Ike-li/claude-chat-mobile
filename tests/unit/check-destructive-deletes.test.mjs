@@ -238,3 +238,35 @@ test('豁免: shell rm 可用 safe-rm 放行', () => {
     execSync('rm -rf /tmp/fixed-ci-dir');
   `), []);
 });
+
+// ── 2026-08-04 code review：shell 删除扫描面的三个洞（实测逐条确认）────────────
+// findShellDeletes 把 execFileSync/execFile/spawnSync/spawn 列进了扫描名单，但判据
+// `/\brm\s+-[A-Za-z]*r/` 只匹配 shell 字符串形态——而这四个 API 恰恰【只收 argv 数组】，
+// 于是它们是名单里的死条目。本仓库自己的调用约定就是 argv 数组（git-workspace.js:45）。
+test('反向: argv 数组形态的递归 rm 必须报（execFileSync/spawnSync 一族只收这种形态）', () => {
+  assert.equal(check("spawnSync('rm', ['-rf', target]);").length, 1, 'spawnSync argv 形态漏过 = 门禁对这一族恒绿');
+  assert.equal(check("execFileSync('rm', ['-rf', target]);").length, 1);
+  assert.equal(check("execFile('rm', ['-r', dir], cb);").length, 1);
+  assert.equal(check("spawn('/bin/rm', ['-rf', dir]);").length, 1, '带路径的 rm 同样要认');
+});
+
+// -R 是 macOS rm(1) 首先文档化的递归开关；--recursive 是 GNU 长形式。
+// 旧判据 `-[A-Za-z]*r` 大小写敏感、且 [A-Za-z]* 吃不掉第二个 `-`，两者全漏。
+test('反向: rm -R 与 rm --recursive 与 -rf 同等对待', () => {
+  assert.equal(check("execSync('rm -Rf ' + target);").length, 1, '-R 是 macOS rm 文档里的首选写法');
+  assert.equal(check("execSync('rm --recursive ' + target);").length, 1);
+  assert.equal(check("spawnSync('rm', ['--recursive', dir]);").length, 1);
+});
+
+// 非递归删除仍归单文件规则管，不该被这条判据抓——否则整个仓库的正当 rm 调用全变违规。
+test('正向: 非递归 rm 不被递归判据误抓', () => {
+  assert.deepEqual(check("execSync('rm -f ' + target);"), []);
+  assert.deepEqual(check("spawnSync('rm', ['-f', target]);"), []);
+});
+
+test('豁免: argv 形态同样可用 safe-rm 放行', () => {
+  assert.deepEqual(check(`
+    // safe-rm: 容器内一次性环境
+    spawnSync('rm', ['-rf', '/tmp/fixed-ci-dir']);
+  `), []);
+});

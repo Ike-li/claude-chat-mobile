@@ -178,6 +178,16 @@ export function findDestructiveCalls(source) {
 // 【掩码后】文本找（测试夹具里写在模板串中的样例，其 execSync 头也被抹掉，天然不命中），
 // 参数区间按掩码文本括号配平后回【原文】同区间查 `rm -r…`。shell 删除天然追溯不到 mkdtemp，
 // 一律要求 `// safe-rm: <理由>` 显式豁免。
+// 递归开关：-r / -R / -rf / -fr / --recursive。大小写都要认——-R 是 macOS rm(1) 首先
+// 文档化的写法；`[A-Za-z]*` 吃不掉第二个 `-`，所以长形式必须单列一支。
+const RECURSIVE_FLAG = '(?:-[A-Za-z]*[rR]|--recursive)';
+// 形态一：shell 字符串。`execSync('rm -rf ' + x)`、`execFileSync('sh', ['-c', 'rm -rf ' + x])`。
+const SHELL_RM_RECURSIVE = new RegExp(`\\brm\\s+${RECURSIVE_FLAG}`);
+// 形态二：argv 数组。`spawnSync('rm', ['-rf', x])`——命令名与开关分处两个实参，中间隔着
+// 引号和方括号，形态一的 `rm\s+` 永远匹配不到。而 execFileSync/execFile/spawnSync/spawn
+// 【只收】这种形态，旧判据下它们是扫描名单里的死条目（2026-08-04 实测确认）。
+const ARGV_RM_RECURSIVE = new RegExp(`(['"\`])(?:[\\w./-]*/)?rm\\1\\s*,\\s*\\[[^\\]]*${RECURSIVE_FLAG}`);
+
 export function findShellDeletes(maskedSource, rawSource) {
   const lines = rawSource.split('\n');
   const calls = [];
@@ -190,7 +200,8 @@ export function findShellDeletes(maskedSource, rawSource) {
     }
     if (close === -1) continue;
     const rawArgs = rawSource.slice(open + 1, close);
-    if (!/\brm\s+-[A-Za-z]*r/.test(rawArgs)) continue; // 只盯递归形态（-r/-rf/-fr…）；非递归 rm 单文件级
+    // 只盯递归形态；非递归 rm 归下方单文件规则管，破坏力有界。
+    if (!SHELL_RM_RECURSIVE.test(rawArgs) && !ARGV_RM_RECURSIVE.test(rawArgs)) continue;
     const line = maskedSource.slice(0, m.index).split('\n').length;
     calls.push({ line, fn: m[1], arg: rawArgs.trim().slice(0, 80), text: lines[line - 1]?.trim() ?? '' });
   }
