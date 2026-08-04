@@ -2020,14 +2020,20 @@ registerSocketConnection(io, socket => {
         if (typeof ack === 'function') ack({ ok: false, error: '发送失败，请重试', retryable: true });
         return;
       }
+      // 只在消息真正成功入队后才登记去重 ID（此后同 ID 重发才判 duplicate、幂等）。
+      // 【必须排在下面所有副作用之前】send 已 resolve = 消息确实进了 SDK 队列，从这一刻起它就是
+      // 「已处理」。排在 diagLog / takeOver 之后的话，那两步任一抛异常都会走 finally 释放 in-flight
+      // 而去重 ID 未登记 → 客户端收负 ack 重发 → isProcessed 与 isInFlight 双双为假 → handler 整条
+      // 重跑并二次 a.send()，同一条 prompt 投给 Claude 两次。加 try/finally 之前那条陈旧的 in-flight
+      // 占用反而会挡住重试（卡到重启，但至多一次），即修 F1 时把「卡死」换成了「可能重复投递」。
+      // 顺序不变量由 tests/unit/message-dedup.test.mjs 的源码级断言钉住（2026-08-04 code review）。
+      messageDedupState = commitProcessed(clientMessageId, messageDedupState);
       diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
       if (viewingInstanceId === a.instanceId && mirrorEngine.isReadonly()) {
         // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续
         // 被旧 mirrorReadonly 锁在 CLI 来源。失败入队不清锁，仍保持终端权威。
         mirrorEngine.takeOver(a.sessionId);
       }
-      // 只在消息真正成功入队后才登记去重 ID（此后同 ID 重发才判 duplicate、幂等）。
-      messageDedupState = commitProcessed(clientMessageId, messageDedupState);
       // 入队即在跑：立即广播 turnRunning=true，多端禁发送按钮无延迟（本端已乐观置位，这条管其它端）。
       broadcastInstances();
       if (typeof ack === 'function') ack({ ok: true, instanceId: a.instanceId });

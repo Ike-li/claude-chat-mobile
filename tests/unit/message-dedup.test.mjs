@@ -166,3 +166,37 @@ test.describe('isInFlight / claimInFlight / releaseInFlight（并发去重：处
     assert.equal(releaseInFlight(undefined, s), s);
   });
 });
+
+// ── 2026-08-04 code review：登记时机的顺序不变量 ──────────────────────────────
+// 这条不变量活在 src/server/app.js 的 user:message handler 里，那段没有单测入口（要 socket +
+// 真实例），但它极易被"顺手挪一行"破坏，且破坏后的症状是【同一条 prompt 投给 Claude 两次】——
+// 昂贵且难复现。故在源码层面钉住相对顺序。
+//
+// 为什么必须最先 commit：send 已 resolve 成功 = 消息确实进了 SDK 队列，从这一刻起它就是"已处理"。
+// 若 commitProcessed 排在 diagLog.record / mirrorEngine.takeOver 之后，那两步任一抛异常都会：
+//   finally 释放 in-flight → 去重 ID 未登记 → 客户端收负 ack 重发
+//   → isProcessed 假、isInFlight 假 → handler 整条重跑 → a.send() 二次投递。
+// 加 try/finally 之前，那条陈旧的 in-flight 占用反而会挡住重试（卡到重启，但至多一次）。
+test('user:message：commitProcessed 排在 send 成功后的所有副作用之前（防重复投递）', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../../src/server/app.js', import.meta.url), 'utf8');
+
+  const start = src.indexOf("if (!sent) {");
+  assert.ok(start > 0, '未找到 send 失败分支，app.js 结构已变，请同步本测试');
+  const end = src.indexOf('} finally {', start);
+  assert.ok(end > start, '未找到 handler 的 finally');
+  const seg = src.slice(start, end);
+
+  const at = needle => {
+    const i = seg.indexOf(needle);
+    assert.ok(i >= 0, `未在 send 成功段里找到 ${needle}`);
+    return i;
+  };
+  const commit = at('commitProcessed(');
+  for (const sideEffect of ['diagLog.record(', 'mirrorEngine.takeOver(', 'broadcastInstances(']) {
+    assert.ok(
+      commit < at(sideEffect),
+      `commitProcessed 必须排在 ${sideEffect} 之前：该副作用抛异常会让去重 ID 漏登记，重发时整条 handler 重跑并二次 a.send()`,
+    );
+  }
+});
