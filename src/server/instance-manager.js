@@ -47,10 +47,9 @@ export function createInstanceManager() {
     return 'idle';
   }
 
-  function remove(id) {
-    const agent = agents.get(id);
-    if (!agent) return null;
-    agent.dispose();
+  // 只清表、不 dispose。onExit 与 remove 共用这一份——两处各自手写九行 delete 时曾漏掉
+  // unread* 三张表（2026-08-03 F3），instanceId 自增不复用，条目永远无人再读。收敛后加新表只改这里。
+  function clearTables(id) {
     agents.delete(id);
     permissionModes.delete(id);
     efforts.delete(id);
@@ -60,6 +59,13 @@ export function createInstanceManager() {
     unreadCounts.delete(id);
     unreadSnapshotOnEntry.delete(id);
     lastCountedTopLevelMessageId.delete(id);
+  }
+
+  function remove(id) {
+    const agent = agents.get(id);
+    if (!agent) return null;
+    agent.dispose();
+    clearTables(id);
     return agent;
   }
 
@@ -91,6 +97,7 @@ export function createInstanceManager() {
     inheritedEffort,
     stateOf,
     captureUnreadSnapshot,
+    clearTables,
     remove,
   };
 }
