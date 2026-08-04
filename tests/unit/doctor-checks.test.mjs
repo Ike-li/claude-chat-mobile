@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic } from '../../src/ops/doctor-checks.js';
+import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, logSwitchDiagnostic, LOG_ROTATE_THRESHOLD_BYTES } from '../../src/ops/doctor-checks.js';
 
 // 判据依据（2026-08-04 用本地假网关抓 /v1/messages 请求体实测，CLI 2.1.221）：
 //   全局 sonnet + 目录映射 SONNET      → 发出 grok-4.5      （映射生效）
@@ -322,4 +322,61 @@ test('modelSettingsConflictDiagnostic: 原型链键名不得让整份体检崩�
     assert.ok(r && typeof r.status === 'string', `model=${evil} 必须返回正常结果而非抛异常`);
     assert.equal(r.status, 'warn', `${evil} 不是档位别名，应按模型全名判 warn`);
   }
+});
+
+// ---- 日志开关长开检出 ----
+// 事故实证（2026-08-04 复核）：~/Library/Logs/ccm-server.log.0.gz 解压 156,351,605 字节 = 149MiB，
+// 归档时间 7/18，与 app.js:2661 注释「DEBUG_SDK_MESSAGES 长开曾把日志刷到 149M 而无任何界面可见」
+// 对得上。当时唯一的可见性是事后翻磁盘——doctor 此前对三个日志开关零感知（grep LOG_ scripts/doctor.js
+// 无命中）。
+//
+// 判据与服务状态面板对齐（logic.js serviceStatusBasicRows：只有 sdkDebug 开才 alert）：
+// interactions/stderr 量级小得多，单独开着是正常调试态，不该每次体检都报 warn 制造噪音——
+// 那样人会学会忽略它，检出就白做了（同 metrics.js recentDeliveryFailure 的「狼来了」考虑）。
+// 但它们叠加「日志已经涨过轮转阈值」时仍要提醒：此时保留窗口正在被压缩。
+const noLogFile = { interactions: false, sdkDebug: false, stderr: false, logFileBytes: 0 };
+
+test('logSwitchDiagnostic: 三个开关全关 → ok', () => {
+  const r = logSwitchDiagnostic(noLogFile);
+  assert.equal(r.status, 'ok');
+});
+
+test('logSwitchDiagnostic: DEBUG_SDK_MESSAGES 开 → warn 且点名该开关（149M 事故元凶）', () => {
+  const r = logSwitchDiagnostic({ ...noLogFile, sdkDebug: true });
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /DEBUG_SDK_MESSAGES/);
+});
+
+// 防「文案写死」空过：实现若不分开关种类、恒回同一串，本条会红。
+test('logSwitchDiagnostic: 仅 LOG_STDERR 开且日志未超阈值 → ok，且不得点名 DEBUG_SDK_MESSAGES', () => {
+  const r = logSwitchDiagnostic({ ...noLogFile, stderr: true });
+  assert.equal(r.status, 'ok');
+  assert.match(r.detail, /LOG_STDERR/);
+  assert.doesNotMatch(r.detail, /DEBUG_SDK_MESSAGES/);
+});
+
+// 防「大小分支空过」：实现若忽略 logFileBytes，本条会红。
+test('logSwitchDiagnostic: 仅 LOG_STDERR 开但日志已超轮转阈值 → 升级为 warn 且带出实际体积', () => {
+  const r = logSwitchDiagnostic({ ...noLogFile, stderr: true, logFileBytes: LOG_ROTATE_THRESHOLD_BYTES + 1 });
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /\d+\s*MB/);
+});
+
+// 两个 warn 分支（sdkDebug / oversized）的 detail 都含开关名与体积，只断言这两项会被另一分支
+// 误满足——首轮变异检查实测：把 `if (sdkDebug)` 改成 `if (false)` 时本条仍绿（落到 oversized 分支
+// 照样通过）。故必须再断言一句 sdkDebug 分支【独有】的收尾指引，才真正钉住走的是哪条分支。
+test('logSwitchDiagnostic: sdkDebug 开且日志超阈值 → 走 sdkDebug 分支，开关名与体积同时出现', () => {
+  const r = logSwitchDiagnostic({ ...noLogFile, sdkDebug: true, logFileBytes: 200 * 1024 * 1024 });
+  assert.equal(r.status, 'warn');
+  assert.match(r.detail, /DEBUG_SDK_MESSAGES/);
+  assert.match(r.detail, /200\s*MB/);
+  assert.match(r.detail, /调试完请/, 'sdkDebug 分支独有文案；缺了说明落到了 oversized 分支');
+});
+
+// 日志文件读不到（未配置 LOG_FILE / 前台跑 / 权限不足）时，体检不得因此崩或误报体积。
+test('logSwitchDiagnostic: logFileBytes 缺省 → 按「未超阈值」处理，不出现体积文案', () => {
+  const r = logSwitchDiagnostic({ interactions: true, sdkDebug: false, stderr: false });
+  assert.equal(r.status, 'ok');
+  assert.match(r.detail, /LOG_INTERACTIONS/);
+  assert.doesNotMatch(r.detail, /MB/);
 });

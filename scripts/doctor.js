@@ -15,8 +15,9 @@
 // 10. 前端 JS 语法（递归检查 public/js/**/*.js——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
 // 11. 测试覆盖率门槛
 // 12. CLI hooks 桥安装态（只读 status；不安装、不改 ~/.claude）
+// 13. 日志开关长开（DEBUG_SDK_MESSAGES/LOG_INTERACTIONS/LOG_STDERR + 日志体积）
 import { config } from 'dotenv';
-import { existsSync, accessSync, constants, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, accessSync, constants, mkdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -25,7 +26,7 @@ import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
-import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic } from '../src/ops/doctor-checks.js';
+import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic, logSwitchDiagnostic } from '../src/ops/doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
 
@@ -345,6 +346,35 @@ function checkCoverageThreshold() {
   }
 }
 
+// D13: 日志开关长开。DEBUG_SDK_MESSAGES 长开曾把日志刷到 149MB 而事后才被发现（2026-07-18 归档实测），
+// 此前 doctor 对三个开关零感知，服务状态面板是唯一可见性（app.js logging 字段）——那要人主动去看。
+//
+// 读 process.env 而非解析 .env 原文：上面 config({ path: envFile }) 已把被诊断的 .env 灌进
+// process.env，而 dotenv 默认不覆盖已存在的值，所以 process.env 恰好是「shell export 优先、.env 补充」
+// 的实际生效态。只读 .env 文件会漏掉 shell export 的开关（doctor 曾因只读文件而给出恒绿假 OK）。
+//
+// 三个开关的判定口径【故意不统一】，逐字对齐运行时，否则 doctor 报的和实际生效的不是一回事：
+//   LOG_INTERACTIONS 严格 === '1'（interaction-log.js:12）
+//   DEBUG_SDK_MESSAGES / LOG_STDERR 是 truthy（agent.js:428 / :144）
+// 后两个写成 LOG_STDERR=false 反而是【开着】——这正是本检查能顺带暴露的脚枪。
+function checkLogSwitches() {
+  let logFileBytes = 0;
+  // LOG_FILE 留空时的默认路径只在 macOS 部署约定下成立（同 log-terminal.js / rotate-logs.sh）；
+  // 其它平台或文件不存在时按 0 处理，让判定退化为「只看开关」而不是误报体积。
+  const logFile = process.env.LOG_FILE
+    || (platform() === 'darwin' ? join(homedir(), 'Library', 'Logs', 'ccm-server.log') : '');
+  if (logFile) {
+    try { logFileBytes = statSync(logFile).size; } catch { /* 不存在/无权限：按 0，不影响开关判定 */ }
+  }
+  const r = logSwitchDiagnostic({
+    interactions: process.env.LOG_INTERACTIONS === '1',
+    sdkDebug: !!process.env.DEBUG_SDK_MESSAGES,
+    stderr: !!process.env.LOG_STDERR,
+    logFileBytes,
+  });
+  (r.status === 'warn' ? warn : ok)('日志开关', r.detail);
+}
+
 // ──────────────────────── 主流程 ────────────────────────
 
 // 解析命令行 --env 和 --fix
@@ -391,6 +421,7 @@ function effectiveConfigFiles() {
   checkFrontendSyntax();
   checkCoverageThreshold();
   checkHooksBridge();
+  checkLogSwitches();
 
   // --fix 选项：自动修复权限
   if (shouldFix) {

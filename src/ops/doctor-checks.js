@@ -239,3 +239,42 @@ export function computeReadiness(checks = []) {
   if (hasDanger || list.some(c => c.status === 'warn')) return { level: 'caution', summary: '可用，但有需留意的偏宽项' };
   return { level: 'ready', summary: '关键项就绪' };
 }
+
+// 日志开关长开检出。三个开关都会放大日志体积，但量级差几个数量级：
+// DEBUG_SDK_MESSAGES 每条 SDK 消息一行（2026-07-18 归档实测 149MiB，见 app.js:2661 注释），
+// LOG_STDERR 只在子进程写 stderr 时出，LOG_INTERACTIONS 每条消息四行。
+//
+// 判据与服务状态面板对齐（logic.js serviceStatusBasicRows：只有 sdkDebug 算 alert）——
+// interactions/stderr 单开是正常调试态，恒 warn 会变成人人忽略的噪音（同 metrics.js
+// recentDeliveryFailure「狼来了」考虑）。但它们叠加「日志已涨过轮转阈值」时要提醒：
+// rotate-logs.sh 是 --max-mb 20 --keep 5，越过阈值就开始天天轮转，保留窗口随之压缩。
+//
+// 阈值取 rotate-logs.sh 的 MAX_MB=20，不是拍脑袋：越过它才真正开始吃保留窗口。
+// 两处各写各的有漂移风险，但 shell 脚本无法被 import——改 rotate-logs.sh 时须同步此处。
+export const LOG_ROTATE_THRESHOLD_BYTES = 20 * 1024 * 1024;
+
+export function logSwitchDiagnostic({ interactions = false, sdkDebug = false, stderr = false, logFileBytes = 0 } = {}) {
+  const on = [];
+  if (sdkDebug) on.push('DEBUG_SDK_MESSAGES');
+  if (interactions) on.push('LOG_INTERACTIONS');
+  if (stderr) on.push('LOG_STDERR');
+  if (!on.length) return { status: 'ok', detail: '三个日志开关均关闭' };
+
+  const bytes = Number.isFinite(logFileBytes) && logFileBytes > 0 ? logFileBytes : 0;
+  const oversized = bytes >= LOG_ROTATE_THRESHOLD_BYTES;
+  const sizeNote = oversized ? `；日志已 ${Math.round(bytes / 1024 / 1024)} MB（超轮转阈值，保留窗口正在缩短）` : '';
+  const list = on.join(' / ');
+
+  if (sdkDebug) {
+    return {
+      status: 'warn',
+      detail: `${list} 开着${sizeNote}\n` +
+        `  DEBUG_SDK_MESSAGES 每条 SDK 消息一行，长开曾把日志刷到 149MB（2026-07-18 归档实测）。\n` +
+        `  调试完请在 .env 关掉并重启常驻 server。`,
+    };
+  }
+  if (oversized) {
+    return { status: 'warn', detail: `${list} 开着${sizeNote}\n  确认仍需要，否则关掉以免继续压缩日志保留窗口。` };
+  }
+  return { status: 'ok', detail: `${list} 开着（量级可控，日志未超轮转阈值）` };
+}
