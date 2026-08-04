@@ -1,6 +1,7 @@
 // notifications.js —— 事件 → 通知的纯逻辑层（渠道无关文案 + 渠道元数据），从 server.js 抽出便于单测。
 // 传输层仍在 server.js：pushNotify（Web Push）与 ntfyNotify（ntfy）。
 import { basename } from 'node:path';
+import { setCapped } from '../shared/bounded-map.js';
 
 // notificationForEvent 返回 { title, body, data? }：
 //   · body 最小化（SEC-04 / docs/design.md）：不含命令/参数/问题正文/summary——尤其 ntfy 明文经第三方；正文回 app 内经鉴权取。
@@ -146,9 +147,8 @@ export function throttleNotify(sessionId, category, now, state = new Map(), minI
   }
   const next = new Map(state);
   // approval/input 有"被处理"动作、需要追踪未决；finished 是一次性通知，直接 pending:false（只受最小间隔约束）
-  next.set(sessionId, { ...sessionState, [category]: { notifiedAt: now, pending: category === 'approval' || category === 'input' } });
   // 有界：新增会话推到尾部，超上限删头部最旧（Map 保插入序）；已存在会话 set 不改位置、size 不变、不触发。
-  if (next.size > NOTIFY_THROTTLE_CAP) next.delete(next.keys().next().value);
+  setCapped(next, sessionId, { ...sessionState, [category]: { notifiedAt: now, pending: category === 'approval' || category === 'input' } }, NOTIFY_THROTTLE_CAP);
   return { throttled: false, next };
 }
 

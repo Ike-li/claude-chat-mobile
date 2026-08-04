@@ -4,6 +4,7 @@
 // 恒开、无 env 开关：埋点本身克制（离散状态转换而非轮询/心跳），量级与 interactionLog 同一
 // 数量级；容量上限从第一天写死，不留"能被打开却没有可见性/无自动上限"的口子（DEBUG_SDK_MESSAGES 教训）。
 import { provisionalKey } from './interaction-log.js';
+import { setCapped } from '../shared/bounded-map.js';
 
 export const MAX_ENTRIES_PER_SESSION = 100;
 export const MAX_SESSIONS = 200;
@@ -41,10 +42,7 @@ export function record(sessionKey, subsystem, event, detail = {}) {
   if (!sessionKey) return; // 无法关联到任何会话/实例——诚实丢弃，不造假 key
   if (!buffers.has(sessionKey)) {
     // 防无界增长：会话数超上限时 FIFO 淘汰最旧会话缓冲（与 interactionLog 同精神）
-    if (buffers.size >= MAX_SESSIONS) {
-      buffers.delete(buffers.keys().next().value);
-    }
-    buffers.set(sessionKey, []);
+    setCapped(buffers, sessionKey, [], MAX_SESSIONS);
   }
   const buf = buffers.get(sessionKey);
   const entry = { ts: Date.now(), subsystem, event, detail: safeDetail(detail) };
@@ -81,10 +79,7 @@ export function rebindDiagLogs(fromKey, sessionId) {
   const existing = buffers.get(sessionId) || [];
   let merged = pending.concat(existing);
   if (merged.length > MAX_ENTRIES_PER_SESSION) merged = merged.slice(merged.length - MAX_ENTRIES_PER_SESSION);
-  if (!buffers.has(sessionId) && buffers.size >= MAX_SESSIONS) {
-    buffers.delete(buffers.keys().next().value);
-  }
-  buffers.set(sessionId, merged);
+  setCapped(buffers, sessionId, merged, MAX_SESSIONS);
 }
 
 export { provisionalKey };

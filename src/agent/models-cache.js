@@ -11,6 +11,8 @@
 // 有界：cwd 数受 workDirs 白名单约束（通常 < 20），仍设上限防御异常增长；超限淘汰最旧（LRU-on-write）。
 // 可序列化：toJSON/load 跨重启持久化进 data/init-cache.json（缓存可弃，损坏即当空）。
 
+import { setLru } from '../shared/bounded-map.js';
+
 // 通用 per-cwd 有界 Map。models / slashCommands 共用同一形状（cwd → payload）。
 export function createCwdKeyedCache({ max = 32 } = {}) {
   const byCwd = new Map(); // cwd → payload
@@ -19,9 +21,8 @@ export function createCwdKeyedCache({ max = 32 } = {}) {
     // 记录某 cwd 的 payload。cwd 落空（未知工作区）直接忽略——绝不存进无键桶。
     set(cwd, payload) {
       if (!cwd) return;
-      byCwd.delete(cwd);            // 删后重插：刷新到尾部（最近使用），配合下方淘汰=LRU
-      byCwd.set(cwd, payload);
-      while (byCwd.size > max) byCwd.delete(byCwd.keys().next().value); // 淘汰最旧
+      // 写入即刷新到尾部（最近使用）；超上限淘汰最久未写的——LRU-on-write。
+      setLru(byCwd, cwd, payload, max);
     },
     // 取某 cwd 的 payload；未知 cwd 返回 null——诚实的「不知道」，绝不回退别区清单（那正是 bug）。
     get(cwd) {

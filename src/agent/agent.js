@@ -10,6 +10,7 @@ import { sdkChildEnv } from '../shared/child-env.js';
 import { truncate, stringify, redactBase64, TOOL_SUMMARY_CAP } from '../shared/tool-summary.js';
 import { AGENT_EVENT_TYPES } from '../shared/protocol.js';
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
+import { setCapped } from '../shared/bounded-map.js';
 import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
@@ -143,7 +144,7 @@ export function buildAgentQueryOptions(session, env = process.env) {
     stderr: data => { if (env.LOG_STDERR) console.error('[claude]', sanitize(data)); },
   };
 }
-const TOOL_INPUT_MAX = 40;                // LRU 上限，防内存涨
+const TOOL_INPUT_MAX = 40;                // FIFO 容量上限（Map 插入序淘汰最旧），防内存涨
 const TOOL_CHANGE_KIND = { Edit: 'edit', Write: 'write', Read: 'read', MultiEdit: 'multiedit', NotebookEdit: 'notebook' };
 const toolFilePath = (input) => input?.file_path ?? input?.notebook_path ?? null;
 // AskUserQuestion 选项归一：字符串 → {label}；对象保留 description/preview（对齐 CLI 自动 Other 之外的完整呈现）
@@ -260,7 +261,7 @@ export class AgentSession {
     this._ringLen = 0;
     this._bufferView = []; // 惰性缓存；_ringPush 置脏为 null
     this.toolInputs = new Map(); // ③：toolUseId → {name, input, ts}（文件类工具完整 input，供 tool:preview 重建 diff）
-    this.toolOutputs = new Map(); // 工具完整 output（截断前），供 tool:full 展开；TTL/LRU 与 toolInputs 同口径
+    this.toolOutputs = new Map(); // 工具完整 output（截断前），供 tool:full 展开；TTL + FIFO 容量上限与 toolInputs 同口径
     this.toolNames = new Map();   // toolUseId → name（tool_result 选 cap 用，短命）
     this.bufferTrimmed = false;
     this.pendingTurns = 0;             // 在途轮数，仅由 send(+1) 与 result(-1) 改写
@@ -1438,21 +1439,16 @@ export class AgentSession {
   }
 
   // toolNames（toolUseId→name，tool_result 选 cap 用、短命）：正常靠 tool_result 配对 delete + dispose clear
-  // 收敛；此处补 LRU 上限（同 toolInputs/toolOutputs 的 TOOL_INPUT_MAX），防异常 SDK 流下大量 tool_use 无
-  // 配对 tool_result 时无界增长。删最旧仅在 >40 并发未配对工具的极端场景触发（几乎不可达）。
+  // 收敛；此处补 FIFO 容量上限（同 toolInputs/toolOutputs 的 TOOL_INPUT_MAX，setCapped 非写刷新 LRU），
+  // 防异常 SDK 流下大量 tool_use 无配对 tool_result 时无界增长。删最旧仅在 >40 并发未配对工具的
+  // 极端场景触发（几乎不可达）；tool id 正常不重复写，FIFO 与「写刷新 LRU」在此无观测差。
   rememberToolName(id, name) {
-    this.toolNames.set(id, name);
-    if (this.toolNames.size > TOOL_INPUT_MAX) {
-      this.toolNames.delete(this.toolNames.keys().next().value);
-    }
+    setCapped(this.toolNames, id, name, TOOL_INPUT_MAX);
   }
 
-  // ③：缓存文件类工具完整 input（LRU + TTL），供 tool:preview 无损重建 diff（避开 tool_use 的 600 字截断）。
+  // ③：缓存文件类工具完整 input（FIFO 容量 + TTL），供 tool:preview 无损重建 diff（避开 tool_use 的 600 字截断）。
   cacheToolInput(id, name, input) {
-    this.toolInputs.set(id, { name, input, ts: Date.now() });
-    if (this.toolInputs.size > TOOL_INPUT_MAX) {
-      this.toolInputs.delete(this.toolInputs.keys().next().value); // 删最老（Map 保持插入序）
-    }
+    setCapped(this.toolInputs, id, { name, input, ts: Date.now() }, TOOL_INPUT_MAX);
   }
   getToolInput(id) {
     const e = this.toolInputs.get(id);
@@ -1464,17 +1460,14 @@ export class AgentSession {
   // 工具完整输出缓存：缓存原始结构（raw），返回时红线。live 卡片只推 600 字摘要，
   // 点「展开全文」经 tool:full 取此处。base64 图片等大载荷在返回时被 redactBase64 替换，
   // 防止整串原样进 DOM 打爆手机标签页；纯文本工具输出不受影响。
-  // 与 toolInputs 同 TTL/LRU；非文件工具也能展开（Bash/MCP 长输出是主场景）。
+  // 与 toolInputs 同 TTL + FIFO 容量上限；非文件工具也能展开（Bash/MCP 长输出是主场景）。
   cacheToolOutput(id, raw) {
     if (!id || raw == null) return;
     // 超大载荷（如 base64 图片）不缓存：摘要层已红线，展开也无法展示有意义内容。
     // 用 stringify()（try/catch 兜底）而非裸 JSON.stringify——raw 结构不受本项目控制（MCP/SDK 工具
     // 输出），循环引用等不可序列化值绝不能让这条体积检查抛错打断 map() 消息泵。
     if (stringify(raw).length > 256 * 1024) return;
-    this.toolOutputs.set(id, { raw, ts: Date.now() });
-    if (this.toolOutputs.size > TOOL_INPUT_MAX) {
-      this.toolOutputs.delete(this.toolOutputs.keys().next().value);
-    }
+    setCapped(this.toolOutputs, id, { raw, ts: Date.now() }, TOOL_INPUT_MAX);
   }
   getToolOutput(id) {
     const e = this.toolOutputs.get(id);

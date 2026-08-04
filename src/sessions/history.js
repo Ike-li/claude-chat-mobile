@@ -12,6 +12,7 @@ import { MAX_SESSION_LIMIT } from './workdirs.js';
 import { toolSummary } from '../shared/tool-summary.js';
 // 本地 slash 命令输出的解析口径同样与 live 侧（agent.js）共用，防两边形态漂移。
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
+import { setCapped } from '../shared/bounded-map.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
@@ -204,10 +205,8 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   // B6：缓存消息（LRU 淘汰：上方命中路径 delete+set 移到 Map 末尾，超上限淘汰最久未用的）；已在流式阶段封顶到
   // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
   // 既防一次性撑爆前端，也防全量常驻 server 内存。mtime 失效保证一致性——被淘汰条目下次 mtime 未变即重入。
-  if (_histCache.size >= HIST_CACHE_MAX) {
-    _histCache.delete(_histCache.keys().next().value);
-  }
-  _histCache.set(historyFile, { mtimeMs, messages });
+  // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
+  setCapped(_histCache, historyFile, { mtimeMs, messages }, HIST_CACHE_MAX);
 
   return messages.slice(-limit);
 }
@@ -550,9 +549,18 @@ function reconstructSlashCommand(content) {
 // 要求闭合标签同款谨慎）。API Error（上游/网络错误）是真实运行事件、有诊断价值，不在此列——过滤它属独立决策。
 // 注：slash 命令的调用块（<command-*>）不在此列——那部分交给上面的 reconstructSlashCommand 重建保留，
 // 不再当噪音丢弃；此处只处理命令的「输出」（<local-command-stdout>），那才是真正的系统噪音。
+//
+// local-command 包装探测（比 parseLocalCommandOutput 的 wrapped 更宽）：只要求「以开标签起、文中有闭标签」，
+// 不要求开闭同类/整段纯包装——噪音过滤宁可多丢、不能漏（漏了会回显成气泡）。三处同判据共用此函数，
+// 避免再各写一份正则后只改一处。
+function isLocalCommandWrapped(text) {
+  const t = String(text ?? '').trim();
+  return /^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t);
+}
+
 function isCliSystemLine(content) {
   const t = content.trim();
-  if (/^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t)) return true;
+  if (isLocalCommandWrapped(t)) return true;
   // `!` bash 模式注入：终端里 ! 前缀跑 bash，CLI 以 <bash-input>/<bash-stdout>/<bash-stderr> 注入输入/输出
   // （role=user、isMeta 缺失，漏过 isMeta 闸）。实证 234 会话漏 4+4 条。
   if (/^<bash-(input|stdout|stderr)>/.test(t) && /<\/bash-(input|stdout|stderr)>/.test(t)) return true;
@@ -1034,8 +1042,7 @@ function hasLocalCommandStdoutAfter(entries, fromIndex) {
     if (!e) continue;
     if (e.type === 'system') {
       if (e.subtype !== 'local_command' || typeof e.content !== 'string') continue;
-      const t = e.content.trim();
-      if (/^<local-command-(stdout|stderr)>/.test(t) && /<\/local-command-(stdout|stderr)>/.test(t)) return true;
+      if (isLocalCommandWrapped(e.content)) return true;
       continue;
     }
     if (e.type !== 'user' || e.isSidechain) continue;
@@ -1044,8 +1051,7 @@ function hasLocalCommandStdoutAfter(entries, fromIndex) {
       ? c.filter(b => b?.type === 'text').map(b => b.text).join('\n')
       : '';
     if (!text) continue;
-    if (/^<local-command-(stdout|stderr)>/.test(text.trim())
-        && /<\/local-command-(stdout|stderr)>/.test(text.trim())) return true;
+    if (isLocalCommandWrapped(text)) return true;
   }
   return false;
 }

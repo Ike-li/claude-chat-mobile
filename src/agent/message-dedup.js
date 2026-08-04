@@ -4,6 +4,8 @@
 // 被处理两次。本模块只做"是否已处理过"的判定 + 有界记录，状态外置（调用方持有 Map<clientMessageId, ts>）；
 // n=1 场景内存态即可（重启清零可接受，同 rate-limiter.js 的取舍）。
 
+import { setCapped } from '../shared/bounded-map.js';
+
 export const DEDUP_CAP = 500; // 有界窗口上限：超出后清最旧一条（Map 保插入序，近似 LRU），防内存无限增长
 
 // 纯函数：只【查询】clientMessageId 是否已处理过，无副作用。
@@ -20,10 +22,7 @@ export function commitProcessed(clientMessageId, state, cap = DEDUP_CAP) {
   if (!clientMessageId) return state;
   if (state.has(clientMessageId)) return state;
   // 原地写入：热路径避免每条消息 clone Map；调用方持有同一引用即可（仍返回 state 保持链式 API）
-  state.set(clientMessageId, Date.now());
-  if (state.size > cap) {
-    state.delete(state.keys().next().value); // 最旧的一条（插入序首位）
-  }
+  setCapped(state, clientMessageId, Date.now(), cap);
   return state;
 }
 

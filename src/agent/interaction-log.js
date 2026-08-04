@@ -3,6 +3,7 @@
 // 自动截断长负载（1500 字符），避免日志膨胀；完整内容在环形缓冲/文件系统，此处只摘要。
 // 用途：调试"为什么 claude 没执行我要的"、审计对话内容（公网部署合规需求）
 import { sanitize } from '../shared/sanitizer.js';
+import { setCapped } from '../shared/bounded-map.js';
 
 const MAX_PAYLOAD_CHARS = 1500;
 const MAX_SESSIONS = 200; // sessionBuffers 会话数上限——防常驻 server 长跑下历史会话日志缓冲无界累积（FIFO 淘汰最旧）
@@ -45,20 +46,14 @@ export function rebindSessionLogs(fromKey, sessionId) {
   let merged = pending.concat(existing);
   if (merged.length > 100) merged = merged.slice(merged.length - 100);
   // 会话数 cap：目标键若是新会话也要占位（pending 迁走后 size 可能仍超）
-  if (!sessionBuffers.has(sessionId) && sessionBuffers.size >= MAX_SESSIONS) {
-    sessionBuffers.delete(sessionBuffers.keys().next().value);
-  }
-  sessionBuffers.set(sessionId, merged);
+  setCapped(sessionBuffers, sessionId, merged, MAX_SESSIONS);
 }
 
 export function addSessionLog(sessionId, type, text, meta) {
   if (!sessionId) return;
   if (!sessionBuffers.has(sessionId)) {
     // 防无界增长：会话数超上限时 FIFO 淘汰最旧会话缓冲（Map 保插入序；与 history/sessions 缓存同精神）
-    if (sessionBuffers.size >= MAX_SESSIONS) {
-      sessionBuffers.delete(sessionBuffers.keys().next().value);
-    }
-    sessionBuffers.set(sessionId, []);
+    setCapped(sessionBuffers, sessionId, [], MAX_SESSIONS);
   }
   const buffer = sessionBuffers.get(sessionId);
   const entry = {
