@@ -2446,7 +2446,9 @@ import { createSessionDeleteController } from './app/session-delete.js';
       s.el.style.opacity = '0.4';
       requestAnimationFrame(() => {
         s.el.innerHTML = render(s.raw);
-        s.el.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
+        // try 与全文件其余 hljs 调用点一致（2026-08-03 F5）：rAF 回调里抛错会中断后续
+        // 复制按钮注入与 opacity 恢复，气泡永久停在半透明——高亮失败只该丢高亮。
+        s.el.querySelectorAll('pre code').forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });
         injectCodeCopyButtons(s.el);
         appendCopyAction(s.el, () => s.raw, 'left');
         s.el.style.opacity = '1';
