@@ -205,40 +205,11 @@ export function configureHttpShell({
   const swScriptPath = join(publicDir, 'sw.js');
   const assetVersion = computeAssetVersion(selfJsDir, publicDir, selfJsFiles);
 
-  let indexHtml = null;
-  let appJs = null;
-  try {
-    indexHtml = rewriteIndexAssetUrls(
-      readFileSync(join(publicDir, 'index.html'), 'utf8'),
-      assetVersion,
-    ).replace('<body ', `<body data-cf-access="${isAccessEnabled() ? '1' : '0'}" `);
-  } catch { /* served as 500 below */ }
-  try {
-    appJs = rewriteAppModuleImports(
-      readFileSync(join(selfJsDir, 'app.js'), 'utf8'),
-      assetVersion,
-    );
-  } catch { /* served as 500 below */ }
-
-  app.get(['/', '/index.html'], (_req, res) => {
-    if (!indexHtml) return res.status(500).send('index load error');
-    res.setHeader('Cache-Control', 'no-store');
-    return res.type('html').send(indexHtml);
-  });
-  app.get('/js/app.js', (_req, res) => {
-    if (!appJs) return res.status(500).send('app.js load error');
-    res.setHeader('Cache-Control', 'no-cache');
-    return res.type('application/javascript').send(appJs);
-  });
-  // 子模块也改写相对 import 的 ?v=，避免 connection-sync 拉到未戳版本的 logic.js 双实例。
-  // 与上面的 indexHtml/appJs 一样启动时读完，请求期只查表：这条路由排在鉴权之前（静态资源必须
-  // 登录前可取），每请求 readFileSync 会让未鉴权的高频请求同步阻塞事件循环。
-  //
-  // ★ 这【是】新增约束，别照 2026-08-02 那版注释理解：index.html 与 /js/app.js 本来就是启动时
-  // 读的，但 public/js 下另外那 23 个子模块（logic.js / i18n.js / app/*.js）此前是逐请求读盘的，
-  // 改完刷新就生效。冻结之后，`npm run dev` 也救不了——node --watch 只监视被 import 的模块，
-  // public/js/** 不在服务端的 import 图里。所以开发档必须留个热读口子（hotReloadJs），
-  // 且生产启动时把冻结这件事说出来，别让人对着旧代码调半天。
+  // 三个读盘口。热读档（ASSET_HOT_RELOAD=1）逐请求调；生产档启动时调一次、请求期只查表。
+  // ★ index.html 与 /js/app.js 必须和子模块【走同一档】：只给子模块接热读时，开发者改了
+  // public/js/app.js（约 7000 行、前端改动的主要落点）刷新拿到的仍是启动快照，而子模块却真更新了
+  // ——半新半旧比整体不更新更难判，且那句「改前端需重启」的横幅恰好只在生产档打印，热读档下
+  // 没有任何线索能解释陈旧（2026-08-04 code review 实测）。
   const readSelfJsSource = (rel) => {
     try {
       return rewriteAppModuleImports(readFileSync(join(selfJsDir, rel), 'utf8'), assetVersion);
@@ -246,8 +217,46 @@ export function configureHttpShell({
       return undefined; // 读不出就当它不存在，落到下面的 static 404
     }
   };
+  const readIndexHtml = () => {
+    try {
+      return rewriteIndexAssetUrls(
+        readFileSync(join(publicDir, 'index.html'), 'utf8'),
+        assetVersion,
+      ).replace('<body ', `<body data-cf-access="${isAccessEnabled() ? '1' : '0'}" `);
+    } catch {
+      return null; // served as 500 below
+    }
+  };
+
+  const indexHtml = hotReloadJs ? null : readIndexHtml();
+  const appJs = hotReloadJs ? null : readSelfJsSource('app.js');
+
+  app.get(['/', '/index.html'], (_req, res) => {
+    const html = hotReloadJs ? readIndexHtml() : indexHtml;
+    if (!html) return res.status(500).send('index load error');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.type('html').send(html);
+  });
+  app.get('/js/app.js', (_req, res) => {
+    const source = hotReloadJs ? readSelfJsSource('app.js') : appJs;
+    if (!source) return res.status(500).send('app.js load error');
+    res.setHeader('Cache-Control', 'no-cache');
+    return res.type('application/javascript').send(source);
+  });
+  // 子模块也改写相对 import 的 ?v=，避免 connection-sync 拉到未戳版本的 logic.js 双实例。
+  // 生产档与上面的 indexHtml/appJs 同档：启动时读完、请求期只查表。这条路由排在鉴权之前
+  // （静态资源必须登录前可取），每请求 readFileSync 会让未鉴权的高频请求同步阻塞事件循环。
+  //
+  // ★ 冻结【是】新增约束，别照 2026-08-02 那版注释理解：public/js 下这 23 个子模块
+  // （logic.js / i18n.js / app/*.js）此前是逐请求读盘的，改完刷新就生效。冻结之后 `npm run dev`
+  // 也救不了——node --watch 只监视被 import 的模块，public/js/** 不在服务端的 import 图里。
+  // 所以开发档留了热读口子（hotReloadJs），并且两档各自把状态打印出来，别让人对着旧代码调半天。
   const selfJsSources = new Map();
-  if (!hotReloadJs) {
+  if (hotReloadJs) {
+    // 热读档也要把状态说出来：横幅只在生产档打印时，开着开关的人看不到任何输出，
+    // 一旦某处没接上热读就完全无从判断（这正是 /js/app.js 漏接时的处境）。
+    console.log(`[assets] ASSET_HOT_RELOAD=1：index.html / /js/app.js / /js/** 全部逐请求读盘，改完刷新即生效（版本戳 ${assetVersion} 仍是启动时算的）`);
+  } else {
     for (const path of listJsFilesRecursive(selfJsDir)) {
       const rel = relative(selfJsDir, path).split(sep).join('/');
       const source = readSelfJsSource(rel);

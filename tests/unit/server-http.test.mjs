@@ -307,7 +307,22 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
       handlers[handlers.length - 1]({ path }, res, () => { out.nextCalled = true; });
       return out;
     };
-    return { root, run };
+    // 按注册键直接打某条专用路由（/js/app.js、index）——run() 只走 /js/** 那条正则路由。
+    const invoke = (routeKey, path) => {
+      const hs = routes.get(routeKey);
+      assert.ok(hs, `未注册路由 ${routeKey}`);
+      const out = { status: 200, body: null, headers: new Map(), nextCalled: false };
+      const res = {
+        status(c) { out.status = c; return this; },
+        setHeader(k, v) { out.headers.set(k, v); return this; },
+        type() { return this; },
+        send(b) { out.body = b; return this; },
+        end() { return this; },
+      };
+      hs[hs.length - 1]({ path }, res, () => { out.nextCalled = true; });
+      return out;
+    };
+    return { root, run, invoke };
   }
 
   // 生产档显式传 hotReloadJs:false —— 默认值读的是 process.env.ASSET_HOT_RELOAD，
@@ -338,6 +353,33 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
 
   test('/js/app.js 让给上面的专用路由', () => {
     assert.equal(mount().run('/js/app.js').nextCalled, true);
+  });
+
+  // ★ 2026-08-04 code review：ASSET_HOT_RELOAD=1 只接了 /js/** 子模块那条路由，
+  // /js/app.js（约 7000 行、前端改动的主要落点）与 index.html 仍发启动时那份 —— 开发者按
+  // .env.example 打开开关、改 app.js、刷新，拿到的是旧代码；而唯一会提示「改前端需重启」的
+  // 启动横幅恰恰关在 if (!hotReloadJs) 里，热读模式下什么都不打印，没有任何线索能解释陈旧。
+  test('hotReloadJs：/js/app.js 也必须热读（它是前端改动的主要落点）', () => {
+    const { root, invoke } = mount({ hotReloadJs: true });
+    writeFileSync(join(root, 'public/js/app.js'), "import { BUILD } from './app/sub.js';\nexport const MAIN = 'edited-after-boot';\n");
+    const out = invoke('/js/app.js', '/js/app.js');
+    assert.equal(out.status, 200);
+    assert.match(out.body, /edited-after-boot/, '开着热读却发启动快照 = 开关名不副实');
+    assert.match(out.body, /from '\.\/app\/sub\.js\?v=[0-9a-f]{8}'/, '热读路径同样要戳版本');
+  });
+
+  test('hotReloadJs：index.html 也热读', () => {
+    const { root, invoke } = mount({ hotReloadJs: true });
+    writeFileSync(join(root, 'public/index.html'), '<body ><!--edited-after-boot--><script src="/js/app.js"></script></body>');
+    const out = invoke('/,/index.html', '/');
+    assert.match(out.body, /edited-after-boot/);
+  });
+
+  test('生产档（hotReloadJs:false）仍是启动快照，不因热读改造回退成逐请求读盘', () => {
+    const { root, invoke } = mount({ hotReloadJs: false });
+    writeFileSync(join(root, 'public/js/app.js'), "export const MAIN = 'mutated-after-boot';\n");
+    const out = invoke('/js/app.js', '/js/app.js');
+    assert.doesNotMatch(out.body, /mutated-after-boot/, '生产档请求期不该读盘');
   });
 
   // 开发期必须能改完就刷新看到。启动预读是 2026-08-02 为"请求期零磁盘访问"加的，但它把
