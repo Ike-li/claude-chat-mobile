@@ -149,26 +149,41 @@ export function isSafeExpr(expr, safe, factories) {
   return Boolean(id && safe.has(id));
 }
 
-// 找出递归删除调用。第一个实参必须按括号配平地取——早期用 [^,)]+ 取，
-// 结果 rmSync(join(ROOT, name), {recursive:true}) 这种【整类】调用压根匹配不上，闸对它恒绿。
+// 扫出所有匹配 headRe 的调用，并按【括号配平】取出实参区间。三条规则（递归删除 / shell 删除 /
+// 单文件删除）共用这一个走法。
+//
+// 为什么必须共用：配平这件事本身就修过一次真 bug —— 早期用 [^,)]+ 取第一个实参，
+// rmSync(join(ROOT, name), {recursive:true}) 这【整类】调用压根匹配不上，闸对它恒绿。
+// 三份逐字节相同的拷贝意味着下一次修只会落到一处，另外两条规则继续失效，而这个闸的
+// 失效方式恰恰是「静默放行」。
+function* balancedCalls(scanSource, headRe) {
+  for (const m of scanSource.matchAll(headRe)) {
+    const open = m.index + m[0].length - 1;
+    let depth = 0, close = -1;
+    for (let i = open; i < scanSource.length; i += 1) {
+      if ('([{'.includes(scanSource[i])) depth += 1;
+      else if (')]}'.includes(scanSource[i])) { depth -= 1; if (depth === 0) { close = i; break; } }
+    }
+    if (close === -1) continue;                        // 截断/不配平 → 跳过，不猜
+    yield { index: m.index, fn: m[1], open, close };
+  }
+}
+
+// 行号：按调用头之前的换行数算（三处规则同一算法）。
+const lineAt = (source, index) => source.slice(0, index).split('\n').length;
+
+// 找出递归删除调用。
+// rmdirSync/rmdir 带 recursive:true 与 rmSync 删除力等价（deprecated 但可用）——不列进来
+// 谁用它就整条绕过门禁（2026-08-03 review 抓出的扫描面缺口）。非递归 rmdir 只能删空目录，
+// 破坏力有界，仍由下方 recursive:true 判据自然排除。
 export function findDestructiveCalls(source) {
   const lines = source.split('\n');
   const calls = [];
-  // rmdirSync/rmdir 带 recursive:true 与 rmSync 删除力等价（deprecated 但可用）——不列进来
-  // 谁用它就整条绕过门禁（2026-08-03 review 抓出的扫描面缺口）。非递归 rmdir 只能删空目录，
-  // 破坏力有界，仍由下方 recursive:true 判据自然排除。
-  for (const m of source.matchAll(/\b(rmSync|rm|rmdirSync|rmdir)\s*\(/g)) {
-    const open = m.index + m[0].length - 1;
-    let depth = 0, close = -1;
-    for (let i = open; i < source.length; i += 1) {
-      if ('([{'.includes(source[i])) depth += 1;
-      else if (')]}'.includes(source[i])) { depth -= 1; if (depth === 0) { close = i; break; } }
-    }
-    if (close === -1) continue;
+  for (const { index, fn, open, close } of balancedCalls(source, /\b(rmSync|rm|rmdirSync|rmdir)\s*\(/g)) {
     const args = splitArgs(source.slice(open + 1, close));
     if (args.length < 2 || !/recursive\s*:\s*true/.test(args[1])) continue;
-    const line = source.slice(0, m.index).split('\n').length;
-    calls.push({ line, fn: m[1], arg: args[0], text: lines[line - 1]?.trim() ?? '' });
+    const line = lineAt(source, index);
+    calls.push({ line, fn, arg: args[0], text: lines[line - 1]?.trim() ?? '' });
   }
   return calls;
 }
@@ -191,19 +206,13 @@ const ARGV_RM_RECURSIVE = new RegExp(`(['"\`])(?:[\\w./-]*/)?rm\\1\\s*,\\s*\\[[^
 export function findShellDeletes(maskedSource, rawSource) {
   const lines = rawSource.split('\n');
   const calls = [];
-  for (const m of maskedSource.matchAll(/\b(execSync|execFileSync|exec|execFile|spawnSync|spawn)\s*\(/g)) {
-    const open = m.index + m[0].length - 1;
-    let depth = 0, close = -1;
-    for (let i = open; i < maskedSource.length; i += 1) {
-      if ('([{'.includes(maskedSource[i])) depth += 1;
-      else if (')]}'.includes(maskedSource[i])) { depth -= 1; if (depth === 0) { close = i; break; } }
-    }
-    if (close === -1) continue;
-    const rawArgs = rawSource.slice(open + 1, close);
+  const headRe = /\b(execSync|execFileSync|exec|execFile|spawnSync|spawn)\s*\(/g;
+  for (const { index, fn, open, close } of balancedCalls(maskedSource, headRe)) {
+    const rawArgs = rawSource.slice(open + 1, close);   // 区间来自掩码文本，内容回原文取
     // 只盯递归形态；非递归 rm 归下方单文件规则管，破坏力有界。
     if (!SHELL_RM_RECURSIVE.test(rawArgs) && !ARGV_RM_RECURSIVE.test(rawArgs)) continue;
-    const line = maskedSource.slice(0, m.index).split('\n').length;
-    calls.push({ line, fn: m[1], arg: rawArgs.trim().slice(0, 80), text: lines[line - 1]?.trim() ?? '' });
+    const line = lineAt(maskedSource, index);
+    calls.push({ line, fn, arg: rawArgs.trim().slice(0, 80), text: lines[line - 1]?.trim() ?? '' });
   }
   return calls;
 }
@@ -260,18 +269,11 @@ export function isExempt(lines, callLine, marker = EXEMPT_MARKER) {
 export function findSingleFileDeletes(source) {
   const lines = source.split('\n');
   const calls = [];
-  for (const m of source.matchAll(/\b(unlinkSync|unlink|rmSync|rm)\s*\(/g)) {
-    const open = m.index + m[0].length - 1;
-    let depth = 0, close = -1;
-    for (let i = open; i < source.length; i += 1) {
-      if ('([{'.includes(source[i])) depth += 1;
-      else if (')]}'.includes(source[i])) { depth -= 1; if (depth === 0) { close = i; break; } }
-    }
-    if (close === -1) continue;
+  for (const { index, fn, open, close } of balancedCalls(source, /\b(unlinkSync|unlink|rmSync|rm)\s*\(/g)) {
     const args = splitArgs(source.slice(open + 1, close));
     if (args.length > 1 && /recursive\s*:\s*true/.test(args[1])) continue; // 递归的归上一条规则管
-    const line = source.slice(0, m.index).split('\n').length;
-    calls.push({ line, fn: m[1], arg: args[0] ?? '', text: lines[line - 1]?.trim() ?? '' });
+    const line = lineAt(source, index);
+    calls.push({ line, fn, arg: args[0] ?? '', text: lines[line - 1]?.trim() ?? '' });
   }
   return calls;
 }
