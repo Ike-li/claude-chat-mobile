@@ -22,6 +22,9 @@ let localJwks = null;         // 内存中的 JWKS JSON 对象
 let localResolver = null;     // jose 本地 Key Set 查找解析器
 let lastFetchTime = 0;        // 上次远程拉取的时间戳（防止短时间内恶意刷未知 kid 导致频繁网络调用）
 const FETCH_COOLDOWN_MS = 30000; // 30 秒网络拉取冷却时间
+// 证书拉取超时：Clash 直连裸拉实测 ~2.5s，2s 必超 → 启动拉证书失败致公网 fail-closed 锁死。
+// 与 ntfy 的 NTFY_TIMEOUT_MS 同为 8s，但是两件独立的事（证书 vs 推送），不抽共享常量——改一边不该牵动另一边。
+const CERTS_FETCH_TIMEOUT_MS = 8000;
 
 // 从本地文件中加载缓存的 JWKS 密钥
 function loadLocalJwks() {
@@ -40,7 +43,7 @@ function loadLocalJwks() {
   return false;
 }
 
-// 远程拉取最新 JWKS，带有 2 秒超时，拉取成功后会持久化到本地
+// 远程拉取最新 JWKS，带超时，拉取成功后会持久化到本地
 async function fetchRemoteJwks() {
   const now = Date.now();
   if (now - lastFetchTime < FETCH_COOLDOWN_MS) {
@@ -51,7 +54,7 @@ async function fetchRemoteJwks() {
 
   const url = `${issuer}/cdn-cgi/access/certs`;
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s 超时：Clash 直连裸拉实测~2.5s，2s 必超→启动拉证书失败致公网 fail-closed 锁死
+  const timeoutId = setTimeout(() => controller.abort(), CERTS_FETCH_TIMEOUT_MS);
 
   try {
     const res = await fetch(url, { signal: controller.signal });

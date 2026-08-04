@@ -105,9 +105,9 @@ export function summarizeCoverageGap(
     totalFiles: all.length,
     loadedFiles: all.length - unloaded.length,
     gapLines,
-    totalLines,
-    // 分母外的行占生产代码的比例；没有行数信息（注入的 countLines 恒 0）时给 null 而不是 0——
-    // "不知道"和"没有缺口"是两回事，别让前者伪装成后者。
+    // 分母外的行占生产代码的比例；没有行数信息时给 null 而不是 0——"不知道"和"没有缺口"
+    // 是两回事，别让前者伪装成后者。这不是只为测试存在的分支：defaultCountLines 读盘失败
+    // 返回 0，全体读失败时 0/0 得 NaN，输出会变成「生产代码的 NaN%」。
     gapPercent: totalLines > 0 ? Number(((gapLines / totalLines) * 100).toFixed(1)) : null,
   };
 }
