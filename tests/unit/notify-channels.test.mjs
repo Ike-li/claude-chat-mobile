@@ -102,6 +102,19 @@ test.describe('createNotifyChannels · 通道开关与失败上报', () => {
     assert.equal(failures, 1);
   });
 
+  // 2026-08-03 review：ntfy 请求此前无显式超时，靠 undici 默认（headers 300s）兜底——挂死的
+  // ntfy 网关会把每次通知的 pending promise 吊住数分钟。对齐 cf-access.js 的显式超时纪律。
+  test('ntfy 请求带显式超时 signal（挂死网关不再靠 undici 默认 300s 兜底）', async t => {
+    let seenSignal = null;
+    const n = createNotifyChannels({
+      dataDir: tempDataDir(t),
+      env: { NTFY_URL: 'https://ntfy.example', NTFY_TOPIC: 'top' },
+      fetchImpl: async (_url, init) => { seenSignal = init?.signal; return { ok: true, status: 200 }; },
+    });
+    await n.ntfyNotify('title', 'body');
+    assert.ok(seenSignal instanceof AbortSignal, 'fetch init 必须带 AbortSignal 超时信号');
+  });
+
   test('ntfy 2xx → 不触发 onDeliveryFailure', async t => {
     let failures = 0;
     const n = createNotifyChannels({

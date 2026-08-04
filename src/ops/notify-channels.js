@@ -82,12 +82,16 @@ export function createNotifyChannels({
     }
   }
 
+  // ntfy 显式超时（2026-08-03，对齐 cf-access.js 的 8s 纪律）：此前靠 undici 默认（headers 300s）
+  // 兜底，挂死的 ntfy 网关会把每次通知的 pending promise 吊住数分钟。超时走 catch 计 ntfy_failure。
+  const NTFY_TIMEOUT_MS = 8000;
+
   // ②2b：向 ntfy 发一条（Node 原生 fetch，零依赖）。没配 / 出错都静默——尽力而为，绝不阻断主流程。
   async function ntfyNotify(title, body, meta = {}) {
     if (!ntfyEnabled) return;
     try {
       const { url, init } = ntfyRequestInit({ url: ntfyUrl, topic: ntfyTopic, token: ntfyToken }, title, body, meta);
-      const res = await fetchImpl(url, init);
+      const res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(NTFY_TIMEOUT_MS) });
       if (!res.ok) {
         // BE-015：fetch 对 4xx/5xx 正常 resolve——不查 res.ok 会把投递失败（401 token 错 / 404 topic 错 / 5xx）
         // 静默当成功。只记状态码（不记 title/body：SEC-04 明文经第三方，勿落日志）。不重试不阻断主流程。
