@@ -36,7 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 58 |
 | Configuration template | 1 |
 | Deployment | 3 |
-| Documentation | 10 |
+| Documentation | 9 |
 | E2E test | 42 |
 | Frontend asset | 3 |
 | Frontend source | 25 |
@@ -55,7 +55,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 134 |
 | Vendored asset | 21 |
 
-Total classified files: **387**.
+Total classified files: **386**.
 
 ## Complete file inventory
 
@@ -81,7 +81,6 @@ Total classified files: **387**.
 | `docs/display-contracts.md` | Documentation | Display contracts: model / effort / statusline TUI–SDK–FE rules and test anchors | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/getting-started.en.md` | Documentation | English first-run tutorial from installation through phone validation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/getting-started.md` | Documentation | Chinese first-run tutorial from installation through phone validation | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
-| `docs/refactor-plan.md` | Documentation | Staged refactor plan (P0-P5): state-ownership consolidation, contract source of truth, frontend split | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
 | `docs/repository-map.md` | Generated documentation | Exhaustive repository file map | README, documentation site, or maintainer reference | `npm run inventory:update` | generated |
 | `eslint.config.js` | Project configuration | ESLint flat config (npm run check static gate) | `npm run check` / `npm run lint` | Authored and reviewed manually | keep |
 | `LICENSE` | Legal | Project license | Referenced by maintainers | Authored and reviewed manually | keep |

@@ -154,7 +154,8 @@ Agent 工具审批或用户直接文件编辑
 
 - `server.js`：兼容启动入口；实际装配在 `src/server/app.js`。
 - `src/agent/agent.js`：`AgentSession`、SDK 映射、权限闸门与环形缓冲。
-- `src/sessions/history.js`：transcript 读取、追平与镜像判定。
+- `src/server/mirror-engine.js`：catchUp 追平调度与镜像状态机（状态自持）。
+- `src/sessions/history.js`：transcript 读取、历史重建与镜像判定纯函数。
 - `src/ops/cli-hooks-bridge.js` / `src/ops/cli-statusline-bridge.js`：CLI 侧信号与快照消费。
 - `public/js/app.js` 与 `public/js/app/`：客户端状态、事件派发与交互模块。
 - `scripts/contract-check.js`：双向 Socket.io 事件契约门禁。

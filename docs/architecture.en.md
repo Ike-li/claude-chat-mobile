@@ -154,7 +154,8 @@ See the [README security model](../README.en.md#security-model) for the concise 
 
 - `server.js`: compatibility launcher; assembly lives in `src/server/app.js`.
 - `src/agent/agent.js`: `AgentSession`, SDK mapping, permission gate, and ring buffer.
-- `src/sessions/history.js`: transcript reading, catch-up, and mirror decisions.
+- `src/server/mirror-engine.js`: catch-up scheduling and the mirror state machine (owns its state).
+- `src/sessions/history.js`: transcript reading, history rebuild, and pure mirror-decision functions.
 - `src/ops/cli-hooks-bridge.js` / `src/ops/cli-statusline-bridge.js`: CLI signal and snapshot consumers.
 - `public/js/app.js` and `public/js/app/`: client state, event dispatch, and interaction modules.
 - `scripts/contract-check.js`: bidirectional Socket.io event-contract gate.
