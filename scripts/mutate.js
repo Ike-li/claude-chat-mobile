@@ -228,7 +228,9 @@ function runTests(testFiles, { coverage = false, timeoutMs, home } = {}) {
     cwd: ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
-    ...(home ? { env: { ...process.env, HOME: home } } : {}),
+    // USERPROFILE 必须一起设：Node 的 os.homedir() 在 win32 读 USERPROFILE、不读 HOME，
+    // 只设 HOME 的沙箱在 Windows 上整个失效（2026-08-03 review）。darwin/linux 上多设无害。
+    ...(home ? { env: { ...process.env, HOME: home, USERPROFILE: home } } : {}),
     ...(timeoutMs ? { timeout: timeoutMs, killSignal: 'SIGKILL' } : {}),
   });
 }
