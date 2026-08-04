@@ -294,6 +294,17 @@ const rlStates = new Map(); // sourceKey → RateLimitState
 // 常驻 LaunchAgent 跑数月即单调增长。仓内其他表都有明确上限（NOTIFY_THROTTLE_CAP=500、MAX_SESSIONS=200
 // 等），只有这里没有。淘汰最坏只是让那个来源重新从 0 计数——与「重启即清零」的既有语义同级。
 const RL_STATES_CAP = 5000;
+// 写入的唯一入口（2026-08-03 F2）：cap 淘汰必须对 HTTP 与 socket 握手两条路径同时生效——
+// 此前只有 createHttpAuth 的 setState 回调做淘汰，io.use 里是裸 rlStates.set，socket.io 握手
+// （/socket.io/?EIO=4 polling 对扫描器同样可达）驱动的条目绕过上限，与上面「有界」的承诺矛盾。
+function setRlStateCapped(key, st) {
+  // Map 保持插入顺序：超限时从最早的开始淘汰（近似 FIFO，足够——限速状态本就是短时的）
+  if (!rlStates.has(key) && rlStates.size >= RL_STATES_CAP) {
+    const oldest = rlStates.keys().next().value;
+    if (oldest !== undefined) rlStates.delete(oldest);
+  }
+  rlStates.set(key, st);
+}
 const httpAuth = createHttpAuth({
   authToken: AUTH_TOKEN,
   isPublicHost,
@@ -315,14 +326,7 @@ const httpAuth = createHttpAuth({
       );
     },
     getState: (key) => rlStates.get(key),
-    setState: (key, st) => {
-      // Map 保持插入顺序：超限时从最早的开始淘汰（近似 FIFO，足够——限速状态本就是短时的）
-      if (!rlStates.has(key) && rlStates.size >= RL_STATES_CAP) {
-        const oldest = rlStates.keys().next().value;
-        if (oldest !== undefined) rlStates.delete(oldest);
-      }
-      rlStates.set(key, st);
-    },
+    setState: setRlStateCapped,
     onResult: onAuthResult,
     onLocked: (key, r) => {
       console.warn(`[http-auth] 连续鉴权失败达阈值 → 锁定 ${Math.ceil((r.retryAfterMs || 0) / 1000)}s（source=${key}）`);
@@ -579,7 +583,7 @@ io.use(async (socket, next) => {
     if (rlActive) {
       const st = rlStates.get(rlKey) || freshState();
       const r = onAuthResult(st, authPassed, Date.now());
-      rlStates.set(rlKey, r.next);
+      setRlStateCapped(rlKey, r.next); // F2：握手路径同样过 cap，不给扫描器绕出无界增长
       if (!authPassed && r.verdict === 'locked') {
         console.warn(`[conn] ${ip} 连续鉴权失败达阈值 → 锁定 ${Math.ceil(r.retryAfterMs / 1000)}s（source=${rlKey}）`);
         // FR-19 最小审计记录：只在"达阈值锁定"这个粒度写（本就限速到每锁定窗口一次），不逐次失败尝试都写——
@@ -1510,6 +1514,11 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         doneInstances.delete(id);
         errorInstances.delete(id);
         abortedInstances.delete(id);
+        // 与 instanceManager.remove 的清理集对齐（2026-08-03 F3）：漏掉这三张表时，每次空闲回收/
+        // 意外退出都泄 3 条 Map entry（instanceId 自增不复用，条目永远无人再读）。
+        unreadCounts.delete(id);
+        unreadSnapshotOnEntry.delete(id);
+        lastCountedTopLevelMessageId.delete(id);
         // 默认 allowCrossWorkspace=false：同 cwd tab 或空表面保留本工作区，不弹到异 cwd live 实例
         if (viewingInstanceId === id) reselectViewingAfter(cwd);
       }
@@ -1858,169 +1867,180 @@ registerSocketConnection(io, socket => {
       if (typeof rawAck === 'function') rawAck(result);
     };
 
-    const text = typeof payload === 'string' ? payload : payload?.text;
-    const attachments = (payload && typeof payload === 'object') ? payload.attachments : undefined;
-    const hasText = typeof text === 'string' && text.trim().length > 0;
-    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
-    if (!hasText && !hasAttachments) {
-      sysTo(socket, '消息为空或格式无效', true); // #12：不静默丢弃；用 system 不终结在途轮
-      if (typeof ack === 'function') ack({ ok: false, error: '消息为空或格式无效', permanent: true }); // BE-002：永久校验失败，客户端应停止重试
-      return;
-    }
-    if (typeof text === 'string' && text.length > 50000) {
-      // system 而非 error：发送前校验，不应 finalize 正在流式的在途任务（前端已先行红字提示）
-      sysTo(socket, `消息过长（${text.length} 字符，上限 50000），未发送`, true);
-      if (typeof ack === 'function') ack({ ok: false, error: '消息过长', permanent: true }); // BE-002：内容超长重发必再失败，客户端应停止重试而非无限重发
-      return;
-    }
-    // E17：附件校验（条数/单文件/总量）。失败用 system 提示、不发送、不终结在途轮。
-    const attErr = validateAttachments(attachments);
-    if (attErr) {
-      sysTo(socket, attErr, true);
-      if (typeof ack === 'function') ack({ ok: false, error: attErr, permanent: true }); // BE-002：附件非法重发必再失败，客户端应停止重试
-      return;
-    }
+    try {
+      const text = typeof payload === 'string' ? payload : payload?.text;
+      const attachments = (payload && typeof payload === 'object') ? payload.attachments : undefined;
+      const hasText = typeof text === 'string' && text.trim().length > 0;
+      const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+      if (!hasText && !hasAttachments) {
+        sysTo(socket, '消息为空或格式无效', true); // #12：不静默丢弃；用 system 不终结在途轮
+        if (typeof ack === 'function') ack({ ok: false, error: '消息为空或格式无效', permanent: true }); // BE-002：永久校验失败，客户端应停止重试
+        return;
+      }
+      if (typeof text === 'string' && text.length > 50000) {
+        // system 而非 error：发送前校验，不应 finalize 正在流式的在途任务（前端已先行红字提示）
+        sysTo(socket, `消息过长（${text.length} 字符，上限 50000），未发送`, true);
+        if (typeof ack === 'function') ack({ ok: false, error: '消息过长', permanent: true }); // BE-002：内容超长重发必再失败，客户端应停止重试而非无限重发
+        return;
+      }
+      // E17：附件校验（条数/单文件/总量）。失败用 system 提示、不发送、不终结在途轮。
+      const attErr = validateAttachments(attachments);
+      if (attErr) {
+        sysTo(socket, attErr, true);
+        if (typeof ack === 'function') ack({ ok: false, error: attErr, permanent: true }); // BE-002：附件非法重发必再失败，客户端应停止重试
+        return;
+      }
 
-    const cleanText = hasText ? text.trim() : '';
-    const model = (payload && typeof payload === 'object') ? payload.model : undefined;
-    // 台阶3：路由到目标实例（instanceId 优先）；无可路由实例（首发/session:new 后/无 open tab）则懒开一个
-    // （resume 该 cwd 当前会话，无则新建；该会话已 live 则聚焦去重），设为查看 tab。
-    const rawInstanceId = payload && typeof payload === 'object' ? payload.instanceId : undefined;
-    const target = resolveTarget(rawInstanceId);
-    if (target.stale) {
-      // BE-001：显式指定了一个已关闭 / 未知实例——fail-closed：不回退当前查看会话、不懒开，负 ACK 让客户端刷新后重发。
-      // 不 commit 去重 ID（客户端刷新拿到有效 instanceId 后可用同一 clientMessageId 重发）。
-      sysTo(socket, '目标会话已关闭，请刷新后重发', true);
-      if (typeof ack === 'function') ack({ ok: false, error: 'stale_instance', stale: true });
-      return;
-    }
-    let a = target.id ? (agents.get(target.id) ?? null) : null;
-    if (!a) {
-      // ensureWhitelisted 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
-      // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
-      const cwd = ensureWhitelisted(routeCwd(payload && typeof payload === 'object' ? payload.cwd : undefined), workDirs);
-      // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
-      const viewingAtStart = viewingInstanceId;
-      const saved = await currentSessionForCwd(cwd);
-      // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
-      // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
-      // justOpened 仍作二次收敛（已完成的 open 但尚未写入 inFlight 清理窗口）。
-      const justOpened = agents.get(viewingInstanceId);
-      a = (saved && instanceForSession(saved.id))
-        || (justOpened && justOpened.cwd === cwd ? justOpened : null)
-        || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
-      if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
-        viewingInstanceId = a.instanceId;
-        // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧 WORK_DIR。
-        viewingCwd = a.cwd;
+      const cleanText = hasText ? text.trim() : '';
+      const model = (payload && typeof payload === 'object') ? payload.model : undefined;
+      // 台阶3：路由到目标实例（instanceId 优先）；无可路由实例（首发/session:new 后/无 open tab）则懒开一个
+      // （resume 该 cwd 当前会话，无则新建；该会话已 live 则聚焦去重），设为查看 tab。
+      const rawInstanceId = payload && typeof payload === 'object' ? payload.instanceId : undefined;
+      const target = resolveTarget(rawInstanceId);
+      if (target.stale) {
+        // BE-001：显式指定了一个已关闭 / 未知实例——fail-closed：不回退当前查看会话、不懒开，负 ACK 让客户端刷新后重发。
+        // 不 commit 去重 ID（客户端刷新拿到有效 instanceId 后可用同一 clientMessageId 重发）。
+        sysTo(socket, '目标会话已关闭，请刷新后重发', true);
+        if (typeof ack === 'function') ack({ ok: false, error: 'stale_instance', stale: true });
+        return;
+      }
+      let a = target.id ? (agents.get(target.id) ?? null) : null;
+      if (!a) {
+        // ensureWhitelisted 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
+        // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
+        const cwd = ensureWhitelisted(routeCwd(payload && typeof payload === 'object' ? payload.cwd : undefined), workDirs);
+        // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
+        const viewingAtStart = viewingInstanceId;
+        const saved = await currentSessionForCwd(cwd);
+        // 并发懒开去重（S2 + SRV-001）：currentSessionForCwd 的 await 间隙内，另一条并发首消息可能已为本 cwd
+        // 懒开了实例。RESUME 靠 instanceForSession；FRESH 另走 dedupedResume(`fresh:${cwd}`) single-flight。
+        // justOpened 仍作二次收敛（已完成的 open 但尚未写入 inFlight 清理窗口）。
+        const justOpened = agents.get(viewingInstanceId);
+        a = (saved && instanceForSession(saved.id))
+          || (justOpened && justOpened.cwd === cwd ? justOpened : null)
+          || await dedupedResume(cwd, saved?.id ?? null); // resume / FRESH 均 single-flight
+        if (shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow: viewingInstanceId })) {
+          viewingInstanceId = a.instanceId;
+          // SRV-002：懒开须同步裸 viewingCwd——否则 envelopes / pendingModeByCwd 仍指向旧 WORK_DIR。
+          viewingCwd = a.cwd;
+          broadcastInstances();
+        }
+        // 用户已切走：实例仍留在 agents Map，不写 viewing、不 broadcast 抢焦点
+      }
+      // 陈旧上下文守卫（2026-07-12 单驾驶员，修「接管后的语义分叉」）：实例的 SDK 子进程上下文是进程内存态、
+      // 只在启动(resume)那一刻读过磁盘；外部驱动方（终端 CLI）此后写的轮次，web 靠追平【显示】了、但子进程
+      // 【内存里没有】——直接发送=模型看不到那些轮次、还从旧位置分叉出第二条 parentUuid 链。externalDirty 由
+      // catchUpTick 观察到外部 text 写入时标记（其 localBusy 吸收逻辑已排除己方写入），此处先置换实例
+      // （dispose+resume 冷读最新磁盘，同 effort 切档模式）再发送。
+      // 已知边界：catchUpTick 只盯当前查看会话——后台 tab 被外部写过、切入后首个 tick(≤2.5s)前极速发送不经
+      // 此守卫（切入流程本身 1-2s，实际难触发）；接受，不为此每次发送读盘比对。
+      if (a.externalDirty && a.sessionId) {
+        // SRV-003：忙碌中禁止置换（会 kill 在途 canUseTool / turn）；可重试 ack，客户端保留 pending。
+        // 文案区分「吸收终端写入」与具体忙因（turn / 审批 / 后台任务），避免 UI 已「完成」仍见笼统「会话正在处理」。
+        if (a.isBusy()) {
+          const nack = externalDirtyBusyNack({
+            pendingTurns: a.pendingTurns,
+            bgTaskCount: a.bgTasks?.size ?? 0,
+            pendingPermissionCount: a.pendingPermissions?.size ?? 0,
+            pendingQuestionCount: a.pendingQuestions?.size ?? 0,
+          });
+          interactionLog.addSessionLog(
+            a.sessionId,
+            'sys_info',
+            `[SYS] externalDirty 置换被拒（${nack.reason}）：${nack.detail}`,
+          );
+          if (typeof ack === 'function') {
+            ack({ ok: false, error: nack.error, retryable: nack.retryable, reason: nack.reason });
+          }
+          return;
+        }
+        const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId);
+        const disposedId = a.instanceId;
+        interactionLog.addSessionLog(sid, 'sys_info', '[SYS] 会话曾被外部（终端）驱动，发送前置换实例吸收外部轮次（防陈旧上下文分叉）');
+        // 体感：置换会冷启动 resume，前端先收到 system 条再等 init，避免「点了没反应」
+        socket.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: sid, instanceId: disposedId, ts: Date.now(),
+          type: 'system', payload: { message: '正在续接会话（吸收终端写入）…', kind: 'resuming' }
+        });
+        // SS-NEW-001 / SRV-NEW-002：silent dispose——不 reselect 到 remaining[0]、不 clearMirror、不中间 broadcast；
+        // viewing 保持死指针，await 后按 shouldClaimViewingAfterSwap 决定是否原子接管（用户切走则不抢）。
+        disposeInstance(disposedId, { reselect: false });
+        // SRV-003：走 dedupedResume 而非裸 openInstance，并发 swap 收敛到同一 resume Promise。
+        a = await dedupedResume(cwd, sid, { mode, effort: eff });
+        if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
+          viewingInstanceId = a.instanceId;
+          viewingCwd = a.cwd;
+        } else if (viewingInstanceId === disposedId) {
+          // 安全网：理论上 silent 后 viewing 应仍是 disposedId 或用户已改；若仍死指针却未 claim，落 reselect
+          reselectViewingAfter(cwd);
+        }
         broadcastInstances();
       }
-      // 用户已切走：实例仍留在 agents Map，不写 viewing、不 broadcast 抢焦点
-    }
-    // 陈旧上下文守卫（2026-07-12 单驾驶员，修「接管后的语义分叉」）：实例的 SDK 子进程上下文是进程内存态、
-    // 只在启动(resume)那一刻读过磁盘；外部驱动方（终端 CLI）此后写的轮次，web 靠追平【显示】了、但子进程
-    // 【内存里没有】——直接发送=模型看不到那些轮次、还从旧位置分叉出第二条 parentUuid 链。externalDirty 由
-    // catchUpTick 观察到外部 text 写入时标记（其 localBusy 吸收逻辑已排除己方写入），此处先置换实例
-    // （dispose+resume 冷读最新磁盘，同 effort 切档模式）再发送。
-    // 已知边界：catchUpTick 只盯当前查看会话——后台 tab 被外部写过、切入后首个 tick(≤2.5s)前极速发送不经
-    // 此守卫（切入流程本身 1-2s，实际难触发）；接受，不为此每次发送读盘比对。
-    if (a.externalDirty && a.sessionId) {
-      // SRV-003：忙碌中禁止置换（会 kill 在途 canUseTool / turn）；可重试 ack，客户端保留 pending。
-      // 文案区分「吸收终端写入」与具体忙因（turn / 审批 / 后台任务），避免 UI 已「完成」仍见笼统「会话正在处理」。
-      if (a.isBusy()) {
-        const nack = externalDirtyBusyNack({
-          pendingTurns: a.pendingTurns,
-          bgTaskCount: a.bgTasks?.size ?? 0,
-          pendingPermissionCount: a.pendingPermissions?.size ?? 0,
-          pendingQuestionCount: a.pendingQuestions?.size ?? 0,
-        });
-        interactionLog.addSessionLog(
-          a.sessionId,
-          'sys_info',
-          `[SYS] externalDirty 置换被拒（${nack.reason}）：${nack.detail}`,
-        );
+      // 在途轮拒收（排队已移除 2026-07-30）：判据只认在途轮，不用 isBusy()——后台任务挂着仍可发送。
+      // 放在 send() 之前而非依赖其返回值，是为了让拒绝理由精确：send() 返回 false 还covers disposed
+      // 与窄竞态，那些是可重试的，而"任务运行中"要的是【不】自动重试（否则等于把排队搬到客户端）。
+      // 不 commit 去重 ID、不记 userMessageIn：同一 clientMessageId 稍后重发必须还能成功。
+      if (a.pendingTurns > 0) {
         if (typeof ack === 'function') {
-          ack({ ok: false, error: nack.error, retryable: nack.retryable, reason: nack.reason });
+          ack({ ok: false, error: '当前任务运行中，请等待完成后再发送', busy: true, retryable: false });
         }
         return;
       }
-      const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId);
-      const disposedId = a.instanceId;
-      interactionLog.addSessionLog(sid, 'sys_info', '[SYS] 会话曾被外部（终端）驱动，发送前置换实例吸收外部轮次（防陈旧上下文分叉）');
-      // 体感：置换会冷启动 resume，前端先收到 system 条再等 init，避免「点了没反应」
-      socket.emit('agent:event', {
-        seq: 0, epoch: 'server', sessionId: sid, instanceId: disposedId, ts: Date.now(),
-        type: 'system', payload: { message: '正在续接会话（吸收终端写入）…', kind: 'resuming' }
-      });
-      // SS-NEW-001 / SRV-NEW-002：silent dispose——不 reselect 到 remaining[0]、不 clearMirror、不中间 broadcast；
-      // viewing 保持死指针，await 后按 shouldClaimViewingAfterSwap 决定是否原子接管（用户切走则不抢）。
-      disposeInstance(disposedId, { reselect: false });
-      // SRV-003：走 dedupedResume 而非裸 openInstance，并发 swap 收敛到同一 resume Promise。
-      a = await dedupedResume(cwd, sid, { mode, effort: eff });
-      if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
-        viewingInstanceId = a.instanceId;
-        viewingCwd = a.cwd;
-      } else if (viewingInstanceId === disposedId) {
-        // 安全网：理论上 silent 后 viewing 应仍是 disposedId 或用户已改；若仍死指针却未 claim，落 reselect
-        reselectViewingAfter(cwd);
+      // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
+      interactionLog.userMessageIn(a.logKey(), cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
+      let sent;
+      try {
+        if (hasAttachments) {
+          // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
+          // 气泡走 displayText（原文，不含路径）+ 去完整 data 的元数据（含小 thumb，进缓冲供回放）
+          // SRV-004：saveAttachments 抛错必须结构化 ack（permanent 磁盘类），避免离线队列永久重试。
+          const saved = await saveAttachments(a.cwd, attachments);
+          sent = await a.send(buildPromptText(cleanText, saved), model, {
+            displayText: cleanText,
+            attachments: toEventMeta(saved),
+            clientMessageId, // FE-002：离线乐观气泡对账
+          });
+        } else {
+          // F1：send 改 async（setModel 需 await）；clientMessageId 供前端对账
+          sent = await a.send(cleanText, model, { clientMessageId });
+        }
+      } catch (err) {
+        // SRV-004：附件落盘失败 / 其它同步抛错 → 负 ACK；附件失败多半 permanent（权限/symlink/满盘）
+        const msg = err?.message || String(err);
+        const permanent = hasAttachments; // 附件校验已过、落盘仍失败 → 重试通常无意义
+        sysTo(socket, hasAttachments ? `附件保存失败：${msg}` : `发送失败：${msg}`, true);
+        if (typeof ack === 'function') ack({ ok: false, error: msg, permanent, retryable: !permanent });
+        return;
       }
+      // BE-002：send 返回 false = 实例已弃用，或上面那道在途轮闸到 send 之间的窄竞态（setModel await
+      // 让出点里另一条抢先开了轮）——都是可重试的临时失败，消息【未】入队。
+      // 必须回传 ok:false + retryable 让客户端保留 pending、稍后重连重试，且【不能】commit 去重 ID——
+      // 否则下次重发命中去重被假成功丢弃。旧代码无条件 ack{ok:true} 且忽略 send 返回值是「假成功丢消息」根因。
+      if (!sent) {
+        if (typeof ack === 'function') ack({ ok: false, error: '发送失败，请重试', retryable: true });
+        return;
+      }
+      diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
+      if (viewingInstanceId === a.instanceId && mirrorEngine.isReadonly()) {
+        // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续
+        // 被旧 mirrorReadonly 锁在 CLI 来源。失败入队不清锁，仍保持终端权威。
+        mirrorEngine.takeOver(a.sessionId);
+      }
+      // 只在消息真正成功入队后才登记去重 ID（此后同 ID 重发才判 duplicate、幂等）。
+      messageDedupState = commitProcessed(clientMessageId, messageDedupState);
+      // 入队即在跑：立即广播 turnRunning=true，多端禁发送按钮无延迟（本端已乐观置位，这条管其它端）。
       broadcastInstances();
-    }
-    // 在途轮拒收（排队已移除 2026-07-30）：判据只认在途轮，不用 isBusy()——后台任务挂着仍可发送。
-    // 放在 send() 之前而非依赖其返回值，是为了让拒绝理由精确：send() 返回 false 还covers disposed
-    // 与窄竞态，那些是可重试的，而"任务运行中"要的是【不】自动重试（否则等于把排队搬到客户端）。
-    // 不 commit 去重 ID、不记 userMessageIn：同一 clientMessageId 稍后重发必须还能成功。
-    if (a.pendingTurns > 0) {
-      if (typeof ack === 'function') {
-        ack({ ok: false, error: '当前任务运行中，请等待完成后再发送', busy: true, retryable: false });
+      if (typeof ack === 'function') ack({ ok: true, instanceId: a.instanceId });
+    } finally {
+      // 异常冒出本 handler 时（socket.js on() 包装器只负责 rawAck 负 ack），这里兜底释放 in-flight
+      // 占用——否则同一 clientMessageId 的重发会被上方 isInFlight 永久拒为「正在处理中」，这条消息
+      // 直到 server 重启都发不出（message-dedup.js 头注释要求的 try/finally release；2026-08-03 F1）。
+      // 正常路径 ack() 已释放（released=true），此处幂等跳过。只 release 不 ack：负 ack 归 on() 包装器。
+      if (!released && clientMessageId) {
+        released = true;
+        messageInFlightIds = releaseInFlight(clientMessageId, messageInFlightIds);
       }
-      return;
     }
-    // FRESH 首轮 sessionId 可能仍 null：走 agent.logKey()（provisionalKey）与 agent 内 userMessageOut/agentSend 对齐
-    interactionLog.userMessageIn(a.logKey(), cleanText, model || a.activeModel || a.reportedModel || a.defaultModel, a.effort || 'model-default', a.permissionMode || 'default'); // 交互日志：client → server；model/effort/perm 走 chip 字段
-    let sent;
-    try {
-      if (hasAttachments) {
-        // 落盘 <cwd>/.ccm-uploads/ → 绝对路径注入 prompt → 送 SDK（claude 用 Read 读，白名单内免审批）；
-        // 气泡走 displayText（原文，不含路径）+ 去完整 data 的元数据（含小 thumb，进缓冲供回放）
-        // SRV-004：saveAttachments 抛错必须结构化 ack（permanent 磁盘类），避免离线队列永久重试。
-        const saved = await saveAttachments(a.cwd, attachments);
-        sent = await a.send(buildPromptText(cleanText, saved), model, {
-          displayText: cleanText,
-          attachments: toEventMeta(saved),
-          clientMessageId, // FE-002：离线乐观气泡对账
-        });
-      } else {
-        // F1：send 改 async（setModel 需 await）；clientMessageId 供前端对账
-        sent = await a.send(cleanText, model, { clientMessageId });
-      }
-    } catch (err) {
-      // SRV-004：附件落盘失败 / 其它同步抛错 → 负 ACK；附件失败多半 permanent（权限/symlink/满盘）
-      const msg = err?.message || String(err);
-      const permanent = hasAttachments; // 附件校验已过、落盘仍失败 → 重试通常无意义
-      sysTo(socket, hasAttachments ? `附件保存失败：${msg}` : `发送失败：${msg}`, true);
-      if (typeof ack === 'function') ack({ ok: false, error: msg, permanent, retryable: !permanent });
-      return;
-    }
-    // BE-002：send 返回 false = 实例已弃用，或上面那道在途轮闸到 send 之间的窄竞态（setModel await
-    // 让出点里另一条抢先开了轮）——都是可重试的临时失败，消息【未】入队。
-    // 必须回传 ok:false + retryable 让客户端保留 pending、稍后重连重试，且【不能】commit 去重 ID——
-    // 否则下次重发命中去重被假成功丢弃。旧代码无条件 ack{ok:true} 且忽略 send 返回值是「假成功丢消息」根因。
-    if (!sent) {
-      if (typeof ack === 'function') ack({ ok: false, error: '发送失败，请重试', retryable: true });
-      return;
-    }
-    diagLog.record(a.logKey(), 'message', 'enqueued', { ms: Date.now() - t0, hasAttachments }); // Part C
-    if (viewingInstanceId === a.instanceId && mirrorEngine.isReadonly()) {
-      // 前端显式接管后第一条消息已成功入 Web SDK 队列：服务端此刻也切换驾驶方，避免 statusline 继续
-      // 被旧 mirrorReadonly 锁在 CLI 来源。失败入队不清锁，仍保持终端权威。
-      mirrorEngine.takeOver(a.sessionId);
-    }
-    // 只在消息真正成功入队后才登记去重 ID（此后同 ID 重发才判 duplicate、幂等）。
-    messageDedupState = commitProcessed(clientMessageId, messageDedupState);
-    // 入队即在跑：立即广播 turnRunning=true，多端禁发送按钮无延迟（本端已乐观置位，这条管其它端）。
-    broadcastInstances();
-    if (typeof ack === 'function') ack({ ok: true, instanceId: a.instanceId });
   });
 
   on(socket, 'user:approve', payload => {
