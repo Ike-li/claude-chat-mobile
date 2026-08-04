@@ -40,6 +40,7 @@ const ROOT_FILES = new Map([
   ['docs/display-contracts.md', ['Documentation', 'Display contracts: model / effort / statusline TUI–SDK–FE rules and test anchors', 'keep']],
   ['docs/getting-started.en.md', ['Documentation', 'English first-run tutorial from installation through phone validation', 'keep']],
   ['docs/getting-started.md', ['Documentation', 'Chinese first-run tutorial from installation through phone validation', 'keep']],
+  ['docs/hard-rules.md', ['Documentation', 'Hard rules, n=1 tradeoffs, and deferred tech-debt index for maintainers', 'keep']],
 ]);
 
 const PREFIX_RULES = [

@@ -4,7 +4,7 @@
 > **可执行锚点**：`tests/unit/display-contracts.test.mjs`（改契约先改测试，再改实现）。  
 > **范围（v1）**：模型 · 思考强度 effort · statusline。其它面（工具卡/历史/权限 pill）见文末扩展清单。
 
-项目入口见 [README](../README.md)；首次运行见[首次使用指南](getting-started.md)；整体数据路径见[架构说明](architecture.md)。
+项目入口见 [README](../README.md)；首次运行见[首次使用指南](getting-started.md)；整体数据路径见[架构说明](architecture.md)；产品不变量与 n=1 取舍见[硬性规则索引](hard-rules.md)。
 
 **原则**
 

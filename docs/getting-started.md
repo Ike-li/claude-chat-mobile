@@ -271,4 +271,5 @@ npm run hooks:uninstall
 - 长期公网使用：[部署与运维](deployment.md)
 - 理解 Web/CLI 双通道：[架构说明](architecture.md)
 - 理解模型、effort、statusline 展示来源：[展示契约](display-contracts.md)
+- 维护者：n=1 硬性规则与技术债索引：[hard-rules.md](hard-rules.md)
 - 查看所有环境变量：[`.env.example`](../.env.example)

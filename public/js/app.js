@@ -6296,7 +6296,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     //   是单例全局（一次只跟踪一个会话的锁）。readonly=false 这里【无条件解锁】——两台设备同时看不同会话时，
     //   给会话 B 的解锁会误解锁正看着会话 A 的另一端。属"单活跃查看者"架构限制，仅多设备-不同会话场景触发；
     //   彻底修需把 viewing/catchup/mirror 全改 per-socket + 定向 emit（大改），单用户工具不值，故保留。
-    //   （承接 docs/design.md；2026-07-12 机主确认 Phase 8 不做此 per-socket 大改、保留现状，见 server.js setMirror 登记。）
+    //   （2026-07-12 机主确认 Phase 8 不做 per-socket 大改、保留现状；见 docs/hard-rules.md §5 AD-5 / mirror-engine 登记。）
     const readonly = !!ev.payload?.readonly;
     const stale = !!ev.payload?.stale;
     // server 是否见过真实 CLI 注册表条目（entrypoint=cli）。缺省（旧服务端/视觉 mock 不带）保守当

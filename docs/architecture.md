@@ -160,4 +160,4 @@ Agent 工具审批或用户直接文件编辑
 - `public/js/app.js` 与 `public/js/app/`：客户端状态、事件派发与交互模块。
 - `scripts/contract-check.js`：双向 Socket.io 事件契约门禁。
 
-完整目录职责与文件清单见[仓库地图](repository-map.md)；模型、effort 与 statusline 的跨层变换见[展示契约](display-contracts.md)。
+完整目录职责与文件清单见[仓库地图](repository-map.md)；模型、effort 与 statusline 的跨层变换见[展示契约](display-contracts.md)；n=1 取舍与已决技术债见[硬性规则索引](hard-rules.md)。

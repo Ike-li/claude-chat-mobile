@@ -120,6 +120,7 @@ See the [architecture guide](docs/architecture.en.md) for the component diagram,
 - [Getting Started](docs/getting-started.en.md): from clone to the first message sent from your phone.
 - [Deployment and operations](docs/deployment.md) (Chinese): Cloudflare Tunnel, Access, LaunchAgent, and systemd.
 - [Architecture](docs/architecture.en.md): Web/CLI paths, event envelopes, and takeover boundaries.
+- [Hard rules and tech debt](docs/hard-rules.md) (Chinese): n=1 tradeoffs, invariants, and deferred work (maintainers).
 - [Display contracts](docs/display-contracts.md) (Chinese): sources of truth for model, effort, and status-line display.
 - [Repository map](docs/repository-map.md): entrypoints, directory roles, and the complete file inventory.
 - [Environment template](.env.example): every runtime setting and its default.

@@ -52,10 +52,11 @@ export function createMirrorEngine({
   // 无法据此区分「己方续接」与「终端在跑」——曾致纯 web 打开/切换会话被误锁只读（切入即 mtime 判活口径已废弃）。
   let mirrorReadonly = false;                         // 当前查看会话是否判「终端活跃、只读」（全局单值，非 per-连接）
   // 【已评估：不做 AD-5 per-连接锁粒度（2026-07-12 机主确认，Phase 8 技术债）】mirrorReadonly 是全局单值 +
-  // io.to('approved') 全局广播 + viewingInstanceId 单例全局——docs/design.md 指出的已知缺陷：两台设备看不同会话时，
+  // io.to('approved') 全局广播 + viewingInstanceId 单例全局——已知缺陷：两台设备看不同会话时，
   // 给会话 B 的 mirror_state 会误解锁正看会话 A 的另一端（前端 onMirrorState 注释同款登记）。AD-5 的完整修复
   // （viewing/catchup/mirror 全改 per-(sessionId,connId) + readonly_changed 定向下发）是改动面很广的大改，触发
-  // 面窄（仅"同一人多设备同看不同会话"并发），n=1 单用户下不值，保留现状。别再因"AD-5 是改进方向"重启这个大改。
+  // 面窄（仅"同一人多设备同看不同会话"并发），n=1 单用户下不值，保留现状。索引见 docs/hard-rules.md §5；
+  // 别再因"AD-5 是改进方向"重启这个大改。
   let mirrorStale = false;                            // stale=疑似终端中断（锁着+尾部 pending+超 MIRROR_STALE_PENDING_MS 零写入），前端换「可接管」文案
   // autonomous=锁是否可确定是本会话自己被 ScheduleWakeup/CronCreate 定时唤起（尾窗内查到 harness 注入
   // 的 "# Autonomous loop check" marker，见 history.js#hasAutonomousLoopMarker），而非真不知道来源的

@@ -232,11 +232,11 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
 //    本地 turn），稳健区分己方/外部写入需 server 传 ownDelta 或内容比对、代价不划算，故接受为已知边界。
 //    契约护栏：busy→idle 必须【整段吸收】（emit []），绝不改成把 [baseline,len) 全当外部 emit——否则己方
 //    turn 的每条会被 live 流 + history_append 重复渲染成气泡。见 tests/unit/mirror-sync.test.mjs 的 skip 说明。
-// 【已评估：不做 SP-10 完整闭合（2026-07-12 机主确认，Phase 8 技术债）】docs/design.md/SP-10 的"两路一致性重设计"
+// 【已评估：不做 SP-10 完整闭合（2026-07-12 机主确认，Phase 8 技术债）】"两路一致性重设计"
 //    （去掉 busy→idle 吸收、改增量读 + 幂等去重、busy→idle 立即触发）要真正闭合上述边界，前提是前端 history_append
 //    能按 uuid 幂等去重——但实测前端 onHistoryAppend（app.js）无 uuid 去重、live 流气泡也不记 uuid，故"立即触发"
 //    简单版无效（仍受契约护栏约束只能吸收），完整版需前端去重 + live 流记 uuid 的联动大改。上述边界触发面窄，
-//    n=1 单用户下该大改不值，保留现状。别再因"SP-10 设计验证通过"重启这个接入。
+//    n=1 单用户下该大改不值，保留现状。索引见 docs/hard-rules.md §5；别再因"SP-10 设计验证通过"重启这个接入。
 export function historyTailKey(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
   const last = messages[messages.length - 1];
