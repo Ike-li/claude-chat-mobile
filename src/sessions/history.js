@@ -167,14 +167,15 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
       // 故被上面那道 user/assistant 闸整条跳过。/code-review 的结果正落在这个形态上：真机跑满 13 分钟、
       // 结果完整落盘，刷新后历史里却什么都没有（2026-08-03）。live 侧同一段正文走 agent.js 的
       // local_command_output 分支，两边共用 parseLocalCommandOutput，形态一致（否则刷新前后两个样）。
-      // requireWrapper：这个 subtype 下还落命令名回显等非输出条目，只认整段是完整包装的那种。
       //
       // 【为什么 CLI 形态不一并放开】终端里同样的输出以 type:'user' + <local-command-stdout> 落盘，被
       // isCliSystemLine 当噪音丢弃（实测切 model/effort 的会话里这类回执可占回显 ~30%），那条判断保持不动：
       // CLI 形态的输出用户在终端里当场看过、web 只是只读回看；web 形态的输出则是用户从没见过的那一份。
       if (entry.type === 'system' && entry.subtype === 'local_command') {
-        const out = parseLocalCommandOutput(entry.content, { requireWrapper: true });
-        if (!out) continue;
+        const out = parseLocalCommandOutput(entry.content);
+        // 只收「整段就是完整包装」的形态：这个 subtype 是个大杂烩，同名 subtype 下还落命令名回显等
+        // 非输出条目，裸文本无从判断是不是命令结果。live 侧不看这个标记（那条通道本身就是输出语义）。
+        if (!out?.wrapped) continue;
         if (entry.uuid) { if (seenUuids.has(entry.uuid)) continue; seenUuids.add(entry.uuid); }
         // 【out.isError 有意不用】live 侧 stderr 会另发一条 notice 标失败，这里不复刻：notice 是瞬时通道，
         // 整个通道的内容（informational/mirror_error/notification/compact_error…）刷新后一律不回显，
@@ -183,7 +184,11 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
         // 是给一句 "API Error: 503" 用的，几 KB 的命令输出塞进去会整段变成挤在中间的小红字。
         //
         // 剥掉包装再交给 expandHistoryEntry：带包装的原文会被 isCliSystemLine 判成噪音丢掉。
-        for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: entry.uuid })) {
+        // 【uuid 传 null】同上面主链分支对 sidechain 的处理：分叉锚点只在对话主链上有效。这是一条
+        // type:'system' 的条目，带出 uuid 会让前端在这个气泡上挂长按分叉入口（renderOne 设
+        // dataset.uuid → resolveForkAnchorUuid 认 role==='assistant' 即采纳），sdkForkSession 遂拿到
+        // 一个非对话行的 upToMessageId。上面那道 seenUuids 去重仍用 entry.uuid，两者用途不同。
+        for (const item of expandHistoryEntry(out.text, 'assistant', entry.timestamp, { uuid: null })) {
           pushCapped(item);
         }
       }

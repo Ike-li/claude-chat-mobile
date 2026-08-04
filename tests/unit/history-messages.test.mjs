@@ -689,8 +689,8 @@ test('getSessionHistory: 别的 system 子类型即便带同款包装也不收',
   assert.deepEqual(msgs, []);
 });
 
-// 严格档（requireWrapper）的意义：这个 subtype 是个大杂烩，只认「整段就是一个完整包装」的确定形态。
-// 放宽成宽松档，同 subtype 下任何裸文本都会被当成命令输出上屏。
+// history 侧只收 wrapped 的形态：这个 subtype 是个大杂烩，只认「整段就是一个完整包装」的确定形态。
+// 放宽成收裸文本，同 subtype 下任何杂项文本都会被当成命令输出上屏。
 test('getSessionHistory: local_command 下的裸文本（无包装）不当输出回显', async () => {
   const cwd = '/test/localcmd-bare-hist';
   const dir = join(BASE, getProjectDir(cwd));
@@ -699,4 +699,37 @@ test('getSessionHistory: local_command 下的裸文本（无包装）不当输�
   ]);
   const msgs = await getSessionHistory('localcmdbare', cwd, 50, { baseDir: BASE });
   assert.deepEqual(msgs, []);
+});
+
+// ★ 2026-08-04 code review：system 条目不该成为分叉锚点。
+// 主链分支特意写了 `uuid: isSidechain ? null : entry.uuid`，理由是「分叉锚点只在主链上有效」；
+// 新增的 local_command 分支却无条件把 system 条目的 uuid 带了出来 —— 前端据此在这条气泡上挂长按
+// 分叉入口，sdkForkSession 会拿到一个非对话行的 upToMessageId。
+test('getSessionHistory: local_command 回显不带分叉锚点 uuid（system 条目不是对话主链）', async () => {
+  const cwd = '/test/localcmd-fork-anchor';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'localcmdfork', [
+    { type: 'system', subtype: 'local_command', isMeta: false, uuid: 'sys-uuid-1',
+      content: '<local-command-stdout>命令输出</local-command-stdout>', timestamp: '2024-01-01T00:00:00Z' },
+  ]);
+  const msgs = await getSessionHistory('localcmdfork', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].content, '命令输出');
+  assert.ok(!msgs[0].uuid, `system 条目的 uuid 不该外泄成分叉锚点，实得: ${msgs[0].uuid}`);
+});
+
+// stdout 段后接 stderr 段：旧的单段锚定正则整体不匹配 → 整条被丢弃（live 侧却原样上屏带标签）。
+test('getSessionHistory: stdout+stderr 并存的输出要完整回显，不整条丢弃', async () => {
+  const cwd = '/test/localcmd-both-streams';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'localcmdboth', [
+    { type: 'system', subtype: 'local_command', isMeta: false, uuid: 's-1',
+      content: '<local-command-stdout>正常输出</local-command-stdout><local-command-stderr>警告信息</local-command-stderr>',
+      timestamp: '2024-01-01T00:00:00Z' },
+  ]);
+  const msgs = await getSessionHistory('localcmdboth', cwd, 50, { baseDir: BASE });
+  assert.equal(msgs.length, 1, '两段包装的完整形态不该被判成非包装而整条丢弃');
+  assert.match(msgs[0].content, /正常输出/);
+  assert.match(msgs[0].content, /警告信息/);
+  assert.ok(!/<local-command-/.test(msgs[0].content), '包装标签不该留在正文里');
 });
