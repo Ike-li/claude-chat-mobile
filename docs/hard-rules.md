@@ -157,6 +157,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 | **AD-5** | per-(sessionId, connId) 镜像锁 + `readonly_changed` 定向下发 | **不做**（2026-07-12 机主确认，Phase 8） | `mirror-engine.js`、`app.js` 注释 |
 | **SP-10** | busy→idle 吸收完整闭合（前端 uuid 幂等 + live 记 uuid） | **不做**（同上） | `history.js` `catchUpStep` 头注 |
 | **OQ-09** | 审批时延等「人机/价值」埋点遥测 | **拒绝**；管道健康指标可走 `/metrics` | `metrics.js` |
+| **UP-1** | 让 web 端 slash 像终端那样 inline 跑（见 §5.1） | **做不到**（上游约束，2026-08-05 查证） | `agent.js#_claimSessionIdEarly` 注释 |
 
 **重开条件（任一条）**：
 
@@ -164,6 +165,37 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 2. 有可测复现 + 愿意承担 AD-5 / SP-10 全链路改动面。  
 
 否则：**别因「设计验证通过」或「理论上更干净」重启这两项。**
+
+### 5.1 web 端 slash 命令恒 fork（UP-1，上游既定行为，不是 bug）
+
+`/code-review` 这类内置 skill 在 web 端**从来没有 inline 跑过**，也不会有。CLI 2.1.222 的判据：
+
+```js
+$Dl(e) = printOutputFormat ∉ {text,json}
+       && CLAUDE_CODE_REPORT_FINDINGS
+       && options.tools.some(r => r.name === "ReportFindings" || r.aliases?.includes(…))
+// 真 → getContext 返回 "inline"；否则 "fork"
+```
+
+**判据是「宿主有没有 `ReportFindings` 工具」**（其描述原文：*so the host UI can render them*）。
+终端有 → 结果直接渲染进对话；ccm 作为 SDK host 没有 → CLI 认定渲染不了 → fork 出去跑完只给一坨文本。
+
+| 事实 | 证据 |
+|---|---|
+| web 14 次全 fork、终端 1 次 inline，**同为 xhigh 档** | 全盘 15 次调用扫描（2026-08-05） |
+| 不是回归、不是档位、不是 ccm 代码 | 同上 |
+| 整轮 `stream_event` = 0（两个转发开关都开着） | 隔离 SDK 探针 |
+| `init` 132s 才到，`rate_limit_event` 9.5s 就带 `session_id` | 同上 |
+
+**接不上的原因**（查过，别重开）：工具名匹配是精确匹配，SDK 自定义工具走 MCP、名字带 `mcp__` 前缀；
+`CLAUDE_CODE_REPORT_FINDINGS` 是内部 flag，`sdk.d.ts` 未暴露。要通得等上游开口子。
+
+**因此 fork 是既成前提**，我们只在此前提下改善可见性（三处，均已落地）：
+sessionId 不独等 `init`（`_claimSessionIdEarly`）· 看门狗豁免本地命令在途（45 分钟上限）·
+扫 `<sessionId>/subagents/` 喂既有 `bgTasks`（只喂进度不喂正文——单文件可达 762KB）。
+
+> **判据陷阱**：判 inline/fork 只看「slash 之后**紧接着的下一条**主链条目」。
+> 用「主链 assistant 累计数」会把用户后续对话算进来，得出不存在的回归转变点（2026-08-05 踩过）。
 
 ---
 
@@ -207,4 +239,5 @@ Fail-closed 要点：路径不可达、审批指纹不符、审批/提问 TTL �
 展示：不混拼 · 不猜 · 先改 display-contracts 测试
 工程：dev 分支 · 宿主机四白名单 · 其余 docker · check 全绿
 债：AD-5 / SP-10 在 n=1 下不做；无新证据不重开
+上游：web slash 恒 fork（UP-1，判据＝宿主无 ReportFindings）；只改可见性，别当 bug 修
 ```
