@@ -75,15 +75,24 @@ export function createMockTransport({
     }
   });
 
-  app.get('/js/app.js', (_req, res) => {
+  // /js/** 全部子模块都要改写相对 import 的 ?v=，与真 server 的 rewriteAppModuleImports 同款正则
+  // （src/server/http.js）—— 两处必须一致，否则 mock 下会出现真 server 没有的模块双实例：
+  // app.js 引入的是 logic.js?v=xxx，而 app/*.js 里的 `../logic.js` 未戳版本 → 浏览器按 URL 缓存
+  // 模块，两份 logic.js 各自 import 出一份 i18n.js，setLang() 只作用在其中一份。纯函数看不出问题，
+  // 一旦子模块调到依赖 i18n 模块级 currentLang 的东西（如 t()），语言就永远停在默认值。
+  // 正则须吃 `../`（`\.\.?\/`）：只认 `./` 会漏掉 app/*.js 里的 `../logic.js`，那正是本段要防的形态。
+  app.get(/^\/js\/.+\.js$/, (req, res, next) => {
+    const rel = req.path.slice('/js/'.length);
+    if (rel.includes('..')) return next();
+    let source;
     try {
-      const source = readFileSync(join(jsDir, 'app.js'), 'utf8')
-        .replace(/from\s+(['"])(\.\/[\w./-]+\.js)\1/g, `from '$2?v=${assetVersion}'`);
-      res.setHeader('Cache-Control', 'no-cache');
-      res.type('application/javascript').send(source);
-    } catch (error) {
-      res.status(500).send(`app.js load error: ${error.message}`);
+      source = readFileSync(join(jsDir, rel), 'utf8');
+    } catch {
+      return next(); // 不存在 → 交给 static 出 404，别把读失败伪装成 500
     }
+    res.setHeader('Cache-Control', 'no-cache');
+    res.type('application/javascript')
+      .send(source.replace(/from\s+(['"])(\.\.?\/[\w./-]+\.js)\1/g, `from '$2?v=${assetVersion}'`));
   });
 
   app.use(express.static(publicDir, {

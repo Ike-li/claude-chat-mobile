@@ -90,6 +90,37 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // P0-ORDER：武装「loadHistory 在途时镜像追平插队」的顺序竞态，下一次切入 Timeline Session 生效。
+      command: 'test:arm-history-order-race',
+      run: async () => { getContext().armHistoryOrderRace(); },
+    },
+    {
+      // P0-TS6：只读镜像的增量追平（终端里跑、server 轮询 transcript 检出新落定消息 → history_append）。
+      // 每批 messages 都进一个【新的空 fragment】再一次性插入 #messages，所以判定基准必须能从 frag
+      // 回落读 #messages 的尾巴——回落一旦失效，每批都会被当成「会话首条」而各插一条日期行。
+      // 这条路径此前只有 fake-DOM 单测覆盖过，这里补真实 DOM 的端到端。
+      command: 'test:history-append-ts',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId, delay } = getContext();
+        const today = (hh, mm) => { const d = new Date(); d.setHours(hh, mm, 0, 0); return d.toISOString(); };
+        const yday = (hh, mm) => { const d = new Date(); d.setDate(d.getDate() - 1); d.setHours(hh, mm, 0, 0); return d.toISOString(); };
+        // 三批分别验：首批建基准 / 同日短间隔靠回落判定不插行 / 跨天补日期行
+        const batches = [
+          [{ role: 'user', content: 'Mirror batch one', uuid: 'u-ha-1', timestamp: yday(21, 0) }],
+          [{ role: 'assistant', content: 'Mirror batch two', uuid: 'a-ha-2', timestamp: yday(21, 1) }],
+          [{ role: 'user', content: 'Mirror batch three', uuid: 'u-ha-3', timestamp: today(8, 0) }],
+        ];
+        for (let i = 0; i < batches.length; i++) {
+          socket.emit('agent:event', {
+            seq: i + 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test',
+            instanceId: viewingInstanceId, ts: Date.now(),
+            type: 'history_append', payload: { external: true, messages: batches[i] },
+          });
+          await delay(120); // 逐批到达，逼出「每批一个新 frag」的真实时序
+        }
+      },
+    },
+    {
       // 历史里的 API Error 差异化渲染。走 history_append（前端 onHistoryAppend → renderHistoryBubbles，
       // 与刷新后 loadHistory 同一渲染器），字段形态复刻 src/sessions/history.js 真实产出：
       // isApiErrorMessage/apiErrorStatus/apiError 只挂文本条。apiErrorStatus 有 null 的真形态
@@ -570,6 +601,44 @@ export function createContentScenarios(getContext) {
       },
     },
     {
+      // P0-TS5：信封 ts 保真。事件带的是 26 小时前的时刻（模拟 sync:since 从环形缓冲补发离开期间
+      // 攒下的事件——src/server/app.js 是 { ...envelope, replay:true } 原样转发，ts 是事件真实发生
+      // 时刻而非补发时刻）。客户端若拿 Date.now() 顶替信封 ts，日期行会显示「今天」；正确实现显示
+      // 「昨天」。没有这条，「传信封 ts」这个决策在 E2E 层结构性无法失败——mock 其余 replay 事件的
+      // ts 就是 Date.now()，两种实现渲染结果完全相同。
+      command: 'test:stale-ts',
+      run: async () => {
+        const { socket, activeEpoch, viewingInstanceId } = getContext();
+        // 按【日历日】构造，不用「Date.now() 减 N 小时」——后者在本地 0/1 点会把「26 小时前」
+        // 算成前天，让下面断言「昨天」的 P0-TS5 每天定时红两小时（DST 日窗口还会更宽）。
+        // 与 mock-session-timeline fixture 同一套写法。
+        const atDaysAgo = (n, hh, mm) => {
+          const d = new Date();
+          d.setDate(d.getDate() - n);
+          d.setHours(hh, mm, 0, 0);
+          return d.getTime();
+        };
+        // 两条：先落一条前天的把判定基准推到过去（触发本场景的那条消息 ts 是当下，直接跟一条
+        // 昨天的会被「时间倒流不插行」的规则吃掉），再落一条昨天的——它相对前天是跨天且时间前进，
+        // 必出 day 行「昨天」。客户端若用 Date.now() 顶替，两条都成了「今天」→ 一行也不会多出来。
+        for (const [seq, daysAgo, text] of [[1, 2, 'Stale envelope prompt from two days ago'],
+          [2, 1, 'Stale envelope prompt from yesterday']]) {
+          socket.emit('agent:event', {
+            seq, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
+            ts: atDaysAgo(daysAgo, 9, 0), replay: true,
+            type: 'user_message', payload: { text }
+          });
+        }
+        // 收尾 result：客户端发消息即 setBusy(true)，没有终态事件就一直悬在 busy。
+        // 本场景只验时间戳，但仍要把回合收干净，别给同进程的后续 spec 留下半开状态。
+        socket.emit('agent:event', {
+          seq: 3, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId,
+          ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_stale_ts', durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] }
+        });
+      },
+    },
+    {
       command: 'test:stream',
       run: async ({ activeInst }) => {
         const { io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay } = getContext();
@@ -650,11 +719,16 @@ export function createContentScenarios(getContext) {
         await delay(500);
 
         // Stream slowly: gives time for interrupt while keeping tests bounded.
+        const myTurn = activeInst.turnSeq;
         for (let i = 0; i < 20; i++) {
           // WS-008：每次 delay 后检查 abort 标志——interrupt 处理器会把 activeInst.aborted 置 true。旧实现不检查，
           // 中断后这个 16s(20×800ms) 循环仍继续每 800ms 发 text_delta + 末尾 result，污染后续 test case（TC-11
           // 之后的用例会收到本轮迟到事件）。检测到中断即停：不再发 delta、不发终态 result（interrupt 已发 system）。
           if (activeInst.aborted) { console.log('[mock] stream-long aborted by interrupt'); return; }
+          // WS-008b：单靠 aborted 会被「中断后立刻发下一条」漏过——新命令进来时会把 aborted 清回 false
+          // （见 server.js 的 test: 拦截处），而本循环那时还睡在 delay 里，醒来就当作没被中断过继续跑满。
+          // 回合号是自己那一轮的身份证：换了轮次就说明这个循环已经过气，必须立刻收摊。
+          if (activeInst.turnSeq !== myTurn) { console.log('[mock] stream-long 已被新回合取代，停止续发'); return; }
           socket.emit('agent:event', {
             seq: 2 + i, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
             type: 'text_delta', payload: { messageId: 'msg_long_1', text: `Chunk ${i + 1} of analysis... ` }

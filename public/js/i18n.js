@@ -466,6 +466,10 @@ export const EN_DICT = Object.freeze({
   '仍在等待响应': 'Still waiting for a response',
 
   // —— 时间与时长 ——
+  // 消息流时间戳的日期分隔行只需这两个 key：更早的日期走 formatCalendarDayLabel 的
+  // getLang() 分支手搓（月份是普通常量数组，塞进词典只会变成 12 个孤儿 key）。
+  '今天': 'Today',
+  '昨天': 'Yesterday',
   '刚刚': 'just now',
   '分钟前': 'min ago',
   '小时前': 'h ago',

@@ -87,6 +87,10 @@ let switchBackReplayArmed = false;
 // 否则 sync:since 那次调用早把标记翻成 true，session:history 的"第一次"就会误读成"第二次"。
 let replayFloodSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 165 条积压事件（超阈值 → reload）
 let replayFloodHistoryArmed = false; // false=返回基线 4 条；true=返回 reload 专属标记文案（证明真走了 session:history）
+// P0-ORDER：复现「loadHistory 在途时镜像追平插队」的 DOM 顺序竞态。武装后，下一次 session:history
+// 会先 emit 一条 history_append（模拟 catchUpTick 在 web 拉历史的窗口里检出终端新落定的消息，
+// 该事件是 out-of-band、不进 replay buffer、任何时候直接渲染），再返回历史本体。
+let historyOrderRaceArmed = false;
 let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 21 条积压事件（低于阈值 → flush）
 // P0-REPLAY-UNREAD-DISMISS：同 replaySmallSyncArmed 两段式门控，但第二次 ack 额外挂 unreadOnEntry——
 // 验证回放缓冲程序性落底与未读胶囊自动确认已读的协同（不复用 mockUnreadOnEntry* 单例，见下方
@@ -148,6 +152,7 @@ function resetMockState() {
   switchBackReplayArmed = false;
   replayFloodSyncArmed = false;
   replayFloodHistoryArmed = false;
+  historyOrderRaceArmed = false;
   replaySmallSyncArmed = false;
   replayUnreadSyncArmed = false;
   pendingDevices = [];
@@ -401,6 +406,15 @@ function mainCwdSessions() {
       entrypoint: 'sdk-ts'
     });
   }
+  // P0-TS：消息流时间戳专用会话。历史跨前天/昨天/今天三天，覆盖 day 行、time 行、
+  // 同轮抑制、工具卡与子 agent 正文不参与——期望值见 message-timestamps.spec.ts。
+  sessions.push({
+    id: 'mock-session-timeline',
+    title: 'Timeline Session',
+    model: 'claude-3-5-sonnet',
+    lastUsedAt: Date.now() - 1300000,
+    entrypoint: 'sdk-ts'
+  });
   return sessions;
 }
 
@@ -879,6 +893,10 @@ io.on('connection', socket => {
         instanceId: 'inst_gap',
         title: 'Archived Gap Session'
       },
+      'mock-session-timeline': {
+        instanceId: 'inst_timeline',
+        title: 'Timeline Session'
+      },
       'mock-session-older-migration': {
         instanceId: 'inst_older_migration',
         title: 'Older Migration Session'
@@ -965,17 +983,87 @@ io.on('connection', socket => {
     callback({ ok: true, instanceId: forkedInst.instanceId, sessionId: forkedInst.sessionId });
   });
 
-  socket.on('session:history', (payload, callback) => {
+  // 存量 fixture 统一落在「今天、彼此相差 1 秒」：消息流时间戳只会在每段历史顶部多一行日期，
+  // 段内不插时间行（gap 远小于阈值），故不触碰任何既有断言。
+  // 基准锚在【今天 12:00】而不是 Date.now() 往回减——后者在 2000 条的 long-history fixture 上
+  // 要横跨 33 分钟，本地 0 点前后跑就会把一批消息甩到昨天，在历史中段凭空多出一条日期分隔行。
+  function stampHistoryMessages(res) {
+    if (!Array.isArray(res?.messages)) return res;
+    const noon = new Date();
+    noon.setHours(12, 0, 0, 0);
+    const base = noon.getTime();
+    return {
+      ...res,
+      messages: res.messages.map((m, i) => (m?.timestamp
+        ? m
+        : { ...m, timestamp: new Date(base + i * 1000).toISOString() })),
+    };
+  }
+
+  socket.on('session:history', (payload, rawCallback) => {
     const { sessionId, cwd } = payload || {};
     console.log(`[mock] session:history sessionId=${sessionId}, cwd=${cwd}`);
-    if (typeof callback !== 'function') return;
+    if (typeof rawCallback !== 'function') return;
+    // 真 server 的每条历史消息都带 timestamp（transcript 原样透传，见 src/sessions/history.js）。
+    // 这里统一在出口补齐，而不是逐个分支手写——17 处 callback 漏一个就是一处静默的契约 drift。
+    // 已显式带 timestamp 的（如 mock-session-timeline fixture）保持原值不覆盖。
+    const callback = res => rawCallback(stampHistoryMessages(res));
     // P0-NOSID 区分度标记：真 server 在无 sessionId 时压根查不到（回「会话不存在」）。这里故意返回一段
     // 可识别文案——只要它出现在页面上，就说明前端仍然清屏改走了磁盘，即修复失效。断言它「不出现」。
     if (noSessionIdMode) {
       callback({ messages: [{ role: 'assistant', content: 'NOSID_DISK_MUST_NOT_APPEAR', uuid: 'a-nosid-disk' }] });
       return;
     }
-    if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
+    // P0-ORDER：在 ack【之前】推一条 history_append，精确复刻真实时序——web 拉历史的往返窗口里，
+    // server 的 catchUpTick 检出终端刚落定的消息就直接推过来了。前端先渲染这条增量、再收到历史本体，
+    // 若历史只会 appendChild 到尾部，就会出现「新消息在上、整段旧历史在下」。
+    if (historyOrderRaceArmed && sessionId === 'mock-session-timeline') {
+      historyOrderRaceArmed = false;
+      socket.emit('agent:event', {
+        seq: 99, epoch: activeEpoch, sessionId, instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'history_append',
+        payload: {
+          external: true,
+          // 时刻锚在 fixture 最后一条（今天 08:30）之后 10 分钟，【不用 Date.now()】——
+          // 用当前时刻的话，在本地 08:30 之前跑测试就会早于那条历史，被「时间倒流不插行」吃掉，
+          // marker 变成 null。而断言若只写 not.toBe('day')，null 也满足 → 整条用例假绿。
+          // 固定 10 分钟间隔（≥5 分钟阈值、同日、user）保证必出 time 行，与跑测试的时刻无关。
+          messages: [{
+            role: 'user', content: 'RACE_LATE_ARRIVAL', uuid: 'u-race-1',
+            timestamp: (() => { const d = new Date(); d.setHours(8, 40, 0, 0); return d.toISOString(); })(),
+          }],
+        },
+      });
+    }
+    if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-timeline') {
+      // P0-TS 时间戳 fixture。时刻按「相对今天」构造（非硬编码日历日），跑在任何一天都稳定。
+      // 期望 marker 共 5 个 = day×3（#1 首条 / #4 跨天 / #7 跨天）+ time×2（#5 / #9）：
+      //   #1 user     前天 09:00  → day   规则2 首条
+      //   #2 assistant 前天 09:01 → 无    规则5 role 抑制
+      //   #3 工具卡    前天 09:02 → 无    不参与、不打 data-ts（故不推进 prevTs）
+      //   #4 assistant 昨天 00:02 → day   规则4 跨天不受 role 抑制（prevTs 仍是 #2 的前天 09:01）
+      //   #5 user     昨天 22:00  → time  同日 + user + gap 21h58m（「昨天」这天的 day 行已被 #4 消耗）
+      //   #6 子agent正文 昨天 22:01 → 无   进子卡、不打 data-ts
+      //   #7 user     今天 08:00  → day   规则4 跨天（prevTs = #5 的昨天 22:00）
+      //   #8 assistant 今天 08:20 → 无    规则5 同轮抑制（虽超 5 分钟阈值）
+      //   #9 user     今天 08:30  → time  同日 + user + gap 10min
+      const day = n => { const d = new Date(); d.setDate(d.getDate() - n); return d; };
+      const iso = (n, hh, mm) => { const d = day(n); d.setHours(hh, mm, 0, 0); return d.toISOString(); };
+      callback({
+        messages: [
+          { role: 'user', content: 'Timeline day-before prompt', uuid: 'u-tl-1', timestamp: iso(2, 9, 0) },
+          { role: 'assistant', content: 'Timeline day-before reply', uuid: 'a-tl-2', timestamp: iso(2, 9, 1) },
+          { kind: 'tool_use', role: 'assistant', toolUseId: 'tl-tool-1', name: 'Read', inputSummary: '{"file":"a.ts"}', timestamp: iso(2, 9, 2) },
+          { kind: 'tool_result', role: 'user', toolUseId: 'tl-tool-1', ok: true, outputSummary: 'ok', timestamp: iso(2, 9, 2) },
+          { role: 'assistant', content: 'Timeline past-midnight reply', uuid: 'a-tl-4', timestamp: iso(1, 0, 2) },
+          { role: 'user', content: 'Timeline yesterday evening prompt', uuid: 'u-tl-5', timestamp: iso(1, 22, 0) },
+          { role: 'assistant', content: 'Timeline subagent body', uuid: 'a-tl-6', parentToolUseId: 'tl-tool-1', timestamp: iso(1, 22, 1) },
+          { role: 'user', content: 'Timeline today morning prompt', uuid: 'u-tl-7', timestamp: iso(0, 8, 0) },
+          { role: 'assistant', content: 'Timeline today long-turn reply', uuid: 'a-tl-8', timestamp: iso(0, 8, 20) },
+          { role: 'user', content: 'Timeline today follow-up', uuid: 'u-tl-9', timestamp: iso(0, 8, 30) }
+        ]
+      });
+    } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
       callback({
         messages: [
           // uuid：P0-FORK 长按分叉锚点定位用（expandHistoryEntry 透出，见 src/sessions/history.js）。
@@ -1538,6 +1626,7 @@ io.on('connection', socket => {
     ...createContentScenarios(() => ({
       io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay,
       setViewingInstanceId: value => { viewingInstanceId = value; },
+      armHistoryOrderRace: () => { historyOrderRaceArmed = true; },
     })),
     {
       commands: ['test:question', 'test:question-duplicate', 'test:question-remote-resolved', 'test:question-result-error'],
@@ -3420,7 +3509,16 @@ io.on('connection', socket => {
     if (cmd.startsWith('test:')) {
       activeEpoch = 'mock-epoch-' + cmd.replace(/[^a-zA-Z0-9]/g, '_') + '-' + Date.now();
       const activeInst = mockInstances.find(i => i.instanceId === viewingInstanceId);
-      if (activeInst) activeInst.aborted = false; // WS-008：新场景开始，清 abort 标志（interrupt 会置 true 令流式循环提前退出）
+      if (activeInst) {
+        activeInst.aborted = false; // WS-008：新场景开始，清 abort 标志（interrupt 会置 true 令流式循环提前退出）
+        // WS-008b：光靠 aborted 挡不住「中断后立刻发下一条」——它和上面这行清标志互相打架：
+        // 停止把 aborted 置 true，但流式循环还睡在 delay 里没醒；此时新命令进来先把标志清回 false，
+        // 循环醒来看到 false 就继续跑完整整 16s，最后那记 instances 广播带的是【启动时快照的】
+        // viewingInstanceId，落在好几个 test 之后 → 前端 bindView 清屏，表现为毫不相干的用例莫名其妙
+        // 少了消息（实测：P0-04b 泄漏的循环打中 P0-13 的 test:tool 窗口）。
+        // 加单调递增的回合号：旧循环发现回合已经不是自己那一轮，立即退出。两条退出路径互不干扰。
+        activeInst.turnSeq = (activeInst.turnSeq ?? 0) + 1;
+      }
 
       if (await scenarioRegistry.run(cmd, { activeInst, requestedModel })) return;
     }

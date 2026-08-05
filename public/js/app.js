@@ -9,6 +9,8 @@ import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
 import { createRttMonitor } from './app/connection-sync.js';
 import { createMessageRenderer } from './app/message-renderer.js';
+import { createMessageTimeline } from './app/message-timeline.js';
+import { createHistoryLoadGate } from './app/history-load-gate.js';
 import { createAgentEventDispatcher, createReplayBuffer } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
@@ -744,6 +746,11 @@ import { createSessionDeleteController } from './app/session-delete.js';
     pinStreamLiveStatus();
     return bar;
   };
+  // 消息流时间戳：跨天插日期分隔行、用户发言间隔超阈值插一次 HH:mm。只作用于主链 user/assistant
+  // 气泡，工具卡/thinking/系统条一律不夹（那些在一个回合里密集刷屏，加时间戳是纯噪音）。
+  const messageTimeline = createMessageTimeline({ createElement: el, appendMessage, messagesEl });
+  // 拉历史在途时把镜像追平的 history_append 扣住，历史落地后再放行——顺序与打戳同时正确。
+  const historyLoadGate = createHistoryLoadGate();
   // UI-007：工具卡/角标状态标 — 可信 SVG + aria-label（currentColor 吃语义色）
   function setStatusIcon(el, kind) {
     if (!el) return;
@@ -1754,7 +1761,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
       // scout 模型到齐后，compose 页默认档摘要与底栏 pill 同步刷新
       if (_composeReady) refreshComposeDefaultsSummary();
     },
-    text_delta(p) {
+    text_delta(p, ev) {
       clearLiveRetry(); // 重试已过，流恢复——状态行从重试态回落普通 spinner
       // 子 agent 正文：嵌进可折叠卡（不污染主流气泡）；parentToolUseId = 主 Agent/Task 的 toolUseId
       if (isSubagentPayload(p)) {
@@ -1766,7 +1773,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
         setBusy(true);
         return;
       }
-      const s = getStream(p.messageId);
+      const s = getStream(p.messageId, ev?.ts);
       s.raw += p.text;
       // UX-004：流式期间节流全量 renderMarkdown（默认 80ms），避免裸星号/列表源码；result 时 finalize 权威全文
       if (!s._mdTimer) {
@@ -1964,7 +1971,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     },
     // F3：user_message 事件渲染右侧气泡（已入缓冲，多设备/重载均可回放）
     // E17：p.attachments=[{name,mimeType,size,thumb?}]——图片显 thumb（data URI，CSP img-src data: 已许），其他显 📎 chip
-    user_message(p) {
+    user_message(p, ev) {
       // 弱网韧性：检查是否存在具有相同文本的未连接/离线发送中的乐观占位符。
       // 如果存在，不创建新气泡，而是将占位符气泡无缝转换为已确认的消息状态。
       // FE-002：优先 clientMessageId；纯附件无 .whitespace-pre-wrap 时按附件名集合匹配。
@@ -1993,6 +2000,11 @@ import { createSessionDeleteController } from './app/session-delete.js';
       if (matchedBubble) {
         matchedBubble.classList.remove('opacity-70');
         matchedBubble.querySelector('.pending-indicator')?.remove();
+        // 离线占位转正：补服务端权威 ts + 补该插的时间行。占位创建时刻意不打客户端 Date.now()
+        //（手机时钟若快几小时，那条 data-ts 落在未来，而「ts < prevTs 不插行」的规则排在跨天之前
+        // → 之后每条都被判成时间倒流，连日期行都永久消失）。这个分支直接 return、不走 append，
+        // 故须在此单独收口；settleAt 会把 marker 插在这条气泡【前面】而不是容器尾部。
+        messageTimeline.settleAt(matchedBubble, ev?.ts, 'user');
         // FE-005：离线占位曾是纯 textContent——确认时升级为与历史一致的 markdown 渲染（保留附件区）
         if (p.text && !matchedBubble.classList.contains('um')) {
           const attWrap = matchedBubble.querySelector('.flex.flex-wrap');
@@ -2045,7 +2057,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
         bubble.appendChild(buildAttachmentWrap(p.attachments, Boolean(p.text)));
       }
       if (p.text) appendCopyAction(bubble, () => p.text, 'right');
-      appendMessage(bubble);
+      messageTimeline.appendWithTime(bubble, ev?.ts, 'user');
       scrollBottom(true);
     },
     permission_request(p) {
@@ -2423,14 +2435,16 @@ import { createSessionDeleteController } from './app/session-delete.js';
     }
     streams.clear();
   }
-  function getStream(id) {
+  // ts：本轮首个 text_delta 的信封时刻。注意气泡只在这里建一次，所以它的 data-ts 是回合【开头】
+  // 而非结束——长回合下用户紧接着跟进时 gap 会算大、比预期更常插行，是已知偏差（见 logic.js 注释）。
+  function getStream(id, ts) {
     const key = id || '_';
     let s = streams.get(key);
     if (!s) {
       // UX-004：直接 msg-body 容器，流式走 innerHTML=render，不再用纯文本 textNode 裸显 markdown
       const wrap = el(`<div class="msg-frame msg-body px-0.5" data-testid="assistant-message" aria-live="polite"></div>`);
       wrap.dataset.topLevel = '1'; // 未读角标锚点定位用：仅主链 assistant 流式气泡（子agent走 getSubagentStream，不经过这里）
-      appendMessage(wrap);
+      messageTimeline.appendWithTime(wrap, ts, 'assistant');
       s = { el: wrap, raw: '', done: false };
       streams.set(key, s);
       scrollBottom();
@@ -2779,7 +2793,8 @@ import { createSessionDeleteController } from './app/session-delete.js';
       
       const indicator = el(`<div class="pending-indicator text-[11px] text-ink-faint mt-1 animate-pulse">${t('🕐 正在等待连接...')}</div>`);
       bubble.appendChild(indicator);
-      appendMessage(bubble);
+      // ts 传 null：离线时客户端时钟不可信，等 user_message 转正时补服务端权威值（见那一分支的注释）
+      messageTimeline.appendWithTime(bubble, null, 'user');
       
       enqueueOutbox({
         text,
@@ -5840,19 +5855,24 @@ import { createSessionDeleteController } from './app/session-delete.js';
   function loadHistory(sessionId, cwd = currentCwd, onDone) {
     if (!sessionId) return;
     const reqInstanceId = displayedInstanceId; // WS-001：捕获发起时的视图目标（代次）
+    // SS-ORDER：从这里到历史真正落地是一段可观的窗口（socket 往返 + renderHistoryBubbles 的分块
+    // 渲染，2000 条约 50 块）。期间镜像追平的 history_append 完全可能插进来——它是 out-of-band，
+    // 不进 replay buffer，挡不住。扣住它们，等历史落地后按原顺序放行（见 history-load-gate.js）。
+    const gateHandle = historyLoadGate.begin(reqInstanceId);
     socket.emit('session:history', { sessionId, cwd }, res => {
       // WS-001：迟到 ACK 守卫——发起后若已切走（会话或实例变），丢弃本回调。否则 A 的历史会被 renderHistoryBubbles
       // 追加进当前 B 的 DOM，且 hideLoadingCard 抹掉 B 的 loading 卡。对齐 onHistoryAppend 的 viewingInstanceId 守卫。
-      if (displayedSessionId !== sessionId || displayedInstanceId !== reqInstanceId) return;
+      if (displayedSessionId !== sessionId || displayedInstanceId !== reqInstanceId) { historyLoadGate.abort(gateHandle); return; }
       hideLoadingCard();
       const msgs = res?.messages || [];
       if (!msgs.length) {
         if (res?.error) addBar(t('历史消息加载失败'), 'text-ink-faint');
+        flushHeldHistoryAppends(gateHandle);
         onDone?.();
         return;
       }
       addBar(`${t('加载了')} ${msgs.length} ${t('条历史消息')}`, 'text-ink-faint');
-      renderHistoryBubbles(msgs, onDone);
+      renderHistoryBubbles(msgs, () => { flushHeldHistoryAppends(gateHandle); onDone?.(); }, { fullReload: true });
       // 记下该会话已渲染到的磁盘 history 条数——切入时与 server 报的 diskLen 比对，判「离开期间被外部写过」
       // 而需清屏重载（见 shouldReloadOnEnter）。全量重载=全长。
       seenDiskLenBySession.set(sessionId, msgs.length);
@@ -5929,9 +5949,18 @@ import { createSessionDeleteController } from './app/session-delete.js';
 
   // 渲染一批历史/追平消息为气泡并追加（loadHistory 与 onHistoryAppend 复用；分块让出主线程 + 一次性 fragment 插入 + 空闲高亮）。
   // 支持文本 / thinking / tool_use / tool_result；sidechain（parentToolUseId）收进可折叠子 agent 卡。
-  function renderHistoryBubbles(msgs, onDone) {
+  // fullReload：来自 loadHistory 的全量加载（这批就是会话开头，时间戳基准不看 #messages 里已有内容）
+  // 还是来自 onHistoryAppend 的增量追平（要回落读 #messages 尾巴接上前批）。详见 message-timeline.js
+  // 的 appendWithTimeToFragment 注释——两者对基准的要求正好相反。
+  function renderHistoryBubbles(msgs, onDone, { fullReload = false } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
     const frag = document.createDocumentFragment();
+    // fragment 是线性构建的：基准 seed 一次之后顺着往下带，不必每条反向扫。
+    //  · 全量加载：null —— 这批就是整个会话的开头。
+    //  · 增量追平：#messages 尾巴的戳 —— 接上前一批。
+    const stampIntoFrag = messageTimeline.beginFragment(frag, {
+      seedPrevTs: fullReload ? null : messageTimeline.lastTimestampIn(messagesEl),
+    });
     const codeBlocks = [];
     // histToolCards/histSubCards 是模块级持久 Map（跨 tick 配对，见其声明处注释），本函数只读写不新建。
     const ensureHistSub = (parentId, subagentType) => {
@@ -6084,7 +6113,9 @@ import { createSessionDeleteController } from './app/session-delete.js';
         bubble.dataset.uuid = msg.uuid;
         bindForkLongPress(bubble, isUser ? 'user' : 'assistant');
       }
-      frag.appendChild(bubble);
+      // 历史条目的 timestamp 是 transcript 原样透传的 ISO 串（src/sessions/history.js）。
+      // 节点先进游离的 frag，故 prevTs 优先读 frag、空了再回落 #messages（增量追加场景）。
+      stampIntoFrag(bubble, msg.timestamp, msg.role);
     }
 
     // 中断检查用「渲染发起时 #messages 归属哪个实例」的快照；bindView 是唯一整体改写 #messages 的地方，
@@ -6116,10 +6147,20 @@ import { createSessionDeleteController } from './app/session-delete.js';
     processChunk();
   }
 
+  // 历史落地后放行被扣住的追平事件。此刻 DOM 已是最终态，走正常 onHistoryAppend 即可——
+  // 顺序天然接在历史之后，时间戳也以真正的前一条为基准（不会再误判成会话首条）。
+  function flushHeldHistoryAppends(handle) {
+    for (const ev of historyLoadGate.release(handle)) onHistoryAppend(ev);
+  }
+
   // 只读「追平」：server 轮询「正在终端 CLI 里跑」的会话 transcript，检测到【外部新落定】消息 → history_append。
   // 仅渲染当前查看会话。局限：看不到实时 thinking / 在跑子 agent——它们不落盘，终端把消息落定后才追加得到。
   function onHistoryAppend(ev) {
     if (ev.instanceId !== viewingInstanceId) return; // 只进当前查看会话（server 已按 viewing 发，这里再兜一层）
+    // 拉历史在途：扣住，等历史落地后由 flushHeldHistoryAppends 按原顺序放行。此刻渲染的话，
+    // 顺序会排到历史前面，而且是对着尚被清空的 #messages 判定时间戳（会误判成会话首条而多出
+    // 一条日期分隔行）——顺序和打戳都得等最终 DOM 就位才算得准。
+    if (historyLoadGate.hold(ev)) return;
     const msgs = ev.payload?.messages || [];
     if (!msgs.length && !ev.payload?.replace) return;
     // SS-001：满窗滑动全量重发——先清屏再渲，避免把中间条当增量叠上去。
@@ -6132,7 +6173,9 @@ import { createSessionDeleteController } from './app/session-delete.js';
       toolCards.clear();
       subagentCards.clear();
       histToolCards.clear(); histSubCards.clear(); // 全量替换=真正的从头渲染，历史配对表也要归零（同 clearView）
-      if (msgs.length) renderHistoryBubbles(msgs);
+      // 满窗滑动全量替换：上面刚 innerHTML='' 清过屏，语义同 loadHistory 的全量加载——
+      // 这批就是当前窗口的开头，基准不该回落（此刻回落也读不到东西，显式标注防将来清屏逻辑变动）
+      if (msgs.length) renderHistoryBubbles(msgs, undefined, { fullReload: true });
       const sid = ev.sessionId;
       if (sid) seenDiskLenBySession.set(sid, msgs.length);
     } else if (msgs.length) {

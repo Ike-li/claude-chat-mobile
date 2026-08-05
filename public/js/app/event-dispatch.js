@@ -1,5 +1,11 @@
 import { shouldDropAgentEvent } from '../logic.js';
 
+// Handler 契约：`(payload, envelope)`。
+//  · 第一参永远是 event.payload —— 绝大多数 handler 只声明它，多传一个实参对它们无影响。
+//  · 第二参是【整个信封】，需要 payload 之外的元信息时才取。目前只有 user_message / text_delta
+//    用它拿 `ts`：payload 里没有时间，而 sync:since 补发的是环形缓冲里的旧信封（server 原样转发），
+//    ts 是事件真实发生时刻。若改用客户端 Date.now()，离开三小时后切回的那整批会被盖成「现在」，
+//    刷新页面又变回磁盘时间 —— 同一批消息两种时间。信封上的 replay 标记同样由此传递。
 export function createAgentEventDispatcher(context, {
   handlers = () => ({}),
   logger = null,
@@ -96,7 +102,7 @@ export function createAgentEventDispatcher(context, {
     // sync:since 批量补发标记：仅在 handler 调用期间为真，供 alertCue / OS notify 判断是否静音
     state.isReplayBatch = Boolean(event.replay);
     try {
-      handlers()[event.type]?.(event.payload);
+      handlers()[event.type]?.(event.payload, event);
     } catch (err) {
       // 异常绝不能冒出去：lastSeq 在上面就已前移，这条事件已经不可能被 sync:since 补回（服务端
       // eventsSince 按 lastSeq 过滤），若再让异常中断整条派发链，同批后续事件会一起丢 —— 手机上

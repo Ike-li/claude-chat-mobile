@@ -889,14 +889,19 @@ details.thinking.thinking-live > summary::before {
   border-radius: 0.75rem;
 }
 
-/* "以下为新消息"分割线：仿微信两侧横线夹文字，与消息气泡视觉区分开（非对话内容） */
-.unread-divider {
+/* 两侧横线夹文字（仿微信），与消息气泡视觉区分开——它们不是对话内容：
+   .unread-divider = "以下为新消息"；.msg-day-divider = 消息流的跨天日期行。
+   时间行（同一天内的 HH:mm）不用横线，只是居中细字，见 message-timeline.js。 */
+.unread-divider,
+.msg-day-divider {
   display: flex;
   align-items: center;
   gap: 0.75rem;
 }
 .unread-divider::before,
-.unread-divider::after {
+.unread-divider::after,
+.msg-day-divider::before,
+.msg-day-divider::after {
   content: '';
   flex: 1;
   height: 1px;
