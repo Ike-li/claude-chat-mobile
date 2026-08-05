@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveInstanceTarget,
+  shouldRejectOutboxLazyOpen,
   reselectViewingTarget,
   shouldClaimViewingAfterSwap,
   shouldClaimViewingAfterLazyOpen,
@@ -42,6 +43,56 @@ test.describe('resolveInstanceTarget（BE-001：区分缺省回退 / 命中 / �
 
   test('空字符串 instanceId 视为「显式但未知」→ stale（客户端不应发空 id；真缺省用 null/undefined）', () => {
     assert.deepEqual(resolveInstanceTarget('', viewing, isLive), { id: null, stale: true });
+  });
+
+  // 离线 outbox 重发：入队时 viewing 是会话 X，重发时服务端 viewing 可能已是 Y。
+  // 对交互式首发，缺省回退到服务端 viewing 是对的（那就是用户眼下看的）；对 outbox 重发不是——
+  // 它携带的是入队时刻的快照，回退等于把一条旧消息投给一个它从没指向过的会话。
+  test('allowViewingFallback=false + 缺省 instanceId → 不回退 viewing，交给调用方按 cwd 路由', () => {
+    assert.deepEqual(
+      resolveInstanceTarget(null, viewing, isLive, { allowViewingFallback: false }),
+      { id: null, stale: false }
+    );
+    assert.deepEqual(
+      resolveInstanceTarget(undefined, viewing, isLive, { allowViewingFallback: false }),
+      { id: null, stale: false }
+    );
+  });
+
+  test('allowViewingFallback=false 不改变显式 id 的判定（命中仍命中、已关闭仍 stale）', () => {
+    assert.deepEqual(
+      resolveInstanceTarget('inst_a', viewing, isLive, { allowViewingFallback: false }),
+      { id: 'inst_a', stale: false }
+    );
+    assert.deepEqual(
+      resolveInstanceTarget('inst_gone', viewing, isLive, { allowViewingFallback: false }),
+      { id: null, stale: true }
+    );
+  });
+
+  test('opts 缺省 / 空对象 → 保持回退（交互式首发路径不受影响）', () => {
+    assert.deepEqual(resolveInstanceTarget(null, viewing, isLive, {}), { id: 'inst_b', stale: false });
+    assert.deepEqual(resolveInstanceTarget(null, viewing, isLive), { id: 'inst_b', stale: false });
+  });
+});
+
+// 关掉 viewing 回退后，outbox 重发落到懒开分支，而 routeCwd 缺省仍会回退到服务端 viewingCwd
+// （多半是别的工作区）——那等于换个路径把消息投给它从没指向过的会话。这是那道防线的另一半。
+test.describe('shouldRejectOutboxLazyOpen（outbox 重发无 live 实例时必须自带 cwd）', () => {
+  test('outbox + 无 cwd → 拒（不许靠服务端 viewingCwd 猜目标）', () => {
+    assert.equal(shouldRejectOutboxLazyOpen({ fromOutbox: true, cwd: undefined }), true);
+    assert.equal(shouldRejectOutboxLazyOpen({ fromOutbox: true, cwd: null }), true);
+    assert.equal(shouldRejectOutboxLazyOpen({ fromOutbox: true, cwd: '' }), true);
+    assert.equal(shouldRejectOutboxLazyOpen({ fromOutbox: true, cwd: '   ' }), true);
+  });
+
+  test('outbox + 带 cwd → 放行（按入队时刻的工作区懒开）', () => {
+    assert.equal(shouldRejectOutboxLazyOpen({ fromOutbox: true, cwd: '/repo/a' }), false);
+  });
+
+  test('非 outbox（交互式首发）无 cwd 仍放行 —— 不得波及正常新会话路径', () => {
+    assert.equal(shouldRejectOutboxLazyOpen({ fromOutbox: false, cwd: undefined }), false);
+    assert.equal(shouldRejectOutboxLazyOpen({}), false);
   });
 });
 

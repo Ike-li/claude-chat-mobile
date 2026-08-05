@@ -11,6 +11,7 @@ import {
   presentOnlineSendTransport,
   presentOfflineResendAck,
   shouldBusyAfterOfflineBatch,
+  planOutboxDrainNotice,
   planOutboxEnqueue,
   parseDurableOutbox,
   dumpDurableOutbox,
@@ -365,6 +366,76 @@ test('presentOfflineResendAck: timeout / retryable → requeue', () => {
   assert.equal(presentOfflineResendAck(new Error('timeout'), undefined).outcome, 'requeue');
   assert.equal(presentOfflineResendAck(null, { ok: false, retryable: true }).requeue, true);
   assert.equal(presentOfflineResendAck(null, null).requeue, true);
+});
+
+// 目标实例已关闭是死信：服务端 fail-closed 回 {stale:true} 却【没有】permanent 字段，
+// 旧实现落到兜底 requeue → 每次重连重发一遍、永不退场（现场：一条消息从 18:01 刷到 19:49）。
+// 在线路径 presentOnlineSendAck 早已把 stale 排除出 requeue，这里补齐对称性。
+test('presentOfflineResendAck: stale → 终态停重试，不再无限 requeue', () => {
+  const out = presentOfflineResendAck(null, { ok: false, error: 'stale_instance', stale: true });
+  assert.equal(out.outcome, 'permanent');
+  assert.equal(out.requeue, false);
+  assert.equal(out.permanent, true);
+  assert.equal(out.clearBusyIfViewing, true);
+  assert.match(out.message, /已关闭/); // 不得把裸 'stale_instance' 透给用户
+});
+
+test('presentOfflineResendAck: 仅 error=stale_instance（无 stale 字段）也判死信', () => {
+  const out = presentOfflineResendAck(null, { ok: false, error: 'stale_instance' });
+  assert.equal(out.outcome, 'permanent');
+  assert.equal(out.requeue, false);
+  assert.match(out.message, /已关闭/);
+});
+
+// 重发横幅无归属过滤 → 队列项发往别的会话，横幅却贴在当前会话消息流里，
+// 读起来像「这条排队消息在本会话发了」（现场：机主在 Official 看到 third-party 的重发提示）。
+test.describe('planOutboxDrainNotice（重发横幅归属标注）', () => {
+  test('全部目标为当前 viewing → 原文案，不加其它会话标注', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: 'v' }, { instanceId: 'v' }],
+      viewingInstanceId: 'v',
+    });
+    assert.equal(out.total, 2);
+    assert.equal(out.foreign, 0);
+    assert.doesNotMatch(out.text, /其它会话/);
+    assert.match(out.text, /2/);
+  });
+
+  test('全部目标为其它会话 → 文案明说发往其它会话', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: 'other' }],
+      viewingInstanceId: 'v',
+    });
+    assert.equal(out.foreign, 1);
+    assert.match(out.text, /其它会话/);
+  });
+
+  test('混合 → 标出其中几条发往其它会话', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: 'v' }, { instanceId: 'other' }, { instanceId: 'other2' }],
+      viewingInstanceId: 'v',
+    });
+    assert.equal(out.total, 3);
+    assert.equal(out.foreign, 2);
+    assert.match(out.text, /其它会话/);
+  });
+
+  test('viewing 为 null（首页/无 tab）→ 全部算其它会话，不谎称属于当前视图', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: 'a' }],
+      viewingInstanceId: null,
+    });
+    assert.equal(out.foreign, 1);
+    assert.match(out.text, /其它会话/);
+  });
+
+  test('item.instanceId 为 null（首发未开实例）不得与 viewing=null 配成「属于本视图」', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: null }],
+      viewingInstanceId: null,
+    });
+    assert.equal(out.foreign, 1);
+  });
 });
 
 test('shouldBusyAfterOfflineBatch: 无 viewing 剩余且无 viewing ok → 不 busy', () => {

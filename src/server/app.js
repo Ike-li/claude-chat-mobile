@@ -53,6 +53,7 @@ import { searchFiles } from '../files/file-search.js';
 import { isProcessed, commitProcessed, isInFlight, claimInFlight, releaseInFlight } from '../agent/message-dedup.js';
 import {
   resolveInstanceTarget,
+  shouldRejectOutboxLazyOpen,
   reselectViewingTarget,
   shouldClaimViewingAfterSwap,
   shouldClaimViewingAfterLazyOpen,
@@ -271,7 +272,7 @@ const routeCwd = cwd => {
 };
 // 台阶3：按实例路由（BE-001 fail-closed）——缺省（无 instanceId）落 viewingInstanceId（向后兼容缺参旧调用）；
 // 显式命中 live 取该实例；显式但已关闭 → stale（id=null，绝不静默回退 viewing、绝不误投别的会话）。见 instance-routing.js。
-const resolveTarget = id => resolveInstanceTarget(id, viewingInstanceId, x => agents.has(x));
+const resolveTarget = (id, opts) => resolveInstanceTarget(id, viewingInstanceId, x => agents.has(x), opts);
 const resolveInstanceId = id => resolveTarget(id).id;   // 仅取 id：显式 stale → null（不再回退 viewing），无实例的 handler 自然 no-op/echo 拨回
 const routeInstance = id => { const rid = resolveInstanceId(id); return rid ? (agents.get(rid) ?? null) : null; };
 // audit_record 的 actor 字段（FR-19，承接 Phase 4）：deviceId 取握手带的 deviceToken（isLocal/CF Access
@@ -1888,7 +1889,11 @@ registerSocketConnection(io, socket => {
       // 台阶3：路由到目标实例（instanceId 优先）；无可路由实例（首发/session:new 后/无 open tab）则懒开一个
       // （resume 该 cwd 当前会话，无则新建；该会话已 live 则聚焦去重），设为查看 tab。
       const rawInstanceId = payload && typeof payload === 'object' ? payload.instanceId : undefined;
-      const target = resolveTarget(rawInstanceId);
+      // 离线 outbox 重发（客户端 deliverOutboxItem 置位）：payload 里的 instanceId/cwd 是【入队时刻】的
+      // 快照，而断线期间服务端 viewing 可能已换到别的工作区/会话。此时缺省回退 viewing 会把一条旧消息
+      // 投给它从没指向过的会话，故关掉回退；交互式首发不置此位，回退仍是正确行为。
+      const fromOutbox = payload && typeof payload === 'object' && payload.fromOutbox === true;
+      const target = resolveTarget(rawInstanceId, fromOutbox ? { allowViewingFallback: false } : undefined);
       if (target.stale) {
         // BE-001：显式指定了一个已关闭 / 未知实例——fail-closed：不回退当前查看会话、不懒开，负 ACK 让客户端刷新后重发。
         // 不 commit 去重 ID（客户端刷新拿到有效 instanceId 后可用同一 clientMessageId 重发）。
@@ -1898,9 +1903,17 @@ registerSocketConnection(io, socket => {
       }
       let a = target.id ? (agents.get(target.id) ?? null) : null;
       if (!a) {
+        const rawCwd = payload && typeof payload === 'object' ? payload.cwd : undefined;
+        // outbox 重发既无 live 实例、又没带入队时刻的 cwd → 目标无从确定。下面 routeCwd 的缺省回退会落到
+        // 服务端当前 viewingCwd（多半已是别的工作区），那就换条路径误投了。同 BE-001 fail-closed。
+        if (shouldRejectOutboxLazyOpen({ fromOutbox, cwd: rawCwd })) {
+          sysTo(socket, '目标会话已关闭，请刷新后重发', true);
+          ack({ ok: false, error: 'stale_instance', stale: true });
+          return;
+        }
         // ensureWhitelisted 同 session:new(#8)/session:switch：routeCwd 缺省回退(viewingCwdOf)可能仍是
         // 热移除目录（该目录有 live 实例挂着未被 reloadWorkdirs 归位），不夯一次白名单会在其上新开 FRESH 会话。
-        const cwd = ensureWhitelisted(routeCwd(payload && typeof payload === 'object' ? payload.cwd : undefined), workDirs);
+        const cwd = ensureWhitelisted(routeCwd(rawCwd), workDirs);
         // SRV-NEW-001：记录 await 前 viewing；open 期间用户 switch/home 则不得抢回 UI。
         const viewingAtStart = viewingInstanceId;
         const saved = await currentSessionForCwd(cwd);

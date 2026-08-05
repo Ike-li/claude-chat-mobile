@@ -14,11 +14,27 @@
 // 走懒开而非拒绝。据此 { id:null } 的两种成因（缺省无 viewing vs 显式 stale）由 stale 字段区分。
 //
 // isLive(id) 由调用方注入（server 侧即 id => agents.has(id)），保持本模块无状态、可单测。
-
-export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive) {
-  if (requestedId == null) return { id: viewingInstanceId ?? null, stale: false };
+//
+// opts.allowViewingFallback=false 关掉上面第一态的回退（缺省 → { id:null, stale:false }，仍非 stale）。
+// 给离线 outbox 重发用：它携带的 instanceId/cwd 是【入队时刻】的快照，而服务端 viewing 在断线期间
+// 可能已经换了会话——此时回退等于把一条旧消息投给它从没指向过的会话。交互式首发不传此项：
+// 那条路径上服务端 viewing 就是用户眼下看的，回退才是正确行为。
+export function resolveInstanceTarget(requestedId, viewingInstanceId, isLive, opts = {}) {
+  if (requestedId == null) {
+    if (opts.allowViewingFallback === false) return { id: null, stale: false };
+    return { id: viewingInstanceId ?? null, stale: false };
+  }
   if (isLive(requestedId)) return { id: requestedId, stale: false };
   return { id: null, stale: true };
+}
+
+// allowViewingFallback=false 的另一半：关掉实例回退后 outbox 重发会落到懒开分支，而那里的
+// routeCwd(undefined) 缺省仍回退服务端 viewingCwd——换条路径把消息投给它从没指向过的会话。
+// outbox 项入队时一定带 cwd（app.js 的 outboxPayload），缺了就是数据不全，宁可落死信让用户手动重发。
+// 交互式首发（fromOutbox=false）无 cwd 属正常（服务端按当前 viewing 工作区懒开），不受此闸约束。
+export function shouldRejectOutboxLazyOpen({ fromOutbox = false, cwd = undefined } = {}) {
+  if (fromOutbox !== true) return false;
+  return typeof cwd !== 'string' || cwd.trim() === '';
 }
 
 // BE-016 + resumeFailed UX：当前查看的实例被移除（退出 / dispose）后，重选查看目标并【原子同步】viewingCwd。

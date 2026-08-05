@@ -1291,6 +1291,15 @@ export function presentOfflineResendAck(err, ack) {
     const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : t('当前任务运行中，完成后可发送');
     return { outcome: 'blocked', permanent: false, requeue: false, clearBusyIfViewing: false, message: error };
   }
+  // stale（目标实例已关闭）也是死信：服务端 fail-closed 的负 ack 只带 {stale:true}、【不带】permanent，
+  // 落到下面的兜底 requeue 就成了「每次重连重发一遍、永不退场」。判据与在线路径 presentOnlineSendAck
+  // 逐字对齐（error==='stale_instance' || ack.stale），并把裸协议串换成人话——用户看到的是提示不是错误码。
+  if (!err && ack && ack.ok === false && (ack.stale === true || ack.error === 'stale_instance')) {
+    return {
+      outcome: 'permanent', permanent: true, requeue: false, clearBusyIfViewing: true,
+      message: t('目标会话已关闭，请刷新后重发'),
+    };
+  }
   if (!err && ack && ack.ok === false && ack.permanent) {
     const error = (typeof ack.error === 'string' && ack.error.trim()) ? ack.error.trim() : t('发送失败');
     return { outcome: 'permanent', permanent: true, requeue: false, clearBusyIfViewing: true, message: error };
@@ -1314,6 +1323,28 @@ export function shouldBusyAfterOfflineBatch({ viewingInstanceId, remainingItems 
   // 本批对当前 viewing 成功发出 → 短暂 busy 等 result（与在线一致）；非 viewing 成功不抬 busy
   if (hadViewingOk && viewingInstanceId != null) return true;
   return false;
+}
+
+// 重发横幅文案：addBar 无条件贴当前会话消息流（app.js 的 addBar 不带归属过滤），而队列项的目标
+// 是【入队时刻】那个实例——两者不是一回事。不标注就会读成「这条排队消息在本会话发了」，
+// 叠上服务端 sysTo 的「目标会话已关闭」（同样贴当前视图）尤其像串会话。
+// 归属判据与 shouldBusyAfterOfflineBatch / app.js 的 targetsViewing 逐字一致：
+// instanceId != null 且相等才算本视图——两边同为 null（首页 + 首发未开实例）不得配成一对。
+export function planOutboxDrainNotice({ items = [], viewingInstanceId = null } = {}) {
+  const list = Array.isArray(items) ? items : [];
+  const total = list.length;
+  const foreign = list.filter(
+    it => !(it && it.instanceId != null && it.instanceId === viewingInstanceId)
+  ).length;
+  let text;
+  if (foreign === 0) {
+    text = `${t('正在重发离线发送队列中的')} ${total} ${t('条消息...')}`;
+  } else if (foreign === total) {
+    text = `${t('正在重发')} ${total} ${t('条离线消息（发往其它会话）...')}`;
+  } else {
+    text = `${t('正在重发离线发送队列中的')} ${total} ${t('条消息...')}${t('（其中 ')}${foreign}${t(' 条发往其它会话）')}`;
+  }
+  return { total, foreign, text };
 }
 
 // 通知预览安全截断（FE-NEW-002）：JSON.stringify(undefined) 是 undefined，.slice 会抛。
