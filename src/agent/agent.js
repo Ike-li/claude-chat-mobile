@@ -15,6 +15,7 @@ import { fingerprintSync, verifyIntegritySync } from '../auth/fingerprint.js';
 import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { normalizePermissionMode } from './cli-settings-defaults.js';
+import { scanSubagents } from '../sessions/history.js';
 
 // 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
 // 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
@@ -205,6 +206,24 @@ const SLASH_QUIET_BREAKERS = new Set([
   'task_progress', 'task_notification', 'api_retry', 'system',
 ]);
 
+// 本地 slash 命令在途时，静默看门狗（idleTimeoutMs）的豁免上限。
+// 【为什么需要豁免】checkIdle 的两条既有豁免——hasBgTasks()（SDK Task 工具）与
+// hasRunningForegroundTool()（主链未收口的 tool_use）——本地命令一条都不满足：它由 CLI 在自己
+// 进程里跑，不产 task_progress，主链上也没有 tool_use（2026-08-03 那批会话主链 assistant 条数 = 0）。
+// 于是 SDK 流全空、lastActivity 不刷新，600s 到点就 interrupt() 掐掉一个其实正在正常干活的命令。
+// 真机实测超线的有 788s / 1076s / 1869s 三次。
+// 【为什么仍要有上限】豁免若无界，真挂死的本地命令就永远等不到看门狗——把「误杀」换成「永挂」
+// 不是修复。45 分钟 = 实测最长 31 分钟留余量后取整；超过它按挂死处理，回到原有中断路径。
+const SLASH_LOCAL_COMMAND_GRACE_MS = 45 * 60_000;
+
+// 本地 slash 命令的进度轮询间隔。命令在途期间才跑，命令一结束即停——常态零开销。
+// 3s：真机实测一次扫描 6ms（762KB 单文件）~27ms（11 个子代理），3s 一拍的盘压可忽略，
+// 而移动端看「还在动」需要的正是这个量级的刷新率。
+const LOCAL_COMMAND_PROGRESS_INTERVAL_MS = 3_000;
+// 磁盘观察出来的子代理在 bgTasks 里的键前缀：与 SDK 真实 task_id 分开命名空间，
+// 免得两条来源（SDK task_progress / 我们扫盘）撞键互相覆盖。
+const LOCAL_CMD_TASK_PREFIX = 'localcmd:';
+
 // message_delta 常只带 output_tokens；整对象覆盖会抹掉 input/cache → statusline uncached 0。
 // 白名单合并：只写入下一帧里出现的非负有限数字段，保留 prev 其余字段。
 const MESSAGE_USAGE_KEYS = Object.freeze([
@@ -220,7 +239,7 @@ export function mergeMessageUsage(prev, next) {
 }
 
 export class AgentSession {
-  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd, resolvedEnv, worktreeSettingsPath }) {
+  constructor({ instanceId, resumeId, cwd, claudeBin, model, permissionMode, effort, ultracode = false, idleTimeoutMs, instanceIdleReclaimMs, approvalTtlMs, slashQuietNoticeMs, onEvent, onSessionId, onExit, onUsage, onBgTaskChange, onStateSettled, historicalCostUsd, resolvedEnv, worktreeSettingsPath, transcriptBaseDir }) {
     // 台阶3：进程内唯一、永不变的实例句柄。前端按 viewingInstanceId 分流（新会话 init 前
     // sessionId=null，故分流/路由用 instanceId 而非 sessionId）。server 生成并传入（inst_${n}）。
     this.instanceId = instanceId;
@@ -371,6 +390,12 @@ export class AgentSession {
     this._thinkBuf = '';
     this._thinkTimer = null;
     this._slashQuietTimer = null; // slash 命令静默长跑提示表（见 _armSlashQuietNotice）
+    this._slashCommandStartedAt = null; // 本地 slash 命令在途起点（看门狗豁免，见 _localCommandInFlight）
+    this._localCmdProgressTimer = null; // 命令在途期间的 subagents 进度轮询表（见 _startLocalCommandProgress）
+    this._localCmdTaskIds = new Set();  // 本轮由扫盘产出的 bgTasks 键，命令收尾时统一清
+    // transcript 根目录：生产恒为 undefined（history.js 内默认 ~/.claude/projects）。
+    // 单测注入 tmpdir 用——扫盘类逻辑若只能打真实目录，测试就得在机主的会话树上跑（曾出过事故）。
+    this.transcriptBaseDir = transcriptBaseDir;
   }
 
   // ---- streaming input：用户消息队列 → AsyncIterable<SDKUserMessage> ----
@@ -1228,11 +1253,18 @@ export class AgentSession {
     }
     // 在途轮 + 活后台任务：主流通可长时间无 delta（子代理内部跑），不得按 idleTimeout 误杀。
     // 前台工具同理：tool_use 到 tool_result 之间 SDK 流零消息，但本轮正在推进（见 FOREGROUND_TOOL_GRACE_MS）。
+    // 本地 slash 命令第三条同理，且比前两者更极端——它整轮零 SDK 消息，连 tool_use 都没有
+    // （见 SLASH_LOCAL_COMMAND_GRACE_MS）。
     // 与 pendingPermissions 同口径：刷新 lastActivity 后返回（不进静默中断、也不进空闲回收）。
-    if (this.pendingTurns > 0 && (this.hasBgTasks() || this.hasRunningForegroundTool())) {
+    // ★ 这里必须用 hasSdkBgTasks() 而非 hasBgTasks()：见该方法注释（否则本地命令的 45 分钟上限被
+    // 自家扫盘产物打穿）。
+    if (this.pendingTurns > 0 && (this.hasSdkBgTasks() || this.hasRunningForegroundTool() || this._localCommandInFlight())) {
       this.lastActivity = Date.now();
       return;
     }
+    // 本地命令已过 45 分钟上限：轮询早已停摆，但扫出来的任务不会自己消失（磁盘观察没有完成信号）。
+    // 不在此清掉的话，面板与 ⏳ 角标会一直显示「运行中」直到 bgTasks 的 2h TTL。E6 回归。
+    if (this._localCmdTaskIds.size && !this._localCommandInFlight()) this._clearLocalCommandProgress();
     const idleFor = Date.now() - this.lastActivity;
     if (this.pendingTurns === 0) {
       // 用户正查看本实例：不回收（读历史/停在会话页不应被 30min 空闲清屏）
@@ -1358,7 +1390,13 @@ export class AgentSession {
         truncated: messageTruncated || descTruncated || false,
       });
     }
-    for (const k of [...this.bgTasks.keys()]) if (!seen.has(k)) this.bgTasks.delete(k);
+    // localcmd:* 不参与 reconcile：它们不是 SDK 报来的任务，本就不会出现在这份快照里，
+    // 无差别删除会让本地 slash 命令的进度行被任何一次 background_tasks_changed 抹掉
+    // （下一拍轮询又加回来 → 面板闪烁）。它们的生命周期由 _clearLocalCommandProgress 独管。
+    // 2026-08-05 真机 /code-review 自查抓出（E4）。
+    for (const k of [...this.bgTasks.keys()]) {
+      if (!seen.has(k) && !k.startsWith(LOCAL_CMD_TASK_PREFIX)) this.bgTasks.delete(k);
+    }
     if (this.bgTasks.size !== had) this.onBgTaskChange?.();
     // 全量快照同步到前端：否则 web 只攒到「最新一条 task_progress」，看不到并行任务列表
     this.emitBgTasksSnapshot();
@@ -1382,6 +1420,100 @@ export class AgentSession {
   }
 
   hasBgTasks() { return this.bgTasks.size > 0; }
+
+  // checkIdle 豁免专用：只认【SDK 上报的】后台任务，排除我们自己扫盘造出来的 localcmd 条目。
+  // 【为什么必须分开】localcmd 任务的「还活着」语义已经由 _localCommandInFlight() 表达了，而那个
+  // 判据自带 45 分钟上限。若让它们也算进豁免，就成了自我循环：扫出子代理 → hasBgTasks() 恒真 →
+  // 上限到期后 _localCommandInFlight() 返回 false 也没用，豁免照旧续命，直到 bgTasks 的 2h TTL 才
+  // sweep 掉——正是 SLASH_LOCAL_COMMAND_GRACE_MS 注释里说要避免的「把误杀换成永挂」。
+  // 2026-08-05 真机 /code-review 自查抓出（E1），单测 agent-lifecycle「E1：…」锁住。
+  // 展示侧仍用 hasBgTasks()：面板/⏳ 角标该显示磁盘观察到的子代理，那与 idle 判定是两件事。
+  hasSdkBgTasks() {
+    for (const key of this.bgTasks.keys()) {
+      if (!key.startsWith(LOCAL_CMD_TASK_PREFIX)) return true;
+    }
+    return false;
+  }
+
+  // 本地 slash 命令是否仍在途（供 checkIdle 豁免，上限见 SLASH_LOCAL_COMMAND_GRACE_MS）。
+  // 起点由 _armSlashQuietNotice 置位，终点是该命令的输出到达或本轮 result——两者都在 map() 里清。
+  _localCommandInFlight() {
+    if (!this._slashCommandStartedAt) return false;
+    return Date.now() - this._slashCommandStartedAt <= SLASH_LOCAL_COMMAND_GRACE_MS;
+  }
+
+  // ---- 本地 slash 命令的进度可见性 ----
+  // 病灶：CLI 把整条命令跑在独立 fork 上下文里，主链 transcript 零条目、SDK 流也零消息
+  // （2026-08-05 探针实测整轮 stream_event = 0，尽管 forwardSubagentText 已开）。用户看得见的
+  // 只剩 status_line 心跳——「只有计时器在转、别的什么都没有」，真机上等 13 分钟后按了停止。
+  //
+  // 出路：执行过程完整落在 <sessionId>/subagents/agent-*.jsonl，扫它。产出喂 bgTaskUpsert，
+  // 复用既有后台任务面板 + ⏳ 角标 + checkIdle 的 hasBgTasks 豁免——不新增事件类型、不动前端契约。
+  //
+  // 【只喂进度不喂正文】子代理对话真机可达 762KB。全文推送会挤爆环形缓冲（emitTransient 存在的
+  // 理由正是这个），也不是移动端该渲染的体量。scanSubagents 只回身份 + 最近动作。
+  _startLocalCommandProgress() {
+    if (this._localCmdProgressTimer || this.disposed) return;
+    const arm = () => {
+      this._localCmdProgressTimer = setTimeout(tick, LOCAL_COMMAND_PROGRESS_INTERVAL_MS);
+      this._localCmdProgressTimer.unref?.(); // 进度表不该拖住 server 退出
+    };
+    const tick = () => {
+      this._localCmdProgressTimer = null;
+      if (this.disposed || !this._localCommandInFlight()) return; // 命令已收尾/实例已没：自然停摆
+      this._pollLocalCommandProgress()
+        .catch(() => { /* 扫盘失败（写入中/权限）不该反噬消息泵，下一拍再试 */ })
+        .finally(() => { if (!this.disposed && this._localCommandInFlight()) arm(); });
+    };
+    arm();
+  }
+
+  async _pollLocalCommandProgress() {
+    // sessionId 可能还没到（本地命令下 init 晚到，见 _claimSessionIdEarly；真机首个带 id 的消息
+    // 在 9.5s）——扫盘要它做目录名，没有就跳过本拍，下一拍再试。
+    if (!this.sessionId) return;
+    const found = await scanSubagents(this.sessionId, this.cwd, { baseDir: this.transcriptBaseDir });
+    // ★ await 之后必须重新验一次：扫盘期间命令可能已收尾（local_command_output / result / dispose /
+    // 下一条 slash 都会走 _clearLocalCommandProgress）。少了这道，poll 返回时会把刚清掉的任务重新
+    // 塞回 bgTasks，而那批 ghost 键此后【没有任何路径会再清它们】——hasBgTasks() 长期为真：
+    // 会话列表 ⏳ 常亮、isBusy 挂住、dispose/effort 置换被拦，直到 2h TTL。
+    // 2026-08-05 真机 /code-review 自查抓出（E2），单测 agent-background-tasks「E2：…」锁住。
+    if (this.disposed || !this._localCommandInFlight()) return;
+    if (!found.length) return;
+    for (const a of found) {
+      const key = `${LOCAL_CMD_TASK_PREFIX}${a.agentId}`;
+      this._localCmdTaskIds.add(key);
+      // taskType 用 'local_agent'：这是前端认识的类型（logic.js#formatBgTaskRowLabel 只认
+      // local_agent/agent 才给 🤖），语义也对——磁盘上这些确实是本地跑的 agent。
+      // 曾误写成 'subagent'，那不是一等类型，行标签会退化成裸文本（2026-08-05 自查 E5）。
+      // description 直接透传 CLI 写的那句（"Angle A: line-by-line diff scan"），顶层编排 agent 没有
+      // 这个字段 → null，前端已有无描述的兜底渲染。
+      this.bgTaskUpsert(key, 'local_agent', a.lastToolName || '', {
+        description: a.description,
+        lastToolName: a.lastToolName,
+        subagentType: a.agentType,
+      });
+    }
+    this.emitBgTasksSnapshot();
+  }
+
+  // 命令收尾的【唯一收口】：清在途标记 + 停表 + 清掉本轮扫出来的任务。
+  // 【为什么必须显式清任务】它们是从磁盘观察来的，没有 task_notification 这类完成信号——子代理
+  // 跑完文件仍在原地，光靠 sweepBgTasks 的 TTL 要拖到过期才熄，期间前端 ⏳ 角标与面板一直挂着。
+  // 【为什么 _slashCommandStartedAt 也在这里清】本地命令在途本是【一个】概念，却曾由三个字段分别
+  // 表达、由不同路径各自清除（2026-08-05 真机自查指出的可维护性问题，也让 E2 的守卫一度失效——
+  // 调用方清了任务却没清在途标记，_localCommandInFlight() 仍为真）。现在调用方只需调本方法。
+  _clearLocalCommandProgress() {
+    this._slashCommandStartedAt = null;
+    if (this._localCmdProgressTimer) {
+      clearTimeout(this._localCmdProgressTimer);
+      this._localCmdProgressTimer = null;
+    }
+    if (!this._localCmdTaskIds.size) return;
+    for (const key of this._localCmdTaskIds) this.bgTaskDone(key);
+    this._localCmdTaskIds.clear();
+    this.emitBgTasksSnapshot(); // 空表也推：前端据此立刻收起横幅
+  }
 
   // 是否有仍在跑的主会话前台工具（超 FOREGROUND_TOOL_GRACE_MS 的不再算「在干活」，见常量注释）。
   // 顺带清掉超限条目：它们已不影响判定，留着只会在长会话里堆成垃圾。
@@ -1495,6 +1627,7 @@ export class AgentSession {
     clearInterval(this.idleTimer); this.idleTimer = null;
     this._clearInterruptSettleWatchdog(); // 实例销毁：不留跨实例悬挂计时
     this._clearSlashQuietNotice();        // 同上：实例没了就别再往它身上发提示
+    this._clearLocalCommandProgress();    // 同上：停进度轮询表，不留悬挂 timer
     if (this._textTimer) { clearTimeout(this._textTimer); this._textTimer = null; }
     if (this._thinkTimer) { clearTimeout(this._thinkTimer); this._thinkTimer = null; }
     for (const [id] of this.pendingPermissions) this.resolvePermission(id, 'deny');
@@ -1587,7 +1720,12 @@ export class AgentSession {
   // 事件到达即撤表（见 emit 里的 SLASH_QUIET_BREAKERS），所以秒回的 /context、/usage 不会看到它。
   _armSlashQuietNotice(text) {
     this._clearSlashQuietNotice();
+    this._clearLocalCommandProgress(); // 上一条命令的在途标记/进度表/任务条目都不跨消息残留
     if (!WEB_BARE_SLASH_RE.test(String(text ?? '').trim())) return;
+    // 同一道 slash 判据顺带给看门狗置位（见 _localCommandInFlight）：两者判的是同一件事
+    // ——「这一轮可能整轮没有 SDK 消息」，没必要各跑一次正则、各自漂移。
+    this._slashCommandStartedAt = Date.now();
+    this._startLocalCommandProgress(); // 命令在途期间扫 subagents，把「跑到哪了」推给前端
     this._slashQuietTimer = setTimeout(() => {
       this._slashQuietTimer = null; // 先置空：下面 emitNotice 走 emit，会回头调 _clearSlashQuietNotice
       this.emitNotice('该命令可能在独立上下文中运行，完成前不会有中间输出。可以继续等待，或点停止取消。', 'info');
@@ -1599,6 +1737,43 @@ export class AgentSession {
     if (!this._slashQuietTimer) return;
     clearTimeout(this._slashQuietTimer);
     this._slashQuietTimer = null;
+  }
+
+  // sessionId 首达兜底：认【任何】带 session_id 的 SDK 消息，不再独等 system/init。
+  //
+  // 【为什么】CLI 执行本地 slash 命令时，整条命令跑在一个独立 fork 上下文里，init 要等命令
+  // 跑完才投。fork 本身是上游既定行为、改不掉（判据＝宿主有无 ReportFindings 工具，
+  // 完整机制与「别重开」理由见 docs/hard-rules.md §5.1 / UP-1）——本方法只治它的次生伤害。
+  // 2026-08-05 隔离探针实测（/tmp 小仓库、两行文件的 /code-review）：init 132s 才到，
+  // 而同一条流上 rate_limit_event 在 9.5s 就带着完整 session_id 到了。真机更极端——11 次 web 端
+  // /code-review 全是新会话首条，ccm 拿到 id 的延迟 124s~1869s，其中 2 次（用户中途按停止）
+  // 从头到尾没拿到过，那两个会话在盘上活着、在 ccm 里却永远是「新会话」。
+  //
+  // 期间 this.sessionId 为空 ⇒ 事件信封 sessionId=null、instances 广播无 id ⇒ 会话设置里看不到
+  // session id、工作区标题恒「新会话」、历史与镜像都无从查起（它们都以 sessionId 为键）。用户
+  // 只看得见 status_line 心跳——那条本就不靠 SDK 消息驱动（见 SLASH_QUIET_BREAKERS 上方注释），
+  // 于是「只有计时器在转、别的什么都没有」。
+  //
+  // 【边界】只在「当前还没有」时认领：resume 场景 sessionId 构造时已注入，不被后续消息改写；
+  // /clear 等换会话仍由 init 分支处理（它比对新旧 session_id 后清 firstMessage/lastUsage/bgTasks，
+  // 那套状态清理不能在这里做——本方法拿不到「这是换会话还是首达」的判据）。
+  //
+  // 【日志键必须同做 rebind】logKey() 在 sessionId 落定前用 provisionalKey(instanceId)。若只赋值
+  // 不并入，init 分支那次 rebind 会因 prevLogKey === this.sessionId 退化成 no-op，首轮日志就此蒸发。
+  _claimSessionIdEarly(msg) {
+    if (this.sessionId) return;
+    const sid = msg?.session_id;
+    if (typeof sid !== 'string' || !sid) return; // 与 init 分支同口径：非空字符串才是可用的路由键
+    const prevLogKey = this.logKey();
+    this.sessionId = sid;
+    if (prevLogKey && prevLogKey !== sid) {
+      interactionLog.rebindSessionLogs(prevLogKey, sid);
+      diagLog.rebindDiagLogs(prevLogKey, sid);
+    }
+    // model 传 undefined：早到的消息（rate_limit_event 等）不带模型名。下游两处都对此免疫——
+    // upsertSession 是 `if (model)` 才覆盖、recordCwdDefaultModel 判据含 `!!reportedModel`，
+    // init 到达时会用真值再 upsert 一次补齐。
+    this.onSessionId?.(sid, this.firstMessage, undefined);
   }
 
   // 瞬时事件旁路：广播给前端做即时 UI 更新，但【不进 replay buffer、不递增 seq】。
@@ -1689,6 +1864,7 @@ export class AgentSession {
 
   // ---- SDK 消息 → 契约事件映射 ----
   map(msg) {
+    this._claimSessionIdEarly(msg);
     switch (msg.type) {
       case 'system':
         if (msg.subtype === 'init') {
@@ -1857,6 +2033,7 @@ export class AgentSession {
           //
           // 独立合成 messageId，不并进主 agent 的 assistantResponseBuffer/currentMessageId：
           // 前端按 messageId 分气泡，result(p) 的权威全文覆盖也按 messageId 匹配，两边天然不撞。
+          this._clearLocalCommandProgress(); // 输出到手 = 命令跑完：撤豁免 + 停轮询 + 熄掉扫出来的 ⏳
           const out = parseLocalCommandOutput(msg.content);
           if (out) {
             this.emit('text_delta', { messageId: `local-cmd-${msg.uuid || randomUUID()}`, text: out.text });
@@ -2156,6 +2333,7 @@ export class AgentSession {
       }
 
       case 'result': {
+        this._clearLocalCommandProgress(); // 本轮收尾（含被中断/出错）：无论命令是否产出，豁免都到此为止
         this._flushText(); this._flushThink();
         // settle 槽优先：forceSettled 迟到 result 不 --pendingTurns（watchdog/settleForce 已清账）
         this._settleOneResultTurn();

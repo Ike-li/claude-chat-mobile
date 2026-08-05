@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { getSessionLogs } from '../../src/agent/interaction-log.js';
 import { buildAgentQueryOptions } from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { getProjectDir } from '../../src/sessions/history.js';
 
 test.describe('buildAgentQueryOptions — 后台进度加强开关', () => {
   test('默认 agentProgressSummaries=true（~30s AI 进度 summary）', () => {
@@ -706,6 +710,185 @@ test.describe('buildAgentQueryOptions — worktree 网关隔离经 settings 文�
     s.ultracode = true;
     const opts = buildAgentQueryOptions(s, { ...process.env });
     assert.deepEqual(opts.settings, { ultracode: true });
+    s.dispose();
+  });
+});
+
+// ---- 本地 slash 命令的进度可见性（扫 subagents → 喂 bgTasks）----
+// 病灶：CLI 把 /code-review 这类命令跑在独立 fork 上下文里，主链 transcript 零条目、SDK 流零消息
+// （2026-08-05 探针实测 stream_event = 0）。用户只看得见 status_line 心跳，真机等 13 分钟后按了停止。
+// 执行过程唯一的可观测来源是 <sessionId>/subagents/agent-*.jsonl。
+test.describe('本地 slash 命令进度：subagents → bgTasks', () => {
+  const BASE = join(tmpdir(), `ccm-localcmd-${process.pid}`);
+
+  function seed(cwd, sid, agents) {
+    const dir = join(BASE, getProjectDir(cwd), sid, 'subagents');
+    mkdirSync(dir, { recursive: true });
+    for (const a of agents) {
+      writeFileSync(join(dir, `agent-${a.id}.meta.json`), JSON.stringify({ agentType: 'general-purpose', ...(a.desc ? { description: a.desc } : {}) }));
+      writeFileSync(join(dir, `agent-${a.id}.jsonl`), JSON.stringify({
+        type: 'assistant', isSidechain: true,
+        message: { role: 'assistant', content: [{ type: 'tool_use', name: a.tool || 'Read', input: {} }] },
+      }) + '\n');
+    }
+  }
+
+  test('扫到的子代理进入 bgTasks，description/lastToolName 原样带出（前端明细行的内容来源）', async () => {
+    const cwd = '/test/localcmd-basic';
+    seed(cwd, 'lc-basic', [{ id: 'a00b4eae6', desc: 'Angle A: line-by-line diff scan', tool: 'Grep' }]);
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-basic';
+    s._armSlashQuietNotice('/code-review'); // 生产前提：poll 只在命令在途期间被 tick 调用
+
+    await s._pollLocalCommandProgress();
+
+    const tasks = s.bgTasksList();
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].description, 'Angle A: line-by-line diff scan');
+    assert.equal(tasks[0].lastToolName, 'Grep');
+    assert.equal(tasks[0].subagentType, 'general-purpose');
+    assert.equal(s.hasBgTasks(), true, '有活任务 → checkIdle 的既有豁免随之生效（看门狗多一道保险）');
+    s.dispose();
+  });
+
+  // 【变异检查记录】把 _pollLocalCommandProgress 里的 `if (!this.sessionId) return` 删掉，本用例仍绿
+  // ——因为 scanSubagents 内的 isSafeSessionId 也会挡下 null。两道守卫是双保险，单测无法区分谁在起
+  // 作用。本用例锁的是「没有 id 时不得凭空造出任务」这个可观测结果，不是那一行 return 的存在。
+  test('sessionId 未到时不造任务（本地命令下 init 晚到，真机首个带 id 的消息在 9.5s）', async () => {
+    const { s } = makeSession({ cwd: '/test/localcmd-nosid', transcriptBaseDir: BASE });
+    s.sessionId = null;
+    await s._pollLocalCommandProgress();
+    assert.equal(s.hasBgTasks(), false, '没有 id 就没有目录名，不该凭空造任务');
+    s.dispose();
+  });
+
+  test('命令收尾 → 扫出来的任务被清掉（磁盘观察没有完成信号，不清就一直挂 ⏳）', async () => {
+    const cwd = '/test/localcmd-clear';
+    seed(cwd, 'lc-clear', [{ id: 'aone' }, { id: 'atwo' }]);
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-clear';
+    s._armSlashQuietNotice('/code-review');
+    await s._pollLocalCommandProgress();
+    assert.equal(s.bgTasksList().length, 2);
+
+    s._clearLocalCommandProgress();
+
+    assert.equal(s.hasBgTasks(), false, '收尾后必须熄灭，否则面板与角标永远挂着');
+    s.dispose();
+  });
+
+  test('result 收尾即清（命令被中断/出错、没有输出的那条路径）', async () => {
+    const cwd = '/test/localcmd-result';
+    seed(cwd, 'lc-result', [{ id: 'ares' }]);
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-result';
+    s._armSlashQuietNotice('/code-review');
+    await s._pollLocalCommandProgress();
+    assert.equal(s.hasBgTasks(), true);
+
+    s.map({ type: 'result', subtype: 'success', session_id: 'lc-result', usage: {}, total_cost_usd: 0 });
+
+    assert.equal(s.hasBgTasks(), false);
+    assert.equal(s._localCommandInFlight(), false);
+    s.dispose();
+  });
+
+  test('轮询只在命令在途期间起表：普通消息不开表（常态零开销）', () => {
+    const { s } = makeSession({ cwd: '/test/localcmd-idle' });
+    s._armSlashQuietNotice('帮我看下这段代码');
+    assert.equal(s._localCmdProgressTimer, null, '非 slash 不该起进度轮询');
+    s._armSlashQuietNotice('/code-review');
+    assert.ok(s._localCmdProgressTimer, 'slash 命令须起表');
+    s.dispose();
+    assert.equal(s._localCmdProgressTimer, null, 'dispose 须停表，不留悬挂 timer');
+  });
+
+  // E2 回归（2026-08-05 真机 /code-review 自查抓出）：tick() 只在 await 之前检查 disposed/in-flight，
+  // 扫盘返回后无条件 upsert。命令若在 await 期间收尾并清理，poll 完成时会把任务重新塞回去——
+  // 而那批 ghost 键此后没有任何路径会再清它们（清理只发生在 output/result/下一条 slash/dispose），
+  // hasBgTasks() 因此长期为真：会话列表 ⏳ 常亮、isBusy 挂住、dispose/effort 置换被拦。
+  // E4 回归（2026-08-05 真机 /code-review 自查抓出）：reconcileBgTasks 按 SDK 全量快照删除所有
+  // 不在快照里的键。localcmd:* 本就不会出现在 SDK 快照里（它们是我们扫盘造的），于是任何一次
+  // background_tasks_changed 都会把进度行抹掉，下一拍轮询又加回来 → 面板闪烁。
+  test('E4：SDK 全量 reconcile 不得抹掉 localcmd 进度行', async () => {
+    const cwd = '/test/localcmd-reconcile';
+    seed(cwd, 'lc-rec', [{ id: 'akeep' }]);
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-rec';
+    s._armSlashQuietNotice('/code-review');
+    await s._pollLocalCommandProgress();
+    assert.equal(s.bgTasksList().length, 1);
+
+    s.reconcileBgTasks([{ task_id: 'sdk-real', task_type: 'workflow', description: 'SDK 的任务' }]);
+
+    const ids = s.bgTasksList().map(t => t.taskId);
+    assert.ok(ids.includes('localcmd:akeep'), 'localcmd 行须保留，它不归 SDK 快照管');
+    assert.ok(ids.includes('sdk-real'), 'SDK 任务照常进来');
+    s.dispose();
+  });
+
+  test('E4 对照：SDK 自己的陈旧任务仍被 reconcile 清掉（防修过头）', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('sdk-stale', 'workflow', '已消失的任务');
+    s.reconcileBgTasks([{ task_id: 'sdk-new', task_type: 'workflow' }]);
+    const ids = s.bgTasksList().map(t => t.taskId);
+    assert.ok(!ids.includes('sdk-stale'), 'SDK 键不在快照里就该删');
+    assert.ok(ids.includes('sdk-new'));
+    s.dispose();
+  });
+
+  test('E5：扫出的任务用前端认识的 local_agent 类型（拿得到 🤖 行标签）', async () => {
+    const cwd = '/test/localcmd-type';
+    seed(cwd, 'lc-type', [{ id: 'atype', desc: 'Angle A' }]);
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-type';
+    s._armSlashQuietNotice('/code-review');
+    await s._pollLocalCommandProgress();
+    assert.equal(s.bgTasksList()[0].taskType, 'local_agent', "'subagent' 不是前端一等类型，行标签会退化成裸文本");
+    s.dispose();
+  });
+
+  test('E2：扫盘与收尾竞态不得留下 ghost 任务', async () => {
+    const cwd = '/test/localcmd-race';
+    seed(cwd, 'lc-race', [{ id: 'aghost' }]);
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-race';
+    s.pendingTurns = 1;
+    s._armSlashQuietNotice('/code-review');
+
+    const inflight = s._pollLocalCommandProgress(); // 扫盘开始（异步）
+    s._clearLocalCommandProgress();                  // await 期间命令收尾
+    await inflight;                                   // 扫盘返回
+
+    assert.equal(s.hasBgTasks(), false, '收尾后扫盘返回，不得把任务重新塞回去');
+    assert.equal(s._localCmdTaskIds.size, 0);
+    s.dispose();
+  });
+
+  test('E2b：dispose 后扫盘返回同样不得复活任务', async () => {
+    const cwd = '/test/localcmd-race2';
+    seed(cwd, 'lc-race2', [{ id: 'aghost2' }]);
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-race2';
+    s._armSlashQuietNotice('/code-review');
+    const inflight = s._pollLocalCommandProgress();
+    s.dispose();
+    await inflight;
+    assert.equal(s.hasBgTasks(), false, '实例已没，扫盘结果不该再落进它的账上');
+  });
+
+  test('扫盘键与 SDK 真实 task_id 分属不同命名空间（不互相覆盖）', async () => {
+    const cwd = '/test/localcmd-ns';
+    seed(cwd, 'lc-ns', [{ id: 'adup' }]);
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-ns';
+    s._armSlashQuietNotice('/code-review');
+    s.bgTaskUpsert('adup', 'workflow', 'SDK 报来的同名任务');   // 同名，但来自 SDK
+    await s._pollLocalCommandProgress();
+    assert.equal(s.bgTasksList().length, 2, '同名不同源须并存，不得互相覆盖');
+    s._clearLocalCommandProgress();
+    assert.equal(s.bgTasksList().length, 1, '只清扫盘那条，SDK 那条不动');
+    assert.equal(s.bgTasksList()[0].taskType, 'workflow');
     s.dispose();
   });
 });

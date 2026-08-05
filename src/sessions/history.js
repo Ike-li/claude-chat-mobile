@@ -1,6 +1,6 @@
 // history.js —— 读取 CLI 会话历史用于前端展示（方案 2）
 // CLI 历史文件：~/.claude/projects/<project>/<session_id>.jsonl
-import { open, stat, readdir } from 'node:fs/promises';
+import { open, stat, readdir, readFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
@@ -638,6 +638,38 @@ async function scanSessionsViaSdk(cwd, limit) {
       lastUsedAt: Math.round(activityAt ?? s.lastModified),
     };
   }))).filter(Boolean);
+
+  // 补齐 SDK 漏报的会话（2026-08-05 真机）：SDK 的 listSessions/getSessionInfo 会跳过「无可提取
+  // summary」的会话（sdk.d.ts:687 原话：…is a sidechain session, or has no extractable summary）。
+  // 本地 slash 命令（/code-review 等）跑在 fork 上下文里，主链 transcript 只落 entrypoint-marker /
+  // queue-operation / mode，一条 user/assistant 都没有 ⇒ 提不出 summary ⇒ 整个会话从抽屉里消失，
+  // 而它在盘上活得好好的（CLI 自己的 /resume 列表把它显示成 "(session)"，同一个原因）。
+  // 归属语义不变：只补【本 cwd 项目目录里实际存在】的 jsonl，SDK 报了但盘上没有的幽灵照旧滤掉。
+  // 成本：一次 readdir + 只对差集 stat（差集通常为 0；正常会话全都有 summary）。
+  try {
+    const seen = new Set(enriched.map(s => s.id));
+    const names = await readdir(projectDir);
+    const missing = names.filter(n => n.endsWith('.jsonl') && !seen.has(n.slice(0, -6)));
+    // ★ 先按 mtime 排序再截断，不能按 readdir 顺序（那是文件名序）：老目录里差集可达上百个
+    //   （SDK 候选窗本身有上限，落在窗外的老会话也会进差集），按文件名截断会把刚跑完的新会话
+    //   挡在窗外——2026-08-05 真机就是这么漏掉 8f064e08 的。stat 便宜，全量做；只有活下来的
+    //   那批才付 readLastMessageActivityMs（要开文件读尾窗）的代价。
+    const stats = (await Promise.all(missing.map(async name => {
+      try {
+        const st = await stat(join(projectDir, name));
+        return { name, size: st.size, mtimeMs: st.mtimeMs };
+      } catch { return null; }
+    }))).filter(Boolean);
+    stats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    const extra = await Promise.all(stats.slice(0, fetchLimit).map(async m => {
+      const file = join(projectDir, m.name);
+      const activityAt = await readLastMessageActivityMs(file, m.size).catch(() => null);
+      // 标题：这类会话主链无消息，readHeadMeta 也提不出，统一回落占位（与快路径空 summary 同口径）
+      return { id: m.name.slice(0, -6), title: '(无标题)', lastUsedAt: Math.round(activityAt ?? m.mtimeMs) };
+    }));
+    enriched.push(...extra);
+  } catch { /* readdir 失败（目录刚被删等）：SDK 结果照常返回，不因补齐失败而整个列表塌掉 */ }
+
   enriched.sort((a, b) => b.lastUsedAt - a.lastUsedAt || String(a.id).localeCompare(String(b.id)));
   // hasMore：重排后仍有未展示项，或 SDK 候选触顶（目录里可能还有更旧/未纳入的会话）
   return {
@@ -1222,4 +1254,70 @@ export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } 
 export function externalGrowthWhilePaused({ state, prevSize, curSize } = {}) {
   if (state !== 'permission') return false;
   return Number(prevSize) >= 0 && Number(curSize) >= 0 && Number(curSize) > Number(prevSize);
+}
+
+// ---- 子代理进度观察（本地 slash 命令的唯一可见来源）----
+// CLI 执行 /code-review 这类本地命令时，整条命令跑在独立 fork 上下文里：主链 transcript 零条目、
+// SDK 流也零消息（2026-08-05 隔离探针实测整轮 stream_event = 0，尽管 forwardSubagentText 已开）。
+// 但执行过程完整落在 <sessionId>/subagents/agent-<agentId>.jsonl —— 真机 xhigh 档单文件 762KB、
+// max 档 22~26 个文件。这是「命令跑到哪了」的唯一可观测来源。
+//
+// 【只取进度不取正文】返回每个子代理的身份 + 最近动作，不返回对话正文：762KB 推给手机端既挤爆
+// 环形缓冲（emitTransient 存在的理由正是这个），也不是移动端该渲染的体量。调用方喂 bgTaskUpsert，
+// 复用既有后台任务面板与 ⏳ 角标。
+//
+// 【尾窗读取】同 classifyTranscriptTail：只读末 TAIL_READ_BYTES，不整读——子代理文件可达数百 KB，
+// 而我们只要最后一条 tool_use 的名字。起点切中的半行 JSON.parse 失败即跳过。
+export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
+  if (!isSafeSessionId(sessionId)) return []; // SS-003 同口径：拒绝路径穿越
+  const dir = join(baseDir, getProjectDir(cwd), sessionId, 'subagents');
+  let names;
+  try {
+    names = await readdir(dir);
+  } catch {
+    return []; // 目录不存在 = 本轮没有子代理（绝大多数普通轮次），不是错误
+  }
+  const out = [];
+  for (const name of names) {
+    const m = /^agent-([0-9a-zA-Z_-]+)\.jsonl$/.exec(name); // 字符集同 isSafeSessionId，排除 .meta.json 与异物
+    if (!m) continue;
+    const agentId = m[1];
+    const entry = { agentId, agentType: null, description: null, lastToolName: null, lastActivityMs: 0 };
+    // meta.json：agentType 恒有，description 只有被 spawn 的子代理有（顶层编排 agent 没有）
+    try {
+      const meta = JSON.parse(await readFile(join(dir, `agent-${agentId}.meta.json`), 'utf-8'));
+      if (meta && typeof meta === 'object') {
+        if (typeof meta.agentType === 'string') entry.agentType = meta.agentType;
+        if (typeof meta.description === 'string') entry.description = meta.description;
+      }
+    } catch { /* meta 缺失/损坏：仍按无描述的子代理报出，不整条丢弃 */ }
+    try {
+      const fh = await open(join(dir, name), 'r');
+      try {
+        const { size, mtimeMs } = await fh.stat();
+        entry.lastActivityMs = mtimeMs;
+        if (size > 0) {
+          const start = size > TAIL_READ_BYTES ? size - TAIL_READ_BYTES : 0;
+          const buf = Buffer.allocUnsafe(size - start);
+          const { bytesRead } = await fh.read(buf, 0, size - start, start);
+          for (const line of buf.toString('utf-8', 0, bytesRead).split('\n')) {
+            if (!line.trim()) continue;
+            let e;
+            try { e = JSON.parse(line); } catch { continue; }
+            const content = e?.message?.content;
+            if (!Array.isArray(content)) continue;
+            for (const b of content) {                       // 同一条 assistant 可含多个 tool_use，取最后一个
+              if (b?.type === 'tool_use' && typeof b.name === 'string') entry.lastToolName = b.name;
+            }
+          }
+        }
+      } finally {
+        await fh.close().catch(() => {});
+      }
+    } catch { /* 读失败（写入中/权限）：保留已有 meta 字段报出，下一拍再试 */ }
+    out.push(entry);
+  }
+  // 最近活动优先：前端明细行按此序展示，正在动的排前面
+  out.sort((a, b) => b.lastActivityMs - a.lastActivityMs);
+  return out;
 }

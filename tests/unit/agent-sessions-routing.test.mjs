@@ -78,3 +78,68 @@ test.describe('session:new 后旧实例路由代次守卫（Bug B 回归）', ()
     s.dispose();
   });
 });
+
+// ---- sessionId 首达兜底认领（agent.js#_claimSessionIdEarly）----
+// 病灶：sessionId 的唯一来源曾是 system/init，而 CLI 执行本地 slash 命令（web 端 /code-review 等）
+// 时整条命令跑在独立 fork 上下文里，init 要等命令跑完才投。2026-08-05 隔离探针实测 init 132s 才到、
+// 同流上 rate_limit_event 9.5s 就带着 session_id 到了；真机 11 次 web /code-review 延迟 124s~1869s，
+// 其中 2 次（中途按停止）从头到尾没拿到过 id。期间前端：会话设置无 session id、标题恒「新会话」、
+// 历史与镜像无从查起（三者都以 sessionId 为键）。
+test.describe('sessionId 首达兜底：不独等 system/init', () => {
+  test('非 init 消息带 session_id → 立即认领并触发 onSessionId（这是本次修复的核心行为）', () => {
+    const calls = [];
+    const { s } = makeSession({ onSessionId: (sid, title, model) => calls.push({ sid, title, model }) });
+    s.firstMessage = '/code-review';
+
+    // 探针实测的真实首条消息形态：rate_limit_event 带完整 session_id，早于 init 122 秒
+    s.map({ type: 'rate_limit_event', session_id: 'sid-early', rate_limit_info: {} });
+
+    assert.equal(s.sessionId, 'sid-early', 'init 之前就该拿到 sessionId');
+    assert.equal(calls.length, 1, 'onSessionId 须被触发（否则 sessions.json 无条目、前端标题仍是「新会话」）');
+    assert.equal(calls[0].sid, 'sid-early');
+    assert.equal(calls[0].title, '/code-review', 'firstMessage 须作标题带出');
+    assert.equal(calls[0].model, undefined, '早到消息不带模型名，须传 undefined 让下游 if(model) 守卫跳过');
+    s.dispose();
+  });
+
+  test('事件信封随即带上真 sessionId（前端按它分流；空 id 正是「只有计时器、别的都没有」的成因）', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'rate_limit_event', session_id: 'sid-envelope', rate_limit_info: {} });
+    s.emit('system', { message: 'x' });
+    assert.equal(events.at(-1).sessionId, 'sid-envelope');
+    s.dispose();
+  });
+
+  test('已有 sessionId（resume 场景）不被后续消息改写', () => {
+    const calls = [];
+    const { s } = makeSession({ onSessionId: sid => calls.push(sid) });
+    s.sessionId = 'sid-resumed';
+    s.map({ type: 'rate_limit_event', session_id: 'sid-other', rate_limit_info: {} });
+    assert.equal(s.sessionId, 'sid-resumed', 'resume 的 id 是权威，非 init 消息无权改写');
+    assert.equal(calls.length, 0);
+    s.dispose();
+  });
+
+  test('非法 session_id（非字符串/空串）不认领——与 init 分支同口径，不让坏路由键进事件信封', () => {
+    const { s } = makeSession();
+    for (const bad of [123, {}, [], '', null, undefined]) {
+      s.map({ type: 'rate_limit_event', session_id: bad, rate_limit_info: {} });
+      assert.equal(s.sessionId, null, `session_id=${JSON.stringify(bad)} 不该被认领`);
+    }
+    s.dispose();
+  });
+
+  test('早期认领后 init 仍照常对账（换会话清理、model 回填不受影响）', () => {
+    const calls = [];
+    const { s } = makeSession({ onSessionId: (sid, title, model) => calls.push({ sid, model }) });
+    s.map({ type: 'rate_limit_event', session_id: 'sid-x', rate_limit_info: {} });
+    assert.equal(calls.length, 1);
+
+    // 同 id 的 init 到达：带真实 model，须再触发一次 onSessionId 补齐（upsertSession 的 if(model) 才填得上）
+    s.map({ type: 'system', subtype: 'init', session_id: 'sid-x', model: 'claude-opus-5', cwd: '/tmp/test' });
+    assert.equal(s.sawInit, true);
+    assert.equal(calls.length, 2, 'init 须照常触发 onSessionId，否则模型名永远补不上');
+    assert.equal(calls[1].model, 'claude-opus-5');
+    s.dispose();
+  });
+});

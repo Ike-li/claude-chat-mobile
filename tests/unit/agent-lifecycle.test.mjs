@@ -8,6 +8,22 @@ import {
   formatLifecycleGatewayStall,
 } from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { getProjectDir } from '../../src/sessions/history.js';
+
+// 本地 slash 命令进度相关用例共用的磁盘 fixture（隔离 tmpdir，绝不打真实 ~/.claude）
+const LOCALCMD_BASE = join(tmpdir(), `ccm-lifecycle-localcmd-${process.pid}`);
+const LOCALCMD_CWD = '/test/lifecycle-localcmd';
+{
+  const d = join(LOCALCMD_BASE, getProjectDir(LOCALCMD_CWD), 'sid-e1', 'subagents');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'agent-aone.meta.json'), JSON.stringify({ agentType: 'general-purpose', description: 'Angle A' }));
+  writeFileSync(join(d, 'agent-aone.jsonl'), JSON.stringify({
+    type: 'assistant', isSidechain: true,
+    message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Read', input: {} }] } }) + '\n');
+}
 
 
 // ---- lifecycle 文案（防「会话已结束」歧义）----
@@ -165,6 +181,114 @@ test.describe('checkIdle()', () => {
     s.checkIdle();
     assert.equal(s.terminating, true);
     assert.equal(aborted, true);
+    s.dispose();
+  });
+
+  // 本地 slash 命令在途豁免（agent.js#_localCommandInFlight）。
+  // 病灶：/code-review 这类本地命令由 CLI 在自己进程里跑，不产 task_progress、主链也没有 tool_use
+  // （2026-08-03 那批真机会话主链 assistant 条数 = 0），既有两条豁免一条都不满足 ⇒ SDK 流全空、
+  // lastActivity 不刷新 ⇒ 600s 到点 interrupt() 掐掉一个正在正常干活的命令。实测超线 788s/1076s/1869s。
+  test('本地 slash 命令在途 → 静默超限也不中断（既有两条豁免都不满足它）', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    assert.equal(s.hasBgTasks(), false, '前提：本地命令不产 task_progress');
+    assert.equal(s.hasRunningForegroundTool(), false, '前提：主链没有 tool_use');
+    let interrupted = false;
+    s.q = { interrupt: () => { interrupted = true; } };
+
+    s._armSlashQuietNotice('/code-review max');   // 与 send() 同一置位点
+    s.checkIdle();
+
+    assert.equal(interrupted, false, '本地命令在途不得被静默看门狗掐掉');
+    assert.equal(events.find(e => e.type === 'error'), undefined);
+    s.dispose();
+  });
+
+  test('普通消息（非 slash）不获豁免 —— 证明上条不是恒真断言', () => {
+    const { s } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    let interrupted = false;
+    s.q = { interrupt: () => { interrupted = true; } };
+
+    s._armSlashQuietNotice('帮我看下这段代码');    // 不是 slash → 不置位
+    s.checkIdle();
+
+    assert.equal(interrupted, true, '普通消息静默挂死仍须走原中断路径');
+    s.dispose();
+  });
+
+  test('豁免有上限：超 SLASH_LOCAL_COMMAND_GRACE_MS 后回到中断路径（不把误杀换成永挂）', () => {
+    const { s } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    let interrupted = false;
+    s.q = { interrupt: () => { interrupted = true; } };
+
+    s._armSlashQuietNotice('/code-review max');
+    s._slashCommandStartedAt = Date.now() - (46 * 60_000); // 越过 45 分钟上限
+    s.checkIdle();
+
+    assert.equal(interrupted, true, '超上限须按挂死处理');
+    s.dispose();
+  });
+
+  test('命令输出到达即撤豁免（下一轮静默按常规判）', () => {
+    const { s } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s._armSlashQuietNotice('/code-review');
+    assert.equal(s._localCommandInFlight(), true);
+
+    s.map({ type: 'system', subtype: 'local_command_output', content: '<local-command-stdout>done</local-command-stdout>', session_id: 'sid-lc' });
+    assert.equal(s._localCommandInFlight(), false, '输出到手 = 命令跑完，豁免须撤');
+    s.dispose();
+  });
+
+  test('回合 result 收尾也撤豁免（命令被中断/出错、没有输出的那条路径）', () => {
+    const { s } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s._armSlashQuietNotice('/code-review');
+    assert.equal(s._localCommandInFlight(), true);
+
+    s.map({ type: 'result', subtype: 'success', session_id: 'sid-r', usage: {}, total_cost_usd: 0 });
+    assert.equal(s._localCommandInFlight(), false, 'result 后不得残留豁免');
+    s.dispose();
+  });
+
+  // E1 回归（2026-08-05 真机 /code-review 自查抓出）：③ 的磁盘任务把 ② 的 45 分钟上限打穿。
+  // checkIdle 的豁免是 `hasBgTasks() || … || _localCommandInFlight()`——扫出子代理后 hasBgTasks()
+  // 恒真，于是 _localCommandInFlight() 到期返回 false 也没用，豁免照旧；而轮询已停、任务不再刷新
+  // 也不被清，要等 BG_TASK_LIFECYCLE_TTL_MS（2h）才 sweep 掉。等于把「误杀」换成了注释里说要避免的「永挂」。
+  test('E1：扫出的 localcmd 任务不得让 45 分钟上限失效', async () => {
+    const { s } = makeSession({ cwd: LOCALCMD_CWD, transcriptBaseDir: LOCALCMD_BASE, idleTimeoutMs: 1 });
+    s.sessionId = 'sid-e1';
+    s.pendingTurns = 1;
+    s._armSlashQuietNotice('/code-review max');
+    await s._pollLocalCommandProgress();
+    assert.equal(s.hasBgTasks(), true, '前提：磁盘扫出了子代理任务');
+
+    s._slashCommandStartedAt = Date.now() - 46 * 60_000; // 越过上限
+    s.lastActivity = 0;
+    let interrupted = false;
+    s.q = { interrupt: () => { interrupted = true; } };
+    s.checkIdle();
+
+    assert.equal(interrupted, true, '超 45 分钟上限后必须回到中断路径，不得被自家磁盘任务续命');
+    s.dispose();
+  });
+
+  test('E6：上限到期时一并清掉 localcmd 任务（否则面板永远挂着「运行中」）', async () => {
+    const { s } = makeSession({ cwd: LOCALCMD_CWD, transcriptBaseDir: LOCALCMD_BASE, idleTimeoutMs: 1 });
+    s.sessionId = 'sid-e1';
+    s.pendingTurns = 1;
+    s.q = { interrupt: () => {} };
+    s._armSlashQuietNotice('/code-review max');
+    await s._pollLocalCommandProgress();
+    s._slashCommandStartedAt = Date.now() - 46 * 60_000;
+    s.lastActivity = 0;
+    s.checkIdle();
+    assert.equal(s.hasBgTasks(), false, '命令已按挂死处理，磁盘观察出来的任务不该还在');
     s.dispose();
   });
 

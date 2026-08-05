@@ -178,14 +178,21 @@ test('SDK 消息转译：init 的 session_id 非法时不得调用 onSessionId',
 });
 
 // 防修过头：合法 session_id 照常触发（含参数原样透传）。
+// 【为什么是两次】map() 入口的 _claimSessionIdEarly 先认领一次（本地 slash 命令下 init 可能晚到
+// 100s+，见该方法注释），init 分支随后再触发一次——两次互补而非重复：第一次让前端立刻拿到
+// sessionId（否则会话设置无 id、标题恒「新会话」），第二次补上早到消息不带的 model。
+// 下游对重复调用免疫：writeSessionEntrypoint 有 getSession 守卫、upsertSession 的 model 走
+// `if (model)` 才覆盖、recordCwdDefaultModel 判据含 `!!reportedModel`。
 test('SDK 消息转译：init 的 session_id 合法时 onSessionId 照常触发', () => {
   const calls = [];
   const { s, dispose } = makeSession({ onSessionId: (...a) => calls.push(a) });
   try {
     s.map({ type: 'system', subtype: 'init', session_id: 'sid-legit-1', model: 'm1' });
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2, '早期认领 + init 补齐，两次都该在');
     assert.equal(calls[0][0], 'sid-legit-1');
-    assert.equal(calls[0][2], 'm1');
+    assert.equal(calls[0][2], undefined, '早期认领那次不带 model（早到消息没有模型名）');
+    assert.equal(calls[1][0], 'sid-legit-1');
+    assert.equal(calls[1][2], 'm1', 'init 那次必须带真实 model，否则 sessions.json 的模型名永远补不上');
   } finally {
     try { dispose(); } catch { /* noop */ }
   }

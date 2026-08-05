@@ -1487,7 +1487,6 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     onStateSettled: () => broadcastInstances(),
     onSessionId: (sid, firstMessage, model) => {
       // 新会话首次获得 id 时，写 entrypoint 元数据使 CLI /resume 可见（按本实例 cwd 落对应 project 目录）。
-      // sessionId 已在 agent.js 先于 emit('init') 赋值 → 下方 init 边界的 broadcastInstances 自然带新 sid/title。
       if (!sessions.getSession(sid)) writeSessionEntrypoint(sid, cwd);
       // effort/permissionMode 一并持久化：init 事件到达时 agent 已完成漂移检测（permissionMode 为对账后真值），
       // effort 为构造时注入值（运行时不可改）。web 端续接恢复依赖这两字段。
@@ -1495,6 +1494,11 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       // fresh 会话（未 resume、未 pin model）首 init 的 model = cwd CLI 默认 → 缓存供后续新会话预显（判据排除 resume-no-record，防污染）
       recordCwdDefaultModel(cwd, { resumeId: instance.resumeId, pinnedModel: instance.defaultModel, reportedModel: model });
       interactionLog.addSessionLog(sid, 'sys_info', `[SYS] 会话已获得 ID: sessionId=${sid}, 标题="${firstMessage || '未命名'}", model=${model || '默认'}`);
+      // 显式广播：此前靠「init 边界的 broadcastInstances 自然带新 sid/title」搭便车，而 sessionId 现在
+      // 可能远早于 init 到达（本地 slash 命令下实测早 122s，见 agent.js#_claimSessionIdEarly）。不显式推
+      // 一次的话，前端要一直等到 init 才知道会话有了 id——「会话设置无 session id、标题恒『新会话』」
+      // 那组症状照旧。init 时会再调一次本回调，届时多一次全量广播，幂等无害。
+      broadcastInstances();
     },
     // 台阶3：实例意外退出/挂死自杀 → 从 Map 删该 instanceId（不影响其他实例）；resume 失败清该 cwd 指针
     // 打破"重试→resume 同一失效 id→循环"死锁；若退的是当前查看 tab，重选：优先同 cwd，默认不跨工作区

@@ -2281,7 +2281,12 @@ export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   // 它在 SDK 侧根本不存在，q.stopTask('__notask_local_agent') 必然静默失败，而 UI 仍会打一条
   // 「已请求停止…」，任务行挂到 BG_TASK_ORPHAN_TTL_MS(3min) 才消失。同文件的行标签渲染早就知道要排除
   // 这个前缀（task-status.js 里 `!taskId.startsWith('__notask_')` 才显示 #shortId），停止按钮漏了。
-  const synthetic = id.startsWith('__notask_');
+  // 两类合成键都不是真实 SDK taskId，q.stopTask 必然静默失败：
+  //   __notask_*  —— agent.js 在 SDK 未给 task_id 时的占位；
+  //   localcmd:*  —— 本地 slash 命令期间从磁盘 subagents/ 观察出来的子代理（agent.js
+  //                  LOCAL_CMD_TASK_PREFIX）。它们是 CLI fork 上下文里的进程，SDK 侧无此 id。
+  // 前缀字面量在前后端各写一份：边界规则禁止 public/js 引用 src/，改一处必须改另一处。
+  const synthetic = id.startsWith('__notask_') || id.startsWith('localcmd:');
   return { canStop: Boolean(id) && !synthetic && bannerVisible !== false, taskId: synthetic ? null : (id || null) };
 }
 

@@ -15,7 +15,7 @@
 //
 // 换成假 HOME 之后，就算 getProjectDir 再塌成 ''，删的也只是本文件自己 mkdtemp 出来的空壳目录。
 // 下面那个 rmProjectDir 护栏仍然保留：假 HOME 是"炸不到人"，护栏是"根本不许炸"，两层不冲突。
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, utimesSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 
@@ -154,3 +154,76 @@ test('SDK 快路径: SDK 抛错不走 fail-closed，回落兜底扫盘正常出�
 });
 
 test.after(() => { try { rmSync(FAKE_HOME, { recursive: true, force: true }); } catch { /* 尽力而为 */ } });
+
+// 2026-08-05 真机：新会话首条发 /code-review，跑完后【整个会话从抽屉里消失】。
+// 根因不在 ccm——SDK 的 listSessions/getSessionInfo 会跳过「无可提取 summary」的会话
+// （sdk.d.ts:687 原话：Returns undefined if the session file is not found, is a sidechain
+// session, or has no extractable summary）。而本地 slash 命令跑在 fork 上下文里，主链 transcript
+// 只落 entrypoint-marker / queue-operation / mode，一条 user/assistant 都没有 ⇒ 提不出 summary。
+// 实测：getSessionInfo('8f064e08…') → undefined，CLI 自己的 /resume 列表也只显示 "(session)"。
+// 这是 UP-1 的第四处次生伤害，比前三处更彻底：会话在盘上活着，在列表里根本不存在。
+test('SDK 漏报的会话（无 summary）仍须出现在列表里——本地 slash 命令跑完的会话就是这形态', async () => {
+  const cwd = '/sdk/no-summary';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  // 正常会话：SDK 认得
+  writeJSONL(dir, 'sid-normal', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
+  // /code-review 跑完的会话真实形态：零条 user/assistant，SDK 提不出 summary 故不返回
+  writeJSONL(dir, 'sid-forked', [
+    { type: 'entrypoint-marker', entrypoint: 'cli', sessionId: 'sid-forked' },
+    { type: 'queue-operation', operation: 'enqueue', sessionId: 'sid-forked' },
+    { type: 'mode', mode: 'normal', sessionId: 'sid-forked' },
+  ]);
+  __setSdkListSessionsForTest(async () => [
+    { sessionId: 'sid-normal', summary: '正常会话', lastModified: 1784098212405 },
+    // sid-forked 缺席——SDK 就是这么漏的
+  ]);
+  try {
+    const { sessions } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 10 });
+    const ids = sessions.map(s => s.id);
+    assert.ok(ids.includes('sid-normal'), '正常会话照常在');
+    assert.ok(ids.includes('sid-forked'), 'SDK 漏报的会话必须补齐，否则用户在抽屉里找不到它');
+    assert.equal(sessions.find(s => s.id === 'sid-forked').title, '(无标题)', '无 summary 回落占位标题');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+test('补齐不改变既有归属过滤：SDK 报了但盘上没有的幽灵仍被滤掉', async () => {
+  const cwd = '/sdk/no-summary-ghost';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'sid-real', [{ type: 'user', message: { role: 'user', content: 'hi' } }]);
+  __setSdkListSessionsForTest(async () => [
+    { sessionId: 'sid-real', summary: '真会话', lastModified: 1784098212405 },
+    { sessionId: 'sid-ghost', summary: '祖先目录混入', lastModified: 1784098212500 },
+  ]);
+  try {
+    const { sessions } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 10 });
+    assert.deepEqual(sessions.map(s => s.id), ['sid-real'], '补齐只看本目录实际存在的 jsonl，不放行幽灵');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+// 差集按 mtime 排序再截断，不能按 readdir 的文件名序：老目录里差集可达上百个（SDK 候选窗有上限，
+// 窗外的老会话也进差集），按文件名截断会把刚跑完的新会话挡在窗外——2026-08-05 真机就是这么漏的
+// （第一版修复在测试里绿、在 312 个 jsonl 的真实目录上仍缺失）。
+test('SDK 漏报补齐: 差集超窗时按活动时间取最近的，不按文件名序', async () => {
+  const cwd = '/sdk/no-summary-order';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const noMsg = [{ type: 'queue-operation', operation: 'enqueue' }];
+  // zzz-new 文件名排最后但最新；aaa-old-* 一大批占满窗口
+  for (let i = 0; i < 60; i++) writeJSONL(dir, `aaa-old-${String(i).padStart(3, '0')}`, noMsg);
+  writeJSONL(dir, 'zzz-new', noMsg);
+  const past = new Date(Date.now() - 86400_000);
+  for (let i = 0; i < 60; i++) utimesSync(join(dir, `aaa-old-${String(i).padStart(3, '0')}.jsonl`), past, past);
+  __setSdkListSessionsForTest(async () => []); // SDK 一条都不认（全是无 summary 会话）
+  try {
+    const { sessions } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 10 });
+    assert.ok(sessions.some(s => s.id === 'zzz-new'), '最新的会话必须进列表，哪怕文件名排在最后');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});

@@ -15,6 +15,7 @@ export function makeSession(opts = {}) {
     slashQuietNoticeMs: opts.slashQuietNoticeMs,
     resumeId: opts.resumeId || null,
     historicalCostUsd: opts.historicalCostUsd || 0,
+    transcriptBaseDir: opts.transcriptBaseDir, // 扫盘类逻辑的隔离根（不传 = 生产默认 ~/.claude/projects）
     onEvent(event) { events.push(event); },
     onSessionId: opts.onSessionId || (() => {}),
     onExit: opts.onExit || (() => {}),

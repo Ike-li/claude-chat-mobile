@@ -796,3 +796,27 @@ test.describe('taskStopUiState：合成 taskId 不得渲染可点的「停」', 
     assert.equal(taskStopUiState({ taskId: 'task_abc', bannerVisible: false }).canStop, false);
   });
 });
+
+// E3/E5 回归（2026-08-05 真机 /code-review 自查抓出）：磁盘观察出来的子代理被喂进 bgTasks 通道
+// （键前缀 localcmd:，见 agent.js#_pollLocalCommandProgress）。它们借用了真任务的 UI，但两处对不上：
+//   E3 停止按钮——taskStopUiState 只排除 __notask_ 前缀，localcmd: 会渲染出可点的「停」，
+//      而 q.stopTask('localcmd:…') 在 SDK 侧根本没有这个 id，点了必然静默失败。
+//   E5 行标签——上游 taskType 曾写成 'subagent'，而这里只认 local_agent/agent，拿不到 🤖。
+test.describe('localcmd: 合成任务的 UI 语义', () => {
+  test('E3：localcmd: 键不得渲染出可点的「停」（SDK 侧没有这个 id）', () => {
+    const r = taskStopUiState({ taskId: 'localcmd:a00b4eae6' });
+    assert.equal(r.canStop, false, '磁盘观察出来的子代理停不了，按钮不该可点');
+    assert.equal(r.taskId, null);
+  });
+
+  test('E3 对照：真实 SDK taskId 仍可停（防修过头）', () => {
+    const r = taskStopUiState({ taskId: 'w60tplm3a' });
+    assert.equal(r.canStop, true);
+    assert.equal(r.taskId, 'w60tplm3a');
+  });
+
+  test('E5：taskType 用 local_agent 时行标签带 🤖（与真 SDK 子代理同档）', () => {
+    const label = formatBgTaskRowLabel({ taskType: 'local_agent', message: 'Angle A' });
+    assert.ok(String(label).includes('🤖'), `local_agent 应带 🤖，实际: ${label}`);
+  });
+});

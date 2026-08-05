@@ -1,10 +1,10 @@
 // tests/unit/history.test.mjs —— history.js 单测（tmpdir 注入，零网络/零真实 claude 目录）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync } from 'node:fs';
+import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused } from '../../src/sessions/history.js';
+import { getProjectDir, getSessionHistory, HISTORY_MAX_MESSAGES, catchUpStep, rebaselineAbsorbedExternal, classifyTranscriptTail, lastPermissionMode, readLastPermissionMode, lastAssistantModel, readLastAssistantModel, externalGrowthWhilePaused, scanSubagents } from '../../src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -495,5 +495,129 @@ test.describe('externalGrowthWhilePaused：等审批期间的终端写入必须�
   test('缺参不抛', () => {
     assert.doesNotThrow(() => externalGrowthWhilePaused());
     assert.equal(externalGrowthWhilePaused(), false);
+  });
+});
+
+// ---- scanSubagents：本地 slash 命令期间「命令跑到哪了」的唯一可观测来源 ----
+// 主链 transcript 零条目、SDK 流零消息（2026-08-05 探针实测 stream_event = 0），执行过程只落在
+// <sessionId>/subagents/ 下。真机实测 xhigh 档 762KB 单文件 6ms、max 档 11 文件 27ms。
+test.describe('scanSubagents', () => {
+  function writeSubagent(cwd, sid, agentId, { meta, entries }) {
+    const dir = join(BASE, getProjectDir(cwd), sid, 'subagents');
+    mkdirSync(dir, { recursive: true });
+    if (meta !== undefined) writeFileSync(join(dir, `agent-${agentId}.meta.json`), JSON.stringify(meta));
+    writeFileSync(join(dir, `agent-${agentId}.jsonl`), entries.map(e => JSON.stringify(e)).join('\n') + '\n');
+  }
+
+  test('读出身份与最近动作：agentType/description/lastToolName', async () => {
+    const cwd = '/test/subagents-basic';
+    writeSubagent(cwd, 'sa-basic', 'a00b4eae6', {
+      meta: { agentType: 'general-purpose', description: 'Angle A: line-by-line diff scan' },
+      entries: [
+        { type: 'user', isSidechain: true, message: { role: 'user', content: 'Review target: ...' } },
+        { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Read', input: {} }] } },
+        { type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Grep', input: {} }] } },
+      ],
+    });
+    const r = await scanSubagents('sa-basic', cwd, { baseDir: BASE });
+    assert.equal(r.length, 1);
+    assert.equal(r[0].agentId, 'a00b4eae6');
+    assert.equal(r[0].agentType, 'general-purpose');
+    assert.equal(r[0].description, 'Angle A: line-by-line diff scan');
+    assert.equal(r[0].lastToolName, 'Grep', '取最后一条 tool_use，不是第一条');
+  });
+
+  test('同一条 assistant 含多个 tool_use → 取最后一个', async () => {
+    const cwd = '/test/subagents-multi';
+    writeSubagent(cwd, 'sa-multi', 'amulti', {
+      meta: { agentType: 'general-purpose' },
+      entries: [{ type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [
+        { type: 'text', text: '并行跑三个' },
+        { type: 'tool_use', name: 'Read', input: {} },
+        { type: 'tool_use', name: 'Bash', input: {} },
+      ] } }],
+    });
+    const r = await scanSubagents('sa-multi', cwd, { baseDir: BASE });
+    assert.equal(r[0].lastToolName, 'Bash');
+  });
+
+  test('多个子代理 → 按最近活动排序（正在动的排前面）', async () => {
+    const cwd = '/test/subagents-order';
+    for (const id of ['aold', 'anew']) {
+      writeSubagent(cwd, 'sa-order', id, {
+        meta: { agentType: 'general-purpose', description: `desc-${id}` },
+        entries: [{ type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Read', input: {} }] } }],
+      });
+    }
+    // 把 aold 的 mtime 拨旧
+    const f = join(BASE, getProjectDir(cwd), 'sa-order', 'subagents', 'agent-aold.jsonl');
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(f, old, old);
+    const r = await scanSubagents('sa-order', cwd, { baseDir: BASE });
+    assert.equal(r.length, 2);
+    assert.equal(r[0].agentId, 'anew', '最近活动的排前面');
+  });
+
+  test('meta.json 缺失 → 仍报出该子代理（不整条丢弃）', async () => {
+    const cwd = '/test/subagents-nometa';
+    writeSubagent(cwd, 'sa-nometa', 'anometa', {
+      meta: undefined,
+      entries: [{ type: 'assistant', isSidechain: true, message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } }],
+    });
+    const r = await scanSubagents('sa-nometa', cwd, { baseDir: BASE });
+    assert.equal(r.length, 1);
+    assert.equal(r[0].agentType, null);
+    assert.equal(r[0].lastToolName, 'Bash', 'meta 缺失不影响 jsonl 解析');
+  });
+
+  test('半行/损坏 JSON 跳过，不整条失败（写入中的文件是常态）', async () => {
+    const cwd = '/test/subagents-partial';
+    const dir = join(BASE, getProjectDir(cwd), 'sa-partial', 'subagents');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'agent-apart.meta.json'), JSON.stringify({ agentType: 'general-purpose' }));
+    writeFileSync(join(dir, 'agent-apart.jsonl'),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Read', input: {} }] } })
+      + '\n{"type":"assistant","message":{"role":"assist');  // 写到一半的尾行
+    const r = await scanSubagents('sa-partial', cwd, { baseDir: BASE });
+    assert.equal(r[0].lastToolName, 'Read', '半行跳过，已解析的仍生效');
+  });
+
+  test('无 subagents 目录（绝大多数普通轮次）→ 空数组，不是错误', async () => {
+    const r = await scanSubagents('sa-absent', '/test/subagents-none', { baseDir: BASE });
+    assert.deepEqual(r, []);
+  });
+
+  // 穿越目标必须【真实存在且有内容】，否则「不存在 → []」会让断言恒真、守卫删掉也全绿（实测空过）。
+  // 靶子放在另一个 project 目录下：从 A 目录用 '../<projB>/victim' 正好落到 B 的真实子代理目录。
+  test('非法 sessionId 不落盘读（路径穿越同 SS-003 口径）', async () => {
+    const from = '/test/escape-from';
+    const to = '/test/escape-to';
+    const projTo = getProjectDir(to);
+    const target = join(BASE, projTo, 'victim', 'subagents');
+    mkdirSync(target, { recursive: true });
+    writeFileSync(join(target, 'agent-aleak.meta.json'), JSON.stringify({ agentType: 'general-purpose' }));
+    writeFileSync(join(target, 'agent-aleak.jsonl'),
+      JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } }));
+    // 自证靶子确实可读（否则下面的穿越断言又成恒真）
+    const legit = await scanSubagents('victim', to, { baseDir: BASE });
+    assert.equal(legit[0]?.agentId, 'aleak', '前提：靶目录本身可被合法读到，穿越断言才有意义');
+
+    // 同一份数据，换成从 from 目录穿越过去——守卫必须挡住
+    assert.deepEqual(await scanSubagents(`../${projTo}/victim`, from, { baseDir: BASE }), [], '守卫须挡住跨 project 目录穿越');
+    assert.deepEqual(await scanSubagents('../../../etc', '/test/x', { baseDir: BASE }), []);
+    assert.deepEqual(await scanSubagents('', '/test/x', { baseDir: BASE }), []);
+  });
+
+  test('只认 agent-<id>.jsonl：meta.json 与异物不被当成子代理', async () => {
+    const cwd = '/test/subagents-filter';
+    const dir = join(BASE, getProjectDir(cwd), 'sa-filter', 'subagents');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'agent-areal.jsonl'), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [] } }));
+    writeFileSync(join(dir, 'agent-areal.meta.json'), JSON.stringify({ agentType: 'general-purpose' }));
+    writeFileSync(join(dir, 'README.txt'), 'noise');
+    writeFileSync(join(dir, 'agent-bad.jsonl.tmp'), 'noise');
+    const r = await scanSubagents('sa-filter', cwd, { baseDir: BASE });
+    assert.equal(r.length, 1);
+    assert.equal(r[0].agentId, 'areal');
   });
 });
