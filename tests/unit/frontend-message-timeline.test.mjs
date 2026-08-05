@@ -116,6 +116,25 @@ test('增量模式：seed 自 messagesEl 末尾的 data-ts，接上前一批', (
   assert.deepEqual(markers(frag2).map(n => n.dataset.markerKind), ['time']);
 });
 
+// 三态哨兵不能在传参处被压平。scanTsBackFrom 的约定：number=找到 / null=确实没有（会话首条）/
+// undefined=扫满 SCAN_LIMIT 前一条在视野外。stamp() 用 `prevTs !== undefined` 守着，
+// appendWithTime 与 settleAt 都按位置传参、哨兵完好；beginFragment 走的是选项对象，
+// 而解构默认值 `{ seedPrevTs = null }` 恰恰在值为 undefined 时触发 —— 把「看不见」压成了「没有」，
+// 于是一个堆了几百张工具卡的 agentic 回合之后，增量追平会凭空插一条整宽日期分隔行。
+test('增量模式：seed 为 undefined（扫满上限）时不得退化成「会话首条」而插日期行', () => {
+  const { timeline, messagesEl: harnessMessagesEl } = harness();
+  timeline.appendWithTime(bubble(), at(2026, 8, 4, 9, 0), 'user'); // 确实存在前一条主链气泡
+  for (let i = 0; i < 600; i++) harnessMessagesEl.appendChild(fakeNode()); // 600 张无戳工具卡，顶过 SCAN_LIMIT=500
+
+  const seed = timeline.lastTimestampIn(harnessMessagesEl);
+  assert.equal(seed, undefined, '前置条件：扫满上限应返回 undefined 哨兵');
+
+  const frag = fakeNode();
+  timeline.beginFragment(frag, { seedPrevTs: seed })(bubble(), at(2026, 8, 4, 9, 5), 'user');
+  assert.deepEqual(markers(frag).map(n => n.dataset.markerKind), [],
+    '★ 看不见前一条 ≠ 没有前一条：宁可不插行，也不能凭空冒出一条日期分隔行');
+});
+
 test('lastTimestampIn：反向扫描跳过工具卡与 ephemeral live 行', () => {
   const { timeline, messagesEl } = harness();
   timeline.appendWithTime(bubble(), at(2026, 8, 4, 9, 0), 'user');

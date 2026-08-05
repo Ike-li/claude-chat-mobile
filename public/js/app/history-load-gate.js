@@ -20,17 +20,49 @@
 // 而 B 随后只能释放空队列——那些没进历史快照的增量就永久消失了（终端在跑、手机上却少了几条）。
 // 所以 abort/release 都按 handle 结算：不是自己那一轮就安全地什么都不做。
 // 同款思路见 event-dispatch.js 的 createReplayBuffer（WS-001/WS-002 迟到 ACK 守卫）。
-export function createHistoryLoadGate() {
-  let current = null;   // { instanceId, queue }；null = 闸门关闭。对象身份即 handle
+//
+// 【为什么必须有看门狗】上面那套 handle 结算只保证「谁该关闸」，不保证「闸门一定会被关上」——
+// 它要求每条早退路径都记得调 abort/release。实测有两条路径没人记得，且都无声无息：
+//  ① renderHistoryBubbles 是分块渲染，中途切走时 processChunk 直接 return，而 onDone 是
+//     flushHeldHistoryAppends 的唯一调用点，于是既不 release 也不 abort；
+//  ② session:history 用的是裸 ack，socket.io-client 断线时 _clearAcks() 会 delete 掉非 withError
+//     的 handler 并且**不调用它**（见 socket.io-client/build/esm/socket.js 的 _clearAcks），
+//     手机锁屏/切后台就能触发，回调永不执行。
+// 后果一样：闸门永久开着，此后该实例每条 history_append 都被 hold 掉——终端在跑、手机再也不刷新、
+// 没有任何报错。逐条补 abort 是打地鼠，新增一条早退路径就再漏一次；所以照 createReplayBuffer 的
+// armTimeout 补一道兜底：到点就把扣住的事件放行并关闸。宁可顺序稍差，也绝不静默吞消息。
+// 20s：必须长于 app.js 的 session:history ack 超时（15s）+ 分块渲染最坏耗时，让 release/abort 这两条
+// 显式路径永远有先手，看门狗只在「回调压根没来过」时才兜底。它不是正常路径的一部分，调到这里就说明
+// 有代码路径失职了；阈值宁可保守，也不要把慢加载误判成失职而抢跑。
+const DEFAULT_TIMEOUT_MS = 20000;
+
+export function createHistoryLoadGate({ timers = globalThis, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+  let current = null;   // { instanceId, queue, timeoutId }；null = 闸门关闭。对象身份即 handle
+  let onTimeoutFlush = () => {};
 
   const isStale = handle => handle != null && handle !== current;
 
+  function disarm() {
+    if (current?.timeoutId != null) timers.clearTimeout(current.timeoutId);
+  }
+
   return {
+    // 兜底放行的接收方（app.js 注入，走与正常放行同一条 onHistoryAppend 路径）。
+    onTimeout(fn) { onTimeoutFlush = typeof fn === 'function' ? fn : () => {}; },
+
     // 开闸，返回本轮的 handle。同实例重新加载（gap reload）时也换新 handle，
     // 上一轮的残留队列自然作废，不会被带进新一轮。
     begin(instanceId) {
-      current = { instanceId: instanceId ?? null, queue: [] };
-      return current;
+      disarm(); // 换轮：撤掉上一轮的兜底，避免旧定时器到点后打中新一轮的队列
+      const handle = { instanceId: instanceId ?? null, queue: [], timeoutId: null };
+      current = handle;
+      handle.timeoutId = timers.setTimeout(() => {
+        if (current !== handle) return; // 已被更晚一次 begin/release/abort 顶替，本次兜底失效
+        const held = handle.queue;
+        current = null;
+        onTimeoutFlush(held);
+      }, timeoutMs);
+      return handle;
     },
     // 返回 true 表示已扣住，调用方不要再渲染这条。
     // 只扣当前加载目标的事件——与 loadHistory 的迟到 ACK 守卫同口径；别的实例的追平必须照常放行，
@@ -44,6 +76,7 @@ export function createHistoryLoadGate() {
     // 关闸并交出队列。幂等（再调返回空）；非本轮的 handle 拿不到任何东西，也不影响当前轮。
     release(handle) {
       if (!current || isStale(handle)) return [];
+      disarm();
       const released = current.queue;
       current = null;
       return released;
@@ -52,6 +85,7 @@ export function createHistoryLoadGate() {
     // 否则闸门永远开着，之后所有追平被静默吞掉。非本轮的 handle 是 no-op。
     abort(handle) {
       if (isStale(handle)) return;
+      disarm();
       current = null;
     },
   };

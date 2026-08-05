@@ -15,9 +15,91 @@ import { createHistoryLoadGate } from '../../public/js/app/history-load-gate.js'
 
 const ev = (instanceId, n) => ({ instanceId, type: 'history_append', payload: { messages: [n] } });
 
+// 可控时钟：把 setTimeout 换成手动触发，直接验看门狗到点后的行为，不真等墙钟。
+function fakeTimers() {
+  let pending = null;
+  let nextId = 1;
+  return {
+    setTimeout: (fn, ms) => { pending = { fn, ms, id: nextId }; return nextId++; },
+    clearTimeout: (id) => { if (pending?.id === id) pending = null; },
+    fire() { const p = pending; pending = null; p?.fn(); },
+    armed: () => pending != null,
+    delay: () => pending?.ms,
+  };
+}
+
 test('未开闸时不扣任何事件', () => {
   const gate = createHistoryLoadGate();
   assert.equal(gate.hold(ev('inst_1', 1)), false);
+});
+
+// —— 看门狗：闸门必须能自己关上 ——
+// 隔壁 createReplayBuffer 有 3s 超时兜底（armTimeout，注释写着「不能无限期黑屏攒着」），
+// 本闸门原本一个 setTimeout 都没有：只要有任何一条早退路径忘了 abort，闸门就永久开着，
+// 此后该实例所有 history_append 被静默吞掉——终端一直在输出，手机上再也不刷新，且无任何报错。
+// 实测存在两条这样的路径：
+//  ① renderHistoryBubbles 分块渲染中途切走，processChunk 早退，onDone（唯一的 release 调用点）不执行；
+//  ② session:history 用的是裸 ack，socket.io-client 断线时 _clearAcks() 会 delete 掉非 withError 的
+//     handler 且不调用（见 socket.io-client/build/esm/socket.js），回调永不执行。
+// 逐条补 abort 是打地鼠——新增早退路径就会再漏。看门狗保证「无论如何都会关上」。
+
+test('看门狗：超时到点自动放行扣住的事件，闸门关闭', () => {
+  const timers = fakeTimers();
+  const gate = createHistoryLoadGate({ timers });
+  gate.begin('inst_1');
+  gate.hold(ev('inst_1', 1));
+  gate.hold(ev('inst_1', 2));
+
+  assert.equal(timers.armed(), true, 'begin 就该挂上兜底');
+  const flushed = [];
+  gate.onTimeout(events => flushed.push(...events));
+  timers.fire();
+
+  assert.deepEqual(flushed.map(e => e.payload.messages[0]), [1, 2], '★ 扣住的事件必须放行，不能丢');
+  assert.equal(gate.hold(ev('inst_1', 3)), false, '超时后闸门必须已关闭，不再扣新事件');
+});
+
+test('看门狗：release 之后不再触发（正常路径不该被兜底二次放行）', () => {
+  const timers = fakeTimers();
+  const gate = createHistoryLoadGate({ timers });
+  gate.begin('inst_1');
+  gate.hold(ev('inst_1', 1));
+
+  const flushed = [];
+  gate.onTimeout(events => flushed.push(...events));
+  gate.release();
+  assert.equal(timers.armed(), false, 'release 必须撤掉兜底，否则定时器空挂');
+  timers.fire();
+  assert.deepEqual(flushed, [], '已 release 的事件不能被兜底再放行一次');
+});
+
+test('看门狗：abort 之后不再触发', () => {
+  const timers = fakeTimers();
+  const gate = createHistoryLoadGate({ timers });
+  gate.begin('inst_1');
+  gate.hold(ev('inst_1', 1));
+
+  const flushed = [];
+  gate.onTimeout(events => flushed.push(...events));
+  gate.abort();
+  assert.equal(timers.armed(), false);
+  timers.fire();
+  assert.deepEqual(flushed, []);
+});
+
+test('看门狗：begin 换轮时重挂，旧轮的兜底不得放行新轮队列', () => {
+  const timers = fakeTimers();
+  const gate = createHistoryLoadGate({ timers });
+  const flushed = [];
+  gate.onTimeout(events => flushed.push(...events));
+
+  gate.begin('inst_1');
+  gate.hold(ev('inst_1', 1));
+  gate.begin('inst_2');           // 切到另一个会话，接管闸门
+  gate.hold(ev('inst_2', 9));
+  timers.fire();                  // 只应有一个存活的兜底，且属于 inst_2 这一轮
+
+  assert.deepEqual(flushed.map(e => e.payload.messages[0]), [9]);
 });
 
 test('开闸期间扣住同实例事件，release 按原顺序放行', () => {

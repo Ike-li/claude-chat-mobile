@@ -118,6 +118,14 @@ export function createContentScenarios(getContext) {
           });
           await delay(120); // 逐批到达，逼出「每批一个新 frag」的真实时序
         }
+        // 收尾 result：与同期的 test:stale-ts 同一条规则——客户端发消息即 setBusy(true)，没有终态
+        // 事件就一直悬在 busy。本场景只验时间戳，但仍要把回合收干净，否则同页面后续任何一次
+        // sendChatMessage 都会在 helper 的「等 data-mode 不再是 stop」上白等 20s，还报在误导的位置。
+        socket.emit('agent:event', {
+          seq: batches.length + 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test',
+          instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_history_append_ts', durationMs: 10, costUsd: 0, isError: false, models: ['claude-3-5-sonnet'] },
+        });
       },
     },
     {
@@ -716,10 +724,14 @@ export function createContentScenarios(getContext) {
           seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
           type: 'thinking_delta', payload: { messageId: 'msg_long_1', text: '<thinking>Starting a long-running analysis task...</thinking>' }
         });
+        // ★ 回合号必须在【进入本轮时】快照，不能等 delay 之后再取：新的 test: 命令会在拦截处把
+        // turnSeq 自增并把 aborted 清回 false（见 server.js），若那条命令恰好落在下面这段 delay 里，
+        // 醒来读到的就是【新】回合号，于是 `turnSeq !== myTurn` 恒为 false、aborted 也刚被清掉——
+        // 两条退出路径同时失效，本循环跑满 16s 并把迟到事件泼进后续 spec。
+        const myTurn = activeInst.turnSeq;
         await delay(500);
 
         // Stream slowly: gives time for interrupt while keeping tests bounded.
-        const myTurn = activeInst.turnSeq;
         for (let i = 0; i < 20; i++) {
           // WS-008：每次 delay 后检查 abort 标志——interrupt 处理器会把 activeInst.aborted 置 true。旧实现不检查，
           // 中断后这个 16s(20×800ms) 循环仍继续每 800ms 发 text_delta + 末尾 result，污染后续 test case（TC-11

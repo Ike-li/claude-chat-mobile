@@ -957,6 +957,10 @@ import { createSessionDeleteController } from './app/session-delete.js';
   // 去重基线）→ loadHistory（默认 cwd=currentCwd、ack 内 hideLoadingCard）。connect 路径不像 bindView 那样
   // 先 clearView，loadHistory 是 appendChild 不清空，故重载前必须先 clearView 防重复整段对话。
   const PROBE_MS = 5000; // 探测 ack 超时：远低于 socket.io 被动心跳超时窗口(~45s)，又容忍移动端慢 RTT
+  // session:history 的 ack 超时。给得宽松（server 要读整份 transcript，长会话可能上千条），
+  // 它的职责不是"快速失败"而是"保证回调一定会被调用一次"——裸 ack 在断线时会被静默丢弃，
+  // 那正是 historyLoadGate 永久卡死的两个成因之一（见 history-load-gate.js 的看门狗注释）。
+  const HISTORY_ACK_TIMEOUT_MS = 15000;
   let _probeInFlight = false;
   function reloadCurrentFromHistory(onDone) {
     if (!displayedSessionId) return;
@@ -5891,7 +5895,11 @@ import { createSessionDeleteController } from './app/session-delete.js';
     // 渲染，2000 条约 50 块）。期间镜像追平的 history_append 完全可能插进来——它是 out-of-band，
     // 不进 replay buffer，挡不住。扣住它们，等历史落地后按原顺序放行（见 history-load-gate.js）。
     const gateHandle = historyLoadGate.begin(reqInstanceId);
-    socket.emit('session:history', { sessionId, cwd }, res => {
+    // 必须用 socket.timeout()：裸 ack 在断线时会被 socket.io-client 的 _clearAcks() 直接 delete 掉
+    // 且【不调用】（只有 withError 的才回调），于是这个回调永不执行——闸门不 abort 也不 release，
+    // 手机锁屏/切后台就能触发。带 timeout 后断线会以 err 形式回调，下面 err 分支负责收尾。
+    socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd }, (err, res) => {
+      if (err) { historyLoadGate.abort(gateHandle); hideLoadingCard(); onDone?.(); return; }
       // WS-001：迟到 ACK 守卫——发起后若已切走（会话或实例变），丢弃本回调。否则 A 的历史会被 renderHistoryBubbles
       // 追加进当前 B 的 DOM，且 hideLoadingCard 抹掉 B 的 loading 卡。对齐 onHistoryAppend 的 viewingInstanceId 守卫。
       if (displayedSessionId !== sessionId || displayedInstanceId !== reqInstanceId) { historyLoadGate.abort(gateHandle); return; }
@@ -6160,7 +6168,11 @@ import { createSessionDeleteController } from './app/session-delete.js';
     const targetInstanceId = displayedInstanceId;
     let i = 0;
     function processChunk() {
-      if (displayedInstanceId !== targetInstanceId) return;
+      // ★ 中断也必须通知收尾。onDone 是 flushHeldHistoryAppends 的唯一调用点，早年这里直接 return
+      // 把它一并跳过了：闸门既不 release 也不 abort，永久开着，此后该实例每条 history_append 都被
+      // 静默吞掉——终端在跑、手机再也不刷新、无任何报错。此刻视图已切走，flush 出来的事件会被
+      // onHistoryAppend 的 viewingInstanceId 守卫正常丢弃，所以只关闸、不会污染新视图。
+      if (displayedInstanceId !== targetInstanceId) { onDone?.(); return; }
       const { end, done } = nextHistoryRenderChunk({ processed: i, total: msgs.length, chunkSize: HISTORY_RENDER_CHUNK_SIZE });
       for (; i < end; i++) renderOne(msgs[i]);
       if (!done) {
@@ -6181,20 +6193,35 @@ import { createSessionDeleteController } from './app/session-delete.js';
 
   // 历史落地后放行被扣住的追平事件。此刻 DOM 已是最终态，走正常 onHistoryAppend 即可——
   // 顺序天然接在历史之后，时间戳也以真正的前一条为基准（不会再误判成会话首条）。
-  function flushHeldHistoryAppends(handle) {
-    for (const ev of historyLoadGate.release(handle)) onHistoryAppend(ev);
+  // ★ 必须串行：renderHistoryBubbles 对 >HISTORY_RENDER_CHUNK_SIZE 条是【异步】的（分块让出主线程，
+  // frag 最后才一次性 appendChild）。若在这里同步 for 循环挨个调 onHistoryAppend，一个 60 条的批次
+  // 会先挂起、紧随其后的 3 条批次却同步落地——后到的排到先到的前面，而且它 seed 基准读的是尚未
+  // 收到前一批的 #messages，又会凭空多一条日期分隔行。那正是本闸门要消灭的两个症状，等于在闸门
+  // 内部原样复现一遍。所以等前一批真正落地（onDone）再放下一批。
+  function drainHeldHistoryAppends(events) {
+    let i = 0;
+    const next = () => { if (i < events.length) onHistoryAppend(events[i++], next); };
+    next();
   }
+  function flushHeldHistoryAppends(handle) {
+    drainHeldHistoryAppends(historyLoadGate.release(handle));
+  }
+  // 看门狗兜底放行：走与正常放行完全相同的路径。到这里说明某条早退路径没能收尾（见 history-load-gate.js），
+  // 此刻 DOM 未必是最终态、顺序可能不完美——但比静默吞掉消息好得多。
+  historyLoadGate.onTimeout(drainHeldHistoryAppends);
 
   // 只读「追平」：server 轮询「正在终端 CLI 里跑」的会话 transcript，检测到【外部新落定】消息 → history_append。
   // 仅渲染当前查看会话。局限：看不到实时 thinking / 在跑子 agent——它们不落盘，终端把消息落定后才追加得到。
-  function onHistoryAppend(ev) {
-    if (ev.instanceId !== viewingInstanceId) return; // 只进当前查看会话（server 已按 viewing 发，这里再兜一层）
+  // onDone：本批真正落地（frag 已插入 #messages）后回调。仅串行放行队列时需要——见 flushHeldHistoryAppends。
+  function onHistoryAppend(ev, onDone) {
+    const done = () => onDone?.();
+    if (ev.instanceId !== viewingInstanceId) { done(); return; } // 只进当前查看会话（server 已按 viewing 发，这里再兜一层）
     // 拉历史在途：扣住，等历史落地后由 flushHeldHistoryAppends 按原顺序放行。此刻渲染的话，
     // 顺序会排到历史前面，而且是对着尚被清空的 #messages 判定时间戳（会误判成会话首条而多出
     // 一条日期分隔行）——顺序和打戳都得等最终 DOM 就位才算得准。
-    if (historyLoadGate.hold(ev)) return;
+    if (historyLoadGate.hold(ev)) { done(); return; }
     const msgs = ev.payload?.messages || [];
-    if (!msgs.length && !ev.payload?.replace) return;
+    if (!msgs.length && !ev.payload?.replace) { done(); return; }
     // SS-001：满窗滑动全量重发——先清屏再渲，避免把中间条当增量叠上去。
     if (ev.payload?.replace) {
       messagesEl.innerHTML = '';
@@ -6207,14 +6234,17 @@ import { createSessionDeleteController } from './app/session-delete.js';
       histToolCards.clear(); histSubCards.clear(); // 全量替换=真正的从头渲染，历史配对表也要归零（同 clearView）
       // 满窗滑动全量替换：上面刚 innerHTML='' 清过屏，语义同 loadHistory 的全量加载——
       // 这批就是当前窗口的开头，基准不该回落（此刻回落也读不到东西，显式标注防将来清屏逻辑变动）
-      if (msgs.length) renderHistoryBubbles(msgs, undefined, { fullReload: true });
       const sid = ev.sessionId;
       if (sid) seenDiskLenBySession.set(sid, msgs.length);
+      if (msgs.length) renderHistoryBubbles(msgs, done, { fullReload: true });
+      else done();
     } else if (msgs.length) {
-      renderHistoryBubbles(msgs);
       // 追平也是磁盘 history 增量——累加到已见条数，保持切入对账基准准确（见 shouldReloadOnEnter）。
       const sid = ev.sessionId;
       if (sid) seenDiskLenBySession.set(sid, (seenDiskLenBySession.get(sid) || 0) + msgs.length);
+      renderHistoryBubbles(msgs, done);
+    } else {
+      done();
     }
   }
 

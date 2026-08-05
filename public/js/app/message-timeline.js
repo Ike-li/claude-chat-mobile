@@ -104,8 +104,12 @@ export function createMessageTimeline({
     //  · 增量追平 history_append：seedPrevTs = #messages 尾巴的戳，接上前一批。
     // 这样「全量 vs 增量」是一个数据（seed 值），不是一个布尔开关；也不再有「要不要偷看
     // #messages」这种把实现细节外泄给调用方的选项。
-    beginFragment(frag, { seedPrevTs = null } = {}) {
-      let prevTs = seedPrevTs;
+    // ★ 不能写成解构默认值 `{ seedPrevTs = null }`：默认值在【值为 undefined 时也会触发】，而
+    // undefined 正是 scanTsBackFrom 的第三态哨兵（扫满上限、前一条在视野外）。压成 null 就等于
+    // 告诉判定层「这是会话首条」，于是几百张工具卡之后的增量追平会凭空多一条日期分隔行。
+    // 用 in 判断键是否存在：缺省（全量加载不传）才回落 null，显式传 undefined 一律原样保留。
+    beginFragment(frag, opts = {}) {
+      let prevTs = 'seedPrevTs' in opts ? opts.seedPrevTs : null;
       return (node, rawTs, role) => {
         const ts = normalizeMessageTs(rawTs);
         if (ts != null) {
