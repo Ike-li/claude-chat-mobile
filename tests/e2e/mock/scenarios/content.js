@@ -95,6 +95,11 @@ export function createContentScenarios(getContext) {
       run: async () => { getContext().armHistoryOrderRace(); },
     },
     {
+      // P0-ACK-TIMEOUT：武装「session:history 的 ack 永不返回、但连接没断」，下一次切入 Timeline Session 生效。
+      command: 'test:arm-history-ack-timeout',
+      run: async () => { getContext().armHistoryAckTimeout(); },
+    },
+    {
       // P0-TS6：只读镜像的增量追平（终端里跑、server 轮询 transcript 检出新落定消息 → history_append）。
       // 每批 messages 都进一个【新的空 fragment】再一次性插入 #messages，所以判定基准必须能从 frag
       // 回落读 #messages 的尾巴——回落一旦失效，每批都会被当成「会话首条」而各插一条日期行。

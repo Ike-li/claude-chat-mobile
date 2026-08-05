@@ -5905,7 +5905,14 @@ import { createSessionDeleteController } from './app/session-delete.js';
     // 且【不调用】（只有 withError 的才回调），于是这个回调永不执行——闸门不 abort 也不 release，
     // 手机锁屏/切后台就能触发。带 timeout 后断线会以 err 形式回调，下面 err 分支负责收尾。
     socket.timeout(HISTORY_ACK_TIMEOUT_MS).emit('session:history', { sessionId, cwd }, (err, res) => {
-      if (err) { historyLoadGate.abort(gateHandle); hideLoadingCard(); onDone?.(); return; }
+      // ★ 这里必须 release+drain 而【不是】abort：ACK 失败 ≠ 视图已切走。超时（15s）时连接常常还活着，
+      // 断线时也可能不触发全量重载，而扣住的那些 history_append 是 out-of-band 的单程票——不进 replay
+      // buffer，server 的 catch-up 基线又已前移，abort 掉就是永久丢失（终端在跑、手机上少几条，直到
+      // 用户重进或刷新才补上）。无条件 flush 是安全的，有两层现成守卫兜着：① release() 对 stale handle
+      // 返回 []，上一轮的迟到 err 动不了当前轮的队列；② onHistoryAppend 的 viewingInstanceId 守卫会丢弃
+      // 不属于当前视图的事件。于是「视图已切走」时它与 abort 完全等价，只在「视图还在」时多放行——正是
+      // 要修的那一格。同款取舍见 processChunk 的中断路径与闸门看门狗：宁可顺序稍差，绝不静默吞消息。
+      if (err) { hideLoadingCard(); flushHeldHistoryAppends(gateHandle); onDone?.(); return; }
       // WS-001：迟到 ACK 守卫——发起后若已切走（会话或实例变），丢弃本回调。否则 A 的历史会被 renderHistoryBubbles
       // 追加进当前 B 的 DOM，且 hideLoadingCard 抹掉 B 的 loading 卡。对齐 onHistoryAppend 的 viewingInstanceId 守卫。
       if (displayedSessionId !== sessionId || displayedInstanceId !== reqInstanceId) { historyLoadGate.abort(gateHandle); return; }

@@ -91,6 +91,13 @@ let replayFloodHistoryArmed = false; // false=返回基线 4 条；true=返回 r
 // 会先 emit 一条 history_append（模拟 catchUpTick 在 web 拉历史的窗口里检出终端新落定的消息，
 // 该事件是 out-of-band、不进 replay buffer、任何时候直接渲染），再返回历史本体。
 let historyOrderRaceArmed = false;
+// P0-ACK-TIMEOUT：复刻「ACK 永不返回、但连接没断」。武装后，下一次 session:history 会先 emit 一条
+// history_append（闸门此刻正扣着它），然后【故意不调用 callback】——前端 socket.timeout(15s) 到点走
+// err 分支。这条被扣住的增量是它在客户端的唯一副本（out-of-band、不进 replay buffer，server 的
+// catch-up 基线已前移），err 分支若 abort 就永久消失，且 abort 同时撤掉闸门 20s 看门狗，兜底也救不回。
+// 【为什么不用断线来更快触发 err】断线会引发重连 + 全量历史加载，那条消息会从别的路径回到页面上，
+// 测试就假绿了。要锁的恰恰是「连接未断的纯 ACK 超时」这一格，所以 15s 等待是本用例的固有成本。
+let historyAckTimeoutArmed = false;
 let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 21 条积压事件（低于阈值 → flush）
 // P0-REPLAY-UNREAD-DISMISS：同 replaySmallSyncArmed 两段式门控，但第二次 ack 额外挂 unreadOnEntry——
 // 验证回放缓冲程序性落底与未读胶囊自动确认已读的协同（不复用 mockUnreadOnEntry* 单例，见下方
@@ -153,6 +160,7 @@ function resetMockState() {
   replayFloodSyncArmed = false;
   replayFloodHistoryArmed = false;
   historyOrderRaceArmed = false;
+  historyAckTimeoutArmed = false;
   replaySmallSyncArmed = false;
   replayUnreadSyncArmed = false;
   pendingDevices = [];
@@ -1035,6 +1043,25 @@ io.on('connection', socket => {
         },
       });
     }
+    // P0-ACK-TIMEOUT：窗口期推一条追平，然后【不 ack】直接 return——连接保持，前端只能靠 15s 超时收尾。
+    // 这条 return 是本用例的全部机关：ack 一旦返回，走的就是正常路径，测不到 err 分支的取舍。
+    if (historyAckTimeoutArmed && sessionId === 'mock-session-timeline') {
+      historyAckTimeoutArmed = false;
+      socket.emit('agent:event', {
+        seq: 98, epoch: activeEpoch, sessionId, instanceId: viewingInstanceId, ts: Date.now(),
+        type: 'history_append',
+        payload: {
+          external: true,
+          // 与 P0-ORDER 同样锚在「今天 08:40」而不用 Date.now()：历史本体这次压根不会落地，
+          // 固定时刻能让断言不受跑测试的时钟影响（理由详见上面 RACE_LATE_ARRIVAL 的注释）。
+          messages: [{
+            role: 'user', content: 'ACK_TIMEOUT_HELD_APPEND', uuid: 'u-ack-timeout-1',
+            timestamp: (() => { const d = new Date(); d.setHours(8, 40, 0, 0); return d.toISOString(); })(),
+          }],
+        },
+      });
+      return; // ★ 故意不调用 callback
+    }
     if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-timeline') {
       // P0-TS 时间戳 fixture。时刻按「相对今天」构造（非硬编码日历日），跑在任何一天都稳定。
       // 期望 marker 共 5 个 = day×3（#1 首条 / #4 跨天 / #7 跨天）+ time×2（#5 / #9）：
@@ -1627,6 +1654,7 @@ io.on('connection', socket => {
       io, socket, activeEpoch, viewingInstanceId, activeModel, mockInstances, delay,
       setViewingInstanceId: value => { viewingInstanceId = value; },
       armHistoryOrderRace: () => { historyOrderRaceArmed = true; },
+      armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
     })),
     {
       commands: ['test:question', 'test:question-duplicate', 'test:question-remote-resolved', 'test:question-result-error'],
