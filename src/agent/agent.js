@@ -688,6 +688,11 @@ export class AgentSession {
       this._forceSettleOpenTurns();
       this.pendingTurns = 0;
       this._awaitingInterruptResult = false;
+      // 本地 slash 命令的状态机也在此收口：_clearLocalCommandProgress 自称「唯一收口」，但此前只挂在
+      // happy path（result / local_command_output / dispose / 下次 slash）上。用户点停止后 SDK 常无
+      // 配对 result，于是 grace + 3s 轮询 + localcmd 键全都还活着，面板一直「运行中」、isBusy 拦住
+      // dispose/effort，直到 45min grace 到期。强制收口路径必须一并调用（2026-08-05 review #1）。
+      this._clearLocalCommandProgress();
       diagLog.record(this.logKey(), 'interrupt', 'settle_watchdog', { strandedTurns: stranded, graceMs: ms });
       interactionLog.addSessionLog(this.logKey(), 'sys_info',
         `[SYS] 中断后 ${Math.round(ms / 1000)}s 未收到配对 result，已就地清账（在途轮 ${stranded} → 0），子进程保留`);
@@ -726,6 +731,7 @@ export class AgentSession {
         this.pendingTurns = 0;
       }
       this._awaitingInterruptResult = false; // 无伴随 result 可消费
+      this._clearLocalCommandProgress();      // 同 settle 看门狗：强制收口须带上本地命令状态机（review #1）
       for (const id of [...this.pendingPermissions.keys()]) this.resolvePermission(id, 'deny');
       for (const [toolUseID, pending] of [...this.pendingQuestions.entries()]) {
         pending.signal?.removeEventListener('abort', pending.abortHandler);
@@ -835,6 +841,12 @@ export class AgentSession {
   async stopTask(taskId) {
     if (this.disposed) return false;                          // 弃用实例不发
     if (typeof taskId !== 'string' || !taskId) return false;  // 无有效 taskId 不调 SDK
+    // 合成键在 SDK 侧根本不存在，打过去只会空转到超时，还会与前端「已请求停止」的乐观提示叠成
+    // 「点了、说停了、其实没停」。前端也挡一层（taskStopUiState），但那不能是唯一防线——旧客户端、
+    // 手工 emit、任何漏接策略函数的 UI 路径都能绕过（2026-08-05 review #4）。
+    //   localcmd:*  磁盘观察出来的子代理（LOCAL_CMD_TASK_PREFIX），是 CLI fork 上下文里的进程
+    //   __notask_*  SDK 未给 task_id 时的占位
+    if (taskId.startsWith(LOCAL_CMD_TASK_PREFIX) || taskId.startsWith('__notask_')) return false;
     if (!this.q?.stopTask) return false;                      // 无 q（实例未 start）/ SDK 无该方法：显式判，勿靠 ?. 静默通过
     try {
       await this._raceControlRequest(() => this.q.stopTask(taskId), 'stop_task');
@@ -1355,7 +1367,10 @@ export class AgentSession {
     const now = Date.now();
     let removed = false;
     for (const [k, t] of this.bgTasks) {
-      const orphan = typeof k === 'string' && k.startsWith('__notask_');
+      // localcmd:* 与 __notask_* 同属「合成/磁盘观察、没有完成信号」一类，共用孤儿短 TTL：
+      // 它们的正常终止靠 _clearLocalCommandProgress，TTL 只是漏清时的兜底——真任务的 2h 太长，
+      // ⏳ 与 isBusy 会挂到用户以为卡死（2026-08-05 review #8）。
+      const orphan = typeof k === 'string' && (k.startsWith('__notask_') || k.startsWith(LOCAL_CMD_TASK_PREFIX));
       const ttl = orphan ? BG_TASK_ORPHAN_TTL_MS : BG_TASK_LIFECYCLE_TTL_MS;
       if (now - t.lastSeenAt > ttl) { this.bgTasks.delete(k); removed = true; }
     }
@@ -1472,14 +1487,25 @@ export class AgentSession {
     // sessionId 可能还没到（本地命令下 init 晚到，见 _claimSessionIdEarly；真机首个带 id 的消息
     // 在 9.5s）——扫盘要它做目录名，没有就跳过本拍，下一拍再试。
     if (!this.sessionId) return;
-    const found = await scanSubagents(this.sessionId, this.cwd, { baseDir: this.transcriptBaseDir });
+    const found = await scanSubagents(this.sessionId, this.cwd, {
+      baseDir: this.transcriptBaseDir,
+      since: this._slashCommandStartedAt || 0, // 上一轮遗留的子代理不算本轮进度（review #5）
+    });
     // ★ await 之后必须重新验一次：扫盘期间命令可能已收尾（local_command_output / result / dispose /
     // 下一条 slash 都会走 _clearLocalCommandProgress）。少了这道，poll 返回时会把刚清掉的任务重新
     // 塞回 bgTasks，而那批 ghost 键此后【没有任何路径会再清它们】——hasBgTasks() 长期为真：
     // 会话列表 ⏳ 常亮、isBusy 挂住、dispose/effort 置换被拦，直到 2h TTL。
     // 2026-08-05 真机 /code-review 自查抓出（E2），单测 agent-background-tasks「E2：…」锁住。
     if (this.disposed || !this._localCommandInFlight()) return;
-    if (!found.length) return;
+    // 差集删除：本轮扫不到的 = 该子代理已结束（文件被清理/超出 since 窗）。只 upsert 不删的话，
+    // 跑完的 finder 会一直显示「运行中」，面板计数与 ⏳ 虚高到整轮 result 才归位（review #5）。
+    const alive = new Set(found.map(a => `${LOCAL_CMD_TASK_PREFIX}${a.agentId}`));
+    for (const key of [...this._localCmdTaskIds]) {
+      if (alive.has(key)) continue;
+      this.bgTaskDone(key);
+      this._localCmdTaskIds.delete(key);
+    }
+    if (!found.length) { this.emitBgTasksSnapshot(); return; } // 全结束也要推一次，前端才收得起横幅
     for (const a of found) {
       const key = `${LOCAL_CMD_TASK_PREFIX}${a.agentId}`;
       this._localCmdTaskIds.add(key);
@@ -1878,6 +1904,10 @@ export class AgentSession {
             this.bgTasks.clear();          // 换会话清空活后台注册表（旧会话后台任务不串到新会话）
             this.pendingToolUses.clear();  // 同理：旧会话在途工具账不串新会话（否则新会话首轮被无依据豁免看护）
             this.subagentTypeByParent.clear(); // 换会话清空子 agent 类型缓存（旧会话子 agent 类型不串到新会话）
+            // 本地命令状态机同理：只 bgTasks.clear() 的话，grace 与 3s 轮询仍活着，下一拍会用【新】
+            // sessionId 扫盘把任务再 upsert 回来；而 _localCmdTaskIds 里还是旧键，收尾时 bgTaskDone
+            // 全是 no-op。旧会话的在途 slash 不该跟着新会话跑（2026-08-05 review #3）。
+            this._clearLocalCommandProgress();
           }
           // FRESH 首轮：init 前的日志写在 provisionalKey(instanceId) 下，先并入真 sessionId 再记后续 sys_info。
           const prevLogKey = this.logKey();

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { getSessionLogs } from '../../src/agent/interaction-log.js';
 import { buildAgentQueryOptions } from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getProjectDir } from '../../src/sessions/history.js';
@@ -807,6 +807,60 @@ test.describe('本地 slash 命令进度：subagents → bgTasks', () => {
   // 扫盘返回后无条件 upsert。命令若在 await 期间收尾并清理，poll 完成时会把任务重新塞回去——
   // 而那批 ghost 键此后没有任何路径会再清它们（清理只发生在 output/result/下一条 slash/dispose），
   // hasBgTasks() 因此长期为真：会话列表 ⏳ 常亮、isBusy 挂住、dispose/effort 置换被拦。
+  // #5 回归（2026-08-05 第二轮 review）：poll 只 upsert、从不删。中途跑完的子代理仍显示「运行中」，
+  // 面板计数与 ⏳ 虚高到整轮 result 才归位。
+  test('#5：本轮扫不到的子代理须从面板移除（跑完就不该还显示运行中）', async () => {
+    const cwd = '/test/localcmd-diff';
+    seed(cwd, 'lc-diff', [{ id: 'aalive' }, { id: 'adone' }]);
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-diff';
+    s._armSlashQuietNotice('/code-review');
+    await s._pollLocalCommandProgress();
+    assert.equal(s.bgTasksList().length, 2, '前提：两个子代理都在跑');
+
+    rmSync(join(BASE, getProjectDir(cwd), 'lc-diff', 'subagents', 'agent-adone.jsonl')); // 一个结束并被清理
+    await s._pollLocalCommandProgress();
+
+    const ids = s.bgTasksList().map(t => t.taskId);
+    assert.deepEqual(ids, ['localcmd:aalive'], '扫不到的须移除，否则计数虚高');
+    s.dispose();
+  });
+
+  // #5b：scanSubagents 无 mtime 过滤 → 同会话第二次 /code-review 会把上一轮【已完成】的子代理
+  // 立刻「复活」成运行中。
+  test('#5b：早于本次命令起点的历史子代理不算本轮进度', async () => {
+    const cwd = '/test/localcmd-stale';
+    seed(cwd, 'lc-stale', [{ id: 'aprev' }]);
+    // 把上一轮的产物时间拨到 1 小时前
+    const f = join(BASE, getProjectDir(cwd), 'lc-stale', 'subagents', 'agent-aprev.jsonl');
+    const old = new Date(Date.now() - 3600_000);
+    utimesSync(f, old, old);
+
+    const { s } = makeSession({ cwd, transcriptBaseDir: BASE });
+    s.sessionId = 'lc-stale';
+    s._armSlashQuietNotice('/code-review'); // 新一轮命令刚开始
+    await s._pollLocalCommandProgress();
+
+    assert.equal(s.hasBgTasks(), false, '上一轮已完成的子代理不该复活为本轮进度');
+    s.dispose();
+  });
+
+  // #4 回归（2026-08-05 第二轮 review）：stopTask 只校验 string 非空就打给 SDK。合成键
+  // （localcmd:* 磁盘观察、__notask_* 无 task_id 占位）在 SDK 侧根本不存在，打过去只会空转到超时；
+  // 与前端 1.5s 后假报「已请求停止」叠加，用户看到的是「点了、说停了、其实没停」。
+  // 前端已挡一层（taskStopUiState），但那不能是唯一防线——旧客户端/手工 emit/行按钮都能绕过。
+  test('#4：stopTask 直接拒绝合成 id，不打给 SDK', async () => {
+    const calls = [];
+    const { s } = makeSession();
+    s.q = { stopTask: async id => { calls.push(id); } };
+    assert.equal(await s.stopTask('localcmd:a00b4eae6'), false, '磁盘观察出来的子代理停不了');
+    assert.equal(await s.stopTask('__notask_local_agent'), false, '无 task_id 的占位键同理');
+    assert.deepEqual(calls, [], '一次都不该打给 SDK');
+    assert.equal(await s.stopTask('w60tplm3a'), true, '真实 taskId 照常放行（防修过头）');
+    assert.deepEqual(calls, ['w60tplm3a']);
+    s.dispose();
+  });
+
   // E4 回归（2026-08-05 真机 /code-review 自查抓出）：reconcileBgTasks 按 SDK 全量快照删除所有
   // 不在快照里的键。localcmd:* 本就不会出现在 SDK 快照里（它们是我们扫盘造的），于是任何一次
   // background_tasks_changed 都会把进度行抹掉，下一拍轮询又加回来 → 面板闪烁。

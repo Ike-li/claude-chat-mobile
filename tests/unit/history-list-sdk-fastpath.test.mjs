@@ -227,3 +227,25 @@ test('SDK 漏报补齐: 差集超窗时按活动时间取最近的，不按文�
     rmProjectDir(dir);
   }
 });
+
+// #6 回归（2026-08-05 第二轮 review）：gap-fill 只认后缀 .jsonl，不过 SS-003 字符集，于是备份/
+// 手写文件（foo.bar.jsonl、带路径分隔符的名字）会变成抽屉里点不开的幽灵会话——点击时
+// sessionFileExists/isSafeSessionId 才拒绝。补齐入口必须与其他读盘点同一口径。
+test('SDK 漏报补齐: 非法 sessionId 形态的 jsonl 不得混进列表', async () => {
+  const cwd = '/sdk/no-summary-unsafe';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const noMsg = [{ type: 'queue-operation', operation: 'enqueue' }];
+  writeJSONL(dir, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', noMsg); // 合法形态
+  writeJSONL(dir, 'backup.2026-08-05', noMsg);                     // 含点：非法
+  writeJSONL(dir, 'note wtf', noMsg);                              // 含空格：非法
+  __setSdkListSessionsForTest(async () => []);
+  try {
+    const { sessions } = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 10 });
+    const ids = sessions.map(s => s.id);
+    assert.ok(ids.includes('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'), '合法会话照常补齐');
+    assert.ok(!ids.some(id => id.includes('.') || id.includes(' ')), `非法形态不得进列表，实际: ${ids}`);
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});

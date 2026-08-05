@@ -649,7 +649,9 @@ async function scanSessionsViaSdk(cwd, limit) {
   try {
     const seen = new Set(enriched.map(s => s.id));
     const names = await readdir(projectDir);
-    const missing = names.filter(n => n.endsWith('.jsonl') && !seen.has(n.slice(0, -6)));
+    // isSafeSessionId 与其他读盘点同口径（SS-003）：只认后缀会把备份/手写文件（backup.2026-08-05.jsonl、
+    // 带空格的名字）补成抽屉里点不开的幽灵会话——点击时才被 sessionFileExists 拒绝（review #6）。
+    const missing = names.filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6)) && !seen.has(n.slice(0, -6)));
     // ★ 先按 mtime 排序再截断，不能按 readdir 顺序（那是文件名序）：老目录里差集可达上百个
     //   （SDK 候选窗本身有上限，落在窗外的老会话也会进差集），按文件名截断会把刚跑完的新会话
     //   挡在窗外——2026-08-05 真机就是这么漏掉 8f064e08 的。stat 便宜，全量做；只有活下来的
@@ -1268,7 +1270,10 @@ export function externalGrowthWhilePaused({ state, prevSize, curSize } = {}) {
 //
 // 【尾窗读取】同 classifyTranscriptTail：只读末 TAIL_READ_BYTES，不整读——子代理文件可达数百 KB，
 // 而我们只要最后一条 tool_use 的名字。起点切中的半行 JSON.parse 失败即跳过。
-export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
+// opts.since：只认这个时刻【之后】还有活动的子代理（毫秒）。不传 = 全收。
+// 用途：同一会话第二次跑 /code-review 时，上一轮已完成的 agent-*.jsonl 仍躺在目录里，
+// 不过滤就会被当成本轮进度立刻「复活」成运行中（2026-08-05 review #5）。
+export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR, since = 0 } = {}) {
   if (!isSafeSessionId(sessionId)) return []; // SS-003 同口径：拒绝路径穿越
   const dir = join(baseDir, getProjectDir(cwd), sessionId, 'subagents');
   let names;
@@ -1315,6 +1320,9 @@ export async function scanSubagents(sessionId, cwd, { baseDir = CLAUDE_DIR } = {
         await fh.close().catch(() => {});
       }
     } catch { /* 读失败（写入中/权限）：保留已有 meta 字段报出，下一拍再试 */ }
+    // since 过滤放在 push 前（读完才知道 mtime）。宽限 5s：命令刚发出、子代理文件可能在起点
+    // 前一瞬创建；宁可多显示一条真在跑的，不漏报本轮进度。
+    if (since > 0 && entry.lastActivityMs > 0 && entry.lastActivityMs < since - 5_000) continue;
     out.push(entry);
   }
   // 最近活动优先：前端明细行按此序展示，正在动的排前面

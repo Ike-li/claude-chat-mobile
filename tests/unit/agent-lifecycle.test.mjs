@@ -292,6 +292,64 @@ test.describe('checkIdle()', () => {
     s.dispose();
   });
 
+  // #1 回归（2026-08-05 第二轮 review）：interrupt 的两条【强制收口】路径（settle 看门狗、
+  // settleForce）只清 pendingTurns，不碰 localcmd 状态机。而 _clearLocalCommandProgress 的注释
+  // 自称「命令收尾的唯一收口」——它只挂在 happy path（result / local_command_output / dispose /
+  // 下次 slash）上。用户点停止后 SDK 常无配对 result，于是 grace + 3s 轮询 + localcmd 键全都还活着：
+  // 面板一直「运行中」、isBusy 拦住 dispose/effort 置换，直到 45min grace 到期。
+  test('#1：点停止后 settle 看门狗须一并收口 localcmd 状态机', async () => {
+    const { s } = makeSession({ cwd: LOCALCMD_CWD, transcriptBaseDir: LOCALCMD_BASE });
+    s.interruptSettleGraceMs = 20; // 构造参数接不进来（agent.js:310 读的是自身字段），构造后直接设
+    s.sessionId = 'sid-e1';
+    s.pendingTurns = 1;
+    s._awaitingInterruptResult = true;
+    s._armSlashQuietNotice('/code-review max');
+    await s._pollLocalCommandProgress();
+    assert.equal(s.hasBgTasks(), true, '前提：已扫出 localcmd 任务');
+
+    s._armInterruptSettleWatchdog();
+    await new Promise(r => setTimeout(r, 60)); // 等看门狗开火
+
+    assert.equal(s.pendingTurns, 0, '前提：看门狗确实清了账');
+    assert.equal(s.hasBgTasks(), false, '停止后面板不该还挂着「运行中」');
+    assert.equal(s._localCommandInFlight(), false, 'grace 须一并撤，否则 isBusy 拦住 dispose/effort');
+    s.dispose();
+  });
+
+  // #3 回归：init 换会话（/clear 等）只 bgTasks.clear()，不清在途标记/轮询表/_localCmdTaskIds。
+  // 结果：清了 map 但 grace 与 timer 仍活 → 下一拍 poll 用【新】sessionId 扫盘再 upsert；
+  // 而 _localCmdTaskIds 里还是旧键，收尾时 bgTaskDone 旧键是 no-op。
+  test('#3：init 换 sessionId 须收口 localcmd 状态机', async () => {
+    const { s } = makeSession({ cwd: LOCALCMD_CWD, transcriptBaseDir: LOCALCMD_BASE });
+    s.sessionId = 'sid-e1';
+    s.pendingTurns = 1;
+    s._armSlashQuietNotice('/code-review max');
+    await s._pollLocalCommandProgress();
+    assert.equal(s._localCmdTaskIds.size, 1);
+
+    s.map({ type: 'system', subtype: 'init', session_id: 'sid-brand-new', model: 'm', cwd: LOCALCMD_CWD });
+
+    assert.equal(s._localCommandInFlight(), false, '换会话后旧命令的 grace 不该继续');
+    assert.equal(s._localCmdProgressTimer, null, '轮询表须停，否则下一拍用新 sessionId 扫盘复活');
+    assert.equal(s._localCmdTaskIds.size, 0, '旧键须清空，否则收尾 bgTaskDone 全是 no-op');
+    s.dispose();
+  });
+
+  // #8 回归：localcmd 与 __notask_ 同属「磁盘/合成、无完成信号」一类，却走真任务的 2h TTL。
+  // 万一某条收口路径漏清（#1/#3 就是），⏳ 与 isBusy 会比 3min 孤儿策略挂久得多。
+  test('#8：localcmd 键走孤儿短 TTL，不占真任务的 2h', () => {
+    const { s } = makeSession();
+    s.bgTaskUpsert('localcmd:aorphan', 'local_agent', 'x');
+    s.bgTaskUpsert('sdk-real', 'workflow', 'y');
+    // 拨到 5 分钟前：超过孤儿 TTL(3min)、远未到真任务 TTL(2h)
+    for (const t of s.bgTasks.values()) t.lastSeenAt = Date.now() - 5 * 60_000;
+    s.sweepBgTasks();
+    const ids = s.bgTasksList().map(x => x.taskId);
+    assert.ok(!ids.includes('localcmd:aorphan'), 'localcmd 漏清时须由短 TTL 兜底');
+    assert.ok(ids.includes('sdk-real'), '真 SDK 任务仍走 2h，不被误清');
+    s.dispose();
+  });
+
   test('instanceIdleReclaimMs=0 → 禁用空闲回收', () => {
     const { s, events } = makeSession({ instanceIdleReclaimMs: 0 });
     s.pendingTurns = 0;

@@ -1,4 +1,4 @@
-import { bgTaskListCollapsed, formatBgTaskRowLabel, formatProgressHistoryEntry, taskDetailState, taskStopUiState } from '../logic.js';
+import { bgTaskListCollapsed, formatBgTaskRowLabel, formatProgressHistoryEntry, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic.js';
 import { t } from '../i18n.js';
 
 export function createTaskStatusController(context, {
@@ -163,16 +163,25 @@ export function createTaskStatusController(context, {
       const histTag = histLen > 0 ? ` · ${histLen}条` : '';
       label.textContent = `${title.slice(0, 72 - histTag.length)}${histTag}`;
       label.title = task.message || taskId;
-      const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
-      stop.onclick = (e) => { e.stopPropagation(); stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`); };
-      top.append(label, stop);
+      // 行「停」与横幅主钮共用同一策略：此前这里【无条件】挂按钮并 stopTask(taskId)，绕开了
+      // taskStopUiState——多子代理时每行都可点，而 localcmd:* 在 SDK 侧根本没有这个 id，点了必然
+      // 静默失败，前端还会乐观地打一条「已请求停止」（2026-08-05 review #2）。
+      const rowStop = taskStopUiState({ taskId, bannerVisible: true });
+      if (rowStop.canStop) {
+        const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
+        stop.onclick = (e) => { e.stopPropagation(); stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`); };
+        top.append(label, stop);
+      } else {
+        top.append(label);
+      }
 
       const metaParts = [];
       if (task.lastToolName) metaParts.push(`${t('工具')} ${task.lastToolName}`);
       if (task.subagentType && !(task.message || '').includes(String(task.subagentType))) {
         metaParts.push(String(task.subagentType));
       }
-      const shortId = typeof taskId === 'string' && !taskId.startsWith('__notask_')
+      // 合成命名空间不进 meta：同 formatBgTaskRowLabel 的回落，用统一判据（review #7）
+      const shortId = typeof taskId === 'string' && !isSyntheticTaskId(taskId)
         ? taskId.slice(0, 10)
         : '';
       if (shortId) metaParts.push(`#${shortId}`);

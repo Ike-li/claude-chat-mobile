@@ -2151,7 +2151,7 @@ export function isSpawnToolName(name) {
 export function formatBgTaskRowLabel({ taskType, message, taskId, subagentType } = {}) {
   let msg = (typeof message === 'string' && message.trim()) ? message.trim() : '';
   if (!msg && subagentType) msg = String(subagentType).trim();
-  if (!msg && typeof taskId === 'string' && taskId && !taskId.startsWith('__notask_')) {
+  if (!msg && typeof taskId === 'string' && taskId && !isSyntheticTaskId(taskId)) {
     msg = taskId.slice(0, 12);
   }
   if (!msg) msg = t('后台任务');
@@ -2275,18 +2275,27 @@ export function shouldResetMirrorOnViewChange({
 }
 
 // 后台任务停止按钮态：有非空 taskId 且横幅可见才可点（对齐 SDK stopTask(taskId)）。
+// 合成任务 id：SDK 侧不存在这个 id，任何「停止」都必然静默失败，展示上也不该露出内部命名空间。
+// 两类来源：
+//   __notask_*  —— agent.js 在 SDK 未给 task_id 时的占位；
+//   localcmd:*  —— 本地 slash 命令期间从磁盘 subagents/ 观察出来的子代理（agent.js
+//                  LOCAL_CMD_TASK_PREFIX），它们是 CLI fork 上下文里的进程。
+// 【为什么抽出来】这是个「协议字段」性质的判断，消费者有停止策略、行标题回落、meta shortId 三处。
+// 2026-08-05 第一轮只改了停止策略一处，另两处继续泄漏 `#localcmd:a`（真机截图可见）——
+// 合成键必须扫全部消费者，不能靠单个 helper 自觉。
+// 前缀字面量前后端各写一份：边界规则禁止 public/js 引用 src/，改一处必须改另一处。
+export function isSyntheticTaskId(taskId) {
+  const id = typeof taskId === 'string' ? taskId.trim() : '';
+  return id.startsWith('__notask_') || id.startsWith('localcmd:');
+}
+
 export function taskStopUiState({ taskId, bannerVisible = true } = {}) {
   const id = typeof taskId === 'string' ? taskId.trim() : '';
   // 合成键（agent.js 在 SDK 未给 task_id 时用 `__notask_${taskType}` 占位）不是真实 taskId：
   // 它在 SDK 侧根本不存在，q.stopTask('__notask_local_agent') 必然静默失败，而 UI 仍会打一条
   // 「已请求停止…」，任务行挂到 BG_TASK_ORPHAN_TTL_MS(3min) 才消失。同文件的行标签渲染早就知道要排除
   // 这个前缀（task-status.js 里 `!taskId.startsWith('__notask_')` 才显示 #shortId），停止按钮漏了。
-  // 两类合成键都不是真实 SDK taskId，q.stopTask 必然静默失败：
-  //   __notask_*  —— agent.js 在 SDK 未给 task_id 时的占位；
-  //   localcmd:*  —— 本地 slash 命令期间从磁盘 subagents/ 观察出来的子代理（agent.js
-  //                  LOCAL_CMD_TASK_PREFIX）。它们是 CLI fork 上下文里的进程，SDK 侧无此 id。
-  // 前缀字面量在前后端各写一份：边界规则禁止 public/js 引用 src/，改一处必须改另一处。
-  const synthetic = id.startsWith('__notask_') || id.startsWith('localcmd:');
+  const synthetic = isSyntheticTaskId(id);
   return { canStop: Boolean(id) && !synthetic && bannerVisible !== false, taskId: synthetic ? null : (id || null) };
 }
 

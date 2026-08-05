@@ -820,3 +820,18 @@ test.describe('localcmd: 合成任务的 UI 语义', () => {
     assert.ok(String(label).includes('🤖'), `local_agent 应带 🤖，实际: ${label}`);
   });
 });
+
+// #7 回归（2026-08-05 第二轮 review）：E3 只统一了「停止按钮的策略函数」，合成命名空间仍从另外
+// 两处泄漏到界面——行标签回落（无 description 时直接显示 taskId）与 meta 的 #shortId（只排除
+// __notask_）。真机截图里那行 `工具 Read · general-purpose · #localcmd:a` 就是现场。
+test.describe('#7：合成键不得泄漏到界面文本', () => {
+  test('formatBgTaskRowLabel 无 message 时不回落成 localcmd: 裸键', () => {
+    const label = String(formatBgTaskRowLabel({ taskType: 'local_agent', message: '', taskId: 'localcmd:a00b4eae6' }));
+    assert.ok(!label.includes('localcmd:'), `合成命名空间不该出现在行标题，实际: ${label}`);
+  });
+
+  test('对照：真实 taskId 仍可作回落展示（防修过头）', () => {
+    const label = String(formatBgTaskRowLabel({ taskType: 'local_agent', message: '', taskId: 'w60tplm3a' }));
+    assert.ok(label.length > 0);
+  });
+});
