@@ -401,6 +401,56 @@ body.ccm-sheet-open #messages {
 .conn-rtt-chip.hidden {
   display: none;
 }
+
+/* 连接状态横幅（header 与消息区之间的一行，非阻断）。
+   刻意不在这里写 display —— 交给 Tailwind 的 hidden/flex 工具类（#unreadPill 是同款既有组合），
+   免得自建样式表与 Play CDN 运行时注入的 <style> 谁先谁后决定显隐，那是不确定的。
+   淡底一律走 color-mix：语义 token 在 tw-config 里是裸 var(--x)，`色/NN` 透明度类对它们是死代码。 */
+.conn-banner {
+  border-bottom: 1px solid var(--line-soft);
+  background: var(--surface-sunk);
+  color: var(--ink-soft);
+}
+.conn-banner--info {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent-deep);
+}
+.conn-banner--warn {
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--warning) 40%, transparent);
+  color: var(--warning);
+}
+.conn-banner--success {
+  background: color-mix(in srgb, var(--success) 12%, var(--surface));
+  border-bottom-color: color-mix(in srgb, var(--success) 40%, transparent);
+  color: var(--success);
+}
+.conn-banner__detail {
+  color: var(--ink-faint);
+  font-size: 10px;
+}
+.conn-banner__detail.hidden {
+  display: none;
+}
+/* 重试按钮：继承横幅当前 tone 色（currentColor），不自带配色，三态下都不打架 */
+.conn-banner__retry {
+  margin-left: auto;
+  padding: 0.15rem 0.6rem;
+  border-radius: 9999px;
+  border: 1px solid currentColor;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  min-height: 26px;
+}
+.conn-banner__retry:active {
+  transform: scale(0.96);
+}
+.conn-banner__retry.hidden {
+  display: none;
+}
 @media (hover: hover) {
   .top-context-pill:hover {
     background: var(--line-soft);
@@ -600,7 +650,11 @@ body.ccm-sheet-open #messages {
   body {
     display: grid !important;
     grid-template-columns: 300px 1fr !important;
-    grid-template-rows: auto 1fr auto !important;
+    /* 四行：header / 连接横幅 / 消息区 / composer。横幅隐藏时是 display:none，不算 grid item，
+       该行 auto 尺寸塌成 0，连接正常时与三行布局逐像素等价。
+       ★ 未显式定位的非 fixed body 子元素会被自动排版塞进隐式行（对横幅就是 300px 宽卡在侧栏底下，
+       且新隐式行会从 1fr 消息行偷高度、被 overflow:hidden 裁掉 composer）——新增此类元素必须在这里定位。 */
+    grid-template-rows: auto auto 1fr auto !important;
     height: 100vh !important;
     overflow: hidden !important;
   }
@@ -629,16 +683,21 @@ body.ccm-sheet-open #messages {
     z-index: 5 !important;
   }
 
-  #messages {
+  #connBanner {
     grid-column: 2 !important;
     grid-row: 2 !important;
+  }
+
+  #messages {
+    grid-column: 2 !important;
+    grid-row: 3 !important;
     height: 100% !important;
     overflow-y: auto !important;
   }
 
   footer {
     grid-column: 2 !important;
-    grid-row: 3 !important;
+    grid-row: 4 !important;
     z-index: 5 !important;
   }
 
@@ -767,6 +826,9 @@ body.ccm-sheet-open #messages {
       transition: none !important;
     }
     #activityBanner .animate-spin {
+      animation: none !important;
+    }
+    #connBanner .animate-spin {
       animation: none !important;
     }
     .skeleton-shimmer {

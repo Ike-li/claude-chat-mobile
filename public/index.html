@@ -141,6 +141,17 @@
     <span id="statusLine" class="hidden">未连接</span>
   </header>
 
+  <!-- 连接状态横幅：#connDot 那个 3.5px 小圆点看不清，这里给一条可读的页面级反馈。
+       非阻断——进 body 的 flex 列占一行，不遮消息区，断线期间仍可滚动看历史、仍可离线排队发消息。
+       三态与延迟阈值全在 logic.js resolveConnectionBanner，显隐由 app/connection-banner.js 驱动。
+       role="status" 已隐含 aria-live="polite"，不要再叠一层；秒数每 500ms 变，必须 aria-hidden 否则刷屏。 -->
+  <div id="connBanner" class="hidden conn-banner shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs" role="status" data-testid="conn-banner">
+    <span id="connBannerSpinner" class="animate-spin" aria-hidden="true">⚙</span>
+    <span id="connBannerText" class="font-semibold"></span>
+    <span id="connBannerDetail" class="hidden conn-banner__detail tabular-nums" aria-hidden="true"></span>
+    <button type="button" id="connBannerRetry" class="hidden conn-banner__retry" data-testid="conn-banner-retry">立即重试</button>
+  </div>
+
   <!-- 左侧侧边栏遮罩 scrim -->
   <div id="sidebarScrim" class="hidden fixed inset-0 z-30 bg-black/40 backdrop-blur-[1px] transition-opacity duration-300"></div>
 

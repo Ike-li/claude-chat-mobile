@@ -1498,6 +1498,48 @@ export function foregroundReconnectAction(connected) {
   return connected ? 'probe' : 'connect';
 }
 
+// ── 连接状态顶部横幅（页面级可见反馈）────────────────────────────────────────
+// 存在理由：连接态此前只有 #connDot 那个 3.5px 小圆点，而唯一的人话文案写给了恒 hidden 的
+// #statusLine（见 index.html 注释）——系统知道、代码写了、界面上没有任何可读反馈。这里把
+// 判定抽成纯函数，接线层（app/connection-banner.js）只负责按返回值刷 DOM。
+//
+// 四个阈值都是「延迟出现」而非「立即出现」：局域网秒连、手机切后台回来的瞬时断开都不该闪横幅。
+// retry 严格晚于两个显示阈值，否则会出现「按钮先于横幅可见」的不可能态（单测钉住这条不变量）。
+export const CONN_BANNER_CONNECTING_DELAY_MS = 800;    // 首连：超过才显示「连接中…」
+export const CONN_BANNER_DISCONNECT_DELAY_MS = 1000;   // 断线：超过才显示「连接断开…」
+export const CONN_BANNER_RETRY_DELAY_MS = 5000;        // 超过才露「立即重试」（短抖动靠自动重连）
+export const CONN_BANNER_RECONNECTED_LINGER_MS = 1600; // 「已重新连接」绿条停留时长
+
+// phase：'connecting'（从未连上过）| 'offline'（连上过又断了）| 'online'
+// elapsedMs：当前 phase 已持续时长；suppressed：鉴权门/Access 重登门打开中（全屏页与横幅不能并存）
+// wasVisible：进入 online 那一刻横幅是否可见——决定要不要给「已重新连接」，秒连不该闪绿条
+// 返回 null（不显示）或 { tone, label, detail, spinner, retry }；label 是中文原文（key），接线层才 t()
+export function resolveConnectionBanner({ phase, elapsedMs, suppressed = false, wasVisible = false } = {}) {
+  if (suppressed) return null;
+  if (typeof elapsedMs !== 'number' || !Number.isFinite(elapsedMs) || elapsedMs < 0) return null;
+  if (phase === 'connecting') {
+    if (elapsedMs < CONN_BANNER_CONNECTING_DELAY_MS) return null;
+    // 首连不报「已断开 N 秒」：从没连上过，无「断开」可言
+    return { tone: 'info', label: '连接中…', detail: '', spinner: true, retry: elapsedMs >= CONN_BANNER_RETRY_DELAY_MS };
+  }
+  if (phase === 'offline') {
+    if (elapsedMs < CONN_BANNER_DISCONNECT_DELAY_MS) return null;
+    return {
+      tone: 'warn',
+      label: '连接断开，自动重连中…',
+      detail: `${t('已断开')} ${formatUptime(elapsedMs)}`,
+      spinner: true,
+      retry: elapsedMs >= CONN_BANNER_RETRY_DELAY_MS,
+    };
+  }
+  if (phase === 'online') {
+    if (!wasVisible || elapsedMs >= CONN_BANNER_RECONNECTED_LINGER_MS) return null;
+    // 已经连上了，不该还转圈
+    return { tone: 'success', label: '已重新连接', detail: '', spinner: false, retry: false };
+  }
+  return null;
+}
+
 // sync:since 的 ack 回调决策（probe 与普通 connect 路径共用）：
 //   err（探测 timeout，仅 probe 路径会有）→ 'reconnect'：判定半开死连接，强制 disconnect+connect 触发干净重连；
 //   res.found===false（实例已 dispose/重启/effort 换 id 没了）→ 'reload'：清屏重载历史（connect 路径不先 clearView，

@@ -37,9 +37,9 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Configuration template | 1 |
 | Deployment | 3 |
 | Documentation | 10 |
-| E2E test | 44 |
+| E2E test | 45 |
 | Frontend asset | 3 |
-| Frontend source | 27 |
+| Frontend source | 28 |
 | Generated asset | 6 |
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
@@ -52,10 +52,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 4 |
 | Test support | 5 |
-| Unit test | 139 |
+| Unit test | 141 |
 | Vendored asset | 21 |
 
-Total classified files: **397**.
+Total classified files: **401**.
 
 ## Complete file inventory
 
@@ -102,6 +102,7 @@ Total classified files: **397**.
 | `public/js/app/approval-questions.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/attachments.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/client-log.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/app/connection-banner.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/connection-sync.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/context.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/drawer.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -246,6 +247,7 @@ Total classified files: **397**.
 | `tests/e2e/p0/attachments-ui.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/busy-session-switch-back.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/cold-start-hydration.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/connection-banner.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/console-log-modal.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/cross-tab-pending-cleanup.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/device-tofu-requests-help.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
@@ -368,6 +370,7 @@ Total classified files: **397**.
 | `tests/unit/fingerprint.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/frontend-app-modules.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/frontend-approval-controller.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/frontend-connection-banner.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/frontend-event-dispatch.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/frontend-history-load-gate.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/frontend-message-renderer.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
@@ -399,6 +402,7 @@ Total classified files: **397**.
 | `tests/unit/logic-client-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-composer-mention.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-composer-primary.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-connection-banner.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-content.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-deeplink.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-diag-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

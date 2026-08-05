@@ -8,6 +8,7 @@ import { createClientLogger } from './app/client-log.js';
 import { createAlertController } from './app/alerts.js';
 import { createAttachmentController, createStoredPreviewLoader } from './app/attachments.js';
 import { createRttMonitor } from './app/connection-sync.js';
+import { createConnectionBannerController } from './app/connection-banner.js';
 import { createMessageRenderer } from './app/message-renderer.js';
 import { createMessageTimeline } from './app/message-timeline.js';
 import { createHistoryLoadGate } from './app/history-load-gate.js';
@@ -57,6 +58,8 @@ import { createSessionDeleteController } from './app/session-delete.js';
   // ---- DOM ----
   const $ = id => document.getElementById(id);
   const messagesEl = $('messages'), inputEl = $('input'), statusEl = $('statusLine'), connDot = $('connDot'), connRttEl = $('connRtt'), connDotWrap = $('connDotWrap');
+  const connBannerEl = $('connBanner'), connBannerTextEl = $('connBannerText'), connBannerDetailEl = $('connBannerDetail');
+  const connBannerSpinnerEl = $('connBannerSpinner'), connBannerRetryEl = $('connBannerRetry');
   const btnSend = $('btnSend'), btnStop = $('btnStop'), btnNew = $('btnNew'), btnHome = $('btnHome'), btnSessions = $('btnSessions');
   const activityBanner = $('activityBanner'), activityBannerText = $('activityBannerText');
   // 流内 live 活动行（懒创建 #streamLiveStatus）；composer 顶条 #activeStatusPill 已移除
@@ -172,6 +175,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
   // 远程设备审批 + 访问帮助 UI
   const deviceRequests = $('deviceRequests'); // 已信任设备上的待审批请求卡片栈
   const deviceDenied = $('deviceDenied'), deviceDeniedRetry = $('deviceDeniedRetry'), deviceDeniedHelp = $('deviceDeniedHelp');
+  const deviceModalEl = $('deviceModal'); // TOFU 待授权全屏遮罩（连接横幅的抑制判据之一）
   const accessHelp = $('accessHelp'), accessHelpClose = $('accessHelpClose'), accessHelpOpen = $('accessHelpOpen'), authHelpLink = $('authHelpLink');
   const btnConsole = $('btnConsole'), consoleModal = $('consoleModal'),
         consoleClose = $('consoleClose'), consoleClear = $('consoleClear'),
@@ -504,6 +508,11 @@ import { createSessionDeleteController } from './app/session-delete.js';
       status: statusEl,
       connRtt: connRttEl,
       connDotWrap,
+      connBanner: connBannerEl,
+      connBannerText: connBannerTextEl,
+      connBannerDetail: connBannerDetailEl,
+      connBannerSpinner: connBannerSpinnerEl,
+      connBannerRetry: connBannerRetryEl,
       consoleModal,
       consoleLogArea,
       btnAttach,
@@ -1057,6 +1066,24 @@ import { createSessionDeleteController } from './app/session-delete.js';
   const measureRtt = rttMonitor.measure;
   const startRttLoop = rttMonitor.start;
   const stopRttLoop = rttMonitor.stop;
+
+  // ---- 连接状态横幅：把 #connDot 那个 3.5px 小圆点的信息提升为页面级可读反馈 ----
+  // 抑制条件读的是两个全屏门的 hidden class：鉴权失败时 socket 永远连不上，此时挂一条
+  // 「自动重连中…」既误导又与全屏令牌输入页视觉打架。因此 connect_error 不必额外接线。
+  // 写成 !!el && !hidden 而不是 !el?.classList.contains('hidden')：后者在元素缺失时得到 !undefined
+  // === true，也就是「恒抑制」——一次 id 改名就会静默关掉整个横幅，无报错、无红测试。
+  const gateIsOpen = el => !!el && !el.classList.contains('hidden');
+  const connBanner = createConnectionBannerController(appContext, {
+    onRetry: () => reconnectIfNeeded(),
+    onToggle: () => scrollBottom(), // 横幅占一行会改 #messages 高度；非 force 调用不贴底会自动 no-op
+    // 四个 z-50 全屏门都要算：它们盖住整屏时，底下再挂一条「自动重连中…」既看不见又会被读屏念出来，
+    // 而且 deviceDenied/deviceModal 下重连是徒劳的（设备没获批，连上也会被再次拒绝）。
+    isSuppressed: () => gateIsOpen(authGate) || gateIsOpen(accessRelogin)
+      || gateIsOpen(deviceDenied) || gateIsOpen(deviceModalEl),
+  });
+  // io() 在本脚本同步执行流里已发起连接、中间无 await，故此处即「首连开始」的准确起点。
+  connBanner.markConnecting();
+
   socket.on('connect', () => {
     authGate?.classList.add('hidden');           // 鉴权通过：收起令牌输入页
     if (authToken) authToken.value = '';         // 成功后不把令牌留在本地表单状态里
@@ -1064,6 +1091,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     connectErrorCount = 0;
     if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
     connDot.className = 'w-2 h-2 rounded-full bg-success shrink-0';
+    connBanner.markConnected(); // 必须排在上面两个门收起之后：isSuppressed 此刻才为 false
     setStatus(t('已连接'));
     startRttLoop(); // 连上即开始测 RTT（立即一次 + 周期）
     cliStatusWrapEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
@@ -1083,6 +1111,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
   });
   socket.on('disconnect', (reason) => {
     connDot.className = 'w-2 h-2 rounded-full bg-danger shrink-0';
+    connBanner.markDisconnected();
     setStatus(t('连接断开，自动重连中…'));
     stopRttLoop();
     clearRttDisplay();
@@ -1419,6 +1448,9 @@ import { createSessionDeleteController } from './app/session-delete.js';
     deviceDenied?.classList.add('hidden');
     if (socket.connected) socket.disconnect();
     socket.connect(); // 重新发起 → 重新进入 pending，可信端/终端可再批
+    // 相位起点必须跟着重置：被拒期间横幅一直被 deviceDenied 抑制着不显示，但 phaseSince 停在最初
+    // 断开那一刻。遮罩一收、抑制解除，横幅会立刻端出「已断开 12 分钟」——而重连其实一秒前才发起。
+    connBanner.markDisconnected();
   };
 
   // 已信任设备渲染待审批设备请求（pending_devices 事件）。点准入/拒绝即发 user:approveDevice/denyDevice。

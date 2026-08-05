@@ -225,7 +225,11 @@ export const EN_DICT = Object.freeze({
 
   // —— 连接 / 令牌 / 离线队列 ——
   '已连接': 'Connected',
+  // 下面两条同时供恒 hidden 的 #statusLine 与页面顶部连接横幅使用（同一状态、同一文案，不另起近义 key）
   '连接断开，自动重连中…': 'Disconnected, reconnecting…',
+  '已重新连接': 'Reconnected',
+  '已断开': 'Offline for',
+  '立即重试': 'Retry now',
   '需要访问令牌': 'Access token required',
   '令牌无效，请重新输入': 'Invalid token — enter it again',
   '需要重新登录': 'Sign-in required',
