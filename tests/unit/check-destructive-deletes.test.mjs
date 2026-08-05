@@ -258,6 +258,25 @@ test('反向: rm -R 与 rm --recursive 与 -rf 同等对待', () => {
   assert.equal(check("spawnSync('rm', ['--recursive', dir]);").length, 1);
 });
 
+// ── 2026-08-05 code review：递归开关不一定紧跟 rm ──────────────────────────
+// 旧判据 `rm\s+RECURSIVE_FLAG` 只认紧挨着 rm 的那一个开关。实测：`rm -rf` 拦得住，
+// 但只要在递归开关【前面】插入任何别的选项就零违规。这类 shell 调用又进不了 fs.rm* 扫描，
+// 所以是 safe-rm 门禁的完整旁路——比"少认几种写法"严重得多，等于给了一条恒绿通道。
+test('反向: 递归开关与 rm 之间隔着别的选项，同样必须报', () => {
+  assert.equal(check("execSync('rm -f -r ' + target);").length, 1, '选项分离是最常见的等价写法');
+  assert.equal(check("execSync('rm --force --recursive ' + target);").length, 1, '长形式分离');
+  assert.equal(check("execSync('rm -v -rf ' + target);").length, 1, '递归簇前插了一个短选项');
+  assert.equal(check("execSync('rm -i -R ' + target);").length, 1, '-R 也要认');
+  assert.equal(check("execSync('rm --interactive=never -rf ' + target);").length, 1, '带值长选项不该截断选项区');
+});
+
+// 选项区扫描的边界必须是「第一个非选项 token」。放宽成「扫到语句末尾」的话，同一条 shell 串里
+// 别的命令的 -r 会被算到 rm 头上——门禁一吵就会被人加 safe-rm 绕过，假绿比漏报更难发现。
+test('正向: 选项区扫描不跨命令误报', () => {
+  assert.deepEqual(check("execSync('rm -f ' + a + ' && tar -rf ' + b);"), [], '-rf 属于 tar，不是 rm');
+  assert.deepEqual(check("execSync('rm -f a; grep -r pat');"), [], '; 之后是另一条命令');
+});
+
 // 非递归删除仍归单文件规则管，不该被这条判据抓——否则整个仓库的正当 rm 调用全变违规。
 test('正向: 非递归 rm 不被递归判据误抓', () => {
   assert.deepEqual(check("execSync('rm -f ' + target);"), []);

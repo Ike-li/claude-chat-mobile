@@ -196,8 +196,17 @@ export function findDestructiveCalls(source) {
 // 递归开关：-r / -R / -rf / -fr / --recursive。大小写都要认——-R 是 macOS rm(1) 首先
 // 文档化的写法；`[A-Za-z]*` 吃不掉第二个 `-`，所以长形式必须单列一支。
 const RECURSIVE_FLAG = '(?:-[A-Za-z]*[rR]|--recursive)';
-// 形态一：shell 字符串。`execSync('rm -rf ' + x)`、`execFileSync('sh', ['-c', 'rm -rf ' + x])`。
-const SHELL_RM_RECURSIVE = new RegExp(`\\brm\\s+${RECURSIVE_FLAG}`);
+// 递归开关【不一定紧跟 rm】：`rm -f -r`、`rm --force --recursive`、`rm -v -rf`、`rm -i -R`
+// 全是合法写法，而旧判据 `rm\s+RECURSIVE_FLAG` 只认紧跟其后的那一个开关，上述四种一律零违规
+// （2026-08-05 探针逐条确认）。这类调用又追溯不到 fs.rm* 扫描，等于 safe-rm 门禁的完整旁路。
+// 改成扫完整个选项区：`-[\w=-]+` 只吃 `-` 开头的 token（`=` 是为 `--interactive=never` 这类
+// 带值长选项留的），碰到第一个非选项 token 就停。这个边界同时就是防跨命令误报的机制——
+// `rm -f a && tar -rf b` 里 `a` 终止了 rm 的选项区，属于 tar 的 `-rf` 不会被算到 rm 头上；
+// `;` `|` `&&` 同理，不必逐个枚举分隔符。
+// 【残余风险】GNU 允许操作数写在选项前（`rm dir -rf`），本判据不覆盖：要认它就得让扫描越过
+// 非选项 token，跨命令误报会立刻回来。真实代码里几乎不这么写，权衡后留口，勿当已覆盖。
+const RM_OPTION = '-[\\w=-]+';
+const SHELL_RM_RECURSIVE = new RegExp(`\\brm\\s+(?:${RM_OPTION}\\s+)*${RECURSIVE_FLAG}`);
 // 形态二：argv 数组。`spawnSync('rm', ['-rf', x])`——命令名与开关分处两个实参，中间隔着
 // 引号和方括号，形态一的 `rm\s+` 永远匹配不到。而 execFileSync/execFile/spawnSync/spawn
 // 【只收】这种形态，旧判据下它们是扫描名单里的死条目（2026-08-04 实测确认）。
