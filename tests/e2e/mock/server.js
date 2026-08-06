@@ -98,6 +98,10 @@ let historyOrderRaceArmed = false;
 // 【为什么不用断线来更快触发 err】断线会引发重连 + 全量历史加载，那条消息会从别的路径回到页面上，
 // 测试就假绿了。要锁的恰恰是「连接未断的纯 ACK 超时」这一格，所以 15s 等待是本用例的固有成本。
 let historyAckTimeoutArmed = false;
+// P0-SYNC-ACK-TIMEOUT：武装「bindView 的 sync:since ack 永不返回、但连接没断」（F3/2026-08-06）。
+// 裸 ack 断线时被 socket.io-client 的 _clearAcks() 静默丢弃，超时窗内则纯粹没人叫——两种情况下
+// 回调都不执行，而加载卡收场与历史加载全挂在回调里。一次性：吞掉一次后自动解除，后续 sync 正常。
+let syncAckTimeoutArmed = false;
 let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 21 条积压事件（低于阈值 → flush）
 // P0-REPLAY-UNREAD-DISMISS：同 replaySmallSyncArmed 两段式门控，但第二次 ack 额外挂 unreadOnEntry——
 // 验证回放缓冲程序性落底与未读胶囊自动确认已读的协同（不复用 mockUnreadOnEntry* 单例，见下方
@@ -161,6 +165,7 @@ function resetMockState() {
   replayFloodHistoryArmed = false;
   historyOrderRaceArmed = false;
   historyAckTimeoutArmed = false;
+  syncAckTimeoutArmed = false;
   replaySmallSyncArmed = false;
   replayUnreadSyncArmed = false;
   pendingDevices = [];
@@ -1430,6 +1435,13 @@ io.on('connection', socket => {
         callback({ ok: true, replayed, pending, unreadOnEntry, ...extra });
       }
     };
+    // P0-SYNC-ACK-TIMEOUT：吞掉本次 ack、连接保持。前端只能靠 socket.timeout 的 err 分支收尾——
+    // 裸 ack 下这个回调永不执行，加载卡永转、历史永不加载（F3）。放在所有分支之前：吞的是整个 ack。
+    if (syncAckTimeoutArmed && sessionId === 'mock-session-timeline') {
+      syncAckTimeoutArmed = false;
+      console.log('[mock] sync:since swallowed (sync-ack-timeout armed)');
+      return;
+    }
     // P0-NOSID：无 sessionId 的活实例——回放 live 事件（replayed>0），模拟「事件在流、磁盘还没有」。
     // 前端此时若走 reload 就会清屏拉 session:history（下面那条 handler 会返回一段绝不该出现的文案），
     // 正确行为是保留缓冲回放。放在 inst_2 分支之前：它按 instanceId 分流，不会互相干扰。
@@ -1655,6 +1667,7 @@ io.on('connection', socket => {
       setViewingInstanceId: value => { viewingInstanceId = value; },
       armHistoryOrderRace: () => { historyOrderRaceArmed = true; },
       armHistoryAckTimeout: () => { historyAckTimeoutArmed = true; },
+      armSyncAckTimeout: () => { syncAckTimeoutArmed = true; },
     })),
     {
       commands: ['test:question', 'test:question-duplicate', 'test:question-remote-resolved', 'test:question-result-error'],

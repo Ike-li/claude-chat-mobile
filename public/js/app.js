@@ -967,6 +967,10 @@ import { createSessionDeleteController } from './app/session-delete.js';
   // 它的职责不是"快速失败"而是"保证回调一定会被调用一次"——裸 ack 在断线时会被静默丢弃，
   // 那正是 historyLoadGate 永久卡死的两个成因之一（见 history-load-gate.js 的看门狗注释）。
   const HISTORY_ACK_TIMEOUT_MS = 15000;
+  // sync:since 的 ack 超时（bindView 入场 + connect 重连补传两处共用，F3/2026-08-06）。职责同上：
+  // 不是快速失败，是保证回调必被调用一次——裸 ack 断线时被 _clearAcks() 静默丢弃，而加载卡收场、
+  // 历史加载、pending 快照对账全挂在回调里。server ack 前要先逐条重放环形缓冲，给同样宽松的窗。
+  const SYNC_ACK_TIMEOUT_MS = 15000;
   let _probeInFlight = false;
   function reloadCurrentFromHistory(onDone) {
     if (!displayedSessionId) return;
@@ -1065,7 +1069,9 @@ import { createSessionDeleteController } from './app/session-delete.js';
       });
     } else {
       replayHandle = replayBuffer.begin(reqInstanceId);
-      socket.emit('sync:since', payload, res => act(null, res));
+      // F3：裸 ack 断线时被 _clearAcks() 静默丢弃（同 loadHistory 的教训）→ pending 快照对账永久缺失。
+      // 带 timeout 后 err 走 act 的既有 'reconnect' 分支：ack 超时 = 连接可疑，干净重连一次。
+      socket.timeout(SYNC_ACK_TIMEOUT_MS).emit('sync:since', payload, (err, res) => act(err, res));
     }
   }
 
@@ -4228,12 +4234,30 @@ import { createSessionDeleteController } from './app/session-delete.js';
     // 回放缓冲（P0-REPLAY-BUFFER）：emit 之前先 begin()，期间命中该 instanceId 的 agent:event
     // 先入队不渲染（见上方 socket.on('agent:event', ...)），修「切会话逐条吐消息像打字机」。
     const replayHandle = replayBuffer.begin(id);
-    socket.emit('sync:since', { instanceId: id, sessionId: sid, lastSeq: resumeFromSeq }, res => {
+    // F3（2026-08-06）：必须 socket.timeout——裸 ack 断线时被 _clearAcks() 静默删除且【不调用】
+    // （同 loadHistory 那条禁令），整个回调（含 hideLoadingCard/loadHistory/applyPendingSnapshot）
+    // 都不会执行：加载卡永转、历史永不加载；且首次进入页面期间断线连 connect 补传都没有
+    // （initialLoad 尚未翻转）。err 分支在下方迟到守卫之后收尾。
+    socket.timeout(SYNC_ACK_TIMEOUT_MS).emit('sync:since', { instanceId: id, sessionId: sid, lastSeq: resumeFromSeq }, (err, res) => {
       // 已切走：丢弃过期回调。显式 discard 本轮 handle——后续 bindView 的 begin/discard 通常已顶替，
       // 但若同一实例被快速 A→B→A 重入，仅靠 displayed 守卫早退而不 resolve，会让中间那批已入队事件
       // 既不 flush 也不推进基线，最终被第三次 begin 无声丢掉。
       if (displayedInstanceId !== id) {
         replayBuffer.resolve(replayHandle, 'discard');
+        return;
+      }
+      if (err) {
+        // 超时/断线：这个 ack 不会来了。有 sid → 与下面 'load' 分支同款转拉磁盘历史（loadHistory
+        // 自带 15s 超时与 err 清理，连接还活着即自愈；resolve('reload') 把续传基线推进到缓冲尾，
+        // 历史不占 seq、不会重复）。无 sid → 磁盘上无从补拉，缓冲就是唯一内容：flush 渲染 + 收
+        // 加载卡，宁可残缺不可白等（同 decideTimeoutAction 的取舍）。unreadOnEntry 随 ack 丢失，按 0。
+        if (sid) {
+          replayBuffer.resolve(replayHandle, 'reload');
+          loadHistory(sid, entry.cwd, () => showUnreadPillIfAny(0));
+        } else {
+          replayBuffer.resolve(replayHandle, 'flush');
+          hideLoadingCard();
+        }
         return;
       }
       // S1：hasCache 时已增量续传（resumeFromSeq=缓存位置，回放只含新事件、append 不重复）。

@@ -1572,11 +1572,12 @@ export function resolveConnectionBanner({ phase, elapsedMs, suppressed = false, 
 }
 
 // sync:since 的 ack 回调决策（probe 与普通 connect 路径共用）：
-//   err（探测 timeout，仅 probe 路径会有）→ 'reconnect'：判定半开死连接，强制 disconnect+connect 触发干净重连；
+//   err（ack 超时/断线，probe 与 connect 补传两路都会有）→ 'reconnect'：判定半开死连接，强制 disconnect+connect 触发干净重连；
 //   res.found===false（实例已 dispose/重启/effort 换 id 没了）→ 'reload'：清屏重载历史（connect 路径不先 clearView，
 //     无法靠 replayed 自辨「实例没了」与「实例还在只是无新事件」，靠 found 区分）；
 //   其余（有回放 / 无新事件 / 实例还在）→ 'none'：交给正常 agent:event 经 epoch/seq 去重增量渲染。
-// 普通 connect 路径无 timeout、err 恒 null → 不会误判 reconnect。
+// connect 补传路径现同样带 timeout（F3/2026-08-06）：裸 ack 断线时被 _clearAcks() 丢弃，pending 快照
+// 对账会永久缺失；err → 'reconnect' 干净重连是有意行为，不是误判。
 export function syncAckAction(err, res, { seenDiskLen = 0, hasSessionId = true } = {}) {
   if (err) return 'reconnect';
   // 无 sessionId（CLI 未吐 init）：'reload' 会清屏后拿 session:history 换回「会话不存在」→ 白屏。
