@@ -491,6 +491,13 @@ export class AgentSession {
     // 清理（无论正常结束/抛错/resume 失败都执行；异常已被上方 catch 收口，不会跳过）
     clearInterval(this.idleTimer); this.idleTimer = null;
     this._clearInterruptSettleWatchdog(); // 实例已终，不留跨实例悬挂计时
+    // R3（2026-08-06）：与 dispose 对称。emit() 没有 disposed 守卫，这三个表到点仍会推事件——
+    // 而那时实例已从 agents 里摘掉，server 会广播一条挂着已消失 instanceId 的 system/text_delta。
+    // 触发面不止「CLI 自己退出」：checkIdle 的空闲回收与 settleForce 都走 abort → consume 收尾。
+    this._clearSlashQuietNotice();
+    this._clearLocalCommandProgress();
+    if (this._textTimer) { clearTimeout(this._textTimer); this._textTimer = null; }
+    if (this._thinkTimer) { clearTimeout(this._thinkTimer); this._thinkTimer = null; }
     this.pendingTurns = 0;
     this._openTurns = [];
     this.queue = [];
@@ -1653,7 +1660,17 @@ export class AgentSession {
     // 持有陈旧引用的路径只见 disposed 不够，还可能读到非零 pendingTurns/非空 queue）。
     this.pendingTurns = 0;
     this._openTurns = [];
+    // R4（2026-08-06）：丢弃未送达 SDK 的消息必须可见，与 interrupt 的 queue_dropped 对称。
+    // send() 返回 true 后消息可能仍停在 queue（输入泵还没开始等待，如 CLI 启动中 notifyInput=null），
+    // 此时 session:close 等路径 dispose 会静默清空——而 app.js 已 commitProcessed 去重 ID、客户端
+    // 已收 ok:true 删掉 pending 气泡，同 clientMessageId 重发还会命中 isProcessed 被当成功：
+    // 消息永久消失且无任何痕迹。emit 必须在标 disposed 之后、但事件仍能出（emit 无 disposed 守卫），
+    // 前端据 clientMessageIds 把对应气泡标「已取消」（多设备/回放同款收敛）。
+    const droppedIds = this.queue.map(it => it.clientMessageId).filter(Boolean);
     this.queue = [];
+    if (droppedIds.length > 0) {
+      this.emit('system', { message: '尚未送达的消息已随会话关闭取消', kind: 'queue_dropped', clientMessageIds: droppedIds });
+    }
     this._awaitingInterruptResult = false;
     this.notifyInput?.();
     clearInterval(this.idleTimer); this.idleTimer = null;

@@ -880,3 +880,57 @@ test.describe('pendingRequestsSnapshot()', () => {
     assert.equal(snap.questions[0].requestId, 't1#0');
   });
 });
+
+// ---- 退出路径的清理对称性（R3/R4，2026-08-06 BUG hunting review）----
+test.describe('退出路径清理对称性', () => {
+  // R3：consume() 自然退出（CLI 进程自己结束 / checkIdle 空闲回收 abort / settleForce abort）没有清
+  // _slashQuietTimer 与 delta 攒批表，而 emit() 无 disposed 守卫——到点仍会推一条挂着已消失
+  // instanceId 的事件（server 照常 io.to('approved').emit）。dispose() 三个都清了，两条路径必须对称。
+  test('R3：consume 自然退出必须与 dispose 一样清掉 slash 静默表与 delta 攒批表', async () => {
+    const { s, events } = makeSession({ slashQuietNoticeMs: 20 });
+    s.sawInit = true;
+    s.resumeId = null;
+    s.q = { setModel() { return Promise.resolve(); } };
+    // 起一个 slash 静默提示表 + 一个文本攒批表（两者都是 setTimeout，到点会 emit）
+    assert.equal(await s.send('/code-review'), true);
+    assert.notEqual(s._slashQuietTimer, null, '前置：slash 静默表已武装');
+    s._textBuf = 'partial';
+    s._textTimer = setTimeout(() => s._flushText(), 20);
+
+    const fakeQ = { [Symbol.asyncIterator]() { return { next() { return Promise.resolve({ done: true }); } }; } };
+    await s.consume(fakeQ);
+    assert.equal(s.disposed, true, '前置：自然退出已标 disposed');
+
+    assert.equal(s._slashQuietTimer, null, 'slash 静默表必须随退出清掉');
+    assert.equal(s._textTimer, null, 'delta 攒批表必须随退出清掉');
+
+    const before = events.length;
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(events.length, before, '实例已终，不得再往它身上 emit（挂着已消失 instanceId 的事件）');
+  });
+
+  // R4：dispose() 清 queue 时不发 queue_dropped，而 interrupt() 发。send() 返回 true 后消息可能仍在
+  // this.queue（SDK 输入泵尚未取走，如 CLI 启动中 notifyInput 还是 null），此时 session:close 等路径
+  // dispose 会静默丢弃；而 app.js 已 commitProcessed 去重 ID、客户端已收 ok:true 删掉 pending 气泡，
+  // 同 clientMessageId 重发会命中 isProcessed 被当成功——消息永久消失且无任何痕迹。
+  test('R4：dispose 丢弃未送达队列时必须发 queue_dropped，与 interrupt 对称', async () => {
+    const { s, events } = makeSession();
+    s.q = { setModel() { return Promise.resolve(); } };
+    // notifyInput 为 null = 输入泵尚未开始等待（CLI 启动中），消息停在 queue 里
+    assert.equal(s.notifyInput, null, '前置：输入泵未在等待');
+    assert.equal(await s.send('未送达就被关掉', null, { clientMessageId: 'cm-lost-1' }), true);
+    assert.equal(s.queue.length, 1, '前置：消息仍在队列、尚未送达 SDK');
+
+    s.dispose();
+
+    const dropped = events.filter(e => e.type === 'system' && e.payload?.kind === 'queue_dropped');
+    assert.equal(dropped.length, 1, '静默丢弃 = 用户以为发了、实际永久消失');
+    assert.deepEqual(dropped[0].payload.clientMessageIds, ['cm-lost-1']);
+  });
+
+  test('R4b：队列本就为空时 dispose 不发多余的 queue_dropped', () => {
+    const { s, events } = makeSession();
+    s.dispose();
+    assert.equal(events.filter(e => e.payload?.kind === 'queue_dropped').length, 0);
+  });
+});
