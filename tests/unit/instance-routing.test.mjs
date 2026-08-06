@@ -258,4 +258,15 @@ test.describe('externalDirtyBusyNack（SRV-003：置换被 isBusy 挡住）', ()
     assert.equal(r.reason, 'busy');
     assert.match(r.error, /吸收终端写入|仍忙|稍后/);
   });
+
+  // 2026-08-06 F2：busy 维度对齐（e32eb70 补 stale 之后的同型第二例）。前端两条 present* 判定
+  // （presentOnlineSendAck / presentOfflineResendAck）都靠 ack.busy 识别「忙拒收」落 blocked 终态；
+  // 四种忙因语义上全是「现在别投、稍后能成」，缺这一维就落兜底 requeue——离线队列每次重连自动
+  // 重发一遍、永不退场。
+  test('四种忙因的 nack 都必须带 busy:true（present* 判定的识别锚点）', () => {
+    assert.equal(externalDirtyBusyNack({ pendingTurns: 1 }).busy, true);
+    assert.equal(externalDirtyBusyNack({ pendingPermissionCount: 1 }).busy, true);
+    assert.equal(externalDirtyBusyNack({ bgTaskCount: 2 }).busy, true);
+    assert.equal(externalDirtyBusyNack({}).busy, true);
+  });
 });

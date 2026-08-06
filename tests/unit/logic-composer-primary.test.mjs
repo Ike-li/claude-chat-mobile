@@ -26,6 +26,8 @@ import {
   systemBarClass,
   INTERRUPT_PENDING_TIMEOUT_MS,
 } from '../../public/js/logic.js';
+// F2 配对回归用：server 侧忙拒收判定与前端 present* 必须逐维对齐（该模块零依赖、单测环境可直接 import）
+import { externalDirtyBusyNack } from '../../src/server/instance-routing.js';
 
 test('resolveComposerPrimaryMode: 空闲空输入 → 禁用发送', () => {
   const out = resolveComposerPrimaryMode({});
@@ -574,5 +576,26 @@ test.describe('presentOfflineResendAck: busy 拒收', () => {
   test('普通可重试失败仍走 requeue（与 blocked 区分）', () => {
     const out = presentOfflineResendAck(null, { ok: false, error: '发送失败', retryable: true });
     assert.equal(out.outcome, 'requeue');
+  });
+
+  // 2026-08-06 F2 回归：externalDirty 置换被拒（server 侧 externalDirtyBusyNack）经 app.js 转发后，
+  // 两条 present* 路径都必须判成「忙拒收」，不得落兜底 requeue——离线路径的 requeue 意味着每次
+  // 重连自动重发一遍、条目永不退场（e32eb70 补 stale 维之后，busy 维的同型缺口）。
+  test('externalDirty 忙拒收 ack → 离线 blocked 终态 / 在线不 requeue', () => {
+    const nacks = [
+      externalDirtyBusyNack({ pendingTurns: 1 }),
+      externalDirtyBusyNack({ bgTaskCount: 2 }),
+    ];
+    for (const nack of nacks) {
+      // 逐字段对齐 src/server/app.js externalDirty 分支的 ack 转发形状
+      const ack = { ok: false, error: nack.error, busy: nack.busy === true, retryable: nack.retryable, reason: nack.reason };
+      const off = presentOfflineResendAck(null, ack);
+      assert.equal(off.outcome, 'blocked', `${nack.reason}: 离线必须落终态待手动重发`);
+      assert.equal(off.requeue, false);
+      const on = presentOnlineSendAck(ack);
+      assert.equal(on.requeue, false, `${nack.reason}: 在线不得自动重排队（等于把排队搬到客户端）`);
+      assert.equal(on.restoreDraft, true, '文字应回填输入框由用户决定何时重发');
+      assert.equal(on.clearBusy, false, '不能把在跑那轮的状态行/停止钮一起清掉');
+    }
   });
 });

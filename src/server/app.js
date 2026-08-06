@@ -1954,7 +1954,7 @@ registerSocketConnection(io, socket => {
             'sys_info',
             `[SYS] externalDirty 置换被拒（${nack.reason}）：${nack.detail}`,
           );
-          ack({ ok: false, error: nack.error, retryable: nack.retryable, reason: nack.reason });
+          ack({ ok: false, error: nack.error, busy: nack.busy === true, retryable: nack.retryable, reason: nack.reason });
           return;
         }
         const cwd = a.cwd, sid = a.sessionId, mode = a.permissionMode, eff = effortOf(a.instanceId);

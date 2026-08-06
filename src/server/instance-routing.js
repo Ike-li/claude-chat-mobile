@@ -99,6 +99,10 @@ export function canDeleteSessionGuard({ liveInstance = false, resumeInFlight = f
 // 负 ACK 须同时说明「为何要置换」+「为何现在不能」——旧文案「会话正在处理」在 UI 已 result「完成」时极误导
 // （例如仅 bgTasks 残留、或 turn 刚结束与发送竞态）。detail 供 interact 日志排障。
 // 优先级：turn > permission/question > bgTasks > busy 兜底。
+// 所有分支都带 busy:true（2026-08-06 F2）：前端两条 present* 判定（presentOnlineSendAck /
+// presentOfflineResendAck）都以 ack.busy 识别「忙拒收」落 blocked 终态；四种忙因语义上全是
+// 「现在别投、稍后能成」，漏这一维会落兜底 requeue——离线队列每次重连自动重发、永不退场
+// （e32eb70 补 stale 维之后的同型第二例，成对决策函数必须逐维对照）。
 export function externalDirtyBusyNack({
   pendingTurns = 0,
   bgTaskCount = 0,
@@ -121,6 +125,7 @@ export function externalDirtyBusyNack({
       error: '需先吸收终端写入，但上一轮仍在处理，请完成后重试',
       reason: 'turn',
       detail,
+      busy: true,
       retryable: true,
     };
   }
@@ -129,6 +134,7 @@ export function externalDirtyBusyNack({
       error: '需先吸收终端写入，但仍有待处理的审批或提问',
       reason: 'permission',
       detail,
+      busy: true,
       retryable: true,
     };
   }
@@ -137,6 +143,7 @@ export function externalDirtyBusyNack({
       error: '需先吸收终端写入，但后台任务仍在运行，请完成后重试',
       reason: 'bg_tasks',
       detail,
+      busy: true,
       retryable: true,
     };
   }
@@ -144,6 +151,7 @@ export function externalDirtyBusyNack({
     error: '需先吸收终端写入，但会话仍忙，请稍后重试',
     reason: 'busy',
     detail,
+    busy: true,
     retryable: true,
   };
 }
