@@ -105,7 +105,6 @@ export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateL
       }
 
       if (!authPassed) return res.status(401).json({ status: 'unauthorized' });
-      return next();
     } catch {
       // JWT 失败等：若启用了限速，计一次失败（与 socket 失败路径对齐）
       const rl = rateLimit;
@@ -127,6 +126,11 @@ export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateL
       }
       return res.status(401).json({ status: 'unauthorized' });
     }
+    // 鉴权已通过。next() 必须在 try 外（R6/2026-08-06）：下游 handler 的同步抛错不是鉴权失败——
+    // 圈进上面的 catch 会给已通过鉴权的来源计一次失败（连续 8 次即 15min 锁定，机主被自家某个
+    // handler 的 bug 锁在门外、审计被污染成「有人暴破」），并在响应可能已写出后二次 res.status(401)。
+    // 下游异常原样向外传播，交给 Express 5 的错误处理（async 中间件的 rejection 会被其接住）。
+    return next();
   };
 }
 

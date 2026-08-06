@@ -153,6 +153,44 @@ test('createHttpAuth rateLimit：连续失败锁定 → 429（AUTH-001）', asyn
   assert.equal(locked, 1);
 });
 
+// 2026-08-06 R6：try 不得把 next() 圈进去。下游 handler（/metrics 聚合、/push/subscribe 解析等）
+// 的同步抛错不是鉴权失败——圈进 catch 会给【已通过鉴权】的来源计一次失败（连续 8 次即 15min 锁定，
+// 机主被自家某个 handler 的 bug 锁在门外），且在响应可能已写出后二次 res.status(401)。
+test('createHttpAuth：下游 handler 抛错不计鉴权失败、不二次写响应、异常向外传播', async () => {
+  const states = new Map();
+  const onResultCalls = [];
+  let now = 3_000_000;
+  const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
+  const auth = createHttpAuth({
+    authToken: 'secret',
+    isPublicHost: () => false,
+    verifyAccessJwt: async () => {},
+    rateLimit: {
+      active: true,
+      sourceKey: () => 'ip:7.7.7.7',
+      getState: (k) => states.get(k),
+      setState: (k, st) => { states.set(k, st); },
+      onResult: (st, ok, ts) => { onResultCalls.push(ok); return onAuthResult(st, ok, ts); },
+      now: () => now,
+    },
+  });
+  const statusCalls = [];
+  const res = {
+    status(code) { statusCalls.push(code); return this; },
+    json() { return this; },
+    setHeader() { return this; },
+  };
+  const req = { headers: { host: 'lan' }, query: { token: 'secret' }, socket: { remoteAddress: '7.7.7.7' } };
+  // 下游同步抛错必须向外传播（交给 Express 错误处理），而不是被当鉴权失败吞掉
+  await assert.rejects(
+    auth(req, res, () => { throw new Error('downstream boom'); }),
+    /downstream boom/,
+  );
+  assert.deepEqual(onResultCalls, [true], '只该有鉴权成功那一次计数，绝不能出现 ok=false');
+  assert.equal((states.get('ip:7.7.7.7')?.failCount ?? 0), 0, '失败计数必须为 0——否则 8 个下游 bug 就把机主锁 15 分钟');
+  assert.deepEqual(statusCalls, [], '下游抛错后不得二次写响应（401/429 都不行）');
+});
+
 // AUTH-NEW-1：active 可为 (req)=>boolean；无 AUTH_TOKEN 但公网 Host 仍须对 JWT 失败限速
 test('createHttpAuth rateLimit：active(req) 公网 Host 无 token 仍计入失败（AUTH-NEW-1）', async () => {
   const states = new Map();
