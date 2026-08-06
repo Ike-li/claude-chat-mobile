@@ -383,74 +383,69 @@ test.describe('interrupt()', () => {
     assert.equal(s._interruptSettleTimer, null);
   });
 
-  // 回归：watchdog force 清账后用户又发一轮，迟到的旧 result 不得把新轮 pendingTurns 扣成 0（假 idle）。
+  // 回归（2026-08-06 F1）：watchdog 清账必须【弃置】在途槽，而不是标 forceSettled 留在队首。
+  // watchdog 的触发前提就是配对 result 永不到达（见 _armInterruptSettleWatchdog 注释），且本路径
+  // 子进程仍活着——留下的占位会把 forceSlotTtlMs(60s) 窗内新发一轮的真 result 吸收成 applied:false：
+  // pendingTurns 永挂 1 → isBusy 恒真 → send 拒收「当前任务运行中」，直到 idleTimeoutMs(生产 10min)
+  // 的静默看门狗再 interrupt 一次才解，而那次清账又留下新占位——形态可复发。旧版两条回归恰好绕开
+  // 这一格：一条假定迟到 result 必到（喂了两条 result），另一条把 TTL 调成 30ms 并 sleep 过期后才发新轮。
   // 场景要模拟「消息已泵出 this.queue 进 CLI」：queue 空、pendingTurns=1、openTurns 有槽；
   // 若消息仍在 queue，interrupt 会当排队丢弃并 _dropOpenTurnSlots，不会武装 watchdog。
-  test('watchdog force 清账后新发一轮 + 迟到旧 result → 新轮 pendingTurns 仍为 1', async () => {
+  test('watchdog 清账即弃槽：TTL 窗内新发一轮，其真 result 必须立即清账', async () => {
     const { s } = makeSession();
     s.interruptSettleGraceMs = 20;
+    // forceSlotTtlMs 保持生产默认（60s）：要锁的正是「TTL 未过期」这一格
     s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
     assert.equal(await s.send('old'), true);
-    assert.equal(s.pendingTurns, 1);
-    assert.equal(s._openTurns.length, 1);
     s.queue = []; // 已泵进 CLI：中断收口靠配对 result / watchdog，而非 queue 丢弃
     await s.interrupt();
     assert.equal(s._awaitingInterruptResult, true);
     assert.equal(s.pendingTurns, 1, '成功路径当下不减：先等 SDK 的终态 result');
     await new Promise(r => setTimeout(r, 60));
-    assert.equal(s.pendingTurns, 0, 'watchdog 已 force 清账');
-    assert.equal(s._openTurns.length, 1, 'force 槽仍在，等迟到 result 出槽');
-    assert.equal(s._openTurns[0].forceSettled, true);
+    assert.equal(s.pendingTurns, 0, 'watchdog 已清账');
+    assert.equal(s._openTurns.length, 0, '在途槽随清账弃置，不留占位');
 
-    assert.equal(await s.send('new after force'), true);
+    assert.equal(await s.send('new after watchdog'), true);
     assert.equal(s.pendingTurns, 1, '新轮在途');
-    assert.equal(s._openTurns.length, 2);
-
-    // 迟到的中断轮 result：只消耗 force 槽，不得 -- 新轮
     s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
-    assert.equal(s.pendingTurns, 1, '迟到 result 不得把新轮扣成假 idle');
-    assert.equal(s._openTurns.length, 1);
-    assert.equal(s._openTurns[0].forceSettled, false);
-
-    // 新轮真正结束
-    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
-    assert.equal(s.pendingTurns, 0);
-    assert.equal(s._openTurns.length, 0);
+    assert.equal(s.pendingTurns, 0, '新轮真 result 必须把账减到 0，不被陈旧占位吸收');
+    assert.equal(s.isBusy(), false, '否则 stateOf 恒 busy：spinner 与停止按钮永不消失');
+    assert.equal(await s.send('third'), true, '会话必须立即可用，而非等 10min idleTimeout');
     s.dispose();
   });
 
-  // 回归（上一条的对偶）：watchdog 的触发【前提】就是「配对 result 永不到达」（见 _armInterruptSettleWatchdog
-  // 注释：q.interrupt() 照样 resolve，却永不产生配对 result）。这种情况下只标记不移除的 force 槽会永久堵在
-  // 队首，把此后每一轮真 result 都吸收成 applied:false → pendingTurns 再也回不到 0：
-  // stateOf 恒 busy（spinner/停止按钮不消失）、queued 恒 true（每条新消息标排队）、queueFull 恒真（发送禁用）。
-  // 且每次 10min 静默看门狗又 interrupt 一次、再造一个 force 槽 —— 自我复现不自愈。
-  test('watchdog force 清账后迟到 result 永不到达 → 过期 force 槽不得吃掉后续真 result', async () => {
+  // 上一条的对偶（弃槽的代价，显式接受）：中断轮的 result 若真的迟到（watchdog 已多等 8s 才清账，
+  // 实践中近乎不存在），它走「无槽回落」：空闲时 0-1 clamp 成 no-op；恰有新轮在途时会把新轮提前
+  // 扣成 0——瞬态假 idle（流式输出仍在渲染），新轮自己的 result 再经 clamp 归零，不产生负账、自愈。
+  // 两害相权：瞬态假 idle 远轻于旧行为在「result 永不来」这个常见世界里的 10 分钟假 busy 锁死。
+  test('watchdog 弃槽后迟到 result 走无槽回落：不产生负账、状态自愈', async () => {
     const { s } = makeSession();
     s.interruptSettleGraceMs = 20;
-    s.forceSlotTtlMs = 30; // 单测加速；生产默认宽于任何真实 SDK 迟到
     s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
     assert.equal(await s.send('old'), true);
     s.queue = [];
     await s.interrupt();
     await new Promise(r => setTimeout(r, 60));
-    assert.equal(s.pendingTurns, 0, 'watchdog 已 force 清账');
-    assert.equal(s._openTurns.length, 1, 'force 槽留下等迟到 result');
+    assert.equal(s.pendingTurns, 0, 'watchdog 已清账');
 
-    // 迟到 result 始终没来，等过 TTL：这个槽已经不可能再被消耗
-    await new Promise(r => setTimeout(r, 40));
+    // 空闲时迟到 result：无槽回落 clamp，纯 no-op
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    assert.equal(s.pendingTurns, 0, '不得为负、不得复挂');
 
-    assert.equal(await s.send('turn A'), true);
+    // 新轮在途时迟到 result：提前清账（接受的瞬态假 idle），新轮自己的 result 经 clamp 不产生负账
+    assert.equal(await s.send('new turn'), true);
     assert.equal(s.pendingTurns, 1);
     s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
-    assert.equal(s.pendingTurns, 0, '过期 force 槽必须被回收，真 result 要能把账减到 0');
-    assert.equal(s.isBusy(), false, '否则 stateOf 恒 busy：spinner 与停止按钮永不消失');
+    assert.equal(s.pendingTurns, 0, '迟到 result 提前清账：瞬态假 idle，显式接受');
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
+    assert.equal(s.pendingTurns, 0, '新轮真 result 走 clamp，不得为负');
+    assert.equal(s._openTurns.length, 0);
 
-    // 再来一轮，确认稳态不残留
+    // 稳态不残留
     assert.equal(await s.send('turn B'), true);
     assert.equal(s.pendingTurns, 1);
     s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {} });
     assert.equal(s.pendingTurns, 0, '稳态不得卡在 1');
-    assert.equal(s._openTurns.length, 0);
     s.dispose();
   });
 

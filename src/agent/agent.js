@@ -297,8 +297,9 @@ export class AgentSession {
                                             // ——一次性消费。不能靠嗅探 SDK 的 result.subtype（如 'error_during_execution'）
                                             // 反推"是不是用户中断"：该 subtype 是"执行过程中出错"的泛化分类，与
                                             // error_max_turns/error_max_budget_usd 同级，也可能是真实的独立异常。
-    // 在途轮 settle 槽（FIFO）。send/auto-turn 开槽；result 出槽。interrupt force-settle 把槽标 forceSettled，
-    // 迟到 result 只消耗 force 槽、不得再 --pendingTurns（否则 watchdog 清账后又发新轮会被迟到 result 误扣成假 idle）。
+    // 在途轮 settle 槽（FIFO）。send/auto-turn 开槽；result 出槽。settleForce/disposed 收口把槽标
+    // forceSettled——abort 前 for-await 可能还吐出已缓冲的消息，force 槽在这个窄窗吸收迟到 result、
+    // 不再 --pendingTurns。结算看门狗（子进程存活）的清账则直接弃槽，见 _armInterruptSettleWatchdog。
     // 单测若只改 pendingTurns 不入槽，result 走「无槽」回落仍 --pendingTurns，保持旧测试语义。
     this._openTurns = [];
     this._turnIdSeq = 0;
@@ -308,10 +309,9 @@ export class AgentSession {
     // interrupt() 成功后等待 SDK 配对 result 的宽限期（ms）。到期未等到即就地清账，见
     // _armInterruptSettleWatchdog。可在单测里覆盖为更短值。
     this.interruptSettleGraceMs = typeof this.interruptSettleGraceMs === 'number' ? this.interruptSettleGraceMs : 8_000;
-    // force 槽的存活上限（ms）。force 槽是留给「迟到 result」的占位，但 watchdog 的触发前提恰恰是配对
-    // result 永不到达——那种情况下槽会永久堵在队首、把此后每一轮真 result 都吸收掉，pendingTurns 再也回
-    // 不到 0（恒 busy + 恒排队 + 发送禁用，且每次静默 interrupt 再造一个，自我复现）。给它一个宽于任何真实
-    // SDK 迟到（秒级）、又远窄于用户可感知卡死的 TTL；过期即回收。可在单测里覆盖为更短值。
+    // force 槽的存活上限（ms）。force 槽现在只产生于 settleForce/disposed 收口（结算看门狗改为直接
+    // 弃槽，2026-08-06 F1）——abort 之后 for-await 还可能吐出已缓冲的消息，force 槽在那个窄窗吸收
+    // 迟到 result。TTL 防它滞留堵队首（实例通常随即销毁，这是兜底）；过期即回收。可在单测里覆盖为更短值。
     this.forceSlotTtlMs = typeof this.forceSlotTtlMs === 'number' ? this.forceSlotTtlMs : 60_000;
     this._interruptSettleTimer = null;
     this.pendingPermissions = new Map(); // requestId → { resolve, suggestions, input }
@@ -645,9 +645,9 @@ export class AgentSession {
 
   // result 到达时结算一槽。返回 { applied, forceSettled }：applied=true 表示本次对 pendingTurns 做了 --。
   _settleOneResultTurn() {
-    // 回收过期 force 槽：它只是「等一个可能到来的迟到 result」的占位，而 watchdog 的触发前提就是那个
-    // result 永不到达。超过 TTL 仍没被消耗 = 它不会再来了，此时必须让位，否则真 result 全被它吸收成
-    // applied:false，pendingTurns 永挂（回归见 agent-control「迟到 result 永不到达」）。
+    // 回收过期 force 槽：它只是「等一个可能到来的迟到 result」的占位（现仅 settleForce/disposed
+    // 收口产生，见构造函数 forceSlotTtlMs 注释）。超过 TTL 仍没被消耗 = 它不会再来了，此时必须让位，
+    // 否则真 result 全被它吸收成 applied:false，pendingTurns 永挂。
     const now = Date.now();
     while (this._openTurns.length
         && this._openTurns[0].forceSettled
@@ -676,7 +676,7 @@ export class AgentSession {
   // 这里给成功路径补一层：宽限期内 result 没来就地清账。与 settleForce 的关键区别是【不 abort 子进程】
   // ——SDK 本就空闲，杀进程会把一个可用会话变成「会话已中断」，代价远大于收益；也不重发 interrupted
   // （成功路径已发过一次），只补一次广播让 server 把 idle 态推给前端。
-  // force 清账时把 openTurns 标 forceSettled，迟到 result 只消耗 force 槽，不会误扣 force 之后新发的轮。
+  // 清账时在途槽直接弃置（不标 forceSettled）：理由见下方回调内注释。
   _armInterruptSettleWatchdog() {
     this._clearInterruptSettleWatchdog();
     const ms = Number(this.interruptSettleGraceMs);
@@ -685,7 +685,13 @@ export class AgentSession {
       this._interruptSettleTimer = null;
       if (this.disposed || !this._awaitingInterruptResult || this.pendingTurns <= 0) return;
       const stranded = this.pendingTurns;
-      this._forceSettleOpenTurns();
+      // 弃置在途槽而非标 forceSettled 留队首（2026-08-06 F1）：本路径的触发前提就是配对 result 永不
+      // 到达（见上），且子进程仍活着——留下的占位会把 forceSlotTtlMs 窗内新发一轮的真 result 吸收成
+      // applied:false，pendingTurns 永挂：假 busy 锁到 idleTimeoutMs(10min)，那次清账再留占位、可复发。
+      // 迟到 result 万一真的来（已多等 8s）：空闲时走 _settleOneResultTurn 的无槽回落 clamp 成 no-op；
+      // 恰有新轮在途则把新轮提前扣成 0——瞬态假 idle、随新轮自己的 result 自愈，远轻于 10 分钟锁死。
+      // 此刻不存在别的在途槽可误伤：pendingTurns≥1 期间 send 与 auto-turn 都开不了新轮。
+      this._openTurns = [];
       this.pendingTurns = 0;
       this._awaitingInterruptResult = false;
       // 本地 slash 命令的状态机也在此收口：_clearLocalCommandProgress 自称「唯一收口」，但此前只挂在
