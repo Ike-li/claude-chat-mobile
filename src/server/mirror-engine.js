@@ -165,7 +165,14 @@ export function createMirrorEngine({
   let mirrorRelease = { readonly: false, quietTicks: 0 };
   let mirrorLastSize = -1;                            // 上一 tick 的 transcript 字节大小（keep-alive 判文件增长）；-1=基线未建立（切入 / localBusy 后首个正常 tick 只记 size 不判增长）
   let mirrorCliSeen = false;                          // 负证据槽（session-registry cliPresenceStep）：观察期内是否见过 entrypoint=cli 的活注册表条目；「曾见→消失」= 终端已死，喂 mirrorStaleFlag 立即判 stale；切会话在 entry 分支重置
+  // 接管 fencing token（R2/2026-08-06）。tick 的三重提交守卫比对 viewing / 实例引用 / cwd+sessionId，
+  // 而用户接管【不改变其中任何一项】——一个在 takeOver 之前开始读盘、之后才 resolve 的 tick 会带着
+  // 接管前的观察走完提交段：重新标脏 + 广播 history_append + 重新上锁，用户刚拿到的输入权当场被夺走
+  // （且随后本方轮次开跑会让 mirrorReleaseStep 维持锁，要再攒满 12.5s 静默才解锁）。
+  // takeOver 递增本计数；tick 入口取快照，提交前比对——变了就整 tick 作废，与 viewing 守卫同款语义。
+  let takeOverGeneration = 0;
   async function catchUpTickOnce() {
+    const takeOverAtEntry = takeOverGeneration;
     const id = getViewingInstanceId();
     const a = id ? agents.get(id) : null;
     if (!a || !a.sessionId) { catchUpKey = null; mirrorRelease = { readonly: false, quietTicks: 0 }; mirrorLastSize = -1; setMirror(false, null, false, false, undefined, id, 'no_session'); return; } // 无查看会话：停、复位释放态
@@ -194,6 +201,7 @@ export function createMirrorEngine({
         const curLen = Array.isArray(curMsgs) ? curMsgs.length : -1;
         const curTailKey = Array.isArray(curMsgs) ? historyTailKey(curMsgs) : null;
         if (getViewingInstanceId() === id && agents.get(id) === a && `${a.cwd}\x00${a.sessionId}` === key
+            && takeOverGeneration === takeOverAtEntry // R2：接管已 dispose+resume 吸收过磁盘，旧观察不得重新标脏
             && rebaselineAbsorbedExternal({
               sameSession: true,
               curLen,
@@ -225,7 +233,8 @@ export function createMirrorEngine({
       // P1（7/26 CCD 调研吸收）：CLI 进程注册表权威自报，比尾部形态猜测强一档；读失败/无条目 fail-open null → 完全回落既有判定
       const entryRegistryEntry = await readSessionRegistry(a.sessionId, a.cwd, registryOpts).catch(() => null);
       const registryBusy = registryIndicatesTerminalBusy(entryRegistryEntry);
-      if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
+      if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key
+          || takeOverGeneration !== takeOverAtEntry) return; // R2：接管也是一种「世界已变」
                                           // await 让出后视图/实例/session 可能已变：旧观察结果与待提交基线全部作废，不提交
       catchUpKey = key;
       catchUpState = seededState;
@@ -276,7 +285,8 @@ export function createMirrorEngine({
         ]);
       } catch { /* 读失败保守 settled：不误标 stale */ }
       const busyRegistryBusy = registryIndicatesTerminalBusy(busyRegistryEntry);
-      if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
+      if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key
+          || takeOverGeneration !== takeOverAtEntry) return; // R2：接管也是一种「世界已变」
                                           // await 让出后视图/实例/session 可能已变：待提交状态全部作废，不提交
       const busyCliPresence = cliPresenceStep(mirrorCliSeen, busyRegistryEntry);
       mirrorCliSeen = busyCliPresence.seen;
@@ -334,8 +344,9 @@ export function createMirrorEngine({
       return; // history 失败则整 tick 放弃（与旧 try/catch return 一致）
     }
     const { emit, state, reload } = catchUpStep(catchUpState, { messages, localBusy: false });
-    if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key) return;
-                                                                      // await 让出后视图/实例/session 可能已变：作废旧 tick，不提交 baseline/size/观察态
+    if (getViewingInstanceId() !== id || agents.get(id) !== a || `${a.cwd}\x00${a.sessionId}` !== key
+        || takeOverGeneration !== takeOverAtEntry) return;
+                                                                      // await 让出后视图/实例/session/驾驶方可能已变：作废旧 tick，不提交 baseline/size/观察态
     catchUpState = state;                                              // 视图仍在才提交 baseline——移到切走判断之后，防切走瞬间污染 baseline 致那段外部写入在 catchUp 路径漏推
     const cliPresence = cliPresenceStep(mirrorCliSeen, registryEntry); // 负证据推进也在守卫后：切走瞬间的旧观察不得污染新会话的 seen 槽
     mirrorCliSeen = cliPresence.seen;
@@ -420,6 +431,7 @@ export function createMirrorEngine({
     requestRebaseline() { catchUpRebaselineRequested = true; },
     // 前端显式接管后第一条消息成功入队：服务端切换驾驶方
     takeOver(sessionId) {
+      takeOverGeneration += 1; // R2：作废所有在飞 tick 的观察（它们看到的是接管前的世界）
       mirrorRelease = { readonly: false, quietTicks: 0 };
       mirrorLastSize = -1;
       setMirror(false, sessionId, true, false, mirrorObservedCli, getViewingInstanceId(), 'user_takeover');

@@ -702,3 +702,59 @@ test('归属守卫：localBusy tick 中途实例被换掉 → 不得把观察结
 
   assert.equal(a.externalDirty, false, '守卫应在提交前 return，旧实例上不留这一 tick 的痕迹');
 });
+
+// ── 接管 fencing：R2（2026-08-06 BUG hunting review）─────────────────────────
+// takeOver() 是用户显式接管后的权威解锁（前端 override → 发消息成功入队 → 服务端切换驾驶方）。
+// tick 的三重提交守卫只比对 viewing / 实例引用 / cwd+sessionId——接管【不改变其中任何一项】，
+// 于是一个在 takeOver 之前开始读盘、之后才 resolve 的 tick 会带着接管前的观察走完提交段：
+// 重新 a.externalDirty=true + 广播 history_append + mirrorReleaseStep(externalWrite) → 重新上锁。
+// 用户刚拿到输入权就被夺走，且随后本方轮次开跑（localBusy）会让 mirrorReleaseStep 维持锁、
+// quietTicks 清零，要再攒满 12.5s 静默才解锁。对照：clearMirrorOnViewChange 能被 viewing 守卫兜住，
+// takeOver 兜不住——这是一处不对称，须给接管一个 fencing token。
+test('R2：tick 在飞期间用户接管 → 旧观察不得把刚接管的会话重新上锁', async () => {
+  let takenOver = false;
+  const h = makeEngine({
+    // 探针在每个 tick 的第一个 await 之前触发：在此调 takeOver，模拟「tick 已开始读盘、
+    // 用户此刻完成接管」——读盘拿到的是接管前的世界，提交时接管已生效。
+    onTickProbe: getEngine => {
+      if (!takenOver) return;
+      takenOver = 'done';
+      getEngine().takeOver('sess-takeover');
+    },
+  });
+  const a = h.view('inst-A', 'sess-takeover');
+  const base = Date.now() - 20_000;
+  // 先建立基线（切入分支，本 tick 不推）
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-takeover', settledTail(base, '第一轮'));
+  await h.engine.catchUpTick();
+
+  // 终端又写了一轮：下个 tick 会观察到外部增长 → 正常情况该上锁
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-takeover', [
+    ...settledTail(base, '第一轮'),
+    ...settledTail(Date.now() - 1_000, '终端写的第二轮'),
+  ]);
+  a.externalDirty = false;
+  takenOver = true; // 武装：下个 tick 一开始就接管
+  await h.engine.catchUpTick();
+
+  assert.equal(takenOver, 'done', '前置：接管确实发生在 tick 飞行中');
+  assert.equal(h.engine.isReadonly(), false, '接管后的会话不得被在飞旧 tick 重新上锁');
+  assert.equal(a.externalDirty, false, '接管已 dispose+resume 吸收过磁盘，旧观察不得重新标脏');
+});
+
+test('R2b：无接管时同样的外部增长仍必须正常上锁（防上一条测成恒不上锁的假绿）', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-normal-lock');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-normal-lock', settledTail(base, '第一轮'));
+  await h.engine.catchUpTick();
+
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-normal-lock', [
+    ...settledTail(base, '第一轮'),
+    ...settledTail(Date.now() - 1_000, '终端写的第二轮'),
+  ]);
+  await h.engine.catchUpTick();
+
+  assert.equal(h.engine.isReadonly(), true, '外部写入照常上锁');
+  assert.equal(a.externalDirty, true, '照常标脏');
+});
