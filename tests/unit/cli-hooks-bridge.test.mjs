@@ -112,6 +112,39 @@ test('scanHookEvents：目录不存在 → 空结果不抛（server 先于安装
   assert.deepEqual(got, { events: [], expired: 0, invalid: 0 });
 });
 
+// 2026-08-06 R5：CLI_HOOKS_DIR 是用户可配路径（.env.example 文档化），指到含无关 *.json 的目录时，
+// 删除面绝不能扩到「目录下所有 json」。判据＝只认 eventFileName 的命名形态
+// （<capturedAt>-<事件名>-<pid>-<hex6>.json）；别人的文件读、删都不许碰。
+test('R5：非本模块命名形态的 *.json 不进扫描面——sweep/scan/容量修剪都不许删别人的文件', () => {
+  const dir = tempDir();
+  try {
+    // 三个「别人的文件」：普通配置名、看着像但缺随机段、坏 JSON 内容
+    writeFileSync(join(dir, 'settings.json'), '{"mine":"keep"}', { mode: 0o600 });
+    writeFileSync(join(dir, 'data.json'), '{broken', { mode: 0o600 });
+    writeFileSync(join(dir, '1-Stop.json'), '{}', { mode: 0o600 });
+    // 一个自己的事件
+    const event = normalizeCliHookInput(stopInput, { capturedAt: 1_785_000_000_000 });
+    writeCliHookEvent(event, { dir });
+
+    // scan：只消费自己的事件，别人的文件不删、不计 invalid
+    const got = scanHookEvents({ dir, now: 1_785_000_001_000 });
+    assert.equal(got.events.length, 1);
+    assert.equal(got.invalid, 0, '别人的文件不是"坏事件"，不许计数更不许删');
+    assert.deepEqual(readdirSync(dir).sort(), ['1-Stop.json', 'data.json', 'settings.json']);
+
+    // sweep（server 启动全清扫）：写回一个事件再清扫，只删自己的
+    writeCliHookEvent(event, { dir });
+    const removed = sweepHookEvents({ dir });
+    assert.equal(removed, 1, '只清自己的事件文件');
+    assert.deepEqual(readdirSync(dir).sort(), ['1-Stop.json', 'data.json', 'settings.json']);
+
+    // 容量修剪：cap 以自家文件计数，别人的文件既不占额也不被修剪
+    const path = writeCliHookEvent(event, { dir, cap: 1 });
+    assert.notEqual(path, null, '别人的 3 个 json 不该占掉 cap 名额');
+    assert.equal(readFileSync(join(dir, 'settings.json'), 'utf8'), '{"mine":"keep"}');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('scanHookEvents：单次处理有上限，超出部分直接删（防积压拖垮一次 tick）', () => {
   const dir = tempDir();
   try {

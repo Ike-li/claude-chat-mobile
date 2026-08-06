@@ -143,12 +143,18 @@ function atomicWriteJson(dir, filename, payload) {
   }
 }
 
+// 只认下方 eventFileName 写出的命名形态（<capturedAt>-<事件名>-<pid>-<hex6>.json）。
+// 扫描/启动清扫/容量修剪的删除面都以此为界（R5/2026-08-06）：CLI_HOOKS_DIR 是用户可配路径
+// （.env.example），指到含无关 *.json 的目录时，旧判据「目录下所有 json」会把别人的文件
+// 当作坏事件读掉、删光。非自家形态的文件读、删、计数都不许碰。
+const HOOK_EVENT_FILE_RE = /^\d+-[A-Za-z][A-Za-z0-9_-]*-\d+-[0-9a-f]{6}\.json$/;
+
 function eventFileNames(dir) {
-  // .tmp 是别人正在写的半成品，不属于扫描面
-  return readdirSync(dir).filter(name => name.endsWith('.json') && !name.startsWith('.'));
+  // .tmp（别人正在写的半成品）与非自家命名形态（别人的文件）都不属于扫描面
+  return readdirSync(dir).filter(name => HOOK_EVENT_FILE_RE.test(name));
 }
 
-// 事件文件名：时间可排序 + pid/随机后缀防同毫秒冲突。
+// 事件文件名：时间可排序 + pid/随机后缀防同毫秒冲突。改形状必须同步上方 HOOK_EVENT_FILE_RE。
 function eventFileName(event) {
   return `${event.capturedAt}-${event.hookEventName}-${process.pid}-${randomBytes(3).toString('hex')}.json`;
 }
