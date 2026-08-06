@@ -59,6 +59,7 @@ import {
   shouldClaimViewingAfterLazyOpen,
   canDeleteSessionGuard,
   externalDirtyBusyNack,
+  resolveEffortBroadcast,
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
@@ -1969,7 +1970,15 @@ registerSocketConnection(io, socket => {
         // viewing 保持死指针，await 后按 shouldClaimViewingAfterSwap 决定是否原子接管（用户切走则不抢）。
         disposeInstance(disposedId, { reselect: false });
         // SRV-003：走 dedupedResume 而非裸 openInstance，并发 swap 收敛到同一 resume Promise。
-        a = await dedupedResume(cwd, sid, { mode, effort: eff });
+        // R1（2026-08-06）：与 setEffort 同款收口——silent dispose 后 viewing 是死指针，await 抛错
+        // 会被 socket.js 兜底 catch 接走，下面的 claim/reselect/broadcast 全不执行、死指针永久留存。
+        try {
+          a = await dedupedResume(cwd, sid, { mode, effort: eff });
+        } catch (err) {
+          if (viewingInstanceId === disposedId) reselectViewingAfter(cwd);
+          broadcastInstances();
+          throw err;
+        }
         if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
           viewingInstanceId = a.instanceId;
           viewingCwd = a.cwd;
@@ -2191,17 +2200,36 @@ registerSocketConnection(io, socket => {
       type: 'system', payload: { message: '正在切换思考强度并续接会话…', kind: 'resuming' }
     });
     disposeInstance(disposedId, { reselect: false });
-    const ni = await dedupedResume(cwd, sid, { mode, effort: level });
+    let ni;
+    try {
+      ni = await dedupedResume(cwd, sid, { mode, effort: level });
+    } catch (err) {
+      // R1（2026-08-06）：silent dispose 不 reselect，viewing 故意停在死指针上等 await 结果。
+      // 这里若抛出（openInstance 的 MAX_LIVE_SESSIONS、query()/start() 同步失败），控制流会被
+      // socket.js 的兜底 catch 接走——下面的 claim/reselect/broadcast 全不执行，viewing 永久
+      // 指向已删 id：instancesPayload 报一个不存在的 tab、catchUpTick 走 no_session 分支、镜像锁不清。
+      // 必须在此就地收口：把 viewing 从死指针上摘下来并广播，再把错误交回原有链路。
+      if (viewingInstanceId === disposedId) reselectViewingAfter(cwd);
+      broadcastInstances();
+      throw err;
+    }
     if (shouldClaimViewingAfterSwap({ disposedId, viewingNow: viewingInstanceId })) {
       viewingInstanceId = ni.instanceId;
       viewingCwd = ni.cwd;
     } else if (viewingInstanceId === disposedId) {
       reselectViewingAfter(cwd);
     }
+    // R7（2026-08-06）：dedupedResume 按 resumeId 合流且只有首个调用的 extra 生效——与
+    // session:switch / externalDirty 置换并发时会拿到别人参数构造的实例。按实例真实档位广播，
+    // 不谎报；不一致时明确告诉用户重试（否则 UI 说切成功了，而下次切回该档会被幂等闸挡掉）。
+    const broadcast = resolveEffortBroadcast({ requested: level, actual: effortOf(ni.instanceId) });
     io.to('approved').emit('agent:event', {
       seq: 0, epoch: 'server', sessionId: null, instanceId: ni.instanceId, ts: Date.now(),
-      type: 'effort_mode', payload: { level }
+      type: 'effort_mode', payload: { level: broadcast.level }
     });
+    if (broadcast.mismatch) {
+      sysTo(socket, '思考强度切换被并发的会话操作合流，未生效，请重试', true);
+    }
     broadcastInstances();
   });
 

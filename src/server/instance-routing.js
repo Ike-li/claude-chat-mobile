@@ -82,6 +82,19 @@ export function shouldClaimViewingAfterLazyOpen({ viewingAtStart, viewingNow } =
   return viewingNow === viewingAtStart;
 }
 
+// R7（2026-08-06）：置换后该按哪个 effort 广播 effort_mode。
+// dedupedResume 按 resumeId 合流并发调用，且【只有首个调用的 extra 生效】——setEffort 与
+// session:switch / externalDirty 置换并发时，后到者会拿到别人参数构造的实例。旧实现无条件广播
+// 「请求值」，于是前端说切成功了、而 effortByInstance 里是另一个值：UI 与注册表分叉，且用户下次
+// 切回该档会被 `level === effortOf(id)` 的幂等闸挡掉，永远回不去。
+// 判据只认实例的真实档位（actual）：一致 → 正常广播；不一致 → 广播真实值并让调用方提示用户重试，
+// 绝不谎报。actual 为 undefined（注册表还没写入等边角）时回落 requested，保持旧行为。
+export function resolveEffortBroadcast({ requested = null, actual = undefined } = {}) {
+  if (actual === undefined) return { level: requested, mismatch: false };
+  const level = actual ?? null;
+  return { level, mismatch: level !== (requested ?? null) };
+}
+
 // SRV-NEW-004：session:delete / deletePermanent 是否允许继续删除。
 // liveInstance=true → web 正驱动；resumeInFlight=true → 并发 switch/open 正在 spawn。
 // 两道闸任一命中 → fail-closed 拒绝（避免 hide/删文件与 resume 写盘竞态）。

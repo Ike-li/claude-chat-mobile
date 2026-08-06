@@ -10,6 +10,7 @@ import {
   shouldClaimViewingAfterLazyOpen,
   canDeleteSessionGuard,
   externalDirtyBusyNack,
+  resolveEffortBroadcast,
 } from '../../src/server/instance-routing.js';
 
 test.describe('resolveInstanceTarget（BE-001：区分缺省回退 / 命中 / 显式 stale）', () => {
@@ -268,5 +269,30 @@ test.describe('externalDirtyBusyNack（SRV-003：置换被 isBusy 挡住）', ()
     assert.equal(externalDirtyBusyNack({ pendingPermissionCount: 1 }).busy, true);
     assert.equal(externalDirtyBusyNack({ bgTaskCount: 2 }).busy, true);
     assert.equal(externalDirtyBusyNack({}).busy, true);
+  });
+});
+
+// R7（2026-08-06）：dedupedResume 按 resumeId 合流，只有首个调用的 extra 生效——并发 setEffort 与
+// session:switch 时后到者拿到别人参数构造的实例，旧实现仍按请求值广播 effort_mode，UI 与注册表分叉，
+// 且用户下次切回该档会被幂等闸挡掉、永远回不去。判据只认实例真实档位，不一致时诚实报 mismatch。
+test.describe('resolveEffortBroadcast（R7 置换后档位广播）', () => {
+  test('实例真实档位与请求一致 → 正常广播、无 mismatch', () => {
+    assert.deepEqual(resolveEffortBroadcast({ requested: 'xhigh', actual: 'xhigh' }),
+      { level: 'xhigh', mismatch: false });
+  });
+
+  test('被并发合流成别人的实例 → 广播真实值并标 mismatch，绝不谎报', () => {
+    assert.deepEqual(resolveEffortBroadcast({ requested: 'xhigh', actual: 'high' }),
+      { level: 'high', mismatch: true });
+  });
+
+  test('真实档位为 null（模型默认）也算不一致，须广播 null', () => {
+    assert.deepEqual(resolveEffortBroadcast({ requested: 'xhigh', actual: null }),
+      { level: null, mismatch: true });
+  });
+
+  test('actual 未提供（注册表尚未写入等边角）→ 回落请求值，保持旧行为', () => {
+    assert.deepEqual(resolveEffortBroadcast({ requested: 'xhigh' }),
+      { level: 'xhigh', mismatch: false });
   });
 });
