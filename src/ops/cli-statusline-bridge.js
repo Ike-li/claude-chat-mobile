@@ -10,6 +10,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
   readFileSync,
   renameSync,
   unlinkSync,
@@ -162,6 +163,41 @@ export function normalizeCliStatusInput(raw, {
   return snapshot;
 }
 
+// 快照保留窗（R9/2026-08-06）。一个会话一个文件（名=sha256(sessionId)），会话删了快照不删——
+// 真机实测 22 天攒 248 个。而超过 readCliStatusSnapshot 的 TTL 后快照读出来必是 {state:'stale'}，
+// 留着零价值。取 24h 远宽于任何 refreshIntervalSec 推出的读 TTL（分钟级），只清真正的死文件；
+// 对齐 hooks 投递箱的 HOOK_EVENT_TTL_MS 治理形态（此前两个同构模块只有一边有闸）。
+export const STATUSLINE_SNAPSHOT_TTL_MS = 24 * 60 * 60_000;
+
+// 只认自家命名形态（sha256 十六进制 + .json）。删除面纪律同 hooks 侧 R5：目录是用户可配的
+// （CLI_STATUSLINE_DIR），绝不能把别人的 *.json 卷进来。
+const SNAPSHOT_FILE_RE = /^[0-9a-f]{64}\.json$/;
+
+// 清扫过期快照，返回删除数量。写入路径顺带调用——CLI 每次刷 statusline 都会写，不需要额外调度。
+// 判据用 capturedAt（文件内容）而非 mtime：与 readCliStatusSnapshot 的过期判据同源。
+// 读不动/解析失败的按「不认识」跳过，不删——宁可留垃圾也不误删。
+export function sweepStatusSnapshots({ dir = DEFAULT_CLI_STATUSLINE_DIR, now = Date.now(), ttlMs = STATUSLINE_SNAPSHOT_TTL_MS, skip = null } = {}) {
+  let removed = 0;
+  const resolvedDir = resolve(dir);
+  let names;
+  try { names = readdirSync(resolvedDir).filter(name => SNAPSHOT_FILE_RE.test(name)); }
+  catch { return 0; } // 目录不存在（首次运行 / 桥未安装）
+  for (const name of names) {
+    // skip：写入路径传本次的目标文件名。清扫绝不能删自己正要写的那个——CLI 若缓冲后才落盘，
+    // capturedAt 可能已略旧，会变成「删了又写」；多进程同 session 争写时还会与别人的 rename 竞态。
+    if (skip && name === skip) continue;
+    const path = join(resolvedDir, name);
+    try {
+      const parsed = JSON.parse(readFileSync(path, 'utf8'));
+      const capturedAt = nonNegative(parsed?.capturedAt);
+      if (capturedAt === null || now - capturedAt <= ttlMs) continue;
+      unlinkSync(path); // safe-path: 目录段是 resolve(dir) 常量，文件名经 SNAPSHOT_FILE_RE 限定为自家 sha256 形态
+      removed += 1;
+    } catch { /* 读不动/坏 JSON：不认识就不删 */ }
+  }
+  return removed;
+}
+
 export function snapshotFilePath(dir = DEFAULT_CLI_STATUSLINE_DIR, sessionId) {
   if (typeof dir !== 'string' || !dir || typeof sessionId !== 'string' || !sessionId) {
     throw new TypeError('snapshot dir and sessionId must be non-empty strings');
@@ -194,10 +230,15 @@ function assertSnapshotForWrite(snapshot) {
 
 export function writeCliStatusSnapshot(snapshot, {
   dir = DEFAULT_CLI_STATUSLINE_DIR,
+  now = Date.now(),
 } = {}) {
   assertSnapshotForWrite(snapshot);
   const privateDir = ensurePrivateDirectory(dir);
   const destination = snapshotFilePath(privateDir, snapshot.sessionId);
+  // R9：写入即清扫过期快照。挂在这条路径上是因为 CLI 每次刷 statusline 都会写——不必新增调度，
+  // 也不会在 server 侧读路径上加开销。skip 掉本次目标（见 sweepStatusSnapshots 内注释）。
+  // 清扫失败不得影响写入（它是加分项）。
+  try { sweepStatusSnapshots({ dir: privateDir, now, skip: basenameForTemp(destination) }); } catch { /* 清扫失败不挡写入 */ }
   const temporary = join(privateDir, `.${basenameForTemp(destination)}.${process.pid}.${randomUUID()}.tmp`);
   let fd;
   let renamed = false;

@@ -19,6 +19,8 @@ import { pathToFileURL } from 'node:url';
 
 import {
   cliStatuslineTtlMs,
+  STATUSLINE_SNAPSHOT_TTL_MS,
+  sweepStatusSnapshots,
   normalizeCliStatusInput,
   readCliStatusSnapshot,
   selectStatusReplay,
@@ -415,4 +417,62 @@ test('writeCliStatusSnapshot：多进程同 session 争写后仍只有一个完�
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// R9（2026-08-06 BUG hunting review）：快照目录只写不清。
+// 文件名是 sha256(sessionId)，一个会话一个，会话删了快照不删——真机实测 22 天攒了 248 个文件。
+// 关键是它【已有 TTL 语义】：readCliStatusSnapshot 对超期快照返回 {state:'stale'}，即过期的读出来
+// 也没用，留着零价值。对照同作者写的 hooks 投递箱（cli-hooks-bridge）本就有 TTL + cap 两道闸，
+// 两个同构模块此前不对称。清扫挂在写入路径上（CLI 每次刷 statusline 都会写），不需要额外调度。
+test.describe('sweepStatusSnapshots（R9：过期快照清扫）', () => {
+  const mkSnapshot = (sessionId, capturedAt) => normalizeCliStatusInput({
+    session_id: sessionId,
+    workspace: { current_dir: '/repo' },
+    model: { id: 'model' },
+  }, { capturedAt });
+
+  test('超过保留窗的快照被删，窗内的保留', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-statusline-sweep-'));
+    try {
+      const now = 1_800_000_000_000;
+      const oldPath = writeCliStatusSnapshot(mkSnapshot('old-session', now - STATUSLINE_SNAPSHOT_TTL_MS - 1), { dir });
+      const freshPath = writeCliStatusSnapshot(mkSnapshot('fresh-session', now - 1_000), { dir });
+
+      const removed = sweepStatusSnapshots({ dir, now });
+
+      assert.equal(removed, 1);
+      assert.deepEqual(readdirSync(dir), [basename(freshPath)]);
+      assert.equal(readdirSync(dir).includes(basename(oldPath)), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('只认自家 sha256 命名形态，别人的 json 不碰（同 hooks 侧 R5 的删除面纪律）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-statusline-sweep-'));
+    try {
+      const now = 1_800_000_000_000;
+      writeFileSync(join(dir, 'settings.json'), '{"mine":"keep"}', { mode: 0o600 });
+      writeFileSync(join(dir, 'notes.json'), '{}', { mode: 0o600 });
+      writeCliStatusSnapshot(mkSnapshot('old-session', now - STATUSLINE_SNAPSHOT_TTL_MS - 1), { dir });
+
+      assert.equal(sweepStatusSnapshots({ dir, now }), 1, '只删自家过期快照');
+      assert.deepEqual(readdirSync(dir).sort(), ['notes.json', 'settings.json']);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+
+  test('目录不存在 → 0 且不抛（首次运行 / 桥未安装）', () => {
+    assert.equal(sweepStatusSnapshots({ dir: join(tmpdir(), 'ccm-statusline-absent'), now: 1 }), 0);
+  });
+
+  test('写入路径顺带清扫：写新快照时过期的旧快照自动退场（无需额外调度）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-statusline-sweep-'));
+    try {
+      const now = 1_800_000_000_000;
+      const stalePath = writeCliStatusSnapshot(mkSnapshot('gone-session', now - STATUSLINE_SNAPSHOT_TTL_MS - 1), { dir });
+      const livePath = writeCliStatusSnapshot(mkSnapshot('live-session', now), { dir, now });
+
+      const left = readdirSync(dir).sort();
+      assert.deepEqual(left, [basename(livePath)], '写入即清扫，过期快照不该留');
+      assert.equal(left.includes(basename(stalePath)), false);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
 });
