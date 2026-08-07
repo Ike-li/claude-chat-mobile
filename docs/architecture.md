@@ -63,7 +63,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 
 1. 用户在电脑终端直接运行 `claude`。这个进程不经过 Claude Chat Mobile 的 Agent SDK 子进程。
 2. CLI 把已经完成的消息写入 `~/.claude/projects/` 下的 transcript。
-3. server 的 `catchUpTick` 默认每 2.5 秒检查当前会话的磁盘变化，并把新增的落盘消息推给 Web。
+3. server 的 `catchUpTick` 常态每 2.5 秒检查当前会话的磁盘变化（进入只读镜像后收紧到 1 秒，解锁前的静默判定按约 12.5 秒墙钟折算），并把新增的落盘消息推给 Web。
 4. 可选 hooks bridge 把 Stop / Notification 写入文件投递箱；`fs.watch` 只是加速触发器，磁盘 transcript 仍是真相源。
 5. 可选 statusline bridge 给 CLI 会话写入模型、effort、上下文、成本和额度快照。
 
@@ -86,6 +86,11 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 4. **终端回合结束并经过静默判定后**，镜像锁释放，Web 才能续接。
 5. **Web 接管发送前**，若 transcript 相对现有 SDK 实例有外部增长，server 先 dispose 旧实例并 resume 吸收，再发送新消息。
 
+**这五条是默认路径，不是硬约束。** 项目管得住自己的 SDK 实例，管不住终端里那个独立进程：镜像锁只作用于 Web 端的输入，
+用户仍可在只读态下点「强制立即续接」/「仍要续接」显式解锁（`public/js/app.js` 的 `requestMirrorResume` /
+`appendForceResumeAction`，两条路径都要过一次写明分叉风险的确认框）。解锁只是撤掉 Web 侧的锁，**不会停止终端进程**——
+若终端此后继续写同一会话，仍会形成两条 transcript 分支。这个逃生口是有意保留的：用户常常比判定链更早知道终端已经关掉。
+
 轮询意味着存在最多一个检查周期的观察窗口。切换会话、手动刷新镜像与 hooks 信号会主动插队触发检查，但它们仍不能证明对另一个活进程拥有控制权。
 
 ## 事件信封与断线回放
@@ -105,7 +110,8 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 }
 ```
 
-- `type` 是闭合事件集合，由 `scripts/contract-check.js` 对后端发送方、前端接收方与 mock server 做一致性校验。
+- `type` 是闭合事件集合，由 `scripts/contract-check.js` 对**后端发送方**（递归扫 `src/`）与 **mock server** 做一致性校验；入向 socket 事件另查前端 emit 是否都在契约内。
+  注意门禁**不检查前端有没有对应的接收 handler**——扫描面不含 `public/js` 的 `handle` 表，而前端对未登记 type 是静默丢弃。当前 26 型恰好全覆盖（前端 `handle` 表 + `outOfBand` 表合计），但那是靠人维护、不是靠闸门保证。
 - `seq` 在一个 `AgentSession` 内递增，前端据此去重。
 - `epoch` 标识服务端/实例世代；变化时客户端重置旧的去重基线。
 - `sessionId` 与 `instanceId` 分开，避免同一 CLI 会话的逻辑身份和当前 Web 进程实例混淆。

@@ -59,7 +59,7 @@
 | 已鉴权 ≠ 限操作面 | 限速只挡鉴权口暴破；机主即 root，对操作面限速违背产品目的 |
 | 工作区白名单 | 路径门，不决定 Claude 工具是否自动放行 |
 | 范围内文件不敏感过滤 | `.env` 等照读——与「机主即 root」一致 |
-| 子进程 env 不裁剪 | 与终端 claude 一致；第三方网关靠 shell `ANTHROPIC_*` |
+| 子进程 env 不做白名单裁剪 | 指**继承环境**：与终端 claude 一致，第三方网关靠 shell `ANTHROPIC_*`。`src/shared/child-env.js` 只有两处例外——滤掉值为空串的键、追加 `CCM_STATUSLINE_ORIGIN` / `CCM_HOOKS_ORIGIN` 两个 origin 标记（后者是 hooks 桥判「这是 web 驱动的子进程、别重复推送」的依据）。另有一个**叠加层**方向相反：worktree 网关隔离读出的 `resolvedEnv` 经 `agent.js` 的 `filterSafeResolvedEnv` 只放行 `ANTHROPIC_*` / `CLAUDE_CODE_*` 才叠加上去，防 worktree settings 覆盖 `PORT` / `AUTH_TOKEN` / `CCM_DATA_DIR` 等服务端变量 |
 
 ---
 

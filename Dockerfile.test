@@ -4,7 +4,7 @@
 # getProjectDir 被改成恒返回 ''，测试里的 rmSync 目标塌成 ~/.claude/projects 本身，
 # 机主 70 个项目的 transcript 与 memory 一次删光。
 #
-# 仓库里已经补了三层防护（沙箱 HOME / 删除点护栏 / check-destructive-tests 门禁），但它们都在
+# 仓库里已经补了三层防护（沙箱 HOME / 删除点护栏 / check-destructive-deletes 门禁），但它们都在
 # 【代码层】——防的是已知机制。容器防的是另一件事：**测试进程根本够不到宿主机的家目录**。
 # 判据不依赖任何代码正确性，所以下一个还没想到的形态也一起挡住了。
 #

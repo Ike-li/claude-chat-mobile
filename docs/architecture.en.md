@@ -63,7 +63,7 @@ A Web session is not a remote Anthropic chat page. The SDK child inherits the lo
 
 1. The user runs `claude` directly in a computer terminal. This process does not pass through Claude Chat Mobile's SDK child.
 2. The CLI writes completed messages to a transcript under `~/.claude/projects/`.
-3. The server's `catchUpTick` checks the current session for disk growth every 2.5 seconds by default and sends newly persisted messages to Web.
+3. The server's `catchUpTick` checks the current session for disk growth every 2.5 seconds in steady state (tightening to 1 second once the read-only mirror engages; the quiet period before unlocking works out to roughly 12.5 seconds of wall clock) and sends newly persisted messages to Web.
 4. The optional hooks bridge writes Stop / Notification to a file inbox. `fs.watch` only accelerates a check; the disk transcript remains the source of truth.
 5. The optional statusline bridge writes snapshots of CLI model, effort, context, cost, and quota.
 
@@ -86,6 +86,8 @@ The project reduces that risk with these rules:
 4. **After the terminal turn ends and passes the quiet-period check**, the mirror lock is released and Web may resume.
 5. **Before a Web takeover send**, if the transcript has grown beyond the current SDK instance, the server disposes that stale instance and resumes from disk before sending.
 
+**These five rules are the default path, not a hard constraint.** The project controls its own SDK instance; it cannot control the independent process running in your terminal. The mirror lock only gates input on the Web side, and the user can still unlock it explicitly from the read-only state via "force resume now" / "resume anyway" (`requestMirrorResume` / `appendForceResumeAction` in `public/js/app.js`, both behind a confirmation that spells out the fork risk). Unlocking merely drops the Web-side lock and **does not stop the terminal process** — if the terminal keeps writing to the same session afterwards, the transcript can still fork into two branches. The escape hatch is deliberate: users often know the terminal is already closed well before the detection chain can prove it.
+
 Polling leaves an observation window of up to one check interval. Session switches, manual mirror refresh, and hook signals can schedule an earlier check, but none of them proves control over another live process.
 
 ## Event envelope and reconnect replay
@@ -105,7 +107,8 @@ Outbound Socket.io traffic uses one `agent:event` envelope:
 }
 ```
 
-- `type` comes from a closed event set. `scripts/contract-check.js` checks consistency across backend senders, front-end receivers, and the mock server.
+- `type` comes from a closed event set. `scripts/contract-check.js` checks consistency across **backend senders** (recursive scan of `src/`) and the **mock server**; for inbound socket events it additionally verifies that front-end emits stay within the contract.
+  Note that the gate does **not** check for a matching front-end receive handler — `public/js`'s `handle` table is outside its scan surface, and the front end silently drops unregistered types. All 26 types happen to be covered today (the front-end `handle` table plus the `outOfBand` table), but that holds by convention, not by enforcement.
 - `seq` increases within one `AgentSession` and lets the front end deduplicate.
 - `epoch` identifies a server/instance generation; a change resets the client's old deduplication baseline.
 - `sessionId` and `instanceId` remain separate so persisted CLI-session identity is not confused with a current Web process.

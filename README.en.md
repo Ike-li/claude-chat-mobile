@@ -21,13 +21,13 @@ Claude Code may keep running while you are away from your computer. Claude Chat 
 - People who need to switch between repositories and sessions while seeing tool calls, diffs, background tasks, and errors on a phone.
 - People who want approvals and questions to reach the phone instead of watching a terminal continuously.
 
-Only one side drives a session at a time. Web-driven messages travel through the Agent SDK into the local CLI. When the terminal CLI is driving, the Web app follows the persisted transcript in read-only mode. This is not screen sharing, and the phone and terminal cannot both type into one live process.
+By default only one side drives a session at a time. Web-driven messages travel through the Agent SDK into the local CLI. When the terminal CLI is driving, the Web app follows the persisted transcript in read-only mode. This is not screen sharing, and the phone and terminal cannot both type into one live process. While the terminal is still running you can explicitly force a takeover (behind a confirmation that spells out the fork risk) — that only lifts the read-only lock on the phone side; it does not stop the terminal process.
 
 ## Core capabilities
 
 ### Sessions and workspaces
 
-- Resume, fork, and remove CLI sessions at two levels, with a cross-session “needs you” view.
+- Resume, fork, and remove CLI sessions at two levels, with a cross-session “needs you” view (scoped to instances the Web backend is driving; sessions waiting inside a plain terminal do not enter this view and surface only through the optional hooks bridge).
 - Monitor multiple workspaces and sessions. A git worktree must be added to `workdirs.json` by absolute path; it is never auto-discovered or implicitly authorized.
 - One message per turn: while a task runs, you can keep a draft, but the send control becomes Stop instead of queuing another message.
 

@@ -8,7 +8,7 @@
 Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重复造轮子
 新功能的状态别再落 `public/js/app.js` / `src/server/app.js` 顶层作用域：前端新状态进 `public/js/app/` 模块（工厂 + context 注入，样板见 `public/js/app/event-dispatch.js`），后端新状态进所属域模块。存量不动。
 
-双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 白名单见 `src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 26 种；seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存四条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播；终端会话的「回合结束/需要你」可选装 CLI hooks 桥（`npm run hooks:install`，事件走 `~/.claude/ccm/hooks-v1/` 文件投递箱 + server fs.watch，把轮询变即时信号，未装则回落轮询）；离线唤醒走 web-push/ntfy，只唤醒不带内容、socket 在线时不推送。
+双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 白名单见 `src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 26 种；seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存这几条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播；终端会话的「回合结束/需要你」可选装 CLI hooks 桥（`npm run hooks:install`，事件走 `~/.claude/ccm/hooks-v1/` 文件投递箱 + server fs.watch，把轮询变即时信号，未装则回落轮询）；离线唤醒走 web-push/ntfy——**审批/提问/后台任务完成无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制（前台判据是客户端上报的 `client:presence`，不是 socket 连着）；body 默认最小化不含正文，用户可按设备开启「推送内容预览」后改发 `previewBody`（见 `src/ops/notifications.js`、`notify-channels.js`）。
 
 **产品立场 n=1 自托管**（单机主、无多租户）。硬性规则、n=1 取舍、已决「不做」的技术债（AD-5 / SP-10 等）见 [docs/hard-rules.md](docs/hard-rules.md)。历史 design 文档已下线，以该文 + 实现为准。
 
@@ -20,7 +20,8 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 ## 测试跑在哪：宿主机只跑白名单，其余进容器
 
-**宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`。
+**宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`
+（钩子的白名单还含同源别名：`lint:fix`、`test:visual`、`test:playwright`、`test:playwright:p0`，见 `scripts/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
 前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
 已核实不碰 `~/.claude`）。
 
@@ -56,8 +57,8 @@ npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
 npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性 + i18n 词典孤儿 key 扫描 + 破坏性删除守卫（测试里的 recursive 删除必须可追溯到 mkdtemp，否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`——两种标记不通用，为单文件删除批的豁免不放行递归删除）+ visual mock registry guard + 禁止模式 + inventory（零 token、最快）
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
-npm test           # 单测 + 可靠集成(server/auth/upload)；claude-turn 集成默认跳过；--test-force-exit 保证退出。CI 不跑本条(force-exit 会腰斩异步单测)，拆成 test:unit + test:integration 两步
-npm run test:unit  # node --test tests/unit/*.test.mjs：仅纯逻辑单测（零 token、最快）
+npm test           # 单测 + tests/integration/*.test.mjs 全部（不是只跑 server/auth/upload 那几个）；其中需真 agent turn 的 7 个由 RUN_CLAUDE_INTEGRATION 门控、默认跳过；--test-force-exit 保证退出。CI 不跑本条(force-exit 会腰斩异步单测)，拆成 test:unit + test:integration 两步
+npm run test:unit  # node --test tests/unit/*.test.mjs：零 token、不 spawn claude、不起 server（最快）。注意「单测」不等于「纯函数」——相当一部分文件会用 mkdtemp 临时目录或 spawnSync 跑本仓脚本（门禁类、CLI 类、文件类），隔离靠 preload-env + 一次性目录
 npm run test:integration # 仅集成测试（起真 server，需本机 claude CLI）。CI 里靠 CLAUDE_BIN 指向 tests/fixtures/fake-claude.sh 过 preflight，接线类用例真跑
 RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测试一起跑(慢/耗 token/不稳；共 7 个文件：claude-lifecycle/session-switch/websocket-events/aborted-state/message-idempotency/approval-integrity 整份 + file-upload 一个 describe)
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）
@@ -77,4 +78,4 @@ npm run test:smoke -- --list
 npm run test:smoke -- --scenario core
 ```
 
-健康检查：`GET /health` → `{status, sessionId, busy, versions, buildNonce, timestamp}`（设了 `AUTH_TOKEN` 时需带 `?token=` 或 `x-auth-token` 头，否则 401）。运行时可观测：`GET /metrics`（同样鉴权）→ `{metrics{activeSessions,events,catchUpHits,catchUpReloads,rateLimitLockouts,pushSuccess,pushFailure,ntfyFailure,clientErrors}, state, states, timestamp}`——指标最小集 + StateProbe 五类状态分类（后端产出四类，host_offline 由客户端心跳判定）；**鉴权 JSON 快照**，非 Prometheus 文本（n=1 自托管默认无 scraper；多实例 scrape 需先改 [docs/hard-rules.md](docs/hard-rules.md) 立场）。历史回显走鉴权的 `session:history` socket 事件，不开无鉴权 HTTP 数据端点。服务状态可见性（判定化）：`instances` 广播额外带 `service{startedAt,deliveryFailure,rateLimitLockout,clientError}` 字段（startedAt 供面板"运行时长/启动于"展示 + 推送投递健康 + 登录限速锁定 + 前端错误告警，告警均带 24h 时效窗自动退场；与"需要你(N)"聚合是不同轴，不混判）；服务状态面板只渲染 基础+判定化告警 两段，不展示裸计数器（对人无参照系不可解读，原始计数留 `/metrics` 巡检端点）。
+健康检查：`GET /health` → `{status, sessionId, busy, versions, buildNonce, timestamp}`（设了 `AUTH_TOKEN` 时需带 `?token=` 或 `x-auth-token` 头，否则 401）。运行时可观测：`GET /metrics`（同样鉴权）→ `{metrics{activeSessions,events,catchUpHits,catchUpReloads,rateLimitLockouts,pushSuccess,pushFailure,ntfyFailure,clientErrors,hookEventsConsumed,hookEventsIgnored,hookPushes}, state, states, timestamp}`——指标最小集 + StateProbe 五类状态分类（后端产出四类，host_offline 由客户端心跳判定）；**鉴权 JSON 快照**，非 Prometheus 文本（n=1 自托管默认无 scraper；多实例 scrape 需先改 [docs/hard-rules.md](docs/hard-rules.md) 立场）。历史回显走鉴权的 `session:history` socket 事件，不开无鉴权 HTTP 数据端点。服务状态可见性（判定化）：`instances` 广播额外带 `service{startedAt,deliveryFailure,rateLimitLockout,clientError}` 字段（startedAt 供面板"运行时长/启动于"展示 + 推送投递健康 + 登录限速锁定 + 前端错误告警，告警均带 24h 时效窗自动退场；与"需要你(N)"聚合是不同轴，不混判）；服务状态面板只渲染 基础+判定化告警 两段，不展示裸计数器（对人无参照系不可解读，原始计数留 `/metrics` 巡检端点）。

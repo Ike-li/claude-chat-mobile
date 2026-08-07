@@ -144,7 +144,7 @@ PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退
 ```
 
 - 不配 ntfy 则优雅缺席、仍走 Web Push。
-- ⚠️ 通知正文可能含命令 / 审批详情 → 务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
+- ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名**（`basename(cwd)`），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
 - 改这些 env 后须**重启常驻 server 进程**才生效（见下「运维速查」的 `kickstart`）。
 
 ## 运维速查

@@ -10,7 +10,10 @@
 
 1. **不是 100% 字节透传**。每条契约写明「源 → 允许变换 → 屏幕上应是什么」。
 2. **条数 / 语义对齐 TUI**；展示层可做可读化，不得偷偷合并、猜测、用 Web 偏好冒充 CLI 态。
-3. **单测锚点**是回归闸；本文是给人读的索引。冲突时以测试 + 代码注释为准，再回来改本文。
+3. **单测锚点**是回归闸；本文是给人读的索引。冲突时以**测试 + 实现**为准，再回来改本文。
+   注意**代码注释不是仲裁依据**：注释和文档一样会过时（已实测到多处旧决策注释与现行分支相反），
+   且不少注释仍引用早已下线的历史设计规格文档（`design.md` 及其 `AD-*` / `NFR-*` / `SP-*` 编号）。
+   注释可以帮你理解「当初为什么这么做」，但「现在到底怎么做」只由被测试覆盖的实现回答。
 
 ---
 
@@ -155,16 +158,20 @@ transcript 事实            stream / control / usage     status_line 组装    
 | **不含** | model/effort（已在底栏 pill） |
 | **锚点** | `logic-statusline-summary.test.mjs` · `statusline.test.mjs` · display-contracts |
 
-### 3.4 ctx 窗口映射（允许的「猜」）
+### 3.4 ctx 窗口来源（只认真值，不猜）
 
 | 优先级 | 规则 |
 |--------|------|
-| 1 | SDK `getContextUsage().maxTokens` + `percentage`（权威） |
-| 2 | model 名含 `[1m]` / 已确认 1M 的当代 id → 1_000_000 |
-| 3 | 认出 claude/opus/sonnet/haiku → 200_000 保守兜底 |
-| 4 | 认不出 → 不显 %，只显绝对 token |
+| 1 | SDK `getContextUsage().maxTokens` + `percentage`（运行时权威；拿到即写进会话缓存） |
+| 2 | 会话缓存 `agent.ctxWindowCache`（本会话此前拿到过的**真值**，带 model 指纹，模型一变即作废） |
+| 3 | 两级都没有 → **不出** `windowSize` / `usedPercent`，只显绝对 token |
 
-**禁止**：把未知第三方模型硬显示成误导性百分比。
+**禁止**：按 model 名推断窗口大小。这里曾有一张 model→窗口 的静态映射表（`[1m]`→1M、认出 claude/opus/sonnet/haiku→200k 兜底），
+已于 2026-07-29 删除——它漏了 opus-5，RPC 一超时就回落 200k，真机上 ctx 在「532k/1M=53%」与「532k/200k 封顶 100%」之间反复跳。
+静态表有三个不可修复的缺陷：新模型上线要人工补表、窗口升级要改代码、第三方网关的模型别名根本无从判断。
+**宁可短暂看不到百分比，也不显示一个错的。**
+
+**锚点**：`src/ops/statusline.js` `getContextUsageSafe` / `readCachedCtxWindow` / `cacheCtxWindow` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」）
 
 ---
 
@@ -186,7 +193,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 | 工具卡 | 截断 600/Bash 2000、脱敏 base64、标题抽 path | `agent` truncate · `formatTool*` |
 | 审批 sheet | ExitPlanMode → markdown plan；input 不截断 | `formatPermInputDisplay` |
 | 历史回显 | 滤 CLI 系统行；非 jsonl 全量 | `history.js` |
-| 会话列表 | 自扫盘，不用 SDK listSessions | `listSessionsPage` |
+| 会话列表 | **生产走 SDK `listSessions` 快路径**（判据 `baseDir === CLAUDE_DIR`）+ 按 jsonl 存在做归属过滤 + readdir 补 SDK 漏报；隔离测试注入别的 baseDir 时回落自造扫盘。`hasMore` / `hiddenIds`(L1) / TTL 缓存仍由 `listSessionsPage` 自己维护 | `listSessionsPage` · `scanSessionsViaSdk` |
 | 系统条中文 | compacting 等 agent 写死中文 | `agent.map` system |
 
 后续若某面反复踩坑，升格进 display-contracts 测试块即可。
