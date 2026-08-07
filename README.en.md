@@ -25,6 +25,7 @@ transcripts and session files under ~/.claude
 ```
 
 The goal is not "another AI chat product" but **using your local Claude Code remotely and equivalently**: send messages, watch streaming output, approve tools, interrupt, resume sessions, switch model / permission mode / effort.
+
 What it solves: **staying able to operate local Claude Code safely, and close to terminal-equivalently, when you are not at the computer.**
 
 Only one side drives a session at a time. Web-driven messages travel through the Agent SDK into the local CLI; when the terminal CLI is driving, the Web app follows the persisted transcript in read-only mode, and the two sides cannot both type into one live process. While the terminal is still running you can explicitly force a takeover (behind a confirmation that spells out the fork risk) — that only lifts the read-only lock on the phone side; it does not stop the terminal process. See the [architecture guide](docs/architecture.en.md) for the component diagram, message flow, single-driver transitions, and reconnect replay.

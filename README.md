@@ -25,6 +25,7 @@
 ```
 
 目标不是「再做一个 AI 聊天产品」，而是 **远程等价地使用本机 Claude Code**：发消息、流式看输出、工具审批、中断、续接会话、切模型/权限档/effort。
+
 它解决的是：**人不在电脑前时，仍能安全、接近终端等价地操作本机 Claude Code。**
 
 ![Claude Chat Mobile — 终端里的 claude，手机上也能用](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
