@@ -186,3 +186,31 @@ test.describe('shouldBypassDeviceApproval', () => {
     }, norm), false);
   });
 });
+
+// R8（2026-08-06 BUG hunting review）：空 Host 不再等同「真本机」。
+// 旧判据把 host === '' 与 localhost 并列 bypass 设备门，理由写的是「本机工具/健康探针」——但实测
+// 项目内没有任何调用方发空 Host（浏览器 / socket.io-client / fetch 全都带），而 /health、/metrics
+// 根本不走 bypass（只过 httpAuth）。留着它等于：反代若配成 proxy_set_header Host ""，公网请求
+// 就被当成真本机直连、跳过设备审批——一行配置错误打穿一层防护。
+// 收紧代价极轻：真发空 Host 的客户端落入待审列表，机主批准一次即可，不是硬拒绝。
+test.describe('shouldBypassDeviceApproval：空 Host 不算本机（R8）', () => {
+  const norm = (x) => (x || '').replace(/^::ffff:/, '');
+
+  test('peer loopback + 空 Host → 不 bypass（反代置空 Host 的绕过面）', () => {
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: false, peerAddress: '127.0.0.1', hostHeader: '',
+    }, norm), false);
+  });
+
+  test('peer loopback + 缺失 Host 头（undefined）→ 同样不 bypass', () => {
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: false, peerAddress: '127.0.0.1',
+    }, norm), false);
+  });
+
+  test('CF Access 已验时空 Host 仍 bypass（JWT 是更强的边界，与 Host 无关）', () => {
+    assert.equal(shouldBypassDeviceApproval({
+      accessEnabled: true, peerAddress: '127.0.0.1', hostHeader: '',
+    }, norm), true);
+  });
+});

@@ -92,6 +92,10 @@ export function shouldBypassDeviceApproval({
   const peerLocal = ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
   if (!peerLocal) return false;
   const host = String(hostHeader || '').split(':')[0].toLowerCase();
-  // 空 Host 视为本机工具/健康探针；公网域名（含 tunnel）不 bypass
-  return host === '' || host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  // R8（2026-08-06）：空 Host【不】视为本机。旧判据把它与 localhost 并列，理由是「本机工具/健康探针」，
+  // 但实测项目内无任何调用方发空 Host（浏览器 / socket.io-client / fetch 全带），而 /health、/metrics
+  // 也不走本判据（只过 httpAuth）。留着它等于：反代若配成 proxy_set_header Host ""，公网请求会被当成
+  // 真本机直连、跳过设备审批——一行配置错误打穿一层防护。真发空 Host 的客户端落入待审列表、
+  // 机主批准一次即可（非硬拒绝）。公网域名（含 tunnel）本就不 bypass。
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1';
 }
