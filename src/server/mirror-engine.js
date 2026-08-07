@@ -1,6 +1,6 @@
 // mirror-engine.js —— 只读镜像 / catchUp 追平引擎：状态与编排的唯一所有者。
 //
-// 【为什么收敛】此前 15 个 mirror*/catchUp* 模块级可变量散在 src/server/app.js 顶层，与 32 个 socket
+// 【为什么收敛】此前 15 个 mirror*/catchUp* 模块级可变量散在 src/server/app.js 顶层，与当时 32 个 socket
 // handler 共享同一作用域；而它们的决策规则早已提纯到 src/sessions/history.js。读懂一次「终端是否在驾驶」
 // 要同时看两个文件、且 app.js 里任何人都能改这些量。本模块把状态与编排合到一处，对 app.js 只暴露窄接口。
 // 规则纯函数仍留在 history.js（classifyTranscriptTail 一族与 transcript 解析强耦合，搬走会断链），

@@ -9,7 +9,7 @@ import { dataFile } from '../shared/data-dir.js';
 
 // #14：锚定模块目录而非 process.cwd()，从任何目录启动 server 都读写同一份状态。
 // CCM_SESSIONS_FILE 覆盖路径——仅测试用，让单测指向临时文件、永不碰真实 data/sessions.json（防 npm test 污染生产状态）。
-// 次优先 CCM_DATA_DIR（server.js/devices.js 同款）：E2E 设一个 CCM_DATA_DIR 即把 sessions 连同其余状态文件
+// 次优先 CCM_DATA_DIR（与 devices.js 同款）：E2E 设一个 CCM_DATA_DIR 即把 sessions 连同其余状态文件
 // 一并重定向到临时根，无需逐个设环境变量。优先级：CCM_SESSIONS_FILE > CCM_DATA_DIR/sessions.json > data/sessions.json。
 const FILE = process.env.CCM_SESSIONS_FILE || dataFile('sessions.json');
 
@@ -87,7 +87,7 @@ function save() {
   _saveTimer = setTimeout(() => { _saveTimer = null; writer.request(); }, 200);
 }
 
-// 进程正常退出时同步 flush（由 server.js shutdown() 调用），保证干净退出状态不丢。
+// 进程正常退出时同步 flush（由 src/server/app.js 的 shutdown() 调用），保证干净退出状态不丢。
 // BE-012：先 fence 作废任何在飞异步写（防其 rename 后于本同步写落地、把终态覆盖回旧），再同步权威写。
 export function flushSaveSync() {
   clearTimeout(_saveTimer);

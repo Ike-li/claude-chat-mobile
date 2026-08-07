@@ -54,7 +54,7 @@ function save() {
   _saveTimer = setTimeout(() => { _saveTimer = null; writer.request(); }, 200);
 }
 
-// 进程正常退出时同步 flush（server.js shutdown() 调用），防抖窗口内未落盘的状态不因 process.exit 丢失。
+// 进程正常退出时同步 flush（src/server/app.js 的 shutdown() 调用），防抖窗口内未落盘的状态不因 process.exit 丢失。
 // BE-012：先 fence 作废在飞异步写，防其 rename 后于本同步写落地覆盖回旧（丢失 dispose 时刚写的 deny 终态）。
 export function flushSaveSync() {
   clearTimeout(_saveTimer);

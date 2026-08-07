@@ -2,7 +2,7 @@
 //
 // 边界：只在鉴权门口用、不限已鉴权操作（单操作者/机主即 root，已鉴权=全权，对操作面限速违背产品目的）。
 // 机制：按 sourceKey 计数 + 指数退避 + 阈值锁定，静默衰减不永久惩罚。状态由调用方存于内存 Map（n=1 瘦快；
-// 重启清零 = 残余风险，见 docs/design.md）。本模块只含纯函数状态转移，sourceKey 取值与审计由调用方（server.js）负责。
+// 重启清零 = 残余风险，见 docs/design.md）。本模块只含纯函数状态转移，sourceKey 取值与审计由调用方（src/server/app.js）负责。
 
 // 参数（OQ-03 已决，采纳为可配置默认）：手滑容忍 + 暴破不经济 + 久未失败自动原谅。
 export const DEFAULT_RATE_LIMIT_CONFIG = Object.freeze({

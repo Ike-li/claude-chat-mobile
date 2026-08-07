@@ -1,5 +1,5 @@
 // workdirs.js —— 多工作区白名单配置：解析 / 校验 / 归一
-// 单一事实源：server.js preflight + fs.watch 热加载、scripts/doctor.js D3 都用这里的函数，
+// 单一事实源：src/server/app.js 的 preflight + fs.watch 热加载、scripts/doctor.js D3 都用这里的函数，
 // 避免 string|object 解析逻辑三处分叉。
 // 条目形态：`string`（路径）或 `{ path: string, sessionLimit?: 正整数 }`（向后兼容纯字符串数组）。
 import { readFileSync, realpathSync, statSync } from 'node:fs';
@@ -8,7 +8,7 @@ import { isAbsolute as isAbsolutePosix } from 'node:path/posix';
 import { isAbsolute as isAbsoluteWin32 } from 'node:path/win32';
 
 export const DEFAULT_SESSION_LIMIT = 6;   // 未指定时每工作区历史会话默认显示条数
-export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与 server.js history:list all 分支直接 import 本常量（= 前端「显示全部」的服务端硬顶）
+export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与 src/server/app.js 的 session:list all 分支直接 import 本常量（= 前端「显示全部」的服务端硬顶）
 export const MAX_LIVE_SESSIONS = 20;      // 全局硬上限：live 会话实例数量，防止有意保留过多 CLI 子进程
 
 // 校验 sessionLimit：必须是 [1, MAX] 的整数。非法（含缺省交由调用方判断）→ 返回 { value, warning }。
@@ -55,7 +55,7 @@ export function normalizeWorkdirEntries(parsed) {
 
 // WORK_DIRS_FILE 是否已是绝对路径：POSIX（/…）与 win32（C:\… / \\server\share\…）双规范都判一遍，
 // 不看宿主 OS——`startsWith('/')` 旧写法在 server 跑在 Windows 上时会把 `C:\...` 误判成相对路径、
-// 错误拼进安装目录。三处调用方（server.js preflight + fs.watch 热加载、doctor.js D3）共用本函数。
+// 错误拼进安装目录。三处调用方（src/server/app.js 的 preflight + fs.watch 热加载、doctor.js D3）共用本函数。
 export function resolveWorkdirsFilePath(dirsFile, baseDir) {
   return (isAbsolutePosix(dirsFile) || isAbsoluteWin32(dirsFile)) ? dirsFile : join(baseDir, dirsFile);
 }

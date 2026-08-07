@@ -166,7 +166,7 @@ const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn
 //   默认另开 agentProgressSummaries（~30s AI summary）刷新 lastSeenAt。2h 仅防漏完成信号时 ⏳ 永挂。
 const BG_TASK_ORPHAN_TTL_MS = 180000;           // 合成键孤儿 3min
 const BG_TASK_LIFECYCLE_TTL_MS = 2 * 60 * 60 * 1000; // 真实 task_id 2h 兜底
-const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 server.js APPROVAL_TTL_MS；
+const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 src/server/config.js 的 APPROVAL_TTL_MS；
                                           // docs/design.md/OQ-05 已决：不预置具体数值，此为实现落地的合理默认）
 const GATEWAY_STALL_WARN_MS = 90_000;     // 在途轮静默早期告警线（只提示不中断，见 formatLifecycleGatewayStall）：
                                           // 宽于正常首 token 延迟 + 30s checkIdle tick 粒度，远窄于 idleTimeoutMs 中断阈
@@ -1022,10 +1022,10 @@ export class AgentSession {
     pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
   }
 
-  // 返回值 = 本次落定的 outcome 字符串（与 emit('request_resolved') 的 outcome 一致），供 server.js
+  // 返回值 = 本次落定的 outcome 字符串（与 emit('request_resolved') 的 outcome 一致），供 src/server/app.js
   // 的 user:approve handler 判断是否需要额外写 audit_record（目前只在 integrity_mismatch 时写，
-  // 见 server.js 注释）——resolvePermission 本身不知道调用方是哪个设备/socket，无法自己写 audit_record
-  // （actor 归属信息只有 server.js 层有），故只把结果吐出去，把"要不要审计"的判断留给上层。
+  // 见 src/server/app.js 注释）——resolvePermission 本身不知道调用方是哪个设备/socket，无法自己写 audit_record
+  // （actor 归属信息只有 src/server/app.js 层有），故只把结果吐出去，把"要不要审计"的判断留给上层。
   // 找不到 pending（已被 abort/consume 清理）时返回 undefined，调用方不应据此写审计。
   // opts.exitMode：对齐 CLI plan-exit——批准 ExitPlanMode 时用户选的退出后权限档
   // （default / acceptEdits / bypassPermissions）；非法或缺省回落 default。

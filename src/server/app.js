@@ -2620,7 +2620,7 @@ registerSocketConnection(io, socket => {
     }
   });
 
-  // ④ UI 安全体检：6 项运行时检查 + 全局危险白名单审查。走 on() 鉴权闸（deviceApproved fail-closed）。
+  // ④ UI 安全体检：运行时检查 + 全局危险白名单审查（项数见 runDoctor）。走 on() 鉴权闸（deviceApproved fail-closed）。
   // 全程脱敏（runDoctor 只出布尔/计数/危险规则串，绝不回显明文 token/绝对路径/AUD/密钥）。
   // CLI hooks 桥的一键安装/卸载。**这是 server 唯一会写用户全局 ~/.claude/settings.json 的路径**，
   // 且只在已鉴权设备显式点击时执行——绝不在启动、连接或任何后台时机自动触发。

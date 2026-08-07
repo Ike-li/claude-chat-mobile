@@ -1,5 +1,5 @@
-// notifications.js —— 事件 → 通知的纯逻辑层（渠道无关文案 + 渠道元数据），从 server.js 抽出便于单测。
-// 传输层仍在 server.js：pushNotify（Web Push）与 ntfyNotify（ntfy）。
+// notifications.js —— 事件 → 通知的纯逻辑层（渠道无关文案 + 渠道元数据），从组装根 src/server/app.js 抽出便于单测。
+// 传输层在 src/ops/notify-channels.js：createNotifyChannels 返回的 pushNotify（Web Push）与 ntfyNotify（ntfy）。
 import { basename } from 'node:path';
 import { setCapped } from '../shared/bounded-map.js';
 

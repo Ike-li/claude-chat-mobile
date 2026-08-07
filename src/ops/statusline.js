@@ -331,7 +331,7 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
       thrownFailure = { reason: 'rpc_error', message: String(err?.message || err), timedOut: false };
     }
   }
-  // claude CLI 版本（启动时采集，server.js 传入）：取首段裸版本号，去 "(Claude Code)" 等后缀；前端加 v 前缀
+  // claude CLI 版本（启动时由 src/server/app.js 的 preflight 采集并传入）：取首段裸版本号，去 "(Claude Code)" 等后缀；前端加 v 前缀
   const ver = versions?.cli && versions.cli !== 'unknown' ? String(versions.cli).split(/\s+/)[0] : '';
   if (ver) p.version = ver;
   // 会话元数据：sid（ccm 自管 sessionId）。注：CLI statusline 的 "pid" 实为 Claude Code 的 prompt_id、

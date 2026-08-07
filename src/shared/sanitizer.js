@@ -2,7 +2,9 @@
 // 功能：过滤日志/终端输出中的敏感信息（token、API key、密码等），防止泄露。
 // 用途：交互日志（LOG_INTERACTIONS=1）、stderr 输出、启动打印等所有日志场景。
 
-// 15 种敏感信息正则模式（含 Anthropic key）
+// 敏感信息正则模式表（含 Anthropic key）。条数以数组本身为准，注释里不再复制计数——
+// 此前写死的「15 种」在陆续追加模式后就对不上了，而这个数字没有任何测试或门禁盯着，
+// 只会一直漂。要看有多少条，数数组；要加模式，直接往下追加即可。
 const PATTERNS = [
   // 1. API keys (sk-*, key-*, api-*) 长度 ≥15 字符
   [/\b(sk|key|api)[-_][A-Za-z0-9][A-Za-z0-9_-]{15,}\b/g, '***'],
@@ -84,7 +86,7 @@ export function sanitize(text) {
   // 1. 先去除控制序列
   text = stripControlSequences(text);
 
-  // 2. 应用 15 种敏感模式替换
+  // 2. 应用 PATTERNS 里的全部敏感模式替换
   for (const [pattern, replacement] of PATTERNS) {
     text = text.replace(pattern, replacement);
   }

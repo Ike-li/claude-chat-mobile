@@ -48,7 +48,7 @@ const _histCache = new Map(); // filePath → { mtimeMs, messages }
 const HIST_CACHE_MAX = 10;
 
 // 根据 cwd 推断项目目录名。CLI 命名规则：路径中所有非字母数字字符（/、.、_ 等）都替换为 -（不折叠连续 -）。
-// cwd 须先经 realpath 规范化（server.js 启动期做），才与 CLI 的 ~/.claude/projects 命名一致（如 /tmp→/private/tmp）。
+// cwd 须先经 realpath 规范化（src/server/app.js 的 preflight 启动期做），才与 CLI 的 ~/.claude/projects 命名一致（如 /tmp→/private/tmp）。
 // 导出供 listSessions 与单测用。
 // SS-004：与 CLI 同规则——非字母数字 → '-'，故 /tmp/foo 与 /tmp-foo 会编码成同一目录名。
 // 改编码会与 CLI 裂；调用方用 workdirs.findProjectDirCollisions 在 resolveWorkdirs 时 warn。
@@ -575,14 +575,19 @@ function isCliSystemLine(content) {
   return false;
 }
 
-// ---- 会话列表：与 CLI /resume 同源，直接扫 ~/.claude/projects/<编码cwd>/ ----
+// ---- 会话列表：与 CLI /resume 同源，列出 ~/.claude/projects/<编码cwd>/ 下的会话 ----
 // 列出该 cwd 下所有会话（含终端 entrypoint:cli 建的），不依赖 sessions.json 注册表。
 // baseDir 仅供单测注入临时夹具；生产用默认 CLAUDE_DIR。
-// 【已评估：不迁 SDK 官方 listSessions（2026-07-12 实证）】SDK 0.3.201 有官方 listSessions（返回 summary/
-// customTitle/firstPrompt/gitBranch 等丰富字段，能省掉本函数的 readdir+N×stat+readHeadMeta），但它**不返回
-// entrypoint**（本函数用它区分 cli/sdk 来源、前端据此显来源），且其 summary 的标题语义 ≠ 本函数的"ai-title >
-// 首条 user > 命令名"优先级（整体替换会改前端标题/来源图标显示）；hasMore（SDK 不给总数）/hiddenIds（Phase 6
-// L1）/mtime 缓存仍要全保留。收益（省扫盘）不抵风险（可见行为变 + 定制照旧），故保留自实现。
+//
+// 【取数路径：生产走 SDK listSessions 快路径，隔离夹具回落自造扫盘】判据是下方 useSdk(baseDir)。
+// 2026-07-12 曾评估「不迁 SDK」，两条理由后来都不再成立，别照那段旧结论回滚：
+//   · 「SDK 不返回 entrypoint，前端据此显来源」——经核实 entrypoint 在会话列表这条路上是死字段：
+//     前端 sessionRow 显式传 null（public/js/app.js），来源角标读的是 session-registry 的 terminal，
+//     不是 entrypoint。（entrypoint 仍被 readHeadMeta / 尾部形态判定使用，那是另一条路。）
+//   · 「summary 标题语义 ≠ ai-title > 首条 user > 命令名」——迁移后标题即由 SDK summary 承担，
+//     与 CLI /resume 所见同源，这正是想要的效果。
+// 仍由本函数自己维护、SDK 给不了的三件：hasMore（SDK 不给总数）、hiddenIds（L1 两级删除）、TTL 缓存；
+// 另加两道 SDK 侧兜不住的修正：按 jsonl 是否存在做归属过滤、readdir 补 SDK 漏报的无 summary 会话。
 // 返回 { sessions, hasMore }：hasMore=该目录会话总数 > limit（诚实计算，非 length===limit 猜测），
 // 供前端决定是否显示「显示全部」。缓存键含 limit——否则 limit=6 结果会在 TTL 内污染 all(limit=50) 请求。
 // hiddenIds（FR-20 两级删除 L1，承接 docs/design.md）：本函数是 session:list 的真实数据源（直接扫盘，不依赖

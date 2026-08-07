@@ -1,6 +1,6 @@
 // instance-latches.js —— 实例状态 latch（done/error/aborted）派生纯函数
 //
-// 三个 latch 互斥（同一 instanceId 同一时刻至多命中一个），供 server.js 的 instanceState() 在
+// 三个 latch 互斥（同一 instanceId 同一时刻至多命中一个），供 src/server/app.js 的 instanceState() 在
 // "无在途轮次/无待批审批/无后台任务"时才落到这三者之一（否则 idle）。分出纯函数而非散落在
 // onEvent 大回调里的原因：done/error 的既有规则（"只在非 viewing 时才 latch，前台自己看事件流即可"）
 // 与 aborted 的规则（"必须无条件 latch，因为中止操作本身几乎总发生在 viewing 的前台会话"）不对称——

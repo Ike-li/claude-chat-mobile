@@ -120,7 +120,10 @@ export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
   return { userModel, dirs: [...byDir.values()] };
 }
 
-// 编排 6 项运行时安全检查 + 危险白名单审查，产出【已脱敏】报告。
+// 编排运行时安全检查 + 危险白名单审查，产出【已脱敏】报告。
+// 项数以下方 checks.push 为准，并由 tests/unit/doctor-runtime.test.mjs 的
+// `assert.equal(rep.checks.length, 11)` 硬锁——增删项会让那条断言红，据它更新即可。
+// （此前注释写死的「6 项」在陆续加到 11 项后一直没人更新，是没有任何闸门盯着的注释计数。）
 export function runDoctor(ctx = {}) {
   const checks = [];
 

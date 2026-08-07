@@ -1,6 +1,10 @@
 // logic.js —— app.js 的纯决策逻辑。
-// 红线：本文件只做数据→数据，不得 import / 触碰 DOM / window / socket / 任何全局可变状态。
-// 目的：让 app.js（浏览器 import）与 tests/unit/logic.test.mjs（node:test）共用同一份逻辑，零依赖、零构建。
+// 红线：本文件只做数据→数据，不得触碰 DOM / window / socket / 应用可变状态（会话、实例、连接态等）。
+// 目的：让 app.js（浏览器 import）与 tests/unit/logic-*.test.mjs（node:test）共用同一份逻辑，零构建。
+// 唯一允许的 import 是 ./i18n.js：它是纯查表 + 一个语言开关（模块级 currentLang，仅 setLang 改），
+// 在 node 与浏览器下行为一致、不引入宿主依赖，故不破坏上面那条红线的目的。
+// 想再加 import 前先自问：新依赖能在裸 node 里被 import 且不碰宿主 API 吗？不能就别加。
+// （原注释写的是「不得 import … 零依赖」，与第一行的 i18n import 直接矛盾，已按真实边界改写。）
 
 // HTML 转义。app.js 多处复用（审批命令、工具参数摘要）+ ansiToHtml 内部。
 import { t, getLang } from './i18n.js';
