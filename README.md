@@ -1,6 +1,7 @@
 # Claude Chat Mobile
 
-> 把本机 `claude` CLI 接到手机：沿用同一套项目配置、工具与会话记录，但不是远程桌面，也不是共享实时 TTY。
+这是一个本机自托管的「Claude Code 远程控制台」：把本机 `claude` CLI 的 agent 会话，接到手机/浏览器的聊天 UI 上。
+没有数据库、没有多租户、没有 SaaS 后端——状态落在本机磁盘和进程内存里。
 
 **中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/)
 
@@ -11,45 +12,33 @@
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#快速开始)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-> Agent SDK 与 claude CLI 徽章直接读取 `master` 上的 `package.json`。CLI 徽章表示上个发布版的验证环境，不是最低版本要求。
+## 一句话产品形态
+
+```
+手机 PWA / 浏览器
+    ↕ Socket.io（鉴权后进 approved 房间）
+本机 Node server（server.js → src/server/app.js）
+    ↕ Agent SDK query()
+本机 claude CLI 子进程（cwd = 某个白名单工作区）
+    ↕ 读写
+~/.claude 下的 transcript / 会话文件
+```
+
+目标不是「再做一个 AI 聊天产品」，而是 **远程等价地使用本机 Claude Code**：发消息、流式看输出、工具审批、中断、续接会话、切模型/权限档/effort。
+它解决的是：**人不在电脑前时，仍能安全、接近终端等价地操作本机 Claude Code。**
 
 ![Claude Chat Mobile — 终端里的 claude，手机上也能用](https://ike-li.github.io/claude-chat-mobile/assets/hero-zh.jpg)
 
-Claude Code 在跑，人却不总在电脑前。Claude Chat Mobile 通过 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) 驱动你本机已登录的 CLI，让你在手机上继续改代码、跑命令、回答问题和审批操作。它不打包 Claude，也不建立第二套账号或会话系统。
-
-## 适合谁
-
-- 已经在 macOS 或 Linux 终端使用 `claude`，希望离开电脑后继续查看和处理任务。
-- 需要在多个仓库、多个会话之间切换，并在手机上查看工具调用、diff、后台任务和错误状态。
-- 希望危险操作或问题能主动通知到手机，而不是一直盯着终端。
-
-默认同一时刻只有一个驾驶员：Web 驾驶时消息经 Agent SDK 进入本机 CLI；终端 CLI 驾驶时，Web 只读追平落盘记录。它不是远程桌面，也不能让手机和终端同时向同一个实时进程输入。终端仍在跑时你可以显式强制续接（会先弹确认框说明分叉风险）——那只解除手机这一侧的只读，不会停掉终端进程。
+同一时刻只有一个驾驶员。Web 驾驶时消息经 Agent SDK 进入本机 CLI；终端 CLI 驾驶时，Web 只读追平落盘记录，两端不能同时向一个实时进程输入。终端仍在跑时你可以显式强制续接（会先弹确认框说明分叉风险）——那只解除手机这一侧的只读，不会停掉终端进程。完整的组件图、消息流、单驾驶员状态转换与断线回放见[架构说明](docs/architecture.md)。
 
 ## 核心能力
 
-### 会话与工作区
-
-- 续接、分叉和两级删除 CLI 会话；跨会话聚合“需要你”的任务（范围是 Web 后端正在驱动的实例；纯终端里等待的会话不进这个聚合，只能靠可选的 hooks bridge 单独通知）。
-- 多工作区、多会话并行查看。git worktree 必须把绝对路径显式加入 `workdirs.json`，不会自动探测或隐式放行。
-- 一轮一条：任务运行时输入可继续写草稿，但发送键切换为停止键，不会积压待发消息。
-
-### 手机交互
-
-- 流式 Markdown、代码高亮、工具卡片、Edit/Write diff、Read 片段、`AskUserQuestion` 原生选择器。
-- 上传图片与文件、粘贴截图、历史附件预览，以及 composer `@` 文件引用。
-- 在授权工作区内浏览项目文件；不超过 256KB 的现有文本文件可用 CodeMirror 编辑，写前用内容哈希阻止并发覆盖。
-
-### 通知与可见性
-
-- Web Push / ntfy 通知审批、提问和结果；默认只发类型级提示，可测试推送链路并选择是否开启 Web Push 内容预览。
-- 可选 CLI hooks bridge，让终端会话的 Stop / Notification 从轮询升级为即时信号。
-- API 错误、重试倒计时、SDK 提示、子 agent 与后台任务进度直接显示在界面中，不再只藏在服务端日志。
-
-### 可靠性与运维
-
-- `seq + epoch` 事件去重与断线补发；状态栏按当前驾驶方选择 SDK 或 CLI 快照作为事实源。
-- `doctor` 启动自检、UI 安全体检、日志脱敏、鉴权限速、服务状态面板和鉴权后的 `/health`、`/metrics`。
-- 可安装 PWA，完整中英文界面；前端依赖均随项目自托管，不依赖 CDN。
+- **会话与工作区**：续接、分叉、两级删除 CLI 会话；跨会话聚合「需要你」的任务；多工作区、多会话并行查看。一轮一条——任务运行时输入可继续写草稿，但发送键切换为停止键，不积压待发消息。
+- **对话与文件**：流式 Markdown、代码高亮、工具卡片、Edit/Write diff、Read 片段、`AskUserQuestion` 原生选择器；上传图片与文件、粘贴截图、历史附件预览、composer `@` 文件引用；在授权工作区内浏览项目文件，并用 CodeMirror 直接编辑。
+- **通知**：Web Push / ntfy 推送审批、提问和结果，默认只发类型级提示，可测试推送链路并选择是否开启内容预览；可选 CLI hooks bridge，把终端会话的「回合结束/需要你」从轮询升级为即时信号。
+- **可见性**：API 错误、重试倒计时、SDK 提示、子 agent 与后台任务进度直接显示在界面中，不再只藏在服务端日志。
+- **可靠性与运维**：`seq + epoch` 事件去重与断线补发；状态栏按当前驾驶方选择 SDK 或 CLI 快照作为事实源；`doctor` 启动自检、UI 安全体检、日志脱敏、鉴权限速、服务状态面板和鉴权后的 `/health`、`/metrics`。
+- **形态**：可安装 PWA，完整中英文界面；前端依赖均随项目自托管，不依赖 CDN。
 
 ## 前置条件
 
@@ -57,6 +46,7 @@ Claude Code 在跑，人却不总在电脑前。Claude Chat Mobile 通过 [Claud
 - **本机已安装并登录 `claude` CLI**；先确认 `which claude` 能找到命令，并能在终端正常开始对话。
 - **macOS 或 Linux** 为一等支持平台；原生 Windows 属实验路径，推荐使用 WSL2。
 - 官方订阅和第三方网关都可用。网关相关 `ANTHROPIC_*` 必须存在于**启动 server 的 shell 环境**；写进 `.env` 会被剥除。
+- 截至 **2026-07-31**，Agent SDK 与 `claude -p` 仍消耗 Claude 订阅额度，Anthropic 曾公布的独立 credit 方案处于暂停状态（政策可能变化，以[官方说明](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)为准）；用 API key 或第三方网关时，费用与限额由对应平台决定。
 
 ## 快速开始
 
@@ -64,24 +54,18 @@ Claude Code 在跑，人却不总在电脑前。Claude Chat Mobile 通过 [Claud
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 
-node --version
-which claude
+node --version && which claude   # 对照上面的前置条件
 npm install --omit=dev
-npm run setup
+npm run setup                    # 生成 AUTH_TOKEN、询问 WORK_DIR、询问是否装 CLI hooks bridge
 node scripts/doctor.js
 npm start
-```
 
-`setup` 会生成 `AUTH_TOKEN`、询问允许 Claude 操作的 `WORK_DIR`，并明确询问是否安装 CLI hooks bridge。启动日志会打印带 token 的局域网地址，在手机上打开即可。
-
-手机首次从非本机路径连接时，还要在电脑上批准设备：
-
-```bash
+# 手机首次从非本机地址连接时，另开一个终端批准设备
 node scripts/device.js list
 node scripts/device.js approve <ID>
 ```
 
-完整的首次安装、非交互 setup、可复制的编程 agent 安装提示、PWA 和 bridge 配置见 [首次使用指南](docs/getting-started.md)。
+启动日志会打印带 token 的局域网地址，在手机上打开即可。完整的首次安装、非交互 setup、可复制的编程 agent 安装提示、PWA 和 bridge 配置见[首次使用指南](docs/getting-started.md)。
 
 ## 运行方式
 
@@ -91,7 +75,7 @@ node scripts/device.js approve <ID>
 | 临时公网：`cloudflared tunnel --url http://localhost:3000` | 试用、演示 | 随机域名会变化；没有 Access，仍需设备审批 |
 | 固定生产：固定域名 + Cloudflare Access + 常驻服务 | 长期随时访问 | 需要一次性部署与运维，见 [部署指南](docs/deployment.md) |
 
-PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先“添加到主屏幕”。
+PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先「添加到主屏幕」。
 
 ## 安全模型
 
@@ -106,17 +90,6 @@ PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先“添加
 
 漏洞请通过 [GitHub Security Advisories](SECURITY.md) 私下报告，不要公开提交 issue。
 
-## Web 与 CLI 如何协作
-
-```text
-Web 驾驶：手机 → Socket.io → AgentSession → Agent SDK → 本机 claude CLI → 工作区
-CLI 驾驶：终端 claude → transcript / hooks → server → 手机只读镜像
-```
-
-两条路径共享 CLI 的落盘会话记录，但不共享一个实时 TTY。CLI 驾驶时，Web 只能看到已经落盘的内容；hooks 负责加速“回合结束/需要你”信号，不会把终端进程变成可双向附着的会话。Web 接管前会等待终端回合结束，并在发送前吸收磁盘上的外部增长。
-
-完整组件图、消息流、单驾驶员状态转换与断线回放见 [架构说明](docs/architecture.md)。
-
 ## 文档导航
 
 - [首次使用指南](docs/getting-started.md)：从 clone 到手机发出第一条消息。
@@ -127,12 +100,6 @@ CLI 驾驶：终端 claude → transcript / hooks → server → 手机只读镜
 - [仓库地图](docs/repository-map.md)：入口、目录职责与完整文件清单。
 - [环境变量模板](.env.example)：所有运行时配置及默认值。
 - [安全策略](SECURITY.md)：漏洞报告方式。
-
-## 用量与兼容性
-
-截至 **2026-07-31**，Agent SDK、`claude -p` 和第三方 Agent SDK 应用仍使用 Claude 订阅额度；Anthropic 曾公布的独立 credit 方案处于暂停状态。政策可能变化，请以 [官方说明](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan) 为准。
-
-使用 API key 或第三方网关时，费用与限额由对应平台决定。项目记录的 claude CLI 版本只是发布验证环境；升级前可查看 [Releases](https://github.com/Ike-li/claude-chat-mobile/releases)。
 
 ## 许可证
 

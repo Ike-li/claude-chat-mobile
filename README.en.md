@@ -1,6 +1,7 @@
 # Claude Chat Mobile
 
-> Connect your local `claude` CLI to your phone. It keeps the same project configuration, tools, and session history, but it is not remote desktop software or a shared live TTY.
+This is a self-hosted "remote console for Claude Code" that runs on your own machine: it puts your local `claude` CLI agent sessions into a chat UI on your phone or browser.
+No database, no multi-tenancy, no SaaS backend — state lives on local disk and in process memory.
 
 [中文](README.md) · **English** · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/)
 
@@ -11,43 +12,31 @@
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#quick-start)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-> The Agent SDK and claude CLI badges read `package.json` on `master`. The CLI badge records the environment used to verify the latest release; it is not a minimum version requirement.
+## Product shape at a glance
 
-Claude Code may keep running while you are away from your computer. Claude Chat Mobile drives your locally authenticated CLI through the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview), so you can keep editing code, running commands, answering questions, and approving actions from your phone. It does not bundle Claude or create a separate account or session system.
+```
+Phone PWA / browser
+    ↕ Socket.io (authenticated, joins the approved room)
+Local Node server (server.js → src/server/app.js)
+    ↕ Agent SDK query()
+Local claude CLI child process (cwd = one allowlisted workspace)
+    ↕ reads / writes
+transcripts and session files under ~/.claude
+```
 
-## Who it is for
+The goal is not "another AI chat product" but **using your local Claude Code remotely and equivalently**: send messages, watch streaming output, approve tools, interrupt, resume sessions, switch model / permission mode / effort.
+What it solves: **staying able to operate local Claude Code safely, and close to terminal-equivalently, when you are not at the computer.**
 
-- People who already use `claude` in a macOS or Linux terminal and want to follow or handle work away from the desk.
-- People who need to switch between repositories and sessions while seeing tool calls, diffs, background tasks, and errors on a phone.
-- People who want approvals and questions to reach the phone instead of watching a terminal continuously.
-
-By default only one side drives a session at a time. Web-driven messages travel through the Agent SDK into the local CLI. When the terminal CLI is driving, the Web app follows the persisted transcript in read-only mode. This is not screen sharing, and the phone and terminal cannot both type into one live process. While the terminal is still running you can explicitly force a takeover (behind a confirmation that spells out the fork risk) — that only lifts the read-only lock on the phone side; it does not stop the terminal process.
+Only one side drives a session at a time. Web-driven messages travel through the Agent SDK into the local CLI; when the terminal CLI is driving, the Web app follows the persisted transcript in read-only mode, and the two sides cannot both type into one live process. While the terminal is still running you can explicitly force a takeover (behind a confirmation that spells out the fork risk) — that only lifts the read-only lock on the phone side; it does not stop the terminal process. See the [architecture guide](docs/architecture.en.md) for the component diagram, message flow, single-driver transitions, and reconnect replay.
 
 ## Core capabilities
 
-### Sessions and workspaces
-
-- Resume, fork, and remove CLI sessions at two levels, with a cross-session “needs you” view (scoped to instances the Web backend is driving; sessions waiting inside a plain terminal do not enter this view and surface only through the optional hooks bridge).
-- Monitor multiple workspaces and sessions. A git worktree must be added to `workdirs.json` by absolute path; it is never auto-discovered or implicitly authorized.
-- One message per turn: while a task runs, you can keep a draft, but the send control becomes Stop instead of queuing another message.
-
-### Mobile interaction
-
-- Streaming Markdown, syntax highlighting, tool cards, Edit/Write diffs, Read excerpts, and a native `AskUserQuestion` picker.
-- Image and file uploads, pasted screenshots, historical attachment previews, and composer `@` file references.
-- Browse files inside approved workspaces. Existing text files up to 256KB can be edited in CodeMirror, with content-hash checks preventing concurrent overwrites.
-
-### Notifications and visibility
-
-- Web Push / ntfy notifications for approvals, questions, and results. Notifications default to type-only text; you can test the delivery path and optionally enable content previews for Web Push.
-- An optional CLI hooks bridge turns terminal Stop / Notification events into immediate signals instead of waiting for polling.
-- API errors, retry countdowns, SDK notices, subagents, and background-task progress are visible in the UI rather than only in server logs.
-
-### Reliability and operations
-
-- `seq + epoch` event deduplication and reconnect replay. The status line selects either SDK or CLI snapshots according to the current driver.
-- Startup checks with `doctor`, an in-app security check, redacted logs, auth rate limits, a service-status panel, and authenticated `/health` and `/metrics` endpoints.
-- An installable PWA with complete Chinese and English UI coverage. Browser dependencies are self-hosted with the project instead of loaded from a CDN.
+- **Sessions and workspaces**: resume, fork, and remove CLI sessions at two levels; a cross-session "needs you" view; multiple workspaces and sessions in parallel. One message per turn — while a task runs you can keep a draft, but the send control becomes Stop instead of queuing another message.
+- **Conversation and files**: streaming Markdown, syntax highlighting, tool cards, Edit/Write diffs, Read excerpts, a native `AskUserQuestion` picker; image and file uploads, pasted screenshots, historical attachment previews, composer `@` file references; browse project files inside approved workspaces and edit them directly in CodeMirror.
+- **Notifications**: Web Push / ntfy for approvals, questions, and results, defaulting to type-only text, with a delivery-path test and an optional content preview; an optional CLI hooks bridge upgrades terminal "turn ended / needs you" from polling to an immediate signal.
+- **Visibility**: API errors, retry countdowns, SDK notices, subagents, and background-task progress appear in the UI rather than only in server logs.
+- **Reliability and operations**: `seq + epoch` event deduplication and reconnect replay; the status line picks SDK or CLI snapshots according to the current driver; startup checks with `doctor`, an in-app security check, redacted logs, auth rate limits, a service-status panel, and authenticated `/health` and `/metrics`.
+- **Form factor**: an installable PWA with complete Chinese and English UI coverage; browser dependencies are self-hosted with the project instead of loaded from a CDN.
 
 ## Prerequisites
 
@@ -55,6 +44,7 @@ By default only one side drives a session at a time. Web-driven messages travel 
 - **A locally installed and authenticated `claude` CLI.** Confirm that `which claude` finds it and that a terminal conversation works.
 - **macOS or Linux** are first-class platforms. Native Windows is experimental; WSL2 is the safer route.
 - Claude subscriptions and third-party gateways are both supported. Gateway `ANTHROPIC_*` variables must exist in the **shell that starts the server**; values placed in `.env` are stripped.
+- As of **2026-07-31**, the Agent SDK and `claude -p` still draw from Claude subscription usage, and Anthropic's previously announced separate-credit plan is paused (policy may change; check the [official notice](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)). API-key and third-party-gateway costs and limits are set by their providers.
 
 ## Quick Start
 
@@ -62,24 +52,18 @@ By default only one side drives a session at a time. Web-driven messages travel 
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 
-node --version
-which claude
+node --version && which claude   # check against the prerequisites above
 npm install --omit=dev
-npm run setup
+npm run setup                    # creates AUTH_TOKEN, asks for WORK_DIR and the CLI hooks bridge
 node scripts/doctor.js
 npm start
-```
 
-`setup` creates an `AUTH_TOKEN`, asks which `WORK_DIR` Claude may access, and explicitly asks whether to install the CLI hooks bridge. The startup log prints a tokenized LAN URL that you can open on your phone.
-
-The first connection from a non-local device also requires approval on the computer:
-
-```bash
+# on the first connection from a non-local address, approve the device from another terminal
 node scripts/device.js list
 node scripts/device.js approve <ID>
 ```
 
-For the complete first-run flow, non-interactive setup, a copyable coding-agent prompt, PWA setup, and bridge configuration, see the [Getting Started guide](docs/getting-started.en.md).
+The startup log prints a tokenized LAN URL that you can open on your phone. For the complete first-run flow, non-interactive setup, a copyable coding-agent prompt, PWA setup, and bridge configuration, see the [Getting Started guide](docs/getting-started.en.md).
 
 ## Three ways to run it
 
@@ -104,17 +88,6 @@ PWA installation and Web Push require HTTPS. On iOS, Web Push also requires iOS 
 
 Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.md), not a public issue.
 
-## How Web and CLI work together
-
-```text
-Web driver: phone → Socket.io → AgentSession → Agent SDK → local claude CLI → workspace
-CLI driver:  terminal claude → transcript / hooks → server → read-only phone mirror
-```
-
-Both paths share persisted CLI session history, not a live TTY. While the terminal CLI is driving, the Web app can only see content that has reached disk. Hooks accelerate “turn ended / needs you” signals; they do not make the terminal process a bidirectionally attached session. Before Web takes over, it waits for the terminal turn to end and absorbs external transcript growth before sending.
-
-See the [architecture guide](docs/architecture.en.md) for the component diagram, message flow, single-driver transitions, and reconnect replay.
-
 ## Documentation
 
 - [Getting Started](docs/getting-started.en.md): from clone to the first message sent from your phone.
@@ -125,12 +98,6 @@ See the [architecture guide](docs/architecture.en.md) for the component diagram,
 - [Repository map](docs/repository-map.md): entrypoints, directory roles, and the complete file inventory.
 - [Environment template](.env.example): every runtime setting and its default.
 - [Security policy](SECURITY.md): private vulnerability-reporting instructions.
-
-## Usage and compatibility
-
-As of **2026-07-31**, Agent SDK, `claude -p`, and third-party Agent SDK apps still draw from Claude subscription usage. Anthropic's previously announced separate-credit plan is paused. This policy may change; check the [official notice](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan).
-
-API-key and third-party-gateway costs and limits are set by their providers. The recorded claude CLI version is only a release-verification environment; check [Releases](https://github.com/Ike-li/claude-chat-mobile/releases) before upgrading.
 
 ## License
 

@@ -72,6 +72,7 @@ The read-only mirror therefore has strict limits:
 - It sees content after it reaches disk, not live stdout.
 - It cannot write to or attach to the terminal process's stdin.
 - Thinking, subagent intermediate work, or tool output may remain invisible until persisted.
+- The cross-session “needs you” view only covers instances the Web backend is driving; sessions waiting inside a plain terminal do not enter it and surface only through the optional hooks bridge.
 - Hooks shorten discovery of “turn ended / needs you,” but they do not turn the mirror into a shared TTY.
 
 ## Single-driver model
