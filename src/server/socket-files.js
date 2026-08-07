@@ -70,8 +70,23 @@ export function registerFileSocketHandlers({
   }
 
   // browse/write 的 scopeDirs：白名单即可（显式 workdir 已在列表内）。
+  // 【为什么不收紧到单个 cwd】n=1 自托管、机主即 root：跨 workdir 的 relPath 读到的仍是机主自己的
+  // 文件（直接切到那个工作区就能读），不构成越权。宽 scope 是有意的，收紧反而会挡掉「在 A 项目里
+  // 让 claude 参考 B 项目代码」这类正常用法。真正的问题在审计归属，见 auditTargetFor（R10）。
   function scopeDirsFor(_cwd, workDirs) {
     return workDirs;
+  }
+
+  // R10（2026-08-06）：审计的 target 必须是【真实落点所属的 workdir】，不能是请求声明的 cwd。
+  // 宽 scope 下 relPath 可以跨到别的 workdir，旧实现一律记声明 cwd——事后查「谁动过 B 项目的文件」
+  // 会显示 A，审计指错项目。归属解析复用 attributePath（同 tool:preview 的判据）。
+  // 解析不出（相对路径拼不成、或落在白名单外——那种情况调用方本就已 fail-closed）时回落声明 cwd。
+  // 同区时不加 declaredCwd，避免给绝大多数记录塞冗余字段。
+  function auditTargetFor(cwd, relPath) {
+    if (typeof relPath !== 'string' || !relPath) return { target: cwd, extra: null };
+    const attribution = attributePath(relPath, getWorkDirs(), cwd);
+    if (!attribution || attribution.workDir === cwd) return { target: cwd, extra: null };
+    return { target: attribution.workDir, extra: { declaredCwd: cwd } };
   }
 
   // 工作区 git 变更列表（只读；与 statusline 三分计数分工）
@@ -206,12 +221,15 @@ export function registerFileSocketHandlers({
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'files:write', ...meta } });
       return ack(result);
     }
+    // R10：成功写入的 target 记真实落点所属 workdir（宽 scope 允许跨区 relPath）。
+    const { target, extra } = auditTargetFor(cwd, relPath);
+    const baseMeta = result.ok ? meta : { ...meta, code: result.code };
     audit.recordAudit({
       actor: actorFromSocket(socket),
       action: 'file_write',
-      target: cwd,
+      target,
       outcome: result.ok ? 'success' : 'denied',
-      meta: result.ok ? meta : { ...meta, code: result.code },
+      meta: extra ? { ...baseMeta, ...extra } : baseMeta,
     });
     return ack(result);
   });

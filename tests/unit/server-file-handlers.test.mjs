@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { registerFileSocketHandlers } from '../../src/server/socket-files.js';
+import { attributePath as realAttributePath } from '../../src/files/file-preview.js';
+// R10 归属断言用真实 attributePath（纯函数、零 I/O）：手写 stub 曾把契约编错——它对 relPath 直接看
+// 前缀，而真实实现先 resolve(cwd, relPath)，于是测试与实现互相印证、恒绿。
 
 function register(extra = {}) {
   const handlers = new Map();
@@ -202,4 +205,37 @@ test('files:write 冲突（非 scope 的失败）→ 记 file_write 审计 outco
 test('files:write 无 ack 时忽略', async () => {
   const { handlers } = register();
   await handlers.get('files:write')({ relPath: 'a.js', content: 'x', baseHash: 'h' }); // 不抛
+});
+
+// R10（2026-08-06 BUG hunting review）：审计归属。
+// scopeDirsFor 返回全量 workDirs（n=1 下机主即 root，跨 workdir 的 relPath 不构成越权，是有意的宽 scope），
+// 但审计把 target 记成【请求声明的 cwd】——文件实际落在另一个 workdir 时，事后查「谁动过 B 项目的文件」
+// 会显示 A。安全性不变，修的是审计准确性：target 必须是真实落点所属的 workdir。
+test('R10：files:write 落到别的 workdir 时，审计 target 记真实落点而非声明的 cwd', async () => {
+  const { handlers, audits } = register({
+    getWorkDirs: () => ['/repo', '/other'],
+    // 声明 cwd=/repo，relPath 指向 /other —— 宽 scope 下写入成功
+    writeFileInScope: () => ({ ok: true, contentHash: 'h', bytesWritten: 3 }),
+    attributePath: realAttributePath,
+  });
+  let response;
+  await handlers.get('files:write')({ cwd: '/repo', relPath: '../other/x.txt', content: 'abc' }, v => { response = v; });
+
+  assert.equal(response.ok, true, '宽 scope 是有意的，不改行为');
+  const entry = audits.find(a => a.action === 'file_write');
+  assert.ok(entry, '成功写入必须留审计');
+  assert.equal(entry.target, '/other', '审计要指向真实落点所属工作区');
+  assert.equal(entry.meta.declaredCwd, '/repo', '声明的 cwd 保留在 meta 里供对照');
+});
+
+test('R10b：落点就在声明 cwd 内时，审计 target 不变（不制造无谓差异）', async () => {
+  const { handlers, audits } = register({
+    getWorkDirs: () => ['/repo', '/other'],
+    attributePath: realAttributePath,
+  });
+  await handlers.get('files:write')({ cwd: '/repo', relPath: 'a.txt', content: 'abc' }, () => {});
+
+  const entry = audits.find(a => a.action === 'file_write');
+  assert.equal(entry.target, '/repo');
+  assert.equal(entry.meta.declaredCwd, undefined, '同区时不加冗余字段');
 });
