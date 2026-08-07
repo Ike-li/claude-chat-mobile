@@ -1,6 +1,7 @@
 # Claude Chat Mobile
 
 这是一个本机自托管的「Claude Code 远程控制台」：把本机 `claude` CLI 的 agent 会话，接到手机/浏览器的聊天 UI 上。
+
 没有数据库、没有多租户、没有 SaaS 后端——状态落在本机磁盘和进程内存里。
 
 **中文** · [English](README.en.md) · [🌐 网站](https://ike-li.github.io/claude-chat-mobile/)
