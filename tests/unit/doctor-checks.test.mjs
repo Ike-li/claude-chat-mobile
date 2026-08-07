@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, logSwitchDiagnostic, LOG_ROTATE_THRESHOLD_BYTES } from '../../src/ops/doctor-checks.js';
+import {
+  uploadsFootprintDiagnostic,
+  UPLOADS_FOOTPRINT_WARN_BYTES, statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, logSwitchDiagnostic, LOG_ROTATE_THRESHOLD_BYTES } from '../../src/ops/doctor-checks.js';
 
 // 判据依据（2026-08-04 用本地假网关抓 /v1/messages 请求体实测，CLI 2.1.221）：
 //   全局 sonnet + 目录映射 SONNET      → 发出 grok-4.5      （映射生效）
@@ -379,4 +381,44 @@ test('logSwitchDiagnostic: logFileBytes 缺省 → 按「未超阈值」处理�
   assert.equal(r.status, 'ok');
   assert.match(r.detail, /LOG_INTERACTIONS/);
   assert.doesNotMatch(r.detail, /MB/);
+});
+
+// R9-uploads（2026-08-06 BUG hunting review）：只报可见性，【不自动清理】。
+// .ccm-uploads/ 落在机主真实工作目录里，且历史消息回显要读它（附件预览走 browse:read）——
+// 按 TTL/容量删会让老对话的图片预览全坏掉。要做对只有「识别 transcript 已引用不到的孤儿」一条路，
+// 复杂度与风险不匹配实测增长率（22 天 2.5MB）。故只给体积可见性，清不清由机主判断。
+test.describe('uploadsFootprintDiagnostic（R9：附件目录可见性，不自动删）', () => {
+  test('无附件目录 → ok 且不啰嗦', () => {
+    const r = uploadsFootprintDiagnostic({ dirs: [] });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /无附件/);
+  });
+
+  test('体积在阈值内 → ok，报总量供参照', () => {
+    const r = uploadsFootprintDiagnostic({ dirs: [{ cwd: '/repo', bytes: 5 * 1024 * 1024, files: 12 }] });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /5 MB|12/);
+  });
+
+  test('超阈值 → warn，且明说不会自动清理、要机主自己删', () => {
+    const r = uploadsFootprintDiagnostic({
+      dirs: [{ cwd: '/repo', bytes: UPLOADS_FOOTPRINT_WARN_BYTES + 1, files: 400 }],
+    });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /不会自动清理|手动/);
+  });
+
+  test('多目录合计判阈值，detail 里点名最大的那个', () => {
+    const half = Math.ceil(UPLOADS_FOOTPRINT_WARN_BYTES / 2) + 1;
+    const r = uploadsFootprintDiagnostic({
+      dirs: [{ cwd: '/small', bytes: 1024, files: 1 }, { cwd: '/big', bytes: half * 2, files: 300 }],
+    });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /\/big/);
+  });
+
+  test('不回显完整路径以外的内容，也不因单目录为 0 而误报', () => {
+    const r = uploadsFootprintDiagnostic({ dirs: [{ cwd: '/repo', bytes: 0, files: 0 }] });
+    assert.equal(r.status, 'ok');
+  });
 });

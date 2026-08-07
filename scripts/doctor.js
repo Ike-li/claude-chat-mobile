@@ -17,7 +17,7 @@
 // 12. CLI hooks 桥安装态（只读 status；不安装、不改 ~/.claude）
 // 13. 日志开关长开（DEBUG_SDK_MESSAGES/LOG_INTERACTIONS/LOG_STDERR + 日志体积）
 import { config } from 'dotenv';
-import { existsSync, accessSync, constants, mkdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -26,7 +26,7 @@ import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
-import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic, logSwitchDiagnostic } from '../src/ops/doctor-checks.js';
+import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic, logSwitchDiagnostic, uploadsFootprintDiagnostic } from '../src/ops/doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
 
@@ -375,6 +375,36 @@ function checkLogSwitches() {
   (r.status === 'warn' ? warn : ok)('日志开关', r.detail);
 }
 
+// 白名单工作目录清单（与 checkWorkDir 同一解析口径，只取路径不做可写校验）。
+function workdirPaths() {
+  const out = [process.env.WORK_DIR || homedir()];
+  const dirsFile = process.env.WORK_DIRS_FILE;
+  const result = dirsFile
+    ? loadWorkdirsFile(resolveWorkdirsFilePath(dirsFile, HERE))
+    : normalizeWorkdirEntries((process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean));
+  if (result) for (const { path } of result.entries) out.push(path);
+  return [...new Set(out)];
+}
+
+// R9：手机上传附件的磁盘占用可见性。只报不删——理由见 uploadsFootprintDiagnostic 的头注释。
+function checkUploadsFootprint() {
+  const dirs = [];
+  for (const cwd of workdirPaths()) {
+    const dir = join(cwd, '.ccm-uploads');
+    let bytes = 0;
+    let files = 0;
+    try {
+      for (const name of readdirSync(dir)) {
+        try { bytes += statSync(join(dir, name)).size; files += 1; }
+        catch { /* 读取中被删/无权限：跳过该文件 */ }
+      }
+    } catch { continue; } // 目录不存在 = 该工作区没传过附件
+    dirs.push({ cwd, bytes, files });
+  }
+  const r = uploadsFootprintDiagnostic({ dirs });
+  (r.status === 'warn' ? warn : ok)('附件占用', r.detail);
+}
+
 // ──────────────────────── 主流程 ────────────────────────
 
 // 解析命令行 --env 和 --fix
@@ -422,6 +452,7 @@ function effectiveConfigFiles() {
   checkCoverageThreshold();
   checkHooksBridge();
   checkLogSwitches();
+  checkUploadsFootprint();
 
   // --fix 选项：自动修复权限
   if (shouldFix) {

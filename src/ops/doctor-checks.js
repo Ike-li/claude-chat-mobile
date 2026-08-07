@@ -253,6 +253,37 @@ export function computeReadiness(checks = []) {
 // 两处各写各的有漂移风险，但 shell 脚本无法被 import——改 rotate-logs.sh 时须同步此处。
 export const LOG_ROTATE_THRESHOLD_BYTES = 20 * 1024 * 1024;
 
+// R9-uploads（2026-08-06）：附件目录只报可见性，【刻意不自动清理】。
+// .ccm-uploads/ 落在机主真实工作目录里，且历史消息回显要读它（附件预览走 browse:read）——按 TTL 或
+// 容量删会让老对话的图片预览全坏掉。要做对只有「识别 transcript 已引用不到的孤儿」一条路，那要扫全部
+// transcript 做引用计数，复杂度与风险都不匹配实测增长率（22 天 2.5MB）。对比 statusline 快照：那边过期
+// 即无用（读出来必是 stale），所以那边治、这边不治。同样的「只写不清」症状，处置完全相反。
+// 阈值 200MB：远高于正常使用量级，越过它才值得机主分神去看一眼。
+export const UPLOADS_FOOTPRINT_WARN_BYTES = 200 * 1024 * 1024;
+
+const mb = bytes => Math.round(bytes / 1024 / 1024);
+
+// dirs: [{ cwd, bytes, files }]，由调用方扫盘得到（本函数纯判定、不读盘）。
+export function uploadsFootprintDiagnostic({ dirs = [] } = {}) {
+  const list = (Array.isArray(dirs) ? dirs : []).filter(d => d && Number(d.bytes) > 0);
+  if (!list.length) return { status: 'ok', detail: '无附件占用（.ccm-uploads 为空或不存在）' };
+
+  const totalBytes = list.reduce((sum, d) => sum + Number(d.bytes || 0), 0);
+  const totalFiles = list.reduce((sum, d) => sum + Number(d.files || 0), 0);
+  const biggest = list.reduce((max, d) => (Number(d.bytes) > Number(max.bytes) ? d : max), list[0]);
+  const base = `手机上传的附件共 ${mb(totalBytes)} MB / ${totalFiles} 个文件（最大：${biggest.cwd}）`;
+
+  if (totalBytes <= UPLOADS_FOOTPRINT_WARN_BYTES) {
+    return { status: 'ok', detail: base };
+  }
+  return {
+    status: 'warn',
+    detail: `${base}\n` +
+      `  产品【不会自动清理】它：历史消息里的附件预览要读这些文件，按时间或容量删会让老对话的图片打不开。\n` +
+      `  需要回收空间时手动删（删掉的那几条历史里预览会失效，对话正文不受影响）。`,
+  };
+}
+
 export function logSwitchDiagnostic({ interactions = false, sdkDebug = false, stderr = false, logFileBytes = 0 } = {}) {
   const on = [];
   if (sdkDebug) on.push('DEBUG_SDK_MESSAGES');
