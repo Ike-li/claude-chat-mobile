@@ -15,6 +15,12 @@ export const enabled = process.env.LOG_INTERACTIONS === '1';
 const sessionBuffers = new Map();
 let logCallback = null;
 
+// 这四类各有专属 console 输出（带 [user→srv] 这类方向标记，见文件下方四个包装函数），
+// 在 addSessionLog 里再打一次就是双份。其余类型（sys_info 等）没有包装函数，
+// 此前只进内存缓冲、永不落盘 —— 见 addSessionLog 末尾的补写。
+// ★ 新增带专属 console 的包装函数时，类型要同步加进来，否则该类型会双倍刷屏（日志里肉眼可见）。
+const CONSOLE_BY_WRAPPER = new Set(['user_in', 'user_out', 'agent_send', 'agent_result']);
+
 export function setCallback(cb) {
   logCallback = cb;
 }
@@ -73,6 +79,28 @@ export function addSessionLog(sessionId, type, text, meta) {
   buffer.push(entry);
   if (buffer.length > 100) {
     buffer.shift();
+  }
+  // A 通道补写：sessionBuffers 是纯内存（100 条/会话、200 会话 FIFO），**重启即失**。
+  // 对话主干由四个包装函数各自落盘，而 sys_info 这类系统事件（会话启动/连接/拿到 ID）此前
+  // 一条都不落 —— 排障时文件里只有对话、没有状态转换时间点，只能拿半边。
+  //
+  // ★ 必须走 fmt()，与四个包装函数同口径（sanitize 脱敏 + 1500 字符截断 + 换行折叠）。
+  // 别以为「系统事件不含正文」就能省：app.js:1498 把 firstMessage（= 用户第一条消息**全文**，
+  // 见 agent.js:615）拼进了 sys_info。实测原样落盘会写出 3184 字节一行、含明文
+  // `sk-ant-api03-…`、且带真实换行——而同一份内容经 userMessageOut 落的那份是脱敏且截断的。
+  // 这个日志文件长期留存并轮转归档，公网部署下明文密钥落盘是不可接受的。
+  // 换行折叠同样必需：installLogTimestamps 按「每次 console 调用」加前缀，不是每个物理行，
+  // 真实换行会摊出既无时间戳也无 [interact] 标记的裸行。
+  //
+  // 刻意不受 LOG_INTERACTIONS 管辖：那个开关管的是「交互内容」（对话正文，量大、含隐私），
+  // 而系统事件是状态转换线、量小（每会话个位数），且**恰恰在关掉交互日志时更需要**——
+  // 那时文件里没有对话，至少得留下「会话何时启动、何时拿到 id」。经 fmt() 之后正文风险已收口。
+  if (!CONSOLE_BY_WRAPPER.has(type)) {
+    // try/catch 对齐本函数既有的 throw-free 契约（见下方 logCallback 的包裹）：
+    // 落盘失败绝不能连累已入内存的 entry，更不能让 session_log 广播被跳过。
+    try {
+      console.log(`[interact] [${type}] session=${sessionId} ${fmt(text)}`);
+    } catch { /* 落盘失败不影响内存缓冲与实时广播 */ }
   }
   if (typeof logCallback === 'function') {
     try {

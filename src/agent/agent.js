@@ -2531,7 +2531,10 @@ export class AgentSession {
       }
 
       default:
-        // 未映射的 SDK 消息类型不再静默蒸发：记入交互日志抽屉（三重 cap，无膨胀风险），保留可观测性
+        // 未映射的 SDK 消息类型不再静默蒸发：记入交互日志抽屉，保留可观测性。
+        // 注：2026-08-10 起 addSessionLog 也落文件（A 通道），此处不再只受抽屉那三重 cap 约束。
+        // 仍判定无膨胀风险：本行内容只有类型名（几十字节）、经 fmt() 截断，且真高频化时日志里
+        // 会明显堆出「未映射」行——那正是提示该把它加进上面白名单的信号，不是要消音的噪音。
         interactionLog.addSessionLog(this.logKey(), 'sys_info', `[SYS] 未映射 SDK 消息 type=${msg.type ?? '(空)'}`);
         break;
     }
