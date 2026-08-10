@@ -2,7 +2,7 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
-// 检查项（14 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
+// 检查项（15 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
@@ -16,7 +16,8 @@
 // 11. 测试覆盖率门槛
 // 12. CLI hooks 桥安装态（只读 status；不安装、不改 ~/.claude）
 // 13. 日志开关长开（DEBUG_SDK_MESSAGES/LOG_INTERACTIONS/LOG_STDERR + 日志体积）
-// 14. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
+// 14. CLAUDE_CONFIG_DIR 兼容性（CLI 认它、本仓固定读 ~/.claude；设了会静默读不到历史，见 doctor-checks.claudeConfigDirDiagnostic）
+// 15. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
 import { config } from 'dotenv';
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
@@ -27,7 +28,7 @@ import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
-import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic, logSwitchDiagnostic, uploadsFootprintDiagnostic } from '../src/ops/doctor-checks.js';
+import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic, logSwitchDiagnostic, uploadsFootprintDiagnostic, claudeConfigDirDiagnostic } from '../src/ops/doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
 
@@ -376,6 +377,12 @@ function checkLogSwitches() {
   (r.status === 'warn' ? warn : ok)('日志开关', r.detail);
 }
 
+// CLAUDE_CONFIG_DIR：CLI 认、本仓不认。设了它 → 会话历史静默读不到，见 claudeConfigDirDiagnostic。
+function checkClaudeConfigDir() {
+  const r = claudeConfigDirDiagnostic({ configDir: process.env.CLAUDE_CONFIG_DIR || '' });
+  (r.status === 'warn' ? warn : ok)('CLAUDE_CONFIG_DIR', r.detail);
+}
+
 // 白名单工作目录清单（与 checkWorkDir 同一解析口径，只取路径不做可写校验）。
 function workdirPaths() {
   const out = [process.env.WORK_DIR || homedir()];
@@ -438,7 +445,7 @@ function effectiveConfigFiles() {
   });
 }
 
-// 执行 12 项检查（D4 端口检查是 async，需 await）
+// 执行 15 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
   checkClaudeBin();
@@ -453,6 +460,7 @@ function effectiveConfigFiles() {
   checkCoverageThreshold();
   checkHooksBridge();
   checkLogSwitches();
+  checkClaudeConfigDir();
   checkUploadsFootprint();
 
   // --fix 选项：自动修复权限

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   uploadsFootprintDiagnostic,
-  UPLOADS_FOOTPRINT_WARN_BYTES, statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, logSwitchDiagnostic, LOG_ROTATE_THRESHOLD_BYTES } from '../../src/ops/doctor-checks.js';
+  UPLOADS_FOOTPRINT_WARN_BYTES, statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, logSwitchDiagnostic, LOG_ROTATE_THRESHOLD_BYTES, claudeConfigDirDiagnostic } from '../../src/ops/doctor-checks.js';
 
 // 判据依据（2026-08-04 用本地假网关抓 /v1/messages 请求体实测，CLI 2.1.221）：
 //   全局 sonnet + 目录映射 SONNET      → 发出 grok-4.5      （映射生效）
@@ -420,5 +420,29 @@ test.describe('uploadsFootprintDiagnostic（R9：附件目录可见性，不自�
   test('不回显完整路径以外的内容，也不因单目录为 0 而误报', () => {
     const r = uploadsFootprintDiagnostic({ dirs: [{ cwd: '/repo', bytes: 0, files: 0 }] });
     assert.equal(r.status, 'ok');
+  });
+});
+
+// ── claudeConfigDirDiagnostic ─────────────────────────────────────────────
+// CLI/SDK 都认 CLAUDE_CONFIG_DIR（SDK 实测：projects 根 = (CLAUDE_CONFIG_DIR ?? ~/.claude)/projects），
+// 本仓 history.js 的 CLAUDE_DIR 却硬编码 homedir()。设了它 = CLI 把 transcript 落到别处、本仓去老地方找，
+// 而失败形态是「读不到 = 当作没有会话」，静默到无法自查。这里只把它变成启动时说得清的告警。
+test.describe('claudeConfigDirDiagnostic', () => {
+  test('未设置 → ok', () => {
+    assert.equal(claudeConfigDirDiagnostic({ configDir: '' }).status, 'ok');
+    assert.equal(claudeConfigDirDiagnostic({}).status, 'ok');
+    assert.equal(claudeConfigDirDiagnostic().status, 'ok');
+  });
+
+  test('只有空白字符 → 视同未设置', () => {
+    assert.equal(claudeConfigDirDiagnostic({ configDir: '   ' }).status, 'ok');
+  });
+
+  test('设置了 → warn，点名变量值与「读不到历史」这一具体后果', () => {
+    const r = claudeConfigDirDiagnostic({ configDir: '/custom/claude-home' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /CLAUDE_CONFIG_DIR/);
+    assert.match(r.detail, /\/custom\/claude-home/, '要回显实际值，否则排障时不知道是谁设的');
+    assert.match(r.detail, /历史|会话|transcript/);
   });
 });

@@ -309,3 +309,26 @@ export function logSwitchDiagnostic({ interactions = false, sdkDebug = false, st
   }
   return { status: 'ok', detail: `${list} 开着（量级可控，日志未超轮转阈值）` };
 }
+
+// CLAUDE_CONFIG_DIR 兼容性告警（只报不修）。
+//
+// CLI 与 Agent SDK 都认这个 env——SDK 实测 projects 根 = `(CLAUDE_CONFIG_DIR ?? ~/.claude)/projects`
+// （sdk.mjs 里以该 env 为 memoize cache key，运行时改即生效）。而本仓 history.js 的 CLAUDE_DIR
+// 固定 `homedir()/.claude/projects`：设了这个变量，CLI 把 transcript 落到新位置，本仓仍去老地方找。
+//
+// 之所以必须告警：失败形态是**静默**的——读不到文件等于「这个工作区没有会话」，不报错、不留痕，
+// 用户只会看到会话列表空白，无从自查。同型于 project 目录名编码漂移那次（stat 失败被 catch 吞成没有会话）。
+//
+// 【为什么只告警不支持】改根目录解析牵动所有路径计算，含删除护栏那条路径（2026-08-02 删库事故就出在
+// 目录段被算错上）。n=1 自托管默认不设这个变量，为一个当前无人使用的部署形态改动删除路径，风险大于收益。
+// 真要支持，得连同 workdirs / 镜像 / 删除护栏一起改，值得单独立项。
+export function claudeConfigDirDiagnostic({ configDir = '' } = {}) {
+  const dir = typeof configDir === 'string' ? configDir.trim() : '';
+  if (!dir) return { status: 'ok', detail: '未设置（CLI 与本仓都走默认 ~/.claude）' };
+  return {
+    status: 'warn',
+    detail: `CLAUDE_CONFIG_DIR=${dir}\n`
+      + `  CLI 会把会话 transcript 落到该目录下，而本仓固定读 ~/.claude/projects —— 会话历史与只读镜像\n`
+      + `  会读不到，且表现为「这个工作区没有会话」而不是报错。请取消该变量，或改用终端查看这些会话。`,
+  };
+}
