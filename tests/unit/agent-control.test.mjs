@@ -671,3 +671,232 @@ test.describe('fetchUsage() 节流（昂贵 RPC 的调用频率对齐数据变�
     s.dispose();
   });
 });
+
+// 精确出槽（2026-08-09 实测 CLI 2.1.225 契约后加）：result 上带 `user_message_uuid`，其值就是本仓
+// 发消息时自打并透传给 CLI 的那个 uuid（三次真 turn 探针实测逐字节相同）。有了它就不必再 FIFO 猜。
+//
+// 要锁的这一格：settleForce 收口后 force 槽**留在队首**且 TTL 60s（见 settleForce 与 forceSlotTtlMs），
+// 窗口内新发一轮，其真 result 会被队首的 force 槽吸收成 applied:false ⇒ pendingTurns 永挂 1 ⇒
+// isBusy 恒真 ⇒ send 拒收「当前任务运行中」，直到静默看门狗(生产 10min)才解。
+// watchdog 那条路径已在 2026-08-06 改成弃槽，但 settleForce/dispose 收口这条仍在产生 force 槽。
+test.describe('result 精确出槽（user_message_uuid）', () => {
+  test('TTL 窗内的 force 槽不得吃掉新轮的 result', async () => {
+    const { s } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+
+    assert.equal(await s.send('old'), true);
+    s.queue = [];                       // 已泵进 CLI
+    s._forceSettleOpenTurns();          // 模拟 settleForce 收口：标 force、槽留在队首
+    s.pendingTurns = 0;                 // settleForce 同时把账清零
+    assert.equal(s._openTurns.length, 1, '前提：force 槽仍占着队首');
+
+    assert.equal(await s.send('new'), true);
+    assert.equal(s.pendingTurns, 1, '前提：新轮已开槽');
+    assert.equal(s._openTurns.length, 2, '前提：force 槽与新轮槽共存');
+    const uuidNew = s.queue[s.queue.length - 1].uuid;
+    assert.ok(uuidNew, '前提：send 给消息打了 uuid');
+
+    s.map({
+      type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {},
+      user_message_uuid: uuidNew,
+    });
+    assert.equal(s.pendingTurns, 0, '带 uuid 的 result 必须结算它自己那一槽，不被队首 force 槽吸收');
+    assert.equal(s.isBusy(), false, '否则 spinner 与停止按钮永不消失');
+    s.dispose();
+  });
+});
+
+// terminal_reason（2026-08-09 真 turn 探针实测）：result 上 CLI 给的**权威死因**，正常完成是
+// "completed"，被 interrupt 打断是 "aborted_streaming"，另有 max_turns / hook_stopped /
+// budget_exhausted / api_error / prompt_too_long 等。
+// ★ 枚举以**运行中的 CLI** 为准：2.1.225 二进制里实测 19 个值都在。装机 SDK 0.3.201 的 sdk.d.ts
+// 只列了 13 个（0.3.226 才补齐到 19）——SDK 类型定义滞后于 CLI 产出是常态（command_lifecycle 干脆
+// 任何一版 d.ts 都没有，却照样收得到），拿 d.ts 当权威会得出错误结论。
+//
+// 本仓原先只能靠自己的 _awaitingInterruptResult 标志判断「这条 result 是不是中断导致的」——那是
+// 「我发过 interrupt」而不是「它真的被中断了」。abort 若来自本仓之外的路径（看门狗、收口、CLI 自身），
+// 标志为 false，前端就会把一条被腰斩的回复当成正常完成。
+test.describe('terminal_reason（CLI 权威死因）', () => {
+  test('透出到 result payload，供前端与排障使用', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {},
+      terminal_reason: 'completed' });
+    const r = events.find(e => e.type === 'result');
+    assert.equal(r.payload.terminalReason, 'completed');
+    s.dispose();
+  });
+
+  test('aborted_* 即判定为中断，即便本仓没发过 interrupt', () => {
+    const { s, events } = makeSession();
+    assert.equal(s._awaitingInterruptResult, false, '前提：本仓没发过 interrupt');
+    s.map({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {},
+      terminal_reason: 'aborted_streaming' });
+    const r = events.find(e => e.type === 'result');
+    assert.equal(r.payload.interrupted, true, 'CLI 说它被中止了，就该按中止呈现');
+    s.dispose();
+  });
+
+  test('非 aborted 的死因不得被误标成中断', () => {
+    const { s, events } = makeSession();
+    s.map({ type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {},
+      terminal_reason: 'max_turns' });
+    const r = events.find(e => e.type === 'result');
+    assert.equal(r.payload.interrupted, false, 'max_turns 是超限不是中止，语义不能混');
+    assert.equal(r.payload.terminalReason, 'max_turns');
+    s.dispose();
+  });
+});
+
+// C2（2026-08-10 审查复现）：精确出槽只关上了「正常完成」那一半。
+// 被 interrupt 打断的 result **没有 user_message_uuid**（阶段 0 真 turn 实测契约），必然回落 FIFO，
+// 于是照样撞上队首的 force 槽 ⇒ applied:false ⇒ pendingTurns 永挂 ⇒ isBusy 恒真 ⇒ 用户发不出下一条，
+// 而配对 result 已到又会撤掉 8s 的 interruptSettle 兜底，只剩静默看门狗(生产 10min)。
+// 判据：中断只可能中断「正在跑的那一轮」，不可能对应一个已被 force 清账、等着迟到 result 的槽。
+test.describe('中断路径也不得被 force 槽吃掉', () => {
+  test('无 uuid 的中断 result 跳过 force 槽，结算真正在途的那一轮', async () => {
+    const { s } = makeSession();
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+
+    assert.equal(await s.send('old'), true);
+    s.queue = [];                       // 已泵进 CLI
+    s._forceSettleOpenTurns();          // settleForce 收口：force 槽留在队首（TTL 60s）
+    s.pendingTurns = 0;
+
+    assert.equal(await s.send('new'), true);
+    s.queue = [];                       // 新轮也已泵出，否则 interrupt 走排队丢弃路径
+    await s.interrupt();
+    assert.equal(s.pendingTurns, 1, '前提：成功路径当下不减，先等配对 result');
+
+    // 实测契约：中断的 result 有 terminal_reason，但没有 user_message_uuid
+    s.map({
+      type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {},
+      terminal_reason: 'aborted_streaming',
+    });
+    assert.equal(s.pendingTurns, 0, '中断的是在途轮，不该被已放弃的 force 槽吸收');
+    assert.equal(s.isBusy(), false, '否则 spinner 与停止按钮永不消失');
+    assert.equal(await s.send('next'), true, '否则用户被卡到静默看门狗(生产 10min)才能再发消息');
+    s.dispose();
+  });
+});
+
+// 挡住三个实测会空过的变异（2026-08-10 审查）：改坏实现而全量单测零红的三处。
+test.describe('精确出槽的三条生死线', () => {
+  // 变异实测：把 agent.js inputStream() 里的 `uuid: item.uuid` 改成 undefined，112 条测试全绿。
+  // 而 tests/ 下对 inputStream() 是零引用——整个精确出槽依赖这个 uuid 真的交到 CLI 手里，
+  // 断了就 100% 退回 FIFO，特性静默死亡且无人察觉。
+  test('send 打的 uuid 必须真的透传进 SDK 输入流', async () => {
+    const { s } = makeSession();
+    s.q = { setModel() { return Promise.resolve(); } };
+    assert.equal(await s.send('hello'), true);
+    const slotUuid = s._openTurns[0]?.msgUuid;
+    assert.ok(slotUuid, '前提：开槽时记下了 uuid');
+
+    const it = s.inputStream();
+    const { value } = await it.next();
+    assert.equal(value.uuid, slotUuid, 'CLI 靠它在 result 上回报 user_message_uuid，断了精确出槽就失效');
+    await it.return(); // 显式收尾，别让生成器挂在 notifyInput 上
+    s.dispose();
+  });
+
+  // 变异实测：删掉 uuid 命中分支里的 `if (hit.forceSettled) return {applied:false}`，全量单测零红。
+  // 那是本次改动新加的一条防线：force 槽等的迟到 result 到了，只该出槽，不该替【新轮】减账。
+  test('uuid 命中 force 槽 → 只出槽不减账，不得让新轮假 idle', async () => {
+    const { s } = makeSession();
+    s.q = { setModel() { return Promise.resolve(); } };
+    assert.equal(await s.send('old'), true);
+    const uuidOld = s._openTurns[0].msgUuid;
+    s.queue = [];
+    s._forceSettleOpenTurns();
+    s.pendingTurns = 0;
+    assert.equal(await s.send('new'), true);
+    assert.equal(s.pendingTurns, 1, '前提：新轮在途');
+
+    s.map({
+      type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {},
+      user_message_uuid: uuidOld, // 旧轮的迟到 result
+    });
+    assert.equal(s.pendingTurns, 1, '迟到 result 不得替新轮减账，否则流式还在跑 spinner 就没了');
+    assert.equal(s.isBusy(), true);
+    s.dispose();
+  });
+
+  // 变异实测：把 startsWith('aborted_') 改成 === 'aborted_streaming'，全量单测零红。
+  // 判据立的是「aborted_ 前缀」，就得有一条用例钉住前缀语义而非某个字面量。
+  test('aborted_tools 同样判为中断（判据是前缀，不是单个字面量）', () => {
+    const { s, events } = makeSession();
+    s.map({
+      type: 'result', subtype: 'error_during_execution', is_error: true, duration_ms: 10, modelUsage: {},
+      terminal_reason: 'aborted_tools',
+    });
+    const r = events.find(e => e.type === 'result');
+    assert.equal(r.payload.interrupted, true);
+    assert.equal(r.payload.terminalReason, 'aborted_tools');
+    s.dispose();
+  });
+});
+
+// 上面「watchdog 清账即弃槽」与其对偶那两条（本文件 test:394 / test:421）是 2026-08-06 F1 事故的
+// 带血回归，但它们喂的 result **不带 user_message_uuid**，走的是 FIFO 回落分支。而生产上正常完成的
+// 轮次几乎恒带 uuid、走精确出槽分支——两条回归当前守的是次要路径。
+// 这里给它们各配一个「result 带 uuid」的孪生，让同一条保护在新分支上也钉住。
+test.describe('F1 回归的孪生（result 带 uuid，走精确出槽分支）', () => {
+  test('watchdog 弃槽后，带 uuid 的新轮 result 同样必须立即清账', async () => {
+    const { s } = makeSession();
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+    assert.equal(await s.send('old'), true);
+    s.queue = [];
+    await s.interrupt();
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(s.pendingTurns, 0, '前提：watchdog 已清账');
+    assert.equal(s._openTurns.length, 0, '前提：在途槽已弃置');
+
+    assert.equal(await s.send('new after watchdog'), true);
+    const uuidNew = s._openTurns[0].msgUuid;
+    assert.ok(uuidNew, '前提：新轮槽带 uuid');
+    s.map({
+      type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {},
+      user_message_uuid: uuidNew,
+    });
+    assert.equal(s.pendingTurns, 0, '走精确出槽分支时，新轮 result 同样把账减到 0');
+    assert.equal(s.isBusy(), false);
+    assert.equal(await s.send('third'), true, '会话必须立即可用，而非等 10min idleTimeout');
+    s.dispose();
+  });
+
+  test('watchdog 弃槽后，带【旧轮】uuid 的迟到 result 不得误命中新轮的槽', async () => {
+    const { s } = makeSession();
+    s.interruptSettleGraceMs = 20;
+    s.q = { interrupt() { return Promise.resolve(); }, setModel() { return Promise.resolve(); } };
+    assert.equal(await s.send('old'), true);
+    const uuidOld = s._openTurns[0].msgUuid;
+    s.queue = [];
+    await s.interrupt();
+    await new Promise(r => setTimeout(r, 60));
+    assert.equal(s.pendingTurns, 0, '前提：watchdog 已清账、旧槽已弃置');
+
+    assert.equal(await s.send('new turn'), true);
+    const uuidNew = s._openTurns[0].msgUuid;
+    assert.notEqual(uuidOld, uuidNew, '前提：两轮 uuid 不同');
+
+    // 旧轮的迟到 result：它的槽早被 watchdog 弃置，uuid 找不到 → 回落 FIFO，
+    // 与既有对偶用例同样落在「瞬态假 idle」这个显式接受的取舍上，不得为负、不得复挂。
+    s.map({
+      type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {},
+      user_message_uuid: uuidOld,
+    });
+    assert.equal(s.pendingTurns, 0, '迟到 result 提前清账：瞬态假 idle，与既有取舍一致');
+
+    // 新轮自己的 result 到达：clamp 后不得为负，状态自愈
+    s.map({
+      type: 'result', subtype: 'success', is_error: false, duration_ms: 10, modelUsage: {},
+      user_message_uuid: uuidNew,
+    });
+    assert.equal(s.pendingTurns, 0, '不得为负');
+    assert.equal(s._openTurns.length, 0, '不留残槽');
+
+    assert.equal(await s.send('turn B'), true);
+    assert.equal(s.pendingTurns, 1, '稳态可用');
+    s.dispose();
+  });
+});

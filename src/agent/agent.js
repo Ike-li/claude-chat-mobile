@@ -623,14 +623,15 @@ export class AgentSession {
     // 日志键走 logKey()：FRESH 首轮 sessionId 未到时用 provisional，init 后 rebind，避免首跳蒸发。
     const { model: metaModel, effort: effortStr, permissionMode: permStr } = this.logMeta();
     interactionLog.userMessageOut(this.logKey(), displayText, metaModel, effortStr, permStr); // 交互日志：server → client（user_message 广播）
-    this._openTurnSlot();
+    // uuid 随消息透传 CLI（SDKUserMessage.uuid），CLI 以它索引内部队列，并在 result 上原样回报为
+    // user_message_uuid。必须在开槽【之前】生成：槽要带着它才能被精确结算。
+    const msgUuid = randomUUID();
+    this._openTurnSlot(msgUuid);
     this.pendingTurns++;
     if (this.pendingTurns === 1) { this.turnStartedAt = Date.now(); this.turnOutputTokens = 0; this._msgOutBase = 0; } // 本轮开表
     this._armSlashQuietNotice(text); // slash 命令可能整轮静默（fork 上下文），到点提示一次「不是卡死」
     // model/effort/permission 各走独立 chip 字段（text 不再内联），日志逐条显示「那一刻」的具体模型 + 档位
     interactionLog.agentSend(this.logKey(), text, metaModel, effortStr, permStr); // 交互日志：agent → SDK（text=promptText 含路径）
-    // uuid 随消息透传 CLI（SDKUserMessage.uuid），CLI 以它索引内部队列
-    const msgUuid = randomUUID();
     this.queue.push({ text, clientMessageId: opts.clientMessageId || null, uuid: msgUuid, displayText });
     this.notifyInput?.();
     this.lastActivity = Date.now(); // 续期静默看护：send 是用户活动，防 idle 误判
@@ -670,9 +671,11 @@ export class AgentSession {
   }
 
   // 在途轮 settle 槽：与 pendingTurns 配平。forceSettled 槽吸收「已 force 清账后迟到的 result」。
-  _openTurnSlot() {
+  // msgUuid：本轮消息透传给 CLI 的 uuid（send 路径有；合成轮/后台任务这类无对应用户消息的槽为 null）。
+  // result 上的 user_message_uuid 就是它，据此精确出槽，见 _settleOneResultTurn。
+  _openTurnSlot(msgUuid = null) {
     const id = ++this._turnIdSeq;
-    this._openTurns.push({ id, forceSettled: false });
+    this._openTurns.push({ id, forceSettled: false, msgUuid });
     return id;
   }
 
@@ -693,7 +696,25 @@ export class AgentSession {
   }
 
   // result 到达时结算一槽。返回 { applied, forceSettled }：applied=true 表示本次对 pendingTurns 做了 --。
-  _settleOneResultTurn() {
+  //
+  // 出槽三路，按可靠性降序。要解决的病灶只有一个：FIFO 出槽在「队首是未过期的 force 槽」时会把
+  // 在途轮的真 result 吸收成 applied:false ⇒ pendingTurns 永挂 ⇒ isBusy 恒真 ⇒ send 拒收，
+  // 直到静默看门狗(生产 10min)才解。
+  //
+  //  ① userMessageUuid 命中 → 消它自己那一槽。result 上的 `user_message_uuid` 实测（真 turn，CLI
+  //     2.1.225）在**正常完成**时逐字节等于本仓 send 自打并透传的 uuid；**被 interrupt 时是 undefined**。
+  //  ② 判定为中断、但没有 uuid → 跳过 force 槽，消第一个真槽。依据：中断只可能中断「正在跑的那一轮」，
+  //     不可能对应一个已被 force 清账、正等着迟到 result 的槽。这条专治 ① 覆盖不到的中断路径。
+  //  ③ 都不适用（合成轮、后台任务、旧 CLI 不发这些字段）→ 回落原来的 FIFO shift，语义不变。
+  //
+  // terminalReason 只用于判 ②，取值同 wasInterrupted：本仓的 _awaitingInterruptResult 只说明
+  // 「我发过 interrupt」，CLI 的 aborted_* 才是「它确实被腰斩了」，两源取或。
+  //
+  // force 槽的产地：settleForce 与 dispose 收口（watchdog 那条已于 2026-08-06 改成直接弃槽）。
+  // settleForce 末尾会 abort 子进程，但从 abort 到 consume 收尾清空 _openTurns 之间有异步窗口
+  // （SDK close() 要等 2s 才 SIGTERM），窗口内 disposed 仍为 false、pendingTurns 已归 0 ⇒ send 能过，
+  // 于是「force 槽存活 + 新轮在途」这个组合可达。窗口窄，但用户点完停止立刻再发一条就会命中。
+  _settleOneResultTurn(userMessageUuid = null, terminalReason = null) {
     // 回收过期 force 槽：它只是「等一个可能到来的迟到 result」的占位（现仅 settleForce/disposed
     // 收口产生，见构造函数 forceSlotTtlMs 注释）。超过 TTL 仍没被消耗 = 它不会再来了，此时必须让位，
     // 否则真 result 全被它吸收成 applied:false，pendingTurns 永挂。
@@ -703,6 +724,26 @@ export class AgentSession {
         && this._openTurns[0].forceSettledAt != null
         && now - this._openTurns[0].forceSettledAt > this.forceSlotTtlMs) {
       this._openTurns.shift();
+    }
+    // ① uuid 精确命中：消它自己那一槽，不动队首。
+    if (userMessageUuid) {
+      const idx = this._openTurns.findIndex(s => s.msgUuid === userMessageUuid);
+      if (idx >= 0) {
+        const [hit] = this._openTurns.splice(idx, 1);
+        // 命中的就是已 force 清账的那一槽 = 它等的迟到 result 到了：只出槽，绝不再 --（防新轮假 idle）
+        if (hit.forceSettled) return { applied: false, forceSettled: true };
+        this.pendingTurns = Math.max(0, this.pendingTurns - 1);
+        return { applied: true, forceSettled: false };
+      }
+    }
+    // ② 中断且无 uuid：跳过 force 槽消第一个真槽（中断不可能对应已放弃的槽）
+    if (this._awaitingInterruptResult || (terminalReason?.startsWith('aborted_') ?? false)) {
+      const idx = this._openTurns.findIndex(s => !s.forceSettled);
+      if (idx >= 0) {
+        this._openTurns.splice(idx, 1);
+        this.pendingTurns = Math.max(0, this.pendingTurns - 1);
+        return { applied: true, forceSettled: false };
+      }
     }
     const t = this._openTurns.shift();
     if (!t) {
@@ -2430,8 +2471,12 @@ export class AgentSession {
       case 'result': {
         this._clearLocalCommandProgress(); // 本轮收尾（含被中断/出错）：无论命令是否产出，豁免都到此为止
         this._flushText(); this._flushThink();
-        // settle 槽优先：forceSettled 迟到 result 不 --pendingTurns（watchdog/settleForce 已清账）
-        this._settleOneResultTurn();
+        // CLI 给的权威死因。取值以**运行中的 CLI** 为准（2.1.225 实测 19 值：含 budget_exhausted /
+        // api_error / turn_setup_failed 等）——注意装机 SDK 0.3.201 的 sdk.d.ts 里只列了 13 个，
+        // 类型定义滞后于 CLI 产出，别拿它当权威。旧 CLI 不发这个字段 → null，各判据自动退回原样。
+        const terminalReason = typeof msg.terminal_reason === 'string' ? msg.terminal_reason : null;
+        // settle 槽：uuid 精确出槽 → 中断跳过 force 槽 → FIFO 回落，三路见 _settleOneResultTurn
+        this._settleOneResultTurn(msg.user_message_uuid, terminalReason);
         // 本轮收表：账面仍有在途轮（后台任务合成轮等）→ 立即重开；否则清零（status_line 不再带 turn 段）
         if (this.pendingTurns > 0) { this.turnStartedAt = Date.now(); } else { this.turnStartedAt = null; }
         this.turnOutputTokens = 0;
@@ -2443,11 +2488,16 @@ export class AgentSession {
         if (typeof msg.total_cost_usd === 'number') this.totalCostUsd = msg.total_cost_usd;
         this.totalDurationMs += msg.duration_ms || 0;
         this.totalApiDurationMs += msg.duration_api_ms || 0;
-        const wasInterrupted = this._awaitingInterruptResult; // P1-4：一次性消费，防误标到后续无关的 result
+        // P1-4：一次性消费，防误标到后续无关的 result。
+        // 判据两源取或：_awaitingInterruptResult 只说明「本仓发过 interrupt」，覆盖不到看门狗收口、
+        // 实例 dispose、CLI 自身发起的中止；terminal_reason 的 aborted_* 是 CLI 说「它确实被腰斩了」。
+        // 只认 aborted_* 前缀，不把 max_turns / budget_exhausted / hook_stopped 这些别的死因混进来。
+        const wasInterrupted = this._awaitingInterruptResult || (terminalReason?.startsWith('aborted_') ?? false);
         this._awaitingInterruptResult = false;
         this._clearInterruptSettleWatchdog(); // 配对 result 已到：撤销兜底，否则悬挂计时会误清后续轮次的账
         diagLog.record(this.logKey(), 'queue', 'turn_settled', {
           pendingTurnsAfter: this.pendingTurns, wasInterrupted, isError: !!msg.is_error, durationMs: msg.duration_ms,
+          terminalReason, // 排障时能直接看到 CLI 的死因，不必再从消息形态倒推
         });
         this.emit('result', {
           messageId: this.currentMessageId,
@@ -2457,7 +2507,8 @@ export class AgentSession {
           errors: msg.subtype === 'success' ? undefined : msg.errors,
           models: Object.keys(msg.modelUsage ?? {}), // F1：语义断言用
           text: this.assistantResponseBuffer || undefined, // 完整回复文本：供前端断网恢复后校正截断的 s.raw
-          interrupted: wasInterrupted // 这条 result 是否由用户主动中止直接导致（区别于独立的真实错误/完成）
+          interrupted: wasInterrupted, // 这条 result 是否由用户主动中止直接导致（区别于独立的真实错误/完成）
+          ...(terminalReason ? { terminalReason } : {}), // CLI 权威死因；旧 CLI 无此字段时整个不带
         });
         const { model: modelStr, effort: effortStr, permissionMode: permStr } = this.logMeta(); // 统一解析，消除与 send 的漂移
         const durationStr = `[result] ${msg.subtype} duration=${msg.duration_ms}ms`; // model/effort/permission 走独立 chip 字段，不再进文本
