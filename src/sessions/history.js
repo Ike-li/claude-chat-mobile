@@ -13,6 +13,7 @@ import { toolSummary } from '../shared/tool-summary.js';
 // 本地 slash 命令输出的解析口径同样与 live 侧（agent.js）共用，防两边形态漂移。
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
 import { setCapped } from '../shared/bounded-map.js';
+import { encodeProjectDir } from '../shared/project-dir.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
@@ -44,20 +45,20 @@ const _listCache = new Map(); // dir → { ts, result }
 const LIST_CACHE_TTL = 4000;
 
 // B6：getSessionHistory 结果按文件路径缓存，按 mtimeMs 失效。切回同一会话无需重新读盘。
-const _histCache = new Map(); // filePath → { mtimeMs, messages }
+const _histCache = new Map(); // filePath → { mtimeMs, size, messages }（失效判据见 getSessionHistory 的 B6）
 const HIST_CACHE_MAX = 10;
 
-// 根据 cwd 推断项目目录名。CLI 命名规则：路径中所有非字母数字字符（/、.、_ 等）都替换为 -（不折叠连续 -）。
+// 根据 cwd 推断项目目录名。编码规则见 src/shared/project-dir.js（与 CLI/SDK 逐字节对齐的唯一实现）。
 // cwd 须先经 realpath 规范化（src/server/app.js 的 preflight 启动期做），才与 CLI 的 ~/.claude/projects 命名一致（如 /tmp→/private/tmp）。
-// 导出供 listSessions 与单测用。
-// SS-004：与 CLI 同规则——非字母数字 → '-'，故 /tmp/foo 与 /tmp-foo 会编码成同一目录名。
+// 本名保留：调用点遍布 history/app，且「getProjectDir」已是仓内通用叫法。
+// SS-004：非字母数字 → '-'，故 /tmp/foo 与 /tmp-foo 会编码成同一目录名。
 // 改编码会与 CLI 裂；调用方用 workdirs.findProjectDirCollisions 在 resolveWorkdirs 时 warn。
 export function getProjectDir(cwd) {
-  return String(cwd || '').replace(/[^a-zA-Z0-9]/g, '-');
+  return encodeProjectDir(cwd);
 }
 
-// SS-004 检测实现在 workdirs.js（resolve 时 warn），避免 history↔workdirs 互相 import。
-// 此处仅保留 getProjectDir 作为编码 SoT。
+// SS-004 检测实现在 workdirs.js（resolve 时 warn），避免 history↔workdirs 互相 import——
+// 两边现在都从 src/shared/project-dir.js 取同一份编码，不再各存一份会漂移的复制品。
 
 // 读取会话历史消息（user/assistant 文本 + 主链 tool_use/tool_result；过滤 thinking/子 agent/CLI 噪音）。
 // 流式读【完整】文件——与 CLI /resume 同源、不按字节截断头部，做到 Web 端看到的历史 = CLI 的全量历史。
@@ -79,17 +80,26 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   const projectDir = getProjectDir(cwd);
   const historyFile = join(baseDir, projectDir, `${sessionId}.jsonl`);
 
-  let mtimeMs;
+  let mtimeMs, size;
   try {
-    ({ mtimeMs } = await stat(historyFile));
+    ({ mtimeMs, size } = await stat(historyFile));
   } catch {
     return []; // 文件不存在：新会话或已删
   }
 
-  // B6：mtime 未变 = 内容未变，直接返回缓存。缓存的是封顶到 HISTORY_MAX_MESSAGES 的尾部消息，按 limit 取尾再返回
-  // （stat ~1ms，远快于重新流式读盘 + 解析）。
+  // B6：mtime + size 双判据都未变 = 内容未变，直接返回缓存。缓存的是封顶到 HISTORY_MAX_MESSAGES 的
+  // 尾部消息，按 limit 取尾再返回（stat ~1ms，远快于重新流式读盘 + 解析）。
+  //
+  // 【为什么不能只认 mtime】同一毫秒内的两次写入 mtime 完全相同，只看 mtime 会把变长的文件判成
+  // 「没变」并吐回陈旧消息。后果不在历史回显，而在单驾驶员模型：catchUpStep 拿到旧 messages ⇒
+  // 看不到终端刚写的那一轮 ⇒ externalWrite 判 false ⇒ 该上锁的会话不上锁。真机 tick 间隔 1–2.5s
+  // 撞同毫秒概率低，但容器里 mirror-engine 的 R2b 用例实测偶发翻车（宿主机慢反而躲过）。
+  // size 是同一次 stat 顺手拿的，零额外系统调用。
+  //
+  // 残留缺口（已知、不修）：等长覆写仍会命中缓存。CLI 的 transcript 是 append-only，等长原地改写
+  // 不存在；真要防得改成读内容 hash，为一个不发生的场景付每次全文读的代价，不划算。
   const cached = _histCache.get(historyFile);
-  if (cached && cached.mtimeMs === mtimeMs) {
+  if (cached && cached.mtimeMs === mtimeMs && cached.size === size) {
     // 真 LRU：命中后移到 Map 末尾，避免热会话被冷扫挤掉
     _histCache.delete(historyFile);
     _histCache.set(historyFile, cached);
@@ -206,7 +216,7 @@ export async function getSessionHistory(sessionId, cwd, limit = HISTORY_MAX_MESS
   // HISTORY_MAX_MESSAGES，返回时再按 limit 取尾。正常会话（≤上限）即全量历史；仅极端超大会话被削顶——
   // 既防一次性撑爆前端，也防全量常驻 server 内存。mtime 失效保证一致性——被淘汰条目下次 mtime 未变即重入。
   // 写入用 setCapped（FIFO 占位）：命中路径已负责刷新位置；这里只保证新键不把表撑破。
-  setCapped(_histCache, historyFile, { mtimeMs, messages }, HIST_CACHE_MAX);
+  setCapped(_histCache, historyFile, { mtimeMs, size, messages }, HIST_CACHE_MAX);
 
   return messages.slice(-limit);
 }

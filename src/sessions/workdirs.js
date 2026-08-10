@@ -6,6 +6,7 @@ import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { isAbsolute as isAbsolutePosix } from 'node:path/posix';
 import { isAbsolute as isAbsoluteWin32 } from 'node:path/win32';
+import { encodeProjectDir } from '../shared/project-dir.js';
 
 export const DEFAULT_SESSION_LIMIT = 6;   // 未指定时每工作区历史会话默认显示条数
 export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与 src/server/app.js 的 session:list all 分支直接 import 本常量（= 前端「显示全部」的服务端硬顶）
@@ -91,11 +92,10 @@ export function isWhitelisted(cwd, dirs) {
   return typeof cwd === 'string' && cwd !== '' && dirs.includes(cwd);
 }
 
-// SS-004：与 history.getProjectDir / CLI 同规则（非字母数字 → '-'）。
-// 放在本模块避免 workdirs↔history 循环耦合；history 仍是路径编码的 SoT 实现。
-function projectDirKey(cwd) {
-  return String(cwd || '').replace(/[^a-zA-Z0-9]/g, '-');
-}
+// SS-004：与 history.getProjectDir / CLI 同规则。两边共用 src/shared/project-dir.js 的单一实现——
+// 此处曾是一份逐字复制品，注释写着「同规则」却和 history 那份一起漏了 200 截断与 NFC 归一。
+// 从 shared 取而不是从 history 取，仍是为了避免 workdirs↔history 循环耦合。
+const projectDirKey = encodeProjectDir;
 
 // SS-004：在一组已 realpath 的工作区路径上检测 project 目录名碰撞。
 export function findProjectDirCollisions(dirs = []) {

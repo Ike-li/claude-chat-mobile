@@ -5,14 +5,13 @@ import { open } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CCM_PERMISSION_MODES } from './cli-settings-defaults.js';
+// project 目录名编码走 shared 唯一实现：本文件曾自带第三份复制品（无 200 截断 + hash 后缀），
+// 与 history/workdirs 分叉后会造成「历史同步正常、镜像观察态静默为空」的不对称失效。
+import { encodeProjectDir } from '../shared/project-dir.js';
 
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 const EMPTY_OBSERVED_STATE = Object.freeze({ model: null, permissionMode: null });
 const TAIL_READ_BYTES = 512 * 1024;
-
-function projectDirFor(cwd) {
-  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
-}
 
 export function extractCliObservedState(entries) {
   let model = null;
@@ -37,7 +36,7 @@ export async function readCliObservedState(sessionId, cwd, { baseDir = CLAUDE_PR
   if (typeof sessionId !== 'string' || !/^[0-9a-zA-Z_-]+$/.test(sessionId) || typeof cwd !== 'string') {
     return { ...EMPTY_OBSERVED_STATE };
   }
-  const file = join(baseDir, projectDirFor(cwd), `${sessionId}.jsonl`);
+  const file = join(baseDir, encodeProjectDir(cwd), `${sessionId}.jsonl`);
   try {
     const fh = await open(file, 'r');
     try {
