@@ -454,6 +454,68 @@ test('requestRebaseline 时磁盘已被终端写长 → 标脏（BE-009 防分�
   assert.equal(a.externalDirty, true, '被 rebaseline 吸收的外部增长必须标脏，否则下条手机消息从旧位置分叉');
 });
 
+// 上一条的镜像对照（2026-08-10）：磁盘同样变长、同样在重连时比对，但写它的是【己方】刚跑完的 turn。
+// localBusy 分支冻结 baseline，baseline 要等下一 tick 的吸收才推进；而 turn 一结束 state 立刻是 idle。
+// 重连落进 turn 结束前后各约一个 tick 周期的窗口（rebaseline flag 由【下一个】tick 消费，故连接发生在
+// turn 结束【之前】同样会命中；周期常态 2500ms、只读镜像态 1000ms），旧实现就拿冻结的 baseline 比含己方
+// 新写入的磁盘长度，把自己写的判成终端写入 → 纯 web 驱动的会话也弹「正在续接会话（吸收终端写入）…」
+// 并白白 dispose+resume 冷启动一次（实证会话 39da384a：主链全部 sdk-ts、零真实 cli 写入）。
+// 判据靠 wasOwnTurn 与 catchUpStep 的吸收窗口同源——但只认己方 turn，见下一条用例。
+test('己方 turn 刚跑完（wasOwnTurn）时重连 → 不标脏：那段增长是自己写的，不是终端写入', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-own-turn');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-own-turn', settledTail(base));
+  await h.engine.catchUpTick();          // 切入定基线（idle）
+
+  // 己方 turn 在跑：写盘的是自己，此 tick 走 localBusy 分支 → baseline 冻结、只记 wasBusy=true
+  h.setState('inst-A', 'busy');
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-own-turn', [
+    ...settledTail(base),
+    { type: 'user', message: { role: 'user', content: '手机上发的问题' }, timestamp: iso(base + 5_000) },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '己方 turn 写的回答' }] }, timestamp: iso(base + 6_000) },
+  ]);
+  await h.engine.catchUpTick();
+
+  // turn 结束（pendingTurns→0 即 idle），下一 tick 的 wasBusy 吸收尚未跑；此刻手机解锁重连
+  h.setState('inst-A', 'idle');
+  h.engine.requestRebaseline();
+  await h.engine.catchUpTick();
+
+  assert.equal(a.externalDirty, false, '己方刚写完的那一轮不是终端写入，不得触发 dispose+resume 置换');
+});
+
+// 上一条的边界守卫（2026-08-10 独立审查发现）：localBusy 把 busy 与 permission 压成同一个布尔，但两者
+// 语义不同——busy=己方确定在写盘；permission=己方在等审批（最长 30min），磁盘增长【可能是终端写的】，
+// 那正是 externalGrowthWhilePaused 存在的理由。若拿 localBusy 口径的 wasBusy 去豁免，就会连审批窗里的
+// 终端写入一起吞掉：permission 建立 size 基线 → 终端写入 → 轮次收尾使 state 翻 idle（写入之后再没有第二个
+// permission tick，externalGrowthWhilePaused 兜不住）→ 重连 rebaseline 漏标 → 下条手机消息进陈旧 SDK
+// 子进程 → transcript 分叉。漏标(分叉)远重于误标(多一次冷启动)，故这一维只豁免己方 turn。
+test('等审批期间终端写入、随后 state 翻 idle 时重连 → 仍须标脏（豁免只给己方 turn，不给审批窗）', async () => {
+  const h = makeEngine();
+  const a = h.view('inst-A', 'sess-perm-ext');
+  const base = Date.now() - 20_000;
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-perm-ext', settledTail(base));
+  await h.engine.catchUpTick();          // 切入定基线（idle）
+
+  h.setState('inst-A', 'permission');    // 等审批：己方不写盘（此 tick 建 size 基线）
+  await h.engine.catchUpTick();
+
+  // 审批挂起期间终端写入同一会话
+  writeTranscript(h.roots.transcriptBaseDir, a.cwd, 'sess-perm-ext', [
+    ...settledTail(base),
+    { type: 'user', message: { role: 'user', content: '终端在审批窗里问的' }, timestamp: iso(base + 5_000) },
+    { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: '终端在审批窗里答的' }] }, timestamp: iso(base + 6_000) },
+  ]);
+
+  // 审批被拒/轮次收尾 → state 翻 idle，写入之后再没有第二个 permission tick；此刻手机重连
+  h.setState('inst-A', 'idle');
+  h.engine.requestRebaseline();
+  await h.engine.catchUpTick();
+
+  assert.equal(a.externalDirty, true, '审批窗里的终端写入必须标脏，否则下条手机消息从旧位置分叉');
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 // 以下用例由 `npm run mutate -- src/server/mirror-engine.js` 反推补齐（2026-08-02）。
 // 上面那批用例首轮全绿，但变异检查显示 129 个变异体里存活 67 个——存活的意思是「这行被

@@ -321,6 +321,37 @@ test.describe('rebaselineAbsorbedExternal（BE-009）', () => {
   test('localBusy=false（显式传入）+ 磁盘变长 → 仍 true（老行为不受影响，回归保护）', () => {
     assert.equal(rebaselineAbsorbedExternal({ sameSession: true, curLen: 5, baseline: 2, localBusy: false }), true);
   });
+  // 2026-08-10：localBusy 只罩住「重连当下仍在跑」，罩不住「刚跑完」。己方 turn 期间 catchUpTick 走
+  // localBusy 分支【冻结 baseline】，baseline 要等下一个 tick 的吸收才推进；而 turn 一结束 state 即 idle。
+  // 重连落进 turn 结束前后各约一个 tick 周期的窗口（rebaseline flag 由【下一个】tick 消费，故连接发生在
+  // turn 结束【之前】同样会命中），rebaseline 就拿【冻结的旧 baseline】比【含己方刚写那一轮的磁盘长度】，
+  // 判成外部增长标 externalDirty——「发消息→锁屏→解锁看结果」正是移动端最典型的模式。实证会话 39da384a：
+  // 主链全部 sdk-ts、零真实 cli 写入（唯一 cli 条目是自家 entrypoint-marker 假行），全程 web 驱动却反复
+  // 弹「正在续接会话（吸收终端写入）…」。修法=补 wasOwnTurn 维度，与 catchUpStep 的吸收窗口同源。
+  test('wasOwnTurn=true（己方 turn 上一 tick 还在写盘）+ 现已 idle + 磁盘变长 → false（己方刚写完，不是终端写入）', () => {
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: 130, baseline: 100, localBusy: false, wasOwnTurn: true,
+    }), false);
+  });
+  test('wasOwnTurn=true + 满窗 tail 变（SS-NEW-002 判据）→ 同样 false（早退要挡住两条判定支路）', () => {
+    const cap = 4;
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: cap, baseline: cap, historyCap: cap, localBusy: false, wasOwnTurn: true,
+      prevTailKey: 't1|user|old', curTailKey: 't2|assistant|new',
+    }), false);
+  });
+  test('wasOwnTurn=false + 磁盘变长 → true（终端真写入这条主路不受影响，防修过头）', () => {
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: 130, baseline: 100, localBusy: false, wasOwnTurn: false,
+    }), true);
+  });
+  // 等审批(permission)不等于己方在写盘：那段增长可能真来自终端，豁免它会漏标致 transcript 分叉。
+  // 调用方据此只在 st==='busy' 时传 wasOwnTurn:true（mirror-engine 的 seed 与 localBusy 两个写入点）。
+  test('wasOwnTurn=false 但上一 tick 是等审批 + 磁盘变长 → true（审批窗里的终端写入不得被吞）', () => {
+    assert.equal(rebaselineAbsorbedExternal({
+      sameSession: true, curLen: 130, baseline: 100, localBusy: false, wasOwnTurn: false,
+    }), true);
+  });
 });
 
 // ── 原始同步 bug 复现（web 额度耗尽 → CLI 外部 resume+compact 写入 → web 重开看不到 CLI 新输出）────────

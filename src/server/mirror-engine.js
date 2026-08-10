@@ -207,6 +207,11 @@ export function createMirrorEngine({
               curLen,
               baseline: catchUpState.baseline,
               localBusy, // 己方忙碌不算外部写入
+              // 己方 turn【上一 tick】还在写盘：baseline 被下面 localBusy 分支冻结着、这一轮的增长是自己
+              // 写的，只是尚未吸收。不传这一维，「发消息→锁屏→解锁」这条移动端主路就会把己方写入判成终端
+              // 写入。刻意用 wasOwnTurn 而非 localBusy 口径的 wasBusy——等审批(permission)期间的增长可能
+              // 真是终端写的，豁免它会漏标致分叉（2026-08-10，见 rebaselineAbsorbedExternal 注释）。
+              wasOwnTurn: catchUpState.wasOwnTurn === true,
               prevTailKey: catchUpState.lastTailKey ?? null,
               curTailKey,
             })) {
@@ -221,7 +226,10 @@ export function createMirrorEngine({
       catch { return; }
       const seedLen = seedMsgs.length;
       // SS-001：seed 时同步 lastTailKey，否则下一 tick 满窗会把「首次记指纹」当滑动误 reload
-      const seededState = { baseline: seedLen, wasBusy: localBusy, lastTailKey: historyTailKey(seedMsgs) };
+      // wasOwnTurn 与 wasBusy 分开记：前者只认己方 turn 在写盘（st==='busy'），供重连 rebaseline 判「这段
+      // 增长是不是自己写的」；后者是 localBusy 口径（含 permission），供 catchUpStep 吸收己方写盘。见
+      // rebaselineAbsorbedExternal 注释：审批窗里的增长可能真是终端写的，不能按 wasBusy 一并豁免。
+      const seededState = { baseline: seedLen, wasBusy: localBusy, wasOwnTurn: st === 'busy', lastTailKey: historyTailKey(seedMsgs) };
       // 切入预判（2026-07-12 单驾驶员）：按尾部形态立即预锁——PENDING=有人正驱动（终端轮次未完结），
       // 堵「切走再切回、终端还在跑但要等下一条 text 落盘才锁」的空窗。旧「切入不预锁」是因为当时唯一
       // 判据 mtime 不可信（web resume 自身刷 mtime）；尾部形态是语义判据、可信。localBusy 豁免见 mirrorEntryLock。
@@ -295,7 +303,9 @@ export function createMirrorEngine({
       if (externalGrowthWhilePaused({ state: st, prevSize: mirrorLastSize, curSize: busySize })) {
         a.externalDirty = true;
       }
-      catchUpState = { baseline: catchUpState.baseline, wasBusy: true, lastTailKey: catchUpState.lastTailKey ?? null };
+      // wasOwnTurn 只在 st==='busy' 时置：permission（等审批）期间 web 侧未必不写盘（并行工具调用里免审批
+      // 的那几个照跑照落盘），但更要紧的是那段增长也可能真来自终端——豁免它会让重连 rebaseline 漏标致分叉。
+      catchUpState = { baseline: catchUpState.baseline, wasBusy: true, wasOwnTurn: st === 'busy', lastTailKey: catchUpState.lastTailKey ?? null };
       // busy（己方 turn 在写盘）作废 size 基线；permission（己方不写盘）维持基线，供下一 tick 判终端增长
       mirrorLastSize = st === 'permission' && busySize >= 0 ? busySize : -1;
       mirrorRelease = rel.state;

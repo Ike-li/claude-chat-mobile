@@ -309,17 +309,37 @@ export function catchUpStep(state, { messages, localBusy = false, historyCap = H
 // 长度增长 → true；HISTORY_MAX 满窗滑动时 len 不变但尾指纹变 → 也 true（对齐 catchUpStep lastTailKey）。
 // 2026-07-18 修复：新增 localBusy（调用方 instanceState 已算好、同 catchUpStep/mirrorReleaseStep 同名参数同判据）
 // ——己方正跑 turn/等审批时磁盘变长大概率是自己写出来的，不是终端外部写入，早退 false 不误标 externalDirty。
+// 2026-08-10 修复：localBusy 只罩住「重连当下仍在跑」，罩不住「刚跑完」。catchUpStep 的 localBusy 分支
+// 【冻结 baseline】只记 wasBusy=true，baseline 要等下一 tick 的吸收才推进；而 turn 一结束 state 立刻是 idle。
+// 重连落进 turn 结束前后各约一个 tick 周期的窗口（常态 2500ms、只读镜像态 1000ms；flag 由【下一个】tick
+// 消费，故连接发生在 turn 结束【之前】同样会命中），就拿【冻结的旧 baseline】比【含己方刚写那一轮的磁盘
+// 长度】，把自己写的判成外部增长——「发消息→锁屏→解锁看结果」正是移动端最典型的模式。实证会话 39da384a：
+// 主链全部 sdk-ts、零真实 cli 写入（唯一 cli 条目是自家 entrypoint-marker 假行），却反复弹「正在续接
+// 会话（吸收终端写入）…」。补 wasOwnTurn 维度即可，与 catchUpStep 的 wasBusy 吸收窗口同源。
+//
+// 【为什么是 wasOwnTurn 而不是 localBusy 口径的 wasBusy】localBusy 把 busy 与 permission 压成一个布尔，
+// 但两者语义不同：busy=己方确定在写盘；permission=己方在等审批（最长 30min），磁盘增长【可能是终端写的】
+// ——externalGrowthWhilePaused 存在的理由正是这个。若按 localBusy 口径豁免，就会连审批窗里的终端写入一起
+// 吞掉（permission 建基线→终端写入→轮次收尾翻 idle→重连，此时 externalGrowthWhilePaused 已没有第二个
+// permission tick 可兜）⇒ 漏标 ⇒ transcript 分叉。漏标(分叉)远重于误标(多跑一次冷启动)，故只豁免己方 turn。
+//
+// 取舍：与 catchUpStep 的 wasBusy 整段吸收同源（见本文件 §已知边界 code-review 发现 2）——终端写入若恰好
+// 撞进「己方 turn 刚结束」这一窗口会被一并吸收、不标脏。该窗口内 catchUpStep 本就已经漏（那条边界是既有的），
+// 但重连路径此前是独立的第二道网，本改动把这个窄窗内的检出从「重连就能抓到」降为「抓不到」。这是有意取舍，
+// 不是等价改写。窗口宽度 ≈ 一个 tick 周期，且仅在「己方 turn 正跑 + 终端并发写同一会话」时才存在。
 export function rebaselineAbsorbedExternal({
   sameSession,
   curLen,
   baseline,
   localBusy = false,
+  wasOwnTurn = false,
   historyCap = HISTORY_MAX_MESSAGES,
   prevTailKey = null,
   curTailKey = null,
 } = {}) {
   if (sameSession !== true) return false;
   if (localBusy === true) return false;
+  if (wasOwnTurn === true) return false; // 己方 turn 上一 tick 还在写盘 → 这次增长是自己写的，baseline 只是尚未吸收
   if (!Number.isFinite(curLen) || !Number.isFinite(baseline)) return false;
   if (curLen > baseline) return true;
   const atCap = Number.isFinite(historyCap) && historyCap > 0
