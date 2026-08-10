@@ -109,6 +109,15 @@ function filterSafeResolvedEnv(env) {
   return Object.keys(out).length ? out : undefined;
 }
 
+// CLI stderr 尾部缓冲上限。
+// 【为什么必须自己接住 stderr】装机的 SDK 0.3.201 的 getProcessExitError 只造
+// `Claude Code process exited with code N`，不含 CLI 输出（上游 0.3.211 才把 stderr 拼进 process-exit
+// error）。而 CLI 把 resume 失败的真实原因——尤其 `Session <id> is currently running as a background
+// agent (bg)`——只写在 stderr。不接住它，F4 就永远只能吐「process exited with code 1」这种对用户
+// 毫无信息量的文案（该断链曾被一条喂了理想形态错误对象的单测掩盖）。
+// 只留尾部：报错行总在最末，长跑会话的 stderr 不会把内存撑大。4000 字符足够容纳 CLI 的多行报错。
+const STDERR_TAIL_MAX = 4000;
+
 // SDK query options 纯函数（可单测）：集中「与 CLI 对齐的桥接开关」，避免 start() 内联大对象难测。
 // agentProgressSummaries：默认开——子 agent ~30s AI 进度写 task_progress.summary，刷新 lastSeenAt + 横幅文案；
 // 关：CCM_AGENT_PROGRESS_SUMMARIES=0（省 fork token；静默期只靠 tool description 变化）。
@@ -142,7 +151,12 @@ export function buildAgentQueryOptions(session, env = process.env) {
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     env: { ...sdkChildEnv(env), ...filterSafeResolvedEnv(session.resolvedEnv) },
-    stderr: data => { if (env.LOG_STDERR) console.error('[claude]', sanitize(data)); },
+    // 无条件收集（不受 LOG_STDERR 影响）：LOG_STDERR 管的是「要不要打到服务端日志」，
+    // 而 resume 失败的原因识别任何部署下都需要。传了本 callback 才会让 SDK 把 stdio[2] 设成 pipe。
+    stderr: data => {
+      session._recordStderr(data);
+      if (env.LOG_STDERR) console.error('[claude]', sanitize(data));
+    },
   };
 }
 const TOOL_INPUT_MAX = 40;                // FIFO 容量上限（Map 插入序淘汰最旧），防内存涨
@@ -370,6 +384,7 @@ export class AgentSession {
     this.totalCostUsd = 0;        // result.total_cost_usd 最新值（SDK 已是会话累计，勿 +=）
     this.totalDurationMs = 0;     // += result.duration_ms（活跃轮次累计，非墙钟——实例懒重生不暴露给用户）
     this.totalApiDurationMs = 0;  // += result.duration_api_ms
+    this.stderrTail = '';         // CLI stderr 尾部（有界，见 _recordStderr）：resume 失败时唯一的原因来源
     this.lastToolName = null;     // 最后使用的工具名（Bash/Agent/Write 等），供后台 tab 角标细化
     this.bgTasks = new Map();     // 活的后台任务注册表 key → { taskType, message, lastSeenAt }——task_progress upsert / 完成 or TTL 清；驱动"纯后台运行中"⏳
     // 子 agent 类型缓存 parent_tool_use_id → subagent_type：probe 实证只有 assistant 消息带 subagent_type，
@@ -441,6 +456,28 @@ export class AgentSession {
       ?.catch?.(() => {});
   }
 
+  // CLI stderr 收集（有界，尾部保留）。只服务于 resume 失败的原因识别，不进事件流、不落日志——
+  // 落日志是 LOG_STDERR 的事，两者刻意分开。见 STDERR_TAIL_MAX 处的说明。
+  _recordStderr(data) {
+    const chunk = String(data ?? '');
+    if (!chunk) return;
+    this.stderrTail = (this.stderrTail + chunk).slice(-STDERR_TAIL_MAX);
+  }
+
+  // 从 stderr 尾部挑出「会话被别的 claude 进程独占」那一行；没有就空串。
+  // 实情（别被"提取"二字误导）：formatSessionLockError 在 /background agent/i 命中时返回的是**固定文案**，
+  // rawMessage 不出现在输出里——所以本函数当下实际只充当布尔判据。逐行 + slice 是防御性的：
+  // 万一下游哪天改成回显原文，传下去的是那一行，而不是整段含建议行与栈的 stderr。
+  _sessionLockLineFromStderr() {
+    if (!this.stderrTail) return '';
+    const lines = sanitize(this.stderrTail).split('\n');
+    for (let i = lines.length - 1; i >= 0; i--) {   // 报错行通常在末尾，从后往前找
+      const line = lines[i].trim();
+      if (/background agent/i.test(line)) return line.slice(0, 200);
+    }
+    return '';
+  }
+
   async consume(q) {
     let caught = null;
     try {
@@ -468,11 +505,16 @@ export class AgentSession {
         // sessionFileExists 已通过时「历史被清理」常误导：优先透传 CLI 真实原因（含 background agent 独占）。
         this.resumeFailed = true;
         const reason = caught?.message ? sanitize(String(caught.message)).slice(0, 200) : '';
+        // 独占锁原因有两个可能来源，按可靠性排序取第一个命中的：
+        //  · reason —— SDK 0.3.211+ 才会把 CLI stderr 拼进 process-exit error；装机的 0.3.201 不会。
+        //  · stderr 尾部 —— CLI 任何版本都往这写，与 SDK 版本无关。
+        // 两条都留：升级后 reason 自带原文走第一条，不升级也不瞎。
+        const lockRaw = /background agent/i.test(reason) ? reason : this._sessionLockLineFromStderr();
         let message;
-        if (/background agent/i.test(reason)) {
+        if (lockRaw) {
           // 只透传 stderr 原文，不硬塞 kind：这里唯一的证据就是那句报错，占用者的真实 kind
           // （注册表口径 'bg' / agents 口径 'background'）在此不可知，塞死会让文案说得比证据更满。
-          message = formatSessionLockError({ rawMessage: reason });
+          message = formatSessionLockError({ rawMessage: lockRaw });
         } else if (reason) {
           message = `无法恢复会话：${reason.slice(0, 120)}。请新建会话或从列表选择其他会话`;
         } else {

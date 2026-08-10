@@ -6,6 +6,7 @@ import {
   formatLifecycleProcessExited,
   formatLifecycleSessionError,
   formatLifecycleGatewayStall,
+  buildAgentQueryOptions,
 } from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -730,6 +731,32 @@ test.describe('consume() 退出路径', () => {
     assert.ok(err);
     assert.match(err.payload.message, /后台 agent/);
     assert.doesNotMatch(err.payload.message, /历史可能已被清理/);
+    s.dispose();
+  });
+
+  // ↑ 那条用例喂的是「错误 message 里带 CLI 原文」的理想形态，而装机的 SDK 0.3.201 不产出这种形态：
+  // 它的 getProcessExitError 只会造 `Claude Code process exited with code N`（上游 0.3.211 才把 stderr
+  // 拼进去）。CLI 真正把 background agent 独占的原因写在 **stderr**，SDK 0.3.201 已经会把 stderr 原样
+  // 转给 options.stderr（实测 stdio[2]='pipe' + stderr.on('data') → options.stderr(chunk)）。
+  // 所以判据只能是「我们自己接住 stderr」——这条不依赖 SDK 版本，升级与否都成立。
+  test('resume 撞 background agent 锁：原因只在 stderr、SDK 错误仅含 exit code → 文案仍指向后台 agent', async () => {
+    const { s, events } = makeSession({ resumeId: 'bg-locked' });
+    s.sawInit = false;
+    buildAgentQueryOptions(s).stderr(
+      'Error: Session bg-locked is currently running as a background agent (bg).\n'
+      + 'Use `claude agents` to find and attach to it, or add --fork-session to branch off a copy.\n',
+    );
+    const fakeQ = {
+      [Symbol.asyncIterator]() {
+        return { next() { return Promise.reject(new Error('Claude Code process exited with code 1')); } };
+      },
+    };
+    await s.consume(fakeQ);
+    assert.equal(s.resumeFailed, true);
+    const err = events.find(e => e.type === 'error' && !e.payload.recoverable);
+    assert.ok(err);
+    assert.match(err.payload.message, /后台 agent/);
+    assert.doesNotMatch(err.payload.message, /CLI 未完成初始化/);
     s.dispose();
   });
 
