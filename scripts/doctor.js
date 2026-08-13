@@ -2,11 +2,11 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
-// 检查项（15 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
+// 检查项（16 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
-// 4. PORT 未被占用
+// 4. PORT 未被占用（被自家常驻 server unit 占用判 ok——常驻部署下那是正常态）
 // 5. WEB_STATUSLINE 配置口径（web 自有状态栏默认自包含启用，可用 WEB_STATUSLINE=off 关闭）
 // 6. CLI statusline bridge 安装态（只读 status；不安装、不改 ~/.claude）
 // 7. 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
@@ -18,6 +18,7 @@
 // 13. 日志开关长开（DEBUG_SDK_MESSAGES/LOG_INTERACTIONS/LOG_STDERR + 日志体积）
 // 14. CLAUDE_CONFIG_DIR 兼容性（CLI 认它、本仓固定读 ~/.claude；设了会静默读不到历史，见 doctor-checks.claudeConfigDirDiagnostic）
 // 15. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
+// 16. LaunchAgent 常驻服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
 import { config } from 'dotenv';
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
@@ -28,7 +29,7 @@ import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
-import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic, logSwitchDiagnostic, uploadsFootprintDiagnostic, claudeConfigDirDiagnostic } from '../src/ops/doctor-checks.js';
+import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic, logSwitchDiagnostic, uploadsFootprintDiagnostic, claudeConfigDirDiagnostic, serviceUnitsDiagnostic, portOccupancyDiagnostic } from '../src/ops/doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
 
@@ -146,30 +147,67 @@ function checkOneDir(label, dir, soft = false) {
   }
 }
 
-// D4: PORT 未被占用
+// scripts/service.js status --json 的只读探针。D4 与 D16 共用一次结果（跑两遍等于两次 launchctl）。
+// 与 D6/D12 同款 execFileSync 范式。读不到返回 null，两个检查项各自降级。
+let _serviceStatus;
+function readServiceStatus() {
+  if (_serviceStatus !== undefined) return _serviceStatus;
+  try {
+    const raw = execFileSync(process.execPath, [join(HERE, 'scripts', 'service.js'), 'status', '--json'], {
+      cwd: HERE,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 8000,
+    });
+    const parsed = JSON.parse(raw);
+    _serviceStatus = parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    _serviceStatus = null;
+  }
+  return _serviceStatus;
+}
+
+// 端口是不是自家常驻 server 占的。三个条件都要：unit 在跑、探到的端口一致、确实连得通。
+// 不能只看「server 在跑」——doctor 支持 --env=other.env，那份 .env 的 PORT 可能与常驻服务不同，
+// 只看运行态会把「别的进程占了我要用的端口」误报成预期占用。
+function servicePortOwner(port) {
+  const s = readServiceStatus();
+  const server = s?.units?.find(u => u.unit === 'server');
+  if (!server || server.state !== 'running') return null;
+  return server.listen?.reachable && server.listen?.port === port ? server.label : null;
+}
+
+// D4: PORT 未被占用（或被自家常驻服务占用——那是常驻部署的正常态，不是故障）
 async function checkPort() {
   const port = parseInt(process.env.PORT || '3000', 10);
   if (isNaN(port) || port < 1 || port > 65535) {
-    fail('PORT', `无效端口: ${process.env.PORT || '3000'}`);
+    const r = portOccupancyDiagnostic({ port: process.env.PORT || '3000' });
+    fail(r.name, r.detail);
     return;
   }
-  return new Promise(resolve => {
+  const probe = await new Promise(resolve => {
     const conn = createConnection({ port, host: '127.0.0.1' });
-    conn.on('connect', () => {
-      conn.destroy();
-      fail('PORT', `端口 ${port} 已被占用（可能上次未干净停止）。请 kill 旧进程或换端口。`);
-      resolve();
-    });
+    conn.on('connect', () => { conn.destroy(); resolve({ occupied: true }); });
     conn.on('error', err => {
-      if (err.code === 'ECONNREFUSED') {
-        ok('PORT', `端口 ${port} 可用`);
-      } else {
-        warn('PORT', `端口 ${port} 探测失败: ${err.message}`);
-      }
-      resolve();
+      resolve(err.code === 'ECONNREFUSED' ? { occupied: false } : { probeError: err.message });
     });
-    setTimeout(() => { conn.destroy(); resolve(); }, 500); // 超时兜底
+    setTimeout(() => { conn.destroy(); resolve({ probeError: '探测超时' }); }, 500); // 超时兜底
   });
+  const ownerLabel = probe.occupied ? servicePortOwner(port) : null;
+  const r = portOccupancyDiagnostic({ port, ...probe, ownerLabel });
+  ({ ok, warn, fail })[r.status](r.name, r.detail);
+}
+
+// D16: LaunchAgent 常驻服务安装态。与 D6/D12 同款只读探针；判定全在 doctor-checks.serviceUnitsDiagnostic，
+// 与 UI 体检共用同一份（两处各写一份迟早分叉）。
+function checkServiceUnits() {
+  const s = readServiceStatus();
+  const r = serviceUnitsDiagnostic({
+    platform: s?.platform ?? platform(),
+    supported: s?.supported ?? false,
+    units: s?.units ?? null,
+  });
+  ({ ok, warn, fail })[r.status](r.name, r.detail);
 }
 
 // D5: WEB_STATUSLINE 配置口径。E16 现在由 statusline.js 自包含组装，不依赖终端 statusLine 脚本或
@@ -445,7 +483,7 @@ function effectiveConfigFiles() {
   });
 }
 
-// 执行 15 项检查（D4 端口检查是 async，需 await）
+// 执行 16 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
   checkClaudeBin();
@@ -462,6 +500,7 @@ function effectiveConfigFiles() {
   checkLogSwitches();
   checkClaudeConfigDir();
   checkUploadsFootprint();
+  checkServiceUnits();
 
   // --fix 选项：自动修复权限
   if (shouldFix) {

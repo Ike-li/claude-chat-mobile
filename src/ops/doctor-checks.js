@@ -332,3 +332,73 @@ export function claudeConfigDirDiagnostic({ configDir = '' } = {}) {
       + `  会读不到，且表现为「这个工作区没有会话」而不是报错。请取消该变量，或改用终端查看这些会话。`,
   };
 }
+
+// ── D16：LaunchAgent 常驻服务安装态 ──────────────────────────────────────
+//
+// 入参是 scripts/service.js status --json 的输出（doctor 用 execFileSync 只读取回来，
+// 同 D6/D12 的探针范式）。这里只消费 ownership/state/flapping/drift 四个字段，
+// **绝不回显 plistPath**——绝对路径属脱敏范围（见本文件与 doctor-runtime.js 的纪律）。
+//
+// 判据分级的理由：
+//   crashed  → fail：装了却没在跑，是明确故障，值得让 doctor 退出码变 1
+//   flapping → warn：在跑但崩过（机主的隧道就是 -9 被 KeepAlive 拉起）。只看 PID 会一直显绿，
+//                    这一档不报出来，隧道挂了只能等公网 1033 才发现
+//   drift    → warn：仓库移动 / node 换版本，重启才会暴露，提前说
+//   shape 漂移的 foreign unit → **不算问题**：自定义启动方式（机主的隧道用自写包装脚本绕代理
+//                    TUN 劫持）是有意配置，年年报黄只会训练用户忽略告警
+export function serviceUnitsDiagnostic({ platform = '', supported = false, units = null } = {}) {
+  const name = 'LaunchAgent';
+  if (platform !== 'darwin' || !supported) {
+    return { status: 'ok', name, detail: `非 macOS（${platform || '未知'}），跳过 LaunchAgent 检查；Linux 请用 systemd，见 docs/deployment.md` };
+  }
+  if (!Array.isArray(units)) {
+    return { status: 'warn', name, detail: '无法读取常驻服务状态；运行 `npm run service:status` 查看详情。' };
+  }
+
+  const server = units.find((u) => u.unit === 'server');
+  if (!server || server.state === 'not-installed') {
+    return { status: 'warn', name, detail: '常驻服务未安装：关掉终端 server 就停了、开机也不会自启。运行 `npm run service:install` 安装。' };
+  }
+  if (server.state === 'crashed') {
+    return { status: 'fail', name, detail: `${server.label} 已安装但当前未运行（上次异常退出）。运行 \`npm run service:status\` 看详情、\`node scripts/service.js logs server\` 看日志。` };
+  }
+
+  const problems = [];
+  for (const u of units) {
+    if (u.flapping) problems.push(`${u.label} 在跑但曾异常退出（被 KeepAlive 拉起）`);
+    // shape = 用户换掉了启动方式，属有意配置，不计入问题
+    const realDrift = (u.drift || []).filter((d) => d !== 'shape');
+    if (realDrift.length) problems.push(`${u.label} 配置与模板不一致：${realDrift.join('、')}`);
+  }
+  if (problems.length) {
+    return { status: 'warn', name, detail: `${problems.join('\n  ')}\n  运行 \`npm run service:status\` 查看详情。` };
+  }
+  const running = units.filter((u) => u.state === 'running').length;
+  return { status: 'ok', name, detail: `${server.label} 运行中（共 ${running} 个 unit 在跑）` };
+}
+
+// ── D4：端口占用判定 ────────────────────────────────────────────────────
+//
+// 旧实现把「端口连得上」无条件判成 fail。但常驻部署——文档主推、也是机主实际用的拓扑——下
+// 端口本来就该被自家 server 占着，于是 doctor 在生产机器上**恒红**一项。恒红的检查项等于没有检查项。
+export function portOccupancyDiagnostic({ port, occupied = false, ownerLabel = null, probeError = '' } = {}) {
+  const name = 'PORT';
+  const n = Number(port);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    return { status: 'fail', name, detail: `无效端口: ${port}` };
+  }
+  if (probeError) {
+    return { status: 'warn', name, detail: `端口 ${n} 探测失败: ${probeError}` };
+  }
+  if (!occupied) {
+    return { status: 'ok', name, detail: `端口 ${n} 可用` };
+  }
+  if (ownerLabel) {
+    return { status: 'ok', name, detail: `端口 ${n} 由常驻服务 ${ownerLabel} 占用（预期；勿再手动 npm start）` };
+  }
+  return {
+    status: 'fail',
+    name,
+    detail: `端口 ${n} 已被占用，且不是本仓的常驻服务。查是谁：lsof -nP -iTCP:${n} -sTCP:LISTEN`,
+  };
+}

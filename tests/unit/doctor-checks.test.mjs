@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   uploadsFootprintDiagnostic,
-  UPLOADS_FOOTPRINT_WARN_BYTES, statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, logSwitchDiagnostic, LOG_ROTATE_THRESHOLD_BYTES, claudeConfigDirDiagnostic } from '../../src/ops/doctor-checks.js';
+  UPLOADS_FOOTPRINT_WARN_BYTES, statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, logSwitchDiagnostic, LOG_ROTATE_THRESHOLD_BYTES, claudeConfigDirDiagnostic, serviceUnitsDiagnostic, portOccupancyDiagnostic } from '../../src/ops/doctor-checks.js';
 
 // 判据依据（2026-08-04 用本地假网关抓 /v1/messages 请求体实测，CLI 2.1.221）：
 //   全局 sonnet + 目录映射 SONNET      → 发出 grok-4.5      （映射生效）
@@ -444,5 +444,114 @@ test.describe('claudeConfigDirDiagnostic', () => {
     assert.match(r.detail, /CLAUDE_CONFIG_DIR/);
     assert.match(r.detail, /\/custom\/claude-home/, '要回显实际值，否则排障时不知道是谁设的');
     assert.match(r.detail, /历史|会话|transcript/);
+  });
+});
+
+// ── D16：LaunchAgent 安装态 ───────────────────────────────────────────────
+// 判据只消费 scripts/service.js status --json 的 ownership/state/drift 三个字段，
+// **绝不回显 plistPath 绝对路径**（doctor-runtime.js:3 的脱敏纪律）。
+test.describe('serviceUnitsDiagnostic', () => {
+  const server = (over = {}) => ({
+    unit: 'server', label: 'com.ccm.server', known: true,
+    ownership: 'managed', state: 'running', flapping: false, drift: [], ...over,
+  });
+
+  test('非 macOS → ok 并说明跳过原因（CI 与 Docker 都在 Linux 上，不能红）', () => {
+    const r = serviceUnitsDiagnostic({ platform: 'linux', supported: false, units: [] });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /macOS|systemd/);
+  });
+
+  test('server 在跑且归属清晰 → ok', () => {
+    const r = serviceUnitsDiagnostic({ platform: 'darwin', supported: true, units: [server()] });
+    assert.equal(r.status, 'ok');
+  });
+
+  test('未安装 → warn 并给出安装命令（新用户最需要的一句）', () => {
+    const r = serviceUnitsDiagnostic({
+      platform: 'darwin', supported: true,
+      units: [server({ state: 'not-installed', ownership: 'adoptable' })],
+    });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /service:install|未安装/);
+  });
+
+  // 机主的隧道就是这个状态。只看 PID 会一直显绿灯，而它其实在反复崩溃重启。
+  test('flapping → warn 并点名是哪个 unit', () => {
+    const r = serviceUnitsDiagnostic({
+      platform: 'darwin', supported: true,
+      units: [server(), { unit: 'tunnel', label: 'com.ccm.tunnel', known: true, ownership: 'foreign', state: 'running', flapping: true, drift: [] }],
+    });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /com\.ccm\.tunnel/);
+  });
+
+  test('server crashed → fail（装了却没在跑，是明确故障）', () => {
+    const r = serviceUnitsDiagnostic({
+      platform: 'darwin', supported: true,
+      units: [server({ state: 'crashed' })],
+    });
+    assert.equal(r.status, 'fail');
+  });
+
+  test('配置漂移 → warn 并列出漂移维度', () => {
+    const r = serviceUnitsDiagnostic({
+      platform: 'darwin', supported: true,
+      units: [server({ drift: ['repo-path'] })],
+    });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /repo-path/);
+  });
+
+  test('shape 漂移的 foreign unit 不算问题（自定义启动方式是有意配置，别年年报黄）', () => {
+    const r = serviceUnitsDiagnostic({
+      platform: 'darwin', supported: true,
+      units: [server(), { unit: 'tunnel', label: 'com.ccm.tunnel', known: true, ownership: 'foreign', state: 'running', flapping: false, drift: ['shape'] }],
+    });
+    assert.equal(r.status, 'ok');
+  });
+
+  test('detail 里绝不出现 plist 绝对路径（脱敏纪律）', () => {
+    const r = serviceUnitsDiagnostic({
+      platform: 'darwin', supported: true,
+      units: [server({ plistPath: '/Users/you/Library/LaunchAgents/com.ccm.server.plist', drift: ['repo-path'] })],
+    });
+    assert.ok(!r.detail.includes('/Users/you'), 'doctor 输出不回显绝对路径');
+  });
+
+  test('status --json 拿不到（service.js 挂了）→ warn 而非 fail，不阻断整份体检', () => {
+    assert.equal(serviceUnitsDiagnostic({ platform: 'darwin', supported: true, units: null }).status, 'warn');
+  });
+});
+
+// ── D4 修正：端口被自家常驻服务占用不是故障 ─────────────────────────────
+// 旧实现无条件把「端口连得上」判成 fail，而常驻部署（文档主推的拓扑）下这是**恒红**的假警报。
+test.describe('portOccupancyDiagnostic', () => {
+  test('端口空闲 → ok', () => {
+    assert.equal(portOccupancyDiagnostic({ port: 3000, occupied: false }).status, 'ok');
+  });
+
+  test('被自家 server unit 占用 → ok（这正是常驻部署的正常态）', () => {
+    const r = portOccupancyDiagnostic({ port: 3000, occupied: true, ownerLabel: 'com.ccm.server' });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /com\.ccm\.server/);
+  });
+
+  test('被不明进程占用 → fail（真冲突，要提示怎么查）', () => {
+    const r = portOccupancyDiagnostic({ port: 3000, occupied: true, ownerLabel: null });
+    assert.equal(r.status, 'fail');
+    assert.match(r.detail, /lsof|占用/);
+  });
+
+  test('端口号非法 → fail', () => {
+    assert.equal(portOccupancyDiagnostic({ port: 0 }).status, 'fail');
+    assert.equal(portOccupancyDiagnostic({ port: 70000 }).status, 'fail');
+    assert.equal(portOccupancyDiagnostic({ port: NaN }).status, 'fail');
+  });
+
+  test('探测本身失败（非 ECONNREFUSED）→ warn，不武断判占用', () => {
+    const r = portOccupancyDiagnostic({ port: 3000, probeError: 'EHOSTUNREACH' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /EHOSTUNREACH/);
   });
 });
