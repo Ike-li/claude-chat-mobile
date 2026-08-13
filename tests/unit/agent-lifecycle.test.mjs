@@ -9,6 +9,8 @@ import {
   buildAgentQueryOptions,
 } from '../../src/agent/agent.js';
 import { makeSession } from '../helpers/agent-unit.mjs';
+import { getSessionLogs } from '../../src/agent/interaction-log.js';
+import { getDiagLogs } from '../../src/agent/diag-log.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -53,6 +55,22 @@ test.describe('formatLifecycle*', () => {
     // 本地前台工具在跑（误报，已由前台工具豁免修掉）。剩余场景也未必是网关——可能是网络或
     // 长 prefill。看门狗只知道「没收到消息」，不知道为什么，文案不得替它猜。
     assert.equal(/第三方网关|限流/.test(msg), false, '不得断言未经证实的归因');
+  });
+
+  // R2（2026-08-10 真机 a90814ca）：静默秒数与本轮真实时长不同源——静默锚会被豁免分支
+  // （后台任务/前台工具/本地命令在途）合法刷新，本轮起点只在 send/result 变。只报前者时，
+  // 用户在一条 271 秒的连续静默里先看到「113 秒」、后看到「90 秒」，无从判断到底等了多久。
+  test('R2：本轮总时长明显长于静默秒数时并报两个数', () => {
+    const msg = formatLifecycleGatewayStall(90, 10, 285);
+    assert.match(msg, /模型已 90 秒无响应/);
+    assert.match(msg, /本轮已进行 285 秒/);
+    assert.equal(/已中断|已按挂死/.test(msg), false, '仍然只是告警');
+  });
+
+  test('R2b：本轮时长缺失或与静默同源时退回原文案（不说「已 90 秒无响应，本轮已进行 90 秒」这种废话）', () => {
+    assert.equal(formatLifecycleGatewayStall(95, 10).includes('本轮已进行'), false, '缺参数不得凭空造数');
+    assert.equal(formatLifecycleGatewayStall(95, 10, 95).includes('本轮已进行'), false, '两数相等无信息量');
+    assert.equal(formatLifecycleGatewayStall(95, 10, 99).includes('本轮已进行'), false, '差距在容差内不加噪音');
   });
 });
 
@@ -160,6 +178,140 @@ test.describe('checkIdle()', () => {
     assert.equal(s.terminating, false);
     assert.equal(aborted, false);
     assert.equal(events.find(e => e.type === 'error'), undefined);
+    s.dispose();
+  });
+
+  // R1（2026-08-10 真机 a90814ca）：切回会话不得给在途轮的静默看护续命。
+  // 病灶是一个字段兼两职——touchActivity() 刷的 lastActivity 既当「空闲回收时钟」又当「在途轮静默时钟」。
+  // 后果有二：① 挂死轮次的 idleTimeoutMs 中断保护每被切进一次就重新计时（agent.js:765 的注释早已
+  // 记下这点，但没修）；② 告警里的「模型已 N 秒无响应」会跟着倒退——真机那次一条 271 秒的连续静默
+  // 里先报「113 秒」、两分半后又报「90 秒」，数字比前一条还小。
+  test('R1：touchActivity 不续期在途轮静默看护（切回会话不给挂死轮次续命）', () => {
+    const { s } = makeSession({ idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    let interrupted = false;
+    s.q = { interrupt: () => { interrupted = true; } };
+
+    s.touchActivity();   // 用户切回本会话（server 的 user:setViewing / finishOpenFocus）
+    s.checkIdle();
+
+    assert.equal(interrupted, true, '切视图是「用户在看」，不是「模型有产出」——不得推迟挂死中断');
+    s.dispose();
+  });
+
+  // R2c：告警分支的接线（此前只有纯函数用例，emit 那一路没人守）。
+  test('R2c：网关静默告警把本轮真实时长一并报出', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.turnStartedAt = Date.now() - 285_000; // 本轮已进行 285 秒
+    s.lastActivity = Date.now() - 91_000;   // 静默锚在 91 秒前被豁免分支合法刷新过
+
+    s.checkIdle();
+
+    const err = events.find(e => e.type === 'error');
+    assert.ok(err, '越过 90 秒告警线应发一条 recoverable error');
+    assert.match(err.payload.message, /模型已 9[0-9] 秒无响应/);
+    assert.match(err.payload.message, /本轮已进行 28[45] 秒/, '本轮真实时长必须出现在文案里');
+    assert.equal(err.payload.recoverable, true);
+    s.dispose();
+  });
+
+  // R3（2026-08-10 真机 a90814ca）：那次排障里，用户屏幕上明明有两条「模型已 N 秒无响应」，
+  // 而服务端日志 `grep 秒无响应` 零命中——lifecycle error 这一路只 emit 不落盘，事后只能靠 tick
+  // 相位反推。看护类判定必须自己留痕，否则下次还是只能猜。
+  test('R3a：网关静默告警落会话日志（屏幕看得见，日志也查得到）', () => {
+    const { s } = makeSession({ instanceId: 'r3a', idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.turnStartedAt = Date.now() - 285_000;
+    s.lastActivity = Date.now() - 91_000;
+
+    s.checkIdle();
+
+    const hit = getSessionLogs(s.logKey()).find(e => /无响应/.test(e.text || ''));
+    assert.ok(hit, '告警只 emit 不落盘 → 排障时日志里查不到');
+    assert.match(hit.text, /本轮已进行 28[45] 秒/, '落盘的那条要带上真实时长，不能比屏幕上的还少信息');
+    s.dispose();
+  });
+
+  test('R3b：静默看护中断落会话日志（比告警更严重，此前同样不落盘）', () => {
+    const { s } = makeSession({ instanceId: 'r3b', idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    s.q = { interrupt: () => {} };
+
+    s.checkIdle();
+
+    const hit = getSessionLogs(s.logKey()).find(e => /挂死|已中断/.test(e.text || ''));
+    assert.ok(hit, '看门狗替用户按下 Esc 这件事必须可追溯');
+    s.dispose();
+  });
+
+  test('R3c：静默看护豁免留痕，能指认是哪一条豁免刷新了静默锚', () => {
+    const { s } = makeSession({ instanceId: 'r3c', idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    s._armSlashQuietNotice('/code-review max'); // 本地命令在途 → 走豁免分支
+
+    s.checkIdle();
+
+    const hit = getDiagLogs(s.logKey()).find(e => e.event === 'idle_exempt');
+    assert.ok(hit, '豁免分支刷新 lastActivity 是静默秒数失真的直接来源，必须留痕');
+    assert.equal(hit.detail.reason, 'local_command');
+    s.dispose();
+  });
+
+  test('R3d：同一豁免持续命中只记一次（30s tick 不得把诊断缓冲刷爆）', () => {
+    const { s } = makeSession({ instanceId: 'r3d', idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    s._armSlashQuietNotice('/code-review max');
+
+    s.checkIdle();
+    s.checkIdle();
+    s.checkIdle();
+
+    const hits = getDiagLogs(s.logKey()).filter(e => e.event === 'idle_exempt');
+    assert.equal(hits.length, 1, '稳态豁免只记起点；原因变了才该再记一条');
+    s.dispose();
+  });
+
+  // 变异检查补漏：删掉 checkIdle 里的清锚行（豁免不再命中时的 _noteIdleExemption(null)）时
+  // R3c/R3d 全绿——「同一原因的第二段豁免」这条路当时无人守。真机现场恰恰是「豁免了一下又没了」，
+  // 不清锚的话第二段就查不出来。
+  test('R3e：豁免中断后再次命中要重新留痕', () => {
+    const { s } = makeSession({ instanceId: 'r3e', idleTimeoutMs: 1 });
+    s.pendingTurns = 1;
+    s.lastActivity = 0;
+    s.q = { interrupt: () => {} };
+
+    s._armSlashQuietNotice('/code-review max');
+    s.checkIdle();                       // 第一段豁免
+
+    // 命令输出到手 = 豁免撤销（与 E1 那批用例同一条真实路径）
+    s.map({ type: 'system', subtype: 'local_command_output', content: '<local-command-stdout>done</local-command-stdout>', session_id: 'sid-r3e' });
+    s.checkIdle();                       // 走非豁免路径 → 清锚
+
+    s._armSlashQuietNotice('/code-review max');
+    s.checkIdle();                       // 第二段豁免
+
+    const hits = getDiagLogs(s.logKey()).filter(e => e.event === 'idle_exempt');
+    assert.equal(hits.length, 2, '两段独立的豁免各留一条，否则「豁免了一下又没了」事后查不出来');
+    s.dispose();
+  });
+
+  test('R2d：同段静默只告一次（去重锚），锚前移后可再告', () => {
+    const { s, events } = makeSession({ idleTimeoutMs: 600_000 });
+    s.pendingTurns = 1;
+    s.lastActivity = Date.now() - 91_000;
+
+    s.checkIdle();
+    s.checkIdle();
+    assert.equal(events.filter(e => e.type === 'error').length, 1, '同段静默重复 tick 不得刷屏');
+
+    s.lastActivity = Date.now() - 95_000; // 锚前移 = 新静默段
+    s.checkIdle();
+    assert.equal(events.filter(e => e.type === 'error').length, 2, '新静默段应能再告一次');
     s.dispose();
   });
 

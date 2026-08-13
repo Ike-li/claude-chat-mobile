@@ -86,10 +86,18 @@ export function formatLifecycleIdleReclaim(mins) {
 // 归因收敛（2026-07-30 排查 0f82d2e7）：旧文案断言「多为第三方网关限流/挂起」，而真机 6 次触发全是
 // 本地前台工具在跑（那批误报已由 hasRunningForegroundTool 豁免修掉）。看门狗只知道「没收到消息」、
 // 不知道为什么——文案只陈述观测事实与可操作项，不替它猜因。
-export function formatLifecycleGatewayStall(seconds, timeoutMins) {
+// turnSeconds（本轮真实时长）与 seconds（静默秒数）不同源，这是 2026-08-10 真机 a90814ca 的教训：
+// 静默锚 lastActivity 会被 checkIdle 的豁免分支（后台任务/前台工具/本地命令在途）合法刷新，而本轮起点
+// turnStartedAt 只在 send/result 变。只报静默秒数时，用户在一条 271 秒的连续静默里先看到「113 秒」、
+// 两分半后又看到「90 秒」——后一条数字更小，读起来像倒退，无从判断到底等了多久。
+// 两数拉开一个 tick（30s）以上才并报：差距在容差内并报只是噪音。
+const GATEWAY_STALL_TURN_GAP_S = 30;
+export function formatLifecycleGatewayStall(seconds, timeoutMins, turnSeconds) {
   const s = Math.max(1, Math.round(Number(seconds) || 1));
   const m = Math.max(1, Number(timeoutMins) || 1);
-  return `模型已 ${s} 秒无响应（本轮继续等待，${m} 分钟仍零消息将自动中断）——可点「停止」后重发，或换模型再试`;
+  const t = Math.round(Number(turnSeconds) || 0);
+  const head = t - s > GATEWAY_STALL_TURN_GAP_S ? `本轮已进行 ${t} 秒，继续等待；` : '本轮继续等待，';
+  return `模型已 ${s} 秒无响应（${head}${m} 分钟仍零消息将自动中断）——可点「停止」后重发，或换模型再试`;
 }
 export function formatLifecycleProcessExited() {
   return '进程已退出：可重新发送消息继续（会话历史仍在）';
@@ -333,6 +341,9 @@ export class AgentSession {
     this.denyKinds = new Map();          // toolUseID → 'answered'|'denied'|'cancelled'：deny+message 通道的真实语义，供前端区分 ☑️/🚫（is_error 不足以分辨）
     this.permSeq = 0;
     this.lastActivity = Date.now();
+    this.lastViewedAt = 0;   // 用户「切进本会话看」的时刻（touchActivity）。只喂空闲回收看护，
+                             // 不喂在途轮静默看护——两者的语义差见 touchActivity / checkIdle 注释。
+    this._lastIdleExemption = null; // 上次命中的静默看护豁免原因（见 _noteIdleExemption：变化才留痕）
     this.currentMessageId = null;
     this.sawTextDelta = false;
     this.firstMessage = null;
@@ -1322,10 +1333,33 @@ export class AgentSession {
     }
   }
 
+  // 静默看护豁免留痕：只在【豁免原因变化】时记一条（无→有、一种→另一种、有→无）。
+  // 不能每 tick 都记——一个跑 15 分钟的子代理会灌 30 条一模一样的记录，把诊断缓冲里真正
+  // 有价值的事件挤掉（diag-log 的 MAX_ENTRIES_PER_SESSION=100）。
+  // 记它的动机：这几条豁免刷新 lastActivity 是「告警秒数倒退」的直接来源，而在此之前
+  // 它们一行痕迹都不留，事后只能靠 30s tick 的相位反推是哪条命中了。
+  _noteIdleExemption(reason) {
+    if (reason === this._lastIdleExemption) return;
+    const was = this._lastIdleExemption;
+    this._lastIdleExemption = reason;
+    if (!reason) {
+      diagLog.record(this.logKey(), 'idle', 'idle_exempt_end', { was });
+      return;
+    }
+    diagLog.record(this.logKey(), 'idle', 'idle_exempt', {
+      reason, was, pendingTurns: this.pendingTurns, idleForMs: Date.now() - this.lastActivity,
+    });
+  }
+
   // 用户显式活动续期：切回/打开本实例（setViewing / session:switch）时调用。
-  // 不进事件流——只刷新 lastActivity。
+  // 不进事件流——只刷新 lastViewedAt。
+  //
+  // ★ 刷的是 lastViewedAt 而非 lastActivity（2026-08-10 真机 a90814ca 改）：切视图证明「用户在看」，
+  // 不证明「模型有产出」。混用一个字段时，用户每切进一次 tab 就给挂死轮次的 idleTimeoutMs 续 10 分钟
+  // （_armInterruptSettleWatchdog 上方的注释早已记下这个洞，但当时没修），且「模型已 N 秒无响应」的 N
+  // 会跟着倒退。回收看护仍认它，见 checkIdle 的 viewIdleFor。
   touchActivity() {
-    this.lastActivity = Date.now();
+    this.lastViewedAt = Date.now();
   }
 
   // 当前是否为前端 viewing 实例。true 时跳过空闲回收（用户正在看历史也不该被 30min 清屏）。
@@ -1356,6 +1390,7 @@ export class AgentSession {
       this.emitBgTasksSnapshot();
     }
     if (this.pendingPermissions.size > 0 || this.pendingQuestions.size > 0) {
+      this._noteIdleExemption('pending_approval');
       this.lastActivity = Date.now();
       return;
     }
@@ -1367,18 +1402,32 @@ export class AgentSession {
     // ★ 这里必须用 hasSdkBgTasks() 而非 hasBgTasks()：见该方法注释（否则本地命令的 45 分钟上限被
     // 自家扫盘产物打穿）。
     if (this.pendingTurns > 0 && (this.hasSdkBgTasks() || this.hasRunningForegroundTool() || this._localCommandInFlight())) {
+      // 留痕：这三条豁免刷新 lastActivity 是「告警秒数比上一条还小」的直接来源（2026-08-10 真机
+      // a90814ca：一条 271 秒的连续静默里先报 113 秒、后报 90 秒，事后无从判断是哪条豁免干的）。
+      this._noteIdleExemption([
+        this.hasSdkBgTasks() && 'sdk_bg_task',
+        this.hasRunningForegroundTool() && 'foreground_tool',
+        this._localCommandInFlight() && 'local_command',
+      ].filter(Boolean).join('+'));
       this.lastActivity = Date.now();
       return;
     }
+    this._noteIdleExemption(null); // 豁免不再命中：清锚，下次再豁免时要重新记一条
     // 本地命令已过 45 分钟上限：轮询早已停摆，但扫出来的任务不会自己消失（磁盘观察没有完成信号）。
     // 不在此清掉的话，面板与 ⏳ 角标会一直显示「运行中」直到 bgTasks 的 2h TTL。E6 回归。
     if (this._localCmdTaskIds.size && !this._localCommandInFlight()) this._clearLocalCommandProgress();
-    const idleFor = Date.now() - this.lastActivity;
+    // 两个时钟分家（2026-08-10 真机 a90814ca）：
+    //  · idleFor（在途轮静默看护 + 网关告警）—— 只认「模型/工具有产出」与用户主动输入（send/审批/答题），
+    //    不认切视图。混用时用户每切进一次 tab 就给挂死轮次续 10 分钟，告警秒数也会倒退。
+    //  · viewIdleFor（空闲实例回收）—— 切视图照样算活动：用户在读历史，不该被 30min 清屏。
+    const nowMs = Date.now();
+    const idleFor = nowMs - this.lastActivity;
+    const viewIdleFor = nowMs - Math.max(this.lastActivity, this.lastViewedAt);
     if (this.pendingTurns === 0) {
       // 用户正查看本实例：不回收（读历史/停在会话页不应被 30min 空闲清屏）
       if (this.viewed) return;
       // 完全空闲回收：isBusy 还含 bgTasks（刚 sweep 后可能仍有活任务）
-      if (this.instanceIdleReclaimMs > 0 && !this.isBusy() && idleFor > this.instanceIdleReclaimMs) {
+      if (this.instanceIdleReclaimMs > 0 && !this.isBusy() && viewIdleFor > this.instanceIdleReclaimMs) {
         const mins = Math.max(1, Math.round(this.instanceIdleReclaimMs / 60000));
         this.emit('error', {
           message: formatLifecycleIdleReclaim(mins),
@@ -1390,8 +1439,12 @@ export class AgentSession {
       return;
     }
     if (idleFor > this.idleTimeoutMs) {
+      const timeoutMsg = formatLifecycleIdleTimeout(Math.round(this.idleTimeoutMs / 60000));
+      // 落盘：看门狗替用户按下 Esc 是本模块最重的自动决策，此前只 emit 不落日志，事后无法追溯。
+      interactionLog.addSessionLog(this.logKey(), 'sys_info',
+        `[SYS] ${timeoutMsg}（idleFor=${Math.round(idleFor / 1000)}s pendingTurns=${this.pendingTurns}）`);
       this.emit('error', {
-        message: formatLifecycleIdleTimeout(Math.round(this.idleTimeoutMs / 60000)),
+        message: timeoutMsg,
         recoverable: true
       });
       // 终端等价性：CLI 里请求挂死只是停在原地报错（用户可 Esc 中断本轮），从不自杀会话。
@@ -1412,8 +1465,15 @@ export class AgentSession {
       && this.stallWarnedForActivity !== this.lastActivity
     ) {
       this.stallWarnedForActivity = this.lastActivity;
+      // 本轮真实时长一并报出：静默锚被豁免分支刷新过时，单报 idleFor 会让用户以为「才等了 90 秒」。
+      const turnFor = this.turnStartedAt ? Math.round((nowMs - this.turnStartedAt) / 1000) : 0;
+      const stallMsg = formatLifecycleGatewayStall(
+        Math.round(idleFor / 1000), Math.round(this.idleTimeoutMs / 60000), turnFor);
+      // 落盘：2026-08-10 真机 a90814ca 屏幕上两条告警，服务端日志 `grep 秒无响应` 零命中——
+      // lifecycle error 这一路此前只走 emit。排障拿不到发生时刻，只能靠 tick 相位反推。
+      interactionLog.addSessionLog(this.logKey(), 'sys_info', `[SYS] ${stallMsg}`);
       this.emit('error', {
-        message: formatLifecycleGatewayStall(Math.round(idleFor / 1000), Math.round(this.idleTimeoutMs / 60000)),
+        message: stallMsg,
         recoverable: true
       });
     }
