@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  占位符 plist 模板 —— 菜单栏控制台随登录自启。别直接加载本文件。
+
+  通常不用手工装：`node scripts/service.js install menubar` 会渲染它并 bootstrap
+  （菜单栏 app 里那个「开机自启」开关调的也是同一条路径）。
+
+  占位符（下划线包裹）：
+    __LABEL__   LaunchAgent 标签，须与目标文件名一致，如 com.ccm.menubar
+    __APP__     CCM.app 的绝对路径，如 /Users/you/code/claude-chat-mobile/desktop/build/CCM.app
+    __LOG__     日志绝对路径，如 /Users/you/Library/Logs/ccm-menubar.log
+
+  两个与 server.plist.template 有意不同的地方：
+
+  1. **KeepAlive 必须是 false。** 设 true 的话用户从菜单里点「退出」会被 launchd 立刻拉起来，
+     这个应用就再也关不掉了。菜单栏工具的正确语义是「登录时起一次」，不是「保证常驻」。
+
+  2. 走 `/usr/bin/open <app>` 而不是直接指向 Contents/MacOS/ 里的二进制：经 LaunchServices
+     启动，LSUIElement 这类 accessory app 的行为才正常（激活策略、单实例语义）。open 本身
+     立刻退出，正好与 KeepAlive=false 匹配。
+
+  用 scripts/render-plist.js 替换（勿裸 sed，理由见 server.plist.template 头注）：
+
+    node scripts/render-plist.js deploy/menubar.plist.template \
+      ~/Library/LaunchAgents/com.ccm.menubar.plist \
+      LABEL=com.ccm.menubar APP="$PWD/desktop/build/CCM.app" \
+      LOG="$HOME/Library/Logs/ccm-menubar.log"
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/open</string>
+    <string>__APP__</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>__LOG__</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG__</string>
+</dict>
+</plist>

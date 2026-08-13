@@ -65,8 +65,11 @@ npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock serve
 npm run test:visual # test:e2e 的兼容别名
 
 # 启动前自检配置
-node scripts/doctor.js              # 启动自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/CLI statusline bridge 安装态/CLI hooks 桥安装态/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率
+node scripts/doctor.js              # 启动自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/CLI statusline bridge 安装态/CLI hooks 桥安装态/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率/LaunchAgent 常驻服务安装态
 node scripts/doctor.js --env=prod.env  # 指定 .env 文件
+
+# 常驻服务（macOS LaunchAgent）
+npm run service:status              # 各 unit 的运行态/归属/漂移；--json 供菜单栏与 doctor 消费
 
 # 设备指纹审批与管理
 node scripts/device.js list         # 列出所有受信任和等待确认的设备
