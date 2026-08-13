@@ -52,6 +52,8 @@ export const INBOUND_SOCKET_EVENTS = Object.freeze([
   'conn:ping',
   'dev:restart',
   'doctor:run',
+  'env:get',
+  'env:set',
   'files:search',
   'files:write',
   'git:diff',

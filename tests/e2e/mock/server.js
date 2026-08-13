@@ -116,6 +116,55 @@ let mockDiagLogsByInstance = new Map(); // 镜像/排队/停止诊断时间线�
 // 服务状态面板：确定性 startedAt（mock 进程启动时刻）；deliveryFailure 由 test:service-delivery-failure 注入，
 // rateLimitLockout/clientError（判定化告警）由 test:service-incidents 注入
 const MOCK_SERVICE_STARTED_AT = Date.now();
+
+// 配置面板夹具。与 src/ops/env-schema.js 的 buildEnvView 同形状，但**手写一份**——
+// 本 mock 刻意零 import src/（改 src/ 不该让 E2E 变红）。只放够断言的最小集：
+// 一个只读敏感项、一个普通值、一个未设置的空值、一个可写敏感项、一个开关。
+const mockLabel = (zh, en) => ({ zh, en });
+function buildMockEnvView() {
+  return {
+    groups: [
+      {
+        id: 'auth',
+        label: mockLabel('鉴权', 'Authentication'),
+        items: [{
+          key: 'AUTH_TOKEN', kind: 'readonly', label: mockLabel('访问令牌', 'Access token'),
+          readonly: true, secret: true, masked: { set: true, length: 64 },
+          help: mockLabel('要更换请在电脑上跑 npm run setup。', 'Run npm run setup on the machine to rotate it.'),
+        }],
+      },
+      {
+        id: 'runtime',
+        label: mockLabel('运行时', 'Runtime'),
+        items: [
+          { key: 'PORT', kind: 'number', label: mockLabel('监听端口', 'Port'), readonly: false, secret: false, value: '3000', min: 1, max: 65535 },
+          { key: 'WORK_DIR', kind: 'path', label: mockLabel('主工作目录', 'Primary work directory'), readonly: false, secret: false, value: '/Users/you/code' },
+        ],
+      },
+      {
+        id: 'push',
+        label: mockLabel('推送', 'Notifications'),
+        items: [
+          { key: 'VAPID_PRIVATE_KEY', kind: 'secret', label: mockLabel('VAPID 私钥', 'VAPID private key'), readonly: false, secret: true, masked: { set: true, length: 43 } },
+          { key: 'NTFY_TOPIC', kind: 'text', label: mockLabel('ntfy topic', 'ntfy topic'), readonly: false, secret: false, value: '' },
+        ],
+      },
+      {
+        id: 'toggles',
+        label: mockLabel('功能开关', 'Feature toggles'),
+        items: [{
+          key: 'DEV_MODE', kind: 'toggle', label: mockLabel('开发者模式', 'Developer mode'),
+          readonly: false, secret: false, value: '1', values: { on: '1', off: '' },
+        }],
+      },
+    ],
+    readonlyDiagnostics: [{
+      key: 'ANTHROPIC_*',
+      label: mockLabel('模型网关配置', 'Model gateway config'),
+      help: mockLabel('只能从启动 shell export，.env 里的会被剥除。', 'Must come from the launching shell.'),
+    }],
+  };
+}
 // P0-DESTROY-6（server 重启误报「会话已中断」修复）：test:server-restart 用它把 service.startedAt
 // 拨到另一个值，模拟「重连后是另一个 server 进程」——前端 detectServerRestart 据此把「实例全部
 // 消失」判为整机重启而非单实例被摧毁。null = 未拨（正常返回进程级常量）。
@@ -1404,6 +1453,17 @@ io.on('connection', socket => {
   socket.on('push:test', (_payload, ack) => {
     if (typeof ack !== 'function') return;
     ack({ ok: true, sent: 0, failed: 0, subscribed: false });
+  });
+
+  // 配置面板的读取路径。夹具刻意混了三种形态：普通值、敏感项（只给 set+length）、未设置的空值，
+  // 让 E2E 能断言「敏感项显示的是遮罩文案而不是明文」。
+  socket.on('env:get', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({
+      ok: true,
+      envFileExists: true,
+      ...buildMockEnvView(),
+    });
   });
 
   socket.on('service:status', (_payload, ack) => {

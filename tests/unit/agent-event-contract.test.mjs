@@ -245,7 +245,13 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //      + push:test（自证推送链路的「发一条测试推送」，对齐既有「试听提示音」；没有它就只能等
   //        真事件才知道通不通——本项目真实踩过"以为推送在工作、其实从未订阅成功"）
   // （曾含 worktree:sessions：git linked worktree 自动发现；已拆除——worktree 路径须显式写入 workdirs.json）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 40);
+  //      + env:get / env:set（服务与配置面板：在手机上改 .env。同 hooks:setup 的理由——主界面在
+  //        手机上而改配置只能上电脑，40 个配置项里绝大多数移动端用户永远碰不到。三条纪律见
+  //        src/server/app.js 的 handler 头注：只写文件不动 process.env、key 白名单（env-schema）、
+  //        日志与 ack 只记 key 名不记值。env:set 因为要真写 .env 而进 MOCK_INBOUND_EXEMPT）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 42);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('env:get'));
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('env:set'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('push:test'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('hooks:setup'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('client:presence'));

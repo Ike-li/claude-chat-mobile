@@ -7,7 +7,9 @@
 // （viewing*/mirror*/catchUp*），拆开只会把耦合变成上下文对象穿针——有意保留为组装根本体。
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { statSync, readFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync } from 'node:fs';
+import { statSync, readFileSync, realpathSync, existsSync, mkdirSync, appendFileSync, unlinkSync, accessSync, constants as fsConstants } from 'node:fs';
+import { createConnection } from 'node:net';
+import { parse as dotenvParse } from 'dotenv';
 import { maskToken } from '../shared/sanitizer.js';
 import { setCapped } from '../shared/bounded-map.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
@@ -31,6 +33,9 @@ import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
+import { applyEnvChanges } from '../ops/env-file.js';
+import { buildEnvView, validateEnvChanges } from '../ops/env-schema.js';
+import { isSupervised } from '../ops/service-units.js';
 import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy } from '../ops/statusline.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
@@ -97,6 +102,30 @@ import { registerFileSocketHandlers } from './socket-files.js';
 initCfAccess();
 
 const HERE = join(import.meta.dirname, '..', '..'); // 项目根；从任何 cwd 启动都一致
+const ENV_FILE_PATH = join(HERE, '.env'); // 配置面板读写的目标；与 config.js 的 dotenv 加载点同一份
+
+const canAccessPath = (p, mode) => {
+  try {
+    accessSync(p, mode);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// 纯 TCP 探测：不发 HTTP 请求行 ⇒ 不经过鉴权中间件 ⇒ 不计入登录限速。
+// 只用于「改 PORT 前看新端口空不空」，500ms 截止。
+const probeLocalPort = (port) => new Promise(resolve => {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return resolve(false);
+  const conn = createConnection({ port, host: '127.0.0.1' });
+  const done = (busy) => {
+    try { conn.destroy(); } catch { /* noop */ }
+    resolve(busy);
+  };
+  conn.on('connect', () => done(true));
+  conn.on('error', () => done(false));
+  setTimeout(() => done(false), 500);
+});
 const {
   port,
   authToken: AUTH_TOKEN,
@@ -2592,8 +2621,13 @@ registerSocketConnection(io, socket => {
   // 仅 DEV_MODE=1 放行；优雅退出复用 shutdown（flush sessions + dispose 实例 + close），
   // 靠 LaunchAgent/systemd 的 KeepAlive 自动拉起，前端 socket.io 自动重连 + epoch init 恢复。
   on(socket, 'dev:restart', (payload, ack) => {
-    if (!DEV_MODE) {
-      if (typeof ack === 'function') ack({ ok: false, error: 'DEV_MODE 未开启，拒绝重启' });
+    // 判据从「DEV_MODE=1」放宽成「DEV_MODE=1 或被进程管理器托管」。这个改法**净安全性为正**：
+    // 旧判据太紧（生产常驻部署改完配置没法从手机重启）也太松（DEV_MODE=1 时前台 npm start
+    // 也能被停掉，然后永远起不来 —— 没有 KeepAlive 拉它）。新判据两头都堵。
+    if (!DEV_MODE && !isSupervised()) {
+      if (typeof ack === 'function') {
+        ack({ ok: false, error: '当前进程不是由 LaunchAgent/systemd 托管，停了不会自动拉起 —— 拒绝重启' });
+      }
       return;
     }
     console.log('[dev] 收到 web 端重启请求，优雅退出（KeepAlive 将自动拉起）');
@@ -2684,6 +2718,76 @@ registerSocketConnection(io, socket => {
       // 早前把 CCM_DATA_DIR 当 rootDir 传，拼出 <CCM_DATA_DIR>/data/... 永不存在 → 扫 0 个文件 → 恒报绿。
       configPermsProblems: countConfigPermProblems(HERE, { dataDir: process.env.CCM_DATA_DIR || null }),
     }));
+  });
+
+  // ── 配置面板：读写 .env ────────────────────────────────────────────────
+  //
+  // 之所以开这个口子：ccm 的主界面在手机上，而改 .env 只能上电脑 —— 40 个配置项里绝大多数
+  // 手机用户永远碰不到。与 hooks:setup 同一心智（那个开的是「写用户全局 settings.json」的口子）。
+  //
+  // 三条纪律：
+  //   1. **只写文件，绝不动 process.env** —— 半生效的配置比不生效更糟；生效靠重启
+  //   2. key 白名单（src/ops/env-schema.js），schema 之外一律拒绝：这不是通用 .env 编辑器
+  //   3. 日志与 ack **只记 key 名不记值** —— changes 里可能有 VAPID 私钥、ntfy token
+  const readEnvValues = () => {
+    try {
+      return dotenvParse(readFileSync(ENV_FILE_PATH));
+    } catch {
+      return {};
+    }
+  };
+
+  on(socket, 'env:get', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({ ok: true, ...buildEnvView(readEnvValues()), envFileExists: existsSync(ENV_FILE_PATH) });
+  });
+
+  on(socket, 'env:set', async (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const changes = payload?.changes;
+    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+      return ack({ ok: false, results: [{ key: '', level: 'error', message: '缺少 changes' }] });
+    }
+    const current = readEnvValues();
+
+    // 端口占用只在**值真的变了**时才探：当前 server 正绑在旧 PORT 上，无条件探测会恒报占用
+    // （那正是 doctor D4 修掉的那个 bug）。探测结果预先算好，喂给同步的 validateEnvChanges。
+    let portBusy = false;
+    const nextPort = changes.PORT;
+    if (typeof nextPort === 'string' && nextPort !== String(current.PORT ?? '')) {
+      portBusy = await probeLocalPort(Number(nextPort));
+    }
+
+    const verdict = validateEnvChanges(changes, {
+      current,
+      fileExists: existsSync,
+      isWritable: p => canAccessPath(p, fsConstants.W_OK),
+      isExecutable: p => canAccessPath(p, fsConstants.X_OK),
+      probePort: () => portBusy,
+    });
+    if (!verdict.ok) return ack({ ok: false, results: verdict.results });
+
+    // warn 不阻断，但要用户明确点头（UI 弹确认后带 acceptWarnings 重发）
+    if (verdict.results.some(r => r.level === 'warn') && !payload?.acceptWarnings) {
+      return ack({ ok: false, needsConfirm: true, results: verdict.results });
+    }
+    if (payload?.dryRun) return ack({ ok: true, dryRun: true, results: verdict.results, written: [] });
+
+    let text = '';
+    try {
+      text = readFileSync(ENV_FILE_PATH, 'utf8');
+    } catch { /* 没有 .env 就从空文件长出来 */ }
+    try {
+      // 0600 + 唯一 tmp + fsync + rename：与 sessions / devices 同一个原子写
+      writeOwnerOnlyFile(ENV_FILE_PATH, applyEnvChanges(text, changes));
+    } catch (err) {
+      return ack({ ok: false, results: [{ key: '', level: 'error', message: `写入 .env 失败：${String(err?.message || err)}` }] });
+    }
+
+    const keys = Object.keys(changes);
+    // 服务端留痕：事后要能查到「这台机器的配置是谁什么时候改的」。只记 key 名 —— 值里有密钥。
+    console.log(`[env] 经 UI 修改 ${keys.length} 项：${keys.join(', ')}（需重启生效）`);
+    ack({ ok: true, results: verdict.results, written: keys, restartRequired: true });
   });
 
   // 服务状态面板（NFR-15 可见性）：一次 ack 拼齐 基础(startedAt/versions) + 判定化告警(computeServiceHealth)。

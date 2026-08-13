@@ -1,0 +1,395 @@
+// 配置面板的单一事实源：哪些 env 能从 UI 改、改成什么算合法、怎么展示。
+//
+// ## 为什么 schema 只放服务端
+// scripts/check-import-boundaries.js 的 frontend-no-backend 规则禁止 public/js 引 src/，
+// 所以前后端不可能真共享这份表。与其两边各写一份迟早分叉，不如只留服务端一份、经 env:get 的
+// ack 下发，前端当数据渲染。加一个配置项 = 只改这一个文件。
+//
+// ## 为什么文案是 {zh,en} 对而不是走 i18n 词典
+// scripts/i18n-check.js 扫的是 HTML 文本节点与 js 里的 t('原文') 调用点；服务端下发的字符串
+// 它扫不到，塞进 EN_DICT 会立刻变成孤儿 key 让 npm run check 报红。现成范式是
+// scripts/setup.js:85 的 MESSAGES 双语字典。**别好心把这些搬进 EN_DICT。**
+//
+// ## 三条硬边界（不是「暂未支持」，是不能做）
+//   1. ANTHROPIC_* —— src/server/config.js:21,36-42 启动期无条件剥除，只认真实 shell export。
+//      写进 .env 是静默失效，做成表单等于骗人。只读诊断 + 引导改 shell profile。
+//   2. AUTH_TOKEN —— 只读。改完到重启之间 .env 与运行中进程不一致；重启后所有已保存 token 的
+//      设备（含正在操作的这台手机）都要重新输入，极易把自己锁在门外。
+//   3. CCM_DATA_DIR —— 只读。改它等于把全部控制面状态（会话/设备信任/审批/审计）孤儿化，
+//      那是**迁移**不是设置，docs/deployment.md 有「停服→移动→doctor→启动」的配方。
+
+import { maskSecret } from './env-file.js';
+
+// 开关类的真值字面量**逐 key 声明**，绝不用统一的 truthy 判定。
+// src/ops/log-terminal.js:32 明写过这个经典脚枪：LOG_STDERR=false 反而是「开」——
+// 因为那处用的是 truthy 判定，而 'false' 是个非空字符串。
+const TOGGLE_ONE = { on: '1', off: '' };    // DEV_MODE / LOG_* / ASSET_HOT_RELOAD：严格 === '1'
+const TOGGLE_OFF = { on: '', off: 'off' };  // WEB_STATUSLINE / FILE_EDIT / CLI_*：严格 === 'off'
+const TOGGLE_ON = { on: 'on', off: '' };    // LOG_TERMINAL：严格 === 'on'
+
+const t = (zh, en) => ({ zh, en });
+
+// kind: text | number | path | url | secret | toggle | readonly
+export const ENV_SCHEMA = {
+  // ── 鉴权 ────────────────────────────────────────────────────────────
+  AUTH_TOKEN: {
+    group: 'auth', kind: 'readonly', secret: true,
+    label: t('访问令牌', 'Access token'),
+    help: t('留空时 server 只绑 127.0.0.1，手机将无法访问。要更换请在电脑上跑 npm run setup。',
+      'Empty means the server binds 127.0.0.1 only. Run npm run setup on the machine to rotate it.'),
+  },
+  CF_ACCESS_HOSTNAME: {
+    group: 'auth', kind: 'text',
+    label: t('Cloudflare Access 域名', 'Cloudflare Access hostname'),
+    help: t('公网域名。与 TEAM、AUD 三项必须同时设置或同时留空。', 'Set all three CF_ACCESS_* or none.'),
+    together: ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD'],
+  },
+  CF_ACCESS_TEAM: {
+    group: 'auth', kind: 'text',
+    label: t('Cloudflare Access 团队名', 'Cloudflare Access team'),
+    together: ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD'],
+  },
+  CF_ACCESS_AUD: {
+    group: 'auth', kind: 'secret',
+    label: t('Cloudflare Access AUD', 'Cloudflare Access AUD'),
+    together: ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD'],
+  },
+
+  // ── 运行时 ──────────────────────────────────────────────────────────
+  PORT: {
+    group: 'runtime', kind: 'number', min: 1, max: 65535, default: '3000',
+    label: t('监听端口', 'Port'),
+  },
+  WORK_DIR: {
+    group: 'runtime', kind: 'path', mustExist: true, writable: true,
+    label: t('主工作目录', 'Primary work directory'),
+    help: t('claude 的默认工作目录。', 'Default working directory for claude.'),
+  },
+  WORK_DIRS_FILE: {
+    group: 'runtime', kind: 'path', mustExist: true,
+    label: t('多工作区配置文件', 'Workdirs file'),
+    help: t('指向 workdirs.json。该文件内容支持热加载，改完即生效。',
+      'Points at workdirs.json. Its contents hot-reload without a restart.'),
+  },
+  CLAUDE_BIN: {
+    group: 'runtime', kind: 'path', mustExist: true, executable: true,
+    label: t('claude 可执行文件', 'claude binary'),
+    help: t('留空则从 PATH 查找。', 'Empty means look it up on PATH.'),
+  },
+
+  // ── 超时与配额 ──────────────────────────────────────────────────────
+  IDLE_TIMEOUT_MS: {
+    group: 'limits', kind: 'number', min: 1000, default: '600000', unit: 'ms',
+    label: t('无输出判挂死', 'Idle timeout'),
+  },
+  INSTANCE_IDLE_RECLAIM_MS: {
+    group: 'limits', kind: 'number', min: 0, default: '1800000', unit: 'ms',
+    label: t('空闲实例回收', 'Idle instance reclaim'),
+    help: t('0 = 不回收。', '0 disables reclaiming.'),
+  },
+  APPROVAL_TTL_MS: {
+    group: 'limits', kind: 'number', min: 1000, default: '1800000', unit: 'ms',
+    label: t('审批自动过期', 'Approval TTL'),
+  },
+  NOTIFY_THROTTLE_MS: {
+    group: 'limits', kind: 'number', min: 0, default: '60000', unit: 'ms',
+    label: t('同类通知最小间隔', 'Notification throttle'),
+  },
+  SESSION_DELETE_QUIET_MS: {
+    group: 'limits', kind: 'number', min: 0, default: '300000', unit: 'ms',
+    label: t('删除会话前静默期', 'Session delete quiet period'),
+  },
+
+  // ── 推送 ────────────────────────────────────────────────────────────
+  VAPID_PUBLIC_KEY: {
+    group: 'push', kind: 'text',
+    label: t('VAPID 公钥', 'VAPID public key'),
+    together: ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'],
+  },
+  VAPID_PRIVATE_KEY: {
+    group: 'push', kind: 'secret',
+    label: t('VAPID 私钥', 'VAPID private key'),
+    together: ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'],
+  },
+  VAPID_SUBJECT: {
+    group: 'push', kind: 'url', // 必须是 mailto: 或 https:，走 URL 校验而不是自由文本
+    label: t('VAPID 联系方式', 'VAPID subject'),
+    help: t('mailto: 或 https: 开头。', 'Starts with mailto: or https:.'),
+    together: ['VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT'],
+  },
+  NTFY_URL: {
+    group: 'push', kind: 'url',
+    label: t('ntfy 服务地址', 'ntfy URL'),
+    help: t('务必自托管或用私密 topic：标题会带工作区目录名，且明文经第三方。',
+      'Self-host or use a private topic: titles carry the workspace name in clear text.'),
+    together: ['NTFY_URL', 'NTFY_TOPIC'],
+  },
+  NTFY_TOPIC: {
+    group: 'push', kind: 'text',
+    label: t('ntfy topic', 'ntfy topic'),
+    together: ['NTFY_URL', 'NTFY_TOPIC'],
+  },
+  NTFY_TOKEN: { group: 'push', kind: 'secret', label: t('ntfy 访问令牌', 'ntfy token') },
+  PUBLIC_URL: {
+    group: 'push', kind: 'url',
+    label: t('公网地址', 'Public URL'),
+    help: t('通知深链用。留空回退到 CF_ACCESS_HOSTNAME。', 'Used for notification deep links.'),
+  },
+
+  // ── 功能开关 ────────────────────────────────────────────────────────
+  DEV_MODE: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_ONE,
+    label: t('开发者模式', 'Developer mode'),
+    help: t('齿轮面板出现「重启服务」按钮。', 'Adds a restart button to the settings panel.'),
+  },
+  WEB_STATUSLINE: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_OFF,
+    label: t('Web 状态栏', 'Web status line'),
+  },
+  FILE_EDIT: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_OFF,
+    label: t('文件编辑器写入', 'File editor writes'),
+  },
+  ASSET_HOT_RELOAD: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_ONE,
+    label: t('前端资源热重载', 'Asset hot reload'),
+  },
+  CLI_HOOKS_BRIDGE: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_OFF,
+    label: t('CLI hooks 桥', 'CLI hooks bridge'),
+    help: t('关掉只是停止消费事件，不卸载安装。', 'Off stops consuming events; it does not uninstall.'),
+  },
+  CLI_STATUSLINE_BRIDGE: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_OFF,
+    label: t('CLI statusline 桥', 'CLI statusline bridge'),
+  },
+
+  // ── 日志 ────────────────────────────────────────────────────────────
+  LOG_INTERACTIONS: {
+    group: 'logs', kind: 'toggle', values: TOGGLE_ONE,
+    label: t('四跳交互日志', 'Interaction log'),
+    help: t('会记录消息正文摘要（已脱敏、截断 1500 字符）。', 'Records redacted message excerpts.'),
+  },
+  LOG_STDERR: {
+    group: 'logs', kind: 'toggle', values: TOGGLE_ONE,
+    label: t('子进程 stderr', 'Child stderr'),
+  },
+  DEBUG_SDK_MESSAGES: {
+    group: 'logs', kind: 'toggle', values: TOGGLE_ONE,
+    label: t('SDK 原始消息', 'Raw SDK messages'),
+    help: t('体积极大，长开曾把日志刷到 149MB。', 'Very verbose; has produced 149MB logs when left on.'),
+  },
+  LOG_TERMINAL: {
+    group: 'logs', kind: 'toggle', values: TOGGLE_ON,
+    label: t('启动时开日志窗口', 'Open log terminal on boot'),
+    help: t('仅 macOS。', 'macOS only.'),
+  },
+  LOG_FILE: {
+    group: 'logs', kind: 'path',
+    label: t('日志文件路径', 'Log file path'),
+    help: t('只告诉 doctor 与日志窗口去哪找；server 自身仍由进程管理器重定向落盘。',
+      'Only tells doctor/log window where to look; the process manager still does the redirect.'),
+  },
+};
+
+export const ENV_GROUPS = [
+  { id: 'auth', label: t('鉴权', 'Authentication') },
+  { id: 'runtime', label: t('运行时', 'Runtime') },
+  { id: 'limits', label: t('超时与配额', 'Timeouts & quotas') },
+  { id: 'push', label: t('推送', 'Notifications') },
+  { id: 'toggles', label: t('功能开关', 'Feature toggles') },
+  { id: 'logs', label: t('日志', 'Logging') },
+];
+
+// 只读诊断：不可写，但用户需要知道它们现在是什么状态。
+export const READONLY_DIAGNOSTICS = [
+  {
+    key: 'ANTHROPIC_*',
+    label: t('模型网关配置', 'Model gateway config'),
+    help: t('只能从启动 shell export —— .env 里的会在启动时被剥除。改法：写进 shell profile 后重启服务。',
+      'Must come from the launching shell; values in .env are stripped at startup.'),
+  },
+  {
+    key: 'CCM_DATA_DIR',
+    label: t('控制面数据目录', 'Control-plane data directory'),
+    help: t('改它是一次迁移不是一次设置（会话/设备信任/审批/审计都在里面）。见 docs/deployment.md。',
+      'Changing it is a migration, not a setting. See docs/deployment.md.'),
+  },
+];
+
+export const WRITABLE_KEYS = Object.freeze(
+  Object.entries(ENV_SCHEMA).filter(([, d]) => d.kind !== 'readonly').map(([k]) => k)
+);
+
+export function isWritableKey(key) {
+  return WRITABLE_KEYS.includes(key);
+}
+
+// ── 校验 ────────────────────────────────────────────────────────────────
+//
+// 立场是**全或无**：任何一项 error 就整体拒写。部分生效的配置比不写更糟 —— 用户以为改好了，
+// server 却起不来，而且不知道是哪一半生效了。warn 不阻断，但要报出来让 UI 弹确认。
+
+function hasControlChars(s) {
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.charCodeAt(i);
+    if (c < 0x20 || c === 0x7f) return true;
+  }
+  return false;
+}
+
+function checkUrl(key, value, def) {
+  const allowMailto = key === 'VAPID_SUBJECT';
+  let u;
+  try {
+    u = new URL(value);
+  } catch {
+    return `不是合法的 URL：${def.label.zh}`;
+  }
+  const ok = u.protocol === 'http:' || u.protocol === 'https:' || (allowMailto && u.protocol === 'mailto:');
+  return ok ? null : `${def.label.zh} 只支持 http/https${allowMailto ? '/mailto' : ''}`;
+}
+
+// 单项类型校验。返回错误文案或 null。
+function checkOne(key, value, def, d) {
+  if (hasControlChars(value)) return '值不能包含换行或控制字符';
+
+  if (def.kind === 'number') {
+    const n = Number(value);
+    if (!Number.isInteger(n)) return `${def.label.zh} 必须是整数`;
+    if (def.min !== undefined && n < def.min) return `${def.label.zh} 不能小于 ${def.min}`;
+    if (def.max !== undefined && n > def.max) return `${def.label.zh} 不能大于 ${def.max}`;
+    // 端口占用只在**值变了**时才探测：当前 server 正绑在旧端口上，无条件探测会恒报占用
+    // —— 那正是 doctor D4 的既有 bug，别复制过来。
+    if (key === 'PORT' && String(d.current?.PORT ?? '') !== value && d.probePort(n)) {
+      return `端口 ${n} 已被占用`;
+    }
+    return null;
+  }
+
+  if (def.kind === 'path') {
+    if (!value.startsWith('/')) return `${def.label.zh} 必须是绝对路径（启动后 cwd 未必是仓库根）`;
+    if (def.mustExist && !d.fileExists(value)) return `路径不存在：${value}`;
+    if (def.writable && !d.isWritable(value)) return `路径不可写：${value}`;
+    if (def.executable && !d.isExecutable(value)) return `文件不可执行：${value}`;
+    return null;
+  }
+
+  if (def.kind === 'url') return checkUrl(key, value, def);
+
+  if (def.kind === 'toggle') {
+    // 只认声明过的字面量。'true'/'0'/'yes' 这类值写进去是**静默失效**，
+    // 甚至可能反向生效（truthy 判定下 'false' 是开），必须当场拒绝。
+    const { on, off } = def.values;
+    if (value !== on && value !== off) {
+      return `${def.label.zh} 只接受 ${JSON.stringify(on)} 或 ${JSON.stringify(off)}`;
+    }
+    return null;
+  }
+
+  return null;
+}
+
+// 「三项全设或全空」这类成套约束，必须看**合并后的最终状态**，不能只看本次改动：
+// 用户可能已经填好两项，这次只补第三项。
+function checkTogether(changes, current) {
+  const problems = [];
+  const seen = new Set();
+  for (const def of Object.values(ENV_SCHEMA)) {
+    if (!def.together || seen.has(def.together.join())) continue;
+    const group = def.together;
+    if (!group.some((k) => Object.hasOwn(changes, k))) continue; // 本次没碰这组
+    seen.add(group.join());
+
+    const finalOf = (k) => (Object.hasOwn(changes, k) ? changes[k] : current?.[k]);
+    const filled = group.filter((k) => {
+      const v = finalOf(k);
+      return typeof v === 'string' && v.length > 0;
+    });
+    if (filled.length !== 0 && filled.length !== group.length) {
+      problems.push({
+        key: group.find((k) => Object.hasOwn(changes, k)),
+        level: 'error',
+        message: `${group.join(' / ')} 必须同时设置或同时留空（现在只填了 ${filled.length}/${group.length} 项）`,
+      });
+    }
+  }
+  return problems;
+}
+
+// 长开会明显放大代价、但不是错误的开关。
+const NOISY_TOGGLES = {
+  DEBUG_SDK_MESSAGES: '体积极大，长开曾把日志刷到 149MB',
+  LOG_INTERACTIONS: '会把消息正文摘要写进日志（已脱敏、截断）',
+};
+
+export function validateEnvChanges(changes, d) {
+  const results = [];
+  for (const [key, value] of Object.entries(changes || {})) {
+    if (key.startsWith('ANTHROPIC_')) {
+      results.push({
+        key,
+        level: 'error',
+        message: '模型网关配置只能从启动 shell export —— 写进 .env 会在启动期被剥除，等于静默失效',
+      });
+      continue;
+    }
+    const def = ENV_SCHEMA[key];
+    if (!def) {
+      results.push({ key, level: 'error', message: `不认识的配置项（本面板不是通用 .env 编辑器）` });
+      continue;
+    }
+    if (def.kind === 'readonly') {
+      results.push({ key, level: 'error', message: `${def.label.zh} 在此处只读，${def.help?.zh || ''}`.trim() });
+      continue;
+    }
+    if (value === null) continue; // 删除不做类型校验
+
+    if (typeof value !== 'string') {
+      results.push({ key, level: 'error', message: '配置值必须是字符串' });
+      continue;
+    }
+    const err = checkOne(key, value, def, d);
+    if (err) {
+      results.push({ key, level: 'error', message: err });
+      continue;
+    }
+    if (value && NOISY_TOGGLES[key] && value === def.values?.on) {
+      results.push({ key, level: 'warn', message: NOISY_TOGGLES[key] });
+    }
+  }
+
+  results.push(...checkTogether(changes || {}, d?.current || {}));
+  return { ok: !results.some((r) => r.level === 'error'), results };
+}
+
+// ── 下发给前端的视图 ────────────────────────────────────────────────────
+// 敏感项只出 { set, length }。明文永不离开服务端 —— 同 src/ops/doctor-runtime.js 的脱敏纪律。
+export function buildEnvView(values = {}) {
+  const groups = ENV_GROUPS.map((g) => ({
+    id: g.id,
+    label: g.label,
+    items: Object.entries(ENV_SCHEMA)
+      .filter(([, def]) => def.group === g.id)
+      .map(([key, def]) => {
+        const raw = typeof values[key] === 'string' ? values[key] : '';
+        const item = {
+          key,
+          kind: def.kind,
+          label: def.label,
+          help: def.help,
+          readonly: def.kind === 'readonly',
+          secret: !!def.secret || def.kind === 'secret',
+        };
+        if (def.values) item.values = def.values;
+        if (def.default !== undefined) item.default = def.default;
+        if (def.unit) item.unit = def.unit;
+        if (def.min !== undefined) item.min = def.min;
+        if (def.max !== undefined) item.max = def.max;
+        if (item.secret) item.masked = maskSecret(raw);
+        else item.value = raw;
+        return item;
+      }),
+  }));
+  return { groups, readonlyDiagnostics: READONLY_DIAGNOSTICS };
+}
