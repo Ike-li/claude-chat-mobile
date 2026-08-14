@@ -18,7 +18,7 @@
 //   3. CCM_DATA_DIR —— 只读。改它等于把全部控制面状态（会话/设备信任/审批/审计）孤儿化，
 //      那是**迁移**不是设置，docs/deployment.md 有「停服→移动→doctor→启动」的配方。
 
-import { maskSecret } from './env-file.js';
+import { isSerializableEnvValue, maskSecret } from './env-file.js';
 
 // 开关类的真值字面量**逐 key 声明**，绝不用统一的 truthy 判定。
 // src/ops/log-terminal.js:32 明写过这个经典脚枪：LOG_STDERR=false 反而是「开」——
@@ -252,7 +252,13 @@ function checkUrl(key, value, def) {
 
 // 单项类型校验。返回错误文案或 null。
 function checkOne(key, value, def, d) {
-  if (hasControlChars(value)) return '值不能包含换行或控制字符';
+  // 校验期与序列化期用**同一个判据**，否则会出现「校验说 ok、写盘时抛错」——
+  // 用户填完点保存才收到一句看不懂的异常，而不是在输入时就被告知。
+  if (!isSerializableEnvValue(value)) {
+    return hasControlChars(value)
+      ? '值不能包含换行或控制字符'
+      : "值不能包含单引号（'）：.env 会被 dotenv 与 shell 两边读，只有单引号包裹两边都安全，而它包不住自身";
+  }
 
   if (def.kind === 'number') {
     const n = Number(value);

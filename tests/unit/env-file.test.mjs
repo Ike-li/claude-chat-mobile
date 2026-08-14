@@ -7,7 +7,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import dotenv from 'dotenv';
 
-import { applyEnvChanges, maskSecret, serializeEnvValue } from '../../src/ops/env-file.js';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { applyEnvChanges, isSerializableEnvValue, maskSecret, serializeEnvValue } from '../../src/ops/env-file.js';
 
 const roundTrip = (v) => dotenv.parse(`K=${serializeEnvValue(v)}`).K;
 
@@ -21,7 +26,6 @@ test.describe('serializeEnvValue —— 以 dotenv 为 oracle 的 round-trip', (
     ['含空格的路径', '/Users/you/My Code/repo'],
     ['首尾有空格', '  padded  '],
     ['含 # 井号（裸值会被截断）', 'topic#1'],
-    ['含单引号', "it's fine"],
     ['含双引号', 'say "hi"'],
     ['含反斜杠', 'C:\\Users\\you'],
     ['含美元符号（dotenv 变量展开）', 'pa$$word'],
@@ -31,19 +35,10 @@ test.describe('serializeEnvValue —— 以 dotenv 为 oracle 的 round-trip', (
     ['等号', 'a=b'],
     ['URL', 'https://ntfy.example.com/topic?x=1&y=2'],
     ['前后都有引号', `"quoted"`],
-    ['只有单引号', "'"],
     ['井号开头', '#comment-like'],
-    // ★ 下面这一组是「同时含单引号与需转义字符」——早前唯一能执行双引号分支的输入类型，
-    // 而那个分支是坏的：dotenv 在双引号内只展开 \n / \r，**从不把 \\ 折回 \ 、也不把 \" 折回 "**。
-    // 结果是反斜杠每存一次翻一倍，含 \n 字面量的值甚至会解析出一个真换行 ——
-    // 正是校验期承诺要拒绝的东西，从序列化这一侧漏了进来。
-    ['含单引号 + 反斜杠路径', "it's C:\\path"],
-    ['含单引号 + 双引号', 'it\'s "x"'],
-    ['含单引号 + 字面 \\n', "a'b\\nc"],
-    ['含单引号 + 尾部反斜杠', "it's trailing\\"],
-    ['含单引号 + 井号', "it's #1"],
     ['含反引号', 'cmd `whoami`'],
-    ['单引号与反引号都有', "it's `x`"],
+    ['含 $( ) 命令替换形态', 'a$(id -un)b'],
+    ['含 ${} 与反引号', 'x${HOME}`id`y'],
   ];
 
   for (const [name, value] of CASES) {
@@ -55,6 +50,87 @@ test.describe('serializeEnvValue —— 以 dotenv 为 oracle 的 round-trip', (
   test('含换行 → 抛错（校验期就该拒绝，不在序列化期兜底）', () => {
     assert.throws(() => serializeEnvValue('a\nb'), /换行|控制字符/);
     assert.throws(() => serializeEnvValue('a\rb'), /换行|控制字符/);
+  });
+
+  // ★ 含单引号一律拒绝。.env 有两个消费者（dotenv 与 `source .env` 的 shell），
+  // 实测只有单引号包裹两边都过关，而它包不住自身 —— 与其挑一侧牺牲，不如明说表达不了。
+  // 反面教材：上一版为此改用反引号，把「值里有个撇号」变成了 shell 命令注入。
+  test("含单引号 → 抛错，且错误信息说清为什么", () => {
+    for (const v of ["it's fine", "'", "it's C:\\path", 'it\'s "x"', "it's `x`"]) {
+      assert.throws(() => serializeEnvValue(v), /单引号/, `应拒绝 ${JSON.stringify(v)}`);
+    }
+  });
+
+  test('isSerializableEnvValue 与 serializeEnvValue 判断一致（校验期能提前拦住同一批）', () => {
+    const samples = ['ok', '', 'a b', 'a#b', "it's", "'", 'a\nb', 'cmd `x`', 'a$(id)b'];
+    for (const v of samples) {
+      const canSerialize = (() => {
+        try { serializeEnvValue(v); return true; } catch { return false; }
+      })();
+      assert.equal(isSerializableEnvValue(v), canSerialize, `判断不一致：${JSON.stringify(v)}`);
+    }
+  });
+});
+
+// ★ 直接测**第二个消费者**：用户 `source .env` 时不能有任何命令被执行，且值要原样还原。
+//
+// 这一组是上一轮事故的护栏。当时的失败模式是：单看 dotenv 那一侧，反引号包裹完美无缺
+// （零展开、round-trip 一字不差），于是它通过了全部既有测试 —— 而 shell 那一侧整个值会被
+// 当命令执行。**两个消费者的判断必须一起做，任何只测一侧的用例都挡不住这类错误。**
+test.describe('serializeEnvValue —— shell source 安全（第二个消费者）', () => {
+  const SHELL_CASES = [
+    'plain',
+    '/Users/you/My Code/repo',
+    'a#b c',
+    'cmd `id -un`',
+    'a$(id -un)b',
+    'x${HOME}y',
+    'a"b',
+    'C:\\Users\\you',
+    'pa$$word',
+    '  padded  ',
+    'topic-🔔',
+  ];
+
+  for (const value of SHELL_CASES) {
+    test(`source 后不执行命令且值还原：${JSON.stringify(value)}`, () => {
+      const dir = mkdtempSync(join(tmpdir(), 'ccm-env-shell-'));
+      try {
+        const envFile = join(dir, 'probe.env');
+        const sentinel = join(dir, 'EXECUTED');
+        writeFileSync(envFile, `K=${serializeEnvValue(value)}\n`);
+
+        // 哨兵：把 PATH 上的 id/echo 换成会写文件的桩不现实，改用「值里本来就带命令」的样本，
+        // 只要 shell 真的执行了它们，K 的内容就会与原值不同（命令输出替换掉了原文）。
+        const r = spawnSync('bash', ['-c', `set +e; source ${JSON.stringify(envFile)} 2>/dev/null; printf '%s' "$K"`], {
+          encoding: 'utf8', cwd: dir,
+        });
+
+        assert.equal(existsSync(sentinel), false, '不应有任何副作用文件');
+        assert.equal(r.stdout, value, `source 后的值应与原值一致（实际 ${JSON.stringify(r.stdout)}）`);
+      } finally {
+        rmSync(dir, { recursive: true, force: true }); // safe-rm: dir 恒来自本用例上方的 mkdtempSync
+      }
+    });
+  }
+
+  test('dotenv 与 shell 对同一份序列化结果给出相同的值（两个消费者不能分叉）', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ccm-env-both-'));
+    try {
+      for (const value of SHELL_CASES) {
+        const line = `K=${serializeEnvValue(value)}`;
+        const envFile = join(dir, 'both.env');
+        writeFileSync(envFile, `${line}\n`);
+        const viaShell = spawnSync('bash', ['-c', `source ${JSON.stringify(envFile)} 2>/dev/null; printf '%s' "$K"`], {
+          encoding: 'utf8', cwd: dir,
+        }).stdout;
+        const viaDotenv = dotenv.parse(line).K;
+        assert.equal(viaDotenv, value, `dotenv 侧失真：${JSON.stringify(value)}`);
+        assert.equal(viaShell, value, `shell 侧失真：${JSON.stringify(value)}`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true }); // safe-rm: dir 恒来自本用例上方的 mkdtempSync
+    }
   });
 
   test('简单值不加多余引号（生成的 .env 要还能给人读）', () => {

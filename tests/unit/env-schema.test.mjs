@@ -206,7 +206,7 @@ test.describe('类型校验', () => {
   });
 
   test('值含换行 → error（.env 是行格式，塞进去就是语法错误）', () => {
-    assert.equal(validateEnvChanges({ NTFY_TOPIC: 'a\nb' }, deps()).ok, false);
+    assert.equal(validateEnvChanges({ NTFY_TOKEN: 'a\nb' }, deps()).ok, false);
   });
 
   test('null（删除）跳过类型校验', () => {
@@ -323,5 +323,26 @@ test.describe('buildEnvView —— 下发给前端的视图', () => {
 
   test('带上只读诊断段', () => {
     assert.ok(buildEnvView(values).readonlyDiagnostics.length >= 2);
+  });
+});
+
+// 校验期与序列化期必须用同一判据 —— 否则「校验说 ok、写盘时抛错」，
+// 用户填完点保存才收到一句看不懂的异常。
+test.describe('校验期与序列化期对齐', () => {
+  test('含单引号的值在校验期就被拒（不是等到写盘抛错）', () => {
+    const r = validateEnvChanges({ NTFY_TOKEN: "it's mine" }, deps());
+    assert.equal(r.ok, false);
+    assert.match(r.results[0].message, /单引号/);
+  });
+
+  test('含换行同样在校验期拒', () => {
+    assert.equal(validateEnvChanges({ NTFY_TOPIC: 'a\nb' }, deps()).ok, false);
+  });
+
+  // 用 NTFY_TOKEN：它没有 together 成对约束，不会把两条规则搅在一起。
+  test('shell 元字符（$ ` 等）合法 —— 它们会被单引号安全包住，不该误伤', () => {
+    assert.equal(validateEnvChanges({ NTFY_TOKEN: 'a$(id)b' }, deps()).ok, true);
+    assert.equal(validateEnvChanges({ NTFY_TOKEN: 'x${HOME}y' }, deps()).ok, true);
+    assert.equal(validateEnvChanges({ NTFY_TOKEN: 'cmd `id`' }, deps()).ok, true);
   });
 });

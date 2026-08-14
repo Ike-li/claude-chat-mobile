@@ -192,6 +192,10 @@ export function createEnvConfigPanel({
       body.append(sec);
     }
 
+    // 清掉上一次保存留下的「立即重启」——它插在 footer 里，而 render() 只重建 body。
+    // 不清的话：保存一次 → 关面板 → 重开，会看到一个 disabled 的「重启中…」，
+    // 而用户这次根本没保存过任何东西（Playwright 实证过）。
+    footer.querySelector('#envConfigRestart')?.remove();
     footer.classList.remove('hidden');
     saveBtn.disabled = true;
     hint.textContent = '';
@@ -209,13 +213,20 @@ export function createEnvConfigPanel({
     return changes;
   }
 
-  function showResults(results, title) {
+  // fallback 是必须的：服务端有两条路径只给 error 不给 results —— socket.js 的 catch-all
+  // 与「设备未批准」。只渲染 results 的话，那两种情况下用户看到的是一个**只有标题、正文全空**
+  // 的失败框，零解释。
+  function showResults(results, title, fallback) {
     const box = el('div', 'p-2.5 rounded-xl border border-line bg-sunk space-y-1');
     box.append(el('div', 'text-xs font-semibold text-ink', title));
-    for (const r of results || []) {
+    const list = Array.isArray(results) ? results : [];
+    for (const r of list) {
       const line = el('div', `text-[11px] ${r.level === 'error' ? 'text-danger' : 'text-warn'}`);
       line.textContent = r.key ? `${r.key}：${r.message}` : r.message;
       box.append(line);
+    }
+    if (list.length === 0) {
+      box.append(el('div', 'text-[11px] text-danger', fallback || '服务端没有给出原因'));
     }
     body.prepend(box);
     body.scrollTop = 0;
@@ -242,7 +253,7 @@ export function createEnvConfigPanel({
     }
 
     if (!res?.ok) {
-      showResults(res?.results, '保存失败，一项都没写入');
+      showResults(res?.results, '保存失败，一项都没写入', res?.error);
       saveBtn.disabled = false;
       return;
     }
@@ -288,7 +299,7 @@ export function createEnvConfigPanel({
     socket.emit('env:get', {}, (res) => {
       loading = false;
       if (!res?.ok) {
-        body.replaceChildren(el('div', 'text-xs text-danger', '读取配置失败'));
+        body.replaceChildren(el('div', 'text-xs text-danger', `读取配置失败：${res?.error || '服务端没有给出原因'}`));
         return;
       }
       render(res);

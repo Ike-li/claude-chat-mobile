@@ -25,27 +25,49 @@ function hasControlChars(s) {
   return false;
 }
 
-// 需要引用的信号：空值、含任一种引号/反斜杠/井号、或有空白字符。
-// 反引号也算：.env 常被 `source` 进 shell，裸值里的反引号会被当命令替换执行。
-const NEEDS_QUOTE = /[#'"`\\\s]/;
+// 什么样的值可以裸写。**这是白名单，不是黑名单** —— 早前列"危险字符"的写法漏掉了 `$`，
+// 于是 `pa$$word`、`x${HOME}y` 裸写进 .env，用户 `source` 一下就被 shell 展开成别的东西
+// （property test 当场抓到）。黑名单要求"每遇到一个新字符都正确归类"，而那正是会失败的那一步
+// —— 同 CLAUDE.md 里那条「白名单而非黑名单」的教训。
+//
+// 名单里这些字符在 shell 与 dotenv 两侧都是纯字面：字母数字、`_-.` 、路径的 `/`、
+// URL 的 `:@+=`、逗号。其余一律加单引号。
+const BARE_SAFE = /^[A-Za-z0-9_\-./:@+=,]+$/;
 
+// 这个值能不能被安全地写进 .env。**唯一的否定条件是含单引号**，理由见 serializeEnvValue。
+// 供 env-schema 在校验期提前拦一道 —— 否则用户填完点保存，才在写盘那一刻收到一句抛错。
+export function isSerializableEnvValue(value) {
+  const s = String(value ?? '');
+  return !hasControlChars(s) && !s.includes("'");
+}
+
+// ## 为什么含单引号的值一律拒绝，而不是"换一种引号"
+//
+// `.env` 有**两个**消费者，两边的转义规则不一样，必须同时满足：
+//   ① dotenv（server 启动时读它）
+//   ② shell（用户调试时 `source .env`）
+//
+// 实测三种包裹（2026-08-14）：
+//                dotenv 无损?          shell source 安全?
+//   裸值          被行内 # 截断         安全（无特殊字符时）
+//   单引号 '…'    ✓ 零展开              ✓ 完全字面
+//   双引号 "…"    ✓（值不含 \ 和 "）    ✗ $(...) 会执行
+//   反引号 `…`    ✓ 零展开              ✗ 整个值被当命令执行
+//
+// 也就是说**单引号是唯一两边都过关的包法**，而它恰恰包不住自身。对含单引号的值，
+// 任何选择都会在某一侧失守 —— 与其挑一侧牺牲，不如明确说"这个值我表达不了"。
+//
+// 这条判断有过一次真实的反面教材：上一版为了 round-trip 正确性改用了反引号，
+// 结果把「值里有个撇号」变成了 shell 命令注入（`K=\`it's x'; id -un > PWNED; :\`` 实测被执行），
+// 而它自己上面那行注释刚说过反引号在 shell 里危险。**两个消费者的判断必须一起做，不能轮流做。**
 export function serializeEnvValue(value) {
   const s = String(value ?? '');
   if (hasControlChars(s)) {
     throw new Error('配置值不能包含换行或控制字符');
   }
-  if (s && !NEEDS_QUOTE.test(s)) return s;
-  // 单引号：dotenv 对其内容不做任何转义展开，是最安全的包法。
+  if (BARE_SAFE.test(s)) return s;
   if (!s.includes("'")) return `'${s}'`;
-  // 反引号：dotenv 对它同样不做展开（实测确认），是含单引号时的首选。
-  if (!s.includes('`')) return `\`${s}\``;
-  // 三种引号只剩双引号。dotenv 在双引号内**只展开 \n / \r，从不把 \\ 折回 \ 、
-  // 也不把 \" 折回 "** —— 所以「转义后再靠 parser 还原」这条路根本不通（早前就错在这里：
-  // 反斜杠每存一次翻一倍，含 \n 字面量的值甚至会解析出一个真换行）。
-  // 只有当值本身不含这两个字符时，双引号才是无损的。
-  if (!s.includes('"') && !s.includes('\\')) return `"${s}"`;
-  // 同时含单引号 + 反引号 + (双引号或反斜杠)：三种引号都表达不了，与其静默损坏不如拒绝。
-  throw new Error('配置值不能同时包含单引号、反引号与双引号/反斜杠');
+  throw new Error("配置值不能包含单引号（'）：.env 里唯一对 dotenv 与 shell 都安全的包裹方式是单引号，而它包不住自身");
 }
 
 // 敏感项对外只报「设了没 + 多长」。绝不回显明文 —— 与 src/ops/doctor-runtime.js 的脱敏纪律同源。
