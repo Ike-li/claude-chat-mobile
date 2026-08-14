@@ -34,11 +34,11 @@ function hasControlChars(s) {
 // URL 的 `:@+=`、逗号。其余一律加单引号。
 const BARE_SAFE = /^[A-Za-z0-9_\-./:@+=,]+$/;
 
-// 这个值能不能被安全地写进 .env。**唯一的否定条件是含单引号**，理由见 serializeEnvValue。
+// 这个值能不能被安全地写进 .env。**两个否定条件：含单引号、以反斜杠结尾**，理由见 serializeEnvValue。
 // 供 env-schema 在校验期提前拦一道 —— 否则用户填完点保存，才在写盘那一刻收到一句抛错。
 export function isSerializableEnvValue(value) {
   const s = String(value ?? '');
-  return !hasControlChars(s) && !s.includes("'");
+  return !hasControlChars(s) && !s.includes("'") && !s.endsWith('\\');
 }
 
 // ## 为什么含单引号的值一律拒绝，而不是"换一种引号"
@@ -60,12 +60,30 @@ export function isSerializableEnvValue(value) {
 // 这条判断有过一次真实的反面教材：上一版为了 round-trip 正确性改用了反引号，
 // 结果把「值里有个撇号」变成了 shell 命令注入（`K=\`it's x'; id -un > PWNED; :\`` 实测被执行），
 // 而它自己上面那行注释刚说过反引号在 shell 里危险。**两个消费者的判断必须一起做，不能轮流做。**
+//
+// ## 为什么以 `\` 结尾的值也一律拒绝（2026-08-14 第三轮审查复现）
+//
+// 上面那张表漏了一行：单引号包裹对**以反斜杠结尾**的值同样不成立，只是这次失守的是 dotenv 侧。
+// dotenv 的单引号分支正则是 `'(?:\\'|[^'])*'` —— 它把 `\'` 当作转义的单引号。于是 `K='x\'`
+// 的闭合引号被吃掉，贪婪匹配一路吞到文件里**下一个** `'`，**其间的 key 全部消失**；
+// 而 shell `source` 侧单引号内 `\` 是纯字面量、完全正确。同一份文件，两个消费者不同结果。
+//
+// 反斜杠个数无关：`'x\\'` 的第一个 `\` 被 `[^']` 吃掉，第二个与闭合引号组成 `\'` 照样命中转义分支。
+//
+// 后果方向是 fail-open：被吞掉的若是 CF_ACCESS_* 之一，src/auth/cf-access.js 的
+// `enabled = !!(hostname && team && aud)` 会让公网 2FA 整层静默关闭，而面板报的是「已写入」。
+//
+// **刻意不改成"把反斜杠加倍"**：那能救 dotenv 却会让 shell 侧读出多余的反斜杠 ——
+// 又一次「轮流做判断」。与单引号同样处理：明说这个值表达不了。
 export function serializeEnvValue(value) {
   const s = String(value ?? '');
   if (hasControlChars(s)) {
     throw new Error('配置值不能包含换行或控制字符');
   }
   if (BARE_SAFE.test(s)) return s;
+  if (s.endsWith('\\')) {
+    throw new Error('配置值不能以反斜杠（\\）结尾：dotenv 会把它与结尾引号读成转义，从而吞掉 .env 里后面的配置项');
+  }
   if (!s.includes("'")) return `'${s}'`;
   throw new Error("配置值不能包含单引号（'）：.env 里唯一对 dotenv 与 shell 都安全的包裹方式是单引号，而它包不住自身");
 }

@@ -346,3 +346,54 @@ test.describe('校验期与序列化期对齐', () => {
     assert.equal(validateEnvChanges({ NTFY_TOKEN: 'cmd `id`' }, deps()).ok, true);
   });
 });
+
+// 第三轮审查 #1 的校验期一侧：三个否定条件各给各的理由。
+// 合并成一句会让「路径末尾多打了个反斜杠」收到一句关于单引号的提示，用户照着改也改不对。
+test.describe('validateEnvChanges —— 以反斜杠结尾的值在校验期就被拒绝', () => {
+  test('拒绝，且理由说的是反斜杠不是单引号', () => {
+    // 两项同时给：NTFY_URL / NTFY_TOPIC 有 together 约束，只填一项会被另一条规则先拦下
+    const r = validateEnvChanges({ NTFY_URL: 'https://ntfy.sh/a', NTFY_TOPIC: 'my-topic\\' });
+    assert.equal(r.ok, false, '必须拒绝');
+    const msg = r.results.map((x) => x.message).join(' ');
+    assert.match(msg, /反斜杠/, `理由应指向反斜杠，实际：${msg}`);
+    assert.doesNotMatch(msg, /单引号/, `不该提单引号，实际：${msg}`);
+  });
+
+  test('反斜杠不在结尾则放行（不过度收紧）', () => {
+    assert.equal(validateEnvChanges({ NTFY_URL: 'https://ntfy.sh/a', NTFY_TOPIC: 'my\\topic' }).ok, true);
+  });
+});
+
+// 第三轮审查 #10：CF_ACCESS_* 是**另一条鉴权轴**（公网 2FA），而 AUTH_TOKEN 因「极易把自己锁在
+// 门外」被钉成 readonly。现状是持有 LAN 层凭据 + 设备批准就能把公网层整个删掉，且零告警零确认 ——
+// 第二因子可以被第一因子静默删除。配合本批把 dev:restart 放宽到 isSupervised()（生产恒 true），
+// 这成了手机上一次会话内可完成的闭环。
+//
+// 不改成 readonly（那会让手机上配不了 CF Access），改成**必须显式确认**：前端对 warn 会弹
+// appConfirm 再重发，用户至少被告知自己在关掉什么。
+test.describe('validateEnvChanges —— 清空 CF_ACCESS_* 必须先警告', () => {
+  const current = { CF_ACCESS_HOSTNAME: 'x.example.com', CF_ACCESS_TEAM: 'myteam', CF_ACCESS_AUD: 'aud123' };
+
+  test('三项一起清空 → warn 且说清后果', () => {
+    const r = validateEnvChanges(
+      { CF_ACCESS_HOSTNAME: null, CF_ACCESS_TEAM: null, CF_ACCESS_AUD: null },
+      { current }
+    );
+    const warns = r.results.filter((x) => x.level === 'warn');
+    assert.ok(warns.length > 0, '清空公网 2FA 不能零告警');
+    assert.match(warns.map((w) => w.message).join(' '), /2FA|公网|关闭/, '要说清关掉的是什么');
+  });
+
+  test('本来就没配 → 不告警（没有东西被关掉）', () => {
+    const r = validateEnvChanges({ CF_ACCESS_HOSTNAME: null }, { current: {} });
+    assert.equal(r.results.filter((x) => x.level === 'warn').length, 0);
+  });
+
+  test('设置（而非清空）不告警', () => {
+    const r = validateEnvChanges(
+      { CF_ACCESS_HOSTNAME: 'x.example.com', CF_ACCESS_TEAM: 't', CF_ACCESS_AUD: 'a' },
+      { current: {} }
+    );
+    assert.equal(r.results.filter((x) => x.level === 'warn').length, 0);
+  });
+});

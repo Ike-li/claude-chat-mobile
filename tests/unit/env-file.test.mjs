@@ -14,7 +14,17 @@ import { join } from 'node:path';
 
 import { applyEnvChanges, isSerializableEnvValue, maskSecret, serializeEnvValue } from '../../src/ops/env-file.js';
 
-const roundTrip = (v) => dotenv.parse(`K=${serializeEnvValue(v)}`).K;
+// ★ oracle 必须是**多行** .env，不能是单行。
+//
+// 上一版这里写的是 `dotenv.parse(\`K=${serializeEnvValue(v)}\`)` —— 单行。而 dotenv 的单引号分支
+// 正则是 `'(?:\\'|[^'])*'`，它把 `\'` 当作转义的单引号：值以 `\` 结尾时闭合引号被吃掉，匹配会
+// 一路贪婪到文件里**下一个** `'`。单行文件里没有下一个 `'`，正则被迫回溯，于是永远解析正确 ——
+// 判据把「后面还有别的行」这一维消掉了，缺陷恰好落在被消掉的那一维里。
+//
+// 尾随行刻意含一个单引号包裹的值：那是贪婪匹配的落点，也是面板最常写出的形态（含 # 的值必加引号）。
+const TRAILER = ["NEXT_KEY='#general'", 'AFTER=plain'].join('\n');
+const parseMultiline = (line) => dotenv.parse(`${line}\n${TRAILER}\n`);
+const roundTrip = (v) => parseMultiline(`K=${serializeEnvValue(v)}`).K;
 
 test.describe('serializeEnvValue —— 以 dotenv 为 oracle 的 round-trip', () => {
   const CASES = [
@@ -61,8 +71,30 @@ test.describe('serializeEnvValue —— 以 dotenv 为 oracle 的 round-trip', (
     }
   });
 
+  // ★ 以 `\` 结尾一律拒绝 —— 与单引号同源的第二个「表达不了」。
+  //
+  // dotenv 把 `\'` 当转义单引号，于是 `K='x\'` 的闭合引号被吃掉，值一路吞到下一个 `'`，
+  // **后续 key 整个消失**；而 shell `source` 侧单引号内 `\` 是字面量、完全正确。两个消费者对同一份
+  // 文件给出不同结果，与反引号那次同型、方向相反。个数无关：`'x\\'` 的第一个 `\` 被 `[^']` 吃掉，
+  // 第二个与闭合引号组成 `\'` 照样命中转义分支。
+  //
+  // 后果是 fail-open：被吞掉的 key 若是 CF_ACCESS_* 之一，src/auth/cf-access.js 的
+  // `enabled = !!(hostname && team && aud)` 会让公网 2FA 整层静默关闭。
+  test('以反斜杠结尾 → 抛错，且错误信息说清为什么', () => {
+    for (const v of ['C:\\Users\\you\\', 'https://ntfy.sh/a\\', 'x\\\\', '\\']) {
+      assert.throws(() => serializeEnvValue(v), /反斜杠/, `应拒绝 ${JSON.stringify(v)}`);
+    }
+  });
+
+  test('反斜杠不在结尾则照常接受（不过度收紧）', () => {
+    for (const v of ['C:\\Users\\you', 'a\\b', '\\leading']) {
+      assert.equal(roundTrip(v), v, `不该拒绝 ${JSON.stringify(v)}`);
+    }
+  });
+
   test('isSerializableEnvValue 与 serializeEnvValue 判断一致（校验期能提前拦住同一批）', () => {
-    const samples = ['ok', '', 'a b', 'a#b', "it's", "'", 'a\nb', 'cmd `x`', 'a$(id)b'];
+    const samples = ['ok', '', 'a b', 'a#b', "it's", "'", 'a\nb', 'cmd `x`', 'a$(id)b',
+      'C:\\Users\\you\\', 'x\\\\', '\\', 'C:\\Users\\you'];
     for (const v of samples) {
       const canSerialize = (() => {
         try { serializeEnvValue(v); return true; } catch { return false; }
@@ -114,19 +146,27 @@ test.describe('serializeEnvValue —— shell source 安全（第二个消费者
     });
   }
 
+  // ★ 这份文件必须是**多行**，且受测行后面要有一个单引号包裹的值。
+  // 单行版本会让 dotenv 的贪婪匹配无处可去、被迫回溯，从而掩盖「值以 \ 结尾吞掉后续 key」那类缺陷。
+  // 断言也不能只看被测 key 本身：**后续 key 是否还在**才是分叉的直接指纹。
   test('dotenv 与 shell 对同一份序列化结果给出相同的值（两个消费者不能分叉）', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ccm-env-both-'));
     try {
       for (const value of SHELL_CASES) {
-        const line = `K=${serializeEnvValue(value)}`;
         const envFile = join(dir, 'both.env');
-        writeFileSync(envFile, `${line}\n`);
-        const viaShell = spawnSync('bash', ['-c', `source ${JSON.stringify(envFile)} 2>/dev/null; printf '%s' "$K"`], {
-          encoding: 'utf8', cwd: dir,
-        }).stdout;
-        const viaDotenv = dotenv.parse(line).K;
-        assert.equal(viaDotenv, value, `dotenv 侧失真：${JSON.stringify(value)}`);
+        const text = `K=${serializeEnvValue(value)}\n${TRAILER}\n`;
+        writeFileSync(envFile, text);
+        const shellOut = spawnSync('bash', ['-c',
+          `source ${JSON.stringify(envFile)} 2>/dev/null; printf '%s\\n%s' "$K" "$NEXT_KEY"`,
+        ], { encoding: 'utf8', cwd: dir }).stdout;
+        // 换行当分隔符是安全的：含控制字符的值在序列化期就被拒绝，不可能出现在 SHELL_CASES 里
+        const [viaShell, shellNext] = shellOut.split('\n');
+        const parsed = dotenv.parse(text);
+        assert.equal(parsed.K, value, `dotenv 侧失真：${JSON.stringify(value)}`);
         assert.equal(viaShell, value, `shell 侧失真：${JSON.stringify(value)}`);
+        // 后续 key 两侧都必须完好——被吞掉的 key 是静默消失的，只看 K 看不出来
+        assert.equal(parsed.NEXT_KEY, '#general', `dotenv 侧吞掉了后续 key（受测值 ${JSON.stringify(value)}）`);
+        assert.equal(shellNext, '#general', `shell 侧吞掉了后续 key（受测值 ${JSON.stringify(value)}）`);
       }
     } finally {
       rmSync(dir, { recursive: true, force: true }); // safe-rm: dir 恒来自本用例上方的 mkdtempSync

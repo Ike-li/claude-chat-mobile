@@ -255,9 +255,13 @@ function checkOne(key, value, def, d) {
   // 校验期与序列化期用**同一个判据**，否则会出现「校验说 ok、写盘时抛错」——
   // 用户填完点保存才收到一句看不懂的异常，而不是在输入时就被告知。
   if (!isSerializableEnvValue(value)) {
-    return hasControlChars(value)
-      ? '值不能包含换行或控制字符'
-      : "值不能包含单引号（'）：.env 会被 dotenv 与 shell 两边读，只有单引号包裹两边都安全，而它包不住自身";
+    if (hasControlChars(value)) return '值不能包含换行或控制字符';
+    // 三个否定条件各给各的理由。合并成一句「格式非法」会让「路径末尾多打了个反斜杠」这种
+    // 最常见的形态收到一句关于单引号的提示，用户照着改也改不对。
+    if (String(value).endsWith('\\')) {
+      return '值不能以反斜杠（\\）结尾：dotenv 会把它与结尾引号读成转义，从而吞掉 .env 里后面的配置项（去掉末尾的 \\ 即可）';
+    }
+    return "值不能包含单引号（'）：.env 会被 dotenv 与 shell 两边读，只有单引号包裹两边都安全，而它包不住自身";
   }
 
   if (def.kind === 'number') {
@@ -333,6 +337,35 @@ const NOISY_TOGGLES = {
   LOG_INTERACTIONS: '会把消息正文摘要写进日志（已脱敏、截断）',
 };
 
+// ## 清空 CF_ACCESS_* 必须先警告（2026-08-14 第三轮审查）
+//
+// 上面 §硬边界 把 AUTH_TOKEN 钉成 readonly，理由是「极易把自己锁在门外」。但 CF_ACCESS_* 是
+// **另一条鉴权轴**——AUTH_TOKEN 管 LAN/本机那层，CF Access JWT 管公网那层——三项却全部可写，
+// 清空还零告警。等于**持有第一因子就能静默删掉第二因子**，而且删掉之后设备 token 事后被吊销
+// 也回滚不了。配合本批把 dev:restart 放宽到 `DEV_MODE || isSupervised()`（生产 LaunchAgent 下
+// 恒 true），这成了手机上一次会话内可完成的闭环。
+//
+// 不做成 readonly：那会让「在手机上配 CF Access」彻底没法做。改成 warn —— 前端对 warn 会弹
+// appConfirm 再重发，用户至少被明确告知自己在关掉什么。
+const CF_ACCESS_KEYS = ['CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD'];
+
+function checkCfAccessTeardown(changes, current) {
+  // src/auth/cf-access.js:92 是 `enabled = !!(hostname && team && aud)` —— 任意一项被清空，
+  // 整层就关了。所以判据是「有没有清掉任何一项**且它本来是设着的**」。
+  const cleared = CF_ACCESS_KEYS.filter((k) => {
+    const wasSet = String(current?.[k] ?? '').trim() !== '';
+    const nowEmpty = !Object.hasOwn(changes, k) ? false : String(changes[k] ?? '').trim() === '';
+    return wasSet && nowEmpty;
+  });
+  if (cleared.length === 0) return [];
+  return [{
+    key: cleared[0],
+    level: 'warn',
+    message: `会关闭公网 2FA（Cloudflare Access）：清空 ${cleared.join(' / ')} 后，公网域名退化成只靠 AUTH_TOKEN 校验。`
+      + '若这台 server 暴露在公网上，这一步会实质降低防护等级。',
+  }];
+}
+
 export function validateEnvChanges(changes, d) {
   const results = [];
   for (const [key, value] of Object.entries(changes || {})) {
@@ -374,6 +407,7 @@ export function validateEnvChanges(changes, d) {
   }
 
   results.push(...checkTogether(changes || {}, d?.current || {}));
+  results.push(...checkCfAccessTeardown(changes || {}, d?.current || {}));
   return { ok: !results.some((r) => r.level === 'error'), results };
 }
 
