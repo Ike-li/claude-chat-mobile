@@ -138,28 +138,36 @@ export function labelFor(unit, prefix = DEFAULT_LABEL_PREFIX) {
 // 「本进程是不是被进程管理器托管的」——即：优雅退出之后有没有东西会把它拉起来。
 // 用途是给 web 端的重启按钮把关：误判成「受管」的后果是用户能停掉一个没人会拉起的前台进程。
 //
-// 判据是**结构性**的：launchd 托管时 plist 用 `exec node server.js`（zsh 被替换掉），
-// 所以 node 的父进程直接是 launchd(1)。实测本机 server 进程 ppid 确为 1。
+// ## macOS：结构 + 形态，两个条件都要
 //
-// ★ 为什么不用 XPC_SERVICE_NAME（早前那版判「非空且 !== '0'」是错的）：
-// 实测扫全机 82 个进程，GUI app（LaunchServices 启动）的子进程继承的是
-// `application.<bundleid>.<n>.<n>` 并原样往下传，**不会**被改写成 "0"（Chrome / 网易云 /
-// codex 三个独立样本）。也就是说从 Terminal.app 手动 npm start，node 会拿到
-// `application.com.apple.Terminal.*` → 被判成受管。当初那次「实测」只在 ccm server 自己
-// spawn 的 shell 上取过样，而那条链恰好会被重写成 "0" —— 单点采样得出的分布结论。
-// 环境变量天然可继承，本就不适合回答「我的父进程是谁」这个问题。
+// 这两条单独用都被实测推翻过：
+//   ① 只看 `XPC_SERVICE_NAME` 非空 —— GUI app（LaunchServices 启动）的子进程继承的是
+//      `application.<bundleid>.<n>.<n>` 并原样往下传（Chrome / 网易云 / codex 三个独立样本），
+//      于是从 Terminal.app 手动 npm start 会被判成受管。
+//   ② 只看 `ppid === 1` —— 孤儿进程（`nohup` / `disown` / 关掉启动它的终端）被 init 收养后
+//      ppid 同样是 1，实测确认，而它根本没人拉起。
 //
-// systemd 侧只能退回环境变量：docs/deployment.md:30 推荐的是 `systemctl --user`，
-// 那种形态下 ppid 是 `systemd --user` 而非 1，结构判据不适用。代价是 Linux 上若有人在
-// 继承了 INVOCATION_ID 的终端里前台启动，仍会被判成受管——已知残余风险，macOS 侧不受影响。
+// 合起来才成立：launchd 托管时 plist 用 `exec node server.js`（zsh 被替换掉）⇒ 父进程直接是
+// launchd(1)，**且** XPC 标签是一个真实的 service 名（`com.ccm.server`）；孤儿进程虽然 ppid 也
+// 是 1，但 XPC 继承自当初那个终端（`application.*` 或 `0`），形态对不上。
+//
+// ## Linux：完全不看 ppid
+//
+// 容器里 ppid 常常是 1（入口是 shell wrapper 时 node 的父进程就是 PID 1），实测
+// `docker run --entrypoint sh -c 'node …'` → ppid=1。所以 Linux 侧只认 systemd 自己注入的
+// 信号；docs/deployment.md 推荐的 `systemctl --user` 那种形态 ppid 也不是 1。
+// 残余风险：由 systemd user unit 拉起的桌面终端会继承 INVOCATION_ID，那种环境下前台启动仍会误判。
 export function isSupervised({
   ppid = typeof process !== 'undefined' ? process.ppid : 0,
   env = typeof process !== 'undefined' ? process.env : {},
   platform = typeof process !== 'undefined' ? process.platform : '',
 } = {}) {
-  if (ppid === 1) return true; // launchd / systemd system unit
-  if (platform === 'darwin') return false; // macOS 上没有第二个可信信号，宁可拒绝
   const e = env || {};
+  if (platform === 'darwin') {
+    if (ppid !== 1) return false;
+    const xpc = typeof e.XPC_SERVICE_NAME === 'string' ? e.XPC_SERVICE_NAME.trim() : '';
+    return !!xpc && xpc !== '0' && !xpc.startsWith('application.');
+  }
   return ['INVOCATION_ID', 'JOURNAL_STREAM']
     .some((k) => typeof e[k] === 'string' && e[k].trim().length > 0);
 }

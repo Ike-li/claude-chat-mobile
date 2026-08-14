@@ -476,7 +476,10 @@ export function createServiceManager(deps = {}) {
 
     // bootout 对没在跑的 unit 会返回非零（"Could not find service"）—— 那不是失败是「本来就没跑」。
     // 据此中止会让 plist 与 manifest 永远卸不掉。
-    execLaunchctl(['bootout', `gui/${uid}/${entry.label}`]);
+    // 用派生的 label 而不是 entry.label：manifest 是磁盘 JSON，validateManifest 对 label 只校验
+    // 「非空字符串」，篡改后能 bootout 任意 gui/<uid>/<label>。删文件那半已经用派生路径了，
+    // 这半不跟上等于护栏只做了一半。
+    execLaunchctl(['bootout', `gui/${uid}/${label}`]);
 
     // safe-path: target 由 plistPathFor(labelFor(unit)) 派生，unit 已过 guardUnit 的白名单
     // （SERVICE_UNIT_NAMES 之一），home 来自 os.homedir()。**刻意不用 manifest 里的 plistPath**
@@ -708,10 +711,18 @@ function realHttpGet(url) {
 function readLine() {
   return new Promise((resolve) => {
     process.stdin.setEncoding('utf8');
-    process.stdin.once('data', (d) => {
+    const done = (value) => {
       process.stdin.pause();
-      resolve(String(d));
-    });
+      process.stdin.removeListener('data', onData);
+      process.stdin.removeListener('end', onEnd);
+      resolve(value);
+    };
+    const onData = (d) => done(String(d));
+    // EOF（Ctrl-D）必须也 settle —— 只监听 'data' 的话 promise 永不完成，进程静默 exit 0，
+    // 而包装脚本会把「静默 0」读成成功。这正是 scripts/setup.js:10-14 记过的那个坑。
+    const onEnd = () => done('');
+    process.stdin.once('data', onData);
+    process.stdin.once('end', onEnd);
     process.stdin.resume();
   });
 }

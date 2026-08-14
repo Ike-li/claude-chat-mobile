@@ -401,51 +401,47 @@ test.describe('validateManifest', () => {
 //   太松：DEV_MODE=1 时前台 npm start 也能被停掉，然后**永远起不来**（没有 KeepAlive 拉它）
 // 判据实测（2026-08-13，ps eww 26867）：launchd 会给托管进程注入 XPC_SERVICE_NAME=com.ccm.server。
 test.describe('isSupervised', () => {
-  // 判据是**结构性**的：launchd 托管时 plist 用 `exec node server.js`（zsh 被替换掉），
-  // 所以 node 的父进程直接是 launchd(1)。实测本机 server 进程 ppid 确为 1。
-  //
-  // ★ 为什么不用 XPC_SERVICE_NAME：早前那版判「非空且 !== '0'」是错的。实测扫全机 82 个进程，
-  //   GUI app（LaunchServices 启动）的子进程继承的是 application.<bundleid>.<n>.<n> 并原样往下传，
-  //   不会被改写成 "0"（Chrome / 网易云 / codex 三个独立样本）。也就是说从 Terminal.app 手动
-  //   npm start，node 会拿到 application.com.apple.Terminal.* → 被误判成受管 → web 端能停掉一个
-  //   没有 KeepAlive 会拉它的进程。当初那次「实测」只在 ccm server 自己 spawn 的 shell 上取过样，
-  //   而那条链恰好会被重写成 "0" —— 单点采样得出的分布结论。
-  test('ppid=1 → true（launchd 直属；本机 server 进程实测 ppid=1）', () => {
-    assert.equal(isSupervised({ ppid: 1, platform: 'darwin' }), true);
+  const XPC = 'com.ccm.server';
+
+  // macOS 需要**结构 + 形态**两个条件。两条单独用都被实测推翻过，见实现的头注。
+  test('launchd 托管：ppid=1 且 XPC 是真实 service 名 → true', () => {
+    assert.equal(isSupervised({ ppid: 1, platform: 'darwin', env: { XPC_SERVICE_NAME: XPC } }), true);
   });
 
-  test('前台 npm start → false（ppid 是 npm/shell，停了就再也起不来）', () => {
-    assert.equal(isSupervised({ ppid: 67233, platform: 'darwin' }), false);
-  });
-
-  test('★ 从 Terminal.app 启动、继承了 application.* 的进程 → false', () => {
+  test('★ 孤儿进程：ppid=1 但 XPC 继承自终端 → false（nohup / disown / 关掉启动它的终端）', () => {
     assert.equal(
-      isSupervised({ ppid: 500, platform: 'darwin', env: { XPC_SERVICE_NAME: 'application.com.apple.Terminal.123.456' } }),
+      isSupervised({ ppid: 1, platform: 'darwin', env: { XPC_SERVICE_NAME: '0' } }),
       false,
-      'GUI app 的子进程会继承 application.*，绝不能据此判受管'
+      'ppid=1 也可能是被 init 收养的孤儿，它根本没人拉起'
+    );
+    assert.equal(
+      isSupervised({ ppid: 1, platform: 'darwin', env: { XPC_SERVICE_NAME: 'application.com.apple.Terminal.1.2' } }),
+      false,
+      'GUI app 的子进程会继承 application.*'
+    );
+    assert.equal(isSupervised({ ppid: 1, platform: 'darwin', env: {} }), false, '没有 XPC 标签同样不算');
+  });
+
+  test('★ 前台 npm start：XPC 像样但 ppid 不是 1 → false', () => {
+    assert.equal(
+      isSupervised({ ppid: 67233, platform: 'darwin', env: { XPC_SERVICE_NAME: XPC } }),
+      false,
+      '环境变量可继承，父进程不是 launchd 就不算受管'
     );
   });
 
-  test('★ macOS 上任何 XPC_SERVICE_NAME 都不足以判受管（含 agent label 形态）', () => {
-    assert.equal(
-      isSupervised({ ppid: 500, platform: 'darwin', env: { XPC_SERVICE_NAME: 'com.ccm.server' } }),
-      false,
-      'ppid 不是 1 就不是 launchd 直属，环境变量可继承、不可作数'
-    );
+  // Linux 完全不看 ppid：容器里入口是 shell wrapper 时 node 的 ppid 就是 1（实测）。
+  test('Linux 容器：ppid=1 但无 systemd 信号 → false', () => {
+    assert.equal(isSupervised({ ppid: 1, platform: 'linux', env: {} }), false);
   });
 
-  // systemd --user（docs/deployment.md:30 推荐的 Linux 形态）的 ppid 是 systemd --user 而非 1，
-  // 只能靠 systemd 自己注入的信号。
-  test('Linux + INVOCATION_ID → true（systemd --user，ppid 不是 1）', () => {
+  test('Linux + systemd 信号 → true（systemctl --user 的 ppid 不是 1）', () => {
     assert.equal(isSupervised({ ppid: 900, platform: 'linux', env: { INVOCATION_ID: 'abc' } }), true);
     assert.equal(isSupervised({ ppid: 900, platform: 'linux', env: { JOURNAL_STREAM: '8:1' } }), true);
   });
 
-  test('Linux 前台跑 → false', () => {
-    assert.equal(isSupervised({ ppid: 900, platform: 'linux', env: {} }), false);
-  });
-
   test('空串按未设置处理', () => {
+    assert.equal(isSupervised({ ppid: 1, platform: 'darwin', env: { XPC_SERVICE_NAME: '   ' } }), false);
     assert.equal(isSupervised({ ppid: 900, platform: 'linux', env: { INVOCATION_ID: '  ' } }), false);
   });
 
