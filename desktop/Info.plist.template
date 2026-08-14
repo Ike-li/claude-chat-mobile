@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  CCM.app 的 Info.plist 模板。由 scripts/app-build.js 用 scripts/render-plist.js 渲染
+  （复用 deploy/*.plist.template 那套字面量替换 + XML 转义，路径含 &/#/空格/引号都安全）。
+
+  占位符：
+    __VERSION__  版本号，取自 package.json
+    __REPO__     仓库绝对路径 —— build 时烘进来当兜底
+    __NODE__     node 绝对路径 —— 同上
+
+  为什么把路径烘进 Info.plist：菜单栏 app 要找到 scripts/service.js 才能干活，而 GUI app
+  的环境不是登录 shell（PATH 里通常没有 homebrew）。运行时优先读 UserDefaults（用户可经
+  「重新定位仓库…」改），这里的值只是首次启动的兜底。
+
+  LSUIElement=1 是关键：无 Dock 图标、不进 app switcher，只在菜单栏出现一个 template image。
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>com.ccm.menubar</string>
+  <key>CFBundleName</key>
+  <string>CCM</string>
+  <key>CFBundleDisplayName</key>
+  <string>CCM 控制台</string>
+  <key>CFBundleExecutable</key>
+  <string>CCM</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>__VERSION__</string>
+  <key>CFBundleVersion</key>
+  <string>__VERSION__</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>13.0</string>
+  <key>LSUIElement</key>
+  <true/>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>CCMRepoPath</key>
+  <string>__REPO__</string>
+  <key>CCMNodePath</key>
+  <string>__NODE__</string>
+</dict>
+</plist>

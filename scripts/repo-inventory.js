@@ -45,6 +45,7 @@ const ROOT_FILES = new Map([
 
 const PREFIX_RULES = [
   ['.github/', 'Automation', 'GitHub workflow', 'keep'],
+  ['desktop/', 'Desktop integration', 'macOS menubar console source and bundle template', 'keep'],
   ['deploy/', 'Deployment', 'Service manager deployment template', 'keep'],
   ['src/', 'Backend source', 'Server-side domain module', 'keep'],
   ['public/js/app/', 'Frontend source', 'Browser application domain module', 'keep'],
@@ -87,6 +88,7 @@ function entryAndGeneration(path, classification) {
   else if (path === '.env.example') entry = '`scripts/setup.js` and runtime configuration';
   else if (path === 'CLAUDE.md' || path === 'AGENTS.md') entry = 'Claude Code and Codex project instruction loader';
   else if (path.startsWith('.github/')) entry = 'GitHub Actions';
+  else if (path.startsWith('desktop/')) entry = '`npm run app:build`';
   else if (path.startsWith('deploy/')) entry = 'LaunchAgent or systemd installation';
   else if (path.startsWith('src/')) entry = 'Imported by the runtime entrypoint';
   else if (path.startsWith('public/')) entry = 'Served by Express and consumed by the browser';

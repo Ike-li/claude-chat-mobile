@@ -70,6 +70,10 @@ node scripts/doctor.js --env=prod.env  # 指定 .env 文件
 
 # 常驻服务（macOS LaunchAgent）
 npm run service:status              # 各 unit 的运行态/归属/漂移；--json 供菜单栏与 doctor 消费
+npm run service:install|adopt|restart|logs|health   # adopt=接管手工安装（只写 manifest 不碰 plist）；uninstall 须 --yes
+
+# 菜单栏控制台（macOS，可选）
+npm run app:build                   # swiftc 编译 desktop/ccm-menubar.swift → desktop/build/CCM.app（产物不入库）
 
 # 设备指纹审批与管理
 node scripts/device.js list         # 列出所有受信任和等待确认的设备

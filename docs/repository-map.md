@@ -36,6 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 63 |
 | Configuration template | 1 |
 | Deployment | 4 |
+| Desktop integration | 2 |
 | Documentation | 10 |
 | E2E test | 48 |
 | Frontend asset | 3 |
@@ -46,16 +47,16 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Instructions | 2 |
 | Integration test | 22 |
 | Legal | 2 |
-| Maintainer tooling | 27 |
+| Maintainer tooling | 28 |
 | Project configuration | 5 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
 | Test configuration | 4 |
 | Test support | 5 |
-| Unit test | 147 |
+| Unit test | 148 |
 | Vendored asset | 21 |
 
-Total classified files: **417**.
+Total classified files: **421**.
 
 ## Complete file inventory
 
@@ -74,6 +75,8 @@ Total classified files: **417**.
 | `deploy/menubar.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/server.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/tunnel.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
+| `desktop/ccm-menubar.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
+| `desktop/Info.plist.template` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `docker-compose.test.yml` | Test configuration | Compose entry for the isolated test container (npm run test:docker*) | Referenced by maintainers | Authored and reviewed manually | keep |
 | `Dockerfile.test` | Test configuration | Isolated test container — keeps test processes away from the host home directory | Referenced by maintainers | Authored and reviewed manually | keep |
 | `docs/architecture.en.md` | Documentation | English explanation of Web/CLI data paths, ownership, and replay | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |
@@ -152,6 +155,7 @@ Total classified files: **417**.
 | `README.en.md` | Documentation | English project entry | User or maintainer documentation | Authored and reviewed manually | keep |
 | `README.md` | Documentation | Primary Chinese project entry | User or maintainer documentation | Authored and reviewed manually | keep |
 | `scripts/agent-event-contract.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/app-build.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-destructive-deletes.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-import-boundaries.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-playwright-forbidden-patterns.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
@@ -345,6 +349,7 @@ Total classified files: **417**.
 | `tests/unit/agent-sessions-routing.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/agent-subagents.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/agent-system-subtypes.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/app-build.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/approval-lifecycle.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/approval-store.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/attention.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
