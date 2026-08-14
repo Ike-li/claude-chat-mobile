@@ -136,21 +136,30 @@ export function labelFor(unit, prefix = DEFAULT_LABEL_PREFIX) {
 }
 
 // 「本进程是不是被进程管理器托管的」——即：优雅退出之后有没有东西会把它拉起来。
+// 用途是给 web 端的重启按钮把关：误判成「受管」的后果是用户能停掉一个没人会拉起的前台进程。
 //
-// 用途是给 web 端的重启按钮把关。只认 DEV_MODE 的旧判据**同时太紧也太松**：
-//   太紧：生产常驻部署改完配置没法从手机重启，「手机上改配置」这条路断在最后一步
-//   太松：DEV_MODE=1 时前台 `npm start` 也能被停掉，然后**永远起不来**（没有 KeepAlive 拉它）
+// 判据是**结构性**的：launchd 托管时 plist 用 `exec node server.js`（zsh 被替换掉），
+// 所以 node 的父进程直接是 launchd(1)。实测本机 server 进程 ppid 确为 1。
 //
-// 判据实测（2026-08-13）：
-//   launchd 托管的进程   → XPC_SERVICE_NAME=com.ccm.server（`ps eww <pid>` 实见）
-//   普通终端里的 node    → XPC_SERVICE_NAME=0              ← ★ 关键陷阱
-// **macOS 给所有普通进程也注入这个变量，值是字面量 "0"**。只判「非空」会把前台 npm start
-// 也认成受管，于是 web 端能把它停掉、再也起不来 —— 那正是这个判据要堵的洞。必须排除 "0"。
-// systemd 侧对应 INVOCATION_ID / JOURNAL_STREAM（那两个没有同型的哨兵值）。
-export function isSupervised(env = process.env) {
+// ★ 为什么不用 XPC_SERVICE_NAME（早前那版判「非空且 !== '0'」是错的）：
+// 实测扫全机 82 个进程，GUI app（LaunchServices 启动）的子进程继承的是
+// `application.<bundleid>.<n>.<n>` 并原样往下传，**不会**被改写成 "0"（Chrome / 网易云 /
+// codex 三个独立样本）。也就是说从 Terminal.app 手动 npm start，node 会拿到
+// `application.com.apple.Terminal.*` → 被判成受管。当初那次「实测」只在 ccm server 自己
+// spawn 的 shell 上取过样，而那条链恰好会被重写成 "0" —— 单点采样得出的分布结论。
+// 环境变量天然可继承，本就不适合回答「我的父进程是谁」这个问题。
+//
+// systemd 侧只能退回环境变量：docs/deployment.md:30 推荐的是 `systemctl --user`，
+// 那种形态下 ppid 是 `systemd --user` 而非 1，结构判据不适用。代价是 Linux 上若有人在
+// 继承了 INVOCATION_ID 的终端里前台启动，仍会被判成受管——已知残余风险，macOS 侧不受影响。
+export function isSupervised({
+  ppid = typeof process !== 'undefined' ? process.ppid : 0,
+  env = typeof process !== 'undefined' ? process.env : {},
+  platform = typeof process !== 'undefined' ? process.platform : '',
+} = {}) {
+  if (ppid === 1) return true; // launchd / systemd system unit
+  if (platform === 'darwin') return false; // macOS 上没有第二个可信信号，宁可拒绝
   const e = env || {};
-  const xpc = typeof e.XPC_SERVICE_NAME === 'string' ? e.XPC_SERVICE_NAME.trim() : '';
-  if (xpc && xpc !== '0') return true;
   return ['INVOCATION_ID', 'JOURNAL_STREAM']
     .some((k) => typeof e[k] === 'string' && e[k].trim().length > 0);
 }

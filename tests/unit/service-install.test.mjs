@@ -10,7 +10,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 
-import { createServiceManager, pickNodePath, resolveManifestPath } from '../../scripts/service.js';
+import { createServiceManager, pickNodePath, resolveManifestPath, resolveUninstallConfirm } from '../../scripts/service.js';
 
 const HOME = '/Users/you';
 const REPO = '/Users/you/code/claude-chat-mobile';
@@ -60,6 +60,11 @@ function setup({ files = {}, objs = {}, manifest = null, launchctlFails = false,
   const writes = []; // 写操作顺序 —— 「先 manifest 后 plist」是中断可恢复的前提，要能断言
   let stored = manifest;
   let failNow = launchctlFails;
+  // bootstrap 成功后 launchctl 里就该查得到这个 unit —— 不模拟这一步的话，
+  // 「install 完了 launchctl 却不认识它」这种只在 bootstrap 失败时才该出现的状态会变成常态。
+  const loaded = new Set(
+    tsv.split('\n').slice(1).map((l) => l.split('\t')[2]).filter(Boolean)
+  );
 
   const mgr = createServiceManager({
     platform: 'darwin',
@@ -69,10 +74,14 @@ function setup({ files = {}, objs = {}, manifest = null, launchctlFails = false,
     now: () => 1786000000000,
     execLaunchctl: (args) => {
       calls.push(args);
-      if (args[0] === 'list') return { status: 0, stdout: tsv, stderr: '' };
-      return failNow
-        ? { status: 1, stdout: '', stderr: 'Load failed: 5: Input/output error' }
-        : { status: 0, stdout: '', stderr: '' };
+      if (args[0] === 'list') {
+        const rows = [...loaded].map((label) => `-\t0\t${label}`);
+        return { status: 0, stdout: ['PID\tStatus\tLabel', ...rows].join('\n'), stderr: '' };
+      }
+      if (failNow) return { status: 1, stdout: '', stderr: 'Load failed: 5: Input/output error' };
+      if (args[0] === 'bootstrap') loaded.add(args[2]?.split('/').pop()?.replace(/\.plist$/, ''));
+      if (args[0] === 'bootout') loaded.delete(args[1]?.split('/').pop());
+      return { status: 0, stdout: '', stderr: '' };
     },
     readPlistFile: (p) => plists[p] ?? null,
     readFileRaw: (p) => fs.get(p) ?? null,
@@ -168,6 +177,33 @@ test.describe('install —— 全新安装', () => {
     assert.equal(r.ok, false);
     assert.match(r.error, /Load failed|bootstrap/i);
   });
+
+  // ★ bootstrap 失败（macOS 上 "Load failed: 5: Input/output error" 很常见）时 plist 与 manifest
+  // 都已落盘。早前第二次 install 命中 `inManifest && exists` 直接返回 already + exit 0，
+  // **根本不再尝试 bootstrap** —— 用户只能先 uninstall 再 install 才出得来，而 CLI 毫无提示。
+  test('bootstrap 失败后再次 install 会重试加载，而不是报 already', () => {
+    const s = setup({ launchctlFails: true });
+    const first = s.mgr.install('server');
+    assert.equal(first.ok, false, '首次应如实报失败');
+
+    s.setLaunchctlFail(false);
+    const before = s.calls.filter((a) => a[0] === 'bootstrap').length;
+    const second = s.mgr.install('server');
+    assert.equal(second.ok, true);
+    assert.ok(
+      s.calls.filter((a) => a[0] === 'bootstrap').length > before,
+      '第二次 install 必须重试 bootstrap，否则用户困在死路里'
+    );
+  });
+
+  test('已装好且确实在跑 → 仍然返回 already，不做多余的 bootstrap', () => {
+    const s = setup({ tsv: 'PID\tStatus\tLabel\n26867\t0\tcom.ccm.server' });
+    s.mgr.install('server');
+    const before = s.calls.filter((a) => a[0] === 'bootstrap').length;
+    const r = s.mgr.install('server');
+    assert.equal(r.action, 'already');
+    assert.equal(s.calls.filter((a) => a[0] === 'bootstrap').length, before);
+  });
 });
 
 test.describe('install —— 护栏：绝不覆写用户的配置', () => {
@@ -205,6 +241,27 @@ test.describe('install —— 护栏：绝不覆写用户的配置', () => {
     const r = mgr.install('tunnel');
     assert.equal(r.ok, false);
     assert.match(r.error, /cloudflared|config\.yml/);
+  });
+
+  // ★ deploy/menubar.plist.template 的头注写着「node scripts/service.js install menubar 会渲染
+  // 它并 bootstrap」，但 precheck 早前只校验 tunnel ⇒ APP 为 undefined 时 escapeXml 把它变成
+  // 字面量 "undefined" 写进 plist，还报「✓ 已安装并加载」。且 menubar 的 driftFields 只有
+  // log-path，status 会一直显示 managed 无漂移，用户无从发现。
+  test('menubar 不带 --app 时拒绝安装（否则写出 /usr/bin/open undefined 并报成功）', () => {
+    const { mgr, fs } = setup();
+    const r = mgr.install('menubar');
+    assert.equal(r.ok, false);
+    assert.match(r.error, /app|APP|\.app/i);
+    assert.equal(fs.has(`${AGENTS}/com.ccm.menubar.plist`), false, '拒绝时不能留下半份 plist');
+  });
+
+  test('menubar 带 --app 可以装，且 plist 里没有 undefined', () => {
+    const { mgr, fs } = setup();
+    const r = mgr.install('menubar', { app: '/Users/you/code/repo/desktop/build/CCM.app' });
+    assert.equal(r.ok, true);
+    const xml = fs.get(`${AGENTS}/com.ccm.menubar.plist`);
+    assert.ok(!xml.includes('undefined'), 'plist 里不能出现字面量 undefined');
+    assert.ok(xml.includes('CCM.app'));
   });
 
   test('tunnel 有 config.yml 时可以装', () => {
@@ -299,7 +356,7 @@ test.describe('uninstall —— CAS 保护', () => {
 
   test('正常卸载：bootout + 删 plist + 从 manifest 移除', () => {
     const { mgr, fs, calls, manifestNow } = installed();
-    const r = mgr.uninstall('server');
+    const r = mgr.uninstall('server', { confirmed: true });
 
     assert.equal(r.ok, true);
     assert.ok(calls.some((a) => a[0] === 'bootout'), '应 bootout');
@@ -311,7 +368,7 @@ test.describe('uninstall —— CAS 保护', () => {
     const { mgr, fs } = installed();
     fs.set(SERVER_PLIST, `${fs.get(SERVER_PLIST)}<!-- 我改了点东西 -->`);
 
-    const r = mgr.uninstall('server');
+    const r = mgr.uninstall('server', { confirmed: true });
     assert.equal(r.ok, false);
     assert.match(r.error, /改过|不一致|--force/);
     assert.ok(fs.has(SERVER_PLIST), '拒绝时绝不能删');
@@ -320,7 +377,7 @@ test.describe('uninstall —— CAS 保护', () => {
   test('--force 可以越过 CAS（但要显式要求）', () => {
     const { mgr, fs } = installed();
     fs.set(SERVER_PLIST, '<!-- 改过 -->');
-    const r = mgr.uninstall('server', { force: true });
+    const r = mgr.uninstall('server', { force: true, confirmed: true });
     assert.equal(r.ok, true);
     assert.equal(fs.has(SERVER_PLIST), false);
   });
@@ -330,7 +387,7 @@ test.describe('uninstall —— CAS 保护', () => {
     mgr.install('logrotate');
     const logrotateBefore = JSON.stringify(manifestNow().units.logrotate);
 
-    mgr.uninstall('server');
+    mgr.uninstall('server', { confirmed: true });
     assert.equal(JSON.stringify(manifestNow().units.logrotate), logrotateBefore);
   });
 
@@ -339,7 +396,7 @@ test.describe('uninstall —— CAS 保护', () => {
       objs: { [SERVER_PLIST]: HANDWRITTEN_OBJ },
       files: { [SERVER_PLIST]: HANDWRITTEN_XML },
     });
-    const r = mgr.uninstall('server');
+    const r = mgr.uninstall('server', { confirmed: true });
     assert.equal(r.ok, false);
     assert.match(r.error, /不是本工具安装|adopt|manifest/);
     assert.ok(fs.has(SERVER_PLIST), '不是我们装的，一个字节都不能碰');
@@ -347,13 +404,13 @@ test.describe('uninstall —— CAS 保护', () => {
 
   test('unknown unit 拒绝卸载（机主自建的 tunnel-watch）', () => {
     const { mgr } = setup();
-    const r = mgr.uninstall('tunnel-watch');
+    const r = mgr.uninstall('tunnel-watch', { confirmed: true });
     assert.equal(r.ok, false);
   });
 
   test('未安装 → already，不报错', () => {
     const { mgr } = setup();
-    const r = mgr.uninstall('server');
+    const r = mgr.uninstall('server', { confirmed: true });
     assert.equal(r.ok, false);
   });
 
@@ -362,7 +419,7 @@ test.describe('uninstall —— CAS 保护', () => {
   test('bootout 失败仍继续删 plist 与 manifest 条目（服务可能本来就没在跑）', () => {
     const { mgr, fs, manifestNow, setLaunchctlFail } = installed();
     setLaunchctlFail(true);
-    const r = mgr.uninstall('server');
+    const r = mgr.uninstall('server', { confirmed: true });
     assert.equal(r.ok, true, 'bootout 非零不该让整个卸载失败');
     assert.equal(fs.has(SERVER_PLIST), false, 'plist 必须删掉，否则永远卸不干净');
     assert.equal(manifestNow().units.server, undefined);
@@ -425,5 +482,113 @@ test.describe('pickNodePath', () => {
 
   test('多行输出只取第一行（某些 shell 的 command -v 会多吐东西）', () => {
     assert.equal(pickNodePath(`${LINK}\n/other/node\n`, EXEC, (p) => p === LINK), LINK);
+  });
+});
+
+test.describe('uninstall —— 路径与 CAS 的加固（审查发现）', () => {
+  // manifest 是磁盘上的 0600 JSON，能被篡改；validateManifest 只校验 plistPath 是非空字符串，
+  // 不校验它的位置。所以删除目标必须用派生路径，manifest 里那个只能拿来做 CAS 与展示。
+  test('删除目标用派生路径，manifest 里被篡改的 plistPath 不生效', () => {
+    const evil = '/Users/you/.ssh/id_rsa';
+    const s = setup({
+      files: { [SERVER_PLIST]: HANDWRITTEN_XML, [evil]: 'PRIVATE KEY' },
+      objs: { [SERVER_PLIST]: HANDWRITTEN_OBJ },
+      manifest: {
+        schemaVersion: 1,
+        labelPrefix: 'com.ccm',
+        units: {
+          server: {
+            label: 'com.ccm.server',
+            plistPath: evil, // ← 被篡改
+            sha256: sha(HANDWRITTEN_XML),
+            template: 'deploy/server.plist.template',
+          },
+        },
+      },
+    });
+    s.mgr.uninstall('server', { force: true, confirmed: true });
+    assert.ok(s.fs.has(evil), '绝不能删 manifest 里指的那个无关文件');
+    assert.equal(s.fs.has(SERVER_PLIST), false, '该删的是派生路径上的 plist');
+  });
+
+  // raw === null 有两种成因：文件不在（终态，放行）vs 文件在但读不出来（CAS 无从验证）。
+  // 早前共用一个 null 分支，后者会让护栏静默失效 —— 而 unlink 只要父目录可写就能成。
+  test('plist 在盘上却读不出来 → 拒绝删除（CAS 无从核对），除非 --force', () => {
+    const s = setup({ objs: { [SERVER_PLIST]: HANDWRITTEN_OBJ } });
+    s.mgr.install('server');
+    // 文件存在但读不出：把 readFileRaw 的数据源清掉、fileExists 仍为真
+    const seen = s.fs.get(SERVER_PLIST);
+    s.fs.set(SERVER_PLIST, undefined); // Map.has 仍为 true，get 返回 undefined → readFileRaw 给 null
+    assert.ok(seen !== undefined);
+
+    const r = s.mgr.uninstall('server', { confirmed: true });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /读不出来|--force/);
+    assert.ok(s.fs.has(SERVER_PLIST), '拒绝时不能删');
+  });
+
+  test('文件本来就不在 → 照常放行（那就是我们要的终态）', () => {
+    const s = setup({ objs: { [SERVER_PLIST]: HANDWRITTEN_OBJ } });
+    s.mgr.install('server');
+    s.fs.delete(SERVER_PLIST);
+    assert.equal(s.mgr.uninstall('server', { confirmed: true }).ok, true);
+  });
+});
+
+// ★ 2026-08-13 一次真实事故的产物：当时以「验证护栏会拒绝」为由在生产机器上跑了 uninstall，
+// 而那个预期是错的（adopt 记的正是盘上那份的 sha，CAS 当然匹配），服务被真删了。
+// 护栏放在 manager 层而不是 CLI 层：将来菜单栏 app 或任何调用方忘了确认也会被拒。
+test.describe('uninstall —— 默认拒绝，必须显式确认', () => {
+  test('不传 confirmed → 拒绝，且一个字节都不动', () => {
+    const s = setup({ objs: { [SERVER_PLIST]: HANDWRITTEN_OBJ } });
+    s.mgr.install('server');
+    const before = s.fs.get(SERVER_PLIST);
+
+    const r = s.mgr.uninstall('server');
+    assert.equal(r.ok, false);
+    assert.equal(r.needsConfirm, true);
+    assert.match(r.error, /--yes|确认/);
+    assert.equal(s.fs.get(SERVER_PLIST), before, 'plist 必须原样');
+    assert.ok(s.manifestNow().units.server, 'manifest 条目也不能动');
+  });
+
+  test('confirmed: false 与不传等价（别让 falsy 值蒙混过去）', () => {
+    const s = setup({ objs: { [SERVER_PLIST]: HANDWRITTEN_OBJ } });
+    s.mgr.install('server');
+    assert.equal(s.mgr.uninstall('server', { confirmed: false }).ok, false);
+    assert.equal(s.mgr.uninstall('server', { confirmed: 'yes' }).ok, false, '只认严格 true');
+    assert.equal(s.mgr.uninstall('server', { confirmed: 1 }).ok, false);
+    assert.ok(s.fs.has(SERVER_PLIST));
+  });
+
+  test('--force 不能替代确认（两者管的是不同的事）', () => {
+    const s = setup({ objs: { [SERVER_PLIST]: HANDWRITTEN_OBJ } });
+    s.mgr.install('server');
+    const r = s.mgr.uninstall('server', { force: true });
+    assert.equal(r.ok, false, 'force 只越过 CAS，不代表用户确认了要卸载');
+    assert.ok(s.fs.has(SERVER_PLIST));
+  });
+});
+
+test.describe('resolveUninstallConfirm', () => {
+  test('--yes → 确认', () => {
+    assert.equal(resolveUninstallConfirm({ yes: true, isTty: false }).confirmed, true);
+  });
+
+  // 非 TTY 必须显式拒绝而不是回落到 readline：setup.js:10-14 记过那个坑 ——
+  // agent shell 里 stdin 立刻 EOF，readline 的 promise 永不 settle，进程静默退出 0。
+  test('非交互且无 --yes → 拒绝（不是静默通过，也不是挂住）', () => {
+    const r = resolveUninstallConfirm({ yes: false, isTty: false });
+    assert.equal(r.confirmed, false);
+    assert.equal(r.reason, 'non-interactive');
+  });
+
+  test('交互终端里只有恰好答 y/yes 才算确认', () => {
+    for (const a of ['y', 'Y', 'yes', 'YES', ' y \n']) {
+      assert.equal(resolveUninstallConfirm({ isTty: true, answer: a }).confirmed, true, `应接受 ${JSON.stringify(a)}`);
+    }
+    for (const a of ['', 'n', 'no', '\n', 'yep', '是', null]) {
+      assert.equal(resolveUninstallConfirm({ isTty: true, answer: a }).confirmed, false, `应拒绝 ${JSON.stringify(a)}`);
+    }
   });
 });

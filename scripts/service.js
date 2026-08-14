@@ -282,6 +282,12 @@ export function createServiceManager(deps = {}) {
   // 装 tunnel 前必须已有 ~/.cloudflared/config.yml：没有它 cloudflared 起不来，
   // 而 KeepAlive=true 会把失败变成一个无限崩溃重启循环（机主的 -9 就是这么来的）。
   function precheck(unit, opts) {
+    // menubar 的 APP 无人把关时，escapeXml(undefined) 会把字面量 "undefined" 写进 plist，
+    // 还报「✓ 已安装并加载」；而 menubar 的 driftFields 只有 log-path，status 会一直显示
+    // managed 无漂移，用户无从发现。deploy/menubar.plist.template 的头注恰好教人这么装。
+    if (unit === 'menubar') {
+      return opts.app ? null : '装 menubar 需要 --app=<CCM.app 的绝对路径>';
+    }
     if (unit !== 'tunnel') return null;
     if (!fileExists(join(home, '.cloudflared', 'config.yml'))) {
       return '未找到 ~/.cloudflared/config.yml —— 先按 docs/deployment.md §1 建好命名隧道再装，'
@@ -303,7 +309,26 @@ export function createServiceManager(deps = {}) {
     const inManifest = Object.hasOwn(manifest.units, unit);
     const exists = fileExists(plistPath);
 
-    if (inManifest && exists) return { ok: true, unit, label, action: 'already', plistPath };
+    if (inManifest && exists) {
+      // 别急着说 already：bootstrap 可能上次失败了（macOS 的 "Load failed: 5" 很常见），
+      // 那时 plist 与 manifest 都在盘上、launchd 却不认识这个 unit。早前这里无条件早退，
+      // 用户就困在死路里 —— install 说「已是目标状态」+ exit 0，start 却报 Could not find service，
+      // 只有先 uninstall 再 install 才出得来，而 CLI 没有任何提示指向那条路。
+      if (launchctlList([]).has(label)) {
+        return { ok: true, unit, label, action: 'already', plistPath };
+      }
+      const retry = execLaunchctl(['bootstrap', `gui/${uid}`, plistPath]);
+      if (!retry || retry.status !== 0) {
+        return {
+          ok: false,
+          unit,
+          label,
+          plistPath,
+          error: `plist 已在盘上但未被加载，重试 bootstrap 仍失败：${String(retry?.stderr || '未知错误').trim().split('\n')[0]}`,
+        };
+      }
+      return { ok: true, unit, label, plistPath, action: 'recovered' };
+    }
 
     // 盘上有、manifest 没有 —— 不是我们装的，绝不覆写。
     if (exists && !inManifest) {
@@ -392,9 +417,23 @@ export function createServiceManager(deps = {}) {
     return { ok: true, unit, label, action: 'adopted' };
   }
 
-  function uninstall(unit, { force = false } = {}) {
+  // confirmed 默认 false —— **护栏放在这一层而不是 CLI 层**：将来菜单栏 app 或任何别的调用方
+  // 忘了确认，也会被拒绝，而不是默默把服务卸掉。
+  //
+  // 这条护栏是 2026-08-13 一次真实事故的产物：当时以「验证护栏会拒绝」为由在生产机器上跑了
+  // uninstall，而预期是错的（adopt 记的正是盘上那份的 sha，CAS 当然匹配），服务被真删了。
+  // 教训与 CLAUDE.md 里 mutate 删库那条同型：**别给破坏性操作开「这次应该安全」的例外**。
+  function uninstall(unit, { force = false, confirmed = false } = {}) {
     const bad = guardUnit(unit);
     if (bad) return { ok: false, unit, error: bad };
+    if (confirmed !== true) {
+      return {
+        ok: false,
+        unit,
+        needsConfirm: true,
+        error: '卸载会停止服务并删除 plist。加 --yes 确认，或在交互终端里回答 y。',
+      };
+    }
 
     const label = labelFor(unit, labelPrefix);
     const plistPath = plistPathFor(label);
@@ -412,15 +451,26 @@ export function createServiceManager(deps = {}) {
       };
     }
 
+    // 删除目标用**派生路径**而不是 manifest 里存的 entry.plistPath：后者是磁盘上的 JSON，
+    // 被篡改后能指向任意文件（实测 validateManifest 只校验它是非空字符串，不校验位置）。
+    // 派生路径恒为 plistPathFor(labelFor(unit))，unit 已过 guardUnit 的白名单。
+    // entry.plistPath 只保留给 CAS 与展示。
+    const target = plistPathFor(label);
+
     // CAS：盘上这份还是不是我们当初写下的那份？**这个问题字节相等才是正确判据**
     // （与漂移判定的语义比对是两个不同的问题，两个哈希两个用途，别混）。
-    const raw = readFileRaw(entry.plistPath);
+    const raw = readFileRaw(target);
+    // raw 为 null 有两种成因，必须分开：文件不在（那就是我们要的终态，放行）vs 文件在但读不出来
+    // （权限不足/IO 错误 —— CAS 无从验证，此时放行等于护栏静默失效，而 unlink 只要父目录可写就成）。
+    if (raw === null && fileExists(target) && !force) {
+      return { ok: false, unit, label, error: `${target} 读不出来，无法核对是否是本工具安装的那份，拒绝删除。确认无误可加 --force` };
+    }
     if (raw !== null && !force && sha256(raw) !== entry.sha256) {
       return {
         ok: false,
         unit,
         label,
-        error: `${entry.plistPath} 与安装时不一致（你手动改过？），拒绝删除。确认无误可加 --force`,
+        error: `${target} 与安装时不一致（你手动改过？），拒绝删除。确认无误可加 --force`,
       };
     }
 
@@ -428,10 +478,10 @@ export function createServiceManager(deps = {}) {
     // 据此中止会让 plist 与 manifest 永远卸不掉。
     execLaunchctl(['bootout', `gui/${uid}/${entry.label}`]);
 
-    // safe-path: 路径取自 manifest 里我们自己写下的 plistPath，且该条目只可能由 install/adopt 写入
-    // （两者都走 labelFor + 前缀白名单校验）。算错的最坏情况是指向一个不存在的 plist 路径，
-    // 不会打到别的目录 —— 与 2026-08-02 那次「目录段塌成真实根」的形态不同。
-    deleteFile(entry.plistPath);
+    // safe-path: target 由 plistPathFor(labelFor(unit)) 派生，unit 已过 guardUnit 的白名单
+    // （SERVICE_UNIT_NAMES 之一），home 来自 os.homedir()。**刻意不用 manifest 里的 plistPath**
+    // ——那是磁盘 JSON，被篡改后能指向任意文件，而 validateManifest 不校验它的位置。
+    deleteFile(target);
 
     delete manifest.units[unit];
     writeManifest(manifest);
@@ -653,6 +703,19 @@ function realHttpGet(url) {
   return { status: Number.parseInt(out.slice(idx + 1), 10), body: out.slice(0, idx) };
 }
 
+// 只在确认交互里用一次。刻意不引 readline/promises 的 Interface：那东西在非 TTY 下的
+// 行为是本仓踩过的坑（见 resolveUninstallConfirm 头注），这里的调用点已经先判过 isTTY。
+function readLine() {
+  return new Promise((resolve) => {
+    process.stdin.setEncoding('utf8');
+    process.stdin.once('data', (d) => {
+      process.stdin.pause();
+      resolve(String(d));
+    });
+    process.stdin.resume();
+  });
+}
+
 function realLanIp() {
   for (const list of Object.values(networkInterfaces() || {})) {
     for (const ni of list || []) {
@@ -796,7 +859,7 @@ const USAGE = [
   '  service.js status [--json] [--fast]',
   '  service.js install <unit> [--tunnel=<名字>] [--cloudflared=<路径>] [--json]',
   '  service.js adopt <unit> [--json]                 # 只写 manifest，不动 plist',
-  '  service.js uninstall <unit> [--force] [--json]',
+  '  service.js uninstall <unit> --yes [--force] [--json]   # 默认拒绝，须显式确认',
   '  service.js start|stop <unit> [--json]',
   '  service.js restart <unit> [--wait] [--json]',
   '  service.js logs [unit] [--lines=N] [--follow]',
@@ -807,6 +870,19 @@ const USAGE = [
 ].join('\n');
 
 const WRITE_ACTIONS = new Set(['install', 'adopt', 'uninstall']);
+
+// 「这次卸载算不算得到确认」。纯判定，IO 由调用方给。
+//   --yes            → 确认
+//   交互终端         → 问一句，只有恰好答 y/yes 才算
+//   非交互且无 --yes → **拒绝**（不是静默通过）
+// 非 TTY 必须显式拒绝而不是回落到 readline：scripts/setup.js:10-14 记过那个坑 ——
+// agent shell 里 stdin 立刻 EOF，readline 的 promise 永不 settle，进程静默退出 0。
+export function resolveUninstallConfirm({ yes = false, isTty = false, answer = null }) {
+  if (yes) return { confirmed: true, reason: 'flag' };
+  if (!isTty) return { confirmed: false, reason: 'non-interactive' };
+  const a = String(answer ?? '').trim().toLowerCase();
+  return { confirmed: a === 'y' || a === 'yes', reason: 'answer' };
+}
 const CONTROL_ACTIONS = new Set(['start', 'stop', 'restart']);
 
 // 日志路径以 plist 里的 StandardOutPath 为准（用户可能改过），读不到再回落默认约定。
@@ -847,13 +923,14 @@ function runCopyToken() {
 }
 
 export function parseArgs(rest) {
-  const flags = { json: false, fast: false, force: false, wait: false, follow: false };
+  const flags = { json: false, fast: false, force: false, wait: false, follow: false, yes: false };
   const opts = {};
   const positional = [];
   for (const a of rest) {
     if (a === '--json') flags.json = true;
     else if (a === '--fast') flags.fast = true;
     else if (a === '--force') flags.force = true;
+    else if (a === '--yes' || a === '-y') flags.yes = true;
     else if (a === '--wait') flags.wait = true;
     else if (a === '--follow' || a === '-f') flags.follow = true;
     else if (a.startsWith('--')) {
@@ -864,7 +941,7 @@ export function parseArgs(rest) {
   return { flags, opts, positional };
 }
 
-export function main(argv) {
+export async function main(argv) {
   const [action, ...rest] = argv;
   if (!action) {
     process.stderr.write(`${USAGE}\n`);
@@ -918,8 +995,20 @@ export function main(argv) {
       process.exitCode = 64;
       return;
     }
+    let confirmed = true;
+    if (action === 'uninstall') {
+      const isTty = !!process.stdin.isTTY;
+      let answer = null;
+      if (!flags.yes && isTty) {
+        const label = `${DEFAULT_LABEL_PREFIX}.${unit}`;
+        process.stdout.write(`即将停止 ${label} 并删除它的 plist。确认请输入 y： `);
+        answer = await readLine();
+      }
+      const verdict = resolveUninstallConfirm({ yes: flags.yes, isTty, answer });
+      confirmed = verdict.confirmed;
+    }
     // 写路径才解析登录 shell 的 node（见 pickNodePath 头注）；status 不付这个成本。
-    const r = realManager()[action](unit, { node: realLoginShellNode(), ...opts, force: flags.force });
+    const r = realManager()[action](unit, { node: realLoginShellNode(), ...opts, force: flags.force, confirmed });
     if (flags.json) {
       process.stdout.write(`${JSON.stringify(r)}\n`);
     } else if (r.ok) {
