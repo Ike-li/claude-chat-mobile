@@ -33,6 +33,17 @@ test.describe('serializeEnvValue —— 以 dotenv 为 oracle 的 round-trip', (
     ['前后都有引号', `"quoted"`],
     ['只有单引号', "'"],
     ['井号开头', '#comment-like'],
+    // ★ 下面这一组是「同时含单引号与需转义字符」——早前唯一能执行双引号分支的输入类型，
+    // 而那个分支是坏的：dotenv 在双引号内只展开 \n / \r，**从不把 \\ 折回 \ 、也不把 \" 折回 "**。
+    // 结果是反斜杠每存一次翻一倍，含 \n 字面量的值甚至会解析出一个真换行 ——
+    // 正是校验期承诺要拒绝的东西，从序列化这一侧漏了进来。
+    ['含单引号 + 反斜杠路径', "it's C:\\path"],
+    ['含单引号 + 双引号', 'it\'s "x"'],
+    ['含单引号 + 字面 \\n', "a'b\\nc"],
+    ['含单引号 + 尾部反斜杠', "it's trailing\\"],
+    ['含单引号 + 井号', "it's #1"],
+    ['含反引号', 'cmd `whoami`'],
+    ['单引号与反引号都有', "it's `x`"],
   ];
 
   for (const [name, value] of CASES) {
@@ -90,6 +101,17 @@ test.describe('applyEnvChanges —— 保结构改写', () => {
     assert.equal(dotenv.parse(out).LOG_STDERR, undefined);
     assert.ok(!/^LOG_STDERR=/m.test(out), '不能留下 LOG_STDERR= 空行');
     assert.ok(!out.includes('LOG_STDERR'), '整行都该没了');
+  });
+
+  // ★ 同名 key 重复是常见写法（在文件底部追加以覆盖上面的值）。dotenv 的生效语义是后者覆盖前者，
+  // 所以**改**只需改最后一行；但**删**必须删掉全部同名行 —— 只删最后一行会让上面那个旧值复活，
+  // 用户以为清空了，配置却静默回退到一个更老的值。
+  test('删除时删掉全部同名行（否则旧值复活）', () => {
+    const dup = 'LOG_STDERR=1\nPORT=3000\nLOG_STDERR=1\n';
+    const out = applyEnvChanges(dup, { LOG_STDERR: null });
+    assert.equal(dotenv.parse(out).LOG_STDERR, undefined, '旧值不能复活');
+    assert.ok(!/^\s*(export\s+)?LOG_STDERR\s*=/m.test(out), '不能残留任何 LOG_STDERR 赋值行');
+    assert.equal(dotenv.parse(out).PORT, '3000', '中间无关的行不受影响');
   });
 
   test('删不存在的 key 是 no-op，不报错', () => {

@@ -259,10 +259,14 @@ function checkOne(key, value, def, d) {
     if (!Number.isInteger(n)) return `${def.label.zh} 必须是整数`;
     if (def.min !== undefined && n < def.min) return `${def.label.zh} 不能小于 ${def.min}`;
     if (def.max !== undefined && n > def.max) return `${def.label.zh} 不能大于 ${def.max}`;
-    // 端口占用只在**值变了**时才探测：当前 server 正绑在旧端口上，无条件探测会恒报占用
-    // —— 那正是 doctor D4 的既有 bug，别复制过来。
-    if (key === 'PORT' && String(d.current?.PORT ?? '') !== value && d.probePort(n)) {
-      return `端口 ${n} 已被占用`;
+    // 端口占用只在**生效值真的变了**时才探测：当前 server 正绑在旧端口上，无条件探测会恒报占用
+    // —— 那正是 doctor D4 的既有 bug。
+    // 注意比的是**生效值**而不是「.env 里写没写」：没有 PORT 行时 server 跑在 def.default，
+    // 用户把面板里的 PORT 显式填成那个默认值不是改端口，早前按空串比会判成变了 → 探到自己 → 报占用，
+    // 而且全或无会把同批次其他改动一起挡掉。
+    if (key === 'PORT') {
+      const effective = String(d.current?.PORT ?? '') || def.default || '';
+      if (effective !== value && d.probePort(n)) return `端口 ${n} 已被占用`;
     }
     return null;
   }
@@ -334,7 +338,11 @@ export function validateEnvChanges(changes, d) {
       });
       continue;
     }
-    const def = ENV_SCHEMA[key];
+    // Object.hasOwn 而不是 `ENV_SCHEMA[key]` 的真值判断：ENV_SCHEMA 是普通对象字面量，
+    // 原型是 Object.prototype ⇒ ENV_SCHEMA['toString'|'constructor'|'hasOwnProperty'|…] 恒 truthy，
+    // 那批 key 会畅通无阻地写进 .env（`__proto__` 经 JSON.parse 是 own property，同样漏）。
+    // 下游还会污染 process.env 上的 Object.prototype 方法：toString 被字符串遮蔽后 String(env) 抛错。
+    const def = Object.hasOwn(ENV_SCHEMA, key) ? ENV_SCHEMA[key] : null;
     if (!def) {
       results.push({ key, level: 'error', message: `不认识的配置项（本面板不是通用 .env 编辑器）` });
       continue;

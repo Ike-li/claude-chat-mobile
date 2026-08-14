@@ -82,6 +82,22 @@ test.describe('白名单：不是通用 .env 编辑器', () => {
     assert.equal(validateEnvChanges({ AUTH_TOKEN: 'new' }, deps()).ok, false);
   });
 
+  // ★ ENV_SCHEMA 是普通对象字面量，原型是 Object.prototype ⇒ ENV_SCHEMA['toString'] 等恒 truthy。
+  // 早前判据写的是 `const def = ENV_SCHEMA[key]; if (!def) 拒绝`，这些 key 全都畅通无阻地写进了 .env。
+  // 下游还会污染 process.env 上的 Object.prototype 方法（toString 被字符串遮蔽后 String(env) 抛错）。
+  test('原型链上的 key 一律拒绝（constructor / toString / __proto__ / hasOwnProperty）', () => {
+    for (const key of ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'valueOf', 'isPrototypeOf']) {
+      const r = validateEnvChanges({ [key]: 'pwned' }, deps());
+      assert.equal(r.ok, false, `${key} 必须被拒绝`);
+      assert.deepEqual(errorsOf(r), [key]);
+    }
+  });
+
+  test('JSON.parse 出来的 __proto__（own property，socket 的真实形态）同样被拒', () => {
+    const changes = JSON.parse('{"__proto__":"pwned","PORT":"8080"}');
+    assert.equal(validateEnvChanges(changes, deps()).ok, false);
+  });
+
   test('ANTHROPIC_* 拒绝写入（写了也会被启动期剥除，等于骗人）', () => {
     const r = validateEnvChanges({ ANTHROPIC_BASE_URL: 'https://x' }, deps());
     assert.equal(r.ok, false);
@@ -109,6 +125,29 @@ test.describe('类型校验', () => {
     }));
     assert.equal(probed, false, '值没变就别探测，否则恒报「被自己占用」');
     assert.equal(r.ok, true);
+  });
+
+  // ★ .env 里没有 PORT 行时 server 跑在默认 3000（config.js:57）。把面板里的 PORT 显式填成 3000
+  // 不是「改端口」，可早前判据只看 .env 里写没写 ⇒ 判定为变了 ⇒ 探到自己 ⇒ 报占用。
+  // 而且是全或无，这一条会把同批次其他改动一起挡掉。与刚修的 doctor D4 恒红是同一类判据错误。
+  test('.env 无 PORT 行、面板填的正是当前生效的默认端口 → 不探测、不报占用', () => {
+    let probed = false;
+    const r = validateEnvChanges({ PORT: '3000' }, deps({
+      current: {},
+      probePort: () => { probed = true; return true; },
+    }));
+    assert.equal(probed, false, '生效值没变就不该探测');
+    assert.equal(r.ok, true);
+  });
+
+  test('.env 无 PORT 行、面板改成别的端口 → 照常探测', () => {
+    let probed = null;
+    const r = validateEnvChanges({ PORT: '8080' }, deps({
+      current: {},
+      probePort: (p) => { probed = p; return true; },
+    }));
+    assert.equal(probed, 8080);
+    assert.equal(r.ok, false);
   });
 
   test('PORT 变了且新端口被占 → error', () => {

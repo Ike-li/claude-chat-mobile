@@ -25,8 +25,9 @@ function hasControlChars(s) {
   return false;
 }
 
-// 需要引用的信号：空值、含引号/反斜杠/井号、或有空白字符。
-const NEEDS_QUOTE = /[#'"\\\s]/;
+// 需要引用的信号：空值、含任一种引号/反斜杠/井号、或有空白字符。
+// 反引号也算：.env 常被 `source` 进 shell，裸值里的反引号会被当命令替换执行。
+const NEEDS_QUOTE = /[#'"`\\\s]/;
 
 export function serializeEnvValue(value) {
   const s = String(value ?? '');
@@ -36,9 +37,15 @@ export function serializeEnvValue(value) {
   if (s && !NEEDS_QUOTE.test(s)) return s;
   // 单引号：dotenv 对其内容不做任何转义展开，是最安全的包法。
   if (!s.includes("'")) return `'${s}'`;
-  // 值本身含单引号，只能退到双引号 —— 那就必须把 \ 与 " 都转义掉，
-  // 否则 dotenv 的转义展开会改掉内容。
-  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+  // 反引号：dotenv 对它同样不做展开（实测确认），是含单引号时的首选。
+  if (!s.includes('`')) return `\`${s}\``;
+  // 三种引号只剩双引号。dotenv 在双引号内**只展开 \n / \r，从不把 \\ 折回 \ 、
+  // 也不把 \" 折回 "** —— 所以「转义后再靠 parser 还原」这条路根本不通（早前就错在这里：
+  // 反斜杠每存一次翻一倍，含 \n 字面量的值甚至会解析出一个真换行）。
+  // 只有当值本身不含这两个字符时，双引号才是无损的。
+  if (!s.includes('"') && !s.includes('\\')) return `"${s}"`;
+  // 同时含单引号 + 反引号 + (双引号或反斜杠)：三种引号都表达不了，与其静默损坏不如拒绝。
+  throw new Error('配置值不能同时包含单引号、反引号与双引号/反斜杠');
 }
 
 // 敏感项对外只报「设了没 + 多长」。绝不回显明文 —— 与 src/ops/doctor-runtime.js 的脱敏纪律同源。
@@ -67,22 +74,31 @@ export function applyEnvChanges(text, changes) {
   const src = String(text ?? '');
   const lines = src.split('\n');
   const pending = new Map(entries);
+  // 删除与替换对「同名 key 重复」的处理必须不同，见下方循环里的两条注释。
+  const deletions = new Set(entries.filter(([, v]) => v === null).map(([k]) => k));
   const out = [];
 
-  // 从后往前扫：同名 key 出现多次时，dotenv 的生效语义是**后者覆盖前者**，
-  // 所以要改的是最后那一行，前面的重复行原样留着（那是用户的历史，不该替他清理）。
-  const handled = new Set();
+  // 从后往前扫：dotenv 的生效语义是**后者覆盖前者**。
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
     const key = keyOfLine(line);
-    if (key === null || !pending.has(key) || handled.has(key)) {
+    if (key === null) {
       out.unshift(line);
       continue;
     }
-    handled.add(key);
+    // 删除：**全部**同名行一并丢弃。只删最后一行的话，上面那个被覆盖的旧值会复活 ——
+    // 用户以为清空了，配置却静默回退到一个更老的值。
+    if (deletions.has(key)) {
+      pending.delete(key);
+      continue;
+    }
+    if (!pending.has(key)) {
+      out.unshift(line);
+      continue;
+    }
+    // 替换：只改最后一行。前面的重复行不影响生效值，是用户的历史，不该替他清理。
     const value = pending.get(key);
     pending.delete(key);
-    if (value === null) continue; // 整行丢弃
     out.unshift(`${key}=${serializeEnvValue(value)}`);
   }
 
