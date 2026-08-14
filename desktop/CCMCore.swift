@@ -120,7 +120,10 @@ func summaryLine(status: ServiceStatus?, problem: EnvProblem, lastError: String?
 
     var parts: [String] = []
     switch server.stateName {
-    case "running": parts.append(server.isFlapping ? "运行中（曾崩溃）" : "运行中")
+    // ★ isFlapping 的语义在 6a38e7c 里从「上次退出码 ≠ 0」换成了「1 小时内 ≥3 次重启」，
+    // 这句文案上一版没跟上：对一个一次都没崩过、只是被 kickstart 过几次的 unit 说「曾崩溃」，
+    // 是编造的事实。「上次是不是非正常退出」在 lastExitAbnormal 里，不由这里下结论。
+    case "running": parts.append(server.isFlapping ? "运行中（频繁重启）" : "运行中")
     case "stopped": parts.append("已停止")
     case "crashed": parts.append("已崩溃")
     default: parts.append("未安装")
@@ -172,26 +175,36 @@ func terminalScript(command: String) -> String {
 /// 某个 unit 的安装命令。**必须带齐该 unit 的必填参数**，否则 L1 的 precheck 必然拒绝 ——
 /// 第一轮审查发现子菜单里的「安装」对 menubar / tunnel 是个恒失败的入口。
 /// tunnel 的隧道名与 cloudflared 路径只有用户知道，所以给的是一条待补全的命令模板。
+///
+/// ## unit 必须 shellQuote（2026-08-14 第三轮审查）
+/// 它不是常量：scripts/service.js 对未知 unit 走 `label.slice(labelPrefix.count + 1)`，
+/// label 来自 `~/Library/LaunchAgents` 的**文件名**。而这串最终经 osascript 的
+/// `do script` 交给 shell 执行。前置条件（能写那个目录）本身已等于有用户级执行权，
+/// 所以不是新的信任边界，但同一文件里 repo/appPath/workDir 都过了 shellQuote，漏这一个纯属不一致。
 func installCommand(unit: String, repo: String, appPath: String?) -> String {
-    let base = "cd \(shellQuote(repo)) && node scripts/service.js install \(unit)"
+    let base = "cd \(shellQuote(repo)) && node scripts/service.js install \(shellQuote(unit))"
     switch unit {
     case "menubar":
         guard let app = appPath else { return base }
         return "\(base) --app=\(shellQuote(app))"
     case "tunnel":
-        // 故意留成模板：这两个值本工具无从得知，让用户在终端里补完再回车。
-        return "\(base) --tunnel=<隧道名> --cloudflared=$(command -v cloudflared)"
+        // 故意留成模板：这两个值本工具无从得知，让用户在终端里按 ↑ 调出来补完再回车。
+        // ★ 占位符必须 shellQuote：`do script` 是**立刻执行**的（同 src/ops/log-terminal.js），
+        // 裸写 `<隧道名>` 时 `<` `>` 是重定向算符，实测 zsh 报 `no such file or directory: 隧道名`
+        // 并以退出码 1 结束 —— node 一次都没跑，用户拿到的错误比 precheck 那句还没信息量。
+        // 加引号后命令能真正跑到 precheck，报的是「装 tunnel 需要 --tunnel=… 与 --cloudflared=…」。
+        return "\(base) --tunnel=\(shellQuote("隧道名")) --cloudflared=$(command -v cloudflared)"
     default:
         return base
     }
 }
 
 func uninstallCommand(unit: String, repo: String) -> String {
-    "cd \(shellQuote(repo)) && node scripts/service.js uninstall \(unit) --yes"
+    "cd \(shellQuote(repo)) && node scripts/service.js uninstall \(shellQuote(unit)) --yes"
 }
 
 func logsCommand(unit: String, repo: String) -> String {
-    "cd \(shellQuote(repo)) && node scripts/service.js logs \(unit) --follow"
+    "cd \(shellQuote(repo)) && node scripts/service.js logs \(shellQuote(unit)) --follow"
 }
 
 func doctorCommand(repo: String) -> String {

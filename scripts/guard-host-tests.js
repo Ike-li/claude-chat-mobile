@@ -33,6 +33,10 @@ import { readFileSync } from 'node:fs';
 const HOST_ALLOWED_SCRIPTS = new Set([
   'lint', 'lint:fix', 'check',
   'test:unit', 'test:e2e', 'test:visual', 'test:playwright', 'test:playwright:p0',
+  // app:test = swiftc 编译 desktop/CCMCore.swift + 断言集，产物落 desktop/build/（已 gitignore）。
+  // 不起 server、不 spawn claude、不碰 ~/.claude —— 与前三条同档。它现在还是 `npm run check`
+  // 的一环（见 package.json），不放行的话连 check 都会被自己的钩子拦下来。
+  'app:test',
 ]);
 
 // 「这一段会跑测试 / 执行被改坏的源码」——本钩子的管辖范围。

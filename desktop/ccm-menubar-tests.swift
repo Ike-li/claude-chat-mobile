@@ -212,19 +212,36 @@ struct CCMCoreTests {
         eq(menubar.contains("--app="), true, "menubar 安装必须带 --app")
         eq(menubar.contains("'/Applications/CCM.app'"), true, "app 路径被 shellQuote")
 
-        // tunnel 的隧道名本工具无从得知 → 给一条待补全的模板，而不是一条注定失败的命令
+        // tunnel 的隧道名本工具无从得知 → 给一条待补全的模板。
+        // ★ 但 do script 是**立刻执行**的（同 src/ops/log-terminal.js 的用法），所以占位符必须是
+        // shell 安全的：裸写 `<隧道名>` 时 `<` `>` 是重定向算符，实测 zsh 直接
+        // `no such file or directory: 隧道名` 退出码 1 —— node 一次都没跑，用户拿到的错误比
+        // precheck 那句「装 tunnel 需要 --tunnel=…」还没信息量。加引号后命令能跑到 precheck。
         let tunnel = installCommand(unit: "tunnel", repo: repo, appPath: nil)
         eq(tunnel.contains("--tunnel="), true, "tunnel 安装给出 --tunnel 占位")
         eq(tunnel.contains("--cloudflared="), true, "tunnel 安装给出 --cloudflared")
+        eq(tunnel.contains("<"), false, "占位符不能裸带 < （shell 会当成输入重定向）")
+        eq(tunnel.contains(">"), false, "占位符不能裸带 > （shell 会当成输出重定向）")
 
+        // ★ unit 也必须 shellQuote：它不是常量，来自 ~/Library/LaunchAgents 的文件名
+        // （scripts/service.js 对未知 unit 走 `label.slice(prefix.length + 1)`），
+        // 而这串最终经 osascript 的 do script 交给 shell 执行。
+        eq(logsCommand(unit: "a;touch /tmp/pwned", repo: repo).contains("service.js logs 'a;touch /tmp/pwned'"),
+           true, "logs 的 unit 要被 shellQuote")
+        eq(uninstallCommand(unit: "a;id", repo: repo).contains("uninstall 'a;id'"),
+           true, "uninstall 的 unit 要被 shellQuote")
+        eq(installCommand(unit: "a;id", repo: repo, appPath: nil).contains("install 'a;id'"),
+           true, "install 的 unit 要被 shellQuote")
+
+        // unit 现在也过 shellQuote（见 CCMCore.swift 的理由），'server' 与 server 在 shell 里等价
         eq(installCommand(unit: "server", repo: repo, appPath: nil),
-           "cd '/Users/you/code/repo' && node scripts/service.js install server",
+           "cd '/Users/you/code/repo' && node scripts/service.js install 'server'",
            "server 安装无需额外参数")
 
         // 卸载必须带 --yes：manager 层默认拒绝（那是 2026-08-13 事故后加的护栏）
         eq(uninstallCommand(unit: "server", repo: repo).contains("--yes"), true, "卸载必须带 --yes")
 
-        eq(logsCommand(unit: "server", repo: repo).contains("logs server --follow"), true, "日志命令")
+        eq(logsCommand(unit: "server", repo: repo).contains("logs 'server' --follow"), true, "日志命令")
         eq(doctorCommand(repo: repo).contains("scripts/doctor.js"), true, "doctor 命令")
 
         // 装机向导：四步串起来，且 work-dir 必须显式传（setup.js 非交互模式绝不回落 $HOME）
