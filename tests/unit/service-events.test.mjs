@@ -13,7 +13,9 @@ import {
   MAX_SERVICE_EVENTS,
   appendEvents,
   classifyRestartPattern,
+  deserializeSnapshot,
   diffRunningState,
+  serializeSnapshot,
   validateServiceEvents,
 } from '../../src/ops/service-events.js';
 
@@ -164,13 +166,17 @@ test.describe('classifyRestartPattern —— 频率判据（取代「最后一�
     assert.equal(classifyRestartPattern(events, { label: 'com.ccm.tunnel', now: T }).flapping, false);
   });
 
-  test('started 计入（stop 后又起来，从进程角度就是重新开始）', () => {
+  // ★ 这条用例原本断言的是 `started 计入 → flapping=true`，2026-08-14 第三轮审查推翻了那个设计：
+  // 那正是让短命周期 job（tunnel-watch / logrotate）恒亮告警的原因。判据收窄成只认 restarted。
+  test('started 不计入（那是「从无到有」，周期 job 每轮都这样）', () => {
     const events = [
       ev(T - 10 * 60_000, 'com.ccm.tunnel', 'started'),
       ev(T - 20 * 60_000, 'com.ccm.tunnel', 'started'),
       ev(T - 30 * 60_000, 'com.ccm.tunnel', 'restarted'),
     ];
-    assert.equal(classifyRestartPattern(events, { label: 'com.ccm.tunnel', now: T }).flapping, true);
+    const r = classifyRestartPattern(events, { label: 'com.ccm.tunnel', now: T });
+    assert.equal(r.lastHour, 1, '三条里只有一条是 restarted');
+    assert.equal(r.flapping, false);
   });
 
   test('没有事件 → 一切为零，不 flapping', () => {
@@ -212,5 +218,109 @@ test.describe('validateServiceEvents —— 读盘校验', () => {
     const out = validateServiceEvents(many);
     assert.equal(out.length, MAX_SERVICE_EVENTS);
     assert.equal(out.at(-1).ts, MAX_SERVICE_EVENTS + 49);
+  });
+});
+
+// ── 第三轮审查修复：短命周期 job 不再被算成重启 ──────────────────────────
+//
+// 机主机器上的实证：`com.ccm.tunnel-watch`（每 30s 检测 en0 的 DHCP 漂移）与 `com.ccm.logrotate`
+// 在 `launchctl list` 里 pid 恒为 `-` —— 它们是**短命周期 job**，不是常驻进程。采样器每 60s 抓
+// 一次，抓到在跑就产 started、下次抓到已退出就产 stopped。把 started 计入频率的后果是：
+// 一小时抓到三次就报 flapping ——**这正是本功能立意要消灭的「恒亮告警」，只是换了个 label**。
+//
+// 判据改成只认 restarted（pid→pid，进程被就地换掉）。取舍写明：
+//   · 常驻服务的崩溃循环在 60s 粒度下几乎必然表现为 pid→pid（KeepAlive 会立刻拉起），命中
+//   · 周期 job 的形态是 null↔pid 交替，天然不命中
+//   · 代价：真「停了很久再手动起来」的循环不计入频率 —— 但那是用户操作，本来就不是 flapping
+test.describe('classifyRestartPattern —— 短命周期 job 不算 flapping', () => {
+  const at = (ts, kind) => ({ ts, label: 'com.ccm.tunnel-watch', kind });
+
+  test('started/stopped 交替 8 次 → 不算 flapping（周期 job 的形态）', () => {
+    const events = [];
+    for (let i = 0; i < 4; i += 1) {
+      events.push(at(T - (8 - i * 2) * 60_000, 'started'));
+      events.push(at(T - (7 - i * 2) * 60_000, 'stopped'));
+    }
+    const r = classifyRestartPattern(events, { label: 'com.ccm.tunnel-watch', now: T });
+    assert.equal(r.flapping, false, '周期 job 来了又走不是崩溃循环');
+    assert.equal(r.lastHour, 0, 'started/stopped 都不计入频率');
+  });
+
+  test('pid→pid 的 restarted 仍然计入（真崩溃循环的形态）', () => {
+    const events = [at(T - 30 * 60_000, 'restarted'), at(T - 20 * 60_000, 'restarted'), at(T - 10 * 60_000, 'restarted')];
+    assert.equal(classifyRestartPattern(events, { label: 'com.ccm.tunnel-watch', now: T }).flapping, true);
+  });
+
+  test('started 混进来也不会把 restarted 的计数推过阈值', () => {
+    const events = [
+      at(T - 50 * 60_000, 'restarted'), at(T - 40 * 60_000, 'started'),
+      at(T - 30 * 60_000, 'started'), at(T - 20 * 60_000, 'restarted'),
+    ];
+    const r = classifyRestartPattern(events, { label: 'com.ccm.tunnel-watch', now: T });
+    assert.equal(r.lastHour, 2, '只有两条 restarted');
+    assert.equal(r.flapping, false);
+  });
+});
+
+// ── 第三轮审查修复：时钟回拨不再制造假 flapping ─────────────────────────
+//
+// `now - e.ts < WINDOW` 对**未来**时间戳的差值是负数，而负数恒 < 窗口 ⇒ 全部历史事件
+// 一起落进「1 小时内」。触发路径：NTP 大幅回拨 / VM 快照回滚 / 手改过 service-events.json。
+test.describe('classifyRestartPattern —— 未来时间戳不计入窗口', () => {
+  const HOUR = 3600_000;
+  const ev = (ts) => ({ ts, label: 'com.ccm.tunnel', kind: 'restarted' });
+
+  test('时钟回拨（事件 ts 在未来）→ 不算 flapping', () => {
+    const events = Array.from({ length: 10 }, (_, i) => ev(T + (i + 1) * 24 * HOUR));
+    const r = classifyRestartPattern(events, { label: 'com.ccm.tunnel', now: T });
+    assert.equal(r.flapping, false, '未来时间戳不该被当成「刚刚发生」');
+    assert.equal(r.lastHour, 0);
+    assert.equal(r.last24h, 0);
+  });
+
+  test('未来事件不污染 lastRestartAt（否则 UI 显示负的「多久以前」）', () => {
+    const events = [ev(T - 2 * HOUR), ev(T + 30 * 24 * HOUR)];
+    const r = classifyRestartPattern(events, { label: 'com.ccm.tunnel', now: T });
+    assert.equal(r.lastRestartAt, T - 2 * HOUR, '取最近的**过去**事件');
+  });
+});
+
+// ── 第三轮审查修复：快照可持久化，跨 server 生命周期比对 ──────────────────
+//
+// 修的是本功能最大的盲区：`com.ccm.server` 自身的重启**结构性永远记不到**。
+//   ① 命内：launchctl 里 com.ccm.server 的 pid 就是采样进程自己（ps 实证），恒定 ⇒ before===after
+//   ② 跨命：快照只在内存，server 重启即归零 ⇒ 新命首次采样走「prev 为空」静默分支
+// 于是最该被抓到的场景（server 自己在崩溃循环）恰恰是唯一抓不到的。把快照落盘后，
+// 新命的首次采样拿得到上一命的 pid，server 换命就产出一条 restarted。
+test.describe('快照序列化 —— 跨 server 生命周期比对', () => {
+  test('序列化 → 反序列化 后可直接喂给 diffRunningState', () => {
+    const before = snap({ 'com.ccm.server': { pid: 100, lastExit: 0 }, 'com.ccm.tunnel': { pid: 7, lastExit: -9 } });
+    const restored = deserializeSnapshot(serializeSnapshot(before));
+    assert.deepEqual([...restored.entries()], [...before.entries()]);
+  });
+
+  test('★ server 换命 → 认出 restarted（这条是整个修复的意义所在）', () => {
+    const lastLife = deserializeSnapshot(serializeSnapshot(snap({ 'com.ccm.server': { pid: 51531, lastExit: 0 } })));
+    const thisLife = snap({ 'com.ccm.server': { pid: 60001, lastExit: 0 } });
+    const evs = diffRunningState(lastLife, thisLife, T);
+    assert.equal(evs.length, 1);
+    assert.equal(evs[0].kind, 'restarted');
+    assert.equal(evs[0].from, 51531);
+    assert.equal(evs[0].to, 60001);
+  });
+
+  test('读不懂的快照一律当作「没有基线」→ 首次采样仍静默，不伪造事件', () => {
+    for (const bad of [null, undefined, 'x', 42, [], { 'com.ccm.server': 'nope' }, { 'com.ccm.server': { pid: 'x' } }]) {
+      const m = deserializeSnapshot(bad);
+      assert.ok(m instanceof Map, `应返回 Map：${JSON.stringify(bad)}`);
+      assert.deepEqual(diffRunningState(m, snap({ 'com.ccm.server': { pid: 1 } }), T), [],
+        `坏快照不该产出事件：${JSON.stringify(bad)}`);
+    }
+  });
+
+  test('pid 为 null 的条目原样保留（周期 job 的常态，丢了会误判成 started）', () => {
+    const m = deserializeSnapshot(serializeSnapshot(snap({ 'com.ccm.logrotate': { pid: null, lastExit: 0 } })));
+    assert.equal(m.has('com.ccm.logrotate'), true);
+    assert.equal(m.get('com.ccm.logrotate').pid, null);
   });
 });

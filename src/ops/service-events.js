@@ -21,9 +21,19 @@ export const MAX_SERVICE_EVENTS = 200;
 
 const KINDS = new Set(['restarted', 'started', 'stopped']);
 
-// 「进程重新开始了」的两种形态都计入频率：restarted 是 kickstart -k 那种瞬间换 PID，
-// started 是 stop 之后又起来。stopped 不算 —— 那通常是用户主动停的。
-const RESTART_KINDS = new Set(['restarted', 'started']);
+// ## 只有 restarted 计入频率（2026-08-14 第三轮审查修正）
+//
+// 上一版把 started 也算进来，后果是**把刚消灭的恒亮告警搬到了另一个 label 上**：
+// 机主机器上的 `com.ccm.tunnel-watch`（每 30s 检测 DHCP 漂移）与 `com.ccm.logrotate` 在
+// `launchctl list` 里 pid 恒为 `-` —— 它们是短命周期 job 不是常驻进程。采样器 60s 抓一次，
+// 抓到在跑产 started、下次抓到已退出产 stopped，一小时抓够三次就误报 flapping。
+//
+// 判据收窄成 pid→pid（进程被就地换掉）。取舍：
+//   · 常驻服务的崩溃循环在 60s 粒度下几乎必然是 pid→pid（KeepAlive 立刻拉起），命中
+//   · 周期 job 是 null↔pid 交替，天然不命中
+//   · 代价：「停了很久再手动起来」的循环不计入 —— 那是用户操作，本来就不该叫 flapping
+// started / stopped 仍然**照常记录**，它们进时间线供人看，只是不参与下告警结论。
+const RESTART_KINDS = new Set(['restarted']);
 
 const HOUR_MS = 3600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -81,11 +91,60 @@ export function appendEvents(existing, incoming) {
  * flapping 的定义从「最后一次退出码非 0」换成「短窗口内重启多次」——见文件头注。
  */
 export function classifyRestartPattern(events, { label, now = Date.now() } = {}) {
+  // `e.ts <= now` 不是多余的：`now - e.ts < WINDOW` 对**未来**时间戳的差值是负数，
+  // 而负数恒 < 窗口 ⇒ 全部历史事件一起落进「1 小时内」⇒ 假 flapping 恒亮。
+  // 触发路径：NTP 大幅回拨 / VM 快照回滚 / 有人手改过 service-events.json。
+  const inWindow = (e, win) => e.ts <= now && now - e.ts < win;
   const mine = (events || []).filter((e) => e && e.label === label && RESTART_KINDS.has(e.kind));
-  const lastHour = mine.filter((e) => now - e.ts < FLAP_WINDOW_MS).length;
-  const last24h = mine.filter((e) => now - e.ts < DAY_MS).length;
-  const lastRestartAt = mine.length ? Math.max(...mine.map((e) => e.ts)) : null;
+  const past = mine.filter((e) => e.ts <= now);
+  const lastHour = mine.filter((e) => inWindow(e, FLAP_WINDOW_MS)).length;
+  const last24h = mine.filter((e) => inWindow(e, DAY_MS)).length;
+  const lastRestartAt = past.length ? Math.max(...past.map((e) => e.ts)) : null;
   return { lastHour, last24h, flapping: lastHour >= FLAP_THRESHOLD, lastRestartAt };
+}
+
+// ## 快照的持久化（2026-08-14 第三轮审查修复的最大盲区）
+//
+// 修的是：`com.ccm.server` 自身的重启**结构性永远记不到**。两条叠加：
+//   ① 命内：`launchctl list` 里 com.ccm.server 的 pid 就是采样进程自己（ps 实证 pid 恒定），
+//      于是 diffRunningState 的 `before === after` 恒成立，永不产出事件；
+//   ② 跨命：快照只在内存，server 重启即归零，新命首次采样走「prev 为空」的静默分支。
+// 结果是最该被抓到的场景（server 自己在崩溃重启循环）成了唯一抓不到的。
+//
+// 把快照落盘之后，新命的首次采样拿得到**上一命**的 pid，server 换命即产出一条 restarted，
+// 频率判据这才对 server 生效。首次运行（盘上没有快照）仍然静默——那是真的没有基线。
+//
+// 形状与 parseLaunchctlList 的输出一致：Map<label, {pid, lastExit}>，pid 可为 null。
+
+/** Map → 可 JSON 序列化的普通对象。 */
+export function serializeSnapshot(snapshot) {
+  const out = {};
+  if (!(snapshot instanceof Map)) return out;
+  for (const [label, entry] of snapshot) {
+    if (typeof label !== 'string' || !label) continue;
+    out[label] = { pid: pidOf(entry), lastExit: typeof entry?.lastExit === 'number' ? entry.lastExit : null };
+  }
+  return out;
+}
+
+/**
+ * 普通对象 → Map。**读不懂一律退化成空 Map**（＝没有基线 ⇒ 首次采样静默），
+ * 绝不抛错、也绝不伪造事件：坏快照制造出来的假重启比没有历史更糟。
+ * pid 为 null 的条目必须原样保留——那是周期 job 的常态，丢了会在下一轮被误判成 started。
+ */
+export function deserializeSnapshot(raw) {
+  const map = new Map();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return map;
+  for (const [label, entry] of Object.entries(raw)) {
+    if (typeof label !== 'string' || !label) continue;
+    if (!entry || typeof entry !== 'object') continue;
+    // pid 必须是 number 或 null；'x' 这种脏值整条丢弃，不要静默当成 null（那会伪造出 started）
+    const hasPid = Object.hasOwn(entry, 'pid');
+    if (!hasPid) continue;
+    if (entry.pid !== null && !(typeof entry.pid === 'number' && Number.isFinite(entry.pid))) continue;
+    map.set(label, { pid: entry.pid, lastExit: typeof entry.lastExit === 'number' ? entry.lastExit : null });
+  }
+  return map;
 }
 
 /** 读盘校验。读不懂一律当作「没有历史」，绝不抛错阻断 status。 */

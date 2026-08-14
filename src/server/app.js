@@ -40,7 +40,9 @@ import { isSupervised, parseLaunchctlList } from '../ops/service-units.js';
 import {
   appendEvents,
   classifyRestartPattern,
+  deserializeSnapshot,
   diffRunningState,
+  serializeSnapshot,
   validateServiceEvents,
 } from '../ops/service-events.js';
 import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy } from '../ops/statusline.js';
@@ -764,12 +766,21 @@ function computeNeedsYou() {
 // kickstart 一次。单看退出码会每天误报一次，而恒亮的告警比没有告警更糟。
 //
 // 采样放在 server 进程里而不是新起一个 LaunchAgent：这里本来就常驻，一次 `launchctl list`
-// 约 5ms、不 spawn node。代价是 server 自己挂着的那段时间记不到 —— 但那段时间 UI 也看不到，
-// 所以不是真的损失。
+// 约 5ms、不 spawn node。
+//
+// ## 快照必须落盘（2026-08-14 第三轮审查修复）
+//
+// 上一版把快照只放在内存里，加上「命内 com.ccm.server 的 pid 就是采样进程自己、恒定不变」，
+// 两条叠加让 **server 自身的重启结构性永远记不到** —— 最该被抓到的崩溃循环恰恰是唯一的盲区。
+// 当时那句取舍（「server 挂着那段时间 UI 也看不到，所以不是真的损失」）对别的 unit 成立，
+// 对 server 自己不成立：重启完成那一刻 UI 恰恰是可达的。
+// 落盘之后，新命的首次采样拿得到上一命的 pid，server 换命即产出一条 restarted。
 const SERVICE_EVENTS_FILE = dataFile('service-events.json');
+const SERVICE_SNAPSHOT_FILE = dataFile('service-snapshot.json');
 const SERVICE_SAMPLE_INTERVAL_MS = 60_000;
 let serviceSampleInterval;
-let lastServiceSnapshot = null;
+let lastServiceSnapshot = readServiceSnapshot();
+let lastSnapshotJson = null;
 
 function readServiceEvents() {
   try {
@@ -777,6 +788,24 @@ function readServiceEvents() {
   } catch {
     return [];
   }
+}
+
+// 读不出/读不懂一律退化成空 Map ＝「没有基线」⇒ 首次采样静默。
+// 绝不因为快照坏了就伪造事件：假重启比没有历史更糟。
+function readServiceSnapshot() {
+  try {
+    return deserializeSnapshot(JSON.parse(readFileSync(SERVICE_SNAPSHOT_FILE, 'utf8')));
+  } catch {
+    return new Map();
+  }
+}
+
+// writeOwnerOnlyFile 不建父目录（realWriteManifest 就自己先 mkdir 了，这里上一版漏了）。
+// 全新安装、用户还没聊过天时 dataDir 可能尚未被 sessions/approval-store 顺手创建 ⇒ 每次采样
+// ENOENT，重启事件被静默吞掉。
+function writeServiceStateFile(path, content) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeOwnerOnlyFile(path, content);
 }
 
 function sampleServiceEvents() {
@@ -792,17 +821,33 @@ function sampleServiceEvents() {
   const mine = new Map([...snapshot].filter(([label]) => label.startsWith('com.ccm.')));
 
   const events = diffRunningState(lastServiceSnapshot, mine, Date.now());
-  lastServiceSnapshot = mine;
-  if (events.length === 0) return;
 
+  // ★ 快照推进必须排在事件落盘**之后**。上一版排在前面，于是写盘失败（目录不存在/磁盘满）时
+  // 那批事件永久丢失、下一轮 diff 也拿不回来 —— 只留一条 warn。现在写失败就不推进，下轮重试。
+  if (events.length > 0) {
+    try {
+      const merged = appendEvents(readServiceEvents(), events);
+      writeServiceStateFile(SERVICE_EVENTS_FILE, JSON.stringify(merged, null, 2));
+      for (const e of events) {
+        console.log(`[service] ${e.label} ${e.kind}${e.from ? ` pid ${e.from}→${e.to ?? '-'}` : ''}`);
+      }
+    } catch (err) {
+      console.warn(`[service] 重启事件落盘失败（保留快照，下轮重试）：${err?.message || err}`);
+      return; // 不推进快照
+    }
+  }
+  lastServiceSnapshot = mine;
+
+  // 快照独立落盘：它是**下一条命**的比对基线，失败只影响那一次比对，不该回滚已记下的事件。
+  // 只在内容变化时写——绝大多数采样什么都没变，没必要每分钟碰一次盘。
   try {
-    const merged = appendEvents(readServiceEvents(), events);
-    writeOwnerOnlyFile(SERVICE_EVENTS_FILE, JSON.stringify(merged, null, 2));
-    for (const e of events) {
-      console.log(`[service] ${e.label} ${e.kind}${e.from ? ` pid ${e.from}→${e.to ?? '-'}` : ''}`);
+    const json = JSON.stringify(serializeSnapshot(mine));
+    if (json !== lastSnapshotJson) {
+      writeServiceStateFile(SERVICE_SNAPSHOT_FILE, json);
+      lastSnapshotJson = json;
     }
   } catch (err) {
-    console.warn(`[service] 重启事件落盘失败：${err?.message || err}`);
+    console.warn(`[service] 快照落盘失败（下一条命将缺少比对基线）：${err?.message || err}`);
   }
 }
 
@@ -815,6 +860,10 @@ function computeServiceHealth() {
   });
   const lockout = metrics.recentIncident({ at: g.rate_limit_lockouts_last_ts, now });
   const clientError = metrics.recentIncident({ at: g.client_errors_last_ts, now });
+  // ★ restarts **刻意不在这份 payload 里**。本函数喂的是 instances 广播（41 处调用点，轮次边界
+  // 就会触发），而前端只在 service:status 的 ack 里读 restarts —— 放广播里那份零消费者，白发
+  // payload 给每台连着的设备，还每次同步 readFileSync + JSON.parse 一遍。面板那条路径在
+  // service:status handler 里单独调 summarizeRestarts()。
   return {
     startedAt: SERVICE_STARTED_AT,
     deliveryFailure: failure
@@ -825,8 +874,6 @@ function computeServiceHealth() {
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
     hooksBridge: { state: hooksInstallState, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
-    // 常驻服务的重启历史。判定化：不给裸计数器，给「有没有在频繁重启」+ 最近几条时间线。
-    restarts: summarizeRestarts(now),
   };
 }
 
@@ -836,11 +883,15 @@ function summarizeRestarts(now = Date.now()) {
   const events = readServiceEvents();
   if (events.length === 0) return { units: [], recent: [] };
   const labels = [...new Set(events.map((e) => e.label))].sort();
-  return {
-    units: labels.map((label) => ({ label, ...classifyRestartPattern(events, { label, now }) })),
-    // 最近 10 条给 UI 画时间线。倒序：最新的在前。
-    recent: events.slice(-10).reverse(),
-  };
+  const units = labels.map((label) => ({ label, ...classifyRestartPattern(events, { label, now }) }));
+
+  // ★ 时间线只取「摘要里有话说的那些 unit」的事件。
+  // 上一版是全局最后 10 条，于是一个高频 label（周期 job）能把时间线整个占满，用户看到的是
+  // 「com.ccm.tunnel 24 小时内 5 次」下面却一条 tunnel 都没有 —— 同一屏里两段互相打脸。
+  // 摘要为空时不过滤：那时时间线是唯一的信息，全局最近 10 条仍然有用。
+  const shown = new Set(units.filter((u) => u.last24h > 0 || u.flapping).map((u) => u.label));
+  const pool = shown.size ? events.filter((e) => shown.has(e.label)) : events;
+  return { units, recent: pool.slice(-10).reverse() }; // 倒序：最新的在前
 }
 
 // 安装态缓存：启动时读一次，装/卸后由 refreshHooksInstallState 主动刷新。
@@ -1333,12 +1384,17 @@ if (!statusOff) {
   // 周期刷新让 git 段（外部 commit/改动无事件驱动）跟上；去重 + clientsCount 守卫在 tick 内封顶开销
   // DeepSeek: 统一路由到 scheduleStatusRefresh 以消除并发重叠与合并请求
   statusInterval = setInterval(() => scheduleStatusRefresh(), 10_000);
-  // 常驻服务的重启历史采样。先立刻跑一次建立基线（首次不产出事件，见 diffRunningState），
-  // 之后每分钟一次。unref() 让它不阻止进程退出。
-  sampleServiceEvents();
-  serviceSampleInterval = setInterval(() => sampleServiceEvents(), SERVICE_SAMPLE_INTERVAL_MS);
-  serviceSampleInterval.unref?.();
 }
+
+// 常驻服务的重启历史采样。**刻意不放进上面的 `if (!statusOff)`**：
+// 上一版塞在那里，于是用户在手机配置面板关掉「Web 状态栏」（WEB_STATUSLINE 是可点的 toggle，
+// src/ops/env-schema.js）就连带把重启历史采样一起关了 —— 面板「重启记录」从此永远「暂无记录」
+// 且不说明原因。两个正交功能不共用一个开关。
+// 不支持的平台由 sampleServiceEvents() 内部早退（process.platform !== 'darwin'），零开销。
+// 先立刻跑一次：盘上有上一条命的快照时，这一次就能认出 server 自己的重启。
+sampleServiceEvents();
+serviceSampleInterval = setInterval(() => sampleServiceEvents(), SERVICE_SAMPLE_INTERVAL_MS);
+serviceSampleInterval.unref?.(); // 不阻止进程退出
 
 // 当前会话指针经 cwd 归属校验：仅当其 jsonl 存在于该 cwd 的 project 目录才算「本 cwd 的当前」
 // （切目录/跨 cwd 启动时指针可能指向别目录会话）。终端会话不在 sessions.json → 返回 {id} 仅凭 id resume
@@ -2889,7 +2945,9 @@ registerSocketConnection(io, socket => {
       rateLimitLockout: health.rateLimitLockout,
       clientError: health.clientError,
       hooksBridge: health.hooksBridge, // 面板「终端会话推送」段：显示安装态 + 一键安装/卸载
-      restarts: health.restarts,     // 面板「重启记录」段：谁在什么时候重启过（判定化，不给裸计数器）
+      // 面板「重启记录」段：谁在什么时候重启过（判定化，不给裸计数器）。
+      // 只在这条路径上算——它要读盘，而 instances 广播每轮都发、那边没有任何消费者。
+      restarts: summarizeRestarts(),
       // 日志开关可见性：DEBUG_SDK_MESSAGES 长开曾把日志刷到 149M 而无任何界面可见——
       // 面板「日志开关」行据此渲染（sdkDebug 开着标黄）。env 启动时定死，ack 时读即最新。
       logging: {
@@ -3192,6 +3250,9 @@ function shutdown(sig) {
   sessions.flushSaveSync(); // B4：防抖窗口内未落盘的状态同步写入
   clearInterval(statusInterval);  // E16：node --watch 的 SIGTERM 重启路径必须清定时器
   clearTimeout(statusDebounce);   // （在途 git execFile 由 2s timeout 与进程退出收割）
+  // 重启历史采样器：虽有 .unref() 不阻止退出，但关闭期间 fire 会同步 execFileSync('launchctl')
+  // 卡住关闭路径（5s timeout）。与上面两条同一理由，一起清。
+  clearInterval(serviceSampleInterval);
   mirrorEngine.stop();     // 只读追平定时器（.unref 不阻止退出，但清掉避免关闭期间噪音回调）
   hooksInbox.close();             // 关 hooks 投递箱 watcher + 防抖定时器（同上：避免关闭期间回调）
   stopLogTerminalSync({ dataDir: DATA_DIR }); // 同步关日志窗口：下面就 process.exit，异步来不及
