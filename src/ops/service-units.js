@@ -206,14 +206,23 @@ export function parseLaunchctlList(tsv) {
   return out;
 }
 
-// 生命周期状态。flapping 是**独立维度**不是第五种状态：机主的 com.ccm.tunnel 正是「有 PID
-// （KeepAlive 拉起来了）+ LastExitStatus=-9（被 SIGKILL 过）」——只看 PID 会一直显绿灯，
-// 而它其实在反复崩溃重启。漏掉这档，隧道挂了只能等公网报 1033 才发现。
+// 生命周期状态。
+//
+// ★ 这里**不再产出 flapping**。早前的版本用「最后一次退出码 ≠ 0」判它，而那是个瞬时值：
+// 机主的 com.ccm.tunnel 恒为 -9，因为自建看门狗 com.ccm.tunnel-watch 每 30s 检测 en0 的
+// DHCP 漂移、发现变了就 `launchctl kickstart -k`（-k 先 SIGKILL）。路由器每天换一次 IP，
+// 于是这个「异常退出」每天都在 —— 用瞬时值判 flapping 等于每天误报一次。
+// 恒亮的告警比没有告警更糟：它会训练用户忽略图标，真出事那天也不会多看一眼
+// （与 doctor D4 那个「端口被自家服务占用判 fail」的恒红是同一类错误）。
+// flapping 现在由 src/ops/service-events.js 按**重启频率**判定（1 小时内 ≥3 次）。
+//
+// lastExitAbnormal 仍然保留：那是「上次是不是非正常退出」这个事实本身，UI 可以展示，
+// 只是不再单独拿它下告警结论。
 export function classifyState({ pid = null, lastExit = null, plistExists = true } = {}) {
-  if (!plistExists) return { state: 'not-installed', flapping: false };
-  const crashed = typeof lastExit === 'number' && Number.isFinite(lastExit) && lastExit !== 0;
-  if (pid !== null && Number.isFinite(pid)) return { state: 'running', flapping: crashed };
-  return { state: crashed ? 'crashed' : 'stopped', flapping: false };
+  if (!plistExists) return { state: 'not-installed', lastExitAbnormal: false };
+  const abnormal = typeof lastExit === 'number' && Number.isFinite(lastExit) && lastExit !== 0;
+  if (pid !== null && Number.isFinite(pid)) return { state: 'running', lastExitAbnormal: abnormal };
+  return { state: abnormal ? 'crashed' : 'stopped', lastExitAbnormal: abnormal };
 }
 
 // plutil 解析出的 plist 对象 → 语义事实。形态对不上时相关字段为 null 而非抛错：

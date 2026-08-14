@@ -15,7 +15,7 @@ import { setCapped } from '../shared/bounded-map.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
-import { execSync, execFile } from 'node:child_process';
+import { execSync, execFile, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import express from 'express';
 import { Server } from 'socket.io';
@@ -35,7 +35,14 @@ import { attributePath, buildDiff, readPreview } from '../files/file-preview.js'
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
 import { applyEnvChanges } from '../ops/env-file.js';
 import { buildEnvView, validateEnvChanges } from '../ops/env-schema.js';
-import { isSupervised } from '../ops/service-units.js';
+import { dataFile } from '../shared/data-dir.js';
+import { isSupervised, parseLaunchctlList } from '../ops/service-units.js';
+import {
+  appendEvents,
+  classifyRestartPattern,
+  diffRunningState,
+  validateServiceEvents,
+} from '../ops/service-events.js';
 import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy } from '../ops/statusline.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
@@ -750,6 +757,55 @@ function computeNeedsYou() {
 // （=有人在暴力尝试入口，安全信号）+ 前端错误（=界面自身坏了，详情在日志面板）。
 // 刻意不接 classifyState()：那是 /metrics 外部消费的粗分类，failed/awaiting 已被会话 ❗ 角标/需要你(N) 覆盖，
 // mobile_offline 对正在看 UI 的设备是自指悖论——原样接入会制造重复信号，见方案 Context。
+// ── 常驻服务的重启历史采样 ────────────────────────────────────────────────
+//
+// launchd 只保留「最后一次怎么退出的」，那是瞬时值。要回答「这正常吗」必须有时间序列 ——
+// 机主机器上的实证：隧道的 LastExitStatus 恒为 -9，因为自建看门狗每天按 DHCP 漂移
+// kickstart 一次。单看退出码会每天误报一次，而恒亮的告警比没有告警更糟。
+//
+// 采样放在 server 进程里而不是新起一个 LaunchAgent：这里本来就常驻，一次 `launchctl list`
+// 约 5ms、不 spawn node。代价是 server 自己挂着的那段时间记不到 —— 但那段时间 UI 也看不到，
+// 所以不是真的损失。
+const SERVICE_EVENTS_FILE = dataFile('service-events.json');
+const SERVICE_SAMPLE_INTERVAL_MS = 60_000;
+let serviceSampleInterval;
+let lastServiceSnapshot = null;
+
+function readServiceEvents() {
+  try {
+    return validateServiceEvents(JSON.parse(readFileSync(SERVICE_EVENTS_FILE, 'utf8')));
+  } catch {
+    return [];
+  }
+}
+
+function sampleServiceEvents() {
+  if (process.platform !== 'darwin') return;
+  let snapshot;
+  try {
+    const raw = execFileSync('launchctl', ['list'], { encoding: 'utf8', timeout: 5000 });
+    snapshot = parseLaunchctlList(raw);
+  } catch {
+    return; // launchctl 挂了不该影响 server；下一轮再试
+  }
+  // 只留我们前缀下的 unit：别把机器上几十个第三方 agent 的重启都记进来
+  const mine = new Map([...snapshot].filter(([label]) => label.startsWith('com.ccm.')));
+
+  const events = diffRunningState(lastServiceSnapshot, mine, Date.now());
+  lastServiceSnapshot = mine;
+  if (events.length === 0) return;
+
+  try {
+    const merged = appendEvents(readServiceEvents(), events);
+    writeOwnerOnlyFile(SERVICE_EVENTS_FILE, JSON.stringify(merged, null, 2));
+    for (const e of events) {
+      console.log(`[service] ${e.label} ${e.kind}${e.from ? ` pid ${e.from}→${e.to ?? '-'}` : ''}`);
+    }
+  } catch (err) {
+    console.warn(`[service] 重启事件落盘失败：${err?.message || err}`);
+  }
+}
+
 function computeServiceHealth() {
   const g = metrics.snapshot().gauges;
   const c = metrics.snapshot().counters;
@@ -769,6 +825,21 @@ function computeServiceHealth() {
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
     hooksBridge: { state: hooksInstallState, off: process.env.CLI_HOOKS_BRIDGE === 'off' },
+    // 常驻服务的重启历史。判定化：不给裸计数器，给「有没有在频繁重启」+ 最近几条时间线。
+    restarts: summarizeRestarts(now),
+  };
+}
+
+// 给面板用的重启摘要。flapping 走频率判据（1 小时内 ≥3 次），单次异常退出不算 ——
+// 见 src/ops/service-events.js 的头注。
+function summarizeRestarts(now = Date.now()) {
+  const events = readServiceEvents();
+  if (events.length === 0) return { units: [], recent: [] };
+  const labels = [...new Set(events.map((e) => e.label))].sort();
+  return {
+    units: labels.map((label) => ({ label, ...classifyRestartPattern(events, { label, now }) })),
+    // 最近 10 条给 UI 画时间线。倒序：最新的在前。
+    recent: events.slice(-10).reverse(),
   };
 }
 
@@ -1262,6 +1333,11 @@ if (!statusOff) {
   // 周期刷新让 git 段（外部 commit/改动无事件驱动）跟上；去重 + clientsCount 守卫在 tick 内封顶开销
   // DeepSeek: 统一路由到 scheduleStatusRefresh 以消除并发重叠与合并请求
   statusInterval = setInterval(() => scheduleStatusRefresh(), 10_000);
+  // 常驻服务的重启历史采样。先立刻跑一次建立基线（首次不产出事件，见 diffRunningState），
+  // 之后每分钟一次。unref() 让它不阻止进程退出。
+  sampleServiceEvents();
+  serviceSampleInterval = setInterval(() => sampleServiceEvents(), SERVICE_SAMPLE_INTERVAL_MS);
+  serviceSampleInterval.unref?.();
 }
 
 // 当前会话指针经 cwd 归属校验：仅当其 jsonl 存在于该 cwd 的 project 目录才算「本 cwd 的当前」
@@ -2813,6 +2889,7 @@ registerSocketConnection(io, socket => {
       rateLimitLockout: health.rateLimitLockout,
       clientError: health.clientError,
       hooksBridge: health.hooksBridge, // 面板「终端会话推送」段：显示安装态 + 一键安装/卸载
+      restarts: health.restarts,     // 面板「重启记录」段：谁在什么时候重启过（判定化，不给裸计数器）
       // 日志开关可见性：DEBUG_SDK_MESSAGES 长开曾把日志刷到 149M 而无任何界面可见——
       // 面板「日志开关」行据此渲染（sdkDebug 开着标黄）。env 启动时定死，ack 时读即最新。
       logging: {

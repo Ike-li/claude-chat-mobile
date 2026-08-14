@@ -2067,6 +2067,55 @@ export function formatHooksBridgeRow(hooksBridge) {
 // 各类均由服务端时效窗判定（超窗自动退场，见 metrics.js recentIncident/recentDeliveryFailure）；
 // 旧 server 无新字段 → 优雅缺席。刻意不吞并/复用"需要你(N)"聚合的展示逻辑——
 // 两条轴分开陈列，不让服务健康看起来像"更多同类待办"。
+// 「重启记录」段的行。
+//
+// 判定化而不是给裸计数器：`launchctl` 的 LastExitStatus 是瞬时值，回答不了「这正常吗」。
+// 机主机器上的实证——隧道恒为 -9，因为自建看门狗每天按 DHCP 漂移 kickstart 一次。
+// 所以这里展示的是**频率 + 时间线**：每天一次一眼看得出是例行的，密集连发才是真出事了。
+export function formatRestartRows({ restarts, now = Date.now() } = {}) {
+  const units = restarts?.units || [];
+  const recent = restarts?.recent || [];
+  if (units.length === 0 && recent.length === 0) {
+    return { summary: [], timeline: [], empty: true };
+  }
+
+  const summary = units
+    .filter((u) => u.last24h > 0 || u.flapping)
+    .map((u) => ({
+      label: u.label,
+      // flapping 的判据是频率（1 小时内 ≥3 次），不是「上次退出码非 0」
+      text: u.flapping
+        ? `1 小时内重启 ${u.lastHour} 次`
+        : `24 小时内 ${u.last24h} 次 · 上次 ${formatAgoShort(now - u.lastRestartAt)}前`,
+      alert: !!u.flapping,
+    }));
+
+  const timeline = recent.map((e) => ({
+    label: e.label,
+    text: `${formatAgoShort(now - e.ts)}前 ${restartKindText(e.kind)}`,
+  }));
+
+  return { summary, timeline, empty: false };
+}
+
+function restartKindText(kind) {
+  if (kind === 'restarted') return '重启';
+  if (kind === 'started') return '启动';
+  if (kind === 'stopped') return '停止';
+  return kind || '?';
+}
+
+// 粗粒度「多久以前」。UI 要的是量级不是精度。
+export function formatAgoShort(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '?';
+  const m = Math.floor(ms / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时`;
+  return `${Math.floor(h / 24)} 天`;
+}
+
 export function formatServiceNotices({ service, now } = {}) {
   const notices = [];
   const countSuffix = c => (Number.isFinite(c) && c > 0 ? `${t('（累计')} ${c} ${t('次）')}` : '');

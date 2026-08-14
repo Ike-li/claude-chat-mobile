@@ -34,6 +34,7 @@ import dotenv from 'dotenv';
 import { writeOwnerOnlyFile } from '../src/files/file-security.js';
 import { renderTemplate, stripLeadingComment } from './render-plist.js';
 
+import { classifyRestartPattern, validateServiceEvents } from '../src/ops/service-events.js';
 import {
   DEFAULT_LABEL_PREFIX,
   SERVICE_UNIT_NAMES,
@@ -95,6 +96,7 @@ export function createServiceManager(deps = {}) {
     deleteFile = () => {},
     fileExists = () => false,
     writeManifest = () => {},
+    readEvents = () => [],
     renderPlist = realRenderPlist,
     sleep = realSleep,
     httpGet = realHttpGet,
@@ -153,7 +155,7 @@ export function createServiceManager(deps = {}) {
     }
   }
 
-  function buildKnownUnit(unit, { live, manifest, warnings, fast, port }) {
+  function buildKnownUnit(unit, { live, manifest, warnings, fast, port, events }) {
     const label = labelFor(unit, labelPrefix);
     const plistPath = plistPathFor(label);
     const plist = readPlistSafe(plistPath, warnings);
@@ -170,8 +172,10 @@ export function createServiceManager(deps = {}) {
       )
       : [];
     const inManifest = Object.hasOwn(manifest.units, unit);
-    const { state, flapping } = classifyState({ ...running, plistExists });
+    const { state, lastExitAbnormal } = classifyState({ ...running, plistExists });
     const ownership = classifyOwnership({ knownUnit: true, inManifest, drift });
+    // flapping 来自**重启频率**而不是最后一次退出码 —— 见 service-units.js 的 classifyState 头注。
+    const restarts = classifyRestartPattern(events, { label, now: now() });
 
     return {
       unit,
@@ -181,18 +185,20 @@ export function createServiceManager(deps = {}) {
       state,
       pid: running.pid,
       lastExitStatus: running.lastExit,
-      flapping,
+      lastExitAbnormal,
+      flapping: restarts.flapping,
+      restarts,
       drift,
       plistPath,
       // 只有 server 监听本地端口；隧道与定时器没有可探的端口。
       listen: unit === 'server' && !fast ? { port, reachable: !!tcpProbe(port) } : null,
-      detail: describeUnit({ state, flapping, drift, plistExists, ownership }),
+      detail: describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership }),
     };
   }
 
   // 前缀命中但不在模板表里的 unit（机主自建的 com.ccm.tunnel-watch）。看得见才管得住 ——
   // 它占着我们的 label 命名空间，status 里不列出来等于假装它不存在。
-  function buildUnknownUnits({ live, warnings, knownLabels }) {
+  function buildUnknownUnits({ live, warnings, knownLabels, events }) {
     const labels = new Set();
     for (const label of live.keys()) labels.add(label);
     try {
@@ -206,7 +212,8 @@ export function createServiceManager(deps = {}) {
       const plistPath = plistPathFor(label);
       const plistExists = !!readPlistSafe(plistPath, warnings);
       const running = live.get(label) || { pid: null, lastExit: null };
-      const { state, flapping } = classifyState({ ...running, plistExists });
+      const { state, lastExitAbnormal } = classifyState({ ...running, plistExists });
+      const restarts = classifyRestartPattern(events, { label, now: now() });
       out.push({
         unit: label.slice(labelPrefix.length + 1),
         label,
@@ -215,7 +222,9 @@ export function createServiceManager(deps = {}) {
         state,
         pid: running.pid,
         lastExitStatus: running.lastExit,
-        flapping,
+        lastExitAbnormal,
+        flapping: restarts.flapping,
+        restarts,
         drift: [],
         plistPath,
         listen: null,
@@ -234,10 +243,14 @@ export function createServiceManager(deps = {}) {
     const env = readEnv() || {};
     const port = positivePort(env.PORT) ?? 3000;
 
+    // 重启历史由 server 进程周期采样落盘（见 src/server/app.js 的 sampleServiceEvents）。
+    // 这里只读不写：status 可能被菜单栏每 2s 调一次，写盘会打架。
+    const events = validateServiceEvents(readEvents());
+
     const knownLabels = new Set(SERVICE_UNIT_NAMES.map((u) => labelFor(u, labelPrefix)));
     const units = SERVICE_UNIT_NAMES
-      .map((unit) => buildKnownUnit(unit, { live, manifest, warnings, fast, port }))
-      .concat(buildUnknownUnits({ live, warnings, knownLabels }));
+      .map((unit) => buildKnownUnit(unit, { live, manifest, warnings, fast, port, events }))
+      .concat(buildUnknownUnits({ live, warnings, knownLabels, events }));
 
     const ip = lanIp();
     return {
@@ -606,10 +619,14 @@ function positivePort(value) {
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
 }
 
-function describeUnit({ state, flapping, drift, plistExists, ownership }) {
+function describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership }) {
   if (!plistExists) return '未安装';
   const parts = [];
-  if (flapping) parts.push('曾异常退出后被 KeepAlive 拉起');
+  // 只有**频繁**重启才算异常。单次的 lastExitAbnormal 不再当告警说 —— 机主的隧道恒为 -9
+  // （看门狗按 DHCP 漂移每天 kickstart 一次），那样说等于每天误报。
+  if (restarts?.flapping) parts.push(`1 小时内重启 ${restarts.lastHour} 次`);
+  else if (restarts?.last24h > 0) parts.push(`24 小时内重启 ${restarts.last24h} 次`);
+  else if (lastExitAbnormal && state === 'running') parts.push('上次非正常退出（已重新拉起）');
   // shape 漂移不等于故障：机主的隧道用的是自写包装脚本（/bin/bash ~/.cloudflared/xxx.sh，
   // 多半为绕过代理 TUN 劫持），那是有意的配置。文案要说清「不接管」而不是暗示出错。
   if (drift.includes('shape')) parts.push('自定义启动方式，本工具不接管（只可查看与启停）');
@@ -762,6 +779,19 @@ function realManifestPath() {
   return resolveManifestPath(process.env, realReadEnv(), ROOT);
 }
 
+export function resolveEventsPath(shellEnv = process.env, fileEnv = {}, root = ROOT) {
+  const dir = shellEnv?.CCM_DATA_DIR || fileEnv?.CCM_DATA_DIR || join(root, 'data');
+  return join(dir, 'service-events.json');
+}
+
+function realReadEvents() {
+  try {
+    return JSON.parse(readFileSync(resolveEventsPath(process.env, realReadEnv(), ROOT), 'utf8'));
+  } catch {
+    return [];
+  }
+}
+
 function realReadManifest() {
   try {
     return JSON.parse(readFileSync(realManifestPath(), 'utf8'));
@@ -822,10 +852,22 @@ export function realManager() {
     fileExists: existsSync,
     writeManifest: realWriteManifest,
     renderPlist: realRenderPlist,
+    readEvents: realReadEvents,
   });
 }
 
 // ---------- 人类可读渲染 ----------
+
+// 「多久以前」的粗粒度人话。UI 要的是量级不是精度。
+export function formatAgo(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '?';
+  const m = Math.floor(ms / 60_000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时`;
+  return `${Math.floor(h / 24)} 天`;
+}
 
 const STATE_ICON = {
   running: '●',
@@ -843,6 +885,7 @@ const OWNERSHIP_LABEL = {
 
 export function formatStatus(s) {
   const lines = [];
+  const now = s.generatedAt || Date.now();
   lines.push('=== 常驻服务状态 ===');
   lines.push('');
   if (!s.supported) {
@@ -852,8 +895,9 @@ export function formatStatus(s) {
   }
   for (const u of s.units) {
     const icon = u.flapping ? '◐' : (STATE_ICON[u.state] || '?');
+    const restartNote = u.restarts?.lastRestartAt ? `  上次重启 ${formatAgo(now - u.restarts.lastRestartAt)}前` : '';
     const pid = u.pid ? ` pid=${u.pid}` : '';
-    lines.push(`${icon} ${u.label}  ${u.state}${pid}  [${OWNERSHIP_LABEL[u.ownership] || u.ownership}]`);
+    lines.push(`${icon} ${u.label}  ${u.state}${pid}  [${OWNERSHIP_LABEL[u.ownership] || u.ownership}]${restartNote}`);
     if (u.detail) lines.push(`    ${u.detail}`);
     if (u.listen) lines.push(`    端口 ${u.listen.port} ${u.listen.reachable ? '可连接' : '连不上'}`);
   }

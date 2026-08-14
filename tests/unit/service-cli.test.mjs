@@ -76,6 +76,7 @@ function makeManager(overrides = {}) {
     readEnv: overrides.readEnv ?? (() => ({ PORT: '3000', AUTH_TOKEN: 'x'.repeat(64) })),
     envFileExists: overrides.envFileExists ?? (() => true),
     tcpProbe: overrides.tcpProbe ?? (() => true),
+    readEvents: overrides.readEvents ?? (() => []),
     lanIp: () => '192.168.1.9',
     ...overrides.extra,
   });
@@ -139,13 +140,43 @@ test.describe('status —— 状态与 flapping', () => {
     assert.equal(u.flapping, false);
   });
 
-  // 机主的隧道就是这个状态：LastExitStatus=-9 说明被 SIGKILL 过，KeepAlive 又拉了起来。
-  // 只看 PID 会一直显绿灯 —— 这正是「隧道挂了只能等公网 1033 才发现」的根源。
-  test('tunnel 在跑但上次异常退出 → running + flapping=true', () => {
+  // ★ 机主的隧道恒为 LastExitStatus=-9，但那**不是崩溃**：自建看门狗 com.ccm.tunnel-watch
+  // 每 30s 检测 en0 的 DHCP 漂移，变了就 `launchctl kickstart -k`（-k 先 SIGKILL）。
+  // 路由器每天换一次 IP ⇒ 用「最后一次退出码」判 flapping 等于每天误报一次。
+  // 现在退出码只记录事实（lastExitAbnormal），告警交给重启频率。
+  test('上次异常退出但没有频繁重启 → 不算 flapping，只记 lastExitAbnormal', () => {
     const u = makeManager().status().units.find((x) => x.unit === 'tunnel');
     assert.equal(u.state, 'running');
-    assert.equal(u.flapping, true);
     assert.equal(u.lastExitStatus, -9);
+    assert.equal(u.lastExitAbnormal, true, '事实要记下来');
+    assert.equal(u.flapping, false, '每天一次的看门狗重启不该恒亮告警');
+  });
+
+  test('1 小时内重启 3 次 → flapping（真进了崩溃重启循环）', () => {
+    const now = 1786000000000;
+    const ev = (minsAgo) => ({ ts: now - minsAgo * 60_000, label: 'com.ccm.tunnel', kind: 'restarted' });
+    const u = makeManager({ readEvents: () => [ev(30), ev(20), ev(10)] })
+      .status().units.find((x) => x.unit === 'tunnel');
+    assert.equal(u.flapping, true);
+    assert.equal(u.restarts.lastHour, 3);
+  });
+
+  test('每天一次的重启历史 → 24h 计数有值但不 flapping', () => {
+    const now = 1786000000000;
+    const HOUR = 3600_000;
+    const ev = (h) => ({ ts: now - h * HOUR, label: 'com.ccm.tunnel', kind: 'restarted' });
+    const u = makeManager({ readEvents: () => [ev(71), ev(47), ev(23), ev(2)] })
+      .status().units.find((x) => x.unit === 'tunnel');
+    assert.equal(u.flapping, false);
+    assert.equal(u.restarts.last24h, 2);
+    assert.equal(u.restarts.lastRestartAt, now - 2 * HOUR, 'UI 要显示「上次重启 2 小时前」');
+  });
+
+  test('重启历史读不出来（文件缺失/坏 JSON）→ 一切为零，不影响其余字段', () => {
+    const u = makeManager({ readEvents: () => null }).status().units.find((x) => x.unit === 'server');
+    assert.equal(u.flapping, false);
+    assert.deepEqual(u.restarts, { lastHour: 0, last24h: 0, flapping: false, lastRestartAt: null });
+    assert.equal(u.state, 'running', '其余判定不受影响');
   });
 
   test('logrotate 已装未运行 → stopped（定时器 unit 的常态，不是故障）', () => {

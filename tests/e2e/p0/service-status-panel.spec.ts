@@ -26,6 +26,14 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(body).toContainText('日志开关');
     await expect(body).toContainText('交互日志 开 · SDK 调试 关 · stderr 开');
 
+    // 2.5 重启记录段：launchd 只留「最后一次退出码」那个瞬时值，回答不了「这正常吗」。
+    // 夹具给的是一条例行重启（每天一次的 DHCP 漂移），所以**不该标黄** ——
+    // 恒亮的告警会训练用户忽略它，那正是这一段要避免的。
+    await expect(body).toContainText('重启记录');
+    await expect(body).toContainText('com.ccm.tunnel');
+    await expect(body).toContainText('24 小时内 1 次');
+    await expect(body.locator('.text-warning')).toHaveCount(0);
+
     // 3. 裸计数器段已撤：不再渲染「运行指标」及其行 label
     await expect(body).not.toContainText('运行指标');
     await expect(body).not.toContainText('活跃会话');

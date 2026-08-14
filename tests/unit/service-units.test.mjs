@@ -114,47 +114,49 @@ test.describe('parseLaunchctlList', () => {
 });
 
 test.describe('classifyState', () => {
+  // ★ 这里**不再产出 flapping**。早前用「最后一次退出码 ≠ 0」判它，而那是瞬时值：
+  // 机主的隧道恒为 -9（自建看门狗每天按 DHCP 漂移 kickstart -k 一次），于是每天误报。
+  // flapping 改由 service-events.js 按重启频率判定，见那个文件的测试。
   test('未安装：plist 不存在时压过一切', () => {
     assert.deepEqual(
       classifyState({ pid: null, lastExit: 0, plistExists: false }),
-      { state: 'not-installed', flapping: false }
+      { state: 'not-installed', lastExitAbnormal: false }
     );
   });
 
-  test('running：有 PID 且上次正常退出', () => {
+  test('running：有 PID', () => {
     assert.deepEqual(
       classifyState({ pid: 26867, lastExit: 0, plistExists: true }),
-      { state: 'running', flapping: false }
+      { state: 'running', lastExitAbnormal: false }
     );
   });
 
-  // 这一档最容易漏：机主的 com.ccm.tunnel 就在这里 —— 有 PID（KeepAlive 拉起来了）
-  // 但 LastExitStatus=-9（被 SIGKILL 过）。只看 PID 会一直显绿灯，而它其实在反复崩溃重启。
-  test('running + flapping：有 PID 但上次异常退出（崩过又被 KeepAlive 拉起）', () => {
+  test('有 PID 且上次异常退出 → 仍是 running，只记下 lastExitAbnormal', () => {
     assert.deepEqual(
       classifyState({ pid: 62368, lastExit: -9, plistExists: true }),
-      { state: 'running', flapping: true }
+      { state: 'running', lastExitAbnormal: true },
+      '「在跑」与「上次怎么退出的」是两件事，后者不单独用来下告警结论'
     );
   });
 
   test('crashed：无 PID 且上次异常退出', () => {
     assert.deepEqual(
       classifyState({ pid: null, lastExit: 1, plistExists: true }),
-      { state: 'crashed', flapping: false }
+      { state: 'crashed', lastExitAbnormal: true }
     );
   });
 
   test('stopped：无 PID 且上次正常退出（定时器 unit 的常态）', () => {
     assert.deepEqual(
       classifyState({ pid: null, lastExit: 0, plistExists: true }),
-      { state: 'stopped', flapping: false }
+      { state: 'stopped', lastExitAbnormal: false }
     );
   });
 
   test('plist 存在但 launchctl 里查无此条 → stopped（已落盘未 bootstrap）', () => {
     assert.deepEqual(
       classifyState({ pid: null, lastExit: null, plistExists: true }),
-      { state: 'stopped', flapping: false }
+      { state: 'stopped', lastExitAbnormal: false }
     );
   });
 });
