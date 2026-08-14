@@ -197,3 +197,92 @@ test.describe('health —— 唯一会碰 HTTP 的路径', () => {
     assert.ok(!JSON.stringify(mgr.health()).includes('tok'));
   });
 });
+
+// ── 第三轮审查 #8：stop 之后 start 不起来 ────────────────────────────────
+//
+// `man launchctl`：bootout "**removes their definitions** [from] the domain"；
+// kickstart "Instructs launchd to run **the specified service**"。被 bootout 掉的 unit 已经不在
+// domain 里，kickstart 必然 `Could not find service`。而 guardControllable 只检查 plist 文件存在
+// （bootout 不删文件），所以护栏放行、直接撞上失败。
+//
+// 这条以前没被抓到，是因为既有用例只断言 argv 形状（「start 用 kickstart」「stop 用 bootout」），
+// 没有一条走 stop→start 往返。**这个 fake 会真的模拟 launchd 的 domain 语义**：
+// bootout 把 label 从 list 里摘掉，对不在 domain 里的 label 做 kickstart 会失败。
+function domainAwareSetup() {
+  const calls = [];
+  let loaded = true;   // domain 里有没有这条 service
+  let pid = 26867;
+
+  const mgr = createServiceManager({
+    platform: 'darwin', home: HOME, repo: REPO, node: '/opt/homebrew/bin/node', uid: 501,
+    now: () => 1786000000000,
+    execLaunchctl: (args) => {
+      calls.push(args);
+      const [cmd] = args;
+      if (cmd === 'list') {
+        return { status: 0, stdout: loaded ? tsvWith(pid) : 'PID\tStatus\tLabel', stderr: '' };
+      }
+      if (cmd === 'bootout') {
+        if (!loaded) return { status: 1, stdout: '', stderr: 'Could not find service' };
+        loaded = false;
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (cmd === 'bootstrap') {
+        loaded = true; pid += 1;
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      if (cmd === 'kickstart') {
+        // ★ 关键：不在 domain 里就找不到——这正是真实 launchctl 的行为
+        if (!loaded) return { status: 1, stdout: '', stderr: 'Could not find service "gui/501/com.ccm.server"' };
+        pid += 1;
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 0, stdout: '', stderr: '' };
+    },
+    readPlistFile: (p) => (p === SERVER_PLIST ? SERVER_OBJ : null),
+    fileExists: (p) => p === SERVER_PLIST,   // bootout 不删 plist 文件
+    readFileRaw: () => null, readManifest: () => null,
+    readEnv: () => ({ PORT: '3000', AUTH_TOKEN: 'tok' }), envFileExists: () => true,
+    tcpProbe: () => true, lanIp: () => null, realpath: (p) => p, sleep: () => {},
+    httpGet: () => ({ status: 200, body: '{"status":"ok"}' }),
+  });
+  return { mgr, calls, isLoaded: () => loaded };
+}
+
+test.describe('stop → start 往返（真实 domain 语义）', () => {
+  test('★ stop 之后 start 必须成功（此前恒失败：bootout 移除定义、kickstart 找不到）', () => {
+    const { mgr, isLoaded } = domainAwareSetup();
+    assert.equal(mgr.stop('server').ok, true, 'stop 应成功');
+    assert.equal(isLoaded(), false, 'bootout 之后 unit 已不在 domain 里');
+
+    const r = mgr.start('server');
+    assert.equal(r.ok, true, `start 应把它拉回来，实际错误：${r.error}`);
+    assert.equal(isLoaded(), true, 'start 之后应重新在 domain 里');
+  });
+
+  test('unit 已加载时 start 仍走 kickstart（bootstrap 会报 already loaded）', () => {
+    const { mgr, calls } = domainAwareSetup();
+    assert.equal(mgr.start('server').ok, true);
+    assert.ok(calls.some((a) => a[0] === 'kickstart'), '已加载时应用 kickstart');
+    assert.ok(!calls.some((a) => a[0] === 'bootstrap'), '已加载时不该 bootstrap');
+  });
+
+  test('未加载时 start 用 bootstrap 把 plist 重新载入 domain', () => {
+    const { mgr, calls } = domainAwareSetup();
+    mgr.stop('server');
+    calls.length = 0;
+    assert.equal(mgr.start('server').ok, true);
+    const boot = calls.find((a) => a[0] === 'bootstrap');
+    assert.ok(boot, 'ered 未加载时应 bootstrap');
+    assert.equal(boot[1], 'gui/501', 'bootstrap 的第一个参数是 domain');
+    assert.equal(boot[2], SERVER_PLIST, '第二个参数是 plist 路径');
+  });
+
+  test('restart 对未加载的 unit 也能救回来（kickstart -k 同样找不到 service）', () => {
+    const { mgr, isLoaded } = domainAwareSetup();
+    mgr.stop('server');
+    const r = mgr.restart('server');
+    assert.equal(r.ok, true, `restart 应先把它载回 domain，实际错误：${r.error}`);
+    assert.equal(isLoaded(), true);
+  });
+});

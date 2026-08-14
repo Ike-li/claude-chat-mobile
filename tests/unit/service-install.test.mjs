@@ -408,10 +408,15 @@ test.describe('uninstall —— CAS 保护', () => {
     assert.equal(r.ok, false);
   });
 
-  test('未安装 → already，不报错', () => {
+  // 标题曾写「未安装 → already，不报错」，与下面的断言直接矛盾：`already` 是 install/adopt
+  // 的幂等语义（service.js:331 / :406 各返回 ok:true + action:'already'），uninstall 没有这一档。
+  // 卸载一个不在 manifest 里的 unit 是**拒绝**——那正是「只对自己装的东西做写操作」这条纪律，
+  // 不是幂等成功。标题按实际行为改正，顺便把拒绝的理由也断言上，防止将来退化成别的错误。
+  test('未在 manifest 里 → 拒绝卸载（不是幂等 already）', () => {
     const { mgr } = setup();
     const r = mgr.uninstall('server', { confirmed: true });
     assert.equal(r.ok, false);
+    assert.match(r.error, /manifest|未安装|不是本工具/, `理由要说清为什么拒绝，实际：${r.error}`);
   });
 
   // bootout 对一个没在跑的 unit 会返回非零（"Could not find service"）——那不是失败，

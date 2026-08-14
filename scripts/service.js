@@ -525,11 +525,33 @@ export function createServiceManager(deps = {}) {
     return launchctlList([]).get(label)?.pid ?? null;
   }
 
+  // ## 为什么要先探测 domain（2026-08-14 第三轮审查修复）
+  //
+  // `man launchctl`：bootout「**removes their definitions**」，kickstart「run **the specified
+  // service**」。stop 用的是 bootout ⇒ unit 已经不在 domain 里 ⇒ 之后 kickstart 必然
+  // `Could not find service`。而 guardControllable 只检查 plist **文件**存在（bootout 不删文件），
+  // 所以护栏放行、直接撞上失败：菜单栏点「停止」再点「启动」必失败，CLI 同理。
+  //
+  // 更糟的是 src/ops/doctor-checks.js 对 stopped 态给的修复建议恰恰就是这条 start 命令。
+  //
+  // 所以按 domain 里在不在分流：在 → kickstart（bootstrap 会报 already loaded）；
+  // 不在 → bootstrap 把 plist 重新载入。两条路径都只在**我们自己前缀**下的 label 上跑
+  // （guardControllable 已经把 unit 名约束在 labelPrefix 命名空间内）。
+  // live 可由调用方传入已取好的一份，避免多打一次 `launchctl list`
+  // （restart 本来就要查一次拿旧 PID，那份直接复用）。
+  function ensureLoaded(label, live = launchctlList([])) {
+    if (live.has(label)) return null;
+    const r = execLaunchctl(['bootstrap', `gui/${uid}`, plistPathFor(label)]);
+    return !r || r.status !== 0 ? launchctlErr(r) : null;
+  }
+
   function start(unit) {
     const bad = guardControllable(unit);
     if (bad) return { ok: false, unit, error: bad };
     const label = labelFor(unit, labelPrefix);
-    // 用 kickstart 而非 bootstrap：unit 通常已经加载着，bootstrap 会报 "service already loaded"。
+    const loadErr = ensureLoaded(label);
+    if (loadErr) return { ok: false, unit, label, error: loadErr };
+    // 到这里 unit 一定在 domain 里：kickstart 让它立刻跑起来（无视 RunAtLoad 等启动条件）
     const r = execLaunchctl(['kickstart', `gui/${uid}/${label}`]);
     if (!r || r.status !== 0) return { ok: false, unit, label, error: launchctlErr(r) };
     return { ok: true, unit, label, action: 'started' };
@@ -552,8 +574,13 @@ export function createServiceManager(deps = {}) {
     const bad = guardControllable(unit);
     if (bad) return { ok: false, unit, error: bad };
     const label = labelFor(unit, labelPrefix);
-    const oldPid = currentPid(label);
+    // 一次 list 同时拿到「旧 PID」与「在不在 domain 里」——不为第二个问题再打一次 launchctl
+    const live = launchctlList([]);
+    const oldPid = live.get(label)?.pid ?? null;
 
+    // 同 start()：被 bootout 过的 unit 不在 domain 里，kickstart -k 一样找不到它。
+    const loadErr = ensureLoaded(label, live);
+    if (loadErr) return { ok: false, unit, label, oldPid, error: loadErr };
     const r = execLaunchctl(['kickstart', '-k', `gui/${uid}/${label}`]);
     if (!r || r.status !== 0) return { ok: false, unit, label, oldPid, error: launchctlErr(r) };
     if (!wait) return { ok: true, unit, label, action: 'restarted', oldPid };
@@ -619,7 +646,7 @@ function positivePort(value) {
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
 }
 
-function describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership }) {
+export function describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership }) {
   if (!plistExists) return '未安装';
   const parts = [];
   // 只有**频繁**重启才算异常。单次的 lastExitAbnormal 不再当告警说 —— 机主的隧道恒为 -9
@@ -823,9 +850,16 @@ function realWriteFile(path, content) {
 
 function realDeleteFile(path) {
   try {
-    // safe-path: 调用方（uninstall）只传 manifest 里自己写下的 plistPath，且那条记录只可能由
-    // install/adopt 经 labelFor + 前缀白名单生成。算错的最坏情况是指向一个不存在的 plist，
-    // 打不到别的目录 —— 与 2026-08-02「目录段塌成真实根」的事故形态不同。
+    // safe-path: 调用方（uninstall）传的是**派生路径** plistPathFor(labelFor(unit))，unit 已过
+    // guardUnit 的 SERVICE_UNIT_NAMES 白名单、home 来自 os.homedir()（见 scripts/service.js 的
+    // `deleteFile(target)` 调用点）。**刻意不用 manifest 里的 entry.plistPath** —— 那是磁盘 JSON，
+    // 被篡改后能指向任意文件，而 validateManifest 只校验它是非空字符串、不校验位置。
+    // 算错的最坏情况是指向一个不存在的 plist，打不到别的目录 ——
+    // 与 2026-08-02「目录段塌成真实根」的事故形态不同。
+    //
+    // （这条理由本身在 2026-08-14 被改正过一次：上一版写的是「只传 manifest 里自己写下的
+    // plistPath」，那描述的恰是被 8c9785a 废弃掉的设计。门禁只正则匹配 `// safe-path:` 不校验
+    // 理由文本，所以过期的理由能一直绿着 —— 读到这类标记时要回调用点核对，别只信注释。）
     unlinkSync(path);
   } catch { /* 文件已不在就是我们要的终态 */ }
 }
