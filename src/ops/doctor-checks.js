@@ -376,7 +376,15 @@ export function serviceUnitsDiagnostic({ platform = '', supported = false, units
 
   const problems = [];
   for (const u of units) {
-    if (u.flapping) problems.push(`${u.label} 在跑但曾异常退出（被 KeepAlive 拉起）`);
+    // ★ flapping 的语义已从「上次退出码 ≠ 0」换成「1 小时内 ≥3 次重启」（见 src/ops/service-events.js）。
+    // 这句文案上一版没跟上，于是它对着一个一次都没崩过、只是被 kickstart 过几次的 unit 说
+    // 「曾异常退出（被 KeepAlive 拉起）」—— 编造的事实会把排障往错误方向带。
+    // 「上次是不是非正常退出」这个事实本身仍在 u.lastExitAbnormal 里，供 status 展示，
+    // 但**不单独下告警结论**：那正是恒亮误报的来源。
+    if (u.flapping) {
+      const n = u.restarts?.lastHour;
+      problems.push(`${u.label} 1 小时内重启 ${Number.isFinite(n) ? n : '多'} 次（疑似崩溃重启循环）`);
+    }
     // shape = 用户换掉了启动方式，属有意配置，不计入问题
     const realDrift = (u.drift || []).filter((d) => d !== 'shape');
     if (realDrift.length) problems.push(`${u.label} 配置与模板不一致：${realDrift.join('、')}`);
@@ -386,6 +394,23 @@ export function serviceUnitsDiagnostic({ platform = '', supported = false, units
   }
   const running = units.filter((u) => u.state === 'running').length;
   return { status: 'ok', name, detail: `${server.label} 运行中（共 ${running} 个 unit 在跑）` };
+}
+
+/**
+ * 端口是不是自家常驻 server 占的。**三个条件缺一不可**：unit 在跑、探到的端口一致、确实连得通。
+ *
+ * 判定放在这一层（而不是 scripts/doctor.js 里贴着 execFileSync 写）是 2026-08-14 第三轮审查的
+ * 结论：那条判据此前完全没有测试，把它改成无条件 `return server.label` 全套单测照样绿 ——
+ * 而那意味着「别的进程占了我要用的端口」会被报成「预期占用」，正是它当初要避免的失败、方向相反。
+ *
+ * 不能只看「server 在跑」：doctor 支持 --env=other.env，那份 .env 的 PORT 可能与常驻服务不同。
+ *
+ * @param status `scripts/service.js status --json` 的解析结果（读不到传 null）
+ */
+export function resolveServicePortOwner({ status = null, port = null } = {}) {
+  const server = status?.units?.find((u) => u.unit === 'server');
+  if (!server || server.state !== 'running') return null;
+  return server.listen?.reachable && server.listen?.port === port ? server.label : null;
 }
 
 // ── D4：端口占用判定 ────────────────────────────────────────────────────

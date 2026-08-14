@@ -730,6 +730,15 @@ export const EN_DICT = Object.freeze({
   '原因未知': 'reason unknown',
   '🚫 接收推送通知权限已被拒绝，可在浏览器地址栏左侧设置中重新允许': '🚫 Notification permission was denied — re-allow it from the settings to the left of the address bar',
   '❌ 订阅出错:': '❌ Subscription error:',
+  // 服务状态面板「重启记录」段。整段此前是硬编码中文（i18n 门禁只查孤儿 key、查不出反向），
+  // 于是英文界面下这一段是中文——而 '重启'/'停止'/'刚刚' 等词典里本来就有译文，白白浪费。
+  '重启记录': 'Restart history',
+  '暂无记录（服务启动后开始采样）': 'No records yet (sampling starts once the service is running)',
+  '1 小时内重启': 'restarted in the last hour:',
+  '24 小时内': 'in the last 24h:',
+  '上次': 'last',
+  '前': ' ago',
+  '启动': 'started',
 });
 
 // 需要翻译的属性白名单：这四个是「屏幕上/读屏器里真会念出来」的，其余属性（data-*、aria-labelledby

@@ -1,8 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  LOG_ROTATE_THRESHOLD_BYTES,
+  UPLOADS_FOOTPRINT_WARN_BYTES,
+  classifyAuthToken,
+  classifyDeviceGateTopology,
+  classifyPermissionRule,
+  claudeConfigDirDiagnostic,
+  computeReadiness,
+  hooksBridgeDiagnostic,
+  logSwitchDiagnostic,
+  modelSettingsConflictDiagnostic,
+  portOccupancyDiagnostic,
+  resolveServicePortOwner,
+  serviceUnitsDiagnostic,
+  statuslineBridgeDiagnostic,
+  statuslineConfigDiagnostic,
+  summarizeDangerous,
   uploadsFootprintDiagnostic,
-  UPLOADS_FOOTPRINT_WARN_BYTES, statuslineConfigDiagnostic, statuslineBridgeDiagnostic, hooksBridgeDiagnostic, classifyPermissionRule, summarizeDangerous, classifyAuthToken, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, logSwitchDiagnostic, LOG_ROTATE_THRESHOLD_BYTES, claudeConfigDirDiagnostic, serviceUnitsDiagnostic, portOccupancyDiagnostic } from '../../src/ops/doctor-checks.js';
+} from '../../src/ops/doctor-checks.js';
 
 // 判据依据（2026-08-04 用本地假网关抓 /v1/messages 请求体实测，CLI 2.1.221）：
 //   全局 sonnet + 目录映射 SONNET      → 发出 grok-4.5      （映射生效）
@@ -566,5 +582,62 @@ test.describe('portOccupancyDiagnostic', () => {
     const r = portOccupancyDiagnostic({ port: 3000, probeError: 'EHOSTUNREACH' });
     assert.equal(r.status, 'warn');
     assert.match(r.detail, /EHOSTUNREACH/);
+  });
+});
+
+// 第三轮审查 #4：flapping 的语义在 6a38e7c 里从「上次退出码 ≠ 0」换成了「1 小时内 ≥3 次重启」，
+// 但这条文案没跟上，于是它对着一个一次都没崩过的 unit 说「曾异常退出（被 KeepAlive 拉起）」——
+// 那是**编造的事实**，会把排障往错误方向带。反过来真崩了一次被拉起的 unit，这里什么都不说。
+test.describe('serviceUnitsDiagnostic —— flapping 文案必须说频率，不能说「曾异常退出」', () => {
+  const base = { platform: 'darwin', supported: true };
+  const unit = (over) => ({ unit: 'server', label: 'com.ccm.server', state: 'running', drift: [], ...over });
+
+  test('flapping 的 detail 说的是重启频率', () => {
+    const r = serviceUnitsDiagnostic({
+      ...base,
+      units: [unit({ flapping: true, restarts: { lastHour: 4, last24h: 9, flapping: true, lastRestartAt: 1 } })],
+    });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /1 小时内|频繁重启|重启 4 次/, `应说频率，实际：${r.detail}`);
+    assert.doesNotMatch(r.detail, /曾异常退出|KeepAlive/, `不该再说退出码语义，实际：${r.detail}`);
+  });
+
+  test('单次异常退出（lastExitAbnormal）不再产出 flapping 告警，但也不该被完全隐藏', () => {
+    const r = serviceUnitsDiagnostic({
+      ...base,
+      units: [unit({ flapping: false, lastExitAbnormal: true, restarts: { lastHour: 0, last24h: 1, flapping: false, lastRestartAt: 1 } })],
+    });
+    assert.equal(r.status, 'ok', '单次异常退出不是故障——恒亮告警比没有告警更糟');
+  });
+});
+
+// 第三轮审查：D4 那条「端口被自家服务占用是正常态」的**三条件判据**此前完全没有测试
+// （servicePortOwner / readServiceStatus 在 tests/ 里零引用），被测的 portOccupancyDiagnostic
+// 只接收算好的 ownerLabel。把 servicePortOwner 改成无条件 `return server.label`，
+// 全套单测照样绿 —— 而那意味着「别的进程占了我要用的端口」会被报成「预期占用」，
+// 正是这条判据当初要避免的失败，方向相反。
+test.describe('resolveServicePortOwner —— 三个条件缺一不可', () => {
+  const status = (over) => ({ units: [{ unit: 'server', label: 'com.ccm.server', state: 'running', listen: { port: 3000, reachable: true }, ...over }] });
+
+  test('三条件齐备 → 认作自家占用', () => {
+    assert.equal(resolveServicePortOwner({ status: status(), port: 3000 }), 'com.ccm.server');
+  });
+
+  test('unit 没在跑 → null（端口是别人占的）', () => {
+    assert.equal(resolveServicePortOwner({ status: status({ state: 'stopped' }), port: 3000 }), null);
+  });
+
+  test('端口对不上 → null（doctor --env=other.env 的 PORT 可能与常驻服务不同）', () => {
+    assert.equal(resolveServicePortOwner({ status: status(), port: 4000 }), null);
+  });
+
+  test('连不上 → null（进程在但端口不是它开的）', () => {
+    assert.equal(resolveServicePortOwner({ status: status({ listen: { port: 3000, reachable: false } }), port: 3000 }), null);
+  });
+
+  test('读不到 status / 没有 server unit → null，不抛错', () => {
+    assert.equal(resolveServicePortOwner({ status: null, port: 3000 }), null);
+    assert.equal(resolveServicePortOwner({ status: { units: [] }, port: 3000 }), null);
+    assert.equal(resolveServicePortOwner({}), null);
   });
 });

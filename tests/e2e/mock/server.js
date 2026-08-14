@@ -172,12 +172,18 @@ let mockServiceStartedAtOverride = null;
 let mockDeliveryFailure = null;
 let mockRateLimitLockout = null;
 let mockClientError = null;
+const DEFAULT_MOCK_RESTARTS = {
+  units: [{ label: 'com.ccm.tunnel', lastHour: 0, last24h: 1, flapping: false, lastRestartAt: MOCK_SERVICE_STARTED_AT - 7200000 }],
+  recent: [{ ts: MOCK_SERVICE_STARTED_AT - 7200000, label: 'com.ccm.tunnel', kind: 'restarted' }],
+};
+let mockRestarts = DEFAULT_MOCK_RESTARTS;
 
 function resetMockState() {
   mockServiceStartedAtOverride = null;
   mockDeliveryFailure = null;
   mockRateLimitLockout = null;
   mockClientError = null;
+  mockRestarts = DEFAULT_MOCK_RESTARTS;
   viewingInstanceId = 'inst_1';
   permissionMode = 'default';
   effortLevel = null;
@@ -1485,12 +1491,11 @@ io.on('connection', socket => {
       deliveryFailure: mockDeliveryFailure,
       rateLimitLockout: mockRateLimitLockout,
       clientError: mockClientError,
-      // 「重启记录」段夹具：一条例行的（每天一次的 DHCP 漂移重启，不标黄）+ 一条时间线。
-      // 刻意不给 flapping 的样本：那会让 E2E 每次都看到黄字，掩盖真正的回归。
-      restarts: {
-        units: [{ label: 'com.ccm.tunnel', lastHour: 0, last24h: 1, flapping: false, lastRestartAt: MOCK_SERVICE_STARTED_AT - 7200000 }],
-        recent: [{ ts: MOCK_SERVICE_STARTED_AT - 7200000, label: 'com.ccm.tunnel', kind: 'restarted' }],
-      },
+      // 「重启记录」段夹具：默认给一条例行的（每天一次的 DHCP 漂移重启，**不标黄**）。
+      // 默认不给 flapping 样本：那会让 E2E 每次都看到黄字，掩盖真正的回归。
+      // flapping 那条路径由 test:service-flapping 场景注入 —— 否则 alert→text-warning 这个映射
+      // 从来没被断言过，把它改成恒 null 全套 E2E 照样绿（2026-08-14 第三轮审查）。
+      restarts: mockRestarts,
       // 「终端会话推送」段夹具：默认未安装（新用户初见的形态，也是最需要被引导的那一态）
       hooksBridge: { state: mockHooksState, off: false },
       logging: { interactions: true, sdkDebug: false, stderr: true },
@@ -1732,6 +1737,7 @@ io.on('connection', socket => {
       setMockServiceIncidents: ({ rateLimitLockout = null, clientError = null } = {}) => {
         mockRateLimitLockout = rateLimitLockout; mockClientError = clientError;
       },
+      setMockRestarts: value => { mockRestarts = value; },
       setViewingInstanceId: value => { viewingInstanceId = value; },
       // test:server-restart：把 service.startedAt 拨到另一个值（模拟重连到重启后的新 server 进程）
       // + 广播时带上同形 service payload（真 server 的 instances 广播恒带 service 字段）。

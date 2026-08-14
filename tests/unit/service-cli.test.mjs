@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createServiceManager } from '../../scripts/service.js';
+import { createServiceManager, describeUnit, resolveEventsPath } from '../../scripts/service.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'scripts', 'service.js');
@@ -353,5 +353,90 @@ test.describe('CLI 端到端', () => {
     assert.equal(r.status, 0);
     assert.ok(!r.stdout.trim().startsWith('{'), '人类模式不该直接吐 JSON');
     assert.match(r.stdout, /macOS/);
+  });
+});
+
+// ── 第三轮审查：补两处零断言的承重路径 ───────────────────────────────────
+//
+// describeUnit 此前 **100% 无断言**（tests/ 里零引用、零 `.detail` 断言），而 6a38e7c 新增的
+// 重启话术全在这个函数里 —— 把它整个改成 `return ''` 全套单测照样绿。
+test.describe('describeUnit —— 每条分支都要有人看着', () => {
+  const base = { state: 'running', drift: [], plistExists: true, ownership: 'managed' };
+  const R = (over) => ({ lastHour: 0, last24h: 0, flapping: false, lastRestartAt: null, ...over });
+
+  test('未安装压过一切', () => {
+    assert.equal(describeUnit({ ...base, plistExists: false, restarts: R({ flapping: true }) }), '未安装');
+  });
+
+  test('flapping → 说 1 小时内的次数（频率判据，不是退出码）', () => {
+    const d = describeUnit({ ...base, restarts: R({ flapping: true, lastHour: 4, last24h: 9 }) });
+    assert.match(d, /1 小时内重启 4 次/);
+  });
+
+  test('不 flapping 但 24h 内有重启 → 说 24h 的次数', () => {
+    const d = describeUnit({ ...base, restarts: R({ last24h: 2 }) });
+    assert.match(d, /24 小时内重启 2 次/);
+    assert.doesNotMatch(d, /1 小时内/);
+  });
+
+  test('单次异常退出且在跑 → 陈述事实，不下告警结论', () => {
+    const d = describeUnit({ ...base, restarts: R(), lastExitAbnormal: true });
+    assert.match(d, /上次非正常退出（已重新拉起）/);
+  });
+
+  test('频率话术压过单次异常退出（否则同一行自相矛盾）', () => {
+    const d = describeUnit({ ...base, restarts: R({ last24h: 3 }), lastExitAbnormal: true });
+    assert.doesNotMatch(d, /上次非正常退出/);
+  });
+
+  test('shape 漂移说「不接管」而不是暗示出错（机主隧道用自写包装脚本）', () => {
+    const d = describeUnit({ ...base, restarts: R(), drift: ['shape'] });
+    assert.match(d, /自定义启动方式，本工具不接管/);
+    assert.doesNotMatch(d, /配置与模板不一致/);
+  });
+
+  test('非 shape 漂移逐条列出', () => {
+    const d = describeUnit({ ...base, restarts: R(), drift: ['keepAlive', 'path'] });
+    assert.match(d, /配置与模板不一致：keepAlive、path/);
+  });
+
+  test('foreign 且非 shape → 提示 adopt 前不改写', () => {
+    const d = describeUnit({ ...base, restarts: R(), ownership: 'foreign' });
+    assert.match(d, /adopt 前不会被改写/);
+  });
+
+  test('crashed 追加一句', () => {
+    const d = describeUnit({ ...base, state: 'crashed', restarts: R() });
+    assert.match(d, /上次异常退出且当前未运行/);
+  });
+
+  test('一切正常 → 空串（没话说就别说）', () => {
+    assert.equal(describeUnit({ ...base, restarts: R() }), '');
+  });
+});
+
+// resolveEventsPath 此前零测试，而它的孪生函数 resolveManifestPath 有一整组 —— 正因为
+// 「数据目录算错」的后果是静默的：server 往 A 写、CLI/菜单栏从 B 读，重启记录永远空白且无报错。
+// 机主的 .env 真设了 CCM_DATA_DIR，**这条路径在生产上承重**。
+test.describe('resolveEventsPath —— 与 data-dir.js 必须同口径', () => {
+  const ROOT = '/repo';
+
+  test('都没设 → 回落 <repo>/data', () => {
+    assert.equal(resolveEventsPath({}, {}, ROOT), '/repo/data/service-events.json');
+  });
+
+  test('读 .env 里的 CCM_DATA_DIR（漏掉它就是 server 写 A、CLI 读 B）', () => {
+    assert.equal(resolveEventsPath({}, { CCM_DATA_DIR: '/data/ccm' }, ROOT), '/data/ccm/service-events.json');
+  });
+
+  test('shell 环境优先于 .env（与 dotenv 的不覆盖语义一致）', () => {
+    assert.equal(
+      resolveEventsPath({ CCM_DATA_DIR: '/from/shell' }, { CCM_DATA_DIR: '/from/envfile' }, ROOT),
+      '/from/shell/service-events.json'
+    );
+  });
+
+  test('空串按未设置处理（同 config.js 的 normalizeLoadedEnvironment）', () => {
+    assert.equal(resolveEventsPath({ CCM_DATA_DIR: '' }, {}, ROOT), '/repo/data/service-events.json');
   });
 });

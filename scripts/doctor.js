@@ -29,7 +29,17 @@ import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
-import { hooksBridgeDiagnostic, statuslineBridgeDiagnostic, statuslineConfigDiagnostic, logSwitchDiagnostic, uploadsFootprintDiagnostic, claudeConfigDirDiagnostic, serviceUnitsDiagnostic, portOccupancyDiagnostic } from '../src/ops/doctor-checks.js';
+import {
+  claudeConfigDirDiagnostic,
+  hooksBridgeDiagnostic,
+  logSwitchDiagnostic,
+  portOccupancyDiagnostic,
+  resolveServicePortOwner,
+  serviceUnitsDiagnostic,
+  statuslineBridgeDiagnostic,
+  statuslineConfigDiagnostic,
+  uploadsFootprintDiagnostic,
+} from '../src/ops/doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
 
@@ -170,11 +180,10 @@ function readServiceStatus() {
 // 端口是不是自家常驻 server 占的。三个条件都要：unit 在跑、探到的端口一致、确实连得通。
 // 不能只看「server 在跑」——doctor 支持 --env=other.env，那份 .env 的 PORT 可能与常驻服务不同，
 // 只看运行态会把「别的进程占了我要用的端口」误报成预期占用。
+// 只负责取数；三条件判定在 doctor-checks.resolveServicePortOwner（纯函数、可测）。
+// 判据留在这里时零覆盖 —— 改成无条件 return label 全套单测照样绿。
 function servicePortOwner(port) {
-  const s = readServiceStatus();
-  const server = s?.units?.find(u => u.unit === 'server');
-  if (!server || server.state !== 'running') return null;
-  return server.listen?.reachable && server.listen?.port === port ? server.label : null;
+  return resolveServicePortOwner({ status: readServiceStatus(), port });
 }
 
 // D4: PORT 未被占用（或被自家常驻服务占用——那是常驻部署的正常态，不是故障）

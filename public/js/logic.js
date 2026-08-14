@@ -2080,28 +2080,30 @@ export function formatRestartRows({ restarts, now = Date.now() } = {}) {
   }
 
   const summary = units
+    // `|| u.flapping` 不是冗余的防御：flapping 恒蕴含 last24h ≥ 3（1 小时窗口 ⊂ 24 小时窗口），
+    // 但那是**当前生产者**的性质，判据万一改了这里不该跟着漏掉告警行。
     .filter((u) => u.last24h > 0 || u.flapping)
     .map((u) => ({
       label: u.label,
       // flapping 的判据是频率（1 小时内 ≥3 次），不是「上次退出码非 0」
       text: u.flapping
-        ? `1 小时内重启 ${u.lastHour} 次`
-        : `24 小时内 ${u.last24h} 次 · 上次 ${formatAgoShort(now - u.lastRestartAt)}前`,
+        ? `${t('1 小时内重启')} ${u.lastHour} ${t('次')}`
+        : `${t('24 小时内')} ${u.last24h} ${t('次')} · ${t('上次')} ${formatAgoShort(now - u.lastRestartAt)}${t('前')}`,
       alert: !!u.flapping,
     }));
 
   const timeline = recent.map((e) => ({
     label: e.label,
-    text: `${formatAgoShort(now - e.ts)}前 ${restartKindText(e.kind)}`,
+    text: `${formatAgoShort(now - e.ts)}${t('前')} ${restartKindText(e.kind)}`,
   }));
 
   return { summary, timeline, empty: false };
 }
 
 function restartKindText(kind) {
-  if (kind === 'restarted') return '重启';
-  if (kind === 'started') return '启动';
-  if (kind === 'stopped') return '停止';
+  if (kind === 'restarted') return t('重启');
+  if (kind === 'started') return t('启动');
+  if (kind === 'stopped') return t('停止');
   return kind || '?';
 }
 
@@ -2109,11 +2111,11 @@ function restartKindText(kind) {
 export function formatAgoShort(ms) {
   if (!Number.isFinite(ms) || ms < 0) return '?';
   const m = Math.floor(ms / 60000);
-  if (m < 1) return '刚刚';
-  if (m < 60) return `${m} 分钟`;
+  if (m < 1) return t('刚刚');
+  if (m < 60) return `${m} ${t('分钟')}`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} 小时`;
-  return `${Math.floor(h / 24)} 天`;
+  if (h < 24) return `${h} ${t('小时')}`;
+  return `${Math.floor(h / 24)} ${t('天')}`;
 }
 
 export function formatServiceNotices({ service, now } = {}) {

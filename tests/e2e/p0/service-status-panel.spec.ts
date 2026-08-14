@@ -72,6 +72,34 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 第三轮审查补的盲区：默认夹具刻意不 flapping（恒亮黄字会掩盖回归），于是
+  // `item.alert ? 'text-warning' : null` 这个映射从来没被正向断言过 —— 把它改成恒 null，
+  // 全套单测与 E2E 照样绿。这条用例把「频繁重启 → 黄字」钉住。
+  test('P0-22d 频繁重启注入 → 重启记录段出黄字摘要（判色查 classList）', async ({ page }) => {
+    await gotoMock(page);
+
+    await sendChatMessage(page, 'test:service-flapping');
+    await waitForIdle(page);
+
+    await openGeneralSettings(page);
+    await openGeneralDiagSection(page);
+    await page.locator('#btnServiceStatus').click();
+    const body = page.locator('#serviceStatusBody');
+
+    // 摘要说的是**频率**（1 小时内 N 次），不是「曾崩溃 / 上次异常退出」那套退出码语义
+    await expect(body).toContainText('1 小时内重启 4');
+    await expect(body).not.toContainText('曾崩溃');
+    // ★ 正向断言映射：flapping 那行的**值**必须带 text-warning。
+    // addRow 把 valueClass 加在 row.lastChild（值那个 span）上，label 在 firstChild ——
+    // 按 label 去 filter 永远匹配不到，这是写这条断言时踩过的坑。
+    await expect(body.locator('.text-warning', { hasText: '1 小时内重启 4' })).toBeVisible();
+    await expect(body).toContainText('com.ccm.server');
+    // 时间线仍是常规灰字，不该跟着标黄
+    await expect(body.locator('.text-ink-faint', { hasText: '重启' }).first()).toBeVisible();
+
+    await expectNoBrowserErrors(page);
+  });
+
   test('P0-22c 限速锁定+前端错误注入 → 升格告警行渲染与判色', async ({ page }) => {
     await gotoMock(page);
 
