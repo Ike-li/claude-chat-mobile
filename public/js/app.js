@@ -1432,6 +1432,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     $, socket, openSheet, closeSheet, appConfirm,
     pickText: (pair) => (getLang() === 'en' ? (pair.en || pair.zh) : pair.zh),
     beforeOpen: () => general.close(), // 先收通用设置，否则它会拦掉本面板上的点击
+    canRestart: () => _canRestart,
     onSaved: () => {},
   });
   envConfigPanel.bind();
@@ -3778,6 +3779,8 @@ import { createSessionDeleteController } from './app/session-delete.js';
     });
   }
 
+  let _canRestart = false; // 由 instances 广播维护，供配置面板判断能否就地重启
+
   function setInstances(p) {
     availableDirs = Array.isArray(p?.dirs) ? p.dirs : [];
     const prevInstances = instancesList;
@@ -3856,6 +3859,9 @@ import { createSessionDeleteController } from './app/session-delete.js';
     // 开发者模式：DEV_MODE=1 时显示齿轮面板「重启服务」组（生产默认隐藏，防误触重启对外服务）
     const devGroup = $('devModeGroup');
     if (devGroup) devGroup.classList.toggle('hidden', !p?.devMode);
+    // canRestart 与 devMode 是两维：devMode 管上面这个常驻按钮组，canRestart 管配置面板
+    // 保存成功后要不要给「立即重启」入口（生产 DEV_MODE=0 但被 launchd 托管时应为 true）。
+    _canRestart = p?.canRestart === true;
     // 短 session_id 状态胶囊：显示当前查看会话的前 8 位；无会话（空首页/未获 id）隐藏
     updatePillSession(instancesList.find(x => x.instanceId === newViewing)?.sessionId || null);
     // 顶栏文件夹 pill：首页/compose 隐藏（页内已有工作区入口）；进入真实会话后显示

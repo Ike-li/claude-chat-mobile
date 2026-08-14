@@ -17,6 +17,9 @@ const CHANGED_MARK = 'data-ccm-dirty';
 
 export function createEnvConfigPanel({
   $, socket, openSheet, closeSheet, appConfirm, pickText, onSaved,
+  // 「本进程停了有没有人拉起来」——由服务端经 instances 广播下发（DEV_MODE 或被 launchd/systemd
+  // 托管）。false 时不显示重启入口：停掉一个没人会拉起的进程等于让用户自断退路。
+  canRestart = () => false,
   // 打开前的钩子：收掉可能还开着的通用设置 sheet，否则两层 sheet 叠着、上层拦掉下层的点击
   // （E2E 实测：generalSheet 的 label 会 intercept pointer events）。
   // **必须走这个参数而不是在 app.js 侧包装 open()** —— 同 settings.js 里 onOpen 的理由：
@@ -245,9 +248,34 @@ export function createEnvConfigPanel({
     }
 
     // 全或无：走到这里说明整批都写进去了。
-    hint.textContent = `已写入 ${res.written?.length ?? 0} 项，需重启服务才生效`;
+    const n = res.written?.length ?? 0;
     saveBtn.disabled = true;
     onSaved?.(res);
+
+    // 配置只写进了文件，进程里还是旧值 —— 不给重启入口的话这条路就断在最后一步。
+    if (!canRestart()) {
+      hint.textContent = `已写入 ${n} 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）`;
+      return;
+    }
+    hint.textContent = `已写入 ${n} 项，重启后生效`;
+    const btn = el('button', 'hit-44 px-3 py-2 rounded-xl border border-line text-xs text-ink active:bg-sunk', '立即重启');
+    btn.type = 'button';
+    btn.id = 'envConfigRestart';
+    btn.onclick = async () => {
+      if (!await appConfirm('重启会中断所有正在跑的会话。继续？', { tone: 'warn' })) return;
+      btn.disabled = true;
+      btn.textContent = '重启中…';
+      socket.emit('dev:restart', {}, (r) => {
+        // 成功的话 socket 很快会断、自动重连；失败要如实说，别让按钮一直转
+        if (r && r.ok === false) {
+          btn.disabled = false;
+          btn.textContent = '立即重启';
+          hint.textContent = r.error || '重启被拒绝';
+        }
+      });
+    };
+    footer.querySelector('#envConfigRestart')?.remove();
+    footer.insertBefore(btn, saveBtn);
   }
 
   function open() {

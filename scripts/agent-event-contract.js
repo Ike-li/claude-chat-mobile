@@ -460,7 +460,6 @@ const MOCK_INBOUND_EXEMPT = Object.freeze({
   'session:deletePermanent': '同 session:delete',
   'logs:clientError': '前端错误上报是 fire-and-forget，无回执可断言；E2E 侧改用 expectNoBrowserErrors 直接断言"没有前端错误"',
   'user:ackUnread': '已读确认无回执；unread-pill.spec.ts 直接嗅 socket.io 出向 WS 帧断言前端确实发了这条（往返未验，见该文件注释）',
-  'env:set': '要真写 .env 文件，mock server 没有可写的配置（写了也影响不到它自己的运行时）；改写与校验逻辑由 env-file / env-schema 单测覆盖，读取路径由 env:get 的 mock handler + E2E 覆盖',
 });
 
 export function checkInboundSocketContract({

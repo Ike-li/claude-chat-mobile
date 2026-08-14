@@ -810,7 +810,7 @@ function instancesPayload() {
       unreadCount: unreadCounts.get(id) || 0, // 未读角标活计数（预留会话列表徽标用；聊天页内胶囊走 sync:since ack 的 unreadOnEntry 冻结快照）
     });
   }
-  const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE, needsYou: computeNeedsYou(), service: computeServiceHealth() };
+  const payload = { viewingInstanceId, viewingCwd: viewingCwdOf(), dirs: workDirs, instances: list, devMode: DEV_MODE, canRestart: canRestartNow(), needsYou: computeNeedsYou(), service: computeServiceHealth() };
   // 当前 cwd 的「CLI 默认模型」（scout / fresh 首 init 探得，非推断——A1 删的是旧的推断字段，此为实测值）：
   // 供新会话/无记录续接在 init 前显真实默认名而非笼统「沿用当前」（前端只改标签、发送仍不带 --model）。
   // 无条件下发（每次 cwd/视图切换均随 broadcastInstances 按 viewingCwd 归键，防跨区泄漏；查看真实 resumed
@@ -963,6 +963,12 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
   cliDefaultsInflight.set(cwd, p);
   return p;
 }
+// 「配置改完能不能就地重启生效」——与 devMode 是两维：devMode 管开发者面板那个常驻重启按钮，
+// 这个管配置面板保存成功后要不要给「立即重启」入口。生产部署 DEV_MODE=0 但被 launchd 托管时
+// 应为 true，否则「手机上改配置」这条路断在最后一步、放宽 dev:restart 门控就只剩个远程停机原语。
+// 与 dev:restart handler 用同一个判据，两处不能分叉。
+const canRestartNow = () => DEV_MODE || isSupervised();
+
 function broadcastInstances() { // 多设备同步 tab 栏（当前查看 tab + 各实例角标状态，合成事件惯例）
   // 与 viewing 对齐：当前查看实例豁免空闲回收（用户读历史时 lastActivity 不会因 SDK 刷新）。
   // 放在每次 broadcast 前扫一遍——viewing 变更路径多（switch/setViewing/reselect/lazy open），
@@ -2621,9 +2627,11 @@ registerSocketConnection(io, socket => {
   // 仅 DEV_MODE=1 放行；优雅退出复用 shutdown（flush sessions + dispose 实例 + close），
   // 靠 LaunchAgent/systemd 的 KeepAlive 自动拉起，前端 socket.io 自动重连 + epoch init 恢复。
   on(socket, 'dev:restart', (payload, ack) => {
-    // 判据从「DEV_MODE=1」放宽成「DEV_MODE=1 或被进程管理器托管」。这个改法**净安全性为正**：
-    // 旧判据太紧（生产常驻部署改完配置没法从手机重启）也太松（DEV_MODE=1 时前台 npm start
-    // 也能被停掉，然后永远起不来 —— 没有 KeepAlive 拉它）。新判据两头都堵。
+    // 判据从「DEV_MODE=1」放宽成「DEV_MODE=1 或被进程管理器托管」。
+    // **这是纯放松**：新集合严格包含旧集合，所以它只解决「太紧」那一侧（生产常驻部署改完配置
+    // 没法从手机重启）。「太松」那一侧——DEV_MODE=1 时前台 npm start 也能被停掉、然后永远
+    // 起不来——**没有被堵**，因为 DEV_MODE 会直接短路掉 isSupervised()。要真堵得让
+    // isSupervised() 无条件必需，那会改变 DEV_MODE 的既有语义，属单独一次取舍，不在此次范围。
     if (!DEV_MODE && !isSupervised()) {
       if (typeof ack === 'function') {
         ack({ ok: false, error: '当前进程不是由 LaunchAgent/systemd 托管，停了不会自动拉起 —— 拒绝重启' });
