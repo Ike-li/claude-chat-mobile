@@ -359,6 +359,17 @@ export function serviceUnitsDiagnostic({ platform = '', supported = false, units
   if (!server || server.state === 'not-installed') {
     return { status: 'warn', name, detail: '常驻服务未安装：关掉终端 server 就停了、开机也不会自启。运行 `npm run service:install` 安装。' };
   }
+  // stopped：plist 在盘上但没被 launchd 加载（stop 之后 / bootstrap 失败 / agent 被禁用）。
+  // classifyState 的取值域是 4 个，早前漏了这一档 ⇒ 掉进末尾的 ok 分支，
+  // 输出「运行中（共 0 个 unit 在跑）」—— 服务是停的却报绿，文案还自相矛盾。
+  if (server.state === 'stopped') {
+    return {
+      status: 'warn',
+      name,
+      detail: `${server.label} 已安装但当前未运行（没被 launchd 加载）。`
+        + '`npm run service:status` 看详情，`node scripts/service.js start server` 启动。',
+    };
+  }
   if (server.state === 'crashed') {
     return { status: 'fail', name, detail: `${server.label} 已安装但当前未运行（上次异常退出）。运行 \`npm run service:status\` 看详情、\`node scripts/service.js logs server\` 看日志。` };
   }

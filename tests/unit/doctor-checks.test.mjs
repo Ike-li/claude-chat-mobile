@@ -486,6 +486,19 @@ test.describe('serviceUnitsDiagnostic', () => {
     assert.match(r.detail, /com\.ccm\.tunnel/);
   });
 
+  // ★ classifyState 的取值域是 4 个，早前只处理了 not-installed / crashed，
+  // stopped 掉进末尾的 ok 分支，输出「运行中（共 0 个 unit 在跑）」—— 服务是停的却报绿，
+  // 而且文案自相矛盾。这正是 D16 存在的理由所覆盖的场景之一。
+  test('server stopped（plist 在盘上但没被加载）→ warn，且文案不能说「运行中」', () => {
+    const r = serviceUnitsDiagnostic({
+      platform: 'darwin', supported: true,
+      units: [server({ state: 'stopped' })],
+    });
+    assert.equal(r.status, 'warn');
+    assert.ok(!r.detail.includes('运行中'), `文案不能说运行中：${r.detail}`);
+    assert.match(r.detail, /未运行|已停止|没在跑/);
+  });
+
   test('server crashed → fail（装了却没在跑，是明确故障）', () => {
     const r = serviceUnitsDiagnostic({
       platform: 'darwin', supported: true,
