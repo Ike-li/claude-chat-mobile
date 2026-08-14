@@ -36,7 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 63 |
 | Configuration template | 1 |
 | Deployment | 4 |
-| Desktop integration | 2 |
+| Desktop integration | 4 |
 | Documentation | 10 |
 | E2E test | 48 |
 | Frontend asset | 3 |
@@ -56,7 +56,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 148 |
 | Vendored asset | 21 |
 
-Total classified files: **421**.
+Total classified files: **423**.
 
 ## Complete file inventory
 
@@ -75,7 +75,9 @@ Total classified files: **421**.
 | `deploy/menubar.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/server.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/tunnel.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
+| `desktop/ccm-menubar-tests.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/ccm-menubar.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
+| `desktop/CCMCore.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/Info.plist.template` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `docker-compose.test.yml` | Test configuration | Compose entry for the isolated test container (npm run test:docker*) | Referenced by maintainers | Authored and reviewed manually | keep |
 | `Dockerfile.test` | Test configuration | Isolated test container — keeps test processes away from the host home directory | Referenced by maintainers | Authored and reviewed manually | keep |

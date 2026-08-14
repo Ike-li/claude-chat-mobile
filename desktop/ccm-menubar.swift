@@ -1,158 +1,24 @@
-// ccm-menubar.swift —— 常驻服务的菜单栏控制台。
+// ccm-menubar.swift —— 常驻服务的菜单栏控制台（GUI 层）。
 //
-// 用 `npm run app:build` 编译（swiftc 单文件 → .app bundle，不建 Xcode 工程、不加 npm 依赖）。
+// 用 `npm run app:build` 编译（swiftc + CCMCore.swift，不建 Xcode 工程、不加 npm 依赖）。
 //
-// ## 唯一的架构纪律：本文件零业务逻辑
+// ## 唯一的架构纪律：零业务逻辑
 //
-// 「这个 unit 什么状态、归谁管、有没有漂移、该显示什么话」全部由 scripts/service.js 的
-// `status --json` 决定，本文件只把那份 JSON 渲染成菜单。**永不自己解析 launchctl 输出**，
-// 也不自己拼人类可读文案——那些判据（漂移的语义比对、flapping 的四档分类、ownership 的
-// 归属护栏）在 Node 侧有 190 多个单测护着，在这里重写一遍等于让它们慢慢分叉。
+// 「这个 unit 什么状态、归谁管、有没有漂移」由 scripts/service.js 的 `status --json` 决定；
+// 「该显示什么话、该拼什么命令」由 CCMCore.swift 决定（那层有测试）。本文件只剩三件
+// Node 做不了的事：画菜单栏、弹原生窗、spawn 进程。**永不自己解析 launchctl。**
 //
-// 后果是这个文件出 bug 的最坏情况只是「菜单显示不对」，不会做错事：它没有删除逻辑、
-// 没有路径计算、没有状态判定。
-//
-// ## 为什么状态灯用 SF Symbols 而不是 public/icons/ 里那套
-// LSUIElement=1 的 app 没有 Dock 图标、不进 app switcher，唯一可见的美术资源就是菜单栏那个
-// item —— 它应该是 template image（单色、随系统明暗与菜单栏着色自动适配），而 PWA 那套是
-// 彩色位图。用 SF Symbols 还省掉了 .icns 与整条图标构建链。
+// ## 三条踩过的坑（都有对应注释）
+//   1. `runSync` 的超时曾经形同虚设，且顺序读两个 pipe 会死锁 —— 见该函数头注
+//   2. Timer 只注册 `.default` 模式，菜单跟踪期间根本不触发 —— 见 scheduleTimer
+//   3. 探测回调无条件重建菜单，会把用户正打开的菜单拆掉 —— 见 render
 
 import AppKit
 import Foundation
 
-// MARK: - L1 的输出契约（对应 scripts/service.js 的 STATUS_SCHEMA_VERSION = 1）
-//
-// 字段全部可选或带默认：Swift 侧解码失败会让整个菜单空掉，而 Node 侧加字段是常事。
-// 宁可少显示一行，也不能因为多了个不认识的字段就整个瞎掉。
-
-struct ListenInfo: Decodable {
-    let port: Int
-    let reachable: Bool
-}
-
-struct UnitStatus: Decodable {
-    let unit: String
-    let label: String
-    let known: Bool
-    let ownership: String   // managed | adoptable | foreign | unknown
-    let state: String       // not-installed | stopped | running | crashed
-    let pid: Int?
-    let flapping: Bool
-    let drift: [String]
-    let listen: ListenInfo?
-    let detail: String
-
-    /// 菜单栏那盏灯的字符前缀。与 scripts/service.js 的 formatStatus 保持同一套符号，
-    /// 这样 CLI 与 GUI 看到的是同一种语言。
-    var lamp: String {
-        if flapping { return "◐" }
-        switch state {
-        case "running": return "●"
-        case "stopped": return "○"
-        case "crashed": return "✗"
-        default: return "·"
-        }
-    }
-
-    /// 这个 unit 是否允许 install / uninstall。判据来自 L1 的 ownership，本文件不重算。
-    var isWritable: Bool { ownership == "managed" || ownership == "adoptable" }
-}
-
-struct SetupInfo: Decodable {
-    let envExists: Bool
-    let port: Int?
-    let lanUrl: String?
-}
-
-struct ServiceStatus: Decodable {
-    let schemaVersion: Int
-    let platform: String
-    let supported: Bool
-    let repo: String
-    let setup: SetupInfo
-    let units: [UnitStatus]
-    let warnings: [String]
-
-    var server: UnitStatus? { units.first { $0.unit == "server" } }
-
-    /// 整体健康度 → 状态灯图标。优先级：环境坏 > 服务挂 > 有告警 > 正常。
-    var symbol: String {
-        guard supported else { return "questionmark.circle" }
-        guard let s = server else { return "questionmark.circle" }
-        if s.state == "crashed" { return "xmark.octagon" }
-        if s.state == "not-installed" { return "exclamationmark.triangle" }
-        if units.contains(where: { $0.flapping }) { return "exclamationmark.triangle" }
-        if units.contains(where: { !$0.drift.filter { $0 != "shape" }.isEmpty }) { return "exclamationmark.triangle" }
-        if s.state != "running" { return "exclamationmark.triangle" }
-        return "checkmark.circle"
-    }
-}
-
-// MARK: - 运行环境：仓库在哪、node 在哪
-//
-// 两个都可能失效（仓库被移动、nvm 换版本），失效时不是崩溃而是进入一个能自救的错误态。
-
-final class RuntimeEnv {
-    private static let repoKey = "CCMRepoPath"
-    private static let nodeKey = "CCMNodePath"
-
-    private(set) var repo: String?
-    private(set) var node: String?
-
-    init() {
-        repo = RuntimeEnv.resolveRepo()
-        node = RuntimeEnv.resolveNode()
-    }
-
-    /// 仓库路径三级解析。有效性判据是 **scripts/service.js 存在**，不是目录存在 ——
-    /// 仓库被删后父目录往往还在，只判目录会给出一个假绿。
-    private static func resolveRepo() -> String? {
-        let candidates = [
-            UserDefaults.standard.string(forKey: repoKey),
-            Bundle.main.object(forInfoDictionaryKey: repoKey) as? String,
-        ]
-        for case let path? in candidates where isRepo(path) { return path }
-        return nil
-    }
-
-    static func isRepo(_ path: String) -> Bool {
-        FileManager.default.fileExists(atPath: (path as NSString).appendingPathComponent("scripts/service.js"))
-    }
-
-    /// node 路径：**绝不依赖 PATH**。GUI app 的环境不是登录 shell，PATH 里通常没有 homebrew。
-    /// 走 `zsh -lc 'command -v node'` 与 plist 自身的启动方式同源（终端等价性），
-    /// nvm 换版本也能自动跟上。失败回落到 build 时烘进 Info.plist 的那个。
-    private static func resolveNode() -> String? {
-        if let out = runSync("/bin/zsh", ["-lc", "command -v node"])?.stdout,
-           let first = out.split(separator: "\n").first {
-            let p = String(first).trimmingCharacters(in: .whitespaces)
-            if !p.isEmpty && FileManager.default.isExecutableFile(atPath: p) { return p }
-        }
-        if let baked = Bundle.main.object(forInfoDictionaryKey: nodeKey) as? String,
-           FileManager.default.isExecutableFile(atPath: baked) { return baked }
-        return nil
-    }
-
-    func relocateRepo(_ path: String) {
-        UserDefaults.standard.set(path, forKey: RuntimeEnv.repoKey)
-        repo = path
-    }
-
-    func relocateNode(_ path: String) {
-        UserDefaults.standard.set(path, forKey: RuntimeEnv.nodeKey)
-        node = path
-    }
-
-    func refresh() {
-        if repo == nil { repo = RuntimeEnv.resolveRepo() }
-        if node == nil { node = RuntimeEnv.resolveNode() }
-    }
-}
-
 // MARK: - 进程调用
 
-/// 简易结果类型。Swift 的 Result 要求错误类型遵循 Error，而这里的「错误」只是一句给用户看的话，
-/// 为它造一个 Error struct 属于纯样板。
+/// 简易结果类型。Swift 的 Result 要求错误类型遵循 Error，而这里的「错误」只是一句给用户看的话。
 enum Probe<T> {
     case ok(T)
     case failed(String)
@@ -164,33 +30,158 @@ struct RunResult {
     let stderr: String
 }
 
-/// 同步跑一个命令。只在后台队列里调用 —— 主线程跑这个会卡住整个菜单栏。
-@discardableResult
+/// 同步跑一个命令，带**真实**超时。只在后台队列里调用。
+///
+/// 早前的实现有两个致命缺陷，第一轮代理审查实测出来的：
+///
+///   ① **超时形同虚设**：`readDataToEndOfFile()` 写在计时循环之前，而它的返回条件就是
+///      「子进程关闭了 stdout」≈「子进程已退出」。实测 `timeout:1` 跑 `sleep 4` → 4.08s 才返回，
+///      且返回成功。所以要先起一个等退出的 watchdog，再谈读数据。
+///
+///   ② **顺序读两个 pipe 会死锁**：先读干 stdout 再读 stderr，子进程若往 stderr 写满 64KB
+///      而 stdout 一直不关，双方互等。实测 200KB stderr 的子进程 20s 未返回。两个 pipe
+///      必须**并发**排空。
+///
+/// 叠加起来的后果比单独任一个都严重：那时全部后台工作跑在同一条串行队列上，一次阻塞
+/// 就等于整个 app 永久瘫痪（`inFlight` 停在 true、后续任务永不执行、点什么都没反应）。
 func runSync(_ launchPath: String, _ args: [String], cwd: String? = nil, timeout: TimeInterval = 10) -> RunResult? {
     let task = Process()
     task.executableURL = URL(fileURLWithPath: launchPath)
     task.arguments = args
     if let cwd { task.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
-    let out = Pipe(), err = Pipe()
-    task.standardOutput = out
-    task.standardError = err
+    let outPipe = Pipe(), errPipe = Pipe()
+    task.standardOutput = outPipe
+    task.standardError = errPipe
 
-    do { try task.run() } catch { return nil }
+    // 两个 pipe 并发排空（缺陷 ②）
+    let lock = NSLock()
+    var outData = Data(), errData = Data()
+    let readers = DispatchGroup()
+    for (pipe, isOut) in [(outPipe, true), (errPipe, false)] {
+        readers.enter()
+        DispatchQueue.global(qos: .utility).async {
+            let d = pipe.fileHandleForReading.readDataToEndOfFile()
+            lock.lock()
+            if isOut { outData = d } else { errData = d }
+            lock.unlock()
+            readers.leave()
+        }
+    }
 
-    // 超时兜底：service.js 正常在 100ms 内返回，卡住多半是 launchctl 或 plutil 挂了。
-    let deadline = Date().addingTimeInterval(timeout)
-    let outData = out.fileHandleForReading.readDataToEndOfFile()
-    let errData = err.fileHandleForReading.readDataToEndOfFile()
-    while task.isRunning && Date() < deadline { usleep(20_000) }
-    if task.isRunning { task.terminate(); return nil }
-    task.waitUntilExit()
+    do {
+        try task.run()
+    } catch {
+        return nil
+    }
 
-    return RunResult(
-        status: task.terminationStatus,
-        stdout: String(data: outData, encoding: .utf8) ?? "",
-        stderr: String(data: errData, encoding: .utf8) ?? ""
-    )
+    // 独立的退出 watchdog（缺陷 ①）：超时以「进程有没有退出」为准，与读数据解耦。
+    let exited = DispatchSemaphore(value: 0)
+    DispatchQueue.global(qos: .utility).async {
+        task.waitUntilExit()
+        exited.signal()
+    }
+
+    if exited.wait(timeout: .now() + timeout) == .timedOut {
+        task.terminate()
+        if exited.wait(timeout: .now() + 2) == .timedOut {
+            kill(task.processIdentifier, SIGKILL)
+            _ = exited.wait(timeout: .now() + 2) // 收尸，别留僵尸
+        }
+        _ = readers.wait(timeout: .now() + 1)
+        return nil
+    }
+
+    // 进程已退出 ⇒ 两个 pipe 都会很快 EOF；给个上限防极端情况（子进程把 fd 传给了孙进程）
+    _ = readers.wait(timeout: .now() + 3)
+    lock.lock()
+    let o = String(data: outData, encoding: .utf8) ?? ""
+    let e = String(data: errData, encoding: .utf8) ?? ""
+    lock.unlock()
+    return RunResult(status: task.terminationStatus, stdout: o, stderr: e)
+}
+
+func firstLine(_ s: String) -> String {
+    s.split(separator: "\n").first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+}
+
+// MARK: - 运行环境：仓库在哪、node 在哪
+
+final class RuntimeEnv {
+    private static let repoKey = "CCMRepoPath"
+    private static let nodeKey = "CCMNodePath"
+
+    private let lock = NSLock()
+    private var _repo: String?
+    private var _node: String?
+
+    var repo: String? { lock.lock(); defer { lock.unlock() }; return _repo }
+    var node: String? { lock.lock(); defer { lock.unlock() }; return _node }
+
+    /// **不在 init 里解析**：resolveNode 会跑一个登录 shell，而 init 发生在主线程。
+    /// 早前那版每次启动都在 statusItem 创建之前同步跑 zsh，一旦 shell 启动脚本卡住
+    /// 就是「菜单栏连图标都不出现」。改成由后台的第一次 refresh() 填。
+    init() {}
+
+    static func isRepo(_ path: String) -> Bool {
+        FileManager.default.fileExists(atPath: serviceScriptPath(in: path))
+    }
+
+    private static func resolveRepo() -> String? {
+        let candidates = [
+            UserDefaults.standard.string(forKey: repoKey),
+            Bundle.main.object(forInfoDictionaryKey: repoKey) as? String,
+        ]
+        for case let path? in candidates where isRepo(path) { return path }
+        return nil
+    }
+
+    /// node 路径：**绝不依赖 PATH**（GUI app 的环境不是登录 shell）。走 `zsh -lc 'command -v node'`
+    /// 与 plist 自身的启动方式同源，nvm 换版本也能跟上。失败回落到 build 时烘进 Info.plist 的那个。
+    private static func resolveNode() -> String? {
+        if let out = runSync("/bin/zsh", ["-lc", "command -v node"], timeout: 5)?.stdout,
+           let first = out.split(separator: "\n").first {
+            let p = String(first).trimmingCharacters(in: .whitespaces)
+            if !p.isEmpty && FileManager.default.isExecutableFile(atPath: p) { return p }
+        }
+        if let baked = Bundle.main.object(forInfoDictionaryKey: nodeKey) as? String,
+           FileManager.default.isExecutableFile(atPath: baked) { return baked }
+        return nil
+    }
+
+    /// **每轮都重新校验**，不是只在 nil 时才解析。早前那版只补 nil，于是「启动时仓库有效、
+    /// 之后被移动」会让 repo 永远保持一个失效路径 —— 菜单里连「重新定位仓库…」都不显示，
+    /// 用户看到一个恒定报错且无处下手的界面。**只在后台队列调用。**
+    func refresh() {
+        let currentRepo = repo
+        let stillValid = currentRepo.map { RuntimeEnv.isRepo($0) } ?? false
+        let nextRepo = stillValid ? currentRepo : RuntimeEnv.resolveRepo()
+
+        let currentNode = node
+        let nodeValid = currentNode.map { FileManager.default.isExecutableFile(atPath: $0) } ?? false
+        let nextNode = nodeValid ? currentNode : RuntimeEnv.resolveNode()
+
+        lock.lock()
+        _repo = nextRepo
+        _node = nextNode
+        lock.unlock()
+    }
+
+    func relocateRepo(_ path: String) {
+        UserDefaults.standard.set(path, forKey: RuntimeEnv.repoKey)
+        lock.lock(); _repo = path; lock.unlock()
+    }
+
+    func relocateNode(_ path: String) {
+        UserDefaults.standard.set(path, forKey: RuntimeEnv.nodeKey)
+        lock.lock(); _node = path; lock.unlock()
+    }
+
+    var problem: EnvProblem {
+        if repo == nil { return .noRepo }
+        if node == nil { return .noNode }
+        return .none
+    }
 }
 
 /// 调 L1。所有对服务的认知都从这里来。
@@ -198,21 +189,16 @@ final class ServiceClient {
     private let env: RuntimeEnv
     init(env: RuntimeEnv) { self.env = env }
 
-    private func script(_ name: String) -> String? {
-        guard let repo = env.repo else { return nil }
-        return (repo as NSString).appendingPathComponent("scripts/\(name)")
-    }
-
-    /// `service.js status --json`。fast=true 跳过 TCP 探测，给高频轮询用。
     func status(fast: Bool) -> Probe<ServiceStatus> {
         guard let node = env.node else { return .failed("找不到 node") }
-        guard let repo = env.repo, let js = script("service.js") else { return .failed("找不到仓库") }
-
-        var args = [js, "status", "--json"]
+        guard let repo = env.repo else { return .failed("找不到仓库") }
+        var args = [serviceScriptPath(in: repo), "status", "--json"]
         if fast { args.append("--fast") }
+
         guard let r = runSync(node, args, cwd: repo, timeout: 8) else { return .failed("service.js 无响应") }
         guard r.status == 0 else {
-            return .failed(firstLine(r.stderr).isEmpty ? "service.js 退出码 \(r.status)" : firstLine(r.stderr))
+            let msg = firstLine(r.stderr)
+            return .failed(msg.isEmpty ? "service.js 退出码 \(r.status)" : msg)
         }
         guard let data = r.stdout.data(using: .utf8),
               let parsed = try? JSONDecoder().decode(ServiceStatus.self, from: data) else {
@@ -221,16 +207,14 @@ final class ServiceClient {
         return .ok(parsed)
     }
 
-    /// 启停重启。**不判归属**——那是 L1 的事（它对 foreign/unknown 也允许启停，只拒绝写 plist）。
+    /// 启停重启。**不判归属** —— 那是 L1 的事（它对 foreign/unknown 也允许启停，只拒绝写 plist）。
     func control(_ action: String, unit: String) -> Probe<Void> {
-        guard let node = env.node, let repo = env.repo, let js = script("service.js") else {
-            return .failed("环境不完整")
-        }
-        guard let r = runSync(node, [js, action, unit, "--json"], cwd: repo, timeout: 30) else {
+        guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
+        guard let r = runSync(node, [serviceScriptPath(in: repo), action, unit, "--json"], cwd: repo, timeout: 30) else {
             return .failed("service.js 无响应")
         }
         if r.status == 0 { return .ok(()) }
-        // 错误文案原样取自 L1，不在这里二次加工
+        // 错误文案原样取自 L1（--json 时成功与失败都写 stdout），不在这里二次加工
         if let data = r.stdout.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let msg = obj["error"] as? String {
@@ -238,10 +222,16 @@ final class ServiceClient {
         }
         return .failed(firstLine(r.stderr))
     }
-}
 
-func firstLine(_ s: String) -> String {
-    s.split(separator: "\n").first.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+    /// 把 AUTH_TOKEN 送进剪贴板。**明文不进本进程内存** —— L1 直接 pbcopy，
+    /// 这里只看退出码。这是「打开 Web UI 却没有令牌」那个问题的正解。
+    func copyToken() -> Probe<Void> {
+        guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
+        guard let r = runSync(node, [serviceScriptPath(in: repo), "copy-token"], cwd: repo, timeout: 10) else {
+            return .failed("service.js 无响应")
+        }
+        return r.status == 0 ? .ok(()) : .failed(firstLine(r.stderr))
+    }
 }
 
 // MARK: - 菜单栏应用
@@ -250,18 +240,23 @@ func firstLine(_ s: String) -> String {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let env = RuntimeEnv()
-    private lazy var client = ServiceClient(env: env)
-    private let queue = DispatchQueue(label: "ccm.menubar.probe")
+    private let client: ServiceClient
+    // 探测与动作分两条队列：动作里有 osascript / 30s 的 control，卡住它不该连带把状态刷新也冻住。
+    private let probeQueue = DispatchQueue(label: "ccm.menubar.probe")
+    private let actionQueue = DispatchQueue(label: "ccm.menubar.action", attributes: .concurrent)
 
     private var latest: ServiceStatus?
     private var lastError: String?
-    private var lastUpdate: Date?
+    private var lastOk: Date?
     private var timer: Timer?
     private var menuOpen = false
     private var inFlight = false
+    private var wizardShown = false
 
-    // 菜单关着时只需要给灯上色，10s 足够；打开时用户在盯着，2s。
-    private var interval: TimeInterval { menuOpen ? 2 : 10 }
+    override init() {
+        client = ServiceClient(env: env)
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -272,32 +267,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         render()
         probe()
         scheduleTimer()
-
-        // 全新机器：.env 都没有，直接把装机向导递到脸前。
-        if env.repo != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                guard let self, let s = self.latest, s.supported, !s.setup.envExists else { return }
-                self.runSetupWizard()
-            }
-        }
     }
 
     private func scheduleTimer() {
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+        let t = Timer(timeInterval: probeInterval(menuOpen: menuOpen), repeats: true) { [weak self] _ in
             Task { @MainActor in self?.probe() }
         }
+        // ★ 必须是 .common：NSMenu 跟踪期间主 run loop 跑在 NSEventTrackingRunLoopMode，
+        // 只注册 .default 的 timer 在菜单打开时**一次都不触发** —— 那样「菜单打开 2s 高频刷新」
+        // 这个特性完全是白写的（代理实测 tracking 模式下 0 次触发）。
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     // MARK: 状态轮询
 
     private func probe() {
         guard !inFlight else { return }
-        env.refresh()
         inFlight = true
         let fast = !menuOpen
-        queue.async { [weak self] in
+        probeQueue.async { [weak self] in
             guard let self else { return }
+            // refresh 会跑登录 shell，**必须在后台**（早前在主线程，shell 卡住就是菜单栏白板）
+            self.env.refresh()
             let result = self.client.status(fast: fast)
             Task { @MainActor in
                 self.inFlight = false
@@ -305,10 +298,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case .ok(let s):
                     self.latest = s
                     self.lastError = nil
-                    self.lastUpdate = Date()
+                    self.lastOk = Date()
+                    self.maybeShowWizard(s)
                 case .failed(let e):
-                    // **不清空 latest**：断一次就把面板清空会让用户以为服务没了。
-                    // 保留旧值 + 在摘要行标注「状态已过期 Ns」，同 public/js/app.js 断线时的做法。
+                    // **不清空 latest**：断一次就清空会让用户以为服务没了。保留旧值 +
+                    // 在摘要行标注「状态已过期 Ns」，同 public/js/app.js 断线时的做法。
                     self.lastError = e
                 }
                 self.render()
@@ -316,76 +310,71 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    private func maybeShowWizard(_ s: ServiceStatus) {
+        guard !wizardShown, s.isSupported, s.setup?.envExists == false else { return }
+        wizardShown = true
+        runSetupWizard()
+    }
+
     // MARK: 渲染
 
     private func render() {
         renderIcon()
-        renderMenu()
+        // ★ 菜单打开时不重建：removeAllItems 会把用户正在浏览的菜单连同展开的子菜单一起拆掉，
+        // 高亮丢失、可能点不中目标项。打开期间只更新图标与 tooltip，内容等关闭后再刷。
+        if !menuOpen { renderMenu() }
+    }
+
+    private var staleSeconds: Int? {
+        guard lastError != nil, let t = lastOk else { return nil }
+        return Int(Date().timeIntervalSince(t))
+    }
+
+    private func summary() -> String {
+        summaryLine(status: latest, problem: env.problem, lastError: lastError, staleSeconds: staleSeconds)
     }
 
     private func renderIcon() {
         guard let button = statusItem.button else { return }
-        let name: String
-        if env.repo == nil || env.node == nil {
-            name = "questionmark.circle"
-        } else if let s = latest {
-            name = s.symbol
+        let name = env.problem == .none ? (latest?.symbol ?? "questionmark.circle") : "questionmark.circle"
+        if let image = NSImage(systemSymbolName: name, accessibilityDescription: "ccm") {
+            image.isTemplate = true // 单色，随菜单栏明暗自动适配
+            button.image = image
+            button.title = ""
         } else {
-            name = "questionmark.circle"
+            // SF Symbol 拿不到时留个可点的文字，别变成一条零宽空白
+            button.image = nil
+            button.title = "ccm"
         }
-        let image = NSImage(systemSymbolName: name, accessibilityDescription: "ccm")
-        image?.isTemplate = true // 单色，随菜单栏明暗自动适配
-        button.image = image
-        button.toolTip = summaryLine()
-    }
-
-    private func summaryLine() -> String {
-        if env.repo == nil { return "找不到仓库 —— 点开菜单重新定位" }
-        if env.node == nil { return "找不到 node —— 点开菜单重新定位" }
-        guard let s = latest else { return lastError.map { "读不到状态：\($0)" } ?? "读取中…" }
-        guard s.supported else { return "本机不是 macOS？" }
-        guard let server = s.server else { return "未发现 server unit" }
-
-        var parts: [String] = []
-        switch server.state {
-        case "running": parts.append(server.flapping ? "运行中（曾崩溃）" : "运行中")
-        case "stopped": parts.append("已停止")
-        case "crashed": parts.append("已崩溃")
-        default: parts.append("未安装")
-        }
-        if let l = server.listen { parts.append(l.reachable ? ":\(l.port)" : ":\(l.port) 连不上") }
-        if let e = lastError, let t = lastUpdate {
-            parts.append("状态已过期 \(Int(Date().timeIntervalSince(t)))s（\(e)）")
-        }
-        return "ccm · " + parts.joined(separator: " · ")
+        button.toolTip = summary()
     }
 
     private func renderMenu() {
         guard let menu = statusItem.menu else { return }
         menu.removeAllItems()
 
-        // ── 摘要行（不可点）
-        let summary = NSMenuItem(title: summaryLine(), action: nil, keyEquivalent: "")
-        summary.isEnabled = false
-        menu.addItem(summary)
+        let summaryItem = NSMenuItem(title: summary(), action: nil, keyEquivalent: "")
+        summaryItem.isEnabled = false
+        menu.addItem(summaryItem)
 
-        // ── 环境错误态：给出自救入口，而不是干瞪眼
-        if env.repo == nil {
+        // 环境错误态：给出自救入口，而不是干瞪眼
+        switch env.problem {
+        case .noRepo:
             menu.addItem(.separator())
             menu.addItem(action("重新定位仓库…", #selector(relocateRepo)))
             menu.addItem(.separator())
             menu.addItem(action("退出", #selector(quit), key: "q"))
             return
-        }
-        if env.node == nil {
+        case .noNode:
             menu.addItem(.separator())
             menu.addItem(action("定位 node…", #selector(relocateNode)))
             menu.addItem(.separator())
             menu.addItem(action("退出", #selector(quit), key: "q"))
             return
+        case .none:
+            break
         }
 
-        // ── L1 的告警原样透出（文案不在本文件加工）
         for w in latest?.warnings ?? [] {
             let item = NSMenuItem(title: "⚠ \(w)", action: nil, keyEquivalent: "")
             item.isEnabled = false
@@ -393,10 +382,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(action("打开 Web UI", #selector(openWebUI), key: "o"))
+        menu.addItem(action("打开 Web UI（并复制令牌）", #selector(openWebUI), key: "o"))
+        menu.addItem(action("复制访问令牌", #selector(copyToken)))
 
-        // ── 各 unit
-        if let units = latest?.units, !units.isEmpty {
+        if let units = latest?.unitList, !units.isEmpty {
             menu.addItem(.separator())
             for u in units { menu.addItem(unitItem(u)) }
         }
@@ -410,7 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let autostart = action("开机自启（菜单栏）", #selector(toggleAutostart))
         autostart.state = menubarInstalled ? .on : .off
         menu.addItem(autostart)
-        if latest?.setup.envExists == false {
+        if latest?.setup?.envExists == false {
             menu.addItem(action("首次安装向导…", #selector(setupWizard)))
         }
 
@@ -419,40 +408,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private var menubarInstalled: Bool {
-        latest?.units.first { $0.unit == "menubar" }.map { $0.state != "not-installed" } ?? false
+        latest?.unitList.first { $0.unit == "menubar" }.map { $0.stateName != "not-installed" } ?? false
     }
 
-    /// 单个 unit 的行 + 它的操作子菜单。
-    /// 能不能 install/uninstall 完全看 L1 给的 ownership —— 本文件不重算归属。
     private func unitItem(_ u: UnitStatus) -> NSMenuItem {
-        var title = "\(u.lamp) \(u.unit)"
-        switch u.state {
-        case "running": title += u.pid.map { "  运行中 (\($0))" } ?? "  运行中"
-        case "stopped": title += "  已停止"
-        case "crashed": title += "  已崩溃"
-        default: title += "  未安装"
-        }
-        if u.ownership == "unknown" { title += "  · 非本仓" }
-        else if u.ownership == "foreign" { title += "  · 手工配置" }
-
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let item = NSMenuItem(title: unitTitle(u), action: nil, keyEquivalent: "")
         let sub = NSMenu()
+        let name = u.unitName
 
-        if !u.detail.isEmpty {
-            let d = NSMenuItem(title: u.detail, action: nil, keyEquivalent: "")
-            d.isEnabled = false
-            sub.addItem(d)
+        if let d = u.detail, !d.isEmpty {
+            let line = NSMenuItem(title: d, action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            sub.addItem(line)
             sub.addItem(.separator())
         }
 
-        if u.state != "not-installed" {
-            sub.addItem(unitAction("启动", unit: u.unit, verb: "start"))
-            sub.addItem(unitAction("停止", unit: u.unit, verb: "stop"))
-            sub.addItem(unitAction("重启", unit: u.unit, verb: "restart"))
+        if u.stateName != "not-installed" {
+            sub.addItem(unitAction("启动", unit: name, verb: "start"))
+            sub.addItem(unitAction("停止", unit: name, verb: "stop"))
+            sub.addItem(unitAction("重启", unit: name, verb: "restart"))
             sub.addItem(.separator())
-            sub.addItem(unitAction("查看日志", unit: u.unit, verb: "logs"))
+            sub.addItem(unitAction("查看日志", unit: name, verb: "logs"))
         } else if u.isWritable {
-            sub.addItem(unitAction("安装", unit: u.unit, verb: "install"))
+            // 「在终端里安装…」而不是「安装」：tunnel 的隧道名等参数只有用户知道，
+            // 而 L1 的 precheck 会拒绝缺参数的调用。开终端给一条待补全的命令，比给一个
+            // 点了必然报错的按钮诚实（第一轮审查抓到的就是后者）。
+            sub.addItem(unitAction("在终端里安装…", unit: name, verb: "install"))
         }
 
         item.submenu = sub
@@ -472,32 +453,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
-    // MARK: NSMenuDelegate —— 打开时提速，关闭时降频
+    // MARK: NSMenuDelegate
 
     func menuWillOpen(_ menu: NSMenu) {
         menuOpen = true
         scheduleTimer()
+        // 打开瞬间先用当前数据渲染一次（此时 menuOpen 已为 true，render 不会重建，
+        // 所以这里显式调 renderMenu），再触发一次探测；探测回来的结果留到下次打开。
+        renderMenu()
         probe()
     }
 
     func menuDidClose(_ menu: NSMenu) {
         menuOpen = false
         scheduleTimer()
+        renderMenu() // 补上打开期间被跳过的那次刷新
     }
 
     // MARK: 动作
 
     @objc private func runUnitAction(_ sender: NSMenuItem) {
         guard let info = sender.representedObject as? [String: String],
-              let unit = info["unit"], let verb = info["verb"] else { return }
+              let unit = info["unit"], let verb = info["verb"],
+              let repo = env.repo else { return }
 
-        if verb == "logs" { openLogsFor(unit: unit); return }
-
-        // install 走 CLI 而不是在这里拼参数：tunnel 要 --tunnel/--cloudflared，
-        // menubar 要 --app，各自的前置检查都在 L1 的 precheck 里。
-        if verb == "install" {
-            openTerminal(command: "cd \(shellQuote(env.repo ?? "")) && node scripts/service.js install \(unit)")
+        switch verb {
+        case "logs":
+            openTerminal(command: logsCommand(unit: unit, repo: repo))
             return
+        case "install":
+            openTerminal(command: installCommand(unit: unit, repo: repo, appPath: Bundle.main.bundlePath))
+            return
+        default:
+            break
         }
 
         if verb == "stop", unit == "server" {
@@ -507,10 +495,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             alert.addButton(withTitle: "停止")
             alert.addButton(withTitle: "取消")
             alert.alertStyle = .warning
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard runModal(alert) == .alertFirstButtonReturn else { return }
         }
 
-        queue.async { [weak self] in
+        actionQueue.async { [weak self] in
             guard let self else { return }
             let r = self.client.control(verb, unit: unit)
             Task { @MainActor in
@@ -520,22 +508,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// 打开 Web UI 前先把令牌送进剪贴板 —— lanUrl 不含 `#token=`，没有这一步用户只会
+    /// 落到一个令牌输入页而手上什么都没有。令牌全程走 L1 的 pbcopy，不进本进程内存。
     @objc private func openWebUI() {
-        // 优先用 L1 给的 lanUrl（它知道真实端口与本机 IP）；拿不到就回落 localhost。
-        let url = latest?.setup.lanUrl ?? "http://127.0.0.1:\(latest?.setup.port ?? 3000)"
-        if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+        let url = webUIURL(status: latest)
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            let copied = self.client.copyToken()
+            Task { @MainActor in
+                if let u = URL(string: url) { NSWorkspace.shared.open(u) }
+                if case .failed = copied {
+                    // 没令牌也照样打开：未设 AUTH_TOKEN 的本机部署本就直接可用
+                    return
+                }
+            }
+        }
     }
 
-    @objc private func openLogs() { openLogsFor(unit: "server") }
+    @objc private func copyToken() {
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            let r = self.client.copyToken()
+            Task { @MainActor in
+                switch r {
+                case .ok: self.alert("已复制", "访问令牌已在剪贴板里，粘贴到网页的令牌框即可。")
+                case .failed(let e): self.alert("复制失败", e)
+                }
+            }
+        }
+    }
 
-    private func openLogsFor(unit: String) {
+    @objc private func openLogs() {
         guard let repo = env.repo else { return }
-        openTerminal(command: "cd \(shellQuote(repo)) && node scripts/service.js logs \(unit) --follow")
+        openTerminal(command: logsCommand(unit: "server", repo: repo))
     }
 
     @objc private func runDoctor() {
         guard let repo = env.repo else { return }
-        openTerminal(command: "cd \(shellQuote(repo)) && node scripts/doctor.js")
+        openTerminal(command: doctorCommand(repo: repo))
     }
 
     @objc private func revealRepo() {
@@ -545,9 +555,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleAutostart() {
         guard let repo = env.repo else { return }
-        let appPath = Bundle.main.bundlePath
-        let verb = menubarInstalled ? "uninstall menubar --yes" : "install menubar --app=\(shellQuote(appPath))"
-        openTerminal(command: "cd \(shellQuote(repo)) && node scripts/service.js \(verb)")
+        let cmd = menubarInstalled
+            ? uninstallCommand(unit: "menubar", repo: repo)
+            : installCommand(unit: "menubar", repo: repo, appPath: Bundle.main.bundlePath)
+        openTerminal(command: cmd)
     }
 
     @objc private func relocateRepo() {
@@ -566,6 +577,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.showsHiddenFiles = true
+        activate()
         guard panel.runModal() == .OK, let url = panel.url else { return }
         env.relocateNode(url.path)
         probe()
@@ -579,10 +591,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     //
     // **这是 Swift 在整个方案里存在的唯一硬理由**：scripts/setup.js 的 resolveSetupPlan 规定
     // 非交互模式必须显式 --work-dir 且绝不回落 $HOME（"那等于把整个家目录交给 agent"），
-    // 而零命令行用户没法输路径。NSOpenPanel 正好补上这一个洞。
-    //
-    // 其余每一步都委托给 CLI，并且**开一个真 Terminal 窗口跑**——让用户看见真实输出，
-    // 而不是一个转圈的 spinner。失败时报错就在眼前，不用我在这里翻译。
+    // 而零命令行用户没法输路径。NSOpenPanel 正好补上这一个洞。其余每步都委托 CLI，
+    // 并且开一个真 Terminal 窗口跑 —— 让用户看见真实输出，失败时报错就在眼前。
     private func runSetupWizard() {
         guard let repo = env.repo else { return }
 
@@ -598,7 +608,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         """
         welcome.addButton(withTitle: "继续")
         welcome.addButton(withTitle: "取消")
-        guard welcome.runModal() == .alertFirstButtonReturn else { return }
+        guard runModal(welcome) == .alertFirstButtonReturn else { return }
 
         guard let workDir = pickDirectory(title: "选择 claude 的工作目录") else { return }
 
@@ -607,19 +617,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hooksAlert.informativeText = "装了之后，你在电脑终端里跑的 claude 会话，回合结束或需要你决策时能即时推到手机。不装也能用，只是靠轮询、没有推送。"
         hooksAlert.addButton(withTitle: "安装")
         hooksAlert.addButton(withTitle: "先不装")
-        let hooks = hooksAlert.runModal() == .alertFirstButtonReturn ? "on" : "off"
+        let hooks = runModal(hooksAlert) == .alertFirstButtonReturn
 
-        let script = [
-            "cd \(shellQuote(repo))",
-            "node scripts/setup.js --yes --work-dir=\(shellQuote(workDir)) --hooks=\(hooks)",
-            "node scripts/service.js install server",
-            "node scripts/service.js start server",
-            "node scripts/service.js status",
-        ].joined(separator: " && ")
-        openTerminal(command: script)
+        openTerminal(command: setupCommand(repo: repo, workDir: workDir, hooks: hooks))
     }
 
     // MARK: 小工具
+
+    /// LSUIElement app 没有 Dock 图标，不激活就弹模态窗的话，窗口可能藏在别的 app 后面，
+    /// 而用户没有任何入口把它翻到前面 —— app 却已经进了模态循环。
+    private func activate() {
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func runModal(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        activate()
+        return alert.runModal()
+    }
 
     private func pickDirectory(title: String) -> String? {
         let panel = NSOpenPanel()
@@ -627,6 +641,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
+        activate()
         return panel.runModal() == .OK ? panel.url?.path : nil
     }
 
@@ -635,31 +650,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         a.messageText = title
         a.informativeText = body
         a.alertStyle = .warning
-        a.runModal()
+        _ = runModal(a)
     }
 
-    /// 开一个 Terminal 窗口跑命令。同 src/ops/log-terminal.js 的做法（那是仓库里已有的
-    /// 桌面集成先例）：长任务与安装流程都走真终端，让输出可见、失败可查。
+    /// 开一个 Terminal 窗口跑命令。同 src/ops/log-terminal.js 的做法（仓库里已有的桌面集成先例）：
+    /// 长任务与安装流程都走真终端，让输出可见、失败可查。
     private func openTerminal(command: String) {
-        let escaped = command
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let osa = "tell application \"Terminal\"\nactivate\ndo script \"\(escaped)\"\nend tell"
-        queue.async {
-            runSync("/usr/bin/osascript", ["-e", osa], timeout: 15)
+        let osa = terminalScript(command: command)
+        actionQueue.async {
+            _ = runSync("/usr/bin/osascript", ["-e", osa], timeout: 15)
         }
     }
-}
-
-/// shell 单引号包裹。值里的单引号用 '"'"' 的经典写法闭合再拼接。
-func shellQuote(_ s: String) -> String {
-    "'" + s.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
 }
 
 // MARK: - 入口
 //
 // 用 @main 而不是顶层语句：编译走 -parse-as-library（AppKit app 的标准姿势），那种模式下
-// 顶层表达式是非法的，而且 AppDelegate 带 @MainActor、不能在 nonisolated 上下文里构造。
+// 顶层表达式非法，且 AppDelegate 带 @MainActor、不能在 nonisolated 上下文里构造。
 
 @main
 struct CCMApp {

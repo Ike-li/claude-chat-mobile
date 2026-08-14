@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { infoPlistVars, swiftcArgs } from '../../scripts/app-build.js';
+import { infoPlistVars, swiftTarget, swiftcArgs } from '../../scripts/app-build.js';
 import { renderTemplate, stripLeadingComment } from '../../scripts/render-plist.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -15,30 +15,50 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-test.describe('swiftcArgs', () => {
-  const args = swiftcArgs({ source: '/x/a.swift', out: '/y/CCM' });
+// ★ 每个 test 内部各自调用，**不要在 describe 顶层算一次共享值**：
+// describe 的回调是同步执行的，顶层一旦抛错（比如签名变了），整块会炸掉、内部 test
+// 一个都不注册 —— 而汇总只统计注册过的 test，于是显示成 `fail 0`。
+// 这个陷阱在本仓真实发生过：swiftcArgs 从 source 改成 sources 时，
+// `npm run test:unit` 报 `fail 0` 却以退出码 1 结束，差点被当成全绿。
+const ARGS = () => swiftcArgs({ sources: ['/x/Core.swift', '/x/a.swift'], out: '/y/CCM' });
 
+test.describe('swiftcArgs', () => {
   // 源码末尾是 @main struct + @MainActor，不加这个 flag 会被当 script 模式编译而失败。
   test('必须带 -parse-as-library', () => {
-    assert.ok(args.includes('-parse-as-library'));
+    assert.ok(ARGS().includes('-parse-as-library'));
   });
 
   test('链接 AppKit（NSStatusBar / NSMenu / NSAlert 都在里面）', () => {
+    const args = ARGS();
     const i = args.indexOf('-framework');
     assert.ok(i >= 0 && args[i + 1] === 'AppKit');
   });
 
-  test('-o 后面紧跟输出路径，源码在最后', () => {
+  test('测试构建不链 AppKit（CCMCore 是纯 Foundation，链了反而多一份依赖）', () => {
+    const args = swiftcArgs({ sources: ['/x/Core.swift'], out: '/y/t', frameworks: [] });
+    assert.ok(!args.includes('-framework'));
+  });
+
+  test('-o 后面紧跟输出路径，源码全部排在最后且保持顺序', () => {
+    const args = ARGS();
     const i = args.indexOf('-o');
     assert.equal(args[i + 1], '/y/CCM');
-    assert.equal(args.at(-1), '/x/a.swift');
+    assert.deepEqual(args.slice(-2), ['/x/Core.swift', '/x/a.swift'], '多文件编译要按序传给 swiftc');
   });
 
   test('target 下限与 Info.plist 的 LSMinimumSystemVersion 一致（13.0）', () => {
+    const args = ARGS();
     const i = args.indexOf('-target');
     assert.match(args[i + 1], /macos13\.0/);
     const tpl = readFileSync(join(ROOT, 'desktop/Info.plist.template'), 'utf8');
     assert.match(tpl, /<key>LSMinimumSystemVersion<\/key>\s*<string>13\.0<\/string>/);
+  });
+
+  // 写死 arm64 的话，Intel Mac 上会安静地交叉编译出 arm64 产物、codesign 通过、
+  // 打印「✓ 已生成」，然后 open 报「不支持」—— 失败点离根因很远。
+  test('target 架构按宿主派生，不写死 arm64', () => {
+    assert.match(swiftTarget('arm64'), /^arm64-apple-macos/);
+    assert.match(swiftTarget('x64'), /^x86_64-apple-macos/);
   });
 });
 
