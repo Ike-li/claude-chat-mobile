@@ -65,11 +65,27 @@ export const ENV_SCHEMA = {
     label: t('主工作目录', 'Primary work directory'),
     help: t('claude 的默认工作目录。', 'Default working directory for claude.'),
   },
+  // ── 工作区列表：统一配置文件里的内联形态（P1b）────────────────────────
+  //
+  // 优先级高于 WORK_DIRS_FILE 与 WORK_DIRS —— 统一配置文件是新的事实源，显式写了就该赢。
+  // 那两个保留是为了不打断现有部署（migrate 会把它们内联进这里）。
+  //
+  // `reload: 'hot'` 是全表唯一一个：改完即生效、无需重启。其余项缺省 'restart'。
+  // 这个标记不是文档，是**行为**：ccm.config.json 变更时，server 只热应用标了 hot 的 key，
+  // 其余提示需重启 —— 现状是用户根本无从知道改哪些要重启。
+  WORKDIRS: {
+    group: 'runtime', kind: 'list', reload: 'hot',
+    label: t('工作区列表', 'Workspaces'),
+    help: t('每项是绝对路径，或 {path, sessionLimit}。改完即生效，无需重启。当前列表见工作区抽屉；'
+      + '编辑请用 CLI 或桌面端（手机面板没有数组编辑器，故此处只读）。',
+      'Each entry is an absolute path, or {path, sessionLimit}. Hot-reloads without a restart. '
+      + 'See the workspace drawer for the current list; edit via CLI or desktop (read-only here).'),
+  },
   WORK_DIRS_FILE: {
-    group: 'runtime', kind: 'path', mustExist: true,
-    label: t('多工作区配置文件', 'Workdirs file'),
-    help: t('指向 workdirs.json。该文件内容支持热加载，改完即生效。',
-      'Points at workdirs.json. Its contents hot-reload without a restart.'),
+    group: 'runtime', kind: 'path', mustExist: true, reload: 'hot',
+    label: t('多工作区配置文件（旧）', 'Workdirs file (legacy)'),
+    help: t('指向外部 workdirs.json。已被上面的工作区列表取代，保留仅为兼容既有部署。',
+      'Points at an external workdirs.json. Superseded by the inline list above; kept for compatibility.'),
   },
   CLAUDE_BIN: {
     group: 'runtime', kind: 'path', mustExist: true, executable: true,
@@ -250,6 +266,22 @@ function checkUrl(key, value, def) {
   return ok ? null : `${def.label.zh} 只支持 http/https${allowMailto ? '/mailto' : ''}`;
 }
 
+// list（当前只有 WORKDIRS）的结构校验。
+//
+// 条目形状必须与 src/sessions/workdirs.js 的 normalizeWorkdirEntries 接受的一致：
+// `string` 或 `{path, sessionLimit?}`。那边对非法条目是 **warn-skip 不挡启动**，很合理 ——
+// 一个坏条目不该让整台 server 起不来。但正因为它宽容，**写入这一侧必须严**：
+// 放进去一个形状不对的条目，用户看到的是「保存成功」，得到的是一个静默少了一项的白名单。
+function checkList(value, def) {
+  if (!Array.isArray(value)) return `${def.label.zh} 必须是数组（每项为路径字符串或 {path, sessionLimit}）`;
+  for (const entry of value) {
+    if (typeof entry === 'string' && entry.trim()) continue;
+    if (entry && typeof entry === 'object' && typeof entry.path === 'string' && entry.path.trim()) continue;
+    return `${def.label.zh} 的条目必须是非空路径字符串或 {path, sessionLimit}，收到：${JSON.stringify(entry)}`;
+  }
+  return null;
+}
+
 // 单项类型校验。返回错误文案或 null。
 function checkOne(key, value, def, d) {
   // 校验期与序列化期用**同一个判据**，否则会出现「校验说 ok、写盘时抛错」——
@@ -392,6 +424,14 @@ export function validateEnvChanges(changes, d) {
     }
     if (value === null) continue; // 删除不做类型校验
 
+    // list 是唯一的非字符串 kind，必须在「必须是字符串」与 .env 序列化检查之前分流：
+    // 那两道都是为 .env 行格式写的，对数组会先 String(value) 折成 "/a,/b" 再放行。
+    if (def.kind === 'list') {
+      const err = checkList(value, def);
+      if (err) results.push({ key, level: 'error', message: err });
+      continue;
+    }
+
     if (typeof value !== 'string') {
       results.push({ key, level: 'error', message: '配置值必须是字符串' });
       continue;
@@ -426,7 +466,10 @@ export function buildEnvView(values = {}) {
           kind: def.kind,
           label: def.label,
           help: def.help,
-          readonly: def.kind === 'readonly',
+          // list 也标只读：前端 env-config.js 只分派 number / toggle，其余渲染成 text input，
+          // 而往数组项里塞一个字符串会让 app.js 的 Array.isArray 判否 → 静默回落旧路径。
+          // 结构化编辑器留给 CLI 与 desktop（P1c）。
+          readonly: def.kind === 'readonly' || def.kind === 'list',
           secret: !!def.secret || def.kind === 'secret',
         };
         if (def.values) item.values = def.values;

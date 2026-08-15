@@ -397,3 +397,43 @@ test.describe('validateEnvChanges —— 清空 CF_ACCESS_* 必须先警告', ()
     assert.equal(r.results.filter((x) => x.level === 'warn').length, 0);
   });
 });
+
+// ── P1b：list 类型（WORKDIRS）的校验 ────────────────────────────────────────
+//
+// 缺陷路径（实测确认）：前端 env-config.js 只分派 number / toggle，其余一律渲染成 text input。
+// 于是 list 项在手机面板里会变成一个可输入的文本框，用户敲进去的字符串被当作 WORKDIRS 提交 ——
+// 而 app.js 的 readInlineWorkdirs 判的是 `Array.isArray(parsed?.WORKDIRS)`，非数组直接回落到
+// 旧路径。结果是**工作区配置静默失效、面板却报保存成功**，与 CF_ACCESS_* 被吞那次同型。
+//
+// 两道防线：① buildEnvView 把 list 标成只读，前端不给编辑；② 这里的校验拒收任何非数组，
+// 保护所有写入路径（含将来的 CLI 与 desktop）。② 比 ① 重要 —— 前端是可绕过的。
+test('validateEnvChanges: WORKDIRS 必须是数组，字符串一律拒收', () => {
+  const d = { current: {}, fileExists: () => true, isWritable: () => true, isExecutable: () => true, probePort: () => false };
+  const r = validateEnvChanges({ WORKDIRS: '/a,/b' }, d);
+  assert.equal(r.ok, false);
+  assert.match(r.results[0].message, /数组/);
+});
+
+test('validateEnvChanges: WORKDIRS 接受路径字符串与 {path,sessionLimit} 混用', () => {
+  const d = { current: {}, fileExists: () => true, isWritable: () => true, isExecutable: () => true, probePort: () => false };
+  assert.equal(validateEnvChanges({ WORKDIRS: ['/a', { path: '/b', sessionLimit: 3 }] }, d).ok, true);
+});
+
+test('validateEnvChanges: WORKDIRS 空数组合法（= 只保留 WORK_DIR 一个工作区）', () => {
+  const d = { current: {}, fileExists: () => true, isWritable: () => true, isExecutable: () => true, probePort: () => false };
+  assert.equal(validateEnvChanges({ WORKDIRS: [] }, d).ok, true);
+});
+
+test('validateEnvChanges: WORKDIRS 条目形状不对时拒收，不静默丢条目', () => {
+  const d = { current: {}, fileExists: () => true, isWritable: () => true, isExecutable: () => true, probePort: () => false };
+  assert.equal(validateEnvChanges({ WORKDIRS: [{ dir: '/a' }] }, d).ok, false);
+  assert.equal(validateEnvChanges({ WORKDIRS: [123] }, d).ok, false);
+});
+
+test('buildEnvView: list 项标成只读 —— 前端没有数组编辑器，给个 text input 只会写坏它', () => {
+  const view = buildEnvView({});
+  const runtime = view.groups.find(g => g.id === 'runtime');
+  const workdirs = runtime.items.find(i => i.key === 'WORKDIRS');
+  assert.equal(workdirs.kind, 'list');
+  assert.equal(workdirs.readonly, true);
+});
