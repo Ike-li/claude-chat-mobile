@@ -55,7 +55,7 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 ```bash
 npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
-npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性 + i18n 词典孤儿 key 扫描 + 破坏性删除守卫（测试里的 recursive 删除必须可追溯到 mkdtemp，否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`——两种标记不通用，为单文件删除批的豁免不放行递归删除）+ visual mock registry guard + 禁止模式 + inventory（零 token、最快）
+npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性（含契约计数：文档写的「当前 N 种/个」按 `protocol.js` 真值校验）+ n=1 假设面登记簿（`docs/hard-rules.md` §2 表格 ⇔ 代码 `// n1: <ID>` 标记双向相等）+ i18n 词典孤儿 key 扫描 + 破坏性删除守卫（测试里的 recursive 删除必须可追溯到 mkdtemp，否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`——两种标记不通用，为单文件删除批的豁免不放行递归删除）+ visual mock registry guard + 禁止模式 + inventory（零 token、最快）
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
 npm test           # 单测 + tests/integration/*.test.mjs 全部（不是只跑 server/auth/upload 那几个）；其中需真 agent turn 的 7 个由 RUN_CLAUDE_INTEGRATION 门控、默认跳过；--test-force-exit 保证退出。CI 不跑本条(force-exit 会腰斩异步单测)，拆成 test:unit + test:integration 两步
 npm run test:unit  # node --test tests/unit/*.test.mjs：零 token、不 spawn claude、不起 server（最快）。注意「单测」不等于「纯函数」——相当一部分文件会用 mkdtemp 临时目录或 spawnSync 跑本仓脚本（门禁类、CLI 类、文件类），隔离靠 preload-env + 一次性目录

@@ -30,25 +30,29 @@
 
 下列设计在 **「每实例单用户 / 一人为主」** 下成立。若目标变成多租户、团队账号、或「一人多机同时看不同会话且互不串台」，应**先改本文立场**再开大改，而不是在局部打补丁。
 
+**下面两张表是 n=1 假设面的登记簿**：每行一个 ID，代码里对应位置写 `// n1: <ID> 理由`，由 `npm run check` 的 `scripts/check-n1-assumptions.js` 双向校验（登记了却没标记 → 红；标了却没登记 → 红）。改立场那天，`grep -rn '// n1:' src/ public/js/` 就是要逐个处理的清单。
+
+> 门禁只保证**已登记的**不漂移，**发现不了新增的未登记假设**——n=1 依赖没有语法特征，一个新的全局单例在语法上与普通模块级变量毫无区别。新增假设点仍得靠 review 时想起来登记。
+
 ### 2.1 全局查看上下文
 
-| 单例 | 含义 | 代码 |
-|------|------|------|
-| `viewingInstanceId` | 服务端当前查看 tab；全员共享 | `src/server/app.js` |
-| `viewingCwd` | 当前工作区上下文；新建会话 / statusline / 白名单缺省 | 同上 |
-| `mirrorReadonly` + 全局广播 | 只读镜像锁是**全局单值**，非 per-连接 | `src/server/mirror-engine.js` |
-| 前端镜像视图 | 按 `viewingInstanceId` 分流渲染 | `public/js/app.js` |
+| ID | 单例 | 含义 | 持有者 |
+|----|------|------|--------|
+| `N1-VIEWING-INSTANCE` | `viewingInstanceId` | 服务端当前查看 tab；全员共享 | `src/server/app.js` |
+| `N1-VIEWING-CWD` | `viewingCwd` | 当前工作区上下文；新建会话 / statusline / 白名单缺省 | 同上 |
+| `N1-MIRROR-LOCK` | `mirrorReadonly` + 全局广播 | 只读镜像锁是**全局单值**，非 per-连接 | `src/server/mirror-engine.js` |
+| `N1-MIRROR-VIEW-FE` | 前端镜像视图 | 按 `viewingInstanceId` 分流渲染 | `public/js/app.js` |
 
 **已知缺陷（n=1 接受）**：两台设备同时看不同会话时，会话 B 的 `mirror_state` 可能误解锁正看 A 的一端。见 §5 AD-5。
 
 ### 2.2 进程内易失态
 
-| 状态 | 取舍 |
-|------|------|
-| 鉴权限速 Map | 内存；重启清零（残余风险可接受） |
-| `/metrics` 计数 | 内存；重启清零；**JSON 快照**，非 Prometheus 文本（单机主无 scraper 的默认运维面） |
-| 额度 / rate 快照 | 单例、不分账号 |
-| 消息去重等 | 内存即可 |
+| ID | 状态 | 取舍 | 持有者 |
+|----|------|------|--------|
+| `N1-RATE-LIMIT` | 鉴权限速 Map | 内存；重启清零（残余风险可接受） | `src/server/app.js` 的 `rlStates` |
+| `N1-METRICS` | `/metrics` 计数 | 内存；重启清零；**JSON 快照**，非 Prometheus 文本（单机主无 scraper 的默认运维面） | `src/ops/metrics.js` |
+| `N1-USAGE-SNAPSHOT` | 额度 / rate 快照 | 单例、不分账号 | `src/ops/statusline.js`（`usage-snapshot.js` 自身是纯函数，状态由调用方持有） |
+| `N1-MSG-DEDUP` | 消息去重 | 内存即可 | `src/server/app.js` 的 `messageDedupState`（`message-dedup.js` 同为纯函数） |
 
 **硬约束**：历史回显走鉴权 `session:history`；**不开无鉴权 HTTP 数据端点**。
 
@@ -124,7 +128,7 @@
 
 ### 4.3 `npm run check` 包
 
-ESLint · import 边界 · 双向事件契约 · 文档一致性 · i18n 孤儿 key · 破坏性删除 · visual mock registry · Playwright 禁止模式 · inventory。
+ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · visual mock registry · Playwright 禁止模式 · inventory。
 
 删除豁免标记（不通用）：
 
@@ -232,7 +236,7 @@ Fail-closed 要点：路径不可达、审批指纹不符、审批/提问 TTL �
 ## 8. 速查
 
 ```
-产品：n=1 机主 · 终端等价 · 非多租户 · 非共享 TTY
+产品：n=1 机主 · 终端等价 · 非多租户 · 非共享 TTY（假设面登记簿见 §2，枚举用 grep -rn '// n1:' src/ public/js/）
 架构：单驾驶员 · agent:event 闭合（protocol.js）· viewing 全局单值
 状态：新逻辑不进 app.js 顶层 · import 边界硬闸
 安全：五层分立 · fail-closed · 推送 body 最小化

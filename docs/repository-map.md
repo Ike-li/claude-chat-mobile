@@ -47,16 +47,16 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Instructions | 2 |
 | Integration test | 22 |
 | Legal | 2 |
-| Maintainer tooling | 28 |
+| Maintainer tooling | 29 |
 | Project configuration | 5 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
 | Test configuration | 4 |
 | Test support | 5 |
-| Unit test | 152 |
+| Unit test | 153 |
 | Vendored asset | 21 |
 
-Total classified files: **429**.
+Total classified files: **431**.
 
 ## Complete file inventory
 
@@ -160,6 +160,7 @@ Total classified files: **429**.
 | `scripts/app-build.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-destructive-deletes.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-import-boundaries.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/check-n1-assumptions.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-playwright-forbidden-patterns.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-visual-mock-registry.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/collect-source-files.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
@@ -363,6 +364,7 @@ Total classified files: **429**.
 | `tests/unit/cf-access.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/check-destructive-deletes.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/check-import-boundaries.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/check-n1-assumptions.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cli-bg-session-lock.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cli-hooks-bridge.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/cli-mirror-state.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

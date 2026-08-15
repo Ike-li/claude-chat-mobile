@@ -50,6 +50,8 @@ export function createMirrorEngine({
   // 禁用输入，硬防「两进程并发写同一 JSONL 致会话分叉」。解锁：切会话重判 / 用户显式接管（前端 override）。
   // 不用 transcript mtime 判活：web 端自己 resume 会话时 claude --resume 就写盘刷新 mtime（追加 mode 记录），
   // 无法据此区分「己方续接」与「终端在跑」——曾致纯 web 打开/切换会话被误锁只读（切入即 mtime 判活口径已废弃）。
+  // n1: N1-MIRROR-LOCK 全局单值 + io.to('approved') 全局广播，非 per-(sessionId,connId)：两台设备看不同
+  //     会话时，给会话 B 的 mirror_state 会误解锁正看会话 A 的那一端。完整修法即下方登记的 AD-5。
   let mirrorReadonly = false;                         // 当前查看会话是否判「终端活跃、只读」（全局单值，非 per-连接）
   // 【已评估：不做 AD-5 per-连接锁粒度（2026-07-12 机主确认，Phase 8 技术债）】mirrorReadonly 是全局单值 +
   // io.to('approved') 全局广播 + viewingInstanceId 单例全局——已知缺陷：两台设备看不同会话时，

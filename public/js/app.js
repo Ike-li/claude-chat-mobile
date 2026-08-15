@@ -248,6 +248,8 @@ import { createSessionDeleteController } from './app/session-delete.js';
   // mirrorReadonlySid=当前只读会话（null=可编辑）；mirrorOverriddenSid=用户已显式接管、忽略其只读；
   // armedTakeoverSid=已排队接管、等终端本轮完结/疑似中断再自动放行（见 logic.js armedTakeoverStep）；
   // mirrorStaleFlag=当前只读会话是否处于疑似中断态（供点击「续接 CLI 会话」时判定走排队还是即时确认）。
+  // n1: N1-MIRROR-VIEW-FE 这一族按「当前 viewing」单值渲染，与服务端 N1-MIRROR-LOCK 的全局广播配对：
+  //     本端收到的 mirror_state 可能是为另一台设备正看的会话算出来的（见 onMirrorState 的归属判定）。
   let mirrorReadonlySid = null, mirrorOverriddenSid = null, armedTakeoverSid = null, mirrorStaleFlag = false;
   // server 侧 cliPresenceStep 的 seen 槽：本次观察期是否见过 entrypoint=cli 的活注册表条目。
   // 决定 stale 该说「终端疑似中断」还是只说只读——没见过终端就别把推断说成事实（原先两个调用点

@@ -151,6 +151,8 @@ let sessionLimitByDir = new Map();
 
 let notifyThrottleState = new Map(); // per-会话推送节流态（docs/design.md），sessionId → {[category]:{notifiedAt,pending}}；
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
+// n1: N1-MSG-DEDUP 进程内单例、重启清零、不分账号——message-dedup.js 自身是纯函数，状态由这里持有。
+//     重启后同一 clientMessageId 会被当成新消息（n=1 下可接受：重启本就中断在途轮）。
 let messageDedupState = new Map(); // clientMessageId → ts（REL-01：离线重发/网络抖动幂等，见 message-dedup.js）
 // isProcessed/commitProcessed 之间横跨多个 await，不是原子的：断线重连重发可能让同一 clientMessageId
 // 的第二个请求在第一个请求 commit 之前就跑到同一段代码，两边各自调一次 a.send() 真实重复发送。
@@ -269,9 +271,12 @@ function preflight() {
 const claudeBin = preflight();
 // 多 repo 台阶3：viewingInstanceId = 前端当前查看的 tab 实例（台阶2 viewingCwd 的细化）。
 // 切 tab 只换视图、不 dispose（各实例后台并行存活，见 agents Map）。初值 null——启动不自动 resume，空首页手选。
+// n1: N1-VIEWING-INSTANCE 全服务端一个「当前查看」，非 per-连接：两台设备各看各的会话时，后切的那台会把
+//     前一台的视图一起改掉。多用户/多机独立视图要先改 hard-rules §2 立场，再全链路改 per-(连接) 分流。
 let viewingInstanceId = null;
 // viewingCwd = 当前查看实例的工作目录上下文（新建会话选目录 / statusline git 段 / 白名单维度）。
 // 必须在 preflight 之后取（WORK_DIR 在 preflight 内才 realpathSync 规范化，否则 cwd 隔离失灵）。
+// n1: N1-VIEWING-CWD 同上，全局单值：随 viewingInstanceId 一起被最后切换的那台设备决定。
 let viewingCwd = WORK_DIR;
 const viewingCwdOf = () => agents.get(viewingInstanceId)?.cwd ?? viewingCwd;
 // BE-016：当前查看实例被移除（退出/dispose）后原子重选 viewing——落到剩余实例取其 cwd，落到空视图(null)保留
@@ -322,6 +327,8 @@ configureHttpShell({
 
 const tokenMatches = provided => secureTokenMatches(AUTH_TOKEN, provided);
 // 鉴权限速状态（socket + HTTP 共用，AUTH-001）。NFR-03：仅鉴权门口，重启清零可接受。
+// n1: N1-RATE-LIMIT 进程内单例、重启清零，且只挡鉴权口暴破——不对已鉴权的操作面限速（机主即 root，
+//     给自己的操作限速违背产品目的，见 §2.3）。多租户下这两条都得重来：状态要持久化，操作面要分账号配额。
 const rlStates = new Map(); // sourceKey → RateLimitState
 // 有界上限。这张表由【未鉴权的公网流量】驱动：服务挂在固定域名上，任何扫描器请求一次 /health
 // （成功或 401 都写）就永久占一条，而全仓只有 get/set、没有任何 delete/TTL 清扫，decayMs 到期也不回收。

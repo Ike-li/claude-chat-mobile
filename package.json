@@ -52,7 +52,7 @@
     "app:build": "node scripts/app-build.js",
     "app:test": "node scripts/app-build.js --test-only",
     "dev": "node --watch server.js",
-    "check": "eslint . && node scripts/check-import-boundaries.js && node scripts/contract-check.js && node scripts/doc-consistency.js && node scripts/i18n-check.js && node scripts/check-destructive-deletes.js && node scripts/check-visual-mock-registry.js && node scripts/check-playwright-forbidden-patterns.js && node scripts/app-build.js --test-only && npm run inventory:check",
+    "check": "eslint . && node scripts/check-import-boundaries.js && node scripts/contract-check.js && node scripts/doc-consistency.js && node scripts/check-n1-assumptions.js && node scripts/i18n-check.js && node scripts/check-destructive-deletes.js && node scripts/check-visual-mock-registry.js && node scripts/check-playwright-forbidden-patterns.js && node scripts/app-build.js --test-only && npm run inventory:check",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "inventory:update": "node scripts/repo-inventory.js --write",

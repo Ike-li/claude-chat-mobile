@@ -8,6 +8,8 @@
 // 这些是 docs/design.md 明列要做的。OQ-09 拒绝的是"授权闭环时延"这类**人机/价值指标**的埋点遥测，不在此列
 // （见 docs/design.md 原文对二者的区分）；本模块不采集任何审批时延/闭环时长。
 
+// n1: N1-METRICS 进程内单例、重启清零、不分账号，且只经鉴权端点吐 JSON 快照（不推 Prometheus 文本）——
+//     单机主默认没有 scraper。多实例 scrape 是另一种产品形态，得先改 hard-rules §2 立场。
 const counters = new Map(); // name → number（累计，只增）
 const gauges = new Map();   // name → number（瞬时，覆盖式）
 

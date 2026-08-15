@@ -86,6 +86,8 @@ export async function gitStatus(cwd) {
 // 单例、进程重启清零、不持久化、不分账号（"每实例单用户"，见 CLAUDE.md）；buildWebStatusLine/
 // buildCliStatusLine 都可通过 usageStore 形参覆盖它——仅供单测隔离，生产路径（app.js refreshStatusLine）
 // 从不传入，恒用这份默认单例，故两条路径能互相垫底。详见 usage-snapshot.js。
+// n1: N1-USAGE-SNAPSHOT 单例、不分账号——额度是账号级的，本项目一个实例只服务一个 Anthropic 账号。
+//     多账号下这份 store 要按账号分桶，否则 A 的额度会垫到 B 的 statusline 上。
 const usageSnapshotStore = createUsageSnapshotStore();
 
 // 供 app.js refreshStatusLine() 的 cli-unavailable 分支使用：owner=cli 但 bridge 快照缺失/过期时，
