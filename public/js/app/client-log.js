@@ -1,5 +1,5 @@
 import { createRingBuffer } from '../ring-buffer.js';
-import { serializeClientLogs, deserializeClientLogs, shouldPersistLog } from '../logic.js';
+import { deserializeClientLogs, serializeClientLogs, shouldPersistLog } from '../logic/service-diag.js';
 
 // 客户端日志内存环形缓冲 + localStorage 持久化。
 // 为什么持久化：手机上最需要日志的时刻恰是「刚才白屏了 / PWA 被 iOS 杀了，重新打开」——

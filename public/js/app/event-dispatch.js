@@ -1,4 +1,4 @@
-import { shouldDropAgentEvent } from '../logic.js';
+import { shouldDropAgentEvent } from '../logic/composer.js';
 
 // Handler 契约：`(payload, envelope)`。
 //  · 第一参永远是 event.payload —— 绝大多数 handler 只声明它，多传一个实参对它们无影响。

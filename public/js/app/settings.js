@@ -6,7 +6,7 @@
 //   会话设置 #settingsSheet（入口=底栏模型/权限/思考强度三个 chip，随 composer 显隐）
 //   通用设置 #generalSheet（侧栏底部入口，本机偏好 + 主机与服务，全局可达）
 // 二者的开合/手势/滚动锁完全一样，故只参数化 DOM key，不复制第二份实现。
-import { resolveSheetDragEnd } from '../logic.js';
+import { resolveSheetDragEnd } from '../logic/panel-state.js';
 
 const SHEET_OPEN_CLASS = 'ccm-sheet-open';
 

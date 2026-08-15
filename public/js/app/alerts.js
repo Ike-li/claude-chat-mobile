@@ -1,4 +1,4 @@
-import { readAlertPrefs, writeAlertPref } from '../logic.js';
+import { readAlertPrefs, writeAlertPref } from '../logic/service-diag.js';
 
 export function createAlertController(context) {
   const win = context.dependencies.window || globalThis.window || {};

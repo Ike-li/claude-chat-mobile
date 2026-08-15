@@ -12,12 +12,7 @@
 // 从 lastElementChild 沿 previousElementSibling 往回走，步数只等于尾部连续的非气泡节点数
 // （工具卡 / thinking / 系统条 / live 状态行）。但一个 agentic 回合可以连着堆几百张工具卡，
 // 所以仍加上限：超了就当没找到，退化成「按首条处理」，绝不把主线程耗在这里。
-import {
-  MESSAGE_TIME_GAP_MS,
-  normalizeMessageTs,
-  resolveMessageTimeMarker,
-  formatMessageTimeMarker,
-} from '../logic.js';
+import { MESSAGE_TIME_GAP_MS, formatMessageTimeMarker, normalizeMessageTs, resolveMessageTimeMarker } from '../logic/message-time.js';
 
 const SCAN_LIMIT = 500;
 

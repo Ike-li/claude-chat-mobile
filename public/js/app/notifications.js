@@ -1,4 +1,5 @@
-import { pushEnvHint, urlBase64ToUint8Array, readPushPreviewPref } from '../logic.js';
+import { urlBase64ToUint8Array } from '../logic/format.js';
+import { pushEnvHint, readPushPreviewPref } from '../logic/service-diag.js';
 import { t } from '../i18n.js';
 
 export function createNotificationController(context, {

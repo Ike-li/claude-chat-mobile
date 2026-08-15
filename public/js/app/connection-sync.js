@@ -1,4 +1,5 @@
-import { formatRttMs, rttToneClass, shouldShowRttChip } from '../logic.js';
+import { formatRttMs, rttToneClass } from '../logic/format.js';
+import { shouldShowRttChip } from '../logic/panel-state.js';
 import { t } from '../i18n.js';
 
 // good/ok 都用中性 ink-soft：健康延迟不与绿点抢 success 色；仅 warn/bad 上色告警。

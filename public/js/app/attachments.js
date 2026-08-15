@@ -1,4 +1,4 @@
-import { attachmentDataUrl, pickPasteImageFiles, formatAttachmentChipLabel, guessImageMime } from '../logic.js';
+import { attachmentDataUrl, formatAttachmentChipLabel, guessImageMime, pickPasteImageFiles } from '../logic/attachments.js';
 import { t } from '../i18n.js';
 
 const MAX_FILE = 10 * 1024 * 1024;

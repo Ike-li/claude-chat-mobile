@@ -40,7 +40,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Documentation | 10 |
 | E2E test | 48 |
 | Frontend asset | 3 |
-| Frontend source | 29 |
+| Frontend source | 43 |
 | Generated asset | 6 |
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
@@ -56,7 +56,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 153 |
 | Vendored asset | 21 |
 
-Total classified files: **431**.
+Total classified files: **445**.
 
 ## Complete file inventory
 
@@ -128,6 +128,20 @@ Total classified files: **431**.
 | `public/js/canonicalize.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/i18n.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/logic.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/attachments.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/bg-tasks.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/composer.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/connection.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/format.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/message-time.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/mirror.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/models-effort.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/outbox-send.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/panel-state.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/permissions.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/service-diag.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/statusline.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/tool-cards.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/ring-buffer.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/sw-cleanup.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/tw-config.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |

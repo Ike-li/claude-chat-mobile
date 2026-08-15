@@ -1,4 +1,5 @@
-import { isAnsweredQuestionId, formatPermInputDisplay } from '../logic.js';
+import { isAnsweredQuestionId } from '../logic/composer.js';
+import { formatPermInputDisplay } from '../logic/tool-cards.js';
 import { verifyIntegrity } from '../canonicalize.js';
 import { t } from '../i18n.js';
 

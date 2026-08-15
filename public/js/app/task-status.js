@@ -1,4 +1,5 @@
-import { bgTaskListCollapsed, formatBgTaskRowLabel, formatProgressHistoryEntry, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic.js';
+import { bgTaskListCollapsed, formatProgressHistoryEntry, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic/bg-tasks.js';
+import { formatBgTaskRowLabel } from '../logic/tool-cards.js';
 import { t } from '../i18n.js';
 
 export function createTaskStatusController(context, {

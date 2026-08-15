@@ -7,7 +7,7 @@
 //
 // 定时器契约：只在「有东西要显示或即将要显示」时才跑 tick，稳定连接后 clearInterval 彻底停表。
 // 移动端这个页面常驻，留一个 500ms interval 空转是白耗电。
-import { resolveConnectionBanner } from '../logic.js';
+import { resolveConnectionBanner } from '../logic/connection.js';
 import { t } from '../i18n.js';
 
 const BANNER_BASE = 'conn-banner shrink-0 flex items-center gap-2 px-3 py-1.5 text-xs';

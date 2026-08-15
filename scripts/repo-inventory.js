@@ -49,6 +49,7 @@ const PREFIX_RULES = [
   ['deploy/', 'Deployment', 'Service manager deployment template', 'keep'],
   ['src/', 'Backend source', 'Server-side domain module', 'keep'],
   ['public/js/app/', 'Frontend source', 'Browser application domain module', 'keep'],
+  ['public/js/logic/', 'Frontend source', 'Pure decision logic by domain — shared by the browser and node:test', 'keep'],
   ['public/js/', 'Frontend source', 'Browser application module or service worker', 'keep'],
   ['public/css/', 'Frontend source', 'Browser stylesheet', 'keep'],
   ['public/vendor/', 'Vendored asset', 'Pinned browser-side third-party dependency', 'keep'],
