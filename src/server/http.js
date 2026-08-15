@@ -251,8 +251,10 @@ export function configureHttpShell({
   // 生产档与上面的 indexHtml/appJs 同档：启动时读完、请求期只查表。这条路由排在鉴权之前
   // （静态资源必须登录前可取），每请求 readFileSync 会让未鉴权的高频请求同步阻塞事件循环。
   //
-  // ★ 冻结【是】新增约束，别照 2026-08-02 那版注释理解：public/js 下这 23 个子模块
-  // （logic.js / i18n.js / app/*.js）此前是逐请求读盘的，改完刷新就生效。冻结之后 `npm run dev`
+  // ★ 冻结【是】新增约束，别照 2026-08-02 那版注释理解：public/js 下除 app.js 外的全部子模块
+  // （logic.js barrel / logic/*.js / i18n.js / app/*.js / 其余顶层 .js，由下面的递归扫描决定，
+  // 不在此处写死数量——写死的计数会随目录增删静默失真）此前是逐请求读盘的，改完刷新就生效。
+  // 冻结之后 `npm run dev`
   // 也救不了——node --watch 只监视被 import 的模块，public/js/** 不在服务端的 import 图里。
   // 所以开发档留了热读口子（hotReloadJs），并且两档各自把状态打印出来，别让人对着旧代码调半天。
   const selfJsSources = new Map();

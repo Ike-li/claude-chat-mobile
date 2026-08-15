@@ -123,6 +123,30 @@ test('doc consistency 不误判无锚点行里的计数', async t => {
   assert.deepEqual(result.problems, []);
 });
 
+// 中英文档是孪生体（architecture.md ↔ architecture.en.md），只守中文会造成【守卫不对称】：
+// 改 AGENT_EVENT_TYPES 时中文红、英文静默失真而 npm run check 全绿。2026-08-15 独立审查发现
+// docs/architecture.en.md 的「All 26 types」正是这种漏网——它在扫描面内，但判据是纯中文量词。
+test('doc consistency 同样拦住英文文档里的契约计数漂移', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-doc-contract-en-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'package.json', JSON.stringify({ scripts: {}, dependencies: {} }));
+  await writeFixture(root, 'README.md', [
+    'The `AGENT_EVENT_TYPES` whitelist: all 99 types are covered today.',
+    'Inbound `INBOUND_SOCKET_EVENTS` currently has 42 events.',
+  ].join('\n'));
+
+  const result = checkDocConsistency({
+    rootDir: root,
+    docGlobs: ['README.md'],
+    contractCounts: { outbound: 26, inbound: 42 },
+  });
+
+  assert.deepEqual(result.problems.map(problem => problem.code), ['contract_count_drift']);
+  assert.equal(result.problems[0].documented, 99);
+  assert.equal(result.problems[0].actual, 26);
+});
+
 test('current docs stay consistent with package scripts and dependency versions', () => {
   const result = checkDocConsistency();
   assert.deepEqual(result.problems, []);

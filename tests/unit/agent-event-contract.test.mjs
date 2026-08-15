@@ -271,8 +271,8 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
 });
 
 // 出向侧对称的数量锚点。CLAUDE.md:11 对外宣称「type 分 26 种」，但此前全仓没有任何断言盯着
-// AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向的 40 早有上面那条断言守着，
-// 出向没有纯属遗漏。数字变动时请连同 CLAUDE.md:11 一起改。
+// AGENT_EVENT_TYPES 的长度——增删 type 时那句话会静默失真。入向早有上面那条断言守着，
+// 出向没有纯属遗漏。数字变动时 doc-consistency 的 checkContractCounts 会把文档侧一并拦下。
 test('AGENT_EVENT_TYPES 数量与 CLAUDE.md 宣称的 26 种一致', () => {
   assert.equal(AGENT_EVENT_TYPES.length, 26);
 });

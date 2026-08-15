@@ -421,7 +421,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
   });
 
   // 开发期必须能改完就刷新看到。启动预读是 2026-08-02 为"请求期零磁盘访问"加的，但它把
-  // public/js 下【除 app.js 外的 23 个子模块】从"逐请求读盘"变成了启动冻结（index.html 与
+  // public/js 下【除 app.js 外的全部子模块】从"逐请求读盘"变成了启动冻结（index.html 与
   // app.js 本来就是启动读的，子模块不是）。而 `npm run dev` 的 node --watch 只监视被 import
   // 的模块，public/js/** 不在服务端的 import 图里 → 改完刷新拿到的还是旧代码、且零提示。
   test('hotReloadJs：开发期逐请求读盘，改完刷新即生效（且相对 import 照样戳版本）', () => {

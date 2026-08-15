@@ -22,7 +22,7 @@
 ```
 TUI / CLI 用户可见          Agent SDK / 磁盘              CCM server                 Web FE
 ─────────────────          ─────────────────            ──────────                 ──────
-菜单 / statusline /        supportedModels              agent:event 信封            logic.js 纯函数
+菜单 / statusline /        supportedModels              agent:event 信封            logic/ 纯函数
 transcript 事实            stream / control / usage     status_line 组装            app.js DOM
 ```
 
@@ -30,7 +30,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 |----|------|----------|
 | SDK 边界 | 拉真值、映射 subtype → emit | `src/agent/agent.js` |
 | Server 合成 | statusline 组装、effort 归一、缓存重放 | `src/server/app.js`, `src/ops/statusline.js` |
-| FE 展示 | 可读化、磁贴/pill 策略 | `public/js/logic.js`, `public/js/app.js` |
+| FE 展示 | 可读化、磁贴/pill 策略 | `public/js/logic/`（`logic.js` 是 re-export barrel）, `public/js/app.js` |
 
 ---
 
@@ -204,7 +204,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 
 | 契约 | 实现 | 测试 |
 |------|------|------|
-| 模型磁贴 N + wire 标题 | `public/js/logic.js` `resolveModelTileDisplay` | `display-contracts` · `logic-ui-ux-remaining` |
+| 模型磁贴 N + wire 标题 | `public/js/logic/models-effort.js` `resolveModelTileDisplay` | `display-contracts` · `logic-ui-ux-remaining` |
 | 发送 pin wire | `resolveSendModel` | `display-contracts` · `logic-session` |
 | Pill 显 wire | `resolveModelPillText` | `logic-session` · E2E P0-09 |
 | Effort UI→SDK | `normalizeEffortUiLevel` | `display-contracts` · `cli-settings-defaults` |

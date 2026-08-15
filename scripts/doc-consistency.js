@@ -183,7 +183,12 @@ const CONTRACT_ANCHORS = Object.freeze([
 // 同行出现两个符号名 = 归属有歧义，报错要求拆行——静默跳过等于漏检，与本门禁的目的相反。
 function checkContractCounts({ rootDir, docFiles, contractCounts }) {
   const problems = [];
-  const countRe = /当前\s*`?(\d+)`?\s*[种个型条]/g;
+  // 中英两种量词都要认：architecture.md / architecture.en.md 是孪生体，只守中文会造成
+  // 【守卫不对称】——改 AGENT_EVENT_TYPES 时中文红、英文静默失真而 npm run check 全绿
+  // （2026-08-15 独立审查发现 architecture.en.md 的「All 26 types」正是这样漏网的）。
+  // 英文侧不要求「currently」之类的前缀词：英文写法太多（all / currently has / today there are），
+  // 锚点已经把范围收窄到「同行点了符号名」的那几行，量词本身足够判别。
+  const countRe = /当前\s*`?(\d+)`?\s*[种个型条]|(?<![\w.])(\d+)\s+(?:types?|events?)\b/gi;
 
   for (const rel of docFiles) {
     readText(rootDir, rel).split('\n').forEach((line, index) => {
@@ -205,7 +210,7 @@ function checkContractCounts({ rootDir, docFiles, contractCounts }) {
       const [, kind, label] = anchors[0];
       const actual = contractCounts[kind];
       for (const match of counts) {
-        const documented = Number(match[1]);
+        const documented = Number(match[1] ?? match[2]);   // 组 1=中文量词，组 2=英文量词
         if (documented === actual) continue;
         problems.push({
           code: 'contract_count_drift',

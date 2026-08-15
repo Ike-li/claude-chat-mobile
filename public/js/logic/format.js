@@ -9,6 +9,7 @@
 
 import { t } from '../i18n.js';
 
+// HTML 转义。app.js 多处复用（审批命令、工具参数摘要）+ ansiToHtml 内部。
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
