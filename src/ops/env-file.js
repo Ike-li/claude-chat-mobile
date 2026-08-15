@@ -95,9 +95,14 @@ export function maskSecret(value) {
 }
 
 // 行首是不是某个 key 的赋值行。容忍 `export KEY=`（有人习惯这么写）与两侧空白。
-function keyOfLine(line) {
-  const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
-  return m ? m[1] : null;
+//
+// 返回 { key, prefix }：prefix 是 `=` 之前、key 之前的那一段原文（缩进 + 可能的 `export `）。
+// 替换时必须把它原样拼回去 —— 上一版只拼 `${key}=…`，于是**改一次值就把 export 弄丢了**。
+// 后果不在 dotenv 侧（它本来就不管 export），而在第二个消费者：用户 `source .env` 之后
+// 那个变量不再被导出、子进程读不到，而 .env 看上去一切正常。
+function matchAssignment(line) {
+  const m = /^(\s*(?:export\s+)?)([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+  return m ? { prefix: m[1], key: m[2] } : null;
 }
 
 const APPEND_HEADER = '# ===== 以下由设置面板写入 =====';
@@ -121,11 +126,12 @@ export function applyEnvChanges(text, changes) {
   // 从后往前扫：dotenv 的生效语义是**后者覆盖前者**。
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
-    const key = keyOfLine(line);
-    if (key === null) {
+    const hit = matchAssignment(line);
+    if (hit === null) {
       out.unshift(line);
       continue;
     }
+    const { key, prefix } = hit;
     // 删除：**全部**同名行一并丢弃。只删最后一行的话，上面那个被覆盖的旧值会复活 ——
     // 用户以为清空了，配置却静默回退到一个更老的值。
     if (deletions.has(key)) {
@@ -137,9 +143,10 @@ export function applyEnvChanges(text, changes) {
       continue;
     }
     // 替换：只改最后一行。前面的重复行不影响生效值，是用户的历史，不该替他清理。
+    // prefix 原样拼回：缩进与 `export ` 都是用户写的形态，改个值不该顺手改掉它。
     const value = pending.get(key);
     pending.delete(key);
-    out.unshift(`${key}=${serializeEnvValue(value)}`);
+    out.unshift(`${prefix}${key}=${serializeEnvValue(value)}`);
   }
 
   // 剩下的是新 key。删除一个本来就不存在的 key 是 no-op。

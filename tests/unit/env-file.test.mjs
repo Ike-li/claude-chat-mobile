@@ -122,6 +122,10 @@ test.describe('serializeEnvValue —— shell source 安全（第二个消费者
     'pa$$word',
     '  padded  ',
     'topic-🔔',
+    // ★ 这两个让下面的哨兵断言真正承重：命令替换若被执行，cwd（临时目录）里就会出现 EXECUTED。
+    // 上一版的哨兵永远不会被任何东西创建，那条 assert 恒为真、白占一行。
+    'x`touch EXECUTED`y',
+    'x$(touch EXECUTED)y',
   ];
 
   for (const value of SHELL_CASES) {
@@ -132,8 +136,9 @@ test.describe('serializeEnvValue —— shell source 安全（第二个消费者
         const sentinel = join(dir, 'EXECUTED');
         writeFileSync(envFile, `K=${serializeEnvValue(value)}\n`);
 
-        // 哨兵：把 PATH 上的 id/echo 换成会写文件的桩不现实，改用「值里本来就带命令」的样本，
-        // 只要 shell 真的执行了它们，K 的内容就会与原值不同（命令输出替换掉了原文）。
+        // 哨兵是**真的**：SHELL_CASES 里有两个值内嵌 `touch EXECUTED`，cwd 就是这个临时目录。
+        // shell 一旦真的做了命令替换，这个文件就会出现——所以下面那条 assert 不是摆设。
+        // 另一条防线是值比对：命令输出会把原文替换掉，K 与原值就对不上了。
         const r = spawnSync('bash', ['-c', `set +e; source ${JSON.stringify(envFile)} 2>/dev/null; printf '%s' "$K"`], {
           encoding: 'utf8', cwd: dir,
         });
@@ -296,5 +301,53 @@ test.describe('maskSecret', () => {
   test('返回值里不含原文的任何片段', () => {
     const secret = 'super-secret-token';
     assert.ok(!JSON.stringify(maskSecret(secret)).includes('secret'));
+  });
+});
+
+// ── export 前缀必须原样保留 ──────────────────────────────────────────────
+//
+// keyOfLine 特意容忍 `export KEY=`（有人习惯这么写，好让 `source .env` 之后子进程也拿得到），
+// 但替换分支拼的是 `${key}=…` —— 前缀在改一次值之后就没了。
+// 后果不在 dotenv 侧（它本来就不管 export），而在**第二个消费者**：用户 `source .env` 之后
+// 那个变量不再被导出，子进程读不到，而 .env 看上去一切正常。同一类「两个消费者」问题。
+test.describe('applyEnvChanges —— export 前缀', () => {
+  test('原本带 export 的行，改值后仍带 export', () => {
+    const out = applyEnvChanges('export PORT=3000\nAUTH_TOKEN=abc\n', { PORT: '4000' });
+    assert.match(out, /^export PORT=4000$/m, `实际：${JSON.stringify(out)}`);
+    assert.match(out, /^AUTH_TOKEN=abc$/m, '没带 export 的行不该被加上');
+  });
+
+  test('原本不带 export 的行，改值后也不加', () => {
+    const out = applyEnvChanges('PORT=3000\n', { PORT: '4000' });
+    assert.match(out, /^PORT=4000$/m);
+    assert.doesNotMatch(out, /export/);
+  });
+
+  test('前缀的空白形态原样保留（`export   KEY=` 也认）', () => {
+    const out = applyEnvChanges('export   PORT=3000\n', { PORT: '4000' });
+    assert.match(out, /^export {3}PORT=4000$/m, `实际：${JSON.stringify(out)}`);
+  });
+
+  test('缩进原样保留', () => {
+    const out = applyEnvChanges('  export PORT=3000\n', { PORT: '4000' });
+    assert.match(out, /^ {2}export PORT=4000$/m, `实际：${JSON.stringify(out)}`);
+  });
+
+  test('同名重复行只改最后一条，且各自的 export 形态互不影响', () => {
+    const out = applyEnvChanges('PORT=1\nexport PORT=2\n', { PORT: '9' });
+    assert.match(out, /^PORT=1$/m, '前面的重复行是用户的历史，不动');
+    assert.match(out, /^export PORT=9$/m, '生效的那行保留自己的 export');
+  });
+
+  test('新追加的 key 不带 export（没有可继承的形态）', () => {
+    const out = applyEnvChanges('export PORT=3000\n', { NTFY_TOPIC: 'x' });
+    assert.match(out, /^NTFY_TOPIC=x$/m);
+    assert.match(out, /^export PORT=3000$/m, '没被改的行原样不动');
+  });
+
+  test('删除仍然是整行删掉（含 export 那种写法）', () => {
+    const out = applyEnvChanges('export PORT=3000\nAUTH_TOKEN=abc\n', { PORT: null });
+    assert.doesNotMatch(out, /PORT/);
+    assert.match(out, /^AUTH_TOKEN=abc$/m);
   });
 });
