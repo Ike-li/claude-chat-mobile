@@ -84,6 +84,22 @@ npm run setup
 
 环境变量始终优先于配置文件——`PORT=4000 npm start` 会压过文件里的值。
 
+### 用命令行改配置
+
+没有图形界面时（服务器部署），全部配置都能从命令行读写：
+
+```bash
+node scripts/config.js schema            # 列出全部配置项及其含义（活文档，从 schema 生成）
+node scripts/config.js get               # 当前配置（密钥默认脱敏，须 --reveal 才出明文）
+node scripts/config.js set PORT=4100 WEB_STATUSLINE=false
+node scripts/config.js unset PORT
+node scripts/config.js check             # 校验配置是否合法
+node scripts/config.js migrate           # 旧 .env → ccm.config.json（含 workdirs 内联）
+```
+
+`set` 会告诉你哪些改动需要重启 server；开关接受 `true/false`、`on/off`、`yes/no`、`1/0`。
+非法值整批拒写（不会写进去一半），与手机设置面板走的是同一套校验。
+
 ### 非交互模式
 
 编程 agent、CI shell 或其他没有 TTY 的环境必须显式使用：
@@ -300,4 +316,4 @@ npm run hooks:uninstall
 - 理解 Web/CLI 双通道：[架构说明](architecture.md)
 - 理解模型、effort、statusline 展示来源：[展示契约](display-contracts.md)
 - 维护者：n=1 硬性规则与技术债索引：[hard-rules.md](hard-rules.md)
-- 查看全部配置项及其含义：[`.env.example`](../.env.example)（键名与 `ccm.config.json` 一致，仅格式为旧版）
+- 查看全部配置项及其含义：`node scripts/config.js schema`（从 schema 生成，永不与代码分叉）

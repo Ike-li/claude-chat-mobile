@@ -35,6 +35,9 @@
   "scripts": {
     "start": "node server.js",
     "setup": "node scripts/setup.js",
+    "config": "node scripts/config.js",
+    "config:check": "node scripts/config.js check",
+    "config:migrate": "node scripts/config.js migrate",
     "statusline:status": "node scripts/statusline-bridge-setup.js status",
     "statusline:install": "node scripts/statusline-bridge-setup.js install",
     "statusline:uninstall": "node scripts/statusline-bridge-setup.js uninstall",

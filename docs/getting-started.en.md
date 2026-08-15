@@ -85,6 +85,23 @@ back to `.env`**, so existing deployments need no changes. If you specifically n
 
 Environment variables always beat the config file — `PORT=4000 npm start` overrides the file.
 
+### Editing config from the command line
+
+With no GUI (server deployments), every setting is readable and writable from the shell:
+
+```bash
+node scripts/config.js schema            # list every setting and what it does (generated from the schema)
+node scripts/config.js get               # current config (secrets redacted unless --reveal)
+node scripts/config.js set PORT=4100 WEB_STATUSLINE=false
+node scripts/config.js unset PORT
+node scripts/config.js check             # validate the current config
+node scripts/config.js migrate           # legacy .env → ccm.config.json (inlines workdirs)
+```
+
+`set` reports which changes need a server restart. Toggles accept `true/false`, `on/off`,
+`yes/no`, or `1/0`. Invalid values reject the whole batch (never a half-written config),
+using the same validation as the phone settings panel.
+
 ### Non-interactive mode
 
 A coding agent, CI shell, or any environment without a TTY must be explicit:
@@ -301,4 +318,4 @@ Use docs/deployment.md for a fixed public domain or persistent service. Do not c
 - Long-term public access: [Deployment and operations](deployment.md) (Chinese)
 - Understand the Web/CLI paths: [Architecture](architecture.en.md)
 - Understand model, effort, and statusline sources: [Display contracts](display-contracts.md) (Chinese)
-- Review every setting and what it does: [`.env.example`](../.env.example) (same key names as `ccm.config.json`, legacy format)
+- Review every setting and what it does: `node scripts/config.js schema` (generated from the schema, never drifts from the code)

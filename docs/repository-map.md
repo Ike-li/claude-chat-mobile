@@ -47,16 +47,16 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Instructions | 2 |
 | Integration test | 22 |
 | Legal | 2 |
-| Maintainer tooling | 29 |
+| Maintainer tooling | 30 |
 | Project configuration | 5 |
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
 | Test configuration | 4 |
 | Test support | 5 |
-| Unit test | 154 |
+| Unit test | 155 |
 | Vendored asset | 21 |
 
-Total classified files: **447**.
+Total classified files: **449**.
 
 ## Complete file inventory
 
@@ -178,6 +178,7 @@ Total classified files: **447**.
 | `scripts/check-playwright-forbidden-patterns.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/check-visual-mock-registry.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/collect-source-files.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
+| `scripts/config.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/contract-check.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/coverage-check.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
 | `scripts/device.js` | Maintainer tooling | Project maintenance or verification command | Direct maintainer CLI or an `npm` script | Authored and reviewed manually | keep |
@@ -388,6 +389,7 @@ Total classified files: **447**.
 | `tests/unit/client-error-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/client-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/collect-source-files.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/config-cli.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/config-file.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/contrast-tokens.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/coverage-check.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
