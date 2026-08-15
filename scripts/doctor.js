@@ -19,7 +19,6 @@
 // 14. CLAUDE_CONFIG_DIR 兼容性（CLI 认它、本仓固定读 ~/.claude；设了会静默读不到历史，见 doctor-checks.claudeConfigDirDiagnostic）
 // 15. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
 // 16. LaunchAgent 常驻服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
-import { config } from 'dotenv';
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
@@ -28,6 +27,8 @@ import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
+import { readConfigFileRaw, readConfigFileValues } from '../src/ops/config-file.js';
+import { loadRuntimeEnvironment } from '../src/server/config.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import {
   claudeConfigDirDiagnostic,
@@ -123,15 +124,8 @@ function checkWorkDir() {
   // 对无效项告警跳过、不挡启动，doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
   // 解析统一走 workdirs.js（与 server.js preflight 单一事实源）：条目支持 string 或 {path, sessionLimit}。
   // 文件模式复用导出的 loadWorkdirsFile（read+parse+normalize→null），逗号模式走 normalizeWorkdirEntries。
-  let result;
-  const dirsFile = process.env.WORK_DIRS_FILE;
-  if (dirsFile) {
-    const filePath = resolveWorkdirsFilePath(dirsFile, HERE);
-    result = loadWorkdirsFile(filePath);
-    if (!result) warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath})`);
-  } else {
-    result = normalizeWorkdirEntries((process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean));
-  }
+  const { result, from, filePath } = resolveWorkdirSource();
+  if (!result && from === 'WORK_DIRS_FILE') warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath})`);
   if (result) {
     for (const w of result.warnings) warn('WORK_DIRS', w);
     for (const { path } of result.entries) checkOneDir('WORK_DIRS', path, true);
@@ -430,13 +424,26 @@ function checkClaudeConfigDir() {
   (r.status === 'warn' ? warn : ok)('CLAUDE_CONFIG_DIR', r.detail);
 }
 
+// 工作区来源解析 —— **与 src/server/app.js 的 readWorkdirSource 同一优先级**：
+// 内联 WORKDIRS > 外部 workdirs.json > 逗号串 WORK_DIRS。
+// D3 与 workdirPaths 共用这一份：那条「同一解析口径」的注释以前只是口头约定，两处各写一遍，
+// 加第三条路径时必然只改一处 —— 而 doctor 的全部价值就在于「它看到的 = server 会看到的」。
+function resolveWorkdirSource() {
+  const inline = readConfigFileRaw(HERE)?.WORKDIRS;
+  if (Array.isArray(inline)) return { result: normalizeWorkdirEntries(inline), from: 'WORKDIRS' };
+  const dirsFile = process.env.WORK_DIRS_FILE;
+  if (dirsFile) {
+    const filePath = resolveWorkdirsFilePath(dirsFile, HERE);
+    return { result: loadWorkdirsFile(filePath), from: 'WORK_DIRS_FILE', filePath };
+  }
+  const raw = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
+  return { result: normalizeWorkdirEntries(raw), from: 'WORK_DIRS' };
+}
+
 // 白名单工作目录清单（与 checkWorkDir 同一解析口径，只取路径不做可写校验）。
 function workdirPaths() {
   const out = [process.env.WORK_DIR || homedir()];
-  const dirsFile = process.env.WORK_DIRS_FILE;
-  const result = dirsFile
-    ? loadWorkdirsFile(resolveWorkdirsFilePath(dirsFile, HERE))
-    : normalizeWorkdirEntries((process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean));
+  const { result } = resolveWorkdirSource();
   if (result) for (const { path } of result.entries) out.push(path);
   return [...new Set(out)];
 }
@@ -466,12 +473,21 @@ function checkUploadsFootprint() {
 const envArg = process.argv.find(a => a.startsWith('--env='));
 const shouldFix = process.argv.includes('--fix');
 const envFile = envArg ? envArg.split('=')[1] : join(HERE, '.env');
-if (existsSync(envFile)) {
-  config({ path: envFile });
-  console.log(`已加载: ${envFile}`);
-} else if (envArg) {
+if (envArg && !existsSync(envFile)) {
   console.error(`错误: 指定的 .env 文件不存在: ${envFile}`);
   process.exit(1);
+}
+
+// 配置加载走 server 的同一条路径（loadRuntimeEnvironment），而不是自己 dotenv.config 一次。
+// 理由是判据必须同源：doctor 的全部价值在于「它看到的 = server 启动时会看到的」。自己解析一份
+// 就会有分叉——而 setup.js 现在默认生成的是 ccm.config.json，旧的 dotenv 路径对它完全失明，
+// 新装用户跑 doctor 会被告知「未设置 AUTH_TOKEN」，照着改了还是没用。
+const loaded = readConfigFileValues(HERE, envArg ? { envFile } : {});
+loadRuntimeEnvironment(process.env, envArg ? { envFile } : { dir: HERE, quiet: true });
+if (loaded.error) {
+  console.error(`⚠️  配置文件解析失败：${loaded.error}`);
+} else if (loaded.source !== 'none') {
+  console.log(`已加载: ${loaded.path}`);
 }
 
 // WS-011：统一 effective config 上下文。旧实现 --env 只影响 dotenv 加载（改 process.env），D6/D7/--fix 仍硬读
@@ -486,7 +502,10 @@ const EFFECTIVE = {
 // 'data/xxx.json' → 实际数据目录下的 xxx.json。
 function effectiveConfigFiles() {
   return CONFIG_FILE_NAMES.map(name => {
+    // '.env' 映射到**被诊断的**那份（--env=prod.env 时不是仓库里这份）；
+    // 其余项目根文件（ccm.config.json）按仓库根解析；data/* 挂到实际数据目录。
     if (name === '.env') return { path: EFFECTIVE.envFile, name };
+    if (!name.startsWith('data')) return { path: join(HERE, name), name };
     const base = name.replace(/^data[/\\]/, '');
     return { path: join(EFFECTIVE.dataDir, base), name };
   });

@@ -18,7 +18,6 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -26,6 +25,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readConfigFileValues } from '../src/ops/config-file.js';
 
 import {
   HOOK_EVENT_LIST,
@@ -250,12 +250,12 @@ function probeServerAlive(port) {
 function resolvePort() {
   const fromEnv = Number(process.env.PORT);
   if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
-  try {
-    const envFile = readFileSync(join(ROOT, '.env'), 'utf8');
-    const line = envFile.split('\n').find(l => /^\s*PORT\s*=/.test(l));
-    const value = Number(line?.split('=')[1]?.trim());
-    if (Number.isFinite(value) && value > 0) return value;
-  } catch { /* 无 .env → 默认端口 */ }
+  // 走统一配置层而不是手写正则抠 .env 的 PORT 行：那段正则对 ccm.config.json 完全失明，
+  // 会让改过端口的用户静默拿到 3000 —— 而 hooks 桥拿这个端口去做回环验证，
+  // 结果是「装好了但验证连不上」，最难排查的那类症状。
+  const { values } = readConfigFileValues(ROOT);
+  const fromFile = Number(values.PORT);
+  if (Number.isFinite(fromFile) && fromFile > 0) return fromFile;
   return 3000;
 }
 

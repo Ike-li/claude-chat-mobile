@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // scripts/setup.js —— 一键配置向导：生成 .env（AUTH_TOKEN + WORK_DIR），零依赖。
-// 用法: node scripts/setup.js [--env <path>]                        # 交互向导（人用）
+// 用法: node scripts/setup.js [--config <path>|--env <path>]                        # 交互向导（人用）
 //       node scripts/setup.js --yes --work-dir=<path> [--hooks=on|off] [--force]  # 非交互（编程 agent 用）
 //   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN,
 //   否则只绑 127.0.0.1、手机连不上」——向导默认帮你生成。
@@ -17,9 +17,10 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import { join, dirname, resolve } from 'node:path';
+import { basename, join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeOwnerOnlyFile } from '../src/files/file-security.js';
+import { applyConfigChanges, CONFIG_FILE_NAME } from '../src/ops/config-file.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -30,8 +31,23 @@ export function generateToken(bytes = 32) {
   return randomBytes(bytes).toString('hex');
 }
 
+// 生成统一配置文件 ccm.config.json 的内容（P1b 起的默认格式）。
+//
+// 与下面 buildEnvContent 的关键差别：那个是**正则替换模板里的赋值行**，模板格式一变就静默
+// 不替换（所以调用点还得回头校验一次替换是否真的生效）；这个是结构化构造，写出去的就是数据
+// 本身，不存在「没匹配上」。值里的空格 / 引号 / 反斜杠交给 JSON.stringify，不需要 .env 时代
+// 那套「同时满足 dotenv 与 shell 两个解析器」的字符白名单。
+export function buildConfigContent({ authToken, workDir } = {}) {
+  const config = applyConfigChanges({}, {
+    ...(authToken ? { AUTH_TOKEN: authToken } : {}),
+    ...(workDir ? { WORK_DIR: workDir } : {}),
+  });
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
+
 // 基于 .env.example 模板填入 AUTH_TOKEN / WORK_DIR，返回新的 .env 内容。
 // 只替换行首的赋值行（KEY=…），注释与其他行原样保留。
+// **旧格式**：仅在 --env 显式指定时使用（如需要 docker --env-file）。
 export function buildEnvContent(template, { authToken, workDir } = {}) {
   let out = template;
   if (authToken) out = out.replace(/^AUTH_TOKEN=.*$/m, `AUTH_TOKEN=${authToken}`);
@@ -48,14 +64,15 @@ export function detectLang(env = process.env) {
 // 参数解析。未知参数不静默忽略而是收集起来由上层拒绝——`--workdir=` 这种少一个连字符的 typo
 // 若被忽略，WORK_DIR 就会悄悄回落到 $HOME，正是本模式要堵的那个洞。
 export function parseSetupArgs(argv = []) {
-  const out = { envPath: undefined, yes: false, workDir: undefined, hooks: undefined, force: false, unknown: [] };
+  const out = { envPath: undefined, configPath: undefined, yes: false, workDir: undefined, hooks: undefined, force: false, unknown: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const eq = arg.indexOf('=');
     const name = eq > 0 ? arg.slice(0, eq) : arg;
     const inline = eq > 0 ? arg.slice(eq + 1) : undefined;
     const value = () => (inline !== undefined ? inline : argv[++i]);
-    if (name === '--env') out.envPath = value();
+    if (name === '--config') out.configPath = value();
+    else if (name === '--env') out.envPath = value();
     else if (name === '--work-dir') out.workDir = value();
     else if (name === '--hooks') out.hooks = value();
     else if (name === '--yes' || name === '-y') out.yes = true;
@@ -75,6 +92,9 @@ export function resolveSetupPlan({ args, envExists = false } = {}) {
   if (args.hooks !== undefined && args.hooks !== 'on' && args.hooks !== 'off') {
     return refuse('invalid_hooks', String(args.hooks));
   }
+  // 两种格式互斥。挑一个赢的话，用户会拿到一个自己没要求的格式，而两个路径写的是不同文件 ——
+  // 那正是「读写不同源」类问题的种子。
+  if (args.configPath !== undefined && args.envPath !== undefined) return refuse('both_formats');
   if (!args.yes) return { mode, workDir: args.workDir, hooks: args.hooks };
   if (!args.workDir) return refuse('work_dir_required');
   if (envExists && !args.force) return refuse('env_exists');
@@ -102,13 +122,14 @@ export const MESSAGES = {
     hooksInstalling: '正在安装并验证…',
     hooksSkipped: '已跳过。随时可跑 npm run hooks:install 补装。',
     hooksFailed: '安装未成功（见上方输出）。不影响其余配置；稍后可跑 npm run hooks:install 重试。',
-    usage: '用法: node scripts/setup.js [--env <path>]\n'
+    usage: '用法: node scripts/setup.js [--config <path>|--env <path>]\n'
       + '      node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--force] [--env <path>]',
     refuse: {
       unknown_flag: d => `无法识别的参数：${d}`,
       invalid_hooks: d => `--hooks 只接受 on 或 off，收到：${d}`,
       work_dir_required: () => '非交互模式必须显式给出 --work-dir=<绝对路径>。'
         + '这里不会静默回落到 $HOME——那等于把整个家目录交给 agent 读写。',
+      both_formats: () => '--config 与 --env 只能给一个：前者写 ccm.config.json，后者写旧格式 .env。',
       env_exists: d => `${d} 已存在，非交互模式不会覆盖它（里面可能有正在用的 AUTH_TOKEN）。`
         + '确认要覆盖再加 --force。',
     },
@@ -132,13 +153,14 @@ export const MESSAGES = {
     hooksInstalling: 'Installing and verifying…',
     hooksSkipped: 'Skipped. Run npm run hooks:install anytime.',
     hooksFailed: 'Install did not complete (see output above). Your other config is fine; retry with npm run hooks:install.',
-    usage: 'usage: node scripts/setup.js [--env <path>]\n'
+    usage: 'usage: node scripts/setup.js [--config <path>|--env <path>]\n'
       + '       node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--force] [--env <path>]',
     refuse: {
       unknown_flag: d => `Unrecognized argument: ${d}`,
       invalid_hooks: d => `--hooks accepts only on or off, got: ${d}`,
       work_dir_required: () => 'Non-interactive mode requires an explicit --work-dir=<absolute-path>. '
         + 'It will not silently fall back to $HOME — that would hand your entire home directory to the agent.',
+      both_formats: () => 'Pass either --config or --env, not both: the former writes ccm.config.json, the latter legacy .env.',
       env_exists: d => `${d} already exists; non-interactive mode will not overwrite it `
         + '(it may hold the AUTH_TOKEN you are using). Add --force if you really mean to replace it.',
     },
@@ -154,21 +176,31 @@ const c = {
   accent: s => `\x1b[36m${s}\x1b[0m`,
 };
 
-// 落盘 .env（两条路径共用，防交互/非交互各写一份再分叉）。
+// 落盘（交互/非交互两条路径共用，防各写一份再分叉）。
+//
 // 注意成功提示的位置：token 那行必须在 writeOwnerOnlyFile 之后才打印。旧实现先打印
 // 「✓ 已生成 AUTH_TOKEN（已写入 .env）」再去问 WORK_DIR，被 EOF/Ctrl-C 打断时一个字没写却已经报了成功。
-function writeEnvFile({ envPath, templatePath, workDir, t }) {
+//
+// format='config'（默认）走结构化构造；'env' 是显式要旧格式时的退路（如需要 docker --env-file）。
+function writeSetupFile({ envPath, templatePath, workDir, format, t }) {
   const token = generateToken();
-  const template = readFileSync(templatePath, 'utf8');
-  const content = buildEnvContent(template, { authToken: token, workDir: workDir || undefined });
-  writeOwnerOnlyFile(envPath, content);
 
-  // 校验替换真的生效——buildEnvContent 靠正则匹配 .env.example 模板里的赋值行，模板格式一旦变了
-  // 会静默不替换（.replace 无匹配即原样返回），此前不管有没有生效都打印"已写入"成功提示。
-  if (!content.includes(`AUTH_TOKEN=${token}`)) {
-    console.error(`\n⚠️  .env.example 模板格式有变，AUTH_TOKEN 未能自动写入！请手动在 ${envPath} 里加一行：\nAUTH_TOKEN=${token}`);
+  if (format === 'env') {
+    const template = readFileSync(templatePath, 'utf8');
+    const content = buildEnvContent(template, { authToken: token, workDir: workDir || undefined });
+    writeOwnerOnlyFile(envPath, content);
+    // 校验替换真的生效——buildEnvContent 靠正则匹配 .env.example 模板里的赋值行，模板格式一旦变了
+    // 会静默不替换（.replace 无匹配即原样返回），此前不管有没有生效都打印"已写入"成功提示。
+    if (!content.includes(`AUTH_TOKEN=${token}`)) {
+      console.error(`\n⚠️  .env.example 模板格式有变，AUTH_TOKEN 未能自动写入！请手动在 ${envPath} 里加一行：\nAUTH_TOKEN=${token}`);
+    }
+  } else {
+    // 结构化构造没有「没匹配上」这个失败模式，所以上面那道兜底校验在这条路径上不需要。
+    writeOwnerOnlyFile(envPath, buildConfigContent({ authToken: token, workDir: workDir || undefined }));
   }
-  console.log(`\n${c.green('✓')} ${t.tokenLabel}: ${c.dim(token.slice(0, 8) + t.tokenWrittenSuffix)}`);
+
+  const written = `…（已写入 ${basename(envPath)}）`;
+  console.log(`\n${c.green('✓')} ${t.tokenLabel}: ${c.dim(token.slice(0, 8) + written)}`);
   console.log(`${c.green('✓')} ${t.wroteLabel} ${c.bold(envPath)} ${c.dim(t.permNote)}`);
 }
 
@@ -189,7 +221,7 @@ function printNextSteps(t) {
   console.log(c.dim(`\n${t.publicNote}\n`));
 }
 
-async function runInteractive({ plan, envPath, templatePath, t }) {
+async function runInteractive({ plan, envPath, templatePath, format, t }) {
   const rl = createInterface({ input: stdin, output: stdout });
   try {
     // 已有 .env → 先问是否覆盖（默认否，绝不静默覆盖既有配置）
@@ -203,7 +235,7 @@ async function runInteractive({ plan, envPath, templatePath, t }) {
 
     // WORK_DIR：命令行已给就不问；交互留空 = $HOME（人自己按回车做的选择，与 agent 静默回落不同）
     const workDir = plan.workDir ?? (await rl.question(`\n${t.workDirLabel} ${c.dim(t.workDirHint)}: `)).trim();
-    writeEnvFile({ envPath, templatePath, workDir, t });
+    writeSetupFile({ envPath, templatePath, workDir, format, t });
 
     // CLI hooks 桥：默认装（终端直跑的会话唯有装了它才能推到手机——轮询只能在你已经打开
     // app 时追平镜像，永远不会主动叫你）。默认 Y 但必须问：它写的是用户全局 ~/.claude/settings.json。
@@ -221,8 +253,8 @@ async function runInteractive({ plan, envPath, templatePath, t }) {
   }
 }
 
-function runNonInteractive({ plan, envPath, templatePath, t }) {
-  writeEnvFile({ envPath, templatePath, workDir: plan.workDir, t });
+function runNonInteractive({ plan, envPath, templatePath, format, t }) {
+  writeSetupFile({ envPath, templatePath, workDir: plan.workDir, format, t });
   if (plan.hooks === 'on') installHooksBridge(t);
   else console.log(c.dim(t.hooksSkipped));
   printNextSteps(t);
@@ -230,13 +262,17 @@ function runNonInteractive({ plan, envPath, templatePath, t }) {
 
 async function main() {
   const args = parseSetupArgs(process.argv.slice(2));
-  const envPath = args.envPath || join(HERE, '.env');
+  // 默认生成统一配置文件；--env 是显式要旧格式时的退路（如需要 docker --env-file）。
+  const format = args.envPath ? 'env' : 'config';
+  const envPath = args.envPath || args.configPath || join(HERE, CONFIG_FILE_NAME);
   const templatePath = join(HERE, '.env.example');
   const t = MESSAGES[detectLang()];
 
   console.log(c.bold(`\n${t.title}\n`));
 
-  if (!existsSync(templatePath)) {
+  // 模板只有旧格式路径才需要。结构化构造不读模板，缺了 .env.example 也照样能装机 ——
+  // 早前无条件检查会让「仓库里没有 .env.example」直接 exit 1，而新路径根本用不到它。
+  if (format === 'env' && !existsSync(templatePath)) {
     console.error(t.noTemplate);
     process.exit(1);
   }
@@ -248,8 +284,8 @@ async function main() {
     process.exit(2);
   }
 
-  if (plan.mode === 'noninteractive') runNonInteractive({ plan, envPath, templatePath, t });
-  else await runInteractive({ plan, envPath, templatePath, t });
+  if (plan.mode === 'noninteractive') runNonInteractive({ plan, envPath, templatePath, format, t });
+  else await runInteractive({ plan, envPath, templatePath, format, t });
 }
 
 // 仅直接运行时进入交互；被测试 import 时不执行 main。

@@ -33,7 +33,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Category | Files |
 | --- | ---: |
 | Automation | 2 |
-| Backend source | 65 |
+| Backend source | 66 |
 | Configuration template | 1 |
 | Deployment | 4 |
 | Desktop integration | 4 |
@@ -53,10 +53,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 4 |
 | Test support | 5 |
-| Unit test | 153 |
+| Unit test | 154 |
 | Vendored asset | 21 |
 
-Total classified files: **445**.
+Total classified files: **447**.
 
 ## Complete file inventory
 
@@ -227,6 +227,7 @@ Total classified files: **445**.
 | `src/ops/cli-hooks-bridge.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/cli-statusline-bridge.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/client-error-log.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
+| `src/ops/config-file.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/doctor-checks.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/doctor-runtime.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
 | `src/ops/env-file.js` | Backend source | Server-side domain module | Imported by the runtime entrypoint | Authored and reviewed manually | keep |
@@ -387,6 +388,7 @@ Total classified files: **445**.
 | `tests/unit/client-error-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/client-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/collect-source-files.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/config-file.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/contrast-tokens.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/coverage-check.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/data-dir.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

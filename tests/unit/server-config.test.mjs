@@ -82,6 +82,71 @@ test('loadRuntimeEnvironment：测试 child 的显式空认证配置不被 .env 
   }
 });
 
+// ── P1a：统一配置文件 ccm.config.json ────────────────────────────────────────
+//
+// 上面四条锁的是 .env 路径（仍受支持：显式 --env=prod.env 与迁移期回落都走它）。
+// 这三条锁新路径 —— 重点是**类型化只发生在配置层内部**：JSON 里写 boolean / number，
+// 投影回 process.env 之后仍是那 7 处消费点认得的字面量，消费点一行不改。
+test('loadRuntimeEnvironment：读 ccm.config.json，结构化值投影成消费点认得的字面量', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-config-json-'));
+  try {
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({
+      $schemaVersion: 1,
+      PORT: 4100,
+      AUTH_TOKEN: 'from-json',
+      WEB_STATUSLINE: false,   // 默认开的项，关掉 → 必须投成 'off'
+      DEV_MODE: true,          // 默认关的项，打开 → 必须投成 '1'
+      LOG_TERMINAL: true,      // 第三套字面量 → 必须投成 'on'
+      CCM_DATA_DIR: '/external/data', // passthrough：不在 ENV_SCHEMA 里也要活下来
+    }));
+    const env = {};
+
+    loadRuntimeEnvironment(env, { dir, quiet: true });
+
+    assert.equal(env.PORT, '4100');
+    assert.equal(env.AUTH_TOKEN, 'from-json');
+    assert.equal(env.WEB_STATUSLINE, 'off');      // app.js:1229 判 === 'off'
+    assert.equal(env.DEV_MODE, '1');              // config.js:65 判 === '1'
+    assert.equal(env.LOG_TERMINAL, 'on');         // log-terminal.js:33 判 !== 'on'
+    assert.equal(env.CCM_DATA_DIR, '/external/data');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadRuntimeEnvironment：开关为默认态时不写 key —— 空串 ≡ 未设置', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-config-default-'));
+  try {
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({
+      WEB_STATUSLINE: true,  // 默认就是开 → 不该留下 WEB_STATUSLINE=''
+      DEV_MODE: false,       // 默认就是关 → 同理
+    }));
+    const env = {};
+
+    loadRuntimeEnvironment(env, { dir, quiet: true });
+
+    assert.equal(env.WEB_STATUSLINE, undefined);
+    assert.equal(env.DEV_MODE, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadRuntimeEnvironment：shell 值仍然压过 ccm.config.json', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-config-shell-wins-'));
+  try {
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ PORT: 4100, AUTH_TOKEN: 'from-json' }));
+    const env = { PORT: '9000' };
+
+    loadRuntimeEnvironment(env, { dir, quiet: true });
+
+    assert.equal(env.PORT, '9000');          // shell 赢
+    assert.equal(env.AUTH_TOKEN, 'from-json'); // 未被 shell 指定的仍从文件来
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('loadRuntimeEnvironment：shell 空串 ANTHROPIC_* 不应被 .env 填入（SH-001 回归）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-env-empty-anthropic-'));
   try {

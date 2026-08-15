@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs';
+
 import dotenv from 'dotenv';
+
+import { loadConfigSources, projectToEnv, resolveConfigValues } from '../ops/config-file.js';
 import { resolveDataDir } from '../shared/data-dir.js';
 
 const positiveNumber = (value, fallback) => {
@@ -26,7 +30,7 @@ export function normalizeLoadedEnvironment(env, shellAnthropicKeys) {
 // Must run in the thin launcher before importing app.js. Several state modules
 // resolve their file paths at module evaluation time, so loading .env inside
 // app.js would be too late for CCM_DATA_DIR. Provider variables remain shell-only.
-export function loadRuntimeEnvironment(env = process.env, { envFile, quiet = false } = {}) {
+export function loadRuntimeEnvironment(env = process.env, { envFile, dir, quiet = false } = {}) {
   const shellAnthropicKeys = new Set(Object.keys(env).filter(key => key.startsWith('ANTHROPIC_')));
   // OPS/SH-001：dotenv 默认不覆盖已存在的 key——含空串。LaunchAgent/systemd 若 export AUTH_TOKEN=
   // 或 CCM_DATA_DIR=，会挡住 .env 填入，normalize 再删空串 → 进程当「未设置」跑（绑 127.0.0.1 /
@@ -41,11 +45,31 @@ export function loadRuntimeEnvironment(env = process.env, { envFile, quiet = fal
       if (env[key] === '' && !key.startsWith('ANTHROPIC_')) delete env[key];
     }
   }
-  dotenv.config({
-    ...(envFile ? { path: envFile } : {}),
-    processEnv: env,
-    quiet,
-  });
+
+  // 配置源：默认扫 cwd（plist 是 `cd "__REPO__" && exec node server.js`，systemd 同理），
+  // ccm.config.json 优先、缺失回落 .env。显式 envFile 走兼容路径 —— doctor 的 `--env=prod.env`
+  // 与单测都指向一个具体文件，那时不该再去扫目录。
+  const sources = envFile
+    ? { fileValues: dotenv.parse(readFileSync(envFile)), warnings: [] }
+    : loadConfigSources({ dir: dir ?? process.cwd() });
+
+  const { values, warnings } = resolveConfigValues({ fileValues: sources.fileValues, shellEnv: env });
+  if (!quiet) {
+    for (const w of [...sources.warnings, ...warnings]) console.warn(`[config] ${w}`);
+  }
+
+  // 投影回 process.env：**只填 env 里还没有的 key**。这一条就是 dotenv「不覆盖已存在的 key」
+  // 语义的等价物 —— 换格式不改变谁赢。已在 env 里的要么是真 shell 值，要么是
+  // CCM_TEST_PRESERVE_EMPTY_ENV 下被刻意保留的空串（随后由 normalizeLoadedEnvironment 删掉）。
+  //
+  // 类型化到此为止：投影出去的是字符串，现有 7 处消费点的字面量判据一行不改。
+  // 等 P1b/P1c 把消费点迁到结构化值，这一层才退场。
+  for (const [key, value] of Object.entries(values)) {
+    if (Object.hasOwn(env, key)) continue;
+    const projected = projectToEnv(key, value);
+    if (projected !== null) env[key] = projected;
+  }
+
   return normalizeLoadedEnvironment(env, shellAnthropicKeys);
 }
 

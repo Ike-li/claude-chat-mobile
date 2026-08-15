@@ -9,6 +9,9 @@ import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, comp
 // 敏感配置文件清单（相对项目根）——CLI doctor（scripts/doctor.js）与本运行时 doctor 共用同一事实源，
 // 防两处各自维护再漏同步。列表新增项须同时被 CLI 检查/自动修复与 UI 体检覆盖。
 export const CONFIG_FILE_NAMES = [
+  // 统一配置文件（P1a 起的默认格式）。它和 .env 一样装着 AUTH_TOKEN / VAPID 私钥 / ntfy token，
+  // 不进这张清单的话 CLI doctor 查不到、--fix 也修不了 —— 而 setup.js 现在默认生成的就是它。
+  'ccm.config.json',
   '.env',
   join('data', 'sessions.json'),
   join('data', 'init-cache.json'),
@@ -35,9 +38,11 @@ export function countConfigPermProblems(rootDir, { platform = process.platform, 
   const dataRoot = dataDir || join(rootDir, 'data');
   let problems = 0;
   for (const name of CONFIG_FILE_NAMES) {
-    const p = name === '.env'
-      ? join(rootDir, name)
-      : join(dataRoot, name.replace(/^data[/\\]/, ''));
+    // 判据从「是不是 .env」换成「在不在 data/ 下」：清单里现在有两个项目根文件
+    // （ccm.config.json 与 .env），按名字逐个列举迟早漏掉新加的那个。
+    const p = name.startsWith('data')
+      ? join(dataRoot, name.replace(/^data[/\\]/, ''))
+      : join(rootDir, name);
     if (!existsSync(p)) continue;      // 文件不存在不算问题
     if (!isOwnerOnly(p)) problems++;   // 存在但非 0600 → 过宽
   }

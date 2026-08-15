@@ -29,12 +29,12 @@ import { homedir, networkInterfaces } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import dotenv from 'dotenv';
 
 import { writeOwnerOnlyFile } from '../src/files/file-security.js';
 import { renderTemplate, stripLeadingComment } from './render-plist.js';
 
 import { classifyRestartPattern, validateServiceEvents } from '../src/ops/service-events.js';
+import { CONFIG_FILE_NAME, readConfigFileValues } from '../src/ops/config-file.js';
 import {
   DEFAULT_LABEL_PREFIX,
   SERVICE_UNIT_NAMES,
@@ -694,12 +694,11 @@ function realTcpProbe(port) {
   return !!r && r.status === 0;
 }
 
+// 「配置文件里写了什么」（不含 shell 覆盖）—— manifest 路径解析与 setup 信息展示都基于它。
+// 走统一配置层：读错源的后果是菜单栏 app 显示默认端口 3000 与错误的 lanUrl，而那是用户判断
+// 「服务到底起没起」的主要依据。
 function realReadEnv() {
-  try {
-    return dotenv.parse(readFileSync(join(ROOT, '.env')));
-  } catch {
-    return {};
-  }
+  return readConfigFileValues(ROOT).values;
 }
 
 // 解析不了（路径不存在、权限不足）就回落原值：两边都回落 ⇒ 仍能正确比较，
@@ -875,7 +874,9 @@ export function realManager() {
     readPlistFile: realReadPlistFile,
     readManifest: realReadManifest,
     readEnv: realReadEnv,
-    envFileExists: () => existsSync(join(ROOT, '.env')),
+    // 「配置过没有」而不是「.env 在不在」：新装用户的配置在 ccm.config.json 里，
+    // 只判旧文件会让菜单栏 app 对着一台配好的服务显示「尚未配置」。
+    envFileExists: () => existsSync(join(ROOT, CONFIG_FILE_NAME)) || existsSync(join(ROOT, '.env')),
     tcpProbe: realTcpProbe,
     lanIp: realLanIp,
     listAgentLabels: () => realListAgentLabels(home),

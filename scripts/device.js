@@ -2,11 +2,13 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { config } from 'dotenv';
+import { loadRuntimeEnvironment } from '../src/server/config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
-config({ path: join(ROOT, '.env'), quiet: true });
+// 走 server 的同一条加载路径而不是自己 dotenv 一次：这里只要 CCM_DATA_DIR，但读错源的后果
+// 是对着一个空的 trusted-devices.json 工作 —— 「一个设备都没有」和「读错目录了」长得一模一样。
+loadRuntimeEnvironment(process.env, { dir: ROOT, quiet: true });
 const DATA_DIR = process.env.CCM_DATA_DIR || join(ROOT, 'data');
 const TRUSTED_DEVICES_FILE = join(DATA_DIR, 'trusted-devices.json');
 // devices.js 在模块初始化时锚定数据路径，必须先加载 .env 再动态导入。

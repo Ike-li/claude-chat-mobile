@@ -33,6 +33,12 @@ import { createNotifyChannels } from '../ops/notify-channels.js';
 import { formatClientErrorLine, createSocketErrorLimiter } from '../ops/client-error-log.js';
 import { attributePath, buildDiff, readPreview } from '../files/file-preview.js';
 import { runDoctor, countConfigPermProblems } from '../ops/doctor-runtime.js';
+import {
+  applyConfigChanges,
+  CONFIG_FILE_NAME,
+  createConfigReloader,
+  structuredToStringValues,
+} from '../ops/config-file.js';
 import { applyEnvChanges } from '../ops/env-file.js';
 import { buildEnvView, validateEnvChanges } from '../ops/env-schema.js';
 import { dataFile } from '../shared/data-dir.js';
@@ -104,7 +110,13 @@ import { registerFileSocketHandlers } from './socket-files.js';
 initCfAccess();
 
 const HERE = join(import.meta.dirname, '..', '..'); // 项目根；从任何 cwd 启动都一致
-const ENV_FILE_PATH = join(HERE, '.env'); // 配置面板读写的目标；与 config.js 的 dotenv 加载点同一份
+const ENV_FILE_PATH = join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
+const CONFIG_FILE_PATH = join(HERE, CONFIG_FILE_NAME); // 统一配置文件，优先于 .env
+
+// 面板读写的目标必须与 src/server/config.js 启动时**读的那一份**是同一个文件。
+// 分流写错的后果不是报错而是假成功：用户改完看到「已写入」，重启后毫无变化 ——
+// 与 CF_ACCESS_* 被 dotenv 吞掉那次是同一种失效形态（fail-open + 假成功）。
+const usingConfigJson = () => existsSync(CONFIG_FILE_PATH);
 
 const canAccessPath = (p, mode) => {
   try {
@@ -171,7 +183,26 @@ const { pushEnabled, pushNotify, ntfyNotify, savePushSubscription } = notify;
 // ---- 工作区白名单：读取源 + 应用（preflight 与热加载共用）----
 // 读取原始条目源：WORK_DIRS_FILE（JSON 数组文件，优先）或 WORK_DIRS（逗号分隔，向后兼容）。
 // 文件读/解析失败 → 返回 null（调用方保留旧配置，不清空白名单）。
+// 统一配置文件里的内联工作区列表（P1b）。返回 null = 没写这一项，回落到旧的两条路径。
+//
+// 每次调用重读文件而不是用启动时的快照：热加载路径本来就要重读，而这个 JSON 只有几 KB。
+// 换来的是零新增模块级状态 —— 与 CLAUDE.md「新状态别再落 app.js 顶层」一致。
+function readInlineWorkdirs() {
+  if (!usingConfigJson()) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
+    return Array.isArray(parsed?.WORKDIRS) ? parsed.WORKDIRS : null;
+  } catch {
+    return null; // 坏 JSON：启动期 loadConfigSources 已经 fail-loud 过，这里静默回落即可
+  }
+}
+
 function readWorkdirSource() {
+  // 优先级：内联 WORKDIRS > 外部 workdirs.json > 逗号串。统一配置文件是新的事实源，
+  // 显式写了就该赢；后两条保留只为不打断既有部署（config migrate 会把它们内联进来）。
+  const inline = readInlineWorkdirs();
+  if (inline !== null) return normalizeWorkdirEntries(inline);
+
   const dirsFile = process.env.WORK_DIRS_FILE;
   if (dirsFile) {
     const filePath = resolveWorkdirsFilePath(dirsFile, HERE);
@@ -510,30 +541,62 @@ function unlockSocket(socket) {
   scheduleStatusRefresh();
 }
 
-// workdirs.json 热加载监听（仅 WORK_DIRS_FILE 模式；逗号串 WORK_DIRS 无文件可 watch）。
-// 与 trusted-devices 直接 watch 文件不同：workdirs.json 由人用编辑器改，VS Code/vim 默认原子写(rename 换 inode)
-// 会让对旧 inode 的 watch 永久失聪 → 改为 watch 其目录并过滤 basename（对子文件替换免疫）。300ms 防抖。
-if (process.env.WORK_DIRS_FILE) {
-  const wf = resolveWorkdirsFilePath(process.env.WORK_DIRS_FILE, HERE);
-  const wbase = basename(wf);
-  let wtimer = null;
-  // mtime 前置守卫：相对路径时 dirname(wf) 可能是整个项目根，且部分平台(Linux/网络 FS)不提供 filename→basename 过滤失效。
-  // 每次事件比对 workdirs 文件 mtime，未变即跳过——消除根目录无关文件变动（如 dev 期编辑器 swap）引发的重载风暴。
-  let lastWorkdirsMtime = 0;
-  try { lastWorkdirsMtime = statSync(wf).mtimeMs; } catch { /* 文件暂不存在，首次变更时再取 */ }
+// 配置类文件的变更监听（workdirs.json 与 ccm.config.json 共用）。
+//
+// 与 trusted-devices 直接 watch 文件不同：这两个都由人用编辑器改，而 VS Code/vim 默认原子写
+// (rename 换 inode) 会让对旧 inode 的 watch 永久失聪 → 改为 watch 其目录并过滤 basename
+// （对子文件替换免疫）。300ms 防抖。
+//
+// mtime 前置守卫：相对路径时 dirname 可能是整个项目根，且部分平台(Linux/网络 FS)不提供 filename
+// → basename 过滤失效。每次事件比对 mtime，未变即跳过——消除根目录无关文件变动（如 dev 期编辑器
+// swap）引发的重载风暴。
+function watchFileDebounced(filePath, onChange, label) {
+  const base = basename(filePath);
+  let timer = null;
+  let lastMtime = 0;
+  try { lastMtime = statSync(filePath).mtimeMs; } catch { /* 文件暂不存在，首次变更时再取 */ }
   try {
-    watch(dirname(wf), (_evt, filename) => {
-      if (filename && filename !== wbase) return; // 有 filename 时直接按 basename 过滤
+    watch(dirname(filePath), (_evt, filename) => {
+      if (filename && filename !== base) return;
       let m;
-      try { m = statSync(wf).mtimeMs; } catch { return; } // 文件不存在/不可读 → 跳过（保留旧白名单）
-      if (m === lastWorkdirsMtime) return;               // mtime 未变 = 非本文件变动，忽略
-      lastWorkdirsMtime = m;
-      clearTimeout(wtimer);
-      wtimer = setTimeout(reloadWorkdirs, 300);
+      try { m = statSync(filePath).mtimeMs; } catch { return; } // 不存在/不可读 → 跳过（保留旧配置）
+      if (m === lastMtime) return;
+      lastMtime = m;
+      clearTimeout(timer);
+      timer = setTimeout(onChange, 300);
     });
   } catch (err) {
-    console.error('[workdirs] 无法监视 workdirs 文件所在目录:', err.message);
+    console.error(`[${label}] 无法监视文件所在目录:`, err.message);
   }
+}
+
+// workdirs.json 热加载（仅 WORK_DIRS_FILE 模式；逗号串 WORK_DIRS 无文件可 watch）。
+if (process.env.WORK_DIRS_FILE) {
+  watchFileDebounced(resolveWorkdirsFilePath(process.env.WORK_DIRS_FILE, HERE), reloadWorkdirs, 'workdirs');
+}
+
+// 统一配置文件热加载（P1b）：hot 项就地生效，restart 项只提示 —— 热应用一个需重启的项是假生效。
+//
+// **只在文件已存在时才装监听**：未迁移的部署一个 watch 都不多加，与 P1a 的零影响立场一致。
+// 运行中才创建 ccm.config.json 的情况不被监听，这是对的：那时整个启动配置都还是从旧源读的，
+// 换源本来就需要重启。
+if (usingConfigJson()) {
+  const configReloader = createConfigReloader({
+    readConfig: () => {
+      try {
+        return JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
+      } catch {
+        return null; // 编辑器写到一半 → 保留旧快照，别把白名单判成全部删除
+      }
+    },
+    onHot: (keys) => {
+      console.log(`[config] 热加载生效：${keys.join(', ')}`);
+      if (keys.includes('WORKDIRS')) reloadWorkdirs();
+    },
+    onRestart: (keys) => console.warn(`⚠️  [config] 这些改动需重启 server 才生效：${keys.join(', ')}`),
+  });
+  configReloader.prime();
+  watchFileDebounced(CONFIG_FILE_PATH, () => configReloader.handleChange(), 'config');
 }
 
 // 终端控制台交互：敲回车一键同意最新申请设备，或输入 deny 拒绝。
@@ -2831,7 +2894,17 @@ registerSocketConnection(io, socket => {
   //   1. **只写文件，绝不动 process.env** —— 半生效的配置比不生效更糟；生效靠重启
   //   2. key 白名单（src/ops/env-schema.js），schema 之外一律拒绝：这不是通用 .env 编辑器
   //   3. 日志与 ack **只记 key 名不记值** —— changes 里可能有 VAPID 私钥、ntfy token
+  // 已迁移到 ccm.config.json 时读它并投影成字符串态 —— buildEnvView / validateEnvChanges
+  // 都是按 .env 时代的字符串写的，在边界上投影一次比为 JSON 再写一套校验安全（两套判据分叉
+  // 正是本仓出过事的形态）。前端因此完全无感。
   const readEnvValues = () => {
+    if (usingConfigJson()) {
+      try {
+        return structuredToStringValues(JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8')));
+      } catch {
+        return {};
+      }
+    }
     try {
       return dotenvParse(readFileSync(ENV_FILE_PATH));
     } catch {
@@ -2841,7 +2914,12 @@ registerSocketConnection(io, socket => {
 
   on(socket, 'env:get', (_payload, ack) => {
     if (typeof ack !== 'function') return;
-    ack({ ok: true, ...buildEnvView(readEnvValues()), envFileExists: existsSync(ENV_FILE_PATH) });
+    ack({
+      ok: true,
+      ...buildEnvView(readEnvValues()),
+      envFileExists: usingConfigJson() || existsSync(ENV_FILE_PATH),
+      configFile: usingConfigJson() ? CONFIG_FILE_NAME : '.env',
+    });
   });
 
   on(socket, 'env:set', async (payload, ack) => {
@@ -2875,15 +2953,25 @@ registerSocketConnection(io, socket => {
     }
     if (payload?.dryRun) return ack({ ok: true, dryRun: true, results: verdict.results, written: [] });
 
-    let text = '';
-    try {
-      text = readFileSync(ENV_FILE_PATH, 'utf8');
-    } catch { /* 没有 .env 就从空文件长出来 */ }
+    // 写入目标与上面 readEnvValues 的读取目标严格同源，绝不能各判各的。
+    const target = usingConfigJson() ? CONFIG_FILE_NAME : '.env';
     try {
       // 0600 + 唯一 tmp + fsync + rename：与 sessions / devices 同一个原子写
-      writeOwnerOnlyFile(ENV_FILE_PATH, applyEnvChanges(text, changes));
+      if (usingConfigJson()) {
+        let currentConfig = {};
+        try {
+          currentConfig = JSON.parse(readFileSync(CONFIG_FILE_PATH, 'utf8'));
+        } catch { /* 读不动就从空配置长出来；校验已经过了，不该在这一步把用户挡在门外 */ }
+        writeOwnerOnlyFile(CONFIG_FILE_PATH, `${JSON.stringify(applyConfigChanges(currentConfig, changes), null, 2)}\n`);
+      } else {
+        let text = '';
+        try {
+          text = readFileSync(ENV_FILE_PATH, 'utf8');
+        } catch { /* 没有 .env 就从空文件长出来 */ }
+        writeOwnerOnlyFile(ENV_FILE_PATH, applyEnvChanges(text, changes));
+      }
     } catch (err) {
-      return ack({ ok: false, results: [{ key: '', level: 'error', message: `写入 .env 失败：${String(err?.message || err)}` }] });
+      return ack({ ok: false, results: [{ key: '', level: 'error', message: `写入 ${target} 失败：${String(err?.message || err)}` }] });
     }
 
     const keys = Object.keys(changes);
