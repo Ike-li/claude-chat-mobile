@@ -36,7 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 66 |
 | Configuration template | 1 |
 | Deployment | 4 |
-| Desktop integration | 4 |
+| Desktop integration | 5 |
 | Documentation | 10 |
 | E2E test | 48 |
 | Frontend asset | 3 |
@@ -53,10 +53,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 4 |
 | Test support | 5 |
-| Unit test | 155 |
+| Unit test | 156 |
 | Vendored asset | 21 |
 
-Total classified files: **449**.
+Total classified files: **451**.
 
 ## Complete file inventory
 
@@ -75,6 +75,7 @@ Total classified files: **449**.
 | `deploy/menubar.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/server.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/tunnel.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
+| `desktop/ccm-config-window.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/ccm-menubar-tests.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/ccm-menubar.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/CCMCore.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
@@ -394,6 +395,7 @@ Total classified files: **449**.
 | `tests/unit/contrast-tokens.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/coverage-check.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/data-dir.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/desktop-schema-contract.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/device-cli.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/device-gate.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/devices.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

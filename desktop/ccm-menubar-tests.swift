@@ -37,6 +37,10 @@ struct CCMCoreTests {
         testSummaryLine()
         testServiceScriptPath()
         testShellQuote()
+        testConfigSchemaDecoding()
+        testConfigItemPresentation()
+        testConfigCommands()
+        testLogHelpers()
         testAppleScriptEscape()
         testCommands()
         testWebUIURL()
@@ -316,4 +320,120 @@ struct CCMCoreTests {
         eq(probeInterval(menuOpen: false), 10, "菜单关着低频")
         eq(probeInterval(menuOpen: true), 2, "菜单打开高频")
     }
+}
+
+// MARK: - 配置 schema（P3）
+
+func decodeSchema(_ json: String) -> ConfigSchema? {
+    guard let d = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(ConfigSchema.self, from: d)
+}
+
+func testConfigSchemaDecoding() {
+    // ★ 与 ServiceStatus 同一条纪律：Node 侧多给字段不能让整份解码失败。
+    // 配置窗口整个空掉，比少显示一行糟得多。
+    let withExtras = #"""
+    {"schemaVersion":1,"groups":[{"id":"auth","label":{"zh":"鉴权","en":"Auth"},
+     "items":[{"key":"AUTH_TOKEN","kind":"readonly","label":{"zh":"访问令牌"},
+               "secret":true,"masked":{"set":true,"length":64},"brandNewField":123}]}],
+     "somethingAddedLater":{"a":1}}
+    """#
+    let s = decodeSchema(withExtras)
+    check(s != nil, "多出来的字段不该让解码失败")
+    eq(s?.schemaVersion, 1, "schemaVersion 解出来")
+    eq(s?.groupList.count, 1, "一个分组")
+    eq(s?.groupList.first?.label?.text, "鉴权", "中文优先")
+
+    // 缺字段同样不能炸：整份 items 缺失时给空数组而不是 nil 崩溃点
+    let sparse = decodeSchema(#"{"schemaVersion":1,"groups":[{"id":"x"}]}"#)
+    eq(sparse?.groupList.first?.visibleItems.count, 0, "缺 items 时是空数组")
+
+    // 没有 key 的条目直接滤掉：它渲染不出任何有意义的控件，留着只会是一行空白
+    let noKey = decodeSchema(#"{"schemaVersion":1,"groups":[{"id":"x","items":[{"kind":"text"}]}]}"#)
+    eq(noKey?.groupList.first?.visibleItems.count, 0, "无 key 的条目被滤掉")
+
+    // 版本判据：对不上就该显示提示，而不是拿旧字段猜新格式
+    check(decodeSchema(#"{"schemaVersion":1}"#)?.isCompatible(with: 1) == true, "版本一致")
+    check(decodeSchema(#"{"schemaVersion":2}"#)?.isCompatible(with: 1) == false, "版本不一致要能判出来")
+    check(decodeSchema(#"{"groups":[]}"#)?.isCompatible(with: 1) == false, "缺版本号视为不兼容")
+}
+
+func testConfigItemPresentation() {
+    func item(_ json: String) -> ConfigItem? {
+        guard let d = json.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(ConfigItem.self, from: d)
+    }
+
+    // ★ 可编辑判据必须看 kind，不能看 readonly 字段。
+    // readonly 是服务端给**手机面板**的渲染提示：list 项被标只读只因前端没有数组编辑器。
+    // 照搬它会让 WORKDIRS 在桌面上也不能改 —— 而桌面端正是该负责编辑它的地方。
+    let list = item(#"{"key":"WORKDIRS","kind":"list","readonly":true}"#)
+    check(list?.isEditable == true, "list 在桌面端可编辑（readonly 是给手机面板的）")
+    let ro = item(#"{"key":"AUTH_TOKEN","kind":"readonly","readonly":true}"#)
+    check(ro?.isEditable == false, "真 readonly 不可编辑")
+
+    // secret 永远不预填明文 —— 服务端根本没下发（只给 {set,length}）
+    let secretSet = item(#"{"key":"NTFY_TOKEN","kind":"secret","secret":true,"masked":{"set":true,"length":20}}"#)
+    eq(secretSet?.displayValue, "••••••••", "已设置的 secret 显示掩码")
+    let secretUnset = item(#"{"key":"NTFY_TOKEN","kind":"secret","secret":true,"masked":{"set":false,"length":0}}"#)
+    eq(secretUnset?.displayValue, "", "未设置的 secret 显示空")
+    let plain = item(#"{"key":"PORT","kind":"number","value":"4100"}"#)
+    eq(plain?.displayValue, "4100", "非 secret 预填实际值")
+
+    // ★ toggle 方向由「哪一侧字面量是空串」决定，与 src/ops/config-file.js 的 toggleDefaultsOn 同源。
+    // 写反的后果是开关显示与实际相反 —— 用户看到「已关闭」而它正开着，改一下反而关不掉。
+    //
+    // WEB_STATUSLINE 默认开（on 是空串）：只有显式 "off" 才是关
+    check(item(#"{"key":"WEB_STATUSLINE","kind":"toggle","values":{"on":"","off":"off"},"value":""}"#)?
+        .toggleIsOn == true, "默认开的项：空值 = 开")
+    check(item(#"{"key":"WEB_STATUSLINE","kind":"toggle","values":{"on":"","off":"off"},"value":"off"}"#)?
+        .toggleIsOn == false, "默认开的项：off = 关")
+    // DEV_MODE 默认关（off 是空串）：只有显式 "1" 才是开
+    check(item(#"{"key":"DEV_MODE","kind":"toggle","values":{"on":"1","off":""},"value":"1"}"#)?
+        .toggleIsOn == true, "默认关的项：1 = 开")
+    check(item(#"{"key":"DEV_MODE","kind":"toggle","values":{"on":"1","off":""},"value":""}"#)?
+        .toggleIsOn == false, "默认关的项：空值 = 关")
+    // 与 .env 时代那个脚枪对应：'false' 是非空字符串，truthy 判定下反而是「开」。
+    // 这里方向由字面量决定，所以 'false' 对默认开的项被读作「开」是**正确的** ——
+    // 它不等于 'off'。CLI 层才把 'false' 当关（parseCliValue），两层语义不同。
+    check(item(#"{"key":"WEB_STATUSLINE","kind":"toggle","values":{"on":"","off":"off"},"value":"false"}"#)?
+        .toggleIsOn == true, "配置文件层：'false' 不等于 'off'，仍是开")
+}
+
+func testConfigCommands() {
+    let repo = "/Users/you/my repo"   // 刻意带空格：argv 形式下它不需要任何转义
+
+    eq(configSchemaArgs(repo: repo),
+       ["/Users/you/my repo/scripts/config.js", "schema", "--json"], "schema argv")
+    eq(configGetArgs(repo: repo),
+       ["/Users/you/my repo/scripts/config.js", "get", "--json"], "get argv")
+
+    // ★ 这些 argv 直接交给 Process，**不经 shell**，所以刻意不做引号处理。
+    // 加了 shellQuote 反而会把引号当成值的一部分写进配置文件。
+    eq(configSetArgs(repo: repo, changes: [("PORT", "4100"), ("WORK_DIR", "/a b/c")]),
+       ["/Users/you/my repo/scripts/config.js", "set", "PORT=4100", "WORK_DIR=/a b/c"],
+       "set argv：含空格的路径原样传")
+    check(configSetArgs(repo: repo, changes: []) == nil, "空改动不该起进程")
+    eq(configUnsetArgs(repo: repo, keys: ["PORT"]),
+       ["/Users/you/my repo/scripts/config.js", "unset", "PORT"], "unset argv")
+    check(configUnsetArgs(repo: repo, keys: []) == nil, "空 keys 不该起进程")
+
+    // ★ CLI 侧收的是 true/false，**不是** .env 字面量 'off'/'1'。
+    // scripts/config.js 的 parseCliValue 专门为此写了一套解析：送 'off' 过去，
+    // 对默认开的项会被读成「开」（因为 'off' 不等于 CLI 认的 false 词表…）——
+    // 实际上 parseCliValue 认识 'off'，但送 '1'/'' 这类就会出事。统一用 true/false 最安全。
+    eq(toggleArgValue(true), "true", "开 → true")
+    eq(toggleArgValue(false), "false", "关 → false")
+}
+
+func testLogHelpers() {
+    let text = (1...50).map { "line \($0)" }.joined(separator: "\n")
+    eq(lastLines(text, 3), ["line 48", "line 49", "line 50"], "取最后三行")
+    eq(lastLines("a\nb", 10).count, 2, "行数不足时全给")
+    eq(lastLines("", 5), [""], "空文本给一个空行而不是崩")
+
+    // 配置里写了就用配置的；没写且默认位置不存在 → nil（显示「未配置」比对着不存在的路径报错强）
+    eq(resolveLogPath(configured: "/tmp/x.log", home: "/Users/you"), "/tmp/x.log", "配置优先")
+    eq(resolveLogPath(configured: "", home: "/nonexistent-home"), nil, "空配置且无默认文件 → nil")
+    eq(resolveLogPath(configured: nil, home: "/nonexistent-home"), nil, "无配置且无默认文件 → nil")
 }

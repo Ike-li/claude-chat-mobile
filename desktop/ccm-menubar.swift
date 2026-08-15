@@ -252,6 +252,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var menuOpen = false
     private var inFlight = false
     private var wizardShown = false
+    // ★ 窗口控制器必须被持有。放局部变量的话，方法一返回引用计数归零，窗口会一闪而过
+    // 或干脆不出现 —— AppKit 的窗口不会替你保命。
+    private var configWindow: ConfigWindowController?
+    private var logWindow: LogWindowController?
 
     override init() {
         client = ServiceClient(env: env)
@@ -391,6 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(action("配置…", #selector(openConfig), key: ","))
         menu.addItem(action("查看日志", #selector(openLogs)))
         menu.addItem(action("运行体检（doctor）", #selector(runDoctor)))
         menu.addItem(action("在 Finder 中显示仓库", #selector(revealRepo)))
@@ -538,9 +543,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// 内嵌日志窗口。**不再丢给 Terminal**：那要用户自己在一堆窗口里找它，
+    /// 而且关掉 app 之后那个 tail 还在跑。内嵌的随窗口关闭停止轮询。
+    @objc private func openConfig() {
+        if configWindow == nil { configWindow = ConfigWindowController(env: env) }
+        configWindow?.present()
+    }
+
     @objc private func openLogs() {
-        guard let repo = env.repo else { return }
-        openTerminal(command: logsCommand(unit: "server", repo: repo))
+        if logWindow == nil { logWindow = LogWindowController(env: env) }
+        logWindow?.present()
     }
 
     @objc private func runDoctor() {

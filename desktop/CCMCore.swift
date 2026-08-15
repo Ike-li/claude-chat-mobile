@@ -237,3 +237,158 @@ func webUIURL(status: ServiceStatus?) -> String {
 
 /// 菜单关着时只需要给灯上色，菜单打开时用户在盯着。
 func probeInterval(menuOpen: Bool) -> TimeInterval { menuOpen ? 2 : 10 }
+
+// MARK: - 配置 schema（L1 的输出契约，对应 src/ops/config-file.js 的 CONFIG_SCHEMA_VERSION）
+//
+// 数据来自 `node scripts/config.js schema --json`。与 ServiceStatus 同一条失败模式纪律：
+// **除 schemaVersion 外全部可选** —— Node 侧加字段是常事，而一个字段变 null 就让整份解码失败、
+// 配置窗口整个空掉，是最糟的结果。宁可少渲染一行。
+
+struct LocalizedText: Decodable {
+    let zh: String?
+    let en: String?
+    /// 中文优先：这个 app 的读者是机主本人，界面其余部分也是中文。
+    var text: String { zh ?? en ?? "" }
+}
+
+struct MaskedSecret: Decodable {
+    let set: Bool?
+    let length: Int?
+}
+
+struct ToggleLiterals: Decodable {
+    let on: String?
+    let off: String?
+}
+
+struct ConfigItem: Decodable {
+    let key: String?
+    let kind: String?
+    let label: LocalizedText?
+    let help: LocalizedText?
+    let readonly: Bool?
+    let secret: Bool?
+    let masked: MaskedSecret?
+    let value: String?
+    let values: ToggleLiterals?
+    // `default` 是 Swift 关键字，必须反引号转义。漏声明它不会报错，只会静默解码成 nil ——
+    // PORT 的「默认 3000」这类提示在窗口里凭空消失，而没有任何迹象说明为什么。
+    // tests/unit/desktop-schema-contract.test.mjs 就是抓这类漏字段的。
+    let `default`: String?
+    let unit: String?
+    let min: Int?
+    let max: Int?
+
+    var name: String { key ?? "" }
+    var kindName: String { kind ?? "text" }
+    var isSecret: Bool { secret ?? false }
+
+    /// 能不能在窗口里编辑它。
+    ///
+    /// **判据是 kind 而不是 readonly 字段。** readonly 是服务端给**手机面板**的渲染提示：
+    /// list 项被标成 readonly 只因为前端没有数组编辑器，而桌面端完全可以做一个。
+    /// 照搬那个字段会让 WORKDIRS 在桌面上也变成只读 —— 与 scripts/config.js 的 schema
+    /// 输出把 list 标为「仅 CLI / 桌面端可改」是同一处判断。
+    var isEditable: Bool { kindName != "readonly" }
+
+    /// 输入框里应该预填什么。secret 永远不预填明文 —— 服务端根本没下发它（只给 {set,length}）。
+    var displayValue: String {
+        if isSecret { return (masked?.set ?? false) ? "••••••••" : "" }
+        return value ?? ""
+    }
+
+    /// toggle 当前是开还是关。方向由「哪一侧字面量是空串」决定，同 src/ops/config-file.js
+    /// 的 toggleDefaultsOn —— 空串那侧是默认态，因为空值写不进配置文件。
+    var toggleIsOn: Bool { ConfigItem.decodedToggle(self, current: value ?? "") }
+
+    /// 同上，但值从外部来。
+    ///
+    /// 窗口渲染时用的是 `config get` 拿到的**当前**值，而不是 schema 自带的那份快照 ——
+    /// 两者可能不同（schema 是表单描述，取的时机也不一样）。判定逻辑只此一份，
+    /// 免得「显示用一套、保存比对用另一套」这种最难查的分叉。
+    static func decodedToggle(_ item: ConfigItem, current: String) -> Bool {
+        guard item.kindName == "toggle" else { return false }
+        let on = item.values?.on ?? ""
+        let off = item.values?.off ?? ""
+        return on.isEmpty ? current != off : current == on
+    }
+}
+
+struct ConfigGroup: Decodable {
+    let id: String?
+    let label: LocalizedText?
+    let items: [ConfigItem]?
+
+    var visibleItems: [ConfigItem] { (items ?? []).filter { !$0.name.isEmpty } }
+}
+
+struct ConfigSchema: Decodable {
+    let schemaVersion: Int?
+    let groups: [ConfigGroup]?
+
+    var groupList: [ConfigGroup] { groups ?? [] }
+
+    /// 能不能解码这份 schema。版本对不上时宁可显示一句提示，也不要拿旧字段猜新格式。
+    func isCompatible(with supported: Int) -> Bool { (schemaVersion ?? 0) == supported }
+}
+
+/// 本 app 支持的配置 schema 版本。与 src/ops/config-file.js 的 CONFIG_SCHEMA_VERSION 对齐；
+/// tests/unit/desktop-schema-contract.test.mjs 双向校验，改一边另一边会红。
+let SUPPORTED_CONFIG_SCHEMA_VERSION = 1
+
+// MARK: - 配置命令（argv 形式）
+//
+// 与上面那批 install/uninstall 命令的关键差别：**这些不经 shell**。
+// 那批要交给 osascript 的 `do script`（用户要看见输出），所以每个参数都得 shellQuote；
+// 这批直接 Process 传 argv，参数边界由系统保证 —— 路径里有空格、引号、`$(...)` 都无所谓，
+// 天然免疫注入。所以这里刻意**不做**任何引号处理，加了反而会把引号当成值的一部分写进配置。
+
+func configScriptPath(in repo: String) -> String {
+    (repo as NSString).appendingPathComponent("scripts/config.js")
+}
+
+func configSchemaArgs(repo: String) -> [String] {
+    [configScriptPath(in: repo), "schema", "--json"]
+}
+
+func configGetArgs(repo: String) -> [String] {
+    [configScriptPath(in: repo), "get", "--json"]
+}
+
+/// 保存一批改动。空表返回 nil —— 没有改动就不该起一个进程。
+func configSetArgs(repo: String, changes: [(key: String, value: String)]) -> [String]? {
+    guard !changes.isEmpty else { return nil }
+    return [configScriptPath(in: repo), "set"] + changes.map { "\($0.key)=\($0.value)" }
+}
+
+/// 删除一项。同样是 argv，不经 shell。
+func configUnsetArgs(repo: String, keys: [String]) -> [String]? {
+    guard !keys.isEmpty else { return nil }
+    return [configScriptPath(in: repo), "unset"] + keys
+}
+
+/// toggle 在 CLI 侧接受 true/false —— scripts/config.js 的 parseCliValue 专门为此写了一套
+/// 解析（**不能**送 'off'/'1' 这些 .env 字面量：那是给配置文件读的，CLI 层语义相反）。
+func toggleArgValue(_ isOn: Bool) -> String { isOn ? "true" : "false" }
+
+// MARK: - 日志窗口
+//
+// 常驻部署把日志重定向到文件，要看得自己 tail。窗口里显示尾部若干行即可 ——
+// 一个几百 MB 的日志（DEBUG_SDK_MESSAGES 长开曾刷到 149MB）整份读进内存会直接卡死 UI。
+
+let LOG_TAIL_BYTES = 256 * 1024
+
+/// 从一段日志文本里取最后 n 行。**按行数截而不是按字节**：按字节截会把第一行切成半截，
+/// 而日志的第一个字符往往是时间戳，半截时间戳比没有更让人困惑。
+func lastLines(_ text: String, _ n: Int) -> [String] {
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    return lines.count <= n ? lines : Array(lines.suffix(n))
+}
+
+/// 日志文件路径：配置里的 LOG_FILE 优先，否则回落常驻部署的默认位置。
+/// 两者都拿不到时返回 nil —— 显示「未配置日志文件」比对着一个不存在的路径报错强。
+func resolveLogPath(configured: String?, home: String) -> String? {
+    if let c = configured, !c.isEmpty { return c }
+    let fallback = (home as NSString).appendingPathComponent("Library/Logs/ccm-server.log")
+    return FileManager.default.fileExists(atPath: fallback) ? fallback : nil
+}

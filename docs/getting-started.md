@@ -270,6 +270,25 @@ npm run hooks:uninstall
 
 手机端也可在“设置 → 服务状态 → 终端会话推送”中显式安装或卸载。
 
+## 可选：macOS 桌面控制台
+
+只在 macOS 上可用，且完全可选 —— 手机端与命令行已经覆盖全部功能。
+
+```bash
+npm run app:build      # swiftc 编译出 desktop/build/CCM.app（产物不入库）
+open desktop/build/CCM.app
+```
+
+菜单栏图标显示服务状态；菜单里有两个窗口：
+
+- **配置…**：一张表单，内容由 `config.js schema` 下发，改完点保存。它走的是同一个 CLI，
+  所以**server 没起来时照样能改配置** —— 那恰恰是最需要改它的时刻。密钥只显示掩码，
+  不动就不会被提交。
+- **查看日志**：内嵌滚动视图，2 秒刷新，只读文件尾部（日志几百 MB 时也不会卡死）。
+
+勾「开机自启（菜单栏）」会装一个 LaunchAgent。这是 macOS 平台的实现方式，
+不是产品要求你用的部署方案 —— 服务器上用 systemd / pm2 / docker 都行。
+
 <details>
 <summary>把首次安装交给编程 agent</summary>
 

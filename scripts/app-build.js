@@ -28,7 +28,7 @@ const INFO_PLIST = join(APP, 'Contents', 'Info.plist');
 // CCMCore.swift 是纯逻辑层（零 AppKit、零 Process），app 与测试都编译它 —— 这样测试跑的
 // 就是产品里那一份代码，而不是一个平行的复制品。
 const CORE = join(DESKTOP, 'CCMCore.swift');
-const APP_SOURCES = [CORE, join(DESKTOP, 'ccm-menubar.swift')];
+const APP_SOURCES = [CORE, join(DESKTOP, 'ccm-menubar.swift'), join(DESKTOP, 'ccm-config-window.swift')];
 const TEST_SOURCES = [CORE, join(DESKTOP, 'ccm-menubar-tests.swift')];
 const TEST_BIN = join(BUILD, 'ccm-core-tests');
 
