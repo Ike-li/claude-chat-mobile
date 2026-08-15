@@ -81,8 +81,8 @@
 | 项 | 规则 |
 |----|------|
 | 出向 | 唯一信封 `agent:event`（`type` + `seq` + `epoch` + …） |
-| type 白名单 | **`src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 26 种；散文数字若漂移以代码为准） |
-| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 40 个） |
+| type 白名单 | **`src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 26 种） |
+| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 42 个） |
 | 门禁 | `npm run check` → `scripts/contract-check.js` / `agent-event-contract.js` |
 | 改 type | 必须同时改 protocol + 真实 emit 路径 + mock + 前端 handler（否则 check 红） |
 

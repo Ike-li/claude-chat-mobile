@@ -2,6 +2,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS } from '../src/shared/protocol.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -164,9 +165,69 @@ function checkDocumentedDependencyVersions({ rootDir, docFiles, packageJson }) {
   return problems;
 }
 
+// 契约计数的锚点符号 → 真相源里的哪一份清单。文档写「当前 N 种/个」时必须在同一行点出符号名。
+const CONTRACT_ANCHORS = Object.freeze([
+  ['AGENT_EVENT_TYPES', 'outbound', '出向 agent:event type'],
+  ['INBOUND_SOCKET_EVENTS', 'inbound', '入向 socket 事件'],
+]);
+
+// 文档里的契约计数必须与 src/shared/protocol.js 一致。
+//
+// 【为什么加这条】两份清单的长度此前只活在散文里，靠 hard-rules 一句「散文数字若漂移以代码为准」
+// 兜底——而给数字写免责声明等于承认这条信息不可信。2026-08-15 实测：文档写「入向当前 40 个」，
+// protocol.js 实际 42 个，doc consistency 全绿也发现不了。数字交给机器保证后，免责声明才能删掉。
+//
+// 【为什么用行内锚点而不是裸 /当前 (\d+)/】文档里有大量与契约无关的计数（「共 7 个文件」
+// 「70 个项目 / 291 memory」），裸匹配会把它们全部误伤。判据收窄成「同一行出现契约符号名」：
+// 写这个数字的人本来就该在同一行点明它属于哪份清单，否则读者也无从核对。
+// 同行出现两个符号名 = 归属有歧义，报错要求拆行——静默跳过等于漏检，与本门禁的目的相反。
+function checkContractCounts({ rootDir, docFiles, contractCounts }) {
+  const problems = [];
+  const countRe = /当前\s*`?(\d+)`?\s*[种个型条]/g;
+
+  for (const rel of docFiles) {
+    readText(rootDir, rel).split('\n').forEach((line, index) => {
+      const anchors = CONTRACT_ANCHORS.filter(([symbol]) => line.includes(symbol));
+      if (anchors.length === 0) return;
+      const counts = [...line.matchAll(countRe)];
+      if (counts.length === 0) return;
+
+      if (anchors.length > 1) {
+        problems.push({
+          code: 'contract_count_ambiguous',
+          file: rel,
+          line: index + 1,
+          message: `${rel}:${index + 1} 同行出现多个契约符号，计数归属有歧义——拆到不同行再写数字`,
+        });
+        return;
+      }
+
+      const [, kind, label] = anchors[0];
+      const actual = contractCounts[kind];
+      for (const match of counts) {
+        const documented = Number(match[1]);
+        if (documented === actual) continue;
+        problems.push({
+          code: 'contract_count_drift',
+          file: rel,
+          line: index + 1,
+          kind,
+          documented,
+          actual,
+          message: `${rel}:${index + 1} 写 ${label} 当前 ${documented} 项，实际 ${actual} 项（真相源 src/shared/protocol.js）`,
+        });
+      }
+    });
+  }
+
+  return problems;
+}
+
 export function checkDocConsistency({
   rootDir = ROOT,
   docGlobs = DEFAULT_DOC_GLOBS,
+  // 注入口仅供单测喂假计数；生产恒读 protocol.js 真值。
+  contractCounts = { outbound: AGENT_EVENT_TYPES.length, inbound: INBOUND_SOCKET_EVENTS.length },
 } = {}) {
   const packageJson = readJson(rootDir, 'package.json');
   const docFiles = expandDocGlobs(rootDir, docGlobs);
@@ -174,6 +235,7 @@ export function checkDocConsistency({
     ...checkLinks({ rootDir, docFiles }),
     ...checkNpmScriptReferences({ rootDir, docFiles, packageJson }),
     ...checkDocumentedDependencyVersions({ rootDir, docFiles, packageJson }),
+    ...checkContractCounts({ rootDir, docFiles, contractCounts }),
   ];
 
   return { rootDir, docFiles, problems };

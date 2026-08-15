@@ -75,6 +75,54 @@ test('doc consistency 拦住核心依赖的 major 版本漂移（不只 SDK）',
   assert.equal(result.problems[0].actual, '^5.0.0');
 });
 
+// 契约计数（agent:event type 数 / 入向 socket 事件数）此前只活在散文里，靠一句「散文数字若漂移
+// 以代码为准」的免责声明兜底——而免责声明等于承认这条信息不可信。实测 2026-08-15：hard-rules
+// 写「入向当前 40 个」，protocol.js 实际 42 个，doc-consistency 全绿却发现不了。
+// 判据用【行内锚点】：同一行必须出现 AGENT_EVENT_TYPES / INBOUND_SOCKET_EVENTS 才校验，
+// 否则文档里任何「N 个」都会被误判（CLAUDE.md 有「7 个文件」「70 个项目」等无关计数）。
+test('doc consistency 拦住契约计数漂移（出向 type 数 / 入向事件数）', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-doc-contract-count-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'package.json', JSON.stringify({ scripts: {}, dependencies: {} }));
+  await writeFixture(root, 'README.md', [
+    '| type 白名单 | `AGENT_EVENT_TYPES` 为唯一真相源（当前 99 种）|',
+    '| 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 42 个）|',
+  ].join('\n'));
+
+  const result = checkDocConsistency({
+    rootDir: root,
+    docGlobs: ['README.md'],
+    contractCounts: { outbound: 26, inbound: 42 },
+  });
+
+  // 出向写错该报，入向写对不该报
+  assert.deepEqual(result.problems.map(problem => problem.code), ['contract_count_drift']);
+  assert.equal(result.problems[0].documented, 99);
+  assert.equal(result.problems[0].actual, 26);
+});
+
+test('doc consistency 不误判无锚点行里的计数', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-doc-contract-noanchor-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'package.json', JSON.stringify({ scripts: {}, dependencies: {} }));
+  // 都是无关计数，同行没有契约符号 → 一条都不该报
+  await writeFixture(root, 'README.md', [
+    '需真 agent turn 的共 7 个文件，默认跳过。',
+    '那次删掉了当前 70 个项目 / 291 memory。',
+    '出向信封当前 26 种是另一回事，但本行没写符号名。',
+  ].join('\n'));
+
+  const result = checkDocConsistency({
+    rootDir: root,
+    docGlobs: ['README.md'],
+    contractCounts: { outbound: 26, inbound: 42 },
+  });
+
+  assert.deepEqual(result.problems, []);
+});
+
 test('current docs stay consistent with package scripts and dependency versions', () => {
   const result = checkDocConsistency();
   assert.deepEqual(result.problems, []);
