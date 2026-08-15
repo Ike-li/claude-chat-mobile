@@ -12,6 +12,10 @@ workdirs.json
 # tests/unit/config-file.test.mjs 有一条断言锁住这行，别删。
 ccm.config.json
 ccm.config.*.json
+# writeOwnerOnlyFile 的原子写临时文件（${path}.${pid}.${ts}.${rand}.tmp）——
+# 进程在 open 与 rename 之间被 SIGKILL 时会残留，内容是完整的配置含 AUTH_TOKEN。
+# .env 靠 .env.* 天然盖住，新文件名不在那条规则的覆盖面内。
+ccm.config.json.*
 
 # 运行时状态（ADR-005：会话元数据，本地生成）
 /data/

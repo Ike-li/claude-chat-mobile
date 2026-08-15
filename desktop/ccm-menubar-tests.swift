@@ -380,24 +380,27 @@ func testConfigItemPresentation() {
     let plain = item(#"{"key":"PORT","kind":"number","value":"4100"}"#)
     eq(plain?.displayValue, "4100", "非 secret 预填实际值")
 
-    // ★ toggle 方向由「哪一侧字面量是空串」决定，与 src/ops/config-file.js 的 toggleDefaultsOn 同源。
-    // 写反的后果是开关显示与实际相反 —— 用户看到「已关闭」而它正开着，改一下反而关不掉。
+    // ★★ toggle 的取值域：`config get --json` 下发的是 JSON 真值的字符串化
+    // （"true"/"false"），**不是** .env 字面量（''/'off'/'1'/'on'）。
     //
-    // WEB_STATUSLINE 默认开（on 是空串）：只有显式 "off" 才是关
-    check(item(#"{"key":"WEB_STATUSLINE","kind":"toggle","values":{"on":"","off":"off"},"value":""}"#)?
-        .toggleIsOn == true, "默认开的项：空值 = 开")
-    check(item(#"{"key":"WEB_STATUSLINE","kind":"toggle","values":{"on":"","off":"off"},"value":"off"}"#)?
-        .toggleIsOn == false, "默认开的项：off = 关")
-    // DEV_MODE 默认关（off 是空串）：只有显式 "1" 才是开
-    check(item(#"{"key":"DEV_MODE","kind":"toggle","values":{"on":"1","off":""},"value":"1"}"#)?
-        .toggleIsOn == true, "默认关的项：1 = 开")
-    check(item(#"{"key":"DEV_MODE","kind":"toggle","values":{"on":"1","off":""},"value":""}"#)?
-        .toggleIsOn == false, "默认关的项：空值 = 关")
-    // 与 .env 时代那个脚枪对应：'false' 是非空字符串，truthy 判定下反而是「开」。
-    // 这里方向由字面量决定，所以 'false' 对默认开的项被读作「开」是**正确的** ——
-    // 它不等于 'off'。CLI 层才把 'false' 当关（parseCliValue），两层语义不同。
-    check(item(#"{"key":"WEB_STATUSLINE","kind":"toggle","values":{"on":"","off":"off"},"value":"false"}"#)?
-        .toggleIsOn == true, "配置文件层：'false' 不等于 'off'，仍是开")
+    // 上一版这里的 fixture 写的是 "value":"off" —— production 从不产生那个形态，于是断言与
+    // 实现互相印证、125 条全绿，而真机上每一个设置过的开关都显示反且改不动。
+    // 这组断言直接喂 `config get` 真正会给的值。
+    let onOff = #"{"key":"WEB_STATUSLINE","kind":"toggle","values":{"on":"","off":"off"}}"#
+    let oneEmpty = #"{"key":"DEV_MODE","kind":"toggle","values":{"on":"1","off":""}}"#
+
+    check(ConfigItem.decodedToggle(item(onOff)!, current: "false") == false, "默认开的项：get 给 false ⇒ 关")
+    check(ConfigItem.decodedToggle(item(onOff)!, current: "true") == true, "默认开的项：get 给 true ⇒ 开")
+    check(ConfigItem.decodedToggle(item(oneEmpty)!, current: "true") == true, "默认关的项：get 给 true ⇒ 开")
+    check(ConfigItem.decodedToggle(item(oneEmpty)!, current: "false") == false, "默认关的项：get 给 false ⇒ 关")
+
+    // 未设置的项不在 get 的输出里 ⇒ current 为空 ⇒ 回落 schema 默认方向
+    check(ConfigItem.decodedToggle(item(onOff)!, current: "") == true, "未设置 + 默认开 ⇒ 开")
+    check(ConfigItem.decodedToggle(item(oneEmpty)!, current: "") == false, "未设置 + 默认关 ⇒ 关")
+
+    // secret 的「已设置」判据来自 get 而不是 schema（cmdSchema 传空 values，masked 恒为 set:false）
+    eq(ConfigItem.secretDisplay(current: "<已设置，64 字符>"), "••••••••", "已设置的 secret 显示掩码")
+    eq(ConfigItem.secretDisplay(current: ""), "", "未设置的 secret 显示空")
 }
 
 func testConfigCommands() {

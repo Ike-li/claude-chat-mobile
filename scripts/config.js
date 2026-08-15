@@ -40,6 +40,7 @@ import {
   structuredToStringValues,
 } from '../src/ops/config-file.js';
 import { isSerializableEnvValue } from '../src/ops/env-file.js';
+import { resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { buildEnvView, ENV_SCHEMA, validateEnvChanges } from '../src/ops/env-schema.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -160,10 +161,34 @@ function toValidationShape(changes) {
       out[key] = value;
       continue;
     }
-    const projected = projectToEnv(key, value);
-    out[key] = projected === null ? '' : projected;
+    // ★ 保留 null 而不是折成 ''：null 在 validateEnvChanges 里是「删除」（跳过类型校验），
+    // 而 '' 是「填了个空值」——后者会让 `set LOG_FILE=` 收到「必须是绝对路径」这种
+    // 与意图完全无关的错误，且全或无会把同批次其他改动一起挡掉。
+    // applyConfigChanges 对 null 与 '' 都按删除处理，所以写入侧语义不变。
+    out[key] = projectToEnv(key, value);
   }
   return out;
+}
+
+// ★★ 写入前的配置源守卫 —— 本文件最重要的一道闸。
+//
+// 缺陷实录：读取侧走 loadConfigSources（**会回落 .env**），而写入侧的 readStructured 只认
+// ccm.config.json。于是在一台只有 .env 的既有部署上 `config set PORT=4100` 会生成一份
+// 只含 PORT 的新文件，而它优先级更高 —— 整份 .env 被遮蔽，重启后 AUTH_TOKEN / WORK_DIR /
+// CCM_DATA_DIR / CF_ACCESS_* 全部消失：手机连不上、agent 作用域变成整个家目录、
+// 数据孤儿化、公网 2FA 静默关闭。而 CLI 报的是「已写入 / 需重启生效」，重启正是引爆动作。
+//
+// 这与本文件头部第 2 条纪律「CLI 不是配置文件的特权通道」直接冲突：面板路径做对了
+// （app.js 的 usingConfigJson 读写同源），新写的 CLI 反而成了那个能绕过一切的通道。
+//
+// 判据必须是「两个文件都看」，与 loadConfigSources 完全同源。--force 留给明确要覆盖的人。
+function guardWriteTarget(dir, flags = {}) {
+  if (existsSync(configPathOf(dir))) return null;        // 已迁移：正常写
+  if (!existsSync(join(dir, '.env'))) return null;       // 全新安装：正常建
+  if (flags.force) return null;                          // 用户明确要覆盖
+  return `检测到 .env 但还没有 ${CONFIG_FILE_NAME}。现在写会生成一份只含本次改动的新配置，`
+    + `而它的优先级高于 .env —— 里面的 AUTH_TOKEN / WORK_DIR / CCM_DATA_DIR 等会被整份遮蔽，`
+    + `重启后手机将连不上。请先跑 migrate 完成迁移，或确认要丢弃 .env 再加 --force。`;
 }
 
 // 校验依赖：与 server 的 env:set 喂给 validateEnvChanges 的是同一组判据。
@@ -178,6 +203,8 @@ const validationDeps = (current) => ({
 });
 
 function cmdInit(dir, flags, io) {
+  const guard = guardWriteTarget(dir, flags);
+  if (guard) return { ok: false, problems: [guard] };
   if (existsSync(configPathOf(dir)) && !flags.force) {
     return { ok: false, problems: [`${CONFIG_FILE_NAME} 已存在（里面可能有正在用的 AUTH_TOKEN）。确认要重建再加 --force。`] };
   }
@@ -207,8 +234,10 @@ function cmdGet(dir, positionals, flags) {
   return { ok: true, data: { source, rows }, messages: rows.map(r => `${r.key}=${r.value}`) };
 }
 
-function cmdSet(dir, assignments, io) {
+function cmdSet(dir, assignments, io, flags = {}) {
   if (!assignments.length) return { ok: false, problems: ['用法：set KEY=VAL [KEY=VAL...]'] };
+  const guard = guardWriteTarget(dir, flags);
+  if (guard) return { ok: false, problems: [guard] };
 
   // ① CLI 层解析：把人写的 true/false/JSON 转成 schema 类型
   const changes = {};
@@ -249,15 +278,31 @@ function cmdSet(dir, assignments, io) {
   };
 }
 
-function cmdUnset(dir, positionals, io) {
+function cmdUnset(dir, positionals, io, flags = {}) {
   if (!positionals.length) return { ok: false, problems: ['用法：unset KEY [KEY...]'] };
+  const guard = guardWriteTarget(dir, flags);
+  if (guard) return { ok: false, problems: [guard] };
   const current = readStructured(dir);
   if (!current) return { ok: false, problems: [`${CONFIG_FILE_NAME} 不存在`] };
 
   const changes = Object.fromEntries(positionals.map(k => [k, null]));
+
+  // ★ 删除同样要过校验，与 set 用同一份判据。
+  // env-schema 特意把 readonly 判断放在 `value === null` 之前，就是为了让「删除只读项」也被拦；
+  // checkTogether 会认出「CF_ACCESS_* 只剩 2/3」；checkCfAccessTeardown 会对拆除公网 2FA 出 warn。
+  // 此前这条路径完全不过校验 —— 实测 `unset AUTH_TOKEN` 直接删成功，而同一个 key 用 set 会被拒绝。
+  const verdict = validateEnvChanges(changes, validationDeps(structuredToStringValues(current)));
+  const errors = verdict.results.filter(r => r.level === 'error');
+  if (errors.length) return { ok: false, problems: errors.map(r => `${r.key}: ${r.message}`) };
+
   writeStructured(dir, applyConfigChanges(current, changes), io);
   const restartRequired = positionals.filter(k => reloadKindOf(k) === 'restart').sort();
-  return { ok: true, restartRequired, messages: [`已删除：${positionals.join(', ')}`] };
+  return {
+    ok: true,
+    restartRequired,
+    warnings: verdict.results.filter(r => r.level === 'warn').map(r => `${r.key}: ${r.message}`),
+    messages: [`已删除：${positionals.join(', ')}`],
+  };
 }
 
 function cmdMigrate(dir, flags, io) {
@@ -275,7 +320,10 @@ function cmdMigrate(dir, flags, io) {
   // 那个还躺在盘上的文件会变成「看起来是事实源、实际已失效」，下次排障必被误导。
   let workdirsEntries;
   if (fileValues.WORK_DIRS_FILE) {
-    const wp = join(dir, fileValues.WORK_DIRS_FILE);
+    // 用仓库既有的解析器：裸 join 对绝对路径会拼成 <dir>/tmp/... 读不到，
+    // 于是落进「读不出来，已原样保留」分支 —— 告警把用户引向一个根本没坏的文件。
+    // server preflight / 热加载 / doctor D3 三处都用这个函数，migrate 是唯一漏的。
+    const wp = resolveWorkdirsFilePath(fileValues.WORK_DIRS_FILE, dir);
     try {
       const parsed = JSON.parse(readFileSync(wp, 'utf8'));
       workdirsEntries = Array.isArray(parsed) ? parsed : null;
@@ -394,8 +442,8 @@ export function runConfigCommand(args, { dir = ROOT, ...io } = {}) {
     switch (command) {
       case 'init': return cmdInit(dir, flags, io);
       case 'get': return cmdGet(dir, positionals, flags);
-      case 'set': return cmdSet(dir, assignments, io);
-      case 'unset': return cmdUnset(dir, positionals, io);
+      case 'set': return cmdSet(dir, assignments, io, flags);
+      case 'unset': return cmdUnset(dir, positionals, io, flags);
       case 'migrate': return cmdMigrate(dir, flags, io);
       case 'check': return cmdCheck(dir);
       case 'schema': return cmdSchema();

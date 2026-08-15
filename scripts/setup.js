@@ -199,7 +199,7 @@ function writeSetupFile({ envPath, templatePath, workDir, format, t }) {
     writeOwnerOnlyFile(envPath, buildConfigContent({ authToken: token, workDir: workDir || undefined }));
   }
 
-  const written = `…（已写入 ${basename(envPath)}）`;
+  const written = t.tokenWrittenSuffix.replace(/\.env/, basename(envPath));
   console.log(`\n${c.green('✓')} ${t.tokenLabel}: ${c.dim(token.slice(0, 8) + written)}`);
   console.log(`${c.green('✓')} ${t.wroteLabel} ${c.bold(envPath)} ${c.dim(t.permNote)}`);
 }
@@ -225,8 +225,9 @@ async function runInteractive({ plan, envPath, templatePath, format, t }) {
   const rl = createInterface({ input: stdin, output: stdout });
   try {
     // 已有 .env → 先问是否覆盖（默认否，绝不静默覆盖既有配置）
-    if (existsSync(envPath)) {
-      const ans = (await rl.question(`⚠️  ${envPath} ${t.overwritePrompt}`)).trim().toLowerCase();
+    const existing = [envPath, join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].find(p => existsSync(p));
+    if (existing) {
+      const ans = (await rl.question(`⚠️  ${existing} ${t.overwritePrompt}`)).trim().toLowerCase();
       if (ans !== 'y' && ans !== 'yes') {
         console.log(t.cancelled);
         return;
@@ -277,7 +278,14 @@ async function main() {
     process.exit(1);
   }
 
-  const plan = resolveSetupPlan({ args, envExists: existsSync(envPath) });
+  // ★ 「已经配置过没有」必须同时看两份。默认目标是 ccm.config.json，而既有部署的配置在 .env 里——
+  // 只 stat 新路径的话，setup 会在一台正在跑的实例旁边生成一份带**全新 AUTH_TOKEN** 的配置，
+  // 且它优先级更高：所有已授权设备（含正在操作的那台手机）当场失效，PORT/CCM_DATA_DIR/CF_ACCESS_* 一并被遮蔽。
+  // desktop/CCMCore.swift 的 setupCommand 拼的就是这条命令，菜单栏点一次「安装向导」就会中。
+  const alreadyConfigured = existsSync(envPath)
+    || existsSync(join(HERE, CONFIG_FILE_NAME))
+    || existsSync(join(HERE, '.env'));
+  const plan = resolveSetupPlan({ args, envExists: alreadyConfigured });
   if (plan.refuse) {
     console.error(`✗ ${t.refuse[plan.refuse.code](plan.refuse.detail ?? envPath)}\n`);
     console.error(t.usage);

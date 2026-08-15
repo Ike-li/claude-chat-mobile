@@ -274,11 +274,22 @@ export function createConfigReloader({ readConfig, onHot, onRestart }) {
 // 那两个函数是按 .env 时代的字符串态写的（PORT 比较、checkTogether、CF_ACCESS 拆除告警全是
 // 字符串判断）。与其为 JSON 再写一套校验（两套判据分叉正是本仓踩过的坑），不如在边界上投影一次。
 // 前端行为因此完全不变：toggle 仍按 `value === values.on` 渲染，而默认态投影成缺席 ≡ 空串 ≡ on 侧。
+// ★ 必须先 coerce 再投影，不能直接把生 JSON 喂给 projectToEnv。
+//
+// 缺陷实录：projectToEnv 的 toggle 分支是 `value ? on : off`，它**假定输入已经是 boolean**。
+// 手写的配置文件里可能是字符串（`{"WEB_STATUSLINE":"off","DEV_MODE":"false"}`），而
+// 非空字符串全是 truthy —— 方向整个翻过来：面板显示「已开启」而运行时读作关闭，
+// `config check` 也跟着报「配置检查通过」。
+//
+// 运行时路径（readConfigFileValues → resolveConfigValues → coerce → project）一直是对的，
+// 只有这个直接投影的快捷方式漏了第一步。coerce 对已是正确类型的值是恒等的，所以补上它
+// 对正常配置零影响，只是把手写字符串收编进来。
 export function structuredToStringValues(structured = {}) {
   const out = {};
   for (const [key, value] of Object.entries(structured)) {
     if (key === VERSION_KEY) continue;
-    const s = projectToEnv(key, value);
+    const normalized = isPassthrough(key) ? value : coerceToSchemaType(key, value).value;
+    const s = projectToEnv(key, normalized);
     if (s !== null) out[key] = s;
   }
   return out;

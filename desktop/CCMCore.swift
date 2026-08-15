@@ -301,16 +301,38 @@ struct ConfigItem: Decodable {
     /// 的 toggleDefaultsOn —— 空串那侧是默认态，因为空值写不进配置文件。
     var toggleIsOn: Bool { ConfigItem.decodedToggle(self, current: value ?? "") }
 
-    /// 同上，但值从外部来。
+    /// 同上，但值从 `config get --json` 来。
     ///
-    /// 窗口渲染时用的是 `config get` 拿到的**当前**值，而不是 schema 自带的那份快照 ——
-    /// 两者可能不同（schema 是表单描述，取的时机也不一样）。判定逻辑只此一份，
-    /// 免得「显示用一套、保存比对用另一套」这种最难查的分叉。
+    /// ## ★ 两个取值域，别搞混（这里出过一次实打实的 P0）
+    ///
+    /// `item.values` 里的 on/off 是 **.env 字面量**（`''` / `'off'` / `'1'` / `'on'`），
+    /// 而 `config get --json` 下发的是 **JSON 真值的字符串化**（`"true"` / `"false"`，
+    /// 见 scripts/config.js 的 formatValueForDisplay 走 JSON.stringify）。
+    ///
+    /// 拿后者去比前者，每一个设置过的开关都会显示反 —— 而且保存路径用同一个错基线做
+    /// before/after 比对，于是唯一"能提交"的改动是把已有的值再写一遍：开着的关不掉、
+    /// 关着的开不了，状态栏还报「已保存 1 项」。
+    ///
+    /// 未设置的项不在 `get` 的输出里，`current` 为空 —— 那时才回落到 values 判默认方向
+    /// （空串那侧是默认态，同 src/ops/config-file.js 的 toggleDefaultsOn）。
     static func decodedToggle(_ item: ConfigItem, current: String) -> Bool {
         guard item.kindName == "toggle" else { return false }
-        let on = item.values?.on ?? ""
-        let off = item.values?.off ?? ""
-        return on.isEmpty ? current != off : current == on
+
+        switch current.trimmingCharacters(in: .whitespaces).lowercased() {
+        case "true": return true
+        case "false": return false
+        default: break
+        }
+
+        // 空值 / 认不出的值 → 该项没有显式配置，取 schema 声明的默认方向
+        return (item.values?.on ?? "").isEmpty
+    }
+
+    /// secret 是否已设置。**判据来自 `config get` 而不是 schema**：
+    /// cmdSchema 传的是 `buildEnvView({})`，masked 恒为 `{set:false}`，照它渲染的话
+    /// 「已设置的 CF_ACCESS_AUD」和「从没设过」长得一模一样。
+    static func secretDisplay(current: String) -> String {
+        current.isEmpty ? "" : "••••••••"
     }
 }
 

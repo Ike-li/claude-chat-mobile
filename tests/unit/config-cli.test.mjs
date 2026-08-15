@@ -323,3 +323,93 @@ test('schema 清单标出热加载项与只读项', () => {
   // WORKDIRS 不能标「只读」—— CLI 能改它，那是给手机面板的渲染提示
   assert.doesNotMatch(text, /WORKDIRS[^\n]*\[只读/);
 });
+
+// ★★ 写入侧必须与读取侧用同一套「配置源」判定。
+//
+// 缺陷实录（子代理审查发现，已复现）：cmdGet/cmdCheck 走 readConfigFileValues → loadConfigSources
+// （**会回落 .env**），而 cmdSet/cmdInit/cmdUnset 走 readStructured —— 那个函数只认
+// ccm.config.json，对 .env 完全失明。后果是在一台只有 .env 的既有部署上：
+//
+//   config set PORT=4100
+//   → 生成 {"$schemaVersion":1,"PORT":4100}，整份 .env 被这个新文件遮蔽
+//   → 重启后 AUTH_TOKEN/WORK_DIR/CCM_DATA_DIR/CF_ACCESS_* 全部 undefined
+//   → 手机连不上（只绑 127.0.0.1）+ agent 作用域变成整个家目录 + 数据孤儿化 + 公网 2FA 关闭
+//
+// 而 CLI 报的是「已写入 / 需重启 server 才生效」——假成功，且重启正是引爆动作。
+// 这与 config.js 头部第 2 条纪律「CLI 不是配置文件的特权通道」直接冲突：面板路径做对了，
+// 新写的 CLI 反而成了那个能绕过一切的通道。
+test.describe('写入侧的配置源判定（必须与读取侧一致）', () => {
+  const onlyEnv = (dir) => writeFileSync(join(dir, '.env'), 'AUTH_TOKEN=real\nWORK_DIR=/x\n');
+
+  test('set：只有 .env 时拒绝，并指出要先 migrate', () => withTempDir((dir) => {
+    onlyEnv(dir);
+    const r = runConfigCommand({
+      command: 'set', positionals: [], flags: {}, assignments: [['PORT', '4100']],
+    }, { dir });
+    assert.equal(r.ok, false);
+    assert.ok(r.problems.some(p => p.includes('migrate')), '必须告诉用户下一步做什么');
+    assert.equal(existsSync(join(dir, 'ccm.config.json')), false, '一个字节都不该写');
+  }));
+
+  test('unset：同样拒绝', () => withTempDir((dir) => {
+    onlyEnv(dir);
+    const r = runConfigCommand({ command: 'unset', positionals: ['WORK_DIR'], flags: {}, assignments: [] }, { dir });
+    assert.equal(r.ok, false);
+    assert.ok(r.problems.some(p => p.includes('migrate')));
+  }));
+
+  test('init：同样拒绝 —— 否则会盖出一个带新 AUTH_TOKEN 的空配置', () => withTempDir((dir) => {
+    onlyEnv(dir);
+    const r = runConfigCommand({ command: 'init', positionals: [], flags: {}, assignments: [] }, { dir });
+    assert.equal(r.ok, false);
+    assert.equal(existsSync(join(dir, 'ccm.config.json')), false);
+  }));
+
+  test('--force 仍可强行执行（用户明确要覆盖时不该被挡死）', () => withTempDir((dir) => {
+    onlyEnv(dir);
+    const r = runConfigCommand({ command: 'init', positionals: [], flags: { force: true }, assignments: [] }, { dir });
+    assert.equal(r.ok, true);
+  }));
+
+  test('已迁移的部署不受影响（两者都在时正常写）', () => withTempDir((dir) => {
+    onlyEnv(dir);
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ $schemaVersion: 1, AUTH_TOKEN: 'real' }));
+    const r = runConfigCommand({
+      command: 'set', positionals: [], flags: {}, assignments: [['PORT', '4100']],
+    }, { dir });
+    assert.equal(r.ok, true);
+    assert.equal(JSON.parse(readFileSync(join(dir, 'ccm.config.json'), 'utf8')).AUTH_TOKEN, 'real');
+  }));
+
+  test('全新安装（两者都没有）照常 init', () => withTempDir((dir) => {
+    assert.equal(runConfigCommand({ command: 'init', positionals: [], flags: {}, assignments: [] }, { dir }).ok, true);
+  }));
+});
+
+// ★ unset 也必须过校验。
+//
+// env-schema.js 特意把 readonly 判断放在 `value === null` 之前，就是为了让「删除只读项」
+// 也被拦住。面板路径（env:set）拦住了，CLI 没有 —— 实测 `unset AUTH_TOKEN` 直接删成功，
+// 而同一个 key 用 `set` 会被明确拒绝。后果：重启后只绑 127.0.0.1。
+test.describe('unset 的校验', () => {
+  test('只读项不能删 —— 与 set 拒绝它的理由完全相同', () => withTempDir((dir) => {
+    runConfigCommand({ command: 'init', positionals: [], flags: {}, assignments: [] }, { dir });
+    const r = runConfigCommand({ command: 'unset', positionals: ['AUTH_TOKEN'], flags: {}, assignments: [] }, { dir });
+    assert.equal(r.ok, false);
+    const cfg = JSON.parse(readFileSync(join(dir, 'ccm.config.json'), 'utf8'));
+    assert.ok(cfg.AUTH_TOKEN, 'AUTH_TOKEN 必须还在');
+  }));
+
+  test('普通项照常可删', () => withTempDir((dir) => {
+    runConfigCommand({ command: 'init', positionals: [], flags: {}, assignments: [] }, { dir });
+    runConfigCommand({ command: 'set', positionals: [], flags: {}, assignments: [['PORT', '4100']] }, { dir });
+    const r = runConfigCommand({ command: 'unset', positionals: ['PORT'], flags: {}, assignments: [] }, { dir });
+    assert.equal(r.ok, true);
+    assert.equal(Object.hasOwn(JSON.parse(readFileSync(join(dir, 'ccm.config.json'), 'utf8')), 'PORT'), false);
+  }));
+
+  test('未知 key 报错而不是静默 no-op', () => withTempDir((dir) => {
+    runConfigCommand({ command: 'init', positionals: [], flags: {}, assignments: [] }, { dir });
+    assert.equal(runConfigCommand({ command: 'unset', positionals: ['NOPE'], flags: {}, assignments: [] }, { dir }).ok, false);
+  }));
+});

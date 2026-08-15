@@ -82,9 +82,9 @@ export const ENV_SCHEMA = {
       + 'See the workspace drawer for the current list; edit via CLI or desktop (read-only here).'),
   },
   WORK_DIRS_FILE: {
-    group: 'runtime', kind: 'path', mustExist: true, reload: 'hot',
+    group: 'runtime', kind: 'path', mustExist: true,
     label: t('多工作区配置文件（旧）', 'Workdirs file (legacy)'),
-    help: t('指向外部 workdirs.json。已被上面的工作区列表取代，保留仅为兼容既有部署。',
+    help: t('指向外部 workdirs.json。该文件的**内容**支持热加载，但改这个指针本身需要重启。已被上面的工作区列表取代。',
       'Points at an external workdirs.json. Superseded by the inline list above; kept for compatibility.'),
   },
   CLAUDE_BIN: {
@@ -275,9 +275,25 @@ function checkUrl(key, value, def) {
 function checkList(value, def) {
   if (!Array.isArray(value)) return `${def.label.zh} 必须是数组（每项为路径字符串或 {path, sessionLimit}）`;
   for (const entry of value) {
-    if (typeof entry === 'string' && entry.trim()) continue;
-    if (entry && typeof entry === 'object' && typeof entry.path === 'string' && entry.path.trim()) continue;
-    return `${def.label.zh} 的条目必须是非空路径字符串或 {path, sessionLimit}，收到：${JSON.stringify(entry)}`;
+    const path = typeof entry === 'string' ? entry
+      : (entry && typeof entry === 'object' && typeof entry.path === 'string' ? entry.path : null);
+    if (path === null || !path.trim()) {
+      return `${def.label.zh} 的条目必须是非空路径字符串或 {path, sessionLimit}，收到：${JSON.stringify(entry)}`;
+    }
+    // ★ 必须是绝对路径。checkOne 的 path kind 早就有这道（理由：启动后 cwd 未必是仓库根），
+    // 而 list 独独漏了 —— 实测 ['..'] 能通过校验，realpath 相对 cwd 解析后把仓库父目录
+    // 整棵树放进白名单。白名单是 claude 的文件作用域边界，不是展示用的列表。
+    if (!path.startsWith('/')) {
+      return `${def.label.zh} 的每项必须是绝对路径（启动后 cwd 未必是仓库根），收到：${JSON.stringify(path)}`;
+    }
+    // sessionLimit 非法时 normalizeWorkdirEntries 只 warn-skip 并静默回退默认值 ——
+    // 用户看到「保存成功」，拿到的是一个和自己写的不一样的配置。写入侧要严。
+    if (entry && typeof entry === 'object' && Object.hasOwn(entry, 'sessionLimit')) {
+      const n = entry.sessionLimit;
+      if (!Number.isInteger(n) || n < 1) {
+        return `${def.label.zh} 的 sessionLimit 必须是 ≥1 的整数，收到：${JSON.stringify(n)}`;
+      }
+    }
   }
   return null;
 }

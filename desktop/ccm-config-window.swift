@@ -232,7 +232,7 @@ final class ConfigWindowController: NSWindowController {
         }
 
         let field: NSTextField = item.isSecret ? NSSecureTextField() : NSTextField()
-        field.stringValue = item.isSecret ? item.displayValue : current
+        field.stringValue = item.isSecret ? ConfigItem.secretDisplay(current: current) : current
         field.isEditable = item.isEditable
         field.isSelectable = true
         field.placeholderString = item.`default`.map { "默认 \($0)\(item.unit ?? "")" }
@@ -258,8 +258,10 @@ final class ConfigWindowController: NSWindowController {
             guard let field = entry.view as? NSTextField else { continue }
             // secret 的输入框预填的是掩码。**没动过就绝不提交** —— 否则会把 "••••••••"
             // 当成新密钥写进配置文件，把用户真正的 token 冲掉。
-            if entry.item.isSecret && field.stringValue == entry.item.displayValue { continue }
             let old = loadedValues[key] ?? entry.item.value ?? ""
+            // secret 输入框预填的是掩码，没动过就绝不提交 —— 否则会把 "••••••••" 当成新密钥
+            // 写进配置，把用户真正的 token 冲掉。判据必须与预填时用的是同一个函数。
+            if entry.item.isSecret && field.stringValue == ConfigItem.secretDisplay(current: old) { continue }
             if field.stringValue != old { changes.append((key, field.stringValue)) }
         }
 
@@ -285,7 +287,7 @@ final class ConfigWindowController: NSWindowController {
 
 // MARK: - 日志窗口
 
-final class LogWindowController: NSWindowController {
+final class LogWindowController: NSWindowController, NSWindowDelegate {
     private let env: RuntimeEnv
     private let textView = NSTextView()
     private let pathLabel = NSTextField(labelWithString: "")
@@ -301,6 +303,10 @@ final class LogWindowController: NSWindowController {
         window.title = "CCM 日志"
         window.center()
         super.init(window: window)
+        // ★ 必须当 delegate。程序化创建的 NSWindow delegate 为 nil，红色关闭按钮走
+        // NSWindow.close() 而**不经过** NSWindowController.close() —— 只 override 后者的话，
+        // 用户关掉窗口后那个 2s 轮询会一直读盘到 app 退出（AppDelegate 强引用着 controller）。
+        window.delegate = self
         buildChrome()
     }
 
@@ -352,10 +358,17 @@ final class LogWindowController: NSWindowController {
     }
 
     /// 窗口关掉就停轮询 —— 否则一个后台定时器会一直读盘到 app 退出。
+    /// 两条路径都要接：红按钮 → windowWillClose；代码调用 → close()。
+    func windowWillClose(_ notification: Notification) { stopPolling() }
+
     override func close() {
+        stopPolling()
+        super.close()
+    }
+
+    private func stopPolling() {
         timer?.invalidate()
         timer = nil
-        super.close()
     }
 
     private func resolvePath() {

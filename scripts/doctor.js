@@ -429,7 +429,9 @@ function checkClaudeConfigDir() {
 // D3 与 workdirPaths 共用这一份：那条「同一解析口径」的注释以前只是口头约定，两处各写一遍，
 // 加第三条路径时必然只改一处 —— 而 doctor 的全部价值就在于「它看到的 = server 会看到的」。
 function resolveWorkdirSource() {
-  const inline = readConfigFileRaw(HERE)?.WORKDIRS;
+  // ★ 跟随**被诊断的**配置：--env=prod.env 时不能去读仓库根那份 ccm.config.json，
+  // 否则 doctor 检查的是本仓库的工作区、却报给你 prod 的诊断结论 —— 正是 WS-011 声明要消灭的假绿。
+  const inline = envArg ? null : readConfigFileRaw(HERE)?.WORKDIRS;
   if (Array.isArray(inline)) return { result: normalizeWorkdirEntries(inline), from: 'WORKDIRS' };
   const dirsFile = process.env.WORK_DIRS_FILE;
   if (dirsFile) {
@@ -483,11 +485,17 @@ if (envArg && !existsSync(envFile)) {
 // 就会有分叉——而 setup.js 现在默认生成的是 ccm.config.json，旧的 dotenv 路径对它完全失明，
 // 新装用户跑 doctor 会被告知「未设置 AUTH_TOKEN」，照着改了还是没用。
 const loaded = readConfigFileValues(HERE, envArg ? { envFile } : {});
-loadRuntimeEnvironment(process.env, envArg ? { envFile } : { dir: HERE, quiet: true });
 if (loaded.error) {
+  // ★ 必须先报再加载：loadRuntimeEnvironment 对坏 JSON 是 fail-loud（会抛），排在这之前的话
+  // doctor 直接崩栈、16 项体检一项都不跑 —— 而诊断坏配置正是它存在的理由。
   console.error(`⚠️  配置文件解析失败：${loaded.error}`);
 } else if (loaded.source !== 'none') {
   console.log(`已加载: ${loaded.path}`);
+}
+try {
+  loadRuntimeEnvironment(process.env, envArg ? { envFile } : { dir: HERE, quiet: true });
+} catch (err) {
+  console.error(`⚠️  配置加载失败，后续检查基于不完整的环境：${err?.message || err}`);
 }
 
 // WS-011：统一 effective config 上下文。旧实现 --env 只影响 dotenv 加载（改 process.env），D6/D7/--fix 仍硬读
