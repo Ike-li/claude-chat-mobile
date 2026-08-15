@@ -4,7 +4,7 @@
 // 最重要的一条是「敏感项永远拿不到明文」——服务端只下发 { set, length }，页面上不该出现任何密钥值。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, openGeneralDiagSection, openGeneralSettings } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, openGeneralDiagSection, openGeneralSettings, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-31 服务与配置面板：入口打开 → 分组渲染 → 敏感项遮罩 → 只读项禁用', async ({ page }) => {
@@ -115,6 +115,28 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
 
     // mock 把收到的 key 原样回在 written 里，前端渲染成「已写入 N 项」
     await expect(page.locator('#envConfigHint')).toContainText('已写入 1 项');
+    await expectNoBrowserErrors(page);
+  });
+
+  // canRestart:false 那一侧此前零覆盖——mock 74 处广播全硬编码 true，把整个分支删掉
+  // 全套 E2E 照样绿。而它恰恰是「前台 npm start 的用户」会看到的唯一形态：
+  // 配置写进文件了、进程里还是旧值，若不明说得去电脑上重启，这条路就断在最后一步。
+  test('P0-31g 非常驻托管时不给「立即重启」，而是明说要到电脑上重启', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:no-restart');
+    await waitForIdle(page);
+
+    await openGeneralSettings(page);
+    await openGeneralDiagSection(page);
+    await page.locator('#btnEnvConfig').click();
+    await page.locator('#envConfigBody input[data-key="PORT"]').fill('8080');
+    await page.locator('#envConfigSave').click();
+
+    const hint = page.locator('#envConfigHint');
+    await expect(hint).toContainText('已写入 1 项');
+    await expect(hint).toContainText('本进程不是常驻托管');
+    // 查 DOM 存在性而不是文案：按钮不该被渲染出来（点了也没用，只会让人以为重启了）
+    await expect(page.locator('#envConfigRestart')).toHaveCount(0);
     await expectNoBrowserErrors(page);
   });
 

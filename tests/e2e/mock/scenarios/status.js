@@ -368,6 +368,31 @@ export function createStatusScenarios(getContext) {
       }),
     },
     {
+      // canRestart:false 注入：模拟「前台 npm start、不是 LaunchAgent 托管」。
+      // 配置面板保存后不该给「立即重启」按钮，而要明说得到电脑上重启——那条路径此前零覆盖
+      // （mock 74 处广播全硬编码 canRestart:true），删掉整个分支全套 E2E 照样绿。
+      command: 'test:no-restart',
+      run: run(async ({ io, socket, activeEpoch, viewingInstanceId, activeModel, setMockCanRestart, mockInstances, mockServicePayload }) => {
+        setMockCanRestart(false);
+        socket.emit('agent:event', {
+          seq: 1, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: viewingInstanceId, ts: Date.now(),
+          type: 'result', payload: { messageId: 'msg_no_restart_1', durationMs: 50, costUsd: 0, isError: false, models: [activeModel] },
+        });
+        // 立刻推一帧带 canRestart:false 的 instances（同 test:server-restart 的做法）
+        io.emit('agent:event', {
+          seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+          type: 'instances', payload: {
+            canRestart: false,
+            viewingInstanceId,
+            viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd,
+            dirs: Array.from(new Set(mockInstances.map(i => i.cwd))),
+            instances: mockInstances,
+            service: mockServicePayload(),
+          },
+        });
+      }),
+    },
+    {
       // 重启记录「频繁重启」注入：后续 service:status ack 带一个 flapping 的 unit，
       // 供 E2E 验证 alert → text-warning 这个映射真的接上了。默认夹具刻意不 flapping
       // （恒亮黄字会掩盖回归），所以不注入的话这条路径从来没被断言过。

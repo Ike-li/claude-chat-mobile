@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createServiceManager, describeUnit, resolveEventsPath } from '../../scripts/service.js';
+import { createServiceManager, describeUnit, formatStatus, resolveEventsPath } from '../../scripts/service.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'scripts', 'service.js');
@@ -438,5 +438,72 @@ test.describe('resolveEventsPath —— 与 data-dir.js 必须同口径', () => 
 
   test('空串按未设置处理（同 config.js 的 normalizeLoadedEnvironment）', () => {
     assert.equal(resolveEventsPath({ CCM_DATA_DIR: '' }, {}, ROOT), '/repo/data/service-events.json');
+  });
+});
+
+// formatStatus 的 darwin 渲染路径此前完全没有断言：唯一那条用例设 CCM_TEST_PLATFORM=linux，
+// 只走 `!s.supported` 的两行早退。把整段人类可读表格换成 `return '仅支持 macOS\n'`，
+// 全套单测照样绿——而那正是机主在终端里唯一会看到的东西。
+test.describe('formatStatus —— 人类可读表格（darwin 路径）', () => {
+  const base = {
+    supported: true, generatedAt: 1786600000000, warnings: [],
+    units: [{
+      unit: 'server', label: 'com.ccm.server', state: 'running', pid: 51531,
+      ownership: 'managed', flapping: false, drift: [], detail: '', listen: null,
+      restarts: { lastHour: 0, last24h: 0, flapping: false, lastRestartAt: null },
+    }],
+  };
+  const render = (over) => formatStatus({ ...base, ...over });
+  const withUnit = (over) => render({ units: [{ ...base.units[0], ...over }] });
+
+  test('正常运行：灯 ● + label + state + pid + 归属', () => {
+    const out = withUnit({});
+    assert.match(out, /● com\.ccm\.server {2}running pid=51531 {2}\[/, `实际：\n${out}`);
+  });
+
+  test('flapping 的灯是 ◐ 而不是 state 对应的那个（频繁重启压过状态）', () => {
+    assert.match(withUnit({ flapping: true }), /^◐ com\.ccm\.server/m);
+  });
+
+  test('stopped / crashed 各有各的灯', () => {
+    assert.match(withUnit({ state: 'stopped', pid: null }), /^○ com\.ccm\.server {2}stopped {2}\[/m);
+    assert.match(withUnit({ state: 'crashed', pid: null }), /^✗ com\.ccm\.server {2}crashed {2}\[/m);
+  });
+
+  test('未知 state 用 ? 而不是崩掉', () => {
+    assert.match(withUnit({ state: 'weird', pid: null }), /^\? com\.ccm\.server {2}weird/m);
+  });
+
+  test('有过重启 → 追加「上次重启 N 前」', () => {
+    const out = withUnit({ restarts: { lastHour: 0, last24h: 1, flapping: false, lastRestartAt: base.generatedAt - 7200_000 } });
+    assert.match(out, /上次重启 2 小时前/, `实际：\n${out}`);
+  });
+
+  test('从没重启过 → 不追加那一段（别写「上次重启 ?前」）', () => {
+    assert.doesNotMatch(withUnit({}), /上次重启/);
+  });
+
+  test('detail 与端口各占一行缩进', () => {
+    const out = withUnit({ detail: '24 小时内重启 2 次', listen: { port: 3000, reachable: true } });
+    assert.match(out, /^ {4}24 小时内重启 2 次$/m);
+    assert.match(out, /^ {4}端口 3000 可连接$/m);
+  });
+
+  test('端口连不上要说出来（不是静默省略）', () => {
+    assert.match(withUnit({ listen: { port: 3000, reachable: false } }), /^ {4}端口 3000 连不上$/m);
+  });
+
+  test('一个 unit 都没有 → 明说，不是给个空表', () => {
+    assert.match(render({ units: [] }), /（未发现任何 com\.ccm\.\* unit）/);
+  });
+
+  test('warnings 逐条带 ⚠ 前缀列出', () => {
+    assert.match(render({ warnings: ['launchctl list 失败：x'] }), /^⚠ launchctl list 失败：x$/m);
+  });
+
+  test('不支持的平台只印 warnings，不印表格', () => {
+    const out = formatStatus({ supported: false, warnings: ['LaunchAgent 服务管理仅支持 macOS（当前平台：linux）'], units: [] });
+    assert.match(out, /仅支持 macOS/);
+    assert.doesNotMatch(out, /com\.ccm/);
   });
 });

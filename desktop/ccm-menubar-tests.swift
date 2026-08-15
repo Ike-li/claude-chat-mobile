@@ -35,6 +35,7 @@ struct CCMCoreTests {
         testSymbol()
         testUnitPresentation()
         testSummaryLine()
+        testServiceScriptPath()
         testShellQuote()
         testAppleScriptEscape()
         testCommands()
@@ -143,6 +144,14 @@ struct CCMCoreTests {
         eq(unitTitle(foreign).contains("手工配置"), true, "foreign 标注归属")
         let unknown = unit(#"{"unit":"tunnel-watch","state":"stopped","ownership":"unknown"}"#)!
         eq(unitTitle(unknown).contains("非本仓"), true, "unknown 标注归属")
+
+        // 三个非 running 的臂此前只有 lamp 被断言过，标题文案本身没有 —— 把它们都改成同一句话
+        // 也照样绿，而这几行正是用户在菜单里唯一读到的东西。
+        eq(unitTitle(unit(#"{"unit":"x","state":"stopped"}"#)!).contains("已停止"), true, "stopped 标题")
+        eq(unitTitle(unit(#"{"unit":"x","state":"crashed"}"#)!).contains("已崩溃"), true, "crashed 标题")
+        eq(unitTitle(unit(#"{"unit":"x","state":"not-installed"}"#)!).contains("未安装"), true, "未安装标题")
+        // 没有 pid 时不该拼出「运行中 ()」这种空括号
+        eq(unitTitle(unit(#"{"unit":"x","state":"running"}"#)!).contains("("), false, "无 pid 时不留空括号")
     }
 
     // MARK: 摘要行
@@ -175,6 +184,36 @@ struct CCMCoreTests {
         """)
         eq(summaryLine(status: unreachable, problem: .none, lastError: nil, staleSeconds: nil).contains("连不上"),
            true, "进程在但端口不通要说出来")
+
+        // 三个早退分支此前一条都没断言（unsupported 只经 symbol 那个不同的函数验过）
+        let unsupported = decode(#"{"schemaVersion":1,"supported":false,"units":[]}"#)
+        eq(summaryLine(status: unsupported, problem: .none, lastError: nil, staleSeconds: nil),
+           "本机不支持 LaunchAgent 管理", "非 macOS 明说，不是伪装成正常")
+
+        let noServer = decode(#"{"schemaVersion":1,"supported":true,"units":[{"unit":"tunnel","state":"running"}]}"#)
+        eq(summaryLine(status: noServer, problem: .none, lastError: nil, staleSeconds: nil),
+           "未发现 server unit", "只有隧道没有 server 时要说清")
+
+        // ★ flapping 的语义是「1 小时内 ≥3 次重启」，不是「曾崩溃」——文案不能再说退出码那套
+        let flapping = decode(#"{"schemaVersion":1,"supported":true,"units":[{"unit":"server","state":"running","flapping":true}]}"#)
+        let flapLine = summaryLine(status: flapping, problem: .none, lastError: nil, staleSeconds: nil)
+        eq(flapLine.contains("频繁重启"), true, "说频率")
+        eq(flapLine.contains("曾崩溃"), false, "不再说退出码语义")
+
+        let stopped = decode(#"{"schemaVersion":1,"supported":true,"units":[{"unit":"server","state":"stopped"}]}"#)
+        eq(summaryLine(status: stopped, problem: .none, lastError: nil, staleSeconds: nil).contains("已停止"),
+           true, "stopped 摘要")
+    }
+
+    // MARK: 仓库定位
+    //
+    // 判据是 scripts/service.js 存在而不是目录存在：仓库被删后父目录往往还在，
+    // 只判目录会给一个假绿。此前这个函数零断言。
+
+    static func testServiceScriptPath() {
+        eq(serviceScriptPath(in: "/Users/you/code/ccm"), "/Users/you/code/ccm/scripts/service.js", "拼到 scripts/service.js")
+        eq(serviceScriptPath(in: "/Users/you/code/ccm/"), "/Users/you/code/ccm/scripts/service.js", "末尾斜杠不产生双斜杠")
+        eq(serviceScriptPath(in: "/a b/repo"), "/a b/repo/scripts/service.js", "路径含空格照样拼对")
     }
 
     // MARK: 转义
