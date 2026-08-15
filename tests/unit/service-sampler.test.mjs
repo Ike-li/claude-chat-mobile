@@ -229,3 +229,85 @@ test.describe('createServiceSampler.summarize —— 面板要的摘要', () => 
     assert.deepEqual(sampler.summarize(), { units: [], recent: [] });
   });
 });
+
+// ── P2：非 macOS 的自身启动记录 ──────────────────────────────────────────────
+//
+// sample() 第一行就是 `if (platform !== 'darwin') return`，所以 Linux / docker / systemd 用户
+// 的「重启记录」段**永远是空的** —— 面板上那一整块对他们不存在。
+//
+// 补法刻意按平台分工，而不是把 launchctl 那套换成通用实现：
+//   · macOS 沿用 launchctl 快照比对（2026-08-14 刚修好 server 自身重启的盲区，且它还能看到
+//     隧道 / 日志轮转 / 菜单栏那些 server 自己不知道的 unit）
+//   · 其余平台用 server 自己的启动记录 —— 它只知道自己，但那恰好是这些平台唯一能知道的
+//
+// 两条路径**互斥**：在 darwin 上同时记会让同一次重启进两条，flapping 阈值被打成一半。
+test.describe('recordSelfStart —— 非 macOS 的重启历史', () => {
+  test('darwin 上不记：launchctl 路径已覆盖，双写会让 flapping 阈值虚高一倍', () => {
+    const { sampler, state } = world({ platform: 'darwin' });
+    sampler.recordSelfStart();
+    assert.equal(state.events, null);
+    assert.equal(state.writes.events, 0);
+  });
+
+  test('非 darwin 首次启动记 started —— 不计入 flapping（那是首次运行不是循环）', () => {
+    const { sampler, state } = world({ platform: 'linux' });
+    sampler.recordSelfStart();
+    assert.equal(state.events.length, 1);
+    assert.equal(state.events[0].kind, 'started');
+    assert.equal(state.events[0].label, 'com.ccm.server');
+  });
+
+  test('已有历史时记 restarted —— 这才是计入频率的那种', () => {
+    const { sampler, state } = world({
+      platform: 'linux',
+      events: [{ ts: T0 - 60_000, label: 'com.ccm.server', kind: 'started' }],
+    });
+    sampler.recordSelfStart();
+    assert.equal(state.events.at(-1).kind, 'restarted');
+  });
+
+  // 阈值是 3 次 restarted，而首次启动记的是 started（不计入频率）。所以「起了三次」只有
+  // 2 次 restarted —— **尚未达标**。这条锁住不要把阈值悄悄放宽：告警恒亮比没有告警更糟。
+  test('一小时内起三次 → 只有 2 次 restarted，还不算 flapping', () => {
+    const { sampler, state } = world({ platform: 'linux' });
+    for (const offset of [0, 60_000, 120_000]) {
+      state.t = T0 + offset;
+      sampler.recordSelfStart();
+    }
+    const unit = sampler.summarize(T0 + 120_000).units.find(u => u.label === 'com.ccm.server');
+    assert.equal(unit.lastHour, 2);
+    assert.equal(unit.flapping, false);
+  });
+
+  test('四次启动 → 3 次 restarted，越过阈值', () => {
+    const { sampler, state } = world({ platform: 'linux' });
+    for (const offset of [0, 60_000, 120_000, 180_000]) {
+      state.t = T0 + offset;
+      sampler.recordSelfStart();
+    }
+    const unit = sampler.summarize(T0 + 180_000).units.find(u => u.label === 'com.ccm.server');
+    assert.equal(unit.lastHour, 3);
+    assert.equal(unit.flapping, true);
+  });
+
+  test('写盘失败只 warn，不阻断启动 —— 记不了历史也不该让 server 起不来', () => {
+    const { sampler, state } = world({ platform: 'linux', failWriteEvents: true });
+    assert.doesNotThrow(() => sampler.recordSelfStart());
+    assert.ok(state.warns.some(w => w.includes('启动记录')));
+  });
+
+  test('坏事件文件 → 当作没有历史，记 started 而不是抛错', () => {
+    const { sampler, state } = world({ platform: 'linux', events: { not: 'an array' } });
+    sampler.recordSelfStart();
+    assert.equal(state.events.at(-1).kind, 'started');
+  });
+
+  test('历史有上限，不会无限增长', () => {
+    const many = Array.from({ length: 205 }, (_, i) => ({
+      ts: T0 - (205 - i) * 1000, label: 'com.ccm.server', kind: 'restarted',
+    }));
+    const { sampler, state } = world({ platform: 'linux', events: many });
+    sampler.recordSelfStart();
+    assert.ok(state.events.length <= 200);
+  });
+});

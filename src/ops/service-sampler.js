@@ -89,6 +89,43 @@ export function createServiceSampler(deps = {}) {
   }
 
   /**
+   * server 自己的启动记录 —— **非 macOS 平台的重启历史唯一来源**。
+   *
+   * sample() 第一行就按平台早退，所以 Linux / docker / systemd 用户的「重启记录」段
+   * 一直是空的：那一整块面板对他们不存在。而 server 自己知道自己什么时候起来的，
+   * 这个事实与进程管理器无关，任何平台都成立。
+   *
+   * ## 为什么 darwin 上不记
+   *
+   * 两条路径**必须互斥**。macOS 上 launchctl 快照比对已经能认出 server 自身重启
+   * （2026-08-14 把快照落盘之后修好的），再记一次会让同一次重启进两条事件 ——
+   * flapping 阈值被实际打成一半，恒亮告警又回来了。
+   *
+   * 而且 launchctl 那条路更全：它还能看到隧道、日志轮转、菜单栏那些 server 自己
+   * 压根不知道的 unit。所以不是「通用实现取代平台实现」，是各自负责能看到的部分。
+   *
+   * kind 的判据是「盘上有没有本 label 的历史」：首次运行记 started（不计入频率，
+   * 那是首次启动不是循环），之后每次记 restarted。与 diffRunningState 的语义一致。
+   */
+  function recordSelfStart(at = now()) {
+    if (platform === 'darwin') return null;
+
+    const label = `${labelPrefix}server`;
+    try {
+      const events = readEvents();
+      const kind = events.some((e) => e.label === label) ? 'restarted' : 'started';
+      const event = { ts: at, label, kind, from: null, to: null, lastExit: null };
+      writeEvents(appendEvents(events, [event]).slice(-MAX_SERVICE_EVENTS));
+      log(`[service] ${label} ${kind}（自身启动记录）`);
+      return event;
+    } catch (err) {
+      // 记不了历史不该让 server 起不来 —— 这是可观测性功能，不是启动前提。
+      warn(`[service] 自身启动记录落盘失败（本次重启不会出现在历史里）：${err?.message || err}`);
+      return null;
+    }
+  }
+
+  /**
    * 面板要的两段。判定化：不给裸计数器，给「有没有在频繁重启」+ 一小段时间线。
    *
    * 时间线只取「摘要里有话说的那些 unit」的事件。此前是全局最后 N 条，于是一个高频 label
@@ -105,5 +142,5 @@ export function createServiceSampler(deps = {}) {
     return { units, recent: pool.slice(-recentLimit).reverse() }; // 倒序：最新的在前
   }
 
-  return { sample, summarize };
+  return { sample, recordSelfStart, summarize };
 }

@@ -1407,6 +1407,10 @@ if (!statusOff) {
 // 不支持的平台由 sampler 内部早退（process.platform !== 'darwin'），零开销。
 // 先立刻跑一次：盘上有上一条命的快照时，这一次就能认出 server 自己的重启。
 serviceSampler.sample();
+// 非 macOS 的重启历史唯一来源：上面那条 sample() 在这些平台上直接早退，面板「重启记录」段
+// 因此一直是空的。server 自己知道自己什么时候起来的，这个事实与进程管理器无关。
+// darwin 上此调用内部早退——两条路径互斥，双写会让同一次重启进两条、flapping 阈值虚高一倍。
+serviceSampler.recordSelfStart();
 serviceSampleInterval = setInterval(() => serviceSampler.sample(), SERVICE_SAMPLE_INTERVAL_MS);
 serviceSampleInterval.unref?.(); // 不阻止进程退出
 

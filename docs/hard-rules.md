@@ -149,7 +149,8 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 - 重启/空闲回收后停**空首页**，只展示最近列表，**不自动** `session:switch`。  
 - dispose / resume 失败默认**禁止跨工作区闪回**（用户主动关 tab 可允许）。  
 - 忙碌中禁止 externalDirty 的 dispose+resume 置换（SRV-003）。  
-- 服务状态面板只渲染判定化告警，不展示裸计数器（原始数留 `/metrics`）。  
+- 服务状态面板只渲染判定化告警，不展示裸计数器（原始数留 `/metrics`）。
+- 重启历史两条路径**互斥**：macOS 走 launchctl 快照比对（还能看到隧道等其它 unit），其余平台走 server 自身启动记录。双写会让同一次重启进两条、flapping 阈值虚高一倍。  
 - 推送 body 最小化（SEC-04）；完成类通知在前台在线时可不推。
 
 ### 4.6 配置文件
