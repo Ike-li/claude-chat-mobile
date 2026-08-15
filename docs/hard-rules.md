@@ -141,8 +141,8 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 ### 4.4 生产运维
 
 - 常驻服务占端口：**勿再手动 `npm start` 撞端口**。  
-- 改 `.env`/代码须**重启**常驻进程。  
-- **例外**：`workdirs.json` 热加载；被移除目录仅拒新开。
+- 改配置/代码须**重启**常驻进程。  
+- **例外**：工作区列表热加载（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`）；被移除目录仅拒新开。哪些项可热加载由 `env-schema.js` 的 `reload` 标记决定（缺省 `restart`，当前唯一 `hot` 是 `WORKDIRS`）。
 
 ### 4.5 产品 UX 已决
 
@@ -151,6 +151,17 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 - 忙碌中禁止 externalDirty 的 dispose+resume 置换（SRV-003）。  
 - 服务状态面板只渲染判定化告警，不展示裸计数器（原始数留 `/metrics`）。  
 - 推送 body 最小化（SEC-04）；完成类通知在前台在线时可不推。
+
+### 4.6 配置文件
+
+| 规则 | 说明 |
+|------|------|
+| 单一事实源 | schema 在 `src/ops/env-schema.js`，读写与类型归一在 `src/ops/config-file.js`。加一个配置项只改前者 |
+| 格式 | `ccm.config.json`（结构化 JSON）。**存在时优先，缺失才回落 `.env`**；旧部署零改动 |
+| 读写同源 | 面板/CLI 写入的文件必须与启动时读的是同一份。写错源不是报错而是**假成功**——用户看到「已写入」、重启毫无变化（同 CF_ACCESS_* 被 dotenv 吞那次） |
+| 优先级 | shell env > 配置文件 > 内置默认。`ANTHROPIC_*` 只认真实 shell export，写进文件照样剥除 |
+| 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；`tests/unit/config-file.test.mjs` 有断言锁住 |
+| 迁移是显式动作 | 没有任何代码路径会自动创建 `ccm.config.json`（`setup` 与 `config migrate` 除外，两者都是用户发起） |
 
 ---
 
@@ -210,7 +221,7 @@ HTTP/Socket 鉴权（AUTH_TOKEN 或 CF Access）
         ↓
 设备信任（本机 / CF Access JWT 可豁免）
         ↓
-WORK_DIR / workdirs.json 范围门
+WORK_DIR / WORKDIRS 范围门
         ↓
 CLI permissions.allow + Web 当前权限档
         ↓

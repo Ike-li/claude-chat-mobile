@@ -13,6 +13,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -625,4 +626,24 @@ test.describe('migrateEnvValues —— .env 字符串态转结构化', () => {
     const { config } = migrateEnvValues({ PORT: '3000' });
     assert.equal(Object.hasOwn(config, 'WORKDIRS'), false);
   });
+});
+
+// ★ 安全断言，不是行为测试。
+//
+// ccm.config.json 与 .env 同等敏感（AUTH_TOKEN / VAPID 私钥 / ntfy token 都在里面），而本仓是
+// **public repo**。setup.js 现在默认把它生成在项目根，用户一个 `git add -A` 就会把自己的入口
+// 密钥推上公网 —— 实测确认过：加 .gitignore 之前 `git status` 确实把它列为待追踪。
+//
+// 这条性质不能靠「记得」：它在 .gitignore 里只是一行，删掉不会有任何测试变红，除非有这一条。
+test('安全：ccm.config.json 必须被 gitignore（含 AUTH_TOKEN，且本仓 public）', () => {
+  const repoRoot = new URL('../../', import.meta.url).pathname;
+
+  // 容器/无 git 环境跳过：check-ignore 需要真实工作树
+  const probe = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: repoRoot, encoding: 'utf8' });
+  if (probe.status !== 0) return;
+
+  for (const name of ['ccm.config.json', 'ccm.config.prod.json']) {
+    const r = spawnSync('git', ['check-ignore', name], { cwd: repoRoot, encoding: 'utf8' });
+    assert.equal(r.status, 0, `${name} 未被 .gitignore 覆盖 —— 用户 git add -A 会把 AUTH_TOKEN 提交到 public repo`);
+  }
 });

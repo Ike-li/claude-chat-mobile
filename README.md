@@ -47,7 +47,7 @@
 - **Node.js ≥ 20**。
 - **本机已安装并登录 `claude` CLI**；先确认 `which claude` 能找到命令，并能在终端正常开始对话。
 - **macOS 或 Linux** 为一等支持平台；原生 Windows 属实验路径，推荐使用 WSL2。
-- 官方订阅和第三方网关都可用。网关相关 `ANTHROPIC_*` 必须存在于**启动 server 的 shell 环境**；写进 `.env` 会被剥除。
+- 官方订阅和第三方网关都可用。网关相关 `ANTHROPIC_*` 必须存在于**启动 server 的 shell 环境**；写进配置文件会被剥除。
 - 截至 **2026-07-31**，Agent SDK 与 `claude -p` 仍消耗 Claude 订阅额度，Anthropic 曾公布的独立 credit 方案处于暂停状态（政策可能变化，以[官方说明](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)为准）；用 API key 或第三方网关时，费用与限额由对应平台决定。
 
 ## 快速开始
@@ -100,7 +100,7 @@ PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先「添加
 - [硬性规则与技术债](docs/hard-rules.md)：n=1 取舍、架构不变量、已决「不做」项（维护者）。
 - [展示契约](docs/display-contracts.md)：模型、思考强度和状态栏的事实源。
 - [仓库地图](docs/repository-map.md)：入口、目录职责与完整文件清单。
-- [环境变量模板](.env.example)：所有运行时配置及默认值。
+- [配置项说明](.env.example)：所有运行时配置及默认值（键名与 `ccm.config.json` 一致）。
 - [安全策略](SECURITY.md)：漏洞报告方式。
 
 ## 许可证

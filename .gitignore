@@ -7,6 +7,11 @@
 .env.*
 !.env.example
 workdirs.json
+# 统一配置文件：与 .env 同等敏感（AUTH_TOKEN / VAPID 私钥 / ntfy token 都在里面），
+# 而本仓是 public repo —— 漏进去等于把机主的入口密钥推上公网。
+# tests/unit/config-file.test.mjs 有一条断言锁住这行，别删。
+ccm.config.json
+ccm.config.*.json
 
 # 运行时状态（ADR-005：会话元数据，本地生成）
 /data/

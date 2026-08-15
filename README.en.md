@@ -45,7 +45,7 @@ Only one side drives a session at a time. Web-driven messages travel through the
 - **Node.js 20 or newer.**
 - **A locally installed and authenticated `claude` CLI.** Confirm that `which claude` finds it and that a terminal conversation works.
 - **macOS or Linux** are first-class platforms. Native Windows is experimental; WSL2 is the safer route.
-- Claude subscriptions and third-party gateways are both supported. Gateway `ANTHROPIC_*` variables must exist in the **shell that starts the server**; values placed in `.env` are stripped.
+- Claude subscriptions and third-party gateways are both supported. Gateway `ANTHROPIC_*` variables must exist in the **shell that starts the server**; values placed in the config file are stripped.
 - As of **2026-07-31**, the Agent SDK and `claude -p` still draw from Claude subscription usage, and Anthropic's previously announced separate-credit plan is paused (policy may change; check the [official notice](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)). API-key and third-party-gateway costs and limits are set by their providers.
 
 ## Quick Start
@@ -98,7 +98,7 @@ Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.m
 - [Hard rules and tech debt](docs/hard-rules.md) (Chinese): n=1 tradeoffs, invariants, and deferred work (maintainers).
 - [Display contracts](docs/display-contracts.md) (Chinese): sources of truth for model, effort, and status-line display.
 - [Repository map](docs/repository-map.md): entrypoints, directory roles, and the complete file inventory.
-- [Environment template](.env.example): every runtime setting and its default.
+- [Settings reference](.env.example): every runtime setting and its default (same key names as `ccm.config.json`).
 - [Security policy](SECURITY.md): private vulnerability-reporting instructions.
 
 ## License

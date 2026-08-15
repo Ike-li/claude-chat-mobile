@@ -33,7 +33,7 @@ claude --version
 
 - 官方订阅：确保启动 server 的本机账号已经登录 `claude`，无需再配 API key。
 - 第三方网关：先在**将要启动 server 的 shell** 中导出网关要求的 `ANTHROPIC_*`，再启动项目。
-- 不要把 `ANTHROPIC_*` 写进项目 `.env`：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。
+- 不要把 `ANTHROPIC_*` 写进项目配置文件：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。
 
 ## 2. 获取代码与安装依赖
 
@@ -57,11 +57,32 @@ npm run setup
 
 向导会：
 
-1. 生成随机 `AUTH_TOKEN` 并写入 `.env`，文件权限设为 `0600`。
+1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
 2. 询问 `WORK_DIR`。请选择明确的项目目录，不要把整个家目录作为方便的默认范围。
 3. 询问是否安装 CLI hooks bridge。默认安装，但只有你确认后才会写 `~/.claude/settings.json`。
 
-如果 `.env` 已存在，向导默认不覆盖。
+如果配置文件已存在，向导默认不覆盖。
+
+### 配置文件
+
+所有配置集中在项目根的 `ccm.config.json`，一份 JSON：
+
+```json
+{
+  "$schemaVersion": 1,
+  "AUTH_TOKEN": "……",
+  "WORK_DIR": "/Users/you/code/project-a",
+  "PORT": 3000,
+  "WEB_STATUSLINE": false
+}
+```
+
+开关是真正的 `true` / `false`，端口是数字，不再有 `KEY=value` 的引号与转义规则。
+
+旧版 `.env` 仍受支持：**`ccm.config.json` 存在时优先读它，缺失则回落 `.env`**，既有部署无需改动。
+若确实需要 `.env`（例如 `docker --env-file`），用 `node scripts/setup.js --env <path>` 生成。
+
+环境变量始终优先于配置文件——`PORT=4000 npm start` 会压过文件里的值。
 
 ### 非交互模式
 
@@ -76,22 +97,29 @@ node scripts/setup.js \
 
 - `--work-dir` 必填，不会静默回落到 `$HOME`。
 - `--hooks` 只接受 `on` 或 `off`；`on` 会修改用户级 Claude hooks 配置。
-- 已有 `.env` 时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
-- 可用 `--env <path>` 指定其他环境文件。
+- 已有配置文件时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
+- 可用 `--config <path>` 指定配置文件位置；`--env <path>` 则生成旧版 `.env`（两者互斥）。
 
-多工作区推荐在 `.env` 设置 `WORK_DIRS_FILE=workdirs.json`，文件内容为绝对路径数组：
+多工作区在 `ccm.config.json` 里加 `WORKDIRS` 数组，每项是绝对路径或 `{path, sessionLimit}`：
 
 ```json
-[
-  "/Users/you/code/project-a",
-  {
-    "path": "/Users/you/code/project-b",
-    "sessionLimit": 10
-  }
-]
+{
+  "WORK_DIR": "/Users/you/code/project-a",
+  "WORKDIRS": [
+    "/Users/you/code/project-a",
+    {
+      "path": "/Users/you/code/project-b",
+      "sessionLimit": 10
+    }
+  ]
+}
 ```
 
-`workdirs.json` 支持热加载。git worktree 也必须作为独立绝对路径显式加入；项目不会自动发现或放行。
+`WORKDIRS` **支持热加载**，改完即生效、无需重启（其余配置项均需重启）。
+git worktree 也必须作为独立绝对路径显式加入；项目不会自动发现或放行。
+
+旧版的 `WORK_DIRS_FILE=workdirs.json`（外部文件）与 `WORK_DIRS`（逗号分隔）仍然可用，
+但优先级低于 `WORKDIRS`。三者同时存在时只有 `WORKDIRS` 生效。
 
 ## 4. 运行启动自检
 
@@ -107,7 +135,7 @@ node scripts/doctor.js
 node scripts/doctor.js --fix
 ```
 
-`--fix` 会收紧 `.env` 与控制面 JSON 文件权限；先阅读输出，再决定是否运行。
+`--fix` 会收紧配置文件与控制面 JSON 文件权限；先阅读输出，再决定是否运行。
 
 ## 5. 启动 server
 
@@ -222,7 +250,7 @@ npm run hooks:uninstall
 - `install` 只追加自己的 hook 条目，保留已有 hooks，并自动做回环验证。
 - 安装后必须新开终端里的 Claude CLI 会话，旧进程不会重新加载 hooks。
 - server 不在线时 hook 只落盘并静默退出，不阻断 CLI。
-- `.env` 设 `CLI_HOOKS_BRIDGE=off` 可让 server 暂停消费，不必卸载全局配置。
+- 配置里设 `CLI_HOOKS_BRIDGE: false` 可让 server 暂停消费，不必卸载全局配置。
 
 手机端也可在“设置 → 服务状态 → 终端会话推送”中显式安装或卸载。
 
@@ -243,7 +271,7 @@ npm run hooks:uninstall
    不要把整个家目录当 WORK_DIR；hooks=on 会修改 ~/.claude/settings.json。
 4. 你的 shell 没有 TTY，不要运行交互向导。使用：
    node scripts/setup.js --yes --work-dir=<确认后的绝对路径> --hooks=<on 或 off>
-   如果 .env 已存在就停下来，不要自行加 --force。
+   如果配置文件已存在就停下来，不要自行加 --force。
 5. 运行 node scripts/doctor.js；只在输出明确要求且安全时使用 --fix。
 6. 确认没有常驻服务占用端口后，在后台启动 server。用鉴权后的 /health JSON 验证，
    不要只看进程是否存在。
@@ -258,11 +286,11 @@ npm run hooks:uninstall
 
 | 现象 | 检查 |
 |---|---|
-| 启动日志没有手机地址 | `AUTH_TOKEN` 未设置；重新运行 setup 或修正 `.env` 后重启 |
+| 启动日志没有手机地址 | `AUTH_TOKEN` 未设置；重新运行 setup 或修正配置文件后重启 |
 | agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；改用 `--yes --work-dir=... --hooks=...` |
 | `EADDRINUSE :3000` | 已有常驻服务或其他进程占用端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
-| 第三方网关配置不生效 | `ANTHROPIC_*` 必须来自启动 server 的 shell，不是 `.env` |
+| 第三方网关配置不生效 | `ANTHROPIC_*` 必须来自启动 server 的 shell，不是配置文件 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |
 | Android 安装后只是浏览器快捷方式 | Cloudflare Access 可能拦住 PWA 图标，见[部署指南](deployment.md#2b-android-pwa图标必须对匿名可达) |
 
@@ -272,4 +300,4 @@ npm run hooks:uninstall
 - 理解 Web/CLI 双通道：[架构说明](architecture.md)
 - 理解模型、effort、statusline 展示来源：[展示契约](display-contracts.md)
 - 维护者：n=1 硬性规则与技术债索引：[hard-rules.md](hard-rules.md)
-- 查看所有环境变量：[`.env.example`](../.env.example)
+- 查看全部配置项及其含义：[`.env.example`](../.env.example)（键名与 `ccm.config.json` 一致，仅格式为旧版）

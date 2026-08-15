@@ -21,7 +21,7 @@
 
 ## ⚠️ 最容易忘的一点
 
-生产实例由常驻服务占着 3000 端口，**不要再手动 `npm start`**（会撞端口）。改了 `.env` 或拉了新代码后，**重启 server 进程**才生效：
+生产实例由常驻服务占着 3000 端口，**不要再手动 `npm start`**（会撞端口）。改了配置或拉了新代码后，**重启 server 进程**才生效：
 
 ```bash
 # macOS LaunchAgent
@@ -30,7 +30,7 @@ launchctl kickstart -k gui/$(id -u)/<your-server-label>
 systemctl --user restart <your-server-service>
 ```
 
-💡 若已设 `DEV_MODE=1`（见 `.env.example`），web 端齿轮面板会出现「重启服务」按钮，可免上电脑一键 kickstart（优雅退出后由 LaunchAgent/systemd 的 KeepAlive 自动拉起）——生产对外部署建议留空该变量，避免误触重启对外服务。
+💡 若已设 `DEV_MODE`（见 `.env.example` 的配置项说明），web 端齿轮面板会出现「重启服务」按钮，可免上电脑一键 kickstart（优雅退出后由 LaunchAgent/systemd 的 KeepAlive 自动拉起）——生产对外部署建议留空该变量，避免误触重启对外服务。
 
 ## 从零搭建
 
@@ -56,11 +56,13 @@ cloudflared tunnel route dns <tunnel-name> <your-domain>   # 建代理 CNAME
 1. Zero Trust → Access → Applications → Add → **Self-hosted**，域填 `<your-domain>`。
 2. 登录法选 **One-time PIN（Email OTP）** 或接 Google/Microsoft IdP。
 3. 策略 Allow 指定邮箱。
-4. 取应用的 **AUD tag**，连同 team 名填进项目 `.env`：
-   ```
-   CF_ACCESS_HOSTNAME=<your-domain>
-   CF_ACCESS_TEAM=<your-team>
-   CF_ACCESS_AUD=<aud-tag>
+4. 取应用的 **AUD tag**，连同 team 名填进项目 `ccm.config.json`（三项必须同时设置或同时留空）：
+   ```json
+   {
+     "CF_ACCESS_HOSTNAME": "<your-domain>",
+     "CF_ACCESS_TEAM": "<your-team>",
+     "CF_ACCESS_AUD": "<aud-tag>"
+   }
    ```
 5. **登录有效期（Session Duration）**：过一次 OTP 后多久内免重复验（默认约 24h）。改法：Zero Trust → Access → Applications → 选中该应用 → **Configure / Edit → Session Duration**，下拉选 15 分钟 ~ 1 个月，或「No duration, expires immediately」每次都验；某条 Policy 内也能单独设，覆盖应用级。
    > 换浏览器 / 无痕窗口 / 清除站点数据都会**重新触发 OTP**——Access 会话是按浏览器隔离的 `CF_Authorization` cookie，与这个时长无关（同浏览器、没清数据、未过期才免验）。
@@ -126,15 +128,15 @@ mkdir -p "$HOME/Library/Application Support/claude-chat-mobile/data"
 chmod 700 "$HOME/Library/Application Support/claude-chat-mobile" \
   "$HOME/Library/Application Support/claude-chat-mobile/data"
 
-# 写入项目 .env（示例值请换成你的绝对路径）
-CCM_DATA_DIR=/Users/you/Library/Application Support/claude-chat-mobile/data
+# 写进项目配置（示例值请换成你的绝对路径）
+# ccm.config.json: { "CCM_DATA_DIR": "/Users/you/Library/Application Support/claude-chat-mobile/data" }
 ```
 
 目录保存 CCM 的会话指针/偏好、设备信任、审批、审计、推送和缓存，文件应保持 `0600`。Claude 原始 transcript 仍在 `~/.claude/projects/`，不会迁入这里；上传附件仍在各工作目录的 `.ccm-uploads/`。迁移前停止常驻服务并备份，迁移后运行 `node scripts/doctor.js` 再重启。`scripts/device.js`、server 与 doctor 都读取同一 `CCM_DATA_DIR`。
 
 ### 4. 通知（可选：ntfy + 深链）
 
-移动端锁屏 / 息屏时，Web Push 在 iOS 上受限（须先"添加到主屏幕"、且局域网 http 下不可用）。配 ntfy 可绕开：server 端一行 POST 到 ntfy 服务，手机装 ntfy app 订阅 topic 即收锁屏通知。全在启动 shell 或 `.env` 注入：
+移动端锁屏 / 息屏时，Web Push 在 iOS 上受限（须先"添加到主屏幕"、且局域网 http 下不可用）。配 ntfy 可绕开：server 端一行 POST 到 ntfy 服务，手机装 ntfy app 订阅 topic 即收锁屏通知。全在启动 shell 或配置文件注入：
 
 ```
 NTFY_URL=https://ntfy.example.com   # 你自托管的 ntfy 实例
@@ -171,12 +173,12 @@ npm start
 | 现象 | 处理 |
 |---|---|
 | 公网 502 / 1033 | server 没跑：看 server 日志、重启；或隧道挂了：看 tunnel 日志 |
-| OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜「Access JWT 校验失败」，核对 `.env` 的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
+| OTP 登录过了但 app 连不上 | JWT 校验失败：server 日志搜「Access JWT 校验失败」，核对配置里的 `CF_ACCESS_TEAM/AUD` 与 CF 应用是否一致 |
 | 手机进不去登录页 | 检查 DNS / 隧道日志有无 `Registered tunnel connection` |
 | Android 装的 PWA 长按只有「移除」、系统设置点进去是 Chrome | 装成了 shortcut 而非 WebAPK：Access 拦了 `/icons/*`，Google 打包服务器抓不到图标。见 §2b，给图标加 Bypass 后删图标重装 |
-| 改了 `.env` 不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
+| 改了配置不生效 | 忘了重启 server 进程（见上方「最容易忘的一条」） |
 | 公网 1033 且部署机开着全局代理/VPN | 代理的 TUN 模式劫持了 `cloudflared` 到 Cloudflare edge 的出站连接：先临时关闭系统代理/VPN 复测确认；长期共存则在代理软件里给 `cloudflared` 进程或 `*.trycloudflare.com` / `*.cloudflareaccess.com` / 你的隧道域名配置直连(bypass)规则 |
-| 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在启动 shell `export ANTHROPIC_MODEL=<带后缀名>` 后重启，或 web 端 `/model <带后缀名>` 切换（`.env` 里的 `ANTHROPIC_*` 启动期被剥除，配置只能来自 shell） |
+| 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在启动 shell `export ANTHROPIC_MODEL=<带后缀名>` 后重启，或 web 端 `/model <带后缀名>` 切换（配置文件里的 `ANTHROPIC_*` 启动期被剥除，只能来自 shell） |
 | 回复只有工具卡片、无正文 | 网关可能不流式 → `src/agent/agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
 
 
@@ -193,8 +195,8 @@ cloudflared tunnel --url http://localhost:3000
 
 ## 日志窗口（可选，macOS）
 
-常驻部署的日志写进文件（`~/Library/Logs/ccm-server.log`），要看得先自己 `tail -f`。在 `.env` 设
-`LOG_TERMINAL=on` 后，server 每次启动会自动开一个 Terminal 窗口跟随该日志，停止/重启时自动关掉它：
+常驻部署的日志写进文件（`~/Library/Logs/ccm-server.log`），要看得先自己 `tail -f`。在配置里设
+`LOG_TERMINAL` 后，server 每次启动会自动开一个 Terminal 窗口跟随该日志，停止/重启时自动关掉它：
 
 ```bash
 LOG_TERMINAL=on        # 默认关闭

@@ -33,7 +33,7 @@ The project does not bundle, install, or sign in to Claude for you.
 
 - Claude subscription: make sure the local account that will start the server is already signed in to `claude`; no extra API key is needed.
 - Third-party gateway: export the required `ANTHROPIC_*` values in the **shell that will start the server**, then start the project.
-- Do not put `ANTHROPIC_*` in the project's `.env`. Startup strips those values so a project file cannot override the CLI/provider environment.
+- Do not put `ANTHROPIC_*` in the project config file. Startup strips those values so a project file cannot override the CLI/provider environment.
 
 ## 2. Get the code and install dependencies
 
@@ -57,11 +57,33 @@ npm run setup
 
 The wizard:
 
-1. Creates a random `AUTH_TOKEN`, writes it to `.env`, and sets mode `0600`.
+1. Creates a random `AUTH_TOKEN`, writes it to `ccm.config.json`, and sets mode `0600`.
 2. Asks for `WORK_DIR`. Choose a specific project directory instead of exposing your whole home directory for convenience.
 3. Asks whether to install the CLI hooks bridge. Installation is the default, but it writes `~/.claude/settings.json` only after you confirm.
 
-If `.env` already exists, the wizard does not overwrite it by default.
+If a config file already exists, the wizard does not overwrite it by default.
+
+### The config file
+
+All configuration lives in `ccm.config.json` at the project root — one JSON file:
+
+```json
+{
+  "$schemaVersion": 1,
+  "AUTH_TOKEN": "…",
+  "WORK_DIR": "/Users/you/code/project-a",
+  "PORT": 3000,
+  "WEB_STATUSLINE": false
+}
+```
+
+Toggles are real `true` / `false` and ports are numbers — no more `KEY=value` quoting and escaping rules.
+
+Legacy `.env` is still supported: **`ccm.config.json` wins when present, otherwise the loader falls
+back to `.env`**, so existing deployments need no changes. If you specifically need `.env`
+(for `docker --env-file`, say), generate it with `node scripts/setup.js --env <path>`.
+
+Environment variables always beat the config file — `PORT=4000 npm start` overrides the file.
 
 ### Non-interactive mode
 
@@ -76,22 +98,29 @@ node scripts/setup.js \
 
 - `--work-dir` is required and never silently falls back to `$HOME`.
 - `--hooks` accepts only `on` or `off`; `on` changes user-level Claude hooks configuration.
-- If `.env` exists, the command refuses to overwrite it. Add `--force` only after deciding to replace its current token and configuration.
-- Use `--env <path>` to target another environment file.
+- If a config file exists, the command refuses to overwrite it. Add `--force` only after deciding to replace its current token and configuration.
+- Use `--config <path>` to place the config file elsewhere; `--env <path>` generates a legacy `.env` instead (the two are mutually exclusive).
 
-For multiple workspaces, set `WORK_DIRS_FILE=workdirs.json` in `.env` and use an array of absolute paths:
+For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry is an absolute path or `{path, sessionLimit}`:
 
 ```json
-[
-  "/Users/you/code/project-a",
-  {
-    "path": "/Users/you/code/project-b",
-    "sessionLimit": 10
-  }
-]
+{
+  "WORK_DIR": "/Users/you/code/project-a",
+  "WORKDIRS": [
+    "/Users/you/code/project-a",
+    {
+      "path": "/Users/you/code/project-b",
+      "sessionLimit": 10
+    }
+  ]
+}
 ```
 
-`workdirs.json` hot-reloads. A git worktree must also be listed as its own absolute path; the project never discovers or authorizes it implicitly.
+`WORKDIRS` **hot-reloads** — edits take effect immediately, no restart (every other setting needs one).
+A git worktree must also be listed as its own absolute path; the project never discovers or authorizes it implicitly.
+
+The legacy `WORK_DIRS_FILE=workdirs.json` (external file) and `WORK_DIRS` (comma-separated) still work
+but rank below `WORKDIRS`. When more than one is present, only `WORKDIRS` takes effect.
 
 ## 4. Run the preflight checks
 
@@ -107,7 +136,7 @@ For permission-only repairs:
 node scripts/doctor.js --fix
 ```
 
-`--fix` tightens permissions on `.env` and control-plane JSON files. Read the diagnosis before deciding to use it.
+`--fix` tightens permissions on the config file and control-plane JSON files. Read the diagnosis before deciding to use it.
 
 ## 5. Start the server
 
@@ -222,7 +251,7 @@ npm run hooks:uninstall
 - `install` appends only its own hook entries, preserves existing hooks, and performs a loopback verification.
 - Open a new terminal Claude CLI session after installation; an existing process does not reload hooks.
 - If the server is offline, the hook writes its file and exits quietly without blocking the CLI.
-- Set `CLI_HOOKS_BRIDGE=off` in `.env` to pause server consumption without removing global configuration.
+- Set `CLI_HOOKS_BRIDGE: false` in the config file to pause server consumption without removing global configuration.
 
 The phone UI can also install or remove the bridge explicitly under Settings → Service status → Terminal session notifications.
 
@@ -243,7 +272,7 @@ Follow these steps in order and verify each result before continuing:
    Do not use my whole home directory. hooks=on changes ~/.claude/settings.json.
 4. Your shell has no TTY, so do not run the interactive wizard. Use:
    node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
-   If .env already exists, stop instead of adding --force yourself.
+   If a config file already exists, stop instead of adding --force yourself.
 5. Run node scripts/doctor.js. Use --fix only when its output calls for a safe permission repair.
 6. Confirm no persistent service owns the port, then start the server in the background. Verify authenticated
    /health JSON; do not rely only on the process existing.
@@ -259,11 +288,11 @@ Use docs/deployment.md for a fixed public domain or persistent service. Do not c
 
 | Symptom | Check |
 |---|---|
-| No phone URL in startup logs | `AUTH_TOKEN` is unset; rerun setup or correct `.env`, then restart |
+| No phone URL in startup logs | `AUTH_TOKEN` is unset; rerun setup or correct the config file, then restart |
 | An agent ran setup but wrote nothing | Interactive mode was used without a TTY; use `--yes --work-dir=... --hooks=...` |
 | `EADDRINUSE :3000` | A persistent service or another process owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
-| A third-party gateway is ignored | `ANTHROPIC_*` must come from the server's startup shell, not `.env` |
+| A third-party gateway is ignored | `ANTHROPIC_*` must come from the server's startup shell, not the config file |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |
 | Android installs only a browser shortcut | Cloudflare Access may block PWA icons; see the [deployment guide](deployment.md#2b-android-pwa图标必须对匿名可达) |
 
@@ -272,4 +301,4 @@ Use docs/deployment.md for a fixed public domain or persistent service. Do not c
 - Long-term public access: [Deployment and operations](deployment.md) (Chinese)
 - Understand the Web/CLI paths: [Architecture](architecture.en.md)
 - Understand model, effort, and statusline sources: [Display contracts](display-contracts.md) (Chinese)
-- Review every environment variable: [`.env.example`](../.env.example)
+- Review every setting and what it does: [`.env.example`](../.env.example) (same key names as `ccm.config.json`, legacy format)
