@@ -258,6 +258,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var configWindow: ConfigWindowController?
     private var logWindow: LogWindowController?
     private var taskWindow: TaskWindowController?
+    private var consoleWindow: ConsoleWindowController?
 
     override init() {
         client = ServiceClient(env: env)
@@ -265,6 +266,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Dock 图标偏好（默认关）。切成 .regular 的 app 必须有 main menu，
+        // 否则菜单栏是空的、Cmd+Q / Cmd+W 全部失效 —— LSUIElement app 平时不需要它。
+        ConsoleWindowController.applyDockIconPolicy()
+        installMainMenu()
+
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
         menu.delegate = self
@@ -341,6 +347,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func renderIcon() {
+        pushStateToConsole()
         guard let button = statusItem.button else { return }
         let name = env.problem == .none ? (latest?.symbol ?? "questionmark.circle") : "questionmark.circle"
         if let image = NSImage(systemSymbolName: name, accessibilityDescription: "ccm") {
@@ -388,6 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(action("打开控制台…", #selector(openConsole), key: "\r"))
         menu.addItem(action("打开 Web UI（并复制令牌）", #selector(openWebUI), key: "o"))
         menu.addItem(action("复制访问令牌", #selector(copyToken)))
 
@@ -645,6 +653,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let hooks = runModal(hooksAlert) == .alertFirstButtonReturn
 
         runTask("首次安装", setupSteps(repo: repo, workDir: workDir, hooks: hooks))
+    }
+
+    // MARK: 主窗口与 Dock
+
+    /// .regular 模式下必须有 main menu，否则用户看到一条空菜单栏、Cmd+Q 也按不了。
+    /// 只建最小集：应用菜单（关于/隐藏/退出）+ 窗口菜单（关闭/最小化）。
+    private func installMainMenu() {
+        let main = NSMenu()
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(withTitle: "关于 CCM", action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)), keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "隐藏 CCM", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "退出 CCM", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        let winItem = NSMenuItem()
+        let winMenu = NSMenu(title: "窗口")
+        winMenu.addItem(withTitle: "最小化", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        winMenu.addItem(withTitle: "关闭", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        winItem.submenu = winMenu
+        main.addItem(winItem)
+
+        NSApp.mainMenu = main
+        NSApp.windowsMenu = winMenu
+    }
+
+    @objc private func openConsole() {
+        if consoleWindow == nil { consoleWindow = ConsoleWindowController(app: self) }
+        pushStateToConsole()
+        consoleWindow?.present()
+    }
+
+    /// 菜单栏那盏灯与控制台用**同一份**状态，避免两处各刷各的、显示不一致。
+    private func pushStateToConsole() {
+        guard let c = consoleWindow else { return }
+        let stale = lastOk.map { Int(Date().timeIntervalSince($0)) }
+        c.refresh(status: latest, problem: env.problem, lastError: lastError,
+                  staleSeconds: lastError == nil ? nil : stale, repo: env.repo)
+    }
+
+    /// 点 Dock 图标（app 已在跑、没有可见窗口时）走这里 —— 这正是刘海场景下的救命入口。
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { openConsole() }
+        return true
+    }
+
+    /// 控制台按钮的分派。判定在 CCMCore 的 consoleActions，这里只负责执行。
+    func performConsoleAction(_ kind: ConsoleActionKind) {
+        switch kind {
+        case .openWebUI: openWebUI()
+        case .copyToken: copyToken()
+        case .config: openConfig()
+        case .logs: openLogs()
+        case .doctor: runDoctor()
+        case .relocateRepo: relocateRepo()
+        case .relocateNode: relocateNode()
+        case .setupWizard: setupWizard()
+        }
     }
 
     // MARK: 小工具

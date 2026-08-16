@@ -36,7 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 66 |
 | Configuration template | 1 |
 | Deployment | 4 |
-| Desktop integration | 5 |
+| Desktop integration | 6 |
 | Documentation | 10 |
 | E2E test | 48 |
 | Frontend asset | 3 |
@@ -56,7 +56,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 156 |
 | Vendored asset | 21 |
 
-Total classified files: **451**.
+Total classified files: **452**.
 
 ## Complete file inventory
 
@@ -76,6 +76,7 @@ Total classified files: **451**.
 | `deploy/server.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `deploy/tunnel.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `desktop/ccm-config-window.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
+| `desktop/ccm-console-window.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/ccm-menubar-tests.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/ccm-menubar.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/CCMCore.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |

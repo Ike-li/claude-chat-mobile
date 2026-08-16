@@ -42,6 +42,7 @@ struct CCMCoreTests {
         testLogHelpers()
         testConfigSnapshot()
         testTaskSteps()
+        testConsoleActions()
         testWebUIURL()
         testProbeInterval()
 
@@ -409,4 +410,32 @@ func testTaskSteps() {
     eq(setupSteps(repo: repo, workDir: "/x", hooks: false)[0].argv[3], "--hooks=off", "hooks 关")
     eq(steps[1].argv, ["/Users/you/my repo/scripts/service.js", "install", "server"], "第二步安装")
     eq(steps[3].argv.last, "status", "末步确认状态")
+}
+
+func testConsoleActions() {
+    func status(_ json: String) -> ServiceStatus? { decode(json) }
+    let running = #"{"schemaVersion":1,"supported":true,"setup":{"envExists":true},"units":[{"unit":"server","state":"running"}]}"#
+    let stopped = #"{"schemaVersion":1,"supported":true,"setup":{"envExists":true},"units":[{"unit":"server","state":"stopped"}]}"#
+    let fresh = #"{"schemaVersion":1,"supported":true,"setup":{"envExists":false},"units":[{"unit":"server","state":"not-installed"}]}"#
+
+    // 环境坏掉时只留修复入口：其余动作此刻全都会失败，亮着按钮只会让人以为点了没反应
+    let noRepo = consoleActions(status: nil, problem: .noRepo)
+    eq(noRepo.count, 1, "没有仓库时只给一个动作")
+    eq(noRepo.first?.kind, .relocateRepo, "且是重新定位")
+    eq(consoleActions(status: nil, problem: .noNode).first?.kind, .relocateNode, "没有 node 同理")
+
+    let ok = consoleActions(status: status(running), problem: .none)
+    check(ok.first(where: { $0.kind == .openWebUI })?.enabled == true, "server 在跑 ⇒ 可打开 Web UI")
+    check(!ok.contains(where: { $0.kind == .setupWizard }), "已配置 ⇒ 不显示装机向导")
+
+    // server 没跑时打不开 Web UI，但配置和日志照常 —— 那正是最需要它们的时刻
+    let down = consoleActions(status: status(stopped), problem: .none)
+    check(down.first(where: { $0.kind == .openWebUI })?.enabled == false, "server 停了 ⇒ Web UI 禁用")
+    check(down.first(where: { $0.kind == .config })?.enabled == true, "配置不依赖 server")
+    check(down.first(where: { $0.kind == .logs })?.enabled == true, "日志不依赖 server")
+
+    // 全新机器：给装机向导，且没有 token 可复制
+    let new = consoleActions(status: status(fresh), problem: .none)
+    check(new.first?.kind == .setupWizard, "未配置 ⇒ 首项是装机向导")
+    check(new.first(where: { $0.kind == .copyToken })?.enabled == false, "没配过 ⇒ 复制令牌禁用")
 }

@@ -433,3 +433,60 @@ func setupSteps(repo: String, workDir: String, hooks: Bool) -> [TaskStep] {
         TaskStep(title: "确认状态", argv: [service, "status"]),
     ]
 }
+
+// MARK: - 主窗口（控制台）
+//
+// ## 为什么需要它
+//
+// LSUIElement app 没有 Dock 图标、也不进 Cmd+Tab，**菜单栏图标是唯一入口**。
+// 而 MacBook Pro 的刘海会挤掉靠右的菜单栏图标 —— 一旦被挤掉，用户没有任何办法把它找回来
+// （再次 open CCM.app 只是激活已有实例，不显示任何窗口）。那不是体验问题，是入口消失。
+//
+// 主窗口 + 可选的 Dock 图标给出第二条路。顺带补上一个一直缺的东西：三个子窗口
+// （配置/日志/任务）此前是散的，菜单栏那个下拉菜单在充当「主页」—— 而它正是刘海吃掉的东西。
+
+enum ConsoleActionKind: String {
+    case openWebUI, copyToken, config, logs, doctor, relocateRepo, relocateNode, setupWizard
+}
+
+struct ConsoleAction: Equatable {
+    let kind: ConsoleActionKind
+    let title: String
+    let enabled: Bool
+}
+
+/// 主窗口上该出现哪些动作、哪些能点。
+///
+/// 判定集中在这里而不是散在按钮的 isEnabled 赋值里：环境不完整时几乎所有动作都没意义，
+/// 而「按钮亮着但点了没反应」比「按钮是灰的」难排查得多。
+func consoleActions(status: ServiceStatus?, problem: EnvProblem) -> [ConsoleAction] {
+    // 环境坏掉时只留修复入口。此时 repo/node 都拿不到，其余动作全部会失败。
+    switch problem {
+    case .noRepo:
+        return [ConsoleAction(kind: .relocateRepo, title: "重新定位仓库…", enabled: true)]
+    case .noNode:
+        return [ConsoleAction(kind: .relocateNode, title: "定位 node…", enabled: true)]
+    case .none:
+        break
+    }
+
+    let serverRunning = status?.server?.stateName == "running"
+    // 没配过就没有 token，也没有可打开的地址 —— 该走装机向导而不是点开一个必然 401 的页面。
+    let configured = status?.setup?.envExists ?? false
+
+    var out: [ConsoleAction] = []
+    if !configured {
+        out.append(ConsoleAction(kind: .setupWizard, title: "首次安装向导…", enabled: true))
+    }
+    out.append(ConsoleAction(kind: .openWebUI, title: "打开 Web UI", enabled: serverRunning))
+    out.append(ConsoleAction(kind: .copyToken, title: "复制访问令牌", enabled: configured))
+    // 配置与日志**不依赖 server 在跑** —— 那正是最需要它们的时刻（配置窗口走 CLI 读磁盘）。
+    out.append(ConsoleAction(kind: .config, title: "配置…", enabled: true))
+    out.append(ConsoleAction(kind: .logs, title: "查看日志", enabled: true))
+    out.append(ConsoleAction(kind: .doctor, title: "运行体检", enabled: true))
+    return out
+}
+
+/// Dock 图标偏好的存储键。默认**关**：这仍是个常驻后台工具，
+/// 只有被刘海挤掉入口的人才需要它，不该让所有人的 Dock 多一个图标。
+let DOCK_ICON_DEFAULTS_KEY = "CCMShowDockIcon"

@@ -293,8 +293,24 @@ open desktop/build/CCM.app
 - **首次安装向导 / 体检 / 安装卸载服务**：在内嵌任务窗口里逐步执行，实时显示每一步的输出，
   某步失败就停在那里并显示退出码。
 
+菜单里的**打开控制台…**是主窗口：服务状态、各 unit、以及全部动作都在这一屏。
+
 勾「开机自启（菜单栏）」会装一个 LaunchAgent。这是 macOS 平台的实现方式，
 不是产品要求你用的部署方案 —— 服务器上用 systemd / pm2 / docker 都行。
+
+### 菜单栏图标被刘海挡住了怎么办
+
+MacBook Pro 的刘海会挤掉靠右的菜单栏图标。这个 app 默认没有 Dock 图标、也不进 Cmd+Tab，
+所以图标一旦被挤掉就**没有任何入口**了（再次 `open CCM.app` 只是激活已在跑的实例）。
+
+控制台窗口里有「在 Dock 中显示图标」开关，勾上之后 Dock 里会多一个图标，点它就能唤出控制台。
+**建议在图标还找得到的时候先勾上它。**
+
+已经被挤掉、进不去了的话，用命令行救一次再重开 app：
+
+```bash
+defaults write com.ccm.menubar CCMShowDockIcon -bool true
+```
 
 <details>
 <summary>把首次安装交给编程 agent</summary>
