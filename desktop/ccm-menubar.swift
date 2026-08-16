@@ -241,7 +241,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let env = RuntimeEnv()
     private let client: ServiceClient
-    // 探测与动作分两条队列：动作里有 osascript / 30s 的 control，卡住它不该连带把状态刷新也冻住。
+    // 探测与动作分两条队列：动作里有 30s 的 control 调用，卡住它不该连带把状态刷新也冻住。
+    // （任务窗口自己起异步 Process，不占这两条队列。）
     private let probeQueue = DispatchQueue(label: "ccm.menubar.probe")
     private let actionQueue = DispatchQueue(label: "ccm.menubar.action", attributes: .concurrent)
 
@@ -256,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // 或干脆不出现 —— AppKit 的窗口不会替你保命。
     private var configWindow: ConfigWindowController?
     private var logWindow: LogWindowController?
+    private var taskWindow: TaskWindowController?
 
     override init() {
         client = ServiceClient(env: env)
@@ -484,10 +486,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         switch verb {
         case "logs":
-            openTerminal(command: logsCommand(unit: unit, repo: repo))
+            runTask("\(unit) 日志", unitLogSteps(unit: unit, repo: repo))
             return
         case "install":
-            openTerminal(command: installCommand(unit: unit, repo: repo, appPath: Bundle.main.bundlePath))
+            runTask("安装 \(unit)", installSteps(unit: unit, repo: repo, appPath: Bundle.main.bundlePath))
             return
         default:
             break
@@ -557,7 +559,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func runDoctor() {
         guard let repo = env.repo else { return }
-        openTerminal(command: doctorCommand(repo: repo))
+        runTask("体检", doctorSteps(repo: repo))
     }
 
     @objc private func revealRepo() {
@@ -567,10 +569,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleAutostart() {
         guard let repo = env.repo else { return }
-        let cmd = menubarInstalled
-            ? uninstallCommand(unit: "menubar", repo: repo)
-            : installCommand(unit: "menubar", repo: repo, appPath: Bundle.main.bundlePath)
-        openTerminal(command: cmd)
+        // 卸载是破坏性动作，GUI 里必须先问一句 —— CLI 那侧靠 --yes 表达意图，
+        // 而菜单项点一下就执行，没有等价的「我确认」环节。
+        if menubarInstalled {
+            let a = NSAlert()
+            a.messageText = "取消开机自启？"
+            a.informativeText = "会移除菜单栏的 LaunchAgent。app 本身不受影响，随时可以再打开。"
+            a.addButton(withTitle: "取消自启")
+            a.addButton(withTitle: "算了")
+            guard runModal(a) == .alertFirstButtonReturn else { return }
+            runTask("取消开机自启", uninstallSteps(unit: "menubar", repo: repo))
+        } else {
+            runTask("设置开机自启", installSteps(unit: "menubar", repo: repo, appPath: Bundle.main.bundlePath))
+        }
     }
 
     @objc private func relocateRepo() {
@@ -603,8 +614,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     //
     // **这是 Swift 在整个方案里存在的唯一硬理由**：scripts/setup.js 的 resolveSetupPlan 规定
     // 非交互模式必须显式 --work-dir 且绝不回落 $HOME（"那等于把整个家目录交给 agent"），
-    // 而零命令行用户没法输路径。NSOpenPanel 正好补上这一个洞。其余每步都委托 CLI，
-    // 并且开一个真 Terminal 窗口跑 —— 让用户看见真实输出，失败时报错就在眼前。
+    // 而零命令行用户没法输路径。NSOpenPanel 正好补上这一个洞。
+    //
+    // 其余每步仍然委托 CLI（判定只有一份），但在**内嵌任务窗口**里跑：用户看得见每一步的
+    // 真实输出、失败时报错就在眼前，而不必切到 Terminal。桌面端不再依赖任何终端。
     private func runSetupWizard() {
         guard let repo = env.repo else { return }
 
@@ -631,7 +644,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hooksAlert.addButton(withTitle: "先不装")
         let hooks = runModal(hooksAlert) == .alertFirstButtonReturn
 
-        openTerminal(command: setupCommand(repo: repo, workDir: workDir, hooks: hooks))
+        runTask("首次安装", setupSteps(repo: repo, workDir: workDir, hooks: hooks))
     }
 
     // MARK: 小工具
@@ -665,13 +678,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = runModal(a)
     }
 
-    /// 开一个 Terminal 窗口跑命令。同 src/ops/log-terminal.js 的做法（仓库里已有的桌面集成先例）：
-    /// 长任务与安装流程都走真终端，让输出可见、失败可查。
-    private func openTerminal(command: String) {
-        let osa = terminalScript(command: command)
-        actionQueue.async {
-            _ = runSync("/usr/bin/osascript", ["-e", osa], timeout: 15)
+    /// 在内嵌任务窗口里跑，**不再切 Terminal**。
+    ///
+    /// 旧实现拼一条 shell 串交给 osascript 的 `do script`，理由是「每一步都看得见输出」——
+    /// 理由对，结论错：用户要的是看得见输出，不是切换到终端。自己开窗口两个目标都满足，
+    /// 且不再需要 shellQuote + AppleScript 转义那两层易错的引号处理。
+    private func runTask(_ title: String, _ steps: [TaskStep]) {
+        guard let node = env.node, let repo = env.repo else {
+            alert("环境不完整", "找不到 node 或仓库目录，先在菜单里重新定位。")
+            return
         }
+        if taskWindow == nil { taskWindow = TaskWindowController() }
+        taskWindow?.run(title: title, steps: steps, node: node, cwd: repo)
     }
 }
 

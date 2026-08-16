@@ -36,14 +36,12 @@ struct CCMCoreTests {
         testUnitPresentation()
         testSummaryLine()
         testServiceScriptPath()
-        testShellQuote()
         testConfigSchemaDecoding()
         testConfigItemPresentation()
         testConfigCommands()
         testLogHelpers()
         testConfigSnapshot()
-        testAppleScriptEscape()
-        testCommands()
+        testTaskSteps()
         testWebUIURL()
         testProbeInterval()
 
@@ -223,83 +221,7 @@ struct CCMCoreTests {
 
     // MARK: 转义
 
-    static func testShellQuote() {
-        eq(shellQuote("/plain/path"), "'/plain/path'", "普通路径")
-        eq(shellQuote("/a b/c"), "'/a b/c'", "含空格")
-        eq(shellQuote("/a$HOME/c"), "'/a$HOME/c'", "$ 被单引号中和")
-        eq(shellQuote("/a`id`/c"), "'/a`id`/c'", "反引号被单引号中和")
-        // 单引号用 '"'"' 闭合再拼接的经典写法
-        eq(shellQuote("it's"), "'it'\"'\"'s'", "含单引号")
-    }
-
-    static func testAppleScriptEscape() {
-        eq(appleScriptEscape("plain"), "plain", "无需转义")
-        eq(appleScriptEscape("a\"b"), "a\\\"b", "双引号")
-        // ★ 顺序要紧：先反斜杠后双引号。反过来会把刚插入的转义反斜杠再转义一遍。
-        eq(appleScriptEscape("a\\b"), "a\\\\b", "反斜杠")
-        eq(appleScriptEscape("a\\\"b"), "a\\\\\\\"b", "反斜杠 + 双引号的组合顺序")
-        eq(appleScriptEscape("it's"), "it's", "单引号在 AppleScript 里无需转义")
-
-        let script = terminalScript(command: "cd '/a b' && node x.js")
-        eq(script.contains("do script \"cd '/a b' && node x.js\""), true, "命令被包进 do script")
-        eq(script.hasPrefix("tell application \"Terminal\""), true, "AppleScript 头")
-    }
-
     // MARK: 命令拼装（第一轮审查里出错最多的地方）
-
-    static func testCommands() {
-        let repo = "/Users/you/code/repo"
-
-        // ★ menubar 必须带 --app，否则 L1 的 precheck 必然拒绝 —— 早前子菜单里的「安装」
-        // 对 menubar / tunnel 就是个点了必然报错的入口。
-        let menubar = installCommand(unit: "menubar", repo: repo, appPath: "/Applications/CCM.app")
-        eq(menubar.contains("--app="), true, "menubar 安装必须带 --app")
-        eq(menubar.contains("'/Applications/CCM.app'"), true, "app 路径被 shellQuote")
-
-        // tunnel 的隧道名本工具无从得知 → 给一条待补全的模板。
-        // ★ 但 do script 是**立刻执行**的（同 src/ops/log-terminal.js 的用法），所以占位符必须是
-        // shell 安全的：裸写 `<隧道名>` 时 `<` `>` 是重定向算符，实测 zsh 直接
-        // `no such file or directory: 隧道名` 退出码 1 —— node 一次都没跑，用户拿到的错误比
-        // precheck 那句「装 tunnel 需要 --tunnel=…」还没信息量。加引号后命令能跑到 precheck。
-        let tunnel = installCommand(unit: "tunnel", repo: repo, appPath: nil)
-        eq(tunnel.contains("--tunnel="), true, "tunnel 安装给出 --tunnel 占位")
-        eq(tunnel.contains("--cloudflared="), true, "tunnel 安装给出 --cloudflared")
-        eq(tunnel.contains("<"), false, "占位符不能裸带 < （shell 会当成输入重定向）")
-        eq(tunnel.contains(">"), false, "占位符不能裸带 > （shell 会当成输出重定向）")
-
-        // ★ unit 也必须 shellQuote：它不是常量，来自 ~/Library/LaunchAgents 的文件名
-        // （scripts/service.js 对未知 unit 走 `label.slice(prefix.length + 1)`），
-        // 而这串最终经 osascript 的 do script 交给 shell 执行。
-        eq(logsCommand(unit: "a;touch /tmp/pwned", repo: repo).contains("service.js logs 'a;touch /tmp/pwned'"),
-           true, "logs 的 unit 要被 shellQuote")
-        eq(uninstallCommand(unit: "a;id", repo: repo).contains("uninstall 'a;id'"),
-           true, "uninstall 的 unit 要被 shellQuote")
-        eq(installCommand(unit: "a;id", repo: repo, appPath: nil).contains("install 'a;id'"),
-           true, "install 的 unit 要被 shellQuote")
-
-        // unit 现在也过 shellQuote（见 CCMCore.swift 的理由），'server' 与 server 在 shell 里等价
-        eq(installCommand(unit: "server", repo: repo, appPath: nil),
-           "cd '/Users/you/code/repo' && node scripts/service.js install 'server'",
-           "server 安装无需额外参数")
-
-        // 卸载必须带 --yes：manager 层默认拒绝（那是 2026-08-13 事故后加的护栏）
-        eq(uninstallCommand(unit: "server", repo: repo).contains("--yes"), true, "卸载必须带 --yes")
-
-        eq(logsCommand(unit: "server", repo: repo).contains("logs 'server' --follow"), true, "日志命令")
-        eq(doctorCommand(repo: repo).contains("scripts/doctor.js"), true, "doctor 命令")
-
-        // 装机向导：四步串起来，且 work-dir 必须显式传（setup.js 非交互模式绝不回落 $HOME）
-        let setup = setupCommand(repo: repo, workDir: "/Users/you/work", hooks: true)
-        eq(setup.contains("--work-dir='/Users/you/work'"), true, "work-dir 显式且被引用")
-        eq(setup.contains("--hooks=on"), true, "hooks=on")
-        eq(setupCommand(repo: repo, workDir: "/w", hooks: false).contains("--hooks=off"), true, "hooks=off")
-        eq(setup.contains("install server"), true, "向导包含安装")
-        eq(setup.contains("start server"), true, "向导包含启动")
-
-        // 路径含空格 / 单引号时整条命令仍然是安全的
-        let odd = installCommand(unit: "server", repo: "/Users/o'brien/my repo", appPath: nil)
-        eq(odd.contains("'/Users/o'\"'\"'brien/my repo'"), true, "怪路径被正确引用")
-    }
 
     // MARK: Web UI 地址
 
@@ -457,4 +379,34 @@ func testConfigSnapshot() {
     check(!fresh.isLegacyEnv, "未配置不是旧格式")
 
     eq(configMigrateArgs(repo: "/r"), ["/r/scripts/config.js", "migrate", "--json"], "migrate argv")
+}
+
+func testTaskSteps() {
+    let repo = "/Users/you/my repo"   // 带空格：argv 形式下不需要任何转义
+
+    eq(doctorSteps(repo: repo).first?.argv, ["/Users/you/my repo/scripts/doctor.js"], "doctor argv")
+
+    // menubar 必须带 --app，否则 L1 precheck 恒拒（旧实现里这是个恒失败的入口）
+    let mb = installSteps(unit: "menubar", repo: repo, appPath: "/Applications/CCM.app")
+    eq(mb.first?.argv.last, "--app=/Applications/CCM.app", "menubar 带 app 路径")
+    eq(installSteps(unit: "server", repo: repo, appPath: nil).first?.argv,
+       ["/Users/you/my repo/scripts/service.js", "install", "server"], "server 安装 argv")
+    // 没拿到 app 路径时不拼半截参数
+    eq(installSteps(unit: "menubar", repo: repo, appPath: nil).first?.argv.count, 3, "缺 app 路径就不加")
+
+    eq(uninstallSteps(unit: "tunnel", repo: repo).first?.argv.last, "--yes", "卸载须显式确认")
+
+    // ★ 任务窗口是「跑完就结束」的语义，--follow 会让它永不返回
+    let logs = unitLogSteps(unit: "server", repo: repo)
+    check(!(logs.first?.argv.contains("--follow") ?? true), "unit 日志不能用跟随模式")
+    check(logs.first?.argv.contains("--lines=200") ?? false, "取固定行数")
+
+    // 装机四步，顺序与旧的 shell && 串逐字对应
+    let steps = setupSteps(repo: repo, workDir: "/a b/c", hooks: true)
+    eq(steps.count, 4, "装机四步")
+    eq(steps[0].argv[2], "--work-dir=/a b/c", "含空格的路径原样传，不转义")
+    eq(steps[0].argv[3], "--hooks=on", "hooks 开")
+    eq(setupSteps(repo: repo, workDir: "/x", hooks: false)[0].argv[3], "--hooks=off", "hooks 关")
+    eq(steps[1].argv, ["/Users/you/my repo/scripts/service.js", "install", "server"], "第二步安装")
+    eq(steps[3].argv.last, "status", "末步确认状态")
 }

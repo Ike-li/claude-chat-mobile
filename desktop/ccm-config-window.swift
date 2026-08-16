@@ -473,3 +473,142 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 }
+
+// MARK: - 任务窗口
+//
+// 桌面端自己跑命令并**流式**显示输出，取代此前「拼一条 shell 串丢给 Terminal」的做法。
+//
+// 那个做法的理由（写在旧 setupCommand 上）是「每一步都看得见输出，失败时报错就在眼前」——
+// 理由对，结论错：用户要的是看得见输出，不是切换到终端。自己开窗口两个目标都满足，
+// 而且不再需要 shellQuote + AppleScript 转义那两层易错的引号处理。
+//
+// **不能复用 runSync**：那个是同步阻塞的，跑 doctor（几十秒）会让整个 UI 卡死，
+// 而且它要等进程退出才返回，拿不到流式输出。这里用异步 readabilityHandler。
+
+final class TaskWindowController: NSWindowController, NSWindowDelegate {
+    private let textView = NSTextView()
+    private let statusLabel = NSTextField(labelWithString: "")
+    private var running: Process?
+
+    init() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 720, height: 460),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered, defer: false)
+        window.center()
+        super.init(window: window)
+        window.delegate = self
+        buildChrome()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    private func buildChrome() {
+        guard let window else { return }
+        textView.isEditable = false
+        textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        textView.autoresizingMask = [.width]
+
+        let scroll = NSScrollView()
+        scroll.hasVerticalScroller = true
+        scroll.documentView = textView
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+
+        statusLabel.textColor = .secondaryLabelColor
+        let bar = NSStackView(views: [statusLabel])
+        bar.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        bar.translatesAutoresizingMaskIntoConstraints = false
+
+        let root = NSView()
+        root.addSubview(scroll)
+        root.addSubview(bar)
+        NSLayoutConstraint.activate([
+            scroll.topAnchor.constraint(equalTo: root.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            bar.topAnchor.constraint(equalTo: scroll.bottomAnchor),
+            bar.leadingAnchor.constraint(equalTo: root.leadingAnchor),
+            bar.trailingAnchor.constraint(equalTo: root.trailingAnchor),
+            bar.bottomAnchor.constraint(equalTo: root.bottomAnchor),
+        ])
+        window.contentView = root
+    }
+
+    /// 关窗即终止在跑的进程。留着它在后台跑完是最糟的：用户以为取消了，
+    /// 而 install 那类命令正在改 ~/Library/LaunchAgents。
+    func windowWillClose(_ notification: Notification) {
+        running?.terminate()
+        running = nil
+    }
+
+    func run(title: String, steps: [TaskStep], node: String, cwd: String) {
+        window?.title = title
+        textView.string = ""
+        showWindow(nil)
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        runStep(steps, index: 0, node: node, cwd: cwd)
+    }
+
+    private func append(_ text: String) {
+        guard !text.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.textView.string += text
+            self.textView.scrollToEndOfDocument(nil)
+        }
+    }
+
+    /// 逐步执行，任一步非零退出即停 —— 与旧实现的 `a && b && c` 语义一致。
+    private func runStep(_ steps: [TaskStep], index: Int, node: String, cwd: String) {
+        guard index < steps.count else {
+            DispatchQueue.main.async { [weak self] in self?.statusLabel.stringValue = "全部完成" }
+            return
+        }
+        let step = steps[index]
+        DispatchQueue.main.async { [weak self] in
+            self?.statusLabel.stringValue = "第 \(index + 1)/\(steps.count) 步：\(step.title)…"
+        }
+        append("\n$ \(step.argv.joined(separator: " "))\n")
+
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: node)
+        task.arguments = step.argv
+        task.currentDirectoryURL = URL(fileURLWithPath: cwd)
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = pipe          // 合流：用户看的是一条时间线，不是两个流
+        pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
+            let data = h.availableData
+            guard !data.isEmpty else { return }
+            self?.append(String(data: data, encoding: .utf8) ?? "")
+        }
+
+        task.terminationHandler = { [weak self] proc in
+            pipe.fileHandleForReading.readabilityHandler = nil
+            // 排空退出前最后一批还没被 handler 读走的数据，否则末尾几行（常常正是错误原因）会丢
+            if let rest = try? pipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
+                self?.append(String(data: rest, encoding: .utf8) ?? "")
+            }
+            guard let self else { return }
+            if proc.terminationStatus == 0 {
+                self.runStep(steps, index: index + 1, node: node, cwd: cwd)
+            } else {
+                self.running = nil
+                DispatchQueue.main.async {
+                    self.statusLabel.stringValue = "「\(step.title)」失败（退出码 \(proc.terminationStatus)），已停止后续步骤"
+                }
+            }
+        }
+
+        do {
+            try task.run()
+            running = task
+        } catch {
+            append("无法启动：\(error.localizedDescription)\n")
+            DispatchQueue.main.async { [weak self] in self?.statusLabel.stringValue = "启动失败" }
+        }
+    }
+}

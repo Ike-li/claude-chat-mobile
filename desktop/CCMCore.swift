@@ -151,76 +151,18 @@ func unitTitle(_ u: UnitStatus) -> String {
     return title
 }
 
-// MARK: - 命令与 URL 拼装
+// MARK: - URL 拼装
 //
-// 这一节是第一轮审查里出错最多的地方（install 少传参数、Web UI URL 缺 token），
-// 而它们全是纯字符串运算 —— 正是最该被断言锁住的部分。
-
-/// shell 单引号包裹。值里的单引号用 '"'"' 的经典写法闭合再拼接。
-func shellQuote(_ s: String) -> String {
-    "'" + s.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
-}
-
-/// AppleScript 字符串字面量转义。**顺序要紧**：先反斜杠后双引号，反过来会把刚插入的
-/// 转义反斜杠又转义一遍。单引号在 AppleScript 里无需转义（由外层 shellQuote 负责 shell 侧）。
-func appleScriptEscape(_ s: String) -> String {
-    s.replacingOccurrences(of: "\\", with: "\\\\")
-        .replacingOccurrences(of: "\"", with: "\\\"")
-}
-
-func terminalScript(command: String) -> String {
-    "tell application \"Terminal\"\nactivate\ndo script \"\(appleScriptEscape(command))\"\nend tell"
-}
-
-/// 某个 unit 的安装命令。**必须带齐该 unit 的必填参数**，否则 L1 的 precheck 必然拒绝 ——
-/// 第一轮审查发现子菜单里的「安装」对 menubar / tunnel 是个恒失败的入口。
-/// tunnel 的隧道名与 cloudflared 路径只有用户知道，所以给的是一条待补全的命令模板。
-///
-/// ## unit 必须 shellQuote（2026-08-14 第三轮审查）
-/// 它不是常量：scripts/service.js 对未知 unit 走 `label.slice(labelPrefix.count + 1)`，
-/// label 来自 `~/Library/LaunchAgents` 的**文件名**。而这串最终经 osascript 的
-/// `do script` 交给 shell 执行。前置条件（能写那个目录）本身已等于有用户级执行权，
-/// 所以不是新的信任边界，但同一文件里 repo/appPath/workDir 都过了 shellQuote，漏这一个纯属不一致。
-func installCommand(unit: String, repo: String, appPath: String?) -> String {
-    let base = "cd \(shellQuote(repo)) && node scripts/service.js install \(shellQuote(unit))"
-    switch unit {
-    case "menubar":
-        guard let app = appPath else { return base }
-        return "\(base) --app=\(shellQuote(app))"
-    case "tunnel":
-        // 故意留成模板：这两个值本工具无从得知，让用户在终端里按 ↑ 调出来补完再回车。
-        // ★ 占位符必须 shellQuote：`do script` 是**立刻执行**的（同 src/ops/log-terminal.js），
-        // 裸写 `<隧道名>` 时 `<` `>` 是重定向算符，实测 zsh 报 `no such file or directory: 隧道名`
-        // 并以退出码 1 结束 —— node 一次都没跑，用户拿到的错误比 precheck 那句还没信息量。
-        // 加引号后命令能真正跑到 precheck，报的是「装 tunnel 需要 --tunnel=… 与 --cloudflared=…」。
-        return "\(base) --tunnel=\(shellQuote("隧道名")) --cloudflared=$(command -v cloudflared)"
-    default:
-        return base
-    }
-}
-
-func uninstallCommand(unit: String, repo: String) -> String {
-    "cd \(shellQuote(repo)) && node scripts/service.js uninstall \(shellQuote(unit)) --yes"
-}
-
-func logsCommand(unit: String, repo: String) -> String {
-    "cd \(shellQuote(repo)) && node scripts/service.js logs \(shellQuote(unit)) --follow"
-}
-
-func doctorCommand(repo: String) -> String {
-    "cd \(shellQuote(repo)) && node scripts/doctor.js"
-}
-
-/// 首次装机向导在终端里跑的那串。每一步都看得见输出 —— 失败时报错就在眼前。
-func setupCommand(repo: String, workDir: String, hooks: Bool) -> String {
-    [
-        "cd \(shellQuote(repo))",
-        "node scripts/setup.js --yes --work-dir=\(shellQuote(workDir)) --hooks=\(hooks ? "on" : "off")",
-        "node scripts/service.js install server",
-        "node scripts/service.js start server",
-        "node scripts/service.js status",
-    ].joined(separator: " && ")
-}
+// ## 这里曾经还有一整套 shell / AppleScript 命令拼装
+//
+// shellQuote、appleScriptEscape、terminalScript 与 5 个 *Command 函数，用来把命令拼成
+// 一条 shell 串交给 osascript 的 `do script`。第一轮代理审查在这一节找到的 bug 最多
+// （install 少传参数、Web UI URL 缺 token、tunnel 占位符被当成重定向算符），因为它们
+// **全是纯字符串运算**，而每一层引号都得自己转义对。
+//
+// 现在整节没了：桌面端改用 argv + 内嵌任务窗口（TaskStep / TaskWindowController），
+// 参数边界由系统保证，两层转义一起消失。留下这段注释是因为那批 bug 的教训仍然有效 ——
+// **需要转义的地方，先问能不能不转义**。
 
 /// 打开 Web UI 用的地址。
 ///
@@ -434,4 +376,60 @@ struct ConfigSnapshot {
 
 func configMigrateArgs(repo: String) -> [String] {
     [configScriptPath(in: repo), "migrate", "--json"]
+}
+
+// MARK: - 运维动作（argv 形式，桌面端自包含）
+//
+// ## 为什么与上面那批 *Command 字符串并存了一段时间，现在取代它们
+//
+// 旧实现把命令拼成 shell 字符串交给 osascript 的 `do script`，理由写在 setupCommand 上：
+// 「每一步都看得见输出 —— 失败时报错就在眼前」。这个理由是对的，但结论下错了：
+// 用户要的是**看得见输出**，不是**切换到终端**。桌面端自己开一个任务窗口显示输出，
+// 两个目标同时满足，而且不再需要 shellQuote / AppleScript 转义那两层易错的引号处理
+// （第一轮代理审查里出 bug 最多的就是纯字符串拼装）。
+//
+// argv 直接交给 Process，参数边界由系统保证：路径含空格、引号、`$(...)` 全部无所谓。
+
+/// 一步任务。title 显示在窗口里，让用户知道卡在哪一步。
+struct TaskStep {
+    let title: String
+    let argv: [String]
+}
+
+func doctorSteps(repo: String) -> [TaskStep] {
+    [TaskStep(title: "运行体检", argv: [(repo as NSString).appendingPathComponent("scripts/doctor.js")])]
+}
+
+func installSteps(unit: String, repo: String, appPath: String?) -> [TaskStep] {
+    let script = serviceScriptPath(in: repo)
+    var argv = [script, "install", unit]
+    // menubar 必须带 --app：L1 的 precheck 没有它必然拒绝（第一轮审查发现子菜单里的
+    // 「安装」对 menubar 是个恒失败的入口）。
+    if unit == "menubar", let app = appPath { argv.append("--app=\(app)") }
+    return [TaskStep(title: "安装 \(unit)", argv: argv)]
+}
+
+func uninstallSteps(unit: String, repo: String) -> [TaskStep] {
+    [TaskStep(title: "卸载 \(unit)", argv: [serviceScriptPath(in: repo), "uninstall", unit, "--yes"])]
+}
+
+func unitLogSteps(unit: String, repo: String, lines: Int = 200) -> [TaskStep] {
+    // **不带 --follow**：任务窗口是「跑完就结束」的语义，跟随模式会让它永不返回。
+    // 需要持续看的是 server 日志，那个有专门的日志窗口。
+    [TaskStep(title: "\(unit) 日志", argv: [serviceScriptPath(in: repo), "logs", unit, "--lines=\(lines)"])]
+}
+
+/// 首次装机：四步串行，任一失败即停。
+///
+/// 与旧的 setupCommand 逐字对应，只是从 `a && b && c` 的 shell 串拆成了显式步骤 ——
+/// 这样用户能看到「卡在第几步」，而不是一坨输出里自己找。
+func setupSteps(repo: String, workDir: String, hooks: Bool) -> [TaskStep] {
+    let setup = (repo as NSString).appendingPathComponent("scripts/setup.js")
+    let service = serviceScriptPath(in: repo)
+    return [
+        TaskStep(title: "生成配置", argv: [setup, "--yes", "--work-dir=\(workDir)", "--hooks=\(hooks ? "on" : "off")"]),
+        TaskStep(title: "安装常驻服务", argv: [service, "install", "server"]),
+        TaskStep(title: "启动服务", argv: [service, "start", "server"]),
+        TaskStep(title: "确认状态", argv: [service, "status"]),
+    ]
 }
