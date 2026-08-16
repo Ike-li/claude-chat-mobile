@@ -104,6 +104,16 @@ Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<yo
 
 ### 3. 常驻（macOS LaunchAgent 示例）
 
+> **只装 server 的话有更省事的路**：`npm run service:install server`，或在 macOS 桌面控制台
+> （`npm run app:build`）里勾「开机自启（菜单栏）」——都不用碰 plist。下面这套模板适用于
+> **同时要托管 cloudflared 隧道与日志轮转**、或者想自己掌控 plist 内容的场景。
+>
+> ⚠️ **两条路不要都走，而且 label 有讲究。** 工具装的固定是 `com.ccm.server`；模板注释里的示例
+> 是 `com.you.ccm-server`。`service:status`、`adopt`、桌面控制台**只扫 `com.ccm.*` 前缀**，
+> 换个前缀装出来的那份它们看都看不到。后果是两个 LaunchAgent 抢同一个端口，而工具只报告得出其中一个。
+> 想让手工装的那份也被工具管起来：`__LABEL__` 填 `com.ccm.server`，然后
+> `npm run service:adopt server`（只写 manifest，一个字节都不碰 plist）。
+
 仓库 `deploy/` 下有三份**占位符 plist 模板**，复制、替换占位符后放到 `~/Library/LaunchAgents/`：
 
 - [`deploy/server.plist.template`](../deploy/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
@@ -193,15 +203,31 @@ cloudflared tunnel --url http://localhost:3000
 
 此时不启用 Access（`CF_ACCESS_*` 留空），鉴权纯靠 `AUTH_TOKEN`。
 
-## 日志窗口（可选，macOS）
+## 看日志的两条路（都可选，都只在 macOS）
+
+同名不同物，别混：
+
+| | `LOG_TERMINAL`（下面这节） | 桌面控制台的「查看日志」 |
+|---|---|---|
+| 由谁开 | **server 自己**，每次启动时 | 你在 app 里点的时候 |
+| 窗口是什么 | 真的 Terminal.app 窗口，里面跑 `tail -f` | app 内嵌的滚动视图，2 秒刷新读文件尾 |
+| 需要授权 | 要，系统「自动化」控制终端 | 不要 |
+| server 挂了还能用吗 | 不能（它靠 server 启动时去开） | 能，日志文件还在就读得到 |
+
+想要「一开机就有个窗口在滚日志」用 `LOG_TERMINAL`；只是偶尔查一下用桌面控制台。
+
+### `LOG_TERMINAL`：server 启动时自动开 Terminal 窗口
 
 常驻部署的日志写进文件（`~/Library/Logs/ccm-server.log`），要看得先自己 `tail -f`。在配置里设
 `LOG_TERMINAL` 后，server 每次启动会自动开一个 Terminal 窗口跟随该日志，停止/重启时自动关掉它：
 
 ```bash
-LOG_TERMINAL=on        # 默认关闭
-LOG_FILE=              # 留空 = ~/Library/Logs/ccm-server.log
+node scripts/config.js set LOG_TERMINAL=on    # 默认关闭
+node scripts/config.js set LOG_FILE=/绝对/路径 # 不设 = ~/Library/Logs/ccm-server.log
 ```
+
+（直接改 `ccm.config.json` 也行：`"LOG_TERMINAL": true`。JSON 里写布尔值，
+落到进程环境时会由 schema 归一成这个键实际认的字面量。）
 
 - **仅 macOS**（靠 osascript 驱动 Terminal.app）；Linux 留空即可，设了会打一行"已跳过"。
 - **首次会弹系统「自动化」授权框**，需允许控制「终端」；拒绝后 server 照常跑，只是开不出窗口（日志会提示怎么开）。

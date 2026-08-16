@@ -60,6 +60,8 @@ The wizard:
 1. Creates a random `AUTH_TOKEN`, writes it to `ccm.config.json`, and sets mode `0600`.
 2. Asks for `WORK_DIR`. Choose a specific project directory instead of exposing your whole home directory for convenience.
 3. Asks whether to install the CLI hooks bridge. Installation is the default, but it writes `~/.claude/settings.json` only after you confirm.
+4. On macOS, asks whether to compile the [desktop console](#optional-macos-desktop-console). Not compiled by
+   default — it needs the Xcode Command Line Tools.
 
 If a config file already exists, the wizard does not overwrite it by default.
 
@@ -88,6 +90,27 @@ Environment variables always beat the config file — `PORT=4000 npm start` over
 Keys the project does not know about **are still passed through** (into `process.env`, which the claude
 subprocess inherits) — third-party variables like `HTTPS_PROXY` or `CLAUDE_CONFIG_DIR` work fine here.
 Startup logs one line per unregistered key, which also helps you spot a typo in a key name.
+
+### Upgrading from a legacy `.env`
+
+**It runs without migrating.** After pulling new code, your existing `.env` is still read, including
+unregistered keys such as `HTTPS_PROXY`. The step below is optional — the new format is simply nicer
+to work with.
+
+```bash
+npm run config:migrate      # = node scripts/config.js migrate
+```
+
+Migration reads the `.env`, inlines an external `workdirs.json` alongside it into `ccm.config.json`,
+and **keeps your existing `AUTH_TOKEN`**. The old `.env` is not deleted, but is no longer read (the
+new file wins).
+
+> ⚠️ **Do not "upgrade" with `npm run setup --force`.** `--force` is a clean reinstall and mints a
+> new `AUTH_TOKEN` — every approved device stops working and each phone has to be approved again.
+> When a config already exists, setup refuses and points at `migrate`; do what it says.
+
+On a legacy deployment the desktop console shows a banner and a "Migrate" button at the top of the
+config window, so you never have to go back to a terminal.
 
 ### Editing config from the command line
 
@@ -119,6 +142,8 @@ node scripts/setup.js \
 
 - `--work-dir` is required and never silently falls back to `$HOME`.
 - `--hooks` accepts only `on` or `off`; `on` changes user-level Claude hooks configuration.
+- `--desktop` accepts only `on` or `off` and defaults to `off`; `on` runs `swiftc`. On a
+  non-macOS host, an explicit `--desktop=on` is rejected with a reason rather than ignored.
 - If a config file exists, the command refuses to overwrite it. Add `--force` only after deciding to replace its current token and configuration.
 - Use `--config <path>` to place the config file elsewhere; `--env <path>` generates a legacy `.env` instead (the two are mutually exclusive).
 
@@ -276,6 +301,68 @@ npm run hooks:uninstall
 
 The phone UI can also install or remove the bridge explicitly under Settings → Service status → Terminal session notifications.
 
+## Optional: macOS desktop console
+
+macOS only, and entirely optional — the phone UI and the command line already cover every feature.
+
+The setup wizard offers to compile it; you can also do it yourself at any time:
+
+```bash
+npm run app:build      # builds desktop/build/CCM.app (~420K, not committed)
+open desktop/build/CCM.app
+```
+
+**It needs the Xcode Command Line Tools, not the full Xcode** (1–2GB versus 12GB+). Any machine
+that has used `git` or `cc` most likely already has them. Otherwise:
+
+```bash
+xcode-select --install
+```
+
+A menu bar icon shows service status. **The desktop app is self-contained and never opens a
+terminal** — installing, diagnosing, reading logs, and editing configuration all happen inside it:
+
+- **Configure…**: a form whose contents come from `config.js schema`. It drives the same CLI, so
+  **you can still edit configuration while the server is down** — precisely when you most need to.
+  Secrets render masked and are not submitted unless changed. On a legacy `.env` deployment, a
+  banner with a "Migrate" button appears at the top of the window.
+- **View logs**: an embedded scrolling view, refreshed every 2 seconds, reading only the tail of the
+  file (so a multi-hundred-MB log does not freeze it).
+- **First-run wizard / doctor / install and uninstall service**: run step by step in an embedded task
+  window with live output. A failing step stops there and shows its exit code.
+
+**Open Console…** in the menu is the main window: service status, individual units, and every action
+on one screen.
+
+Checking "Start at login (menu bar)" installs a LaunchAgent. That is how this platform does it, not
+a deployment model the project requires of you — systemd, pm2, or docker are all fine on a server.
+
+### Why there is no prebuilt app to download
+
+An app you compile yourself carries **no quarantine attribute** and opens on a double-click. An app
+downloaded from a web page always gets one, and the first launch hits Gatekeeper's "cannot verify the
+developer". Fixing that properly means an Apple Developer account for notarization ($99/year), which
+is out of proportion for a self-hosted tool. Telling you to `xattr -d` around it would be telling you
+to disable a security mechanism.
+
+Compiling also has a side benefit: the binary matches exactly the source you are holding, and you do
+not have to trust anyone else's build.
+
+### When the notch hides the menu bar icon
+
+The MacBook Pro notch squeezes out menu bar icons on the right. This app has no Dock icon and does not
+appear in Cmd+Tab by default, so once the icon is pushed out there is **no entry point left** (running
+`open CCM.app` again only activates the instance that is already running).
+
+The console window has a "Show icon in Dock" toggle. With it on, a Dock icon appears and clicking it
+brings the console back. **Turn it on while you can still find the icon.**
+
+If the icon is already gone, recover once from the command line and reopen the app:
+
+```bash
+defaults write com.ccm.menubar CCMShowDockIcon -bool true
+```
+
 <details>
 <summary>Delegate first installation to a coding agent</summary>
 
@@ -316,10 +403,13 @@ Use docs/deployment.md for a fixed public domain or persistent service. Do not c
 | A third-party gateway is ignored | `ANTHROPIC_*` must come from the server's startup shell, not the config file |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |
 | Android installs only a browser shortcut | Cloudflare Access may block PWA icons; see the [deployment guide](deployment.md#2b-android-pwa图标必须对匿名可达) |
+| Startup logs "read as number/boolean" conversion notes | `ccm.config.json` has numbers or toggles written as strings; use `3000` / `true`, not `"3000"` / `"true"` |
+| The desktop menu bar icon is gone | The notch pushed it out; see [the section above](#when-the-notch-hides-the-menu-bar-icon) for the one-line `defaults write` recovery |
 
 ## Next steps
 
 - Long-term public access: [Deployment and operations](deployment.md) (Chinese)
 - Understand the Web/CLI paths: [Architecture](architecture.en.md)
 - Understand model, effort, and statusline sources: [Display contracts](display-contracts.md) (Chinese)
+- Maintainers — n=1 hard rules and the technical-debt index: [hard-rules.md](hard-rules.md) (Chinese)
 - Review every setting and what it does: `node scripts/config.js schema` (generated from the schema, never drifts from the code)

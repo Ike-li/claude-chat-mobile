@@ -90,6 +90,24 @@ npm run setup
 `HTTPS_PROXY`、`CLAUDE_CONFIG_DIR` 这类第三方变量放在这里是有效的。启动日志会为每个未登记的键
 打印一行提示，顺便帮你发现拼错的键名。
 
+### 从旧版 `.env` 升级
+
+**不迁移也能跑。** 拉了新代码之后，原有的 `.env` 会照常被读取，包括 `HTTPS_PROXY` 这类
+未登记的键。以下两条是可选的，只是新格式更好用。
+
+```bash
+npm run config:migrate      # = node scripts/config.js migrate
+```
+
+迁移会把 `.env` 读进来、连同外置的 `workdirs.json` 一起内联进 `ccm.config.json`，
+**保留原有的 `AUTH_TOKEN`**。原 `.env` 不会被删除，但从此不再被读取（新文件优先）。
+
+> ⚠️ **不要用 `npm run setup --force` 来「升级」。** `--force` 是覆盖重装，会生成一个新的
+> `AUTH_TOKEN`——所有已批准的设备都会失效，每台手机都得重新走一遍审批。已有配置时
+> setup 会拒绝并指向 `migrate`，请照它说的做。
+
+桌面控制台在旧格式下会在配置窗口顶部显示一条横幅和「迁移配置」按钮，不必回到终端。
+
 ### 用命令行改配置
 
 没有图形界面时（服务器部署），全部配置都能从命令行读写：
@@ -119,6 +137,8 @@ node scripts/setup.js \
 
 - `--work-dir` 必填，不会静默回落到 `$HOME`。
 - `--hooks` 只接受 `on` 或 `off`；`on` 会修改用户级 Claude hooks 配置。
+- `--desktop` 只接受 `on` 或 `off`，缺省 `off`；`on` 会跑 `swiftc`。非 macOS 上显式给
+  `--desktop=on` 会被拒绝并说明原因，而不是静默忽略。
 - 已有配置文件时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
 - 可用 `--config <path>` 指定配置文件位置；`--env <path>` 则生成旧版 `.env`（两者互斥）。
 
@@ -371,6 +391,8 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 | 第三方网关配置不生效 | `ANTHROPIC_*` 必须来自启动 server 的 shell，不是配置文件 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |
 | Android 安装后只是浏览器快捷方式 | Cloudflare Access 可能拦住 PWA 图标，见[部署指南](deployment.md#2b-android-pwa图标必须对匿名可达) |
+| 启动日志刷「已读作数字/布尔」的类型转换提示 | `ccm.config.json` 里把数字或开关写成了字符串；改成 `3000` / `true` 而不是 `"3000"` / `"true"` |
+| 桌面端菜单栏图标找不到了 | 刘海挤掉了；见[上面这节](#菜单栏图标被刘海挡住了怎么办)用 `defaults write` 救一次 |
 
 ## 下一步
 

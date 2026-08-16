@@ -23,6 +23,8 @@
 | 单用户 = 机主 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全模型](../README.md#安全模型) |
 | 不是远程桌面 / 共享 TTY / 多租户托管 | 不附着终端 stdin/stdout | [architecture.md](architecture.md) |
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
+| **不替用户决定怎么后台运行** | 基础版只保证「一条命令能跑起来」。LaunchAgent 是 macOS 上的一种**可选便利**（`service:install` / 桌面端勾选），不是产品要求——服务器上 systemd / pm2 / docker 都行，`deploy/` 下的 plist 是模板不是规范 | 2026-08-15 机主确认；[deployment.md](deployment.md) |
+| **可选功能由用户开关，不猜** | 桌面控制台、两个 bridge、`LOG_TERMINAL`、推送……默认全关，装机向导逐项问。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**（`--work-dir` 回落 `$HOME` = 整个家目录挂给远程入口）直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
 
 ---
 
@@ -163,6 +165,8 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 | 优先级 | shell env > 配置文件 > 内置默认。`ANTHROPIC_*` 只认真实 shell export，写进文件照样剥除 |
 | 必须 gitignore | 与 `.env` 同等敏感且本仓 **public**；`tests/unit/config-file.test.mjs` 有断言锁住 |
 | 迁移是显式动作 | 没有任何代码路径会自动创建 `ccm.config.json`（`setup` 与 `config migrate` 除外，两者都是用户发起） |
+| 未登记键：**读宽写严** | 读取侧原样放行进 `process.env`（claude 子进程继承它，`HTTPS_PROXY` / `CLAUDE_CONFIG_DIR` 这类才有效），只打一行提示；写入侧 (`config set` / 面板) 仍只认 `WRITABLE_KEYS`。**这个不对称是有意的**——别为了「一致性」把两侧统一：统一到严，第三方网关用户静默失效；统一到宽，面板变成任意键写入面 |
+| CLI 值解析不复用 `coerceToSchemaType` | `parseCliValue` 自己认 `true/false/on/off/yes/no/1/0`。复用会出事：`TOGGLE_OFF` 的 off 字面量是 `'off'`，`set WEB_STATUSLINE=false` 经 coerce 会**变成开** |
 
 ---
 
@@ -174,6 +178,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 | **SP-10** | busy→idle 吸收完整闭合（前端 uuid 幂等 + live 记 uuid） | **不做**（同上） | `history.js` `catchUpStep` 头注 |
 | **OQ-09** | 审批时延等「人机/价值」埋点遥测 | **拒绝**；管道健康指标可走 `/metrics` | `metrics.js` |
 | **UP-1** | 让 web 端 slash 像终端那样 inline 跑（见 §5.1） | **做不到**（上游约束，2026-08-05 查证） | `agent.js#_claimSessionIdEarly` 注释 |
+| **DT-1** | 仓库里放编译好的 `CCM.app` 供下载 | **不做**（2026-08-16）：本地编译产物**无 quarantine 属性**，双击即开；下载来的必被打上 quarantine，首次打开必撞 Gatekeeper。根治要 Apple 开发者账号做公证（$99/年），对自托管工具不成比例；教用户 `xattr -d` 绕过等于教他关掉一层安全机制 | `docs/getting-started.md#为什么不直接发一个编译好的-app` |
 
 **重开条件（任一条）**：
 

@@ -37,7 +37,8 @@ Only one side drives a session at a time. Web-driven messages travel through the
 - **Conversation and files**: streaming Markdown, syntax highlighting, tool cards, Edit/Write diffs, Read excerpts, a native `AskUserQuestion` picker; image and file uploads, pasted screenshots, historical attachment previews, composer `@` file references; browse project files inside approved workspaces and edit them directly in CodeMirror.
 - **Notifications**: Web Push / ntfy for approvals, questions, and results, defaulting to type-only text, with a delivery-path test and an optional content preview; an optional CLI hooks bridge upgrades terminal "turn ended / needs you" from polling to an immediate signal.
 - **Visibility**: API errors, retry countdowns, SDK notices, subagents, and background-task progress appear in the UI rather than only in server logs.
-- **Reliability and operations**: `seq + epoch` event deduplication and reconnect replay; the status line picks SDK or CLI snapshots according to the current driver; startup checks with `doctor`, an in-app security check, redacted logs, auth rate limits, a service-status panel, and authenticated `/health` and `/metrics`.
+- **Reliability and operations**: `seq + epoch` event deduplication and reconnect replay; the status line picks SDK or CLI snapshots according to the current driver; startup checks with `doctor`, an in-app security check, redacted logs, auth rate limits, a service-status panel, and authenticated `/health` and `/metrics`. All configuration lives in a single `ccm.config.json` that the CLI (`config.js`) and the GUI both read and write.
+- **Configuration entry points**: headless use `node scripts/config.js`; macOS additionally has an optional desktop console (menu bar icon plus a main window) with an embedded config form, logs, doctor, and service installation — **no terminal needed**, and configuration stays editable while the server is down.
 - **Form factor**: an installable PWA with complete Chinese and English UI coverage; browser dependencies are self-hosted with the project instead of loaded from a CDN.
 
 ## Prerequisites
@@ -56,7 +57,7 @@ cd claude-chat-mobile
 
 node --version && which claude   # check against the prerequisites above
 npm install --omit=dev
-npm run setup                    # creates AUTH_TOKEN, asks for WORK_DIR and the CLI hooks bridge
+npm run setup                    # creates AUTH_TOKEN; asks for WORK_DIR, the CLI hooks bridge, and (macOS) the desktop console
 node scripts/doctor.js
 npm start
 
@@ -83,7 +84,7 @@ PWA installation and Web Push require HTTPS. On iOS, Web Push also requires iOS 
 
 1. **Single-user, owner-level access.** There is no multi-user or tenant isolation. An authenticated operation has the permissions of the local account that started `claude`.
 2. **No token means loopback only.** Without `AUTH_TOKEN`, the server listens only on `127.0.0.1`. Phone or tunnel access requires a strong token.
-3. **Keep workspace scope narrow.** `WORK_DIR` and `workdirs.json` are the scope gate for files, sessions, and git operations. Do not expose your whole home directory for convenience.
+3. **Keep workspace scope narrow.** `WORK_DIR` and `WORKDIRS` are the scope gate for files, sessions, and git operations. Do not expose your whole home directory for convenience.
 4. **Automatic approval inherits CLI configuration.** `permissions.allow` rules from `~/.claude/settings.json`, project `.claude/settings.json`, and `.claude/settings.local.json` apply here too. Review accumulated Bash/Write rules before public use.
 5. **Device trust is a second gate.** Except for local connections or requests validated by Cloudflare Access JWT, a valid token still needs one-time device approval. Revoke a device with `node scripts/device.js deny <ID>`.
 6. **The file editor is a direct user write.** It does not pass through the Agent tool-approval chain. It can only modify existing files up to 256KB and applies scope checks, content-hash conflict detection, and audit logging. Set `FILE_EDIT=off` for read-only browsing.
@@ -98,7 +99,7 @@ Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.m
 - [Hard rules and tech debt](docs/hard-rules.md) (Chinese): n=1 tradeoffs, invariants, and deferred work (maintainers).
 - [Display contracts](docs/display-contracts.md) (Chinese): sources of truth for model, effort, and status-line display.
 - [Repository map](docs/repository-map.md): entrypoints, directory roles, and the complete file inventory.
-- [Settings reference](.env.example): every runtime setting and its default (same key names as `ccm.config.json`).
+- **Settings reference**: `node scripts/config.js schema` — every setting, type, and default, generated from the schema so it can never drift from the code. [.env.example](.env.example) is the legacy template kept for `setup --env` (e.g. `docker --env-file`).
 - [Security policy](SECURITY.md): private vulnerability-reporting instructions.
 
 ## License

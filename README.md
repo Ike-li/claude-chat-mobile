@@ -39,7 +39,8 @@
 - **对话与文件**：流式 Markdown、代码高亮、工具卡片、Edit/Write diff、Read 片段、`AskUserQuestion` 原生选择器；上传图片与文件、粘贴截图、历史附件预览、composer `@` 文件引用；在授权工作区内浏览项目文件，并用 CodeMirror 直接编辑。
 - **通知**：Web Push / ntfy 推送审批、提问和结果，默认只发类型级提示，可测试推送链路并选择是否开启内容预览；可选 CLI hooks bridge，把终端会话的「回合结束/需要你」从轮询升级为即时信号。
 - **可见性**：API 错误、重试倒计时、SDK 提示、子 agent 与后台任务进度直接显示在界面中，不再只藏在服务端日志。
-- **可靠性与运维**：`seq + epoch` 事件去重与断线补发；状态栏按当前驾驶方选择 SDK 或 CLI 快照作为事实源；`doctor` 启动自检、UI 安全体检、日志脱敏、鉴权限速、服务状态面板和鉴权后的 `/health`、`/metrics`。
+- **可靠性与运维**：`seq + epoch` 事件去重与断线补发；状态栏按当前驾驶方选择 SDK 或 CLI 快照作为事实源；`doctor` 启动自检、UI 安全体检、日志脱敏、鉴权限速、服务状态面板和鉴权后的 `/health`、`/metrics`。全部配置集中在一份 `ccm.config.json`，命令行 (`config.js`) 与图形界面读写同一份。
+- **配置入口**：headless 用 `node scripts/config.js`；macOS 上另有可选的桌面控制台（菜单栏图标 + 主窗口），配置表单、日志、体检、服务安装全部内嵌，**不需要开终端**，且 server 没起来时照样能改配置。
 - **形态**：可安装 PWA，完整中英文界面；前端依赖均随项目自托管，不依赖 CDN。
 
 ## 前置条件
@@ -58,7 +59,7 @@ cd claude-chat-mobile
 
 node --version && which claude   # 对照上面的前置条件
 npm install --omit=dev
-npm run setup                    # 生成 AUTH_TOKEN、询问 WORK_DIR、询问是否装 CLI hooks bridge
+npm run setup                    # 生成 AUTH_TOKEN，问 WORK_DIR、CLI hooks bridge，macOS 上再问桌面控制台
 node scripts/doctor.js
 npm start
 
@@ -85,7 +86,7 @@ PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先「添加
 
 1. **单用户，权限等同机主。** 项目没有多用户或租户隔离；通过鉴权的操作拥有启动 `claude` 的本机账号权限。
 2. **无 token 不出本机。** 未设置 `AUTH_TOKEN` 时只监听 `127.0.0.1`；需要手机或隧道访问时必须设置强 token。
-3. **工作目录必须收窄。** `WORK_DIR` / `workdirs.json` 是文件、会话和 git 操作的范围门。不要为了省事把整个家目录交给远程入口。
+3. **工作目录必须收窄。** `WORK_DIR` / `WORKDIRS` 是文件、会话和 git 操作的范围门。不要为了省事把整个家目录交给远程入口。
 4. **自动放行继承 CLI 配置。** `~/.claude/settings.json`、项目 `.claude/settings.json` 和 `.claude/settings.local.json` 中的 `permissions.allow` 会同源生效；公网使用前应审查累积的 Bash/Write 等规则。
 5. **设备信任是第二道门。** 除本机直连或已通过 Cloudflare Access JWT 的连接外，合法 token 仍需一次性设备审批；可用 `node scripts/device.js deny <ID>` 吊销。
 6. **文件编辑器是用户直写。** 它不经过 Agent 的工具审批链，只允许修改已存在、≤256KB 的文件，并做范围校验、哈希冲突检测和审计记录；设 `FILE_EDIT=off` 可退回只读。
@@ -100,7 +101,7 @@ PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先「添加
 - [硬性规则与技术债](docs/hard-rules.md)：n=1 取舍、架构不变量、已决「不做」项（维护者）。
 - [展示契约](docs/display-contracts.md)：模型、思考强度和状态栏的事实源。
 - [仓库地图](docs/repository-map.md)：入口、目录职责与完整文件清单。
-- [配置项说明](.env.example)：所有运行时配置及默认值（键名与 `ccm.config.json` 一致）。
+- **配置项说明**：`node scripts/config.js schema` —— 全部配置项、类型与默认值，由 schema 生成，永不与代码分叉。[.env.example](.env.example) 是留给 `setup --env` 的旧格式模板（如 `docker --env-file`）。
 - [安全策略](SECURITY.md)：漏洞报告方式。
 
 ## 许可证
