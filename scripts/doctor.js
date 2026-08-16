@@ -43,9 +43,18 @@ import {
 } from '../src/ops/doctor-checks.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
+import { detectLang } from './setup.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const results = [];
+
+// 界面语言按环境 locale 自动选，与 scripts/setup.js 同一判据（zh_* → 中文，其余英文）。
+//
+// **刻意内联双语而不是像 setup.js 那样建 MESSAGES 字典**：那边的文案要在交互流程的多处复用，
+// 起个 key 是值得的；doctor 的每条文案只用一次，内联能保证两个语言版本永远挨在一起 ——
+// 字典方案下改中文忘了改英文，没有任何机制会发现。
+const LANG = detectLang();
+const bi = (zh, en) => (LANG === 'en' ? en : zh);
 
 // 诊断结果类型
 function ok(name, detail) { results.push({ name, status: 'ok', detail }); }
@@ -56,14 +65,14 @@ function fail(name, detail) { results.push({ name, status: 'fail', detail }); }
 const colors = { ok: '\x1b[32m✓\x1b[0m', warn: '\x1b[33m⚠\x1b[0m', fail: '\x1b[31m✗\x1b[0m' };
 
 function print() {
-  console.log('\n=== 配置诊断 ===\n');
+  console.log(bi('\n=== 配置诊断 ===\n', '\n=== Configuration diagnostics ===\n'));
   for (const r of results) {
     console.log(`${colors[r.status]} ${r.name}`);
     if (r.detail) console.log(`  ${r.detail}\n`);
   }
   const failed = results.filter(r => r.status === 'fail').length;
   const warned = results.filter(r => r.status === 'warn').length;
-  console.log(`=== 结果: ${results.length - failed - warned} 通过, ${warned} 警告, ${failed} 失败 ===\n`);
+  console.log(bi(`=== 结果: ${results.length - failed - warned} 通过, ${warned} 警告, ${failed} 失败 ===\n`, `=== Result: ${results.length - failed - warned} passed, ${warned} warning(s), ${failed} failed ===\n`));
   process.exit(failed > 0 ? 1 : 0);
 }
 
@@ -73,17 +82,17 @@ function print() {
 function checkAuthToken() {
   const token = process.env.AUTH_TOKEN;
   if (token === undefined) {
-    warn('AUTH_TOKEN', '未设置 → 仅监听 127.0.0.1（本机），无法从手机访问。需要手机访问请在 .env 设置后重启。');
+    warn('AUTH_TOKEN', bi('未设置 → 仅监听 127.0.0.1（本机），无法从手机访问。需要手机访问请在配置里设置后重启。', 'Not set → binds 127.0.0.1 only; your phone cannot reach it. Set it in the config file and restart.'));
     return;
   }
   if (!token || !token.trim()) {
-    fail('AUTH_TOKEN', '已设置但为空 → 仅监听 127.0.0.1。若要手机访问，设置非空 token。');
+    fail('AUTH_TOKEN', bi('已设置但为空 → 仅监听 127.0.0.1。若要手机访问，设置非空 token。', 'Set but empty → binds 127.0.0.1 only. Use a non-empty token for phone access.'));
     return;
   }
   if (token.length < 8) {
-    warn('AUTH_TOKEN', `长度仅 ${token.length} 字符，建议 ≥16 字符（随机字符串）提高安全性。`);
+    warn('AUTH_TOKEN', bi(`长度仅 ${token.length} 字符，建议 ≥16 字符（随机字符串）提高安全性。`, `Only ${token.length} characters; 16+ random characters is recommended.`));
   } else {
-    ok('AUTH_TOKEN', `已设置（${token.length} 字符）`);
+    ok('AUTH_TOKEN', bi(`已设置（${token.length} 字符）`, `Set (${token.length} characters)`));
   }
 }
 
@@ -94,18 +103,18 @@ function checkClaudeBin() {
   if (!claudePath) {
     claudePath = resolveExecutableViaPath('claude'); // POSIX which / win32 where
     if (!claudePath) {
-      fail('CLAUDE_BIN', '未设置 CLAUDE_BIN 且 PATH 查找不到 claude。请确认 Claude Code CLI 已安装并在 PATH 中。');
+      fail('CLAUDE_BIN', bi('未设置 CLAUDE_BIN 且 PATH 查找不到 claude。请确认 Claude Code CLI 已安装并在 PATH 中。', 'CLAUDE_BIN unset and no claude on PATH. Make sure the Claude Code CLI is installed and on PATH.'));
       return;
     }
   }
   if (!existsSync(claudePath)) {
-    fail('CLAUDE_BIN', `路径不存在: ${claudePath}`);
+    fail('CLAUDE_BIN', bi(`路径不存在: ${claudePath}`, `Path does not exist: ${claudePath}`));
     return;
   }
   try {
     accessSync(claudePath, constants.X_OK);
   } catch {
-    fail('CLAUDE_BIN', `路径存在但不可执行: ${claudePath}`);
+    fail('CLAUDE_BIN', bi(`路径存在但不可执行: ${claudePath}`, `Path exists but is not executable: ${claudePath}`));
     return;
   }
   // 检查版本
@@ -113,7 +122,7 @@ function checkClaudeBin() {
     const ver = execSync(`"${claudePath}" --version`, { encoding: 'utf8', timeout: 3000 }).trim();
     ok('CLAUDE_BIN', `${claudePath} — ${ver}`);
   } catch (err) {
-    warn('CLAUDE_BIN', `${claudePath} 可执行但 --version 失败: ${err.message}`);
+    warn('CLAUDE_BIN', bi(`${claudePath} 可执行但 --version 失败: ${err.message}`, `${claudePath} is executable but --version failed: ${err.message}`));
   }
 }
 
@@ -134,20 +143,20 @@ function checkWorkDir() {
 
 function checkOneDir(label, dir, soft = false) {
   if (!existsSync(dir)) {
-    if (soft) { warn(label, `不存在: ${dir}（server 启动期会告警跳过此目录）`); return; }
+    if (soft) { warn(label, bi(`不存在: ${dir}（server 启动期会告警跳过此目录）`, `Missing: ${dir} (the server warns and skips it at startup)`)); return; }
     try {
       mkdirSync(dir, { recursive: true });
-      ok(label, `不存在已创建: ${dir}`);
+      ok(label, bi(`不存在已创建: ${dir}`, `Did not exist; created: ${dir}`));
     } catch (err) {
-      fail(label, `不存在且无法创建: ${dir} — ${err.message}`);
+      fail(label, bi(`不存在且无法创建: ${dir} — ${err.message}`, `Missing and could not be created: ${dir} — ${err.message}`));
     }
     return;
   }
   try {
     accessSync(dir, constants.W_OK);
-    ok(label, `可写: ${dir}`);
+    ok(label, bi(`可写: ${dir}`, `Writable: ${dir}`));
   } catch {
-    (soft ? warn : fail)(label, `存在但不可写: ${dir}`);
+    (soft ? warn : fail)(label, bi(`存在但不可写: ${dir}`, `Exists but is not writable: ${dir}`));
   }
 }
 
@@ -245,7 +254,7 @@ function checkStatuslineBridge() {
       return;
     }
     const detail = (err?.stderr?.toString() || err?.message || '未知错误').split('\n').filter(Boolean)[0];
-    warn('CLI_STATUSLINE_BRIDGE', `无法只读检查安装状态：${detail}。运行 \`npm run statusline:status\` 查看详情。`);
+    warn('CLI_STATUSLINE_BRIDGE', bi(`无法只读检查安装状态：${detail}。运行 npm run statusline:status 查看详情。`, `Could not read install state: ${detail}. Run npm run statusline:status for details.`));
     return;
   }
   const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState });
@@ -275,7 +284,7 @@ function checkHooksBridge() {
       return;
     }
     const detail = (err?.stderr?.toString() || err?.message || '未知错误').split('\n').filter(Boolean)[0];
-    warn('CLI_HOOKS_BRIDGE', `无法只读检查安装状态：${detail}。运行 \`npm run hooks:status\` 查看详情。`);
+    warn('CLI_HOOKS_BRIDGE', bi(`无法只读检查安装状态：${detail}。运行 npm run hooks:status 查看详情。`, `Could not read install state: ${detail}. Run npm run hooks:status for details.`));
     return;
   }
   const result = hooksBridgeDiagnostic({ bridgeOff, installState });
@@ -286,7 +295,7 @@ function checkHooksBridge() {
 function checkAnthropicEnv() {
   const envPath = EFFECTIVE.envFile; // WS-011：读被诊断的 .env（--env 指定），非硬编码仓库 HERE/.env
   if (!existsSync(envPath)) {
-    ok('ANTHROPIC_* 环境', '.env 不存在（可选）');
+    ok(bi('ANTHROPIC_* 环境', 'ANTHROPIC_* environment'), bi('.env 不存在（可选）', '.env not present (optional)'));
     return;
   }
   try {
@@ -294,15 +303,18 @@ function checkAnthropicEnv() {
     const lines = raw.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
     const hasAnthropicKeys = lines.some(l => /^ANTHROPIC_[A-Z_]+=/.test(l.trim()));
     if (hasAnthropicKeys) {
-      warn('ANTHROPIC_* 环境',
-        `.env 含 ANTHROPIC_* 变量 → 启动期会被剥除。\n` +
-        `  模型/网关/凭据只能在启动 shell 里 export，不经 .env 配置（终端等价性）。\n` +
-        `  若 web 端模型列表与终端不一致，检查启动 shell 的 ANTHROPIC_* 环境变量。`);
+      warn(bi('ANTHROPIC_* 环境', 'ANTHROPIC_* environment'), bi(
+        '.env 含 ANTHROPIC_* 变量 → 启动期会被剥除。\n'
+        + '  模型/网关/凭据只能在启动 shell 里 export，不经配置文件设置（终端等价性）。\n'
+        + '  若 web 端模型列表与终端不一致，检查启动 shell 的 ANTHROPIC_* 环境变量。',
+        '.env contains ANTHROPIC_* variables → they are stripped at startup.\n'
+        + '  Model / gateway / credentials must be exported in the launching shell, not set in the config file (terminal equivalence).\n'
+        + "  If the web model list differs from your terminal, check the launching shell's ANTHROPIC_* variables."));
     } else {
-      ok('ANTHROPIC_* 环境', '.env 不含 ANTHROPIC_* 变量（正确；网关配置应从 shell export）');
+      ok(bi('ANTHROPIC_* 环境', 'ANTHROPIC_* environment'), bi('.env 不含 ANTHROPIC_* 变量（正确；网关配置应从 shell export）', '.env has no ANTHROPIC_* variables (correct: gateway config must come from the shell)'));
     }
   } catch (err) {
-    warn('ANTHROPIC_* 环境', `.env 读取失败: ${err.message}`);
+    warn(bi('ANTHROPIC_* 环境', 'ANTHROPIC_* environment'), bi(`.env 读取失败: ${err.message}`, `Could not read .env: ${err.message}`));
   }
 }
 
@@ -314,7 +326,7 @@ function checkAnthropicEnv() {
 
 function checkConfigPermissions() {
   if (platform() === 'win32') {
-    ok('配置文件权限', 'Windows 平台跳过检查（不支持 POSIX 权限位）');
+    ok(bi('配置文件权限', 'Config file permissions'), bi('Windows 平台跳过检查（不支持 POSIX 权限位）', 'Skipped on Windows (no POSIX permission bits)'));
     return;
   }
 
@@ -329,10 +341,11 @@ function checkConfigPermissions() {
   }
 
   if (problems.length > 0) {
-    warn('配置文件权限',
-      problems.join('; ') + '\n  运行 `node scripts/doctor.js --fix` 自动修复为 0600');
+    warn(bi('配置文件权限', 'Config file permissions'), problems.join('; ') + bi(
+      '\n  运行 node scripts/doctor.js --fix 自动修复为 0600',
+      '\n  Run node scripts/doctor.js --fix to tighten them to 0600'));
   } else {
-    ok('配置文件权限', '所有配置文件均为 owner-only (0600)');
+    ok(bi('配置文件权限', 'Config file permissions'), bi('所有配置文件均为 owner-only (0600)', 'All config files are owner-only (0600)'));
   }
 }
 
@@ -341,9 +354,9 @@ function checkConfigPermissions() {
 function checkDocConsistency() {
   const result = runDocConsistency({ rootDir: HERE });
   if (result.problems.length > 0) {
-    fail('文档一致性', formatDocConsistency(result) + '\n  （单一事实源/防漂移纪律）');
+    fail(bi('文档一致性', 'Docs consistency'), formatDocConsistency(result) + bi('\n  （单一事实源/防漂移纪律）', '\n  (single-source-of-truth / anti-drift discipline)'));
   } else {
-    ok('文档一致性', `${result.docFiles.length} 份文档：链接/命令/SDK 版本一致`);
+    ok(bi('文档一致性', 'Docs consistency'), bi(`${result.docFiles.length} 份文档：链接/命令/SDK 版本一致`, `${result.docFiles.length} docs: links / commands / SDK versions consistent`));
   }
 }
 
@@ -354,7 +367,7 @@ function checkFrontendSyntax() {
   try {
     files = collectSyntaxFiles(HERE).filter(file => file.startsWith('public/js/'));
   } catch {
-    warn('前端 JS 语法', 'public/js/ 不存在，跳过');
+    warn(bi('前端 JS 语法', 'Frontend JS syntax'), bi('public/js/ 不存在，跳过', 'public/js/ not found, skipped'));
     return;
   }
   const bad = [];
@@ -367,9 +380,9 @@ function checkFrontendSyntax() {
     }
   }
   if (bad.length > 0) {
-    fail('前端 JS 语法', bad.join('\n  ') + '\n  （浏览器脚本无单测覆盖，语法错会致页面死在「未连接」）');
+    fail(bi('前端 JS 语法', 'Frontend JS syntax'), bad.join('\n  ') + bi('\n  （浏览器脚本无单测覆盖，语法错会致页面死在「未连接」）', '\n  (browser scripts have no unit tests; a syntax error leaves the page stuck on the not-connected screen)'));
   } else {
-    ok('前端 JS 语法', `public/js/ ${files.length} 个文件（含 app/ 子模块）语法通过`);
+    ok(bi('前端 JS 语法', 'Frontend JS syntax'), bi(`public/js/ ${files.length} 个文件（含 app/ 子模块）语法通过`, `public/js/: ${files.length} files (including app/ submodules) parse cleanly`));
   }
 }
 
@@ -382,10 +395,10 @@ function checkCoverageThreshold() {
     const stdout = execSync('node scripts/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 }).toString();
     const actual = stdout.match(/行覆盖率:\s*([\d.]+)%/)?.[1];
     const threshold = stdout.match(/门槛:\s*([\d.]+)%/)?.[1];
-    ok('测试覆盖率', actual && threshold ? `行覆盖率 ${actual}%（门槛 ${threshold}%）` : '达标');
+    ok(bi('测试覆盖率', 'Test coverage'), actual && threshold ? bi(`行覆盖率 ${actual}%（门槛 ${threshold}%）`, `Line coverage ${actual}% (threshold ${threshold}%)`) : bi('达标', 'meets threshold'));
   } catch (err) {
     const msg = (err.stderr?.toString() || err.message || '').split('\n').filter(Boolean).slice(-3).join(' | ');
-    warn('测试覆盖率', `覆盖率检查未通过: ${msg || '超时或无法运行'}`);
+    warn(bi('测试覆盖率', 'Test coverage'), bi(`覆盖率检查未通过: ${msg || '超时或无法运行'}`, `Coverage check failed: ${msg || 'timed out or could not run'}`));
   }
 }
 
@@ -415,7 +428,7 @@ function checkLogSwitches() {
     stderr: !!process.env.LOG_STDERR,
     logFileBytes,
   });
-  (r.status === 'warn' ? warn : ok)('日志开关', r.detail);
+  (r.status === 'warn' ? warn : ok)(bi('日志开关', 'Log switches'), r.detail);
 }
 
 // CLAUDE_CONFIG_DIR：CLI 认、本仓不认。设了它 → 会话历史静默读不到，见 claudeConfigDirDiagnostic。
@@ -466,7 +479,7 @@ function checkUploadsFootprint() {
     dirs.push({ cwd, bytes, files });
   }
   const r = uploadsFootprintDiagnostic({ dirs });
-  (r.status === 'warn' ? warn : ok)('附件占用', r.detail);
+  (r.status === 'warn' ? warn : ok)(bi('附件占用', 'Attachment footprint'), r.detail);
 }
 
 // ──────────────────────── 主流程 ────────────────────────
@@ -488,14 +501,14 @@ const loaded = readConfigFileValues(HERE, envArg ? { envFile } : {});
 if (loaded.error) {
   // ★ 必须先报再加载：loadRuntimeEnvironment 对坏 JSON 是 fail-loud（会抛），排在这之前的话
   // doctor 直接崩栈、16 项体检一项都不跑 —— 而诊断坏配置正是它存在的理由。
-  console.error(`⚠️  配置文件解析失败：${loaded.error}`);
+  console.error(bi(`⚠️  配置文件解析失败：${loaded.error}`, `⚠️  Could not parse the config file: ${loaded.error}`));
 } else if (loaded.source !== 'none') {
-  console.log(`已加载: ${loaded.path}`);
+  console.log(bi(`已加载: ${loaded.path}`, `Loaded: ${loaded.path}`));
 }
 try {
   loadRuntimeEnvironment(process.env, envArg ? { envFile } : { dir: HERE, quiet: true });
 } catch (err) {
-  console.error(`⚠️  配置加载失败，后续检查基于不完整的环境：${err?.message || err}`);
+  console.error(bi(`⚠️  配置加载失败，后续检查基于不完整的环境：${err?.message || err}`, `⚠️  Config load failed; checks below run on an incomplete environment: ${err?.message || err}`));
 }
 
 // WS-011：统一 effective config 上下文。旧实现 --env 只影响 dotenv 加载（改 process.env），D6/D7/--fix 仍硬读

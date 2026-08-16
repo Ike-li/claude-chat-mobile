@@ -436,7 +436,7 @@ const USAGE = [
 
 export function runConfigCommand(args, { dir = ROOT, ...io } = {}) {
   const { command, positionals, assignments, flags = {}, unknownFlags = [] } = args;
-  if (unknownFlags.length) return { ok: false, problems: [`无法识别的参数：${unknownFlags.join(' ')}`, USAGE] };
+  if (unknownFlags.length) return { ok: false, problems: [`无法识别的参数：${unknownFlags.join(' ')}`], usage: USAGE };
 
   try {
     switch (command) {
@@ -447,7 +447,7 @@ export function runConfigCommand(args, { dir = ROOT, ...io } = {}) {
       case 'migrate': return cmdMigrate(dir, flags, io);
       case 'check': return cmdCheck(dir);
       case 'schema': return cmdSchema();
-      default: return { ok: false, problems: [command ? `未知命令：${command}` : '缺少命令', USAGE] };
+      default: return { ok: false, problems: [command ? `未知命令：${command}` : '缺少命令'], usage: USAGE };
     }
   } catch (err) {
     return { ok: false, problems: [String(err?.message || err)] };
@@ -468,6 +468,7 @@ function main() {
   for (const m of result.messages ?? []) console.log(m);
   for (const w of result.warnings ?? []) console.warn(`⚠️  ${w}`);
   for (const p of result.problems ?? []) console.error(`✗ ${p}`);
+  if (result.usage) console.error(`\n${result.usage}`);
   process.exit(result.ok ? 0 : 1);
 }
 
