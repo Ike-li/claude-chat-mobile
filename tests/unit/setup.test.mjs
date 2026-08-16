@@ -141,3 +141,57 @@ test('resolveSetupPlan: 交互模式下已给的参数直接生效、不再问',
   assert.equal(plan.workDir, '/tmp/w');
   assert.equal(plan.hooks, 'off');
 });
+
+// ── 桌面控制台的装机选项 ────────────────────────────────────────────────────
+//
+// 用户装完 CLI 才知道有个桌面端、还得自己去翻文档找 `npm run app:build` —— 装机时问一句
+// 更自然。与 hooks 同一心智：**默认不装**（它要跑 swiftc、可能要用户先装 CLT），
+// 且非交互模式必须显式给值，不猜。
+test.describe('--desktop：桌面控制台', () => {
+  test('解析 on / off', () => {
+    assert.equal(parseSetupArgs(['--desktop=on']).desktop, 'on');
+    assert.equal(parseSetupArgs(['--desktop', 'off']).desktop, 'off');
+    assert.equal(parseSetupArgs([]).desktop, undefined, '不给就是待询问');
+  });
+
+  test('取值非法时拒绝 —— 同 --hooks，不猜用户意图', () => {
+    const r = resolveSetupPlan({ args: parseSetupArgs(['--yes', '--work-dir=/x', '--desktop=yes']) });
+    assert.ok(r.refuse);
+    assert.equal(r.refuse.code, 'invalid_desktop');
+  });
+
+  test('非交互模式默认不装 —— 它要跑 swiftc，不该擅自做', () => {
+    const r = resolveSetupPlan({ args: parseSetupArgs(['--yes', '--work-dir=/x']) });
+    assert.equal(r.desktop, 'off');
+  });
+
+  test('非交互显式 on 才装', () => {
+    const r = resolveSetupPlan({ args: parseSetupArgs(['--yes', '--work-dir=/x', '--desktop=on']) });
+    assert.equal(r.desktop, 'on');
+  });
+
+  // 非 macOS 上没有桌面端可装。静默忽略会让用户以为装上了，明确拒绝才有信息量 ——
+  // 同 src/ops/log-terminal.js 那条「返回 reason 而不是假装成功」。
+  test('非 macOS 上显式 --desktop=on 被拒绝并说明原因', () => {
+    const r = resolveSetupPlan({
+      args: parseSetupArgs(['--yes', '--work-dir=/x', '--desktop=on']),
+      platform: 'linux',
+    });
+    assert.ok(r.refuse);
+    assert.equal(r.refuse.code, 'desktop_unsupported');
+  });
+
+  test('非 macOS 上不给 --desktop 则正常走完，不报错', () => {
+    const r = resolveSetupPlan({
+      args: parseSetupArgs(['--yes', '--work-dir=/x']),
+      platform: 'linux',
+    });
+    assert.equal(r.refuse, undefined);
+    assert.equal(r.desktop, 'off');
+  });
+
+  test('交互模式不预设，留 undefined 待询问', () => {
+    const r = resolveSetupPlan({ args: parseSetupArgs([]) });
+    assert.equal(r.desktop, undefined);
+  });
+});

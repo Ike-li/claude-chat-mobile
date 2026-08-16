@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/setup.js —— 一键配置向导：生成 .env（AUTH_TOKEN + WORK_DIR），零依赖。
 // 用法: node scripts/setup.js [--config <path>|--env <path>]                        # 交互向导（人用）
-//       node scripts/setup.js --yes --work-dir=<path> [--hooks=on|off] [--force]  # 非交互（编程 agent 用）
+//       node scripts/setup.js --yes --work-dir=<path> [--hooks=on|off] [--desktop=on|off] [--force]  # 非交互（编程 agent 用）
 //   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN,
 //   否则只绑 127.0.0.1、手机连不上」——向导默认帮你生成。
 //   公网固定部署（Cloudflare Access 2FA / 隧道 / 常驻）不在向导内，见 docs/deployment.md。
@@ -64,7 +64,7 @@ export function detectLang(env = process.env) {
 // 参数解析。未知参数不静默忽略而是收集起来由上层拒绝——`--workdir=` 这种少一个连字符的 typo
 // 若被忽略，WORK_DIR 就会悄悄回落到 $HOME，正是本模式要堵的那个洞。
 export function parseSetupArgs(argv = []) {
-  const out = { envPath: undefined, configPath: undefined, yes: false, workDir: undefined, hooks: undefined, force: false, unknown: [] };
+  const out = { envPath: undefined, configPath: undefined, yes: false, workDir: undefined, hooks: undefined, desktop: undefined, force: false, unknown: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const eq = arg.indexOf('=');
@@ -75,6 +75,7 @@ export function parseSetupArgs(argv = []) {
     else if (name === '--env') out.envPath = value();
     else if (name === '--work-dir') out.workDir = value();
     else if (name === '--hooks') out.hooks = value();
+    else if (name === '--desktop') out.desktop = value();
     else if (name === '--yes' || name === '-y') out.yes = true;
     else if (name === '--force') out.force = true;
     else out.unknown.push(arg);
@@ -84,7 +85,7 @@ export function parseSetupArgs(argv = []) {
 
 // 把参数 + 磁盘现状（.env 是否已存在）解析成一份可执行计划，或一条拒绝理由。
 // 交互模式下未给的项留 undefined = 「待询问」；非交互模式下必须全部落定。
-export function resolveSetupPlan({ args, envExists = false } = {}) {
+export function resolveSetupPlan({ args, envExists = false, platform = process.platform } = {}) {
   const mode = args.yes ? 'noninteractive' : 'interactive';
   const refuse = (code, detail) => ({ mode, refuse: { code, detail } });
 
@@ -92,13 +93,22 @@ export function resolveSetupPlan({ args, envExists = false } = {}) {
   if (args.hooks !== undefined && args.hooks !== 'on' && args.hooks !== 'off') {
     return refuse('invalid_hooks', String(args.hooks));
   }
+  if (args.desktop !== undefined && args.desktop !== 'on' && args.desktop !== 'off') {
+    return refuse('invalid_desktop', String(args.desktop));
+  }
+  // 桌面控制台只有 macOS 有。静默忽略会让用户以为装上了 —— 明确拒绝才有信息量，
+  // 同 src/ops/log-terminal.js 那条「返回 reason 而不是假装成功」。
+  if (args.desktop === 'on' && platform !== 'darwin') {
+    return refuse('desktop_unsupported', platform);
+  }
   // 两种格式互斥。挑一个赢的话，用户会拿到一个自己没要求的格式，而两个路径写的是不同文件 ——
   // 那正是「读写不同源」类问题的种子。
   if (args.configPath !== undefined && args.envPath !== undefined) return refuse('both_formats');
-  if (!args.yes) return { mode, workDir: args.workDir, hooks: args.hooks };
+  if (!args.yes) return { mode, workDir: args.workDir, hooks: args.hooks, desktop: args.desktop };
   if (!args.workDir) return refuse('work_dir_required');
   if (envExists && !args.force) return refuse('env_exists');
-  return { mode, workDir: args.workDir, hooks: args.hooks ?? 'off' };
+  // 默认不装：它要跑 swiftc（可能还要用户先 xcode-select --install），与 hooks 同一心智。
+  return { mode, workDir: args.workDir, hooks: args.hooks ?? 'off', desktop: args.desktop ?? 'off' };
 }
 
 // 交互壳的双语文案（纯文本片段，颜色在 main 里组装）。
@@ -122,11 +132,18 @@ export const MESSAGES = {
     hooksInstalling: '正在安装并验证…',
     hooksSkipped: '已跳过。随时可跑 npm run hooks:install 补装。',
     hooksFailed: '安装未成功（见上方输出）。不影响其余配置；稍后可跑 npm run hooks:install 重试。',
+    desktopPrompt: '编译 macOS 桌面控制台? 菜单栏里看服务状态、改配置、看日志，不用开终端。'
+      + '需要 Xcode Command Line Tools（不是完整 Xcode，装过 git 的多半已经有）[y/N] ',
+    desktopBuilding: '正在编译桌面 app…',
+    desktopFailed: '编译未成功（见上方输出）。不影响其余配置；装好 Command Line Tools'
+      + '（xcode-select --install）后跑 npm run app:build 重试。',
     usage: '用法: node scripts/setup.js [--config <path>|--env <path>]\n'
-      + '      node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--force] [--env <path>]',
+      + '      node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--desktop=on|off] [--force] [--env <path>]',
     refuse: {
       unknown_flag: d => `无法识别的参数：${d}`,
       invalid_hooks: d => `--hooks 只接受 on 或 off，收到：${d}`,
+      invalid_desktop: d => `--desktop 只接受 on 或 off，收到：${d}`,
+      desktop_unsupported: d => `桌面控制台只有 macOS 有（当前平台：${d}）。服务器上用手机端与命令行，功能是齐的。`,
       work_dir_required: () => '非交互模式必须显式给出 --work-dir=<绝对路径>。'
         + '这里不会静默回落到 $HOME——那等于把整个家目录交给 agent 读写。',
       both_formats: () => '--config 与 --env 只能给一个：前者写 ccm.config.json，后者写旧格式 .env。',
@@ -154,11 +171,18 @@ export const MESSAGES = {
     hooksInstalling: 'Installing and verifying…',
     hooksSkipped: 'Skipped. Run npm run hooks:install anytime.',
     hooksFailed: 'Install did not complete (see output above). Your other config is fine; retry with npm run hooks:install.',
+    desktopPrompt: 'Build the macOS desktop console? Service state, config and logs from the menu bar, '
+      + 'no terminal needed. Requires Xcode Command Line Tools (not full Xcode; if you have git you likely have them) [y/N] ',
+    desktopBuilding: 'Building the desktop app…',
+    desktopFailed: 'Build did not complete (see output above). Your other config is fine; install the Command Line '
+      + 'Tools (xcode-select --install) and retry with npm run app:build.',
     usage: 'usage: node scripts/setup.js [--config <path>|--env <path>]\n'
-      + '       node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--force] [--env <path>]',
+      + '       node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--desktop=on|off] [--force] [--env <path>]',
     refuse: {
       unknown_flag: d => `Unrecognized argument: ${d}`,
       invalid_hooks: d => `--hooks accepts only on or off, got: ${d}`,
+      invalid_desktop: d => `--desktop accepts only on or off, got: ${d}`,
+      desktop_unsupported: d => `The desktop console is macOS-only (this platform: ${d}). On a server, the phone UI and CLI cover everything.`,
       work_dir_required: () => 'Non-interactive mode requires an explicit --work-dir=<absolute-path>. '
         + 'It will not silently fall back to $HOME — that would hand your entire home directory to the agent.',
       both_formats: () => 'Pass either --config or --env, not both: the former writes ccm.config.json, the latter legacy .env.',
@@ -217,6 +241,14 @@ function installHooksBridge(t) {
   if (r.status !== 0) console.log(c.dim(t.hooksFailed));
 }
 
+// 桌面控制台。失败不阻断装机 —— 它是可选增强，而最可能的失败原因（没装 Command Line
+// Tools）用户看提示自己就能解决。同 installHooksBridge 的处理。
+function buildDesktopApp(t) {
+  console.log(c.dim(t.desktopBuilding));
+  const r = spawnSync(process.execPath, [join(HERE, 'scripts', 'app-build.js')], { stdio: 'inherit' });
+  if (r.status !== 0) console.log(c.dim(t.desktopFailed));
+}
+
 function printNextSteps(t) {
   console.log(c.bold(`\n${t.nextSteps}`));
   console.log(`  ${c.accent('node scripts/doctor.js')}   ${c.dim(t.stepDoctor)}`);
@@ -243,6 +275,17 @@ async function runInteractive({ plan, envPath, templatePath, format, t }) {
 
     // CLI hooks 桥：默认装（终端直跑的会话唯有装了它才能推到手机——轮询只能在你已经打开
     // app 时追平镜像，永远不会主动叫你）。默认 Y 但必须问：它写的是用户全局 ~/.claude/settings.json。
+    // 桌面控制台：只在 macOS 上问。默认「不装」—— 它要跑 swiftc，而很多人没装 CLT。
+    let desktop = plan.desktop;
+    if (desktop === undefined) {
+      if (process.platform !== 'darwin') {
+        desktop = 'off';
+      } else {
+        const ans = (await rl.question(`\n${t.desktopPrompt}`)).trim().toLowerCase();
+        desktop = ans === 'y' || ans === 'yes' ? 'on' : 'off';
+      }
+    }
+
     let hooks = plan.hooks;
     if (hooks === undefined) {
       const ans = (await rl.question(`\n${t.hooksPrompt}`)).trim().toLowerCase();
@@ -261,6 +304,7 @@ function runNonInteractive({ plan, envPath, templatePath, format, t }) {
   writeSetupFile({ envPath, templatePath, workDir: plan.workDir, format, t });
   if (plan.hooks === 'on') installHooksBridge(t);
   else console.log(c.dim(t.hooksSkipped));
+  if (plan.desktop === 'on') buildDesktopApp(t);
   printNextSteps(t);
 }
 

@@ -60,6 +60,8 @@ npm run setup
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
 2. 询问 `WORK_DIR`。请选择明确的项目目录，不要把整个家目录作为方便的默认范围。
 3. 询问是否安装 CLI hooks bridge。默认安装，但只有你确认后才会写 `~/.claude/settings.json`。
+4. macOS 上还会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
+   Xcode Command Line Tools。
 
 如果配置文件已存在，向导默认不覆盖。
 
@@ -278,9 +280,18 @@ npm run hooks:uninstall
 
 只在 macOS 上可用，且完全可选 —— 手机端与命令行已经覆盖全部功能。
 
+装机向导会问一句要不要编译它；也可以随时自己来：
+
 ```bash
-npm run app:build      # swiftc 编译出 desktop/build/CCM.app（产物不入库）
+npm run app:build      # 编译出 desktop/build/CCM.app（约 420K，产物不入库）
 open desktop/build/CCM.app
+```
+
+**只需要 Xcode Command Line Tools，不是完整的 Xcode**（前者约 1–2GB，后者 12GB+）。
+装过 git / 用过 `cc` 的机器多半已经有了；没有的话：
+
+```bash
+xcode-select --install
 ```
 
 菜单栏图标显示服务状态。**桌面端自包含，不需要开终端** —— 安装、体检、看日志、改配置
@@ -297,6 +308,15 @@ open desktop/build/CCM.app
 
 勾「开机自启（菜单栏）」会装一个 LaunchAgent。这是 macOS 平台的实现方式，
 不是产品要求你用的部署方案 —— 服务器上用 systemd / pm2 / docker 都行。
+
+### 为什么不直接发一个编译好的 app
+
+自己编译出来的产物**没有 quarantine 属性**，双击就能开。而从网页下载的 app 会被系统打上
+quarantine，第一次打开必然撞 Gatekeeper 的「无法验证开发者」——要根治得买 Apple 开发者
+账号做公证（每年 $99），对一个自托管工具不成比例。让你自己 `xattr -d` 绕过去，等于教你
+关掉一层安全机制。
+
+编译还有个附带好处：产物与你手上这份源码严格同版本，不需要相信任何人打包的二进制。
 
 ### 菜单栏图标被刘海挡住了怎么办
 
