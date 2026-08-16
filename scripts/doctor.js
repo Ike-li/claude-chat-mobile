@@ -22,12 +22,12 @@
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
-import { readConfigFileRaw, readConfigFileValues } from '../src/ops/config-file.js';
+import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../src/ops/config-file.js';
 import { loadRuntimeEnvironment } from '../src/server/config.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import {
@@ -292,32 +292,54 @@ function checkHooksBridge() {
   (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
-// D7: 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
+// D7: 网关环境一致性（配置文件里若有 ANTHROPIC_* 提示已被剥除）
+//
+// **两种格式都要查。** 这一项的全部价值是告诉用户「你写这儿没用」——只查 .env 的话，
+// 新默认格式下它归零：写进 ccm.config.json 的 ANTHROPIC_* 照样被剥除，而 doctor 会对着
+// 一份已经被忽略的 .env 报「✓ 不含 ANTHROPIC_*」。配置层确实会 warn，但 doctor 传的是 quiet。
 function checkAnthropicEnv() {
-  const envPath = EFFECTIVE.envFile; // WS-011：读被诊断的 .env（--env 指定），非硬编码仓库 HERE/.env
-  if (!existsSync(envPath)) {
-    ok(bi('ANTHROPIC_* 环境', 'ANTHROPIC_* environment'), bi('.env 不存在（可选）', '.env not present (optional)'));
+  const NAME = bi('ANTHROPIC_* 环境', 'ANTHROPIC_* environment');
+  // --env 指定时只查那一份（WS-011：诊断谁就查谁）；否则两份都查。
+  const targets = envArg
+    ? [EFFECTIVE.envFile]
+    : [join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].filter(existsSync);
+
+  if (!targets.length || (envArg && !existsSync(EFFECTIVE.envFile))) {
+    ok(NAME, bi('未找到配置文件（可选）', 'No config file found (optional)'));
     return;
   }
-  try {
-    const raw = readFileSync(envPath, 'utf8');
-    const lines = raw.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'));
-    const hasAnthropicKeys = lines.some(l => /^ANTHROPIC_[A-Z_]+=/.test(l.trim()));
-    if (hasAnthropicKeys) {
-      warn(bi('ANTHROPIC_* 环境', 'ANTHROPIC_* environment'), bi(
-        '.env 含 ANTHROPIC_* 变量 → 启动期会被剥除。\n'
-        + '  模型/网关/凭据只能在启动 shell 里 export，不经配置文件设置（终端等价性）。\n'
-        + '  若 web 端模型列表与终端不一致，检查启动 shell 的 ANTHROPIC_* 环境变量。',
-        '.env contains ANTHROPIC_* variables → they are stripped at startup.\n'
-        + '  Model / gateway / credentials must be exported in the launching shell, not set in the config file (terminal equivalence).\n'
-        + "  If the web model list differs from your terminal, check the launching shell's ANTHROPIC_* variables."));
-    } else {
-      ok(bi('ANTHROPIC_* 环境', 'ANTHROPIC_* environment'), bi('.env 不含 ANTHROPIC_* 变量（正确；网关配置应从 shell export）', '.env has no ANTHROPIC_* variables (correct: gateway config must come from the shell)'));
+
+  const offenders = [];
+  for (const file of targets) {
+    try {
+      const raw = readFileSync(file, 'utf8');
+      const hit = file.endsWith('.json')
+        // JSON 侧比对键名，不用行正则：格式化后一个键可能跨行
+        ? Object.keys(JSON.parse(raw)).some(k => /^ANTHROPIC_[A-Z_]+$/.test(k))
+        : raw.split('\n').filter(l => l.trim() && !l.trim().startsWith('#'))
+          .some(l => /^ANTHROPIC_[A-Z_]+=/.test(l.trim()));
+      if (hit) offenders.push(basename(file));
+    } catch (err) {
+      warn(NAME, bi(`${basename(file)} 读取失败: ${err.message}`, `Could not read ${basename(file)}: ${err.message}`));
+      return;
     }
-  } catch (err) {
-    warn(bi('ANTHROPIC_* 环境', 'ANTHROPIC_* environment'), bi(`.env 读取失败: ${err.message}`, `Could not read .env: ${err.message}`));
   }
+
+  if (offenders.length) {
+    warn(NAME, bi(
+      `${offenders.join(' / ')} 含 ANTHROPIC_* 变量 → 启动期会被剥除。\n`
+      + '  模型/网关/凭据只能在启动 shell 里 export，不经配置文件设置（终端等价性）。\n'
+      + '  若 web 端模型列表与终端不一致，检查启动 shell 的 ANTHROPIC_* 环境变量。',
+      `${offenders.join(' / ')} contains ANTHROPIC_* variables → they are stripped at startup.\n`
+      + '  Model / gateway / credentials must be exported in the launching shell, not set in a config file (terminal equivalence).\n'
+      + "  If the web model list differs from your terminal, check the launching shell's ANTHROPIC_* variables."));
+    return;
+  }
+  ok(NAME, bi(
+    `${targets.map(f => basename(f)).join(' / ')} 不含 ANTHROPIC_* 变量（正确；网关配置应从 shell export）`,
+    `${targets.map(f => basename(f)).join(' / ')} has no ANTHROPIC_* variables (correct: gateway config must come from the shell)`));
 }
+
 
 // D8: 配置文件权限（.env, data/*.json）。单一事实源列表：checkConfigPermissions 与 fixConfigFiles
 // 共用 CONFIG_FILE_NAMES，防止两处各自维护的清单再次漏同步（trusted/pending-devices.json、

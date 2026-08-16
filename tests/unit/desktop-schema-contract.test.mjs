@@ -62,3 +62,66 @@ test('分组字段对齐（groups 的 id/label/items）', () => {
     assert.ok(declared.has(key), `ConfigGroup 缺字段 ${key}`);
   }
 });
+
+// ★★ 名字对上了，类型也得对上。
+//
+// 缺陷实录（子代理变异验证）：把 `let min: Int?` 改成 `String?`，上面两条断言全绿 ——
+// 而 JSONDecoder 对 typeMismatch 是**整份 abort**（不是"这一个字段变 nil"），
+// 配合 ccm-config-window.swift 的 `try?` 就是配置窗口整个变成「config.js 输出无法解析」。
+//
+// CCMCore.swift 头注那句「除 schemaVersion 外全部可选…宁可少渲染一行」对**缺失/null** 成立，
+// 对**类型变化**不成立。所以 JS 侧任何一个 min/max/default/unit 的类型调整都会炸窗口。
+test('schema 下发值的类型与 Swift 声明的类型一致', async () => {
+  const { buildEnvView } = await import('../../src/ops/env-schema.js');
+  const src = readSwift('CCMCore.swift');
+
+  // Swift 类型 → 期望的 JS typeof。复合类型统一按 object 比。
+  const EXPECT = {
+    String: 'string', Int: 'number', Bool: 'boolean',
+    LocalizedText: 'object', MaskedSecret: 'object', ToggleLiterals: 'object',
+  };
+
+  const block = /struct ConfigItem: Decodable \{([\s\S]*?)\n\}/.exec(src);
+  const declared = new Map(
+    [...block[1].matchAll(/^\s*let\s+`?(\w+)`?\s*:\s*(\w+)\??/gm)].map(m => [m[1], m[2]]),
+  );
+
+  // 用一份**含值**的视图：只有真下发了才比得了类型
+  const items = buildEnvView({ PORT: '3000', AUTH_TOKEN: 'x', WEB_STATUSLINE: 'off' })
+    .groups.flatMap(g => g.items);
+
+  const bad = [];
+  for (const item of items) {
+    for (const [key, value] of Object.entries(item)) {
+      // undefined / null 不进 JSON（JSON.stringify 直接丢弃这个键），Swift 那边解成 nil ——
+      // 而全部字段都是可选类型，这正是设计好的。只有**真下发了但类型不对**才会 abort 解码。
+      if (value === undefined || value === null) continue;
+      const swiftType = declared.get(key);
+      if (!swiftType) continue;            // 漏字段由上一条断言负责
+      const want = EXPECT[swiftType];
+      if (!want) continue;                 // 没见过的 Swift 类型，不猜
+      const got = Array.isArray(value) ? 'array' : typeof value;
+      if (got !== want) bad.push(`${item.key}.${key}: Swift 声明 ${swiftType}(→${want}) 但下发 ${got}`);
+    }
+  }
+  assert.deepEqual(bad, [], `类型不匹配会让 JSONDecoder 整份 abort、配置窗口空白：\n${bad.join('\n')}`);
+});
+
+// ★ 顶层 wire key 也要钉住。
+//
+// 上面第一条比的是**两个常量的值**，从不看 cmdSchema 实际输出的键名。实测把输出里的
+// `schemaVersion` 改名后：Swift 解出 nil → isCompatible=false → 窗口显示「配置格式不兼容」，
+// 而两条断言仍全绿 —— 正是那条断言开头声称要防的症状。
+test('config schema 的输出里确实有 schemaVersion 这个键', async () => {
+  const { runConfigCommand } = await import('../../scripts/config.js');
+  const r = runConfigCommand(
+    { command: 'schema', positionals: [], flags: {}, assignments: [] },
+    { dir: '/tmp' },
+  );
+  assert.equal(r.ok, true);
+  assert.ok(
+    Object.hasOwn(r.data, 'schemaVersion'),
+    'Swift 的 ConfigSchema 按这个键名解码；改名会让窗口显示「配置格式不兼容」而门禁无感',
+  );
+  assert.equal(typeof r.data.schemaVersion, 'number');
+});

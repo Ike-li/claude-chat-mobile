@@ -140,11 +140,18 @@ const configPathOf = (dir) => join(dir, CONFIG_FILE_NAME);
 function readStructured(dir) {
   const p = configPathOf(dir);
   if (!existsSync(p)) return null;
+  let parsed;
   try {
-    return JSON.parse(readFileSync(p, 'utf8'));
+    parsed = JSON.parse(readFileSync(p, 'utf8'));
   } catch (err) {
     throw new Error(`${CONFIG_FILE_NAME} 解析失败：${err.message}`, { cause: err });
   }
+  // 与 loadConfigSources 同一道检查。少了它，顶层是数组时 set 会写出
+  // {"0":1,"1":2,"$schemaVersion":1,...} —— 读路径 fail-loud、写路径静默捣碎。
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${CONFIG_FILE_NAME} 顶层必须是一个 JSON 对象`);
+  }
+  return parsed;
 }
 
 function writeStructured(dir, config, { write = writeOwnerOnlyFile } = {}) {
@@ -225,6 +232,15 @@ function cmdGet(dir, positionals, flags) {
 
   const structured = source === 'config' ? (readStructured(dir) ?? {}) : values;
   const wanted = positionals.length ? positionals : Object.keys(structured).filter(k => k !== '$schemaVersion');
+
+  // 显式点名了一个不认识的 key 时报错。此前打印 `PROT=` 然后退 0 ——
+  // 与 check 里「拼错的 key 是静默失效」的立场正好相反，而 get 恰恰是用来确认值的。
+  if (positionals.length) {
+    const unknown = wanted.filter(k => !schemaDef(k) && !PASSTHROUGH_KEYS.includes(k));
+    if (unknown.length) {
+      return { ok: false, problems: unknown.map(k => `不认识的配置项 ${k}`) };
+    }
+  }
 
   const rows = wanted.map(key => ({
     key,
@@ -461,7 +477,9 @@ function main() {
   const result = runConfigCommand(args);
 
   if (args.flags.json) {
-    console.log(JSON.stringify(result.data ?? result, null, 2));
+    // 形状统一：**永远**带 ok。此前 get/schema 直接吐 data（无 ok 字段），
+    // 而其余五个命令吐整个 result（有 ok）——按 .ok 判断的消费方会把成功当失败。
+    console.log(JSON.stringify({ ok: result.ok, ...(result.data ?? {}), ...(result.data ? {} : result) }, null, 2));
     process.exit(result.ok ? 0 : 1);
   }
 

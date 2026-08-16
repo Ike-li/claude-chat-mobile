@@ -44,19 +44,27 @@ final class ConfigClient {
 
     /// 当前值。**与 schema 分两次取**：schema 是表单描述（不含任何值），
     /// get 才是配置快照且 secret 已脱敏。合成一次请求会让 secret 明文有机会混进表单描述。
-    func currentValues() -> [String: String] {
-        guard let node = env.node, let repo = env.repo,
-              let r = runSync(node, configGetArgs(repo: repo), cwd: repo, timeout: 8),
-              r.status == 0,
-              let data = r.stdout.data(using: .utf8),
+    func currentValues() -> Probe<[String: String]> {
+        guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
+        guard let r = runSync(node, configGetArgs(repo: repo), cwd: repo, timeout: 8) else {
+            return .failed("config.js 无响应")
+        }
+        guard r.status == 0 else {
+            // 原样转发 L1 的话（坏 JSON 在这里就是「ccm.config.json 解析失败：…」）——
+            // 它比这里能编的任何一句都准确，而且直接告诉用户该去修哪个文件。
+            let msg = [r.stdout, r.stderr].map(firstLine).first { !$0.isEmpty } ?? ""
+            return .failed(msg.isEmpty ? "读取配置失败（退出码 \(r.status)）" : msg)
+        }
+        guard let data = r.stdout.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let rows = obj["rows"] as? [[String: Any]] else { return [:] }
-
+              let rows = obj["rows"] as? [[String: Any]] else {
+            return .failed("config.js 输出无法解析")
+        }
         var out: [String: String] = [:]
         for row in rows {
             if let k = row["key"] as? String, let v = row["value"] as? String { out[k] = v }
         }
-        return out
+        return .ok(out)
     }
 
     /// 保存一批改动。错误文案原样取自 L1 —— 那边的校验信息比这里能编的任何一句都准确。
@@ -158,9 +166,22 @@ final class ConfigWindowController: NSWindowController {
         }
     }
 
-    private func render(_ probe: Probe<ConfigSchema>, _ values: [String: String]) {
+    private func render(_ probe: Probe<ConfigSchema>, _ valuesProbe: Probe<[String: String]>) {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         controls.removeAll()
+
+        // 值读不出来时**不能**渲染一张空表单：那看起来像「所有项都没配过」，
+        // 用户一保存就会把真实配置覆盖成一批空值。
+        var values: [String: String] = [:]
+        switch valuesProbe {
+        case .failed(let why):
+            let msg = "读不到当前配置：\(why)"
+            statusLabel.stringValue = msg
+            stack.addArrangedSubview(NSTextField(labelWithString: msg))
+            return
+        case .ok(let v):
+            values = v
+        }
         loadedValues = values
 
         switch probe {
@@ -372,7 +393,8 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func resolvePath() {
-        let configured = ConfigClient(env: env).currentValues()["LOG_FILE"]
+        var configured: String?
+        if case .ok(let v) = ConfigClient(env: env).currentValues() { configured = v["LOG_FILE"] }
         logPath = resolveLogPath(configured: configured, home: NSHomeDirectory())
         pathLabel.stringValue = logPath ?? "未配置日志文件（配置里设 LOG_FILE，或用常驻服务的默认位置）"
     }
