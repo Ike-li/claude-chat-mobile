@@ -55,6 +55,11 @@ test.before(async () => {
       // 显式关 DEV_MODE：机主 .env 里 DEV_MODE=1(dogfooding)会被子进程 dotenv 读到,
       // 致 dev:restart 测试真的触发重启、裸进程直接死→后续测试级联崩。钉 '0' 隔离之。
       DEV_MODE: '0',
+      // 同理钉掉 systemd 监管信号：GitHub Actions runner 由 systemd 启动，INVOCATION_ID/
+      // JOURNAL_STREAM 会层层继承进被测 server，isSupervised() 误判「被监管」→ dev:restart
+      // 放行，「未设 DEV_MODE → 拒绝」用例在 CI Linux 上红。空串在 isSupervised 的
+      // trim().length>0 判据下必为否，与本地行为对齐。
+      INVOCATION_ID: '', JOURNAL_STREAM: '',
       // 同 _spawn-server：禁桌面日志窗，防集成测堆 Terminal.app（机主 .env 常 LOG_TERMINAL=on）。
       LOG_TERMINAL: 'off',
       HOME: process.env.HOME, PATH: process.env.PATH },
