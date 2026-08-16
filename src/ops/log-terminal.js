@@ -165,13 +165,3 @@ export function stopLogTerminalSync({ dataDir, log = console } = {}) {
   }
 }
 
-// 停止/重启：关掉自己开的那个窗口。只认状态文件里记的 id——绝不去猜、更不碰用户自己的窗口。
-export async function stopLogTerminal({ dataDir, log = console } = {}) {
-  const statePath = logTerminalStatePath(dataDir);
-  const state = readLogTerminalState(statePath);
-  if (!state) return false;
-  clearLogTerminalState(statePath);
-  await runOsascript(buildCloseScript(state.windowId));
-  log.log?.('[log-terminal] 已关闭日志窗口');
-  return true;
-}

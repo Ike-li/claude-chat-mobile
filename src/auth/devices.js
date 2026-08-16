@@ -56,10 +56,6 @@ function writeTrustedSet(set) {
   }
 }
 
-export function saveTrustedDevices() {
-  return writeTrustedSet(trustedDevices);
-}
-
 // 纯函数（BE-011）：在【副本】上应用信任集合变更，persist(副本) 成功才返回新集合、失败或抛错返回 null。
 // 调用方仅在非 null 时把新集合提交到内存并报告成功；null 时保持原状 + 报告失败，绝不谎报吊销/批准成功。
 export function persistTrustedChange(currentSet, mutate, persist) {

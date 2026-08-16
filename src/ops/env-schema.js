@@ -237,10 +237,6 @@ export const WRITABLE_KEYS = Object.freeze(
   Object.entries(ENV_SCHEMA).filter(([, d]) => d.kind !== 'readonly').map(([k]) => k)
 );
 
-export function isWritableKey(key) {
-  return WRITABLE_KEYS.includes(key);
-}
-
 // ── 校验 ────────────────────────────────────────────────────────────────
 //
 // 立场是**全或无**：任何一项 error 就整体拒写。部分生效的配置比不写更糟 —— 用户以为改好了，
