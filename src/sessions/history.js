@@ -17,7 +17,7 @@ import { encodeProjectDir } from '../shared/project-dir.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
-export let __sdkListSessionsForTest;
+let __sdkListSessionsForTest;
 export function __setSdkListSessionsForTest(fn) { __sdkListSessionsForTest = fn; }
 
 // CLI transcript 根目录，与 CLI /resume 同源。硬编码 ~/.claude/projects：这是 CLI 的固定约定，且

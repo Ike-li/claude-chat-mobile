@@ -121,7 +121,7 @@ export function readCachedCtxWindow(agent, model) {
   return c.maxTokens;
 }
 
-export function cacheCtxWindow(agent, model, maxTokens) {
+function cacheCtxWindow(agent, model, maxTokens) {
   if (!agent || !Number.isFinite(maxTokens) || maxTokens <= 0) return;
   agent.ctxWindowCache = { model: model || '', maxTokens };
 }

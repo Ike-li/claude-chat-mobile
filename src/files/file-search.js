@@ -8,10 +8,10 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
 export const FILE_SEARCH_LIMIT = 50;
-export const FILE_SEARCH_MAX_CANDIDATES = 5000;
+const FILE_SEARCH_MAX_CANDIDATES = 5000;
 export const FILE_SEARCH_MAX_DEPTH = 6;
-export const FILE_SEARCH_CACHE_TTL_MS = 5_000;
-export const FILE_SEARCH_TIMEOUT_MS = 3_000;
+const FILE_SEARCH_CACHE_TTL_MS = 5_000;
+const FILE_SEARCH_TIMEOUT_MS = 3_000;
 
 const SKIP_DIR_NAMES = new Set(['node_modules', '.git', '.worktrees']);
 

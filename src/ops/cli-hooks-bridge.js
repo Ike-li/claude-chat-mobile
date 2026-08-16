@@ -29,7 +29,7 @@ import { join, resolve } from 'node:path';
 import { throttleNotify } from './notifications.js';
 
 export const CLI_HOOKS_SCHEMA_VERSION = 1;
-export const DEFAULT_CLI_HOOKS_ROOT = join(homedir(), '.claude', 'ccm', 'hooks-v1');
+const DEFAULT_CLI_HOOKS_ROOT = join(homedir(), '.claude', 'ccm', 'hooks-v1');
 export const DEFAULT_CLI_HOOKS_EVENTS_DIR = join(DEFAULT_CLI_HOOKS_ROOT, 'events');
 export const DEFAULT_CLI_HOOKS_ACKS_DIR = join(DEFAULT_CLI_HOOKS_ROOT, 'acks');
 // 陈旧事件阈值：合盖睡一夜再打开，攒下的事件既不该刷镜像（启动后首个 catchUpTick 本就全量重建）
@@ -37,10 +37,10 @@ export const DEFAULT_CLI_HOOKS_ACKS_DIR = join(DEFAULT_CLI_HOOKS_ROOT, 'acks');
 export const HOOK_EVENT_TTL_MS = 5 * 60_000;
 // 推送另设更严的年龄闸（server 侧决策用）：旧事件仍可触发刷新，但不补推通知。
 export const HOOK_PUSH_MAX_AGE_MS = 90_000;
-export const MAX_HOOK_EVENT_BYTES = 16 * 1024;
+const MAX_HOOK_EVENT_BYTES = 16 * 1024;
 // 目录容量上限：runner 写入前自清；server 单次 scan 处理上限（超出直接删，不留到下次）。
-export const HOOK_EVENTS_CAP = 256;
-export const HOOK_SCAN_MAX_FILES = 100;
+const HOOK_EVENTS_CAP = 256;
+const HOOK_SCAN_MAX_FILES = 100;
 // 安装回环验证用的 sessionId 前缀：server 见到只写 ack 回执，不推送、不刷镜像。
 export const HOOK_VERIFY_PREFIX = 'ccm-verify-';
 
@@ -326,7 +326,7 @@ export function readHooksInstallState({ home = homedir() } = {}) {
 // 节流类别：**必须**是 pending:false 的一次性类别，绝不能复用 'approval'/'input'——后两者被
 // throttleNotify 置 pending:true，靠 request_resolved 清除；hook 世界没有对应的"已处理"事件，
 // 复用会让该会话的后续推送被永久吞掉。
-export const HOOK_NOTIFY_CATEGORY = Object.freeze({
+const HOOK_NOTIFY_CATEGORY = Object.freeze({
   Stop: 'hook-finished',
   Notification: 'hook-attention',
 });
@@ -386,7 +386,7 @@ export function decideHookEventActions(events, {
   };
 }
 
-export function ackFilePath(dir, verifyId) {
+function ackFilePath(dir, verifyId) {
   const key = createHash('sha256').update(String(verifyId), 'utf8').digest('hex');
   return join(resolve(dir), `${key}.json`);
 }

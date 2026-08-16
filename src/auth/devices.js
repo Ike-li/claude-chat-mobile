@@ -84,7 +84,7 @@ export function loadPendingDevices() {
   }
 }
 
-export function savePendingDevices() {
+function savePendingDevices() {
   try {
     mkdirSync(dirname(PENDING_DEVICES_FILE), { recursive: true });
     writeOwnerOnlyFile(PENDING_DEVICES_FILE, JSON.stringify(pendingDevices, null, 2));

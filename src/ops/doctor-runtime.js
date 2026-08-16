@@ -54,7 +54,7 @@ export function countConfigPermProblems(rootDir, { platform = process.platform, 
 // managed-settings）只会有一个被更新，另一个继续基于陈旧视图出报告——而 doctor 的职责恰恰是
 // 告诉用户配置是否自洽。本次「模型体检丢了用户级 env」正是重复遍历的直接产物。
 // 容错：读/解析失败的源 json 为 null（比照 workdirs.js 的「坏配置不清空」），坏 JSON 不让体检崩。
-export function readSettingsChain({ home, workDirs = [] } = {}) {
+function readSettingsChain({ home, workDirs = [] } = {}) {
   const parse = (file) => {
     try {
       return JSON.parse(readFileSync(file, 'utf8'));

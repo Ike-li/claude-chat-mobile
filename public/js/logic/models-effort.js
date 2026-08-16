@@ -78,7 +78,7 @@ export function defaultResolvedModel(modelsList) {
 }
 
 /** 选中 value 对应的 wire；无则 '' */
-export function resolvedModelForValue(value, modelsList) {
+function resolvedModelForValue(value, modelsList) {
   if (value == null || value === '' || !Array.isArray(modelsList)) return '';
   const entry = modelsList.find(m => (typeof m === 'string' ? m : m?.value) === value);
   if (!entry || typeof entry === 'string') return '';

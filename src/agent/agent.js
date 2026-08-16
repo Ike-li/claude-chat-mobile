@@ -251,7 +251,7 @@ const LOCAL_CMD_TASK_PREFIX = 'localcmd:';
 const MESSAGE_USAGE_KEYS = Object.freeze([
   'input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens',
 ]);
-export function mergeMessageUsage(prev, next) {
+function mergeMessageUsage(prev, next) {
   if (!next || typeof next !== 'object') return prev && typeof prev === 'object' ? { ...prev } : null;
   const out = prev && typeof prev === 'object' ? { ...prev } : {};
   for (const k of MESSAGE_USAGE_KEYS) {

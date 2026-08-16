@@ -90,7 +90,7 @@ export function presentOnlineSendTransport(err, ack) {
 export const OUTBOX_MAX_ITEMS = 20;
 export const OUTBOX_STORAGE_KEY = 'ccm-outbox-v1';
 
-export function serializeOutboxItem(item) {
+function serializeOutboxItem(item) {
   if (!item || typeof item !== 'object') return null;
   const clientMessageId = typeof item.clientMessageId === 'string' ? item.clientMessageId : '';
   if (!clientMessageId) return null;

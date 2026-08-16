@@ -53,3 +53,10 @@ is not affiliated with, endorsed by, or sponsored by Anthropic. Nothing in the
 license grants any rights to use Anthropic's trademarks. Any use of the `claude`
 CLI or Anthropic's APIs through this program remains subject to Anthropic's own
 terms of service.
+
+================================================================================
+THIRD-PARTY NOTICES
+================================================================================
+
+Bundled third-party browser assets are listed with their licenses in
+public/vendor/THIRD-PARTY-NOTICES.md.

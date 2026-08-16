@@ -20,7 +20,7 @@
 // 字节 sha256 仍然有用，但只用于卸载 CAS（「这个文件还是不是我当初写下的那份」——那个问题字节
 // 相等才是正确判据）。两个哈希两个用途，绝不混用。
 
-export const MANIFEST_SCHEMA_VERSION = 1;
+const MANIFEST_SCHEMA_VERSION = 1;
 
 // 默认 label 前缀。机主既有的四个手工装 unit 用的就是 com.ccm.*，换前缀会一个都认不出来、
 // adopt 直接失效。

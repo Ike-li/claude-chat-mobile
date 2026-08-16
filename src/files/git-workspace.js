@@ -7,9 +7,9 @@ import { promisify } from 'node:util';
 
 export const MAX_GIT_ENTRIES = 500;
 export const MAX_GIT_DIFF_BYTES = 256 * 1024;
-export const GIT_STATUS_TIMEOUT_MS = 2_000;
-export const GIT_DIFF_TIMEOUT_MS = 3_000;
-export const GIT_MAX_BUFFER = 1 << 20; // 1MB status
+const GIT_STATUS_TIMEOUT_MS = 2_000;
+const GIT_DIFF_TIMEOUT_MS = 3_000;
+const GIT_MAX_BUFFER = 1 << 20; // 1MB status
 
 const defaultExecFile = promisify(execFileCb);
 

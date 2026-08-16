@@ -24,7 +24,7 @@ export function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'"'"'`)}'`;
 }
 
-export function appleScriptQuote(value) {
+function appleScriptQuote(value) {
   return `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }
 
@@ -87,7 +87,7 @@ export function buildCloseScript(windowId) {
   ].join('\n');
 }
 
-export function logTerminalStatePath(dataDir) {
+function logTerminalStatePath(dataDir) {
   return join(dataDir, 'log-terminal.json');
 }
 

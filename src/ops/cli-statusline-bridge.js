@@ -19,9 +19,9 @@ import {
 import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
 
-export const CLI_STATUSLINE_SCHEMA_VERSION = 1;
-export const MAX_CLI_STATUSLINE_SNAPSHOT_BYTES = 64 * 1024;
-export const DEFAULT_CLI_STATUSLINE_DIR = join(
+const CLI_STATUSLINE_SCHEMA_VERSION = 1;
+const MAX_CLI_STATUSLINE_SNAPSHOT_BYTES = 64 * 1024;
+const DEFAULT_CLI_STATUSLINE_DIR = join(
   homedir(), '.claude', 'ccm', 'statusline-v1', 'snapshots',
 );
 

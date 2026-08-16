@@ -1,6 +1,6 @@
 // 末参若是 function 则视为 socket.io ack（emit(event, payload, ack)）。SRV-NEW-005：handler 抛错时
 // 必须负 ack，否则前端 timeout/offline 队列会把请求当 in-flight 永久挂起。
-export function extractSocketAck(args) {
+function extractSocketAck(args) {
   if (!Array.isArray(args) || args.length === 0) return null;
   const last = args[args.length - 1];
   return typeof last === 'function' ? last : null;
