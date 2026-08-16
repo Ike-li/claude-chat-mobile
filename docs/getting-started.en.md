@@ -85,6 +85,10 @@ back to `.env`**, so existing deployments need no changes. If you specifically n
 
 Environment variables always beat the config file — `PORT=4000 npm start` overrides the file.
 
+Keys the project does not know about **are still passed through** (into `process.env`, which the claude
+subprocess inherits) — third-party variables like `HTTPS_PROXY` or `CLAUDE_CONFIG_DIR` work fine here.
+Startup logs one line per unregistered key, which also helps you spot a typo in a key name.
+
 ### Editing config from the command line
 
 With no GUI (server deployments), every setting is readable and writable from the shell:

@@ -135,9 +135,13 @@ export function diffReloadKinds(prev = {}, next = {}) {
 export function projectToEnv(key, value) {
   const def = schemaDef(key);
   if (!def) {
-    // passthrough 项没有 schema 声明，按字符串原样投影（空串仍折叠成 null）。
+    // passthrough 与未登记的 key 都按字符串原样投影（空串仍折叠成 null）。
+    //
+    // ★ 未登记那半是端到端测出来的：只放行 resolveConfigValues 而这里仍返回 null，
+    // 结果是「迁移保住了 HTTPS_PROXY、启动路径却丢」—— 配置文件里看得见，
+    // process.env 里没有，claude 子进程照样拿不到。放行必须三处一起改。
     const s = String(value ?? '');
-    return isPassthrough(key) && s !== '' ? s : null;
+    return s === '' ? null : s;
   }
 
   if (def.kind === 'toggle') {
@@ -175,8 +179,18 @@ export function resolveConfigValues({ fileValues = {}, shellEnv = {} } = {}) {
       values[key] = raw;
       continue;
     }
+    // ★ 未登记的 key **放行**。dotenv 时代 .env 是全量灌进 process.env 的，而 claude 子进程
+    // 继承 process.env —— 写在配置里的 HTTPS_PROXY / CLAUDE_CONFIG_DIR 之类一直是生效的，
+    // 按 schema 白名单过滤会静默掐掉它们（常驻部署的 stdout 被重定向，那行 warn 没人看得到）。
+    //
+    // 读取侧宽容、写入侧严格：面板与 config set 仍然拒绝未知 key（validateEnvChanges 那道闸
+    // 不动），那是「不做通用配置编辑器」的产品边界。这里只是不再替用户丢东西。
+    //
+    // 措辞刻意说「已原样传递」而不是「已忽略」：拼错的 key（AUTH_TOEKN）与有意的第三方变量
+    // 在这里无法自动区分，但用户看到自己没打算传的东西出现在这一行，就会发现是拼错了。
     if (!schemaDef(key)) {
-      warnings.push(`已忽略未知配置项 ${key}（本文件不是通用配置编辑器）`);
+      warnings.push(`${key} 未登记在配置 schema 内，已原样传递给 server 与 claude 子进程`);
+      values[key] = raw;
       continue;
     }
     const { value, warning } = coerceToSchemaType(key, raw);
@@ -288,7 +302,14 @@ export function structuredToStringValues(structured = {}) {
   const out = {};
   for (const [key, value] of Object.entries(structured)) {
     if (key === VERSION_KEY) continue;
-    const normalized = isPassthrough(key) ? value : coerceToSchemaType(key, value).value;
+    // 未登记的 key 与 passthrough 一样原样带上：schema 之外的东西不做类型归一，
+    // 也不能在这里被丢掉 —— server 起来后子进程要靠它。
+    if (!schemaDef(key)) {
+      const raw = value === undefined || value === null ? '' : String(value);
+      if (raw !== '') out[key] = raw;
+      continue;
+    }
+    const normalized = coerceToSchemaType(key, value).value;
     const s = projectToEnv(key, normalized);
     if (s !== null) out[key] = s;
   }
@@ -395,7 +416,9 @@ export function migrateEnvValues(envValues = {}, { workdirsEntries } = {}) {
       continue;
     }
     if (!schemaDef(key)) {
-      warnings.push(`${key} 未迁移：不在配置 schema 内`);
+      // 一并迁移。丢掉的话用户迁完就少了代理/自定义变量，而那正是 .env 全量语义的一部分。
+      config[key] = raw;
+      warnings.push(`${key} 未登记在配置 schema 内，已原样迁移（server 与子进程照常能拿到）`);
       continue;
     }
     config[key] = coerceToSchemaType(key, raw).value;

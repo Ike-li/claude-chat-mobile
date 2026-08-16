@@ -310,12 +310,16 @@ test.describe('resolveConfigValues —— 优先级链', () => {
     assert.equal(values.ANTHROPIC_BASE_URL, 'https://real');
   });
 
-  test('schema 之外的 key 被丢弃并 warn —— 这不是通用配置编辑器', () => {
+  // 【立场变更记录】此前这里断言的是「未知 key 被丢弃」，理由写作「这不是通用配置编辑器」。
+  // 那句话对**写入侧**成立（面板/CLI 至今仍拒绝未知 key），但被错用到了读取侧：
+  // dotenv 时代 .env 是全量灌进 process.env 的，claude 子进程靠继承它拿到 HTTPS_PROXY 之类。
+  // 白名单过滤等于替用户掐掉那些变量，且常驻部署看不到那行 warn。
+  test('schema 之外的 key 放行并报出来（读取侧宽容，写入侧仍严格）', () => {
     const { values, warnings } = resolveConfigValues({
       fileValues: { NOT_A_REAL_KEY: 'x' },
       shellEnv: {},
     });
-    assert.equal(Object.hasOwn(values, 'NOT_A_REAL_KEY'), false);
+    assert.equal(values.NOT_A_REAL_KEY, 'x');
     assert.ok(warnings.some(w => w.includes('NOT_A_REAL_KEY')));
   });
 
@@ -569,9 +573,11 @@ test.describe('migrateEnvValues —— .env 字符串态转结构化', () => {
     assert.ok(warnings.some(w => w.includes('ANTHROPIC_')));
   });
 
-  test('未知 key 不迁移但要报出来 —— 用户得知道自己那行没了', () => {
+  // 【立场变更记录】同上：此前断言「未知 key 不迁移」，那会让用户迁完就丢掉代理等设置 ——
+  // 而迁移的承诺是「1:1 转换」，丢东西与那个承诺直接冲突。
+  test('未知 key 一并迁移并报出来', () => {
     const { config, warnings } = migrateEnvValues({ MY_CUSTOM: 'x' });
-    assert.equal(Object.hasOwn(config, 'MY_CUSTOM'), false);
+    assert.equal(config.MY_CUSTOM, 'x');
     assert.ok(warnings.some(w => w.includes('MY_CUSTOM')));
   });
 
@@ -646,4 +652,61 @@ test('安全：ccm.config.json 必须被 gitignore（含 AUTH_TOKEN，且本仓 
     const r = spawnSync('git', ['check-ignore', name], { cwd: repoRoot, encoding: 'utf8' });
     assert.equal(r.status, 0, `${name} 未被 .gitignore 覆盖 —— 用户 git add -A 会把 AUTH_TOKEN 提交到 public repo`);
   }
+});
+
+// ★★ 读取侧放行未登记的 key，写入侧仍然拒绝。
+//
+// dotenv 时代 `.env` 是**全量**灌进 process.env 的，而 claude 子进程继承 process.env ——
+// 所以写在 .env 里的 HTTPS_PROXY / CLAUDE_CONFIG_DIR 之类一直是生效的。改成 schema 白名单
+// 过滤之后它们被静默丢弃（只留一行 warn，而常驻部署的 stdout 被进程管理器重定向，看不到）。
+//
+// 两侧立场不同是刻意的：
+//   · 读取侧宽容 —— 用户往配置里放什么是他的自由，子进程该拿到就拿到
+//   · 写入侧严格 —— 面板/CLI 拒绝未知 key，那是「不做通用配置编辑器」的产品边界
+//
+// 代价：拼错的 key（AUTH_TOEKN）不再被当成错误。无法自动区分「有意的第三方变量」和
+// 「拼错的自家变量」，所以 warn 的措辞要让两种情况都读得懂 —— 说「已原样传递」而不是
+// 「已忽略」，用户看到自己没打算传的东西出现在这一行就会发现拼错了。
+test.describe('未登记 key：读取侧放行', () => {
+  test('配置文件里的未知 key 进入生效配置', () => {
+    const { values } = resolveConfigValues({
+      fileValues: { AUTH_TOKEN: 't', HTTPS_PROXY: 'http://127.0.0.1:7890' },
+      shellEnv: {},
+    });
+    assert.equal(values.HTTPS_PROXY, 'http://127.0.0.1:7890');
+  });
+
+  test('放行但要报出来 —— 措辞得让「拼错了」也看得出来', () => {
+    const { warnings } = resolveConfigValues({ fileValues: { AUTH_TOEKN: 'typo' }, shellEnv: {} });
+    assert.ok(warnings.some(w => w.includes('AUTH_TOEKN')));
+    assert.ok(warnings.some(w => /传递|passed/.test(w)), '不能再说「已忽略」——它现在确实生效了');
+  });
+
+  test('已登记的 passthrough 项不 warn（它们是已知的）', () => {
+    const { warnings } = resolveConfigValues({ fileValues: { CCM_DATA_DIR: '/x' }, shellEnv: {} });
+    assert.deepEqual(warnings, []);
+  });
+
+  test('ANTHROPIC_* 仍然剥除 —— 那是硬边界，不受本次放行影响', () => {
+    const { values } = resolveConfigValues({ fileValues: { ANTHROPIC_BASE_URL: 'https://x' }, shellEnv: {} });
+    assert.equal(Object.hasOwn(values, 'ANTHROPIC_BASE_URL'), false);
+  });
+
+  test('未知 key 不做类型归一，原样传递', () => {
+    const { values } = resolveConfigValues({ fileValues: { SOME_FLAG: 'false' }, shellEnv: {} });
+    assert.equal(values.SOME_FLAG, 'false');
+  });
+
+  // 迁移必须带上它们，否则用户迁完就丢了代理设置
+  test('migrate 保留未登记的 key', () => {
+    const { config, warnings } = migrateEnvValues({ AUTH_TOKEN: 't', HTTPS_PROXY: 'http://p' });
+    assert.equal(config.HTTPS_PROXY, 'http://p');
+    assert.ok(warnings.some(w => w.includes('HTTPS_PROXY')));
+  });
+
+  test('结构化投影也带上它们（否则 server 起来后子进程还是拿不到）', () => {
+    const out = structuredToStringValues({ HTTPS_PROXY: 'http://p', PORT: 3000 });
+    assert.equal(out.HTTPS_PROXY, 'http://p');
+    assert.equal(out.PORT, '3000');
+  });
 });
