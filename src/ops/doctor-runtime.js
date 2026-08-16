@@ -140,7 +140,7 @@ export function runDoctor(ctx = {}) {
   const wc = (ctx.workDirs || []).length;
   checks.push({ id: 'WORK_DIRS', status: wc ? 'ok' : 'warn', detail: `${wc} 个工作目录`, safe: { count: wc } }); // 不回显路径
 
-  const sl = statuslineConfigDiagnostic(ctx.webStatuslineOff);
+  const sl = statuslineConfigDiagnostic(ctx.webStatuslineOff, ctx.lang);
   checks.push({ id: 'WEB_STATUSLINE', status: sl.status, detail: sl.detail });
 
   // BE-013：区分「未检查」（undefined/null）与「已检查、0 处过宽」（0）。旧实现把缺省 undefined 当 0 → 恒显

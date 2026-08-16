@@ -193,7 +193,7 @@ function servicePortOwner(port) {
 async function checkPort() {
   const port = parseInt(process.env.PORT || '3000', 10);
   if (isNaN(port) || port < 1 || port > 65535) {
-    const r = portOccupancyDiagnostic({ port: process.env.PORT || '3000' });
+    const r = portOccupancyDiagnostic({ port: process.env.PORT || '3000', lang: LANG });
     fail(r.name, r.detail);
     return;
   }
@@ -206,7 +206,7 @@ async function checkPort() {
     setTimeout(() => { conn.destroy(); resolve({ probeError: '探测超时' }); }, 500); // 超时兜底
   });
   const ownerLabel = probe.occupied ? servicePortOwner(port) : null;
-  const r = portOccupancyDiagnostic({ port, ...probe, ownerLabel });
+  const r = portOccupancyDiagnostic({ port, ...probe, ownerLabel, lang: LANG });
   ({ ok, warn, fail })[r.status](r.name, r.detail);
 }
 
@@ -218,6 +218,7 @@ function checkServiceUnits() {
     platform: s?.platform ?? platform(),
     supported: s?.supported ?? false,
     units: s?.units ?? null,
+    lang: LANG,
   });
   ({ ok, warn, fail })[r.status](r.name, r.detail);
 }
@@ -225,7 +226,7 @@ function checkServiceUnits() {
 // D5: WEB_STATUSLINE 配置口径。E16 现在由 statusline.js 自包含组装，不依赖终端 statusLine 脚本或
 // ~/.claude/settings.json；settings.json 仍会被 Claude CLI 自己用于 permissions.allow，但不是 web 状态栏前置条件。
 function checkStatuslineConfig() {
-  const result = statuslineConfigDiagnostic(process.env.WEB_STATUSLINE === 'off');
+  const result = statuslineConfigDiagnostic(process.env.WEB_STATUSLINE === 'off', LANG);
   (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
@@ -249,7 +250,7 @@ function checkStatuslineBridge() {
     installState = parsed.state;
   } catch (err) {
     if (webOff || bridgeOff) {
-      const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState: 'not-installed' });
+      const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState: 'not-installed', lang: LANG });
       ok(result.name, result.detail);
       return;
     }
@@ -257,7 +258,7 @@ function checkStatuslineBridge() {
     warn('CLI_STATUSLINE_BRIDGE', bi(`无法只读检查安装状态：${detail}。运行 npm run statusline:status 查看详情。`, `Could not read install state: ${detail}. Run npm run statusline:status for details.`));
     return;
   }
-  const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState });
+  const result = statuslineBridgeDiagnostic({ webOff, bridgeOff, installState, lang: LANG });
   (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
@@ -279,7 +280,7 @@ function checkHooksBridge() {
     installState = parsed.state;
   } catch (err) {
     if (bridgeOff) {
-      const result = hooksBridgeDiagnostic({ bridgeOff, installState: 'not-installed' });
+      const result = hooksBridgeDiagnostic({ bridgeOff, installState: 'not-installed', lang: LANG });
       ok(result.name, result.detail);
       return;
     }
@@ -287,7 +288,7 @@ function checkHooksBridge() {
     warn('CLI_HOOKS_BRIDGE', bi(`无法只读检查安装状态：${detail}。运行 npm run hooks:status 查看详情。`, `Could not read install state: ${detail}. Run npm run hooks:status for details.`));
     return;
   }
-  const result = hooksBridgeDiagnostic({ bridgeOff, installState });
+  const result = hooksBridgeDiagnostic({ bridgeOff, installState, lang: LANG });
   (result.status === 'ok' ? ok : warn)(result.name, result.detail);
 }
 
@@ -423,6 +424,7 @@ function checkLogSwitches() {
     try { logFileBytes = statSync(logFile).size; } catch { /* 不存在/无权限：按 0，不影响开关判定 */ }
   }
   const r = logSwitchDiagnostic({
+    lang: LANG,
     interactions: process.env.LOG_INTERACTIONS === '1',
     sdkDebug: !!process.env.DEBUG_SDK_MESSAGES,
     stderr: !!process.env.LOG_STDERR,
@@ -433,7 +435,7 @@ function checkLogSwitches() {
 
 // CLAUDE_CONFIG_DIR：CLI 认、本仓不认。设了它 → 会话历史静默读不到，见 claudeConfigDirDiagnostic。
 function checkClaudeConfigDir() {
-  const r = claudeConfigDirDiagnostic({ configDir: process.env.CLAUDE_CONFIG_DIR || '' });
+  const r = claudeConfigDirDiagnostic({ configDir: process.env.CLAUDE_CONFIG_DIR || '', lang: LANG });
   (r.status === 'warn' ? warn : ok)('CLAUDE_CONFIG_DIR', r.detail);
 }
 
@@ -478,7 +480,7 @@ function checkUploadsFootprint() {
     } catch { continue; } // 目录不存在 = 该工作区没传过附件
     dirs.push({ cwd, bytes, files });
   }
-  const r = uploadsFootprintDiagnostic({ dirs });
+  const r = uploadsFootprintDiagnostic({ dirs, lang: LANG });
   (r.status === 'warn' ? warn : ok)(bi('附件占用', 'Attachment footprint'), r.detail);
 }
 

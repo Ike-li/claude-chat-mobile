@@ -82,44 +82,53 @@ export function modelSettingsConflictDiagnostic({ userModel = '', dirs = [] } = 
 
 // off：调用方传入的 `process.env.WEB_STATUSLINE === 'off'`（本模块不直接读 env，保持纯函数可测）。
 // 两态都是合法配置、非风险，status 恒 ok；detail 如实反映当前生效状态，不再是恒定文案。
-export function statuslineConfigDiagnostic(off = false) {
+export function statuslineConfigDiagnostic(off = false, lang = 'zh') {
   return {
     status: 'ok',
     name: 'WEB_STATUSLINE',
     detail: off
-      ? '已通过 WEB_STATUSLINE=off 关闭 web 状态栏。'
-      : 'web 状态栏自包含：使用 SDK usage + 本机 git + CLI 版本，默认启用；设 WEB_STATUSLINE=off 可关闭。',
+      ? bi(lang, '已通过 WEB_STATUSLINE=off 关闭 web 状态栏。', 'Disabled via WEB_STATUSLINE=off.')
+      : bi(lang,
+        'web 状态栏自包含：使用 SDK usage + 本机 git + CLI 版本，默认启用；设 WEB_STATUSLINE=off 可关闭。',
+        'Self-contained: SDK usage + local git + CLI version. Enabled by default; set WEB_STATUSLINE=off to disable.'),
   };
 }
 
-export function statuslineBridgeDiagnostic({ webOff = false, bridgeOff = false, installState = 'not-installed' } = {}) {
+export function statuslineBridgeDiagnostic({ webOff = false, bridgeOff = false, installState = 'not-installed', lang = 'zh' } = {}) {
   if (webOff) {
-    return { status: 'ok', name: 'CLI_STATUSLINE_BRIDGE', detail: 'WEB_STATUSLINE=off，CLI bridge 不参与运行。' };
+    return { status: 'ok', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, 'WEB_STATUSLINE=off，CLI bridge 不参与运行。', 'WEB_STATUSLINE=off, so the CLI bridge is not in play.') };
   }
   if (bridgeOff) {
-    return { status: 'ok', name: 'CLI_STATUSLINE_BRIDGE', detail: '已通过 CLI_STATUSLINE_BRIDGE=off 回滚为 SDK-only 状态栏。' };
+    return { status: 'ok', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '已通过 CLI_STATUSLINE_BRIDGE=off 回滚为 SDK-only 状态栏。', 'Rolled back to the SDK-only status line via CLI_STATUSLINE_BRIDGE=off.') };
   }
   if (installState === 'installed') {
-    return { status: 'ok', name: 'CLI_STATUSLINE_BRIDGE', detail: '已安装：CLI 驾驶时按 session 同步 statusline；Web 驾驶时使用 SDK。' };
+    return { status: 'ok', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '已安装：CLI 驾驶时按 session 同步 statusline；Web 驾驶时使用 SDK。', 'Installed: syncs the status line per session when the CLI drives; uses the SDK when the web drives.') };
   }
   if (installState === 'drifted') {
-    return { status: 'warn', name: 'CLI_STATUSLINE_BRIDGE', detail: '安装记录与当前 Claude statusLine.command 已漂移/被改写；先运行 `npm run statusline:status` 检查，勿强行覆盖。' };
+    return { status: 'warn', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '安装记录与当前 Claude statusLine.command 已漂移/被改写；先运行 npm run statusline:status 检查，勿强行覆盖。', 'The install manifest and the current Claude statusLine.command have drifted; run npm run statusline:status before overwriting anything.') };
   }
-  return { status: 'warn', name: 'CLI_STATUSLINE_BRIDGE', detail: '未安装；Web 驾驶的 SDK 状态栏可用，但 CLI 镜像 statusline 不同步。运行 `npm run statusline:install` 显式启用。' };
+  return { status: 'warn', name: 'CLI_STATUSLINE_BRIDGE', detail: bi(lang, '未安装；Web 驾驶的 SDK 状态栏可用，但 CLI 镜像 statusline 不同步。运行 npm run statusline:install 显式启用。', 'Not installed. The SDK status line works when the web drives, but mirrored CLI sessions will not sync. Run npm run statusline:install to enable it.') };
 }
 
+// 界面语言：CLI doctor 按 locale 传入，web UI 由客户端语言传入（doctor:run 的 payload）。
+// **detail 仍然是字符串**——不改成 {zh,en} 对是刻意的：本文件的单测有 56 处断言 detail
+// 的字面值，改形状要动它们全部，而加一个默认 'zh' 的参数一处都不用动。
+// 与 ENV_SCHEMA 的 t(zh,en) 范式差别在于消费时机：那份表是数据、随 ack 下发给前端按需取；
+// 这里的诊断是**产出时就要定语言**的一句话。
+const bi = (lang, zh, en) => (lang === 'en' ? en : zh);
+
 // D12: CLI hooks 桥安装态（同 D6：只消费 status 子命令的 state，不回显任何命令内容）。
-export function hooksBridgeDiagnostic({ bridgeOff = false, installState = 'not-installed' } = {}) {
+export function hooksBridgeDiagnostic({ bridgeOff = false, installState = 'not-installed', lang = 'zh' } = {}) {
   if (bridgeOff) {
-    return { status: 'ok', name: 'CLI_HOOKS_BRIDGE', detail: '已通过 CLI_HOOKS_BRIDGE=off 停用（安装保留，事件不消费）。' };
+    return { status: 'ok', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '已通过 CLI_HOOKS_BRIDGE=off 停用（安装保留，事件不消费）。', 'Disabled via CLI_HOOKS_BRIDGE=off (the install stays; events are not consumed).') };
   }
   if (installState === 'installed') {
-    return { status: 'ok', name: 'CLI_HOOKS_BRIDGE', detail: '已安装：终端会话回合结束/需要你时即时刷新并推送。' };
+    return { status: 'ok', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '已安装：终端会话回合结束/需要你时即时刷新并推送。', 'Installed: terminal sessions refresh and push the moment a turn ends or needs you.') };
   }
   if (installState === 'drifted') {
-    return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: '安装记录与 settings.json 的 hooks 条目已漂移；先运行 `npm run hooks:status` 检查，勿强行覆盖。' };
+    return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '安装记录与 settings.json 的 hooks 条目已漂移；先运行 npm run hooks:status 检查，勿强行覆盖。', 'The install manifest and the hooks entries in settings.json have drifted; run npm run hooks:status before overwriting anything.') };
   }
-  return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: '未安装；终端直跑的会话仅靠 2.5s 轮询、无推送。运行 `npm run hooks:install` 显式启用。' };
+  return { status: 'warn', name: 'CLI_HOOKS_BRIDGE', detail: bi(lang, '未安装；终端直跑的会话仅靠 2.5s 轮询、无推送。运行 npm run hooks:install 显式启用。', 'Not installed. Sessions you run in your own terminal rely on 2.5s polling with no push. Run npm run hooks:install to enable it.') };
 }
 
 // 命令名右边界：空白、冒号、行尾。冒号是关键——Claude Code 的规范通配语法是 `Bash(rm:*)`，
@@ -264,50 +273,71 @@ export const UPLOADS_FOOTPRINT_WARN_BYTES = 200 * 1024 * 1024;
 const mb = bytes => Math.round(bytes / 1024 / 1024);
 
 // dirs: [{ cwd, bytes, files }]，由调用方扫盘得到（本函数纯判定、不读盘）。
-export function uploadsFootprintDiagnostic({ dirs = [] } = {}) {
+export function uploadsFootprintDiagnostic({ dirs = [], lang = 'zh' } = {}) {
   const list = (Array.isArray(dirs) ? dirs : []).filter(d => d && Number(d.bytes) > 0);
-  if (!list.length) return { status: 'ok', detail: '无附件占用（.ccm-uploads 为空或不存在）' };
+  if (!list.length) return { status: 'ok', detail: bi(lang, '无附件占用（.ccm-uploads 为空或不存在）', 'No attachment footprint (.ccm-uploads is empty or absent)') };
 
   const totalBytes = list.reduce((sum, d) => sum + Number(d.bytes || 0), 0);
   const totalFiles = list.reduce((sum, d) => sum + Number(d.files || 0), 0);
   const biggest = list.reduce((max, d) => (Number(d.bytes) > Number(max.bytes) ? d : max), list[0]);
-  const base = `手机上传的附件共 ${mb(totalBytes)} MB / ${totalFiles} 个文件（最大：${biggest.cwd}）`;
+  const base = bi(lang,
+    `手机上传的附件共 ${mb(totalBytes)} MB / ${totalFiles} 个文件（最大：${biggest.cwd}）`,
+    `Attachments uploaded from your phone: ${mb(totalBytes)} MB across ${totalFiles} files (largest: ${biggest.cwd})`);
 
   if (totalBytes <= UPLOADS_FOOTPRINT_WARN_BYTES) {
     return { status: 'ok', detail: base };
   }
   return {
     status: 'warn',
-    detail: `${base}\n` +
-      `  产品【不会自动清理】它：历史消息里的附件预览要读这些文件，按时间或容量删会让老对话的图片打不开。\n` +
-      `  需要回收空间时手动删（删掉的那几条历史里预览会失效，对话正文不受影响）。`,
+    detail: `${base}\n` + bi(lang,
+      '  产品【不会自动清理】它：历史消息里的附件预览要读这些文件，按时间或容量删会让老对话的图片打不开。\n'
+      + '  需要回收空间时手动删（删掉的那几条历史里预览会失效，对话正文不受影响）。',
+      '  The product never cleans these up: attachment previews in your history read these files, so deleting\n'
+      + '  by age or size would break images in old conversations. Delete them by hand when you need the space\n'
+      + '  (previews in those messages stop working; the conversation text is unaffected).'),
   };
 }
 
-export function logSwitchDiagnostic({ interactions = false, sdkDebug = false, stderr = false, logFileBytes = 0 } = {}) {
+export function logSwitchDiagnostic({ interactions = false, sdkDebug = false, stderr = false, logFileBytes = 0, lang = 'zh' } = {}) {
   const on = [];
   if (sdkDebug) on.push('DEBUG_SDK_MESSAGES');
   if (interactions) on.push('LOG_INTERACTIONS');
   if (stderr) on.push('LOG_STDERR');
-  if (!on.length) return { status: 'ok', detail: '三个日志开关均关闭' };
+  if (!on.length) return { status: 'ok', detail: bi(lang, '三个日志开关均关闭', 'All three log switches are off') };
 
   const bytes = Number.isFinite(logFileBytes) && logFileBytes > 0 ? logFileBytes : 0;
   const oversized = bytes >= LOG_ROTATE_THRESHOLD_BYTES;
-  const sizeNote = oversized ? `；日志已 ${Math.round(bytes / 1024 / 1024)} MB（超轮转阈值，保留窗口正在缩短）` : '';
+  const sizeNote = oversized
+    ? bi(lang,
+      `；日志已 ${Math.round(bytes / 1024 / 1024)} MB（超轮转阈值，保留窗口正在缩短）`,
+      `; the log is already ${Math.round(bytes / 1024 / 1024)} MB (past the rotation threshold, so the retention window is shrinking)`)
+    : '';
   const list = on.join(' / ');
 
   if (sdkDebug) {
     return {
       status: 'warn',
-      detail: `${list} 开着${sizeNote}\n` +
-        `  DEBUG_SDK_MESSAGES 每条 SDK 消息一行，长开曾把日志刷到 149MB（2026-07-18 归档实测）。\n` +
-        `  调试完请在 .env 关掉并重启常驻 server。`,
+      detail: bi(lang,
+        `${list} 开着${sizeNote}\n`
+        + '  DEBUG_SDK_MESSAGES 每条 SDK 消息一行，长开曾把日志刷到 149MB（2026-07-18 归档实测）。\n'
+        + '  调试完请在配置里关掉并重启常驻 server。',
+        `${list} on${sizeNote}\n`
+        + '  DEBUG_SDK_MESSAGES writes one line per SDK message; left on it has produced a 149MB log (measured 2026-07-18).\n'
+        + '  Turn it off in the config file once you are done debugging, then restart the service.'),
     };
   }
   if (oversized) {
-    return { status: 'warn', detail: `${list} 开着${sizeNote}\n  确认仍需要，否则关掉以免继续压缩日志保留窗口。` };
+    return {
+      status: 'warn',
+      detail: bi(lang,
+        `${list} 开着${sizeNote}\n  确认仍需要，否则关掉以免继续压缩日志保留窗口。`,
+        `${list} on${sizeNote}\n  Confirm you still need them; otherwise turn them off to stop shrinking the log retention window.`),
+    };
   }
-  return { status: 'ok', detail: `${list} 开着（量级可控，日志未超轮转阈值）` };
+  return {
+    status: 'ok',
+    detail: bi(lang, `${list} 开着（量级可控，日志未超轮转阈值）`, `${list} on (volume is fine; the log is under the rotation threshold)`),
+  };
 }
 
 // CLAUDE_CONFIG_DIR 兼容性告警（只报不修）。
@@ -322,14 +352,17 @@ export function logSwitchDiagnostic({ interactions = false, sdkDebug = false, st
 // 【为什么只告警不支持】改根目录解析牵动所有路径计算，含删除护栏那条路径（2026-08-02 删库事故就出在
 // 目录段被算错上）。n=1 自托管默认不设这个变量，为一个当前无人使用的部署形态改动删除路径，风险大于收益。
 // 真要支持，得连同 workdirs / 镜像 / 删除护栏一起改，值得单独立项。
-export function claudeConfigDirDiagnostic({ configDir = '' } = {}) {
+export function claudeConfigDirDiagnostic({ configDir = '', lang = 'zh' } = {}) {
   const dir = typeof configDir === 'string' ? configDir.trim() : '';
-  if (!dir) return { status: 'ok', detail: '未设置（CLI 与本仓都走默认 ~/.claude）' };
+  if (!dir) return { status: 'ok', detail: bi(lang, '未设置（CLI 与本仓都走默认 ~/.claude）', 'Not set (both the CLI and this repo use the default ~/.claude)') };
   return {
     status: 'warn',
-    detail: `CLAUDE_CONFIG_DIR=${dir}\n`
-      + `  CLI 会把会话 transcript 落到该目录下，而本仓固定读 ~/.claude/projects —— 会话历史与只读镜像\n`
-      + `  会读不到，且表现为「这个工作区没有会话」而不是报错。请取消该变量，或改用终端查看这些会话。`,
+    detail: `CLAUDE_CONFIG_DIR=${dir}\n` + bi(lang,
+      '  CLI 会把会话 transcript 落到该目录下，而本仓固定读 ~/.claude/projects —— 会话历史与只读镜像\n'
+      + '  会读不到，且表现为「这个工作区没有会话」而不是报错。请取消该变量，或改用终端查看这些会话。',
+      '  The CLI writes session transcripts there, but this repo always reads ~/.claude/projects — session\n'
+      + '  history and the read-only mirror will come up empty, showing "no sessions here" rather than an error.\n'
+      + '  Unset the variable, or view those sessions from the terminal instead.'),
   };
 }
 
@@ -346,18 +379,18 @@ export function claudeConfigDirDiagnostic({ configDir = '' } = {}) {
 //   drift    → warn：仓库移动 / node 换版本，重启才会暴露，提前说
 //   shape 漂移的 foreign unit → **不算问题**：自定义启动方式（机主的隧道用自写包装脚本绕代理
 //                    TUN 劫持）是有意配置，年年报黄只会训练用户忽略告警
-export function serviceUnitsDiagnostic({ platform = '', supported = false, units = null } = {}) {
+export function serviceUnitsDiagnostic({ platform = '', supported = false, units = null, lang = 'zh' } = {}) {
   const name = 'LaunchAgent';
   if (platform !== 'darwin' || !supported) {
-    return { status: 'ok', name, detail: `非 macOS（${platform || '未知'}），跳过 LaunchAgent 检查；Linux 请用 systemd，见 docs/deployment.md` };
+    return { status: 'ok', name, detail: bi(lang, `非 macOS（${platform || '未知'}），跳过 LaunchAgent 检查；Linux 请用 systemd，见 docs/deployment.md`, `Not macOS (${platform || 'unknown'}); skipping the LaunchAgent check. On Linux use systemd — see docs/deployment.md`) };
   }
   if (!Array.isArray(units)) {
-    return { status: 'warn', name, detail: '无法读取常驻服务状态；运行 `npm run service:status` 查看详情。' };
+    return { status: 'warn', name, detail: bi(lang, '无法读取常驻服务状态；运行 npm run service:status 查看详情。', 'Could not read the service state; run npm run service:status for details.') };
   }
 
   const server = units.find((u) => u.unit === 'server');
   if (!server || server.state === 'not-installed') {
-    return { status: 'warn', name, detail: '常驻服务未安装：关掉终端 server 就停了、开机也不会自启。运行 `npm run service:install` 安装。' };
+    return { status: 'warn', name, detail: bi(lang, '常驻服务未安装：关掉终端 server 就停了、开机也不会自启。运行 npm run service:install 安装。', 'No resident service installed: the server stops when you close the terminal and will not start at login. Run npm run service:install.') };
   }
   // stopped：plist 在盘上但没被 launchd 加载（stop 之后 / bootstrap 失败 / agent 被禁用）。
   // classifyState 的取值域是 4 个，早前漏了这一档 ⇒ 掉进末尾的 ok 分支，
@@ -371,7 +404,7 @@ export function serviceUnitsDiagnostic({ platform = '', supported = false, units
     };
   }
   if (server.state === 'crashed') {
-    return { status: 'fail', name, detail: `${server.label} 已安装但当前未运行（上次异常退出）。运行 \`npm run service:status\` 看详情、\`node scripts/service.js logs server\` 看日志。` };
+    return { status: 'fail', name, detail: bi(lang, `${server.label} 已安装但当前未运行（上次异常退出）。运行 npm run service:status 看详情、node scripts/service.js logs server 看日志。`, `${server.label} is installed but not running (last exit was abnormal). Run npm run service:status for state and node scripts/service.js logs server for logs.`) };
   }
 
   const problems = [];
@@ -383,17 +416,23 @@ export function serviceUnitsDiagnostic({ platform = '', supported = false, units
     // 但**不单独下告警结论**：那正是恒亮误报的来源。
     if (u.flapping) {
       const n = u.restarts?.lastHour;
-      problems.push(`${u.label} 1 小时内重启 ${Number.isFinite(n) ? n : '多'} 次（疑似崩溃重启循环）`);
+      problems.push(bi(lang,
+        `${u.label} 1 小时内重启 ${Number.isFinite(n) ? n : '多'} 次（疑似崩溃重启循环）`,
+        `${u.label} restarted ${Number.isFinite(n) ? n : 'several'} times in the last hour (looks like a crash loop)`));
     }
     // shape = 用户换掉了启动方式，属有意配置，不计入问题
     const realDrift = (u.drift || []).filter((d) => d !== 'shape');
-    if (realDrift.length) problems.push(`${u.label} 配置与模板不一致：${realDrift.join('、')}`);
+    if (realDrift.length) {
+      problems.push(bi(lang,
+        `${u.label} 配置与模板不一致：${realDrift.join('、')}`,
+        `${u.label} differs from the template: ${realDrift.join(', ')}`));
+    }
   }
   if (problems.length) {
-    return { status: 'warn', name, detail: `${problems.join('\n  ')}\n  运行 \`npm run service:status\` 查看详情。` };
+    return { status: 'warn', name, detail: `${problems.join('\n  ')}\n` + bi(lang, '  运行 npm run service:status 查看详情。', '  Run npm run service:status for details.') };
   }
   const running = units.filter((u) => u.state === 'running').length;
-  return { status: 'ok', name, detail: `${server.label} 运行中（共 ${running} 个 unit 在跑）` };
+  return { status: 'ok', name, detail: bi(lang, `${server.label} 运行中（共 ${running} 个 unit 在跑）`, `${server.label} is running (${running} unit(s) up)`) };
 }
 
 /**
@@ -417,24 +456,32 @@ export function resolveServicePortOwner({ status = null, port = null } = {}) {
 //
 // 旧实现把「端口连得上」无条件判成 fail。但常驻部署——文档主推、也是机主实际用的拓扑——下
 // 端口本来就该被自家 server 占着，于是 doctor 在生产机器上**恒红**一项。恒红的检查项等于没有检查项。
-export function portOccupancyDiagnostic({ port, occupied = false, ownerLabel = null, probeError = '' } = {}) {
+export function portOccupancyDiagnostic({ port, occupied = false, ownerLabel = null, probeError = '', lang = 'zh' } = {}) {
   const name = 'PORT';
   const n = Number(port);
   if (!Number.isInteger(n) || n < 1 || n > 65535) {
-    return { status: 'fail', name, detail: `无效端口: ${port}` };
+    return { status: 'fail', name, detail: bi(lang, `无效端口: ${port}`, `Invalid port: ${port}`) };
   }
   if (probeError) {
-    return { status: 'warn', name, detail: `端口 ${n} 探测失败: ${probeError}` };
+    return { status: 'warn', name, detail: bi(lang, `端口 ${n} 探测失败: ${probeError}`, `Could not probe port ${n}: ${probeError}`) };
   }
   if (!occupied) {
-    return { status: 'ok', name, detail: `端口 ${n} 可用` };
+    return { status: 'ok', name, detail: bi(lang, `端口 ${n} 可用`, `Port ${n} is free`) };
   }
   if (ownerLabel) {
-    return { status: 'ok', name, detail: `端口 ${n} 由常驻服务 ${ownerLabel} 占用（预期；勿再手动 npm start）` };
+    return {
+      status: 'ok',
+      name,
+      detail: bi(lang,
+        `端口 ${n} 由常驻服务 ${ownerLabel} 占用（预期；勿再手动 npm start）`,
+        `Port ${n} is held by the ${ownerLabel} service (expected; do not run npm start by hand)`),
+    };
   }
   return {
     status: 'fail',
     name,
-    detail: `端口 ${n} 已被占用，且不是本仓的常驻服务。查是谁：lsof -nP -iTCP:${n} -sTCP:LISTEN`,
+    detail: bi(lang,
+      `端口 ${n} 已被占用，且不是本仓的常驻服务。查是谁：lsof -nP -iTCP:${n} -sTCP:LISTEN`,
+      `Port ${n} is taken by something that is not this repo's service. Find it with: lsof -nP -iTCP:${n} -sTCP:LISTEN`),
   };
 }
