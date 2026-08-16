@@ -131,7 +131,8 @@ export const MESSAGES = {
         + '这里不会静默回落到 $HOME——那等于把整个家目录交给 agent 读写。',
       both_formats: () => '--config 与 --env 只能给一个：前者写 ccm.config.json，后者写旧格式 .env。',
       env_exists: d => `${d} 已存在，非交互模式不会覆盖它（里面可能有正在用的 AUTH_TOKEN）。`
-        + '确认要覆盖再加 --force。',
+        + '若是从旧版本升级，请跑 node scripts/config.js migrate 迁移，不要用 --force —— '
+        + '那会生成一个新 AUTH_TOKEN，所有已授权设备都要重新批准。'
     },
   },
   en: {
@@ -162,7 +163,9 @@ export const MESSAGES = {
         + 'It will not silently fall back to $HOME — that would hand your entire home directory to the agent.',
       both_formats: () => 'Pass either --config or --env, not both: the former writes ccm.config.json, the latter legacy .env.',
       env_exists: d => `${d} already exists; non-interactive mode will not overwrite it `
-        + '(it may hold the AUTH_TOKEN you are using). Add --force if you really mean to replace it.',
+        + '(it may hold the AUTH_TOKEN you are using). Upgrading from an older version? Run '
+        + 'node scripts/config.js migrate instead — --force would mint a new AUTH_TOKEN and every '
+        + 'approved device would have to be re-approved.'
     },
   },
 };
@@ -282,12 +285,10 @@ async function main() {
   // 只 stat 新路径的话，setup 会在一台正在跑的实例旁边生成一份带**全新 AUTH_TOKEN** 的配置，
   // 且它优先级更高：所有已授权设备（含正在操作的那台手机）当场失效，PORT/CCM_DATA_DIR/CF_ACCESS_* 一并被遮蔽。
   // desktop/CCMCore.swift 的 setupCommand 拼的就是这条命令，菜单栏点一次「安装向导」就会中。
-  const alreadyConfigured = existsSync(envPath)
-    || existsSync(join(HERE, CONFIG_FILE_NAME))
-    || existsSync(join(HERE, '.env'));
-  const plan = resolveSetupPlan({ args, envExists: alreadyConfigured });
+  const existingConfig = [envPath, join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].find(existsSync);
+  const plan = resolveSetupPlan({ args, envExists: !!existingConfig });
   if (plan.refuse) {
-    console.error(`✗ ${t.refuse[plan.refuse.code](plan.refuse.detail ?? envPath)}\n`);
+    console.error(`✗ ${t.refuse[plan.refuse.code](plan.refuse.detail ?? existingConfig ?? envPath)}\n`);
     console.error(t.usage);
     process.exit(2);
   }

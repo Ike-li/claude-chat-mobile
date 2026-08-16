@@ -53,7 +53,11 @@ export function loadRuntimeEnvironment(env = process.env, { envFile, dir, quiet 
     ? { fileValues: dotenv.parse(readFileSync(envFile)), warnings: [] }
     : loadConfigSources({ dir: dir ?? process.cwd() });
 
-  const { values, warnings } = resolveConfigValues({ fileValues: sources.fileValues, shellEnv: env });
+  const { values, warnings } = resolveConfigValues({
+    fileValues: sources.fileValues,
+    shellEnv: env,
+    source: envFile ? 'env' : sources.source,
+  });
   if (!quiet) {
     for (const w of [...sources.warnings, ...warnings]) console.warn(`[config] ${w}`);
   }

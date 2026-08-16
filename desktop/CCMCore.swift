@@ -414,3 +414,24 @@ func resolveLogPath(configured: String?, home: String) -> String? {
     let fallback = (home as NSString).appendingPathComponent("Library/Logs/ccm-server.log")
     return FileManager.default.fileExists(atPath: fallback) ? fallback : nil
 }
+
+// MARK: - 配置来源
+
+/// `config get --json` 除了值还告诉我们这些值是从哪读的。
+///
+/// 桌面端需要它来区分两种状态：已迁移（可直接编辑保存）与仍在旧版 `.env`（写入会被 L1 的
+/// guardWriteTarget 拒绝，因为那会生成一份只含本次改动的新文件、把整份 .env 遮蔽）。
+/// 不区分的话，老用户会看到一张能填的表单、点保存却收到一句「去命令行跑 migrate」。
+struct ConfigSnapshot {
+    let values: [String: String]
+    let source: String
+
+    /// 仍在旧格式上。此时该引导迁移，而不是让用户填表单。
+    var isLegacyEnv: Bool { source == "env" }
+    /// 一份配置都还没有（全新安装）——窗口该提示去跑 setup 而不是显示空表单。
+    var isUnconfigured: Bool { source == "none" }
+}
+
+func configMigrateArgs(repo: String) -> [String] {
+    [configScriptPath(in: repo), "migrate", "--json"]
+}

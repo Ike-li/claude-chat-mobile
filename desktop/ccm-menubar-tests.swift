@@ -41,6 +41,7 @@ struct CCMCoreTests {
         testConfigItemPresentation()
         testConfigCommands()
         testLogHelpers()
+        testConfigSnapshot()
         testAppleScriptEscape()
         testCommands()
         testWebUIURL()
@@ -439,4 +440,21 @@ func testLogHelpers() {
     eq(resolveLogPath(configured: "/tmp/x.log", home: "/Users/you"), "/tmp/x.log", "配置优先")
     eq(resolveLogPath(configured: "", home: "/nonexistent-home"), nil, "空配置且无默认文件 → nil")
     eq(resolveLogPath(configured: nil, home: "/nonexistent-home"), nil, "无配置且无默认文件 → nil")
+}
+
+func testConfigSnapshot() {
+    // 迁移引导的判据：桌面端要区分「已迁移」「仍在 .env」「还没配过」三态。
+    // 混成一个的话，老用户会看到一张能填的表单、点保存却收到「去命令行跑 migrate」。
+    let legacy = ConfigSnapshot(values: ["PORT": "4001"], source: "env")
+    check(legacy.isLegacyEnv, "source=env ⇒ 需要引导迁移")
+    check(!legacy.isUnconfigured, "有 .env 不算未配置")
+
+    let migrated = ConfigSnapshot(values: ["PORT": "4001"], source: "config")
+    check(!migrated.isLegacyEnv, "source=config ⇒ 可直接编辑")
+
+    let fresh = ConfigSnapshot(values: [:], source: "none")
+    check(fresh.isUnconfigured, "source=none ⇒ 还没配过")
+    check(!fresh.isLegacyEnv, "未配置不是旧格式")
+
+    eq(configMigrateArgs(repo: "/r"), ["/r/scripts/config.js", "migrate", "--json"], "migrate argv")
 }

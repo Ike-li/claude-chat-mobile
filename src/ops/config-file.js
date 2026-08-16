@@ -163,7 +163,7 @@ export function projectToEnv(key, value) {
 // 与 parseServerConfig 现有分工一致）。
 //
 // 这条链与 dotenv 的「不覆盖已存在 key」语义等价 —— 换格式不改变谁赢。
-export function resolveConfigValues({ fileValues = {}, shellEnv = {} } = {}) {
+export function resolveConfigValues({ fileValues = {}, shellEnv = {}, source = 'config' } = {}) {
   const values = {};
   const warnings = [];
 
@@ -194,7 +194,11 @@ export function resolveConfigValues({ fileValues = {}, shellEnv = {} } = {}) {
       continue;
     }
     const { value, warning } = coerceToSchemaType(key, raw);
-    if (warning) warnings.push(warning);
+    // ★ 只有 JSON 来源的类型转换才值得报。.env 只能存字符串，「PORT 从 "4001" 读成 4001」
+    // 是那个格式的**常态**而非异常 —— 对未迁移的老部署每次启动刷十几行，纯噪音。
+    // 与 shell 侧的处理同理（下面那个循环也丢弃转换 warning，理由完全相同）。
+    // ccm.config.json 里出现字符串则确实说明手写错了类型，那时要报。
+    if (warning && source === 'config') warnings.push(warning);
     values[key] = value;
   }
 
@@ -354,7 +358,7 @@ export function readConfigFileValues(dir, { envFile } = {}) {
     }
     const { fileValues, source, path } = loadConfigSources({ dir });
     if (source !== 'config') return { values: fileValues, source, path, error: null };
-    const { values } = resolveConfigValues({ fileValues, shellEnv: {} });
+    const { values } = resolveConfigValues({ fileValues, shellEnv: {}, source });
     return { values: structuredToStringValues(values), source, path, error: null };
   } catch (err) {
     return { values: {}, source: 'error', path: null, error: String(err?.message || err) };

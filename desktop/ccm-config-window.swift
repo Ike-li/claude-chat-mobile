@@ -44,7 +44,7 @@ final class ConfigClient {
 
     /// 当前值。**与 schema 分两次取**：schema 是表单描述（不含任何值），
     /// get 才是配置快照且 secret 已脱敏。合成一次请求会让 secret 明文有机会混进表单描述。
-    func currentValues() -> Probe<[String: String]> {
+    func currentValues() -> Probe<ConfigSnapshot> {
         guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
         guard let r = runSync(node, configGetArgs(repo: repo), cwd: repo, timeout: 8) else {
             return .failed("config.js 无响应")
@@ -64,7 +64,19 @@ final class ConfigClient {
         for row in rows {
             if let k = row["key"] as? String, let v = row["value"] as? String { out[k] = v }
         }
-        return .ok(out)
+        return .ok(ConfigSnapshot(values: out, source: (obj["source"] as? String) ?? "config"))
+    }
+
+    /// 旧版 .env → ccm.config.json。**桌面端也要能做**：否则老用户在窗口里看到一张能填的
+    /// 表单、点保存却收到一句「去命令行跑 migrate」—— 图形界面把人赶回终端是最差的收尾。
+    func migrate() -> Probe<Void> {
+        guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
+        guard let r = runSync(node, configMigrateArgs(repo: repo), cwd: repo, timeout: 15) else {
+            return .failed("config.js 无响应")
+        }
+        if r.status == 0 { return .ok(()) }
+        let msg = [r.stdout, r.stderr].map(firstLine).first { !$0.isEmpty } ?? ""
+        return .failed(msg.isEmpty ? "迁移失败（退出码 \(r.status)）" : msg)
     }
 
     /// 保存一批改动。错误文案原样取自 L1 —— 那边的校验信息比这里能编的任何一句都准确。
@@ -87,6 +99,7 @@ final class ConfigWindowController: NSWindowController {
     private let statusLabel = NSTextField(labelWithString: "")
     private var controls: [String: (item: ConfigItem, view: NSView)] = [:]
     private var loadedValues: [String: String] = [:]
+    private var legacyEnv = false
 
     init(env: RuntimeEnv) {
         self.env = env
@@ -166,7 +179,7 @@ final class ConfigWindowController: NSWindowController {
         }
     }
 
-    private func render(_ probe: Probe<ConfigSchema>, _ valuesProbe: Probe<[String: String]>) {
+    private func render(_ probe: Probe<ConfigSchema>, _ valuesProbe: Probe<ConfigSnapshot>) {
         stack.arrangedSubviews.forEach { $0.removeFromSuperview() }
         controls.removeAll()
 
@@ -179,8 +192,9 @@ final class ConfigWindowController: NSWindowController {
             statusLabel.stringValue = msg
             stack.addArrangedSubview(NSTextField(labelWithString: msg))
             return
-        case .ok(let v):
-            values = v
+        case .ok(let snap):
+            values = snap.values
+            legacyEnv = snap.isLegacyEnv
         }
         loadedValues = values
 
@@ -198,6 +212,9 @@ final class ConfigWindowController: NSWindowController {
                 stack.addArrangedSubview(NSTextField(labelWithString: msg))
                 return
             }
+            // 旧格式：先给一条横幅 + 一键迁移。此时保存必然被 L1 拒绝（写入会遮蔽整份 .env），
+            // 与其让用户填完表单才撞墙，不如一进来就说清楚下一步是什么。
+            if legacyEnv { stack.addArrangedSubview(legacyBanner()) }
             for group in schema.groupList {
                 let items = group.visibleItems
                 if items.isEmpty { continue }
@@ -205,6 +222,41 @@ final class ConfigWindowController: NSWindowController {
                 for item in items { stack.addArrangedSubview(row(for: item, values: values)) }
             }
             statusLabel.stringValue = "共 \(controls.count) 项可编辑"
+        }
+    }
+
+    private func legacyBanner() -> NSView {
+        let text = NSTextField(labelWithString:
+            "这台机器还在用旧版 .env 配置。迁移成 ccm.config.json 后才能在这里保存修改 —— "
+            + "迁移是 1:1 转换，原 .env 会保留供回滚。")
+        text.lineBreakMode = .byWordWrapping
+        text.maximumNumberOfLines = 3
+        text.preferredMaxLayoutWidth = 420
+
+        let button = NSButton(title: "迁移配置", target: self, action: #selector(onMigrate))
+        button.bezelStyle = .rounded
+
+        let box = NSStackView(views: [text, button])
+        box.orientation = .horizontal
+        box.spacing = 12
+        box.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
+        return box
+    }
+
+    @objc private func onMigrate(_ sender: Any?) {
+        statusLabel.stringValue = "迁移中…"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let result = self.client.migrate()
+            DispatchQueue.main.async {
+                switch result {
+                case .ok:
+                    self.statusLabel.stringValue = "已迁移到 ccm.config.json（原 .env 已保留，重启 server 后生效）"
+                    self.onReload(nil)
+                case .failed(let why):
+                    self.statusLabel.stringValue = "迁移失败：\(why)"
+                }
+            }
         }
     }
 
@@ -394,7 +446,7 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
 
     private func resolvePath() {
         var configured: String?
-        if case .ok(let v) = ConfigClient(env: env).currentValues() { configured = v["LOG_FILE"] }
+        if case .ok(let snap) = ConfigClient(env: env).currentValues() { configured = snap.values["LOG_FILE"] }
         logPath = resolveLogPath(configured: configured, home: NSHomeDirectory())
         pathLabel.stringValue = logPath ?? "未配置日志文件（配置里设 LOG_FILE，或用常驻服务的默认位置）"
     }
