@@ -22,8 +22,12 @@
 
 export const MANIFEST_SCHEMA_VERSION = 1;
 
-// 默认 label 前缀。**不是** docs/deployment.md 示例里的 com.you.ccm-：机主既有的四个 unit
-// 用的就是 com.ccm.*，换前缀会一个都认不出来、adopt 直接失效。
+// 默认 label 前缀。机主既有的四个手工装 unit 用的就是 com.ccm.*，换前缀会一个都认不出来、
+// adopt 直接失效。
+//
+// 2026-08-16 前 deploy/*.plist.template 与 docs/deployment.md 的示例写的是 com.you.ccm-，
+// 照抄的人会装出一个**工具完全看不见**的 unit（前缀不命中连 unknown 都算不上），
+// 两条路都装就是两个 LaunchAgent 抢同一个端口。现已统一到本前缀。
 export const DEFAULT_LABEL_PREFIX = 'com.ccm';
 
 // 漂移原因的稳定顺序：展示与断言都依赖它，别按 Object.keys 的偶然顺序输出。

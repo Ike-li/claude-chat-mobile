@@ -8,8 +8,8 @@
 //   node scripts/render-plist.js <template> <out> KEY=VALUE [KEY=VALUE...]
 // 例：
 //   node scripts/render-plist.js deploy/server.plist.template \
-//     ~/Library/LaunchAgents/com.you.ccm-server.plist \
-//     LABEL=com.you.ccm-server REPO="$PWD" NODE="$(command -v node)" \
+//     ~/Library/LaunchAgents/com.ccm.server.plist \
+//     LABEL=com.ccm.server REPO="$PWD" NODE="$(command -v node)" \
 //     LOG="$HOME/Library/Logs/ccm-server.log"
 // （"$PWD" 等外层双引号是保护当前 shell 调用本脚本时的参数边界，与模板内部的转义/引用是两回事。）
 import { readFileSync, writeFileSync } from 'node:fs';

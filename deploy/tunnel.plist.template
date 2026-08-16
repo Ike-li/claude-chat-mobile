@@ -7,8 +7,13 @@
   这是标准 `cloudflared tunnel run` 配方；不含任何环境相关加固（如本机开全局代理时的
   edge 绕行），那类问题见 deployment.md 排错速查、按你自己的网络环境处理。
 
+  通常不用手工装：`node scripts/service.js install tunnel` 会渲染它并 bootstrap。
+  手工装适合「想自己掌控 plist 内容」。
+
   占位符：
-    __LABEL__         LaunchAgent 标签，如 com.you.ccm-tunnel
+    __LABEL__         LaunchAgent 标签。**建议就用 com.ccm.tunnel**：service.js 与桌面控制台
+                      只扫 com.ccm.* 前缀，换个前缀装出来的它们看都看不到（理由详见
+                      server.plist.template 头注）
     __CLOUDFLARED__   cloudflared 绝对路径（command -v cloudflared），如 /opt/homebrew/bin/cloudflared
     __TUNNEL__        命名隧道名或 UUID（与 config.yml 的 tunnel 一致）
     __LOG__           日志绝对路径，如 /Users/you/Library/Logs/ccm-tunnel.log
@@ -18,8 +23,8 @@
   scripts/render-plist.js（字面量替换 + XML 转义）：
 
     node scripts/render-plist.js deploy/tunnel.plist.template \
-      ~/Library/LaunchAgents/com.you.ccm-tunnel.plist \
-      LABEL=com.you.ccm-tunnel CLOUDFLARED="$(command -v cloudflared)" \
+      ~/Library/LaunchAgents/com.ccm.tunnel.plist \
+      LABEL=com.ccm.tunnel CLOUDFLARED="$(command -v cloudflared)" \
       TUNNEL=your-tunnel-name LOG="$HOME/Library/Logs/ccm-tunnel.log"
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

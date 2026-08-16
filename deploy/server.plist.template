@@ -3,8 +3,15 @@
   占位符 plist 模板 —— 别直接加载本文件。复制它、把下列占位符替换成你的真实值后，
   落到 ~/Library/LaunchAgents/<你的-label>.plist 再 bootstrap。
 
+  通常不用手工装：`node scripts/service.js install server` 会渲染它并 bootstrap
+  （桌面控制台里那个「开机自启」走的也是同一条路径）。手工装适合「想自己掌控 plist 内容」。
+
   占位符（下划线包裹）：
-    __LABEL__   LaunchAgent 标签，须与目标文件名一致，如 com.you.ccm-server
+    __LABEL__   LaunchAgent 标签，须与目标文件名一致。**建议就用 com.ccm.server**：
+                service.js（status/adopt）与桌面控制台只扫 com.ccm.* 前缀，换个前缀装出来的
+                它们看都看不到 —— 两条路都装的结果是两个 LaunchAgent 抢同一个端口，
+                而工具只报告得出其中一个。已用 com.ccm.server 装好的，跑
+                `node scripts/service.js adopt server` 就能被工具管起来（只写 manifest，不动 plist）。
     __REPO__    仓库绝对路径，如 /Users/you/code/claude-chat-mobile
     __NODE__    node 绝对路径（command -v node），如 /opt/homebrew/bin/node
     __LOG__     日志绝对路径，如 /Users/you/Library/Logs/ccm-server.log
@@ -15,8 +22,8 @@
   XML 转义）：
 
     node scripts/render-plist.js deploy/server.plist.template \
-      ~/Library/LaunchAgents/com.you.ccm-server.plist \
-      LABEL=com.you.ccm-server REPO="$PWD" NODE="$(command -v node)" \
+      ~/Library/LaunchAgents/com.ccm.server.plist \
+      LABEL=com.ccm.server REPO="$PWD" NODE="$(command -v node)" \
       LOG="$HOME/Library/Logs/ccm-server.log"
 
   （示例里的 "$PWD" 外层双引号是保护当前 shell 调用本命令时的参数边界，与模板内部的转义无关。）

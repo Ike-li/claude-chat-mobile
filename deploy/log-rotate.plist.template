@@ -6,8 +6,13 @@
   作用：每天 03:47 跑一次 scripts/rotate-logs.sh，对常驻服务日志做 copy-truncate 轮转
   （为什么必须 copy-truncate 而非 newsyslog rename，见脚本头部注释）。
 
+  通常不用手工装：`node scripts/service.js install logrotate` 会渲染它并 bootstrap。
+  手工装适合「想自己掌控 plist 内容」。
+
   占位符（下划线包裹）：
-    __LABEL__   LaunchAgent 标签，须与目标文件名一致，如 com.you.ccm-logrotate
+    __LABEL__   LaunchAgent 标签，须与目标文件名一致。**建议就用 com.ccm.logrotate**：
+                service.js 与桌面控制台只扫 com.ccm.* 前缀，换个前缀装出来的它们看都看不到
+                （理由详见 server.plist.template 头注）
     __REPO__    仓库绝对路径，如 /Users/you/code/claude-chat-mobile
     __LOG__     本定时器自身的日志绝对路径（每次轮转仅一行输出），如
                 /Users/you/Library/Logs/ccm-logrotate.log
@@ -15,11 +20,11 @@
   用 scripts/render-plist.js 替换（勿裸 sed，理由见 server.plist.template 头注）：
 
     node scripts/render-plist.js deploy/log-rotate.plist.template \
-      ~/Library/LaunchAgents/com.you.ccm-logrotate.plist \
-      LABEL=com.you.ccm-logrotate REPO="$PWD" \
+      ~/Library/LaunchAgents/com.ccm.logrotate.plist \
+      LABEL=com.ccm.logrotate REPO="$PWD" \
       LOG="$HOME/Library/Logs/ccm-logrotate.log"
 
-  加载：launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.you.ccm-logrotate.plist
+  加载：launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccm.logrotate.plist
 -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

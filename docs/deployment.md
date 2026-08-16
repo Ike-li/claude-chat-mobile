@@ -102,30 +102,44 @@ Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<yo
 
 改完必须**删掉主屏图标重新安装**——Chrome 缓存了失败结果，不会自己重试。
 
-### 3. 常驻（macOS LaunchAgent 示例）
+### 3. 常驻（macOS LaunchAgent）
 
-> **只装 server 的话有更省事的路**：`npm run service:install server`，或在 macOS 桌面控制台
-> （`npm run app:build`）里勾「开机自启（菜单栏）」——都不用碰 plist。下面这套模板适用于
-> **同时要托管 cloudflared 隧道与日志轮转**、或者想自己掌控 plist 内容的场景。
->
-> ⚠️ **两条路不要都走，而且 label 有讲究。** 工具装的固定是 `com.ccm.server`；模板注释里的示例
-> 是 `com.you.ccm-server`。`service:status`、`adopt`、桌面控制台**只扫 `com.ccm.*` 前缀**，
-> 换个前缀装出来的那份它们看都看不到。后果是两个 LaunchAgent 抢同一个端口，而工具只报告得出其中一个。
-> 想让手工装的那份也被工具管起来：`__LABEL__` 填 `com.ccm.server`，然后
-> `npm run service:adopt server`（只写 manifest，一个字节都不碰 plist）。
+四个 unit 都能一条命令装好，**不用碰 plist**：
 
-仓库 `deploy/` 下有三份**占位符 plist 模板**，复制、替换占位符后放到 `~/Library/LaunchAgents/`：
+```bash
+npm run service:install -- server      # node server.js，RunAtLoad + KeepAlive
+npm run service:install -- tunnel      # cloudflared tunnel run（读 §1 的 config.yml）
+npm run service:install -- logrotate   # 每天 03:47 轮转日志
+npm run service:install -- menubar     # 桌面控制台随登录自启（可选）
+npm run service:status                 # 装了哪些、在不在跑、有没有漂移
+```
+
+macOS 桌面控制台里勾「开机自启（菜单栏）」走的是同一条路径。装出来的 label 固定是 `com.ccm.<unit>`。
+
+<details>
+<summary>手工渲染 plist（想自己掌控内容时）</summary>
+
+仓库 `deploy/` 下有四份**占位符 plist 模板**——它们同时是上面 `service:install` 的数据源
+（`scripts/service.js:71` 直接读它们渲染），不是可以删掉的文档附件。
 
 - [`deploy/server.plist.template`](../deploy/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
 - [`deploy/tunnel.plist.template`](../deploy/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
 - [`deploy/log-rotate.plist.template`](../deploy/log-rotate.plist.template) —— 每天 03:47 跑 `scripts/rotate-logs.sh` 做日志轮转（copy-truncate：launchd 持 O_APPEND fd，rename 式的 newsyslog/logrotate 转出来的新文件永远是空的，机制见脚本头注；默认超 20MB 才转、gzip 保留 5 份）。
+- [`deploy/menubar.plist.template`](../deploy/menubar.plist.template) —— `/usr/bin/open CCM.app`。刻意不设 `KeepAlive`（设了的话用户从菜单点「退出」会被 launchd 立刻拉起，再也关不掉）。
 
-每份模板顶部的 XML 注释列出占位符（`__LABEL__`/`__REPO__`/`__NODE__`/`__LOG__` 等）与一行可直接跑的 `node scripts/render-plist.js` 替换示例（字面量替换 + XML 转义，不用裸 `sed`——审计 TC-009：路径若含空格/`&`/`#`/引号等特殊字符，裸 `sed` 可能破坏替换或生成非法 plist）。替换后加载：
+每份模板顶部的 XML 注释列出占位符与一行可直接跑的 `node scripts/render-plist.js` 替换示例（字面量替换 + XML 转义，不用裸 `sed`——审计 TC-009：路径若含空格/`&`/`#`/引号等特殊字符，裸 `sed` 可能破坏替换或生成非法 plist）。替换后加载：
 
 ```bash
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-server-label>.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<your-tunnel-label>.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccm.tunnel.plist
 ```
+
+⚠️ **label 一定要用 `com.ccm.<unit>`。** `service:status`、`adopt`、桌面控制台**只扫 `com.ccm.*`
+前缀**，换个前缀装出来的那份它们看都看不到——手工装完再用工具装一次，就是两个 LaunchAgent
+抢同一个端口，而工具只报告得出其中一个。手工装好之后跑一次
+`npm run service:adopt -- server` 让工具接管（只写 manifest，一个字节都不碰 plist）。
+
+</details>
 
 > LaunchAgent 在**登录后**启动。若要"开机未登录也跑"（headless），需要改成 root LaunchDaemon。
 
