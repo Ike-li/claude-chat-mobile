@@ -160,13 +160,16 @@ test.describe('--desktop：桌面控制台', () => {
     assert.equal(r.refuse.code, 'invalid_desktop');
   });
 
+  // platform 显式钉 darwin：这两条测的是 macOS 上的装/不装决策。不钉的话在 Linux CI 上
+  // --desktop=on 会走 desktop_unsupported 拒绝分支（r.desktop=undefined），
+  // 而「默认不装」则与拒绝分支恰好同值 'off'，空过。
   test('非交互模式默认不装 —— 它要跑 swiftc，不该擅自做', () => {
-    const r = resolveSetupPlan({ args: parseSetupArgs(['--yes', '--work-dir=/x']) });
+    const r = resolveSetupPlan({ args: parseSetupArgs(['--yes', '--work-dir=/x']), platform: 'darwin' });
     assert.equal(r.desktop, 'off');
   });
 
   test('非交互显式 on 才装', () => {
-    const r = resolveSetupPlan({ args: parseSetupArgs(['--yes', '--work-dir=/x', '--desktop=on']) });
+    const r = resolveSetupPlan({ args: parseSetupArgs(['--yes', '--work-dir=/x', '--desktop=on']), platform: 'darwin' });
     assert.equal(r.desktop, 'on');
   });
 
