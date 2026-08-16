@@ -3247,7 +3247,7 @@ httpServer.on('error', err => {
   if (err.code === 'EADDRINUSE') {
     console.error(`\n❌ 启动失败：端口 ${port} 已被占用。`);
     console.error(`   查看占用者：lsof -nP -iTCP:${port} -sTCP:LISTEN`);
-    console.error(`   或在 .env 中改用其他 PORT\n`);
+    console.error(`   或改用其他端口：node scripts/config.js set PORT=<新端口>\n`);
   } else {
     console.error(`\n❌ 启动失败：${err.message}\n`);
   }

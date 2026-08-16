@@ -43,6 +43,7 @@ struct CCMCoreTests {
         testConfigSnapshot()
         testTaskSteps()
         testConsoleActions()
+        testPortConflictPresentation()
         testWebUIURL()
         testProbeInterval()
 
@@ -409,7 +410,9 @@ func testTaskSteps() {
     eq(steps[0].argv[3], "--hooks=on", "hooks 开")
     eq(setupSteps(repo: repo, workDir: "/x", hooks: false)[0].argv[3], "--hooks=off", "hooks 关")
     eq(steps[1].argv, ["/Users/you/my repo/scripts/service.js", "install", "server"], "第二步安装")
-    eq(steps[3].argv.last, "status", "末步确认状态")
+    // 【变更记录】此前断言末步是 status。status 恒退出 0（只读查询的正确语义），
+    // 拿它收尾会让端口冲突场景一路绿灯报「全部完成」—— 详见 testPortConflictPresentation。
+    eq(steps[3].argv.last, "health", "末步确认服务真的可用")
 }
 
 func testConsoleActions() {
@@ -438,4 +441,28 @@ func testConsoleActions() {
     let new = consoleActions(status: status(fresh), problem: .none)
     check(new.first?.kind == .setupWizard, "未配置 ⇒ 首项是装机向导")
     check(new.first(where: { $0.kind == .copyToken })?.enabled == false, "没配过 ⇒ 复制令牌禁用")
+}
+
+func testPortConflictPresentation() {
+    // ★ 装机末步必须能判定成败。status 恒退出 0（只读查询的正确语义），拿它收尾会让
+    // 端口冲突场景一路绿灯报「全部完成」，而 server 正在崩溃循环。
+    let steps = setupSteps(repo: "/r", workDir: "/w", hooks: false)
+    check(!(steps.last?.argv.contains("status") ?? true), "末步不能是 status —— 它恒退出 0")
+    eq(steps.last?.argv.last, "health", "末步用 health：带 token 打 /health，能区分是不是我们的服务")
+    check(steps[2].argv.contains("--wait"), "启动要等就绪，不能 kickstart 完就返回")
+
+    // ★ 服务没在跑、端口却通 ⇒ 被别的进程占着。这正是端口冲突的 signature，
+    // 而此前显示成 "已崩溃 · :4567"，端口号旁边没有任何异常标记、反而像是正常的。
+    func line(_ state: String, reachable: Bool) -> String {
+        let json = """
+        {"schemaVersion":1,"supported":true,"units":[{"unit":"server","state":"\(state)",
+         "listen":{"port":4567,"reachable":\(reachable)}}]}
+        """
+        return summaryLine(status: decode(json), problem: .none, lastError: nil, staleSeconds: nil)
+    }
+    check(line("crashed", reachable: true).contains("被其它进程占用"), "崩溃 + 端口通 ⇒ 指出被占用")
+    check(line("stopped", reachable: true).contains("被其它进程占用"), "停止 + 端口通 ⇒ 同理")
+    check(line("running", reachable: true).contains(":4567"), "正常运行时照常显示端口")
+    check(!line("running", reachable: true).contains("被其它进程占用"), "运行中不该报占用")
+    check(line("crashed", reachable: false).contains("连不上"), "崩溃 + 端口不通 ⇒ 仍是连不上")
 }

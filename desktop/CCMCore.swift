@@ -129,7 +129,15 @@ func summaryLine(status: ServiceStatus?, problem: EnvProblem, lastError: String?
     default: parts.append("未安装")
     }
     if let l = server.listen, let p = l.port {
-        parts.append((l.reachable ?? false) ? ":\(p)" : ":\(p) 连不上")
+        let reachable = l.reachable ?? false
+        // ★ 服务没在跑、端口却通 —— 那个端口被**别的进程**占着，正是端口冲突的 signature。
+        // 此前这里只显示 ":4567"，与「已崩溃」并排，反而暗示端口一切正常，
+        // 而端口恰恰就是崩溃的原因。
+        if server.stateName != "running" && reachable {
+            parts.append(":\(p) 被其它进程占用")
+        } else {
+            parts.append(reachable ? ":\(p)" : ":\(p) 连不上")
+        }
     }
     if let stale = staleSeconds, let e = lastError {
         parts.append("状态已过期 \(stale)s（\(e)）")
@@ -429,8 +437,18 @@ func setupSteps(repo: String, workDir: String, hooks: Bool) -> [TaskStep] {
     return [
         TaskStep(title: "生成配置", argv: [setup, "--yes", "--work-dir=\(workDir)", "--hooks=\(hooks ? "on" : "off")"]),
         TaskStep(title: "安装常驻服务", argv: [service, "install", "server"]),
-        TaskStep(title: "启动服务", argv: [service, "start", "server"]),
-        TaskStep(title: "确认状态", argv: [service, "status"]),
+        // `restart --wait` 而不是 `start`：后者只 kickstart 就返回，不等 server 真的起来。
+        TaskStep(title: "启动并等待就绪", argv: [service, "restart", "server", "--wait"]),
+        // ★ 末步必须是 **health** 而不是 status。
+        //
+        // status 是只读查询，无论服务 crashed 还是 running 都退出 0（那是对的 CLI 语义，
+        // doctor D16 也靠它不抛）—— 拿它收尾，端口冲突时装机会一路绿灯报「全部完成」，
+        // 而 server 正在崩溃循环。
+        //
+        // health 带 token 打 /health：端口被别的进程占着时它拿不到预期响应，退出码非零。
+        // 这也是唯一能区分「我们的服务在监听」与「某个进程占着这个端口」的判据 ——
+        // 纯 TCP 探测对占位进程一样探得通。
+        TaskStep(title: "确认服务可用", argv: [service, "health"]),
     ]
 }
 
