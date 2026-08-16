@@ -1,9 +1,9 @@
-// approval-store.js —— 服务端持久状态：审批请求台账，单 JSON 文件，原子写（docs/design.md approval_request 表，
-// 承接 NFR-16/NFR-17/FR-19/FR-22）。与 sessions.js 同一套模式（防抖异步写 + tmp+rename 原子落盘）。
+// approval-store.js —— 服务端持久状态：审批请求台账，单 JSON 文件，原子写。
+// 与 sessions.js 同一套模式（防抖异步写 + tmp+rename 原子落盘）。
 //
 // 存在的理由：canUseTool 挂起的审批此前只活在 AgentSession 的内存 Map 里（Phase 1/3 的刻意简化——
-// 见 agent.js pendingPermissions）——进程一死（重启/崩溃）就凭空消失，FR-19"审批记录可查询留存"、
-// NFR-16"留存有界可治理"都无从谈起。本模块只是台账（谁批准了什么、何时、结果如何），不是执行门槛——
+// 见 agent.js pendingPermissions）——进程一死（重启/崩溃）就凭空消失，"审批记录可查询留存"、
+// "留存有界可治理"都无从谈起。本模块只是台账（谁批准了什么、何时、结果如何），不是执行门槛——
 // 真正的完整性校验/fail-closed 仍在 agent.js 的同步内存路径（见 fingerprint.js 头部注释），本模块的
 // 写入失败不应、也不会阻塞审批流程本身（各调用点仅捕获日志，不向上抛）。
 import { readFileSync, mkdirSync } from 'node:fs';
@@ -94,7 +94,7 @@ export function recordDecided(reqId, { status, decidedBy, decidedAt }) {
   save();
 }
 
-// 重启恢复语义（见 docs/design.md §4）：canUseTool 回调随上一进程终止已无法兑现，遗留的 pending
+// 重启恢复语义：canUseTool 回调随上一进程终止已无法兑现，遗留的 pending
 // 一律标记 expired，decidedBy 固定 'system:restart'，绝不能让它们看起来"仍可批准"。返回处置条数。
 export function expireAllPending({ decidedBy = 'system:restart', decidedAt } = {}) {
   const at = decidedAt ?? Date.now();
@@ -111,7 +111,7 @@ export function expireAllPending({ decidedBy = 'system:restart', decidedAt } = {
   return count;
 }
 
-// NFR-16 留存治理：终态（非 pending）记录按 decidedAt 早于 cutoffTs 的清理。pending 记录永不因保留期
+// 留存治理：终态（非 pending）记录按 decidedAt 早于 cutoffTs 的清理。pending 记录永不因保留期
 // 被清（无论多久悬置，仍需走 TTL/重启恢复的正常终态化路径，不应被留存治理这条平行逻辑意外收走）。
 export function purgeTerminalOlderThan(cutoffTs) {
   const before = state.requests.length;

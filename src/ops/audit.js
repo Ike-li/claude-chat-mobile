@@ -1,14 +1,14 @@
-// audit.js —— 服务端持久状态：最小安全审计记录，单 JSON 文件，环形上限，原子写（docs/design.md audit_record 表，
-// 承接 FR-19/NFR-06/NFR-16）。写入模式同 sessions.js/approval-store.js（防抖异步 + tmp+rename 原子落盘）。
+// audit.js —— 服务端持久状态：最小安全审计记录，单 JSON 文件，环形上限，原子写。
+// 写入模式同 sessions.js/approval-store.js（防抖异步 + tmp+rename 原子落盘）。
 //
-// 范围收敛到 FR-19 明文列出的三类"web 特有安全动作"——鉴权（限速锁定）、设备（批准/拒绝/吊销）、
+// 范围收敛到三类"web 特有安全动作"——鉴权（限速锁定）、设备（批准/拒绝/吊销）、
 // 审批（完整性校验失败、重启批量失效、留存治理清理本身）。刻意不覆盖：①审批的常规 allow/deny——
 // 那是 approval_request 表自己的职责（含完整 op），本表若逐条重复记录会让环形上限更快被日常噪音
 // 挤满、反而冲掉真正稀有的异常信号；②纯运维性日志（推送失败、workdirs 热加载、scout 超时等）——
-// 不是"安全动作"，维持现状 console.warn/error 即可，不必叠加一套平行判定体系（呼应 OQ-07 瘦中转原则）。
+// 不是"安全动作"，维持现状 console.warn/error 即可，不必叠加一套平行判定体系（呼应瘦中转原则）。
 //
-// meta 字段约束（NFR-06："meta 无敏感正文"）：只放事实性元数据（工具名、计数、cwd 尾段等），
-// 不放命令原文/文件内容/凭证——调用点自行遵守，本模块不做内容过滤（同 §3.4.1 WorkdirScopeGuard
+// meta 字段约束（"meta 无敏感正文"）：只放事实性元数据（工具名、计数、cwd 尾段等），
+// 不放命令原文/文件内容/凭证——调用点自行遵守，本模块不做内容过滤（同 WorkdirScopeGuard
 // 的显式抉择：防线在写入点自律，不在这里做黑名单式内容审查）。
 import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';
@@ -19,7 +19,7 @@ import { dataFile } from '../shared/data-dir.js';
 
 const FILE = process.env.CCM_AUDIT_FILE || dataFile('audit-records.json');
 
-// NFR-16：环形上限，可配（默认 5000，同 docs/design.md 建议值）。
+// 环形上限，可配（默认 5000）。
 const CAP = Number(process.env.AUDIT_RECORD_CAP) > 0 ? Number(process.env.AUDIT_RECORD_CAP) : 5000;
 
 const EMPTY = () => ({ records: [] });

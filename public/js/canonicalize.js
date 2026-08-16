@@ -1,4 +1,4 @@
-// public/js/canonicalize.js —— 审批完整性绑定的规范化 + 指纹核心（docs/design.md，承接 AD-7/NFR-17）
+// public/js/canonicalize.js —— 审批完整性绑定的规范化 + 指纹核心（"所批即所行"）
 // 前后端共享同一份文件（浏览器原生 ESM 加载 /js/canonicalize.js；Node 端 agent.js 用相对路径 import
 // 同一文件）——"机制强度==双端一致性强度"，任一端 NFC/键排序/数字格式化行为不同都会使合法审批在
 // 校验步被误判为篡改。哈希用 crypto.subtle（Web Crypto，Node 20+ 与所有现代浏览器均全局可用，SHA-256
@@ -30,7 +30,7 @@ function canonicalizeValue(v) {
   throw new Error(`canonicalize: 不支持的值类型：${kind}`);
 }
 
-// 词法路径归一化（折叠 ./ 与 ../、去尾斜杠）——刻意不 resolve 符号链接，与 §3.4.1 WorkdirScopeGuard
+// 词法路径归一化（折叠 ./ 与 ../、去尾斜杠）——刻意不 resolve 符号链接，与 WorkdirScopeGuard
 // 相反：那里范围是权限边界必须 resolve 真实落点；这里完整性层管"用户看到的路径 == 指纹的路径"的
 // 展示一致性，resolve 符号链接反而会让展示路径与指纹背离。不用 node:path（浏览器不可用）——纯字符串
 // 操作，前后端逐字节一致正是本函数存在的理由，不碰文件系统（不存在的路径也能正常计算）。

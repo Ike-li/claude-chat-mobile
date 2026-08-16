@@ -135,7 +135,7 @@ export async function saveAttachments(workDir, attachments) {
 }
 
 // 路径注入：原文末尾追加 [附件] 段（绝对路径逐行）。原文空（纯附件）时仅留附件段。
-// 这是「告诉 claude 文件在哪」的静态标注，非中间层智能（§6）——等价终端里你说「看下 X 文件」。
+// 这是「告诉 claude 文件在哪」的静态标注，非中间层智能——等价终端里你说「看下 X 文件」。
 export function buildPromptText(text, saved) {
   const base = (text || '').trim();
   if (!saved || saved.length === 0) return base;

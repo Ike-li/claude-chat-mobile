@@ -4,8 +4,8 @@ import { basename } from 'node:path';
 import { setCapped } from '../shared/bounded-map.js';
 
 // notificationForEvent 返回 { title, body, data? }：
-//   · body 最小化（SEC-04 / docs/design.md）：不含命令/参数/问题正文/summary——尤其 ntfy 明文经第三方；正文回 app 内经鉴权取。
-//   · title 追加 cwdBase（docs/design.md NotifPayload/OQ-08 已决：默认显示，不设隐藏配置项）——仅目录尾段（basename），
+//   · body 最小化（SEC-04，见 docs/hard-rules.md）：不含命令/参数/问题正文/summary——尤其 ntfy 明文经第三方；正文回 app 内经鉴权取。
+//   · title 追加 cwdBase（已决：默认显示，不设隐藏配置项）——仅目录尾段（basename），
 //     非完整路径，帮多工作区场景分辨通知来自哪个项目；无 cwd（如未绑定实例）时不追加，向后兼容不带 cwd 的旧调用。
 //   · data 仅在传入 instanceId 时附带（{instanceId, sessionId, cwd}）——供深链回该会话。Web Push 的 data 走 RFC 8291
 //     端到端加密（push service 不见明文、不上锁屏），故保留完整 cwd 供深链；ntfy click 深链则不含完整 cwd（见 ntfyMetaFor）。
@@ -120,11 +120,11 @@ export function notificationForCliHook(hookEventName, { cwd, sessionId, instance
   return instanceId ? { ...base, data: { instanceId, sessionId, cwd } } : base;
 }
 
-// ── per-会话推送节流（docs/design.md TriggerPolicy，承接 FR-14"不重复轰炸同一会话"的另一半）──
+// ── per-会话推送节流（"不重复轰炸同一会话"的另一半）──
 // 两层规则：①同一会话同一类别已有未决通知（未被 clearNotifyPending 清除）不重复推——
 // approval/input 需要"被处理"（request_resolved）才算未决解除；finished（result/task_notification）
 // 是一次性终态通知，没有"被处理"这个动作，只受②约束。②同类事件最小间隔（默认 60s）内抑制，
-// 防止连续多次触发瞬间炸出好几条。纯函数、状态外置（EP-2）：调用方持有 Map<sessionId, {[category]:{notifiedAt,pending}}>。
+// 防止连续多次触发瞬间炸出好几条。纯函数、状态外置：调用方持有 Map<sessionId, {[category]:{notifiedAt,pending}}>。
 export const NOTIFY_CATEGORY = Object.freeze({
   permission_request: 'approval',
   question: 'input',

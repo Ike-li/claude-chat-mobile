@@ -1,4 +1,4 @@
-// fingerprint.js —— 审批完整性绑定的后端侧哈希封装（docs/design.md，承接 AD-7/NFR-17）
+// fingerprint.js —— 审批完整性绑定的后端侧哈希封装（"所批即所行"）
 // canonicalizeOp（字符串构造，前后端一致性有真实风险）与哈希（SHA-256，标准化算法、跨实现无漂移
 // 风险）分离：canonicalizeOp 从 public/js/canonicalize.js 原样导入（浏览器与本文件共享同一份实现）；
 // 哈希后端用 node:crypto 同步 API——askPermission/resolvePermission 是同步函数，若改用 crypto.subtle

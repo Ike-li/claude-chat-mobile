@@ -48,7 +48,7 @@ export function tokenMatches(expected, provided) {
   return actual.length === wanted.length && timingSafeEqual(actual, wanted);
 }
 
-// AUTH-001：HTTP 鉴权与 Socket 握手共用限速——否则 /health|/metrics|/push/* 可无限试 AUTH_TOKEN，
+// HTTP 鉴权与 Socket 握手共用限速——否则 /health|/metrics|/push/* 可无限试 AUTH_TOKEN，
 // 而同 IP 的 socket 已被 lock。rateLimit 可选；不传则行为与改造前一致（仅鉴权）。
 // rateLimit = { active, sourceKey, getState, setState, onResult, now?, onLocked? }
 // rateLimit.active：boolean 或 (req) => boolean。AUTH-NEW-1：公网 Host 即使无 AUTH_TOKEN 也须限速，

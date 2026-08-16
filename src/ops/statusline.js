@@ -148,7 +148,7 @@ export function webContextCost({ agent }) {
   return r;
 }
 
-// Part2（§6）：安全取 Agent SDK 上下文用量。活跃会话（调用方已确认 agent.q 存在且未 dispose）调 q.getContextUsage()
+// Part2：安全取 Agent SDK 上下文用量。活跃会话（调用方已确认 agent.q 存在且未 dispose）调 q.getContextUsage()
 // 取【运行时权威】maxTokens/percentage；RPC 超时（默认 1.5s，cold ~3.8s 但不阻塞——先发陈旧值/回来补发）
 // 或抛错 → 返回 null 让调用方垫会话缓存的窗口真值。本函数只兜 RPC 层（延迟/异常），不判生命周期。
 // 不再透传 categories（那是 CLI /context 分解，非 CLI statusline 字段；web statusline 对齐 CLI statusline 故不含）。

@@ -1,8 +1,8 @@
-// workdir-scope-guard.js —— web 侧目录可达性的唯一裁决点（docs/design.md，承接 AD-12/FR-23）
+// workdir-scope-guard.js —— web 侧目录可达性的唯一裁决点
 // 与 workdirs.js 的 isWhitelisted 判断粒度不同：isWhitelisted 只判断 cwd 本身在不在白名单（精确匹配，
 // 用于 session:new/switch 的 cwd——该值恒来自前端从 workDirs 列表本身选取，无子路径穿越面）；本函数判断
 // cwd 内任意子路径是否越界（供文件浏览/附件等允许用户提供任意子路径的场景），必须 resolve 符号链接——
-// 范围是权限边界，不 resolve 则 cwd 内一个指向范围外的 symlink 即逃逸（与 §5.5 canonicalize 刻意相反：
+// 范围是权限边界，不 resolve 则 cwd 内一个指向范围外的 symlink 即逃逸（与 canonicalize 刻意相反：
 // 那是完整性层"所见即所批"的展示一致性抉择，不 resolve；此处权限层管真实落点，两者分工不同不可混用）。
 import { realpathSync } from 'node:fs';
 import { sep } from 'node:path';

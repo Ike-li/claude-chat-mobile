@@ -1,14 +1,14 @@
-// 审批台账生命周期（重启 fail-closed + NFR-16 留存治理），从 server/app.js 下沉。
+// 审批台账生命周期（重启 fail-closed + 留存治理），从 server/app.js 下沉。
 import * as approvalStore from './approval-store.js';
 import * as audit from '../ops/audit.js';
 
-// NFR-16："建议 90 天，可配"（docs/design.md）。0/负数/非数字一律回落默认。
+// 保留期："建议 90 天，可配"。0/负数/非数字一律回落默认。
 export function approvalRetentionMs(env = process.env) {
   const days = Number(env.APPROVAL_RETENTION_DAYS) > 0 ? Number(env.APPROVAL_RETENTION_DAYS) : 90;
   return days * 24 * 60 * 60 * 1000;
 }
 
-// 重启后 pending 审批的 fail-closed 处置（docs/design.md §4）：canUseTool 回调绑在上一进程的
+// 重启后 pending 审批的 fail-closed 处置：canUseTool 回调绑在上一进程的
 // 内存里，随进程终止已无法兑现——遗留在持久化台账里的 status=pending 记录一律标 expired，
 // 绝不能让它们在"等我"聚合或任何未来查询里看起来"仍可批准"（批一个已无执行上下文的操作是危险假象）。
 // 必须在 httpServer.listen 之前跑完：这之后 io 才可能真正开始接受连接、驱动新的实例。

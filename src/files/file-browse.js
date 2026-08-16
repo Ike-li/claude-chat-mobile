@@ -1,4 +1,4 @@
-// file-browse.js —— FileBrowseHandler（docs/design.md，承接 AD-12/FR-07"浏览项目文件"）
+// file-browse.js —— FileBrowseHandler（"浏览项目文件"，只读）
 // 授权目录内的文件树浏览、内容读取，以及（2026-07 起）CodeMirror 编辑器的直写回。请求-响应型，
 // 不进事件信封/RingBuffer——非会话进展，断线重来即可，无"错过"概念（src/server/socket-files.js 侧以普通 ack 回调接线，不走 broadcast）。
 // 写路径唯一入口 writeFileInScope（socket 层 files:write）：只改【已存在】的文件（不带 O_CREAT，不新建
@@ -6,7 +6,7 @@
 // 落盘即审计（src/server/socket-files.js 的 audit.recordAudit file_write）；这是机主本人在编辑器里的显式操作，语义等同
 // ssh+vim，不走 agent 行为的审批链（approval-store 是给 canUseTool 设计的，不是给人)。部署方仍可用
 // .env FILE_EDIT=off 整体回到只读（src/server/app.js 读取，见其 fileEditOff 判定）。
-// 透明性权衡（显式抉择，承接 docs/design.md）：范围内内容不做敏感过滤（.env 等照读）——机主即 root +
+// 透明性权衡（显式抉择）：范围内内容不做敏感过滤（.env 等照读）——机主即 root +
 // 终端 TUI 语义等同，防线在范围门（WorkdirScopeGuard）不在内容审查，本模块不自作主张加过滤。
 import { readdirSync, lstatSync, fstatSync, openSync, readSync, closeSync, renameSync, unlinkSync, writeFileSync, chmodSync, fsyncSync, constants } from 'node:fs';
 import { isUtf8 } from 'node:buffer';
@@ -14,7 +14,7 @@ import { join, dirname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import { isInScope } from './workdir-scope-guard.js';
 
-// docs/design.md 建议值（256KB/片、500 条/页）：本模块把它们同时当默认值与硬顶——弱网上限的含义是"每次最多这么多"，
+// 256KB/片、500 条/页：本模块把它们同时当默认值与硬顶——弱网上限的含义是"每次最多这么多"，
 // 客户端可请求更小的页（省流量），但不能请求更大的页绕过分页语义；不做成可无限调大的可配置项。
 export const MAX_BROWSE_ENTRIES = 500;
 export const MAX_BROWSE_BYTES = 256 * 1024;
@@ -104,7 +104,7 @@ export function readFile(cwd, relPath, scopeDirs, opts = {}) {
   // E18 附件预览：base64 模式——按字节精确分页返回该片 base64（二进制不拒绝、不做 UTF-8 尾裁剪，
   // 拼装方是前端 Uint8Array，切在哪都无损）。范围门/硬顶与文本模式完全同权，模式只改编码不改安全。
   const wantBase64 = opts.encoding === 'base64';
-  // TOCTOU 缓解（docs/design.md 登记为残余风险、非绝对防护）：O_NOFOLLOW 挡开时刻叶节点被替换为
+  // TOCTOU 缓解（登记为残余风险、非绝对防护）：O_NOFOLLOW 挡开时刻叶节点被替换为
   // symlink（ELOOP 直接拒绝）；读后再用 isInScope 复核一次真实落点，缓解 scope 校验与 open 之间的窗口替换。
   const NOFOLLOW = constants.O_NOFOLLOW || 0;
   let fd;

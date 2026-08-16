@@ -207,7 +207,7 @@ export function classifyAuthToken(token) {
   return { status: 'ok', isSet: true, length: t.length };
 }
 
-// AUTH-003：localhost / 反代到 127.0.0.1 的隧道会跳过设备指纹审批（trustBasis=bypass），
+// localhost / 反代到 127.0.0.1 的隧道会跳过设备指纹审批（trustBasis=bypass），
 // 公网只剩 AUTH_TOKEN 一层。CF Access 已开则 JWT 是公网门，不警告。
 // 返回 { status, detail, safe } 供 runDoctor 挂 checks。
 export function classifyDeviceGateTopology({ authTokenSet, cfEnabled } = {}) {

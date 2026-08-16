@@ -204,7 +204,7 @@ export function isAnsweredQuestionId(requestId, answeredIds) {
   return false;
 }
 
-// 回车键是否触发发送（2026-07-13 排查报告 §4：移动端回车发送截断）。桌面物理键盘用 Shift+Enter
+// 回车键是否触发发送（2026-07-13 排查：移动端回车发送截断）。桌面物理键盘用 Shift+Enter
 // 当换行「逃生舱」，非 Shift 回车一律发送；但触屏软键盘没有 Shift+Enter 这个组合，若照搬桌面语义，
 // 用户想换行分段时按下的每一次回车都会被当场发出，把一条多行长消息在换行处截断成几条。
 // 触摸设备下回车恒不发送（走 textarea 默认插入换行），发送收窄为仅走发送按钮；非触摸设备维持原状。

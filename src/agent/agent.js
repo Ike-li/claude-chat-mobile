@@ -189,7 +189,7 @@ const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn
 const BG_TASK_ORPHAN_TTL_MS = 180000;           // 合成键孤儿 3min
 const BG_TASK_LIFECYCLE_TTL_MS = 2 * 60 * 60 * 1000; // 真实 task_id 2h 兜底
 const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 src/server/config.js 的 APPROVAL_TTL_MS；
-                                          // docs/design.md/OQ-05 已决：不预置具体数值，此为实现落地的合理默认）
+                                          // 已决：不预置具体数值，此为实现落地的合理默认）
 const GATEWAY_STALL_WARN_MS = 90_000;     // 在途轮静默早期告警线（只提示不中断，见 formatLifecycleGatewayStall）：
                                           // 宽于正常首 token 延迟 + 30s checkIdle tick 粒度，远窄于 idleTimeoutMs 中断阈
 // 前台工具在途豁免上限（2026-07-30 排查真机会话 0f82d2e7）：tool_use 发出到 tool_result 回来之间 SDK 流
@@ -1063,11 +1063,11 @@ export class AgentSession {
     // 恒空，见 resolvePermission 兜底注释）；保留此日志以便 SDK 版本变更后能第一时间发现 setMode 开始下发。
     if (suggestions?.length) console.log(`[canUseTool] ${name} suggestions: ${JSON.stringify(suggestions)}`);
     const requestId = toolUseID || `perm_${++this.permSeq}`;
-    // 审批 TTL（docs/design.md，承接 OQ-05）：createdAt=悬置起点，expiresAt=过期时刻；
-    // 事件携带二者供前端未来展示悬置时长/倒计时（FR-22），即使本轮不接 UI 也先备好契约字段。
+    // 审批 TTL：createdAt=悬置起点，expiresAt=过期时刻；
+    // 事件携带二者供前端未来展示悬置时长/倒计时，即使本轮不接 UI 也先备好契约字段。
     const createdAt = Date.now();
     const expiresAt = createdAt + this.approvalTtlMs;
-    // 审批完整性绑定（docs/design.md，承接 AD-7/NFR-17，"所批即所行"）：canUseTool 收到 op 的这一刻
+    // 审批完整性绑定（"所批即所行"）：canUseTool 收到 op 的这一刻
     // 就是完整性锚点的源头——op={tool,args,cwd} 越晚计算，越可能与用户最终看到/批准的内容脱节。
     // 指纹随 permission_request 下发供手机端渲染前重算比对（协议步骤4）；resolvePermission 收到客户端
     // 回传的 op 后重算比对本处存的 fp（协议步骤6），不一致 fail-closed 拒绝。用同步 fingerprintSync
@@ -1076,7 +1076,7 @@ export class AgentSession {
     // pendingPermissions.set() 真正执行前的窗口让 resolvePermission 扑空、返回的 Promise 永远不 resolve。
     const fp = fingerprintSync({ tool: name, args: input, cwd: this.cwd });
     this.emit('permission_request', { requestId, name, input, cwd: this.cwd, fp, createdAt, expiresAt });
-    // 持久化台账（docs/design.md approval_request 表，承接 NFR-16/19/22，Phase 4）：只是台账记录，写入失败
+    // 持久化台账：只是台账记录，写入失败
     // 不影响审批流程本身（recordCreated 内部已捕获落盘错误、不向上抛，见 approval-store.js 头部注释）。
     approvalStore.recordCreated({ reqId: requestId, sessionId: this.sessionId, tool: name, args: input, cwd: this.cwd, fingerprint: fp, risk: null, createdAt, expiresAt });
     return new Promise(resolve => {
@@ -1131,7 +1131,7 @@ export class AgentSession {
     if (pending.expiryTimer) clearTimeout(pending.expiryTimer); // BE-003：用户/系统提交决定，取消到期 timer
     this.pendingPermissions.delete(requestId);
     this.lastActivity = Date.now(); // 用户审批是主动操作，续期静默看护
-    // 审批 TTL fail-closed（OQ-05 已决）：过期后不可再兑现同一请求——不论传入的 decision 是什么，一律按
+    // 审批 TTL fail-closed（已决）：过期后不可再兑现同一请求——不论传入的 decision 是什么，一律按
     // 拒绝处理，避免对一个可能已失去语境（主机/会话状态已变化）的操作误批。outcome 标 'expired' 以区别于
     // 用户主动 allow/deny，供前端提示"已过期，请重新触发"而非误显示为一次正常的拒绝。
     if (Date.now() > pending.expiresAt) {
@@ -1141,7 +1141,7 @@ export class AgentSession {
       pending.resolve({ behavior: 'deny', message: '审批已过期，操作未执行，请重新触发', interrupt: false });
       return 'expired';
     }
-    // 审批完整性绑定（docs/design.md 步骤6/§5.5，承接 AD-7/NFR-17，"所批即所行"）：仅在 allow 时校验——
+    // 审批完整性绑定（协议步骤6，"所批即所行"）：仅在 allow 时校验——
     // deny 不存在"拒绝了错误操作"这种需要防范的风险。clientOp 缺失或与 askPermission 时锚定的 fp
     // 不符，一律 fail-closed 拒绝 + 高优审计告警——不假设"服务端自己存的副本在等待期间没被动过"。
     if (decision === 'allow') {
@@ -1230,7 +1230,7 @@ export class AgentSession {
       const expiresAt = createdAt + this.approvalTtlMs;
       const expiryTimer = setTimeout(() => this._expireQuestion(toolUseID), this.approvalTtlMs);
       expiryTimer.unref?.();
-      // createdAt：供 AD-11/§3.2.5 AttentionDeriver 的"等我输入"悬置起点（waitingSince），镜像 pendingPermissions 已有的 createdAt 模式。
+      // createdAt：供 AttentionDeriver 的"等我输入"悬置起点（waitingSince），镜像 pendingPermissions 已有的 createdAt 模式。
       this.pendingQuestions.set(toolUseID, { resolve, questions, answers, remaining, signal, abortHandler, createdAt, expiresAt, expiryTimer });
 
       for (let i = 0; i < questions.length; i++) {
@@ -2027,7 +2027,7 @@ export class AgentSession {
   pendingRequestsSnapshot() {
     const permissions = [];
     for (const [requestId, p] of this.pendingPermissions) {
-      // fp（NFR-17 完整性绑定）+ createdAt/expiresAt（FR-22 悬置时长/TTL）：补全字段，兑现上方注释
+      // fp（完整性绑定）+ createdAt/expiresAt（悬置时长/TTL）：补全字段，兑现上方注释
       // "逐字段一致"的承诺——此前只带 name/input/cwd 三者，切会话重建的卡片会跳过完整性预检
       // （p.fp undefined）且悬置时长/倒计时展示落空，虽不影响后端 fail-closed 门槛（那边独立按
       // requestId 存 fp），但会让前端这条支线体验缺失。

@@ -156,7 +156,7 @@ export function runDoctor(ctx = {}) {
 
   checks.push({ id: 'CF_ACCESS', status: ctx.cfEnabled ? 'ok' : 'warn', detail: ctx.cfEnabled ? '已启用公网 2FA' : '未启用（回退纯 AUTH_TOKEN）', safe: { enabled: !!ctx.cfEnabled, audSet: !!ctx.cfAudSet } }); // AUD 仅布尔
 
-  // AUTH-003：token 公网 + 无 CF Access 时，localhost 反代/隧道会跳过设备指纹门——显式 warn，不改运行时默认。
+  // token 公网 + 无 CF Access 时，localhost 反代/隧道会跳过设备指纹门——显式 warn，不改运行时默认。
   const gate = classifyDeviceGateTopology({ authTokenSet: tok.isSet && tok.status !== 'fail', cfEnabled: !!ctx.cfEnabled });
   checks.push({ id: 'DEVICE_GATE', status: gate.status, detail: gate.detail, safe: gate.safe });
 

@@ -620,7 +620,7 @@ function isCliSystemLine(content) {
 // 另加两道 SDK 侧兜不住的修正：按 jsonl 是否存在做归属过滤、readdir 补 SDK 漏报的无 summary 会话。
 // 返回 { sessions, hasMore }：hasMore=该目录会话总数 > limit（诚实计算，非 length===limit 猜测），
 // 供前端决定是否显示「显示全部」。缓存键含 limit——否则 limit=6 结果会在 TTL 内污染 all(limit=50) 请求。
-// hiddenIds（FR-20 两级删除 L1，承接 docs/design.md）：本函数是 session:list 的真实数据源（直接扫盘，不依赖
+// hiddenIds（两级删除 L1）：本函数是 session:list 的真实数据源（直接扫盘，不依赖
 // sessions.json 注册表），故"删除产品可见引用"必须在这里过滤，而不是只删 sessions.js 的指针——否则
 // L1 删除后会话仍会在下次 session:list 时原样列出。传空 Set/不传 = 不过滤（向后兼容旧调用点）。
 // 过滤发生在扫盘结果（含缓存）之后、按 limit 截断的窗口之内——已被隐藏的会话若恰好排在最近 N 条内，
@@ -1268,8 +1268,8 @@ export async function sessionFileSize(sessionId, cwd, { baseDir = CLAUDE_DIR } =
   }
 }
 
-// L2 删除的活跃会话保护②用（FR-20，承接 docs/design.md）：mtime 距今 < 静默阈值即视为"可能正被终端使用"——
-// 纯终端进程正驱动的会话后端无法确证（同 AD-3 盲区），mtime 是文件系统元数据级的启发式护栏，非内容
+// L2 删除的活跃会话保护②用（两级删除）：mtime 距今 < 静默阈值即视为"可能正被终端使用"——
+// 纯终端进程正驱动的会话后端无法确证（同"纯终端驱动后端不可见"盲区），mtime 是文件系统元数据级的启发式护栏，非内容
 // 解析，诚实登记非完备。id 同 sessionFileExists 做字符集校验防路径穿越；不存在/非法 id → -1。
 export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {
   if (!isSafeSessionId(sessionId)) return -1;

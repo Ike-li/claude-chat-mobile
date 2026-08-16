@@ -85,7 +85,7 @@ export function ensureWhitelisted(cwd, dirs) {
   return dirs.includes(cwd) ? cwd : dirs[0];
 }
 
-// 精确白名单判定（单一事实源）：cwd 是否为白名单内目录。供 routeCwd 做越界检测 + 审计信号（FR-23）。
+// 精确白名单判定（单一事实源）：cwd 是否为白名单内目录。供 routeCwd 做越界检测 + 审计信号。
 // 与 ensureWhitelisted 的区别：本函数只回答“在不在范围内”（不做归位），让调用方决定越界时如何处理（回退 + 记审计）。
 // git linked worktree 若要用，须把其绝对路径显式写入 workdirs.json，与其它工作区同级——无自动探测、无隐式放行。
 export function isWhitelisted(cwd, dirs) {

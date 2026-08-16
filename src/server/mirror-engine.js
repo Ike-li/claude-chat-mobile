@@ -378,7 +378,7 @@ export function createMirrorEngine({
     }
     const externalWrite = emit.length > 0 || reload;
     if (emit.length > 0) {                                               // 观察到外部写入 → 追平尾巴
-      metrics.inc('catch_up_hits'); // NFR-15 补齐命中（catchUpTick 成功推了终端侧外部增量的次数）
+      metrics.inc('catch_up_hits'); // 补齐命中（catchUpTick 成功推了终端侧外部增量的次数）
       a.externalDirty = true; // 该实例的 SDK 子进程内存上下文已落后于磁盘（外部驱动方写了新轮次）——web 下次发送前须置换实例吸收，否则模型看不到这些轮次、语义分叉
       io.to('approved').emit('agent:event', { // SEC-01：会话内容，仅广播给已批准设备
         seq: 0, epoch: 'server', sessionId: a.sessionId, instanceId: id, cwd: a.cwd, ts: Date.now(),

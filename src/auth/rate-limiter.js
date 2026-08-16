@@ -1,10 +1,10 @@
-// rate-limiter.js —— 鉴权端口防暴破限速（纯函数状态机，承接 docs/design.md / NFR-03）
+// rate-limiter.js —— 鉴权端口防暴破限速（纯函数状态机）
 //
 // 边界：只在鉴权门口用、不限已鉴权操作（单操作者/机主即 root，已鉴权=全权，对操作面限速违背产品目的）。
 // 机制：按 sourceKey 计数 + 指数退避 + 阈值锁定，静默衰减不永久惩罚。状态由调用方存于内存 Map（n=1 瘦快；
-// 重启清零 = 残余风险，见 docs/design.md）。本模块只含纯函数状态转移，sourceKey 取值与审计由调用方（src/server/app.js）负责。
+// 重启清零 = 残余风险、已接受）。本模块只含纯函数状态转移，sourceKey 取值与审计由调用方（src/server/app.js）负责。
 
-// 参数（OQ-03 已决，采纳为可配置默认）：手滑容忍 + 暴破不经济 + 久未失败自动原谅。
+// 参数（已决，采纳为可配置默认）：手滑容忍 + 暴破不经济 + 久未失败自动原谅。
 export const DEFAULT_RATE_LIMIT_CONFIG = Object.freeze({
   threshold: 8,           // 连续失败达此数 → 锁定
   baseBackoffMs: 500,     // 退避基数
@@ -52,12 +52,12 @@ export function onAuthResult(s, ok, now, cfg = DEFAULT_RATE_LIMIT_CONFIG) {
   };
 }
 
-// sourceKey：限速计数的来源标识（承接 docs/design.md "来源识别"）。
+// sourceKey：限速计数的来源标识。
 // 优先级：边缘层可信注入的真实来源(CF-Connecting-IP) → 连接 IP。
 // 信任边界：只信自己边缘层（Cloudflare）注入的头，【绝不信客户端自称的 X-Forwarded-For】——
 // 后者可伪造，用它做 key 等于给攻击者一把绕过 per-source 限速的钥匙。normalizeIp 由调用方注入（去 ::ffff: 前缀）。
 //
-// AUTH-002：CF-Connecting-IP 仅在 trustCfConnectingIp=true 时采信（调用方应只在 isPublicHost 公网
+// CF-Connecting-IP 仅在 trustCfConnectingIp=true 时采信（调用方应只在 isPublicHost 公网
 // Access 路径下置 true）。LAN/直连上该头可被客户端伪造，采信会把限速状态拆成无限 source key 绕过。
 export function rlSourceKey(handshake, normalizeIp = (x) => x, { trustCfConnectingIp = false } = {}) {
   if (trustCfConnectingIp) {

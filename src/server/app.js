@@ -161,7 +161,7 @@ let workDirs = [];
 // 每工作区历史会话显示条数（session:list 默认截断量）；WORK_DIR 及未指定的目录用 DEFAULT_SESSION_LIMIT。
 let sessionLimitByDir = new Map();
 
-let notifyThrottleState = new Map(); // per-会话推送节流态（docs/design.md），sessionId → {[category]:{notifiedAt,pending}}；
+let notifyThrottleState = new Map(); // per-会话推送节流态，sessionId → {[category]:{notifiedAt,pending}}；
                                       // 纯函数返回全新 Map，直接整体替换引用（非 mutate）
 // n1: N1-MSG-DEDUP 进程内单例、重启清零、不分账号——message-dedup.js 自身是纯函数，状态由这里持有。
 //     重启后同一 clientMessageId 会被当成新消息（n=1 下可接受：重启本就中断在途轮）。
@@ -327,13 +327,13 @@ const reselectViewingAfter = (removedCwd, opts = {}) => {
 // 合法路径 = workdirs 白名单本身（含用户把 git worktree 路径显式写入 workdirs.json 的条目）。
 const routeCwd = cwd => {
   if (isWhitelisted(cwd, workDirs)) return cwd;
-  // FR-23 越界审计信号：显式传了不在白名单的路径 → 记一条检测信号，再安全回退当前查看目录。
+  // 越界审计信号：显式传了不在白名单的路径 → 记一条检测信号，再安全回退当前查看目录。
   // 不 fail-closed：回退本身已防越权（不访问越界目录），拒绝会破坏“传错自动纠正”顺手性 + #8 热移除回退。
   if (typeof cwd === 'string' && cwd) {
     console.warn(`[scope] 越界工作目录请求被拒：${cwd} 不在白名单，回退当前查看目录`);
-    // FR-19 最小审计记录（承接 Phase 4）：routeCwd 调用点分散、多数无 socket 上下文可传 actor，
+    // 最小审计记录：routeCwd 调用点分散、多数无 socket 上下文可传 actor，
     // 此处 actor 留空——目录越界信号的价值在"发生过"本身，不在于精确到哪个连接（真正的访问控制
-    // 已经生效，这里只是留痕，同 §3.4.1 WorkdirScopeGuard 的既有 [scope] 日志一个粒度）。
+    // 已经生效，这里只是留痕，同 WorkdirScopeGuard 的既有 [scope] 日志一个粒度）。
     audit.recordAudit({ action: 'scope_violation', target: cwd, outcome: 'denied', meta: { via: 'routeCwd' } });
   }
   return viewingCwdOf();
@@ -343,7 +343,7 @@ const routeCwd = cwd => {
 const resolveTarget = (id, opts) => resolveInstanceTarget(id, viewingInstanceId, x => agents.has(x), opts);
 const resolveInstanceId = id => resolveTarget(id).id;   // 仅取 id：显式 stale → null（不再回退 viewing），无实例的 handler 自然 no-op/echo 拨回
 const routeInstance = id => { const rid = resolveInstanceId(id); return rid ? (agents.get(rid) ?? null) : null; };
-// audit_record 的 actor 字段（FR-19，承接 Phase 4）：deviceId 取握手带的 deviceToken（isLocal/CF Access
+// audit_record 的 actor 字段：deviceId 取握手带的 deviceToken（isLocal/CF Access
 // 直连场景恒无 token，null 属正常）；via 复用既有 socket.trustBasis（'device-token'/'bypass'），
 // 不新造一套分类，与 SEC-03 吊销对称逻辑用的是同一份信任来源判断。
 const actorFromSocket = socket => ({ deviceId: socket?.handshake?.auth?.deviceToken ?? null, via: socket?.trustBasis ?? null });
@@ -357,9 +357,9 @@ configureHttpShell({
 });
 
 const tokenMatches = provided => secureTokenMatches(AUTH_TOKEN, provided);
-// 鉴权限速状态（socket + HTTP 共用，AUTH-001）。NFR-03：仅鉴权门口，重启清零可接受。
+// 鉴权限速状态（socket + HTTP 共用）。仅鉴权门口，重启清零可接受。
 // n1: N1-RATE-LIMIT 进程内单例、重启清零，且只挡鉴权口暴破——不对已鉴权的操作面限速（机主即 root，
-//     给自己的操作限速违背产品目的，见 §2.3）。多租户下这两条都得重来：状态要持久化，操作面要分账号配额。
+//     给自己的操作限速违背产品目的，见 hard-rules §2.3）。多租户下这两条都得重来：状态要持久化，操作面要分账号配额。
 const rlStates = new Map(); // sourceKey → RateLimitState
 // 有界上限。这张表由【未鉴权的公网流量】驱动：服务挂在固定域名上，任何扫描器请求一次 /health
 // （成功或 401 都写）就永久占一条，而全仓只有 get/set、没有任何 delete/TTL 清扫，decayMs 到期也不回收。
@@ -377,13 +377,13 @@ const httpAuth = createHttpAuth({
   authToken: AUTH_TOKEN,
   isPublicHost,
   verifyAccessJwt,
-  // AUTH-001：HTTP 与 socket 握手共享限速 Map，堵住 /health|/metrics|/push 无限试 token。
+  // HTTP 与 socket 握手共享限速 Map，堵住 /health|/metrics|/push 无限试 token。
   rateLimit: {
     // AUTH-NEW-1：与 socket `publicHost || AUTH_TOKEN` 对齐——CF Access-only（空 AUTH_TOKEN）公网 Host
     // 上的 /health|/metrics|/push JWT 失败也须限速；纯本机无 token 仍不限。
     active: (req) => !!(AUTH_TOKEN || isPublicHost(req?.headers?.host)),
     sourceKey: (req) => {
-      // AUTH-002 + AUTH-NEW-2：公网 Host 且 peer=loopback（隧道）才采信 CF-Connecting-IP；
+      // 公网 Host 且 peer=loopback（隧道）才采信 CF-Connecting-IP；
       // LAN 伪造 Host+CF-IP 只回落连接 IP，防拆限速桶。
       const publicHost = isPublicHost(req.headers?.host);
       const peer = req.socket?.remoteAddress || req.ip || '';
@@ -635,9 +635,9 @@ if (process.stdin.isTTY) {
   });
 }
 
-// 鉴权门口防暴破限速（NFR-03 / docs/design.md）：仅当配了鉴权门（公网 CF Access 或 AUTH_TOKEN）时生效——
+// 鉴权门口防暴破限速：仅当配了鉴权门（公网 CF Access 或 AUTH_TOKEN）时生效——
 // 无鉴权模式(!AUTH_TOKEN 且非公网) authPassed 恒真、永不计失败，天然不触发。
-// AUTH-002：CF-Connecting-IP 仅公网 Host 采信；LAN 只认连接 IP（防伪造头拆分限速桶）。
+// CF-Connecting-IP 仅公网 Host 采信；LAN 只认连接 IP（防伪造头拆分限速桶）。
 // 状态内存态 Map（与 HTTP createHttpAuth 共用 rlStates；重启清零 = 机主误锁时的逃生口）。
 // ---- 鉴权（公网 Host 强制 Access JWT、fail-closed；LAN/本机回退 token；无 token 时仅 localhost）----
 io.use(async (socket, next) => {
@@ -679,17 +679,17 @@ io.use(async (socket, next) => {
       authPassed = true;
     }
 
-    // 限速计数：成功清零、失败退避/锁定（docs/design.md onAuthResult）
+    // 限速计数：成功清零、失败退避/锁定
     if (rlActive) {
       const st = rlStates.get(rlKey) || freshState();
       const r = onAuthResult(st, authPassed, Date.now());
       setRlStateCapped(rlKey, r.next); // F2：握手路径同样过 cap，不给扫描器绕出无界增长
       if (!authPassed && r.verdict === 'locked') {
         console.warn(`[conn] ${ip} 连续鉴权失败达阈值 → 锁定 ${Math.ceil(r.retryAfterMs / 1000)}s（source=${rlKey}）`);
-        // FR-19 最小审计记录：只在"达阈值锁定"这个粒度写（本就限速到每锁定窗口一次），不逐次失败尝试都写——
+        // 最小审计记录：只在"达阈值锁定"这个粒度写（本就限速到每锁定窗口一次），不逐次失败尝试都写——
         // 后者本身可被攻击者刷出高频事件、会把环形上限里的真实信号挤掉，锁定事件已足够代表"发生过暴破尝试"。
         audit.recordAudit({ actor: { deviceId: null, via: 'unauthenticated' }, action: 'auth_rate_limited', target: rlKey, outcome: 'locked', meta: { retryAfterMs: r.retryAfterMs } });
-        metrics.inc('rate_limit_lockouts'); // NFR-15 限速触发数（与审计同粒度：每锁定窗口一次）
+        metrics.inc('rate_limit_lockouts'); // 限速触发数（与审计同粒度：每锁定窗口一次）
         metrics.gauge('rate_limit_lockouts_last_ts', Date.now()); // 服务状态可见性：带时间戳，供 recentIncident 判定
       }
     }
@@ -778,13 +778,13 @@ const cliDefaultsInflight = new Map();        // cwd → Promise（并发去重�
 // 在途态 + latch 推导（无实例=idle）；broadcastInstances 在轮次/审批边界推送，前端据此渲染 tab 栏角标 + 通知。
 const STATE_BOUNDARY = new Set(['init', 'result', 'error', 'permission_request', 'question', 'request_resolved', 'tool_use', 'task_notification', 'system']);
 const BG_TYPE_TO_TOOL = { local_agent: 'Agent', local_bash: 'Bash' }; // 后台任务类型 → 前端 TOOL_BADGE 键（🤖 Agent / 🖥 Bash）；未知类型 → null → ⏳
-// "等我"跨会话聚合（AD-11/§3.2.5 AttentionDeriver，承接 FR-21/FR-22）：跨全部 live 实例（不限 viewingCwd）
-// 投影 needsYou。数据源=运行时 agents（读模型投影，非新数据源，EP-1）：
+// "等我"跨会话聚合（AttentionDeriver）：跨全部 live 实例（不限 viewingCwd）
+// 投影 needsYou。数据源=运行时 agents（读模型投影，非新数据源）：
 //   ①审批维度——每个 live 实例的 pendingPermissions（已有 createdAt/expiresAt，承接审批 TTL 阶段），
 //     此处过滤 now<=expiresAt（deriveAttention 契约要求调用方先过滤，保持纯函数不依赖 Date.now()）；
 //   ②输入维度——pendingQuestions（本次新增 createdAt），仅当该实例无 pendingPermissions 时计入
 //     awaiting_input（镜像 StatusDeriver 优先级：审批 > 输入，与 instanceState() 的 'permission' 判定一致）。
-// 边界（继承 AD-3，如实登记）：纯终端会话的等待态不经此路径可见——本函数只覆盖 web 后端驱动的 live 实例。
+// 边界（已知盲区，如实登记）：纯终端会话的等待态不经此路径可见——本函数只覆盖 web 后端驱动的 live 实例。
 function computeNeedsYou() {
   const sessionViews = [];
   const pendingApprovals = [];
@@ -813,10 +813,10 @@ function computeNeedsYou() {
     sessionViews.push({ sessionId: a.sessionId, cwd: a.cwd, title, lastActiveAt, status, awaitingSince });
   }
   const { needsYou } = deriveAttention(sessionViews, pendingApprovals);
-  // instanceId 是纯函数契约之外的接线专用字段（前端深链需要，复用 FR-14 applyDeepLink({instanceId,sessionId,cwd})）。
+  // instanceId 是纯函数契约之外的接线专用字段（前端深链需要，复用 applyDeepLink({instanceId,sessionId,cwd})）。
   return needsYou.map(item => ({ ...item, instanceId: instanceIdBySessionId.get(item.sessionId) ?? null }));
 }
-// 服务状态可见性（NFR-15/可维护性，与上面 computeNeedsYou 的 FR-21/注意力不对称是不同的轴，不混入其判定）：
+// 服务状态可见性（与上面 computeNeedsYou 的注意力不对称是不同的轴，不混入其判定）：
 // "ccm 这个服务本身有没有出过岔子"——判定化信号，全部带时效窗自动退场（不做不衰减的常驻布尔）：
 // 推送投递健康（recentDeliveryFailure）+ 服务启动时刻（供前端与本地基线比对判定重启）+ 登录限速锁定
 // （=有人在暴力尝试入口，安全信号）+ 前端错误（=界面自身坏了，详情在日志面板）。
@@ -1544,7 +1544,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
     // worktree 网关隔离：经 0600 settings 文件下发，压住 CLI 从 canonical repo root 误读的网关配置
     worktreeSettingsPath: worktreeSettingsFileFor(cwd, cliDefaultsByCwd.get(cwd), effNorm.ultracode),
     onEvent: envelope => {
-      metrics.inc('events'); // NFR-15 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
+      metrics.inc('events'); // 事件 seq 速率（累计事件数，速率由 /metrics 消费者按两次快照时间差算）
       if (envelope.type === 'init') {
         lastInit = envelope.payload;
         // slash 命令按本实例 cwd 归键（project/local skill 随区变）；空列表不写，避免冲掉更好缓存
@@ -1647,7 +1647,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
           hasClients: hasForegroundApprovedClient(approvedSockets) && viewingInstanceId === envelope.instanceId,
           instanceId: envelope.instanceId, sessionId: envelope.sessionId, cwd: envelope.cwd,
         });
-        // P1-5 per-会话节流（docs/design.md）：同一会话同一类别已有未决通知或未过最小间隔 → 抑制，不推送。
+        // per-会话节流：同一会话同一类别已有未决通知或未过最小间隔 → 抑制，不推送。
         if (pn) {
           const notifyCategory = NOTIFY_CATEGORY[envelope.type];
           if (notifyCategory) {
@@ -2245,7 +2245,7 @@ registerSocketConnection(io, socket => {
   });
 
   on(socket, 'user:approve', payload => {
-    // op：客户端回传它渲染审批卡片时所见的 {tool,args,cwd}（承接 docs/design.md 端到端协议步骤5/6，NFR-17
+    // op：客户端回传它渲染审批卡片时所见的 {tool,args,cwd}（端到端审批协议步骤5/6，
     // 审批完整性绑定）——allow 决策时 agent.js#resolvePermission 用它重算指纹比对 askPermission 时
     // 锚定的 fp，不一致 fail-closed 拒绝。deny 决策不校验（拒绝任何操作都安全，op 缺省或不传均可）。
     const { requestId, decision, alwaysThisSession, instanceId, op, exitMode } = payload || {};
@@ -2254,7 +2254,7 @@ registerSocketConnection(io, socket => {
     if (a) {
       interactionLog.addSessionLog(a.logKey(), 'sys_info', `[SYS] 许可决策 (user:approve): requestId=${requestId}, decision=${decision}, alwaysThisSession=${alwaysThisSession}${exitMode ? `, exitMode=${exitMode}` : ''}`);
       const outcome = a.resolvePermission(requestId, decision, Boolean(alwaysThisSession), op, exitMode ? { exitMode } : undefined);
-      // FR-19 最小审计记录（承接 Phase 4）：只在完整性校验失败时写——常规 allow/deny 已完整落在
+      // 最小审计记录：只在完整性校验失败时写——常规 allow/deny 已完整落在
       // approval_request 台账里（含 op 全量），这里重复记一条只会用日常噪音挤占 audit_record 的环形
       // 上限；actor 归属信息只有这层（socket）有，agent.js 保持设备无关，故写点放在这里而非 agent.js。
       if (outcome === 'integrity_mismatch') {
@@ -2664,13 +2664,13 @@ registerSocketConnection(io, socket => {
     // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
     const all = obj.all === true;
     const limit = all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
-    // hiddenIds（FR-20 两级删除 L1）：L1 删除的会话从这里过滤掉，不出现在列表里（transcript 仍在盘上）。
+    // hiddenIds（两级删除 L1）：L1 删除的会话从这里过滤掉，不出现在列表里（transcript 仍在盘上）。
     const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit, hiddenIds: new Set(sessions.getHiddenIds()) });
     const terminal = await annotateTerminalStates(cwd, list);
     ack({ currentSessionId, sessions: terminal.list, terminalBusy: terminal.terminalBusy, hasMore: all ? false : hasMore });
   });
 
-  // 两级删除 L1（FR-20，承接 docs/design.md）：默认删——只从产品可见列表移除，transcript 原样保留在主机磁盘，
+  // 两级删除 L1：默认删——只从产品可见列表移除，transcript 原样保留在主机磁盘，
   // 可从终端 `claude --resume` 或再次经本产品扫盘找回（"隐藏"而非"删除"，但对用户呈现为"删除"）。
   on(socket, 'session:delete', async (payload, ack) => {
     if (typeof ack !== 'function') return;
@@ -2699,9 +2699,9 @@ registerSocketConnection(io, socket => {
     ack({ ok: true });
   });
 
-  // 两级删除 L2（FR-20，承接 docs/design.md）：显式二次确认（前端二次弹窗把关，本端不重复校验"是否已二次确认"
+  // 两级删除 L2：显式二次确认（前端二次弹窗把关，本端不重复校验"是否已二次确认"
   // 这种 UI 语义——收到这个事件本身就代表用户已经过确认）——真删底层 transcript 文件，不可恢复。
-  // 活跃会话保护两道，任一不过 fail-closed 拒绝（防与 claude 侧并发写分叉，§8.3 已登记启发式非完备）。
+  // 活跃会话保护两道，任一不过 fail-closed 拒绝（防与 claude 侧并发写分叉，启发式非完备、已如实登记）。
   on(socket, 'session:deletePermanent', async (payload, ack) => {
     if (typeof ack !== 'function') return;
     const { sessionId } = payload || {};
@@ -2998,7 +2998,7 @@ registerSocketConnection(io, socket => {
     ack({ ok: true, results: verdict.results, written: keys, restartRequired: true });
   });
 
-  // 服务状态面板（NFR-15 可见性）：一次 ack 拼齐 基础(startedAt/versions) + 判定化告警(computeServiceHealth)。
+  // 服务状态面板：一次 ack 拼齐 基础(startedAt/versions) + 判定化告警(computeServiceHealth)。
   // 不带裸计数器——那是 /metrics 巡检端点的机器原料，对人无参照系不可解读（判定化改造，见 plans）。
   // 走 on() 鉴权闸（deviceApproved fail-closed，运行状态属敏感数据）；重启提示不进 payload——
   // 前端已有 _serviceRestartNoticeActive（instances 广播维护），面板直读，避免二次写 localStorage 基线。
@@ -3077,7 +3077,7 @@ registerSocketConnection(io, socket => {
       if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, unreadOnEntry });
     };
     const a = routeInstance(instanceId); // 台阶3：续传指定 tab 实例的缓冲（缺省 viewingInstanceId）
-    if (!a || a.sessionId !== sessionId) { metrics.inc('catch_up_reloads'); return done(0, false, false); } // 无匹配实例：客户端清屏重载历史（NFR-15 重载：仅计后端能确证的触发；前端因 diskLen 盲区的重载后端不可观测、不计）；亦会在下个 live 事件凭 epoch 自愈
+    if (!a || a.sessionId !== sessionId) { metrics.inc('catch_up_reloads'); return done(0, false, false); } // 无匹配实例：客户端清屏重载历史（重载口径：仅计后端能确证的触发；前端因 diskLen 盲区的重载后端不可观测、不计）；亦会在下个 live 事件凭 epoch 自愈
     const { events, gap } = a.eventsSince(Number(lastSeq) || 0);
     if (gap) { // #13：有缺口时明确告知，客户端可整段重渲染，不把残缺当完整
       socket.emit('agent:event', {
@@ -3255,7 +3255,7 @@ httpServer.on('error', err => {
 });
 
 // 重启 fail-closed 处置遗留 pending 审批（必须在 listen 之前：这之后 io 才可能接受连接、驱动新实例）
-// + NFR-16 留存治理（启动即清一次 + 每 24h）。实现下沉 src/agent/approval-lifecycle.js。
+// + 留存治理（启动即清一次 + 每 24h）。实现下沉 src/agent/approval-lifecycle.js。
 expireOrphanedPending();
 startApprovalRetentionSweep();
 

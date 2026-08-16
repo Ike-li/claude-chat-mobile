@@ -185,7 +185,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
   // 工作区面板外壳（文件 / 改动两 tab 同壳）
   const workspaceModal = $('workspaceModal'), workspaceClose = $('workspaceClose'),
         workspaceTabFiles = $('workspaceTabFiles'), workspaceTabChanges = $('workspaceTabChanges');
-  // 项目文件只读浏览（FR-07）——文件 tab
+  // 项目文件只读浏览——文件 tab
   const fileBrowseTools = $('fileBrowseTools'), fileBrowseBack = $('fileBrowseBack'),
         fileBrowsePath = $('fileBrowsePath'),
         fileBrowseBody = $('fileBrowseBody'), fileBrowseEdit = $('fileBrowseEdit'),
@@ -456,7 +456,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
   let displayedInstanceId = undefined;  // undefined 确保首次 viewingInstanceId=null 也会 bind 空启动页
   let displayedSessionId = null;
   let instancesList = [];               // 最近 instances 事件的实例列表（含 per-instance state）
-  let needsYouList = [];                // "等我"聚合（AD-11/§3.2.5，承接 FR-21/FR-22），按 waitingSince 升序（等得越久排越前）
+  let needsYouList = [];                // "等我"聚合（AttentionDeriver），按 waitingSince 升序（等得越久排越前）
   // 服务状态可见性（第一性原理重新设计，与上面 needsYouList 是不同轴——这条答"服务本身有没有出过岔子"）：
   // latestServiceHealth = 最近一次 instances 广播里的 service 字段。
   let latestServiceHealth = null;
@@ -1315,7 +1315,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     socket.emit('doctor:run', {}, rep => renderDoctor(rep, box));
   };
 
-  // ---- 服务状态面板（NFR-15 可见性）----
+  // ---- 服务状态面板 ----
   // 设置「访问与设备」组入口 → 底部 sheet 两段渲染：基础(时长/版本/连接/日志开关) + 异常告警（判定化：
   // 裸计数器段已撤——对人无参照系不可解读，原始计数留 /metrics 巡检端点；有信号项升格为带时效窗告警）。
   // 数据走鉴权 service:status ack（doctor:run 同构）；打开即拉、开着时 5s 重拉（后台 tab 跳过）、关闭即停。
@@ -2149,7 +2149,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
       // sensitive：正文是工具入参原文（Bash 的 command、Write 的 file_path/content 头部）。
       // 预览开关关闭时 notify 只保留标题，与 Web Push / ntfy 两条通道的隐私口径对齐。
       notify(t('⚠️ 等待审批'), `${p.name}：${safeJsonPreview(p.input, 80)}`, { sensitive: true });
-      approvals.verifyPermIntegrity(p); // 异步、不阻塞渲染——NFR-17 协议步骤4，核验结果稍后到达时若仍是当前卡片才提示
+      approvals.verifyPermIntegrity(p); // 异步、不阻塞渲染——完整性协议步骤4，核验结果稍后到达时若仍是当前卡片才提示
     },
     question(p) {
       // 幂等：同上（快照补发 vs buffer 回放去重），按 requestId
@@ -2165,7 +2165,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     request_resolved(p) {
       const { requestId, kind } = p;
       if (kind === 'permission') {
-        // NFR-17：完整性校验失败是服务端 fail-closed 介入，不是用户的选择——若用户刚点了"允许"，
+        // 完整性校验失败是服务端 fail-closed 介入，不是用户的选择——若用户刚点了"允许"，
         // answerPerm() 已乐观显示过"✅ 已允许"（activePerm 早已本地清空，下面的分支找不到它，无从
         // 事后订正）。这里补一条独立提示，避免用户以为操作已生效、实际却被悄悄拦下。
         if (p.outcome === 'integrity_mismatch') {
@@ -3021,7 +3021,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     }
     send();
   };
-  // 移动端回车发送截断修复（2026-07-13 排查报告 §4/§8.1）：触屏软键盘没有 Shift+Enter 这个换行
+  // 移动端回车发送截断修复（2026-07-13 排查）：触屏软键盘没有 Shift+Enter 这个换行
   // 逃生舱，回车恒当发送键会把长消息在换行处截断。触摸设备下回车走 textarea 默认换行，发送收窄为
   // 仅走发送按钮；enterkeyhint 同步改 'enter'，避免部分输入法把回车当 action 直接派发而非插入换行符。
   const isTouchDevice = matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
@@ -4418,7 +4418,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     chip.setAttribute('aria-label', meta.label);
     head.appendChild(chip);
   }
-  // "已等待"文案（FR-22，与 needsYouList 共享 waitingSince 数据源）：按分钟粒度，不做秒级实时动画——
+  // "已等待"文案（与 needsYouList 共享 waitingSince 数据源）：按分钟粒度，不做秒级实时动画——
   // 该区块只在 instances 广播到达时重渲（同 refreshNeedsYou 触发时机），文案本就是"上次广播时刻"的快照。
   function formatWaitingDuration(waitingSince) {
     if (typeof waitingSince !== 'number') return '';
@@ -4428,7 +4428,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     const h = Math.floor(mins / 60), m = mins % 60;
     return `${t('已等待')} ${h} ${t('小时')}${m ? ' ' + m + ' ' + t('分钟') : ''}`;
   }
-  // 单条"需要你"行：点击深链跳转（复用 FR-14 applyDeepLink，同通知点击的落地逻辑）。
+  // 单条"需要你"行：点击深链跳转（复用 applyDeepLink，同通知点击的落地逻辑）。
   // 全程 textContent 插值动态数据（title/cwd/toolName 均可能含用户数据）→ CSP 安全，同现有行渲染惯例。
   function needsYouRow(item) {
     const isApproval = item.reason === 'awaiting_approval';
@@ -4452,8 +4452,8 @@ import { createSessionDeleteController } from './app/session-delete.js';
     };
     return row;
   }
-  // 顶部"需要你(N)"聚合区（AD-11/§3.2.5，承接 FR-21）：needsYouList 已由 setInstances 按 waitingSince
-  // 升序排好（等得越久排越前，OQ-01 已决），此处只负责渲染，不重排序。空列表渲染空壳（hidden），
+  // 顶部"需要你(N)"聚合区（AttentionDeriver）：needsYouList 已由 setInstances 按 waitingSince
+  // 升序排好（等得越久排越前，已决），此处只负责渲染，不重排序。空列表渲染空壳（hidden），
   // 保持 #needsYouSection 锚点常在，refreshNeedsYou 的 querySelector 才总能找到替换目标。
   function buildNeedsYouSection() {
     const section = el(`<div id="needsYouSection"></div>`);
@@ -4574,8 +4574,8 @@ import { createSessionDeleteController } from './app/session-delete.js';
       sessionsDot.classList.add('hidden');
     }
   }
-  // 服务状态可见性（第一性原理重新设计）：与上面 updateSessionsDot（会话待处理，FR-21/注意力不对称）
-  // 是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（NFR-15/可维护性），复用 connDotWrap（已有的
+  // 服务状态可见性（第一性原理重新设计）：与上面 updateSessionsDot（会话待处理/注意力不对称）
+  // 是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（可维护性），复用 connDotWrap（已有的
   // 服务级 UI 落点，纯连通性的 connDot 内圈继续只管绿/红，环形边框承载这条独立语义）。
   function updateServiceNotice(service) {
     latestServiceHealth = service;
@@ -5086,7 +5086,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
         rowContent.appendChild(closeBtn);
       }
 
-      // 未打开的历史会话：两级删除入口（FR-20）。已打开的会话走上面的关闭 tab，不在此重复给删除入口
+      // 未打开的历史会话：两级删除入口。已打开的会话走上面的关闭 tab，不在此重复给删除入口
       // （删一个正被本产品驱动的会话语义混乱，后端 L2 保护①也会拒）。无 id 的新会话（未落盘）无从删。
       if (s.id && !liveInst) {
         const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" title="${t('删除会话')}">🗑</button>`);
@@ -5317,7 +5317,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     if (currentCwd) expandedDirs.add(currentCwd);
 
     // 抽屉 = 注意力入口 + 导航树（非状态仪表盘）：需要你 → 服务异常 → 工作区树。
-    // "需要你"聚合置顶（AD-11/§3.2.5 AttentionDeriver，承接 FR-21）：跨全部工作区/会话，
+    // "需要你"聚合置顶（AttentionDeriver）：跨全部工作区/会话，
     // 不限于当前展开的目录——正是它相对下方逐目录列表的增量价值（注意力不对称）。
     sessionPanel.appendChild(buildNeedsYouSection());
     sessionPanel.appendChild(buildServiceSection());

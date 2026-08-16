@@ -14,7 +14,7 @@ import { dataFile } from '../shared/data-dir.js';
 const FILE = process.env.CCM_SESSIONS_FILE || dataFile('sessions.json');
 
 // 台阶2：当前会话指针由全局单指针 currentSessionId 升为 currentByCwd（每工作目录一个）。
-// hiddenSessionIds（FR-20 两级删除 L1，承接 docs/design.md）：session:list 的数据源是直接扫
+// hiddenSessionIds（两级删除 L1）：session:list 的数据源是直接扫
 // ~/.claude/projects/<cwd>/ 的 transcript 文件（history.js#listSessionsPage，"不依赖 sessions.json
 // 注册表"），本模块原本的会话记录只是体验增强（标题缓存/指针），并非列表的真实数据源——故 L1"删产品
 // 可见引用、transcript 保留"不能只删这里的指针了事，必须有一份独立的隐藏名单，由 listSessionsPage
@@ -188,7 +188,7 @@ export function updateSessionPrefs(id, prefs) {
 // ANTHROPIC_* env 默认、服务端不可知；"最近会话 model" 只是推断（上次可能 /model 覆盖、env 默认可能已变），
 // 不算真值。空首页改显「不指定」、首条消息后由 init.model 校正——拿不到真值就不显、不猜。
 
-// ---- 两级删除 L1（FR-20，承接 docs/design.md）----
+// ---- 两级删除 L1 ----
 export function hideSession(id) {
   if (typeof id !== 'string' || !id) return;
   if (!state.hiddenSessionIds.includes(id)) {

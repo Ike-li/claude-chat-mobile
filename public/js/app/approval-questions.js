@@ -74,7 +74,7 @@ export function createApprovalController(context, {
   let multiSelectedIndexes = new Set(); // multiSelect 当前题勾选的下标
   let permArmTimer = null;
 
-  // ---- 审批完整性预检（NFR-17，承接 docs/design.md 协议步骤4）----
+  // ---- 审批完整性预检（协议步骤4）----
   // 渲染前（严格说：渲染后异步补验，见下）重算指纹比对服务端锚定的 fp，防传输层篡改（op 被改而 fp
   // 未同步改）。不阻塞卡片显示——真正的执行门槛在后端 resolvePermission（agent.js），这里只是"谨慎
   // 确认"提示，即使因浏览器兼容性等原因未能核验也不影响审批本身仍受后端 fail-closed 保护。
@@ -184,7 +184,7 @@ export function createApprovalController(context, {
       decision,
       alwaysThisSession: permAlways.checked,
       instanceId: getViewingInstanceId(), // 台阶3：路由到当前查看 tab 实例（切过去后审批的本就是该实例）
-      // op：回传本卡片渲染时所见的确切操作（承接 docs/design.md NFR-17 审批完整性绑定协议步骤5）——
+      // op：回传本卡片渲染时所见的确切操作（审批完整性绑定协议步骤5）——
       // 服务端用它重算指纹比对 canUseTool 时锚定的 fp，不一致 fail-closed 拒绝（agent.js#resolvePermission）。
       op: { tool: activePerm.name, args: activePerm.input, cwd: activePerm.cwd }
     };

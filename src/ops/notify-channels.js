@@ -66,11 +66,11 @@ export function createNotifyChannels({
       const effectiveBody = (sub.prefs?.preview === true && previewBody) ? previewBody : body;
       const payload = JSON.stringify(data ? { title, body: effectiveBody, data } : { title, body: effectiveBody });
       return webpushImpl.sendNotification(sub, payload)
-        .then(() => metrics.inc('push_success')) // NFR-15 推送成功率（分子）
+        .then(() => metrics.inc('push_success')) // 推送成功率（分子）
         .catch(e => {
           if (e.statusCode === 410 || e.statusCode === 404) expired.push(sub.endpoint); // 过期/注销：订阅生命周期正常结束，非"通知失败"
           else {
-            metrics.inc('push_failure'); console.error('[push] 推送失败:', e.statusCode ?? '', e.message); // NFR-15 notify_failed 信号：真失败（非订阅过期）才计
+            metrics.inc('push_failure'); console.error('[push] 推送失败:', e.statusCode ?? '', e.message); // notify_failed 信号：真失败（非订阅过期）才计
             metrics.gauge('push_failure_last_ts', Date.now()); onDeliveryFailure(); // 服务状态可见性：带时间戳，供 recentDeliveryFailure 判定
           }
         });
