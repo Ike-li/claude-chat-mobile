@@ -76,6 +76,7 @@ npm run service:install|adopt|restart|logs|health   # adopt=接管手工安装�
 
 # 菜单栏控制台（macOS，可选）
 npm run app:build                   # swiftc 编译 desktop/ccm-menubar.swift → desktop/build/CCM.app（产物不入库）
+npm run app:install                 # app:build 后装进 /Applications（Spotlight/Launchpad 可搜；升级后菜单点「重启应用」）
 
 # 设备指纹审批与管理
 node scripts/device.js list         # 列出所有受信任和等待确认的设备

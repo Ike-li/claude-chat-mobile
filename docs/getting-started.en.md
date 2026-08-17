@@ -310,6 +310,10 @@ The setup wizard offers to compile it; you can also do it yourself at any time:
 ```bash
 npm run app:build      # builds desktop/build/CCM.app (~420K, not committed)
 open desktop/build/CCM.app
+
+npm run app:install    # or: build and install into /Applications — findable from Spotlight /
+                       # Launchpad / Dock, no more launching from the repo directory. Same for
+                       # upgrades; afterwards pick "重启应用" (Relaunch) from the menu
 ```
 
 **It needs the Xcode Command Line Tools, not the full Xcode** (1–2GB versus 12GB+). Any machine

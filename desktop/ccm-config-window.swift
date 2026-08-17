@@ -364,8 +364,16 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
     private let env: RuntimeEnv
     private let textView = NSTextView()
     private let pathLabel = NSTextField(labelWithString: "")
+    private let sourcePopup = NSPopUpButton()
     private var timer: Timer?
-    private var logPath: String?
+    private var sources: [LogSource] = []
+
+    /// 当前选中的日志文件；源列表为空时 nil（pathLabel 显示提示，refresh 不读盘）。
+    private var logPath: String? {
+        let idx = sourcePopup.indexOfSelectedItem
+        guard idx >= 0, idx < sources.count else { return nil }
+        return sources[idx].path
+    }
 
     init(env: RuntimeEnv) {
         self.env = env
@@ -397,10 +405,12 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
         scroll.documentView = textView
         scroll.translatesAutoresizingMaskIntoConstraints = false
 
+        sourcePopup.target = self
+        sourcePopup.action = #selector(sourceChanged)
         pathLabel.textColor = .secondaryLabelColor
         pathLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         pathLabel.lineBreakMode = .byTruncatingHead
-        let bar = NSStackView(views: [pathLabel])
+        let bar = NSStackView(views: [sourcePopup, pathLabel])
         bar.edgeInsets = NSEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         bar.translatesAutoresizingMaskIntoConstraints = false
 
@@ -423,7 +433,7 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        resolvePath()
+        resolveSources()
         refresh()
         // 2s 一次：日志是给人看的，再快也读不过来，而每次都要读盘。
         timer?.invalidate()
@@ -444,11 +454,29 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
         timer = nil
     }
 
-    private func resolvePath() {
+    /// 源列表 = LOG_FILE 配置 + ~/Library/Logs 的 ccm-*.log 扫描。判定在 CCMCore.logSources
+    /// （有断言），本方法只做它测不了的部分：读配置、枚举目录、重建下拉框，并尽量保持当前选中。
+    private func resolveSources() {
         var configured: String?
         if case .ok(let snap) = ConfigClient(env: env).currentValues() { configured = snap.values["LOG_FILE"] }
-        logPath = resolveLogPath(configured: configured, home: NSHomeDirectory())
-        pathLabel.stringValue = logPath ?? "未配置日志文件（配置里设 LOG_FILE，或用常驻服务的默认位置）"
+        let home = NSHomeDirectory()
+        let logsDir = (home as NSString).appendingPathComponent("Library/Logs")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: logsDir)) ?? []
+        let previous = logPath
+        sources = logSources(configured: configured, home: home, fileNames: names)
+        // 逐条 addItem 而不是 addItems(withTitles:)：后者对重复标题会静默吞项。
+        sourcePopup.removeAllItems()
+        for s in sources { sourcePopup.menu?.addItem(NSMenuItem(title: s.title, action: nil, keyEquivalent: "")) }
+        if let previous, let idx = sources.firstIndex(where: { $0.path == previous }) {
+            sourcePopup.selectItem(at: idx)
+        }
+        pathLabel.stringValue = logPath ?? "未发现日志文件（~/Library/Logs/ccm-*.log，或配置里设 LOG_FILE）"
+    }
+
+    @objc private func sourceChanged() {
+        pathLabel.stringValue = logPath ?? ""
+        textView.string = "" // 换源先清屏，免得旧源的尾巴看起来像新源的内容
+        refresh()
     }
 
     private func refresh() {

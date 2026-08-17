@@ -360,10 +360,27 @@ func testLogHelpers() {
     eq(lastLines("a\nb", 10).count, 2, "行数不足时全给")
     eq(lastLines("", 5), [""], "空文本给一个空行而不是崩")
 
-    // 配置里写了就用配置的；没写且默认位置不存在 → nil（显示「未配置」比对着不存在的路径报错强）
-    eq(resolveLogPath(configured: "/tmp/x.log", home: "/Users/you"), "/tmp/x.log", "配置优先")
-    eq(resolveLogPath(configured: "", home: "/nonexistent-home"), nil, "空配置且无默认文件 → nil")
-    eq(resolveLogPath(configured: nil, home: "/nonexistent-home"), nil, "无配置且无默认文件 → nil")
+    // 日志源列表：LOG_FILE 配置的路径优先置顶；~/Library/Logs 下的 ccm-*.log 全部列出
+    // （tunnel / logrotate / menubar / tunnel-watch……有文件就有源），server 排最前；
+    // .gz 轮转历史与非 ccm 前缀文件不进列表。
+    eq(logSources(configured: nil, home: "/h", fileNames: []), [], "无配置无文件 → 空列表")
+    let names = ["ccm-tunnel.log", "ccm-server.log", "ccm-server.log.1.gz", "other.log", "ccm-tunnel-watch.log"]
+    let plain = logSources(configured: nil, home: "/h", fileNames: names)
+    eq(plain.map(\.title), ["server", "tunnel", "tunnel-watch"], "server 置顶其余字母序；gz 与非 ccm 文件排除")
+    eq(plain[0].path, "/h/Library/Logs/ccm-server.log", "路径 = 日志目录 + 文件名")
+    let custom = logSources(configured: "/tmp/x.log", home: "/h", fileNames: ["ccm-server.log"])
+    eq(custom.map(\.title), ["server（LOG_FILE）", "server"], "LOG_FILE 自定义路径置顶，默认位置仍单独可选")
+    let dup = logSources(configured: "/h/Library/Logs/ccm-server.log", home: "/h", fileNames: ["ccm-server.log"])
+    eq(dup.count, 1, "LOG_FILE 恰为默认路径时去重，不出现两个相同源")
+    eq(logSources(configured: "", home: "/h", fileNames: []), [], "空字符串配置视同未配置")
+
+    // 「重启应用」argv：经 sh 先 sleep 等旧实例退出再 open；路径必须 POSIX 单引号转义 ——
+    // 含空格不能拆词、含单引号不能注入（8/13 教训：包裹方式错误＝命令注入）。
+    let relaunch = relaunchArgv(bundlePath: "/Applications/CCM.app")
+    eq(Array(relaunch.prefix(2)), ["/bin/sh", "-c"], "经 sh 以便 sleep 等旧实例先退出")
+    check(relaunch[2].contains("/usr/bin/open '/Applications/CCM.app'"), "路径单引号包裹")
+    let tricky = relaunchArgv(bundlePath: "/Users/o'brien/My Apps/CCM.app")[2]
+    check(tricky.contains("open '/Users/o'\\''brien/My Apps/CCM.app'"), "单引号 POSIX 转义且空格不拆词")
 }
 
 func testConfigSnapshot() {

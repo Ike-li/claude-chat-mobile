@@ -419,6 +419,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(action("重启应用", #selector(relaunchApp)))
         menu.addItem(action("退出", #selector(quit), key: "q"))
     }
 
@@ -617,6 +618,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func setupWizard() { runSetupWizard() }
 
     @objc private func quit() { NSApp.terminate(nil) }
+
+    /// 重启自身：分离子进程 sleep 后 open 本 bundle，自己立即退出。
+    /// 用于 app:build / app:install 升级后换上新产物 —— 此前只能「退出 + 回终端 open」。
+    @objc private func relaunchApp() {
+        let argv = relaunchArgv(bundlePath: Bundle.main.bundlePath)
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: argv[0])
+        p.arguments = Array(argv.dropFirst())
+        try? p.run()
+        NSApp.terminate(nil)
+    }
 
     // MARK: 首次装机向导
     //

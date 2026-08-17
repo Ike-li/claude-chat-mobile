@@ -357,12 +357,44 @@ func lastLines(_ text: String, _ n: Int) -> [String] {
     return lines.count <= n ? lines : Array(lines.suffix(n))
 }
 
-/// 日志文件路径：配置里的 LOG_FILE 优先，否则回落常驻部署的默认位置。
-/// 两者都拿不到时返回 nil —— 显示「未配置日志文件」比对着一个不存在的路径报错强。
-func resolveLogPath(configured: String?, home: String) -> String? {
-    if let c = configured, !c.isEmpty { return c }
-    let fallback = (home as NSString).appendingPathComponent("Library/Logs/ccm-server.log")
-    return FileManager.default.fileExists(atPath: fallback) ? fallback : nil
+/// 日志窗口的一个可选源。title 给下拉框（server / tunnel / logrotate…），path 给 tail。
+struct LogSource: Equatable {
+    let title: String
+    let path: String
+}
+
+/// 日志窗口的源列表：LOG_FILE 配置的路径优先置顶，再列 ~/Library/Logs/ 下的全部 ccm-*.log
+/// （tunnel / logrotate / menubar / tunnel-watch……有文件就有源，server 排最前）。
+/// fileNames 由调用方枚举日志目录后喂进来 —— 本函数零 IO，断言可全覆盖。
+/// .gz 轮转历史靠 hasSuffix(".log") 天然排除；与 LOG_FILE 同路径的条目去重。
+func logSources(configured: String?, home: String, fileNames: [String]) -> [LogSource] {
+    var sources: [LogSource] = []
+    if let c = configured, !c.isEmpty {
+        sources.append(LogSource(title: "server（LOG_FILE）", path: c))
+    }
+    let logsDir = (home as NSString).appendingPathComponent("Library/Logs")
+    let scanned = fileNames
+        .filter { $0.hasPrefix("ccm-") && $0.hasSuffix(".log") }
+        .map { name in
+            LogSource(
+                title: String(name.dropFirst("ccm-".count).dropLast(".log".count)),
+                path: (logsDir as NSString).appendingPathComponent(name))
+        }
+        .filter { candidate in !sources.contains { $0.path == candidate.path } }
+        .sorted { a, b in
+            if (a.title == "server") != (b.title == "server") { return a.title == "server" }
+            return a.title < b.title
+        }
+    sources.append(contentsOf: scanned)
+    return sources
+}
+
+/// 「重启应用」的 argv：分离的 sh 先 sleep 等旧实例退出，再 open 同一 bundle
+/// （open 对仍在跑的实例只会激活它，所以必须先退再开，顺序靠 sleep 保证）。
+/// 路径做 POSIX 单引号转义 —— 纯字符串拼装是历史上出 bug 最多的地方，放这层测。
+func relaunchArgv(bundlePath: String) -> [String] {
+    let quoted = "'" + bundlePath.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    return ["/bin/sh", "-c", "sleep 0.4; /usr/bin/open \(quoted)"]
 }
 
 // MARK: - 配置来源

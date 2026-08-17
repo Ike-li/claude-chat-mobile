@@ -126,6 +126,18 @@ export function main({ test = true } = {}) {
   process.stdout.write(`  试运行：open ${APP}\n`);
   process.stdout.write('  开机自启：在菜单栏里勾「开机自启（菜单栏）」，或 node scripts/service.js install menubar --app="'
     + APP + '"\n');
+
+  // --install：把产物装进 /Applications，让 Spotlight / Launchpad / Dock 能找到它，
+  // 从此启动不再依赖「cd 到仓库 open build 产物」。
+  if (process.argv.includes('--install')) {
+    const dest = '/Applications/CCM.app';
+    process.stdout.write(`\n安装到 ${dest}…\n`);
+    // 先删后拷：ditto 对已存在 bundle 是合并式覆盖，被改名/删除的旧文件会残留
+    rmSync(dest, { recursive: true, force: true }); // safe-rm: 目标恒为字面量 /Applications/CCM.app，不含任何运行期计算
+    run('ditto', [APP, dest], 'ditto');
+    process.stdout.write('✓ 已安装。Spotlight 搜「CCM」即可打开；旧实例在跑的话点菜单「重启应用」或退出后从新位置打开，\n'
+      + '  并重新勾一次「开机自启（菜单栏）」让 LaunchAgent 指向新位置。\n');
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

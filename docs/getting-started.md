@@ -305,6 +305,9 @@ npm run hooks:uninstall
 ```bash
 npm run app:build      # 编译出 desktop/build/CCM.app（约 420K，产物不入库）
 open desktop/build/CCM.app
+
+npm run app:install    # 或者：编译并装进 /Applications —— Spotlight / Launchpad / Dock 都能找到，
+                       # 以后启动不用再回仓库目录。升级同理，装完在菜单里点「重启应用」换上新版
 ```
 
 **只需要 Xcode Command Line Tools，不是完整的 Xcode**（前者约 1–2GB，后者 12GB+）。
