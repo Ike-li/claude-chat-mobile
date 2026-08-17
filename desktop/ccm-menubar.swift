@@ -592,14 +592,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 内嵌日志窗口。**不再丢给 Terminal**：那要用户自己在一堆窗口里找它，
     /// 而且关掉 app 之后那个 tail 还在跑。内嵌的随窗口关闭停止轮询。
     @objc private func openConfig() {
-        if configWindow == nil { configWindow = ConfigWindowController(env: env) }
+        // ?.window == nil：窗口被关闭后 NSWindow 可能已随之释放，复用旧 controller 的
+        // showWindow 会无窗可显——点击从此静默失效（2026-08-17 全菜单点击验证抓到，
+        // doctor 复现 3/3）。重建 controller 是无条件正确的防御。
+        if configWindow == nil || configWindow?.window == nil { configWindow = ConfigWindowController(env: env) }
         configWindow?.present()
     }
 
     @objc private func openLogs() { openLogsWindow(preferUnit: nil) }
 
     private func openLogsWindow(preferUnit: String?) {
-        if logWindow == nil { logWindow = LogWindowController(env: env) }
+        if logWindow == nil || logWindow?.window == nil { logWindow = LogWindowController(env: env) } // 同 openConfig 的防御
         logWindow?.present(preferUnit: preferUnit)
     }
 
@@ -817,7 +820,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             alert("环境不完整", "找不到 node 或仓库目录，先在菜单里重新定位。")
             return
         }
-        if taskWindow == nil { taskWindow = TaskWindowController() }
+        if taskWindow == nil || taskWindow?.window == nil { taskWindow = TaskWindowController() } // 同 openConfig 的防御
         taskWindow?.run(title: title, steps: steps, node: node, cwd: repo, onSuccess: onSuccess)
     }
 }
