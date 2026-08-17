@@ -157,6 +157,37 @@ struct CCMCoreTests {
         eq(unitTitle(unit(#"{"unit":"x","state":"not-installed"}"#)!).contains("未安装"), true, "未安装标题")
         // 没有 pid 时不该拼出「运行中 ()」这种空括号
         eq(unitTitle(unit(#"{"unit":"x","state":"running"}"#)!).contains("("), false, "无 pid 时不留空括号")
+
+        // ── UI 可理解性（2026-08-17 机主反馈「不知道谁是干嘛的」）────────────────
+        // stopped 的状态词按 unit 语义定制：定时器与打火即退任务的「停止」是健康待机，
+        // 照写「已停止」会被读成故障（用户真的来问过）。server/tunnel 的 stopped 才是真没跑。
+        eq(unitTitle(unit(#"{"unit":"logrotate","state":"stopped"}"#)!).contains("待机 · 每天 03:47"),
+           true, "logrotate 待机语义而非故障语义")
+        eq(unitTitle(unit(#"{"unit":"menubar","state":"stopped"}"#)!).contains("随登录自启"),
+           true, "menubar 打火即退的常态语义")
+        eq(unitTitle(unit(#"{"unit":"server","state":"stopped"}"#)!).contains("已停止"),
+           true, "server 的 stopped 是真停止")
+
+        // 分组：server/tunnel 是日常主服务，其余收进「其他服务」子菜单
+        let all = ["server", "tunnel", "logrotate", "menubar", "tunnel-watch"].map {
+            unit("{\"unit\":\"\($0)\",\"state\":\"stopped\"}")!
+        }
+        let g = splitUnits(all)
+        eq(g.primary.map(\.unitName), ["server", "tunnel"], "主服务两项且顺序保持")
+        eq(g.secondary.map(\.unitName), ["logrotate", "menubar", "tunnel-watch"], "其余进次组")
+
+        // 顶层「重启服务」直达项的可用性：已安装（含 crashed）才可重启
+        let mk = { (st: String) in decode(#"{"schemaVersion":1,"units":[{"unit":"server","state":"\#(st)"}]}"#) }
+        eq(canRestartServer(mk("running")), true, "running 可重启")
+        eq(canRestartServer(mk("crashed")), true, "crashed 可重启")
+        eq(canRestartServer(mk("not-installed")), false, "未安装不可重启")
+        eq(canRestartServer(nil), false, "无状态不可重启")
+
+        // tooltip：实现词汇的人话解释；归属标注要展开说明
+        check(unitTooltip(unit(#"{"unit":"server","state":"running"}"#)!).contains("重启"),
+              "server tooltip 提到改配置后要重启")
+        check(unitTooltip(foreign).contains("手工配置"), "foreign tooltip 解释「手工配置」")
+        check(unitTooltip(unknown).contains("非本仓"), "unknown tooltip 解释「非本仓」")
     }
 
     // MARK: 摘要行

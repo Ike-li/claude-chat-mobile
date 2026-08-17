@@ -145,18 +145,60 @@ func summaryLine(status: ServiceStatus?, problem: EnvProblem, lastError: String?
     return "ccm · " + parts.joined(separator: " · ")
 }
 
-/// unit 那一行的标题。
+/// unit 那一行的标题。stopped 的状态词按 unit 语义定制（stoppedLabel）：定时器与
+/// 打火即退任务的「停止」是健康待机——照写「已停止」会被读成故障，用户真的来问过。
 func unitTitle(_ u: UnitStatus) -> String {
     var title = "\(u.lamp) \(u.unitName)"
     switch u.stateName {
     case "running": title += u.pid.map { "  运行中 (\($0))" } ?? "  运行中"
-    case "stopped": title += "  已停止"
+    case "stopped": title += stoppedLabel(forUnit: u.unitName)
     case "crashed": title += "  已崩溃"
     default: title += "  未安装"
     }
     if u.ownership == "unknown" { title += "  · 非本仓" }
     else if u.ownership == "foreign" { title += "  · 手工配置" }
     return title
+}
+
+/// stopped 的语义化文案。logrotate 是 StartCalendarInterval 定时器（每天 03:47 打一枪即退）、
+/// menubar 是 RunAtLoad 打火任务（登录时 open 本 app 后即退）——它们 99% 的时间就该是 stopped。
+func stoppedLabel(forUnit name: String) -> String {
+    switch name {
+    case "logrotate": return "  待机 · 每天 03:47 轮转"
+    case "menubar": return "  随登录自启"
+    default: return "  已停止"
+    }
+}
+
+/// 菜单里 unit 的分组：server / tunnel 是使用者日常关心的主服务（「手机能不能连」），
+/// 其余（定时器、自启项、用户自加的 watch…）收进「其他服务 ▸」——平铺时它们与 server
+/// 同权重，而它们的「待机」常态恰恰最容易被读成故障。
+func splitUnits(_ units: [UnitStatus]) -> (primary: [UnitStatus], secondary: [UnitStatus]) {
+    let primaryNames = ["server", "tunnel"]
+    return (units.filter { primaryNames.contains($0.unitName) },
+            units.filter { !primaryNames.contains($0.unitName) })
+}
+
+/// 顶层「重启服务」直达项的可用性：server 已安装（含 crashed——重启正是自救动作）才有意义。
+func canRestartServer(_ status: ServiceStatus?) -> Bool {
+    guard let s = status?.server else { return false }
+    return ["running", "stopped", "crashed"].contains(s.stateName)
+}
+
+/// unit 行的悬停解释。菜单里的实现词汇（logrotate / tunnel-watch / 归属标注）对使用者
+/// 不自明——tooltip 用人话补一句「它是干嘛的、什么状态算正常」。
+func unitTooltip(_ u: UnitStatus) -> String {
+    var text: String
+    switch u.unitName {
+    case "server": text = "ccm 本体：手机连接的就是它。改配置后需要重启它才生效。"
+    case "tunnel": text = "Cloudflare 公网隧道：手机在外网访问全靠它。"
+    case "logrotate": text = "日志轮转定时器：每天 03:47 醒来跑一次即退，平时显示待机是正常的。"
+    case "menubar": text = "本 app 的「随登录启动」项：登录时拉起 app 后即退，平时显示待机是正常的。"
+    default: text = "非本项目模板的 LaunchAgent（com.ccm.* 前缀被一并纳入显示）。"
+    }
+    if u.ownership == "foreign" { text += "「手工配置」= 启动方式是你自定义的，本工具只帮启停、不覆写。" }
+    if u.ownership == "unknown" { text += "「非本仓」= 不是本项目安装的，本工具只帮查看与启停。" }
+    return text
 }
 
 // MARK: - URL 拼装

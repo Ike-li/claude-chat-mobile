@@ -274,6 +274,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
         menu.delegate = self
+        // 手动管理 enabled：顶层「重启服务」要按 server 安装态灰显，autoenable 会把有 action 的项恒置可用
+        menu.autoenablesItems = false
         statusItem.menu = menu
 
         render()
@@ -395,23 +397,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(action("打开控制台…", #selector(openConsole), key: "\r"))
-        menu.addItem(action("打开 Web UI（并复制令牌）", #selector(openWebUI), key: "o"))
-        menu.addItem(action("复制访问令牌", #selector(copyToken)))
+        menu.addItem(action("打开控制台…", #selector(openConsole), key: "\r",
+            tip: "服务状态、各 unit 与全部动作的总览窗口；刘海挡住菜单栏图标时的备用入口"))
+        menu.addItem(action("打开 Web UI（并复制令牌）", #selector(openWebUI), key: "o",
+            tip: "在浏览器打开本机 ccm，并把访问令牌复制到剪贴板——首次进入粘贴即可"))
+        menu.addItem(action("复制访问令牌", #selector(copyToken),
+            tip: "仅复制 AUTH_TOKEN（给手机手动登录、或粘贴到别处）"))
+
+        // 高频动作直达：改配置后最常用的一步，不必进 server 子菜单找
+        let restart = unitAction("重启服务", unit: "server", verb: "restart")
+        restart.toolTip = "重启 server（= service.js restart）：改完配置让它生效的那一步；手机会短暂断连几秒"
+        restart.isEnabled = canRestartServer(latest)
+        menu.addItem(restart)
 
         if let units = latest?.unitList, !units.isEmpty {
             menu.addItem(.separator())
-            for u in units { menu.addItem(unitItem(u)) }
+            let grouped = splitUnits(units)
+            for u in grouped.primary { menu.addItem(unitItem(u)) }
+            if !grouped.secondary.isEmpty {
+                let more = NSMenuItem(title: "其他服务", action: nil, keyEquivalent: "")
+                more.toolTip = "定时器与自启项等低频服务——「待机」是它们的正常状态"
+                let sub = NSMenu()
+                sub.autoenablesItems = false
+                for u in grouped.secondary { sub.addItem(unitItem(u)) }
+                more.submenu = sub
+                menu.addItem(more)
+            }
         }
 
         menu.addItem(.separator())
-        menu.addItem(action("配置…", #selector(openConfig), key: ","))
-        menu.addItem(action("查看日志", #selector(openLogs)))
-        menu.addItem(action("运行体检（doctor）", #selector(runDoctor)))
-        menu.addItem(action("在 Finder 中显示仓库", #selector(revealRepo)))
+        menu.addItem(action("配置…", #selector(openConfig), key: ",",
+            tip: "配置表单（读写 ccm.config.json，密钥打码）；server 没起来时也能用。改完记得点上面的「重启服务」"))
+        menu.addItem(action("查看日志", #selector(openLogs),
+            tip: "内嵌日志窗口，下拉框可在 server / tunnel 等各服务日志间切换"))
+        menu.addItem(action("运行体检（doctor）", #selector(runDoctor),
+            tip: "17 项自检：token、CLI、端口、权限、桥接状态……觉得哪里不对劲先跑它"))
+        menu.addItem(action("在 Finder 中显示仓库", #selector(revealRepo),
+            tip: "打开项目所在文件夹"))
 
         menu.addItem(.separator())
-        let autostart = action("开机自启（菜单栏）", #selector(toggleAutostart))
+        let autostart = action("开机自启（菜单栏）", #selector(toggleAutostart),
+            tip: "登录后自动出现本菜单栏图标（安装/卸载 menubar 自启项）。与 server 是否常驻无关")
         autostart.state = menubarInstalled ? .on : .off
         menu.addItem(autostart)
         if latest?.setup?.envExists == false {
@@ -419,8 +445,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(action("重启应用", #selector(relaunchApp)))
-        menu.addItem(action("退出", #selector(quit), key: "q"))
+        menu.addItem(action("重启应用", #selector(relaunchApp),
+            tip: "退出并重新打开本 app（升级重编译后换上新版用）；不影响 server"))
+        menu.addItem(action("退出", #selector(quit), key: "q",
+            tip: "关闭菜单栏图标。server 照常运行，手机不受影响"))
     }
 
     private var menubarInstalled: Bool {
@@ -429,7 +457,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func unitItem(_ u: UnitStatus) -> NSMenuItem {
         let item = NSMenuItem(title: unitTitle(u), action: nil, keyEquivalent: "")
+        item.toolTip = unitTooltip(u)
         let sub = NSMenu()
+        sub.autoenablesItems = false
         let name = u.unitName
 
         if let d = u.detail, !d.isEmpty {
@@ -463,9 +493,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
-    private func action(_ title: String, _ sel: Selector, key: String = "") -> NSMenuItem {
+    private func action(_ title: String, _ sel: Selector, key: String = "", tip: String? = nil) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: sel, keyEquivalent: key)
         item.target = self
+        item.toolTip = tip
         return item
     }
 
