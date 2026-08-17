@@ -446,10 +446,18 @@ func testTaskSteps() {
 
     eq(uninstallSteps(unit: "tunnel", repo: repo).first?.argv.last, "--yes", "卸载须显式确认")
 
-    // ★ 任务窗口是「跑完就结束」的语义，--follow 会让它永不返回
-    let logs = unitLogSteps(unit: "server", repo: repo)
-    check(!(logs.first?.argv.contains("--follow") ?? true), "unit 日志不能用跟随模式")
-    check(logs.first?.argv.contains("--lines=200") ?? false, "取固定行数")
+    // unit 子菜单「查看日志」直接打开内嵌日志窗口并预选该 unit 的源。此前的 unitLogSteps
+    // （任务窗口里跑 service.js logs 打一段文本）已于 2026-08-17 退役——机主反馈「都是让去
+    // 某某文件看」：一次性文本输出不是日志视图。source title 恰好 = unit 名；LOG_FILE
+    // 自定义路径时 server 源的 title 是「server（LOG_FILE）」，按前缀也要能选中。
+    let srcs = [LogSource(title: "server（LOG_FILE）", path: "/x"),
+                LogSource(title: "server", path: "/y"),
+                LogSource(title: "tunnel", path: "/z")]
+    eq(logSourceIndex(forUnit: "server", in: srcs), 1, "精确匹配优先于 LOG_FILE 形态")
+    eq(logSourceIndex(forUnit: "tunnel", in: srcs), 2, "普通 unit 精确匹配")
+    eq(logSourceIndex(forUnit: "server", in: [LogSource(title: "server（LOG_FILE）", path: "/x")]),
+       0, "只有 LOG_FILE 形态时按前缀选中")
+    eq(logSourceIndex(forUnit: "logrotate", in: srcs), nil, "无此源返回 nil（窗口保持默认选中）")
 
     // 装机四步，顺序与旧的 shell && 串逐字对应
     let steps = setupSteps(repo: repo, workDir: "/a b/c", hooks: true)

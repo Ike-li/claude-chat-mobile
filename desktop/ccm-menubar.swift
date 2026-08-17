@@ -526,7 +526,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         switch verb {
         case "logs":
-            runTask("\(unit) 日志", unitLogSteps(unit: unit, repo: repo))
+            // 直接打开内嵌日志窗口并预选该 unit 的源——此前在任务窗口跑 service.js logs
+            // 打一段一次性文本，被机主读成「让我去某某文件看」（2026-08-17 反馈）。
+            openLogsWindow(preferUnit: unit)
             return
         case "install":
             runTask("安装 \(unit)", installSteps(unit: unit, repo: repo, appPath: Bundle.main.bundlePath))
@@ -592,9 +594,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         configWindow?.present()
     }
 
-    @objc private func openLogs() {
+    @objc private func openLogs() { openLogsWindow(preferUnit: nil) }
+
+    private func openLogsWindow(preferUnit: String?) {
         if logWindow == nil { logWindow = LogWindowController(env: env) }
-        logWindow?.present()
+        logWindow?.present(preferUnit: preferUnit)
     }
 
     @objc private func runDoctor() {

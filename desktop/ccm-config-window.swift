@@ -429,11 +429,17 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
         window.contentView = root
     }
 
-    func present() {
+    /// preferUnit 非 nil 时预选该 unit 的日志源（unit 子菜单「查看日志」带着来意打开窗口）。
+    func present(preferUnit: String? = nil) {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         resolveSources()
+        if let unit = preferUnit, let idx = logSourceIndex(forUnit: unit, in: sources) {
+            sourcePopup.selectItem(at: idx)
+            pathLabel.stringValue = logPath ?? ""
+            textView.string = "" // 换源先清屏，同 sourceChanged
+        }
         refresh()
         // 2s 一次：日志是给人看的，再快也读不过来，而每次都要读盘。
         timer?.invalidate()

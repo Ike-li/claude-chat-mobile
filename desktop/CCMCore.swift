@@ -495,10 +495,13 @@ func uninstallSteps(unit: String, repo: String) -> [TaskStep] {
     [TaskStep(title: "卸载 \(unit)", argv: [serviceScriptPath(in: repo), "uninstall", unit, "--yes"])]
 }
 
-func unitLogSteps(unit: String, repo: String, lines: Int = 200) -> [TaskStep] {
-    // **不带 --follow**：任务窗口是「跑完就结束」的语义，跟随模式会让它永不返回。
-    // 需要持续看的是 server 日志，那个有专门的日志窗口。
-    [TaskStep(title: "\(unit) 日志", argv: [serviceScriptPath(in: repo), "logs", unit, "--lines=\(lines)"])]
+/// unit 子菜单「查看日志」预选源的下标：精确 title == unit 优先；LOG_FILE 自定义路径时
+/// server 源的 title 是「server（LOG_FILE）」，按前缀兜底。找不到返回 nil（窗口保持默认选中）。
+/// （此前这里是 unitLogSteps——任务窗口跑 `service.js logs` 打一段一次性文本，2026-08-17
+/// 按机主反馈退役：点「查看日志」应直接看到持续刷新的日志视图，而不是被指去某个文件。）
+func logSourceIndex(forUnit unit: String, in sources: [LogSource]) -> Int? {
+    if let exact = sources.firstIndex(where: { $0.title == unit }) { return exact }
+    return sources.firstIndex(where: { $0.title.hasPrefix(unit + "（") })
 }
 
 /// 首次装机：四步串行，任一失败即停。
