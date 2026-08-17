@@ -10,7 +10,7 @@
 //
 // ## 漂移判定为什么不能用 sha256（2026-08-13 实测）
 //
-// 机主手写的 ~/Library/LaunchAgents/com.ccm.server.plist 与 deploy/server.plist.template 经
+// 机主手写的 ~/Library/LaunchAgents/com.ccm.server.plist 与 desktop/launchd/server.plist.template 经
 // render-plist.js 渲染的结果**字节必然不同**，两处差异：
 //   ① 模板正文里 ProgramArguments 内的那条行内注释（stripLeadingComment 只剥首段，正文的保留）
 //   ② 模板给路径加了双引号（TC-009 防 word-split），手写的没加
@@ -25,7 +25,7 @@ const MANIFEST_SCHEMA_VERSION = 1;
 // 默认 label 前缀。机主既有的四个手工装 unit 用的就是 com.ccm.*，换前缀会一个都认不出来、
 // adopt 直接失效。
 //
-// 2026-08-16 前 deploy/*.plist.template 与 docs/deployment.md 的示例写的是 com.you.ccm-，
+// 2026-08-16 前各 plist 模板（时称 deploy/，今 desktop/launchd/）与 docs/deployment.md 的示例写的是 com.you.ccm-，
 // 照抄的人会装出一个**工具完全看不见**的 unit（前缀不命中连 unknown 都算不上），
 // 两条路都装就是两个 LaunchAgent 抢同一个端口。现已统一到本前缀。
 export const DEFAULT_LABEL_PREFIX = 'com.ccm';
@@ -72,7 +72,7 @@ const ROTATE_SUFFIX = '/scripts/rotate-logs.sh';
 // 报 shape 漂移而不是逐字段比对出一堆噪音。
 const UNITS = {
   server: {
-    template: 'deploy/server.plist.template',
+    template: 'desktop/launchd/server.plist.template',
     vars: ['LABEL', 'REPO', 'NODE', 'LOG'],
     logName: 'ccm-server.log',
     requiredFacts: ['repo', 'node'],
@@ -84,7 +84,7 @@ const UNITS = {
     },
   },
   tunnel: {
-    template: 'deploy/tunnel.plist.template',
+    template: 'desktop/launchd/tunnel.plist.template',
     vars: ['LABEL', 'CLOUDFLARED', 'TUNNEL', 'LOG'],
     logName: 'ccm-tunnel.log',
     requiredFacts: ['cloudflared', 'tunnel'],
@@ -100,7 +100,7 @@ const UNITS = {
     },
   },
   logrotate: {
-    template: 'deploy/log-rotate.plist.template',
+    template: 'desktop/launchd/log-rotate.plist.template',
     vars: ['LABEL', 'REPO', 'LOG'],
     logName: 'ccm-logrotate.log',
     requiredFacts: ['repo'],
@@ -116,7 +116,7 @@ const UNITS = {
     },
   },
   menubar: {
-    template: 'deploy/menubar.plist.template',
+    template: 'desktop/launchd/menubar.plist.template',
     vars: ['LABEL', 'APP', 'LOG'],
     logName: 'ccm-menubar.log',
     requiredFacts: ['app'],

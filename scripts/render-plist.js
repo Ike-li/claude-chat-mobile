@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// scripts/render-plist.js —— 安全渲染 deploy/*.plist.template 占位符（审计 TC-009）。
+// scripts/render-plist.js —— 安全渲染 desktop/launchd/*.plist.template 占位符（审计 TC-009）。
 //
-// 此前 deploy/ 模板头部注释建议直接用 `sed -e 's#__X__#value#'` 做替换：value（仓库路径/node 路径等）
+// 此前各模板头部注释建议直接用 `sed -e 's#__X__#value#'` 做替换：value（仓库路径/node 路径等）
 // 若含 sed 替换特殊字符 `&`（插入整个匹配串）或定界符本身 `#`，替换结果会被破坏；含 XML 元字符
 // （`&`/`<`/`>`）还会生成非法 plist。此脚本用字面量 split/join（非正则、非 shell）做占位符替换，
 // 并对替换值做 XML 转义，两类问题一并根治——用法：
 //   node scripts/render-plist.js <template> <out> KEY=VALUE [KEY=VALUE...]
 // 例：
-//   node scripts/render-plist.js deploy/server.plist.template \
+//   node scripts/render-plist.js desktop/launchd/server.plist.template \
 //     ~/Library/LaunchAgents/com.ccm.server.plist \
 //     LABEL=com.ccm.server REPO="$PWD" NODE="$(command -v node)" \
 //     LOG="$HOME/Library/Logs/ccm-server.log"

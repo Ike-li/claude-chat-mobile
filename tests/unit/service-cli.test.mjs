@@ -197,7 +197,7 @@ test.describe('status —— 漂移与归属', () => {
             label: 'com.ccm.server',
             plistPath: `${HOME}/Library/LaunchAgents/com.ccm.server.plist`,
             sha256: 'a'.repeat(64),
-            template: 'deploy/server.plist.template',
+            template: 'desktop/launchd/server.plist.template',
           },
         },
       }),

@@ -19,7 +19,7 @@
 
   用 scripts/render-plist.js 替换（勿裸 sed，理由见 server.plist.template 头注）：
 
-    node scripts/render-plist.js deploy/log-rotate.plist.template \
+    node scripts/render-plist.js desktop/launchd/log-rotate.plist.template \
       ~/Library/LaunchAgents/com.ccm.logrotate.plist \
       LABEL=com.ccm.logrotate REPO="$PWD" \
       LOG="$HOME/Library/Logs/ccm-logrotate.log"

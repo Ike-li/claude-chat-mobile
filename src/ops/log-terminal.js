@@ -15,7 +15,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-// 与 scripts/rotate-logs.sh 默认值、deploy/server.plist.template 示例同一约定
+// 与 scripts/rotate-logs.sh 默认值、desktop/launchd/server.plist.template 示例同一约定
 const DEFAULT_LOG_FILE_SUFFIX = ['Library', 'Logs', 'ccm-server.log'];
 const TAIL_LINES = 200;
 const OSASCRIPT_TIMEOUT_MS = 5000;

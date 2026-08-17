@@ -21,7 +21,7 @@
 
   用 scripts/render-plist.js 替换（勿裸 sed，理由见 server.plist.template 头注）：
 
-    node scripts/render-plist.js deploy/menubar.plist.template \
+    node scripts/render-plist.js desktop/launchd/menubar.plist.template \
       ~/Library/LaunchAgents/com.ccm.menubar.plist \
       LABEL=com.ccm.menubar APP="$PWD/desktop/build/CCM.app" \
       LOG="$HOME/Library/Logs/ccm-menubar.log"

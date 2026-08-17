@@ -23,7 +23,7 @@
 | 单用户 = 机主 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全模型](../README.md#安全模型) |
 | 不是远程桌面 / 共享 TTY / 多租户托管 | 不附着终端 stdin/stdout | [architecture.md](architecture.md) |
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
-| **不替用户决定怎么后台运行** | 基础版只保证「一条命令能跑起来」。LaunchAgent 是 macOS 上的一种**可选便利**（`service:install` / 桌面端勾选），不是产品要求——服务器上 systemd / pm2 / docker 都行，`deploy/` 下的 plist 是模板不是规范 | 2026-08-15 机主确认；[deployment.md](deployment.md) |
+| **不替用户决定怎么后台运行** | 基础版只保证「一条命令能跑起来」（`npm start`，全平台基线）。macOS 之外不做官方常驻适配——服务器上 systemd / pm2 / docker 都行，文档只指路。macOS 另有**单独一个可选入口**：GUI 与 LaunchAgent 便利全部收在 `desktop/`（菜单栏 app + `desktop/launchd/` 的 plist 模板，经 `service:install` / 桌面端勾选安装），模板不是规范。两个入口互不相关，按平台自由选择 | 2026-08-15 机主确认；2026-08-17 机主确认 desktop 单独入口；[deployment.md](deployment.md) |
 | **可选功能由用户开关，不猜** | 桌面控制台、两个 bridge、`LOG_TERMINAL`、推送……默认全关，装机向导逐项问。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**（`--work-dir` 回落 `$HOME` = 整个家目录挂给远程入口）直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
 
 ---

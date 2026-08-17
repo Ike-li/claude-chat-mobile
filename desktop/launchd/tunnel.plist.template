@@ -22,7 +22,7 @@
   都是独立 ProgramArguments 数组元素，不经 shell 解析，但仍需要正确的 XML 转义）。改用
   scripts/render-plist.js（字面量替换 + XML 转义）：
 
-    node scripts/render-plist.js deploy/tunnel.plist.template \
+    node scripts/render-plist.js desktop/launchd/tunnel.plist.template \
       ~/Library/LaunchAgents/com.ccm.tunnel.plist \
       LABEL=com.ccm.tunnel CLOUDFLARED="$(command -v cloudflared)" \
       TUNNEL=your-tunnel-name LOG="$HOME/Library/Logs/ccm-tunnel.log"

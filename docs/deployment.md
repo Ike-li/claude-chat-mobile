@@ -119,13 +119,12 @@ macOS 桌面控制台里勾「开机自启（菜单栏）」走的是同一条�
 <details>
 <summary>手工渲染 plist（想自己掌控内容时）</summary>
 
-仓库 `deploy/` 下有四份**占位符 plist 模板**——它们同时是上面 `service:install` 的数据源
-（`scripts/service.js:71` 直接读它们渲染），不是可以删掉的文档附件。
+仓库 `desktop/launchd/` 下有四份**占位符 plist 模板**（macOS 专属入口的东西都归 `desktop/`）——它们同时是上面 `service:install` 的数据源（`scripts/service.js:71` 直接读它们渲染），不是可以删掉的文档附件。
 
-- [`deploy/server.plist.template`](../deploy/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
-- [`deploy/tunnel.plist.template`](../deploy/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
-- [`deploy/log-rotate.plist.template`](../deploy/log-rotate.plist.template) —— 每天 03:47 跑 `scripts/rotate-logs.sh` 做日志轮转（copy-truncate：launchd 持 O_APPEND fd，rename 式的 newsyslog/logrotate 转出来的新文件永远是空的，机制见脚本头注；默认超 20MB 才转、gzip 保留 5 份）。
-- [`deploy/menubar.plist.template`](../deploy/menubar.plist.template) —— `/usr/bin/open CCM.app`。刻意不设 `KeepAlive`（设了的话用户从菜单点「退出」会被 launchd 立刻拉起，再也关不掉）。
+- [`desktop/launchd/server.plist.template`](../desktop/launchd/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
+- [`desktop/launchd/tunnel.plist.template`](../desktop/launchd/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
+- [`desktop/launchd/log-rotate.plist.template`](../desktop/launchd/log-rotate.plist.template) —— 每天 03:47 跑 `scripts/rotate-logs.sh` 做日志轮转（copy-truncate：launchd 持 O_APPEND fd，rename 式的 newsyslog/logrotate 转出来的新文件永远是空的，机制见脚本头注；默认超 20MB 才转、gzip 保留 5 份）。
+- [`desktop/launchd/menubar.plist.template`](../desktop/launchd/menubar.plist.template) —— `/usr/bin/open CCM.app`。刻意不设 `KeepAlive`（设了的话用户从菜单点「退出」会被 launchd 立刻拉起，再也关不掉）。
 
 每份模板顶部的 XML 注释列出占位符与一行可直接跑的 `node scripts/render-plist.js` 替换示例（字面量替换 + XML 转义，不用裸 `sed`——审计 TC-009：路径若含空格/`&`/`#`/引号等特殊字符，裸 `sed` 可能破坏替换或生成非法 plist）。替换后加载：
 

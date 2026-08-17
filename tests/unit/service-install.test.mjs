@@ -161,6 +161,9 @@ test.describe('install —— 全新安装', () => {
         units: {
           server: {
             label: 'com.ccm.server', plistPath: SERVER_PLIST,
+            // template 故意保留 2026-08-17 搬移前的旧路径：机主生产机的 manifest 里就是这个值。
+            // 它钉住「manifest 的 template 字段只做非空校验、绝不被拿去读文件」——recover 走
+            // templateFor(unit) 重算路径，stale 值必须无害；若有人把它接进 readFileSync，此处即红。
             sha256: 'a'.repeat(64), template: 'deploy/server.plist.template',
           },
         },
@@ -243,7 +246,7 @@ test.describe('install —— 护栏：绝不覆写用户的配置', () => {
     assert.match(r.error, /cloudflared|config\.yml/);
   });
 
-  // ★ deploy/menubar.plist.template 的头注写着「node scripts/service.js install menubar 会渲染
+  // ★ desktop/launchd/menubar.plist.template 的头注写着「node scripts/service.js install menubar 会渲染
   // 它并 bootstrap」，但 precheck 早前只校验 tunnel ⇒ APP 为 undefined 时 escapeXml 把它变成
   // 字面量 "undefined" 写进 plist，还报「✓ 已安装并加载」。且 menubar 的 driftFields 只有
   // log-path，status 会一直显示 managed 无漂移，用户无从发现。
@@ -506,7 +509,7 @@ test.describe('uninstall —— 路径与 CAS 的加固（审查发现）', () =
             label: 'com.ccm.server',
             plistPath: evil, // ← 被篡改
             sha256: sha(HANDWRITTEN_XML),
-            template: 'deploy/server.plist.template',
+            template: 'desktop/launchd/server.plist.template',
           },
         },
       },

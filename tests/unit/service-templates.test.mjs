@@ -1,4 +1,4 @@
-// tests/unit/service-templates.test.mjs —— deploy/*.plist.template 与 UNITS 表的契约
+// tests/unit/service-templates.test.mjs —— desktop/launchd/*.plist.template 与 UNITS 表的契约
 //
 // 为什么单独一个文件：service-units.test.mjs 是**纯逻辑**测试（全部依赖可注入、一个字节都不碰盘），
 // 本文件恰恰相反 —— 它故意走 scripts/service.js 里那条真实渲染路径（readFileSync 真模板 →
@@ -7,7 +7,7 @@
 // 为什么需要它：service.js 的 renderPlist 是可注入 dep，所有 service-* 测试注入的都是假实现，
 // 于是**真实渲染路径至今零测试**。后果有两档：
 //
-//   1. 响的：deploy/ 被当成遗留文档附件删掉。它看起来确实像 —— service.js:4 的头注还记着
+//   1. 响的：desktop/launchd/ 下的模板被当成纯文档示例删掉或挪走 —— service.js:4 的头注还记着
 //      「此前有三份模板但没有一行代码调用 launchctl」，而 19222c7 之后它们成了 install 的
 //      运行时数据源。删掉之后 test:unit 全绿，只有 inventory 因清单变化报 stale；
 //      顺手跑一次 inventory:update 就一路绿到用户点「安装服务」才炸。
@@ -43,7 +43,7 @@ function renderReal(unit) {
   return renderTemplate(stripLeadingComment(raw), renderVarsFor(unit, CTX));
 }
 
-test.describe('deploy/*.plist.template ⇔ UNITS 表', () => {
+test.describe('desktop/launchd/*.plist.template ⇔ UNITS 表', () => {
   test('UNITS 表非空 —— 否则下面的 for 循环会静默零断言通过', () => {
     assert.ok(SERVICE_UNIT_NAMES.length >= 4, `期望至少 4 个 unit，实际 ${SERVICE_UNIT_NAMES.length}`);
   });

@@ -35,8 +35,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Automation | 2 |
 | Backend source | 66 |
 | Configuration template | 1 |
-| Deployment | 4 |
-| Desktop integration | 6 |
+| Desktop integration | 10 |
 | Documentation | 10 |
 | E2E test | 48 |
 | Frontend asset | 3 |
@@ -71,16 +70,16 @@ Total classified files: **453**.
 | `.nvmrc` | Project configuration | Recommended Node major version | Referenced by maintainers | Authored and reviewed manually | keep |
 | `AGENTS.md` | Instructions | Codex project instructions symlink | Claude Code and Codex project instruction loader | Authored and reviewed manually | keep |
 | `CLAUDE.md` | Instructions | Canonical project and Claude Code instructions | Claude Code and Codex project instruction loader | Authored and reviewed manually | keep |
-| `deploy/log-rotate.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
-| `deploy/menubar.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
-| `deploy/server.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
-| `deploy/tunnel.plist.template` | Deployment | Service manager deployment template | LaunchAgent or systemd installation | Authored and reviewed manually | keep |
 | `desktop/ccm-config-window.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/ccm-console-window.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/ccm-menubar-tests.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/ccm-menubar.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/CCMCore.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/Info.plist.template` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
+| `desktop/launchd/log-rotate.plist.template` | Desktop integration | macOS LaunchAgent template rendered by the service installer | `node scripts/service.js install` | Authored and reviewed manually | keep |
+| `desktop/launchd/menubar.plist.template` | Desktop integration | macOS LaunchAgent template rendered by the service installer | `node scripts/service.js install` | Authored and reviewed manually | keep |
+| `desktop/launchd/server.plist.template` | Desktop integration | macOS LaunchAgent template rendered by the service installer | `node scripts/service.js install` | Authored and reviewed manually | keep |
+| `desktop/launchd/tunnel.plist.template` | Desktop integration | macOS LaunchAgent template rendered by the service installer | `node scripts/service.js install` | Authored and reviewed manually | keep |
 | `docker-compose.test.yml` | Test configuration | Compose entry for the isolated test container (npm run test:docker*) | Referenced by maintainers | Authored and reviewed manually | keep |
 | `Dockerfile.test` | Test configuration | Isolated test container — keeps test processes away from the host home directory | Referenced by maintainers | Authored and reviewed manually | keep |
 | `docs/architecture.en.md` | Documentation | English explanation of Web/CLI data paths, ownership, and replay | README, documentation site, or maintainer reference | Authored and reviewed manually | keep |

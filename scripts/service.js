@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/service.js —— 常驻服务（LaunchAgent）的管理入口：安装态、归属、启停、健康。
 //
-// 此前仓库有 deploy/*.plist.template 三份模板和 render-plist.js 渲染器，但**没有一行代码调用
+// 此前仓库有三份 plist 模板（今 desktop/launchd/）和 render-plist.js 渲染器，但**没有一行代码调用
 // launchctl** —— 安装、启停、查状态全靠照抄 docs/deployment.md 里的命令。结果是服务状态不可见：
 // 隧道 LastExitStatus=-9（崩过又被 KeepAlive 拉起）这种事，只有公网报 1033 时才发现。
 //
@@ -297,7 +297,7 @@ export function createServiceManager(deps = {}) {
   function precheck(unit, opts) {
     // menubar 的 APP 无人把关时，escapeXml(undefined) 会把字面量 "undefined" 写进 plist，
     // 还报「✓ 已安装并加载」；而 menubar 的 driftFields 只有 log-path，status 会一直显示
-    // managed 无漂移，用户无从发现。deploy/menubar.plist.template 的头注恰好教人这么装。
+    // managed 无漂移，用户无从发现。desktop/launchd/menubar.plist.template 的头注恰好教人这么装。
     if (unit === 'menubar') {
       return opts.app ? null : '装 menubar 需要 --app=<CCM.app 的绝对路径>';
     }

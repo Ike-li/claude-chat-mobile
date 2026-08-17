@@ -45,8 +45,9 @@ const ROOT_FILES = new Map([
 
 const PREFIX_RULES = [
   ['.github/', 'Automation', 'GitHub workflow', 'keep'],
+  // desktop/ = macOS 专属入口整体（GUI + LaunchAgent 便利）；launchd/ 前缀更具体，必须排在前面
+  ['desktop/launchd/', 'Desktop integration', 'macOS LaunchAgent template rendered by the service installer', 'keep'],
   ['desktop/', 'Desktop integration', 'macOS menubar console source and bundle template', 'keep'],
-  ['deploy/', 'Deployment', 'Service manager deployment template', 'keep'],
   ['src/', 'Backend source', 'Server-side domain module', 'keep'],
   ['public/js/app/', 'Frontend source', 'Browser application domain module', 'keep'],
   ['public/js/logic/', 'Frontend source', 'Pure decision logic by domain — shared by the browser and node:test', 'keep'],
@@ -89,8 +90,8 @@ function entryAndGeneration(path, classification) {
   else if (path === '.env.example') entry = '`scripts/setup.js` and runtime configuration';
   else if (path === 'CLAUDE.md' || path === 'AGENTS.md') entry = 'Claude Code and Codex project instruction loader';
   else if (path.startsWith('.github/')) entry = 'GitHub Actions';
+  else if (path.startsWith('desktop/launchd/')) entry = '`node scripts/service.js install`';
   else if (path.startsWith('desktop/')) entry = '`npm run app:build`';
-  else if (path.startsWith('deploy/')) entry = 'LaunchAgent or systemd installation';
   else if (path.startsWith('src/')) entry = 'Imported by the runtime entrypoint';
   else if (path.startsWith('public/')) entry = 'Served by Express and consumed by the browser';
   else if (path.startsWith('tests/unit/')) entry = '`npm run test:unit`';

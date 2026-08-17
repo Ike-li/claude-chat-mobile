@@ -21,7 +21,7 @@
   非法 plist。改用 scripts/render-plist.js（字面量 split/join，非正则、非 shell，且对替换值做
   XML 转义）：
 
-    node scripts/render-plist.js deploy/server.plist.template \
+    node scripts/render-plist.js desktop/launchd/server.plist.template \
       ~/Library/LaunchAgents/com.ccm.server.plist \
       LABEL=com.ccm.server REPO="$PWD" NODE="$(command -v node)" \
       LOG="$HOME/Library/Logs/ccm-server.log"

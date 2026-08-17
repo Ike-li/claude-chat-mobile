@@ -36,7 +36,7 @@ const HANDWRITTEN_SERVER_PLIST = {
   StandardErrorPath: '/Users/you/Library/Logs/ccm-server.log',
 };
 
-// 同一份配置，但走 deploy/server.plist.template + render-plist.js 的产物（路径带双引号）。
+// 同一份配置，但走 desktop/launchd/server.plist.template + render-plist.js 的产物（路径带双引号）。
 const RENDERED_SERVER_PLIST = {
   ...HANDWRITTEN_SERVER_PLIST,
   ProgramArguments: [
@@ -364,7 +364,7 @@ test.describe('validateManifest', () => {
         label: 'com.ccm.server',
         plistPath: '/Users/you/Library/LaunchAgents/com.ccm.server.plist',
         sha256: 'a'.repeat(64),
-        template: 'deploy/server.plist.template',
+        template: 'desktop/launchd/server.plist.template',
         vars: { LABEL: 'com.ccm.server', REPO: '/Users/you/code/repo', NODE: '/opt/homebrew/bin/node', LOG: '/x.log' },
         installedAt: 1786000000000,
         adopted: false,

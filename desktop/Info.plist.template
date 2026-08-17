@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   CCM.app 的 Info.plist 模板。由 scripts/app-build.js 用 scripts/render-plist.js 渲染
-  （复用 deploy/*.plist.template 那套字面量替换 + XML 转义，路径含 &/#/空格/引号都安全）。
+  （复用 desktop/launchd/*.plist.template 那套字面量替换 + XML 转义，路径含 &/#/空格/引号都安全）。
 
   占位符：
     __VERSION__  版本号，取自 package.json
