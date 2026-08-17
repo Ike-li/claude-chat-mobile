@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/setup.js —— 一键配置向导：生成 .env（AUTH_TOKEN + WORK_DIR），零依赖。
+// scripts/setup.js —— 一键配置向导：生成 ccm.config.json（AUTH_TOKEN + WORK_DIR；--env 则生成旧版 .env），零依赖。
 // 用法: node scripts/setup.js [--config <path>|--env <path>]                        # 交互向导（人用）
 //       node scripts/setup.js --yes --work-dir=<path> [--hooks=on|off] [--desktop=on|off] [--force]  # 非交互（编程 agent 用）
 //   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN,
