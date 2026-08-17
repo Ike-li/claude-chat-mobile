@@ -20,6 +20,10 @@ ccm.config.json.*
 # 运行时状态（ADR-005：会话元数据，本地生成）
 /data/
 
+# 其他 AI 编程工具在仓库根落的瞬时运行文件（如 Codex 的 chat RPC 管道）。
+# 不 ignore 的话，它存在的瞬间会被 inventory 扫成「未分类文件」，随机打红 check 与单测。
+.codex-chat-rpc.jsonl
+
 # 上传附件落盘区（E17/ADR-013：本仓库被当 WORK_DIR 测试时会出现于此）
 .ccm-uploads/
 
