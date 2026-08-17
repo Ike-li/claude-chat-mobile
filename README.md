@@ -101,7 +101,7 @@ PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先「添加
 - [硬性规则与技术债](docs/hard-rules.md)：n=1 取舍、架构不变量、已决「不做」项（维护者）。
 - [展示契约](docs/display-contracts.md)：模型、思考强度和状态栏的事实源。
 - [仓库地图](docs/repository-map.md)：入口、目录职责与完整文件清单。
-- **配置项说明**：`node scripts/config.js schema` —— 全部配置项、类型与默认值，由 schema 生成，永不与代码分叉。[.env.example](.env.example) 是留给 `setup --env` 的旧格式模板（如 `docker --env-file`）。
+- **配置项说明**：`node scripts/config.js schema` —— 全部配置项、类型与默认值，由 schema 生成，永不与代码分叉。
 - [安全策略](SECURITY.md)：漏洞报告方式。
 
 ## 许可证

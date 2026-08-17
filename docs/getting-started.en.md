@@ -82,8 +82,9 @@ All configuration lives in `ccm.config.json` at the project root — one JSON fi
 Toggles are real `true` / `false` and ports are numbers — no more `KEY=value` quoting and escaping rules.
 
 Legacy `.env` is still supported: **`ccm.config.json` wins when present, otherwise the loader falls
-back to `.env`**, so existing deployments need no changes. If you specifically need `.env`
-(for `docker --env-file`, say), generate it with `node scripts/setup.js --env <path>`.
+back to `.env`**, so existing deployments need no changes. (The wizard only generates the new
+format; deployments that already have a `.env` keep working, and `node scripts/config.js schema`
+lists every setting at any time.)
 
 Environment variables always beat the config file — `PORT=4000 npm start` overrides the file.
 
@@ -145,7 +146,7 @@ node scripts/setup.js \
 - `--desktop` accepts only `on` or `off` and defaults to `off`; `on` runs `swiftc`. On a
   non-macOS host, an explicit `--desktop=on` is rejected with a reason rather than ignored.
 - If a config file exists, the command refuses to overwrite it. Add `--force` only after deciding to replace its current token and configuration.
-- Use `--config <path>` to place the config file elsewhere; `--env <path>` generates a legacy `.env` instead (the two are mutually exclusive).
+- Use `--config <path>` to place the config file elsewhere.
 
 For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry is an absolute path or `{path, sessionLimit}`:
 

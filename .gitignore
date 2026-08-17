@@ -2,10 +2,9 @@
 /node_modules/
 
 # 环境变量与密钥（绝不提交）
-# 覆盖 .env / .env.local / .env.production / .env.*.local 等；仅放行模板 .env.example
+# 覆盖 .env / .env.local / .env.production / .env.*.local 等
 .env
 .env.*
-!.env.example
 workdirs.json
 # 统一配置文件：与 .env 同等敏感（AUTH_TOKEN / VAPID 私钥 / ntfy token 都在里面），
 # 而本仓是 public repo —— 漏进去等于把机主的入口密钥推上公网。

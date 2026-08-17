@@ -82,7 +82,7 @@ npm run setup
 开关是真正的 `true` / `false`，端口是数字，不再有 `KEY=value` 的引号与转义规则。
 
 旧版 `.env` 仍受支持：**`ccm.config.json` 存在时优先读它，缺失则回落 `.env`**，既有部署无需改动。
-若确实需要 `.env`（例如 `docker --env-file`），用 `node scripts/setup.js --env <path>` 生成。
+（向导只生成新格式；已有 `.env` 的部署照常工作，配置项清单随时可用 `node scripts/config.js schema` 查看。）
 
 环境变量始终优先于配置文件——`PORT=4000 npm start` 会压过文件里的值。
 
@@ -140,7 +140,7 @@ node scripts/setup.js \
 - `--desktop` 只接受 `on` 或 `off`，缺省 `off`；`on` 会跑 `swiftc`。非 macOS 上显式给
   `--desktop=on` 会被拒绝并说明原因，而不是静默忽略。
 - 已有配置文件时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
-- 可用 `--config <path>` 指定配置文件位置；`--env <path>` 则生成旧版 `.env`（两者互斥）。
+- 可用 `--config <path>` 指定配置文件位置。
 
 多工作区在 `ccm.config.json` 里加 `WORKDIRS` 数组，每项是绝对路径或 `{path, sessionLimit}`：
 

@@ -1,8 +1,8 @@
 // .env 的结构化读写：按行改，不重排、不丢注释、不动不认识的 key。
 //
-// 为什么不复用 scripts/setup.js 的 buildEnvContent：那是三行正则往 .env.example 模板里填值，
-// 不保结构、不支持增删，且它自己的注释就写着「模板格式一变就静默不替换」。dotenv 只有 parser
-// 没有 serializer，所以序列化这块只能自己写 —— 也正是最容易写错的一块。
+// 序列化为什么自己写：dotenv 只有 parser 没有 serializer —— 而序列化正是最容易写错的一块。
+// （setup.js 曾有的 buildEnvContent 走「正则往模板填值」，不保结构、不支持增删、模板格式一变
+// 就静默不替换，2026-08-17 已随「生成旧格式」能力退役；本模块服务的是**已存在** .env 的编辑。）
 //
 // ## serializeEnvValue 的三个坑（写错的后果是 server 起不来，不是「配置没生效」）
 //   1. 裸值会被行内 `#` 截断 —— NTFY_TOPIC=topic#1 解析出来是 "topic"

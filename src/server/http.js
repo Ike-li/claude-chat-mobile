@@ -190,8 +190,8 @@ export function configureHttpShell({
   // /js/** 子模块是否逐请求读盘（开发期改完刷新即生效）。默认关，专用开关 ASSET_HOT_RELOAD=1 打开。
   //
   // 为什么另起一个变量而不复用 DEV_MODE：① DEV_MODE 还管着 dev:restart（远程重启常驻服务），
-  // 静态资源热读不该顺带把那个能力面一起打开；② 本仓 .env.example 把 DEV_MODE 定位成
-  // 「dogfooding 常驻部署也可以开」，机主的生产 .env 里就是 1 —— 拿它当判据等于在生产悄悄
+  // 静态资源热读不该顺带把那个能力面一起打开；② 本仓 env-schema 把 DEV_MODE 定位成
+  // 「dogfooding 常驻部署也可以开」，机主的生产配置里就是开着的 —— 拿它当判据等于在生产悄悄
   // 把启动预读撤回去，那正是这次优化想避免的。
   // 也不去嗅 node --watch：实测 --watch 被 node 自己消费掉，子进程的 process.execArgv 是空数组。
   hotReloadJs = process.env.ASSET_HOT_RELOAD === '1',

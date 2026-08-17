@@ -29,7 +29,6 @@ const ROOT_FILES = new Map([
   ['Dockerfile.test', ['Test configuration', 'Isolated test container — keeps test processes away from the host home directory', 'keep']],
   ['docker-compose.test.yml', ['Test configuration', 'Compose entry for the isolated test container (npm run test:docker*)', 'keep']],
   ['.dockerignore', ['Test configuration', 'Build-context exclusions for Dockerfile.test', 'keep']],
-  ['.env.example', ['Configuration template', 'Documented runtime environment variables', 'keep']],
   ['.gitignore', ['Project configuration', 'Generated and secret file exclusions', 'keep']],
   ['.nvmrc', ['Project configuration', 'Recommended Node major version', 'keep']],
   // docs/ 手写文档逐篇显式登记（无 .md 通配）：往 docs/ 新增文档必须先在此声明用途，
@@ -87,7 +86,6 @@ function entryAndGeneration(path, classification) {
   else if (path === 'package.json' || path === 'package-lock.json') entry = '`npm`';
   else if (path === 'playwright.config.ts') entry = '`npm run test:e2e`';
   else if (path === 'eslint.config.js') entry = '`npm run check` / `npm run lint`';
-  else if (path === '.env.example') entry = '`scripts/setup.js` and runtime configuration';
   else if (path === 'CLAUDE.md' || path === 'AGENTS.md') entry = 'Claude Code and Codex project instruction loader';
   else if (path.startsWith('.github/')) entry = 'GitHub Actions';
   else if (path.startsWith('desktop/launchd/')) entry = '`node scripts/service.js install`';

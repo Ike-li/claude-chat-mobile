@@ -99,7 +99,7 @@ Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.m
 - [Hard rules and tech debt](docs/hard-rules.md) (Chinese): n=1 tradeoffs, invariants, and deferred work (maintainers).
 - [Display contracts](docs/display-contracts.md) (Chinese): sources of truth for model, effort, and status-line display.
 - [Repository map](docs/repository-map.md): entrypoints, directory roles, and the complete file inventory.
-- **Settings reference**: `node scripts/config.js schema` — every setting, type, and default, generated from the schema so it can never drift from the code. [.env.example](.env.example) is the legacy template kept for `setup --env` (e.g. `docker --env-file`).
+- **Settings reference**: `node scripts/config.js schema` — every setting, type, and default, generated from the schema so it can never drift from the code.
 - [Security policy](SECURITY.md): private vulnerability-reporting instructions.
 
 ## License

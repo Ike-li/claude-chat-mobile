@@ -112,7 +112,7 @@ test('scanHookEvents：目录不存在 → 空结果不抛（server 先于安装
   assert.deepEqual(got, { events: [], expired: 0, invalid: 0 });
 });
 
-// 2026-08-06 R5：CLI_HOOKS_DIR 是用户可配路径（.env.example 文档化），指到含无关 *.json 的目录时，
+// 2026-08-06 R5：CLI_HOOKS_DIR 是用户可配路径（env-schema 文档化），指到含无关 *.json 的目录时，
 // 删除面绝不能扩到「目录下所有 json」。判据＝只认 eventFileName 的命名形态
 // （<capturedAt>-<事件名>-<pid>-<hex6>.json）；别人的文件读、删都不许碰。
 test('R5：非本模块命名形态的 *.json 不进扫描面——sweep/scan/容量修剪都不许删别人的文件', () => {

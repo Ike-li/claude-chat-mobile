@@ -332,7 +332,7 @@ test.describe('resolveConfigValues —— 优先级链', () => {
     assert.equal(warnings.filter(w => w.includes('schemaVersion')).length, 0);
   });
 
-  // ★ ENV_SCHEMA 只有 31 个 key，而 .env.example 有 35 个 —— 差的 4 个是**真实被消费的**
+  // ★ 决策时值 ENV_SCHEMA 只有 31 个 key，而 .env.example（已退役）有 35 个 —— 差的 4 个是**真实被消费的**
   // 配置项，只是没进 UI 可改的那张表（CCM_DATA_DIR 是 readonly diagnostic，另三个是遗漏）。
   // 若按「schema 白名单」一刀切，它们会在迁移时静默消失：用户的 CCM_DATA_DIR 没了 ⇒ 全部
   // 会话/设备信任/审批台账一次性孤儿化，而且报的是「迁移成功」。
@@ -380,23 +380,9 @@ test('安全边界：写入侧不会凭空创建 ccm.config.json（迁移必须�
   assert.equal(loadConfigSources({ dir }).source, 'env');
 }));
 
-// ★ 防回归门禁，不是行为测试。
-//
-// 教训来源：这个仓库有过「门禁只查『不许多』不查『不许少』」的先例。以后有人往 .env.example
-// 加一个新配置项却忘了同步 schema，配置层会把它当未知 key 丢掉 —— 而丢配置是静默的。
-// 这条断言让那个疏忽在 test:unit 阶段就红。
-test('覆盖面：.env.example 里的每个 key 都必须被 schema 或 passthrough 认领', async () => {
-  const { readFileSync } = await import('node:fs');
-  const { ENV_SCHEMA } = await import('../../src/ops/env-schema.js');
-  const { PASSTHROUGH_KEYS } = await import('../../src/ops/config-file.js');
-
-  const declared = new Set([...Object.keys(ENV_SCHEMA), ...PASSTHROUGH_KEYS]);
-  const inExample = [...readFileSync(new URL('../../.env.example', import.meta.url), 'utf8')
-    .matchAll(/^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=/gm)].map(m => m[1]);
-
-  const orphans = [...new Set(inExample)].filter(k => !declared.has(k));
-  assert.deepEqual(orphans, [], `这些 key 会被配置层静默丢弃：${orphans.join(', ')}`);
-});
+// （曾有一条「.env.example 每个 key 须被 schema 或 passthrough 认领」的覆盖面门禁——
+// 2026-08-17 .env.example 随「生成旧格式」能力退役后，schema 成为配置项的唯一事实源，
+// 「第二事实源漂移」这个被防的轴不复存在，该门禁随之退役。）
 
 test.describe('loadConfigSources —— 新文件优先，回落 .env', () => {
   test('只有 ccm.config.json 时读它', () => withTempDir((dir) => {

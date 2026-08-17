@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// scripts/setup.js —— 一键配置向导：生成 ccm.config.json（AUTH_TOKEN + WORK_DIR；--env 则生成旧版 .env），零依赖。
-// 用法: node scripts/setup.js [--config <path>|--env <path>]                        # 交互向导（人用）
+// scripts/setup.js —— 一键配置向导：生成 ccm.config.json（AUTH_TOKEN + WORK_DIR），零依赖。
+// 用法: node scripts/setup.js [--config <path>]                                     # 交互向导（人用）
 //       node scripts/setup.js --yes --work-dir=<path> [--hooks=on|off] [--desktop=on|off] [--force]  # 非交互（编程 agent 用）
 //   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN,
 //   否则只绑 127.0.0.1、手机连不上」——向导默认帮你生成。
@@ -14,7 +14,7 @@
 //   · hooks 不默认装（那会写用户全局 ~/.claude/settings.json）——必须显式 --hooks=on
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
 import { basename, join, dirname, resolve } from 'node:path';
@@ -33,26 +33,17 @@ export function generateToken(bytes = 32) {
 
 // 生成统一配置文件 ccm.config.json 的内容（P1b 起的默认格式）。
 //
-// 与下面 buildEnvContent 的关键差别：那个是**正则替换模板里的赋值行**，模板格式一变就静默
-// 不替换（所以调用点还得回头校验一次替换是否真的生效）；这个是结构化构造，写出去的就是数据
-// 本身，不存在「没匹配上」。值里的空格 / 引号 / 反斜杠交给 JSON.stringify，不需要 .env 时代
-// 那套「同时满足 dotenv 与 shell 两个解析器」的字符白名单。
+// 结构化构造：写出去的就是数据本身，不存在旧模板替换时代「正则没匹配上就静默不生效」的
+// 失败模式（那套 buildEnvContent + .env.example 已于 2026-08-17 随「生成旧格式」能力一并
+// 退役——它面向的人群在新格式成为默认后趋近于零；读取已存在 .env 的回落链不受影响，
+// 见 src/ops/config-file.js）。值里的空格 / 引号 / 反斜杠交给 JSON.stringify，不需要
+// .env 时代那套「同时满足 dotenv 与 shell 两个解析器」的字符白名单。
 export function buildConfigContent({ authToken, workDir } = {}) {
   const config = applyConfigChanges({}, {
     ...(authToken ? { AUTH_TOKEN: authToken } : {}),
     ...(workDir ? { WORK_DIR: workDir } : {}),
   });
   return `${JSON.stringify(config, null, 2)}\n`;
-}
-
-// 基于 .env.example 模板填入 AUTH_TOKEN / WORK_DIR，返回新的 .env 内容。
-// 只替换行首的赋值行（KEY=…），注释与其他行原样保留。
-// **旧格式**：仅在 --env 显式指定时使用（如需要 docker --env-file）。
-export function buildEnvContent(template, { authToken, workDir } = {}) {
-  let out = template;
-  if (authToken) out = out.replace(/^AUTH_TOKEN=.*$/m, `AUTH_TOKEN=${authToken}`);
-  if (workDir) out = out.replace(/^WORK_DIR=.*$/m, `WORK_DIR=${workDir}`);
-  return out;
 }
 
 // 按环境 locale 选界面语言：zh_* → 中文，其余 → 英文。
@@ -64,7 +55,7 @@ export function detectLang(env = process.env) {
 // 参数解析。未知参数不静默忽略而是收集起来由上层拒绝——`--workdir=` 这种少一个连字符的 typo
 // 若被忽略，WORK_DIR 就会悄悄回落到 $HOME，正是本模式要堵的那个洞。
 export function parseSetupArgs(argv = []) {
-  const out = { envPath: undefined, configPath: undefined, yes: false, workDir: undefined, hooks: undefined, desktop: undefined, force: false, unknown: [] };
+  const out = { configPath: undefined, yes: false, workDir: undefined, hooks: undefined, desktop: undefined, force: false, unknown: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const eq = arg.indexOf('=');
@@ -72,7 +63,6 @@ export function parseSetupArgs(argv = []) {
     const inline = eq > 0 ? arg.slice(eq + 1) : undefined;
     const value = () => (inline !== undefined ? inline : argv[++i]);
     if (name === '--config') out.configPath = value();
-    else if (name === '--env') out.envPath = value();
     else if (name === '--work-dir') out.workDir = value();
     else if (name === '--hooks') out.hooks = value();
     else if (name === '--desktop') out.desktop = value();
@@ -101,9 +91,6 @@ export function resolveSetupPlan({ args, envExists = false, platform = process.p
   if (args.desktop === 'on' && platform !== 'darwin') {
     return refuse('desktop_unsupported', platform);
   }
-  // 两种格式互斥。挑一个赢的话，用户会拿到一个自己没要求的格式，而两个路径写的是不同文件 ——
-  // 那正是「读写不同源」类问题的种子。
-  if (args.configPath !== undefined && args.envPath !== undefined) return refuse('both_formats');
   if (!args.yes) return { mode, workDir: args.workDir, hooks: args.hooks, desktop: args.desktop };
   if (!args.workDir) return refuse('work_dir_required');
   if (envExists && !args.force) return refuse('env_exists');
@@ -115,7 +102,6 @@ export function resolveSetupPlan({ args, envExists = false, platform = process.p
 export const MESSAGES = {
   zh: {
     title: '⚙  Claude Chat Mobile —— 配置向导',
-    noTemplate: '✗ 找不到 .env.example，请在项目根目录运行。',
     overwritePrompt: '已存在，覆盖它? [y/N] ',
     cancelled: '已取消，现有 .env 未改动。',
     tokenLabel: '已生成 AUTH_TOKEN（手机访问必需）',
@@ -137,8 +123,8 @@ export const MESSAGES = {
     desktopBuilding: '正在编译桌面 app…',
     desktopFailed: '编译未成功（见上方输出）。不影响其余配置；装好 Command Line Tools'
       + '（xcode-select --install）后跑 npm run app:build 重试。',
-    usage: '用法: node scripts/setup.js [--config <path>|--env <path>]\n'
-      + '      node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--desktop=on|off] [--force] [--env <path>]',
+    usage: '用法: node scripts/setup.js [--config <path>]\n'
+      + '      node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--desktop=on|off] [--force]',
     refuse: {
       unknown_flag: d => `无法识别的参数：${d}`,
       invalid_hooks: d => `--hooks 只接受 on 或 off，收到：${d}`,
@@ -146,7 +132,6 @@ export const MESSAGES = {
       desktop_unsupported: d => `桌面控制台只有 macOS 有（当前平台：${d}）。服务器上用手机端与命令行，功能是齐的。`,
       work_dir_required: () => '非交互模式必须显式给出 --work-dir=<绝对路径>。'
         + '这里不会静默回落到 $HOME——那等于把整个家目录交给 agent 读写。',
-      both_formats: () => '--config 与 --env 只能给一个：前者写 ccm.config.json，后者写旧格式 .env。',
       env_exists: d => `${d} 已存在，非交互模式不会覆盖它（里面可能有正在用的 AUTH_TOKEN）。`
         + '若是从旧版本升级，请跑 node scripts/config.js migrate 迁移，不要用 --force —— '
         + '那会生成一个新 AUTH_TOKEN，所有已授权设备都要重新批准。'
@@ -154,7 +139,6 @@ export const MESSAGES = {
   },
   en: {
     title: '⚙  Claude Chat Mobile — setup wizard',
-    noTemplate: '✗ .env.example not found — run this from the project root.',
     overwritePrompt: 'already exists. Overwrite it? [y/N] ',
     cancelled: 'Cancelled. Your existing .env was left untouched.',
     tokenLabel: 'Generated AUTH_TOKEN (required for phone access)',
@@ -176,8 +160,8 @@ export const MESSAGES = {
     desktopBuilding: 'Building the desktop app…',
     desktopFailed: 'Build did not complete (see output above). Your other config is fine; install the Command Line '
       + 'Tools (xcode-select --install) and retry with npm run app:build.',
-    usage: 'usage: node scripts/setup.js [--config <path>|--env <path>]\n'
-      + '       node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--desktop=on|off] [--force] [--env <path>]',
+    usage: 'usage: node scripts/setup.js [--config <path>]\n'
+      + '       node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--desktop=on|off] [--force]',
     refuse: {
       unknown_flag: d => `Unrecognized argument: ${d}`,
       invalid_hooks: d => `--hooks accepts only on or off, got: ${d}`,
@@ -185,7 +169,6 @@ export const MESSAGES = {
       desktop_unsupported: d => `The desktop console is macOS-only (this platform: ${d}). On a server, the phone UI and CLI cover everything.`,
       work_dir_required: () => 'Non-interactive mode requires an explicit --work-dir=<absolute-path>. '
         + 'It will not silently fall back to $HOME — that would hand your entire home directory to the agent.',
-      both_formats: () => 'Pass either --config or --env, not both: the former writes ccm.config.json, the latter legacy .env.',
       env_exists: d => `${d} already exists; non-interactive mode will not overwrite it `
         + '(it may hold the AUTH_TOKEN you are using). Upgrading from an older version? Run '
         + 'node scripts/config.js migrate instead — --force would mint a new AUTH_TOKEN and every '
@@ -207,28 +190,14 @@ const c = {
 //
 // 注意成功提示的位置：token 那行必须在 writeOwnerOnlyFile 之后才打印。旧实现先打印
 // 「✓ 已生成 AUTH_TOKEN（已写入 .env）」再去问 WORK_DIR，被 EOF/Ctrl-C 打断时一个字没写却已经报了成功。
-//
-// format='config'（默认）走结构化构造；'env' 是显式要旧格式时的退路（如需要 docker --env-file）。
-function writeSetupFile({ envPath, templatePath, workDir, format, t }) {
+function writeSetupFile({ outPath, workDir, t }) {
   const token = generateToken();
+  // 结构化构造没有旧模板替换那种「正则没匹配上就静默不生效」的失败模式，无需写后校验。
+  writeOwnerOnlyFile(outPath, buildConfigContent({ authToken: token, workDir: workDir || undefined }));
 
-  if (format === 'env') {
-    const template = readFileSync(templatePath, 'utf8');
-    const content = buildEnvContent(template, { authToken: token, workDir: workDir || undefined });
-    writeOwnerOnlyFile(envPath, content);
-    // 校验替换真的生效——buildEnvContent 靠正则匹配 .env.example 模板里的赋值行，模板格式一旦变了
-    // 会静默不替换（.replace 无匹配即原样返回），此前不管有没有生效都打印"已写入"成功提示。
-    if (!content.includes(`AUTH_TOKEN=${token}`)) {
-      console.error(`\n⚠️  .env.example 模板格式有变，AUTH_TOKEN 未能自动写入！请手动在 ${envPath} 里加一行：\nAUTH_TOKEN=${token}`);
-    }
-  } else {
-    // 结构化构造没有「没匹配上」这个失败模式，所以上面那道兜底校验在这条路径上不需要。
-    writeOwnerOnlyFile(envPath, buildConfigContent({ authToken: token, workDir: workDir || undefined }));
-  }
-
-  const written = t.tokenWrittenSuffix.replace(/\.env/, basename(envPath));
+  const written = t.tokenWrittenSuffix.replace(/\.env/, basename(outPath));
   console.log(`\n${c.green('✓')} ${t.tokenLabel}: ${c.dim(token.slice(0, 8) + written)}`);
-  console.log(`${c.green('✓')} ${t.wroteLabel} ${c.bold(envPath)} ${c.dim(t.permNote)}`);
+  console.log(`${c.green('✓')} ${t.wroteLabel} ${c.bold(outPath)} ${c.dim(t.permNote)}`);
 }
 
 // CLI hooks 桥安装（两条路径共用）。写的是用户全局 ~/.claude/settings.json，故只在明确要装时才调。
@@ -256,11 +225,11 @@ function printNextSteps(t) {
   console.log(c.dim(`\n${t.publicNote}\n`));
 }
 
-async function runInteractive({ plan, envPath, templatePath, format, t }) {
+async function runInteractive({ plan, outPath, t }) {
   const rl = createInterface({ input: stdin, output: stdout });
   try {
-    // 已有 .env → 先问是否覆盖（默认否，绝不静默覆盖既有配置）
-    const existing = [envPath, join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].find(p => existsSync(p));
+    // 已有配置 → 先问是否覆盖（默认否，绝不静默覆盖既有配置）
+    const existing = [outPath, join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].find(p => existsSync(p));
     if (existing) {
       const ans = (await rl.question(`⚠️  ${existing} ${t.overwritePrompt}`)).trim().toLowerCase();
       if (ans !== 'y' && ans !== 'yes') {
@@ -271,7 +240,7 @@ async function runInteractive({ plan, envPath, templatePath, format, t }) {
 
     // WORK_DIR：命令行已给就不问；交互留空 = $HOME（人自己按回车做的选择，与 agent 静默回落不同）
     const workDir = plan.workDir ?? (await rl.question(`\n${t.workDirLabel} ${c.dim(t.workDirHint)}: `)).trim();
-    writeSetupFile({ envPath, templatePath, workDir, format, t });
+    writeSetupFile({ outPath, workDir, t });
 
     // CLI hooks 桥：默认装（终端直跑的会话唯有装了它才能推到手机——轮询只能在你已经打开
     // app 时追平镜像，永远不会主动叫你）。默认 Y 但必须问：它写的是用户全局 ~/.claude/settings.json。
@@ -300,8 +269,8 @@ async function runInteractive({ plan, envPath, templatePath, format, t }) {
   }
 }
 
-function runNonInteractive({ plan, envPath, templatePath, format, t }) {
-  writeSetupFile({ envPath, templatePath, workDir: plan.workDir, format, t });
+function runNonInteractive({ plan, outPath, t }) {
+  writeSetupFile({ outPath, workDir: plan.workDir, t });
   if (plan.hooks === 'on') installHooksBridge(t);
   else console.log(c.dim(t.hooksSkipped));
   if (plan.desktop === 'on') buildDesktopApp(t);
@@ -310,35 +279,25 @@ function runNonInteractive({ plan, envPath, templatePath, format, t }) {
 
 async function main() {
   const args = parseSetupArgs(process.argv.slice(2));
-  // 默认生成统一配置文件；--env 是显式要旧格式时的退路（如需要 docker --env-file）。
-  const format = args.envPath ? 'env' : 'config';
-  const envPath = args.envPath || args.configPath || join(HERE, CONFIG_FILE_NAME);
-  const templatePath = join(HERE, '.env.example');
+  const outPath = args.configPath || join(HERE, CONFIG_FILE_NAME);
   const t = MESSAGES[detectLang()];
 
   console.log(c.bold(`\n${t.title}\n`));
-
-  // 模板只有旧格式路径才需要。结构化构造不读模板，缺了 .env.example 也照样能装机 ——
-  // 早前无条件检查会让「仓库里没有 .env.example」直接 exit 1，而新路径根本用不到它。
-  if (format === 'env' && !existsSync(templatePath)) {
-    console.error(t.noTemplate);
-    process.exit(1);
-  }
 
   // ★ 「已经配置过没有」必须同时看两份。默认目标是 ccm.config.json，而既有部署的配置在 .env 里——
   // 只 stat 新路径的话，setup 会在一台正在跑的实例旁边生成一份带**全新 AUTH_TOKEN** 的配置，
   // 且它优先级更高：所有已授权设备（含正在操作的那台手机）当场失效，PORT/CCM_DATA_DIR/CF_ACCESS_* 一并被遮蔽。
   // desktop/CCMCore.swift 的 setupCommand 拼的就是这条命令，菜单栏点一次「安装向导」就会中。
-  const existingConfig = [envPath, join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].find(existsSync);
+  const existingConfig = [outPath, join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].find(existsSync);
   const plan = resolveSetupPlan({ args, envExists: !!existingConfig });
   if (plan.refuse) {
-    console.error(`✗ ${t.refuse[plan.refuse.code](plan.refuse.detail ?? existingConfig ?? envPath)}\n`);
+    console.error(`✗ ${t.refuse[plan.refuse.code](plan.refuse.detail ?? existingConfig ?? outPath)}\n`);
     console.error(t.usage);
     process.exit(2);
   }
 
-  if (plan.mode === 'noninteractive') runNonInteractive({ plan, envPath, templatePath, format, t });
-  else await runInteractive({ plan, envPath, templatePath, format, t });
+  if (plan.mode === 'noninteractive') runNonInteractive({ plan, outPath, t });
+  else await runInteractive({ plan, outPath, t });
 }
 
 // 仅直接运行时进入交互；被测试 import 时不执行 main。

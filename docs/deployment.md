@@ -30,7 +30,7 @@ launchctl kickstart -k gui/$(id -u)/<your-server-label>
 systemctl --user restart <your-server-service>
 ```
 
-💡 若已设 `DEV_MODE`（见 `.env.example` 的配置项说明），web 端齿轮面板会出现「重启服务」按钮，可免上电脑一键 kickstart（优雅退出后由 LaunchAgent/systemd 的 KeepAlive 自动拉起）——生产对外部署建议留空该变量，避免误触重启对外服务。
+💡 若已设 `DEV_MODE`（配置项说明见 `node scripts/config.js schema`），web 端齿轮面板会出现「重启服务」按钮，可免上电脑一键 kickstart（优雅退出后由 LaunchAgent/systemd 的 KeepAlive 自动拉起）——生产对外部署建议留空该变量，避免误触重启对外服务。
 
 ## 从零搭建
 

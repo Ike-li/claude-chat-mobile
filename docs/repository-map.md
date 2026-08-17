@@ -34,7 +34,6 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | --- | ---: |
 | Automation | 2 |
 | Backend source | 66 |
-| Configuration template | 1 |
 | Desktop integration | 10 |
 | Documentation | 10 |
 | E2E test | 48 |
@@ -55,7 +54,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 157 |
 | Vendored asset | 21 |
 
-Total classified files: **453**.
+Total classified files: **452**.
 
 ## Complete file inventory
 
@@ -63,7 +62,6 @@ Total classified files: **453**.
 | --- | --- | --- | --- | --- | --- |
 | `.claude/settings.json` | Project configuration | Claude Code PreToolUse hook — asks before running destructive commands on the host | Referenced by maintainers | Authored and reviewed manually | keep |
 | `.dockerignore` | Test configuration | Build-context exclusions for Dockerfile.test | Referenced by maintainers | Authored and reviewed manually | keep |
-| `.env.example` | Configuration template | Documented runtime environment variables | `scripts/setup.js` and runtime configuration | Authored and reviewed manually | keep |
 | `.github/workflows/test.yml` | Automation | GitHub workflow | GitHub Actions | Authored and reviewed manually | keep |
 | `.github/workflows/upstream-watch.yml` | Automation | GitHub workflow | GitHub Actions | Authored and reviewed manually | keep |
 | `.gitignore` | Project configuration | Generated and secret file exclusions | Referenced by maintainers | Authored and reviewed manually | keep |

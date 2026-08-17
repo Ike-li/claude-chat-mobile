@@ -408,7 +408,8 @@ function cmdCheck(dir) {
 // 传空 values 而不是当前配置 —— 值由 get 命令单独取（且默认脱敏）。
 //
 // 不带 --json 时输出人类可读的配置项清单。这份清单**从 ENV_SCHEMA 生成**，所以永远不会与
-// 代码分叉 —— 而 .env.example 那 123 行注释是手写的，加一个配置项必须记得同步它。
+// 代码分叉 —— 曾经的 .env.example 那 123 行注释是手写的第二事实源，加配置项必须记得同步它，
+// 正因如此 2026-08-17 已随旧格式生成能力一并退役，schema 自此是配置项文档的唯一出处。
 function cmdSchema() {
   const view = buildEnvView({});
   const lines = [];

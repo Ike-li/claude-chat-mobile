@@ -2,13 +2,12 @@
 // 交互壳（readline 提问 / 写文件）不在此测，靠手动跑 `npm run setup` 验证。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateToken, buildConfigContent, buildEnvContent, parseSetupArgs, resolveSetupPlan } from '../../scripts/setup.js';
+import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan } from '../../scripts/setup.js';
 
 // ── P1b：默认生成 ccm.config.json ────────────────────────────────────────────
 //
-// buildEnvContent 那套是「正则替换 .env.example 模板的赋值行」，它自己的兜底逻辑就写着
-// 「模板格式一旦变了就静默不替换」—— setup.js:166 因此还得回头校验一次替换是否真的生效。
-// 结构化构造没有这个失败模式：写出去的就是数据本身，不存在「没匹配上」。
+// 结构化构造：写出去的就是数据本身，不存在旧模板替换时代「正则没匹配上就静默不生效」的
+// 失败模式（buildEnvContent + .env.example 已于 2026-08-17 随「生成旧格式」能力退役）。
 test.describe('buildConfigContent —— 结构化生成，不再依赖模板匹配', () => {
   test('产出合法 JSON，带 schema 版本与两个必填项', () => {
     const parsed = JSON.parse(buildConfigContent({ authToken: 'abc123', workDir: '/Users/you/code' }));
@@ -42,40 +41,14 @@ test('generateToken: 十六进制、长度=2×bytes、每次不同', () => {
   assert.notEqual(generateToken(32), generateToken(32));
 });
 
-test('buildEnvContent: 填入 AUTH_TOKEN，其余行原样不动', () => {
-  const tpl = 'AUTH_TOKEN=\nPORT=3000\nWORK_DIR=\n';
-  const out = buildEnvContent(tpl, { authToken: 'abc123' });
-  assert.match(out, /^AUTH_TOKEN=abc123$/m);
-  assert.match(out, /^PORT=3000$/m);
-});
-
-test('buildEnvContent: 填入 WORK_DIR', () => {
-  const tpl = 'AUTH_TOKEN=\nWORK_DIR=\n';
-  const out = buildEnvContent(tpl, { authToken: 'x', workDir: '/tmp/work' });
-  assert.match(out, /^WORK_DIR=\/tmp\/work$/m);
-});
-
-test('buildEnvContent: 省略 workDir 时保持 WORK_DIR= 空（默认 $HOME）', () => {
-  const tpl = 'AUTH_TOKEN=\nWORK_DIR=\n';
-  const out = buildEnvContent(tpl, { authToken: 'x' });
-  assert.match(out, /^WORK_DIR=$/m);
-});
-
-test('buildEnvContent: 只替换首个匹配行、不重复注入', () => {
-  const tpl = '# AUTH_TOKEN 说明\nAUTH_TOKEN=\n';
-  const out = buildEnvContent(tpl, { authToken: 'tok' });
-  assert.match(out, /^AUTH_TOKEN=tok$/m);
-  assert.match(out, /^# AUTH_TOKEN 说明$/m); // 注释行不被当成赋值行改掉
-});
-
 // ── 非交互模式（编程 agent 代装用）─────────────────────────────
 // 背景实证：无 TTY 时 stdin 立刻 EOF → rl.question 的 promise 永不 settle → 进程静默退出 0、
 // .env 一个字没写，却已经先打印过「✓ 已生成 AUTH_TOKEN（已写入 .env）」。agent 照这个输出
 // 判定必然误报成功。故非交互路径必须由参数完整表达意图，且危险默认一律不许静默生效。
 
-test('parseSetupArgs: --env 支持空格与等号两种写法', () => {
-  assert.equal(parseSetupArgs(['--env', '/tmp/a/.env']).envPath, '/tmp/a/.env');
-  assert.equal(parseSetupArgs(['--env=/tmp/b/.env']).envPath, '/tmp/b/.env');
+test('parseSetupArgs: 已退役的 --env 按未知参数处理（生成旧格式的能力已移除，拒绝而非静默忽略）', () => {
+  assert.ok(parseSetupArgs(['--env=/tmp/b/.env']).unknown.includes('--env=/tmp/b/.env'));
+  assert.ok(parseSetupArgs(['--env', '/tmp/a/.env']).unknown.includes('--env'));
 });
 
 test('parseSetupArgs: 解析全部开关', () => {

@@ -12,7 +12,6 @@ export const DEFAULT_DOC_GLOBS = Object.freeze([
   'CLAUDE.md',
   'SECURITY.md',
   '.github/copilot-instructions.md',
-  '.env.example',
   'docs/*.md',
 ]);
 
