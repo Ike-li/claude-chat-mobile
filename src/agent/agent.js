@@ -69,6 +69,26 @@ export const USAGE_MIN_INTERVAL_MS = 60_000;
 // 自动感知、不必等 agent 实例重建（切工作区/切 effort/resume/server 重启才会重建）。
 export const USAGE_THIRD_PARTY_INTERVAL_MS = 10 * 60 * 1000;
 
+// 连续失败退避。【为什么单靠上面两档不够】降到第三方慢档的判据是 CLI 自报的
+// rate_limits_available === false——只要一直读不到一份可用结果，就永远判不出该降档，被锁死在最快
+// 的 60s 档：失败本身把频率钉在最激进档位。（该死结的另一半是"慢但最终成功"被本地超时误判成失败，
+// 那一半由 _adoptUsage 认领迟到结果解决；这里只管真失败。）
+// 与在途去重是两条正交防线：去重挡"上一发还没回"，退避挡"回了但是错的"——后者 rpc 已 settle、
+// 在途闸当场失效，而 get_usage 那半个全量 transcript 扫盘的成本与网络无关、照付不误。
+// 阈值 3：一两次抖动不该改变行为，连续 3 分钟拿不到才算"这条路现在不通"。
+export const USAGE_FAIL_BACKOFF_AFTER = 3;
+// 封顶取第三方档同量级：退避是省成本，不是放弃——恢复的发现延迟必须有界，否则额度栏一旦消失就要
+// 等到实例重建才回来。同一个常量也用作在途去重的年龄上限（见 fetchUsage）：两条路共用这一个界。
+// 有意的副作用：第三方档基线本身就等于封顶值，故那一档下退避恒为 no-op、一次都不放大。
+export const USAGE_BACKOFF_MAX_MS = USAGE_THIRD_PARTY_INTERVAL_MS;
+
+// 纯函数（可单测）：按连续失败次数放大常规档节流窗。阈值前原样返回，之后 2^n 放大并封顶；
+// 基线已等于封顶值时（第三方档）恒等返回。
+export function usageBackoffWindow(baseMs, failStreak) {
+  if (!(failStreak >= USAGE_FAIL_BACKOFF_AFTER)) return baseMs;
+  return Math.min(baseMs * 2 ** (failStreak - USAGE_FAIL_BACKOFF_AFTER + 1), USAGE_BACKOFF_MAX_MS);
+}
+
 // 会话生命周期用户可见文案（可恢复类 error）。统一前缀，避免「会话已结束」歧义：
 // 磁盘会话通常还在，掐掉的是子进程 / 在途轮。前端 error bar 原样展示。
 export function formatLifecycleIdleTimeout(mins) {
@@ -387,6 +407,9 @@ export class AgentSession {
     this._usageFetchAt = 0;                // 节流窗起点（见 USAGE_MIN_INTERVAL_MS）
     this._usageCached = null;              // 节流窗内复用的上次结果
     this._usageThirdParty = false;         // 上次 CLI 自报 rate_limits_available:false（无订阅额度）→ 降到 USAGE_THIRD_PARTY_INTERVAL_MS 档
+    this._usageInFlight = null;            // 在途 RPC promise：本地超时后 CLI 侧仍在跑，未 settle 前不得再发（见 fetchUsage）
+    this._usageInFlightAt = 0;             // 在途起点：给上一行的去重加年龄上限，防"一去不回"永久熄火
+    this._usageFailStreak = 0;             // 连续失败次数 → 节流窗退避档位（见 usageBackoffWindow）；成功即清零
     // per-turn 秒表/输出 token（CLI 式动态状态行 ✻ Verb… (Ns · ↓ tokens)，经 status_line.turn 透出）：
     this.turnStartedAt = null;    // 本轮开始时间戳（send/合成轮置位，result 无排队轮清 null）
     this.turnOutputTokens = 0;    // 本轮累计输出 token（跨 message 累加）
@@ -974,37 +997,84 @@ export class AgentSession {
       this.lastUsageFetchFailure = { reason: 'rpc_no_method' };
       return null;
     }
-    // 显式传参优先（测试绕开节流用 0）；否则按上次 CLI 自报的鉴权类型选档。
+    // 显式传参优先（测试绕开节流用 0）；否则按上次 CLI 自报的鉴权类型选档，再叠加连续失败退避。
+    // 注意 minIntervalMs 只绕开【节流窗】，绕不开下面的在途闸——传 0 也不会向挂住的通道加压。
     const windowMs = minIntervalMs
-      ?? (this._usageThirdParty ? USAGE_THIRD_PARTY_INTERVAL_MS : USAGE_MIN_INTERVAL_MS);
-    // 成败都占用节流窗：RPC 挂住时更不该继续给同一条 stdio control 通道加压。
+      ?? usageBackoffWindow(
+        this._usageThirdParty ? USAGE_THIRD_PARTY_INTERVAL_MS : USAGE_MIN_INTERVAL_MS,
+        this._usageFailStreak,
+      );
+    // 成败都占用节流窗：上一发还没回时更不该给同一条 stdio control 通道加压。
     // 窗内早退不碰 lastUsageFetchFailure——沿用上次判定依据，与快照回落配合保持状态稳定。
     if (this._usageFetchAt && now - this._usageFetchAt < windowMs) return this._usageCached;
+    // 在途去重 + 年龄上限。timeoutMs 到点只是【本方放弃等待】，CLI 侧那一发仍在飞
+    // （get_usage = 一次真实网络请求 + 一次全量 transcript 扫盘）。只靠节流窗的话，窗一到就再发
+    // 一发，未返回的请求会在 CLI 侧重叠。
+    // 【观察 vs 因果，别混】2026-08-17 排查会话 4d4443ce 时，该实例对 API 的并发连接数显著高于
+    // 同机终端 CLI（峰值 20+ vs 稳定 4）。但同期 web 消息取件被拖延数百秒这件事，其因果未能证实：
+    // 该进程的累计 CPU 远小于停滞时长（在等待，不是空转），且更早的版本以 6 倍频率轮询却无此症状，
+    // 真正与症状同刻发生的是网卡地址漂移。此处只按"不向未回的通道加压"这条独立成立的卫生原则修，
+    // 不主张它能治那次停滞。
+    // 年龄上限不可省：没有它，一发真的一去不回就会把本实例的额度栏永久钉死（只剩账号级快照垫，
+    // 而那份有 15min TTL），与 USAGE_BACKOFF_MAX_MS 处"恢复延迟必须有界"的不变量直接冲突。
+    // 超龄放行后旧发若迟到 settle，_clearUsageInFlight 的身份守卫保证它不会误清新发的标记。
+    if (this._usageInFlight && now - this._usageInFlightAt < USAGE_BACKOFF_MAX_MS) return this._usageCached;
+    // 不刷新在途起点以外的状态：在途早退不算"问过一次"，RPC 回来后按原窗口正常轮到下一次。
     this._usageFetchAt = now;
     const startedAt = Date.now();
     let timer = null;
     try {
-      const usage = await Promise.race([
-        this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
+      const rpc = Promise.resolve(this.q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET());
+      this._usageInFlight = rpc;
+      this._usageInFlightAt = now;
+      // 结算挂在 rpc 自身的 settle 上，不在下面的 try/finally 里——那两处在【本地超时】那一刻就跑，
+      // 而此时 CLI 侧请求还在飞。两个后果都得在这里兜住：
+      //  · 清在途标记：用 finally 清等于没去重；
+      //  · 认领迟到的成功：Promise.race 决定的只是本方不再等，赢家仍会带着完整结果 settle。丢掉它，
+      //    "慢但每次都健康"就会被读成"一直失败"——值被弃、failStreak 空涨，而降档判据
+      //    rate_limits_available 恰恰只能从那份被弃的值里读到（死结的另一半）。
+      rpc.then(
+        usage => { this._adoptUsage(usage, startedAt); this._clearUsageInFlight(rpc); },
+        () => { this._clearUsageInFlight(rpc); }, // 失败侧不再 ++：本次的账已由下面的 catch 记过
+      );
+      // 成功路径的状态写入已由上面的 then 完成（它先于 race 注册，故 await 返回时必已跑过）。
+      return await Promise.race([
+        rpc,
         new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('usage timeout')), timeoutMs); }),
       ]);
-      this.lastUsageFetchFailure = null;
-      this.lastUsageOkMs = Date.now() - startedAt;
-      this._usageCached = usage;
-      // 鉴权类型双向自适应：CLI 说没有订阅额度就降档，说有就回常规档。只读 CLI 的权威自报，
-      // 不做展示层判定（额度到底显不显示仍由 ops/statusline.js#resolveRateReason 决定）。
-      this._usageThirdParty = usage?.rate_limits_available === false;
-      return usage;
     } catch (err) {
+      this._usageFailStreak++;
       this.lastUsageFetchFailure = {
         reason: 'rpc_error', message: String(err?.message || err),
         timedOut: err?.message === 'usage timeout', ms: Date.now() - startedAt,
+        // 仅供本对象内联排查：下游 statusline.js 的字段白名单不收它，日志里看不到（reason 未变
+        // 时 recordRateReasonIfChanged 也不会再写）。真要观测退避档位得另开通道。
+        failStreak: this._usageFailStreak,
       };
-      this._usageCached = null;
+      this._usageCached = null; // 迟到的成功会由 _adoptUsage 覆盖回来
       return null;
     } finally {
       if (timer) clearTimeout(timer);
     }
+  }
+
+  // 认领一份 usage 结果。可能在【本地超时之后】才被调用（迟到的成功），故一切以它为准：
+  // 覆盖 catch 分支写下的失败态、清零退避、重判鉴权档。
+  // 鉴权类型双向自适应：CLI 说没有订阅额度就降档，说有就回常规档。只读 CLI 的权威自报，
+  // 不做展示层判定（额度到底显不显示仍由 ops/statusline.js#resolveRateReason 决定）。
+  _adoptUsage(usage, startedAt) {
+    this.lastUsageFetchFailure = null;
+    this.lastUsageOkMs = Date.now() - startedAt;
+    this._usageFailStreak = 0; // 恢复即刻自愈：下一次按常规档问，不背历史失败的债
+    this._usageCached = usage;
+    this._usageThirdParty = usage?.rate_limits_available === false;
+  }
+
+  // 身份守卫必须留：超龄放行后会有两发同时在飞，旧发 settle 时不得清掉新发的标记。
+  _clearUsageInFlight(rpc) {
+    if (this._usageInFlight !== rpc) return;
+    this._usageInFlight = null;
+    this._usageInFlightAt = 0;
   }
 
   // 权限档切换（与 send 的 setModel 同型，差分——仅档位真变才调 SDK）。

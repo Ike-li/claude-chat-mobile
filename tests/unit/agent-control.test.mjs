@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeSession } from '../helpers/agent-unit.mjs';
-import { USAGE_MIN_INTERVAL_MS, USAGE_THIRD_PARTY_INTERVAL_MS } from '../../src/agent/agent.js';
+import {
+  USAGE_MIN_INTERVAL_MS, USAGE_THIRD_PARTY_INTERVAL_MS,
+  USAGE_FAIL_BACKOFF_AFTER, USAGE_BACKOFF_MAX_MS, usageBackoffWindow,
+} from '../../src/agent/agent.js';
 
 test.describe('logMeta()', () => {
   test('全空 → 兜底 default / model-default / default', () => {
@@ -668,6 +671,233 @@ test.describe('fetchUsage() 节流（昂贵 RPC 的调用频率对齐数据变�
     const base = 1_000 + USAGE_THIRD_PARTY_INTERVAL_MS + 1;
     await s.fetchUsage(1500, { now: base + USAGE_MIN_INTERVAL_MS + 1 });        // 已回常规窗
     assert.equal(calls, 3);
+    s.dispose();
+  });
+});
+
+// 【为什么上面那批节流用例没能挡住这个洞】不是单一原因——三个要素从来没在同一条用例里凑齐：
+//  · '超过节流窗 → 再打一次' 把 now 推过了窗口，但桩立刻【成功】；
+//  · '失败同样占用节流窗' 桩会失败，但两发 now 是 1000 → 5000 都在窗内，第二发被节流窗短路，
+//    换成永不 resolve 的桩它照样绿——所以"桩用 throw"只是必要条件之一，不是全部原因；
+//  · 'RPC 超时 → null' 的桩真的挂住，但只发一发。
+// 缺的组合是「挂住的桩 + now 跨过窗口」，下面每条都同时满足这两个条件。
+// 背景观察（相关，不是因果）：2026-08-17 排查会话 4d4443ce 时，被 statusline 轮询的 CLI 实例对
+// API 的并发连接数峰值 20+，同机终端 CLI 稳定 4。那次 web 消息取件被拖延数百秒的因果未能证实
+// （该进程累计 CPU 远小于停滞时长；更早的 6 倍轮询频率版本无此症状），详见 agent.js 中
+// fetchUsage 在途去重处的注释。这批用例守的是"不向未回的通道加压"这条独立成立的卫生原则。
+test.describe('fetchUsage() 在途去重（本地超时 ≠ CLI 侧请求结束）', () => {
+  test('RPC 挂住未回 → 节流窗到期也不重打（防 CLI 侧请求堆积）', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => { calls++; return new Promise(() => {}); } };
+    assert.equal(await s.fetchUsage(10, { now: 1_000 }), null); // 本地 10ms 超时放弃
+    assert.equal(calls, 1);
+    // 窗到期，但上一发在 CLI 侧仍未返回 → 不得加压
+    assert.equal(await s.fetchUsage(10, { now: 1_000 + USAGE_MIN_INTERVAL_MS + 1 }), null);
+    assert.equal(calls, 1);
+    s.dispose();
+  });
+
+  test('挂住的 RPC 最终回来 → 解除在途占用，下次窗到期正常重打（不永久熄火）', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    let release;
+    s.q = {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => {
+        calls++;
+        return new Promise(resolve => { release = resolve; });
+      },
+    };
+    await s.fetchUsage(10, { now: 1_000 });
+    assert.equal(calls, 1);
+    release({ rate_limits_available: true }); // CLI 侧终于回了
+    await new Promise(r => setImmediate(r));  // 让 settle 回调跑完
+    await s.fetchUsage(10, { now: 1_000 + USAGE_MIN_INTERVAL_MS + 1 });
+    assert.equal(calls, 2);
+    s.dispose();
+  });
+
+  test('RPC 挂住后被 reject → 同样解除在途占用（失败也要放行下一次探测）', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    let fail;
+    s.q = {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => {
+        calls++;
+        return new Promise((_, reject) => { fail = reject; });
+      },
+    };
+    await s.fetchUsage(10, { now: 1_000 });
+    fail(new Error('late failure'));
+    await new Promise(r => setImmediate(r));
+    await s.fetchUsage(10, { now: 1_000 + USAGE_MIN_INTERVAL_MS + 1 });
+    assert.equal(calls, 2);
+    s.dispose();
+  });
+});
+
+// 【为什么在途去重之外还要退避】去重只挡得住"挂住"那一种失败：RPC 快速 reject 时它已经 settle，
+// 在途标记随即清空，于是每个节流窗照旧打一发。而 get_usage 的成本有一半与网络无关——CLI 侧那次
+// 全量 transcript 扫盘照做不误。更要命的是降到第三方慢档的判据 `rate_limits_available === false`
+// 要求 RPC 先成功返回一次：一直失败就永远判不出该降档，被锁死在最快的 60s 档上（2026-08-17 真机
+// lastOkMs 恒为 null 即此状态）。失败本身把频率锁在最激进档位，是这个洞的结构性根因。
+test.describe('fetchUsage() 连续失败退避（失败越久问得越稀，打破"永远快档"死结）', () => {
+  const W = USAGE_MIN_INTERVAL_MS;
+
+  test('连续失败达阈值 → 节流窗指数退避', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => { calls++; throw new Error('boom'); } };
+    let t = 1_000;
+    for (let i = 0; i < USAGE_FAIL_BACKOFF_AFTER; i++) {
+      await s.fetchUsage(1500, { now: t });
+      t += W + 1;
+    }
+    assert.equal(calls, USAGE_FAIL_BACKOFF_AFTER); // 阈值内仍按常规窗
+    await s.fetchUsage(1500, { now: t });          // 已退避到 2×W，只过 1×W 不该重打
+    assert.equal(calls, USAGE_FAIL_BACKOFF_AFTER);
+    await s.fetchUsage(1500, { now: t + W + 1 });  // 满 2×W
+    assert.equal(calls, USAGE_FAIL_BACKOFF_AFTER + 1);
+    s.dispose();
+  });
+
+  test('中途成功一次 → 失败计数清零，窗立刻回常规档（网络恢复要能自愈）', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    let ok = false;
+    s.q = {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => {
+        calls++;
+        if (!ok) throw new Error('boom');
+        return { rate_limits_available: true };
+      },
+    };
+    let t = 1_000;
+    for (let i = 0; i < USAGE_FAIL_BACKOFF_AFTER; i++) { await s.fetchUsage(1500, { now: t }); t += W + 1; }
+    ok = true;
+    await s.fetchUsage(1500, { now: t + W + 1 });        // 退避窗 2×W 到期，这发成功
+    const after = calls;
+    await s.fetchUsage(1500, { now: t + 2 * W + 3 });    // 只过 1×W：若未清零则不会重打
+    assert.equal(calls, after + 1);
+    s.dispose();
+  });
+
+  test('退避有上限，不会退到天荒地老（网络恢复的发现延迟有界）', () => {
+    assert.equal(usageBackoffWindow(W, 0), W);
+    assert.equal(usageBackoffWindow(W, USAGE_FAIL_BACKOFF_AFTER - 1), W); // 阈值前不退
+    assert.equal(usageBackoffWindow(W, USAGE_FAIL_BACKOFF_AFTER), W * 2);
+    assert.equal(usageBackoffWindow(W, 99), USAGE_BACKOFF_MAX_MS);        // 封顶
+    assert.ok(usageBackoffWindow(W, 99) <= USAGE_BACKOFF_MAX_MS);
+  });
+});
+
+// 【迟到的成功】Promise.race 决定的只是"本方不再等"，赢家仍会带着完整结果 settle——那份结果
+// 此刻无人认领。get_usage 含一次全量 transcript 扫盘，大 transcript 下稳定超过 1500ms 完全正常，
+// 于是"慢但每次都健康"会被整条链路误读成"一直失败"：值被丢、failStreak 一路涨到封顶，而降档判据
+// rate_limits_available 又恰恰只能从那份被丢掉的值里读到——死结的另一半。
+// 断言一律落在外部可观察量（RPC 调用次数、fetchUsage 返回值），不碰私有字段。
+test.describe('fetchUsage() 迟到结果认领（本地超时 ≠ 结果作废）', () => {
+  const W = USAGE_MIN_INTERVAL_MS;
+
+  test('本地超时后 RPC 才返回 → 值仍入缓存，不丢', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    let release;
+    s.q = {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => {
+        calls++;
+        return new Promise(resolve => { release = resolve; });
+      },
+    };
+    assert.equal(await s.fetchUsage(10, { now: 1_000 }), null); // 本方放弃等待
+    const late = { rate_limits_available: true, five_hour: { utilization: 42 } };
+    release(late);
+    await new Promise(r => setImmediate(r));
+    // 窗内再问：应拿到那份迟到的值，而不是 null
+    assert.deepEqual(await s.fetchUsage(10, { now: 1_500 }), late);
+    assert.equal(calls, 1);
+    s.dispose();
+  });
+
+  test('慢但每次都成功 → 不被推进退避（"慢"不等于"坏"）', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    const pending = [];
+    s.q = {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => {
+        calls++;
+        return new Promise(resolve => { pending.push(resolve); });
+      },
+    };
+    let t = 1_000;
+    for (let i = 0; i < USAGE_FAIL_BACKOFF_AFTER + 1; i++) {
+      await s.fetchUsage(10, { now: t });                 // 每发都本地超时
+      pending[pending.length - 1]({ rate_limits_available: true }); // 但随后都成功返回
+      await new Promise(r => setImmediate(r));
+      t += W + 1;
+    }
+    // 若迟到的成功不被认领，failStreak 会涨到阈值、窗翻倍，最后一发就会被挡住
+    assert.equal(calls, USAGE_FAIL_BACKOFF_AFTER + 1);
+    s.dispose();
+  });
+
+  test('迟到的成功同样驱动第三方档判定（降档不再要求 1500ms 内返回）', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    let release;
+    s.q = {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => {
+        calls++;
+        return new Promise(resolve => { release = resolve; });
+      },
+    };
+    await s.fetchUsage(10, { now: 1_000 });
+    release({ rate_limits_available: false }); // CLI 自报：无订阅额度
+    await new Promise(r => setImmediate(r));
+    await s.fetchUsage(10, { now: 1_000 + W + 1 }); // 过了常规窗，但已应降到第三方档
+    assert.equal(calls, 1);
+    await s.fetchUsage(10, { now: 1_000 + USAGE_THIRD_PARTY_INTERVAL_MS + 1 });
+    assert.equal(calls, 2);
+    s.dispose();
+  });
+});
+
+// 在途去重的代价是"绝不加压"换来了"可能永久静默"：RPC 若真的一去不回，_usageInFlight 就永远
+// 占着，该实例余生的额度栏只能靠账号级快照垫（那份还有 15min TTL），直到实例重建。
+// 这与 USAGE_BACKOFF_MAX_MS 处写下的不变量——"网络恢复的发现延迟必须有界"——直接冲突：退避那条
+// 路有界，去重这条路不能无界。年龄上限就是这条路的界。
+test.describe('fetchUsage() 在途年龄上限（去重不得变成永久熄火）', () => {
+  test('在途超过年龄上限 → 放行一发探测，恢复延迟重新有界', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    s.q = { usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => { calls++; return new Promise(() => {}); } };
+    await s.fetchUsage(10, { now: 1_000 });
+    assert.equal(calls, 1);
+    await s.fetchUsage(10, { now: 1_000 + USAGE_BACKOFF_MAX_MS - 1 }); // 未超龄：仍不加压
+    assert.equal(calls, 1);
+    await s.fetchUsage(10, { now: 1_000 + USAGE_BACKOFF_MAX_MS + 1 }); // 超龄：放行
+    assert.equal(calls, 2);
+    s.dispose();
+  });
+
+  test('超龄放行后，先前那发迟到 settle 不得误清新在途标记', async () => {
+    const { s } = makeSession();
+    let calls = 0;
+    const resolvers = [];
+    s.q = {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => {
+        calls++;
+        return new Promise(resolve => { resolvers.push(resolve); });
+      },
+    };
+    await s.fetchUsage(10, { now: 1_000 });
+    await s.fetchUsage(10, { now: 1_000 + USAGE_BACKOFF_MAX_MS + 1 }); // 第二发
+    assert.equal(calls, 2);
+    resolvers[0]({ rate_limits_available: true }); // 第一发迟到 settle
+    await new Promise(r => setImmediate(r));
+    // 第二发仍在途 → 不得因第一发的 settle 而放行第三发
+    await s.fetchUsage(10, { now: 1_000 + USAGE_BACKOFF_MAX_MS + 2 });
+    assert.equal(calls, 2);
     s.dispose();
   });
 });
