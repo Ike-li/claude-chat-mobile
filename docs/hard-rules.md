@@ -222,17 +222,9 @@ sessionId 不独等 `init`（`_claimSessionIdEarly`）· 看门狗豁免本地�
 
 ## 6. 安全分层（互不替代）
 
-```text
-HTTP/Socket 鉴权（AUTH_TOKEN 或 CF Access）
-        ↓
-设备信任（本机 / CF Access JWT 可豁免）
-        ↓
-WORK_DIR / WORKDIRS 范围门
-        ↓
-CLI permissions.allow + Web 当前权限档
-        ↓
-Agent canUseTool 审批  ‖  用户文件编辑器直写（独立范围/大小/哈希/审计）
-```
+详见 [架构说明 · 鉴权与范围边界](architecture.md#鉴权与范围边界)（完整分层图与各层互不替代的边界）。摘要：
+
+鉴权（AUTH_TOKEN / CF Access）→ 设备信任 → 工作区范围门 → CLI permissions.allow + Web 权限档 → Agent 审批 ‖ 文件编辑器直写（独立范围/大小/哈希/审计）。
 
 Fail-closed 要点：路径不可达、审批指纹不符、审批/提问 TTL 到期、重启后 pending 审批。
 
