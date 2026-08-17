@@ -210,7 +210,7 @@ final class ServiceClient {
     /// 启停重启。**不判归属** —— 那是 L1 的事（它对 foreign/unknown 也允许启停，只拒绝写 plist）。
     func control(_ action: String, unit: String) -> Probe<Void> {
         guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
-        guard let r = runSync(node, [serviceScriptPath(in: repo), action, unit, "--json"], cwd: repo, timeout: 30) else {
+        guard let r = runSync(node, [serviceScriptPath(in: repo), action, unit, "--json"], cwd: repo, timeout: serviceControlTimeout) else {
             return .failed("service.js 无响应")
         }
         if r.status == 0 { return .ok(()) }
@@ -241,10 +241,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let env = RuntimeEnv()
     private let client: ServiceClient
-    // 探测与动作分两条队列：动作里有 30s 的 control 调用，卡住它不该连带把状态刷新也冻住。
-    // （任务窗口自己起异步 Process，不占这两条队列。）
+    // 探测与动作分队列（control 最长 40s，不能堵刷新）。动作保持并发：
+    // 复制令牌 / 打开 Web UI 不该等无关 unit 的 kickstart。同 unit 启停靠 busyUnits。
     private let probeQueue = DispatchQueue(label: "ccm.menubar.probe")
     private let actionQueue = DispatchQueue(label: "ccm.menubar.action", attributes: .concurrent)
+    private var busyUnits = Set<String>()
 
     private var latest: ServiceStatus?
     private var lastError: String?
@@ -407,7 +408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // 高频动作直达：改配置后最常用的一步，不必进 server 子菜单找
         let restart = unitAction("重启服务", unit: "server", verb: "restart")
         restart.toolTip = "重启 server（= service.js restart）：改完配置让它生效的那一步；手机会短暂断连几秒"
-        restart.isEnabled = canRestartServer(latest)
+        restart.isEnabled = canRestartServer(latest, busyUnits: busyUnits)
         menu.addItem(restart)
 
         if let units = latest?.unitList, !units.isEmpty {
@@ -472,9 +473,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         if u.stateName != "not-installed" {
-            sub.addItem(unitAction("启动", unit: name, verb: "start"))
-            sub.addItem(unitAction("停止", unit: name, verb: "stop"))
-            sub.addItem(unitAction("重启", unit: name, verb: "restart"))
+            let idle = isControlEnabled(unit: name, busyUnits: busyUnits)
+            let start = unitAction("启动", unit: name, verb: "start")
+            let stop = unitAction("停止", unit: name, verb: "stop")
+            let restart = unitAction("重启", unit: name, verb: "restart")
+            start.isEnabled = idle
+            stop.isEnabled = idle
+            restart.isEnabled = idle
+            sub.addItem(start)
+            sub.addItem(stop)
+            sub.addItem(restart)
             sub.addItem(.separator())
             sub.addItem(unitAction("查看日志", unit: name, verb: "logs"))
         } else if u.isWritable {
@@ -549,10 +557,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard runModal(alert) == .alertFirstButtonReturn else { return }
         }
 
+        busyUnits.insert(unit)
         actionQueue.async { [weak self] in
             guard let self else { return }
             let r = self.client.control(verb, unit: unit)
             Task { @MainActor in
+                self.busyUnits.remove(unit)
                 if case .failed(let e) = r { self.alert("操作失败", e) }
                 self.probe()
             }

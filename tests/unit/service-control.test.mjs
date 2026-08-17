@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createServiceManager } from '../../scripts/service.js';
+import { createServiceManager, launchctlTimeoutMs } from '../../scripts/service.js';
 
 const HOME = '/Users/you';
 const REPO = '/Users/you/code/claude-chat-mobile';
@@ -24,7 +24,7 @@ const SERVER_OBJ = {
 
 const tsvWith = (pid) => ['PID\tStatus\tLabel', `${pid ?? '-'}\t0\tcom.ccm.server`].join('\n');
 
-function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () => true, env = { PORT: '3000', AUTH_TOKEN: 'tok' }, extraPlists = [] } = {}) {
+function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () => true, env = { PORT: '3000', AUTH_TOKEN: 'tok' }, extraPlists = [], execLaunchctl } = {}) {
   const calls = [];
   const httpCalls = [];
   const present = new Set([SERVER_PLIST, ...extraPlists]);
@@ -37,7 +37,7 @@ function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () 
     node: '/opt/homebrew/bin/node',
     uid: 501,
     now: () => 1786000000000,
-    execLaunchctl: (args) => {
+    execLaunchctl: execLaunchctl ?? ((args) => {
       calls.push(args);
       if (args[0] === 'list') {
         // 每次 list 推进一格，模拟 kickstart 后 PID 变化
@@ -47,7 +47,7 @@ function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () 
       return launchctlFails
         ? { status: 1, stdout: '', stderr: 'Could not find service' }
         : { status: 0, stdout: '', stderr: '' };
-    },
+    }),
     readPlistFile: (p) => (p === SERVER_PLIST ? SERVER_OBJ : null),
     fileExists: (p) => present.has(p),
     readFileRaw: () => null,
@@ -148,6 +148,39 @@ test.describe('restart --wait —— 用 PID 变化判就绪', () => {
     const r = mgr.restart('server');
     assert.equal(r.ok, true);
     assert.equal(calls.filter((a) => a[0] === 'list').length, 1, '只为拿旧 PID 查一次');
+  });
+
+  // spawnSync 超时 stderr 为空；必须显式说「超时」，不能落到「未知错误」。
+  test('kickstart 超时必须说「超时」，不能翻译成「未知错误」', () => {
+    const err = new Error('spawnSync launchctl ETIMEDOUT');
+    err.code = 'ETIMEDOUT';
+    const { mgr } = setup({
+      execLaunchctl: (args) => {
+        if (args[0] === 'list') return { status: 0, stdout: tsvWith(26867), stderr: '' };
+        if (args[0] === 'kickstart') {
+          return { status: null, stdout: '', stderr: '', error: err, signal: 'SIGTERM' };
+        }
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    const r = mgr.restart('server');
+    assert.equal(r.ok, false);
+    assert.match(r.error, /超时/, `应告诉用户是超时，实际：${r.error}`);
+    assert.doesNotMatch(r.error, /未知错误/, '空 stderr 的超时不能落到兜底文案');
+  });
+});
+
+test.describe('launchctl 超时预算', () => {
+  // 2026-08-17 本机实测：logrotate 刚跑完再 `kickstart -k` 堵约 20s 才返回 0。
+  // 25s 是盖过这次观察的客户端预算；list/bootout 仍 5s，见下一条。
+  test('kickstart 要比 launchd 默认节流窗口长（实测紧接着再 kickstart -k ≈ 20s）', () => {
+    assert.ok(launchctlTimeoutMs(['kickstart', '-k', 'gui/501/com.ccm.logrotate']) >= 25_000);
+    assert.ok(launchctlTimeoutMs(['kickstart', 'gui/501/com.ccm.server']) >= 25_000);
+  });
+
+  test('list / bootout 保持短超时（高频、不该被 kickstart 的长窗口拖累）', () => {
+    assert.equal(launchctlTimeoutMs(['list']), 5_000);
+    assert.equal(launchctlTimeoutMs(['bootout', 'gui/501/com.ccm.server']), 5_000);
   });
 });
 

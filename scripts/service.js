@@ -519,7 +519,12 @@ export function createServiceManager(deps = {}) {
     return null;
   }
 
-  const launchctlErr = (r) => String(r?.stderr || r?.stdout || '未知错误').trim().split('\n')[0];
+  const launchctlErr = (r) => {
+    if (r?.error?.code === 'ETIMEDOUT') {
+      return 'launchctl 超时（刚重启过的服务可能被系统节流，稍后再试）';
+    }
+    return String(r?.stderr || r?.stdout || '未知错误').trim().split('\n')[0];
+  };
 
   function currentPid(label) {
     return launchctlList([]).get(label)?.pid ?? null;
@@ -665,8 +670,13 @@ export function describeUnit({ state, restarts, lastExitAbnormal, drift, plistEx
 
 // ---------- 真实依赖（只有 CLI 路径会用到；测试全部注入 mock） ----------
 
+// kickstart 会堵住 ThrottleInterval；list/bootout 必须保持短超时。
+export function launchctlTimeoutMs(args) {
+  return args?.[0] === 'kickstart' ? 25_000 : 5_000;
+}
+
 function realExecLaunchctl(args) {
-  return spawnSync('launchctl', args, { encoding: 'utf8', timeout: 5000 });
+  return spawnSync('launchctl', args, { encoding: 'utf8', timeout: launchctlTimeoutMs(args) });
 }
 
 // plutil 把 XML plist 归一化成 JSON。用它而不是手写 XML 解析：macOS 自带、能吃二进制 plist、
