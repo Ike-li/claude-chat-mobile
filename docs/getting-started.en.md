@@ -330,8 +330,9 @@ terminal** — installing, diagnosing, reading logs, and editing configuration a
   **you can still edit configuration while the server is down** — precisely when you most need to.
   Secrets render masked and are not submitted unless changed. On a legacy `.env` deployment, a
   banner with a "Migrate" button appears at the top of the window.
-- **View logs**: an embedded scrolling view, refreshed every 2 seconds, reading only the tail of the
-  file (so a multi-hundred-MB log does not freeze it).
+- **View logs**: an embedded scrolling view with a dropdown to switch between the server / tunnel /
+  logrotate logs (any `~/Library/Logs/ccm-*.log` shows up as a source), refreshed every 2 seconds,
+  reading only the tail of the file (so a multi-hundred-MB log does not freeze it).
 - **First-run wizard / doctor / install and uninstall service**: run step by step in an embedded task
   window with live output. A failing step stops there and shows its exit code.
 
