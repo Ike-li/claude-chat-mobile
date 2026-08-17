@@ -20,7 +20,6 @@ let tmpDir;
 // 本文件起真 server 子进程。CI 上 CLAUDE_BIN 指向 tests/fixtures/fake-claude.sh（见 workflow），
 // preflight 因此过关，HTTP/socket 接线用例照常跑——这是 CI 里唯一执行真实 src/server/app.js 的路径。
 // 唯一例外是 scout：它要真 claude 才能拉到模型清单，stub 给不了，单独用 REAL_CLI_ONLY 挡住。
-const CI_SKIP = {};
 const REAL_CLI_ONLY = process.env.CI
   ? { skip: 'scout 需真 claude CLI 拉模型清单；CI 用的是 tests/fixtures/fake-claude.sh stub' }
   : {};
@@ -97,7 +96,7 @@ test.after(async () => {
   try { await rm(tmpDir, { recursive: true, force: true }); } catch {}
 });
 
-test.describe('HTTP 端点', CI_SKIP, () => {
+test.describe('HTTP 端点', () => {
   test('GET /health → 200 + JSON body', async () => {
     const body = await httpGet(url('/health'));
     const j = JSON.parse(body);
@@ -117,7 +116,7 @@ test.describe('HTTP 端点', CI_SKIP, () => {
   });
 });
 
-test.describe('Socket.IO 连接与认证', CI_SKIP, () => {
+test.describe('Socket.IO 连接与认证', () => {
   test('正确 AUTH_TOKEN 握手成功', async () => {
     const s = connectSocket();
     await new Promise((resolve, reject) => {
@@ -130,7 +129,7 @@ test.describe('Socket.IO 连接与认证', CI_SKIP, () => {
   });
 });
 
-test.describe('事件流 — 新连接重放', CI_SKIP, () => {
+test.describe('事件流 — 新连接重放', () => {
   test('连接时总是收到权威 mirror_state，空闲态明确 readonly=false', async (t) => {
     const events = [];
     const s = connectSocket();
@@ -167,7 +166,7 @@ test.describe('事件流 — 新连接重放', CI_SKIP, () => {
   });
 });
 
-test.describe('session:list — 空工作目录', CI_SKIP, () => {
+test.describe('session:list — 空工作目录', () => {
   test('session:list 返回空列表', async () => {
     const s = connectSocket();
     await new Promise((resolve, reject) => {
@@ -185,7 +184,7 @@ test.describe('session:list — 空工作目录', CI_SKIP, () => {
   });
 });
 
-test.describe('session:switch — 非法 sessionId 被拒', CI_SKIP, () => {
+test.describe('session:switch — 非法 sessionId 被拒', () => {
   test('含 ../ 的 sessionId → ack { ok: false }', async () => {
     const s = connectSocket();
     await new Promise((resolve, reject) => {
@@ -216,7 +215,7 @@ test.describe('session:switch — 非法 sessionId 被拒', CI_SKIP, () => {
   });
 });
 
-test.describe('session:new — 创建新会话', CI_SKIP, () => {
+test.describe('session:new — 创建新会话', () => {
   test('session:new → ack { ok: true }（懒创建，不发消息不 spawn agent）', async () => {
     const s = connectSocket();
     await new Promise((resolve, reject) => {
@@ -234,7 +233,7 @@ test.describe('session:new — 创建新会话', CI_SKIP, () => {
   });
 });
 
-test.describe('dev:restart — DEV_MODE 关闭时拒绝', CI_SKIP, () => {
+test.describe('dev:restart — DEV_MODE 关闭时拒绝', () => {
   test('未设 DEV_MODE（测试子进程默认）→ ack { ok: false }，不重启', async () => {
     const s = connectSocket();
     await new Promise((resolve, reject) => {
@@ -274,7 +273,7 @@ test.describe('session:new — scout 获取真实模型清单', REAL_CLI_ONLY, (
   });
 });
 
-test.describe('user:message 输入校验', CI_SKIP, () => {
+test.describe('user:message 输入校验', () => {
   test('空消息 → system error', async () => {
     const s = connectSocket();
     await new Promise((resolve, reject) => {
@@ -310,7 +309,7 @@ test.describe('user:message 输入校验', CI_SKIP, () => {
   });
 });
 
-test.describe('user:setPermissionMode — 档位校验', CI_SKIP, () => {
+test.describe('user:setPermissionMode — 档位校验', () => {
   test('未知权限档 → system error', async () => {
     const s = connectSocket();
     await new Promise((resolve, reject) => {
