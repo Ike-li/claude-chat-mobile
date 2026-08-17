@@ -574,11 +574,17 @@ final class TaskWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         running?.terminate()
         running = nil
+        onSuccess = nil // 关窗 = 取消：别在用户放弃后还触发「成功后自动重启」
     }
 
-    func run(title: String, steps: [TaskStep], node: String, cwd: String) {
+    private var onSuccess: (() -> Void)?
+
+    /// onSuccess：全部步骤成功结束时在主线程调用一次（失败或用户关窗则不调）。
+    /// 「更新桌面端」用它在装完后自动重启本 app。
+    func run(title: String, steps: [TaskStep], node: String, cwd: String, onSuccess: (() -> Void)? = nil) {
         window?.title = title
         textView.string = ""
+        self.onSuccess = onSuccess
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -597,7 +603,13 @@ final class TaskWindowController: NSWindowController, NSWindowDelegate {
     /// 逐步执行，任一步非零退出即停 —— 与旧实现的 `a && b && c` 语义一致。
     private func runStep(_ steps: [TaskStep], index: Int, node: String, cwd: String) {
         guard index < steps.count else {
-            DispatchQueue.main.async { [weak self] in self?.statusLabel.stringValue = "全部完成" }
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.statusLabel.stringValue = "全部完成"
+                let done = self.onSuccess
+                self.onSuccess = nil
+                done?()
+            }
             return
         }
         let step = steps[index]

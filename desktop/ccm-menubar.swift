@@ -445,8 +445,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        menu.addItem(action("更新桌面端（重新编译）", #selector(updateApp),
+            tip: "一键完成：用当前仓库源码重新编译 → 装进 /Applications → 自动重启本 app 换上新版。拉了新代码后点这一个就够"))
         menu.addItem(action("重启应用", #selector(relaunchApp),
-            tip: "退出并重新打开本 app（升级重编译后换上新版用）；不影响 server"))
+            tip: "只重启不编译（app 行为异常时试它）；不影响 server"))
         menu.addItem(action("退出", #selector(quit), key: "q",
             tip: "关闭菜单栏图标。server 照常运行，手机不受影响"))
     }
@@ -654,6 +656,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func quit() { NSApp.terminate(nil) }
 
+    /// 「更新桌面端」一键项：编译+安装（任务窗口可见每步输出），成功后自动重启换新版。
+    /// 失败则窗口停在失败步骤，不触发重启——旧版继续跑，永远有一个能用的 app。
+    @objc private func updateApp() {
+        guard let repo = env.repo else { return }
+        runTask("更新桌面端", updateAppSteps(repo: repo), onSuccess: { [weak self] in
+            // 让「全部完成」被看见一瞬，再重启换新版
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.relaunchApp() }
+        })
+    }
+
     /// 重启自身：分离子进程 sleep 后 open 本 bundle，自己立即退出。
     /// 用于 app:build / app:install 升级后换上新产物 —— 此前只能「退出 + 回终端 open」。
     @objc private func relaunchApp() {
@@ -800,13 +812,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 旧实现拼一条 shell 串交给 osascript 的 `do script`，理由是「每一步都看得见输出」——
     /// 理由对，结论错：用户要的是看得见输出，不是切换到终端。自己开窗口两个目标都满足，
     /// 且不再需要 shellQuote + AppleScript 转义那两层易错的引号处理。
-    private func runTask(_ title: String, _ steps: [TaskStep]) {
+    private func runTask(_ title: String, _ steps: [TaskStep], onSuccess: (() -> Void)? = nil) {
         guard let node = env.node, let repo = env.repo else {
             alert("环境不完整", "找不到 node 或仓库目录，先在菜单里重新定位。")
             return
         }
         if taskWindow == nil { taskWindow = TaskWindowController() }
-        taskWindow?.run(title: title, steps: steps, node: node, cwd: repo)
+        taskWindow?.run(title: title, steps: steps, node: node, cwd: repo, onSuccess: onSuccess)
     }
 }
 

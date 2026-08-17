@@ -495,6 +495,13 @@ func uninstallSteps(unit: String, repo: String) -> [TaskStep] {
     [TaskStep(title: "卸载 \(unit)", argv: [serviceScriptPath(in: repo), "uninstall", unit, "--yes"])]
 }
 
+/// 「更新桌面端」一键项：用当前仓库源码重新编译并装进 /Applications（app-build --install
+/// 内含编译+测试+安装三步）。成功后由 GUI 层的 onSuccess 自动重启本 app 换上新版。
+func updateAppSteps(repo: String) -> [TaskStep] {
+    [TaskStep(title: "编译并安装到 /Applications",
+              argv: [(repo as NSString).appendingPathComponent("scripts/app-build.js"), "--install"])]
+}
+
 /// unit 子菜单「查看日志」预选源的下标：精确 title == unit 优先；LOG_FILE 自定义路径时
 /// server 源的 title 是「server（LOG_FILE）」，按前缀兜底。找不到返回 nil（窗口保持默认选中）。
 /// （此前这里是 unitLogSteps——任务窗口跑 `service.js logs` 打一段一次性文本，2026-08-17

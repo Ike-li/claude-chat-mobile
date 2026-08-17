@@ -459,6 +459,13 @@ func testTaskSteps() {
        0, "只有 LOG_FILE 形态时按前缀选中")
     eq(logSourceIndex(forUnit: "logrotate", in: srcs), nil, "无此源返回 nil（窗口保持默认选中）")
 
+    // 「更新桌面端」一键项（2026-08-17 机主反馈「没有一个总的重启按钮」）：
+    // 重新编译并装进 /Applications；成功后自动 relaunch 属 GUI 层（onSuccess 回调）。
+    let upd = updateAppSteps(repo: repo)
+    eq(upd.count, 1, "更新一步到位（app-build --install 内含编译+安装）")
+    check(upd.first?.argv.first?.hasSuffix("scripts/app-build.js") ?? false, "跑 app-build")
+    check(upd.first?.argv.contains("--install") ?? false, "带 --install 装进 /Applications")
+
     // 装机四步，顺序与旧的 shell && 串逐字对应
     let steps = setupSteps(repo: repo, workDir: "/a b/c", hooks: true)
     eq(steps.count, 4, "装机四步")
