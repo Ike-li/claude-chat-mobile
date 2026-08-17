@@ -8,6 +8,7 @@ import {
   classifyPermissionRule,
   claudeConfigDirDiagnostic,
   computeReadiness,
+  configFormatDiagnostic,
   hooksBridgeDiagnostic,
   logSwitchDiagnostic,
   modelSettingsConflictDiagnostic,
@@ -325,6 +326,29 @@ test('hooksBridgeDiagnostic：off / 已安装 / 漂移 / 未安装 四态', () =
   const missing = hooksBridgeDiagnostic({ installState: 'not-installed' });
   assert.equal(missing.status, 'warn');
   assert.match(missing.detail, /hooks:install/);
+});
+
+// D17：配置格式可见性。核心断言是 legacy env 的 status 必须是 **ok 而非 warn**——
+// .env 是长期受支持的一等路径（产品立场，见 doctor-checks.configFormatDiagnostic 头注），
+// 这项检查的唯一目的是给 headless 旧用户一条主动发现迁移能力的路，不是催迁。
+test('configFormatDiagnostic：config / env / none 三态，legacy 恒为 ok', () => {
+  const unified = configFormatDiagnostic({ source: 'config' });
+  assert.equal(unified.status, 'ok');
+  assert.match(unified.detail, /ccm\.config\.json/);
+
+  const legacy = configFormatDiagnostic({ source: 'env' });
+  assert.equal(legacy.status, 'ok');
+  assert.match(legacy.detail, /长期受支持/);
+  assert.match(legacy.detail, /config\.js migrate/);
+
+  const legacyEn = configFormatDiagnostic({ source: 'env', lang: 'en' });
+  assert.equal(legacyEn.status, 'ok');
+  assert.match(legacyEn.detail, /supported long-term/);
+  assert.match(legacyEn.detail, /config\.js migrate/);
+
+  const fresh = configFormatDiagnostic({ source: 'none' });
+  assert.equal(fresh.status, 'ok');
+  assert.match(fresh.detail, /setup\.js/);
 });
 
 // ── 2026-08-04 code review：本次改动自身的两个洞（实测确认）────────────────────

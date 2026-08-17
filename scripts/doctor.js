@@ -2,7 +2,7 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
 //
-// 检查项（16 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
+// 检查项（17 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
@@ -19,6 +19,7 @@
 // 14. CLAUDE_CONFIG_DIR 兼容性（CLI 认它、本仓固定读 ~/.claude；设了会静默读不到历史，见 doctor-checks.claudeConfigDirDiagnostic）
 // 15. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
 // 16. LaunchAgent 常驻服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
+// 17. 配置格式可见性（legacy .env 恒 ok 非 warn——一等路径不催迁，只在此告知迁移能力，见 doctor-checks.configFormatDiagnostic）
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
@@ -32,6 +33,7 @@ import { loadRuntimeEnvironment } from '../src/server/config.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import {
   claudeConfigDirDiagnostic,
+  configFormatDiagnostic,
   hooksBridgeDiagnostic,
   logSwitchDiagnostic,
   portOccupancyDiagnostic,
@@ -506,6 +508,12 @@ function checkUploadsFootprint() {
   (r.status === 'warn' ? warn : ok)(bi('附件占用', 'Attachment footprint'), r.detail);
 }
 
+// D17: 配置格式可见性。source 来自上面 readConfigFileValues 的结果——与 server 同一条读取路径。
+function checkConfigFormat() {
+  const r = configFormatDiagnostic({ source: loaded.error ? 'none' : (loaded.source || 'none'), lang: LANG });
+  ok(bi('配置格式', 'Config format'), r.detail);
+}
+
 // ──────────────────────── 主流程 ────────────────────────
 
 // 解析命令行 --env 和 --fix
@@ -556,7 +564,7 @@ function effectiveConfigFiles() {
   });
 }
 
-// 执行 16 项检查（D4 端口检查是 async，需 await）
+// 执行 17 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
   checkClaudeBin();
@@ -566,6 +574,7 @@ function effectiveConfigFiles() {
   checkStatuslineBridge();
   checkAnthropicEnv();
   checkConfigPermissions();
+  checkConfigFormat();
   checkDocConsistency();
   checkFrontendSyntax();
   checkCoverageThreshold();

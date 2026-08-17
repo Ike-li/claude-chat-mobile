@@ -340,6 +340,37 @@ export function logSwitchDiagnostic({ interactions = false, sdkDebug = false, st
   };
 }
 
+// 配置格式可见性。legacy .env 恒为 **ok 而非 warn**：.env 是长期受支持的一等路径，
+// 不是待移除的 deprecated 形态——warn 级或启动日志 nag 都与这个立场矛盾（常驻服务每次
+// 拉起念一遍「永远不可完成的建议」，是不可消音的噪音）。
+//
+// 这项存在的唯一目的：给 headless 旧用户一条**主动发现**迁移能力的路。另两个提示时机
+// 都是意图驱动的——GUI 配置窗口的迁移横幅（想编辑时）、config.js set 的 guardWriteTarget
+// 拦截（正在改时）；doctor 补上第三个：主动求建议时。三者之外不再提。
+export function configFormatDiagnostic({ source = 'none', lang = 'zh' } = {}) {
+  const name = 'CONFIG_FORMAT';
+  if (source === 'config') {
+    return {
+      status: 'ok', name,
+      detail: bi(lang, '统一配置文件 ccm.config.json（config.js set 与桌面端表单编辑可用）',
+        'Unified config file ccm.config.json (config.js set and the desktop form editor are available)'),
+    };
+  }
+  if (source === 'env') {
+    return {
+      status: 'ok', name,
+      detail: bi(lang,
+        '旧版 .env（长期受支持）。迁移到 ccm.config.json 可启用 config.js set 与桌面端表单编辑：node scripts/config.js migrate',
+        'Legacy .env (supported long-term). Migrating to ccm.config.json enables config.js set and the desktop form editor: node scripts/config.js migrate'),
+    };
+  }
+  return {
+    status: 'ok', name,
+    detail: bi(lang, '尚未配置（首次安装：node scripts/setup.js，或桌面端「首次安装向导」）',
+      'Not configured yet (first install: node scripts/setup.js, or the desktop setup wizard)'),
+  };
+}
+
 // CLAUDE_CONFIG_DIR 兼容性告警（只报不修）。
 //
 // CLI 与 Agent SDK 都认这个 env——SDK 实测 projects 根 = `(CLAUDE_CONFIG_DIR ?? ~/.claude)/projects`
