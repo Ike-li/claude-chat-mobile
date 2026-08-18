@@ -46,6 +46,8 @@ struct CCMCoreTests {
         testPortConflictPresentation()
         testWebUIURL()
         testProbeInterval()
+        testDeviceSnapshot()
+        testDevicePresentation()
 
         let msg = "\nCCMCore: \(passed) passed, \(failed) failed\n"
         FileHandle.standardOutput.write(msg.data(using: .utf8)!)
@@ -542,4 +544,67 @@ func testPortConflictPresentation() {
     check(line("running", reachable: true).contains(":4567"), "正常运行时照常显示端口")
     check(!line("running", reachable: true).contains("被其它进程占用"), "运行中不该报占用")
     check(line("crashed", reachable: false).contains("连不上"), "崩溃 + 端口不通 ⇒ 仍是连不上")
+}
+
+// MARK: 设备审批快照（对应 scripts/device.js 的 `list --json`，schemaVersion = 1）
+//
+// 这一组的存在理由跟 ServiceStatus 那组一样：Node 侧的字段是会变的，而"一个字段变 null
+// 就整份解码失败"在这里的后果格外隐蔽——菜单里「设备审批」永远空着，看起来跟"没有设备
+// 在等"一模一样，机主根本不会察觉自己漏掉了一台待批设备。
+func decodeDevices(_ json: String) -> DeviceSnapshot? {
+    guard let d = json.data(using: .utf8) else { return nil }
+    return try? JSONDecoder().decode(DeviceSnapshot.self, from: d)
+}
+
+extension CCMCoreTests {
+    static func testDeviceSnapshot() {
+        let full = decodeDevices(#"""
+        {"schemaVersion":1,
+         "pending":[{"deviceId":"0123456789abcdef0123456789abcdef","ip":"192.168.1.5","userAgent":"Mozilla/5.0 (iPhone; CPU iPhone OS 17_0)","ts":1700000000000}],
+         "trusted":["aaaabbbb"]}
+        """#)
+        eq(full?.pendingList.count, 1, "解出一台待审设备")
+        eq(full?.trustedList ?? [], ["aaaabbbb"], "解出信任列表")
+        eq(full?.pendingList.first?.id, "0123456789abcdef0123456789abcdef", "deviceId 原样保留——审批要拿它当参数")
+
+        eq(decodeDevices(#"{"schemaVersion":1,"pending":[],"trusted":[]}"#)?.pendingList.count, 0, "空 pending 解成空数组")
+
+        // 解码韧性：缺字段、字段为 null 都不能让整份快照塌掉
+        check(decodeDevices(#"{"schemaVersion":1}"#) != nil, "缺 pending/trusted 仍能解码")
+        eq(decodeDevices(#"{"schemaVersion":1}"#)?.pendingList.count, 0, "缺字段回落空数组，不是 nil")
+        check(decodeDevices(#"{"schemaVersion":1,"pending":[{"deviceId":"abc"}]}"#)?.pendingList.first != nil,
+              "待审设备只有 deviceId、缺 ip/ua/ts 也要能解——审批只需要 ID")
+        check(decodeDevices("not json at all") == nil, "非 JSON 如实解不出，由调用方降级")
+    }
+
+    // MARK: 待审设备怎么显示给人看
+    //
+    // 核对是这道门的全部意义所在：机主要判断"在敲门的到底是不是我那台手机"。
+    // 32 位 hex 直接铺在菜单里既放不下也没法核对，所以要截断成能和手机上那串对上的短形式，
+    // 再补一个人能直接认出的设备类型。
+    static func testDevicePresentation() {
+        eq(shortDeviceId("0123456789abcdef0123456789abcdef"), "01234567…cdef", "长 ID 截成 前8…后4")
+        eq(shortDeviceId("abcd"), "abcd", "短 ID 原样显示，不加省略号")
+        eq(shortDeviceId(""), "（无 ID）", "空 ID 要有可读占位，不能显示成空行")
+
+        eq(deviceKindLabel("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"), "iPhone",
+           "iPhone 的 UA 里也含 Mac OS X——必须先判 iPhone，否则全被认成 Mac")
+        eq(deviceKindLabel("Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X)"), "iPad", "iPad 同理先于 Mac")
+        eq(deviceKindLabel("Mozilla/5.0 (Linux; Android 14; Pixel 8)"), "Android", "Android")
+        eq(deviceKindLabel("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"), "Mac", "Mac")
+        eq(deviceKindLabel("Mozilla/5.0 (Windows NT 10.0; Win64; x64)"), "Windows", "Windows")
+        eq(deviceKindLabel(nil), "未知设备", "缺 UA 不显示空白")
+        eq(deviceKindLabel(""), "未知设备", "空 UA 同上")
+
+        let d = decodeDevices(#"{"schemaVersion":1,"pending":[{"deviceId":"0123456789abcdef0123456789abcdef","ip":"192.168.1.5","userAgent":"Mozilla/5.0 (iPhone)"}]}"#)!.pendingList[0]
+        let title = pendingDeviceTitle(d)
+        check(title.contains("iPhone"), "行标题带设备类型：\(title)")
+        check(title.contains("192.168.1.5"), "行标题带来源 IP——同一台手机换网络时这是唯一的区分线索：\(title)")
+        check(title.contains("01234567"), "行标题带短 ID 供核对：\(title)")
+
+        // 缺 IP 时不能显示成 "iPhone · "（尾巴上挂个孤零零的分隔符）
+        let noIp = decodeDevices(#"{"schemaVersion":1,"pending":[{"deviceId":"abcd1234","userAgent":"Mozilla/5.0 (iPhone)"}]}"#)!.pendingList[0]
+        check(!pendingDeviceTitle(noIp).hasSuffix("·"), "缺 IP 时不留悬空分隔符：\(pendingDeviceTitle(noIp))")
+        check(pendingDeviceTitle(noIp).contains("未知来源"), "缺 IP 如实说未知，不静默省略")
+    }
 }

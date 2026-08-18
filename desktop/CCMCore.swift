@@ -624,3 +624,59 @@ func consoleActions(status: ServiceStatus?, problem: EnvProblem) -> [ConsoleActi
 /// Dock 图标偏好的存储键。默认**关**：这仍是个常驻后台工具，
 /// 只有被刘海挤掉入口的人才需要它，不该让所有人的 Dock 多一个图标。
 let DOCK_ICON_DEFAULTS_KEY = "CCMShowDockIcon"
+
+// MARK: - 设备审批（对应 scripts/device.js 的 `list --json`，schemaVersion = 1）
+//
+// 桌面端此前完全没有设备审批入口。后果是装了 GUI 反而比 headless 少两条路：终端里的
+// 「回车批准 / deny 拒绝」只在 `process.stdin.isTTY` 下注册（src/server/app.js），而
+// launchd 拉起的 server 没有 TTY，那两条自动失效——机主只剩下开终端敲 device.js 一条路。
+//
+// 数据取自 CLI 而不是 server 的 HTTP 面：审批恰恰是「server 在跑但你还连不上」时要用的东西，
+// 依赖 server 在线就本末倒置了。device.js 直接读写那两个 JSON，server 靠 fs.watch 感知。
+
+struct PendingDevice: Decodable {
+    let deviceId: String?
+    let ip: String?
+    let userAgent: String?
+    let ts: Double?
+
+    var id: String { deviceId ?? "" }
+}
+
+struct DeviceSnapshot: Decodable {
+    let schemaVersion: Int?
+    let pending: [PendingDevice]?
+    let trusted: [String]?
+
+    var pendingList: [PendingDevice] { pending ?? [] }
+    var trustedList: [String] { trusted ?? [] }
+}
+
+/// 32 位 hex 的设备指纹在菜单里既放不下也没法读。截成 前8…后4：手机上那串是全量显示的，
+/// 两端各留一截足够机主一眼对上，而 8 位十六进制的碰撞空间在单用户场景下绰绰有余。
+func shortDeviceId(_ id: String) -> String {
+    if id.isEmpty { return "（无 ID）" }
+    guard id.count > 16 else { return id }
+    return "\(id.prefix(8))…\(id.suffix(4))"
+}
+
+/// User-Agent → 一个人能认出来的设备类型。核对「在敲门的是不是我那台手机」时，
+/// 「iPhone」比一整串 Mozilla/5.0 有用得多。
+/// 顺序有讲究：iOS 的 UA 里含 "like Mac OS X"，先判 Mac 会把 iPhone/iPad 全认成 Mac。
+func deviceKindLabel(_ ua: String?) -> String {
+    guard let ua = ua, !ua.isEmpty else { return "未知设备" }
+    if ua.contains("iPhone") { return "iPhone" }
+    if ua.contains("iPad") { return "iPad" }
+    if ua.contains("Android") { return "Android" }
+    if ua.contains("Macintosh") || ua.contains("Mac OS") { return "Mac" }
+    if ua.contains("Windows") { return "Windows" }
+    return "其他设备"
+}
+
+/// 待审设备在菜单里的一行：类型 · 短 ID · 来源 IP。三样都是核对用的——
+/// 类型答「是什么设备」，短 ID 答「是不是我屏幕上那台」，IP 答「从哪来的」。
+/// 缺 IP 时如实写「未知来源」而不是省略：留一个悬空的 `·` 看起来像渲染坏了。
+func pendingDeviceTitle(_ d: PendingDevice) -> String {
+    let ip = (d.ip?.isEmpty == false) ? d.ip! : "未知来源"
+    return "\(deviceKindLabel(d.userAgent)) · \(shortDeviceId(d.id)) · \(ip)"
+}

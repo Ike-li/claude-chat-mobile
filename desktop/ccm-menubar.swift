@@ -234,6 +234,46 @@ final class ServiceClient {
     }
 }
 
+/// 调 scripts/device.js。设备审批走 CLI 而不是 server 的 HTTP 面：这道门恰恰是
+/// 「server 在跑、但你还连不上」时才需要的，让它依赖 server 在线就本末倒置了。
+/// device.js 直接读写那两个 JSON，server 侧靠 fs.watch 感知并即时解锁已连接的 socket。
+final class DeviceClient {
+    private let env: RuntimeEnv
+    init(env: RuntimeEnv) { self.env = env }
+
+    private func scriptPath(in repo: String) -> String {
+        (repo as NSString).appendingPathComponent("scripts/device.js")
+    }
+
+    func list() -> Probe<DeviceSnapshot> {
+        guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
+        guard let r = runSync(node, [scriptPath(in: repo), "list", "--json"], cwd: repo, timeout: 8) else {
+            return .failed("device.js 无响应")
+        }
+        guard r.status == 0 else {
+            let msg = firstLine(r.stderr)
+            return .failed(msg.isEmpty ? "device.js 退出码 \(r.status)" : msg)
+        }
+        guard let data = r.stdout.data(using: .utf8),
+              let parsed = try? JSONDecoder().decode(DeviceSnapshot.self, from: data) else {
+            return .failed("device.js 输出无法解析")
+        }
+        return .ok(parsed)
+    }
+
+    /// approve / deny。**不在这里重复判「ID 在不在待审列表」** —— device.js 已有那道纵深防御
+    /// （防打错 ID 把陌生 token 静默加进信任表），两处各判一次早晚会判出两套结论。
+    func decide(_ verb: String, deviceId: String) -> Probe<Void> {
+        guard let node = env.node, let repo = env.repo else { return .failed("环境不完整") }
+        guard let r = runSync(node, [scriptPath(in: repo), verb, deviceId], cwd: repo, timeout: 15) else {
+            return .failed("device.js 无响应")
+        }
+        if r.status == 0 { return .ok(()) }
+        let msg = firstLine(r.stderr)
+        return .failed(msg.isEmpty ? "device.js 退出码 \(r.status)" : msg)
+    }
+}
+
 // MARK: - 菜单栏应用
 
 @MainActor
@@ -241,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let env = RuntimeEnv()
     private let client: ServiceClient
+    private let deviceClient: DeviceClient
     // 探测与动作分队列（control 最长 40s，不能堵刷新）。动作保持并发：
     // 复制令牌 / 打开 Web UI 不该等无关 unit 的 kickstart。同 unit 启停靠 busyUnits。
     private let probeQueue = DispatchQueue(label: "ccm.menubar.probe")
@@ -248,6 +289,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var busyUnits = Set<String>()
 
     private var latest: ServiceStatus?
+    // 待审设备快照。**与 latest 分开保存**：device.js 拉取失败不该把服务状态一起清掉，
+    // 反之亦然——两者是两个独立进程、两条独立的失败路径。
+    private var latestDevices: DeviceSnapshot?
     private var lastError: String?
     private var lastOk: Date?
     private var timer: Timer?
@@ -263,6 +307,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     override init() {
         client = ServiceClient(env: env)
+        deviceClient = DeviceClient(env: env)
         super.init()
     }
 
@@ -307,6 +352,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // refresh 会跑登录 shell，**必须在后台**（早前在主线程，shell 卡住就是菜单栏白板）
             self.env.refresh()
             let result = self.client.status(fast: fast)
+            // 设备快照同轮拉取。**不因 status 失败而跳过**：server 挂了恰恰是最需要看
+            // 待审设备的时刻之一（device.js 只读文件，不依赖 server 在线）。
+            let devices = self.deviceClient.list()
             Task { @MainActor in
                 self.inFlight = false
                 switch result {
@@ -320,6 +368,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     // 在摘要行标注「状态已过期 Ns」，同 public/js/app.js 断线时的做法。
                     self.lastError = e
                 }
+                // 同理保留旧值：拉失败时宁可显示一份可能过期的待审列表，也好过让整段消失——
+                // 「没有设备在等」和「我没拉到」在菜单上长得一模一样，而后者会让机主漏掉一台设备。
+                if case .ok(let d) = devices { self.latestDevices = d }
                 self.render()
             }
         }
@@ -395,6 +446,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let item = NSMenuItem(title: "⚠ \(w)", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
+        }
+
+        // 待审设备排在所有常规动作之前：有台设备正卡在门外用不了，这是菜单里最该被立刻
+        // 看到的事。没有待审时整段不出现——常态下菜单不该为一件不存在的事留出位置。
+        let pending = latestDevices?.pendingList ?? []
+        if !pending.isEmpty {
+            menu.addItem(.separator())
+            let header = NSMenuItem(title: "🔐 \(pending.count) 台新设备等待批准", action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+            for d in pending { menu.addItem(pendingDeviceItem(d)) }
         }
 
         menu.addItem(.separator())
@@ -490,6 +552,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return item
     }
 
+    /// 待审设备一行 + 准入/拒绝子菜单。完整 ID 放 tooltip：菜单标题里塞不下 32 位 hex，
+    /// 而机主核对时需要看到全量——手机屏幕上显示的就是全量那串。
+    private func pendingDeviceItem(_ d: PendingDevice) -> NSMenuItem {
+        let item = NSMenuItem(title: pendingDeviceTitle(d), action: nil, keyEquivalent: "")
+        item.toolTip = "完整 ID：\(d.id)\n先和手机屏幕上显示的 ID 核对，再决定是否准入。"
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+
+        let approve = NSMenuItem(title: "✓ 准入", action: #selector(approvePendingDevice(_:)), keyEquivalent: "")
+        approve.target = self
+        approve.representedObject = d.id
+        approve.toolTip = "加入信任表。该设备当前那条连接会被即时解锁——server 监听 trusted-devices.json，无需重启。"
+
+        let deny = NSMenuItem(title: "✗ 拒绝", action: #selector(denyPendingDevice(_:)), keyEquivalent: "")
+        deny.target = self
+        deny.representedObject = d.id
+        deny.toolTip = "移出待审列表并断开该设备。这不是拉黑——同一台设备之后仍可重新申请。"
+
+        sub.addItem(approve)
+        sub.addItem(deny)
+        item.submenu = sub
+        return item
+    }
+
     private func unitAction(_ title: String, unit: String, verb: String) -> NSMenuItem {
         let item = NSMenuItem(title: title, action: #selector(runUnitAction(_:)), keyEquivalent: "")
         item.target = self
@@ -522,6 +608,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // MARK: 动作
+
+    // MARK: 设备审批
+    //
+    // 只有「准入」二次确认：它把一台设备**永久**写进信任表，之后能读会话内容、能向 claude 发消息，
+    // 误点的代价不对称。拒绝是安全方向，且 denyDevice 只是移出列表不拉黑（同一设备仍可重新申请），
+    // 再加一道确认只会让人在真该拒绝时犹豫。
+
+    @objc private func approvePendingDevice(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, !id.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "准入这台新设备？"
+        // 完整 ID 摊开在确认框里：这是整道审批唯一的核对依据，菜单标题里是截断的。
+        alert.informativeText = """
+        设备 ID：\(id)
+
+        先和手机屏幕上显示的 ID 逐位核对。准入后这台设备将被永久信任——能读取会话内容、能向 claude 发消息。
+        """
+        alert.addButton(withTitle: "准入")
+        alert.addButton(withTitle: "取消")
+        alert.alertStyle = .warning
+        guard runModal(alert) == .alertFirstButtonReturn else { return }
+        decidePendingDevice(id, verb: "approve", label: "准入设备")
+    }
+
+    @objc private func denyPendingDevice(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String, !id.isEmpty else { return }
+        decidePendingDevice(id, verb: "deny", label: "拒绝设备")
+    }
+
+    private func decidePendingDevice(_ id: String, verb: String, label: String) {
+        actionQueue.async { [weak self] in
+            guard let self else { return }
+            let r = self.deviceClient.decide(verb, deviceId: id)
+            Task { @MainActor in
+                if case .failed(let e) = r { self.lastError = "\(label)失败：\(e)" }
+                // 成败都立刻重探。失败时同样要刷：那台设备可能刚被别的入口处理掉了
+                // （web 端远程准入 / headless 终端回车），此时"失败"的真相是"已经没了"。
+                self.probe()
+            }
+        }
+    }
 
     @objc private func runUnitAction(_ sender: NSMenuItem) {
         guard let info = sender.representedObject as? [String: String],

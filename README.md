@@ -63,7 +63,7 @@ npm run setup                    # 生成 AUTH_TOKEN，问 WORK_DIR（必须是�
 node scripts/doctor.js
 npm start                        # 若 doctor 说 3000 已被桌面端占用，不要再起一个；用菜单里 server 一行的「重启」
 
-# 手机首次从非本机地址连接时，另开一个终端批准设备
+# 手机首次从非本机地址连接时批准设备（桌面端也可直接从菜单栏「🔐 N 台新设备等待批准」点准入）
 node scripts/device.js list
 node scripts/device.js approve <ID>
 ```

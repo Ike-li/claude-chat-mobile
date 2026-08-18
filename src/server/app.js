@@ -25,7 +25,7 @@ import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, 
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
-import { notificationForEvent, notificationForCliHook, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
+import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
 import { startLogTerminal, stopLogTerminalSync } from '../ops/log-terminal.js';
 import { createHooksInbox } from './hooks-inbox.js';
@@ -722,6 +722,20 @@ io.use(async (socket, next) => {
         const ua = socket.handshake.headers['user-agent'] || 'Unknown';
         addPendingDevice(deviceToken, { ip, userAgent: ua });
         broadcastPendingDevices(); // 通知已登录的可信设备来远程一键审批（免终端）
+        // 离线唤醒：上面那条广播只发给【此刻在线且前台】的可信端，机主锁屏或在别的 app 时整道
+        // 审批完全静默——而"人不在电脑前"恰是本项目的主用例。直推是安全的：/push/subscribe 对
+        // 未批准设备恒 403（见 bypassDeviceApproval 注释），订阅表里只可能是已批准设备，不会把
+        // "有新设备在等"告诉那台正在等批准的设备自己。
+        // 节流键是设备维度的哨兵串、不是会话（见 notifications.js 的 DEVICE_NOTIFY_KEY）。
+        {
+          const r = throttleNotify(DEVICE_NOTIFY_KEY, 'device', Date.now(), notifyThrottleState, DEVICE_NOTIFY_INTERVAL_MS);
+          notifyThrottleState = r.next; // 放行与否都写回（同 envelope 路径的幂等约定）
+          if (!r.throttled) {
+            const dn = notificationForDeviceRequest({ count: getPendingDevices().length });
+            pushNotify(dn.title, dn.body); // 无 data：设备审批不属于任何会话，深链无处可去
+            ntfyNotify(dn.title, dn.body, ntfyMetaFor('device_request', {}, notify.publicUrl));
+          }
+        }
 
         console.log('\n==================================================');
         console.log(`📢 [安全] 发现新设备请求公网/局域网接入！`);

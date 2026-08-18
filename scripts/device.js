@@ -1,5 +1,4 @@
 // scripts/device.js —— CLI 工具：管理待确认和受信任的设备指纹。
-import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadRuntimeEnvironment } from '../src/server/config.js';
@@ -9,55 +8,65 @@ const ROOT = join(HERE, '..');
 // 走 server 的同一条加载路径而不是自己 dotenv 一次：这里只要 CCM_DATA_DIR，但读错源的后果
 // 是对着一个空的 trusted-devices.json 工作 —— 「一个设备都没有」和「读错目录了」长得一模一样。
 loadRuntimeEnvironment(process.env, { dir: ROOT, quiet: true });
-const DATA_DIR = process.env.CCM_DATA_DIR || join(ROOT, 'data');
-const TRUSTED_DEVICES_FILE = join(DATA_DIR, 'trusted-devices.json');
 // devices.js 在模块初始化时锚定数据路径，必须先加载 .env 再动态导入。
-const { getPendingDevices, approveDevice, denyDevice } = await import('../src/auth/devices.js');
+// 信任表一律经 getTrustedDeviceIds 读，不在这里自己 join 路径：devices.js 除 CCM_DATA_DIR 外
+// 还支持 CCM_*_DEVICES_FILE 文件级重定向，本文件自己算的话，list 与 approve 会认不同的源。
+const { getPendingDevices, getTrustedDeviceIds, approveDevice, denyDevice } = await import('../src/auth/devices.js');
 
 const args = process.argv.slice(2);
 const command = args[0] || 'help';
+const jsonMode = args.includes('--json');
 
 function printHelp() {
   console.log(`
 CCM 设备审批工具
 用法:
   node scripts/device.js list           - 列出所有受信任和等待确认的设备
+  node scripts/device.js list --json    - 同上，输出机读 JSON（桌面端菜单栏用）
   node scripts/device.js approve <ID>   - 批准指定设备 ID 接入公网
   node scripts/device.js deny <ID>      - 拒绝并移除指定设备 ID
   node scripts/device.js help          - 显示此帮助信息
 `);
 }
 
+// 两种输出的唯一数据源。deviceToken → deviceId 的改名与 socket 侧 pendingDevicesPayload
+// （src/auth/device-gate.js）保持一致：同一份东西在两条通道上不该有两个名字。
+function snapshot() {
+  return {
+    schemaVersion: 1,
+    pending: getPendingDevices().map(d => ({
+      deviceId: d.deviceToken, ip: d.ip, userAgent: d.userAgent, ts: d.ts,
+    })),
+    trusted: getTrustedDeviceIds(),
+  };
+}
+
 function listDevices() {
+  const snap = snapshot();
+  // --json：stdout 只许有 JSON。桌面端 JSONDecoder 收到任何人类文案都会整条解析失败，
+  // 表现为菜单里"设备审批"永远空着——比报错更难查。
+  if (jsonMode) {
+    console.log(JSON.stringify(snap));
+    return;
+  }
+
   console.log('=== 等待确认的设备 (Pending) ===');
-  const pending = getPendingDevices();
-  if (pending.length === 0) {
+  if (snap.pending.length === 0) {
     console.log('  （暂无等待确认的设备）');
   } else {
-    pending.forEach((d, idx) => {
+    snap.pending.forEach((d, idx) => {
       const date = new Date(d.ts).toLocaleString();
-      console.log(`  [${idx + 1}] ID: ${d.deviceToken}`);
+      console.log(`  [${idx + 1}] ID: ${d.deviceId}`);
       console.log(`      IP: ${d.ip} | 申请时间: ${date}`);
       console.log(`      User-Agent: ${d.userAgent || 'Unknown'}`);
     });
   }
 
   console.log('\n=== 已受信任的设备 (Trusted) ===');
-  try {
-    if (existsSync(TRUSTED_DEVICES_FILE)) {
-      const trusted = JSON.parse(readFileSync(TRUSTED_DEVICES_FILE, 'utf8'));
-      if (Array.isArray(trusted) && trusted.length > 0) {
-        trusted.forEach((id, idx) => {
-          console.log(`  [${idx + 1}] ID: ${id}`);
-        });
-      } else {
-        console.log('  （暂无已受信任的设备）');
-      }
-    } else {
-      console.log('  （暂无已受信任的设备）');
-    }
-  } catch (err) {
-    console.log('  （读取受信任列表失败）', err.message);
+  if (snap.trusted.length === 0) {
+    console.log('  （暂无已受信任的设备）');
+  } else {
+    snap.trusted.forEach((id, idx) => console.log(`  [${idx + 1}] ID: ${id}`));
   }
   console.log('');
 }

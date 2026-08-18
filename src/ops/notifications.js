@@ -120,6 +120,23 @@ export function notificationForCliHook(hookEventName, { cwd, sessionId, instance
   return instanceId ? { ...base, data: { instanceId, sessionId, cwd } } : base;
 }
 
+// 新设备请求接入的推送文案：与 notificationForEvent 分列——触发源是 socket 握手那一刻
+// （io.use 里 addPendingDevice），不是任何 agent:event envelope，混进按 type 键控的 switch
+// 会让「type 对应真实 envelope 类型」这条隐含契约变模糊（同 notificationForCliHook）。
+//
+// SEC-04 在这里比别处更硬：deviceId / ip / userAgent 恰恰是审批时要核对的三项，而推送是明文
+// 通道（ntfy 还经第三方）。所以本函数【只解构 count】——多余字段结构上就取不到，不是靠"记得别放"。
+// 也不给 previewBody：「推送内容预览」开关是为会话正文设的，不该成为设备标识漏进明文的旁路。
+//
+// 不带 data：设备审批不属于任何会话，深链无处可去；点开落首页即可看到待审卡片。
+export function notificationForDeviceRequest({ count = 1 } = {}) {
+  const n = Number.isFinite(count) && count > 1 ? Math.floor(count) : 1;
+  return {
+    title: '🔐 新设备请求接入',
+    body: n > 1 ? `${n} 台设备正在等待批准，回 app 内确认` : '有新设备想要接入，回 app 内确认',
+  };
+}
+
 // ── per-会话推送节流（"不重复轰炸同一会话"的另一半）──
 // 两层规则：①同一会话同一类别已有未决通知（未被 clearNotifyPending 清除）不重复推——
 // approval/input 需要"被处理"（request_resolved）才算未决解除；finished（result/task_notification）
@@ -131,6 +148,16 @@ export const NOTIFY_CATEGORY = Object.freeze({
   result: 'finished',
   task_notification: 'finished',
 });
+
+// 设备审批推送的节流键与窗口。key 借用 throttleNotify 的 per-会话状态机，但它并不是会话——
+// 用一个真实 sessionId（UUID）永不碰撞的哨兵串。category 刻意用 'device' 而非 'approval'：
+// 后者会置 pending，而清 pending 的三条审批路径里有一条（CLI 改 trusted-devices.json，由
+// device-gate.js 的文件监听器处理）根本够不到 app.js 持有的节流状态——用了未决语义，从 CLI
+// 批准之后这条状态就永远解不开，之后真有新设备也不再推。
+// 窗口比会话类通知长得多（5min vs 60s）：「有设备在等你批准」没有回合完成那样的时效性，
+// 每分钟提醒一次纯属打扰；反过来跨窗口再提醒一次是好事，机主可能错过了第一条。
+export const DEVICE_NOTIFY_KEY = '__devices__';
+export const DEVICE_NOTIFY_INTERVAL_MS = 300000;
 
 // 有界窗口（同 message-dedup DEDUP_CAP / interaction-log MAX_SESSIONS 的 always-on 有界纪律）：
 // per-会话节流态在常驻进程里长跑不应无限增长；超上限按插入序丢最旧会话（正常单用户远不及此，
@@ -174,12 +201,14 @@ const NTFY_TAGS = {
   // CLI hooks 桥：Stop=完成；Notification=需要你（不得误用 result 的 checkmark + priority 3，J3）
   cli_hook_stop: ['white_check_mark'],
   cli_hook_notification: ['warning', 'bell'],
+  device_request: ['closed_lock_with_key'],
 };
 export function ntfyMetaFor(type, data = {}, publicUrl = '') {
   const priority = (
     type === 'permission_request'
     || type === 'question'
     || type === 'cli_hook_notification'
+    || type === 'device_request' // 机主不处理，那台新设备就一直用不了——同属"需即时响应"
   ) ? 5 : 3;
   const tags = NTFY_TAGS[type] || [];
   let click;

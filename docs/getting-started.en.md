@@ -243,7 +243,15 @@ A quick tunnel is for testing: its hostname may change on every start and it has
 
 ## 7. Approve the phone
 
-The first non-local connection waits for device approval. On the computer, run:
+The first non-local connection waits for device approval. Pick any of four routes:
+
+**Menu bar app (macOS)** — a "🔐 N 台新设备等待批准" entry appears at the top of the menu; expand that row and click "✓ 准入". Each row reads "device type · short ID · source IP", the full ID is in the tooltip, and approving asks for confirmation.
+
+**Another signed-in device** — any already-trusted device shows a pending-device card; tap Approve, no computer needed.
+
+**The headless terminal** — press Enter in the terminal running `npm start` to approve the latest device, or type `deny` to reject it. This one needs a TTY; the launchd-managed server behind the menu bar app has none, so use the routes above there.
+
+**Command line** (works in every mode):
 
 ```bash
 node scripts/device.js list
@@ -251,6 +259,8 @@ node scripts/device.js approve <ID>
 ```
 
 Check the pending device ID before approving it. The page unlocks immediately afterward; the token does not need to be entered again.
+
+If push is subscribed, a "🔐 新设备请求接入" notification also arrives. It carries no device ID or IP — push is a plaintext channel, so verification always happens inside the app — and repeats at most once per 5 minutes.
 
 To revoke a mistaken approval or a lost device:
 

@@ -43,6 +43,16 @@ export function getTrustedCount() {
   return trustedDevices ? trustedDevices.size : 0;
 }
 
+// 受信任设备 ID 列表（供 CLI 与桌面端菜单展示、给机主核对）。与 getTrustedCount 的区别是
+// 它返回 ID 本身，所以只该喂给已经过鉴权的本机通道，不进任何网络响应。
+// 每次重读磁盘，同 isDeviceTrusted 的理由：CLI 与 server 是两个进程，内存副本会过期。
+// 这个 getter 存在的意义是让 scripts/device.js 不必自己 join 路径——它自己算的话就只认
+// CCM_DATA_DIR，而本模块还支持 CCM_TRUSTED_DEVICES_FILE 文件级重定向，两个消费者会分叉。
+export function getTrustedDeviceIds() {
+  loadTrustedDevices();
+  return [...trustedDevices];
+}
+
 // 把给定信任集合原子写盘，返回成败布尔（BE-011：成败必须可观测，不再吞成 undefined——
 // 否则吊销/批准落盘失败会被静默当成功，而 isDeviceTrusted 每次重读磁盘会让被吊销设备复活）。
 function writeTrustedSet(set) {

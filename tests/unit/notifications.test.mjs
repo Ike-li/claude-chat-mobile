@@ -1,7 +1,7 @@
 // tests/unit/notifications.test.mjs —— notificationForEvent 纯映射单测（零副作用，不碰 web-push 传输）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../../src/ops/notifications.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notificationForDeviceRequest } from '../../src/ops/notifications.js';
 
 // ── BE-014：push 订阅结构校验（落盘前拦畸形，防 .slice() 抛 500 + 污染后续推送）──────────────
 test.describe('isValidPushSubscription', () => {
@@ -148,6 +148,37 @@ test.describe('notificationForBackgroundRunning', () => {
   test('缺省参数不抛', () => {
     const n = notificationForBackgroundRunning();
     assert.equal(n.title, '⏳ 任务仍在后台运行');
+  });
+});
+
+// ── notificationForDeviceRequest：新设备请求接入（socket 握手触发，非 agent:event）──
+// SEC-04 在这里比别处更硬：设备 ID / IP / User-Agent 恰恰是审批时要核对的三项，
+// 而推送是明文通道（ntfy 还经第三方）。通知只负责「叫你回来看」，核对一律回 app 内做。
+test.describe('notificationForDeviceRequest', () => {
+  test('单台待审 → 固定标题，且 ID/IP/UA 一个都不进通知', () => {
+    const n = notificationForDeviceRequest({ count: 1, deviceId: 'tok-abc123', ip: '192.168.1.5', userAgent: 'Mozilla/5.0 iPhone' });
+    assert.equal(n.title, '🔐 新设备请求接入');
+    assert.ok(n.body.length > 0, 'body 不应为空');
+    const dumped = JSON.stringify(n);
+    assert.ok(!/tok-abc123/.test(dumped), `通知不得含设备 ID，实际：${dumped}`);
+    assert.ok(!/192\.168\.1\.5/.test(dumped), `通知不得含 IP，实际：${dumped}`);
+    assert.ok(!/iPhone|Mozilla/.test(dumped), `通知不得含 User-Agent，实际：${dumped}`);
+  });
+
+  test('多台待审 → body 反映台数（仍不含任何设备标识）', () => {
+    const n = notificationForDeviceRequest({ count: 3 });
+    assert.match(n.body, /3/, 'body 应体现待审台数，便于判断是否遭遇 flood');
+  });
+
+  test('无 previewBody：预览开关不该让设备标识漏进明文通道', () => {
+    const n = notificationForDeviceRequest({ count: 1, deviceId: 'tok-abc123' });
+    assert.equal(n.previewBody, undefined);
+  });
+
+  test('缺省参数不抛，按 1 台处理', () => {
+    const n = notificationForDeviceRequest();
+    assert.equal(n.title, '🔐 新设备请求接入');
+    assert.ok(n.body.length > 0);
   });
 });
 
@@ -316,6 +347,31 @@ test('ntfyMetaFor: background_running（presence 跳变触发的后台运行中�
   const m = ntfyMetaFor('background_running', {}, '');
   assert.equal(m.priority, 3, '低优先级：不需要用户即时响应');
   assert.deepEqual(m.tags, ['hourglass_flowing_sand']);
+});
+
+// 设备审批与 permission_request 同级：机主不处理，那台新设备就一直用不了——属于"需即时响应"。
+test('ntfyMetaFor: device_request → 高优先级 5 + 专属标签', () => {
+  const m = ntfyMetaFor('device_request', {}, '');
+  assert.equal(m.priority, 5);
+  assert.deepEqual(m.tags, ['closed_lock_with_key']);
+});
+
+// 设备审批不属于任何会话，深链无处可去——即便配了 publicUrl 也不该编一个点不开的链接。
+test('ntfyMetaFor: device_request 无 click 深链（无 instanceId）', () => {
+  assert.equal(ntfyMetaFor('device_request', {}, 'https://ccm.example.com').click, undefined);
+});
+
+// device 类别刻意【不】走 approval 的"未决"语义：CLI 审批路径（trusted-devices.json 文件监听，
+// 在 device-gate.js 里）够不到 app.js 持有的节流状态，无法清 pending——一旦用 pending 语义，
+// 从 CLI 批准后这条状态永远解不开，之后真有新设备也不再推。改用纯最小间隔，代价是同一批待审
+// 设备每隔一个窗口会再提醒一次，而那反倒是想要的（机主可能错过第一条）。
+test('throttleNotify: device 类别只受最小间隔约束，不留未决标记', () => {
+  const r1 = throttleNotify('__devices__', 'device', 1000, new Map(), 300000);
+  assert.equal(r1.throttled, false);
+  const r2 = throttleNotify('__devices__', 'device', 60000, r1.next, 300000); // 59s < 5min
+  assert.equal(r2.throttled, true, '窗口内重复入列不重复推');
+  const r3 = throttleNotify('__devices__', 'device', 400000, r1.next, 300000); // 6.6min > 5min
+  assert.equal(r3.throttled, false, '过了窗口应能再提醒一次（无需任何 clearNotifyPending）');
 });
 
 test('ntfyMetaFor: click 深链含 instance/session，但【不含完整 cwd】（ntfy 明文第三方，SEC-04）', () => {

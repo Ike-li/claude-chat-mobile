@@ -8,7 +8,7 @@
 Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重复造轮子
 新功能的状态别再落 `public/js/app.js` / `src/server/app.js` 顶层作用域：前端新状态进 `public/js/app/` 模块（工厂 + context 注入，样板见 `public/js/app/event-dispatch.js`），后端新状态进所属域模块。存量不动。
 
-双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 白名单见 `src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 26 种；seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存这几条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播；终端会话的「回合结束/需要你」可选装 CLI hooks 桥（`npm run hooks:install`，事件走 `~/.claude/ccm/hooks-v1/` 文件投递箱 + server fs.watch，把轮询变即时信号，未装则回落轮询）；离线唤醒走 web-push/ntfy——**审批/提问/后台任务完成无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制（前台判据是客户端上报的 `client:presence`，不是 socket 连着）；body 默认最小化不含正文，用户可按设备开启「推送内容预览」后改发 `previewBody`（见 `src/ops/notifications.js`、`notify-channels.js`）。
+双向实时同步走 Socket.io，出向消息统一收敛成 `agent:event` 信封（type 白名单见 `src/shared/protocol.js` 的 `AGENT_EVENT_TYPES`，当前 26 种；seq+epoch 去重回放，`npm run check` 校验出入向事件契约）；并存这几条通道——Web 主动发消息用发送路径(Web→Agent SDK→Claude Code CLI)/接收路径(Claude Code CLI→Agent SDK→Web)，SDK 流式转发+攒批缓冲；CLI 终端直接驱动则不经过 Agent SDK，靠磁盘 transcript 轮询（`catchUpTick`）同步只读镜像，"单驾驶员模型"防两端同时写分叉（Web 发消息前若检测到外部写入，先 dispose 旧 SDK 子进程再 resume 吸收）；设备审批靠文件监听 `trusted-devices.json` 广播（四个入口：桌面端菜单栏、web 端已信任设备远程准入、headless 终端回车/deny（要 TTY，launchd 起的 server 没有）、`scripts/device.js`）；新设备入列会推一条不含 ID/IP 的通知（5 分钟节流）；终端会话的「回合结束/需要你」可选装 CLI hooks 桥（`npm run hooks:install`，事件走 `~/.claude/ccm/hooks-v1/` 文件投递箱 + server fs.watch，把轮询变即时信号，未装则回落轮询）；离线唤醒走 web-push/ntfy——**审批/提问/后台任务完成无条件推**（用户可能锁屏或在别的 app），只有回合完成的 `result` 在「approved 房间有前台可见连接」时才抑制（前台判据是客户端上报的 `client:presence`，不是 socket 连着）；body 默认最小化不含正文，用户可按设备开启「推送内容预览」后改发 `previewBody`（见 `src/ops/notifications.js`、`notify-channels.js`）。
 
 **产品立场 n=1 自托管**（单机主、无多租户）。硬性规则、n=1 取舍、已决「不做」的技术债（AD-5 / SP-10 等）见 [docs/hard-rules.md](docs/hard-rules.md)。历史 design 文档已下线，以该文 + 实现为准。
 
@@ -78,6 +78,7 @@ npm run service:install|adopt|restart|logs|health   # adopt=接管手工安装�
 
 # 设备指纹审批与管理
 node scripts/device.js list         # 列出所有受信任和等待确认的设备
+node scripts/device.js list --json  # 机读快照（桌面端菜单栏「🔐 N 台新设备等待批准」的数据源）
 node scripts/device.js approve <ID> # 批准指定设备 ID
 node scripts/device.js deny <ID>    # 拒绝/删除指定设备 ID
 
