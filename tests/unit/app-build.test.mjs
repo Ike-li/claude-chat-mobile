@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { infoPlistVars, swiftTarget, swiftcArgs } from '../../scripts/app-build.js';
+import { infoPlistVars, swiftTarget, swiftcArgs, autostartTargetPath } from '../../scripts/app-build.js';
 import { renderTemplate, stripLeadingComment } from '../../scripts/render-plist.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -101,5 +101,22 @@ test.describe('infoPlistVars', () => {
   test('CFBundleExecutable 与构建产物的二进制文件名一致（写错则 bundle 起不来）', () => {
     const tpl = readFileSync(join(ROOT, 'desktop/Info.plist.template'), 'utf8');
     assert.match(tpl, /<key>CFBundleExecutable<\/key>\s*<string>CCM<\/string>/);
+  });
+});
+
+// ── autostartTargetPath ────────────────────────────────────────────────────
+// 2026-08-18 在机主真机上踩到：跑 npm run app:install 的人，看到的最后一条可复制命令
+// 是 `service.js install menubar --app="<repo>/desktop/build/CCM.app"` —— 那条提示排在
+// --install 分支【之前】，固定打印构建产物路径。照着做，开机自启就钉在一个 gitignore
+// 的目录上，git clean / 换分支之后静默失效。
+test.describe('autostartTargetPath', () => {
+  const BUILD = '/Users/you/code/claude-chat-mobile/desktop/build/CCM.app';
+
+  test('装进 /Applications 后自启指向那个稳定位置，不是刚才的构建产物', () => {
+    assert.equal(autostartTargetPath(BUILD, { installed: true }), '/Applications/CCM.app');
+  });
+
+  test('只编译不安装 → 只能指向构建产物（调用方另给风险提示）', () => {
+    assert.equal(autostartTargetPath(BUILD, { installed: false }), BUILD);
   });
 });

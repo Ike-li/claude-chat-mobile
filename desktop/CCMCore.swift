@@ -673,6 +673,19 @@ func deviceKindLabel(_ ua: String?) -> String {
     return "其他设备"
 }
 
+/// 勾「开机自启」前的风险判据：当前 app 是不是跑在仓库目录里（那就是 desktop/build 的构建产物）。
+///
+/// 自启用的是 Bundle.main.bundlePath，而 getting-started.md 恰好教了一条「只想先看一眼」的路：
+/// `npm run app:build && open desktop/build/CCM.app`。看完顺手勾自启，LaunchAgent 就钉死在一个
+/// gitignore 的产物上，git clean / 换分支之后静默失效（2026-08-18 真机实证）。
+///
+/// **必须比到分隔符**：本仓的平级 worktree 检出位就是 `<repo>-<分支名>`（见 CLAUDE.md），
+/// 裸 hasPrefix(repo) 会把 claude-chat-mobile-promo 误判成 claude-chat-mobile 的内部路径。
+/// 与 scripts/service.js 里那条 status 警告用同一判据，两侧不该给出不同结论。
+func isRunningFromRepoBuild(bundlePath: String, repo: String) -> Bool {
+    bundlePath.hasPrefix(repo + "/")
+}
+
 /// 待审设备在菜单里的一行：类型 · 短 ID · 来源 IP。三样都是核对用的——
 /// 类型答「是什么设备」，短 ID 答「是不是我屏幕上那台」，IP 答「从哪来的」。
 /// 缺 IP 时如实写「未知来源」而不是省略：留一个悬空的 `·` 看起来像渲染坏了。

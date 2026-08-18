@@ -45,6 +45,13 @@ export function swiftcArgs({ sources, out, target = swiftTarget(), frameworks = 
   return ['-O', '-parse-as-library', '-target', target, ...fw, '-o', out, ...sources];
 }
 
+// 「开机自启该指向哪个 CCM.app」。装进 /Applications 之后，desktop/build 里那份只是中间产物：
+// 拿它去装 LaunchAgent，等于把自启钉在一个 gitignore 的目录上，git clean 或换分支即失效，
+// 而 status 直到 2026-08-18 才会为此报警。抽成函数是因为它编码的是一个判断，不是格式化。
+export function autostartTargetPath(buildAppPath, { installed } = {}) {
+  return installed ? '/Applications/CCM.app' : buildAppPath;
+}
+
 // Info.plist 需要的占位符变量。少一个都会让 bundle 里出现字面量 __XXX__。
 export function infoPlistVars({ version, repo, node }) {
   return { VERSION: version, REPO: repo, NODE: node };
@@ -123,13 +130,11 @@ export function main({ test = true } = {}) {
   run('codesign', ['--force', '--sign', '-', APP], 'codesign');
 
   process.stdout.write(`\n✓ 已生成 ${APP}\n`);
-  process.stdout.write(`  试运行：open ${APP}\n`);
-  process.stdout.write('  开机自启：在菜单栏里勾「开机自启（菜单栏）」，或 node scripts/service.js install menubar --app="'
-    + APP + '"\n');
 
   // --install：把产物装进 /Applications，让 Spotlight / Launchpad / Dock 能找到它，
   // 从此启动不再依赖「cd 到仓库 open build 产物」。
-  if (process.argv.includes('--install')) {
+  const installed = process.argv.includes('--install');
+  if (installed) {
     const dest = '/Applications/CCM.app';
     process.stdout.write(`\n安装到 ${dest}…\n`);
     // 先删后拷：ditto 对已存在 bundle 是合并式覆盖，被改名/删除的旧文件会残留
@@ -137,6 +142,19 @@ export function main({ test = true } = {}) {
     run('ditto', [APP, dest], 'ditto');
     process.stdout.write('✓ 已安装。Spotlight 搜「CCM」即可打开；旧实例在跑的话点菜单「重启应用」或退出后从新位置打开，\n'
       + '  并重新勾一次「开机自启（菜单栏）」让 LaunchAgent 指向新位置。\n');
+  } else {
+    process.stdout.write(`  试运行：open ${APP}\n`);
+  }
+
+  // 自启提示必须指向【最终落地位置】，且排在 --install 之后。此前它固定打印构建产物路径
+  // 又排在安装之前，于是跑 app:install 的人看到的最后一条可复制命令指向 desktop/build/CCM.app
+  // ——照做就把 LaunchAgent 钉在 gitignore 的目录上，git clean 后开机自启静默失效。
+  const target = autostartTargetPath(APP, { installed });
+  process.stdout.write('  开机自启：在菜单栏里勾「开机自启（菜单栏）」，'
+    + `或 node scripts/service.js install menubar --app="${target}"\n`);
+  if (!installed) {
+    process.stdout.write('  ⚠ 上面这个路径在仓库的构建目录里（已 gitignore），git clean 或换分支会删掉它，\n'
+      + '    届时开机自启会静默失效。长期使用请跑 npm run app:install 装到 /Applications。\n');
   }
 }
 

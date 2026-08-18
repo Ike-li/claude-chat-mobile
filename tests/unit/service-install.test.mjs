@@ -610,3 +610,44 @@ test.describe('resolveUninstallConfirm', () => {
     }
   });
 });
+
+// ── install —— 已装但参数变了 ──────────────────────────────────────────────
+//
+// 2026-08-18 在机主真机上实测到的死循环：status 报「开机自启指向仓库构建产物」，照它给的
+// 命令跑 `install menubar --app=/Applications/CCM.app`，CLI 回「已是目标状态，无需改动」，
+// plist 纹丝不动，下一次 status 警告照旧。
+//
+// 根因：早退判据只看「manifest 有记录 + plist 在盘上 + launchd 认识它」三件事，完全不比对
+// 内容，于是参数怎么变都判 already。这里不改成自动重写——那要连带 bootout + bootstrap，
+// 风险面大于收益；按本文件既有风格（「盘上有、manifest 没有」那条分支）报错 + 指路。
+test.describe('install —— 已装但参数变了', () => {
+  const OLD_APP = `${REPO}/desktop/build/CCM.app`;
+
+  // 让代码自己装一遍来生成 manifest，而不是手写一份结构（手写的会被 validateManifest 拒掉，
+  // 于是测试实际测的是「不接管自定义启动方式」那条无关分支——同 148 行那条幂等用例的做法）。
+  const installedMenubar = () => {
+    const env = setup();
+    const first = env.mgr.install('menubar', { app: OLD_APP });
+    assert.equal(first.ok, true, `前置安装应成功：${first.error ?? ''}`);
+    env.writes.length = 0; // 只关心第二次 install 有没有写
+    return env;
+  };
+
+  test('--app 换成 /Applications → 不许报 already，要点名参数并给出出路', () => {
+    const { mgr, manifestNow, writes } = installedMenubar();
+    const r = mgr.install('menubar', { app: '/Applications/CCM.app' });
+
+    assert.equal(r.ok, false, '参数变了却报成功，人会以为已经改好了');
+    assert.match(r.error, /APP/, '要点名到底哪个参数不一致');
+    assert.match(r.error, /uninstall/, '必须给出出路，否则就是死循环');
+    assert.equal(manifestNow().units.menubar.vars.APP, OLD_APP, '报错路径一个字节都不该写');
+    assert.deepEqual(writes, [], '报错路径不该有任何写操作');
+  });
+
+  test('参数完全相同 → 仍然 already（幂等不能被这条检查破坏）', () => {
+    const { mgr } = installedMenubar();
+    const r = mgr.install('menubar', { app: OLD_APP });
+    assert.equal(r.ok, true);
+    assert.equal(r.action, 'already');
+  });
+});

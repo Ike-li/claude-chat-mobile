@@ -760,7 +760,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard runModal(a) == .alertFirstButtonReturn else { return }
             runTask("取消开机自启", uninstallSteps(unit: "menubar", repo: repo))
         } else {
-            runTask("设置开机自启", installSteps(unit: "menubar", repo: repo, appPath: Bundle.main.bundlePath))
+            let path = Bundle.main.bundlePath
+            // 跑在仓库构建目录里就先拦一道。service.js 的 status 现在会为这种情况报一条警告，
+            // 但那是【事后】——等你看到警告时 LaunchAgent 已经指错了。这里在事前问一句。
+            if isRunningFromRepoBuild(bundlePath: path, repo: repo) {
+                let a = NSAlert()
+                a.messageText = "先装到 /Applications 再设自启？"
+                a.informativeText = """
+                当前运行的是仓库里的构建产物：
+                \(path.dropFirst(repo.count + 1))
+
+                它被 gitignore，git clean 或换分支就会消失，届时开机自启静默失效（登录后菜单栏没有图标，且没有任何地方会告诉你为什么）。
+
+                建议先跑 npm run app:install（或菜单里的「更新桌面端」）装到 /Applications，从那里再勾自启。
+                """
+                a.addButton(withTitle: "仍然设为自启")
+                a.addButton(withTitle: "取消")
+                a.alertStyle = .warning
+                guard runModal(a) == .alertFirstButtonReturn else { return }
+            }
+            runTask("设置开机自启", installSteps(unit: "menubar", repo: repo, appPath: path))
         }
     }
 
@@ -825,12 +844,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let welcome = NSAlert()
         welcome.messageText = "配置 ccm"
         welcome.informativeText = """
-        接下来会做三件事：
+        接下来会做四件事：
         1. 选一个工作目录（claude 的默认目录）
-        2. 生成 .env（含随机访问令牌）
+        2. 生成 ccm.config.json（含随机访问令牌）
         3. 安装常驻服务并启动
+        4. 打一次 /health，确认真的能用
 
-        全部在一个终端窗口里执行，你能看到每一步的真实输出。
+        全部在一个任务窗口里执行，你能看到每一步的真实输出。
         """
         welcome.addButton(withTitle: "继续")
         welcome.addButton(withTitle: "取消")

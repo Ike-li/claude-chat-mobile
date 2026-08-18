@@ -48,6 +48,7 @@ struct CCMCoreTests {
         testProbeInterval()
         testDeviceSnapshot()
         testDevicePresentation()
+        testAutostartRisk()
 
         let msg = "\nCCMCore: \(passed) passed, \(failed) failed\n"
         FileHandle.standardOutput.write(msg.data(using: .utf8)!)
@@ -606,5 +607,30 @@ extension CCMCoreTests {
         let noIp = decodeDevices(#"{"schemaVersion":1,"pending":[{"deviceId":"abcd1234","userAgent":"Mozilla/5.0 (iPhone)"}]}"#)!.pendingList[0]
         check(!pendingDeviceTitle(noIp).hasSuffix("·"), "缺 IP 时不留悬空分隔符：\(pendingDeviceTitle(noIp))")
         check(pendingDeviceTitle(noIp).contains("未知来源"), "缺 IP 如实说未知，不静默省略")
+    }
+}
+
+// MARK: 勾「开机自启」前的风险判据
+//
+// 2026-08-18 在机主真机上踩到：菜单里勾自启用的是 Bundle.main.bundlePath，而
+// getting-started.md 恰好教了一条「只想先看一眼」的路——`npm run app:build && open
+// desktop/build/CCM.app`。看完觉得不错顺手勾上自启，LaunchAgent 就钉死在 gitignore
+// 的构建产物上，git clean / 换分支之后静默失效，且 status 与 doctor 当时都看不出来。
+extension CCMCoreTests {
+    static func testAutostartRisk() {
+        let repo = "/Users/you/code/claude-chat-mobile"
+        check(isRunningFromRepoBuild(bundlePath: "\(repo)/desktop/build/CCM.app", repo: repo),
+              "跑在仓库构建目录里 → 该拦一道")
+        check(!isRunningFromRepoBuild(bundlePath: "/Applications/CCM.app", repo: repo),
+              "/Applications 是 app:install 的落点，稳定位置不该拦")
+        check(!isRunningFromRepoBuild(bundlePath: "/Users/you/Applications/CCM.app", repo: repo),
+              "用户自己的 ~/Applications 同样稳定")
+
+        // ★ 必须比到分隔符：本仓的平级 worktree 检出位就是 `<repo>-<分支名>`（见 CLAUDE.md），
+        // 裸 hasPrefix(repo) 会把 claude-chat-mobile-promo 误判成 claude-chat-mobile 内部。
+        check(!isRunningFromRepoBuild(bundlePath: "\(repo)-promo/desktop/build/CCM.app", repo: repo),
+              "平级 worktree（<repo>-promo）不是本仓内部，别误判")
+        check(!isRunningFromRepoBuild(bundlePath: repo, repo: repo),
+              "路径恰好等于仓库根（不可能是 app）也不算")
     }
 }

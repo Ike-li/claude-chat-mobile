@@ -167,15 +167,34 @@ export function createServiceManager(deps = {}) {
     const plistExists = !!plist;
     const running = live.get(label) || { pid: null, lastExit: null };
 
+    const facts = plistExists ? extractUnitFacts(unit, plist) : null;
     // plist 不存在时**不做漂移判定**：extractUnitFacts(null) 会让每一项都是 null，
     // diffUnitSemantics 据此报 shape → ownership 变 foreign → 连 install 都会被自己拒掉。
     const drift = plistExists
       ? diffUnitSemantics(
         unit,
         normalizePaths(expectedFactsFor(unit, ctx)),
-        normalizePaths(extractUnitFacts(unit, plist))
+        normalizePaths(facts)
       )
       : [];
+
+    // menubar 的 LaunchAgent 只有一个可执行目标：那个 .app 的路径。它**不在 driftFields 里**
+    // ——app 是安装期参数，status 侧没有期望值可比（expectedFactsFor 里 app 恒为 ctx.app ?? null），
+    // 塞进去会 expected=null vs actual=有值、每次都报假漂移，见 service-units.js 头注那条纪律。
+    // 代价是它失效时三条自查路径全绿：status 的 drift 是空数组，doctor 只消费 drift，菜单栏读同一份。
+    // 2026-08-18 在机主真机上实证过这个盲区：自启指向 <repo>/desktop/build/CCM.app —— gitignore
+    // 的构建产物，git clean 一下开机自启就没了，而没有任何地方会告诉他。所以改判 actual 值本身。
+    if (unit === 'menubar' && facts?.app) {
+      if (!fileExists(facts.app)) {
+        warnings.push('开机自启指向的 CCM.app 已不存在，登录时拉不起菜单栏 —— '
+          + '跑 npm run app:install 重装，再在菜单里重新勾一次「开机自启（菜单栏）」');
+      } else if (repo && facts.app.startsWith(`${repo}/`)) {
+        // 只给仓库相对形态：这条会渲染进菜单栏的 ⚠ 行，绝对路径又长又没多给信息。
+        warnings.push(`开机自启指向仓库内的 ${facts.app.slice(repo.length + 1)} —— 那是 gitignore `
+          + '的构建产物，git clean 或换分支后自启会静默失效。跑 npm run app:install 装到 '
+          + '/Applications，再在菜单里重新勾一次「开机自启（菜单栏）」');
+      }
+    }
     const inManifest = Object.hasOwn(manifest.units, unit);
     const schedule = extractSchedule(plist);
     const { state, lastExitAbnormal } = classifyState({ ...running, plistExists });
@@ -340,6 +359,27 @@ export function createServiceManager(deps = {}) {
     const exists = fileExists(plistPath);
 
     if (inManifest && exists) {
+      // 参数变了不能装作没看见。这个早退此前只看「manifest 有记录 + plist 在盘上 + launchd
+      // 认识它」三件事，**完全不比对内容** —— 于是 `install menubar --app=<新路径>` 会回一句
+      // 「已是目标状态，无需改动」，而 plist 纹丝不动。2026-08-18 实测到的死循环就是这么来的：
+      // status 报「开机自启指向仓库构建产物」，照它给的命令执行，CLI 说没事，警告下一次照旧。
+      //
+      // 这里**不自动重写**：那要连带 bootout + bootstrap 去改一个正在跑的 unit，风险面大于收益。
+      // 按下面「盘上有、manifest 没有」那条分支的同款风格 —— 报错 + 指出唯一的出路。
+      const desiredVars = renderVarsFor(unit, { ...ctx, ...opts });
+      const recordedVars = manifest.units[unit]?.vars ?? {};
+      const changedVars = Object.keys(desiredVars).filter((k) => desiredVars[k] !== recordedVars[k]);
+      if (changedVars.length) {
+        return {
+          ok: false,
+          unit,
+          label,
+          plistPath,
+          error: `${label} 已安装，但本次参数与它当前的配置不一致（${changedVars.join(' / ')}）。`
+            + '本工具不就地改写正在运行的 unit —— 先卸载再装：'
+            + `node scripts/service.js uninstall ${unit} --yes`,
+        };
+      }
       // 别急着说 already：bootstrap 可能上次失败了（macOS 的 "Load failed: 5" 很常见），
       // 那时 plist 与 manifest 都在盘上、launchd 却不认识这个 unit。早前这里无条件早退，
       // 用户就困在死路里 —— install 说「已是目标状态」+ exit 0，start 却报 Could not find service，

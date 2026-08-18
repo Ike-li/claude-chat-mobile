@@ -604,3 +604,59 @@ test.describe('formatStatus —— 人类可读表格（darwin 路径）', () =>
     assert.doesNotMatch(out, /com\.ccm/);
   });
 });
+
+// ── menubar 自启指向的 app ──────────────────────────────────────────────────
+//
+// 这一组补的是 2026-08-18 在机主真机上发现的坑：com.ccm.menubar 的 plist 指向
+// <repo>/desktop/build/CCM.app —— 一个 gitignore 的构建产物。git clean / 换分支
+// 把它删掉，开机自启就静默失效，而当时三条自查路径全都显示正常。
+//
+// 为什么走 warnings 而不是 drift：app 路径是**安装期参数**，status 侧没有期望值可比
+// （expectedFactsFor 里 app 恒为 ctx.app ?? null）。塞进 driftFields 会让 expected=null
+// vs actual=有值 每次都不相等，恒报假漂移——service-units.js 的头注专门写过这条纪律。
+// 真正要判的是 actual 值本身：这个路径还在吗？它在不在会被清掉的地方？
+test.describe('status —— menubar 自启指向的 app', () => {
+  const menubarPlist = (app) => ({
+    [`${HOME}/Library/LaunchAgents/com.ccm.menubar.plist`]: {
+      Label: 'com.ccm.menubar',
+      ProgramArguments: ['/usr/bin/open', app],
+      RunAtLoad: true,
+      StandardOutPath: `${HOME}/Library/Logs/ccm-menubar.log`,
+      StandardErrorPath: `${HOME}/Library/Logs/ccm-menubar.log`,
+    },
+  });
+  const warningsOf = (overrides) => makeManager(overrides).status().warnings.join('\n');
+
+  test('指向仓库内的构建产物 → 警告它会被 git clean 掉，并给出补救命令', () => {
+    const w = warningsOf({
+      plists: menubarPlist(`${REPO}/desktop/build/CCM.app`),
+      extra: { fileExists: () => true }, // 此刻文件还在——问题不是"没了"，是"待会儿会没"
+    });
+    assert.match(w, /desktop\/build\/CCM\.app/, '要指出它到底指向哪，否则用户无从下手');
+    assert.match(w, /app:install/, '要给出补救命令，不能只报警不指路');
+    assert.doesNotMatch(w, new RegExp(REPO.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '/desktop'),
+      '路径按仓库相对形态给出，不回显绝对路径');
+  });
+
+  test('指向 /Applications 且文件在 → 不警告（这正是 app:install 的正常结果）', () => {
+    const w = warningsOf({
+      plists: menubarPlist('/Applications/CCM.app'),
+      extra: { fileExists: () => true },
+    });
+    assert.doesNotMatch(w, /开机自启/, '正常安装不该报警——否则告警会被训练成噪音');
+  });
+
+  test('指向的 app 已不存在 → 警告登录时拉不起菜单栏', () => {
+    const w = warningsOf({
+      plists: menubarPlist('/Applications/CCM.app'),
+      extra: { fileExists: () => false },
+    });
+    assert.match(w, /不存在/);
+    assert.match(w, /app:install/);
+  });
+
+  test('menubar 未安装 → 不产生自启警告（没装不是故障）', () => {
+    const w = warningsOf({ plists: {}, extra: { fileExists: () => false } });
+    assert.doesNotMatch(w, /开机自启/);
+  });
+});
