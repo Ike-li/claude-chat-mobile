@@ -43,7 +43,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
 | Instructions | 2 |
-| Integration test | 22 |
+| Integration test | 23 |
 | Legal | 2 |
 | Maintainer tooling | 30 |
 | Project configuration | 5 |
@@ -54,7 +54,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 157 |
 | Vendored asset | 21 |
 
-Total classified files: **452**.
+Total classified files: **453**.
 
 ## Complete file inventory
 
@@ -328,6 +328,7 @@ Total classified files: **452**.
 | `tests/integration/cf-access-gate.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/claude-lifecycle.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/config-refresh.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
+| `tests/integration/device-approval-grants-access.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/device-approval-isolation.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/device-revoke-symmetry.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/file-browse.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
