@@ -2,7 +2,13 @@
 // 交互壳（readline 提问 / 写文件）不在此测，靠手动跑 `npm run setup` 验证。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan } from '../../scripts/setup.js';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan, normalizeSetupWorkDir, promptWorkDir, MESSAGES } from '../../scripts/setup.js';
+
+const SETUP = new URL('../../scripts/setup.js', import.meta.url);
 
 // ── P1b：默认生成 ccm.config.json ────────────────────────────────────────────
 //
@@ -170,4 +176,144 @@ test.describe('--desktop：桌面控制台', () => {
     const r = resolveSetupPlan({ args: parseSetupArgs([]) });
     assert.equal(r.desktop, undefined);
   });
+});
+
+// ── 新用户踩过的装机坑 ────────────────────────────────────────────────────
+// 无 TTY 的 `npm run setup` 曾对着已有配置打出覆盖提示后 exit 0，成功信号几乎没有。
+// 家目录回车默认曾与文档「不要把整个家目录交给远程入口」对不上。
+
+test('parseSetupArgs: --help / -h 不当未知参数', () => {
+  assert.equal(parseSetupArgs(['--help']).help, true);
+  assert.equal(parseSetupArgs(['-h']).help, true);
+  assert.deepEqual(parseSetupArgs(['--help']).unknown, []);
+});
+
+test('resolveSetupPlan: --help 直接进入 help，不要求 TTY 或 --yes', () => {
+  const plan = resolveSetupPlan({ args: parseSetupArgs(['--help']), isTty: false });
+  assert.equal(plan.mode, 'help');
+  assert.equal(plan.refuse, undefined);
+});
+
+test('resolveSetupPlan: 非 TTY 且未给 --yes → 拒绝，不走进交互提问', () => {
+  const plan = resolveSetupPlan({ args: parseSetupArgs([]), isTty: false });
+  assert.equal(plan.refuse?.code, 'tty_required');
+});
+
+test('normalizeSetupWorkDir: 空串 / 家目录 / 相对路径拒绝，绝对项目路径通过', () => {
+  const home = '/Users/you';
+  assert.equal(normalizeSetupWorkDir('', { home }).code, 'work_dir_required');
+  assert.equal(normalizeSetupWorkDir('   ', { home }).code, 'work_dir_required');
+  assert.equal(normalizeSetupWorkDir(home, { home }).code, 'work_dir_is_home');
+  assert.equal(normalizeSetupWorkDir('~', { home }).code, 'work_dir_is_home');
+  assert.equal(normalizeSetupWorkDir('code/project', { home }).code, 'work_dir_not_absolute');
+  const ok = normalizeSetupWorkDir('/Users/you/code/project', { home });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.workDir, '/Users/you/code/project');
+  const fromHome = normalizeSetupWorkDir('~/code/project', { home });
+  assert.equal(fromHome.ok, true);
+  assert.equal(fromHome.workDir, '/Users/you/code/project');
+});
+
+test('resolveSetupPlan: 非交互 --work-dir 等于家目录时拒绝', () => {
+  const plan = resolveSetupPlan({
+    args: parseSetupArgs(['--yes', '--work-dir=/Users/you', '--hooks=off']),
+    home: '/Users/you',
+  });
+  assert.equal(plan.refuse?.code, 'work_dir_is_home');
+});
+
+test('向导文案不再把配置文件叫 .env', () => {
+  for (const lang of ['zh', 'en']) {
+    assert.doesNotMatch(MESSAGES[lang].cancelled, /\.env/);
+    assert.doesNotMatch(MESSAGES[lang].tokenWrittenSuffix, /\.env/);
+    assert.match(MESSAGES[lang].refuse.tty_required(), /--yes/);
+  }
+});
+
+test('CLI：无 TTY 且未给 --yes → exit 2，不写配置', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-setup-tty-'));
+  const config = join(dir, 'ccm.config.json');
+  try {
+    const res = spawnSync(process.execPath, [SETUP.pathname, `--config=${config}`], {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, LANG: 'C' },
+    });
+    assert.equal(res.status, 2, res.stderr || res.stdout);
+    assert.match(`${res.stderr}\n${res.stdout}`, /--yes/);
+    assert.equal(existsSync(config), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI：--config 写到别处时，仓库根已有 ccm.config.json 不挡', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-setup-cfg-'));
+  const work = join(dir, 'work');
+  const config = join(dir, 'ccm.config.json');
+  try {
+    const res = spawnSync(process.execPath, [
+      SETUP.pathname, '--yes', `--work-dir=${work}`, '--hooks=off', `--config=${config}`,
+    ], {
+      encoding: 'utf8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, LANG: 'C' },
+      cwd: new URL('../..', import.meta.url).pathname,
+    });
+    assert.equal(res.status, 0, res.stderr || res.stdout);
+    assert.equal(existsSync(config), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ── 交互向导：输错一个字符不该让人重跑整个向导 ─────────────────────────────
+// 拒空回车/家目录是对的，但第一版实现拒完就 return——用户已经答过「覆盖现有配置? y」，
+// 一个 typo 就得从头再来。这里把「问一次」换成「问到对或到上限」，上限是必须的：
+// 没有上限时，ask 若因 stdin 关闭恒返回空串就成了死循环（文件头注释记的正是这类 EOF 事故）。
+test('promptWorkDir：输错可以重来，逐次报出具体原因', async () => {
+  const answers = ['', '/Users/you', '/Users/you/code/app'];
+  const seen = [];
+  let asked = 0;
+
+  const r = await promptWorkDir(async () => answers[asked++], {
+    home: '/Users/you',
+    onInvalid: ({ code }) => seen.push(code),
+  });
+
+  assert.equal(r.ok, true);
+  assert.equal(r.workDir, '/Users/you/code/app');
+  assert.equal(asked, 3);
+  assert.deepEqual(seen, ['work_dir_required', 'work_dir_is_home'], '每次拒绝的理由要各自报出来，不能只报最后一次');
+});
+
+test('promptWorkDir：连错到上限就停，不无限追问', async () => {
+  let asked = 0;
+  const r = await promptWorkDir(async () => { asked += 1; return 'code/project'; }, {
+    home: '/Users/you',
+    maxAttempts: 3,
+  });
+
+  assert.equal(r.ok, false);
+  assert.equal(r.code, 'work_dir_not_absolute', '返回最后一次的具体原因，不是笼统的 required');
+  assert.equal(asked, 3, '到上限必须停——ask 恒返回空串时（stdin 关闭）没有上限就是死循环');
+});
+
+test('promptWorkDir：第一次就对则只问一次', async () => {
+  let asked = 0;
+  const r = await promptWorkDir(async () => { asked += 1; return '~/code/app'; }, { home: '/Users/you' });
+
+  assert.equal(r.ok, true);
+  assert.equal(r.workDir, '/Users/you/code/app');
+  assert.equal(asked, 1);
+});
+
+test('CLI：--help 在无 TTY 下 exit 0 并打印用法', () => {
+  const res = spawnSync(process.execPath, [SETUP.pathname, '--help'], {
+    encoding: 'utf8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...process.env, LANG: 'C' },
+  });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /--work-dir=/);
 });

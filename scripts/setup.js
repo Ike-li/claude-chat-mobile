@@ -8,16 +8,17 @@
 //   界面语言按环境 locale 自动选：zh_* → 中文，其余 → 英文。
 //
 // 为什么有非交互模式：README 一直建议「把安装丢给编程 agent 代跑」，但 agent 的 shell 没有 TTY，
-// stdin 立刻 EOF → readline 的 question promise 永不 settle → 进程静默退出 0、.env 一个字没写
-// （实测）。非交互模式让意图完全由参数表达，且两个危险默认一律不许静默生效：
-//   · WORK_DIR 不回落 $HOME（那等于把整个家目录交给 agent）——必须显式 --work-dir
+// stdin 立刻 EOF → 旧实现会打出覆盖提示后 exit 0、一个字没写。无 TTY 现在直接拒绝，
+// 必须用 --yes --work-dir --hooks 把意图写全。两个危险默认一律不许静默生效：
+//   · WORK_DIR 不回落 $HOME（那等于把整个家目录交给远程入口）——必须显式且不能是家目录
 //   · hooks 不默认装（那会写用户全局 ~/.claude/settings.json）——必须显式 --hooks=on
 import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, realpathSync } from 'node:fs';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import { basename, join, dirname, resolve } from 'node:path';
+import { basename, join, dirname, resolve, isAbsolute } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { writeOwnerOnlyFile } from '../src/files/file-security.js';
 import { applyConfigChanges, CONFIG_FILE_NAME } from '../src/ops/config-file.js';
@@ -55,7 +56,7 @@ export function detectLang(env = process.env) {
 // 参数解析。未知参数不静默忽略而是收集起来由上层拒绝——`--workdir=` 这种少一个连字符的 typo
 // 若被忽略，WORK_DIR 就会悄悄回落到 $HOME，正是本模式要堵的那个洞。
 export function parseSetupArgs(argv = []) {
-  const out = { configPath: undefined, yes: false, workDir: undefined, hooks: undefined, desktop: undefined, force: false, unknown: [] };
+  const out = { configPath: undefined, yes: false, workDir: undefined, hooks: undefined, desktop: undefined, force: false, help: false, unknown: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const eq = arg.indexOf('=');
@@ -68,14 +69,46 @@ export function parseSetupArgs(argv = []) {
     else if (name === '--desktop') out.desktop = value();
     else if (name === '--yes' || name === '-y') out.yes = true;
     else if (name === '--force') out.force = true;
+    else if (name === '--help' || name === '-h') out.help = true;
     else out.unknown.push(arg);
   }
   return out;
 }
 
+// 交互回车不得静默变成 $HOME（那等于把整个家目录交给远程入口，与 hard-rules「可选功能不猜」同轴）。
+// `~/project` 展开后若不是家目录本身则接受；相对路径拒绝，避免 cwd 不同时配到别处。
+export function normalizeSetupWorkDir(raw, { home = homedir() } = {}) {
+  const trimmed = String(raw ?? '').trim();
+  if (!trimmed) return { ok: false, code: 'work_dir_required' };
+  const homeAbs = resolve(home);
+  let candidate;
+  if (trimmed === '~') candidate = homeAbs;
+  else if (trimmed.startsWith('~/')) candidate = resolve(homeAbs, trimmed.slice(2));
+  else if (!isAbsolute(trimmed)) return { ok: false, code: 'work_dir_not_absolute' };
+  else candidate = resolve(trimmed);
+  if (candidate === homeAbs) return { ok: false, code: 'work_dir_is_home' };
+  return { ok: true, workDir: candidate };
+}
+
+// 交互向导问 WORK_DIR：问到合法为止，而不是一拒就退出。用户到这一步可能已经答过
+// 「覆盖现有配置? y」，一个 typo 让他重跑整个向导是白付的代价。
+//
+// maxAttempts 不是保守起见——它是正确性要求：ask 若因 stdin 关闭而恒返回空串，
+// 没有上限就是死循环（本文件头注释记的那次 EOF 事故就是这个形状）。
+export async function promptWorkDir(ask, { home = homedir(), maxAttempts = 3, onInvalid } = {}) {
+  let last = { ok: false, code: 'work_dir_required' };
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    last = normalizeSetupWorkDir(await ask(), { home });
+    if (last.ok) return last;
+    onInvalid?.({ code: last.code, attempt, remaining: maxAttempts - attempt });
+  }
+  return last;
+}
+
 // 把参数 + 磁盘现状（.env 是否已存在）解析成一份可执行计划，或一条拒绝理由。
 // 交互模式下未给的项留 undefined = 「待询问」；非交互模式下必须全部落定。
-export function resolveSetupPlan({ args, envExists = false, platform = process.platform } = {}) {
+export function resolveSetupPlan({ args, envExists = false, platform = process.platform, isTty = true, home = homedir() } = {}) {
+  if (args.help) return { mode: 'help' };
   const mode = args.yes ? 'noninteractive' : 'interactive';
   const refuse = (code, detail) => ({ mode, refuse: { code, detail } });
 
@@ -91,11 +124,16 @@ export function resolveSetupPlan({ args, envExists = false, platform = process.p
   if (args.desktop === 'on' && platform !== 'darwin') {
     return refuse('desktop_unsupported', platform);
   }
-  if (!args.yes) return { mode, workDir: args.workDir, hooks: args.hooks, desktop: args.desktop };
+  if (!args.yes) {
+    if (!isTty) return refuse('tty_required');
+    return { mode, workDir: args.workDir, hooks: args.hooks, desktop: args.desktop };
+  }
   if (!args.workDir) return refuse('work_dir_required');
+  const workDirNorm = normalizeSetupWorkDir(args.workDir, { home });
+  if (!workDirNorm.ok) return refuse(workDirNorm.code);
   if (envExists && !args.force) return refuse('env_exists');
   // 默认不装：它要跑 swiftc（可能还要用户先 xcode-select --install），与 hooks 同一心智。
-  return { mode, workDir: args.workDir, hooks: args.hooks ?? 'off', desktop: args.desktop ?? 'off' };
+  return { mode, workDir: workDirNorm.workDir, hooks: args.hooks ?? 'off', desktop: args.desktop ?? 'off' };
 }
 
 // 交互壳的双语文案（纯文本片段，颜色在 main 里组装）。
@@ -103,11 +141,11 @@ export const MESSAGES = {
   zh: {
     title: '⚙  Claude Chat Mobile —— 配置向导',
     overwritePrompt: '已存在，覆盖它? [y/N] ',
-    cancelled: '已取消，现有 .env 未改动。',
+    cancelled: '已取消，现有配置未改动。',
     tokenLabel: '已生成 AUTH_TOKEN（手机访问必需）',
-    tokenWrittenSuffix: '…（已写入 .env）',
+    tokenWrittenSuffix: '…（已写入 %s）',
     workDirLabel: 'claude 工作目录 WORK_DIR',
-    workDirHint: '(回车 = 默认 $HOME)',
+    workDirHint: '(必须是绝对路径，不能是家目录)',
     wroteLabel: '已写入',
     permNote: '(权限 0600)',
     nextSteps: '下一步:',
@@ -130,8 +168,12 @@ export const MESSAGES = {
       invalid_hooks: d => `--hooks 只接受 on 或 off，收到：${d}`,
       invalid_desktop: d => `--desktop 只接受 on 或 off，收到：${d}`,
       desktop_unsupported: d => `桌面控制台只有 macOS 有（当前平台：${d}）。服务器上用手机端与命令行，功能是齐的。`,
-      work_dir_required: () => '非交互模式必须显式给出 --work-dir=<绝对路径>。'
-        + '这里不会静默回落到 $HOME——那等于把整个家目录交给 agent 读写。',
+      work_dir_required: () => '必须显式给出工作目录的绝对路径（--work-dir= 或向导里键入）。'
+        + '这里不会静默回落到 $HOME——那等于把整个家目录交给远程入口。',
+      work_dir_is_home: () => 'WORK_DIR 不能是家目录。请换成一个具体项目目录。',
+      work_dir_not_absolute: () => 'WORK_DIR 必须是绝对路径（或以 ~/ 写成家目录下的子目录）。',
+      tty_required: () => '当前没有交互终端。不要跑 npm run setup；改用：'
+        + ' node scripts/setup.js --yes --work-dir=<绝对路径> --hooks=on|off',
       env_exists: d => `${d} 已存在，非交互模式不会覆盖它（里面可能有正在用的 AUTH_TOKEN）。`
         + '若是从旧版本升级，请跑 node scripts/config.js migrate 迁移，不要用 --force —— '
         + '那会生成一个新 AUTH_TOKEN，所有已授权设备都要重新批准。'
@@ -140,11 +182,11 @@ export const MESSAGES = {
   en: {
     title: '⚙  Claude Chat Mobile — setup wizard',
     overwritePrompt: 'already exists. Overwrite it? [y/N] ',
-    cancelled: 'Cancelled. Your existing .env was left untouched.',
+    cancelled: 'Cancelled. Your existing config was left untouched.',
     tokenLabel: 'Generated AUTH_TOKEN (required for phone access)',
-    tokenWrittenSuffix: '… (written to .env)',
+    tokenWrittenSuffix: '… (written to %s)',
     workDirLabel: 'claude working directory WORK_DIR',
-    workDirHint: '(Enter = default $HOME)',
+    workDirHint: '(absolute path required; not your home directory)',
     wroteLabel: 'Wrote',
     permNote: '(mode 0600)',
     nextSteps: 'Next steps:',
@@ -167,8 +209,12 @@ export const MESSAGES = {
       invalid_hooks: d => `--hooks accepts only on or off, got: ${d}`,
       invalid_desktop: d => `--desktop accepts only on or off, got: ${d}`,
       desktop_unsupported: d => `The desktop console is macOS-only (this platform: ${d}). On a server, the phone UI and CLI cover everything.`,
-      work_dir_required: () => 'Non-interactive mode requires an explicit --work-dir=<absolute-path>. '
-        + 'It will not silently fall back to $HOME — that would hand your entire home directory to the agent.',
+      work_dir_required: () => 'An explicit absolute --work-dir= is required (or type one in the wizard). '
+        + 'It will not silently fall back to $HOME — that would hand your entire home directory to a remote entrypoint.',
+      work_dir_is_home: () => 'WORK_DIR cannot be your home directory. Use a specific project folder.',
+      work_dir_not_absolute: () => 'WORK_DIR must be an absolute path (or a ~/… path under your home directory).',
+      tty_required: () => 'This shell has no TTY. Do not run npm run setup. Use: '
+        + 'node scripts/setup.js --yes --work-dir=<absolute-path> --hooks=on|off',
       env_exists: d => `${d} already exists; non-interactive mode will not overwrite it `
         + '(it may hold the AUTH_TOKEN you are using). Upgrading from an older version? Run '
         + 'node scripts/config.js migrate instead — --force would mint a new AUTH_TOKEN and every '
@@ -195,7 +241,7 @@ function writeSetupFile({ outPath, workDir, t }) {
   // 结构化构造没有旧模板替换那种「正则没匹配上就静默不生效」的失败模式，无需写后校验。
   writeOwnerOnlyFile(outPath, buildConfigContent({ authToken: token, workDir: workDir || undefined }));
 
-  const written = t.tokenWrittenSuffix.replace(/\.env/, basename(outPath));
+  const written = t.tokenWrittenSuffix.replace('%s', basename(outPath));
   console.log(`\n${c.green('✓')} ${t.tokenLabel}: ${c.dim(token.slice(0, 8) + written)}`);
   console.log(`${c.green('✓')} ${t.wroteLabel} ${c.bold(outPath)} ${c.dim(t.permNote)}`);
 }
@@ -238,9 +284,19 @@ async function runInteractive({ plan, outPath, t }) {
       }
     }
 
-    // WORK_DIR：命令行已给就不问；交互留空 = $HOME（人自己按回车做的选择，与 agent 静默回落不同）
-    const workDir = plan.workDir ?? (await rl.question(`\n${t.workDirLabel} ${c.dim(t.workDirHint)}: `)).trim();
-    writeSetupFile({ outPath, workDir, t });
+    // WORK_DIR：命令行已给就不问（给错了直接拒，交互里不替它「救」一个显式参数）。
+    // 自己键入的则问到对为止——空回车 / 家目录一律拒绝，与非交互同一条硬规则。
+    const workDirNorm = plan.workDir
+      ? normalizeSetupWorkDir(plan.workDir)
+      : await promptWorkDir(
+        async () => (await rl.question(`\n${t.workDirLabel} ${c.dim(t.workDirHint)}: `)).trim(),
+        { onInvalid: ({ code }) => console.error(`✗ ${t.refuse[code]()}`) },
+      );
+    if (!workDirNorm.ok) {
+      console.error(`✗ ${t.refuse[workDirNorm.code]()}`);
+      return;
+    }
+    writeSetupFile({ outPath, workDir: workDirNorm.workDir, t });
 
     // CLI hooks 桥：默认装（终端直跑的会话唯有装了它才能推到手机——轮询只能在你已经打开
     // app 时追平镜像，永远不会主动叫你）。默认 Y 但必须问：它写的是用户全局 ~/.claude/settings.json。
@@ -284,12 +340,18 @@ async function main() {
 
   console.log(c.bold(`\n${t.title}\n`));
 
-  // ★ 「已经配置过没有」必须同时看两份。默认目标是 ccm.config.json，而既有部署的配置在 .env 里——
-  // 只 stat 新路径的话，setup 会在一台正在跑的实例旁边生成一份带**全新 AUTH_TOKEN** 的配置，
-  // 且它优先级更高：所有已授权设备（含正在操作的那台手机）当场失效，PORT/CCM_DATA_DIR/CF_ACCESS_* 一并被遮蔽。
-  // desktop/CCMCore.swift 的 setupCommand 拼的就是这条命令，菜单栏点一次「安装向导」就会中。
-  const existingConfig = [outPath, join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].find(existsSync);
-  const plan = resolveSetupPlan({ args, envExists: !!existingConfig });
+  // ★ 默认目标必须同时看 ccm.config.json 与 .env：只 stat 新路径的话，setup 会在一台
+  // 正在跑的实例旁边生成一份带**全新 AUTH_TOKEN** 的配置，且它优先级更高。
+  // `--config <path>` 是显式另写一份，只看那个路径——否则仓库里已有配置时，文档写的
+  // 隔离装机永远被拒。
+  const existingConfig = args.configPath
+    ? (existsSync(outPath) ? outPath : undefined)
+    : [outPath, join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].find(existsSync);
+  const plan = resolveSetupPlan({ args, envExists: !!existingConfig, isTty: !!stdin.isTTY });
+  if (plan.mode === 'help') {
+    console.log(t.usage);
+    process.exit(0);
+  }
   if (plan.refuse) {
     console.error(`✗ ${t.refuse[plan.refuse.code](plan.refuse.detail ?? existingConfig ?? outPath)}\n`);
     console.error(t.usage);
