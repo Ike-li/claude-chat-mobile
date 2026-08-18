@@ -1,7 +1,7 @@
 // tests/unit/notifications.test.mjs —— notificationForEvent 纯映射单测（零副作用，不碰 web-push 传输）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notificationForDeviceRequest } from '../../src/ops/notifications.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notificationForDeviceRequest } from '../../src/ops/notifications.js';
 
 // ── BE-014：push 订阅结构校验（落盘前拦畸形，防 .slice() 抛 500 + 污染后续推送）──────────────
 test.describe('isValidPushSubscription', () => {
@@ -508,4 +508,60 @@ test('ntfyMetaFor: CLI Stop hook → priority 3 + checkmark', () => {
   const m = ntfyMetaFor('cli_hook_stop', {});
   assert.equal(m.priority, 3);
   assert.ok(m.tags.includes('white_check_mark'));
+});
+
+// ── 网关静默告警（system + kind:'notice' + notice:'gateway_stall'）→ 锁屏可见 ──────────────
+// 背景（2026-08-18 排查）：「模型已 N 秒无响应」此前只落消息流，锁屏/离开时全程不可见，用户只见
+// spinner 干转不知何故。识别锚是结构化 notice 字段而非文案（文案会随措辞/i18n 变，同 D1 教训）。
+// 它不走 error 信封：前端 error(p) 会 finalizeStreams + failPendingToolCards + setBusy(false)
+// 把在途轮当终点误杀（agent.js emitNotice 注释明文禁忌）——emit 形态由 agent-lifecycle R2c 锁住。
+test.describe('gateway_stall 静默告警推送', () => {
+  const stallPayload = {
+    message: '模型已 116 秒无响应（本轮已进行 206 秒，继续等待；10 分钟仍零消息将自动中断）——可点「停止」后重发，或换模型再试',
+    kind: 'notice', level: 'warning', notice: 'gateway_stall', seconds: 116, turnSeconds: 206,
+  };
+
+  test('无前台可见客户端 → 推送：title 带 cwd 尾段，body 含静默秒数与自动中断预告，不给 previewBody', () => {
+    const n = notificationForEvent('system', stallPayload, { hasClients: false, instanceId: 'i1', sessionId: 's1', cwd: '/Users/you/proj' });
+    assert.equal(n.title, '⏳ 模型长时间无响应 · proj');
+    assert.match(n.body, /116 秒/);
+    assert.match(n.body, /自动中断/);
+    assert.deepEqual(n.data, { instanceId: 'i1', sessionId: 's1', cwd: '/Users/you/proj' });
+    assert.equal('previewBody' in n, false, '告警无会话正文可预览，预览开关不该有旁路');
+  });
+
+  test('前台正看着本会话 → 不推（消息流里的告警条已可见）', () => {
+    assert.equal(notificationForEvent('system', stallPayload, { hasClients: true }), null);
+  });
+
+  test('seconds 缺失/畸形 → body 退化为通用文案，不显 NaN/undefined', () => {
+    const n = notificationForEvent('system', { ...stallPayload, seconds: undefined }, { hasClients: false });
+    assert.ok(n, '秒数缺失不该整条不推');
+    assert.doesNotMatch(n.body, /NaN|undefined/);
+    assert.match(n.body, /自动中断/);
+  });
+
+  test('其余 system 事件（普通 notice / 已中断回执）→ 不推', () => {
+    assert.equal(notificationForEvent('system', { message: 'x', kind: 'notice', level: 'info' }, { hasClients: false }), null);
+    assert.equal(notificationForEvent('system', { message: '已中断', kind: 'interrupted' }, { hasClients: false }), null);
+  });
+
+  test('stall 类别：interval-only 节流（不置 pending），窗口远宽于告警源的 90–120s 节拍', () => {
+    assert.equal(NOTIFY_CATEGORY.system, 'stall');
+    assert.ok(STALL_NOTIFY_INTERVAL_MS >= 300_000, '2026-08-17 实测坏天气下告警每 90–120s 一条，套 60s 通用窗≈每条都推');
+    const t0 = 1_000_000;
+    const r1 = throttleNotify('sid', 'stall', t0, new Map(), STALL_NOTIFY_INTERVAL_MS);
+    assert.equal(r1.throttled, false);
+    assert.equal(r1.next.get('sid').stall.pending, false, 'stall 无「被处理」动作，走未决语义会永远解不开（同 DEVICE 教训）');
+    const r2 = throttleNotify('sid', 'stall', t0 + STALL_NOTIFY_INTERVAL_MS - 1, r1.next, STALL_NOTIFY_INTERVAL_MS);
+    assert.equal(r2.throttled, true, '窗口内重复告警不再推');
+    const r3 = throttleNotify('sid', 'stall', t0 + STALL_NOTIFY_INTERVAL_MS + 1, r1.next, STALL_NOTIFY_INTERVAL_MS);
+    assert.equal(r3.throttled, false, '跨窗口再提醒一次是好事——还卡着这个事实本身有信息量');
+  });
+
+  test('ntfy 元数据：非紧急（priority 3）+ hourglass 标签', () => {
+    const meta = ntfyMetaFor('system', {}, '');
+    assert.equal(meta.priority, 3, '告警无需即时响应（10 分钟自动中断兜底在），不得抬 urgent');
+    assert.deepEqual(meta.tags, ['hourglass_flowing_sand']);
+  });
 });

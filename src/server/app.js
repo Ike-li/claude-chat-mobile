@@ -25,7 +25,7 @@ import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, 
 import * as sessions from '../sessions/sessions.js';
 import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
-import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
+import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
 import { startLogTerminal, stopLogTerminalSync } from '../ops/log-terminal.js';
 import { createHooksInbox } from './hooks-inbox.js';
@@ -1638,6 +1638,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         // result 仅无客户端连时推（连着的自己看得到）；permission/question/task_notification 无条件推
         // （用户可能锁屏/在别的 app）。task_notification=后台任务（Workflow/后台 Agent/Bash）完成——
         // 此前落到这里两分支都不命中、从不推，手机锁屏收不到完成通知，本次补齐。
+        // system/gateway_stall（模型静默告警）同 result 口径：前台看着不推、离开才推（10min 专用窗见下）。
         // 先判断"若不考虑节流，本该不该推"（result 仅无客户端连时推等既有规则），
         // 只有确实要推送时才消费节流配额——避免"注定不推"的事件（如有客户端连的 result）白白占用节流窗口，
         // 致真正需要推送时被误判为"最近推过"。
@@ -1665,7 +1666,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         if (pn) {
           const notifyCategory = NOTIFY_CATEGORY[envelope.type];
           if (notifyCategory) {
-            const r = throttleNotify(envelope.sessionId, notifyCategory, Date.now(), notifyThrottleState, notifyThrottleMs);
+            // stall（网关静默告警）两处特判：① 专用 10min 窗——告警源坏天气下每 90–120s 一条，
+            // 套 60s 通用窗≈每条都推；② sessionId 可能未落定（首轮请求就静默、init 未达），
+            // 退用 instanceId 作节流键——throttleNotify 缺 key 是「保守放行」，告警多密推送就多密。
+            const throttleKey = notifyCategory === 'stall' ? (envelope.sessionId || envelope.instanceId) : envelope.sessionId;
+            const intervalMs = notifyCategory === 'stall' ? STALL_NOTIFY_INTERVAL_MS : notifyThrottleMs;
+            const r = throttleNotify(throttleKey, notifyCategory, Date.now(), notifyThrottleState, intervalMs);
             if (r.throttled) pn = null;
             notifyThrottleState = r.next; // 无论放行与否都写回：next 在放行时含新记录，节流时等于原状态（幂等安全）
           }

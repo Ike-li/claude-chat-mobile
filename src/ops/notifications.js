@@ -79,6 +79,22 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
         previewBody: truncatePreview(p.summary)
       });
     }
+    case 'system': {
+      // 仅网关静默告警推送（agent.js checkIdle 的 gateway_stall notice，结构化字段识别、不匹配文案）；
+      // 其余 system（普通 notice / 已中断回执等）是纯流内提示，从不出推送。2026-08-18 排查背景：
+      // 「模型已 N 秒无响应」此前只落消息流，锁屏/离开时全程不可见，用户只见 spinner 干转不知何故。
+      // 抑制口径同 result：前台正看着本会话时流内告警条已可见，推送只服务锁屏/离开场景。
+      if (p.kind !== 'notice' || p.notice !== 'gateway_stall') return null;
+      if (hasClients) return null;
+      // body 无会话正文（SEC-04 天然满足），也不给 previewBody——预览开关是为会话正文设的旁路，
+      // 这里没有可预览物。秒数畸形/缺失时退化为通用文案，绝不渲染 NaN。
+      const secs = Number(p.seconds);
+      const head = Number.isFinite(secs) && secs > 0 ? `已 ${Math.round(secs)} 秒无响应，` : '';
+      return withData({
+        title: titleWithCwd('⏳ 模型长时间无响应'),
+        body: `${head}仍在等待；持续无消息将自动中断`,
+      });
+    }
     default:
       return null;
   }
@@ -147,6 +163,9 @@ export const NOTIFY_CATEGORY = Object.freeze({
   question: 'input',
   result: 'finished',
   task_notification: 'finished',
+  // system 型信封只有 gateway_stall notice 会产出通知（见 notificationForEvent），故此映射只被静默
+  // 告警消费。stall 无「被处理」动作 → throttleNotify 里归入 pending:false 一侧，只受最小间隔约束。
+  system: 'stall',
 });
 
 // 设备审批推送的节流键与窗口。key 借用 throttleNotify 的 per-会话状态机，但它并不是会话——
@@ -158,6 +177,11 @@ export const NOTIFY_CATEGORY = Object.freeze({
 // 每分钟提醒一次纯属打扰；反过来跨窗口再提醒一次是好事，机主可能错过了第一条。
 export const DEVICE_NOTIFY_KEY = '__devices__';
 export const DEVICE_NOTIFY_INTERVAL_MS = 300000;
+
+// 静默告警（stall 类别）的专用节流窗。告警源在坏天气下每 90–120s 一条（2026-08-17 真机 4d4443ce
+// 一轮 24 连发），套 60s 通用窗≈每条都推；10min 窗把最坏情况压到每轮个位数，同时保留「还卡着」
+// 这个事实的跨窗口再提醒（同 DEVICE 的取舍：跨窗口重提是好事，机主可能错过了第一条）。
+export const STALL_NOTIFY_INTERVAL_MS = 600000;
 
 // 有界窗口（同 message-dedup DEDUP_CAP / interaction-log MAX_SESSIONS 的 always-on 有界纪律）：
 // per-会话节流态在常驻进程里长跑不应无限增长；超上限按插入序丢最旧会话（正常单用户远不及此，
@@ -202,6 +226,9 @@ const NTFY_TAGS = {
   cli_hook_stop: ['white_check_mark'],
   cli_hook_notification: ['warning', 'bell'],
   device_request: ['closed_lock_with_key'],
+  // system 型只有 gateway_stall 告警会走到推送（见 notificationForEvent）：等待语义，非紧急
+  // （10 分钟自动中断兜底在，无需用户即时响应，priority 保持默认 3）。
+  system: ['hourglass_flowing_sand'],
 };
 export function ntfyMetaFor(type, data = {}, publicUrl = '') {
   const priority = (

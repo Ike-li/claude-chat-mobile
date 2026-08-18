@@ -1537,14 +1537,19 @@ export class AgentSession {
       this.stallWarnedForActivity = this.lastActivity;
       // 本轮真实时长一并报出：静默锚被豁免分支刷新过时，单报 idleFor 会让用户以为「才等了 90 秒」。
       const turnFor = this.turnStartedAt ? Math.round((nowMs - this.turnStartedAt) / 1000) : 0;
-      const stallMsg = formatLifecycleGatewayStall(
-        Math.round(idleFor / 1000), Math.round(this.idleTimeoutMs / 60000), turnFor);
+      const stallSec = Math.round(idleFor / 1000);
+      const stallMsg = formatLifecycleGatewayStall(stallSec, Math.round(this.idleTimeoutMs / 60000), turnFor);
       // 落盘：2026-08-10 真机 a90814ca 屏幕上两条告警，服务端日志 `grep 秒无响应` 零命中——
-      // lifecycle error 这一路此前只走 emit。排障拿不到发生时刻，只能靠 tick 相位反推。
+      // lifecycle 这一路此前只走 emit。排障拿不到发生时刻，只能靠 tick 相位反推。
       interactionLog.addSessionLog(this.logKey(), 'sys_info', `[SYS] ${stallMsg}`);
-      this.emit('error', {
-        message: stallMsg,
-        recoverable: true
+      // 走 system/notice 而非 error（2026-08-18）：前端 error(p) 会 finalizeStreams +
+      // failPendingToolCards + setBusy(false) 把在途轮当终点（emitNotice 注释明文写着这条禁忌），
+      // 而本告警恰恰只在轮次还在跑时发出——此前每告一次就杀一次 spinner、把在途工具卡标成失败。
+      // notice:'gateway_stall' + seconds/turnSeconds 是通知层的识别锚与推送正文数据源
+      // （notifications.js 的 system 分支按结构化字段判定，不做文案匹配）。
+      this.emit('system', {
+        message: stallMsg, kind: 'notice', level: 'warning',
+        notice: 'gateway_stall', seconds: stallSec, turnSeconds: turnFor,
       });
     }
   }

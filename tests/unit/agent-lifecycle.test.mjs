@@ -200,8 +200,15 @@ test.describe('checkIdle()', () => {
     s.dispose();
   });
 
+  // 网关静默告警的出向形态过滤器（2026-08-18 重分类为 system/notice 后，各用例共用这一个判据）。
+  const stallWarns = (events) => events.filter(e => e.type === 'system' && e.payload?.notice === 'gateway_stall');
+
   // R2c：告警分支的接线（此前只有纯函数用例，emit 那一路没人守）。
-  test('R2c：网关静默告警把本轮真实时长一并报出', () => {
+  // 2026-08-18 重分类：告警从 error 改走 system/notice——前端 error(p) 会 finalizeStreams +
+  // failPendingToolCards + setBusy(false) 把在途轮当终点误杀（agent.js emitNotice 注释明文写着这条
+  // 禁忌，这条告警恰是漏网者：每次告警 spinner 消失、在途工具卡被标失败、busy 闪断后靠 instances
+  // 广播才拉回来）。结构化字段供通知层识别推送（tests/unit/notifications gateway_stall 组）。
+  test('R2c：网关静默告警走 system/notice（不得再发 error 误杀在途轮），带结构化字段', () => {
     const { s, events } = makeSession({ idleTimeoutMs: 600_000 });
     s.pendingTurns = 1;
     s.turnStartedAt = Date.now() - 285_000; // 本轮已进行 285 秒
@@ -209,11 +216,15 @@ test.describe('checkIdle()', () => {
 
     s.checkIdle();
 
-    const err = events.find(e => e.type === 'error');
-    assert.ok(err, '越过 90 秒告警线应发一条 recoverable error');
-    assert.match(err.payload.message, /模型已 9[0-9] 秒无响应/);
-    assert.match(err.payload.message, /本轮已进行 28[45] 秒/, '本轮真实时长必须出现在文案里');
-    assert.equal(err.payload.recoverable, true);
+    assert.equal(events.find(e => e.type === 'error'), undefined, '告警不得走 error——前端会把在途轮当终点');
+    const [warn] = stallWarns(events);
+    assert.ok(warn, '越过 90 秒告警线应发 system/notice 告警');
+    assert.equal(warn.payload.kind, 'notice');
+    assert.equal(warn.payload.level, 'warning');
+    assert.match(warn.payload.message, /模型已 9[0-9] 秒无响应/);
+    assert.match(warn.payload.message, /本轮已进行 28[45] 秒/, '本轮真实时长必须出现在文案里');
+    assert.ok(warn.payload.seconds >= 90 && warn.payload.seconds <= 99, '静默秒数须以结构化字段透出（供推送 body）');
+    assert.ok(warn.payload.turnSeconds >= 284 && warn.payload.turnSeconds <= 286, '本轮时长同为结构化字段');
     s.dispose();
   });
 
@@ -307,11 +318,11 @@ test.describe('checkIdle()', () => {
 
     s.checkIdle();
     s.checkIdle();
-    assert.equal(events.filter(e => e.type === 'error').length, 1, '同段静默重复 tick 不得刷屏');
+    assert.equal(stallWarns(events).length, 1, '同段静默重复 tick 不得刷屏');
 
     s.lastActivity = Date.now() - 95_000; // 锚前移 = 新静默段
     s.checkIdle();
-    assert.equal(events.filter(e => e.type === 'error').length, 2, '新静默段应能再告一次');
+    assert.equal(stallWarns(events).length, 2, '新静默段应能再告一次');
     s.dispose();
   });
 
@@ -355,6 +366,7 @@ test.describe('checkIdle()', () => {
 
     assert.equal(interrupted, false, '本地命令在途不得被静默看门狗掐掉');
     assert.equal(events.find(e => e.type === 'error'), undefined);
+    assert.equal(stallWarns(events).length, 0, '豁免期也不得发静默告警');
     s.dispose();
   });
 
@@ -627,9 +639,9 @@ test.describe('checkIdle()', () => {
     s.lastActivity = Date.now() - 100_000; // 100s 静默：过告警线、远未到 10 分钟
     s.checkIdle();
     assert.equal(s.terminating, false, '只告警不中断');
-    const warns = () => events.filter(e => e.type === 'error' && /无响应/.test(e.payload.message));
+    const warns = () => stallWarns(events);
     assert.equal(warns().length, 1);
-    assert.equal(warns()[0].payload.recoverable, true);
+    assert.equal(warns()[0].payload.level, 'warning');
     s.checkIdle(); // 同段静默再 tick → 不刷屏
     assert.equal(warns().length, 1, '同段静默只告一次');
     s.lastActivity = Date.now() - 95_000; // 有过新消息后再次挂起 → 新静默段
@@ -642,7 +654,7 @@ test.describe('checkIdle()', () => {
     fresh.s.pendingTurns = 1;
     fresh.s.lastActivity = Date.now() - 30_000;
     fresh.s.checkIdle();
-    assert.equal(fresh.events.filter(e => e.type === 'error').length, 0, '30s 静默不告警');
+    assert.equal(stallWarns(fresh.events).length, 0, '30s 静默不告警');
     fresh.s.dispose();
     const tight = makeSession({ idleTimeoutMs: 1 }); // 中断阈值 < 告警线
     tight.s.pendingTurns = 1;
@@ -650,8 +662,9 @@ test.describe('checkIdle()', () => {
     tight.s.abort = { abort() {} };
     tight.s.checkIdle();
     const errs = tight.events.filter(e => e.type === 'error');
-    assert.equal(errs.length, 1, '只有中断文案，无叠加告警');
+    assert.equal(errs.length, 1, '只有中断文案');
     assert.match(errs[0].payload.message, /未收到 Claude 的任何消息/);
+    assert.equal(stallWarns(tight.events).length, 0, '无叠加告警');
     tight.s.dispose();
   });
 
@@ -669,6 +682,7 @@ test.describe('checkIdle()', () => {
     assert.equal(aborted, false);
     assert.ok(s.lastActivity > 0, '应刷新 lastActivity，等同「仍有活动」');
     assert.equal(events.find(e => e.type === 'error'), undefined);
+    assert.equal(stallWarns(events).length, 0, '豁免期也不得发静默告警');
     s.bgTasks.clear();
     s.dispose();
   });
@@ -722,7 +736,8 @@ test.describe('checkIdle()', () => {
     assert.equal(s.terminating, false, '前台工具在跑不得中断');
     assert.equal(aborted, false);
     assert.ok(s.lastActivity > Date.now() - 1000, '应刷新 lastActivity，等同「仍有活动」');
-    assert.equal(events.find(e => e.type === 'error'), undefined, '不得发网关无响应告警');
+    assert.equal(events.find(e => e.type === 'error'), undefined);
+    assert.equal(stallWarns(events).length, 0, '不得发网关无响应告警');
     s.dispose();
   });
 
@@ -734,8 +749,7 @@ test.describe('checkIdle()', () => {
     assert.equal(s.hasRunningForegroundTool(), false, 'tool_result 到达应销账');
     s.lastActivity = Date.now() - 100_000;
     s.checkIdle();
-    const warns = events.filter(e => e.type === 'error' && /无响应/.test(e.payload.message));
-    assert.equal(warns.length, 1, '工具已回、真在等模型 → 该告警');
+    assert.equal(stallWarns(events).length, 1, '工具已回、真在等模型 → 该告警');
     s.dispose();
   });
 
@@ -747,8 +761,7 @@ test.describe('checkIdle()', () => {
     assert.equal(s.hasRunningForegroundTool(), false, '超上限的在途工具不再算「在干活」');
     s.lastActivity = Date.now() - 100_000;
     s.checkIdle();
-    const warns = events.filter(e => e.type === 'error' && /无响应/.test(e.payload.message));
-    assert.equal(warns.length, 1, '超上限后恢复告警');
+    assert.equal(stallWarns(events).length, 1, '超上限后恢复告警');
     s.dispose();
   });
 
