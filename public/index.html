@@ -58,7 +58,7 @@
         class="w-full bg-sunk border border-line rounded-lg px-3 py-2.5 text-sm text-ink placeholder-ink-faint focus:outline-none focus:ring-1 focus:ring-accent mb-2">
       <div id="authError" class="hidden text-xs text-danger mb-2"></div>
       <button id="authSubmit" class="w-full py-2.5 rounded-lg bg-cta text-white active:brightness-95 font-medium">进入</button>
-      <div class="text-xs text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">.env</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 或启动日志里。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
+      <div class="text-xs text-ink-faint mt-4 leading-relaxed">令牌仅存于本机浏览器（localStorage），不上传。也可用 <code class="bg-sunk px-1 rounded">#token=值</code> 直接进入。令牌在服务器 <code class="bg-sunk px-1 rounded">ccm.config.json</code> 的 <code class="bg-sunk px-1 rounded">AUTH_TOKEN</code> 或启动日志里。<button id="authHelpLink" type="button" class="text-accent underline">不知道令牌？查看帮助</button></div>
     </div>
   </div>
 
@@ -604,7 +604,7 @@
         </div>
         <div>
           <div class="font-semibold text-ink mb-1">🔑 访问令牌在哪</div>
-          <div class="text-ink-soft">在服务器 <code class="bg-sunk px-1 rounded text-xs">.env</code> 的 <code class="bg-sunk px-1 rounded text-xs">AUTH_TOKEN</code>，或服务启动日志里的入口 URL。<strong class="text-ink">清除浏览器数据会一并清掉它</strong>，届时重输一次即可。</div>
+          <div class="text-ink-soft">在服务器 <code class="bg-sunk px-1 rounded text-xs">ccm.config.json</code> 的 <code class="bg-sunk px-1 rounded text-xs">AUTH_TOKEN</code>，或服务启动日志里的入口 URL。<strong class="text-ink">清除浏览器数据会一并清掉它</strong>，届时重输一次即可。</div>
         </div>
         <div>
           <div class="font-semibold text-ink mb-1">🆕 新设备怎么获批</div>
@@ -795,7 +795,7 @@
         </div>
       </div>
 
-      <!-- ═══ 🖥 这台电脑 ═══ 落在主机上（~/.claude/settings.json、常驻 server），跨设备共享 -->
+      <!-- ═══ 🖥 这台电脑 ═══ 落在主机上（~/.claude/settings.json、在跑的 server），跨设备共享 -->
       <div id="generalSectionHost" class="text-xs font-bold text-ink flex items-center gap-1.5 pt-1 scroll-mt-8">🖥 <span>这台电脑</span></div>
       <div data-scope-note="host" class="text-[10px] text-ink-faint leading-snug px-0.5 -mt-2">
         影响整机所有会话（含终端 claude），换手机看也是同一份。
@@ -820,10 +820,10 @@
         </div>
       </details>
 
-      <!-- 开发者模式：一键重启常驻 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
+      <!-- 开发者模式：一键重启 server（仅 DEV_MODE=1 时显示，由 setInstances 控制）-->
       <div id="devModeGroup" class="hidden">
         <div class="text-xs font-semibold text-ink-soft mb-2">🛠 开发者</div>
-        <button id="btnRestartServer" type="button" class="w-full text-left p-2.5 rounded-xl border border-warning/40 bg-warning/5 active:bg-warning/10 text-xs text-warning">⟳ 重启服务（改代码/.env 后生效）</button>
+        <button id="btnRestartServer" type="button" class="w-full text-left p-2.5 rounded-xl border border-warning/40 bg-warning/5 active:bg-warning/10 text-xs text-warning">⟳ 重启服务（改代码/配置后生效）</button>
       </div>
 
       <!-- ═══ 🔑 访问与帮助 ═══ -->

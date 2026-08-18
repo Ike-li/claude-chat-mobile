@@ -17,8 +17,9 @@ const CHANGED_MARK = 'data-ccm-dirty';
 
 export function createEnvConfigPanel({
   $, socket, openSheet, closeSheet, appConfirm, pickText, onSaved,
-  // 「本进程停了有没有人拉起来」——由服务端经 instances 广播下发（DEV_MODE 或被 launchd/systemd
-  // 托管）。false 时不显示重启入口：停掉一个没人会拉起的进程等于让用户自断退路。
+  // 「本进程停了有没有人拉起来」——由服务端经 instances 广播下发（DEV_MODE 或有进程管理器
+  // 托管）。false 时不显示重启入口：停掉一个没人会拉起的进程等于让用户自断退路，
+  // 而 headless 的 npm start 正是这种形态。
   canRestart = () => false,
   // 打开前的钩子：收掉可能还开着的通用设置 sheet，否则两层 sheet 叠着、上层拦掉下层的点击
   // （E2E 实测：generalSheet 的 label 会 intercept pointer events）。

@@ -1,8 +1,13 @@
-# 部署与运维：常驻服务 + 固定公网入口
+# 部署与运维：公网入口 + 两条启动路径
 
-> 本文给出一套常驻部署参考：macOS LaunchAgent 常驻 + Cloudflare Tunnel 固定域名 + Cloudflare Access 双因素。
+> 启动只有两条入口，互不相关：
 >
-> 下文用占位符 `<your-domain>`、`<your-team>`、`<UUID>` 等，替换为你自己的值。Linux/systemd 用户把 LaunchAgent 部分换成 systemd unit，思路一致。
+> 1. **headless**：终端里 `npm start`（全平台基线）。进程怎么保活（tmux / 自己的 systemd / docker）自己定，本仓库不提供官方 unit。
+> 2. **macOS desktop**：`CCM.app`。常驻、崩溃拉起、看日志、改配置、重启都在菜单里。
+>
+> 下文的 Tunnel / Access 是公网怎么进来，不是第三条启动方式。
+>
+> 占位符 `<your-domain>`、`<your-team>`、`<UUID>` 换成你自己的值。
 
 首次本地安装先看[首次使用指南](getting-started.md)；Web/CLI 双通道与单驾驶员边界见[架构说明](architecture.md)。
 
@@ -13,7 +18,7 @@
 ```
 
 - **公网入口**：固定域名，Cloudflare Access 把守（Email OTP 或 Google/Microsoft 2FA），公网**不带 `#token=`**。
-- **两个常驻进程**（随登录自启、崩溃自重启、关终端不掉）：
+- **两个要一直跑着的进程**（桌面端会帮你拉；headless 自己保持）：
   - server：`node server.js`，**经登录 shell（`zsh -lc` / `bash -lc`）启动**，保证 claude 的 PATH / 登录态与你终端一致。
   - tunnel：`cloudflared` 命名隧道，把 `:3000` 投到公网域名。
 - **鉴权分层**：公网走 Access JWT（服务端 `src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
@@ -21,16 +26,11 @@
 
 ## ⚠️ 最容易忘的一点
 
-生产实例由常驻服务占着 3000 端口，**不要再手动 `npm start`**（会撞端口）。改了配置或拉了新代码后，**重启 server 进程**才生效：
+桌面端一旦把 server 拉起来，3000 就被占着，**不要再手动 `npm start`**。改了配置或拉了新代码后，从菜单点「重启服务」。
 
-```bash
-# macOS LaunchAgent
-launchctl kickstart -k gui/$(id -u)/<your-server-label>
-# systemd
-systemctl --user restart <your-server-service>
-```
+headless 没有桌面端：在跑 `npm start` 的那个终端里停掉再起。
 
-💡 若已设 `DEV_MODE`（配置项说明见 `node scripts/config.js schema`），web 端齿轮面板会出现「重启服务」按钮，可免上电脑一键 kickstart（优雅退出后由 LaunchAgent/systemd 的 KeepAlive 自动拉起）——生产对外部署建议留空该变量，避免误触重启对外服务。
+💡 若已设 `DEV_MODE`（配置项说明见 `node scripts/config.js schema`），web 端齿轮面板会出现「重启服务」按钮，可免上电脑一键重启——只适合本机调试，生产对外部署建议留空，避免误触。
 
 ## 从零搭建
 
@@ -102,24 +102,35 @@ Zero Trust → Access → Applications → Add → Self-hosted，Domain 填 `<yo
 
 改完必须**删掉主屏图标重新安装**——Chrome 缓存了失败结果，不会自己重试。
 
-### 3. 常驻（macOS LaunchAgent）
+### 3. 让 server 一直跑着
 
-四个 unit 都能一条命令装好，**不用碰 plist**：
+**macOS 走桌面端。** `npm run app:install` 把 `CCM.app` 装进 `/Applications`，用菜单安装并启动 server，需要的话再勾「开机自启（菜单栏）」。不要把下面的 `service:install` 当成第三条入口——那是桌面端背后的同一条 CLI。
+
+**headless**（Linux，或 Mac 上不用 GUI）：终端里 `npm start`，窗口别关。要关终端也能活，用你自己的保活方式。
+
+桌面端和 `npm start` 都要用户登录后的会话。开机未登录就跑，不在这两条入口里。
+
+<details>
+<summary>桌面端背后的 CLI（一般不用手敲）</summary>
+
+菜单里的安装 / 启停调的就是这些命令。SSH 上机器、人不在 GUI 前时才直接跑。
 
 ```bash
 npm run service:install -- server      # node server.js，RunAtLoad + KeepAlive
 npm run service:install -- tunnel      # cloudflared tunnel run（读 §1 的 config.yml）
 npm run service:install -- logrotate   # 每天 03:47 轮转日志
-npm run service:install -- menubar     # 桌面控制台随登录自启（可选）
-npm run service:status                 # 装了哪些、在不在跑、有没有漂移
+npm run service:install -- menubar     # 桌面控制台随登录自启
+npm run service:status
 ```
 
-macOS 桌面控制台里勾「开机自启（菜单栏）」走的是同一条路径。装出来的 label 固定是 `com.ccm.<unit>`。
+装出来的 label 固定是 `com.ccm.<unit>`。
+
+</details>
 
 <details>
 <summary>手工渲染 plist（想自己掌控内容时）</summary>
 
-仓库 `desktop/launchd/` 下有四份**占位符 plist 模板**（macOS 专属入口的东西都归 `desktop/`）——它们同时是上面 `service:install` 的数据源（`scripts/service.js:71` 直接读它们渲染），不是可以删掉的文档附件。
+仓库 `desktop/launchd/` 下有四份占位符模板，是桌面端 / `service.js` 的数据源（`scripts/service.js` 直接读它们渲染），不是可以删掉的附件。
 
 - [`desktop/launchd/server.plist.template`](../desktop/launchd/server.plist.template) —— `node server.js`，经 `zsh -lc 'cd <repo> && exec <node> server.js'` 登录 shell 启动（保 PATH/登录态与终端一致），`RunAtLoad`+`KeepAlive`，stdout/stderr 合并到 `~/Library/Logs/`。
 - [`desktop/launchd/tunnel.plist.template`](../desktop/launchd/tunnel.plist.template) —— `cloudflared tunnel run <tunnel-name>`（读 §1 写好的 `~/.cloudflared/config.yml`）。
@@ -140,11 +151,9 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.ccm.tunnel.plist
 
 </details>
 
-> LaunchAgent 在**登录后**启动。若要"开机未登录也跑"（headless），需要改成 root LaunchDaemon。
-
 #### 控制面数据放在仓库外
 
-`CCM_DATA_DIR` 是受支持的状态根目录；不设置时仍兼容 `./data`。常驻部署建议把它设为绝对路径，避免切分支、清理仓库或测试脚本碰到生产状态：
+`CCM_DATA_DIR` 是受支持的状态根目录；不设置时仍兼容 `./data`。长期跑着的实例建议把它设为绝对路径，避免切分支、清理仓库或测试脚本碰到生产状态：
 
 ```bash
 mkdir -p "$HOME/Library/Application Support/claude-chat-mobile/data"
@@ -155,7 +164,7 @@ chmod 700 "$HOME/Library/Application Support/claude-chat-mobile" \
 # ccm.config.json: { "CCM_DATA_DIR": "/Users/you/Library/Application Support/claude-chat-mobile/data" }
 ```
 
-目录保存 CCM 的会话指针/偏好、设备信任、审批、审计、推送和缓存，文件应保持 `0600`。Claude 原始 transcript 仍在 `~/.claude/projects/`，不会迁入这里；上传附件仍在各工作目录的 `.ccm-uploads/`。迁移前停止常驻服务并备份，迁移后运行 `node scripts/doctor.js` 再重启。`scripts/device.js`、server 与 doctor 都读取同一 `CCM_DATA_DIR`。
+目录保存 CCM 的会话指针/偏好、设备信任、审批、审计、推送和缓存，文件应保持 `0600`。Claude 原始 transcript 仍在 `~/.claude/projects/`，不会迁入这里；上传附件仍在各工作目录的 `.ccm-uploads/`。迁移前先停掉 server（桌面端菜单或 headless 那个终端）并备份，迁完跑 `node scripts/doctor.js` 再按原入口拉起。`scripts/device.js`、server 与 doctor 都读取同一 `CCM_DATA_DIR`。
 
 ### 4. 通知（可选：ntfy + 深链）
 
@@ -170,26 +179,37 @@ PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退
 
 - 不配 ntfy 则优雅缺席、仍走 Web Push。
 - ⚠️ ntfy 的**正文恒最小化**（不含命令、参数、问题正文或 summary——`previewBody` 只发给 Web Push，见 `src/server/app.js` 的 notify 分发）；但**标题会带工作区目录名**（`basename(cwd)`），且明文经第三方。故仍务必**自托管 ntfy 或用私密 topic + `NTFY_TOKEN`**，勿用公共 `ntfy.sh` 的裸 topic。
-- 改这些 env 后须**重启常驻 server 进程**才生效（见下「运维速查」的 `kickstart`）。
+- 改这些 env 后须**重启 server** 才生效（见下「运维速查」）。
 
 ## 运维速查
 
+按你用的那条入口操作，不要手敲 `launchctl`。
+
 ```bash
-# 实时日志（轮转归档在同目录 <name>.0.gz…<name>.4.gz，最新的是 .0）
-tail -f ~/Library/Logs/<your-server-log>.log
+# headless：停掉当前 npm start，再起
+# 桌面端：菜单「重启服务」；日志用「查看日志」
 
-# 重启 / 停 / 起（macOS）
-launchctl kickstart -k gui/$(id -u)/<your-server-label>
-launchctl bootout    gui/$(id -u)/<your-server-label>
-launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/<your-server-label>.plist
-
-# 是否在跑（有 "PID" = 在跑）
-launchctl list <your-server-label> | grep -E '"PID"|LastExitStatus'
-
-# 临时本地调试：先让出 3000，调完再 bootstrap 回去
-launchctl bootout gui/$(id -u)/<your-server-label>
-npm start
+# 人在 SSH 里、服务却是桌面端装的（不是第三条入口）
+npm run service:status
+npm run service:restart -- server
+npm run service:logs -- server
+node scripts/service.js stop server
+node scripts/service.js start server
 ```
+
+<details>
+<summary>service.js 失灵时（直接问 launchd）</summary>
+
+工具自己坏了才走这里。label 必须是 `com.ccm.<unit>`，见上面手工装那节。
+
+```bash
+launchctl print gui/$(id -u)/com.ccm.server
+launchctl kickstart -k gui/$(id -u)/com.ccm.server
+launchctl bootout    gui/$(id -u)/com.ccm.server
+launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
+```
+
+</details>
 
 ## 排错速查
 
@@ -231,7 +251,7 @@ cloudflared tunnel --url http://localhost:3000
 
 ### `LOG_TERMINAL`：server 启动时自动开 Terminal 窗口
 
-常驻部署的日志写进文件（`~/Library/Logs/ccm-server.log`），要看得先自己 `tail -f`。在配置里设
+桌面端把日志写进文件（`~/Library/Logs/ccm-server.log`）；headless 默认打到终端。要文件尾跟随，在配置里设
 `LOG_TERMINAL` 后，server 每次启动会自动开一个 Terminal 窗口跟随该日志，停止/重启时自动关掉它：
 
 ```bash

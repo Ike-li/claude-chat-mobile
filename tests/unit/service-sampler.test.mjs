@@ -44,7 +44,7 @@ function world({ platform = 'darwin', units = {}, events = null, snapshot = null
 const setLive = (state, units) => { state.live = new Map(Object.entries(units)); };
 
 test.describe('createServiceSampler.sample —— 采样与落盘', () => {
-  test('非 darwin 一律不采样（Linux 用 systemd，见 docs/deployment.md）', () => {
+  test('非 darwin 一律不采样（没有 launchd 快照可比）', () => {
     const { sampler, state } = world({ platform: 'linux', units: { 'com.ccm.server': { pid: 1 } } });
     sampler.sample();
     assert.equal(state.writes.events, 0);
@@ -232,7 +232,7 @@ test.describe('createServiceSampler.summarize —— 面板要的摘要', () => 
 
 // ── P2：非 macOS 的自身启动记录 ──────────────────────────────────────────────
 //
-// sample() 第一行就是 `if (platform !== 'darwin') return`，所以 Linux / docker / systemd 用户
+// sample() 第一行就是 `if (platform !== 'darwin') return`，所以非 macOS（headless）用户
 // 的「重启记录」段**永远是空的** —— 面板上那一整块对他们不存在。
 //
 // 补法刻意按平台分工，而不是把 launchctl 那套换成通用实现：

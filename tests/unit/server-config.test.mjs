@@ -39,7 +39,7 @@ test('loadRuntimeEnvironment：shell 空串 AUTH_TOKEN/CCM_DATA_DIR 不挡 .env 
       'AUTH_TOKEN=from-dotenv-token',
       'CCM_DATA_DIR=/external/from-dotenv',
     ].join('\n'));
-    // 模拟 LaunchAgent/systemd export 了空串——dotenv 默认不覆盖已有 key
+    // 模拟外层 export 了空串——dotenv 默认不覆盖已有 key
     const env = { AUTH_TOKEN: '', CCM_DATA_DIR: '' };
 
     loadRuntimeEnvironment(env, { envFile, quiet: true });
@@ -154,7 +154,7 @@ test('loadRuntimeEnvironment：shell 空串 ANTHROPIC_* 不应被 .env 填入（
     writeFileSync(envFile, [
       'ANTHROPIC_API_KEY=sk-ant-should-NOT-leak-per-README-and-doctor-contract',
     ].join('\n'));
-    // 模拟 LaunchAgent/systemd export 了空串——ANTHROPIC_* 无论空串还是完全未设，都只认真实 shell 值。
+    // 模拟外层 export 了空串——ANTHROPIC_* 无论空串还是完全未设，都只认真实 shell 值。
     const env = { ANTHROPIC_API_KEY: '' };
 
     loadRuntimeEnvironment(env, { envFile, quiet: true });

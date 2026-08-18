@@ -164,7 +164,7 @@ export function renderRepositoryMap(files) {
     '',
     '## Runtime entrypoints',
     '',
-    '- `server.js` is the compatibility launcher used by `npm start`, LaunchAgent, systemd, and integration tests.',
+    '- `server.js` is the compatibility launcher used by `npm start`, the macOS desktop LaunchAgent, and integration tests.',
     '- `src/` contains server-side implementation grouped by domain.',
     '- `public/` is the native-ESM PWA served directly by Express.',
     '- `tests/` is the only automated-test root; real Claude turns happen in `tests/smoke/` (always, on demand) and in select `tests/integration/*` files gated by `RUN_CLAUDE_INTEGRATION=1` — neither runs by default.',

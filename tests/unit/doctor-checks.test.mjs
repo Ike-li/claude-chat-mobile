@@ -499,7 +499,21 @@ test.describe('serviceUnitsDiagnostic', () => {
   test('非 macOS → ok 并说明跳过原因（CI 与 Docker 都在 Linux 上，不能红）', () => {
     const r = serviceUnitsDiagnostic({ platform: 'linux', supported: false, units: [] });
     assert.equal(r.status, 'ok');
-    assert.match(r.detail, /macOS|systemd/);
+    assert.match(r.detail, /macOS/);
+  });
+
+  // 启动收敛成两条入口（headless npm start / macOS desktop）后，deployment.md 明说
+  // 【本仓库不提供官方 systemd unit】。这句跳过说明此前写「Linux 请用 systemd，见
+  // docs/deployment.md」，把用户支去找一份不存在的指南。同源的还有 scripts/service.js
+  // 的降级警告——两处要一起对，只改一处就是留一半假指路。
+  test('非 macOS 的跳过说明指向真实入口，中英两版都不指 systemd', () => {
+    const zh = serviceUnitsDiagnostic({ platform: 'linux', supported: false, units: [] });
+    const en = serviceUnitsDiagnostic({ platform: 'linux', supported: false, units: [], lang: 'en' });
+
+    assert.match(zh.detail, /npm start/, 'headless 是全平台基线，指路要落在它上面');
+    assert.doesNotMatch(zh.detail, /请用 systemd/);
+    assert.match(en.detail, /npm start/);
+    assert.doesNotMatch(en.detail, /use systemd/);
   });
 
   test('server 在跑且归属清晰 → ok', () => {
@@ -514,6 +528,16 @@ test.describe('serviceUnitsDiagnostic', () => {
     });
     assert.equal(r.status, 'warn');
     assert.match(r.detail, /service:install|未安装/);
+  });
+
+  // 「未安装」对 headless 用户不是缺陷——终端里 npm start 本来就不装 LaunchAgent。
+  // 原文案只说「关掉终端 server 就停了、开机也不会自启」，读起来像少装了必需件。
+  test('未安装的提示要说清 headless 用不着它，别把正当入口说成缺件', () => {
+    const r = serviceUnitsDiagnostic({
+      platform: 'darwin', supported: true,
+      units: [server({ state: 'not-installed', ownership: 'adoptable' })],
+    });
+    assert.match(r.detail, /npm start|headless/, '要点明另一条入口本来就不需要它');
   });
 
   // 机主的隧道就是这个状态。只看 PID 会一直显绿灯，而它其实在反复崩溃重启。

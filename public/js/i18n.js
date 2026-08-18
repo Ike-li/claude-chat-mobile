@@ -17,7 +17,7 @@ export const LANG_STORAGE_KEY = 'ccm_lang';
 // 译文用语对齐 Claude Code CLI（permission mode / workspace / interrupt / resume 等），让从 CLI 切过来的
 // 人零认知成本。scripts/i18n-check.js 扫 index.html 的界面文案与全仓 t('...') 调用，报词典里的孤儿 key。
 //
-// 注意混排句：`令牌在服务器 <code>.env</code> 的 <code>AUTH_TOKEN</code> 或启动日志里。` 会被 DOM 切成
+// 注意混排句：`令牌在服务器 <code>ccm.config.json</code> 的 <code>AUTH_TOKEN</code> 或启动日志里。` 会被 DOM 切成
 // 好几个文本节点，词典 key 因此是「的」「或启动日志里。」这样的碎片。译文按英文语序分配到各碎片上，
 // 拼起来才成句——改这类句子必须整句一起改，单看一条 key 是读不出上下文的。
 export const EN_DICT = Object.freeze({
@@ -221,7 +221,7 @@ export const EN_DICT = Object.freeze({
   'GitHub 仓库 · 源码 / Issue / Star →': 'GitHub repo · source / issues / star →',
   '在浏览器打开 GitHub 仓库': 'Open the GitHub repo in your browser',
   '🛠 开发者': '🛠 Developer',
-  '⟳ 重启服务（改代码/.env 后生效）': '⟳ Restart server (applies code/.env changes)',
+  '⟳ 重启服务（改代码/配置后生效）': '⟳ Restart server (applies code/config changes)',
 
   // —— 连接 / 令牌 / 离线队列 ——
   '已连接': 'Connected',
@@ -260,7 +260,7 @@ export const EN_DICT = Object.freeze({
   '数据每 5 秒自动刷新 · 告警超 24 小时自动退场 · 原始计数见 /metrics': 'Refreshes every 5s · alerts expire after 24h · raw counters at /metrics',
   '已复制 session id：': 'Copied session id: ',
   '个会话在运行/待审批，重启会中断它们（含后台任务）。': 'session(s) running or awaiting approval will be interrupted by the restart (including background tasks).',
-  '⟳ 重启常驻 server？': '⟳ Restart the resident server?',
+  '⟳ 重启服务？': '⟳ Restart the server?',
   '服务将优雅退出并由 KeepAlive 自动拉起，页面会自动重连。': 'The service will exit gracefully, KeepAlive will bring it back, and this page reconnects on its own.',
   '重启': 'Restart',
   '⟳ 正在重启服务…页面将自动重连': '⟳ Restarting the service… this page will reconnect automatically',

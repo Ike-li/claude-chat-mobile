@@ -32,7 +32,7 @@ export function normalizeLoadedEnvironment(env, shellAnthropicKeys) {
 // app.js would be too late for CCM_DATA_DIR. Provider variables remain shell-only.
 export function loadRuntimeEnvironment(env = process.env, { envFile, dir, quiet = false } = {}) {
   const shellAnthropicKeys = new Set(Object.keys(env).filter(key => key.startsWith('ANTHROPIC_')));
-  // OPS/SH-001：dotenv 默认不覆盖已存在的 key——含空串。LaunchAgent/systemd 若 export AUTH_TOKEN=
+  // OPS/SH-001：dotenv 默认不覆盖已存在的 key——含空串。上层若 export AUTH_TOKEN=
   // 或 CCM_DATA_DIR=，会挡住 .env 填入，normalize 再删空串 → 进程当「未设置」跑（绑 127.0.0.1 /
   // 落盘到仓库 data/）。空串 ≡ 未设置，加载前清掉，让 .env 能补全。
   // 集成测试 child 以 CCM_TEST_PRESERVE_EMPTY_ENV=1 明确声明空认证/CF 配置：保留到 dotenv 完成，
@@ -46,7 +46,8 @@ export function loadRuntimeEnvironment(env = process.env, { envFile, dir, quiet 
     }
   }
 
-  // 配置源：默认扫 cwd（plist 是 `cd "__REPO__" && exec node server.js`，systemd 同理），
+  // 配置源：默认扫 cwd（headless 在仓库目录里 npm start；桌面端的 plist 也是
+  // `cd "__REPO__" && exec node server.js`，两条入口 cwd 都落在仓库根），
   // ccm.config.json 优先、缺失回落 .env。显式 envFile 走兼容路径 —— doctor 的 `--env=prod.env`
   // 与单测都指向一个具体文件，那时不该再去扫目录。
   const sources = envFile

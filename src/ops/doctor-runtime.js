@@ -31,7 +31,7 @@ export const CONFIG_FILE_NAMES = [
 // 让 runDoctor 显 warn/未知而非 ok。rootDir 缺省项目根（server 侧传 import.meta.dirname）。
 export function countConfigPermProblems(rootDir, { platform = process.platform, dataDir = null } = {}) {
   if (platform === 'win32') return null; // 无法真正检查 → 不可假报 0
-  // 清单项以【项目根】为基准（'data/sessions.json'），但生产部署普遍用 CCM_DATA_DIR 把数据目录移出仓库。
+  // 清单项以【项目根】为基准（'data/sessions.json'），但长期跑着的实例普遍用 CCM_DATA_DIR 把数据目录移出仓库。
   // 必须剥掉 data/ 前缀再挂到真实数据目录上——此前 server 侧直接把 CCM_DATA_DIR 当 rootDir 传入，拼出
   // <CCM_DATA_DIR>/data/sessions.json 这个永不存在的路径，一个文件都扫不到 → 恒 0 → 体检恒报绿（BE-013 假绿）。
   // CLI doctor（scripts/doctor.js effectiveConfigFiles）一直用同一套剥前缀逻辑，这里与它对齐。

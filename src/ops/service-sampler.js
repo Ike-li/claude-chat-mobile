@@ -51,7 +51,7 @@ export function createServiceSampler(deps = {}) {
   const readEvents = () => validateServiceEvents(readEventsRaw());
 
   function sample() {
-    if (platform !== 'darwin') return; // Linux 用 systemd，见 docs/deployment.md
+    if (platform !== 'darwin') return; // 非 macOS 没有 launchd 快照可比；headless 的重启记录走下面那条路
     const live = listUnits();
     if (!(live instanceof Map)) return; // 这一轮没取到；下一轮再试，绝不据此清空
 
@@ -91,7 +91,7 @@ export function createServiceSampler(deps = {}) {
   /**
    * server 自己的启动记录 —— **非 macOS 平台的重启历史唯一来源**。
    *
-   * sample() 第一行就按平台早退，所以 Linux / docker / systemd 用户的「重启记录」段
+   * sample() 第一行就按平台早退，所以非 macOS（headless）用户的「重启记录」段
    * 一直是空的：那一整块面板对他们不存在。而 server 自己知道自己什么时候起来的，
    * 这个事实与进程管理器无关，任何平台都成立。
    *

@@ -181,7 +181,7 @@ export function resolveConfigValues({ fileValues = {}, shellEnv = {}, source = '
     }
     // ★ 未登记的 key **放行**。dotenv 时代 .env 是全量灌进 process.env 的，而 claude 子进程
     // 继承 process.env —— 写在配置里的 HTTPS_PROXY / CLAUDE_CONFIG_DIR 之类一直是生效的，
-    // 按 schema 白名单过滤会静默掐掉它们（常驻部署的 stdout 被重定向，那行 warn 没人看得到）。
+    // 按 schema 白名单过滤会静默掐掉它们（桌面端跑时 stdout 被重定向到日志文件，那行 warn 没人看得到）。
     //
     // 读取侧宽容、写入侧严格：面板与 config set 仍然拒绝未知 key（validateEnvChanges 那道闸
     // 不动），那是「不做通用配置编辑器」的产品边界。这里只是不再替用户丢东西。

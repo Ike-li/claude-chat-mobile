@@ -77,7 +77,7 @@ test('getProjectDir: 超长路径按 CLI 口径截断+hash（真实 SDK 能据�
 //   SDK 0.3.201  Pr(e) = process.platform === "darwin" ? e.normalize("NFC") : e   ← 平台门控
 //   CLI 2.1.225  xp(e) = e.normalize("NFC")                                        ← 无条件
 // 写 transcript 的是 CLI，所以要对齐的是后者。
-// 失败场景：Linux systemd 部署（CLAUDE.md 明列的形态）+ workdir 含 NFD 形式的非 ASCII（例如从 macOS
+// 失败场景：Linux 上 headless 跑（npm start）+ workdir 含 NFD 形式的非 ASCII（例如从 macOS
 // 拷来的 `café`，磁盘上是 `café`）→ CLI 编出 `-caf-`（é 一个字符→一个 '-'），本仓编出 `-cafe-`
 // （e 保留 + 组合符→'-'）→ 目录名不同 → 该 workdir 会话列表恒空，而 CLI 自己一切正常。
 // ★ 本用例在 macOS 上恒绿（两条分支都会归一），只有 Linux 容器（npm run test:docker）能真正鉴别它。

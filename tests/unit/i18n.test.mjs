@@ -127,3 +127,13 @@ test.describe('writeLangPref', () => {
     assert.doesNotThrow(() => writeLangPref(undefined, 'en'));
   });
 });
+
+test.describe('登录帮助把 AUTH_TOKEN 指到现行配置文件', () => {
+  test('index.html 不再让用户去 .env 找令牌', async () => {
+    const { readFileSync } = await import('node:fs');
+    const html = readFileSync(new URL('../../public/index.html', import.meta.url), 'utf8');
+    assert.match(html, /ccm\.config\.json/);
+    assert.doesNotMatch(html, /服务器 <code[^>]*>\.env<\/code>/);
+    assert.doesNotMatch(html, /改代码\/\.env/);
+  });
+});

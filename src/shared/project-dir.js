@@ -10,8 +10,8 @@
 // ★ 归一这步要对齐 CLI，不是对齐 SDK —— 上游这两者本身不一致（2026-08-09 分别从两个产物直接读出）：
 //     SDK 0.3.201  Pr(e) = process.platform === "darwin" ? e.normalize("NFC") : e   ← 平台门控
 //     CLI 2.1.225  xp(e) = e.normalize("NFC")                                        ← 无条件
-//   写 transcript 的是 CLI，跟它。macOS 上两种写法行为完全相同，分歧只在 Linux（本项目支持 systemd
-//   部署）且路径含 NFD 形式非 ASCII 时显形：那时 SDK 式写法会把同一个目录编成两个名字。
+//   写 transcript 的是 CLI，跟它。macOS 上两种写法行为完全相同，分歧只在 Linux（headless
+//   那条入口的常见平台）且路径含 NFD 形式非 ASCII 时显形：那时 SDK 式写法会把同一个目录编成两个名字。
 //   对应回归用例在 tests/unit/history-files.test.mjs，且**只有 Linux 容器能鉴别它**（macOS 上恒绿）。
 //
 // 那个 200 是贴着文件系统单段 255 字节上限设的，不是美观阈值：不截断算出的名字**根本建不出目录**，

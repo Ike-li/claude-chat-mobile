@@ -50,7 +50,7 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 ## 常用命令
 
-> ⚠️ **生产部署 = 常驻服务**（macOS LaunchAgent / Linux systemd 占着 3000 端口，固定公网域名 + Cloudflare Access 2FA）：**勿手动 `npm start`**（会撞端口）；改配置/代码后须**重启常驻 server 进程**才生效。**例外**：工作区列表支持热加载，改完即生效、免重启（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`，server 监听文件变化，被移除目录上的已开会话继续运行、仅拒新开）。哪些项热加载由 schema 的 `reload` 标记决定，当前只有 `WORKDIRS`。
+> ⚠️ **启动只有两条入口**：headless = 终端 `npm start`；macOS 还可走 `desktop/` 的 CCM.app。桌面端占着 3000 时**勿再手动 `npm start`**。改配置/代码后，桌面端点「重启服务」，headless 重启那个进程。**例外**：工作区列表支持热加载，改完即生效、免重启（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`，server 监听文件变化，被移除目录上的已开会话继续运行、仅拒新开）。哪些项热加载由 schema 的 `reload` 标记决定，当前只有 `WORKDIRS`。
 
 配置统一放在项目根 `ccm.config.json`（结构化 JSON，`AUTH_TOKEN`/`PORT`/`WORKDIRS`/各开关都在里面）；旧版 `.env` 仍受支持——**新文件存在时优先，缺失才回落 `.env`**。schema 单一事实源是 `src/ops/env-schema.js`，读写与类型归一在 `src/ops/config-file.js`（读写必须同源，写错源＝假成功）。环境变量始终压过文件。
 
@@ -67,16 +67,14 @@ npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock serve
 npm run test:visual # test:e2e 的兼容别名
 
 # 启动前自检配置
-node scripts/doctor.js              # 启动自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/CLI statusline bridge 安装态/CLI hooks 桥安装态/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率/LaunchAgent 常驻服务安装态
+node scripts/doctor.js              # 启动自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/CLI statusline bridge 安装态/CLI hooks 桥安装态/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率/桌面端服务安装态
 node scripts/doctor.js --env=prod.env  # 指定 .env 文件
 
-# 常驻服务（macOS LaunchAgent）
+# macOS 桌面端（第二条入口；下面 service:* 是它背后的 CLI，一般不用手敲）
+npm run app:install                 # 编译并装进 /Applications —— Spotlight/Launchpad 可搜；升级后菜单点「重启应用」
+npm run app:build                   # 只编译到 desktop/build/CCM.app，不装系统目录
 npm run service:status              # 各 unit 的运行态/归属/漂移；--json 供菜单栏与 doctor 消费
 npm run service:install|adopt|restart|logs|health   # adopt=接管手工安装（只写 manifest 不碰 plist）；uninstall 须 --yes
-
-# 菜单栏控制台（macOS，可选）
-npm run app:build                   # swiftc 编译 desktop/ccm-menubar.swift → desktop/build/CCM.app（产物不入库）
-npm run app:install                 # app:build 后装进 /Applications（Spotlight/Launchpad 可搜；升级后菜单点「重启应用」）
 
 # 设备指纹审批与管理
 node scripts/device.js list         # 列出所有受信任和等待确认的设备

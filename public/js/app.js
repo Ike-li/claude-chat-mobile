@@ -1472,13 +1472,13 @@ import { createSessionDeleteController } from './app/session-delete.js';
     }
   };
 
-  // 开发者模式：一键重启常驻 server（按钮仅 DEV_MODE=1 时由 setInstances 显示）。
+  // 开发者模式：一键重启 server（按钮仅 DEV_MODE=1 时由 setInstances 显示）。
   const btnRestartServer = $('btnRestartServer');
   if (btnRestartServer) btnRestartServer.onclick = async () => {
     const busyN = instancesList.filter(i => i.state === 'busy' || i.state === 'permission').length;
     const warnLine = busyN ? `⚠️ ${busyN} ${t('个会话在运行/待审批，重启会中断它们（含后台任务）。')}\n\n` : '';
     if (!(await appConfirm({
-      title: t('⟳ 重启常驻 server？'),
+      title: t('⟳ 重启服务？'),
       body: `${warnLine}${t('服务将优雅退出并由 KeepAlive 自动拉起，页面会自动重连。')}`,
       okText: t('重启'),
       tone: 'danger',

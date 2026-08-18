@@ -23,7 +23,7 @@
 | 单用户 = 机主 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全模型](../README.md#安全模型) |
 | 不是远程桌面 / 共享 TTY / 多租户托管 | 不附着终端 stdin/stdout | [architecture.md](architecture.md) |
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
-| **不替用户决定怎么后台运行** | 基础版只保证「一条命令能跑起来」（`npm start`，全平台基线）。macOS 之外不做官方常驻适配——服务器上 systemd / pm2 / docker 都行，文档只指路。macOS 另有**单独一个可选入口**：GUI 与 LaunchAgent 便利全部收在 `desktop/`（菜单栏 app + `desktop/launchd/` 的 plist 模板，经 `service:install` / 桌面端勾选安装），模板不是规范。两个入口互不相关，按平台自由选择 | 2026-08-15 机主确认；2026-08-17 机主确认 desktop 单独入口；[deployment.md](deployment.md) |
+| **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口 | 2026-08-15 机主确认；2026-08-17 机主确认 desktop 单独入口；[deployment.md](deployment.md) |
 | **可选功能由用户开关，不猜** | 桌面控制台、两个 bridge、`LOG_TERMINAL`、推送……默认全关，装机向导逐项问。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**（`--work-dir` 回落 `$HOME` = 整个家目录挂给远程入口）直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
 
 ---
@@ -142,8 +142,8 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 
 ### 4.4 生产运维
 
-- 常驻服务占端口：**勿再手动 `npm start` 撞端口**。  
-- 改配置/代码须**重启**常驻进程。  
+- 桌面端占着端口：**勿再手动 `npm start` 撞端口**。  
+- 改配置/代码：桌面端点「重启服务」；headless 停掉当前 `npm start` 再起。  
 - **例外**：工作区列表热加载（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`）；被移除目录仅拒新开。哪些项可热加载由 `env-schema.js` 的 `reload` 标记决定（缺省 `restart`，当前唯一 `hot` 是 `WORKDIRS`）。
 
 ### 4.5 产品 UX 已决

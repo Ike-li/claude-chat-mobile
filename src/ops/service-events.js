@@ -1,4 +1,4 @@
-// 常驻服务的重启历史：从两次 `launchctl list` 快照之间认出重启，并按**频率**判定异常。
+// 桌面端服务的重启历史：从两次 `launchctl list` 快照之间认出重启，并按**频率**判定异常。
 //
 // ## 为什么需要历史，而不是直接看 LastExitStatus
 //
@@ -29,7 +29,7 @@ const KINDS = new Set(['restarted', 'started', 'stopped']);
 // 抓到在跑产 started、下次抓到已退出产 stopped，一小时抓够三次就误报 flapping。
 //
 // 判据收窄成 pid→pid（进程被就地换掉）。取舍：
-//   · 常驻服务的崩溃循环在 60s 粒度下几乎必然是 pid→pid（KeepAlive 立刻拉起），命中
+//   · 崩溃循环在 60s 粒度下几乎必然是 pid→pid（KeepAlive 立刻拉起），命中
 //   · 周期 job 是 null↔pid 交替，天然不命中
 //   · 代价：「停了很久再手动起来」的循环不计入 —— 那是用户操作，本来就不该叫 flapping
 // started / stopped 仍然**照常记录**，它们进时间线供人看，只是不参与下告警结论。

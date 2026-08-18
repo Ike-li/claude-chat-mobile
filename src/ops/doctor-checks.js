@@ -320,7 +320,7 @@ export function logSwitchDiagnostic({ interactions = false, sdkDebug = false, st
       detail: bi(lang,
         `${list} 开着${sizeNote}\n`
         + '  DEBUG_SDK_MESSAGES 每条 SDK 消息一行，长开曾把日志刷到 149MB（2026-07-18 归档实测）。\n'
-        + '  调试完请在配置里关掉并重启常驻 server。',
+        + '  调试完请在配置里关掉并重启 server。',
         `${list} on${sizeNote}\n`
         + '  DEBUG_SDK_MESSAGES writes one line per SDK message; left on it has produced a 149MB log (measured 2026-07-18).\n'
         + '  Turn it off in the config file once you are done debugging, then restart the service.'),
@@ -397,7 +397,7 @@ export function claudeConfigDirDiagnostic({ configDir = '', lang = 'zh' } = {}) 
   };
 }
 
-// ── D16：LaunchAgent 常驻服务安装态 ──────────────────────────────────────
+// ── D16：桌面端服务（LaunchAgent）安装态 ─────────────────────────────────
 //
 // 入参是 scripts/service.js status --json 的输出（doctor 用 execFileSync 只读取回来，
 // 同 D6/D12 的探针范式）。这里只消费 ownership/state/flapping/drift 四个字段，
@@ -413,15 +413,15 @@ export function claudeConfigDirDiagnostic({ configDir = '', lang = 'zh' } = {}) 
 export function serviceUnitsDiagnostic({ platform = '', supported = false, units = null, lang = 'zh' } = {}) {
   const name = 'LaunchAgent';
   if (platform !== 'darwin' || !supported) {
-    return { status: 'ok', name, detail: bi(lang, `非 macOS（${platform || '未知'}），跳过 LaunchAgent 检查；Linux 请用 systemd，见 docs/deployment.md`, `Not macOS (${platform || 'unknown'}); skipping the LaunchAgent check. On Linux use systemd — see docs/deployment.md`) };
+    return { status: 'ok', name, detail: bi(lang, `非 macOS（${platform || '未知'}），跳过 LaunchAgent 检查；用 npm start 启动，保活方式自选，见 docs/deployment.md`, `Not macOS (${platform || 'unknown'}); skipping the LaunchAgent check. Start with npm start and keep it alive however you prefer — see docs/deployment.md`) };
   }
   if (!Array.isArray(units)) {
-    return { status: 'warn', name, detail: bi(lang, '无法读取常驻服务状态；运行 npm run service:status 查看详情。', 'Could not read the service state; run npm run service:status for details.') };
+    return { status: 'warn', name, detail: bi(lang, '无法读取桌面端服务状态；运行 npm run service:status 查看详情。', 'Could not read the desktop service state; run npm run service:status for details.') };
   }
 
   const server = units.find((u) => u.unit === 'server');
   if (!server || server.state === 'not-installed') {
-    return { status: 'warn', name, detail: bi(lang, '常驻服务未安装：关掉终端 server 就停了、开机也不会自启。运行 npm run service:install 安装。', 'No resident service installed: the server stops when you close the terminal and will not start at login. Run npm run service:install.') };
+    return { status: 'warn', name, detail: bi(lang, '桌面端服务未安装（headless 用 npm start 就不需要它）。要开机自启 / 崩溃拉起，从桌面端菜单装，或 npm run service:install。', 'The desktop service is not installed (headless npm start does not need it). For start-at-login and crash recovery, install it from the desktop menu or run npm run service:install.') };
   }
   // stopped：plist 在盘上但没被 launchd 加载（stop 之后 / bootstrap 失败 / agent 被禁用）。
   // classifyState 的取值域是 4 个，早前漏了这一档 ⇒ 掉进末尾的 ok 分支，
@@ -504,15 +504,15 @@ export function portOccupancyDiagnostic({ port, occupied = false, ownerLabel = n
       status: 'ok',
       name,
       detail: bi(lang,
-        `端口 ${n} 由常驻服务 ${ownerLabel} 占用（预期；勿再手动 npm start）`,
-        `Port ${n} is held by the ${ownerLabel} service (expected; do not run npm start by hand)`),
+        `端口 ${n} 由桌面端服务 ${ownerLabel} 占用（预期；勿再手动 npm start）`,
+        `Port ${n} is held by the desktop service ${ownerLabel} (expected; do not run npm start by hand)`),
     };
   }
   return {
     status: 'fail',
     name,
     detail: bi(lang,
-      `端口 ${n} 已被占用，且不是本仓的常驻服务。查是谁：lsof -nP -iTCP:${n} -sTCP:LISTEN`,
-      `Port ${n} is taken by something that is not this repo's service. Find it with: lsof -nP -iTCP:${n} -sTCP:LISTEN`),
+      `端口 ${n} 已被占用，且不是桌面端装的服务。若是另一个 npm start，先停掉它；否则查是谁：lsof -nP -iTCP:${n} -sTCP:LISTEN`,
+      `Port ${n} is taken by something other than the desktop service. If it is another npm start, stop that one; otherwise find it with: lsof -nP -iTCP:${n} -sTCP:LISTEN`),
   };
 }

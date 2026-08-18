@@ -57,11 +57,11 @@
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 
-node --version && which claude   # 对照上面的前置条件
+node --version && which claude && claude auth status
 npm install --omit=dev
-npm run setup                    # 生成 AUTH_TOKEN，问 WORK_DIR、CLI hooks bridge，macOS 上再问桌面控制台
+npm run setup                    # 生成 AUTH_TOKEN，问 WORK_DIR（必须是项目绝对路径）、CLI hooks bridge，macOS 上再问桌面控制台
 node scripts/doctor.js
-npm start
+npm start                        # 若 doctor 说 3000 已被桌面端占用，不要再起一个；用菜单「重启服务」
 
 # 手机首次从非本机地址连接时，另开一个终端批准设备
 node scripts/device.js list
@@ -76,7 +76,7 @@ node scripts/device.js approve <ID>
 |---|---|---|
 | 同 WiFi：`http://<lan-ip>:3000/#token=…` | 家中或办公室局域网 | 最省事，离开当前网络后不可用 |
 | 临时公网：`cloudflared tunnel --url http://localhost:3000` | 试用、演示 | 随机域名会变化；没有 Access，仍需设备审批 |
-| 固定生产：固定域名 + Cloudflare Access + 常驻服务 | 长期随时访问 | 需要一次性部署与运维，见 [部署指南](docs/deployment.md) |
+| 固定公网：固定域名 + Cloudflare Access | 长期随时访问 | 进程用桌面端或保持 `npm start`；隧道见 [部署指南](docs/deployment.md) |
 
 PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先「添加到主屏幕」。
 
@@ -96,7 +96,7 @@ PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先「添加
 ## 文档导航
 
 - [首次使用指南](docs/getting-started.md)：从 clone 到手机发出第一条消息。
-- [部署与运维](docs/deployment.md)：Cloudflare Tunnel、Access、LaunchAgent 与 systemd。
+- [部署与运维](docs/deployment.md)：两条启动入口、Cloudflare Tunnel 与 Access。
 - [架构说明](docs/architecture.md)：Web/CLI 双通道、事件信封与接管边界。
 - [硬性规则与技术债](docs/hard-rules.md)：n=1 取舍、架构不变量、已决「不做」项（维护者）。
 - [展示契约](docs/display-contracts.md)：模型、思考强度和状态栏的事实源。

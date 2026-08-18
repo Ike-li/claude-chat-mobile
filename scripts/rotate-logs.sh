@@ -1,13 +1,13 @@
 #!/bin/bash
 # rotate-logs.sh —— copy-truncate 日志轮转（macOS LaunchAgent 部署场景）
 #
-# 为什么不用 newsyslog/logrotate 的 rename 式轮转：常驻服务的 stdout/stderr 是
+# 为什么不用 newsyslog/logrotate 的 rename 式轮转：桌面端服务的 stdout/stderr 是
 # launchd 按 StandardOutPath 打开后传给进程的 fd，进程不会重开日志文件——rename 后
 # 进程继续写旧 inode，新文件永远是空的。launchd 以 O_APPEND 打开该 fd（lsof +fg 实测
 # FILE-FLAG 含 AP），因此对原文件 copy + truncate 后，后续写入自动落到新 EOF，无空洞。
 #
 # 用法: rotate-logs.sh [--max-mb N] [--keep N] [logfile ...]
-#   不带文件参数时默认轮转 ~/Library/Logs/ 下 ccm-server.log / ccm-tunnel.log（对应部署文档里的两个常驻进程）。
+#   不带文件参数时默认轮转 ~/Library/Logs/ 下 ccm-server.log / ccm-tunnel.log（对应部署文档里的两个长跑进程）。
 #   超过 --max-mb（默认 20）才轮转；归档 gzip 保留 --keep（默认 5）份：<f>.0.gz（最新）… <f>.4.gz。
 #
 # 已知窗口：cp 与 truncate 之间写入的行会丢（亚秒级），日志场景可接受。

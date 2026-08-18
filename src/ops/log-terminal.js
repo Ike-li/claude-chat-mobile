@@ -1,4 +1,4 @@
-// log-terminal.js —— 常驻部署的「日志窗口」：server 启动时自动开一个 Terminal 窗口 tail 日志，
+// log-terminal.js —— 「日志窗口」：server 启动时自动开一个 Terminal 窗口 tail 日志，
 // 停止/重启时把它关掉。默认关闭，`LOG_TERMINAL=on` 才启用。
 //
 // 定位：这是**桌面便利功能**，不是运行时依赖。任何一步失败都只打一行日志继续跑——server 绝不能

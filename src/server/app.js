@@ -363,7 +363,7 @@ const tokenMatches = provided => secureTokenMatches(AUTH_TOKEN, provided);
 const rlStates = new Map(); // sourceKey → RateLimitState
 // 有界上限。这张表由【未鉴权的公网流量】驱动：服务挂在固定域名上，任何扫描器请求一次 /health
 // （成功或 401 都写）就永久占一条，而全仓只有 get/set、没有任何 delete/TTL 清扫，decayMs 到期也不回收。
-// 常驻 LaunchAgent 跑数月即单调增长。仓内其他表都有明确上限（NOTIFY_THROTTLE_CAP=500、MAX_SESSIONS=200
+// 长期跑着的实例数月即单调增长。仓内其他表都有明确上限（NOTIFY_THROTTLE_CAP=500、MAX_SESSIONS=200
 // 等），只有这里没有。淘汰最坏只是让那个来源重新从 0 计数——与「重启即清零」的既有语义同级。
 const RL_STATES_CAP = 5000;
 // 写入的唯一入口（2026-08-03 F2）：cap 淘汰必须对 HTTP 与 socket 握手两条路径同时生效——
@@ -822,7 +822,7 @@ function computeNeedsYou() {
 // （=有人在暴力尝试入口，安全信号）+ 前端错误（=界面自身坏了，详情在日志面板）。
 // 刻意不接 classifyState()：那是 /metrics 外部消费的粗分类，failed/awaiting 已被会话 ❗ 角标/需要你(N) 覆盖，
 // mobile_offline 对正在看 UI 的设备是自指悖论——原样接入会制造重复信号，见方案 Context。
-// ── 常驻服务的重启历史采样 ────────────────────────────────────────────────
+// ── 桌面端服务的重启历史采样 ──────────────────────────────────────────────
 //
 // launchd 只保留「最后一次怎么退出的」，那是瞬时值。要回答「这正常吗」必须有时间序列 ——
 // 机主机器上的实证：隧道的 LastExitStatus 恒为 -9，因为自建看门狗每天按 DHCP 漂移
@@ -1100,7 +1100,7 @@ async function ensureCliDefaults(cwd, { force = false } = {}) {
   return p;
 }
 // 「配置改完能不能就地重启生效」——与 devMode 是两维：devMode 管开发者面板那个常驻重启按钮，
-// 这个管配置面板保存成功后要不要给「立即重启」入口。生产部署 DEV_MODE=0 但被 launchd 托管时
+// 这个管配置面板保存成功后要不要给「立即重启」入口。DEV_MODE=0 但被 launchd 托管时
 // 应为 true，否则「手机上改配置」这条路断在最后一步、放宽 dev:restart 门控就只剩个远程停机原语。
 // 与 dev:restart handler 用同一个判据，两处不能分叉。
 const canRestartNow = () => DEV_MODE || isSupervised();
@@ -1400,7 +1400,7 @@ if (!statusOff) {
   statusInterval = setInterval(() => scheduleStatusRefresh(), 10_000);
 }
 
-// 常驻服务的重启历史采样。**刻意不放进上面的 `if (!statusOff)`**：
+// 桌面端服务的重启历史采样。**刻意不放进上面的 `if (!statusOff)`**：
 // 上一版塞在那里，于是用户在手机配置面板关掉「Web 状态栏」（WEB_STATUSLINE 是可点的 toggle，
 // src/ops/env-schema.js）就连带把重启历史采样一起关了 —— 面板「重启记录」从此永远「暂无记录」
 // 且不说明原因。两个正交功能不共用一个开关。
@@ -2773,12 +2773,12 @@ registerSocketConnection(io, socket => {
     readPreview,
   });
 
-  // 开发者模式：web 端一键重启常驻 server（dogfooding 改代码/.env 后免上电脑 kickstart）。
+  // 开发者模式：web 端一键重启 server（dogfooding 改代码/配置后免上电脑动手）。
   // 仅 DEV_MODE=1 放行；优雅退出复用 shutdown（flush sessions + dispose 实例 + close），
-  // 靠 LaunchAgent/systemd 的 KeepAlive 自动拉起，前端 socket.io 自动重连 + epoch init 恢复。
+  // 靠托管方（桌面端装的 LaunchAgent）的 KeepAlive 自动拉起，前端 socket.io 自动重连 + epoch init 恢复。
   on(socket, 'dev:restart', (payload, ack) => {
     // 判据从「DEV_MODE=1」放宽成「DEV_MODE=1 或被进程管理器托管」。
-    // **这是纯放松**：新集合严格包含旧集合，所以它只解决「太紧」那一侧（生产常驻部署改完配置
+    // **这是纯放松**：新集合严格包含旧集合，所以它只解决「太紧」那一侧（桌面端托管时改完配置
     // 没法从手机重启）。「太松」那一侧——DEV_MODE=1 时前台 npm start 也能被停掉、然后永远
     // 起不来——**没有被堵**，因为 DEV_MODE 会直接短路掉 isSupervised()。要真堵得让
     // isSupervised() 无条件必需，那会改变 DEV_MODE 的既有语义，属单独一次取舍，不在此次范围。
@@ -2788,7 +2788,9 @@ registerSocketConnection(io, socket => {
         outcome: 'denied', meta: { reason: 'not-supervised' },
       });
       if (typeof ack === 'function') {
-        ack({ ok: false, error: '当前进程不是由 LaunchAgent/systemd 托管，停了不会自动拉起 —— 拒绝重启' });
+        // 不点名具体的进程管理器：headless `npm start` 是本仓正当入口之一，说「你没用
+        // LaunchAgent/systemd」会把用户支去装一套仓库并不提供的东西。要说的是后果。
+        ack({ ok: false, error: '当前进程没有进程管理器托管（终端里直接 npm start 就是这样），停了不会自动拉起 —— 拒绝重启' });
       }
       return;
     }
@@ -3260,7 +3262,7 @@ expireOrphanedPending();
 startApprovalRetentionSweep();
 
 httpServer.listen(port, host, () => {
-  // 常驻部署的日志窗口（LOG_TERMINAL=on 才开）：停止/重启时由 shutdown() 关掉。
+  // 日志窗口（LOG_TERMINAL=on 才开）：停止/重启时由 shutdown() 关掉。
   // **必须放在绑定成功之后**：早于此处会给一个根本没起来的 server（如端口被占）开出窗口，
   // 而那条路径退出太快、状态文件还没写完就没了，留下关不掉的孤儿窗口（实测踩到）。
   startLogTerminal({ home: homedir(), dataDir: DATA_DIR }).catch(() => {});
@@ -3272,7 +3274,7 @@ httpServer.listen(port, host, () => {
   if (!AUTH_TOKEN) {
     console.log(`  本机: http://localhost:${port}`);
     console.warn('  ⚠️  未设置 AUTH_TOKEN —— 仅监听 127.0.0.1，不可走隧道对外。');
-    console.warn('  ⚠️  需要手机访问请在 .env 设置 AUTH_TOKEN 后重启。');
+    console.warn('  ⚠️  需要手机访问请在 ccm.config.json 设置 AUTH_TOKEN 后重启。');
   } else {
     // 安全打印：首次启动（无 sessions.json）打印完整 URL 便于扫码，后续用掩码（防录屏/日志泄露）
     const isFirstRun = !existsSync(join(DATA_DIR, 'sessions.json'));
@@ -3312,7 +3314,7 @@ httpServer.listen(port, host, () => {
   }).catch(err => console.warn('[cli-settings] 启动预取失败:', err?.message || err));
 });
 
-// #4：SIGINT 与 SIGTERM 都要清理（node --watch 重启、systemd、docker stop 走 SIGTERM）
+// #4：SIGINT 与 SIGTERM 都要清理（node --watch 重启、进程管理器、docker stop 走 SIGTERM）
 function shutdown(sig) {
   console.log(`\n收到 ${sig}，正在关闭…`);
   sessions.flushSaveSync(); // B4：防抖窗口内未落盘的状态同步写入

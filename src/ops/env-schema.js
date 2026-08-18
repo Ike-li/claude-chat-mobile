@@ -386,7 +386,7 @@ const NOISY_TOGGLES = {
 // 上面 §硬边界 把 AUTH_TOKEN 钉成 readonly，理由是「极易把自己锁在门外」。但 CF_ACCESS_* 是
 // **另一条鉴权轴**——AUTH_TOKEN 管 LAN/本机那层，CF Access JWT 管公网那层——三项却全部可写，
 // 清空还零告警。等于**持有第一因子就能静默删掉第二因子**，而且删掉之后设备 token 事后被吊销
-// 也回滚不了。配合本批把 dev:restart 放宽到 `DEV_MODE || isSupervised()`（生产 LaunchAgent 下
+// 也回滚不了。配合本批把 dev:restart 放宽到 `DEV_MODE || isSupervised()`（桌面端 LaunchAgent 下
 // 恒 true），这成了手机上一次会话内可完成的闭环。
 //
 // 不做成 readonly：那会让「在手机上配 CF Access」彻底没法做。改成 warn —— 前端对 warn 会弹

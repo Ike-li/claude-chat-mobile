@@ -55,11 +55,11 @@ Only one side drives a session at a time. Web-driven messages travel through the
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 
-node --version && which claude   # check against the prerequisites above
+node --version && which claude && claude auth status
 npm install --omit=dev
-npm run setup                    # creates AUTH_TOKEN; asks for WORK_DIR, the CLI hooks bridge, and (macOS) the desktop console
+npm run setup                    # creates AUTH_TOKEN; asks for an absolute project WORK_DIR, the CLI hooks bridge, and (macOS) the desktop console
 node scripts/doctor.js
-npm start
+npm start                        # if doctor says 3000 is held by the desktop app, do not start another; restart from the menu
 
 # on the first connection from a non-local address, approve the device from another terminal
 node scripts/device.js list
@@ -74,7 +74,7 @@ The startup log prints a tokenized LAN URL that you can open on your phone. For 
 |---|---|---|
 | Same Wi-Fi: `http://<lan-ip>:3000/#token=…` | Home or office LAN | Simplest option; unavailable after leaving that network |
 | Temporary public URL: `cloudflared tunnel --url http://localhost:3000` | Trials and demos | Random hostname changes; no Access layer, so device approval still applies |
-| Fixed production deployment: domain + Cloudflare Access + service manager | Long-term access from anywhere | Requires one-time operations setup; see the [deployment guide](docs/deployment.md) |
+| Fixed public URL: domain + Cloudflare Access | Long-term access from anywhere | Keep the process via the desktop app or `npm start`; tunnels in the [deployment guide](docs/deployment.md) |
 
 PWA installation and Web Push require HTTPS. On iOS, Web Push also requires iOS 16.4+ and installing the site on the Home Screen first.
 
@@ -94,7 +94,7 @@ Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.m
 ## Documentation
 
 - [Getting Started](docs/getting-started.en.md): from clone to the first message sent from your phone.
-- [Deployment and operations](docs/deployment.md) (Chinese): Cloudflare Tunnel, Access, LaunchAgent, and systemd.
+- [Deployment and operations](docs/deployment.md) (Chinese): the two start entries, Cloudflare Tunnel, and Access.
 - [Architecture](docs/architecture.en.md): Web/CLI paths, event envelopes, and takeover boundaries.
 - [Hard rules and tech debt](docs/hard-rules.md) (Chinese): n=1 tradeoffs, invariants, and deferred work (maintainers).
 - [Display contracts](docs/display-contracts.md) (Chinese): sources of truth for model, effort, and status-line display.
