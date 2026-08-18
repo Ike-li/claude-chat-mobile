@@ -207,15 +207,8 @@ func splitUnits(_ units: [UnitStatus]) -> (primary: [UnitStatus], secondary: [Un
             units.filter { !primaryNames.contains($0.unitName) })
 }
 
-/// 顶层「重启服务」直达项的可用性：server 已安装（含 crashed——重启正是自救动作）才有意义。
-/// `busyUnits`：该 unit 正在 start/stop/restart 时必须灭掉，否则关菜单再开再点会叠两次 kickstart。
-func canRestartServer(_ status: ServiceStatus?, busyUnits: Set<String> = []) -> Bool {
-    guard isControlEnabled(unit: "server", busyUnits: busyUnits) else { return false }
-    guard let s = status?.server else { return false }
-    return ["running", "stopped", "crashed"].contains(s.stateName)
-}
-
-/// start/stop/restart 进行中把对应菜单项灭掉。与 `canRestartServer` 叠加，不替代状态判定。
+/// start/stop/restart 进行中把对应菜单项灭掉，否则关菜单再开再点会叠两次 kickstart。
+/// unit 是否**存在**由 `unitItem` 的 `not-installed` 分支管，这里只判「此刻能不能点」。
 func isControlEnabled(unit: String, busyUnits: Set<String>) -> Bool {
     !busyUnits.contains(unit)
 }

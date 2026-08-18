@@ -190,15 +190,9 @@ struct CCMCoreTests {
         eq(g.primary.map(\.unitName), ["server", "tunnel"], "主服务两项且顺序保持")
         eq(g.secondary.map(\.unitName), ["logrotate", "menubar", "tunnel-watch"], "其余进次组")
 
-        // 顶层「重启服务」直达项的可用性：已安装（含 crashed）才可重启
-        let mk = { (st: String) in decode(#"{"schemaVersion":1,"units":[{"unit":"server","state":"\#(st)"}]}"#) }
-        eq(canRestartServer(mk("running")), true, "running 可重启")
-        eq(canRestartServer(mk("crashed")), true, "crashed 可重启")
-        eq(canRestartServer(mk("not-installed")), false, "未安装不可重启")
-        eq(canRestartServer(nil), false, "无状态不可重启")
-        // 连点：unit 正在 kickstart 时必须灭掉，否则关菜单再开再点会叠两次
-        eq(canRestartServer(mk("running"), busyUnits: ["server"]), false, "进行中不可再点重启")
-        eq(canRestartServer(mk("running"), busyUnits: ["logrotate"]), true, "别的 unit 忙不影响 server")
+        // 连点：unit 正在 kickstart 时子菜单的启动/停止/重启必须灭掉，否则关菜单再开再点会叠两次
+        eq(isControlEnabled(unit: "server", busyUnits: ["server"]), false, "进行中不可再点重启")
+        eq(isControlEnabled(unit: "server", busyUnits: ["logrotate"]), true, "别的 unit 忙不影响 server")
         eq(isControlEnabled(unit: "logrotate", busyUnits: ["logrotate"]), false, "短命 unit 进行中同样灭掉")
         eq(isControlEnabled(unit: "logrotate", busyUnits: []), true, "空闲可点")
         eq(serviceControlTimeout > 25, true, "必须长过 service.js 的 kickstart 窗口（25s），否则 GUI 会先杀掉还在节流的合法调用")

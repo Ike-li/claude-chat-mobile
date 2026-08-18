@@ -334,7 +334,7 @@ function reportVerify(v) {
     lines.push('', '✅ 安装成功（文件级验证通过）。启动 server 后即完整生效；可随时 npm run hooks:verify 补跑端到端验证。');
   } else {
     lines.push(`⚠ 服务级：server 在线但 ${VERIFY_ACK_TIMEOUT_MS / 1000} 秒内未消费。可能原因：`);
-    lines.push('  · server 是旧版本（不含 hooks 支持）→ 重启它（桌面端菜单「重启服务」，headless 在原终端）');
+    lines.push('  · server 是旧版本（不含 hooks 支持）→ 重启它（桌面端菜单里 server 一行点「重启」，headless 在原终端）');
     lines.push('  · 配置里设了 CLI_HOOKS_BRIDGE=off');
     lines.push('  · ~/.claude/ccm/hooks-v1/ 目录状态异常 → node scripts/doctor.js');
     lines.push('安装本身已完成；修复后 npm run hooks:verify 重验。');

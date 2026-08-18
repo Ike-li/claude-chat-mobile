@@ -275,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
         menu.delegate = self
-        // 手动管理 enabled：顶层「重启服务」要按 server 安装态灰显，autoenable 会把有 action 的项恒置可用
+        // 手动管理 enabled：各 unit 子菜单的启动/停止/重启要在动作进行中灰显，autoenable 会把有 action 的项恒置可用
         menu.autoenablesItems = false
         statusItem.menu = menu
 
@@ -405,12 +405,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(action("复制访问令牌", #selector(copyToken),
             tip: "仅复制 AUTH_TOKEN（给手机手动登录、或粘贴到别处）"))
 
-        // 高频动作直达：改配置后最常用的一步，不必进 server 子菜单找
-        let restart = unitAction("重启服务", unit: "server", verb: "restart")
-        restart.toolTip = "重启 server（= service.js restart）：改完配置让它生效的那一步；手机会短暂断连几秒"
-        restart.isEnabled = canRestartServer(latest, busyUnits: busyUnits)
-        menu.addItem(restart)
-
         if let units = latest?.unitList, !units.isEmpty {
             menu.addItem(.separator())
             let grouped = splitUnits(units)
@@ -428,7 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(action("配置…", #selector(openConfig), key: ",",
-            tip: "配置表单（读写 ccm.config.json，密钥打码）；server 没起来时也能用。改完记得点上面的「重启服务」"))
+            tip: "配置表单（读写 ccm.config.json，密钥打码）；server 没起来时也能用。改完记得从上面的 server 一行点「重启」让它生效"))
         menu.addItem(action("查看日志", #selector(openLogs),
             tip: "内嵌日志窗口，下拉框可在 server / tunnel 等各服务日志间切换"))
         menu.addItem(action("运行体检（doctor）", #selector(runDoctor),

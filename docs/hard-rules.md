@@ -143,7 +143,7 @@ Playwright 禁止：`test.only` / `skip` / `fixme` · `networkidle` · `waitForT
 ### 4.4 生产运维
 
 - 桌面端占着端口：**勿再手动 `npm start` 撞端口**。  
-- 改配置/代码：桌面端点「重启服务」；headless 停掉当前 `npm start` 再起。  
+- 改配置/代码：桌面端菜单里 server 一行点「重启」；headless 停掉当前 `npm start` 再起。  
 - **例外**：工作区列表热加载（`ccm.config.json` 的 `WORKDIRS` 或旧版 `workdirs.json`）；被移除目录仅拒新开。哪些项可热加载由 `env-schema.js` 的 `reload` 标记决定（缺省 `restart`，当前唯一 `hot` 是 `WORKDIRS`）。
 
 ### 4.5 产品 UX 已决

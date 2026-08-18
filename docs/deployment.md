@@ -26,7 +26,7 @@
 
 ## ⚠️ 最容易忘的一点
 
-桌面端一旦把 server 拉起来，3000 就被占着，**不要再手动 `npm start`**。改了配置或拉了新代码后，从菜单点「重启服务」。
+桌面端一旦把 server 拉起来，3000 就被占着，**不要再手动 `npm start`**。改了配置或拉了新代码后，从菜单里 server 一行点「重启」。
 
 headless 没有桌面端：在跑 `npm start` 的那个终端里停掉再起。
 
@@ -187,7 +187,7 @@ PUBLIC_URL=https://<your-domain>    # 点通知深链回该会话；留空回退
 
 ```bash
 # headless：停掉当前 npm start，再起
-# 桌面端：菜单「重启服务」；日志用「查看日志」
+# 桌面端：菜单里 server 一行点「重启」；日志用「查看日志」
 
 # 人在 SSH 里、服务却是桌面端装的（不是第三条入口）
 npm run service:status

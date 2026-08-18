@@ -61,7 +61,7 @@ node --version && which claude && claude auth status
 npm install --omit=dev
 npm run setup                    # 生成 AUTH_TOKEN，问 WORK_DIR（必须是项目绝对路径）、CLI hooks bridge，macOS 上再问桌面控制台
 node scripts/doctor.js
-npm start                        # 若 doctor 说 3000 已被桌面端占用，不要再起一个；用菜单「重启服务」
+npm start                        # 若 doctor 说 3000 已被桌面端占用，不要再起一个；用菜单里 server 一行的「重启」
 
 # 手机首次从非本机地址连接时，另开一个终端批准设备
 node scripts/device.js list

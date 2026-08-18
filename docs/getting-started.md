@@ -10,7 +10,7 @@
 - 一个受 `AUTH_TOKEN`、工作区白名单和设备审批保护的手机入口。
 - 与本机 `claude` CLI 共用配置、工具和落盘会话记录的 Web 界面。
 
-本指南覆盖首次安装。已经在跑桌面端或终端里的 `npm start` 时，不要再开第二个 server；桌面端用菜单「重启服务」，headless 在原终端重启。
+本指南覆盖首次安装。已经在跑桌面端或终端里的 `npm start` 时，不要再开第二个 server；桌面端用菜单里 server 一行的「重启」，headless 在原终端重启。
 
 ## 1. 检查前置条件
 
@@ -172,7 +172,7 @@ node scripts/doctor.js
 
 它会检查 token、CLI 路径、工作区、端口、网关环境、文件权限、bridge 状态和文档/前端一致性。
 默认不跑单测覆盖率（要跑一遍完整单测，约一分钟）；那道门槛由 CI 守着，维护者本地想立刻看就加 `--full`。
-若提示 3000 已被桌面端占用，不要再执行下一步的 `npm start`，从桌面端菜单重启服务。
+若提示 3000 已被桌面端占用，不要再执行下一步的 `npm start`，从桌面端菜单里 server 一行点「重启」。
 
 权限类问题可让 doctor 做最小修复：
 
@@ -205,7 +205,7 @@ curl -sS "http://127.0.0.1:3000/health?token=<AUTH_TOKEN>"
 
 返回包含 `status`、`versions`、`buildNonce` 与 `timestamp` 的 JSON 才算 server 已正常响应。`AUTH_TOKEN` 等同本机 shell 入口密钥，不要把真实值贴到 issue、聊天记录或截图中。
 
-如果桌面端或已有的 `npm start` 占着 3000，不要再起一个。桌面端点「重启服务」，headless 在原终端重启。详见[部署指南的运维速查](deployment.md#运维速查)。
+如果桌面端或已有的 `npm start` 占着 3000，不要再起一个。桌面端菜单里 server 一行点「重启」，headless 在原终端重启。详见[部署指南的运维速查](deployment.md#运维速查)。
 
 ## 6. 从手机打开
 
