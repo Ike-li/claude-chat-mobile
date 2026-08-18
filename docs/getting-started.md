@@ -114,16 +114,19 @@ npm run config:migrate      # = node scripts/config.js migrate
 没有图形界面时（服务器部署），全部配置都能从命令行读写：
 
 ```bash
+node scripts/config.js init              # 直接生成配置文件（含随机 AUTH_TOKEN），不走向导
 node scripts/config.js schema            # 列出全部配置项及其含义（活文档，从 schema 生成）
 node scripts/config.js get               # 当前配置（密钥默认脱敏，须 --reveal 才出明文）
 node scripts/config.js set PORT=4100 WEB_STATUSLINE=false
+node scripts/config.js set 'WORKDIRS=["/path/a","/path/b"]'   # 数组类要 JSON 字面量，不是逗号分隔
 node scripts/config.js unset PORT
 node scripts/config.js check             # 校验配置是否合法
 node scripts/config.js migrate           # 旧 .env → ccm.config.json（含 workdirs 内联）
 ```
 
-`set` 会告诉你哪些改动需要重启 server；开关接受 `true/false`、`on/off`、`yes/no`、`1/0`。
-非法值整批拒写（不会写进去一半），与手机设置面板走的是同一套校验。
+`set` 会告诉你哪些改动需要重启 server，哪些是热加载项（改完即生效）；开关接受 `true/false`、
+`on/off`、`yes/no`、`1/0`。非法值整批拒写（不会写进去一半），与手机设置面板走的是同一套校验。
+`init` 与 setup 一样不覆盖已有配置文件，要重建须显式加 `--force`。
 
 ### 非交互模式
 
@@ -407,6 +410,7 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 | doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
+| 输错一次 token 后，连正确 token 也返回 `{"status":"rate_limited"}` / HTTP 429 | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。15 分钟长锁需要连续 8 次失败、且每次都等过退避才触发 |
 | 第三方网关配置不生效 | `ANTHROPIC_*` 必须来自启动 server 的 shell，不是配置文件 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |
 | Android 安装后只是浏览器快捷方式 | Cloudflare Access 可能拦住 PWA 图标，见[部署指南](deployment.md#2b-android-pwa图标必须对匿名可达) |

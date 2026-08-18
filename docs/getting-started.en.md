@@ -119,17 +119,20 @@ config window, so you never have to go back to a terminal.
 With no GUI (server deployments), every setting is readable and writable from the shell:
 
 ```bash
+node scripts/config.js init              # create the config file (with a random AUTH_TOKEN) without the wizard
 node scripts/config.js schema            # list every setting and what it does (generated from the schema)
 node scripts/config.js get               # current config (secrets redacted unless --reveal)
 node scripts/config.js set PORT=4100 WEB_STATUSLINE=false
+node scripts/config.js set 'WORKDIRS=["/path/a","/path/b"]'   # array settings need a JSON literal, not a comma list
 node scripts/config.js unset PORT
 node scripts/config.js check             # validate the current config
 node scripts/config.js migrate           # legacy .env → ccm.config.json (inlines workdirs)
 ```
 
-`set` reports which changes need a server restart. Toggles accept `true/false`, `on/off`,
-`yes/no`, or `1/0`. Invalid values reject the whole batch (never a half-written config),
-using the same validation as the phone settings panel.
+`set` reports which changes need a server restart and which are hot-reloaded (effective
+immediately). Toggles accept `true/false`, `on/off`, `yes/no`, or `1/0`. Invalid values reject
+the whole batch (never a half-written config), using the same validation as the phone settings
+panel. Like setup, `init` refuses to overwrite an existing config file unless you pass `--force`.
 
 ### Non-interactive mode
 
@@ -421,6 +424,7 @@ Public access is in docs/deployment.md. The only start entries are npm start or 
 | doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
 | `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
+| After one wrong token, even the correct one returns `{"status":"rate_limited"}` / HTTP 429 | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. The 15-minute lockout needs 8 consecutive failures that each wait out the backoff |
 | A third-party gateway is ignored | `ANTHROPIC_*` must come from the server's startup shell, not the config file |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |
 | Android installs only a browser shortcut | Cloudflare Access may block PWA icons; see the [deployment guide](deployment.md#2b-android-pwa图标必须对匿名可达) |
