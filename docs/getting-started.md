@@ -10,7 +10,7 @@
 - 一个受 `AUTH_TOKEN`、工作区白名单和设备审批保护的手机入口。
 - 与本机 `claude` CLI 共用配置、工具和落盘会话记录的 Web 界面。
 
-本指南覆盖首次安装。已经用 LaunchAgent/systemd 常驻部署的实例不要再手动运行 `npm start`，请按[部署指南](deployment.md)重启服务。
+本指南覆盖首次安装。已经在跑桌面端或终端里的 `npm start` 时，不要再开第二个 server；桌面端用菜单「重启服务」，headless 在原终端重启。
 
 ## 1. 检查前置条件
 
@@ -18,13 +18,14 @@
 node --version
 which claude
 claude --version
+claude auth status
 ```
 
 需要满足：
 
 - Node.js ≥ 20。
 - `which claude` 能找到本机 CLI。
-- `claude` 已登录，能在终端正常开始一次对话。
+- `claude auth status` 显示已登录；或能在终端正常开始一次对话。
 - macOS 或 Linux。原生 Windows 属实验路径，推荐 WSL2。
 
 项目不自带 Claude，也不会替你安装或登录 CLI。
@@ -58,7 +59,7 @@ npm run setup
 向导会：
 
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
-2. 询问 `WORK_DIR`。请选择明确的项目目录，不要把整个家目录作为方便的默认范围。
+2. 询问 `WORK_DIR`。必须填一个项目的绝对路径；空回车和家目录都会被拒绝。
 3. 询问是否安装 CLI hooks bridge。默认安装，但只有你确认后才会写 `~/.claude/settings.json`。
 4. macOS 上还会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
    Xcode Command Line Tools。
@@ -140,7 +141,7 @@ node scripts/setup.js \
 - `--desktop` 只接受 `on` 或 `off`，缺省 `off`；`on` 会跑 `swiftc`。非 macOS 上显式给
   `--desktop=on` 会被拒绝并说明原因，而不是静默忽略。
 - 已有配置文件时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
-- 可用 `--config <path>` 指定配置文件位置。
+- 可用 `--config <path>` 指定配置文件位置。这条路径独立于仓库根已有的配置，不会因为旁边已有 `ccm.config.json` 而被拒。
 
 多工作区在 `ccm.config.json` 里加 `WORKDIRS` 数组，每项是绝对路径或 `{path, sessionLimit}`：
 
@@ -170,6 +171,8 @@ node scripts/doctor.js
 ```
 
 它会检查 token、CLI 路径、工作区、端口、网关环境、文件权限、bridge 状态和文档/前端一致性。
+默认不跑单测覆盖率（要跑一遍完整单测，约一分钟）；那道门槛由 CI 守着，维护者本地想立刻看就加 `--full`。
+若提示 3000 已被桌面端占用，不要再执行下一步的 `npm start`，从桌面端菜单重启服务。
 
 权限类问题可让 doctor 做最小修复：
 
@@ -202,7 +205,7 @@ curl -sS "http://127.0.0.1:3000/health?token=<AUTH_TOKEN>"
 
 返回包含 `status`、`versions`、`buildNonce` 与 `timestamp` 的 JSON 才算 server 已正常响应。`AUTH_TOKEN` 等同本机 shell 入口密钥，不要把真实值贴到 issue、聊天记录或截图中。
 
-如果这台机器已经有 LaunchAgent/systemd 常驻实例，3000 端口通常已被占用。不要启动第二个 server；按[部署指南的运维速查](deployment.md#运维速查)重启现有服务。
+如果桌面端或已有的 `npm start` 占着 3000，不要再起一个。桌面端点「重启服务」，headless 在原终端重启。详见[部署指南的运维速查](deployment.md#运维速查)。
 
 ## 6. 从手机打开
 
@@ -230,7 +233,7 @@ cloudflared tunnel --url http://localhost:3000
 https://<random>.trycloudflare.com/#token=<AUTH_TOKEN>
 ```
 
-随机隧道适合测试，域名每次启动都可能变化，也没有 Cloudflare Access；设备审批仍然生效。固定域名、Access 2FA 与常驻服务见[部署指南](deployment.md)。
+随机隧道适合测试，域名每次启动都可能变化，也没有 Cloudflare Access；设备审批仍然生效。固定域名和 Access 2FA 见[部署指南](deployment.md)。
 
 ## 7. 批准手机设备
 
@@ -303,11 +306,11 @@ npm run hooks:uninstall
 装机向导会问一句要不要编译它；也可以随时自己来：
 
 ```bash
-npm run app:build      # 编译出 desktop/build/CCM.app（约 420K，产物不入库）
-open desktop/build/CCM.app
+npm run app:install    # 编译并装进 /Applications —— 这是 macOS 那条入口
+                       # Spotlight / Launchpad / Dock 都能找到；升级后菜单点「重启应用」
 
-npm run app:install    # 或者：编译并装进 /Applications —— Spotlight / Launchpad / Dock 都能找到，
-                       # 以后启动不用再回仓库目录。升级同理，装完在菜单里点「重启应用」换上新版
+# 只想先看一眼、不装系统目录：
+npm run app:build && open desktop/build/CCM.app
 ```
 
 **只需要 Xcode Command Line Tools，不是完整的 Xcode**（前者约 1–2GB，后者 12GB+）。
@@ -329,8 +332,8 @@ xcode-select --install
 
 菜单里的**打开控制台…**是主窗口：服务状态、各 unit、以及全部动作都在这一屏。
 
-勾「开机自启（菜单栏）」会装一个 LaunchAgent。这是 macOS 平台的实现方式，
-不是产品要求你用的部署方案 —— 服务器上用 systemd / pm2 / docker 都行。
+勾「开机自启（菜单栏）」只让菜单栏图标随登录出现，实现上是一个 LaunchAgent。
+headless 继续用终端里的 `npm start`，两套不要同时占 3000。
 
 ### 为什么不直接发一个编译好的 app
 
@@ -362,23 +365,25 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 
 ```text
 帮我首次安装并启动 claude-chat-mobile（把本机 claude CLI 接到手机 Web UI）。
-这是全新环境首次安装，不是重启已部署的常驻服务。
+这是全新环境首次安装，不是重启已经在跑的桌面端或 npm start。
 
 按顺序做，每步确认结果再进入下一步：
-1. 检查 node --version ≥ 20，which claude 能找到命令，并确认 claude 已登录。
+1. 检查 node --version ≥ 20，which claude 能找到命令，并用 claude auth status 确认已登录。
    任一不满足就停下来告诉我，不要自行安装或登录 claude。
 2. 运行 npm install --omit=dev。
 3. 先跟我确认 WORK_DIR 的绝对路径，以及是否安装 CLI hooks bridge。
    不要把整个家目录当 WORK_DIR；hooks=on 会修改 ~/.claude/settings.json。
-4. 你的 shell 没有 TTY，不要运行交互向导。使用：
+4. 你的 shell 没有 TTY，不要运行交互向导。先 unset AUTH_TOKEN WORK_DIR PORT CCM_DATA_DIR
+   WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL，
+   以免当前会话里已有的值压过刚写入的配置。然后：
    node scripts/setup.js --yes --work-dir=<确认后的绝对路径> --hooks=<on 或 off>
    如果配置文件已存在就停下来，不要自行加 --force。
-5. 运行 node scripts/doctor.js；只在输出明确要求且安全时使用 --fix。
-6. 确认没有常驻服务占用端口后，在后台启动 server。用鉴权后的 /health JSON 验证，
-   不要只看进程是否存在。
+5. 运行 node scripts/doctor.js；只在输出明确要求且安全时使用 --fix。不要加 --full，除非我要求。
+6. 确认 3000 没被桌面端或另一个 npm start 占用后，用 `npm start` 启动（headless）。
+   用鉴权后的 /health JSON 验证，不要只看进程是否存在。
 7. 告诉我启动日志中的局域网手机地址，但不要把 AUTH_TOKEN 写进任何会外传的文件或报告。
 8. 等我的手机发起连接后，运行 node scripts/device.js list；让我核对设备，再执行 approve。
-固定公网域名和常驻部署按 docs/deployment.md 处理，不要擅自改系统服务。
+公网入口按 docs/deployment.md；启动只有 npm start 或 macOS 桌面端，不要擅自改系统服务。
 ```
 
 </details>
@@ -388,8 +393,9 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 | 现象 | 检查 |
 |---|---|
 | 启动日志没有手机地址 | `AUTH_TOKEN` 未设置；重新运行 setup 或修正配置文件后重启 |
-| agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；改用 `--yes --work-dir=... --hooks=...` |
-| `EADDRINUSE :3000` | 已有常驻服务或其他进程占用端口；不要盲目再启动 |
+| agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；现在会直接拒绝。改用 `--yes --work-dir=... --hooks=...` |
+| doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
+| `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
 | 第三方网关配置不生效 | `ANTHROPIC_*` 必须来自启动 server 的 shell，不是配置文件 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |

@@ -10,7 +10,7 @@
 - A phone entrypoint protected by `AUTH_TOKEN`, a workspace allowlist, and device approval.
 - A Web UI that shares configuration, tools, and persisted session history with your local `claude` CLI.
 
-This guide covers a first installation. If LaunchAgent or systemd already keeps the app running, do not start a second copy with `npm start`; restart it through the [deployment guide](deployment.md) instead.
+This guide covers a first installation. If the desktop app or a terminal `npm start` is already running, do not start a second server. Restart from the desktop menu, or in the same terminal for headless.
 
 ## 1. Check the prerequisites
 
@@ -18,13 +18,14 @@ This guide covers a first installation. If LaunchAgent or systemd already keeps 
 node --version
 which claude
 claude --version
+claude auth status
 ```
 
 You need:
 
 - Node.js 20 or newer.
 - A local `claude` command that `which` can find.
-- An authenticated CLI that can start a normal terminal conversation.
+- `claude auth status` showing a signed-in account, or a CLI that can start a normal terminal conversation.
 - macOS or Linux. Native Windows is experimental; WSL2 is recommended.
 
 The project does not bundle, install, or sign in to Claude for you.
@@ -58,7 +59,7 @@ npm run setup
 The wizard:
 
 1. Creates a random `AUTH_TOKEN`, writes it to `ccm.config.json`, and sets mode `0600`.
-2. Asks for `WORK_DIR`. Choose a specific project directory instead of exposing your whole home directory for convenience.
+2. Asks for `WORK_DIR`. It must be an absolute project path; an empty answer or your home directory is rejected.
 3. Asks whether to install the CLI hooks bridge. Installation is the default, but it writes `~/.claude/settings.json` only after you confirm.
 4. On macOS, asks whether to compile the [desktop console](#optional-macos-desktop-console). Not compiled by
    default — it needs the Xcode Command Line Tools.
@@ -146,7 +147,7 @@ node scripts/setup.js \
 - `--desktop` accepts only `on` or `off` and defaults to `off`; `on` runs `swiftc`. On a
   non-macOS host, an explicit `--desktop=on` is rejected with a reason rather than ignored.
 - If a config file exists, the command refuses to overwrite it. Add `--force` only after deciding to replace its current token and configuration.
-- Use `--config <path>` to place the config file elsewhere.
+- Use `--config <path>` to place the config file elsewhere. That path is independent of any existing project-root config — a repo that already has `ccm.config.json` will not block it.
 
 For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry is an absolute path or `{path, sessionLimit}`:
 
@@ -176,6 +177,8 @@ node scripts/doctor.js
 ```
 
 The doctor checks the token, CLI path, workspaces, port, gateway environment, file permissions, bridge state, and documentation/front-end consistency.
+It does not run the unit-test coverage suite by default (that means a full unit run, about a minute); CI guards that threshold, and maintainers can pass `--full` to see it locally.
+If it says port 3000 is held by the desktop app, do not run `npm start` next — restart from the desktop menu.
 
 For permission-only repairs:
 
@@ -208,7 +211,7 @@ curl -sS "http://127.0.0.1:3000/health?token=<AUTH_TOKEN>"
 
 The server is ready when it returns JSON containing `status`, `versions`, `buildNonce`, and `timestamp`. Treat `AUTH_TOKEN` as a key to your local shell: never paste the real value into issues, chat logs, or screenshots.
 
-If LaunchAgent or systemd already runs this checkout, port 3000 is probably occupied. Do not start a second server; use the [operations quick reference](deployment.md#运维速查) to restart the existing service.
+If the desktop app or an existing `npm start` already holds port 3000, do not start another. Restart from the desktop menu, or in the same terminal for headless. See the [operations quick reference](deployment.md#运维速查).
 
 ## 6. Open it on your phone
 
@@ -236,7 +239,7 @@ Then open:
 https://<random>.trycloudflare.com/#token=<AUTH_TOKEN>
 ```
 
-A quick tunnel is for testing: its hostname may change on every start and it has no Cloudflare Access layer, so device approval still applies. For a fixed domain, Access 2FA, and a persistent service, use the [deployment guide](deployment.md).
+A quick tunnel is for testing: its hostname may change on every start and it has no Cloudflare Access layer, so device approval still applies. For a fixed domain and Access 2FA, see the [deployment guide](deployment.md).
 
 ## 7. Approve the phone
 
@@ -309,12 +312,11 @@ macOS only, and entirely optional — the phone UI and the command line already 
 The setup wizard offers to compile it; you can also do it yourself at any time:
 
 ```bash
-npm run app:build      # builds desktop/build/CCM.app (~420K, not committed)
-open desktop/build/CCM.app
+npm run app:install    # build and put CCM.app in /Applications — this is the macOS entry
+                       # Spotlight / Launchpad / Dock can find it; after an upgrade pick 「重启应用」
 
-npm run app:install    # or: build and install into /Applications — findable from Spotlight /
-                       # Launchpad / Dock, no more launching from the repo directory. Same for
-                       # upgrades; afterwards pick "重启应用" (Relaunch) from the menu
+# try-run without installing into /Applications:
+npm run app:build && open desktop/build/CCM.app
 ```
 
 **It needs the Xcode Command Line Tools, not the full Xcode** (1–2GB versus 12GB+). Any machine
@@ -340,8 +342,8 @@ terminal** — installing, diagnosing, reading logs, and editing configuration a
 **Open Console…** in the menu is the main window: service status, individual units, and every action
 on one screen.
 
-Checking "Start at login (menu bar)" installs a LaunchAgent. That is how this platform does it, not
-a deployment model the project requires of you — systemd, pm2, or docker are all fine on a server.
+Checking "Start at login (menu bar)" only brings the menu-bar icon back at login (via a LaunchAgent).
+Headless keeps using `npm start` in a terminal. Do not let both occupy port 3000.
 
 ### Why there is no prebuilt app to download
 
@@ -376,24 +378,26 @@ Give the following prompt to Claude Code, Codex CLI, or another local coding age
 
 ```text
 Install and start claude-chat-mobile for the first time. It connects my local claude CLI to a phone Web UI.
-This is a clean first installation, not a restart of an already deployed persistent service.
+This is a clean first installation, not a restart of a desktop app or npm start that is already running.
 
 Follow these steps in order and verify each result before continuing:
-1. Check that node --version is at least 20, which claude finds the command, and claude is authenticated.
+1. Check that node --version is at least 20, which claude finds the command, and claude auth status shows a login.
    Stop and tell me if any check fails; do not install or sign in to claude yourself.
 2. Run npm install --omit=dev.
 3. Ask me for the absolute WORK_DIR and whether to install the CLI hooks bridge.
    Do not use my whole home directory. hooks=on changes ~/.claude/settings.json.
-4. Your shell has no TTY, so do not run the interactive wizard. Use:
+4. Your shell has no TTY, so do not run the interactive wizard. First unset AUTH_TOKEN WORK_DIR PORT
+   CCM_DATA_DIR WORK_DIRS WORK_DIRS_FILE CF_ACCESS_HOSTNAME CF_ACCESS_TEAM CF_ACCESS_AUD LOG_TERMINAL
+   so inherited values cannot override the file you are about to write. Then:
    node scripts/setup.js --yes --work-dir=<confirmed absolute path> --hooks=<on or off>
    If a config file already exists, stop instead of adding --force yourself.
-5. Run node scripts/doctor.js. Use --fix only when its output calls for a safe permission repair.
-6. Confirm no persistent service owns the port, then start the server in the background. Verify authenticated
-   /health JSON; do not rely only on the process existing.
+5. Run node scripts/doctor.js. Use --fix only when its output calls for a safe permission repair. Do not pass --full unless I ask.
+6. Confirm port 3000 is not held by the desktop app or another npm start, then start with `npm start` (headless).
+   Verify authenticated /health JSON; do not rely only on the process existing.
 7. Give me the LAN phone URL from startup logs, but never write AUTH_TOKEN into any file or report that may leave
    this machine.
 8. After my phone connects, run node scripts/device.js list. Let me verify the device before running approve.
-Use docs/deployment.md for a fixed public domain or persistent service. Do not change system services on your own.
+Public access is in docs/deployment.md. The only start entries are npm start or the macOS desktop app. Do not change system services on your own.
 ```
 
 </details>
@@ -403,8 +407,9 @@ Use docs/deployment.md for a fixed public domain or persistent service. Do not c
 | Symptom | Check |
 |---|---|
 | No phone URL in startup logs | `AUTH_TOKEN` is unset; rerun setup or correct the config file, then restart |
-| An agent ran setup but wrote nothing | Interactive mode was used without a TTY; use `--yes --work-dir=... --hooks=...` |
-| `EADDRINUSE :3000` | A persistent service or another process owns the port; do not blindly start another |
+| An agent ran setup but wrote nothing | Interactive mode was used without a TTY; setup now refuses. Use `--yes --work-dir=... --hooks=...` |
+| doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
+| `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
 | A third-party gateway is ignored | `ANTHROPIC_*` must come from the server's startup shell, not the config file |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |

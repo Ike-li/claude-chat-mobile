@@ -109,3 +109,36 @@ test('summarizeCoverageGap：算不出行数时 gapPercent 是 null，不是 0�
   assert.equal(gap.gapLines, 0);
   assert.deepEqual(gap.unloaded, ['src/a.js']);
 });
+
+// ── 2026-08-17：谁在守这个门槛 ──────────────────────────────────────────────
+// doctor 把覆盖率检查改成 `--full` 才跑之后，它对用户说「覆盖率仍由 npm run check 守门」——
+// 而 check 的脚本链里根本没有 coverage-check，CI 里也没有，门槛于是一个执行点都不剩。
+// 这与本文件上方那条注释记的是同一类错（doctor 曾写死「≥ 65%」报了个不存在的数字）：
+// 跨文件的事实断言没人校验，写错就一直错。下面两条把「守门人存在」和「doctor 别乱点名」
+// 都变成机械判据。
+
+test('覆盖率门槛必须有自动执行点——CI 里真的会跑 coverage-check', () => {
+  const workflow = readFileSync(new URL('../../.github/workflows/test.yml', import.meta.url), 'utf8');
+  assert.match(
+    workflow,
+    /coverage-check\.js/,
+    'CI 不跑 coverage-check ＝ 门槛无人守门：doctor 默认已跳过它，除此之外没有任何自动路径',
+  );
+});
+
+test('doctor 跳过覆盖率时点名的 npm script，必须真的跑 coverage-check', () => {
+  const doctor = readFileSync(new URL('../../scripts/doctor.js', import.meta.url), 'utf8');
+  const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
+
+  // 只看 checkCoverageThreshold 的跳过分支——doctor 别处提 npm 命令是它自己的事。
+  const skipBranch = doctor.match(/function checkCoverageThreshold[\s\S]*?\n {2}}/)?.[0];
+  assert.ok(skipBranch, 'checkCoverageThreshold 的跳过分支没找到，改了结构就同步改这条断言');
+
+  for (const [, script] of skipBranch.matchAll(/npm run ([\w:]+)/g)) {
+    assert.match(
+      pkg.scripts?.[script] ?? '',
+      /coverage-check/,
+      `doctor 让用户拿 \`npm run ${script}\` 守覆盖率，但它的定义里没有 coverage-check —— 换个真跑的命令，或别点名`,
+    );
+  }
+});

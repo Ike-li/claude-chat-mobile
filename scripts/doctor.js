@@ -1,24 +1,24 @@
 #!/usr/bin/env node
 // scripts/doctor.js —— 启动前配置自检
-// 用法: node scripts/doctor.js [--env=path/to/.env] [--fix]
+// 用法: node scripts/doctor.js [--env=path/to/.env] [--fix] [--full]
 //
 // 检查项（17 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
-// 4. PORT 未被占用（被自家常驻 server unit 占用判 ok——常驻部署下那是正常态）
+// 4. PORT 未被占用（被自家 server unit 占用判 ok——桌面端拉着服务时那是正常态）
 // 5. WEB_STATUSLINE 配置口径（web 自有状态栏默认自包含启用，可用 WEB_STATUSLINE=off 关闭）
 // 6. CLI statusline bridge 安装态（只读 status；不安装、不改 ~/.claude）
 // 7. 网关环境一致性（.env 若有 ANTHROPIC_* 提示已被剥除）
 // 8. 配置文件权限（.env / data/*.json 是否为 owner-only 0600）
 // 9. 文档一致性（死链 + 旧文件名漂移 + npm scripts + SDK 版本；防文档间漂移的机械化背书）
 // 10. 前端 JS 语法（递归检查 public/js/**/*.js——冒烟不加载浏览器脚本，语法错会潜伏致「未连接」）
-// 11. 测试覆盖率门槛
+// 11. 测试覆盖率门槛（仅 --full；默认跳过——装机预检不该跑完整单测）
 // 12. CLI hooks 桥安装态（只读 status；不安装、不改 ~/.claude）
 // 13. 日志开关长开（DEBUG_SDK_MESSAGES/LOG_INTERACTIONS/LOG_STDERR + 日志体积）
 // 14. CLAUDE_CONFIG_DIR 兼容性（CLI 认它、本仓固定读 ~/.claude；设了会静默读不到历史，见 doctor-checks.claudeConfigDirDiagnostic）
 // 15. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
-// 16. LaunchAgent 常驻服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
+// 16. 桌面端服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
 // 17. 配置格式可见性（legacy .env 恒 ok 非 warn——一等路径不催迁，只在此告知迁移能力，见 doctor-checks.configFormatDiagnostic）
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
@@ -182,8 +182,8 @@ function readServiceStatus() {
   return _serviceStatus;
 }
 
-// 端口是不是自家常驻 server 占的。三个条件都要：unit 在跑、探到的端口一致、确实连得通。
-// 不能只看「server 在跑」——doctor 支持 --env=other.env，那份 .env 的 PORT 可能与常驻服务不同，
+// 端口是不是自家 server 占的。三个条件都要：unit 在跑、探到的端口一致、确实连得通。
+// 不能只看「server 在跑」——doctor 支持 --env=other.env，那份 .env 的 PORT 可能与在跑的服务不同，
 // 只看运行态会把「别的进程占了我要用的端口」误报成预期占用。
 // 只负责取数；三条件判定在 doctor-checks.resolveServicePortOwner（纯函数、可测）。
 // 判据留在这里时零覆盖 —— 改成无条件 return label 全套单测照样绿。
@@ -191,7 +191,7 @@ function servicePortOwner(port) {
   return resolveServicePortOwner({ status: readServiceStatus(), port });
 }
 
-// D4: PORT 未被占用（或被自家常驻服务占用——那是常驻部署的正常态，不是故障）
+// D4: PORT 未被占用（或被自家 server unit 占用——桌面端拉着服务时那是正常态，不是故障）
 async function checkPort() {
   const port = parseInt(process.env.PORT || '3000', 10);
   if (isNaN(port) || port < 1 || port > 65535) {
@@ -212,7 +212,7 @@ async function checkPort() {
   ({ ok, warn, fail })[r.status](r.name, r.detail);
 }
 
-// D16: LaunchAgent 常驻服务安装态。与 D6/D12 同款只读探针；判定全在 doctor-checks.serviceUnitsDiagnostic，
+// D16: 桌面端服务安装态。与 D6/D12 同款只读探针；判定全在 doctor-checks.serviceUnitsDiagnostic，
 // 与 UI 体检共用同一份（两处各写一份迟早分叉）。
 function checkServiceUnits() {
   const s = readServiceStatus();
@@ -415,7 +415,18 @@ function checkFrontendSyntax() {
 // 门槛与实测值都从子进程输出里读，不在这里复述常量——此处曾写死「≥ 65%」，而
 // scripts/coverage-check.js 的默认门槛早已是 75，doctor 于是对着用户报了一个不存在的数字。
 // 覆盖率是会持续变的量，任何抄写都会再次漂移，只能转述真实输出。
-function checkCoverageThreshold() {
+//
+// 默认跳过：装机预检会因此再跑一遍完整单测（约一分钟），新用户只想知道 token/CLI/端口是否可用。
+// 跳过后门槛由 CI 的 unit-test job 守（`.github/workflows/test.yml` 直接跑 coverage-check.js）；
+// 本地要立刻知道就 `node scripts/doctor.js --full`。
+// ★ 这里【不要】点名 `npm run check`：它的脚本链里没有 coverage-check，写上去就是又一次
+//   「对着用户报一个不存在的东西」。tests/unit/coverage-check.test.mjs 会按 package.json 核对本段里
+//   提到的每个 npm script。
+function checkCoverageThreshold({ full = false } = {}) {
+  if (!full) {
+    ok(bi('测试覆盖率', 'Test coverage'), bi('已跳过（装机预检默认不跑单测；本地用 --full，CI 每次推送都跑）', 'Skipped (first-run doctor does not run the unit suite; use --full locally, CI runs it on every push)'));
+    return;
+  }
   try {
     const stdout = execSync('node scripts/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 }).toString();
     const actual = stdout.match(/行覆盖率:\s*([\d.]+)%/)?.[1];
@@ -516,9 +527,10 @@ function checkConfigFormat() {
 
 // ──────────────────────── 主流程 ────────────────────────
 
-// 解析命令行 --env 和 --fix
+// 解析命令行 --env / --fix / --full
 const envArg = process.argv.find(a => a.startsWith('--env='));
 const shouldFix = process.argv.includes('--fix');
+const shouldFull = process.argv.includes('--full');
 const envFile = envArg ? envArg.split('=')[1] : join(HERE, '.env');
 if (envArg && !existsSync(envFile)) {
   console.error(`错误: 指定的 .env 文件不存在: ${envFile}`);
@@ -577,7 +589,7 @@ function effectiveConfigFiles() {
   checkConfigFormat();
   checkDocConsistency();
   checkFrontendSyntax();
-  checkCoverageThreshold();
+  checkCoverageThreshold({ full: shouldFull });
   checkHooksBridge();
   checkLogSwitches();
   checkClaudeConfigDir();
