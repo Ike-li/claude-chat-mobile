@@ -159,14 +159,28 @@ struct CCMCoreTests {
         eq(unitTitle(unit(#"{"unit":"x","state":"running"}"#)!).contains("("), false, "无 pid 时不留空括号")
 
         // ── UI 可理解性（2026-08-17 机主反馈「不知道谁是干嘛的」）────────────────
-        // stopped 的状态词按 unit 语义定制：定时器与打火即退任务的「停止」是健康待机，
+        // stopped 的状态词按**调度形态**定制：定时器与打火即退任务的「停止」是健康待机，
         // 照写「已停止」会被读成故障（用户真的来问过）。server/tunnel 的 stopped 才是真没跑。
-        eq(unitTitle(unit(#"{"unit":"logrotate","state":"stopped"}"#)!).contains("待机 · 每天 03:47"),
-           true, "logrotate 待机语义而非故障语义")
-        eq(unitTitle(unit(#"{"unit":"menubar","state":"stopped"}"#)!).contains("随登录自启"),
-           true, "menubar 打火即退的常态语义")
-        eq(unitTitle(unit(#"{"unit":"server","state":"stopped"}"#)!).contains("已停止"),
-           true, "server 的 stopped 是真停止")
+        //
+        // ★ 2026-08-18：判据从 unit 名字表换成 status --json 里的 schedule 字段。
+        // 名字表只硬编码了 logrotate/menubar 两个自家模板，机主自建的 com.ccm.tunnel-watch
+        // （每 30s 救一次隧道）落进 default 仍被标「已停止」—— 机主本人因此来问「这个要启用吗」。
+        // 用户随时可能再加一个 watch，名字表永远追不上；plist 里的调度形态是现成的事实。
+        eq(unitTitle(unit(#"{"unit":"logrotate","state":"stopped","schedule":{"kind":"periodic","calendar":{"Hour":3,"Minute":47}}}"#)!).contains("待机 · 每天 03:47"),
+           true, "时刻由 plist 算出，模板改了文案跟着变")
+        eq(unitTitle(unit(#"{"unit":"menubar","state":"stopped","schedule":{"kind":"on-demand"}}"#)!).contains("随登录自启"),
+           true, "打火即退的常态语义")
+        eq(unitTitle(unit(#"{"unit":"tunnel-watch","state":"stopped","schedule":{"kind":"periodic","everySeconds":30}}"#)!).contains("待机 · 每 30 秒触发"),
+           true, "模板里没有的自建 unit 同样认得出待机——名字表做不到这条")
+        eq(unitTitle(unit(#"{"unit":"server","state":"stopped","schedule":{"kind":"resident"}}"#)!).contains("已停止"),
+           true, "KeepAlive 的 unit 停了就是真停了，绝不粉饰")
+        eq(unitTitle(unit(#"{"unit":"x","state":"stopped"}"#)!).contains("已停止"),
+           true, "没有 schedule 字段（旧版 CLI）时保守回落「已停止」")
+        // 灯也要跟着分：待机用 ◌，与 scripts/service.js 的 STATE_ICON 同一套符号。
+        eq(unit(#"{"unit":"x","state":"stopped","schedule":{"kind":"periodic","everySeconds":30}}"#)?.lamp, "◌",
+           "待机的灯不能和真停止一样")
+        eq(unit(#"{"unit":"x","state":"stopped","schedule":{"kind":"resident"}}"#)?.lamp, "○",
+           "常驻服务停了仍是 ○")
 
         // 分组：server/tunnel 是日常主服务，其余收进「其他服务」子菜单
         let all = ["server", "tunnel", "logrotate", "menubar", "tunnel-watch"].map {

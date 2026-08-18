@@ -11,7 +11,9 @@ import {
   SERVICE_UNIT_NAMES,
   classifyOwnership,
   classifyState,
+  describeSchedule,
   diffUnitSemantics,
+  extractSchedule,
   extractUnitFacts,
   isSupervised,
   labelFor,
@@ -449,5 +451,79 @@ test.describe('isSupervised', () => {
 
   test('无参调用不抛错（读真实 process）', () => {
     assert.equal(typeof isSupervised(), 'boolean');
+  });
+});
+
+// ── 调度形态：stopped 到底是故障还是待机 ──────────────────────────────────
+//
+// launchd 眼里「此刻没有进程」只有一个词 —— stopped。但那对 KeepAlive 常驻服务是故障信号，
+// 对定时器/打火即退任务是**健康待机**。同一个枚举值承载两种相反含义，UI 只能靠 unit 名字猜，
+// 于是 default 分支必然漏掉没被硬编码的 unit：机主自建的 com.ccm.tunnel-watch 每 30s 救一次
+// 隧道，面板照样标「已停止」，机主本人因此来问过「这个要启用吗」。
+//
+// 判据不该是名字表，而是 plist 里本来就写着的事实。**刻意不走 extractUnitFacts**：那个函数
+// 对不在 UNITS 表里的 unit 直接抛错，而最需要这个判断的恰恰是 unknown unit。
+test.describe('extractSchedule —— 从 plist 读「它期望常驻吗」', () => {
+  test('KeepAlive true → resident（这种 stopped 是真故障）', () => {
+    assert.deepEqual(extractSchedule({ KeepAlive: true }), { kind: 'resident' });
+  });
+
+  test('KeepAlive 是字典（launchd 允许 {SuccessfulExit:false}）同样算 resident', () => {
+    assert.deepEqual(extractSchedule({ KeepAlive: { SuccessfulExit: false } }), { kind: 'resident' });
+  });
+
+  test('StartInterval → periodic 并带上秒数（tunnel-watch 就是 30）', () => {
+    assert.deepEqual(extractSchedule({ StartInterval: 30, RunAtLoad: true }), { kind: 'periodic', everySeconds: 30 });
+  });
+
+  test('StartCalendarInterval → periodic 并带上时刻（logrotate 每天 03:47）', () => {
+    assert.deepEqual(
+      extractSchedule({ StartCalendarInterval: { Hour: 3, Minute: 47 } }),
+      { kind: 'periodic', calendar: { Hour: 3, Minute: 47 } },
+    );
+  });
+
+  test('只有 RunAtLoad → on-demand（menubar：登录时打一枪即退）', () => {
+    assert.deepEqual(extractSchedule({ RunAtLoad: true, KeepAlive: false }), { kind: 'on-demand' });
+  });
+
+  test('什么都没有 → unknown，绝不擅自说成待机', () => {
+    assert.deepEqual(extractSchedule({}), { kind: 'unknown' });
+    assert.deepEqual(extractSchedule(null), { kind: 'unknown' });
+  });
+
+  // KeepAlive 与 StartInterval 同时写时以 KeepAlive 为准：launchd 会一直保活，
+  // 那个 interval 实际不起作用，报成 periodic 会把真故障说成待机。
+  test('KeepAlive 优先于 StartInterval（真常驻的 stopped 不能被说成待机）', () => {
+    assert.equal(extractSchedule({ KeepAlive: true, StartInterval: 30 }).kind, 'resident');
+  });
+});
+
+test.describe('describeSchedule —— 待机说明由事实算出，不是硬编码时刻', () => {
+  test('秒级间隔', () => {
+    assert.equal(describeSchedule({ kind: 'periodic', everySeconds: 30 }), '待机 · 每 30 秒触发');
+  });
+
+  test('分钟级间隔换算成分钟，别让人读「每 3600 秒」', () => {
+    assert.equal(describeSchedule({ kind: 'periodic', everySeconds: 300 }), '待机 · 每 5 分钟触发');
+    assert.equal(describeSchedule({ kind: 'periodic', everySeconds: 3600 }), '待机 · 每 60 分钟触发');
+  });
+
+  // 硬编码「每天 03:47」的问题：模板改了时刻，文案不会跟着变。从 plist 算就不会漂。
+  test('日历时刻补零成 HH:MM', () => {
+    assert.equal(describeSchedule({ kind: 'periodic', calendar: { Hour: 3, Minute: 47 } }), '待机 · 每天 03:47');
+    assert.equal(describeSchedule({ kind: 'periodic', calendar: { Hour: 0, Minute: 5 } }), '待机 · 每天 00:05');
+  });
+
+  test('日历只给了小时 → 只说小时那一档，不编造分钟', () => {
+    assert.equal(describeSchedule({ kind: 'periodic', calendar: { Hour: 3 } }), '待机 · 每天 03:00');
+    assert.equal(describeSchedule({ kind: 'periodic', calendar: { Minute: 15 } }), '待机 · 每小时第 15 分');
+  });
+
+  test('on-demand / resident / unknown', () => {
+    assert.equal(describeSchedule({ kind: 'on-demand' }), '随登录自启');
+    assert.equal(describeSchedule({ kind: 'resident' }), null, 'resident 的 stopped 是故障，没有待机说法');
+    assert.equal(describeSchedule({ kind: 'unknown' }), null);
+    assert.equal(describeSchedule(null), null);
   });
 });

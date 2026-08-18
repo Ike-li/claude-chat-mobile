@@ -10,7 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createServiceManager, describeUnit, formatStatus, resolveEventsPath } from '../../scripts/service.js';
+import { createServiceManager, describeUnit, formatStatus, formatControlResult, resolveEventsPath } from '../../scripts/service.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'scripts', 'service.js');
@@ -38,17 +38,26 @@ const HANDWRITTEN = {
     StandardOutPath: `${HOME}/Library/Logs/ccm-tunnel.log`,
     StandardErrorPath: `${HOME}/Library/Logs/ccm-tunnel.log`,
   },
+  // StartCalendarInterval 逐字对齐 desktop/launchd/log-rotate.plist.template（03:47）——
+  // 待机文案由它算出来，fixture 编错就会让测试与实现互相印证一个假形态。
   [`${HOME}/Library/LaunchAgents/com.ccm.logrotate.plist`]: {
     Label: 'com.ccm.logrotate',
     ProgramArguments: ['/bin/bash', `${REPO}/scripts/rotate-logs.sh`],
     RunAtLoad: false,
+    StartCalendarInterval: { Hour: 3, Minute: 47 },
     StandardOutPath: `${HOME}/Library/Logs/ccm-logrotate.log`,
     StandardErrorPath: `${HOME}/Library/Logs/ccm-logrotate.log`,
   },
+  // 机主真机 plist 的形态（2026-08-18 读自 ~/Library/LaunchAgents/，路径按 identity 纪律换成 /Users/you）：
+  // 每 30s 检测 en0 的 DHCP 漂移，变了就 kickstart 隧道。**它没有 KeepAlive** —— 打一枪即退，
+  // 所以 launchctl list 里 pid 恒为 `-`，而那正是它健康工作时的样子。
   [`${HOME}/Library/LaunchAgents/com.ccm.tunnel-watch.plist`]: {
     Label: 'com.ccm.tunnel-watch',
-    ProgramArguments: ['/bin/zsh', '-lc', 'my own watchdog'],
+    ProgramArguments: ['/bin/bash', `${HOME}/.cloudflared/ccm-tunnel-bindwatch.sh`],
     RunAtLoad: true,
+    StartInterval: 30,
+    StandardOutPath: `${HOME}/Library/Logs/ccm-tunnel-watch.log`,
+    StandardErrorPath: `${HOME}/Library/Logs/ccm-tunnel-watch.log`,
   },
 };
 
@@ -96,6 +105,20 @@ test.describe('status —— 平台降级', () => {
     assert.equal(out.platform, 'linux');
     assert.deepEqual(out.units, []);
     assert.match(out.warnings.join(' '), /macOS/);
+  });
+
+  // 这条警告是 Linux 用户在本仓唯一会看到的「那我该怎么办」。它此前写「Linux 请用 systemd，
+  // 见 docs/deployment.md」—— 而 deployment.md 收敛成两条入口后明说【本仓库不提供官方 unit】，
+  // 于是指路指向了一份不存在的指南。降级提示必须落在真实存在的入口上。
+  test('非 macOS 的指路落在真实入口上，不指向仓库不提供的方案', () => {
+    const warning = createServiceManager({
+      platform: 'linux', home: HOME, repo: REPO,
+      execLaunchctl: () => assert.fail('非 darwin 不应调用 launchctl'),
+      readPlistFile: () => assert.fail('非 darwin 不应读盘'),
+    }).status().warnings.join(' ');
+
+    assert.match(warning, /npm start/, 'headless 那条入口是全平台基线，指路要指到它');
+    assert.doesNotMatch(warning, /请用 systemd/, '仓库不提供 systemd unit，别把用户支去找一份不存在的指南');
   });
 });
 
@@ -353,6 +376,80 @@ test.describe('CLI 端到端', () => {
     assert.equal(r.status, 0);
     assert.ok(!r.stdout.trim().startsWith('{'), '人类模式不该直接吐 JSON');
     assert.match(r.stdout, /macOS/);
+  });
+});
+
+// ── 待机 ≠ 故障 ───────────────────────────────────────────────────────────
+//
+// launchd 的 stopped 只说「此刻没有进程」。5 个 unit 里有 3 个（tunnel-watch / logrotate /
+// menubar）健康工作时就该是这个状态，而面板一律标「已停止」——机主本人因此来问过
+// 「tunnel-watch 要启用吗」。判据来自 plist 里的调度形态，不是 unit 名字表：后者必然漏掉
+// 用户自建的 unit，而那恰恰是最容易被误读的一类（它还同时带着「非本仓」标签）。
+test.describe('周期 job 的 stopped 是待机，不是故障', () => {
+  const unitOf = (name) => makeManager().status().units.find((u) => u.unit === name);
+
+  test('status 给出每个 unit 的调度形态（含模板里没有的自建 unit）', () => {
+    assert.deepEqual(unitOf('server').schedule, { kind: 'resident' });
+    assert.deepEqual(unitOf('logrotate').schedule, { kind: 'periodic', calendar: { Hour: 3, Minute: 47 } });
+    assert.deepEqual(unitOf('tunnel-watch').schedule, { kind: 'periodic', everySeconds: 30 },
+      'unknown unit 走的是另一条构造路径，最需要这个字段的就是它');
+  });
+
+  test('周期 job 的 detail 说「待机」并给出触发节奏，不说「已停止」', () => {
+    assert.match(unitOf('tunnel-watch').detail, /待机 · 每 30 秒触发/);
+    assert.match(unitOf('logrotate').detail, /待机 · 每天 03:47/);
+  });
+
+  test('自建 unit 仍然保留「非本仓管理」这句——待机说明是补充不是替换', () => {
+    assert.match(unitOf('tunnel-watch').detail, /非本仓管理/);
+  });
+
+  test('常驻服务停了照旧是故障，绝不粉饰成待机', () => {
+    const mgr = makeManager({ tsv: ['PID\tStatus\tLabel', '-\t0\tcom.ccm.server'].join('\n') });
+    const server = mgr.status().units.find((u) => u.unit === 'server');
+    assert.equal(server.state, 'stopped');
+    assert.doesNotMatch(server.detail, /待机/, 'KeepAlive 的 unit 没在跑就是没在跑');
+  });
+
+  test('人类可读面板里周期 job 不显示成 ○ stopped', () => {
+    const out = formatStatus(makeManager().status());
+    const line = out.split('\n').find((l) => l.includes('com.ccm.tunnel-watch'));
+    assert.ok(line, 'tunnel-watch 应出现在面板里');
+    assert.doesNotMatch(line, /stopped/, '「stopped」这个词正是让机主以为它没启用的原因');
+  });
+});
+
+// ── start/restart 的结果呈现 ──────────────────────────────────────────────
+//
+// manager 层标了 unverified 而 CLI 不打印它，等于没标——这类「接线洞」在本仓有前科
+// （resume 冷读模型那次，server 侧接好了、前端没接，全套单测照样绿）。把呈现抽成
+// 纯函数是为了让它有人看着：start/restart 会真碰 launchctl，端到端 spawn 测不了。
+test.describe('formatControlResult —— 弱判据必须出现在人眼前', () => {
+  test('普通成功：一行 ✓，不带噪音', () => {
+    const out = formatControlResult({ ok: true, label: 'com.ccm.server', action: 'started' });
+    assert.match(out.stdout, /✓ com\.ccm\.server/);
+    assert.equal(out.stderr, '');
+  });
+
+  test('restart 带 pid 变化时把新旧 pid 打出来', () => {
+    const out = formatControlResult({ ok: true, label: 'com.ccm.server', action: 'restarted', oldPid: 1, newPid: 2 });
+    assert.match(out.stdout, /1 → 2/);
+  });
+
+  test('unverified 的成功必须带一行 ⚠ 到 stderr，而不是和普通成功长得一样', () => {
+    const out = formatControlResult({
+      ok: true, label: 'com.ccm.server', action: 'started',
+      unverified: true, warning: '没能确认监听者就是本服务，用 service health 复核',
+    });
+    assert.match(out.stdout, /✓ com\.ccm\.server/, '仍然是成功，不改退出码语义');
+    assert.match(out.stderr, /⚠/);
+    assert.match(out.stderr, /复核/);
+  });
+
+  test('失败：只有 ✗ 到 stderr', () => {
+    const out = formatControlResult({ ok: false, error: '端口 3000 已被其它进程占用' });
+    assert.equal(out.stdout, '');
+    assert.match(out.stderr, /✗ 端口 3000/);
   });
 });
 

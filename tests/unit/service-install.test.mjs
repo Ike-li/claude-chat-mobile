@@ -53,7 +53,7 @@ const CUSTOM_TUNNEL_OBJ = {
   StandardErrorPath: `${HOME}/Library/Logs/ccm-tunnel.log`,
 };
 
-function setup({ files = {}, objs = {}, manifest = null, launchctlFails = false, tsv = 'PID\tStatus\tLabel' } = {}) {
+function setup({ files = {}, objs = {}, manifest = null, launchctlFails = false, tsv = 'PID\tStatus\tLabel', portListenerPid = () => null } = {}) {
   const fs = new Map(Object.entries(files));
   const plists = { ...objs };
   const calls = [];
@@ -93,6 +93,7 @@ function setup({ files = {}, objs = {}, manifest = null, launchctlFails = false,
     readEnv: () => ({ PORT: '3000' }),
     envFileExists: () => true,
     tcpProbe: () => false,
+    portListenerPid,
     lanIp: () => null,
     realpath: (p) => p,
   });
@@ -237,6 +238,15 @@ test.describe('install —— 护栏：绝不覆写用户的配置', () => {
     assert.equal(r.ok, false);
     assert.match(r.error, /adopt/, '应引导用 adopt 而不是默默覆盖');
     assert.equal(fs.get(SERVER_PLIST), HANDWRITTEN_XML, '手写的 plist 必须原样保留');
+  });
+
+  test('端口被前台 npm start 占着时拒绝 install，不 bootstrap', () => {
+    const { mgr, calls, fs } = setup({ portListenerPid: () => 4242 });
+    const r = mgr.install('server');
+    assert.equal(r.ok, false);
+    assert.match(r.error, /npm start|占用/);
+    assert.ok(!calls.some((a) => a[0] === 'bootstrap'), '占用时不得 bootstrap（RunAtLoad 会立刻拉起）');
+    assert.equal(fs.has(SERVER_PLIST), false, '拒绝时不能留下半份 plist');
   });
 
   test('tunnel 缺 ~/.cloudflared/config.yml 时拒绝安装（否则装出一个崩溃重启循环）', () => {

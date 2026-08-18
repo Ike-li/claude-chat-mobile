@@ -24,7 +24,7 @@ const SERVER_OBJ = {
 
 const tsvWith = (pid) => ['PID\tStatus\tLabel', `${pid ?? '-'}\t0\tcom.ccm.server`].join('\n');
 
-function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () => true, env = { PORT: '3000', AUTH_TOKEN: 'tok' }, extraPlists = [], execLaunchctl } = {}) {
+function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () => true, env = { PORT: '3000', AUTH_TOKEN: 'tok' }, extraPlists = [], execLaunchctl, portListenerPid = () => null } = {}) {
   const calls = [];
   const httpCalls = [];
   const present = new Set([SERVER_PLIST, ...extraPlists]);
@@ -55,6 +55,7 @@ function setup({ pids = [26867], httpGet, launchctlFails = false, tcpProbe = () 
     readEnv: () => env,
     envFileExists: () => true,
     tcpProbe,
+    portListenerPid,
     lanIp: () => null,
     realpath: (p) => p,
     sleep: () => {},
@@ -109,6 +110,50 @@ test.describe('start / stop', () => {
     assert.equal(r.ok, false);
     assert.match(r.error, /Could not find service/);
   });
+
+  // 先 npm start 再点桌面端「启动」：kickstart 会再拉一个 server.js，EADDRINUSE 后
+  // KeepAlive 空转。端口上的 pid 对不上 LaunchAgent 时必须先拒绝。
+  test('start 在端口被非 LaunchAgent 进程占用时拒绝，且不 kickstart', () => {
+    const { mgr, calls } = setup({ portListenerPid: () => 4242 });
+    const r = mgr.start('server');
+    assert.equal(r.ok, false);
+    assert.match(r.error, /npm start|占用/, `应让用户去停前台进程，实际：${r.error}`);
+    assert.ok(!calls.some((a) => a[0] === 'kickstart'), '占用时不得 kickstart，否则 KeepAlive 空转');
+  });
+
+  test('start server 端口一直听不上 → 不假装成功', () => {
+    const { mgr } = setup({ tcpProbe: () => false, portListenerPid: () => null });
+    const r = mgr.start('server', { timeoutMs: 300, intervalMs: 100 });
+    assert.equal(r.ok, false);
+    assert.match(r.error, /端口|听/);
+  });
+
+  test('端口就是 LaunchAgent 自己在听 → start 放行', () => {
+    const { mgr, calls } = setup({ portListenerPid: () => 26867 });
+    const r = mgr.start('server');
+    assert.equal(r.ok, true, r.error);
+    assert.ok(calls.some((a) => a[0] === 'kickstart'));
+    assert.ok(!r.unverified, 'lsof 认出是自己 = 强判据，不该标未验证');
+  });
+
+  // ★ 两条闸都 fail-open 时要留下痕迹。lsof 看不清（权限/超时/不可用）→ serverPortConflict
+  // 放行 → kickstart → 这里只剩 tcpProbe，而【纯 TCP 握手对占位进程一样通】
+  // （CCMCore.swift 装机末步用 health 而非 status，理由就是这个）。判据弱了可以，
+  // 但不能和「确认是自己在听」长得一模一样——否则用户没有任何线索去复核。
+  test('lsof 看不清、只有 tcpProbe 通 → 仍算起来了，但必须标出没验过', () => {
+    const { mgr } = setup({ portListenerPid: () => null, tcpProbe: () => true });
+    const r = mgr.start('server');
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.unverified, true, 'tcpProbe 单独成立时判据是弱的，要标出来');
+    assert.match(r.warning ?? '', /health|复核|确认/, '要给出下一步怎么复核，不是干标一个布尔');
+  });
+
+  test('restart 走同一条弱判据时也标未验证（别只修 start 那一半）', () => {
+    const { mgr } = setup({ pids: [26867, 30001], portListenerPid: () => null, tcpProbe: () => true });
+    const r = mgr.restart('server', { wait: true });
+    assert.equal(r.ok, true, r.error);
+    assert.equal(r.unverified, true);
+  });
 });
 
 test.describe('restart --wait —— 用 PID 变化判就绪', () => {
@@ -141,6 +186,14 @@ test.describe('restart --wait —— 用 PID 变化判就绪', () => {
     const r = mgr.restart('server', { wait: true, timeoutMs: 300, intervalMs: 100 });
     assert.equal(r.ok, false);
     assert.match(r.error, /端口|监听/);
+  });
+
+  test('restart 同样拒绝：端口被前台 npm start 占着时不得 kickstart -k', () => {
+    const { mgr, calls } = setup({ portListenerPid: () => 4242 });
+    const r = mgr.restart('server');
+    assert.equal(r.ok, false);
+    assert.match(r.error, /npm start|占用/);
+    assert.ok(!calls.some((a) => a[0] === 'kickstart'), '占用时不得换进程');
   });
 
   test('不带 --wait 时立刻返回，不轮询', () => {
@@ -201,7 +254,7 @@ test.describe('health —— 唯一会碰 HTTP 的路径', () => {
     assert.equal(n, 1, '收到 401 后一次都不能再试——8 次就锁 15 分钟');
     assert.equal(r.ok, false);
     assert.equal(r.reason, 'auth-mismatch');
-    assert.match(r.error, /\.env|重启|不一致/);
+    assert.match(r.error, /配置|重启|不一致/);
   });
 
   test('429 也不重试（已经被锁了，再戳只会更久）', () => {

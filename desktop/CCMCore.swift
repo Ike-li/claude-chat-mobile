@@ -21,6 +21,14 @@ struct ListenInfo: Decodable {
     let reachable: Bool?
 }
 
+/// unit 的调度形态，来自 scripts/service.js 的 `extractSchedule`（读 plist 算出）。
+/// 它回答的是「这个 unit 期望常驻吗」—— stopped 是故障还是健康待机，全看这个。
+struct ScheduleInfo: Decodable {
+    let kind: String?              // resident | periodic | on-demand | unknown
+    let everySeconds: Int?         // StartInterval
+    let calendar: [String: Int]?   // StartCalendarInterval
+}
+
 struct UnitStatus: Decodable {
     let unit: String?
     let label: String?
@@ -32,6 +40,7 @@ struct UnitStatus: Decodable {
     let drift: [String]?
     let listen: ListenInfo?
     let detail: String?
+    let schedule: ScheduleInfo?
 
     var unitName: String { unit ?? label ?? "?" }
     var stateName: String { state ?? "unknown" }
@@ -44,11 +53,14 @@ struct UnitStatus: Decodable {
         if isFlapping { return "◐" }
         switch stateName {
         case "running": return "●"
-        case "stopped": return "○"
+        case "stopped": return idleLabel(for: schedule) != nil ? "◌" : "○"
         case "crashed": return "✗"
         default: return "·"
         }
     }
+
+    /// 「此刻没有进程」是不是正常。周期任务与打火即退任务的 stopped 是健康待机。
+    var isIdleByDesign: Bool { stateName == "stopped" && idleLabel(for: schedule) != nil }
 
     /// 能不能对它做 install / uninstall。判据来自 L1 的 ownership，本文件不重算归属。
     var isWritable: Bool { ownership == "managed" || ownership == "adoptable" }
@@ -145,13 +157,13 @@ func summaryLine(status: ServiceStatus?, problem: EnvProblem, lastError: String?
     return "ccm · " + parts.joined(separator: " · ")
 }
 
-/// unit 那一行的标题。stopped 的状态词按 unit 语义定制（stoppedLabel）：定时器与
+/// unit 那一行的标题。stopped 的状态词按**调度形态**定制（idleLabel）：定时器与
 /// 打火即退任务的「停止」是健康待机——照写「已停止」会被读成故障，用户真的来问过。
 func unitTitle(_ u: UnitStatus) -> String {
     var title = "\(u.lamp) \(u.unitName)"
     switch u.stateName {
     case "running": title += u.pid.map { "  运行中 (\($0))" } ?? "  运行中"
-    case "stopped": title += stoppedLabel(forUnit: u.unitName)
+    case "stopped": title += "  " + (idleLabel(for: u.schedule) ?? "已停止")
     case "crashed": title += "  已崩溃"
     default: title += "  未安装"
     }
@@ -160,14 +172,30 @@ func unitTitle(_ u: UnitStatus) -> String {
     return title
 }
 
-/// stopped 的语义化文案。logrotate 是 StartCalendarInterval 定时器（每天 03:47 打一枪即退）、
-/// menubar 是 RunAtLoad 打火任务（登录时 open 本 app 后即退）——它们 99% 的时间就该是 stopped。
-func stoppedLabel(forUnit name: String) -> String {
-    switch name {
-    case "logrotate": return "  待机 · 每天 03:47 轮转"
-    case "menubar": return "  随登录自启"
-    default: return "  已停止"
+/// stopped 的语义化文案，由 plist 里的调度形态算出（与 service-units.js 的 describeSchedule 同口径）。
+///
+/// ★ 判据**不是 unit 名字表**。名字表只能覆盖仓库自带的模板，而最容易被误读的恰恰是用户自建的
+/// unit —— 机主的 com.ccm.tunnel-watch 每 30s 救一次隧道，落进 default 被标「已停止」，
+/// 它还同时挂着「非本仓」，读起来就像装了没启用；机主本人为此来问过。用户随时可能再加一个
+/// watch，名字表永远追不上，而 plist 里 KeepAlive / StartInterval / StartCalendarInterval
+/// 本来就写着答案。
+///
+/// 返回 nil = 这个 stopped 没有「待机」说法（常驻服务，或形态判不出来）—— 那时照常说「已停止」，
+/// 保守回落也覆盖旧版 CLI 不下发 schedule 字段的情况。
+func idleLabel(for schedule: ScheduleInfo?) -> String? {
+    guard let s = schedule else { return nil }
+    if s.kind == "on-demand" { return "随登录自启" }
+    guard s.kind == "periodic" else { return nil }
+    if let secs = s.everySeconds {
+        return secs >= 60 ? "待机 · 每 \(Int((Double(secs) / 60).rounded())) 分钟触发" : "待机 · 每 \(secs) 秒触发"
     }
+    if let cal = s.calendar {
+        let pad = { (n: Int) in String(format: "%02d", n) }
+        // 只给 Minute 不给 Hour 是 launchd 的「每小时第 N 分」，别补一个没写的小时进去。
+        if let h = cal["Hour"] { return "待机 · 每天 \(pad(h)):\(pad(cal["Minute"] ?? 0))" }
+        if let m = cal["Minute"] { return "待机 · 每小时第 \(m) 分" }
+    }
+    return "待机 · 定时触发"
 }
 
 /// 菜单里 unit 的分组：server / tunnel 是使用者日常关心的主服务（「手机能不能连」），

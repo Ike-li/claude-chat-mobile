@@ -159,7 +159,8 @@ export function labelFor(unit, prefix = DEFAULT_LABEL_PREFIX) {
 //
 // 容器里 ppid 常常是 1（入口是 shell wrapper 时 node 的父进程就是 PID 1），实测
 // `docker run --entrypoint sh -c 'node …'` → ppid=1。所以 Linux 侧只认 systemd 自己注入的
-// 信号；docs/deployment.md 推荐的 `systemctl --user` 那种形态 ppid 也不是 1。
+// 信号 —— 本仓不提供 systemd unit（headless 就是终端里 npm start），但**用户自建的保活**
+// 要认得出来：认不出就会对一台真会被拉起的实例拒绝 web 端重启。
 // 残余风险：由 systemd user unit 拉起的桌面终端会继承 INVOCATION_ID，那种环境下前台启动仍会误判。
 export function isSupervised({
   ppid = typeof process !== 'undefined' ? process.ppid : 0,
@@ -243,6 +244,50 @@ export function extractUnitFacts(unit, plist) {
     keepAlive: obj.KeepAlive === true,
     log,
   };
+}
+
+// 调度形态：这个 unit **期望常驻吗**。判据全在 plist 里，不查 UNITS 表 ——
+// 最需要这个判断的恰恰是表里没有的 unit（机主自建的 com.ccm.tunnel-watch 每 30s 救一次隧道，
+// 面板却照 launchd 的说法标「已停止」，机主本人因此来问过「这个要启用吗」）。
+//
+// launchd 的 stopped 只说「此刻没有进程」，而那对三类 unit 含义相反：
+//   resident  KeepAlive → stopped 是**故障**
+//   periodic  StartInterval / StartCalendarInterval → stopped 是**健康待机**（99% 的时间都该如此）
+//   on-demand RunAtLoad 打火即退 → 同上
+// 拿名字表去分这三类必然漏掉自建 unit；plist 里本来就写着，读它就行。
+export function extractSchedule(plist) {
+  const obj = plist && typeof plist === 'object' ? plist : {};
+  // KeepAlive 可以是 true，也可以是 {SuccessfulExit:false} 这类字典——两种都是「保持它活着」。
+  // **必须优先于 StartInterval**：两者同写时 launchd 按 KeepAlive 保活，把真故障说成待机最危险。
+  if (obj.KeepAlive === true || (obj.KeepAlive && typeof obj.KeepAlive === 'object')) return { kind: 'resident' };
+  if (Number.isFinite(obj.StartInterval) && obj.StartInterval > 0) {
+    return { kind: 'periodic', everySeconds: obj.StartInterval };
+  }
+  if (obj.StartCalendarInterval && typeof obj.StartCalendarInterval === 'object') {
+    return { kind: 'periodic', calendar: obj.StartCalendarInterval };
+  }
+  if (obj.RunAtLoad === true) return { kind: 'on-demand' };
+  return { kind: 'unknown' };
+}
+
+// 待机说明。**从事实算，不写死时刻**：硬编码「每天 03:47」在模板改了之后不会跟着变，
+// 而这类文案的读者恰恰拿它当真相。resident / unknown 返回 null —— 它们的 stopped 没有
+// 「待机」这个说法，硬给一个等于把故障粉饰成正常。
+export function describeSchedule(schedule) {
+  const s = schedule && typeof schedule === 'object' ? schedule : {};
+  if (s.kind === 'on-demand') return '随登录自启';
+  if (s.kind !== 'periodic') return null;
+  if (Number.isFinite(s.everySeconds)) {
+    return s.everySeconds >= 60
+      ? `待机 · 每 ${Math.round(s.everySeconds / 60)} 分钟触发`
+      : `待机 · 每 ${s.everySeconds} 秒触发`;
+  }
+  const cal = s.calendar || {};
+  const pad = (n) => String(n).padStart(2, '0');
+  // 只给 Minute 不给 Hour 是 launchd 的「每小时第 N 分」，别补一个没写的小时进去。
+  if (Number.isFinite(cal.Hour)) return `待机 · 每天 ${pad(cal.Hour)}:${pad(cal.Minute ?? 0)}`;
+  if (Number.isFinite(cal.Minute)) return `待机 · 每小时第 ${cal.Minute} 分`;
+  return '待机 · 定时触发';
 }
 
 // 语义漂移。**不比字节、不比 plutil 输出字符串**，只比提取出来的值——理由见文件头注。

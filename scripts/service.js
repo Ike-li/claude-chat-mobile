@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/service.js —— 常驻服务（LaunchAgent）的管理入口：安装态、归属、启停、健康。
+// scripts/service.js —— 桌面端服务（LaunchAgent）的管理入口：安装态、归属、启停、健康。
 //
 // 此前仓库有三份 plist 模板（今 desktop/launchd/）和 render-plist.js 渲染器，但**没有一行代码调用
 // launchctl** —— 安装、启停、查状态全靠照抄 docs/deployment.md 里的命令。结果是服务状态不可见：
@@ -40,7 +40,9 @@ import {
   SERVICE_UNIT_NAMES,
   classifyOwnership,
   classifyState,
+  describeSchedule,
   diffUnitSemantics,
+  extractSchedule,
   expectedFactsFor,
   extractUnitFacts,
   labelFor,
@@ -86,6 +88,7 @@ export function createServiceManager(deps = {}) {
     readEnv = () => ({}),
     envFileExists = () => false,
     tcpProbe = () => false,
+    portListenerPid = () => null,
     lanIp = () => null,
     listAgentLabels = () => [],
     realpath = (p) => p,
@@ -127,7 +130,9 @@ export function createServiceManager(deps = {}) {
       setup: { envExists: envFileExists(), port: null, lanUrl: null },
       units: [],
       // 明确 reason 而不是静默假成功 —— 同 src/ops/log-terminal.js:33-36 的立场。
-      warnings: [`LaunchAgent 服务管理仅支持 macOS（当前平台：${platform}）。Linux 请用 systemd，见 docs/deployment.md`],
+      // 指路只能指向本仓真有的东西：非 macOS 的入口就是 headless `npm start`，
+      // 保活方式（tmux / 自建 systemd unit / docker）由用户自己定，仓库不提供 unit。
+      warnings: [`LaunchAgent 服务管理仅支持 macOS（当前平台：${platform}）。非 macOS 用 npm start 启动，保活方式自选，见 docs/deployment.md`],
     };
   }
 
@@ -172,6 +177,7 @@ export function createServiceManager(deps = {}) {
       )
       : [];
     const inManifest = Object.hasOwn(manifest.units, unit);
+    const schedule = extractSchedule(plist);
     const { state, lastExitAbnormal } = classifyState({ ...running, plistExists });
     const ownership = classifyOwnership({ knownUnit: true, inManifest, drift });
     // flapping 来自**重启频率**而不是最后一次退出码 —— 见 service-units.js 的 classifyState 头注。
@@ -190,9 +196,10 @@ export function createServiceManager(deps = {}) {
       restarts,
       drift,
       plistPath,
+      schedule,
       // 只有 server 监听本地端口；隧道与定时器没有可探的端口。
       listen: unit === 'server' && !fast ? { port, reachable: !!tcpProbe(port) } : null,
-      detail: describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership }),
+      detail: describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership, schedule }),
     };
   }
 
@@ -210,8 +217,10 @@ export function createServiceManager(deps = {}) {
       if (!label.startsWith(`${labelPrefix}.`) || knownLabels.has(label)) continue;
       if (unitFromLabel(label, labelPrefix)) continue; // 已知 unit 已在上一轮处理
       const plistPath = plistPathFor(label);
-      const plistExists = !!readPlistSafe(plistPath, warnings);
+      const plist = readPlistSafe(plistPath, warnings);
+      const plistExists = !!plist;
       const running = live.get(label) || { pid: null, lastExit: null };
+      const schedule = extractSchedule(plist);
       const { state, lastExitAbnormal } = classifyState({ ...running, plistExists });
       const restarts = classifyRestartPattern(events, { label, now: now() });
       out.push({
@@ -227,8 +236,14 @@ export function createServiceManager(deps = {}) {
         restarts,
         drift: [],
         plistPath,
+        schedule,
         listen: null,
-        detail: '非本仓管理（模板里没有这个 unit），只可查看与启停',
+        // 待机说明排在前面：自建 unit 同时带着「非本仓」与 stopped 两个标签，最容易被读成
+        // 「装了但没启用」——机主的 tunnel-watch 就是这么被问的。先说它在正常待机。
+        detail: [
+          state === 'stopped' ? describeSchedule(schedule) : null,
+          '非本仓管理（模板里没有这个 unit），只可查看与启停',
+        ].filter(Boolean).join('；'),
       });
     }
     return out.sort((a, b) => a.label.localeCompare(b.label));
@@ -315,6 +330,8 @@ export function createServiceManager(deps = {}) {
   function install(unit, opts = {}) {
     const bad = guardUnit(unit);
     if (bad) return { ok: false, unit, error: bad };
+    const held = serverPortConflict(unit);
+    if (held) return { ok: false, unit, error: portConflictError(held) };
 
     const label = labelFor(unit, labelPrefix);
     const plistPath = plistPathFor(label);
@@ -550,16 +567,69 @@ export function createServiceManager(deps = {}) {
     return !r || r.status !== 0 ? launchctlErr(r) : null;
   }
 
-  function start(unit) {
+  // 端口上的监听 pid 对不上 LaunchAgent 时禁止再 kickstart：否则第二个 server.js
+  // EADDRINUSE 退出，KeepAlive 空转，菜单还报成功。常见情况是终端里先开了 npm start。
+  function serverPortConflict(unit) {
+    if (unit !== 'server') return null;
+    const port = positivePort((readEnv() || {}).PORT) ?? 3000;
+    const listenPid = portListenerPid(port);
+    if (!listenPid) return null;
+    const ours = currentPid(labelFor(unit, labelPrefix));
+    if (ours && listenPid === ours) return null;
+    return { port, listenPid };
+  }
+
+  function portConflictError({ port, listenPid }) {
+    return `端口 ${port} 已被其它进程占用（pid=${listenPid}），不是桌面端拉起的 server。若是终端里的 npm start，先停掉再启动。`;
+  }
+
+  // 「没能确认监听者是自己」时的说辞。走到这里说明两道 lsof 判据都 fail-open 了，
+  // 剩下的 tcpProbe 是弱判据：纯 TCP 握手对占位进程一样通。不阻断（lsof 可能只是
+  // 权限不足或超时），但要留下痕迹 + 指向 health —— 那是唯一能区分「我们的服务在听」
+  // 与「某个进程占着这个端口」的判据（同 desktop/CCMCore.swift 装机末步的选择）。
+  function unverifiedWarning(port) {
+    return `端口 ${port} 通了，但没能确认监听者就是本服务（lsof 不可用或看不到该进程）。`
+      + '用 `npm run service:health` 复核。';
+  }
+
+  function confirmServerListening(label, { timeoutMs = 15000, intervalMs = 300 } = {}) {
+    const port = positivePort((readEnv() || {}).PORT) ?? 3000;
+    const maxTries = Math.max(1, Math.ceil(timeoutMs / intervalMs));
+    for (let i = 0; i < maxTries; i += 1) {
+      if (i > 0) sleep(intervalMs);
+      const pid = currentPid(label);
+      if (!pid) continue;
+      const listenPid = portListenerPid(port);
+      if (listenPid && listenPid !== pid) {
+        return { ok: false, pid, error: portConflictError({ port, listenPid }) };
+      }
+      if (listenPid === pid) return { ok: true, pid };
+      if (tcpProbe(port)) return { ok: true, pid, unverified: true, warning: unverifiedWarning(port) };
+    }
+    return { ok: false, error: `启动后未能确认进程在听端口 ${port}` };
+  }
+
+  // 只在弱判据成立时才往结果里加字段——强判据下的成功结果保持原样（无关字段会进 --json，
+  // 桌面端解析的是同一份对象）。
+  function weakProof(ready) {
+    return ready.unverified ? { unverified: true, warning: ready.warning } : {};
+  }
+
+  function start(unit, { timeoutMs = 15000, intervalMs = 300 } = {}) {
     const bad = guardControllable(unit);
     if (bad) return { ok: false, unit, error: bad };
+    const held = serverPortConflict(unit);
+    if (held) return { ok: false, unit, error: portConflictError(held) };
     const label = labelFor(unit, labelPrefix);
     const loadErr = ensureLoaded(label);
     if (loadErr) return { ok: false, unit, label, error: loadErr };
     // 到这里 unit 一定在 domain 里：kickstart 让它立刻跑起来（无视 RunAtLoad 等启动条件）
     const r = execLaunchctl(['kickstart', `gui/${uid}/${label}`]);
     if (!r || r.status !== 0) return { ok: false, unit, label, error: launchctlErr(r) };
-    return { ok: true, unit, label, action: 'started' };
+    if (unit !== 'server') return { ok: true, unit, label, action: 'started' };
+    const ready = confirmServerListening(label, { timeoutMs, intervalMs });
+    if (!ready.ok) return { ok: false, unit, label, error: ready.error };
+    return { ok: true, unit, label, action: 'started', ...weakProof(ready) };
   }
 
   function stop(unit) {
@@ -578,6 +648,8 @@ export function createServiceManager(deps = {}) {
   function restart(unit, { wait = false, timeoutMs = 15000, intervalMs = 300 } = {}) {
     const bad = guardControllable(unit);
     if (bad) return { ok: false, unit, error: bad };
+    const held = serverPortConflict(unit);
+    if (held) return { ok: false, unit, error: portConflictError(held) };
     const label = labelFor(unit, labelPrefix);
     // 一次 list 同时拿到「旧 PID」与「在不在 domain 里」——不为第二个问题再打一次 launchctl
     const live = launchctlList([]);
@@ -597,11 +669,21 @@ export function createServiceManager(deps = {}) {
       sleep(intervalMs);
       const pid = currentPid(label);
       if (pid && pid !== oldPid) {
-        // 进程活着不等于服务可用：server 还得真的在监听。
-        if (unit === 'server' && !tcpProbe(port)) {
-          return { ok: false, unit, label, oldPid, newPid: pid, error: `新进程已起（pid=${pid}）但端口 ${port} 连不上，看日志` };
+        let proof = {};
+        if (unit === 'server') {
+          const listenPid = portListenerPid(port);
+          if (listenPid && listenPid !== pid) {
+            return { ok: false, unit, label, oldPid, newPid: pid, error: portConflictError({ port, listenPid }) };
+          }
+          if (listenPid !== pid) {
+            if (!tcpProbe(port)) {
+              return { ok: false, unit, label, oldPid, newPid: pid, error: `新进程已起（pid=${pid}）但端口 ${port} 连不上，看日志` };
+            }
+            // lsof 没认出是自己、只有 TCP 通 —— 与 start 同一条弱判据，同样要标出来。
+            proof = { unverified: true, warning: unverifiedWarning(port) };
+          }
         }
-        return { ok: true, unit, label, action: 'restarted', oldPid, newPid: pid };
+        return { ok: true, unit, label, action: 'restarted', oldPid, newPid: pid, ...proof };
       }
     }
     return { ok: false, unit, label, oldPid, error: `重启后未能确认新进程（超时 ${timeoutMs}ms）` };
@@ -627,7 +709,7 @@ export function createServiceManager(deps = {}) {
       return {
         ok: false,
         reason: 'auth-mismatch',
-        error: '.env 里的 AUTH_TOKEN 与正在跑的进程不一致 —— 该重启服务了。（已收到 401，不再重试：连续 8 次失败会把本机锁 15 分钟）',
+        error: '配置里的 AUTH_TOKEN 与正在跑的进程不一致 —— 该重启服务了。（已收到 401，不再重试：连续 8 次失败会把本机锁 15 分钟）',
       };
     }
     if (res?.status === 429) {
@@ -651,9 +733,15 @@ function positivePort(value) {
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
 }
 
-export function describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership }) {
+export function describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership, schedule }) {
   if (!plistExists) return '未安装';
   const parts = [];
+  // 周期 job / 打火即退任务的 stopped 是**健康待机**（99% 的时间都该如此），照 launchd 的说法
+  // 写「已停止」会被读成故障。判据来自 plist 里的调度形态，见 service-units.extractSchedule。
+  if (state === 'stopped') {
+    const idle = describeSchedule(schedule);
+    if (idle) parts.push(idle);
+  }
   // 只有**频繁**重启才算异常。单次的 lastExitAbnormal 不再当告警说 —— 机主的隧道恒为 -9
   // （看门狗按 DHCP 漂移每天 kickstart 一次），那样说等于每天误报。
   if (restarts?.flapping) parts.push(`1 小时内重启 ${restarts.lastHour} 次`);
@@ -692,6 +780,17 @@ function realReadPlistFile(path) {
   } catch {
     return null;
   }
+}
+
+// 谁在听这个端口。-t 只打 pid。失败返回 null（看不清，不挡 kickstart）。
+function realPortListenerPid(port) {
+  const r = spawnSync('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+    encoding: 'utf8',
+    timeout: 3000,
+  });
+  const first = String(r?.stdout || '').trim().split('\n')[0];
+  const n = Number(first);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 // 纯 TCP 握手：不发 HTTP 请求行 ⇒ express 不路由 ⇒ 不经过鉴权中间件 ⇒ 不计入限速失败。
@@ -888,6 +987,7 @@ export function realManager() {
     // 只判旧文件会让菜单栏 app 对着一台配好的服务显示「尚未配置」。
     envFileExists: () => existsSync(join(ROOT, CONFIG_FILE_NAME)) || existsSync(join(ROOT, '.env')),
     tcpProbe: realTcpProbe,
+    portListenerPid: realPortListenerPid,
     lanIp: realLanIp,
     listAgentLabels: () => realListAgentLabels(home),
     realpath: realRealpath,
@@ -916,10 +1016,19 @@ export function formatAgo(ms) {
 
 const STATE_ICON = {
   running: '●',
+  idle: '◌',
   stopped: '○',
   crashed: '✗',
   'not-installed': '·',
 };
+
+// stopped 分两种，面板必须用两个词：常驻服务停了是故障，周期 job / 打火即退任务停着是
+// 健康待机。混用一个词的后果实测过——5 个 unit 里 3 个健康的被标 stopped，机主本人来问
+// 「tunnel-watch 要启用吗」。**只改呈现，不改 state 字段**：JSON 契约仍是 launchd 的四个取值，
+// 消费方（desktop）拿 schedule 自己判，判据与呈现分开。
+function stateWord(u) {
+  return u.state === 'stopped' && describeSchedule(u.schedule) ? 'idle' : u.state;
+}
 
 const OWNERSHIP_LABEL = {
   managed: '本仓管理',
@@ -931,7 +1040,7 @@ const OWNERSHIP_LABEL = {
 export function formatStatus(s) {
   const lines = [];
   const now = s.generatedAt || Date.now();
-  lines.push('=== 常驻服务状态 ===');
+  lines.push('=== 服务状态 ===');
   lines.push('');
   if (!s.supported) {
     lines.push(...s.warnings);
@@ -939,10 +1048,11 @@ export function formatStatus(s) {
     return lines.join('\n');
   }
   for (const u of s.units) {
-    const icon = u.flapping ? '◐' : (STATE_ICON[u.state] || '?');
+    const word = stateWord(u);
+    const icon = u.flapping ? '◐' : (STATE_ICON[word] || '?');
     const restartNote = u.restarts?.lastRestartAt ? `  上次重启 ${formatAgo(now - u.restarts.lastRestartAt)}前` : '';
     const pid = u.pid ? ` pid=${u.pid}` : '';
-    lines.push(`${icon} ${u.label}  ${u.state}${pid}  [${OWNERSHIP_LABEL[u.ownership] || u.ownership}]${restartNote}`);
+    lines.push(`${icon} ${u.label}  ${word}${pid}  [${OWNERSHIP_LABEL[u.ownership] || u.ownership}]${restartNote}`);
     if (u.detail) lines.push(`    ${u.detail}`);
     if (u.listen) lines.push(`    端口 ${u.listen.port} ${u.listen.reachable ? '可连接' : '连不上'}`);
   }
@@ -1009,7 +1119,7 @@ function runLogs(unit, opts, flags) {
 function runCopyToken() {
   const token = realReadEnv().AUTH_TOKEN;
   if (!token) {
-    process.stderr.write('未设置 AUTH_TOKEN（.env 里没有）\n');
+    process.stderr.write('未设置 AUTH_TOKEN（配置文件里没有）\n');
     process.exitCode = 1;
     return;
   }
@@ -1078,11 +1188,10 @@ export async function main(argv) {
     const r = realManager()[action](unit, { wait: flags.wait });
     if (flags.json) {
       process.stdout.write(`${JSON.stringify(r)}\n`);
-    } else if (r.ok) {
-      const pidNote = r.newPid ? `（pid ${r.oldPid ?? '?'} → ${r.newPid}）` : '';
-      process.stdout.write(`✓ ${r.label} ${ACTION_TEXT[r.action] || r.action}${pidNote}\n`);
     } else {
-      process.stderr.write(`✗ ${r.error}\n`);
+      const { stdout, stderr } = formatControlResult(r);
+      if (stdout) process.stdout.write(stdout);
+      if (stderr) process.stderr.write(stderr);
     }
     process.exitCode = r.ok ? 0 : 1;
     return;
@@ -1134,6 +1243,18 @@ const ACTION_TEXT = {
   adopted: '已接管（只写了 manifest，plist 原样未动）',
   uninstalled: '已卸载并删除 plist',
 };
+
+// start/stop/restart 的人类可读呈现。抽成纯函数是为了让 `unverified`（成功了、但判据弱）
+// 这个分支有人看着 —— 这些动作会真碰 launchctl，端到端 spawn 测不了，而 manager 标了、
+// CLI 不打印就等于没标。⚠ 走 stderr 而非 stdout：退出码仍是 0，它是附注不是失败。
+export function formatControlResult(r) {
+  if (!r.ok) return { stdout: '', stderr: `✗ ${r.error}\n` };
+  const pidNote = r.newPid ? `（pid ${r.oldPid ?? '?'} → ${r.newPid}）` : '';
+  return {
+    stdout: `✓ ${r.label} ${ACTION_TEXT[r.action] || r.action}${pidNote}\n`,
+    stderr: r.warning ? `⚠ ${r.warning}\n` : '',
+  };
+}
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
   main(process.argv.slice(2));
