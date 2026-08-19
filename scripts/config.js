@@ -22,7 +22,7 @@
 // 3. **secret 明文绝不默认离开进程。** get 只出「设了没 + 多长」，须显式 --reveal。
 //    同 buildEnvView 的脱敏纪律与 CCMCore.swift 那条「刻意不拼 #token=」。
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { accessSync, constants as fsConstants, existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -199,13 +199,28 @@ function guardWriteTarget(dir, flags = {}) {
 }
 
 // 校验依赖：与 server 的 env:set 喂给 validateEnvChanges 的是同一组判据。
-// 端口占用不在 CLI 里探测——那需要真连一次，而 CLI 常在 server 正跑着时运行，
-// 无条件探测会把「自家 server 占着」误报成冲突（doctor D4 修过同一个 bug）。
+//
+// 只有 probePort 被有意桩掉：它需要真连一次，而 CLI 常在 server 正跑着时运行，无条件探测
+// 会把「自家 server 占着」误报成冲突（doctor D4 修过同一个 bug）。
+//
+// isWritable / isExecutable **不适用那条理由**——它们是纯 fs 判断，没有「自己干扰自己」的问题。
+// 早前把这两个也一并桩成 `() => true`，于是 `config set CLAUDE_BIN=/etc/hosts` 被判「已写入」
+// 且 `config check` 报「配置检查通过」，而手机面板对同一个值会以「文件不可执行」拒绝、
+// server preflight 随后起不来。CLI 不是配置文件的特权通道，判据必须与面板同源。
+const canAccessPath = (p, mode) => {
+  try {
+    accessSync(p, mode);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const validationDeps = (current) => ({
   current,
   fileExists: existsSync,
-  isWritable: () => true,
-  isExecutable: () => true,
+  isWritable: p => canAccessPath(p, fsConstants.W_OK),
+  isExecutable: p => canAccessPath(p, fsConstants.X_OK),
   probePort: () => false,
 });
 
@@ -366,6 +381,7 @@ function cmdMigrate(dir, flags, io) {
 // 面板与 set 都过 validateEnvChanges，而用编辑器直接改的人没有任何防线。
 function cmdCheck(dir) {
   const problems = [];
+  const warnings = [];
   const { values, source, error } = readConfigFileValues(dir);
   if (error) return { ok: false, problems: [error] };
   if (source === 'none') return { ok: false, problems: ['没有找到配置文件（ccm.config.json 或 .env）。跑 init 生成。'] };
@@ -379,7 +395,14 @@ function cmdCheck(dir) {
       if (!def) {
         // passthrough 项（CCM_DATA_DIR 等）不在 ENV_SCHEMA 里但完全合法，别报成拼写错误
         if (PASSTHROUGH_KEYS.includes(key)) continue;
-        problems.push(`未知配置项 ${key}（拼错的 key 是静默失效——server 永远读不到它）`);
+        // ★ 提出来但**不判红**。判据必须与读取侧同源：resolveConfigValues 是有意宽容的，
+        // 它把未登记 key 原样传给 server 与 claude 子进程，并发一句一模一样的 warning
+        // （config-file.js:191 及其上方那段注释）。migrate 也照迁。
+        // 早前这里 push 进 problems，于是：`.env` 里有 HTTPS_PROXY → migrate 成功 →
+        // check exit 1 说「server 永远读不到它」，而同一份文件 config get 打得出、server 也
+        // 确实读得到——一句与运行时事实相反的解释，外加一个红的 npm run config:check。
+        // 拼错的 key（AUTH_TOEKN）与有意的第三方变量在这里无法自动区分，所以只陈述、不裁决。
+        warnings.push(`${key} 未登记在配置 schema 内，会被原样传给 server 与 claude 子进程（若是拼错的 key，它就是这样静默失效的）`);
         continue;
       }
       // readonly 的含义是「不能从面板改」，不是「值非法」。check 校验的是现有配置合不合法，
@@ -400,8 +423,8 @@ function cmdCheck(dir) {
   }
 
   return problems.length
-    ? { ok: false, problems }
-    : { ok: true, messages: [`配置检查通过（${source === 'config' ? CONFIG_FILE_NAME : '.env'}）`] };
+    ? { ok: false, problems, warnings }
+    : { ok: true, warnings, messages: [`配置检查通过（${source === 'config' ? CONFIG_FILE_NAME : '.env'}）`] };
 }
 
 // schema 是**表单描述**，不是配置快照：GUI 拿它渲染控件，不该顺带拿到 secret 明文。

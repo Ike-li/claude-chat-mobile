@@ -8,7 +8,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -269,10 +269,30 @@ test.describe('runConfigCommand —— check', () => {
     assert.ok(r.problems.length >= 2);
   }));
 
-  test('未知 key 报出来 —— 拼错的 key 是静默失效', () => withTempDir((dir) => {
+  // 未登记的 key 要**提出来**（拼错的 key 长得就像这样），但**不判红**：读取侧是有意宽容的，
+  // resolveConfigValues 会把它原样传给 server 与 claude 子进程，并发同样一句 warning。
+  // 判红等于说「server 永远读不到它」，而那与运行时事实相反。
+  test('未知 key 提出来 —— 拼错的 key 是静默失效', () => withTempDir((dir) => {
     writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ AUTH_TOEKN: 'typo' }));
     const r = runConfigCommand({ command: 'check', positionals: [], flags: {}, assignments: [] }, { dir });
-    assert.ok(r.problems.some(p => p.includes('AUTH_TOEKN')));
+    assert.ok((r.warnings ?? []).some(w => w.includes('AUTH_TOEKN')), '要点名，否则拼错永远发现不了');
+  }));
+
+  // ★ 实录：`.env` 里有 HTTPS_PROXY → `config migrate` 成功迁过来 → `config check` exit 1，
+  // 理由写着「server 永远读不到它」，而同一份文件 `config get` 打得出、server 也确实读得到。
+  // 用代理的用户迁移完就拿到一个红的 npm run config:check 外加一句与事实相反的解释。
+  test('★ migrate 自己会写进去的第三方 key 不判红 —— 运行时确实会读它', () => withTempDir((dir) => {
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ AUTH_TOKEN: 'x'.repeat(32), HTTPS_PROXY: 'http://127.0.0.1:7890' }));
+    const r = runConfigCommand({ command: 'check', positionals: [], flags: {}, assignments: [] }, { dir });
+    assert.equal(r.ok, true, 'server 读得到、config get 打得出，check 不能说它读不到');
+    assert.ok((r.warnings ?? []).some(w => w.includes('HTTPS_PROXY')), '但仍要提一句');
+  }));
+
+  test('真正非法的值仍然判红，未登记 key 不给它当挡箭牌', () => withTempDir((dir) => {
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ PORT: 99999, HTTPS_PROXY: 'http://x' }));
+    const r = runConfigCommand({ command: 'check', positionals: [], flags: {}, assignments: [] }, { dir });
+    assert.equal(r.ok, false);
+    assert.ok(r.problems.some(p => p.includes('PORT')));
   }));
 
   // .env 时代的两个转义地雷只在旧格式下需要检查（JSON 没有这个失败模式）
@@ -281,6 +301,47 @@ test.describe('runConfigCommand —— check', () => {
     const r = runConfigCommand({ command: 'check', positionals: [], flags: {}, assignments: [] }, { dir });
     assert.equal(r.ok, false);
     assert.ok(r.problems.some(p => /反斜杠|backslash/.test(p)));
+  }));
+});
+
+// ★ validationDeps 曾把 isWritable / isExecutable 一并桩成 `() => true`，而注释里只为
+// probePort 做了辩解（那个确有理由：CLI 常在 server 正跑着时运行，无条件探测会把「自家 server
+// 占着」误报成冲突，doctor D4 修过同一个 bug）。另外两个没有这种理由——它们是纯 fs 判断。
+// 后果是 CLI 认证「配置检查通过」的值，手机面板会拒、server preflight 起不来。
+// 这与本文件头注第 ③ 条「CLI 不是配置文件的特权通道」直接冲突。
+test.describe('runConfigCommand —— set 的路径校验必须与手机面板同判据', () => {
+  const init = (dir) => runConfigCommand({ command: 'init', positionals: [], flags: {}, assignments: [] }, { dir });
+  const set = (dir, k, v) => runConfigCommand({ command: 'set', positionals: [], flags: {}, assignments: [[k, v]] }, { dir });
+
+  test('★ CLAUDE_BIN 指向不可执行的普通文件 → 拒绝', () => withTempDir((dir) => {
+    init(dir);
+    const plain = join(dir, 'not-a-binary.txt');
+    writeFileSync(plain, 'x', { mode: 0o644 });
+    const r = set(dir, 'CLAUDE_BIN', plain);
+    assert.equal(r.ok, false, '写进去 server 就 spawn 不起 claude —— 面板拒的东西 CLI 不能放行');
+    assert.ok(r.problems.some(p => /可执行|executable/.test(p)), `要说清为什么：${JSON.stringify(r.problems)}`);
+  }));
+
+  test('CLAUDE_BIN 指向真正可执行的文件 → 放行', () => withTempDir((dir) => {
+    init(dir);
+    const bin = join(dir, 'fake-claude');
+    writeFileSync(bin, '#!/bin/sh\n', { mode: 0o755 });
+    assert.equal(set(dir, 'CLAUDE_BIN', bin).ok, true);
+  }));
+
+  // root 绕过一切 mode 位，chmod 0555 对它不构成「不可写」——容器里跑的正是 root。
+  // 这里跳过而不是放宽断言：断言本身是对的，只是它的前提（进程受 mode 位约束）在 root 下不成立。
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  test('★ WORK_DIR 指向不可写目录 → 拒绝', { skip: isRoot ? 'root 不受 mode 位约束，此场景在 root 下无法构造' : false }, () => withTempDir((dir) => {
+    init(dir);
+    const ro = join(dir, 'readonly-dir');
+    mkdirSync(ro, { mode: 0o555 });
+    try {
+      const r = set(dir, 'WORK_DIR', ro);
+      assert.equal(r.ok, false, '不可写的工作目录会让上传/写文件在运行时才炸');
+    } finally {
+      chmodSync(ro, 0o755); // 还原，否则 rmSync 删不掉
+    }
   }));
 });
 

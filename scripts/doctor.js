@@ -521,8 +521,14 @@ function checkUploadsFootprint() {
 
 // D17: 配置格式可见性。source 来自上面 readConfigFileValues 的结果——与 server 同一条读取路径。
 function checkConfigFormat() {
-  const r = configFormatDiagnostic({ source: loaded.error ? 'none' : (loaded.source || 'none'), lang: LANG });
-  ok(bi('配置格式', 'Config format'), r.detail);
+  // 解析失败要原样传下去，**不能压成 source:'none'**：那会让「配置坏了」和「还没配置」变成同一格，
+  // 整份体检据此 exit 0，而 server 用同一个文件根本起不来。
+  const r = configFormatDiagnostic({
+    source: loaded.error ? 'none' : (loaded.source || 'none'),
+    error: loaded.error || null,
+    lang: LANG,
+  });
+  (r.status === 'fail' ? fail : ok)(bi('配置格式', 'Config format'), r.detail);
 }
 
 // ──────────────────────── 主流程 ────────────────────────

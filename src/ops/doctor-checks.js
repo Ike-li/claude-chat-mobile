@@ -347,8 +347,19 @@ export function logSwitchDiagnostic({ interactions = false, sdkDebug = false, st
 // 这项存在的唯一目的：给 headless 旧用户一条**主动发现**迁移能力的路。另两个提示时机
 // 都是意图驱动的——GUI 配置窗口的迁移横幅（想编辑时）、config.js set 的 guardWriteTarget
 // 拦截（正在改时）；doctor 补上第三个：主动求建议时。三者之外不再提。
-export function configFormatDiagnostic({ source = 'none', lang = 'zh' } = {}) {
+export function configFormatDiagnostic({ source = 'none', error = null, lang = 'zh' } = {}) {
   const name = 'CONFIG_FORMAT';
+  // ★「坏了」必须先于「还没配」判：调用方拿不到 source 时会传 'none'，而解析失败恰恰也走这条路。
+  // 压成同一格的后果是——一个 server 根本起不来的文件被报成 ok「尚未配置（首次安装：…）」，
+  // doctor 还 exit 0；用户照着提示去跑 setup.js，反而把那个只是少一个逗号的文件覆盖掉了。
+  if (error) {
+    return {
+      status: 'fail', name,
+      detail: bi(lang,
+        `配置文件解析失败，server 用同一个文件也起不来：${error}。修好这个文件（别跑 setup.js，那会覆盖它）`,
+        `Config file failed to parse, and the server cannot boot on it either: ${error}. Fix the file (do not run setup.js — that would overwrite it)`),
+    };
+  }
   if (source === 'config') {
     return {
       status: 'ok', name,

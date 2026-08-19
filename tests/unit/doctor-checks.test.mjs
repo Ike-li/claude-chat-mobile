@@ -351,6 +351,21 @@ test('configFormatDiagnostic：config / env / none 三态，legacy 恒为 ok', (
   assert.match(fresh.detail, /setup\.js/);
 });
 
+// ★「配置坏了」与「还没配置」是两回事，此前被压成同一格：doctor 把解析失败映射成 source:'none'，
+// 于是一个 server 根本起不来的文件被报成 ok「尚未配置（首次安装：…）」，doctor 还 exit 0。
+// 桌面端「运行体检」和文档里的 agent recipe 都读这个退出码，看到的是一份干净的预检。
+test('★ configFormatDiagnostic：解析失败必须是 fail，且不能伪装成「尚未配置」', () => {
+  const broken = configFormatDiagnostic({ source: 'none', error: 'Unexpected token } in JSON at position 42' });
+  assert.equal(broken.status, 'fail', 'server 起不来的配置不能报 ok');
+  assert.doesNotMatch(broken.detail, /尚未配置|首次安装/, '别把「坏了」说成「还没配」——用户会去跑 setup 覆盖掉它');
+  assert.match(broken.detail, /Unexpected token/, '要把解析器的原话带出来，否则用户不知道改哪一行');
+
+  const brokenEn = configFormatDiagnostic({ source: 'none', error: 'bad json', lang: 'en' });
+  assert.equal(brokenEn.status, 'fail');
+  assert.doesNotMatch(brokenEn.detail, /Not configured yet/);
+  assert.match(brokenEn.detail, /bad json/);
+});
+
 // ── 2026-08-04 code review：本次改动自身的两个洞（实测确认）────────────────────
 // 洞一：resolveTiers 用 `TIER_ALIASES[bare]` 做计算属性查找，`constructor` / `__proto__`
 // 经原型链返回真值非数组 → 下游 tiers.filter 抛 TypeError，冲出 runDoctor 打死整份体检报告
