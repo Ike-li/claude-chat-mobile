@@ -17,6 +17,7 @@ import {
   extractUnitFacts,
   isSupervised,
   labelFor,
+  willBeRespawned,
   parseLaunchctlList,
   renderVarsFor,
   unitFromLabel,
@@ -566,4 +567,14 @@ test.describe('describeSchedule —— 待机说明由事实算出，不是硬�
     assert.equal(describeSchedule({ kind: 'unknown' }), null);
     assert.equal(describeSchedule(null), null);
   });
+});
+
+test('willBeRespawned：判据是「退出后有人拉起」——托管或 npm run dev 的 watch；DEV_MODE 不算数', () => {
+  // launchd 托管：KeepAlive 拉起
+  assert.equal(willBeRespawned({ supervised: true, npmLifecycleEvent: 'start' }), true);
+  // npm run dev：node --watch 拉起（watch 无法从子进程自证，认 npm_lifecycle_event）
+  assert.equal(willBeRespawned({ supervised: false, npmLifecycleEvent: 'dev' }), true);
+  // 前台 npm start：退出即死——2026-08-19 真机上 DEV_MODE=1 时假成功真死亡的那条路
+  assert.equal(willBeRespawned({ supervised: false, npmLifecycleEvent: 'start' }), false);
+  assert.equal(willBeRespawned({ supervised: false, npmLifecycleEvent: undefined }), false);
 });

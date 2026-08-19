@@ -195,6 +195,20 @@ export function isSupervised({
     .some((k) => typeof e[k] === 'string' && e[k].trim().length > 0);
 }
 
+// 「dev:restart 退出后，有人会把进程拉起来吗」——重启入口的放行判据必须对准这个事实本身，
+// 而不是「操作者是不是开发者」（DEV_MODE）。2026-08-19 真机实测过反例：DEV_MODE=1 +
+// 前台 npm start 时从手机点「立即重启」，进程退出后无人拉起、前端已乐观提示成功——假成功真死亡。
+// 拉起者只有两种：进程管理器托管（isSupervised），或 npm run dev 的 node --watch。
+// watch 无法从子进程自证（--watch 被 node 消费掉、execArgv 是空数组，见 src/server/http.js
+// 的实测注），所以认 npm 的 lifecycle 事件名；绕过 npm 直接 `node --watch server.js` 的场景
+// 识别不了，代价是那种用法下按钮不出现——宁可少给入口，不给会死的入口。
+export function willBeRespawned({
+  supervised = isSupervised(),
+  npmLifecycleEvent = typeof process !== 'undefined' ? process.env.npm_lifecycle_event : '',
+} = {}) {
+  return supervised || npmLifecycleEvent === 'dev';
+}
+
 // 该 unit 的模板相对路径。渲染在 scripts/service.js（src/ 不得 import scripts/，见头注）。
 export function templateFor(unit) {
   const def = UNITS[unit];
