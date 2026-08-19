@@ -35,6 +35,7 @@
   "scripts": {
     "start": "node server.js",
     "setup": "node scripts/setup.js",
+    "uninstall": "node scripts/uninstall.js",
     "config": "node scripts/config.js",
     "config:check": "node scripts/config.js check",
     "config:migrate": "node scripts/config.js migrate",

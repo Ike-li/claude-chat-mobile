@@ -147,6 +147,12 @@ const UNITS = {
 
 export const SERVICE_UNIT_NAMES = Object.freeze(Object.keys(UNITS));
 
+// unit → 默认日志文件名。给卸载器的 --purge 用：日志路径必须从这张代码内字面量表派生，
+// 不能信 manifest 里存的 LOG（磁盘 JSON 可被改指向任意文件，同 service.js 卸载不信 plistPath 的理由）。
+export const SERVICE_UNIT_LOG_NAMES = Object.freeze(
+  Object.fromEntries(Object.entries(UNITS).map(([unit, def]) => [unit, def.logName]))
+);
+
 export function labelFor(unit, prefix = DEFAULT_LABEL_PREFIX) {
   return `${prefix}.${unit}`;
 }

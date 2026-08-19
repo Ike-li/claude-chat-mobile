@@ -401,6 +401,19 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 
 </details>
 
+## 卸载
+
+```bash
+npm run uninstall -- --dry-run   # 先看会做什么，不动任何东西
+npm run uninstall -- --yes       # 卸安装面：launchd 受管服务、CCM.app、偏好域、两个 CLI 桥及 ~/.claude/ccm
+npm run uninstall -- --purge --yes  # 追加删除数据目录（按白名单逐项）、ccm.config.json/.env、受管服务日志
+```
+
+只删本产品安装/运行产生的东西：不在 service manifest 里的 launchd unit（比如手工装的
+cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 里桥条目以外的内容一律不碰；
+各工作区的 `.ccm-uploads/` 只报告不删除（历史消息的附件预览要读它）。数据目录里不认识的文件
+（手动备份等）会保留并列出。浏览器/手机侧的站点数据和 PWA 需要手动清。
+
 ## 常见问题
 
 | 现象 | 检查 |

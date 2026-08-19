@@ -415,6 +415,21 @@ Public access is in docs/deployment.md. The only start entries are npm start or 
 
 </details>
 
+## Uninstall
+
+```bash
+npm run uninstall -- --dry-run   # preview every action without touching anything
+npm run uninstall -- --yes       # remove the install surface: managed launchd units, CCM.app, defaults domain, both CLI bridges and ~/.claude/ccm
+npm run uninstall -- --purge --yes  # additionally delete the data dir (known files only), ccm.config.json/.env, managed-unit logs
+```
+
+It only removes what this product installed or produced: launchd units outside the service
+manifest (for example a hand-installed cloudflared tunnel), `~/.claude/projects`, `~/.cloudflared`,
+and anything in settings.json beyond the two bridge entries are never touched. Per-workdir
+`.ccm-uploads/` is reported but never deleted (attachment previews in old transcripts read from it).
+Unrecognized files in the data dir (manual backups etc.) are kept and listed. Browser/phone-side
+site data and the installed PWA must be cleared manually.
+
 ## Troubleshooting
 
 | Symptom | Check |
