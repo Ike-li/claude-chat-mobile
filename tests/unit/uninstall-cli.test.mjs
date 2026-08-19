@@ -39,13 +39,15 @@ function testEnvFor(home, dataDir) {
 }
 
 // spawn 包装：桥脚本放行（HOME 已隔离到临时目录，真删真卸都安全）；
-// service.js 与 defaults 一律 stub —— 前者会 launchctl bootout 真实 unit，后者动真实偏好域。
-function makeSpawn(env, { service, defaults } = {}) {
+// service.js 与 defaults 一律 stub —— 前者会 launchctl bootout 真实 unit，后者动真实偏好域；
+// pgrep 默认 stub 成「无进程」——真跑会匹配到宿主机的真实进程，测试不可依赖宿主状态。
+function makeSpawn(env, { service, defaults, pgrep } = {}) {
   const calls = [];
   const fn = (cmd, args) => {
     calls.push([cmd, ...args.map(String)]);
     const script = typeof args?.[0] === 'string' ? basename(args[0]) : '';
     if (cmd === 'defaults') return defaults ? defaults(args) : { status: 1, stdout: '', stderr: '' };
+    if (cmd === 'pgrep') return pgrep ? pgrep(args) : { status: 1, stdout: '', stderr: '' };
     if (script === 'service.js') {
       if (service) return service(args.slice(1));
       throw new Error(`测试未准备 service.js stub 却被调用：${args.join(' ')}`);
@@ -209,11 +211,58 @@ test('launchd：manifest 里的 unit 逐个经 service.js 卸载；「未安装�
   assert.deepEqual(states, { 'unit:server': 'done', 'unit:menubar': 'skip' });
 });
 
+test('残留菜单栏进程：按 appPath 锚定探测，SIGTERM 后复查确认退出', () => {
+  let probes = 0;
+  const killed = [];
+  const { u } = makeUninstaller({
+    stubs: {
+      // 第一次探测命中两个 PID，SIGTERM 后复查为空
+      pgrep: () => (probes++ === 0
+        ? { status: 0, stdout: '87128\n87999\n', stderr: '' }
+        : { status: 1, stdout: '', stderr: '' }),
+    },
+    factory: { kill: (pid, sig) => killed.push([pid, sig]), sleep: () => {} },
+  });
+  const result = u.run({ purge: false });
+  assert.equal(result.ok, true, JSON.stringify(result.steps));
+  assert.deepEqual(killed, [[87128, 'SIGTERM'], [87999, 'SIGTERM']]);
+  const step = result.steps.find((s) => s.name === 'app-process');
+  assert.equal(step.status, 'done');
+});
+
+test('残留菜单栏进程：dry-run 只报告将终止，不真杀', () => {
+  const killed = [];
+  const { u } = makeUninstaller({
+    stubs: { pgrep: () => ({ status: 0, stdout: '87128\n', stderr: '' }) },
+    factory: { kill: (pid, sig) => killed.push([pid, sig]), sleep: () => {} },
+  });
+  const result = u.run({ purge: false, dryRun: true });
+  assert.deepEqual(killed, [], 'dry-run 不得发信号');
+  const step = result.steps.find((s) => s.name === 'app-process');
+  assert.equal(step.status, 'plan');
+  assert.match(step.detail, /87128/);
+  assert.equal(result.ok, true);
+});
+
+test('残留菜单栏进程：SIGTERM 未生效则报错并指引手动退出，不升级 SIGKILL', () => {
+  const killed = [];
+  const { u } = makeUninstaller({
+    stubs: { pgrep: () => ({ status: 0, stdout: '87128\n', stderr: '' }) }, // 复查仍在
+    factory: { kill: (pid, sig) => killed.push([pid, sig]), sleep: () => {} },
+  });
+  const result = u.run({ purge: false });
+  assert.equal(result.ok, false);
+  assert.ok(killed.every(([, sig]) => sig === 'SIGTERM'), '只允许 SIGTERM');
+  const step = result.steps.find((s) => s.name === 'app-process');
+  assert.equal(step.status, 'error');
+  assert.match(step.detail, /退出/);
+});
+
 test('非 darwin：launchd/app/defaults 整段跳过，桥与数据逻辑照常', () => {
   const { u, spawn } = makeUninstaller({ factory: { platform: 'linux' } });
   const result = u.run({ purge: false });
   assert.equal(result.ok, true);
-  assert.ok(spawn.calls.every(([cmd]) => cmd !== 'defaults'), '非 darwin 不得碰 defaults');
+  assert.ok(spawn.calls.every(([cmd]) => cmd !== 'defaults' && cmd !== 'pgrep'), '非 darwin 不得碰 defaults/pgrep');
   assert.ok(result.steps.some((s) => s.name === 'launchd' && s.status === 'skip'));
 });
 

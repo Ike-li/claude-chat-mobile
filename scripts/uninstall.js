@@ -75,6 +75,8 @@ export function createUninstaller({
   spawn = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', env }),
   // 生产唯一入口不覆盖此默认值；测试注入 mkdtemp 临时路径。
   appPath = '/Applications/CCM.app',
+  kill = (pid, sig) => process.kill(pid, sig),
+  sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
   out = (line) => process.stdout.write(`${line}\n`),
 } = {}) {
   const fileEnv = readConfigFileValues(root).values;
@@ -130,7 +132,41 @@ export function createUninstaller({
       }
     }
 
-    // ---- 2. /Applications/CCM.app ----
+    // ---- 2. 残留的菜单栏 app 进程 ----
+    // menubar 的 LaunchAgent 是 /usr/bin/open 启动型：GUI 进程不是 agent 的子进程，bootout
+    // 够不着它；删 .app 也杀不死已加载进内存的映像（unlink 语义）。按可执行路径精确锚定探测
+    // （不按进程名猜），只发 SIGTERM 后复查——打不死不升级 SIGKILL，如实报人工处理。
+    const pgrepPids = () => {
+      const r = safeSpawn('pgrep', ['-f', `${join(appPath, 'Contents', 'MacOS')}/`]);
+      if (r.status !== 0) return [];
+      return String(r.stdout || '').split('\n')
+        .map((l) => Number.parseInt(l, 10))
+        .filter((pid) => Number.isInteger(pid) && pid > 1);
+    };
+    if (platform === 'darwin') {
+      const pids = pgrepPids();
+      if (!pids.length) {
+        push('app-process', 'skip', '无残留的菜单栏 app 进程');
+      } else if (dryRun) {
+        push('app-process', 'plan', `将终止仍在运行的菜单栏 app（PID ${pids.join('、')}）`);
+      } else {
+        for (const pid of pids) {
+          try { kill(pid, 'SIGTERM'); } catch { /* 进程可能恰好自己退了 */ }
+        }
+        let remaining = pids;
+        for (let i = 0; i < 8 && remaining.length; i++) {
+          sleep(250);
+          remaining = pgrepPids();
+        }
+        if (remaining.length) {
+          push('app-process', 'error', `SIGTERM 未生效（PID ${remaining.join('、')}），请在菜单栏点「退出」手动退出`);
+        } else {
+          push('app-process', 'done', `已终止菜单栏 app（PID ${pids.join('、')}）`);
+        }
+      }
+    }
+
+    // ---- 3. /Applications/CCM.app ----
     if (platform !== 'darwin') {
       push('app', 'skip', '非 macOS，无桌面 app');
     } else if (!existsSync(appPath)) {
@@ -144,7 +180,7 @@ export function createUninstaller({
       push('app', 'done', `已删除 ${appPath}`);
     }
 
-    // ---- 3. UserDefaults 偏好域 ----
+    // ---- 4. UserDefaults 偏好域 ----
     if (platform !== 'darwin') {
       push('defaults', 'skip', '非 macOS，无偏好域');
     } else if (dryRun) {
@@ -157,7 +193,7 @@ export function createUninstaller({
       else push('defaults', 'skip', '偏好域 com.ccm.menubar 不存在');
     }
 
-    // ---- 4. 两个 CLI 桥 + ~/.claude/ccm 残余 ----
+    // ---- 5. 两个 CLI 桥 + ~/.claude/ccm 残余 ----
     // 残余目录只在「桥确认已卸/本就未装」后才清：漂移或判定失败时 manifest 是后续人工
     // 卸载的凭据，删掉它等于把恢复 settings.json 的唯一线索也销毁。
     let residueOkAll = true;
@@ -217,9 +253,9 @@ export function createUninstaller({
       }
     }
 
-    // ---- 5. --purge：数据面 ----
+    // ---- 6. --purge：数据面 ----
     if (purge) {
-      // 5a. 数据根：白名单逐项删，未知内容保留并报告（绝不整树 rmSync，理由见文件头）。
+      // 6a. 数据根：白名单逐项删，未知内容保留并报告（绝不整树 rmSync，理由见文件头）。
       if (!existsSync(dataDir)) {
         push('purge:data', 'skip', `数据根不存在：${dataDir}`);
       } else {
@@ -249,7 +285,7 @@ export function createUninstaller({
         }
       }
 
-      // 5b. 仓库根配置文件。
+      // 6b. 仓库根配置文件。
       for (const fname of CONFIG_FILES) {
         const p = join(root, fname);
         if (!existsSync(p)) continue;
@@ -258,7 +294,7 @@ export function createUninstaller({
         push(`purge:config:${fname}`, 'done', `已删除 ${p}`);
       }
 
-      // 5c. 受管 unit 的日志（unit 列表取自卸载前的 manifest 快照；logName 出自代码内字面量表，
+      // 6c. 受管 unit 的日志（unit 列表取自卸载前的 manifest 快照；logName 出自代码内字面量表，
       // 不信 manifest 存的 LOG 路径——同 service.js 卸载不信 plistPath 的理由）。
       if (platform === 'darwin' && managedUnits.length) {
         const logsDir = join(home, 'Library', 'Logs');
@@ -280,7 +316,7 @@ export function createUninstaller({
         }
       }
 
-      // 5d. 各工作区 .ccm-uploads：只报不删（历史消息附件预览要读它）。
+      // 6d. 各工作区 .ccm-uploads：只报不删（历史消息附件预览要读它）。
       const workdirs = Array.isArray(fileEnv.WORKDIRS)
         ? fileEnv.WORKDIRS.map((w) => (typeof w === 'string' ? w : w?.dir || w?.path)).filter(Boolean)
         : [];

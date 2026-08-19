@@ -405,7 +405,7 @@ defaults write com.ccm.menubar CCMShowDockIcon -bool true
 
 ```bash
 npm run uninstall -- --dry-run   # 先看会做什么，不动任何东西
-npm run uninstall -- --yes       # 卸安装面：launchd 受管服务、CCM.app、偏好域、两个 CLI 桥及 ~/.claude/ccm
+npm run uninstall -- --yes       # 卸安装面：launchd 受管服务、残留的菜单栏 app 进程、CCM.app、偏好域、两个 CLI 桥及 ~/.claude/ccm
 npm run uninstall -- --purge --yes  # 追加删除数据目录（按白名单逐项）、ccm.config.json/.env、受管服务日志
 ```
 

@@ -419,7 +419,7 @@ Public access is in docs/deployment.md. The only start entries are npm start or 
 
 ```bash
 npm run uninstall -- --dry-run   # preview every action without touching anything
-npm run uninstall -- --yes       # remove the install surface: managed launchd units, CCM.app, defaults domain, both CLI bridges and ~/.claude/ccm
+npm run uninstall -- --yes       # remove the install surface: managed launchd units, any leftover menu bar app process, CCM.app, defaults domain, both CLI bridges and ~/.claude/ccm
 npm run uninstall -- --purge --yes  # additionally delete the data dir (known files only), ccm.config.json/.env, managed-unit logs
 ```
 

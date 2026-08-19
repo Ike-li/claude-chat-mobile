@@ -75,7 +75,7 @@ npm run app:install                 # 编译并装进 /Applications —— Spotl
 npm run app:build                   # 只编译到 desktop/build/CCM.app，不装系统目录
 npm run service:status              # 各 unit 的运行态/归属/漂移；--json 供菜单栏与 doctor 消费
 npm run service:install|adopt|restart|logs|health   # adopt=接管手工安装（只写 manifest 不碰 plist）；uninstall 须 --yes
-npm run uninstall -- [--purge] [--dry-run] --yes    # 一键卸载（受管服务+CCM.app+偏好域+两个桥+~/.claude/ccm；--purge 连数据根白名单/配置/受管日志）；只删产品自己装的，manifest 外的 unit/~/.cloudflared/~/.claude/projects 永不碰
+npm run uninstall -- [--purge] [--dry-run] --yes    # 一键卸载（受管服务+残留 menubar 进程+CCM.app+偏好域+两个桥+~/.claude/ccm；--purge 连数据根白名单/配置/受管日志）；只删产品自己装的，manifest 外的 unit/~/.cloudflared/~/.claude/projects 永不碰
 
 # 设备指纹审批与管理
 node scripts/device.js list         # 列出所有受信任和等待确认的设备
