@@ -14,6 +14,11 @@ import { createEnvConfigPanel } from '../../public/js/app/env-config.js';
 // 前端源码不许 import src/，但测试不受模块边界约束（check-import-boundaries.js:13 明写）。
 import { buildEnvView } from '../../src/ops/env-schema.js';
 
+// sheets.js 的 CONFIRM_TONES 是工厂内部常量、不导出，只能在这里复述键集（public/js/app/sheets.js:97-101）。
+// 复述的风险是「那边加了新 tone、这边没跟上」——但那只会让本断言把一个其实有效的 tone 判红，
+// 是安全方向的失败，不会恒绿放过一个无效值（`tone: 'warn'` 正是被这条抓住的）。
+const CONFIRM_TONES = new Set(['default', 'warning', 'danger']);
+
 // env-config.js 的 el() 直接调 document.createElement —— 那是浏览器边界，按工程规则可以桩掉
 // （本仓其它前端模块都靠注入拿节点，这个是唯一直接碰全局的）。桩在文件级装一次，测完还原。
 const realDocument = globalThis.document;
@@ -94,7 +99,14 @@ function harness({ ackQueue = [], canRestart = () => true, confirmAnswer = true 
     $: (id) => dom[id],
     socket,
     openSheet: () => {}, closeSheet: () => {},
-    appConfirm: async (msg) => { confirms.push(msg); return confirmAnswer; },
+    // 桩必须与真实 appConfirm（public/js/app/sheets.js:102）同构地解构对象。
+    // 此前它写成 `async (msg) => ...` 收字符串，于是「传字符串进去」这个 bug 在测试里
+    // 恒绿：解构字符串原始值不报错，只是每个字段都得 undefined，而 textContent = undefined
+    // 会落成空串（DOMString? 的可空转换先把 undefined 变成 null），确认框全空一个字都没有。
+    appConfirm: async ({ title, body, okText, tone } = {}) => {
+      confirms.push({ title, body, okText, tone });
+      return confirmAnswer;
+    },
     pickText: (pair) => (pair && typeof pair === 'object' ? (pair.zh ?? pair.en ?? '') : String(pair ?? '')),
     onSaved: (r) => saved.push(r),
     canRestart,
@@ -165,7 +177,10 @@ test.describe('env-config 保存流程 —— warn 的二次确认', () => {
       { PORT: '8080' }
     );
     assert.equal(h.confirms.length, 1, '必须问一次');
-    assert.match(h.confirms[0], /会关闭公网 2FA/, '确认框要把 warn 原文摆出来，不能只说「有警告」');
+    const ask = h.confirms[0];
+    assert.ok(ask.title, '标题不能为空——一个字都没有的确认框，用户只会直接点确定');
+    assert.match(`${ask.title} ${ask.body ?? ''}`, /会关闭公网 2FA/, '确认框要把 warn 原文摆出来，不能只说「有警告」');
+    assert.ok(CONFIRM_TONES.has(ask.tone), `tone 必须是 sheets.js 认得的值之一，收到 ${JSON.stringify(ask.tone)}`);
     const sets = h.emitted.filter((e) => e.event === 'env:set');
     assert.equal(sets.length, 2, '确认后重发');
     assert.equal(sets[0].payload.acceptWarnings, false);
@@ -217,6 +232,29 @@ test.describe('env-config 保存流程 —— 重启入口取决于是否常驻�
     const btn = h.dom.envConfigFooter.children.find((c) => c.id === 'envConfigRestart');
     assert.equal(btn, undefined, '停掉一个没人会拉起的进程等于让用户自断退路');
     assert.match(textOf(h.dom.envConfigHint), /本进程不是常驻托管/);
+  });
+
+  // 重启会中断所有在跑的会话与后台任务。此前只测到「按钮在不在」，点下去弹的那个框没人看过——
+  // 而它恰恰是把字符串当对象传、渲染出一个一个字都没有的确认框的地方。
+  test('★ 点「立即重启」弹的确认框必须有字：破坏性操作配空白框，等于诱导用户直接点确定', async () => {
+    const h = await openAndEdit({ ackQueue: [okAck], canRestart: () => true }, { PORT: '8080' });
+    const btn = h.dom.envConfigFooter.children.find((c) => c.id === 'envConfigRestart');
+    await btn.onclick();
+    await settle();
+    assert.equal(h.confirms.length, 1, '重启前必须问一次');
+    const ask = h.confirms[0];
+    assert.ok(ask.title, '标题不能为空');
+    assert.match(`${ask.title} ${ask.body ?? ''}`, /会中断|interrupt/i, '要把后果说出来：所有正在跑的会话会被中断');
+    assert.ok(CONFIRM_TONES.has(ask.tone), `tone 必须是 sheets.js 认得的值之一，收到 ${JSON.stringify(ask.tone)}`);
+    assert.equal(h.emitted.filter((e) => e.event === 'dev:restart').length, 1, '确认后才真发');
+  });
+
+  test('重启确认点「取消」→ 一个 dev:restart 都不发', async () => {
+    const h = await openAndEdit({ ackQueue: [okAck], canRestart: () => true, confirmAnswer: false }, { PORT: '8080' });
+    const btn = h.dom.envConfigFooter.children.find((c) => c.id === 'envConfigRestart');
+    await btn.onclick();
+    await settle();
+    assert.equal(h.emitted.filter((e) => e.event === 'dev:restart').length, 0);
   });
 
   test('保存成功会通知外部（onSaved），失败不会', async () => {

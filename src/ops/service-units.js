@@ -61,9 +61,21 @@ function parseServerCommand(argv) {
   const right = parts[1].trim();
   if (!right.endsWith(' server.js')) return { repo: null, node: null };
   return {
-    repo: str(stripQuotes(left.slice(3))),
-    node: str(stripQuotes(right.slice(0, -' server.js'.length))),
+    repo: str(unescapeShellDq(stripQuotes(left.slice(3)))),
+    node: str(unescapeShellDq(stripQuotes(right.slice(0, -' server.js'.length)))),
   };
+}
+
+// 与 scripts/render-plist.js 的 escapeShellDq 互为逆。
+//
+// ★ 必须成对：渲染侧给 `$` / 反引号 / `\` / `"` 加了反斜杠（否则 zsh 会在双引号里展开它们，
+// 路径含 `$` 时会静默 cd 到别处、KeepAlive 把 node 起不来变成无限重启循环），而这里只
+// stripQuotes 不反转义的话，解析出来的 repo 比期望值多几个反斜杠 → diffUnitSemantics 判
+// repo-path 漂移 → doctor D16 恒亮 warn。恰恰是这个改动要服务的那批用户换来一个新毛病。
+//
+// 对不含反斜杠的普通路径（含机主手写的那些 plist）是恒等的，所以既有安装不受影响。
+function unescapeShellDq(value) {
+  return String(value ?? '').replace(/\\([\\$`"])/g, '$1');
 }
 
 const ROTATE_SUFFIX = '/scripts/rotate-logs.sh';
@@ -223,11 +235,27 @@ export function parseLaunchctlList(tsv) {
 //
 // lastExitAbnormal 仍然保留：那是「上次是不是非正常退出」这个事实本身，UI 可以展示，
 // 只是不再单独拿它下告警结论。
-export function classifyState({ pid = null, lastExit = null, plistExists = true } = {}) {
-  if (!plistExists) return { state: 'not-installed', lastExitAbnormal: false };
+// loaded：launchd 域里还有没有这个 job（launchctl list 是否列出该 label）。null = 调用方没给。
+// 它与 plistExists 是**两件独立的事**：plist 躺在磁盘上、但已被 bootout，定时器就永远不会再触发。
+// plistExists     ：plist **能不能解析**（readPlistFile 返回了对象）
+// plistFileExists ：plist **文件在不在**（fileExists）。null = 调用方没给，回落旧行为。
+//
+// ★★ 这两个必须分开。readPlistFile 在「文件不存在」「plutil 非零退出」「plutil 5s 超时」
+// 三种情况下**都返回 null**，而它们的正确结论完全不同：
+//   · 文件真没了（git clean / 手滑）：开机自启已经死了。进程还在只是上次启动的残留，重启后
+//     就没了 —— 必须现在就报出来。曾经有一版让 pid 压过一切，于是 doctor D16 从 warn 变 ok，
+//     菜单栏还把「在终端里安装…」换成三个点了必然报错的按钮（guardControllable 仍要求
+//     plist 在盘上）。那正是 1158e7a 修的那类「三条自查路径全看不见」的盲区。
+//   · 文件在、只是 plutil 抽风：那是读取故障。有 pid 就是在跑，不能说成「未安装」——
+//     否则 doctor D4 会因 resolveServicePortOwner 要求 state==='running' 而把自家端口
+//     报成被外来进程占用。
+export function classifyState({ pid = null, lastExit = null, plistExists = true, plistFileExists = null, loaded = null } = {}) {
   const abnormal = typeof lastExit === 'number' && Number.isFinite(lastExit) && lastExit !== 0;
-  if (pid !== null && Number.isFinite(pid)) return { state: 'running', lastExitAbnormal: abnormal };
-  return { state: abnormal ? 'crashed' : 'stopped', lastExitAbnormal: abnormal };
+  // 没给 plistFileExists 时按旧语义走：解析不出来就当没装。不静默改判老调用方。
+  const fileGone = plistFileExists === null ? !plistExists : !plistFileExists;
+  if (fileGone) return { state: 'not-installed', lastExitAbnormal: false, loaded };
+  if (pid !== null && Number.isFinite(pid)) return { state: 'running', lastExitAbnormal: abnormal, loaded };
+  return { state: abnormal ? 'crashed' : 'stopped', lastExitAbnormal: abnormal, loaded };
 }
 
 // plutil 解析出的 plist 对象 → 语义事实。形态对不上时相关字段为 null 而非抛错：

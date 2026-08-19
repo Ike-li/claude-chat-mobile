@@ -11,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { createServiceManager, describeUnit, formatStatus, formatControlResult, resolveEventsPath } from '../../scripts/service.js';
+import { extractSchedule } from '../../src/ops/service-units.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CLI = join(ROOT, 'scripts', 'service.js');
@@ -81,6 +82,10 @@ function makeManager(overrides = {}) {
     execLaunchctl: overrides.execLaunchctl
       ?? (() => ({ status: 0, stdout: overrides.tsv ?? LAUNCHCTL_TSV, stderr: '' })),
     readPlistFile: (path) => plists[path] ?? null,
+    // 「文件在不在」与「能不能解析」在真实实现里是两个独立来源（existsSync vs plutil）。
+    // 默认让它们一致——既有用例的语义就是「plists 表里有 = 装了」；要单独构造
+    // 「文件在但 plutil 读不出来」的用例，在 extra 里覆盖 fileExists 即可。
+    fileExists: (path) => Object.prototype.hasOwnProperty.call(plists, path),
     readManifest: overrides.readManifest ?? (() => null),
     readEnv: overrides.readEnv ?? (() => ({ PORT: '3000', AUTH_TOKEN: 'x'.repeat(64) })),
     envFileExists: overrides.envFileExists ?? (() => true),
@@ -198,7 +203,7 @@ test.describe('status —— 状态与 flapping', () => {
   test('重启历史读不出来（文件缺失/坏 JSON）→ 一切为零，不影响其余字段', () => {
     const u = makeManager({ readEvents: () => null }).status().units.find((x) => x.unit === 'server');
     assert.equal(u.flapping, false);
-    assert.deepEqual(u.restarts, { lastHour: 0, last24h: 0, flapping: false, lastRestartAt: null });
+    assert.deepEqual(u.restarts, { lastHour: 0, last24h: 0, manual24h: 0, flapping: false, lastRestartAt: null });
     assert.equal(u.state, 'running', '其余判定不受影响');
   });
 
@@ -457,6 +462,128 @@ test.describe('formatControlResult —— 弱判据必须出现在人眼前', ()
 //
 // describeUnit 此前 **100% 无断言**（tests/ 里零引用、零 `.detail` 断言），而 6a38e7c 新增的
 // 重启话术全在这个函数里 —— 把它整个改成 `return ''` 全套单测照样绿。
+// ★ stop 的目标状态是「它别跑了」。已经不在 launchd domain 里时那个状态本来就成立 ——
+// 而 bootout 这时返回非零（"Could not find service"），旧实现据此报 ✗ 并在菜单栏弹失败提示。
+// uninstall 一直是宽容的（见那里的注释：「那不是失败是本来就没跑」），stop 这一侧一直缺着；
+// 叠加「被 bootout 的 unit 仍显示成健康待机」这个盲区，用户根本无从知道它已经停了。
+// loaded 这一位要在**两条构建路径**上都成立，而不是只有已知 unit 有。
+// 机主本机就跑着手写的 com.ccm.tunnel-watch —— 自建 unit 恰恰是最容易被误读成「装了没启用」的那类。
+test.describe('loaded —— 自建 unit 与 list 失败时的诚实度', () => {
+  const WATCH_PLIST = `${HOME}/Library/LaunchAgents/com.ccm.tunnel-watch.plist`;
+  const watchPlists = {
+    [WATCH_PLIST]: {
+      Label: 'com.ccm.tunnel-watch',
+      ProgramArguments: ['/bin/bash', `${HOME}/.cloudflared/watch.sh`],
+      StartInterval: 30,
+      StandardOutPath: `${HOME}/Library/Logs/ccm-tunnel-watch.log`,
+    },
+  };
+  const unitNamed = (s, name) => s.units.find((u) => u.label === `com.ccm.${name}`);
+
+  test('★ 自建 unit 被 bootout 后同样要能看出来（buildUnknownUnits 也得带 loaded）', () => {
+    // launchctl 里只有 server，watch 的 plist 在盘上但已不在 domain 里
+    const mgr = makeManager({
+      plists: watchPlists,
+      tsv: ['PID\tStatus\tLabel', '26867\t0\tcom.ccm.server'].join('\n'),
+      // 已不在 launchctl list 里，只能靠 ~/Library/LaunchAgents 目录扫描发现 —— 这正是本场景
+      extra: { listAgentLabels: () => ['com.ccm.tunnel-watch'] },
+    });
+    const u = unitNamed(mgr.status({ fast: true }), 'tunnel-watch');
+    assert.ok(u, '自建 unit 要出现在 status 里');
+    assert.equal(u.loaded, false, '已从 launchd 卸载 —— 这一位不能只有已知 unit 才有');
+    assert.doesNotMatch(u.detail, /待机/, '每 30 秒触发一次的说法此刻是假的');
+  });
+
+  test('★ launchctl list 失败时不许说「已从 launchd 卸载」—— 那是不知道，不是知道它没了', () => {
+    const mgr = makeManager({
+      plists: watchPlists,
+      execLaunchctl: () => ({ status: 1, stdout: '', stderr: 'Could not connect' }),
+      extra: { listAgentLabels: () => ['com.ccm.tunnel-watch'] },
+    });
+    const s = mgr.status({ fast: true });
+    for (const u of s.units) {
+      assert.notEqual(u.loaded, false, `${u.label}：list 都读不到，凭什么断言它被卸载了`);
+      assert.doesNotMatch(u.detail || '', /不会执行|已从 launchd 卸载/,
+        `${u.label} 的 detail 在 list 失败时不该给出确定结论：${u.detail}`);
+    }
+    assert.ok(s.warnings.some((w) => /launchctl list/.test(w)), '要留一条 warning 说清读不到');
+  });
+});
+
+test.describe('stop —— 已经停了不是失败', () => {
+  // domain 里只有 server；logrotate 的 plist 在磁盘上（HANDWRITTEN 里有）但已被 bootout
+  const ONLY_SERVER = ['PID\tStatus\tLabel', '26867\t0\tcom.ccm.server'].join('\n');
+
+  // guardControllable 要求 plist 在磁盘上——这正是本场景的前提（文件在，但已被 bootout）
+  const stopManager = (tsv, bootout) => makeManager({
+    extra: { fileExists: () => true },
+    execLaunchctl: (args) => (args[0] === 'list'
+      ? { status: 0, stdout: tsv, stderr: '' }
+      : bootout),
+  });
+
+  test('★ 停一个已被 bootout 的 unit → ok，不弹失败', () => {
+    // 真实 launchctl 对不在 domain 里的 label 就是这么答的
+    const mgr = stopManager(ONLY_SERVER, { status: 3, stdout: '', stderr: 'Boot-out failed: 3: No such process' });
+    const r = mgr.stop('logrotate');
+    assert.equal(r.ok, true, '要的状态已经成立，报 ✗ 只会让人以为出了事');
+    assert.equal(r.alreadyStopped, true, '如实标注：这次并没有真去停它');
+  });
+
+  test('还在 domain 里 → 照常 bootout', () => {
+    const r = stopManager(LAUNCHCTL_TSV, { status: 0, stdout: '', stderr: '' }).stop('logrotate');
+    assert.equal(r.ok, true);
+    assert.notEqual(r.alreadyStopped, true);
+  });
+
+  test('真的失败（权限等）仍然报失败，别把这条宽容变成万能挡箭牌', () => {
+    const r = stopManager(LAUNCHCTL_TSV, { status: 1, stdout: '', stderr: 'Operation not permitted' }).stop('logrotate');
+    assert.equal(r.ok, false);
+  });
+
+  // ★★ launchctlList 在 list 非零退出/抛异常时都返回**空 Map** —— 那是「不知道」，不是
+  // 「什么都没加载」。据它早退等于 fail-open：报「✓ 已停止」、退出 0、bootout 一次没跑，
+  // 而服务还在跑。宁可照常 bootout 让真错误浮上来。
+  test('★★ launchctl list 本身失败 → 不许当成「已经停了」，必须照常 bootout', () => {
+    const calls = [];
+    const mgr = makeManager({
+      extra: { fileExists: () => true },
+      execLaunchctl: (args) => {
+        calls.push(args[0]);
+        return args[0] === 'list'
+          ? { status: 1, stdout: '', stderr: 'launchctl: Could not connect' }
+          : { status: 1, stdout: '', stderr: 'Operation not permitted' };
+      },
+    });
+    const r = mgr.stop('logrotate');
+    assert.ok(calls.includes('bootout'), '不确定它在不在 domain 里时必须真去停一次');
+    assert.equal(r.ok, false, 'bootout 失败要如实报，不能报成「已停止」');
+  });
+
+  test('★ launchctl list 抛异常时同样不早退', () => {
+    const calls = [];
+    const mgr = makeManager({
+      extra: { fileExists: () => true },
+      execLaunchctl: (args) => {
+        calls.push(args[0]);
+        if (args[0] === 'list') throw new Error('spawn ENOENT');
+        return { status: 0, stdout: '', stderr: '' };
+      },
+    });
+    const r = mgr.stop('logrotate');
+    assert.ok(calls.includes('bootout'));
+    assert.equal(r.ok, true, 'bootout 成功就是真停了');
+    assert.notEqual(r.alreadyStopped, true);
+  });
+
+  // 弱判据必须出现在人眼前，不能只躺在 --json 里 —— 同本文件 formatControlResult 那组的立场。
+  test('★ 「本来就没在跑」要在 CLI 输出里说出来，而不是与真停止长得一模一样', () => {
+    const r = stopManager(ONLY_SERVER, { status: 3, stdout: '', stderr: 'Boot-out failed: 3: No such process' }).stop('logrotate');
+    const out = formatControlResult(r).stdout;
+    assert.match(out, /本来就没在跑|已经停了|未在运行/, `弱判据要可见，实际输出：${JSON.stringify(out)}`);
+  });
+});
+
 test.describe('describeUnit —— 每条分支都要有人看着', () => {
   const base = { state: 'running', drift: [], plistExists: true, ownership: 'managed' };
   const R = (over) => ({ lastHour: 0, last24h: 0, flapping: false, lastRestartAt: null, ...over });
@@ -500,6 +627,31 @@ test.describe('describeUnit —— 每条分支都要有人看着', () => {
   test('foreign 且非 shape → 提示 adopt 前不改写', () => {
     const d = describeUnit({ ...base, restarts: R(), ownership: 'foreign' });
     assert.match(d, /adopt 前不会被改写/);
+  });
+
+  // ★ 「待机」这个词的意思是「装着、等着、到点会响」。被 bootout 之后 plist 照样在磁盘上、
+  // 调度形态照样读得出来，可它永远不会再响了 —— 说成待机是在报一个反的事实。
+  // 停掉 logrotate 一次，日志轮转就此静默死掉，而面板/CLI/doctor 三处都说一切正常。
+  // schedule 形状取自**真实的 extractSchedule**，不手编：手编的外部契约一旦编错，
+  // 测试与实现会互相印证并恒绿（本仓在 git fixture 上栽过一次）。
+  const DAILY = extractSchedule({ StartCalendarInterval: { Hour: 3, Minute: 47 } });
+
+  test('★ 已 bootout 的定时器不能说成「待机」', () => {
+    const d = describeUnit({ ...base, state: 'stopped', restarts: R(), schedule: DAILY, loaded: false });
+    assert.match(d, /已停止/, '要说清它停了');
+    assert.match(d, /不会执行/, '要说清后果：到点也不会响');
+    assert.match(d, /start/, '要给出恢复动作');
+  });
+
+  test('仍在 launchd 里的定时器照旧说待机（这是 99% 的正常态，别改成告警）', () => {
+    const d = describeUnit({ ...base, state: 'stopped', restarts: R(), schedule: DAILY, loaded: true });
+    assert.match(d, /待机/);
+    assert.doesNotMatch(d, /已停止|不会触发/);
+  });
+
+  test('loaded 未知（null）时维持旧行为，不凭空报故障', () => {
+    const d = describeUnit({ ...base, state: 'stopped', restarts: R(), schedule: DAILY, loaded: null });
+    assert.match(d, /待机/);
   });
 
   test('crashed 追加一句', () => {
@@ -547,7 +699,7 @@ test.describe('formatStatus —— 人类可读表格（darwin 路径）', () =>
     units: [{
       unit: 'server', label: 'com.ccm.server', state: 'running', pid: 51531,
       ownership: 'managed', flapping: false, drift: [], detail: '', listen: null,
-      restarts: { lastHour: 0, last24h: 0, flapping: false, lastRestartAt: null },
+      restarts: { lastHour: 0, last24h: 0, manual24h: 0, flapping: false, lastRestartAt: null },
     }],
   };
   const render = (over) => formatStatus({ ...base, ...over });
@@ -649,7 +801,10 @@ test.describe('status —— menubar 自启指向的 app', () => {
   test('指向的 app 已不存在 → 警告登录时拉不起菜单栏', () => {
     const w = warningsOf({
       plists: menubarPlist('/Applications/CCM.app'),
-      extra: { fileExists: () => false },
+      // fileExists 现在同时被两处消费：判 plist 在不在（决定 unit 是否已安装）、
+      // 判自启指向的 .app 在不在。真实 fs 对两个路径本来就给不同答案，mock 也必须区分 ——
+      // 一律 false 会让 unit 先被判成未安装，根本走不到自启检查这一步。
+      extra: { fileExists: (p) => String(p).endsWith('.plist') },
     });
     assert.match(w, /不存在/);
     assert.match(w, /app:install/);

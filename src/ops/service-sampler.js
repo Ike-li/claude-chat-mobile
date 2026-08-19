@@ -14,6 +14,7 @@
 // scripts/service.js 的 createServiceManager 同一范式：全部 IO 走 deps，宿主机零成本可测。
 import {
   MAX_SERVICE_EVENTS,
+  RESTART_INTENT_KIND,
   appendEvents,
   classifyRestartPattern,
   deserializeSnapshot,
@@ -126,6 +127,34 @@ export function createServiceSampler(deps = {}) {
   }
 
   /**
+   * 「接下来那次换 pid 是用户按的」。在 dev:restart 真正退出之前调用。
+   *
+   * ## 为什么必须由发起方记
+   *
+   * 采样器只能看见 pid 变了，看不见为什么变 —— 崩溃重启和用户点「立即重启」在 launchctl
+   * 眼里一模一样。而配置面板每次保存成功都给一个「立即重启」按钮，手机上改三次配置就凑够
+   * 「1 小时 3 次」，doctor 于是报「疑似崩溃重启循环」、面板变红、菜单栏图标变 ◐ —— 什么都没崩。
+   *
+   * ## 为什么这里**不**按平台早退
+   *
+   * recordSelfStart 在 darwin 上早退，是因为 launchctl 快照比对已经能认出 server 自身重启，
+   * 再记一次会重复计数。这条相反：darwin 正是那条会产出 restarted 的路径，也就正是需要
+   * 「这次是有意的」这份声明的地方。两个方法的平台条件天然相反，不要照着上面那个抄。
+   */
+  function recordRestartIntent(at = now()) {
+    const label = `${labelPrefix}server`;
+    try {
+      const event = { ts: at, label, kind: RESTART_INTENT_KIND, from: null, to: null, lastExit: null };
+      writeEvents(appendEvents(readEvents(), [event]).slice(-MAX_SERVICE_EVENTS));
+      return event;
+    } catch (err) {
+      // 记不下来只会让这次重启被当成崩溃计一次，不该阻断重启本身。
+      warn(`[service] 重启意图落盘失败（这次重启可能被计入 flapping）：${err?.message || err}`);
+      return null;
+    }
+  }
+
+  /**
    * 面板要的两段。判定化：不给裸计数器，给「有没有在频繁重启」+ 一小段时间线。
    *
    * 时间线只取「摘要里有话说的那些 unit」的事件。此前是全局最后 N 条，于是一个高频 label
@@ -142,5 +171,5 @@ export function createServiceSampler(deps = {}) {
     return { units, recent: pool.slice(-recentLimit).reverse() }; // 倒序：最新的在前
   }
 
-  return { sample, recordSelfStart, summarize };
+  return { sample, recordSelfStart, recordRestartIntent, summarize };
 }

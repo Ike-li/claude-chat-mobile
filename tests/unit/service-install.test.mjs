@@ -175,6 +175,103 @@ test.describe('install —— 全新安装', () => {
     assert.ok(fs.has(SERVER_PLIST), 'plist 应被补写');
   });
 
+  // ★ recovered 分支此前从不读 manifest 记的 vars，只吃 CLI opts。而 adopt 那里写得清清楚楚
+  // 「vars 是将来 recovered 分支要拿来重渲染的参数」，ACTION_TEXT.recovered 也告诉用户
+  // 「已按 manifest 重建」—— 实际是死数据。plist 被删（git clean / 手滑）时用户并不会再带一次
+  // --tunnel/--cloudflared/--app，于是恢复被自己的 precheck 拦下，要他手填工具已经存着的值。
+  // server/logrotate 侥幸能恢复，只因它们的 vars 恰好都能从 ctx 推出来。
+  test('★ tunnel 的 plist 被删 → 按 manifest 记的 vars 重建，不再要用户重打参数', () => {
+    const { mgr, fs } = setup({
+      files: { [`${HOME}/.cloudflared/config.yml`]: 'tunnel: home\n' },
+      manifest: {
+        schemaVersion: 1,
+        labelPrefix: 'com.ccm',
+        units: {
+          tunnel: {
+            label: 'com.ccm.tunnel',
+            plistPath: `${AGENTS}/com.ccm.tunnel.plist`,
+            sha256: 'b'.repeat(64),
+            template: 'desktop/launchd/tunnel.plist.template',
+            vars: { LABEL: 'com.ccm.tunnel', CLOUDFLARED: '/opt/homebrew/bin/cloudflared', TUNNEL: 'home', LOG: `${HOME}/Library/Logs/ccm-tunnel.log` },
+          },
+        },
+      },
+    });
+    const r = mgr.install('tunnel');   // 注意：**不带**任何 --tunnel / --cloudflared
+    assert.equal(r.ok, true, `不该再要求重打参数：${r.error}`);
+    assert.equal(r.action, 'recovered');
+    const written = fs.get(`${AGENTS}/com.ccm.tunnel.plist`);
+    assert.match(written, /home/, '隧道名要从 manifest 里取回来');
+    assert.match(written, /cloudflared/, 'cloudflared 路径同理');
+  });
+
+  test('CLI 显式给的参数压过 manifest 记的（用户想换隧道时得能换）', () => {
+    const { mgr, fs } = setup({
+      files: { [`${HOME}/.cloudflared/config.yml`]: 'tunnel: home\n' },
+      manifest: {
+        schemaVersion: 1,
+        labelPrefix: 'com.ccm',
+        units: {
+          tunnel: {
+            label: 'com.ccm.tunnel',
+            plistPath: `${AGENTS}/com.ccm.tunnel.plist`,
+            sha256: 'b'.repeat(64),
+            template: 'desktop/launchd/tunnel.plist.template',
+            vars: { LABEL: 'com.ccm.tunnel', CLOUDFLARED: '/old/cloudflared', TUNNEL: 'old-name', LOG: `${HOME}/Library/Logs/ccm-tunnel.log` },
+          },
+        },
+      },
+    });
+    const r = mgr.install('tunnel', { tunnel: 'new-name', cloudflared: '/opt/homebrew/bin/cloudflared' });
+    assert.equal(r.ok, true, r.error);
+    const written = fs.get(`${AGENTS}/com.ccm.tunnel.plist`);
+    assert.match(written, /new-name/);
+    assert.doesNotMatch(written, /old-name/);
+  });
+
+  // ★ optsFromVars 只挂在 `!exists` 分支时，同一条命令会因为「plist 在不在」给出相反结果：
+  // plist 还在 → 报「参数与当前配置不一致（CLOUDFLARED / TUNNEL）… 先卸载再装」，
+  // 让用户为了「没重复输入工具已经存着的参数」去拆掉一条正常工作的隧道。
+  test('★ plist 还在时不带参数跑 install → 认作「已是目标状态」，不是「参数不一致」', () => {
+    const TUNNEL_PLIST = `${AGENTS}/com.ccm.tunnel.plist`;
+    const vars = { LABEL: 'com.ccm.tunnel', CLOUDFLARED: '/opt/homebrew/bin/cloudflared', TUNNEL: 'home', LOG: `${HOME}/Library/Logs/ccm-tunnel.log` };
+    const { mgr } = setup({
+      files: { [`${HOME}/.cloudflared/config.yml`]: 'tunnel: home\n', [TUNNEL_PLIST]: '<plist/>' },
+      objs: {
+        [TUNNEL_PLIST]: {
+          Label: 'com.ccm.tunnel',
+          ProgramArguments: ['/opt/homebrew/bin/cloudflared', 'tunnel', 'run', 'home'],
+          RunAtLoad: true, KeepAlive: true,
+          StandardOutPath: vars.LOG, StandardErrorPath: vars.LOG,
+        },
+      },
+      tsv: ['PID\tStatus\tLabel', '111\t0\tcom.ccm.tunnel'].join('\n'),
+      manifest: {
+        schemaVersion: 1, labelPrefix: 'com.ccm',
+        units: { tunnel: { label: 'com.ccm.tunnel', plistPath: TUNNEL_PLIST, sha256: 'c'.repeat(64), template: 'desktop/launchd/tunnel.plist.template', vars } },
+      },
+    });
+    const r = mgr.install('tunnel');   // 不带 --tunnel / --cloudflared
+    assert.equal(r.ok, true, `不该要求重打工具已经存着的参数：${r.error}`);
+    assert.equal(r.action, 'already');
+  });
+
+  // ★ 恢复 menubar 时若 manifest 记的 APP 已经被 git clean 掉了，重建出来的 plist 指向一个
+  // 不存在的 bundle —— 「✓ 已修复安装」却什么都拉不起来。precheck 只判了 opts.app 真不真，
+  // 没判它在不在。1158e7a 修的正是「自启指向仓库构建产物、三条自查路径全看不见」。
+  test('★ 从 manifest 恢复 menubar：记录的 .app 已不存在 → 拒绝，不假装修好了', () => {
+    const APP = `${REPO}/desktop/build/CCM.app`;
+    const { mgr } = setup({
+      manifest: {
+        schemaVersion: 1, labelPrefix: 'com.ccm',
+        units: { menubar: { label: 'com.ccm.menubar', plistPath: `${AGENTS}/com.ccm.menubar.plist`, sha256: 'd'.repeat(64), template: 'desktop/launchd/menubar.plist.template', vars: { LABEL: 'com.ccm.menubar', APP, LOG: `${HOME}/Library/Logs/ccm-menubar.log` } } },
+      },
+    });
+    const r = mgr.install('menubar');  // files 里没有那个 .app
+    assert.equal(r.ok, false, '指向不存在的 bundle 的「修复」等于没修');
+    assert.match(r.error, /不存在|app:install/, `要说清是路径没了：${r.error}`);
+  });
+
   test('launchctl bootstrap 失败 → ok:false 且如实报错（不假装成功）', () => {
     const { mgr } = setup({ launchctlFails: true });
     const r = mgr.install('server');
@@ -269,8 +366,11 @@ test.describe('install —— 护栏：绝不覆写用户的配置', () => {
   });
 
   test('menubar 带 --app 可以装，且 plist 里没有 undefined', () => {
-    const { mgr, fs } = setup();
-    const r = mgr.install('menubar', { app: '/Users/you/code/repo/desktop/build/CCM.app' });
+    // .app 要真的在（内存 fs 里放一份）：precheck 现在除了「给没给」还判「在不在」，
+    // 否则从 manifest 恢复时会拿一个被 git clean 掉的路径重建出「修好了」的假象。
+    const APP = '/Users/you/code/repo/desktop/build/CCM.app';
+    const { mgr, fs } = setup({ files: { [APP]: 'bundle' } });
+    const r = mgr.install('menubar', { app: APP });
     assert.equal(r.ok, true);
     const xml = fs.get(`${AGENTS}/com.ccm.menubar.plist`);
     assert.ok(!xml.includes('undefined'), 'plist 里不能出现字面量 undefined');
@@ -626,7 +726,8 @@ test.describe('install —— 已装但参数变了', () => {
   // 让代码自己装一遍来生成 manifest，而不是手写一份结构（手写的会被 validateManifest 拒掉，
   // 于是测试实际测的是「不接管自定义启动方式」那条无关分支——同 148 行那条幂等用例的做法）。
   const installedMenubar = () => {
-    const env = setup();
+    // 两个候选路径都要在内存 fs 里：precheck 会判 .app 是否存在
+    const env = setup({ files: { [OLD_APP]: 'bundle', '/Applications/CCM.app': 'bundle' } });
     const first = env.mgr.install('menubar', { app: OLD_APP });
     assert.equal(first.ok, true, `前置安装应成功：${first.error ?? ''}`);
     env.writes.length = 0; // 只关心第二次 install 有没有写

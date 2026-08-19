@@ -2822,6 +2822,15 @@ registerSocketConnection(io, socket => {
       actor: actorFromSocket(socket), action: 'server_restart', target: 'server',
       outcome: 'allowed', meta: { via: DEV_MODE ? 'dev-mode' : 'supervised' },
     });
+    // 声明「接下来那次换 pid 是用户按的」。采样器只看得见 pid 变了、看不出为什么变，而配置
+    // 面板每次保存成功都给一个「立即重启」按钮 —— 不记这一条的话，手机上改三次配置就会被
+    // 判成「1 小时内重启 3 次·疑似崩溃重启循环」。必须在退出**之前**落盘。
+    //
+    // 只在**真会被拉起**时记。DEV_MODE=1 下即使没有进程管理器托管也放行（见上面那段），
+    // 那时进程停了就没了、不会有新的 pid 出现 —— 记一条 intent 只会留下一份孤儿声明，
+    // 它会在 120s 窗口内认领掉恰好撞上来的下一条 restarted（比如你手动重开 server 那次），
+    // 把一次真实重启从频率统计里抹掉。
+    if (isSupervised()) serviceSampler.recordRestartIntent();
     if (typeof ack === 'function') ack({ ok: true });
     // 稍延后再退出，确保 ack 先发回客户端（客户端据此显示「重启中…」并等待重连）
     setTimeout(() => shutdown('DEV_RESTART'), 200);

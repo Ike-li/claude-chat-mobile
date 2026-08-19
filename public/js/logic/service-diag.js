@@ -177,13 +177,16 @@ export function formatRestartRows({ restarts, now = Date.now() } = {}) {
       // flapping 的判据是频率（1 小时内 ≥3 次），不是「上次退出码非 0」
       text: u.flapping
         ? `${t('1 小时内重启')} ${u.lastHour} ${t('次')}`
-        : `${t('24 小时内')} ${u.last24h} ${t('次')} · ${t('上次')} ${formatAgoShort(now - u.lastRestartAt)}${t('前')}`,
+        // manual24h 单独说：这一行的「N 次」只数无法解释的重启，而「上次」指向的是全部重启里
+        // 最近的一条。一次崩溃 + 三次面板重启若不点明，就成了「24 小时内 1 次 · 上次 刚刚」，
+        // 而那个「上次」并不在这 1 次里 —— 同一行自相矛盾。旧 server 不带这个字段，照旧不显示。
+        : `${t('24 小时内')} ${u.last24h} ${t('次')}${u.manual24h > 0 ? `（${t('另有手动重启')} ${u.manual24h} ${t('次')}）` : ''} · ${t('上次')} ${formatAgoShort(now - u.lastRestartAt)}`,
       alert: !!u.flapping,
     }));
 
   const timeline = recent.map((e) => ({
     label: e.label,
-    text: `${formatAgoShort(now - e.ts)}${t('前')} ${restartKindText(e.kind)}`,
+    text: `${formatAgoShort(now - e.ts)} ${restartKindText(e.kind)}`,
   }));
 
   return { summary, timeline, empty: false };
@@ -193,18 +196,26 @@ function restartKindText(kind) {
   if (kind === 'restarted') return t('重启');
   if (kind === 'started') return t('启动');
   if (kind === 'stopped') return t('停止');
+  // 用户从手机点的「立即重启」，在退出前记下的声明。它不计入 flapping 频率，但要进时间线：
+  // 少了这一条，时间线上就只剩一次孤零零的「重启」，看的人无从判断那是自己按的还是崩的。
+  if (kind === 'restart-requested') return t('手动重启');
   return kind || '?';
 }
 
 // 粗粒度「多久以前」。UI 要的是量级不是精度。
+// 返回的是**完整短语**，调用方不要再补「前」。
+// 此前这里混着两类返回值：'刚刚' / '?' 本身就是完整的，而 '5 分钟' 是待补量词的片段，
+// 两个调用点又无条件拼「前」 —— 于是每次重启服务后打开服务状态，那条刚记下的必然读作
+// 「刚刚前 启动」；客户端时钟落后于服务端时差值为负，还会读作「?前 重启」。
+// 同文件的 formatAgo 一直是把「前」烘焙进每个分支的，与它对齐。
 export function formatAgoShort(ms) {
   if (!Number.isFinite(ms) || ms < 0) return '?';
   const m = Math.floor(ms / 60000);
   if (m < 1) return t('刚刚');
-  if (m < 60) return `${m} ${t('分钟')}`;
+  if (m < 60) return `${m} ${t('分钟前')}`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} ${t('小时')}`;
-  return `${Math.floor(h / 24)} ${t('天')}`;
+  if (h < 24) return `${h} ${t('小时前')}`;
+  return `${Math.floor(h / 24)} ${t('天前')}`;
 }
 
 export function formatServiceNotices({ service, now } = {}) {

@@ -19,7 +19,11 @@
 // unit 在崩溃循环里把文件撑爆。
 export const MAX_SERVICE_EVENTS = 200;
 
-const KINDS = new Set(['restarted', 'started', 'stopped']);
+// ★ restart-requested 必须在这个白名单里，否则 recordRestartIntent 写下去的声明在读回来时
+// 被整条丢弃 —— 那不只是「抵消逻辑不生效」：recordRestartIntent 自己也走 readEvents()，
+// 于是每写一条新 intent 就把上一条从磁盘上抹掉。加它的时候漏了这里，而单测只断言
+// 「写入侧收到了什么」、从不 round-trip 读一次，所以三千多条测试全绿。
+const KINDS = new Set(['restarted', 'started', 'stopped', 'restart-requested']);
 
 // ## 只有 restarted 计入频率（2026-08-14 第三轮审查修正）
 //
@@ -34,6 +38,15 @@ const KINDS = new Set(['restarted', 'started', 'stopped']);
 //   · 代价：「停了很久再手动起来」的循环不计入 —— 那是用户操作，本来就不该叫 flapping
 // started / stopped 仍然**照常记录**，它们进时间线供人看，只是不参与下告警结论。
 const RESTART_KINDS = new Set(['restarted']);
+
+// 用户主动重启（手机面板的「立即重启」→ dev:restart）在退出前先记一条这个 kind。
+// 它本身不是重启，是一份「接下来那次换 pid 是我按的」的声明——采样器无从分辨有意与崩溃，
+// 只有发起方知道。它进时间线供人看，但不参与频率判据。
+export const RESTART_INTENT_KIND = 'restart-requested';
+
+// 一条 intent 认领其后多久内的那次 restarted。要盖住「优雅退出 200ms + KeepAlive 拉起 +
+// 采样器下一轮 tick」，同时短到不会把一次真崩溃误认成用户操作。
+const INTENT_WINDOW_MS = 120_000;
 
 const HOUR_MS = 3600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -95,12 +108,34 @@ export function classifyRestartPattern(events, { label, now = Date.now() } = {})
   // 而负数恒 < 窗口 ⇒ 全部历史事件一起落进「1 小时内」⇒ 假 flapping 恒亮。
   // 触发路径：NTP 大幅回拨 / VM 快照回滚 / 有人手改过 service-events.json。
   const inWindow = (e, win) => e.ts <= now && now - e.ts < win;
-  const mine = (events || []).filter((e) => e && e.label === label && RESTART_KINDS.has(e.kind));
+  const ours = (events || []).filter((e) => e && e.label === label);
+  const mine = ours.filter((e) => RESTART_KINDS.has(e.kind));
+
+  // ★ 把「用户自己按的重启」从频率判据里摘掉。配置面板每次保存成功都给一个「立即重启」按钮，
+  // 手机上改三次配置就凑够「1 小时 3 次」→ doctor 报「疑似崩溃重启循环」、面板变红、菜单栏 ◐，
+  // 而根本没有东西崩过。恒亮的告警比没有告警更糟，见本文件头注。
+  //
+  // 每条 intent 只认领**紧随其后的第一条** restarted，不是抵消整个窗口：否则「重启完之后
+  // 真的开始崩溃循环」就被一次主动重启永久打掩护了。
+  const intentional = new Set();
+  const intents = ours.filter((e) => e.kind === RESTART_INTENT_KIND).map((e) => e.ts).sort((a, b) => a - b);
+  for (const at of intents) {
+    const hit = mine.find((e) => !intentional.has(e) && e.ts >= at && e.ts - at < INTENT_WINDOW_MS);
+    if (hit) intentional.add(hit);
+  }
+  const counted = mine.filter((e) => !intentional.has(e));
+
   const past = mine.filter((e) => e.ts <= now);
-  const lastHour = mine.filter((e) => inWindow(e, FLAP_WINDOW_MS)).length;
-  const last24h = mine.filter((e) => inWindow(e, DAY_MS)).length;
+  const lastHour = counted.filter((e) => inWindow(e, FLAP_WINDOW_MS)).length;
+  const last24h = counted.filter((e) => inWindow(e, DAY_MS)).length;
+  // 「24 小时内重启 N 次」在 UI 上是当**事实**说的，所以还要给出手动那部分的条数 ——
+  // 否则「一次崩溃 + 三次面板重启」会显示成「24 小时内 1 次 · 上次 刚刚」，而「上次」
+  // 指向的那次并不在这 1 次里，同一行自相矛盾。
+  const manual24h = mine.filter((e) => intentional.has(e) && inWindow(e, DAY_MS)).length;
+  // lastRestartAt 取**全部**重启的最后一条：那是「上次重启在什么时候」这个事实，历史面板
+  // 要如实显示，与「这些重启算不算异常」是两回事。
   const lastRestartAt = past.length ? Math.max(...past.map((e) => e.ts)) : null;
-  return { lastHour, last24h, flapping: lastHour >= FLAP_THRESHOLD, lastRestartAt };
+  return { lastHour, last24h, manual24h, flapping: lastHour >= FLAP_THRESHOLD, lastRestartAt };
 }
 
 // ## 快照的持久化（2026-08-14 第三轮审查修复的最大盲区）

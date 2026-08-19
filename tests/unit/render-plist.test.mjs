@@ -3,6 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { escapeXml, parseKeyValueArgs, renderTemplate, stripLeadingComment } from '../../scripts/render-plist.js';
+// 转义与解析必须成对验证：只测渲染侧看不出「解析回来多了几个反斜杠」这种恒久漂移。
+import { diffUnitSemantics, extractUnitFacts } from '../../src/ops/service-units.js';
 
 test.describe('escapeXml', () => {
   test('转义 & < >', () => {
@@ -32,6 +34,78 @@ test.describe('parseKeyValueArgs', () => {
 
   test('缺少 = 的参数抛错', () => {
     assert.throws(() => parseKeyValueArgs(['NOTKEYVALUE']), /KEY=VALUE/);
+  });
+});
+
+// ★ escapeXml 管的是 XML 层。而 server 模板里那一行是 `/bin/zsh -lc 'cd "__REPO__" && …'`
+// —— 占位符落在 **zsh 双引号串**里，那里 `$`、反引号、`\` 仍然会被 shell 解释。
+// 后果不是报错而是静默走偏：`/Users/x/code/my$proj` 渲染出去，zsh 执行的是 `cd "/Users/x/code/my"`，
+// bootstrap 照样成功（launchctl 只管加载 plist），然后 node 起不来、KeepAlive 无限重启循环，
+// 而 CLI 只会说一句「重启后未能确认新进程」。
+// 这与本文件开头那条 TC-009 是同一个错误的下一层：sed 那层修好了，shell 这层还漏着。
+test.describe('__SHQ_KEY__ —— shell 双引号上下文的占位符', () => {
+  const tpl = '<string>cd "__SHQ_REPO__" &amp;&amp; exec "__SHQ_NODE__" server.js</string>';
+
+  test('普通路径恒等 —— 不能因为加了转义就让既有安装判成漂移', () => {
+    const out = renderTemplate(tpl, { REPO: '/Users/you/code/repo', NODE: '/opt/homebrew/bin/node' });
+    assert.match(out, /cd "\/Users\/you\/code\/repo"/);
+    assert.match(out, /exec "\/opt\/homebrew\/bin\/node"/);
+  });
+
+  test('★ 路径含 $ → 转义掉，不再被 zsh 展开成空', () => {
+    const out = renderTemplate(tpl, { REPO: '/Users/x/code/my$proj', NODE: '/n' });
+    assert.match(out, /cd "\/Users\/x\/code\/my\\\$proj"/, '$ 必须带上反斜杠');
+  });
+
+  test('★ 路径含反引号 → 转义掉，不再被当成命令替换', () => {
+    const out = renderTemplate(tpl, { REPO: '/tmp/`whoami`', NODE: '/n' });
+    assert.match(out, /\\`whoami\\`/);
+  });
+
+  test('路径含双引号与反斜杠也各自转义（否则引号提前闭合）', () => {
+    const out = renderTemplate(tpl, { REPO: '/tmp/a"b\\c', NODE: '/n' });
+    assert.match(out, /\\"/, '双引号要转义');
+    assert.match(out, /\\\\c/, '反斜杠要转义，且必须排在最前面做，否则会把别人加的反斜杠再转一次');
+  });
+
+  test('XML 转义仍然照做（两层都要，顺序是先 shell 后 XML）', () => {
+    const out = renderTemplate(tpl, { REPO: '/tmp/a&b', NODE: '/n' });
+    assert.match(out, /a&amp;b/);
+  });
+
+  test('普通 __KEY__ 不做 shell 转义 —— 它们是独立 argv 项，不经 shell', () => {
+    const out = renderTemplate('<string>__APP__</string>', { APP: '/Applications/My$App.app' });
+    assert.match(out, /My\$App\.app/, '加了反斜杠反而会把路径改坏');
+  });
+
+  // ★★ 转义必须与解析成对。渲染侧加了反斜杠，而 parseServerCommand 若只 stripQuotes 不反转义，
+  // 解析出的 repo 就比期望值多几个反斜杠 → diffUnitSemantics 判 repo-path 漂移 →
+  // doctor D16 恒亮 warn。那等于给这个修复要服务的那批用户换了个新毛病。
+  test('★★ 渲染→解析往返：含 shell 元字符的路径不能被判成漂移', () => {
+    for (const repo of ['/Users/you/code/my$proj', '/tmp/`whoami`/repo', '/tmp/a"b/repo', '/tmp/a\\b/repo', '/Users/John Doe/code/repo', '/Users/you/code/ccm']) {
+      const xml = renderTemplate('<string>cd "__SHQ_REPO__" &amp;&amp; exec "__SHQ_NODE__" server.js</string>',
+        { REPO: repo, NODE: '/opt/homebrew/bin/node' });
+      const cmd = xml.replace(/<\/?string>/g, '').replace(/&amp;/g, '&');
+      const facts = extractUnitFacts('server', {
+        Label: 'com.ccm.server',
+        ProgramArguments: ['/bin/zsh', '-lc', cmd],
+      });
+      assert.equal(facts.repo, repo, `往返必须还原：${JSON.stringify(repo)}`);
+      assert.equal(facts.node, '/opt/homebrew/bin/node');
+      const drift = diffUnitSemantics('server',
+        { repo, node: '/opt/homebrew/bin/node', log: null, keepAlive: false, runAtLoad: false, label: 'com.ccm.server' },
+        { ...facts, log: null, keepAlive: false, runAtLoad: false, label: 'com.ccm.server' });
+      assert.deepEqual(drift, [], `不该漂移：${JSON.stringify(repo)} → ${JSON.stringify(drift)}`);
+    }
+  });
+
+  test('手写的 plist（没转义、也没引号）照旧解析得出 —— 反转义对它们是恒等的', () => {
+    const facts = extractUnitFacts('server', {
+      Label: 'com.ccm.server',
+      ProgramArguments: ['/bin/zsh', '-lc', 'cd /Users/you/code/repo && exec /opt/homebrew/bin/node server.js'],
+    });
+    assert.equal(facts.repo, '/Users/you/code/repo');
+    assert.equal(facts.node, '/opt/homebrew/bin/node');
   });
 });
 

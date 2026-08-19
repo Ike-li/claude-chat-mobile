@@ -146,6 +146,63 @@ test.describe('classifyRestartPattern —— 频率判据（取代「最后一�
     assert.equal(r.flapping, false);
   });
 
+  // ★ 用户主动点「立即重启」也会换 pid，采样器照样产出一条 restarted。而配置面板在**每次保存
+  // 成功后**都给一个「立即重启」按钮 —— 手机上改三次配置就凑够「1 小时 3 次」，doctor 报
+  // 「疑似崩溃重启循环」、面板行变红、菜单栏图标变 ◐，而根本没有任何东西崩过。
+  // 这正是本模块头注写着要消灭的那类恒亮误报，从另一扇门回来了。
+  test.describe('主动重启不算崩溃', () => {
+    const intent = (ts, label = 'com.ccm.server') => ({ ts, label, kind: 'restart-requested' });
+
+    test('★ 三次「点按钮重启」→ 不是 flapping', () => {
+      const events = [
+        intent(T - 50 * 60_000), ev(T - 50 * 60_000 + 3000, 'com.ccm.server'),
+        intent(T - 30 * 60_000), ev(T - 30 * 60_000 + 4000, 'com.ccm.server'),
+        intent(T - 10 * 60_000), ev(T - 10 * 60_000 + 2500, 'com.ccm.server'),
+      ];
+      const r = classifyRestartPattern(events, { label: 'com.ccm.server', now: T });
+      assert.equal(r.flapping, false, '用户自己按的三次重启不是崩溃循环');
+      assert.equal(r.lastHour, 0, '有意的重启不进频率计数');
+    });
+
+    test('★ 但重启之后真的崩起来了，照样要报', () => {
+      const events = [
+        intent(T - 40 * 60_000), ev(T - 40 * 60_000 + 3000, 'com.ccm.server'),
+        ev(T - 20 * 60_000, 'com.ccm.server'),   // 这三条没有对应的 intent
+        ev(T - 12 * 60_000, 'com.ccm.server'),
+        ev(T - 4 * 60_000, 'com.ccm.server'),
+      ];
+      const r = classifyRestartPattern(events, { label: 'com.ccm.server', now: T });
+      assert.equal(r.lastHour, 3, '一条 intent 只抵消紧随其后的一条，不抵消整个窗口');
+      assert.equal(r.flapping, true, '一次主动重启不该给后续的崩溃循环打掩护');
+    });
+
+    test('intent 之后隔了很久才重启 → 那是另一回事，照算', () => {
+      const events = [
+        intent(T - 50 * 60_000),
+        ev(T - 20 * 60_000, 'com.ccm.server'),   // 距 intent 半小时，不是它引起的
+        ev(T - 12 * 60_000, 'com.ccm.server'),
+        ev(T - 4 * 60_000, 'com.ccm.server'),
+      ];
+      assert.equal(classifyRestartPattern(events, { label: 'com.ccm.server', now: T }).flapping, true);
+    });
+
+    test('lastRestartAt 仍取全部重启的最后一条 —— 那是事实，不是判据', () => {
+      const events = [intent(T - 10 * 60_000), ev(T - 10 * 60_000 + 2000, 'com.ccm.server')];
+      const r = classifyRestartPattern(events, { label: 'com.ccm.server', now: T });
+      assert.equal(r.lastRestartAt, T - 10 * 60_000 + 2000, '历史面板要如实显示「上次重启在几分钟前」');
+    });
+
+    test('别的 label 的 intent 不能抵消本 label 的重启', () => {
+      const events = [
+        intent(T - 30 * 60_000, 'com.ccm.tunnel'),
+        ev(T - 30 * 60_000 + 2000, 'com.ccm.server'),
+        ev(T - 20 * 60_000, 'com.ccm.server'),
+        ev(T - 10 * 60_000, 'com.ccm.server'),
+      ];
+      assert.equal(classifyRestartPattern(events, { label: 'com.ccm.server', now: T }).flapping, true);
+    });
+  });
+
   test('只算这个 label 自己的事件', () => {
     const events = [
       ev(T - 10 * 60_000, 'com.ccm.server'),
@@ -181,7 +238,7 @@ test.describe('classifyRestartPattern —— 频率判据（取代「最后一�
 
   test('没有事件 → 一切为零，不 flapping', () => {
     const r = classifyRestartPattern([], { label: 'x', now: T });
-    assert.deepEqual({ ...r }, { lastHour: 0, last24h: 0, flapping: false, lastRestartAt: null });
+    assert.deepEqual({ ...r }, { lastHour: 0, last24h: 0, manual24h: 0, flapping: false, lastRestartAt: null });
   });
 
   test('给出最近一次重启时间（UI 要显示「上次重启：3 小时前」）', () => {

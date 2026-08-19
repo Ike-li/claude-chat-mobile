@@ -218,6 +218,7 @@ export const EN_DICT = Object.freeze({
   '新设备怎么批 · 令牌在哪 · 连不上怎么办 →': 'Approving devices · where the token is · connection help →',
   '🔍 安全体检 · 公网暴露前自查 →': '🔍 Security check · self-audit before going public →',
   '📊 服务状态 · 运行时长 / 版本 / 告警 →': '📊 Service status · uptime / version / alerts →',
+  '⚙ 服务与配置 · 端口 / 工作目录 / 推送 →': '⚙ Service & config · port / work dir / push →',
   'GitHub 仓库 · 源码 / Issue / Star →': 'GitHub repo · source / issues / star →',
   '在浏览器打开 GitHub 仓库': 'Open the GitHub repo in your browser',
   '🛠 开发者': '🛠 Developer',
@@ -278,6 +279,38 @@ export const EN_DICT = Object.freeze({
   '日志开关': 'Log switches',
   'SDK 调试': 'SDK debug',
   '(无错误信息)': '(no error message)',
+
+  // —— 服务与配置面板（在手机上改 ccm.config.json）——
+  // 表单里配置项的名字/说明由服务端下发、本就是双语（env-schema 的 {zh,en} 走 pickText），
+  // 这里收录的只是面板外壳：状态、按钮、提示、确认框。
+  // 带占位字母的 key（N/V）按本文件既有约定在取用点 .replace()，见 logic/bg-tasks.js:179。
+  '服务与配置': 'Service & config',
+  '⚙ 服务与配置': '⚙ Service & config',
+  '关闭服务与配置': 'Close service & config',
+  '读取中…': 'Loading…',
+  '读取配置失败：': 'Could not read the config: ',
+  '服务端没有给出原因': 'the server gave no reason',
+  '保存后需重启服务才生效': 'Takes effect after the service restarts',
+  '已设置（N 字符）': 'Set (N characters)',
+  '未设置': 'Not set',
+  '只读': 'read-only',
+  '更换': 'Replace',
+  '输入新值（留空 = 清除该项）': 'Enter a new value (leave empty to clear it)',
+  '默认 V': 'default V',
+  '此处不可改': 'Not editable here',
+  '保存失败，一项都没写入': 'Save failed — nothing was written',
+  '保存前请确认': 'Confirm before saving',
+  '仍然保存？': 'Save anyway?',
+  '仍然保存': 'Save anyway',
+  '已写入 N 项，重启后生效': 'Wrote N item(s); takes effect after a restart',
+  '已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）': 'Wrote N item(s). A service restart is required, and this process is not supervised — restart it from your computer.',
+  '立即重启': 'Restart now',
+  '立即重启服务': 'Restart the service now',
+  '重启会中断所有正在跑的会话。继续？': 'Restarting interrupts every running session, including background tasks. Continue?',
+  '重启中…': 'Restarting…',
+  '重启被拒绝': 'Restart refused',
+  '手动重启': 'manual restart',
+  '另有手动重启': 'plus manual restarts:',
 
   // —— 设备审批 ——
   '🔔 新设备请求接入': '🔔 New device requesting access',
@@ -737,7 +770,6 @@ export const EN_DICT = Object.freeze({
   '1 小时内重启': 'restarted in the last hour:',
   '24 小时内': 'in the last 24h:',
   '上次': 'last',
-  '前': ' ago',
   '启动': 'started',
 });
 

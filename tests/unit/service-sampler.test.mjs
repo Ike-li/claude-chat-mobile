@@ -9,6 +9,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createServiceSampler } from '../../src/ops/service-sampler.js';
+// 读路径必须真的走一遍：只断言「写下去了什么」会漏掉 kind 白名单这一环。
+import { classifyRestartPattern, validateServiceEvents } from '../../src/ops/service-events.js';
 
 const T0 = 1786600000000;
 
@@ -241,6 +243,61 @@ test.describe('createServiceSampler.summarize —— 面板要的摘要', () => 
 //   · 其余平台用 server 自己的启动记录 —— 它只知道自己，但那恰好是这些平台唯一能知道的
 //
 // 两条路径**互斥**：在 darwin 上同时记会让同一次重启进两条，flapping 阈值被打成一半。
+// ★ recordRestartIntent 的平台条件与 recordSelfStart **恰好相反**，别照着上面那个抄：
+// recordSelfStart 在 darwin 早退是因为 launchctl 快照已覆盖、再记会重复计数；而 darwin 正是
+// 那条会产出 restarted 的路径，也就正是需要「这次是有意的」这份声明的地方。
+test.describe('recordRestartIntent —— 用户按的重启不该被算成崩溃', () => {
+  test('★ darwin 上必须记（这里恰恰是 recordSelfStart 早退的那一侧）', () => {
+    const { sampler, state } = world({ platform: 'darwin' });
+    sampler.recordRestartIntent();
+    assert.equal(state.events.length, 1);
+    assert.equal(state.events[0].kind, 'restart-requested');
+    assert.equal(state.events[0].label, 'com.ccm.server');
+  });
+
+  test('非 darwin 也记 —— 判据在 classifyRestartPattern，与平台无关', () => {
+    const { sampler, state } = world({ platform: 'linux' });
+    sampler.recordRestartIntent();
+    assert.equal(state.events.at(-1).kind, 'restart-requested');
+  });
+
+  // ★★ 这条测的是**跨读写边界**，而不是「写下去了什么」。
+  // 上一版只断言 writeEvents 收到了什么，于是漏掉了致命的一环：validateServiceEvents 的
+  // kind 白名单里没有 restart-requested，读回来时被整条丢弃。后果比无效更糟 ——
+  // recordRestartIntent 自己也走 readEvents()，所以**每写一条新 intent 就抹掉上一条**。
+  // 判据必须是「写完再读回来还在不在」，只看写入侧永远看不见这个洞。
+  test('★★ 写进去的 intent 必须能被读回来（读路径的 kind 白名单要认它）', () => {
+    const { sampler, state } = world({ platform: 'darwin' });
+    sampler.recordRestartIntent();
+    sampler.recordRestartIntent();
+    sampler.recordRestartIntent();
+    const survived = validateServiceEvents(state.events).filter((e) => e.kind === 'restart-requested');
+    assert.equal(survived.length, 3, '三次主动重启要留下三条声明，一条都不能被读路径吃掉');
+  });
+
+  test('★ 与 classifyRestartPattern 端到端：三次手动重启不构成 flapping', () => {
+    const { sampler, state } = world({ platform: 'darwin' });
+    // 每次「点按钮重启」= 先记声明，紧接着采样器认出换了 pid
+    for (let i = 0; i < 3; i += 1) {
+      state.t = T0 + i * 10 * 60_000;
+      sampler.recordRestartIntent();
+      state.events = [...(state.events ?? []), { ts: state.t + 3000, label: 'com.ccm.server', kind: 'restarted' }];
+    }
+    const events = validateServiceEvents(state.events);
+    const r = classifyRestartPattern(events, { label: 'com.ccm.server', now: T0 + 25 * 60_000 });
+    assert.equal(r.flapping, false, `用户自己按的三次重启不是崩溃循环：${JSON.stringify(r)}`);
+  });
+
+  test('落盘失败只警告，不能阻断重启本身', () => {
+    const { sampler, state } = world({ platform: 'darwin', failWriteEvents: true });
+    let out;
+    assert.doesNotThrow(() => { out = sampler.recordRestartIntent(); });
+    assert.equal(out, null, '写不进去要如实返回 null，不能假装记下了');
+    assert.equal(state.writes.events, 0);
+    assert.equal(state.warns.length, 1, '必须留一句警告：这次重启会被计入 flapping');
+  });
+});
+
 test.describe('recordSelfStart —— 非 macOS 的重启历史', () => {
   test('darwin 上不记：launchctl 路径已覆盖，双写会让 flapping 阈值虚高一倍', () => {
     const { sampler, state } = world({ platform: 'darwin' });

@@ -122,7 +122,8 @@ export function createTaskStatusController(context, {
       if (settled) return;
       settled = true;
       if (ok) addBar(message, 'text-ink-faint');
-      else addBar(t('停止请求未生效：任务可能已结束'), 'text-warn');
+      // tw-config.js 定义的是 warning，没有 warn —— text-warn 是个不存在的类，渲染成默认字色。
+      else addBar(t('停止请求未生效：任务可能已结束'), 'text-warning');
     };
     context.socket?.emit('task:stop', { instanceId: context.state.viewingInstanceId, taskId }, res => done(res?.ok === true));
     // 兜底：不回 ack 的旧服务端/mock 下保持原有「已请求停止」文案，不因缺 ack 变成误报失败

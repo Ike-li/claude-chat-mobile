@@ -122,21 +122,21 @@ test.describe('classifyState', () => {
   test('未安装：plist 不存在时压过一切', () => {
     assert.deepEqual(
       classifyState({ pid: null, lastExit: 0, plistExists: false }),
-      { state: 'not-installed', lastExitAbnormal: false }
+      { state: 'not-installed', lastExitAbnormal: false, loaded: null }
     );
   });
 
   test('running：有 PID', () => {
     assert.deepEqual(
       classifyState({ pid: 26867, lastExit: 0, plistExists: true }),
-      { state: 'running', lastExitAbnormal: false }
+      { state: 'running', lastExitAbnormal: false, loaded: null }
     );
   });
 
   test('有 PID 且上次异常退出 → 仍是 running，只记下 lastExitAbnormal', () => {
     assert.deepEqual(
       classifyState({ pid: 62368, lastExit: -9, plistExists: true }),
-      { state: 'running', lastExitAbnormal: true },
+      { state: 'running', lastExitAbnormal: true, loaded: null },
       '「在跑」与「上次怎么退出的」是两件事，后者不单独用来下告警结论'
     );
   });
@@ -144,22 +144,62 @@ test.describe('classifyState', () => {
   test('crashed：无 PID 且上次异常退出', () => {
     assert.deepEqual(
       classifyState({ pid: null, lastExit: 1, plistExists: true }),
-      { state: 'crashed', lastExitAbnormal: true }
+      { state: 'crashed', lastExitAbnormal: true, loaded: null }
     );
   });
 
   test('stopped：无 PID 且上次正常退出（定时器 unit 的常态）', () => {
     assert.deepEqual(
       classifyState({ pid: null, lastExit: 0, plistExists: true }),
-      { state: 'stopped', lastExitAbnormal: false }
+      { state: 'stopped', lastExitAbnormal: false, loaded: null }
     );
   });
 
   test('plist 存在但 launchctl 里查无此条 → stopped（已落盘未 bootstrap）', () => {
     assert.deepEqual(
       classifyState({ pid: null, lastExit: null, plistExists: true }),
-      { state: 'stopped', lastExitAbnormal: false }
+      { state: 'stopped', lastExitAbnormal: false, loaded: null }
     );
+  });
+
+  // ★ plistExists=false 不只意味着「文件不在」：readPlistFile 在 plutil 非零退出**或 5s 超时**时
+  // 也返回 null（且不发警告）。拿「没装」去解释一个明明有 pid 的进程是明显错的，而它会级联——
+  // doctor D16 对着正在跑的 server 警告「桌面端服务未安装」，D4 因 resolveServicePortOwner
+  // 要求 state==='running' 而把 3000 端口报成被外来进程占用（fail），菜单栏则藏掉启停项改显「安装」。
+  // ★★ 「文件不在」与「plutil 读不出来」是两件事，不能给它们选同一个赢家。
+  //   · 文件真被删了（git clean / 手滑）→ 开机自启已经死了。进程还在只是上次启动的残留，
+  //     重启后就没了 —— 这个事实必须现在就说出来（doctor D16 warn、菜单栏给「安装」入口）。
+  //     早前一版让 pid 压过一切，把这个 warn 变成了 ok，而且菜单栏会显示三个点了必然
+  //     报错的按钮（guardControllable 仍要求 plist 在）。那正是 1158e7a 修的那类盲区。
+  //   · 文件在、只是 plutil 非零退出或 5s 超时 → 那是读取故障，不是「没装」。有 pid 就是在跑。
+  test('★★ plist 文件真的不在 → not-installed，即便进程还活着', () => {
+    const r = classifyState({ pid: 4321, lastExit: 0, plistExists: false, plistFileExists: false });
+    assert.equal(r.state, 'not-installed', '开机自启已死，不能因为残留进程还在就报绿');
+  });
+
+  test('★★ 文件在、只是 plutil 读不出来 → 有 pid 就是 running', () => {
+    const r = classifyState({ pid: 4321, lastExit: 0, plistExists: false, plistFileExists: true });
+    assert.equal(r.state, 'running', 'plutil 抽风不该让正在跑的服务被判成「未安装」');
+  });
+
+  test('文件在、读不出来、也没 pid → stopped 而不是 not-installed（文件在就不是没装）', () => {
+    const r = classifyState({ pid: null, lastExit: 0, plistExists: false, plistFileExists: true });
+    assert.equal(r.state, 'stopped');
+  });
+
+  test('调用方没传 plistFileExists（旧签名）→ 回落旧行为，不静默改判', () => {
+    assert.equal(classifyState({ pid: 4321, plistExists: false }).state, 'not-installed');
+    assert.equal(classifyState({ pid: null, plistExists: false }).state, 'not-installed');
+  });
+
+  // ★ 「plist 在磁盘上」与「launchd 域里还有这个 job」是两件事。被 bootout 之后定时器永远不会
+  // 再触发，而旧实现和正常待机渲染成同一行「idle · 待机 · 每天 03:47」——日志轮转死了没人看得出来。
+  test('★ 已 bootout 与「装着待机」必须可区分', () => {
+    const bootedOut = classifyState({ pid: null, lastExit: null, plistExists: true, loaded: false });
+    const idle = classifyState({ pid: null, lastExit: null, plistExists: true, loaded: true });
+    assert.equal(bootedOut.loaded, false, '已从 launchd 卸载：定时不会再触发');
+    assert.equal(idle.loaded, true);
+    assert.notDeepEqual(bootedOut, idle, '两者不能塌成同一个判定');
   });
 });
 

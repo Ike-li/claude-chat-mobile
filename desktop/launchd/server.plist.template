@@ -38,8 +38,11 @@
     <string>/bin/zsh</string>
     <string>-lc</string>
     <!-- 登录 shell 启动以保终端等价性：claude 的 PATH / 登录态与你终端一致。下面两个路径占位符都加了
-         双引号，防路径含空格时被 zsh word-split（TC-009）；仍不支持路径含字面双引号字符的极端情况。 -->
-    <string>cd "__REPO__" &amp;&amp; exec "__NODE__" server.js</string>
+         双引号，防路径含空格时被 zsh word-split（TC-009）。
+         __SHQ_ 前缀表示「该占位符落在 shell 双引号串内」，render-plist.js 会先做 shell 转义再做 XML
+         转义 —— 双引号里 $、反引号、\ 仍会被 zsh 解释，而路径含它们时不报错、只会静默 cd 到别处，
+         随后 KeepAlive 把 node 起不来变成无限崩溃重启循环。字面双引号现在也支持了。 -->
+    <string>cd "__SHQ_REPO__" &amp;&amp; exec "__SHQ_NODE__" server.js</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

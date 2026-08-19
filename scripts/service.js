@@ -160,11 +160,19 @@ export function createServiceManager(deps = {}) {
     }
   }
 
-  function buildKnownUnit(unit, { live, manifest, warnings, fast, port, events }) {
+  function buildKnownUnit(unit, { live, liveKnown, manifest, warnings, fast, port, events }) {
     const label = labelFor(unit, labelPrefix);
     const plistPath = plistPathFor(label);
-    const plist = readPlistSafe(plistPath, warnings);
+    // 文件在不在、能不能解析，是两个独立的事实，要分别喂给 classifyState。
+    // readPlistFile 对「文件不存在」「plutil 非零退出」「plutil 5s 超时」一律返回 null，
+    // 而 readPlistSafe 只在**抛异常**时发警告 —— plutil 静默失败那条路径此前一句话都没有。
+    const plistFileExists = fileExists(plistPath);
+    const plist = plistFileExists ? readPlistSafe(plistPath, warnings) : null;
     const plistExists = !!plist;
+    if (plistFileExists && !plistExists) {
+      warnings.push(`${label} 的 plist 在盘上但解析不出来（plutil 非零退出或超时）——`
+        + '漂移判定与调度形态本轮不可用，状态按「进程在不在」保守给出');
+    }
     const running = live.get(label) || { pid: null, lastExit: null };
 
     const facts = plistExists ? extractUnitFacts(unit, plist) : null;
@@ -197,7 +205,9 @@ export function createServiceManager(deps = {}) {
     }
     const inManifest = Object.hasOwn(manifest.units, unit);
     const schedule = extractSchedule(plist);
-    const { state, lastExitAbnormal } = classifyState({ ...running, plistExists });
+    // live.has(label) = launchd 域里还有没有这个 job。这一位以前拿到了却没往下传，于是
+    // 「被 bootout 的定时器」和「装着待机的定时器」渲染成同一行 —— 日志轮转停了看不出来。
+    const { state, lastExitAbnormal, loaded } = classifyState({ ...running, plistExists, plistFileExists, loaded: liveKnown ? live.has(label) : null });
     const ownership = classifyOwnership({ knownUnit: true, inManifest, drift });
     // flapping 来自**重启频率**而不是最后一次退出码 —— 见 service-units.js 的 classifyState 头注。
     const restarts = classifyRestartPattern(events, { label, now: now() });
@@ -211,6 +221,7 @@ export function createServiceManager(deps = {}) {
       pid: running.pid,
       lastExitStatus: running.lastExit,
       lastExitAbnormal,
+      loaded,
       flapping: restarts.flapping,
       restarts,
       drift,
@@ -218,13 +229,13 @@ export function createServiceManager(deps = {}) {
       schedule,
       // 只有 server 监听本地端口；隧道与定时器没有可探的端口。
       listen: unit === 'server' && !fast ? { port, reachable: !!tcpProbe(port) } : null,
-      detail: describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership, schedule }),
+      detail: describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership, schedule, loaded }),
     };
   }
 
   // 前缀命中但不在模板表里的 unit（机主自建的 com.ccm.tunnel-watch）。看得见才管得住 ——
   // 它占着我们的 label 命名空间，status 里不列出来等于假装它不存在。
-  function buildUnknownUnits({ live, warnings, knownLabels, events }) {
+  function buildUnknownUnits({ live, liveKnown, warnings, knownLabels, events }) {
     const labels = new Set();
     for (const label of live.keys()) labels.add(label);
     try {
@@ -236,11 +247,16 @@ export function createServiceManager(deps = {}) {
       if (!label.startsWith(`${labelPrefix}.`) || knownLabels.has(label)) continue;
       if (unitFromLabel(label, labelPrefix)) continue; // 已知 unit 已在上一轮处理
       const plistPath = plistPathFor(label);
-      const plist = readPlistSafe(plistPath, warnings);
+      const plistFileExists = fileExists(plistPath);
+      const plist = plistFileExists ? readPlistSafe(plistPath, warnings) : null;
       const plistExists = !!plist;
       const running = live.get(label) || { pid: null, lastExit: null };
       const schedule = extractSchedule(plist);
-      const { state, lastExitAbnormal } = classifyState({ ...running, plistExists });
+      // 自建 unit（机主的 com.ccm.tunnel-watch）同样要能看出「已被 bootout」——
+      // 它们恰恰是最容易被读成「装了但没启用」的那类，少了这一位就只能靠猜。
+      const { state, lastExitAbnormal, loaded } = classifyState({
+        ...running, plistExists, plistFileExists, loaded: liveKnown ? live.has(label) : null,
+      });
       const restarts = classifyRestartPattern(events, { label, now: now() });
       out.push({
         unit: label.slice(labelPrefix.length + 1),
@@ -253,14 +269,16 @@ export function createServiceManager(deps = {}) {
         lastExitAbnormal,
         flapping: restarts.flapping,
         restarts,
+        loaded,
         drift: [],
         plistPath,
         schedule,
         listen: null,
         // 待机说明排在前面：自建 unit 同时带着「非本仓」与 stopped 两个标签，最容易被读成
         // 「装了但没启用」——机主的 tunnel-watch 就是这么被问的。先说它在正常待机。
+        // 但「待机」的前提是它还在 launchd 域里，被 bootout 之后那句话就是假的。
         detail: [
-          state === 'stopped' ? describeSchedule(schedule) : null,
+          state === 'stopped' ? idleOrStoppedText(schedule, loaded) : null,
           '非本仓管理（模板里没有这个 unit），只可查看与启停',
         ].filter(Boolean).join('；'),
       });
@@ -273,7 +291,12 @@ export function createServiceManager(deps = {}) {
 
     const warnings = [];
     const manifest = validateManifest(readManifest());
+    // launchctlList 在失败时返回**空 Map** —— 那是「不知道」，不是「什么都没加载」。
+    // liveKnown 把这两者分开：读不到时全体 unit 的 loaded 记 null，否则一次 list 失败
+    // 会让每一行都言之凿凿地说「已从 launchd 卸载」，而那是个具体的假事实。
+    const beforeList = warnings.length;
     const live = launchctlList(warnings);
+    const liveKnown = warnings.length === beforeList;
     const env = readEnv() || {};
     const port = positivePort(env.PORT) ?? 3000;
 
@@ -283,8 +306,8 @@ export function createServiceManager(deps = {}) {
 
     const knownLabels = new Set(SERVICE_UNIT_NAMES.map((u) => labelFor(u, labelPrefix)));
     const units = SERVICE_UNIT_NAMES
-      .map((unit) => buildKnownUnit(unit, { live, manifest, warnings, fast, port, events }))
-      .concat(buildUnknownUnits({ live, warnings, knownLabels, events }));
+      .map((unit) => buildKnownUnit(unit, { live, liveKnown, manifest, warnings, fast, port, events }))
+      .concat(buildUnknownUnits({ live, liveKnown, warnings, knownLabels, events }));
 
     const ip = lanIp();
     return {
@@ -333,7 +356,16 @@ export function createServiceManager(deps = {}) {
     // 还报「✓ 已安装并加载」；而 menubar 的 driftFields 只有 log-path，status 会一直显示
     // managed 无漂移，用户无从发现。desktop/launchd/menubar.plist.template 的头注恰好教人这么装。
     if (unit === 'menubar') {
-      return opts.app ? null : '装 menubar 需要 --app=<CCM.app 的绝对路径>';
+      if (!opts.app) return '装 menubar 需要 --app=<CCM.app 的绝对路径>';
+      // ★ 只判「给没给」是不够的。从 manifest 恢复时这个值来自上次安装，而它很可能指向
+      // <repo>/desktop/build/CCM.app —— gitignore 的构建产物，git clean / 换分支就没了。
+      // 那时重建出来的 plist 指向一个不存在的 bundle，CLI 却报「✓ 已修复安装」，
+      // 登录时什么也拉不起来，而 menubar 的 driftFields 里没有 app，status 一路显示正常。
+      // 1158e7a 修的正是这个盲区，别在恢复路径上把它重新放进来。
+      if (!fileExists(opts.app)) {
+        return `${opts.app} 不存在 —— 先跑 npm run app:install 装到 /Applications，再用 --app= 指向它`;
+      }
+      return null;
     }
     if (unit !== 'tunnel') return null;
     if (!fileExists(join(home, '.cloudflared', 'config.yml'))) {
@@ -346,7 +378,21 @@ export function createServiceManager(deps = {}) {
     return null;
   }
 
-  function install(unit, opts = {}) {
+  // manifest 里记的模板变量 → install 的 opts。renderVarsFor 是正方向（opts → vars），
+  // 恢复时需要反过来：plist 被 git clean / 手滑删掉时，用户不会在命令行上再打一次
+  // --tunnel/--cloudflared/--app，而这些值工具自己一直存着。
+  // 只映射「无法从 ctx 推出来」的那几个：REPO/NODE/LOG/LABEL 每次都由 ctx 重算，
+  // 拿旧值反而会把仓库搬家后的恢复钉回旧路径。
+  const optsFromVars = (vars) => {
+    const v = vars && typeof vars === 'object' ? vars : {};
+    const out = {};
+    if (typeof v.TUNNEL === 'string' && v.TUNNEL) out.tunnel = v.TUNNEL;
+    if (typeof v.CLOUDFLARED === 'string' && v.CLOUDFLARED) out.cloudflared = v.CLOUDFLARED;
+    if (typeof v.APP === 'string' && v.APP) out.app = v.APP;
+    return out;
+  };
+
+  function install(unit, rawOpts = {}) {
     const bad = guardUnit(unit);
     if (bad) return { ok: false, unit, error: bad };
     const held = serverPortConflict(unit);
@@ -357,6 +403,16 @@ export function createServiceManager(deps = {}) {
     const manifest = validateManifest(readManifest());
     const inManifest = Object.hasOwn(manifest.units, unit);
     const exists = fileExists(plistPath);
+
+    // manifest 有记录就拿它补参数，CLI 显式给的压过它 —— 用户想换隧道时必须换得掉。
+    // **不能只挂在 `!exists` 分支上**：那样同一条 `install tunnel`（不带参数）会因为 plist
+    // 在不在而给出相反结果 —— plist 还在时走 changedVars 比对，desired 从空 opts 算出来
+    // 全是 undefined，于是报「参数与当前配置不一致（CLOUDFLARED / TUNNEL）… 先卸载再装」，
+    // 让人为了没重复输入工具自己存着的参数，去拆掉一条正常工作的隧道。
+    // 没有 manifest 记录时（全新安装）一律只认 CLI，避免旧值悄悄参与。
+    const opts = inManifest
+      ? { ...optsFromVars(manifest.units[unit]?.vars), ...rawOpts }
+      : rawOpts;
 
     if (inManifest && exists) {
       // 参数变了不能装作没看见。这个早退此前只看「manifest 有记录 + plist 在盘上 + launchd
@@ -676,6 +732,21 @@ export function createServiceManager(deps = {}) {
     const bad = guardControllable(unit);
     if (bad) return { ok: false, unit, error: bad };
     const label = labelFor(unit, labelPrefix);
+    // ★ stop 要的是「它别跑了」。已经不在 domain 里时那个状态本来就成立，而 bootout 这时返回
+    // 非零（"Boot-out failed: 3: No such process"）—— uninstall 一直把它当「本来就没跑」忽略掉
+    // （见那里的注释），stop 却据此报 ✗ 并在菜单栏弹失败提示。最容易撞上的两种情形：连点两次
+    // 停止、或停一个上次就已被 bootout 的 unit —— 而后者在面板上一直显示成健康待机，用户
+    // 根本无从知道它已经停了。判据用 domain 成员关系而不是解析错误串：与 start/restart 走
+    // ensureLoaded 的那一侧对称，也不依赖 launchctl 的文案措辞。
+    // ★ launchctlList 在「list 非零退出」和「抛异常」时都返回**空 Map**，那不是「什么都没加载」，
+    // 是「不知道」。据空 Map 早退会让 launchctl 不可用时 stop 报「✓ 已停止」、退出 0、
+    // 却根本没跑 bootout —— 服务还在跑，而人以为停了。这是 fail-open，比原来的误报严重得多。
+    // 所以只在**确知**它不在 domain 里时才早退：list 自己出问题就照常走 bootout，让真错误浮上来。
+    const listWarnings = [];
+    const live = launchctlList(listWarnings);
+    if (listWarnings.length === 0 && !live.has(label)) {
+      return { ok: true, unit, label, action: 'stopped', alreadyStopped: true };
+    }
     const r = execLaunchctl(['bootout', `gui/${uid}/${label}`]);
     if (!r || r.status !== 0) return { ok: false, unit, label, error: launchctlErr(r) };
     return { ok: true, unit, label, action: 'stopped' };
@@ -773,14 +844,37 @@ function positivePort(value) {
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;
 }
 
-export function describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership, schedule }) {
+// stopped 那一格该说什么。已知 unit 与自建 unit 共用同一套判据 —— 分成两处写，迟早分叉。
+//
+// loaded 三态各有各的说法：
+//   true / null（不知道）→ 按调度形态说「待机 · 每天 03:47」，这是 99% 的正常态；
+//   false                → 它已被 bootout，plist 还在、schedule 也照样解析得出，但永远不会
+//                          再触发。这时说「待机」是在报一个反的事实。
+// null 必须与 true 同待遇：launchctl list 读不到时全体 unit 都是 null，那是「不知道」，
+// 不是「知道它们都被卸载了」—— 否则一次 list 失败会让每一行都撒一个具体的谎。
+function idleOrStoppedText(schedule, loaded) {
+  const idle = describeSchedule(schedule);
+  if (loaded !== false) return idle;
+  // describeSchedule 给的是「待机 · 每 30 秒触发」这种**完整短语**，整个嵌进去会语无伦次：
+  // 「已停止（待机 · 每 30 秒触发不会触发）」既自相矛盾又重复。剥掉前缀，只留节奏本身。
+  const rhythm = idle ? idle.replace(/^待机 · /, '') : null;
+  return rhythm
+    ? `已停止（原定${rhythm}，现在不会执行）；start 可重新加载`
+    : '已从 launchd 卸载；start 可重新加载';
+}
+
+export function describeUnit({ state, restarts, lastExitAbnormal, drift, plistExists, ownership, schedule, loaded = null }) {
   if (!plistExists) return '未安装';
   const parts = [];
   // 周期 job / 打火即退任务的 stopped 是**健康待机**（99% 的时间都该如此），照 launchd 的说法
   // 写「已停止」会被读成故障。判据来自 plist 里的调度形态，见 service-units.extractSchedule。
+  //
+  // ★ 但「待机」的前提是 launchd 域里还有这个 job。被 bootout 之后 plist 照样躺在磁盘上、
+  // 调度形态也照样读得出来，可它永远不会再触发了 —— 那不是待机，是停了。旧实现只看 schedule，
+  // 于是停掉 logrotate 后面板恒显「待机 · 每天 03:47」，而日志轮转其实已经死了。
   if (state === 'stopped') {
-    const idle = describeSchedule(schedule);
-    if (idle) parts.push(idle);
+    const word = idleOrStoppedText(schedule, loaded);
+    if (word) parts.push(word);
   }
   // 只有**频繁**重启才算异常。单次的 lastExitAbnormal 不再当告警说 —— 机主的隧道恒为 -9
   // （看门狗按 DHCP 漂移每天 kickstart 一次），那样说等于每天误报。
@@ -1067,6 +1161,8 @@ const STATE_ICON = {
 // 「tunnel-watch 要启用吗」。**只改呈现，不改 state 字段**：JSON 契约仍是 launchd 的四个取值，
 // 消费方（desktop）拿 schedule 自己判，判据与呈现分开。
 function stateWord(u) {
+  // loaded===false 时不许说 idle：那个词的意思是「装着、等着、到点会响」，而它已经不会响了。
+  if (u.loaded === false) return u.state;
   return u.state === 'stopped' && describeSchedule(u.schedule) ? 'idle' : u.state;
 }
 
@@ -1290,8 +1386,11 @@ const ACTION_TEXT = {
 export function formatControlResult(r) {
   if (!r.ok) return { stdout: '', stderr: `✗ ${r.error}\n` };
   const pidNote = r.newPid ? `（pid ${r.oldPid ?? '?'} → ${r.newPid}）` : '';
+  // 「它本来就没在跑」和「我刚把它停了」是两件事，别渲染成同一句。弱判据要出现在人眼前，
+  // 只留在 --json 里等于没说 —— 尤其这一条常常意味着「上次它就已经被 bootout 了而你不知道」。
+  const weak = r.alreadyStopped ? '（本来就没在跑）' : '';
   return {
-    stdout: `✓ ${r.label} ${ACTION_TEXT[r.action] || r.action}${pidNote}\n`,
+    stdout: `✓ ${r.label} ${ACTION_TEXT[r.action] || r.action}${weak}${pidNote}\n`,
     stderr: r.warning ? `⚠ ${r.warning}\n` : '',
   };
 }

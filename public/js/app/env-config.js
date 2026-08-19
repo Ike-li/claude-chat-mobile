@@ -13,6 +13,8 @@
 //
 // 渲染全走 DOM API 不拼 innerHTML：文案里有中文标点与括号，拼字符串迟早要在转义上翻车。
 
+import { t } from '../i18n.js';
+
 const CHANGED_MARK = 'data-ccm-dirty';
 
 export function createEnvConfigPanel({
@@ -49,7 +51,7 @@ export function createEnvConfigPanel({
   function markDirty() {
     const dirty = [...fields.values()].some((f) => f.el.getAttribute(CHANGED_MARK) === '1');
     saveBtn.disabled = !dirty;
-    hint.textContent = dirty ? '保存后需重启服务才生效' : '';
+    hint.textContent = dirty ? t('保存后需重启服务才生效') : '';
   }
 
   function watch(input, field) {
@@ -87,26 +89,26 @@ export function createEnvConfigPanel({
     const state = el('div', 'flex items-center gap-2');
     const masked = item.masked || { set: false, length: 0 };
     state.append(el('span', 'text-xs text-ink-soft',
-      masked.set ? `已设置（${masked.length} 字符）` : '未设置'));
+      masked.set ? t('已设置（N 字符）').replace('N', String(masked.length)) : t('未设置')));
 
     // 本函数统一自己往 row 上挂，不靠返回值 —— 早前两个分支都是 return 出去而调用方丢掉了，
     // 结果只读敏感项整块不渲染（AUTH_TOKEN 的「已设置（N 字符）」根本不出现）。E2E 抓到的。
     if (item.readonly) {
-      state.append(el('span', 'text-[10px] text-ink-faint', '只读'));
+      state.append(el('span', 'text-[10px] text-ink-faint', t('只读')));
       field.el = state;
       field.read = () => undefined; // 只读项永不进 changes
       row.append(state);
       return state;
     }
 
-    const btn = el('button', 'hit-44 px-2 py-1 rounded-lg border border-line text-[11px] text-ink-soft active:bg-sunk', '更换');
+    const btn = el('button', 'hit-44 px-2 py-1 rounded-lg border border-line text-[11px] text-ink-soft active:bg-sunk', t('更换'));
     btn.type = 'button';
     const input = document.createElement('input');
     input.type = 'password';
     input.className = 'hidden w-full mt-1 px-2 py-1.5 rounded-lg border border-line bg-sunk text-xs text-ink';
     input.dataset.key = item.key;
     input.setAttribute(CHANGED_MARK, '0');
-    input.placeholder = '输入新值（留空 = 清除该项）';
+    input.placeholder = t('输入新值（留空 = 清除该项）');
 
     btn.addEventListener('click', () => {
       // 点了「更换」就进入替换态：此后即使留空也算一次改动（空 = 清除），
@@ -140,7 +142,7 @@ export function createEnvConfigPanel({
     input.dataset.key = item.key;
     input.disabled = !!item.readonly;
     input.setAttribute(CHANGED_MARK, '0');
-    if (item.default !== undefined) input.placeholder = `默认 ${item.default}`;
+    if (item.default !== undefined) input.placeholder = t('默认 V').replace('V', String(item.default));
     field.el = input;
     // 空串 = 清除该项（服务端会整行删掉）。原本就是空的则视为没改。
     field.read = () => (input.value === '' ? null : input.value);
@@ -183,7 +185,7 @@ export function createEnvConfigPanel({
     // 只读诊断：不是表单，是「这些为什么改不了」的解释。少了它，用户会以为面板漏了 ANTHROPIC_*。
     if (view.readonlyDiagnostics?.length) {
       const sec = el('section', 'space-y-2 pt-2 border-t border-line');
-      sec.append(el('div', 'text-xs font-semibold text-ink-soft', '此处不可改'));
+      sec.append(el('div', 'text-xs font-semibold text-ink-soft', t('此处不可改')));
       for (const d of view.readonlyDiagnostics) {
         const row = el('div', 'space-y-0.5');
         row.append(el('div', 'text-xs text-ink', `${text(d.label)}（${d.key}）`));
@@ -222,12 +224,12 @@ export function createEnvConfigPanel({
     box.append(el('div', 'text-xs font-semibold text-ink', title));
     const list = Array.isArray(results) ? results : [];
     for (const r of list) {
-      const line = el('div', `text-[11px] ${r.level === 'error' ? 'text-danger' : 'text-warn'}`);
+      const line = el('div', `text-[11px] ${r.level === 'error' ? 'text-danger' : 'text-warning'}`);
       line.textContent = r.key ? `${r.key}：${r.message}` : r.message;
       box.append(line);
     }
     if (list.length === 0) {
-      box.append(el('div', 'text-[11px] text-danger', fallback || '服务端没有给出原因'));
+      box.append(el('div', 'text-[11px] text-danger', fallback || t('服务端没有给出原因')));
     }
     body.prepend(box);
     body.scrollTop = 0;
@@ -245,7 +247,17 @@ export function createEnvConfigPanel({
     let res = await send(false);
     if (res?.needsConfirm) {
       const lines = (res.results || []).filter((r) => r.level === 'warn').map((r) => r.message).join('\n');
-      const okToGo = await appConfirm(`${lines}\n\n仍然保存？`, { tone: 'warn' });
+      // appConfirm 收的是**对象**（public/js/app/sheets.js:102 解构 { title, body, okText, tone }）。
+      // 这里曾经传字符串 + 第二个参数：解构字符串原始值不报错，只是每个字段都是 undefined，
+      // 而 textContent = undefined 会落成空串（DOMString? 先把 undefined 转成 null），
+      // 于是弹出来的是一个**标题空、正文被 hidden 隐藏**的框——只有两个按钮，警告原文全丢。
+      // 用户就这样把公网 2FA 关掉了。tone 也必须是 CONFIRM_TONES 里有的值，'warn' 不是。
+      const okToGo = await appConfirm({
+        title: t('保存前请确认'),
+        body: `${lines}\n\n${t('仍然保存？')}`,
+        okText: t('仍然保存'),
+        tone: 'warning',
+      });
       if (!okToGo) {
         saveBtn.disabled = false;
         return;
@@ -254,7 +266,7 @@ export function createEnvConfigPanel({
     }
 
     if (!res?.ok) {
-      showResults(res?.results, '保存失败，一项都没写入', res?.error);
+      showResults(res?.results, t('保存失败，一项都没写入'), res?.error);
       saveBtn.disabled = false;
       return;
     }
@@ -266,23 +278,31 @@ export function createEnvConfigPanel({
 
     // 配置只写进了文件，进程里还是旧值 —— 不给重启入口的话这条路就断在最后一步。
     if (!canRestart()) {
-      hint.textContent = `已写入 ${n} 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）`;
+      hint.textContent = t('已写入 N 项。需要重启服务才生效（本进程不是常驻托管，请到电脑上重启）').replace('N', String(n));
       return;
     }
-    hint.textContent = `已写入 ${n} 项，重启后生效`;
-    const btn = el('button', 'hit-44 px-3 py-2 rounded-xl border border-line text-xs text-ink active:bg-sunk', '立即重启');
+    hint.textContent = t('已写入 N 项，重启后生效').replace('N', String(n));
+    const btn = el('button', 'hit-44 px-3 py-2 rounded-xl border border-line text-xs text-ink active:bg-sunk', t('立即重启'));
     btn.type = 'button';
     btn.id = 'envConfigRestart';
     btn.onclick = async () => {
-      if (!await appConfirm('重启会中断所有正在跑的会话。继续？', { tone: 'warn' })) return;
+      // 同上：必须传对象。这一条更要紧——它确认的是「中断所有在跑的会话与后台任务」，
+      // 而空白确认框只会让人直接点确定。破坏性动作用 danger 而非 warning。
+      const okToRestart = await appConfirm({
+        title: t('立即重启服务'),
+        body: t('重启会中断所有正在跑的会话。继续？'),
+        okText: t('重启'),
+        tone: 'danger',
+      });
+      if (!okToRestart) return;
       btn.disabled = true;
-      btn.textContent = '重启中…';
+      btn.textContent = t('重启中…');
       socket.emit('dev:restart', {}, (r) => {
         // 成功的话 socket 很快会断、自动重连；失败要如实说，别让按钮一直转
         if (r && r.ok === false) {
           btn.disabled = false;
-          btn.textContent = '立即重启';
-          hint.textContent = r.error || '重启被拒绝';
+          btn.textContent = t('立即重启');
+          hint.textContent = r.error || t('重启被拒绝');
         }
       });
     };
@@ -294,13 +314,13 @@ export function createEnvConfigPanel({
     if (!modal || loading) return;
     beforeOpen?.();
     loading = true;
-    body.replaceChildren(el('div', 'text-xs text-ink-soft', '读取中…'));
+    body.replaceChildren(el('div', 'text-xs text-ink-soft', t('读取中…')));
     footer.classList.add('hidden');
     openSheet(modal);
     socket.emit('env:get', {}, (res) => {
       loading = false;
       if (!res?.ok) {
-        body.replaceChildren(el('div', 'text-xs text-danger', `读取配置失败：${res?.error || '服务端没有给出原因'}`));
+        body.replaceChildren(el('div', 'text-xs text-danger', `${t('读取配置失败：')}${res?.error || t('服务端没有给出原因')}`));
         return;
       }
       render(res);

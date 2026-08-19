@@ -34,10 +34,37 @@ export function parseKeyValueArgs(pairs) {
   return vars;
 }
 
+// shell **双引号串内**的转义。TC-009 修的是 sed 那一层，这是它的下一层：
+// server 模板那行是 `/bin/zsh -lc 'cd "__REPO__" && exec "__NODE__" server.js'`，
+// 双引号里 `$`、反引号、`\` 仍会被 zsh 解释。路径含 `$` 时不会报错，只会静默走偏 ——
+// `/Users/x/code/my$proj` 变成 `cd "/Users/x/code/my"`，bootstrap 照样成功（launchctl 只管
+// 加载 plist），随后 node 起不来、KeepAlive 把它变成无限崩溃重启循环，而 CLI 只说一句
+// 「重启后未能确认新进程」，没有任何线索指向路径。
+// 反斜杠必须**第一个**替换，否则会把后面几步刚加的反斜杠再转义一次。
+export function escapeShellDq(value) {
+  return String(value)
+    .replaceAll('\\', '\\\\')
+    .replaceAll('$', '\\$')
+    .replaceAll('`', '\\`')
+    .replaceAll('"', '\\"');
+}
+
 // 字面量替换 __KEY__ → escapeXml(value)；非正则、非 shell，对 &/#/空格/引号等特殊字符天然免疫。
+//
+// 模板里写 `__SHQ_<KEY>__` 即声明「这个占位符落在 shell 双引号串内」，渲染时先做 shell 转义
+// 再做 XML 转义。**vars 的键名不变**（还是 REPO/NODE）—— manifest 里已记录的参数因此不受影响，
+// 否则 install 的 changedVars 比对会把每一个既有安装都判成「参数与当前配置不一致」而拒绝。
+//
+// 为什么要模板显式声明、而不是一律 shell 转义：其余模板的 ProgramArguments 元素是**独立 argv
+// 项**，launchd 直接 exec、根本不经 shell，给它们加反斜杠等于把路径改坏
+// （`/Applications/My$App.app` → `/Applications/My\$App.app`，文件就再也找不到了）。
+// 对不含 \ $ ` " 的正常路径，shell 转义是恒等的，所以既有安装也不会因此被判成漂移。
 export function renderTemplate(templateContent, vars) {
   let content = templateContent;
   for (const [key, value] of Object.entries(vars)) {
+    // 先 SHQ 变体再普通变体：`__SHQ_REPO__` 里不含 `__REPO__`（R 前只有一个下划线），
+    // 顺序其实无关紧要，但写成这样读起来不用去数下划线。
+    content = content.split(`__SHQ_${key}__`).join(escapeXml(escapeShellDq(value)));
     content = content.split(`__${key}__`).join(escapeXml(value));
   }
   return content;
