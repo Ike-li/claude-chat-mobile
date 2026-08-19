@@ -136,11 +136,27 @@ export function resolveSetupPlan({ args, envExists = false, platform = process.p
   return { mode, workDir: workDirNorm.workDir, hooks: args.hooks ?? 'off', desktop: args.desktop ?? 'off' };
 }
 
+// 覆盖提示的判定：把「检测到哪个文件」与「将写入哪个文件」当成两件事。
+//
+// 它们不同的那一格才是危险格：旧文件不会被覆盖，而是被优先级更高的新文件**架空**——
+// 磁盘上原样躺着、看起来毫发无损，实际里面每一项都不再生效。用「覆盖它?」问这一格
+// 是在问错的问题，用户答的也就不是他以为的那件事。
+export function describeOverwrite({ existingConfig, outPath }) {
+  if (!existingConfig) return null;
+  return { existing: existingConfig, target: outPath, shadows: existingConfig !== outPath };
+}
+
 // 交互壳的双语文案（纯文本片段，颜色在 main 里组装）。
 export const MESSAGES = {
   zh: {
     title: '⚙  Claude Chat Mobile —— 配置向导',
     overwritePrompt: '已存在，覆盖它? [y/N] ',
+    shadowWarning: (existing, target) =>
+      `⚠️  检测到 ${existing}，但本次将写入 ${target}。\n`
+      + `   新文件优先级更高：${existing} 会原样留在磁盘上，却从此完全失效——\n`
+      + '   CCM_DATA_DIR（会话与已信任设备）、PORT、VAPID_*（推送）、CF_ACCESS_*（公网 2FA）全部不再生效。\n'
+      + '   想保留这些请改用 node scripts/config.js migrate 迁移，而不是在这里新写一份。\n'
+      + '   仍要继续? [y/N] ',
     cancelled: '已取消，现有配置未改动。',
     tokenLabel: '已生成 AUTH_TOKEN（手机访问必需）',
     tokenWrittenSuffix: '…（已写入 %s）',
@@ -155,6 +171,7 @@ export const MESSAGES = {
     hooksPrompt: '安装 CLI hooks 桥? 让你在电脑终端直接跑的 claude 会话也能推送到手机 [Y/n] ',
     hooksInstalling: '正在安装并验证…',
     hooksSkipped: '已跳过。随时可跑 npm run hooks:install 补装。',
+    desktopSkipped: '已跳过桌面控制台。随时可跑 npm run app:install 补装。',
     hooksFailed: '安装未成功（见上方输出）。不影响其余配置；稍后可跑 npm run hooks:install 重试。',
     desktopPrompt: '编译 macOS 桌面控制台? 菜单栏里看服务状态、改配置、看日志，不用开终端。'
       + '需要 Xcode Command Line Tools（不是完整 Xcode，装过 git 的多半已经有）[y/N] ',
@@ -182,6 +199,12 @@ export const MESSAGES = {
   en: {
     title: '⚙  Claude Chat Mobile — setup wizard',
     overwritePrompt: 'already exists. Overwrite it? [y/N] ',
+    shadowWarning: (existing, target) =>
+      `⚠️  Found ${existing}, but this run will write ${target}.\n`
+      + `   The new file takes precedence: ${existing} stays on disk untouched yet stops applying entirely —\n`
+      + '   CCM_DATA_DIR (sessions and trusted devices), PORT, VAPID_* (push) and CF_ACCESS_* (public 2FA) all go dead.\n'
+      + '   To keep them, run node scripts/config.js migrate instead of writing a fresh file here.\n'
+      + '   Continue anyway? [y/N] ',
     cancelled: 'Cancelled. Your existing config was left untouched.',
     tokenLabel: 'Generated AUTH_TOKEN (required for phone access)',
     tokenWrittenSuffix: '… (written to %s)',
@@ -196,6 +219,7 @@ export const MESSAGES = {
     hooksPrompt: 'Install the CLI hooks bridge? Lets sessions you run in your own terminal push to your phone [Y/n] ',
     hooksInstalling: 'Installing and verifying…',
     hooksSkipped: 'Skipped. Run npm run hooks:install anytime.',
+    desktopSkipped: 'Skipped the desktop console. Run npm run app:install anytime.',
     hooksFailed: 'Install did not complete (see output above). Your other config is fine; retry with npm run hooks:install.',
     desktopPrompt: 'Build the macOS desktop console? Service state, config and logs from the menu bar, '
       + 'no terminal needed. Requires Xcode Command Line Tools (not full Xcode; if you have git you likely have them) [y/N] ',
@@ -271,13 +295,27 @@ function printNextSteps(t) {
   console.log(c.dim(`\n${t.publicNote}\n`));
 }
 
-async function runInteractive({ plan, outPath, t }) {
-  const rl = createInterface({ input: stdin, output: stdout });
+// deps 只为可测而存在：这个壳里出过两个只有「真跑一遍交互」才看得见的 bug（问了不用、
+// 问错文件），而它们恰恰是最不会有人手动复跑的路径。默认值即真实实现。
+export async function runInteractive({ plan, outPath, existingConfig, t }, deps = {}) {
+  const {
+    createRl = () => createInterface({ input: stdin, output: stdout }),
+    writeFile = writeSetupFile,
+    buildDesktop = buildDesktopApp,
+    installHooks = installHooksBridge,
+    platform = process.platform,
+  } = deps;
+  const rl = createRl();
   try {
-    // 已有配置 → 先问是否覆盖（默认否，绝不静默覆盖既有配置）
-    const existing = [outPath, join(HERE, CONFIG_FILE_NAME), join(HERE, '.env')].find(p => existsSync(p));
-    if (existing) {
-      const ans = (await rl.question(`⚠️  ${existing} ${t.overwritePrompt}`)).trim().toLowerCase();
+    // 已有配置 → 先问是否覆盖（默认否，绝不静默覆盖既有配置）。
+    // existingConfig 由 main() 算好后传进来，**这里不再自己搜一遍**：此前独立搜 [outPath,
+    // ccm.config.json, .env] 与 main() 的判据分岔，于是提示里说的文件和真正要写的文件是两个。
+    const overwrite = describeOverwrite({ existingConfig, outPath });
+    if (overwrite) {
+      const prompt = overwrite.shadows
+        ? t.shadowWarning(overwrite.existing, overwrite.target)
+        : `⚠️  ${overwrite.target} ${t.overwritePrompt}`;
+      const ans = (await rl.question(prompt)).trim().toLowerCase();
       if (ans !== 'y' && ans !== 'yes') {
         console.log(t.cancelled);
         return;
@@ -296,14 +334,14 @@ async function runInteractive({ plan, outPath, t }) {
       console.error(`✗ ${t.refuse[workDirNorm.code]()}`);
       return;
     }
-    writeSetupFile({ outPath, workDir: workDirNorm.workDir, t });
+    writeFile({ outPath, workDir: workDirNorm.workDir, t });
 
     // CLI hooks 桥：默认装（终端直跑的会话唯有装了它才能推到手机——轮询只能在你已经打开
     // app 时追平镜像，永远不会主动叫你）。默认 Y 但必须问：它写的是用户全局 ~/.claude/settings.json。
     // 桌面控制台：只在 macOS 上问。默认「不装」—— 它要跑 swiftc，而很多人没装 CLT。
     let desktop = plan.desktop;
     if (desktop === undefined) {
-      if (process.platform !== 'darwin') {
+      if (platform !== 'darwin') {
         desktop = 'off';
       } else {
         const ans = (await rl.question(`\n${t.desktopPrompt}`)).trim().toLowerCase();
@@ -316,8 +354,12 @@ async function runInteractive({ plan, outPath, t }) {
       const ans = (await rl.question(`\n${t.hooksPrompt}`)).trim().toLowerCase();
       hooks = ans === '' || ans === 'y' || ans === 'yes' ? 'on' : 'off';
     }
-    if (hooks === 'on') installHooksBridge(t);
+    if (hooks === 'on') installHooks(t);
     else console.log(c.dim(t.hooksSkipped));
+    // 问了就必须用：此前 desktop 赋值后再没被读过，答 y 的用户什么也等不到，
+    // 连一句「已跳过」都没有——比不问更糟，因为他以为装上了。
+    if (desktop === 'on') buildDesktop(t);
+    else if (platform === 'darwin') console.log(c.dim(t.desktopSkipped));
 
     printNextSteps(t);
   } finally {
@@ -325,11 +367,23 @@ async function runInteractive({ plan, outPath, t }) {
   }
 }
 
-function runNonInteractive({ plan, outPath, t }) {
-  writeSetupFile({ outPath, workDir: plan.workDir, t });
-  if (plan.hooks === 'on') installHooksBridge(t);
+// deps 与 runInteractive 同款，理由也一样：这条路径上的行为只有真跑一遍才看得见，
+// 而它恰恰是「照着文档敲一行命令」的人用的那条。
+export function runNonInteractive({ plan, outPath, existingConfig, t }, deps = {}) {
+  const {
+    writeFile = writeSetupFile,
+    buildDesktop = buildDesktopApp,
+    installHooks = installHooksBridge,
+    warn = (m) => console.warn(m),
+  } = deps;
+  // 影子化的后果与走哪条路径无关。交互路径拿到整段警告，而 `--yes --force` 一声不吭。
+  // --force 的语义是「我知道有既有配置，继续」，不是「别告诉我会发生什么」。
+  const overwrite = describeOverwrite({ existingConfig, outPath });
+  if (overwrite?.shadows) warn(t.shadowWarning(overwrite.existing, overwrite.target));
+  writeFile({ outPath, workDir: plan.workDir, t });
+  if (plan.hooks === 'on') installHooks(t);
   else console.log(c.dim(t.hooksSkipped));
-  if (plan.desktop === 'on') buildDesktopApp(t);
+  if (plan.desktop === 'on') buildDesktop(t);
   printNextSteps(t);
 }
 
@@ -358,8 +412,8 @@ async function main() {
     process.exit(2);
   }
 
-  if (plan.mode === 'noninteractive') runNonInteractive({ plan, outPath, t });
-  else await runInteractive({ plan, outPath, t });
+  if (plan.mode === 'noninteractive') runNonInteractive({ plan, outPath, existingConfig, t });
+  else await runInteractive({ plan, outPath, existingConfig, t });
 }
 
 // 仅直接运行时进入交互；被测试 import 时不执行 main。

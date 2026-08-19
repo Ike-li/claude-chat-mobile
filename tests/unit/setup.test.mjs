@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan, normalizeSetupWorkDir, promptWorkDir, MESSAGES } from '../../scripts/setup.js';
+import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan, normalizeSetupWorkDir, promptWorkDir, describeOverwrite, runInteractive, runNonInteractive, MESSAGES } from '../../scripts/setup.js';
 
 const SETUP = new URL('../../scripts/setup.js', import.meta.url);
 
@@ -265,6 +265,139 @@ test('CLI：--config 写到别处时，仓库根已有 ccm.config.json 不挡', 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ── 覆盖提示：说的必须是「将写入哪个文件」，不是「搜到了哪个文件」───────────
+//
+// runInteractive 此前自己又搜了一遍 [outPath, ccm.config.json, .env]，与 main() 已经算好的
+// existingConfig 分岔，同一处错配长出两个症状：
+//   · legacy 部署被问「/repo/.env 已存在，覆盖它?」，答 y 写的却是 ccm.config.json ——
+//     .env 原样留在磁盘上、但从此被更高优先级的新文件完全架空（CCM_DATA_DIR 失效 ⇒ 会话与
+//     设备信任全部孤儿化，CF_ACCESS_* 失效 ⇒ 公网 2FA 关闭），而用户看文件还在，以为没事。
+//   · `--config <path>` 隔离装机被问「仓库的 ccm.config.json 会被覆盖」，而它根本不会被碰；
+//     默认答 N 于是取消了一次本来完全安全的安装。
+test.describe('describeOverwrite —— 覆盖提示的判定', () => {
+  test('没有既有配置 → 根本不问', () => {
+    assert.equal(describeOverwrite({ existingConfig: undefined, outPath: '/repo/ccm.config.json' }), null);
+  });
+
+  test('检测到的就是将写入的 → 普通覆盖', () => {
+    const d = describeOverwrite({ existingConfig: '/repo/ccm.config.json', outPath: '/repo/ccm.config.json' });
+    assert.equal(d.shadows, false);
+    assert.equal(d.target, '/repo/ccm.config.json');
+  });
+
+  test('★ legacy .env + 将写 ccm.config.json → 必须判成影子化，不能当普通覆盖问', () => {
+    const d = describeOverwrite({ existingConfig: '/repo/.env', outPath: '/repo/ccm.config.json' });
+    assert.equal(d.shadows, true, '.env 不会被覆盖，而是被架空——这比覆盖更隐蔽，提示必须分开说');
+    assert.equal(d.existing, '/repo/.env');
+    assert.equal(d.target, '/repo/ccm.config.json');
+  });
+
+  test('★ 影子化文案要点名后果与迁移出路，两种语言都要', () => {
+    for (const lang of ['zh', 'en']) {
+      const msg = MESSAGES[lang].shadowWarning('/repo/.env', '/repo/ccm.config.json');
+      assert.match(msg, /\/repo\/\.env/, '要说清是哪个旧文件');
+      assert.match(msg, /ccm\.config\.json/, '要说清将写入哪个新文件');
+      assert.match(msg, /CCM_DATA_DIR/, '后果里最贵的一项必须点名');
+      assert.match(msg, /config\.js migrate/, '要给出迁移出路，不能只拦不指路');
+    }
+  });
+});
+
+// ★ 影子化的后果与走哪条路径无关。交互路径拿到了整段警告，而 `--yes --force` 一声不吭 ——
+// 而那恰恰是「照着文档敲一行命令」的人会用的形式，出事时更没有线索。
+// --force 的语义是「我知道有既有配置，继续」，不是「别告诉我会发生什么」。
+test.describe('runNonInteractive —— --yes --force 也要说清影子化', () => {
+  const run = (existingConfig, outPath) => {
+    const warns = [];
+    runNonInteractive(
+      { plan: { workDir: '/tmp/ccm-work', hooks: 'off', desktop: 'off' }, outPath, existingConfig, t: MESSAGES.zh },
+      { writeFile: () => {}, buildDesktop: () => {}, installHooks: () => {}, warn: (m) => warns.push(m) },
+    );
+    return warns.join('\n');
+  };
+
+  test('★ legacy .env + 写 ccm.config.json → 后果与出路都要说出来', () => {
+    const w = run('/repo/.env', '/repo/ccm.config.json');
+    assert.match(w, /CCM_DATA_DIR/, '最贵的那一项后果必须点名');
+    assert.match(w, /config\.js migrate/, '要给出迁移这条正路');
+  });
+
+  test('覆盖的就是同一个文件 → 不是影子化，别多嘴', () => {
+    assert.equal(run('/repo/ccm.config.json', '/repo/ccm.config.json'), '');
+  });
+
+  test('全新安装 → 不警告', () => {
+    assert.equal(run(undefined, '/repo/ccm.config.json'), '');
+  });
+});
+
+// ── 交互向导：问了就必须用 ────────────────────────────────────────────────
+// 「编译 macOS 桌面控制台?」问完把答案丢了：desktop 变量赋值后再没被读过，buildDesktopApp
+// 只在非交互路径被调用。答 y 的用户什么也没等到，连一句「已跳过」都没有。
+test.describe('runInteractive —— 桌面控制台的回答必须生效', () => {
+  // answer: (question) => string —— 按问题内容作答，模拟真人敲键盘
+  const baseDeps = (answer = () => '') => {
+    const calls = [];
+    const asked = [];
+    return {
+      calls,
+      asked,
+      deps: {
+        createRl: () => ({
+          question: async (q) => { asked.push(q); return answer(q); },
+          close: () => {},
+        }),
+        writeFile: () => calls.push('write'),
+        buildDesktop: () => calls.push('desktop'),
+        installHooks: () => calls.push('hooks'),
+      },
+    };
+  };
+
+  const PLAN = { plan: { workDir: '/tmp/ccm-work', hooks: 'off', desktop: undefined }, outPath: '/tmp/ccm.config.json', existingConfig: undefined, t: MESSAGES.zh };
+
+  test('★ 答 y → 真的去编译（此前一声不吭什么也不做）', async () => {
+    const { calls, deps } = baseDeps((q) => (/桌面控制台/.test(q) ? 'y' : ''));
+    await runInteractive(PLAN, { ...deps, platform: 'darwin' });
+    assert.ok(calls.includes('desktop'), '答 y 就必须编译');
+  });
+
+  test('答 n → 不编译', async () => {
+    const { calls, deps } = baseDeps(() => 'n');
+    await runInteractive(PLAN, { ...deps, platform: 'darwin' });
+    assert.equal(calls.includes('desktop'), false);
+  });
+
+  test('非 macOS → 不问也不编译', async () => {
+    const { calls, asked, deps } = baseDeps();
+    await runInteractive(PLAN, { ...deps, platform: 'linux' });
+    assert.equal(calls.includes('desktop'), false);
+    assert.equal(asked.some((q) => /桌面控制台/.test(q)), false, '非 macOS 上问了也没用，别问');
+  });
+
+  test('★ --config 隔离装机：existingConfig 由调用方给定，向导不再自己去仓库根搜一遍', async () => {
+    const { calls, asked, deps } = baseDeps();
+    await runInteractive(
+      { plan: { workDir: '/tmp/ccm-work', hooks: 'off', desktop: 'off' }, outPath: '/tmp/isolated.json', existingConfig: undefined, t: MESSAGES.zh },
+      { ...deps, platform: 'linux' },
+    );
+    assert.equal(asked.some((q) => /覆盖它|仍要继续/.test(q)), false, '目标文件不存在就不该问覆盖');
+    assert.ok(calls.includes('write'), '不问覆盖也要照常写');
+  });
+
+  test('★ legacy .env → 弹的是影子化警告，不是「覆盖它?」', async () => {
+    const { asked, deps } = baseDeps(() => 'y');
+    await runInteractive(
+      { plan: { workDir: '/tmp/ccm-work', hooks: 'off', desktop: 'off' }, outPath: '/repo/ccm.config.json', existingConfig: '/repo/.env', t: MESSAGES.zh },
+      { ...deps, platform: 'linux' },
+    );
+    const q = asked.find((s) => /\.env/.test(s));
+    assert.ok(q, '必须就 .env 问一次');
+    assert.match(q, /CCM_DATA_DIR/, '后果要摆出来，不能只说「已存在，覆盖它?」');
+    assert.match(q, /config\.js migrate/, '要指出迁移这条正路');
+  });
 });
 
 // ── 交互向导：输错一个字符不该让人重跑整个向导 ─────────────────────────────
