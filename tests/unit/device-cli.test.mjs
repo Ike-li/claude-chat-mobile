@@ -122,3 +122,18 @@ test.describe('device.js approve / deny', () => {
     assert.equal(runCli(dataDir, ['deny']).status, 1);
   });
 });
+
+// 2026-08-19 演练实录：机主在【另一个实例的目录】下跑了 approve，那边恰好也有同一台设备待审，
+// 于是命令如实报了成功——而他盯着的那台 server 从头到尾没看见这次批准。输出里必须带上
+// 「我动的是哪个数据目录」，否则批错实例这件事在终端里没有任何痕迹。
+test('approve/list 的输出带上实际操作的数据目录（防批到另一个实例上）', async t => {
+  const dataDir = await withDataDir(t);
+  await seedPending(dataDir, [{ deviceToken: 'dev-1', ip: '1.2.3.4', userAgent: 'x', ts: 1 }]);
+
+  const approved = runCli(dataDir, ['approve', 'dev-1']);
+  assert.equal(approved.status, 0, approved.stderr);
+  assert.ok(approved.stdout.includes(dataDir), `批准输出要指明数据目录，实际：\n${approved.stdout}`);
+
+  const listed = runCli(dataDir, ['list']);
+  assert.ok(listed.stdout.includes(dataDir), `list 输出要指明数据目录，实际：\n${listed.stdout}`);
+});

@@ -742,12 +742,15 @@ io.use(async (socket, next) => {
         console.log(`   设备 ID: ${deviceToken || '（未提供）'}`);
         console.log(`   来自 IP: ${ip}`);
         console.log(`   User-Agent: ${ua}`);
+        // 「电脑控制台」曾让机主满机器找窗口（2026-08-19 实录）——这条消息**就打印在**该按回车的
+        // 那个窗口里，直接指认它即可。非交互分支同理带上项目目录：命令按当前目录的配置决定数据根，
+        // 机器上装着不止一份时（fork / 演练用的 clone），在别处跑会如实报成功却批到另一个实例上。
         if (process.stdin.isTTY) {
-          console.log(`   -> 请在电脑控制台直接按【回车键 (Enter)】一键同意此设备`);
+          console.log(`   -> 就在这个窗口（跑着 npm start 的这个终端）里按【回车键 (Enter)】一键同意此设备`);
           console.log(`   -> 或输入【deny】拒绝并移除该设备（非拉黑：denyDevice 只是移出待审/信任列表，同一 token 之后仍可重新申请）`);
         } else {
-          console.log(`   -> 当前运行在非交互模式下。请在电脑运行下方命令授权此设备：`);
-          console.log(`      node scripts/device.js approve "${deviceToken}"`);
+          console.log(`   -> 当前运行在非交互模式下。请在电脑运行下方命令授权此设备（必须在本项目目录下跑）：`);
+          console.log(`      cd ${HERE} && node scripts/device.js approve "${deviceToken}"`);
         }
         console.log('==================================================\n');
       }
