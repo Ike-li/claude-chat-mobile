@@ -26,7 +26,27 @@ struct ListenInfo: Decodable {
 struct ScheduleInfo: Decodable {
     let kind: String?              // resident | periodic | on-demand | unknown
     let everySeconds: Int?         // StartInterval
-    let calendar: [String: Int]?   // StartCalendarInterval
+    let calendar: [String: Int]?   // StartCalendarInterval（单字典形态）
+
+    /// launchd 的 StartCalendarInterval 有**两种**合法形态：单个字典，以及字典数组（多个时刻）。
+    /// service-units.js 的 extractSchedule 只判 `typeof === 'object'`（数组也满足）后原样透传，
+    /// 所以数组真的会到达这里。
+    ///
+    /// 而本文件「字段全 optional，一个坏字段杀不死解码」的纪律只覆盖 null 与缺字段 ——
+    /// Swift 的 optional **不容忍类型不匹配**：`[String: Int]?` 撞上数组会抛 typeMismatch，
+    /// 冲出整个 ServiceStatus 的解码，菜单于是永久停在「读不到状态」，没有 unit、没有启停项。
+    /// 机主本机就跑着手写的 com.ccm.tunnel-watch，而 buildUnknownUnits 会收编任意 com.ccm.*，
+    /// 所以这不是假想场景。JS 侧对同一形态是优雅降级的（「待机 · 定时触发」），两侧不能分叉。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try? c.decodeIfPresent(String.self, forKey: .kind)
+        everySeconds = try? c.decodeIfPresent(Int.self, forKey: .everySeconds)
+        // 解不出单字典形态就留 nil —— idleLabel 会回落到「待机 · 定时触发」，与 JS 侧一致。
+        // 用 `try?` 而不是分支穷举：将来 launchd 再多一种形态也不会把整份状态带下水。
+        calendar = try? c.decodeIfPresent([String: Int].self, forKey: .calendar)
+    }
+
+    private enum CodingKeys: String, CodingKey { case kind, everySeconds, calendar }
 }
 
 struct UnitStatus: Decodable {
@@ -41,6 +61,9 @@ struct UnitStatus: Decodable {
     let listen: ListenInfo?
     let detail: String?
     let schedule: ScheduleInfo?
+    /// launchd 域里还有没有这个 job。false = 已被 bootout：plist 还在磁盘上、调度形态也照样
+    /// 读得出来，但它永远不会再触发了。缺字段（旧版 CLI）时为 nil，按「不知道」保守处理。
+    let loaded: Bool?
 
     var unitName: String { unit ?? label ?? "?" }
     var stateName: String { state ?? "unknown" }
@@ -53,14 +76,20 @@ struct UnitStatus: Decodable {
         if isFlapping { return "◐" }
         switch stateName {
         case "running": return "●"
-        case "stopped": return idleLabel(for: schedule) != nil ? "◌" : "○"
+        case "stopped": return isIdleByDesign ? "◌" : "○"
         case "crashed": return "✗"
         default: return "·"
         }
     }
 
     /// 「此刻没有进程」是不是正常。周期任务与打火即退任务的 stopped 是健康待机。
-    var isIdleByDesign: Bool { stateName == "stopped" && idleLabel(for: schedule) != nil }
+    ///
+    /// ★ 前提是它还在 launchd 域里。被 bootout 之后 plist 照样在磁盘上、schedule 也照样解析
+    /// 得出来，可它永远不会再触发 —— 那不是待机，是停了。少了 loaded 这一项，主行会显示
+    /// 「◌ logrotate 待机 · 每天 03:47」，而同一份状态在子菜单 detail 里写的是
+    /// 「已停止（每天 03:47 不会触发）」，两个界面对着同一个事实说相反的话。
+    /// loaded 缺字段（旧版 CLI）时按 nil 处理，维持旧行为，不凭空把正常待机改成告警。
+    var isIdleByDesign: Bool { stateName == "stopped" && loaded != false && idleLabel(for: schedule) != nil }
 
     /// 能不能对它做 install / uninstall。判据来自 L1 的 ownership，本文件不重算归属。
     var isWritable: Bool { ownership == "managed" || ownership == "adoptable" }
@@ -163,7 +192,9 @@ func unitTitle(_ u: UnitStatus) -> String {
     var title = "\(u.lamp) \(u.unitName)"
     switch u.stateName {
     case "running": title += u.pid.map { "  运行中 (\($0))" } ?? "  运行中"
-    case "stopped": title += "  " + (idleLabel(for: u.schedule) ?? "已停止")
+    // 走 isIdleByDesign 而不是直接问 idleLabel：后者只看调度形态，而「待机」还有一个前提 ——
+    // 它得还在 launchd 域里。被 bootout 的定时器 schedule 照样解析得出，却永远不会再触发。
+    case "stopped": title += "  " + (u.isIdleByDesign ? (idleLabel(for: u.schedule) ?? "已停止") : "已停止")
     case "crashed": title += "  已崩溃"
     default: title += "  未安装"
     }

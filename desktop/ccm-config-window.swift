@@ -434,16 +434,31 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        resolveSources()
-        if let unit = preferUnit, let idx = logSourceIndex(forUnit: unit, in: sources) {
-            sourcePopup.selectItem(at: idx)
-            pathLabel.stringValue = logPath ?? ""
-            textView.string = "" // 换源先清屏，同 sourceChanged
-        }
+        // 先用「只扫 ~/Library/Logs」的源列表把窗口立刻立起来（纯本地目录枚举，毫秒级），
+        // 配置里的 LOG_FILE 随后异步补上。
+        applySources(configured: nil, preferUnit: preferUnit)
         refresh()
         // 2s 一次：日志是给人看的，再快也读不过来，而每次都要读盘。
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
+
+        // ★ 读 LOG_FILE 要起一个 node 跑 `config.js get --json`（冷启动 0.2~1s，超时 8s）。
+        // 它此前直接跑在主线程上，而 present() 只从 @objc 菜单动作进入 —— 于是每次点「查看日志」
+        // 整个 UI 就冻那么久；配置文件放在无响应的网络卷上时会连着转 8 秒菊花，菜单还半收着。
+        // runSync 自己的注释就写着「只在后台队列里调用」（ccm-menubar.swift:33）。
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            var configured: String?
+            if case .ok(let snap) = ConfigClient(env: self.env).currentValues() {
+                configured = snap.values["LOG_FILE"]
+            }
+            guard configured != nil else { return } // 没配就别白重建一次下拉框
+            DispatchQueue.main.async { [weak self] in
+                // 第二轮不再套用 preferUnit：它在第一轮已经生效并被记成「用户选的」。
+                // 这里再来一次，会把用户在这两轮之间手动切走的源硬拽回去。
+                self?.applySources(configured: configured, preferUnit: nil)
+            }
+        }
     }
 
     /// 窗口关掉就停轮询 —— 否则一个后台定时器会一直读盘到 app 退出。
@@ -462,9 +477,9 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
 
     /// 源列表 = LOG_FILE 配置 + ~/Library/Logs 的 ccm-*.log 扫描。判定在 CCMCore.logSources
     /// （有断言），本方法只做它测不了的部分：读配置、枚举目录、重建下拉框，并尽量保持当前选中。
-    private func resolveSources() {
-        var configured: String?
-        if case .ok(let snap) = ConfigClient(env: env).currentValues() { configured = snap.values["LOG_FILE"] }
+    /// 只做 UI 重建，**必须在主线程调用**。取 LOG_FILE 那一步（要起 node 子进程）由调用方
+    /// 在后台队列完成后把结果传进来，见 present()。
+    private func applySources(configured: String?, preferUnit: String?) {
         let home = NSHomeDirectory()
         let logsDir = (home as NSString).appendingPathComponent("Library/Logs")
         let names = (try? FileManager.default.contentsOfDirectory(atPath: logsDir)) ?? []
@@ -473,13 +488,31 @@ final class LogWindowController: NSWindowController, NSWindowDelegate {
         // 逐条 addItem 而不是 addItems(withTitles:)：后者对重复标题会静默吞项。
         sourcePopup.removeAllItems()
         for s in sources { sourcePopup.menu?.addItem(NSMenuItem(title: s.title, action: nil, keyEquivalent: "")) }
-        if let previous, let idx = sources.firstIndex(where: { $0.path == previous }) {
+
+        // 选中优先级，从高到低：
+        //   ① 本次带来的 preferUnit —— 从 unit 子菜单点「查看日志」，那是一句明确的「我要看这个」。
+        //      窗口已开时 controller 是复用的（ccm-menubar.swift 缓存它），若让「保持原选中」
+        //      压过它，点了就毫无反应：窗口浮上来，显示的还是上一个 unit 的日志。
+        //   ② 用户手动切过的源 —— 异步补配置那一轮会再进来一次，不能把人正看着的日志切走。
+        //   ③ 都没有 → 保留 NSPopUpButton 的默认（首项）。配置里设了 LOG_FILE 时它就排在首位，
+        //      这正是「第一轮先立起窗口、第二轮补上配置」这个两段式要达到的效果 ——
+        //      若无条件恢复 previous，第一轮自动选中的 index 0 会把 LOG_FILE 永远挤掉。
+        if let unit = preferUnit, let idx = logSourceIndex(forUnit: unit, in: sources) {
+            sourcePopup.selectItem(at: idx)
+            userPickedSource = true
+            textView.string = "" // 换源先清屏，同 sourceChanged
+        } else if userPickedSource, let previous, let idx = sources.firstIndex(where: { $0.path == previous }) {
             sourcePopup.selectItem(at: idx)
         }
         pathLabel.stringValue = logPath ?? "未发现日志文件（~/Library/Logs/ccm-*.log，或配置里设 LOG_FILE）"
     }
 
+    /// 用户有没有亲手选过源。用来区分「他正在看的那个」与「我们替他默认选的那个」：
+    /// 前者不能被异步补配置那一轮切走，后者应该被更好的默认（LOG_FILE）取代。
+    private var userPickedSource = false
+
     @objc private func sourceChanged() {
+        userPickedSource = true
         pathLabel.stringValue = logPath ?? ""
         textView.string = "" // 换源先清屏，免得旧源的尾巴看起来像新源的内容
         refresh()
@@ -572,23 +605,45 @@ final class TaskWindowController: NSWindowController, NSWindowDelegate {
     /// 关窗即终止在跑的进程。留着它在后台跑完是最糟的：用户以为取消了，
     /// 而 install 那类命令正在改 ~/Library/LaunchAgents。
     func windowWillClose(_ notification: Notification) {
+        // ★ 先作废当前这一代，再终止。只 terminate 是不够的：步骤链的推进发生在
+        // terminationHandler 里，正好卡在两步之间关窗时，terminate 打在一个已经退出的进程上，
+        // 而下一步照样会被启动 —— 正是本注释上一段声称要防的结果。
+        runToken += 1
         running?.terminate()
         running = nil
+        isRunning = false
         onSuccess = nil // 关窗 = 取消：别在用户放弃后还触发「成功后自动重启」
     }
 
     private var onSuccess: (() -> Void)?
 
+    /// 「代」。run 一次 +1，关窗也 +1。所有异步回调带着自己那一代回来，对不上就整个丢弃。
+    /// **只在主线程读写** —— 这三个字段此前在 terminationHandler 线程与主线程之间裸共享。
+    private var runToken = 0
+    private var isRunning = false
+
     /// onSuccess：全部步骤成功结束时在主线程调用一次（失败或用户关窗则不调）。
     /// 「更新桌面端」用它在装完后自动重启本 app。
+    ///
+    /// ★ 在途时拒绝新任务。此前这里无条件重绑 self.onSuccess 且不管上一个进程，于是：
+    /// 跑「运行体检」（数十秒）时点「更新桌面端」→ doctor 没被终止、继续往同一个窗口里输出，
+    /// 它结束时走到步骤链末尾，调用的却是**更新任务**的 relaunch 闭包 →
+    /// NSApp.terminate 打断正在往 /Applications 里 ditto 的 app-build.js --install，
+    /// 留下半个 bundle 再把它打开。双击菜单项也能并发跑两次安装。
     func run(title: String, steps: [TaskStep], node: String, cwd: String, onSuccess: (() -> Void)? = nil) {
-        window?.title = title
-        textView.string = ""
-        self.onSuccess = onSuccess
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-        runStep(steps, index: 0, node: node, cwd: cwd)
+        if isRunning {
+            append("\n⚠️  上一个任务还在运行，本次「\(title)」未启动。等它结束，或关窗取消后重试。\n")
+            return
+        }
+        runToken += 1
+        isRunning = true
+        window?.title = title
+        textView.string = ""
+        self.onSuccess = onSuccess
+        runStep(steps, index: 0, node: node, cwd: cwd, token: runToken)
     }
 
     private func append(_ text: String) {
@@ -600,12 +655,24 @@ final class TaskWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    /// 只在这一代仍然当前时才写进日志视图。runToken 只在主线程读写，所以比对必须在主线程做。
+    private func appendIfCurrent(_ text: String, token: Int) {
+        guard !text.isEmpty else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, token == self.runToken else { return }
+            self.textView.string += text
+            self.textView.scrollToEndOfDocument(nil)
+        }
+    }
+
     /// 逐步执行，任一步非零退出即停 —— 与旧实现的 `a && b && c` 语义一致。
-    private func runStep(_ steps: [TaskStep], index: Int, node: String, cwd: String) {
+    private func runStep(_ steps: [TaskStep], index: Int, node: String, cwd: String, token: Int) {
         guard index < steps.count else {
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                guard let self, token == self.runToken else { return }
                 self.statusLabel.stringValue = "全部完成"
+                self.running = nil
+                self.isRunning = false
                 let done = self.onSuccess
                 self.onSuccess = nil
                 done?()
@@ -626,24 +693,30 @@ final class TaskWindowController: NSWindowController, NSWindowDelegate {
         let pipe = Pipe()
         task.standardOutput = pipe
         task.standardError = pipe          // 合流：用户看的是一条时间线，不是两个流
+        // 输出也要带这一代的 token：进程被 terminate 之后仍可能有最后一批数据在管道里，
+        // 不比对就会把上一个任务的末尾几行拼进新任务的日志（关窗后立刻跑「更新桌面端」即可复现）。
         pipe.fileHandleForReading.readabilityHandler = { [weak self] h in
             let data = h.availableData
             guard !data.isEmpty else { return }
-            self?.append(String(data: data, encoding: .utf8) ?? "")
+            self?.appendIfCurrent(String(data: data, encoding: .utf8) ?? "", token: token)
         }
 
         task.terminationHandler = { [weak self] proc in
             pipe.fileHandleForReading.readabilityHandler = nil
             // 排空退出前最后一批还没被 handler 读走的数据，否则末尾几行（常常正是错误原因）会丢
             if let rest = try? pipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
-                self?.append(String(data: rest, encoding: .utf8) ?? "")
+                self?.appendIfCurrent(String(data: rest, encoding: .utf8) ?? "", token: token)
             }
-            guard let self else { return }
-            if proc.terminationStatus == 0 {
-                self.runStep(steps, index: index + 1, node: node, cwd: cwd)
-            } else {
-                self.running = nil
-                DispatchQueue.main.async {
+            // ★ running / isRunning / 步进全部收敛到主线程。此前 running 在这条后台线程上被写，
+            // 却在主线程的 windowWillClose 里被读和置 nil —— 两边互相看不见对方的写入（未加同步的
+            // 跨线程 Process? 访问本身也是数据竞争）。token 比对则让已被作废的那一代直接出局。
+            DispatchQueue.main.async { [weak self] in
+                guard let self, token == self.runToken else { return }
+                if proc.terminationStatus == 0 {
+                    self.runStep(steps, index: index + 1, node: node, cwd: cwd, token: token)
+                } else {
+                    self.running = nil
+                    self.isRunning = false
                     self.statusLabel.stringValue = "「\(step.title)」失败（退出码 \(proc.terminationStatus)），已停止后续步骤"
                 }
             }
@@ -654,7 +727,12 @@ final class TaskWindowController: NSWindowController, NSWindowDelegate {
             running = task
         } catch {
             append("无法启动：\(error.localizedDescription)\n")
-            DispatchQueue.main.async { [weak self] in self?.statusLabel.stringValue = "启动失败" }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, token == self.runToken else { return }
+                self.statusLabel.stringValue = "启动失败"
+                self.running = nil
+                self.isRunning = false   // 不清这一位，此后所有任务都会被「上一个还在跑」挡住
+            }
         }
     }
 }

@@ -72,6 +72,16 @@ func runSync(_ launchPath: String, _ args: [String], cwd: String? = nil, timeout
     do {
         try task.run()
     } catch {
+        // ★ 两个 reader 已经在上面起来了，且它们各自强持着自己的 Pipe。run() 抛错时没有子进程
+        // 继承写端，父进程这一侧的 fileHandleForWriting 又随 Pipe 一直活着 —— 于是那两个
+        // readDataToEndOfFile 永远等不到 EOF，两个线程就此永久阻塞，readers.leave() 也永不调用。
+        // 触发路径很日常：env.node 指向 nvm 路径，版本目录在 refresh() 校验之后、这里 spawn
+        // 之前被移除（nvm uninstall / 切版本）→ ENOENT。而 probe() 每 2~10s 重试一次，
+        // 每次失败泄漏两个 .utility 线程，界面上只显示「找不到 node」。
+        // 显式关掉写端即可让读端收到 EOF、线程正常退出。
+        try? outPipe.fileHandleForWriting.close()
+        try? errPipe.fileHandleForWriting.close()
+        readers.wait()
         return nil
     }
 
@@ -897,7 +907,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openConsole() {
-        if consoleWindow == nil { consoleWindow = ConsoleWindowController(app: self) }
+        // 与 openConfig / openLogsWindow / runTask 同一条防御：程序化建的 NSWindow 在关闭时被释放，
+        // controller 还在但 .window 已成 nil，此后 showWindow 无窗可显、点击静默失效。
+        // 这里漏掉这一半的代价比另外三个都大 —— 控制台正是刘海挤掉状态栏图标时的救命入口，
+        // 而 applicationShouldHandleReopen（Dock 图标）走的也是本方法，关一次就两条路一起死。
+        if consoleWindow == nil || consoleWindow?.window == nil { consoleWindow = ConsoleWindowController(app: self) }
         pushStateToConsole()
         consoleWindow?.present()
     }

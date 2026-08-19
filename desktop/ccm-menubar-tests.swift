@@ -179,6 +179,38 @@ struct CCMCoreTests {
            true, "KeepAlive 的 unit 停了就是真停了，绝不粉饰")
         eq(unitTitle(unit(#"{"unit":"x","state":"stopped"}"#)!).contains("已停止"),
            true, "没有 schedule 字段（旧版 CLI）时保守回落「已停止」")
+
+        // ★ launchd 的 StartCalendarInterval 有**两种**合法形态：单个字典，以及字典数组（多时刻）。
+        // service-units.js 的 extractSchedule 只判 `typeof === 'object'`（数组也满足）后原样透传，
+        // 所以数组会真的到达这里。而 Swift 的 optional 容忍 null / 缺字段，**不容忍类型不匹配**：
+        // `[String: Int]?` 撞上数组 → 整个 ServiceStatus 解码失败 → 菜单永久显示「读不到状态」，
+        // 没有 unit、没有启停项。机主本机就跑着手写的 com.ccm.tunnel-watch，buildUnknownUnits
+        // 会把任意 com.ccm.* 收进来，所以这不是假想场景。
+        // JS 侧对同一形态是优雅降级的（describeSchedule 说「待机 · 定时触发」），两侧不能分叉。
+        check(decode(#"{"schemaVersion":1,"units":[{"unit":"backup","state":"stopped","schedule":{"kind":"periodic","calendar":[{"Hour":9},{"Hour":21}]}}]}"#) != nil,
+              "多时刻的 StartCalendarInterval 不能让整份状态解不出来")
+        eq(idleLabel(for: unit(#"{"unit":"backup","state":"stopped","schedule":{"kind":"periodic","calendar":[{"Hour":9},{"Hour":21}]}}"#)?.schedule),
+           "待机 · 定时触发", "解不出具体时刻时与 JS 侧同样降级，而不是崩掉")
+        // 单字典形态照旧给出精确时刻，别为了兼容把好用的那条也降级了
+        eq(idleLabel(for: unit(#"{"unit":"logrotate","state":"stopped","schedule":{"kind":"periodic","calendar":{"Hour":3,"Minute":47}}}"#)?.schedule),
+           "待机 · 每天 03:47", "单字典形态不受影响")
+
+        // ★★ loaded=false = 已被 bootout：plist 还在磁盘上、调度形态也照样读得出来，
+        // 但它永远不会再触发了。CLI 侧已经按这个改了 detail 与状态词，菜单栏这一行如果
+        // 不跟着解码 loaded，两个界面就会对着同一份状态说相反的话 ——
+        // 子菜单里写「已停止（每天 03:47 不会触发）」，主行却仍是「◌ logrotate 待机 · 每天 03:47」。
+        let bootedOut = #"{"unit":"logrotate","state":"stopped","loaded":false,"schedule":{"kind":"periodic","calendar":{"Hour":3,"Minute":47}}}"#
+        eq(unitTitle(unit(bootedOut)!).contains("待机"), false, "已从 launchd 卸载的定时器不能说成待机")
+        eq(unitTitle(unit(bootedOut)!).contains("已停止"), true, "要说清它停了")
+        eq(unit(bootedOut)?.lamp, "○", "待机灯 ◌ 的含义是「到点会响」，它已经不会响了")
+        eq(unit(bootedOut)?.isIdleByDesign, false, "不是设计如此的空闲，是真的被停了")
+
+        // loaded=true / 字段缺失（旧版 CLI）时维持原样，别把正常待机改成告警
+        let stillLoaded = #"{"unit":"logrotate","state":"stopped","loaded":true,"schedule":{"kind":"periodic","calendar":{"Hour":3,"Minute":47}}}"#
+        eq(unitTitle(unit(stillLoaded)!).contains("待机 · 每天 03:47"), true, "仍在 launchd 里就是正常待机")
+        eq(unit(stillLoaded)?.lamp, "◌", "正常待机的灯不变")
+        let noField = #"{"unit":"logrotate","state":"stopped","schedule":{"kind":"periodic","calendar":{"Hour":3,"Minute":47}}}"#
+        eq(unitTitle(unit(noField)!).contains("待机 · 每天 03:47"), true, "旧版 CLI 不带 loaded → 保守维持旧行为")
         // 灯也要跟着分：待机用 ◌，与 scripts/service.js 的 STATE_ICON 同一套符号。
         eq(unit(#"{"unit":"x","state":"stopped","schedule":{"kind":"periodic","everySeconds":30}}"#)?.lamp, "◌",
            "待机的灯不能和真停止一样")
