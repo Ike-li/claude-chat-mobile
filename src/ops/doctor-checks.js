@@ -527,3 +527,31 @@ export function portOccupancyDiagnostic({ port, occupied = false, ownerLabel = n
       `Port ${n} is taken by something other than the desktop service. If it is another npm start, stop that one; otherwise find it with: lsof -nP -iTCP:${n} -sTCP:LISTEN`),
   };
 }
+
+// D18: shell 环境变量覆盖可见性。env 恒压过 ccm.config.json / .env，而被压住的一侧没有任何
+// 症状——「文件里明明没这个配置，行为却带着它」。2026-08-19 真机实测：一个终端会话里残留着
+// 8/17 迁移前 source 过的整套旧 .env 导出（CF_ACCESS_*/CCM_DATA_DIR/DEV_MODE/LOG_TERMINAL…），
+// doctor 与 server 全程按它运行，doctor 却一个字都没提。本检查只列**键名**——键的值可能是
+// AUTH_TOKEN / VAPID 私钥，诊断输出会被贴进 issue / 聊天，一个字节都不能带出来。
+// shellEnv 必须是 loadRuntimeEnvironment **之前**的快照：加载后文件值也进了 process.env，分不清来源。
+export function envOverrideDiagnostic({ shellEnv = {}, keys = [], lang = 'zh' } = {}) {
+  // 空串按「未设置」口径（与 src/shared/data-dir.js:17、normalizeLoadedEnvironment 一致）
+  const hits = keys.filter((k) => typeof shellEnv[k] === 'string' && shellEnv[k] !== '');
+  if (!hits.length) {
+    return {
+      status: 'ok',
+      detail: bi(lang, '无 shell 环境变量覆盖配置项（配置文件里的值即生效值）',
+        'No shell environment variables override the config file (what the file says is what runs)'),
+    };
+  }
+  return {
+    status: 'warn',
+    detail: bi(lang,
+      `${hits.length} 个配置项被 shell 环境变量压过配置文件（env 恒优先）：${hits.join('、')} —— `
+      + '文件里改这些项不会生效。若非有意设置，在启动 server 的终端里跑 '
+      + '`env | grep -E "CCM_|CF_ACCESS|WORK_DIR|LOG_|DEV_MODE|VAPID|PORT"` 定位来源，或 exec zsh 重开会话',
+      `${hits.length} config key(s) are overridden by shell environment variables (env always wins): ${hits.join(', ')} — `
+      + 'editing them in the config file has no effect. If unintended, run '
+      + '`env | grep -E "CCM_|CF_ACCESS|WORK_DIR|LOG_|DEV_MODE|VAPID|PORT"` in the terminal that starts the server, or exec a fresh shell'),
+  };
+}

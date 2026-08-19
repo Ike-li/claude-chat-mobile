@@ -2,7 +2,7 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix] [--full]
 //
-// 检查项（17 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
+// 检查项（18 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
@@ -20,6 +20,7 @@
 // 15. 附件占用可见性（各工作区 .ccm-uploads 体积；只报不删，见 doctor-checks.uploadsFootprintDiagnostic）
 // 16. 桌面端服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
 // 17. 配置格式可见性（legacy .env 恒 ok 非 warn——一等路径不催迁，只在此告知迁移能力，见 doctor-checks.configFormatDiagnostic）
+// 18. shell 环境变量覆盖可见性（env 恒压过配置文件而被压侧无症状；只列键名不回显值，见 doctor-checks.envOverrideDiagnostic）
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
@@ -41,8 +42,11 @@ import {
   serviceUnitsDiagnostic,
   statuslineBridgeDiagnostic,
   statuslineConfigDiagnostic,
+  envOverrideDiagnostic,
   uploadsFootprintDiagnostic,
 } from '../src/ops/doctor-checks.js';
+import { ENV_SCHEMA } from '../src/ops/env-schema.js';
+import { PASSTHROUGH_KEYS } from '../src/ops/config-file.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
 import { detectLang } from './setup.js';
@@ -445,6 +449,15 @@ function checkCoverageThreshold({ full = false } = {}) {
 // process.env，而 dotenv 默认不覆盖已存在的值，所以 process.env 恰好是「shell export 优先、.env 补充」
 // 的实际生效态。只读 .env 文件会漏掉 shell export 的开关（doctor 曾因只读文件而给出恒绿假 OK）。
 //
+// D18: shell env 覆盖可见性。键表＝ENV_SCHEMA 全部 key ∪ PASSTHROUGH_KEYS（CCM_DATA_DIR 等
+// 故意不进 UI 的键也会被 env 压过文件，恰恰更隐蔽）。快照取自 loadRuntimeEnvironment 之前，
+// 见 SHELL_ENV_SNAPSHOT 处注释。
+function checkEnvOverrides() {
+  const keys = [...Object.keys(ENV_SCHEMA), ...PASSTHROUGH_KEYS];
+  const d = envOverrideDiagnostic({ shellEnv: SHELL_ENV_SNAPSHOT, keys, lang: LANG });
+  (d.status === 'ok' ? ok : warn)(bi('环境变量覆盖', 'Shell env overrides'), d.detail);
+}
+
 // 三个开关的判定口径【故意不统一】，逐字对齐运行时，否则 doctor 报的和实际生效的不是一回事：
 //   LOG_INTERACTIONS 严格 === '1'（interaction-log.js:12）
 //   DEBUG_SDK_MESSAGES / LOG_STDERR 是 truthy（agent.js:428 / :144）
@@ -555,6 +568,9 @@ if (loaded.error) {
 } else if (loaded.source !== 'none') {
   console.log(bi(`已加载: ${loaded.path}`, `Loaded: ${loaded.path}`));
 }
+// D18 的快照必须取在 loadRuntimeEnvironment **之前**：加载后配置文件的值也进了 process.env，
+// 「shell 带来的」与「文件灌入的」就再也分不开了。只留浅拷贝，值仅用于「设没设」判定、绝不回显。
+const SHELL_ENV_SNAPSHOT = { ...process.env };
 try {
   loadRuntimeEnvironment(process.env, envArg ? { envFile } : { dir: HERE, quiet: true });
 } catch (err) {
@@ -601,6 +617,7 @@ function effectiveConfigFiles() {
   checkClaudeConfigDir();
   checkUploadsFootprint();
   checkServiceUnits();
+  checkEnvOverrides();
 
   // --fix 选项：自动修复权限
   if (shouldFix) {

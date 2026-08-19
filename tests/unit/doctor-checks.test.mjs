@@ -9,6 +9,7 @@ import {
   claudeConfigDirDiagnostic,
   computeReadiness,
   configFormatDiagnostic,
+  envOverrideDiagnostic,
   hooksBridgeDiagnostic,
   logSwitchDiagnostic,
   modelSettingsConflictDiagnostic,
@@ -702,5 +703,29 @@ test.describe('resolveServicePortOwner —— 三个条件缺一不可', () => {
     assert.equal(resolveServicePortOwner({ status: null, port: 3000 }), null);
     assert.equal(resolveServicePortOwner({ status: { units: [] }, port: 3000 }), null);
     assert.equal(resolveServicePortOwner({}), null);
+  });
+});
+
+test.describe('envOverrideDiagnostic —— shell env 压过配置文件的可见性', () => {
+  test('无覆盖 → ok', () => {
+    const d = envOverrideDiagnostic({ shellEnv: { PATH: '/usr/bin', HOME: '/Users/x' }, keys: ['PORT', 'DEV_MODE'], lang: 'zh' });
+    assert.equal(d.status, 'ok');
+  });
+
+  test('有覆盖 → warn，逐个列出键名，但绝不打印值（AUTH_TOKEN/VAPID 私钥可能就在其中）', () => {
+    const d = envOverrideDiagnostic({
+      shellEnv: { CF_ACCESS_TEAM: 'super-secret-team', DEV_MODE: '1', PATH: '/usr/bin' },
+      keys: ['CF_ACCESS_TEAM', 'DEV_MODE', 'PORT'],
+      lang: 'zh',
+    });
+    assert.equal(d.status, 'warn');
+    assert.match(d.detail, /CF_ACCESS_TEAM/);
+    assert.match(d.detail, /DEV_MODE/);
+    assert.equal(d.detail.includes('super-secret-team'), false, '值可能是密钥，只许出现键名');
+  });
+
+  test('空串按「未设置」口径不计（与 data-dir/normalizeLoadedEnvironment 同口径）', () => {
+    const d = envOverrideDiagnostic({ shellEnv: { PORT: '' }, keys: ['PORT'], lang: 'zh' });
+    assert.equal(d.status, 'ok');
   });
 });
