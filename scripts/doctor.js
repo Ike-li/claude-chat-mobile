@@ -43,6 +43,7 @@ import {
   statuslineBridgeDiagnostic,
   statuslineConfigDiagnostic,
   envOverrideDiagnostic,
+  identifySelfServer,
   uploadsFootprintDiagnostic,
 } from '../src/ops/doctor-checks.js';
 import { ENV_SCHEMA } from '../src/ops/env-schema.js';
@@ -142,8 +143,11 @@ function checkWorkDir() {
   const { result, from, filePath } = resolveWorkdirSource();
   if (!result && from === 'WORK_DIRS_FILE') warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath})`);
   if (result) {
-    for (const w of result.warnings) warn('WORK_DIRS', w);
-    for (const { path } of result.entries) checkOneDir('WORK_DIRS', path, true);
+    // 标签用**实际来源键名**（from：WORKDIRS / WORK_DIRS_FILE / WORK_DIRS），不再硬编码成旧的
+    // WORK_DIRS：新用户配的是 ccm.config.json 的 WORKDIRS，报成 WORK_DIRS 会让他去找一个
+    // 自己配置里根本不存在的键（2026-08-19 新装实测）。
+    for (const w of result.warnings) warn(from, w);
+    for (const { path } of result.entries) checkOneDir(from, path, true);
   }
 }
 
@@ -195,6 +199,24 @@ function servicePortOwner(port) {
   return resolveServicePortOwner({ status: readServiceStatus(), port });
 }
 
+// 取数：谁在 listen 这个端口（pid + 命令行 + cwd）。同样只取数，判定在 identifySelfServer。
+// 任何一步失败都返回空数组——认不出来只会退回原来的 fail 分支，不会误判成自己人。
+function listenerProcesses(port) {
+  try {
+    const pids = execFileSync('/usr/sbin/lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', timeout: 3000 })
+      .split('\n').map(s => s.trim()).filter(Boolean);
+    return pids.map((pid) => {
+      const command = execFileSync('/bin/ps', ['-o', 'command=', '-p', pid], { encoding: 'utf8', timeout: 3000 }).trim();
+      // lsof 的 cwd 行形如 `n/Users/you/code/…`（-F 输出，n 前缀是字段标记）
+      const cwd = execFileSync('/usr/sbin/lsof', ['-a', '-d', 'cwd', '-p', pid, '-Fn'], { encoding: 'utf8', timeout: 3000 })
+        .split('\n').find(l => l.startsWith('n'))?.slice(1) || null;
+      return { pid: Number(pid), command, cwd };
+    });
+  } catch {
+    return [];
+  }
+}
+
 // D4: PORT 未被占用（或被自家 server unit 占用——桌面端拉着服务时那是正常态，不是故障）
 async function checkPort() {
   const port = parseInt(process.env.PORT || '3000', 10);
@@ -212,7 +234,9 @@ async function checkPort() {
     setTimeout(() => { conn.destroy(); resolve({ probeError: '探测超时' }); }, 500); // 超时兜底
   });
   const ownerLabel = probe.occupied ? servicePortOwner(port) : null;
-  const r = portOccupancyDiagnostic({ port, ...probe, ownerLabel, lang: LANG });
+  // 托管服务认不出来时，再看看是不是本仓的 headless npm start（判定在 identifySelfServer，纯函数可测）。
+  const selfPid = probe.occupied && !ownerLabel ? (identifySelfServer({ processes: listenerProcesses(port), repoRoot: HERE })?.pid ?? null) : null;
+  const r = portOccupancyDiagnostic({ port, ...probe, ownerLabel, selfPid, lang: LANG });
   ({ ok, warn, fail })[r.status](r.name, r.detail);
 }
 

@@ -9,6 +9,7 @@ import {
   claudeConfigDirDiagnostic,
   computeReadiness,
   configFormatDiagnostic,
+  identifySelfServer,
   envOverrideDiagnostic,
   hooksBridgeDiagnostic,
   logSwitchDiagnostic,
@@ -724,8 +725,61 @@ test.describe('envOverrideDiagnostic —— shell env 压过配置文件的可�
     assert.equal(d.detail.includes('super-secret-team'), false, '值可能是密钥，只许出现键名');
   });
 
+  // 2026-08-19 真机证伪：机主照着旧提示跑了 exec zsh，doctor 输出一字未变——exec 只换进程映像，
+  // 环境原样继承。提示必须给「真能清掉」的动作，且带上具体键名可直接粘贴。
+  test('提示是可直接粘贴的 unset 命令，且绝不建议 exec', () => {
+    for (const lang of ['zh', 'en']) {
+      const d = envOverrideDiagnostic({
+        shellEnv: { CCM_DATA_DIR: '/tmp/x', LOG_TERMINAL: 'on' },
+        keys: ['CCM_DATA_DIR', 'LOG_TERMINAL'],
+        lang,
+      });
+      assert.match(d.detail, /unset CCM_DATA_DIR LOG_TERMINAL/, `${lang}: 要给带具体键名、可粘贴的命令`);
+      // 提到 exec 可以，但只能是「它没用」——绝不能把它作为解决办法给出去
+      if (/exec/.test(d.detail)) {
+        assert.match(d.detail, lang === 'zh' ? /exec[\s\S]{0,24}无效/ : /exec[\s\S]{0,40}fail/,
+          `${lang}: 出现 exec 时必须明说它无效`);
+      }
+    }
+  });
+
   test('空串按「未设置」口径不计（与 data-dir/normalizeLoadedEnvironment 同口径）', () => {
     const d = envOverrideDiagnostic({ shellEnv: { PORT: '' }, keys: ['PORT'], lang: 'zh' });
     assert.equal(d.status, 'ok');
   });
+});
+
+test.describe('identifySelfServer —— headless npm start 也要认得出是自家 server', () => {
+  const REPO = '/Users/you/code/claude-chat-mobile';
+
+  test('本仓的 node server.js（cwd 落在仓库根）→ 认领', () => {
+    const r = identifySelfServer({
+      processes: [{ pid: 39090, command: 'node server.js', cwd: REPO }],
+      repoRoot: REPO,
+    });
+    assert.deepEqual(r, { pid: 39090, cwd: REPO });
+  });
+
+  test('★ 隔壁仓库的同名 server.js → 不认领（本机 codex-chat-mobile 就是真实反例）', () => {
+    const r = identifySelfServer({
+      processes: [{ pid: 50021, command: 'node server.js', cwd: '/Users/you/code/codex-chat-mobile' }],
+      repoRoot: REPO,
+    });
+    assert.equal(r, null, '同名不等于同一个，cwd 对不上就不是自己');
+  });
+
+  test('无关进程 → 不认领', () => {
+    assert.equal(identifySelfServer({
+      processes: [{ pid: 1, command: 'nginx: master process', cwd: '/' }],
+      repoRoot: REPO,
+    }), null);
+    assert.equal(identifySelfServer({ processes: [], repoRoot: REPO }), null);
+  });
+});
+
+test('portOccupancyDiagnostic：端口被自家 headless server 占着是 ok，不再劝人「停掉它」', () => {
+  const d = portOccupancyDiagnostic({ port: 3000, occupied: true, selfPid: 39090, lang: 'zh' });
+  assert.equal(d.status, 'ok', 'headless npm start 是官方两条入口之一，不能恒红');
+  assert.match(d.detail, /39090/);
+  assert.equal(/停掉/.test(d.detail), false);
 });

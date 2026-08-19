@@ -498,7 +498,21 @@ export function resolveServicePortOwner({ status = null, port = null } = {}) {
 //
 // 旧实现把「端口连得上」无条件判成 fail。但常驻部署——文档主推、也是机主实际用的拓扑——下
 // 端口本来就该被自家 server 占着，于是 doctor 在生产机器上**恒红**一项。恒红的检查项等于没有检查项。
-export function portOccupancyDiagnostic({ port, occupied = false, ownerLabel = null, probeError = '', lang = 'zh' } = {}) {
+// 「占着端口的是不是本仓自己的 headless server」。resolveServicePortOwner 只认 launchd 托管那一种，
+// 而 headless `npm start` 是文档主推的两条入口之一——认不出它，D4 对 headless 用户就是恒红一项
+// （同本节头注那条「恒红的检查项等于没有检查项」，2026-08-19 新装演练实测撞上）。
+// cwd 必须比对：本机就跑着一个隔壁仓库的同名 node server.js（codex-chat-mobile），只匹配命令行会认错人。
+export function identifySelfServer({ processes = [], repoRoot = '' } = {}) {
+  for (const p of processes) {
+    const command = String(p?.command || '');
+    if (!/\bnode\b/.test(command) || !/server\.js/.test(command)) continue;
+    if (repoRoot && p?.cwd && p.cwd !== repoRoot) continue;
+    return { pid: p.pid, cwd: p.cwd || null };
+  }
+  return null;
+}
+
+export function portOccupancyDiagnostic({ port, occupied = false, ownerLabel = null, selfPid = null, probeError = '', lang = 'zh' } = {}) {
   const name = 'PORT';
   const n = Number(port);
   if (!Number.isInteger(n) || n < 1 || n > 65535) {
@@ -519,12 +533,21 @@ export function portOccupancyDiagnostic({ port, occupied = false, ownerLabel = n
         `Port ${n} is held by the desktop service ${ownerLabel} (expected; do not run npm start by hand)`),
     };
   }
+  if (selfPid) {
+    return {
+      status: 'ok',
+      name,
+      detail: bi(lang,
+        `端口 ${n} 由本仓的 headless server 占用（npm start，PID ${selfPid}）—— 已经在跑了，不用再启一个`,
+        `Port ${n} is held by this repo's headless server (npm start, PID ${selfPid}) — it is already running; do not start another`),
+    };
+  }
   return {
     status: 'fail',
     name,
     detail: bi(lang,
-      `端口 ${n} 已被占用，且不是桌面端装的服务。若是另一个 npm start，先停掉它；否则查是谁：lsof -nP -iTCP:${n} -sTCP:LISTEN`,
-      `Port ${n} is taken by something other than the desktop service. If it is another npm start, stop that one; otherwise find it with: lsof -nP -iTCP:${n} -sTCP:LISTEN`),
+      `端口 ${n} 已被占用，且既不是桌面端装的服务、也不是本仓的 npm start。查是谁：lsof -nP -iTCP:${n} -sTCP:LISTEN`,
+      `Port ${n} is taken by something that is neither the desktop service nor this repo's npm start. Find it with: lsof -nP -iTCP:${n} -sTCP:LISTEN`),
   };
 }
 
@@ -544,14 +567,20 @@ export function envOverrideDiagnostic({ shellEnv = {}, keys = [], lang = 'zh' } 
         'No shell environment variables override the config file (what the file says is what runs)'),
     };
   }
+  // 清除方式只给「真能清掉」的两条。**别建议 exec**：exec 只换进程映像、环境原样继承
+  // （2026-08-19 机主照旧提示跑 exec zsh，doctor 输出一字未变）。同理开新标签页也没用——
+  // 变量若在终端 app 进程上，每个新标签页都继承，只有整个 app 退出重开才换得掉。
+  const unsetCmd = `unset ${hits.join(' ')}`;
   return {
     status: 'warn',
     detail: bi(lang,
       `${hits.length} 个配置项被 shell 环境变量压过配置文件（env 恒优先）：${hits.join('、')} —— `
-      + '文件里改这些项不会生效。若非有意设置，在启动 server 的终端里跑 '
-      + '`env | grep -E "CCM_|CF_ACCESS|WORK_DIR|LOG_|DEV_MODE|VAPID|PORT"` 定位来源，或 exec zsh 重开会话',
+      + `文件里改这些项不会生效。若非有意设置，在启动 server 的终端里跑 \`${unsetCmd}\` 清掉它们`
+      + '（exec zsh 与开新标签页都无效：环境跨 exec 继承、新标签页继承终端 app 本身的环境，'
+      + '要根治得把终端 app 整个退出再打开）',
       `${hits.length} config key(s) are overridden by shell environment variables (env always wins): ${hits.join(', ')} — `
-      + 'editing them in the config file has no effect. If unintended, run '
-      + '`env | grep -E "CCM_|CF_ACCESS|WORK_DIR|LOG_|DEV_MODE|VAPID|PORT"` in the terminal that starts the server, or exec a fresh shell'),
+      + `editing them in the config file has no effect. If unintended, run \`${unsetCmd}\` in the terminal that starts the server`
+      + ' (exec zsh and opening a new tab both fail: the environment survives exec, and new tabs inherit it from the terminal'
+      + ' app itself — quit and reopen the terminal app to clear it for good)'),
   };
 }

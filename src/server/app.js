@@ -3328,7 +3328,10 @@ httpServer.listen(port, host, () => {
       }
       console.log(`  公网:   先跑 cloudflared tunnel --url http://localhost:${port}`);
       console.log(`          再开 https://<随机域名>.trycloudflare.com/#token=<YOUR_TOKEN>  ← 装 PWA 走这条（需 https）`);
-      console.log(`  💡 提示: Token 已掩码显示，完整 token 在 .env 中查看（或删除 data/sessions.json 重启显示完整 URL）`);
+      // 文件名与路径都按**实际生效的那份**给：写死 `.env` / `data/sessions.json` 会让用新格式
+      // 或搬过数据目录（CCM_DATA_DIR）的用户去翻一个不存在的文件（2026-08-19 新装实测）。
+      console.log(`  💡 提示: Token 已掩码显示，完整 token 在 ${usingConfigJson() ? CONFIG_FILE_NAME : '.env'} 中查看`
+        + `（或删除 ${join(DATA_DIR, 'sessions.json')} 重启显示完整 URL）`);
     }
   }
   console.log('========================================');
