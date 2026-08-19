@@ -59,7 +59,7 @@ npm run setup
 The wizard:
 
 1. Creates a random `AUTH_TOKEN`, writes it to `ccm.config.json`, and sets mode `0600`.
-2. Asks for `WORK_DIR`. It must be an absolute project path; an empty answer or your home directory is rejected.
+2. Asks which project folder should open on your phone. It must be an absolute (or `~/`) path; an empty answer or your home directory itself is rejected. After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, with the first as the default `WORK_DIR`. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
 3. Asks whether to install the CLI hooks bridge. Installation is the default, but it writes `~/.claude/settings.json` only after you confirm.
 4. On macOS, asks whether to compile the [desktop console](#optional-macos-desktop-console). Not compiled by
    default — it needs the Xcode Command Line Tools.

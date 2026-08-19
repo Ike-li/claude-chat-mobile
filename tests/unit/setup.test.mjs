@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan, normalizeSetupWorkDir, promptWorkDir, describeOverwrite, runInteractive, runNonInteractive, MESSAGES } from '../../scripts/setup.js';
+import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan, normalizeSetupWorkDir, promptWorkDir, promptWorkDirs, describeOverwrite, runInteractive, runNonInteractive, MESSAGES } from '../../scripts/setup.js';
 
 const SETUP = new URL('../../scripts/setup.js', import.meta.url);
 
@@ -449,4 +449,50 @@ test('CLI：--help 在无 TTY 下 exit 0 并打印用法', () => {
   });
   assert.equal(res.status, 0, res.stderr);
   assert.match(res.stdout, /--work-dir=/);
+});
+
+test.describe('promptWorkDirs —— 向导支持一次登记多个工作区', () => {
+  test('首个必填；追加可选，空回车结束；写入顺序保持、重复去重', async () => {
+    const first = ['/Users/you/code/app'];
+    const extras = ['/Users/you/code/tools', '/Users/you/code/app', '   ', '不会问到这里'];
+    let f = 0; let e = 0;
+    const r = await promptWorkDirs(
+      async () => first[f++],
+      async () => extras[e++],
+      { home: '/Users/you' },
+    );
+    assert.equal(r.ok, true);
+    assert.equal(r.workDir, '/Users/you/code/app', 'WORK_DIR = 第一个（默认工作区）');
+    assert.deepEqual(r.workDirs, ['/Users/you/code/app', '/Users/you/code/tools'], '重复项去重、空回车即止');
+    assert.equal(e, 3, '空回车后不再追问');
+  });
+
+  test('追加目录无效（相对路径/家目录）→ 报原因后继续问，不炸整个向导', async () => {
+    const invalids = [];
+    const extras = ['relative/path', '~', '/Users/you/code/b', ''];
+    let e = 0;
+    const r = await promptWorkDirs(
+      async () => '/Users/you/code/a',
+      async () => extras[e++],
+      { home: '/Users/you', onInvalid: ({ code }) => invalids.push(code) },
+    );
+    assert.deepEqual(r.workDirs, ['/Users/you/code/a', '/Users/you/code/b']);
+    assert.deepEqual(invalids, ['work_dir_not_absolute', 'work_dir_is_home']);
+  });
+
+  test('首个就不合法且重试耗尽 → 失败原样上抛（与 promptWorkDir 同契约）', async () => {
+    const r = await promptWorkDirs(async () => '', async () => '', { home: '/Users/you', maxAttempts: 2 });
+    assert.equal(r.ok, false);
+    assert.equal(r.code, 'work_dir_required');
+  });
+});
+
+test('buildConfigContent：给了 workDirs 就写 WORKDIRS 数组（自文档化，供日后手动增删），WORK_DIR 仍是默认那个', () => {
+  const parsed = JSON.parse(buildConfigContent({
+    authToken: 'x',
+    workDir: '/Users/you/code/app',
+    workDirs: ['/Users/you/code/app', '/Users/you/code/tools'],
+  }));
+  assert.equal(parsed.WORK_DIR, '/Users/you/code/app');
+  assert.deepEqual(parsed.WORKDIRS, ['/Users/you/code/app', '/Users/you/code/tools']);
 });

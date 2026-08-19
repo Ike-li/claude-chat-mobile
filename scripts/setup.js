@@ -39,10 +39,14 @@ export function generateToken(bytes = 32) {
 // 退役——它面向的人群在新格式成为默认后趋近于零；读取已存在 .env 的回落链不受影响，
 // 见 src/ops/config-file.js）。值里的空格 / 引号 / 反斜杠交给 JSON.stringify，不需要
 // .env 时代那套「同时满足 dotenv 与 shell 两个解析器」的字符白名单。
-export function buildConfigContent({ authToken, workDir } = {}) {
+export function buildConfigContent({ authToken, workDir, workDirs } = {}) {
   const config = applyConfigChanges({}, {
     ...(authToken ? { AUTH_TOKEN: authToken } : {}),
     ...(workDir ? { WORK_DIR: workDir } : {}),
+    // 向导登记的全部工作区。即使只有一个也写出来：让 WORKDIRS 这个键出现在文件里，
+    // 用户日后想加项目时打开配置一眼就能看到往哪加（热加载，保存即生效），
+    // 不用先去读文档考古出这个键名——2026-08-19 新用户实测的困惑正是「不知道有没有/怎么设多个」。
+    ...(Array.isArray(workDirs) && workDirs.length ? { WORKDIRS: workDirs } : {}),
   });
   return `${JSON.stringify(config, null, 2)}\n`;
 }
@@ -105,6 +109,26 @@ export async function promptWorkDir(ask, { home = homedir(), maxAttempts = 3, on
   return last;
 }
 
+// 交互向导问工作区列表：第一个必填（即 WORK_DIR，手机端默认打开的目录），其后可选追加，
+// 空回车结束。追加项无效只报原因继续问、不炸整个向导；重复项去重。循环有硬上限：
+// ask 若因 stdin 关闭恒返回非空垃圾，没有上限就是死循环（同 promptWorkDir 的 EOF 教训）。
+export async function promptWorkDirs(ask, askMore, { home = homedir(), maxAttempts = 3, onInvalid } = {}) {
+  const first = await promptWorkDir(ask, { home, maxAttempts, onInvalid });
+  if (!first.ok) return first;
+  const dirs = [first.workDir];
+  for (let i = 0; i < 20; i += 1) {
+    const raw = String((await askMore()) ?? '').trim();
+    if (!raw) break;
+    const r = normalizeSetupWorkDir(raw, { home });
+    if (!r.ok) {
+      onInvalid?.({ code: r.code });
+      continue;
+    }
+    if (!dirs.includes(r.workDir)) dirs.push(r.workDir);
+  }
+  return { ok: true, workDir: dirs[0], workDirs: dirs };
+}
+
 // 把参数 + 磁盘现状（.env 是否已存在）解析成一份可执行计划，或一条拒绝理由。
 // 交互模式下未给的项留 undefined = 「待询问」；非交互模式下必须全部落定。
 export function resolveSetupPlan({ args, envExists = false, platform = process.platform, isTty = true, home = homedir() } = {}) {
@@ -160,8 +184,11 @@ export const MESSAGES = {
     cancelled: '已取消，现有配置未改动。',
     tokenLabel: '已生成 AUTH_TOKEN（手机访问必需）',
     tokenWrittenSuffix: '…（已写入 %s）',
-    workDirLabel: 'claude 工作目录 WORK_DIR',
-    workDirHint: '(必须是绝对路径，不能是家目录)',
+    workDirLabel: '手机端要打开哪个项目目录？',
+    workDirHint: '(claude 会话将在这个目录里读写代码。填绝对路径或 ~/ 路径；不能是家目录本身。稍后还能追加更多)',
+    moreDirPrompt: '再加一个项目目录？(可选，直接回车结束)',
+    workdirsSummary: n => `已登记 ${n} 个工作区，第一个是默认打开的`,
+    workdirsHint: '以后增删工作区：改 ccm.config.json 里的 WORKDIRS 数组即可，保存即生效（热加载，免重启）；也可在手机端「设置」里改。',
     wroteLabel: '已写入',
     permNote: '(权限 0600)',
     nextSteps: '下一步:',
@@ -208,8 +235,11 @@ export const MESSAGES = {
     cancelled: 'Cancelled. Your existing config was left untouched.',
     tokenLabel: 'Generated AUTH_TOKEN (required for phone access)',
     tokenWrittenSuffix: '… (written to %s)',
-    workDirLabel: 'claude working directory WORK_DIR',
-    workDirHint: '(absolute path required; not your home directory)',
+    workDirLabel: 'Which project folder should open on your phone?',
+    workDirHint: '(claude sessions will read and write code there. Absolute or ~/ path; not your home directory itself. You can add more next)',
+    moreDirPrompt: 'Add another project folder? (optional; press Enter to finish)',
+    workdirsSummary: n => `Registered ${n} workspace(s); the first one opens by default`,
+    workdirsHint: 'To add or remove workspaces later, edit the WORKDIRS array in ccm.config.json — it hot-reloads on save (no restart). The phone Settings page can edit it too.',
     wroteLabel: 'Wrote',
     permNote: '(mode 0600)',
     nextSteps: 'Next steps:',
@@ -260,14 +290,18 @@ const c = {
 //
 // 注意成功提示的位置：token 那行必须在 writeOwnerOnlyFile 之后才打印。旧实现先打印
 // 「✓ 已生成 AUTH_TOKEN（已写入 .env）」再去问 WORK_DIR，被 EOF/Ctrl-C 打断时一个字没写却已经报了成功。
-function writeSetupFile({ outPath, workDir, t }) {
+function writeSetupFile({ outPath, workDir, workDirs, t }) {
   const token = generateToken();
   // 结构化构造没有旧模板替换那种「正则没匹配上就静默不生效」的失败模式，无需写后校验。
-  writeOwnerOnlyFile(outPath, buildConfigContent({ authToken: token, workDir: workDir || undefined }));
+  writeOwnerOnlyFile(outPath, buildConfigContent({ authToken: token, workDir: workDir || undefined, workDirs }));
 
   const written = t.tokenWrittenSuffix.replace('%s', basename(outPath));
   console.log(`\n${c.green('✓')} ${t.tokenLabel}: ${c.dim(token.slice(0, 8) + written)}`);
   console.log(`${c.green('✓')} ${t.wroteLabel} ${c.bold(outPath)} ${c.dim(t.permNote)}`);
+  if (Array.isArray(workDirs) && workDirs.length) {
+    console.log(`${c.green('✓')} ${t.workdirsSummary(workDirs.length)}`);
+    console.log(c.dim(`  ${t.workdirsHint}`));
+  }
 }
 
 // CLI hooks 桥安装（两条路径共用）。写的是用户全局 ~/.claude/settings.json，故只在明确要装时才调。
@@ -322,19 +356,21 @@ export async function runInteractive({ plan, outPath, existingConfig, t }, deps 
       }
     }
 
-    // WORK_DIR：命令行已给就不问（给错了直接拒，交互里不替它「救」一个显式参数）。
-    // 自己键入的则问到对为止——空回车 / 家目录一律拒绝，与非交互同一条硬规则。
+    // 工作区：命令行已给就不问（给错了直接拒，交互里不替它「救」一个显式参数）。
+    // 自己键入的则问到对为止——空回车 / 家目录一律拒绝，与非交互同一条硬规则；
+    // 首个之后可追加更多目录（2026-08-19 新用户实测：只问一个目录会让人以为手机端只能配一个项目）。
     const workDirNorm = plan.workDir
       ? normalizeSetupWorkDir(plan.workDir)
-      : await promptWorkDir(
+      : await promptWorkDirs(
         async () => (await rl.question(`\n${t.workDirLabel} ${c.dim(t.workDirHint)}: `)).trim(),
+        async () => (await rl.question(`${t.moreDirPrompt}: `)).trim(),
         { onInvalid: ({ code }) => console.error(`✗ ${t.refuse[code]()}`) },
       );
     if (!workDirNorm.ok) {
       console.error(`✗ ${t.refuse[workDirNorm.code]()}`);
       return;
     }
-    writeFile({ outPath, workDir: workDirNorm.workDir, t });
+    writeFile({ outPath, workDir: workDirNorm.workDir, workDirs: workDirNorm.workDirs, t });
 
     // CLI hooks 桥：默认装（终端直跑的会话唯有装了它才能推到手机——轮询只能在你已经打开
     // app 时追平镜像，永远不会主动叫你）。默认 Y 但必须问：它写的是用户全局 ~/.claude/settings.json。

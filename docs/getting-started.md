@@ -59,7 +59,7 @@ npm run setup
 向导会：
 
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
-2. 询问 `WORK_DIR`。必须填一个项目的绝对路径；空回车和家目录都会被拒绝。
+2. 询问「手机端要打开哪个项目目录」。必须填绝对路径（或 `~/` 路径）；空回车和家目录本身都会被拒绝。首个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，第一个作为默认打开的 `WORK_DIR`。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
 3. 询问是否安装 CLI hooks bridge。默认安装，但只有你确认后才会写 `~/.claude/settings.json`。
 4. macOS 上还会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
    Xcode Command Line Tools。
