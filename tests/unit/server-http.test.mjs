@@ -331,7 +331,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
     const app = { use: () => {}, get: (p, ...h) => routes.set(String(p), h) };
     configureHttpShell({ app, projectRoot: root, isAccessEnabled: () => false, ...options });
 
-    const handlers = routes.get(String(/^\/js\/.+\.js$/));
+    const handlers = routes.get(String(/^\/js\/.+\.js$/i));
     assert.ok(handlers, '未注册 /js/** 子模块路由');
     const run = path => {
       const out = { status: 200, body: null, headers: new Map(), nextCalled: false };
@@ -391,6 +391,24 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
 
   test('/js/app.js 让给上面的专用路由', () => {
     assert.equal(mount().run('/js/app.js').nextCalled, true);
+  });
+
+  // CodeQL js/case-sensitive-middleware-path：Express 字符串路径默认大小写不敏感，
+  // 正则默认敏感。不带 i 时 /JS/app/sub.js 绕过改写落到 static，在大小写不敏感的
+  // 文件系统上发出未戳 ?v= 的源码（模块双实例）。
+  test('大小写折叠的 /JS/**.js 仍走改写路由，不落到 static', () => {
+    const { run } = mount({ hotReloadJs: false });
+    for (const path of ['/JS/app/sub.js', '/js/APP/SUB.JS', '/Js/App/Sub.JS']) {
+      const out = run(path);
+      assert.equal(out.nextCalled, false, `${path} 落到了 static`);
+      assert.equal(out.status, 200, path);
+      assert.match(out.body, /BUILD = 'startup'/);
+      assert.match(out.body, /from '\.\.\/logic\.js\?v=[0-9a-f]{8}'/);
+    }
+  });
+
+  test('大小写折叠的 /JS/APP.JS 仍让给专用路由', () => {
+    assert.equal(mount().run('/JS/APP.JS').nextCalled, true);
   });
 
   // ★ 2026-08-04 code review：ASSET_HOT_RELOAD=1 只接了 /js/** 子模块那条路由，

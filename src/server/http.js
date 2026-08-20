@@ -274,9 +274,12 @@ export function configureHttpShell({
     console.log(`[assets] /js/** ${selfJsSources.size} 个子模块已在启动时读入并戳版本 ${assetVersion}；`
       + '改前端源码需重启本进程才生效（开发期设 ASSET_HOT_RELOAD=1 可改为逐请求读盘）');
   }
-  app.get(/^\/js\/.+\.js$/, (req, res, next) => {
-    if (req.path === '/js/app.js') return next(); // 上面专用路由已处理
-    const rel = req.path.replace(/^\/js\//, '');
+  // `i`：Express 字符串路径默认大小写不敏感，正则默认敏感。不带 i 时 /JS/foo.js
+  // 绕过本路由落到 static；在大小写不敏感的文件系统上会发出未戳 ?v= 的源码。
+  // CodeQL js/case-sensitive-middleware-path。
+  app.get(/^\/js\/.+\.js$/i, (req, res, next) => {
+    const rel = req.path.replace(/^\/js\//i, '').toLowerCase();
+    if (rel === 'app.js') return next(); // 上面专用路由已处理
     if (rel.includes('..')) return res.status(400).end();
     const source = hotReloadJs ? readSelfJsSource(rel) : selfJsSources.get(rel);
     if (source === undefined) return next(); // 交给 static 404

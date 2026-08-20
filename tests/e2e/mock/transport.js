@@ -81,7 +81,7 @@ export function createMockTransport({
   // 模块，两份 logic.js 各自 import 出一份 i18n.js，setLang() 只作用在其中一份。纯函数看不出问题，
   // 一旦子模块调到依赖 i18n 模块级 currentLang 的东西（如 t()），语言就永远停在默认值。
   // 正则须吃 `../`（`\.\.?\/`）：只认 `./` 会漏掉 app/*.js 里的 `../logic.js`，那正是本段要防的形态。
-  app.get(/^\/js\/.+\.js$/, (req, res, next) => {
+  app.get(/^\/js\/.+\.js$/i, (req, res, next) => {
     const rel = req.path.slice('/js/'.length);
     if (rel.includes('..')) return next();
     let source;
