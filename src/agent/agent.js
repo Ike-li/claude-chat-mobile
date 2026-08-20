@@ -39,6 +39,48 @@ const RATE_LIMIT_LABELS = Object.freeze({
   seven_day_overage_included: 'Fable 5 额度',
   overage: '用量信用额度',
 });
+
+// 额度墙的第二条投递形态。CLI 撞墙时并不总发 `rate_limit_event`：主循环（以及子 agent）被拒时，
+// 墙是塞在 assistant 消息顶层的 `quotaLimits` 里、连同 error='rate_limit' / isApiErrorMessage
+// / apiErrorStatus=429 一起来的（2.1.235、2.1.236 实测形态见 agent-quota-wall.test.mjs 的真机夹具）。
+// 于是 case 'rate_limit_event' 那条中文标签通道整个落空，用户只拿到 content 里的一句英文原文
+// （"You've hit your session limit · resets 10am"），而结构化的额度类型/重置时刻/超额是否可用全被丢弃。
+//
+// 后果不只是「英文」：随后的 result 仍是 subtype='success'，前端照常渲染成回合正常完成。
+// 2026-08-20 真机复现——一轮跑了 683 秒的活撞墙作废，手机端却显示成功，正文还是 9 分钟前那条
+// 无关的旧回复，用户完全无从知道自己撞了墙、更不知道何时能继续。
+//
+// 这里只把结构化字段翻成与 rate_limit_event 同源的中文措辞（保持两条路径口径一致），
+// 不改 error/result 的既有语义——那条 emit('error') 仍照旧发出，透传上游原文不动。
+function formatQuotaWall(quota) {
+  if (!quota || typeof quota !== 'object' || quota.status !== 'rejected') return null;
+  const parts = [`已达${RATE_LIMIT_LABELS[quota.rateLimitType] || '用量'}上限`];
+  const reset = formatResetClock(quota.resetsAt);
+  if (reset) parts.push(`${reset}重置`);
+  // 超额用量被组织禁用时，「等重置」是唯一出路。不说出来，用户会以为是自己配置错了而去翻设置。
+  if (quota.overageStatus === 'rejected' && !quota.unifiedRateLimitFallbackAvailable) {
+    parts.push('超额用量不可用');
+  }
+  return parts.join('，');
+}
+
+// resetsAt → 本地时钟。2.1.235/2.1.236 实测为**秒级** unix 时间戳（8/20 那次 1787238000 = 当地 10:00，
+// 与 CLI 自己印的 "resets 10am" 逐字对上）。仍按量级归一：同族字段在 SDK 其他消息里有毫秒口径的先例，
+// 判错一个数量级会把「10:00 重置」显示成 1970 年，比不显示更糟。
+function formatResetClock(resetsAt) {
+  const raw = Number(resetsAt);
+  if (!Number.isFinite(raw) || raw <= 0) return null;
+  const at = new Date(raw < 1e11 ? raw * 1000 : raw);
+  if (Number.isNaN(at.getTime())) return null;
+  const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  // 七天窗的重置点常在几天后，只印 hh:mm 会读成「今天」。跨日才补日期，同日保持简短。
+  const now = new Date();
+  const sameDay = at.getFullYear() === now.getFullYear()
+    && at.getMonth() === now.getMonth()
+    && at.getDate() === now.getDate();
+  return sameDay ? hhmm : `${at.getMonth() + 1}/${at.getDate()} ${hhmm}`;
+}
+
 const TOOL_SUMMARY_CAP_BASH = 2000; // Bash/命令类输出用户常要多看几行
 // ③：文件类工具——tool_use 额外缓存完整 input（供预览无损重建 diff）+ emit 未截断 path（供前端给预览入口）。
 const FILE_TOOLS = new Set(['Edit', 'Write', 'Read', 'MultiEdit', 'NotebookEdit']);
@@ -2406,7 +2448,12 @@ export class AgentSession {
               .filter(b => b?.type === 'text' && b.text)
               .map(b => b.text).join('\n').trim();
             const who = subType ? `子 agent ${subType}` : '子 agent';
-            this.emitNotice(`${who}：${detail || `API 错误：${msg.error}`}`, 'warning');
+            // 子 agent 撞墙同样带 quotaLimits，且这里连英文原文都常被 CLI 包成
+            // "Agent terminated early due to an API error: …" 的长段落，重置时刻淹在里面。
+            // 摘要拼在正文之前，一眼能看到「什么额度、几点恢复」。
+            const subQuota = formatQuotaWall(msg.quotaLimits);
+            const body = detail || `API 错误：${msg.error}`;
+            this.emitNotice(`${who}：${subQuota ? `${subQuota}。${body}` : body}`, 'warning');
             break;
           }
           // 同上一处（主 agent 那条 content 循环）的理由：`?? []` 挡不住"非数组的对象"，for-of 会抛。
@@ -2463,6 +2510,11 @@ export class AgentSession {
           const detail = asArray(msg.message?.content)
             .filter(b => b?.type === 'text' && b.text)
             .map(b => b.text).join('\n').trim();
+          // 额度墙先行一条中文摘要（见 formatQuotaWall 上方注释）：英文原文照旧透传给下面的 error，
+          // 这里只补它没有的东西——额度类型、重置时刻、超额是否可用。放在 error 之前是因为前端
+          // error(p) 会 setBusy(false) 收束本轮，之后到达的事件在「已结束」的回合尾部读起来像新内容。
+          const quotaNotice = formatQuotaWall(msg.quotaLimits);
+          if (quotaNotice) this.emitNotice(quotaNotice, 'warning');
           this.emit('error', { message: detail || `API 错误：${msg.error}`, recoverable: true });
           // ⚠️ 此处【不】减 pendingTurns——整套配平依赖「轮⇒result 假设」：每个已启动轮次恰好产出一个
           // result（成功/报错/被中断都算），由随后的 result 事件减掉本轮。若某 SDK/网关版本把终态 API 错误
