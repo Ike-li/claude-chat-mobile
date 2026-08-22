@@ -12,6 +12,16 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 **产品立场 n=1 自托管**（单机主、无多租户）。硬性规则、n=1 取舍、已决「不做」的技术债（AD-5 / SP-10 等）见 [docs/hard-rules.md](docs/hard-rules.md)。历史 design 文档已下线，以该文 + 实现为准。
 
+## 代码地图与模块边界
+
+后端 `src/` 按域分层：`agent/`（SDK 会话驱动 agent.js、审批生命周期/存储、CLI 镜像态判定）· `sessions/`（会话注册表、transcript 历史与 catchUp 在 history.js、工作区、「需要你」聚合）· `server/`（组装根：app.js 存量顶层态、http/socket 接线、instance-* 多实例管理、mirror-engine 只读镜像、hooks 投递箱）· `auth/`（AUTH_TOKEN 限速、CF Access、设备指纹/信任门）· `files/`（浏览/预览/搜索/上传、git 变更、工作区范围门）· `ops/`（配置 env-schema/config-file、doctor、通知与推送通道、statusline 与额度快照、metrics、审计、两个 CLI 桥的 server 侧、受管服务 service-*）· `shared/`（叶子工具层；protocol.js 是事件契约真相源）。
+
+边界是 `scripts/check-import-boundaries.js` 的硬闸（check 一环），不是口头约定：前后端互不 import（唯一豁免 `public/js/canonicalize.js`，指纹规范化两侧共用）· `src/shared` 是叶子，不得反向 import 其他后端域 · `src/server` 是组装根，只有 server.js 与它自身能 import 它 · 运行时代码禁止 import `scripts/`（全部是维护者工具，非运行时）与 `tests/` · 零循环依赖。
+
+前端三层：`public/js/app.js`（存量编排层）→ `public/js/app/*`（域模块，见上）→ `public/js/logic/*`（**纯决策函数：数据进数据出，不碰 DOM/window/socket/应用可变态，唯一宿主外 import 是 `i18n.js`；浏览器与 `tests/unit/logic-*.test.mjs` 的 node:test 零构建共用同一份文件**。新前端逻辑能写成纯函数就先落这里；`logic.js` 仅是 re-export barrel）。`desktop/` 是 macOS 菜单栏 app（Swift）+ launchd 模板。
+
+文档索引：[docs/architecture.md](docs/architecture.md)（双通道/单驾驶员/回放详解）· [docs/display-contracts.md](docs/display-contracts.md)（模型/effort/statusline 展示语义；改契约先改 `tests/unit/display-contracts.test.mjs`）· [docs/deployment.md](docs/deployment.md)（常驻/隧道/CF Access 运维）· [docs/getting-started.md](docs/getting-started.md)（装机教程）· [docs/repository-map.md](docs/repository-map.md)（**生成物**，全文件清单与归类）· README.md（产品入口，含安全模型）。增/删/移动文件后跑 `npm run inventory:update` 重新生成 repository-map，否则 check 里的 inventory:check 拒未分类文件。`AGENTS.md` 是指向本文件的符号链接（Codex 同源读取），改这一份即可。
+
 ## 分支纪律
 
 **日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`）。
@@ -21,7 +31,7 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 ## 测试跑在哪：宿主机只跑白名单，其余进容器
 
 **宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`
-（钩子的白名单还含同源别名：`lint:fix`、`test:visual`、`test:playwright`、`test:playwright:p0`，见 `scripts/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
+（钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`test:playwright:p0`、`app:test`，见 `scripts/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
 前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
 已核实不碰 `~/.claude`）。
 
@@ -66,13 +76,22 @@ RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）
 npm run test:visual # test:e2e 的兼容别名
 
+# 装机与配置
+npm run setup      # 交互装机向导（写 ccm.config.json；可选功能逐项问；非交互下会动全局的项缺省 off、危险回落直接拒绝——见 hard-rules §1）
+node scripts/config.js get|set|unset|check|migrate|schema   # headless 配置 CLI（与 web 配置面板同一读写源 config-file.js；secret 明文须显式 --reveal）
+
 # 启动前自检配置
-node scripts/doctor.js              # 启动自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/CLI statusline bridge 安装态/CLI hooks 桥安装态/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率/桌面端服务安装态
+node scripts/doctor.js              # 启动自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/CLI statusline bridge 安装态/CLI hooks 桥安装态/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率/桌面端服务安装态/shell env 压过文件配置时列出键名
 node scripts/doctor.js --env=prod.env  # 指定 .env 文件
+
+# 两个 CLI 桥（可选、显式安装，动 ~/.claude；一键卸载会对称移除）
+npm run statusline:install|status|uninstall    # statusline 桥：把 CLI 会话的 statusline 数据落成快照，供 web 只读镜像展示
+npm run hooks:install|status|verify|uninstall  # hooks 桥：把「回合结束/需要你」的轮询变即时信号（机制见概述段）
 
 # macOS 桌面端（第二条入口；下面 service:* 是它背后的 CLI，一般不用手敲）
 npm run app:install                 # 编译并装进 /Applications —— Spotlight/Launchpad 可搜；升级后菜单点「重启应用」
 npm run app:build                   # 只编译到 desktop/build/CCM.app，不装系统目录
+#   ⚠️ 改 desktop/*.swift 后 check 全绿 ≠ 编译通过：check 里的 app:test 只编 CCMCore + 断言集，菜单栏与两个窗口 .swift 要 app:build 才编到
 npm run service:status              # 各 unit 的运行态/归属/漂移；--json 供菜单栏与 doctor 消费
 npm run service:install|adopt|restart|logs|health   # adopt=接管手工安装（只写 manifest 不碰 plist）；uninstall 须 --yes
 npm run uninstall -- [--purge] [--dry-run] --yes    # 一键卸载（受管服务+残留 menubar 进程+CCM.app+偏好域+两个桥+~/.claude/ccm；--purge 连数据根白名单/配置/受管日志）；只删产品自己装的，manifest 外的 unit/~/.cloudflared/~/.claude/projects 永不碰
