@@ -454,7 +454,6 @@ function collectInboundEvents(rootDir, dirs, kind) {
 // mock ⊆ contract（mock 不许发明事件），不查 contract ⊆ mock，于是"少实现"永远静默。
 const MOCK_INBOUND_EXEMPT = Object.freeze({
   'dev:restart': '真重启进程，mock server 无法在自己身上模拟；拒绝路径由 server.test.mjs「DEV_MODE 关闭时拒绝」覆盖',
-  'doctor:run': '跑本机自检（读真实 .env / CLI / 权限位），mock 没有可自检的运行时；逻辑由 doctor-checks/doctor-runtime 单测覆盖',
   'mirror:syncNow': '手动催一次 catchUp 追平，依赖真实 transcript 轮询；mock 无磁盘镜像，判定链由 mirror-engine 单测覆盖',
   'session:delete': '两级删除要真删磁盘 transcript；由 session-delete.test.mjs 集成测试覆盖',
   'session:deletePermanent': '同 session:delete',

@@ -217,6 +217,8 @@ export const EN_DICT = Object.freeze({
   '点按复制完整 session id': 'Tap to copy the full session id',
   '新设备怎么批 · 令牌在哪 · 连不上怎么办 →': 'Approving devices · where the token is · connection help →',
   '🔍 安全体检 · 公网暴露前自查 →': '🔍 Security check · self-audit before going public →',
+  '🔍 安全体检 · 收起结果 ▲': '🔍 Security check · hide results ▲',
+  '▲ 收起体检结果': '▲ Hide check results',
   '📊 服务状态 · 运行时长 / 版本 / 告警 →': '📊 Service status · uptime / version / alerts →',
   '⚙ 服务与配置 · 端口 / 工作目录 / 推送 →': '⚙ Service & config · port / work dir / push →',
   'GitHub 仓库 · 源码 / Issue / Star →': 'GitHub repo · source / issues / star →',

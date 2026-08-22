@@ -1307,12 +1307,28 @@ import { createSessionDeleteController } from './app/session-delete.js';
   const cfgRefreshBtn = $('btnConfigRefresh');
   wireConfigRefreshButton(cfgRefreshBtn, cfgRefreshBtn?.querySelector('[data-spin]') || cfgRefreshBtn);
 
-  if ($('btnSecurityCheck')) $('btnSecurityCheck').onclick = () => {
-    const box = $('doctorReport');
-    box.classList.remove('hidden');
-    box.replaceChildren();
-    const loading = el(`<div class="text-ink-faint"></div>`); loading.textContent = t('🔍 体检中…'); box.appendChild(loading);
-    socket.emit('doctor:run', {}, rep => renderDoctor(rep, box));
+  // 展开/收起共用同一个入口：报告是十几行的长列表（还带 WHITELIST 明细），只给"展开"就没有回程
+  // 路径——诊断区另两个入口是 bottom sheet 自带 ✕，唯独这块是内联展开，展开后把设置列表顶出屏幕。
+  // 尾部再挂一个同源收起行：长报告看完停在底部，不必滚回按钮。
+  const btnSecurityCheck = $('btnSecurityCheck'), doctorBox = $('doctorReport');
+  function setDoctorOpen(open) {
+    doctorBox.classList.toggle('hidden', !open);
+    if (!open) doctorBox.replaceChildren(); // 收起即清空：下次展开必重跑，不留过期快照
+    btnSecurityCheck.textContent = t(open ? '🔍 安全体检 · 收起结果 ▲' : '🔍 安全体检 · 公网暴露前自查 →');
+    btnSecurityCheck.setAttribute('aria-expanded', String(open));
+  }
+  if (btnSecurityCheck && doctorBox) btnSecurityCheck.onclick = () => {
+    if (!doctorBox.classList.contains('hidden')) { setDoctorOpen(false); return; }
+    setDoctorOpen(true);
+    const loading = el(`<div class="text-ink-faint"></div>`); loading.textContent = t('🔍 体检中…'); doctorBox.appendChild(loading);
+    socket.emit('doctor:run', {}, rep => {
+      if (doctorBox.classList.contains('hidden')) return; // 体检期间被收起：丢弃迟到的 ack，别把面板重新撑开
+      renderDoctor(rep, doctorBox);
+      const foot = el(`<button type="button" class="w-full mt-2 py-1.5 rounded-lg border border-line text-ink-soft active:bg-sunk"></button>`);
+      foot.textContent = t('▲ 收起体检结果');
+      foot.onclick = () => setDoctorOpen(false);
+      doctorBox.appendChild(foot);
+    });
   };
 
   // ---- 服务状态面板 ----

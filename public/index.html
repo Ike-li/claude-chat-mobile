@@ -813,7 +813,7 @@
       <details id="generalDiagDetails" class="rounded-xl border border-line bg-surface">
         <summary class="px-2.5 py-2 text-xs font-semibold text-ink-soft cursor-pointer select-none">🩺 <span>诊断</span> <span class="text-[10px] text-ink-faint font-normal">体检 · 服务状态</span></summary>
         <div class="space-y-2 px-2.5 pb-2.5">
-          <button id="btnSecurityCheck" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">🔍 安全体检 · 公网暴露前自查 →</button>
+          <button id="btnSecurityCheck" type="button" aria-expanded="false" aria-controls="doctorReport" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">🔍 安全体检 · 公网暴露前自查 →</button>
           <div id="doctorReport" class="hidden p-2.5 rounded-xl border border-line bg-surface text-xs space-y-0.5"></div>
           <button id="btnServiceStatus" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">📊 服务状态 · 运行时长 / 版本 / 告警 →</button>
           <button id="btnEnvConfig" type="button" class="w-full text-left p-2.5 rounded-xl border border-line bg-surface active:bg-sunk text-xs text-ink">⚙ 服务与配置 · 端口 / 工作目录 / 推送 →</button>

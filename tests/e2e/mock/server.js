@@ -1508,6 +1508,21 @@ io.on('connection', socket => {
     });
   });
 
+  // UI 安全体检（④）：确定性快照。WHITELIST 特意带一条危险规则 —— renderDoctor 里
+  // `c.safe.dangerous` 那段明细渲染否则从来没被 E2E 走过。
+  socket.on('doctor:run', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    ack({
+      checks: [
+        { id: 'AUTH_TOKEN', status: 'ok', detail: '已设置（长度 64）', safe: { isSet: true, length: 64 } },
+        { id: 'CLAUDE_BIN', status: 'ok', detail: '0.1.0-mock (Claude Code)' },
+        { id: 'CONFIG_PERMS', status: 'warn', detail: '1 个配置文件权限过宽（非 0600）' },
+        { id: 'WHITELIST', status: 'warn', detail: '1 条偏宽规则', safe: { dangerous: [{ rule: 'Bash(*)', reason: '任意命令', scope: 'user' }] } },
+      ],
+      readiness: { level: 'caution', summary: '可用，但有需留意的偏宽项' },
+    });
+  });
+
   // Handle sync:since for switching workspace viewing instances and historical message hydration
   socket.on('sync:since', (payload, callback) => {
     const { instanceId, sessionId } = payload || {};

@@ -36,7 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 66 |
 | Desktop integration | 11 |
 | Documentation | 10 |
-| E2E test | 48 |
+| E2E test | 49 |
 | Frontend asset | 3 |
 | Frontend source | 43 |
 | Generated asset | 6 |
@@ -54,7 +54,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 159 |
 | Vendored asset | 21 |
 
-Total classified files: **457**.
+Total classified files: **458**.
 
 ## Complete file inventory
 
@@ -303,6 +303,7 @@ Total classified files: **457**.
 | `tests/e2e/p0/pending-snapshot-reconcile.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/permission-allow-deny.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/replay-buffer.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/security-check-toggle.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/security-observable-ui.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/service-status-panel.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/settings-github-link.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
