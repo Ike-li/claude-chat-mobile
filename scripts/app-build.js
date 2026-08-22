@@ -27,9 +27,12 @@ const INFO_PLIST = join(APP, 'Contents', 'Info.plist');
 
 // CCMCore.swift 是纯逻辑层（零 AppKit、零 Process），app 与测试都编译它 —— 这样测试跑的
 // 就是产品里那一份代码，而不是一个平行的复制品。
+// CCMProcess.swift 同样两边都编：它有副作用（spawn 子进程）却必须可测 —— 那里出过一次
+// FD 泄漏，把整个菜单栏拖成「点什么都没反应」，见该文件头注。
 const CORE = join(DESKTOP, 'CCMCore.swift');
-const APP_SOURCES = [CORE, join(DESKTOP, 'ccm-menubar.swift'), join(DESKTOP, 'ccm-config-window.swift'), join(DESKTOP, 'ccm-console-window.swift')];
-const TEST_SOURCES = [CORE, join(DESKTOP, 'ccm-menubar-tests.swift')];
+const PROC = join(DESKTOP, 'CCMProcess.swift');
+const APP_SOURCES = [CORE, PROC, join(DESKTOP, 'ccm-menubar.swift'), join(DESKTOP, 'ccm-config-window.swift'), join(DESKTOP, 'ccm-console-window.swift')];
+const TEST_SOURCES = [CORE, PROC, join(DESKTOP, 'ccm-menubar-tests.swift')];
 const TEST_BIN = join(BUILD, 'ccm-core-tests');
 
 // swiftc 参数的单一事实源。-parse-as-library 是必须的：源码末尾有顶层的 app.run()，

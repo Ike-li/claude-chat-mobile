@@ -34,7 +34,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | --- | ---: |
 | Automation | 2 |
 | Backend source | 66 |
-| Desktop integration | 10 |
+| Desktop integration | 11 |
 | Documentation | 10 |
 | E2E test | 48 |
 | Frontend asset | 3 |
@@ -54,7 +54,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 159 |
 | Vendored asset | 21 |
 
-Total classified files: **456**.
+Total classified files: **457**.
 
 ## Complete file inventory
 
@@ -73,6 +73,7 @@ Total classified files: **456**.
 | `desktop/ccm-menubar-tests.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/ccm-menubar.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/CCMCore.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
+| `desktop/CCMProcess.swift` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/Info.plist.template` | Desktop integration | macOS menubar console source and bundle template | `npm run app:build` | Authored and reviewed manually | keep |
 | `desktop/launchd/log-rotate.plist.template` | Desktop integration | macOS LaunchAgent template rendered by the service installer | `node scripts/service.js install` | Authored and reviewed manually | keep |
 | `desktop/launchd/menubar.plist.template` | Desktop integration | macOS LaunchAgent template rendered by the service installer | `node scripts/service.js install` | Authored and reviewed manually | keep |

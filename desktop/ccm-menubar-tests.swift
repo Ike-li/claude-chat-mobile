@@ -49,6 +49,7 @@ struct CCMCoreTests {
         testDeviceSnapshot()
         testDevicePresentation()
         testAutostartRisk()
+        testRunSyncResourceHygiene()
 
         let msg = "\nCCMCore: \(passed) passed, \(failed) failed\n"
         FileHandle.standardOutput.write(msg.data(using: .utf8)!)
@@ -664,5 +665,56 @@ extension CCMCoreTests {
               "平级 worktree（<repo>-promo）不是本仓内部，别误判")
         check(!isRunningFromRepoBuild(bundlePath: repo, repo: repo),
               "路径恰好等于仓库根（不可能是 app）也不算")
+    }
+}
+
+
+// MARK: runSync 的资源卫生（CCMProcess.swift）
+//
+// 2026-08-22 现场：菜单栏进程持有 2550 个 pipe fd 撞上限自锁，此后每一次 service.js 调用都
+// 直接失败，界面上只显示「service.js 无响应」而 server 照常在跑 —— 用户点「停止」毫无效果，
+// 因为停止命令根本没发出去。三条独立证据印证：server 进程 ELAPSED 连续 27h46m 从未退出、
+// service.js 自记的 manual24h=0、菜单栏状态已过期 84967s。
+//
+// 根因是两个独立缺陷叠加，详见 CCMProcess.swift 头注：(a) Foundation 不归还父进程侧的 pipe
+// 读端 fd —— 每次调用必漏 2 个，与超时/孙进程无关；(b) readDataToEndOfFile() 没有 deadline，
+// 孙进程继承写端时读线程永久阻塞，连 (a) 的修法都执行不到。本用例用 `sleep 8 & exit 0` 精确
+// 复现 (b) 的形态（service.js 内部 spawn 的 launchctl / nc 变成孤儿时就长这样），而它同时
+// 覆盖 (a)：只修 (b) 时这条断言照样红。
+//
+// 这条断言是**真 spawn**，不是纯函数 —— 也正因如此它抓得到前两轮 review 没抓到的东西：
+// 那两轮修的是「超时形同虚设」与「顺序读死锁」，都是行为正确性，而这次泄漏的是资源。
+extension CCMCoreTests {
+    static func openFDCount() -> Int {
+        (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd").count) ?? -1
+    }
+
+    static func testRunSyncResourceHygiene() {
+        // —— 基本行为不能被修坏 ——
+        let r = runSync("/bin/sh", ["-c", "printf out; printf err >&2; exit 3"], timeout: 5)
+        eq(r?.status, Int32(3), "runSync 透传退出码")
+        eq(r?.stdout, "out", "runSync 收 stdout")
+        eq(r?.stderr, "err", "runSync 收 stderr")
+        check(runSync("/nonexistent/binary", [], timeout: 2) == nil, "spawn 失败返回 nil")
+        check(runSync("/bin/sh", ["-c", "sleep 5"], timeout: 0.3) == nil, "超时返回 nil")
+
+        // —— 泄漏回归 ——
+        let iterations = 6
+        let before = openFDCount()
+        for _ in 0..<iterations {
+            // 父 sh 立即退出（status 0），后台孙进程继承 pipe 写端并活过整个采样窗口
+            _ = runSync("/bin/sh", ["-c", "sleep 8 & exit 0"], timeout: 1, drainGrace: 0.2)
+        }
+        // fd 在读线程收工那一刻才归还，最迟是 timeout+drainGrace。**轮询等而不是固定 sleep**：
+        // 修好时几乎立刻退出（快），坏掉时才等满上限（慢的是失败路径，不拖累日常 check）；
+        // 慢机器上也不会因为固定窗口不够而 flaky。
+        var after = openFDCount()
+        let deadline = Date().addingTimeInterval(4)
+        while after - before > 2 && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.05)
+            after = openFDCount()
+        }
+        check(after - before <= 2,
+              "runSync 不泄漏 fd：孙进程持有 pipe 写端 \(iterations) 次后 fd \(before) → \(after)")
     }
 }

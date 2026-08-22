@@ -702,11 +702,20 @@ final class TaskWindowController: NSWindowController, NSWindowDelegate {
         }
 
         task.terminationHandler = { [weak self] proc in
-            pipe.fileHandleForReading.readabilityHandler = nil
-            // 排空退出前最后一批还没被 handler 读走的数据，否则末尾几行（常常正是错误原因）会丢
-            if let rest = try? pipe.fileHandleForReading.readToEnd(), !rest.isEmpty {
+            let fh = pipe.fileHandleForReading
+            fh.readabilityHandler = nil
+            // 排空退出前最后一批还没被 handler 读走的数据，否则末尾几行（常常正是错误原因）会丢。
+            // 用 drainToDeadline 而不是 readToEnd()：后者等的是「写端全关」，而这些步骤跑的是
+            // node 脚本、它自己会 spawn launchctl 之类的孙进程，一旦有孤儿持有写端就永久阻塞在
+            // 这条 terminationHandler 上（Foundation 的内部队列，堵住会连累别的 Process 回调）。
+            let rest = drainToDeadline(fh.fileDescriptor, deadline: Date().addingTimeInterval(2))
+            if !rest.isEmpty {
                 self?.appendIfCurrent(String(data: rest, encoding: .utf8) ?? "", token: token)
             }
+            // ★ 归还读端 fd。Foundation 不会自己还 —— 与 CCMProcess.swift 头注记的是同一个坑，
+            //   那次它把菜单栏漏到 2550 个 pipe 撞上限、点什么都没反应。这里频率低（用户手动
+            //   触发的任务窗口），但反复开窗跑任务同样会累积。
+            try? fh.close()
             // ★ running / isRunning / 步进全部收敛到主线程。此前 running 在这条后台线程上被写，
             // 却在主线程的 windowWillClose 里被读和置 nil —— 两边互相看不见对方的写入（未加同步的
             // 跨线程 Process? 访问本身也是数据竞争）。token 比对则让已被作废的那一代直接出局。
@@ -726,6 +735,9 @@ final class TaskWindowController: NSWindowController, NSWindowDelegate {
             try task.run()
             running = task
         } catch {
+            // spawn 失败时 terminationHandler 永远不会触发，读端得在这里还（同上）
+            pipe.fileHandleForReading.readabilityHandler = nil
+            try? pipe.fileHandleForReading.close()
             append("无法启动：\(error.localizedDescription)\n")
             DispatchQueue.main.async { [weak self] in
                 guard let self, token == self.runToken else { return }
