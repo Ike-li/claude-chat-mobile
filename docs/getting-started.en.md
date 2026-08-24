@@ -167,7 +167,9 @@ For multiple workspaces, add a `WORKDIRS` array to `ccm.config.json`. Each entry
 }
 ```
 
-`WORKDIRS` **hot-reloads** — edits take effect immediately, no restart (every other setting needs one).
+`WORKDIRS` **hot-reloads** — edits take effect immediately, no restart. Which settings hot-reload is
+decided by the `reload` flag in the schema; `node scripts/config.js schema` marks them on each entry
+(only `WORKDIRS` when this was written — trust the schema output, not this sentence).
 A git worktree must also be listed as its own absolute path; the project never discovers or authorizes it implicitly.
 
 The legacy `WORK_DIRS_FILE=workdirs.json` (external file) and `WORK_DIRS` (comma-separated) still work

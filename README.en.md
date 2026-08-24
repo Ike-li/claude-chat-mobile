@@ -93,14 +93,22 @@ Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.m
 
 ## Documentation
 
+**Install and run**
+
 - [Getting Started](docs/getting-started.en.md): from clone to the first message sent from your phone.
 - [Deployment and operations](docs/deployment.md) (Chinese): the two start entries, Cloudflare Tunnel, and Access.
-- [Architecture](docs/architecture.en.md): Web/CLI paths, event envelopes, and takeover boundaries.
-- [Hard rules and tech debt](docs/hard-rules.md) (Chinese): n=1 tradeoffs, invariants, and deferred work (maintainers).
-- [Display contracts](docs/display-contracts.md) (Chinese): sources of truth for model, effort, and status-line display.
-- [Repository map](docs/repository-map.md): entrypoints, directory roles, and the complete file inventory.
 - **Settings reference**: `node scripts/config.js schema` — every setting, type, and default, generated from the schema so it can never drift from the code.
 - [Security policy](SECURITY.md): private vulnerability-reporting instructions.
+
+**Understand and contribute** (maintainers)
+
+- [Architecture](docs/architecture.en.md): Web/CLI paths, event envelopes, and takeover boundaries.
+- [Hard rules and tech debt](docs/hard-rules.md) (Chinese): n=1 tradeoffs, invariants, and deferred work.
+- [Display contracts](docs/display-contracts.md) (Chinese): sources of truth for model, effort, and status-line display.
+
+**Generated**
+
+- [Repository map](docs/repository-map.md): the full file inventory produced by `npm run inventory:update`, used by the `inventory:check` gate to reject unclassified files. You normally do not need to read it.
 
 ## License
 

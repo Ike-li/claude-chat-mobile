@@ -95,14 +95,22 @@ PWA 与 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+ 并先「添加
 
 ## 文档导航
 
+**装机与运行**
+
 - [首次使用指南](docs/getting-started.md)：从 clone 到手机发出第一条消息。
 - [部署与运维](docs/deployment.md)：两条启动入口、Cloudflare Tunnel 与 Access。
-- [架构说明](docs/architecture.md)：Web/CLI 双通道、事件信封与接管边界。
-- [硬性规则与技术债](docs/hard-rules.md)：n=1 取舍、架构不变量、已决「不做」项（维护者）。
-- [展示契约](docs/display-contracts.md)：模型、思考强度和状态栏的事实源。
-- [仓库地图](docs/repository-map.md)：入口、目录职责与完整文件清单。
 - **配置项说明**：`node scripts/config.js schema` —— 全部配置项、类型与默认值，由 schema 生成，永不与代码分叉。
 - [安全策略](SECURITY.md)：漏洞报告方式。
+
+**理解与参与**（维护者）
+
+- [架构说明](docs/architecture.md)：Web/CLI 双通道、事件信封与接管边界。
+- [硬性规则与技术债](docs/hard-rules.md)：n=1 取舍、架构不变量、已决「不做」项。
+- [展示契约](docs/display-contracts.md)：模型、思考强度和状态栏的事实源。
+
+**生成物**
+
+- [仓库地图](docs/repository-map.md)：`npm run inventory:update` 产出的全文件清单，供 `inventory:check` 门禁拒绝未分类文件。人类通常不需要读它。
 
 ## 许可证
 

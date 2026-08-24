@@ -161,7 +161,8 @@ node scripts/setup.js \
 }
 ```
 
-`WORKDIRS` **支持热加载**，改完即生效、无需重启（其余配置项均需重启）。
+`WORKDIRS` **支持热加载**，改完即生效、无需重启。哪些项能热加载由 schema 的 `reload` 标记决定，
+`node scripts/config.js schema` 会在条目上标出（写这句时只有 `WORKDIRS`，以 schema 输出为准）。
 git worktree 也必须作为独立绝对路径显式加入；项目不会自动发现或放行。
 
 旧版的 `WORK_DIRS_FILE=workdirs.json`（外部文件）与 `WORK_DIRS`（逗号分隔）仍然可用，
