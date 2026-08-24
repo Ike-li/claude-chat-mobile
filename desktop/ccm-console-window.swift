@@ -22,6 +22,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate {
     private let unitsStack = NSStackView()
     private let actionsStack = NSStackView()
     private let repoLabel = NSTextField(labelWithString: "")
+    private let identityLabel = NSTextField(labelWithString: "")
     private let dockToggle = NSButton(checkboxWithTitle: "在 Dock 中显示图标", target: nil, action: nil)
     private weak var delegateApp: AppDelegate?
 
@@ -57,6 +58,11 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate {
         repoLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         repoLabel.lineBreakMode = .byTruncatingHead
 
+        // 「我跑的是哪一份」：两份 bundle 的版本号一样，能分辨它们的是编译时刻与 commit。
+        identityLabel.textColor = .tertiaryLabelColor
+        identityLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        identityLabel.lineBreakMode = .byTruncatingHead
+
         dockToggle.target = self
         dockToggle.action = #selector(onToggleDock)
         dockToggle.state = ConsoleWindowController.dockIconEnabled ? .on : .off
@@ -66,7 +72,7 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate {
             summary,
             separator(), unitsStack,
             separator(), actionsStack,
-            separator(), dockToggle, repoLabel,
+            separator(), dockToggle, identityLabel, repoLabel,
         ])
         root.orientation = .vertical
         root.alignment = .leading
@@ -99,8 +105,12 @@ final class ConsoleWindowController: NSWindowController, NSWindowDelegate {
     }
 
     /// 状态变了就刷新（由 AppDelegate 的轮询驱动，与菜单栏那盏灯同一份数据）。
-    func refresh(status: ServiceStatus?, problem: EnvProblem, lastError: String?, staleSeconds: Int?, repo: String?) {
+    func refresh(status: ServiceStatus?, problem: EnvProblem, lastError: String?, staleSeconds: Int?,
+                 repo: String?, identity: String) {
         summary.stringValue = summaryLine(status: status, problem: problem, lastError: lastError, staleSeconds: staleSeconds)
+        // identity 由 AppDelegate 传进来而不是这里自己读 Bundle.main：单一来源，
+        // 两处各读一份迟早分叉（本仓已经为此吃过几次亏）。
+        identityLabel.stringValue = identity
         repoLabel.stringValue = repo ?? "未定位仓库"
 
         unitsStack.arrangedSubviews.forEach { $0.removeFromSuperview() }

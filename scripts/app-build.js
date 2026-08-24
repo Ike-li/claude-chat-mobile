@@ -107,9 +107,45 @@ function readAutostartAppPath() {
   }
 }
 
+// 编译时刻，给人看的本地时间。刻意不存 ISO/epoch：显示侧（Swift）就不必解析日期，
+// 而 n=1 自托管里「编译的人」和「看的人」是同一台机器，本地时间没有歧义。
+export function formatBuildTime(ms) {
+  const two = (n) => String(n).padStart(2, '0');
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
 // Info.plist 需要的占位符变量。少一个都会让 bundle 里出现字面量 __XXX__。
-export function infoPlistVars({ version, repo, node }) {
-  return { VERSION: version, REPO: repo, NODE: node };
+export function infoPlistVars({ version, repo, node, buildTime = '', buildCommit = 'unknown', buildNumber = '' }) {
+  return {
+    VERSION: version,
+    REPO: repo,
+    NODE: node,
+    BUILD_TIME: buildTime,
+    BUILD_COMMIT: buildCommit,
+    // CFBundleVersion 在 macOS 语义上是**构建号**，本该单调递增。此前它与
+    // CFBundleShortVersionString 共用同一个 semver，于是两份 bundle（/Applications 与
+    // desktop/build）在 LaunchServices 里的 version 字段完全相同（实测 2026-08-24），
+    // 系统没有任何依据判断哪份更新。回落到 version 只是为了「拿不到构建号也别产出空值」。
+    BUILD_NUMBER: buildNumber || version,
+  };
+}
+
+// 编译时的 git 身份。拿不到（非 git 检出 / 没装 git）一律 'unknown'，绝不让构建失败：
+// 这是可观测性，不是正确性前提。
+// 带未提交改动时标 -dirty —— 那份二进制里含着仓库里看不到的东西，排障时最容易漏判。
+function gitCommitLabel() {
+  try {
+    const head = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: ROOT, encoding: 'utf8', timeout: 3000 });
+    if (!head || head.status !== 0) return 'unknown';
+    const sha = String(head.stdout).trim();
+    if (!sha) return 'unknown';
+    const st = spawnSync('git', ['status', '--porcelain'], { cwd: ROOT, encoding: 'utf8', timeout: 5000 });
+    const dirty = st && st.status === 0 && String(st.stdout).trim() !== '';
+    return dirty ? `${sha}-dirty` : sha;
+  } catch {
+    return 'unknown';
+  }
 }
 
 // 写进 bundle 的 node 路径：与 plist 里那条同源，用登录 shell 的 `command -v node`
@@ -183,7 +219,13 @@ export function main({ test = true } = {}) {
 
   process.stdout.write('渲染 Info.plist…\n');
   const tpl = stripLeadingComment(readFileSync(join(DESKTOP, 'Info.plist.template'), 'utf8'));
-  const rendered = renderTemplate(tpl, infoPlistVars({ version, repo: ROOT, node }));
+  const now = Date.now();
+  const rendered = renderTemplate(tpl, infoPlistVars({
+    version, repo: ROOT, node,
+    buildTime: formatBuildTime(now),
+    buildCommit: gitCommitLabel(),
+    buildNumber: String(Math.floor(now / 1000)),   // epoch 秒：可证单调，且与 semver 不冲突
+  }));
   // 精确匹配占位符形态：宽泛的 includes('__') 会把仓库路径里的双下划线
   // （/Users/you/my__work/…）误判成未替换，报一句与真实原因完全无关的错。
   if (/__[A-Z_]+__/.test(rendered)) {

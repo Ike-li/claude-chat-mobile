@@ -741,6 +741,38 @@ func isRunningFromRepoBuild(bundlePath: String, repo: String) -> Bool {
     bundlePath.hasPrefix(repo + "/")
 }
 
+/// 「我现在跑的是哪一份」——一行自证身份，给菜单与控制台共用。
+///
+/// 【为什么不是「显示版本号」那么简单】2026-08-24 实测：`/Applications/CCM.app` 与
+/// `<repo>/desktop/build/CCM.app` 的 `CFBundleShortVersionString` **完全相同**（都是
+/// package.json 的 semver），LaunchServices 里记的 version 字段也一样。所以版本号对
+/// 「Spotlight 里那两个 CCM 哪个是哪个」「我跑的这份含不含某个修复」这两个真实问题
+/// 零判别力 —— 那次排障只能去 stat 二进制的 mtime。有判别力的是下面这三段。
+///
+/// 缺失一律省略而不是显示 "unknown"：旧 bundle 没有这两个键，硬填占位只会让人
+/// 以为构建坏了。少一段信息 ≠ 出了问题。
+func appIdentityLine(version: String?, buildTime: String?, commit: String?,
+                     bundlePath: String, repo: String?) -> String {
+    var parts: [String] = ["CCM" + (version.map { " \($0)" } ?? "")]
+
+    if let t = buildTime, !t.isEmpty { parts.append("\(t) 编译") }
+    // "unknown" 是 app-build.js 在非 git 检出下写进去的占位，等同于「没有这条信息」
+    if let c = commit, !c.isEmpty, c != "unknown" { parts.append(c) }
+
+    parts.append(bundleLocationLabel(bundlePath: bundlePath, repo: repo))
+    return parts.joined(separator: " · ")
+}
+
+/// bundle 所在位置的短标签。判据复用 `isRunningFromRepoBuild` —— 那个函数此前只在
+/// 勾「开机自启」时用来弹一次警告，"我正跑着仓库构建产物"这个事实算得出来却从不显示。
+private func bundleLocationLabel(bundlePath: String, repo: String?) -> String {
+    if let repo, isRunningFromRepoBuild(bundlePath: bundlePath, repo: repo) {
+        return "⚠ 仓库构建产物"
+    }
+    // 显示所在目录而不是硬说成 /Applications：用户可能把它拖去了 ~/Applications
+    return (bundlePath as NSString).deletingLastPathComponent
+}
+
 /// 待审设备在菜单里的一行：类型 · 短 ID · 来源 IP。三样都是核对用的——
 /// 类型答「是什么设备」，短 ID 答「是不是我屏幕上那台」，IP 答「从哪来的」。
 /// 缺 IP 时如实写「未知来源」而不是省略：留一个悬空的 `·` 看起来像渲染坏了。

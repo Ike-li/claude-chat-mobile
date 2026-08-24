@@ -307,6 +307,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: 渲染
 
+    /// 这份 bundle 的自证身份。取数在这里（Bundle.main 是宿主状态），拼装在 CCMCore 的
+    /// `appIdentityLine` 里（纯函数、有断言）。
+    private func appIdentity() -> String {
+        let info = Bundle.main
+        return appIdentityLine(
+            version: info.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            buildTime: info.object(forInfoDictionaryKey: "CCMBuildTime") as? String,
+            commit: info.object(forInfoDictionaryKey: "CCMBuildCommit") as? String,
+            bundlePath: info.bundlePath,
+            repo: env.repo)
+    }
+
     /// 心跳落盘，供 `scripts/doctor.js` 的 D19 判断菜单栏是不是卡死了。
     ///
     /// ★ **必须写在 probe 的 MainActor 完成回调里，不能挂在 Timer tick 上。**
@@ -450,6 +462,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         menu.addItem(.separator())
+        // 身份行紧挨着「更新桌面端」：那正是你需要确认「刚才换上的是哪一份」的时刻。
+        // 放在这里而不是菜单顶部，是为了不给每次开菜单都加一行噪音。
+        let idItem = NSMenuItem(title: appIdentity(), action: nil, keyEquivalent: "")
+        idItem.isEnabled = false
+        idItem.toolTip = "这份 CCM.app 的身份：版本 · 编译时刻 · git commit · 装在哪。"
+            + "两份 bundle 的版本号是一样的，能分辨它们的是后两段"
+        menu.addItem(idItem)
         menu.addItem(action("更新桌面端（重新编译）", #selector(updateApp),
             tip: "一键完成：用当前仓库源码重新编译 → 装进 /Applications → 自动重启本 app 换上新版。拉了新代码后点这一个就够"))
         menu.addItem(action("重启应用", #selector(relaunchApp),
@@ -870,7 +889,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let c = consoleWindow else { return }
         let stale = lastOk.map { Int(Date().timeIntervalSince($0)) }
         c.refresh(status: latest, problem: env.problem, lastError: lastError,
-                  staleSeconds: lastError == nil ? nil : stale, repo: env.repo)
+                  staleSeconds: lastError == nil ? nil : stale, repo: env.repo,
+                  identity: appIdentity())
     }
 
     /// 点 Dock 图标（app 已在跑、没有可见窗口时）走这里 —— 这正是刘海场景下的救命入口。

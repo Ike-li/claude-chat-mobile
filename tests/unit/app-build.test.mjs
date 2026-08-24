@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { APP_SOURCES, infoPlistVars, shouldRemoveBuildArtifact, swiftTarget, swiftcArgs, typecheckArgs, autostartTargetPath } from '../../scripts/app-build.js';
+import { APP_SOURCES, formatBuildTime, infoPlistVars, shouldRemoveBuildArtifact, swiftTarget, swiftcArgs, typecheckArgs, autostartTargetPath } from '../../scripts/app-build.js';
 import { renderTemplate, stripLeadingComment } from '../../scripts/render-plist.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -70,7 +70,7 @@ test.describe('infoPlistVars', () => {
     const placeholders = [...tpl.matchAll(/__([A-Z_]+)__/g)].map((m) => m[1]);
     assert.ok(placeholders.length > 0, '模板里应当有占位符');
 
-    const vars = infoPlistVars({ version: '1.0.0', repo: '/r', node: '/n' });
+    const vars = infoPlistVars({ version: '1.0.0', repo: '/r', node: '/n', buildTime: '2026-08-24 03:47', buildCommit: '39aea4f', buildNumber: '1787561239' });
     for (const p of new Set(placeholders)) {
       assert.ok(Object.hasOwn(vars, p), `infoPlistVars 缺少 ${p}`);
     }
@@ -78,7 +78,7 @@ test.describe('infoPlistVars', () => {
 
   test('渲染后不残留任何占位符', () => {
     const tpl = stripLeadingComment(readFileSync(join(ROOT, 'desktop/Info.plist.template'), 'utf8'));
-    const out = renderTemplate(tpl, infoPlistVars({ version: '1.0.0', repo: '/r', node: '/n' }));
+    const out = renderTemplate(tpl, infoPlistVars({ version: '1.0.0', repo: '/r', node: '/n', buildTime: '2026-08-24 03:47', buildCommit: '39aea4f', buildNumber: '1787561239' }));
     assert.ok(!/__[A-Z_]+__/.test(out), `仍有占位符：${out.match(/__[A-Z_]+__/g)}`);
   });
 
@@ -212,5 +212,45 @@ test.describe('shouldRemoveBuildArtifact', () => {
       installed: true, buildAppPath: BUILD_APP, autostartAppPath: `${BUILD_APP}/`,
     });
     assert.equal(r.remove, false, '尾斜杠没归一化就会删掉正在被自启使用的 app');
+  });
+});
+
+// ── 构建身份 ───────────────────────────────────────────────────────────────
+// 2026-08-24：机主问「Spotlight 里为什么两个 CCM」。实测两份 bundle 的
+// CFBundleShortVersionString 完全相同（都是 package.json 的 1.6.0），LaunchServices 里
+// 记的 version 字段也一样 —— 版本号在这个问题上**零判别力**。排障时只能去 stat 二进制
+// 的 mtime。commit 与构建号才是能回答「我跑的是哪一份、含不含某个修复」的字段。
+test.describe('构建身份', () => {
+  test('formatBuildTime 补零到固定宽度（月/日/时/分个位数时最容易错）', () => {
+    // 用固定 epoch 只断言形状：本地时区不同则具体数字不同，断言内容会脆。
+    assert.match(formatBuildTime(1787561239000), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    assert.match(formatBuildTime(Date.UTC(2026, 0, 2, 3, 4)), /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  });
+
+  test('CFBundleVersion 用构建号而不是 semver —— 否则两份 bundle 在 LS 里无从排序', () => {
+    const tplPath = join(ROOT, 'desktop', 'Info.plist.template');
+    const tpl = stripLeadingComment(readFileSync(tplPath, 'utf8'));
+    const out = renderTemplate(tpl, infoPlistVars({
+      version: '1.6.0', repo: '/r', node: '/n',
+      buildTime: '2026-08-24 03:47', buildCommit: '39aea4f', buildNumber: '1787561239',
+    }));
+    assert.match(out, /<key>CFBundleVersion<\/key>\s*<string>1787561239<\/string>/);
+    assert.match(out, /<key>CFBundleShortVersionString<\/key>\s*<string>1\.6\.0<\/string>/);
+  });
+
+  test('构建时间与 commit 都进 bundle：Swift 侧靠它们自证身份', () => {
+    const tpl = stripLeadingComment(readFileSync(join(ROOT, 'desktop', 'Info.plist.template'), 'utf8'));
+    const out = renderTemplate(tpl, infoPlistVars({
+      version: '1.6.0', repo: '/r', node: '/n',
+      buildTime: '2026-08-24 03:47', buildCommit: '39aea4f-dirty', buildNumber: '1787561239',
+    }));
+    assert.match(out, /<key>CCMBuildTime<\/key>\s*<string>2026-08-24 03:47<\/string>/);
+    assert.match(out, /<key>CCMBuildCommit<\/key>\s*<string>39aea4f-dirty<\/string>/);
+  });
+
+  test('拿不到构建号时回落到 version —— 可观测性缺失不该产出空的 CFBundleVersion', () => {
+    const vars = infoPlistVars({ version: '1.6.0', repo: '/r', node: '/n' });
+    assert.equal(vars.BUILD_NUMBER, '1.6.0');
+    assert.equal(vars.BUILD_COMMIT, 'unknown', '非 git 检出时必须是可识别的占位，不是空串');
   });
 });

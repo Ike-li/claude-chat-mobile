@@ -608,11 +608,16 @@ export function menubarLivenessDiagnostic({
   running = false,
   lastProbeAt = null,          // epoch **秒**（Swift 的 Date().timeIntervalSince1970），不是毫秒
   lastProbeOk = null,
+  runningCommit = null,        // 运行中那份 bundle 的 CCMBuildCommit（app-build 编译时烘进去）
+  headCommit = null,           // 仓库当前 HEAD 的短 hash
+  commitsBehind = null,        // runningCommit..HEAD 的提交数；算不出来时为 null
   nowMs = Date.now(),
   staleAfterMs = 5 * 60 * 1000,  // 一轮探测最坏约 27s（node 解析 5 + status 8+3 + device 8+3），10 倍余量
   lang = 'zh',
 } = {}) {
   const name = 'CCM.app';
+  const build = buildFreshnessNote({ runningCommit, headCommit, commitsBehind, lang });
+  const withBuild = (text) => (build ? `${text}${build}` : text);
 
   if (!running) {
     return { status: 'ok', name, detail: bi(lang,
@@ -622,9 +627,9 @@ export function menubarLivenessDiagnostic({
 
   const at = Number(lastProbeAt);
   if (!Number.isFinite(at) || at <= 0) {
-    return { status: 'warn', name, detail: bi(lang,
+    return { status: 'warn', name, detail: withBuild(bi(lang,
       '菜单栏 app 在跑，但读不到它的心跳——多半是不带心跳的旧版。跑 npm run app:install，然后退出并重新打开它。',
-      'The menu bar app is running but has no heartbeat — most likely an older build. Run npm run app:install, then quit and reopen it.') };
+      'The menu bar app is running but has no heartbeat — most likely an older build. Run npm run app:install, then quit and reopen it.')) };
   }
 
   // 未来的时间戳（改过系统时钟）按新鲜处理：宁可漏报，也别拿一个说不清的判据吓人。
@@ -650,9 +655,29 @@ export function menubarLivenessDiagnostic({
       'The menu bar app is refreshing, but its latest probe could not read the service state — that is a server-side issue; see the LaunchAgent entry above.') };
   }
 
-  return { status: 'ok', name, detail: bi(lang,
+  return { status: 'ok', name, detail: withBuild(bi(lang,
     `菜单栏 app 在跑，状态刷新正常（${formatStaleAge(ageMs, lang)}前）。`,
-    `The menu bar app is running and refreshing normally (last update ${formatStaleAge(ageMs, lang)} ago).`) };
+    `The menu bar app is running and refreshing normally (last update ${formatStaleAge(ageMs, lang)} ago).`)) };
+}
+
+// 运行中的那份 bundle 落后仓库多少。返回 null = 无话可说（拿不到 commit，或本来就是最新）。
+//
+// 为什么值得单独说：D19 最初只能讲「多半是不带心跳的旧版」——因为它无从知道运行中的
+// 二进制是哪个 commit。而这恰恰是机主真正想知道的（「我跑的这份含不含那个修复」）。
+// bundle 里烘进 CCMBuildCommit 之后才答得上来。
+//
+// commitsBehind 算不出来时（换过分支、该 commit 不是 HEAD 祖先、非 git 检出）只说「不同」：
+// 给一个看起来很确定却是猜的数字，比不给更糟。
+function buildFreshnessNote({ runningCommit, headCommit, commitsBehind, lang }) {
+  if (!runningCommit || !headCommit) return '';
+  // 带 -dirty 的构建即使 hash 相同也不等于 HEAD，但那属于「你自己知道在干什么」，不唠叨
+  if (runningCommit === headCommit) return '';
+  const gap = Number.isFinite(commitsBehind) && commitsBehind > 0
+    ? bi(lang, `落后当前 HEAD ${commitsBehind} 个提交`, `${commitsBehind} commits behind HEAD`)
+    : bi(lang, `与当前 HEAD ${headCommit} 不同`, `differs from HEAD ${headCommit}`);
+  return bi(lang,
+    ` 跑的是构建 ${runningCommit}，${gap}——npm run app:install 后退出并重新打开它即可换上新版。`,
+    ` The running build is ${runningCommit}, ${gap}. Run npm run app:install, then quit and reopen it.`);
 }
 
 // 停摆时长。小时是主要量级——63 小时那次，时长本身就是信息量最大的一条。

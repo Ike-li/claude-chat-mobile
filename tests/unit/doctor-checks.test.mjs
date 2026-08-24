@@ -836,6 +836,47 @@ test.describe('menubarLivenessDiagnostic', () => {
     assert.equal(beyond.status, 'fail', '301 秒前 > 5 分钟阈值，应判卡住');
   });
 
+  // ── 构建新鲜度 ──────────────────────────────────────────────────────────
+  // 2026-08-24 加：写 D19 时碰到的表达力上限 —— 它只能说「多半是旧版」，因为无从知道
+  // 运行中的二进制是哪个 commit。bundle 里烘进 CCMBuildCommit 之后就能说准了。
+  test('运行中的构建与 HEAD 一致 → 不额外唠叨', () => {
+    const r = menubarLivenessDiagnostic({
+      running: true, lastProbeAt: AT(10), lastProbeOk: true, nowMs: NOW,
+      runningCommit: '1c4708a', headCommit: '1c4708a',
+    });
+    assert.equal(r.status, 'ok');
+    assert.doesNotMatch(r.detail, /落后|不同/);
+  });
+
+  test('落后 N 个提交 → 报出 commit 与差距，并给换新版的具体做法', () => {
+    const r = menubarLivenessDiagnostic({
+      running: true, lastProbeAt: AT(10), lastProbeOk: true, nowMs: NOW,
+      runningCommit: '39aea4f', headCommit: '1c4708a', commitsBehind: 3,
+    });
+    assert.match(r.detail, /39aea4f/);
+    assert.match(r.detail, /3 个提交/);
+    assert.match(r.detail, /app:install/, '只报差距不给做法等于让人自己去猜');
+  });
+
+  test('算不出差距（换过分支 / 该 commit 不是 HEAD 祖先）→ 只说不同，不编数字', () => {
+    const r = menubarLivenessDiagnostic({
+      running: true, lastProbeAt: AT(10), lastProbeOk: true, nowMs: NOW,
+      runningCommit: '39aea4f', headCommit: '1c4708a', commitsBehind: null,
+    });
+    assert.match(r.detail, /不同/);
+    assert.doesNotMatch(r.detail, /个提交/, '算不出来就别给一个看起来很确定的数字');
+  });
+
+  test('没有心跳时也把 commit 报出来 —— 这正是「多半是旧版」该被替换成的东西', () => {
+    const r = menubarLivenessDiagnostic({
+      running: true, lastProbeAt: null, nowMs: NOW,
+      runningCommit: '39aea4f', headCommit: '1c4708a', commitsBehind: 2,
+    });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /39aea4f/);
+    assert.match(r.detail, /2 个提交/);
+  });
+
   test('detail 里报出实际停摆时长，方便判断是刚卡还是卡了很久', () => {
     const r = menubarLivenessDiagnostic({ running: true, lastProbeAt: AT(63 * 3600), lastProbeOk: true, nowMs: NOW });
     assert.match(r.detail, /63/, '63 小时那次，时长本身就是最有信息量的一条');

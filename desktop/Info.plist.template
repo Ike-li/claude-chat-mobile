@@ -4,9 +4,16 @@
   （复用 desktop/launchd/*.plist.template 那套字面量替换 + XML 转义，路径含 &/#/空格/引号都安全）。
 
   占位符：
-    __VERSION__  版本号，取自 package.json
-    __REPO__     仓库绝对路径 —— build 时烘进来当兜底
-    __NODE__     node 绝对路径 —— 同上
+    __VERSION__       版本号，取自 package.json
+    __BUILD_NUMBER__  构建号（epoch 秒），单调递增
+    __BUILD_TIME__    编译时刻（本地时间，给人看）
+    __BUILD_COMMIT__  编译时的 git 短 hash，带未提交改动时后缀 -dirty
+    __REPO__          仓库绝对路径 —— build 时烘进来当兜底
+    __NODE__          node 绝对路径 —— 同上
+
+  为什么要烘构建身份：两份 bundle（/Applications 与 desktop/build）的 CFBundleShortVersionString
+  完全相同（都是 package.json 的 semver），于是「我现在跑的是哪一份、含不含某个修复」在界面上
+  根本答不出来 —— 2026-08-23 排障时只能去 stat 二进制的 mtime。commit 才是能回答这个问题的字段。
 
   为什么把路径烘进 Info.plist：菜单栏 app 要找到 scripts/service.js 才能干活，而 GUI app
   的环境不是登录 shell（PATH 里通常没有 homebrew）。运行时优先读 UserDefaults（用户可经
@@ -30,7 +37,7 @@
   <key>CFBundleShortVersionString</key>
   <string>__VERSION__</string>
   <key>CFBundleVersion</key>
-  <string>__VERSION__</string>
+  <string>__BUILD_NUMBER__</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>LSUIElement</key>
@@ -41,5 +48,9 @@
   <string>__REPO__</string>
   <key>CCMNodePath</key>
   <string>__NODE__</string>
+  <key>CCMBuildTime</key>
+  <string>__BUILD_TIME__</string>
+  <key>CCMBuildCommit</key>
+  <string>__BUILD_COMMIT__</string>
 </dict>
 </plist>

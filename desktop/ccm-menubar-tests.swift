@@ -51,6 +51,7 @@ struct CCMCoreTests {
         testAutostartRisk()
         testRunSyncResourceHygiene()
         testModalWindowsAreRaised()
+        testAppIdentityLine()
 
         let msg = "\nCCMCore: \(passed) passed, \(failed) failed\n"
         FileHandle.standardOutput.write(msg.data(using: .utf8)!)
@@ -768,5 +769,56 @@ extension CCMCoreTests {
                       + "模态窗沉到别人后面会把整个 app 冻死，连退出都点不动")
             }
         }
+    }
+}
+
+// ── appIdentityLine ────────────────────────────────────────────────────────
+// 2026-08-24：机主问「Spotlight 里为什么老是两个 CCM」。实测两份 bundle 的
+// CFBundleShortVersionString 一模一样（都是 1.6.0），LaunchServices 里记的 version 也一样
+// —— **版本号在这个问题上零判别力**，排障时只能去 stat 二进制的 mtime。
+// 真正能回答「我跑的是哪一份、含不含某个修复」的是：装在哪 · 编译于何时 · 哪个 commit。
+extension CCMCoreTests {
+    static func testAppIdentityLine() {
+        let installed = "/Applications/CCM.app"
+        let repo = "/Users/you/code/claude-chat-mobile"
+        let repoBuild = "\(repo)/desktop/build/CCM.app"
+
+        eq(appIdentityLine(version: "1.6.0", buildTime: "2026-08-24 03:47", commit: "39aea4f",
+                           bundlePath: installed, repo: repo),
+           "CCM 1.6.0 · 2026-08-24 03:47 编译 · 39aea4f · /Applications",
+           "完整信息：版本 · 编译时刻 · commit · 装在哪")
+
+        // 这一段是「两个 CCM」问题的直接答案：判据复用已有的 isRunningFromRepoBuild，
+        // 那个函数此前只在勾开机自启时弹一次警告，平时算得出来却不显示。
+        check(appIdentityLine(version: "1.6.0", buildTime: "2026-08-24 03:47", commit: "39aea4f",
+                              bundlePath: repoBuild, repo: repo).hasSuffix("⚠ 仓库构建产物"),
+              "跑的是仓库构建产物要显著标出来")
+
+        // 平级 worktree（<repo>-promo）不能被误判成仓库内 —— 同 isRunningFromRepoBuild 的既有断言
+        check(!appIdentityLine(version: "1.6.0", buildTime: nil, commit: nil,
+                               bundlePath: "\(repo)-promo/desktop/build/CCM.app", repo: repo)
+                .hasSuffix("⚠ 仓库构建产物"),
+              "平级 worktree 不是本仓库的构建产物")
+
+        // 旧 bundle 没有这两个键：优雅降级成短行，不能出现空段或字面量 unknown
+        eq(appIdentityLine(version: "1.6.0", buildTime: nil, commit: nil, bundlePath: installed, repo: repo),
+           "CCM 1.6.0 · /Applications", "缺构建信息时不留空段")
+        eq(appIdentityLine(version: "1.6.0", buildTime: "", commit: "unknown", bundlePath: installed, repo: repo),
+           "CCM 1.6.0 · /Applications", "空串与 unknown 一并省略")
+
+        // -dirty 必须原样留着：那份二进制里含着仓库里看不到的改动，是排障最容易漏判的一种
+        check(appIdentityLine(version: "1.6.0", buildTime: "2026-08-24 03:47", commit: "39aea4f-dirty",
+                              bundlePath: installed, repo: repo).contains("39aea4f-dirty"),
+              "带未提交改动的构建要看得出来")
+
+        // 装到别处（用户手动拖走）：显示所在目录，别硬说成 /Applications
+        eq(appIdentityLine(version: "1.6.0", buildTime: nil, commit: nil,
+                           bundlePath: "/Users/you/Applications/CCM.app", repo: repo),
+           "CCM 1.6.0 · /Users/you/Applications", "非标准位置显示实际目录")
+
+        // repo 还没解析出来（首次启动、后台 refresh 未完成）不能崩，也不该误判成仓库产物
+        check(!appIdentityLine(version: nil, buildTime: nil, commit: nil, bundlePath: installed, repo: nil)
+                .contains("仓库构建产物"),
+              "repo 未知时不下「仓库构建产物」这个结论")
     }
 }

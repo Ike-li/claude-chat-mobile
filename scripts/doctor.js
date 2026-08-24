@@ -267,8 +267,10 @@ function readMenubarHeartbeat() {
   if (platform() !== 'darwin') return { running: false };
   // 匹配 bundle 内的可执行路径：/Applications 与仓库构建产物两份都算「菜单栏在跑」。
   // execFileSync 在 pgrep 无匹配（退出码 1）时抛错，正好落进 catch —— 与 D6/D12 同款范式。
+  let pid;
   try {
-    execFileSync('/usr/bin/pgrep', ['-f', '/Contents/MacOS/CCM'], { encoding: 'utf8', timeout: 3000 });
+    pid = execFileSync('/usr/bin/pgrep', ['-f', '/Contents/MacOS/CCM'], { encoding: 'utf8', timeout: 3000 })
+      .trim().split('\n')[0];
   } catch {
     return { running: false };
   }
@@ -285,7 +287,41 @@ function readMenubarHeartbeat() {
     running: true,
     lastProbeAt: at === null ? null : Number(at),
     lastProbeOk: okFlag === null ? null : okFlag === '1',
+    ...readMenubarBuild(pid),
   };
+}
+
+// 运行中那份 bundle 是哪个 commit 编出来的，以及落后仓库多少。
+//
+// 走**运行中进程的可执行路径**而不是猜 /Applications：跑的可能正是仓库构建产物，
+// 而那两份 bundle 的版本号一模一样（实测 2026-08-24），只有 commit 分得开。
+// 任何一步取不到就整体返回空对象——判定侧看到 null 就不说这件事，绝不编。
+function readMenubarBuild(pid) {
+  const out = {};
+  try {
+    const exe = execFileSync('/bin/ps', ['-o', 'comm=', '-p', String(pid)], { encoding: 'utf8', timeout: 3000 }).trim();
+    const marker = '/Contents/MacOS/';
+    const i = exe.lastIndexOf(marker);
+    if (i < 0) return out;
+    const plist = join(exe.slice(0, i), 'Contents', 'Info.plist');
+    const raw = execFileSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8', timeout: 3000 });
+    out.runningCommit = JSON.parse(raw)?.CCMBuildCommit || null;
+    if (!out.runningCommit) return out;
+
+    out.headCommit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: HERE, encoding: 'utf8', timeout: 3000 }).trim();
+    // -dirty 只是显示用的后缀，喂给 git 会解析失败 —— 算距离前先剥掉
+    const base = String(out.runningCommit).replace(/-dirty$/, '');
+    try {
+      const n = execFileSync('git', ['rev-list', '--count', `${base}..HEAD`], { cwd: HERE, encoding: 'utf8', timeout: 5000 }).trim();
+      out.commitsBehind = Number(n);
+    } catch {
+      // 换过分支 / 该 commit 不是 HEAD 祖先 / 已被 gc —— 判定侧只说「不同」，不给数字
+      out.commitsBehind = null;
+    }
+  } catch {
+    // 拿不到就算了：这是可观测性，不该让体检本身报错
+  }
+  return out;
 }
 
 function checkMenubarLiveness() {
