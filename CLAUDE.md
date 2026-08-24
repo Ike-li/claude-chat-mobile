@@ -67,7 +67,7 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 ```bash
 npm start          # node server.js（默认端口 3000）
 npm run dev        # node --watch server.js
-npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性（含契约计数：文档写的「当前 N 种/个」按 `protocol.js` 真值校验）+ n=1 假设面登记簿（`docs/hard-rules.md` §2 表格 ⇔ 代码 `// n1: <ID>` 标记双向相等）+ i18n 词典孤儿 key 扫描 + 破坏性删除守卫（测试里的 recursive 删除必须可追溯到 mkdtemp，否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`——两种标记不通用，为单文件删除批的豁免不放行递归删除）+ visual mock registry guard + 禁止模式 + inventory（零 token、最快）
+npm run check      # ESLint（语法+死代码+未定义引用）+ 模块边界守卫（分层不变量+零循环依赖）+ 双向事件契约（出向 agent:event 类型 + 入向 socket 事件名）+ 文档一致性（含契约计数：文档写的「当前 N 种/个」按 `protocol.js` 真值校验）+ n=1 假设面登记簿（`docs/hard-rules.md` §2 表格 ⇔ 代码 `// n1: <ID>` 标记双向相等）+ i18n 词典孤儿 key 扫描 + 破坏性删除守卫（测试里的 recursive 删除必须可追溯到 mkdtemp，否则写 `// safe-rm: 理由`；生产代码里「追不到一次性目录、目录段由代码算出」的单文件删除要写 `// safe-path: 理由`——两种标记不通用，为单文件删除批的豁免不放行递归删除）+ visual mock registry guard + 禁止模式 + desktop swiftc typecheck 与 CCMCore 单测（app-build --test-only）+ inventory（零 token、最快）
 npm run lint       # 仅 ESLint（eslint .）；lint:fix 自动修可修项
 npm test           # 单测 + tests/integration/*.test.mjs 全部（不是只跑 server/auth/upload 那几个）；其中需真 agent turn 的 7 个由 RUN_CLAUDE_INTEGRATION 门控、默认跳过；--test-force-exit 保证退出。CI 不跑本条(force-exit 会腰斩异步单测)，拆成 test:unit + test:integration 两步
 npm run test:unit  # node --test tests/unit/*.test.mjs：零 token、不 spawn claude、不起 server（最快）。注意「单测」不等于「纯函数」——相当一部分文件会用 mkdtemp 临时目录或 spawnSync 跑本仓脚本（门禁类、CLI 类、文件类），隔离靠 preload-env + 一次性目录
@@ -81,7 +81,7 @@ npm run setup      # 交互装机向导（写 ccm.config.json；可选功能逐�
 node scripts/config.js get|set|unset|check|migrate|schema   # headless 配置 CLI（与 web 配置面板同一读写源 config-file.js；secret 明文须显式 --reveal）
 
 # 启动前自检配置
-node scripts/doctor.js              # 启动自检：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/CLI statusline bridge 安装态/CLI hooks 桥安装态/ANTHROPIC_* + 配置权限/文档一致性/前端语法/覆盖率/桌面端服务安装态/shell env 压过文件配置时列出键名
+node scripts/doctor.js              # 启动自检（19 项）：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/statusline 桥/hooks 桥/ANTHROPIC_*/配置权限/配置格式/文档一致性/前端语法/覆盖率(仅 --full)/日志开关长开/CLAUDE_CONFIG_DIR/附件占用/桌面端服务安装态/菜单栏 app 活性/shell env 压过文件配置时列出键名
 node scripts/doctor.js --env=prod.env  # 指定 .env 文件
 
 # 两个 CLI 桥（可选、显式安装，动 ~/.claude；一键卸载会对称移除）
@@ -89,7 +89,7 @@ npm run statusline:install|status|uninstall    # statusline 桥：把 CLI 会话
 npm run hooks:install|status|verify|uninstall  # hooks 桥：把「回合结束/需要你」的轮询变即时信号（机制见概述段）
 
 # macOS 桌面端（第二条入口；下面 service:* 是它背后的 CLI，一般不用手敲）
-npm run app:install                 # 编译并装进 /Applications —— Spotlight/Launchpad 可搜；升级后菜单点「重启应用」
+npm run app:install                 # 首次编译并装进 /Applications —— Spotlight/Launchpad 可搜。装过之后升级走菜单「更新桌面端（重新编译）」一步到位（编译→安装→自动重启）；「重启应用」只重启不编译，用于 app 行为异常
 npm run app:build                   # 只编译到 desktop/build/CCM.app，不装系统目录
 #   check 里的 app:test 会先对全部 desktop/*.swift 跑一次 swiftc -typecheck（约 1.5s），所以「check 全绿」已蕴含「能编译」；
 #   但 typecheck 不产出 bundle，改了菜单栏要真跑起来仍需 app:build/app:install

@@ -60,9 +60,9 @@ npm run setup
 
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
 2. 询问「手机端要打开哪个项目目录」。必须填绝对路径（或 `~/` 路径）；空回车和家目录本身都会被拒绝。首个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，第一个作为默认打开的 `WORK_DIR`。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
-3. 询问是否安装 CLI hooks bridge。默认安装，但只有你确认后才会写 `~/.claude/settings.json`。
-4. macOS 上还会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
+3. macOS 上会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
    Xcode Command Line Tools。
+4. 询问是否安装 CLI hooks bridge。默认安装，但只有你确认后才会写 `~/.claude/settings.json`。
 
 如果配置文件已存在，向导默认不覆盖。
 
@@ -265,7 +265,8 @@ node scripts/device.js approve <ID>
 node scripts/device.js deny <ID>
 ```
 
-本机 loopback 和已经通过 Cloudflare Access JWT 的公网连接会跳过设备审批；普通局域网和临时随机隧道不会。
+跳过设备审批只有两种情况：已经通过 Cloudflare Access JWT 的连接，或**真·本机直连**——peer 是 loopback **且** Host 也是 `localhost` / `127.0.0.1` / `::1`（空 Host 不算）。
+经 cloudflared / nginx / SSH 反代进来的请求 peer 同样是 `127.0.0.1`，但 Host 是公网域名，**仍需审批**；普通局域网和临时随机隧道也不跳过。判据见 `src/auth/rate-limiter.js` 的 `shouldBypassDeviceApproval`。
 
 ## 8. 完成首次验收
 
@@ -319,8 +320,9 @@ npm run hooks:uninstall
 装机向导会问一句要不要编译它；也可以随时自己来：
 
 ```bash
-npm run app:install    # 编译并装进 /Applications —— 这是 macOS 那条入口
-                       # Spotlight / Launchpad / Dock 都能找到；升级后菜单点「重启应用」
+npm run app:install    # 首次编译并装进 /Applications —— 这是 macOS 那条入口
+                       # Spotlight / Launchpad / Dock 都能找到
+                       # 装过之后要升级，不用回终端：菜单里点「更新桌面端（重新编译）」
 
 # 只想先看一眼、不装系统目录：
 npm run app:build && open desktop/build/CCM.app
@@ -342,6 +344,10 @@ xcode-select --install
 - **查看日志**：内嵌滚动视图，下拉框可在 server / tunnel / logrotate 等各服务日志间切换（`~/Library/Logs/ccm-*.log` 有文件就有源），2 秒刷新，只读文件尾部（日志几百 MB 时也不会卡死）。
 - **首次安装向导 / 体检 / 安装卸载服务**：在内嵌任务窗口里逐步执行，实时显示每一步的输出，
   某步失败就停在那里并显示退出码。
+- **更新桌面端（重新编译）**：拉了新代码后点这一个就够——用当前仓库源码重新编译、装进
+  `/Applications`、自动重启换上新版，一步到位。它上面那行灰字是这份 app 的身份（版本 · 编译
+  时刻 · git commit · 装在哪）：两份 bundle 版本号相同，能分辨它们的是后两段。
+  旁边的**重启应用**只重启不编译，用于 app 本身行为异常时。
 
 菜单里的**打开控制台…**是主窗口：服务状态、各 unit、以及全部动作都在这一屏。
 

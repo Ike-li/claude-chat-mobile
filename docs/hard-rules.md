@@ -130,7 +130,7 @@
 
 ### 4.3 `npm run check` 包
 
-ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · visual mock registry · Playwright 禁止模式 · inventory。
+ESLint · import 边界 · 双向事件契约 · 文档一致性（含契约计数）· n=1 假设面登记簿（§2）· i18n 孤儿 key · 破坏性删除 · visual mock registry · Playwright 禁止模式 · desktop swiftc typecheck + CCMCore 单测（`app-build --test-only`）· inventory。
 
 删除豁免标记（不通用）：
 

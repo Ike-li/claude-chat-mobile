@@ -150,7 +150,7 @@ Agent 工具审批或用户直接文件编辑
 | Claude 对话 | `~/.claude/projects/` transcript | CLI/Web 续接与稳定历史 |
 | Web 实例运行态 | 内存中的 `AgentSession` | 流式 turn、审批、事件缓冲 |
 | CCM 控制面 | `CCM_DATA_DIR` | 会话指针、设备、审批、审计、推送与缓存 |
-| 工作区白名单 | `WORK_DIR` / `WORK_DIRS_FILE` | 限定可见与可操作目录 |
+| 工作区白名单 | `WORK_DIR` / `WORKDIRS` | 限定可见与可操作目录 |
 | Web 驾驶状态栏 | SDK 事件 | 当前模型、上下文、成本、effort |
 | CLI 驾驶状态栏 | 可选 statusline 快照 | 终端会话的只读状态展示 |
 | CLI 即时信号 | 可选 hooks 投递箱 | Stop / Notification 加速与通知 |

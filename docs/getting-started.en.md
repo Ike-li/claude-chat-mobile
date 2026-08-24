@@ -60,9 +60,9 @@ The wizard:
 
 1. Creates a random `AUTH_TOKEN`, writes it to `ccm.config.json`, and sets mode `0600`.
 2. Asks which project folder should open on your phone. It must be an absolute (or `~/`) path; an empty answer or your home directory itself is rejected. After the first one you can keep adding more folders (press Enter to finish) — they are all written to the `WORKDIRS` array, with the first as the default `WORK_DIR`. To add or remove workspaces later, edit `WORKDIRS` in the config; it hot-reloads on save.
-3. Asks whether to install the CLI hooks bridge. Installation is the default, but it writes `~/.claude/settings.json` only after you confirm.
-4. On macOS, asks whether to compile the [desktop console](#optional-macos-desktop-console). Not compiled by
+3. On macOS, asks whether to compile the [desktop console](#optional-macos-desktop-console). Not compiled by
    default — it needs the Xcode Command Line Tools.
+4. Asks whether to install the CLI hooks bridge. Installation is the default, but it writes `~/.claude/settings.json` only after you confirm.
 
 If a config file already exists, the wizard does not overwrite it by default.
 
@@ -271,7 +271,8 @@ To revoke a mistaken approval or a lost device:
 node scripts/device.js deny <ID>
 ```
 
-Local loopback connections and requests already validated by Cloudflare Access JWT skip device approval. Normal LAN access and temporary quick tunnels do not.
+Only two things skip device approval: a connection already validated by Cloudflare Access JWT, or a **genuine local connection** — the peer is loopback **and** the Host header is `localhost` / `127.0.0.1` / `::1` (an empty Host does not count).
+Requests arriving through cloudflared / nginx / an SSH reverse proxy also have `127.0.0.1` as their peer, but their Host is a public domain, so they **still need approval**. Normal LAN access and temporary quick tunnels do not skip it either. The rule lives in `shouldBypassDeviceApproval` in `src/auth/rate-limiter.js`.
 
 ## 8. Complete the first-run check
 
@@ -325,8 +326,9 @@ macOS only, and entirely optional — the phone UI and the command line already 
 The setup wizard offers to compile it; you can also do it yourself at any time:
 
 ```bash
-npm run app:install    # build and put CCM.app in /Applications — this is the macOS entry
-                       # Spotlight / Launchpad / Dock can find it; after an upgrade pick 「重启应用」
+npm run app:install    # first build, installed into /Applications — this is the macOS entry
+                       # Spotlight / Launchpad / Dock can find it
+                       # once installed, upgrades need no terminal: pick 「更新桌面端（重新编译）」 in the menu
 
 # try-run without installing into /Applications:
 npm run app:build && open desktop/build/CCM.app
@@ -342,20 +344,26 @@ xcode-select --install
 A menu bar icon shows service status. **The desktop app is self-contained and never opens a
 terminal** — installing, diagnosing, reading logs, and editing configuration all happen inside it:
 
-- **Configure…**: a form whose contents come from `config.js schema`. It drives the same CLI, so
+- **「配置…」 (Configure…)**: a form whose contents come from `config.js schema`. It drives the same CLI, so
   **you can still edit configuration while the server is down** — precisely when you most need to.
   Secrets render masked and are not submitted unless changed. On a legacy `.env` deployment, a
   banner with a "Migrate" button appears at the top of the window.
-- **View logs**: an embedded scrolling view with a dropdown to switch between the server / tunnel /
+- **「查看日志」 (View logs)**: an embedded scrolling view with a dropdown to switch between the server / tunnel /
   logrotate logs (any `~/Library/Logs/ccm-*.log` shows up as a source), refreshed every 2 seconds,
   reading only the tail of the file (so a multi-hundred-MB log does not freeze it).
 - **First-run wizard / doctor / install and uninstall service**: run step by step in an embedded task
   window with live output. A failing step stops there and shows its exit code.
+- **「更新桌面端（重新编译）」 (Update desktop app)**: after pulling new code this one item is enough —
+  it rebuilds from the current repo, installs into `/Applications`, and relaunches into the new build.
+  The dimmed line above it is this app's identity (version · build time · git commit · install path):
+  two bundles share a version number, so the last two segments are what tell them apart.
+  **「重启应用」 (Relaunch)** next to it only relaunches without rebuilding — for when the app itself
+  misbehaves.
 
-**Open Console…** in the menu is the main window: service status, individual units, and every action
-on one screen.
+**「打开控制台…」 (Open Console…)** in the menu is the main window: service status, individual units,
+and every action on one screen.
 
-Checking "Start at login (menu bar)" only brings the menu-bar icon back at login (via a LaunchAgent).
+Checking 「开机自启（菜单栏）」 (Start at login) only brings the menu-bar icon back at login (via a LaunchAgent).
 Headless keeps using `npm start` in a terminal. Do not let both occupy port 3000.
 
 ### Why there is no prebuilt app to download
