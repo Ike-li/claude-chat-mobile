@@ -18,7 +18,9 @@ import Foundation
 
 // MARK: - 运行环境：仓库在哪、node 在哪
 
-final class RuntimeEnv {
+// @unchecked Sendable 的依据就是下面那把 NSLock：_repo/_node 是仅有的可变态，全部经它进出。
+// 声明出来不是装饰 —— 它让「后台队列可以直接持有 env」从一句注释变成编译器盯着的不变量。
+final class RuntimeEnv: @unchecked Sendable {
     private static let repoKey = "CCMRepoPath"
     private static let nodeKey = "CCMNodePath"
 
@@ -96,7 +98,9 @@ final class RuntimeEnv {
 }
 
 /// 调 L1。所有对服务的认知都从这里来。
-final class ServiceClient {
+// Sendable（不是 @unchecked）：只有 `private let env` 一个存储属性，且它自身 Sendable。
+// 好处是将来谁往这里加一个可变 var，编译器会直接报错，而不是留下一个静默的 data race。
+final class ServiceClient: Sendable {
     private let env: RuntimeEnv
     init(env: RuntimeEnv) { self.env = env }
 
@@ -148,7 +152,8 @@ final class ServiceClient {
 /// 调 scripts/device.js。设备审批走 CLI 而不是 server 的 HTTP 面：这道门恰恰是
 /// 「server 在跑、但你还连不上」时才需要的，让它依赖 server 在线就本末倒置了。
 /// device.js 直接读写那两个 JSON，server 侧靠 fs.watch 感知并即时解锁已连接的 socket。
-final class DeviceClient {
+// 同 ServiceClient：无可变存储属性，靠编译器守住。
+final class DeviceClient: Sendable {
     private let env: RuntimeEnv
     init(env: RuntimeEnv) { self.env = env }
 
@@ -258,18 +263,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard !inFlight else { return }
         inFlight = true
         let fast = !menuOpen
+        // ★ 三个依赖在**进后台闭包之前**取成局部常量。它们是 @MainActor 隔离的属性，在
+        //   Sendable 闭包里经 self 访问就跨了隔离域 —— 那正是这份文件里 14 条并发告警的来源。
+        //   三个类型都已声明 Sendable，按值捕获既安全又让编译器接管这条不变量。
+        let env = self.env, client = self.client, deviceClient = self.deviceClient
         probeQueue.async { [weak self] in
             guard let self else { return }
             // refresh 会跑登录 shell，**必须在后台**（早前在主线程，shell 卡住就是菜单栏白板）
-            self.env.refresh()
-            let result = self.client.status(fast: fast)
+            env.refresh()
+            let result = client.status(fast: fast)
             // 设备快照同轮拉取。**不因 status 失败而跳过**：server 挂了恰恰是最需要看
             // 待审设备的时刻之一（device.js 只读文件，不依赖 server 在线）。
-            let devices = self.deviceClient.list()
+            let devices = deviceClient.list()
             Task { @MainActor in
                 self.inFlight = false
+                var probeSucceeded = false
                 switch result {
                 case .ok(let s):
+                    probeSucceeded = true
                     self.latest = s
                     self.lastError = nil
                     self.lastOk = Date()
@@ -282,6 +293,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // 同理保留旧值：拉失败时宁可显示一份可能过期的待审列表，也好过让整段消失——
                 // 「没有设备在等」和「我没拉到」在菜单上长得一模一样，而后者会让机主漏掉一台设备。
                 if case .ok(let d) = devices { self.latestDevices = d }
+                self.writeHeartbeat(ok: probeSucceeded)
                 self.render()
             }
         }
@@ -294,6 +306,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // MARK: 渲染
+
+    /// 心跳落盘，供 `scripts/doctor.js` 的 D19 判断菜单栏是不是卡死了。
+    ///
+    /// ★ **必须写在 probe 的 MainActor 完成回调里，不能挂在 Timer tick 上。**
+    ///   scheduleTimer 把 timer 注册在 `.common` 模式，而 `.common` 含
+    ///   `NSModalPanelRunLoopMode` —— 模态冻结期间 timer 照常触发，tick 驱动的心跳
+    ///   会在 app 已经彻底卡死时显示一切健康，正好在最需要它的时候失效。
+    ///   2026-08-23 那 63 小时里被饿死的恰恰是这条回调：`inFlight` 卡在 true、
+    ///   fd 冻在 2550 一个不涨，说明后续探测一次都没能启动。
+    ///
+    /// 成功失败都写：探测**失败**是 server 的问题（doctor 的 LaunchAgent 一项管），
+    /// 探测**停摆**才是菜单栏自己的问题 —— 两者必须分得开，否则 server 一挂就误报卡死。
+    ///
+    /// 用 UserDefaults 而不是新建心跳文件：菜单栏本来就在用它（repo/node/Dock 图标三个键），
+    /// 按 bundle id 天然分域，Node 侧一句 `defaults read` 就能读，零路径协商。
+    private func writeHeartbeat(ok: Bool) {
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: HEARTBEAT_AT_KEY)
+        UserDefaults.standard.set(ok, forKey: HEARTBEAT_OK_KEY)
+    }
 
     private func render() {
         renderIcon()
@@ -373,10 +404,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(action("打开控制台…", #selector(openConsole), key: "\r",
             tip: "服务状态、各 unit 与全部动作的总览窗口；刘海挡住菜单栏图标时的备用入口"))
-        menu.addItem(action("打开 Web UI（并复制令牌）", #selector(openWebUI), key: "o",
-            tip: "在浏览器打开本机 ccm，并把访问令牌复制到剪贴板——首次进入粘贴即可"))
-        menu.addItem(action("复制访问令牌", #selector(copyToken),
-            tip: "仅复制 AUTH_TOKEN（给手机手动登录、或粘贴到别处）"))
+        // 这两项与控制台按钮共用同一判据（canOpenWebUI / canCopyToken）。此前菜单里
+        // 恒可点，而控制台早就门禁住了 —— 同一个产品判断只落实了一半。
+        let webUIItem = action("打开 Web UI（并复制令牌）", #selector(openWebUI), key: "o",
+            tip: "在浏览器打开本机 ccm，并把访问令牌复制到剪贴板——首次进入粘贴即可")
+        webUIItem.isEnabled = canOpenWebUI(status: latest)
+        menu.addItem(webUIItem)
+        let tokenItem = action("复制访问令牌", #selector(copyToken),
+            tip: "仅复制 AUTH_TOKEN（给手机手动登录、或粘贴到别处）")
+        tokenItem.isEnabled = canCopyToken(status: latest)
+        menu.addItem(tokenItem)
 
         if let units = latest?.unitList, !units.isEmpty {
             menu.addItem(.separator())
@@ -549,11 +586,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func decidePendingDevice(_ id: String, verb: String, label: String) {
+        let deviceClient = self.deviceClient
         actionQueue.async { [weak self] in
             guard let self else { return }
-            let r = self.deviceClient.decide(verb, deviceId: id)
+            let r = deviceClient.decide(verb, deviceId: id)
             Task { @MainActor in
-                if case .failed(let e) = r { self.lastError = "\(label)失败：\(e)" }
+                // ★ 用 alert 而不是写 lastError：这个回调里没有 render()，写进去当场就不显示；
+                //   而紧接着的 probe() 一旦成功又会把 lastError 置回 nil —— 那条错误在被显示
+                //   之前就已经消失了，「准入失败」100% 不可见。旁边 runUnitAction 的失败路径
+                //   用的就是 alert，两条相邻路径此前一条看得见、一条完全吞掉。
+                if case .failed(let e) = r { self.alert("\(label)失败", e) }
                 // 成败都立刻重探。失败时同样要刷：那台设备可能刚被别的入口处理掉了
                 // （web 端远程准入 / headless 终端回车），此时"失败"的真相是"已经没了"。
                 self.probe()
@@ -563,8 +605,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func runUnitAction(_ sender: NSMenuItem) {
         guard let info = sender.representedObject as? [String: String],
-              let unit = info["unit"], let verb = info["verb"],
-              let repo = env.repo else { return }
+              let unit = info["unit"], let verb = info["verb"] else { return }
+        // 拆成两段：菜单项自带的 representedObject 坏掉是程序错误（静默返回即可），
+        // 而「找不到仓库」是用户能处理的状况，得说出来 —— 见 requireRepo。
+        guard let repo = requireRepo() else { return }
 
         switch verb {
         case "logs":
@@ -590,9 +634,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         busyUnits.insert(unit)
+        let client = self.client
         actionQueue.async { [weak self] in
             guard let self else { return }
-            let r = self.client.control(verb, unit: unit)
+            let r = client.control(verb, unit: unit)
             Task { @MainActor in
                 self.busyUnits.remove(unit)
                 if case .failed(let e) = r { self.alert("操作失败", e) }
@@ -605,9 +650,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 落到一个令牌输入页而手上什么都没有。令牌全程走 L1 的 pbcopy，不进本进程内存。
     @objc private func openWebUI() {
         let url = webUIURL(status: latest)
+        let client = self.client
         actionQueue.async { [weak self] in
-            guard let self else { return }
-            let copied = self.client.copyToken()
+            // 只判存活、不绑定：client 已经按值捕获，闭包里再没有用到 self 的地方。
+            // 但这条早退有真实语义 —— app 已经退出就别再去动用户的剪贴板。
+            guard self != nil else { return }
+            let copied = client.copyToken()
             Task { @MainActor in
                 if let u = URL(string: url) { NSWorkspace.shared.open(u) }
                 if case .failed = copied {
@@ -619,9 +667,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func copyToken() {
+        let client = self.client
         actionQueue.async { [weak self] in
             guard let self else { return }
-            let r = self.client.copyToken()
+            let r = client.copyToken()
             Task { @MainActor in
                 switch r {
                 case .ok: self.alert("已复制", "访问令牌已在剪贴板里，粘贴到网页的令牌框即可。")
@@ -649,17 +698,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func runDoctor() {
-        guard let repo = env.repo else { return }
+        guard let repo = requireRepo() else { return }
         runTask("体检", doctorSteps(repo: repo))
     }
 
     @objc private func revealRepo() {
-        guard let repo = env.repo else { return }
+        guard let repo = requireRepo() else { return }
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo)
     }
 
     @objc private func toggleAutostart() {
-        guard let repo = env.repo else { return }
+        guard let repo = requireRepo() else { return }
         // 卸载是破坏性动作，GUI 里必须先问一句 —— CLI 那侧靠 --yes 表达意图，
         // 而菜单项点一下就执行，没有等价的「我确认」环节。
         if menubarInstalled {
@@ -722,7 +771,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// 「更新桌面端」一键项：编译+安装（任务窗口可见每步输出），成功后自动重启换新版。
     /// 失败则窗口停在失败步骤，不触发重启——旧版继续跑，永远有一个能用的 app。
     @objc private func updateApp() {
-        guard let repo = env.repo else { return }
+        guard let repo = requireRepo() else { return }
         runTask("更新桌面端", updateAppSteps(repo: repo), onSuccess: { [weak self] in
             // 让「全部完成」被看见一瞬，再重启换新版
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.relaunchApp() }
@@ -749,7 +798,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // 其余每步仍然委托 CLI（判定只有一份），但在**内嵌任务窗口**里跑：用户看得见每一步的
     // 真实输出、失败时报错就在眼前，而不必切到 Terminal。桌面端不再依赖任何终端。
     private func runSetupWizard() {
-        guard let repo = env.repo else { return }
+        guard let repo = requireRepo() else { return }
 
         let welcome = NSAlert()
         welcome.messageText = "配置 ccm"
@@ -848,6 +897,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func activate() {
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// 取仓库路径，取不到就说清楚——而不是静默什么都不发生。
+    ///
+    /// 菜单**渲染之后**仓库才被移动/删除时，那些菜单项仍然留在屏幕上；此前五处同形的
+    /// `guard let repo = env.repo else { return }` 让点击字面意义上毫无反应，而 runTask
+    /// 里那句「环境不完整」提示被它们全部抢在了前面。「点了没反应」是这个 app 反复出现的
+    /// 失败形态，能少一处是一处。
+    private func requireRepo() -> String? {
+        if let repo = env.repo { return repo }
+        alert("环境不完整", "找不到 ccm 仓库。用菜单里的「重新定位仓库…」重新指一下。")
+        return nil
     }
 
     /// 把模态窗抬到**所有 app 的普通窗口之上**，且不依赖「这个 app 能不能被激活」。

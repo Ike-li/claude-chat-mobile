@@ -584,3 +584,80 @@ export function envOverrideDiagnostic({ shellEnv = {}, keys = [], lang = 'zh' } 
       + ' app itself — quit and reopen the terminal app to clear it for good)'),
   };
 }
+
+// ── 菜单栏 app 的活性 ──────────────────────────────────────────────────────
+//
+// 【为什么需要这一项】2026-08-23，机主的菜单栏 app 被一个沉到别人窗口后面的确认框冻死
+// **63 小时**，期间系统里没有任何信号：menubar unit 因为 `open` + KeepAlive=false 恒显示
+// 「待机」（与 app 是活着、崩了还是卡死完全无关），`service.js health` 只打 server 的
+// HTTP，D16 只看 server。进程活着、图标还在、菜单还能弹出（状态栏菜单由系统侧渲染），
+// 但主线程回不到事件循环，所以点什么都没反应——连「退出」。
+//
+// 【心跳从哪来】ccm-menubar.swift 的 probe() 在**每轮探测完成时**把 CCMLastProbeAt /
+// CCMLastProbeOk 写进 UserDefaults。刻意**不挂在 Timer tick 上**：scheduleTimer 把 timer
+// 注册在 .common 模式，而 .common 含 NSModalPanelRunLoopMode——模态冻结期间 timer 照常
+// 触发，tick 驱动的心跳会在 app 卡死时显示一切健康。被饿死的恰恰是 probe 的 MainActor
+// 完成回调，心跳就必须落在那条路径上。
+//
+// 成功失败都写，是为了把两件事分开：探测**失败**是 server 的问题（D16 管），
+// 探测**停摆**才是菜单栏自己卡住了。
+//
+// 【这道闸保证不了什么】它只在有人跑 doctor 时才看得见。63 小时那次真正的问题是没人去看
+// ——要让信号主动找到人，得把它送进手机端的服务状态面板，那是另一件事。
+export function menubarLivenessDiagnostic({
+  running = false,
+  lastProbeAt = null,          // epoch **秒**（Swift 的 Date().timeIntervalSince1970），不是毫秒
+  lastProbeOk = null,
+  nowMs = Date.now(),
+  staleAfterMs = 5 * 60 * 1000,  // 一轮探测最坏约 27s（node 解析 5 + status 8+3 + device 8+3），10 倍余量
+  lang = 'zh',
+} = {}) {
+  const name = 'CCM.app';
+
+  if (!running) {
+    return { status: 'ok', name, detail: bi(lang,
+      '菜单栏 app 没在跑（headless 用法本就不需要它）。',
+      'The menu bar app is not running (the headless setup does not need it).') };
+  }
+
+  const at = Number(lastProbeAt);
+  if (!Number.isFinite(at) || at <= 0) {
+    return { status: 'warn', name, detail: bi(lang,
+      '菜单栏 app 在跑，但读不到它的心跳——多半是不带心跳的旧版。跑 npm run app:install，然后退出并重新打开它。',
+      'The menu bar app is running but has no heartbeat — most likely an older build. Run npm run app:install, then quit and reopen it.') };
+  }
+
+  // 未来的时间戳（改过系统时钟）按新鲜处理：宁可漏报，也别拿一个说不清的判据吓人。
+  const ageMs = Math.max(0, nowMs - at * 1000);
+
+  if (ageMs > staleAfterMs) {
+    const ago = formatStaleAge(ageMs, lang);
+    return { status: 'fail', name, detail: bi(lang,
+      `菜单栏 app 的进程还在，但已经 ${ago} 没有刷新过状态——它的主线程多半卡住了，此时菜单还能弹出、点什么都没反应（连「退出」）。`
+      + '最常见的原因是一个沉到别的窗口后面的确认框：先查'
+      + ' `osascript -e \'tell application "System Events" to tell process "CCM" to get value of every static text of window 1\'`，'
+      + '有对话框就把它点掉；查不到再 `killall CCM` 重开。',
+      `The menu bar app's process is alive but has not refreshed for ${ago} — its main thread is most likely stuck, `
+      + 'in which case the menu still opens but nothing responds (not even Quit). '
+      + 'The usual cause is a confirmation dialog buried behind other windows: first check '
+      + '`osascript -e \'tell application "System Events" to tell process "CCM" to get value of every static text of window 1\'` '
+      + 'and dismiss it if there is one; otherwise `killall CCM` and reopen.') };
+  }
+
+  if (lastProbeOk === false) {
+    return { status: 'warn', name, detail: bi(lang,
+      '菜单栏 app 在刷新，但最近一轮读不到服务状态——那是 server 侧的事，看上面的 LaunchAgent 一项。',
+      'The menu bar app is refreshing, but its latest probe could not read the service state — that is a server-side issue; see the LaunchAgent entry above.') };
+  }
+
+  return { status: 'ok', name, detail: bi(lang,
+    `菜单栏 app 在跑，状态刷新正常（${formatStaleAge(ageMs, lang)}前）。`,
+    `The menu bar app is running and refreshing normally (last update ${formatStaleAge(ageMs, lang)} ago).`) };
+}
+
+// 停摆时长。小时是主要量级——63 小时那次，时长本身就是信息量最大的一条。
+function formatStaleAge(ms, lang) {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return bi(lang, `${minutes} 分钟`, `${minutes} min`);
+  return bi(lang, `${Math.round(minutes / 60)} 小时`, `${Math.round(minutes / 60)} h`);
+}

@@ -2,7 +2,7 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix] [--full]
 //
-// 检查项（18 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
+// 检查项（19 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
@@ -21,6 +21,7 @@
 // 16. 桌面端服务安装态（只读 scripts/service.js status；不装、不改任何 plist）
 // 17. 配置格式可见性（legacy .env 恒 ok 非 warn——一等路径不催迁，只在此告知迁移能力，见 doctor-checks.configFormatDiagnostic）
 // 18. shell 环境变量覆盖可见性（env 恒压过配置文件而被压侧无症状；只列键名不回显值，见 doctor-checks.envOverrideDiagnostic）
+// 19. 菜单栏 app 活性（进程在但主线程卡死时，系统里此前零信号——见 doctor-checks.menubarLivenessDiagnostic）
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
@@ -44,6 +45,7 @@ import {
   statuslineConfigDiagnostic,
   envOverrideDiagnostic,
   identifySelfServer,
+  menubarLivenessDiagnostic,
   uploadsFootprintDiagnostic,
 } from '../src/ops/doctor-checks.js';
 import { ENV_SCHEMA } from '../src/ops/env-schema.js';
@@ -250,6 +252,44 @@ function checkServiceUnits() {
     units: s?.units ?? null,
     lang: LANG,
   });
+  ({ ok, warn, fail })[r.status](r.name, r.detail);
+}
+
+// D19: 菜单栏 app 活性。两个只读探针（pgrep + defaults read），不改任何东西。
+//
+// 为什么不能只看 service.js status 的 menubar 那一行：它因为 `open` + KeepAlive=false
+// 恒为 stopped，被渲染成「随登录自启」——与 app 是活着、崩了还是卡死**完全无关**。
+// 心跳来自 app 自己（ccm-menubar.swift 的 probe 完成回调），判据全在
+// doctor-checks.menubarLivenessDiagnostic，与 UI 侧共用一份。
+const MENUBAR_BUNDLE_ID = 'com.ccm.menubar'; // 与 desktop/Info.plist.template 同源，由 tests/unit/desktop-schema-contract.test.mjs 钉住
+
+function readMenubarHeartbeat() {
+  if (platform() !== 'darwin') return { running: false };
+  // 匹配 bundle 内的可执行路径：/Applications 与仓库构建产物两份都算「菜单栏在跑」。
+  // execFileSync 在 pgrep 无匹配（退出码 1）时抛错，正好落进 catch —— 与 D6/D12 同款范式。
+  try {
+    execFileSync('/usr/bin/pgrep', ['-f', '/Contents/MacOS/CCM'], { encoding: 'utf8', timeout: 3000 });
+  } catch {
+    return { running: false };
+  }
+  const readKey = (key) => {
+    try {
+      return execFileSync('/usr/bin/defaults', ['read', MENUBAR_BUNDLE_ID, key], { encoding: 'utf8', timeout: 3000 }).trim();
+    } catch {
+      return null; // 键不存在（旧版没有心跳）时 defaults 退出码非 0
+    }
+  };
+  const at = readKey('CCMLastProbeAt');
+  const okFlag = readKey('CCMLastProbeOk');
+  return {
+    running: true,
+    lastProbeAt: at === null ? null : Number(at),
+    lastProbeOk: okFlag === null ? null : okFlag === '1',
+  };
+}
+
+function checkMenubarLiveness() {
+  const r = menubarLivenessDiagnostic({ ...readMenubarHeartbeat(), lang: LANG });
   ({ ok, warn, fail })[r.status](r.name, r.detail);
 }
 
@@ -641,6 +681,7 @@ function effectiveConfigFiles() {
   checkClaudeConfigDir();
   checkUploadsFootprint();
   checkServiceUnits();
+  checkMenubarLiveness();
   checkEnvOverrides();
 
   // --fix 选项：自动修复权限

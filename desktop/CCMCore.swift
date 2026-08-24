@@ -624,6 +624,23 @@ struct ConsoleAction: Equatable {
 ///
 /// 判定集中在这里而不是散在按钮的 isEnabled 赋值里：环境不完整时几乎所有动作都没意义，
 /// 而「按钮亮着但点了没反应」比「按钮是灰的」难排查得多。
+/// 「打开 Web UI」能不能点。
+///
+/// **菜单与控制台必须共用这一份判据。**此前这层门禁只有控制台实现了（`consoleActions`
+/// 里那两行），菜单里那两项恒可点 —— 同一个产品判断只落实一半，比两边都不做更难发现。
+/// server 没跑时点它：copyToken 失败被刻意静默，然后 NSWorkspace 打开一个必然连不上的
+/// 地址；`latest` 还是 nil 时 `webUIURL` 更会回落到硬编码的 127.0.0.1:3000，端口配成
+/// 别的就是打开一个完全无关的页面，而 app 侧零反馈。
+func canOpenWebUI(status: ServiceStatus?) -> Bool {
+    status?.server?.stateName == "running"
+}
+
+/// 「复制访问令牌」能不能点。没配过就没有 token，也没有可打开的地址 ——
+/// 该走装机向导，而不是点开一个必然 401 的页面。
+func canCopyToken(status: ServiceStatus?) -> Bool {
+    status?.setup?.envExists ?? false
+}
+
 func consoleActions(status: ServiceStatus?, problem: EnvProblem) -> [ConsoleAction] {
     // 环境坏掉时只留修复入口。此时 repo/node 都拿不到，其余动作全部会失败。
     switch problem {
@@ -635,15 +652,13 @@ func consoleActions(status: ServiceStatus?, problem: EnvProblem) -> [ConsoleActi
         break
     }
 
-    let serverRunning = status?.server?.stateName == "running"
-    // 没配过就没有 token，也没有可打开的地址 —— 该走装机向导而不是点开一个必然 401 的页面。
-    let configured = status?.setup?.envExists ?? false
+    let configured = canCopyToken(status: status)
 
     var out: [ConsoleAction] = []
     if !configured {
         out.append(ConsoleAction(kind: .setupWizard, title: "首次安装向导…", enabled: true))
     }
-    out.append(ConsoleAction(kind: .openWebUI, title: "打开 Web UI", enabled: serverRunning))
+    out.append(ConsoleAction(kind: .openWebUI, title: "打开 Web UI", enabled: canOpenWebUI(status: status)))
     out.append(ConsoleAction(kind: .copyToken, title: "复制访问令牌", enabled: configured))
     // 配置与日志**不依赖 server 在跑** —— 那正是最需要它们的时刻（配置窗口走 CLI 读磁盘）。
     out.append(ConsoleAction(kind: .config, title: "配置…", enabled: true))
@@ -655,6 +670,15 @@ func consoleActions(status: ServiceStatus?, problem: EnvProblem) -> [ConsoleActi
 /// Dock 图标偏好的存储键。默认**关**：这仍是个常驻后台工具，
 /// 只有被刘海挤掉入口的人才需要它，不该让所有人的 Dock 多一个图标。
 let DOCK_ICON_DEFAULTS_KEY = "CCMShowDockIcon"
+
+/// 心跳的存储键。菜单栏在**每轮探测完成时**写这两个值，`scripts/doctor.js` 的 D19 用
+/// `defaults read com.ccm.menubar <key>` 读出来判断「进程还在但主线程是不是卡死了」。
+/// 那是 2026-08-23 之前系统里完全没有的信号：menubar unit 因为 `open` + KeepAlive=false
+/// 恒显示「待机」，与 app 活着、崩了还是冻住毫无关系，于是它被一个看不见的确认框
+/// 冻死 63 小时都没人发现。
+/// 键名散落在 Swift 与 Node 两侧，由 tests/unit/desktop-schema-contract.test.mjs 钉住。
+let HEARTBEAT_AT_KEY = "CCMLastProbeAt"   // Date().timeIntervalSince1970，**秒**
+let HEARTBEAT_OK_KEY = "CCMLastProbeOk"   // 上一轮探测是否成功
 
 // MARK: - 设备审批（对应 scripts/device.js 的 `list --json`，schemaVersion = 1）
 //

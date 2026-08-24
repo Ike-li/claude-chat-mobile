@@ -21,6 +21,7 @@ import {
   statuslineConfigDiagnostic,
   summarizeDangerous,
   uploadsFootprintDiagnostic,
+  menubarLivenessDiagnostic,
 } from '../../src/ops/doctor-checks.js';
 
 // 判据依据（2026-08-04 用本地假网关抓 /v1/messages 请求体实测，CLI 2.1.221）：
@@ -782,4 +783,61 @@ test('portOccupancyDiagnostic：端口被自家 headless server 占着是 ok，�
   assert.equal(d.status, 'ok', 'headless npm start 是官方两条入口之一，不能恒红');
   assert.match(d.detail, /39090/);
   assert.equal(/停掉/.test(d.detail), false);
+});
+
+// ── menubarLivenessDiagnostic ──────────────────────────────────────────────
+// 2026-08-23：机主的菜单栏 app 被一个沉到别人窗口后面的确认框冻死 **63 小时**，
+// 期间系统里没有任何信号 —— menubar unit 因为 `open` + KeepAlive=false 恒显示「待机」，
+// service.js health 只打 server 的 HTTP，doctor D16 只看 server。进程活着、图标还在，
+// 但主线程回不到事件循环，点什么都没反应（连「退出」）。
+//
+// 心跳由 app 在**每轮探测完成时**写进 UserDefaults（见 ccm-menubar.swift 的 probe），
+// 这里只负责判定。成功/失败都写，是为了把两件事分开：探测**失败**是 server 的问题
+// （D16 管），探测**停摆**才是菜单栏自己卡住了。
+test.describe('menubarLivenessDiagnostic', () => {
+  const NOW = 1786000000000;          // 毫秒
+  const AT = (agoSeconds) => (NOW / 1000) - agoSeconds;   // 秒（与 Swift 的 timeIntervalSince1970 同单位）
+
+  test('进程没跑 → ok：没开菜单栏是完全正常的状态，不该报警', () => {
+    const r = menubarLivenessDiagnostic({ running: false, nowMs: NOW });
+    assert.equal(r.status, 'ok');
+  });
+
+  test('进程在但读不到心跳 → warn 而不是 fail：装的可能是不带心跳的旧版，升级即自愈', () => {
+    const r = menubarLivenessDiagnostic({ running: true, lastProbeAt: null, nowMs: NOW });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /旧版|重新打开|app:install/);
+  });
+
+  test('心跳新鲜且上轮探测成功 → ok', () => {
+    const r = menubarLivenessDiagnostic({ running: true, lastProbeAt: AT(10), lastProbeOk: true, nowMs: NOW });
+    assert.equal(r.status, 'ok');
+  });
+
+  test('心跳新鲜但上轮探测失败 → warn：菜单栏活着，读不到状态是 server 的事（D16 管）', () => {
+    const r = menubarLivenessDiagnostic({ running: true, lastProbeAt: AT(10), lastProbeOk: false, nowMs: NOW });
+    assert.equal(r.status, 'warn');
+    assert.doesNotMatch(r.detail, /卡住|冻/, '这一档不是菜单栏卡住，别把排障往错方向带');
+  });
+
+  test('心跳超时 → fail，且必须给出路（先查隐藏模态框，再 killall）', () => {
+    const r = menubarLivenessDiagnostic({ running: true, lastProbeAt: AT(3600), lastProbeOk: true, nowMs: NOW });
+    assert.equal(r.status, 'fail');
+    assert.match(r.detail, /killall/, 'fail 不给出路等于只报警不解决——那次唯一的出路就是 killall');
+    assert.match(r.detail, /osascript|对话框|模态/, '真实根因是看不见的模态框，应先查它再杀进程');
+  });
+
+  // ★ 单位换算必须由测试钉住：Swift 写的是**秒**，doctor 侧比的是**毫秒**。
+  // 弄反的症状是「永远新鲜」或「永远五万年前」，两种都不会抛错，只会静默失效。
+  test('lastProbeAt 按秒解读：刚好卡在阈值内外两侧', () => {
+    const within = menubarLivenessDiagnostic({ running: true, lastProbeAt: AT(299), lastProbeOk: true, nowMs: NOW });
+    const beyond = menubarLivenessDiagnostic({ running: true, lastProbeAt: AT(301), lastProbeOk: true, nowMs: NOW });
+    assert.equal(within.status, 'ok', '299 秒前 < 5 分钟阈值，应判新鲜');
+    assert.equal(beyond.status, 'fail', '301 秒前 > 5 分钟阈值，应判卡住');
+  });
+
+  test('detail 里报出实际停摆时长，方便判断是刚卡还是卡了很久', () => {
+    const r = menubarLivenessDiagnostic({ running: true, lastProbeAt: AT(63 * 3600), lastProbeOk: true, nowMs: NOW });
+    assert.match(r.detail, /63/, '63 小时那次，时长本身就是最有信息量的一条');
+  });
 });

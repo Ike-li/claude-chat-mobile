@@ -7,9 +7,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { infoPlistVars, swiftTarget, swiftcArgs, autostartTargetPath } from '../../scripts/app-build.js';
+import { APP_SOURCES, infoPlistVars, swiftTarget, swiftcArgs, typecheckArgs, autostartTargetPath } from '../../scripts/app-build.js';
 import { renderTemplate, stripLeadingComment } from '../../scripts/render-plist.js';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -118,5 +118,51 @@ test.describe('autostartTargetPath', () => {
 
   test('只编译不安装 → 只能指向构建产物（调用方另给风险提示）', () => {
     assert.equal(autostartTargetPath(BUILD, { installed: false }), BUILD);
+  });
+});
+
+// ── typecheckArgs ──────────────────────────────────────────────────────────
+// 为什么需要它：npm run check 此前只编译 CCMCore + CCMProcess + 测试（TEST_SOURCES），
+// 而三个 GUI 文件共 1842 行（占生产 Swift 的 67%）连语法都不过一遍——改坏了 check 照样全绿，
+// 只有人手动跑 app:build 才暴露。全量 -typecheck 实测 1.5 秒，便宜到可以无条件进门禁。
+test.describe('typecheckArgs', () => {
+  const ARGS = () => typecheckArgs({ sources: ['/x/a.swift', '/x/b.swift'] });
+
+  test('是 -typecheck 而不是 -o：只做类型检查，不产出任何文件', () => {
+    const args = ARGS();
+    assert.ok(args.includes('-typecheck'));
+    assert.ok(!args.includes('-o'), '带 -o 就变成真编译了，会写 build 产物并慢一个数量级');
+  });
+
+  test('链接 AppKit —— GUI 文件里全是 NSMenu / NSAlert / NSWindow，不链必然报未定义', () => {
+    const args = ARGS();
+    const i = args.indexOf('-framework');
+    assert.ok(i >= 0 && args[i + 1] === 'AppKit');
+  });
+
+  test('target 与真编译同源（按宿主派生），否则会检查一个跟产物不同的平台', () => {
+    const args = ARGS();
+    const i = args.indexOf('-target');
+    assert.equal(args[i + 1], swiftTarget());
+  });
+
+  test('源码排在最后且保持顺序', () => {
+    assert.deepEqual(ARGS().slice(-2), ['/x/a.swift', '/x/b.swift']);
+  });
+});
+
+// ── APP_SOURCES 的完备性 ───────────────────────────────────────────────────
+// ★ 这条才是编译闸真正的防线。typecheckArgs 只保证「传进去的文件被检查」，
+// 保证不了「该传的都传了」——新加一个 desktop/*.swift 却忘了写进 APP_SOURCES，
+// 那个文件既不进 app 也不进门禁，症状是「我明明写了代码，菜单里没有」。
+test.describe('APP_SOURCES 覆盖 desktop 下每一个产品 .swift', () => {
+  test('除测试断言集外，desktop/*.swift 全部在 APP_SOURCES 里', () => {
+    const dir = join(ROOT, 'desktop');
+    const onDisk = readdirSync(dir)
+      .filter((f) => f.endsWith('.swift') && f !== 'ccm-menubar-tests.swift')
+      .sort();
+    const declared = APP_SOURCES.map((p) => p.split('/').pop()).sort();
+    assert.deepEqual(declared, onDisk,
+      '新增的 desktop/*.swift 必须同时写进 APP_SOURCES，否则它既不进 app 也不进编译闸');
   });
 });

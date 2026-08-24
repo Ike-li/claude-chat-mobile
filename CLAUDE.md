@@ -91,7 +91,8 @@ npm run hooks:install|status|verify|uninstall  # hooks 桥：把「回合结束/
 # macOS 桌面端（第二条入口；下面 service:* 是它背后的 CLI，一般不用手敲）
 npm run app:install                 # 编译并装进 /Applications —— Spotlight/Launchpad 可搜；升级后菜单点「重启应用」
 npm run app:build                   # 只编译到 desktop/build/CCM.app，不装系统目录
-#   ⚠️ 改 desktop/*.swift 后 check 全绿 ≠ 编译通过：check 里的 app:test 只编 CCMCore + 断言集，菜单栏与两个窗口 .swift 要 app:build 才编到
+#   check 里的 app:test 会先对全部 desktop/*.swift 跑一次 swiftc -typecheck（约 1.5s），所以「check 全绿」已蕴含「能编译」；
+#   但 typecheck 不产出 bundle，改了菜单栏要真跑起来仍需 app:build/app:install
 npm run service:status              # 各 unit 的运行态/归属/漂移；--json 供菜单栏与 doctor 消费
 npm run service:install|adopt|restart|logs|health   # adopt=接管手工安装（只写 manifest 不碰 plist）；uninstall 须 --yes
 npm run uninstall -- [--purge] [--dry-run] --yes    # 一键卸载（受管服务+残留 menubar 进程+CCM.app+偏好域+两个桥+~/.claude/ccm；--purge 连数据根白名单/配置/受管日志）；只删产品自己装的，manifest 外的 unit/~/.cloudflared/~/.claude/projects 永不碰

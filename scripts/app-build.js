@@ -31,7 +31,9 @@ const INFO_PLIST = join(APP, 'Contents', 'Info.plist');
 // FD 泄漏，把整个菜单栏拖成「点什么都没反应」，见该文件头注。
 const CORE = join(DESKTOP, 'CCMCore.swift');
 const PROC = join(DESKTOP, 'CCMProcess.swift');
-const APP_SOURCES = [CORE, PROC, join(DESKTOP, 'ccm-menubar.swift'), join(DESKTOP, 'ccm-config-window.swift'), join(DESKTOP, 'ccm-console-window.swift')];
+// 导出：tests/unit/app-build.test.mjs 据此断言「desktop 下每个产品 .swift 都在这里」——
+// 漏一个的症状是「代码写了菜单里没有」，且它同时逃过下面那道 typecheck 闸。
+export const APP_SOURCES = [CORE, PROC, join(DESKTOP, 'ccm-menubar.swift'), join(DESKTOP, 'ccm-config-window.swift'), join(DESKTOP, 'ccm-console-window.swift')];
 const TEST_SOURCES = [CORE, PROC, join(DESKTOP, 'ccm-menubar-tests.swift')];
 const TEST_BIN = join(BUILD, 'ccm-core-tests');
 
@@ -46,6 +48,15 @@ export function swiftTarget(arch = process.arch) {
 export function swiftcArgs({ sources, out, target = swiftTarget(), frameworks = ['AppKit'] }) {
   const fw = frameworks.flatMap((f) => ['-framework', f]);
   return ['-O', '-parse-as-library', '-target', target, ...fw, '-o', out, ...sources];
+}
+
+// 只做类型检查、不产出任何文件（所以没有 -o，也不需要 -O / -parse-as-library）。
+// 存在理由：此前 `npm run check` 只编译 TEST_SOURCES，三个 GUI 文件（1842 行，占生产 Swift
+// 的 67%）连语法都不过一遍 —— 改坏了 check 照样全绿，只有人记得手动跑 app:build 才暴露。
+// 全量 -typecheck 实测 1.5 秒，便宜到可以无条件进门禁，于是那条「靠人记住」的警告可以删掉。
+export function typecheckArgs({ sources, target = swiftTarget(), frameworks = ['AppKit'] }) {
+  const fw = frameworks.flatMap((f) => ['-framework', f]);
+  return ['-typecheck', '-target', target, ...fw, ...sources];
 }
 
 // 「开机自启该指向哪个 CCM.app」。装进 /Applications 之后，desktop/build 里那份只是中间产物：
@@ -81,8 +92,20 @@ function run(cmd, args, label) {
 }
 
 // 跑 CCMCore 的断言集。Foundation 就够，不链 AppKit（测试里没有 GUI 类型）。
+//
+// 先全量 typecheck 再编测试：GUI 语法错应该最先炸，不必等测试编译完。这一步覆盖的是
+// 断言集永远够不到的那 1842 行 —— @main 冲突让 ccm-menubar.swift 进不了测试编译单元，
+// 而测试二进制不链 AppKit，GUI 类型也抽不进 CCMCore。类型检查是这里唯一还能做的机器验证。
 export function runTests() {
   mkdirSync(BUILD, { recursive: true });
+  process.stdout.write('类型检查 desktop/*.swift…\n');
+  const tc = run('swiftc', typecheckArgs({ sources: APP_SOURCES }), 'swiftc(typecheck)');
+  // 成功时也把 stderr 打出来。run() 默认只在失败时回显捕获的输出，而 swiftc 的**告警**
+  // 恰恰走成功路径 —— 不打的话这条通道是死的：并发隔离、API 弃用这类「能编过但会出事」
+  // 的信号永远没人看得见。刻意不做成 -warnings-as-errors：Xcode 升级会引入新告警，
+  // 那会把门禁打红成噪音；可见但不阻塞才是这里正确的失败模式。
+  const warnings = String(tc?.stderr || '').trim();
+  if (warnings) process.stdout.write(`${warnings}\n`);
   process.stdout.write('编译 CCMCore 测试…\n');
   run('swiftc', swiftcArgs({ sources: TEST_SOURCES, out: TEST_BIN, frameworks: [] }), 'swiftc(test)');
   const r = spawnSync(TEST_BIN, [], { encoding: 'utf8', stdio: 'inherit' });

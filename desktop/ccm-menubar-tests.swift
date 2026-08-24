@@ -555,6 +555,24 @@ func testConsoleActions() {
     let new = consoleActions(status: status(fresh), problem: .none)
     check(new.first?.kind == .setupWizard, "未配置 ⇒ 首项是装机向导")
     check(new.first(where: { $0.kind == .copyToken })?.enabled == false, "没配过 ⇒ 复制令牌禁用")
+
+    // ★ 判据必须是**菜单与控制台共用的那一份**。此前这层门禁只有控制台实现了，
+    //   菜单里「打开 Web UI」「复制访问令牌」恒可点：server 没跑时点它，浏览器打开一个
+    //   必然连不上的地址（latest 为 nil 时 webUIURL 还会回落到硬编码的 127.0.0.1:3000，
+    //   端口配成别的就是打开一个完全无关的页面），而 app 侧零反馈。
+    //   同一个产品判断只落实一半，比两边都不做更难发现。
+    check(canOpenWebUI(status: status(running)), "server 在跑 ⇒ 可开 Web UI")
+    check(!canOpenWebUI(status: status(stopped)), "server 停了 ⇒ 不可开")
+    check(!canOpenWebUI(status: nil), "还没读到状态 ⇒ 不可开（别拿回落端口去猜）")
+    check(canCopyToken(status: status(running)), "已配置 ⇒ 可复制令牌")
+    check(!canCopyToken(status: status(fresh)), "没配过 ⇒ 没有令牌可复制")
+    check(!canCopyToken(status: nil), "还没读到状态 ⇒ 不可复制")
+
+    // 控制台的两项必须由同一判据算出，否则两个界面会各说各话
+    eq(ok.first(where: { $0.kind == .openWebUI })?.enabled, canOpenWebUI(status: status(running)),
+       "控制台的 Web UI 门禁 == canOpenWebUI")
+    eq(new.first(where: { $0.kind == .copyToken })?.enabled, canCopyToken(status: status(fresh)),
+       "控制台的复制令牌门禁 == canCopyToken")
 }
 
 func testPortConflictPresentation() {
