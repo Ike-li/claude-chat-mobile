@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { APP_SOURCES, infoPlistVars, swiftTarget, swiftcArgs, typecheckArgs, autostartTargetPath } from '../../scripts/app-build.js';
+import { APP_SOURCES, infoPlistVars, shouldRemoveBuildArtifact, swiftTarget, swiftcArgs, typecheckArgs, autostartTargetPath } from '../../scripts/app-build.js';
 import { renderTemplate, stripLeadingComment } from '../../scripts/render-plist.js';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -164,5 +164,53 @@ test.describe('APP_SOURCES 覆盖 desktop 下每一个产品 .swift', () => {
     const declared = APP_SOURCES.map((p) => p.split('/').pop()).sort();
     assert.deepEqual(declared, onDisk,
       '新增的 desktop/*.swift 必须同时写进 APP_SOURCES，否则它既不进 app 也不进编译闸');
+  });
+});
+
+// ── shouldRemoveBuildArtifact ──────────────────────────────────────────────
+// 2026-08-24 机主报「Spotlight 里老是有两个 CCM」。实测 LaunchServices 把两个 bundle
+// 注册到了**同一个 identifier**（com.ccm.menubar）下：/Applications 那份和
+// desktop/build 那份 —— 同名、同图标、同版本号，界面上分不出哪个是哪个。
+// 根因是构建管线：app-build 永远先编到 desktop/build/CCM.app，--install 只是 ditto 一份
+// 出去，中间产物从不删除。装完之后它已经没有用途了，只剩下制造二义性。
+//
+// 判据抽成纯函数而不是写在 main() 里，是因为判错的后果很重：**删掉一个正被开机自启
+// 使用的 app**。判据留在取数侧就是零覆盖（改成无条件 return true 全套单测照样绿）。
+test.describe('shouldRemoveBuildArtifact', () => {
+  const BUILD_APP = '/Users/you/code/claude-chat-mobile/desktop/build/CCM.app';
+
+  test('只编译不安装 → 保留：此时构建产物就是最终产物（getting-started 教的「先看一眼」那条路）', () => {
+    const r = shouldRemoveBuildArtifact({ installed: false, buildAppPath: BUILD_APP });
+    assert.equal(r.remove, false);
+    assert.match(r.reason, /不安装|最终产物/);
+  });
+
+  test('装进 /Applications 且自启不指向它 → 删除', () => {
+    const r = shouldRemoveBuildArtifact({
+      installed: true, buildAppPath: BUILD_APP, autostartAppPath: '/Applications/CCM.app',
+    });
+    assert.equal(r.remove, true);
+  });
+
+  test('读不到自启配置（没装自启 / plutil 失败）→ 删除：清理是安全方向', () => {
+    const r = shouldRemoveBuildArtifact({ installed: true, buildAppPath: BUILD_APP, autostartAppPath: null });
+    assert.equal(r.remove, true);
+  });
+
+  // ★ 这一支是整条改动唯一会造成真实损害的路径：自启指向构建产物虽然是个已被
+  //   service.js 警告过的状态，但它**仍然是能用的**，删掉就把它变成静默失效。
+  test('自启正指向构建产物 → 保留，并说清楚要先重新勾一次自启', () => {
+    const r = shouldRemoveBuildArtifact({
+      installed: true, buildAppPath: BUILD_APP, autostartAppPath: BUILD_APP,
+    });
+    assert.equal(r.remove, false);
+    assert.match(r.reason, /开机自启/);
+  });
+
+  test('尾斜杠不算两个路径：plist 里带 / 时同样要认出来', () => {
+    const r = shouldRemoveBuildArtifact({
+      installed: true, buildAppPath: BUILD_APP, autostartAppPath: `${BUILD_APP}/`,
+    });
+    assert.equal(r.remove, false, '尾斜杠没归一化就会删掉正在被自启使用的 app');
   });
 });

@@ -12,6 +12,7 @@
 // 就重置，用户设过的「重新定位仓库」会莫名其妙丢掉。
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -64,6 +65,46 @@ export function typecheckArgs({ sources, target = swiftTarget(), frameworks = ['
 // 而 status 直到 2026-08-18 才会为此报警。抽成函数是因为它编码的是一个判断，不是格式化。
 export function autostartTargetPath(buildAppPath, { installed } = {}) {
   return installed ? '/Applications/CCM.app' : buildAppPath;
+}
+
+// 装完之后 desktop/build/CCM.app 还留着，就是一份**同 bundle id、同版本号、零区分标记**
+// 的复制品。实测（2026-08-24）LaunchServices 把两个 bundle 注册到同一个 identifier 下，
+// 于是 Spotlight 里出现两个同名同图标的 CCM，界面上分不出哪个是哪个；旧实例还在跑时
+// 从 Spotlight 打开更可能只是激活旧实例，让「更新桌面端」看起来没生效。
+//
+// 但**不能无条件删**：万一 menubar 的 LaunchAgent 正指向构建产物——那是个已经被
+// service.js 警告过的状态，却仍然是能用的——删掉就把它变成静默失效。所以先问一句。
+export function shouldRemoveBuildArtifact({ installed = false, buildAppPath, autostartAppPath = null } = {}) {
+  if (!installed) {
+    return { remove: false, reason: '只编译不安装，构建产物就是最终产物' };
+  }
+  // 尾斜杠归一化：plist 里写成 `<path>/` 的话，不归一就会把「正在被自启使用」判成不相等，
+  // 于是删掉一个能用的 app —— 这是整条改动唯一会造成真实损害的路径。
+  const norm = (p) => String(p || '').replace(/\/+$/, '');
+  if (autostartAppPath && norm(autostartAppPath) === norm(buildAppPath)) {
+    return {
+      remove: false,
+      reason: '开机自启正指向它——先在菜单里重新勾一次「开机自启（菜单栏）」改指 /Applications，再重新安装',
+    };
+  }
+  return { remove: true, reason: '已装进 /Applications，构建产物只是 ditto 的源' };
+}
+
+// menubar LaunchAgent 指向哪个 bundle。读不到（没装自启 / 非 macOS / plist 坏了）返回 null，
+// 判据那边按「不指向构建产物」处理：清理是安全方向，且真删错了 service.js 会立刻报
+// 「开机自启指向的 CCM.app 已不存在」——是个看得见的告警，不是静默失效。
+function readAutostartAppPath() {
+  const plist = join(homedir(), 'Library', 'LaunchAgents', 'com.ccm.menubar.plist');
+  if (!existsSync(plist)) return null;
+  try {
+    const r = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8', timeout: 3000 });
+    if (!r || r.status !== 0) return null;
+    // 形态是 ['/usr/bin/open', '<bundle path>']，见 desktop/launchd/menubar.plist.template
+    const args = JSON.parse(r.stdout)?.ProgramArguments;
+    return Array.isArray(args) ? (args.find((a) => String(a).endsWith('.app')) ?? null) : null;
+  } catch {
+    return null;
+  }
 }
 
 // Info.plist 需要的占位符变量。少一个都会让 bundle 里出现字面量 __XXX__。
@@ -175,6 +216,18 @@ export function main({ test = true } = {}) {
   // 自启提示必须指向【最终落地位置】，且排在 --install 之后。此前它固定打印构建产物路径
   // 又排在安装之前，于是跑 app:install 的人看到的最后一条可复制命令指向 desktop/build/CCM.app
   // ——照做就把 LaunchAgent 钉在 gitignore 的目录上，git clean 后开机自启静默失效。
+  // 清理中间产物：装完之后它只剩下在 Spotlight 里制造一个分不清的同名条目。
+  const cleanup = shouldRemoveBuildArtifact({
+    installed, buildAppPath: APP, autostartAppPath: readAutostartAppPath(),
+  });
+  if (cleanup.remove) {
+    rmSync(APP, { recursive: true, force: true }); // safe-rm: 目标恒为 <repo>/desktop/build/CCM.app，两段目录名都是本文件里的字面量常量，不含任何运行期计算（同 :114 那处）
+    process.stdout.write(`  已清理构建产物（${cleanup.reason}），Spotlight 里只会剩一个 CCM。\n`);
+  } else if (installed) {
+    process.stdout.write(`  ⚠ 保留了 ${APP}：${cleanup.reason}\n`
+      + '    在此之前 Spotlight 里会有两个同名的 CCM，分不出哪个是哪个。\n');
+  }
+
   const target = autostartTargetPath(APP, { installed });
   process.stdout.write('  开机自启：在菜单栏里勾「开机自启（菜单栏）」，'
     + `或 node scripts/service.js install menubar --app="${target}"\n`);

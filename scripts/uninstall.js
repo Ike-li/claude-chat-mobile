@@ -180,6 +180,21 @@ export function createUninstaller({
       push('app', 'done', `已删除 ${appPath}`);
     }
 
+    // ---- 3b. 仓库里的构建产物（只报告，不删）----
+    //
+    // app-build.js 先编到 <repo>/desktop/build/CCM.app，--install 才 ditto 出去；自 2026-08-24
+    // 起装完会自动清掉那份中间产物，但**只编译不安装**（npm run app:build / 装机向导）留下的
+    // 那一份不在清理范围内。它 bundle id 与安装版完全相同，Spotlight 照样索引 —— 卸载之后
+    // 仍能搜到一个可启动的 CCM，会让人以为没卸干净。
+    //
+    // 不替用户删：本工具的契约是「只删产品自己装的」，而这是仓库里的构建产物，
+    // 伸手进去删越界了（跟永不碰 ~/.claude/projects 是同一条线）。
+    const buildApp = join(root, 'desktop', 'build', 'CCM.app');
+    if (platform === 'darwin' && existsSync(buildApp)) {
+      push('app-build-artifact', 'skip',
+        `${buildApp} 仍在（仓库里的构建产物，不属卸载范围）。Spotlight 还会搜到它，想彻底清掉手动删除该目录即可。`);
+    }
+
     // ---- 4. UserDefaults 偏好域 ----
     if (platform !== 'darwin') {
       push('defaults', 'skip', '非 macOS，无偏好域');
