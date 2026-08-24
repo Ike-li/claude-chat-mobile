@@ -50,6 +50,7 @@ struct CCMCoreTests {
         testDevicePresentation()
         testAutostartRisk()
         testRunSyncResourceHygiene()
+        testModalWindowsAreRaised()
 
         let msg = "\nCCMCore: \(passed) passed, \(failed) failed\n"
         FileHandle.standardOutput.write(msg.data(using: .utf8)!)
@@ -716,5 +717,38 @@ extension CCMCoreTests {
         }
         check(after - before <= 2,
               "runSync 不泄漏 fd：孙进程持有 pipe 写端 \(iterations) 次后 fd \(before) → \(after)")
+    }
+}
+
+extension CCMCoreTests {
+    /// 源码闸：菜单栏里每一处裸 `.runModal()` 之前，都必须先 `raiseAboveEverything(...)`。
+    ///
+    /// 【为什么读源码而不是跑代码】ccm-menubar.swift 带 `@main`，与本测试集的 `@main` 不能
+    /// 同处一个编译单元，整份进不了 app:test；而这些模态窗全是 GUI 类型，抽进 CCMCore 也
+    /// 白搭 —— 测试二进制**不链 AppKit**（app-build.js 里 `frameworks: []`）。两条路都堵死，
+    /// 于是退一步，守住唯一还能被机器验证的那条不变量。
+    ///
+    /// 【为什么这条不变量值这道闸】违反它的后果不是「某个功能坏了」，而是**整个 app 冻死
+    /// 且退不掉**：模态窗一旦沉到别的窗口后面，LSUIElement 没有 Dock 图标也不进 Cmd+Tab，
+    /// 用户翻不上来，主线程永远回不到事件循环。2026-08-23 实测卡了 63 小时，只能 killall。
+    ///
+    /// 用 `#filePath` 定位而不是相对 cwd：这个二进制由 app-build.js 直接 spawn，
+    /// cwd 取决于谁调的 npm，靠不住。
+    static func testModalWindowsAreRaised() {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for name in ["ccm-menubar.swift", "ccm-config-window.swift", "ccm-console-window.swift"] {
+            let path = dir.appendingPathComponent(name).path
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+                check(false, "源码闸读不到 \(name)")
+                continue
+            }
+            let lines = text.components(separatedBy: "\n")
+            for (i, line) in lines.enumerated() where line.contains(".runModal()") {
+                let guarded = lines[max(0, i - 4)...i].contains { $0.contains("raiseAboveEverything(") }
+                check(guarded,
+                      "\(name):\(i + 1) 裸调 runModal 前没有 raiseAboveEverything —— "
+                      + "模态窗沉到别人后面会把整个 app 冻死，连退出都点不动")
+            }
+        }
     }
 }

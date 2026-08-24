@@ -710,8 +710,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.showsHiddenFiles = true
-        activate()
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard runModal(panel) == .OK, let url = panel.url else { return }
         env.relocateNode(url.path)
         probe()
     }
@@ -847,15 +846,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: 小工具
 
-    /// LSUIElement app 没有 Dock 图标，不激活就弹模态窗的话，窗口可能藏在别的 app 后面，
-    /// 而用户没有任何入口把它翻到前面 —— app 却已经进了模态循环。
     private func activate() {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// 把模态窗抬到**所有 app 的普通窗口之上**，且不依赖「这个 app 能不能被激活」。
+    ///
+    /// 【这道防线的代价是实测出来的，2026-08-23】机主点了「停止 server」，确认框好端端地
+    /// 待在 (830,215)、260×218、没有最小化，只是被别的窗口盖住；主线程就此冻在
+    /// `-[NSAlert runModal]` 里 **63 小时**。表现是「菜单能弹出、能高亮、点什么都没反应，
+    /// 连『退出』也没反应」—— 状态栏菜单由系统侧（NSContextMenuImpl）渲染，所以照样弹得
+    /// 出来也高亮得了，但菜单项的 action 派发必须回主线程。LSUIElement 又没有 Dock 图标、
+    /// 不进 Cmd+Tab，用户手上**没有任何入口**能把那个窗口翻上来，只能去终端 `killall CCM`。
+    ///
+    /// 光靠 activate() 救不回来：`NSApp.activate(ignoringOtherApps:)` 自 macOS 14 起已废弃，
+    /// 系统会拒绝把一个非前台的 accessory app 提到前面 —— 当时实测连 `open -a CCM.app`
+    /// 之后 `frontmost` 都还是 false。所以**可见性绝不能寄托在「能否激活」上**。下面三件
+    /// 事都绕开它：
+    ///   - `orderFrontRegardless()` 顾名思义，不看激活权限；
+    ///   - `.modalPanel` 层级压住所有 app 的普通窗口（仍低于菜单栏的 `.mainMenu`）；
+    ///   - `.canJoinAllSpaces` 让它跟着用户切 Space，堵掉「窗口留在另一个桌面」那条路。
+    ///
+    /// 残留风险要说在前面：这仍然是**阻塞主线程**的模态。万一哪天连这三招都被系统改掉，
+    /// app 会再次整体卡死且退不掉，唯一出路依旧是 `killall CCM`。彻底根治得把所有
+    /// runModal 改成 `beginSheetModal` 的非阻塞回调——那是另一次改动，不在这次范围内。
+    private func raiseAboveEverything(_ window: NSWindow) {
+        window.level = .modalPanel
+        window.collectionBehavior.insert(.canJoinAllSpaces)
+        window.orderFrontRegardless()
+    }
+
     private func runModal(_ alert: NSAlert) -> NSApplication.ModalResponse {
         activate()
+        raiseAboveEverything(alert.window)
         return alert.runModal()
+    }
+
+    /// NSOpenPanel 与 NSAlert 同病同治：它一样是把主线程占死的 runModal。收进同一个包装器，
+    /// `ccm-menubar-tests.swift` 里那道源码闸才能守住「没有裸 runModal」这条不变量。
+    private func runModal(_ panel: NSOpenPanel) -> NSApplication.ModalResponse {
+        activate()
+        raiseAboveEverything(panel)
+        return panel.runModal()
     }
 
     private func pickDirectory(title: String) -> String? {
@@ -864,8 +896,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        activate()
-        return panel.runModal() == .OK ? panel.url?.path : nil
+        return runModal(panel) == .OK ? panel.url?.path : nil
     }
 
     private func alert(_ title: String, _ body: String) {
