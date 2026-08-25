@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 使用交流 / General discussion (Chinese)
+    url: https://qm.qq.com/q/9Bv2ZaSAUw
+    about: 装机、配置、用法问题可进 QQ 群 881200369。请勿在群里贴 AUTH_TOKEN 或公网域名。
+  - name: 安全漏洞 / Security vulnerability
+    url: https://github.com/Ike-li/claude-chat-mobile/security/advisories/new
+    about: 请通过 Security Advisories 私下报告，不要公开提交 Issue。

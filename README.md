@@ -224,6 +224,16 @@ Web / CLI 双通道、Agent SDK、事件同步、断线恢复和会话接管。
 **[安全策略](SECURITY.md)**
 漏洞报告方式。
 
+## 交流与反馈
+
+* **Bug 与功能请求**：提 [GitHub Issue](https://github.com/Ike-li/claude-chat-mobile/issues)。有搜索、有归档——下一个撞上同样问题的人能直接找到答案，不必再问一遍。
+* **安全漏洞**：走 [GitHub Security Advisories](SECURITY.md) 私下报告，不要公开提交 Issue。
+* **使用交流**：QQ 群 **881200369**——用手机 QQ 扫下方二维码，或在电脑上[点击加入](https://qm.qq.com/q/9Bv2ZaSAUw)。
+
+<img src="https://ike-li.github.io/claude-chat-mobile/assets/qq-group-qr.png" alt="CCM 交流群 QQ 二维码，群号 881200369" width="240">
+
+> ⚠️ 在群里贴信息前请先脱敏。**`AUTH_TOKEN`、公网域名、完整的 `ccm.config.json`、`doctor` 原始输出**都不要直接贴——这些足以让人接管你的机器，而群聊历史对所有成员（包括后来加入的）可见，贴出去就撤不干净了。
+
 ## License
 
 [GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li，附带 Section 7 补充条款，详见 [NOTICE](NOTICE)。

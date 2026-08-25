@@ -222,6 +222,16 @@ Code entrypoints, directory ownership, and the repository file structure.
 **[Security policy](SECURITY.md)**
 How to report vulnerabilities.
 
+## Community and feedback
+
+* **Bugs and feature requests**: open a [GitHub Issue](https://github.com/Ike-li/claude-chat-mobile/issues). It is searchable and archived — the next person who hits the same problem can find the answer instead of asking again.
+* **Security vulnerabilities**: report privately through [GitHub Security Advisories](SECURITY.md), not a public issue.
+* **General discussion** (Chinese): QQ group **881200369** — scan the QR code below with the QQ mobile app, or [join from a desktop](https://qm.qq.com/q/9Bv2ZaSAUw).
+
+<img src="https://ike-li.github.io/claude-chat-mobile/assets/qq-group-qr.png" alt="QQ group QR code for the CCM discussion group, group number 881200369" width="240">
+
+> ⚠️ Redact before you paste anything into the group. Never paste your **`AUTH_TOKEN`, public domain, full `ccm.config.json`, or raw `doctor` output** — they are enough for someone to take over your machine, and group history is visible to every member including those who join later, so you cannot take it back.
+
 ## License
 
 [GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li, with Section 7 additional terms; see [NOTICE](NOTICE).

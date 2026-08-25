@@ -1,0 +1,57 @@
+name: Bug 报告 / Bug report
+description: 报告一个问题 / Report a problem
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### ⚠️ 提交前请先脱敏 / Redact before submitting
+
+        这是一个**直通本机 shell 的远程入口**，而 Issue 是公开且会被搜索引擎索引的。
+        贴出下面任何一项，等于把这台机器交出去：
+
+        - `AUTH_TOKEN`（哪怕只贴前几位）
+        - 公网域名、`CF_ACCESS_*`、`NTFY_TOKEN`、VAPID 私钥
+        - 完整的 `ccm.config.json`
+        - `doctor` 或 server 日志原文（可能含 token 与绝对路径）
+
+        需要贴日志时请手动替换成 `<redacted>`。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么 / What happened
+      description: 你期望看到什么，实际看到的是什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      placeholder: |
+        1. …
+        2. …
+        3. 看到 …
+    validations:
+      required: true
+
+  - type: textarea
+    id: env
+    attributes:
+      label: 环境 / Environment
+      description: |
+        `node --version` · `claude --version` · CCM 版本（`package.json` 或 `/health` 的 `versions`）·
+        操作系统 · 访问方式（同 WiFi / 临时隧道 / 固定公网）· 启动入口（`npm start` 或 macOS 桌面端）。
+        **`doctor` 输出请脱敏后再贴。**
+      render: text
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: redacted
+    attributes:
+      label: 确认 / Confirm
+      options:
+        - label: 我已确认贴出的内容不含 AUTH_TOKEN、公网域名或其他凭据
+          required: true
