@@ -141,7 +141,7 @@ Agent 工具审批或用户直接文件编辑
 - `WORK_DIR` / `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（旧版外置 `workdirs.json` 仍受支持，优先级低于 `WORKDIRS`）。
 - Agent 的 `canUseTool` 审批只管理 Agent 自主行为；用户在文件编辑器中点击保存属于直接写入，走独立的范围、大小、哈希与审计防线。
 
-安全摘要见 [README 安全模型](../README.md#安全模型)，部署拓扑见[部署与运维](deployment.md)。
+安全摘要见 [README 安全边界](../README.md#安全边界)，部署拓扑见[部署与运维](deployment.md)。
 
 ## 状态与持久化
 

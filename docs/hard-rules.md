@@ -20,7 +20,7 @@
 | 规则 | 说明 | 锚点 |
 |------|------|------|
 | 终端等价 | Web ≈ 本机对 claude 打字；CLI 有什么 Web 就有什么 | `CLAUDE.md`、Agent SDK |
-| 单用户 = 机主 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全模型](../README.md#安全模型) |
+| 单用户 = 机主 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全边界](../README.md#安全边界) |
 | 不是远程桌面 / 共享 TTY / 多租户托管 | 不附着终端 stdin/stdout | [architecture.md](architecture.md) |
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
 | **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口 | 2026-08-15 机主确认；2026-08-17 机主确认 desktop 单独入口；[deployment.md](deployment.md) |
