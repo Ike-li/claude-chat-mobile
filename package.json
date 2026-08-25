@@ -1,6 +1,6 @@
 {
   "name": "claude-chat-mobile",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "description": "Mobile chat UI that bridges your local claude CLI to your phone — terminal-equivalent agent access (resume, streaming output, on-device tool approvals).",
   "type": "module",
   "private": true,
@@ -30,7 +30,7 @@
     "node": ">=20"
   },
   "verifiedWith": {
-    "claudeCli": "2.1.235"
+    "claudeCli": "2.1.245"
   },
   "scripts": {
     "start": "node server.js",
