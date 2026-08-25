@@ -37,6 +37,12 @@ project's own code is licensed under AGPL-3.0-only (see root `LICENSE`); that do
 - 版权与许可同 highlight.js / Copyright and license: same as highlight.js above (BSD-3-Clause)
 - 来源 / Source: https://github.com/highlightjs/highlight.js/tree/main/src/styles
 
+## highlight.js GitHub Dark 主题 — `github-dark.min.css`
+
+- 来源主题 / Theme: GitHub（Dark），highlight.js 自带主题，维护者 @Hirse
+- 版权与许可同 highlight.js / Copyright and license: same as highlight.js above (BSD-3-Clause)
+- 来源 / Source: https://github.com/highlightjs/highlight.js/tree/main/src/styles
+
 ## CodeMirror 5 — `codemirror/codemirror.min.js`, `codemirror/codemirror.min.css`, `codemirror/mode-*.min.js`
 
 - 版本 / Version: 5.65.21

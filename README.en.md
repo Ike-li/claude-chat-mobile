@@ -1,10 +1,10 @@
 # Claude Chat Mobile
 
-This is a self-hosted "remote console for Claude Code" that runs on your own machine: it puts your local `claude` CLI agent sessions into a chat UI on your phone or browser.
+**Bring the Claude Code on your computer to your phone.**
 
-No database, no multi-tenancy, no SaaS backend — state lives on local disk and in process memory.
+Claude Chat Mobile is a **self-hosted remote console for Claude Code that runs on your own machine**. It puts your local `claude` CLI sessions into a chat UI on your phone or browser, so that after you walk away from the computer you can still start or resume a session, watch task progress, answer questions, approve tool calls, and interrupt a task.
 
-**What it is not**: an official Claude client · a wrapper around the Claude web app · a service that uploads your code · a remote desktop or shared terminal · a multi-tenant hosting platform. Your code, session records, and model calls all stay on your own machine.
+Your code, the Claude CLI, your project files, and the local CCM / Claude session state all keep running or living **on your own computer**. There is no database, no multi-tenancy, and no SaaS backend; model requests are still sent by the local `claude` CLI using your existing Anthropic sign-in or third-party gateway configuration.
 
 [中文](README.md) · **English** · [🌐 Website](https://ike-li.github.io/claude-chat-mobile/)
 
@@ -15,149 +15,219 @@ No database, no multi-tenancy, no SaaS backend — state lives on local disk and
 [![PWA](https://img.shields.io/badge/PWA-installable-blueviolet.svg)](#quick-start)
 [![CI](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml/badge.svg)](https://github.com/Ike-li/claude-chat-mobile/actions/workflows/test.yml)
 
-## What problem does it solve
+## Why you might want it
 
-Claude Code is good at tasks you hand off and let run for a while, but normally you have to be back at the computer to keep interacting with it.
+Claude Code can keep working through a development task on your computer, but when it hits a question, a tool approval, or a decision that needs a human, you normally have to be back at the desk.
+
+Claude Chat Mobile moves that part of the interaction to your phone:
 
 ```text
-Claude Code is running a long task on your computer
+Claude Code is working on your computer
         ↓
 You walk away
         ↓
-Your phone gets a "needs you" or task-finished notification
+Check progress / answer a question / approve a tool / interrupt — from your phone
         ↓
-You open Claude Chat Mobile
-        ↓
-Read output / answer a question / approve a tool / interrupt
-        ↓
-Claude Code keeps running on your computer
+Claude Code keeps running on the original computer
 ```
 
-The goal is not "another AI chat product" but **using your local Claude Code remotely and equivalently**: send messages, watch streaming output, approve tools, interrupt, resume sessions, switch model / permission mode / effort.
+The goal is not to rebuild an AI chat product, but:
 
-What it solves: **staying able to operate local Claude Code safely, and close to terminal-equivalently, when you are not at the computer.**
-
-## How it works
-
-```
-Phone PWA / browser
-    ↕ Socket.io (authenticated, joins the approved room)
-Local Node server (server.js → src/server/app.js)
-    ↕ Agent SDK query()
-Local claude CLI child process (cwd = one allowlisted workspace)
-    ↕ reads / writes
-transcripts and session files under ~/.claude
-```
-
-The code execution, project reads, tool calls, and session storage all still happen in the Claude Code on your machine; this project is its remote control surface.
-
-Only one side drives a session at a time. Web-driven messages travel through the Agent SDK into the local CLI; when the terminal CLI is driving, the Web app follows the persisted transcript in read-only mode, and the two sides cannot both type into one live process. While the terminal is still running you can explicitly force a takeover (behind a confirmation that spells out the fork risk) — that only lifts the read-only lock on the phone side; it does not stop the terminal process. See the [architecture guide](docs/architecture.en.md) for the component diagram, message flow, single-driver transitions, and reconnect replay.
+> **to let you operate the Claude Code on your own machine safely and close to terminal-equivalently while you are away from it.**
 
 ## Who is it for
 
-You already use Claude Code on your computer, and you want to:
+If you already use Claude Code and any of these apply, Claude Chat Mobile is probably a fit:
 
-- stop having to sit at your desk while Claude works through a long task;
-- keep watching progress, answering `AskUserQuestion`, approving tool calls, and interrupting a task that went sideways, after you have left;
-- get notified when a task finishes or needs a human;
-- keep using the projects, CLI configuration, and development environment on your own machine instead of moving all of it into someone else's cloud.
+* you do not want to sit at the desk the whole time Claude runs a long task;
+* you want to keep watching progress and interacting after you have left;
+* you want to answer `AskUserQuestion` or approve tool calls from your phone;
+* you want a notification when a task finishes or needs a human;
+* you want to keep using the projects, Claude CLI configuration, and development environment on your original machine;
+* you want to own the service and the data rather than move a whole development environment into someone else's SaaS.
 
-**If you just want to chat with Claude from your phone, the official Claude client is a better fit.**
+It is probably **not** a fit if:
+
+* you just want ordinary chat with Claude on your phone;
+* you do not currently use Claude Code;
+* you want to sign up and start using it without running a service on your own computer.
+
+## Core capabilities
+
+* **Remote control of Claude Code**: start and resume sessions, watch streaming output, answer questions, approve tools, stop tasks, switch model / permission mode / effort.
+* **Sessions and workspaces**: multiple workspaces and sessions, including resuming Claude CLI sessions that already exist on the machine.
+* **Working with project content**: view tool calls, Edit / Write diffs and Read output; browse and edit files inside approved workspaces; upload files and images, and paste screenshots.
+* **Notifications**: approvals, questions, and task results over Web Push / ntfy, with an optional Claude CLI hooks bridge.
+* **Reconnect recovery**: after the phone loses network and reconnects, missing session events are filled in.
+* **Local operations**: a `doctor` startup self-check; on macOS, an optional desktop console for configuration, logs, services, and device approval.
+* **PWA**: installable to the phone home screen, with full Chinese and English UI.
+
+## How it works
+
+```text
+Phone PWA / browser
+        ↕
+     Socket.io
+        ↕
+Claude Chat Mobile Server
+      (local machine)
+        ↕
+ Claude Agent SDK
+        ↕
+local claude CLI
+        ↕
+project files / Claude sessions
+```
+
+The phone and the browser are only a **remote control surface**.
+
+Executing code, reading the project, calling tools, and maintaining Claude sessions all still happen in the Claude Code on your computer.
+
+### One boundary worth understanding
+
+A live Claude session has exactly one driver at a time.
+
+While the terminal is driving, the Web side is read-only by default; you can explicitly resume from the Web when you need to, but that may fork the session. The terminal and the Web never type into the same live Claude process at once.
+
+See the [architecture guide](docs/architecture.en.md) for the full component relationships, the Web / CLI dual path, event synchronization, and session takeover.
 
 ## Prerequisites
 
-- **Node.js 20 or newer.**
-- **A locally installed and authenticated `claude` CLI.** Confirm that `which claude` finds it and that a terminal conversation works.
-- **macOS or Linux** are first-class platforms. Native Windows is experimental; WSL2 is the safer route.
-- Claude subscriptions and third-party gateways are both supported. Gateway `ANTHROPIC_*` variables must exist in the **shell that starts the server**; values placed in the config file are stripped.
-- As of **2026-07-31**, the Agent SDK and `claude -p` still draw from Claude subscription usage, and Anthropic's previously announced separate-credit plan is paused (policy may change; check the [official notice](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)). API-key and third-party-gateway costs and limits are set by their providers.
+You need:
 
-## Three ways to run it
+* **Node.js 20 or newer**;
+* a locally installed and working `claude` CLI;
+* a signed-in Claude account, or a third-party gateway that already works;
+* at least one project directory you are willing to let Claude Code operate on.
 
-**Read this table before deciding whether to install.** The simplest option needs no domain and no Cloudflare — the same Wi-Fi is enough.
+> ⚠️ One rule that is easy to miss with third-party gateways: the gateway's `ANTHROPIC_*` variables **must come from the shell that starts the server**. Values written into `ccm.config.json` are stripped at startup — the file says one thing, nothing takes effect, and nothing reports an error.
 
-| Mode | Best for | Notes |
-|---|---|---|
-| Same Wi-Fi: `http://<lan-ip>:3000/#token=…` | Home or office LAN | Simplest option; unavailable after leaving that network |
-| Temporary public URL: `cloudflared tunnel --url http://localhost:3000` | Trials and demos | Random hostname changes; no Access layer, so device approval still applies |
-| Fixed public URL: domain + Cloudflare Access | Long-term access from anywhere | Keep the process via the desktop app or `npm start`; tunnels in the [deployment guide](docs/deployment.md) |
+Platform support:
 
-PWA installation and Web Push require HTTPS. On iOS, Web Push also requires iOS 16.4+ and installing the site on the Home Screen first.
+| Platform       | Status         |
+| -------------- | -------------- |
+| macOS          | first-class    |
+| Linux          | first-class    |
+| Windows + WSL2 | recommended    |
+| Native Windows | experimental   |
 
-## Security Model
-
-> This is a remotely reachable code-execution path into your local shell. **Read all six before you install**, and especially before exposing it publicly.
-
-1. **Single-user, owner-level access.** There is no multi-user or tenant isolation. An authenticated operation has the permissions of the local account that started `claude`.
-2. **No token means loopback only.** Without `AUTH_TOKEN`, the server listens only on `127.0.0.1`. Phone or tunnel access requires a strong token.
-3. **Keep workspace scope narrow.** `WORK_DIR` and `WORKDIRS` are the scope gate for files, sessions, and git operations. Do not expose your whole home directory for convenience.
-4. **Automatic approval inherits CLI configuration.** `permissions.allow` rules from `~/.claude/settings.json`, project `.claude/settings.json`, and `.claude/settings.local.json` apply here too. Review accumulated Bash/Write rules before public use.
-5. **Device trust is a second gate.** Except for local connections or requests validated by Cloudflare Access JWT, a valid token still needs one-time device approval. Revoke a device with `node scripts/device.js deny <ID>`.
-6. **The file editor is a direct user write.** It does not pass through the Agent tool-approval chain. It can only modify existing files up to 256KB and applies scope checks, content-hash conflict detection, and audit logging. Set `FILE_EDIT=off` for read-only browsing.
-
-Report vulnerabilities privately through [GitHub Security Advisories](SECURITY.md), not a public issue.
+Claude Chat Mobile **does not include Claude Code, and will not install or sign in to the Claude CLI for you**.
 
 ## Quick Start
+
+If Claude Code already runs on your computer:
 
 ```bash
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 
-node --version && which claude && claude auth status
+node --version
+which claude
+claude auth status
+
 npm install --omit=dev
-npm run setup                    # creates AUTH_TOKEN; asks for an absolute project WORK_DIR, the CLI hooks bridge, and (macOS) the desktop console
+npm run setup
 node scripts/doctor.js
-npm start                        # if doctor says 3000 is held by the desktop app, do not start another; restart from the menu
+npm start
 ```
 
-The startup log prints a tokenized LAN URL that you can open on your phone.
+`npm run setup` walks you through generating a local configuration and setting the workspaces that may be accessed, and can optionally install the CLI hooks bridge; on macOS it can also install the desktop console.
 
-**The first time you open it on your phone it will sit at "waiting for approval" — that is by design, not a failure.** Beyond a valid token there is a second device-approval gate (Security Model item 5 above). Approve it in any of these ways:
+Once it starts, the terminal prints a LAN address you can open on your phone.
+
+The first time another device connects, you have to approve it:
 
 ```bash
-node scripts/device.js list      # check the pending device ID
+node scripts/device.js list
 node scripts/device.js approve <ID>
 ```
 
-With the macOS desktop app installed you can admit it straight from the menu bar row "🔐 N devices awaiting approval"; any already-trusted device also shows a pending card with an Approve button, so you never have to go back to the computer. The page unlocks immediately after approval — no need to re-enter the token.
+Then open the address from the startup log on your phone to enter a workspace and send Claude Code its first message.
 
-For the complete first-run flow, non-interactive setup, a copyable coding-agent prompt, PWA setup, and bridge configuration, see the [Getting Started guide](docs/getting-started.en.md).
+> If the macOS desktop app already started a server, do not run a second `npm start`. Follow what `doctor` tells you and restart the service from the desktop menu instead.
 
-## Core capabilities
+Full first-run instructions — configuration, non-interactive setup, PWA, and CLI hooks:
 
-- **Sessions and workspaces**: resume, fork, and remove CLI sessions at two levels; a cross-session "needs you" view; multiple workspaces and sessions in parallel. One message per turn — while a task runs you can keep a draft, but the send control becomes Stop instead of queuing another message.
-- **Conversation and files**: streaming Markdown, syntax highlighting, tool cards, Edit/Write diffs, Read excerpts, a native `AskUserQuestion` picker; image and file uploads, pasted screenshots, historical attachment previews, composer `@` file references; browse project files inside approved workspaces and edit them directly in CodeMirror.
-- **Notifications**: Web Push / ntfy for approvals, questions, and results, defaulting to type-only text, with a delivery-path test and an optional content preview; an optional CLI hooks bridge upgrades terminal "turn ended / needs you" from polling to an immediate signal.
-- **Visibility**: API errors, retry countdowns, SDK notices, subagents, and background-task progress appear in the UI rather than only in server logs.
-- **Reliability and operations**: `seq + epoch` event deduplication and reconnect replay; the status line picks SDK or CLI snapshots according to the current driver; startup checks with `doctor`, an in-app security check, redacted logs, auth rate limits, a service-status panel, and authenticated `/health` and `/metrics`. All configuration lives in a single `ccm.config.json` that the CLI (`config.js`) and the GUI both read and write.
-- **Configuration entry points**: headless use `node scripts/config.js`; macOS additionally has an optional desktop console (menu bar icon plus a main window) with an embedded config form, logs, doctor, and service installation — **no terminal needed**, and configuration stays editable while the server is down.
-- **Form factor**: an installable PWA with complete Chinese and English UI coverage; browser dependencies are self-hosted with the project instead of loaded from a CDN.
+**→ [Getting Started guide](docs/getting-started.en.md)**
+
+## Remote access
+
+Claude Chat Mobile supports everything from LAN access to a long-lived public entry point:
+
+| Scenario         | Method                                      | Best for                       |
+| ---------------- | ------------------------------------------- | ------------------------------ |
+| Same Wi-Fi       | LAN address                                 | the simplest first run         |
+| Temporary public | Cloudflare Quick Tunnel                     | trials and demos               |
+| Long-term public | fixed domain + Cloudflare Tunnel + Access   | regular access from outside    |
+
+PWA installation and Web Push require HTTPS; on iOS, Web Push also requires iOS 16.4+ and installing the site to the Home Screen first.
+
+Fixed domains, Cloudflare Tunnel, Cloudflare Access, long-running setups, and day-to-day operations:
+
+**→ [Deployment and operations](docs/deployment.md)** (Chinese)
+
+## Security Model
+
+> **Claude Chat Mobile is an entry point that can reach the Claude Code on your machine remotely, and through it indirectly obtain local code execution.**
+
+Treat it as a remote control tool for a development machine, not as an ordinary web page.
+
+Boundaries to understand before you use it:
+
+1. **Single user.** There is no multi-user or tenant isolation; the permissions of an authenticated operation ultimately come from the local account running `claude`.
+2. **No token means it is not exposed to the LAN.** Without `AUTH_TOKEN`, the server listens only on `127.0.0.1`.
+3. **Workspaces are explicitly allowlisted.** Files, sessions, and related operations can only reach the configured `WORK_DIR` / `WORKDIRS`. Do not add your whole home directory for convenience.
+4. **New devices need trust.** Except for local connections and connections already validated by Cloudflare Access, a device holding the correct token still needs one device approval.
+5. **Claude Code permissions are inherited.** Existing Claude Code rules such as `permissions.allow` stay in effect; review your automatic Bash / Write approvals before public use.
+6. **The file editor is a direct user write.** It **does not pass through the Agent tool-approval chain**. It can only modify existing files inside an approved workspace, with scope checks, a size limit, content-hash conflict detection, and audit logging. Set `FILE_EDIT=off` if you do not need it.
+
+If you plan to expose it publicly for the long term, read [deployment and operations](docs/deployment.md) (Chinese) first.
+
+Report security vulnerabilities privately through [GitHub Security Advisories](SECURITY.md), not a public issue.
 
 ## Documentation
 
-**I want to use it**
+### I want to get started
 
-- [Getting Started](docs/getting-started.en.md): from clone to the first message sent from your phone.
-- [Deployment and operations](docs/deployment.md) (Chinese): the two start entries, Cloudflare Tunnel, Access, and long-running setups.
-- **Settings reference**: `node scripts/config.js schema` — every setting, type, and default, generated from the schema so it can never drift from the code.
-- [Security policy](SECURITY.md): private vulnerability-reporting instructions.
+**[Getting Started guide](docs/getting-started.en.md)**
+From a computer that already runs Claude Code, all the way to the first message sent from your phone; also covers configuration, migration, PWA, and CLI hooks.
 
-**I want to know how it works**
+**[Deployment and operations](docs/deployment.md)** (Chinese)
+LAN, public access, Cloudflare Tunnel, Cloudflare Access, long-running setups, and routine operations.
 
-- [Architecture](docs/architecture.en.md): Web/CLI paths, event envelopes, reconnect replay, and takeover boundaries.
+Settings are not maintained as a separate static list — read the current definitions generated from the schema:
 
-**I want to change or maintain it**
+```bash
+node scripts/config.js schema
+```
 
-- [Hard rules and tech debt](docs/hard-rules.md) (Chinese): n=1 tradeoffs, invariants, and deferred work.
-- [Display contracts](docs/display-contracts.md) (Chinese): sources of truth for model, effort, and status-line display.
-- [Repository map](docs/repository-map.md): the full file inventory produced by `npm run inventory:update`, used by the `inventory:check` gate to reject unclassified files. You normally do not need to read it.
+### I want to understand how it works
+
+**[Architecture](docs/architecture.en.md)**
+Web / CLI dual path, the Agent SDK, event synchronization, reconnect recovery, and session takeover.
+
+### I want to modify or maintain it
+
+**[Hard rules and tech debt](docs/hard-rules.md)** (Chinese)
+Architectural invariants, design tradeoffs, and what the project has decided not to do.
+
+**[Display contracts](docs/display-contracts.md)** (Chinese)
+Sources of truth and display rules for model, effort, and status-line information.
+
+**[Repository map](docs/repository-map.md)**
+Code entrypoints, directory ownership, and the repository file structure.
+
+### Security
+
+**[Security policy](SECURITY.md)**
+How to report vulnerabilities.
 
 ## License
 
 [GNU AGPL-3.0-only](LICENSE) © 2026 Ike-li, with Section 7 additional terms; see [NOTICE](NOTICE).
 
-You may use, study, modify, and self-host this software. If you offer a modified version as a network service, the AGPL requires you to make the corresponding source available. The additional terms also require attribution and prohibit misrepresenting the project's origin.
+You may use, study, modify, and self-host this project. If you offer a modified version as a network service to other users, you must meet the AGPL's corresponding-source obligation; the additional terms also require attribution and prohibit misrepresenting the project's origin.
 
 ## Friend Links
 
-- [LINUX DO](https://linux.do/)
+* [LINUX DO](https://linux.do/)

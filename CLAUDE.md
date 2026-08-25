@@ -20,7 +20,7 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 前端三层：`public/js/app.js`（存量编排层）→ `public/js/app/*`（域模块，见上）→ `public/js/logic/*`（**纯决策函数：数据进数据出，不碰 DOM/window/socket/应用可变态，唯一宿主外 import 是 `i18n.js`；浏览器与 `tests/unit/logic-*.test.mjs` 的 node:test 零构建共用同一份文件**。新前端逻辑能写成纯函数就先落这里；`logic.js` 仅是 re-export barrel）。`desktop/` 是 macOS 菜单栏 app（Swift）+ launchd 模板。
 
-文档索引：[docs/architecture.md](docs/architecture.md)（双通道/单驾驶员/回放详解）· [docs/display-contracts.md](docs/display-contracts.md)（模型/effort/statusline 展示语义；改契约先改 `tests/unit/display-contracts.test.mjs`）· [docs/deployment.md](docs/deployment.md)（常驻/隧道/CF Access 运维）· [docs/getting-started.md](docs/getting-started.md)（装机教程）· [docs/repository-map.md](docs/repository-map.md)（**生成物**，全文件清单与归类）· README.md（产品入口，含安全模型）。增/删/移动文件后跑 `npm run inventory:update` 重新生成 repository-map，否则 check 里的 inventory:check 拒未分类文件。`AGENTS.md` 是指向本文件的符号链接（Codex 同源读取），改这一份即可。
+文档索引：[docs/architecture.md](docs/architecture.md)（双通道/单驾驶员/回放详解）· [docs/display-contracts.md](docs/display-contracts.md)（模型/effort/statusline 展示语义；改契约先改 `tests/unit/display-contracts.test.mjs`）· [docs/deployment.md](docs/deployment.md)（常驻/隧道/CF Access 运维）· [docs/getting-started.md](docs/getting-started.md)（装机教程）· [docs/repository-map.md](docs/repository-map.md)（**生成物**，全文件清单与归类）· README.md（产品入口，含安全边界）。增/删/移动文件后跑 `npm run inventory:update` 重新生成 repository-map，否则 check 里的 inventory:check 拒未分类文件。`AGENTS.md` 是指向本文件的符号链接（Codex 同源读取），改这一份即可。
 
 ## 分支纪律
 
