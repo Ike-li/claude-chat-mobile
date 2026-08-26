@@ -16,6 +16,7 @@ import * as approvalStore from './approval-store.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { normalizePermissionMode } from './cli-settings-defaults.js';
 import { scanSubagents } from '../sessions/history.js';
+import { invalidateCtxOccupancy, clearCtxWindowCache } from '../ops/statusline.js';
 
 // 出向 type 自检：契约（src/shared/protocol.js）此前只被 npm run check 的门禁脚本消费，运行时看不见它，
 // 漏登记的 type 会一路发到前端再被 handle 表静默丢弃。这里【只记录不拦截】——门禁负责挡提交，运行时
@@ -442,7 +443,7 @@ export class AgentSession {
 
     // E16 statusline 数据源（server 构造 status_line 时只读，不进事件契约）：
     this.lastUsage = null;        // 最近主线程 assistant 的 message.usage（ctx 占用口径：in/out/w/r）
-    this.ctxWindowCache = null;   // {model, maxTokens}：本会话拿到过的上下文窗口【真值】(getContextUsage)，供 RPC 短暂不可用时垫底；带 model 指纹，模型一变即作废。绝不按模型名猜窗口，见 statusline.js readCachedCtxWindow
+    this.ctxWindowCache = null;   // {model, maxTokens, totalTokens, percentage, attempted, inFlight, staleOccupancy}：getContextUsage 结果缓存。窗口+占用都是运行时真值；git tick / 流式 usage 热缓存不重打（该 RPC 在 CLI 侧是按类别 count_tokens）。带 model 指纹，模型一变即作废。见 statusline.js shouldFetchContextUsage
     this.lastRateUnavailableReason = null; // 额度(5h/7d)不可用原因去重锚点。【唯一写者 = ops/statusline.js】——判定要看快照回落后 p.rate 的最终值，本层看不到
     this.lastUsageFetchFailure = null;     // 最近一次 fetchUsage 失败的结构化原因 {reason,message,timedOut,ms}，供 statusline 判定；本身不写日志
     this.lastUsageOkMs = null;             // 最近一次 fetchUsage 成功耗时：get_usage 在 CLI 侧含网络请求+全量 transcript 扫盘，给"超时值是否太紧"留实测依据
@@ -2182,6 +2183,7 @@ export class AgentSession {
           if (this.sessionId && msg.session_id !== this.sessionId) {
             this.firstMessage = null;
             this.lastUsage = null; // E16：换会话上下文清零，旧 ctx% 不得残留显示
+            clearCtxWindowCache(this); // 窗口/占用作废，并退役在途 getContextUsage
             this.lastRateUnavailableReason = null; // 换会话清零，避免新会话被旧会话的"未变化"误判吞掉首次诊断
             this.lastToolName = null;      // 切换会话清工具名
             this.bgTasks.clear();          // 换会话清空活后台注册表（旧会话后台任务不串到新会话）
@@ -2249,7 +2251,8 @@ export class AgentSession {
           // 不可用，ctx% 就跳回压缩前的高位，且压缩后往往没有新轮次能覆盖它 → 永久滞留在满窗。
           // 与 init 换会话的 E16 同源。清零后 ctx% 短暂缺席，等权威值补上——宁可不显示，也不显示错的。
           this.lastUsage = null;
-          this.emit('system', { message: '上下文已压缩' });
+          invalidateCtxOccupancy(this); // 占用作废、窗口保留；退役在途 RPC，下一拍再拉一次权威占用
+          this.emit('system', { message: '上下文已压缩', kind: 'compact_boundary' });
         } else if (msg.subtype === 'task_notification') {
           // 后台任务（Workflow/后台 Agent/后台 Bash）完成的专用 SDK 通道（CLI 交互/SDK 模式）。
           // 通知本身不启轮，但会触发模型自动重调汇报——武装 pendingAutoTurn，待该轮 message_start/assistant 合成 pendingTurns。

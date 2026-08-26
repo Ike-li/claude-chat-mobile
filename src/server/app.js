@@ -44,7 +44,7 @@ import { buildEnvView, validateEnvChanges } from '../ops/env-schema.js';
 import { dataFile } from '../shared/data-dir.js';
 import { isSupervised, parseLaunchctlList, willBeRespawned } from '../ops/service-units.js';
 import { createServiceSampler } from '../ops/service-sampler.js';
-import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy } from '../ops/statusline.js';
+import { buildWebStatusLine, buildCliStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy, strongerStatusRefreshReason, statusRefreshReasonForEnvelope } from '../ops/statusline.js';
 import { readCliStatusSnapshot, selectStatusOwner, selectStatusReplay, selectStatusSource } from '../ops/cli-statusline-bridge.js';
 import { validateAttachments, saveAttachments, buildPromptText, toEventMeta } from '../files/uploads.js';
 import * as interactionLog from '../agent/interaction-log.js';
@@ -1339,7 +1339,7 @@ function replayStatusLineTo(socket) {
   });
 }
 
-async function refreshStatusLine() {
+async function refreshStatusLine(reason = 'event') {
   if (statusOff || io.engine.clientsCount === 0) return; // 禁用 / 无人连接零开销
   statusRefreshState = noteStatusRefreshBusy(statusRefreshState, 'enter');
   if (!statusRefreshState.proceed) return; // 忙：已记 queued，leave 时补跑
@@ -1353,7 +1353,10 @@ async function refreshStatusLine() {
     const owner = statusOwnerFor(va, currentInstanceId);
     let payload;
     if (owner === 'sdk') {
-      const sdkPayload = await buildWebStatusLine({ agent: va, cwd, versions });
+      const sdkPayload = await buildWebStatusLine({
+        agent: va, cwd, versions, reason,
+        onContextUsageAdopted: () => scheduleStatusRefresh('event'),
+      });
       payload = { ...sdkPayload, source: { kind: 'sdk' } };
     } else {
       const cliRead = readCliSnapshotForSession(va.sessionId, cwd);
@@ -1406,15 +1409,21 @@ async function refreshStatusLine() {
     if (statusRefreshState.reschedule) scheduleStatusRefresh(); // 忙时排队的那次补跑
   }
 }
-function scheduleStatusRefresh() {                     // 300ms 防抖（合并高频 onUsage/init/result 触发）
+let pendingStatusReason = 'tick';
+function scheduleStatusRefresh(reason = 'event') {     // 300ms 防抖（合并高频 onUsage/init/result 触发）
   if (statusOff) return;
+  pendingStatusReason = strongerStatusRefreshReason(pendingStatusReason, reason);
   clearTimeout(statusDebounce);
-  statusDebounce = setTimeout(() => refreshStatusLine().catch(err => console.error('[statusline]', err)), 300);
+  statusDebounce = setTimeout(() => {
+    const r = pendingStatusReason;
+    pendingStatusReason = 'tick';
+    refreshStatusLine(r).catch(err => console.error('[statusline]', err));
+  }, 300);
 }
 if (!statusOff) {
-  // 周期刷新让 git 段（外部 commit/改动无事件驱动）跟上；去重 + clientsCount 守卫在 tick 内封顶开销
+  // 周期刷新让 git 段（外部 commit/改动无事件驱动）跟上。ctx% 走占用缓存，tick 不重打 getContextUsage。
   // DeepSeek: 统一路由到 scheduleStatusRefresh 以消除并发重叠与合并请求
-  statusInterval = setInterval(() => scheduleStatusRefresh(), 10_000);
+  statusInterval = setInterval(() => scheduleStatusRefresh('tick'), 10_000);
 }
 
 // 桌面端服务的重启历史采样。**刻意不放进上面的 `if (!statusOff)`**：
@@ -1596,8 +1605,11 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
           unreadCounts.set(id, (unreadCounts.get(id) || 0) + 1);
         }
       }
-      // E16：仅当前查看 tab 的轮次边界刷新状态行（后台实例的 init/result 不抢占 viewingInstanceId 的 statusline）
-      if ((envelope.type === 'init' || envelope.type === 'result') && id === viewingInstanceId) scheduleStatusRefresh();
+      // E16：仅当前查看 tab 的轮次边界刷新状态行（后台实例的 init/result/compact 不抢占 viewingInstanceId 的 statusline）
+      {
+        const statusReason = statusRefreshReasonForEnvelope(envelope.type, envelope.payload);
+        if (statusReason && id === viewingInstanceId) scheduleStatusRefresh(statusReason);
+      }
       // lastUsedAt 对齐消息活动：用户发送 / 轮次结束时刷新（init/onSessionId 的 upsert 不再刷）
       if (instance.sessionId && (envelope.type === 'user_message' || envelope.type === 'result')) {
         sessions.touchSessionActivity(instance.sessionId, envelope.ts);
@@ -1689,7 +1701,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
       }
     },
     // E16：assistant 边界刷新 statusline（仅当前查看 tab；scheduleStatusRefresh 有 300ms 防抖兜频率）——ctx 不等 result/10s tick
-    onUsage: () => { if (id === viewingInstanceId) scheduleStatusRefresh(); },
+    onUsage: () => { if (id === viewingInstanceId) scheduleStatusRefresh('usage'); },
     // 活后台任务集合变化 → 节流重算会话列表 ⏳（纯后台运行期 pendingTurns=0，这是唯一的 busy 触发源；scout 实例不接、不跑后台任务）
     onBgTaskChange: () => scheduleBgBroadcast(),
     // 账面被兜底路径就地改写（interrupt 结算看门狗）——无伴随事件流，须显式重播 instances，

@@ -4,7 +4,7 @@
 // 绝不按模型名猜窗口——猜错会把 532k/1M(53%) 显示成 532k/200k(封顶 100%)。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy } from '../../src/ops/statusline.js';
+import { webContextCost, buildWebStatusLine, buildCliStatusLine, gitStatus, parseRepo, parsePorcelain, getContextUsageSafe, usageBitsForStatusLine, projectNameFromCwd, getFallbackUsageRate, noteStatusRefreshBusy, shouldFetchContextUsage, invalidateCtxOccupancy, clearCtxWindowCache, strongerStatusRefreshReason, statusRefreshReasonForEnvelope, CONTEXT_USAGE_INFLIGHT_MAX_MS } from '../../src/ops/statusline.js';
 import { getDiagLogs } from '../../src/agent/diag-log.js';
 import { createUsageSnapshotStore, USAGE_SNAPSHOT_TTL_MS } from '../../src/ops/usage-snapshot.js';
 
@@ -262,8 +262,9 @@ test.describe('buildWebStatusLine：ctx 窗口只认运行时真值 + 会话内�
     const agent = { activeModel: 'claude-opus-5', lastUsage: usageT(940_000), q: sdkQ(1_000_000), disposed: false };
     await buildWebStatusLine({ agent, cwd: undefined });   // SDK 成功 → 1M 窗口真值落库缓存
     agent.lastUsage = null;                                 // 压缩边界清零
+    invalidateCtxOccupancy(agent);                          // 占用缓存一并失效，否则会把压缩前 % 当现值
     agent.q = { getContextUsage: async () => { throw new Error('rpc fail'); } }; // 压缩后 SDK 短暂不可用
-    const p = await buildWebStatusLine({ agent, cwd: undefined });
+    const p = await buildWebStatusLine({ agent, cwd: undefined, reason: 'event' });
     assert.equal(p.ctx?.usedPercent, undefined, '窗口缓存尚在，但没有占用真值就不许出百分比');
     assert.equal(p.ctx?.tokens, undefined, '也不得凭空造出绝对 token');
   });
@@ -869,5 +870,284 @@ test.describe('buildWebStatusLine：无 lastUsage 仍可用 getContextUsage 出 
     assert.equal(p.ctx.totalTokens, 130_000);
     assert.equal(p.ctx.tokens, undefined);
     assert.equal(p.ctx.in, undefined);
+  });
+});
+
+// getContextUsage = CLI /context 拆账（按类别 count_tokens，冷路径数秒、每拍 ~20 发）。
+// 10s statusline tick 是给 git 的，不得顺便重打；占用缓存挂 agent，只在失效时拉。
+test.describe('shouldFetchContextUsage：按失效拉，不跟 git tick', () => {
+  const warm = { model: 'm', maxTokens: 1_000_000, totalTokens: 100, percentage: 10, attempted: true };
+
+  test('无缓存 → 任何 reason 都拉（含 tick，首包）', () => {
+    assert.equal(shouldFetchContextUsage({ hasQ: true, disposed: false, cache: null, model: 'm', reason: 'tick' }), true);
+    assert.equal(shouldFetchContextUsage({ hasQ: true, disposed: false, cache: null, model: 'm', reason: 'event' }), true);
+  });
+
+  test('热缓存（窗口+占用）→ tick/usage/event 都不拉', () => {
+    for (const reason of ['tick', 'usage', 'event']) {
+      assert.equal(shouldFetchContextUsage({ hasQ: true, disposed: false, cache: warm, model: 'm', reason }), false);
+    }
+  });
+
+  test('staleOccupancy（压缩后）→ 拉，含 tick', () => {
+    assert.equal(shouldFetchContextUsage({
+      hasQ: true, disposed: false, cache: { ...warm, staleOccupancy: true }, model: 'm', reason: 'tick',
+    }), true);
+  });
+
+  test('模型变 → 拉', () => {
+    assert.equal(shouldFetchContextUsage({ hasQ: true, disposed: false, cache: warm, model: 'other', reason: 'tick' }), true);
+  });
+
+  test('inFlight → 不拉（含 stale，防 44 发重叠）', () => {
+    assert.equal(shouldFetchContextUsage({
+      hasQ: true, disposed: false,
+      cache: { ...warm, inFlight: true, inFlightAt: 1, staleOccupancy: true },
+      model: 'm', reason: 'event', now: 2,
+    }), false);
+  });
+
+  test('disposed / 无 q → 不拉', () => {
+    assert.equal(shouldFetchContextUsage({ hasQ: false, disposed: false, cache: null, model: 'm', reason: 'event' }), false);
+    assert.equal(shouldFetchContextUsage({ hasQ: true, disposed: true, cache: null, model: 'm', reason: 'event' }), false);
+  });
+
+  test('首次失败后 tick/usage 不重试，event 重试', () => {
+    const failed = { model: 'm', attempted: true, maxTokens: 0 };
+    assert.equal(shouldFetchContextUsage({ hasQ: true, disposed: false, cache: failed, model: 'm', reason: 'tick' }), false);
+    assert.equal(shouldFetchContextUsage({ hasQ: true, disposed: false, cache: failed, model: 'm', reason: 'usage' }), false);
+    assert.equal(shouldFetchContextUsage({ hasQ: true, disposed: false, cache: failed, model: 'm', reason: 'event' }), true);
+  });
+
+  test('有窗口无占用但有 lastUsage → 不拉（回落 lastUsage/窗口）', () => {
+    const c = { model: 'm', maxTokens: 1_000_000, attempted: true };
+    assert.equal(shouldFetchContextUsage({
+      hasQ: true, disposed: false, cache: c, model: 'm', reason: 'usage', hasLastUsage: true,
+    }), false);
+  });
+
+  test('有窗口无占用无 lastUsage（压缩 RPC 失败）→ event 重试，tick 不重试', () => {
+    const c = { model: 'm', maxTokens: 1_000_000, attempted: true };
+    assert.equal(shouldFetchContextUsage({
+      hasQ: true, disposed: false, cache: c, model: 'm', reason: 'tick', hasLastUsage: false,
+    }), false);
+    assert.equal(shouldFetchContextUsage({
+      hasQ: true, disposed: false, cache: c, model: 'm', reason: 'event', hasLastUsage: false,
+    }), true);
+  });
+
+  test('inFlight 超龄 → 放行（防永久熄火）', () => {
+    const c = {
+      model: 'm', maxTokens: 1_000_000, totalTokens: 1, percentage: 1, attempted: true,
+      inFlight: true, inFlightAt: 0, staleOccupancy: true,
+    };
+    assert.equal(shouldFetchContextUsage({
+      hasQ: true, disposed: false, cache: c, model: 'm', reason: 'event', now: CONTEXT_USAGE_INFLIGHT_MAX_MS + 1,
+    }), true);
+  });
+});
+
+test.describe('strongerStatusRefreshReason：防抖合并时 event 压过 tick', () => {
+  test('tick+usage → usage；usage+event → event；event+tick → event', () => {
+    assert.equal(strongerStatusRefreshReason('tick', 'usage'), 'usage');
+    assert.equal(strongerStatusRefreshReason('usage', 'event'), 'event');
+    assert.equal(strongerStatusRefreshReason('event', 'tick'), 'event');
+    assert.equal(strongerStatusRefreshReason('tick', 'tick'), 'tick');
+  });
+});
+
+test.describe('buildWebStatusLine：getContextUsage 结果缓存，tick 不重打', () => {
+  const usageC = t => ({ input_tokens: t, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+
+  test('热缓存后 reason=tick / usage 不再调 getContextUsage', async () => {
+    let called = 0;
+    const q = { getContextUsage: async () => { called++; return { maxTokens: 1_000_000, percentage: 23, totalTokens: 230_000, categories: [] }; } };
+    const agent = { activeModel: 'm', lastUsage: usageC(50_000), q, disposed: false };
+    const first = await buildWebStatusLine({ agent, cwd: undefined, reason: 'event' });
+    assert.equal(called, 1);
+    assert.equal(first.ctx.usedPercent, 23);
+    assert.equal(first.ctx.totalTokens, 230_000);
+
+    const tick = await buildWebStatusLine({ agent, cwd: undefined, reason: 'tick' });
+    const usage = await buildWebStatusLine({ agent, cwd: undefined, reason: 'usage' });
+    assert.equal(called, 1, 'git tick / 流式 usage 不得重打 /context 拆账');
+    assert.equal(tick.ctx.windowSize, 1_000_000);
+    assert.equal(tick.ctx.usedPercent, 23);
+    assert.equal(usage.ctx.totalTokens, 230_000);
+    assert.equal(usage.ctx.tokens, 50_000); // lastUsage 仍是 in/out 明细
+  });
+
+  test('压缩失效后下一拍会再拉一次', async () => {
+    let called = 0;
+    const q = { getContextUsage: async () => { called++; return { maxTokens: 1_000_000, percentage: called === 1 ? 94 : 4, totalTokens: called === 1 ? 940_000 : 18_000, categories: [] }; } };
+    const agent = { activeModel: 'm', lastUsage: usageC(940_000), q, disposed: false };
+    await buildWebStatusLine({ agent, cwd: undefined, reason: 'event' });
+    assert.equal(called, 1);
+    agent.lastUsage = null;
+    invalidateCtxOccupancy(agent);
+    const after = await buildWebStatusLine({ agent, cwd: undefined, reason: 'tick' });
+    assert.equal(called, 2);
+    assert.equal(after.ctx.usedPercent, 4);
+    assert.equal(after.ctx.totalTokens, 18_000);
+    assert.equal(after.ctx.windowSize, 1_000_000);
+  });
+
+  test('模型切换作废缓存，再拉一次', async () => {
+    let called = 0;
+    const q = { getContextUsage: async () => { called++; return { maxTokens: called === 1 ? 1_000_000 : 200_000, percentage: 10, totalTokens: 20_000, categories: [] }; } };
+    const agent = { activeModel: 'opus', lastUsage: usageC(20_000), q, disposed: false };
+    await buildWebStatusLine({ agent, cwd: undefined, reason: 'event' });
+    agent.activeModel = 'haiku';
+    const p = await buildWebStatusLine({ agent, cwd: undefined, reason: 'event' });
+    assert.equal(called, 2);
+    assert.equal(p.ctx.windowSize, 200_000);
+  });
+
+  test('在途第二次进入不发起第二发', async () => {
+    let called = 0;
+    let release;
+    const q = { getContextUsage: () => { called++; return new Promise(r => { release = r; }); } };
+    const agent = { activeModel: 'm', lastUsage: usageC(1_000), q, disposed: false };
+    const a = buildWebStatusLine({ agent, cwd: undefined, reason: 'event', timeoutMs: 5_000 });
+    for (let i = 0; i < 30 && !agent.ctxWindowCache?.inFlight; i++) await Promise.resolve();
+    assert.equal(agent.ctxWindowCache?.inFlight, true, 'A 应已标上 inFlight');
+    const b = await buildWebStatusLine({ agent, cwd: undefined, reason: 'event', timeoutMs: 5_000 });
+    assert.equal(called, 1);
+    assert.equal(b.ctx?.windowSize, undefined); // B 看到 inFlight，不候
+    release({ maxTokens: 1_000_000, percentage: 5, totalTokens: 50_000 });
+    const first = await a;
+    assert.equal(first.ctx.windowSize, 1_000_000);
+    assert.equal(called, 1);
+  });
+
+  test('超时后迟到结果写入缓存并回调，不丢弃', async () => {
+    let release;
+    const q = { getContextUsage: () => new Promise(r => { release = r; }) };
+    const agent = { activeModel: 'm', lastUsage: usageC(1_000), q, disposed: false };
+    let adopted = 0;
+    const p1 = await buildWebStatusLine({
+      agent, cwd: undefined, reason: 'event', timeoutMs: 30,
+      onContextUsageAdopted: () => { adopted++; },
+    });
+    assert.equal(p1.ctx?.windowSize, undefined);
+    assert.equal(agent.ctxWindowCache.inFlight, true);
+    release({ maxTokens: 1_000_000, percentage: 10, totalTokens: 100_000 });
+    await new Promise(r => setImmediate(r));
+    assert.equal(adopted, 1);
+    assert.equal(agent.ctxWindowCache.maxTokens, 1_000_000);
+    assert.equal(agent.ctxWindowCache.inFlight, false);
+    const p2 = await buildWebStatusLine({ agent, cwd: undefined, reason: 'tick' });
+    assert.equal(p2.ctx.windowSize, 1_000_000);
+    assert.equal(p2.ctx.usedPercent, 10);
+    assert.equal(p2.ctx.totalTokens, 100_000);
+  });
+
+  test('lastUsage 增长超过缓存占用 → 不重打 RPC，% 随 lastUsage 上调', async () => {
+    let called = 0;
+    const q = { getContextUsage: async () => { called++; return { maxTokens: 1_000_000, percentage: 10, totalTokens: 100_000, categories: [] }; } };
+    const agent = { activeModel: 'm', lastUsage: usageC(100_000), q, disposed: false };
+    await buildWebStatusLine({ agent, cwd: undefined, reason: 'event' });
+    agent.lastUsage = usageC(250_000);
+    const p = await buildWebStatusLine({ agent, cwd: undefined, reason: 'usage' });
+    assert.equal(called, 1);
+    assert.equal(p.ctx.totalTokens, 250_000);
+    assert.equal(p.ctx.usedPercent, 25);
+    assert.equal(p.ctx.tokens, 250_000);
+  });
+
+  test('invalidate 后迟到的旧 RPC 不得写回压缩前占用', async () => {
+    let release;
+    const q = { getContextUsage: () => new Promise(r => { release = r; }) };
+    const agent = { activeModel: 'm', lastUsage: usageC(940_000), q, disposed: false };
+    const p1 = await buildWebStatusLine({
+      agent, cwd: undefined, reason: 'event', timeoutMs: 30,
+      onContextUsageAdopted: () => { throw new Error('旧 RPC 不得触发 adopted'); },
+    });
+    assert.equal(p1.ctx?.windowSize, undefined);
+    assert.equal(agent.ctxWindowCache.inFlight, true);
+    const genAtFetch = agent._ctxUsageGen;
+    agent.lastUsage = null;
+    invalidateCtxOccupancy(agent);
+    assert.ok(agent._ctxUsageGen > genAtFetch);
+    assert.equal(agent.ctxWindowCache.inFlight, false);
+    assert.equal(agent.ctxWindowCache.staleOccupancy, true);
+    release({ maxTokens: 1_000_000, percentage: 94, totalTokens: 940_000 });
+    await new Promise(r => setImmediate(r));
+    assert.equal(agent.ctxWindowCache.percentage, undefined, '压缩前占用不得写回');
+    assert.equal(agent.ctxWindowCache.totalTokens, undefined);
+    assert.equal(agent.ctxWindowCache.staleOccupancy, true);
+  });
+
+  test('clearCtxWindowCache 后迟到结果不得重建缓存', async () => {
+    let release;
+    const q = { getContextUsage: () => new Promise(r => { release = r; }) };
+    const agent = { activeModel: 'm', lastUsage: usageC(100_000), q, disposed: false };
+    await buildWebStatusLine({ agent, cwd: undefined, reason: 'event', timeoutMs: 30 });
+    assert.equal(agent.ctxWindowCache.inFlight, true);
+    clearCtxWindowCache(agent);
+    assert.equal(agent.ctxWindowCache, null);
+    release({ maxTokens: 1_000_000, percentage: 10, totalTokens: 100_000 });
+    await new Promise(r => setImmediate(r));
+    assert.equal(agent.ctxWindowCache, null);
+  });
+
+  test('staleOccupancy 时 lastUsage 再大也不写入占用缓存', async () => {
+    const agent = {
+      activeModel: 'm',
+      lastUsage: usageC(940_000),
+      ctxWindowCache: {
+        model: 'm', maxTokens: 1_000_000, staleOccupancy: true, attempted: false, inFlight: false,
+      },
+      q: { getContextUsage: async () => { throw new Error('rpc fail'); } },
+      disposed: false,
+    };
+    await buildWebStatusLine({ agent, cwd: undefined, reason: 'event' });
+    assert.equal(agent.ctxWindowCache.totalTokens, undefined);
+    assert.equal(agent.ctxWindowCache.percentage, undefined);
+  });
+});
+
+test.describe('invalidateCtxOccupancy：清占用留窗口', () => {
+  test('已有窗口 → 清 totalTokens/percentage，标 stale，允许再拉', () => {
+    const agent = { ctxWindowCache: { model: 'm', maxTokens: 1_000_000, totalTokens: 900_000, percentage: 90, attempted: true } };
+    invalidateCtxOccupancy(agent);
+    assert.equal(agent.ctxWindowCache.maxTokens, 1_000_000);
+    assert.equal(agent.ctxWindowCache.totalTokens, undefined);
+    assert.equal(agent.ctxWindowCache.percentage, undefined);
+    assert.equal(agent.ctxWindowCache.staleOccupancy, true);
+    assert.equal(agent.ctxWindowCache.attempted, false);
+  });
+
+  test('无缓存 → 标 stale，让下一拍去拉', () => {
+    const agent = {};
+    invalidateCtxOccupancy(agent);
+    assert.equal(agent.ctxWindowCache.staleOccupancy, true);
+    assert.equal(agent.ctxWindowCache.attempted, false);
+  });
+
+  test('退役 inFlight + 递增 gen：随后 tick 允许再拉', () => {
+    const agent = {
+      _ctxUsageGen: 1,
+      ctxWindowCache: {
+        model: 'm', maxTokens: 1_000_000, totalTokens: 900_000, percentage: 90,
+        attempted: true, inFlight: true, inFlightAt: Date.now(),
+      },
+    };
+    invalidateCtxOccupancy(agent);
+    assert.equal(agent.ctxWindowCache.inFlight, false);
+    assert.equal(agent._ctxUsageGen, 2);
+    assert.equal(shouldFetchContextUsage({
+      hasQ: true, disposed: false, cache: agent.ctxWindowCache, model: 'm', reason: 'tick',
+    }), true);
+  });
+});
+
+test.describe('statusRefreshReasonForEnvelope：压缩边界也要立刻刷 statusline', () => {
+  test('init/result → event；compactBoundary system → event；其它 system → 不刷', () => {
+    assert.equal(statusRefreshReasonForEnvelope('init', {}), 'event');
+    assert.equal(statusRefreshReasonForEnvelope('result', {}), 'event');
+    assert.equal(statusRefreshReasonForEnvelope('system', { kind: 'compact_boundary' }), 'event');
+    assert.equal(statusRefreshReasonForEnvelope('system', { message: '上下文已压缩' }), null);
+    assert.equal(statusRefreshReasonForEnvelope('text_delta', {}), null);
   });
 });

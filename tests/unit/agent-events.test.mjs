@@ -33,6 +33,8 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     const { s } = makeSession({ resumeId: 'sid-1', onSessionId() {} });
     s.firstMessage = 'hello';
     s.lastUsage = { input_tokens: 100 };
+    s.ctxWindowCache = { model: 'm', maxTokens: 1_000_000, totalTokens: 100, percentage: 10, inFlight: true };
+    s._ctxUsageGen = 3;
     s.sessionId = 'sid-1';
 
     s.map({ type: 'system', subtype: 'init', session_id: 'sid-2', model: null, cwd: '/tmp',
@@ -41,6 +43,8 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     assert.equal(s.sessionId, 'sid-2');
     assert.equal(s.firstMessage, null);
     assert.equal(s.lastUsage, null);
+    assert.equal(s.ctxWindowCache, null);
+    assert.equal(s._ctxUsageGen, 4, '换会话必须退役在途 getContextUsage，否则迟到结果会写到新会话上');
     s.dispose();
   });
 
@@ -94,6 +98,7 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.map({ type: 'system', subtype: 'compact_boundary' });
     const sys = events.find(e => e.type === 'system' && e.payload.message === '上下文已压缩');
     assert.ok(sys);
+    assert.equal(sys.payload.kind, 'compact_boundary');
     s.dispose();
   });
 
@@ -104,10 +109,22 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
   test('system/compact_boundary：lastUsage 重置（旧满窗占用不得当作压缩后现值）', () => {
     const { s } = makeSession();
     s.lastUsage = { input_tokens: 2, output_tokens: 855, cache_creation_input_tokens: 861, cache_read_input_tokens: 938_700 };
+    s.ctxWindowCache = {
+      model: 'm', maxTokens: 1_000_000, totalTokens: 940_000, percentage: 94,
+      attempted: true, inFlight: true, inFlightAt: Date.now(),
+    };
+    s._ctxUsageGen = 7;
 
     s.map({ type: 'system', subtype: 'compact_boundary' });
 
     assert.equal(s.lastUsage, null);
+    assert.equal(s.ctxWindowCache.maxTokens, 1_000_000, '窗口没变，保留');
+    assert.equal(s.ctxWindowCache.totalTokens, undefined);
+    assert.equal(s.ctxWindowCache.percentage, undefined);
+    assert.equal(s.ctxWindowCache.staleOccupancy, true);
+    assert.equal(s.ctxWindowCache.attempted, false);
+    assert.equal(s.ctxWindowCache.inFlight, false);
+    assert.equal(s._ctxUsageGen, 8, '压缩必须退役在途 RPC，否则迟到的压缩前占用会写回缓存');
     s.dispose();
   });
 

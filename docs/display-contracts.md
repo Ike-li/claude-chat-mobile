@@ -172,7 +172,9 @@ transcript 事实            stream / control / usage     status_line 组装    
 静态表有三个不可修复的缺陷：新模型上线要人工补表、窗口升级要改代码、第三方网关的模型别名根本无从判断。
 **宁可短暂看不到百分比，也不显示一个错的。**
 
-**锚点**：`src/ops/statusline.js` `getContextUsageSafe` / `readCachedCtxWindow` / `cacheCtxWindow` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」）
+`getContextUsage` 在 CLI 侧是 `/context` 拆账（按类别 `count_tokens`），不是读内存。statusline 的 10s tick 只刷新 git；占用结果缓存在 `agent.ctxWindowCache`，只在无窗口 / 模型变 / `compact_boundary` 失效时重拉。流式 `onUsage` 用 lastUsage 单调上调占用，不重打 RPC。
+
+**锚点**：`src/ops/statusline.js` `getContextUsageSafe` / `shouldFetchContextUsage` / `readCachedCtxWindow` / `cacheCtxWindow` / `invalidateCtxOccupancy` · `tests/unit/display-contracts.test.mjs`（「ctx 窗口：无运行时真值时不出 %（不按模型名硬造分母）」） · `tests/unit/statusline.test.mjs`（tick 不重打）
 
 ---
 
@@ -213,4 +215,4 @@ transcript 事实            stream / control / usage     status_line 组装    
 | Effort 不猜 low | `effortUiState` | `logic-session` |
 | Statusline 双源不混拼 | `buildWeb*` `buildCli*` `selectStatusSource` | `statusline.test` · smoke statusline |
 | 折叠摘要 | `formatStatuslineCollapsedSummary` | `logic-statusline-summary` |
-| ctx 窗口只认真值 | `getContextUsageSafe` `readCachedCtxWindow` `cacheCtxWindow` | `statusline.test` |
+| ctx 窗口只认真值 | `getContextUsageSafe` `shouldFetchContextUsage` `readCachedCtxWindow` `cacheCtxWindow` | `statusline.test` |

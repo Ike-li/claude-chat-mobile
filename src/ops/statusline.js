@@ -114,6 +114,11 @@ export function getFallbackUsageRate(now, usageStore = usageSnapshotStore) {
 // 缓存挂 agent 实例并带 model 指纹：模型一变立即作废（opus-5 的 1M 若沿用到 haiku 会算出假百分比）。
 // 已知边界：同一 model 名在不同 provider 下窗口可能不同（切网关）。切 provider 要改 .env + 重启
 // 常驻 server，agent 实例随之重建、缓存自然清空，故不额外处理。
+//
+// getContextUsage 不是读内存：CLI 按类别 count_tokens（system/tools/MCP/skills/memory），冷路径数秒。
+// 10s tick 是给 git 的，占用缓存热时不得重打。只在无窗口 / 模型变 / 压缩失效时拉一次。
+export const CONTEXT_USAGE_INFLIGHT_MAX_MS = 30_000;
+
 export function readCachedCtxWindow(agent, model) {
   const c = agent?.ctxWindowCache;
   if (!c || !Number.isFinite(c.maxTokens) || c.maxTokens <= 0) return null;
@@ -123,7 +128,87 @@ export function readCachedCtxWindow(agent, model) {
 
 function cacheCtxWindow(agent, model, maxTokens) {
   if (!agent || !Number.isFinite(maxTokens) || maxTokens <= 0) return;
-  agent.ctxWindowCache = { model: model || '', maxTokens };
+  const prev = agent.ctxWindowCache;
+  const same = prev && (prev.model || '') === (model || '');
+  agent.ctxWindowCache = { ...(same ? prev : {}), model: model || '', maxTokens };
+}
+
+export function lastUsageInputTokens(u) {
+  if (!u) return 0;
+  return (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+}
+
+// 是否该向 CLI 发 get_context_usage。纯函数，供接线 + 单测锁调用频率。
+export function shouldFetchContextUsage({
+  hasQ, disposed, cache, model, reason = 'event', hasLastUsage = false, now,
+} = {}) {
+  if (disposed || !hasQ) return false;
+  if (cache?.inFlight) {
+    const age = (now ?? Date.now()) - (cache.inFlightAt || 0);
+    if (age < CONTEXT_USAGE_INFLIGHT_MAX_MS) return false;
+  }
+  const sameModel = !!cache && (cache.model || '') === (model || '');
+  const hasWindow = sameModel && Number.isFinite(cache.maxTokens) && cache.maxTokens > 0;
+  const hasOccupancy = sameModel && (
+    (Number.isFinite(cache.totalTokens) && cache.totalTokens >= 0)
+    || Number.isFinite(cache.percentage)
+  );
+  if (cache?.staleOccupancy) return true;
+  if (!sameModel) return true;
+  if (hasWindow && hasOccupancy) return false;
+  if (hasWindow && hasLastUsage) return false;
+  if (reason === 'tick' || reason === 'usage') {
+    if (cache?.attempted) return false;
+    return true;
+  }
+  return true;
+}
+
+export function strongerStatusRefreshReason(a, b) {
+  const rank = { tick: 0, usage: 1, event: 2 };
+  const ra = rank[a] ?? 2;
+  const rb = rank[b] ?? 2;
+  return rb >= ra ? b : a;
+}
+
+export function statusRefreshReasonForEnvelope(type, payload) {
+  if (type === 'init' || type === 'result') return 'event';
+  if (type === 'system' && payload?.kind === 'compact_boundary') return 'event';
+  return null;
+}
+
+// 丢掉在途 getContextUsage 的认领权：迟到成功不得写回已失效的占用。
+function retireCtxUsageGeneration(agent) {
+  if (!agent) return;
+  agent._ctxUsageGen = (agent._ctxUsageGen || 0) + 1;
+  if (agent.ctxWindowCache) {
+    agent.ctxWindowCache.inFlight = false;
+    agent.ctxWindowCache.inFlightAt = 0;
+  }
+}
+
+// 压缩后占用作废、窗口保留。attempted 清零，允许紧接着再拉一次权威占用。
+export function invalidateCtxOccupancy(agent) {
+  if (!agent) return;
+  retireCtxUsageGeneration(agent);
+  const c = agent.ctxWindowCache;
+  if (!c) {
+    agent.ctxWindowCache = { model: '', maxTokens: 0, staleOccupancy: true, attempted: false, inFlight: false };
+    return;
+  }
+  c.totalTokens = undefined;
+  c.percentage = undefined;
+  c.staleOccupancy = true;
+  c.attempted = false;
+  c.inFlight = false;
+  c.inFlightAt = 0;
+}
+
+// 换会话：整份缓存丢掉，并退役在途 RPC（否则迟到结果会写到新会话上）。
+export function clearCtxWindowCache(agent) {
+  if (!agent) return;
+  retireCtxUsageGeneration(agent);
+  agent.ctxWindowCache = null;
 }
 
 // web 会话自己的 ctx/cost（口径：assistant.message.usage，非 result.usage 轮内聚合避免高估）。
@@ -160,6 +245,114 @@ export async function getContextUsageSafe(q, timeoutMs = 1500) {
       new Promise((_, rej) => setTimeout(() => rej(new Error('getContextUsage timeout')), timeoutMs)),
     ]);
   } catch { return null; }
+}
+
+function beginCtxFetch(agent, model, now) {
+  const gen = (agent._ctxUsageGen || 0) + 1;
+  agent._ctxUsageGen = gen;
+  const prev = agent.ctxWindowCache;
+  const same = prev && (prev.model || '') === (model || '');
+  const c = same ? prev : { model: model || '' };
+  c.model = model || '';
+  c.attempted = true;
+  c.inFlight = true;
+  c.inFlightAt = now;
+  c.staleOccupancy = false;
+  agent.ctxWindowCache = c;
+  return gen;
+}
+
+function adoptContextUsage(agent, model, sdkCtx, gen) {
+  if (!agent || gen !== agent._ctxUsageGen) return false;
+  if (sdkCtx && Number.isFinite(sdkCtx.maxTokens) && sdkCtx.maxTokens > 0) {
+    cacheCtxWindow(agent, model, sdkCtx.maxTokens);
+  }
+  const stored = agent.ctxWindowCache || { model: model || '' };
+  stored.model = model || stored.model || '';
+  stored.inFlight = false;
+  stored.inFlightAt = 0;
+  stored.attempted = true;
+  stored.staleOccupancy = false;
+  if (sdkCtx && Number.isFinite(sdkCtx.percentage)) {
+    stored.percentage = Math.min(100, Math.max(0, Math.round(sdkCtx.percentage)));
+  }
+  if (sdkCtx && Number.isFinite(sdkCtx.totalTokens) && sdkCtx.totalTokens >= 0) {
+    stored.totalTokens = sdkCtx.totalTokens;
+  }
+  agent.ctxWindowCache = stored;
+  return true;
+}
+
+function clearCtxInFlight(agent, gen) {
+  if (!agent || gen !== agent._ctxUsageGen) return;
+  if (agent.ctxWindowCache) {
+    agent.ctxWindowCache.inFlight = false;
+    agent.ctxWindowCache.inFlightAt = 0;
+  }
+}
+
+// 真正发 RPC。超时只放弃等待，CLI 侧仍在跑；迟到成功由 then 写入缓存并 onAdopted 补刷。
+async function fetchAndAdoptContextUsage(agent, { timeoutMs = 1500, onAdopted, now = Date.now() } = {}) {
+  const q = agent?.q;
+  if (!q?.getContextUsage) return;
+  const model = agent.activeModel || agent.reportedModel || '';
+  const gen = beginCtxFetch(agent, model, now);
+  const rpc = Promise.resolve().then(() => q.getContextUsage());
+  let waiting = true;
+  rpc.then(
+    sdk => {
+      if (!adoptContextUsage(agent, model, sdk, gen)) return;
+      if (!waiting) onAdopted?.();
+    },
+    () => { clearCtxInFlight(agent, gen); },
+  );
+  let timer = null;
+  try {
+    await Promise.race([
+      rpc,
+      new Promise((_, rej) => { timer = setTimeout(() => rej(new Error('getContextUsage timeout')), timeoutMs); }),
+    ]);
+  } catch {
+    // 超时：inFlight 保持到 rpc settle；抛错：失败分支已清 inFlight
+  } finally {
+    if (timer) clearTimeout(timer);
+    waiting = false;
+  }
+}
+
+function bumpOccupancyFromLastUsage(agent, model, luTokens) {
+  const c = agent?.ctxWindowCache;
+  if (!c || (c.model || '') !== (model || '')) return;
+  if (c.staleOccupancy) return; // 压缩后占用已作废，不得用压缩前 lastUsage 填回去
+  const win = c.maxTokens;
+  if (!Number.isFinite(win) || win <= 0 || !(luTokens > 0)) return;
+  // 只上调已有占用（SDK 权威或此前 lastUsage）。空占用不从 lastUsage 填——那是压缩失败回落路径，由 applyCachedCtx 决定显不显示。
+  if (!Number.isFinite(c.totalTokens) || c.totalTokens < 0) return;
+  if (luTokens > c.totalTokens) {
+    c.totalTokens = luTokens;
+    c.percentage = Math.min(100, Math.round(luTokens / win * 100));
+  }
+}
+
+function applyCachedCtx(p, agent, model) {
+  const win = readCachedCtxWindow(agent, model);
+  const c = agent?.ctxWindowCache;
+  const same = c && (c.model || '') === (model || '');
+  if (win) {
+    p.ctx = p.ctx || {};
+    p.ctx.windowSize = win;
+  }
+  if (same && Number.isFinite(c.percentage)) {
+    p.ctx = p.ctx || {};
+    p.ctx.usedPercent = Math.min(100, Math.max(0, Math.round(c.percentage)));
+    if (Number.isFinite(c.totalTokens) && c.totalTokens >= 0) {
+      p.ctx.totalTokens = c.totalTokens;
+    }
+    return;
+  }
+  if (p.ctx && Number.isFinite(p.ctx.tokens) && p.ctx.tokens > 0 && win) {
+    p.ctx.usedPercent = Math.min(100, Math.round(p.ctx.tokens / win * 100));
+  }
 }
 
 // 从 agent.fetchUsage()（SDK usage_EXPERIMENTAL…）提取 statusline 需要对齐 CLI 的字段：
@@ -245,7 +438,10 @@ function recordRateReasonIfChanged(agent, reason, extra = {}) {
 // 组装 web 状态栏结构化 payload（全字段可选，缺则省；前端按存在性渲染原生 UI）。
 // 权限档不在此——前端已有独立 pill（pillPerm），避免重复显示；effort 进 statusline 对齐 CLI 文案
 // （底栏 pill 仍保留作切换器）。
-export async function buildWebStatusLine({ agent, cwd, versions, usageStore = usageSnapshotStore }) {
+export async function buildWebStatusLine({
+  agent, cwd, versions, usageStore = usageSnapshotStore,
+  reason = 'event', timeoutMs = 1500, onContextUsageAdopted,
+} = {}) {
   const p = { ts: Date.now() };
   // FRESH 会话 activeModel 为空（未显式指定 model）时回退 reportedModel（init 报告的真实运行模型）——
   // 只读显示，不碰 activeModel，不触发 F1（空发 setModel 重置网关模型）。见 agent.js reportedModel。
@@ -273,29 +469,22 @@ export async function buildWebStatusLine({ agent, cwd, versions, usageStore = us
     const total = u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens;
     if (total > 0) p.ctx.cacheHitPct = Math.round(u.cache_read_input_tokens / total * 100); // 瞬时：本轮命中率
   }
-  // ctx 百分比：优先 Agent SDK getContextUsage() 的【运行时权威】maxTokens/percentage（活跃会话），
-  // 拿到就把窗口真值写进会话缓存；无活 q（idle/历史/dispose）/ RPC 超时 / 抛错 → 垫缓存里的真值。
-  // 两级都没有 → 不设 windowSize/usedPercent（不按模型名猜），前端退回只显绝对 token。
-  // 无 lastUsage 时仍可只出 window/percent/totalTokens（修首包/清零后 ctx 整段缺席）。
-  const sdkCtx = (agent?.q && !agent.disposed) ? await getContextUsageSafe(agent.q) : null;
-  if (sdkCtx && Number.isFinite(sdkCtx.maxTokens) && sdkCtx.maxTokens > 0) {
-    cacheCtxWindow(agent, model, sdkCtx.maxTokens);
-    p.ctx = p.ctx || {};
-    p.ctx.windowSize = sdkCtx.maxTokens;
-    p.ctx.usedPercent = Math.min(100, Math.max(0, Math.round(sdkCtx.percentage || 0)));
-    // totalTokens 与 percentage 同源（全量上下文占用）；p.ctx.tokens 仍是 lastUsage 单轮口径。
-    if (Number.isFinite(sdkCtx.totalTokens) && sdkCtx.totalTokens >= 0) {
-      p.ctx.totalTokens = sdkCtx.totalTokens;
-    }
-  } else if (p.ctx && Number.isFinite(p.ctx.tokens) && p.ctx.tokens > 0) {
-    const win = readCachedCtxWindow(agent, model);
-    if (win) {
-      p.ctx.windowSize = win;
-      // 缓存路径的占用是 lastUsage 单轮口径（cache_read 覆盖整个上下文，近似全量），
-      // 非 SDK 的权威 totalTokens；故这里自算百分比且不写 totalTokens。
-      p.ctx.usedPercent = Math.min(100, Math.round(p.ctx.tokens / win * 100));
-    }
+  // ctx 百分比：权威来自 getContextUsage（窗口 + 占用），结果挂 agent.ctxWindowCache。
+  // 热缓存 / git tick / 流式 usage 不重打——该 RPC 在 CLI 侧是按类别 count_tokens，不是读内存。
+  // lastUsage 只提供 in/out/w/r，以及占用单调上调（本轮上下文变长、不必再拆账）。
+  const luTokens = lastUsageInputTokens(agent?.lastUsage);
+  if (shouldFetchContextUsage({
+    hasQ: !!(agent?.q?.getContextUsage),
+    disposed: !!agent?.disposed,
+    cache: agent?.ctxWindowCache,
+    model,
+    reason,
+    hasLastUsage: luTokens > 0,
+  })) {
+    await fetchAndAdoptContextUsage(agent, { timeoutMs, onAdopted: onContextUsageAdopted });
   }
+  bumpOccupancyFromLastUsage(agent, model, luTokens);
+  applyCachedCtx(p, agent, model);
   if (cc.cost) {
     if (cc.cost.usedUsd > 0) p.cost = cc.cost.usedUsd;
     if (cc.cost.durationMs > 0 || cc.cost.apiDurationMs > 0)
