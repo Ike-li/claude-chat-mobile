@@ -57,12 +57,45 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
-  test('report 含 11 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS）', () => {
+  test('report 含 12 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS / ENV_OVERRIDE）', () => {
     const rep = runDoctor({ home: '/nonexistent-ccm', workDirs: [] });
-    assert.equal(rep.checks.length, 11);
+    assert.equal(rep.checks.length, 12);
     assert.ok(rep.checks.some(c => c.id === 'DEVICE_GATE'));
     assert.ok(rep.checks.some(c => c.id === 'MODEL_SETTINGS'));
+    assert.ok(rep.checks.some(c => c.id === 'ENV_OVERRIDE'));
     assert.ok(['ready', 'caution', 'blocked'].includes(rep.readiness.level));
+  });
+});
+
+// D18 此前**唯一的消费者是 scripts/doctor.js**（维护者 CLI）。而 ccm 的主场景是手机，
+// 手机端两个入口（配置面板 / 安全体检）都看不到它——「env 恒压过配置文件而被压侧无症状」
+// 这句话本身就写在 scripts/doctor.js:23，产品自己承认它危险，却只报给最不需要的那类用户。
+test.describe('ENV_OVERRIDE：把 doctor D18 接进手机端的安全体检', () => {
+  const base = { home: '/nonexistent-ccm', workDirs: [] };
+
+  test('有 shell env 覆盖 → warn，且逐个列出键名', () => {
+    const rep = runDoctor({ ...base, shellEnv: { WORK_DIR: '/from/shell', DEV_MODE: '1' } });
+    const c = rep.checks.find(x => x.id === 'ENV_OVERRIDE');
+    assert.equal(c.status, 'warn');
+    assert.deepEqual(c.safe.keys.slice().sort(), ['DEV_MODE', 'WORK_DIR']);
+    assert.match(c.detail, /WORK_DIR/);
+  });
+
+  test('★ 只列键名，绝不回显值 —— 被覆盖的可能正是 AUTH_TOKEN / VAPID 私钥', () => {
+    const rep = runDoctor({ ...base, shellEnv: { AUTH_TOKEN: 'shell-side-secret-token' } });
+    assert.equal(JSON.stringify(rep).includes('shell-side-secret-token'), false);
+  });
+
+  test('无覆盖 → ok', () => {
+    const c = runDoctor({ ...base, shellEnv: { PATH: '/usr/bin' } }).checks.find(x => x.id === 'ENV_OVERRIDE');
+    assert.equal(c.status, 'ok');
+  });
+
+  // 与 BE-013 同一条纪律：缺省不得假绿。调用方忘了传快照时显 ok，等于把「没查」说成「没问题」。
+  test('★ 没传 shellEnv（调用方漏接线）→ 不显 ok，safe.checked=false', () => {
+    const c = runDoctor(base).checks.find(x => x.id === 'ENV_OVERRIDE');
+    assert.notEqual(c.status, 'ok');
+    assert.equal(c.safe.checked, false);
   });
 });
 

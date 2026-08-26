@@ -18,7 +18,7 @@
 //   3. CCM_DATA_DIR —— 只读。改它等于把全部控制面状态（会话/设备信任/审批/审计）孤儿化，
 //      那是**迁移**不是设置，docs/deployment.md 有「停服→移动→doctor→启动」的配方。
 
-import { isSerializableEnvValue, maskSecret } from './env-file.js';
+import { isSerializableEnvValue, maskSecret, shellOverriddenKeys } from './env-file.js';
 
 // 开关类的真值字面量**逐 key 声明**，绝不用统一的 truthy 判定。
 // src/ops/log-terminal.js:32 明写过这个经典脚枪：LOG_STDERR=false 反而是「开」——
@@ -465,7 +465,26 @@ export function validateEnvChanges(changes, d) {
 
 // ── 下发给前端的视图 ────────────────────────────────────────────────────
 // 敏感项只出 { set, length }。明文永不离开服务端 —— 同 src/ops/doctor-runtime.js 的脱敏纪律。
-export function buildEnvView(values = {}) {
+//
+// ## shellEnv：为什么它必须由调用方传进来，且必须是「投影之前」的快照
+// values 是**配置文件**的投影，而 shell 环境变量恒压过配置文件 —— 被压住的那一行在面板上
+// 与正常行长得一模一样：用户改完、保存成功、运行时仍是旧值，零症状（VC-D4-02，2026-08-26 实测）。
+// 要标出这种行，就得知道 shell 里设过哪些 key，而这里**不能自己去读 process.env**：
+//   1. src/server/config.js:72 会把文件值投影回 process.env（只填还没有的 key），
+//      加载之后现读分不出来源，做出来的是永远不报的假功能；
+//   2. src/ops 不读 process.env 是既定约定（同 src/shared/data-dir.js 顶层不读 env 的理由）——
+//      这个模块得能被单测直接喂数据。
+// 快照由 src/server/config.js 的 getShellEnvSnapshot() 提供（它在投影前第一行拍下）。
+//
+// **只标键，绝不回显 env 的值**：被压住的可能正是 AUTH_TOKEN / VAPID 私钥，
+// 与 doctor D18 同一条纪律（src/ops/doctor-checks.js:560 上方注释）。
+export function buildEnvView(values = {}, { shellEnv = null } = {}) {
+  // 没给快照 = 这一维**没查过**，此时整个字段缺席，而不是下发 false。
+  // false 的意思是「查过了，没被覆盖」——把「没查」说成「没问题」正是 BE-013 那个假绿的形状。
+  // 具体受益方是 scripts/config.js 的 cmdSchema()：它拿 buildEnvView({}) 当**配置项文档**下发给
+  // 桌面端（值是空的、也没有 shell 上下文），那条通道上给出 false 就是一句没有根据的断言。
+  const checked = !!shellEnv && typeof shellEnv === 'object';
+  const overridden = new Set(checked ? shellOverriddenKeys(shellEnv, Object.keys(ENV_SCHEMA)) : []);
   const groups = ENV_GROUPS.map((g) => ({
     id: g.id,
     label: g.label,
@@ -484,6 +503,9 @@ export function buildEnvView(values = {}) {
           readonly: def.kind === 'readonly' || def.kind === 'list',
           secret: !!def.secret || def.kind === 'secret',
         };
+        // 查过了才下发（true/false 都下发）；没查则整个字段缺席，见上方注释。
+        // 只读项也照标 —— 它同样会被 env 压过，只是用户不能在这里改而已。
+        if (checked) item.overriddenByEnv = overridden.has(key);
         if (def.values) item.values = def.values;
         if (def.default !== undefined) item.default = def.default;
         if (def.unit) item.unit = def.unit;

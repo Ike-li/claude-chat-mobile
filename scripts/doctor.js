@@ -48,8 +48,7 @@ import {
   menubarLivenessDiagnostic,
   uploadsFootprintDiagnostic,
 } from '../src/ops/doctor-checks.js';
-import { ENV_SCHEMA } from '../src/ops/env-schema.js';
-import { PASSTHROUGH_KEYS } from '../src/ops/config-file.js';
+import { ALL_CONFIG_KEYS } from '../src/ops/config-file.js';
 import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
 import { collectSyntaxFiles } from './collect-source-files.js';
 import { detectLang } from './setup.js';
@@ -549,12 +548,12 @@ function checkCoverageThreshold({ full = false } = {}) {
 // process.env，而 dotenv 默认不覆盖已存在的值，所以 process.env 恰好是「shell export 优先、.env 补充」
 // 的实际生效态。只读 .env 文件会漏掉 shell export 的开关（doctor 曾因只读文件而给出恒绿假 OK）。
 //
-// D18: shell env 覆盖可见性。键表＝ENV_SCHEMA 全部 key ∪ PASSTHROUGH_KEYS（CCM_DATA_DIR 等
-// 故意不进 UI 的键也会被 env 压过文件，恰恰更隐蔽）。快照取自 loadRuntimeEnvironment 之前，
-// 见 SHELL_ENV_SNAPSHOT 处注释。
+// D18: shell env 覆盖可见性。键表＝ALL_CONFIG_KEYS（ENV_SCHEMA 全部 key ∪ PASSTHROUGH_KEYS，
+// CCM_DATA_DIR 等故意不进 UI 的键也会被 env 压过文件，恰恰更隐蔽）——与手机端安全体检的
+// ENV_OVERRIDE 共用同一份键表，否则同一台机器上两处会给出不同答案。
+// 快照取自 loadRuntimeEnvironment 之前，见 SHELL_ENV_SNAPSHOT 处注释。
 function checkEnvOverrides() {
-  const keys = [...Object.keys(ENV_SCHEMA), ...PASSTHROUGH_KEYS];
-  const d = envOverrideDiagnostic({ shellEnv: SHELL_ENV_SNAPSHOT, keys, lang: LANG });
+  const d = envOverrideDiagnostic({ shellEnv: SHELL_ENV_SNAPSHOT, keys: ALL_CONFIG_KEYS, lang: LANG });
   (d.status === 'ok' ? ok : warn)(bi('环境变量覆盖', 'Shell env overrides'), d.detail);
 }
 

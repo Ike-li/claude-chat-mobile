@@ -66,6 +66,18 @@ test('root server.js is only a compatibility launcher for src/server/app.js', ()
   assert.doesNotMatch(source, /export\s*\{[^}]+\}\s*from\s*['"]\.\/src\/server\/app\.js/);
 });
 
+// VC-D4-02 的接线闸。buildEnvView 少传 shellEnv 时不会报错，只会把每一项都算成「没被覆盖」——
+// 与「面板压根没这个功能」在屏幕上完全同形。这类接线洞在本仓只有源码断言抓得到
+// （app.js 起真 server，没法在单测里 import 进来问它）。
+test('配置面板与安全体检都必须拿到 shell env 快照（少接一根线 = 静默假绿）', () => {
+  const source = readFileSync('src/server/app.js', 'utf8');
+  assert.match(source, /getShellEnvSnapshot/, 'app.js 必须引入投影前的 shell env 快照');
+  assert.match(source, /buildEnvView\([\s\S]{0,80}?shellEnv/,
+    'env:get 必须把快照喂给 buildEnvView，否则面板永远显示「没被覆盖」');
+  assert.match(source, /runDoctor\(\{[\s\S]{0,800}?shellEnv:/,
+    'doctor:run 必须带上快照，否则手机端安全体检看不到 D18（此前它唯一的消费者是维护者 CLI）');
+});
+
 // 行数上限已移除：拆分判据是行为域的归属，不是文件尺寸。按尺寸强制拆分会把一个内聚的
 // 行为域劈成两半（读一个行为要跨文件），而放任一个多职责文件长到 799 行却一路绿灯——
 // 尺寸既不充分也不必要。这里只保留三个曾经的单体不得复活的正向断言。

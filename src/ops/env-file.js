@@ -94,6 +94,22 @@ export function maskSecret(value) {
   return { set: s.length > 0, length: s.length };
 }
 
+// shell 环境变量压过配置文件的判据 —— **唯一实现**，两个消费者共用：
+//   · src/ops/doctor-checks.js 的 envOverrideDiagnostic（doctor D18，整体一句话诊断）
+//   · src/ops/env-schema.js 的 buildEnvView（配置面板，逐行标注哪一行改了不生效）
+// 两处问的是同一个问题。各写一份的话，分叉之后**两边都不会报错**：面板说「没被覆盖」、
+// doctor 说「被覆盖了」，只有用户被误导（2026-08-05 的 stale 死信正是这个形状——
+// 两个函数的注释都写着「与对方对齐」，而那一维从没对齐过）。
+//
+// 空串按「未设置」口径：与 src/shared/data-dir.js:17 和 normalizeLoadedEnvironment 一致
+// （启动期会把空串 key 整个删掉，进程视为没设过）。
+// typeof 判串而不是真值判断：shellEnv 是普通对象，裸 shellEnv[k] 对 'constructor' /
+// 'toString' 这类原型链上的 key 恒 truthy，会把它们误报成「被覆盖」。
+export function shellOverriddenKeys(shellEnv, keys = []) {
+  const env = shellEnv && typeof shellEnv === 'object' ? shellEnv : {};
+  return keys.filter((k) => typeof env[k] === 'string' && env[k] !== '');
+}
+
 // 行首是不是某个 key 的赋值行。容忍 `export KEY=`（有人习惯这么写）与两侧空白。
 //
 // 返回 { key, prefix }：prefix 是 `=` 之前、key 之前的那一段原文（缩进 + 可能的 `export `）。

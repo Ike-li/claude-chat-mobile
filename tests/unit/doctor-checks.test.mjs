@@ -748,6 +748,18 @@ test.describe('envOverrideDiagnostic —— shell env 压过配置文件的可�
     const d = envOverrideDiagnostic({ shellEnv: { PORT: '' }, keys: ['PORT'], lang: 'zh' });
     assert.equal(d.status, 'ok');
   });
+
+  // 配置面板要在**被压住的那一行**上打标记（VC-D4-02），而不是只给一段整体文案。
+  // 命中的键名本来就已经算出来了，顺手出成结构化字段，省得调用方再解析 detail 那段散文
+  // ——解析散文是下一次判据分叉的起点。
+  test('命中的键名以结构化数组出（detail 那段散文不该被谁去反解析）', () => {
+    const d = envOverrideDiagnostic({ shellEnv: { WORK_DIR: '/a', PORT: '' }, keys: ['WORK_DIR', 'PORT'], lang: 'zh' });
+    assert.deepEqual(d.keys, ['WORK_DIR']);
+  });
+
+  test('无覆盖时 keys 是空数组而不是 undefined（调用方直接 .length 不用先判空）', () => {
+    assert.deepEqual(envOverrideDiagnostic({ shellEnv: {}, keys: ['PORT'] }).keys, []);
+  });
 });
 
 test.describe('identifySelfServer —— headless npm start 也要认得出是自家 server', () => {

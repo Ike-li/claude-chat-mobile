@@ -169,4 +169,30 @@ test.describe('P0 日常零 token Mock UI 回归 · 保存路径', () => {
     await expect(page.locator('#envConfigHint')).toContainText('已写入 2 项');
     await expectNoBrowserErrors(page);
   });
+
+  // VC-D4-01（2026-08-26 探索性测试）：AUTH_TOKEN 那一行必须**看得出来是只读的**。
+  // 上面 P0-31 已经断言了「不出现明文」与「没有输入框」，但没断「用户看得到 readonly 这件事」。
+  // 差别在于失败形态：少了 `只读` 标记，用户只会看到一行没有输入框的字，
+  // 于是去点「更换」——而这一项刻意没有「更换」按钮（在手机上改错 token 会把自己锁在门外，
+  // 见 env-schema.js 顶注第 2 条）。看不出只读，就只剩「这面板坏了」这一个解释。
+  test('P0-31h AUTH_TOKEN 行：长度 + 只读标记 + 没有「更换」入口（三者缺一都会误导）', async ({ page }) => {
+    await gotoMock(page);
+    await openGeneralSettings(page);
+    await openGeneralDiagSection(page);
+    await page.locator('#btnEnvConfig').click();
+    await expect(page.locator('#envConfigModal')).toBeVisible();
+
+    // 定位到 AUTH_TOKEN 那一行本身（而不是在整块面板里模糊搜字，那会被别的 secret 项串味）
+    const row = page.locator('#envConfigBody')
+      .locator('div', { has: page.locator('code', { hasText: /^AUTH_TOKEN$/ }) }).first();
+
+    await expect(row).toContainText('已设置（64 字符）');   // 值位给的是长度，不是任何一段真实字符
+    await expect(row).toContainText('只读');                 // ★ 本条新增的那一维
+    await expect(row.locator('button', { hasText: '更换' })).toHaveCount(0);
+    await expect(row.locator('input')).toHaveCount(0);
+    // 只读的理由要留在屏幕上，否则用户只知道「改不了」不知道「去哪改」
+    await expect(row).toContainText('npm run setup');
+
+    await expectNoBrowserErrors(page);
+  });
 });

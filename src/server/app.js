@@ -91,7 +91,7 @@ import * as approvalStore from '../agent/approval-store.js';
 import { expireOrphanedPending, startApprovalRetentionSweep } from '../agent/approval-lifecycle.js';
 import * as audit from '../ops/audit.js';
 import * as metrics from '../ops/metrics.js';
-import { parseServerConfig } from './config.js';
+import { getShellEnvSnapshot, parseServerConfig } from './config.js';
 import {
   clientIp,
   configureHttpShell,
@@ -2918,6 +2918,9 @@ registerSocketConnection(io, socket => {
       // BE-013/L1：.env 在项目根、data/*.json 在实际数据目录（CCM_DATA_DIR 可把它移出仓库）——两者必须分开传。
       // 早前把 CCM_DATA_DIR 当 rootDir 传，拼出 <CCM_DATA_DIR>/data/... 永不存在 → 扫 0 个文件 → 恒报绿。
       configPermsProblems: countConfigPermProblems(HERE, { dataDir: process.env.CCM_DATA_DIR || null }),
+      // D18：投影**之前**的 shell 快照。现读 process.env 是没用的——config.js 已经把文件值
+      // 填了进去，来源分不开（那会做出一个永远报「全被覆盖」的假功能）。
+      shellEnv: getShellEnvSnapshot(),
     }));
   });
 
@@ -2952,7 +2955,9 @@ registerSocketConnection(io, socket => {
     if (typeof ack !== 'function') return;
     ack({
       ok: true,
-      ...buildEnvView(readEnvValues()),
+      // 第二个参数不是可选的装饰：少了它，被 shell env 压过的行会跟正常行长得一模一样，
+      // 用户改完保存成功、运行时仍用旧值（VC-D4-02）。快照取自投影之前，见 config.js。
+      ...buildEnvView(readEnvValues(), { shellEnv: getShellEnvSnapshot() }),
       envFileExists: usingConfigJson() || existsSync(ENV_FILE_PATH),
       configFile: usingConfigJson() ? CONFIG_FILE_NAME : '.env',
     });

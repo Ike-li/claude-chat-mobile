@@ -4,7 +4,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { isOwnerOnly } from '../files/file-security.js';
-import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic } from './doctor-checks.js';
+import { ALL_CONFIG_KEYS } from './config-file.js';
+import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic } from './doctor-checks.js';
 
 // 敏感配置文件清单（相对项目根）——CLI doctor（scripts/doctor.js）与本运行时 doctor 共用同一事实源，
 // 防两处各自维护再漏同步。列表新增项须同时被 CLI 检查/自动修复与 UI 体检覆盖。
@@ -127,7 +128,7 @@ export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
 
 // 编排运行时安全检查 + 危险白名单审查，产出【已脱敏】报告。
 // 项数以下方 checks.push 为准，并由 tests/unit/doctor-runtime.test.mjs 的
-// `assert.equal(rep.checks.length, 11)` 硬锁——增删项会让那条断言红，据它更新即可。
+// `assert.equal(rep.checks.length, 12)` 硬锁——增删项会让那条断言红，据它更新即可。
 // （此前注释写死的「6 项」在陆续加到 11 项后一直没人更新，是没有任何闸门盯着的注释计数。）
 export function runDoctor(ctx = {}) {
   const checks = [];
@@ -177,6 +178,21 @@ export function runDoctor(ctx = {}) {
       gatewayDirCount: modelSnap.dirs.filter(d => Object.keys(d.tierTargets).length > 0).length,
       pinnedDirCount: modelSnap.dirs.filter(d => d.localModel || d.projectModel).length,
     },
+  });
+
+  // D18 的手机端出口。「env 恒压过配置文件而被压侧无症状」这句话写在 scripts/doctor.js:23 ——
+  // 产品自己承认它危险，可此前唯一的消费者是维护者 CLI，而 ccm 的主场景恰恰在手机上。
+  // ctx.shellEnv 必须是 loadRuntimeEnvironment **之前**的快照（src/server/config.js
+  // getShellEnvSnapshot），加载后文件值也进了 process.env、来源就分不开了。
+  // 缺省不假绿：调用方没传快照 = 这项没查过，与 BE-013 的 CONFIG_PERMS 同一条纪律。
+  const envOvChecked = !!ctx.shellEnv && typeof ctx.shellEnv === 'object';
+  const envOv = envOverrideDiagnostic({ shellEnv: ctx.shellEnv || {}, keys: ALL_CONFIG_KEYS, lang: ctx.lang });
+  checks.push({
+    id: 'ENV_OVERRIDE',
+    status: envOvChecked ? envOv.status : 'warn',
+    detail: envOvChecked ? envOv.detail : '环境变量覆盖未检查（未知）',
+    // 只出键名 —— 值可能是 AUTH_TOKEN / VAPID 私钥，而体检报告会被贴进 issue / 聊天。
+    safe: { checked: envOvChecked, keys: envOvChecked ? envOv.keys : [] },
   });
 
   // 危险白名单：读合并 permissions.allow，危险条附 scope（让用户知道改哪个文件），非危险不列。

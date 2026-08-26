@@ -299,6 +299,7 @@ export const EN_DICT = Object.freeze({
   '更换': 'Replace',
   '输入新值（留空 = 清除该项）': 'Enter a new value (leave empty to clear it)',
   '默认 V': 'default V',
+  '⚠ 已被环境变量覆盖 —— 运行时用的是 shell 里的值，在这里改不会生效': '⚠ Overridden by a shell environment variable — the running process uses the shell value, so editing it here has no effect',
   '此处不可改': 'Not editable here',
   '保存失败，一项都没写入': 'Save failed — nothing was written',
   '保存前请确认': 'Confirm before saving',

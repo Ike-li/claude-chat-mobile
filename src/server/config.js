@@ -27,10 +27,25 @@ export function normalizeLoadedEnvironment(env, shellAnthropicKeys) {
   return env;
 }
 
+// 投影**之前**的 shell 环境快照。消费者是配置面板（逐行标「这一行被 env 压过了，改了不生效」）
+// 与手机端安全体检的 D18；两处都只用它做「设没设」判定，绝不回显值——被压住的可能正是
+// AUTH_TOKEN / VAPID 私钥。
+//
+// 为什么由 loadRuntimeEnvironment 自己在第一行拍，而不是像 scripts/doctor.js:673 那样让调用方拍：
+// 这个快照唯一的正确时机是「文件值投影回 env 之前」，投影之后来源就分不开了（面板会把每一项
+// 都标成被覆盖）。让调用方守一句注释是可以写错的；写在这里，顺序由构造保证。
+// app.js 也拿不到别的时机——它是被 server.js 在 loadRuntimeEnvironment 之后才动态 import 的。
+let shellEnvSnapshot = {};
+export function getShellEnvSnapshot() {
+  return shellEnvSnapshot;
+}
+
 // Must run in the thin launcher before importing app.js. Several state modules
 // resolve their file paths at module evaluation time, so loading .env inside
 // app.js would be too late for CCM_DATA_DIR. Provider variables remain shell-only.
 export function loadRuntimeEnvironment(env = process.env, { envFile, dir, quiet = false } = {}) {
+  // 浅拷贝而非引用：下面的投影会往 env 上写，引用会让快照跟着长出文件值。
+  shellEnvSnapshot = { ...env };
   const shellAnthropicKeys = new Set(Object.keys(env).filter(key => key.startsWith('ANTHROPIC_')));
   // OPS/SH-001：dotenv 默认不覆盖已存在的 key——含空串。上层若 export AUTH_TOKEN=
   // 或 CCM_DATA_DIR=，会挡住 .env 填入，normalize 再删空串 → 进程当「未设置」跑（绑 127.0.0.1 /

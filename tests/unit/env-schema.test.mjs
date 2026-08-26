@@ -13,6 +13,8 @@ import {
   buildEnvView,
   validateEnvChanges,
 } from '../../src/ops/env-schema.js';
+// 跨模块引一次 doctor 的 D18：本文件末尾那条「判据同源」断言要拿它当对照物。
+import { envOverrideDiagnostic } from '../../src/ops/doctor-checks.js';
 
 const deps = (over = {}) => ({
   fileExists: () => true,
@@ -323,6 +325,60 @@ test.describe('buildEnvView —— 下发给前端的视图', () => {
 
   test('带上只读诊断段', () => {
     assert.ok(buildEnvView(values).readonlyDiagnostics.length >= 2);
+  });
+});
+
+// VC-D4-02（2026-08-26 探索性测试实测 FAIL）——**面板展示的是文件值，而文件值不等于生效值**。
+// 复现：server 以 WORK_DIR=<A> 启动、进程实际在用 A，而面板照着 ccm.config.json 显示 <B>，
+// 且全面板搜「环境变量/覆盖/压过」零命中。用户在手机上改完、保存成功、运行时仍是 A —— 零症状。
+// 根因是 buildEnvView 只投影配置文件，连 shell env 都不看。
+//
+// 为什么快照必须由调用方传进来：src/server/config.js 会把文件值**投影回 process.env**
+// （只填还没有的 key），所以在这一层现读 process.env 分不出来源，做出来的是永远不报的假功能。
+test.describe('buildEnvView —— 文件值 ≠ 生效值时必须标出来', () => {
+  const values = { WORK_DIR: '/from/config/file', PORT: '3000' };
+  const itemOf = (view, key) => view.groups.flatMap((g) => g.items).find((i) => i.key === key);
+
+  test('被 shell env 压过的键标 overriddenByEnv —— 面板据此告诉用户「这里改了不生效」', () => {
+    const view = buildEnvView(values, { shellEnv: { WORK_DIR: '/from/shell/env' } });
+    assert.equal(itemOf(view, 'WORK_DIR').overriddenByEnv, true);
+  });
+
+  test('没被压过的键是 false 而不是 undefined —— 前端要能直接判真假', () => {
+    const view = buildEnvView(values, { shellEnv: { WORK_DIR: '/from/shell/env' } });
+    assert.equal(itemOf(view, 'PORT').overriddenByEnv, false);
+  });
+
+  test('绝不回显 env 的值：键可能是 AUTH_TOKEN / VAPID 私钥（同 doctor D18 的纪律）', () => {
+    const view = buildEnvView(values, { shellEnv: { AUTH_TOKEN: 'shell-side-secret-token' } });
+    assert.equal(JSON.stringify(view).includes('shell-side-secret-token'), false);
+    assert.equal(itemOf(view, 'AUTH_TOKEN').overriddenByEnv, true, '只读项同样要标——它照样被压过');
+  });
+
+  test('空串按「未设置」口径不计（与 normalizeLoadedEnvironment / data-dir 同口径）', () => {
+    const view = buildEnvView(values, { shellEnv: { PORT: '' } });
+    assert.equal(itemOf(view, 'PORT').overriddenByEnv, false);
+  });
+
+  // 「没查过」不得伪装成「没问题」——同 BE-013 的 CONFIG_PERMS。scripts/config.js 的 cmdSchema()
+  // 拿 buildEnvView({}) 当配置项文档下发给桌面端，那条通道上没有 shell 上下文，
+  // 给 false 就是一句没有根据的断言。
+  test('★ 没传快照时字段整个缺席，而不是下发 false（那是把「没查」说成「没问题」）', () => {
+    const item = buildEnvView(values).groups.flatMap((g) => g.items).find((i) => i.key === 'WORK_DIR');
+    assert.equal(Object.hasOwn(item, 'overriddenByEnv'), false);
+  });
+
+  // 这一条是本次改动的核心防线。面板的行内标注与 doctor D18 问的是同一个问题；两处各写一份判据，
+  // 分叉之后**两边都不会报错**——面板说「没被覆盖」、doctor 说「被覆盖了」，只有用户被误导。
+  // 2026-08-05 的 stale 死信正是这个形状（两个函数注释都写「与对方对齐」，而那一维从没对齐）。
+  test('★ 与 doctor D18 判据同源：同一份 shellEnv 下两者认定的键集必须逐字相等', () => {
+    const shellEnv = { WORK_DIR: '/a', PORT: '', DEV_MODE: '1', AUTH_TOKEN: 'x', PATH: '/usr/bin' };
+    const fromView = buildEnvView({}, { shellEnv })
+      .groups.flatMap((g) => g.items).filter((i) => i.overriddenByEnv).map((i) => i.key).sort();
+    const fromDoctor = envOverrideDiagnostic({
+      shellEnv, keys: Object.keys(ENV_SCHEMA), lang: 'zh',
+    }).keys.slice().sort();
+    assert.deepEqual(fromView, fromDoctor);
   });
 });
 

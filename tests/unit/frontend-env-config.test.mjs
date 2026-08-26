@@ -264,3 +264,40 @@ test.describe('env-config 保存流程 —— 重启入口取决于是否常驻�
     assert.equal(badH.saved.length, 0);
   });
 });
+
+// VC-D4-02：面板展示的是**文件值**，而 shell env 恒压过文件。被压住的那一行改了保存成功、
+// 运行时仍用旧值，且屏幕上没有任何痕迹——2026-08-26 实测：全面板搜「环境变量/覆盖/压过」零命中。
+// 这一组断言的是「用户看得见」，所以判据是渲染出来的**文字**，不是内部字段。
+test.describe('env-config 渲染 —— 被环境变量压过的行必须看得出来', () => {
+  // 夹具仍用真实 buildEnvView，避免手编外部契约编错后测试与实现互相印证（本仓在 git fixture 上栽过）
+  const overriddenAck = {
+    ok: true,
+    ...buildEnvView({ PORT: '3000', WORK_DIR: '/from/config/file' },
+      { shellEnv: { WORK_DIR: '/from/shell/env' } }),
+    envFileExists: true,
+  };
+
+  const openWith = async (ack) => {
+    const h = harness({ ackQueue: [ack] });
+    h.panel.open();
+    await settle();
+    return h;
+  };
+
+  test('被压过时屏幕上出现「环境变量」字样，并明说这里改了不生效', async () => {
+    const h = await openWith(overriddenAck);
+    const screen = textOf(h.dom.envConfigBody);
+    assert.match(screen, /环境变量/);
+    assert.match(screen, /不生效|不会生效/);
+  });
+
+  test('★ 只提示，绝不回显 env 的值 —— 被压的可能是 AUTH_TOKEN / VAPID 私钥', async () => {
+    const h = await openWith(overriddenAck);
+    assert.equal(textOf(h.dom.envConfigBody).includes('/from/shell/env'), false);
+  });
+
+  test('没有任何键被压过时不出现这段提示（否则变成人人忽略的噪音）', async () => {
+    const h = await openWith(VIEW_ACK);
+    assert.equal(/环境变量/.test(textOf(h.dom.envConfigBody)), false);
+  });
+});

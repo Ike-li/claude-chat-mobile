@@ -1,3 +1,7 @@
+// 本文件此前零 import（纯决策函数）。唯一的例外是 shellOverriddenKeys —— 它必须与配置面板
+// 共用同一份实现，见 env-file.js 处注释（判据分叉时两边都不报错，只有用户被误导）。
+import { shellOverriddenKeys } from './env-file.js';
+
 // 模型配置「永不打架」体检：settings 的 model 字段 vs 各工作目录的 ANTHROPIC_DEFAULT_*_MODEL 网关映射。
 //
 // 判据来自实测（2026-08-04，CLI 2.1.221，本地假网关抓 /v1/messages 请求体）：
@@ -557,12 +561,16 @@ export function portOccupancyDiagnostic({ port, occupied = false, ownerLabel = n
 // doctor 与 server 全程按它运行，doctor 却一个字都没提。本检查只列**键名**——键的值可能是
 // AUTH_TOKEN / VAPID 私钥，诊断输出会被贴进 issue / 聊天，一个字节都不能带出来。
 // shellEnv 必须是 loadRuntimeEnvironment **之前**的快照：加载后文件值也进了 process.env，分不清来源。
+// keys 也原样出成结构化字段：配置面板要在**被压住的那一行**上打标记（VC-D4-02），
+// 拿到的必须是键名数组，而不是去反解析下面 detail 那段散文——解析散文是下一次判据分叉的起点。
 export function envOverrideDiagnostic({ shellEnv = {}, keys = [], lang = 'zh' } = {}) {
-  // 空串按「未设置」口径（与 src/shared/data-dir.js:17、normalizeLoadedEnvironment 一致）
-  const hits = keys.filter((k) => typeof shellEnv[k] === 'string' && shellEnv[k] !== '');
+  // 判据是共用的 shellOverriddenKeys（含「空串≡未设置」口径），见 env-file.js 处注释：
+  // 这里与 buildEnvView 必须永远给出同一个键集。
+  const hits = shellOverriddenKeys(shellEnv, keys);
   if (!hits.length) {
     return {
       status: 'ok',
+      keys: [],
       detail: bi(lang, '无 shell 环境变量覆盖配置项（配置文件里的值即生效值）',
         'No shell environment variables override the config file (what the file says is what runs)'),
     };
@@ -573,6 +581,7 @@ export function envOverrideDiagnostic({ shellEnv = {}, keys = [], lang = 'zh' } 
   const unsetCmd = `unset ${hits.join(' ')}`;
   return {
     status: 'warn',
+    keys: hits,
     detail: bi(lang,
       `${hits.length} 个配置项被 shell 环境变量压过配置文件（env 恒优先）：${hits.join('、')} —— `
       + `文件里改这些项不会生效。若非有意设置，在启动 server 的终端里跑 \`${unsetCmd}\` 清掉它们`

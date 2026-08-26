@@ -249,4 +249,38 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expectNoBrowserErrors(page);
   });
+
+  // VC-D1-01（2026-08-26 探索性测试）：一次完整回合的**三段形变**。
+  // 本文件上面 P0-02 只覆盖了第一段（空输入 → 打字 → 发送钮活过来），后两段散落在别的用例里，
+  // 从没有一条把它们串成一条链断言过。串起来才拦得住这类失败：
+  //   · 发送钮停在方块但正文已完整 → 回合结算没落地，输入框会一直拒收下一条
+  //   · 正文出现但从没见过动态行 → 流式通道没接上，用户在等待期间看不到任何进展
+  //   · 回合结束没有收尾行 → 回看历史时看不出这一轮花了多久
+  test('P0-02l 一次完整回合的三段形变：灰 → 停止方块＋动态行 → 回箭头＋收尾行', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    // 第一段：空输入 = 不可点且整颗隐藏（Composer C，避免「点了没反应」）
+    await expect(page.locator('#btnSend')).toBeDisabled();
+    await expect(page.locator('#btnSend')).toBeHidden();
+    await page.locator('#input').fill('test:tool');
+    await expect(page.locator('#btnSend')).toBeVisible();
+    await expect(page.locator('#btnSend')).toBeEnabled();
+
+    // 第二段：点发送后 箭头 → 停止方块，且流内出现动态状态行（等待期间的唯一进展信号）
+    await page.locator('#btnSend').click();
+    await expect(page.locator('#btnSend')).toHaveAttribute('data-mode', 'stop');
+    await expect(page.locator('#streamLiveStatus')).toBeVisible();
+    await expect(page.locator('[data-testid="user-message"]').last()).toContainText('test:tool');
+
+    // 第三段：回合结算 —— 动态行退场、发送钮回到非 stop 态、留下 CLI 式收尾行。
+    // 收尾行动词是 8 选 1 随机（TURN_DONE_VERBS，逐字取自 CLI 词表），所以按形状匹配而不是钉死某个词。
+    await waitForIdle(page);
+    await expect(page.locator('#btnSend')).not.toHaveAttribute('data-mode', 'stop');
+    await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('All tools executed cleanly');
+    await expect(page.locator('#messages')).toContainText(
+      /✻ (Baked|Brewed|Churned|Cogitated|Cooked|Crunched|Sautéed|Worked) for \d+[smhd]/);
+
+    await expectNoBrowserErrors(page);
+  });
 });

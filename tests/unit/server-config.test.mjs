@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import {
+  getShellEnvSnapshot,
   loadRuntimeEnvironment,
   normalizeLoadedEnvironment,
   parseServerConfig,
@@ -142,6 +143,44 @@ test('loadRuntimeEnvironment：shell 值仍然压过 ccm.config.json', () => {
 
     assert.equal(env.PORT, '9000');          // shell 赢
     assert.equal(env.AUTH_TOKEN, 'from-json'); // 未被 shell 指定的仍从文件来
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// VC-D4-02 的地基：配置面板要标出「这一行被 shell 环境变量压过了」，就必须拿到一份
+// **投影之前**的 env 快照。投影之后文件值也进了 process.env（上面那条「shell 赢」测的正是
+// 这个投影），来源就再也分不开——那时做出来的标注是永远不报的假功能。
+//
+// 快照刻意由 loadRuntimeEnvironment 自己在第一行拍，而不是像 scripts/doctor.js:673 那样
+// 靠调用方守一句注释：顺序由构造保证，写不错。下面两条锁的就是这个不变量。
+test('getShellEnvSnapshot：快照拍在投影之前 —— 文件值不得混进来（否则每一项都会被标成「被覆盖」）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-shell-snapshot-'));
+  try {
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ PORT: 4100, AUTH_TOKEN: 'from-json' }));
+    const env = { WORK_DIR: '/from/shell' };
+
+    loadRuntimeEnvironment(env, { dir, quiet: true });
+
+    const snap = getShellEnvSnapshot();
+    assert.equal(snap.WORK_DIR, '/from/shell', 'shell 真的设过的要在');
+    assert.equal(snap.PORT, undefined, '文件值不能出现在快照里');
+    assert.equal(snap.AUTH_TOKEN, undefined, '同上');
+    // 投影确实发生过——否则上面两条会因为「压根没投影」而假绿
+    assert.equal(env.PORT, '4100');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('getShellEnvSnapshot：是拷贝不是引用 —— 后续投影改 env 不得回写快照', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ccm-shell-snapshot-copy-'));
+  try {
+    writeFileSync(join(dir, 'ccm.config.json'), JSON.stringify({ PORT: 4100 }));
+    const env = {};
+    loadRuntimeEnvironment(env, { dir, quiet: true });
+    env.LATER_SET = 'x';
+    assert.equal(getShellEnvSnapshot().LATER_SET, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

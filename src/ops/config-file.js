@@ -51,6 +51,12 @@ export const PASSTHROUGH_KEYS = Object.freeze([
   'CLI_STATUSLINE_DIR',  // src/server/app.js:1078
 ]);
 
+// 「一个 shell 环境变量能压掉配置文件里的哪些 key」的完整键表 —— 两个 doctor 共用：
+// scripts/doctor.js 的 D18（维护者 CLI）与 src/ops/doctor-runtime.js 的 ENV_OVERRIDE（手机端
+// 安全体检）。两边各自拼一次 `[...Object.keys(ENV_SCHEMA), ...PASSTHROUGH_KEYS]` 的话，
+// 同一台机器上两处会给出不同答案，而它们本该是同一个问题。
+export const ALL_CONFIG_KEYS = Object.freeze([...Object.keys(ENV_SCHEMA), ...PASSTHROUGH_KEYS]);
+
 const isPassthrough = (key) => PASSTHROUGH_KEYS.includes(key);
 
 const schemaDef = (key) => (Object.hasOwn(ENV_SCHEMA, key) ? ENV_SCHEMA[key] : null);

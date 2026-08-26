@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings, openSettingsSection, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { closeGeneralSettings, closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openGeneralSettings, openSessionSettings, openSettingsSection, sendChatMessage, waitForIdle } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-09 设置面板：权限模式、模型选择、thinking effort 与 [1m] 后缀', async ({ page }) => {
@@ -521,6 +521,74 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 重开面板：syncPreferences 从 storage 读回，应仍是勾选态（不是每次都复位成默认关）。
     await openGeneralSettings(page);
     await expect(page.locator('#prefPushPreview')).toBeChecked();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // ── 以下两条来自 2026-08-26 的探索性测试（VC-D1-02 / VC-D4-03）────────────────────
+  //
+  // VC-D1-02：切权限档要在**三处**同时更新——磁贴强调色、底栏 pill、消息流里的留痕横杠。
+  // 本文件上面 P0-09d 已经断言过 empty-start 下**不打**横杠（UX-019 的负向），而正向
+  // 「有消息之后切档 → 消息流末尾出现 `权限档 → X`」一直没有断言。少了它，回看历史时
+  // 看不出权限档何时变过，而这恰恰是审计价值最高的一条留痕。
+  test('P0-09v 有消息后切权限档：pill 与消息流横杠同时更新（不是只更新 pill）', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    // 先发一条，离开 empty-start —— 横杠只在有内容的会话里打（UX-019）
+    await sendChatMessage(page, 'test:tab');
+    await waitForIdle(page);
+    await expect(page.locator('#messages')).not.toHaveClass(/empty-start/);
+
+    // 起始档是 default（Manual）——必须切到**另一档**，点当前档不会产生任何变化，
+    // 那样断言会在一个什么都没发生的页面上恒绿。
+    await expect(page.locator('#pillPermText')).toHaveText('Manual');
+    await openSessionSettings(page);
+    await openSettingsSection(page, 'perm');
+    const target = page.locator('.perm-tile[data-mode="acceptEdits"]');
+    await target.scrollIntoViewIfNeeded();
+    await target.click();
+    await closeSettings(page);
+
+    // 三处之二：底栏 pill 用 CLI 英文契约名（不是「接受编辑」这类译名）
+    await expect(page.locator('#pillPermText')).toHaveText('Accept edits');
+    // 三处之三：消息流里留痕。文案同样是契约名，回看时能对上 CLI。
+    await expect(page.locator('#messages')).toContainText('权限档 → Accept edits');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // VC-D4-03：这六张磁贴里有一张是 `Bypass permissions`（绕过全部权限检查）。它们此前是纯
+  // `<div>` —— Tab 走不到、辅助技术不认得是控件、也读不出「当前选中的是哪一档」。
+  // 判据分三层，逐层都失败过：能不能拿到焦点 / 是不是控件 / 选中态说不说得出来。
+  test('P0-09w 权限磁贴是可访问控件：键盘可达、有角色、选中态可播报', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+    await openSessionSettings(page);
+    await openSettingsSection(page, 'perm');
+
+    const tiles = page.locator('#customPermGrid .perm-tile');
+    await expect(tiles).toHaveCount(6);
+
+    // 1. 是真正的控件，不是套了 class 的 div
+    for (const mode of ['default', 'plan', 'acceptEdits', 'bypassPermissions']) {
+      const tile = page.locator(`.perm-tile[data-mode="${mode}"]`);
+      await expect(tile).toHaveRole('button');
+    }
+
+    // 2. 选中态能被读出来：当前档 aria-pressed=true，其余 false（而不是全都没有这个属性）
+    await expect(page.locator('.perm-tile[data-mode="default"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.perm-tile[data-mode="plan"]')).toHaveAttribute('aria-pressed', 'false');
+
+    // 3. 键盘真的能激活它 —— 只加 role 不接键盘等于换了个说法的同一个 bug。
+    //    聚焦后按 Enter，档位必须真的切过去（三处同步里最容易被漏掉的一处）。
+    await page.locator('.perm-tile[data-mode="plan"]').scrollIntoViewIfNeeded();
+    await page.locator('.perm-tile[data-mode="plan"]').focus();
+    await expect(page.locator('.perm-tile[data-mode="plan"]')).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#pillPermText')).toContainText('Plan');
+    await expect(page.locator('.perm-tile[data-mode="plan"]')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.perm-tile[data-mode="default"]')).toHaveAttribute('aria-pressed', 'false');
 
     await expectNoBrowserErrors(page);
   });

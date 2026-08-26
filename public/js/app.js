@@ -3440,11 +3440,17 @@ import { createSessionDeleteController } from './app/session-delete.js';
         const dangerCls = s.danger ? ' text-danger' : '';
         const titleCls = s.danger ? 'text-danger' : 'text-ink';
         const descCls = s.danger ? 'text-red-500/80' : 'text-ink-soft';
+        // 元素是 <button> 而不是套了 class 的 <div>：这六张里有一张是 Bypass permissions
+        // （绕过全部权限检查），而 div 版本 Tab 走不到、辅助技术不认得是控件、也读不出当前选的是哪档
+        // （2026-08-26 探索性测试 VC-D4-03 实测：role/tabindex/aria-pressed 全为 null）。
+        // 用原生 button 而不是 div+role+tabindex+键盘处理：焦点、Enter/Space 激活、焦点环全部白送，
+        // 且下面那个 click 委托（closest('.perm-tile')）一行都不用改。
+        // aria-pressed 是这组按钮的「选中态」——单选语义靠它播报，样式那圈 ring 只有看得见的人能用。
         const card = el(`
-          <div data-mode="${esc(s.id)}" class="perm-tile p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all${dangerCls}">
+          <button type="button" data-mode="${esc(s.id)}" aria-pressed="false" class="perm-tile w-full text-left p-2 rounded-xl border border-line bg-surface active:bg-sunk cursor-pointer transition-all${dangerCls}">
             <div class="text-xs font-semibold ${titleCls} leading-snug">${esc(s.title)}</div>
             <div class="text-[11px] ${descCls} mt-0.5 leading-snug line-clamp-2">${esc(s.desc)}</div>
-          </div>
+          </button>
         `);
         customPermGrid.appendChild(card);
       }
@@ -3500,6 +3506,9 @@ import { createSessionDeleteController } from './app/session-delete.js';
     if (customPermGrid) {
       customPermGrid.querySelectorAll('.perm-tile').forEach(tile => {
         const isCurrent = tile.dataset.mode === mode;
+        // 选中态有两条通道，必须一起更新：ring 那圈给看得见的人，aria-pressed 给读屏。
+        // 只改样式的话，辅助技术用户读到的是六个一模一样的按钮、无从知道当前在哪一档。
+        tile.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
         if (isCurrent) {
           tile.classList.add('ring-1', 'ring-accent', 'border-accent', 'bg-accent-wash/30');
           const title = tile.querySelector('.text-xs');

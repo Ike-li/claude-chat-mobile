@@ -165,6 +165,15 @@ export function createEnvConfigPanel({
       else row.append(buildInput(item, field));
     }
 
+    // 这一行的值来自配置文件，而 shell 环境变量恒压过配置文件 —— 不标出来的话，被压住的行
+    // 与正常行长得一模一样：用户改完、保存成功、运行时仍是旧值，屏幕上零症状（VC-D4-02）。
+    // 服务端只下发布尔（键名级），**绝不下发 env 的值**：被压住的可能正是 AUTH_TOKEN / VAPID 私钥。
+    // 只标注不禁用输入：unset 掉那个环境变量之后，这里写的值仍然是要生效的。
+    if (item.overriddenByEnv) {
+      row.append(el('div', 'text-[10px] text-warning leading-relaxed',
+        t('⚠ 已被环境变量覆盖 —— 运行时用的是 shell 里的值，在这里改不会生效')));
+    }
+
     const help = text(item.help);
     if (help) row.append(el('div', 'text-[10px] text-ink-faint leading-relaxed', help));
     fields.set(item.key, field);
