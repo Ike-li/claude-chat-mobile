@@ -97,6 +97,20 @@ test.describe('map() — SDK 消息 → 契约事件', () => {
     s.dispose();
   });
 
+  // 压缩把上下文砍掉大半，压缩【前】那轮的 lastUsage 立刻失去意义：statusline 的窗口回落路径
+  // 拿 cache_read 当「近似全量占用」（见 ops/statusline.js），压缩后它会把旧的满窗占用当成现值，
+  // 于是 ctx% 从压缩后的真值跳回压缩前的高位且再也降不下来（压缩后没有新轮次能覆盖它）。
+  // 与 init 换会话的 E16 清零同源——那条路径清了，这条漏了。
+  test('system/compact_boundary：lastUsage 重置（旧满窗占用不得当作压缩后现值）', () => {
+    const { s } = makeSession();
+    s.lastUsage = { input_tokens: 2, output_tokens: 855, cache_creation_input_tokens: 861, cache_read_input_tokens: 938_700 };
+
+    s.map({ type: 'system', subtype: 'compact_boundary' });
+
+    assert.equal(s.lastUsage, null);
+    s.dispose();
+  });
+
   test('stream_event/text_delta → text_delta 批量缓冲（20ms timer 测试）', async () => {
     const { s, events } = makeSession();
     s.currentMessageId = 'msg-1';

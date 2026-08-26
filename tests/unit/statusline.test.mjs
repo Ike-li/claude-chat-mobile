@@ -253,6 +253,21 @@ test.describe('buildWebStatusLine：ctx 窗口只认运行时真值 + 会话内�
     assert.equal(degraded.ctx.usedPercent, 53); // 532k/1M，而非 532k/200k 封顶 100
   });
 
+  // ↑ 上一条成立的**前提**是「lastUsage 代表当前上下文占用」。压缩会打破它：上下文被砍掉大半，
+  // 而 lastUsage 还停在压缩前那轮（真机 2026-08-26：940k → 4.7k，回落路径把 94% 当现值显示且
+  // 因压缩后没有新轮次覆盖而永久滞留）。上游（agent.js 的 compact_boundary / init 换会话）负责
+  // 清零，本条固化清零后的下游契约：**宁可整段不显示，也不得用窗口缓存另找一个分母把 % 补出来**。
+  // 少了这条，回落路径被"优化"成拿缓存兜底时无人会红——原 bug 正是这样藏住的。
+  test('lastUsage 被上游清零（压缩/换会话）→ 即使窗口缓存还在也不出 usedPercent', async () => {
+    const agent = { activeModel: 'claude-opus-5', lastUsage: usageT(940_000), q: sdkQ(1_000_000), disposed: false };
+    await buildWebStatusLine({ agent, cwd: undefined });   // SDK 成功 → 1M 窗口真值落库缓存
+    agent.lastUsage = null;                                 // 压缩边界清零
+    agent.q = { getContextUsage: async () => { throw new Error('rpc fail'); } }; // 压缩后 SDK 短暂不可用
+    const p = await buildWebStatusLine({ agent, cwd: undefined });
+    assert.equal(p.ctx?.usedPercent, undefined, '窗口缓存尚在，但没有占用真值就不许出百分比');
+    assert.equal(p.ctx?.tokens, undefined, '也不得凭空造出绝对 token');
+  });
+
   test('模型切换 → 旧窗口缓存作废（opus-5 的 1M 不得算到 haiku 头上）', async () => {
     const agent = { activeModel: 'claude-opus-5', lastUsage: usageT(100_000), q: sdkQ(1_000_000), disposed: false };
     await buildWebStatusLine({ agent, cwd: undefined });

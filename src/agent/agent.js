@@ -2243,6 +2243,12 @@ export class AgentSession {
           // !compact_error：万一同一条消息既报 compacting 又带失败原因，别把失败截胡成「正在压缩…」
           this.emit('system', { message: '正在压缩会话上下文…' });
         } else if (msg.subtype === 'compact_boundary') {
+          // 压缩把上下文砍掉大半（真机实测 preTokens 940k → postTokens 4.7k），压缩【前】那轮的 usage
+          // 就此失去意义。statusline 的窗口回落路径把 lastUsage 的 cache_read 当「近似全量占用」
+          // （见 ops/statusline.js，该近似仅在无压缩时成立）；不清零则 SDK getContextUsage 一旦短暂
+          // 不可用，ctx% 就跳回压缩前的高位，且压缩后往往没有新轮次能覆盖它 → 永久滞留在满窗。
+          // 与 init 换会话的 E16 同源。清零后 ctx% 短暂缺席，等权威值补上——宁可不显示，也不显示错的。
+          this.lastUsage = null;
           this.emit('system', { message: '上下文已压缩' });
         } else if (msg.subtype === 'task_notification') {
           // 后台任务（Workflow/后台 Agent/后台 Bash）完成的专用 SDK 通道（CLI 交互/SDK 模式）。
