@@ -12,6 +12,10 @@ import {
   presentOfflineResendAck,
   shouldBusyAfterOfflineBatch,
   outboxItemTargetsViewing,
+  SERVER_PRE_TURN_UPPER_BOUND_MS,
+  SEND_ACK_FALLBACK_MS,
+  SEND_ACK_TRANSPORT_MS,
+  OFFLINE_RESEND_ACK_MS,
   planOutboxDrainNotice,
   planOutboxEnqueue,
   parseDurableOutbox,
@@ -425,8 +429,9 @@ test.describe('planOutboxDrainNotice（重发横幅归属标注）', () => {
 
   // 这两条的 viewingCwd 是 2026-08-26 补的：原 fixture 写于加 cwd 维度之前，只传 viewingInstanceId:null
   // 就想表达「首页」，但那和「冷启动尚未收到 instances 广播」在数据上无法区分。真实首页两者不同——
-  // 回主页/点＋只清 viewingInstanceId，currentCwd 立刻切到该目录（app.js:4987-4988，且注释写明是为了
-  // 不让广播落地前的发送投错工作区）；currentCwd 全仓只有三个赋值点，唯有冷启动前才是 null。
+  // 回主页/点＋只清 viewingInstanceId，currentCwd 立刻切到该目录（app.js 里目录行 ＋ 的 onclick，
+  // 那行 `currentCwd = d` 的注释写明了是为了不让广播落地前的发送投错工作区）；
+  // currentCwd 全仓只有三个赋值点（声明处的 null、instances 广播、上面那个 ＋），唯有冷启动前才是 null。
   // 断言实质不变：首页仍要如实标注「发往其它会话」。
   test('viewing 为 null（首页/无 tab）→ 全部算其它会话，不谎称属于当前视图', () => {
     const out = planOutboxDrainNotice({
@@ -538,6 +543,23 @@ test.describe('outboxItemTargetsViewing（三处共用的归属判据）', () =>
     assert.equal(outboxItemTargetsViewing({ instanceId: null, cwd: '/w/a' }, {}), false);
   });
 
+  // 与服务端 shouldRejectOutboxLazyOpen 对齐：空串/空白 cwd 不得当成合法匹配键。
+  // 旧实现用 `!= null`，'' 会双空串互配成功，把「目标未定」谎称成「属于本视图」。
+  test('cwd 为空串/空白 → 与缺失同属 fail-closed，不算本视图', () => {
+    assert.equal(
+      outboxItemTargetsViewing({ instanceId: null, cwd: '' }, { viewingInstanceId: null, viewingCwd: '' }),
+      false,
+    );
+    assert.equal(
+      outboxItemTargetsViewing({ instanceId: null, cwd: '   ' }, { viewingInstanceId: null, viewingCwd: '   ' }),
+      false,
+    );
+    assert.equal(
+      outboxItemTargetsViewing({ instanceId: null, cwd: '' }, { viewingInstanceId: 'i', viewingCwd: '/w/a' }),
+      false,
+    );
+  });
+
   test('item 为空 → false，不抛', () => {
     assert.equal(outboxItemTargetsViewing(null, { viewingInstanceId: 'v' }), false);
     assert.equal(outboxItemTargetsViewing(undefined, {}), false);
@@ -598,6 +620,35 @@ test('shouldBusyAfterOfflineBatch: 首页无 viewing 实例 → 即便剩余项 
     remainingItems: [{ instanceId: null, cwd: '/w/a' }],
     hadViewingOk: false,
   }), false);
+});
+
+// 发送时序常量的序关系不变量。2026-08-26 的教训：SEND_ACK_FALLBACK_MS 与
+// BUSY_BROADCAST_CLEAR_GRACE_MS 是同一个约束（服务端 pendingTurns 计入广播前的窗口）的两个消费者，
+// 却分居 app.js 与 logic/ 两个文件、各写各的 5000，于是同一个根因要被发现两次（第二次靠独立审查
+// 才挖出来）。把它们收进同一个模块并用断言钉住彼此关系——失配就在 test:unit 里当场炸，
+// 不必等真机上「运行条中途消失」。
+test.describe('发送时序常量：序关系不变量', () => {
+  test('UI 兜底必须早于传输判据（按钮先解锁，消息才谈得上「没送达」）', () => {
+    assert.ok(SEND_ACK_FALLBACK_MS < SEND_ACK_TRANSPORT_MS);
+  });
+
+  test('在线与离线重发用同一个传输窗（重发打的是同一个 handler）', () => {
+    assert.equal(SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS);
+  });
+
+  test('传输窗必须覆盖服务端 pre-turn 上界，否则轮次没开跑就被判「未送达」', () => {
+    assert.ok(SEND_ACK_TRANSPORT_MS > SERVER_PRE_TURN_UPPER_BOUND_MS);
+  });
+
+  // 这条是 2026-08-26 二轮审查发现的漏网之鱼：看门狗守的是同一个窗口，5000 会在 setModel
+  // 还没回来时就把乐观 busy 判成「轮次已结束」，运行条与停止按钮中途消失。
+  test('busy 看门狗宽限期同样要覆盖 pre-turn 上界', () => {
+    assert.ok(BUSY_BROADCAST_CLEAR_GRACE_MS > SERVER_PRE_TURN_UPPER_BOUND_MS);
+  });
+
+  test('传输窗必须小于 engine.io 被动判死窗（pingInterval 25s + pingTimeout 20s）', () => {
+    assert.ok(SEND_ACK_TRANSPORT_MS < 45000);
+  });
 });
 
 test('safeJsonPreview: undefined/null/circular 不抛', () => {

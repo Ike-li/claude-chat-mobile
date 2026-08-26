@@ -85,6 +85,37 @@ export function presentOnlineSendTransport(err, ack) {
   return presentOnlineSendAck(ack);
 }
 
+// ---- 发送时序常量 ----
+// 服务端从收到 user:message 到 pendingTurns++ 的耗时上界。主导项是 agent.js#send 里那次 setModel
+// control_request：它打给一个刚 spawn、还没起来的 CLI，上限 interruptTimeoutMs=10s。这段窗口里
+// instance-manager 的 stateOf() 恒返回 'idle'（判据就是 pendingTurns > 0），轮次「还没开始」。
+//
+// 这个数字是【多个】客户端判据的共同约束源——凡是要区分「轮次还没开跑」与「轮次已结束/没送达」
+// 的地方，窗口都必须比它长。2026-08-26 之前传输超时与 busy 看门狗各写各的 5000，双双踩中：
+// 前者把没送达判错（白刷「正在重发」横幅），后者把没结束判错（运行条中途消失）。
+// 同一个根因被发现了两次，第二次靠独立审查才挖出来——所以现在它们同住一个模块并有序关系断言
+// 钉住（tests/unit/logic-composer-primary.test.mjs 的「发送时序常量」describe）。
+export const SERVER_PRE_TURN_UPPER_BOUND_MS = 10000;
+
+// UI 兜底：到点解锁发送按钮，防 ack 真丢时按钮永久卡死。只管本端交互手感，不参与「是否送达」
+// 的判定，所以可以（也应该）远短于下面那个——按钮早点能按，比让用户干等安全。
+export const SEND_ACK_FALLBACK_MS = 5000;
+
+// 传输判据：超时即认定「这条没送达」→ 进 outbox 自动重发。必须覆盖 SERVER_PRE_TURN_UPPER_BOUND_MS
+// 之外，还要留出 resume 的时间——注意 RESUME 路径并非有界：openResumeInstance 是
+// Promise.all([两次无超时的 transcript 尾读, Promise.race([ensureCliDefaults, 1200ms])])，
+// 即 max(尾读IO, ≤1200ms)，只有 FRESH 分支才真的 ≤1200ms。
+// 上界一侧受 engine.io 被动判死窗约束（默认 pingInterval 25s + pingTimeout 20s = 45s，本仓未覆盖
+// 该默认）。真断线不必等满：socket.io 的 onclose→_clearAcks 会立刻用 Error 回调非 buffered 的 ack，
+// 30s 只在 half-open 才真的付出。
+// 已知不足：附件上传的传输时间也算在这个窗口里（计时从 emit 起算，早于连接检查），20MB 附件在
+// 移动上行下可能超 30s → 仍会误判重发。要根治得把附件走 HTTP 分离出去，不在本轮范围。
+export const SEND_ACK_TRANSPORT_MS = 30000;
+
+// 离线重发窗：重发打的是同一个 user:message handler，同一段慢路径要再走一遍，故与上面同值
+// （不变量断言钉住相等）。
+export const OFFLINE_RESEND_ACK_MS = SEND_ACK_TRANSPORT_MS;
+
 // ---- 发送 outbox（在线/离线统一耐久队列的纯决策）----
 // 条目可序列化字段不含 bubbleEl；app.js 用 clientMessageId 回挂 DOM。
 export const OUTBOX_MAX_ITEMS = 20;
@@ -181,13 +212,21 @@ export function presentOfflineResendAck(err, ack) {
 // 两条判据分工：
 // ① instanceId 非空 → 严格相等。同一工作区可并存多个会话，cwd 相同也不得改判。
 // ② instanceId 为空（入队时实例还没开：新会话首发、或在线 ack 超时把首发消息推进 outbox）→
-//    按 cwd 判。服务端 fromOutbox 路径正是这么路由的：无 instanceId 时用 payload.cwd 懒开/resume
-//    该目录的当前会话（server/app.js 的 shouldRejectOutboxLazyOpen 之后那段）。cwd 任一侧缺失就
-//    判不属于——服务端同样 fail-closed 拒绝这种项，不该在 UI 上谎称它属于眼下这个会话。
+//    按 cwd 判。cwd 任一侧缺失/空串就判不属于，与服务端 shouldRejectOutboxLazyOpen 的 fail-closed
+//    对齐（它同样拒 cwd.trim() === ''），不在 UI 上谎称它属于眼下这个会话。
+//
+//    ⚠️ 这是启发式，不是与服务端逐字等价的判据。服务端 fromOutbox 无 instanceId 时路由到
+//    currentSessionForCwd(cwd)——那是该目录的【当前会话指针】，而不是「客户端正在看的实例」。
+//    该指针会被 session:new / 空首页 compose 清掉，同一工作区也可能同时有多个会话。所以在
+//    「一个工作区开了两个会话」或「离线期间 session:new 清过指针」时，这里判 true 而服务端可能
+//    投给另一个会话。可达性窄（要 ≥2 个同目录会话，或离线 session:new），代价仅是文案归属标错，
+//    故接受启发式而不引入 instances 列表依赖把纯函数复杂化。
 export function outboxItemTargetsViewing(item, { viewingInstanceId = null, viewingCwd = null } = {}) {
   if (!item || typeof item !== 'object') return false;
   if (item.instanceId != null) return item.instanceId === viewingInstanceId;
-  return item.cwd != null && viewingCwd != null && item.cwd === viewingCwd;
+  const itemCwd = typeof item.cwd === 'string' ? item.cwd.trim() : '';
+  const viewCwd = typeof viewingCwd === 'string' ? viewingCwd.trim() : '';
+  return itemCwd !== '' && viewCwd !== '' && itemCwd === viewCwd;
 }
 
 // 离线批处理后是否应 busy：仅当「仍有目标为当前 viewing 的重入队项」或「本批有 viewing 相关 ok 且
@@ -268,9 +307,15 @@ export function shouldBindBusyFromBroadcast({ state, bgActive } = {}) {
 // 看门狗：上面单向对齐的代价——终止事件（result/error/interrupted）若被实例路由过滤丢弃或丢包，
 // 本地 liveLine 会永久卡在 busy=true 空转（见 ccm 现场：会话已结束、spinner 仍在跑）。这里补另一半：
 // 服务端 stateOf() 已把后台任务折进 'busy'（instance-manager.js），故此处只看 state 而非 bgActive——
-// 真后台任务期 state 仍是 'busy'，不会被误清。宽限期防止刚发送、服务端 pendingTurns 尚未计入广播的
-// 乐观 busy 窗口被误清（同量级于 app.js 的 SEND_ACK_FALLBACK_MS）。
-export const BUSY_BROADCAST_CLEAR_GRACE_MS = 5000;
+// 真后台任务期 state 仍是 'busy'，不会被误清。
+//
+// 宽限期必须覆盖 SERVER_PRE_TURN_UPPER_BOUND_MS（见其声明处）：那段窗口里服务端 stateOf() 恒为
+// 'idle'（pendingTurns 还是 0），而 broadcastInstances 在 server 有近三十个调用点——任何一个实例的
+// 状态变动都会广播，撞进这段窗口就把本端正在跑的乐观 busy 判成「轮次已结束」，运行条和停止按钮
+// 中途消失（2026-08-26 二轮审查发现；此前取 5000，短于 setModel 的 10s 上限）。
+// 取值与传输窗同源：两者守的是同一段窗口。代价是终止事件真丢包时 spinner 多转到这个时长才被清掉
+// ——但那只是多转几秒，而误清的后果是用户看不到停止按钮、中止不了正在跑的轮次，后者更糟。
+export const BUSY_BROADCAST_CLEAR_GRACE_MS = SEND_ACK_TRANSPORT_MS;
 export function shouldForceClearBusyFromBroadcast({ state, localBusy = false, turnStartTs = null, now = 0, graceMs = BUSY_BROADCAST_CLEAR_GRACE_MS } = {}) {
   if (!localBusy || shouldSeedBusyFromInstanceState(state)) return false;
   if (!turnStartTs) return true;
