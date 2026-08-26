@@ -1,12 +1,14 @@
-// tests/integration/session-delete.test.mjs —— 两级删除集成测试（FR-20，承接 docs/design.md）
+// tests/integration/session-delete.test.mjs —— 彻底删除集成测试
 //
-// transcript 目录的现实约束：L2 删除走 SDK 官方 deleteSession，它只操作真实 ~/.claude/projects（无
+// transcript 目录的现实约束：deletePermanent 走 SDK 官方 deleteSession，它只操作真实 ~/.claude/projects（无
 // 自定义根的口子），history.js 的读也只认这个真实根——两者必须一致，故本测试**必然操作真实
 // ~/.claude/projects**，无法像 approval-store/audit 那样重定向到临时目录。风险控制到可接受：
 //   ①workDir 是一次性 mkdtemp 随机目录 → 编码后的 project 目录名（含 ccm-session-delete-wd 标识）独一无二，
 //     SDK deleteSession 只在这个独一无二的 project dir 里删指定 UUID，碰不到任何真实项目的会话；
 //   ②before 先扫清任何上次被 kill 残留的 *ccm-session-delete-wd* 目录（防累积）；③after 清理本次目录。
 // 零 token 成本（手写假 .jsonl，不起真 claude 子进程）、走"可靠集成"档（默认 npm test 就跑）。
+//
+// 2026-08-26：L1 软隐藏（session:delete）已移除，本文件只覆盖 deletePermanent。
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, utimesSync, realpathSync, readdirSync } from 'node:fs';
@@ -114,31 +116,12 @@ async function cleanup() {
 }
 
 test.describe(
-  '两级删除（FR-20）',
+  '彻底删除会话',
   () => {
     test.before(async () => { sweepStaleTestDirs(); await startServer(); });
     test.after(async () => { await cleanup(); });
 
-    test('L1 删除：session:list 里不再出现，但 transcript 文件仍在磁盘', async () => {
-      const sessionId = '11111111-1111-4111-8111-111111111111';
-      const file = writeFakeSession(sessionId);
-      const socket = ioClient(`http://127.0.0.1:${port}`, { auth: { token: TOKEN }, transports: ['websocket'], reconnection: false });
-      await new Promise(resolve => socket.once('connect', resolve));
-
-      const before = await emitAck(socket, 'session:list', { cwd: workDir, all: true });
-      assert.ok(before.sessions.some(s => s.id === sessionId), '删除前应在列表里');
-
-      const delRes = await emitAck(socket, 'session:delete', { sessionId, cwd: workDir });
-      assert.equal(delRes.ok, true);
-
-      const after = await emitAck(socket, 'session:list', { cwd: workDir, all: true });
-      assert.ok(!after.sessions.some(s => s.id === sessionId), 'L1 删除后不应再出现在列表里');
-      assert.ok(existsSync(file), 'L1 删除不应真删文件——transcript 必须仍在磁盘');
-
-      socket.disconnect();
-    });
-
-    test('L2 删除：真删磁盘文件，session:list 也不再出现', async () => {
+    test('deletePermanent：真删磁盘文件，session:list 也不再出现', async () => {
       const sessionId = '22222222-2222-4222-8222-222222222222';
       const file = writeFakeSession(sessionId);
       const socket = ioClient(`http://127.0.0.1:${port}`, { auth: { token: TOKEN }, transports: ['websocket'], reconnection: false });
@@ -146,7 +129,7 @@ test.describe(
 
       const delRes = await emitAck(socket, 'session:deletePermanent', { sessionId, cwd: workDir });
       assert.equal(delRes.ok, true, JSON.stringify(delRes));
-      assert.ok(!existsSync(file), 'L2 删除应真删底层 transcript 文件');
+      assert.ok(!existsSync(file), '应真删底层 transcript 文件');
 
       const after = await emitAck(socket, 'session:list', { cwd: workDir, all: true });
       assert.ok(!after.sessions.some(s => s.id === sessionId));
@@ -154,7 +137,7 @@ test.describe(
       socket.disconnect();
     });
 
-    test('L2 删除活跃保护②：transcript mtime 太新（可能正被终端使用）→ 拒绝，文件不删', async () => {
+    test('活跃保护②：transcript mtime 太新（可能正被终端使用）→ 拒绝，文件不删', async () => {
       const sessionId = '33333333-3333-4333-8333-333333333333';
       const file = writeFakeSession(sessionId, { quiet: false }); // mtime = 现在，未回拨
       const socket = ioClient(`http://127.0.0.1:${port}`, { auth: { token: TOKEN }, transports: ['websocket'], reconnection: false });
@@ -168,7 +151,7 @@ test.describe(
       socket.disconnect();
     });
 
-    test('L2 删除：不存在的 sessionId → fail-closed 拒绝（保护①的前置校验）', async () => {
+    test('不存在的 sessionId → fail-closed 拒绝', async () => {
       const socket = ioClient(`http://127.0.0.1:${port}`, { auth: { token: TOKEN }, transports: ['websocket'], reconnection: false });
       await new Promise(resolve => socket.once('connect', resolve));
 
@@ -179,10 +162,8 @@ test.describe(
       socket.disconnect();
     });
 
-    test('删除后写一条对应级别的 audit_record（不含被删内容）', async () => {
+    test('删除后写 audit_record（不含被删内容）', async () => {
       const AU = await import('../../src/ops/audit.js');
-      const l1Rows = AU.listRecent({ limit: 100, action: 'session_delete_l1' });
-      assert.ok(l1Rows.some(r => r.target === '11111111-1111-4111-8111-111111111111'));
       const l2Rows = AU.listRecent({ limit: 100, action: 'session_delete_l2' });
       const l2 = l2Rows.find(r => r.target === '22222222-2222-4222-8222-222222222222');
       assert.ok(l2);

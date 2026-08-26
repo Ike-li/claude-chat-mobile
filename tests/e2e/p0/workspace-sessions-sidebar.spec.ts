@@ -236,6 +236,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await page.getByRole('button', { name: '显示全部会话…' }).click();
     await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
+    await expect(page.getByTestId('session-remaining-hint')).toBeVisible();
+    await expect(page.getByTestId('session-remaining-hint')).toContainText('可用搜索查找');
     await expect(sessionButtonByTitle(page, 'Older Migration Session')).toBeVisible();
 
     await openSessionByTitle(page, 'Older Migration Session');
@@ -243,6 +245,64 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#messages')).toContainText('Review older migration notes', { timeout: 10_000 });
     await expect(page.locator('#messages')).toContainText('Older migration history loaded from session:list overflow.');
     await expect(page.locator('#messages')).not.toContainText('test:history-overflow');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11-search 工作区会话搜索按标题过滤', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await expect(sessionButtonByTitle(page, 'Archived Planning Session')).toBeVisible();
+    await expect(sessionButtonByTitle(page, 'Timeline Session')).toBeVisible();
+
+    const search = page.getByTestId('session-search');
+    await expect(search).toBeVisible();
+    await search.fill('Timeline');
+    await expect(sessionButtonByTitle(page, 'Timeline Session')).toBeVisible({ timeout: 5_000 });
+    await expect(sessionButtonByTitle(page, 'Archived Planning Session')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '显示全部会话…' })).toHaveCount(0);
+
+    await search.fill('definitely-no-match-xyz');
+    await expect(page.getByTestId('session-search-empty')).toBeVisible({ timeout: 5_000 });
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11-search-stable 搜索框在 debounce 后仍是同一节点且保持焦点', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const search = page.getByTestId('session-search');
+    await expect(search).toBeVisible();
+    await search.click();
+    await search.evaluate((el) => { (el as HTMLElement).dataset.ccmAlive = '1'; });
+
+    // delay > 前端 200ms debounce：每一键都会触发一次 populateSubtree。
+    // fill() 一次写完锁不住「输入框被 innerHTML 拆掉」；必须按键间隔超过 debounce。
+    await search.pressSequentially('Time', { delay: 260 });
+
+    const alive = await page.getByTestId('session-search').evaluate((el) => (el as HTMLElement).dataset.ccmAlive);
+    expect(alive).toBe('1');
+    await expect(page.getByTestId('session-search')).toBeFocused();
+    await expect(page.getByTestId('session-search')).toHaveValue('Time');
+    await expect(sessionButtonByTitle(page, 'Timeline Session')).toBeVisible({ timeout: 5_000 });
+
+    await expectNoBrowserErrors(page);
+  });
+
+  test('P0-11-delete 🗑 二次确认后从列表移除', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    await expect(sessionButtonByTitle(page, 'Archived Planning Session')).toBeVisible();
+
+    const row = page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]');
+    await row.getByTestId('session-delete').click();
+    await expect(page.locator('#confirmModal')).toBeVisible();
+    await page.getByRole('button', { name: '彻底删除' }).click();
+    await expect(page.locator('#confirmModal')).toBeHidden({ timeout: 5_000 });
+    await expect(sessionButtonByTitle(page, 'Archived Planning Session')).toHaveCount(0, { timeout: 5_000 });
 
     await expectNoBrowserErrors(page);
   });

@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { listSessions as sdkListSessions } from '@anthropic-ai/claude-agent-sdk';
-import { MAX_SESSION_LIMIT } from './workdirs.js';
+import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT } from './workdirs.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
 import { toolSummary } from '../shared/tool-summary.js';
@@ -616,28 +616,61 @@ function isCliSystemLine(content) {
 //     不是 entrypoint。（entrypoint 仍被 readHeadMeta / 尾部形态判定使用，那是另一条路。）
 //   · 「summary 标题语义 ≠ ai-title > 首条 user > 命令名」——迁移后标题即由 SDK summary 承担，
 //     与 CLI /resume 所见同源，这正是想要的效果。
-// 仍由本函数自己维护、SDK 给不了的三件：hasMore（SDK 不给总数）、hiddenIds（L1 两级删除）、TTL 缓存；
+// 仍由本函数自己维护、SDK 给不了的：hasMore / total（SDK 不给总数）、TTL 缓存、标题 query 过滤
+// （候选走 readdir；匹配键 OR SDK summary 与 readHeadMeta 各字段）；
 // 另加两道 SDK 侧兜不住的修正：按 jsonl 是否存在做归属过滤、readdir 补 SDK 漏报的无 summary 会话。
-// 返回 { sessions, hasMore }：hasMore=该目录会话总数 > limit（诚实计算，非 length===limit 猜测），
-// 供前端决定是否显示「显示全部」。缓存键含 limit——否则 limit=6 结果会在 TTL 内污染 all(limit=50) 请求。
-// hiddenIds（两级删除 L1）：本函数是 session:list 的真实数据源（直接扫盘，不依赖
-// sessions.json 注册表），故"删除产品可见引用"必须在这里过滤，而不是只删 sessions.js 的指针——否则
-// L1 删除后会话仍会在下次 session:list 时原样列出。传空 Set/不传 = 不过滤（向后兼容旧调用点）。
-// 过滤发生在扫盘结果（含缓存）之后、按 limit 截断的窗口之内——已被隐藏的会话若恰好排在最近 N 条内，
-// 会占掉一个显示配额（下拉即少显示一条，而非自动补下一条）。Could 优先级下接受这个小瑕疵：换成
-// "过滤后再截断"须让缓存也按 hiddenIds 分裂存储（Set 又不宜做缓存键），复杂度不成比例。
-export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT, hiddenIds } = {}) {
+// 返回 { sessions, hasMore, total }：
+//   total = 该 cwd 会话总数（query 过滤前）；hasMore = 过滤后仍有未返回项（浏览：total>limit；搜索：匹配数>limit）。
+// 缓存键含 limit；有 query 时另加 `q:` 段——否则搜索结果会污染浏览缓存，或反过来。
+// excludeIds：进程内临时排除（删文件窗口 pendingDeleteIds）；传空 Set/不传 = 不过滤。
+export async function listSessionsPage(cwd, { baseDir = CLAUDE_DIR, limit = LIST_LIMIT, excludeIds, query } = {}) {
   const dir = join(baseDir, getProjectDir(cwd));
-  const cacheKey = `${dir}:${limit}`;
+  const normalizedQuery = typeof query === 'string' ? query.trim() : '';
+  const cacheKey = normalizedQuery
+    ? `${dir}:q:${normalizedQuery.toLowerCase()}:${limit}`
+    : `${dir}:${limit}`;
 
-  // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + 尾窗活动时间 + N×readHeadMeta）——隐藏名单不进缓存键：
-  // 缓存的是"该 cwd 全部会话"的扫盘结果，隐藏过滤在缓存之后应用，删除后 invalidateListCache 仍照常生效。
+  // B2：TTL 缓存命中，直接返回（避免重复 readdir + N×stat + 尾窗活动时间 + N×readHeadMeta）——
+  // excludeIds 不进缓存键：缓存的是扫盘结果，排除在缓存之后应用。
   const cached = _listCache.get(cacheKey);
   const fromScan = cached && Date.now() - cached.ts < LIST_CACHE_TTL
     ? cached.result
-    : await scanSessionsPage(dir, cwd, limit, cacheKey, baseDir);
-  if (!hiddenIds || hiddenIds.size === 0) return fromScan;
-  return { ...fromScan, sessions: fromScan.sessions.filter(s => !hiddenIds.has(s.id)) };
+    : await scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, normalizedQuery);
+  if (!excludeIds || excludeIds.size === 0) return fromScan;
+  return { ...fromScan, sessions: fromScan.sessions.filter(s => !excludeIds.has(s.id)) };
+}
+
+// 标题子串匹配（大小写不敏感）。空/空白 query 视为全匹配。前后端各有一份同语义纯函数（前端在
+// public/js/logic/session-search.js）；两边不能互相 import（边界闸）。
+export function matchesSessionTitle(title, query) {
+  const q = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  if (!q) return true;
+  return String(title || '').toLowerCase().includes(q);
+}
+
+// 搜索匹配键：抽屉可见的 SDK summary + readHeadMeta 各字段（ai-title / 未截断 firstUser / 命令名）。
+// 浏览走 SDK summary，搜索走扫盘——两套标题不是同一串，必须 OR，否则按看见的词会搜空。
+export function sessionTitleSearchKeys({ summary, aiTitle, firstUser, firstCmd } = {}) {
+  const keys = [];
+  for (const raw of [summary, aiTitle, firstUser, firstCmd]) {
+    const s = typeof raw === 'string' ? raw.trim() : '';
+    if (s) keys.push(s);
+  }
+  return keys;
+}
+
+export function matchesSessionSearch(keys, query) {
+  const q = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  if (!q) return true;
+  return (Array.isArray(keys) ? keys : []).some(k => matchesSessionTitle(k, q));
+}
+
+export function resolveSessionListTitle({ summary, metaTitle } = {}) {
+  const s = typeof summary === 'string' ? summary.trim() : '';
+  if (s) return s;
+  const m = typeof metaTitle === 'string' ? metaTitle.trim() : '';
+  if (m) return m.length > 60 ? m.slice(0, 60) : m;
+  return '(无标题)';
 }
 
 // 快路径判定：生产 baseDir === CLAUDE_DIR 时走 SDK 官方 listSessions（summary = CLI /resume 同款标题，
@@ -681,12 +714,17 @@ async function scanSessionsViaSdk(cwd, limit) {
   // 而它在盘上活得好好的（CLI 自己的 /resume 列表把它显示成 "(session)"，同一个原因）。
   // 归属语义不变：只补【本 cwd 项目目录里实际存在】的 jsonl，SDK 报了但盘上没有的幽灵照旧滤掉。
   // 成本：一次 readdir + 只对差集 stat（差集通常为 0；正常会话全都有 summary）。
+  let dirTotal = enriched.length;
+  let countedFromDisk = false;
   try {
     const seen = new Set(enriched.map(s => s.id));
     const names = await readdir(projectDir);
     // isSafeSessionId 与其他读盘点同口径（SS-003）：只认后缀会把备份/手写文件（backup.2026-08-05.jsonl、
     // 带空格的名字）补成抽屉里点不开的幽灵会话——点击时才被 sessionFileExists 拒绝（review #6）。
-    const missing = names.filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6)) && !seen.has(n.slice(0, -6)));
+    const allJsonl = names.filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6)));
+    dirTotal = allJsonl.length; // 诚实总数：以盘上合法 jsonl 为准（含 SDK 漏报）
+    countedFromDisk = true;
+    const missing = allJsonl.filter(n => !seen.has(n.slice(0, -6)));
     // ★ 先按 mtime 排序再截断，不能按 readdir 顺序（那是文件名序）：老目录里差集可达上百个
     //   （SDK 候选窗本身有上限，落在窗外的老会话也会进差集），按文件名截断会把刚跑完的新会话
     //   挡在窗外——2026-08-05 真机就是这么漏掉 8f064e08 的。stat 便宜，全量做；只有活下来的
@@ -708,14 +746,41 @@ async function scanSessionsViaSdk(cwd, limit) {
   } catch { /* readdir 失败（目录刚被删等）：SDK 结果照常返回，不因补齐失败而整个列表塌掉 */ }
 
   enriched.sort((a, b) => b.lastUsedAt - a.lastUsedAt || String(a.id).localeCompare(String(b.id)));
-  // hasMore：重排后仍有未展示项，或 SDK 候选触顶（目录里可能还有更旧/未纳入的会话）
+  // hasMore：盘上总数已准确时只用 total>limit。OR SDK 触顶只可能多报——祖先幽灵被滤掉后
+  // 会让「还有更早的会话」假阳性。readdir 失败才回落触顶猜测。
+  const total = Math.max(dirTotal, enriched.length);
   return {
     sessions: enriched.slice(0, limit),
-    hasMore: enriched.length > limit || arr.length >= fetchLimit,
+    hasMore: countedFromDisk ? total > limit : (total > limit || arr.length >= fetchLimit),
+    total,
   };
 }
 
-async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir) {
+// 搜索 overlay：向 SDK 要浏览窗同量级的 summary，叠到扫盘候选上当匹配键/展示标题。
+// 不拿 SDK 当候选集（窗仍 ≈51）；SDK 失败则 overlay 为空，仍可按 readHeadMeta 搜。
+async function fetchSdkSummaryMap(cwd) {
+  const fn = __sdkListSessionsForTest || sdkListSessions;
+  const fetchLimit = LIST_LIMIT + 1;
+  const all = await fn({ dir: cwd, limit: fetchLimit });
+  const map = new Map();
+  for (const s of Array.isArray(all) ? all : []) {
+    if (!s || typeof s.sessionId !== 'string') continue;
+    const summary = typeof s.summary === 'string' ? s.summary.trim() : '';
+    if (summary) map.set(s.sessionId, summary);
+  }
+  return map;
+}
+
+async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir, query = '') {
+  // 标题搜索必须绕开 SDK 快路径：其 fetchLimit≈51，窗外旧会话永远进不了候选集。
+  // query 非空 → 强制全量 readdir + readHeadMeta 再过滤（n=1 下百~数百级可接受）。
+  if (query) {
+    let titleById = new Map();
+    if (useSdk(baseDir)) {
+      try { titleById = await fetchSdkSummaryMap(cwd); } catch { /* overlay 失败：仍按 readHeadMeta 搜 */ }
+    }
+    return scanViaReaddir(dir, limit, cacheKey, query, titleById);
+  }
   if (useSdk(baseDir)) {
     try {
       const result = await scanSessionsViaSdk(cwd, limit);
@@ -723,25 +788,27 @@ async function scanSessionsPage(dir, cwd, limit, cacheKey, baseDir) {
       return result;
     } catch {
       // SDK 异常（CLI 版本/环境/编码不一致）不 fail-closed：回落自造扫盘兜底，列表照常出。
-      return scanViaReaddir(dir, limit, cacheKey);
+      return scanViaReaddir(dir, limit, cacheKey, '');
     }
   }
-  return scanViaReaddir(dir, limit, cacheKey);
+  return scanViaReaddir(dir, limit, cacheKey, '');
 }
 
-// 自造扫盘（兜底路径 + baseDir 隔离测试实例）：readdir + N×stat + 全量尾窗活动时间 + 前 limit 条 readHeadMeta。
+// 自造扫盘（兜底路径 + baseDir 隔离测试实例 + 标题搜索唯一路径）：
+// readdir + N×stat + 全量尾窗活动时间 + readHeadMeta。
+// 浏览：只对前 limit 条读 meta。搜索：对前 SEARCH_SCAN_LIMIT 条读 meta 再按标题过滤。
 // 排序/lastUsedAt 用最后主链消息时间（无则回落 mtime），避免 mode/permission-mode 等元数据写盘把旧会话顶前。
-// readHeadMeta 仍保留——兜底依赖它取 title/model/entrypoint，快路径不进此。
-async function scanViaReaddir(dir, limit, cacheKey) {
+async function scanViaReaddir(dir, limit, cacheKey, query = '', titleById = new Map()) {
   let names;
   try {
     names = await readdir(dir);
   } catch {
-    return { sessions: [], hasMore: false }; // 目录不存在 = 该 cwd 尚无任何会话
+    return { sessions: [], hasMore: false, total: 0 }; // 目录不存在 = 该 cwd 尚无任何会话
   }
 
   // B2：stat 并发（Promise.allSettled 容错：单文件失败不影响其他）
-  const jsonlNames = names.filter(n => n.endsWith('.jsonl'));
+  // 只认安全 session id（与 SDK 补齐同口径），避免备份文件进列表。
+  const jsonlNames = names.filter(n => n.endsWith('.jsonl') && isSafeSessionId(n.slice(0, -6)));
   const statResults = await Promise.allSettled(
     jsonlNames.map(async name => {
       const file = join(dir, name);
@@ -766,19 +833,47 @@ async function scanViaReaddir(dir, limit, cacheKey) {
   // 活动时间相同（或都回落 mtime）时按 id 稳定排序，避免两次 list 顺序抖动。
   withActivity.sort((a, b) => b.activityAt - a.activityAt || String(a.id).localeCompare(String(b.id)));
 
-  // B2：readHeadMeta 并发（仅对前 limit 个——标题/model/entrypoint）
-  const top = withActivity.slice(0, limit);
-  const metas = await Promise.all(top.map(s => readHeadMeta(s.file, s.size)));
-  const sessions = top.map((s, i) => ({
-    id: s.id,
-    title: metas[i].title || '(无标题)',
-    model: metas[i].model || null,
-    entrypoint: metas[i].entrypoint || null,
-    lastUsedAt: Math.round(s.activityAt)
-  }));
-  const result = { sessions, hasMore: withActivity.length > limit };
+  const total = withActivity.length;
+  const metaBudget = query ? Math.min(total, SEARCH_SCAN_LIMIT) : Math.min(total, limit);
+  const ranked = withActivity.slice(0, metaBudget);
+  const metas = await Promise.all(ranked.map(s => readHeadMeta(s.file, s.size)));
+  const decorated = ranked.map((s, i) => {
+    const meta = metas[i] || {};
+    const overlay = titleById.get(s.id) || '';
+    const title = query
+      ? resolveSessionListTitle({ summary: overlay, metaTitle: meta.title })
+      : (meta.title || '(无标题)');
+    return {
+      id: s.id,
+      title,
+      model: meta.model || null,
+      entrypoint: meta.entrypoint || null,
+      lastUsedAt: Math.round(s.activityAt),
+      _keys: query
+        ? sessionTitleSearchKeys({
+          summary: overlay,
+          aiTitle: meta.aiTitle,
+          firstUser: meta.firstUser,
+          firstCmd: meta.firstCmd,
+        })
+        : null,
+    };
+  });
 
-  // B2：存缓存（键含 limit）
+  let sessions;
+  let hasMore;
+  if (query) {
+    const matched = decorated.filter(s => matchesSessionSearch(s._keys, query));
+    sessions = matched.slice(0, limit);
+    hasMore = matched.length > limit;
+  } else {
+    sessions = decorated;
+    hasMore = total > limit;
+  }
+  for (const s of sessions) delete s._keys;
+  const result = { sessions, hasMore, total };
+
+  // B2：存缓存（键含 limit；搜索键另含 q:，见 listSessionsPage）
   _listCache.set(cacheKey, { ts: Date.now(), result });
   return result;
 }
@@ -865,6 +960,9 @@ async function readHeadMeta(file, size) {
   } catch {
     return {};
   }
+  meta.aiTitle = aiTitle;
+  meta.firstUser = firstUser;
+  meta.firstCmd = firstCmd;
   meta.title = (aiTitle || firstUser || firstCmd).slice(0, 60);
   return meta;
 }
@@ -1268,7 +1366,7 @@ export async function sessionFileSize(sessionId, cwd, { baseDir = CLAUDE_DIR } =
   }
 }
 
-// L2 删除的活跃会话保护②用（两级删除）：mtime 距今 < 静默阈值即视为"可能正被终端使用"——
+// deletePermanent 的活跃会话保护②：mtime 距今 < 静默阈值即视为"可能正被终端使用"——
 // 纯终端进程正驱动的会话后端无法确证（同"纯终端驱动后端不可见"盲区），mtime 是文件系统元数据级的启发式护栏，非内容
 // 解析，诚实登记非完备。id 同 sessionFileExists 做字符集校验防路径穿越；不存在/非法 id → -1。
 export async function sessionFileMtime(sessionId, cwd, { baseDir = CLAUDE_DIR } = {}) {

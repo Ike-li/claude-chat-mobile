@@ -194,7 +194,7 @@ transcript 事实            stream / control / usage     status_line 组装    
 | 工具卡 | 截断 600/Bash 2000、脱敏 base64、标题抽 path | `agent` truncate · `formatTool*` |
 | 审批 sheet | ExitPlanMode → markdown plan；input 不截断 | `formatPermInputDisplay` |
 | 历史回显 | 滤 CLI 系统行；非 jsonl 全量 | `history.js` |
-| 会话列表 | **生产走 SDK `listSessions` 快路径**（判据 `baseDir === CLAUDE_DIR`）+ 按 jsonl 存在做归属过滤 + readdir 补 SDK 漏报；隔离测试注入别的 baseDir 时回落自造扫盘。`hasMore` / `hiddenIds`(L1) / TTL 缓存仍由 `listSessionsPage` 自己维护 | `listSessionsPage` · `scanSessionsViaSdk` |
+| 会话列表 | **生产走 SDK `listSessions` 快路径**（判据 `baseDir === CLAUDE_DIR`）+ 按 jsonl 存在做归属过滤 + readdir 补 SDK 漏报；隔离测试注入别的 baseDir 时回落自造扫盘。`hasMore` / `total` / 标题 `query` 搜索（搜索强制全量 readdir 绕开 SDK ~51 窗；匹配键 OR SDK `summary` 与 `ai-title` / 未截断 firstUser / 命令名，展示标题优先 summary）/ TTL 缓存由 `listSessionsPage` 维护；`excludeIds` 供删文件窗口临时过滤。readdir 成功时 `hasMore = total > limit`，不得 OR SDK 触顶 | `listSessionsPage` · `scanSessionsViaSdk` |
 | 系统条中文 | compacting 等 agent 写死中文 | `agent.map` system |
 
 后续若某面反复踩坑，升格进 display-contracts 测试块即可。

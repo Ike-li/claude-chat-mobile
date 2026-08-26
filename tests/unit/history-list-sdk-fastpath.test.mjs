@@ -231,6 +231,87 @@ test('SDK 漏报补齐: 差集超窗时按活动时间取最近的，不按文�
 // #6 回归（2026-08-05 第二轮 review）：gap-fill 只认后缀 .jsonl，不过 SS-003 字符集，于是备份/
 // 手写文件（foo.bar.jsonl、带路径分隔符的名字）会变成抽屉里点不开的幽灵会话——点击时
 // sessionFileExists/isSafeSessionId 才拒绝。补齐入口必须与其他读盘点同一口径。
+test('SDK 快路径: 盘上总数已够、SDK 触顶全是幽灵时 hasMore 不得假报', async () => {
+  const cwd = '/sdk/hasmore-ghosts';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  for (let i = 0; i < 4; i++) writeJSONL(dir, `s${i}`, [{ type: 'user', message: { role: 'user', content: `m${i}` } }]);
+  __setSdkListSessionsForTest(async (opts) => {
+    const real = Array.from({ length: 4 }, (_, i) => ({ sessionId: `s${i}`, summary: `t${i}`, lastModified: 1000 + i }));
+    const ghosts = Array.from({ length: opts.limit }, (_, i) => ({
+      sessionId: `ghost-${i}`, summary: `g${i}`, lastModified: 1,
+    }));
+    return [...real, ...ghosts];
+  });
+  try {
+    const page = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 4 });
+    assert.equal(page.total, 4);
+    assert.equal(page.sessions.length, 4);
+    assert.equal(page.hasMore, false, 'readdir 已给出准确 total 时，不得再用 SDK 触顶猜测 hasMore');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+test('搜索: query 不把 SDK 窗当候选集——窗外旧会话仍能命中', async () => {
+  const cwd = '/sdk/search-beyond-window';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  const nowSec = Date.now() / 1000;
+  writeJSONL(dir, 'needle-old', [{
+    type: 'user',
+    timestamp: new Date(Date.now() - 999_000).toISOString(),
+    message: { role: 'user', content: 'UniqueNeedleTitle' },
+  }]);
+  utimesSync(join(dir, 'needle-old.jsonl'), nowSec - 999, nowSec - 999);
+  for (let i = 0; i < 12; i++) {
+    const id = `n${String(i).padStart(3, '0')}`;
+    writeJSONL(dir, id, [{
+      type: 'user',
+      timestamp: new Date(Date.now() - i * 1000).toISOString(),
+      message: { role: 'user', content: `noise ${i}` },
+    }]);
+    utimesSync(join(dir, `${id}.jsonl`), nowSec - i, nowSec - i);
+  }
+  __setSdkListSessionsForTest(async () => Array.from({ length: 5 }, (_, i) => ({
+    sessionId: `n${String(i).padStart(3, '0')}`,
+    summary: `noise ${i}`,
+    lastModified: Date.now() - i * 1000,
+  })));
+  try {
+    const found = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 50, query: 'UniqueNeedle' });
+    assert.equal(found.sessions.length, 1);
+    assert.equal(found.sessions[0].id, 'needle-old');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+test('搜索: 按抽屉可见的 SDK summary 能命中，firstUser 也能命中，展示用 summary', async () => {
+  const cwd = '/sdk/search-summary-overlay';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'sid-renamed', [{
+    type: 'user',
+    message: { role: 'user', content: 'hello world from the first prompt' },
+  }]);
+  __setSdkListSessionsForTest(async () => [
+    { sessionId: 'sid-renamed', summary: 'Renamed Visible Title', lastModified: Date.now() },
+  ]);
+  try {
+    const byVisible = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 10, query: 'Renamed Visible' });
+    assert.equal(byVisible.sessions.length, 1);
+    assert.equal(byVisible.sessions[0].id, 'sid-renamed');
+    assert.equal(byVisible.sessions[0].title, 'Renamed Visible Title', '搜索结果标题必须与浏览行同源');
+
+    const byUser = await listSessionsPage(cwd, { baseDir: CLAUDE_DIR, limit: 10, query: 'hello world' });
+    assert.equal(byUser.sessions.length, 1);
+    assert.equal(byUser.sessions[0].id, 'sid-renamed');
+  } finally {
+    __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
 test('SDK 漏报补齐: 非法 sessionId 形态的 jsonl 不得混进列表', async () => {
   const cwd = '/sdk/no-summary-unsafe';
   const dir = join(CLAUDE_DIR, getProjectDir(cwd));

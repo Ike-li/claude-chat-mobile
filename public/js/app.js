@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -24,6 +24,7 @@ import { createInteractionQueueState, createApprovalController } from './app/app
 import { createSheetController } from './app/sheets.js';
 import { createDrawerController } from './app/drawer.js';
 import { createSessionDeleteController } from './app/session-delete.js';
+import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-search.js';
 (() => {
   // ---- token 注入（4a：#token= → localStorage → 立即清地址栏）----
   const hashMatch = location.hash.match(/#token=(.+)/);
@@ -170,7 +171,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
   // 两个弹窗容器留在 app.js：通用 sheet 开关与视图切换仍要用；其余 perm*/question* DOM 引用
   // 连同 selectedExitMode / multiSelectedIndexes 等状态已归 app/approval-questions.js 所有。
   const permModal = $('permModal'), questionModal = $('questionModal');
-  // 两级删除会话与通用确认弹窗的 DOM 引用已随各自模块迁出（app/session-delete.js、app/sheets.js）。
+  // 会话彻底删除与通用确认弹窗的 DOM 引用已随各自模块迁出（app/session-delete.js、app/sheets.js）。
   const authGate = $('authGate'), authToken = $('authToken'), authSubmit = $('authSubmit'), authError = $('authError'); // 访问令牌输入页
   const accessRelogin = $('accessRelogin'), accessReloginBtn = $('accessReloginBtn'); // Access 会话过期重登浮层
   // 远程设备审批 + 访问帮助 UI
@@ -601,6 +602,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
     sessionDraftCache,
     seenDiskLenBySession,
     sessionsCache,
+    sessionSearchQueryByDir,
   } = sessionWorkspaceState;
   const interactionState = createInteractionQueueState(appContext);
   const clientLogger = createClientLogger(appContext, {
@@ -4767,8 +4769,12 @@ import { createSessionDeleteController } from './app/session-delete.js';
   const { openLeftSidebar, closeLeftSidebar } = drawer;
 
   const { openDeleteSession } = createSessionDeleteController(appContext, {
-    $, socket, addBar, appConfirm, openSheet, closeSheet,
-    onDeleted: () => openSessionPanel(),
+    socket, addBar, appConfirm,
+    onDeleted: ({ cwd } = {}) => {
+      // 立刻丢掉该 cwd 的 SWR 缓存，避免重建时先画「含已删行」的旧快照再等 revalidate。
+      if (cwd) sessionsCache.delete(cwd);
+      openSessionPanel();
+    },
   });
 
   // ---- 项目文件只读浏览：传输回调、分页状态和 DOM 渲染由独立 controller 管理 ----
@@ -5114,7 +5120,8 @@ import { createSessionDeleteController } from './app/session-delete.js';
       // 手势——已打开会话本行没有其它可见按钮，用户体感是"点开会话后这行的图标凭空消失了"）。
       // 侧滑仍保留作快捷方式，二者并存、互不冲突，都是触发同一个 session:close。
       if (liveInst) {
-        const closeBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm">✕</button>`);
+        // ✕ 保留字符（E2E hasText:'✕'）；红=不可逆留给 🗑，故 hover 用中性色。
+        const closeBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-ink hover:bg-sunk active:bg-line text-sm" data-testid="session-close" title="${t('关闭会话')}" aria-label="${t('关闭会话')}">✕</button>`);
         closeBtn.onclick = async e => {
           e.stopPropagation();
           haptic('warning');
@@ -5132,10 +5139,10 @@ import { createSessionDeleteController } from './app/session-delete.js';
         rowContent.appendChild(closeBtn);
       }
 
-      // 未打开的历史会话：两级删除入口。已打开的会话走上面的关闭 tab，不在此重复给删除入口
-      // （删一个正被本产品驱动的会话语义混乱，后端 L2 保护①也会拒）。无 id 的新会话（未落盘）无从删。
+      // 未打开的历史会话：彻底删除入口。已打开的会话走上面的关闭 tab，不在此重复给删除入口
+      // （删一个正被本产品驱动的会话语义混乱，后端保护①也会拒）。无 id 的新会话（未落盘）无从删。
       if (s.id && !liveInst) {
-        const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" title="${t('删除会话')}">🗑</button>`);
+        const delBtn = el(`<button class="shrink-0 w-6 h-6 rounded text-ink-faint hover:text-danger hover:bg-sunk active:bg-line text-sm" data-testid="session-delete" title="${t('删除会话')}" aria-label="${t('删除会话')}">🗑</button>`);
         delBtn.onclick = e => {
           e.stopPropagation();
           haptic('warning');
@@ -5230,18 +5237,42 @@ import { createSessionDeleteController } from './app/session-delete.js';
       // 后台保鲜不使现有 renderRows /「显示全部」闭包失效；首次（折叠目录尚未画过）仍建立代次。
       if (!background || subtreeGen === 0) subtreeGen += 1;
       const myGen = subtreeGen;
-      // 渲染：无 id 新会话实例 + 会话行 +（若被截断）「显示全部」行
+      const activeQuery = () => String(sessionSearchQueryByDir.get(cwd) || '').trim();
+
+      const mountSearch = () => bindSessionSearchInput(container, {
+        cwd,
+        getQuery: (dir) => sessionSearchQueryByDir.get(dir) || '',
+        setQuery: (dir, value) => sessionSearchQueryByDir.set(dir, value),
+        onDebouncedQuery: (dir) => {
+          if (!expandedDirs.has(dir)) return;
+          populateSubtree(dir, container);
+        },
+        el,
+      });
+
+      // 渲染：搜索框（稳定节点）+ 行宿主（可重建）+ 无 id 新会话 + 会话行 +（浏览态）「显示全部」/剩余提示
       // git worktree 不再嵌套在本目录下自动分组——须作为独立 workdir 出现在 availableDirs。
-      const renderRows = (sessions, hasMore) => {
+      const renderRows = (sessions, hasMore, total = null) => {
         const { liveMap, freshTabs } = currentLiveRows();
-        container.innerHTML = '';
-        for (const inst of freshTabs) {
-          container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+        const query = activeQuery();
+        mountSearch();
+        const rowsHost = bindSessionRowsHost(container, el);
+        rowsHost.innerHTML = '';
+
+        if (!query) {
+          for (const inst of freshTabs) {
+            rowsHost.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+          }
         }
         for (const s of sessions) {
-          container.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
+          rowsHost.appendChild(sessionRow(s, liveMap.get(s.id), cwd));
         }
-        if (hasMore) {
+        if (query && sessions.length === 0) {
+          const empty = el(`<div class="pl-6 pr-3 py-3 text-xs text-ink-faint border-b border-line-soft/40" data-testid="session-search-empty">${t('无匹配会话')}</div>`);
+          rowsHost.appendChild(empty);
+        }
+
+        if (!query && hasMore && !expandedAllDirs.has(cwd)) {
           const more = el(`<button class="w-full text-left pl-6 pr-3 py-2 text-xs text-accent hover:bg-sunk/50 border-b border-line-soft/40">${t('显示全部会话…')}</button>`);
           more.onclick = () => {
             haptic('tap');
@@ -5253,27 +5284,41 @@ import { createSessionDeleteController } from './app/session-delete.js';
               if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
               if (!expandedDirs.has(cwd) || myGen !== subtreeGen) return;
               const all = state?.sessions || [];
+              const nextHasMore = !!state?.hasMore;
+              const nextTotal = Number.isFinite(state?.total) ? state.total : null;
               updateTerminalBusyForDir(cwd, all, state?.terminalBusy);
-              sessionsCache.set(cwd, { sessions: all, hasMore: false });
-              renderRows(all, false);
+              sessionsCache.set(cwd, { sessions: all, hasMore: nextHasMore, total: nextTotal, query: '' });
+              renderRows(all, nextHasMore, nextTotal);
             });
           };
-          container.appendChild(more);
+          rowsHost.appendChild(more);
+        } else if (!query && hasMore && expandedAllDirs.has(cwd)) {
+          const remaining = remainingOlderSessionCount(total, sessions.length);
+          const hintText = remaining != null
+            ? t('还有 {n} 个更早的会话，可用搜索查找').replace('{n}', String(remaining))
+            : t('还有更早的会话，可用搜索查找');
+          const hint = el(`<div class="pl-6 pr-3 py-2 text-xs text-ink-faint border-b border-line-soft/40" data-testid="session-remaining-hint"></div>`);
+          hint.textContent = hintText;
+          rowsHost.appendChild(hint);
         }
       };
 
       if (!background) {
-        // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore}）：有缓存就先拿旧数据把列表画出来，
-        // 不等网络；新鲜度交给下面那次无条件 revalidate。
+        // 1) SWR 缓存极速呈现（缓存值形状：{sessions, hasMore, total?, query?}）：有缓存就先拿旧数据把列表画出来，
+        // 不等网络；新鲜度交给下面那次无条件 revalidate。搜索态与浏览态缓存键共享同一 Map，用 query 字段区分。
+        mountSearch();
         const cachedEntry = sessionsCache.get(cwd);
-        if (cachedEntry) {
-          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore);
+        const cacheMatchesQuery = cachedEntry && String(cachedEntry.query || '') === activeQuery();
+        if (cacheMatchesQuery) {
+          renderRows(cachedEntry.sessions || [], cachedEntry.hasMore, cachedEntry.total ?? null);
         } else {
-          container.innerHTML = '';
-          for (const inst of currentLiveRows().freshTabs) {
-            container.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+          const rowsHost = bindSessionRowsHost(container, el);
+          rowsHost.innerHTML = '';
+          if (!activeQuery()) {
+            for (const inst of currentLiveRows().freshTabs) {
+              rowsHost.appendChild(sessionRow({ id: null, title: inst.title, lastUsedAt: null, entrypoint: null }, inst, cwd));
+            }
           }
-          // 显示高级骨架屏
           const skeleton = el(`
             <div class="skeleton-loader py-1">
               <div class="flex flex-col gap-2 px-6 py-3 border-b border-line-soft/40">
@@ -5286,7 +5331,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
               </div>
             </div>
           `);
-          container.appendChild(skeleton);
+          rowsHost.appendChild(skeleton);
         }
       }
 
@@ -5299,26 +5344,36 @@ import { createSessionDeleteController } from './app/session-delete.js';
       // 常规调用仍由结构变化/展开动作收窄；另有仅在抽屉可见时每 12 秒一次的 background revalidate，
       // 用来跟进 CLI registry 的 busy/alive。响应回来后由 shouldRerenderSessionList 比对内容签名，
       // 没真变化只更新缓存、不动 DOM，因此不会重画列表或闪骨架屏（P0-11t/P0-11z）。
+      // 搜索态 revalidate 必须带上 query，否则会把匹配结果打回默认 6 条。
       if (background && !socket.connected) return;
       const requestGen = ++sessionListRequestGen;
-      socket.emit('session:list', { cwd, all: expandedAllDirs.has(cwd) }, state => {
+      const query = activeQuery();
+      const listPayload = query
+        ? { cwd, query }
+        : { cwd, all: expandedAllDirs.has(cwd) };
+      socket.emit('session:list', listPayload, state => {
         if (requestGen !== sessionListRequestGen) return;
         if (!isSessionPanelRevalidateActive() || !container.isConnected) return;
         if (myGen !== subtreeGen) return;
         if (!background && !expandedDirs.has(cwd)) return;
+        // 用户在请求飞行期间改了搜索词 → 丢弃过期 ack
+        if (activeQuery() !== query) return;
         const sessions = state?.sessions || [];
         const hasMore = !!state?.hasMore;
+        const total = Number.isFinite(state?.total) ? state.total : null;
         updateTerminalBusyForDir(cwd, sessions, state?.terminalBusy);
         const prevEntry = sessionsCache.get(cwd);
         const willRerender = shouldRerenderSessionList({
-          hasPrevEntry: !!prevEntry,
+          hasPrevEntry: !!prevEntry && String(prevEntry.query || '') === query,
           prevSessions: prevEntry?.sessions,
           prevHasMore: prevEntry?.hasMore,
+          prevTotal: prevEntry?.total ?? null,
           nextSessions: sessions,
           nextHasMore: hasMore,
+          nextTotal: total,
         });
-        sessionsCache.set(cwd, { sessions, hasMore });
-        if (willRerender) renderRows(sessions, hasMore);
+        sessionsCache.set(cwd, { sessions, hasMore, total, query });
+        if (willRerender) renderRows(sessions, hasMore, total);
       });
     };
 

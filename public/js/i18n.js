@@ -81,17 +81,14 @@ export const EN_DICT = Object.freeze({
   '可点选项、多选确认、填「其他」，或跳过中止本轮': 'Tap an option, confirm a multi-select, fill in "Other", or skip to interrupt the turn',
 
   // —— 删除会话 / 通用确认 ——
-  '🗑 删除会话': '🗑 Delete session',
-  '从列表移除': 'Remove from list',
-  '仅从本产品隐藏；主机上的完整记录保留，可从终端': 'Hides it from this app only; the full transcript stays on the host. Run',
-  '找回。': 'in the terminal to recover it.',
-  '彻底删除（含底层文件）': 'Delete permanently (including files on disk)',
-  '真删主机上的会话记录文件，': 'Really deletes the transcript file on the host —',
-  '不可恢复': 'cannot be undone',
-  '；点击后需再次确认。': '. You will be asked to confirm again.',
+  '🗑 删除会话？': '🗑 Delete session?',
   '取消': 'Cancel',
   '确定': 'Confirm',
   '确认操作': 'Confirm action',
+  '搜索会话': 'Search sessions',
+  '无匹配会话': 'No matching sessions',
+  '还有 {n} 个更早的会话，可用搜索查找': '{n} older sessions remain — use search to find them',
+  '还有更早的会话，可用搜索查找': 'Older sessions remain — use search to find them',
 
   // —— 运行日志抽屉 ——
   '交互日志': 'Interaction log',
@@ -578,9 +575,6 @@ export const EN_DICT = Object.freeze({
   '📊 额度显示已恢复（此前：': '📊 Usage display restored (was: ',
 
   // —— 会话管理（删除 / 关闭 / 分叉 / 首页）——
-  '已从列表移除：': 'Removed from the list: ',
-  '移除失败': 'Remove failed',
-  '🗑 彻底删除底层文件？': '🗑 Permanently delete the underlying file?',
   '会话「': 'The transcript for "',
   '」在主机上的记录将被真正抹除。': '" on the host will be truly erased.',
   '此操作不可恢复。': 'This cannot be undone.',

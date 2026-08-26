@@ -5,6 +5,8 @@ export function createSessionWorkspaceState(context) {
   const sessionDraftCache = new Map();
   const seenDiskLenBySession = new Map();
   const sessionsCache = new Map();
+  // 每工作区会话搜索词（仅当前工作区范围）。空串/缺省 = 浏览模式。
+  const sessionSearchQueryByDir = new Map();
   // 有界 set：超过 cap 丢最旧 key（Map 插入序）
   const origSet = seenDiskLenBySession.set.bind(seenDiskLenBySession);
   seenDiskLenBySession.set = (k, v) => {
@@ -19,6 +21,7 @@ export function createSessionWorkspaceState(context) {
     sessionDrafts: sessionDraftCache,
     seenDiskLenBySession,
     sessionsCache,
+    sessionSearchQueryByDir,
   };
   context.state.sessionWorkspaces = state;
   return state;

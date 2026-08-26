@@ -38,7 +38,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Documentation | 10 |
 | E2E test | 49 |
 | Frontend asset | 3 |
-| Frontend source | 43 |
+| Frontend source | 45 |
 | Generated asset | 6 |
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
@@ -51,10 +51,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 4 |
 | Test support | 5 |
-| Unit test | 159 |
+| Unit test | 161 |
 | Vendored asset | 21 |
 
-Total classified files: **460**.
+Total classified files: **464**.
 
 ## Complete file inventory
 
@@ -123,6 +123,7 @@ Total classified files: **460**.
 | `public/js/app/message-timeline.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/notifications.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/session-delete.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/app/session-search.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/session-workspaces.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/settings.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/sheets.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -142,6 +143,7 @@ Total classified files: **460**.
 | `public/js/logic/panel-state.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/logic/permissions.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/logic/service-diag.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/session-search.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/logic/statusline.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/logic/tool-cards.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/ring-buffer.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -466,6 +468,7 @@ Total classified files: **460**.
 | `tests/unit/logic-restart-rows.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-service-status.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-session-panel.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-session-search.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-session.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-statusline-summary.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-task-detail.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
@@ -500,6 +503,7 @@ Total classified files: **460**.
 | `tests/unit/service-sampler.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/service-templates.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/service-units.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/session-list-ack-hasmore.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/session-registry.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/sessions.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/setup.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

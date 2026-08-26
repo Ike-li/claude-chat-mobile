@@ -421,9 +421,19 @@ export function resolveSheetDragEnd({
 // 骨架屏）时恒需要渲染：骨架屏必须被替换，哪怕真实数据恰好是空列表。粒度：id+title(前 40 字)+
 // lastUsedAt 足以代表用户会感知到的变化，不做深度字段比对；hasMore 单独比较（决定"显示全部"按钮的
 // 出现/消失，不影响每一行的签名本身）。
-export function shouldRerenderSessionList({ hasPrevEntry = false, prevSessions, prevHasMore = false, nextSessions, nextHasMore = false } = {}) {
+export function shouldRerenderSessionList({
+  hasPrevEntry = false,
+  prevSessions,
+  prevHasMore = false,
+  prevTotal = null,
+  nextSessions,
+  nextHasMore = false,
+  nextTotal = null,
+} = {}) {
   if (!hasPrevEntry) return true;
   if (!!prevHasMore !== !!nextHasMore) return true;
+  // total 变化会影响「还有 N 个更早的会话」提示，即使行签名不变也要重渲。
+  if ((prevTotal ?? null) !== (nextTotal ?? null)) return true;
   // terminal 进签名：CLI 进程 busy/alive 状态或副文本变化必须重渲，否则抽屉会陈旧。
   const signature = list => (Array.isArray(list) ? list : [])
     .map(s => `${s?.id || ''}:${(s?.title || '').slice(0, 40)}:${s?.lastUsedAt || ''}:${s?.terminal || ''}`)

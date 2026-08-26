@@ -76,7 +76,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -1793,6 +1793,10 @@ async function openResumeInstance(cwd, resumeId, extra = {}) {
 // 第一条 open 完成后 viewingInstanceId 才有值；await currentSessionForCwd 间隙内两条并发首消息都会
 // miss justOpened 并各 spawn 一个孤儿 CLI。键用 `fresh:${cwd}`，与 resume sessionId 空间隔离。
 const resumeInFlight = new Map(); // key → Promise<AgentSession>
+// 进程内：正在 deletePermanent 的会话 id。列表/搜索在删文件窗口内排除它们。
+// 不落盘——崩溃后孤儿文件重新可见，与 CLI 等价、可重试。必须在 registerSocketConnection
+// 之外：每条 socket 一份的话，另一台设备的 SWR 在删文件窗口内仍会把行吐回去。
+const pendingDeleteIds = new Set();
 function dedupedResume(cwd, resumeId, extra = {}) {
   const key = resumeId || `fresh:${cwd}`;
   let p = resumeInFlight.get(key);
@@ -2675,7 +2679,7 @@ registerSocketConnection(io, socket => {
   }
 
   on(socket, 'session:list', async (payload, maybeAck) => {
-    // 兼容两种调用形态：emit('session:list', cb)（app.js 现状）与 emit('session:list', {cwd, all?}, cb)
+    // 兼容两种调用形态：emit('session:list', cb)（app.js 现状）与 emit('session:list', {cwd, all?, query?}, cb)
     const ack = typeof payload === 'function' ? payload : maybeAck;
     if (typeof ack !== 'function') return;
     const obj = payload && typeof payload === 'object' ? payload : {};
@@ -2684,46 +2688,25 @@ registerSocketConnection(io, socket => {
     // currentSessionId 取该 cwd 指针，但仅当其 jsonl 属本 cwd 才回传（否则 null）。
     const id = sessions.getCurrent(cwd);
     const currentSessionId = (id && await sessionFileExists(cwd, id)) ? id : null;
+    const query = typeof obj.query === 'string' ? obj.query.trim() : '';
     // 每工作区历史会话默认截断到 sessionLimit（workdirs.json 可配，默认 6）；all:true（前端「显示全部」）用硬顶 MAX_SESSION_LIMIT。
+    // query 非空走 SEARCH_RESULT_LIMIT（返回条数，与浏览硬顶同量级）。窗外旧会话能搜到靠的是
+    // history.js 的 SEARCH_SCAN_LIMIT 全量 readdir，不是把 RESULT 抬过 50。
     const all = obj.all === true;
-    const limit = all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT);
-    // hiddenIds（两级删除 L1）：L1 删除的会话从这里过滤掉，不出现在列表里（transcript 仍在盘上）。
-    const { sessions: list, hasMore } = await listSessionsPage(cwd, { limit, hiddenIds: new Set(sessions.getHiddenIds()) });
-    const terminal = await annotateTerminalStates(cwd, list);
-    ack({ currentSessionId, sessions: terminal.list, terminalBusy: terminal.terminalBusy, hasMore: all ? false : hasMore });
-  });
-
-  // 两级删除 L1：默认删——只从产品可见列表移除，transcript 原样保留在主机磁盘，
-  // 可从终端 `claude --resume` 或再次经本产品扫盘找回（"隐藏"而非"删除"，但对用户呈现为"删除"）。
-  on(socket, 'session:delete', async (payload, ack) => {
-    if (typeof ack !== 'function') return;
-    const { sessionId } = payload || {};
-    const cwd = routeCwd(payload?.cwd);
-    if (typeof sessionId !== 'string' || !(await sessionFileExists(cwd, sessionId))) {
-      return ack({ ok: false, error: '会话不存在' });
-    }
-    // SRV-005 + SRV-NEW-004：live 驱动或 resumeInFlight 中均拒删（防 switch 打开窗口 TOCTOU）
-    const delGuardL1 = canDeleteSessionGuard({
-      liveInstance: !!instanceForSession(sessionId),
-      resumeInFlight: resumeInFlight.has(sessionId),
+    const limit = query
+      ? SEARCH_RESULT_LIMIT
+      : (all ? MAX_SESSION_LIMIT : (sessionLimitByDir.get(cwd) ?? DEFAULT_SESSION_LIMIT));
+    const { sessions: list, hasMore, total } = await listSessionsPage(cwd, {
+      limit,
+      query: query || undefined,
+      excludeIds: pendingDeleteIds.size ? new Set(pendingDeleteIds) : undefined,
     });
-    if (!delGuardL1.ok) {
-      return ack({
-        ok: false,
-        error: delGuardL1.reason === 'opening'
-          ? '会话正在打开中，请稍后再从列表移除'
-          : '会话正在被本产品驱动，请先结束或关闭该会话再从列表移除',
-      });
-    }
-    sessions.hideSession(sessionId);
-    if (sessions.getCurrent(cwd) === sessionId) sessions.setCurrent(cwd, null); // 别让指针继续指向一个刚被隐藏的会话
-    invalidateListCache(cwd);
-    audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l1', target: sessionId, outcome: 'success', meta: { cwd } });
-    ack({ ok: true });
+    const terminal = await annotateTerminalStates(cwd, list);
+    // 诚实返回 hasMore：即便 all:true 也不得强制 false——否则「还有更早会话」对用户不可见。
+    ack({ currentSessionId, sessions: terminal.list, terminalBusy: terminal.terminalBusy, hasMore, total });
   });
 
-  // 两级删除 L2：显式二次确认（前端二次弹窗把关，本端不重复校验"是否已二次确认"
-  // 这种 UI 语义——收到这个事件本身就代表用户已经过确认）——真删底层 transcript 文件，不可恢复。
+  // 彻底删除：显式二次确认（前端弹窗把关）——真删底层 transcript 文件，不可恢复。
   // 活跃会话保护两道，任一不过 fail-closed 拒绝（防与 claude 侧并发写分叉，启发式非完备、已如实登记）。
   on(socket, 'session:deletePermanent', async (payload, ack) => {
     if (typeof ack !== 'function') return;
@@ -2751,23 +2734,24 @@ registerSocketConnection(io, socket => {
     if (Date.now() - mtimeMs < sessionDeleteQuietMs) {
       return ack({ ok: false, error: '会话可能正被终端使用，请稍后再试' });
     }
-    // 原子性：先删指针（隐藏 + 清当前指针），后删文件——万一进程在两步之间崩溃，宁可留一个"已隐藏但
-    // 文件还在"的孤儿文件（用户看不到、无害），也不要出现"指针还在指向一个已被删文件"的悬空引用。
-    sessions.hideSession(sessionId);
+    // 原子性：先清当前指针 + 记入 pendingDeleteIds（列表临时排除），再删文件。
+    // 崩溃窗口：pending 不落盘 → 孤儿文件重新可见，可重试；绝不会留下「指针指向已删文件」。
     if (sessions.getCurrent(cwd) === sessionId) sessions.setCurrent(cwd, null);
+    pendingDeleteIds.add(sessionId);
     invalidateListCache(cwd);
     try {
       await sdkDeleteSession(sessionId, { dir: cwd }); // 官方 API：真删 {sessionId}.jsonl + 子 agent transcript 子目录
     } catch (err) {
-      console.error(`[session-delete] L2 删除底层文件失败 sessionId=${sessionId}:`, err.message);
+      pendingDeleteIds.delete(sessionId);
+      invalidateListCache(cwd);
+      console.error(`[session-delete] 删除底层文件失败 sessionId=${sessionId}:`, err.message);
       audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'partial_failure', meta: { cwd } });
-      return ack({ ok: false, error: `已从列表移除，但底层文件删除失败：${err.message}` });
+      return ack({ ok: false, error: `删除失败：${err.message}` });
     }
-    sessions.unhideSession(sessionId); // 文件已真删，隐藏名单不必再为它长期占位
+    pendingDeleteIds.delete(sessionId);
     // 必须【再失效一次】：上面那次 invalidate 发生在 sdkDeleteSession 之前，而真删要跑 git worktree list
     // 子进程、耗时可观。这段窗口里任何一次 session:list（另一台设备的 SWR revalidate、首页跨工作区聚合）
-    // 都会把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache——那次响应因 hiddenIds 还在而看不出异常，
-    // 但 unhideSession 之后隐藏名单没了，缓存里的它就变成正常行返回，点开报「会话不存在」。
+    // 都可能把「仍含该会话」的扫盘结果重新写进 4s TTL 的 _listCache；pending 清掉后就会变成幽灵行。
     invalidateListCache(cwd);
     audit.recordAudit({ actor: actorFromSocket(socket), action: 'session_delete_l2', target: sessionId, outcome: 'success', meta: { cwd } });
     ack({ ok: true });

@@ -11,6 +11,11 @@ import { encodeProjectDir } from '../shared/project-dir.js';
 export const DEFAULT_SESSION_LIMIT = 6;   // 未指定时每工作区历史会话默认显示条数
 export const MAX_SESSION_LIMIT = 50;      // 上限：单一事实源，history.js LIST_LIMIT 与 src/server/app.js 的 session:list all 分支直接 import 本常量（= 前端「显示全部」的服务端硬顶）
 export const MAX_LIVE_SESSIONS = 20;      // 全局硬上限：live 会话实例数量，防止有意保留过多 CLI 子进程
+// 会话标题搜索：SCAN 是扫盘匹配上限，必须高于 MAX_SESSION_LIMIT，否则搜不到「显示全部」窗外的旧会话。
+// RESULT 是返回条数上限，与浏览硬顶同量级（结果列表也不该一次吐上百行）。
+// 单一事实源：history.js 与 session:list handler 同 import。
+export const SEARCH_SCAN_LIMIT = 500;
+export const SEARCH_RESULT_LIMIT = 50;
 
 // 校验 sessionLimit：必须是 [1, MAX] 的整数。非法（含缺省交由调用方判断）→ 返回 { value, warning }。
 function validateSessionLimit(raw, path) {

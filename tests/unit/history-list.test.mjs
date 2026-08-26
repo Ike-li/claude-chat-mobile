@@ -224,24 +224,101 @@ test('listSessionsPage: 缓存按 limit 隔离（limit=2 不污染随后 limit=5
   assert.equal(big.hasMore, false);
 });
 
-// ── listSessionsPage：hiddenIds 过滤（FR-20 两级删除 L1） ──────────────────────
+// ── listSessionsPage：excludeIds（删文件窗口临时过滤）+ total + query ──────────
 
-test('listSessionsPage: hiddenIds 命中的会话不出现在结果里', async () => {
-  const cwd = '/test/page-hidden';
+test('listSessionsPage: excludeIds 命中的会话不出现在结果里', async () => {
+  const cwd = '/test/page-exclude';
   const dir = join(BASE, getProjectDir(cwd));
   for (let i = 0; i < 3; i++) writeJSONL(dir, `h${i}`, [{ type: 'user', message: { role: 'user', content: `q${i}` } }]);
-  const { sessions } = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, hiddenIds: new Set(['h1']) });
+  const { sessions } = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, excludeIds: new Set(['h1']) });
   assert.deepEqual(sessions.map(s => s.id).sort(), ['h0', 'h2']);
 });
 
-test('listSessionsPage: 不传 hiddenIds（或空 Set）→ 不过滤，行为与旧调用点一致', async () => {
-  const cwd = '/test/page-nohidden';
+test('listSessionsPage: 不传 excludeIds（或空 Set）→ 不过滤', async () => {
+  const cwd = '/test/page-noexclude';
   const dir = join(BASE, getProjectDir(cwd));
   writeJSONL(dir, 'nh0', [{ type: 'user', message: { role: 'user', content: 'q' } }]);
   const withoutParam = await listSessionsPage(cwd, { baseDir: BASE, limit: 10 });
-  const withEmptySet = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, hiddenIds: new Set() });
+  const withEmptySet = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, excludeIds: new Set() });
   assert.equal(withoutParam.sessions.length, 1);
   assert.equal(withEmptySet.sessions.length, 1);
+});
+
+test('listSessionsPage: 返回 total=目录会话总数（与 limit 截断无关）', async () => {
+  const cwd = '/test/page-total';
+  const dir = join(BASE, getProjectDir(cwd));
+  for (let i = 0; i < 5; i++) writeJSONL(dir, `t${i}`, [{ type: 'user', message: { role: 'user', content: `q${i}` } }]);
+  const page = await listSessionsPage(cwd, { baseDir: BASE, limit: 2 });
+  assert.equal(page.sessions.length, 2);
+  assert.equal(page.hasMore, true);
+  assert.equal(page.total, 5);
+});
+
+test('listSessionsPage: query 按标题大小写不敏感匹配', async () => {
+  const cwd = '/test/page-query';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'qa', [{ type: 'user', message: { role: 'user', content: 'Alpha Plan' } }]);
+  writeJSONL(dir, 'qb', [{ type: 'user', message: { role: 'user', content: 'beta review' } }]);
+  writeJSONL(dir, 'qc', [{ type: 'user', message: { role: 'user', content: 'ALPHA notes' } }]);
+  const { sessions, total } = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, query: 'alpha' });
+  assert.equal(total, 3);
+  assert.deepEqual(sessions.map(s => s.id).sort(), ['qa', 'qc']);
+});
+
+test('listSessionsPage: query 能命中排在 limit=50 窗外的旧会话', async () => {
+  const cwd = '/test/page-query-deep';
+  const dir = join(BASE, getProjectDir(cwd));
+  const { utimesSync } = await import('node:fs');
+  const nowSec = Date.now() / 1000;
+  // 先写最旧的目标，再写 59 条噪声并抬高 mtime——保证 needle 落在浏览 50 窗外
+  writeJSONL(dir, 'needle-old', [
+    { type: 'user', timestamp: new Date(Date.now() - 999_000).toISOString(), message: { role: 'user', content: 'UniqueNeedleTitle' } },
+  ]);
+  utimesSync(join(dir, 'needle-old.jsonl'), nowSec - 999, nowSec - 999);
+  for (let i = 0; i < 59; i++) {
+    const id = `n${String(i).padStart(3, '0')}`;
+    writeJSONL(dir, id, [{
+      type: 'user',
+      timestamp: new Date(Date.now() - i * 1000).toISOString(),
+      message: { role: 'user', content: `noise ${i}` },
+    }]);
+    utimesSync(join(dir, `${id}.jsonl`), nowSec - i, nowSec - i);
+  }
+  const browse = await listSessionsPage(cwd, { baseDir: BASE, limit: 50 });
+  assert.equal(browse.sessions.length, 50);
+  assert.equal(browse.hasMore, true);
+  assert.equal(browse.total, 60);
+  assert.ok(!browse.sessions.some(s => s.id === 'needle-old'), '浏览窗不应包含最旧的 needle');
+
+  const found = await listSessionsPage(cwd, { baseDir: BASE, limit: 50, query: 'UniqueNeedle' });
+  assert.equal(found.total, 60);
+  assert.equal(found.sessions.length, 1);
+  assert.equal(found.sessions[0].id, 'needle-old');
+  assert.equal(found.hasMore, false);
+});
+
+test('listSessionsPage: query 能命中 firstUser 超过展示 60 字的尾部', async () => {
+  const cwd = '/test/page-query-long';
+  const dir = join(BASE, getProjectDir(cwd));
+  const firstUser = `${'x'.repeat(80)}UniqueTailToken`;
+  writeJSONL(dir, 'long-user', [{ type: 'user', message: { role: 'user', content: firstUser } }]);
+  const found = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, query: 'UniqueTailToken' });
+  assert.equal(found.sessions.length, 1);
+  assert.equal(found.sessions[0].id, 'long-user');
+  // 展示标题仍截断，匹配不得先截断再搜
+  assert.equal(found.sessions[0].title, firstUser.slice(0, 60));
+});
+
+test('listSessionsPage: 空 query / 空白 query 等同不过滤', async () => {
+  const cwd = '/test/page-query-blank';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'qb0', [{ type: 'user', message: { role: 'user', content: 'hello' } }]);
+  const a = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, query: '' });
+  const b = await listSessionsPage(cwd, { baseDir: BASE, limit: 10, query: '   ' });
+  const c = await listSessionsPage(cwd, { baseDir: BASE, limit: 10 });
+  assert.equal(a.sessions.length, 1);
+  assert.equal(b.sessions.length, 1);
+  assert.equal(c.sessions.length, 1);
 });
 
 

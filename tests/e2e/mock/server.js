@@ -39,6 +39,7 @@ let mockUnreadOnEntry = 0; // 未读角标：模拟真 server sync:since 的 ack
 let mockUnreadOnEntryInstanceId = null;
 let lateClosedSessionEventsInstanceId = null;
 let historyOverflowMode = false;
+const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔除
 // P3 抽屉局部重建 + SWR 保鲜回归夹具（test:reconnect-drawer-quiet / test:reconnect-drawer-refresh）：
 // reconnectDrawerTitleChanged 让 mainCwdSessions() 返回改过名的主工作区会话标题，模拟"断线期间被自主
 // 续跑改名"；reconnectSettleMarkerArmed 让下一次 connection handler 在 emitHydration() 之后再追加一条
@@ -205,6 +206,7 @@ function resetMockState() {
   mockUnreadOnEntryInstanceId = null;
   lateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
+  deletedSessionIds.clear();
   reconnectDrawerTitleChanged = false;
   reconnectSettleMarkerArmed = false;
   terminalBadgeArmed = false;
@@ -688,6 +690,18 @@ io.on('connection', socket => {
     }
   });
 
+  // 彻底删除会话（mock：只从列表剔除，不碰磁盘）
+  socket.on('session:deletePermanent', (payload, ack) => {
+    const { sessionId } = payload || {};
+    console.log(`[mock] deletePermanent: ${sessionId}`);
+    if (typeof sessionId !== 'string' || !sessionId) {
+      if (typeof ack === 'function') ack({ ok: false, error: '会话不存在' });
+      return;
+    }
+    deletedSessionIds.add(sessionId);
+    if (typeof ack === 'function') ack({ ok: true });
+  });
+
   // Handle Tab close
   socket.on('session:close', payload => {
     const { instanceId } = payload || {};
@@ -796,10 +810,11 @@ io.on('connection', socket => {
   // Handle session list request for sidebar directory browsing
   socket.on('session:list', (payload, callback) => {
     const { cwd, all } = payload || {};
-    console.log(`[mock] session:list for cwd: ${cwd}`);
+    const query = typeof payload?.query === 'string' ? payload.query.trim().toLowerCase() : '';
+    console.log(`[mock] session:list for cwd: ${cwd}${query ? ` query=${query}` : ''}`);
     if (cwd === '/Users/you/code/claude-chat-mobile') {
       if (typeof callback === 'function') {
-        const sessions = mainCwdSessions();
+        const sessions = mainCwdSessions().filter(s => !deletedSessionIds.has(s.id));
         if (terminalRaceArmed) {
           terminalRaceListCount += 1;
           if (terminalRaceListCount === 2) {
@@ -812,6 +827,7 @@ io.on('connection', socket => {
                 sessions: staleSessions,
                 terminalBusy: true,
                 hasMore: false,
+                total: staleSessions.length,
               });
               io.emit('agent:event', {
                 seq: 1,
@@ -833,12 +849,30 @@ io.on('connection', socket => {
             if (target) target.terminal = 'busy';
           }
         }
+        if (query) {
+          const matched = sessions.filter(s => String(s.title || '').toLowerCase().includes(query));
+          callback({
+            currentSessionId: 'mock-session-visual-test',
+            sessions: matched,
+            terminalBusy: terminalBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
+            hasMore: false,
+            total: sessions.length,
+          });
+          return;
+        }
+        // overflow：截断态 hasMore；显示全部后仍诚实报告「还有更早的」（total 虚高模拟窗外会话）
+        const overflowHidden = historyOverflowMode ? 7 : 0;
+        const total = sessions.length + overflowHidden;
         const visibleSessions = historyOverflowMode && !all ? sessions.slice(0, 3) : sessions;
+        const hasMore = historyOverflowMode
+          ? (all ? overflowHidden > 0 : true)
+          : false;
         callback({
           currentSessionId: 'mock-session-visual-test',
           sessions: visibleSessions,
           terminalBusy: terminalBadgeArmed || (terminalRefreshArmed && terminalRefreshListCount >= 2),
-          hasMore: historyOverflowMode && !all
+          hasMore,
+          total,
         });
         if (terminalRefreshArmed && terminalRefreshListCount === 1) {
           const live = mockInstances.find(i => i.instanceId === 'inst_1');

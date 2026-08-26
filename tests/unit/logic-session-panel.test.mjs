@@ -34,6 +34,20 @@ test('shouldRerenderSessionList: hasMore 翻转（"显示全部"按钮出现/消
   assert.equal(shouldRerenderSessionList({ hasPrevEntry: true, prevSessions: sessions, prevHasMore: true, nextSessions: sessions, nextHasMore: false }), true);
 });
 
+test('shouldRerenderSessionList: total 变化需要重渲染（「还有 N 个」提示），行签名不变也不豁免', () => {
+  const sessions = [{ id: 's1', title: 'Foo', lastUsedAt: 100 }];
+  assert.equal(shouldRerenderSessionList({
+    hasPrevEntry: true,
+    prevSessions: sessions, prevHasMore: true, prevTotal: 60,
+    nextSessions: sessions, nextHasMore: true, nextTotal: 70,
+  }), true);
+  assert.equal(shouldRerenderSessionList({
+    hasPrevEntry: true,
+    prevSessions: sessions, prevHasMore: true, prevTotal: 60,
+    nextSessions: sessions, nextHasMore: true, nextTotal: 60,
+  }), false);
+});
+
 test('shouldRerenderSessionList: 空/未定义入参安全，不抛异常', () => {
   assert.equal(shouldRerenderSessionList(), true); // hasPrevEntry 缺省 false → 必须渲染
   assert.equal(shouldRerenderSessionList({ hasPrevEntry: true }), false); // 两边都是"无数据"视为无变化

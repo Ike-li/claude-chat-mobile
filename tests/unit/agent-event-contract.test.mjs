@@ -230,7 +230,7 @@ socket.on('mock:invented', () => {});`);
 });
 
 test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量抽查）', () => {
-  // 41 = user:*(11) + task:stop + session:*(9) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + files:search + files:write + git:status + git:diff + doctor:run + service:status
+  // 41 = user:*(11) + task:stop + session:*(8) + sync/mirror/conn/dev(4) + logs:*(2) + tool:*(2) + browse:*(2) + files:search + files:write + git:status + git:diff + doctor:run + service:status
   //      + config:refresh（CLI 配置刷新按钮：force 重读 ensureCliDefaults + 广播，手动兜底终端侧改了 settings.json 后 compose 摘要不自动感知）
   //      + client:presence（PWA 前台/后台上报：visibilitychange/pagehide/连接成功时 emit，服务端记 socket.data.hidden，
   //        供 result 完成通知的 hasClients 改按 hasForegroundApprovedClient 判定——修「PWA 切后台但 socket 未断时
@@ -249,7 +249,9 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        手机上而改配置只能上电脑，40 个配置项里绝大多数移动端用户永远碰不到。三条纪律见
   //        src/server/app.js 的 handler 头注：只写文件不动 process.env、key 白名单（env-schema）、
   //        日志与 ack 只记 key 名不记值。env:set 因为要真写 .env 而进 MOCK_INBOUND_EXEMPT）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 42);
+  // （曾含 session:delete：L1 软隐藏；2026-08-26 移除——制造 CLI/web 不等价且无反隐藏入口；
+  //   只留 session:deletePermanent 真删。session:* 由 9 变 8，入向总数 42→41）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 41);
   assert.ok(INBOUND_SOCKET_EVENTS.includes('env:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('env:set'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('push:test'));
@@ -258,6 +260,7 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   assert.ok(INBOUND_SOCKET_EVENTS.includes('config:refresh'));
   assert.ok(!INBOUND_SOCKET_EVENTS.includes('worktree:sessions'));
   assert.ok(!INBOUND_SOCKET_EVENTS.includes('user:cancelQueued'), '排队撤回已移除，契约不得再列');
+  assert.ok(!INBOUND_SOCKET_EVENTS.includes('session:delete'), 'L1 软隐藏已移除，契约不得再列');
   assert.ok(INBOUND_SOCKET_EVENTS.includes('user:ackUnread'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:deletePermanent'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('session:fork'));
