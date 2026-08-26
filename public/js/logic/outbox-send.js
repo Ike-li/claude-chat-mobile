@@ -173,11 +173,33 @@ export function presentOfflineResendAck(err, ack) {
   };
 }
 
+// 队列项是否发往当前视图——outbox 的唯一归属判据。此前 planOutboxDrainNotice /
+// shouldBusyAfterOfflineBatch / app.js 的 targetsViewing 各写一份「逐字一致」的表达式，
+// 任一处改动都会静默分叉（2026-08-05 outbox 三修的教训：两个函数注释都写「与对方对齐」，
+// 而那一维从没对齐过）。合成一个函数后，"一致" 由语言保证，不再靠注释纪律。
+//
+// 两条判据分工：
+// ① instanceId 非空 → 严格相等。同一工作区可并存多个会话，cwd 相同也不得改判。
+// ② instanceId 为空（入队时实例还没开：新会话首发、或在线 ack 超时把首发消息推进 outbox）→
+//    按 cwd 判。服务端 fromOutbox 路径正是这么路由的：无 instanceId 时用 payload.cwd 懒开/resume
+//    该目录的当前会话（server/app.js 的 shouldRejectOutboxLazyOpen 之后那段）。cwd 任一侧缺失就
+//    判不属于——服务端同样 fail-closed 拒绝这种项，不该在 UI 上谎称它属于眼下这个会话。
+export function outboxItemTargetsViewing(item, { viewingInstanceId = null, viewingCwd = null } = {}) {
+  if (!item || typeof item !== 'object') return false;
+  if (item.instanceId != null) return item.instanceId === viewingInstanceId;
+  return item.cwd != null && viewingCwd != null && item.cwd === viewingCwd;
+}
+
 // 离线批处理后是否应 busy：仅当「仍有目标为当前 viewing 的重入队项」或「本批有 viewing 相关 ok 且
 // 指望 result 清 busy」时保持 busy。FE-NEW-001：永久失败且无剩余 viewing 队列 → 必须 clear。
 // remainingItems = 本批结束后仍在 offlineQueue 的项；viewingInstanceId 可为 null。
-export function shouldBusyAfterOfflineBatch({ viewingInstanceId, remainingItems = [], hadViewingOk = false } = {}) {
-  const viewingPending = remainingItems.some(it => it && it.instanceId != null && it.instanceId === viewingInstanceId);
+export function shouldBusyAfterOfflineBatch({ viewingInstanceId, viewingCwd = null, remainingItems = [], hadViewingOk = false } = {}) {
+  // 首页（无 viewing 实例）恒不 busy：那里没有会话承载运行条，且 instances 广播里的 busy 看门狗
+  // 被 `newViewing && newViewing === displayedInstanceId` 包着（app.js），newViewing 为 null 时整段
+  // 跳过 ⇒ 此处一旦置上就没人清得掉，主按钮卡成「停止」直到下次 clearView。下面 hadViewingOk 那条
+  // 早有同款 `viewingInstanceId != null` 前提，这里补齐 viewingPending 那一半（按 cwd 归属后才够得着）。
+  if (viewingInstanceId == null) return false;
+  const viewingPending = remainingItems.some(it => outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd }));
   if (viewingPending) return true;
   // 本批对当前 viewing 成功发出 → 短暂 busy 等 result（与在线一致）；非 viewing 成功不抬 busy
   if (hadViewingOk && viewingInstanceId != null) return true;
@@ -187,14 +209,17 @@ export function shouldBusyAfterOfflineBatch({ viewingInstanceId, remainingItems 
 // 重发横幅文案：addBar 无条件贴当前会话消息流（app.js 的 addBar 不带归属过滤），而队列项的目标
 // 是【入队时刻】那个实例——两者不是一回事。不标注就会读成「这条排队消息在本会话发了」，
 // 叠上服务端 sysTo 的「目标会话已关闭」（同样贴当前视图）尤其像串会话。
-// 归属判据与 shouldBusyAfterOfflineBatch / app.js 的 targetsViewing 逐字一致：
-// instanceId != null 且相等才算本视图——两边同为 null（首页 + 首发未开实例）不得配成一对。
-export function planOutboxDrainNotice({ items = [], viewingInstanceId = null } = {}) {
+// 归属判据走 outboxItemTargetsViewing（与 shouldBusyAfterOfflineBatch / app.js 的 targetsViewing 同一份）。
+export function planOutboxDrainNotice({ items = [], viewingInstanceId = null, viewingCwd = null } = {}) {
   const list = Array.isArray(items) ? items : [];
   const total = list.length;
-  const foreign = list.filter(
-    it => !(it && it.instanceId != null && it.instanceId === viewingInstanceId)
-  ).length;
+  // 冷启动/刷新后 connect 即 drain（app.js 的 socket.on('connect')），而横幅在第一个 await 之前同步
+  // 贴出 ⇒ 必早于本次连接的首帧 instances 广播，此刻两个视图变量都还是初值 null。归属判不出来时
+  // 不标注：说「发往其它会话」和说「本会话」一样是编的。foreign 归 0 自然走下面不带标注的中性文案。
+  const hasViewContext = viewingInstanceId != null || viewingCwd != null;
+  const foreign = hasViewContext
+    ? list.filter(it => !outboxItemTargetsViewing(it, { viewingInstanceId, viewingCwd })).length
+    : 0;
   let text;
   if (foreign === 0) {
     text = `${t('正在重发离线发送队列中的')} ${total} ${t('条消息...')}`;

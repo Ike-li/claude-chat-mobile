@@ -11,6 +11,7 @@ import {
   presentOnlineSendTransport,
   presentOfflineResendAck,
   shouldBusyAfterOfflineBatch,
+  outboxItemTargetsViewing,
   planOutboxDrainNotice,
   planOutboxEnqueue,
   parseDurableOutbox,
@@ -422,10 +423,16 @@ test.describe('planOutboxDrainNotice（重发横幅归属标注）', () => {
     assert.match(out.text, /其它会话/);
   });
 
+  // 这两条的 viewingCwd 是 2026-08-26 补的：原 fixture 写于加 cwd 维度之前，只传 viewingInstanceId:null
+  // 就想表达「首页」，但那和「冷启动尚未收到 instances 广播」在数据上无法区分。真实首页两者不同——
+  // 回主页/点＋只清 viewingInstanceId，currentCwd 立刻切到该目录（app.js:4987-4988，且注释写明是为了
+  // 不让广播落地前的发送投错工作区）；currentCwd 全仓只有三个赋值点，唯有冷启动前才是 null。
+  // 断言实质不变：首页仍要如实标注「发往其它会话」。
   test('viewing 为 null（首页/无 tab）→ 全部算其它会话，不谎称属于当前视图', () => {
     const out = planOutboxDrainNotice({
       items: [{ instanceId: 'a' }],
       viewingInstanceId: null,
+      viewingCwd: '/w/a',
     });
     assert.equal(out.foreign, 1);
     assert.match(out.text, /其它会话/);
@@ -435,8 +442,105 @@ test.describe('planOutboxDrainNotice（重发横幅归属标注）', () => {
     const out = planOutboxDrainNotice({
       items: [{ instanceId: null }],
       viewingInstanceId: null,
+      viewingCwd: '/w/a',
     });
     assert.equal(out.foreign, 1);
+  });
+
+  // 现场（2026-08-26）：新开会话发第一句 → 服务端懒开实例 + setModel 慢于客户端 ack 窗口 →
+  // 消息以 instanceId=null 入 outbox；500ms 后 drain 时懒开已完成、viewingInstanceId 已被广播
+  // 改成新实例 ID，纯 instanceId 判据把它算成 foreign，横幅谎称「发往其它会话」——它就是本会话。
+  test('首发项（instanceId=null）cwd 与当前视图同 → 不算发往其它会话', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: null, cwd: '/w/a' }],
+      viewingInstanceId: 'inst-1',
+      viewingCwd: '/w/a',
+    });
+    assert.equal(out.foreign, 0);
+    assert.doesNotMatch(out.text, /其它会话/);
+  });
+
+  // 反向：离线期间用户切了工作区，队列项重发会落到入队时刻那个 cwd 的会话，不是眼下这个。
+  test('首发项 cwd 与当前视图不同 → 仍标注发往其它会话', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: null, cwd: '/w/a' }],
+      viewingInstanceId: 'inst-1',
+      viewingCwd: '/w/b',
+    });
+    assert.equal(out.foreign, 1);
+    assert.match(out.text, /其它会话/);
+  });
+
+  // instanceId 显式指向别的实例时，cwd 相同也不得改判——同一工作区可以同时开多个会话。
+  test('instanceId 指向其它实例 → 即便同 cwd 也算其它会话', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: 'other', cwd: '/w/a' }],
+      viewingInstanceId: 'inst-1',
+      viewingCwd: '/w/a',
+    });
+    assert.equal(out.foreign, 1);
+  });
+
+  // 冷启动/刷新后 connect 立刻 drain（app.js 的 socket.on('connect')），横幅在第一个 await 之前
+  // 同步贴出 ⇒ 必早于本次连接的首帧 instances 广播，此刻 viewingInstanceId / currentCwd 都还是初值 null。
+  // 归属根本判不出来，既不能说「本会话」也不能说「发往其它会话」——回落成不标注归属的中性文案。
+  test('完全无视图上下文（冷启动 connect 即 drain）→ 中性文案，不谎称发往其它会话', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: null, cwd: '/w/a' }, { instanceId: 'x', cwd: '/w/b' }],
+      viewingInstanceId: null,
+      viewingCwd: null,
+    });
+    assert.equal(out.total, 2);
+    assert.equal(out.foreign, 0);
+    assert.doesNotMatch(out.text, /其它会话/);
+  });
+
+  // 只要有一侧视图上下文在，就仍按真实归属标注（防上面那条把正常判据也一并关掉）。
+  test('有 viewingInstanceId 但无 cwd → 仍照常标注归属', () => {
+    const out = planOutboxDrainNotice({
+      items: [{ instanceId: 'other' }],
+      viewingInstanceId: 'v',
+      viewingCwd: null,
+    });
+    assert.equal(out.foreign, 1);
+    assert.match(out.text, /其它会话/);
+  });
+});
+
+// 归属判据抽成单一函数：此前 planOutboxDrainNotice / shouldBusyAfterOfflineBatch / app.js 的
+// targetsViewing 各写一份「逐字一致」的表达式，任一处改动都会静默分叉（2026-08-05 outbox 三修的教训）。
+test.describe('outboxItemTargetsViewing（三处共用的归属判据）', () => {
+  test('instanceId 相等 → 属于本视图', () => {
+    assert.equal(outboxItemTargetsViewing({ instanceId: 'v' }, { viewingInstanceId: 'v' }), true);
+  });
+
+  test('instanceId 不等 → 不属于', () => {
+    assert.equal(outboxItemTargetsViewing({ instanceId: 'x' }, { viewingInstanceId: 'v' }), false);
+  });
+
+  test('两边 instanceId 同为 null 且无 cwd → 不得配成一对', () => {
+    assert.equal(outboxItemTargetsViewing({ instanceId: null }, { viewingInstanceId: null }), false);
+  });
+
+  test('instanceId 为 null 时按 cwd 归属（首发未开实例路径）', () => {
+    assert.equal(
+      outboxItemTargetsViewing({ instanceId: null, cwd: '/w/a' }, { viewingInstanceId: 'i', viewingCwd: '/w/a' }),
+      true,
+    );
+    assert.equal(
+      outboxItemTargetsViewing({ instanceId: null, cwd: '/w/a' }, { viewingInstanceId: 'i', viewingCwd: '/w/b' }),
+      false,
+    );
+  });
+
+  test('cwd 任一侧缺失 → 目标无从确定，不算本视图（服务端同样 fail-closed 拒懒开）', () => {
+    assert.equal(outboxItemTargetsViewing({ instanceId: null }, { viewingCwd: '/w/a' }), false);
+    assert.equal(outboxItemTargetsViewing({ instanceId: null, cwd: '/w/a' }, {}), false);
+  });
+
+  test('item 为空 → false，不抛', () => {
+    assert.equal(outboxItemTargetsViewing(null, { viewingInstanceId: 'v' }), false);
+    assert.equal(outboxItemTargetsViewing(undefined, {}), false);
   });
 });
 
@@ -462,6 +566,38 @@ test('shouldBusyAfterOfflineBatch: 本批 viewing ok → busy 等 result', () =>
     remainingItems: [],
     hadViewingOk: true,
   }), true);
+});
+
+// 首发项（instanceId=null）走 cwd 归属后，剩余队列里的它也必须算「本视图仍有在途」——
+// 否则批后 setBusy(false) 会把刚开跑那轮的运行条抹掉（要等下一次 instances 广播才补回来）。
+test('shouldBusyAfterOfflineBatch: 剩余首发项 cwd 同当前视图 → busy', () => {
+  assert.equal(shouldBusyAfterOfflineBatch({
+    viewingInstanceId: 'v',
+    viewingCwd: '/w/a',
+    remainingItems: [{ instanceId: null, cwd: '/w/a' }],
+    hadViewingOk: false,
+  }), true);
+});
+
+test('shouldBusyAfterOfflineBatch: 剩余首发项 cwd 是别的工作区 → 不 busy', () => {
+  assert.equal(shouldBusyAfterOfflineBatch({
+    viewingInstanceId: 'v',
+    viewingCwd: '/w/a',
+    remainingItems: [{ instanceId: null, cwd: '/w/b' }],
+    hadViewingOk: false,
+  }), false);
+});
+
+// 空首页（回主页/点＋后 viewingInstanceId=null，但 currentCwd 仍是该工作区）：没有会话承载运行条，
+// 且 instances 广播里的 busy 看门狗被 `newViewing && newViewing === displayedInstanceId` 挡在门外
+// （app.js，newViewing 为 null 时整段跳过）⇒ 这里一旦置上 busy 就没人清得掉，主按钮永久卡成「停止」。
+test('shouldBusyAfterOfflineBatch: 首页无 viewing 实例 → 即便剩余项 cwd 相同也不得 busy', () => {
+  assert.equal(shouldBusyAfterOfflineBatch({
+    viewingInstanceId: null,
+    viewingCwd: '/w/a',
+    remainingItems: [{ instanceId: null, cwd: '/w/a' }],
+    hadViewingOk: false,
+  }), false);
 });
 
 test('safeJsonPreview: undefined/null/circular 不抛', () => {

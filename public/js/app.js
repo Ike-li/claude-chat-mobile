@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -216,6 +216,18 @@ import { createSessionDeleteController } from './app/session-delete.js';
   // 那道闸认服务端权威状态，这道闸认本端在途请求，覆盖 ack 尚未回来的那几十毫秒。
   // SEND_ACK_FALLBACK_MS 只是兜底：ack 真丢了也不永久卡死发送按钮。
   const SEND_ACK_FALLBACK_MS = 5000;
+  // 传输层判据（socket.timeout）：超时即认定「这条没送达」→ 进 outbox 自动重发。必须与 UI 兜底分开——
+  // 服务端的 ack 排在 await a.send() 之后（server/app.js，那个顺序是修「假成功丢消息」时刻意建立的）。
+  // 主导慢因是 send() 内那次 setModel：它是打给一个【刚 spawn、还没起来的】CLI 的 control_request，
+  // 上限 interruptTimeoutMs=10s（agent.js）。新会话首发必然触发——FRESH 实例的 attemptedModel 初值是
+  // undefined，而前端在有 modelsList 缓存时总会送出具体 model 串，差分恒不相等。resume 那段反而是
+  // 有界的（openInstance 不 await spawn，只等 1200ms 封顶的 ensureCliDefaults race），别把慢因记到它头上。
+  // 5s 判超时 ⇒ 首发、以及被终端驱动过的老会话（externalDirty 置换实例后 attemptedModel 归零，又要
+  // 重发一次 setModel）几乎必然被误判成「未送达」，消息进 outbox 后靠服务端 clientMessageId 幂等去重
+  // 救回来——消息不重复也不丢，但用户每次都白看一条「正在重发…」横幅（2026-08-26 现场）。
+  // 取 30s：覆盖 10s setModel + 1.2s resume 预算 + 余量，仍远小于 socket.io 被动判死窗（
+  // engine.io 默认 pingInterval 25s + pingTimeout 20s = 45s，本仓未覆盖该默认）。
+  const SEND_ACK_TRANSPORT_MS = 30000;
   // 按会话隔离在途态（曾是裸全局布尔——同 _pendingSendBusySessionId 修过的同类问题，这个姐妹变量当时漏改）：
   // A 会话 ack 等待窗口内不该阻塞切到 B 会话后的发送按钮。存的是"哪些会话当前有条消息在等 ack"。
   const _sendInFlightSessionIds = new Set();
@@ -868,7 +880,13 @@ import { createSessionDeleteController } from './app/session-delete.js';
   let initialLoad = true;
   let connectErrorCount = 0;  // 公网 socket 连续失败计数，攒够再探测 Access 是否过期
   
-  const OFFLINE_RESEND_ACK_MS = 8000; // 慢移动网络 RTT 留余地（同 cf-access 2s→8s 超时教训，见项目 memory）
+  // 与在线路径同源：重发打的是同一个 user:message handler，那段 setModel 慢路径一样要走一遍。
+  // 8s 曾只按「慢移动网络 RTT」定（同 cf-access 2s→8s 教训），漏算了服务端侧的处理耗时上界，
+  // 于是重发本身又超时 → requeue → 下次 connect 再来一遍，白刷一条横幅。
+  // 串行 drain 的代价分两种情况，别只记住乐观的那半：连着时队首开跑后其余各条会撞 pendingTurns>0
+  // 被瞬时负 ack 落 blocked 终态，总耗时 ≈ 一条的时间；**断线时则完全不同**——那条路由上面循环里的
+  // socket.connected 前置检查掐掉，不再逐条烧满超时（原因见那里的注释）。
+  const OFFLINE_RESEND_ACK_MS = 30000;
   // FE-NEW-001/006：串行重发 + 按 viewing 作用域决定 busy（永久失败/他会话成功不再 sticky busy）。
   // 在线路径有 _sendInFlightSessionIds；离线旧实现 for 循环并行 emit 易撞在途轮闸，且 setBusy(true) 无配对 clear。
   let _offlineDrainInFlight = false;
@@ -921,18 +939,29 @@ import { createSessionDeleteController } from './app/session-delete.js';
     persistOutbox();
     // 横幅贴的是当前会话消息流，但队列项的目标是入队时刻那个实例——不标注归属会读成
     // 「这条排队消息在本会话发了」（现场：机主在 Official 看到 third-party 的重发提示）。
-    const notice = planOutboxDrainNotice({ items, viewingInstanceId });
+    const notice = planOutboxDrainNotice({ items, viewingInstanceId, viewingCwd: currentCwd });
     addBar(notice.text, 'text-info');
     logClientEvent('send', `[WEB_SEND] 正在重发离线发送队列中的 ${items.length} 条消息（其中 ${notice.foreign} 条发往其它会话）`);
     let hadViewingOk = false;
     try {
       for (const item of items) {
         const indicator = item.bubbleEl?.querySelector('.pending-indicator');
+        // 中途断线必须停手：socket.io 在未连接时把 emit 压进 sendBuffer，而断线回调 _clearAcks
+        // 【显式跳过 buffered 包】（socket.io-client/build/cjs/socket.js 的 isBuffered 判断）⇒ 带
+        // timeout 的 ack 不会被断线立刻拒掉，每条都要烧满 OFFLINE_RESEND_ACK_MS 才 settle。串行 drain
+        // 下就是 N × 30s 的停摆，且这期间 _offlineDrainInFlight 一直占位，重连时 connect 里的
+        // processOfflineQueue() 直接早退空转，条目要拖到【再下一次】connect 才动。断了就整批留在队列里
+        // 等 reconnect——那本来就是 outbox 的语义，不必替它在离线时空转。
+        if (!socket.connected) {
+          enqueueOutbox(item);
+          if (indicator) indicator.textContent = t('🕐 正在等待连接...');
+          continue;
+        }
         if (indicator) indicator.textContent = t('🕐 正在发送...');
         logClientEvent('send', `[WEB_SEND] 重发离线消息: "${String(item.text || '').slice(0, 100)}" (${String(item.text || '').length} 字符)`);
         // REL-01：用入队时刻的 instanceId/cwd，不取当下 viewing。
         const decision = await deliverOutboxItem(item);
-        const targetsViewing = item.instanceId != null && item.instanceId === viewingInstanceId;
+        const targetsViewing = outboxItemTargetsViewing(item, { viewingInstanceId, viewingCwd: currentCwd });
         if (decision.outcome === 'ok') {
           if (indicator) indicator.remove();
           if (targetsViewing) hadViewingOk = true;
@@ -956,6 +985,7 @@ import { createSessionDeleteController } from './app/session-delete.js';
       // 批后 busy：仅 viewing 相关 in-flight/成功才抬；永久失败且无剩余 viewing 队列 → clear
       setBusy(shouldBusyAfterOfflineBatch({
         viewingInstanceId,
+        viewingCwd: currentCwd,
         remainingItems: offlineQueue,
         hadViewingOk,
       }));
@@ -2952,8 +2982,9 @@ import { createSessionDeleteController } from './app/session-delete.js';
       cwd: reqCwd,
     };
     const sendInFlightTimer = setTimeout(clearSendInFlight, SEND_ACK_FALLBACK_MS); // 兜底：ack 真丢了也不永久卡死
-    // 在线也走 timeout：half-open / 中途断连时 err 回调 → 入 outbox，不再静默丢字
-    socket.timeout(SEND_ACK_FALLBACK_MS).emit(
+    // 在线也走 timeout：half-open / 中途断连时 err 回调 → 入 outbox，不再静默丢字。
+    // 窗口用 SEND_ACK_TRANSPORT_MS 而非上面那个 UI 兜底：见其声明处的注释（服务端慢路径 ≫ 5s）。
+    socket.timeout(SEND_ACK_TRANSPORT_MS).emit(
       'user:message',
       { text, model, attachments: outgoingAttachments, instanceId: reqViewingInstanceId, cwd: reqCwd, clientMessageId },
       (err, ack) => {
