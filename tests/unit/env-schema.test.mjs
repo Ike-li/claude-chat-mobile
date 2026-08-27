@@ -15,6 +15,10 @@ import {
 } from '../../src/ops/env-schema.js';
 // 跨模块引一次 doctor 的 D18：本文件末尾那条「判据同源」断言要拿它当对照物。
 import { envOverrideDiagnostic } from '../../src/ops/doctor-checks.js';
+// 同理，末尾 CCM_AGENT_PROGRESS_SUMMARIES 那组要把「配置侧投影」与「消费侧判据」串起来跑，
+// 单独断言任何一边的字面量都挡不住两边一起改错。
+import { projectToEnv } from '../../src/ops/config-file.js';
+import { buildAgentQueryOptions } from '../../src/agent/agent.js';
 
 const deps = (over = {}) => ({
   fileExists: () => true,
@@ -492,4 +496,47 @@ test('buildEnvView: list 项标成只读 —— 前端没有数组编辑器，�
   const workdirs = runtime.items.find(i => i.key === 'WORKDIRS');
   assert.equal(workdirs.kind, 'list');
   assert.equal(workdirs.readonly, true);
+});
+
+// ── CCM_AGENT_PROGRESS_SUMMARIES：唯一一个「会计费」的开关 ──────────────────
+//
+// 它此前只存在于 agent.js 的一行 `env.X !== '0'` 里：不在 schema ⇒ 配置面板看不见、
+// scripts/config.js 设不了、doctor 不体检。一个花钱的东西不该只有读源码才能发现。
+//
+// 下面这组断言的重点不是「schema 里有这个 key」，而是 **schema 声明的字面量 ≡ 消费点的判据**。
+// 这正是 2026-08-13 那次事故的形态（.env 的两个消费者轮流判、彼此分叉），所以这里把
+// 配置侧（projectToEnv）与消费侧（buildAgentQueryOptions）串起来跑真实往返，
+// 而不是各自断言一个硬编码字面量 —— 后者两边一起改错时会双双恒绿。
+test.describe('CCM_AGENT_PROGRESS_SUMMARIES：配置侧与消费侧必须同判', () => {
+  const roundTrip = (configValue) => {
+    const literal = projectToEnv('CCM_AGENT_PROGRESS_SUMMARIES', configValue);
+    // projectToEnv 回 null = 空串折叠 = 不写进 env（那一侧即默认态）
+    const env = literal === null ? {} : { CCM_AGENT_PROGRESS_SUMMARIES: literal };
+    return buildAgentQueryOptions({ cwd: '/tmp', sdkPermissionMode: () => 'default' }, env).agentProgressSummaries;
+  };
+
+  test('在 schema 里，且归入 toggles 组（否则面板渲染不出来）', () => {
+    const def = ENV_SCHEMA.CCM_AGENT_PROGRESS_SUMMARIES;
+    assert.ok(def, 'CCM_AGENT_PROGRESS_SUMMARIES 不在 ENV_SCHEMA 里');
+    assert.equal(def.kind, 'toggle');
+    assert.equal(def.group, 'toggles');
+  });
+
+  test('默认开：配置里没有这一项 → 不写 env → SDK 收到 true', () => {
+    assert.equal(buildAgentQueryOptions({ cwd: '/tmp', sdkPermissionMode: () => 'default' }, {}).agentProgressSummaries, true);
+  });
+
+  test('面板关掉 → 投影出的字面量真的能让 SDK 收到 false', () => {
+    assert.equal(roundTrip(false), false);
+  });
+
+  test('面板打开 → SDK 收到 true', () => {
+    assert.equal(roundTrip(true), true);
+  });
+
+  test('空串那侧就是默认那侧（config-file 的 toggleDefaultsOn 不变量）', () => {
+    const { on, off } = ENV_SCHEMA.CCM_AGENT_PROGRESS_SUMMARIES.values;
+    assert.equal(on, '', '默认开的开关，on 必须是空串，否则「开」会被写进配置文件');
+    assert.notEqual(off, '', 'off 必须是个写得进去的非空字面量');
+  });
 });

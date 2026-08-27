@@ -26,6 +26,11 @@ import { isSerializableEnvValue, maskSecret, shellOverriddenKeys } from './env-f
 const TOGGLE_ONE = { on: '1', off: '' };    // DEV_MODE / LOG_* / ASSET_HOT_RELOAD：严格 === '1'
 const TOGGLE_OFF = { on: '', off: 'off' };  // WEB_STATUSLINE / FILE_EDIT / CLI_*：严格 === 'off'
 const TOGGLE_ON = { on: 'on', off: '' };    // LOG_TERMINAL：严格 === 'on'
+// CCM_AGENT_PROGRESS_SUMMARIES：默认开、关值是 '0'，与上面三套都不同。
+// **不要为了「和兄弟项一致」改成 TOGGLE_OFF**：字面量由消费点 agent.js 的 `!== '0'` 决定，
+// schema 这边单方面改成 'off' 会让面板写出一个消费点根本不认的值 —— 用户点了关、日志无异常、
+// 子 agent 照样每 30s fork 一次（还是计费的那条路）。字面量必须跟着消费者走，不是跟着排版走。
+const TOGGLE_ZERO = { on: '', off: '0' };   // CCM_AGENT_PROGRESS_SUMMARIES：严格 === '0'
 
 const t = (zh, en) => ({ zh, en });
 
@@ -178,6 +183,16 @@ export const ENV_SCHEMA = {
   CLI_STATUSLINE_BRIDGE: {
     group: 'toggles', kind: 'toggle', values: TOGGLE_OFF,
     label: t('CLI statusline 桥', 'CLI statusline bridge'),
+  },
+  // 本表里唯一一个**直接产生模型计费**的开关：开着时每个运行中的子 agent 每 ~30s 会被 fork 一次，
+  // 由模型写一句进度短语（SDK 侧默认关，CCM 为了后台任务横幅有文案而默认开）。
+  // 计费量很小（复用父会话的 prompt cache），但「要花钱」这件事本身必须在面板上看得见 ——
+  // 此前它只存在于 agent.js 的一行判据里，面板、config CLI、doctor 三处都发现不了。
+  CCM_AGENT_PROGRESS_SUMMARIES: {
+    group: 'toggles', kind: 'toggle', values: TOGGLE_ZERO,
+    label: t('子 agent 进度摘要', 'Subagent progress summaries'),
+    help: t('后台任务静默期由模型每 ~30s 写一句进度，会产生少量计费。关掉后只靠工具名变化推断进度。',
+      'Model writes a ~30s progress line for idle subagents (small billed cost). Off falls back to tool-name changes.'),
   },
 
   // ── 日志 ────────────────────────────────────────────────────────────
