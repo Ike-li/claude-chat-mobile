@@ -121,6 +121,44 @@ export function resolveDrawerStatus({ liveState, terminalState } = {}) {
   return null;
 }
 
+const DRAWER_STATUS_LABELS = {
+  permission: '需要你',
+  error: '出错',
+  busy: '运行中',
+};
+
+// 会话行 chip：kind 仍是需要你/出错/运行中，busy 的文案按「此刻谁在干活」区分。
+// 抽屉广播没有 origin/resume 字段，驾驶组合只能用 liveState × terminalState 表达：
+//   纯 Web 回合 / Web 续接且 CLI 已 idle     → 运行中
+//   纯 CLI 回合 / CLI 跑着 Web 只读或空闲 tab → 终端运行中
+//   两边同时 busy（续接重叠、CLI --resume 抢走尚未 settle）→ 终端运行中
+//     （registry busy 是「终端正在写」的权威信号，必须写在标题行，不能再藏进副行）
+// 目录角标/顶部点仍用 resolveDrawerStatus 的三态，不把来源抬到工作区层。
+export function resolveDrawerStatusChip({ liveState, terminalState } = {}) {
+  const status = resolveDrawerStatus({ liveState, terminalState });
+  if (!status) return null;
+  const label = (status === 'busy' && terminalState === 'busy')
+    ? '终端运行中'
+    : (DRAWER_STATUS_LABELS[status] || '运行中');
+  return { status, label };
+}
+
+// 会话行副文本：时间 / 已打开 / id。CLI 空闲占用提到最前，避免 truncate 吃掉来源；
+// CLI busy 不再写「终端」——主 chip 已是「终端运行中」。
+export function formatSessionRowSubtitle({
+  whenText = '',
+  liveOpen = false,
+  terminalState = null,
+  shortId = null,
+} = {}) {
+  const parts = [];
+  if (terminalState === 'alive') parts.push(t('终端已打开'));
+  if (whenText) parts.push(whenText);
+  if (liveOpen) parts.push(t('已打开'));
+  if (shortId) parts.push(String(shortId));
+  return parts.join(' · ');
+}
+
 // per-cwd 状态聚合：该 cwd 各实例状态取最高优先级（permission>error>busy>aborted>done>idle；失败比在跑更需关注）。
 // aborted（P1-4 已中止独立状态）介于 done 与 busy 之间：比顺利完成更值得回头看一眼（为什么被中止），但
 // 已是终态，不该盖过仍在运行的其它会话。

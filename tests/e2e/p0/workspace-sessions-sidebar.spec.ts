@@ -687,9 +687,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
-  // P0-11y：CLI 与 Web 共用一套可读状态。terminal busy 即使与 idle live 实例并存也不能被遮蔽；
-  // terminal alive 只是来源/占用信息，放副文本而不占主状态位。
-  test('P0-11y CLI busy 统一显示运行中，alive 仅显示终端已打开', async ({ page }) => {
+  // P0-11y：terminal busy 即使与 idle live 实例并存也不能被遮蔽；会话行 chip 写「终端运行中」
+  // 把来源放在标题行。terminal alive 不占主状态位，副文本「终端已打开」提到时间前面。
+  test('P0-11y CLI busy 显示终端运行中，alive 仅显示终端已打开', async ({ page }) => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:terminal-badge');
@@ -700,18 +700,18 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 同一会话已有 idle Web live 实例时，terminal busy 仍应显示，不能被 liveInst 分支遮蔽。
     const overlapRow = sessionRowByInstance(page, 'inst_1');
-    await expectSessionStatusChip(page, 'inst_1', '运行中');
-    await expect(overlapRow).toContainText('终端');
+    await expectSessionStatusChip(page, 'inst_1', '终端运行中');
+    await expect(overlapRow).toContainText('终端运行中');
 
-    // 纯终端 busy：使用同一个“运行中”文字 chip，来源放在副文本。
+    // 纯终端 busy：chip 本身写明终端，不再靠副行「· 终端」。
     const busyRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Planning Session' });
-    await expect(busyRow.locator('[data-session-status]')).toHaveText('运行中');
-    await expect(busyRow).toContainText('终端');
+    await expect(busyRow.locator('[data-session-status]')).toHaveText('终端运行中');
+    await expect(busyRow).toContainText('终端运行中');
 
     // alive：终端开着但空闲，不显示主状态 chip，只显示明确副文本。
     const aliveRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Gap Session' });
     await expect(aliveRow.locator('[data-session-status]')).toHaveCount(0);
-    await expect(aliveRow).toContainText('终端会话已打开');
+    await expect(aliveRow).toContainText('终端已打开');
 
     // 没有终端状态的普通历史会话不凭空长出状态。
     const plainRow = page.locator('[data-testid="session-row"]', { hasText: 'Deleted Remote Session' });
@@ -734,8 +734,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectSessionStatusChip(page, 'inst_1', '需要你');
 
     // 第二次列表刷新让另一行出现 terminal busy 并触发整段 rows 重画；live 行仍必须读最新 instances 状态。
-    await expect(row.locator('[data-session-status]')).toHaveText('运行中', { timeout: 18_000 });
-    await expect(row).toContainText('终端');
+    await expect(row.locator('[data-session-status]')).toHaveText('终端运行中', { timeout: 18_000 });
+    await expect(row).toContainText('终端运行中');
     await expectSessionStatusChip(page, 'inst_1', '需要你');
     await expect(mainDir.locator('.dir-badge')).toHaveText('需要你');
 

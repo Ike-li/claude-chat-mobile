@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../public/js/logic.js';
+import { modelEntryFor, modelLabelFor, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, resolveSendModel, defaultResolvedModel, effortLevelsFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, shouldClearInputOnBindView, planSessionDraftSwap, isAnsweredQuestionId, shouldDropAgentEvent, presentTurnResult, applyGatewaySuffix } from '../../public/js/logic.js';
 
 test('aggregateStates: 优先级 permission>error>busy>done>idle', () => {
   assert.equal(aggregateStates([{ cwd: '/a', state: 'busy' }, { cwd: '/a', state: 'permission' }], ['/a'])['/a'], 'permission');
@@ -45,6 +45,58 @@ test('resolveDrawerStatus: terminal busy 不被 idle/done live 实例遮蔽；�
   assert.equal(resolveDrawerStatus({ liveState: 'done' }), null);
   assert.equal(resolveDrawerStatus({ liveState: 'aborted' }), null);
   assert.equal(resolveDrawerStatus(), null);
+});
+
+// 会话行 chip 文案：三态 kind 不变，busy 按「此刻谁在干活」区分 Web / CLI。
+// 抽屉没有独立的 origin/resume 字段，驾驶组合只能用 liveState × terminalState 表达。
+test('resolveDrawerStatusChip: 纯 Web 回合 → 运行中；CLI 空闲挂着不改 Web 文案', () => {
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'busy' }), { status: 'busy', label: '运行中' });
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'busy', terminalState: 'alive' }), { status: 'busy', label: '运行中' });
+});
+
+test('resolveDrawerStatusChip: CLI 正在跑（纯终端 / Web 只读镜像 / Web 空闲 tab）→ 终端运行中', () => {
+  assert.deepEqual(resolveDrawerStatusChip({ terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'idle', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'done', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'aborted', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
+});
+
+test('resolveDrawerStatusChip: Web 与 CLI 同时 busy（续接重叠 / 双写窗口）仍标终端运行中', () => {
+  // Web 续接了但 CLI 回合未结束，或 Web 会话被 CLI --resume 抢走且 Web 实例还没 settle。
+  // 终端 registry 是「别人正在写」的权威信号，chip 必须把来源写在标题行上。
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'busy', terminalState: 'busy' }), { status: 'busy', label: '终端运行中' });
+});
+
+test('resolveDrawerStatusChip: 需要你/出错仍优先；空闲与 CLI 挂着无主 chip', () => {
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'permission', terminalState: 'busy' }), { status: 'permission', label: '需要你' });
+  assert.deepEqual(resolveDrawerStatusChip({ liveState: 'error', terminalState: 'busy' }), { status: 'error', label: '出错' });
+  assert.equal(resolveDrawerStatusChip({ liveState: 'idle', terminalState: 'alive' }), null);
+  assert.equal(resolveDrawerStatusChip({ terminalState: 'alive' }), null);
+  assert.equal(resolveDrawerStatusChip({ liveState: 'idle' }), null);
+  assert.equal(resolveDrawerStatusChip(), null);
+});
+
+test('formatSessionRowSubtitle: CLI 空闲来源提到时间前面；busy 不再把「终端」塞进副行', () => {
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '8/27', liveOpen: true, shortId: 'abcdef12' }),
+    '8/27 · 已打开 · abcdef12',
+  );
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '8/27', terminalState: 'busy', shortId: 'abcdef12' }),
+    '8/27 · abcdef12',
+  );
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '8/27', liveOpen: true, terminalState: 'busy', shortId: 'abcdef12' }),
+    '8/27 · 已打开 · abcdef12',
+  );
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '8/27', terminalState: 'alive', shortId: 'abcdef12' }),
+    '终端已打开 · 8/27 · abcdef12',
+  );
+  assert.equal(
+    formatSessionRowSubtitle({ whenText: '8/27', liveOpen: true, terminalState: 'alive', shortId: 'abcdef12' }),
+    '终端已打开 · 8/27 · 已打开 · abcdef12',
+  );
 });
 
 test('summarizeOtherWorkspaces: 空/未定义入参 → null', () => {
