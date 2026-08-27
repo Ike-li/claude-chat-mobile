@@ -28,6 +28,31 @@ test('notification controller only raises foreground notifications when explicit
   assert.equal(notifications.notify('done', 'body', { force: true }), true);
   assert.equal(raised.length, 1);
   assert.equal(raised[0].options.tag, 'ccm-push');
+  assert.equal(notifications.notify('done', 'body', { force: true, tag: 'ccm-sess-1' }), true);
+  assert.equal(raised.at(-1).options.tag, 'ccm-sess-1');
+});
+
+test('notification controller falls back to identity when sensitive body is stripped', () => {
+  const raised = [];
+  class NotificationMock {
+    static permission = 'granted';
+    constructor(title, options) { raised.push({ title, options }); }
+  }
+  const context = createAppContext({
+    dependencies: {
+      document: { hidden: true },
+      window: { Notification: NotificationMock },
+      navigator: {},
+      Notification: NotificationMock,
+    },
+  });
+  const notifications = createNotificationController(context, { autoBind: false });
+  notifications.notify('⚠️ 等待审批', 'Bash：{"command":"rm -rf /"}', {
+    sensitive: true,
+    identity: 'claude-chat-mobile · 修登录',
+  });
+  assert.equal(raised.at(-1).options.body, 'claude-chat-mobile · 修登录');
+  assert.ok(!String(raised.at(-1).options.body).includes('rm -rf'), '预览关闭时命令正文不得上锁屏');
 });
 
 // 隐私：页面自己 new Notification 这条旁路此前完全不读「推送内容预览」开关（只判 document.hidden 与

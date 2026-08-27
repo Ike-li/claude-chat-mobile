@@ -5,7 +5,7 @@ import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { listSessions as sdkListSessions } from '@anthropic-ai/claude-agent-sdk';
+import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT } from './workdirs.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
 // 且只有 live 侧带循环引用护栏——收敛后历史侧一并获得）。
@@ -19,6 +19,8 @@ import { encodeProjectDir } from '../shared/project-dir.js';
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
 let __sdkListSessionsForTest;
 export function __setSdkListSessionsForTest(fn) { __sdkListSessionsForTest = fn; }
+let __sdkGetSessionInfoForTest;
+export function __setSdkGetSessionInfoForTest(fn) { __sdkGetSessionInfoForTest = fn; }
 
 // CLI transcript 根目录，与 CLI /resume 同源。硬编码 ~/.claude/projects：这是 CLI 的固定约定，且
 // L2 删除走 SDK 官方 deleteSession（它同样只认此真实根、无自定义根的口子），故这里不设环境变量覆盖——
@@ -671,6 +673,59 @@ export function resolveSessionListTitle({ summary, metaTitle } = {}) {
   const m = typeof metaTitle === 'string' ? metaTitle.trim() : '';
   if (m) return m.length > 60 ? m.slice(0, 60) : m;
   return '(无标题)';
+}
+
+// 单会话取抽屉可见标题，给通知横幅用。与 listSessionsPage 浏览行同源：
+//   生产（baseDir === CLAUDE_DIR）→ SDK getSessionInfo.summary（= listSessions 映射到 title 的那串，
+//     含 /rename 自定义标题 / 自动摘要 / 首条 prompt，见 SDKSessionInfo.summary）；
+//   SDK 无 summary（sidechain / 提不出摘要，getSessionInfo 返回 undefined）或隔离测试 baseDir
+//     → 该 jsonl 的 readHeadMeta（ai-title > firstUser > firstCmd）。
+// 占位 '(无标题)' 返回空串，让通知层跳过会话段、只留项目名。非法 id 不拼路径。
+export async function peekSessionListTitle(cwd, sessionId, { baseDir = CLAUDE_DIR } = {}) {
+  if (!cwd || !isSafeSessionId(sessionId)) return '';
+  const usable = (raw) => {
+    const s = typeof raw === 'string' ? raw.trim() : '';
+    return s && s !== '(无标题)' ? s : '';
+  };
+  if (useSdk(baseDir)) {
+    try {
+      const fn = __sdkGetSessionInfoForTest || sdkGetSessionInfo;
+      const info = await fn(sessionId, { dir: cwd });
+      const fromSdk = usable(info?.summary);
+      if (fromSdk) return fromSdk;
+    } catch { /* SDK 失败不挡通知，回落读盘 */ }
+  }
+  try {
+    const file = join(baseDir, getProjectDir(cwd), `${sessionId}.jsonl`);
+    const st = await stat(file);
+    const meta = await readHeadMeta(file, st.size);
+    return usable(meta.title);
+  } catch {
+    return '';
+  }
+}
+
+// 通知热路径用：peek 不得把已节流的推送挂死。超时/抛错返回空串，调用方回落 firstMessage 仍发出。
+export const PEEK_SESSION_TITLE_TIMEOUT_MS = 1500;
+
+export async function peekSessionListTitleTimed(cwd, sessionId, {
+  baseDir,
+  timeoutMs = PEEK_SESSION_TITLE_TIMEOUT_MS,
+  peek = peekSessionListTitle,
+} = {}) {
+  const run = () => (baseDir !== undefined ? peek(cwd, sessionId, { baseDir }) : peek(cwd, sessionId));
+  let timer;
+  try {
+    const timed = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('peek-timeout')), timeoutMs);
+    });
+    const title = await Promise.race([Promise.resolve().then(run), timed]);
+    return typeof title === 'string' ? title : '';
+  } catch {
+    return '';
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 // 快路径判定：生产 baseDir === CLAUDE_DIR 时走 SDK 官方 listSessions（summary = CLI /resume 同款标题，

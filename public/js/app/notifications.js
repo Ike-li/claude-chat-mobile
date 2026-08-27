@@ -32,10 +32,13 @@ export function createNotificationController(context, {
   // 这条页面内 new Notification 的旁路此前完全不看「推送内容预览」开关——而 Web Push 侧
   // （notify-channels 按 sub.prefs.preview 挑 body）与 ntfy 侧（恒最小化）都做对了。结果是：用户在设置里
   // 把预览关着、UI 也显示关，PWA 切后台（socket 未断）时命令正文照样弹上锁屏。内容没离开设备，但开关的
-  // 用户可见语义失效。开关关闭时只保留标题（「⚠️ 等待审批」本身不含正文，仍能起到唤醒作用）。
-  function notify(title, body, { force = false, sensitive = false, tag = '' } = {}) {
+  // 用户可见语义失效。开关关闭时剥掉正文；若调用方给了 identity（项目·会话），用它填 body，
+  // 避免 Android heads-up 只剩 PWA 短名「CCM」。标题本身也应带同一串身份（见 app.js notify 包装）。
+  function notify(title, body, { force = false, sensitive = false, tag = '', identity = '' } = {}) {
     if ((!force && !documentRef?.hidden) || !NotificationApi || NotificationApi.permission !== 'granted') return false;
-    const safeBody = sensitive && !readPushPreviewPref(storageGetItem) ? '' : body;
+    let safeBody = sensitive && !readPushPreviewPref(storageGetItem) ? '' : body;
+    // 预览关闭把命令/问题正文剥掉后，横幅不能只剩 PWA 短名「CCM」——至少留下项目·会话身份。
+    if (!safeBody && identity) safeBody = identity;
     try {
       new NotificationApi(title, { body: safeBody, icon: '/icons/icon-192.png', tag: tag || 'ccm-push' });
       return true;

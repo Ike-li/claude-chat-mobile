@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { getProjectDir, listSessions, listSessionsPage, sessionFileMtime } from '../../src/sessions/history.js';
+import { getProjectDir, listSessions, listSessionsPage, sessionFileMtime, peekSessionListTitle, peekSessionListTitleTimed } from '../../src/sessions/history.js';
 
 const BASE = join(tmpdir(), `ccm-hist-${process.pid}`);
 mkdirSync(BASE, { recursive: true });
@@ -67,6 +67,56 @@ test('listSessions: ai-title 优先于首条 user 文本', async () => {
   ]);
   const result = await listSessions(cwd, { baseDir: BASE });
   assert.equal(result[0].title, 'AI 生成标题');
+});
+
+// 通知横幅对齐抽屉：单会话取标题，不扫整个列表。扫盘路径（测试隔离 baseDir）= readHeadMeta，
+// 与 listSessions 同文件的 title 一致（ai-title > firstUser）。
+test('peekSessionListTitle: 与 listSessions 同一条会话的 title 一致（ai-title 优先）', async () => {
+  const cwd = '/test/peek-drawer-title';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sess-peek', [
+    { type: 'user', message: { role: 'user', content: '普通问题这是第一句' } },
+    { type: 'ai-title', aiTitle: '抽屉可见的 AI 标题' },
+  ]);
+  const listed = await listSessions(cwd, { baseDir: BASE });
+  const peeked = await peekSessionListTitle(cwd, 'sess-peek', { baseDir: BASE });
+  assert.equal(listed[0].title, '抽屉可见的 AI 标题');
+  assert.equal(peeked, listed[0].title);
+});
+
+test('peekSessionListTitle: 无 ai-title 时回落首条 user，与抽屉一致', async () => {
+  const cwd = '/test/peek-firstuser';
+  const dir = join(BASE, getProjectDir(cwd));
+  writeJSONL(dir, 'sess-fu', [
+    { type: 'user', message: { role: 'user', content: '帮我修登录页' } },
+  ]);
+  assert.equal(await peekSessionListTitle(cwd, 'sess-fu', { baseDir: BASE }), '帮我修登录页');
+});
+
+test('peekSessionListTitle: 非法 id / 无文件 → 空串，不抛', async () => {
+  assert.equal(await peekSessionListTitle('/x', '../etc/passwd', { baseDir: BASE }), '');
+  assert.equal(await peekSessionListTitle('/x', 'no-such-sess', { baseDir: BASE }), '');
+  assert.equal(await peekSessionListTitle('', 'abc', { baseDir: BASE }), '');
+});
+
+test('peekSessionListTitleTimed: peek 永不 settle 时超时返回空串，不挂起', async () => {
+  const peek = () => new Promise(() => {});
+  const t0 = Date.now();
+  const title = await peekSessionListTitleTimed('/a', 'sid', { peek, timeoutMs: 40 });
+  assert.equal(title, '');
+  const elapsed = Date.now() - t0;
+  assert.ok(elapsed >= 40, `应等到超时，实际 ${elapsed}ms`);
+  assert.ok(elapsed < 400, `超时后应立刻返回，实际 ${elapsed}ms`);
+});
+
+test('peekSessionListTitleTimed: peek 成功返回抽屉标题', async () => {
+  const peek = async () => '抽屉可见的 AI 标题';
+  assert.equal(await peekSessionListTitleTimed('/a', 'sid', { peek, timeoutMs: 1000 }), '抽屉可见的 AI 标题');
+});
+
+test('peekSessionListTitleTimed: peek 抛错返回空串（调用方回落 firstMessage）', async () => {
+  const peek = async () => { throw new Error('SDK boom'); };
+  assert.equal(await peekSessionListTitleTimed('/a', 'sid', { peek, timeoutMs: 1000 }), '');
 });
 
 // 回归：CLI 把 ai-title 流式追加到「标题生成完成时」的字节位置，首轮工具/思考很重的长会话里

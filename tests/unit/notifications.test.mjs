@@ -1,7 +1,7 @@
 // tests/unit/notifications.test.mjs —— notificationForEvent 纯映射单测（零副作用，不碰 web-push 传输）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notificationForDeviceRequest } from '../../src/ops/notifications.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notificationForDeviceRequest, notificationForCliHook, sanitizeNotifySessionTitle, formatNotifyIdentity, notifyHasClientsAtSend } from '../../src/ops/notifications.js';
 
 // ── BE-014：push 订阅结构校验（落盘前拦畸形，防 .slice() 抛 500 + 污染后续推送）──────────────
 test.describe('isValidPushSubscription', () => {
@@ -289,6 +289,91 @@ test('无 cwd（未绑定实例）→ title 不追加，向后兼容不破坏既
 test('cwd 带尾斜杠 → basename 正常取尾段（不留空段）', () => {
   const n = notificationForEvent('question', {}, { cwd: '/a/b/proj/' });
   assert.equal(n.title, '❓ Claude 有问题 · proj');
+});
+
+// ── sessionTitle：横幅要能看出是哪个会话（项目名不够，同一仓库常有多条会话）────────
+// 进 title 不进 body：body 仍最小化（SEC-04）；会话标题是抽屉里已经展示的身份，不是命令/问题正文。
+
+test('result 带 cwd + sessionTitle → title 为 事件 · 项目 · 会话，body 仍只含耗时', () => {
+  const n = notificationForEvent('result', { durationMs: 1000 }, {
+    hasClients: false, cwd: '/a/b/claude-chat-mobile', sessionTitle: '独立审查 count_tokens 缓存',
+  });
+  assert.equal(n.title, '✅ 任务完成 · claude-chat-mobile · 独立审查 count_tokens 缓存');
+  assert.equal(n.body, '用时 1.0s');
+  assert.ok(!n.body.includes('独立审查'), '会话标题只进 title，不重复进最小化 body');
+});
+
+test('permission_request / question / task_notification 同样把会话标题追加到 title', () => {
+  assert.equal(
+    notificationForEvent('permission_request', { name: 'Bash' }, { cwd: '/p/proj', sessionTitle: '修登录' }).title,
+    '⚠️ Claude 请求许可 · proj · 修登录',
+  );
+  assert.equal(
+    notificationForEvent('question', { text: '要删库吗' }, { cwd: '/p/proj', sessionTitle: '修登录' }).title,
+    '❓ Claude 有问题 · proj · 修登录',
+  );
+  assert.ok(!notificationForEvent('question', { text: '要删库吗' }, { cwd: '/p/proj', sessionTitle: '修登录' }).body.includes('要删库'), '问题正文仍不进默认 body');
+  assert.equal(
+    notificationForEvent('task_notification', { status: 'completed' }, { cwd: '/p/proj', sessionTitle: '修登录' }).title,
+    '✅ 后台任务完成 · proj · 修登录',
+  );
+});
+
+test('sessionTitle 为占位「新会话」/「(无标题)」/空白 → 不加，避免横幅出现无信息尾巴', () => {
+  assert.equal(
+    notificationForEvent('result', { durationMs: 1000 }, { hasClients: false, cwd: '/a/proj', sessionTitle: '新会话' }).title,
+    '✅ 任务完成 · proj',
+  );
+  assert.equal(
+    notificationForEvent('result', { durationMs: 1000 }, { hasClients: false, cwd: '/a/proj', sessionTitle: '(无标题)' }).title,
+    '✅ 任务完成 · proj',
+  );
+  assert.equal(
+    notificationForEvent('result', { durationMs: 1000 }, { hasClients: false, cwd: '/a/proj', sessionTitle: '   ' }).title,
+    '✅ 任务完成 · proj',
+  );
+});
+
+test('无 cwd 但有 sessionTitle → title 仍带会话（单工作区也能分辨是哪条）', () => {
+  const n = notificationForEvent('result', { durationMs: 1000 }, { hasClients: false, sessionTitle: '修登录' });
+  assert.equal(n.title, '✅ 任务完成 · 修登录');
+});
+
+test('sanitizeNotifySessionTitle: 换行压成单行、超长截断、占位丢弃', () => {
+  assert.equal(sanitizeNotifySessionTitle('hello\nworld'), 'hello world');
+  assert.equal(sanitizeNotifySessionTitle('新会话'), '');
+  assert.equal(sanitizeNotifySessionTitle('(无标题)'), '');
+  assert.equal(sanitizeNotifySessionTitle(''), '');
+  assert.equal(sanitizeNotifySessionTitle(null), '');
+  const long = sanitizeNotifySessionTitle('x'.repeat(80));
+  assert.equal(long.length, 41);
+  assert.ok(long.endsWith('…'));
+});
+
+test('formatNotifyIdentity: 事件 · 项目 · 会话，缺项则跳过', () => {
+  assert.equal(formatNotifyIdentity('✅ 任务完成', { cwd: '/a/proj', sessionTitle: '修登录' }), '✅ 任务完成 · proj · 修登录');
+  assert.equal(formatNotifyIdentity('✅ 任务完成', { cwd: '/a/proj' }), '✅ 任务完成 · proj');
+  assert.equal(formatNotifyIdentity('✅ 任务完成', { sessionTitle: '修登录' }), '✅ 任务完成 · 修登录');
+  assert.equal(formatNotifyIdentity('✅ 任务完成', {}), '✅ 任务完成');
+});
+
+test('notifyHasClientsAtSend: result/system 发出前用现场值；其余保持节流那一刻的快照', () => {
+  assert.equal(notifyHasClientsAtSend('result', false, true), true, 'peek 期间人回到前台 → 现场 true，result 不再推');
+  assert.equal(notifyHasClientsAtSend('system', false, true), true);
+  assert.equal(notifyHasClientsAtSend('result', false, false), false);
+  assert.equal(notifyHasClientsAtSend('permission_request', false, true), false, '无条件推的类型不改快照');
+  assert.equal(notifyHasClientsAtSend('task_notification', false, true), false);
+});
+
+test('notificationForBackgroundRunning 带 sessionTitle → title 追加会话', () => {
+  const n = notificationForBackgroundRunning({ instanceId: 'i', sessionId: 's', cwd: '/a/proj', sessionTitle: '修登录' });
+  assert.equal(n.title, '⏳ 任务仍在后台运行 · proj · 修登录');
+});
+
+test('notificationForCliHook 带 sessionTitle → title 追加会话', () => {
+  const n = notificationForCliHook('Stop', { cwd: '/a/demo', sessionId: 's1', instanceId: 'i1', sessionTitle: '修登录' });
+  assert.match(n.title, /demo/);
+  assert.match(n.title, /修登录/);
 });
 
 // ── 其余 STATE_BOUNDARY 事件不推 ─────────────────────────────────────────────

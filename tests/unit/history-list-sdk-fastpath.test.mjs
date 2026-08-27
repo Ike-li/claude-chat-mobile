@@ -25,7 +25,7 @@ process.env.HOME = FAKE_HOME;
 
 const test = (await import('node:test')).default;
 const assert = (await import('node:assert/strict')).default;
-const { getProjectDir, listSessionsPage, __setSdkListSessionsForTest } =
+const { getProjectDir, listSessionsPage, peekSessionListTitle, __setSdkListSessionsForTest, __setSdkGetSessionInfoForTest } =
   await import('../../src/sessions/history.js');
 const { MAX_SESSION_LIMIT } = await import('../../src/sessions/workdirs.js');
 
@@ -327,6 +327,43 @@ test('SDK 漏报补齐: 非法 sessionId 形态的 jsonl 不得混进列表', as
     assert.ok(!ids.some(id => id.includes('.') || id.includes(' ')), `非法形态不得进列表，实际: ${ids}`);
   } finally {
     __setSdkListSessionsForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+// 通知横幅对齐抽屉浏览行：getSessionInfo.summary 就是 listSessions 映射到 title 的那串。
+test('peekSessionListTitle: 生产快路径用 getSessionInfo.summary，与抽屉 SDK title 同源', async () => {
+  const cwd = '/sdk/peek-title';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'sid-peek', [{ type: 'user', message: { role: 'user', content: '第一句用户原话很长不该出现在横幅优先位' } }]);
+  let captured;
+  __setSdkGetSessionInfoForTest(async (id, opts) => {
+    captured = { id, dir: opts?.dir };
+    return { sessionId: id, summary: 'CLI /resume 同款标题', lastModified: Date.now() };
+  });
+  try {
+    const title = await peekSessionListTitle(cwd, 'sid-peek');
+    assert.equal(captured.id, 'sid-peek');
+    assert.equal(captured.dir, cwd, 'dir 必须传原始 cwd，与 listSessions 同坑');
+    assert.equal(title, 'CLI /resume 同款标题');
+  } finally {
+    __setSdkGetSessionInfoForTest(undefined);
+    rmProjectDir(dir);
+  }
+});
+
+test('peekSessionListTitle: getSessionInfo 无 summary → 回落 jsonl 的 ai-title（抽屉漏报补齐同口径）', async () => {
+  const cwd = '/sdk/peek-fallback';
+  const dir = join(CLAUDE_DIR, getProjectDir(cwd));
+  writeJSONL(dir, 'sid-fb', [
+    { type: 'user', message: { role: 'user', content: '普通问题' } },
+    { type: 'ai-title', aiTitle: '头窗 AI 标题' },
+  ]);
+  __setSdkGetSessionInfoForTest(async () => undefined);
+  try {
+    assert.equal(await peekSessionListTitle(cwd, 'sid-fb'), '头窗 AI 标题');
+  } finally {
+    __setSdkGetSessionInfoForTest(undefined);
     rmProjectDir(dir);
   }
 });

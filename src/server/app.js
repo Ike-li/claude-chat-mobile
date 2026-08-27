@@ -23,9 +23,9 @@ import { AgentSession } from '../agent/agent.js';
 import { deleteSession as sdkDeleteSession, forkSession as sdkForkSession, resolveSettings as sdkResolveSettings } from '@anthropic-ai/claude-agent-sdk';
 import { resolveFreshPrefs, resolveResumeEffort, defaultsFromEffectiveSettings, normalizePermissionMode, normalizeEffortUiLevel, parseWorktreeCanonicalRoot, buildWorktreeGatewayEnv, countNeutralizableGatewayKeys, decideWorktreeSettingsAction } from '../agent/cli-settings-defaults.js';
 import * as sessions from '../sessions/sessions.js';
-import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel } from '../sessions/history.js';
+import { getSessionHistory, listSessionsPage, sessionFileExists, sessionFileMtime, getProjectDir, invalidateListCache, readLastPermissionMode, readLastAssistantModel, peekSessionListTitleTimed } from '../sessions/history.js';
 import * as diagLog from '../agent/diag-log.js';
-import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning } from '../ops/notifications.js';
+import { notificationForEvent, notificationForCliHook, notificationForDeviceRequest, ntfyMetaFor, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, DEVICE_NOTIFY_KEY, DEVICE_NOTIFY_INTERVAL_MS, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notifyHasClientsAtSend } from '../ops/notifications.js';
 import { decideHookEventActions, resolveHookDirs, readHooksInstallState } from '../ops/cli-hooks-bridge.js';
 import { startLogTerminal, stopLogTerminalSync } from '../ops/log-terminal.js';
 import { createHooksInbox } from './hooks-inbox.js';
@@ -179,6 +179,19 @@ const notify = createNotifyChannels({
   onDeliveryFailure: () => scheduleBgBroadcast(),
 });
 const { pushEnabled, pushNotify, ntfyNotify, savePushSubscription } = notify;
+
+// 通知会话段对齐抽屉浏览标题（SDK summary / ai-title），不是 sessions.json 里截断的首条用户消息。
+// 读盘/SDK 失败回落 firstMessage，不挡这条通知。节流仍在调用方同步完成，避免 peek 期间重复放行。
+async function sessionTitleForNotify(cwd, sessionId) {
+  const fallback = sessions.getSession(sessionId)?.title || '';
+  const drawer = await peekSessionListTitleTimed(cwd, sessionId);
+  return drawer || fallback;
+}
+function emitNotify(pn, ntfyType) {
+  if (!pn) return;
+  pushNotify(pn.title, pn.body, pn.data, pn.previewBody);
+  ntfyNotify(pn.title, pn.body, ntfyMetaFor(ntfyType, pn.data, notify.publicUrl));
+}
 
 // ---- 工作区白名单：读取源 + 应用（preflight 与热加载共用）----
 // 读取原始条目源：WORK_DIRS_FILE（JSON 数组文件，优先）或 WORK_DIRS（逗号分隔，向后兼容）。
@@ -1199,15 +1212,16 @@ function processHookEvents(events) {
   for (const push of decision.pushes) {
     // 深链只在该会话恰好有 live 实例时给得出（纯外部终端会话没有 instanceId）
     const inst = instanceForSession(push.sessionId);
-    const pn = notificationForCliHook(push.hookEventName, {
-      cwd: push.cwd, sessionId: push.sessionId, instanceId: inst?.instanceId,
-    });
-    if (!pn) continue;
-    metrics.inc('hook_pushes');
-    pushNotify(pn.title, pn.body, pn.data);
     const ntfyType = push.hookEventName === 'Notification' ? 'cli_hook_notification'
       : push.hookEventName === 'Stop' ? 'cli_hook_stop' : 'result';
-    ntfyNotify(pn.title, pn.body, ntfyMetaFor(ntfyType, pn.data, notify.publicUrl));
+    void sessionTitleForNotify(push.cwd, push.sessionId).then(sessionTitle => {
+      const pn = notificationForCliHook(push.hookEventName, {
+        cwd: push.cwd, sessionId: push.sessionId, instanceId: inst?.instanceId, sessionTitle,
+      });
+      if (!pn) return;
+      metrics.inc('hook_pushes');
+      emitNotify(pn, ntfyType);
+    }).catch(() => {});
   }
   if (decision.invalidateCwds.length) broadcastInstances(); // 列表徽标/最近列表随之刷新
 }
@@ -1660,7 +1674,7 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         // approved 房间里的实际 Socket 对象（非仅 id）：喂给 hasForegroundApprovedClient 判定"前台可见"，
         // 而不只是"连着"——见下方注释与 PWA 后台推送修复（client:presence）。
         const approvedSockets = approvedSocketObjects();
-        let pn = notificationForEvent(envelope.type, envelope.payload, {
+        const notifyOpts = {
           // BE-007 + PWA 后台推送修复：能看到 result 的客户端 = 已加入 approved 房间【且前台可见】的连接。
           // 待审批(deviceApproved=false)设备虽连着但没 join approved、看不到会话内容/result，不能算「有人在看」
           // 而抑制离线推送——否则唯一在线的是待审批设备时，真正该收到完成通知的离线已批准设备反而收不到。
@@ -1676,7 +1690,8 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
           // 那正是本项目的主用例。限定到 viewingInstanceId 后，至少只有「确实在看这条会话」才抑制。
           hasClients: hasForegroundApprovedClient(approvedSockets) && viewingInstanceId === envelope.instanceId,
           instanceId: envelope.instanceId, sessionId: envelope.sessionId, cwd: envelope.cwd,
-        });
+        };
+        let pn = notificationForEvent(envelope.type, envelope.payload, notifyOpts);
         // per-会话节流：同一会话同一类别已有未决通知或未过最小间隔 → 抑制，不推送。
         if (pn) {
           const notifyCategory = NOTIFY_CATEGORY[envelope.type];
@@ -1694,8 +1709,19 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
         if (pn) {
           // ⑧ previewBody 只喂 pushNotify（按订阅 prefs.preview 挑）；ntfy 恒收 body 最小化文案——
           // 第三方明文通道，不因用户开了预览开关就把正文送去 ntfy（SEC-04 红线不因这个开关松动）。
-          pushNotify(pn.title, pn.body, pn.data, pn.previewBody);              // Web Push（带 data 供 SW 深链）
-          ntfyNotify(pn.title, pn.body, ntfyMetaFor(envelope.type, pn.data, notify.publicUrl)); // ntfy（click 深链，绕移动端限制）
+          // 会话标题异步对齐抽屉（getSessionInfo.summary）；节流已在上面同步消费，避免 peek 期间重复放行。
+          const type = envelope.type;
+          const payload = envelope.payload;
+          void sessionTitleForNotify(notifyOpts.cwd, notifyOpts.sessionId).then(sessionTitle => {
+            const liveHasClients = hasForegroundApprovedClient(approvedSocketObjects()) && viewingInstanceId === notifyOpts.instanceId;
+            const hasClients = notifyHasClientsAtSend(type, notifyOpts.hasClients, liveHasClients);
+            emitNotify(notificationForEvent(type, payload, { ...notifyOpts, sessionTitle, hasClients }), type);
+          }).catch(() => {
+            emitNotify(notificationForEvent(type, payload, {
+              ...notifyOpts,
+              sessionTitle: sessions.getSession(notifyOpts.sessionId)?.title,
+            }), type);
+          });
         }
         broadcastInstances();
       }
@@ -3213,9 +3239,13 @@ registerSocketConnection(io, socket => {
         notifyThrottleState = r.next;
         if (r.throttled) continue;
       }
-      const pn = notificationForBackgroundRunning({ instanceId: id, sessionId: agent.sessionId, cwd: agent.cwd });
-      pushNotify(pn.title, pn.body, pn.data);
-      ntfyNotify(pn.title, pn.body, ntfyMetaFor('background_running', pn.data, notify.publicUrl));
+      const agentCwd = agent.cwd;
+      const agentSid = agent.sessionId;
+      void sessionTitleForNotify(agentCwd, agentSid).then(sessionTitle => {
+        emitNotify(notificationForBackgroundRunning({
+          instanceId: id, sessionId: agentSid, cwd: agentCwd, sessionTitle,
+        }), 'background_running');
+      }).catch(() => {});
     }
   });
 

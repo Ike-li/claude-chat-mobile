@@ -7,6 +7,8 @@ import { setCapped } from '../shared/bounded-map.js';
 //   · body 最小化（SEC-04，见 docs/hard-rules.md）：不含命令/参数/问题正文/summary——尤其 ntfy 明文经第三方；正文回 app 内经鉴权取。
 //   · title 追加 cwdBase（已决：默认显示，不设隐藏配置项）——仅目录尾段（basename），
 //     非完整路径，帮多工作区场景分辨通知来自哪个项目；无 cwd（如未绑定实例）时不追加，向后兼容不带 cwd 的旧调用。
+//   · title 再追加 sessionTitle（抽屉可见的短标题）——同一项目常有多条会话，光有目录名横幅仍分不清；
+//     占位「新会话」/「(无标题)」不加。会话标题是身份不是正文，进 title 不进最小化 body。
 //   · data 仅在传入 instanceId 时附带（{instanceId, sessionId, cwd}）——供深链回该会话。Web Push 的 data 走 RFC 8291
 //     端到端加密（push service 不见明文、不上锁屏），故保留完整 cwd 供深链；ntfy click 深链则不含完整 cwd（见 ntfyMetaFor）。
 //   · 不传 instanceId 时不含 data 键（向后兼容旧调用与单测的 deepEqual）。
@@ -29,6 +31,34 @@ function truncatePreview(text) {
 // 据此判定 approved 房间里是否还有"前台"连接。保守默认：未上报过 presence（data.hidden===undefined，
 // 如刚连接尚未来得及上报、或未来的旧版前端）一律视为前台——最坏情况只是退回现状（该连接不解锁推送），
 // 不会因误判后台而重复轰炸用户。
+// 锁屏/通知栏一行很窄：会话标题截到 40 字（与 sessions.upsertSession 的 title 上限同款），换行压成空格。
+export const NOTIFY_SESSION_TITLE_CAP = 40;
+const NOTIFY_TITLE_PLACEHOLDERS = new Set(['新会话', '(无标题)']);
+
+export function sanitizeNotifySessionTitle(raw) {
+  if (typeof raw !== 'string') return '';
+  const one = raw.replace(/\s+/g, ' ').trim();
+  if (!one || NOTIFY_TITLE_PLACEHOLDERS.has(one)) return '';
+  return one.length > NOTIFY_SESSION_TITLE_CAP ? `${one.slice(0, NOTIFY_SESSION_TITLE_CAP)}…` : one;
+}
+
+// 横幅身份：事件 · 项目 · 会话。缺哪段跳过哪段，避免「✅ 任务完成 · ·」这种空段。
+export function formatNotifyIdentity(eventTitle, { cwd, sessionTitle } = {}) {
+  const parts = [];
+  if (eventTitle) parts.push(eventTitle);
+  if (cwd) parts.push(basename(cwd));
+  const sess = sanitizeNotifySessionTitle(sessionTitle);
+  if (sess) parts.push(sess);
+  return parts.join(' · ');
+}
+
+// result / gateway_stall 在节流那一刻用 hasClients 决定「该不该推」；peek 标题可能耗掉几百 ms，
+// 发出前必须用现场值——人已经回到前台就不再推。permission/question/task 无条件推，保持快照。
+export function notifyHasClientsAtSend(type, snapshotHasClients, liveHasClients) {
+  if (type === 'result' || type === 'system') return liveHasClients === true;
+  return snapshotHasClients === true;
+}
+
 export function hasForegroundApprovedClient(sockets = []) {
   for (const s of sockets) {
     if (s?.data?.hidden !== true) return true;
@@ -37,10 +67,10 @@ export function hasForegroundApprovedClient(sockets = []) {
 }
 
 export function notificationForEvent(type, payload = {}, opts = {}) {
-  const { hasClients = false, instanceId, sessionId, cwd } = opts;
+  const { hasClients = false, instanceId, sessionId, cwd, sessionTitle } = opts;
   const p = payload || {};
   const withData = (base) => (instanceId ? { ...base, data: { instanceId, sessionId, cwd } } : base);
-  const titleWithCwd = (title) => (cwd ? `${title} · ${basename(cwd)}` : title);
+  const titleWithIdentity = (title) => formatNotifyIdentity(title, { cwd, sessionTitle });
   switch (type) {
     case 'result':
       if (hasClients) return null;
@@ -50,7 +80,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       {
         const secs = ((p.durationMs ?? 0) / 1000).toFixed(1);
         const title = p.interrupted ? '⏹ 任务已中止' : (p.isError ? '⚠️ 任务出错' : '✅ 任务完成');
-        return withData({ title: titleWithCwd(title), body: `用时 ${secs}s` });
+        return withData({ title: titleWithIdentity(title), body: `用时 ${secs}s` });
       }
     case 'permission_request': {
       // body 最小化（SEC-04）：只保留工具名，【不含 input 命令/参数正文】；待批操作回 app 内经鉴权查看。
@@ -58,7 +88,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       const inputStr = p.input && typeof p.input === 'object' ? JSON.stringify(p.input) : '';
       const previewBody = truncatePreview(inputStr ? `${p.name ?? '工具'} · ${inputStr}` : (p.name ?? '工具'));
       return withData({
-        title: titleWithCwd('⚠️ Claude 请求许可'),
+        title: titleWithIdentity('⚠️ Claude 请求许可'),
         body: `需要你授权：${p.name ?? '工具'}`,
         previewBody
       });
@@ -66,7 +96,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
     case 'question':
       // 最小化：不含问题正文（消息正文），固定引导文案；正文回 app 内取。
       return withData({
-        title: titleWithCwd('❓ Claude 有问题'),
+        title: titleWithIdentity('❓ Claude 有问题'),
         body: 'Claude 需要你的回答',
         previewBody: truncatePreview(p.text)
       });
@@ -74,7 +104,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       // 最小化：不含 summary 正文（可能含代码/结果），固定引导文案；成功/失败见 title。
       const failed = p.status === 'failed' || p.status === 'error';
       return withData({
-        title: titleWithCwd(failed ? '⚠️ 后台任务失败' : '✅ 后台任务完成'),
+        title: titleWithIdentity(failed ? '⚠️ 后台任务失败' : '✅ 后台任务完成'),
         body: failed ? '后台任务未成功，点开查看' : '后台任务已完成，点开查看',
         previewBody: truncatePreview(p.summary)
       });
@@ -91,7 +121,7 @@ export function notificationForEvent(type, payload = {}, opts = {}) {
       const secs = Number(p.seconds);
       const head = Number.isFinite(secs) && secs > 0 ? `已 ${Math.round(secs)} 秒无响应，` : '';
       return withData({
-        title: titleWithCwd('⏳ 模型长时间无响应'),
+        title: titleWithIdentity('⏳ 模型长时间无响应'),
         body: `${head}仍在等待；持续无消息将自动中断`,
       });
     }
@@ -115,8 +145,8 @@ export function shouldNotifyBackgroundRunning({ hadForeground, hasForeground, ha
 // 不是某个 agent:event，混进 notificationForEvent 的 switch 会让"type 对应真实 envelope 类型"这条隐含
 // 契约变模糊（NOTIFY_CATEGORY 也是按 envelope type 键的，这条不属于任何 envelope type）。
 // body 同样最小化（SEC-04）：不含会话内容/工具名，只提示"仍在运行、跑完会通知你"。
-export function notificationForBackgroundRunning({ instanceId, sessionId, cwd } = {}) {
-  const title = cwd ? `⏳ 任务仍在后台运行 · ${basename(cwd)}` : '⏳ 任务仍在后台运行';
+export function notificationForBackgroundRunning({ instanceId, sessionId, cwd, sessionTitle } = {}) {
+  const title = formatNotifyIdentity('⏳ 任务仍在后台运行', { cwd, sessionTitle });
   const body = '运行结束后会通知你';
   return instanceId ? { title, body, data: { instanceId, sessionId, cwd } } : { title, body };
 }
@@ -125,12 +155,12 @@ export function notificationForBackgroundRunning({ instanceId, sessionId, cwd } 
 // 而 hook 事件不是 agent:event。body 同样最小化（SEC-04）：不含正文，只说发生了什么。
 // data（深链）仅在该会话恰好有 live 实例时带——纯外部终端会话没有 instanceId，如实降级为无深链
 // （点开落首页），不编一个点不开的链接。
-export function notificationForCliHook(hookEventName, { cwd, sessionId, instanceId } = {}) {
-  const titleWithCwd = (title) => (cwd ? `${title} · ${basename(cwd)}` : title);
-  let title;
-  if (hookEventName === 'Stop') title = titleWithCwd('✅ 终端会话完成一轮');
-  else if (hookEventName === 'Notification') title = titleWithCwd('⚠️ 终端会话需要你');
+export function notificationForCliHook(hookEventName, { cwd, sessionId, instanceId, sessionTitle } = {}) {
+  let eventTitle;
+  if (hookEventName === 'Stop') eventTitle = '✅ 终端会话完成一轮';
+  else if (hookEventName === 'Notification') eventTitle = '⚠️ 终端会话需要你';
   else return null;
+  const title = formatNotifyIdentity(eventTitle, { cwd, sessionTitle });
   const body = hookEventName === 'Stop' ? '电脑上的 claude 跑完了这一轮' : '电脑上的 claude 在等你回应';
   const base = { title, body };
   return instanceId ? { ...base, data: { instanceId, sessionId, cwd } } : base;

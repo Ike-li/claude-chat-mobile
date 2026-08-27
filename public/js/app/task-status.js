@@ -339,7 +339,11 @@ export function createTaskStatusController(context, {
     notify(
       failed ? t('🔔 后台任务失败') : t('🔔 后台任务完成'),
       (payload.summary || t('Claude 即将汇报结果')).slice(0, 80),
-      { force: alerts?.preferences?.().foregroundComplete },
+      {
+        force: alerts?.preferences?.().foregroundComplete,
+        sessionId: event.sessionId,
+        cwd: event.cwd,
+      },
     );
     if (event.instanceId !== context.state.viewingInstanceId) return false;
 

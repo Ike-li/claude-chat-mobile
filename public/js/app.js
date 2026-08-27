@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -821,9 +821,23 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     },
   });
   // 与 alertCue 对称：sync:since 补发期间静音 OS 通知，避免前台完成通知连弹（result / task_notification）
-  const notify = (title, body, opts) => {
+  // 身份：默认当前查看会话；跨工作区/后台任务必须显式传 cwd/sessionId，否则会把别人的完成标到正在看的那条上。
+  const notify = (title, body, opts = {}) => {
     if (appContext.state.isReplayBatch) return false;
-    return notifications.notify(title, body, opts);
+    const sessionId = opts.sessionId !== undefined ? opts.sessionId : currentSessionId;
+    const cwd = opts.cwd !== undefined ? opts.cwd : currentCwd;
+    const sessionTitle = lookupNotifySessionTitle({
+      sessionId, cwd, sessionsCache, instances: instancesList,
+    });
+    return notifications.notify(
+      formatNotifyIdentity(title, { cwd, sessionTitle }),
+      body,
+      {
+        ...opts,
+        tag: opts.tag || notifySessionTag(sessionId),
+        identity: formatNotifyIdentity('', { cwd, sessionTitle }),
+      },
+    );
   };
   const setupPush = notifications.setup;
   const taskStatus = createTaskStatusController(appContext, {
@@ -4418,9 +4432,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (d === viewCwd) continue;                   // 查看中的 cwd 走内联渲染，不通知
       const prev = workdirStates[d], cur = newStates[d];
       if (cur === prev) continue;
-      if (cur === 'permission') notify(t('⚠️ 后台需要审批'), baseName(d));
-      else if (cur === 'error') notify(t('⚠️ 后台任务出错'), baseName(d));
-      else if (cur === 'done') notify(t('✅ 后台任务完成'), baseName(d));
+      const identityOpts = otherWorkspaceNotifyOpts(d);
+      if (cur === 'permission') notify(t('⚠️ 后台需要审批'), '', identityOpts);
+      else if (cur === 'error') notify(t('⚠️ 后台任务出错'), '', identityOpts);
+      else if (cur === 'done') notify(t('✅ 后台任务完成'), '', identityOpts);
     }
   }
 
