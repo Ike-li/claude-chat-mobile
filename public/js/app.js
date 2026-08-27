@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -2105,6 +2105,15 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     // F3：user_message 事件渲染右侧气泡（已入缓冲，多设备/重载均可回放）
     // E17：p.attachments=[{name,mimeType,size,thumb?}]——图片显 thumb（data URI，CSP img-src data: 已许），其他显 📎 chip
     user_message(p, ev) {
+      // 这条消息可能已经由历史全量重载渲染成【正式气泡】了：settleCarriedPendingBubbles 认领时
+      // 把 clientMessageId 从乐观气泡移交了过去（见那里的 ★ 注释）。此时屏幕上已经有它，直接收工——
+      // 既不能再建一颗（那是第三颗），也不该走下面的转正流程：它早已是确认态，settleAt 会重复打戳。
+      // 判据只认 clientMessageId 精确匹配，不做文本兜底：已确认气泡是 markdown 结构、没有
+      // .whitespace-pre-wrap，靠文本认反而容易误伤别的消息。
+      if (p.clientMessageId && findUserBubbleByClientMessageId(p.clientMessageId, { settledOnly: true })) {
+        scrollBottom(true);
+        return;
+      }
       // 弱网韧性：检查是否存在具有相同文本的未连接/离线发送中的乐观占位符。
       // 如果存在，不创建新气泡，而是将占位符气泡无缝转换为已确认的消息状态。
       // FE-002：优先 clientMessageId；纯附件无 .whitespace-pre-wrap 时按附件名集合匹配。
@@ -6266,6 +6275,69 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // fullReload：来自 loadHistory 的全量加载（这批就是会话开头，时间戳基准不看 #messages 里已有内容）
   // 还是来自 onHistoryAppend 的增量追平（要回落读 #messages 尾巴接上前批）。详见 message-timeline.js
   // 的 appendWithTimeToFragment 注释——两者对基准的要求正好相反。
+  // 按 clientMessageId 找用户气泡（settledOnly=只要已确认那颗）。用遍历比对 dataset 而不是拼
+  // 属性选择器：id 形如 `${Date.now()}-${base36}`，拼进选择器要考虑转义，遍历没有这个坑。
+  function findUserBubbleByClientMessageId(id, { settledOnly = false } = {}) {
+    if (!id) return null;
+    for (const b of messagesEl.querySelectorAll('[data-testid="user-message"]')) {
+      if (b.dataset.clientMessageId !== id) continue;
+      if (settledOnly && b.classList.contains('opacity-70')) continue;
+      return b;
+    }
+    return null;
+  }
+
+  // 全量重载落地后，处置那些被 clearView 保住的未确认气泡（2026-08-27 真机回归：同一条消息两颗气泡）。
+  //
+  // 【为什么会撞】clearView 在发送窗口内会保住未确认气泡（a417c08，修「发出去的消息消失几秒/闪一下」），
+  // 而 renderHistoryBubbles 是【不清屏、直接 append】的——清屏责任全在调用方。真 server 一收到
+  // user:message 就写进 transcript，于是这次全量重载拉回来的历史里本来就含这条消息，两条路径各渲染
+  // 一颗。触发的是日常路径：已有会话 + 实例被闲置回收后懒开 → 换实例广播 → diskLen ahead → 'reload'。
+  //
+  // 两种归宿，判据见 logic/connection.js 的 findHistoryClaimForPending（与 matchedBubble 同源）：
+  //   · 历史已带回这条 → 丢弃乐观气泡，clientMessageId 移交给历史那颗（★ 见下）；
+  //   · 历史还没有（服务端尚未落盘）→ 把气泡移到末尾。它是最新消息，位置就该在整段历史之后。
+  //
+  // ★ 为什么必须移交 clientMessageId：随后到达的 user_message 事件按它定位气泡，认领不到就【新建】，
+  //   那会是第三颗。移交后由 handle.user_message 开头那道「已确认就收工」的闸接住。
+  // ★ 为什么走 dropPendingUserBubble 而不是裸 remove()：气泡可能已随 bindView 进了 sessionDomCache，
+  //   remove() 摘不掉缓存数组持有的那份，切走再切回它会原样复活（该函数注释里有完整教训）。
+  //
+  // 【为什么在 append 之后才做，而不是渲染前先把气泡摘出来】摘出来再放回去，中间隔着分块渲染的异步
+  // 间隙（>40 条时 scheduleIdle 让出主线程），气泡会真的从屏幕上消失几百毫秒——正是 a417c08 要消灭
+  // 的那个「闪一下」。放在 appendChild(frag) 之后，气泡全程在 DOM 里，移动与丢弃都发生在同一个同步
+  // 块内，浏览器不会重绘中间态。
+  function settleCarriedPendingBubbles(msgs) {
+    for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]) {
+      const tDiv = bubble.querySelector('.whitespace-pre-wrap');
+      const claim = findHistoryClaimForPending({
+        text: tDiv ? tDiv.textContent : '',
+        attNames: bubble.dataset.attNames || '',
+        messages: msgs,
+      });
+      if (!claim) {
+        messagesEl.appendChild(bubble); // 同一节点 appendChild = 移动；已绑的监听器与 dataset 都还在
+        continue;
+      }
+      const heir = claim.uuid
+        ? [...messagesEl.querySelectorAll('[data-testid="user-message"]')].find(b => b.dataset.uuid === claim.uuid)
+        : null;
+      if (!heir) {
+        // 认领到了历史里的那条，却定位不到它渲染出的气泡（msg.uuid 缺失——真实 transcript 每行都有，
+        // 但不做这个假设）。此刻丢弃乐观气泡会让 clientMessageId 无处安放，随后的 user_message 认领
+        // 不到就再建一颗，那是第三颗，比重复更糟。降级成「历史还没有这条」的处理：移到末尾留着。
+        // 最坏结果是两颗（等同未修前），但绝不会丢消息、也不会多出第三颗。
+        messagesEl.appendChild(bubble);
+        continue;
+      }
+      if (bubble.dataset.clientMessageId) heir.dataset.clientMessageId = bubble.dataset.clientMessageId;
+      // 借 dropPendingUserBubble 撤气泡：它的原设计语义是「确定没发出去」，这里是反过来的
+      // 「确定已经发出去了（历史都带回来了）」——但要做的事完全相同：摘出 DOM ＋ 清掉
+      // sessionDomCache 里持有的那份引用（否则切走再切回它会原样复活，见该函数注释）。
+      dropPendingUserBubble(bubble);
+    }
+  }
+
   function renderHistoryBubbles(msgs, onDone, { fullReload = false } = {}) {
     if (!msgs?.length) { onDone?.(); return; }
     const frag = document.createDocumentFragment();
@@ -6455,6 +6527,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
       leaveStartScreen();
       messagesEl.appendChild(frag); // 一次性插入，避免 N 次 live-DOM reflow（分块只让解析让出主线程，插入仍是一次性）
+      // 历史已落地：把 clearView 保住的未确认气泡与刚回来的历史收敛成一条（见函数注释）。
+      // 必须排在 scrollBottom 之前——它可能移动/删除气泡，位置定下来再落底才不会滚错。
+      if (fullReload) settleCarriedPendingBubbles(msgs);
       scrollBottom(true);
       if (codeBlocks.length) {
         const doHighlight = () => codeBlocks.forEach(b => { try { hljs.highlightElement(b); } catch { /* 高亮失败不影响显示 */ } });

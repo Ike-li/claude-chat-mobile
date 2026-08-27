@@ -17,6 +17,48 @@ export function nextHistoryRenderChunk({ processed, total, chunkSize }) {
   return { end, done: end >= total };
 }
 
+// 全量重载历史时，DOM 里那颗未确认的乐观气泡该由哪条历史消息「认领」（返回它，否则 null）。
+//
+// 【为什么需要这一步】clearView 在发送窗口内会保住未确认气泡（a417c08，修「发出去的消息消失
+// 几秒/闪一下」），而紧随其后的 loadHistory → renderHistoryBubbles 是【不清屏、直接 append】
+// 的——清屏责任全在调用方。真 server 一收到 user:message 就写进 transcript，于是那次全量重载
+// 拉回来的历史里本来就含这条消息：保住的气泡 ＋ 历史里的同一条 ＝ 屏幕上两颗一模一样的消息。
+// 触发的是日常路径（已有会话 + 实例被闲置回收后懒开 → 换实例广播 → diskLen ahead → reload）。
+//
+// 判据刻意与 app.js 里 handle.user_message 的 matchedBubble 对齐（文本相等；纯附件按附件名集合），
+// 只差一处：历史消息没有 clientMessageId（transcript 不存它），只能按内容认。两边同源不是巧合——
+// 判据一旦各写各的就会慢慢漂开，而漂开的后果恰恰是这里要消灭的「退化成两个气泡」。
+//
+// 从后往前扫：同一段文本重复发过多次时，刚发出的那条必定是最后一条。
+export function findHistoryClaimForPending({ text = '', attNames = '', messages = [] } = {}) {
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  const wantText = String(text ?? '');
+  const wantAtt = String(attNames ?? '');
+  if (!wantText && !wantAtt) return null; // 既无文本又无附件：无从认领，宁可不认也不能瞎认
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i];
+    // kind 非空 = tool_use / tool_result 等展开项，它们 role 也可能是 'user'，但不是用户气泡
+    if (!m || m.role !== 'user' || m.kind) continue;
+    if (typeof m.content !== 'string') continue;
+    if (wantText) {
+      if (m.content !== wantText) continue;
+    } else {
+      // 纯附件消息：历史侧正文为空（附件块已被 splitAttachmentBlock 剥成 attachments），只能按名字集合认
+      if (m.content.trim()) continue;
+      if (historyAttachmentNames(m) !== wantAtt) continue;
+    }
+    return { index: i, uuid: m.uuid ?? null };
+  }
+  return null;
+}
+
+// 与 buildPendingUserBubble 写进 data-att-names 的指纹算法必须逐字一致（排序后 \0 连接）。
+function historyAttachmentNames(m) {
+  return Array.isArray(m?.attachments)
+    ? m.attachments.map(a => a?.name).filter(Boolean).sort().join('\0')
+    : '';
+}
+
 // 移动端切前台/网络恢复/bfcache 恢复时的重连决策。要害：`socket.connected` 在「半开连接」下会撒谎——
 // 切后台冻结 JS、TCP 未必断、engine.io 心跳计时被冻结尚未发现 server 失联，回前台瞬间它仍是 true。
 // 故 connected 时不能直接判健康（否则白等 socket.io 心跳超时 ~45s 才被动重连 = 用户感受的「卡住」），

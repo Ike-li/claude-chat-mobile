@@ -103,6 +103,16 @@ let historyAckTimeoutArmed = false;
 // 裸 ack 断线时被 socket.io-client 的 _clearAcks() 静默丢弃，超时窗内则纯粹没人叫——两种情况下
 // 回调都不执行，而加载卡收场与历史加载全挂在回调里。一次性：吞掉一次后自动解除，后续 sync 正常。
 let syncAckTimeoutArmed = false;
+// P0-DUP-OPT：复现「在线乐观气泡 + 历史全量重载 = 同一条消息两颗气泡」。
+// 武装后同时改三处，凑齐真实 server 上那条链所需的全部条件：
+//   ① user:message 收到后立刻换实例并广播 instances（模拟实例被回收后的懒开）→ 前端 bindView；
+//   ② sync:since 的 ack 带 diskLen 大于前端已渲染条数 → shouldReloadOnEnter 判 'reload'；
+//   ③ session:history 的历史里【已经含有刚发出的那条用户消息】（真 server 一收到就写 transcript）。
+// mock 此前从不回 diskLen，于是 'reload' 的 diskLen 分支在整套 E2E 里结构性照不出——这正是
+// a417c08 的两条新用例（都只测新会话、无历史）漏掉这个回归的原因。
+let dupOptimisticArmed = false;
+const DUP_OPTIMISTIC_CMD = 'test:dup-optimistic';
+const DUP_OPTIMISTIC_DELAY_MS = 2000;
 let replaySmallSyncArmed = false;   // false=冷入场 ack(0)；true=切回时推 21 条积压事件（低于阈值 → flush）
 // P0-REPLAY-UNREAD-DISMISS：同 replaySmallSyncArmed 两段式门控，但第二次 ack 额外挂 unreadOnEntry——
 // 验证回放缓冲程序性落底与未读胶囊自动确认已读的协同（不复用 mockUnreadOnEntry* 单例，见下方
@@ -1179,8 +1189,7 @@ io.on('connection', socket => {
       //   #9 user     今天 08:30  → time  同日 + user + gap 10min
       const day = n => { const d = new Date(); d.setDate(d.getDate() - n); return d; };
       const iso = (n, hh, mm) => { const d = day(n); d.setHours(hh, mm, 0, 0); return d.toISOString(); };
-      callback({
-        messages: [
+      const timelineMessages = [
           { role: 'user', content: 'Timeline day-before prompt', uuid: 'u-tl-1', timestamp: iso(2, 9, 0) },
           { role: 'assistant', content: 'Timeline day-before reply', uuid: 'a-tl-2', timestamp: iso(2, 9, 1) },
           { kind: 'tool_use', role: 'assistant', toolUseId: 'tl-tool-1', name: 'Read', inputSummary: '{"file":"a.ts"}', timestamp: iso(2, 9, 2) },
@@ -1191,8 +1200,12 @@ io.on('connection', socket => {
           { role: 'user', content: 'Timeline today morning prompt', uuid: 'u-tl-7', timestamp: iso(0, 8, 0) },
           { role: 'assistant', content: 'Timeline today long-turn reply', uuid: 'a-tl-8', timestamp: iso(0, 8, 20) },
           { role: 'user', content: 'Timeline today follow-up', uuid: 'u-tl-9', timestamp: iso(0, 8, 30) }
-        ]
-      });
+      ];
+      // P0-DUP-OPT ③：武装后历史里多带一条「刚发出的那条用户消息」，对齐真 server 的写盘时序。
+      if (dupOptimisticArmed) {
+        timelineMessages.push({ role: 'user', content: DUP_OPTIMISTIC_CMD, uuid: 'u-dup-echo', timestamp: iso(0, 8, 35) });
+      }
+      callback({ messages: timelineMessages });
     } else if (cwd === '/Users/you/code/claude-chat-mobile' && sessionId === 'mock-session-archived') {
       callback({
         messages: [
@@ -1574,6 +1587,14 @@ io.on('connection', socket => {
         callback({ ok: true, replayed, pending, unreadOnEntry, ...extra });
       }
     };
+    // P0-DUP-OPT ②：ack 带 diskLen 大于前端已渲染的条数（timeline fixture 是 10 条），
+    // 触发 shouldReloadOnEnter 的「磁盘 ahead → reload」分支。真 server 一直回这个字段，
+    // mock 从不回（恒 null→0），所以这条分支此前在整套 E2E 里【结构性不可达】。
+    if (dupOptimisticArmed && sessionId === 'mock-session-timeline') {
+      console.log('[mock] P0-DUP-OPT — sync:since ack 带 diskLen=11，逼出全量重载');
+      ack(0, { diskLen: 11 });
+      return;
+    }
     // P0-SYNC-ACK-TIMEOUT：吞掉本次 ack、连接保持。前端只能靠 socket.timeout 的 err 分支收尾——
     // 裸 ack 下这个回调永不执行，加载卡永转、历史永不加载（F3）。放在所有分支之前：吞的是整个 ack。
     if (syncAckTimeoutArmed && sessionId === 'mock-session-timeline') {
@@ -3648,6 +3669,24 @@ io.on('connection', socket => {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
+    }
+
+    // P0-DUP-OPT ①：已有会话里发消息 → 服务端懒开一个【新实例】（真 server 上是实例被
+    // INSTANCE_IDLE_RECLAIM_MS 回收后重新 resume）→ broadcastInstances → 前端 bindView。
+    // sessionId 不变、instanceId 变，正是「同会话换实例」这条日常路径。
+    if (cmd === DUP_OPTIMISTIC_CMD) {
+      dupOptimisticArmed = true;
+      const cur = mockInstances.find(i => i.instanceId === viewingInstanceId);
+      if (cur) {
+        cur.instanceId = 'inst_dup_reopened';
+        viewingInstanceId = 'inst_dup_reopened';
+      }
+      console.log('[mock] P0-DUP-OPT — 同会话换实例并广播 instances，触发前端 bindView');
+      io.emit('agent:event', {
+        seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
+        type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
+      });
+      await delay(DUP_OPTIMISTIC_DELAY_MS);
     }
 
     // 服务端慢路径显式化（test:slow-echo）。真实 server 从收到 user:message 到 emit user_message 之间

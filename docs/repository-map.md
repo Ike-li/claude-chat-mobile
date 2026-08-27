@@ -36,7 +36,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Backend source | 66 |
 | Desktop integration | 11 |
 | Documentation | 10 |
-| E2E test | 49 |
+| E2E test | 50 |
 | Frontend asset | 3 |
 | Frontend source | 45 |
 | Generated asset | 6 |
@@ -51,10 +51,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 4 |
 | Test support | 5 |
-| Unit test | 161 |
+| Unit test | 162 |
 | Vendored asset | 21 |
 
-Total classified files: **464**.
+Total classified files: **466**.
 
 ## Complete file inventory
 
@@ -304,6 +304,7 @@ Total classified files: **464**.
 | `tests/e2e/p0/long-stream-interrupt.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/message-timestamps.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/new-session-first-send.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
+| `tests/e2e/p0/optimistic-bubble-history-dup.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/pending-snapshot-reconcile.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/permission-allow-deny.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
 | `tests/e2e/p0/replay-buffer.spec.ts` | E2E test | Zero-token Playwright browser test or mock | `npm run test:e2e` | Authored and reviewed manually | keep |
@@ -457,6 +458,7 @@ Total classified files: **464**.
 | `tests/unit/logic-content.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-deeplink.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-diag-log.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-history-claim.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-history-fork.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-instance-destroyed.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-live-status.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
