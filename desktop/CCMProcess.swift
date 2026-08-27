@@ -25,6 +25,49 @@
 
 import Foundation
 
+// MARK: - 子进程环境（登录 shell 的 PATH）
+
+/// 登录 shell 的 PATH，**进程内解析一次**。
+///
+/// 为什么需要它：见 CCMCore.swift 的 `childEnvironment` 注释——GUI 血统的 PATH 只有四个系统
+/// 目录，装在 ~/.local/bin 的 claude、装在 /opt/homebrew/bin 的 node 全都找不到。
+///
+/// 为什么成功失败都只解析一次：`zsh -lc` 要跑完整套 rc 文件，实测几十到几百毫秒，而 runSync
+/// 是每 2~10 秒一次的探测路径——不缓存等于给每次探测加一份固定开销。失败也缓存，是因为
+/// 失败只可能来自「/bin/zsh 不在」或「shell 配置本身炸了」，两者都要用户干预，重试没有意义，
+/// 反而会让每次探测都白等一个 5 秒超时（失败路径拖垮日常路径是最糟的取舍）。修好后重开 app 即可。
+private final class LoginShellPath: @unchecked Sendable {
+    static let shared = LoginShellPath()
+    private let lock = NSLock()
+    private var resolved = false
+    private var path: String?
+
+    func value() -> String? {
+        lock.lock()
+        if resolved { defer { lock.unlock() }; return path }
+        lock.unlock()
+
+        // ★ 显式传自身环境，打破递归：runSync 默认要问 childProcessEnvironment()，
+        //   而后者正要问本函数。这是整条链上唯一一处不注入的调用，故意如此。
+        let out = runSync("/bin/zsh", ["-lc", "printf %s \"$PATH\""], timeout: 5,
+                          env: ProcessInfo.processInfo.environment)?.stdout
+        let trimmed = out?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let got = (trimmed?.isEmpty == false) ? trimmed : nil
+
+        lock.lock()
+        resolved = true
+        path = got
+        lock.unlock()
+        return got
+    }
+}
+
+/// 所有子进程共用的环境。**唯一的构造入口**——每个 spawn 点都必须用它，
+/// 由 ccm-menubar-tests.swift 的 `testEverySpawnInjectsEnvironment` 源码闸守着。
+func childProcessEnvironment() -> [String: String] {
+    childEnvironment(base: ProcessInfo.processInfo.environment, loginPath: LoginShellPath.shared.value())
+}
+
 // MARK: - 进程调用
 
 /// 简易结果类型。Swift 的 Result 要求错误类型遵循 Error，而这里的「错误」只是一句给用户看的话。
@@ -86,11 +129,16 @@ func drainToDeadline(_ fd: Int32, deadline: Date) -> Data {
 ///
 /// 叠加起来的后果比单独任一个都严重：那时全部后台工作跑在同一条串行队列上，一次阻塞
 /// 就等于整个 app 永久瘫痪（`inFlight` 停在 true、后续任务永不执行、点什么都没反应）。
+///
+/// env 缺省 nil ⇒ 用 `childProcessEnvironment()`（登录 shell 的 PATH）。显式传值只有一个用途：
+/// `LoginShellPath` 自己解析 PATH 时得传自身环境打破递归。
 func runSync(_ launchPath: String, _ args: [String], cwd: String? = nil,
-             timeout: TimeInterval = 10, drainGrace: TimeInterval = 3) -> RunResult? {
+             timeout: TimeInterval = 10, drainGrace: TimeInterval = 3,
+             env: [String: String]? = nil) -> RunResult? {
     let task = Process()
     task.executableURL = URL(fileURLWithPath: launchPath)
     task.arguments = args
+    task.environment = env ?? childProcessEnvironment()
     if let cwd { task.currentDirectoryURL = URL(fileURLWithPath: cwd) }
 
     let outPipe = Pipe(), errPipe = Pipe()

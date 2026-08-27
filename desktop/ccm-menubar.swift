@@ -804,6 +804,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: argv[0])
         p.arguments = Array(argv.dropFirst())
+        // argv[0] 是绝对路径、这条本身不依赖 PATH，仍然统一注入：环境该怎么给只有一个答案，
+        // 留一处特例就等于让下一个人自己判断「我这条需不需要」——那正是 bug 的复发入口。
+        p.environment = childProcessEnvironment()
         try? p.run()
         NSApp.terminate(nil)
     }

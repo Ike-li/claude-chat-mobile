@@ -144,6 +144,30 @@ func serviceScriptPath(in repo: String) -> String {
     (repo as NSString).appendingPathComponent("scripts/service.js")
 }
 
+/// 子进程该拿到的环境：**只把 PATH 换成登录 shell 的那份，其余一个键都不动。**
+///
+/// 【为什么必须换 PATH】GUI 启动的 app 由 LaunchServices 拉起，继承 launchd 的
+/// `PATH=/usr/bin:/bin:/usr/sbin:/sbin`，它不读 ~/.zshrc / ~/.zprofile。装在 ~/.local/bin、
+/// /opt/homebrew/bin、nvm 目录下的工具在这个 PATH 里一律「不存在」。2026-08-27 的现场：
+/// 菜单栏跑 scripts/doctor.js，doctor 内部 `which claude` 落空 → CLAUDE_BIN 报红 → 退出码
+/// 非零 → 后面十几项检查全被腰斩；而 web 面板同时显示 CLAUDE_BIN 正常，因为 server 的 plist
+/// 用 `zsh -lc` 起，PATH 是全的。
+///
+/// 【为什么只搬 PATH，不搬整个 environment】后者看着更省事，实则会重新制造 2026-08-19 的
+/// 幽灵 env 事故：~/.zshrc 里一个 `export AUTH_TOKEN=旧值` 就会压过 ccm.config.json
+/// （「环境变量始终压过文件」是本仓的既定规则），于是同一个脚本从菜单栏跑和从终端跑读到
+/// **两份不同的配置**，且完全无症状。配置的事实源必须只有 ccm.config.json 一个。
+/// PATH 是唯一的例外，因为它不是配置、而是「上哪找可执行文件」的宿主环境事实。
+///
+/// loginPath 为 nil 或空白时原样返回：宁可维持现状（doctor 照旧报红），也不能把 PATH 清掉
+/// ——那会让失败模式从「一项红」恶化成「连 /usr/bin 都找不到，什么都跑不了」。
+func childEnvironment(base: [String: String], loginPath: String?) -> [String: String] {
+    guard let p = loginPath?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty else { return base }
+    var env = base
+    env["PATH"] = p
+    return env
+}
+
 // MARK: - 摘要行与菜单标题
 
 /// 菜单栏 tooltip 与菜单首行的那句话。

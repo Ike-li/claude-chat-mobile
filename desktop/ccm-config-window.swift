@@ -688,6 +688,11 @@ final class TaskWindowController: NSWindowController, NSWindowDelegate {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: node)
         task.arguments = step.argv
+        // ★ 本 bug 的直接现场（2026-08-27）：不设 environment 就继承 GUI 血统的
+        //   PATH=/usr/bin:/bin:/usr/sbin:/sbin，doctor.js 内部 `which claude` 必然落空、
+        //   报「CLAUDE_BIN unset and no claude on PATH」并以非零退出码腰斩后面十几项检查。
+        //   同一条链上 setup.js / service.js / app-build.js 也都要 PATH 才找得到 git、npm。
+        task.environment = childProcessEnvironment()
         task.currentDirectoryURL = URL(fileURLWithPath: cwd)
 
         let pipe = Pipe()

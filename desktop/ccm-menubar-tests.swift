@@ -52,6 +52,9 @@ struct CCMCoreTests {
         testRunSyncResourceHygiene()
         testModalWindowsAreRaised()
         testAppIdentityLine()
+        testChildEnvironment()
+        testChildEnvironmentReachesSubprocess()
+        testEverySpawnInjectsEnvironment()
 
         let msg = "\nCCMCore: \(passed) passed, \(failed) failed\n"
         FileHandle.standardOutput.write(msg.data(using: .utf8)!)
@@ -820,5 +823,78 @@ extension CCMCoreTests {
         check(!appIdentityLine(version: nil, buildTime: nil, commit: nil, bundlePath: installed, repo: nil)
                 .contains("仓库构建产物"),
               "repo 未知时不下「仓库构建产物」这个结论")
+    }
+}
+
+// ── 子进程环境 ─────────────────────────────────────────────────────────────
+// 2026-08-27：机主报「web 的体检说 CLAUDE_BIN 好好的，desktop 的体检说找不到 claude」。
+// 根因是 GUI 启动的 app 继承 launchd 的 `PATH=/usr/bin:/bin:/usr/sbin:/sbin`，而 claude 装在
+// ~/.local/bin —— doctor.js 在这个 PATH 下 `which claude` 必然落空，退出码非零，后面十几项
+// 检查全被腰斩。server 没这个毛病只因为它的 plist 用 `zsh -lc` 起。
+//
+// 同一个根因**此前已在 node 上撞过一次**（RuntimeEnv.resolveNode 专门开 `zsh -lc "command -v node"`），
+// 当时的解法是给 node 单开一条查找路径，于是换个位置照样复发。这一组断言守的是治根的那一版：
+// 所有子进程统一拿登录 shell 的 PATH。
+extension CCMCoreTests {
+    static func testChildEnvironment() {
+        let base = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": "/Users/you", "AUTH_TOKEN": "from-config"]
+        let login = "/Users/you/.local/bin:/opt/homebrew/bin:/usr/bin:/bin"
+
+        let got = childEnvironment(base: base, loginPath: login)
+        eq(got["PATH"], login, "登录 shell 的 PATH 覆盖 GUI 的贫瘠 PATH")
+        eq(got["HOME"], "/Users/you", "其余键原样保留")
+
+        // ★ 这条断言是整组里最重要的一条，锁的是「只搬 PATH，绝不搬别的」。
+        //
+        // 直觉上「把登录 shell 的整个 environment 灌进去」更省事，但那会**重新制造 2026-08-19
+        // 的幽灵 env 事故**：~/.zshrc 里一个 `export AUTH_TOKEN=旧值` 就会压过 ccm.config.json
+        // （CLAUDE.md 明写「环境变量始终压过文件」），于是同一个脚本从菜单栏跑和从终端跑读到
+        // 两份不同的配置，且零症状。那正是「一个事实两个来源」的定义。
+        eq(got.count, base.count, "不引入登录 shell 的任何其他变量——配置的事实源只有 ccm.config.json")
+
+        // 解析失败/拿到空白时必须原样返回：宁可维持现状（doctor 报红），也不能把 PATH 清空
+        // ——那会让连 /usr/bin 都找不到，失败模式从「一项红」恶化成「什么都跑不了」。
+        eq(childEnvironment(base: base, loginPath: nil)["PATH"], base["PATH"], "解析失败时保留原 PATH")
+        eq(childEnvironment(base: base, loginPath: "   ")["PATH"], base["PATH"], "空白视同解析失败")
+        eq(childEnvironment(base: base, loginPath: nil).count, base.count, "解析失败时不动任何键")
+
+        // base 完全没有 PATH（理论上不会，但 Process 的 environment 是可被外部替换的字典）
+        eq(childEnvironment(base: ["HOME": "/Users/you"], loginPath: login)["PATH"], login, "base 无 PATH 时补上")
+    }
+
+    /// 真 spawn：光有纯函数不够，还得确认它**真的被交给了 Process**。
+    /// 这条抓的是「函数写好了但某个 spawn 点忘了用」——本 bug 的原始形态正是如此。
+    static func testChildEnvironmentReachesSubprocess() {
+        let injected = childProcessEnvironment()["PATH"] ?? ""
+        check(!injected.isEmpty, "childProcessEnvironment 必须给出 PATH")
+
+        let r = runSync("/bin/sh", ["-c", "printf %s \"$PATH\""], timeout: 10)
+        eq(r?.stdout, injected, "runSync 的子进程实际拿到的 PATH == childProcessEnvironment 算出的")
+
+        // 端到端：登录 shell 的 PATH 至少要覆盖当前进程的（zsh -lc 只会往上加，不会减）。
+        // 在 GUI 血统里这条差异就是本 bug；在终端血统里两者相等，断言同样成立。
+        let ownPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        check(injected.count >= ownPath.count || injected == ownPath,
+              "登录 shell PATH 不该比自身的更短（got \(injected.count) vs \(ownPath.count) 字符）")
+    }
+
+    /// 源码闸：新增 spawn 点时忘了注入环境，是这个 bug 唯一的复发路径。
+    /// 纯函数断言拦不住它（函数好好的，只是没人调），只能守在源码这一层。
+    static func testEverySpawnInjectsEnvironment() {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for name in ["CCMProcess.swift", "ccm-config-window.swift", "ccm-menubar.swift", "ccm-console-window.swift"] {
+            let path = dir.appendingPathComponent(name).path
+            guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+                check(false, "源码闸读不到 \(name)")
+                continue
+            }
+            let lines = text.components(separatedBy: "\n")
+            for (i, line) in lines.enumerated() where line.contains("= Process()") {
+                let injected = lines[i...min(lines.count - 1, i + 10)].contains { $0.contains(".environment = ") }
+                check(injected,
+                      "\(name):\(i + 1) spawn 了 Process 却没设 environment —— "
+                      + "GUI 血统的 PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，装在 ~/.local/bin 的 claude 找不到")
+            }
+        }
     }
 }
