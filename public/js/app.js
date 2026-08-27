@@ -2804,6 +2804,72 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   });
 
   // ---- 发送 / 停止 ----
+
+  // 未确认用户气泡（在线乐观 + 离线占位【共用】）。
+  //
+  // 【为什么在线也要建】2026-08-27 真机反馈「发出去的消息消失，过几秒才出现」。原先只有离线分支建气泡，
+  // 在线分支靠服务端回推的 user_message 渲染（旧注释 F3：「不再本地 append 气泡」）。但那条事件被压在
+  // 服务端一串 await 之后——懒开实例（读盘 + spawn CLI + transcript 尾读）与 agent.js#send 里那次
+  // setModel control_request，后者打给刚 spawn 还没起来的 CLI，上界就是 SERVER_PRE_TURN_UPPER_BOUND_MS(10s)。
+  // 这段窗口里输入框已清空、消息流却还是空的，观感就是「没发成功」。首发必中（FRESH 的 attemptedModel
+  // 是 undefined，选了模型就必然触发 setModel）；已有会话则看实例是否已被 INSTANCE_IDLE_RECLAIM_MS(默认
+  // 30min) 回收，所以是「经常」而非每次。
+  //
+  // 【为什么现在可以建了】F3 当初移除本地气泡是为了防「本地一条 + 回推一条」重复渲染，而 FE-002 之后
+  // user_message 带上了 clientMessageId，handle.user_message 的 matchedBubble 会按它精确认领并原地转正
+  // （去半透明、撤指示、补服务端权威 ts）。重复的理由已经消失，只是没人回头把在线气泡加回来。
+  //
+  // 【为什么两条路径共用一个构建器】在线/离线气泡的字段必须逐维一致——clientMessageId、attNames、
+  // topLevel 任一缺失都会让 matchedBubble 认领失败，退化成两个气泡。分开写就是等着它们慢慢漂开
+  // （同款教训见 logic/outbox-send.js 里两个 present* 函数的注释）。差异只有一处：待发文案。
+  //
+  // ts 一律传 null：客户端时钟不可信（手机快几小时会让 data-ts 落在未来，之后每条服务端时间都被判成
+  // 倒流、连日期行都永久消失）。转正时由 settleAt 补服务端权威 ts，见 message-timeline.js 的注释。
+  function buildPendingUserBubble({ text, outgoingAttachments, clientMessageId, pendingLabel }) {
+    const bubble = el(`<div class="msg-frame rounded-xl bg-user text-ink px-3 py-2 text-sm opacity-70 transition-opacity" data-testid="user-message"></div>`);
+    // 未读角标锚点定位用：未确认气泡是「user_message 到达前就存在」的顶层气泡创建点——
+    // matchedBubble 命中时原地复用本节点（见 handle.user_message），不会重新创建，故必须在这里打标记。
+    bubble.dataset.topLevel = '1';
+    // FE-002：clientMessageId + 附件名指纹，供 user_message 回放精确认领（含纯附件无文本）
+    bubble.dataset.clientMessageId = clientMessageId;
+    if (outgoingAttachments?.length) {
+      bubble.dataset.attNames = outgoingAttachments.map(a => a?.name).filter(Boolean).sort().join('\0');
+    }
+    if (text) {
+      const textNode = el(`<div class="whitespace-pre-wrap"></div>`);
+      textNode.textContent = text;
+      foldLongUserText(textNode, text); // 长指令发出去那刻就折，与已确认气泡一致
+      bubble.appendChild(textNode);
+    }
+    // 待发附件缩略 chip/图片预览：controller items 含完整 data → 点击直开本地预览（无需服务端）
+    if (outgoingAttachments?.length) {
+      bubble.appendChild(buildAttachmentWrap(attachments.items(), Boolean(text)));
+    }
+    const indicator = el(`<div class="pending-indicator text-[11px] text-ink-faint mt-1 animate-pulse"></div>`);
+    indicator.textContent = pendingLabel;
+    bubble.appendChild(indicator);
+    messageTimeline.appendWithTime(bubble, null, 'user');
+    return bubble;
+  }
+
+  // 撤掉一颗未确认气泡：负 ack 判定这条消息【确定没发出去】时调用（decision.dropBubble）。
+  // 不撤的话屏幕上会留一颗永远转圈的气泡，用户以为发出去了——比原本「气泡迟迟不出现」更糟。
+  //
+  // ★ 光 remove() 不够：气泡可能已随 bindView 进了某个会话的 sessionDomCache（切走时把整棵
+  // #messages 子树的节点数组存下来，切回时原序 appendChild 复原）。remove() 只摘得掉当前文档里的
+  // 那份，缓存数组仍持有引用 —— 切回该会话时它会被原样加回来，表现为「发送失败的消息过一会儿自己
+  // 复活，并且永远转圈」。ack 窗口最长 SEND_ACK_TRANSPORT_MS(30s)，这期间切走再切回完全够触发。
+  function dropPendingUserBubble(bubble) {
+    if (!bubble) return;
+    bubble.remove();
+    for (const entry of sessionDomCache.values()) {
+      const nodes = entry?.nodes;
+      if (!Array.isArray(nodes)) continue;
+      const i = nodes.indexOf(bubble);
+      if (i >= 0) nodes.splice(i, 1);
+    }
+  }
+
   function send() {
     ensureAlertAudio(); // 发送=用户手势：解锁 WebAudio，本轮完成后提示音才能响
     if (mirrorReadonlySid) { // 只读追平中：硬拦截，防与终端并发写盘分叉（点发送位「续接 CLI 会话」）
@@ -2901,34 +2967,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!socket.connected) {
       // 离线状态：生成乐观消息气泡占位符，保存到离线重发队列，待重连后自动重发
       haptic('tap');
-      const bubble = el(`<div class="msg-frame rounded-xl bg-user text-ink px-3 py-2 text-sm opacity-70 transition-opacity"></div>`);
-      // 未读角标锚点定位用：离线占位气泡是唯一"在线 user_message 到达前就存在"的顶层气泡创建点——
-      // matchedBubble 命中时是原地复用这个节点（见 handle.user_message），不会重新创建，故必须在这里打标记。
-      bubble.dataset.topLevel = '1';
-      // FE-002：挂 clientMessageId + 附件名指纹，供 user_message 回放精确匹配（含纯附件无文本）
-      bubble.dataset.clientMessageId = clientMessageId;
-      if (outgoingAttachments?.length) {
-        bubble.dataset.attNames = outgoingAttachments.map(a => a?.name).filter(Boolean).sort().join('\0');
-      }
-      if (text) {
-        const textNode = el(`<div class="whitespace-pre-wrap"></div>`);
-        textNode.textContent = text;
-        // 离线乐观占位符气泡也折叠（与已确认气泡一致，长指令发出去那刻就折）
-        foldLongUserText(textNode, text);
-        bubble.appendChild(textNode);
-      }
-      
-      // 添加离线待发送的附件缩略 chip/图片预览，让离线体验达到原生级；
-      // controller items 含完整 data → buildAttachmentNode 点击直开本地预览（无需服务端）
-      if (outgoingAttachments && outgoingAttachments.length) {
-        bubble.appendChild(buildAttachmentWrap(attachments.items(), Boolean(text)));
-      }
-      
-      const indicator = el(`<div class="pending-indicator text-[11px] text-ink-faint mt-1 animate-pulse">${t('🕐 正在等待连接...')}</div>`);
-      bubble.appendChild(indicator);
-      // ts 传 null：离线时客户端时钟不可信，等 user_message 转正时补服务端权威值（见那一分支的注释）
-      messageTimeline.appendWithTime(bubble, null, 'user');
-      
+      const bubble = buildPendingUserBubble({
+        text, outgoingAttachments, clientMessageId,
+        pendingLabel: t('🕐 正在等待连接...'),
+      });
+
       enqueueOutbox({
         text,
         model,
@@ -2977,6 +3020,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       // 让「正在发送…」立刻切回 spinner，不必等下一次 1s ticker
       if (liveLine) renderLiveLine();
     };
+    // 在线乐观气泡：先上屏，不等服务端那串 await（见 buildPendingUserBubble 的注释）。
+    // user_message 回推时由 matchedBubble 按 clientMessageId 认领并原地转正，不会变成两个气泡。
+    const pendingBubble = buildPendingUserBubble({
+      text, outgoingAttachments, clientMessageId,
+      pendingLabel: `🕐 ${t('正在发送...')}`,
+    });
     // 失败时恢复草稿：send 会先清空输入；仅当输入仍空才回填，避免覆盖用户已键入的下一条。
     // requeue 路径不回填（消息进 outbox）。
     const restoreDraftOnFail = { text, attachments: outgoingAttachments };
@@ -2987,6 +3036,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       clientMessageId,
       instanceId: reqViewingInstanceId,
       cwd: reqCwd,
+      // 交给 outbox 接管这颗气泡：重发期间 processOfflineQueue 会改它的待发文案、撞上在途轮时
+      // markOutboxBlocked 会在它上面挂「未发送 + 重发」按钮。不传的话在线 requeue 的消息在屏幕上
+      // 就是一颗永远转圈的气泡，用户既看不出它在排队、也没有手动重发的入口。
+      bubbleEl: pendingBubble,
     };
     const sendInFlightTimer = setTimeout(clearSendInFlight, SEND_ACK_FALLBACK_MS); // 兜底：ack 真丢了也不永久卡死
     // 在线也走 timeout：half-open / 中途断连时 err 回调 → 入 outbox，不再静默丢字。
@@ -3011,6 +3064,11 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (_pendingSendBusySessionId === reqSessionId) _pendingSendBusySessionId = null;
       _pendingFirstSend = false;
       logClientEvent('send', `[WEB_SEND] 在线发送未确认：${decision.message || ack?.error || err?.message || 'unknown'}`);
+      // 乐观气泡的去留（判据见 presentOnlineSendAck 的 dropBubble 注释）。刻意排在下方 WS-003 迟到
+      // 负 ack 守卫【之前】：那道守卫挡的是「作用于当前视图」的副作用（贴错误条、清 busy、回填草稿），
+      // 而这颗气泡属于发起时那个会话，与用户此刻在看哪个会话无关——切走了也照样得撤，否则切回时
+      // 迎面一颗永远转圈的假消息。
+      if (decision.dropBubble) dropPendingUserBubble(pendingBubble);
       if (decision.requeue) {
         enqueueOutbox(outboxPayload);
         // 视图仍在本会话时提示已排队；切走则静默入队
@@ -3045,7 +3103,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
     });
     updateSendButtonState(); // 立即反映在途态，不等下一次外部驱动的刷新
-    // F3：不再本地 append 气泡，由 user_message 事件渲染（同时入缓冲，重载可回放）
+    // 气泡已在上方本地 append（buildPendingUserBubble），服务端回推的 user_message 只负责认领转正。
+    // 旧的 F3「不再本地 append，由 user_message 事件渲染」已于 2026-08-27 撤销：那条事件被压在服务端
+    // 一串 await 之后，等它才上屏就是真机报的「消息发出去消失了」。事件仍照常入环形缓冲，刷新可回放。
     inputEl.value = '';
     // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
     if (currentSessionId) sessionDraftCache.delete(currentSessionId);
@@ -5565,6 +5625,27 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     lastSeq = 0;
     curEpoch = null;
     localStorage.setItem('current_session', sessionId || '');
+    // 发送窗口内的清屏要保住未确认气泡。
+    //
+    // 新会话首发【必中】这条路：服务端懒开实例后一定会 broadcastInstances，viewingInstanceId 由 null
+    // 变成新实例 → setInstances 判定视图变了 → bindView → 走到这里 innerHTML=''。用户刚点发送的那颗
+    // 乐观气泡若挺不过这次清屏，就是「消息出现一下又消失、等服务端回显才回来」——真机反馈里的
+    // "闪烁一下才出现"正是它（另一半"消失几秒"是回显本身被服务端慢路径压着，见 buildPendingUserBubble）。
+    //
+    // 判据与下方补 busy 同源（shouldRestoreOptimisticBusy）不是巧合：两者问的是同一件事——这次清屏
+    // 是不是发生在一次尚未落定的发送窗口内。同一次发送里不可能"busy 该留而气泡该丢"，所以共用一个
+    // 判定结果、绝不各判各的（各判各的正是本仓多次踩过的分叉坑）。
+    const inSendWindow = shouldRestoreOptimisticBusy({
+      pendingFirstSend: _pendingFirstSend,
+      pendingSendBusySessionId: _pendingSendBusySessionId,
+      viewingInstanceId: displayedInstanceId,
+      sessionId,
+    });
+    // 只捞未确认的（.opacity-70）——已被 user_message 认领转正的那些属于历史，照常随清屏走、
+    // 由 sessionDomCache 或 loadHistory 负责复原，重复留下会和历史回放撞成两条。
+    const keptPending = inSendWindow
+      ? [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]
+      : [];
     messagesEl.innerHTML = '';
     messagesEl.classList.remove('empty-start');
     clearStreams(); thinkings.clear(); toolCards.clear();
@@ -5582,14 +5663,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     _turnRunning = false;
     // 发送窗口内同会话静默换实例 / history reload 二次 clearView 须补回 busy
     // （innerHTML='' 会拆掉 #streamLiveStatus；setBusy(false) 也会 hide）。真切会话则不补。
-    if (shouldRestoreOptimisticBusy({
-      pendingFirstSend: _pendingFirstSend,
-      pendingSendBusySessionId: _pendingSendBusySessionId,
-      viewingInstanceId: displayedInstanceId,
-      sessionId,
-    })) {
+    if (inSendWindow) {
       setBusy(true);
       _turnRunning = true; // 同会话静默换实例：那条刚发出的消息仍在跑，闸不能松
+      // 未确认气泡放回（innerHTML='' 只是把节点摘出 DOM 树，节点本身连同已绑的监听器都还完好）。
+      // 追加到末尾即可：这批本就是清屏前最靠后的消息，且此刻容器是空的，相对顺序原样保留。
+      // 必须排在 maybeShowEmptySessionGuide 的 queueMicrotask 之前落地——它以 childNodes.length 为
+      // 判据，气泡先回来才不会在"其实有消息"的会话上多贴一张空态引导卡。同步代码天然先于微任务。
+      for (const node of keptPending) messagesEl.appendChild(node);
     }
     hideActivityBanner(); // WS-005：清 activity 横幅，否则 A 的子 agent 活动态残留到空闲的 B（task-progress 已由 setInstances 按实例处理；API 重试态随 liveLine 一起销毁）
 

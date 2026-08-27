@@ -385,6 +385,10 @@ app.post('/__resolve-session-id', (_req, res) => {
 // Helper to delay executions to simulate streaming behavior
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
+// test:slow-echo 的回显延迟：模拟真实 server 在 emit user_message 之前那段前置慢路径（见 user:message
+// handler 里的用法）。取值须显著大于 spec 侧断言用的 timeout，两者拉开倍数余量，否则慢机器上会 flaky。
+const SLOW_ECHO_DELAY_MS = 2000;
+
 function emitLateClosedSessionEvents(closedInstanceId) {
   const staleSessionId = 'mock-session-closed-stale';
   const staleEpoch = 'mock-epoch-closed-stale';
@@ -3634,13 +3638,28 @@ io.on('connection', socket => {
     // "Always echo"会先用 viewingInstanceId=null 广播 user_message，随后才广播的 instances 触发前端
     // bindView→clearView 会把刚回显的气泡一并清空。真实 server 的时序是反过来的：懒开先 broadcastInstances()
     // 后才 a.send()（才 emit user_message）——此处提前创建，让回显自然带上正确的 instanceId，对齐真实时序。
-    if (cmd === 'test:fresh-interrupt' && viewingInstanceId === null) {
-      console.log('[mock] test:fresh-interrupt — 模拟新会话首发、sessionId 未到即可能被点停止');
+    // test:slow-echo 同样纳入：新会话首发是本 bug 最严重的场景（FRESH 的 attemptedModel 是 undefined，
+    // 选了模型就必然触发 setModel 那一跳），且它比"已有会话"多一道坎——懒开广播会触发前端
+    // bindView→clearView 清屏，乐观气泡必须活过这次清屏才算真修好。走同一条懒开分支才能把这道坎测出来。
+    if ((cmd === 'test:fresh-interrupt' || cmd === 'test:slow-echo') && viewingInstanceId === null) {
+      console.log(`[mock] ${cmd} — 模拟新会话首发懒开（sessionId 未到，先广播 instances 再回显）`);
       openFreshMockInstance(requestedModel);
       io.emit('agent:event', {
         seq: 0, epoch: 'server', sessionId: null, ts: Date.now(),
         type: 'instances', payload: { canRestart: mockCanRestart, viewingInstanceId, viewingCwd: mockInstances.find(i => i.instanceId === viewingInstanceId)?.cwd || mockInstances[0].cwd, dirs: Array.from(new Set(mockInstances.map(i => i.cwd))), instances: mockInstances, service: mockServicePayload() }
       });
+    }
+
+    // 服务端慢路径显式化（test:slow-echo）。真实 server 从收到 user:message 到 emit user_message 之间
+    // 压着一串 await：懒开实例（currentSessionForCwd 读盘 + dedupedResume spawn CLI + transcript 尾读）
+    // 与 agent.js#send 里那次 setModel control_request——后者打给一个刚 spawn 还没起来的 CLI，上界就是
+    // logic/outbox-send.js 的 SERVER_PRE_TURN_UPPER_BOUND_MS(10s)。
+    // mock 默认同步 echo，于是「气泡要等服务端回包才出现」这个真机可见的空窗在 E2E 里【结构性不可见】，
+    // 整套回归都跑在"回包瞬时"这一个不真实的时序上。本命令把那段空窗显式化，让「发送后气泡是否立即
+    // 可见」成为可断言的行为。延迟值远大于任何同步渲染耗时，断言侧用短于它的 timeout 才有区分力。
+    if (cmd === 'test:slow-echo') {
+      console.log(`[mock] test:slow-echo — 模拟服务端前置慢路径，延迟 ${SLOW_ECHO_DELAY_MS}ms 后才回显 user_message`);
+      await delay(SLOW_ECHO_DELAY_MS);
     }
 
     // Always echo user message back

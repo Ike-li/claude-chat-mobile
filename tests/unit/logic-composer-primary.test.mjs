@@ -326,6 +326,61 @@ test('presentOnlineSendTransport: 无 err 委托 presentOnlineSendAck', () => {
   assert.equal(presentOnlineSendTransport(null, { ok: false, retryable: true }).requeue, true);
 });
 
+// 在线乐观气泡的去留（2026-08-27）。气泡在 send() 那一刻就上屏了（修「发出去的消息消失」），
+// 于是负 ack 回来时必须决定它的命运。判据只有一条：这条消息还在不在飞。
+//  · ok / requeue → 还在飞（outbox 接管重发，并在同一颗气泡上显示进度/重发按钮）→ 留
+//  · busy / permanent / stale → 确定没发出去，且文字已回填输入框 → 必须撤，否则屏幕上留一颗永远
+//    转圈的气泡，用户以为发出去了——那正是本次要修的「消息被吞」观感的镜像反面，比原 bug 更糟。
+//
+// 【为什么另立字段而不复用 restoreDraft】当前每个分支上两者恰好同值，但语义是两回事：一个管输入框，
+// 一个管消息流。靠巧合相等省一个字段，等于把「将来某分支要回填草稿但保留气泡」变成静默错误。
+// 同款教训见 presentOfflineResendAck 与本函数那次「两边注释都写着对齐、那一维从没对齐」。
+test.describe('presentOnlineSendAck: 乐观气泡去留（dropBubble）', () => {
+  test('成功 → 留，等 user_message 按 clientMessageId 认领转正', () => {
+    assert.equal(presentOnlineSendAck({ ok: true, instanceId: 'i1' }).dropBubble, false);
+  });
+
+  test('可重试失败 → 留，outbox 接管后仍要在这颗气泡上显示重发进度', () => {
+    const out = presentOnlineSendAck({ ok: false, error: '发送失败，请重试', retryable: true });
+    assert.equal(out.requeue, true);
+    assert.equal(out.dropBubble, false, 'outbox 持有 bubbleEl，撤掉它重发就没有节点可认领了');
+  });
+
+  test('busy 拒收 → 撤，消息确定没入队', () => {
+    const out = presentOnlineSendAck({
+      ok: false, error: '当前任务运行中，请等待完成后再发送', busy: true, retryable: false,
+    });
+    assert.equal(out.dropBubble, true);
+    assert.equal(out.restoreDraft, true, '撤气泡与回填草稿成对：消息流里没了，输入框里要有');
+  });
+
+  test('永久失败 / stale → 撤', () => {
+    assert.equal(presentOnlineSendAck({ ok: false, error: '消息过长', permanent: true }).dropBubble, true);
+    assert.equal(presentOnlineSendAck({ ok: false, error: 'stale_instance', stale: true }).dropBubble, true);
+  });
+
+  test('transport 超时 → 留（走 requeue）', () => {
+    assert.equal(presentOnlineSendTransport(new Error('timeout'), undefined).dropBubble, false);
+  });
+
+  // 不变量：留气泡 ⟺ 消息还在飞。新增分支若违反，说明它要么「既不重发又在屏幕上留转圈气泡」，
+  // 要么「重发中却把气泡撤了」——后者会让重发成功时 matchedBubble 找不到节点、凭空多一条气泡。
+  test('不变量：dropBubble 恒等于「既不成功也不重发」', () => {
+    const acks = [
+      { ok: true },
+      { ok: false, error: 'x', retryable: true },
+      { ok: false, error: 'x', busy: true, retryable: false },
+      { ok: false, error: 'x', permanent: true },
+      { ok: false, error: 'stale_instance', stale: true },
+      {}, null, undefined,
+    ];
+    for (const ack of acks) {
+      const out = presentOnlineSendAck(ack);
+      assert.equal(out.dropBubble, !out.ok && !out.requeue, `分支失配: ${JSON.stringify(ack)}`);
+    }
+  });
+});
+
 test('outbox: enqueue 去重同 clientMessageId + 超 cap 丢最旧', () => {
   let q = [];
   ({ queue: q } = planOutboxEnqueue(q, { clientMessageId: 'a', text: '1' }, { maxItems: 2 }));

@@ -250,6 +250,38 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // 在线乐观气泡（2026-08-27）：真机反馈「发出去的消息消失，过几秒才出现」。根因不是丢消息——
+  // 在线路径【根本不建本地气泡】，气泡的诞生被压在服务端一串 await 之后（懒开实例 spawn CLI +
+  // setModel control_request，上界 SERVER_PRE_TURN_UPPER_BOUND_MS=10s）。这段窗口里输入框已清空、
+  // 消息流却还是空的，观感就是"没发成功"。
+  // 这条回归以前【结构性抓不到】：mock 收到 user:message 后同步 echo，回包永远瞬时。
+  // 所以本用例走 test:slow-echo 把那段空窗显式化，断言 timeout 短于 mock 延迟才有区分力。
+  test('P0-02m 在线发送立即出现未确认气泡，服务端回显后原地转正', async ({ page }) => {
+    await gotoMock(page);
+    await ensureComposerReady(page);
+
+    await page.locator('#input').fill('test:slow-echo');
+    await page.locator('#btnSend').click();
+
+    // ★ 800ms 必须远短于 mock 的 SLOW_ECHO_DELAY_MS(2000)：只有本地乐观气泡能让它通过。
+    // 若这里放宽到默认 timeout，服务端回显也能满足断言，用例就退化成「气泡最终会出现」，零区分力。
+    const bubbles = page.locator('[data-testid="user-message"]');
+    await expect(bubbles).toHaveCount(1, { timeout: 800 });
+    await expect(bubbles.last()).toContainText('test:slow-echo');
+    // 未确认态可见：半透明 + 待发指示，让"已发出但还没落定"与"已确认"在视觉上可区分
+    await expect(bubbles.last()).toHaveClass(/opacity-70/);
+    await expect(page.locator('.pending-indicator').last()).toBeVisible();
+    // 发送动作本身已完成：输入框清空、主钮进入停止态
+    await expect(page.locator('#input')).toHaveValue('');
+
+    // 服务端回显到达 → 原地转正（去半透明、撤待发指示），且【不产生第二个气泡】
+    await expect(bubbles.last()).not.toHaveClass(/opacity-70/, { timeout: 10_000 });
+    await expect(bubbles).toHaveCount(1);
+    await expect(page.locator('.pending-indicator')).toHaveCount(0);
+
+    await expectNoBrowserErrors(page);
+  });
+
   // VC-D1-01（2026-08-26 探索性测试）：一次完整回合的**三段形变**。
   // 本文件上面 P0-02 只覆盖了第一段（空输入 → 打字 → 发送钮活过来），后两段散落在别的用例里，
   // 从没有一条把它们串成一条链断言过。串起来才拦得住这类失败：
