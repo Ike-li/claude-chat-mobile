@@ -1,6 +1,5 @@
 // notifications.js —— 事件 → 通知的纯逻辑层（渠道无关文案 + 渠道元数据），从组装根 src/server/app.js 抽出便于单测。
 // 传输层在 src/ops/notify-channels.js：createNotifyChannels 返回的 pushNotify（Web Push）与 ntfyNotify（ntfy）。
-import { basename } from 'node:path';
 import { setCapped } from '../shared/bounded-map.js';
 
 // notificationForEvent 返回 { title, body, data? }：
@@ -33,7 +32,11 @@ function truncatePreview(text) {
 // 不会因误判后台而重复轰炸用户。
 // 锁屏/通知栏一行很窄：会话标题截到 40 字（与 sessions.upsertSession 的 title 上限同款），换行压成空格。
 export const NOTIFY_SESSION_TITLE_CAP = 40;
-const NOTIFY_TITLE_PLACEHOLDERS = new Set(['新会话', '(无标题)']);
+// 'New session' 是 i18n.js:321 给「新会话」的英文译文 —— 前端把标题翻译过再传上来，
+// 只认中文那份等于对英文界面的用户失效（推送里出现「✅ 完成 · proj · New session」这种假标题）。
+// 这三个值必须与 public/js/logic/session-search.js 的同名集合逐字相等，由
+// tests/unit/cross-side-parity.test.mjs 的对照闸守着。
+const NOTIFY_TITLE_PLACEHOLDERS = new Set(['新会话', '(无标题)', 'New session']);
 
 export function sanitizeNotifySessionTitle(raw) {
   if (typeof raw !== 'string') return '';
@@ -42,11 +45,24 @@ export function sanitizeNotifySessionTitle(raw) {
   return one.length > NOTIFY_SESSION_TITLE_CAP ? `${one.slice(0, NOTIFY_SESSION_TITLE_CAP)}…` : one;
 }
 
+// 项目名 = 路径尾段。**不用 node:path 的 basename**，两个实测到的形态它都答错：
+//   · basename('/') === ''（不是 '/'），而外层 `if (cwd)` 判 '/' 为 truthy 放行
+//     → 推出「✅ 任务完成 ·  · 改个bug」的空段，正是下面那行注释声称要避免的东西；
+//   · basename('C:\\code\\proj') 在 POSIX 上返回整串（不认反斜杠）→ 整条 Windows 路径进横幅。
+// 与 public/js/logic/session-search.js 的 projectFromCwd 逐字同源。它本身不 export，
+// 由 cross-side-parity 的 formatNotifyIdentity 用例间接盯着（'/' 与 'C:\\code\\proj' 两行）。
+function projectFromCwd(cwd) {
+  const s = String(cwd || '').replace(/[/\\]+$/, '');
+  if (!s) return '';
+  return s.split(/[/\\]/).pop() || '';
+}
+
 // 横幅身份：事件 · 项目 · 会话。缺哪段跳过哪段，避免「✅ 任务完成 · ·」这种空段。
 export function formatNotifyIdentity(eventTitle, { cwd, sessionTitle } = {}) {
   const parts = [];
   if (eventTitle) parts.push(eventTitle);
-  if (cwd) parts.push(basename(cwd));
+  const proj = projectFromCwd(cwd);
+  if (proj) parts.push(proj);
   const sess = sanitizeNotifySessionTitle(sessionTitle);
   if (sess) parts.push(sess);
   return parts.join(' · ');

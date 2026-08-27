@@ -9,9 +9,14 @@ import { constants, realpathSync } from 'node:fs';
 import { rejectableSymlinkComponent } from './file-security.js';
 
 export const UPLOAD_DIR = '.ccm-uploads';     // WORK_DIR 下的落盘子目录（点前缀，gitignore 友好）
-const MAX_FILES = 10;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;      // 单文件 10MB（解码后字节）
-const MAX_TOTAL_BYTES = 20 * 1024 * 1024;     // 总量 20MB（注：base64 上线 ~1.33x，见 server maxHttpBufferSize）
+
+// 三个上限**前端也各有一份**（public/js/app/attachments.js 的 MAX_COUNT / MAX_FILE / MAX_TOTAL）——
+// 边界闸禁止前后端互相 import，只能各写各的。tests/unit/single-source-of-truth.test.mjs 逐个比对，
+// 改一边不改另一边会红。前端那份是「提前告知用户」，本文件这份才是**真正的闸**（前端不可信）。
+export const MAX_FILES = 10;
+export const MAX_FILE_BYTES = 10 * 1024 * 1024;      // 单文件 10MB（解码后字节）
+export const MAX_TOTAL_BYTES = 20 * 1024 * 1024;     // 总量 20MB（注：base64 上线 ~1.33x，见 server maxHttpBufferSize）
+const mb = (bytes) => `${bytes / 1048576}MB`;        // 文案里的 MB 数由常量算，不再手写字面量
 const MAX_THUMB_CHARS = 100_000;             // FILES-4：thumb 服务端上限（与前端 self-limit 对齐）
 
 // 文件名收敛：只取 basename，去路径分隔/控制/危险字符，去前导点（防 . / .. / 隐藏覆盖），空则回退 file。
@@ -34,7 +39,7 @@ export function validateAttachments(attachments) {
     if (!a || typeof a.data !== 'string' || !a.data) return '附件缺少数据';
     if (typeof a.name !== 'string' || typeof a.mimeType !== 'string') return '附件缺少 name/mimeType';
     const bytes = Buffer.byteLength(a.data, 'base64');
-    if (bytes > MAX_FILE_BYTES) return `附件「${a.name}」过大（${(bytes / 1048576).toFixed(1)}MB，单文件上限 10MB）`;
+    if (bytes > MAX_FILE_BYTES) return `附件「${a.name}」过大（${(bytes / 1048576).toFixed(1)}MB，单文件上限 ${mb(MAX_FILE_BYTES)}）`;
     total += bytes;
     // FILES-4：thumb 进 ring buffer + 广播，须有服务端上限（前端 100k 自限不可信）
     if (a.thumb != null) {
@@ -44,7 +49,7 @@ export function validateAttachments(attachments) {
       }
     }
   }
-  if (total > MAX_TOTAL_BYTES) return `附件总量过大（${(total / 1048576).toFixed(1)}MB，上限 20MB）`;
+  if (total > MAX_TOTAL_BYTES) return `附件总量过大（${(total / 1048576).toFixed(1)}MB，上限 ${mb(MAX_TOTAL_BYTES)}）`;
   return null;
 }
 

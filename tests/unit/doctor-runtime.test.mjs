@@ -58,12 +58,57 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
     }
   });
   test('report 含 12 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS / ENV_OVERRIDE）', () => {
-    const rep = runDoctor({ home: '/nonexistent-ccm', workDirs: [] });
+    // 注入探测：不注入的话 runDoctor 会真的 which + 跑一次 claude --version，
+    // 让这条断言的结果取决于跑测试的机器上装没装 CLI。
+    const rep = runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE });
     assert.equal(rep.checks.length, 12);
     assert.ok(rep.checks.some(c => c.id === 'DEVICE_GATE'));
     assert.ok(rep.checks.some(c => c.id === 'MODEL_SETTINGS'));
     assert.ok(rep.checks.some(c => c.id === 'ENV_OVERRIDE'));
     assert.ok(['ready', 'caution', 'blocked'].includes(rep.readiness.level));
+  });
+});
+
+// ── CLAUDE_BIN 实时探测 ────────────────────────────────────────────────────
+// 2026-08-27：这一格此前的**唯一**判据是 ctx.claudeVersion —— server 启动那一刻 execSync
+// 一次 `claude --version` 拿到的字符串。于是它不是在检查 claude，是在回放一个快照：
+// 当天现场 CLI 已升到 2.1.247，web 体检仍显示 2.1.246 且判 ok；claude 被卸载/移走同理。
+// 现在与 scripts/doctor.js 共用 probeClaudeBin + claudeBinDiagnostic，两边同一判据。
+const STUB_PROBE = { explicit: '/usr/local/bin/claude', exists: true, executable: true, version: '2.1.247 (Claude Code)' };
+const claudeCheck = (ctx) => runDoctor({ home: '/nonexistent-ccm', workDirs: [], ...ctx }).checks.find(c => c.id === 'CLAUDE_BIN');
+
+test.describe('CLAUDE_BIN：实时探测而非回放启动快照', () => {
+  test('探得到且与启动快照一致 → ok，detail 带路径与版本', () => {
+    const c = claudeCheck({ probeClaudeBin: () => STUB_PROBE, claudeVersion: '2.1.247 (Claude Code)' });
+    assert.equal(c.status, 'ok');
+    assert.match(c.detail, /2\.1\.247/);
+    assert.match(c.detail, /claude/);
+  });
+
+  test('实时版本 ≠ 启动快照 → warn（CLI 升级过，跑着的 SDK 子进程还是旧版）', () => {
+    const c = claudeCheck({ probeClaudeBin: () => STUB_PROBE, claudeVersion: '2.1.246 (Claude Code)' });
+    assert.equal(c.status, 'warn', '这正是 2026-08-27 现场那一格：装的是 247，server 启动时是 246');
+    assert.equal(c.safe.stale, true);
+    assert.match(c.detail, /2\.1\.246/);
+    assert.match(c.detail, /重启/);
+  });
+
+  test('PATH 上找不到 claude → fail（不能因为快照里还留着版本号就判绿）', () => {
+    const c = claudeCheck({ probeClaudeBin: () => ({ explicit: '', resolvedPath: '' }), claudeVersion: '2.1.247 (Claude Code)' });
+    assert.equal(c.status, 'fail');
+    assert.equal(c.safe.found, false);
+  });
+
+  test('路径还在但已不可执行 → fail', () => {
+    const c = claudeCheck({ probeClaudeBin: () => ({ explicit: '/x/claude', exists: true, executable: false }) });
+    assert.equal(c.status, 'fail');
+    assert.match(c.detail, /不可执行|not executable/);
+  });
+
+  test('没有启动快照（旧调用）→ 只按实时结果判，不误报 stale', () => {
+    const c = claudeCheck({ probeClaudeBin: () => STUB_PROBE });
+    assert.equal(c.status, 'ok');
+    assert.notEqual(c.safe.stale, true);
   });
 });
 

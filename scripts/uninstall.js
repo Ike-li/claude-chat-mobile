@@ -25,6 +25,7 @@ import { createInterface } from 'node:readline/promises';
 import { resolveManifestPath, resolveUninstallConfirm } from './service.js';
 import { SERVICE_UNIT_LOG_NAMES } from '../src/ops/service-units.js';
 import { readConfigFileValues } from '../src/ops/config-file.js';
+import { claudeSettingsPath, ccmUnderClaudeHome } from '../src/shared/claude-home.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(HERE);
@@ -82,8 +83,8 @@ export function createUninstaller({
   const fileEnv = readConfigFileValues(root).values;
   const manifestPath = resolveManifestPath(env, fileEnv, root);
   const dataDir = dirname(manifestPath);
-  const settingsPath = join(home, '.claude', 'settings.json');
-  const ccmDir = join(home, '.claude', 'ccm');
+  const settingsPath = claudeSettingsPath(home);
+  const ccmDir = ccmUnderClaudeHome(home);
 
   // spawn 可能抛（可执行文件不存在等）——卸载器的方向是 fail-safe：判定不了就少删，不多删。
   function safeSpawn(cmd, args) {

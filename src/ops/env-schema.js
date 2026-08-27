@@ -34,6 +34,13 @@ const TOGGLE_ZERO = { on: '', off: '0' };   // CCM_AGENT_PROGRESS_SUMMARIES：�
 
 const t = (zh, en) => ({ zh, en });
 
+// 默认端口的**唯一定义处**。此前这个 3000 在仓里有六份独立字面量：本 schema 的 default、
+// src/server/config.js 的 `positiveNumber(env.PORT, 3000)`、scripts/service.js 的五处 `?? 3000`。
+// 后果不是「端口错了」（值恰好都一样），而是 schema 的 default **压根没人消费** —— 改它只会
+// 让配置面板和 doctor 显示新值（doctor 用 def.default 算「生效值」），server 照旧跑 3000。
+// 声明了却不被消费的事实源，比没有更糟：它看起来像唯一真相。
+export const DEFAULT_PORT = 3000;
+
 // kind: text | number | path | url | secret | toggle | readonly
 export const ENV_SCHEMA = {
   // ── 鉴权 ────────────────────────────────────────────────────────────
@@ -62,7 +69,7 @@ export const ENV_SCHEMA = {
 
   // ── 运行时 ──────────────────────────────────────────────────────────
   PORT: {
-    group: 'runtime', kind: 'number', min: 1, max: 65535, default: '3000',
+    group: 'runtime', kind: 'number', min: 1, max: 65535, default: String(DEFAULT_PORT),
     label: t('监听端口', 'Port'),
   },
   WORK_DIR: {

@@ -27,9 +27,10 @@ import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { throttleNotify } from './notifications.js';
+import { claudeSettingsPath, ccmUnderClaudeHome } from '../shared/claude-home.js';
 
 export const CLI_HOOKS_SCHEMA_VERSION = 1;
-const DEFAULT_CLI_HOOKS_ROOT = join(homedir(), '.claude', 'ccm', 'hooks-v1');
+const DEFAULT_CLI_HOOKS_ROOT = ccmUnderClaudeHome(homedir(), 'hooks-v1');
 export const DEFAULT_CLI_HOOKS_EVENTS_DIR = join(DEFAULT_CLI_HOOKS_ROOT, 'events');
 export const DEFAULT_CLI_HOOKS_ACKS_DIR = join(DEFAULT_CLI_HOOKS_ROOT, 'acks');
 // 陈旧事件阈值：合盖睡一夜再打开，攒下的事件既不该刷镜像（启动后首个 catchUpTick 本就全量重建）
@@ -253,8 +254,8 @@ export const HOOK_TIMEOUT_SEC = 10; // CLI 侧硬保险；runner 自带 2s 看�
 
 export function hooksPathsForHome(home = homedir()) {
   return {
-    settings: join(home, '.claude', 'settings.json'),
-    manifest: join(home, '.claude', 'ccm', 'hooks-v1', 'install-manifest.json'),
+    settings: claudeSettingsPath(home),
+    manifest: ccmUnderClaudeHome(home, 'hooks-v1', 'install-manifest.json'),
   };
 }
 

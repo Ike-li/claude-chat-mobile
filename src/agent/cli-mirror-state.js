@@ -2,14 +2,14 @@
 // 这里仅描述 CLI 已落盘的观察值；不得把它写回 Web 接管实例的偏好。
 
 import { open } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { CCM_PERMISSION_MODES } from './cli-settings-defaults.js';
 // project 目录名编码走 shared 唯一实现：本文件曾自带第三份复制品（无 200 截断 + hash 后缀），
 // 与 history/workdirs 分叉后会造成「历史同步正常、镜像观察态静默为空」的不对称失效。
 import { encodeProjectDir } from '../shared/project-dir.js';
+import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 
-const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
+// 根路径走 shared 唯一实现（同 encodeProjectDir 的收敛理由，见上）。
 const EMPTY_OBSERVED_STATE = Object.freeze({ model: null, permissionMode: null });
 const TAIL_READ_BYTES = 512 * 1024;
 

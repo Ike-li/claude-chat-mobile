@@ -40,6 +40,7 @@ import {
   resolveHookDirs,
   scanHookEvents,
 } from '../src/ops/cli-hooks-bridge.js';
+import { claudeHome, ccmUnderClaudeHome } from '../src/shared/claude-home.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const RUNNER = join(ROOT, 'scripts', 'hooks-bridge.js');
@@ -66,9 +67,9 @@ function lstatIfPresent(path) {
 
 function assertNoInstallerSymlinks(home, paths) {
   const candidates = [
-    join(home, '.claude'),
-    join(home, '.claude', 'ccm'),
-    join(home, '.claude', 'ccm', 'hooks-v1'),
+    claudeHome(home),
+    ccmUnderClaudeHome(home),
+    ccmUnderClaudeHome(home, 'hooks-v1'),
     paths.settings,
     paths.manifest,
   ];

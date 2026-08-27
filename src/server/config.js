@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 
 import { loadConfigSources, projectToEnv, resolveConfigValues } from '../ops/config-file.js';
 import { resolveDataDir } from '../shared/data-dir.js';
+import { DEFAULT_PORT } from '../ops/env-schema.js';
 
 const positiveNumber = (value, fallback) => {
   const number = Number(value);
@@ -98,7 +99,7 @@ export function parseServerConfig(env, {
   projectRoot,
 } = {}) {
   return {
-    port: positiveNumber(env.PORT, 3000),
+    port: positiveNumber(env.PORT, DEFAULT_PORT),
     authToken: env.AUTH_TOKEN || '',
     idleTimeoutMs: positiveNumber(env.IDLE_TIMEOUT_MS, 600_000),
     // Zero explicitly disables fully-idle instance reclamation.

@@ -35,6 +35,7 @@ import { renderTemplate, stripLeadingComment } from './render-plist.js';
 
 import { classifyRestartPattern, validateServiceEvents } from '../src/ops/service-events.js';
 import { CONFIG_FILE_NAME, readConfigFileValues } from '../src/ops/config-file.js';
+import { DEFAULT_PORT } from '../src/ops/env-schema.js';
 import {
   DEFAULT_LABEL_PREFIX,
   SERVICE_UNIT_NAMES,
@@ -298,7 +299,7 @@ export function createServiceManager(deps = {}) {
     const live = launchctlList(warnings);
     const liveKnown = warnings.length === beforeList;
     const env = readEnv() || {};
-    const port = positivePort(env.PORT) ?? 3000;
+    const port = positivePort(env.PORT) ?? DEFAULT_PORT;
 
     // 重启历史由 server 进程周期采样落盘（见 src/server/app.js 的 sampleServiceEvents）。
     // 这里只读不写：status 可能被菜单栏每 2s 调一次，写盘会打架。
@@ -667,7 +668,7 @@ export function createServiceManager(deps = {}) {
   // EADDRINUSE 退出，KeepAlive 空转，菜单还报成功。常见情况是终端里先开了 npm start。
   function serverPortConflict(unit) {
     if (unit !== 'server') return null;
-    const port = positivePort((readEnv() || {}).PORT) ?? 3000;
+    const port = positivePort((readEnv() || {}).PORT) ?? DEFAULT_PORT;
     const listenPid = portListenerPid(port);
     if (!listenPid) return null;
     const ours = currentPid(labelFor(unit, labelPrefix));
@@ -689,7 +690,7 @@ export function createServiceManager(deps = {}) {
   }
 
   function confirmServerListening(label, { timeoutMs = 15000, intervalMs = 300 } = {}) {
-    const port = positivePort((readEnv() || {}).PORT) ?? 3000;
+    const port = positivePort((readEnv() || {}).PORT) ?? DEFAULT_PORT;
     const maxTries = Math.max(1, Math.ceil(timeoutMs / intervalMs));
     for (let i = 0; i < maxTries; i += 1) {
       if (i > 0) sleep(intervalMs);
@@ -775,7 +776,7 @@ export function createServiceManager(deps = {}) {
 
     // 用轮询次数而不是墙钟截止：now 是可注入的（测试里恒定），拿它算 deadline 会死循环。
     const maxTries = Math.max(1, Math.ceil(timeoutMs / intervalMs));
-    const port = positivePort((readEnv() || {}).PORT) ?? 3000;
+    const port = positivePort((readEnv() || {}).PORT) ?? DEFAULT_PORT;
     for (let i = 0; i < maxTries; i += 1) {
       sleep(intervalMs);
       const pid = currentPid(label);
@@ -805,7 +806,7 @@ export function createServiceManager(deps = {}) {
   // + rate-limiter 阈值 8 锁 15 分钟 ⇒ 一个会重试的健康检查能把机主连同手机一起关在门外。
   function health() {
     const env = readEnv() || {};
-    const port = positivePort(env.PORT) ?? 3000;
+    const port = positivePort(env.PORT) ?? DEFAULT_PORT;
     const token = env.AUTH_TOKEN;
     const url = `http://127.0.0.1:${port}/health${token ? `?token=${encodeURIComponent(token)}` : ''}`;
 

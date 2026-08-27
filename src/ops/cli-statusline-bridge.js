@@ -18,11 +18,12 @@ import {
 } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
+import { ccmUnderClaudeHome } from '../shared/claude-home.js';
 
 const CLI_STATUSLINE_SCHEMA_VERSION = 1;
 const MAX_CLI_STATUSLINE_SNAPSHOT_BYTES = 64 * 1024;
 const DEFAULT_CLI_STATUSLINE_DIR = join(
-  homedir(), '.claude', 'ccm', 'statusline-v1', 'snapshots',
+  ccmUnderClaudeHome(homedir(), 'statusline-v1', 'snapshots'),
 );
 
 export function cliStatuslineTtlMs(refreshIntervalSec = 60) {

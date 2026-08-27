@@ -1,11 +1,39 @@
 // doctor-runtime.js —— UI 安全体检（④）的运行时编排：读合并白名单 + 6 项检查 + 脱敏聚合。
 // server 的 doctor:run 事件调 runDoctor(ctx)，ctx 由 server 喂（env + 已在内存的 workDirs/版本/pushEnabled/设备数）。
 // 脱敏原则：绝不回显明文 token / 绝对路径 / AUD / 密钥——只出布尔、计数、以及危险白名单规则串（用户须据此收紧）。
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, accessSync, constants } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { isOwnerOnly } from '../files/file-security.js';
+import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js';
 import { ALL_CONFIG_KEYS } from './config-file.js';
-import { statuslineConfigDiagnostic, classifyAuthToken, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic } from './doctor-checks.js';
+import { statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic } from './doctor-checks.js';
+import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
+
+// claude CLI 的实时探测。**有副作用**（which + 跑一次 --version），所以不在 doctor-checks.js 里
+// —— 那一层是纯判定。判定用 claudeBinDiagnostic(probeClaudeBin())，CLI 与 web 两个 doctor 同一对。
+//
+// 住在 src/ops 而不是 scripts/doctor.js：server 也要调它，而运行时代码禁止 import scripts/（边界闸）。
+//
+// execFileSync 传 argv 数组，不拼 shell 字符串：路径含空格/引号/`$(...)` 时前者由系统保证边界，
+// 后者要靠手写转义（本仓已经为这类拼装出过命令注入，见 service-units 的 plist 渲染注释）。
+export function probeClaudeBin({ env = process.env } = {}) {
+  const explicit = env.CLAUDE_BIN || '';
+  const resolvedPath = explicit ? '' : resolveExecutableViaPath('claude'); // POSIX which / win32 where
+  const path = explicit || resolvedPath;
+  if (!path) return { explicit, resolvedPath };
+  if (!existsSync(path)) return { explicit, resolvedPath, exists: false };
+  try {
+    accessSync(path, constants.X_OK);
+  } catch {
+    return { explicit, resolvedPath, exists: true, executable: false };
+  }
+  try {
+    const version = String(execFileSync(path, ['--version'], { encoding: 'utf8', timeout: 3000 })).trim();
+    return { explicit, resolvedPath, exists: true, executable: true, version };
+  } catch (err) {
+    return { explicit, resolvedPath, exists: true, executable: true, versionError: err.message };
+  }
+}
 
 // 敏感配置文件清单（相对项目根）——CLI doctor（scripts/doctor.js）与本运行时 doctor 共用同一事实源，
 // 防两处各自维护再漏同步。列表新增项须同时被 CLI 检查/自动修复与 UI 体检覆盖。
@@ -65,12 +93,12 @@ function readSettingsChain({ home, workDirs = [] } = {}) {
   };
   const out = [];
   if (home) {
-    const file = join(home, '.claude', 'settings.json');
+    const file = claudeSettingsPath(home);
     out.push({ scope: 'global', dir: null, file, json: parse(file) });
   }
   for (const dir of workDirs || []) {
     for (const [scope, name] of [['project', 'settings.json'], ['local', 'settings.local.json']]) {
-      const file = join(dir, '.claude', name);
+      const file = join(claudeHome(dir), name);
       out.push({ scope, dir, file, json: parse(file) });
     }
   }
@@ -133,10 +161,17 @@ export function readModelSettingsSnapshot({ home, workDirs = [] } = {}) {
 export function runDoctor(ctx = {}) {
   const checks = [];
 
-  const tok = classifyAuthToken(ctx.authToken);
-  checks.push({ id: 'AUTH_TOKEN', status: tok.status, detail: tok.isSet ? `已设置（长度 ${tok.length ?? '?'}）` : '未设置——不设则仅绑 127.0.0.1', safe: { isSet: tok.isSet, length: tok.length } });
+  // 分类与措辞都走共用的 authTokenDiagnostic —— 与 scripts/doctor.js 同一份判定。
+  // 此前这里是内联三元拼文案，纯空白 token 只说「已设置（长度 3）」，看不出它绑着公网。
+  const tok = authTokenDiagnostic({ token: ctx.authToken, lang: ctx.lang });
+  checks.push({ id: 'AUTH_TOKEN', status: tok.status, detail: tok.detail, safe: tok.safe });
 
-  checks.push({ id: 'CLAUDE_BIN', status: ctx.claudeVersion ? 'ok' : 'warn', detail: ctx.claudeVersion || '未采集到 CLI 版本', safe: { found: !!ctx.claudeVersion, version: ctx.claudeVersion || null } });
+  // 实时探测 + 与启动快照对比。此前这里只回放 ctx.claudeVersion（server 启动那一刻的字符串），
+  // 于是 claude 被升级/卸载/移走之后，web 体检照样绿到下次重启为止。
+  // ctx.probeClaudeBin 由 server 注入（可被测试替换），缺省时自己探。
+  const probe = (ctx.probeClaudeBin || probeClaudeBin)();
+  const cb = claudeBinDiagnostic({ ...probe, startupVersion: ctx.claudeVersion || '', lang: ctx.lang });
+  checks.push({ id: 'CLAUDE_BIN', status: cb.status, detail: cb.detail, safe: cb.safe });
 
   const wc = (ctx.workDirs || []).length;
   checks.push({ id: 'WORK_DIRS', status: wc ? 'ok' : 'warn', detail: `${wc} 个工作目录`, safe: { count: wc } }); // 不回显路径
@@ -158,7 +193,9 @@ export function runDoctor(ctx = {}) {
   checks.push({ id: 'CF_ACCESS', status: ctx.cfEnabled ? 'ok' : 'warn', detail: ctx.cfEnabled ? '已启用公网 2FA' : '未启用（回退纯 AUTH_TOKEN）', safe: { enabled: !!ctx.cfEnabled, audSet: !!ctx.cfAudSet } }); // AUD 仅布尔
 
   // token 公网 + 无 CF Access 时，localhost 反代/隧道会跳过设备指纹门——显式 warn，不改运行时默认。
-  const gate = classifyDeviceGateTopology({ authTokenSet: tok.isSet && tok.status !== 'fail', cfEnabled: !!ctx.cfEnabled });
+  // 纯空白 token 现在判 fail（绑了公网却不设防），于是这里也正确地不再把它当成一道认证门 ——
+  // 此前它是 warn/isSet=true，DEVICE_GATE 会以为公网侧有 AUTH_TOKEN 保护着。
+  const gate = classifyDeviceGateTopology({ authTokenSet: tok.safe.isSet && tok.status !== 'fail', cfEnabled: !!ctx.cfEnabled });
   checks.push({ id: 'DEVICE_GATE', status: gate.status, detail: gate.detail, safe: gate.safe });
 
   checks.push({ id: 'PUSH_VAPID', status: ctx.pushEnabled ? 'ok' : 'warn', detail: ctx.pushEnabled ? '已配置' : '未配置（推送优雅缺席）', safe: { enabled: !!ctx.pushEnabled } }); // 密钥仅布尔

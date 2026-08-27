@@ -28,12 +28,14 @@ import { homedir, platform } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
-import { isOwnerOnly, fixPermissions, resolveExecutableViaPath } from '../src/files/file-security.js';
+import { isOwnerOnly, fixPermissions } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../src/ops/config-file.js';
 import { loadRuntimeEnvironment } from '../src/server/config.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import {
+  authTokenDiagnostic,
+  claudeBinDiagnostic,
   claudeConfigDirDiagnostic,
   configFormatDiagnostic,
   hooksBridgeDiagnostic,
@@ -49,9 +51,10 @@ import {
   uploadsFootprintDiagnostic,
 } from '../src/ops/doctor-checks.js';
 import { ALL_CONFIG_KEYS } from '../src/ops/config-file.js';
-import { CONFIG_FILE_NAMES } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单
+import { CONFIG_FILE_NAMES, probeClaudeBin } from '../src/ops/doctor-runtime.js'; // BE-013：与 UI 体检共用同一敏感文件清单 + 同一份 claude 探测
 import { collectSyntaxFiles } from './collect-source-files.js';
 import { detectLang } from './setup.js';
+import { DEFAULT_PORT } from '../src/ops/env-schema.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 const results = [];
@@ -87,51 +90,23 @@ function print() {
 // ──────────────────────── 检查项 ────────────────────────
 
 // D1: AUTH_TOKEN
+//
+// 判定与措辞全部走共用的 authTokenDiagnostic（src/ops/doctor-checks.js），与 web 体检同一份。
+// 此前这里自己写了一份，纯空白 token 被说成「已设置但为空 → 仅监听 127.0.0.1」——而 server 的
+// `resolveBindHost('   ')` 返回 0.0.0.0，**安全语义正好说反**。共用之后，这一格只剩排版。
 function checkAuthToken() {
-  const token = process.env.AUTH_TOKEN;
-  if (token === undefined) {
-    warn('AUTH_TOKEN', bi('未设置 → 仅监听 127.0.0.1（本机），无法从手机访问。需要手机访问请在配置里设置后重启。', 'Not set → binds 127.0.0.1 only; your phone cannot reach it. Set it in the config file and restart.'));
-    return;
-  }
-  if (!token || !token.trim()) {
-    fail('AUTH_TOKEN', bi('已设置但为空 → 仅监听 127.0.0.1。若要手机访问，设置非空 token。', 'Set but empty → binds 127.0.0.1 only. Use a non-empty token for phone access.'));
-    return;
-  }
-  if (token.length < 8) {
-    warn('AUTH_TOKEN', bi(`长度仅 ${token.length} 字符，建议 ≥16 字符（随机字符串）提高安全性。`, `Only ${token.length} characters; 16+ random characters is recommended.`));
-  } else {
-    ok('AUTH_TOKEN', bi(`已设置（${token.length} 字符）`, `Set (${token.length} characters)`));
-  }
+  const d = authTokenDiagnostic({ token: process.env.AUTH_TOKEN, lang: LANG });
+  ({ ok, warn, fail })[d.status]('AUTH_TOKEN', d.detail);
 }
 
 // D2: CLAUDE_BIN 可执行
+//
+// 探测（probeClaudeBin，有副作用）与判定（claudeBinDiagnostic，纯函数）都在 src/ops 下，
+// web 体检调的是同一对函数、喂同一形状的结果 —— 这一格不再有两份判据。
+// 探测函数不能留在本文件：src/server/app.js 要用它，而运行时代码禁止 import scripts/（边界闸）。
 function checkClaudeBin() {
-  const explicit = process.env.CLAUDE_BIN;
-  let claudePath = explicit;
-  if (!claudePath) {
-    claudePath = resolveExecutableViaPath('claude'); // POSIX which / win32 where
-    if (!claudePath) {
-      fail('CLAUDE_BIN', bi('未设置 CLAUDE_BIN 且 PATH 查找不到 claude。请确认 Claude Code CLI 已安装并在 PATH 中。', 'CLAUDE_BIN unset and no claude on PATH. Make sure the Claude Code CLI is installed and on PATH.'));
-      return;
-    }
-  }
-  if (!existsSync(claudePath)) {
-    fail('CLAUDE_BIN', bi(`路径不存在: ${claudePath}`, `Path does not exist: ${claudePath}`));
-    return;
-  }
-  try {
-    accessSync(claudePath, constants.X_OK);
-  } catch {
-    fail('CLAUDE_BIN', bi(`路径存在但不可执行: ${claudePath}`, `Path exists but is not executable: ${claudePath}`));
-    return;
-  }
-  // 检查版本
-  try {
-    const ver = execSync(`"${claudePath}" --version`, { encoding: 'utf8', timeout: 3000 }).trim();
-    ok('CLAUDE_BIN', `${claudePath} — ${ver}`);
-  } catch (err) {
-    warn('CLAUDE_BIN', bi(`${claudePath} 可执行但 --version 失败: ${err.message}`, `${claudePath} is executable but --version failed: ${err.message}`));
-  }
+  const d = claudeBinDiagnostic({ ...probeClaudeBin(), lang: LANG });
+  ({ ok, warn, fail })[d.status]('CLAUDE_BIN', d.detail);
 }
 
 // D3: WORK_DIR / WORK_DIRS 可写
@@ -220,9 +195,9 @@ function listenerProcesses(port) {
 
 // D4: PORT 未被占用（或被自家 server unit 占用——桌面端拉着服务时那是正常态，不是故障）
 async function checkPort() {
-  const port = parseInt(process.env.PORT || '3000', 10);
+  const port = parseInt(process.env.PORT || String(DEFAULT_PORT), 10);
   if (isNaN(port) || port < 1 || port > 65535) {
-    const r = portOccupancyDiagnostic({ port: process.env.PORT || '3000', lang: LANG });
+    const r = portOccupancyDiagnostic({ port: process.env.PORT || String(DEFAULT_PORT), lang: LANG });
     fail(r.name, r.detail);
     return;
   }

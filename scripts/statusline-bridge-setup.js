@@ -20,13 +20,14 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { claudeHome, claudeSettingsPath, ccmUnderClaudeHome } from '../src/shared/claude-home.js';
 
 const RUNNER = join(dirname(fileURLToPath(import.meta.url)), 'statusline-bridge.js');
 
 function pathsForHome(home = homedir()) {
   return {
-    settings: join(home, '.claude', 'settings.json'),
-    manifest: join(home, '.claude', 'ccm', 'statusline-v1', 'install-manifest.json'),
+    settings: claudeSettingsPath(home),
+    manifest: ccmUnderClaudeHome(home, 'statusline-v1', 'install-manifest.json'),
   };
 }
 
@@ -41,9 +42,9 @@ function lstatIfPresent(path) {
 
 function assertNoInstallerSymlinks(home, paths) {
   const candidates = [
-    join(home, '.claude'),
-    join(home, '.claude', 'ccm'),
-    join(home, '.claude', 'ccm', 'statusline-v1'),
+    claudeHome(home),
+    ccmUnderClaudeHome(home),
+    ccmUnderClaudeHome(home, 'statusline-v1'),
     paths.settings,
     paths.manifest,
   ];

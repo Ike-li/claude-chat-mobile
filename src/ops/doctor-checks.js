@@ -1,6 +1,7 @@
 // 本文件此前零 import（纯决策函数）。唯一的例外是 shellOverriddenKeys —— 它必须与配置面板
 // 共用同一份实现，见 env-file.js 处注释（判据分叉时两边都不报错，只有用户被误导）。
 import { shellOverriddenKeys } from './env-file.js';
+import { bindsPublicly, isBlankToken } from '../shared/bind-host.js';
 
 // 模型配置「永不打架」体检：settings 的 model 字段 vs 各工作目录的 ANTHROPIC_DEFAULT_*_MODEL 网关映射。
 //
@@ -202,13 +203,101 @@ export function summarizeDangerous(rules = []) {
   return { ruleCount: list.length, dangerous };
 }
 
-// AUTH_TOKEN 判定：绝不回显明文，只出 isSet + length。空 = fail（未保护）；<8 = warn（弱）；否则 ok。
+// AUTH_TOKEN 判定：绝不回显明文，只出 isSet + length + 会不会绑公网。
+// 空 = fail（未保护）；纯空白 = fail（**绑了公网却几乎不设防**，见 bind-host.js）；<8 = warn（弱）；否则 ok。
+//
+// bindsPublic 不是这里算的，是问 src/shared/bind-host.js —— server 启动时用的是同一个函数，
+// 所以「doctor 说会不会对外可达」与「实际绑哪个地址」不可能分叉。
 export function classifyAuthToken(token) {
-  if (token === undefined || token === null) return { status: 'warn', isSet: false };
+  if (token === undefined || token === null) return { status: 'warn', isSet: false, bindsPublic: false };
   const t = String(token);
-  if (t === '') return { status: 'fail', isSet: false };
-  if (t.length < 8) return { status: 'warn', isSet: true, length: t.length };
-  return { status: 'ok', isSet: true, length: t.length };
+  if (t === '') return { status: 'fail', isSet: false, bindsPublic: bindsPublicly(t) };
+  if (isBlankToken(t)) return { status: 'fail', isSet: true, length: t.length, blank: true, bindsPublic: bindsPublicly(t) };
+  if (t.length < 8) return { status: 'warn', isSet: true, length: t.length, bindsPublic: bindsPublicly(t) };
+  return { status: 'ok', isSet: true, length: t.length, bindsPublic: bindsPublicly(t) };
+}
+
+// AUTH_TOKEN 的完整体检项（分类 + 给人看的话），**两个 doctor 共用这一个**。
+//
+// 此前 scripts/doctor.js 没用上面的 classifyAuthToken，自己另写了一份判定 + 文案，于是同一个
+// 纯空白 token 在 CLI 里被说成「仅监听 127.0.0.1」（说反了），在 web 里被说成「弱 token」。
+// 分类与措辞都收进这里之后，两边只剩「怎么排版」的差别。
+export function authTokenDiagnostic({ token, lang = 'zh' } = {}) {
+  const c = classifyAuthToken(token);
+  const detail = (() => {
+    if (!c.isSet && c.status === 'warn') {
+      return bi(lang, '未设置 → 仅监听 127.0.0.1（本机），手机访问不到。需要手机访问请在配置里设置后重启。',
+        'Not set → binds 127.0.0.1 only; your phone cannot reach it. Set it in the config file and restart.');
+    }
+    if (!c.isSet) {
+      return bi(lang, '已设置但是空串 → 仅监听 127.0.0.1。若要手机访问，设置非空 token。',
+        'Set but empty → binds 127.0.0.1 only. Use a non-empty token for phone access.');
+    }
+    if (c.blank) {
+      return bi(lang,
+        `全是空白字符（${c.length} 个）→ server 仍会绑 0.0.0.0 对外监听，而这个 token 形同虚设。`
+        + '这是最危险的一格：看起来像没设，实际公网端口开着。设一个真 token，或彻底删掉这一项。',
+        `All whitespace (${c.length} chars) → the server still binds 0.0.0.0 and is publicly reachable, `
+        + 'while this token protects nothing. Set a real token, or remove the setting entirely.');
+    }
+    if (c.status === 'warn') {
+      return bi(lang, `长度仅 ${c.length} 字符，建议 ≥16 字符（随机字符串）提高安全性。`,
+        `Only ${c.length} characters; 16+ random characters is recommended.`);
+    }
+    return bi(lang, `已设置（${c.length} 字符）`, `Set (${c.length} characters)`);
+  })();
+  return { status: c.status, detail, safe: { isSet: c.isSet, length: c.length, blank: !!c.blank, bindsPublic: c.bindsPublic } };
+}
+
+// CLAUDE_BIN 体检，**两个 doctor 共用**。探测这个动作有副作用（which + 跑 --version），
+// 所以留在各自的宿主里做，这里只吃探测结果做判定与措辞——纯函数，可测。
+//
+// 此前两边不但各写一份，连**判据的类型都不同**：CLI 实时 which + 可执行 + --version；
+// web 只看 server 启动那一刻缓存的 versions.cli 是否非空。后果 2026-08-27 当场兑现：
+// CLI 已升到 2.1.247，web 体检仍显示 2.1.246 并判 ok —— 它不是在检查 claude，
+// 是在回放一个可能已经过期的字符串。
+//
+// startupVersion 是 server 启动时的快照。与实时 version 不一致 ⇒ CLI 在 server 跑着的时候
+// 升级过，SDK 子进程用的还是旧版：这是个真信号，之前没人报，现在它自己会说出来。
+export function claudeBinDiagnostic({
+  explicit = '', resolvedPath = '', exists = null, executable = null,
+  version = '', versionError = '', startupVersion = '', lang = 'zh',
+} = {}) {
+  const path = explicit || resolvedPath;
+  if (!path) {
+    return {
+      status: 'fail',
+      detail: bi(lang, '未设置 CLAUDE_BIN 且 PATH 查找不到 claude。请确认 Claude Code CLI 已安装并在 PATH 中。',
+        'CLAUDE_BIN unset and no claude on PATH. Make sure the Claude Code CLI is installed and on PATH.'),
+      safe: { found: false, version: null },
+    };
+  }
+  if (exists === false) {
+    return { status: 'fail', detail: bi(lang, `路径不存在: ${path}`, `Path does not exist: ${path}`), safe: { found: false, version: null } };
+  }
+  if (executable === false) {
+    return { status: 'fail', detail: bi(lang, `路径存在但不可执行: ${path}`, `Path exists but is not executable: ${path}`), safe: { found: true, version: null } };
+  }
+  if (!version) {
+    return {
+      status: 'warn',
+      detail: versionError
+        ? bi(lang, `${path} 可执行但 --version 失败: ${versionError}`, `${path} is executable but --version failed: ${versionError}`)
+        : bi(lang, `${path} 已找到，但没采集到版本号`, `${path} found, but no version was collected`),
+      safe: { found: true, version: null },
+    };
+  }
+  // 实时版本 ≠ 启动快照：CLI 在 server 运行期间升级过，跑着的 SDK 子进程仍是旧版。
+  if (startupVersion && startupVersion !== version) {
+    return {
+      status: 'warn',
+      detail: bi(lang,
+        `${path} — ${version}；但 server 启动时是 ${startupVersion}，说明 CLI 升级过。重启 server 才会用上新版。`,
+        `${path} — ${version}; the server started with ${startupVersion}, so the CLI was upgraded. Restart the server to pick it up.`),
+      safe: { found: true, version, startupVersion, stale: true },
+    };
+  }
+  return { status: 'ok', detail: `${path} — ${version}`, safe: { found: true, version } };
 }
 
 // localhost / 反代到 127.0.0.1 的隧道会跳过设备指纹审批（trustBasis=bypass），

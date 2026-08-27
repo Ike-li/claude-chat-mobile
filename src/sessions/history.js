@@ -4,7 +4,6 @@ import { open, stat, readdir, readFile } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { listSessions as sdkListSessions, getSessionInfo as sdkGetSessionInfo } from '@anthropic-ai/claude-agent-sdk';
 import { MAX_SESSION_LIMIT, SEARCH_SCAN_LIMIT } from './workdirs.js';
 // 历史回显摘要与 agent.js live 工具卡片同口径，共用 src/shared 的实现（此前两侧各一份逐字复制，
@@ -14,6 +13,7 @@ import { toolSummary } from '../shared/tool-summary.js';
 import { parseLocalCommandOutput, WEB_BARE_SLASH_RE } from '../shared/local-command.js';
 import { setCapped } from '../shared/bounded-map.js';
 import { encodeProjectDir } from '../shared/project-dir.js';
+import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 
 // 快路径注入口（仅测试用）：测试替置一个函数后，快路径走替身而非真 SDK，便于无网络/无 CLI 环境下
 // 验证字段映射与 hasMore 语义。生产留默认 undefined → 走真 sdkListSessions。
@@ -26,7 +26,7 @@ export function __setSdkGetSessionInfoForTest(fn) { __sdkGetSessionInfoForTest =
 // L2 删除走 SDK 官方 deleteSession（它同样只认此真实根、无自定义根的口子），故这里不设环境变量覆盖——
 // 设了也只能隔离本模块的"读"、隔离不了 SDK 的"删"，反而制造读写目录分叉。单测走各函数的 baseDir
 // 参数注入实现隔离；需要真跑 L2 删除的集成测试直接用真实目录下的一次性随机子目录 + 严格清理。
-const CLAUDE_DIR = join(homedir(), '.claude', 'projects');
+const CLAUDE_DIR = CLAUDE_PROJECTS_DIR;
 // 历史回显防爆上限：极端超大会话只回最近 N 条 user/assistant，避免一次性把手机 DOM 撑爆。
 // 正常会话（几百条内）全量返回——与 CLI /resume 的完整历史一致（终端等价性）。不再按字节截断头部。
 export const HISTORY_MAX_MESSAGES = 2000;

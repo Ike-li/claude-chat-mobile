@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { resolveBindHost } from '../../src/shared/bind-host.js';
 import {
   LOG_ROTATE_THRESHOLD_BYTES,
   UPLOADS_FOOTPRINT_WARN_BYTES,
   classifyAuthToken,
+  authTokenDiagnostic,
   classifyDeviceGateTopology,
   classifyPermissionRule,
   claudeConfigDirDiagnostic,
@@ -260,7 +262,7 @@ test.describe('summarizeDangerous', () => {
 
 test.describe('classifyAuthToken：绝不回显明文', () => {
   test('undefined → warn(isSet false)', () => {
-    assert.deepEqual(classifyAuthToken(undefined), { status: 'warn', isSet: false });
+    assert.deepEqual(classifyAuthToken(undefined), { status: 'warn', isSet: false, bindsPublic: false });
   });
   test('空串 → fail', () => {
     assert.equal(classifyAuthToken('').status, 'fail');
@@ -275,6 +277,42 @@ test.describe('classifyAuthToken：绝不回显明文', () => {
     const r = classifyAuthToken('x'.repeat(32));
     assert.equal(r.status, 'ok');
     assert.equal(JSON.stringify(r).includes('x'.repeat(32)), false);
+  });
+});
+
+// ── AUTH_TOKEN 判定与 server 实际绑定地址同源 ──────────────────────────────
+// 2026-08-27：纯空白 token 上三方分叉——server 绑 0.0.0.0（'   ' 是 truthy），
+// scripts/doctor.js 说「仅监听 127.0.0.1」（**说反了**），web 说「弱 token」。
+// 根因是 server 的判据是 app.js 里一行内联三元，两个 doctor 够不到、只能各自猜。
+// 判据抽进 src/shared/bind-host.js 之后，这一组断言钉住「猜」变成「问同一个函数」。
+test.describe('authTokenDiagnostic ⇔ resolveBindHost 同源', () => {
+  for (const token of [undefined, null, '', ' ', '   ', '\t\n', 'abc', 'x'.repeat(8), 'x'.repeat(64)]) {
+    test(`token=${JSON.stringify(token)} 的 bindsPublic 与实际绑定地址一致`, () => {
+      const d = authTokenDiagnostic({ token });
+      assert.equal(d.safe.bindsPublic, resolveBindHost(token) === '0.0.0.0',
+        'doctor 说的「对外可达吗」必须等于 server 真正绑的地址');
+    });
+  }
+
+  test('纯空白 token：判 fail，且话里说清它绑的是 0.0.0.0 而非 127.0.0.1', () => {
+    const d = authTokenDiagnostic({ token: '   ' });
+    assert.equal(d.status, 'fail');
+    assert.equal(d.safe.blank, true);
+    assert.equal(d.safe.bindsPublic, true);
+    assert.match(d.detail, /0\.0\.0\.0/);
+    assert.doesNotMatch(d.detail, /仅监听 127\.0\.0\.1/, '这正是修掉的那句反话');
+    assert.doesNotMatch(JSON.stringify(d), /\s{3}/, '别把 token 本身回显出来');
+  });
+
+  test('英文文案同样说 0.0.0.0，不说 binds 127.0.0.1 only', () => {
+    const d = authTokenDiagnostic({ token: '   ', lang: 'en' });
+    assert.match(d.detail, /0\.0\.0\.0/);
+    assert.doesNotMatch(d.detail, /binds 127\.0\.0\.1 only/);
+  });
+
+  test('未设置与空串仍然只绑本机（不能把这两格也误报成公网）', () => {
+    assert.equal(authTokenDiagnostic({ token: undefined }).safe.bindsPublic, false);
+    assert.equal(authTokenDiagnostic({ token: '' }).safe.bindsPublic, false);
   });
 });
 

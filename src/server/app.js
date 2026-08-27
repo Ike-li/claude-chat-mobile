@@ -12,6 +12,7 @@ import { createConnection } from 'node:net';
 import { parse as dotenvParse } from 'dotenv';
 import { maskToken } from '../shared/sanitizer.js';
 import { setCapped } from '../shared/bounded-map.js';
+import { resolveBindHost } from '../shared/bind-host.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -105,6 +106,7 @@ import { isInstanceBeingWatched, resolveUnreadDelta } from './unread-tracker.js'
 import { createSocketEventRegistrar, registerSocketConnection } from './socket.js';
 import { createMirrorEngine } from './mirror-engine.js';
 import { registerFileSocketHandlers } from './socket-files.js';
+import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 
 // env 规整后初始化 Cloudflare Access（CF_ACCESS_* 三项齐全才启用；缺则 isPublicHost 恒 false=回退 token）。
 initCfAccess();
@@ -1472,7 +1474,7 @@ function writeSessionEntrypoint(sessionId, cwd) {
   wroteEntrypoint.add(sessionId);
   try {
     const projectDir = getProjectDir(cwd);
-    const claudeDir = join(homedir(), '.claude', 'projects', projectDir);
+    const claudeDir = join(CLAUDE_PROJECTS_DIR, projectDir);
     const sessionFile = join(claudeDir, `${sessionId}.jsonl`);
     // SDK 可能还没创建文件，或已写入其他事件（queue-operation 等）；我们追加一行，readHeadMeta 扫描时会读到。
     // 格式：最小元数据行，仅 type/entrypoint/sessionId/timestamp，与 SDK 写的行同构（见 grep 结果）。
@@ -1909,7 +1911,7 @@ function openScoutInstance(cwd) {
       setTimeout(() => {
         try {
           const projectDir = getProjectDir(cwd);
-          const file = join(homedir(), '.claude', 'projects', projectDir, `${sid}.jsonl`);
+          const file = join(CLAUDE_PROJECTS_DIR, projectDir, `${sid}.jsonl`);
           // safe-path: projectDir 这一段【目录】是 getProjectDir(cwd) 算出来的。它若返回空串，
           // 路径就从 <根>/<项目>/<sid>.jsonl 塌成 <根>/<sid>.jsonl——打到 projects 根目录下。
           // 今天无害的唯一理由是这里用的是 unlinkSync（单文件）：目标不存在就抛、被 catch 吞掉，
@@ -2926,6 +2928,9 @@ registerSocketConnection(io, socket => {
 
   on(socket, 'doctor:run', (_payload, ack) => {
     if (typeof ack !== 'function') return;
+    // claudeVersion 传的是**启动时的快照**：runDoctor 自己会实时探一次 claude，两者不一致就报
+    // 「CLI 升级过、重启才生效」。此前它是 CLAUDE_BIN 那一格的唯一判据，于是 claude 被升级/移走后
+    // web 体检照样回放旧版本号并判 ok（2026-08-27 实测：装的 2.1.247，面板显示 2.1.246 绿灯）。
     ack(runDoctor({
       authToken: AUTH_TOKEN,
       claudeVersion: versions.cli,
@@ -3304,7 +3309,10 @@ process.on('uncaughtException', err => console.error('[uncaughtException]', err)
 process.on('unhandledRejection', err => console.error('[unhandledRejection]', err));
 
 // ---- 监听 ----
-const host = AUTH_TOKEN ? '0.0.0.0' : '127.0.0.1';
+// 判据走 src/shared/bind-host.js，不写内联三元：两个 doctor 要回答「这台机器对外可达吗」，
+// 而它们够不到这一行，此前只能各自猜——纯空白 token 上 CLI doctor 就猜反了（说「仅监听
+// 127.0.0.1」，实际绑的是 0.0.0.0）。同一个函数才没有分叉余地。
+const host = resolveBindHost(AUTH_TOKEN);
 // 启动期致命错误必须 fail-fast 并给可读提示（A9 精神），不能落进 uncaughtException 兜底静默退出
 httpServer.on('error', err => {
   if (err.code === 'EADDRINUSE') {
