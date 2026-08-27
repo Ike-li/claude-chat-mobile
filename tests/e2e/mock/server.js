@@ -2539,7 +2539,8 @@ io.on('connection', socket => {
     {
       command: 'test:taskprogress-multi',
       run: async ({ activeInst }) => {
-        // 多任务全量快照（emitBgTasksSnapshot 形态）：验证横幅默认折叠列表 + 折叠按钮展开/收起。
+        // 多任务全量快照（emitBgTasksSnapshot 形态）：验证横幅默认折叠 + 混合分组行归属/详情/停止。
+        // 窗口 8s：展开后还要点组头、第一行详情、行内「停」（ack 兜底 1.5s），2s 会在中途被 notification 撤横幅。
         console.log('[mock] test:taskprogress-multi — 推送多任务全量快照');
         const targetInstanceId = activeInst.instanceId;
         activeInst.state = 'busy';
@@ -2553,7 +2554,7 @@ io.on('connection', socket => {
           type: 'task_progress', transient: true,
           payload: { taskId: tasks[0].taskId, taskType: tasks[0].taskType, message: tasks[0].message, tasks }
         });
-        await delay(2000);
+        await delay(8000);
         activeInst.state = 'idle';
         io.emit('agent:event', {
           seq: 51, epoch: activeEpoch, sessionId: 'mock-session-visual-test', instanceId: targetInstanceId, ts: Date.now(),

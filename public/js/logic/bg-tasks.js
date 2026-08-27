@@ -44,6 +44,71 @@ export function bgTaskListCollapsed({ count = 0, userExpanded = null } = {}) {
   return count > 1;
 }
 
+// 后台任务横幅构成：SDK taskType → 四种展示种类。未知一律 other，不把 'subagent' 等旧错值猜成 agent。
+const BG_TASK_KIND_ORDER = Object.freeze(['agent', 'bash', 'workflow', 'other']);
+
+export function classifyBgTaskKind(taskType) {
+  const kind = taskType != null ? String(taskType).trim() : '';
+  if (kind === 'local_agent' || kind === 'agent') return 'agent';
+  if (kind === 'local_bash' || kind === 'bash') return 'bash';
+  if (kind === 'local_workflow' || kind === 'workflow') return 'workflow';
+  return 'other';
+}
+
+function bgTaskKindTitle(kind) {
+  if (kind === 'agent') return t('子代理');
+  if (kind === 'bash') return t('后台命令');
+  if (kind === 'workflow') return t('工作流');
+  return t('后台任务');
+}
+
+function bgTaskKindGroupLabel(kind) {
+  if (kind === 'other') return t('其它');
+  return bgTaskKindTitle(kind);
+}
+
+function bgTaskKindCountLabel(kind, n) {
+  const count = String(n);
+  if (kind === 'agent') return t('N 个子代理').replace('N', count);
+  if (kind === 'bash') return t('N 条命令').replace('N', count);
+  if (kind === 'workflow') return t('N 个工作流').replace('N', count);
+  return t('N 个其它').replace('N', count);
+}
+
+// 混合列表才分组：组顺序固定 子代理 → 后台命令 → 工作流 → 其它；组内保留输入相对序（调用方已按 lastSeenAt 降序）。
+// 单一种类不返回组头（label=null）——省掉「子代理」底下再写一遍「子代理」。
+export function groupBgTasksForList(entries = []) {
+  const items = Array.isArray(entries) ? entries : [];
+  const byKind = { agent: [], bash: [], workflow: [], other: [] };
+  for (const item of items) byKind[classifyBgTaskKind(item?.taskType)].push(item);
+  const present = BG_TASK_KIND_ORDER.filter(kind => byKind[kind].length > 0);
+  const mixed = present.length > 1;
+  return {
+    mixed,
+    groups: present.map(kind => ({
+      kind,
+      label: mixed ? bgTaskKindGroupLabel(kind) : null,
+      items: byKind[kind],
+    })),
+  };
+}
+
+// 横幅头行：左标题按构成，右状态单一种类沿用「运行中 / N 个运行中」，混合改报「2 个子代理 · 1 条命令」。
+export function formatBgTaskBannerCopy(tasks = []) {
+  const arr = Array.isArray(tasks) ? tasks : [];
+  if (arr.length === 0) return { title: '', status: '' };
+  const { mixed, groups } = groupBgTasksForList(arr);
+  if (!mixed) {
+    const kind = groups[0]?.kind || 'other';
+    const status = arr.length > 1 ? `${arr.length} ${t('个运行中')}` : t('运行中');
+    return { title: bgTaskKindTitle(kind), status };
+  }
+  return {
+    title: t('运行中'),
+    status: groups.map(g => bgTaskKindCountLabel(g.kind, g.items.length)).join(' · '),
+  };
+}
+
 // 后台任务详情面板：进度历史条目格式化。
 // description = 工具态即时更新（如 "Running tests..."），summary = AI ~30s 进度摘要。
 // 两者择一显示（summary 优先，因更语义化；description 兜底）。

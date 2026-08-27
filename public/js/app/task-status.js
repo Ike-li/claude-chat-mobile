@@ -1,4 +1,4 @@
-import { bgTaskListCollapsed, formatProgressHistoryEntry, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic/bg-tasks.js';
+import { bgTaskListCollapsed, formatBgTaskBannerCopy, formatProgressHistoryEntry, groupBgTasksForList, isSyntheticTaskId, taskDetailState, taskStopUiState } from '../logic/bg-tasks.js';
 import { formatBgTaskRowLabel } from '../logic/tool-cards.js';
 import { t } from '../i18n.js';
 
@@ -64,12 +64,15 @@ export function createTaskStatusController(context, {
   function showBanner() {
     if (!dom.taskProgressBanner || !dom.taskProgressText) return;
     const n = tasks.size;
-    // 固定标签「后台任务」在 HTML；这里只写数量/状态，明细全在列表行
+    // 标题按构成改写（子代理 / 后台命令 / 工作流 / 混合「运行中」）；状态单一种类仍是数量，混合报「2 个子代理 · 1 条命令」。
     if (n <= 0) {
+      if (dom.taskBannerLabel) dom.taskBannerLabel.textContent = t('后台任务');
       dom.taskProgressText.textContent = '';
       return;
     }
-    dom.taskProgressText.textContent = n > 1 ? `${n} ${t('个运行中')}` : t('运行中');
+    const copy = formatBgTaskBannerCopy([...tasks.values()]);
+    if (dom.taskBannerLabel) dom.taskBannerLabel.textContent = copy.title;
+    dom.taskProgressText.textContent = copy.status;
     dom.taskProgressBanner.classList.remove('hidden');
     syncStopButton();
   }
@@ -86,6 +89,8 @@ export function createTaskStatusController(context, {
       list.replaceChildren();
       list.classList.add('hidden');
     }
+    if (dom.taskBannerLabel) dom.taskBannerLabel.textContent = t('后台任务');
+    if (dom.taskProgressText) dom.taskProgressText.textContent = '';
     syncBannerToggle(true);
     syncStopButton();
   }
@@ -146,63 +151,75 @@ export function createTaskStatusController(context, {
     const collapsed = bgTaskListCollapsed({ count: tasks.size, userExpanded });
     list.classList.toggle('hidden', collapsed);
     syncBannerToggle(collapsed);
-    for (const [taskId, task] of tasks) {
-      const histLen = (progressHistory.get(taskId) || []).length;
-      const isActive = taskDetailState({ taskId, activeDetailId }).visible;
-      // 卡片承载边框，data-testid="bg-task-row" 留在**高度恒定**的头行上：详情展开后卡片变高，
-      // 若把 testid 挂到卡片上，点击（打元素中心点）会落进详情区，"再点一次收起"永远不触发。
-      // 详情作为头行的兄弟而非后代，点它也不会冒泡回头行——不需要 stopPropagation。
-      // 配色只用无 alpha 的语义 token：tw-config 把颜色映射为裸 var(--x)，`/NN` 修饰符生成不出 utility。
-      const card = createElement(`<div class="rounded-lg border ${isActive ? 'border-warning' : 'border-line-soft'} bg-sunk overflow-hidden"></div>`);
-      const row = createElement('<div class="px-2 py-1.5 cursor-pointer select-none" data-testid="bg-task-row"></div>');
-      const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
-      const label = createElement('<span class="truncate flex-1 min-w-0 text-ink font-medium"></span>');
-      const title = formatBgTaskRowLabel({
-        taskType: task.taskType,
-        message: task.message,
-        taskId,
-      });
-      const histTag = histLen > 0 ? ` · ${histLen}条` : '';
-      label.textContent = `${title.slice(0, 72 - histTag.length)}${histTag}`;
-      label.title = task.message || taskId;
-      // 行「停」与横幅主钮共用同一策略：此前这里【无条件】挂按钮并 stopTask(taskId)，绕开了
-      // taskStopUiState——多子代理时每行都可点，而 localcmd:* 在 SDK 侧根本没有这个 id，点了必然
-      // 静默失败，前端还会乐观地打一条「已请求停止」（2026-08-05 review #2）。
-      const rowStop = taskStopUiState({ taskId, bannerVisible: true });
-      if (rowStop.canStop) {
-        const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
-        stop.onclick = (e) => { e.stopPropagation(); stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`); };
-        top.append(label, stop);
-      } else {
-        top.append(label);
+    // 混合才插入组头（子代理 → 后台命令 → 工作流 → 其它）；单一种类不分组，组内保留快照相对序。
+    const grouped = groupBgTasksForList(
+      [...tasks.entries()].map(([taskId, task]) => ({ ...task, taskId })),
+    );
+    for (const group of grouped.groups) {
+      if (group.label) {
+        const head = createElement('<div class="px-1 pt-1 text-[10px] text-ink-faint font-semibold select-none" data-testid="bg-task-group"></div>');
+        head.textContent = group.label;
+        list.appendChild(head);
       }
+      for (const task of group.items) {
+        const taskId = task.taskId;
+        const histLen = (progressHistory.get(taskId) || []).length;
+        const isActive = taskDetailState({ taskId, activeDetailId }).visible;
+        // 卡片承载边框，data-testid="bg-task-row" 留在**高度恒定**的头行上：详情展开后卡片变高，
+        // 若把 testid 挂到卡片上，点击（打元素中心点）会落进详情区，"再点一次收起"永远不触发。
+        // 详情作为头行的兄弟而非后代，点它也不会冒泡回头行——不需要 stopPropagation。
+        // 配色只用无 alpha 的语义 token：tw-config 把颜色映射为裸 var(--x)，`/NN` 修饰符生成不出 utility。
+        const card = createElement(`<div class="rounded-lg border ${isActive ? 'border-warning' : 'border-line-soft'} bg-sunk overflow-hidden"></div>`);
+        const row = createElement('<div class="px-2 py-1.5 cursor-pointer select-none" data-testid="bg-task-row"></div>');
+        const top = createElement('<div class="flex items-center gap-2 text-[11px]"></div>');
+        const label = createElement('<span class="truncate flex-1 min-w-0 text-ink font-medium"></span>');
+        const title = formatBgTaskRowLabel({
+          taskType: task.taskType,
+          message: task.message,
+          taskId,
+        });
+        const histTag = histLen > 0 ? ` · ${histLen}条` : '';
+        label.textContent = `${title.slice(0, 72 - histTag.length)}${histTag}`;
+        label.title = task.message || taskId;
+        // 行「停」与横幅主钮共用同一策略：此前这里【无条件】挂按钮并 stopTask(taskId)，绕开了
+        // taskStopUiState——多子代理时每行都可点，而 localcmd:* 在 SDK 侧根本没有这个 id，点了必然
+        // 静默失败，前端还会乐观地打一条「已请求停止」（2026-08-05 review #2）。
+        const rowStop = taskStopUiState({ taskId, bannerVisible: true });
+        if (rowStop.canStop) {
+          const stop = createElement('<button type="button" class="shrink-0 px-1.5 py-0.5 rounded border border-warning text-warning" data-testid="bg-task-stop">停</button>');
+          stop.onclick = (e) => { e.stopPropagation(); stopTask(taskId, `${t('已请求停止后台任务')} ${String(taskId).slice(0, 8)}…`); };
+          top.append(label, stop);
+        } else {
+          top.append(label);
+        }
 
-      const metaParts = [];
-      if (task.lastToolName) metaParts.push(`${t('工具')} ${task.lastToolName}`);
-      if (task.subagentType && !(task.message || '').includes(String(task.subagentType))) {
-        metaParts.push(String(task.subagentType));
+        const metaParts = [];
+        if (task.lastToolName) metaParts.push(`${t('工具')} ${task.lastToolName}`);
+        if (task.subagentType && !(task.message || '').includes(String(task.subagentType))) {
+          metaParts.push(String(task.subagentType));
+        }
+        // 合成命名空间不进 meta：同 formatBgTaskRowLabel 的回落，用统一判据（review #7）
+        const shortId = typeof taskId === 'string' && !isSyntheticTaskId(taskId)
+          ? taskId.slice(0, 10)
+          : '';
+        if (shortId) metaParts.push(`#${shortId}`);
+        if (metaParts.length) {
+          const meta = createElement('<div class="text-[10px] text-ink-faint mt-0.5 truncate"></div>');
+          meta.textContent = metaParts.join(' · ');
+          meta.title = metaParts.join(' · ');
+          row.append(top, meta);
+        } else {
+          row.append(top);
+        }
+        // 点击行文本区域 → 展开/收起该任务自己的详情
+        row.addEventListener('click', () => toggleDetail(taskId));
+        card.appendChild(row);
+        if (isActive) {
+          const panel = buildDetailPanel(taskId);
+          if (panel) card.appendChild(panel);
+        }
+        list.appendChild(card);
       }
-      // 合成命名空间不进 meta：同 formatBgTaskRowLabel 的回落，用统一判据（review #7）
-      const shortId = typeof taskId === 'string' && !isSyntheticTaskId(taskId)
-        ? taskId.slice(0, 10)
-        : '';
-      if (shortId) metaParts.push(`#${shortId}`);
-      if (metaParts.length) {
-        const meta = createElement('<div class="text-[10px] text-ink-faint mt-0.5 truncate"></div>');
-        meta.textContent = metaParts.join(' · ');
-        meta.title = metaParts.join(' · ');
-        row.append(top, meta);
-      } else {
-        row.append(top);
-      }
-      // 点击行文本区域 → 展开/收起该任务自己的详情
-      row.addEventListener('click', () => toggleDetail(taskId));
-      card.appendChild(row);
-      if (isActive) {
-        const panel = buildDetailPanel(taskId);
-        if (panel) card.appendChild(panel);
-      }
-      list.appendChild(card);
     }
     list.scrollTop = prevScroll;
   }

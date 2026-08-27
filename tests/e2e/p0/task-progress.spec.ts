@@ -22,7 +22,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // 1. 发送 test:taskprogress 后出现后台任务进度横幅。
     await sendChatMessage(page, 'test:taskprogress');
     await expect(page.locator('#taskProgressBanner')).toBeVisible();
-    // b4716e7 起横幅只写数量态「运行中」，步骤明细迁到任务列表行 bg-task-row
+    // mock 是单条 local_agent：标题「子代理」，状态「运行中」；步骤明细在任务列表行
+    await expect(page.locator('#taskBannerLabel')).toHaveText('子代理');
     await expect(page.locator('#taskProgressText')).toContainText('运行中', { timeout: 10_000 });
     await expect(page.locator('[data-testid="bg-task-row"]')).toContainText('步骤', { timeout: 10_000 });
 
@@ -251,7 +252,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:taskprogress-multi');
     await expect(page.locator('#taskProgressBanner')).toBeVisible();
-    await expect(page.locator('#taskProgressText')).toContainText('3 个运行中', { timeout: 10_000 });
+    // mock 是 2 local_agent + 1 local_bash：头行报构成，不再写「3 个运行中」
+    await expect(page.locator('#taskBannerLabel')).toHaveText('运行中');
+    await expect(page.locator('#taskProgressText')).toContainText('2 个子代理 · 1 条命令', { timeout: 10_000 });
 
     // 默认折叠：行已渲染在 DOM（供断言/无障碍），但列表容器不可见。
     // 折叠热区是整条头行（无三角按钮），恒可见；右侧「停止」在多任务下隐藏（每行自带「停」）。
@@ -263,11 +266,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(list).toBeHidden();
     await expect(page.locator('[data-testid="bg-task-row"]')).toHaveCount(3);
 
-    // 点开：展开列表，三行任务详情可见。
+    // 点开：组头按种类（子代理→后台命令），行也按组走——快照里 bash 更靠前，不得仍排第一。
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
     await expect(list).toBeVisible();
-    await expect(page.locator('[data-testid="bg-task-row"]').first()).toBeVisible();
+    const rows = page.locator('[data-testid="bg-task-row"]');
+    await expect(rows.first()).toBeVisible();
+    await expect(page.locator('[data-testid="bg-task-group"]')).toHaveCount(2);
+    await expect(page.locator('[data-testid="bg-task-group"]').nth(0)).toHaveText('子代理');
+    await expect(page.locator('[data-testid="bg-task-group"]').nth(1)).toHaveText('后台命令');
+    await expect(rows.nth(0)).toContainText('Explore');
+    await expect(rows.nth(1)).toContainText('Synthesize');
+    await expect(rows.nth(2)).toContainText('npm test');
+
+    // 组头不是任务行：点了不得展开详情。
+    await page.locator('[data-testid="bg-task-group"]').nth(0).click();
+    await expect(page.locator('[data-testid="task-detail-panel"]')).toHaveCount(0);
+
+    // 第一行是被提前的 Explore，不是快照第一的 bash。
+    await rows.nth(0).click();
+    await expect(page.locator('[data-testid="task-detail-panel"]')).toBeVisible();
+    await expect(page.locator('[data-testid="task-detail-entry"]')).toContainText('Explore');
+
+    // 行内「停」绑的是该行 id（mock 不回 ack，1.5s 兜底仍打「已请求停止」）。
+    await expect(page.locator('[data-testid="bg-task-stop"]')).toHaveCount(3);
+    await page.locator('[data-testid="bg-task-stop"]').first().click();
+    await expect(page.locator('#messages')).toContainText('已请求停止后台任务', { timeout: 5_000 });
 
     // 再点收起。
     await toggle.click();

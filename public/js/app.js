@@ -67,7 +67,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 流内 live 活动行（懒创建 #streamLiveStatus）；composer 顶条 #activeStatusPill 已移除
   const mirrorBanner = $('mirrorBanner'), btnMirrorOverride = $('btnMirrorOverride');
   const mirrorBannerText = $('mirrorBannerText'), mirrorBannerIcon = $('mirrorBannerIcon'), btnMirrorSync = $('btnMirrorSync');
-  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), btnTaskStop = $('btnTaskStop'), taskBannerToggle = $('taskBannerToggle');
+  const taskProgressBanner = $('taskProgressBanner'), taskProgressText = $('taskProgressText'), taskBannerLabel = $('taskBannerLabel'), btnTaskStop = $('btnTaskStop'), taskBannerToggle = $('taskBannerToggle');
   const unreadPillEl = $('unreadPill'), unreadPillCountEl = $('unreadPillCount'); // 未读角标悬浮胶囊
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
@@ -565,6 +565,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       activityBannerText,
       taskProgressBanner,
       taskProgressText,
+      taskBannerLabel,
       btnTaskStop,
       taskBannerToggle,
     },

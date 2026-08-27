@@ -120,17 +120,20 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:workflow-subagents');
-    // mock 推 2 条 task_progress → 标题「2 个运行中」+ 两行明细；多任务默认折叠列表，点横幅头行展开。
+    // mock 推 2 条 local_agent task_progress → 标题「子代理」+「2 个运行中」；多任务默认折叠，点头行展开。
     await expect(page.locator('#taskProgressBanner')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('#taskBannerLabel')).toHaveText('子代理');
     await expect(page.locator('#taskProgressText')).toContainText('2 个运行中');
     await expect(page.locator('#taskProgressText')).not.toContainText('后台任务 后台任务');
     const taskToggle = page.locator('[data-testid="bg-task-toggle"]');
     await expect(taskToggle).toBeVisible();
     await expect(page.locator('[data-testid="bg-task-list"]')).toBeHidden();
     await expect(page.locator('[data-testid="bg-task-row"]')).toHaveCount(2);
+    await expect(page.locator('[data-testid="bg-task-group"]')).toHaveCount(0);
     await taskToggle.click();
     await expect(page.locator('[data-testid="bg-task-list"]')).toBeVisible();
     await expect(page.locator('[data-testid="bg-task-row"]').first()).toContainText('Explore');
+    await expect(page.locator('[data-testid="bg-task-group"]')).toHaveCount(0);
 
     await waitForIdle(page);
 

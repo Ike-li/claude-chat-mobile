@@ -276,3 +276,160 @@ test('task status onComplete：清理已完成任务的 progressHistory，若详
   assert.equal(remaining.length, 1, 't1 卡片须移除');
   assert.equal(cardDetail(remaining[0]), null, '剩下的 t2 卡片不得残留详情');
 });
+
+const isGroupHeader = node => String(node?.html || '').includes('bg-task-group');
+
+test('task status 横幅：单一种类改标题，状态文案沿用数量', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const taskBannerLabel = { textContent: '后台任务' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText, taskBannerLabel },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode });
+
+  status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [
+      { taskId: 'a1', taskType: 'local_agent', message: 'Explore：a' },
+      { taskId: 'a2', taskType: 'local_agent', message: 'Explore：b' },
+    ] },
+  });
+  assert.equal(taskBannerLabel.textContent, '子代理');
+  assert.equal(taskProgressText.textContent, '2 个运行中');
+  assert.equal(context.dom.taskProgressList.children.some(isGroupHeader), false, '单一种类不渲染组头');
+});
+
+test('task status 横幅：混合改报构成，列表按种类分组', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const taskBannerLabel = { textContent: '后台任务' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText, taskBannerLabel },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode });
+
+  status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [
+      { taskId: 'b1', taskType: 'local_bash', message: 'npm test' },
+      { taskId: 'a1', taskType: 'local_agent', message: 'Explore：搜索' },
+      { taskId: 'a2', taskType: 'local_agent', message: 'Plan：起草' },
+    ] },
+  });
+  assert.equal(taskBannerLabel.textContent, '运行中');
+  assert.equal(taskProgressText.textContent, '2 个子代理 · 1 条命令');
+
+  const kids = context.dom.taskProgressList.children;
+  const headers = kids.filter(isGroupHeader);
+  assert.equal(headers.length, 2);
+  assert.equal(headers[0].textContent, '子代理');
+  assert.equal(headers[1].textContent, '后台命令');
+  // 组顺序：两个 agent 卡在 bash 卡之前，即使快照里 bash 更靠前
+  const rows = kids.filter(n => !isGroupHeader(n));
+  assert.equal(rows.length, 3);
+  const rowTitle = card => String(cardHeaderRow(card)?.children?.[0]?.children?.[0]?.textContent || '');
+  assert.match(rowTitle(rows[0]), /Explore/);
+  assert.match(rowTitle(rows[1]), /Plan/);
+  assert.match(rowTitle(rows[2]), /npm test/);
+});
+
+const mixedSnapshot = {
+  instanceId: 'inst-1',
+  payload: { tasks: [
+    { taskId: 'b1', taskType: 'local_bash', message: 'npm test', description: 'npm test' },
+    { taskId: 'a1', taskType: 'local_agent', message: 'Explore：搜索', description: 'Explore：搜索' },
+    { taskId: 'a2', taskType: 'local_agent', message: 'Plan：起草', description: 'Plan：起草' },
+  ] },
+};
+
+const rowStopBtn = card => {
+  const top = cardHeaderRow(card)?.children?.[0];
+  return top?.children?.find(n => String(n.html).includes('bg-task-stop')) || null;
+};
+
+test('task status hideProgress 把标题复位成「后台任务」', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const taskBannerLabel = { textContent: '后台任务' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText, taskBannerLabel },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode, autoBind: false });
+
+  status.onProgress({
+    instanceId: 'inst-1',
+    payload: { tasks: [{ taskId: 'a1', taskType: 'local_agent', message: 'Explore：a' }] },
+  });
+  assert.equal(taskBannerLabel.textContent, '子代理');
+  assert.equal(banner.classList.contains('hidden'), false);
+
+  status.hideProgress();
+  assert.equal(taskBannerLabel.textContent, '后台任务');
+  assert.equal(taskProgressText.textContent, '');
+  assert.equal(banner.classList.contains('hidden'), true);
+});
+
+test('task status onComplete：混合收成单一种类后标题改回种类名、组头消失', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const taskBannerLabel = { textContent: '后台任务' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText, taskBannerLabel },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode, autoBind: false });
+
+  status.onProgress(mixedSnapshot);
+  assert.equal(taskBannerLabel.textContent, '运行中');
+  assert.equal(context.dom.taskProgressList.children.filter(isGroupHeader).length, 2);
+
+  status.onComplete({ instanceId: 'inst-1', payload: { taskId: 'b1', status: 'completed' } });
+  assert.equal(taskBannerLabel.textContent, '子代理');
+  assert.equal(taskProgressText.textContent, '2 个运行中');
+  assert.equal(context.dom.taskProgressList.children.some(isGroupHeader), false, '单一种类不得残留组头');
+  assert.equal(context.dom.taskProgressList.children.length, 2);
+});
+
+test('task status 混合列表：组头不抢点击，第一张卡是被提前的子代理，停钮绑的是该行 id', () => {
+  const banner = taskCardFakeNode();
+  const taskProgressText = { textContent: '' };
+  const taskBannerLabel = { textContent: '后台任务' };
+  const context = createAppContext({
+    dom: { taskProgressBanner: banner, taskProgressText, taskBannerLabel },
+    state: { viewingInstanceId: 'inst-1' },
+  });
+  const emitted = [];
+  context.setSocket({ emit: (ev, payload) => { emitted.push({ ev, payload }); } });
+  const status = createTaskStatusController(context, { createElement: taskCardFakeNode, autoBind: false });
+
+  status.onProgress(mixedSnapshot);
+  const kids = context.dom.taskProgressList.children;
+  const headers = kids.filter(isGroupHeader);
+  const rows = kids.filter(n => !isGroupHeader(n));
+  assert.equal(headers.length, 2);
+  assert.equal(rows.length, 3);
+
+  headers[0].click();
+  const afterHeaderClick = context.dom.taskProgressList.children.filter(n => !isGroupHeader(n));
+  assert.equal(afterHeaderClick.every(card => cardDetail(card) == null), true, '点组头不得展开任何详情');
+
+  cardHeaderRow(rows[0]).click();
+  const rowsAfter = context.dom.taskProgressList.children.filter(n => !isGroupHeader(n));
+  assert.ok(cardDetail(rowsAfter[0]), '第一张卡（Explore，被从 bash 后面提前）应展开详情');
+  assert.equal(cardDetail(rowsAfter[1]), null);
+  assert.equal(cardDetail(rowsAfter[2]), null);
+
+  const stop = rowStopBtn(rowsAfter[0]);
+  assert.ok(stop, '真实 taskId 的行应有停钮');
+  assert.equal(rowStopBtn(headers[0]), null, '组头上不得挂停钮');
+  stop.onclick?.({ stopPropagation() {} });
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].ev, 'task:stop');
+  assert.equal(emitted[0].payload.taskId, 'a1', '停的是提前到第一行的 Explore，不是快照里排在最前的 bash');
+});
+
+

@@ -436,6 +436,7 @@
       </div>
 
       <!-- 后台任务进度横幅（task_progress 瞬时事件驱动、原地刷新；琥珀色区别于上方 accent 色的当前会话子agent活动）
+           头行 #taskBannerLabel 按构成改写（子代理 / 后台命令 / 工作流 / 混合时「运行中」），不再写死「后台任务」。
            「停止」= task:stop → SDK stopTask(taskId)，对齐 CLI 停单个后台任务。
            折叠热区是 #taskBannerToggle 整条头行（无三角按钮）；它与「停止」按钮是兄弟而非父子，
            这样 role="button" 不会吞掉按钮的无障碍语义，键盘 Enter 也不会一次触发两个动作。
@@ -445,7 +446,7 @@
         <div class="flex items-center gap-2">
           <div id="taskBannerToggle" class="flex items-center gap-2 flex-1 min-w-0 cursor-pointer select-none py-1 -my-1" role="button" tabindex="0" aria-expanded="false" data-testid="bg-task-toggle" title="展开/收起任务列表">
             <span class="animate-spin text-sm">⚙</span>
-            <span class="shrink-0 font-semibold">后台任务</span>
+            <span id="taskBannerLabel" class="shrink-0 font-semibold">后台任务</span>
             <span id="taskProgressText" class="font-medium truncate flex-1 min-w-0"></span>
           </div>
           <button type="button" id="btnTaskStop" class="hidden shrink-0 px-2 py-1 rounded-lg border border-warning text-warning font-semibold hover:bg-warning hover:text-surface active:scale-95 transition-all" data-testid="task-stop-btn" title="停止该后台任务">停止</button>
