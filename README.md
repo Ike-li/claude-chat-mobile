@@ -161,10 +161,11 @@ Claude Chat Mobile 支持从局域网到长期公网访问的不同方式：
 | 同一 Wi-Fi | 局域网地址                             | 最简单的首次使用  |
 | 临时公网     | Cloudflare Quick Tunnel           | 临时试用、演示   |
 | 长期公网     | 固定域名 + Cloudflare Tunnel + Access | 长期从外部网络访问 |
+| 自建入口     | 加密隧道 / VPN、自建反向代理                 | 不希望流量经过 Cloudflare |
 
 PWA 和 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+，并先将应用添加到主屏幕。
 
-固定域名、Cloudflare Tunnel、Cloudflare Access、长期运行和运维方式：
+固定域名、Cloudflare Tunnel、Cloudflare Access、不经过 Cloudflare 的替代入口、长期运行和运维方式：
 
 **→ [部署与运维](docs/deployment.md)**
 
@@ -195,7 +196,7 @@ PWA 和 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+，并先将应�
 从已经可以运行 Claude Code 的电脑开始，一直到手机成功发出第一条消息；同时包含配置、迁移、PWA 和 CLI hooks 等说明。
 
 **[部署与运维](docs/deployment.md)**
-局域网、公网访问、Cloudflare Tunnel、Cloudflare Access、长期运行和日常运维。
+局域网、公网访问、Cloudflare Tunnel、Cloudflare Access、不经过 Cloudflare 的替代入口、长期运行和日常运维。
 
 配置项不单独维护静态列表，可以直接查看由 schema 生成的当前定义：
 

@@ -7,13 +7,19 @@ import express from 'express';
 
 export const clientIp = value => (value || '').toString().replace(/^::ffff:/, '');
 
-// 局域网 IPv4（手机同 WiFi 直连用）。排除：VPN/代理虚拟网卡（utun* 等，手机不可达）、
+// 手机可达的 IPv4（同 WiFi 直连，或经 WireGuard/Tailscale 之类的加密隧道）。排除：
 // link-local（169.254.*）、RFC 2544 基准段（198.18/15，TUN 代理常用假网段）。
+//
+// 判据是**地址段**，不是接口名。曾按 /^(utun|tun|tap|ppp)/ 排除整个接口，前提是「虚拟网卡上的
+// 地址手机不可达」——该前提对 VPN 类入口恰好是反的：走隧道时那个地址是手机唯一可达的。
+// 且接口名是 OS 实现细节，同一个 WireGuard 在 macOS 叫 utun0、Linux 叫 wg0，旧判据只滤掉前者。
+// 真正要挡的 TUN 代理假地址（Clash 等占 198.18/15）由下面的地址段规则独立挡住，与接口名无关。
+// 名字用 reachable 而非 lan：结果里可能有隧道内地址（Tailscale 的 100.x、WireGuard 的自定义段），
+// 那些不是局域网地址，调用点的日志文案也不能再写「同 WiFi」。
 // interfaces 可注入（默认 os.networkInterfaces()）便于单测。
-export function lanIPv4s(interfaces = networkInterfaces()) {
-  return Object.entries(interfaces)
-    .filter(([name]) => !/^(utun|tun|tap|ppp)/.test(name))
-    .flatMap(([, addrs]) => addrs || [])
+export function reachableIPv4s(interfaces = networkInterfaces()) {
+  return Object.values(interfaces)
+    .flatMap(addrs => addrs || [])
     .filter(i => i?.family === 'IPv4' && !i.internal
       && !i.address.startsWith('169.254.')
       && !/^198\.1[89]\./.test(i.address))

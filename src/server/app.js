@@ -97,7 +97,7 @@ import {
   clientIp,
   configureHttpShell,
   createHttpAuth,
-  lanIPv4s,
+  reachableIPv4s,
   registerOperationalRoutes,
   tokenMatches as secureTokenMatches,
 } from './http.js';
@@ -3357,16 +3357,16 @@ httpServer.listen(port, host, () => {
     if (isFirstRun) {
       // 首次启动：完整 URL（便于扫码/点击）
       console.log(`  本机:   http://localhost:${port}${frag}`);
-      for (const ip of lanIPv4s()) {
-        console.log(`  局域网: http://${ip}:${port}${frag}  ← 手机同 WiFi 直接用`);
+      for (const ip of reachableIPv4s()) {
+        console.log(`  可访问: http://${ip}:${port}${frag}  ← 同 WiFi 或已连隧道时可用`);
       }
       console.log(`  公网:   先跑 cloudflared tunnel --url http://localhost:${port}`);
       console.log(`          再开 https://<随机域名>.trycloudflare.com${frag}  ← 装 PWA 走这条（需 https）`);
     } else {
       // 后续启动：占位符（防泄露），token 已存浏览器可免带
       console.log(`  本机:   http://localhost:${port}/#token=<YOUR_TOKEN>`);
-      for (const ip of lanIPv4s()) {
-        console.log(`  局域网: http://${ip}:${port}/#token=<YOUR_TOKEN>  ← 手机同 WiFi 直接用`);
+      for (const ip of reachableIPv4s()) {
+        console.log(`  可访问: http://${ip}:${port}/#token=<YOUR_TOKEN>  ← 同 WiFi 或已连隧道时可用`);
       }
       console.log(`  公网:   先跑 cloudflared tunnel --url http://localhost:${port}`);
       console.log(`          再开 https://<随机域名>.trycloudflare.com/#token=<YOUR_TOKEN>  ← 装 PWA 走这条（需 https）`);

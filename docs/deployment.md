@@ -24,6 +24,10 @@
 - **鉴权分层**：公网走 Access JWT（服务端 `src/auth/cf-access.js` fail-closed 校验）；局域网/本机 `http://<lan-ip>:3000/#token=…` 仍走 `AUTH_TOKEN`。
   > 设备审批不会只凭 socket peer 是 loopback 就跳过：server 还会检查 Host。公网 Host（含 cloudflared/nginx/SSH 反代到 `127.0.0.1`）仍需设备 token；只有真实本机 Host，或已经通过 Cloudflare Access JWT 的连接，才跳过这层。
 
+> **Cloudflare 是默认路径，不是硬依赖。** `CF_ACCESS_*` 三项留空即整层关闭，server 侧零改动，
+> 换加密隧道、自建反代或只用局域网都能跑。各拓扑的明文可见方、CCM 侧的连带变化与通用配置要点，
+> 见 [不用 Cloudflare 的公网入口](#不用-cloudflare-的公网入口)。
+
 ## ⚠️ 最容易忘的一点
 
 桌面端一旦把 server 拉起来，3000 就被占着，**不要再手动 `npm start`**。改了配置或拉了新代码后，从菜单里 server 一行点「重启」。
@@ -224,6 +228,145 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 | 经第三方网关报 `model_not_found` | 模型名可能需后缀（如 `<model>[1m]`）：在启动 shell `export ANTHROPIC_MODEL=<带后缀名>` 后重启，或 web 端 `/model <带后缀名>` 切换（配置文件里的 `ANTHROPIC_*` 启动期被剥除，只能来自 shell） |
 | 回复只有工具卡片、无正文 | 网关可能不流式 → `src/agent/agent.js` `map()` 已有全文兜底；仍复现则带 `LOG_STDERR=1` 看子进程日志 |
 
+
+## 不用 Cloudflare 的公网入口
+
+`CF_ACCESS_HOSTNAME/TEAM/AUD` 三项留空时，`src/auth/cf-access.js` 整层关闭（`isPublicHost` 恒 false），
+server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬约束，各方案自身的安装配置以其官方文档为准。
+
+### 各拓扑的明文可见方
+
+现状下 TLS 在 Cloudflare 边缘终止，那一跳能看到明文对话与代码。若这是要消除的暴露点：
+
+| 拓扑 | 中间节点能看到明文 | 机制 |
+|---|---|---|
+| Cloudflare Tunnel + Access（现状） | 能：Cloudflare | TLS 在边缘终止后回源 |
+| 加密隧道 / VPN（WireGuard、Tailscale、ZeroTier、Netbird、Headscale…） | 不能 | 端到端加密；中继只转发密文，协调节点只交换公钥 |
+| 自建反代（VPS + nginx / Caddy / Traefik，打洞用 frp、SSH `-R`、WireGuard 等） | 能：VPS 主机商 | TLS 在你租的那台机器上终止 |
+| 不做公网，只用局域网 | 无中间节点 | 手机与 server 同网段直连 |
+
+第三行是事实陈述而非取舍建议：自建反代**更换**了信任对象（Cloudflare → 主机商），不**消除**中间节点。
+若目标是消除，只有前两类做得到。
+
+### 换掉入口后，CCM 侧的四处连带变化
+
+这四条对**所有**非 Cloudflare 方案共通，与选哪种拓扑无关。
+
+| | 现状（Access 开启） | `CF_ACCESS_*` 留空后 |
+|---|---|---|
+| 公网 2FA | Access JWT，fail-closed | **整层消失**，需自行在入口层补 |
+| `AUTH_TOKEN` | LAN/本机走它 | 不变，全部请求走它 |
+| 设备审批 | 被 Access 跳过 | **自动顶上**，每台新设备批准一次 |
+| 登录限速粒度 | per 真实来源 IP | **退化为按连接 IP** |
+
+后两行需要展开：
+
+**设备审批会自己回来。** `shouldBypassDeviceApproval`（`src/auth/rate-limiter.js:85`）第一行是
+`if (accessEnabled) return true`——Access 与设备审批是替代关系而非叠加。失去 Access 不等于防护归零。
+反代进来的请求也会被正确判成「非本机」：peer 虽是 `127.0.0.1`，但 Host 是公网域名，不满足 bypass 条件。
+
+**限速桶会合并。** `shouldTrustCfConnectingIp`（`rate-limiter.js:75`）要求 `publicHost` 为真，
+而该条件在三项留空时恒 false，于是 `rlSourceKey` 回落到连接 IP。**反代终止在 loopback 后，
+所有公网客户端的连接 IP 都是 `127.0.0.1`，共用同一个限速桶**——一个来源试错触发的退避会波及其余客户端。
+这是刻意取舍（宁可粒度粗，也不采信可伪造的 `X-Forwarded-For`，见 `rate-limiter.js:57`），
+不是配置错误，也无法通过加转发头绕开。VPN 类拓扑不受影响：手机的连接 IP 是隧道内地址，天然分桶。
+
+### 通用落地要点
+
+**共通前提**（三类拓扑都适用）：
+
+- 必须设 `AUTH_TOKEN`。未设时 server 只监听 `127.0.0.1`，任何外部拓扑都连不上。
+- PWA 与 Web Push 需要安全上下文（HTTPS，或 `localhost`）。裸 IP 的 `http://` 能正常聊天，
+  但装不了 PWA、收不到 Web Push，通知只能退回 ntfy（见上节）。
+- `CF_ACCESS_*` 三项留空。配置面板清空时会警告「公网域名退化成只靠 AUTH_TOKEN 校验」
+  （`src/ops/env-schema.js:430`），这条警告在此处是预期行为。
+- **要用通知就必须显式设 `PUBLIC_URL`。** 深链地址是 `PUBLIC_URL` 优先、回落 `CF_ACCESS_HOSTNAME`
+  （`src/ops/notify-channels.js:32`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
+  该项的配置说明写的是「留空回退到 CF_ACCESS_HOSTNAME」，对本节场景等同于「留空即没有」。
+- **启动日志的「可访问」几行会列出隧道内地址。** 地址枚举（`src/server/http.js` 的 `reachableIPv4s`）
+  按**地址段**判定、不看接口名，所以 macOS 上 WireGuard / Tailscale 的 `utun*` 地址会和局域网地址
+  一起列出。TUN 代理占用的 RFC 2544 假段（198.18/15）与 link-local 仍被排除。
+  隧道地址没出现，说明隧道本身没起来，不是日志不显示它。
+
+**加密隧道 / VPN 类**：server 照常跑在 3000，手机经隧道内地址访问
+`http://<隧道内 IP>:3000/#token=<AUTH_TOKEN>`。入网资格由隧道本身承担，未入网的设备根本触达不到端口。
+要 PWA / Web Push 则需给隧道内主机名配证书——部分方案自带签发能力，其余需自行处理。
+
+**反向代理类**：Mac 侧用任意方式把 3000 暴露给反代所在主机（frp、SSH `-R`、VPN 内网互通均可），
+反代对外终止 TLS。CCM 对反代只有两条硬要求：
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3000;
+    proxy_http_version 1.1;
+
+    # 硬要求 1：Host 原样透传。设备审批的判据读它，配成空值或写死会打穿这层
+    proxy_set_header Host $host;
+
+    # 硬要求 2：WebSocket 升级。Socket.io 靠它，缺了会退化成长轮询或直接连不上
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+
+    # 长连接，读超时别设过短（Socket.io 有心跳，但空闲会话仍可能被过短的超时切断）
+    proxy_read_timeout 3600s;
+}
+```
+
+单个 `location /` 全量代理即可，不必为 `/socket.io/` 另开一段。Caddy / Traefik 等价配置同理，
+关键仍是这两条。**不要**依赖 `X-Forwarded-For`：CCM 不读该头（理由见上一节），配了不生效。
+
+由于公网 2FA 层已消失，反代层建议自行补一层认证（mTLS、OIDC / forward auth、Basic Auth 等均可），
+否则公网只剩 `AUTH_TOKEN` + 设备审批。
+
+**只用局域网**：不配任何入口，手机与电脑同 Wi-Fi 时访问 `http://<lan-ip>:3000/#token=<AUTH_TOKEN>`。
+无中间节点，代价是离开这张网就用不了。
+
+<details>
+<summary>把入口选型与配置交给编程 agent</summary>
+
+在仓库目录中把下面内容交给 Claude Code、Codex CLI 或其他本机编程 agent：
+
+```text
+帮我给 claude-chat-mobile 配一个不经过 Cloudflare 的公网入口。
+先做选型，再落地，不要跳过选型直接开始配。
+
+第一步，先问我这几件事，等我回答后再继续：
+- 我有没有可用的 VPS / 公网 IP / 域名？
+- 我需不需要 PWA 安装和 Web Push（需要就必须有 HTTPS）？
+- 我能不能在手机上装客户端 app（VPN 类方案需要）？
+- 我要消除中间节点，还是只要换掉 Cloudflare 就行？这两者结论不同。
+
+第二步，基于回答在这三类拓扑里选一类，说明理由和代价，不要默认选最流行的：
+- 加密隧道 / VPN（无中间节点能看到明文）
+- 自建反向代理（TLS 终止在我的 VPS 上，主机商能看到明文）
+- 只用局域网（无中间节点，出门用不了）
+
+第三步，落地。以下是 CCM 的硬约束，配置必须满足，不满足就是错的：
+1. server 监听 3000。未设 AUTH_TOKEN 时它只监听 127.0.0.1，外部拓扑一律连不上。
+2. 反代必须原样透传 Host 头（nginx 里是 proxy_set_header Host $host;）。
+   设备审批的判据读这个头，配成空值或写死会打穿一层防护。
+3. 反代必须支持 WebSocket 升级（Upgrade / Connection 头），Socket.io 依赖它。
+4. CCM 不读 X-Forwarded-For，配了不生效，不要靠它传递真实来源 IP。
+5. CF_ACCESS_* 三项要留空，此时公网 2FA 层关闭、设备审批自动生效。
+   如果选了反代类拓扑，提醒我在反代层补一层认证。
+6. PWA 与 Web Push 需要 HTTPS 或 localhost，裸 IP 的 http 下不可用。
+7. 如果我要用通知，PUBLIC_URL 必须显式设成入口地址。它平时回落 CF_ACCESS_HOSTNAME，
+   而这个场景下没有该值，不设就会变成「通知能收到、点击不跳转」。
+8. 启动日志里「可访问」那几行会列出所有可达地址，隧道内地址（WireGuard、Tailscale）也在其中。
+   如果隧道地址没出现在那里，是隧道没起来，不要绕过它去别处找地址。
+
+护栏：
+- 不要修改本仓库任何源码，这件事纯配置即可完成。
+- 不要改 ~/.claude 下的任何文件。
+- 不要把 AUTH_TOKEN 写进任何会外传的文件、日志或报告。
+- 涉及安装系统级服务、改防火墙、开端口时，先告诉我要做什么，等我确认。
+- 配完用鉴权后的 /health JSON 验证连通性，不要只看进程存在或端口监听。
+- 第一次从新设备连接后，运行 node scripts/device.js list，让我核对再 approve。
+
+背景与判据见 docs/deployment.md 的「不用 Cloudflare 的公网入口」一节。
+```
+
+</details>
 
 ## 最简替代（仅测试用）
 
