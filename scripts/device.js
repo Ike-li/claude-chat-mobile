@@ -1,7 +1,7 @@
 // scripts/device.js —— CLI 工具：管理待确认和受信任的设备指纹。
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadRuntimeEnvironment } from '../src/server/config.js';
+import { loadRuntimeEnvironment } from '../src/ops/config.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');

@@ -2,9 +2,9 @@ import { readFileSync } from 'node:fs';
 
 import dotenv from 'dotenv';
 
-import { loadConfigSources, projectToEnv, resolveConfigValues } from '../ops/config-file.js';
+import { loadConfigSources, projectToEnv, resolveConfigValues } from './config-file.js';
 import { resolveDataDir } from '../shared/data-dir.js';
-import { DEFAULT_PORT } from '../ops/env-schema.js';
+import { DEFAULT_PORT } from './env-schema.js';
 
 const positiveNumber = (value, fallback) => {
   const number = Number(value);

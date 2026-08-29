@@ -24,6 +24,13 @@ const layout = {
   ops: [
     'audit.js',
     'cli-statusline-bridge.js',
+    // config.js 曾在 src/server/ 下，但它是叶子（只 import ops/config-file.js、ops/env-schema.js、
+    // shared/data-dir.js），放在 server/ 纯属历史，ops/ 才是叶子运维模块的归属地。
+    // 附带效果：scripts/device.js 与 scripts/doctor.js 不再指向 src/server/。注意那条边**本来就是
+    // 合法的**——check-import-boundaries.js:13「tests/scripts 不设边界（工具与测试可跨域引用）」、
+    // protocol.js:6「工具引用运行时是合法方向」都写着。所以这次搬迁不是在修违规，只是让
+    // server-is-sink 的实际引用图变干净了。
+    'config.js',
     'doctor-runtime.js',
     'metrics.js',
     'notifications.js',
@@ -31,7 +38,6 @@ const layout = {
   ],
   server: [
     'app.js',
-    'config.js',
     'http.js',
     'instance-latches.js',
     'instance-manager.js',

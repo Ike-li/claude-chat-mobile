@@ -215,7 +215,7 @@ test.describe('applyEnvChanges —— 保结构改写', () => {
     assert.equal(dotenv.parse(out).MY_CUSTOM_THING, 'keepme');
   });
 
-  // null = 删除整行，不是写 `KEY=`。src/server/config.js:22,39-43 启动时会删掉所有空串 key，
+  // null = 删除整行，不是写 `KEY=`。src/ops/config.js:22,39-43 启动时会删掉所有空串 key，
   // 留一行 `KEY=` 毫无意义，还会挡住从 shell export 同名变量。
   test('null → 整行删除，不留 KEY= 空行', () => {
     const out = applyEnvChanges(SAMPLE, { LOG_STDERR: null });

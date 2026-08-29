@@ -109,7 +109,7 @@ Outbound Socket.io traffic uses one `agent:event` envelope:
 ```
 
 - `type` comes from a closed event set. `scripts/contract-check.js` checks consistency across **backend senders** (recursive scan of `src/`) and the **mock server**; for inbound socket events it additionally verifies that front-end emits stay within the contract.
-  Note that the gate does **not** check for a matching front-end receive handler — `public/js`'s `handle` table is outside its scan surface, and the front end silently drops unregistered types. `AGENT_EVENT_TYPES` currently holds 26 types, and all of them happen to be covered today (the front-end `handle` table plus the `outOfBand` table), but that holds by convention, not by enforcement.
+  A separate **front-end dispatch coverage** check closes the receiving side: the union of the `handle` and `outOfBand` table keys in `public/js/app.js` must equal `AGENT_EVENT_TYPES` exactly (a missing key means events are silently dropped on arrival; an extra one is a dead key), and a type appearing in both tables is rejected as well (`outOfBand` wins at dispatch time, so the `handle` entry would become dead code). `DEFAULT_REPLAY_OOB_TYPES` in `event-dispatch.js` is a parallel copy of the `outOfBand` table and is pinned to match it verbatim — letting it drift makes a new OOB type get queued in the replay buffer and lost permanently when `resolve('reload')` discards the queue.
 - `seq` increases within one `AgentSession` and lets the front end deduplicate.
 - `epoch` identifies a server/instance generation; a change resets the client's old deduplication baseline.
 - `sessionId` and `instanceId` remain separate so persisted CLI-session identity is not confused with a current Web process.

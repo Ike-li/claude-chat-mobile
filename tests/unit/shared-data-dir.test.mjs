@@ -1,5 +1,5 @@
 // tests/unit/shared-data-dir.test.mjs —— data-dir.js 单测（运行时状态根 CCM_DATA_DIR 的唯一解析点）。
-// 关键不变量：解析必须发生在【调用期】而非模块求值期——src/server/config.js 在 .env 加载之前就被
+// 关键不变量：解析必须发生在【调用期】而非模块求值期——src/ops/config.js 在 .env 加载之前就被
 // import，模块顶层读 env 会读到加载前的空环境，导致 CCM_DATA_DIR 静默失效、状态写回仓库 data/。
 import test from 'node:test';
 import assert from 'node:assert/strict';

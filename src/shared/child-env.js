@@ -7,7 +7,7 @@
 //
 // 刻意**不做**白名单裁剪：本项目的哲学是子进程环境与用户终端里的 claude 一致（终端等价性），
 // 走第三方网关的用户靠 shell 里 export 的 ANTHROPIC_* 生效，裁掉就等于砍掉这条支持路径。
-// 启动期已由 src/server/config.js 的 normalizeLoadedEnvironment 处理过 .env 侧的污染
+// 启动期已由 src/ops/config.js 的 normalizeLoadedEnvironment 处理过 .env 侧的污染
 // （删空串 key、剥除非 shell 来源的 ANTHROPIC_*），这里只补两个进程身份标记。
 export function sdkChildEnv(base = process.env) {
   return {

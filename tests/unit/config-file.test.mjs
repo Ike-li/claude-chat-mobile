@@ -5,7 +5,7 @@
 // 而是三条**换格式之后必须仍然成立**的不变量：
 //
 //   ① 优先级链 shell env > 配置文件 > 内置默认 —— 与 dotenv「不覆盖已存在 key」的语义等价
-//   ② ANTHROPIC_* 只认真实 shell export —— 配置文件里写了照样剥除（src/server/config.js:21 的立场）
+//   ② ANTHROPIC_* 只认真实 shell export —— 配置文件里写了照样剥除（src/ops/config.js:21 的立场）
 //   ③ 投影回 process.env 之后，现有那 7 处消费点的字面量判据一字不变地成立
 //      （app.js:1229 `=== 'off'`、config.js:65 `=== '1'`、log-terminal.js:33 `!== 'on'` …）
 //

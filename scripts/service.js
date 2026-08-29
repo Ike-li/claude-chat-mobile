@@ -1039,7 +1039,7 @@ function realListAgentLabels(home) {
 // 会漏掉 .env 里的 CCM_DATA_DIR —— manifest 写进仓库 data/，而生产状态在
 // ~/Library/Application Support/… 下，两边永远对不上，adopt 完下次 status 又变回 adoptable。
 // 优先级与 dotenv 的「不覆盖已有 env」语义一致：shell > .env > 默认。空串按未设置处理
-// （同 src/server/config.js 的 normalizeLoadedEnvironment 与 src/shared/data-dir.js:17）。
+// （同 src/ops/config.js 的 normalizeLoadedEnvironment 与 src/shared/data-dir.js:17）。
 export function resolveManifestPath(shellEnv = process.env, fileEnv = {}, root = ROOT) {
   const dir = shellEnv?.CCM_DATA_DIR || fileEnv?.CCM_DATA_DIR || join(root, 'data');
   return join(dir, 'service-install.json');

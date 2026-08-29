@@ -251,7 +251,7 @@ const AUTO_TURN_ARM_TTL_MS = 120000; // 后台任务通知武装 pendingAutoTurn
 //   默认另开 agentProgressSummaries（~30s AI summary）刷新 lastSeenAt。2h 仅防漏完成信号时 ⏳ 永挂。
 const BG_TASK_ORPHAN_TTL_MS = 180000;           // 合成键孤儿 3min
 const BG_TASK_LIFECYCLE_TTL_MS = 2 * 60 * 60 * 1000; // 真实 task_id 2h 兜底
-const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 src/server/config.js 的 APPROVAL_TTL_MS；
+const DEFAULT_APPROVAL_TTL_MS = 1800000; // 审批悬置默认上限 30min（部署可配置，见 src/ops/config.js 的 APPROVAL_TTL_MS；
                                           // 已决：不预置具体数值，此为实现落地的合理默认）
 const GATEWAY_STALL_WARN_MS = 90_000;     // 在途轮静默早期告警线（只提示不中断，见 formatLifecycleGatewayStall）：
                                           // 宽于正常首 token 延迟 + 30s checkIdle tick 粒度，远窄于 idleTimeoutMs 中断阈

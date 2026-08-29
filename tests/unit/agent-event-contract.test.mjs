@@ -8,6 +8,7 @@ import {
   INBOUND_SOCKET_EVENTS,
   checkAgentEventContract,
   checkInboundSocketContract,
+  checkFrontendDispatchCoverage,
 } from '../../scripts/agent-event-contract.js';
 
 async function writeFixture(root, relativePath, source) {
@@ -368,4 +369,196 @@ test('真实仓库的入向豁免清单每条都写了理由，且都还在契�
   // 缺口必须可见：豁免数就是「E2E 没有往返验证的入向路径」条数
   assert.equal(result.mockEvents.size + result.exemptEvents.size, result.contractEvents.size,
     'mock handler 数 + 豁免数应恰好等于契约数——不等说明有事件既没实现也没登记');
+});
+
+// ── 前端接收面覆盖 ─────────────────────────────────────────────────
+// 这道检查补的是出向契约缺的另一半：后端发得出 ≠ 前端接得住。缺 handler 的失败模式是
+// **静默丢弃**（dispatcher 查表落空直接 return），所以它必须自己不能 fail-open——
+// 下面四条负向用例锁的就是这一点。
+
+test('前端接收面：真实仓库的 handle + outOfBand 并集恰好等于 AGENT_EVENT_TYPES', () => {
+  const result = checkFrontendDispatchCoverage();
+  assert.deepEqual(result.problems, []);
+  // 并集相等是不变量本身；分表计数一起断言，是为了让「某个 type 从 handle 挪进 outOfBand」
+  // 这类语义变更（进不进环形缓冲、占不占 lastSeq）无法悄悄发生。
+  assert.equal(result.handled.size, AGENT_EVENT_TYPES.length);
+  assert.equal(result.tables.handle + result.tables.outOfBand, AGENT_EVENT_TYPES.length);
+});
+
+test('前端接收面：契约里有而前端没接 → 报静默丢弃，不放行', () => {
+  const result = checkFrontendDispatchCoverage({
+    contractTypes: new Set([...AGENT_EVENT_TYPES, 'ghost_type']),
+  });
+  assert.deepEqual(
+    result.problems.map(p => [p.code, p.type]),
+    [['contract_type_not_handled', 'ghost_type']],
+  );
+});
+
+test('前端接收面：前端接了契约里没有的 type → 报死键', () => {
+  const shortened = new Set(AGENT_EVENT_TYPES);
+  shortened.delete('mirror_state');
+  const result = checkFrontendDispatchCoverage({ contractTypes: shortened });
+  assert.deepEqual(
+    result.problems.map(p => [p.code, p.type]),
+    [['handler_not_contract', 'mirror_state']],
+  );
+});
+
+test('前端接收面：锚点定位不到必须报错，不能静默通过（门禁不得 fail-open）', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-frontend-dispatch-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  // 表被改名/挪走后的样子：文件在，两张表都不在
+  await writeFixture(root, 'public/js/app.js', `
+    const somethingElse = { alpha: 1 };
+  `);
+
+  const result = checkFrontendDispatchCoverage({ rootDir: root, contractTypes: new Set(['alpha']) });
+  assert.deepEqual(
+    result.problems.map(p => [p.code, p.table]),
+    [['dispatch_table_not_found', 'handle'], ['dispatch_table_not_found', 'outOfBand']],
+  );
+  // 定位失败时不得再逐条报「未处理」——那会把真正的根因淹掉
+  assert.ok(!result.problems.some(p => p.code === 'contract_type_not_handled'));
+});
+
+test('前端接收面：锚点命中多处 → 报歧义而不是随便取第一个', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-frontend-dispatch-ambiguous-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'public/js/app.js', `
+    const handle = { alpha: 1 };
+    function other() { const handle = { beta: 2 }; }
+    const d = createAgentEventDispatcher({ outOfBand: { gamma: 3 } });
+  `);
+
+  const result = checkFrontendDispatchCoverage({ rootDir: root, contractTypes: new Set(['alpha', 'gamma']) });
+  assert.deepEqual(result.problems.map(p => [p.code, p.table]), [['dispatch_table_ambiguous', 'handle']]);
+});
+
+test('前端接收面：键提取跳过嵌套对象、箭头函数参数、注释与字符串', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-frontend-dispatch-parse-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'public/js/app.js', `
+    const handle = {
+      alpha(payload) { const inner = { not_a_key: 1 }; },
+      // commented_key: 注释里的不算
+      beta: (ev) => { const s = 'string_key: also not'; return { nested: 2 }; },
+      // 表达式体箭头函数：被调函数名后面也是 '('，靠「键必须紧跟 { 或 ,」的位置判据才不会被收进来
+      epsilon: (ev) => onEpsilon(ev),
+    };
+    const d = createAgentEventDispatcher({
+      outOfBand: {
+        gamma: onGamma,
+        delta: (ev) => { if (ev) return { deep: { deeper: 3 } }; },
+      },
+    });
+  `);
+  await writeFixture(root, 'public/js/app/event-dispatch.js',
+    `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma', 'delta']);`);
+
+  const result = checkFrontendDispatchCoverage({
+    rootDir: root,
+    contractTypes: new Set(['alpha', 'beta', 'epsilon', 'gamma', 'delta']),
+  });
+  assert.deepEqual(result.problems, []);
+  assert.deepEqual([...result.handled].sort(), ['alpha', 'beta', 'delta', 'epsilon', 'gamma']);
+  assert.equal(result.tables.handle, 3);
+  assert.equal(result.tables.outOfBand, 2);
+});
+
+test('前端接收面：引号键不被识别——已知局限，且失败方向是报错而非放行', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-frontend-dispatch-quoted-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'public/js/app.js', `
+    const handle = { alpha: 1, 'quoted_key': 2 };
+    const d = createAgentEventDispatcher({ outOfBand: { gamma: 3 } });
+  `);
+  await writeFixture(root, 'public/js/app/event-dispatch.js',
+    `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma']);`);
+
+  const result = checkFrontendDispatchCoverage({
+    rootDir: root,
+    contractTypes: new Set(['alpha', 'quoted_key', 'gamma']),
+  });
+  // 若哪天真要用引号键，这条会红并指向 extractTopLevelKeys——比静默放行强
+  assert.deepEqual(result.problems.map(p => [p.code, p.type]), [['contract_type_not_handled', 'quoted_key']]);
+});
+
+test('前端接收面：同一 type 落在两张表里 → 报重复，不靠并集大小掩盖', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-frontend-dispatch-dup-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'public/js/app.js', `
+    const handle = { alpha: onAlpha, gamma: onGammaHandled };
+    const d = createAgentEventDispatcher({ outOfBand: { gamma: onGammaOob } });
+  `);
+  await writeFixture(root, 'public/js/app/event-dispatch.js',
+    `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma']);`);
+
+  // 并集恰好等于契约，光比并集是发现不了的——outOfBand 在派发时优先，handle 那条成了死代码
+  const result = checkFrontendDispatchCoverage({ rootDir: root, contractTypes: new Set(['alpha', 'gamma']) });
+  assert.deepEqual(result.problems.map(p => [p.code, p.type]), [['duplicate_handler', 'gamma']]);
+});
+
+// ── 第三份表：DEFAULT_REPLAY_OOB_TYPES ────────────────────────────
+// 它是 outOfBand 的平行副本。只验 handle ∪ outOfBand == 契约够不着它：给 outOfBand 加类型并同步
+// protocol.js，那道断言照样绿，而漏改这份副本会让新类型被 replay buffer 误入队、在 reload 时永久丢失。
+
+test('replay OOB 镜像：outOfBand 有而副本漏了 → 报，指出会永久丢失', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-replay-oob-missing-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'public/js/app.js', `
+    const handle = { alpha: onAlpha };
+    const d = createAgentEventDispatcher({ outOfBand: { gamma: onGamma, delta: onDelta } });
+  `);
+  // 副本漏了 delta —— 正是「加了第 6 个 OOB 类型忘了同步」的形状
+  await writeFixture(root, 'public/js/app/event-dispatch.js',
+    `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma']);`);
+
+  const result = checkFrontendDispatchCoverage({
+    rootDir: root,
+    contractTypes: new Set(['alpha', 'gamma', 'delta']),
+  });
+  assert.deepEqual(result.problems.map(p => [p.code, p.type]), [['replay_oob_missing', 'delta']]);
+});
+
+test('replay OOB 镜像：副本残留了已下线的类型 → 报陈旧', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-replay-oob-stale-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'public/js/app.js', `
+    const handle = { alpha: onAlpha };
+    const d = createAgentEventDispatcher({ outOfBand: { gamma: onGamma } });
+  `);
+  await writeFixture(root, 'public/js/app/event-dispatch.js',
+    `const DEFAULT_REPLAY_OOB_TYPES = new Set(['gamma', 'removed_type']);`);
+
+  const result = checkFrontendDispatchCoverage({ rootDir: root, contractTypes: new Set(['alpha', 'gamma']) });
+  assert.deepEqual(result.problems.map(p => [p.code, p.type]), [['replay_oob_stale', 'removed_type']]);
+});
+
+test('replay OOB 镜像：副本定位不到也必须报错，不能静默跳过', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'ccm-replay-oob-anchor-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await writeFixture(root, 'public/js/app.js', `
+    const handle = { alpha: onAlpha };
+    const d = createAgentEventDispatcher({ outOfBand: { gamma: onGamma } });
+  `);
+  await writeFixture(root, 'public/js/app/event-dispatch.js', `const SOMETHING_ELSE = new Set(['gamma']);`);
+
+  const result = checkFrontendDispatchCoverage({ rootDir: root, contractTypes: new Set(['alpha', 'gamma']) });
+  assert.deepEqual(result.problems.map(p => p.code), ['replay_oob_table_not_found']);
+});
+
+test('replay OOB 镜像：真实仓库两份表逐字一致', () => {
+  const result = checkFrontendDispatchCoverage();
+  assert.deepEqual(result.problems, []);
+  assert.equal(result.tables.replayOob, result.tables.outOfBand,
+    'DEFAULT_REPLAY_OOB_TYPES 与 app.js 的 outOfBand 表条数必须相等');
 });

@@ -31,7 +31,7 @@ import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions } from '../src/files/file-security.js';
 import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
 import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../src/ops/config-file.js';
-import { loadRuntimeEnvironment } from '../src/server/config.js';
+import { loadRuntimeEnvironment } from '../src/ops/config.js';
 import { checkDocConsistency as runDocConsistency, formatDocConsistency } from './doc-consistency.js';
 import {
   authTokenDiagnostic,

@@ -8,7 +8,7 @@ import {
   loadRuntimeEnvironment,
   normalizeLoadedEnvironment,
   parseServerConfig,
-} from '../../src/server/config.js';
+} from '../../src/ops/config.js';
 
 test('loadRuntimeEnvironment reads CCM_DATA_DIR before runtime modules are imported', () => {
   const dir = mkdtempSync(join(tmpdir(), 'ccm-env-bootstrap-'));

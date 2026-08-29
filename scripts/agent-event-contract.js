@@ -540,6 +540,214 @@ export function checkInboundSocketContract({
   };
 }
 
+// ── 前端接收面覆盖：出向契约缺的那一半 ────────────────────────────────
+// checkAgentEventContract 只验「后端 emit 的 type 都在契约里」。反向那半——**前端有没有对应的
+// 接收 handler**——此前没有任何一条规则守着（docs/architecture.md 也记着这个缺口）。缺 handler 的
+// 后果是静默丢弃：事件到了浏览器、dispatcher 查表落空、直接 return。没有异常、没有日志、
+// 没有失败的测试，check 全绿而功能没了。
+//
+// 前端接收面分两张表，都在 app.js 的 createAgentEventDispatcher 调用点：
+//   handle    —— 常规事件：进环形缓冲、占 lastSeq、走 handled 分支
+//   outOfBand —— 不进缓冲、不占 lastSeq。resolve('reload') 会整批丢弃队列，OOB 若被误入队
+//                就永久丢失且无法从 session:history 恢复（只读锁不亮、CLI 追平气泡不出现）
+// 两张表的键并集必须精确等于 AGENT_EVENT_TYPES：少一个＝静默丢弃，多一个＝死键。
+// 同一个 type 同时出现在两表里也要拦：createReplayBuffer 里 outOfBand 优先，handle 那条会变成
+// 死代码，该 type 悄悄不再进环形缓冲、不再占 lastSeq——是语义变更而非重复登记。
+//
+// 【第三份表】event-dispatch.js 的 DEFAULT_REPLAY_OOB_TYPES 是 outOfBand 的平行副本，靠一句
+// 「与 createAgentEventDispatcher 的 outOfBand 表同口径」的注释绑定。只验 handle ∪ outOfBand
+// 等于契约是够不着它的：给 outOfBand 加第 6 个类型并同步 protocol.js，那道断言照样绿，而漏改
+// 这份副本就会让新类型被 replay buffer 误入队——正是上面这段注释描述的永久丢失。故一并锁死。
+const FRONTEND_DISPATCH_FILE = 'public/js/app.js';
+const DISPATCH_TABLE_ANCHORS = Object.freeze([
+  { name: 'handle', pattern: /\bconst\s+handle\s*=\s*\{/ },
+  { name: 'outOfBand', pattern: /\boutOfBand\s*:\s*\{/ },
+]);
+const REPLAY_OOB_FILE = 'public/js/app/event-dispatch.js';
+const REPLAY_OOB_ANCHOR = /\bconst\s+DEFAULT_REPLAY_OOB_TYPES\s*=\s*new\s+Set\s*\(\s*\[/;
+
+// 对象字面量的顶层键名。两种形态都认：`key: value` 与方法简写 `key(args) {}`。
+// 嵌套对象与函数体（depth > 1）、字符串、注释一律跳过。
+// 已知局限（两条都 fail-closed，失败方向是红不是放行）：
+//   1. 引号键 `'foo': v` 不被识别 —— 见测试「引号键不被识别」
+//   2. 正则字面量里的裸 `{` / 引号会扰乱 depth —— 与 findMatchingBrace 共用同一组 skip 工具，
+//      属继承的局限；当前两张表里没有正则，真出现时会漏键并报 contract_type_not_handled
+function extractTopLevelKeys(source, openIndex) {
+  const keys = [];
+  let depth = 0;
+  // 最近一个非空白、非注释字符。键位判据要用它：只有紧跟 `{` 或 `,` 的标识符才可能是键。
+  // 少了这道位置判据，`alpha: (ev) => onAlpha(ev)` 里的 onAlpha 会因为后面也是 `(`
+  // 而被当成方法简写键，报出一条指向完全错误位置的 handler_not_contract。
+  let lastMeaningful = '';
+
+  for (let i = openIndex; i < source.length; i += 1) {
+    const ch = source[i];
+    const next = source[i + 1];
+
+    if (ch === '"' || ch === "'" || ch === '`') { i = skipQuoted(source, i, ch) - 1; lastMeaningful = 'x'; continue; }
+    if (ch === '/' && next === '/') { i = skipLineComment(source, i) - 1; continue; }
+    if (ch === '/' && next === '*') { i = skipBlockComment(source, i) - 1; continue; }
+    if (ch === '{') { depth += 1; lastMeaningful = '{'; continue; }
+    if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) return keys;
+      lastMeaningful = '}';
+      continue;
+    }
+    if (depth !== 1) continue;     // 嵌套层内部一律不参与键位判定
+    if (/\s/.test(ch)) continue;   // 空白不改变 lastMeaningful
+
+    const identifier = readIdentifier(source, i);
+    if (identifier) {
+      const after = skipWhitespace(source, i + identifier.length);
+      const atKeyPosition = lastMeaningful === '{' || lastMeaningful === ',';
+      if (atKeyPosition && (source[after] === ':' || source[after] === '(')) keys.push(identifier);
+      i += identifier.length - 1;
+      lastMeaningful = 'x';        // 标识符结尾——只要不是 `{` / `,` 即可
+      continue;
+    }
+
+    lastMeaningful = ch;
+  }
+
+  return keys;
+}
+
+// `new Set([...])` 里的字符串成员。用于 DEFAULT_REPLAY_OOB_TYPES 那份平行表。
+// 注：范围内若出现含引号的注释会被一并提取，导致比对失败——方向是红（fail-closed），
+// 与 extractTopLevelKeys 的引号键局限同一性质。
+function findMatchingBracket(source, openIndex) {
+  let depth = 0;
+  for (let i = openIndex; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === '"' || ch === "'" || ch === '`') { i = skipQuoted(source, i, ch) - 1; continue; }
+    if (ch === '[') depth += 1;
+    else if (ch === ']') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+export function checkFrontendDispatchCoverage({
+  rootDir = ROOT,
+  contractTypes = new Set(AGENT_EVENT_TYPES),
+  file = FRONTEND_DISPATCH_FILE,
+  replayOobFile = REPLAY_OOB_FILE,
+} = {}) {
+  const problems = [];
+  const handled = new Set();
+  const tables = {};
+  const keysByTable = new Map();
+  const normalizedContractTypes = new Set(contractTypes);
+  const source = readFileSync(join(rootDir, file), 'utf8');
+
+  for (const anchor of DISPATCH_TABLE_ANCHORS) {
+    // 锚点必须恰好命中一次。零命中＝表被改名/挪走，多命中＝取错了表——两种都只能报错不能跳过：
+    // 静默跳过等于门禁 fail-open，而它要防的正是「静默」这件事本身。
+    const matches = [...source.matchAll(new RegExp(anchor.pattern.source, 'g'))];
+    if (matches.length !== 1) {
+      problems.push({
+        code: matches.length === 0 ? 'dispatch_table_not_found' : 'dispatch_table_ambiguous',
+        table: anchor.name,
+        message: matches.length === 0
+          ? `cannot locate the "${anchor.name}" dispatch table in ${file} — the anchor no longer matches; fix DISPATCH_TABLE_ANCHORS instead of deleting this check`
+          : `the "${anchor.name}" anchor matches ${matches.length} places in ${file} — cannot tell which is the dispatch table; tighten the anchor pattern`,
+      });
+      continue;
+    }
+    const openIndex = source.indexOf('{', matches[0].index);
+    const keys = extractTopLevelKeys(source, openIndex);
+    tables[anchor.name] = keys.length;
+    keysByTable.set(anchor.name, keys);
+    for (const key of keys) handled.add(key);
+  }
+
+  // 锚点没定位到就不比对：那时 handled 是残缺的，逐条报「未处理」会淹没真正的根因。
+  if (problems.length > 0) {
+    return { problems, handled, tables, contractTypes: normalizedContractTypes, file, rootDir };
+  }
+
+  // 同一 type 落在两张表里：handled 是 Set，光看并集看不出来，必须按表比。
+  const handleKeys = new Set(keysByTable.get('handle') || []);
+  for (const key of keysByTable.get('outOfBand') || []) {
+    if (!handleKeys.has(key)) continue;
+    problems.push({
+      code: 'duplicate_handler',
+      type: key,
+      message: `"${key}" appears in both the handle and outOfBand tables in ${file} — outOfBand wins at dispatch time, so the handle entry is dead code and this type silently stops entering the replay ring buffer; keep exactly one`,
+    });
+  }
+
+  // 第三份表：event-dispatch.js 的 DEFAULT_REPLAY_OOB_TYPES 必须与 outOfBand 表逐字相等。
+  const oobKeys = new Set(keysByTable.get('outOfBand') || []);
+  const replaySource = readFileSync(join(rootDir, replayOobFile), 'utf8');
+  const replayMatches = [...replaySource.matchAll(new RegExp(REPLAY_OOB_ANCHOR.source, 'g'))];
+  if (replayMatches.length !== 1) {
+    problems.push({
+      code: replayMatches.length === 0 ? 'replay_oob_table_not_found' : 'replay_oob_table_ambiguous',
+      table: 'DEFAULT_REPLAY_OOB_TYPES',
+      message: `expected exactly one DEFAULT_REPLAY_OOB_TYPES declaration in ${replayOobFile}, found ${replayMatches.length} — fix REPLAY_OOB_ANCHOR instead of dropping this check`,
+    });
+  } else {
+    const bracketStart = replaySource.indexOf('[', replayMatches[0].index);
+    const bracketEnd = findMatchingBracket(replaySource, bracketStart);
+    const replayTypes = new Set(extractStringLiterals(replaySource.slice(bracketStart, bracketEnd + 1)));
+    tables.replayOob = replayTypes.size;
+    for (const type of [...oobKeys].sort()) {
+      if (replayTypes.has(type)) continue;
+      problems.push({
+        code: 'replay_oob_missing',
+        type,
+        message: `"${type}" is in the outOfBand table but missing from DEFAULT_REPLAY_OOB_TYPES in ${replayOobFile} — the replay buffer will queue it, and resolve('reload') discards the queue, so this event is lost permanently and cannot be recovered from session:history`,
+      });
+    }
+    for (const type of [...replayTypes].sort()) {
+      if (oobKeys.has(type)) continue;
+      problems.push({
+        code: 'replay_oob_stale',
+        type,
+        message: `"${type}" is listed in DEFAULT_REPLAY_OOB_TYPES in ${replayOobFile} but is no longer in the outOfBand table — stale entry; remove it`,
+      });
+    }
+  }
+
+  for (const type of [...normalizedContractTypes].sort()) {
+    if (handled.has(type)) continue;
+    problems.push({
+      code: 'contract_type_not_handled',
+      type,
+      message: `agent:event type "${type}" has no frontend handler in ${file} — events of this type are silently discarded on arrival; add it to the handle or outOfBand table`,
+    });
+  }
+
+  for (const key of [...handled].sort()) {
+    if (normalizedContractTypes.has(key)) continue;
+    problems.push({
+      code: 'handler_not_contract',
+      type: key,
+      message: `${file} handles "${key}" which is not in AGENT_EVENT_TYPES — dead key left behind by a removed type, or a handler wired ahead of its contract entry`,
+    });
+  }
+
+  return { problems, handled, tables, contractTypes: normalizedContractTypes, file, rootDir };
+}
+
+export function formatFrontendDispatchProblems(result) {
+  if (result.problems.length === 0) {
+    // 分表计数不求和显示：handle + outOfBand 才等于 handled，replayOob 是 outOfBand 的镜像、
+    // 不参与并集。三个数字排成一行相加会读成 31/26。
+    return [
+      'frontend dispatch coverage OK',
+      `handled: ${result.handled.size}/${result.contractTypes.size}（handle ${result.tables.handle} + outOfBand ${result.tables.outOfBand}）`,
+      `replay OOB mirror: ${result.tables.replayOob} 条，与 outOfBand 表逐字一致`,
+    ].join('\n');
+  }
+
+  return result.problems.map(problem => `[${problem.code}] ${problem.message}`).join('\n');
+}
+
 export function formatInboundContractProblems(result) {
   if (result.problems.length === 0) {
     return [

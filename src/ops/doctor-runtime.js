@@ -219,7 +219,7 @@ export function runDoctor(ctx = {}) {
 
   // D18 的手机端出口。「env 恒压过配置文件而被压侧无症状」这句话写在 scripts/doctor.js:23 ——
   // 产品自己承认它危险，可此前唯一的消费者是维护者 CLI，而 ccm 的主场景恰恰在手机上。
-  // ctx.shellEnv 必须是 loadRuntimeEnvironment **之前**的快照（src/server/config.js
+  // ctx.shellEnv 必须是 loadRuntimeEnvironment **之前**的快照（src/ops/config.js
   // getShellEnvSnapshot），加载后文件值也进了 process.env、来源就分不开了。
   // 缺省不假绿：调用方没传快照 = 这项没查过，与 BE-013 的 CONFIG_PERMS 同一条纪律。
   const envOvChecked = !!ctx.shellEnv && typeof ctx.shellEnv === 'object';

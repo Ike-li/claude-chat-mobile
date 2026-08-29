@@ -125,7 +125,7 @@ const APPEND_HEADER = '# ===== 以下由设置面板写入 =====';
 
 // changes: { KEY: string | null }
 //   string → 改已有行 / 追加新行
-//   null   → **整行删除**（不是写 KEY=）。src/server/config.js:22,39-43 启动时会删掉所有空串
+//   null   → **整行删除**（不是写 KEY=）。src/ops/config.js:22,39-43 启动时会删掉所有空串
 //            key，留一行 `KEY=` 毫无意义，还会挡住从 shell export 同名变量。
 //   缺席   → 不动
 export function applyEnvChanges(text, changes) {

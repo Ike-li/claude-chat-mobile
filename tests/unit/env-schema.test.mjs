@@ -337,7 +337,7 @@ test.describe('buildEnvView —— 下发给前端的视图', () => {
 // 且全面板搜「环境变量/覆盖/压过」零命中。用户在手机上改完、保存成功、运行时仍是 A —— 零症状。
 // 根因是 buildEnvView 只投影配置文件，连 shell env 都不看。
 //
-// 为什么快照必须由调用方传进来：src/server/config.js 会把文件值**投影回 process.env**
+// 为什么快照必须由调用方传进来：src/ops/config.js 会把文件值**投影回 process.env**
 // （只填还没有的 key），所以在这一层现读 process.env 分不出来源，做出来的是永远不报的假功能。
 test.describe('buildEnvView —— 文件值 ≠ 生效值时必须标出来', () => {
   const values = { WORK_DIR: '/from/config/file', PORT: '3000' };

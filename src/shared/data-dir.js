@@ -3,7 +3,7 @@
 // 此前 sessions/approval-store/audit/devices/cf-access 各写一遍 `process.env.CCM_DATA_DIR || join(…, 'data')`，
 // 回落规则（目录名、相对模块的层级）散在 5 处，改一处就得记得改另外四处。
 //
-// 【为什么 env 只能在函数体内读】src/server/config.js 在 .env 加载【之前】就被 server.js import
+// 【为什么 env 只能在函数体内读】src/ops/config.js 在 .env 加载【之前】就被 server.js import
 // （瘦启动器必须先拿到 loadRuntimeEnvironment 才能加载 .env），若本模块在顶层求值 process.env.CCM_DATA_DIR，
 // config.js 会拿到加载前的空环境 → CCM_DATA_DIR 静默失效 → 生产状态写回仓库 data/。
 // 默认参数 `env = process.env` 在【调用期】求值，天然满足；PROJECT_ROOT 只用 import.meta.dirname，与 env 无关。

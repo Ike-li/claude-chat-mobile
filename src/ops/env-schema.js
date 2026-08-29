@@ -11,7 +11,7 @@
 // scripts/setup.js:85 的 MESSAGES 双语字典。**别好心把这些搬进 EN_DICT。**
 //
 // ## 三条硬边界（不是「暂未支持」，是不能做）
-//   1. ANTHROPIC_* —— src/server/config.js:21,36-42 启动期无条件剥除，只认真实 shell export。
+//   1. ANTHROPIC_* —— src/ops/config.js:21,36-42 启动期无条件剥除，只认真实 shell export。
 //      写进 .env 是静默失效，做成表单等于骗人。只读诊断 + 引导改 shell profile。
 //   2. AUTH_TOKEN —— 只读。改完到重启之间 .env 与运行中进程不一致；重启后所有已保存 token 的
 //      设备（含正在操作的这台手机）都要重新输入，极易把自己锁在门外。
@@ -35,7 +35,7 @@ const TOGGLE_ZERO = { on: '', off: '0' };   // CCM_AGENT_PROGRESS_SUMMARIES：�
 const t = (zh, en) => ({ zh, en });
 
 // 默认端口的**唯一定义处**。此前这个 3000 在仓里有六份独立字面量：本 schema 的 default、
-// src/server/config.js 的 `positiveNumber(env.PORT, 3000)`、scripts/service.js 的五处 `?? 3000`。
+// src/ops/config.js 的 `positiveNumber(env.PORT, 3000)`、scripts/service.js 的五处 `?? 3000`。
 // 后果不是「端口错了」（值恰好都一样），而是 schema 的 default **压根没人消费** —— 改它只会
 // 让配置面板和 doctor 显示新值（doctor 用 def.default 算「生效值」），server 照旧跑 3000。
 // 声明了却不被消费的事实源，比没有更糟：它看起来像唯一真相。
@@ -492,11 +492,11 @@ export function validateEnvChanges(changes, d) {
 // values 是**配置文件**的投影，而 shell 环境变量恒压过配置文件 —— 被压住的那一行在面板上
 // 与正常行长得一模一样：用户改完、保存成功、运行时仍是旧值，零症状（VC-D4-02，2026-08-26 实测）。
 // 要标出这种行，就得知道 shell 里设过哪些 key，而这里**不能自己去读 process.env**：
-//   1. src/server/config.js:72 会把文件值投影回 process.env（只填还没有的 key），
+//   1. src/ops/config.js:72 会把文件值投影回 process.env（只填还没有的 key），
 //      加载之后现读分不出来源，做出来的是永远不报的假功能；
 //   2. src/ops 不读 process.env 是既定约定（同 src/shared/data-dir.js 顶层不读 env 的理由）——
 //      这个模块得能被单测直接喂数据。
-// 快照由 src/server/config.js 的 getShellEnvSnapshot() 提供（它在投影前第一行拍下）。
+// 快照由 src/ops/config.js 的 getShellEnvSnapshot() 提供（它在投影前第一行拍下）。
 //
 // **只标键，绝不回显 env 的值**：被压住的可能正是 AUTH_TOKEN / VAPID 私钥，
 // 与 doctor D18 同一条纪律（src/ops/doctor-checks.js:560 上方注释）。

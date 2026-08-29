@@ -92,7 +92,7 @@ import * as approvalStore from '../agent/approval-store.js';
 import { expireOrphanedPending, startApprovalRetentionSweep } from '../agent/approval-lifecycle.js';
 import * as audit from '../ops/audit.js';
 import * as metrics from '../ops/metrics.js';
-import { getShellEnvSnapshot, parseServerConfig } from './config.js';
+import { getShellEnvSnapshot, parseServerConfig } from '../ops/config.js';
 import {
   clientIp,
   configureHttpShell,
@@ -115,7 +115,7 @@ const HERE = join(import.meta.dirname, '..', '..'); // 项目根；从任何 cwd
 const ENV_FILE_PATH = join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
 const CONFIG_FILE_PATH = join(HERE, CONFIG_FILE_NAME); // 统一配置文件，优先于 .env
 
-// 面板读写的目标必须与 src/server/config.js 启动时**读的那一份**是同一个文件。
+// 面板读写的目标必须与 src/ops/config.js 启动时**读的那一份**是同一个文件。
 // 分流写错的后果不是报错而是假成功：用户改完看到「已写入」，重启后毫无变化 ——
 // 与 CF_ACCESS_* 被 dotenv 吞掉那次是同一种失效形态（fail-open + 假成功）。
 const usingConfigJson = () => existsSync(CONFIG_FILE_PATH);
