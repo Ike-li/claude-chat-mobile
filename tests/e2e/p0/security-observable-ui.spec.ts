@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { captureBrowserErrors, expectNoBrowserErrors } from '../../helpers/playwright';
+import { captureBrowserErrors, expectNoBrowserErrors, waitUntilConnected } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-20 安全与鉴权可观测 UI 行为', async ({ page }) => {
@@ -37,7 +37,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect.poll(() => page.url()).not.toContain('bad-token');
     await expect(page.locator('#authGate')).toBeVisible();
     await expect(page.locator('#authError')).toContainText('令牌无效，请重新输入');
-    await expect(page.locator('#connDot')).not.toHaveClass(/bg-success/);
+    await expect(page.locator('#connDotWrap')).not.toHaveAttribute('data-conn', 'online');
     await expect(page.locator('[data-testid="user-message"]')).toHaveCount(0);
     await expect(page.locator('[data-testid="assistant-message"]')).toHaveCount(0);
     await expect(page.locator('body')).not.toContainText('bad-token');
@@ -46,7 +46,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#authToken').fill('mock-token');
     await page.locator('#authSubmit').click();
     await expect(page.locator('#authGate')).toBeHidden();
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/);
+    await waitUntilConnected(page);
     await expect(page.locator('#input')).toBeVisible();
     await expect(page.locator('body')).not.toContainText('mock-token');
     expect(await page.evaluate(() => localStorage.getItem('auth_token'))).toBe('mock-token');
@@ -94,7 +94,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#authToken').fill('mock-token');
     await page.locator('#authToken').press('Enter');
     await expect(page.locator('#authGate')).toBeHidden();
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/);
+    await waitUntilConnected(page);
     await expect(page.locator('#input')).toBeVisible();
     await expect(page.locator('body')).not.toContainText('invalid-token');
     await expect(page.locator('body')).not.toContainText('mock-token');
@@ -124,7 +124,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#authToken').fill('mock-token');
     await page.locator('#authSubmit').click();
     await expect(page.locator('#authGate')).toBeHidden();
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/);
+    await waitUntilConnected(page);
     await expect(page.locator('#input')).toBeVisible();
     await expect(page.locator('#authToken')).toHaveValue('');
 

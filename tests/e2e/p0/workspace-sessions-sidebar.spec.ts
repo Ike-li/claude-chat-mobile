@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import {
   ANOTHER_WORKSPACE,
   MAIN_WORKSPACE,
@@ -667,9 +667,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     // mock 内部延时 2.5s 后才断线，上面的展开+打标记操作留有充足余量。服务端主动 disconnect(true) 的
     // reason 是 "io server disconnect"——socket.io 客户端按规范不会自动重连，需要显式触发（同
     // input-send-empty.spec.ts P0-02d 的既有断线重连套路：派发 online 事件走 app.js reconnectIfNeeded）。
-    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await waitUntilDisconnected(page);
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
     await expect(page.locator('#messages')).toContainText('Reconnect drawer settle marker');
 
     await expect(page.locator('#sessionPanel .skeleton-loader')).toHaveCount(0);
@@ -695,9 +695,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 服务端主动 disconnect(true) 的 reason 是 "io server disconnect"——socket.io 客户端按规范不会
     // 自动重连，需要显式触发（同 input-send-empty.spec.ts P0-02d 的既有断线重连套路）。
-    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await waitUntilDisconnected(page);
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
     await expect(page.locator('#messages')).toContainText('Reconnect drawer settle marker');
 
     await expect(sessionButtonByTitle(page, 'Renamed After Reconnect')).toBeVisible();
@@ -720,9 +720,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 服务端主动 disconnect(true) 的 reason 是 "io server disconnect"——socket.io 客户端按规范不会
     // 自动重连，需要显式触发（同 input-send-empty.spec.ts P0-02d 的既有断线重连套路）。
-    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await waitUntilDisconnected(page);
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
     await expect(page.locator('#messages')).toContainText('Reconnect drawer settle marker');
     // 主工作区新标题落地——它和"另一个目录 DOM 有没有被连带重建"同属一次 setInstances 判定的产物，
     // 用它做完成信号比额外哨兵更贴近真实回归点（这次判定确实处理过"只有 MAIN 变了"这件事）。

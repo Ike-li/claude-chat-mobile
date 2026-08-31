@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-14 pending snapshot 对账重建审批卡片', async ({ page }) => {
@@ -108,7 +108,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // ★ 真 reload：整棵 DOM、所有前端状态、socket 连接全部销毁重建。
     await page.reload();
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
 
     // 卡片必须自己回来，且**参数完整**——只回来一个空壳等于要求用户盲批。
     await expect(page.locator('#permModal')).toBeVisible({ timeout: 15_000 });

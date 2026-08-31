@@ -1,6 +1,5 @@
-// 页面顶部连接状态横幅：把「正在连接 / 断开重连中 / 已重新连接」从一个 3.5px 小圆点
-// （#connDot）提升为一条可读的横幅。此前唯一的人话文案写给了恒 hidden 的 #statusLine，
-// 用户看不到任何反馈——本模块只做接线，判定全在 logic.js resolveConnectionBanner。
+// 页面顶部连接状态横幅：连通性的人话通道（正在连接 / 断开重连中 / 已重新连接）。
+// 本模块只做接线，判定全在 logic.js resolveConnectionBanner。
 //
 // 相位由调用方用三个 mark* 显式推进（socket 的 connect/disconnect handler 各一行），
 // 本模块不认识 socket，也不认识鉴权门——「是否该抑制」由 isSuppressed 注入。

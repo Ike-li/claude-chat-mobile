@@ -7,17 +7,19 @@
 // 5s 重试阈值用 web-first 断言的 timeout 等过去（非 waitForTimeout，过禁止模式门禁）。
 
 import { test, expect } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02g 断线时顶部横幅可见并给出重试，重连后变绿再自动收起', async ({ page }) => {
     await gotoMock(page);
 
-    // 连接正常时横幅不占位（秒连不闪）
+    // 连接正常时横幅不占位（秒连不闪）；会话按钮角标健康时也隐藏
     await expect(page.locator('[data-testid="conn-banner"]')).toBeHidden();
+    await expect(page.locator('[data-testid="header-conn-badge"]')).toBeHidden();
 
     await sendChatMessage(page, 'test:disconnect-now');
-    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await waitUntilDisconnected(page);
+    await expect(page.locator('[data-testid="header-conn-badge"]')).toBeVisible();
 
     // 断开超过 1s → 横幅出现，文案可读（这正是此前只有 3.5px 小圆点、没有任何可读反馈的地方）
     const banner = page.locator('[data-testid="conn-banner"]');
@@ -30,7 +32,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     // 点重试走 reconnectIfNeeded：与 online 事件同一条路径
     await page.locator('[data-testid="conn-banner-retry"]').click();
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
+    await expect(page.locator('[data-testid="header-conn-badge"]')).toBeHidden();
 
     // 重连成功先给绿条，再自动收起。
     // 必须同时断言「可见」+「success 色阶」：apply() 的隐藏分支只改 className、不清文案，而
@@ -78,7 +81,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:disconnect-now');
-    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await waitUntilDisconnected(page);
     await expect(page.locator('[data-testid="conn-banner"]')).toBeVisible({ timeout: 10_000 });
 
     // 横幅是非阻断的：断线期间仍能把消息排进离线队列（不回归 P0-02d 的能力）
@@ -88,7 +91,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('.pending-indicator').last()).toContainText('正在等待连接');
 
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
     await waitForIdle(page);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
 

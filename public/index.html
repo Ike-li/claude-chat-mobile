@@ -83,8 +83,8 @@
         <!-- 台阶2 Step B：其他工作区有动静时显示状态 emoji（app.js updateSessionsDot 控制；⏳/⚠️/❗/✅ 与面板图例同款）。定位/底色常驻此处，JS 只切 hidden + 换 emoji。 -->
         <span id="sessionsDot" class="hidden absolute -top-1.5 -right-1.5 min-w-[16px] h-4 px-px flex items-center justify-center rounded-full bg-surface border border-line-soft shadow-sm text-xs leading-none"></span>
         
-        <!-- Connection state dot wrapper inside btnSessions -->
-        <div id="connDotWrap" class="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-surface rounded-full border border-line-soft shadow-sm" title="连接状态：绿=已连接 红=断开">
+        <!-- 会话按钮右下角标：有事才出现。首连中不点亮（避免开页闪红）；连通性人话在 #connBanner。 -->
+        <div id="connDotWrap" class="hidden absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center bg-surface rounded-full border border-line-soft shadow-sm" data-conn="connecting" data-reason="ok" data-testid="header-conn-badge">
           <span id="connDot" class="w-2 h-2 rounded-full bg-danger shrink-0"></span>
         </div>
       </button>
@@ -141,7 +141,7 @@
     <span id="statusLine" class="hidden">未连接</span>
   </header>
 
-  <!-- 连接状态横幅：#connDot 那个 3.5px 小圆点看不清，这里给一条可读的页面级反馈。
+  <!-- 连接状态横幅：连通性的人话通道。
        非阻断——进 body 的 flex 列占一行，不遮消息区，断线期间仍可滚动看历史、仍可离线排队发消息。
        三态与延迟阈值全在 logic.js resolveConnectionBanner，显隐由 app/connection-banner.js 驱动。
        role="status" 已隐含 aria-live="polite"，不要再叠一层；秒数每 500ms 变，必须 aria-hidden 否则刷屏。 -->

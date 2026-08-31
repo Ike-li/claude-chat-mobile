@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect, type Page } from '@playwright/test';
-import { expectNoBrowserErrors, gotoMock, sendChatMessage } from '../../helpers/playwright';
+import { expectNoBrowserErrors, gotoMock, sendChatMessage, waitUntilConnected } from '../../helpers/playwright';
 import { ANOTHER_WORKSPACE, MAIN_WORKSPACE, expandWorkspace, expectSidebarClosed, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
 
 // 修「切到一个离开期间产生了很多聊天回复的会话时，从离开点逐条吐到最新（打字机效果）」：sync:since
@@ -166,7 +166,7 @@ test.describe('P0 回放缓冲：切会话/离开期间积压消息不逐条吐�
     await page.request.post('/__arm-no-session-id');
 
     await page.reload();
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
 
     // 核心断言 1：缓冲回放的内容渲染出来了——修复前这里是空白（clearView 清屏 + 磁盘拿不到）。
     await expect(page.locator('#messages')).toContainText('NOSID_LIVE_FROM_BUFFER', { timeout: 10_000 });
@@ -187,7 +187,7 @@ test.describe('P0 回放缓冲：切会话/离开期间积压消息不逐条吐�
     await gotoMock(page);
     await page.request.post('/__arm-no-session-id');
     await page.reload();
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
     await expect(page.locator('#messages')).toContainText('NOSID_LIVE_FROM_BUFFER', { timeout: 10_000 });
     // 前置状态：还没有 sessionId，输入条按既有判定隐藏（shouldShowComposer 首条就是 `if (sessionId)`）
     await expect(page.locator('#composerFooter')).toBeHidden();

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, resolveHeaderConnBadge, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows} from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -888,6 +888,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   let initialLoad = true;
   let connectErrorCount = 0;  // 公网 socket 连续失败计数，攒够再探测 Access 是否过期
+  let everConnected = false;  // 区分「开页首连中」与「曾经连上过再断开」——后者才点亮会话按钮角标
+  let headerSocketOnline = false;
   
   // FE-NEW-001/006：串行重发 + 按 viewing 作用域决定 busy（永久失败/他会话成功不再 sticky busy）。
   // 在线路径有 _sendInFlightSessionIds；离线旧实现 for 循环并行 emit 易撞在途轮闸，且 setBusy(true) 无配对 clear。
@@ -1125,7 +1127,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const startRttLoop = rttMonitor.start;
   const stopRttLoop = rttMonitor.stop;
 
-  // ---- 连接状态横幅：把 #connDot 那个 3.5px 小圆点的信息提升为页面级可读反馈 ----
+  // ---- 连接状态横幅：连通性的人话通道 ----
   // 抑制条件读的是两个全屏门的 hidden class：鉴权失败时 socket 永远连不上，此时挂一条
   // 「自动重连中…」既误导又与全屏令牌输入页视觉打架。因此 connect_error 不必额外接线。
   // 写成 !!el && !hidden 而不是 !el?.classList.contains('hidden')：后者在元素缺失时得到 !undefined
@@ -1148,7 +1150,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     accessRelogin?.classList.add('hidden');      // 连上即收起重登浮层
     connectErrorCount = 0;
     if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
-    connDot.className = 'w-2 h-2 rounded-full bg-success shrink-0';
+    headerSocketOnline = true;
+    everConnected = true;
+    updateAttentionSignal();
     connBanner.markConnected(); // 必须排在上面两个门收起之后：isSuppressed 此刻才为 false
     setStatus(t('已连接'));
     startRttLoop(); // 连上即开始测 RTT（立即一次 + 周期）
@@ -1168,7 +1172,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     processOfflineQueue();
   });
   socket.on('disconnect', (reason) => {
-    connDot.className = 'w-2 h-2 rounded-full bg-danger shrink-0';
+    headerSocketOnline = false;
+    updateAttentionSignal();
     connBanner.markDisconnected();
     setStatus(t('连接断开，自动重连中…'));
     stopRttLoop();
@@ -4152,7 +4157,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       refreshSessionStatusChips();
       refreshNeedsYou();
     }
-    updateAttentionSignal(); // 顶栏 connDotWrap 边框：alert/attention/ok（与连通性内圈绿/红分轴）
+    updateAttentionSignal(); // 顶栏会话按钮角标：断开 / 需要你 / 服务告警（健康时隐藏）
     // 默认磁贴标签依赖 currentModel(空/非空) + cwdDefaultModel，二者本次都可能变（adoptPanelState 改 currentModel、
     // scout 完成的同视图广播改 cwdDefaultModel）。用纯函数比对前后标签，仅真变时重建网格刷新——adoptPanelState 只
     // 切高亮不重建，故此处兜底；无变化不重建（省性能）。
@@ -4635,8 +4640,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!old) return;
     old.replaceWith(buildServiceSection());
   }
-  // 顶栏 connDotWrap 边框：服务异常(alert) 优先于 会话待处理(attention)；内圈绿/红仍只管连通性。
-  // 与 updateServiceNotice 共用边框，避免两轴打架——本函数在 setInstances 末尾统一重算。
+  // 顶栏会话按钮右下角标。判定在 resolveHeaderConnBadge（断开 > 告警 > 需要你 > 隐藏）。
+  // 首连中不点亮，避免开页闪红。
   function updateAttentionSignal() {
     if (!connDotWrap) return;
     const { level } = whatNeedsAttention({
@@ -4644,23 +4649,20 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       needsYou: needsYouList,
       service: latestServiceHealth,
     });
-    // 清旧态
-    connDotWrap.classList.remove('border-warning', 'border-danger', 'border-line-soft');
-    if (level === 'alert') {
-      connDotWrap.classList.add('border-danger');
-      // 保留 RTT/连接 title 前缀语义：追加注意力说明
-      const base = connDotWrap.title || '';
-      // 同下：去重 key 与追加文案必须同语言，且译文须保持「t('服务告警') 是长句译文的前缀」这层关系。
-      if (!base.includes(t('服务告警'))) connDotWrap.title = (base ? base + ' · ' : '') + t('服务告警（推送失败等）');
-    } else if (level === 'attention') {
-      connDotWrap.classList.add('border-warning');
-      const base = connDotWrap.title || '';
-      // 幂等去重靠 includes 比对，故追加的文案必须与被比对的 key 同语言——这里拼 t('需要你') 而非
-      // 写死中文，否则 en 下 includes 永不命中，每刷新一次就往 title 里再追加一段。
-      if (!base.includes(t('需要你'))) connDotWrap.title = (base ? base + ' · ' : '') + `${t('需要你')} (${needsYouList.length || '…'})`;
-    } else {
-      connDotWrap.classList.add('border-line-soft');
+    const spec = resolveHeaderConnBadge({
+      connected: headerSocketOnline,
+      everConnected,
+      attentionLevel: level,
+      needsYouCount: needsYouList.length,
+    });
+    connDotWrap.dataset.conn = spec.conn;
+    connDotWrap.dataset.reason = spec.reason;
+    connDotWrap.title = spec.title;
+    if (connDot) {
+      const fill = spec.tone === 'warning' ? 'bg-warning' : 'bg-danger';
+      connDot.className = `w-2 h-2 rounded-full ${fill} shrink-0`;
     }
+    connDotWrap.classList.toggle('hidden', !spec.visible);
   }
   function updateTerminalBusyForDir(cwd, sessions, terminalBusy) {
     // 新服务端给出完整 registry 的 cwd 汇总，避免默认分页漏掉页外 busy；旧服务端回落当前返回行。
@@ -4715,11 +4717,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
   }
   // 服务状态可见性（第一性原理重新设计）：与上面 updateSessionsDot（会话待处理/注意力不对称）
-  // 是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（可维护性），复用 connDotWrap（已有的
-  // 服务级 UI 落点，纯连通性的 connDot 内圈继续只管绿/红，环形边框承载这条独立语义）。
+  // 是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（可维护性）。
   function updateServiceNotice(service) {
     latestServiceHealth = service;
-    // 边框由 updateAttentionSignal 统一重算（alert > attention > ok），此处只刷服务文案区。
+    // 只存快照 + 刷抽屉文案。顶栏角标由 setInstances 末尾的 updateAttentionSignal 重算。
     refreshServiceSection();
     renderHooksBridgeSection(); // 安装态随广播刷新：面板开着时点完开关能立刻看到变化
   }

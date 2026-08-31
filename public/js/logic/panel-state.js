@@ -295,7 +295,7 @@ export function shouldShowTopContextPill({ viewingInstanceId, sessionId } = {}) 
 }
 
 // 顶栏 RTT 芯片：好网（good/ok）隐藏，只在 warn/bad 时出现——正常时顶栏安静，异常才说话。
-// 连接点 title / 状态行仍可由接线层带延迟数字，不依赖芯片可见。
+// 状态行仍可由接线层带延迟数字，不依赖芯片可见。
 export function shouldShowRttChip(ms) {
   const tone = rttToneClass(ms);
   return tone === 'warn' || tone === 'bad';
@@ -380,7 +380,7 @@ export function shouldRestoreOptimisticBusy({
   return false;
 }
 
-// 统一判定：会话待处理 + 服务异常 → ok | attention | alert（顶栏 connDot 边框 / 注意力信号）。
+// 统一判定：会话待处理 + 服务异常 → ok | attention | alert（顶栏会话按钮角标 / 注意力信号）。
 // priority: alert > attention > ok。抽屉不再复述计数；状态落在需要你卡、工作区树角标、主聊天面。
 export function whatNeedsAttention({ instances, needsYou, service } = {}) {
   const items = [];
@@ -417,6 +417,34 @@ export function whatNeedsAttention({ instances, needsYou, service } = {}) {
   }
   if (items.length) return { level: 'attention', items };
   return { level: 'ok', items: [] };
+}
+
+// 顶栏会话按钮右下角标：有事才出现。
+// 优先级：已连过再断开 > 服务告警 > 需要你 > 隐藏。
+// 首连中（从未连上）不点亮，避免每次打开闪一颗红点（与横幅延迟同因）。
+export function resolveHeaderConnBadge({
+  connected = false,
+  everConnected = false,
+  attentionLevel = 'ok',
+  needsYouCount = 0,
+} = {}) {
+  const conn = connected ? 'online' : (everConnected ? 'offline' : 'connecting');
+  if (conn === 'offline') {
+    return { visible: true, tone: 'danger', conn, reason: 'offline', title: t('未连接') };
+  }
+  if (conn === 'online' && attentionLevel === 'alert') {
+    return { visible: true, tone: 'danger', conn, reason: 'alert', title: t('服务告警（推送失败等）') };
+  }
+  if (conn === 'online' && attentionLevel === 'attention') {
+    return {
+      visible: true,
+      tone: 'warning',
+      conn,
+      reason: 'attention',
+      title: `${t('需要你')} (${needsYouCount || '…'})`,
+    };
+  }
+  return { visible: false, tone: null, conn, reason: 'ok', title: '' };
 }
 
 // 通知深链落地策略（②2c）：通知带 {instanceId, sessionId, cwd}，点击后据客户端 instances 快照决定动作。

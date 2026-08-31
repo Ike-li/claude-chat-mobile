@@ -26,15 +26,25 @@ export function captureBrowserErrors(page: Page, options: BrowserErrorCaptureOpt
   });
 }
 
+/** 等 socket 真正连上。角标健康时隐藏，所以读 data-conn 而不是元素可见性。 */
+export async function waitUntilConnected(page: Page, timeout = 10_000) {
+  await expect(page.locator('#connDotWrap')).toHaveAttribute('data-conn', 'online', { timeout });
+}
+
+/** 等 socket 从已连接变为断开（开页首连中不会到 offline）。 */
+export async function waitUntilDisconnected(page: Page, timeout = 10_000) {
+  await expect(page.locator('#connDotWrap')).toHaveAttribute('data-conn', 'offline', { timeout });
+}
+
 export async function gotoMock(page: Page) {
   captureBrowserErrors(page);
   await page.request.post('/__reset');
   await page.goto('/');
-  // 空首页枢纽默认隐藏底部输入条；就绪信号改为顶栏 + 连接点。
+  // 空首页枢纽默认隐藏底部输入条；就绪信号改为顶栏 + data-conn=online。
   await expect(page.locator('#btnNew')).toBeVisible();
   await expect(page.locator('#btnSessions')).toBeVisible();
   await expect(page.locator('#messages')).toBeVisible();
-  await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+  await waitUntilConnected(page);
 }
 
 /** 进入可发消息态：空首页须先点 ＋（composeReady）才露出输入条；已在会话内则 no-op。 */

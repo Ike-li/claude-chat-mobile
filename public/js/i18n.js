@@ -41,7 +41,6 @@ export const EN_DICT = Object.freeze({
   '新聊天': 'New chat',
   '未连接': 'Disconnected',
   '查看工作区、会话列表和后台状态': 'Workspaces, session list, and background status',
-  '连接状态：绿=已连接 红=断开': 'Connection: green = connected, red = disconnected',
   '手机到主机的往返延迟': 'Round-trip latency from phone to host',
   '工作区：浏览或查看改动': 'Workspace: browse files or view changes',
   '回首页（最近工作区与会话）': 'Home (recent workspaces and sessions)',
@@ -328,7 +327,6 @@ export const EN_DICT = Object.freeze({
   '其他工作区': 'Other workspaces',
   '模型': 'Model',
   '需要你': 'Needs you',
-  '服务告警': 'Service alert',
   '服务告警（推送失败等）': 'Service alert (delivery failures, etc.)',
 
   // —— 消息流 / 工具卡 / 思考 ——

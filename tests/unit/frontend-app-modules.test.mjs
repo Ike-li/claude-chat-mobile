@@ -349,23 +349,23 @@ test('RTT monitor renders latency through app context and clears stale values', 
   const context = createAppContext({ dom: { connRtt: rtt, connDotWrap: wrap } });
   const monitor = createRttMonitor(context, { setStatus: value => statuses.push(value) });
 
-  // 差网：芯片可见 + danger 色；状态行/绿点 title 同步带「延迟」
+  // 差网：芯片可见 + danger 色；状态行带「延迟」。角标 title 不归 RTT 写。
   assert.equal(monitor.render(1250), '1.3s');
   assert.equal(rtt.textContent, '延迟 1.3s');
   assert.match(rtt.className, /conn-rtt-chip/);
   assert.match(rtt.className, /text-danger/);
   assert.doesNotMatch(rtt.className, /\bhidden\b/);
   assert.equal(rtt.title, '手机到主机往返延迟 1.3s');
-  assert.equal(wrap.title, '已连接 · 延迟 1.3s');
+  assert.equal(wrap.title, '');
   assert.deepEqual(statuses, ['已连接 · 延迟 1.3s']);
 
-  // 好网：芯片隐藏（顶栏安静），但 title/状态行仍保留延迟数字供排障
+  // 好网：芯片隐藏（顶栏安静），状态行仍保留延迟数字供排障
   assert.equal(monitor.render(80), '80ms');
   assert.equal(rtt.textContent, '');
   assert.match(rtt.className, /\bhidden\b/);
   assert.match(rtt.className, /conn-rtt-chip/);
   assert.equal(rtt.title, '手机到主机往返延迟 80ms');
-  assert.equal(wrap.title, '已连接 · 延迟 80ms');
+  assert.equal(wrap.title, '');
   assert.equal(statuses.at(-1), '已连接 · 延迟 80ms');
 
   // warn 档仍显示芯片

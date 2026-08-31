@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { ensureComposerReady, expectNoBrowserErrors, gotoMock, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 import { ANOTHER_WORKSPACE, openSessionsSidebar, openWorkspaceSession } from '../../helpers/p0-ui';
 
 const tinyPng = Buffer.from(
@@ -126,7 +126,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:disconnect-now');
-    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await waitUntilDisconnected(page);
 
     await page.locator('#fileInput').setInputFiles({
       name: 'offline-attachment.txt',
@@ -143,7 +143,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#attachTray')).toBeHidden();
 
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
     await waitForIdle(page);
     await expect(page.locator('.pending-indicator')).toHaveCount(0);
     await expect(page.locator('#messages').getByText('offline-attachment.txt')).toHaveCount(1);

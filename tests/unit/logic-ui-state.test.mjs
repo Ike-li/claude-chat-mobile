@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -116,6 +116,80 @@ test.describe('whatNeedsAttention：ok / attention / alert', () => {
     assert.equal(r.level, 'alert');
     assert.ok(r.items.some(i => i.kind === 'delivery_failure'));
     assert.ok(r.items.some(i => i.kind === 'awaiting_input'));
+  });
+});
+
+// ---- resolveHeaderConnBadge：会话按钮右下角标有事才出现 ----
+test.describe('resolveHeaderConnBadge：有事才出现', () => {
+  test('已连接且 ok → 隐藏', () => {
+    const r = resolveHeaderConnBadge({ connected: true, everConnected: true, attentionLevel: 'ok' });
+    assert.equal(r.visible, false);
+    assert.equal(r.conn, 'online');
+    assert.equal(r.reason, 'ok');
+    assert.equal(r.tone, null);
+  });
+
+  test('首连中（从未连上）→ 隐藏，避免开页闪红点', () => {
+    const r = resolveHeaderConnBadge({ connected: false, everConnected: false });
+    assert.equal(r.visible, false);
+    assert.equal(r.conn, 'connecting');
+    assert.equal(r.reason, 'ok');
+  });
+
+  test('已连过再断开 → 显示 danger', () => {
+    const r = resolveHeaderConnBadge({ connected: false, everConnected: true });
+    assert.equal(r.visible, true);
+    assert.equal(r.tone, 'danger');
+    assert.equal(r.conn, 'offline');
+    assert.equal(r.reason, 'offline');
+    assert.equal(r.title, '未连接');
+  });
+
+  test('已连接 + 需要你 → warning', () => {
+    const r = resolveHeaderConnBadge({
+      connected: true,
+      everConnected: true,
+      attentionLevel: 'attention',
+      needsYouCount: 2,
+    });
+    assert.equal(r.visible, true);
+    assert.equal(r.tone, 'warning');
+    assert.equal(r.conn, 'online');
+    assert.equal(r.reason, 'attention');
+    assert.match(r.title, /需要你/);
+    assert.match(r.title, /2/);
+  });
+
+  test('已连接 + 服务告警 → danger', () => {
+    const r = resolveHeaderConnBadge({ connected: true, everConnected: true, attentionLevel: 'alert' });
+    assert.equal(r.visible, true);
+    assert.equal(r.tone, 'danger');
+    assert.equal(r.reason, 'alert');
+    assert.match(r.title, /服务告警/);
+  });
+
+  test('断开优先于需要你', () => {
+    const r = resolveHeaderConnBadge({
+      connected: false,
+      everConnected: true,
+      attentionLevel: 'attention',
+      needsYouCount: 3,
+    });
+    assert.equal(r.reason, 'offline');
+    assert.equal(r.tone, 'danger');
+    assert.equal(r.visible, true);
+  });
+
+  test('首连中即使有 alert 也不点亮', () => {
+    const r = resolveHeaderConnBadge({ connected: false, everConnected: false, attentionLevel: 'alert' });
+    assert.equal(r.visible, false);
+    assert.equal(r.conn, 'connecting');
+  });
+
+  test('缺省入参 → 等同首连中', () => {
+    const r = resolveHeaderConnBadge();
+    assert.equal(r.visible, false);
+    assert.equal(r.conn, 'connecting');
   });
 });
 

@@ -47,7 +47,7 @@ export function formatRttMs(ms) {
 }
 
 // 连接 RTT 色阶语义 token：good(<150) / ok(<400) / warn(<1000) / bad(≥1000)。
-// 返回语义名而非 Tailwind class；接线层：good/ok → 中性 ink-soft（不与绿点抢色），warn/bad → warning/danger。
+// 返回语义名而非 Tailwind class；接线层：good/ok → 中性 ink-soft，warn/bad → warning/danger。
 // 非法 → ''，与 formatRttMs 对齐（隐藏时不着色）。
 export function rttToneClass(ms) {
   if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) return '';

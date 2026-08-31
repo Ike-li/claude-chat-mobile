@@ -2,7 +2,7 @@
 // helpers: tests/helpers/playwright.ts
 
 import { test, expect } from '@playwright/test';
-import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle } from '../../helpers/playwright';
+import { closeSettings, ensureComposerReady, expectNoBrowserErrors, gotoMock, openSettingsSection, sendChatMessage, waitForIdle, waitUntilConnected, waitUntilDisconnected } from '../../helpers/playwright';
 
 test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02 输入框、发送按钮与空输入边界', async ({ page }) => {
@@ -93,7 +93,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await gotoMock(page);
 
     await sendChatMessage(page, 'test:disconnect-now');
-    await expect(page.locator('#connDot')).toHaveClass(/bg-danger/, { timeout: 10_000 });
+    await waitUntilDisconnected(page);
 
     await page.locator('#input').fill('test:settings-echo');
     await expect(page.locator('#btnSend')).toBeEnabled();
@@ -102,7 +102,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(page.locator('#input')).toHaveValue('');
 
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await expect(page.locator('#connDot')).toHaveClass(/bg-success/, { timeout: 10_000 });
+    await waitUntilConnected(page);
     await waitForIdle(page);
     await expect(page.locator('[data-testid="assistant-message"]').last()).toContainText('设置回显：model=');
 
