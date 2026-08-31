@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js';
 import { ALL_CONFIG_KEYS } from './config-file.js';
-import { statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic } from './doctor-checks.js';
+import { statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
 
 // claude CLI 的实时探测。**有副作用**（which + 跑一次 --version），所以不在 doctor-checks.js 里
@@ -197,6 +197,16 @@ export function runDoctor(ctx = {}) {
   // 此前它是 warn/isSet=true，DEVICE_GATE 会以为公网侧有 AUTH_TOKEN 保护着。
   const gate = classifyDeviceGateTopology({ authTokenSet: tok.safe.isSet && tok.status !== 'fail', cfEnabled: !!ctx.cfEnabled });
   checks.push({ id: 'DEVICE_GATE', status: gate.status, detail: gate.detail, safe: gate.safe });
+
+  // D20 的手机端出口（R45，2026-08-30）：FILE_EDIT 是唯一绕过 Agent 审批链的写入通道，而它的
+  // 开关就住在这个配置面板里——web 体检的受众与该提示的受众重合度比装机时跑一次的 CLI doctor 高。
+  // 判定与 scripts/doctor.js D20 同一份纯函数；公网信号 = CF Access 实际启用（ctx.cfEnabled，
+  // auth 层权威判定，比 CLI 侧「三键齐设」更准）或 PUBLIC_URL 已声明。safe 不回显 URL 值，只出布尔。
+  const fe = fileEditExposureDiagnostic({ fileEditOff: !!ctx.fileEditOff, cfConfigured: !!ctx.cfEnabled, publicUrl: ctx.publicUrl || '', lang: ctx.lang });
+  checks.push({
+    id: 'FILE_EDIT', status: fe.status, detail: fe.detail,
+    safe: { off: !!ctx.fileEditOff, publicSignal: !!ctx.cfEnabled || !!String(ctx.publicUrl || '').trim() },
+  });
 
   checks.push({ id: 'PUSH_VAPID', status: ctx.pushEnabled ? 'ok' : 'warn', detail: ctx.pushEnabled ? '已配置' : '未配置（推送优雅缺席）', safe: { enabled: !!ctx.pushEnabled } }); // 密钥仅布尔
 

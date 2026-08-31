@@ -496,3 +496,61 @@ test('buildConfigContent：给了 workDirs 就写 WORKDIRS 数组（自文档化
   assert.equal(parsed.WORK_DIR, '/Users/you/code/app');
   assert.deepEqual(parsed.WORKDIRS, ['/Users/you/code/app', '/Users/you/code/tools']);
 });
+
+// ── R45(2026-08-30 拍板)：文件编辑器直写进配置向导 ─────────────────────────
+// 默认值不动（FILE_EDIT 缺省=开，机主即 root，hard-rules §2.3）；但它是唯一绕过
+// Agent 审批链的写入通道，hard-rules §1「可选功能逐项问」的名单此前漏了它——
+// 补上询问：答「n」才写 FILE_EDIT=off，回车维持默认。非交互路径行为不变（不新增必填项）。
+test.describe('setup 向导 —— 文件编辑器直写要问一句（R45）', () => {
+  test('buildConfigContent：fileEdit off 才写 FILE_EDIT 键，默认不写（缺省开由 schema 负责）', () => {
+    // ccm.config.json 是类型化存储：toggle 落盘为布尔 false，读取时 projectToEnv 投影回
+    // 'off' 字面量进 process.env（消费点 app.js 判 === 'off'）。写字符串 'off' 会在每次
+    // 加载时刷一条类型转换 warning——走 applyConfigChanges 归一正是为了读写同源。
+    const off = JSON.parse(buildConfigContent({ authToken: 'x', workDir: '/tmp/w', fileEdit: 'off' }));
+    assert.equal(off.FILE_EDIT, false);
+    const def = JSON.parse(buildConfigContent({ authToken: 'x', workDir: '/tmp/w' }));
+    assert.equal(Object.hasOwn(def, 'FILE_EDIT'), false, '默认开由 schema 负责，配置文件不写多余键');
+  });
+
+  const seqDeps = (answer) => {
+    const seq = [];
+    let written;
+    return {
+      seq,
+      written: () => written,
+      deps: {
+        createRl: () => ({
+          question: async (q) => {
+            if (/文件编辑/.test(q)) seq.push('ask-file-edit');
+            return answer(q);
+          },
+          close: () => {},
+        }),
+        writeFile: (args) => { seq.push('write'); written = args; },
+        buildDesktop: () => {},
+        installHooks: () => {},
+        platform: 'linux',
+      },
+    };
+  };
+  const PLAN = { plan: { workDir: '/tmp/ccm-work', hooks: 'off', desktop: 'off' }, outPath: '/tmp/ccm.config.json', existingConfig: undefined, t: MESSAGES.zh };
+
+  test('★ 答 n → 写入 FILE_EDIT=off，且问题必须在写文件之前（它要进配置文件，不是装完再问的安装动作）', async () => {
+    const { seq, written, deps } = seqDeps((q) => (/文件编辑/.test(q) ? 'n' : ''));
+    await runInteractive(PLAN, deps);
+    assert.ok(seq.includes('ask-file-edit'), '必须问');
+    assert.ok(seq.indexOf('ask-file-edit') < seq.indexOf('write'), '问晚了答案就进不了配置文件');
+    assert.equal(written().fileEdit, 'off');
+  });
+
+  test('回车（默认）→ 不写 FILE_EDIT，维持默认开', async () => {
+    const { written, deps } = seqDeps(() => '');
+    await runInteractive(PLAN, deps);
+    assert.equal(written().fileEdit, undefined);
+  });
+
+  test('两种语言的提示都存在，且点名「不经审批链」这个关键差异', () => {
+    assert.match(MESSAGES.zh.fileEditPrompt, /审批/);
+    assert.match(MESSAGES.en.fileEditPrompt, /approval/i);
+  });
+});

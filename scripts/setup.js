@@ -39,7 +39,7 @@ export function generateToken(bytes = 32) {
 // 退役——它面向的人群在新格式成为默认后趋近于零；读取已存在 .env 的回落链不受影响，
 // 见 src/ops/config-file.js）。值里的空格 / 引号 / 反斜杠交给 JSON.stringify，不需要
 // .env 时代那套「同时满足 dotenv 与 shell 两个解析器」的字符白名单。
-export function buildConfigContent({ authToken, workDir, workDirs } = {}) {
+export function buildConfigContent({ authToken, workDir, workDirs, fileEdit } = {}) {
   const config = applyConfigChanges({}, {
     ...(authToken ? { AUTH_TOKEN: authToken } : {}),
     ...(workDir ? { WORK_DIR: workDir } : {}),
@@ -47,6 +47,8 @@ export function buildConfigContent({ authToken, workDir, workDirs } = {}) {
     // 用户日后想加项目时打开配置一眼就能看到往哪加（热加载，保存即生效），
     // 不用先去读文档考古出这个键名——2026-08-19 新用户实测的困惑正是「不知道有没有/怎么设多个」。
     ...(Array.isArray(workDirs) && workDirs.length ? { WORKDIRS: workDirs } : {}),
+    // 只有明确说「关」才写键；默认开由 schema 负责（TOGGLE_OFF 的 on 值是空串，写出来反而多余）。
+    ...(fileEdit === 'off' ? { FILE_EDIT: 'off' } : {}),
   });
   return `${JSON.stringify(config, null, 2)}\n`;
 }
@@ -195,6 +197,9 @@ export const MESSAGES = {
     stepDoctor: '# 预检配置',
     stepStart: '# 启动；日志会打印手机可用的局域网地址',
     publicNote: '公网访问（固定域名 / Cloudflare Access 2FA / 常驻）见 docs/deployment.md。',
+    fileEditPrompt: '启用手机端文件编辑器? 可直接修改工作区内文件——不经 Claude 工具审批链'
+      + '（仍有范围/大小/哈希/审计护栏）。长期公网暴露建议关闭 [Y/n] ',
+    fileEditOffNote: '已关闭：将写入 FILE_EDIT=off（手机端文件界面只读；配置里随时可改回）。',
     hooksPrompt: '安装 CLI hooks 桥? 让你在电脑终端直接跑的 claude 会话也能推送到手机 [Y/n] ',
     hooksInstalling: '正在安装并验证…',
     hooksSkipped: '已跳过。随时可跑 npm run hooks:install 补装。',
@@ -246,6 +251,9 @@ export const MESSAGES = {
     stepDoctor: '# pre-flight your config',
     stepStart: '# start; the log prints a LAN URL you can open on your phone',
     publicNote: 'Public access (fixed domain / Cloudflare Access 2FA / daemon): see docs/deployment.md.',
+    fileEditPrompt: 'Enable the phone file editor? It edits workspace files directly — bypassing Claude\'s '
+      + 'tool-approval chain (scope/size/hash/audit guards still apply). Recommended off for long-term public exposure [Y/n] ',
+    fileEditOffNote: 'Off: FILE_EDIT=off will be written (phone file UI becomes read-only; change it in config anytime).',
     hooksPrompt: 'Install the CLI hooks bridge? Lets sessions you run in your own terminal push to your phone [Y/n] ',
     hooksInstalling: 'Installing and verifying…',
     hooksSkipped: 'Skipped. Run npm run hooks:install anytime.',
@@ -290,10 +298,10 @@ const c = {
 //
 // 注意成功提示的位置：token 那行必须在 writeOwnerOnlyFile 之后才打印。旧实现先打印
 // 「✓ 已生成 AUTH_TOKEN（已写入 .env）」再去问 WORK_DIR，被 EOF/Ctrl-C 打断时一个字没写却已经报了成功。
-function writeSetupFile({ outPath, workDir, workDirs, t }) {
+function writeSetupFile({ outPath, workDir, workDirs, fileEdit, t }) {
   const token = generateToken();
   // 结构化构造没有旧模板替换那种「正则没匹配上就静默不生效」的失败模式，无需写后校验。
-  writeOwnerOnlyFile(outPath, buildConfigContent({ authToken: token, workDir: workDir || undefined, workDirs }));
+  writeOwnerOnlyFile(outPath, buildConfigContent({ authToken: token, workDir: workDir || undefined, workDirs, fileEdit }));
 
   const written = t.tokenWrittenSuffix.replace('%s', basename(outPath));
   console.log(`\n${c.green('✓')} ${t.tokenLabel}: ${c.dim(token.slice(0, 8) + written)}`);
@@ -370,7 +378,15 @@ export async function runInteractive({ plan, outPath, existingConfig, t }, deps 
       console.error(`✗ ${t.refuse[workDirNorm.code]()}`);
       return;
     }
-    writeFile({ outPath, workDir: workDirNorm.workDir, workDirs: workDirNorm.workDirs, t });
+
+    // 文件编辑器直写：唯一绕过 Agent 工具审批链的写入通道（R45，2026-08-30）。回车=维持
+    // schema 默认开（机主即 root，hard-rules §2.3），答 n 才写 FILE_EDIT=off。必须在写文件
+    // 之前问——它是配置项，不像 hooks/desktop 是写完配置后才执行的安装动作。
+    const fileEditAns = (await rl.question(`\n${t.fileEditPrompt}`)).trim().toLowerCase();
+    const fileEdit = fileEditAns === 'n' || fileEditAns === 'no' ? 'off' : undefined;
+    if (fileEdit === 'off') console.log(c.dim(t.fileEditOffNote));
+
+    writeFile({ outPath, workDir: workDirNorm.workDir, workDirs: workDirNorm.workDirs, fileEdit, t });
 
     // CLI hooks 桥：默认装（终端直跑的会话唯有装了它才能推到手机——轮询只能在你已经打开
     // app 时追平镜像，永远不会主动叫你）。默认 Y 但必须问：它写的是用户全局 ~/.claude/settings.json。

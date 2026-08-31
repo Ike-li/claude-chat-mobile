@@ -2,7 +2,7 @@
 // scripts/doctor.js —— 启动前配置自检
 // 用法: node scripts/doctor.js [--env=path/to/.env] [--fix] [--full]
 //
-// 检查项（19 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
+// 检查项（20 项，顺序与 main() 里的调用序列一一对应；增删项须同步这份清单）:
 // 1. AUTH_TOKEN 非空且格式合理
 // 2. CLAUDE_BIN 可执行（PATH 查找 claude 或环境变量指向存在）
 // 3. WORK_DIR / WORK_DIRS 可写（多 repo 台阶1：白名单各目录）
@@ -22,6 +22,7 @@
 // 17. 配置格式可见性（legacy .env 恒 ok 非 warn——一等路径不催迁，只在此告知迁移能力，见 doctor-checks.configFormatDiagnostic）
 // 18. shell 环境变量覆盖可见性（env 恒压过配置文件而被压侧无症状；只列键名不回显值，见 doctor-checks.envOverrideDiagnostic）
 // 19. 菜单栏 app 活性（进程在但主线程卡死时，系统里此前零信号——见 doctor-checks.menubarLivenessDiagnostic）
+// 20. 文件编辑器直写 × 公网迹象（唯一绕过 Agent 审批链的写入通道；只在 CF_ACCESS_*/PUBLIC_URL 显式声明公网时提示，见 doctor-checks.fileEditExposureDiagnostic）
 import { existsSync, accessSync, constants, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { execFileSync, execSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
@@ -46,6 +47,7 @@ import {
   statuslineBridgeDiagnostic,
   statuslineConfigDiagnostic,
   envOverrideDiagnostic,
+  fileEditExposureDiagnostic,
   identifySelfServer,
   menubarLivenessDiagnostic,
   uploadsFootprintDiagnostic,
@@ -672,7 +674,21 @@ function effectiveConfigFiles() {
   });
 }
 
-// 执行 17 项检查（D4 端口检查是 async，需 await）
+// D20: 文件编辑器直写 × 公网迹象（R45，2026-08-30 拍板：默认开不动，只提示）。判定在
+// doctor-checks.fileEditExposureDiagnostic；公网信号只认显式声明——CF_ACCESS_* 三键齐设
+//（与 src/auth/cf-access.js 同一组键）或 PUBLIC_URL 非空。须在 loadRuntimeEnvironment 之后跑：
+// FILE_EDIT 可能来自配置文件，投影进 process.env 才读得到。
+function checkFileEditExposure() {
+  const set = k => String(process.env[k] || '').trim() !== '';
+  results.push(fileEditExposureDiagnostic({
+    fileEditOff: process.env.FILE_EDIT === 'off',
+    cfConfigured: set('CF_ACCESS_HOSTNAME') && set('CF_ACCESS_TEAM') && set('CF_ACCESS_AUD'),
+    publicUrl: process.env.PUBLIC_URL || '',
+    lang: LANG,
+  }));
+}
+
+// 执行 20 项检查（D4 端口检查是 async，需 await）
 (async () => {
   checkAuthToken();
   checkClaudeBin();
@@ -693,6 +709,7 @@ function effectiveConfigFiles() {
   checkServiceUnits();
   checkMenubarLiveness();
   checkEnvOverrides();
+  checkFileEditExposure();
 
   // --fix 选项：自动修复权限
   if (shouldFix) {

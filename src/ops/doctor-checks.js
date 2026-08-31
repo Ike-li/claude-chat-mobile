@@ -784,3 +784,30 @@ function formatStaleAge(ms, lang) {
   if (minutes < 60) return bi(lang, `${minutes} 分钟`, `${minutes} min`);
   return bi(lang, `${Math.round(minutes / 60)} 小时`, `${Math.round(minutes / 60)} h`);
 }
+
+// D20: 文件编辑器直写 × 公网迹象（R45，2026-08-30 拍板：默认开不动，doctor 只提示）。
+// 判据只认用户的显式公网声明（CF_ACCESS_* 三键齐设 / PUBLIC_URL 非空），不猜实际暴露——
+// 隧道跑在进程外，server 观测不到自己是否被公网暴露；测不准的判据当安全开关，
+// 失效方向必是 fail-open。与 envOverrideDiagnostic 同纪律：点名键，不回显值。
+export function fileEditExposureDiagnostic({ fileEditOff = false, cfConfigured = false, publicUrl = '', lang = 'zh' } = {}) {
+  if (fileEditOff) {
+    return {
+      status: 'ok', name: 'FILE_EDIT',
+      detail: bi(lang, '已通过 FILE_EDIT=off 关闭直写：手机端文件界面只读。', 'Disabled via FILE_EDIT=off: the phone file UI is read-only.'),
+    };
+  }
+  const signals = [cfConfigured && 'CF_ACCESS_*', String(publicUrl || '').trim() && 'PUBLIC_URL'].filter(Boolean);
+  if (!signals.length) {
+    return {
+      status: 'ok', name: 'FILE_EDIT',
+      detail: bi(lang, '文件编辑器直写开启（默认）。不需要时设 FILE_EDIT=off 回到只读。', 'File editor writes are on (default). Set FILE_EDIT=off for a read-only file UI.'),
+    };
+  }
+  const via = signals.join(' / ');
+  return {
+    status: 'warn', name: 'FILE_EDIT',
+    detail: bi(lang,
+      `检测到公网入口声明（${via}）且文件编辑器直写开着——它不经 Claude 工具审批链（范围/大小/哈希/审计护栏仍在）。长期公网暴露建议设 FILE_EDIT=off。`,
+      `A public entrypoint is declared (${via}) while file editor writes are on — writes bypass Claude's tool-approval chain (scope/size/hash/audit guards still apply). For long-term public exposure, set FILE_EDIT=off.`),
+  };
+}

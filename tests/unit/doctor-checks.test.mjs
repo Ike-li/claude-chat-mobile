@@ -13,6 +13,7 @@ import {
   configFormatDiagnostic,
   identifySelfServer,
   envOverrideDiagnostic,
+  fileEditExposureDiagnostic,
   hooksBridgeDiagnostic,
   logSwitchDiagnostic,
   modelSettingsConflictDiagnostic,
@@ -930,5 +931,47 @@ test.describe('menubarLivenessDiagnostic', () => {
   test('detail 里报出实际停摆时长，方便判断是刚卡还是卡了很久', () => {
     const r = menubarLivenessDiagnostic({ running: true, lastProbeAt: AT(63 * 3600), lastProbeOk: true, nowMs: NOW });
     assert.match(r.detail, /63/, '63 小时那次，时长本身就是最有信息量的一条');
+  });
+});
+
+// ── D20: 文件编辑器直写 × 公网迹象 ─────────────────────────────────────────
+// 背景（2026-08-30 需求合稿 R45 拍板）：FILE_EDIT 是唯一绕过 Agent 审批链的写入通道，
+// 默认开维持不动（机主即 root，hard-rules §2.3）；doctor 只在「用户自己声明了公网入口」
+// 时提示复核。判据只认两个显式声明：CF_ACCESS_* 三键齐设、PUBLIC_URL 非空——
+// server 观测不到进程外的隧道（fail-open 教训），所以不猜「是否真的暴露」，只认声明。
+test.describe('fileEditExposureDiagnostic（R45：直写通道 × 公网迹象提示）', () => {
+  test('FILE_EDIT=off → ok，说明远程界面已只读', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: true, cfConfigured: true, publicUrl: 'https://ccm.example.com' });
+    assert.equal(r.status, 'ok');
+    assert.equal(r.name, 'FILE_EDIT');
+    assert.match(r.detail, /off/);
+  });
+
+  test('默认开 + 无公网声明 → ok，且指出关闭开关（不 nag 局域网用户）', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: false, cfConfigured: false, publicUrl: '' });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /FILE_EDIT=off/, '要给出关闭出路');
+  });
+
+  test('★ 默认开 + CF_ACCESS 齐设 → warn，点名审批链与信号来源', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: false, cfConfigured: true, publicUrl: '' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /审批/, '要说清它绕过 Claude 审批链');
+    assert.match(r.detail, /CF_ACCESS/, '要点名是哪个信号触发的');
+    assert.match(r.detail, /FILE_EDIT=off/, '要给出行动出路');
+  });
+
+  test('★ 默认开 + 仅 PUBLIC_URL → warn，点名 PUBLIC_URL 但不回显 URL 值', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: false, cfConfigured: false, publicUrl: 'https://secret-host.example.com' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /PUBLIC_URL/);
+    assert.doesNotMatch(r.detail, /secret-host/, '与 envOverrideDiagnostic 同纪律：列键名不回显值');
+  });
+
+  test('英文文案同样四要素（状态/审批链/信号/出路）', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: false, cfConfigured: true, publicUrl: '', lang: 'en' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /approval/i);
+    assert.match(r.detail, /FILE_EDIT=off/);
   });
 });

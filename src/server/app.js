@@ -2948,6 +2948,10 @@ registerSocketConnection(io, socket => {
       // D18：投影**之前**的 shell 快照。现读 process.env 是没用的——config.js 已经把文件值
       // 填了进去，来源分不开（那会做出一个永远报「全被覆盖」的假功能）。
       shellEnv: getShellEnvSnapshot(),
+      // D20（R45）：直写开关 + 公网声明信号。cfEnabled 上面已传（isAccessEnabled 权威判定），
+      // 这里补 FILE_EDIT 与 PUBLIC_URL 两个输入；URL 值不进报告（runDoctor 只出布尔）。
+      fileEditOff: process.env.FILE_EDIT === 'off',
+      publicUrl: process.env.PUBLIC_URL || '',
     }));
   });
 

@@ -81,7 +81,7 @@ npm run setup      # 交互装机向导（写 ccm.config.json；可选功能逐�
 node scripts/config.js get|set|unset|check|migrate|schema   # headless 配置 CLI（与 web 配置面板同一读写源 config-file.js；secret 明文须显式 --reveal）
 
 # 启动前自检配置
-node scripts/doctor.js              # 启动自检（19 项）：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/statusline 桥/hooks 桥/ANTHROPIC_*/配置权限/配置格式/文档一致性/前端语法/覆盖率(仅 --full)/日志开关长开/CLAUDE_CONFIG_DIR/附件占用/桌面端服务安装态/菜单栏 app 活性/shell env 压过文件配置时列出键名
+node scripts/doctor.js              # 启动自检（20 项）：AUTH_TOKEN/CLAUDE_BIN/WORK_DIR(S)/PORT/WEB_STATUSLINE/statusline 桥/hooks 桥/ANTHROPIC_*/配置权限/配置格式/文档一致性/前端语法/覆盖率(仅 --full)/日志开关长开/CLAUDE_CONFIG_DIR/附件占用/桌面端服务安装态/菜单栏 app 活性/shell env 压过文件配置时列出键名/文件编辑直写×公网迹象(FILE_EDIT)
 node scripts/doctor.js --env=prod.env  # 指定 .env 文件
 
 # 两个 CLI 桥（可选、显式安装，动 ~/.claude；一键卸载会对称移除）

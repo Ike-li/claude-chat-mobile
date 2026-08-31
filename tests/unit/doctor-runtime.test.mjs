@@ -57,14 +57,15 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
-  test('report 含 12 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS / ENV_OVERRIDE）', () => {
+  test('report 含 13 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS / ENV_OVERRIDE / FILE_EDIT）', () => {
     // 注入探测：不注入的话 runDoctor 会真的 which + 跑一次 claude --version，
     // 让这条断言的结果取决于跑测试的机器上装没装 CLI。
     const rep = runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE });
-    assert.equal(rep.checks.length, 12);
+    assert.equal(rep.checks.length, 13);
     assert.ok(rep.checks.some(c => c.id === 'DEVICE_GATE'));
     assert.ok(rep.checks.some(c => c.id === 'MODEL_SETTINGS'));
     assert.ok(rep.checks.some(c => c.id === 'ENV_OVERRIDE'));
+    assert.ok(rep.checks.some(c => c.id === 'FILE_EDIT'));
     assert.ok(['ready', 'caution', 'blocked'].includes(rep.readiness.level));
   });
 });
@@ -301,4 +302,35 @@ test('readModelSettingsSnapshot：目录级映射覆盖同档位的用户级映�
 
   rmSync(home, { recursive: true, force: true });   // safe-rm: mkdtemp 一次性目录
   rmSync(wd, { recursive: true, force: true });     // safe-rm: mkdtemp 一次性目录
+});
+
+// ── FILE_EDIT：D20 的手机端出口（R45，2026-08-30） ──────────────────────────
+// FILE_EDIT 开关就住在 web 配置面板里，公网用户日常看的是 web 体检，不是装机那一次 CLI doctor
+// ——受众重合度比 CLI 侧更高。判定与 scripts/doctor.js D20 共用 fileEditExposureDiagnostic；
+// 公网信号 = CF Access 实际启用（ctx.cfEnabled，auth 层权威判定）或 PUBLIC_URL 已声明。
+test.describe('FILE_EDIT：直写通道 × 公网迹象（web 体检）', () => {
+  const feCheck = (ctx) => runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx })
+    .checks.find(c => c.id === 'FILE_EDIT');
+
+  test('公网启用 + 直写开 → warn，点名审批链与出路', () => {
+    const c = feCheck({ cfEnabled: true, fileEditOff: false });
+    assert.equal(c.status, 'warn');
+    assert.match(c.detail, /审批/);
+    assert.match(c.detail, /FILE_EDIT=off/);
+  });
+
+  test('FILE_EDIT=off → ok（已只读）', () => {
+    assert.equal(feCheck({ cfEnabled: true, fileEditOff: true }).status, 'ok');
+  });
+
+  test('无公网声明 → ok（不 nag 局域网部署）', () => {
+    assert.equal(feCheck({ cfEnabled: false, fileEditOff: false }).status, 'ok');
+  });
+
+  test('★ safe 与 detail 都绝不回显 PUBLIC_URL 的值——体检报告会被贴进 issue/聊天', () => {
+    const c = feCheck({ cfEnabled: false, fileEditOff: false, publicUrl: 'https://secret-host.example.com' });
+    assert.equal(c.status, 'warn');
+    assert.equal(JSON.stringify(c).includes('secret-host'), false);
+    assert.equal(c.safe.publicSignal, true);
+  });
 });
