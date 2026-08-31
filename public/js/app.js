@@ -14,6 +14,7 @@ import { createMessageTimeline } from './app/message-timeline.js';
 import { createHistoryLoadGate } from './app/history-load-gate.js';
 import { createAgentEventDispatcher, createReplayBuffer } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
+import { createUnreadTracker } from './app/unread-tracker.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createSettingsController } from './app/settings.js';
 import { createEnvConfigPanel } from './app/env-config.js';
@@ -458,6 +459,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   let instancesReady = false;
   let displayedInstanceId = undefined;  // undefined 确保首次 viewingInstanceId=null 也会 bind 空启动页
   let displayedSessionId = null;
+  const unread = createUnreadTracker(); // R65 未读点：已读表状态在模块内，此处只持句柄
   let instancesList = [];               // 最近 instances 事件的实例列表（含 per-instance state）
   let needsYouList = [];                // "等我"聚合（AttentionDeriver），按 waitingSince 升序（等得越久排越前）
   // 服务状态可见性（第一性原理重新设计，与上面 needsYouList 是不同轴——这条答"服务本身有没有出过岔子"）：
@@ -4261,6 +4263,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     replayBuffer.discard();
     const prevInstanceId = displayedInstanceId; // S1：缓存归属的(外出)实例，供切回时检测实例是否被替换
     const prevSessionId = displayedSessionId;   // 切实例前的会话 id——供 planSessionDraftSwap 判 keep/swap
+    // R65：离开旧会话的瞬间把它记为「已看到此刻」——正在看时到达的消息不该在离开后亮点。
+    // 入场侧（下方真实会话分支）另有一记，覆盖「看完直接关页面」的路径；重复标记无害。
+    if (prevSessionId) unread.markSeen(prevSessionId);
     displayedInstanceId = id;
     const sid = entry?.sessionId || null;
     displayedSessionId = sid;
@@ -4375,6 +4380,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     leaveComposeReady();
     syncComposerVisibility();
     syncTopContextPillVisibility(id, sid);
+    if (sid) unread.markSeen(sid); // R65：入场即记已读（离场侧另有一记，两侧合围）
 
     // Phase 2: Check memory cache for instant restoration.
     // 已完成的对话/工具卡片按 session 不可变：同 sessionId 即恢复 DOM，不要求 instanceId 相同
@@ -5163,6 +5169,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const head = el(`<div data-session-head class="flex items-center gap-1.5 min-w-0"></div>`);
       const titleSpan = el(`<span class="flex-1 min-w-0 truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
       titleSpan.textContent = s.title || t('新会话');
+      // R65 未读点：上次打开后有新活动才亮；正在看的（本实例激活或就是当前显示会话）不算未读。
+      if (s.id && unread.isUnread(s, { isViewing: active || s.id === displayedSessionId })) {
+        head.appendChild(el(`<span data-testid="unread-dot" class="shrink-0 w-2 h-2 rounded-full bg-accent"></span>`));
+      }
       head.appendChild(titleSpan);
       appendSessionStatusChip(head, liveInst?.state, s.terminal);
       btn.appendChild(head);
@@ -6122,6 +6132,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           </div>
         `);
         item.querySelector('.font-bold').textContent = s.title || t('无标题会话');
+        // R65 未读点（首页最近行）：inline-block 前置进 truncate 容器，不改其块级截断语义。
+        if (s.id && unread.isUnread(s, { isViewing: s.id === displayedSessionId })) {
+          item.querySelector('.font-bold').prepend(el(`<span data-testid="unread-dot" class="inline-block w-2 h-2 rounded-full bg-accent mr-1.5 align-middle"></span>`));
+        }
         item.querySelector('.dash-ws-icon').textContent = '📁';
         item.querySelector('.dash-ws').textContent = s.workspaceName;
         item.querySelector('.dash-when').textContent = when;

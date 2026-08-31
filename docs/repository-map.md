@@ -38,7 +38,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Documentation | 10 |
 | E2E test | 50 |
 | Frontend asset | 3 |
-| Frontend source | 45 |
+| Frontend source | 47 |
 | Generated asset | 6 |
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
@@ -51,10 +51,10 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Smoke test | 13 |
 | Test configuration | 4 |
 | Test support | 5 |
-| Unit test | 164 |
+| Unit test | 165 |
 | Vendored asset | 21 |
 
-Total classified files: **470**.
+Total classified files: **473**.
 
 ## Complete file inventory
 
@@ -128,6 +128,7 @@ Total classified files: **470**.
 | `public/js/app/settings.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/sheets.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/task-status.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/app/unread-tracker.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/canonicalize.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/i18n.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/logic.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -146,6 +147,7 @@ Total classified files: **470**.
 | `public/js/logic/session-search.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/logic/statusline.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/logic/tool-cards.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/logic/unread.js` | Frontend source | Pure decision logic by domain — shared by the browser and node:test | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/ring-buffer.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/sw-cleanup.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/tw-config.js` | Frontend source | Browser application module or service worker | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
@@ -479,6 +481,7 @@ Total classified files: **470**.
 | `tests/unit/logic-transcript-view.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-ui-state.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/logic-ui-ux-remaining.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/logic-unread.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/manifest.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/message-dedup.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/metrics.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |

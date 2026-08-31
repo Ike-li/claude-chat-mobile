@@ -596,6 +596,54 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectNoBrowserErrors(page);
   });
 
+  // R65 未读点（2026-08-30，替代当天撤除的 H1 聚合卡，计划见 draft/plan-unread-dot-fable-5.md）：
+  // 抽屉行与首页最近行上，「本设备上次打开后有新活动」的会话亮色点。
+  // mock 的 lastUsedAt 相对请求时刻生成：旧会话（-600s 等）恒在基线（页面加载）前＝不亮；
+  // 'Another App Concurrency' 恒为请求时刻＝基线后＝亮——恰好覆盖「基线不追溯」与「新活动亮点」。
+  // 「打开即清」的时序语义在 tests/unit/logic-unread.test.mjs；此处验接线（localStorage 已记 seen）
+  // 与「正在看的不亮」（mock 时间戳每次请求都前移，无法在 E2E 里稳定复现"打开后回来不亮"）。
+  test('P0-11u 会话未读点：基线不追溯、新活动亮点、正在看的不亮', async ({ page }) => {
+    await gotoMock(page);
+
+    // 基线不追溯：冷启动首页只有默认工作区的历史会话（全在基线前）→ 零点
+    await page.locator('#btnHome').click();
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('#dashRecentsList .dash-recent-item').first()).toBeVisible();
+    await expect(page.locator('#dashRecentsList [data-testid="unread-dot"]')).toHaveCount(0);
+
+    // 引入另一工作区的基线后活动（mock 该区会话的 lastUsedAt 恒为请求时刻）
+    await sendChatMessage(page, 'test:needsyou');
+    await waitForIdle(page);
+
+    // 首页最近行：基线后有活动的会话亮点
+    await page.locator('#btnHome').click();
+    await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('#dashRecentsList [data-testid="unread-dot"]').first()).toBeVisible();
+
+    // 抽屉：新活动的行亮点；基线前的旧会话行不亮
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    const freshRow = page.locator('[data-testid="session-row"]', { hasText: 'Another App Concurrency' });
+    await expect(freshRow.locator('[data-testid="unread-dot"]')).toHaveCount(1);
+    const oldRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Planning Session' });
+    await expect(oldRow.locator('[data-testid="unread-dot"]')).toHaveCount(0);
+
+    // 当前会话行必须零点——无论其时间戳落在基线哪一侧都成立（在看=排除；基线前=不追溯），
+    // 双保险断言；「正在看的不亮」的严格时序语义由 logic-unread 单测钉住。
+    const viewingRow = page.locator('[data-testid="session-row"]', { hasText: 'Visual Sandbox (Main)' });
+    await expect(viewingRow.locator('[data-testid="unread-dot"]')).toHaveCount(0);
+
+    // 入场即记已读（markSeen 接线验证）：走 P0-11s 已验证的需要你深链进入另一会话，localStorage 落 seen
+    await page.locator('[data-testid="needs-you-row"]').click();
+    await expectSidebarClosed(page);
+    await expect(page.locator('#topProjectText')).toHaveText('another-react-project');
+    await expect.poll(async () => page.evaluate(() => {
+      try { return typeof JSON.parse(localStorage.getItem('ccm-unread-v1') || '{}').seen?.['mock-session-needsyou']; } catch { return 'error'; }
+    })).toBe('number');
+
+    await expectNoBrowserErrors(page);
+  });
+
   // P3 抽屉局部重建 + SWR 保鲜（切到后台重连后抽屉卡顿的修复）三条回归：
   // t 断线重连零变化 → 两个目录 DOM 原样保留、不出现骨架屏；
   // v 断线期间真实标题变化 → 抽屉必须显示新内容（防缓存优化引入"不刷新"回归）；
