@@ -19,9 +19,7 @@ Claude Chat Mobile 是一个**本机自托管的 Claude Code 远程控制台**�
 
 ## 为什么需要它？
 
-Claude Code 可以在你的电脑上持续执行开发任务，但遇到提问、工具审批或需要人工决策时，通常仍然需要你回到电脑前。
-
-Claude Chat Mobile 把这部分交互带到手机上：
+Claude Code 可以在你的电脑上持续执行开发任务，但遇到提问、工具审批或需要人工决策时，通常仍然需要你回到电脑前。把这段交互搬到手机上：
 
 ```text
 电脑上的 Claude Code 正在工作
@@ -33,23 +31,34 @@ Claude Chat Mobile 把这部分交互带到手机上：
 Claude Code 继续在原来的电脑上运行
 ```
 
+先说清楚：Anthropic 官方的 [Remote Control](https://code.claude.com/docs/en/remote-control) 已经覆盖了这个流程——**如果你能使用官方 Remote Control，也接受它的账号与数据路径，官方是默认推荐，零部署。**
+
+Claude Chat Mobile 是为官方路径**进不去、或不接受其控制面**的人做的，价值立在三件官方给不了的事上：
+
+1. **官方 Remote Control 拒收你的配置。** 它要求 claude.ai 订阅登录并直连 `api.anthropic.com`：API key、第三方网关 / `ANTHROPIC_BASE_URL`、Bedrock / Vertex / Foundry、企业 apps gateway、设置了 `DISABLE_TELEMETRY` 等遥测开关、ZDR 合规组织——这些配置下整条功能不可用。CCM 对模型通路**零假设、零接触**：你的 `claude` CLI 怎么配的，它就怎么用。
+2. **你要求控制面数据留在自己手里。** 官方 Remote Control 连接期间会把会话 transcript（消息、回复、工具活动）存到 Anthropic 服务器用于跨设备同步；CCM 的控制面——服务、transcript、设备信任、推送、审计——全部落在你自己的机器上，公网入口由你选择，局域网内可完全闭环。
+3. **你要「一眼看全机」。** 官方按会话逐个开启远程；CCM 把这台机器上发生过和正在发生的**所有** Claude 会话——终端开的、上周的、忘了开开关的——都做成可见、可续接的控制台，外加文件浏览、git 变更、服务健康这些机器运维面。
+
 它的目标不是重新做一个 AI 聊天产品，而是：
 
-> **让你不在电脑前时，仍然可以安全、接近终端等价地操作本机 Claude Code。**
+> **让你不在电脑前时，仍然可以安全、接近终端等价地操作本机 Claude Code——控制面不经过任何第三方会话中继。**
+
+（措辞边界：这不等于「数据绝不离开本机」——模型请求本来就由本机 `claude` CLI 按你现有的官方登录或网关配置发出；CCM 承诺的是**除此之外**不再多一条数据出口。）
 
 ## 适合谁？
 
 如果你已经在使用 Claude Code，并且有下面这些需求，Claude Chat Mobile 比较适合你：
 
-* Claude 跑长任务时不想一直守在电脑前；
-* 出门后仍想查看任务进度并继续交互；
-* 希望从手机回答 `AskUserQuestion` 或审批工具调用；
-* 希望任务完成或需要人工介入时收到通知；
+* 你的 `claude` CLI 走第三方网关 / API key，或关闭了遥测——官方 Remote Control 对这些配置整条不可用；
+* 你不接受远程会话 transcript 存放在 Anthropic 服务器上，控制面要完全自持；
+* Claude 跑长任务时不想一直守在电脑前，希望从手机回答 `AskUserQuestion`、审批工具调用、收到「需要你」的通知；
+* 想要整台机器的会话总览：终端里开的、历史里躺着的，都能看、能续；
 * 希望继续使用原电脑上的项目、Claude CLI 配置和开发环境；
 * 希望自己掌控服务和数据，而不是把完整开发环境迁移到第三方 SaaS。
 
 它可能**不适合**这些场景：
 
+* 你能使用官方 [Remote Control](https://code.claude.com/docs/en/remote-control)，也接受其账号与数据路径——直接用官方，零部署；
 * 你只是想在手机上和 Claude 普通聊天；
 * 你目前并不使用 Claude Code；
 * 你希望注册账号后直接使用，而不想在自己的电脑上运行服务。
@@ -102,7 +111,7 @@ Claude Chat Mobile Server
 * 已登录 Claude 官方账号，或已经配置可正常工作的第三方网关；
 * 至少一个准备让 Claude Code 操作的项目目录。
 
-> ⚠️ 用第三方网关时有一条容易踩的规则：网关的 `ANTHROPIC_*` 变量**必须来自启动 server 的那个 shell**，写进 `ccm.config.json` 会在启动时被剥除——文件里明明写着，却不生效，也不报错。
+> ⚠️ 用第三方网关时有一条容易踩的规则：网关的 `ANTHROPIC_*` 变量**必须来自启动 server 的那个 shell**，写进 `ccm.config.json` 会在启动时被剥除——启动日志会逐个打印「已忽略」告警，`doctor` 也会提示。网关用户请走 headless 终端入口，细节见[首次使用指南 · 官方订阅与第三方网关](docs/getting-started.md#官方订阅与第三方网关)。
 
 平台支持：
 
@@ -182,7 +191,7 @@ PWA 和 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+，并先将应�
 3. **工作区显式放行。** 文件、会话和相关操作只能进入配置的 `WORK_DIR` / `WORKDIRS`，不要为了方便把整个 Home 目录加入工作区。
 4. **新设备需要信任。** 除本机直连或已经通过 Cloudflare Access 的连接外，持有正确 Token 的新设备仍需要一次设备审批。
 5. **继承 Claude Code 权限。** `permissions.allow` 等已有 Claude Code 权限规则会继续生效，公网使用前应检查 Bash、Write 等自动放行规则。
-6. **文件编辑属于直接写入。** 内置文件编辑器**不经过 Agent 的工具审批链**，只能修改授权工作区内已存在的文件，并做范围校验、大小限制、哈希冲突检测和审计记录；不需要时可以通过 `FILE_EDIT=off` 关闭。
+6. **文件编辑属于直接写入。** 内置文件编辑器**不经过 Agent 的工具审批链**，只能修改授权工作区内已存在的文件，并做范围校验、大小限制、哈希冲突检测和审计记录；不需要时可以通过 `FILE_EDIT=off` 关闭。长期公网暴露建议关闭——配置了公网入口（Cloudflare Access / `PUBLIC_URL`）时 `doctor` 会提示，装机向导也会问这一项。
 
 如果计划长期暴露到公网，请先阅读 [部署与运维](docs/deployment.md)。
 

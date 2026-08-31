@@ -79,3 +79,6 @@ upstream-issue.md
 
 # 菜单栏 app 的编译产物：烘着绝对路径且与 CPU 架构绑定，换机器就不对（npm run app:build 重建）
 desktop/build/
+
+# 讨论中的文稿，未进产品文档。不入库：否则会被 inventory 扫成未分类文件。
+/draft/

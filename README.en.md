@@ -17,9 +17,7 @@ Your code, the Claude CLI, your project files, and the local CCM / Claude sessio
 
 ## Why you might want it
 
-Claude Code can keep working through a development task on your computer, but when it hits a question, a tool approval, or a decision that needs a human, you normally have to be back at the desk.
-
-Claude Chat Mobile moves that part of the interaction to your phone:
+Claude Code can keep working through a development task on your computer, but when it hits a question, a tool approval, or a decision that needs a human, you normally have to be back at the desk. Moving that part of the interaction to your phone looks like:
 
 ```text
 Claude Code is working on your computer
@@ -31,23 +29,34 @@ Check progress / answer a question / approve a tool / interrupt — from your ph
 Claude Code keeps running on the original computer
 ```
 
+Let's be upfront: Anthropic's official [Remote Control](https://code.claude.com/docs/en/remote-control) already covers this flow. **If you can use official Remote Control and accept its account and data path, the official product is the default recommendation — zero deployment.**
+
+Claude Chat Mobile is built for the people the official path **rejects, or whose control-plane terms they do not accept**. Its value stands on three things the official path cannot offer:
+
+1. **Official Remote Control refuses your configuration.** It requires a claude.ai subscription login talking directly to `api.anthropic.com`: API keys, third-party gateways / `ANTHROPIC_BASE_URL`, Bedrock / Vertex / Foundry, the enterprise Claude apps gateway, telemetry opt-outs such as `DISABLE_TELEMETRY`, and ZDR compliance policies all disable the feature entirely. CCM makes **zero assumptions about, and zero contact with, your model path**: however your `claude` CLI is configured, that is what runs.
+2. **You need the control plane to stay in your own hands.** While official Remote Control is connected, the session transcript (messages, replies, tool activity) is stored on Anthropic's servers for cross-device sync. CCM's control plane — the service, transcripts, device trust, push, audit — lives entirely on your own machine; you pick the ingress, and on a LAN it runs fully closed-loop.
+3. **You want the whole machine at a glance.** The official path enables remote access per session; CCM turns **every** Claude session that ever happened on this machine — started in a terminal, last week's, the one you forgot to flag — into a visible, resumable console, plus the machine-operations surface: file browsing, git changes, service health.
+
 The goal is not to rebuild an AI chat product, but:
 
-> **to let you operate the Claude Code on your own machine safely and close to terminal-equivalently while you are away from it.**
+> **to let you operate the Claude Code on your own machine safely and close to terminal-equivalently while you are away from it — with a control plane that passes through no third-party session relay.**
+
+(Wording boundary: this is not "data never leaves your machine" — model requests are still sent by your local `claude` CLI using your existing official sign-in or gateway configuration. What CCM promises is that **no additional data path** is added beyond that.)
 
 ## Who is it for
 
 If you already use Claude Code and any of these apply, Claude Chat Mobile is probably a fit:
 
-* you do not want to sit at the desk the whole time Claude runs a long task;
-* you want to keep watching progress and interacting after you have left;
-* you want to answer `AskUserQuestion` or approve tool calls from your phone;
-* you want a notification when a task finishes or needs a human;
+* your `claude` CLI runs through a third-party gateway / an API key, or with telemetry disabled — configurations official Remote Control refuses outright;
+* you cannot accept remote-session transcripts being stored on Anthropic's servers and need a fully self-hosted control plane;
+* you do not want to sit at the desk while Claude runs a long task — answer `AskUserQuestion`, approve tool calls, and get "needs you" notifications from your phone;
+* you want a whole-machine session overview: sessions started in a terminal, sessions sitting in history — all visible, all resumable;
 * you want to keep using the projects, Claude CLI configuration, and development environment on your original machine;
 * you want to own the service and the data rather than move a whole development environment into someone else's SaaS.
 
 It is probably **not** a fit if:
 
+* you can use official [Remote Control](https://code.claude.com/docs/en/remote-control) and accept its account and data path — use the official product, zero deployment;
 * you just want ordinary chat with Claude on your phone;
 * you do not currently use Claude Code;
 * you want to sign up and start using it without running a service on your own computer.
@@ -100,7 +109,7 @@ You need:
 * a signed-in Claude account, or a third-party gateway that already works;
 * at least one project directory you are willing to let Claude Code operate on.
 
-> ⚠️ One rule that is easy to miss with third-party gateways: the gateway's `ANTHROPIC_*` variables **must come from the shell that starts the server**. Values written into `ccm.config.json` are stripped at startup — the file says one thing, nothing takes effect, and nothing reports an error.
+> ⚠️ One rule that is easy to miss with third-party gateways: the gateway's `ANTHROPIC_*` variables **must come from the shell that starts the server**. Values written into `ccm.config.json` are stripped at startup — the startup log prints an "ignored" warning for each one, and `doctor` flags it too. Gateway users should use the headless terminal entrypoint; see the [getting-started guide](docs/getting-started.md).
 
 Platform support:
 

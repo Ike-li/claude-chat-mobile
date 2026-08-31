@@ -34,7 +34,9 @@ claude auth status
 
 - 官方订阅：确保启动 server 的本机账号已经登录 `claude`，无需再配 API key。
 - 第三方网关：先在**将要启动 server 的 shell** 中导出网关要求的 `ANTHROPIC_*`，再启动项目。
-- 不要把 `ANTHROPIC_*` 写进项目配置文件：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。
+- 不要把 `ANTHROPIC_*` 写进项目配置文件：启动时会主动剥除这些值，避免项目文件覆盖 CLI/provider 环境。剥除不是静默的——启动日志会逐个打印 `[config] 已忽略配置文件里的 ANTHROPIC_…`，`doctor` 的「网关环境一致性」一项也会提示。
+- **网关用户请用 headless 终端入口（`npm start`）**：`ANTHROPIC_*` 只从启动进程的环境继承。macOS 桌面控制台拉起的常驻服务是干净的 GUI 血统环境，里面没有你终端里 export 的变量——网关配置在那条入口下不生效。
+- 顺带说明：官方的 Remote Control 遥控在网关 / API key / 关遥测配置下整条不可用（要求 claude.ai 订阅并直连官方 API）；本项目对模型通路零假设，上述配置下全功能可用——这正是它存在的主要理由之一，见 [README「为什么需要它」](../README.md#为什么需要它)。
 
 ## 2. 获取代码与安装依赖
 
