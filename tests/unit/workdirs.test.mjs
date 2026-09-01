@@ -8,7 +8,7 @@ import { realpathSync } from 'node:fs';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
-  findProjectDirCollisions, resolveWorkdirsFilePath,
+  findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource,
 } from '../../src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -217,5 +217,54 @@ test.describe('resolveWorkdirsFilePath', () => {
   });
   test('相对路径与 baseDir 拼接', () => {
     assert.equal(resolveWorkdirsFilePath('workdirs.json', '/app'), join('/app', 'workdirs.json'));
+  });
+});
+
+// pickWorkdirSource：工作区列表来源的优先级。
+// CLAUDE.md 的通用规则是「环境变量始终压过文件」，但此前 app.js 的 readWorkdirSource 把配置文件
+// 里的内联 WORKDIRS 无条件排在最前——于是显式 `export WORK_DIRS=...` 收窄不了白名单。
+// 2026-09-01 真机实测的后果：smoke 起的隔离实例继承了机主 ccm.config.json 里的 7 个真实工作区，
+// 而它明明传了 WORK_DIRS=<临时目录>。
+test.describe('pickWorkdirSource：env 压过配置文件（CLAUDE.md 通用规则）', () => {
+  const inline = ['/from/config/a', '/from/config/b'];
+
+  test('显式 WORK_DIRS 存在 → 用它，不理会内联 WORKDIRS', () => {
+    const r = pickWorkdirSource({ envList: ['/from/env'], envFile: '', inline });
+    assert.equal(r.kind, 'env-list');
+    assert.deepEqual(r.value, ['/from/env']);
+  });
+
+  test('显式 WORK_DIRS_FILE 存在（无 WORK_DIRS）→ 用它，不理会内联 WORKDIRS', () => {
+    const r = pickWorkdirSource({ envList: [], envFile: '/etc/ccm/workdirs.json', inline });
+    assert.equal(r.kind, 'env-file');
+    assert.equal(r.value, '/etc/ccm/workdirs.json');
+  });
+
+  test('WORK_DIRS 优先于 WORK_DIRS_FILE（两者都设时）', () => {
+    const r = pickWorkdirSource({ envList: ['/from/env'], envFile: '/etc/ccm/workdirs.json', inline });
+    assert.equal(r.kind, 'env-list');
+  });
+
+  test('两个 env 都没设 → 回落配置文件内联 WORKDIRS（生产路径，行为不变）', () => {
+    const r = pickWorkdirSource({ envList: [], envFile: '', inline });
+    assert.equal(r.kind, 'inline');
+    assert.deepEqual(r.value, inline);
+  });
+
+  test('全都没有 → none + 空数组（调用方回落到只有 WORK_DIR）', () => {
+    const r = pickWorkdirSource({ envList: [], envFile: '', inline: null });
+    assert.equal(r.kind, 'none');
+    assert.deepEqual(r.value, []);
+  });
+
+  test('空数组的 envList 不算「设了」，不得盖掉内联值', () => {
+    // `WORK_DIRS=` 或 `WORK_DIRS=,,` 解析出来是空数组——那是「没设」，不是「设成空」。
+    // 若把它当成设了，一个手滑的空变量就会把整份白名单清空。
+    assert.equal(pickWorkdirSource({ envList: [], envFile: '', inline }).kind, 'inline');
+  });
+
+  test('缺省参数不崩', () => {
+    assert.equal(pickWorkdirSource({}).kind, 'none');
+    assert.equal(pickWorkdirSource().kind, 'none');
   });
 });

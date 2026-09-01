@@ -33,6 +33,9 @@ import http from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { rmSync, mkdtempSync, realpathSync } from 'node:fs';
+// managesServer 的 scenario 自己 spawn server，也就自己担「别把生产环境带进去」的责任。
+// runner.js 的 main() 有 process.argv[1] 守卫，被 import 时不会执行。
+import { stripInheritedEnv } from '../runner.js';
 
 const ROOT = join(import.meta.dirname, '..', '..', '..');
 const APP_PORT = Number(process.env.PORT || 3220);
@@ -243,21 +246,30 @@ async function runContract() {
   check('session:close A2 → instances 去除 A2、保留 A1（关 tab 释放、不影响另一实例）',
     closeA2?.ok === true && !idsAfter.includes(iA2) && idsAfter.includes(iA1), `after=${idsAfter.join(',')}`);
 
-  // 9) 非法 instanceId 路由缺省落 viewingInstanceId（此刻 viewing=iA1）。用 setPermissionMode 验证
-  //    （无 busy 限制，任何时候都能切）：bogus instanceId 落回 iA1 → permission_mode 广播且 instanceId=iA1。
-  // 同样等【断言依赖的那条】：close 掉 A2 会让 server 广播一条 viewing 实例当前档位的
-  // permission_mode（mode=auto）。只等「出现一条 permission_mode」会抓到它，把上一步的余波
-  // 当成本次切档的回执。等不到目标帧时回落到窗口内最后一条，让断言照常失败并打印真实收到的值
-  // ——不是等什么就断言什么，instanceId 落回 viewing 这一维仍是真断言。
+  // 9) 显式传一个【不存在的】instanceId 时不切档、也不误伤 viewing 实例。
+  //    `resolveInstanceId` 对 stale id 返回 null（src/server/app.js「显式 stale → null，不再回退
+  //    viewing」），handler 于是走 echo 拨回分支：回一条当前档的 permission_mode，不做任何修改。
+  //    这条性质是安全相关的——旧行为会把 stale id 落回 viewing，那样前端拿着一个过期 id 切档，
+  //    就会改到另一个会话的权限档上去。
+  //    ⚠️ 本断言此前写的正是那条旧语义（「缺省落 viewingInstanceId」+ 期望 mode 变成 acceptEdits），
+  //    产品换了行为而断言没跟上，于是恒红。2026-09-01 真机三连跑复现后改成按现行语义断言。
+
+  const a1ModeOf = () => ((lastOf(e1, 'instances')?.payload?.instances) || [])
+    .find(x => x.instanceId === iA1)?.permissionMode;
+  const modeBefore = a1ModeOf();
   const beforePm = e1.length;
   s1.emit('user:setPermissionMode', { mode: 'acceptEdits', instanceId: 'inst_bogus' });
-  const pm = (await waitForOrNull(e1,
-    ev => ev.type === 'permission_mode' && ev.payload?.mode === 'acceptEdits',
-    10000, 'permission_mode=acceptEdits', beforePm))
-    ?? [...e1.slice(beforePm)].reverse().find(ev => ev.type === 'permission_mode');
-  check('非法 instanceId 切档缺省落 viewingInstanceId（permission_mode 作用于 viewing 实例）',
-    pm?.payload?.mode === 'acceptEdits' && pm?.instanceId === iA1,
-    JSON.stringify({ mode: pm?.payload?.mode, instanceId: pm?.instanceId, want: iA1 }));
+  const pm = await waitForOrNull(e1, ev => ev.type === 'permission_mode', 10000, 'permission_mode echo', beforePm);
+  check('显式 stale instanceId 不切档、echo 拨回当前档（不误伤 viewing 实例）',
+    !!pm && pm.payload?.mode !== 'acceptEdits' && a1ModeOf() === modeBefore,
+    JSON.stringify({ echo: pm?.payload?.mode, a1Before: modeBefore, a1After: a1ModeOf() }));
+
+  // 交接给 e2e 阶段前，等 A1 的轮次真正落地。
+  // A1 实例不会随 s1.close() 消失，viewingInstanceId 也还指着它——下面 runE2E 新连一条 socket
+  // 直接发消息时复用的就是它。若此刻 A1 仍 busy，那条消息会撞上「一轮一条」被挡下，不产生新的
+  // init，于是 I1 的 init 等 60s 等不到、连带 I1 result 一起红（2026-09-01 实测复现：我一度把这个
+  // 等待当成只服务于上面那条断言的冗余优化删掉，e2e 段立刻挂两项）。
+  await waitForOrNull(e1, ev => ev.type === 'result' && ev.instanceId === iA1, 90000, 'A1 轮次落地（交接给 e2e 前）');
 
   s1.close();
 }
@@ -290,10 +302,10 @@ async function runE2E() {
 }
 
 async function run() {
-  server = spawn('node', ['server.js'], {
+  server = spawn(process.execPath, [join(ROOT, 'server.js')], {
     cwd: ROOT,
     env: {
-      ...process.env,
+      ...stripInheritedEnv(process.env),   // 摘掉 CF_ACCESS_*/VAPID_* 等生产键（见 runner.js 的 SMOKE_ENV_BLOCKLIST）
       AUTH_TOKEN: 'ccm-smoke-test-token',
       PORT: String(APP_PORT),
       WORK_DIR: dirA,

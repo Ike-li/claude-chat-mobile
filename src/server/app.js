@@ -77,7 +77,7 @@ import {
 } from './instance-routing.js';
 import { formatSessionLockError } from '../ops/cli-bg-session-lock.js';
 import { watch } from 'node:fs';
-import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveWorkdirsFilePath } from '../sessions/workdirs.js';
+import { DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT, MAX_LIVE_SESSIONS, SEARCH_RESULT_LIMIT, normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted, resolveWorkdirsFilePath, pickWorkdirSource } from '../sessions/workdirs.js';
 import {
   isDeviceTrusted,
   addPendingDevice,
@@ -220,18 +220,18 @@ function readInlineWorkdirs() {
 }
 
 function readWorkdirSource() {
-  // 优先级：内联 WORKDIRS > 外部 workdirs.json > 逗号串。统一配置文件是新的事实源，
-  // 显式写了就该赢；后两条保留只为不打断既有部署（config migrate 会把它们内联进来）。
-  const inline = readInlineWorkdirs();
-  if (inline !== null) return normalizeWorkdirEntries(inline);
-
-  const dirsFile = process.env.WORK_DIRS_FILE;
-  if (dirsFile) {
-    const filePath = resolveWorkdirsFilePath(dirsFile, HERE);
-    return loadWorkdirsFile(filePath); // null=读/解析失败
+  // 优先级：WORK_DIRS > WORK_DIRS_FILE > 内联 WORKDIRS。判定本身在 workdirs.js 的
+  // pickWorkdirSource（纯函数、有单测），这里只负责读 env / 读文件这两件带副作用的事。
+  // 此前内联 WORKDIRS 排在最前，与 CLAUDE.md「环境变量始终压过文件」相反——详见该函数头注。
+  const picked = pickWorkdirSource({
+    envList: (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean),
+    envFile: process.env.WORK_DIRS_FILE,
+    inline: readInlineWorkdirs(),
+  });
+  if (picked.kind === 'env-file') {
+    return loadWorkdirsFile(resolveWorkdirsFilePath(picked.value, HERE)); // null=读/解析失败
   }
-  const raw = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
-  return normalizeWorkdirEntries(raw);
+  return normalizeWorkdirEntries(picked.value);
 }
 // 应用条目：realpath 校验 + 设 workDirs / sessionLimitByDir。WORK_DIR 恒首位（其 limit 若在文件里指定则采用）。
 // 返回 warnings[]（调用方决定打印）。

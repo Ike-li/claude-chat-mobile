@@ -66,6 +66,24 @@ export function resolveWorkdirsFilePath(dirsFile, baseDir) {
   return (isAbsolutePosix(dirsFile) || isAbsoluteWin32(dirsFile)) ? dirsFile : join(baseDir, dirsFile);
 }
 
+// 工作区列表来源的优先级判定（纯函数；I/O 与 env 读取都留在调用方 src/server/app.js）。
+//
+// 【为什么是 env 优先】CLAUDE.md 立的通用规则是「环境变量始终压过文件」。此前 app.js 的
+// readWorkdirSource 把配置文件里的内联 WORKDIRS 无条件排在最前，理由是「统一配置文件是新的事实源，
+// 显式写了就该赢」——那条理由只在「文件 vs 更旧的文件」之间成立，一旦对手是 env 就与通用规则冲突：
+// 显式 `export WORK_DIRS=...` 反而收窄不了白名单。2026-09-01 真机实测到的后果是 smoke 起的隔离
+// 实例继承了机主 ccm.config.json 里的 7 个真实工作区，而它明明传了 WORK_DIRS=<临时目录>；任何
+// 「临时用别的工作区跑一次」的场景都会撞上同一堵墙。
+//
+// 生产路径行为不变：两个 env 都没设时仍回落内联 WORKDIRS（机主的部署正是这条路）。
+// envList 为空数组视为「没设」而不是「设成空」——`WORK_DIRS=` 手滑不该把整份白名单清空。
+export function pickWorkdirSource({ envList = [], envFile = '', inline = null } = {}) {
+  if (Array.isArray(envList) && envList.length) return { kind: 'env-list', value: envList };
+  if (envFile) return { kind: 'env-file', value: envFile };
+  if (inline !== null && inline !== undefined) return { kind: 'inline', value: inline };
+  return { kind: 'none', value: [] };
+}
+
 // I/O 薄壳：读文件 + JSON.parse + normalize。读/解析失败 → null（调用方据此保留旧配置 = 整体非法回退语义）。
 export function loadWorkdirsFile(filePath) {
   let text;

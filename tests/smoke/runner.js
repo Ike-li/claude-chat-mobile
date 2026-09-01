@@ -27,6 +27,31 @@ export function smokeScenarioNames() {
   return Object.keys(SCENARIOS);
 }
 
+// 起 smoke server 时必须从继承环境里【摘掉】的键。
+//
+// 【为什么需要】smoke 用 `{...process.env}` 继承调用者的环境，而调用者未必是一个干净的 shell：
+// 2026-09-01 实测，从 CCM web 端启动的 Claude Code 会话会继承生产 server 进程的整份环境
+// （`CCM_HOOKS_ORIGIN=web-sdk` 就是那条血统的指纹），于是 CF_ACCESS_* / VAPID_* 原样流进每个
+// smoke 实例：CF Access 被启用后实例真的去拉了生产 team 的证书，推送密钥也一并带上。
+// 隔离靠的是「显式给 WORK_DIR/CCM_DATA_DIR/PORT」，但那只覆盖它们列出的键——**没列到的键默认继承**，
+// 这正是清单要存在的原因。删除而不是置空串：loadRuntimeEnvironment 会把空串当「未设置」删掉，
+// 但中途任何一个消费者若在删除前读到空串，语义就分叉了（见 config.js 的 SH-001 注释）。
+export const SMOKE_ENV_BLOCKLIST = Object.freeze([
+  'CF_ACCESS_HOSTNAME', 'CF_ACCESS_TEAM', 'CF_ACCESS_AUD',   // 启用后会对外拉 JWKS + 改鉴权路径
+  'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY', 'VAPID_SUBJECT',  // 生产推送密钥，测试实例不该持有
+  'PUBLIC_URL',                                              // 通知深链会指向生产域名
+  'NTFY_URL', 'NTFY_TOPIC',                                  // 外部通知通道
+  'WORK_DIRS_FILE',                                          // 会盖掉下面显式传的 WORK_DIRS
+  'CCM_HOOKS_ORIGIN', 'CCM_STATUSLINE_ORIGIN',               // 两个桥的血统标记，继承会让来源判定失真
+]);
+
+/** 从继承环境里摘掉不该带进 smoke 实例的键。纯函数，便于单测。 */
+export function stripInheritedEnv(env, blocklist = SMOKE_ENV_BLOCKLIST) {
+  const out = { ...env };
+  for (const key of blocklist) delete out[key];
+  return out;
+}
+
 function valueAfter(args, flag) {
   const index = args.indexOf(flag);
   if (index === -1) return null;
@@ -140,7 +165,7 @@ async function runScenario(name, model) {
   mkdirSync(dataDir, { recursive: true, mode: 0o700 });
   const port = await freePort();
   const env = {
-    ...process.env,
+    ...stripInheritedEnv(process.env),    // 摘掉 CF_ACCESS_*/VAPID_* 等生产键（见 SMOKE_ENV_BLOCKLIST）
     AUTH_TOKEN: 'ccm-smoke-test-token',   // §1.9：没有 token server 拒绝启动
     PORT: String(port),
     WORK_DIR: workDir,
