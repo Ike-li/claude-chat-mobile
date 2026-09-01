@@ -55,14 +55,39 @@ const dirB = realpathSync(mkdtempSync(join(tmpdir(), 'ccm-s3-b-')));
 const DATA_DIR = mkdtempSync(join(tmpdir(), 'ccm-smoke-stage3-'));
 
 let server = null, serverLog = '', cleaned = false;
-function cleanup() {
-  if (cleaned) return; cleaned = true;
-  try { if (server && !server.killed) server.kill('SIGTERM'); } catch {}
-  try { rmSync(dirA, { recursive: true, force: true }); } catch {}
-  try { rmSync(dirB, { recursive: true, force: true }); } catch {}
-  try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch {} // WS-017：删临时数据根（隔离生产 data/）
+
+// 停 server：发 SIGTERM 后【等它真的退出】，超时才 SIGKILL。
+// 旧写法是 `kill('SIGTERM')` 后立刻 rmSync + process.exit()，一个都不等——父进程一退，正在
+// graceful shutdown 的子进程就被 init 收养成孤儿，端口和内存一直占着。2026-09-01 在本机抓到
+// 一个这样的残留：PPID=1、已活 2 小时、两个临时目录早被 rmSync 删光，进程还在监听。
+// runner.js 的 stopServer 从一开始就是对的（kill → await waitForExit → 超时 SIGKILL），
+// 这里是漏抄了「等」的那一半。managesServer 的 scenario 自己 spawn server，也就自己担这个责任。
+function stopServer(graceMs = 5000) {
+  return new Promise(resolve => {
+    if (!server || server.exitCode !== null || server.signalCode !== null) return resolve();
+    let settled = false;
+    const finish = () => { if (settled) return; settled = true; clearTimeout(timer); resolve(); };
+    const timer = setTimeout(() => {
+      try { server.kill('SIGKILL'); } catch { /* 已经没了 */ }
+      setTimeout(finish, 500); // SIGKILL 后给一点收尸时间；再不退就放弃等待，不挂住脚本
+    }, graceMs);
+    server.once('exit', finish);
+    try { server.kill('SIGTERM'); } catch { finish(); }
+  });
 }
-for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { cleanup(); process.exit(130); });
+
+async function cleanup() {
+  if (cleaned) return; cleaned = true;
+  // 顺序不可颠倒：子进程收到 SIGTERM 后要把状态 flush 进 CCM_DATA_DIR，先删目录会让它写进一个
+  // 刚被删掉的路径——轻则重建出残留目录，重则 flush 报错拖长退出、更容易演变成上面那种孤儿。
+  await stopServer();
+  for (const dir of [dirA, dirB, DATA_DIR]) {   // WS-017：DATA_DIR 是临时数据根（隔离生产 data/）
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* 已删/不存在 */ }
+  }
+}
+for (const sig of ['SIGINT', 'SIGTERM']) {
+  process.on(sig, () => { cleanup().finally(() => process.exit(130)); });
+}
 
 function waitHealth(ms) {
   const deadline = Date.now() + ms;
@@ -118,19 +143,22 @@ function waitFor(events, pred, ms, label, from = 0) {
 // 等不到就返回 null，让调用方自己出断言失败信息（比抛异常掀翻整个 scenario 更有诊断价值）
 const waitForOrNull = (...args) => waitFor(...args).catch(() => null);
 
-// emit 后等某 type 的新事件
-async function afterEmit(s, events, event, payload, type, wait = 4000) {
-  const before = events.length;
-  s.emit(event, payload);
-  return waitForOrNull(events, e => e.type === type, wait, `${event} → ${type}`, before);
-}
+// 注：曾有一个 `afterEmit(s, events, event, payload, type)` helper，语义是「emit 后等下一条该
+// type 的事件」。它被删掉了——那个语义本身就是陷阱：同类型事件可能有多条，上一步操作的余波会
+// 排在前面被当成本次的回执（实测 session:close 的 permission_mode 余波就顶掉了 setPermissionMode
+// 的回执）。调用点改为直接 waitForOrNull 并写明「要等哪一条」。
 
 // ---- 契约部分（零 token，借 session:switch fixture spawn 出 idle 实例）----
 async function runContract() {
   const { s: s1, events: e1 } = await connect();
 
-  // 1) instances 事件 shape（初始无实例）——等重放到达，不睡固定 500ms
-  const inst0 = await waitForOrNull(e1, ev => ev.type === 'instances', 10000, '连接后 instances 重放');
+  // 1) instances 事件 shape（初始无实例）——等重放到达，不睡固定 500ms。
+  // 等的条件必须是【断言依赖的那个条件】（dirs 已含两个工作区），不能只等「出现一条 instances」：
+  // 连接初期可能先广播一条 dirs 尚未填全的帧，等到它就会拿着不完整的数据去断言。旧写法
+  // sleep(500)+lastOf 反而因为取最后一条而躲开了这点——换成等条件时把这层语义丢了。
+  const inst0 = (await waitForOrNull(e1,
+    ev => ev.type === 'instances' && ev.payload?.dirs?.includes(dirA) && ev.payload?.dirs?.includes(dirB),
+    10000, 'instances 重放（dirs 含 dirA+dirB）')) ?? lastOf(e1, 'instances');
   check('instances 重放 shape（viewingInstanceId:null + dirs 含 dirA/dirB + instances:[]）',
     inst0 && inst0.payload.viewingInstanceId === null &&
     inst0.payload.dirs.includes(dirA) && inst0.payload.dirs.includes(dirB) &&
@@ -207,15 +235,26 @@ async function runContract() {
   // 只在 close 之后的窗口里找不含 A2 的广播——close 之前的帧（如最初那条空 instances）本来就不含 A2，
   // 从头找会立刻"命中"一条与本次释放无关的旧帧，把断言变成恒真。
   const instAfterClose = (await waitForOrNull(e1,
-    ev => ev.type === 'instances' && !(ev.payload?.instances || []).some(x => x.instanceId === iA2),
-    10000, 'instances 去除 A2', beforeClose)) ?? lastOf(e1, 'instances');
+    ev => ev.type === 'instances'
+      && !(ev.payload?.instances || []).some(x => x.instanceId === iA2)
+      && (ev.payload?.instances || []).some(x => x.instanceId === iA1),   // 断言的两维都要等到
+    10000, 'instances 去除 A2 且保留 A1', beforeClose)) ?? lastOf(e1, 'instances');
   const idsAfter = (instAfterClose?.payload?.instances || []).map(x => x.instanceId);
   check('session:close A2 → instances 去除 A2、保留 A1（关 tab 释放、不影响另一实例）',
     closeA2?.ok === true && !idsAfter.includes(iA2) && idsAfter.includes(iA1), `after=${idsAfter.join(',')}`);
 
   // 9) 非法 instanceId 路由缺省落 viewingInstanceId（此刻 viewing=iA1）。用 setPermissionMode 验证
   //    （无 busy 限制，任何时候都能切）：bogus instanceId 落回 iA1 → permission_mode 广播且 instanceId=iA1。
-  const pm = await afterEmit(s1, e1, 'user:setPermissionMode', { mode: 'acceptEdits', instanceId: 'inst_bogus' }, 'permission_mode', 10000);
+  // 同样等【断言依赖的那条】：close 掉 A2 会让 server 广播一条 viewing 实例当前档位的
+  // permission_mode（mode=auto）。只等「出现一条 permission_mode」会抓到它，把上一步的余波
+  // 当成本次切档的回执。等不到目标帧时回落到窗口内最后一条，让断言照常失败并打印真实收到的值
+  // ——不是等什么就断言什么，instanceId 落回 viewing 这一维仍是真断言。
+  const beforePm = e1.length;
+  s1.emit('user:setPermissionMode', { mode: 'acceptEdits', instanceId: 'inst_bogus' });
+  const pm = (await waitForOrNull(e1,
+    ev => ev.type === 'permission_mode' && ev.payload?.mode === 'acceptEdits',
+    10000, 'permission_mode=acceptEdits', beforePm))
+    ?? [...e1.slice(beforePm)].reverse().find(ev => ev.type === 'permission_mode');
   check('非法 instanceId 切档缺省落 viewingInstanceId（permission_mode 作用于 viewing 实例）',
     pm?.payload?.mode === 'acceptEdits' && pm?.instanceId === iA1,
     JSON.stringify({ mode: pm?.payload?.mode, instanceId: pm?.instanceId, want: iA1 }));
@@ -279,10 +318,10 @@ async function run() {
 }
 
 run()
-  .then(() => {
+  .then(async () => {
     const passed = results.filter(r => r.ok).length;
     console.log(`\n${passed}/${results.length} 通过`);
-    cleanup();
+    await cleanup();   // 必须 await：不等就 exit 正是孤儿的成因（见 stopServer 上方）
     process.exit(passed === results.length ? 0 : 1);
   })
-  .catch(e => { console.error('❌ 测试异常:', e.message); cleanup(); process.exit(1); });
+  .catch(async e => { console.error('❌ 测试异常:', e.message); await cleanup(); process.exit(1); });
