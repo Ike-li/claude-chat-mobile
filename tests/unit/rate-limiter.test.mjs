@@ -5,6 +5,7 @@ import {
   onAuthResult,
   freshState,
   rlSourceKey,
+  ipRateBucket,
   shouldTrustCfConnectingIp,
   shouldBypassDeviceApproval,
   DEFAULT_RATE_LIMIT_CONFIG as CFG,
@@ -132,6 +133,102 @@ test.describe('rlSourceKey 来源识别', () => {
   test('CF-IP 为空串 → 回退连接 IP', () => {
     const hs = { address: '10.0.0.3', headers: { 'cf-connecting-ip': '  ' } };
     assert.equal(rlSourceKey(hs, norm, { trustCfConnectingIp: true }), 'ip:10.0.0.3');
+  });
+});
+
+// SEC（2026-09-01）：IPv6 限速按 /64 归桶。
+// IPv4 时代「一个 IP ≈ 一个来源」的假设在 IPv6 下失效——终端用户拿到的最小分配就是一整个 /64
+// （2^64 个地址），逐地址计桶等于每换一个源地址就得到一个全新的 failCount=0 桶，登录暴破限速被绕过。
+// BIND_MODE=custom + BIND_HOST=:: 打开 IPv6 监听后这条路径才真正可达，是新开的风险面。
+test.describe('rlSourceKey：IPv6 按 /64 归桶（防换源地址绕过限速）', () => {
+  const norm = (x) => (x || '').replace(/^::ffff:/, '');
+  const key = (addr) => rlSourceKey({ address: addr, headers: {} }, norm);
+
+  test('同一 /64 内的不同地址 → 同一个桶（本机实测的三个绕过样本）', () => {
+    const a = key('2408:8207:1:2::1');
+    const b = key('2408:8207:1:2::99ff');
+    const c = key('2408:8207:1:2:aaaa:bbbb:cccc:dddd');
+    assert.equal(a, b);
+    assert.equal(b, c);
+    assert.match(a, /\/64$/, '桶标识须显式带 /64，日志/审计里能一眼看出是前缀而非某个具体地址');
+  });
+
+  test('不同 /64 → 不同桶（归桶不得过度合并）', () => {
+    assert.notEqual(key('2408:8207:1:2::1'), key('2408:8207:1:3::1'), '相邻 /64 是不同来源');
+    assert.notEqual(key('2408:8207:1:2::1'), key('2001:db8:1:2::1'));
+  });
+
+  test('书写形式归一：压缩 / 前导零 / 大小写 落同一个桶', () => {
+    const canonical = key('2001:db8:1:2::1');
+    assert.equal(key('2001:0db8:0001:0002:0000:0000:0000:0001'), canonical, '前导零');
+    assert.equal(key('2001:DB8:1:2::1'), canonical, '大写');
+    assert.equal(key('2001:db8:1:2:0:0:0:1'), canonical, '未压缩');
+  });
+
+  test('zone id 剥离：不因网卡名把同一地址拆成两个桶', () => {
+    assert.equal(key('fe80::1%en0'), key('fe80::1%en1'));
+  });
+
+  test('IPv4 行为逐字节不变（不带 /64、不被改写）', () => {
+    assert.equal(key('203.0.113.7'), 'ip:203.0.113.7');
+    assert.equal(key('10.0.0.9'), 'ip:10.0.0.9');
+    assert.equal(key('127.0.0.1'), 'ip:127.0.0.1');
+    assert.notEqual(key('10.0.0.9'), key('10.0.0.10'), 'IPv4 仍按整地址分桶');
+  });
+
+  test('IPv4-mapped ::ffff:x.x.x.x 走 IPv4 路径（clientIp 已剥前缀）', () => {
+    assert.equal(key('::ffff:192.168.1.5'), 'ip:192.168.1.5');
+    assert.notEqual(key('::ffff:192.168.1.5'), key('::ffff:192.168.1.6'));
+  });
+
+  test('IPv4-mapped 在 normalizeIp 缺省（恒等）时也还原成 IPv4，不塌成同一个桶', () => {
+    // rlSourceKey 的 normalizeIp 默认是恒等函数。若缺了 IPv4-mapped 判定，::ffff:0:0/96 里所有地址
+    // 的前 4 组 hextet 都是 0 → 全世界的 IPv4 来源合并成一个 `0:0:0:0::/64` 桶，一台机器触发锁定
+    // 就把所有 IPv4 客户端一起锁死。这是过度合并里最严重的一种，必须有测试钉住。
+    const raw = (addr) => rlSourceKey({ address: addr, headers: {} });
+    assert.equal(raw('::ffff:192.168.1.5'), 'ip:192.168.1.5');
+    assert.notEqual(raw('::ffff:192.168.1.5'), raw('::ffff:10.0.0.1'));
+  });
+
+  test('IPv6 loopback 归入自己的桶，不与公网地址混', () => {
+    assert.notEqual(key('::1'), key('2408:8207:1:2::1'));
+    assert.equal(key('::1'), key('::2'), '同 /64 一致归并（loopback 段只有本机，合并无副作用）');
+  });
+
+  test('CF-Connecting-IP 为 IPv6 时同样按 /64 归桶（同一个绕过面）', () => {
+    const hs = ip => ({ address: '127.0.0.1', headers: { 'cf-connecting-ip': ip } });
+    const opt = { trustCfConnectingIp: true };
+    assert.equal(rlSourceKey(hs('2408:8207:1:2::1'), norm, opt),
+      rlSourceKey(hs('2408:8207:1:2::beef'), norm, opt));
+    assert.equal(rlSourceKey(hs('203.0.113.7'), norm, opt), 'cfip:203.0.113.7', 'IPv4 的 CF-IP 行为不变');
+  });
+
+  test('畸形 / 非地址输入原样落桶：不崩，且宁可多分桶也不误合并', () => {
+    assert.equal(key(''), 'ip:');
+    assert.equal(key('not-an-ip'), 'ip:not-an-ip');
+    assert.equal(key('2001:db8::1::2'), 'ip:2001:db8::1::2', '两处 :: 非法');
+    assert.equal(key('2001:db8:zzzz::1'), 'ip:2001:db8:zzzz::1', '非 hex 组');
+    assert.equal(key('1:2:3:4:5:6:7:8:9'), 'ip:1:2:3:4:5:6:7:8:9', '超 8 组');
+  });
+});
+
+test.describe('ipRateBucket 直接边界（归桶纯函数）', () => {
+  test('/64 前缀取前 4 组 hextet，输出规范小写去前导零', () => {
+    assert.equal(ipRateBucket('2408:8207:0001:0002:0000:0000:0000:0001'), '2408:8207:1:2::/64');
+    assert.equal(ipRateBucket('FE80::1'), 'fe80:0:0:0::/64');
+  });
+
+  test('未压缩全零 / unspecified 不崩', () => {
+    assert.equal(ipRateBucket('::'), '0:0:0:0::/64');
+  });
+
+  test('带方括号形式（[::1]）也能解析', () => {
+    assert.equal(ipRateBucket('[2001:db8:1:2::5]'), '2001:db8:1:2::/64');
+  });
+
+  test('非字符串输入不崩', () => {
+    assert.equal(ipRateBucket(null), '');
+    assert.equal(ipRateBucket(undefined), '');
   });
 });
 
