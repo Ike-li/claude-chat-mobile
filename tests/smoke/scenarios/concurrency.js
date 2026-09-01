@@ -43,7 +43,6 @@ const check = (name, ok, detail = '') => {
   results.push({ name, ok });
   console.log(`${ok ? '✅' : '❌'} ${name}${detail ? ' — ' + detail : ''}`);
 };
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 const lastOf = (events, type) => [...events].reverse().find(e => e.type === type);
 
 // 两临时工作目录（realpath：macOS /var→/private/var，与 server 启动期规范化一致，断言才对得上）
@@ -98,21 +97,40 @@ function connect() {
 }
 // emit 带 ack 的 promise 包装
 const emitAck = (s, event, payload) => new Promise(resolve => s.emit(event, payload, resolve));
+
+// 等条件成立，而不是睡固定时长。
+// 旧写法散落着 `await sleep(3000)` 再去 slice 里捞事件——真实 turn 的耗时不可预测（本机实测 3263ms），
+// 睡得比它短就捞不到目标事件，并让所有依赖该事件的后续断言连锁假红（一次 sleep 短 263ms ⇒ 4 项红）。
+// 睡得比它长则纯属浪费墙钟。条件等待两头都对：命中即返回，超时才报错，且错误信息直接指出等的是什么。
+// from：只在指定下标之后的事件里找（同类型事件会重复出现时必须限定窗口，例如第二个 init）。
+function waitFor(events, pred, ms, label, from = 0) {
+  const deadline = Date.now() + ms;
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      const hit = events.slice(from).find(pred);
+      if (hit) return resolve(hit);
+      if (Date.now() > deadline) return reject(new Error(`等待超时：${label}`));
+      setTimeout(tick, 100);
+    };
+    tick();
+  });
+}
+// 等不到就返回 null，让调用方自己出断言失败信息（比抛异常掀翻整个 scenario 更有诊断价值）
+const waitForOrNull = (...args) => waitFor(...args).catch(() => null);
+
 // emit 后等某 type 的新事件
-async function afterEmit(s, events, event, payload, type, wait = 400) {
+async function afterEmit(s, events, event, payload, type, wait = 4000) {
   const before = events.length;
   s.emit(event, payload);
-  await sleep(wait);
-  return events.slice(before).find(e => e.type === type);
+  return waitForOrNull(events, e => e.type === type, wait, `${event} → ${type}`, before);
 }
 
 // ---- 契约部分（零 token，借 session:switch fixture spawn 出 idle 实例）----
 async function runContract() {
   const { s: s1, events: e1 } = await connect();
-  await sleep(500);
 
-  // 1) instances 事件 shape（初始无实例）
-  const inst0 = lastOf(e1, 'instances');
+  // 1) instances 事件 shape（初始无实例）——等重放到达，不睡固定 500ms
+  const inst0 = await waitForOrNull(e1, ev => ev.type === 'instances', 10000, '连接后 instances 重放');
   check('instances 重放 shape（viewingInstanceId:null + dirs 含 dirA/dirB + instances:[]）',
     inst0 && inst0.payload.viewingInstanceId === null &&
     inst0.payload.dirs.includes(dirA) && inst0.payload.dirs.includes(dirB) &&
@@ -138,28 +156,30 @@ async function runContract() {
   // 5) 用真实消息懒创建实例 A1（cwd=dirA）——fixture resume 失败率高，改用消息创建确保实例存活
   const beforeA1 = e1.length;
   s1.emit('user:message', { text: 'ping A1', cwd: dirA });
-  // 等待新的 init（在 beforeA1 之后）
-  await sleep(3000);
-  const initA1 = e1.slice(beforeA1).find(ev => ev.type === 'init' && ev.cwd === dirA);
+  // 等 init 真的到达（冷启 + resume 的耗时不可预测，任何写死的 sleep 都是在赌）
+  const initA1 = await waitForOrNull(e1, ev => ev.type === 'init' && ev.cwd === dirA, 60000, 'A1 init', beforeA1);
   const iA1 = initA1?.instanceId;
   check('消息懒创建实例 A1 → init 带 instanceId',
     !!iA1 && typeof iA1 === 'string' && iA1.startsWith('inst_'),
     JSON.stringify(iA1));
 
   // 6) 同 cwd 开新会话 → 消息懒创建实例 A2（台阶3 核心：同 cwd 两实例）
-  s1.emit('session:new', { cwd: dirA });
-  await sleep(300);
+  await emitAck(s1, 'session:new', { cwd: dirA }); // 有 ack，等它回来即可，不必 sleep
   const beforeA2 = e1.length;
   s1.emit('user:message', { text: 'ping A2', cwd: dirA });
-  // 等待新的 init，且 instanceId 不是 iA1
-  await sleep(3000);
-  const initA2 = e1.slice(beforeA2).find(ev => ev.type === 'init' && ev.cwd === dirA && ev.instanceId !== iA1);
+  const initA2 = await waitForOrNull(e1,
+    ev => ev.type === 'init' && ev.cwd === dirA && ev.instanceId !== iA1,
+    60000, 'A2 init（instanceId 须不同于 A1）', beforeA2);
   const iA2 = initA2?.instanceId;
   check('同 cwd 开第二会话 A2 → 不同 instanceId（同 cwd 两实例并存）',
     !!iA2 && iA2 !== iA1, JSON.stringify({ iA1, iA2 }));
-  await sleep(1000); // 等 A2 init 到达
 
-  const instAB = lastOf(e1, 'instances');
+  // 等一条【同时】列出 A1、A2 的 instances 广播：旧写法 sleep(1000) 后取 lastOf，广播晚到就会取到
+  // 只含 A1 的旧帧。等不到则回落 lastOf，让下面的断言仍能打印出实际收到的实例列表作诊断。
+  const instAB = (await waitForOrNull(e1,
+    ev => ev.type === 'instances' &&
+      [iA1, iA2].every(id => id && (ev.payload?.instances || []).some(x => x.instanceId === id)),
+    15000, 'instances 同时含 A1+A2')) ?? lastOf(e1, 'instances');
   const liveIds = (instAB?.payload?.instances || []).map(x => x.instanceId);
   check('instances 同时列出 A1 与 A2 两实例、均 cwd=dirA',
     liveIds.includes(iA1) && liveIds.includes(iA2) &&
@@ -182,16 +202,20 @@ async function runContract() {
   }
 
   // 8) session:close A2 → instances 不再列 A2（释放）；A1 仍在（关 tab 不影响另一实例）
+  const beforeClose = e1.length;
   const closeA2 = await emitAck(s1, 'session:close', { instanceId: iA2 });
-  await sleep(300);
-  const instAfterClose = lastOf(e1, 'instances');
+  // 只在 close 之后的窗口里找不含 A2 的广播——close 之前的帧（如最初那条空 instances）本来就不含 A2，
+  // 从头找会立刻"命中"一条与本次释放无关的旧帧，把断言变成恒真。
+  const instAfterClose = (await waitForOrNull(e1,
+    ev => ev.type === 'instances' && !(ev.payload?.instances || []).some(x => x.instanceId === iA2),
+    10000, 'instances 去除 A2', beforeClose)) ?? lastOf(e1, 'instances');
   const idsAfter = (instAfterClose?.payload?.instances || []).map(x => x.instanceId);
   check('session:close A2 → instances 去除 A2、保留 A1（关 tab 释放、不影响另一实例）',
     closeA2?.ok === true && !idsAfter.includes(iA2) && idsAfter.includes(iA1), `after=${idsAfter.join(',')}`);
 
   // 9) 非法 instanceId 路由缺省落 viewingInstanceId（此刻 viewing=iA1）。用 setPermissionMode 验证
   //    （无 busy 限制，任何时候都能切）：bogus instanceId 落回 iA1 → permission_mode 广播且 instanceId=iA1。
-  const pm = await afterEmit(s1, e1, 'user:setPermissionMode', { mode: 'acceptEdits', instanceId: 'inst_bogus' }, 'permission_mode', 1000);
+  const pm = await afterEmit(s1, e1, 'user:setPermissionMode', { mode: 'acceptEdits', instanceId: 'inst_bogus' }, 'permission_mode', 10000);
   check('非法 instanceId 切档缺省落 viewingInstanceId（permission_mode 作用于 viewing 实例）',
     pm?.payload?.mode === 'acceptEdits' && pm?.instanceId === iA1,
     JSON.stringify({ mode: pm?.payload?.mode, instanceId: pm?.instanceId, want: iA1 }));
@@ -201,37 +225,25 @@ async function runContract() {
 
 // ---- 并行 e2e（需 token，--e2e）：同一 cwd 两会话各发消息，断言会话1 result 不被开会话2 影响 ----
 async function runE2E() {
-  const waitFor = (events, pred, ms, label) => new Promise((resolve, reject) => {
-    const deadline = Date.now() + ms;
-    const tick = () => {
-      const hit = [...events].reverse().find(pred);
-      if (hit) return resolve(hit);
-      if (Date.now() > deadline) return reject(new Error(`等待超时：${label}`));
-      setTimeout(tick, 200);
-    };
-    tick();
-  });
   const { s, events } = await connect();
-  await sleep(500);
+  await waitForOrNull(events, e => e.type === 'instances', 10000, '连接后 instances 重放');
 
   // 会话1：首条消息懒开实例 I1（cwd=dirA）
   s.emit('user:message', { text: '只回复一个词：ALPHA。不要调用任何工具。', cwd: dirA, model: MODEL });
-  const initI1 = await waitFor(events, e => e.type === 'init' && e.cwd === dirA, 60000, 'I1 init').catch(() => null);
+  const initI1 = await waitForOrNull(events, e => e.type === 'init' && e.cwd === dirA, 60000, 'I1 init');
   const i1 = initI1?.instanceId;
   check('会话1 懒开实例 I1（init 带 instanceId/cwd=dirA）', !!i1, JSON.stringify(i1));
 
   // 同 cwd 开会话2：session:new 清查看 tab → 首条消息懒开 I2（不打断 I1）
-  await sleep(200);
-  s.emit('session:new', { cwd: dirA });
-  await sleep(200);
+  await emitAck(s, 'session:new', { cwd: dirA }); // ack 回来即视为已清 tab，无需 sleep 赌时序
   s.emit('user:message', { text: '只回复一个词：BETA。不要调用任何工具。', cwd: dirA, model: MODEL });
-  const initI2 = await waitFor(events, e => e.type === 'init' && e.cwd === dirA && e.instanceId !== i1, 60000, 'I2 init').catch(() => null);
+  const initI2 = await waitForOrNull(events, e => e.type === 'init' && e.cwd === dirA && e.instanceId !== i1, 60000, 'I2 init');
   const i2 = initI2?.instanceId;
   check('同 cwd 开会话2 懒开不同实例 I2（init.instanceId !== I1，同 cwd 两实例并发）', !!i2 && i2 !== i1, JSON.stringify({ i1, i2 }));
 
   // 断言：I1 与 I2 的 result 都到达且各带本 instanceId（I1 没被开 I2 中断——台阶3 地基语义）
-  const rI1 = await waitFor(events, e => e.type === 'result' && e.instanceId === i1, 120000, 'I1 result').catch(() => null);
-  const rI2 = await waitFor(events, e => e.type === 'result' && e.instanceId === i2, 120000, 'I2 result').catch(() => null);
+  const rI1 = await waitForOrNull(events, e => e.type === 'result' && e.instanceId === i1, 120000, 'I1 result');
+  const rI2 = await waitForOrNull(events, e => e.type === 'result' && e.instanceId === i2, 120000, 'I2 result');
   check('I1 的 result 到达且 instanceId===I1（同 cwd 开 I2 未中断 I1——台阶3 地基）', !!rI1);
   check('I2 的 result 到达且 instanceId===I2（两实例同 cwd 并行各自完成）', !!rI2);
 

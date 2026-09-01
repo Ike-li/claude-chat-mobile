@@ -66,7 +66,18 @@ try {
 
     // --- A4: 工具事件数据流 ---
     check('A4-init事件', events.some(e => e.type === 'init'), JSON.stringify(events.find(e => e.type === 'init')?.payload ?? {}).slice(0, 100));
-    check('A4-tool_use事件', since(beforeA2).some(e => e.type === 'tool_use' && e.payload.name === 'Write'));
+    // A4-tool_use 要断言的意图是「建 demo.md 这个动作在事件流里能看到对应的 tool_use」，不是「模型选了
+    // 哪个工具」——旧写法钉死 name==='Write'，而实测 claude 2.1.250 用的是 Bash（`cat > demo.md`），
+    // 上游换个等效工具就假红（同轮 A2-文件真实落盘 / A4-tool_result 都是通过的）。也不能反向放宽成
+    // 「有任意 tool_use」：那样一次 Read 就能让它绿，验证价值归零。判据取「写入类工具 + 入参指向
+    // demo.md」，与 A2-文件真实落盘 互补——一个证明磁盘上真有文件，一个证明事件流里有对应的工具调用。
+    const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit', 'Bash']);
+    const demoWrite = since(beforeA2).find(e =>
+      e.type === 'tool_use' && WRITE_TOOLS.has(e.payload?.name) &&
+      // file.path 只有 FILE_TOOLS 才有；Bash 这类落在 inputSummary（工具入参的截断 JSON）里
+      `${e.payload?.file?.path ?? ''}\n${e.payload?.inputSummary ?? ''}`.includes('demo.md'));
+    check('A4-tool_use事件（写入类工具指向 demo.md）', !!demoWrite,
+      demoWrite ? `工具=${demoWrite.payload.name}` : `本轮工具=${[...new Set(since(beforeA2).filter(e => e.type === 'tool_use').map(e => e.payload?.name))].join(',') || '无'}`);
     check('A4-tool_result事件', since(beforeA2).some(e => e.type === 'tool_result'));
     check('E4-流式text_delta', since(beforeA2).filter(e => e.type === 'text_delta').length > 0, `回复: ${reply1.trim().slice(0, 50)}`);
 
@@ -77,7 +88,7 @@ try {
     // --- envelope 契约：所有【业务流式事件】带 epoch（#2 客户端去重依赖）---
     // WS-015：旧写法 events.filter(有epoch).every(是字符串)——若所有业务事件都【丢了】epoch（正是要防的回归
     // 形态），filter 结果为空数组、[].every()===true 假绿。改为先按类型独立选出「本轮必产且应带 epoch」的
-    // 业务事件（Write 轮次的 tool_use/tool_result/text_delta），断言非空，再要求每条都有合法非 'server' epoch。
+    // 业务事件（建文件轮次的 tool_use/tool_result/text_delta），断言非空，再要求每条都有合法非 'server' epoch。
     const EPOCH_EVENT_TYPES = ['tool_use', 'tool_result', 'text_delta'];
     const bizEvents = since(beforeA2).filter(e => EPOCH_EVENT_TYPES.includes(e.type));
     check('契约-业务事件存在（epoch 断言前提）', bizEvents.length > 0, `${bizEvents.length} 条`);

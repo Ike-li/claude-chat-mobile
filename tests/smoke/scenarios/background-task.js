@@ -47,17 +47,39 @@ try {
   const notif = await waitEvent(e => e.type === 'task_notification', 40000);
   check('收到 task_notification 事件', !!notif, `source=${notif.payload?.source}`);
 
-  // 合成 pendingTurns 后，自动汇报轮开始 → 该窗口内 /health busy 应为 true
-  await sleep(300);
-  const h = await health();
-  check('自动汇报轮期间 /health busy=true（状态机合成生效）', h.busy === true, `busy=${h.busy}`);
+  // 合成 pendingTurns 后，自动汇报轮开始 → 该窗口内 /health busy 应为 true。
+  // 旧写法 `sleep(300)` 后只采样一次，是在赌"这一瞬间恰好落在汇报轮的起止窗口里"——实测两次运行都
+  // 采到 busy=false，而同一轮的「收到 task_notification」「汇报轮 result 落地」「汇报结束后 busy 回落」
+  // 三条全绿，说明轮确实跑过、只是采样点错位。改成从 notification 落地起持续轮询：
+  //   命中 busy=true 即通过；「汇报轮 result 已落地」是停止条件（result 之后 busy 不可能再为 true，
+  //   继续等只会白等到超时）。窗口内一次都没采到 true 才判红，此时是真的没合成出 busy。
+  const notifAt = events.indexOf(notif);
+  const reportSettled = () => events.slice(notifAt + 1).some(e => e.type === 'result');
+  let busySeen = false, samples = 0, lastBusy;
+  const busyDeadline = Date.now() + 90000;
+  while (Date.now() < busyDeadline) {
+    lastBusy = (await health()).busy;
+    samples++;
+    if (lastBusy === true) { busySeen = true; break; }
+    if (reportSettled()) break; // 汇报轮已收尾，busy 窗口已经过去
+    await sleep(100);
+  }
+  check('自动汇报轮期间 /health busy=true（状态机合成生效）', busySeen,
+    `采样 ${samples} 次，末次 busy=${lastBusy}`);
 
   // 自动汇报轮 result 落地 → busy 回落
   await waitEvent(e => events.indexOf(e) > events.indexOf(notif) && e.type === 'result', 60000);
   check('自动汇报轮 result 落地', true);
-  await sleep(300);
-  const h2 = await health();
-  check('汇报结束后 /health busy 回落', h2.busy === false, `busy=${h2.busy}`);
+  // 同样不用固定 sleep 赌"300ms 内一定已回落"：result 到达与 /health 侧状态收敛之间有传播窗口。
+  // 轮询到 busy=false 即通过；一直不回落才判红（那才是真的状态机泄漏）。
+  let settledBusy;
+  const settleDeadline = Date.now() + 30000;
+  while (Date.now() < settleDeadline) {
+    settledBusy = (await health()).busy;
+    if (settledBusy === false) break;
+    await sleep(100);
+  }
+  check('汇报结束后 /health busy 回落', settledBusy === false, `busy=${settledBusy}`);
 } catch (err) {
   check('执行异常', false, err.message);
 } finally {
