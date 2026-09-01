@@ -209,17 +209,15 @@ export function summarizeDangerous(rules = []) {
 //
 // bindsPublic 不是这里算的，是问 src/shared/bind-host.js —— server 启动时用的是同一个函数，
 // 所以「doctor 说会不会对外可达」与「实际绑哪个地址」不可能分叉。
-// bindPlan 可选：BIND_MODE 让「绑哪个地址」不再能从 token 单独推出来（有 token 也可能被显式
-// 限制成只绑 loopback）。缺省值就是现状推导 ⇒ 不传时与改造前逐字节一致。
-export function classifyAuthToken(token, bindPlan = null) {
-  const plan = bindPlan || resolveBindPlan({ authToken: token });
-  const pub = plan.publiclyReachable;
-  if (token === undefined || token === null) return { status: 'warn', isSet: false, bindsPublic: pub };
+// 只判令牌本身。未设置从 warn 升为 **fail**：§1.9 之后没有 token 就起不来，那不是「可以将就」
+// 而是「现在这台机器起不来」。绑哪个地址不在这里回答（见 bindDiagnostic）。
+export function classifyAuthToken(token) {
+  if (token === undefined || token === null) return { status: 'fail', isSet: false };
   const t = String(token);
-  if (t === '') return { status: 'fail', isSet: false, bindsPublic: pub };
-  if (isBlankToken(t)) return { status: 'fail', isSet: true, length: t.length, blank: true, bindsPublic: pub };
-  if (t.length < 8) return { status: 'warn', isSet: true, length: t.length, bindsPublic: pub };
-  return { status: 'ok', isSet: true, length: t.length, bindsPublic: pub };
+  if (t === '') return { status: 'fail', isSet: false };
+  if (isBlankToken(t)) return { status: 'fail', isSet: true, length: t.length, blank: true };
+  if (t.length < 8) return { status: 'warn', isSet: true, length: t.length };
+  return { status: 'ok', isSet: true, length: t.length };
 }
 
 // AUTH_TOKEN 的完整体检项（分类 + 给人看的话），**两个 doctor 共用这一个**。
@@ -227,35 +225,22 @@ export function classifyAuthToken(token, bindPlan = null) {
 // 此前 scripts/doctor.js 没用上面的 classifyAuthToken，自己另写了一份判定 + 文案，于是同一个
 // 纯空白 token 在 CLI 里被说成「仅监听 127.0.0.1」（说反了），在 web 里被说成「弱 token」。
 // 分类与措辞都收进这里之后，两边只剩「怎么排版」的差别。
-export function authTokenDiagnostic({ token, bindPlan = null, lang = 'zh' } = {}) {
-  const plan = bindPlan || resolveBindPlan({ authToken: token });
-  const c = classifyAuthToken(token, plan);
-  // 地址一律从 plan 取，不写死：BIND_MODE=loopback 时说「绑 0.0.0.0 对外监听」就是反话，
-  // 与这个函数当初要根除的那句「仅监听 127.0.0.1」同型，只是触发条件换了。
+export function authTokenDiagnostic({ token, lang = 'zh' } = {}) {
+  const c = classifyAuthToken(token);
+  // 本项只回答「令牌本身够不够」，**不谈绑定地址**——那是 BIND 项的职责。
+  // 混进来的后果实测过：BIND_MODE=loopback 时会说出「server 仍会绑 0.0.0.0 对外监听」这种反话。
   const detail = (() => {
-    if (!c.isSet && c.status === 'warn') {
-      return bi(lang, `未设置 → 仅监听 ${plan.host}（本机），手机访问不到。需要手机访问请在配置里设置后重启。`,
-        `Not set → binds ${plan.host} only; your phone cannot reach it. Set it in the config file and restart.`);
+    if (c.blank) {
+      return bi(lang,
+        `全是空白字符（${c.length} 个）→ 形同虚设，server 会拒绝启动。`
+        + '这一格最危险：看起来像设过了，实际什么都没保护。跑 npm run setup 生成一个真 token，或彻底删掉这一项。',
+        `All whitespace (${c.length} chars) → protects nothing, and the server refuses to start. `
+        + 'This is the worst case: it looks configured but guards nothing. Run npm run setup for a real token, or remove the setting.');
     }
     if (!c.isSet) {
-      return bi(lang, `已设置但是空串 → 仅监听 ${plan.host}。若要手机访问，设置非空 token。`,
-        `Set but empty → binds ${plan.host} only. Use a non-empty token for phone access.`);
-    }
-    if (c.blank) {
-      // 两种措辞：真绑到对外可达的地址才是「最危险的一格」；被 BIND_MODE 限制在本机时
-      // 它只是个无用的配置项，不该吓唬人。
-      if (!c.bindsPublic) {
-        return bi(lang,
-          `全是空白字符（${c.length} 个）→ 这个 token 形同虚设。当前按 BIND_MODE 只绑 ${plan.host}，`
-          + '暂时没有对外暴露；但改回对外监听前请先设一个真 token，或彻底删掉这一项。',
-          `All whitespace (${c.length} chars) → this token protects nothing. BIND_MODE currently keeps it on `
-          + `${plan.host} only, so nothing is exposed yet; set a real token before switching back to a public bind, or remove the setting.`);
-      }
       return bi(lang,
-        `全是空白字符（${c.length} 个）→ server 仍会绑 ${plan.host} 对外监听，而这个 token 形同虚设。`
-        + '这是最危险的一格：看起来像没设，实际公网端口开着。设一个真 token，或彻底删掉这一项。',
-        `All whitespace (${c.length} chars) → the server still binds ${plan.host} and is publicly reachable, `
-        + 'while this token protects nothing. Set a real token, or remove the setting entirely.');
+        '未设置 → server 会拒绝启动。任何访问都要令牌，本机也一样。跑 npm run setup 生成一个。',
+        'Not set → the server refuses to start. Every client needs the token, including on this machine. Run npm run setup.');
     }
     if (c.status === 'warn') {
       return bi(lang, `长度仅 ${c.length} 字符，建议 ≥16 字符（随机字符串）提高安全性。`,
@@ -263,7 +248,7 @@ export function authTokenDiagnostic({ token, bindPlan = null, lang = 'zh' } = {}
     }
     return bi(lang, `已设置（${c.length} 字符）`, `Set (${c.length} characters)`);
   })();
-  return { status: c.status, detail, safe: { isSet: c.isSet, length: c.length, blank: !!c.blank, bindsPublic: c.bindsPublic } };
+  return { status: c.status, detail, safe: { isSet: c.isSet, length: c.length, blank: !!c.blank } };
 }
 
 // CLAUDE_BIN 体检，**两个 doctor 共用**。探测这个动作有副作用（which + 跑 --version），
@@ -339,7 +324,7 @@ export function classifyDeviceGateTopology({ authTokenSet, cfEnabled } = {}) {
   }
   return {
     status: 'ok',
-    detail: '未设 AUTH_TOKEN（仅绑 127.0.0.1），无公网设备门问题',
+    detail: '未设 AUTH_TOKEN —— server 会拒绝启动（§1.9），设备门无从谈起',
     safe: { risk: 'none', authTokenSet: false },
   };
 }
@@ -854,12 +839,9 @@ export function bindDiagnostic({ bindPlan, lang = 'zh' } = {}) {
     // 按 code 各出一份双语，**不嵌 plan.refuse.detail** —— 那串文案住在 src/shared/bind-host.js
     // （纯判定层、没有 lang 参数，写的是中文），直接拼进来会让英文报告里混中文。
     const reason = {
-      lan_requires_token: bi(lang,
-        'BIND_MODE=lan 要求先设置 AUTH_TOKEN。跑 npm run setup 生成一个，或改用 BIND_MODE=loopback。',
-        'BIND_MODE=lan requires AUTH_TOKEN. Run npm run setup to generate one, or switch to BIND_MODE=loopback.'),
-      custom_requires_token: bi(lang,
-        `BIND_HOST=${plan.host} 会对外可达，要求先设置 AUTH_TOKEN。`,
-        `BIND_HOST=${plan.host} is publicly reachable and requires AUTH_TOKEN.`),
+      token_required: bi(lang,
+        '没有 AUTH_TOKEN（或它全是空白字符）——任何访问都要令牌，本机也一样。跑 npm run setup 生成一个。',
+        'AUTH_TOKEN is missing (or all whitespace) — every client needs it, including on this machine. Run npm run setup.'),
       custom_requires_host: bi(lang,
         'BIND_MODE=custom 必须同时设置 BIND_HOST（例如 :: 表示 IPv4/IPv6 双栈）。',
         'BIND_MODE=custom also requires BIND_HOST (for example :: for IPv4+IPv6 dual stack).'),

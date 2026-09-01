@@ -69,7 +69,8 @@ function waitHealth(ms) {
   const deadline = Date.now() + ms;
   return new Promise((resolve, reject) => {
     const tick = () => {
-      const req = http.get(`http://127.0.0.1:${APP_PORT}/health`, r => {
+      // 带 token：§1.9 起 /health 一定要鉴权，不带会恒 401 把探针拖到超时。
+      const req = http.get(`http://127.0.0.1:${APP_PORT}/health?token=${encodeURIComponent(process.env.AUTH_TOKEN || '')}`, r => {
         r.resume();
         if (r.statusCode === 200) return resolve();
         retry();
@@ -87,7 +88,7 @@ function waitHealth(ms) {
 
 function connect() {
   const events = [];
-  const s = io(`http://127.0.0.1:${APP_PORT}`, { auth: { token: '' }, reconnection: false, timeout: 5000 });
+  const s = io(`http://127.0.0.1:${APP_PORT}`, { auth: { token: process.env.AUTH_TOKEN || '' }, reconnection: false, timeout: 5000 });
   s.on('agent:event', ev => events.push(ev));
   return new Promise((res, rej) => {
     s.on('connect', () => res({ s, events }));
@@ -242,7 +243,7 @@ async function run() {
     cwd: ROOT,
     env: {
       ...process.env,
-      AUTH_TOKEN: '',
+      AUTH_TOKEN: 'ccm-smoke-test-token',
       PORT: String(APP_PORT),
       WORK_DIR: dirA,
       WORK_DIRS: `${dirA},${dirB}`,

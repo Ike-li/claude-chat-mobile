@@ -694,8 +694,7 @@ io.use(async (socket, next) => {
       } catch {
         authPassed = false; // 公网 JWT 校验失败 → 落入统一限速计数 + fail-closed
       }
-    } else if (!AUTH_TOKEN) {
-      authPassed = true;
+    // 同 HTTP 侧：不留「无 token 放行」的分支（§1.9 鉴权是启动前提，无 token 起不来）。
     } else if (tokenMatches(socket.handshake.auth?.token)) {
       authPassed = true;
     }
@@ -3363,11 +3362,9 @@ httpServer.listen(port, host, () => {
   console.log(`  工作目录: ${WORK_DIR}${workDirs.length > 1 ? `  (可切换 ${workDirs.length} 个: ${workDirs.join(', ')})` : ''}`);
   console.log(`  claude: ${claudeBin} (${versions.cli})`);
   console.log(`  工具放行: 由 .claude/settings.json 的 permissions 决定（投屏层不注入白名单）`);
-  if (!AUTH_TOKEN) {
-    console.log(`  本机: http://localhost:${port}`);
-    console.warn('  ⚠️  未设置 AUTH_TOKEN —— 仅监听 127.0.0.1，不可走隧道对外。');
-    console.warn('  ⚠️  需要手机访问请在 ccm.config.json 设置 AUTH_TOKEN 后重启。');
-  } else if (!bindPlan.publiclyReachable) {
+  // 无 AUTH_TOKEN 的分支已删除：那个状态到不了这里——resolveBindPlan 会在 listen 之前
+  // refuse('token_required') 并退出（§1.9 鉴权是启动前提）。
+  if (!bindPlan.publiclyReachable) {
     // 有 token 但显式绑了 loopback（BIND_MODE=loopback / custom+本机地址）。
     // 此时**绝不能**再列局域网地址——那些地址上根本没有人在听，照着打开只会失败。
     const frag = `/#token=${encodeURIComponent(AUTH_TOKEN)}`;
@@ -3392,22 +3389,30 @@ httpServer.listen(port, host, () => {
     const isWildcard = host === '0.0.0.0' || host === '::';
     const reachable = isWildcard ? reachableIPv4s() : [host];
 
+    // 公网那两行按声明的方案给：产品只内建 Cloudflare 与局域网两条路（hard-rules §1.10），
+    // 声明了别的拓扑还硬教 cloudflared 就是答非所问——那些方案产品不管，只指路文档。
+    const profile = String(process.env.ACCESS_PROFILE || '').trim();
+    const publicHint = (tokenPart) => (profile && profile !== 'cloudflare'
+      ? [`  公网:   已声明 ACCESS_PROFILE=${profile}，落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」`]
+      : [
+        `  公网:   先跑 cloudflared tunnel --url http://localhost:${port}`,
+        `          再开 https://<随机域名>.trycloudflare.com${tokenPart}  ← 装 PWA 走这条（需 https）`,
+      ]);
+
     if (isFirstRun) {
       // 首次启动：完整 URL（便于扫码/点击）
       console.log(`  本机:   http://localhost:${port}${frag}`);
       for (const ip of reachable) {
         console.log(`  可访问: http://${ip}:${port}${frag}  ← 同 WiFi 或已连隧道时可用`);
       }
-      console.log(`  公网:   先跑 cloudflared tunnel --url http://localhost:${port}`);
-      console.log(`          再开 https://<随机域名>.trycloudflare.com${frag}  ← 装 PWA 走这条（需 https）`);
+      for (const line of publicHint(frag)) console.log(line);
     } else {
       // 后续启动：占位符（防泄露），token 已存浏览器可免带
       console.log(`  本机:   http://localhost:${port}/#token=<YOUR_TOKEN>`);
       for (const ip of reachable) {
         console.log(`  可访问: http://${ip}:${port}/#token=<YOUR_TOKEN>  ← 同 WiFi 或已连隧道时可用`);
       }
-      console.log(`  公网:   先跑 cloudflared tunnel --url http://localhost:${port}`);
-      console.log(`          再开 https://<随机域名>.trycloudflare.com/#token=<YOUR_TOKEN>  ← 装 PWA 走这条（需 https）`);
+      for (const line of publicHint('/#token=<YOUR_TOKEN>')) console.log(line);
       // 文件名与路径都按**实际生效的那份**给：写死 `.env` / `data/sessions.json` 会让用新格式
       // 或搬过数据目录（CCM_DATA_DIR）的用户去翻一个不存在的文件（2026-08-19 新装实测）。
       console.log(`  💡 提示: Token 已掩码显示，完整 token 在 ${usingConfigJson() ? CONFIG_FILE_NAME : '.env'} 中查看`

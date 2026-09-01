@@ -36,7 +36,7 @@ async function startServer(options = {}) {
 
   dataDir = reuseDataDir || mkdtempSync(join(tmpdir(), 'ccm-ws-test-'));
   const started = await spawnServer({
-    AUTH_TOKEN: authEnabled ? 'test-token-123' : '',
+    AUTH_TOKEN: authEnabled ? 'test-token-123' : 'ccm-integration-test-token',   // §1.9：无 token 起不来，非 auth 用例也要给
     WORK_DIR: dataDir,
     CCM_DATA_DIR: dataDir,
     IDLE_TIMEOUT_MS: '10000',
@@ -50,7 +50,9 @@ async function startServer(options = {}) {
 
 // 创建 socket 客户端
 function createClient(options = {}) {
-  const { auth = {} } = options;
+  // 默认带上非 auth 档的 token：§1.9 之后 server 没有 token 就不启动，于是也不存在
+  // 「服务端无 token 所以客户端可以不带」这条路。WS-5 要测「不带 token 被拒」时显式传 auth:{} 覆盖。
+  const { auth = { token: 'ccm-integration-test-token' } } = options;
 
   const socket = ioClient(`http://127.0.0.1:${port}`, {
     auth,

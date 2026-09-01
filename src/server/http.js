@@ -93,8 +93,10 @@ export function createHttpAuth({ authToken, strategy, rateLimit = null }) {
         // 出现在待审列表里，见 /push/subscribe 的说明。
         req.ccmAccessEnabled = true;
       } else if (
-        !authToken
-        || tokenMatches(authToken, req.query.token)
+        // 没有 `!authToken` 短路：鉴权是启动前提（hard-rules §1.9），server 在无 token 时
+        // 根本起不来（src/shared/bind-host.js 的 resolveBindPlan 会 refuse）。这里若留一个
+        // 「token 为空就放行」的分支，等于给未来任何「token 意外变空」的路径备了一道后门。
+        tokenMatches(authToken, req.query.token)
         || tokenMatches(authToken, req.headers['x-auth-token'])
       ) {
         authPassed = true;

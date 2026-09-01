@@ -678,7 +678,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { @MainActor in
                 if let u = URL(string: url) { NSWorkspace.shared.open(u) }
                 if case .failed = copied {
-                    // 没令牌也照样打开：未设 AUTH_TOKEN 的本机部署本就直接可用
+                    // 取不到令牌 → 浏览器那边会停在令牌输入框。此前这里的注释是「未设 AUTH_TOKEN 的
+                    // 本机部署本就直接可用」，那条路已被 hard-rules §1「鉴权是启动前提」取消：
+                    // 没有 token 时 server 根本起不来，所以取不到只可能是读配置失败。
                     return
                 }
             }

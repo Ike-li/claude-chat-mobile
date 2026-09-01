@@ -50,8 +50,8 @@ export const ENV_SCHEMA = {
   AUTH_TOKEN: {
     group: 'auth', kind: 'readonly', secret: true,
     label: t('访问令牌', 'Access token'),
-    help: t('留空时 server 只绑 127.0.0.1，手机将无法访问。要更换请在电脑上跑 npm run setup。',
-      'Empty means the server binds 127.0.0.1 only. Run npm run setup on the machine to rotate it.'),
+    help: t('必填：留空 server 会拒绝启动（任何访问都要令牌，本机也一样）。要更换请在电脑上跑 npm run setup。',
+      'Required: the server refuses to start without it (every client needs the token, including on this machine). Run npm run setup to rotate it.'),
   },
   // 声明式「公网访问方案」。空 = 未声明：一切消费点回落现状推断（CF_ACCESS_* 齐设与否），
   // 既有部署零行为变化 —— 不设 default 'lan'：机主生产环境三键已设、未声明，默认 lan 会

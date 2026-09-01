@@ -189,7 +189,7 @@ PWA 和 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+，并先将应�
 使用前需要理解这些边界：
 
 1. **单用户。** 项目没有多用户或租户隔离，通过鉴权后的操作权限最终取决于运行 `claude` 的本机账号。
-2. **无 Token 不向局域网暴露。** 未设置 `AUTH_TOKEN` 时，服务只监听 `127.0.0.1`。
+2. **没有 Token 就不启动。** `AUTH_TOKEN` 是启动前提，任何绑定模式都一样——本机浏览器打开也要令牌，不存在「本地免鉴权」这条路。
 3. **工作区显式放行。** 文件、会话和相关操作只能进入配置的 `WORK_DIR` / `WORKDIRS`，不要为了方便把整个 Home 目录加入工作区。
 4. **新设备需要信任。** 除本机直连或已经通过 Cloudflare Access 的连接外，持有正确 Token 的新设备仍需要一次设备审批。
 5. **继承 Claude Code 权限。** `permissions.allow` 等已有 Claude Code 权限规则会继续生效，公网使用前应检查 Bash、Write 等自动放行规则。

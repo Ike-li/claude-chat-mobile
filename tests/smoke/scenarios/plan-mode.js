@@ -40,7 +40,7 @@ function collector() {
 }
 
 function connect(col) {
-  const s = io(URL, { auth: { token: '' }, reconnection: false, timeout: 5000 });
+  const s = io(URL, { auth: { token: process.env.AUTH_TOKEN || '' }, reconnection: false, timeout: 5000 });
   s.on('agent:event', ev => {
     if (col.accept(ev) && !['text_delta', 'thinking_delta'].includes(ev.type)) {
       console.log(`  [${ev.type}] ${JSON.stringify(ev.payload).slice(0, 90)}`);

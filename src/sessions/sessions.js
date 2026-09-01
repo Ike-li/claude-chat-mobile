@@ -1,4 +1,6 @@
-// sessions.js —— 服务端唯一持久状态：会话元数据，单 JSON 文件，原子写。
+// sessions.js —— 会话元数据，单 JSON 文件，原子写。（早前这里写「服务端唯一持久状态」，
+// 后来陆续加了 approval-store / audit / init-cache / service-* / notify-channels，那句已不准确。
+// 什么能落盘见 docs/hard-rules.md §1「不新增持久化层」。）
 // 只存元数据（id/title/cwd/model/permissionMode/effort/时间戳），永不存消息内容——内容事实源是 claude 自己的 session。
 import { readFileSync, mkdirSync } from 'node:fs';
 import { writeFile, mkdir, rename, unlink } from 'node:fs/promises';

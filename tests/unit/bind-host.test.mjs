@@ -12,32 +12,55 @@ import assert from 'node:assert/strict';
 
 import { resolveBindPlan, resolveBindHost, bindsPublicly, isLoopbackBindHost, isBlankToken } from '../../src/shared/bind-host.js';
 
-test.describe('resolveBindPlan —— 默认路径必须与改造前逐字节一致', () => {
-  test('★ 未声明 BIND_MODE + 有 token → 0.0.0.0（现状，向后兼容钉子）', () => {
-    const p = resolveBindPlan({ authToken: 'x' });
-    assert.equal(p.host, '0.0.0.0');
-    assert.equal(p.publiclyReachable, true);
-    assert.equal(p.refuse, null);
-  });
-
-  test('★ 未声明 BIND_MODE + 无 token → 127.0.0.1，且不拒绝启动（本地试用是合法用法）', () => {
+// ★ 鉴权是启动前提（hard-rules §1.9，2026-09-01 机主拍板）：
+// 「web 访问必须填 token，局域网也要填」。此前无 token 时静默降级绑 loopback，而那个状态下
+// 本机浏览器打开就是一个**零凭证的全权控制台**（连上即免设备审批，可发消息、跑工具、读写工作区）。
+// 现在不再有「无 token 部署」这个状态：任何绑定模式下缺 token 一律拒绝启动。
+test.describe('resolveBindPlan —— 鉴权是启动前提，无 token 一律拒绝', () => {
+  test('★ 未声明 BIND_MODE + 无 token → refuse（不再静默降级到 loopback）', () => {
     for (const authToken of [undefined, '', null]) {
       const p = resolveBindPlan({ authToken });
-      assert.equal(p.host, '127.0.0.1', `token=${JSON.stringify(authToken)}`);
-      assert.equal(p.publiclyReachable, false);
-      assert.equal(p.refuse, null, '默认路径无 token 只降级、不拒绝——这是既有行为');
+      assert.ok(p.refuse, `token=${JSON.stringify(authToken)} 必须拒绝`);
+      assert.equal(p.refuse.code, 'token_required');
+      assert.match(p.refuse.detail, /AUTH_TOKEN/);
+      assert.match(p.refuse.detail, /setup/, '要给出行动出路');
+      assert.equal(p.publiclyReachable, false, '拒绝时绝不能报成「对外可达」');
     }
   });
 
-  test('无参调用不抛（doctor 侧可能什么都没有）', () => {
-    assert.equal(resolveBindPlan().host, '127.0.0.1');
-    assert.equal(resolveBindPlan({}).host, '127.0.0.1');
+  test('★ 纯空白 token 同样拒绝——它形同虚设，此前却因 truthy 而绑 0.0.0.0（最危险的一格）', () => {
+    for (const authToken of ['   ', '\t\n', ' ']) {
+      const p = resolveBindPlan({ authToken });
+      assert.ok(p.refuse, JSON.stringify(authToken));
+      assert.equal(p.refuse.code, 'token_required');
+    }
   });
 
-  test('纯空白 token 仍按「有 token」绑公网——最危险的那一格由 doctor 报 fail，不在这层改语义', () => {
-    const p = resolveBindPlan({ authToken: '   ' });
+  test('★ 每种绑定模式都要 token，loopback 也不例外（本机同样是 web 访问）', () => {
+    for (const bindMode of ['', 'loopback', 'lan']) {
+      assert.equal(resolveBindPlan({ bindMode }).refuse?.code, 'token_required', `mode=${bindMode}`);
+    }
+    assert.equal(resolveBindPlan({ bindMode: 'custom', bindHost: '127.0.0.1' }).refuse?.code, 'token_required');
+    assert.equal(resolveBindPlan({ bindMode: 'custom', bindHost: '::' }).refuse?.code, 'token_required');
+  });
+
+  test('无参调用不抛（doctor 侧可能什么都没有），且判成拒绝', () => {
+    assert.equal(resolveBindPlan().refuse?.code, 'token_required');
+    assert.equal(resolveBindPlan({}).refuse?.code, 'token_required');
+  });
+
+  test('token 检查排在模式校验之前——两个都缺时先报缺 token（那是更根本的前提）', () => {
+    assert.equal(resolveBindPlan({ bindMode: 'lo0pback' }).refuse.code, 'token_required');
+    assert.equal(resolveBindPlan({ bindMode: 'custom' }).refuse.code, 'token_required');
+  });
+});
+
+test.describe('resolveBindPlan —— 有 token 时的绑定行为（默认路径逐字节不变）', () => {
+  test('★ 未声明 BIND_MODE + 有 token → 0.0.0.0（现状，向后兼容钉子）', () => {
+    const p = resolveBindPlan({ authToken: 'x'.repeat(64) });
     assert.equal(p.host, '0.0.0.0');
     assert.equal(p.publiclyReachable, true);
+    assert.equal(p.refuse, null);
   });
 });
 
@@ -49,11 +72,8 @@ test.describe('resolveBindPlan —— loopback 模式（机主的 SSH 隧道用�
     assert.equal(p.refuse, null);
   });
 
-  test('无 token 同样合法（不对外可达，不需要鉴权做前提）', () => {
-    const p = resolveBindPlan({ bindMode: 'loopback' });
-    assert.equal(p.host, '127.0.0.1');
-    assert.equal(p.refuse, null);
-  });
+  // 「无 token 也能绑 loopback」这条已被 §1.9 推翻——本机同样是 web 访问，同样要 token。
+  // 反转后的断言在上面的「鉴权是启动前提」一节。
 });
 
 test.describe('resolveBindPlan —— lan 模式与不变量', () => {
@@ -64,19 +84,8 @@ test.describe('resolveBindPlan —— lan 模式与不变量', () => {
     assert.equal(p.refuse, null);
   });
 
-  test('★ 无 token → 拒绝启动，不静默降级（不变量：配不出「对外可达但无鉴权」）', () => {
-    const p = resolveBindPlan({ bindMode: 'lan' });
-    assert.ok(p.refuse, '必须拒绝');
-    assert.equal(p.refuse.code, 'lan_requires_token');
-    assert.match(p.refuse.detail, /AUTH_TOKEN/, '要说清缺什么');
-    assert.match(p.refuse.detail, /setup|BIND_MODE/, '要给出行动出路');
-  });
-
-  test('纯空白 token 不算数——它是 truthy 但形同虚设，绑外网前必须有真 token', () => {
-    const p = resolveBindPlan({ authToken: '   ', bindMode: 'lan' });
-    assert.ok(p.refuse, '显式要求绑外网时，空白 token 必须被拒');
-    assert.equal(p.refuse.code, 'lan_requires_token');
-  });
+  // 无 token / 纯空白 token 的拒绝已上收到统一的 token_required（§1.9），
+  // 不再有 lan 专属的 lan_requires_token 分支。
 });
 
 test.describe('resolveBindPlan —— custom 模式（IPv6 与特定网卡的逃生口）', () => {
@@ -93,20 +102,12 @@ test.describe('resolveBindPlan —— custom 模式（IPv6 与特定网卡的逃
     assert.equal(p.publiclyReachable, true);
   });
 
-  test('custom + loopback 地址 + 无 token → 合法（不对外可达）', () => {
+  test('custom + loopback 地址 + 有 token → 合法（不对外可达，但仍要 token）', () => {
     for (const bindHost of ['127.0.0.1', '::1', 'localhost']) {
-      const p = resolveBindPlan({ bindMode: 'custom', bindHost });
+      const p = resolveBindPlan({ authToken: 'x'.repeat(64), bindMode: 'custom', bindHost });
       assert.equal(p.host, bindHost, bindHost);
       assert.equal(p.publiclyReachable, false, bindHost);
       assert.equal(p.refuse, null, bindHost);
-    }
-  });
-
-  test('★ custom + 非 loopback 地址 + 无 token → 拒绝（同 lan 的不变量）', () => {
-    for (const bindHost of ['::', '0.0.0.0', '192.168.1.5']) {
-      const p = resolveBindPlan({ bindMode: 'custom', bindHost });
-      assert.ok(p.refuse, bindHost);
-      assert.equal(p.refuse.code, 'custom_requires_token', bindHost);
     }
   });
 

@@ -28,7 +28,7 @@ async function startServer() {
   process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = dataDir;
-  delete process.env.AUTH_TOKEN;
+  process.env.AUTH_TOKEN = 'ccm-integration-test-token';   // §1.9：没有 token server 拒绝启动
   delete process.env.CF_ACCESS_HOSTNAME;
   delete process.env.CF_ACCESS_TEAM;
   delete process.env.CF_ACCESS_AUD;
@@ -48,6 +48,7 @@ async function startServer() {
 // 创建 socket 客户端
 function createClient() {
   const socket = ioClient(`http://127.0.0.1:${port}`, {
+    auth: { token: 'ccm-integration-test-token' },
     transports: ['websocket'],
     reconnection: false,
   });

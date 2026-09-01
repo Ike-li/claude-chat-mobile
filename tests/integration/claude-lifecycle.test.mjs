@@ -32,7 +32,7 @@ async function startServer(options = {}) {
 
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-cl-test-'));
   const started = await spawnServer({
-    AUTH_TOKEN: '', // 测试不启用 auth
+    AUTH_TOKEN: 'ccm-integration-test-token', // §1.9：没有 token 就不启动，测试必须显式给一个
     WORK_DIR: dataDir,
     CCM_DATA_DIR: dataDir,
     IDLE_TIMEOUT_MS: String(idleTimeoutMs),
@@ -46,6 +46,7 @@ async function startServer(options = {}) {
 // 创建 socket 客户端
 function createClient() {
   const socket = ioClient(`http://127.0.0.1:${port}`, {
+    auth: { token: 'ccm-integration-test-token' },
     transports: ['websocket'],
     reconnection: false,
   });

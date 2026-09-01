@@ -97,7 +97,10 @@ async function startServer(env) {
   while (Date.now() < deadline) {
     if (child.exitCode !== null) throw new Error(`server exited early (${child.exitCode})\n${output}`);
     try {
-      const response = await fetch(`${env.CCM_SMOKE_URL}/health`);
+      // 探针必须带 token：§1.9 起 server 一定有 AUTH_TOKEN，/health 也就一定要鉴权。
+      // 不带的话这里恒 401 → response.ok 永假 → 20s 后报「server readiness timed out」，
+      // 而日志里 server 明明已经打完启动横幅，很容易误判成 server 起不来。
+      const response = await fetch(`${env.CCM_SMOKE_URL}/health?token=${encodeURIComponent(env.AUTH_TOKEN)}`);
       if (response.ok) return child;
     } catch {
       // The listener is not ready yet.
@@ -138,7 +141,7 @@ async function runScenario(name, model) {
   const port = await freePort();
   const env = {
     ...process.env,
-    AUTH_TOKEN: '',
+    AUTH_TOKEN: 'ccm-smoke-test-token',   // §1.9：没有 token server 拒绝启动
     PORT: String(port),
     WORK_DIR: workDir,
     WORK_DIRS: workDir,

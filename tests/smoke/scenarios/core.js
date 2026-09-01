@@ -13,7 +13,7 @@ const results = [];
 const check = (name, ok, detail = '') =>
   results.push({ name, ok }) && console.log(`${ok ? '✅' : '❌'} ${name}${detail ? ' — ' + detail : ''}`);
 
-const socket = io(URL, { auth: { token: '' } });
+const socket = io(URL, { auth: { token: process.env.AUTH_TOKEN || '' } });
 const events = [];
 let textBuf = '';
 socket.on('agent:event', ev => {

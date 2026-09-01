@@ -34,7 +34,7 @@ function collector() {
 }
 
 function connect(col, label) {
-  const s = io(URL, { auth: { token: '' }, reconnection: false, timeout: 5000 });
+  const s = io(URL, { auth: { token: process.env.AUTH_TOKEN || '' }, reconnection: false, timeout: 5000 });
   s.on('agent:event', ev => {
     if (!col.accept(ev)) return;
     const tag = ['text_delta', 'thinking_delta'].includes(ev.type) ? '' : `  [${label}|${ev.type}] seq=${ev.seq} ${JSON.stringify(ev.payload).slice(0, 80)}`;
@@ -73,7 +73,7 @@ try {
 
   // ── 阶段 2：断开窗口——任务应在服务端继续跑（4c）──
   await sleep(5000);
-  const health = await fetch(`${URL}/health`).then(r => r.json());
+  const health = await fetch(`${URL}/health?token=${encodeURIComponent(process.env.AUTH_TOKEN || '')}`).then(r => r.json());
   console.log(`③ 断开 5s 后 /health: busy=${health.busy}, sessionId=${(health.sessionId || '').slice(0, 8)}…`);
 
   // ── 阶段 3：重连 + sync:since 续传 ──

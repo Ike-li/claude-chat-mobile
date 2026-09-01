@@ -48,7 +48,7 @@ if (process.argv.includes('--unit')) {
 const URL = process.env.CCM_SMOKE_URL || `http://127.0.0.1:${process.env.PORT || 3100}`;
 const OFF = process.argv.includes('--off');
 const events = [];
-const sock = io(URL, { auth: { token: '' }, reconnection: false, timeout: 5000 });
+const sock = io(URL, { auth: { token: process.env.AUTH_TOKEN || '' }, reconnection: false, timeout: 5000 });
 sock.on('agent:event', ev => { if (ev.type === 'status_line') events.push(ev); });
 await new Promise((res, rej) => {
   sock.on('connect', res);
@@ -88,7 +88,7 @@ check('E2-含 model+ctx（cost 视计费模式可选）', !!rich,
   rich ? `model=${rich.model} tokens=${rich.ctx.tokens} cost=${Number.isFinite(rich.cost) ? '$' + rich.cost.toFixed(4) : 'N/A(订阅?)'}` : '无');
 
 // E3：第二个零消息连接 → ≤2s 收到缓存重放（快照类事件通用断言）
-const sock2 = io(URL, { auth: { token: '' }, reconnection: false });
+const sock2 = io(URL, { auth: { token: process.env.AUTH_TOKEN || '' }, reconnection: false });
 const got2 = await new Promise(res => {
   const t = setTimeout(() => res(null), 2000);
   sock2.on('agent:event', ev => {

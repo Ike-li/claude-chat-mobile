@@ -187,7 +187,7 @@ Treat it as a remote control tool for a development machine, not as an ordinary 
 Boundaries to understand before you use it:
 
 1. **Single user.** There is no multi-user or tenant isolation; the permissions of an authenticated operation ultimately come from the local account running `claude`.
-2. **No token means it is not exposed to the LAN.** Without `AUTH_TOKEN`, the server listens only on `127.0.0.1`.
+2. **No token, no server.** `AUTH_TOKEN` is a startup prerequisite under every bind mode — even a browser on this machine needs it. There is no "local means no auth" path.
 3. **Workspaces are explicitly allowlisted.** Files, sessions, and related operations can only reach the configured `WORK_DIR` / `WORKDIRS`. Do not add your whole home directory for convenience.
 4. **New devices need trust.** Except for local connections and connections already validated by Cloudflare Access, a device holding the correct token still needs one device approval.
 5. **Claude Code permissions are inherited.** Existing Claude Code rules such as `permissions.allow` stay in effect; review your automatic Bash / Write approvals before public use.

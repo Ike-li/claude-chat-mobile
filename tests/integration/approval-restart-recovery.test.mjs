@@ -31,7 +31,7 @@ async function startServerWithSeededPendingApproval() {
   process.env.PORT = String(30000 + Math.floor(Math.random() * 10000));
   process.env.IDLE_TIMEOUT_MS = '10000';
   process.env.WORK_DIR = dataDir;
-  delete process.env.AUTH_TOKEN;
+  process.env.AUTH_TOKEN = 'ccm-integration-test-token';   // §1.9：没有 token server 拒绝启动
 
   // 模拟"上一个进程崩溃/被 kill -9，遗留一条永远等不到 canUseTool 回调兑现的 pending 审批"——
   // 真实字段形状抄 approval-store.js 的 recordCreated。已终态记录的 decidedAt 用"最近"时间戳

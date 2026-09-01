@@ -27,7 +27,7 @@ let port, dataDir, serverProc;
 async function startServer() {
   dataDir = mkdtempSync(join(tmpdir(), 'ccm-upload-test-'));
   const started = await spawnServer({
-    AUTH_TOKEN: '',
+    AUTH_TOKEN: 'ccm-integration-test-token',
     WORK_DIR: dataDir,
     CCM_DATA_DIR: dataDir,
     IDLE_TIMEOUT_MS: '10000',
@@ -46,7 +46,7 @@ async function startServer() {
 // 创建 socket 客户端
 function createClient() {
   // 从 .env 文件读取 AUTH_TOKEN（server.js 会在模块加载时读取它）
-  const authToken = process.env.AUTH_TOKEN || '';
+  const authToken = 'ccm-integration-test-token';   // 与 spawnServer 传给子进程的一致（§1.9 起必须有 token）
   const socket = ioClient(`http://127.0.0.1:${port}`, {
     auth: { token: authToken },  // 传递 AUTH_TOKEN
     transports: ['websocket'],

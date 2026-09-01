@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveBindHost, resolveBindPlan } from '../../src/shared/bind-host.js';
+import { resolveBindPlan } from '../../src/shared/bind-host.js';
 import {
   LOG_ROTATE_THRESHOLD_BYTES,
   UPLOADS_FOOTPRINT_WARN_BYTES,
@@ -264,8 +264,9 @@ test.describe('summarizeDangerous', () => {
 });
 
 test.describe('classifyAuthToken：绝不回显明文', () => {
-  test('undefined → warn(isSet false)', () => {
-    assert.deepEqual(classifyAuthToken(undefined), { status: 'warn', isSet: false, bindsPublic: false });
+  // §1.9 之后未设置是 fail 不是 warn：没有 token server 根本起不来。
+  test('undefined → fail(isSet false)', () => {
+    assert.deepEqual(classifyAuthToken(undefined), { status: 'fail', isSet: false });
   });
   test('空串 → fail', () => {
     assert.equal(classifyAuthToken('').status, 'fail');
@@ -283,78 +284,56 @@ test.describe('classifyAuthToken：绝不回显明文', () => {
   });
 });
 
-// ── AUTH_TOKEN 判定与 server 实际绑定地址同源 ──────────────────────────────
-// 2026-08-27：纯空白 token 上三方分叉——server 绑 0.0.0.0（'   ' 是 truthy），
-// scripts/doctor.js 说「仅监听 127.0.0.1」（**说反了**），web 说「弱 token」。
-// 根因是 server 的判据是 app.js 里一行内联三元，两个 doctor 够不到、只能各自猜。
-// 判据抽进 src/shared/bind-host.js 之后，这一组断言钉住「猜」变成「问同一个函数」。
-test.describe('authTokenDiagnostic ⇔ resolveBindHost 同源', () => {
-  for (const token of [undefined, null, '', ' ', '   ', '\t\n', 'abc', 'x'.repeat(8), 'x'.repeat(64)]) {
-    test(`token=${JSON.stringify(token)} 的 bindsPublic 与实际绑定地址一致`, () => {
+// ── AUTH_TOKEN：鉴权是启动前提（hard-rules §1.9，2026-09-01） ────────────────
+// 此前这一组钉的是「doctor 说的对外可达 == server 真绑的地址」，因为无 token 时 server 会
+// 静默降级绑 loopback、而两个 doctor 各自猜那个地址。现在没有「无 token 部署」这个状态了：
+// 缺 token 一律拒绝启动，绑哪个地址由 BIND 项单独报告，本项只回答「令牌本身够不够」。
+test.describe('authTokenDiagnostic：缺令牌 = 起不来', () => {
+  test('★ 未设置 / 空串 / 纯空白 一律 fail，并说清后果是拒绝启动', () => {
+    for (const token of [undefined, null, '', ' ', '   ', '\t\n']) {
       const d = authTokenDiagnostic({ token });
-      assert.equal(d.safe.bindsPublic, resolveBindHost(token) === '0.0.0.0',
-        'doctor 说的「对外可达吗」必须等于 server 真正绑的地址');
-    });
-  }
+      assert.equal(d.status, 'fail', JSON.stringify(token));
+      assert.match(d.detail, /启动/, `${JSON.stringify(token)} 要说清 server 起不来`);
+      assert.match(d.detail, /setup/, '要给出行动出路');
+    }
+  });
 
-  test('纯空白 token：判 fail，且话里说清它绑的是 0.0.0.0 而非 127.0.0.1', () => {
+  test('★ 不再谈绑定地址——那是 BIND 项的职责，混进来就会在 BIND_MODE=loopback 时说反话', () => {
+    for (const token of [undefined, '   ', 'x'.repeat(64)]) {
+      const d = authTokenDiagnostic({ token });
+      assert.doesNotMatch(d.detail, /0\.0\.0\.0|127\.0\.0\.1/, JSON.stringify(token));
+    }
+  });
+
+  test('纯空白 token 单独点名（它 truthy，此前恰因此绑上 0.0.0.0，是最危险的一格）', () => {
     const d = authTokenDiagnostic({ token: '   ' });
     assert.equal(d.status, 'fail');
     assert.equal(d.safe.blank, true);
-    assert.equal(d.safe.bindsPublic, true);
-    assert.match(d.detail, /0\.0\.0\.0/);
-    assert.doesNotMatch(d.detail, /仅监听 127\.0\.0\.1/, '这正是修掉的那句反话');
+    assert.match(d.detail, /空白/);
     assert.doesNotMatch(JSON.stringify(d), /\s{3}/, '别把 token 本身回显出来');
   });
 
-  test('英文文案同样说 0.0.0.0，不说 binds 127.0.0.1 only', () => {
-    const d = authTokenDiagnostic({ token: '   ', lang: 'en' });
-    assert.match(d.detail, /0\.0\.0\.0/);
-    assert.doesNotMatch(d.detail, /binds 127\.0\.0\.1 only/);
+  test('弱 token（<8）仍是 warn，不是 fail——它能起来，只是该换个更长的', () => {
+    const d = authTokenDiagnostic({ token: 'abc' });
+    assert.equal(d.status, 'warn');
+    assert.match(d.detail, /3 /);
   });
 
-  test('未设置与空串仍然只绑本机（不能把这两格也误报成公网）', () => {
-    assert.equal(authTokenDiagnostic({ token: undefined }).safe.bindsPublic, false);
-    assert.equal(authTokenDiagnostic({ token: '' }).safe.bindsPublic, false);
-  });
-});
-
-// BIND_MODE 让「绑哪个地址」不再能从 token 推出来。文案里那几个写死的地址串必须跟着实际
-// 绑定走，否则会出现「doctor 说它绑 0.0.0.0 对外监听，而 BIND_MODE=loopback 明明只绑了本机」
-// 这种反话——正是上面那组断言当初要根除的形态，只是换了个触发条件。
-test.describe('authTokenDiagnostic 随 bindPlan 说话（BIND_MODE 可配之后）', () => {
-  test('★ 不传 bindPlan 时行为逐字节不变（向后兼容钉子：缺省值就是现状推导）', () => {
-    for (const token of [undefined, '', '   ', 'x'.repeat(64)]) {
-      const a = authTokenDiagnostic({ token });
-      assert.equal(a.safe.bindsPublic, resolveBindHost(token) === '0.0.0.0', JSON.stringify(token));
-    }
-    assert.match(authTokenDiagnostic({ token: '   ' }).detail, /0\.0\.0\.0/);
+  test('正常 token → ok，只报长度不回显值', () => {
+    const d = authTokenDiagnostic({ token: 'x'.repeat(64) });
+    assert.equal(d.status, 'ok');
+    assert.match(d.detail, /64/);
+    assert.doesNotMatch(JSON.stringify(d), /xxxx/);
   });
 
-  test('★ BIND_MODE=loopback + 纯空白 token → 不得再说「绑 0.0.0.0 对外监听」', () => {
-    const plan = resolveBindPlan({ authToken: '   ', bindMode: 'loopback' });
-    const d = authTokenDiagnostic({ token: '   ', bindPlan: plan });
-    assert.equal(d.safe.bindsPublic, false, '实际只绑本机，不该报成公网可达');
-    assert.doesNotMatch(d.detail, /0\.0\.0\.0/, '这个模式下 0.0.0.0 是反话');
-    assert.match(d.detail, /127\.0\.0\.1/);
-  });
-
-  test('BIND_MODE=custom + :: + 未设 token → 文案给出实际地址而不是写死的 127.0.0.1', () => {
-    const plan = resolveBindPlan({ authToken: 'x'.repeat(64), bindMode: 'custom', bindHost: '::' });
-    const d = authTokenDiagnostic({ token: '', bindPlan: plan });
-    assert.match(d.detail, /::/);
-  });
-
-  test('英文分支同样跟着 bindPlan 走', () => {
-    const plan = resolveBindPlan({ authToken: '   ', bindMode: 'loopback' });
-    const d = authTokenDiagnostic({ token: '   ', bindPlan: plan, lang: 'en' });
-    assert.doesNotMatch(d.detail, /0\.0\.0\.0/);
+  test('英文分支同样说清「拒绝启动」', () => {
+    const d = authTokenDiagnostic({ token: '', lang: 'en' });
+    assert.equal(d.status, 'fail');
+    assert.match(d.detail, /start|setup/i);
+    assert.doesNotMatch(d.detail, /[一-龥]/);
   });
 });
 
-// D22：监听面本身值得单独一项。AUTH_TOKEN 那项回答的是「门锁结不结实」，这项回答
-// 「门开在哪、还开不开得起来」——BIND_MODE 配错时 server 会拒绝启动，而这是 CLI doctor
-// 作为「启动前自检」最该提前告诉用户的一类问题。
 test.describe('bindDiagnostic（D22：监听地址自洽性）', () => {
   test('未声明 BIND_MODE + 有 token → ok，说明当前对外可达', () => {
     const d = bindDiagnostic({ bindPlan: resolveBindPlan({ authToken: 'x'.repeat(64) }) });
@@ -363,10 +342,11 @@ test.describe('bindDiagnostic（D22：监听地址自洽性）', () => {
     assert.match(d.detail, /0\.0\.0\.0/);
   });
 
-  test('未声明 + 无 token → ok（本地试用是合法用法，不是错误）', () => {
+  test('★ 无 token → fail（§1.9：没令牌就不启动，本机也一样）', () => {
     const d = bindDiagnostic({ bindPlan: resolveBindPlan({}) });
-    assert.equal(d.status, 'ok');
-    assert.match(d.detail, /127\.0\.0\.1/);
+    assert.equal(d.status, 'fail');
+    assert.equal(d.safe.refuseCode, 'token_required');
+    assert.match(d.detail, /启动/);
   });
 
   test('★ 配置会导致启动失败 → fail，并原样带出拒绝原因', () => {
@@ -403,7 +383,7 @@ test.describe('bindDiagnostic（D22：监听地址自洽性）', () => {
   test('中文分支给出可读原因（不只是 code）', () => {
     const d = bindDiagnostic({ bindPlan: resolveBindPlan({ bindMode: 'lan' }) });
     assert.match(d.detail, /AUTH_TOKEN/);
-    assert.doesNotMatch(d.detail, /lan_requires_token/, '给人看的话里不该出现内部 code');
+    assert.doesNotMatch(d.detail, /token_required/, '给人看的话里不该出现内部 code');
   });
 
   test('safe 只出结构化事实，不回显自定义地址之外的东西；英文分支完整', () => {

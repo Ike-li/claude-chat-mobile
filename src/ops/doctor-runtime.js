@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js';
 import { ALL_CONFIG_KEYS } from './config-file.js';
+import { resolveBindPlan } from '../shared/bind-host.js';
 import { ACCESS_PROFILES } from './env-schema.js';
 import { statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
@@ -166,12 +167,18 @@ export function runDoctor(ctx = {}) {
   // 此前这里是内联三元拼文案，纯空白 token 只说「已设置（长度 3）」，看不出它绑着公网。
   // bindPlan 由 server 侧算好传入（它拿得到实际生效的 BIND_MODE/BIND_HOST）；
   // 没传时 authTokenDiagnostic 内部按 token 推导 = 改造前的行为。
-  const tok = authTokenDiagnostic({ token: ctx.authToken, bindPlan: ctx.bindPlan || null, lang: ctx.lang });
+  const tok = authTokenDiagnostic({ token: ctx.authToken, lang: ctx.lang });
   checks.push({ id: 'AUTH_TOKEN', status: tok.status, detail: tok.detail, safe: tok.safe });
 
   // 监听面（D22 的手机端出口）：BIND_MODE 配错会让 server 拒绝启动，而这台正在跑的实例
   // 用的是旧配置——面板上看到 fail 就是「下次重启会起不来」的预警。
-  const bindChk = bindDiagnostic({ bindPlan: ctx.bindPlan || null, lang: ctx.lang });
+  // 缺省必须带上 ctx.authToken：否则 resolveBindPlan({}) 会因为「没 token」判 refuse，
+  // 把一个明明有 token 的实例报成「起不来」。server 侧总是传真实 bindPlan，
+  // 这条缺省只服务于不关心绑定的调用方（多为测试）。
+  const bindChk = bindDiagnostic({
+    bindPlan: ctx.bindPlan || resolveBindPlan({ authToken: ctx.authToken }),
+    lang: ctx.lang,
+  });
   checks.push({ id: 'BIND', status: bindChk.status, detail: bindChk.detail, safe: bindChk.safe });
 
   // 实时探测 + 与启动快照对比。此前这里只回放 ctx.claudeVersion（server 启动那一刻的字符串），

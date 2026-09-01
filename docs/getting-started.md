@@ -206,7 +206,7 @@ npm start
 - 可在手机打开的局域网 URL；
 - bridge 与待审批设备状态。
 
-设有 `AUTH_TOKEN` 时，健康检查也需要鉴权：
+健康检查同样需要鉴权（`AUTH_TOKEN` 是启动前提，server 一定有它）：
 
 ```bash
 curl -sS "http://127.0.0.1:3000/health?token=<AUTH_TOKEN>"

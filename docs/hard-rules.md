@@ -25,6 +25,10 @@
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
 | **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口 | 2026-08-15 机主确认；2026-08-17 机主确认 desktop 单独入口；[deployment.md](deployment.md) |
 | **可选功能由用户开关，不猜** | 桌面控制台、两个 bridge、`LOG_TERMINAL`、推送……默认全关，装机向导逐项问。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**（`--work-dir` 回落 `$HOME` = 整个家目录挂给远程入口）直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
+| **对模型通路零假设** | 不关心 claude CLI 接的是哪个上游——官方订阅 / API key / Bedrock / Vertex / 第三方网关，一视同仁。**禁止任何 `ANTHROPIC_BASE_URL` 匹配、厂商白名单或上游探测**；唯一允许据以调整行为的信号是 CLI 自报的能力位（如 `rate_limits_available`），因为那是 CLI 说的、不是我们猜的。`ANTHROPIC_*` 启动期剥除是为「配置文件不许压过 shell 的 provider 凭据」（终端等价），不是限制上游。官方 Remote Control 在网关 / API key 配置下整条不可用，而本项目全功能可用——**这正是它存在的主要理由之一** | 2026-09-01 机主确认；`src/agent/agent.js:107`「不猜 ANTHROPIC_BASE_URL」；`src/shared/child-env.js`；[getting-started.md](getting-started.md) |
+| **不新增持久化层** | 消息内容的真相源**永远**是 `~/.claude/projects/<dir>/<id>.jsonl`，CCM 一条都不存（`sessions.json` 只有索引与指针）。新增持久化必须**同时**满足：① claude 侧不存在该概念（设备信任 / 推送订阅 / 审计这类 web 特有物）② 不能从 transcript 重建。缓存类不受此限，但**必须可随时删除、损坏即当作没有**。唯一的反向例外：往 claude 的 jsonl 追加一行 `entrypoint-marker`，那是互通性所需（让 CLI `/resume` 看得到 web 建的会话），不是 CCM 的存储 | 2026-09-01 机主确认；`src/sessions/history.js`；`src/server/app.js` 的 entrypoint 写入；[architecture.md](architecture.md) 状态表 |
+| **鉴权是启动前提** | 没有 `AUTH_TOKEN` 就**不启动**，任何绑定模式都一样，`BIND_MODE=loopback` 也不例外——本机浏览器打开同样是 web 访问。纯空白 token 一并拒绝（它 truthy 但形同虚设）。**鉴权面 = 数据面与操作面**，不含静态壳：`index.html` 与前端 JS 必须登录前可取，那是登录门本身。本机 loopback 仍免**设备审批**（第二因子，见 §6），但不免 token | 2026-09-01 机主确认；`src/shared/bind-host.js` `resolveBindPlan` 的 `token_required`；`tests/unit/bind-host.test.mjs` |
+| **公网入口只提供两条** | 产品内建的只有 **Cloudflare**（Tunnel + Access）与**局域网直连**两条路。`cloudflared` 是**唯一受管的第三方进程**（有 unit 模板、install/uninstall、菜单栏主服务位）；VPN / 反向代理 / 其它隧道一律只在文档指路，产品不装、不起、不管理。`ACCESS_PROFILE` 是纯声明（只影响 doctor 的针对性检查，不改运行时）；鉴权侧由 `authStrategy` 保证核心不依赖任何具体 IdP。**这不是插件机制**——策略仍在仓内、仍受全部门禁约束（插件化已于 2026-08-14 否决） | 2026-09-01 机主确认；`src/auth/auth-strategy.js`；`src/ops/service-units.js` 的 `tunnel`；[deployment.md](deployment.md) |
 
 ---
 
@@ -224,9 +228,13 @@ sessionId 不独等 `init`（`_claimSessionIdEarly`）· 看门狗豁免本地�
 
 详见 [架构说明 · 鉴权与范围边界](architecture.md#鉴权与范围边界)（完整分层图与各层互不替代的边界）。摘要：
 
-鉴权（AUTH_TOKEN / CF Access）→ 设备信任 → 工作区范围门 → CLI permissions.allow + Web 权限档 → Agent 审批 ‖ 文件编辑器直写（独立范围/大小/哈希/审计）。
+**AUTH_TOKEN（必备，无它不启动）** → 公网 IdP 策略（可选，当前唯一实现 CF Access） → 设备信任 → 工作区范围门 → CLI permissions.allow + Web 权限档 → Agent 审批 ‖ 文件编辑器直写（独立范围/大小/哈希/审计）。
 
-Fail-closed 要点：路径不可达、审批指纹不符、审批/提问 TTL 到期、重启后 pending 审批。
+第一层是**前提而非选项**（§1「鉴权是启动前提」）：没有 token 连 server 都起不来，所以下游各层永远建立在「对方已持令牌」之上。第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `src/auth/auth-strategy.js` 的接口形状；CF Access 是当前唯一实现，换 IdP 不该动核心。
+
+第三层（设备信任）对**真·本机直连**放行——peer 是 loopback 且 Host 也是 loopback 名。那是第二因子的豁免，不是 token 的豁免。
+
+Fail-closed 要点：无 token 拒绝启动、路径不可达、审批指纹不符、审批/提问 TTL 到期、重启后 pending 审批。
 
 ---
 

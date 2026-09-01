@@ -74,7 +74,8 @@ if (process.argv.includes('--unit')) {
 // ───────────────────────────── e2e ─────────────────────────────
 const SECRET = 'BANANA-7391';
 const smokeUrl = process.env.CCM_SMOKE_URL || `http://127.0.0.1:${process.env.PORT || 3100}`;
-const socket = io(smokeUrl, { reconnection: false, timeout: 5000 });
+// §1.9 起 server 必须有 AUTH_TOKEN，握手也就必须带上（runner 会把同一个值注入 env）。
+const socket = io(smokeUrl, { auth: { token: process.env.AUTH_TOKEN || '' }, reconnection: false, timeout: 5000 });
 let acc = '';                 // 累积 assistant 文本
 let userMsg = null;           // user_message 回执 payload
 const timer = setTimeout(() => { check('e2e-超时未完成', false, '15s 内无 result'); cleanup(); }, 15000);

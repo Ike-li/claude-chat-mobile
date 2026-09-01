@@ -10,7 +10,7 @@ const results = [];
 const check = (name, ok, detail = '') =>
   results.push({ name, ok }) && console.log(`${ok ? '✅' : '❌'} ${name}${detail ? ' — ' + detail : ''}`);
 
-const socket = io(URL, { auth: { token: '' } });
+const socket = io(URL, { auth: { token: process.env.AUTH_TOKEN || '' } });
 const events = [];
 socket.on('agent:event', ev => {
   events.push(ev);
@@ -27,7 +27,8 @@ const waitEvent = (pred, ms) => new Promise((resolve, reject) => {
 });
 const mark = () => events.length;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const health = async () => { try { return await (await fetch(`${URL}/health`)).json(); } catch { return {}; } };
+const HEALTH_URL = `${URL}/health?token=${encodeURIComponent(process.env.AUTH_TOKEN || '')}`;   // §1.9：/health 要鉴权
+const health = async () => { try { return await (await fetch(HEALTH_URL)).json(); } catch { return {}; } };
 
 try {
   await new Promise((res, rej) => { socket.on('connect', res); socket.on('connect_error', rej); });
