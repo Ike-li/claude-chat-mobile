@@ -3,6 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { createServerSpawner, waitForCondition } from './_spawn-server.mjs';
+import { SPAWN_ENV_BLOCKLIST } from '../helpers/spawn-env.mjs';
 
 test('readiness 超时：先终止已 spawn 的 server，再抛启动错误', async () => {
   const child = new EventEmitter();
@@ -204,4 +205,61 @@ test('reserveFreePort 真的给出可立即绑定的空闲端口（不是占着�
       return true;
     },
   );
+});
+
+// 同 LOG_TERMINAL 那条的动机，但覆盖面从「一个键」扩到「一批生产键」。
+// 集成测用 {...process.env} 继承调用者环境，而调用者未必是干净 shell：2026-09-01 实测，从 CCM web 端
+// 启动的 Claude Code 会话继承了生产 server 进程的整份环境（指纹 CCM_HOOKS_ORIGIN=web-sdk），于是
+// CF_ACCESS_* 会让被测 server 真的启用 Access 并对外拉生产 team 的 JWKS，VAPID_* 则把推送密钥
+// 一并带进测试进程。baseEnv 注入的是一个构造出来的「脏」环境——不能依赖宿主 env，否则在干净机器上恒绿。
+test('spawn 摘掉继承来的生产键（CF_ACCESS_*/VAPID_* 等），但保留无关键', async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => true;
+  let spawnOptions;
+
+  const spawnServer = createServerSpawner({
+    baseEnv: {
+      PATH: '/usr/bin', HOME: '/home/someone',          // 无关键：必须原样保留
+      CF_ACCESS_HOSTNAME: 'ccm.example.com', CF_ACCESS_TEAM: 'prod-team', CF_ACCESS_AUD: 'aud',
+      VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv', VAPID_SUBJECT: 'mailto:a@b.c',
+      PUBLIC_URL: 'https://prod.example.com', NTFY_URL: 'https://ntfy.sh', NTFY_TOPIC: 't',
+      WORK_DIRS_FILE: '/etc/ccm/workdirs.json',
+      CCM_HOOKS_ORIGIN: 'web-sdk', CCM_STATUSLINE_ORIGIN: 'web-sdk',
+    },
+    spawnProcess: (_command, _args, options) => { spawnOptions = options; return child; },
+    requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: spawnOptions.env.CCM_BUILD_NONCE }),
+    sleep: async () => {},
+    maxAttempts: 1,
+  });
+
+  await spawnServer({ AUTH_TOKEN: 't', WORK_DIR: '/tmp/ccm-test', CCM_DATA_DIR: '/tmp/ccm-test' });
+
+  for (const key of SPAWN_ENV_BLOCKLIST) {
+    assert.equal(key in spawnOptions.env, false, `${key} 不该传给被测 server`);
+  }
+  assert.equal(spawnOptions.env.PATH, '/usr/bin', '无关键必须保留');
+  assert.equal(spawnOptions.env.HOME, '/home/someone');
+  assert.equal(spawnOptions.env.WORK_DIR, '/tmp/ccm-test', 'envOverrides 照常生效');
+});
+
+test('调用方显式传入的键不受 blocklist 影响（overrides 排在 strip 之后）', async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.signalCode = null;
+  child.kill = () => true;
+  let spawnOptions;
+
+  const spawnServer = createServerSpawner({
+    baseEnv: { CF_ACCESS_TEAM: 'inherited-prod-team' },
+    spawnProcess: (_command, _args, options) => { spawnOptions = options; return child; },
+    requestHealth: async () => JSON.stringify({ status: 'ok', buildNonce: spawnOptions.env.CCM_BUILD_NONCE }),
+    sleep: async () => {},
+    maxAttempts: 1,
+  });
+
+  // cf-access-gate 那批用例要显式构造 CF 场景——摘的是「继承来的」，不是「显式要的」。
+  await spawnServer({ CF_ACCESS_TEAM: 'test-team', AUTH_TOKEN: 't', WORK_DIR: '/tmp/x', CCM_DATA_DIR: '/tmp/x' });
+  assert.equal(spawnOptions.env.CF_ACCESS_TEAM, 'test-team');
 });

@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
+import { stripInheritedEnv } from '../helpers/spawn-env.mjs';
 
 // 端口选择：向 OS 要一个当前空闲的端口（listen(0) 拿到后立刻释放），而不是从 30000-40000 里随机抽签。
 //
@@ -53,6 +54,7 @@ export function createServerSpawner({
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms)),
   maxAttempts = 40,
   pickPort = reserveFreePort,
+  baseEnv = process.env,   // 注入点仅供本 helper 的回归测试构造「脏」环境；正常调用永远是 process.env
 } = {}) {
   return async function spawnServer(envOverrides = {}) {
     // 调用方显式传 PORT 时一律照用（如 WS-6 要求「重启后端口不变」），只有不传时才向 OS 要空闲端口。
@@ -60,7 +62,10 @@ export function createServerSpawner({
     const buildNonce = `inttest-${randomUUID()}`;
     const proc = spawnProcess('node', ['server.js'], {
       env: {
-        ...process.env,
+        // 摘掉继承来的生产键（CF_ACCESS_*/VAPID_* 等，见 tests/helpers/spawn-env.mjs）。
+        // 排在 envOverrides 之前：摘的是「继承来的」，不是「调用方显式要的」——cf-access-gate
+        // 那批用例正要自己构造 CF 场景。
+        ...stripInheritedEnv(baseEnv),
         DEV_MODE: '0', // 同 server.test.mjs：隔离机主 .env 里的 DEV_MODE，防 dev:restart 误触发
         ...envOverrides,
         PORT: String(port),        // 覆盖 envOverrides 里可能的 PORT，确保和上面算出的 port 一致

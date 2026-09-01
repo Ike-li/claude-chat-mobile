@@ -50,11 +50,11 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Runtime entrypoint | 1 |
 | Smoke test | 13 |
 | Test configuration | 4 |
-| Test support | 5 |
-| Unit test | 167 |
+| Test support | 6 |
+| Unit test | 168 |
 | Vendored asset | 21 |
 
-Total classified files: **476**.
+Total classified files: **478**.
 
 ## Complete file inventory
 
@@ -332,6 +332,7 @@ Total classified files: **476**.
 | `tests/helpers/agent-unit.mjs` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/helpers/p0-ui.ts` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/helpers/playwright.ts` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
+| `tests/helpers/spawn-env.mjs` | Test support | Shared test helper | Imported by a test command | Authored and reviewed manually | keep |
 | `tests/integration/_spawn-server.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/_spawn-server.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
 | `tests/integration/aborted-state.test.mjs` | Integration test | Isolated server or protocol integration test | `npm run test:integration` | Authored and reviewed manually | keep |
@@ -522,6 +523,7 @@ Total classified files: **476**.
 | `tests/unit/single-source-of-truth.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/smoke-runner.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/source-layout.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
+| `tests/unit/spawn-env.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/statusline-bridge-runner.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/statusline-bridge-setup.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
 | `tests/unit/statusline.test.mjs` | Unit test | Zero-token Node behavior test | `npm run test:unit` | Authored and reviewed manually | keep |
