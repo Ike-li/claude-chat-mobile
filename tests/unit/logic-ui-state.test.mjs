@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -907,5 +907,43 @@ test.describe('#7：合成键不得泄漏到界面文本', () => {
   test('对照：真实 taskId 仍可作回落展示（防修过头）', () => {
     const label = String(formatBgTaskRowLabel({ taskType: 'local_agent', message: '', taskId: 'w60tplm3a' }));
     assert.ok(label.length > 0);
+  });
+});
+
+test.describe('isLanOrLocalHostname：登录门路由的「本地/隧道内」判定', () => {
+  test('Tailscale CGNAT 段 100.64.0.0/10 → true（此前被判成公网，token 失效后无门可弹）', () => {
+    assert.equal(isLanOrLocalHostname('100.64.0.1'), true);
+    assert.equal(isLanOrLocalHostname('100.100.7.53'), true);
+    assert.equal(isLanOrLocalHostname('100.127.255.254'), true); // /10 上界
+  });
+  test('100/8 里 CGNAT 段之外的地址仍是公网（不放整个 100/8）', () => {
+    assert.equal(isLanOrLocalHostname('100.63.255.255'), false); // /10 下界外
+    assert.equal(isLanOrLocalHostname('100.128.0.1'), false);    // /10 上界外
+  });
+  test('公网 IP 与域名 → false', () => {
+    assert.equal(isLanOrLocalHostname('8.8.8.8'), false);
+    assert.equal(isLanOrLocalHostname('chat.example.com'), false);
+  });
+  test('既有判定回归：RFC1918 / loopback / .local / link-local 仍为 true', () => {
+    for (const h of ['10.0.0.2', '192.168.1.4', '172.16.0.1', '172.31.9.9', '169.254.1.1', 'localhost', '127.0.0.1', '::1', 'mbp.local']) {
+      assert.equal(isLanOrLocalHostname(h), true, h);
+    }
+    assert.equal(isLanOrLocalHostname('172.32.0.1'), false); // 172.16/12 上界外，防正则写宽
+  });
+});
+
+test.describe('authFailurePath：unauthorized 时弹 token 门还是走 Access 重登', () => {
+  test('CF 未启用（flag="0"）→ token-gate（bug 回归钉子：注入契约是 "1"|"0"，"0" 真值判断恒 true 曾致死路）', () => {
+    assert.equal(authFailurePath({ lanOrLocal: false, cfAccessFlag: '0' }), 'token-gate');
+  });
+  test('公网 + CF 启用（flag="1"）→ access-relogin（公网无 token 可输）', () => {
+    assert.equal(authFailurePath({ lanOrLocal: false, cfAccessFlag: '1' }), 'access-relogin');
+  });
+  test('本地/隧道内压过 CF 启用 → token-gate（LAN 直连不经 Access）', () => {
+    assert.equal(authFailurePath({ lanOrLocal: true, cfAccessFlag: '1' }), 'token-gate');
+  });
+  test('dataset 缺失（undefined）→ token-gate（失败方向必须是有门可弹）', () => {
+    assert.equal(authFailurePath({ lanOrLocal: false, cfAccessFlag: undefined }), 'token-gate');
+    assert.equal(authFailurePath(), 'token-gate');
   });
 });

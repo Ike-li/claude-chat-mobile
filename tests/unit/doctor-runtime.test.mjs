@@ -57,11 +57,13 @@ test.describe('runDoctor：脱敏 + 结构 + 就绪度', () => {
       rmSync(home, { recursive: true, force: true });
     }
   });
-  test('report 含 13 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS / ENV_OVERRIDE / FILE_EDIT）', () => {
+  test('report 含 15 项 checks + readiness（含 DEVICE_GATE / MODEL_SETTINGS / ENV_OVERRIDE / FILE_EDIT / ACCESS_PROFILE / BIND）', () => {
     // 注入探测：不注入的话 runDoctor 会真的 which + 跑一次 claude --version，
     // 让这条断言的结果取决于跑测试的机器上装没装 CLI。
     const rep = runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE });
-    assert.equal(rep.checks.length, 13);
+    assert.equal(rep.checks.length, 15);
+    assert.ok(rep.checks.some(c => c.id === 'BIND'));
+    assert.ok(rep.checks.some(c => c.id === 'ACCESS_PROFILE'));
     assert.ok(rep.checks.some(c => c.id === 'DEVICE_GATE'));
     assert.ok(rep.checks.some(c => c.id === 'MODEL_SETTINGS'));
     assert.ok(rep.checks.some(c => c.id === 'ENV_OVERRIDE'));
@@ -332,5 +334,39 @@ test.describe('FILE_EDIT：直写通道 × 公网迹象（web 体检）', () => 
     assert.equal(c.status, 'warn');
     assert.equal(JSON.stringify(c).includes('secret-host'), false);
     assert.equal(c.safe.publicSignal, true);
+  });
+
+  test('声明 vpn 时 PUBLIC_URL 不再单独触发 warn（ctx.accessProfile 要真的接进判定）', () => {
+    const c = feCheck({ cfEnabled: false, fileEditOff: false, publicUrl: 'http://100.64.0.5:3000', accessProfile: 'vpn' });
+    assert.equal(c.status, 'ok');
+  });
+});
+
+// ── ACCESS_PROFILE：D21 的手机端出口 ────────────────────────────────────────
+// 方案声明住在 web 配置面板里，切换后的自洽核对同样该在手机上看得到。
+// 判定与 scripts/doctor.js D21 共用 accessProfileDiagnostic；cfConfigured 用 ctx.cfEnabled
+// （auth 层权威判定）。safe 只出布尔/枚举字面量，绝不回显 PUBLIC_URL 值。
+test.describe('ACCESS_PROFILE：按声明方案的针对性检查（web 体检）', () => {
+  const apCheck = (ctx) => runDoctor({ home: '/nonexistent-ccm', workDirs: [], probeClaudeBin: () => STUB_PROBE, ...ctx })
+    .checks.find(c => c.id === 'ACCESS_PROFILE');
+
+  test('未声明 → ok（既有部署零新告警）', () => {
+    const c = apCheck({});
+    assert.ok(c, '体检里应有 ACCESS_PROFILE 一项');
+    assert.equal(c.status, 'ok');
+    assert.equal(c.safe.declared, false);
+  });
+
+  test('声明 vpn 但 CF 层实际开着 → warn（矛盾要在手机上看得到）', () => {
+    const c = apCheck({ accessProfile: 'vpn', cfEnabled: true });
+    assert.equal(c.status, 'warn');
+    assert.match(c.detail, /CF_ACCESS/);
+  });
+
+  test('★ safe 只出布尔/枚举，报告 JSON 不含传入的 URL 值', () => {
+    const c = apCheck({ accessProfile: 'lan', publicUrl: 'https://secret-host.example.com' });
+    assert.equal(JSON.stringify(c).includes('secret-host'), false);
+    assert.equal(c.safe.profile, 'lan');
+    assert.equal(typeof c.safe.publicUrlSet, 'boolean');
   });
 });

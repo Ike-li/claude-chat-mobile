@@ -554,3 +554,114 @@ test.describe('setup 向导 —— 文件编辑器直写要问一句（R45）', 
     assert.match(MESSAGES.en.fileEditPrompt, /approval/i);
   });
 });
+
+// ── 公网访问方案（ACCESS_PROFILE）进配置向导 ────────────────────────────────
+// 数字 1-4 单选、回车 = 不声明（不写键，与 FILE_EDIT「只有显式选择才写」同一纪律）；
+// 非法输入重问、问满三次回落不声明（EOF 防死循环，同 promptWorkDir 的教训——失败方向是「不写」）。
+// 它是配置项，必须在 writeFile 之前问；非交互 --access-profile 非法值一律 refuse 不猜。
+test.describe('setup 向导 —— 公网访问方案问一步（ACCESS_PROFILE）', () => {
+  test('buildConfigContent：给了 accessProfile 才写键（enum 落盘为字符串），缺省不写', () => {
+    const vpn = JSON.parse(buildConfigContent({ authToken: 'x', workDir: '/tmp/w', accessProfile: 'vpn' }));
+    assert.equal(vpn.ACCESS_PROFILE, 'vpn');
+    const def = JSON.parse(buildConfigContent({ authToken: 'x', workDir: '/tmp/w' }));
+    assert.equal(Object.hasOwn(def, 'ACCESS_PROFILE'), false, '未声明由 schema 语义负责，配置文件不写空键');
+  });
+
+  const seqDeps = (answer) => {
+    const seq = [];
+    let written;
+    return {
+      seq,
+      written: () => written,
+      deps: {
+        createRl: () => ({
+          question: async (q) => {
+            if (/怎么从手机访问/.test(q)) seq.push('ask-access-profile');
+            return answer(q);
+          },
+          close: () => {},
+        }),
+        writeFile: (args) => { seq.push('write'); written = args; },
+        buildDesktop: () => {},
+        installHooks: () => {},
+        platform: 'linux',
+      },
+    };
+  };
+  const PLAN = { plan: { workDir: '/tmp/ccm-work', hooks: 'off', desktop: 'off' }, outPath: '/tmp/ccm.config.json', existingConfig: undefined, t: MESSAGES.zh };
+
+  test('★ 答 3 → 写入 vpn，且问题必须在写文件之前（配置项不是装完再问的安装动作）', async () => {
+    const { seq, written, deps } = seqDeps((q) => (/怎么从手机访问/.test(q) ? '3' : ''));
+    await runInteractive(PLAN, deps);
+    assert.ok(seq.includes('ask-access-profile'), '必须问');
+    assert.ok(seq.indexOf('ask-access-profile') < seq.indexOf('write'), '问晚了答案就进不了配置文件');
+    assert.equal(written().accessProfile, 'vpn');
+  });
+
+  test('回车 → 不声明（不写键）', async () => {
+    const { written, deps } = seqDeps(() => '');
+    await runInteractive(PLAN, deps);
+    assert.equal(written().accessProfile, undefined);
+  });
+
+  test('非法输入重问：先答 9 再答 4 → reverse-proxy', async () => {
+    let n = 0;
+    const { written, deps } = seqDeps((q) => (/怎么从手机访问/.test(q) ? (n++ === 0 ? '9' : '4') : ''));
+    await runInteractive(PLAN, deps);
+    assert.equal(written().accessProfile, 'reverse-proxy');
+  });
+
+  test('连续三次非法 → 回落不声明（EOF/乱敲都不能死循环，也绝不猜一个方案）', async () => {
+    const { seq, written, deps } = seqDeps((q) => (/怎么从手机访问/.test(q) ? 'x' : ''));
+    await runInteractive(PLAN, deps);
+    assert.equal(seq.filter((s) => s === 'ask-access-profile').length, 3);
+    assert.equal(written().accessProfile, undefined);
+  });
+
+  test('命令行已给（--access-profile=lan）则交互里不再问', async () => {
+    const { seq, written, deps } = seqDeps(() => '');
+    await runInteractive({ ...PLAN, plan: { ...PLAN.plan, accessProfile: 'lan' } }, deps);
+    assert.equal(seq.includes('ask-access-profile'), false);
+    assert.equal(written().accessProfile, 'lan');
+  });
+
+  test('resolveSetupPlan：非法值一律 refuse（交互与 --yes 两态都拒，不猜意图）', () => {
+    const bad = parseSetupArgs(['--access-profile', 'zerotier']);
+    assert.equal(resolveSetupPlan({ args: bad }).refuse?.code, 'invalid_access_profile');
+    const badYes = parseSetupArgs(['--yes', '--work-dir', '/tmp/x', '--access-profile', 'zerotier']);
+    assert.equal(resolveSetupPlan({ args: badYes }).refuse?.code, 'invalid_access_profile');
+  });
+
+  test('resolveSetupPlan：--yes 带合法值透传，缺省 undefined（纯配置项不新增必填）', () => {
+    const ok = parseSetupArgs(['--yes', '--work-dir', '/tmp/x', '--access-profile', 'vpn']);
+    assert.equal(resolveSetupPlan({ args: ok }).accessProfile, 'vpn');
+    const none = parseSetupArgs(['--yes', '--work-dir', '/tmp/x']);
+    assert.equal(resolveSetupPlan({ args: none }).accessProfile, undefined);
+  });
+
+  test('runNonInteractive：plan.accessProfile 透传进 writeFile', () => {
+    let written;
+    runNonInteractive(
+      { plan: { workDir: '/tmp/x', accessProfile: 'vpn', hooks: 'off', desktop: 'off' }, outPath: '/tmp/c.json', existingConfig: undefined, t: MESSAGES.zh },
+      { writeFile: (args) => { written = args; }, buildDesktop: () => {}, installHooks: () => {} },
+    );
+    assert.equal(written.accessProfile, 'vpn');
+  });
+
+  test('双语齐全：问询举例到具体工具；四个方案的下一步指引都在，vpn/reverse-proxy 指路文档与 agent prompt', () => {
+    assert.match(MESSAGES.zh.accessPrompt, /Tailscale/);
+    assert.match(MESSAGES.zh.accessPrompt, /WireGuard/);
+    assert.match(MESSAGES.en.accessPrompt, /Tailscale/);
+    for (const p of ['cloudflare', 'vpn', 'reverse-proxy', 'lan']) {
+      assert.equal(typeof MESSAGES.zh.accessNotes[p], 'string', `zh accessNotes.${p}`);
+      assert.equal(typeof MESSAGES.en.accessNotes[p], 'string', `en accessNotes.${p}`);
+    }
+    for (const p of ['vpn', 'reverse-proxy']) {
+      assert.match(MESSAGES.zh.accessNotes[p], /deployment/);
+      assert.match(MESSAGES.zh.accessNotes[p], /agent/i);
+      assert.match(MESSAGES.en.accessNotes[p], /deployment/);
+    }
+    assert.equal(typeof MESSAGES.zh.refuse.invalid_access_profile, 'function');
+    assert.equal(typeof MESSAGES.en.refuse.invalid_access_profile, 'function');
+  });
+});

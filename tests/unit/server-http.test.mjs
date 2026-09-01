@@ -12,6 +12,13 @@ import {
   tokenMatches,
   registerOperationalRoutes,
 } from '../../src/server/http.js';
+import { createCfAccessStrategy } from '../../src/auth/auth-strategy.js';
+
+// 鉴权策略桩：刻意复用**真实的** createCfAccessStrategy 而不手写一个对象字面量 ——
+// 「从哪个头取 JWT」是 Cloudflare 侧的外部契约，手写桩会把它复制一份，两边就能各自漂移
+// 而测试照样绿（本仓在 git fixture 上栽过同型的跟头）。这里只注入验签与 Host 归属两个决策。
+const strategyStub = ({ ownsHost = () => false, verify = async () => {}, isEnabled = () => false } = {}) =>
+  createCfAccessStrategy({ init: () => true, isEnabled, ownsHost, verify, env: {} });
 
 // 前端拆到 public/js/app/* 后，若只给 logic.js 打 ?v=，connection-sync 等子模块会吃浏览器缓存——
 // 手机顶栏「延迟」改文案却不生效就是这个坑。与 e2e mock transport 对齐：所有相对 import + css 都戳版本。
@@ -83,8 +90,10 @@ test('createHttpAuth uses Access JWT for public hosts and token fallback for loc
   const verified = [];
   const auth = createHttpAuth({
     authToken: 'secret',
-    isPublicHost: host => host === 'public.example',
-    verifyAccessJwt: async token => verified.push(token),
+    strategy: strategyStub({
+      ownsHost: host => host === 'public.example',
+      verify: async token => verified.push(token),
+    }),
   });
 
   const run = async req => {
@@ -113,8 +122,7 @@ test('createHttpAuth rateLimit：连续失败锁定 → 429（AUTH-001）', asyn
   const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
   const auth = createHttpAuth({
     authToken: 'secret',
-    isPublicHost: () => false,
-    verifyAccessJwt: async () => {},
+    strategy: strategyStub(),
     rateLimit: {
       active: true,
       sourceKey: () => 'ip:9.9.9.9',
@@ -163,8 +171,7 @@ test('createHttpAuth：下游 handler 抛错不计鉴权失败、不二次写响
   const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
   const auth = createHttpAuth({
     authToken: 'secret',
-    isPublicHost: () => false,
-    verifyAccessJwt: async () => {},
+    strategy: strategyStub(),
     rateLimit: {
       active: true,
       sourceKey: () => 'ip:7.7.7.7',
@@ -198,8 +205,10 @@ test('createHttpAuth rateLimit：active(req) 公网 Host 无 token 仍计入失�
   const { onAuthResult } = await import('../../src/auth/rate-limiter.js');
   const auth = createHttpAuth({
     authToken: '', // 无 AUTH_TOKEN
-    isPublicHost: (h) => h === 'app.example.com',
-    verifyAccessJwt: async () => { throw new Error('bad jwt'); },
+    strategy: strategyStub({
+      ownsHost: (h) => h === 'app.example.com',
+      verify: async () => { throw new Error('bad jwt'); },
+    }),
     rateLimit: {
       active: (req) => !!(req?.headers?.host === 'app.example.com'),
       sourceKey: () => 'ip:cf',
@@ -329,7 +338,7 @@ test.describe('configureHttpShell 的 /js/** 子模块路由', () => {
 
     const routes = new Map();
     const app = { use: () => {}, get: (p, ...h) => routes.set(String(p), h) };
-    configureHttpShell({ app, projectRoot: root, isAccessEnabled: () => false, ...options });
+    configureHttpShell({ app, projectRoot: root, strategy: strategyStub(), ...options });
 
     const handlers = routes.get(String(/^\/js\/.+\.js$/i));
     assert.ok(handlers, '未注册 /js/** 子模块路由');

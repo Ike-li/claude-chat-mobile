@@ -6,7 +6,8 @@ import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { isOwnerOnly, resolveExecutableViaPath } from '../files/file-security.js';
 import { ALL_CONFIG_KEYS } from './config-file.js';
-import { statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic } from './doctor-checks.js';
+import { ACCESS_PROFILES } from './env-schema.js';
+import { statuslineConfigDiagnostic, authTokenDiagnostic, claudeBinDiagnostic, summarizeDangerous, computeReadiness, classifyDeviceGateTopology, modelSettingsConflictDiagnostic, envOverrideDiagnostic, fileEditExposureDiagnostic, accessProfileDiagnostic, bindDiagnostic } from './doctor-checks.js';
 import { claudeHome, claudeSettingsPath } from '../shared/claude-home.js';
 
 // claude CLI 的实时探测。**有副作用**（which + 跑一次 --version），所以不在 doctor-checks.js 里
@@ -163,8 +164,15 @@ export function runDoctor(ctx = {}) {
 
   // 分类与措辞都走共用的 authTokenDiagnostic —— 与 scripts/doctor.js 同一份判定。
   // 此前这里是内联三元拼文案，纯空白 token 只说「已设置（长度 3）」，看不出它绑着公网。
-  const tok = authTokenDiagnostic({ token: ctx.authToken, lang: ctx.lang });
+  // bindPlan 由 server 侧算好传入（它拿得到实际生效的 BIND_MODE/BIND_HOST）；
+  // 没传时 authTokenDiagnostic 内部按 token 推导 = 改造前的行为。
+  const tok = authTokenDiagnostic({ token: ctx.authToken, bindPlan: ctx.bindPlan || null, lang: ctx.lang });
   checks.push({ id: 'AUTH_TOKEN', status: tok.status, detail: tok.detail, safe: tok.safe });
+
+  // 监听面（D22 的手机端出口）：BIND_MODE 配错会让 server 拒绝启动，而这台正在跑的实例
+  // 用的是旧配置——面板上看到 fail 就是「下次重启会起不来」的预警。
+  const bindChk = bindDiagnostic({ bindPlan: ctx.bindPlan || null, lang: ctx.lang });
+  checks.push({ id: 'BIND', status: bindChk.status, detail: bindChk.detail, safe: bindChk.safe });
 
   // 实时探测 + 与启动快照对比。此前这里只回放 ctx.claudeVersion（server 启动那一刻的字符串），
   // 于是 claude 被升级/卸载/移走之后，web 体检照样绿到下次重启为止。
@@ -192,6 +200,31 @@ export function runDoctor(ctx = {}) {
 
   checks.push({ id: 'CF_ACCESS', status: ctx.cfEnabled ? 'ok' : 'warn', detail: ctx.cfEnabled ? '已启用公网 2FA' : '未启用（回退纯 AUTH_TOKEN）', safe: { enabled: !!ctx.cfEnabled, audSet: !!ctx.cfAudSet } }); // AUD 仅布尔
 
+  // D21 的手机端出口：方案声明（ACCESS_PROFILE）就住在 web 配置面板里，切换后的自洽核对
+  // 也该在手机上看得到。判定与 scripts/doctor.js D21 共用 accessProfileDiagnostic；
+  // cfConfigured 用 ctx.cfEnabled（auth 层权威判定，比 CLI 侧「三键齐设」更准）。
+  // safe 只出布尔/枚举字面量：publicUrl 的值绝不进报告（会被贴进 issue/聊天）。
+  const apProfile = String(ctx.accessProfile || '').trim();
+  const ap = accessProfileDiagnostic({
+    profile: apProfile,
+    cfConfigured: !!ctx.cfEnabled,
+    publicUrl: ctx.publicUrl || '',
+    authTokenSet: tok.safe.isSet && tok.status !== 'fail',
+    notifyConfigured: !!ctx.notifyConfigured,
+    lang: ctx.lang,
+  });
+  checks.push({
+    id: 'ACCESS_PROFILE', status: ap.status, detail: ap.detail,
+    safe: {
+      declared: apProfile !== '',
+      // 未知值归一成 'unknown'：safe 只出枚举字面量，用户手写的任意串不进结构化字段（detail 里已点名）。
+      profile: !apProfile || ACCESS_PROFILES.includes(apProfile) ? apProfile : 'unknown',
+      cfConfigured: !!ctx.cfEnabled,
+      publicUrlSet: !!String(ctx.publicUrl || '').trim(),
+      notifyConfigured: !!ctx.notifyConfigured,
+    },
+  });
+
   // token 公网 + 无 CF Access 时，localhost 反代/隧道会跳过设备指纹门——显式 warn，不改运行时默认。
   // 纯空白 token 现在判 fail（绑了公网却不设防），于是这里也正确地不再把它当成一道认证门 ——
   // 此前它是 warn/isSet=true，DEVICE_GATE 会以为公网侧有 AUTH_TOKEN 保护着。
@@ -202,7 +235,7 @@ export function runDoctor(ctx = {}) {
   // 开关就住在这个配置面板里——web 体检的受众与该提示的受众重合度比装机时跑一次的 CLI doctor 高。
   // 判定与 scripts/doctor.js D20 同一份纯函数；公网信号 = CF Access 实际启用（ctx.cfEnabled，
   // auth 层权威判定，比 CLI 侧「三键齐设」更准）或 PUBLIC_URL 已声明。safe 不回显 URL 值，只出布尔。
-  const fe = fileEditExposureDiagnostic({ fileEditOff: !!ctx.fileEditOff, cfConfigured: !!ctx.cfEnabled, publicUrl: ctx.publicUrl || '', lang: ctx.lang });
+  const fe = fileEditExposureDiagnostic({ fileEditOff: !!ctx.fileEditOff, cfConfigured: !!ctx.cfEnabled, publicUrl: ctx.publicUrl || '', accessProfile: ctx.accessProfile || '', lang: ctx.lang });
   checks.push({
     id: 'FILE_EDIT', status: fe.status, detail: fe.detail,
     safe: { off: !!ctx.fileEditOff, publicSignal: !!ctx.cfEnabled || !!String(ctx.publicUrl || '').trim() },

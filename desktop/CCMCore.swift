@@ -340,6 +340,14 @@ struct ToggleLiterals: Decodable {
     let off: String?
 }
 
+// enum kind 的候选项（ACCESS_PROFILE 等）。桌面配置窗口暂按文本框渲染（写入有
+// validateEnvChanges 兜底，非法值进不去）；声明字段是为了不被 Decodable 静默丢弃——
+// tests/unit/desktop-schema-contract.test.mjs 会抓 schema 下发但 Swift 未声明的字段。
+struct EnumOption: Decodable {
+    let value: String?
+    let label: LocalizedText?
+}
+
 struct ConfigItem: Decodable {
     let key: String?
     let kind: String?
@@ -350,6 +358,7 @@ struct ConfigItem: Decodable {
     let masked: MaskedSecret?
     let value: String?
     let values: ToggleLiterals?
+    let options: [EnumOption]?
     // `default` 是 Swift 关键字，必须反引号转义。漏声明它不会报错，只会静默解码成 nil ——
     // PORT 的「默认 3000」这类提示在窗口里凭空消失，而没有任何迹象说明为什么。
     // tests/unit/desktop-schema-contract.test.mjs 就是抓这类漏字段的。

@@ -12,7 +12,7 @@ import { createConnection } from 'node:net';
 import { parse as dotenvParse } from 'dotenv';
 import { maskToken } from '../shared/sanitizer.js';
 import { setCapped } from '../shared/bounded-map.js';
-import { resolveBindHost } from '../shared/bind-host.js';
+import { resolveBindPlan } from '../shared/bind-host.js';
 import { writeOwnerOnlyFile, rejectableSymlinkComponent, resolveExecutableViaPath } from '../files/file-security.js';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -56,7 +56,7 @@ import {
   normalizeSlashCommands,
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
-import { initCfAccess, isAccessEnabled, isPublicHost, verifyAccessJwt } from '../auth/cf-access.js';
+import { createCfAccessStrategy } from '../auth/auth-strategy.js';
 import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
@@ -108,8 +108,13 @@ import { createMirrorEngine } from './mirror-engine.js';
 import { registerFileSocketHandlers } from './socket-files.js';
 import { CLAUDE_PROJECTS_DIR } from '../shared/claude-home.js';
 
-// env 规整后初始化 Cloudflare Access（CF_ACCESS_* 三项齐全才启用；缺则 isPublicHost 恒 false=回退 token）。
-initCfAccess();
+// 公网身份提供方策略（当前唯一实现是 Cloudflare Access）。init 必须在 env 规整之后——
+// server.js 先跑 loadRuntimeEnvironment 再动态 import 本模块，那个顺序被
+// tests/unit/source-layout.test.mjs 钉住。CF_ACCESS_* 三项齐全才启用；缺则 ownsHost 恒 false，
+// 全部请求回退 AUTH_TOKEN 路。下面 HTTP 鉴权 / socket 握手 / index.html 注入 / doctor 都用它，
+// 不再各自 import 具体实现（见 src/auth/auth-strategy.js 的说明）。
+const authStrategy = createCfAccessStrategy();
+authStrategy.init();
 
 const HERE = join(import.meta.dirname, '..', '..'); // 项目根；从任何 cwd 启动都一致
 const ENV_FILE_PATH = join(HERE, '.env'); // 旧格式；仅在尚未迁移时读写
@@ -151,6 +156,8 @@ const {
   notifyThrottleMs,
   sessionDeleteQuietMs,
   devMode: DEV_MODE,
+  bindMode: BIND_MODE,
+  bindHost: BIND_HOST,
   workDir: configuredWorkDir,
   dataDir: DATA_DIR,
 } = parseServerConfig(process.env, { home: homedir(), projectRoot: HERE });
@@ -368,7 +375,7 @@ const app = express();
 configureHttpShell({
   app,
   projectRoot: HERE,
-  isAccessEnabled,
+  strategy: authStrategy,
 });
 
 const tokenMatches = provided => secureTokenMatches(AUTH_TOKEN, provided);
@@ -390,17 +397,16 @@ function setRlStateCapped(key, st) {
 }
 const httpAuth = createHttpAuth({
   authToken: AUTH_TOKEN,
-  isPublicHost,
-  verifyAccessJwt,
+  strategy: authStrategy,
   // HTTP 与 socket 握手共享限速 Map，堵住 /health|/metrics|/push 无限试 token。
   rateLimit: {
     // AUTH-NEW-1：与 socket `publicHost || AUTH_TOKEN` 对齐——CF Access-only（空 AUTH_TOKEN）公网 Host
     // 上的 /health|/metrics|/push JWT 失败也须限速；纯本机无 token 仍不限。
-    active: (req) => !!(AUTH_TOKEN || isPublicHost(req?.headers?.host)),
+    active: (req) => !!(AUTH_TOKEN || authStrategy.ownsHost(req?.headers?.host)),
     sourceKey: (req) => {
       // 公网 Host 且 peer=loopback（隧道）才采信 CF-Connecting-IP；
       // LAN 伪造 Host+CF-IP 只回落连接 IP，防拆限速桶。
-      const publicHost = isPublicHost(req.headers?.host);
+      const publicHost = authStrategy.ownsHost(req.headers?.host);
       const peer = req.socket?.remoteAddress || req.ip || '';
       return rlSourceKey(
         { address: peer, headers: req.headers || {} },
@@ -657,7 +663,7 @@ if (process.stdin.isTTY) {
 // ---- 鉴权（公网 Host 强制 Access JWT、fail-closed；LAN/本机回退 token；无 token 时仅 localhost）----
 io.use(async (socket, next) => {
   const ip = clientIp(socket.handshake.address);
-  const publicHost = isPublicHost(socket.handshake.headers.host);
+  const publicHost = authStrategy.ownsHost(socket.handshake.headers.host);
   const rlActive = publicHost || !!AUTH_TOKEN;
   // AUTH-NEW-2：与 HTTP sourceKey 同判据——Host spoof 从 LAN 直连时不信 CF-IP
   const rlKey = rlSourceKey(socket.handshake, clientIp, {
@@ -682,7 +688,7 @@ io.use(async (socket, next) => {
 
     if (publicHost) {
       try {
-        await verifyAccessJwt(socket.handshake.headers['cf-access-jwt-assertion']);
+        await authStrategy.verifyRequest(socket.handshake.headers);
         authPassed = true;
         accessEnabled = true;
       } catch {
@@ -2936,7 +2942,7 @@ registerSocketConnection(io, socket => {
       claudeVersion: versions.cli,
       workDirs,
       home: homedir(),
-      cfEnabled: isAccessEnabled(),
+      cfEnabled: authStrategy.isEnabled(),
       cfAudSet: !!process.env.CF_ACCESS_AUD,
       webStatuslineOff: process.env.WEB_STATUSLINE === 'off',
       pushEnabled,
@@ -2952,6 +2958,11 @@ registerSocketConnection(io, socket => {
       // 这里补 FILE_EDIT 与 PUBLIC_URL 两个输入；URL 值不进报告（runDoctor 只出布尔）。
       fileEditOff: process.env.FILE_EDIT === 'off',
       publicUrl: process.env.PUBLIC_URL || '',
+      // D21：方案声明 + 「通知已配」判定（Web Push 或 ntfy 任一即算——两条通道都吃 PUBLIC_URL 深链）。
+      accessProfile: process.env.ACCESS_PROFILE || '',
+      notifyConfigured: pushEnabled || !!(process.env.NTFY_URL && process.env.NTFY_TOPIC),
+      // 实际生效的监听计划（server 才拿得到）：让体检里「绑哪个地址」的措辞与真相一致。
+      bindPlan,
     }));
   });
 
@@ -3316,7 +3327,15 @@ process.on('unhandledRejection', err => console.error('[unhandledRejection]', er
 // 判据走 src/shared/bind-host.js，不写内联三元：两个 doctor 要回答「这台机器对外可达吗」，
 // 而它们够不到这一行，此前只能各自猜——纯空白 token 上 CLI doctor 就猜反了（说「仅监听
 // 127.0.0.1」，实际绑的是 0.0.0.0）。同一个函数才没有分叉余地。
-const host = resolveBindHost(AUTH_TOKEN);
+const bindPlan = resolveBindPlan({ authToken: AUTH_TOKEN, bindMode: BIND_MODE, bindHost: BIND_HOST });
+// 显式要求绑到对外可达的地址却没有 AUTH_TOKEN（或 custom 没给地址、模式拼错）时拒绝启动。
+// 不静默降级：那会让用户以为公网配好了，实际手机全部连不上且没有任何错误信息
+// （config-file.js 已把这种「悄悄降级到 127.0.0.1」判为必须消除的失败形态）。
+if (bindPlan.refuse) {
+  console.error(`\n❌ 启动失败：${bindPlan.refuse.detail}\n`);
+  process.exit(1);
+}
+const host = bindPlan.host;
 // 启动期致命错误必须 fail-fast 并给可读提示（A9 精神），不能落进 uncaughtException 兜底静默退出
 httpServer.on('error', err => {
   if (err.code === 'EADDRINUSE') {
@@ -3348,6 +3367,15 @@ httpServer.listen(port, host, () => {
     console.log(`  本机: http://localhost:${port}`);
     console.warn('  ⚠️  未设置 AUTH_TOKEN —— 仅监听 127.0.0.1，不可走隧道对外。');
     console.warn('  ⚠️  需要手机访问请在 ccm.config.json 设置 AUTH_TOKEN 后重启。');
+  } else if (!bindPlan.publiclyReachable) {
+    // 有 token 但显式绑了 loopback（BIND_MODE=loopback / custom+本机地址）。
+    // 此时**绝不能**再列局域网地址——那些地址上根本没有人在听，照着打开只会失败。
+    const frag = `/#token=${encodeURIComponent(AUTH_TOKEN)}`;
+    console.log('  已启用鉴权，但按配置只监听本机：');
+    console.log(`  [Token: ${maskToken(AUTH_TOKEN)}]`);
+    console.log(`  本机:   http://localhost:${port}${frag}`);
+    console.log(`  远程:   端口只在 ${host} 上，手机无法直连——请自行转发（SSH -L、Tailscale Serve、反代等）`);
+    console.log('          要让手机同 WiFi 直连，把 BIND_MODE 改成 lan（或留空）后重启');
   } else {
     // 安全打印：首次启动（无 sessions.json）打印完整 URL 便于扫码，后续用掩码（防录屏/日志泄露）
     const isFirstRun = !existsSync(join(DATA_DIR, 'sessions.json'));
@@ -3356,12 +3384,18 @@ httpServer.listen(port, host, () => {
 
     console.log('  已启用鉴权，按场景任选一条打开（token 首次进入后存入浏览器，之后免带）：');
     console.log(`  [Token: ${maskedToken}]`);
-    if (isAccessEnabled()) console.log(`  🔒 Cloudflare Access 已启用：公网 ${process.env.CF_ACCESS_HOSTNAME} 强制 2FA（JWT 校验），AUTH_TOKEN 仅管 LAN/本机`);
+    // 域名走 strategy 而非直读 env：策略内部会 trim + 小写归一，直读打印出来的可能与实际参与判定的字面不同。
+    if (authStrategy.isEnabled()) console.log(`  🔒 Cloudflare Access 已启用：公网 ${authStrategy.publicHostname()} 强制 2FA（JWT 校验），AUTH_TOKEN 仅管 LAN/本机`);
+
+    // 绑到具体地址（BIND_MODE=custom 指定某块网卡）时只列那一个——列出全部网卡地址会给出
+    // 一串根本没人在听的 URL。通配符（0.0.0.0 / ::）才枚举本机地址。
+    const isWildcard = host === '0.0.0.0' || host === '::';
+    const reachable = isWildcard ? reachableIPv4s() : [host];
 
     if (isFirstRun) {
       // 首次启动：完整 URL（便于扫码/点击）
       console.log(`  本机:   http://localhost:${port}${frag}`);
-      for (const ip of reachableIPv4s()) {
+      for (const ip of reachable) {
         console.log(`  可访问: http://${ip}:${port}${frag}  ← 同 WiFi 或已连隧道时可用`);
       }
       console.log(`  公网:   先跑 cloudflared tunnel --url http://localhost:${port}`);
@@ -3369,7 +3403,7 @@ httpServer.listen(port, host, () => {
     } else {
       // 后续启动：占位符（防泄露），token 已存浏览器可免带
       console.log(`  本机:   http://localhost:${port}/#token=<YOUR_TOKEN>`);
-      for (const ip of reachableIPv4s()) {
+      for (const ip of reachable) {
         console.log(`  可访问: http://${ip}:${port}/#token=<YOUR_TOKEN>  ← 同 WiFi 或已连隧道时可用`);
       }
       console.log(`  公网:   先跑 cloudflared tunnel --url http://localhost:${port}`);

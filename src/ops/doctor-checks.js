@@ -1,7 +1,8 @@
 // 本文件此前零 import（纯决策函数）。唯一的例外是 shellOverriddenKeys —— 它必须与配置面板
 // 共用同一份实现，见 env-file.js 处注释（判据分叉时两边都不报错，只有用户被误导）。
 import { shellOverriddenKeys } from './env-file.js';
-import { bindsPublicly, isBlankToken } from '../shared/bind-host.js';
+import { ACCESS_PROFILES } from './env-schema.js';
+import { isBlankToken, resolveBindPlan } from '../shared/bind-host.js';
 
 // 模型配置「永不打架」体检：settings 的 model 字段 vs 各工作目录的 ANTHROPIC_DEFAULT_*_MODEL 网关映射。
 //
@@ -208,13 +209,17 @@ export function summarizeDangerous(rules = []) {
 //
 // bindsPublic 不是这里算的，是问 src/shared/bind-host.js —— server 启动时用的是同一个函数，
 // 所以「doctor 说会不会对外可达」与「实际绑哪个地址」不可能分叉。
-export function classifyAuthToken(token) {
-  if (token === undefined || token === null) return { status: 'warn', isSet: false, bindsPublic: false };
+// bindPlan 可选：BIND_MODE 让「绑哪个地址」不再能从 token 单独推出来（有 token 也可能被显式
+// 限制成只绑 loopback）。缺省值就是现状推导 ⇒ 不传时与改造前逐字节一致。
+export function classifyAuthToken(token, bindPlan = null) {
+  const plan = bindPlan || resolveBindPlan({ authToken: token });
+  const pub = plan.publiclyReachable;
+  if (token === undefined || token === null) return { status: 'warn', isSet: false, bindsPublic: pub };
   const t = String(token);
-  if (t === '') return { status: 'fail', isSet: false, bindsPublic: bindsPublicly(t) };
-  if (isBlankToken(t)) return { status: 'fail', isSet: true, length: t.length, blank: true, bindsPublic: bindsPublicly(t) };
-  if (t.length < 8) return { status: 'warn', isSet: true, length: t.length, bindsPublic: bindsPublicly(t) };
-  return { status: 'ok', isSet: true, length: t.length, bindsPublic: bindsPublicly(t) };
+  if (t === '') return { status: 'fail', isSet: false, bindsPublic: pub };
+  if (isBlankToken(t)) return { status: 'fail', isSet: true, length: t.length, blank: true, bindsPublic: pub };
+  if (t.length < 8) return { status: 'warn', isSet: true, length: t.length, bindsPublic: pub };
+  return { status: 'ok', isSet: true, length: t.length, bindsPublic: pub };
 }
 
 // AUTH_TOKEN 的完整体检项（分类 + 给人看的话），**两个 doctor 共用这一个**。
@@ -222,22 +227,34 @@ export function classifyAuthToken(token) {
 // 此前 scripts/doctor.js 没用上面的 classifyAuthToken，自己另写了一份判定 + 文案，于是同一个
 // 纯空白 token 在 CLI 里被说成「仅监听 127.0.0.1」（说反了），在 web 里被说成「弱 token」。
 // 分类与措辞都收进这里之后，两边只剩「怎么排版」的差别。
-export function authTokenDiagnostic({ token, lang = 'zh' } = {}) {
-  const c = classifyAuthToken(token);
+export function authTokenDiagnostic({ token, bindPlan = null, lang = 'zh' } = {}) {
+  const plan = bindPlan || resolveBindPlan({ authToken: token });
+  const c = classifyAuthToken(token, plan);
+  // 地址一律从 plan 取，不写死：BIND_MODE=loopback 时说「绑 0.0.0.0 对外监听」就是反话，
+  // 与这个函数当初要根除的那句「仅监听 127.0.0.1」同型，只是触发条件换了。
   const detail = (() => {
     if (!c.isSet && c.status === 'warn') {
-      return bi(lang, '未设置 → 仅监听 127.0.0.1（本机），手机访问不到。需要手机访问请在配置里设置后重启。',
-        'Not set → binds 127.0.0.1 only; your phone cannot reach it. Set it in the config file and restart.');
+      return bi(lang, `未设置 → 仅监听 ${plan.host}（本机），手机访问不到。需要手机访问请在配置里设置后重启。`,
+        `Not set → binds ${plan.host} only; your phone cannot reach it. Set it in the config file and restart.`);
     }
     if (!c.isSet) {
-      return bi(lang, '已设置但是空串 → 仅监听 127.0.0.1。若要手机访问，设置非空 token。',
-        'Set but empty → binds 127.0.0.1 only. Use a non-empty token for phone access.');
+      return bi(lang, `已设置但是空串 → 仅监听 ${plan.host}。若要手机访问，设置非空 token。`,
+        `Set but empty → binds ${plan.host} only. Use a non-empty token for phone access.`);
     }
     if (c.blank) {
+      // 两种措辞：真绑到对外可达的地址才是「最危险的一格」；被 BIND_MODE 限制在本机时
+      // 它只是个无用的配置项，不该吓唬人。
+      if (!c.bindsPublic) {
+        return bi(lang,
+          `全是空白字符（${c.length} 个）→ 这个 token 形同虚设。当前按 BIND_MODE 只绑 ${plan.host}，`
+          + '暂时没有对外暴露；但改回对外监听前请先设一个真 token，或彻底删掉这一项。',
+          `All whitespace (${c.length} chars) → this token protects nothing. BIND_MODE currently keeps it on `
+          + `${plan.host} only, so nothing is exposed yet; set a real token before switching back to a public bind, or remove the setting.`);
+      }
       return bi(lang,
-        `全是空白字符（${c.length} 个）→ server 仍会绑 0.0.0.0 对外监听，而这个 token 形同虚设。`
+        `全是空白字符（${c.length} 个）→ server 仍会绑 ${plan.host} 对外监听，而这个 token 形同虚设。`
         + '这是最危险的一格：看起来像没设，实际公网端口开着。设一个真 token，或彻底删掉这一项。',
-        `All whitespace (${c.length} chars) → the server still binds 0.0.0.0 and is publicly reachable, `
+        `All whitespace (${c.length} chars) → the server still binds ${plan.host} and is publicly reachable, `
         + 'while this token protects nothing. Set a real token, or remove the setting entirely.');
     }
     if (c.status === 'warn') {
@@ -786,17 +803,26 @@ function formatStaleAge(ms, lang) {
 }
 
 // D20: 文件编辑器直写 × 公网迹象（R45，2026-08-30 拍板：默认开不动，doctor 只提示）。
-// 判据只认用户的显式公网声明（CF_ACCESS_* 三键齐设 / PUBLIC_URL 非空），不猜实际暴露——
-// 隧道跑在进程外，server 观测不到自己是否被公网暴露；测不准的判据当安全开关，
-// 失效方向必是 fail-open。与 envOverrideDiagnostic 同纪律：点名键，不回显值。
-export function fileEditExposureDiagnostic({ fileEditOff = false, cfConfigured = false, publicUrl = '', lang = 'zh' } = {}) {
+// 判据只认用户的显式公网声明（CF_ACCESS_* 三键齐设 / PUBLIC_URL 非空 / ACCESS_PROFILE 声明了
+// cloudflare|reverse-proxy），不猜实际暴露——隧道跑在进程外，server 观测不到自己是否被公网暴露；
+// 测不准的判据当安全开关，失效方向必是 fail-open。与 envOverrideDiagnostic 同纪律：点名键，不回显值。
+// 显式声明 vpn 时 PUBLIC_URL 不再单独触发：deployment.md 明文教 VPN 用户把它设成隧道内深链地址，
+// 照文档做还被追着 warn 是自相矛盾；抑制的信任级别与 FILE_EDIT=off 一致（用户显式声明即闭嘴）。
+// CF 信号不受任何声明抑制——那是实际开启的公网层，不是声明；未知 profile 严格 === 比较天然按
+// 未声明处理，不得抑制任何信号（fail-closed）。
+export function fileEditExposureDiagnostic({ fileEditOff = false, cfConfigured = false, publicUrl = '', accessProfile = '', lang = 'zh' } = {}) {
   if (fileEditOff) {
     return {
       status: 'ok', name: 'FILE_EDIT',
       detail: bi(lang, '已通过 FILE_EDIT=off 关闭直写：手机端文件界面只读。', 'Disabled via FILE_EDIT=off: the phone file UI is read-only.'),
     };
   }
-  const signals = [cfConfigured && 'CF_ACCESS_*', String(publicUrl || '').trim() && 'PUBLIC_URL'].filter(Boolean);
+  const p = String(accessProfile || '').trim();
+  const signals = [
+    cfConfigured && 'CF_ACCESS_*',
+    String(publicUrl || '').trim() && p !== 'vpn' && 'PUBLIC_URL',
+    (p === 'cloudflare' || p === 'reverse-proxy') && `ACCESS_PROFILE=${p}`,
+  ].filter(Boolean);
   if (!signals.length) {
     return {
       status: 'ok', name: 'FILE_EDIT',
@@ -809,5 +835,155 @@ export function fileEditExposureDiagnostic({ fileEditOff = false, cfConfigured =
     detail: bi(lang,
       `检测到公网入口声明（${via}）且文件编辑器直写开着——它不经 Claude 工具审批链（范围/大小/哈希/审计护栏仍在）。长期公网暴露建议设 FILE_EDIT=off。`,
       `A public entrypoint is declared (${via}) while file editor writes are on — writes bypass Claude's tool-approval chain (scope/size/hash/audit guards still apply). For long-term public exposure, set FILE_EDIT=off.`),
+  };
+}
+
+// D22: 监听地址自洽性。AUTH_TOKEN 那项回答「门锁结不结实」，这项回答「门开在哪、还开不开得起来」。
+// 判定不在这里做——bindPlan 由调用方用 src/shared/bind-host.js 的 resolveBindPlan 算好传入，
+// 那是 server 启动时用的同一个函数，所以「doctor 说的」与「server 会做的」不可能分叉。
+export function bindDiagnostic({ bindPlan, lang = 'zh' } = {}) {
+  const name = 'BIND';
+  const plan = bindPlan || resolveBindPlan({});
+  const safe = {
+    host: plan.host,
+    publiclyReachable: !!plan.publiclyReachable,
+    refuseCode: plan.refuse?.code ?? null,
+  };
+
+  if (plan.refuse) {
+    // 按 code 各出一份双语，**不嵌 plan.refuse.detail** —— 那串文案住在 src/shared/bind-host.js
+    // （纯判定层、没有 lang 参数，写的是中文），直接拼进来会让英文报告里混中文。
+    const reason = {
+      lan_requires_token: bi(lang,
+        'BIND_MODE=lan 要求先设置 AUTH_TOKEN。跑 npm run setup 生成一个，或改用 BIND_MODE=loopback。',
+        'BIND_MODE=lan requires AUTH_TOKEN. Run npm run setup to generate one, or switch to BIND_MODE=loopback.'),
+      custom_requires_token: bi(lang,
+        `BIND_HOST=${plan.host} 会对外可达，要求先设置 AUTH_TOKEN。`,
+        `BIND_HOST=${plan.host} is publicly reachable and requires AUTH_TOKEN.`),
+      custom_requires_host: bi(lang,
+        'BIND_MODE=custom 必须同时设置 BIND_HOST（例如 :: 表示 IPv4/IPv6 双栈）。',
+        'BIND_MODE=custom also requires BIND_HOST (for example :: for IPv4+IPv6 dual stack).'),
+      unknown_bind_mode: bi(lang,
+        'BIND_MODE 的值不认识（合法值：loopback / lan / custom，留空 = 按 AUTH_TOKEN 推断）。',
+        'Unrecognized BIND_MODE (valid: loopback / lan / custom; empty = inferred from AUTH_TOKEN).'),
+    }[plan.refuse.code] || bi(lang, 'BIND_MODE / BIND_HOST 配置无效。', 'Invalid BIND_MODE / BIND_HOST configuration.');
+    return {
+      status: 'fail', name, safe,
+      detail: bi(lang, `当前配置会让 server 拒绝启动：${reason}`,
+        `The server will refuse to start with this configuration: ${reason}`),
+    };
+  }
+  if (!plan.publiclyReachable) {
+    return {
+      status: 'ok', name, safe,
+      detail: bi(lang,
+        `只监听 ${plan.host}（本机）。手机无法直连是预期行为——需要远程访问请自行转发（SSH -L、Tailscale Serve、反代等），或把 BIND_MODE 改成 lan。`,
+        `Listening on ${plan.host} only. Phones cannot connect directly by design — forward the port yourself (SSH -L, Tailscale Serve, a reverse proxy), or set BIND_MODE=lan.`),
+    };
+  }
+  return {
+    status: 'ok', name, safe,
+    detail: bi(lang, `监听 ${plan.host}，对外可达（由 AUTH_TOKEN 把守）。`,
+      `Listening on ${plan.host}; reachable from other hosts (guarded by AUTH_TOKEN).`),
+  };
+}
+
+// D21: 公网访问方案自洽性——声明（ACCESS_PROFILE）与实际键的稳态核对。
+// 写入侧 env-schema.checkAccessProfileConsistency 只管「这一笔改动造成/维持的失配」，
+// 稳态巡检归这里（doctor 每次跑都看全量现状）。与 D20 同纪律：detail 点名键、不回显值
+// （publicUrl 只取「设没设」，值绝不进返回）。多问题聚合进一条 detail、级别取最重——
+// 一个方案一行，别把面板刷成清单。未知值按未声明处理并明说（fail-closed：未知值不得
+// 让任何检查静默跳过）。
+export function accessProfileDiagnostic({ profile = '', cfConfigured = false, publicUrl = '', authTokenSet = false, notifyConfigured = false, lang = 'zh' } = {}) {
+  const name = 'ACCESS_PROFILE';
+  const p = String(profile || '').trim();
+  const urlSet = String(publicUrl || '').trim() !== '';
+
+  if (p === '') {
+    return {
+      status: 'ok', name,
+      detail: cfConfigured
+        ? bi(lang,
+          '未声明（按 CF_ACCESS_* 推断当前 = Cloudflare 公网 2FA）。设 ACCESS_PROFILE 可获得按方案的针对性检查。',
+          'Undeclared (inferred from CF_ACCESS_*: Cloudflare public 2FA). Set ACCESS_PROFILE for profile-specific checks.')
+        : bi(lang,
+          '未声明（CF_ACCESS_* 未配，推断为局域网或自建拓扑）。设 ACCESS_PROFILE 可获得按方案的针对性检查。',
+          'Undeclared (CF_ACCESS_* unset; assuming LAN or self-hosted topology). Set ACCESS_PROFILE for profile-specific checks.'),
+    };
+  }
+  if (!ACCESS_PROFILES.includes(p)) {
+    return {
+      status: 'warn', name,
+      detail: bi(lang,
+        `不认识的值 ${p}，按未声明处理（合法值：${ACCESS_PROFILES.join(' / ')}）。`,
+        `Unknown value ${p}; treated as undeclared (valid: ${ACCESS_PROFILES.join(' / ')}).`),
+    };
+  }
+
+  if (p === 'cloudflare') {
+    if (!cfConfigured) {
+      return {
+        status: 'warn', name,
+        detail: bi(lang,
+          '已声明 Cloudflare，但 CF_ACCESS_* 三项未配齐——公网 2FA 实际未生效。补全三项，或把 ACCESS_PROFILE 改为实际方案。',
+          'Declared cloudflare but CF_ACCESS_* is incomplete — public 2FA is not actually in effect. Complete all three, or change ACCESS_PROFILE.'),
+      };
+    }
+    return {
+      status: 'ok', name,
+      detail: bi(lang, 'Cloudflare Tunnel + Access：公网 2FA 生效。', 'Cloudflare Tunnel + Access: public 2FA in effect.'),
+    };
+  }
+
+  // vpn / reverse-proxy / lan 共通：CF 层不该配着；vpn/reverse-proxy 还要 token 与深链可用。
+  const problems = [];
+  if (cfConfigured) {
+    problems.push(bi(lang,
+      `CF_ACCESS_* 仍配着——与 ${p} 声明矛盾，确认换方案请一并清空三项`,
+      `CF_ACCESS_* is still configured — contradicts the ${p} profile; clear all three if you have switched`));
+  }
+  if (!authTokenSet) {
+    problems.push(p === 'lan'
+      ? bi(lang,
+        'AUTH_TOKEN 未设置——server 只绑 127.0.0.1，同一 WiFi 的手机也连不上',
+        'AUTH_TOKEN unset — the server binds 127.0.0.1 only; even same-WiFi phones cannot connect')
+      : bi(lang,
+        'AUTH_TOKEN 未设置——server 只绑 127.0.0.1，隧道/反代另一端连不上',
+        'AUTH_TOKEN unset — the server binds 127.0.0.1 only; the tunnel/proxy peer cannot reach it'));
+  }
+  if (p === 'lan') {
+    if (urlSet) {
+      problems.push(bi(lang,
+        'PUBLIC_URL 设了值——与仅局域网声明矛盾（要么清掉它，要么改声明）',
+        'PUBLIC_URL is set — contradicts the LAN-only profile (clear it or change the profile)'));
+    }
+  } else if (notifyConfigured && !urlSet) {
+    problems.push(bi(lang,
+      '通知已配置但 PUBLIC_URL 未设——推送深链会断（此拓扑需显式设为手机可达的地址）',
+      'Notifications are configured but PUBLIC_URL is unset — push deep links will break (set it to an address your phone can reach)'));
+  }
+  if (problems.length) {
+    return { status: 'warn', name, detail: problems.join(bi(lang, '；', '; ')) };
+  }
+
+  if (p === 'vpn') {
+    return {
+      status: 'ok', name,
+      detail: bi(lang,
+        '加密隧道 / VPN：入网资格由隧道承担。提醒：PWA / 推送需要 HTTPS 安全上下文（详见 docs/deployment.md）。',
+        'Encrypted tunnel / VPN: network admission is handled by the tunnel. Note: PWA / push need an HTTPS secure context (see docs/deployment.md).'),
+    };
+  }
+  if (p === 'reverse-proxy') {
+    return {
+      status: 'ok', name,
+      detail: bi(lang,
+        '自建反代：建议在反代层再补一层认证；Host 透传与 WebSocket 升级两条硬要求见 docs/deployment.md。',
+        'Self-hosted reverse proxy: consider an extra auth layer at the proxy; Host passthrough and WebSocket upgrade are hard requirements (see docs/deployment.md).'),
+    };
+  }
+  return {
+    status: 'ok', name,
+    detail: bi(lang, '仅局域网：同一 WiFi 直连，无公网面。', 'LAN only: same-WiFi direct access, no public surface.'),
   };
 }

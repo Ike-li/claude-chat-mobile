@@ -19,6 +19,9 @@
 //      那是**迁移**不是设置，docs/deployment.md 有「停服→移动→doctor→启动」的配方。
 
 import { isSerializableEnvValue, maskSecret, shellOverriddenKeys } from './env-file.js';
+// 与 server 启动、两个 doctor 共用同一份 loopback 判据：这里若自己再写一遍「什么算本机地址」，
+// 面板放行的配置就可能与 server 实际拒绝的配置对不上。
+import { isLoopbackBindHost } from '../shared/bind-host.js';
 
 // 开关类的真值字面量**逐 key 声明**，绝不用统一的 truthy 判定。
 // src/ops/log-terminal.js:32 明写过这个经典脚枪：LOG_STDERR=false 反而是「开」——
@@ -41,7 +44,7 @@ const t = (zh, en) => ({ zh, en });
 // 声明了却不被消费的事实源，比没有更糟：它看起来像唯一真相。
 export const DEFAULT_PORT = 3000;
 
-// kind: text | number | path | url | secret | toggle | readonly
+// kind: text | number | path | url | secret | toggle | readonly | list | enum
 export const ENV_SCHEMA = {
   // ── 鉴权 ────────────────────────────────────────────────────────────
   AUTH_TOKEN: {
@@ -49,6 +52,44 @@ export const ENV_SCHEMA = {
     label: t('访问令牌', 'Access token'),
     help: t('留空时 server 只绑 127.0.0.1，手机将无法访问。要更换请在电脑上跑 npm run setup。',
       'Empty means the server binds 127.0.0.1 only. Run npm run setup on the machine to rotate it.'),
+  },
+  // 声明式「公网访问方案」。空 = 未声明：一切消费点回落现状推断（CF_ACCESS_* 齐设与否），
+  // 既有部署零行为变化 —— 不设 default 'lan'：机主生产环境三键已设、未声明，默认 lan 会
+  // 让升级即触发「声明与实际矛盾」告警。消费点（doctor / D20 信号）一律严格 === 比较，
+  // 手改配置绕过校验写进未知值时按未声明处理（未知值不得抑制任何告警，fail-closed）。
+  ACCESS_PROFILE: {
+    group: 'auth', kind: 'enum',
+    options: [
+      { value: '', label: t('未声明（按 CF_ACCESS_* 推断）', 'Undeclared (inferred from CF_ACCESS_*)') },
+      { value: 'cloudflare', label: t('Cloudflare Tunnel + Access', 'Cloudflare Tunnel + Access') },
+      { value: 'vpn', label: t('加密隧道 / VPN（Tailscale、WireGuard、ZeroTier…）', 'Encrypted tunnel / VPN (Tailscale, WireGuard, ZeroTier…)') },
+      { value: 'reverse-proxy', label: t('自建反向代理 / 网关（VPS + nginx、Caddy、frp…）', 'Self-hosted reverse proxy / gateway (VPS + nginx, Caddy, frp…)') },
+      { value: 'lan', label: t('仅局域网（同一 WiFi 直连）', 'LAN only (same-WiFi direct)') },
+    ],
+    label: t('公网访问方案', 'Public access profile'),
+    help: t('声明手机从哪条拓扑访问；doctor 与安全体检按它做针对性检查。选型判据见 docs/deployment.md「不用 Cloudflare 的公网入口」。',
+      'Declares how your phone reaches this machine; doctor tailors its checks accordingly. See docs/deployment.md.'),
+  },
+  // 监听地址。空 = 未声明 = 沿用旧语义（有 token 绑 0.0.0.0、无 token 绑 127.0.0.1），
+  // 现有部署零变化。判定与「显式要绑外网却没 token 就拒绝启动」的不变量在
+  // src/shared/bind-host.js 的 resolveBindPlan —— 那里是 server 与两个 doctor 的共用判据。
+  BIND_MODE: {
+    group: 'auth', kind: 'enum',
+    options: [
+      { value: '', label: t('未声明（按 AUTH_TOKEN 推断）', 'Undeclared (inferred from AUTH_TOKEN)') },
+      { value: 'loopback', label: t('仅本机（127.0.0.1，自己用 SSH/隧道转发）', 'Loopback only (127.0.0.1; forward it yourself via SSH/tunnel)') },
+      { value: 'lan', label: t('对外监听（0.0.0.0，手机同 WiFi 可直连）', 'Listen on all interfaces (0.0.0.0; same-WiFi phones can connect)') },
+      { value: 'custom', label: t('自定义地址（配合 BIND_HOST，填 :: 即 IPv6 双栈）', 'Custom address (with BIND_HOST; use :: for IPv4+IPv6 dual stack)') },
+    ],
+    label: t('监听地址模式', 'Listen address mode'),
+    help: t('改这项要重启。选「仅本机」后手机无法直连，需自行用 SSH/Tailscale 等转发。留空维持现状。',
+      'Requires a restart. With loopback, phones cannot connect directly — forward the port yourself (SSH/Tailscale). Leave empty to keep current behavior.'),
+  },
+  BIND_HOST: {
+    group: 'auth', kind: 'text',
+    label: t('自定义监听地址', 'Custom listen address'),
+    help: t('仅当监听地址模式为「自定义」时生效。:: 表示 IPv4/IPv6 双栈；也可填某块网卡的地址只对它开放。',
+      'Only used when the mode is custom. :: means dual stack (IPv4+IPv6); or set a specific interface address.'),
   },
   CF_ACCESS_HOSTNAME: {
     group: 'auth', kind: 'text',
@@ -230,6 +271,12 @@ export const ENV_SCHEMA = {
   },
 };
 
+// 合法方案字面量，从 options 派生（单一事实源：加方案只改上面 options 一处）。
+// setup 向导（--access-profile 校验）与 doctor-checks（未知值判定）共用。
+export const ACCESS_PROFILES = Object.freeze(
+  ENV_SCHEMA.ACCESS_PROFILE.options.map((o) => o.value).filter(Boolean),
+);
+
 export const ENV_GROUPS = [
   { id: 'auth', label: t('鉴权', 'Authentication') },
   { id: 'runtime', label: t('运行时', 'Runtime') },
@@ -367,6 +414,15 @@ function checkOne(key, value, def, d) {
     return null;
   }
 
+  if (def.kind === 'enum') {
+    // 与 toggle 同理：消费点全是严格 === 比较，schema 不认的串写进去就是静默失效。
+    const allowed = (def.options || []).map((o) => o.value);
+    if (!allowed.includes(value)) {
+      return `${def.label.zh} 只接受 ${allowed.filter(Boolean).join(' / ')}（或留空 = 未声明）`;
+    }
+    return null;
+  }
+
   return null;
 }
 
@@ -432,6 +488,75 @@ function checkCfAccessTeardown(changes, current) {
   }];
 }
 
+// ## ACCESS_PROFILE 声明与 CF_ACCESS_* 实际键的失配警告
+//
+// 一律 warn 不 error：error 会挡死「先声明 cloudflare、下一批再补三键」的合法过渡序列
+// （面板是全或无写入，一条 error 整批拒写），而失配不产生安全洞——server 照常启动，
+// 只是声明与现实没对齐。与 checkCfAccessTeardown 互补：那条管「2FA 被关掉」这个动作本身，
+// 这条管「声明还指着旧方案」；同批清三键+改声明 vpn 时终态一致，本检查静默、只剩 teardown。
+// 触发条件同 checkTogether：本批没碰这组键就不管——否则改个 PORT 都会重弹存量失配的
+// 确认框（稳态失配是 doctor 的活，写入侧只管「这一笔改动造成/维持了失配」）。
+function checkAccessProfileConsistency(changes, current) {
+  const group = ['ACCESS_PROFILE', ...CF_ACCESS_KEYS];
+  if (!group.some((k) => Object.hasOwn(changes, k))) return [];
+
+  const finalOf = (k) => String((Object.hasOwn(changes, k) ? changes[k] : current?.[k]) ?? '').trim();
+  const profile = finalOf('ACCESS_PROFILE');
+  const cfComplete = CF_ACCESS_KEYS.every((k) => finalOf(k) !== '');
+
+  if (profile === 'cloudflare' && !cfComplete) {
+    return [{
+      key: 'ACCESS_PROFILE',
+      level: 'warn',
+      message: '已声明方案为 Cloudflare，但 CF_ACCESS_* 三项未配齐——公网 2FA 实际未生效。补全三项，或把 ACCESS_PROFILE 改为实际使用的方案。',
+    }];
+  }
+  if ((profile === 'vpn' || profile === 'reverse-proxy' || profile === 'lan') && cfComplete) {
+    return [{
+      key: 'ACCESS_PROFILE',
+      level: 'warn',
+      message: `已声明方案为 ${profile}，但 CF_ACCESS_* 三项仍配着——Cloudflare Access 层实际仍在生效。确认换方案的话，请一并清空三项（同步更新 ACCESS_PROFILE）。`,
+    }];
+  }
+  return [];
+}
+
+// ## BIND_MODE / BIND_HOST 的写入侧校验
+//
+// 两条分寸不同，刻意的：
+//   · custom 却没给 BIND_HOST —— 结构性半残（server 拿不到地址），同 checkTogether 判 error。
+//   · 要绑外网却在配置文件里看不到 AUTH_TOKEN —— 只判 warn。**不能是 error**：AUTH_TOKEN
+//     可以来自 shell 环境变量（恒压过配置文件，而写入侧拿不到那个快照），判 error 会误伤
+//     那类部署。真正的把关在启动期 resolveBindPlan——那里读的是最终 env，判据准确。
+function checkBindConsistency(changes, current) {
+  const keys = ['BIND_MODE', 'BIND_HOST'];
+  if (!keys.some((k) => Object.hasOwn(changes, k))) return [];
+
+  const finalOf = (k) => String((Object.hasOwn(changes, k) ? changes[k] : current?.[k]) ?? '').trim();
+  const mode = finalOf('BIND_MODE').toLowerCase();
+  const host = finalOf('BIND_HOST');
+
+  if (mode === 'custom' && !host) {
+    return [{
+      key: 'BIND_HOST',
+      level: 'error',
+      message: '监听地址模式选了「自定义」就必须同时填 BIND_HOST（例如 :: 表示 IPv4/IPv6 双栈）。',
+    }];
+  }
+
+  // 会对外可达 = lan，或 custom 指向一个非 loopback 地址。
+  const willBePublic = mode === 'lan' || (mode === 'custom' && !isLoopbackBindHost(host));
+  if (willBePublic && !String(current?.AUTH_TOKEN ?? '').trim()) {
+    return [{
+      key: 'BIND_MODE',
+      level: 'warn',
+      message: '这个模式会让端口对外可达，而配置文件里没有 AUTH_TOKEN——server 启动时会拒绝并说明原因。'
+        + '若 AUTH_TOKEN 来自 shell 环境变量则可忽略本条；否则请先跑 npm run setup 生成。',
+    }];
+  }
+  return [];
+}
+
 export function validateEnvChanges(changes, d) {
   const results = [];
   for (const [key, value] of Object.entries(changes || {})) {
@@ -482,6 +607,8 @@ export function validateEnvChanges(changes, d) {
 
   results.push(...checkTogether(changes || {}, d?.current || {}));
   results.push(...checkCfAccessTeardown(changes || {}, d?.current || {}));
+  results.push(...checkAccessProfileConsistency(changes || {}, d?.current || {}));
+  results.push(...checkBindConsistency(changes || {}, d?.current || {}));
   return { ok: !results.some((r) => r.level === 'error'), results };
 }
 
@@ -529,6 +656,7 @@ export function buildEnvView(values = {}, { shellEnv = null } = {}) {
         // 只读项也照标 —— 它同样会被 env 压过，只是用户不能在这里改而已。
         if (checked) item.overriddenByEnv = overridden.has(key);
         if (def.values) item.values = def.values;
+        if (def.options) item.options = def.options;
         if (def.default !== undefined) item.default = def.default;
         if (def.unit) item.unit = def.unit;
         if (def.min !== undefined) item.min = def.min;

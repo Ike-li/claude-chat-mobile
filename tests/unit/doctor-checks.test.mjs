@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveBindHost } from '../../src/shared/bind-host.js';
+import { resolveBindHost, resolveBindPlan } from '../../src/shared/bind-host.js';
 import {
   LOG_ROTATE_THRESHOLD_BYTES,
   UPLOADS_FOOTPRINT_WARN_BYTES,
@@ -14,6 +14,8 @@ import {
   identifySelfServer,
   envOverrideDiagnostic,
   fileEditExposureDiagnostic,
+  accessProfileDiagnostic,
+  bindDiagnostic,
   hooksBridgeDiagnostic,
   logSwitchDiagnostic,
   modelSettingsConflictDiagnostic,
@@ -314,6 +316,103 @@ test.describe('authTokenDiagnostic ⇔ resolveBindHost 同源', () => {
   test('未设置与空串仍然只绑本机（不能把这两格也误报成公网）', () => {
     assert.equal(authTokenDiagnostic({ token: undefined }).safe.bindsPublic, false);
     assert.equal(authTokenDiagnostic({ token: '' }).safe.bindsPublic, false);
+  });
+});
+
+// BIND_MODE 让「绑哪个地址」不再能从 token 推出来。文案里那几个写死的地址串必须跟着实际
+// 绑定走，否则会出现「doctor 说它绑 0.0.0.0 对外监听，而 BIND_MODE=loopback 明明只绑了本机」
+// 这种反话——正是上面那组断言当初要根除的形态，只是换了个触发条件。
+test.describe('authTokenDiagnostic 随 bindPlan 说话（BIND_MODE 可配之后）', () => {
+  test('★ 不传 bindPlan 时行为逐字节不变（向后兼容钉子：缺省值就是现状推导）', () => {
+    for (const token of [undefined, '', '   ', 'x'.repeat(64)]) {
+      const a = authTokenDiagnostic({ token });
+      assert.equal(a.safe.bindsPublic, resolveBindHost(token) === '0.0.0.0', JSON.stringify(token));
+    }
+    assert.match(authTokenDiagnostic({ token: '   ' }).detail, /0\.0\.0\.0/);
+  });
+
+  test('★ BIND_MODE=loopback + 纯空白 token → 不得再说「绑 0.0.0.0 对外监听」', () => {
+    const plan = resolveBindPlan({ authToken: '   ', bindMode: 'loopback' });
+    const d = authTokenDiagnostic({ token: '   ', bindPlan: plan });
+    assert.equal(d.safe.bindsPublic, false, '实际只绑本机，不该报成公网可达');
+    assert.doesNotMatch(d.detail, /0\.0\.0\.0/, '这个模式下 0.0.0.0 是反话');
+    assert.match(d.detail, /127\.0\.0\.1/);
+  });
+
+  test('BIND_MODE=custom + :: + 未设 token → 文案给出实际地址而不是写死的 127.0.0.1', () => {
+    const plan = resolveBindPlan({ authToken: 'x'.repeat(64), bindMode: 'custom', bindHost: '::' });
+    const d = authTokenDiagnostic({ token: '', bindPlan: plan });
+    assert.match(d.detail, /::/);
+  });
+
+  test('英文分支同样跟着 bindPlan 走', () => {
+    const plan = resolveBindPlan({ authToken: '   ', bindMode: 'loopback' });
+    const d = authTokenDiagnostic({ token: '   ', bindPlan: plan, lang: 'en' });
+    assert.doesNotMatch(d.detail, /0\.0\.0\.0/);
+  });
+});
+
+// D22：监听面本身值得单独一项。AUTH_TOKEN 那项回答的是「门锁结不结实」，这项回答
+// 「门开在哪、还开不开得起来」——BIND_MODE 配错时 server 会拒绝启动，而这是 CLI doctor
+// 作为「启动前自检」最该提前告诉用户的一类问题。
+test.describe('bindDiagnostic（D22：监听地址自洽性）', () => {
+  test('未声明 BIND_MODE + 有 token → ok，说明当前对外可达', () => {
+    const d = bindDiagnostic({ bindPlan: resolveBindPlan({ authToken: 'x'.repeat(64) }) });
+    assert.equal(d.status, 'ok');
+    assert.equal(d.name, 'BIND');
+    assert.match(d.detail, /0\.0\.0\.0/);
+  });
+
+  test('未声明 + 无 token → ok（本地试用是合法用法，不是错误）', () => {
+    const d = bindDiagnostic({ bindPlan: resolveBindPlan({}) });
+    assert.equal(d.status, 'ok');
+    assert.match(d.detail, /127\.0\.0\.1/);
+  });
+
+  test('★ 配置会导致启动失败 → fail，并原样带出拒绝原因', () => {
+    for (const plan of [
+      resolveBindPlan({ bindMode: 'lan' }),
+      resolveBindPlan({ authToken: 'x'.repeat(64), bindMode: 'custom' }),
+      resolveBindPlan({ authToken: 'x'.repeat(64), bindMode: 'zzz' }),
+    ]) {
+      const d = bindDiagnostic({ bindPlan: plan });
+      assert.equal(d.status, 'fail', plan.refuse?.code);
+      assert.match(d.detail, /启动/, '要说清后果是起不来');
+      assert.equal(d.safe.refuseCode, plan.refuse.code);
+    }
+  });
+
+  test('loopback 模式 → ok 但要点明「手机连不上是预期」（否则用户会当成故障排查）', () => {
+    const d = bindDiagnostic({ bindPlan: resolveBindPlan({ authToken: 'x'.repeat(64), bindMode: 'loopback' }) });
+    assert.equal(d.status, 'ok');
+    assert.match(d.detail, /转发|SSH|隧道/);
+  });
+
+  test('★ 英文分支不得混入中文——refuse.detail 是 bind-host.js 里的中文串，不能直接嵌进英文文案', () => {
+    for (const plan of [
+      resolveBindPlan({ bindMode: 'lan' }),
+      resolveBindPlan({ authToken: 'x'.repeat(64), bindMode: 'custom' }),
+      resolveBindPlan({ authToken: 'x'.repeat(64), bindMode: 'zzz' }),
+    ]) {
+      const d = bindDiagnostic({ bindPlan: plan, lang: 'en' });
+      assert.doesNotMatch(d.detail, /[一-龥]/, `${plan.refuse.code} 的英文文案混了中文：${d.detail}`);
+      assert.match(d.detail, /BIND_MODE|BIND_HOST|AUTH_TOKEN/, '英文文案也要点名相关配置键');
+    }
+  });
+
+  test('中文分支给出可读原因（不只是 code）', () => {
+    const d = bindDiagnostic({ bindPlan: resolveBindPlan({ bindMode: 'lan' }) });
+    assert.match(d.detail, /AUTH_TOKEN/);
+    assert.doesNotMatch(d.detail, /lan_requires_token/, '给人看的话里不该出现内部 code');
+  });
+
+  test('safe 只出结构化事实，不回显自定义地址之外的东西；英文分支完整', () => {
+    const d = bindDiagnostic({ bindPlan: resolveBindPlan({ authToken: 'x'.repeat(64), bindMode: 'custom', bindHost: '::' }), lang: 'en' });
+    assert.equal(d.status, 'ok');
+    assert.equal(d.safe.host, '::');
+    assert.equal(d.safe.publiclyReachable, true);
+    assert.equal(d.safe.refuseCode, null);
+    assert.match(d.detail, /::/);
   });
 });
 
@@ -973,5 +1072,107 @@ test.describe('fileEditExposureDiagnostic（R45：直写通道 × 公网迹象�
     assert.equal(r.status, 'warn');
     assert.match(r.detail, /approval/i);
     assert.match(r.detail, /FILE_EDIT=off/);
+  });
+
+  // ── ACCESS_PROFILE 声明对信号集的影响 ──
+  test('声明 reverse-proxy 本身就是公网信号 → warn 点名 ACCESS_PROFILE=reverse-proxy', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: false, cfConfigured: false, publicUrl: '', accessProfile: 'reverse-proxy' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /ACCESS_PROFILE=reverse-proxy/);
+  });
+  test('声明 vpn 时 PUBLIC_URL 不再单独触发（文档教 VPN 用户设隧道内深链地址）→ ok', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: false, cfConfigured: false, publicUrl: 'http://100.64.0.5:3000', accessProfile: 'vpn' });
+    assert.equal(r.status, 'ok');
+  });
+  test('声明 vpn 压不掉 CF 信号（那是实际开启的公网层，不是声明）→ 仍 warn', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: false, cfConfigured: true, publicUrl: '', accessProfile: 'vpn' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /CF_ACCESS/);
+  });
+  test('声明 lan 不抑制 PUBLIC_URL 信号（矛盾场景双保险方向安全）→ 仍 warn', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: false, cfConfigured: false, publicUrl: 'https://x.example.com', accessProfile: 'lan' });
+    assert.equal(r.status, 'warn');
+  });
+});
+
+// ── D21: 公网访问方案自洽性 ────────────────────────────────────────────────
+// 声明（ACCESS_PROFILE）与实际键（CF_ACCESS_* / PUBLIC_URL / AUTH_TOKEN / 通知配置）
+// 的稳态核对。写入侧的 checkAccessProfileConsistency 只管「这一笔改动」，稳态失配归这里。
+// 未知值按未声明处理且必须说出来（手改配置绕过校验的场景，fail-closed：未知值不得抑制告警）。
+test.describe('accessProfileDiagnostic（D21：按声明方案做针对性检查）', () => {
+  const clean = { profile: '', cfConfigured: false, publicUrl: '', authTokenSet: true, notifyConfigured: false };
+
+  test('未声明 → ok 信息行：按 CF_ACCESS_* 推断 + 指出可声明获得针对性检查', () => {
+    const r1 = accessProfileDiagnostic({ ...clean });
+    assert.equal(r1.status, 'ok');
+    assert.equal(r1.name, 'ACCESS_PROFILE');
+    assert.match(r1.detail, /推断/);
+    assert.match(r1.detail, /ACCESS_PROFILE/);
+    const r2 = accessProfileDiagnostic({ ...clean, cfConfigured: true });
+    assert.equal(r2.status, 'ok');
+    assert.match(r2.detail, /[Cc]loudflare/);
+  });
+
+  test('未知值（手改配置绕过校验）→ warn「按未声明处理」', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'tailscale' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /未声明处理/);
+    assert.match(r.detail, /tailscale/);
+  });
+
+  test('cloudflare：三键不齐 → warn；齐 → ok 提 2FA 生效', () => {
+    assert.equal(accessProfileDiagnostic({ ...clean, profile: 'cloudflare' }).status, 'warn');
+    const ok = accessProfileDiagnostic({ ...clean, profile: 'cloudflare', cfConfigured: true });
+    assert.equal(ok.status, 'ok');
+    assert.match(ok.detail, /2FA/);
+  });
+
+  test('vpn：三键反而齐 → warn；token 未设 → warn 提隧道另一端连不上；通知已配但 PUBLIC_URL 空 → warn 提深链', () => {
+    assert.match(accessProfileDiagnostic({ ...clean, profile: 'vpn', cfConfigured: true }).detail, /CF_ACCESS/);
+    const noTok = accessProfileDiagnostic({ ...clean, profile: 'vpn', authTokenSet: false });
+    assert.equal(noTok.status, 'warn');
+    assert.match(noTok.detail, /127\.0\.0\.1/);
+    const noUrl = accessProfileDiagnostic({ ...clean, profile: 'vpn', notifyConfigured: true });
+    assert.equal(noUrl.status, 'warn');
+    assert.match(noUrl.detail, /PUBLIC_URL/);
+  });
+
+  test('vpn 全净 → ok + 提示 PWA/Push 需 HTTPS', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'vpn', publicUrl: 'http://100.64.0.5:3000', notifyConfigured: true });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /HTTPS/);
+  });
+
+  test('reverse-proxy 全净 → ok + 提反代层认证与 deployment.md 硬要求', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'reverse-proxy', publicUrl: 'https://x.example.com' });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /认证/);
+    assert.match(r.detail, /deployment/);
+  });
+
+  test('lan：三键齐 / PUBLIC_URL 设了 / token 未设 → 各自 warn；全净 → ok', () => {
+    assert.equal(accessProfileDiagnostic({ ...clean, profile: 'lan', cfConfigured: true }).status, 'warn');
+    assert.equal(accessProfileDiagnostic({ ...clean, profile: 'lan', publicUrl: 'https://x.example.com' }).status, 'warn');
+    assert.equal(accessProfileDiagnostic({ ...clean, profile: 'lan', authTokenSet: false }).status, 'warn');
+    assert.equal(accessProfileDiagnostic({ ...clean, profile: 'lan' }).status, 'ok');
+  });
+
+  test('多问题聚合进一条 detail（vpn + 三键齐 + token 未设 → 一条 warn 两个问题）', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'vpn', cfConfigured: true, authTokenSet: false });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /CF_ACCESS/);
+    assert.match(r.detail, /AUTH_TOKEN|127\.0\.0\.1/);
+  });
+
+  test('★ 脱敏：detail 与整个返回值都不回显传入的 PUBLIC_URL 值', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'lan', publicUrl: 'https://secret-host.example.com' });
+    assert.doesNotMatch(JSON.stringify(r), /secret-host/);
+  });
+
+  test('英文分支措辞完整（拿 vpn 缺 token 一例）', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'vpn', authTokenSet: false, lang: 'en' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /127\.0\.0\.1/);
+    assert.match(r.detail, /AUTH_TOKEN/i);
   });
 });

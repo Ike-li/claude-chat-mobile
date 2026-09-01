@@ -168,6 +168,9 @@ Claude Chat Mobile supports everything from LAN access to a long-lived public en
 | Same Wi-Fi       | LAN address                                 | the simplest first run         |
 | Temporary public | Cloudflare Quick Tunnel                     | trials and demos               |
 | Long-term public | fixed domain + Cloudflare Tunnel + Access   | regular access from outside    |
+| Self-hosted entry | encrypted tunnel / VPN, self-hosted reverse proxy | keeping traffic off Cloudflare |
+
+The setup wizard asks how your phone will reach this machine; the answer is stored as `ACCESS_PROFILE`, and `doctor` plus the phone security check tailor their checks to it (the product never installs third-party tunnel tools — it only points to the docs). Skipping is fine; you can pick a profile later in the phone Settings.
 
 PWA installation and Web Push require HTTPS; on iOS, Web Push also requires iOS 16.4+ and installing the site to the Home Screen first.
 
@@ -188,7 +191,7 @@ Boundaries to understand before you use it:
 3. **Workspaces are explicitly allowlisted.** Files, sessions, and related operations can only reach the configured `WORK_DIR` / `WORKDIRS`. Do not add your whole home directory for convenience.
 4. **New devices need trust.** Except for local connections and connections already validated by Cloudflare Access, a device holding the correct token still needs one device approval.
 5. **Claude Code permissions are inherited.** Existing Claude Code rules such as `permissions.allow` stay in effect; review your automatic Bash / Write approvals before public use.
-6. **The file editor is a direct user write.** It **does not pass through the Agent tool-approval chain**. It can only modify existing files inside an approved workspace, with scope checks, a size limit, content-hash conflict detection, and audit logging. Set `FILE_EDIT=off` if you do not need it.
+6. **The file editor is a direct user write.** It **does not pass through the Agent tool-approval chain**. It can only modify existing files inside an approved workspace, with scope checks, a size limit, content-hash conflict detection, and audit logging. Set `FILE_EDIT=off` if you do not need it. Turning it off is recommended for long-term public exposure — `doctor` flags it when a public entry point (Cloudflare Access / `PUBLIC_URL` / a public `ACCESS_PROFILE`) is declared, and the setup wizard asks about it.
 
 If you plan to expose it publicly for the long term, read [deployment and operations](docs/deployment.md) (Chinese) first.
 

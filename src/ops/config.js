@@ -108,6 +108,10 @@ export function parseServerConfig(env, {
     notifyThrottleMs: positiveNumber(env.NOTIFY_THROTTLE_MS, 60_000),
     sessionDeleteQuietMs: positiveNumber(env.SESSION_DELETE_QUIET_MS, 300_000),
     devMode: env.DEV_MODE === '1',
+    // 监听地址的两个输入原样透传，判定留给 src/shared/bind-host.js 的 resolveBindPlan
+    //（server 与两个 doctor 共用那一份，此处再判一次就又有分叉余地了）。
+    bindMode: env.BIND_MODE || '',
+    bindHost: env.BIND_HOST || '',
     workDir: env.WORK_DIR || home,
     // 走带参重载而非无参形式：本函数是可注入纯函数（单测传 projectRoot 断言回落），
     // 且它在 .env 加载前就被求值，绝不能让状态根解析退化成读 process.env。

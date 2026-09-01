@@ -172,6 +172,8 @@ Claude Chat Mobile 支持从局域网到长期公网访问的不同方式：
 | 长期公网     | 固定域名 + Cloudflare Tunnel + Access | 长期从外部网络访问 |
 | 自建入口     | 加密隧道 / VPN、自建反向代理                 | 不希望流量经过 Cloudflare |
 
+装机向导会问「你打算怎么从手机访问」，答案写入 `ACCESS_PROFILE`，`doctor` 与手机端安全体检按它做针对性检查（产品不安装任何第三方隧道工具，只指路文档）；跳过也不影响使用，随时可在手机「设置」里补选。
+
 PWA 和 Web Push 需要 HTTPS；iOS Web Push 还要求 iOS 16.4+，并先将应用添加到主屏幕。
 
 固定域名、Cloudflare Tunnel、Cloudflare Access、不经过 Cloudflare 的替代入口、长期运行和运维方式：

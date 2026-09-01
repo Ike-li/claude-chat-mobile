@@ -130,6 +130,28 @@ export function createEnvConfigPanel({
     return input;
   }
 
+  // enum 项渲染成 select：候选项与双语 label 全部来自服务端下发的 options（env-schema 的
+  // 单一事实源），前端零硬编码。落成自由文本框的话用户能敲进 schema 不认的串 ——
+  // 写入侧 validateEnvChanges 会拒，但那是「保存才报错」，select 让非法值根本无法表达。
+  function buildSelect(item, field) {
+    const select = document.createElement('select');
+    select.className = 'w-full px-2 py-1.5 rounded-lg border border-line bg-sunk text-xs text-ink';
+    select.dataset.key = item.key;
+    select.setAttribute(CHANGED_MARK, '0');
+    for (const opt of item.options || []) {
+      const o = document.createElement('option');
+      o.value = opt.value ?? '';
+      o.textContent = text(opt.label);
+      select.append(o);
+    }
+    select.value = item.value ?? '';
+    field.el = select;
+    // 空 = 清除声明（服务端删键），与 buildInput 的空串语义一致。
+    field.read = () => (select.value === '' ? null : select.value);
+    watch(select, field);
+    return select;
+  }
+
   function buildInput(item, field) {
     const input = document.createElement('input');
     input.type = item.kind === 'number' ? 'number' : 'text';
@@ -162,6 +184,7 @@ export function createEnvConfigPanel({
       head.append(el('code', 'text-[10px] text-ink-faint shrink-0', item.key));
       row.append(head);
       if (item.secret) buildSecret(item, field, row);
+      else if (item.kind === 'enum' && Array.isArray(item.options)) row.append(buildSelect(item, field));
       else row.append(buildInput(item, field));
     }
 

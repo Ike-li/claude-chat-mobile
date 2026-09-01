@@ -22,6 +22,7 @@ import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { writeOwnerOnlyFile } from '../src/files/file-security.js';
 import { applyConfigChanges, CONFIG_FILE_NAME } from '../src/ops/config-file.js';
+import { ACCESS_PROFILES } from '../src/ops/env-schema.js';
 
 const HERE = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -39,7 +40,7 @@ export function generateToken(bytes = 32) {
 // 退役——它面向的人群在新格式成为默认后趋近于零；读取已存在 .env 的回落链不受影响，
 // 见 src/ops/config-file.js）。值里的空格 / 引号 / 反斜杠交给 JSON.stringify，不需要
 // .env 时代那套「同时满足 dotenv 与 shell 两个解析器」的字符白名单。
-export function buildConfigContent({ authToken, workDir, workDirs, fileEdit } = {}) {
+export function buildConfigContent({ authToken, workDir, workDirs, fileEdit, accessProfile } = {}) {
   const config = applyConfigChanges({}, {
     ...(authToken ? { AUTH_TOKEN: authToken } : {}),
     ...(workDir ? { WORK_DIR: workDir } : {}),
@@ -49,6 +50,8 @@ export function buildConfigContent({ authToken, workDir, workDirs, fileEdit } = 
     ...(Array.isArray(workDirs) && workDirs.length ? { WORKDIRS: workDirs } : {}),
     // 只有明确说「关」才写键；默认开由 schema 负责（TOGGLE_OFF 的 on 值是空串，写出来反而多余）。
     ...(fileEdit === 'off' ? { FILE_EDIT: 'off' } : {}),
+    // 同一纪律：只有显式选了方案才写键；回车跳过 = 未声明（一切消费点回落现状推断）。
+    ...(accessProfile ? { ACCESS_PROFILE: accessProfile } : {}),
   });
   return `${JSON.stringify(config, null, 2)}\n`;
 }
@@ -62,7 +65,7 @@ export function detectLang(env = process.env) {
 // 参数解析。未知参数不静默忽略而是收集起来由上层拒绝——`--workdir=` 这种少一个连字符的 typo
 // 若被忽略，WORK_DIR 就会悄悄回落到 $HOME，正是本模式要堵的那个洞。
 export function parseSetupArgs(argv = []) {
-  const out = { configPath: undefined, yes: false, workDir: undefined, hooks: undefined, desktop: undefined, force: false, help: false, unknown: [] };
+  const out = { configPath: undefined, yes: false, workDir: undefined, hooks: undefined, desktop: undefined, accessProfile: undefined, force: false, help: false, unknown: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     const eq = arg.indexOf('=');
@@ -73,6 +76,7 @@ export function parseSetupArgs(argv = []) {
     else if (name === '--work-dir') out.workDir = value();
     else if (name === '--hooks') out.hooks = value();
     else if (name === '--desktop') out.desktop = value();
+    else if (name === '--access-profile') out.accessProfile = value();
     else if (name === '--yes' || name === '-y') out.yes = true;
     else if (name === '--force') out.force = true;
     else if (name === '--help' || name === '-h') out.help = true;
@@ -145,6 +149,11 @@ export function resolveSetupPlan({ args, envExists = false, platform = process.p
   if (args.desktop !== undefined && args.desktop !== 'on' && args.desktop !== 'off') {
     return refuse('invalid_desktop', String(args.desktop));
   }
+  // 方案枚举来自 env-schema 的 ACCESS_PROFILES（单一事实源）。非法值直接拒，不猜意图——
+  // 「zerotier」大概率想要 vpn，但替用户猜写进配置就是 hard-rules §1 明令禁止的静默决定。
+  if (args.accessProfile !== undefined && !ACCESS_PROFILES.includes(args.accessProfile)) {
+    return refuse('invalid_access_profile', String(args.accessProfile));
+  }
   // 桌面控制台只有 macOS 有。静默忽略会让用户以为装上了 —— 明确拒绝才有信息量，
   // 同 src/ops/log-terminal.js 那条「返回 reason 而不是假装成功」。
   if (args.desktop === 'on' && platform !== 'darwin') {
@@ -152,14 +161,15 @@ export function resolveSetupPlan({ args, envExists = false, platform = process.p
   }
   if (!args.yes) {
     if (!isTty) return refuse('tty_required');
-    return { mode, workDir: args.workDir, hooks: args.hooks, desktop: args.desktop };
+    return { mode, workDir: args.workDir, hooks: args.hooks, desktop: args.desktop, accessProfile: args.accessProfile };
   }
   if (!args.workDir) return refuse('work_dir_required');
   const workDirNorm = normalizeSetupWorkDir(args.workDir, { home });
   if (!workDirNorm.ok) return refuse(workDirNorm.code);
   if (envExists && !args.force) return refuse('env_exists');
   // 默认不装：它要跑 swiftc（可能还要用户先 xcode-select --install），与 hooks 同一心智。
-  return { mode, workDir: workDirNorm.workDir, hooks: args.hooks ?? 'off', desktop: args.desktop ?? 'off' };
+  // accessProfile 是纯配置项：缺省 undefined = 不写键（未声明），不套 hooks 的「危险动作缺省 off」。
+  return { mode, workDir: workDirNorm.workDir, hooks: args.hooks ?? 'off', desktop: args.desktop ?? 'off', accessProfile: args.accessProfile };
 }
 
 // 覆盖提示的判定：把「检测到哪个文件」与「将写入哪个文件」当成两件事。
@@ -197,6 +207,22 @@ export const MESSAGES = {
     stepDoctor: '# 预检配置',
     stepStart: '# 启动；日志会打印手机可用的局域网地址',
     publicNote: '公网访问（固定域名 / Cloudflare Access 2FA / 常驻）见 docs/deployment.md。',
+    accessPrompt: '你打算怎么从手机访问？（决定 doctor 与安全体检按哪套方案帮你检查；详见 docs/deployment.md）\n'
+      + '  1) 仅局域网 —— 同一 WiFi 直连\n'
+      + '  2) Cloudflare Tunnel + Access —— 固定域名 + 公网 2FA\n'
+      + '  3) 加密隧道 / VPN —— Tailscale、WireGuard、ZeroTier…\n'
+      + '  4) 自建反代 / 网关 —— VPS + nginx、Caddy、frp…\n'
+      + '选 1-4，回车 = 暂不声明（以后可在手机「设置」或 node scripts/config.js 里改）: ',
+    accessInvalid: '请输入 1-4，或直接回车跳过',
+    accessChosenNote: p => `已声明公网访问方案：${p}（写入 ACCESS_PROFILE；doctor 与安全体检会按它做针对性检查）`,
+    accessNotes: {
+      cloudflare: '公网搭建步骤（固定域名 / Cloudflare Tunnel / Access 2FA / 常驻）见 docs/deployment.md「从零搭建」。',
+      vpn: '加密隧道 / VPN 的落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」：手机用隧道内地址访问，'
+        + '要收通知须显式设 PUBLIC_URL。该章文末有可直接粘贴给编程 agent 的选型与落地 prompt。',
+      'reverse-proxy': '自建反代的落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」：Host 透传与 WebSocket 升级'
+        + '是硬要求，建议在反代层再补一层认证。该章文末有可直接粘贴给编程 agent 的选型与落地 prompt。',
+      lan: '同一 WiFi 直连即可：启动日志会打印手机可用的局域网地址；从手机打开的步骤见 docs/getting-started.md。',
+    },
     fileEditPrompt: '启用手机端文件编辑器? 可直接修改工作区内文件——不经 Claude 工具审批链'
       + '（仍有范围/大小/哈希/审计护栏）。长期公网暴露建议关闭 [Y/n] ',
     fileEditOffNote: '已关闭：将写入 FILE_EDIT=off（手机端文件界面只读；配置里随时可改回）。',
@@ -211,11 +237,12 @@ export const MESSAGES = {
     desktopFailed: '编译未成功（见上方输出）。不影响其余配置；装好 Command Line Tools'
       + '（xcode-select --install）后跑 npm run app:build 重试。',
     usage: '用法: node scripts/setup.js [--config <path>]\n'
-      + '      node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--desktop=on|off] [--force]',
+      + '      node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--desktop=on|off] [--access-profile=cloudflare|vpn|reverse-proxy|lan] [--force]',
     refuse: {
       unknown_flag: d => `无法识别的参数：${d}`,
       invalid_hooks: d => `--hooks 只接受 on 或 off，收到：${d}`,
       invalid_desktop: d => `--desktop 只接受 on 或 off，收到：${d}`,
+      invalid_access_profile: d => `--access-profile 只接受 cloudflare / vpn / reverse-proxy / lan，收到：${d}`,
       desktop_unsupported: d => `桌面控制台只有 macOS 有（当前平台：${d}）。服务器上用手机端与命令行，功能是齐的。`,
       work_dir_required: () => '必须显式给出工作目录的绝对路径（--work-dir= 或向导里键入）。'
         + '这里不会静默回落到 $HOME——那等于把整个家目录交给远程入口。',
@@ -251,6 +278,22 @@ export const MESSAGES = {
     stepDoctor: '# pre-flight your config',
     stepStart: '# start; the log prints a LAN URL you can open on your phone',
     publicNote: 'Public access (fixed domain / Cloudflare Access 2FA / daemon): see docs/deployment.md.',
+    accessPrompt: 'How will your phone reach this machine? (decides which profile doctor and the security check tailor to; see docs/deployment.md)\n'
+      + '  1) LAN only — same-WiFi direct access\n'
+      + '  2) Cloudflare Tunnel + Access — fixed domain + public 2FA\n'
+      + '  3) Encrypted tunnel / VPN — Tailscale, WireGuard, ZeroTier…\n'
+      + '  4) Self-hosted reverse proxy / gateway — VPS + nginx, Caddy, frp…\n'
+      + 'Pick 1-4, or press Enter to skip (change later in the phone Settings or via node scripts/config.js): ',
+    accessInvalid: 'Enter 1-4, or press Enter to skip',
+    accessChosenNote: p => `Access profile declared: ${p} (written as ACCESS_PROFILE; doctor and the security check tailor to it)`,
+    accessNotes: {
+      cloudflare: 'Public setup steps (fixed domain / Cloudflare Tunnel / Access 2FA / daemon): see docs/deployment.md, section "从零搭建" (from scratch).',
+      vpn: 'Encrypted tunnel / VPN essentials: see docs/deployment.md, section "不用 Cloudflare 的公网入口" — reach the phone via the in-tunnel address, '
+        + 'and set PUBLIC_URL explicitly if you want notification deep links. That section ends with a prompt you can paste to a coding agent.',
+      'reverse-proxy': 'Self-hosted reverse proxy essentials: see docs/deployment.md, section "不用 Cloudflare 的公网入口" — Host passthrough and '
+        + 'WebSocket upgrade are hard requirements; consider an extra auth layer at the proxy. That section ends with a prompt you can paste to a coding agent.',
+      lan: 'Same-WiFi direct access just works: the startup log prints the LAN address for your phone; see docs/getting-started.md.',
+    },
     fileEditPrompt: 'Enable the phone file editor? It edits workspace files directly — bypassing Claude\'s '
       + 'tool-approval chain (scope/size/hash/audit guards still apply). Recommended off for long-term public exposure [Y/n] ',
     fileEditOffNote: 'Off: FILE_EDIT=off will be written (phone file UI becomes read-only; change it in config anytime).',
@@ -265,11 +308,12 @@ export const MESSAGES = {
     desktopFailed: 'Build did not complete (see output above). Your other config is fine; install the Command Line '
       + 'Tools (xcode-select --install) and retry with npm run app:build.',
     usage: 'usage: node scripts/setup.js [--config <path>]\n'
-      + '       node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--desktop=on|off] [--force]',
+      + '       node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--desktop=on|off] [--access-profile=cloudflare|vpn|reverse-proxy|lan] [--force]',
     refuse: {
       unknown_flag: d => `Unrecognized argument: ${d}`,
       invalid_hooks: d => `--hooks accepts only on or off, got: ${d}`,
       invalid_desktop: d => `--desktop accepts only on or off, got: ${d}`,
+      invalid_access_profile: d => `--access-profile accepts only cloudflare / vpn / reverse-proxy / lan, got: ${d}`,
       desktop_unsupported: d => `The desktop console is macOS-only (this platform: ${d}). On a server, the phone UI and CLI cover everything.`,
       work_dir_required: () => 'An explicit absolute --work-dir= is required (or type one in the wizard). '
         + 'It will not silently fall back to $HOME — that would hand your entire home directory to a remote entrypoint.',
@@ -294,14 +338,28 @@ const c = {
   accent: s => `\x1b[36m${s}\x1b[0m`,
 };
 
+// 公网访问方案问询：数字 1-4 单选，回车 = 不声明（不写键）。非法输入重问、问满 maxAttempts
+// 回落不声明——EOF/管道喂错内容都不能死循环（promptWorkDir 的教训），且失败方向必须是
+// 「不写」而不是猜一个方案（hard-rules §1）。编号顺序即推荐的认知顺序：从最简单的 lan 起步。
+export async function promptAccessProfile(ask, { maxAttempts = 3, onInvalid } = {}) {
+  const MAP = { 1: 'lan', 2: 'cloudflare', 3: 'vpn', 4: 'reverse-proxy' };
+  for (let i = 0; i < maxAttempts; i += 1) {
+    const raw = String((await ask()) ?? '').trim();
+    if (raw === '') return undefined;
+    if (Object.hasOwn(MAP, raw)) return MAP[raw];
+    onInvalid?.();
+  }
+  return undefined;
+}
+
 // 落盘（交互/非交互两条路径共用，防各写一份再分叉）。
 //
 // 注意成功提示的位置：token 那行必须在 writeOwnerOnlyFile 之后才打印。旧实现先打印
 // 「✓ 已生成 AUTH_TOKEN（已写入 .env）」再去问 WORK_DIR，被 EOF/Ctrl-C 打断时一个字没写却已经报了成功。
-function writeSetupFile({ outPath, workDir, workDirs, fileEdit, t }) {
+function writeSetupFile({ outPath, workDir, workDirs, fileEdit, accessProfile, t }) {
   const token = generateToken();
   // 结构化构造没有旧模板替换那种「正则没匹配上就静默不生效」的失败模式，无需写后校验。
-  writeOwnerOnlyFile(outPath, buildConfigContent({ authToken: token, workDir: workDir || undefined, workDirs, fileEdit }));
+  writeOwnerOnlyFile(outPath, buildConfigContent({ authToken: token, workDir: workDir || undefined, workDirs, fileEdit, accessProfile }));
 
   const written = t.tokenWrittenSuffix.replace('%s', basename(outPath));
   console.log(`\n${c.green('✓')} ${t.tokenLabel}: ${c.dim(token.slice(0, 8) + written)}`);
@@ -330,11 +388,13 @@ function buildDesktopApp(t) {
   if (r.status !== 0) console.log(c.dim(t.desktopFailed));
 }
 
-function printNextSteps(t) {
+function printNextSteps(t, accessProfile) {
   console.log(c.bold(`\n${t.nextSteps}`));
   console.log(`  ${c.accent('node scripts/doctor.js')}   ${c.dim(t.stepDoctor)}`);
   console.log(`  ${c.accent('npm start')}                ${c.dim(t.stepStart)}`);
-  console.log(c.dim(`\n${t.publicNote}\n`));
+  // 选了方案就给对应的落地指引（只指路文档不打印全文——40 行的 agent prompt 住在
+  // deployment.md 里才不会漂移）；没选维持通用一句。
+  console.log(c.dim(`\n${(accessProfile && t.accessNotes[accessProfile]) || t.publicNote}\n`));
 }
 
 // deps 只为可测而存在：这个壳里出过两个只有「真跑一遍交互」才看得见的 bug（问了不用、
@@ -379,6 +439,17 @@ export async function runInteractive({ plan, outPath, existingConfig, t }, deps 
       return;
     }
 
+    // 公网访问方案：纯声明（决定 doctor/安全体检按哪套方案做针对性检查），回车 = 不声明不写键。
+    // 命令行 --access-profile 已给则不再问（同 workDir：显式参数交互里不重复问）。放在 FILE_EDIT
+    // 之前——先答拓扑，下一问「长期公网暴露建议关闭」的语境才立得住。
+    const accessProfile = plan.accessProfile !== undefined
+      ? plan.accessProfile
+      : await promptAccessProfile(
+        async () => (await rl.question(`\n${t.accessPrompt}`)).trim(),
+        { onInvalid: () => console.error(`✗ ${t.accessInvalid}`) },
+      );
+    if (accessProfile) console.log(c.dim(t.accessChosenNote(accessProfile)));
+
     // 文件编辑器直写：唯一绕过 Agent 工具审批链的写入通道（R45，2026-08-30）。回车=维持
     // schema 默认开（机主即 root，hard-rules §2.3），答 n 才写 FILE_EDIT=off。必须在写文件
     // 之前问——它是配置项，不像 hooks/desktop 是写完配置后才执行的安装动作。
@@ -386,7 +457,7 @@ export async function runInteractive({ plan, outPath, existingConfig, t }, deps 
     const fileEdit = fileEditAns === 'n' || fileEditAns === 'no' ? 'off' : undefined;
     if (fileEdit === 'off') console.log(c.dim(t.fileEditOffNote));
 
-    writeFile({ outPath, workDir: workDirNorm.workDir, workDirs: workDirNorm.workDirs, fileEdit, t });
+    writeFile({ outPath, workDir: workDirNorm.workDir, workDirs: workDirNorm.workDirs, fileEdit, accessProfile, t });
 
     // CLI hooks 桥：默认装（终端直跑的会话唯有装了它才能推到手机——轮询只能在你已经打开
     // app 时追平镜像，永远不会主动叫你）。默认 Y 但必须问：它写的是用户全局 ~/.claude/settings.json。
@@ -413,7 +484,7 @@ export async function runInteractive({ plan, outPath, existingConfig, t }, deps 
     if (desktop === 'on') buildDesktop(t);
     else if (platform === 'darwin') console.log(c.dim(t.desktopSkipped));
 
-    printNextSteps(t);
+    printNextSteps(t, accessProfile);
   } finally {
     rl.close();
   }
@@ -432,11 +503,11 @@ export function runNonInteractive({ plan, outPath, existingConfig, t }, deps = {
   // --force 的语义是「我知道有既有配置，继续」，不是「别告诉我会发生什么」。
   const overwrite = describeOverwrite({ existingConfig, outPath });
   if (overwrite?.shadows) warn(t.shadowWarning(overwrite.existing, overwrite.target));
-  writeFile({ outPath, workDir: plan.workDir, t });
+  writeFile({ outPath, workDir: plan.workDir, accessProfile: plan.accessProfile, t });
   if (plan.hooks === 'on') installHooks(t);
   else console.log(c.dim(t.hooksSkipped));
   if (plan.desktop === 'on') buildDesktop(t);
-  printNextSteps(t);
+  printNextSteps(t, plan.accessProfile);
 }
 
 async function main() {

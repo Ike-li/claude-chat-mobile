@@ -62,9 +62,11 @@ npm run setup
 
 1. 生成随机 `AUTH_TOKEN` 并写入 `ccm.config.json`，文件权限设为 `0600`。
 2. 询问「手机端要打开哪个项目目录」。必须填绝对路径（或 `~/` 路径）；空回车和家目录本身都会被拒绝。首个之后可以继续追加更多项目目录（回车结束）——全部写进 `WORKDIRS` 数组，第一个作为默认打开的 `WORK_DIR`。以后增删工作区直接改配置里的 `WORKDIRS` 即可，保存即热加载生效。
-3. macOS 上会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
+3. 询问「你打算怎么从手机访问」（仅局域网 / Cloudflare / 加密隧道 VPN / 自建反代）。回车可跳过；选了会写入 `ACCESS_PROFILE`，`doctor` 与手机端安全体检按它做针对性检查，向导结尾也会打印对应方案的文档指引。
+4. 询问是否启用手机端文件编辑器直写（唯一绕过 Agent 工具审批链的写入通道）。回车维持默认开；答 `n` 写入 `FILE_EDIT=off`。
+5. macOS 上会问要不要编译[桌面控制台](#可选macos-桌面控制台)。默认不编译 —— 它需要
    Xcode Command Line Tools。
-4. 询问是否安装 CLI hooks bridge。默认安装，但只有你确认后才会写 `~/.claude/settings.json`。
+6. 询问是否安装 CLI hooks bridge。默认安装，但只有你确认后才会写 `~/.claude/settings.json`。
 
 如果配置文件已存在，向导默认不覆盖。
 
@@ -145,6 +147,7 @@ node scripts/setup.js \
 - `--hooks` 只接受 `on` 或 `off`；`on` 会修改用户级 Claude hooks 配置。
 - `--desktop` 只接受 `on` 或 `off`，缺省 `off`；`on` 会跑 `swiftc`。非 macOS 上显式给
   `--desktop=on` 会被拒绝并说明原因，而不是静默忽略。
+- `--access-profile` 只接受 `cloudflare` / `vpn` / `reverse-proxy` / `lan`，缺省不写（未声明，一切按 `CF_ACCESS_*` 推断）；非法值直接拒绝，不猜意图。
 - 已有配置文件时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
 - 可用 `--config <path>` 指定配置文件位置。这条路径独立于仓库根已有的配置，不会因为旁边已有 `ccm.config.json` 而被拒。
 

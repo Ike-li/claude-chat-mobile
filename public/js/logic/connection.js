@@ -320,3 +320,19 @@ export function resolveForkAnchorUuid({ role, ownUuid = null, precedingAssistant
   if (role === 'assistant') return ownUuid || null;
   return precedingAssistantUuid || null;
 }
+
+// 页面是否从「本地/局域网/隧道内」打开——决定 unauthorized 时有没有 token 门可弹。
+// 100.64.0.0/10 是 Tailscale 用的 CGNAT 段（正则精确到 /10，不放整个 100/8：100/8 其余部分是可路由公网）。
+// 已知不覆盖：Tailscale MagicDNS 的 *.ts.net 域名（按地址段判，域名场景走公网分支，与既有边界一致）。
+export function isLanOrLocalHostname(h) {
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local')
+    || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(h);
+}
+
+// unauthorized 后走哪扇门：token-gate（弹令牌输入框）还是 access-relogin（公网无 token 可输，提示 Access 重登）。
+// data-cf-access 注入契约是 '1' | '0'（src/server/http.js 对 index.html 的替换）——"0" 是非空字符串，
+// 真值判断恒 true，曾把「CF 未启用」分支彻底堵死（非 CF 拓扑 token 失效后无门可弹的死路）。
+// 唯一合法的「已启用」是 === '1'；dataset 缺失（替换没匹配上）同样落 token 门，失败方向必须有门可弹。
+export function authFailurePath({ lanOrLocal, cfAccessFlag } = {}) {
+  return (lanOrLocal || cfAccessFlag !== '1') ? 'token-gate' : 'access-relogin';
+}

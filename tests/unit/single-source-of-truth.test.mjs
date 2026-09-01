@@ -66,6 +66,17 @@ test('绑定地址只由 src/shared/bind-host.js 决定，不许再写内联三�
     + '  它们只能 import 函数，够不到你这一行三元。');
 });
 
+// BIND_MODE 的合法值有两份手写字面量：bind-host.js 的 BIND_MODES（判定用，resolveBindPlan 拿它
+// 认未知模式）与 env-schema.js 的 BIND_MODE.options（面板 select 渲染用）。ACCESS_PROFILES 能从
+// options 派生，这里不能——bind-host 住在 shared 叶子层，反向 import ops 会撞模块边界闸。
+// 漂移的后果不是报错而是错位：面板能选一个 schema 认、判定层不认的值 → 保存成功 → 重启拒绝启动。
+test('BIND_MODE 的合法值在 bind-host 与 env-schema 之间不许漂移', async () => {
+  const { BIND_MODES } = await import('../../src/shared/bind-host.js');
+  const { ENV_SCHEMA } = await import('../../src/ops/env-schema.js');
+  const fromSchema = ENV_SCHEMA.BIND_MODE.options.map(o => o.value).filter(Boolean);
+  assert.deepEqual(fromSchema, [...BIND_MODES], '两处字面量必须逐项相等（空串「未声明」不计）');
+});
+
 // ── ② 默认端口 ────────────────────────────────────────────────────────────
 // 症状：env-schema 声明了 PORT.default='3000'，但 server 与 service.js 共 8 处各写各的 3000。
 // 于是那个 default **压根没人消费** —— 改它只让配置面板和 doctor 显示新值（doctor 拿

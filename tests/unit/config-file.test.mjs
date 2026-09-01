@@ -696,3 +696,22 @@ test.describe('未登记 key：读取侧放行', () => {
     assert.equal(out.PORT, '3000');
   });
 });
+
+// ── enum kind（ACCESS_PROFILE）：本层零改动的回归钉子 ─────────────────────────
+//
+// enum 是字符串进字符串出，coerce 与投影都走默认分支——这组断言把「零改动」这个论断钉住，
+// 而不是默默依赖：将来有人给 coerceToSchemaType/projectToEnv 加分支时，动到 enum 会先红这里。
+test.describe('ACCESS_PROFILE（enum）经写入/投影两侧保持字符串原样', () => {
+  test('applyConfigChanges 落字符串，不被类型化成别的', () => {
+    const config = applyConfigChanges({}, { ACCESS_PROFILE: 'vpn' });
+    assert.equal(config.ACCESS_PROFILE, 'vpn');
+    assert.equal(typeof config.ACCESS_PROFILE, 'string');
+  });
+  test('null 与空串都等于删键（CLI `config set ACCESS_PROFILE=` 的清除语义）', () => {
+    assert.equal(Object.hasOwn(applyConfigChanges({ ACCESS_PROFILE: 'vpn' }, { ACCESS_PROFILE: null }), 'ACCESS_PROFILE'), false);
+    assert.equal(Object.hasOwn(applyConfigChanges({ ACCESS_PROFILE: 'vpn' }, { ACCESS_PROFILE: '' }), 'ACCESS_PROFILE'), false);
+  });
+  test('structuredToStringValues 原样投影（消费点拿到的就是写入的字面量）', () => {
+    assert.equal(structuredToStringValues({ ACCESS_PROFILE: 'reverse-proxy' }).ACCESS_PROFILE, 'reverse-proxy');
+  });
+});

@@ -301,3 +301,40 @@ test.describe('env-config 渲染 —— 被环境变量压过的行必须看得�
     assert.equal(/环境变量/.test(textOf(h.dom.envConfigBody)), false);
   });
 });
+
+test.describe('env-config 渲染 —— enum 项（ACCESS_PROFILE）渲染成 select', () => {
+  // 夹具仍用真实 buildEnvView（手编外部契约的教训同上）
+  const vpnAck = { ok: true, ...buildEnvView({ ACCESS_PROFILE: 'vpn' }), envFileExists: true };
+
+  test('渲染成 select：全部候选项都在，首项是空值「未声明」，不落成自由文本框', async () => {
+    const h = harness({ ackQueue: [vpnAck] });
+    h.panel.open();
+    await settle();
+    const select = findInput(h.dom.envConfigBody, 'ACCESS_PROFILE');
+    assert.ok(select, '表单里应该有 ACCESS_PROFILE');
+    assert.equal(select.tagName, 'SELECT');
+    assert.ok(select.children.length >= 5, `候选项应含未声明+四方案，实际 ${select.children.length}`);
+    assert.equal(select.children[0].value, '');
+    assert.equal(select.value, 'vpn', '初值选中当前配置值');
+  });
+
+  test('改选后按改动提交：选 lan → changes 带 ACCESS_PROFILE="lan"', async () => {
+    const h = await openAndEdit({ ackQueue: [{ ok: true, results: [] }] }, { ACCESS_PROFILE: 'lan' });
+    const set = h.emitted.find((e) => e.event === 'env:set');
+    assert.ok(set);
+    assert.equal(set.payload.changes.ACCESS_PROFILE, 'lan');
+  });
+
+  test('改回空值 = 清除声明（提交 null 删键）', async () => {
+    const h = harness({ ackQueue: [vpnAck, { ok: true, results: [] }] });
+    h.panel.open();
+    await settle();
+    const select = findInput(h.dom.envConfigBody, 'ACCESS_PROFILE');
+    select.value = '';
+    select.dispatch('change');
+    h.save();
+    await settle();
+    const set = h.emitted.find((e) => e.event === 'env:set');
+    assert.equal(set.payload.changes.ACCESS_PROFILE, null);
+  });
+});

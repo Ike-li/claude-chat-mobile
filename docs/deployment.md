@@ -234,6 +234,29 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 `CF_ACCESS_HOSTNAME/TEAM/AUD` 三项留空时，`src/auth/cf-access.js` 整层关闭（`isPublicHost` 恒 false），
 server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬约束，各方案自身的安装配置以其官方文档为准。
 
+选定方案后建议声明 `ACCESS_PROFILE=vpn|reverse-proxy|lan`（Cloudflare 用户可声明 `cloudflare`；装机向导
+会问这一项，手机「设置」与 `node scripts/config.js set` 也能改）：它是纯声明、不改变任何运行时行为，
+但 `doctor` 与手机端安全体检会按它做针对性检查——声明与 `CF_ACCESS_*`/`PUBLIC_URL`/`AUTH_TOKEN`/通知配置
+互相矛盾时当场指出，而不是等到用不了才发现。
+
+### 收窄监听面：BIND_MODE / BIND_HOST
+
+默认情况下 server 在设了 `AUTH_TOKEN` 时绑 `0.0.0.0`（同 WiFi 的手机可直连），未设时只绑 `127.0.0.1`。
+若你打算「本机只开 loopback，公网入口完全由自己转发」（SSH `-L`、Tailscale Serve、反代等），可以显式收窄：
+
+| 配置 | 实际监听 | 适用 |
+|---|---|---|
+| 不设（默认） | 有 token → `0.0.0.0`；无 token → `127.0.0.1` | 绝大多数情况，行为与历来一致 |
+| `BIND_MODE=loopback` | `127.0.0.1` | 自己用 SSH/Tailscale/反代转发，不想让端口出现在局域网上 |
+| `BIND_MODE=lan` | `0.0.0.0` | 显式声明要对外监听（等价于默认+有 token，但意图写在配置里） |
+| `BIND_MODE=custom` + `BIND_HOST=::` | `::`（IPv4/IPv6 双栈） | 需要 IPv6 访问（默认的 `0.0.0.0` 只监听 IPv4） |
+| `BIND_MODE=custom` + `BIND_HOST=<网卡地址>` | 该地址 | 只对某一块网卡开放 |
+
+**不变量**：`lan` 与「`custom` 指向非 loopback 地址」都要求先有 `AUTH_TOKEN`，否则 **server 拒绝启动**
+并说明原因——不静默降级成 `127.0.0.1`，那会让你以为公网配好了、实际手机全部连不上却毫无提示。
+`BIND_MODE` 拼错、或 `custom` 没给 `BIND_HOST`，同样拒绝启动。改这两项都要重启；
+`doctor` 与手机端安全体检有单独一项报告当前绑到哪、以及配置会不会导致启动失败。
+
 ### 各拓扑的明文可见方
 
 现状下 TLS 在 Cloudflare 边缘终止，那一跳能看到明文对话与代码。若这是要消除的暴露点：
@@ -279,7 +302,8 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 - PWA 与 Web Push 需要安全上下文（HTTPS，或 `localhost`）。裸 IP 的 `http://` 能正常聊天，
   但装不了 PWA、收不到 Web Push，通知只能退回 ntfy（见上节）。
 - `CF_ACCESS_*` 三项留空。配置面板清空时会警告「公网域名退化成只靠 AUTH_TOKEN 校验」
-  （`src/ops/env-schema.js:430`），这条警告在此处是预期行为。
+  （`src/ops/env-schema.js:430`），这条警告在此处是预期行为。若声明了 `ACCESS_PROFILE`，
+  切换方案时面板还会提醒把它一并更新，避免声明指着旧方案。
 - **要用通知就必须显式设 `PUBLIC_URL`。** 深链地址是 `PUBLIC_URL` 优先、回落 `CF_ACCESS_HOSTNAME`
   （`src/ops/notify-channels.js:32`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
   该项的配置说明写的是「留空回退到 CF_ACCESS_HOSTNAME」，对本节场景等同于「留空即没有」。

@@ -66,10 +66,13 @@ function rateLimitActive(rl, req) {
   return !!a;
 }
 
-export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateLimit = null }) {
+// strategy 是「公网身份提供方」（src/auth/auth-strategy.js）：本模块只认那个接口形状，
+// 不认识任何具体 IdP。没有配置公网鉴权时传 NULL_AUTH_STRATEGY —— 它不认领任何 Host，
+// 于是全部请求走下面的 AUTH_TOKEN 路。
+export function createHttpAuth({ authToken, strategy, rateLimit = null }) {
   return async function httpAuth(req, res, next) {
     try {
-      const publicHost = isPublicHost(req.headers.host);
+      const publicHost = strategy.ownsHost(req.headers.host);
       const rl = rateLimit;
       if (rateLimitActive(rl, req)) {
         const key = rl.sourceKey(req);
@@ -83,7 +86,7 @@ export function createHttpAuth({ authToken, isPublicHost, verifyAccessJwt, rateL
 
       let authPassed = false;
       if (publicHost) {
-        await verifyAccessJwt(req.headers['cf-access-jwt-assertion']);
+        await strategy.verifyRequest(req.headers);
         authPassed = true;
         // 供下游 handler 判「设备审批 bypass」：与 socket 侧 io.use 的 shouldBypassDeviceApproval
         // 同源判据（accessEnabled）。CF Access 已是更强的边界（2FA），走它进来的设备结构上不可能
@@ -190,7 +193,7 @@ export function rewriteAppModuleImports(source, assetVersion) {
 export function configureHttpShell({
   app,
   projectRoot,
-  isAccessEnabled,
+  strategy,
   // 默认 null：哈希 public/js 全树 + css/app.css。传数组则仅哈希这些相对 selfJsDir 的路径（单测用）。
   selfJsFiles = null,
   // /js/** 子模块是否逐请求读盘（开发期改完刷新即生效）。默认关，专用开关 ASSET_HOT_RELOAD=1 打开。
@@ -232,7 +235,7 @@ export function configureHttpShell({
       return rewriteIndexAssetUrls(
         readFileSync(join(publicDir, 'index.html'), 'utf8'),
         assetVersion,
-      ).replace('<body ', `<body data-cf-access="${isAccessEnabled() ? '1' : '0'}" `);
+      ).replace('<body ', `<body data-cf-access="${strategy.isEnabled() ? '1' : '0'}" `);
     } catch {
       return null; // served as 500 below
     }

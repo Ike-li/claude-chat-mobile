@@ -458,6 +458,158 @@ test.describe('validateEnvChanges —— 清空 CF_ACCESS_* 必须先警告', ()
   });
 });
 
+// ── ACCESS_PROFILE：enum kind 的成员校验与视图下发 ──────────────────────────
+//
+// enum 是新 kind：值只能是 options 里声明过的字面量。写进去一个 schema 不认的串是**静默失效**
+// （所有消费点严格 === 比较、按未声明处理），必须在写入侧当场拒绝 —— 与 toggle 只认声明字面量同理。
+test.describe('ACCESS_PROFILE —— enum 成员校验', () => {
+  test('四个合法值全部通过', () => {
+    for (const v of ['cloudflare', 'vpn', 'reverse-proxy', 'lan']) {
+      const r = validateEnvChanges({ ACCESS_PROFILE: v }, { current: {} });
+      assert.equal(r.results.filter((x) => x.level === 'error').length, 0, v);
+    }
+  });
+  test('schema 不认的字面量 → error，文案列出允许值（用户能照着改对）', () => {
+    const r = validateEnvChanges({ ACCESS_PROFILE: 'tailscale' }, { current: {} });
+    const errs = r.results.filter((x) => x.level === 'error');
+    assert.equal(errs.length, 1);
+    assert.match(errs[0].message, /cloudflare/);
+    assert.match(errs[0].message, /vpn/);
+    assert.equal(r.ok, false);
+  });
+  test("空串（= 未声明）与 null（= 删键）都合法", () => {
+    assert.equal(validateEnvChanges({ ACCESS_PROFILE: '' }, { current: {} }).ok, true);
+    assert.equal(validateEnvChanges({ ACCESS_PROFILE: null }, { current: {} }).ok, true);
+  });
+});
+
+// ── ACCESS_PROFILE 声明与 CF_ACCESS_* 实际键的一致性 ───────────────────────
+//
+// 一律 warn 不 error：error 会挡死「先声明 cloudflare、下一批再补三键」的合法过渡序列
+// （面板全或无写入），而失配本身不产生安全洞 —— server 照常启动，只是愿望与现实没对齐。
+// 触发条件与 checkTogether 同款：本批没碰这组键（ACCESS_PROFILE + 三键）就不管，
+// 否则改个 PORT 都会重弹存量失配的确认框（稳态失配交给 doctor）。
+test.describe('validateEnvChanges —— ACCESS_PROFILE 声明与实际键失配要警告', () => {
+  const cfSet = { CF_ACCESS_HOSTNAME: 'x.example.com', CF_ACCESS_TEAM: 'myteam', CF_ACCESS_AUD: 'aud123' };
+
+  test('声明 cloudflare 但三键空 → 恰一条 warn（2FA 实际未生效），不 error', () => {
+    const r = validateEnvChanges({ ACCESS_PROFILE: 'cloudflare' }, { current: {} });
+    const warns = r.results.filter((x) => x.level === 'warn');
+    assert.equal(warns.length, 1);
+    assert.match(warns[0].message, /2FA|未生效|CF_ACCESS/);
+    assert.equal(r.ok, true);
+  });
+
+  test('声明 vpn 但三键齐 → warn 提示一并清空三键', () => {
+    const r = validateEnvChanges({ ACCESS_PROFILE: 'vpn' }, { current: cfSet });
+    const warns = r.results.filter((x) => x.level === 'warn');
+    assert.equal(warns.length, 1);
+    assert.match(warns[0].message, /清空|CF_ACCESS/);
+  });
+
+  test('同批「改声明 vpn + 清三键」→ 终态一致，本检查零 warn（只剩 teardown 那条）', () => {
+    const r = validateEnvChanges(
+      { ACCESS_PROFILE: 'vpn', CF_ACCESS_HOSTNAME: null, CF_ACCESS_TEAM: null, CF_ACCESS_AUD: null },
+      { current: cfSet },
+    );
+    const warns = r.results.filter((x) => x.level === 'warn');
+    assert.equal(warns.length, 1, '只应剩 teardown 的 2FA 警告');
+    assert.match(warns[0].message, /2FA/);
+  });
+
+  test('只清三键、声明留在 cloudflare → teardown + 失配两条 warn 互补（各有独立行动项）', () => {
+    const r = validateEnvChanges(
+      { CF_ACCESS_HOSTNAME: null, CF_ACCESS_TEAM: null, CF_ACCESS_AUD: null },
+      { current: { ...cfSet, ACCESS_PROFILE: 'cloudflare' } },
+    );
+    const warns = r.results.filter((x) => x.level === 'warn');
+    assert.equal(warns.length, 2);
+    assert.match(warns.map((w) => w.message).join(' '), /ACCESS_PROFILE/);
+  });
+
+  test('本批只改无关键、存量已失配 → 零新 warn（不做噪音）', () => {
+    const r = validateEnvChanges({ PORT: '3200' }, { current: { ACCESS_PROFILE: 'cloudflare' }, probePort: () => false });
+    assert.equal(r.results.filter((x) => x.level === 'warn').length, 0);
+  });
+
+  test('未声明（空/删除）与声明匹配（cloudflare + 三键齐）都不告警', () => {
+    assert.equal(validateEnvChanges({ ACCESS_PROFILE: '' }, { current: cfSet }).results.filter((x) => x.level === 'warn').length, 0);
+    assert.equal(validateEnvChanges({ ACCESS_PROFILE: null }, { current: cfSet }).results.filter((x) => x.level === 'warn').length, 0);
+    assert.equal(validateEnvChanges({ ACCESS_PROFILE: 'cloudflare' }, { current: cfSet }).results.filter((x) => x.level === 'warn').length, 0);
+    assert.equal(validateEnvChanges({ ACCESS_PROFILE: 'lan' }, { current: {} }).results.filter((x) => x.level === 'warn').length, 0);
+  });
+});
+
+// ── BIND_MODE / BIND_HOST：监听地址可配置 ──────────────────────────────────
+//
+// 分寸与既有两条对齐：结构性半残（custom 却没给地址）→ error，同 checkTogether；
+// 「合法但可能起不来」（要绑外网却没在配置文件里看到 token）→ warn，同 checkCfAccessTeardown。
+// token 那条刻意不做成 error：AUTH_TOKEN 可以来自 shell 环境变量（恒压过配置文件且写入侧看不见），
+// 判成 error 会误伤那类部署。真正的把关在启动期 resolveBindPlan——那里读的是最终 env，判据准确。
+test.describe('validateEnvChanges —— BIND_MODE / BIND_HOST', () => {
+  test('四个合法 BIND_MODE 值通过，未知值 error 并列出合法值', () => {
+    for (const v of ['', 'loopback', 'lan', 'custom']) {
+      const changes = v === 'custom' ? { BIND_MODE: v, BIND_HOST: '::' } : { BIND_MODE: v };
+      assert.equal(validateEnvChanges(changes, { current: { AUTH_TOKEN: 't' } }).ok, true, v);
+    }
+    const bad = validateEnvChanges({ BIND_MODE: 'lo0pback' }, { current: {} });
+    assert.equal(bad.ok, false);
+    assert.match(bad.results.find(r => r.level === 'error').message, /loopback/);
+  });
+
+  test('★ custom 但 BIND_HOST 空 → error（结构性半残，不猜地址）', () => {
+    const r = validateEnvChanges({ BIND_MODE: 'custom' }, { current: { AUTH_TOKEN: 't' } });
+    assert.equal(r.ok, false);
+    assert.match(r.results.find(x => x.level === 'error').message, /BIND_HOST/);
+  });
+
+  test('custom + BIND_HOST 同批给全 → 通过；只补 BIND_HOST（模式已在 current）也通过', () => {
+    assert.equal(validateEnvChanges({ BIND_MODE: 'custom', BIND_HOST: '::' }, { current: { AUTH_TOKEN: 't' } }).ok, true);
+    assert.equal(validateEnvChanges({ BIND_HOST: '::' }, { current: { AUTH_TOKEN: 't', BIND_MODE: 'custom' } }).ok, true);
+  });
+
+  test('lan / custom-非loopback + 配置文件里没有 AUTH_TOKEN → warn（不是 error：token 可能来自 shell env）', () => {
+    for (const changes of [{ BIND_MODE: 'lan' }, { BIND_MODE: 'custom', BIND_HOST: '::' }]) {
+      const r = validateEnvChanges(changes, { current: {} });
+      assert.equal(r.ok, true, '不得拒写');
+      const warns = r.results.filter(x => x.level === 'warn');
+      assert.equal(warns.length, 1, JSON.stringify(changes));
+      assert.match(warns[0].message, /AUTH_TOKEN/);
+      assert.match(warns[0].message, /启动|拒绝/, '要说清后果是起不来');
+    }
+  });
+
+  test('配置文件里有 AUTH_TOKEN → 不 warn（常态部署不该被打扰）', () => {
+    assert.equal(validateEnvChanges({ BIND_MODE: 'lan' }, { current: { AUTH_TOKEN: 't' } }).results.filter(x => x.level === 'warn').length, 0);
+  });
+
+  test('loopback 与 custom+loopback 地址从不 warn（不对外可达，不需要 token 作前提）', () => {
+    assert.equal(validateEnvChanges({ BIND_MODE: 'loopback' }, { current: {} }).results.filter(x => x.level === 'warn').length, 0);
+    assert.equal(validateEnvChanges({ BIND_MODE: 'custom', BIND_HOST: '127.0.0.1' }, { current: {} }).results.filter(x => x.level === 'warn').length, 0);
+  });
+
+  test('本批没碰这组键 → 零新增告警（存量失配交给 doctor，别每次改 PORT 都弹）', () => {
+    const r = validateEnvChanges({ PORT: '3200' }, { current: { BIND_MODE: 'lan' }, probePort: () => false });
+    assert.equal(r.results.length, 0);
+  });
+});
+
+test.describe('buildEnvView —— enum 项下发 options 供前端渲染 select', () => {
+  test('ACCESS_PROFILE 带 options：首项是空值「未声明」，每项 label 双语', () => {
+    const view = buildEnvView({});
+    const item = view.groups.flatMap((g) => g.items).find((i) => i.key === 'ACCESS_PROFILE');
+    assert.ok(item, 'auth 组里应有 ACCESS_PROFILE');
+    assert.equal(item.kind, 'enum');
+    assert.ok(Array.isArray(item.options) && item.options.length >= 5);
+    assert.equal(item.options[0].value, '');
+    for (const opt of item.options) {
+      assert.equal(typeof opt.label?.zh, 'string');
+      assert.equal(typeof opt.label?.en, 'string');
+    }
+    assert.equal(item.readonly, false, 'enum 不是 list，不得连坐标成只读');
+  });
+});
+
 // ── P1b：list 类型（WORKDIRS）的校验 ────────────────────────────────────────
 //
 // 缺陷路径（实测确认）：前端 env-config.js 只分派 number / toggle，其余一律渲染成 text input。
