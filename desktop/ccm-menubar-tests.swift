@@ -50,6 +50,8 @@ struct CCMCoreTests {
         testDevicePresentation()
         testAutostartRisk()
         testRunSyncResourceHygiene()
+        testRunSyncTimeoutDoesNotLeakWorkers()
+        testRunSyncDoesNotWaitUntilExitOffCaller()
         testModalWindowsAreRaised()
         testAppIdentityLine()
         testChildEnvironment()
@@ -739,6 +741,114 @@ extension CCMCoreTests {
         }
         check(after - before <= 2,
               "runSync 不泄漏 fd：孙进程持有 pipe 写端 \(iterations) 次后 fd \(before) → \(after)")
+    }
+
+    /// 2026-08-31 现场：菜单栏点不动、连退出都没有。进程从 08-27 08:07 活到 08-31，
+    /// sample 里 `Dispatch Thread Soft Limit: 64 reached`，64 条线程全堵在
+    /// `runSync` 的 `waitUntilExit` 上，2550 个独立 pipe fd 撞上限，主线程卡在
+    /// `_NSMenuShortcutUpdater` → `CFPasteboardGetGenerationCount` 的 `dispatch_sync`
+    /// （点菜单才走这条路径，所以「图标还在、一点就没反应」）。
+    ///
+    /// 子进程当时已经一个不剩——`waitUntilExit` 跑在**另一条** GCD 线程上，
+    /// 子进程退出通知到不了那条线程的 run loop，于是函数靠信号量超时返回了，
+    /// 但 watchdog 线程和它强持的 Process/Pipe 永远不收工。探测每 10s 两次
+    /// `runSync`，线程池和 fd 一起涨，直到点菜单把主线程也锁死。
+    ///
+    /// 旧的孙进程用例抓不到这条：父 sh 立刻退出时 `waitUntilExit` 碰巧能返回。
+    /// 这里用「超时杀掉还活着的 sleep」——正是 service.js 卡住时走的那条路径。
+    static func threadCount() -> Int {
+        var threadList: thread_act_array_t?
+        var count: mach_msg_type_number_t = 0
+        let kr = task_threads(mach_task_self_, &threadList, &count)
+        guard kr == KERN_SUCCESS else { return -1 }
+        if let threadList {
+            let bytes = vm_size_t(MemoryLayout<thread_act_t>.stride * Int(count))
+            vm_deallocate(mach_task_self_, vm_address_t(UInt(bitPattern: threadList)), bytes)
+        }
+        return Int(count)
+    }
+
+    static func testRunSyncTimeoutDoesNotLeakWorkers() {
+        // 先跑一发，让 LoginShellPath / GCD 池的一次性预热摊掉，不记进增量。
+        _ = runSync("/bin/sh", ["-c", "exit 0"], timeout: 2, drainGrace: 0.2)
+
+        let iterations = 3
+        let threadsBefore = threadCount()
+        let fdsBefore = openFDCount()
+        for _ in 0..<iterations {
+            // 忽略 SIGTERM：terminate() 杀不死，读端会在 waitUntilExit 返回之前
+            // 先因 drain deadline 被关掉 —— 这正是 Foundation 里 waitUntilExit
+            // 丢掉退出通知、线程永久挂起的触发条件。普通 sleep 接到 SIGTERM 立刻死，
+            // 这条竞态在测试里几乎打不中。
+            check(runSync("/bin/sh", ["-c", "trap '' TERM; exec sleep 30"], timeout: 0.2, drainGrace: 0.1) == nil,
+                  "忽略 SIGTERM 的 sleep 应被超时 + SIGKILL 杀掉")
+        }
+
+        var threadsAfter = threadCount()
+        var fdsAfter = openFDCount()
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline && (threadsAfter - threadsBefore > 4 || fdsAfter - fdsBefore > 2) {
+            Thread.sleep(forTimeInterval: 0.05)
+            threadsAfter = threadCount()
+            fdsAfter = openFDCount()
+        }
+        check(threadsAfter - threadsBefore <= 4,
+              "超时路径不泄漏 waitUntilExit 线程：\(iterations) 次后 \(threadsBefore) → \(threadsAfter)")
+        check(fdsAfter - fdsBefore <= 2,
+              "超时路径不泄漏 pipe fd：\(iterations) 次后 \(fdsBefore) → \(fdsAfter)")
+
+        let t0 = Date()
+        let r = runSync("/bin/sh", ["-c", "printf ok"], timeout: 2, drainGrace: 0.2)
+        eq(r?.stdout, "ok", "多次超时后短命令仍能收回输出（GCD 池没被占满）")
+        check(Date().timeIntervalSince(t0) < 1.5, "短命令不该走到超时")
+
+        // 每个 runSync 若还要另起 3 条 GCD 线程（2 reader + 1 waitUntilExit），
+        // 20 路并发会超过进程的 Dispatch 软上限 64，调用方全部堵在信号量上
+        // 等那些永远排不上的 worker —— 这就是菜单栏「点不动」的缩微版。
+        // 调用方线程本身也来自 GCD，所以这个数字必须压到「调用方之外不再占池」。
+        let n = 20
+        let group = DispatchGroup()
+        var ok = 0
+        let lock = NSLock()
+        for i in 0..<n {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                let r = runSync("/bin/sh", ["-c", "printf \(i)"], timeout: 5, drainGrace: 0.3)
+                if r?.stdout == "\(i)" { lock.lock(); ok += 1; lock.unlock() }
+                group.leave()
+            }
+        }
+        let concurrent = group.wait(timeout: .now() + 10)
+        check(concurrent == .success, "\(n) 路并发 runSync 应在 10s 内全部返回，不能把 GCD 池堵死")
+        eq(ok, n, "\(n) 路并发都应收回各自的 stdout")
+    }
+
+    /// 源码闸：`runSync` 不准调用 `waitUntilExit`。
+    ///
+    /// 测试二进制不链 AppKit、没有 `NSApplication.run`，那条「退出通知发到主线程
+    /// run loop、背景线程上的 waitUntilExit 永远等不到」的竞态在这里打不中。
+    /// 菜单栏是 LSUIElement + NSApplication，2026-08-31 的 sample 里 64 条线程
+    /// 全堵在 `-[NSConcreteTask waitUntilExit]`，子进程一个不剩。收尸必须用
+    /// waitpid 在调用方线程做，这条闸把 `waitUntilExit` 的复发入口焊死。
+    static func testRunSyncDoesNotWaitUntilExitOffCaller() {
+        let path = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("CCMProcess.swift").path
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else {
+            check(false, "源码闸读不到 CCMProcess.swift")
+            return
+        }
+        check(text.contains("func runSync("), "源码闸确认扫到了 runSync")
+        let lines = text.components(separatedBy: "\n")
+        for (i, line) in lines.enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("//") || trimmed.hasPrefix("///") { continue }
+            if trimmed.contains("waitUntilExit(") {
+                check(false,
+                      "CCMProcess.swift:\(i + 1) 调用了 waitUntilExit —— "
+                      + "AppKit 进程里退出通知到不了那条线程，watchdog 永不返回，菜单栏点不动")
+            }
+        }
     }
 }
 
