@@ -117,6 +117,30 @@ export function ipRateBucket(ip) {
   return `${h.slice(0, 4).join(':')}::/64`;
 }
 
+// 被拒时给客户端什么原因、带不带重试提示——HTTP 与 socket 的【单一事实源】。
+//
+// 【为什么要收敛】两侧此前各自判断这件事，于是在「本次失败恰好触发锁定」那一刻分叉：
+// HTTP 已经回 429 rate_limited + Retry-After，socket 却仍回 unauthorized 且不带任何重试提示。
+// 表现出来就是同一个来源、同一次失败，手机上看到的是「令牌不对」，curl 看到的是「被限速了，
+// 15 分钟后再来」——前者会让人反复重试，而每次重试都只是撞在锁上。
+//
+// 判据是 verdict 而不是 failCount：'locked' 涵盖两种情形——本次达阈值上的长锁，以及退避/锁定
+// 期内被门拦下。两者对客户端的含义相同（现在别再试了，等这么久）。'backoff' 不算：那一次请求
+// 真的做了 token 校验并失败了，只是顺带上了把短锁，说 rate_limited 会说反话。
+export function authRejection({ verdict, retryAfterMs = null } = {}) {
+  if (verdict !== 'locked') {
+    // unauthorized 不带 retryAfter：给了就等于暗示「等等就能进」，而它真正的问题是令牌不对。
+    return { reason: 'unauthorized', httpStatus: 401, retryAfterMs: null, retryAfterSeconds: null };
+  }
+  // 秒数向上取整且至少 1：Retry-After: 0 会被读成「立刻可重试」，与锁定的意思相反。
+  return {
+    reason: 'rate_limited',
+    httpStatus: 429,
+    retryAfterMs: retryAfterMs ?? null,
+    retryAfterSeconds: Math.max(1, Math.ceil((retryAfterMs || 0) / 1000)),
+  };
+}
+
 // sourceKey：限速计数的来源标识。
 // 优先级：边缘层可信注入的真实来源(CF-Connecting-IP) → 连接 IP。两条路径都过 ipRateBucket 归桶：
 // CF-Connecting-IP 是客户端的真实地址，IPv6 客户端换地址同样能拆桶，是同一个绕过面。

@@ -33,6 +33,8 @@ async function startServer(authToken = 'secret-token') {
   await waitForServerReady(port, authToken);
 }
 
+// 返回 { message, data }：data 是 socket.io 把服务端 err.data 原样送来的负载，
+// 它是 socket 侧对应 HTTP `Retry-After` 头的唯一通道（握手失败没有 HTTP 响应头可用）。
 function connectExpectError(token, timeout = 5000) {
   const socket = ioClient(`http://127.0.0.1:${port}`, {
     auth: token === undefined ? {} : { token },
@@ -41,7 +43,10 @@ function connectExpectError(token, timeout = 5000) {
   });
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => { socket.disconnect(); reject(new Error('期望连接错误但未收到')); }, timeout);
-    socket.once('connect_error', (err) => { clearTimeout(timer); socket.disconnect(); resolve(err.message); });
+    socket.once('connect_error', (err) => {
+      clearTimeout(timer); socket.disconnect();
+      resolve({ message: err.message, data: err.data ?? null });
+    });
     socket.once('connect', () => { clearTimeout(timer); socket.disconnect(); reject(new Error('不应连接成功')); });
   });
 }
@@ -74,14 +79,42 @@ test.describe('鉴权限速接线集成测试', () => {
 
   // 失败后 backoff 短锁在时间窗内拦截后续尝试：串行连错 token，首次 unauthorized、随后应出现 rate_limited
   test('鉴权失败后 backoff 短锁拦截后续握手（出现 rate_limited）', async () => {
-    const msgs = [];
+    const results = [];
     for (let i = 0; i < 3; i++) {
-      msgs.push(await connectExpectError('wrong-token'));
+      results.push(await connectExpectError('wrong-token'));
     }
+    const msgs = results.map(r => r.message);
     assert.match(msgs[0], /unauthorized/, `首次失败应为 unauthorized，实际：${msgs[0]}`);
     assert.ok(
       msgs.some(m => /rate_limited/.test(m)),
       `失败后应被限速短锁拦截（出现 rate_limited），实际全部：${JSON.stringify(msgs)}`,
     );
+  });
+
+  // socket 侧此前一个重试数字都不给：客户端只知道「连不上」，不知道要等多久，于是盲目重连——
+  // 而每次重连都只是撞在刚上的锁上。HTTP 侧一直有 Retry-After 头，握手没有响应头可用，
+  // socket.io 的 err.data 是唯一通道。
+  test('被限速拒绝时带重试提示（对应 HTTP 的 Retry-After）', async () => {
+    const results = [];
+    for (let i = 0; i < 3; i++) {
+      results.push(await connectExpectError('wrong-token'));
+    }
+    const limited = results.find(r => /rate_limited/.test(r.message));
+    assert.ok(limited, `本用例前提是至少出现一次 rate_limited，实际：${JSON.stringify(results.map(r => r.message))}`);
+    assert.ok(limited.data, 'rate_limited 必须带 data 负载');
+    assert.equal(limited.data.reason, 'rate_limited');
+    assert.ok(Number.isFinite(limited.data.retryAfterMs) && limited.data.retryAfterMs > 0,
+      `retryAfterMs 应为正数，实际 ${limited.data.retryAfterMs}`);
+    assert.ok(Number.isInteger(limited.data.retryAfterSeconds) && limited.data.retryAfterSeconds >= 1,
+      'retryAfterSeconds 至少为 1——0 会被读成「立刻可重试」，与锁定的意思相反');
+  });
+
+  // 反向：单纯的令牌错误不该带重试提示，否则等于暗示「等等就能进」，而它真正的问题是令牌不对。
+  test('unauthorized 不带重试提示（不误导成「等一会儿就能进」）', async () => {
+    // 先等过上一条留下的短锁，确保这一次真的走到 token 校验而不是被门拦下
+    await new Promise(r => setTimeout(r, 1200));
+    const first = await connectExpectError('another-wrong-token');
+    assert.match(first.message, /unauthorized/, `应为 unauthorized，实际：${first.message}`);
+    assert.equal(first.data?.retryAfterMs, undefined, 'unauthorized 不该带 retryAfterMs');
   });
 });

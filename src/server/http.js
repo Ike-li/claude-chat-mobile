@@ -4,6 +4,7 @@ import { networkInterfaces } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import compression from 'compression';
 import express from 'express';
+import { authRejection } from '../auth/rate-limiter.js';   // 拒绝语义与 socket 握手共用
 
 export const clientIp = value => (value || '').toString().replace(/^::ffff:/, '');
 
@@ -110,8 +111,9 @@ export function createHttpAuth({ authToken, strategy, rateLimit = null }) {
         rl.setState(key, r.next);
         if (!authPassed && r.verdict === 'locked') {
           rl.onLocked?.(key, r);
-          res.setHeader?.('Retry-After', String(Math.ceil((r.retryAfterMs || 0) / 1000)));
-          return res.status(429).json({ status: 'rate_limited' });
+          const rej = authRejection(r);   // 与 socket 握手共用同一份拒绝语义
+          res.setHeader?.('Retry-After', String(rej.retryAfterSeconds));
+          return res.status(rej.httpStatus).json({ status: rej.reason });
         }
       }
 

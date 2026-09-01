@@ -57,7 +57,7 @@ import {
   resolveSlashCommandsForCwd,
 } from '../agent/models-cache.js';
 import { createCfAccessStrategy } from '../auth/auth-strategy.js';
-import { onAuthResult, freshState, rlSourceKey, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
+import { onAuthResult, freshState, rlSourceKey, authRejection, shouldTrustCfConnectingIp, shouldBypassDeviceApproval } from '../auth/rate-limiter.js';
 import { deriveLatches } from './instance-latches.js';
 import { deriveAttention } from '../sessions/attention.js';
 import { listTerminalSessionStates, applyTerminalStatesToSessions, hasBusyTerminalSessionForCwd, findBlockingLiveAgent } from '../sessions/session-registry.js';
@@ -656,6 +656,18 @@ if (process.stdin.isTTY) {
   });
 }
 
+// 握手拒绝：把 authRejection 的判定翻译成 socket.io 的错误对象。
+// message 仍是原来的字符串（'unauthorized' / 'rate_limited'），前端既有判据不受影响；
+// 新增的 err.data 让客户端能拿到重试提示——socket.io 会把 data 原样送到客户端的
+// connect_error(err) 上，这是 socket 侧对应 HTTP `Retry-After` 头的唯一通道。
+// 此前 socket 侧一个数字都不给，手机端只能盲目重连，而每次重连都只是撞在锁上。
+function rejectHandshake(rlResult) {
+  const rej = authRejection(rlResult);
+  const err = new Error(rej.reason);
+  err.data = { reason: rej.reason, ...(rej.retryAfterMs === null ? {} : { retryAfterMs: rej.retryAfterMs, retryAfterSeconds: rej.retryAfterSeconds }) };
+  return err;
+}
+
 // 鉴权门口防暴破限速：仅当配了鉴权门（公网 CF Access 或 AUTH_TOKEN）时生效——
 // 无鉴权模式(!AUTH_TOKEN 且非公网) authPassed 恒真、永不计失败，天然不触发。
 // CF-Connecting-IP 仅公网 Host 采信；LAN 只认连接 IP（防伪造头拆分限速桶）。
@@ -679,7 +691,7 @@ io.use(async (socket, next) => {
       const now = Date.now();
       if (now < st.lockUntil) {
         console.warn(`[conn] ${ip} 鉴权限速中，拒握手（retryAfter≈${Math.ceil((st.lockUntil - now) / 1000)}s，source=${rlKey}）`);
-        return next(new Error('rate_limited'));
+        return next(rejectHandshake({ verdict: 'locked', retryAfterMs: st.lockUntil - now }));
       }
     }
 
@@ -700,15 +712,18 @@ io.use(async (socket, next) => {
     }
 
     // 限速计数：成功清零、失败退避/锁定
+    let rlResult = null;
     if (rlActive) {
       const st = rlStates.get(rlKey) || freshState();
-      const r = onAuthResult(st, authPassed, Date.now());
-      setRlStateCapped(rlKey, r.next); // F2：握手路径同样过 cap，不给扫描器绕出无界增长
-      if (!authPassed && r.verdict === 'locked') {
-        console.warn(`[conn] ${ip} 连续鉴权失败达阈值 → 锁定 ${Math.ceil(r.retryAfterMs / 1000)}s（source=${rlKey}）`);
+      rlResult = onAuthResult(st, authPassed, Date.now());
+      setRlStateCapped(rlKey, rlResult.next); // F2：握手路径同样过 cap，不给扫描器绕出无界增长
+      if (!authPassed && rlResult.verdict === 'locked') {
+        console.warn(`[conn] ${ip} 连续鉴权失败达阈值 → 锁定 ${Math.ceil(rlResult.retryAfterMs / 1000)}s（source=${rlKey}）`);
         // 最小审计记录：只在"达阈值锁定"这个粒度写（本就限速到每锁定窗口一次），不逐次失败尝试都写——
         // 后者本身可被攻击者刷出高频事件、会把环形上限里的真实信号挤掉，锁定事件已足够代表"发生过暴破尝试"。
-        audit.recordAudit({ actor: { deviceId: null, via: 'unauthenticated' }, action: 'auth_rate_limited', target: rlKey, outcome: 'locked', meta: { retryAfterMs: r.retryAfterMs } });
+        // via 与 HTTP 侧对称（那边是 'socket' 的对家 'http'）：同一条 auth_rate_limited 记录，
+        // 少了它就分不清这次暴破是打在握手上还是打在 /health|/metrics|/push 上。
+        audit.recordAudit({ actor: { deviceId: null, via: 'unauthenticated' }, action: 'auth_rate_limited', target: rlKey, outcome: 'locked', meta: { retryAfterMs: rlResult.retryAfterMs, via: 'socket' } });
         metrics.inc('rate_limit_lockouts'); // 限速触发数（与审计同粒度：每锁定窗口一次）
         metrics.gauge('rate_limit_lockouts_last_ts', Date.now()); // 服务状态可见性：带时间戳，供 recentIncident 判定
       }
@@ -717,7 +732,10 @@ io.use(async (socket, next) => {
     if (!authPassed) {
       const got = socket.handshake.auth?.token;
       console.warn(`[conn] ${ip} 握手鉴权失败（token ${got ? '不匹配' : '缺失'}）`);
-      return next(new Error('unauthorized'));
+      // 本次失败若恰好触发锁定，要和 HTTP 侧一样报 rate_limited——此前这里恒回 unauthorized，
+      // 于是同一次失败在 curl 上是「被限速了，等 15 分钟」，在手机上却是「令牌不对」，
+      // 后者会让人反复重试，而每次重试都只是撞在那把刚上的锁上。
+      return next(rejectHandshake(rlResult ?? {}));
     }
 
     // 鉴权通过后，执行设备审批过滤（纵深防御）

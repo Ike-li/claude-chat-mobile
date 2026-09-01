@@ -67,6 +67,32 @@ export function foregroundReconnectAction(connected) {
   return connected ? 'probe' : 'connect';
 }
 
+// 握手被拒时给人看的话。吃 socket.io connect_error 的 { message, data }，返回 { kind, text }。
+//
+// 存在理由：服务端拒绝握手时只能给出机器可读的标识符（'unauthorized' / 'rate_limited'），
+// 接线层此前把它原样拼进「连接失败：{message}」——屏幕上就是「连接失败：rate_limited」，
+// 既看不懂也不知道要等多久，于是用户反复点重连，而每一次都只是撞在刚上的那把锁上。
+//
+// kind 与文案分开：'unauthorized' 归令牌门处理（它要弹输入框，不是显示一句话），
+// 其余两类才由调用方拿 text 去刷状态行。
+export function describeHandshakeError(err) {
+  const message = String(err?.message ?? '');
+  if (message === 'unauthorized') return { kind: 'unauthorized', text: t('需要访问令牌') };
+  if (message !== 'rate_limited') {
+    // 网络抖动之类：保留原始信息，它是排查时唯一的线索（对用户没意义，但比空白强）。
+    return { kind: 'other', text: `${t('连接失败：')}${message || t('未知错误')}` };
+  }
+  // 秒数来自服务端的 retryAfterSeconds（authRejection 保证 ≥1）。旧服务端不带 data，此时只说结论。
+  const secs = Number(err?.data?.retryAfterSeconds);
+  if (!Number.isFinite(secs) || secs < 1) {
+    return { kind: 'rate_limited', text: t('登录尝试过多，请稍后再试') };
+  }
+  // 分钟向上取整：15 分钟长锁说「900 秒」没人读得懂；而 61 秒说成「1 分钟」会让人早退回来又撞锁。
+  return secs < 60
+    ? { kind: 'rate_limited', text: t('登录尝试过多，请 {n} 秒后再试').replace('{n}', String(secs)) }
+    : { kind: 'rate_limited', text: t('登录尝试过多，请 {n} 分钟后再试').replace('{n}', String(Math.ceil(secs / 60))) };
+}
+
 // ── 连接状态顶部横幅（页面级可见反馈）────────────────────────────────────────
 // 存在理由：连通性的人话写给横幅。判定抽成纯函数，接线层
 // （app/connection-banner.js）只负责按返回值刷 DOM。

@@ -230,6 +230,10 @@ export const EN_DICT = Object.freeze({
   '已断开': 'Offline for',
   '立即重试': 'Retry now',
   '需要访问令牌': 'Access token required',
+  // 握手被防暴破限速挡下（describeHandshakeError）。说清还要等多久，否则用户只会反复重连撞锁。
+  '登录尝试过多，请 {n} 秒后再试': 'Too many sign-in attempts. Try again in {n}s.',
+  '登录尝试过多，请 {n} 分钟后再试': 'Too many sign-in attempts. Try again in {n} min.',
+  '登录尝试过多，请稍后再试': 'Too many sign-in attempts. Try again later.',
   '令牌无效，请重新输入': 'Invalid token — enter it again',
   '需要重新登录': 'Sign-in required',
   '连接失败：': 'Connection failed: ',

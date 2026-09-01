@@ -6,6 +6,7 @@ import {
   freshState,
   rlSourceKey,
   ipRateBucket,
+  authRejection,
   shouldTrustCfConnectingIp,
   shouldBypassDeviceApproval,
   DEFAULT_RATE_LIMIT_CONFIG as CFG,
@@ -209,6 +210,53 @@ test.describe('rlSourceKey：IPv6 按 /64 归桶（防换源地址绕过限速�
     assert.equal(key('2001:db8::1::2'), 'ip:2001:db8::1::2', '两处 :: 非法');
     assert.equal(key('2001:db8:zzzz::1'), 'ip:2001:db8:zzzz::1', '非 hex 组');
     assert.equal(key('1:2:3:4:5:6:7:8:9'), 'ip:1:2:3:4:5:6:7:8:9', '超 8 组');
+  });
+});
+
+// authRejection：被拒时给客户端什么原因 + 重试提示。
+// HTTP 与 socket 此前【各自】判断这件事，于是在「本次失败恰好触发锁定」那一刻分叉：
+// HTTP 已经是 429 rate_limited + Retry-After，socket 却仍回 unauthorized 且不带任何重试提示。
+// 收敛成一个纯函数后两侧不可能再走偏。
+test.describe('authRejection：HTTP 与 socket 的拒绝语义单一事实源', () => {
+  test('verdict=locked → rate_limited + 429 + 保留 retryAfter', () => {
+    const r = authRejection({ verdict: 'locked', retryAfterMs: 900_000 });
+    assert.equal(r.reason, 'rate_limited');
+    assert.equal(r.httpStatus, 429);
+    assert.equal(r.retryAfterMs, 900_000);
+    assert.equal(r.retryAfterSeconds, 900, 'HTTP Retry-After 头用秒，向上取整');
+  });
+
+  test('verdict=backoff → 仍是 unauthorized（本次是鉴权失败，不是被限速挡住）', () => {
+    // 这一次请求真的做了 token 校验并失败了，只是【顺带】给来源上了把短锁。
+    // 告诉客户端 rate_limited 会说反话——它下次才会撞上那把锁。
+    const r = authRejection({ verdict: 'backoff', retryAfterMs: 500 });
+    assert.equal(r.reason, 'unauthorized');
+    assert.equal(r.httpStatus, 401);
+    assert.equal(r.retryAfterMs, null, 'unauthorized 不带重试提示，避免暗示「等等就能进」');
+  });
+
+  test('retryAfterSeconds 向上取整，不给出 0（0 会被读成「立刻可重试」）', () => {
+    assert.equal(authRejection({ verdict: 'locked', retryAfterMs: 1 }).retryAfterSeconds, 1);
+    assert.equal(authRejection({ verdict: 'locked', retryAfterMs: 1001 }).retryAfterSeconds, 2);
+  });
+
+  test('locked 但缺 retryAfterMs → 不崩，秒数至少为 1', () => {
+    const r = authRejection({ verdict: 'locked' });
+    assert.equal(r.reason, 'rate_limited');
+    assert.equal(r.retryAfterSeconds, 1);
+  });
+
+  test('缺省/未知 verdict → 保守回 unauthorized（不误报成限速）', () => {
+    assert.equal(authRejection({}).reason, 'unauthorized');
+    assert.equal(authRejection().reason, 'unauthorized');
+    assert.equal(authRejection({ verdict: 'nonsense' }).reason, 'unauthorized');
+  });
+
+  test('两侧拿到的是同一份判定：locked 时 reason 与 httpStatus 恒对应', () => {
+    for (const ms of [1, 500, 30_000, 900_000]) {
+      const r = authRejection({ verdict: 'locked', retryAfterMs: ms });
+      assert.equal(r.reason === 'rate_limited', r.httpStatus === 429);
+    }
   });
 });
 
