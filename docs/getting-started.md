@@ -430,12 +430,14 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 
 | 现象 | 检查 |
 |---|---|
-| 启动日志没有手机地址 | `AUTH_TOKEN` 未设置；重新运行 setup 或修正配置文件后重启 |
+| server 起不来，日志说没有 `AUTH_TOKEN` | 令牌是启动前提，不再降级绑本机。跑 `npm run setup` 生成一个后重启 |
+| 启动日志只列了本机地址，没有手机地址 | `BIND_MODE=loopback` 只绑 `127.0.0.1`，那些局域网地址上没人在听。要手机直连改回默认或 `lan` |
 | agent 运行 setup 后什么都没写 | 非 TTY 环境用了交互模式；现在会直接拒绝。改用 `--yes --work-dir=... --hooks=...` |
 | doctor / server 读的不是刚生成的配置 | 当前 shell 里已有 `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` 等会压过配置文件；先 `unset` 这些变量再跑 |
 | `EADDRINUSE :3000` | 桌面端或另一个 npm start 占着端口；不要盲目再启动 |
 | 手机一直等待审批 | 运行 `device.js list`，核对并批准正确 ID |
 | 输错一次 token 后，连正确 token 也返回 `{"status":"rate_limited"}` / HTTP 429 | 防暴破退避在生效，不是服务坏了。第 1 次失败就会武装一个 0.5 秒短锁，之后指数退避（1s → 2s → 4s…）。**等几秒再试**，正确 token 会自动恢复；不停重试反而一直落在锁里。15 分钟长锁需要连续 8 次失败、且每次都等过退避才触发 |
+| 自己没输错，却被限速挡住 | 限速按来源分桶，同桶内的失败会累加。**IPv6 客户端按 /64 归桶**，所以同网段另一台设备连错也会连累你；反代终止在 loopback 时所有公网客户端更是共用一个桶（见[部署指南](deployment.md#换掉入口后ccm-侧的四处连带变化)）。等过锁定窗口，或重启 server 立即清零 |
 | 第三方网关配置不生效 | `ANTHROPIC_*` 必须来自启动 server 的 shell，不是配置文件 |
 | CLI 会话状态或通知缺失 | 分别检查 statusline bridge 与 hooks bridge；两者用途不同 |
 | Android 安装后只是浏览器快捷方式 | Cloudflare Access 可能拦住 PWA 图标，见[部署指南](deployment.md#2b-android-pwa图标必须对匿名可达) |

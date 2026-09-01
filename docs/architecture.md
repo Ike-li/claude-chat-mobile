@@ -123,9 +123,11 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 ## 鉴权与范围边界
 
 ```text
-HTTP / Socket 鉴权
+AUTH_TOKEN（必备，无它不启动）
         ↓
-设备信任或 Cloudflare Access
+公网 IdP 策略（可选，当前唯一实现 Cloudflare Access）
+        ↓
+设备信任（真·本机直连豁免此层，不豁免 token）
         ↓
 WORK_DIR / WORKDIRS 范围门
         ↓
@@ -134,10 +136,15 @@ CLI permissions.allow + Web 当前权限档
 Agent 工具审批或用户直接文件编辑
 ```
 
+第一层是**前提而非选项**（[hard-rules §1「鉴权是启动前提」](hard-rules.md)）：没有 `AUTH_TOKEN`
+连 server 都起不来，本机浏览器打开也一样，所以下游各层永远建立在「对方已持令牌」之上。
+第二层写成「公网 IdP 策略」而不是具体产品名，是因为核心代码只认 `src/auth/auth-strategy.js`
+的接口形状；Cloudflare Access 是当前唯一实现，换 IdP 不该动核心。
+
 这些边界互不替代：
 
 - `AUTH_TOKEN` 证明请求持有实例密钥，不代表设备已经获准。
-- Cloudflare Access 是公网身份层，不扩大工作区。
+- Cloudflare Access 是公网身份层，不扩大工作区；它替代设备审批（第二因子），不替代 token。
 - `WORK_DIR` / `WORKDIRS` 限定路径，不决定 Claude 工具是否自动获批（旧版外置 `workdirs.json` 仍受支持，优先级低于 `WORKDIRS`）。
 - Agent 的 `canUseTool` 审批只管理 Agent 自主行为；用户在文件编辑器中点击保存属于直接写入，走独立的范围、大小、哈希与审计防线。
 

@@ -211,7 +211,7 @@ The default port is `3000`. The startup log should show:
 - a LAN URL that can be opened on your phone;
 - bridge and pending-device status.
 
-When `AUTH_TOKEN` is set, the health endpoint also requires authentication:
+The health endpoint requires authentication too (`AUTH_TOKEN` is a startup prerequisite, so the server always has one):
 
 ```bash
 curl -sS "http://127.0.0.1:3000/health?token=<AUTH_TOKEN>"
@@ -447,12 +447,14 @@ site data and the installed PWA must be cleared manually.
 
 | Symptom | Check |
 |---|---|
-| No phone URL in startup logs | `AUTH_TOKEN` is unset; rerun setup or correct the config file, then restart |
+| The server refuses to start, saying `AUTH_TOKEN` is missing | The token is a startup prerequisite; it no longer degrades to a loopback bind. Run `npm run setup` to generate one, then restart |
+| Startup logs list only the local URL, no phone URL | `BIND_MODE=loopback` binds `127.0.0.1` only, so nothing is listening on those LAN addresses. Switch back to the default or `lan` for direct phone access |
 | An agent ran setup but wrote nothing | Interactive mode was used without a TTY; setup now refuses. Use `--yes --work-dir=... --hooks=...` |
 | doctor / the server reads the old config | Inherited `AUTH_TOKEN` / `WORK_DIR` / `CF_ACCESS_*` in the current shell override the file; `unset` them first |
 | `EADDRINUSE :3000` | The desktop app or another npm start owns the port; do not blindly start another |
 | The phone stays on device approval | Run `device.js list`, verify the ID, and approve the correct device |
 | After one wrong token, even the correct one returns `{"status":"rate_limited"}` / HTTP 429 | Brute-force backoff is working, not a broken server. The first failure arms a 0.5s lock, then backs off exponentially (1s → 2s → 4s…). **Wait a few seconds and retry** — a correct token recovers on its own; hammering keeps you inside the lock. The 15-minute lockout needs 8 consecutive failures that each wait out the backoff |
+| You typed the token correctly but rate limiting still blocks you | Limiting buckets by source, and failures inside one bucket add up. **IPv6 clients are bucketed by /64**, so another device on your subnet typing it wrong will affect you; behind a reverse proxy terminating on loopback, all public clients share a single bucket (see the [deployment guide](deployment.md#换掉入口后ccm-侧的四处连带变化)). Wait out the lockout window, or restart the server to clear it immediately |
 | A third-party gateway is ignored | `ANTHROPIC_*` must come from the server's startup shell, not the config file |
 | CLI session status or notifications are missing | Check the statusline and hooks bridges separately; they solve different problems |
 | Android installs only a browser shortcut | Cloudflare Access may block PWA icons; see the [deployment guide](deployment.md#2b-android-pwa图标必须对匿名可达) |

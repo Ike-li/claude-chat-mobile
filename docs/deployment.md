@@ -248,12 +248,13 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 |---|---|---|
 | 不设（默认） | `0.0.0.0` | 绝大多数情况（`AUTH_TOKEN` 是启动前提，没有它 server 直接拒绝启动） |
 | `BIND_MODE=loopback` | `127.0.0.1` | 自己用 SSH/Tailscale/反代转发，不想让端口出现在局域网上 |
-| `BIND_MODE=lan` | `0.0.0.0` | 显式声明要对外监听（等价于默认+有 token，但意图写在配置里） |
+| `BIND_MODE=lan` | `0.0.0.0` | 显式声明要对外监听（等价于默认，但意图写在配置里） |
 | `BIND_MODE=custom` + `BIND_HOST=::` | `::`（IPv4/IPv6 双栈） | 需要 IPv6 访问（默认的 `0.0.0.0` 只监听 IPv4） |
 | `BIND_MODE=custom` + `BIND_HOST=<网卡地址>` | 该地址 | 只对某一块网卡开放 |
 
-**不变量**：`lan` 与「`custom` 指向非 loopback 地址」都要求先有 `AUTH_TOKEN`，否则 **server 拒绝启动**
-并说明原因——不静默降级成 `127.0.0.1`，那会让你以为公网配好了、实际手机全部连不上却毫无提示。
+**不变量**：`AUTH_TOKEN` 是**所有**模式的共同前提，`loopback` 也不例外——本机浏览器打开同样是 web
+访问（[hard-rules §1「鉴权是启动前提」](hard-rules.md)）。没有它 **server 拒绝启动**并说明原因，
+而不是静默降级成 `127.0.0.1`：后者会让你以为配好了、实际手机全部连不上却毫无提示。
 `BIND_MODE` 拼错、或 `custom` 没给 `BIND_HOST`，同样拒绝启动。改这两项都要重启；
 `doctor` 与手机端安全体检有单独一项报告当前绑到哪、以及配置会不会导致启动失败。
 
@@ -280,29 +281,35 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 | 公网 2FA | Access JWT，fail-closed | **整层消失**，需自行在入口层补 |
 | `AUTH_TOKEN` | LAN/本机走它 | 不变，全部请求走它 |
 | 设备审批 | 被 Access 跳过 | **自动顶上**，每台新设备批准一次 |
-| 登录限速粒度 | per 真实来源 IP | **退化为按连接 IP** |
+| 登录限速粒度 | per 真实来源（IPv6 按 /64） | **退化为按连接 IP** |
 
 后两行需要展开：
 
-**设备审批会自己回来。** `shouldBypassDeviceApproval`（`src/auth/rate-limiter.js:85`）第一行是
+**设备审批会自己回来。** `shouldBypassDeviceApproval`（`src/auth/rate-limiter.js`）第一行是
 `if (accessEnabled) return true`——Access 与设备审批是替代关系而非叠加。失去 Access 不等于防护归零。
 反代进来的请求也会被正确判成「非本机」：peer 虽是 `127.0.0.1`，但 Host 是公网域名，不满足 bypass 条件。
 
-**限速桶会合并。** `shouldTrustCfConnectingIp`（`rate-limiter.js:75`）要求 `publicHost` 为真，
-而该条件在三项留空时恒 false，于是 `rlSourceKey` 回落到连接 IP。**反代终止在 loopback 后，
-所有公网客户端的连接 IP 都是 `127.0.0.1`，共用同一个限速桶**——一个来源试错触发的退避会波及其余客户端。
-这是刻意取舍（宁可粒度粗，也不采信可伪造的 `X-Forwarded-For`，见 `rate-limiter.js:57`），
-不是配置错误，也无法通过加转发头绕开。VPN 类拓扑不受影响：手机的连接 IP 是隧道内地址，天然分桶。
+**限速桶会合并。** `shouldTrustCfConnectingIp` 要求 `publicHost` 为真，而该条件在三项留空时恒
+false，于是 `rlSourceKey` 回落到连接 IP。**反代终止在 loopback 后，所有公网客户端的连接 IP
+都是 `127.0.0.1`，共用同一个限速桶**——一个来源试错触发的退避会波及其余客户端。这是刻意取舍
+（宁可粒度粗，也不采信可伪造的 `X-Forwarded-For`，见 `rlSourceKey` 头注），不是配置错误，
+也无法通过加转发头绕开。VPN 类拓扑不受影响：手机的连接 IP 是隧道内地址，天然分桶。
+
+限速桶还有第二个合并维度，与选哪种拓扑无关：**IPv6 客户端按 /64 前缀归桶**（`ipRateBucket`）。
+终端用户拿到的最小分配就是一整个 /64，逐地址计桶等于换个源地址就重置失败计数、暴破限速形同虚设。
+代价是同一 /64 内的多台设备共用一个桶——一台连错到阈值会连累同网段其他设备锁 15 分钟。
+IPv4 不受影响，仍按整地址分桶。
 
 ### 通用落地要点
 
 **共通前提**（三类拓扑都适用）：
 
-- 必须设 `AUTH_TOKEN`。未设时 server 只监听 `127.0.0.1`，任何外部拓扑都连不上。
+- 必须设 `AUTH_TOKEN`。未设时 server **拒绝启动**（hard-rules §1「鉴权是启动前提」），
+  不是降级绑 `127.0.0.1`——任何拓扑都得先有令牌。
 - PWA 与 Web Push 需要安全上下文（HTTPS，或 `localhost`）。裸 IP 的 `http://` 能正常聊天，
   但装不了 PWA、收不到 Web Push，通知只能退回 ntfy（见上节）。
 - `CF_ACCESS_*` 三项留空。配置面板清空时会警告「公网域名退化成只靠 AUTH_TOKEN 校验」
-  （`src/ops/env-schema.js:430`），这条警告在此处是预期行为。若声明了 `ACCESS_PROFILE`，
+  （`src/ops/env-schema.js` 的 `checkTogether`），这条警告在此处是预期行为。若声明了 `ACCESS_PROFILE`，
   切换方案时面板还会提醒把它一并更新，避免声明指着旧方案。
 - **要用通知就必须显式设 `PUBLIC_URL`。** 深链地址是 `PUBLIC_URL` 优先、回落 `CF_ACCESS_HOSTNAME`
   （`src/ops/notify-channels.js:32`）——两个都没有时通知仍正常送达，但**不带 click，点了不跳转**。
@@ -366,7 +373,7 @@ location / {
 - 只用局域网（无中间节点，出门用不了）
 
 第三步，落地。以下是 CCM 的硬约束，配置必须满足，不满足就是错的：
-1. server 监听 3000。未设 AUTH_TOKEN 时它只监听 127.0.0.1，外部拓扑一律连不上。
+1. server 监听 3000。AUTH_TOKEN 是启动前提，没设它 server 直接拒绝启动（不是降级绑 127.0.0.1）。
 2. 反代必须原样透传 Host 头（nginx 里是 proxy_set_header Host $host;）。
    设备审批的判据读这个头，配成空值或写死会打穿一层防护。
 3. 反代必须支持 WebSocket 升级（Upgrade / Connection 头），Socket.io 依赖它。

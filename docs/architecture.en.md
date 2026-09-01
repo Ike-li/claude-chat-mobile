@@ -120,9 +120,11 @@ The ring buffer is not permanent history. If a gap has fallen out of the buffer 
 ## Authentication and scope boundaries
 
 ```text
-HTTP / Socket authentication
+AUTH_TOKEN (required; no token, no server)
             ↓
-device trust or Cloudflare Access
+public IdP strategy (optional; Cloudflare Access is the only implementation today)
+            ↓
+device trust (a true local connection is exempt from this layer, not from the token)
             ↓
 WORK_DIR / WORKDIRS scope gate
             ↓
@@ -131,10 +133,17 @@ CLI permissions.allow + current Web permission mode
 Agent tool approval or direct user file edit
 ```
 
+The first layer is a prerequisite, not an option ([hard-rules §1, "auth is a startup
+prerequisite"](hard-rules.md)): without `AUTH_TOKEN` the server refuses to start — including for a
+browser on this machine — so every layer below it always assumes the caller already holds the token.
+The second layer is named for the role rather than the product because core code only knows the
+interface shape in `src/auth/auth-strategy.js`; Cloudflare Access is today's only implementation, and
+swapping the IdP should not touch the core.
+
 These boundaries do not replace each other:
 
 - `AUTH_TOKEN` proves possession of the instance secret; it does not prove that a device was approved.
-- Cloudflare Access adds public-edge identity; it does not expand workspace scope.
+- Cloudflare Access adds public-edge identity; it does not expand workspace scope. It replaces device approval (the second factor), never the token.
 - `WORK_DIR` / `WORKDIRS` constrain paths; they do not decide which Claude tools run automatically (a legacy external `workdirs.json` still works and ranks below `WORKDIRS`).
 - Agent `canUseTool` approvals govern autonomous Agent actions. Clicking Save in the file editor is a direct user write with separate scope, size, content-hash, and audit controls.
 

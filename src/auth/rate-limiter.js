@@ -107,6 +107,9 @@ export function ipRateBucket(ip) {
   // IPv4-mapped（::ffff:0:0/96）语义上是 IPv4 来源，还原成点分十进制按整地址计桶。
   // 少了这一步，该段所有地址的前 4 组 hextet 都是 0 → 全世界的 IPv4 来源塌成同一个桶，
   // 一台机器触发锁定就把所有 IPv4 客户端一起锁死（比原漏洞更糟）。
+  // 这【不是】边缘情况：BIND_HOST=:: 双栈监听下，IPv4 客户端的 remoteAddress / handshake.address
+  // 本来就长这样（2026-09-01 裸 socket.io 探针实测 `::ffff:127.0.0.1`），只是通常已被调用方注入的
+  // clientIp 剥掉前缀。而 normalizeIp 的缺省值是恒等函数——这条路随时会真走到。
   if (h.slice(0, 5).every(x => x === '0') && h[5] === 'ffff') {
     const hi = parseInt(h[6], 16), lo = parseInt(h[7], 16);
     return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;

@@ -76,7 +76,9 @@ export const ENV_SCHEMA = {
   BIND_MODE: {
     group: 'auth', kind: 'enum',
     options: [
-      { value: '', label: t('未声明（按 AUTH_TOKEN 推断）', 'Undeclared (inferred from AUTH_TOKEN)') },
+      // 「按 AUTH_TOKEN 推断」是 §1.9 之前的语义（无 token 静默降级绑 loopback）。现在 token 是启动
+      // 前提，留空就是确定地绑 0.0.0.0——照旧说「推断」会让人以为不设 token 能换来一个更窄的监听面。
+      { value: '', label: t('未声明（默认对外监听 0.0.0.0）', 'Undeclared (defaults to 0.0.0.0)') },
       { value: 'loopback', label: t('仅本机（127.0.0.1，自己用 SSH/隧道转发）', 'Loopback only (127.0.0.1; forward it yourself via SSH/tunnel)') },
       { value: 'lan', label: t('对外监听（0.0.0.0，手机同 WiFi 可直连）', 'Listen on all interfaces (0.0.0.0; same-WiFi phones can connect)') },
       { value: 'custom', label: t('自定义地址（配合 BIND_HOST，填 :: 即 IPv6 双栈）', 'Custom address (with BIND_HOST; use :: for IPv4+IPv6 dual stack)') },
