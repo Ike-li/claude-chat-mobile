@@ -4,6 +4,7 @@
 // 页面 hidden 跳 tick、onToggle 只在显隐真变化时触发。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { createAppContext } from '../../public/js/app/context.js';
 import { createConnectionBannerController } from '../../public/js/app/connection-banner.js';
@@ -224,6 +225,33 @@ test('stop()：清掉定时器，供页面卸载/重建时收尾', () => {
   assert.notEqual(h.timers.tick, null);
   banner.stop();
   assert.equal(h.timers.tick, null);
+});
+
+test('顶栏角标用的连接快照住在横幅控制器里：首连中不点亮，连过再断开才 offline', () => {
+  const h = makeHarness();
+  const banner = createConnectionBannerController(h.context);
+  banner.markConnecting();
+  assert.equal(banner.isConnected(), false);
+  assert.equal(banner.hasEverConnected(), false);
+
+  banner.markConnected();
+  assert.equal(banner.isConnected(), true);
+  assert.equal(banner.hasEverConnected(), true);
+
+  banner.markDisconnected();
+  assert.equal(banner.isConnected(), false);
+  assert.equal(banner.hasEverConnected(), true, '曾经连上过：断开后仍算 everConnected，角标才能亮红');
+
+  banner.markConnecting();
+  assert.equal(banner.hasEverConnected(), true, '重连中不得把 everConnected 清掉，否则角标会退回首连态');
+});
+
+test('app.js 不得再持有 everConnected / headerSocketOnline 顶层状态', () => {
+  const src = readFileSync(new URL('../../public/js/app.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /\blet everConnected\b/);
+  assert.doesNotMatch(src, /\blet headerSocketOnline\b/);
+  assert.match(src, /connBanner\.isConnected\(\)/);
+  assert.match(src, /connBanner\.hasEverConnected\(\)/);
 });
 
 test('en：文案走 t()，detail 单位随之英文', () => {

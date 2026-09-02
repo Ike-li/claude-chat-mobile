@@ -33,6 +33,9 @@ export function createConnectionBannerController(context, {
   let phase = 'connecting';   // 'connecting' | 'offline' | 'online'
   let phaseSince = clock();
   let visible = false;
+  // 本页是否曾经连上过。顶栏角标用它区分「开页首连中」（不点亮）和「连过再断开」（亮红）。
+  // 只在 markConnected 置 true，重连中的 markConnecting 不得清掉。
+  let everConnected = false;
   // 进入 online 那一刻横幅是否可见——决定要不要给「已重新连接」绿条。秒连不该闪一下。
   // 在 markConnected() 里快照，不在 tick 里反推 DOM。
   let wasVisibleOnConnect = false;
@@ -110,6 +113,7 @@ export function createConnectionBannerController(context, {
   function markConnecting() { wasVisibleOnConnect = false; enter('connecting'); }
   function markDisconnected() { wasVisibleOnConnect = false; enter('offline'); }
   function markConnected() {
+    everConnected = true;
     // ★ 两个条件缺一不可，且快照必须在 enter() 之前——enter 会 render 并改写 visible/phase：
     //   visible：秒连从没显示过横幅，就别闪一下绿条；
     //   phase === 'offline'：绿条说的是「已重新连接」，只属于「断了又回来」。弱网/隧道下首次握手
@@ -123,7 +127,12 @@ export function createConnectionBannerController(context, {
   const retryBtn = context.dom.connBannerRetry;
   if (retryBtn) retryBtn.onclick = () => onRetry();
 
-  const controller = { markConnecting, markDisconnected, markConnected, stop, isVisible: () => visible };
+  const controller = {
+    markConnecting, markDisconnected, markConnected, stop,
+    isVisible: () => visible,
+    isConnected: () => phase === 'online',
+    hasEverConnected: () => everConnected,
+  };
   context.state.connBanner = controller;
   return controller;
 }

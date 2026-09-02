@@ -890,8 +890,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
 
   let initialLoad = true;
   let connectErrorCount = 0;  // 公网 socket 连续失败计数，攒够再探测 Access 是否过期
-  let everConnected = false;  // 区分「开页首连中」与「曾经连上过再断开」——后者才点亮会话按钮角标
-  let headerSocketOnline = false;
   
   // FE-NEW-001/006：串行重发 + 按 viewing 作用域决定 busy（永久失败/他会话成功不再 sticky busy）。
   // 在线路径有 _sendInFlightSessionIds；离线旧实现 for 循环并行 emit 易撞在途轮闸，且 setBusy(true) 无配对 clear。
@@ -1152,10 +1150,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     accessRelogin?.classList.add('hidden');      // 连上即收起重登浮层
     connectErrorCount = 0;
     if (authSubmit) { authSubmit.disabled = false; authSubmit.textContent = t('进入'); }
-    headerSocketOnline = true;
-    everConnected = true;
-    updateAttentionSignal();
     connBanner.markConnected(); // 必须排在上面两个门收起之后：isSuppressed 此刻才为 false
+    updateAttentionSignal();
     setStatus(t('已连接'));
     startRttLoop(); // 连上即开始测 RTT（立即一次 + 周期）
     cliStatusWrapEl?.classList.remove('opacity-40'); // E16：重连恢复（折叠条整体：summary + ANSI 行，重放/刷新马上跟上）
@@ -1174,9 +1170,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     processOfflineQueue();
   });
   socket.on('disconnect', (reason) => {
-    headerSocketOnline = false;
-    updateAttentionSignal();
     connBanner.markDisconnected();
+    updateAttentionSignal();
     setStatus(t('连接断开，自动重连中…'));
     stopRttLoop();
     clearRttDisplay();
@@ -2868,25 +2863,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // ---- 发送 / 停止 ----
 
   // 未确认用户气泡（在线乐观 + 离线占位【共用】）。
-  //
-  // 【为什么在线也要建】2026-08-27 真机反馈「发出去的消息消失，过几秒才出现」。原先只有离线分支建气泡，
-  // 在线分支靠服务端回推的 user_message 渲染（旧注释 F3：「不再本地 append 气泡」）。但那条事件被压在
-  // 服务端一串 await 之后——懒开实例（读盘 + spawn CLI + transcript 尾读）与 agent.js#send 里那次
-  // setModel control_request，后者打给刚 spawn 还没起来的 CLI，上界就是 SERVER_PRE_TURN_UPPER_BOUND_MS(10s)。
-  // 这段窗口里输入框已清空、消息流却还是空的，观感就是「没发成功」。首发必中（FRESH 的 attemptedModel
-  // 是 undefined，选了模型就必然触发 setModel）；已有会话则看实例是否已被 INSTANCE_IDLE_RECLAIM_MS(默认
-  // 30min) 回收，所以是「经常」而非每次。
-  //
-  // 【为什么现在可以建了】F3 当初移除本地气泡是为了防「本地一条 + 回推一条」重复渲染，而 FE-002 之后
-  // user_message 带上了 clientMessageId，handle.user_message 的 matchedBubble 会按它精确认领并原地转正
-  // （去半透明、撤指示、补服务端权威 ts）。重复的理由已经消失，只是没人回头把在线气泡加回来。
-  //
-  // 【为什么两条路径共用一个构建器】在线/离线气泡的字段必须逐维一致——clientMessageId、attNames、
-  // topLevel 任一缺失都会让 matchedBubble 认领失败，退化成两个气泡。分开写就是等着它们慢慢漂开
-  // （同款教训见 logic/outbox-send.js 里两个 present* 函数的注释）。差异只有一处：待发文案。
-  //
-  // ts 一律传 null：客户端时钟不可信（手机快几小时会让 data-ts 落在未来，之后每条服务端时间都被判成
-  // 倒流、连日期行都永久消失）。转正时由 settleAt 补服务端权威 ts，见 message-timeline.js 的注释。
+  // 在线也必须立刻建：user_message 被压在服务端 await 之后，输入框已空、流还空，观感就是没发出去。
+  // 靠 clientMessageId 精确认领转正，不会和回推撞成两条。两条路径共用构建器，字段漂开会认领失败。
+  // ts 传 null：客户端时钟不可信。转正时由 settleAt 补服务端权威 ts。
   function buildPendingUserBubble({ text, outgoingAttachments, clientMessageId, pendingLabel }) {
     const bubble = el(`<div class="msg-frame rounded-xl bg-user text-ink px-3 py-2 text-sm opacity-70 transition-opacity" data-testid="user-message"></div>`);
     // 未读角标锚点定位用：未确认气泡是「user_message 到达前就存在」的顶层气泡创建点——
@@ -3166,8 +3145,6 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     });
     updateSendButtonState(); // 立即反映在途态，不等下一次外部驱动的刷新
     // 气泡已在上方本地 append（buildPendingUserBubble），服务端回推的 user_message 只负责认领转正。
-    // 旧的 F3「不再本地 append，由 user_message 事件渲染」已于 2026-08-27 撤销：那条事件被压在服务端
-    // 一串 await 之后，等它才上屏就是真机报的「消息发出去消失了」。事件仍照常入环形缓冲，刷新可回放。
     inputEl.value = '';
     // 已发出：清掉该会话缓存草稿，避免切走切回把已发送内容当草稿恢复
     if (currentSessionId) sessionDraftCache.delete(currentSessionId);
@@ -4206,7 +4183,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       refreshSessionStatusChips();
       refreshNeedsYou();
     }
-    updateAttentionSignal(); // 顶栏会话按钮角标：断开 / 需要你 / 服务告警（健康时隐藏）
+    updateAttentionSignal(); // 顶栏会话按钮角标：断开 / 需要你（服务健康留在抽屉，不混进这条）
     // 默认磁贴标签依赖 currentModel(空/非空) + cwdDefaultModel，二者本次都可能变（adoptPanelState 改 currentModel、
     // scout 完成的同视图广播改 cwdDefaultModel）。用纯函数比对前后标签，仅真变时重建网格刷新——adoptPanelState 只
     // 切高亮不重建，故此处兜底；无变化不重建（省性能）。
@@ -4699,8 +4676,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       needsYou: needsYouList,
     });
     const spec = resolveHeaderConnBadge({
-      connected: headerSocketOnline,
-      everConnected,
+      connected: connBanner.isConnected(),
+      everConnected: connBanner.hasEverConnected(),
       attentionLevel: level,
       needsYouCount: needsYouList.length,
     });
@@ -6448,26 +6425,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     return null;
   }
 
-  // 全量重载落地后，处置那些被 clearView 保住的未确认气泡（2026-08-27 真机回归：同一条消息两颗气泡）。
-  //
-  // 【为什么会撞】clearView 在发送窗口内会保住未确认气泡（a417c08，修「发出去的消息消失几秒/闪一下」），
-  // 而 renderHistoryBubbles 是【不清屏、直接 append】的——清屏责任全在调用方。真 server 一收到
-  // user:message 就写进 transcript，于是这次全量重载拉回来的历史里本来就含这条消息，两条路径各渲染
-  // 一颗。触发的是日常路径：已有会话 + 实例被闲置回收后懒开 → 换实例广播 → diskLen ahead → 'reload'。
-  //
-  // 两种归宿，判据见 logic/connection.js 的 findHistoryClaimForPending（与 matchedBubble 同源）：
-  //   · 历史已带回这条 → 丢弃乐观气泡，clientMessageId 移交给历史那颗（★ 见下）；
-  //   · 历史还没有（服务端尚未落盘）→ 把气泡移到末尾。它是最新消息，位置就该在整段历史之后。
-  //
-  // ★ 为什么必须移交 clientMessageId：随后到达的 user_message 事件按它定位气泡，认领不到就【新建】，
-  //   那会是第三颗。移交后由 handle.user_message 开头那道「已确认就收工」的闸接住。
-  // ★ 为什么走 dropPendingUserBubble 而不是裸 remove()：气泡可能已随 bindView 进了 sessionDomCache，
-  //   remove() 摘不掉缓存数组持有的那份，切走再切回它会原样复活（该函数注释里有完整教训）。
-  //
-  // 【为什么在 append 之后才做，而不是渲染前先把气泡摘出来】摘出来再放回去，中间隔着分块渲染的异步
-  // 间隙（>40 条时 scheduleIdle 让出主线程），气泡会真的从屏幕上消失几百毫秒——正是 a417c08 要消灭
-  // 的那个「闪一下」。放在 appendChild(frag) 之后，气泡全程在 DOM 里，移动与丢弃都发生在同一个同步
-  // 块内，浏览器不会重绘中间态。
+  // 全量重载后处置被 clearView 保住的未确认气泡。
+  // 历史已带回这条 → 丢乐观气泡并移交 clientMessageId（否则随后 user_message 会再新建一颗）。
+  // 历史还没有 → 移到末尾。必须在 append 之后做：渲染前先摘会闪一下。
+  // 走 dropPendingUserBubble，避免 sessionDomCache 把已删节点复活。
   function settleCarriedPendingBubbles(msgs) {
     for (const bubble of [...messagesEl.querySelectorAll('[data-testid="user-message"].opacity-70')]) {
       const tDiv = bubble.querySelector('.whitespace-pre-wrap');
