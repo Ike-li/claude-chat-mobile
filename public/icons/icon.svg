@@ -1,4 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#FFF7ED"/>
-  <path d="M256 112 C256 208 208 256 112 256 C208 256 256 304 256 400 C256 304 304 256 400 256 C304 256 256 208 256 112 Z" fill="#F97316"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Claude Chat Mobile</title>
+  <desc id="desc">A mobile conversation bubble containing a terminal prompt.</desc>
+  <rect width="512" height="512" rx="112" fill="#AE5238"/>
+
+  <rect x="104" y="76" width="304" height="328" rx="76" fill="#FFF7ED"/>
+  <path d="M270 386 344 450 344 370Z" fill="#FFF7ED"/>
+  <rect x="148" y="120" width="216" height="240" rx="36" fill="#AE5238"/>
+
+  <path d="m204 204 52 52-52 52" fill="none" stroke="#FFF7ED" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M278 308h54" fill="none" stroke="#FFF7ED" stroke-width="32" stroke-linecap="round"/>
 </svg>
