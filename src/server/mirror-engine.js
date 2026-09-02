@@ -388,6 +388,7 @@ export function createMirrorEngine({
     const tailPending = tail.verdict === 'pending';
     const rel = mirrorReleaseStep(mirrorRelease, {
       externalWrite, keepAlive, tailPending, localBusy: false, registryBusy,
+      tailEntrypoint: tail.lastChainEntrypoint, // 己方 SDK 写的 pending 撑不住锁（见 mirrorReleaseStep）
       releaseTicks: mirrorReleaseTicksNeeded(),
     }); // 外部 text 写入/注册表自报 busy→锁；文件仍在长/轮次未完结→维持锁；真静默→累计、达阈值自动解锁
     mirrorRelease = rel.state;

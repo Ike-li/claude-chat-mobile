@@ -373,7 +373,7 @@ export const MIRROR_RELEASE_QUIET_TICKS = 5; // 默认 ×2.5s ≈ 12.5s；mirror
 //     它不是从磁盘形态猜的，是活着的终端进程自己说"我在跑"，堵「终端开跑但首条 text 未落盘」的上锁空窗。
 export function mirrorReleaseStep(state, {
   externalWrite = false, keepAlive = false, tailPending = false, localBusy = false,
-  registryBusy = false,
+  registryBusy = false, tailEntrypoint = null,
   releaseTicks = MIRROR_RELEASE_QUIET_TICKS,
 } = {}) {
   const prevReadonly = Boolean(state?.readonly);
@@ -383,7 +383,12 @@ export function mirrorReleaseStep(state, {
   if (localBusy) return { readonly: prevReadonly, state: { readonly: prevReadonly, quietTicks: 0 } };
   if (registryBusy) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 权威自报终端在跑：直接锁（localBusy 豁免在上一行）
   if (!prevReadonly) return { readonly: false, state: { readonly: false, quietTicks: 0 } };
-  if (keepAlive || tailPending) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
+  // tailEntrypoint（2026-09-02 真机）：pending 尾部若是己方 SDK 写的，它撑不住锁——判据与
+  // mirrorEntryLock 同源（isOwnSdkTail，白名单只认 sdk-ts，未知取值一律回落既有判定）。
+  // 缺了这半边会自锁：web 等一条 ExitPlanMode 审批时尾部恒 pending ⇒ 锁恒维持 ⇒ 手机只读 ⇒
+  // 点不到「批准」⇒ 审批永远 pending。keepAlive/externalWrite/registryBusy 三条兜底不受影响：
+  // 真有人在写盘或注册表自报在跑时，照锁不误。
+  if (keepAlive || (tailPending && !isOwnSdkTail(tailEntrypoint))) return { readonly: true, state: { readonly: true, quietTicks: 0 } }; // 终端仍在写盘/轮次未完结 → 维持锁、静默清零；不上锁靠上一行未锁 return
   const quietTicks = prevQuiet + 1;
   const readonly = quietTicks < need;
   return { readonly, state: { readonly, quietTicks: readonly ? quietTicks : 0 } };
@@ -1183,11 +1188,17 @@ export const MIRROR_STALE_PENDING_MS = 5 * 60_000;
 // 位置在 registryBusy 之后（活着的 CLI 自报在跑压过一切磁盘推断）、prevReadonly 之前（这类锁本就
 // 不该建立，同会话重连不得把它续下去）。
 const SDK_TAIL_ENTRYPOINTS = new Set(['sdk-ts']);
+// 锁的【建立】(mirrorEntryLock) 与【释放】(mirrorReleaseStep) 共用这一个判据。
+// 2026-09-02 真机死锁就是这半边只写在建立侧、释放侧没有：入口认得出「这不是终端」所以不建锁，
+// 出口认不出、于是 tailPending 无条件撑住锁 —— web 等一条 ExitPlanMode 审批时尾部恒 pending，
+// 锁就永远解不掉，手机只读、点不到「批准」、审批永远 pending，闭环自锁。
+// 判据只许有这一处；两侧证据是否对称由 tests/unit/mirror-lock-evidence.test.mjs 的自动闸守。
+function isOwnSdkTail(tailEntrypoint) { return SDK_TAIL_ENTRYPOINTS.has(tailEntrypoint); }
 export function mirrorEntryLock({ tailVerdict, localBusy = false, lastChainTs = null, now = Date.now(), registryBusy = false, prevReadonly = false, tailEntrypoint = null } = {}) {
   if (localBusy) return false;
   if (registryBusy) return true;
   if (tailVerdict !== 'pending') return false;
-  if (SDK_TAIL_ENTRYPOINTS.has(tailEntrypoint)) return false;
+  if (isOwnSdkTail(tailEntrypoint)) return false;
   if (prevReadonly) return true;
   if (lastChainTs != null && (now - lastChainTs > MIRROR_STALE_PENDING_MS)) return false;
   return true;
