@@ -84,6 +84,23 @@ export function pickWorkdirSource({ envList = [], envFile = '', inline = null } 
   return { kind: 'none', value: [] };
 }
 
+// 把 pickWorkdirSource 的选择兑现成 { result, from, filePath? }。
+// doctor D3 必须走这里，不能自己 `if (Array.isArray(inline)) return`——那会把 WORK_DIRS env 吃掉。
+export function resolveWorkdirSource({ envList = [], envFile = '', inline = null, here = '' } = {}) {
+  const picked = pickWorkdirSource({ envList, envFile, inline });
+  if (picked.kind === 'env-file') {
+    const filePath = resolveWorkdirsFilePath(picked.value, here);
+    return { result: loadWorkdirsFile(filePath), from: 'WORK_DIRS_FILE', filePath };
+  }
+  if (picked.kind === 'inline') {
+    return { result: normalizeWorkdirEntries(picked.value), from: 'WORKDIRS' };
+  }
+  return {
+    result: normalizeWorkdirEntries(picked.kind === 'env-list' ? picked.value : []),
+    from: 'WORK_DIRS',
+  };
+}
+
 // I/O 薄壳：读文件 + JSON.parse + normalize。读/解析失败 → null（调用方据此保留旧配置 = 整体非法回退语义）。
 export function loadWorkdirsFile(filePath) {
   let text;

@@ -151,7 +151,7 @@ node scripts/setup.js \
 - `--hooks` accepts only `on` or `off`; `on` changes user-level Claude hooks configuration.
 - `--desktop` accepts only `on` or `off` and defaults to `off`; `on` runs `swiftc`. On a
   non-macOS host, an explicit `--desktop=on` is rejected with a reason rather than ignored.
-- `--access-profile` accepts only `cloudflare` / `vpn` / `reverse-proxy` / `lan` and defaults to unset (undeclared; everything falls back to inferring from `CF_ACCESS_*`); invalid values are rejected instead of guessed.
+- `--access-profile` accepts only `cloudflare` / `vpn` / `reverse-proxy` / `direct` / `lan` and defaults to unset (undeclared; everything falls back to inferring from `CF_ACCESS_*`); invalid values are rejected instead of guessed.
 - If a config file exists, the command refuses to overwrite it. Add `--force` only after deciding to replace its current token and configuration.
 - Use `--config <path>` to place the config file elsewhere. That path is independent of any existing project-root config — a repo that already has `ccm.config.json` will not block it.
 
@@ -175,8 +175,9 @@ decided by the `reload` flag in the schema; `node scripts/config.js schema` mark
 (only `WORKDIRS` when this was written — trust the schema output, not this sentence).
 A git worktree must also be listed as its own absolute path; the project never discovers or authorizes it implicitly.
 
-The legacy `WORK_DIRS_FILE=workdirs.json` (external file) and `WORK_DIRS` (comma-separated) still work
-but rank below `WORKDIRS`. When more than one is present, only `WORKDIRS` takes effect.
+The legacy `WORK_DIRS` (comma-separated) and `WORK_DIRS_FILE=workdirs.json` (external file) still work.
+Priority: shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > config-file inline `WORKDIRS`.
+When neither env var is set, the config-file `WORKDIRS` is used (the production path).
 
 ## 4. Run the preflight checks
 

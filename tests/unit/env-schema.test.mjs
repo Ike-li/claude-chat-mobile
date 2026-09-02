@@ -541,6 +541,12 @@ test.describe('validateEnvChanges —— ACCESS_PROFILE 声明与实际键失配
     assert.match(warns[0].message, /清空|CF_ACCESS/);
   });
 
+  test('声明 direct 但三键齐 → 同样 warn（非 cloudflare 档不得手写 vpn|lan|reverse-proxy）', () => {
+    const r = validateEnvChanges({ ACCESS_PROFILE: 'direct' }, { current: cfSet });
+    const warns = r.results.filter((x) => x.level === 'warn' && /CF_ACCESS/.test(x.message));
+    assert.equal(warns.length, 1, 'direct 与 vpn/lan/reverse-proxy 是同一类「声明换了、CF 层还在」');
+  });
+
   test('同批「改声明 vpn + 清三键」→ 终态一致，本检查零 warn（只剩 teardown 那条）', () => {
     const r = validateEnvChanges(
       { ACCESS_PROFILE: 'vpn', CF_ACCESS_HOSTNAME: null, CF_ACCESS_TEAM: null, CF_ACCESS_AUD: null },

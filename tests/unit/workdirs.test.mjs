@@ -1,14 +1,15 @@
 // tests/unit/workdirs.test.mjs —— workdirs.js 纯逻辑 + I/O 薄壳单测（零网络、tmpdir 注入）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync, mkdirSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT,
   normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirs, ensureWhitelisted, isWhitelisted,
-  findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource,
+  findProjectDirCollisions, resolveWorkdirsFilePath, pickWorkdirSource, resolveWorkdirSource,
 } from '../../src/sessions/workdirs.js';
 
 // ── normalizeWorkdirEntries（纯函数）──────────────────────────────────────
@@ -266,5 +267,36 @@ test.describe('pickWorkdirSource：env 压过配置文件（CLAUDE.md 通用规�
   test('缺省参数不崩', () => {
     assert.equal(pickWorkdirSource({}).kind, 'none');
     assert.equal(pickWorkdirSource().kind, 'none');
+  });
+});
+
+// resolveWorkdirSource：把 pick 的选择兑现成 doctor D3 / 启动自检要用的 { result, from }。
+// 2026-09-02 实测：server 已改 env 优先，CLI doctor 仍 `if (Array.isArray(inline)) return WORKDIRS`，
+// `WORK_DIRS=/tmp/isolated node scripts/doctor.js` 扫的是机主真实工作区。
+test.describe('resolveWorkdirSource：doctor 与 server 同一选择', () => {
+  test('显式 WORK_DIRS 压过内联 WORKDIRS', () => {
+    const r = resolveWorkdirSource({
+      envList: ['/from/env'],
+      envFile: '',
+      inline: ['/from/config/a', '/from/config/b'],
+    });
+    assert.equal(r.from, 'WORK_DIRS');
+    assert.deepEqual(r.result.entries.map(e => e.path), ['/from/env']);
+  });
+
+  test('两个 env 都没设 → 回落内联 WORKDIRS', () => {
+    const r = resolveWorkdirSource({ envList: [], envFile: '', inline: ['/from/config'] });
+    assert.equal(r.from, 'WORKDIRS');
+    assert.deepEqual(r.result.entries.map(e => e.path), ['/from/config']);
+  });
+
+  test('getting-started / schema 不得再说内联 WORKDIRS 压过 WORK_DIRS env', () => {
+    const root = join(dirname(fileURLToPath(import.meta.url)), '../..');
+    const zh = readFileSync(join(root, 'docs/getting-started.md'), 'utf8');
+    const en = readFileSync(join(root, 'docs/getting-started.en.md'), 'utf8');
+    const schema = readFileSync(join(root, 'src/ops/env-schema.js'), 'utf8');
+    assert.doesNotMatch(zh, /优先级低于 `WORKDIRS`/);
+    assert.doesNotMatch(en, /rank below `WORKDIRS`/);
+    assert.doesNotMatch(schema, /优先级高于 WORK_DIRS_FILE 与 WORK_DIRS/);
   });
 });

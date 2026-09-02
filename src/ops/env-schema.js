@@ -80,9 +80,8 @@ export const ENV_SCHEMA = {
     help: t('声明手机从哪条拓扑访问；doctor 与安全体检按它做针对性检查。Tailscale 有两种用法：设备进 tailnet 选「加密隧道」，用 Funnel 暴露到公网选「反向代理」。选型判据见 docs/deployment.md「不用 Cloudflare 的公网入口」。',
       'Declares how your phone reaches this machine; doctor tailors its checks accordingly. Tailscale has two modes: joining your tailnet is an encrypted tunnel, while Funnel exposes the service publicly and counts as a reverse proxy. See docs/deployment.md.'),
   },
-  // 监听地址。空 = 未声明 = 沿用旧语义（有 token 绑 0.0.0.0、无 token 绑 127.0.0.1），
-  // 现有部署零变化。判定与「显式要绑外网却没 token 就拒绝启动」的不变量在
-  // src/shared/bind-host.js 的 resolveBindPlan —— 那里是 server 与两个 doctor 的共用判据。
+  // 监听地址。空 = 未声明 = 默认 0.0.0.0。无/空白 AUTH_TOKEN 一律拒绝启动（token_required），
+  // 不再按 token 有无降级绑 loopback。判定在 src/shared/bind-host.js 的 resolveBindPlan。
   BIND_MODE: {
     group: 'auth', kind: 'enum',
     options: [
@@ -132,8 +131,8 @@ export const ENV_SCHEMA = {
   },
   // ── 工作区列表：统一配置文件里的内联形态（P1b）────────────────────────
   //
-  // 优先级高于 WORK_DIRS_FILE 与 WORK_DIRS —— 统一配置文件是新的事实源，显式写了就该赢。
-  // 那两个保留是为了不打断现有部署（migrate 会把它们内联进这里）。
+  // 优先级：shell WORK_DIRS > shell WORK_DIRS_FILE > 本项。两个 env 都没设时才用这里（生产路径）。
+  // 判定在 pickWorkdirSource。那两个 env 键保留是为了不打断现有部署（migrate 会把它们内联进这里）。
   //
   // `reload: 'hot'` 是全表唯一一个：改完即生效、无需重启。其余项缺省 'restart'。
   // 这个标记不是文档，是**行为**：ccm.config.json 变更时，server 只热应用标了 hot 的 key，
@@ -523,7 +522,7 @@ function checkAccessProfileConsistency(changes, current) {
       message: '已声明方案为 Cloudflare，但 CF_ACCESS_* 三项未配齐——公网 2FA 实际未生效。补全三项，或把 ACCESS_PROFILE 改为实际使用的方案。',
     }];
   }
-  if ((profile === 'vpn' || profile === 'reverse-proxy' || profile === 'lan') && cfComplete) {
+  if (profile && profile !== 'cloudflare' && ACCESS_PROFILES.includes(profile) && cfComplete) {
     return [{
       key: 'ACCESS_PROFILE',
       level: 'warn',

@@ -147,7 +147,7 @@ node scripts/setup.js \
 - `--hooks` 只接受 `on` 或 `off`；`on` 会修改用户级 Claude hooks 配置。
 - `--desktop` 只接受 `on` 或 `off`，缺省 `off`；`on` 会跑 `swiftc`。非 macOS 上显式给
   `--desktop=on` 会被拒绝并说明原因，而不是静默忽略。
-- `--access-profile` 只接受 `cloudflare` / `vpn` / `reverse-proxy` / `lan`，缺省不写（未声明，一切按 `CF_ACCESS_*` 推断）；非法值直接拒绝，不猜意图。
+- `--access-profile` 只接受 `cloudflare` / `vpn` / `reverse-proxy` / `direct` / `lan`，缺省不写（未声明，一切按 `CF_ACCESS_*` 推断）；非法值直接拒绝，不猜意图。
 - 已有配置文件时命令会拒绝覆盖。只有确认要替换现有 token 与配置时才加 `--force`。
 - 可用 `--config <path>` 指定配置文件位置。这条路径独立于仓库根已有的配置，不会因为旁边已有 `ccm.config.json` 而被拒。
 
@@ -170,8 +170,9 @@ node scripts/setup.js \
 `node scripts/config.js schema` 会在条目上标出（写这句时只有 `WORKDIRS`，以 schema 输出为准）。
 git worktree 也必须作为独立绝对路径显式加入；项目不会自动发现或放行。
 
-旧版的 `WORK_DIRS_FILE=workdirs.json`（外部文件）与 `WORK_DIRS`（逗号分隔）仍然可用，
-但优先级低于 `WORKDIRS`。三者同时存在时只有 `WORKDIRS` 生效。
+旧版的 `WORK_DIRS`（逗号分隔）与 `WORK_DIRS_FILE=workdirs.json`（外部文件）仍然可用。
+优先级：shell `WORK_DIRS` > shell `WORK_DIRS_FILE` > 配置文件内联 `WORKDIRS`。
+两个 env 都没设时才用配置文件里的 `WORKDIRS`（这是生产路径）。
 
 ## 4. 运行启动自检
 

@@ -32,7 +32,7 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createConnection } from 'node:net';
 import { isOwnerOnly, fixPermissions } from '../src/files/file-security.js';
-import { normalizeWorkdirEntries, loadWorkdirsFile, resolveWorkdirsFilePath } from '../src/sessions/workdirs.js';
+import { resolveWorkdirSource as loadWorkdirSource } from '../src/sessions/workdirs.js';
 import { CONFIG_FILE_NAME, readConfigFileRaw, readConfigFileValues } from '../src/ops/config-file.js';
 import { loadRuntimeEnvironment } from '../src/ops/config.js';
 import { resolveBindPlan } from '../src/shared/bind-host.js';
@@ -131,8 +131,7 @@ function checkWorkDir() {
   checkOneDir('WORK_DIR', process.env.WORK_DIR || homedir());
   // 多 repo 台阶1：WORK_DIRS 白名单各目录也需可写。soft：问题用 warn（server 启动期
   // 对无效项告警跳过、不挡启动，doctor 与之一致——不因可选切换目录有问题就 fail 整个自检）。
-  // 解析统一走 workdirs.js（与 server.js preflight 单一事实源）：条目支持 string 或 {path, sessionLimit}。
-  // 文件模式复用导出的 loadWorkdirsFile（read+parse+normalize→null），逗号模式走 normalizeWorkdirEntries。
+  // 解析统一走 workdirs.js（与 server readWorkdirSource 单一事实源）：条目支持 string 或 {path, sessionLimit}。
   const { result, from, filePath } = resolveWorkdirSource();
   if (!result && from === 'WORK_DIRS_FILE') warn('WORK_DIRS_FILE', `读取/解析失败 (${filePath})`);
   if (result) {
@@ -578,22 +577,16 @@ function checkClaudeConfigDir() {
   (r.status === 'warn' ? warn : ok)('CLAUDE_CONFIG_DIR', r.detail);
 }
 
-// 工作区来源解析 —— **与 src/server/app.js 的 readWorkdirSource 同一优先级**：
-// 内联 WORKDIRS > 外部 workdirs.json > 逗号串 WORK_DIRS。
-// D3 与 workdirPaths 共用这一份：那条「同一解析口径」的注释以前只是口头约定，两处各写一遍，
-// 加第三条路径时必然只改一处 —— 而 doctor 的全部价值就在于「它看到的 = server 会看到的」。
+// 工作区来源解析 —— 选择走 workdirs.js 的 resolveWorkdirSource（与 server readWorkdirSource 同一优先级：
+// WORK_DIRS env > WORK_DIRS_FILE env > 内联 WORKDIRS）。D3 与 workdirPaths 共用这一份。
 function resolveWorkdirSource() {
-  // ★ 跟随**被诊断的**配置：--env=prod.env 时不能去读仓库根那份 ccm.config.json，
-  // 否则 doctor 检查的是本仓库的工作区、却报给你 prod 的诊断结论 —— 正是 WS-011 声明要消灭的假绿。
-  const inline = envArg ? null : readConfigFileRaw(HERE)?.WORKDIRS;
-  if (Array.isArray(inline)) return { result: normalizeWorkdirEntries(inline), from: 'WORKDIRS' };
-  const dirsFile = process.env.WORK_DIRS_FILE;
-  if (dirsFile) {
-    const filePath = resolveWorkdirsFilePath(dirsFile, HERE);
-    return { result: loadWorkdirsFile(filePath), from: 'WORK_DIRS_FILE', filePath };
-  }
-  const raw = (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean);
-  return { result: normalizeWorkdirEntries(raw), from: 'WORK_DIRS' };
+  // --env=prod.env 时不能去读仓库根那份 ccm.config.json，否则检查的是本仓库工作区、结论却打在 prod 上。
+  return loadWorkdirSource({
+    envList: (process.env.WORK_DIRS || '').split(',').map(s => s.trim()).filter(Boolean),
+    envFile: process.env.WORK_DIRS_FILE || '',
+    inline: envArg ? null : readConfigFileRaw(HERE)?.WORKDIRS,
+    here: HERE,
+  });
 }
 
 // 白名单工作目录清单（与 checkWorkDir 同一解析口径，只取路径不做可写校验）。
