@@ -17,19 +17,9 @@ export function nextHistoryRenderChunk({ processed, total, chunkSize }) {
   return { end, done: end >= total };
 }
 
-// 全量重载历史时，DOM 里那颗未确认的乐观气泡该由哪条历史消息「认领」（返回它，否则 null）。
-//
-// 【为什么需要这一步】clearView 在发送窗口内会保住未确认气泡（a417c08，修「发出去的消息消失
-// 几秒/闪一下」），而紧随其后的 loadHistory → renderHistoryBubbles 是【不清屏、直接 append】
-// 的——清屏责任全在调用方。真 server 一收到 user:message 就写进 transcript，于是那次全量重载
-// 拉回来的历史里本来就含这条消息：保住的气泡 ＋ 历史里的同一条 ＝ 屏幕上两颗一模一样的消息。
-// 触发的是日常路径（已有会话 + 实例被闲置回收后懒开 → 换实例广播 → diskLen ahead → reload）。
-//
-// 判据刻意与 app.js 里 handle.user_message 的 matchedBubble 对齐（文本相等；纯附件按附件名集合），
-// 只差一处：历史消息没有 clientMessageId（transcript 不存它），只能按内容认。两边同源不是巧合——
-// 判据一旦各写各的就会慢慢漂开，而漂开的后果恰恰是这里要消灭的「退化成两个气泡」。
-//
-// 从后往前扫：同一段文本重复发过多次时，刚发出的那条必定是最后一条。
+// 全量重载时，未确认乐观气泡该由哪条历史消息认领（否则 null）。
+// clearView 保住的气泡 + 已入 transcript 的同一条会撞成两颗。
+// 判据与 handle.user_message 的 matchedBubble 对齐；历史没有 clientMessageId，按内容从后往前认。
 export function findHistoryClaimForPending({ text = '', attNames = '', messages = [] } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) return null;
   const wantText = String(text ?? '');

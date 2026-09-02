@@ -2,8 +2,8 @@
 // scripts/setup.js —— 一键配置向导：生成 ccm.config.json（AUTH_TOKEN + WORK_DIR），零依赖。
 // 用法: node scripts/setup.js [--config <path>]                                     # 交互向导（人用）
 //       node scripts/setup.js --yes --work-dir=<path> [--hooks=on|off] [--desktop=on|off] [--force]  # 非交互（编程 agent 用）
-//   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN,
-//   否则只绑 127.0.0.1、手机连不上」——向导默认帮你生成。
+//   覆盖最简路径（同 WiFi / 临时公网）的核心配置。头号门槛是「必须设 AUTH_TOKEN，
+//   否则拒绝启动」——向导默认帮你生成。
 //   公网固定部署（Cloudflare Access 2FA / 隧道 / 常驻）不在向导内，见 docs/deployment.md。
 //   界面语言按环境 locale 自动选：zh_* → 中文，其余 → 英文。
 //
@@ -243,12 +243,12 @@ export const MESSAGES = {
     desktopFailed: '编译未成功（见上方输出）。不影响其余配置；装好 Command Line Tools'
       + '（xcode-select --install）后跑 npm run app:build 重试。',
     usage: '用法: node scripts/setup.js [--config <path>]\n'
-      + '      node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--desktop=on|off] [--access-profile=cloudflare|vpn|reverse-proxy|lan] [--force]',
+      + `      node scripts/setup.js --yes --work-dir=<绝对路径> [--hooks=on|off] [--desktop=on|off] [--access-profile=${ACCESS_PROFILES.join('|')}] [--force]`,
     refuse: {
       unknown_flag: d => `无法识别的参数：${d}`,
       invalid_hooks: d => `--hooks 只接受 on 或 off，收到：${d}`,
       invalid_desktop: d => `--desktop 只接受 on 或 off，收到：${d}`,
-      invalid_access_profile: d => `--access-profile 只接受 cloudflare / vpn / reverse-proxy / lan，收到：${d}`,
+      invalid_access_profile: d => `--access-profile 只接受 ${ACCESS_PROFILES.join(' / ')}，收到：${d}`,
       desktop_unsupported: d => `桌面控制台只有 macOS 有（当前平台：${d}）。服务器上用手机端与命令行，功能是齐的。`,
       work_dir_required: () => '必须显式给出工作目录的绝对路径（--work-dir= 或向导里键入）。'
         + '这里不会静默回落到 $HOME——那等于把整个家目录交给远程入口。',
@@ -320,12 +320,12 @@ export const MESSAGES = {
     desktopFailed: 'Build did not complete (see output above). Your other config is fine; install the Command Line '
       + 'Tools (xcode-select --install) and retry with npm run app:build.',
     usage: 'usage: node scripts/setup.js [--config <path>]\n'
-      + '       node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--desktop=on|off] [--access-profile=cloudflare|vpn|reverse-proxy|lan] [--force]',
+      + `       node scripts/setup.js --yes --work-dir=<absolute-path> [--hooks=on|off] [--desktop=on|off] [--access-profile=${ACCESS_PROFILES.join('|')}] [--force]`,
     refuse: {
       unknown_flag: d => `Unrecognized argument: ${d}`,
       invalid_hooks: d => `--hooks accepts only on or off, got: ${d}`,
       invalid_desktop: d => `--desktop accepts only on or off, got: ${d}`,
-      invalid_access_profile: d => `--access-profile accepts only cloudflare / vpn / reverse-proxy / lan, got: ${d}`,
+      invalid_access_profile: d => `--access-profile accepts only ${ACCESS_PROFILES.join(' / ')}, got: ${d}`,
       desktop_unsupported: d => `The desktop console is macOS-only (this platform: ${d}). On a server, the phone UI and CLI cover everything.`,
       work_dir_required: () => 'An explicit absolute --work-dir= is required (or type one in the wizard). '
         + 'It will not silently fall back to $HOME — that would hand your entire home directory to a remote entrypoint.',
@@ -350,7 +350,7 @@ const c = {
   accent: s => `\x1b[36m${s}\x1b[0m`,
 };
 
-// 公网访问方案问询：数字 1-4 单选，回车 = 不声明（不写键）。非法输入重问、问满 maxAttempts
+// 公网访问方案问询：数字 1-5 单选，回车 = 不声明（不写键）。非法输入重问、问满 maxAttempts
 // 回落不声明——EOF/管道喂错内容都不能死循环（promptWorkDir 的教训），且失败方向必须是
 // 「不写」而不是猜一个方案（hard-rules §1）。编号顺序即推荐的认知顺序：从最简单的 lan 起步。
 export async function promptAccessProfile(ask, { maxAttempts = 3, onInvalid } = {}) {

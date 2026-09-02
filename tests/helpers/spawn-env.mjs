@@ -16,6 +16,7 @@ export const SPAWN_ENV_BLOCKLIST = Object.freeze([
   'PUBLIC_URL',                                              // 通知深链会指向生产域名
   'NTFY_URL', 'NTFY_TOPIC',                                  // 外部通知通道
   'WORK_DIRS_FILE',                                          // 会盖掉显式传入的 WORK_DIRS
+  'BIND_MODE', 'BIND_HOST',                                  // 改 listen 计划；custom 且空 host 会让实例拒绝启动
   'CCM_HOOKS_ORIGIN', 'CCM_STATUSLINE_ORIGIN',               // 两个桥的血统标记，继承会让来源判定失真
 ]);
 

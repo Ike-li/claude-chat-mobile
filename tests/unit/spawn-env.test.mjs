@@ -28,6 +28,13 @@ test.describe('stripInheritedEnv：不把生产环境带进被测实例', () => 
     assert.equal('WORK_DIRS_FILE' in stripInheritedEnv({ WORK_DIRS_FILE: '/etc/workdirs.json' }), false);
   });
 
+  test('摘掉 BIND_MODE / BIND_HOST：父 shell 的 custom+空 host 会让每个被测实例拒绝启动', () => {
+    const out = stripInheritedEnv({ BIND_MODE: 'custom', BIND_HOST: '::', PATH: '/usr/bin' });
+    assert.equal('BIND_MODE' in out, false);
+    assert.equal('BIND_HOST' in out, false);
+    assert.equal(out.PATH, '/usr/bin');
+  });
+
   test('摘掉两个桥的血统标记（继承会让来源判定失真）', () => {
     const out = stripInheritedEnv({ CCM_HOOKS_ORIGIN: 'web-sdk', CCM_STATUSLINE_ORIGIN: 'web-sdk' });
     assert.deepEqual(Object.keys(out), []);

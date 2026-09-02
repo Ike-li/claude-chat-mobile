@@ -382,13 +382,7 @@ export function shouldRestoreOptimisticBusy({
 
 // 统一判定：会话待处理 → ok | attention（顶栏会话按钮角标 / 注意力信号）。
 // 抽屉不再复述计数；状态落在需要你卡、工作区树角标、主聊天面。
-//
-// 【为什么服务健康不在这条轴上】(2026-09-02) 这里曾有一段 deliveryFailure → `return {level:'alert'}`，
-// 排在 needsYou 聚合之后却无条件短路它。后果是：一次推送投递失败在 24h 时效窗里一直有效，
-// 于是顶栏那唯一的位子整天写着「推送失败」，而「3 个审批等你按」被完全挤掉。
-// 两者是不同的轴——needsYou 是「此刻你按一下就能推进」，推送失败是「你在手机上做不了任何事」
-// 的背景状态（要改的是网络/代理配置）。后者的可见性由抽屉「服务」小节与服务状态面板承担，
-// 那两处本来就在渲染它，且不与待办争位。
+// 服务健康不在这条轴上：needsYou 是「此刻按一下就能推进」，投递失败是背景状态，归抽屉「服务」与服务状态面板。
 export function whatNeedsAttention({ instances, needsYou } = {}) {
   const items = [];
   if (Array.isArray(needsYou)) {

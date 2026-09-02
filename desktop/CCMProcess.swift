@@ -1,33 +1,11 @@
 // CCMProcess.swift —— 子进程调用层：spawn 一个命令、带真实超时地收集它的输出。
 //
-// **为什么从 ccm-menubar.swift 抽出来单独一个文件**：2026-08-22 现场抓到一次 FD 泄漏
-// —— 菜单栏进程持有 2550 个 pipe fd 撞上限自锁，`service.js` 的每一次调用（状态刷新、
-// 启动、停止、复制令牌、设备审批）全部返回 nil，界面上只显示「service.js 无响应」，
-// 而 server 照常在跑。停止按钮点了没反应就是这么来的。
+// 进不了 CCMCore（那层零 Process），也没法留在 ccm-menubar.swift（@main 与测试冲突）。
+// 回归：testRunSyncResourceHygiene / testRunSyncTimeoutDoesNotLeakWorkers /
+// testRunSyncDoesNotWaitUntilExitOffCaller。
 //
-// 根因是**两个独立缺陷叠加**（缺陷 ③，各自的修法见 drainToDeadline / runSync）：
-//
-//   (a) Foundation 不归还父进程侧的 pipe 读端 fd。这是主因，**每一次调用都漏 2 个**，
-//       与成功/超时/有没有孙进程全都无关。实测判据：把 reader 线程整个去掉、只 spawn 一个
-//       `sh -c "exit 0"` 并 waitUntilExit，函数返回后 fd 照样净增 2 —— 没有任何自定义代码
-//       持有它。所以别再从「谁强持了 Pipe」的方向找，那条路是错的（本文件初稿就错在这）。
-//   (b) `readDataToEndOfFile()` 没有 deadline。孙进程继承了写端时它永久阻塞，于是连
-//       (a) 的修法「读完自己关」都执行不到。实测：只修 (a) 不修 (b)，孙进程场景 4 次调用
-//       净增 8 个 fd。两个都得修。
-//
-// 2026-08-31 又抓到缺陷 ④：把 `waitUntilExit` 丢到另一条 GCD 线程。AppKit 进程里
-// 子进程退出通知走主线程 run loop，那条 watchdog 在进程已死之后仍永远等，函数靠
-// 信号量超时返回，线程和 Pipe 不收工。现场 64 条 Dispatch 线程全堵在 waitUntilExit、
-// 2550 个 pipe、菜单栏点不动。收尸改成调用方线程上的 waitpid + poll，见 runSync。
-//
-// 这段代码「有副作用但必须可测」：它进不了 CCMCore.swift（那层的存在理由就是零 Process、
-// 零副作用），也没法留在 ccm-menubar.swift 里测（那个文件有 @main，与测试的 @main 冲突）。
-// 所以单开一层，同时进 APP_SOURCES 与 TEST_SOURCES —— 见 scripts/app-build.js。
-// 回归断言在 ccm-menubar-tests.swift 的 testRunSyncResourceHygiene /
-// testRunSyncTimeoutDoesNotLeakWorkers / testRunSyncDoesNotWaitUntilExitOffCaller。
-//
-// 与 CCMCore 的分工：CCMCore 决定「拼什么命令、显示什么话」（纯函数），本文件只管
-// 「把命令跑起来并且不泄漏资源」。两边都有断言集。
+// 收尸必须在调用方线程 waitpid + poll：waitUntilExit 丢到 GCD 会在进程已死后仍永远等。
+// 两个 pipe 必须并发排空，超时不能建立在 readDataToEndOfFile 上。
 
 import Foundation
 
@@ -143,28 +121,10 @@ private func exitCode(fromWaitStatus status: Int32) -> Int32 {
 
 /// 同步跑一个命令，带**真实**超时。只在后台队列里调用。
 ///
-/// 早前的实现有两个致命缺陷，第一轮代理审查实测出来的：
-///
-///   ① **超时形同虚设**：`readDataToEndOfFile()` 写在计时循环之前，而它的返回条件就是
-///      「子进程关闭了 stdout」≈「子进程已退出」。实测 `timeout:1` 跑 `sleep 4` → 4.08s 才返回，
-///      且返回成功。所以要先起一个等退出的 watchdog，再谈读数据。
-///
-///   ② **顺序读两个 pipe 会死锁**：先读干 stdout 再读 stderr，子进程若往 stderr 写满 64KB
-///      而 stdout 一直不关，双方互等。实测 200KB stderr 的子进程 20s 未返回。两个 pipe
-///      必须**并发**排空。
-///
-/// 叠加起来的后果比单独任一个都严重：那时全部后台工作跑在同一条串行队列上，一次阻塞
-/// 就等于整个 app 永久瘫痪（`inFlight` 停在 true、后续任务永不执行、点什么都没反应）。
-///
-/// ④ **`waitUntilExit` 不能丢到另一条 GCD 线程**（2026-08-31）。菜单栏是 NSApplication
-///    进程，子进程退出通知走主线程 run loop；背景线程上的 `waitUntilExit` 在进程已经
-///    死掉之后仍会永远等。函数靠信号量超时返回了，但 watchdog 线程和它强持的
-///    Process/Pipe 不收工。探测每 10s 两次 runSync，Dispatch 软上限 64 打满、pipe fd
-///    顶到 2550，用户一点菜单，主线程 `dispatch_sync` 剪贴板队列，整个图标点不动。
-///    现在收尸和排空都在**调用方线程**上用 waitpid + poll 做，不再向 GCD 池借线程。
-///
-/// env 缺省 nil ⇒ 用 `childProcessEnvironment()`（登录 shell 的 PATH）。显式传值只有一个用途：
-/// `LoginShellPath` 自己解析 PATH 时得传自身环境打破递归。
+/// 超时必须独立于「子进程关 stdout」：readDataToEndOfFile 在退出前不会返回。
+/// 两个 pipe 必须并发排空，否则 stderr 写满 64KB 会与 stdout 互锁。
+/// 收尸在调用方线程 waitpid + poll，不把 waitUntilExit 丢到 GCD（AppKit 退出通知走主线程）。
+/// env 缺省用 childProcessEnvironment()；LoginShellPath 自解析时显式传自身环境打破递归。
 func runSync(_ launchPath: String, _ args: [String], cwd: String? = nil,
              timeout: TimeInterval = 10, drainGrace: TimeInterval = 3,
              env: [String: String]? = nil) -> RunResult? {

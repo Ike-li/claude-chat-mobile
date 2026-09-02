@@ -689,4 +689,15 @@ test.describe('setup 向导 —— 公网访问方案问一步（ACCESS_PROFILE�
     assert.equal(typeof MESSAGES.zh.refuse.invalid_access_profile, 'function');
     assert.equal(typeof MESSAGES.en.refuse.invalid_access_profile, 'function');
   });
+
+  test('usage 与非法值报错必须列出 ACCESS_PROFILES 全表（漏 direct 会让合法值被说成非法）', () => {
+    for (const lang of ['zh', 'en']) {
+      const usage = MESSAGES[lang].usage;
+      const refuse = MESSAGES[lang].refuse.invalid_access_profile('nope');
+      for (const p of ACCESS_PROFILES) {
+        assert.match(usage, new RegExp(p), `${lang} usage 漏了 ${p}`);
+        assert.match(refuse, new RegExp(p), `${lang} invalid_access_profile 漏了 ${p}`);
+      }
+    }
+  });
 });

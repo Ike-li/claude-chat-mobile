@@ -13,11 +13,9 @@ import { formatCliDuration, pickTurnDoneVerb } from './bg-tasks.js';
 // 在线 user:message 的 socket ack 决策（纯函数）。成功只清 in-flight；失败须清乐观 busy +
 // 可见文案，并可恢复草稿（输入已被 send() 清空）。旧实现把 ack 当 clearSendInFlight 忽略 payload。
 //
-// dropBubble = 在线乐观气泡的去留（2026-08-27）。send() 那一刻气泡就上屏了，负 ack 回来时必须决定
-// 它的命运，判据只有一条：这条消息还在不在飞。留 ⟺ ok || requeue（outbox 会在同一颗气泡上接着显示
-// 重发进度）；撤 ⟺ 确定没发出去（此时文字已回填输入框），否则屏幕上留一颗永远转圈的气泡，用户以为
-// 发出去了——比原本「气泡迟迟不出现」更糟。与 restoreDraft 分开是刻意的：一个管消息流、一个管输入框，
-// 当前同值只是巧合，合并会让「回填草稿但保留气泡」这类改动变成静默错误。
+// dropBubble = 在线乐观气泡的去留。send() 那一刻气泡就上屏了，负 ack 必须决定命运：
+// 留 ⟺ ok || requeue；撤 ⟺ 确定没发出去（文字已回填输入框），否则会留一颗永远转圈的气泡。
+// 与 restoreDraft 分开：一个管消息流、一个管输入框，当前同值只是巧合。
 export function presentOnlineSendAck(ack) {
   if (ack && ack.ok === true) {
     return {
