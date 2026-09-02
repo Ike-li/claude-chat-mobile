@@ -438,20 +438,29 @@ export function resolveHeaderConnBadge({
 
 // 顶栏文字 chip：把会话按钮两颗角标（#connDot 纯色点 / #sessionsDot 状态图标）的含义写成人话——
 // 手机没有 hover，它们的 title 等于不存在，用户只看到「一颗不知道什么意思的小红点」。
-// 按优先级只显一条：未连接 > 需要你 N > 其他工作区（需要你/出错/运行中）> 隐藏。
+// 按优先级只显一条：未连接 > 需要你 N > 其他工作区（需要你/出错）> 隐藏。
 // 前两级直接吃 resolveHeaderConnBadge 的 reason（点与字永远说同一件事，不各算一套）；
-// 第三级来自 summarizeOtherWorkspaces（#sessionsDot 的数据源），普通终态不点亮，与该点一致。
-// 顶栏位子只有一个，且这里的每一条都必须是「点开就能处理」的事——推送失败不是，已移除（2026-09-02）。
-const OTHER_WORKSPACE_CHIP_TONE = { permission: 'warning', error: 'danger', busy: 'accent' };
+// 第三级来自 summarizeOtherWorkspaces（#sessionsDot 的数据源）。
+//
+// 顶栏位子只有一个，且这里的每一条都必须是「点开就能处理」的事。两条已按此出局：
+//   · 推送失败（2026-09-02）——手机上无从处理，要去改网络/代理。
+//   · 其他工作区 busy（2026-09-02）——「运行中」是状态不是事件，能持续几十分钟、多工作区并行时
+//     接近常驻，长期亮着只会训练用户忽略这个位置，反过来拉低同槽位「需要你/出错」的信号强度；
+//     点开抽屉也没有任何可执行动作。该信息由 #sessionsDot 图标承担（同一份 summarizeOtherWorkspaces
+//     数据）——图标是低成本环境感知，不喊人，正合适。
+// 下表因此既是色调表也是【准入表】：不在表里的状态一律不进顶栏。两者合一才不会出现
+// 「有文案却没色调」的半亮态（曾经的写法以 DRAWER_STATUS_LABELS 命中为准，删色调不删文案会漏出）。
+const OTHER_WORKSPACE_CHIP_TONE = { permission: 'warning', error: 'danger' };
 export function resolveHeaderAttentionChip({ badgeReason = 'ok', needsYouCount = 0, otherWorkspaceStatus = null } = {}) {
   if (badgeReason === 'offline') return { visible: true, tone: 'danger', reason: 'offline', text: t('未连接') };
   if (badgeReason === 'attention') {
     const text = needsYouCount > 0 ? `${t('需要你')} ${needsYouCount}` : t('需要你');
     return { visible: true, tone: 'warning', reason: 'attention', text };
   }
-  const label = DRAWER_STATUS_LABELS[otherWorkspaceStatus];
-  if (label) {
-    return { visible: true, tone: OTHER_WORKSPACE_CHIP_TONE[otherWorkspaceStatus], reason: 'other-workspace', text: `${t('其他工作区')} · ${t(label)}` };
+  const tone = OTHER_WORKSPACE_CHIP_TONE[otherWorkspaceStatus];
+  if (tone) {
+    const label = DRAWER_STATUS_LABELS[otherWorkspaceStatus];
+    return { visible: true, tone, reason: 'other-workspace', text: `${t('其他工作区')} · ${t(label)}` };
   }
   return { visible: false, tone: null, reason: 'ok', text: '' };
 }

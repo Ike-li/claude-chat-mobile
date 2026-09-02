@@ -91,7 +91,8 @@
       <!-- 手机 ↔ 主机 socket 往返延迟：迷你胶囊「延迟 Nms」，与中间 top-context-pill 同语汇；连上后由 app.js 周期测，断线隐藏 -->
       <span id="connRtt" class="hidden conn-rtt-chip tabular-nums leading-none select-none" title="手机到主机的往返延迟" aria-live="polite"></span>
       <!-- 顶栏文字 chip：把上面两颗角标（纯色点 / 状态图标）的含义写成人话——手机没有 hover，title 等于不存在。
-           按优先级只显一条（未连接 > 推送失败 > 需要你 N > 其他工作区 · 状态），点击=打开抽屉；判定在 logic resolveHeaderAttentionChip。 -->
+           按优先级只显一条（未连接 > 需要你 N > 其他工作区 · 需要你/出错），点击=打开抽屉；判定在 logic resolveHeaderAttentionChip。
+           只说「点开就能处理」的事：推送失败与其他工作区 busy 均不占此位（后者由上面 #sessionsDot 图标表达）。 -->
       <button id="attentionChip" type="button" class="hidden conn-rtt-chip attention-chip select-none" data-testid="header-attention-chip" data-reason="ok" aria-live="polite"></button>
     </div>
 

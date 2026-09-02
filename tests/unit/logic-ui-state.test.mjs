@@ -231,13 +231,21 @@ test.describe('resolveHeaderAttentionChip：顶栏文字 chip 按优先级只说
     assert.equal(resolveHeaderAttentionChip({ badgeReason: 'attention', needsYouCount: 0 }).text, '需要你');
   });
 
-  test('本机健康但其他工作区有动静 → 「其他工作区 · 状态」，色调随状态', () => {
-    const busy = resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'busy' });
-    assert.deepEqual(busy, { visible: true, tone: 'accent', reason: 'other-workspace', text: '其他工作区 · 运行中' });
-    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'permission' }).text, '其他工作区 · 需要你');
-    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'permission' }).tone, 'warning');
+  test('本机健康但其他工作区需要你/出错 → 「其他工作区 · 状态」，色调随状态', () => {
+    const perm = resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'permission' });
+    assert.deepEqual(perm, { visible: true, tone: 'warning', reason: 'other-workspace', text: '其他工作区 · 需要你' });
     assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).text, '其他工作区 · 出错');
     assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).tone, 'danger');
+  });
+
+  // 2026-09-02：busy 与推送失败同罪出局。运行中是「状态」不是「事件」——能持续几十分钟，多工作区
+  // 并行时接近常驻，长期亮着会训练用户忽略这个位置，反而拉低同槽位「需要你/出错」的信号强度；
+  // 且点开抽屉也没有任何可执行动作。#sessionsDot 图标仍照常显示 busy（低成本环境感知，不喊人）。
+  test('其他工作区仅在跑 → 不占顶栏（图标已表达，chip 只说能处理的事）', () => {
+    const r = resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'busy' });
+    assert.equal(r.visible, false);
+    assert.equal(r.reason, 'ok');
+    assert.equal(r.text, '');
   });
 
   test('其他工作区的普通终态（done/aborted/idle）不点亮', () => {
