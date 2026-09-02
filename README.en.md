@@ -166,7 +166,7 @@ Claude Chat Mobile supports everything from LAN access to a long-lived public en
 | Scenario         | Method                                      | Best for                       |
 | ---------------- | ------------------------------------------- | ------------------------------ |
 | Same Wi-Fi       | LAN address                                 | the simplest first run         |
-| Temporary public | Cloudflare Quick Tunnel                     | trials and demos               |
+| Temporary public | Cloudflare Quick Tunnel, ngrok, other hosted tunnels | trials and demos      |
 | Long-term public | fixed domain + Cloudflare Tunnel + Access   | regular access from outside    |
 | Self-hosted entry | encrypted tunnel / VPN, self-hosted reverse proxy | keeping traffic off Cloudflare |
 

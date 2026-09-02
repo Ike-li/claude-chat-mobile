@@ -648,6 +648,19 @@ test.describe('setup 向导 —— 公网访问方案问一步（ACCESS_PROFILE�
     assert.equal(written.accessProfile, 'vpn');
   });
 
+  // 向导是 ACCESS_PROFILE 的第一个入口（配置面板是第二个，见 env-schema.test.mjs 同款断言）。
+  // 两个入口举同一批例子，也就共享同一个坑：Tailscale 一名两拓扑——进 tailnet 是 vpn，
+  // Funnel 是公网、归 reverse-proxy。只写「Tailscale」会把 Funnel 用户引导进 vpn 档，
+  // 而 vpn 在 doctor 的公网信号集里不算公网，整套针对性检查朝放松方向错配。
+  test('举了 Tailscale 就必须同屏交代 Funnel 的去向（zh + en 两面都要）', () => {
+    for (const lang of ['zh', 'en']) {
+      const prompt = MESSAGES[lang].accessPrompt;
+      assert.match(prompt, /Tailscale/, `${lang}：前提是这里确实拿 Tailscale 举例`);
+      assert.match(prompt, /Funnel/i,
+        `${lang}：Funnel 是公网拓扑不归 vpn，不点名它就是在引导误选`);
+    }
+  });
+
   test('双语齐全：问询举例到具体工具；四个方案的下一步指引都在，vpn/reverse-proxy 指路文档与 agent prompt', () => {
     assert.match(MESSAGES.zh.accessPrompt, /Tailscale/);
     assert.match(MESSAGES.zh.accessPrompt, /WireGuard/);

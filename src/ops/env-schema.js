@@ -62,13 +62,19 @@ export const ENV_SCHEMA = {
     options: [
       { value: '', label: t('未声明（按 CF_ACCESS_* 推断）', 'Undeclared (inferred from CF_ACCESS_*)') },
       { value: 'cloudflare', label: t('Cloudflare Tunnel + Access', 'Cloudflare Tunnel + Access') },
-      { value: 'vpn', label: t('加密隧道 / VPN（Tailscale、WireGuard、ZeroTier…）', 'Encrypted tunnel / VPN (Tailscale, WireGuard, ZeroTier…)') },
-      { value: 'reverse-proxy', label: t('自建反向代理 / 网关（VPS + nginx、Caddy、frp…）', 'Self-hosted reverse proxy / gateway (VPS + nginx, Caddy, frp…)') },
+      { value: 'vpn', label: t('加密隧道 / VPN（WireGuard、Tailscale tailnet、ZeroTier…）', 'Encrypted tunnel / VPN (WireGuard, Tailscale tailnet, ZeroTier…)') },
+      // 托管隧道（ngrok / Cloudflare Quick Tunnel / Tailscale Funnel / localtunnel…）不单列枚举值：
+      // 它们在 CCM 侧的连带变化与自建反代逐条相同（TLS 终止在对方那边、peer 是 loopback 导致限速桶
+      // 全塌、CF_ACCESS_* 整层关闭）。新增枚举值只会多一份要同步的检查矩阵，换不来任何不同的判据。
+      { value: 'reverse-proxy', label: t('反向代理 / 托管隧道（nginx、Caddy、frp、ngrok、Tailscale Funnel…）', 'Reverse proxy / hosted tunnel (nginx, Caddy, frp, ngrok, Tailscale Funnel…)') },
       { value: 'lan', label: t('仅局域网（同一 WiFi 直连）', 'LAN only (same-WiFi direct)') },
     ],
     label: t('公网访问方案', 'Public access profile'),
-    help: t('声明手机从哪条拓扑访问；doctor 与安全体检按它做针对性检查。选型判据见 docs/deployment.md「不用 Cloudflare 的公网入口」。',
-      'Declares how your phone reaches this machine; doctor tailors its checks accordingly. See docs/deployment.md.'),
+    // help 里点名 Tailscale 的两种形态：一个产品名对应两种语义相反的拓扑，是这份枚举里唯一
+    // 会让人主动选错的地方，而选错的方向恰好是「把公网拓扑声明成无公网面」（vpn 不在
+    // fileEditExposureDiagnostic 的公网信号集里）。
+    help: t('声明手机从哪条拓扑访问；doctor 与安全体检按它做针对性检查。Tailscale 有两种用法：设备进 tailnet 选「加密隧道」，用 Funnel 暴露到公网选「反向代理」。选型判据见 docs/deployment.md「不用 Cloudflare 的公网入口」。',
+      'Declares how your phone reaches this machine; doctor tailors its checks accordingly. Tailscale has two modes: joining your tailnet is an encrypted tunnel, while Funnel exposes the service publicly and counts as a reverse proxy. See docs/deployment.md.'),
   },
   // 监听地址。空 = 未声明 = 沿用旧语义（有 token 绑 0.0.0.0、无 token 绑 127.0.0.1），
   // 现有部署零变化。判定与「显式要绑外网却没 token 就拒绝启动」的不变量在

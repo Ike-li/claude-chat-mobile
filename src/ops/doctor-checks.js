@@ -960,8 +960,8 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
     return {
       status: 'ok', name,
       detail: bi(lang,
-        '自建反代：建议在反代层再补一层认证；Host 透传与 WebSocket 升级两条硬要求见 docs/deployment.md。',
-        'Self-hosted reverse proxy: consider an extra auth layer at the proxy; Host passthrough and WebSocket upgrade are hard requirements (see docs/deployment.md).'),
+        '反向代理 / 托管隧道：建议在入口层再补一层认证；Host 透传与 WebSocket 升级两条硬要求见 docs/deployment.md。',
+        'Reverse proxy / hosted tunnel: consider an extra auth layer at the entry point; Host passthrough and WebSocket upgrade are hard requirements (see docs/deployment.md).'),
     };
   }
   return {

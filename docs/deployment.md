@@ -237,7 +237,8 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 选定方案后建议声明 `ACCESS_PROFILE=vpn|reverse-proxy|lan`（Cloudflare 用户可声明 `cloudflare`；装机向导
 会问这一项，手机「设置」与 `node scripts/config.js set` 也能改）：它是纯声明、不改变任何运行时行为，
 但 `doctor` 与手机端安全体检会按它做针对性检查——声明与 `CF_ACCESS_*`/`PUBLIC_URL`/`AUTH_TOKEN`/通知配置
-互相矛盾时当场指出，而不是等到用不了才发现。
+互相矛盾时当场指出，而不是等到用不了才发现。四个值就够覆盖全部拓扑：**托管隧道（ngrok、Quick Tunnel、
+Tailscale Funnel…）归 `reverse-proxy`**，判据见下面「托管隧道归哪一档」。
 
 ### 收窄监听面：BIND_MODE / BIND_HOST
 
@@ -265,12 +266,42 @@ server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬�
 | 拓扑 | 中间节点能看到明文 | 机制 |
 |---|---|---|
 | Cloudflare Tunnel + Access（现状） | 能：Cloudflare | TLS 在边缘终止后回源 |
-| 加密隧道 / VPN（WireGuard、Tailscale、ZeroTier、Netbird、Headscale…） | 不能 | 端到端加密；中继只转发密文，协调节点只交换公钥 |
+| 加密隧道 / VPN（WireGuard、Tailscale tailnet、ZeroTier、Netbird、Headscale…） | 不能 | 端到端加密；中继只转发密文，协调节点只交换公钥 |
 | 自建反代（VPS + nginx / Caddy / Traefik，打洞用 frp、SSH `-R`、WireGuard 等） | 能：VPS 主机商 | TLS 在你租的那台机器上终止 |
+| 托管隧道（ngrok、Cloudflare Quick Tunnel、Tailscale Funnel、localtunnel…） | **看 TLS 在哪终止**，见下节 | 服务商托管入口，本机跑一个 agent 回连 |
 | 不做公网，只用局域网 | 无中间节点 | 手机与 server 同网段直连 |
 
 第三行是事实陈述而非取舍建议：自建反代**更换**了信任对象（Cloudflare → 主机商），不**消除**中间节点。
-若目标是消除，只有前两类做得到。
+若目标是消除，只有加密隧道 / VPN 与局域网两类做得到。
+
+### 托管隧道（ngrok / Quick Tunnel / Funnel…）归哪一档
+
+**归 `ACCESS_PROFILE=reverse-proxy`，不新增枚举值。** 判据是下一节那四条连带变化在托管隧道下**逐条相同**：
+`CF_ACCESS_*` 留空导致 Access 层整层消失、设备审批自动顶上、TLS 终止在对方那边、
+本机 agent 回连 3000 使所有公网客户端的连接 IP 都是 `127.0.0.1` 从而**共用一个限速桶**。
+既然判据没有一条不同，多一个枚举值只会多一份要同步维护的检查矩阵。
+
+明文可见方**看 TLS 在哪一跳终止，不看厂商是不是"隧道"**：终止在服务商那边，服务商就能看到明文
+（ngrok、Cloudflare Quick Tunnel 都是这样）；终止在你本机，中间只过密文。
+具体到某一家请去它自己的文档里确认这一条，别按"它叫隧道所以是加密的"推断——
+上表第二行的"不能"成立是因为那类方案本身就是端到端加密的 overlay 网络，不是因为名字里有隧道。
+
+**Tailscale 一个产品名对应两种语义相反的拓扑，这是本节唯一真会让人选错的地方：**
+
+| 用法 | 手机怎么连上 | 声明成 | 有没有公网面 |
+|---|---|---|---|
+| 设备加入 tailnet | 手机也装 Tailscale，走隧道内地址（`100.64/10`） | `vpn` | 无——未入网的设备根本触达不到 |
+| Tailscale Funnel | 任何浏览器打开公开 URL | `reverse-proxy` | **有，全公网可达** |
+
+选错的方向恰好朝放松：`vpn` 不在 doctor 的公网信号集里（`fileEditExposureDiagnostic` 只认
+`cloudflare` 与 `reverse-proxy`），于是文件编辑器直写不会提示关闭、体检还会说"入网资格由隧道承担"——
+对 Funnel 是假话。手机「设置」里的选项与装机向导都点名了这一条，改声明的时候别按产品名对号入座。
+
+**托管隧道特有的一条：URL 会漂。** Quick Tunnel 和 ngrok 免费档每次启动分配的域名可能不同。
+`PUBLIC_URL` 是通知深链的来源（见下节），域名一变就指向失效地址——通知照常送达，点开却打不开。
+要长期用，选带固定域名的档位；临时用则每次改 `PUBLIC_URL`，或干脆别配通知。
+另外这类入口**没有入网门槛**：URL 泄露即全公网可达，上一段说的"限速桶全塌"在这里比自建反代更值得在意
+（自建反代至少还能在入口层加一道认证）。
 
 ### 换掉入口后，CCM 侧的四处连带变化
 
@@ -349,6 +380,12 @@ location / {
 由于公网 2FA 层已消失，反代层建议自行补一层认证（mTLS、OIDC / forward auth、Basic Auth 等均可），
 否则公网只剩 `AUTH_TOKEN` + 设备审批。
 
+**托管隧道类**（同属 `reverse-proxy` 档，归类判据见上文）：不用写上面这段配置——Host 透传与
+WebSocket 升级由服务商那端负责，主流几家默认就满足。本机只需 `<工具> http://localhost:3000` 之类的一条命令。
+需要额外做的只有两件：`PUBLIC_URL` 填分配到的地址（换了地址要跟着改），以及尽量在入口层加一道
+该服务商提供的认证（多数家有 Basic Auth / OAuth 选项，免费档常常没有）——没有的话公网就只剩
+`AUTH_TOKEN` + 设备审批，而这个 URL 是任何人打开浏览器就能触达的。
+
 **只用局域网**：不配任何入口，手机与电脑同 Wi-Fi 时访问 `http://<lan-ip>:3000/#token=<AUTH_TOKEN>`。
 无中间节点，代价是离开这张网就用不了。
 
@@ -367,9 +404,11 @@ location / {
 - 我能不能在手机上装客户端 app（VPN 类方案需要）？
 - 我要消除中间节点，还是只要换掉 Cloudflare 就行？这两者结论不同。
 
-第二步，基于回答在这三类拓扑里选一类，说明理由和代价，不要默认选最流行的：
+第二步，基于回答在这四类拓扑里选一类，说明理由和代价，不要默认选最流行的：
 - 加密隧道 / VPN（无中间节点能看到明文）
 - 自建反向代理（TLS 终止在我的 VPS 上，主机商能看到明文）
+- 托管隧道 ngrok / Quick Tunnel / Tailscale Funnel 等（零运维，但入口在服务商手里，
+  免费档地址还会漂；明文可见方看 TLS 在哪终止，去对应文档确认，别假定）
 - 只用局域网（无中间节点，出门用不了）
 
 第三步，落地。以下是 CCM 的硬约束，配置必须满足，不满足就是错的：
@@ -385,6 +424,9 @@ location / {
    而这个场景下没有该值，不设就会变成「通知能收到、点击不跳转」。
 8. 启动日志里「可访问」那几行会列出所有可达地址，隧道内地址（WireGuard、Tailscale）也在其中。
    如果隧道地址没出现在那里，是隧道没起来，不要绕过它去别处找地址。
+9. 配完提醒我声明 ACCESS_PROFILE（vpn / reverse-proxy / lan，托管隧道也是 reverse-proxy），
+   doctor 与手机端安全体检按它做针对性检查。注意 Tailscale 分两种：设备进 tailnet 是 vpn，
+   用 Funnel 暴露到公网是 reverse-proxy，按产品名对号入座会声明错。
 
 护栏：
 - 不要修改本仓库任何源码，这件事纯配置即可完成。

@@ -210,8 +210,9 @@ export const MESSAGES = {
     accessPrompt: '你打算怎么从手机访问？（决定 doctor 与安全体检按哪套方案帮你检查；详见 docs/deployment.md）\n'
       + '  1) 仅局域网 —— 同一 WiFi 直连\n'
       + '  2) Cloudflare Tunnel + Access —— 固定域名 + 公网 2FA\n'
-      + '  3) 加密隧道 / VPN —— Tailscale、WireGuard、ZeroTier…\n'
-      + '  4) 自建反代 / 网关 —— VPS + nginx、Caddy、frp…\n'
+      + '  3) 加密隧道 / VPN —— WireGuard、Tailscale tailnet、ZeroTier…\n'
+      + '  4) 反向代理 / 托管隧道 —— nginx、Caddy、frp、ngrok、Tailscale Funnel…\n'
+      + '（Tailscale 两种用法分属 3 和 4：设备进 tailnet 选 3，用 Funnel 暴露到公网选 4）\n'
       + '选 1-4，回车 = 暂不声明（以后可在手机「设置」或 node scripts/config.js 里改）: ',
     accessInvalid: '请输入 1-4，或直接回车跳过',
     accessChosenNote: p => `已声明公网访问方案：${p}（写入 ACCESS_PROFILE；doctor 与安全体检会按它做针对性检查）`,
@@ -219,8 +220,9 @@ export const MESSAGES = {
       cloudflare: '公网搭建步骤（固定域名 / Cloudflare Tunnel / Access 2FA / 常驻）见 docs/deployment.md「从零搭建」。',
       vpn: '加密隧道 / VPN 的落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」：手机用隧道内地址访问，'
         + '要收通知须显式设 PUBLIC_URL。该章文末有可直接粘贴给编程 agent 的选型与落地 prompt。',
-      'reverse-proxy': '自建反代的落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」：Host 透传与 WebSocket 升级'
-        + '是硬要求，建议在反代层再补一层认证。该章文末有可直接粘贴给编程 agent 的选型与落地 prompt。',
+      'reverse-proxy': '反向代理 / 托管隧道的落地要点见 docs/deployment.md「不用 Cloudflare 的公网入口」：Host 透传与 WebSocket 升级'
+        + '是硬要求（托管隧道通常自带），建议在入口层再补一层认证；用托管隧道还要留意换 URL 后同步改 PUBLIC_URL，'
+        + '否则推送深链指向失效地址。该章文末有可直接粘贴给编程 agent 的选型与落地 prompt。',
       lan: '同一 WiFi 直连即可：启动日志会打印手机可用的局域网地址；从手机打开的步骤见 docs/getting-started.md。',
     },
     fileEditPrompt: '启用手机端文件编辑器? 可直接修改工作区内文件——不经 Claude 工具审批链'
@@ -281,8 +283,9 @@ export const MESSAGES = {
     accessPrompt: 'How will your phone reach this machine? (decides which profile doctor and the security check tailor to; see docs/deployment.md)\n'
       + '  1) LAN only — same-WiFi direct access\n'
       + '  2) Cloudflare Tunnel + Access — fixed domain + public 2FA\n'
-      + '  3) Encrypted tunnel / VPN — Tailscale, WireGuard, ZeroTier…\n'
-      + '  4) Self-hosted reverse proxy / gateway — VPS + nginx, Caddy, frp…\n'
+      + '  3) Encrypted tunnel / VPN — WireGuard, Tailscale tailnet, ZeroTier…\n'
+      + '  4) Reverse proxy / hosted tunnel — nginx, Caddy, frp, ngrok, Tailscale Funnel…\n'
+      + '(Tailscale splits across 3 and 4: joining your tailnet is 3, exposing it via Funnel is 4)\n'
       + 'Pick 1-4, or press Enter to skip (change later in the phone Settings or via node scripts/config.js): ',
     accessInvalid: 'Enter 1-4, or press Enter to skip',
     accessChosenNote: p => `Access profile declared: ${p} (written as ACCESS_PROFILE; doctor and the security check tailor to it)`,
@@ -290,8 +293,9 @@ export const MESSAGES = {
       cloudflare: 'Public setup steps (fixed domain / Cloudflare Tunnel / Access 2FA / daemon): see docs/deployment.md, section "从零搭建" (from scratch).',
       vpn: 'Encrypted tunnel / VPN essentials: see docs/deployment.md, section "不用 Cloudflare 的公网入口" — reach the phone via the in-tunnel address, '
         + 'and set PUBLIC_URL explicitly if you want notification deep links. That section ends with a prompt you can paste to a coding agent.',
-      'reverse-proxy': 'Self-hosted reverse proxy essentials: see docs/deployment.md, section "不用 Cloudflare 的公网入口" — Host passthrough and '
-        + 'WebSocket upgrade are hard requirements; consider an extra auth layer at the proxy. That section ends with a prompt you can paste to a coding agent.',
+      'reverse-proxy': 'Reverse proxy / hosted tunnel essentials: see docs/deployment.md, section "不用 Cloudflare 的公网入口" — Host passthrough and '
+        + 'WebSocket upgrade are hard requirements (hosted tunnels usually handle both); consider an extra auth layer at the entry point, and if your '
+        + 'tunnel URL changes, update PUBLIC_URL too or push deep links will point at a dead address. That section ends with a prompt you can paste to a coding agent.',
       lan: 'Same-WiFi direct access just works: the startup log prints the LAN address for your phone; see docs/getting-started.md.',
     },
     fileEditPrompt: 'Enable the phone file editor? It edits workspace files directly — bypassing Claude\'s '

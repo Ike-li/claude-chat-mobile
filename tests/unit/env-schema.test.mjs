@@ -483,6 +483,40 @@ test.describe('ACCESS_PROFILE —— enum 成员校验', () => {
   });
 });
 
+// ── ACCESS_PROFILE 的选项文案：能不能让人选对 ──────────────────────────────
+//
+// 这两条不是「文案好不好看」，是**选错档的后果不可见**。声明值一旦落错，doctor 的针对性检查
+// 会整套错配，而且全部朝放松的方向错：
+//   - fileEditExposureDiagnostic（doctor-checks.js）的公网信号集只认 cloudflare / reverse-proxy，
+//     vpn **不算公网** → 文件编辑器直写（唯一绕过 Agent 审批链的写入通道）不会提示关闭；
+//   - accessProfileDiagnostic 的 vpn 分支会说「入网资格由隧道承担」—— 对公网拓扑是假话；
+//   - deployment.md 里「限速桶全塌成一个」的警示只挂在反代类，vpn 明确写着不受影响。
+// 用户不会收到任何报错，只会在体检全绿的状态下少一层防护。
+test.describe('ACCESS_PROFILE —— 选项文案要能让人选对档', () => {
+  const ap = ENV_SCHEMA.ACCESS_PROFILE;
+  const surface = JSON.stringify(ap.options) + JSON.stringify(ap.label) + JSON.stringify(ap.help);
+
+  // Tailscale 一个产品名对应两种语义相反的拓扑：设备进 tailnet（无公网面 → vpn）与
+  // Funnel（把服务暴露到公网 → reverse-proxy）。选项里只写「Tailscale」而不提 Funnel，
+  // 等于把公网拓扑的用户主动引导进 vpn 档。
+  test('举了 Tailscale 就必须同屏交代 Funnel 的去向', () => {
+    assert.match(surface, /Tailscale/i, '前提：vpn 档确实拿 Tailscale 举例（不成立则本条失去意义，改判据别删）');
+    assert.match(surface, /Funnel/i,
+      'Tailscale Funnel 是公网拓扑，不归 vpn。选项里不点名它，Funnel 用户会照着「Tailscale」选中 vpn，\n'
+      + '  于是文件编辑器暴露提示、限速塌桶警示、公网体检全部静默跳过。');
+  });
+
+  // 托管隧道（ngrok / Cloudflare Quick Tunnel / Tailscale Funnel / localtunnel…）在 CCM 侧的
+  // 连带变化与自建反代逐条相同（TLS 终止在对方、peer 是 loopback、限速桶全塌），所以不该新增
+  // 枚举值——但四个选项现在全是「自建」口径，用托管隧道的人在列表里找不到自己，只能瞎选或跳过。
+  test('reverse-proxy 档要让托管隧道用户对号入座', () => {
+    const rp = ap.options.find((o) => o.value === 'reverse-proxy');
+    assert.ok(rp, 'reverse-proxy 档应存在');
+    assert.match(`${rp.label.zh} ${rp.label.en}`, /ngrok|Funnel|Quick Tunnel/i,
+      '至少举一个托管隧道产品名。全是「VPS + nginx」这类自建口径时，ngrok 用户会认为四个选项都不是自己。');
+  });
+});
+
 // ── ACCESS_PROFILE 声明与 CF_ACCESS_* 实际键的一致性 ───────────────────────
 //
 // 一律 warn 不 error：error 会挡死「先声明 cloudflare、下一批再补三键」的合法过渡序列
