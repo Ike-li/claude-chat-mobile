@@ -807,8 +807,11 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(otherDir.locator('.dir-badge')).toHaveText('运行中');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '运行中');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 运行中');
-    // 顶栏文字 chip 与 #sessionsDot 同源同步：图标说不清的，这里用字说
-    await expect(page.locator('[data-testid="header-attention-chip"]')).toHaveText('其他工作区 · 运行中');
+    // 2026-09-02：busy 不再占顶栏文字 chip。顶栏那一个位子只说「点开就能处理」的事，而「别的
+    // 工作区在跑」点开抽屉也没有可执行动作，且它是能持续几十分钟的状态（不是事件），常驻会训练
+    // 用户忽略这个位置、反过来拉低同槽位「需要你/出错」的信号强度。该信息由 #sessionsDot 图标
+    // 独自承担——图标是被动的环境感知，不喊人。判定见 logic resolveHeaderAttentionChip。
+    await expect(page.locator('[data-testid="header-attention-chip"]')).toBeHidden();
     const otherSubtree = otherDir.locator('xpath=following-sibling::*[1]');
     await expect(otherSubtree.locator('[data-session-status]')).toHaveCount(0);
 
@@ -816,6 +819,26 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expectSidebarClosed(page);
     await expect(page.locator('#sessionsDot')).toBeHidden();
     await expect(page.locator('[data-testid="header-attention-chip"]')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // P0-11ae（2026-09-02 真机报告）：刷新后打开抽屉，折叠工作区的「N 未读」要等满一个 12s 周期才
+  // 出现——移动端 onOpened 是三条打开路径里唯一没传 immediate 的（桌面 toggleSessions、
+  // visibilitychange 回前台都传了），而移动端恰恰是本产品主场景。更糟的是空窗期不是「像在加载」：
+  // 旧渲染把「缓存未到位」与「确定 0 未读」一并隐藏，用户读到的是一个错误事实。
+  // 本用例把 timeout 压在 5s（远小于 SESSION_PANEL_REVALIDATE_MS=12s）：只有打开抽屉那一刻真的
+  // 为折叠目录取过数，data-state 才会离开 pending。修复前这里必红。
+  test('P0-11ae 打开抽屉即刻为折叠工作区取数：未读角标不停在 pending', async ({ page }) => {
+    await gotoMock(page);
+    await sendChatMessage(page, 'test:tab'); // 第二个工作区要有实例才会进 dirs 广播
+    await waitForIdle(page);
+    await openSessionsSidebar(page);
+
+    // ANOTHER 保持折叠：openSessionPanel 不会 populate 它，数据只可能来自打开抽屉时那次立即刷新。
+    const otherDir = workspaceRow(page, ANOTHER_WORKSPACE);
+    await expect(otherDir.locator('[data-testid="dir-unread"]'))
+      .toHaveAttribute('data-state', /^(none|unread)$/, { timeout: 5_000 });
 
     await expectNoBrowserErrors(page);
   });

@@ -334,6 +334,8 @@ export const EN_DICT = Object.freeze({
   // —— 会话行未读（R65）+ 长按标为未读/已读 ——
   '未读': 'Unread',
   '{n} 未读': '{n} unread',
+  '未读数加载中': 'Loading unread count',
+  '{n} 个工作区未能加载': '{n} workspaces failed to load',
   '标为未读': 'Mark as unread',
   '标为已读': 'Mark as read',
   '标为未读后，这一行会一直显示「未读」，直到你再次打开它。': 'Marked as unread, this row keeps its "Unread" tag until you open the session again.',

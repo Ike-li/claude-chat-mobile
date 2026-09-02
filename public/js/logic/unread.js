@@ -11,6 +11,8 @@
 // 唯一的自动清除点是「再次打开该会话」（tracker 的 markEntered），离场记 seen 不动它——
 // 否则「正看着时标一下、离开就被离场记录清掉」，标记形同虚设。
 
+import { t } from '../i18n.js';
+
 // 未读判定。never-seen 会话对比基线（首装不追溯历史）；看过的对比 seenAt；正在看的恒不亮；
 // manual=true 时不看时间（标记不依赖 lastUsedAt 字段）。
 export function isSessionUnread({ lastUsedAt, seenAt, baselineTs = 0, isViewing = false, manual = false } = {}) {
@@ -19,6 +21,24 @@ export function isSessionUnread({ lastUsedAt, seenAt, baselineTs = 0, isViewing 
   if (typeof lastUsedAt !== 'number' || !Number.isFinite(lastUsedAt)) return false;
   const seenBar = typeof seenAt === 'number' && Number.isFinite(seenAt) ? seenAt : baselineTs;
   return lastUsedAt > seenBar;
+}
+
+// 目录头「N 未读」角标的三态。调用方传该目录的未读计数：数字=已数清，null=还不知道
+// （SWR 缓存未到位——该目录从未展开过，或刷新后内存缓存已清空、background revalidate 还没回来）。
+//
+// 2026-09-02 实测缺陷：旧渲染只有「显示 N」与「隐藏」两态，null 和 0 一起走隐藏分支，于是
+// 「我还不知道」和「这个目录确实没有未读」在屏幕上完全同形。刷新后打开抽屉，用户看到的不是
+// 一个正在加载的界面，而是一个明确宣称「都没有未读」的界面——几秒后角标凭空冒出来才发现被骗。
+// 未知必须占位（state='pending'），这是它与 0 的唯一区别；占位不写数字，因为数字还不知道。
+//
+// 脏输入（undefined/NaN/负数/非数字）一律按 pending 而非 0：失败方向必须是「说不知道」，
+// 不能是「说没有」——前者只让用户多等一眼，后者是错误信息。
+export function resolveDirUnreadBadge(count) {
+  if (typeof count !== 'number' || !Number.isFinite(count) || count < 0) {
+    return { state: 'pending', visible: true, text: '' };
+  }
+  if (count === 0) return { state: 'none', visible: false, text: '' };
+  return { state: 'unread', visible: true, text: t('{n} 未读').replace('{n}', String(count)) };
 }
 
 // 记「本设备已看过该会话到 now」。不可变更新；超过 cap 时按 ts 淘汰最旧（新记录后写，必留）。

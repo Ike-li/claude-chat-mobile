@@ -3,7 +3,7 @@
 // 与「需要你」chip/聚合（答过才清）分层不合并；首装基线不追溯；正在看的不亮。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSessionUnread, markSeenEntry, setManualUnreadEntry, parseUnreadState, serializeUnreadState } from '../../public/js/logic/unread.js';
+import { isSessionUnread, markSeenEntry, setManualUnreadEntry, parseUnreadState, serializeUnreadState, resolveDirUnreadBadge } from '../../public/js/logic/unread.js';
 
 const T0 = 1_700_000_000_000; // 基线
 const MIN = 60_000;
@@ -140,5 +140,36 @@ test.describe('parseUnreadState / serializeUnreadState：localStorage 序列化�
 
   test('全新状态也带空 manual 表', () => {
     assert.deepEqual(parseUnreadState(null, T0), { baselineTs: T0, seen: {}, manual: {} });
+  });
+});
+
+// ---- resolveDirUnreadBadge：目录头角标的三态 ----
+// 2026-09-02 实测缺陷：刷新后 sessionsCache（纯内存）必空，折叠目录不 populate，unreadCountForDir
+// 返回 null；旧渲染把 null 与 0 一并隐藏，于是「我还不知道」被画成了「这个目录没有未读」——用户看到
+// 的不是加载中，是一个错误的事实（12 秒后 background revalidate 填上缓存，角标才凭空冒出来）。
+// 三态分开：unknown 要有占位，0 才是真的什么都不画。
+test.describe('resolveDirUnreadBadge：未知 ≠ 确定没有', () => {
+  test('count=null（缓存未到位）→ pending 占位，不声称 0', () => {
+    const r = resolveDirUnreadBadge(null);
+    assert.equal(r.state, 'pending');
+    assert.equal(r.visible, true, '必须占位——什么都不画就等于在说「没有未读」');
+    assert.equal(r.text, '', '占位不写数字（还不知道）');
+  });
+
+  test('count=0（确定没有未读）→ 隐藏，不占视觉噪音', () => {
+    assert.deepEqual(resolveDirUnreadBadge(0), { state: 'none', visible: false, text: '' });
+  });
+
+  test('count>0 → 显示「N 未读」', () => {
+    const r = resolveDirUnreadBadge(3);
+    assert.equal(r.state, 'unread');
+    assert.equal(r.visible, true);
+    assert.equal(r.text, '3 未读');
+  });
+
+  test('脏输入（undefined / NaN / 负数 / 字符串）一律按未知处理，不按 0', () => {
+    for (const bad of [undefined, NaN, -1, '2', {}]) {
+      assert.equal(resolveDirUnreadBadge(bad).state, 'pending', String(bad));
+    }
   });
 });

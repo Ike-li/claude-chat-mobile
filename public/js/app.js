@@ -1,8 +1,11 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, describeHandshakeError, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows, formatAgoShort, formatAuditEntry, isLanOrLocalHostname, authFailurePath} from './logic.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, describeHandshakeError, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows, formatAgoShort, formatAuditEntry, isLanOrLocalHostname, authFailurePath, summarizeRecentsLoad} from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
+// 未读域的展示决策直接取子模块：logic/unread.js 不在 logic.js barrel 里（app/unread-tracker.js 同样
+// 直接 import），barrel 是给这份巨石的历史兼容层，不为新符号扩张它。
+import { resolveDirUnreadBadge } from './logic/unread.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
 import { createAlertController } from './app/alerts.js';
@@ -4774,12 +4777,22 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     }
     return n;
   }
+  // 三态渲染（判定在 logic resolveDirUnreadBadge）：pending=缓存还没到位，必须占位说「不知道」，
+  // 不能什么都不画——不画就与「确定没有未读」同形，等于在空窗期报一个错误事实。
   function applyDirUnreadBadge(badge, cwd) {
-    const n = unreadCountForDir(cwd);
-    const show = typeof n === 'number' && n > 0;
-    badge.textContent = show ? t('{n} 未读').replace('{n}', String(n)) : '';
-    badge.title = badge.textContent;
-    badge.classList.toggle('hidden', !show);
+    const spec = resolveDirUnreadBadge(unreadCountForDir(cwd));
+    badge.textContent = spec.text;
+    badge.dataset.state = spec.state;
+    badge.classList.toggle('hidden', !spec.visible);
+    badge.classList.toggle('dir-unread-pending', spec.state === 'pending');
+    if (spec.state === 'pending') {
+      badge.title = t('未读数加载中');
+      badge.setAttribute('aria-label', t('未读数加载中'));
+    } else {
+      badge.title = spec.text;
+      if (spec.text) badge.setAttribute('aria-label', spec.text);
+      else badge.removeAttribute('aria-label');
+    }
   }
   // 行数据变化（renderRows）与长按标记后都要刷：两条路径共用同一个 resolver，不各写一套。
   function refreshDirUnreadCounts() {
@@ -4928,7 +4941,13 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // （两者的接线分别在下方与文件上部，此处仅留位置说明）。
   const drawer = createDrawerController(appContext, {
     $, haptic,
-    onOpened: () => openSessionPanel(),
+    // immediate 与桌面端 toggleSessions（≥1024 分支）、visibilitychange 回前台三处对齐。此前移动端
+    // 是三条打开路径里唯一裸调的，于是要等满一个 SESSION_PANEL_REVALIDATE_MS(12s) 周期才有数据：
+    // 刷新后 sessionsCache（纯内存）必空，折叠目录不 populate，目录头未读角标整整 12 秒是空的——
+    // 而空角标与「确定没有未读」同形（见 resolveDirUnreadBadge），用户读到的是错误事实不是加载中。
+    // 移动端恰恰是本产品主场景。openSessionPanel() 末尾那次裸调装的 12s 定时器仍在，
+    // scheduleSessionPanelRevalidate 的 timer 守卫保证这里不会重复装，不是双倍请求。
+    onOpened: () => { openSessionPanel(); startSessionPanelRevalidator({ immediate: true, skipExpanded: true }); },
     onClosed: () => stopSessionPanelRevalidator(),
   });
   const { openLeftSidebar, closeLeftSidebar } = drawer;
@@ -5122,7 +5141,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (collapsed) stopSessionPanelRevalidator();
       else {
         openSessionPanel(); // 用已剥离 terminal 的 SWR 缓存重画，避免展开时闪旧 CLI 状态
-        startSessionPanelRevalidator({ immediate: true });
+        startSessionPanelRevalidator({ immediate: true, skipExpanded: true });
       }
       return;
     }
@@ -5704,10 +5723,17 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       if (changed) sessionsCache.set(cwd, { ...entry, sessions });
     }
   }
-  function revalidateSessionPanelDirs() {
+  // skipExpanded：紧跟 openSessionPanel() 的那次立即刷新专用。openSessionPanel 已经同步给每个
+  // 展开目录调过 populateSubtree（各自恒发一次 session:list），再对它们刷一遍是纯冗余往返；这次
+  // 立即刷新真正要覆盖的是【折叠目录】——它们不 populate，缓存空着，目录头未读角标要靠这一轮才有数。
+  // 周期刷新与回前台不传此项（抽屉可能已开着很久，展开目录的数据同样陈旧，必须全量刷）。
+  function revalidateSessionPanelDirs({ skipExpanded = false } = {}) {
     if (!isSessionPanelRevalidateActive()) { stopSessionPanelRevalidator(); return; }
     if (socket.connected) {
-      for (const cwd of availableDirs) dirSectionNodes.get(cwd)?.revalidate?.();
+      for (const cwd of availableDirs) {
+        if (skipExpanded && expandedDirs.has(cwd)) continue;
+        dirSectionNodes.get(cwd)?.revalidate?.();
+      }
     }
     scheduleSessionPanelRevalidate();
   }
@@ -5718,9 +5744,9 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       revalidateSessionPanelDirs();
     }, delay);
   }
-  function startSessionPanelRevalidator({ immediate = false } = {}) {
+  function startSessionPanelRevalidator({ immediate = false, skipExpanded = false } = {}) {
     if (!isSessionPanelRevalidateActive()) { stopSessionPanelRevalidator(); return; }
-    if (immediate) revalidateSessionPanelDirs();
+    if (immediate) revalidateSessionPanelDirs({ skipExpanded });
     else scheduleSessionPanelRevalidate();
   }
   document.addEventListener('visibilitychange', () => {
@@ -6162,6 +6188,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
             <span>${t('最近活跃会话')}</span>
           </div>
           <div id="dashRecentsList" class="flex flex-col gap-2 w-full"></div>
+          <!-- 部分工作区 session:list 超时（4s）时的缺角提示：拿不到 ≠ 没有。常驻此处，JS 只切 hidden + 换文案。 -->
+          <p id="dashRecentsIncomplete" class="hidden text-[10.5px] text-ink-faint mt-2 px-1" data-testid="recents-incomplete"></p>
         </div>
 
         <div id="dashEmptyHint" class="w-full hidden text-center mt-2">
@@ -6280,17 +6308,37 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
     };
 
+    // 缺角提示。两件事：① 说出「有 N 个工作区没能加载」；② 把 dashEmptyHint 压掉——「还没有最近
+    // 会话」在缺角时是错的（全部超时 → recent 为空 → 那句话会以确定语气宣布一件没被证实的事，
+    // 正是本次要修的病本身）。无缺角时本函数不碰 section/emptyHint，那是 renderDashRecents 的职责。
+    const incompleteEl = container.querySelector('#dashRecentsIncomplete');
+    const renderRecentsIncompleteNotice = ({ complete, failedCount, failedDirs } = {}) => {
+      if (!incompleteEl) return;
+      if (complete !== false) { incompleteEl.classList.add('hidden'); incompleteEl.textContent = ''; return; }
+      const names = failedDirs.map(projectDisplayName).join('、');
+      incompleteEl.textContent = `${t('{n} 个工作区未能加载').replace('{n}', String(failedCount))}：${names}`;
+      incompleteEl.classList.remove('hidden');
+      recentsSection?.classList.remove('hidden');
+      emptyHint?.classList.add('hidden');
+    };
+
     if (recentsSection && recentsList && dirs.length) {
+      // timedOut 必须随行上报：拿不到 ≠ 该目录没有会话。此前超时一律 done([])，那个工作区连同
+      // 它的未读会话从首页静默消失、界面零痕迹（与目录头角标 null/0 同形是同一个病）。合并结果
+      // 不变（拿到多少展示多少），只是让下面能挂一行「部分工作区未能加载」。
       const listMain = (cwd) => new Promise(resolve => {
         let settled = false;
-        const done = (sessions) => { if (!settled) { settled = true; resolve({ cwd, sessions }); } };
+        const done = (sessions, timedOut = false) => {
+          if (!settled) { settled = true; resolve({ cwd, sessions, timedOut }); }
+        };
         socket.emit('session:list', { cwd }, state => done(state?.sessions || []));
-        setTimeout(() => done([]), 4000); // 单目录超时不挡整表
+        setTimeout(() => done([], true), 4000); // 单目录超时不挡整表，但要说出来
       });
       Promise.all(dirs.map(listMain)).then((mainLists) => {
         if (gen !== _dashRecentsGen) return; // 已换页/重渲
         const recent = mergeRecentSessionsAcrossWorkspaces(mainLists, { limit: 8 });
         renderDashRecents(recent); // 空列表也渲 → dashEmptyHint
+        renderRecentsIncompleteNotice(summarizeRecentsLoad(mainLists));
       });
     } else if (emptyHint) {
       emptyHint.classList.remove('hidden');

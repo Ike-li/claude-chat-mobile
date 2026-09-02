@@ -911,6 +911,25 @@ details.thinking.thinking-live > summary::before {
   white-space: nowrap;
 }
 
+/* 目录头未读角标的「还不知道」占位（resolveDirUnreadBadge state='pending'）：缓存未到位时既不能
+   写数字，也不能什么都不画——不画就与「确定没有未读」同形，等于在空窗期报一个错误事实。
+   做成一枚无文字的窄脉冲丸子：视觉重量明显低于真角标（不抢注意力），但位置上占住，
+   用户一眼能看出「这里的信息还在路上」。 */
+.dir-unread-pending {
+  width: 14px;
+  min-height: 14px;
+  padding: 0;
+  opacity: 0.55;
+  animation: dir-unread-pending-pulse 1.4s ease-in-out infinite;
+}
+@keyframes dir-unread-pending-pulse {
+  0%, 100% { opacity: 0.28; }
+  50% { opacity: 0.62; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dir-unread-pending { animation: none; }
+}
+
 /* UI-007：状态 SVG 图标 */
 .status-icon {
   display: inline-flex;

@@ -4,7 +4,7 @@
 // worktree 不再自动分组：每个路径须是显式 workdir，recents 只合并各 workdir 的 session:list。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeRecentSessionsAcrossWorkspaces } from '../../public/js/logic.js';
+import { mergeRecentSessionsAcrossWorkspaces, summarizeRecentsLoad } from '../../public/js/logic.js';
 
 // 空首页「最近活跃」：跨全部 workdir 的 session:list 结果合并后按 lastUsedAt 降序取 topN，
 // 每条带 cwd + workspaceName，方便一键 session:switch 到任意工作区会话（不必先展开侧栏目录树）。
@@ -110,4 +110,38 @@ test('mergeRecentSessionsAcrossWorkspaces: workspaceName override 优先于 base
   ]);
   assert.equal(fallback.find(s => s.id === 'a').workspaceName, 'foo');
   assert.equal(fallback.find(s => s.id === 'b').workspaceName, 'bar');
+});
+
+// ---- summarizeRecentsLoad：超时目录 ≠ 空目录 ----
+// 2026-09-02 实测缺陷：首页 listMain 对每个 workdir 发 session:list，4s 兜底 done([])。超时目录
+// 因此与「该目录真的没有会话」完全同形——那个工作区连同它的未读会话一起从首页静默消失，界面上
+// 零痕迹。与目录头角标 null/0 同源的病：把「没拿到」呈现成了「确定没有」。
+// 本函数只回答「这次合并有没有缺角」，供渲染层决定要不要挂一行提示；合并本身不变。
+test.describe('summarizeRecentsLoad：拿不到 ≠ 没有', () => {
+  test('全部目录正常 → 无缺角，不提示', () => {
+    const r = summarizeRecentsLoad([
+      { cwd: '/a', sessions: [{ id: 'x', lastUsedAt: 1 }] },
+      { cwd: '/b', sessions: [] },
+    ]);
+    assert.deepEqual(r, { complete: true, failedCount: 0, failedDirs: [] });
+  });
+
+  test('有目录超时 → 报缺角，带目录名供提示行使用', () => {
+    const r = summarizeRecentsLoad([
+      { cwd: '/a', sessions: [{ id: 'x', lastUsedAt: 1 }] },
+      { cwd: '/code/mbp', sessions: [], timedOut: true },
+    ]);
+    assert.equal(r.complete, false);
+    assert.equal(r.failedCount, 1);
+    assert.deepEqual(r.failedDirs, ['/code/mbp']);
+  });
+
+  test('空目录（sessions: []，未超时）不算缺角——那是确定没有', () => {
+    assert.equal(summarizeRecentsLoad([{ cwd: '/a', sessions: [] }]).complete, true);
+  });
+
+  test('脏输入不炸：非数组 / 缺 cwd 一律忽略', () => {
+    assert.deepEqual(summarizeRecentsLoad(null), { complete: true, failedCount: 0, failedDirs: [] });
+    assert.equal(summarizeRecentsLoad([{ timedOut: true }]).complete, true, '无 cwd 无从提示，不计入');
+  });
 });

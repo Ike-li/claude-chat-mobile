@@ -357,6 +357,19 @@ export function mergeRecentSessionsAcrossWorkspaces(dirLists, { limit = 8 } = {}
   return rows.slice(0, cap);
 }
 
+// 首页「最近活跃」这次合并有没有缺角。listMain 逐 workdir 发 session:list，单目录 4s 超时兜底
+// done([])——超时目录与「该目录真的没有会话」在合并结果里完全同形，那个工作区连同它的未读会话
+// 一起从首页静默消失，界面零痕迹。与目录头角标 null/0 同源的病：把「没拿到」呈现成「确定没有」。
+// 本函数不改合并结果（拿到多少仍展示多少），只回答「要不要挂一行『部分工作区未能加载』」。
+export function summarizeRecentsLoad(dirLists) {
+  const failedDirs = [];
+  for (const entry of Array.isArray(dirLists) ? dirLists : []) {
+    if (!entry || typeof entry.cwd !== 'string' || !entry.cwd) continue;
+    if (entry.timedOut) failedDirs.push(entry.cwd);
+  }
+  return { complete: failedDirs.length === 0, failedCount: failedDirs.length, failedDirs };
+}
+
 // 乐观 busy（send() 的 setBusy(true)）会被「服务端换实例 → 广播 instances → setInstances →
 // bindView → clearView 的 setBusy(false)」冲掉，直到首个 delta 才重现。两种场景要补回：
 // 1) 新会话首发懒开：pendingFirstSend + 已绑定新实例 + 尚无 sessionId（FRESH、SDK init 未回；

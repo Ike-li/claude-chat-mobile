@@ -44,6 +44,19 @@ const deletedSessionIds = new Set(); // session:deletePermanent 后从列表剔�
 // reconnectDrawerTitleChanged 让 mainCwdSessions() 返回改过名的主工作区会话标题，模拟"断线期间被自主
 // 续跑改名"；reconnectSettleMarkerArmed 让下一次 connection handler 在 emitHydration() 之后再追加一条
 // system 哨兵消息——E2E 用它确定性地等到"这次重连的 instances 广播已处理完"，不必用禁用的 waitForTimeout。
+// session:list 行的时间基准。**必须是每次场景重置时钉死的常量，不能每次请求现算**：
+// lastUsedAt 进 shouldRerenderSessionList 的行签名，若每次 session:list 都返回新的 Date.now()，
+// 则「两次拉取之间数据没变」这个前提在 mock 下永远不成立——前端的省渲优化（内容没变就不重建
+// DOM 子树）在 E2E 里被夹具单方面废掉，P0-11t/w/z 那组「不被连坐重建」的回归只在「恰好只发了
+// 一次请求」时才碰巧通过。真实 server 的 lastUsedAt 取自 transcript 落盘时间，不会这样漂。
+// 每次 /__reset 刷新，所以跨用例仍是「刚刚活跃过」，不会随 server 长跑越显越旧。
+//
+// 为什么要 +LEAD 而不是取 Date.now() 本身：R65 未读的基线是【页面加载时刻】（parseUnreadState 用
+// 首次加载的 now），而 /__reset 发生在 gotoMock 的 page.goto 之前。若基准就取 reset 时刻，偏移为
+// 0 的「新活动」会话（mock-session-another）会落在基线之前，P0-11u 赖以成立的「基线后有活动＝亮
+// 未读」当场失效。留一段前置量把它推到页面加载之后，同时旧会话（-600s 等）仍稳稳在基线之前。
+const MOCK_LIST_CLOCK_LEAD_MS = 5_000;
+let mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
 let reconnectDrawerTitleChanged = false;
 let reconnectSettleMarkerArmed = false;
 // P0-11y（P1）：终端直跑状态夹具。真 server 由 listTerminalSessionStates 读 CLI 进程注册表
@@ -217,6 +230,7 @@ function resetMockState() {
   lateClosedSessionEventsInstanceId = null;
   historyOverflowMode = false;
   deletedSessionIds.clear();
+  mockListClockBase = Date.now() + MOCK_LIST_CLOCK_LEAD_MS;
   reconnectDrawerTitleChanged = false;
   reconnectSettleMarkerArmed = false;
   terminalBadgeArmed = false;
@@ -451,7 +465,7 @@ function mainCwdSessions() {
       // 见 reconnectDrawerTitleChanged 顶部注释 + test:reconnect-drawer-refresh。
       title: reconnectDrawerTitleChanged ? 'Renamed After Reconnect' : 'Visual Sandbox (Main)',
       model: 'claude-3-5-sonnet',
-      lastUsedAt: Date.now() - 10000,
+      lastUsedAt: mockListClockBase - 10000,
       entrypoint: 'sdk-ts',
       ...(terminalBadgeArmed ? { terminal: 'busy' } : {}),
     },
@@ -459,7 +473,7 @@ function mainCwdSessions() {
       id: 'mock-session-archived',
       title: 'Archived Planning Session',
       model: 'claude-3-5-sonnet',
-      lastUsedAt: Date.now() - 600000,
+      lastUsedAt: mockListClockBase - 600000,
       entrypoint: 'sdk-ts',
       ...(terminalBadgeArmed ? { terminal: 'busy' } : {}),
     },
@@ -467,7 +481,7 @@ function mainCwdSessions() {
       id: 'mock-session-gap',
       title: 'Archived Gap Session',
       model: 'claude-3-5-sonnet',
-      lastUsedAt: Date.now() - 750000,
+      lastUsedAt: mockListClockBase - 750000,
       ...(terminalBadgeArmed ? { terminal: 'alive' } : {}),
       entrypoint: 'sdk-ts'
     },
@@ -475,14 +489,14 @@ function mainCwdSessions() {
       id: 'mock-session-deleted',
       title: 'Deleted Remote Session',
       model: 'claude-3-5-sonnet',
-      lastUsedAt: Date.now() - 900000,
+      lastUsedAt: mockListClockBase - 900000,
       entrypoint: 'sdk-ts'
     },
     {
       id: 'mock-session-long-history',
       title: 'Long History Session',
       model: 'claude-3-5-sonnet',
-      lastUsedAt: Date.now() - 1200000,
+      lastUsedAt: mockListClockBase - 1200000,
       entrypoint: 'sdk-ts'
     }
   ];
@@ -491,7 +505,7 @@ function mainCwdSessions() {
       id: 'mock-session-older-migration',
       title: 'Older Migration Session',
       model: 'claude-3-5-sonnet',
-      lastUsedAt: Date.now() - 2400000,
+      lastUsedAt: mockListClockBase - 2400000,
       entrypoint: 'sdk-ts'
     });
   }
@@ -501,7 +515,7 @@ function mainCwdSessions() {
     id: 'mock-session-timeline',
     title: 'Timeline Session',
     model: 'claude-3-5-sonnet',
-    lastUsedAt: Date.now() - 1300000,
+    lastUsedAt: mockListClockBase - 1300000,
     entrypoint: 'sdk-ts'
   });
   return sessions;
@@ -928,35 +942,35 @@ io.on('connection', socket => {
               id: 'mock-session-another',
               title: 'Another App Concurrency',
               model: 'claude-3-5-haiku',
-              lastUsedAt: Date.now(),
+              lastUsedAt: mockListClockBase,
               entrypoint: 'sdk-ts'
             },
             {
               id: 'mock-session-another-done',
               title: 'Background Done Result',
               model: 'claude-3-5-haiku',
-              lastUsedAt: Date.now() - 1500,
+              lastUsedAt: mockListClockBase - 1500,
               entrypoint: 'sdk-ts'
             },
             {
               id: 'mock-session-another-running',
               title: 'Background Task Running',
               model: 'claude-3-5-haiku',
-              lastUsedAt: Date.now() - 1000,
+              lastUsedAt: mockListClockBase - 1000,
               entrypoint: 'sdk-ts'
             },
             {
               id: 'mock-session-another-permission',
               title: 'Background Needs Approval',
               model: 'claude-3-5-haiku',
-              lastUsedAt: Date.now() - 500,
+              lastUsedAt: mockListClockBase - 500,
               entrypoint: 'sdk-ts'
             },
             {
               id: 'mock-session-scroll-replay',
               title: 'Scroll Replay Session',
               model: 'claude-3-5-sonnet',
-              lastUsedAt: Date.now() - 300,
+              lastUsedAt: mockListClockBase - 300,
               entrypoint: 'sdk-ts'
             },
             {
@@ -967,14 +981,14 @@ io.on('connection', socket => {
               id: 'mock-session-replay-flood',
               title: 'Replay Flood Session',
               model: 'claude-3-5-sonnet',
-              lastUsedAt: Date.now() - 200,
+              lastUsedAt: mockListClockBase - 200,
               entrypoint: 'sdk-ts'
             },
             {
               id: 'mock-session-replay-small',
               title: 'Replay Small Session',
               model: 'claude-3-5-sonnet',
-              lastUsedAt: Date.now() - 100,
+              lastUsedAt: mockListClockBase - 100,
               entrypoint: 'sdk-ts'
             },
             {
@@ -982,7 +996,7 @@ io.on('connection', socket => {
               id: 'mock-session-replay-unread',
               title: 'Replay Unread Session',
               model: 'claude-3-5-sonnet',
-              lastUsedAt: Date.now() - 50,
+              lastUsedAt: mockListClockBase - 50,
               entrypoint: 'sdk-ts'
             }
           ],
