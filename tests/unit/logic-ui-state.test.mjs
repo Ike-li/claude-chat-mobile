@@ -930,6 +930,19 @@ test.describe('isLanOrLocalHostname：登录门路由的「本地/隧道内」�
     }
     assert.equal(isLanOrLocalHostname('172.32.0.1'), false); // 172.16/12 上界外，防正则写宽
   });
+
+  // Tailscale 的另一半：上面那条修的是 CGNAT 地址（100.64/10），但 MagicDNS 开着时手机上
+  // 输入的是 `<主机名>.<tailnet>.ts.net`，走的是域名分支、此前判成公网。
+  test('MagicDNS 域名 *.ts.net → true（100.64/10 那条修的是同一件事的地址那半）', () => {
+    assert.equal(isLanOrLocalHostname('mbp.tail9a3f.ts.net'), true);
+    assert.equal(isLanOrLocalHostname('ccm.example-corp.ts.net'), true);
+  });
+
+  test('后缀匹配不得写宽：ts.net 出现在别处不算', () => {
+    assert.equal(isLanOrLocalHostname('ts.net.attacker.com'), false); // 不在末尾
+    assert.equal(isLanOrLocalHostname('evil-ts.net'), false);         // 缺分隔的点，是别人的域名
+    assert.equal(isLanOrLocalHostname('ts.net'), false);              // 裸域不是任何人的主机
+  });
 });
 
 test.describe('authFailurePath：unauthorized 时弹 token 门还是走 Access 重登', () => {
@@ -945,5 +958,20 @@ test.describe('authFailurePath：unauthorized 时弹 token 门还是走 Access �
   test('dataset 缺失（undefined）→ token-gate（失败方向必须是有门可弹）', () => {
     assert.equal(authFailurePath({ lanOrLocal: false, cfAccessFlag: undefined }), 'token-gate');
     assert.equal(authFailurePath(), 'token-gate');
+  });
+
+  // 整条链的真实后果，也是 *.ts.net 那条判定唯一起作用的场合：hostname 判定只在 CF Access
+  // 确实配着（flag='1'）时才参与决策，flag='0' 时上面第一条已经把所有 hostname 都送进 token 门。
+  // 所以「公网走 CF、私网走 Tailscale」的双路部署是这个 bug 的唯一现场：从 .ts.net 进来会被判
+  // 成公网 → 走 access-relogin → 而这条路根本不经过 Cloudflare，maybeAccessRelogin() 拿到的
+  // /health 不是 302，重登框也不弹。屏幕停在「需要重新登录」，界面上没有任何可点的东西。
+  test('CF Access 配着 + 从 Tailscale MagicDNS 域名进来 → token-gate（否则停在「需要重新登录」且无门可弹）', () => {
+    const lanOrLocal = isLanOrLocalHostname('mbp.tail9a3f.ts.net');
+    assert.equal(authFailurePath({ lanOrLocal, cfAccessFlag: '1' }), 'token-gate');
+  });
+
+  test('对照（防修过头）：CF Access 配着 + 真公网域名 → 仍是 access-relogin', () => {
+    const lanOrLocal = isLanOrLocalHostname('chat.example.com');
+    assert.equal(authFailurePath({ lanOrLocal, cfAccessFlag: '1' }), 'access-relogin');
   });
 });

@@ -349,9 +349,20 @@ export function resolveForkAnchorUuid({ role, ownUuid = null, precedingAssistant
 
 // 页面是否从「本地/局域网/隧道内」打开——决定 unauthorized 时有没有 token 门可弹。
 // 100.64.0.0/10 是 Tailscale 用的 CGNAT 段（正则精确到 /10，不放整个 100/8：100/8 其余部分是可路由公网）。
-// 已知不覆盖：Tailscale MagicDNS 的 *.ts.net 域名（按地址段判，域名场景走公网分支，与既有边界一致）。
+// `.ts.net` 是同一件事的域名那半：MagicDNS 开着时手机上输入的是 `<主机名>.<tailnet>.ts.net`，
+// 走域名分支，此前判成公网。
+//
+// 这个后缀确实两义——tailnet 内访问是私网，Funnel 暴露出去是公网——但两义在这里不构成取舍，
+// 因为本判定只在 CF Access 确实配着时才参与决策（见下面 authFailurePath：flag !== '1' 时所有
+// hostname 一律进 token 门）。于是两边分别是：
+//   · tailnet 内 + CF Access 也配着（公网走 CF、私网走 Tailscale 的双路部署）：判成公网会送去
+//     Access 重登，而这条路不经过 Cloudflare、/health 拿不到 302，重登框也不弹——屏幕停在
+//     「需要重新登录」，界面上没有任何可点的东西。这是本条要修的死路。
+//   · Funnel：正常部署下 CF Access 是空的，本判定压根不参与，改与不改行为一致。
+// 所以判成 LAN 没有反向代价，不是在两个坏结果里挑一个。
 export function isLanOrLocalHostname(h) {
   return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h.endsWith('.local')
+    || h.endsWith('.ts.net')
     || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(h);
 }
 
