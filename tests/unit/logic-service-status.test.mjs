@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { formatUptime, serviceStatusBasicRows, formatServiceNotices, formatHooksBridgeRow, describeRateLimitSource, formatAuditEntry } from '../../public/js/logic.js';
+import { rlSourceKey } from '../../src/auth/rate-limiter.js';
 
 test.describe('formatUptime：运行时长分档', () => {
   test('非法/负 → 空串（接线层据此显「未知」）', () => {
@@ -156,6 +157,14 @@ test.describe('describeRateLimitSource：限速桶 key → 来源画像', () => 
     assert.deepEqual(describeRateLimitSource('ip:127.0.0.1'), { scope: 'local', addr: '127.0.0.1' });
     assert.deepEqual(describeRateLimitSource('ip:::1'), { scope: 'local', addr: '::1' });
   });
+  test('IPv6 loopback 必须认后端真实桶，不能只认字面量 ::1', () => {
+    // ipRateBucket('::1') → 0:0:0:0::/64；rlSourceKey 产出 ip:0:0:0:0::/64。
+    // 只把 '::1' 当本机的话，BIND_HOST=:: 下本机打爆限速会被说成公网暴力尝试。
+    const key = rlSourceKey({ address: '::1', headers: {} });
+    assert.equal(key, 'ip:0:0:0:0::/64');
+    assert.equal(describeRateLimitSource(key).scope, 'local');
+    assert.equal(describeRateLimitSource(key).addr, '0:0:0:0::/64');
+  });
   test('私网 / CGNAT / Tailscale 100.64/10 / IPv6 ULA·link-local → lan', () => {
     for (const [key, addr] of [
       ['ip:192.168.1.5', '192.168.1.5'], ['ip:10.0.0.9', '10.0.0.9'],
@@ -192,6 +201,12 @@ test.describe('限速告警文案按来源分叉（不再无条件说「有人�
 
   test('本机 → 指出是本机，并给出最可能的原因（自己的旧 token）', () => {
     assert.equal(line('ip:127.0.0.1'), '⛔ 登录限速锁定于 9 分钟前（累计 1 次）——来自本机 127.0.0.1，多半是你自己的旧 token');
+  });
+  test('IPv6 loopback 活 key 也走本机措辞，绝不说暴力尝试', () => {
+    const key = rlSourceKey({ address: '::1', headers: {} });
+    const text = line(key);
+    assert.match(text, /来自本机/);
+    assert.doesNotMatch(text, /暴力尝试/);
   });
   test('局域网 → 只陈述事实，不升级成安全事件', () => {
     assert.equal(line('ip:192.168.1.5'), '⛔ 登录限速锁定于 9 分钟前（累计 1 次）——来自局域网 192.168.1.5');
@@ -239,6 +254,15 @@ test.describe('formatAuditEntry：审计记录 → 一行人话', () => {
     const local = formatAuditEntry({ ts: 1, action: 'auth_rate_limited', target: 'ip:127.0.0.1', outcome: 'locked', meta: { via: 'socket' } });
     assert.equal(local.text, '登录限速锁定 · 本机 127.0.0.1 · socket');
     assert.equal(local.severity, 'warning', '本机连试八次是手滑不是入侵，不配 danger');
+
+    const v6local = formatAuditEntry({
+      ts: 1, action: 'auth_rate_limited',
+      target: rlSourceKey({ address: '::1', headers: {} }),
+      outcome: 'locked', meta: { via: 'socket' },
+    });
+    assert.match(v6local.text, /本机/);
+    assert.doesNotMatch(v6local.text, /公网/);
+    assert.equal(v6local.severity, 'warning');
 
     const lan = formatAuditEntry({ ts: 1, action: 'auth_rate_limited', target: 'ip:192.168.1.5', outcome: 'locked', meta: { via: 'http' } });
     assert.equal(lan.text, '登录限速锁定 · 局域网 192.168.1.5 · http');

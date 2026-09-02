@@ -226,6 +226,9 @@ export function formatAgoShort(ms) {
 // 翻 audit-records.json 才发现两次锁定的 target 都是 ip:127.0.0.1 —— 本机自己的旧 token 连试八次。
 // 一条把「自己手滑」讲成「有人在攻击你」的红色告警，比不报还糟：真出事那天它已经被当成噪音了。
 const LOOPBACK_ADDRS = new Set(['127.0.0.1', '::1', 'localhost']);
+// 后端 ipRateBucket 把 ::1 归成 /64 前缀 `0:0:0:0::/64`（IANA 保留段，含 loopback / unspecified）。
+// 只认字面量 ::1 会让 BIND_HOST=:: 下本机锁定被说成公网暴力尝试。
+const LOOPBACK_V6_BUCKETS = new Set(['0:0:0:0::/64', '::/64']);
 // 私网/内网：IPv4 RFC1918 + link-local + 100.64/10（CGNAT，也是 Tailscale 的地址池）；
 // IPv6 ULA(fc00::/7 → fc/fd 开头) + link-local(fe80::/10)。边界写死在正则里——172.15/172.32、
 // 100.63/100.128 都是公网，多吃一段就会把真正的外部攻击说成「局域网」。
@@ -234,11 +237,15 @@ function isPrivateAddr(addr) {
   if (/^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(s)) return true;
   return /^(f[cd]|fe80)/.test(s);
 }
+function isLoopbackAddr(addr) {
+  const s = String(addr || '').toLowerCase();
+  return LOOPBACK_ADDRS.has(s) || LOOPBACK_V6_BUCKETS.has(s);
+}
 export function describeRateLimitSource(source) {
   const raw = String(source ?? '').trim();
   const addr = raw.replace(/^(?:cfip|ip):/, '');
   if (!addr) return { scope: 'unknown', addr: '' };
-  if (LOOPBACK_ADDRS.has(addr.toLowerCase())) return { scope: 'local', addr };
+  if (isLoopbackAddr(addr)) return { scope: 'local', addr };
   if (isPrivateAddr(addr)) return { scope: 'lan', addr };
   return { scope: 'public', addr };
 }
@@ -346,14 +353,8 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
 }
 
 // 审计记录 → 一行人话 + severity（服务状态面板「安全日志」段）。
-//
-// 【为什么需要它】(2026-09-02) data/audit-records.json 自始就在记这些事，但 public/ 里对 audit
-// 零命中——web 端没有任何读取面。于是抽屉那条「⛔ 有人在暴力尝试你的入口」在手机上无从下钻：
-// 看不到是哪个 IP、也看不到历史上是不是同一个来源在反复撞。告警说「发生了什么」，这一段回答
-// 「是谁、几次、从哪来」。
-//
-// 设计同 formatDiagLogEntry：判定只用在 severity 着色上，不做合并/折叠——审计的价值恰恰在于
-// 每条都在、且保持时间顺序。未知 action 兜底渲染而非静默吞掉（同一原则）。
+// 抽屉告警只说「发生了什么」；这一段回答「是谁、几次、从哪来」。
+// 判定只用在 severity 着色，不做合并。未知 action 兜底渲染，不静默吞。
 const AUDIT_SCOPE_LABEL = { local: '本机', lan: '局域网', public: '公网' };
 const AUDIT_NEUTRAL_TEXT = {
   retention_cleanup: '审批记录留存清理',
