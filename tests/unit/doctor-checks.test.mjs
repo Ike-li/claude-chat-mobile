@@ -1111,10 +1111,23 @@ test.describe('accessProfileDiagnostic（D21：按声明方案做针对性检查
     assert.match(accessProfileDiagnostic({ ...clean, profile: 'vpn', cfConfigured: true }).detail, /CF_ACCESS/);
     const noTok = accessProfileDiagnostic({ ...clean, profile: 'vpn', authTokenSet: false });
     assert.equal(noTok.status, 'warn');
-    assert.match(noTok.detail, /127\.0\.0\.1/);
+    assert.match(noTok.detail, /AUTH_TOKEN/);
     const noUrl = accessProfileDiagnostic({ ...clean, profile: 'vpn', notifyConfigured: true });
     assert.equal(noUrl.status, 'warn');
     assert.match(noUrl.detail, /PUBLIC_URL/);
+  });
+
+  // §1.9「鉴权是启动前提」之后没 token 的 server 是**拒绝启动**，不是降级绑 loopback。
+  // 同一份 doctor 里 bindDiagnostic 早就改对了（refuse.code=token_required → status fail），
+  // 这里没跟上——两条检查对同一个状态给出两种说法，而「只绑 127.0.0.1」还会让人以为
+  // 至少本机浏览器能用（实际连进程都起不来）。没有门禁把这两处绑在一起，只能靠测试钉住。
+  test('token 未设的说法必须与 bindDiagnostic 一致：拒绝启动，不是绑 loopback', () => {
+    for (const profile of ['vpn', 'reverse-proxy', 'lan']) {
+      const r = accessProfileDiagnostic({ ...clean, profile, authTokenSet: false });
+      assert.equal(r.status, 'warn', profile);
+      assert.match(r.detail, /拒绝启动|不启动/, `${profile}：要说清是起不来`);
+      assert.doesNotMatch(r.detail, /只绑\s*127\.0\.0\.1/, `${profile}：§1.9 之后不再有「降级绑 loopback」这回事`);
+    }
   });
 
   test('vpn 全净 → ok + 提示 PWA/Push 需 HTTPS', () => {
@@ -1152,7 +1165,8 @@ test.describe('accessProfileDiagnostic（D21：按声明方案做针对性检查
   test('英文分支措辞完整（拿 vpn 缺 token 一例）', () => {
     const r = accessProfileDiagnostic({ ...clean, profile: 'vpn', authTokenSet: false, lang: 'en' });
     assert.equal(r.status, 'warn');
-    assert.match(r.detail, /127\.0\.0\.1/);
+    assert.match(r.detail, /refuses to start/);
     assert.match(r.detail, /AUTH_TOKEN/i);
+    assert.doesNotMatch(r.detail, /[一-鿿]/, '英文分支不得混中文');
   });
 });

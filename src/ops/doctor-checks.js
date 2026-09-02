@@ -925,13 +925,12 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
       `CF_ACCESS_* is still configured — contradicts the ${p} profile; clear all three if you have switched`));
   }
   if (!authTokenSet) {
-    problems.push(p === 'lan'
-      ? bi(lang,
-        'AUTH_TOKEN 未设置——server 只绑 127.0.0.1，同一 WiFi 的手机也连不上',
-        'AUTH_TOKEN unset — the server binds 127.0.0.1 only; even same-WiFi phones cannot connect')
-      : bi(lang,
-        'AUTH_TOKEN 未设置——server 只绑 127.0.0.1，隧道/反代另一端连不上',
-        'AUTH_TOKEN unset — the server binds 127.0.0.1 only; the tunnel/proxy peer cannot reach it'));
+    // §1.9「鉴权是启动前提」之后没 token 是**拒绝启动**（resolveBindPlan 的 refuse.code=
+    // token_required），不是降级绑 loopback。措辞必须与 bindDiagnostic 一致——两条检查看的是
+    // 同一个状态，说法分叉时用户不知道信哪个；「只绑 127.0.0.1」还会让人以为本机浏览器至少能用。
+    problems.push(bi(lang,
+      'AUTH_TOKEN 未设置——server 会拒绝启动（任何访问都要令牌，本机也一样），跑 npm run setup 生成一个',
+      'AUTH_TOKEN unset — the server refuses to start (every client needs a token, including on this machine); run npm run setup'));
   }
   if (p === 'lan') {
     if (urlSet) {
