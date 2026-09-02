@@ -10,6 +10,7 @@ import {
   expectNoSessionStatusChip,
   expectSessionStatusChip,
   expectSidebarClosed,
+  expectSidebarOpen,
   openSessionByTitle,
   openSessionsSidebar,
   openWorkspaceSession,
@@ -577,6 +578,8 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await sendChatMessage(page, 'test:needsyou');
     await waitForIdle(page);
+    // 顶栏文字 chip：把会话按钮上那颗琥珀色小点写成人话（手机看不到 title，之前只能猜）
+    await expect(page.locator('[data-testid="header-attention-chip"]')).toHaveText('需要你 1');
     await openSessionsSidebar(page);
 
     const section = page.locator('#needsYouSection');
@@ -609,29 +612,32 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('#btnHome').click();
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
     await expect(page.locator('#dashRecentsList .dash-recent-item').first()).toBeVisible();
-    await expect(page.locator('#dashRecentsList [data-testid="unread-dot"]')).toHaveCount(0);
+    await expect(page.locator('#dashRecentsList [data-testid="unread-mark"]')).toHaveCount(0);
 
     // 引入另一工作区的基线后活动（mock 该区会话的 lastUsedAt 恒为请求时刻）
     await sendChatMessage(page, 'test:needsyou');
     await waitForIdle(page);
 
-    // 首页最近行：基线后有活动的会话亮点
+    // 首页最近行：基线后有活动的会话亮「未读」chip（文字，不再是说不清自己是什么的色点）
     await page.locator('#btnHome').click();
     await expect(page.locator('[data-testid="home-dashboard"]')).toBeVisible({ timeout: 5_000 });
-    await expect(page.locator('#dashRecentsList [data-testid="unread-dot"]').first()).toBeVisible();
+    await expect(page.locator('#dashRecentsList [data-testid="unread-mark"]').first()).toHaveText('未读');
 
-    // 抽屉：新活动的行亮点；基线前的旧会话行不亮
+    // 抽屉：新活动的行亮 chip + 标题加粗；基线前的旧会话行不亮；目录头汇总「N 未读」（折叠时也看得见）
     await openSessionsSidebar(page);
-    await expandWorkspace(page, ANOTHER_WORKSPACE);
+    const otherDir = await expandWorkspace(page, ANOTHER_WORKSPACE);
     const freshRow = page.locator('[data-testid="session-row"]', { hasText: 'Another App Concurrency' });
-    await expect(freshRow.locator('[data-testid="unread-dot"]')).toHaveCount(1);
+    await expect(freshRow.locator('[data-testid="unread-mark"]')).toHaveText('未读');
+    await expect(freshRow.locator('[data-session-head] > span').first()).toHaveClass(/font-semibold/);
+    await expect(otherDir.locator('[data-testid="dir-unread"]')).toHaveText(/^\d+ 未读$/);
     const oldRow = page.locator('[data-testid="session-row"]', { hasText: 'Archived Planning Session' });
-    await expect(oldRow.locator('[data-testid="unread-dot"]')).toHaveCount(0);
+    await expect(oldRow.locator('[data-testid="unread-mark"]')).toHaveCount(0);
+    await expect(oldRow.locator('[data-session-head] > span').first()).not.toHaveClass(/font-semibold/);
 
     // 当前会话行必须零点——无论其时间戳落在基线哪一侧都成立（在看=排除；基线前=不追溯），
     // 双保险断言；「正在看的不亮」的严格时序语义由 logic-unread 单测钉住。
     const viewingRow = page.locator('[data-testid="session-row"]', { hasText: 'Visual Sandbox (Main)' });
-    await expect(viewingRow.locator('[data-testid="unread-dot"]')).toHaveCount(0);
+    await expect(viewingRow.locator('[data-testid="unread-mark"]')).toHaveCount(0);
 
     // 入场即记已读（markSeen 接线验证）：走 P0-11s 已验证的需要你深链进入另一会话，localStorage 落 seen
     await page.locator('[data-testid="needs-you-row"]').click();
@@ -801,12 +807,15 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(otherDir.locator('.dir-badge')).toHaveText('运行中');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('aria-label', '运行中');
     await expect(page.locator('#sessionsDot')).toHaveAttribute('title', '其他工作区 · 运行中');
+    // 顶栏文字 chip 与 #sessionsDot 同源同步：图标说不清的，这里用字说
+    await expect(page.locator('[data-testid="header-attention-chip"]')).toHaveText('其他工作区 · 运行中');
     const otherSubtree = otherDir.locator('xpath=following-sibling::*[1]');
     await expect(otherSubtree.locator('[data-session-status]')).toHaveCount(0);
 
     await page.locator('#sidebarClose').click();
     await expectSidebarClosed(page);
     await expect(page.locator('#sessionsDot')).toBeHidden();
+    await expect(page.locator('[data-testid="header-attention-chip"]')).toBeHidden();
 
     await expectNoBrowserErrors(page);
   });
@@ -845,6 +854,63 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
 
     await expect(page.locator('#messages')).toContainText('Delayed closed-drawer session list delivered.', { timeout: 5_000 });
     await expect(page.locator('#sessionsDot')).toBeHidden();
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 长按会话行 → 标为未读 / 标为已读（2026-09-02）。触屏路径只发 pointerdown、不发 pointerup——
+  // 500ms 后由前端自己的计时器触发（web-first 断言等它到点，不用被门禁禁掉的 waitForTimeout）；
+  // 桌面右键（contextmenu）走同一个入口。长按松手时浏览器仍会派发 click，必须被吞掉，否则弹出
+  // 确认 sheet 的同时会话也被切走。标记落 localStorage，刷新后仍在；只有再次打开该会话才清。
+  test('P0-11ad 长按会话行标为未读：行上出现「未读」、目录头计数、刷新仍在、再长按标回已读', async ({ page }) => {
+    await gotoMock(page);
+    await openSessionsSidebar(page);
+    const mainDir = await expandWorkspace(page, MAIN_WORKSPACE);
+    const row = page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]');
+    await expect(row).toBeVisible();
+    await expect(row.locator('[data-testid="unread-mark"]')).toHaveCount(0);
+    await expect(mainDir.locator('[data-testid="dir-unread"]')).toBeHidden();
+    await markSessionRows(page, MAIN_WORKSPACE);
+
+    await row.dispatchEvent('pointerdown', { pointerId: 1, button: 0, isPrimary: true, clientX: 120, clientY: 200 });
+    const modal = page.locator('#confirmModal');
+    await expect(modal).toHaveClass(/sheet-open/);
+    await expect(page.locator('#confirmTitle')).toHaveText('Archived Planning Session');
+    await expect(page.locator('#confirmOk')).toHaveText('标为未读');
+    await page.locator('#confirmOk').click();
+    await expect(modal).not.toHaveClass(/sheet-open/);
+    // 答完确认要回到抽屉看见那一行的新状态：确认 sheet 上的点击不算「点抽屉外面」（app.js 全局 click 收抽屉的豁免）
+    await expectSidebarOpen(page);
+    // 标记是原地重刷这一行，不重建节点（长按监听仍挂在原节点上）
+    expect(await readSessionRowMarks(page, MAIN_WORKSPACE)).toContain('preserved');
+
+    await expect(row.locator('[data-testid="unread-mark"]')).toHaveText('未读');
+    await expect(row.locator('[data-session-head] > span').first()).toHaveClass(/font-semibold/);
+    await expect(mainDir.locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
+
+    // 长按松手：pointerup + click 落到行按钮上，click 必须被吞掉——抽屉仍开着、没有切会话
+    await row.dispatchEvent('pointerup', { pointerId: 1, clientX: 120, clientY: 200 });
+    await row.locator('button').first().dispatchEvent('click');
+    await expectSidebarOpen(page);
+    await expect(row.locator('[data-testid="unread-mark"]')).toHaveText('未读');
+
+    // 刷新后仍未读（localStorage 持久）：手动标记不受「基线不追溯」影响
+    await page.reload();
+    await waitUntilConnected(page);
+    await openSessionsSidebar(page);
+    await expandWorkspace(page, MAIN_WORKSPACE);
+    const rowAfter = page.locator('[data-testid="session-row"][data-session-id="mock-session-archived"]');
+    await expect(rowAfter.locator('[data-testid="unread-mark"]')).toHaveText('未读');
+    await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-unread"]')).toHaveText('1 未读');
+
+    // 桌面右键同效；已标过的这次是「标为已读」
+    await rowAfter.dispatchEvent('contextmenu');
+    await expect(modal).toHaveClass(/sheet-open/);
+    await expect(page.locator('#confirmOk')).toHaveText('标为已读');
+    await page.locator('#confirmOk').click();
+    await expect(rowAfter.locator('[data-testid="unread-mark"]')).toHaveCount(0);
+    await expect(rowAfter.locator('[data-session-head] > span').first()).not.toHaveClass(/font-semibold/);
+    await expect(workspaceRow(page, MAIN_WORKSPACE).locator('[data-testid="dir-unread"]')).toBeHidden();
 
     await expectNoBrowserErrors(page);
   });

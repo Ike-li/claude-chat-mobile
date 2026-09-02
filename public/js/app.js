@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, describeHandshakeError, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, resolveHeaderConnBadge, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows, isLanOrLocalHostname, authFailurePath} from './logic.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, describeHandshakeError, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows, isLanOrLocalHostname, authFailurePath} from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -15,6 +15,7 @@ import { createHistoryLoadGate } from './app/history-load-gate.js';
 import { createAgentEventDispatcher, createReplayBuffer } from './app/event-dispatch.js';
 import { createFileBrowser } from './app/file-browser.js';
 import { createUnreadTracker } from './app/unread-tracker.js';
+import { attachLongPress } from './app/long-press.js';
 import { createGitChangesPanel, createWorkspacePanel, renderPatchLines } from './app/git-changes.js';
 import { createSettingsController } from './app/settings.js';
 import { createEnvConfigPanel } from './app/env-config.js';
@@ -72,6 +73,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   const unreadPillEl = $('unreadPill'), unreadPillCountEl = $('unreadPillCount'); // 未读角标悬浮胶囊
   const sessionPanel = $('sessionPanel');
   const sessionsDot = $('sessionsDot');  // 台阶2 Step B：后台目录动静汇总角标
+  const attentionChipEl = $('attentionChip'); // 顶栏文字 chip：把 connDot / sessionsDot 两颗角标的含义写成人话（updateHeaderAttentionChip）
 
   // ---- 极简触觉交互及抽屉式元素 DOM 绑定 ----
   const leftSidebar = $('leftSidebar'); // scrim/close 按钮已随 app/drawer.js 迁出
@@ -3371,7 +3373,10 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   document.addEventListener('click', e => {
     if (!hints.contains(e.target) && e.target !== inputEl) hints.classList.add('hidden');
     if (atMentionList && !atMentionList.contains(e.target) && e.target !== inputEl) hideAtMentionList();
-    if (!leftSidebar.classList.contains('-translate-x-full') && !leftSidebar.contains(e.target) && !btnSessions.contains(e.target) && !(topContextPill && topContextPill.contains(e.target)) && e.target.isConnected)
+    // 点抽屉外面任意处 = 收抽屉。通用确认 sheet（z-50，盖在抽屉之上）不算「外面」：从抽屉里发起的
+    // 确认（长按标为未读 / 🗑 删除）答完应回到抽屉、看到那一行的新状态，而不是抽屉顺手滑走。
+    const insideConfirmSheet = Boolean(e.target.closest?.('#confirmModal'));
+    if (!leftSidebar.classList.contains('-translate-x-full') && !leftSidebar.contains(e.target) && !btnSessions.contains(e.target) && !(topContextPill && topContextPill.contains(e.target)) && !insideConfirmSheet && e.target.isConnected)
       closeLeftSidebar();
   });
   const SEND_ICON_HTML = `<svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>`;
@@ -4395,7 +4400,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     leaveComposeReady();
     syncComposerVisibility();
     syncTopContextPillVisibility(id, sid);
-    if (sid) unread.markSeen(sid); // R65：入场即记已读（离场侧另有一记，两侧合围）
+    if (sid) unread.markEntered(sid); // R65：入场即记已读 + 手动未读作废（离场侧 markSeen 另有一记，两侧合围）
 
     // Phase 2: Check memory cache for instant restoration.
     // 已完成的对话/工具卡片按 session 不可变：同 sessionId 即恢复 DOM，不要求 instanceId 相同
@@ -4673,6 +4678,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       connDot.className = `w-2 h-2 rounded-full ${fill} shrink-0`;
     }
     connDotWrap.classList.toggle('hidden', !spec.visible);
+    updateHeaderAttentionChip();
   }
   function updateTerminalBusyForDir(cwd, sessions, terminalBusy) {
     // 新服务端给出完整 registry 的 cwd 汇总，避免默认分页漏掉页外 busy；旧服务端回落当前返回行。
@@ -4725,6 +4731,51 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       sessionsDot.classList.remove('status-icon', 't-status');
       sessionsDot.classList.add('hidden');
     }
+    updateHeaderAttentionChip();
+  }
+  // 顶栏文字 chip（#attentionChip）：把 #connDot / #sessionsDot 两颗角标的含义写成人话——手机没有 hover，
+  // 它们的 title 等于不存在，用户只看到「一颗不知道什么意思的小红点」。判定在 resolveHeaderAttentionChip；
+  // 输入 1）#connDot 刚算出的 reason（读它的 dataset，DOM 即真相源，不另存一份）2）需要你计数
+  // 3）其他工作区汇总（与 updateSessionsDot 同一份数据）。两个角标的更新函数末尾都会调到这里，谁先谁后都不漏。
+  const ATTENTION_CHIP_TONE_CLASS = { danger: 'text-danger', warning: 'text-warning', accent: 'text-accent' };
+  function updateHeaderAttentionChip() {
+    if (!attentionChipEl) return;
+    const drawerStates = {};
+    for (const cwd of availableDirs) drawerStates[cwd] = drawerStateForDir(cwd);
+    const spec = resolveHeaderAttentionChip({
+      badgeReason: connDotWrap?.dataset.reason || 'ok',
+      needsYouCount: needsYouList.length,
+      otherWorkspaceStatus: summarizeOtherWorkspaces(drawerStates, availableDirs, currentCwd),
+    });
+    attentionChipEl.textContent = spec.text;
+    attentionChipEl.title = spec.text;
+    attentionChipEl.dataset.reason = spec.reason;
+    attentionChipEl.className = `${spec.visible ? '' : 'hidden '}conn-rtt-chip attention-chip select-none ${ATTENTION_CHIP_TONE_CLASS[spec.tone] || ''}`.trim();
+  }
+  // 目录头「N 未读」：按该目录已加载的会话页（SWR 缓存）计。搜索态缓存不是全量、不作数；没缓存
+  // （从未展开、后台保鲜还没回来）就不显示——不显示 0，也不为了这个数字多发一次 session:list。
+  function unreadCountForDir(cwd) {
+    const entry = sessionsCache.get(cwd);
+    if (!entry || String(entry.query || '')) return null;
+    let n = 0;
+    for (const s of entry.sessions || []) {
+      if (s?.id && unread.isUnread(s, { isViewing: s.id === displayedSessionId })) n += 1;
+    }
+    return n;
+  }
+  function applyDirUnreadBadge(badge, cwd) {
+    const n = unreadCountForDir(cwd);
+    const show = typeof n === 'number' && n > 0;
+    badge.textContent = show ? t('{n} 未读').replace('{n}', String(n)) : '';
+    badge.title = badge.textContent;
+    badge.classList.toggle('hidden', !show);
+  }
+  // 行数据变化（renderRows）与长按标记后都要刷：两条路径共用同一个 resolver，不各写一套。
+  function refreshDirUnreadCounts() {
+    sessionPanel.querySelectorAll('[data-dir]').forEach(row => {
+      const badge = row.querySelector('.dir-unread');
+      if (badge) applyDirUnreadBadge(badge, row.dataset.dir);
+    });
   }
   // 服务状态可见性（第一性原理重新设计）：与上面 updateSessionsDot（会话待处理/注意力不对称）
   // 是不同的轴——这里只答"ccm 这个服务本身有没有出过岔子"（可维护性）。
@@ -4870,6 +4921,8 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     onClosed: () => stopSessionPanelRevalidator(),
   });
   const { openLeftSidebar, closeLeftSidebar } = drawer;
+  // 顶栏文字 chip 与会话按钮同一去处：点它打开抽屉（需要你区 / 服务异常区 / 工作区树就在里面）。
+  attentionChipEl?.addEventListener('click', () => openLeftSidebar());
 
   const { openDeleteSession } = createSessionDeleteController(appContext, {
     socket, addBar, appConfirm,
@@ -5093,11 +5146,18 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     const name = el(`<span class="truncate"></span>`); name.textContent = baseName(d);
     const badge = el(`<span class="dir-badge hidden"></span>`);
     applyBadge(badge, drawerStateForDir(d));
+    // 右侧角标组 [N 未读][运行中/需要你/出错]：未读数让折叠着的目录也能看出里面有没看过的会话
+    // （行内标记在折叠态下根本不可见）。计数按已加载的会话页算，见 applyDirUnreadBadge。
+    const unreadBadge = el(`<span class="dir-unread drawer-status-chip shrink-0 text-accent hidden" data-testid="dir-unread"></span>`);
+    applyDirUnreadBadge(unreadBadge, d);
+    const badgeGroup = el(`<span class="ml-auto shrink-0 flex items-center gap-1"></span>`);
+    badgeGroup.appendChild(unreadBadge);
+    badgeGroup.appendChild(badge);
 
     toggleBtn.appendChild(icon);
     toggleBtn.appendChild(arrow);
     toggleBtn.appendChild(name);
-    toggleBtn.appendChild(badge);
+    toggleBtn.appendChild(badgeGroup);
     dirRow.appendChild(toggleBtn);
 
     // 物理热区扩大版 "＋" 新建按钮
@@ -5180,11 +5240,28 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       const head = el(`<div data-session-head class="flex items-center gap-1.5 min-w-0"></div>`);
       const titleSpan = el(`<span class="flex-1 min-w-0 truncate font-medium${active ? ' text-accent' : ' text-ink-soft'}"></span>`);
       titleSpan.textContent = s.title || t('新会话');
-      // R65 未读点：上次打开后有新活动才亮；正在看的（本实例激活或就是当前显示会话）不算未读。
-      if (s.id && unread.isUnread(s, { isViewing: active || s.id === displayedSessionId })) {
-        head.appendChild(el(`<span data-testid="unread-dot" class="shrink-0 w-2 h-2 rounded-full bg-accent"></span>`));
-      }
       head.appendChild(titleSpan);
+      // R65 未读：标题加粗变深 + 文字 chip「未读」（原 8px 色点在手机上既不显眼也说不清自己是什么）。
+      // 上次打开后有新活动或长按标过才亮；正在看的（本实例激活或就是当前显示会话）不算未读。
+      // 抽成函数：长按标记后原地重刷这一行，不等整个列表重画。
+      const isViewingRow = active || s.id === displayedSessionId;
+      const applyUnreadMark = () => {
+        const on = Boolean(s.id) && unread.isUnread(s, { isViewing: isViewingRow });
+        titleSpan.classList.toggle('font-semibold', on);
+        titleSpan.classList.toggle('font-medium', !on);
+        if (!active) {
+          titleSpan.classList.toggle('text-ink', on);
+          titleSpan.classList.toggle('text-ink-soft', !on);
+        }
+        head.querySelector('[data-testid="unread-mark"]')?.remove();
+        if (!on) return;
+        const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip shrink-0 text-accent"></span>`);
+        mark.textContent = t('未读');
+        mark.title = t('未读');
+        mark.setAttribute('aria-label', t('未读'));
+        titleSpan.after(mark);
+      };
+      applyUnreadMark();
       appendSessionStatusChip(head, liveInst?.state, s.terminal);
       btn.appendChild(head);
       const sub = el(`<div class="truncate text-ink-faint text-[10px]"></div>`);
@@ -5223,6 +5300,27 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
         }
       };
       rowContent.appendChild(btn);
+
+      // 长按（触屏按住 / 鼠标按住 / 桌面右键）→ 标为未读 / 标为已读。只有落盘会话（有 id）才有「未读」可言。
+      // 正看着的会话也能标「稍后再看」：isUnread 对它恒 false，另用 isManualUnread 判当前是否已标。
+      if (s.id) {
+        attachLongPress(rowContent, async () => {
+          if (rowContent.getAttribute('data-preventClick') === 'true') return; // 已被侧滑手势认领
+          haptic('tap');
+          const wasUnread = unread.isUnread(s, { isViewing: isViewingRow }) || unread.isManualUnread(s.id);
+          const ok = await appConfirm({
+            title: s.title || t('新会话'),
+            body: wasUnread
+              ? t('标为已读后，这一行的「未读」提示消失。')
+              : t('标为未读后，这一行会一直显示「未读」，直到你再次打开它。'),
+            okText: wasUnread ? t('标为已读') : t('标为未读'),
+          });
+          if (!ok) return;
+          unread.setManualUnread(s.id, !wasUnread);
+          applyUnreadMark();
+          refreshDirUnreadCounts();
+        });
+      }
 
       // 原生 x 按钮：桌面/移动端均常显（此前 md:block hidden 只在桌面显示，手机端只能靠不可发现的侧滑
       // 手势——已打开会话本行没有其它可见按钮，用户体感是"点开会话后这行的图标凭空消失了"）。
@@ -5409,6 +5507,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           hint.textContent = hintText;
           rowsHost.appendChild(hint);
         }
+        refreshDirUnreadCounts(); // 行数据（含 lastUsedAt）刚更新，目录头「N 未读」随之重算
       };
 
       if (!background) {
@@ -6143,9 +6242,12 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
           </div>
         `);
         item.querySelector('.font-bold').textContent = s.title || t('无标题会话');
-        // R65 未读点（首页最近行）：inline-block 前置进 truncate 容器，不改其块级截断语义。
+        // R65 未读（首页最近行）：与抽屉同款「未读」chip，inline-flex 前置进 truncate 容器，不改其块级截断语义。
         if (s.id && unread.isUnread(s, { isViewing: s.id === displayedSessionId })) {
-          item.querySelector('.font-bold').prepend(el(`<span data-testid="unread-dot" class="inline-block w-2 h-2 rounded-full bg-accent mr-1.5 align-middle"></span>`));
+          const mark = el(`<span data-testid="unread-mark" class="drawer-status-chip text-accent mr-1.5 align-middle"></span>`);
+          mark.textContent = t('未读');
+          mark.setAttribute('aria-label', t('未读'));
+          item.querySelector('.font-bold').prepend(mark);
         }
         item.querySelector('.dash-ws-icon').textContent = '📁';
         item.querySelector('.dash-ws').textContent = s.workspaceName;

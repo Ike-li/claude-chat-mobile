@@ -13,13 +13,16 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
   test('P0-02g 断线时顶部横幅可见并给出重试，重连后变绿再自动收起', async ({ page }) => {
     await gotoMock(page);
 
-    // 连接正常时横幅不占位（秒连不闪）；会话按钮角标健康时也隐藏
+    // 连接正常时横幅不占位（秒连不闪）；会话按钮角标与顶栏文字 chip 健康时也隐藏
     await expect(page.locator('[data-testid="conn-banner"]')).toBeHidden();
     await expect(page.locator('[data-testid="header-conn-badge"]')).toBeHidden();
+    await expect(page.locator('[data-testid="header-attention-chip"]')).toBeHidden();
 
     await sendChatMessage(page, 'test:disconnect-now');
     await waitUntilDisconnected(page);
     await expect(page.locator('[data-testid="header-conn-badge"]')).toBeVisible();
+    // 角标那颗红点的人话版：与角标同源同步（resolveHeaderAttentionChip 吃 resolveHeaderConnBadge 的 reason）
+    await expect(page.locator('[data-testid="header-attention-chip"]')).toHaveText('未连接');
 
     // 断开超过 1s → 横幅出现，文案可读（这正是此前只有 3.5px 小圆点、没有任何可读反馈的地方）
     const banner = page.locator('[data-testid="conn-banner"]');
@@ -34,6 +37,7 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await page.locator('[data-testid="conn-banner-retry"]').click();
     await waitUntilConnected(page);
     await expect(page.locator('[data-testid="header-conn-badge"]')).toBeHidden();
+    await expect(page.locator('[data-testid="header-attention-chip"]')).toBeHidden();
 
     // 重连成功先给绿条，再自动收起。
     // 必须同时断言「可见」+「success 色阶」：apply() 的隐藏分支只改 className、不清文案，而

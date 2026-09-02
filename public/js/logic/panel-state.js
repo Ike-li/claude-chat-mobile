@@ -447,6 +447,26 @@ export function resolveHeaderConnBadge({
   return { visible: false, tone: null, conn, reason: 'ok', title: '' };
 }
 
+// 顶栏文字 chip：把会话按钮两颗角标（#connDot 纯色点 / #sessionsDot 状态图标）的含义写成人话——
+// 手机没有 hover，它们的 title 等于不存在，用户只看到「一颗不知道什么意思的小红点」。
+// 按优先级只显一条：未连接 > 推送失败告警 > 需要你 N > 其他工作区（需要你/出错/运行中）> 隐藏。
+// 前三级直接吃 resolveHeaderConnBadge 的 reason（点与字永远说同一件事，不各算一套）；
+// 第四级来自 summarizeOtherWorkspaces（#sessionsDot 的数据源），普通终态不点亮，与该点一致。
+const OTHER_WORKSPACE_CHIP_TONE = { permission: 'warning', error: 'danger', busy: 'accent' };
+export function resolveHeaderAttentionChip({ badgeReason = 'ok', needsYouCount = 0, otherWorkspaceStatus = null } = {}) {
+  if (badgeReason === 'offline') return { visible: true, tone: 'danger', reason: 'offline', text: t('未连接') };
+  if (badgeReason === 'alert') return { visible: true, tone: 'danger', reason: 'alert', text: t('推送失败') };
+  if (badgeReason === 'attention') {
+    const text = needsYouCount > 0 ? `${t('需要你')} ${needsYouCount}` : t('需要你');
+    return { visible: true, tone: 'warning', reason: 'attention', text };
+  }
+  const label = DRAWER_STATUS_LABELS[otherWorkspaceStatus];
+  if (label) {
+    return { visible: true, tone: OTHER_WORKSPACE_CHIP_TONE[otherWorkspaceStatus], reason: 'other-workspace', text: `${t('其他工作区')} · ${t(label)}` };
+  }
+  return { visible: false, tone: null, reason: 'ok', text: '' };
+}
+
 // 通知深链落地策略（②2c）：通知带 {instanceId, sessionId, cwd}，点击后据客户端 instances 快照决定动作。
 //   setViewing = instanceId 仍在 live 列表 → 直接切视图（最快）
 //   switch     = 实例已失效（懒重生 / 关闭 / epoch 变化）但会话在 → session:switch 懒 resume（服务端校验归属）

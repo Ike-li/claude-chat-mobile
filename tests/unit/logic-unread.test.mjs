@@ -3,7 +3,7 @@
 // 与「需要你」chip/聚合（答过才清）分层不合并；首装基线不追溯；正在看的不亮。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isSessionUnread, markSeenEntry, parseUnreadState, serializeUnreadState } from '../../public/js/logic/unread.js';
+import { isSessionUnread, markSeenEntry, setManualUnreadEntry, parseUnreadState, serializeUnreadState } from '../../public/js/logic/unread.js';
 
 const T0 = 1_700_000_000_000; // 基线
 const MIN = 60_000;
@@ -30,6 +30,62 @@ test.describe('isSessionUnread：四态判定', () => {
   test('无 lastUsedAt（未落盘新会话行 / live-only 行）→ 不亮', () => {
     assert.equal(isSessionUnread({ lastUsedAt: null, baselineTs: T0 }), false);
     assert.equal(isSessionUnread({ lastUsedAt: undefined, baselineTs: T0 }), false);
+  });
+});
+
+// 手动未读（长按「标为未读」）：用户显式要求「稍后再看」，压过时间判据——哪怕活动在基线前、
+// 哪怕早就看过；只有「正在看」仍然不亮（自己正看着的内容不算未读，和自动未读同一条红线）。
+test.describe('isSessionUnread：手动未读压过时间判据', () => {
+  test('手动标记 + 活动在基线前（本来永不亮的历史会话）→ 亮', () => {
+    assert.equal(isSessionUnread({ lastUsedAt: T0 - MIN, baselineTs: T0, manual: true }), true);
+  });
+
+  test('手动标记 + 看过之后无新活动 → 仍亮（标记不因「看过」失效，只因再次打开失效）', () => {
+    assert.equal(isSessionUnread({ lastUsedAt: T0 + MIN, seenAt: T0 + 2 * MIN, baselineTs: T0, manual: true }), true);
+  });
+
+  test('手动标记 + 无 lastUsedAt → 亮（标记不依赖时间字段）', () => {
+    assert.equal(isSessionUnread({ lastUsedAt: null, baselineTs: T0, manual: true }), true);
+  });
+
+  test('★ 手动标记 + 正在看 → 不亮', () => {
+    assert.equal(isSessionUnread({ lastUsedAt: T0 - MIN, baselineTs: T0, manual: true, isViewing: true }), false);
+  });
+
+  test('manual 缺省/false → 行为与改动前完全一致', () => {
+    assert.equal(isSessionUnread({ lastUsedAt: T0 - MIN, baselineTs: T0, manual: false }), false);
+    assert.equal(isSessionUnread({ lastUsedAt: T0 + MIN, baselineTs: T0 }), true);
+  });
+});
+
+test.describe('setManualUnreadEntry：手动未读表的不可变增删', () => {
+  test('on=true 记入标记时刻且不改原对象', () => {
+    const before = {};
+    const after = setManualUnreadEntry(before, 'a', true, T0);
+    assert.equal(after.a, T0);
+    assert.equal(before.a, undefined, '必须返回新对象');
+  });
+
+  test('on=false 移除该会话；不存在时原样返回同一对象（调用方可据此免写盘）', () => {
+    const before = { a: T0, b: T0 + 1 };
+    const after = setManualUnreadEntry(before, 'a', false);
+    assert.deepEqual(after, { b: T0 + 1 });
+    assert.equal(before.a, T0, '不原地改');
+    assert.equal(setManualUnreadEntry(before, 'zzz', false), before);
+  });
+
+  test('超过上限淘汰最旧的（与 seen 表同一套 LRU by ts），新记录必留', () => {
+    let manual = {};
+    for (let i = 0; i < 3; i++) manual = setManualUnreadEntry(manual, `s${i}`, true, T0 + i, 3);
+    manual = setManualUnreadEntry(manual, 'newest', true, T0 + 100, 3);
+    assert.equal(Object.keys(manual).length, 3);
+    assert.equal(manual.s0, undefined);
+    assert.equal(manual.newest, T0 + 100);
+  });
+
+  test('sessionId 缺失时原样返回', () => {
+    const manual = { a: T0 };
+    assert.equal(setManualUnreadEntry(manual, '', true, T0), manual);
   });
 });
 
@@ -65,14 +121,24 @@ test.describe('parseUnreadState / serializeUnreadState：localStorage 序列化�
     }
   });
 
-  test('往返保真：serialize → parse 保留基线与 seen 表', () => {
-    const state = { baselineTs: T0, seen: { a: T0 + 1, b: T0 + 2 } };
+  test('往返保真：serialize → parse 保留基线、seen 表与 manual 表', () => {
+    const state = { baselineTs: T0, seen: { a: T0 + 1, b: T0 + 2 }, manual: { c: T0 + 3 } };
     const back = parseUnreadState(serializeUnreadState(state), T0 + 999);
     assert.deepEqual(back, state, '已有基线不得被 now 覆盖——覆盖=每次启动都重置基线，点永远不亮');
   });
 
-  test('seen 里的非数字值被丢弃（防手改/旧版本残留）', () => {
-    const back = parseUnreadState(JSON.stringify({ baselineTs: T0, seen: { a: 'x', b: T0 } }), T0);
+  test('旧版本落盘（无 manual 字段）→ manual 回空表，其余原样（升级不丢已读表）', () => {
+    const back = parseUnreadState(JSON.stringify({ baselineTs: T0, seen: { a: T0 } }), T0 + 999);
+    assert.deepEqual(back, { baselineTs: T0, seen: { a: T0 }, manual: {} });
+  });
+
+  test('seen / manual 里的非数字值被丢弃（防手改/旧版本残留）', () => {
+    const back = parseUnreadState(JSON.stringify({ baselineTs: T0, seen: { a: 'x', b: T0 }, manual: { c: true, d: T0 } }), T0);
     assert.deepEqual(back.seen, { b: T0 });
+    assert.deepEqual(back.manual, { d: T0 });
+  });
+
+  test('全新状态也带空 manual 表', () => {
+    assert.deepEqual(parseUnreadState(null, T0), { baselineTs: T0, seen: {}, manual: {} });
   });
 });

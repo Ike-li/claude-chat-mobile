@@ -13,6 +13,8 @@ import { formatFileSize, cmModeForFileName } from '../../public/js/app/file-brow
 import { createSettingsController } from '../../public/js/app/settings.js';
 import { createSessionWorkspaceState } from '../../public/js/app/session-workspaces.js';
 import { createInteractionQueueState } from '../../public/js/app/approval-questions.js';
+import { createUnreadTracker } from '../../public/js/app/unread-tracker.js';
+import { attachLongPress } from '../../public/js/app/long-press.js';
 
 test('app context owns shared DOM, state, dependencies and the active socket', () => {
   const dom = { messages: { id: 'messages' } };
@@ -582,4 +584,189 @@ test('approval and question state caps answered IDs and recognizes grouped quest
   assert.equal(interactions.isQuestionAnswered('tool#1'), true);
   interactions.markQuestionAnswered('group');
   assert.equal(interactions.isQuestionAnswered('group#4'), true);
+});
+
+// ---- createUnreadTracker：R65 未读点的本设备已读表 + 手动未读（长按「标为未读」）----
+// 纯判定在 logic-unread.test.mjs；这里钉 tracker 的生命周期契约：离场记 seen 不清手动标记、
+// 再次打开（markEntered）才清、标为已读同时记 seen、落盘形状、存储不可用时静默降级。
+function memoryStorage(initial = null) {
+  let raw = initial;
+  return { getItem: () => raw, setItem: (_k, v) => { raw = v; }, dump: () => raw };
+}
+
+test.describe('createUnreadTracker：手动未读的生命周期', () => {
+  const T0 = 1_700_000_000_000;
+
+  test('标为未读 → 基线前的历史会话也亮；离场 markSeen 不清；再次打开 markEntered 才清', () => {
+    let now = T0 + 10;
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => now });
+    const old = { id: 's1', lastUsedAt: T0 - 1000 };
+    assert.equal(tracker.isUnread(old), false, '基线前的历史会话本来不亮');
+
+    tracker.setManualUnread('s1', true);
+    assert.equal(tracker.isUnread(old), true);
+    assert.equal(tracker.isUnread(old, { isViewing: true }), false, '正在看的不亮（与自动未读同一条红线）');
+    assert.equal(tracker.isManualUnread('s1'), true, '长按菜单据此对正看着的会话给出「标为已读」');
+    assert.equal(tracker.isManualUnread('other'), false);
+    assert.equal(JSON.parse(storage.dump()).manual.s1, now, '标记落盘');
+
+    now += 5;
+    tracker.markSeen('s1'); // bindView 离场侧：正看着时标的「稍后再看」必须活过离开
+    assert.equal(tracker.isUnread(old), true);
+
+    now += 5;
+    tracker.markEntered('s1'); // bindView 入场侧：打开 = 看过 + 手动标记作废
+    assert.equal(tracker.isUnread(old), false);
+    const persisted = JSON.parse(storage.dump());
+    assert.deepEqual(persisted.manual, {});
+    assert.equal(persisted.seen.s1, now);
+  });
+
+  test('标为已读 → 时间判据本会亮的会话也不亮（同时记 seen，否则 lastUsedAt 仍压过 seenAt）', () => {
+    const now = T0 + 10;
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: {} }));
+    const tracker = createUnreadTracker({ storage, now: () => now });
+    const fresh = { id: 's2', lastUsedAt: T0 + 5 };
+    assert.equal(tracker.isUnread(fresh), true);
+    tracker.setManualUnread('s2', false);
+    assert.equal(tracker.isUnread(fresh), false);
+    assert.equal(JSON.parse(storage.dump()).seen.s2, now);
+  });
+
+  test('旧版本落盘（无 manual 字段）照常加载；存储不可用时内存态仍工作', () => {
+    const storage = memoryStorage(JSON.stringify({ baselineTs: T0, seen: { s3: T0 + 1 } }));
+    const tracker = createUnreadTracker({ storage, now: () => T0 + 100 });
+    assert.equal(tracker.isUnread({ id: 's3', lastUsedAt: T0 + 50 }), true, '已读表未被升级丢掉：seen 之后有新活动 → 亮');
+    assert.equal(tracker.isUnread({ id: 's3', lastUsedAt: T0 }), false, 'seen 之前的活动不亮');
+
+    const degraded = createUnreadTracker({ storage: null, now: () => T0 });
+    degraded.setManualUnread('x', true);
+    assert.equal(degraded.isUnread({ id: 'x', lastUsedAt: T0 - 1 }), true);
+    degraded.markEntered('x');
+    assert.equal(degraded.isUnread({ id: 'x', lastUsedAt: T0 - 1 }), false);
+  });
+
+  test('无 id 的会话行（未落盘新会话）：标记与判定都是 no-op', () => {
+    const tracker = createUnreadTracker({ storage: memoryStorage(), now: () => T0 });
+    tracker.setManualUnread('', true);
+    tracker.setManualUnread(null, true);
+    assert.equal(tracker.isUnread({ id: null, lastUsedAt: T0 + 1 }), false);
+  });
+});
+
+// ---- attachLongPress：抽屉会话行的长按手势（触屏/鼠标走 Pointer Events 计时，桌面右键同效）----
+// 用 EventTarget + 注入计时器，不依赖 DOM：钉的是手势判定契约（到时触发 / 位移取消 / 抬手取消 /
+// 右键直达 / 触发后吞掉紧随的 click），不是浏览器细节。
+function fakePointerTarget() {
+  const el = new EventTarget();
+  el.fire = (type, init = {}) => {
+    const ev = new Event(type, { cancelable: true, bubbles: true });
+    Object.assign(ev, init);
+    el.dispatchEvent(ev);
+    return ev;
+  };
+  return el;
+}
+
+function fakeTimers() {
+  const timers = new Map();
+  let nextId = 0;
+  return {
+    setTimer: (fn) => { nextId += 1; timers.set(nextId, fn); return nextId; },
+    clearTimer: (id) => { timers.delete(id); },
+    pending: () => timers.size,
+    flush: () => { for (const [id, fn] of [...timers]) { timers.delete(id); fn(); } },
+  };
+}
+
+function mountLongPress(handler = () => {}) {
+  const el = fakePointerTarget();
+  const timers = fakeTimers();
+  const fired = [];
+  attachLongPress(el, ev => { fired.push(ev.type); handler(ev); }, {
+    holdMs: 500,
+    moveTolerance: 10,
+    setTimer: timers.setTimer,
+    clearTimer: timers.clearTimer,
+  });
+  return { el, timers, fired };
+}
+
+const DOWN = { button: 0, isPrimary: true, clientX: 10, clientY: 10 };
+
+test.describe('attachLongPress：长按/右键触发，位移与抬手取消，吞掉紧随的 click', () => {
+  test('按住不动到时 → 触发一次；随后的 click 被吞掉一次，再下一次点击照常', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', DOWN);
+    assert.equal(fired.length, 0, '到时前不触发');
+    assert.equal(timers.pending(), 1);
+    timers.flush();
+    assert.deepEqual(fired, ['pointerdown']);
+
+    el.fire('pointerup', { clientX: 10, clientY: 10 });
+    const swallowed = el.fire('click');
+    assert.equal(swallowed.defaultPrevented, true, '长按松手产生的 click 不能再当成「点开会话」');
+    const passed = el.fire('click');
+    assert.equal(passed.defaultPrevented, false, '只吞一次');
+  });
+
+  test('指尖位移超过容差（纵向滚动 / 横向侧滑）→ 取消，不触发，click 照常', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', DOWN);
+    el.fire('pointermove', { clientX: 10, clientY: 40 });
+    assert.equal(timers.pending(), 0, '位移即撤销计时');
+    timers.flush();
+    assert.equal(fired.length, 0);
+    assert.equal(el.fire('click').defaultPrevented, false);
+  });
+
+  test('容差内的抖动不取消', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', DOWN);
+    el.fire('pointermove', { clientX: 14, clientY: 17 });
+    assert.equal(timers.pending(), 1);
+    timers.flush();
+    assert.equal(fired.length, 1);
+  });
+
+  test('到时前抬手 / 系统接管（pointercancel）→ 取消', () => {
+    for (const type of ['pointerup', 'pointercancel', 'pointerleave']) {
+      const { el, timers, fired } = mountLongPress();
+      el.fire('pointerdown', DOWN);
+      el.fire(type, { clientX: 10, clientY: 10 });
+      assert.equal(timers.pending(), 0, type);
+      timers.flush();
+      assert.equal(fired.length, 0, type);
+    }
+  });
+
+  test('非主键（右键/中键 pointerdown）不计时；contextmenu 直接触发并阻止原生菜单', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', { ...DOWN, button: 2 });
+    assert.equal(timers.pending(), 0);
+    const ctx = el.fire('contextmenu');
+    assert.equal(ctx.defaultPrevented, true, '桌面右键：接管为本 app 的菜单');
+    assert.deepEqual(fired, ['contextmenu']);
+  });
+
+  test('计时器已触发后再来 contextmenu（Android 长按两者都发）→ 不重复触发', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', DOWN);
+    timers.flush();
+    const ctx = el.fire('contextmenu');
+    assert.equal(ctx.defaultPrevented, true);
+    assert.equal(fired.length, 1);
+  });
+
+  test('第二根手指（isPrimary=false）不参与；重复 pointerdown 只保留最后一个计时', () => {
+    const { el, timers, fired } = mountLongPress();
+    el.fire('pointerdown', { ...DOWN, isPrimary: false });
+    assert.equal(timers.pending(), 0);
+    el.fire('pointerdown', DOWN);
+    el.fire('pointerdown', DOWN);
+    assert.equal(timers.pending(), 1);
+    timers.flush();
+    assert.equal(fired.length, 1);
+  });
 });

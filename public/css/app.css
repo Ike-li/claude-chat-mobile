@@ -401,6 +401,14 @@ body.ccm-sheet-open #messages {
 .conn-rtt-chip.hidden {
   display: none;
 }
+/* 顶栏注意力文字 chip（#attentionChip）：复用 rtt chip 的壳，字重加粗、可点；色调由 text-danger/warning/accent 工具类给 */
+.attention-chip {
+  font-weight: 600;
+  cursor: pointer;
+}
+.attention-chip:active {
+  transform: scale(0.97);
+}
 
 /* 连接状态横幅（header 与消息区之间的一行，非阻断）。
    刻意不在这里写 display —— 交给 Tailwind 的 hidden/flex 工具类（#unreadPill 是同款既有组合），
@@ -803,6 +811,7 @@ body.ccm-sheet-open #messages {
   /* 侧滑动画及手势优化 */
   .row-content {
     touch-action: pan-y; /* 仅允许纵向滚动，防止横向滑动与页面滚动冲突 */
+    -webkit-touch-callout: none; /* 长按是本 app 的手势（标为未读/已读），不要 iOS 原生弹出 */
   }
   .row-content.swiping {
     transition: none !important; /* 拖拽中禁用过渡，紧贴指尖 */

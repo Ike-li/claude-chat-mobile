@@ -3,7 +3,7 @@
 // 不覆盖 DOM 接线与 iOS/Safari 平台行为（归 npm run check + 真机），见 docs/design.md 验收纪律。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../public/js/logic.js';
+import { foregroundReconnectAction, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, shouldAckUnreadOnScroll, resolveReplayBufferAction, REPLAY_BUFFER_RELOAD_THRESHOLD, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, pushEnvHint, formatRttMs, rttToneClass, shouldShowRttChip, formatServiceNotices, shouldSendOnEnter, readAlertPrefs, writeAlertPref, ALERT_PREF_KEYS, readPushPreviewPref, writePushPreviewPref, PUSH_PREVIEW_PREF_KEY, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, isSubagentPayload, isSpawnToolName, formatBgTaskRowLabel, formatSubagentCardTitle, isToolSummaryTruncated, taskStopUiState, bgTaskListCollapsed, resolveSheetDragEnd, isLanOrLocalHostname, authFailurePath } from '../../public/js/logic.js';
 
 test.describe('pushEnvHint：移动端 Web Push 前提判定', () => {
   const base = { isSecureContext: true, isIOS: false, isStandalone: false, hasPushManager: true };
@@ -190,6 +190,58 @@ test.describe('resolveHeaderConnBadge：有事才出现', () => {
     const r = resolveHeaderConnBadge();
     assert.equal(r.visible, false);
     assert.equal(r.conn, 'connecting');
+  });
+});
+
+// ---- resolveHeaderAttentionChip：把两颗角标的含义写成人话（手机没有 hover，title 等于不存在）----
+// 前三级与 resolveHeaderConnBadge 的 reason 同源（点与字永远说同一件事）；第四级来自
+// summarizeOtherWorkspaces（#sessionsDot 的数据源）。按优先级只显一条。
+test.describe('resolveHeaderAttentionChip：顶栏文字 chip 按优先级只说一件事', () => {
+  test('ok 且其他工作区无动静 → 隐藏', () => {
+    const r = resolveHeaderAttentionChip({ badgeReason: 'ok', needsYouCount: 0, otherWorkspaceStatus: null });
+    assert.equal(r.visible, false);
+    assert.equal(r.reason, 'ok');
+    assert.equal(r.text, '');
+    assert.deepEqual(resolveHeaderAttentionChip(), r, '缺省入参等同全空');
+  });
+
+  test('未连接 → danger「未连接」，压过一切', () => {
+    const r = resolveHeaderAttentionChip({ badgeReason: 'offline', needsYouCount: 3, otherWorkspaceStatus: 'permission' });
+    assert.equal(r.visible, true);
+    assert.equal(r.tone, 'danger');
+    assert.equal(r.reason, 'offline');
+    assert.equal(r.text, '未连接');
+  });
+
+  test('服务告警 → danger「推送失败」（whatNeedsAttention 的 alert 只来自 deliveryFailure，文案说具体事）', () => {
+    const r = resolveHeaderAttentionChip({ badgeReason: 'alert', needsYouCount: 3 });
+    assert.equal(r.tone, 'danger');
+    assert.equal(r.reason, 'alert');
+    assert.equal(r.text, '推送失败');
+  });
+
+  test('需要你 → warning「需要你 N」；计数缺失时只写「需要你」不写 0', () => {
+    const r = resolveHeaderAttentionChip({ badgeReason: 'attention', needsYouCount: 2, otherWorkspaceStatus: 'busy' });
+    assert.equal(r.visible, true);
+    assert.equal(r.tone, 'warning');
+    assert.equal(r.reason, 'attention');
+    assert.equal(r.text, '需要你 2');
+    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'attention', needsYouCount: 0 }).text, '需要你');
+  });
+
+  test('本机健康但其他工作区有动静 → 「其他工作区 · 状态」，色调随状态', () => {
+    const busy = resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'busy' });
+    assert.deepEqual(busy, { visible: true, tone: 'accent', reason: 'other-workspace', text: '其他工作区 · 运行中' });
+    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'permission' }).text, '其他工作区 · 需要你');
+    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'permission' }).tone, 'warning');
+    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).text, '其他工作区 · 出错');
+    assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: 'error' }).tone, 'danger');
+  });
+
+  test('其他工作区的普通终态（done/aborted/idle）不点亮', () => {
+    for (const st of ['done', 'aborted', 'idle', undefined]) {
+      assert.equal(resolveHeaderAttentionChip({ badgeReason: 'ok', otherWorkspaceStatus: st }).visible, false, String(st));
+    }
   });
 });
 

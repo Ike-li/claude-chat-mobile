@@ -38,7 +38,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Documentation | 10 |
 | E2E test | 50 |
 | Frontend asset | 3 |
-| Frontend source | 47 |
+| Frontend source | 48 |
 | Generated asset | 6 |
 | Generated documentation | 1 |
 | Generated lockfile | 1 |
@@ -54,7 +54,7 @@ This is the source of truth for what belongs in the repository. Run `npm run inv
 | Unit test | 169 |
 | Vendored asset | 21 |
 
-Total classified files: **479**.
+Total classified files: **480**.
 
 ## Complete file inventory
 
@@ -119,6 +119,7 @@ Total classified files: **479**.
 | `public/js/app/file-browser.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/git-changes.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/history-load-gate.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
+| `public/js/app/long-press.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/message-renderer.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/message-timeline.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |
 | `public/js/app/notifications.js` | Frontend source | Browser application domain module | Served by Express and consumed by the browser | Authored and reviewed manually | keep |

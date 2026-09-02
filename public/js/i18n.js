@@ -332,6 +332,14 @@ export const EN_DICT = Object.freeze({
   '模型': 'Model',
   '需要你': 'Needs you',
   '服务告警（推送失败等）': 'Service alert (delivery failures, etc.)',
+  '推送失败': 'Push failed',
+  // —— 会话行未读（R65）+ 长按标为未读/已读 ——
+  '未读': 'Unread',
+  '{n} 未读': '{n} unread',
+  '标为未读': 'Mark as unread',
+  '标为已读': 'Mark as read',
+  '标为未读后，这一行会一直显示「未读」，直到你再次打开它。': 'Marked as unread, this row keeps its "Unread" tag until you open the session again.',
+  '标为已读后，这一行的「未读」提示消失。': 'Marked as read, the "Unread" tag on this row goes away.',
 
   // —— 消息流 / 工具卡 / 思考 ——
   '工具执行已因本轮错误停止': 'Tool execution stopped by an error this turn',
