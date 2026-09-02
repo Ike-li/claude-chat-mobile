@@ -463,8 +463,8 @@ test.describe('validateEnvChanges —— 清空 CF_ACCESS_* 必须先警告', ()
 // enum 是新 kind：值只能是 options 里声明过的字面量。写进去一个 schema 不认的串是**静默失效**
 // （所有消费点严格 === 比较、按未声明处理），必须在写入侧当场拒绝 —— 与 toggle 只认声明字面量同理。
 test.describe('ACCESS_PROFILE —— enum 成员校验', () => {
-  test('四个合法值全部通过', () => {
-    for (const v of ['cloudflare', 'vpn', 'reverse-proxy', 'lan']) {
+  test('五个合法值全部通过', () => {
+    for (const v of ['cloudflare', 'vpn', 'reverse-proxy', 'lan', 'direct']) {
       const r = validateEnvChanges({ ACCESS_PROFILE: v }, { current: {} });
       assert.equal(r.results.filter((x) => x.level === 'error').length, 0, v);
     }

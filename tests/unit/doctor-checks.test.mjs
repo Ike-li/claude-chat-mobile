@@ -1162,6 +1162,53 @@ test.describe('accessProfileDiagnostic（D21：按声明方案做针对性检查
     assert.doesNotMatch(JSON.stringify(r), /secret-host/);
   });
 
+  // ── direct：公网 IP + 端口转发，没有任何中间节点 ────────────────────────────
+  //
+  // 它值得单列枚举值，是因为有两条判据与其余四档都不同、且方向相反：
+  //   1. 暴露面最大（端口直接挂在公网上，扫描器会持续敲），却
+  //   2. 限速分桶最准（peer 就是真实客户端 IP，不像反代那样全塌成 127.0.0.1 一个桶）。
+  // 而 reverse-proxy 分支给的「在入口层再补一层认证」对它是**不可执行的建议**——没有入口层。
+  test('direct 全净 → ok，且说清 AUTH_TOKEN 是唯一的门，不给「入口层补认证」这种做不到的建议', () => {
+    const r = accessProfileDiagnostic({ ...clean, profile: 'direct', publiclyReachable: true });
+    assert.equal(r.status, 'ok');
+    assert.match(r.detail, /AUTH_TOKEN/, '要点名唯一那道门是什么');
+    assert.doesNotMatch(r.detail, /入口层|反代层/, 'direct 没有入口层可补认证，给了也做不到');
+  });
+
+  test('direct 进公网信号集：FILE_EDIT 直写要被点名（暴露面最大的一档漏了就是 fail-open）', () => {
+    const r = fileEditExposureDiagnostic({ fileEditOff: false, cfConfigured: false, publicUrl: '', accessProfile: 'direct' });
+    assert.equal(r.status, 'warn');
+    assert.match(r.detail, /ACCESS_PROFILE=direct/);
+  });
+
+  // 声明「公网直连」却只绑 127.0.0.1 = 端口转发没有转发目标，谁也连不上。
+  // 这个矛盾 bindDiagnostic 抓不到：它对 loopback 说的是「手机无法直连是预期行为」——
+  // 对 reverse-proxy 确实是预期（反代连的就是 loopback），对 direct 恰好说反。
+  test('direct / lan + 只绑 loopback → warn（声明与监听面自相矛盾）', () => {
+    for (const profile of ['direct', 'lan']) {
+      const r = accessProfileDiagnostic({ ...clean, profile, publiclyReachable: false });
+      assert.equal(r.status, 'warn', profile);
+      assert.match(r.detail, /BIND_MODE|127\.0\.0\.1|本机/, `${profile}：要指向监听面`);
+    }
+  });
+
+  test('vpn / reverse-proxy / cloudflare + 只绑 loopback → 不因此 warn（那是它们的推荐形态）', () => {
+    // vpn：deployment.md 的 BIND_MODE 表明确把 loopback 列为「自己用 SSH/Tailscale Serve/反代转发」
+    //      的适用档——照文档做还被追着 warn 是自相矛盾（与 fileEditExposureDiagnostic 对 vpn 的
+    //      PUBLIC_URL 抑制同一条纪律）。cloudflare / reverse-proxy：入口进程连的就是 loopback。
+    for (const profile of ['vpn', 'reverse-proxy']) {
+      const r = accessProfileDiagnostic({ ...clean, profile, publiclyReachable: false, publicUrl: 'https://x.example.com' });
+      assert.equal(r.status, 'ok', `${profile} 不该因 loopback 报警：${r.detail}`);
+    }
+    const cf = accessProfileDiagnostic({ ...clean, profile: 'cloudflare', cfConfigured: true, publiclyReachable: false });
+    assert.equal(cf.status, 'ok');
+  });
+
+  test('publiclyReachable 未传 → 不做任何断言（调用方没给就别猜，也别静默算成矛盾）', () => {
+    assert.equal(accessProfileDiagnostic({ ...clean, profile: 'direct' }).status, 'ok');
+    assert.equal(accessProfileDiagnostic({ ...clean, profile: 'lan' }).status, 'ok');
+  });
+
   test('英文分支措辞完整（拿 vpn 缺 token 一例）', () => {
     const r = accessProfileDiagnostic({ ...clean, profile: 'vpn', authTokenSet: false, lang: 'en' });
     assert.equal(r.status, 'warn');

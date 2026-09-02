@@ -218,6 +218,9 @@ export function runDoctor(ctx = {}) {
     publicUrl: ctx.publicUrl || '',
     authTokenSet: tok.safe.isSet && tok.status !== 'fail',
     notifyConfigured: !!ctx.notifyConfigured,
+    // 复用上面 D22 已经算好的那份，不再自己 resolveBindPlan 一次——同一次体检里两条检查
+    // 用两个各自算的 plan，是「同一事实两套判据」的经典形状（见 single-source-of-truth.test.mjs）。
+    publiclyReachable: bindChk.safe.publiclyReachable,
     lang: ctx.lang,
   });
   checks.push({

@@ -234,11 +234,12 @@ launchctl bootstrap  gui/$(id -u) ~/Library/LaunchAgents/com.ccm.server.plist
 `CF_ACCESS_HOSTNAME/TEAM/AUD` 三项留空时，`src/auth/cf-access.js` 整层关闭（`isPublicHost` 恒 false），
 server 不需要任何代码改动。本节只给判断依据和 CCM 侧的硬约束，各方案自身的安装配置以其官方文档为准。
 
-选定方案后建议声明 `ACCESS_PROFILE=vpn|reverse-proxy|lan`（Cloudflare 用户可声明 `cloudflare`；装机向导
+选定方案后建议声明 `ACCESS_PROFILE=vpn|reverse-proxy|direct|lan`（Cloudflare 用户可声明 `cloudflare`；装机向导
 会问这一项，手机「设置」与 `node scripts/config.js set` 也能改）：它是纯声明、不改变任何运行时行为，
 但 `doctor` 与手机端安全体检会按它做针对性检查——声明与 `CF_ACCESS_*`/`PUBLIC_URL`/`AUTH_TOKEN`/通知配置
-互相矛盾时当场指出，而不是等到用不了才发现。四个值就够覆盖全部拓扑：**托管隧道（ngrok、Quick Tunnel、
-Tailscale Funnel…）归 `reverse-proxy`**，判据见下面「托管隧道归哪一档」。
+互相矛盾时当场指出，而不是等到用不了才发现。**托管隧道（ngrok、Quick Tunnel、Tailscale Funnel…）
+归 `reverse-proxy`**，判据见下面「托管隧道归哪一档」；`direct` 是「公网 IP + 端口转发、无中间节点」，
+它单列是因为暴露面与限速粒度两条判据都与反代相反（见下文「公网直连」）。
 
 ### 收窄监听面：BIND_MODE / BIND_HOST
 
@@ -269,10 +270,12 @@ Tailscale Funnel…）归 `reverse-proxy`**，判据见下面「托管隧道归�
 | 加密隧道 / VPN（WireGuard、Tailscale tailnet、ZeroTier、Netbird、Headscale…） | 不能 | 端到端加密；中继只转发密文，协调节点只交换公钥 |
 | 自建反代（VPS + nginx / Caddy / Traefik，打洞用 frp、SSH `-R`、WireGuard 等） | 能：VPS 主机商 | TLS 在你租的那台机器上终止 |
 | 托管隧道（ngrok、Cloudflare Quick Tunnel、Tailscale Funnel、localtunnel…） | **看 TLS 在哪终止**，见下节 | 服务商托管入口，本机跑一个 agent 回连 |
+| 公网直连（公网 IP + 端口转发 / DMZ，或云主机绑公网口） | 无中间节点 | 客户端直接连到这台机器 |
 | 不做公网，只用局域网 | 无中间节点 | 手机与 server 同网段直连 |
 
-第三行是事实陈述而非取舍建议：自建反代**更换**了信任对象（Cloudflare → 主机商），不**消除**中间节点。
-若目标是消除，只有加密隧道 / VPN 与局域网两类做得到。
+自建反代那行是事实陈述而非取舍建议：它**更换**了信任对象（Cloudflare → 主机商），不**消除**中间节点。
+若目标是消除，只有加密隧道 / VPN、公网直连、局域网三类做得到——但公网直连是拿"没有中间节点"
+换"没有前置防线"，见下文「公网直连」。
 
 ### 托管隧道（ngrok / Quick Tunnel / Funnel…）归哪一档
 
@@ -324,7 +327,8 @@ Tailscale Funnel…）归 `reverse-proxy`**，判据见下面「托管隧道归�
 false，于是 `rlSourceKey` 回落到连接 IP。**反代终止在 loopback 后，所有公网客户端的连接 IP
 都是 `127.0.0.1`，共用同一个限速桶**——一个来源试错触发的退避会波及其余客户端。这是刻意取舍
 （宁可粒度粗，也不采信可伪造的 `X-Forwarded-For`，见 `rlSourceKey` 头注），不是配置错误，
-也无法通过加转发头绕开。VPN 类拓扑不受影响：手机的连接 IP 是隧道内地址，天然分桶。
+也无法通过加转发头绕开。VPN 与公网直连两类不受影响：连接 IP 就是客户端本身（隧道内地址 /
+真实公网 IP），天然分桶——公网直连甚至是全部拓扑里限速粒度最准的一个，代价见下节。
 
 限速桶还有第二个合并维度，与选哪种拓扑无关：**IPv6 客户端按 /64 前缀归桶**（`ipRateBucket`）。
 终端用户拿到的最小分配就是一整个 /64，逐地址计桶等于换个源地址就重置失败计数、暴破限速形同虚设。
@@ -333,7 +337,7 @@ IPv4 不受影响，仍按整地址分桶。
 
 ### 通用落地要点
 
-**共通前提**（三类拓扑都适用）：
+**共通前提**（所有非 Cloudflare 拓扑都适用）：
 
 - 必须设 `AUTH_TOKEN`。未设时 server **拒绝启动**（hard-rules §1「鉴权是启动前提」），
   不是降级绑 `127.0.0.1`——任何拓扑都得先有令牌。
@@ -386,8 +390,22 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
 该服务商提供的认证（多数家有 Basic Auth / OAuth 选项，免费档常常没有）——没有的话公网就只剩
 `AUTH_TOKEN` + 设备审批，而这个 URL 是任何人打开浏览器就能触达的。
 
+**公网直连**（`ACCESS_PROFILE=direct`）：公网 IP + 路由器端口转发 / DMZ，或云主机直接绑公网口，
+中间没有任何节点。它与上面几类的差别集中在两点，且方向相反：
+
+- **暴露面最大。** 端口直接挂在公网上，扫描器会持续敲。**没有前置认证层**——Access 没有、
+  反代层也没有，`AUTH_TOKEN` + 设备审批就是全部防线。因此日志里偶尔出现登录限速锁定属于正常现象，
+  不是有人一定攻进来了；真要收紧就回头选一种带前置认证的拓扑，而不是在这一档上加固。
+- **限速粒度最准。** 连接 IP 就是真实客户端（IPv6 按 /64 归桶），不像反代那样全塌成 `127.0.0.1`
+  一个桶，所以暴破退避是逐来源生效的——这是它唯一强过反代的地方。
+
+另外三条配置注意：`BIND_MODE` **不要**设成 `loopback`（端口转发会没有转发目标，外部一台也连不上；
+`doctor` 与手机端体检会把这个矛盾当场报出来）；TLS 得自己解决（没有反代替你终止，裸 `http://`
+能聊天但装不了 PWA、收不到 Web Push）；`PUBLIC_URL` 填对外那个地址，家宽 IP 会漂的话得跟着更新。
+
 **只用局域网**：不配任何入口，手机与电脑同 Wi-Fi 时访问 `http://<lan-ip>:3000/#token=<AUTH_TOKEN>`。
-无中间节点，代价是离开这张网就用不了。
+无中间节点，代价是离开这张网就用不了。同样别把 `BIND_MODE` 设成 `loopback`——那样同网段的手机
+也连不上（这个矛盾 `doctor` 也会报）。
 
 <details>
 <summary>把入口选型与配置交给编程 agent</summary>
@@ -404,11 +422,12 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
 - 我能不能在手机上装客户端 app（VPN 类方案需要）？
 - 我要消除中间节点，还是只要换掉 Cloudflare 就行？这两者结论不同。
 
-第二步，基于回答在这四类拓扑里选一类，说明理由和代价，不要默认选最流行的：
+第二步，基于回答在这五类拓扑里选一类，说明理由和代价，不要默认选最流行的：
 - 加密隧道 / VPN（无中间节点能看到明文）
 - 自建反向代理（TLS 终止在我的 VPS 上，主机商能看到明文）
 - 托管隧道 ngrok / Quick Tunnel / Tailscale Funnel 等（零运维，但入口在服务商手里，
   免费档地址还会漂；明文可见方看 TLS 在哪终止，去对应文档确认，别假定）
+- 公网直连，公网 IP + 端口转发（无中间节点，但也没有任何前置认证层，端口会被持续扫描）
 - 只用局域网（无中间节点，出门用不了）
 
 第三步，落地。以下是 CCM 的硬约束，配置必须满足，不满足就是错的：
@@ -424,9 +443,11 @@ WebSocket 升级由服务商那端负责，主流几家默认就满足。本机�
    而这个场景下没有该值，不设就会变成「通知能收到、点击不跳转」。
 8. 启动日志里「可访问」那几行会列出所有可达地址，隧道内地址（WireGuard、Tailscale）也在其中。
    如果隧道地址没出现在那里，是隧道没起来，不要绕过它去别处找地址。
-9. 配完提醒我声明 ACCESS_PROFILE（vpn / reverse-proxy / lan，托管隧道也是 reverse-proxy），
-   doctor 与手机端安全体检按它做针对性检查。注意 Tailscale 分两种：设备进 tailnet 是 vpn，
-   用 Funnel 暴露到公网是 reverse-proxy，按产品名对号入座会声明错。
+9. 配完提醒我声明 ACCESS_PROFILE（vpn / reverse-proxy / direct / lan，托管隧道也是
+   reverse-proxy），doctor 与手机端安全体检按它做针对性检查。注意 Tailscale 分两种：设备进
+   tailnet 是 vpn，用 Funnel 暴露到公网是 reverse-proxy，按产品名对号入座会声明错。
+10. 选 direct 或 lan 时 BIND_MODE 不能是 loopback（端口转发会没有转发目标），
+    选 reverse-proxy 则 loopback 恰好是推荐形态。
 
 护栏：
 - 不要修改本仓库任何源码，这件事纯配置即可完成。

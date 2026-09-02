@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateToken, buildConfigContent, parseSetupArgs, resolveSetupPlan, normalizeSetupWorkDir, promptWorkDir, promptWorkDirs, describeOverwrite, runInteractive, runNonInteractive, MESSAGES } from '../../scripts/setup.js';
+import { ACCESS_PROFILES } from '../../src/ops/env-schema.js';
 
 const SETUP = new URL('../../scripts/setup.js', import.meta.url);
 
@@ -604,6 +605,14 @@ test.describe('setup 向导 —— 公网访问方案问一步（ACCESS_PROFILE�
     assert.equal(written().accessProfile, undefined);
   });
 
+  // 新档一律往后追加编号：MAP 是显式字面量而非按 ACCESS_PROFILES 索引推导，就是为了让
+  // 「答 3 = vpn」这类已经写进文档和截图的约定不因枚举展示顺序变化而静默改含义。
+  test('答 5 → direct，且不扰动既有编号（3 仍是 vpn）', async () => {
+    const { written, deps } = seqDeps((q) => (/怎么从手机访问/.test(q) ? '5' : ''));
+    await runInteractive(PLAN, deps);
+    assert.equal(written().accessProfile, 'direct');
+  });
+
   test('非法输入重问：先答 9 再答 4 → reverse-proxy', async () => {
     let n = 0;
     const { written, deps } = seqDeps((q) => (/怎么从手机访问/.test(q) ? (n++ === 0 ? '9' : '4') : ''));
@@ -661,11 +670,14 @@ test.describe('setup 向导 —— 公网访问方案问一步（ACCESS_PROFILE�
     }
   });
 
-  test('双语齐全：问询举例到具体工具；四个方案的下一步指引都在，vpn/reverse-proxy 指路文档与 agent prompt', () => {
+  // 覆盖面从 ACCESS_PROFILES 派生，不写死清单：写死时新增枚举值只会让向导在选中它之后
+  // 静默什么都不打印（accessNotes[p] 是 undefined，console.log 分支跳过），没有任何报错。
+  test('双语齐全：问询举例到具体工具；每个方案的下一步指引都在，vpn/reverse-proxy 指路文档与 agent prompt', () => {
     assert.match(MESSAGES.zh.accessPrompt, /Tailscale/);
     assert.match(MESSAGES.zh.accessPrompt, /WireGuard/);
     assert.match(MESSAGES.en.accessPrompt, /Tailscale/);
-    for (const p of ['cloudflare', 'vpn', 'reverse-proxy', 'lan']) {
+    assert.ok(ACCESS_PROFILES.length >= 5, '前提：枚举值取自 env-schema，不是本文件的副本');
+    for (const p of ACCESS_PROFILES) {
       assert.equal(typeof MESSAGES.zh.accessNotes[p], 'string', `zh accessNotes.${p}`);
       assert.equal(typeof MESSAGES.en.accessNotes[p], 'string', `en accessNotes.${p}`);
     }

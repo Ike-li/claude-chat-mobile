@@ -806,7 +806,8 @@ export function fileEditExposureDiagnostic({ fileEditOff = false, cfConfigured =
   const signals = [
     cfConfigured && 'CF_ACCESS_*',
     String(publicUrl || '').trim() && p !== 'vpn' && 'PUBLIC_URL',
-    (p === 'cloudflare' || p === 'reverse-proxy') && `ACCESS_PROFILE=${p}`,
+    // direct 是暴露面最大的一档（端口直接挂在公网上），漏掉它就是这条检查最严重的 fail-open。
+    (p === 'cloudflare' || p === 'reverse-proxy' || p === 'direct') && `ACCESS_PROFILE=${p}`,
   ].filter(Boolean);
   if (!signals.length) {
     return {
@@ -876,7 +877,10 @@ export function bindDiagnostic({ bindPlan, lang = 'zh' } = {}) {
 // （publicUrl 只取「设没设」，值绝不进返回）。多问题聚合进一条 detail、级别取最重——
 // 一个方案一行，别把面板刷成清单。未知值按未声明处理并明说（fail-closed：未知值不得
 // 让任何检查静默跳过）。
-export function accessProfileDiagnostic({ profile = '', cfConfigured = false, publicUrl = '', authTokenSet = false, notifyConfigured = false, lang = 'zh' } = {}) {
+// publiclyReachable 由调用方从 bindPlan 取（两处：scripts/doctor.js D21 与 doctor-runtime）。
+// 默认 null = 「调用方没说」，此时不做监听面相关的任何断言 —— 默认成 true 会让忘记接线的调用方
+// 静默丢掉一整条检查，默认成 false 则会对所有不关心绑定的调用方误报。
+export function accessProfileDiagnostic({ profile = '', cfConfigured = false, publicUrl = '', authTokenSet = false, notifyConfigured = false, publiclyReachable = null, lang = 'zh' } = {}) {
   const name = 'ACCESS_PROFILE';
   const p = String(profile || '').trim();
   const urlSet = String(publicUrl || '').trim() !== '';
@@ -932,6 +936,20 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
       'AUTH_TOKEN 未设置——server 会拒绝启动（任何访问都要令牌，本机也一样），跑 npm run setup 生成一个',
       'AUTH_TOKEN unset — the server refuses to start (every client needs a token, including on this machine); run npm run setup'));
   }
+  // 声明「设备直接连到这台机器」的两档（lan / direct）与「只绑本机」互相矛盾：端口转发没有
+  // 转发目标，同网段的手机也够不着。bindDiagnostic 抓不到这个——它对 loopback 说的是
+  // 「手机无法直连是预期行为」，那句话对 reverse-proxy / cloudflare 是对的（入口进程连的就是
+  // loopback），对这两档恰好说反。vpn 刻意不在此列：deployment.md 的 BIND_MODE 表把 loopback
+  // 列为「自己用 SSH / Tailscale Serve / 反代转发」的适用档，照文档做还被追着 warn 是自相矛盾。
+  if (publiclyReachable === false && (p === 'lan' || p === 'direct')) {
+    problems.push(p === 'direct'
+      ? bi(lang,
+        '声明公网直连，但 BIND_MODE 让 server 只绑本机 127.0.0.1——端口转发没有转发目标，外部一台也连不上',
+        'Declared direct public exposure, but BIND_MODE binds 127.0.0.1 only — the port forward has nothing to forward to; nothing outside can connect')
+      : bi(lang,
+        '声明仅局域网，但 BIND_MODE 让 server 只绑本机 127.0.0.1——同一 WiFi 的手机也连不上',
+        'Declared LAN-only, but BIND_MODE binds 127.0.0.1 only — even same-WiFi phones cannot connect'));
+  }
   if (p === 'lan') {
     if (urlSet) {
       problems.push(bi(lang,
@@ -961,6 +979,19 @@ export function accessProfileDiagnostic({ profile = '', cfConfigured = false, pu
       detail: bi(lang,
         '反向代理 / 托管隧道：建议在入口层再补一层认证；Host 透传与 WebSocket 升级两条硬要求见 docs/deployment.md。',
         'Reverse proxy / hosted tunnel: consider an extra auth layer at the entry point; Host passthrough and WebSocket upgrade are hard requirements (see docs/deployment.md).'),
+    };
+  }
+  if (p === 'direct') {
+    // 刻意不说「在入口层补认证」——这一档没有入口层，给了也做不到。换成它真正需要知道的三件事：
+    // 唯一防线是什么、被扫描是常态（免得把限速锁定当成故障）、以及它唯一强过反代的那一点。
+    return {
+      status: 'ok', name,
+      detail: bi(lang,
+        '公网直连：没有前置认证层，AUTH_TOKEN + 设备审批就是全部防线；端口直接暴露会被持续扫描，登录限速偶尔锁定属正常。'
+        + '限速按真实客户端 IP 分桶（不像经中间节点转发时那样合并成一个桶）。PWA / 推送需要 HTTPS，此拓扑要自备证书，详见 docs/deployment.md。',
+        'Direct public exposure: there is no pre-auth layer — AUTH_TOKEN plus device approval is the entire defense; an exposed port gets scanned continuously, '
+        + 'so occasional login rate-limit lockouts are normal. Rate limiting does bucket by the real client IP here, instead of collapsing into one bucket behind a forwarder. '
+        + 'PWA / push need HTTPS, so bring your own certificate (see docs/deployment.md).'),
     };
   }
   return {

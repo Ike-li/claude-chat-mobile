@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { readMergedPermissions, runDoctor, countConfigPermProblems, CONFIG_FILE_NAMES, readModelSettingsSnapshot } from '../../src/ops/doctor-runtime.js';
 import { modelSettingsConflictDiagnostic } from '../../src/ops/doctor-checks.js';
+import { resolveBindPlan } from '../../src/shared/bind-host.js';
 
 test.describe('readMergedPermissions：合并 global/project/local + 容错', () => {
   test('合并三层 + scope 标注；坏 JSON / 缺文件 skip 不抛', () => {
@@ -368,5 +369,27 @@ test.describe('ACCESS_PROFILE：按声明方案的针对性检查（web 体检�
     assert.equal(JSON.stringify(c).includes('secret-host'), false);
     assert.equal(c.safe.profile, 'lan');
     assert.equal(typeof c.safe.publicUrlSet, 'boolean');
+  });
+
+  // 接线钉子：判定函数拿 publiclyReachable 做「声明 vs 监听面」的矛盾核对，而这个值只能由
+  // 调用方从 bindPlan 取。忘了传不会报错，只会让整条检查静默失效——恰好是 doctor 里最难发现的
+  // 一类缺陷（体检全绿地少一项）。所以这里不测判定，测的是「值真的接进去了」。
+  test('publiclyReachable 从 bindPlan 接进 D21：direct + 只绑 loopback → warn', () => {
+    const c = apCheck({
+      accessProfile: 'direct',
+      authToken: 'x'.repeat(32),
+      bindPlan: resolveBindPlan({ authToken: 'x'.repeat(32), bindMode: 'loopback' }),
+    });
+    assert.equal(c.status, 'warn', `矛盾没被抓到，说明 publiclyReachable 没接进去：${c.detail}`);
+    assert.match(c.detail, /BIND_MODE|127\.0\.0\.1|本机/);
+  });
+
+  test('对照：direct + 对外监听 → ok（防把 direct 一律报成 warn）', () => {
+    const c = apCheck({
+      accessProfile: 'direct',
+      authToken: 'x'.repeat(32),
+      bindPlan: resolveBindPlan({ authToken: 'x'.repeat(32), bindMode: 'lan' }),
+    });
+    assert.equal(c.status, 'ok', c.detail);
   });
 });

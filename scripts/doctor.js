@@ -717,6 +717,13 @@ function checkAccessProfile() {
     authTokenSet: tok.isSet && tok.status !== 'fail',
     notifyConfigured: (set('VAPID_PUBLIC_KEY') && set('VAPID_PRIVATE_KEY') && set('VAPID_SUBJECT'))
       || (set('NTFY_URL') && set('NTFY_TOPIC')),
+    // 与 D22 同一个 resolveBindPlan（判据只有一处定义）；refuse 时 publiclyReachable 恒 false，
+    // 但那种状态下缺 token 的问题已经由本函数自己的 authTokenSet 分支说了，不会只剩一条监听面告警。
+    publiclyReachable: resolveBindPlan({
+      authToken: process.env.AUTH_TOKEN,
+      bindMode: process.env.BIND_MODE,
+      bindHost: process.env.BIND_HOST,
+    }).publiclyReachable,
     lang: LANG,
   }));
 }

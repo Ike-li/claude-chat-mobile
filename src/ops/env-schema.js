@@ -67,6 +67,10 @@ export const ENV_SCHEMA = {
       // 它们在 CCM 侧的连带变化与自建反代逐条相同（TLS 终止在对方那边、peer 是 loopback 导致限速桶
       // 全塌、CF_ACCESS_* 整层关闭）。新增枚举值只会多一份要同步的检查矩阵，换不来任何不同的判据。
       { value: 'reverse-proxy', label: t('反向代理 / 托管隧道（nginx、Caddy、frp、ngrok、Tailscale Funnel…）', 'Reverse proxy / hosted tunnel (nginx, Caddy, frp, ngrok, Tailscale Funnel…)') },
+      // direct 与 reverse-proxy 只差一个中间节点，但那个差别翻转了两条判据：暴露面最大
+      // （端口直接挂公网），限速分桶却最准（peer 就是真实客户端 IP，不塌成 127.0.0.1 一个桶）。
+      // 而「在入口层再补一层认证」这条对它不可执行——没有入口层。判据不同才配一个枚举值。
+      { value: 'direct', label: t('公网直连（公网 IP + 端口转发，无中间节点）', 'Direct public exposure (public IP + port forward, no middlebox)') },
       { value: 'lan', label: t('仅局域网（同一 WiFi 直连）', 'LAN only (same-WiFi direct)') },
     ],
     label: t('公网访问方案', 'Public access profile'),
