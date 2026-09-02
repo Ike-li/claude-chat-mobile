@@ -12,6 +12,10 @@
 //     单机主默认没有 scraper。多实例 scrape 是另一种产品形态，得先改 hard-rules §2 立场。
 const counters = new Map(); // name → number（累计，只增）
 const gauges = new Map();   // name → number（瞬时，覆盖式）
+// name → string（非数值的「最近一次」上下文，覆盖式）。counters 答「几次」、gauges 答「何时」，
+// 这张表答「是谁/为什么」——限速锁定的来源桶、投递失败的原因。刻意不并进 gauges：那是数值时序，
+// 塞字符串会让 /metrics 的消费方（未来若真接 scraper）拿到类型不一致的字段。
+const labels = new Map();
 
 // 计数器递增。用于"发生过 N 次"类指标：事件数、限速锁定、推送成功/失败。
 export function inc(name, delta = 1) {
@@ -25,6 +29,19 @@ export function gauge(name, value) {
   gauges.set(name, value);
 }
 
+// 记一条「最近一次」的上下文。消费者是服务状态面板（computeServiceHealth 打进 health payload），
+// 不进 snapshot —— /metrics 保持纯数值面。
+export function label(name, value) {
+  labels.set(name, value);
+}
+
+// 缺省返回 null 而非 undefined：这些值直接进 JSON payload，undefined 会被 JSON.stringify 吃掉，
+// 前端就分不清「没发生过」和「字段没实现」（旧 server 兼容判据靠的正是字段在不在）。
+export function getLabel(name) {
+  const v = labels.get(name);
+  return v === undefined ? null : v;
+}
+
 export function snapshot() {
   return {
     counters: Object.fromEntries(counters),
@@ -36,6 +53,7 @@ export function snapshot() {
 export function reset() {
   counters.clear();
   gauges.clear();
+  labels.clear();
 }
 
 // StateProbe.classify——把当前系统观测归为五类中后端可产出的四类之一，或 null（无需

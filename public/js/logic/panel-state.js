@@ -380,9 +380,16 @@ export function shouldRestoreOptimisticBusy({
   return false;
 }
 
-// 统一判定：会话待处理 + 服务异常 → ok | attention | alert（顶栏会话按钮角标 / 注意力信号）。
-// priority: alert > attention > ok。抽屉不再复述计数；状态落在需要你卡、工作区树角标、主聊天面。
-export function whatNeedsAttention({ instances, needsYou, service } = {}) {
+// 统一判定：会话待处理 → ok | attention（顶栏会话按钮角标 / 注意力信号）。
+// 抽屉不再复述计数；状态落在需要你卡、工作区树角标、主聊天面。
+//
+// 【为什么服务健康不在这条轴上】(2026-09-02) 这里曾有一段 deliveryFailure → `return {level:'alert'}`，
+// 排在 needsYou 聚合之后却无条件短路它。后果是：一次推送投递失败在 24h 时效窗里一直有效，
+// 于是顶栏那唯一的位子整天写着「推送失败」，而「3 个审批等你按」被完全挤掉。
+// 两者是不同的轴——needsYou 是「此刻你按一下就能推进」，推送失败是「你在手机上做不了任何事」
+// 的背景状态（要改的是网络/代理配置）。后者的可见性由抽屉「服务」小节与服务状态面板承担，
+// 那两处本来就在渲染它，且不与待办争位。
+export function whatNeedsAttention({ instances, needsYou } = {}) {
   const items = [];
   if (Array.isArray(needsYou)) {
     for (const n of needsYou) {
@@ -406,21 +413,12 @@ export function whatNeedsAttention({ instances, needsYou, service } = {}) {
       }
     }
   }
-  if (service && service.deliveryFailure && typeof service.deliveryFailure === 'object') {
-    const df = service.deliveryFailure;
-    items.push({
-      kind: 'delivery_failure',
-      ref: df.channel || null,
-      summary: `${t('推送失败（')}${df.channel || 'push'}${t('）')}`,
-    });
-    return { level: 'alert', items };
-  }
   if (items.length) return { level: 'attention', items };
   return { level: 'ok', items: [] };
 }
 
 // 顶栏会话按钮右下角标：有事才出现。
-// 优先级：已连过再断开 > 服务告警 > 需要你 > 隐藏。
+// 优先级：已连过再断开 > 需要你 > 隐藏（服务告警不在此列，见 whatNeedsAttention 头注）。
 // 首连中（从未连上）不点亮，避免每次打开闪一颗红点（与横幅延迟同因）。
 export function resolveHeaderConnBadge({
   connected = false,
@@ -431,9 +429,6 @@ export function resolveHeaderConnBadge({
   const conn = connected ? 'online' : (everConnected ? 'offline' : 'connecting');
   if (conn === 'offline') {
     return { visible: true, tone: 'danger', conn, reason: 'offline', title: t('未连接') };
-  }
-  if (conn === 'online' && attentionLevel === 'alert') {
-    return { visible: true, tone: 'danger', conn, reason: 'alert', title: t('服务告警（推送失败等）') };
   }
   if (conn === 'online' && attentionLevel === 'attention') {
     return {
@@ -449,13 +444,13 @@ export function resolveHeaderConnBadge({
 
 // 顶栏文字 chip：把会话按钮两颗角标（#connDot 纯色点 / #sessionsDot 状态图标）的含义写成人话——
 // 手机没有 hover，它们的 title 等于不存在，用户只看到「一颗不知道什么意思的小红点」。
-// 按优先级只显一条：未连接 > 推送失败告警 > 需要你 N > 其他工作区（需要你/出错/运行中）> 隐藏。
-// 前三级直接吃 resolveHeaderConnBadge 的 reason（点与字永远说同一件事，不各算一套）；
-// 第四级来自 summarizeOtherWorkspaces（#sessionsDot 的数据源），普通终态不点亮，与该点一致。
+// 按优先级只显一条：未连接 > 需要你 N > 其他工作区（需要你/出错/运行中）> 隐藏。
+// 前两级直接吃 resolveHeaderConnBadge 的 reason（点与字永远说同一件事，不各算一套）；
+// 第三级来自 summarizeOtherWorkspaces（#sessionsDot 的数据源），普通终态不点亮，与该点一致。
+// 顶栏位子只有一个，且这里的每一条都必须是「点开就能处理」的事——推送失败不是，已移除（2026-09-02）。
 const OTHER_WORKSPACE_CHIP_TONE = { permission: 'warning', error: 'danger', busy: 'accent' };
 export function resolveHeaderAttentionChip({ badgeReason = 'ok', needsYouCount = 0, otherWorkspaceStatus = null } = {}) {
   if (badgeReason === 'offline') return { visible: true, tone: 'danger', reason: 'offline', text: t('未连接') };
-  if (badgeReason === 'alert') return { visible: true, tone: 'danger', reason: 'alert', text: t('推送失败') };
   if (badgeReason === 'attention') {
     const text = needsYouCount > 0 ? `${t('需要你')} ${needsYouCount}` : t('需要你');
     return { visible: true, tone: 'warning', reason: 'attention', text };

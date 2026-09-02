@@ -1559,6 +1559,23 @@ io.on('connection', socket => {
     });
   });
 
+  // 「安全日志」段夹具：确定性三条，刻意覆盖三档 severity —— 公网限速(danger) / 本机限速(warning)
+  // / 设备批准(neutral)。少了「本机」那条，「来源分叉后本机不再标 danger」这个判定就从来没被
+  // E2E 走过，把 describeRateLimitSource 改成恒返回 public 照样全绿。
+  socket.on('audit:get', (_payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const base = MOCK_SERVICE_STARTED_AT;
+    ack({
+      ok: true,
+      capacity: 5000,
+      records: [
+        { id: 'a3', ts: base + 60_000, action: 'auth_rate_limited', target: 'ip:203.0.113.7', outcome: 'locked', meta: { via: 'http' } },
+        { id: 'a2', ts: base + 30_000, action: 'auth_rate_limited', target: 'ip:127.0.0.1', outcome: 'locked', meta: { via: 'http' } },
+        { id: 'a1', ts: base, action: 'device_approved', target: 'dev0123456789', outcome: 'allowed', meta: { via: 'web' } },
+      ],
+    });
+  });
+
   // UI 安全体检（④）：确定性快照。WHITELIST 特意带一条危险规则 —— renderDoctor 里
   // `c.safe.dangerous` 那段明细渲染否则从来没被 E2E 走过。
   socket.on('doctor:run', (_payload, ack) => {

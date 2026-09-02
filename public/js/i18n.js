@@ -331,8 +331,6 @@ export const EN_DICT = Object.freeze({
   '其他工作区': 'Other workspaces',
   '模型': 'Model',
   '需要你': 'Needs you',
-  '服务告警（推送失败等）': 'Service alert (delivery failures, etc.)',
-  '推送失败': 'Push failed',
   // —— 会话行未读（R65）+ 长按标为未读/已读 ——
   '未读': 'Unread',
   '{n} 未读': '{n} unread',
@@ -547,12 +545,38 @@ export const EN_DICT = Object.freeze({
 
   // —— 服务状态告警 ——
   '⛔ 登录限速锁定于': '⛔ Login rate-limit lockout at',
+  // 来源未知时（旧 server ack 无 source 字段）才用这句无条件的措辞；带来源时按 scope 分叉，
+  // 见 public/js/logic/service-diag.js 的 describeRateLimitSource。
   '——可能有人在暴力尝试你的入口': ' — someone may be brute-forcing your entry point',
+  '——来自本机': ' — from this machine,',
+  '，多半是你自己的旧 token': ', most likely your own stale token',
+  '——来自局域网': ' — from the local network,',
+  '——公网': ' — public IP',
+  '在暴力尝试你的入口': 'is brute-forcing your entry point',
   '🔔 推送最近失败于': '🔔 Push last failed at',
   '🐞 前端错误发生于': '🐞 Front-end error at',
   '，详见日志面板': ' — see the log panel',
-  '推送失败（': 'Push failed (',
-  '）': ')',
+
+  // —— 安全日志段（审计记录 → 人话）——
+  '安全日志': 'Security log',
+  '（最近 20 条）': '(latest 20)',
+  '暂时读取不到（服务端未响应）': 'Unavailable (no response from server)',
+  '暂无记录': 'No records yet',
+  '登录限速锁定': 'Login rate-limit lockout',
+  '本机': 'this machine',
+  '局域网': 'LAN',
+  '公网': 'public',
+  '批准设备': 'Approved device',
+  '拒绝设备': 'Denied device',
+  '吊销设备': 'Revoked device',
+  '越界访问被拒': 'Out-of-scope access denied',
+  '审批完整性校验失败': 'Approval integrity check failed',
+  '修改配置': 'Config changed',
+  '重启服务': 'Service restart',
+  '永久删除会话': 'Permanently deleted session',
+  '写入文件': 'Wrote file',
+  '审批记录留存清理': 'Approval retention cleanup',
+  '重启使待审批请求失效': 'Restart invalidated pending approvals',
 
   // —— 诊断时间线 ——
   // 下面几条是「查表 key」：logic.js 的顶层常量表存中文原文、由 t(变量) 取用，源码里没有对应的

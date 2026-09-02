@@ -252,7 +252,12 @@ test('INBOUND_SOCKET_EVENTS 与 interfaces.md 的入向事件表同源（数量�
   //        日志与 ack 只记 key 名不记值。env:set 因为要真写 .env 而进 MOCK_INBOUND_EXEMPT）
   // （曾含 session:delete：L1 软隐藏；2026-08-26 移除——制造 CLI/web 不等价且无反隐藏入口；
   //   只留 session:deletePermanent 真删。session:* 由 9 变 8，入向总数 42→41）
-  assert.equal(INBOUND_SOCKET_EVENTS.length, 41);
+  //      + audit:get（2026-09-02，安全日志段：审计记录的唯一读取面。data/audit-records.json 自始
+  //        只写不读——限速锁定的来源 IP、设备批准/拒绝、越界访问全记着但 web 一条也看不到，于是
+  //        「⛔ 有人在暴力尝试你的入口」这类告警无从下钻。只读、过 deviceApproved 闸、不开 HTTP 端点。
+  //        入向总数 41→42）
+  assert.equal(INBOUND_SOCKET_EVENTS.length, 42);
+  assert.ok(INBOUND_SOCKET_EVENTS.includes('audit:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('env:get'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('env:set'));
   assert.ok(INBOUND_SOCKET_EVENTS.includes('push:test'));

@@ -1,7 +1,7 @@
 // app.js —— 契约客户端：agent:event 渲染 + 审批弹窗 + epoch 感知续传。
 // 纯决策逻辑（effort 档位 / 状态聚合 / ANSI / esc）抽到 logic.js，浏览器 import + node:test 共用。
 /* global io, marked, DOMPurify, hljs */
-import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, describeHandshakeError, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows, isLanOrLocalHostname, authFailurePath} from './logic.js';
+import { esc, formatToolSummary, formatToolCardTitle, formatTaskToolTitle, renderTaskToolResultText, shouldEmitModeChangeBar, resolveModelTileDisplay, resolveModelDisplayName, resolveGatewayModelName, resolveModelPillText, formatCachePercent, effortLevelSubtitle, shouldShowBusyWithMirror, pickBannerToShow, formatStreamPreviewIntervalMs, statusIconSpec, toolPreviewLabel, effortLevelsFor, modelLabelFor, effortUiState, resolvePanelState, aggregateStates, resolveDrawerStatus, resolveDrawerStatusChip, formatSessionRowSubtitle, summarizeOtherWorkspaces, projectDisplayName, shouldShowStartScreen, shouldShowComposer, shouldShowTopContextPill, resolveEmptySurface, wasViewingInstanceDestroyed, detectServerRestart, formatComposeDefaultsSummary, shouldRestoreOptimisticBusy, planSessionDraftSwap, foregroundReconnectAction, describeHandshakeError, syncAckAction, shouldReloadOnEnter, shouldForceScrollAfterReplay, shouldStickScrollToBottom, resolveReplayBufferAction, sessionDomCachePlan, keyboardInsetPadding, logEntryVisibleForInstance, consoleLogEntryLayout, defaultModelTileLabel, withUltracodeTier, resolveDeepLinkTarget, armedTakeoverStep, presentTurnResult, formatServiceNotices, formatHooksBridgeRow, formatPushStatusRow, pushEnvHint, serviceStatusBasicRows, shouldSendOnEnter, whatNeedsAttention, resolveHeaderConnBadge, resolveHeaderAttentionChip, userBubbleFold, mergeRecentSessionsAcrossWorkspaces, remainingOlderSessionCount, formatNotifyIdentity, notifySessionTag, lookupNotifySessionTitle, otherWorkspaceNotifyOpts, isSubagentPayload, isSpawnToolName, isFileMutationTool, accumulateTurnFileChange, summarizeTurnFileChanges, formatSubagentCardTitle, isToolSummaryTruncated, formatMirrorBannerText, formatMirrorComposerHint, shouldEmitThrottledHint, acceptMirrorState, shouldResetMirrorOnViewChange, resolveComposerPrimaryMode, shouldHideComposerSendButton, pillPermTone, shouldShowComposerDiscoverHint, formatLiveActivityText, INTERRUPT_PENDING_TIMEOUT_MS, shouldClearInterruptPendingOnSystem, systemBarClass, pickSpinnerVerb, formatCliSpinnerLine, formatCliRetryLine, advanceThinkingClock, resolveLiveWaitPhase, presentOnlineSendTransport, presentOfflineResendAck, shouldBusyAfterOfflineBatch, outboxItemTargetsViewing, SEND_ACK_FALLBACK_MS, SEND_ACK_TRANSPORT_MS, OFFLINE_RESEND_ACK_MS, planOutboxDrainNotice, planOutboxEnqueue, parseDurableOutbox, dumpDurableOutbox, OUTBOX_STORAGE_KEY, OUTBOX_MAX_ITEMS, safeJsonPreview, shouldSeedBusyFromInstanceState, shouldReseedBusyAfterReload, shouldBindBusyFromBroadcast, shouldForceClearBusyFromBroadcast, buildClientErrorReport, clientErrorGateStep, formatLogsForCopy, isRestoredBoundary, guessImageMime, formatDiagLogEntry, filterConsoleEntries, nextHistoryRenderChunk, findHistoryClaimForPending, resolveUnreadAnchorIndex, shouldAckUnreadOnScroll, resolveForkAnchorUuid, detectAtMentionQuery, applyAtMentionPick, unifiedDiffLines, MAX_DIFF_LINES_FOR_LCS, formatStatuslineCollapsedSummary, formatStatuslineCopyText, formatStatuslineCtxLeft, formatWorkspaceChangeBadge, readPushPreviewPref, writePushPreviewPref, shouldRerenderSessionList, buildDirInstanceSignatures, diffDirSignatures, permissionModeTileSpecs, resolveComposerPlaceholder, resolveTurnEndScroll, resolveSendModel, applyGatewaySuffix, formatRestartRows, formatAgoShort, formatAuditEntry, isLanOrLocalHostname, authFailurePath} from './logic.js';
 import { t, setLang, getLang, resolveInitialLang, readLangPref, writeLangPref, applyI18nToDocument } from './i18n.js';
 import { createAppContext } from './app/context.js';
 import { createClientLogger } from './app/client-log.js';
@@ -1393,7 +1393,7 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
   // 数据走鉴权 service:status ack（doctor:run 同构）；打开即拉、开着时 5s 重拉（后台 tab 跳过）、关闭即停。
   const serviceStatusModal = $('serviceStatusModal'), serviceStatusBody = $('serviceStatusBody');
   let serviceStatusTimer = null;
-  function renderServiceStatus(res) {
+  function renderServiceStatus(res, auditRecords) {
     if (!serviceStatusBody) return;
     const now = Date.now();
     const section = (title, titleSuffix) => {
@@ -1441,7 +1441,32 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
       }
     }
     serviceStatusBody.appendChild(noticesSection);
-    // 段3 重启记录：谁在什么时候重启过。launchd 只留「最后一次退出码」那个瞬时值，
+    // 段3 安全日志：上面那段告警的下钻。告警说「发生了什么」（限速锁定过、推送失败过），
+    // 这一段回答「是谁、几次、从哪来」——审计记录自始就在写，此前 web 端没有任何读取面。
+    const auditSection = section(t('安全日志'), t('（最近 20 条）'));
+    if (!Array.isArray(auditRecords)) {
+      const row = el(`<div class="px-3 py-2.5 text-xs text-ink-faint"></div>`);
+      row.textContent = t('暂时读取不到（服务端未响应）');
+      auditSection.lastChild.appendChild(row);
+    } else if (!auditRecords.length) {
+      const row = el(`<div class="px-3 py-2.5 text-xs text-ink-faint"></div>`);
+      row.textContent = t('暂无记录');
+      auditSection.lastChild.appendChild(row);
+    } else {
+      // 不复用 addRow：那是「标签 : 数值」的两栏行（右栏 text-right tabular-nums），审计文案
+      // 是长句子，右对齐 + 等宽数字在窄屏上会折成难读的阶梯。这里用「时间靠左、文案满宽」的布局。
+      for (const rec of auditRecords) {
+        const entry = formatAuditEntry(rec);
+        const tone = entry.severity === 'danger' ? 'text-danger' : entry.severity === 'warning' ? 'text-warning' : 'text-ink';
+        const row = el(`<div class="flex items-baseline gap-2 px-3 py-2 text-xs border-t border-line-soft first:border-t-0"><span class="text-ink-faint shrink-0 tabular-nums"></span><span class="flex-1 break-words"></span></div>`);
+        row.firstChild.textContent = formatAgoShort(now - entry.ts);
+        row.lastChild.textContent = entry.text;
+        row.lastChild.classList.add(tone);
+        auditSection.lastChild.appendChild(row);
+      }
+    }
+    serviceStatusBody.appendChild(auditSection);
+    // 段4 重启记录：谁在什么时候重启过。launchd 只留「最后一次退出码」那个瞬时值，
     // 而那回答不了「这正常吗」—— 每天一次是路由器换 IP，一小时内三次才是真出事。
     const restartSection = section(t('重启记录'));
     const restartView = formatRestartRows({ restarts: res.restarts, now });
@@ -1490,14 +1515,23 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     });
   }
 
-  function loadServiceStatus() {
+  // 服务状态与安全日志是两个 ack，但必须凑齐了画一次：renderServiceStatus 是 replaceChildren
+  // 全量重绘，各自到达各自渲染会互相冲掉（先到的那段被后到的整体替换掉）。
+  const emitServiceAck = (event, payload) => new Promise(resolve => {
+    socket.timeout(3000).emit(event, payload, (err, res) => resolve(err ? null : res));
+  });
+  async function loadServiceStatus() {
     if (!serviceStatusModal || !serviceStatusModal.classList.contains('sheet-open')) return;
-    socket.timeout(3000).emit('service:status', {}, (err, res) => {
-      if (err || !res || res.ok !== true) return; // 断线/未审批设备无 ack：面板留旧值，不挂 spinner
-      // WS-019 同款迟到 ack 守卫：回包时面板已关则丢弃，防对着 hidden DOM 白渲染
-      if (!serviceStatusModal.classList.contains('sheet-open')) return;
-      renderServiceStatus(res);
-    });
+    const [status, auditRes] = await Promise.all([
+      emitServiceAck('service:status', {}),
+      // 20 条：手机上一屏能扫完的量。环形上限是 5000，全量回传是白发几百 KB。
+      emitServiceAck('audit:get', { limit: 20 }),
+    ]);
+    if (!status || status.ok !== true) return; // 断线/未审批设备无 ack：面板留旧值，不挂 spinner
+    // WS-019 同款迟到 ack 守卫：回包时面板已关则丢弃，防对着 hidden DOM 白渲染
+    if (!serviceStatusModal.classList.contains('sheet-open')) return;
+    // null（拿不到）与 []（拿到了、确实没有记录）是两件事，渲染时说法不同
+    renderServiceStatus(status, auditRes?.ok === true ? (auditRes.records || []) : null);
   }
   function closeServiceStatus() {
     if (serviceStatusTimer) { clearInterval(serviceStatusTimer); serviceStatusTimer = null; }
@@ -4655,14 +4689,14 @@ import { bindSessionSearchInput, bindSessionRowsHost } from './app/session-searc
     if (!old) return;
     old.replaceWith(buildServiceSection());
   }
-  // 顶栏会话按钮右下角标。判定在 resolveHeaderConnBadge（断开 > 告警 > 需要你 > 隐藏）。
-  // 首连中不点亮，避免开页闪红。
+  // 顶栏会话按钮右下角标。判定在 resolveHeaderConnBadge（断开 > 需要你 > 隐藏）。
+  // 首连中不点亮，避免开页闪红。服务健康（推送失败等）不进这条轴——它归抽屉「服务」小节
+  // 与服务状态面板，不与「点一下就能推进」的待办抢顶栏那唯一的位子。
   function updateAttentionSignal() {
     if (!connDotWrap) return;
     const { level } = whatNeedsAttention({
       instances: instancesList,
       needsYou: needsYouList,
-      service: latestServiceHealth,
     });
     const spec = resolveHeaderConnBadge({
       connected: headerSocketOnline,

@@ -218,18 +218,52 @@ export function formatAgoShort(ms) {
   return `${Math.floor(h / 24)} ${t('天前')}`;
 }
 
+// 限速桶 key → 来源画像。入参是后端 rlSourceKey 的产物（'ip:<桶>' / 'cfip:<桶>'，IPv6 已归成
+// /64 前缀），也就是**限速真正计数的那个粒度**——刻意不另算一套「客户端 IP」，否则面板说的地址
+// 和被锁的桶会是两回事。
+//
+// 【为什么必须分叉】(2026-09-02) 告警行此前无条件拼「可能有人在暴力尝试你的入口」。机主看到后
+// 翻 audit-records.json 才发现两次锁定的 target 都是 ip:127.0.0.1 —— 本机自己的旧 token 连试八次。
+// 一条把「自己手滑」讲成「有人在攻击你」的红色告警，比不报还糟：真出事那天它已经被当成噪音了。
+const LOOPBACK_ADDRS = new Set(['127.0.0.1', '::1', 'localhost']);
+// 私网/内网：IPv4 RFC1918 + link-local + 100.64/10（CGNAT，也是 Tailscale 的地址池）；
+// IPv6 ULA(fc00::/7 → fc/fd 开头) + link-local(fe80::/10)。边界写死在正则里——172.15/172.32、
+// 100.63/100.128 都是公网，多吃一段就会把真正的外部攻击说成「局域网」。
+function isPrivateAddr(addr) {
+  const s = addr.toLowerCase();
+  if (/^(10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(s)) return true;
+  return /^(f[cd]|fe80)/.test(s);
+}
+export function describeRateLimitSource(source) {
+  const raw = String(source ?? '').trim();
+  const addr = raw.replace(/^(?:cfip|ip):/, '');
+  if (!addr) return { scope: 'unknown', addr: '' };
+  if (LOOPBACK_ADDRS.has(addr.toLowerCase())) return { scope: 'local', addr };
+  if (isPrivateAddr(addr)) return { scope: 'lan', addr };
+  return { scope: 'public', addr };
+}
+
 export function formatServiceNotices({ service, now } = {}) {
   const notices = [];
   const countSuffix = c => (Number.isFinite(c) && c > 0 ? `${t('（累计')} ${c} ${t('次）')}` : '');
   const lockout = service && service.rateLimitLockout;
   if (lockout && typeof lockout.at === 'number') {
-    notices.push(`${t('⛔ 登录限速锁定于')} ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}${t('——可能有人在暴力尝试你的入口')}`);
+    const src = describeRateLimitSource(lockout.source);
+    // unknown（旧 server ack 无 source）保留原保守措辞：说不清来源时，宁可提醒过度也不误导为安全。
+    const tail = src.scope === 'local' ? `${t('——来自本机')} ${src.addr}${t('，多半是你自己的旧 token')}`
+      : src.scope === 'lan' ? `${t('——来自局域网')} ${src.addr}`
+        : src.scope === 'public' ? `${t('——公网')} ${src.addr} ${t('在暴力尝试你的入口')}`
+          : t('——可能有人在暴力尝试你的入口');
+    notices.push(`${t('⛔ 登录限速锁定于')} ${formatAgo(now - lockout.at)}${countSuffix(lockout.count)}${tail}`);
   }
   const df = service && service.deliveryFailure;
   if (df && typeof df.at === 'number') {
     const channelLabel = df.channel === 'ntfy' ? 'ntfy' : 'push';
     const cnt = Number.isFinite(df.count) && df.count > 0 ? `${t('，累计')} ${df.count} ${t('次')}` : '';
-    notices.push(`${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）`);
+    // reason 已由后端 describeDeliveryError 清洗（不含 endpoint URL，见 src/ops/notifications.js）。
+    // 空串也要当缺席处理，否则行尾留一个孤零零的冒号。
+    const reason = String(df.reason ?? '').trim();
+    notices.push(`${t('🔔 推送最近失败于')} ${formatAgo(now - df.at)}（${channelLabel}${cnt}）${reason ? `：${reason}` : ''}`);
   }
   const ce = service && service.clientError;
   if (ce && typeof ce.at === 'number') {
@@ -309,6 +343,73 @@ export function formatDiagLogEntry({ ts, subsystem, event, detail = {} } = {}) {
     text = `${subsystem}/${event} ${JSON.stringify(d).slice(0, 200)}`;
   }
   return { ts, type: `diag_${subsystem}`, text, severity };
+}
+
+// 审计记录 → 一行人话 + severity（服务状态面板「安全日志」段）。
+//
+// 【为什么需要它】(2026-09-02) data/audit-records.json 自始就在记这些事，但 public/ 里对 audit
+// 零命中——web 端没有任何读取面。于是抽屉那条「⛔ 有人在暴力尝试你的入口」在手机上无从下钻：
+// 看不到是哪个 IP、也看不到历史上是不是同一个来源在反复撞。告警说「发生了什么」，这一段回答
+// 「是谁、几次、从哪来」。
+//
+// 设计同 formatDiagLogEntry：判定只用在 severity 着色上，不做合并/折叠——审计的价值恰恰在于
+// 每条都在、且保持时间顺序。未知 action 兜底渲染而非静默吞掉（同一原则）。
+const AUDIT_SCOPE_LABEL = { local: '本机', lan: '局域网', public: '公网' };
+const AUDIT_NEUTRAL_TEXT = {
+  retention_cleanup: '审批记录留存清理',
+  approval_restart_expired: '重启使待审批请求失效',
+};
+export function formatAuditEntry({ ts, action, target, outcome, meta } = {}) {
+  const d = meta && typeof meta === 'object' ? meta : {};
+  const tgt = target == null ? '' : String(target);
+  const via = d.via ? ` · ${d.via}` : '';
+  // 设备 ID 是指纹 hash，全量显示既占宽又没人逐字读；前 8 位足够在几台设备间区分。
+  const shortId = tgt.slice(0, 8);
+  let text, severity = 'neutral';
+
+  if (action === 'auth_rate_limited') {
+    const src = describeRateLimitSource(tgt);
+    const where = src.scope === 'unknown' ? tgt : `${t(AUDIT_SCOPE_LABEL[src.scope])} ${src.addr}`;
+    text = `${t('登录限速锁定')} · ${where}${via}`;
+    // 只有公网来源才是安全事件。本机/局域网连试到阈值几乎总是自己的旧 token 或写错的脚本，
+    // 标成 danger 会让真正该警觉的那一条淹没在自造的红字里。
+    severity = src.scope === 'public' ? 'danger' : 'warning';
+  } else if (action === 'device_approved') {
+    text = `${t('批准设备')} ${shortId}${via}`;
+  } else if (action === 'device_denied') {
+    text = `${t('拒绝设备')} ${shortId}${via}`;
+  } else if (action === 'device_revoked') {
+    text = `${t('吊销设备')} ${shortId}${via}`;
+    severity = 'warning';
+  } else if (action === 'scope_violation') {
+    text = `${t('越界访问被拒')} · ${tgt}`;
+    severity = 'danger';
+  } else if (action === 'approval_integrity_mismatch') {
+    text = `${t('审批完整性校验失败')} · ${tgt}${d.tool ? ` · ${d.tool}` : ''}`;
+    severity = 'danger';
+  } else if (action === 'env_changed') {
+    text = `${t('修改配置')} · ${tgt}`;
+    severity = 'warning';
+  } else if (action === 'server_restart') {
+    text = `${t('重启服务')}${d.via ? ` · ${d.via}` : ''}${d.reason ? ` · ${d.reason}` : ''}`;
+    if (outcome === 'denied') severity = 'warning';
+  } else if (action === 'session_delete_l2') {
+    text = `${t('永久删除会话')} ${tgt}`;
+  } else if (action === 'file_write') {
+    // 路径尾段即可：手机屏放不下绝对路径，而「改了哪个文件」才是这条记录的信息量所在。
+    text = `${t('写入文件')} ${tgt.split('/').pop() || tgt}`;
+  } else if (AUDIT_NEUTRAL_TEXT[action]) {
+    text = t(AUDIT_NEUTRAL_TEXT[action]);
+  } else {
+    text = `${action || '?'}${tgt ? ` · ${tgt}` : ''}`;
+  }
+
+  // 同一个 action 的成功与失败必须看得出区别。但只追加**文案里没说过**的 outcome：
+  // success/allowed 追加等于每行拖一个信息量为零的尾巴；denied/locked 已经写在动词里了
+  // （「被拒」「拒绝设备」「限速锁定」）。剩下的 partial_failure / error 才是必须显式说出来的。
+  const OUTCOME_ALREADY_IN_TEXT = new Set(['success', 'allowed', 'denied', 'locked', undefined, null, '']);
+  if (!OUTCOME_ALREADY_IN_TEXT.has(outcome)) text += `（${outcome}）`;
+  return { ts, type: 'audit', text, severity };
 }
 
 // 交互日志抽屉「全部｜交互｜诊断」三态过滤：诊断行的 type 统一 diag_ 前缀。未知 filter 值保守

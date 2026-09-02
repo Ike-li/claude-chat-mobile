@@ -1,7 +1,7 @@
 // tests/unit/notifications.test.mjs —— notificationForEvent 纯映射单测（零副作用，不碰 web-push 传输）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notificationForDeviceRequest, notificationForCliHook, sanitizeNotifySessionTitle, formatNotifyIdentity, notifyHasClientsAtSend } from '../../src/ops/notifications.js';
+import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notificationForDeviceRequest, notificationForCliHook, sanitizeNotifySessionTitle, formatNotifyIdentity, notifyHasClientsAtSend, describeDeliveryError } from '../../src/ops/notifications.js';
 
 // ── BE-014：push 订阅结构校验（落盘前拦畸形，防 .slice() 抛 500 + 污染后续推送）──────────────
 test.describe('isValidPushSubscription', () => {
@@ -648,5 +648,37 @@ test.describe('gateway_stall 静默告警推送', () => {
     const meta = ntfyMetaFor('system', {}, '');
     assert.equal(meta.priority, 3, '告警无需即时响应（10 分钟自动中断兜底在），不得抬 urgent');
     assert.deepEqual(meta.tags, ['hourglass_flowing_sand']);
+  });
+});
+
+// ── describeDeliveryError：投递失败原因 → 一行短语（2026-09-02）──────────────────────
+// 起因：push/ntfy 失败此前只 console.error，statusCode 与 message 进 stdout 就没了。面板拿到的
+// 只有 {channel, at, count}，于是「🔔 推送失败」这条告警在 UI 上永远无从下钻——分不清是网络不通
+// 还是 VAPID 配错。这个函数把原因压成一行、且**保证不带 endpoint URL**（那是推送凭证）。
+test.describe('describeDeliveryError', () => {
+  test('有 HTTP 状态码 → 优先用它（最能定位问题的一维）', () => {
+    assert.equal(describeDeliveryError({ statusCode: 502, message: 'Bad Gateway' }), 'HTTP 502');
+    assert.equal(describeDeliveryError({ statusCode: 401 }), 'HTTP 401');
+  });
+  test('无状态码但有 Node 错误码 → 用错误码（ETIMEDOUT 这类短且无敏感信息）', () => {
+    assert.equal(describeDeliveryError({ code: 'ETIMEDOUT' }), 'ETIMEDOUT');
+    assert.equal(describeDeliveryError({ code: 'ENOTFOUND', message: 'getaddrinfo ENOTFOUND fcm.googleapis.com' }), 'ENOTFOUND');
+  });
+  test('message 内嵌 URL → 整条丢弃，绝不把订阅 endpoint 泄进 UI', () => {
+    const e = { message: 'request to https://fcm.googleapis.com/fcm/send/cKq9_SECRET_TOKEN failed, reason: connect ETIMEDOUT' };
+    const r = describeDeliveryError(e);
+    assert.equal(r, 'network error');
+    assert.ok(!r.includes('SECRET_TOKEN'));
+    assert.ok(!r.includes('fcm.googleapis.com'));
+  });
+  test('纯文本 message → 原样（超 60 字截断）', () => {
+    assert.equal(describeDeliveryError({ message: 'socket hang up' }), 'socket hang up');
+    const long = 'x'.repeat(80);
+    assert.equal(describeDeliveryError({ message: long }), `${'x'.repeat(60)}…`);
+  });
+  test('空/畸形入参 → unknown（绝不抛，投递失败路径上再抛一次就吞掉原始错误了）', () => {
+    for (const v of [null, undefined, {}, { message: '   ' }]) {
+      assert.equal(describeDeliveryError(v), 'unknown', String(v));
+    }
   });
 });

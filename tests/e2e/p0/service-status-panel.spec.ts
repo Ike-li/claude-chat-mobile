@@ -32,7 +32,9 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(body).toContainText('重启记录');
     await expect(body).toContainText('com.ccm.tunnel');
     await expect(body).toContainText('24 小时内 1 次');
-    await expect(body.locator('.text-warning')).toHaveCount(0);
+    // 只针对重启摘要断言"不标黄"。此前这里是全面板 .text-warning count 0，安全日志段落地后
+    // 那条本机限速记录（warning）会让它红——但那不是重启段的回归，判据得说清自己在测哪一段。
+    await expect(body.locator('.text-warning', { hasText: '小时内重启' })).toHaveCount(0);
 
     // 3. 裸计数器段已撤：不再渲染「运行指标」及其行 label
     await expect(body).not.toContainText('运行指标');
@@ -117,9 +119,36 @@ test.describe('P0 日常零 token Mock UI 回归', () => {
     await expect(body).toContainText('前端错误发生于 3 分钟前（累计 5 次），详见日志面板');
 
     // 3. 判色：⛔ 红（安全事件）、🐞 黄（判色查 classList 非 textContent）
-    await expect(body.locator('.text-danger', { hasText: '登录限速锁定' })).toBeVisible();
+    // hasText 带「于」：安全日志段也有一行「登录限速锁定 · 公网 …」同为 text-danger，
+    // 不加这个字会同时命中两行、触发 strict mode violation。
+    await expect(body.locator('.text-danger', { hasText: '登录限速锁定于' })).toBeVisible();
     await expect(body.locator('.text-warning', { hasText: '前端错误' })).toBeVisible();
     await expect(body).not.toContainText('✓ 无异常');
+
+    await expectNoBrowserErrors(page);
+  });
+
+  // 安全日志段（2026-09-02）：告警段说「发生过限速锁定」，这一段回答「是谁」。
+  // 机主实际遇到的两次锁定来源都是 ip:127.0.0.1（自己的旧 token），而告警文案当时无条件写
+  // 「可能有人在暴力尝试你的入口」——这条用例把「来源分档 → 措辞与判色都跟着变」钉死。
+  test('P0-22e 安全日志段：审计记录译成人话，来源决定措辞与判色', async ({ page }) => {
+    await gotoMock(page);
+
+    await openGeneralSettings(page);
+    await openGeneralDiagSection(page);
+    await page.locator('#btnServiceStatus').click();
+    const body = page.locator('#serviceStatusBody');
+
+    await expect(body).toContainText('安全日志');
+    await expect(body).toContainText('（最近 20 条）');
+
+    // 公网来源 → 红：这才是该警觉的那一类
+    await expect(body.locator('.text-danger', { hasText: '登录限速锁定 · 公网 203.0.113.7 · http' })).toBeVisible();
+    // 本机来源 → 黄：连试八次是手滑不是入侵。判色查 classList（textContent 分不出档）
+    await expect(body.locator('.text-warning', { hasText: '登录限速锁定 · 本机 127.0.0.1 · http' })).toBeVisible();
+    // 中性事件 → 常规色，且设备 ID 截到 8 位（全量指纹既占宽也没人逐字读）
+    await expect(body).toContainText('批准设备 dev01234 · web');
+    await expect(body).not.toContainText('dev0123456789');
 
     await expectNoBrowserErrors(page);
   });

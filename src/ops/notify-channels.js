@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import webpush from 'web-push';
-import { ntfyRequestInit } from './notifications.js';
+import { ntfyRequestInit, describeDeliveryError } from './notifications.js';
 import * as metrics from './metrics.js';
 import { writeOwnerOnlyFile } from '../files/file-security.js';
 
@@ -72,6 +72,7 @@ export function createNotifyChannels({
           else {
             metrics.inc('push_failure'); console.error('[push] 推送失败:', e.statusCode ?? '', e.message); // notify_failed 信号：真失败（非订阅过期）才计
             metrics.gauge('push_failure_last_ts', Date.now()); onDeliveryFailure(); // 服务状态可见性：带时间戳，供 recentDeliveryFailure 判定
+            metrics.label('delivery_failure_reason', describeDeliveryError(e)); // 让面板说得出「为什么」，而不只是「失败了」（已剥 endpoint）
           }
         });
     }));
@@ -97,10 +98,12 @@ export function createNotifyChannels({
         // 静默当成功。只记状态码（不记 title/body：SEC-04 明文经第三方，勿落日志）。不重试不阻断主流程。
         console.error(`[ntfy] 推送失败: HTTP ${res.status}`);
         metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); onDeliveryFailure();
+        metrics.label('delivery_failure_reason', `HTTP ${res.status}`);
       }
     } catch (e) {
       console.error('[ntfy] 推送失败:', e.message);
       metrics.inc('ntfy_failure'); metrics.gauge('ntfy_failure_last_ts', Date.now()); onDeliveryFailure();
+      metrics.label('delivery_failure_reason', describeDeliveryError(e));
     }
   }
 

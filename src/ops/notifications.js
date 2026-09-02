@@ -314,6 +314,25 @@ export function ntfyRequestInit({ url, topic, token }, title, body, meta = {}) {
 // 变更任何状态【之前】用本函数校验，非法即 400。
 // 标准 PushSubscription.toJSON()：{ endpoint:<http(s) URL 字符串>, keys:{ p256dh, auth }, expirationTime? }；
 // keys 为 web-push RFC 8291 加密所必需，缺失会让 sendNotification 抛错，故一并强制。
+// 投递失败原因 → 一行短语，供服务状态面板/抽屉的「🔔 推送最近失败」行下钻。
+//
+// 【为什么要清洗，不能直接吐 message】web-push 的网络错误 message 里内嵌完整 endpoint
+// （"request to https://fcm.googleapis.com/fcm/send/<token> failed, …"），而 endpoint 就是推送
+// 凭证——拿到它的人能给这台设备发任意通知。它出现在 UI 上、日志里、截图里都算泄露。
+// 含 URL 的 message 整条丢弃而不是正则剔 URL：剔完剩下的「failed, reason: connect ETIMEDOUT」
+// 也没比 'network error' 多说什么，而正则漏一个变体就是凭证外泄，不对称。
+// 优先级 statusCode > code > 纯文本 message：前两者短、稳定、无敏感信息，且正是定位问题要看的那一维
+// （HTTP 401=VAPID 配错，HTTP 502/ETIMEDOUT=网络不通）。
+export function describeDeliveryError(err) {
+  if (!err || typeof err !== 'object') return 'unknown';
+  if (typeof err.statusCode === 'number') return `HTTP ${err.statusCode}`;
+  if (err.code) return String(err.code);
+  const msg = String(err.message ?? '').trim();
+  if (!msg) return 'unknown';
+  if (/https?:\/\//.test(msg)) return 'network error';
+  return msg.length > 60 ? `${msg.slice(0, 60)}…` : msg;
+}
+
 export function isValidPushSubscription(sub) {
   if (!sub || typeof sub !== 'object' || Array.isArray(sub)) return false;
   if (typeof sub.endpoint !== 'string' || sub.endpoint.length === 0) return false;

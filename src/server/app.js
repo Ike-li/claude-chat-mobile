@@ -428,6 +428,7 @@ const httpAuth = createHttpAuth({
       });
       metrics.inc('rate_limit_lockouts');
       metrics.gauge('rate_limit_lockouts_last_ts', Date.now()); // 服务状态可见性：带时间戳，供 recentIncident 判定
+      metrics.label('rate_limit_last_source', key); // 面板据此分辨本机手滑 / 局域网 / 公网暴破（见 describeRateLimitSource）
     },
   },
 });
@@ -726,6 +727,7 @@ io.use(async (socket, next) => {
         audit.recordAudit({ actor: { deviceId: null, via: 'unauthenticated' }, action: 'auth_rate_limited', target: rlKey, outcome: 'locked', meta: { retryAfterMs: rlResult.retryAfterMs, via: 'socket' } });
         metrics.inc('rate_limit_lockouts'); // 限速触发数（与审计同粒度：每锁定窗口一次）
         metrics.gauge('rate_limit_lockouts_last_ts', Date.now()); // 服务状态可见性：带时间戳，供 recentIncident 判定
+        metrics.label('rate_limit_last_source', rlKey); // 与 HTTP 侧同一个键：面板文案按来源分叉的唯一判据
       }
     }
 
@@ -947,12 +949,20 @@ function computeServiceHealth() {
   // 就会触发），而前端只在 service:status 的 ack 里读 restarts —— 放广播里那份零消费者，白发
   // payload 给每台连着的设备，还每次同步 readFileSync + JSON.parse 一遍。面板那条路径在
   // service:status handler 里单独调 serviceSampler.summarize()。
+  // reason / source 是 label（非数值上下文，见 metrics.js）：让面板从「失败了/有人在试」进一步
+  // 说出「为什么/是谁」。都可能为 null——旧进程重启后 label 清零而计数时间戳仍在窗内，前端按缺席渲染。
   return {
     startedAt: SERVICE_STARTED_AT,
     deliveryFailure: failure
-      ? { ...failure, count: (failure.channel === 'ntfy' ? c.ntfy_failure : c.push_failure) ?? 0 }
+      ? {
+        ...failure,
+        count: (failure.channel === 'ntfy' ? c.ntfy_failure : c.push_failure) ?? 0,
+        reason: metrics.getLabel('delivery_failure_reason'),
+      }
       : null,
-    rateLimitLockout: lockout ? { ...lockout, count: c.rate_limit_lockouts ?? 0 } : null,
+    rateLimitLockout: lockout
+      ? { ...lockout, count: c.rate_limit_lockouts ?? 0, source: metrics.getLabel('rate_limit_last_source') }
+      : null,
     clientError: clientError ? { ...clientError, count: c.client_errors ?? 0 } : null,
     // hooks 桥安装态：前端据此在设置面板显示开关、在只读镜像页提示未装。缓存读盘结果——
     // 这个值只在用户装/卸时变，而 instances 广播很频繁。
@@ -3121,6 +3131,20 @@ registerSocketConnection(io, socket => {
       },
       timestamp: Date.now(),
     });
+  });
+
+  // 安全日志：审计记录的**唯一**读取面（2026-09-02）。此前 audit-records.json 只写不读——
+  // 限速锁定的来源 IP、设备批准/拒绝、越界访问全都记着，但手机上一条也看不到，于是「⛔ 有人在
+  // 暴力尝试你的入口」这类告警无从下钻（机主实际遇到的两次锁定来源都是 ip:127.0.0.1）。
+  //
+  // 只读、无副作用、走 on() 的 deviceApproved 闸（与其余 socket 事件同一道门）。不开 HTTP 端点：
+  // 守「不开无鉴权数据端点」，且审计里有设备指纹与来源 IP，比会话列表更该留在鉴权面内。
+  // limit 上限 200：手机上没人翻更多，而 records 环形上限是 5000，全量回传是几百 KB 的白发。
+  on(socket, 'audit:get', (payload, ack) => {
+    if (typeof ack !== 'function') return;
+    const raw = Number(payload?.limit);
+    const limit = Number.isFinite(raw) && raw > 0 ? Math.min(raw, 200) : 50;
+    ack({ ok: true, records: audit.listRecent({ limit }), capacity: audit.capacity() });
   });
 
   // 「刷新消息」（前端按钮文案）：mirror 横幅的确定性追平入口——强制触发一次 catchUpTick（正常 2.5s 自动跑，

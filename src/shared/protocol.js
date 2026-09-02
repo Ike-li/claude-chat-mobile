@@ -45,6 +45,7 @@ export const AGENT_EVENT_TYPES = Object.freeze([
 
 // 入向事件名（客户端 → 服务端）白名单。
 export const INBOUND_SOCKET_EVENTS = Object.freeze([
+  'audit:get',
   'browse:list',
   'browse:read',
   'client:presence',

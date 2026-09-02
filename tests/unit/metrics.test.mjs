@@ -1,7 +1,7 @@
 // tests/unit/metrics.test.mjs —— metrics.js 单测（docs/design.md MetricsCollector + StateProbe，承接 NFR-15）
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inc, gauge, snapshot, reset, classifyState, recentDeliveryFailure, recentIncident } from '../../src/ops/metrics.js';
+import { inc, gauge, label, getLabel, snapshot, reset, classifyState, recentDeliveryFailure, recentIncident } from '../../src/ops/metrics.js';
 
 test.describe('MetricsCollector（docs/design.md 指标最小集）', () => {
   test.beforeEach(() => reset());
@@ -37,6 +37,36 @@ test.describe('MetricsCollector（docs/design.md 指标最小集）', () => {
     inc('a'); gauge('b', 1);
     reset();
     assert.deepEqual(snapshot(), { counters: {}, gauges: {} });
+  });
+});
+
+// label/getLabel：非数值的「最近一次」上下文（2026-09-02）。
+// 存在理由——counters 回答「发生过几次」，gauges 回答「上次什么时候」，但两者都答不出
+// 「是谁 / 为什么」。限速锁定的来源桶、推送投递失败的原因，此前只进 console，UI 拿不到，
+// 于是面板只能说「有人可能在暴力尝试」「推送失败了」这种无从下钻的话。
+test.describe('label：非数值上下文（与 counters/gauges 命名空间独立）', () => {
+  test.beforeEach(() => reset());
+
+  test('覆盖式写入 + 读取', () => {
+    label('rate_limit_last_source', 'ip:127.0.0.1');
+    assert.equal(getLabel('rate_limit_last_source'), 'ip:127.0.0.1');
+    label('rate_limit_last_source', 'cfip:203.0.113.7');
+    assert.equal(getLabel('rate_limit_last_source'), 'cfip:203.0.113.7');
+  });
+
+  test('未写过 → null（不是 undefined：要能直接进 JSON payload）', () => {
+    assert.equal(getLabel('never_set'), null);
+  });
+
+  test('不进 snapshot：/metrics 保持纯数值面（有 scraper 时不会被字符串噎住）', () => {
+    label('rate_limit_last_source', 'ip:10.0.0.1');
+    assert.deepEqual(snapshot(), { counters: {}, gauges: {} });
+  });
+
+  test('reset 一并清空', () => {
+    label('k', 'v');
+    reset();
+    assert.equal(getLabel('k'), null);
   });
 });
 

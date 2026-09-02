@@ -86,15 +86,15 @@ test.describe('readPushPreviewPref / writePushPreviewPref：推送内容预览�
 });
 
 // ---- whatNeedsAttention：顶栏注意力信号（抽屉不再放 live 实例汇总）----
-test.describe('whatNeedsAttention：ok / attention / alert', () => {
+// 只聚合「此刻你能处理的待办」。服务健康（推送失败等）刻意不在这条轴上——见函数头注。
+test.describe('whatNeedsAttention：ok / attention', () => {
   test('全空 → ok', () => {
     assert.deepEqual(whatNeedsAttention({}), { level: 'ok', items: [] });
-    assert.deepEqual(whatNeedsAttention({ instances: [], needsYou: [], service: null }), { level: 'ok', items: [] });
+    assert.deepEqual(whatNeedsAttention({ instances: [], needsYou: [] }), { level: 'ok', items: [] });
   });
   test('needsYou 非空 → attention', () => {
     const r = whatNeedsAttention({
       needsYou: [{ reason: 'awaiting_approval', instanceId: 'i1', title: '批 Bash' }],
-      service: { deliveryFailure: null },
     });
     assert.equal(r.level, 'attention');
     assert.equal(r.items.length, 1);
@@ -108,14 +108,23 @@ test.describe('whatNeedsAttention：ok / attention / alert', () => {
     assert.equal(r.level, 'attention');
     assert.equal(r.items[0].ref, 'i1');
   });
-  test('deliveryFailure → alert（优先于 attention）', () => {
+  // 2026-09-02：deliveryFailure 曾在此 return alert，把已攒好的 needsYou 整个短路掉——
+  // 一次 24h 前的推送失败能把「3 个审批等你」从顶栏挤掉整整一天。运维告警不与待办抢槽位。
+  test('deliveryFailure 不再进注意力轴：有待办仍是 attention', () => {
     const r = whatNeedsAttention({
       needsYou: [{ reason: 'awaiting_input', instanceId: 'i1' }],
       service: { deliveryFailure: { channel: 'push', at: 1, count: 2 } },
     });
-    assert.equal(r.level, 'alert');
-    assert.ok(r.items.some(i => i.kind === 'delivery_failure'));
+    assert.equal(r.level, 'attention');
+    assert.ok(r.items.every(i => i.kind !== 'delivery_failure'));
     assert.ok(r.items.some(i => i.kind === 'awaiting_input'));
+  });
+  test('deliveryFailure 且无待办 → ok（顶栏保持安静，告警只活在抽屉/服务面板）', () => {
+    const r = whatNeedsAttention({
+      needsYou: [],
+      service: { deliveryFailure: { channel: 'push', at: 1, count: 2 } },
+    });
+    assert.deepEqual(r, { level: 'ok', items: [] });
   });
 });
 
@@ -160,14 +169,6 @@ test.describe('resolveHeaderConnBadge：有事才出现', () => {
     assert.match(r.title, /2/);
   });
 
-  test('已连接 + 服务告警 → danger', () => {
-    const r = resolveHeaderConnBadge({ connected: true, everConnected: true, attentionLevel: 'alert' });
-    assert.equal(r.visible, true);
-    assert.equal(r.tone, 'danger');
-    assert.equal(r.reason, 'alert');
-    assert.match(r.title, /服务告警/);
-  });
-
   test('断开优先于需要你', () => {
     const r = resolveHeaderConnBadge({
       connected: false,
@@ -180,8 +181,8 @@ test.describe('resolveHeaderConnBadge：有事才出现', () => {
     assert.equal(r.visible, true);
   });
 
-  test('首连中即使有 alert 也不点亮', () => {
-    const r = resolveHeaderConnBadge({ connected: false, everConnected: false, attentionLevel: 'alert' });
+  test('首连中即使有待办也不点亮', () => {
+    const r = resolveHeaderConnBadge({ connected: false, everConnected: false, attentionLevel: 'attention', needsYouCount: 2 });
     assert.equal(r.visible, false);
     assert.equal(r.conn, 'connecting');
   });
@@ -213,11 +214,12 @@ test.describe('resolveHeaderAttentionChip：顶栏文字 chip 按优先级只说
     assert.equal(r.text, '未连接');
   });
 
-  test('服务告警 → danger「推送失败」（whatNeedsAttention 的 alert 只来自 deliveryFailure，文案说具体事）', () => {
+  // 2026-09-02：曾有一级 alert 写死「推送失败」压在「需要你」之上。推送失败在手机上无从处理
+  // （要去改网络/代理），却能在 24h 里独占这个位子——已整条移出，顶栏只说能处理的事。
+  test('推送失败不再占顶栏：未知 badgeReason 回落到其他工作区/隐藏', () => {
     const r = resolveHeaderAttentionChip({ badgeReason: 'alert', needsYouCount: 3 });
-    assert.equal(r.tone, 'danger');
-    assert.equal(r.reason, 'alert');
-    assert.equal(r.text, '推送失败');
+    assert.equal(r.visible, false);
+    assert.equal(r.reason, 'ok');
   });
 
   test('需要你 → warning「需要你 N」；计数缺失时只写「需要你」不写 0', () => {
