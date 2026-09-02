@@ -17,6 +17,14 @@ export function isInstanceBeingWatched(id, viewingInstanceId, hasForegroundClien
   return hasForegroundClient === true;
 }
 
+// sync:since 带给前端的胶囊数字。快照是上次 captureUnreadSnapshot（connect/setViewing/switch）
+// 冻住的；PWA 切后台 socket 未断时那三次都不会跑，离开期间的增量只在 live 里。只回 snapshot
+// 就会出现「收到完成推送、点回去胶囊是 0」。
+export function unreadOnEntryForSync({ instanceId, viewingInstanceId, snapshot = 0, live = 0 } = {}) {
+  if (instanceId == null || instanceId !== viewingInstanceId) return 0;
+  return (Number(snapshot) || 0) + (Number(live) || 0);
+}
+
 // 这条 envelope 是否代表一条新出现的"顶层消息"（未读计数的颗粒度：用户消息 + assistant 文字回复，
 // 不含工具调用/thinking），以及去重游标 lastCountedMessageId 的下一个值（调用方应无条件写回，
 // 未变化时值不变，天然幂等）。user_message 每次 send() 恰好 emit 一次，天然不重复；text_delta 只认

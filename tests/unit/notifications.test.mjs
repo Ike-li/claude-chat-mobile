@@ -1,6 +1,7 @@
 // tests/unit/notifications.test.mjs —— notificationForEvent 纯映射单测（零副作用，不碰 web-push 传输）
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { notificationForEvent, ntfyMetaFor, ntfyRequestInit, throttleNotify, clearNotifyPending, NOTIFY_CATEGORY, STALL_NOTIFY_INTERVAL_MS, isValidPushSubscription, hasForegroundApprovedClient, shouldNotifyBackgroundRunning, notificationForBackgroundRunning, notificationForDeviceRequest, notificationForCliHook, sanitizeNotifySessionTitle, formatNotifyIdentity, notifyHasClientsAtSend, describeDeliveryError } from '../../src/ops/notifications.js';
 
 // ── BE-014：push 订阅结构校验（落盘前拦畸形，防 .slice() 抛 500 + 污染后续推送）──────────────
@@ -363,6 +364,17 @@ test('notifyHasClientsAtSend: result/system 发出前用现场值；其余保持
   assert.equal(notifyHasClientsAtSend('result', false, false), false);
   assert.equal(notifyHasClientsAtSend('permission_request', false, true), false, '无条件推的类型不改快照');
   assert.equal(notifyHasClientsAtSend('task_notification', false, true), false);
+});
+
+test('app.js 标题 peek 的 catch 也必须走 notifyHasClientsAtSend（then 已有；catch 漏了会在人回前台后仍推）', () => {
+  const src = readFileSync(new URL('../../src/server/app.js', import.meta.url), 'utf8');
+  const start = src.indexOf('sessionTitleForNotify(notifyOpts.cwd, notifyOpts.sessionId)');
+  assert.ok(start >= 0, '找不到 onEvent 里的 sessionTitleForNotify');
+  const chunk = src.slice(start, start + 1600);
+  const catchIdx = chunk.indexOf('.catch(');
+  assert.ok(catchIdx >= 0, '找不到标题 peek 的 catch');
+  assert.match(chunk.slice(catchIdx), /notifyHasClientsAtSend/,
+    'catch 把节流时的 notifyOpts 原样发出去，peek 失败且人已回会话仍会推 result');
 });
 
 test('notificationForBackgroundRunning 带 sessionTitle → title 追加会话', () => {

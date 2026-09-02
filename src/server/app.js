@@ -102,7 +102,7 @@ import {
   tokenMatches as secureTokenMatches,
 } from './http.js';
 import { createInstanceManager } from './instance-manager.js';
-import { isInstanceBeingWatched, resolveUnreadDelta } from './unread-tracker.js';
+import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from './unread-tracker.js';
 import { createSocketEventRegistrar, registerSocketConnection } from './socket.js';
 import { createMirrorEngine } from './mirror-engine.js';
 import { registerFileSocketHandlers } from './socket-files.js';
@@ -1752,9 +1752,12 @@ function openInstance({ cwd, resumeId = null, mode, effort, transcriptMode = nul
             const hasClients = notifyHasClientsAtSend(type, notifyOpts.hasClients, liveHasClients);
             emitNotify(notificationForEvent(type, payload, { ...notifyOpts, sessionTitle, hasClients }), type);
           }).catch(() => {
+            const liveHasClients = hasForegroundApprovedClient(approvedSocketObjects()) && viewingInstanceId === notifyOpts.instanceId;
+            const hasClients = notifyHasClientsAtSend(type, notifyOpts.hasClients, liveHasClients);
             emitNotify(notificationForEvent(type, payload, {
               ...notifyOpts,
               sessionTitle: sessions.getSession(notifyOpts.sessionId)?.title,
+              hasClients,
             }), type);
           });
         }
@@ -2549,6 +2552,7 @@ registerSocketConnection(io, socket => {
     const id = payload?.instanceId;
     if (id == null || id !== viewingInstanceId) return;
     unreadSnapshotOnEntry.delete(id);
+    unreadCounts.delete(id); // 胶囊数字含 live；只清快照会在下次 sync 把活计数再送回去
     broadcastInstances();
   });
 
@@ -3191,8 +3195,8 @@ registerSocketConnection(io, socket => {
     // 让重连客户端能据此清屏重载历史（connect 路径不像 bindView 那样先 clearView，无法靠 replayed 自辨）。
     // diskLen=磁盘 transcript 的 history 条数（仅 replayed=0 时读、带回）：供前端切入对账「离开期间被终端外部
     // 写入」的盲区——磁盘比前端已渲染长即清屏全量重载（见 logic.js shouldReloadOnEnter）。
-    // unreadOnEntry：进入/回到这个实例时应展示的未读胶囊数字，取自 captureUnreadSnapshot 冻结的快照
-    // （user:setViewing / session:switch / 断线重连 / 设备批准写入）。默认 0（未指定不展示）。
+    // unreadOnEntry：进入/回到这个实例时应展示的未读胶囊数字 = 冻结快照 + 尚未 capture 的 live。
+    // PWA 切后台 socket 未断时 capture 不会跑，只回快照会把离开期间的增量丢掉。
     const done = (replayed, gap, found = true, pending = null, diskLen = null, unreadOnEntry = 0) => {
       if (typeof ack === 'function') ack({ replayed, gap: Boolean(gap), found: Boolean(found), pending, diskLen, unreadOnEntry });
     };
@@ -3230,7 +3234,13 @@ registerSocketConnection(io, socket => {
     // （所有 clearView 之后，尤其 gap→重载路径）据此重建卡片，杜绝「角标 ⚠️ 待审批但会话内无卡片」。
     // unreadOnEntry 只在这就是当前查看实例时才有意义——captureUnreadSnapshot 只对 viewingInstanceId 写入，
     // 非当前查看实例的快照要么不存在要么是上一轮陈旧值，不应被当前这次 sync:since 误报出去。
-    const unreadOnEntry = a.instanceId === viewingInstanceId ? (unreadSnapshotOnEntry.get(a.instanceId) || 0) : 0;
+    // 必须把 live 算进去：PWA 切后台 socket 未断时 capture 不会跑，增量只在 unreadCounts 里。
+    const unreadOnEntry = unreadOnEntryForSync({
+      instanceId: a.instanceId,
+      viewingInstanceId,
+      snapshot: unreadSnapshotOnEntry.get(a.instanceId) || 0,
+      live: unreadCounts.get(a.instanceId) || 0,
+    });
     done(replayed, gap, true, a.pendingRequestsSnapshot(), diskLen, unreadOnEntry);
     // 切入/切回后 clearView 会先把 statusline 藏掉；setViewing/switch 的 300ms 防抖刷新可能已在 clearView
     // 之前发出并被清空。此处在 sync 完成后再强制重发一次（清 lastStatusLine 防 key 去重把「已发过但被 clearView 擦掉」的那次吞掉），

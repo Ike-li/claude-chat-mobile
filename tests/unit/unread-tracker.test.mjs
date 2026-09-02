@@ -3,7 +3,8 @@
 // 两个独立判断（有没有人在看 / 这条事件是不是一条新的顶层消息），混在 onEvent 大回调里写容易漏分支。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isInstanceBeingWatched, resolveUnreadDelta } from '../../src/server/unread-tracker.js';
+import { readFileSync } from 'node:fs';
+import { isInstanceBeingWatched, resolveUnreadDelta, unreadOnEntryForSync } from '../../src/server/unread-tracker.js';
 
 test.describe('isInstanceBeingWatched', () => {
   test('非当前查看实例：无论房间是否有人都判定为未在看', () => {
@@ -30,6 +31,31 @@ test.describe('isInstanceBeingWatched', () => {
   test('viewingInstanceId 为 null（空首页）：不判定为在看任何实例', () => {
     assert.equal(isInstanceBeingWatched(null, null, true), false);
     assert.equal(isInstanceBeingWatched('inst-1', null, true), false);
+  });
+});
+
+test.describe('unreadOnEntryForSync', () => {
+  // sync:since 原先只回 snapshot。PWA 切后台 socket 未断时 captureUnreadSnapshot 不会跑
+  // （connect/setViewing/switch 都没发生），活计数攒在 unreadCounts 里，ack 仍带 0 → 胶囊不出现。
+  test('当前查看实例：胶囊数字 = 未 ack 快照 + 离开期间活计数', () => {
+    assert.equal(unreadOnEntryForSync({ instanceId: 'inst-1', viewingInstanceId: 'inst-1', snapshot: 0, live: 3 }), 3);
+    assert.equal(unreadOnEntryForSync({ instanceId: 'inst-1', viewingInstanceId: 'inst-1', snapshot: 2, live: 3 }), 5);
+  });
+
+  test('不是当前查看实例：即使有活计数也回 0（避免把后台会话的快照误报到当前 sync）', () => {
+    assert.equal(unreadOnEntryForSync({ instanceId: 'inst-2', viewingInstanceId: 'inst-1', snapshot: 4, live: 7 }), 0);
+  });
+
+  test('缺省/脏入参不崩，当 0', () => {
+    assert.equal(unreadOnEntryForSync(), 0);
+    assert.equal(unreadOnEntryForSync({ instanceId: 'inst-1', viewingInstanceId: 'inst-1' }), 0);
+    assert.equal(unreadOnEntryForSync({ instanceId: null, viewingInstanceId: null, snapshot: 2, live: 2 }), 0);
+  });
+
+  test('app.js sync:since 必须把 live 交给 unreadOnEntryForSync（只回快照会让 PWA 后台路径胶囊恒 0）', () => {
+    const src = readFileSync(new URL('../../src/server/app.js', import.meta.url), 'utf8');
+    assert.match(src, /unreadOnEntryForSync/);
+    assert.match(src, /live:\s*unreadCounts\.get/);
   });
 });
 
