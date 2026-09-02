@@ -5,7 +5,7 @@
 // history.js 的 readHeadMeta 已改为跳过 marker 假行、只读真实行——listSessions() 返回的 entrypoint
 // 现在是会话真实来源（sdk-ts），不再是 marker 冒充的 "cli"（那是历史遗留的误判，已修）。
 
-import { readFileSync, unlinkSync } from 'node:fs';
+import { readFileSync, unlinkSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { io as ioClient } from 'socket.io-client';
@@ -13,7 +13,12 @@ import { listSessions, getProjectDir } from '../../../src/sessions/history.js';
 
 const PORT = process.env.PORT || 3100;
 const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
-const WORK_DIR = process.env.WORK_DIR;
+// realpathSync 与 server.js preflight 对 WORK_DIR 的归一化对齐。runner 用 mkdtemp(tmpdir())
+// 给出的是 /var/folders/…，而 macOS 上 /var 是指向 /private/var 的符号链接：server 归一化后
+// CLI 按 /private/var/… 落盘，getProjectDir(未归一化路径) 却算出 `-var-folders-…`，于是
+// readFileSync 恒 ENOENT——报出来像「transcript 没写」，实际是**在错误的目录名下找**。
+// 同型说明见 tests/integration/session-delete.test.mjs 的 startServer()。
+const WORK_DIR = process.env.WORK_DIR && realpathSync(process.env.WORK_DIR);
 if (!WORK_DIR) throw new Error('WORK_DIR is required; use tests/smoke/runner.js');
 
 // 测试用例
@@ -83,15 +88,18 @@ const tests = [
         throw new Error('listSessions 未返回该会话');
       }
 
-      // readHeadMeta 现在跳过 marker 假行，报真实来源——web 会话不应再读成 marker 冒充的 "cli"。
+      // web 会话绝不能被 marker 假行冒充成 "cli"。这条守卫两条取数路径都要成立。
       if (session.entrypoint === 'cli') {
-        throw new Error('readHeadMeta 读到的 entrypoint 是 "cli"——疑似又被 entrypoint-marker 假行抢先（回归）');
-      }
-      if (!session.entrypoint) {
-        throw new Error('listSessions 未返回 entrypoint（真实行应带该字段）');
+        throw new Error('listSessions 报出 entrypoint="cli"——被 entrypoint-marker 假行抢先（回归）');
       }
 
-      console.log(`  ✓ history.js 正确读取真实 entrypoint:"${session.entrypoint}"（非 marker 冒充值）`);
+      // 【不】要求 entrypoint 非空：生产走 SDK listSessions 快路径，那条路上 entrypoint 是**死字段**
+      // （history.js 的 listSessionsPage 头注：前端 sessionRow 显式传 null，来源角标读 session-registry
+      // 的 terminal 而非 entrypoint）。旧断言写于 SDK 迁移之前，之后一直没跑到——它要的字段是被
+      // 刻意去掉的。注意 tests/unit/history-list.test.mjs 那条同名守卫**注入了 baseDir**，因而回落
+      // 到自造扫盘路径、readHeadMeta 会填 entrypoint：它绿不代表生产这条路被验证过，两条路要分开看。
+      const src = session.entrypoint ?? '(SDK 快路径不带此字段，符合设计)';
+      console.log(`  ✓ listSessions 未被 marker 冒充；entrypoint=${src}`);
       console.log(`  ✓ 会话 ID: ${sessionId.slice(0, 8)}...`);
 
       // 清理测试会话文件

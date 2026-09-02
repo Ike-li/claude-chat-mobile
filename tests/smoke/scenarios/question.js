@@ -22,6 +22,15 @@ let assistantText = '';
 let questionReceived = false;
 let answerLabel = '';
 
+// 选项可能是裸字符串，也可能是 {label, description} 对象——AskUserQuestion 实际下发的是后者
+// （2026-09-02 真机实测）。本函数与前端 public/js/app/approval-questions.js 的 optionLabel 同语义：
+// 前端早就两种都认，所以这只是本脚本的字符串假设过期了，不是产品缺陷。
+// 不修的话 join() 打出 [object Object]、随后 answerLabel.toLowerCase() 直接 TypeError 崩进程。
+function optionLabel(opt) {
+  if (opt == null) return '';
+  return typeof opt === 'string' ? opt : (opt.label || '');
+}
+
 socket.on('connect', () => {
   console.log('✅ 已连接');
   console.log('📋 发送：要求模型用 AskUserQuestion 提问');
@@ -38,12 +47,12 @@ socket.on('agent:event', ev => {
     const p = ev.payload;
     console.log(`\n❓ 收到选择题 requestId=${p.requestId}`);
     console.log(`   题目：${p.text}`);
-    console.log(`   选项：${p.options.join(' / ')}`);
+    console.log(`   选项：${(p.options || []).map(optionLabel).join(' / ')}`);
     questionReceived = true;
 
     // 自动选择第一个选项
     const idx = 0;
-    answerLabel = p.options[idx] || String(idx);
+    answerLabel = optionLabel(p.options?.[idx]) || String(idx);
     console.log(`   ➜ 自动选择选项 ${idx}：「${answerLabel}」`);
     socket.emit('user:answer', { requestId: p.requestId, optionIndex: idx });
 
