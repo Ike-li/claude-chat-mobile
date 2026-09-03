@@ -19,7 +19,7 @@ test('visual mock registry guard rejects test command fallbacks after registry d
 
   try {
     assert.throws(
-      () => execFileSync(process.execPath, ['scripts/check-visual-mock-registry.js', fixture], {
+      () => execFileSync(process.execPath, ['tests/gates/check-visual-mock-registry.js', fixture], {
         cwd: process.cwd(),
         encoding: 'utf8',
         stdio: 'pipe',
@@ -49,7 +49,7 @@ test('visual mock registry guard also rejects demo command fallbacks after regis
 
   try {
     assert.throws(
-      () => execFileSync(process.execPath, ['scripts/check-visual-mock-registry.js', fixture], {
+      () => execFileSync(process.execPath, ['tests/gates/check-visual-mock-registry.js', fixture], {
         cwd: process.cwd(),
         encoding: 'utf8',
         stdio: 'pipe',
@@ -79,7 +79,7 @@ test('visual mock registry guard 允许独立命令族各自先走 registry disp
   `);
 
   try {
-    assert.doesNotThrow(() => execFileSync(process.execPath, ['scripts/check-visual-mock-registry.js', fixture], {
+    assert.doesNotThrow(() => execFileSync(process.execPath, ['tests/gates/check-visual-mock-registry.js', fixture], {
       cwd: process.cwd(),
       encoding: 'utf8',
       stdio: 'pipe',

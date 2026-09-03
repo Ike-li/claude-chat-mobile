@@ -1,0 +1,48 @@
+# .gitattributes —— 分发裁剪（export-ignore）+ 换行规范化。
+#
+# `git archive` 会跳过带 export-ignore 的路径，于是 `scripts/release.sh` 生成的 tarball
+# 直接是「装机即可运行」的树：不含测试、不含维护者门禁。完整仓库照旧 `git clone`。
+#
+# 【为什么这份名单这么短】测试树、测试基建（Dockerfile/compose/playwright/playground）与
+# 全部门禁脚本都住在 tests/ 下，一条前缀就裁干净。此前门禁散在 scripts/ 里，这里要逐个列 17 行，
+# 且同一份名单在 tests/unit/dist-manifest.test.mjs 的正则和 tests/gates/repo-inventory.js 里
+# 各存一份——三处会各自漂移，加一个门禁脚本要改三个地方且漏了没人发现。目录前缀不需要维护。
+#
+# 【名单方向】黑名单（列出要排除的），与 tests/gates/guard-host-tests.js 的白名单相反——
+# 因为失败方向不同：guard 漏判 = 在宿主机跑破坏性命令（致命），这里漏判 = 多带几个文件（无害），
+# 而误排除 = 用户下载到跑不起来的包（致命）。所以宁可多带，不可少带。
+# 不变量由 tests/unit/dist-manifest.test.mjs 用 `git check-attr` 钉住，不靠人眼核对。
+#
+# 目录要写成两行（`dir` 与 `dir/**`）：gitattributes 是【逐路径查询】的属性，不像 .gitignore
+# 那样目录命中就短路整棵子树；只写 `dir/**` 时 git archive 仍会留下一个空的 dir/ 条目。
+
+# ── 测试树（含测试基建 tests/infra/ 与全部门禁 tests/gates/）──
+/tests                      export-ignore
+/tests/**                   export-ignore
+
+# ── 仓库协作物（对装机运行无用）──────────────────────
+/.github                    export-ignore
+/.github/**                 export-ignore
+/.claude                    export-ignore
+/.claude/**                 export-ignore
+/.gitattributes             export-ignore
+/.dockerignore              export-ignore
+/eslint.config.js           export-ignore
+# CLAUDE.md 与指向它的 AGENTS.md 是给 AI agent 的维护者指令，且通篇引用测试命令。
+# 两个必须一起排除：只排 CLAUDE.md 会在包里留下一个断链的 AGENTS.md 符号链接。
+/CLAUDE.md                  export-ignore
+/AGENTS.md                  export-ignore
+
+# ── scripts/ 里的维护者工具（其余是用户运维命令，必须留）──
+# 判据是「用户装机/运维会不会执行它」：发版、图标生成、上游版本监控、分发打包都不会。
+/scripts/release.sh         export-ignore
+/scripts/gen-icons.js       export-ignore
+/scripts/upstream-watch.js  export-ignore
+/scripts/dist-manifest.js   export-ignore
+
+# ── 换行规范化（与裁剪无关，避免 Windows 检出后 shell 脚本 CRLF 失效）──
+*.sh                        text eol=lf
+*.js                        text
+*.mjs                       text
+*.json                      text
+*.md                        text

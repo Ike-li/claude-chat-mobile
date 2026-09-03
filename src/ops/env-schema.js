@@ -1,12 +1,12 @@
 // 配置面板的单一事实源：哪些 env 能从 UI 改、改成什么算合法、怎么展示。
 //
 // ## 为什么 schema 只放服务端
-// scripts/check-import-boundaries.js 的 frontend-no-backend 规则禁止 public/js 引 src/，
+// tests/gates/check-import-boundaries.js 的 frontend-no-backend 规则禁止 public/js 引 src/，
 // 所以前后端不可能真共享这份表。与其两边各写一份迟早分叉，不如只留服务端一份、经 env:get 的
 // ack 下发，前端当数据渲染。加一个配置项 = 只改这一个文件。
 //
 // ## 为什么文案是 {zh,en} 对而不是走 i18n 词典
-// scripts/i18n-check.js 扫的是 HTML 文本节点与 js 里的 t('原文') 调用点；服务端下发的字符串
+// tests/gates/i18n-check.js 扫的是 HTML 文本节点与 js 里的 t('原文') 调用点；服务端下发的字符串
 // 它扫不到，塞进 EN_DICT 会立刻变成孤儿 key 让 npm run check 报红。现成范式是
 // scripts/setup.js:85 的 MESSAGES 双语字典。**别好心把这些搬进 EN_DICT。**
 //

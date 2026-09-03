@@ -3,11 +3,11 @@ import { join, relative } from 'node:path';
 // 契约真相源在 src/shared/protocol.js（运行时也 import 同一份，出向 emit 据此自检）。这里 import 后
 // 原样再导出：既有 import 面不变（tests/unit/agent-event-contract.test.mjs 直接从本模块取用），
 // 本文件内部两个 check 的默认参数也仍拿得到本地绑定。
-import { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS } from '../src/shared/protocol.js';
+import { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS } from '../../src/shared/protocol.js';
 
 export { AGENT_EVENT_TYPES, INBOUND_SOCKET_EVENTS };
 
-const ROOT = join(import.meta.dirname, '..');
+const ROOT = join(import.meta.dirname, '..', '..');
 
 
 // 出向真实发射面。agent.js 走 agent-session 提取器（AgentSession 的 this.emit(...)）；其余一律按

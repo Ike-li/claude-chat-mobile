@@ -38,13 +38,29 @@ The project does not bundle, install, or sign in to Claude for you.
 
 ## 2. Get the code and install dependencies
 
+There are two ways to get the code; pick one.
+
+### Option A: distribution tarball (you just want to run it)
+
+```bash
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/releases/latest/download/claude-chat-mobile.tar.gz | tar xz
+cd claude-chat-mobile-*/
+npm install --omit=dev
+```
+
+The tarball is about 1.4 MB, cut from the release tag: the test tree, the Docker test environment, and the maintainer gates are left out, while the server, the setup wizard, the preflight checks, device approval, the desktop app, and both CLI bridges are all kept.
+
+`package.json` is trimmed as well — it keeps only the commands that actually run inside the package, and `devDependencies` is dropped. So whatever `npm run` lists is what works; you never type a command only to find its file missing. Use option B when you need `npm test` / `npm run check` / `npm run lint`.
+
+### Option B: full repository (you want to change code or run tests)
+
 ```bash
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 npm install --omit=dev
 ```
 
-`--omit=dev` installs only runtime dependencies and does not download Playwright browsers. Use a full `npm install` when you need to develop or run tests.
+Both paths use `--omit=dev`: it installs only runtime dependencies and does not download Playwright browsers. To run the tests in the full repository, run `npm install` once more without that flag.
 
 ## 3. Create local configuration
 
@@ -461,6 +477,23 @@ site data and the installed PWA must be cleared manually.
 | Android installs only a browser shortcut | Cloudflare Access may block PWA icons; see the [deployment guide](deployment.md#2b-android-pwa图标必须对匿名可达) |
 | Startup logs "read as number/boolean" conversion notes | `ccm.config.json` has numbers or toggles written as strings; use `3000` / `true`, not `"3000"` / `"true"` |
 | The desktop menu bar icon is gone | The notch pushed it out; see [the section above](#when-the-notch-hides-the-menu-bar-icon) for the one-line `defaults write` recovery |
+
+## Maintainers: Docker playground
+
+This is not a product entry. User install still uses `npm run setup` / `npm start` / the desktop app. The playground moves the test environment into a container: empty `HOME`, fake-claude, no host `~/.claude`.
+
+```bash
+npm run docker:build                 # first time, and once more after the image tag lands
+npm run playground:up                # http://127.0.0.1:13000/#token=playground-local-not-a-secret
+npm run playground:device -- list
+npm run playground:device -- approve <ID>
+npm run playground:up:mock           # send/stream UI (mock server)
+npm run playground:up:proxy          # nginx public-Host fixture
+npm run test:docker:playground       # install path + topology probes + thin Playwright TOFU
+npm run playground:reset             # down -v, clear the device trust table
+```
+
+Sending a message will not complete an agent turn (fake-claude). An accidental send stays busy; use `playground:restart` (not while proxy is up — use `playground:up:proxy` instead). Do not open the URL without `#token=` (that trips the auth rate-limit short lock).
 
 ## Next steps
 

@@ -7,7 +7,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SKIP_DIRECTORIES = new Set(['.git', 'node_modules', '.worktrees', 'vendor']);
 
 function walkFiles(rootDir, dir, pattern) {

@@ -40,13 +40,29 @@ claude auth status
 
 ## 2. 获取代码与安装依赖
 
+有两种取得代码的方式，选一种即可。
+
+### 方式 A：分发包（只想把它跑起来）
+
+```bash
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/releases/latest/download/claude-chat-mobile.tar.gz | tar xz
+cd claude-chat-mobile-*/
+npm install --omit=dev
+```
+
+分发包约 1.4 MB，是从发布 tag 裁剪出来的：测试树、Docker 测试环境和维护者门禁工具都不在里面，运行 server、装机向导、启动自检、设备审批、桌面端和两个 CLI 桥则完整保留。
+
+`package.json` 也一并裁过——只留下在包内真能跑的命令，`devDependencies` 一并删除。所以 `npm run` 列出什么就能跑什么，不会出现「敲下去才发现文件不在」。需要 `npm test` / `npm run check` / `npm run lint` 就用方式 B。
+
+### 方式 B：完整仓库（要改代码或跑测试）
+
 ```bash
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
 npm install --omit=dev
 ```
 
-`--omit=dev` 只安装运行依赖，不下载 Playwright 浏览器。需要参与开发或运行测试时再使用完整的 `npm install`。
+两种方式都用 `--omit=dev`：只安装运行依赖，不下载 Playwright 浏览器。要在完整仓库里跑测试，再执行一次不带该参数的 `npm install`。
 
 ## 3. 生成本地配置
 
@@ -444,6 +460,23 @@ cloudflared 隧道）、`~/.claude/projects`、`~/.cloudflared`、settings.json 
 | Android 安装后只是浏览器快捷方式 | Cloudflare Access 可能拦住 PWA 图标，见[部署指南](deployment.md#2b-android-pwa图标必须对匿名可达) |
 | 启动日志刷「已读作数字/布尔」的类型转换提示 | `ccm.config.json` 里把数字或开关写成了字符串；改成 `3000` / `true` 而不是 `"3000"` / `"true"` |
 | 桌面端菜单栏图标找不到了 | 刘海挤掉了；见[上面这节](#菜单栏图标被刘海挡住了怎么办)用 `defaults write` 救一次 |
+
+## 维护者：Docker playground
+
+这不是产品入口，用户装机仍走上面的 `npm run setup` / `npm start` / 桌面端。playground 把测试环境放进容器：空 `HOME`、fake-claude、不碰宿主机 `~/.claude`。
+
+```bash
+npm run docker:build                 # 首次，以及 image 标签落地后再打一次 ccm-test:local
+npm run playground:up                # http://127.0.0.1:13000/#token=playground-local-not-a-secret
+npm run playground:device -- list
+npm run playground:device -- approve <ID>
+npm run playground:up:mock           # 聊天/流式 UI（mock server）
+npm run playground:up:proxy          # nginx 公网 Host 夹具
+npm run test:docker:playground       # 装机路径 + 拓扑探针 + 薄 Playwright TOFU
+npm run playground:reset             # down -v，清设备信任表
+```
+
+发消息不会完成 agent turn（fake-claude）；误点发送后会话会 busy，用 `playground:restart`（不要在开着 proxy 时用 restart，改 `playground:up:proxy`）。不要打开不带 `#token=` 的 URL（会触发鉴权限速短锁）。
 
 ## 下一步
 

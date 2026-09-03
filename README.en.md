@@ -124,12 +124,25 @@ Claude Chat Mobile **does not include Claude Code, and will not install or sign 
 
 ## Quick Start
 
-If Claude Code already runs on your computer:
+If Claude Code already runs on your computer, get the code either way.
+
+**Just want to run it** — download the distribution tarball (~1.4 MB, runtime code only):
+
+```bash
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/releases/latest/download/claude-chat-mobile.tar.gz | tar xz
+cd claude-chat-mobile-*/
+```
+
+**Want to change the code or run the tests** — clone the full repository:
 
 ```bash
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
+```
 
+From here both paths are identical:
+
+```bash
 node --version
 which claude
 claude auth status
@@ -154,6 +167,8 @@ node scripts/device.js approve <ID>
 Then open the address from the startup log on your phone to enter a workspace and send Claude Code its first message.
 
 > If the macOS desktop app already started a server, do not run a second `npm start`. Follow what `doctor` tells you and restart the service from the desktop menu instead.
+
+> The `package.json` inside the tarball is trimmed too: it keeps only the runtime commands (`start`/`dev`/`setup`/`config`/`service:*`/`hooks:*`/`statusline:*`/`app:*`/`uninstall`), so whatever `npm run` lists is what actually works. Test and gate commands are not in the package — use `git clone` when you need `npm test` / `npm run check`.
 
 Full first-run instructions — configuration, non-interactive setup, PWA, and CLI hooks:
 
@@ -221,7 +236,7 @@ Web / CLI dual path, the Agent SDK, event synchronization, reconnect recovery, a
 ### I want to modify or maintain it
 
 **[Hard rules and tech debt](docs/hard-rules.md)** (Chinese)
-Architectural invariants, design tradeoffs, and what the project has decided not to do.
+Architectural invariants, design tradeoffs, and what the project has decided not to do. The maintainer Docker playground (clean Linux HOME) is documented in [getting-started.en.md](docs/getting-started.en.md#maintainers-docker-playground); it is not a third product entry.
 
 **[Display contracts](docs/display-contracts.md)** (Chinese)
 Sources of truth and display rules for model, effort, and status-line information.

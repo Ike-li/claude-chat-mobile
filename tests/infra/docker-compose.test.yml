@@ -7,11 +7,12 @@
 services:
   test:
     build:
-      context: .
-      dockerfile: Dockerfile.test
+      context: ../..
+      dockerfile: tests/infra/Dockerfile.test
+    image: ccm-test:local
     volumes:
       # 源码挂进来：改一行代码不用重建镜像。
-      - .:/app
+      - ../..:/app
       # ★ 匿名卷把镜像里那份 node_modules 盖在挂载之上。不这么做的话，宿主机（macOS/arm64）
       # 的 node_modules 会盖住容器里的——原生模块与 Playwright 浏览器二进制平台不对，直接跑不起来。
       - /app/node_modules

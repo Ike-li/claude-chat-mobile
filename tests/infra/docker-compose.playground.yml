@@ -1,0 +1,175 @@
+# docker-compose.playground.yml —— 维护者本机 playground（测试基础设施，不是产品入口）
+#
+# 与 docker-compose.test.yml 共用 Dockerfile.test / ccm-test:local。
+# 拓扑用 profiles：默认 app；mock 聊天 UI；proxy 公网 Host 夹具。
+# probe / browser 只 `run --rm`，禁止 `up --profile probe|browser`。
+name: ccm-playground
+
+x-ccm-image: &ccm-image
+  build:
+    context: ../..
+    dockerfile: tests/infra/Dockerfile.test
+  image: ccm-test:local
+  pull_policy: never
+  working_dir: /app
+
+# 不挂仓库根：Docker Desktop virtiofs 不能把文件叠到父 bind 里已有的同名文件上。
+# 只挂源码目录，配置由 entrypoint 写进容器层。
+x-runtime-env: &runtime-env
+  HOME: /home/ccm-test
+  AUTH_TOKEN: playground-local-not-a-secret
+  CCM_DATA_DIR: /home/ccm-test/ccm-data
+  WORK_DIR: /home/ccm-test/workspace
+  WORK_DIRS: /home/ccm-test/workspace
+  WORK_DIRS_FILE: ""
+  CLAUDE_BIN: /app/tests/fixtures/fake-claude.sh
+  BIND_MODE: lan
+  BIND_HOST: ""
+  PORT: "3000"
+  ACCESS_PROFILE: lan
+  DEV_MODE: ""
+  ASSET_HOT_RELOAD: "1"
+  LOG_TERMINAL: off
+  CLI_HOOKS_BRIDGE: off
+  CLI_STATUSLINE_BRIDGE: off
+  ANTHROPIC_API_KEY: ""
+  ANTHROPIC_AUTH_TOKEN: ""
+  ANTHROPIC_BASE_URL: ""
+  CF_ACCESS_HOSTNAME: ""
+  CF_ACCESS_TEAM: ""
+  CF_ACCESS_AUD: ""
+  VAPID_PUBLIC_KEY: ""
+  VAPID_PRIVATE_KEY: ""
+  VAPID_SUBJECT: ""
+  NTFY_URL: ""
+  NTFY_TOPIC: ""
+  NTFY_TOKEN: ""
+  PUBLIC_URL: ""
+  CCM_HOOKS_ORIGIN: ""
+  CCM_STATUSLINE_ORIGIN: ""
+  CCM_TEST_PRESERVE_EMPTY_ENV: "1"
+  RUN_CLAUDE_INTEGRATION: ""
+
+services:
+  app:
+    <<: *ccm-image
+    init: true
+    env_file:
+      - playground/runtime.env
+    environment:
+      <<: *runtime-env
+    volumes:
+      - ../../src:/app/src
+      - ../../public:/app/public
+      - ../../scripts:/app/scripts
+      - ../../tests:/app/tests
+      - ../../server.js:/app/server.js
+      - ../../package.json:/app/package.json
+      - /app/node_modules
+      - playground-home:/home/ccm-test
+      - playground-data-fallback:/app/data
+    ports:
+      - "127.0.0.1:13000:3000"
+      - "127.0.0.1:18080:8080"
+    command: ["bash", "/app/tests/infra/playground/entrypoint-app.sh"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health?token=playground-local-not-a-secret').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  mock:
+    <<: *ccm-image
+    profiles: [mock]
+    init: true
+    environment:
+      PORT: "3100"
+      CCM_MOCK_BIND: "0.0.0.0"
+    volumes:
+      - ../../src:/app/src
+      - ../../public:/app/public
+      - ../../scripts:/app/scripts
+      - ../../tests:/app/tests
+      - ../../server.js:/app/server.js
+      - ../../package.json:/app/package.json
+      - /app/node_modules
+    ports:
+      - "127.0.0.1:13100:3100"
+    command: ["node", "tests/e2e/mock/server.js"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/__ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+
+  proxy:
+    profiles: [proxy]
+    image: nginx:1.27-alpine
+    network_mode: service:app
+    volumes:
+      - ./playground/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    command: ["nginx", "-g", "daemon off;"]
+    depends_on:
+      app:
+        condition: service_healthy
+
+  probe:
+    <<: *ccm-image
+    profiles: [probe]
+    network_mode: service:app
+    env_file:
+      - playground/runtime.env
+    environment:
+      <<: *runtime-env
+    volumes:
+      - ../../src:/app/src
+      - ../../public:/app/public
+      - ../../scripts:/app/scripts
+      - ../../tests:/app/tests
+      - ../../server.js:/app/server.js
+      - ../../package.json:/app/package.json
+      - /app/node_modules
+      - playground-home:/home/ccm-test
+    command:
+      - node
+      - --test
+      - tests/playground/setup-install.test.mjs
+      - tests/playground/http-probes.test.mjs
+      - tests/playground/topology.test.mjs
+      - tests/playground/topology-proxy.test.mjs
+    depends_on:
+      app:
+        condition: service_healthy
+
+  browser:
+    <<: *ccm-image
+    profiles: [browser]
+    shm_size: 1gb
+    env_file:
+      - playground/runtime.env
+    environment:
+      <<: *runtime-env
+    volumes:
+      - ../../src:/app/src
+      - ../../public:/app/public
+      - ../../scripts:/app/scripts
+      - ../../tests:/app/tests
+      - ../../server.js:/app/server.js
+      - ../../package.json:/app/package.json
+      - /app/node_modules
+      - playground-home:/home/ccm-test
+    command:
+      - bash
+      - -lc
+      - node --test tests/playground/mock-wiring.test.mjs && npx playwright test -c tests/infra/playwright.playground.config.ts
+    depends_on:
+      app:
+        condition: service_healthy
+      mock:
+        condition: service_healthy
+
+volumes:
+  playground-home:
+  playground-data-fallback:

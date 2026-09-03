@@ -8,7 +8,7 @@ import {
   extractHtmlCopyKeys,
   extractTCallKeys,
   checkI18n,
-} from '../../scripts/i18n-check.js';
+} from '../../tests/gates/i18n-check.js';
 
 async function writeFixture(root, relativePath, text) {
   const file = join(root, relativePath);

@@ -22,6 +22,7 @@ export default [
       '.codegraph/**',
       '.reasonix/**',
       '.worktrees/**',
+      'tests/infra/playground/seed/**',
     ],
   },
   js.configs.recommended,

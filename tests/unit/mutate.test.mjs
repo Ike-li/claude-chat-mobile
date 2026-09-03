@@ -12,7 +12,7 @@ import {
   sampleMutants,
   isKilled,
   parseLineRanges,
-} from '../../scripts/mutate.js';
+} from '../../tests/gates/mutate.js';
 
 // ── 代码位置掩码：字符串/注释/正则字面量里的字符不得被当成可变异的代码 ──────
 
@@ -227,7 +227,7 @@ test('generateMutants：同一行多个变异点用 column 区分（否则报告
 });
 
 test('自动关联只取单测：集成测试起真 server、会把变异循环吊死，要用就 --tests= 显式点名', () => {
-  const source = readFileSync(new URL('../../scripts/mutate.js', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../tests/gates/mutate.js', import.meta.url), 'utf8');
   const listFn = source.slice(source.indexOf('function listTestFiles'), source.indexOf('function listTestFiles') + 300);
   assert.ok(listFn.includes("'tests/unit'"));
   assert.ok(!listFn.includes('tests/integration'), '自动关联面不得包含集成测试目录');
@@ -239,7 +239,7 @@ test('自动关联只取单测：集成测试起真 server、会把变异循环�
 // session-delete.test.mjs 的 projectDir 塌成 ~/.claude/projects 本身，它的 cleanup 把整棵树删了。
 
 test('变异运行必须换一次性 HOME：靠 os.homedir() 推路径的代码算歪了也够不到真实数据', () => {
-  const source = readFileSync(new URL('../../scripts/mutate.js', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../tests/gates/mutate.js', import.meta.url), 'utf8');
   assert.match(source, /HOME: home/, 'runTests 必须能覆盖子进程的 HOME');
   const baselineCall = source.match(/runTests\(testFiles, \{ coverage: true[^)]*\)/)?.[0] ?? '';
   assert.match(baselineCall, /home: sandboxHome/, '基线运行也要走沙箱 HOME —— 真有测试依赖真实 HOME 就该在基线阶段红出来');
@@ -248,7 +248,7 @@ test('变异运行必须换一次性 HOME：靠 os.homedir() 推路径的代码�
 });
 
 test('sandboxHome 必须先于 restore 声明：restore 是 exit 处理器，撞 TDZ 会把还原本身炸掉', () => {
-  const source = readFileSync(new URL('../../scripts/mutate.js', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../tests/gates/mutate.js', import.meta.url), 'utf8');
   const declared = source.indexOf('const sandboxHome');
   const restore = source.indexOf('const restore =');
   assert.ok(declared > 0 && restore > 0);

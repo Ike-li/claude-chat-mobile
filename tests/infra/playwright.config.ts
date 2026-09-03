@@ -10,14 +10,14 @@ const baseURL = process.env.CCM_PLAYWRIGHT_BASE_URL || `http://127.0.0.1:${port}
 const buildNonce = process.env.CCM_PLAYWRIGHT_NONCE || `pw-${randomUUID()}`;
 // TC-010：mock server（tests/e2e/mock/server.js）用模块级全局变量当状态存储，多个 worker 共打
 // 同一进程会互相踩踏（实测 workers>1 直接让 server 抛未捕获异常崩溃）。故单进程内维持 workers:1；
-// 真正的并发改由进程级隔离达成——scripts/test-e2e-parallel.js 并行起多个独立 server 各自处理一个
+// 真正的并发改由进程级隔离达成——tests/infra/e2e-parallel.js 并行起多个独立 server 各自处理一个
 // --shard 切片，进程间零共享状态。CCM_PLAYWRIGHT_SHARD_SUFFIX 只在该编排脚本下设置，用于把每个
 // 分片的报告/产物目录错开，防止并行进程写同一份文件冲突；单独跑 `npm run test:e2e` 时留空，
 // 行为与未引入分片编排前完全一致。
 const shardSuffix = process.env.CCM_PLAYWRIGHT_SHARD_SUFFIX || '';
 
 export default defineConfig({
-  testDir: './tests/e2e',
+  testDir: '../e2e',
   testMatch: 'p0/**/*.spec.ts',
   fullyParallel: false,
   workers: 1,
@@ -25,8 +25,8 @@ export default defineConfig({
   expect: {
     timeout: 8_000
   },
-  outputDir: `test-results${shardSuffix}`,
-  reporter: [['list'], ['html', { outputFolder: `playwright-report${shardSuffix}`, open: 'never' }]],
+  outputDir: `../../test-results${shardSuffix}`,
+  reporter: [['list'], ['html', { outputFolder: `../../playwright-report${shardSuffix}`, open: 'never' }]],
   use: {
     baseURL,
     headless: true,
@@ -37,6 +37,10 @@ export default defineConfig({
     hasTouch: true
   },
   webServer: {
+    // cwd 必须显式指向仓库根：Playwright 默认用 config 文件所在目录（本文件移进 tests/infra/ 后
+    // 就是那里），于是 `node tests/e2e/mock/server.js` 会被解析成 tests/infra/tests/e2e/…；
+    // 而且 mock server 自身按仓库根的相对路径读 public/，cwd 错了即使找得到文件也跑不对。
+    cwd: '../..',
     command: `CCM_BUILD_NONCE=${buildNonce} PORT=${port} node tests/e2e/mock/server.js`,
     url: `${baseURL}/__ready?nonce=${buildNonce}`, // 仅本轮 nonce 匹配才 200，拒绝端口上的陈旧/他者进程
     timeout: 30_000,

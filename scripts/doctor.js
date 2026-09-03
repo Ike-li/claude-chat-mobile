@@ -507,7 +507,7 @@ function checkFrontendSyntax() {
 
 // D11: 测试覆盖率门槛（npm test --experimental-test-coverage）。
 // 门槛与实测值都从子进程输出里读，不在这里复述常量——此处曾写死「≥ 65%」，而
-// scripts/coverage-check.js 的默认门槛早已是 75，doctor 于是对着用户报了一个不存在的数字。
+// tests/gates/coverage-check.js 的默认门槛早已是 75，doctor 于是对着用户报了一个不存在的数字。
 // 覆盖率是会持续变的量，任何抄写都会再次漂移，只能转述真实输出。
 //
 // 默认跳过：装机预检会因此再跑一遍完整单测（约一分钟），新用户只想知道 token/CLI/端口是否可用。
@@ -522,7 +522,7 @@ function checkCoverageThreshold({ full = false } = {}) {
     return;
   }
   try {
-    const stdout = execSync('node scripts/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 }).toString();
+    const stdout = execSync('node tests/gates/coverage-check.js', { cwd: HERE, stdio: 'pipe', timeout: 120_000 }).toString();
     const actual = stdout.match(/行覆盖率:\s*([\d.]+)%/)?.[1];
     const threshold = stdout.match(/门槛:\s*([\d.]+)%/)?.[1];
     ok(bi('测试覆盖率', 'Test coverage'), actual && threshold ? bi(`行覆盖率 ${actual}%（门槛 ${threshold}%）`, `Line coverage ${actual}% (threshold ${threshold}%)`) : bi('达标', 'meets threshold'));

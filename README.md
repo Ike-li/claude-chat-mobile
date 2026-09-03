@@ -126,12 +126,25 @@ Claude Chat Mobile **不包含 Claude Code，也不会替你安装或登录 Clau
 
 ## 快速开始
 
-如果 Claude Code 已经可以在你的电脑上正常运行：
+如果 Claude Code 已经可以在你的电脑上正常运行，先任选一种方式取得代码。
+
+**只想跑起来** —— 下载分发包（约 1.4 MB，只含运行所需的代码）：
+
+```bash
+curl -fsSL https://github.com/Ike-li/claude-chat-mobile/releases/latest/download/claude-chat-mobile.tar.gz | tar xz
+cd claude-chat-mobile-*/
+```
+
+**想改代码或跑测试** —— 克隆完整仓库：
 
 ```bash
 git clone https://github.com/Ike-li/claude-chat-mobile.git
 cd claude-chat-mobile
+```
 
+接下来两者相同：
+
+```bash
 node --version
 which claude
 claude auth status
@@ -156,6 +169,8 @@ node scripts/device.js approve <ID>
 然后在手机中打开启动日志给出的地址，即可进入工作区并向 Claude Code 发送第一条消息。
 
 > macOS 桌面端如果已经启动了 server，不要再执行第二个 `npm start`。按照 `doctor` 的提示使用桌面端菜单重启服务即可。
+
+> 分发包里的 `package.json` 也一并裁过：只留下运行相关的命令（`start`/`dev`/`setup`/`config`/`service:*`/`hooks:*`/`statusline:*`/`app:*`/`uninstall`），`npm run` 列出的就是全部能跑的。测试与门禁命令不在包内，需要 `npm test` / `npm run check` 时改用 `git clone`。
 
 完整的首次安装、配置、非交互 setup、PWA 和 CLI hooks 说明：
 
@@ -223,7 +238,7 @@ Web / CLI 双通道、Agent SDK、事件同步、断线恢复和会话接管。
 ### 我想修改或维护项目
 
 **[硬性规则与技术债](docs/hard-rules.md)**
-项目的架构不变量、设计取舍和明确不做的事情。
+项目的架构不变量、设计取舍和明确不做的事情。维护者本机 Docker playground（干净 Linux HOME）见 [getting-started.md](docs/getting-started.md#维护者docker-playground)，不是第三条产品入口。
 
 **[展示契约](docs/display-contracts.md)**
 模型、思考强度、状态栏等 UI 信息的事实源和展示规则。

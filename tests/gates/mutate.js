@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/mutate.js —— 变异检查：按需、单文件、看「测试会不会开口」
+// tests/gates/mutate.js —— 变异检查：按需、单文件、看「测试会不会开口」
 //
 // 用法：npm run mutate -- src/server/mirror-engine.js [--lines=200-260] [--tests a.test.mjs,b.test.mjs] [--limit N]
 //
@@ -26,11 +26,11 @@ import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseCoverageRows } from './coverage-check.js';
 
-const ROOT = join(import.meta.dirname, '..');
+const ROOT = join(import.meta.dirname, '..', '..');
 
 // ── 代码位置掩码 ────────────────────────────────────────────────────────────
 // 字符串/模板串/注释里的 `&&`、`===` 是文案不是运算符，改了只会造出无意义的变异体（还可能破坏
-// 断言消息）。同 scripts/agent-event-contract.js 的 skipQuoted/skipLineComment 一路做法。
+// 断言消息）。同 tests/gates/agent-event-contract.js 的 skipQuoted/skipLineComment 一路做法。
 export function maskCodePositions(source) {
   const mask = new Array(source.length).fill(true);
   let i = 0;

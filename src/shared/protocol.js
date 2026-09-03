@@ -1,6 +1,6 @@
 // protocol.js —— web↔server 事件契约的唯一机器可读定义（出向 type 白名单 + 入向事件名白名单）。
 //
-// 【为什么在 src/shared 而不是 scripts/】这两份清单原先只活在门禁脚本 scripts/agent-event-contract.js 里，
+// 【为什么在 src/shared 而不是 scripts/】这两份清单原先只活在门禁脚本 tests/gates/agent-event-contract.js 里，
 // 运行时零引用——契约的真相源在检查工具里、被检查的代码却看不见它。而边界规则 runtime-no-tooling 又禁止
 // src/ 反向 import scripts/，结构上堵死了运行时引用契约的路。上移到叶子层后方向理顺：运行时正向 import，
 // 门禁脚本也 import 同一份（scripts/ 不在边界扫描面内，工具引用运行时是合法方向）。

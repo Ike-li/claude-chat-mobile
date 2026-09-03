@@ -8,7 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 // 扫描根：运行时源码三处。tests/scripts 不设边界（工具与测试可跨域引用）。
 const SCAN_ROOTS = ['src', 'public/js'];

@@ -10,7 +10,7 @@ import {
   findBoundaryViolations,
   analyze,
   BOUNDARY_RULES,
-} from '../../scripts/check-import-boundaries.js';
+} from '../../tests/gates/check-import-boundaries.js';
 
 async function scaffold(files) {
   const root = await mkdtemp(join(tmpdir(), 'ccm-boundaries-'));

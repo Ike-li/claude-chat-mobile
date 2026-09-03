@@ -24,7 +24,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const REGISTRY_DOC = 'docs/hard-rules.md';
 // 扫描面 = 运行时源码，与 check-import-boundaries.js 的 SCAN_ROOTS + EXTRA_FILES 同口径

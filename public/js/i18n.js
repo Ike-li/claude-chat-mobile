@@ -15,7 +15,7 @@
 export const LANG_STORAGE_KEY = 'ccm_lang';
 
 // 译文用语对齐 Claude Code CLI（permission mode / workspace / interrupt / resume 等），让从 CLI 切过来的
-// 人零认知成本。scripts/i18n-check.js 扫 index.html 的界面文案与全仓 t('...') 调用，报词典里的孤儿 key。
+// 人零认知成本。tests/gates/i18n-check.js 扫 index.html 的界面文案与全仓 t('...') 调用，报词典里的孤儿 key。
 //
 // 注意混排句：`令牌在服务器 <code>ccm.config.json</code> 的 <code>AUTH_TOKEN</code> 或启动日志里。` 会被 DOM 切成
 // 好几个文本节点，词典 key 因此是「的」「或启动日志里。」这样的碎片。译文按英文语序分配到各碎片上，
@@ -587,7 +587,7 @@ export const EN_DICT = Object.freeze({
 
   // —— 诊断时间线 ——
   // 下面几条是「查表 key」：logic.js 的顶层常量表存中文原文、由 t(变量) 取用，源码里没有对应的
-  // t('...') 字面调用（见 scripts/i18n-check.js keyAppearsAsLiteral）。
+  // t('...') 字面调用（见 tests/gates/i18n-check.js keyAppearsAsLiteral）。
   '成功': 'Succeeded',
   '已拒绝': 'Denied',
   '已回答': 'Answered',

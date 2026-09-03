@@ -16,7 +16,9 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 后端 `src/` 按域分层：`agent/`（SDK 会话驱动 agent.js、审批生命周期/存储、CLI 镜像态判定）· `sessions/`（会话注册表、transcript 历史与 catchUp 在 history.js、工作区、「需要你」聚合）· `server/`（组装根：app.js 存量顶层态、http/socket 接线、instance-* 多实例管理、mirror-engine 只读镜像、hooks 投递箱）· `auth/`（AUTH_TOKEN 限速、CF Access、设备指纹/信任门）· `files/`（浏览/预览/搜索/上传、git 变更、工作区范围门）· `ops/`（配置 env-schema/config-file、doctor、通知与推送通道、statusline 与额度快照、metrics、审计、两个 CLI 桥的 server 侧、受管服务 service-*）· `shared/`（叶子工具层；protocol.js 是事件契约真相源）。
 
-边界是 `scripts/check-import-boundaries.js` 的硬闸（check 一环），不是口头约定：前后端互不 import（唯一豁免 `public/js/canonicalize.js`，指纹规范化两侧共用）· `src/shared` 是叶子，不得反向 import 其他后端域 · `src/server` 是组装根，只有 server.js 与它自身能 import 它 · 运行时代码禁止 import `scripts/`（全部是维护者工具，非运行时）与 `tests/` · 零循环依赖。
+**测试与门禁全部住在 `tests/` 下**：`tests/{unit,integration,e2e,smoke,playground}/` 是用例，`tests/infra/` 是测试基建（`Dockerfile.test`、三份 compose、两份 playwright config、playground 夹具、E2E 分片编排），`tests/gates/` 是 `npm run check` 的 12 个门禁脚本。`scripts/` 只剩用户装机/运维会执行的命令 + 四个维护者工具（`release.sh`/`gen-icons.js`/`upstream-watch.js`/`dist-manifest.js`）。**这样分发裁剪、inventory 分类、门禁自检三处都退化成目录前缀**，不再各存一份会漂移的文件名清单。
+
+边界是 `tests/gates/check-import-boundaries.js` 的硬闸（check 一环），不是口头约定：前后端互不 import（唯一豁免 `public/js/canonicalize.js`，指纹规范化两侧共用）· `src/shared` 是叶子，不得反向 import 其他后端域 · `src/server` 是组装根，只有 server.js 与它自身能 import 它 · 运行时代码禁止 import `scripts/`（全部是维护者工具，非运行时）与 `tests/` · 零循环依赖。
 
 前端三层：`public/js/app.js`（存量编排层）→ `public/js/app/*`（域模块，见上）→ `public/js/logic/*`（**纯决策函数：数据进数据出，不碰 DOM/window/socket/应用可变态，唯一宿主外 import 是 `i18n.js`；浏览器与 `tests/unit/logic-*.test.mjs` 的 node:test 零构建共用同一份文件**。新前端逻辑能写成纯函数就先落这里；`logic.js` 仅是 re-export barrel）。`desktop/` 是 macOS 菜单栏 app（Swift）+ launchd 模板。
 
@@ -24,20 +26,21 @@ Agent SDK：https://code.claude.com/docs/en/agent-sdk/overview，尽量不要重
 
 ## 分支纪律
 
-**日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`）。
+**日常开发一律在 `dev` 分支，不要在 `master` 上直接改**（`master` = 稳定分支 / GitHub 默认 / `clone` 默认拿到，有分支保护）。功能做完再由 `dev` ff 合并进 `master` 并发版（用 `scripts/release.sh`）。发版会顺带用 `git archive` 打一个裁剪过的分发 tarball 传上 Release（装机 `curl` 那条指向它）：裁什么由 `.gitattributes` 的 `export-ignore` 定，**加了新的测试/门禁文件要同步加进去**，不变量由 `tests/unit/dist-manifest.test.mjs` 钉住（详见 [docs/hard-rules.md](docs/hard-rules.md) §4.1.1）。
 
 其他分支的常驻 worktree 检出位是仓库外的平级兄弟目录（`../claude-chat-mobile-<分支名>`，如 `claude-chat-mobile-promo`=宣传创作区、`claude-chat-mobile-gh-pages`=展示站、`claude-chat-mobile-third-party`=三方代理专用），**不是本分支源码**，物理上不在本仓库树内，开发/搜索/审查天然不会扫到，无需额外排除规则。
 
 ## 测试跑在哪：宿主机只跑白名单，其余进容器
 
 **宿主机上只允许跑这四条**：`npm run lint`、`npm run check`、`npm run test:unit`、`npm run test:e2e`
-（钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`test:playwright:p0`、`app:test`，见 `scripts/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
+（钩子的白名单还含同源别名与 check 的组成环节：`lint:fix`、`test:visual`、`test:playwright`、`test:playwright:p0`、`app:test`，见 `tests/gates/guard-host-tests.js` 的 `HOST_ALLOWED_SCRIPTS`）。
 前三条不起 server、不 spawn claude；E2E 打的是 `tests/e2e/mock/server.js`（纯 mock，零外部依赖，
 已核实不碰 `~/.claude`）。
 
 **其余一切会跑测试的命令，一律进容器**：`npm run test:docker`（容器里跑单测 + 集成）、
-`npm run test:docker:e2e`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
-（拉 Playwright 镜像 + npm ci，约 7 分钟）。
+`npm run test:docker:e2e`、`npm run test:docker:playground`、`npm run mutate:docker -- <文件>`。首次用先 `npm run docker:build`
+（拉 Playwright 镜像 + npm ci，约 7 分钟）。维护者要打开一张干净 Linux 用户的 Web UI 时用
+`npm run playground:up`（`127.0.0.1:13000`，fake-claude，不是产品入口；聊天/流式走 `playground:up:mock`）。
 
 > `test:docker` 不含 `check`：`inventory:check` 要 `git ls-files`，而 worktree 检出的 `.git` 是指向
 > 宿主机路径的指针文件，容器里解析不到。`check` 本来就在宿主机白名单里，留在宿主机跑即可。
@@ -75,6 +78,8 @@ npm run test:integration # 仅集成测试（起真 server，需本机 claude CL
 RUN_CLAUDE_INTEGRATION=1 npm test  # 连同需真 claude agent turn 的集成测试一起跑(慢/耗 token/不稳；共 7 个文件：claude-lifecycle/session-switch/websocket-events/aborted-state/message-idempotency/approval-integrity 整份 + file-upload 一个 describe)
 npm run test:e2e   # Playwright 移动端 UI 回归（零外部依赖 mock server）
 npm run test:visual # test:e2e 的兼容别名
+npm run playground:up              # 维护者 Docker playground（干净 Linux HOME，http://127.0.0.1:13000；不是产品入口）
+npm run test:docker:playground     # 容器内装机路径 + 拓扑探针 + 薄 Playwright TOFU
 
 # 装机与配置
 npm run setup      # 交互装机向导（写 ccm.config.json；可选功能逐项问；非交互下会动全局的项缺省 off、危险回落直接拒绝——见 hard-rules §1）

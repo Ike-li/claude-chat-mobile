@@ -23,7 +23,7 @@
 | 单用户 = 机主 | 无多用户/租户隔离；鉴权通过 ≈ 本机启动 claude 的权限 | [README 安全边界](../README.md#安全边界) |
 | 不是远程桌面 / 共享 TTY / 多租户托管 | 不附着终端 stdin/stdout | [architecture.md](architecture.md) |
 | 尽量不重复造轮子 | 功能先看 Claude Code CLI / Agent SDK | `CLAUDE.md` |
-| **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口 | 2026-08-15 机主确认；2026-08-17 机主确认 desktop 单独入口；[deployment.md](deployment.md) |
+| **不替用户决定怎么后台运行** | 启动只有两条入口，互不相关：**headless** = 终端 `npm start`（全平台基线）；**macOS desktop** = `CCM.app`（常驻/重启/日志都在菜单里）。macOS 之外不做官方常驻适配，文档只指路。`desktop/launchd/` 模板和 `service.js` 是桌面端背后的实现，不是第三条入口。维护者本机的 Docker playground（`docker-compose.playground.yml`）是测试基础设施，与 `test:docker` 并列，**不是**产品入口，用户装机路径不走它 | 2026-08-15 机主确认；2026-08-17 机主确认 desktop 单独入口；[deployment.md](deployment.md) |
 | **可选功能由用户开关，不猜** | 桌面控制台、两个 bridge、`LOG_TERMINAL`、推送……默认全关，装机向导逐项问。非交互模式下两类失败模式分开处理：**会动全局的**（`--hooks` 写 `~/.claude`、`--desktop` 跑 swiftc）缺省即 `off`；**静默回落会扩大攻击面的**（`--work-dir` 回落 `$HOME` = 整个家目录挂给远程入口）直接拒绝。取值非法（`--hooks=maybe`）一律拒绝，不猜意图 | `scripts/setup.js` `resolveSetupPlan`；`tests/unit/setup.test.mjs` |
 | **对模型通路零假设** | 不关心 claude CLI 接的是哪个上游——官方订阅 / API key / Bedrock / Vertex / 第三方网关，一视同仁。**禁止任何 `ANTHROPIC_BASE_URL` 匹配、厂商白名单或上游探测**；唯一允许据以调整行为的信号是 CLI 自报的能力位（如 `rate_limits_available`），因为那是 CLI 说的、不是我们猜的。`ANTHROPIC_*` 启动期剥除是为「配置文件不许压过 shell 的 provider 凭据」（终端等价），不是限制上游。官方 Remote Control 在网关 / API key 配置下整条不可用，而本项目全功能可用——**这正是它存在的主要理由之一** | 2026-09-01 机主确认；`src/agent/agent.js:107`「不猜 ANTHROPIC_BASE_URL」；`src/shared/child-env.js`；[getting-started.md](getting-started.md) |
 | **不新增持久化层** | 消息内容的真相源**永远**是 `~/.claude/projects/<dir>/<id>.jsonl`，CCM 一条都不存（`sessions.json` 只有索引与指针）。新增持久化必须**同时**满足：① claude 侧不存在该概念（设备信任 / 推送订阅 / 审计这类 web 特有物）② 不能从 transcript 重建。缓存类不受此限，但**必须可随时删除、损坏即当作没有**。唯一的反向例外：往 claude 的 jsonl 追加一行 `entrypoint-marker`，那是互通性所需（让 CLI `/resume` 看得到 web 建的会话），不是 CCM 的存储 | 2026-09-01 机主确认；`src/sessions/history.js`；`src/server/app.js` 的 entrypoint 写入；[architecture.md](architecture.md) 状态表 |
@@ -36,7 +36,7 @@
 
 下列设计在 **「每实例单用户 / 一人为主」** 下成立。若目标变成多租户、团队账号、或「一人多机同时看不同会话且互不串台」，应**先改本文立场**再开大改，而不是在局部打补丁。
 
-**下面两张表是 n=1 假设面的登记簿**：每行一个 ID，代码里对应位置写 `// n1: <ID> 理由`，由 `npm run check` 的 `scripts/check-n1-assumptions.js` 双向校验（登记了却没标记 → 红；标了却没登记 → 红）。改立场那天，`grep -rn '// n1:' src/ public/js/` 就是要逐个处理的清单。
+**下面两张表是 n=1 假设面的登记簿**：每行一个 ID，代码里对应位置写 `// n1: <ID> 理由`，由 `npm run check` 的 `tests/gates/check-n1-assumptions.js` 双向校验（登记了却没标记 → 红；标了却没登记 → 红）。改立场那天，`grep -rn '// n1:' src/ public/js/` 就是要逐个处理的清单。
 
 > 门禁只保证**已登记的**不漂移，**发现不了新增的未登记假设**——n=1 依赖没有语法特征，一个新的全局单例在语法上与普通模块级变量毫无区别。新增假设点仍得靠 review 时想起来登记。
 
@@ -93,7 +93,7 @@
 | 出向 | 唯一信封 `agent:event`（`type` + `seq` + `epoch` + …） |
 | type 白名单 | **`src/shared/protocol.js` 的 `AGENT_EVENT_TYPES` 为唯一真相源**（当前 26 种） |
 | 入向 | 同文件 `INBOUND_SOCKET_EVENTS`（当前 42 个） |
-| 门禁 | `npm run check` → `scripts/contract-check.js` / `agent-event-contract.js` |
+| 门禁 | `npm run check` → `tests/gates/contract-check.js` / `agent-event-contract.js` |
 | 改 type | 必须同时改 protocol + 真实 emit 路径 + mock + 前端 handler（否则 check 红） |
 
 ### 3.3 状态落点与模块边界
@@ -102,7 +102,7 @@
 |------|------|
 | 新状态**不要**再进 `public/js/app.js` / `src/server/app.js` 顶层 | 约定 + review |
 | 前端：`public/js/app/*` 工厂 + context | 样板 `event-dispatch.js` |
-| 后端：所属域模块；`src/server` 仅组装根；`src/shared` 叶子 | `scripts/check-import-boundaries.js` |
+| 后端：所属域模块；`src/server` 仅组装根；`src/shared` 叶子 | `tests/gates/check-import-boundaries.js` |
 | 运行时不得 import `scripts/` / `tests/` | 同上 |
 | 零循环依赖 | 同上 |
 
@@ -122,15 +122,30 @@
 - 发版：`dev` ff → `master` + `scripts/release.sh`。  
 - 其它分支 worktree 在仓库外兄弟目录，不是本树源码。
 
+### 4.1.1 分发形态（一棵裁剪过的源码树，不是 npm 包）
+
+发版时 `release.sh` 用 `git archive` 从 tag 打出 `claude-chat-mobile.tar.gz` 上传为 Release asset，装机文档里那条 `curl .../releases/latest/download/...` 指向它。裁掉什么由 `.gitattributes` 的 `export-ignore` 决定：**一条 `/tests/**` 前缀就裁掉了用例 + 测试基建（`tests/infra/`）+ 全部门禁（`tests/gates/`）**，另加 `.github/`、`.claude/`、`CLAUDE.md`、`eslint.config.js` 与 `scripts/` 里四个维护者工具；**留下**运行时 + 用户运维命令（`setup`/`doctor`/`device`/`config`/`service`/`uninstall`/两个桥）+ 文档 + `desktop/`。
+
+- **为什么门禁住在 `tests/` 下**：此前它们散在 `scripts/`，「哪些是门禁」这份名单要在 `.gitattributes`（17 行）、`tests/unit/dist-manifest.test.mjs` 的正则、`repo-inventory.js` 的规则表**三处各存一份**——加一个门禁脚本要改三个地方，漏了任何一处都没有机制会发现。收进目录后三者全部退化成目录前缀，不需要维护。
+- **两个不能移的例外**：`scripts/doc-consistency.js` 与 `scripts/collect-source-files.js` 被 `scripts/doctor.js` import，而 `tests/**` 是被裁掉的——移进去等于用户跑 `doctor` 直接 `ERR_MODULE_NOT_FOUND`。已由 `dist-manifest.test.mjs` 单列断言保护。
+- **验证必须基于工作区 tree，不是 `HEAD`**：`git archive HEAD` 打包的是上一次提交的文件树，配上这一次的裁剪规则就是两边不同源——移动了文件而测试恒绿。见 `tests/helpers/worktree-tree.mjs`。
+
+- **不用 `npm pack`**：实测 npm 无条件排除 `package-lock.json`（写进 `files` 字段也没用），而分发包的装机路径 `npm ci --omit=dev` 靠它复现依赖树；且本包 `private: true`、无 `main`/`bin`，本就不是给人 `npm install` 的。
+- **`package.json` 是唯一被改写的文件**：`export-ignore` 是文件级的、裁不掉文件内部字段，而 `package.json` 天生混合（`start`/`setup` 与 `test`/`check`/`mutate` 同在一个 `scripts` 对象）。不改的话包内近一半命令指向已裁掉的文件，用户敲下去只拿到 ENOENT——「配置也隔离了」就成了假话。打包时按**可达性**重写（引用的文件还在吗 · 用的二进制还装得上吗 · 转发的目标还活着吗，转发链迭代到不动点），并删掉 `devDependencies`。**判据不是第二份白名单**——那必然与 `.gitattributes` 分叉且无人发现。代价：tarball 不再是 tag 的逐字节子集（内容仍全部来自 tag，只此一个文件被裁剪）。实现在 `scripts/dist-manifest.js` 的 `rewritePackageJson`，规则由 `tests/unit/dist-package-rewrite.test.mjs` 钉住。
+- **实测记录（2026-09-03）**：改写后的 `package.json` + 原始 lock 跑**真实** `npm ci --omit=dev` 通过（非 dry-run）；解压树以隔离 HOME/CCM_DATA_DIR/高位端口真启 server，`/health` 返回 `status: ok`。删 `devDependencies` 不会让 `npm ci` 失败——lock 里多出的条目被忽略。
+- **名单方向是黑名单**，与 §4.2 的白名单相反：那里漏判 = 在宿主机跑破坏性命令（致命），这里漏判 = 多带几个文件（无害），而误排除 = 用户下载到跑不起来的包（致命）。所以宁可多带。
+- 不变量由 `tests/unit/dist-manifest.test.mjs` 用 `git check-attr` 钉住（生产闭包零裁剪 · 测试树全裁 · 分发树里 doctor 的 D9 全绿 · 零 devDependency 泄漏），闭包算法在 `scripts/dist-manifest.js`。
+- 唯一跨界依赖：`scripts/doctor.js` import 门禁模块 `doc-consistency.js` 与 `collect-source-files.js`，两者必须留在包里，已单列断言保护。
+
 ### 4.2 测试跑在哪（白名单，非黑名单）
 
 **宿主机只允许**：`npm run lint` · `npm run check` · `npm run test:unit` · `npm run test:e2e`（及 visual/playwright 同源别名）。
 
-**其余一律容器**：`test:docker` · `mutate:docker` 等。
+**其余一律容器**：`test:docker` · `test:docker:playground` · `mutate:docker` 等。维护者 playground（干净 Linux HOME、发 loopback 端口、fake-claude）走 `npm run playground:up` / `npm run test:docker:playground`，镜像仍是 `Dockerfile.test`。
 
 **单独授权例外**：`RUN_CLAUDE_INTEGRATION=1` · `npm run test:smoke`。
 
-根因：2026-08-02 宿主机 `mutate` 误删 `~/.claude/projects`。钩子实现见 `scripts/guard-host-tests.js`。
+根因：2026-08-02 宿主机 `mutate` 误删 `~/.claude/projects`。钩子实现见 `tests/gates/guard-host-tests.js`。
 
 ### 4.3 `npm run check` 包
 

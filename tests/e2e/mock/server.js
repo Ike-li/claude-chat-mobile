@@ -1505,7 +1505,7 @@ io.on('connection', socket => {
   });
 
   // client:presence（PWA 前台/后台上报，与真 server 对齐）：无 ack，mock 无推送判定逻辑可影响，
-  // no-op 接收即可（仅需满足入向事件契约扫描，见 scripts/agent-event-contract.js）。
+  // no-op 接收即可（仅需满足入向事件契约扫描，见 tests/gates/agent-event-contract.js）。
   socket.on('client:presence', () => {});
 
   // config:refresh（CLI 配置刷新按钮，与真 server 对齐）：mock 无真实 CLI settings 可重读，ack ok 即可；
@@ -4093,10 +4093,11 @@ io.on('connection', socket => {
   });
 });
 
-httpServer.listen(PORT, '127.0.0.1', () => {
+const bindHost = process.env.CCM_MOCK_BIND || '127.0.0.1';
+httpServer.listen(PORT, bindHost, () => {
   console.log(`\n======================================================`);
   console.log(`🚀 Antigravity Visual Mock Server is running on port ${PORT}`);
-  console.log(`📍 Web UI URL: http://127.0.0.1:${PORT}`);
+  console.log(`📍 Web UI URL: http://${bindHost === '0.0.0.0' ? '127.0.0.1' : bindHost}:${PORT}`);
   console.log(`🛠️ To execute visual tests, open this URL in your browser!`);
   console.log(`======================================================\n`);
 });

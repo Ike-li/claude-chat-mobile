@@ -1,10 +1,10 @@
-// scripts/check-playwright-forbidden-patterns.js —— Playwright 测试基建硬闸。
+// tests/gates/check-playwright-forbidden-patterns.js —— Playwright 测试基建硬闸。
 // test.only/test.skip/test.fixme/networkidle/waitForTimeout 会隐藏回归或引入不确定等待；
 // 本脚本把禁止清单落成 npm run check / CI 都执行的确定性门禁。
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
 
-const TARGET_DIRS = ['tests/e2e'];
+const TARGET_DIRS = ['tests/e2e', 'tests/playground/e2e'];
 // 只扫描 Playwright E2E 树；Node 单元测试里的平台条件 skip 是合法的。未来若加 .js/.mjs/.cjs 的
 // Playwright spec 也必须纳入，避免扩展名死角。
 const TARGET_EXTENSIONS = new Set(['.ts', '.js', '.mjs', '.cjs']);
@@ -32,6 +32,7 @@ function walk(dir, files = []) {
 
 const violations = [];
 for (const dir of TARGET_DIRS) {
+  if (!existsSync(dir)) continue;
   for (const file of walk(dir)) {
     const lines = readFileSync(file, 'utf8').split('\n');
     lines.forEach((line, i) => {
@@ -49,4 +50,4 @@ if (violations.length > 0) {
   console.error('若确认某用例需要暂时隔离，须经人工审阅后显式处理，不得由自动化 agent 自主写入 test.fixme。');
   process.exit(1);
 }
-console.log('✅ Playwright 测试基建禁止模式检查通过（tests/e2e/ 下无 test.only/skip/fixme/networkidle/waitForTimeout）。');
+console.log('✅ Playwright 测试基建禁止模式检查通过（tests/e2e 与 tests/playground/e2e 下无 test.only/skip/fixme/networkidle/waitForTimeout）。');

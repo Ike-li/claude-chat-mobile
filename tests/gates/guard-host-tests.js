@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/guard-host-tests.js —— PreToolUse 钩子：宿主机上跑破坏性命令前先要确认
+// tests/gates/guard-host-tests.js —— PreToolUse 钩子：宿主机上跑破坏性命令前先要确认
 //
 // 【为什么需要机制而不是文档】2026-08-02 那次把 ~/.claude/projects 整棵树删光（70 个项目 /
 // 291 memory / 2990 transcript），根因不是没看见警告，是【没把 npm run mutate 归类成破坏性操作】。
@@ -45,7 +45,7 @@ const TEST_DOMAIN = [
   /\bnpm\s+(?:run\s+)?[\w:.-]*test[\w:.-]*/,   // npm test / npm run test:xxx / npm run pretest
   /\bnpm\s+t\b/,
   /\bnpm\s+run\s+[\w:.-]*mutate[\w:.-]*/,
-  /\bscripts\/mutate\.js\b/,
+  /\b(?:scripts|tests\/gates)\/mutate\.js\b/,
   /\bnode\b[^|&;]*--test\b/,                   // 裸 node --test，绕过 npm 脚本
   /\bRUN_CLAUDE_INTEGRATION\b/,
 ];
@@ -53,7 +53,7 @@ const TEST_DOMAIN = [
 // 已知形态的具体理由。理由必须点名到文件和形态：8/2 的根因是归类判断失败，而"包含集成测试那一档"
 // 这种抽象说法帮不上归类——看的人还是得自己去查它到底碰什么。
 const REASONS = [
-  { re: /\bnpm\s+run\s+[\w:.-]*mutate|\bscripts\/mutate\.js\b/, why: '变异检查会【故意把源码改坏再跑测试】，被改坏的可能正是算删除路径的代码——上次删库就是这么发生的' },
+  { re: /\bnpm\s+run\s+[\w:.-]*mutate|\b(?:scripts|tests\/gates)\/mutate\.js\b/, why: '变异检查会【故意把源码改坏再跑测试】，被改坏的可能正是算删除路径的代码——上次删库就是这么发生的' },
   { re: /\bRUN_CLAUDE_INTEGRATION\b/, why: '会跑 7 个需要真 agent turn 的文件：慢、耗 token、不稳' },
   { re: /\bnpm\s+run\s+[\w:.-]*smoke/, why: '冒烟测试真实调用 claude，消耗额度' },
   { re: /\bnpm\s+run\s+test:integration\b/, why: '集成测试会起真 server 并 spawn claude，且有用例按设计操作真实 ~/.claude/projects' },
@@ -66,7 +66,7 @@ const FALLBACK_REASON = '这一段落在「会跑测试 / 会执行被改坏的�
   + '（白名单只有 npm run lint / check / test:unit / test:e2e，外加带 preload-env 的 tests/unit 单文件跑法）';
 
 // 会跑测试的解释器。域判定【只认命令头】，不认参数里出现的同名字样——否则
-// `grep -rn RUN_CLAUDE_INTEGRATION src/`、`git diff -- scripts/mutate.js` 这类纯只读命令
+// `grep -rn RUN_CLAUDE_INTEGRATION src/`、`git diff -- tests/gates/mutate.js` 这类纯只读命令
 // 都会落进闸里要人确认（2026-08-04 实测，本钩子挂在每一次 Bash 上，误拦即一轮人工往返）。
 const TEST_RUNNERS = new Set(['npm', 'npx', 'node', 'pnpm', 'yarn', 'bun']);
 

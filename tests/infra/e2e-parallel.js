@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/test-e2e-parallel.js —— P0 E2E 双分片并行编排。
+// tests/infra/e2e-parallel.js —— P0 E2E 双分片并行编排。
 //
 // mock server（tests/e2e/mock/server.js）用模块级全局变量当状态存储，一个进程只能安全服务
 // 一条测试流（Playwright workers>1 共打同一进程实测会让状态互相踩踏、server 直接抛未捕获异常
@@ -16,7 +16,7 @@
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 
-const ROOT = join(import.meta.dirname, '..');
+const ROOT = join(import.meta.dirname, '..', '..');
 
 const SHARDS = [
   { shard: '1/2', port: 33341, suffix: '-shard1' },

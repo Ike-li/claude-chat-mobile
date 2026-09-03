@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { checkN1Assumptions } from '../../scripts/check-n1-assumptions.js';
+import { checkN1Assumptions } from '../../tests/gates/check-n1-assumptions.js';
 
 async function writeFixture(root, relativePath, text) {
   const file = join(root, relativePath);

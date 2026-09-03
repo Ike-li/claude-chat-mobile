@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/check-destructive-deletes.js —— 测试里的递归删除，目标必须是一次性目录
+// tests/gates/check-destructive-deletes.js —— 测试里的递归删除，目标必须是一次性目录
 //
 // 【为什么有这条闸】2026-08-02 出过一次真实数据丢失：变异检查把 src/sessions/history.js 的
 // getProjectDir 改成恒返回 ''，而 tests/unit/history-list.test.mjs 与
@@ -21,7 +21,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { maskCodePositions } from './mutate.js';
 
-const ROOT = join(import.meta.dirname, '..');
+const ROOT = join(import.meta.dirname, '..', '..');
 const TEST_DIRS = ['tests'];
 const SRC_DIRS = ['src', 'scripts'];
 const SRC_FILES = ['server.js'];
@@ -227,7 +227,7 @@ export function findShellDeletes(maskedSource, rawSource) {
 }
 
 // 字符串/模板串/注释里的 rmSync 是【文案不是调用】——本闸自己的测试文件里就存了一堆
-// 故意写坏的样例当夹具，不屏蔽就会把自己的夹具报成违规。沿用 scripts/mutate.js 的
+// 故意写坏的样例当夹具，不屏蔽就会把自己的夹具报成违规。沿用 tests/gates/mutate.js 的
 // maskCodePositions（agent-event-contract.js 也是这一路做法），把非代码位置填成空格：
 // 长度与换行都保持不变，行号才不会错位。
 export function stripNonCode(source) {

@@ -108,7 +108,7 @@ Outbound Socket.io traffic uses one `agent:event` envelope:
 }
 ```
 
-- `type` comes from a closed event set. `scripts/contract-check.js` checks consistency across **backend senders** (recursive scan of `src/`) and the **mock server**; for inbound socket events it additionally verifies that front-end emits stay within the contract.
+- `type` comes from a closed event set. `tests/gates/contract-check.js` checks consistency across **backend senders** (recursive scan of `src/`) and the **mock server**; for inbound socket events it additionally verifies that front-end emits stay within the contract.
   A separate **front-end dispatch coverage** check closes the receiving side: the union of the `handle` and `outOfBand` table keys in `public/js/app.js` must equal `AGENT_EVENT_TYPES` exactly (a missing key means events are silently dropped on arrival; an extra one is a dead key), and a type appearing in both tables is rejected as well (`outOfBand` wins at dispatch time, so the `handle` entry would become dead code). `DEFAULT_REPLAY_OOB_TYPES` in `event-dispatch.js` is a parallel copy of the `outOfBand` table and is pinned to match it verbatim — letting it drift makes a new OOB type get queued in the replay buffer and lost permanently when `resolve('reload')` discards the queue.
 - `seq` increases within one `AgentSession` and lets the front end deduplicate.
 - `epoch` identifies a server/instance generation; a change resets the client's old deduplication baseline.
@@ -171,6 +171,6 @@ See the [README security model](../README.en.md#security-model) for the concise 
 - `src/sessions/history.js`: transcript reading, history rebuild, and pure mirror-decision functions.
 - `src/ops/cli-hooks-bridge.js` / `src/ops/cli-statusline-bridge.js`: CLI signal and snapshot consumers.
 - `public/js/app.js` and `public/js/app/`: client state, event dispatch, and interaction modules.
-- `scripts/contract-check.js`: bidirectional Socket.io event-contract gate.
+- `tests/gates/contract-check.js`: bidirectional Socket.io event-contract gate.
 
 See the [repository map](repository-map.md) for complete directory ownership and file inventory, the [display contracts](display-contracts.md) (Chinese) for cross-layer model, effort, and statusline transformations, and [hard rules](hard-rules.md) (Chinese) for n=1 tradeoffs and deferred tech debt.

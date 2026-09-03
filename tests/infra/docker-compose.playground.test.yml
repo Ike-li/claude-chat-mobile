@@ -1,0 +1,20 @@
+# docker-compose.playground.test.yml —— 仅 `test:docker:playground` 叠加。
+# playground-testdata 必须挂到 app + probe + browser 的同一路径。
+# 禁止在单个服务上 tmpfs: /home/ccm-test/ccm-data（那是 per-container，互相看不见 pending 文件）。
+services:
+  app:
+    volumes:
+      - playground-testdata:/home/ccm-test/ccm-data
+  probe:
+    volumes:
+      - playground-testdata:/home/ccm-test/ccm-data
+  browser:
+    volumes:
+      - playground-testdata:/home/ccm-test/ccm-data
+
+volumes:
+  playground-testdata:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs

@@ -113,7 +113,7 @@ Web 会话并不是远端 Anthropic 聊天页。SDK 子进程继承本机 CLI �
 }
 ```
 
-- `type` 是闭合事件集合，由 `scripts/contract-check.js` 对**后端发送方**（递归扫 `src/`）与 **mock server** 做一致性校验；入向 socket 事件另查前端 emit 是否都在契约内。
+- `type` 是闭合事件集合，由 `tests/gates/contract-check.js` 对**后端发送方**（递归扫 `src/`）与 **mock server** 做一致性校验；入向 socket 事件另查前端 emit 是否都在契约内。
   出向另有一道**前端接收面覆盖**检查：`public/js/app.js` 的 `handle` 表 + `outOfBand` 表键并集必须精确等于 `AGENT_EVENT_TYPES`（少一个＝事件到达浏览器后静默丢弃，多一个＝死键），同一 type 落进两表也拦（`outOfBand` 在派发时优先，`handle` 那条会变成死代码）。`event-dispatch.js` 的 `DEFAULT_REPLAY_OOB_TYPES` 是 `outOfBand` 的平行副本，同样被钉成逐字一致——漏改它会让新的 OOB 类型被 replay buffer 误入队，在 `resolve('reload')` 时永久丢失。
 - `seq` 在一个 `AgentSession` 内递增，前端据此去重。
 - `epoch` 标识服务端/实例世代；变化时客户端重置旧的去重基线。
@@ -174,6 +174,6 @@ Agent 工具审批或用户直接文件编辑
 - `src/sessions/history.js`：transcript 读取、历史重建与镜像判定纯函数。
 - `src/ops/cli-hooks-bridge.js` / `src/ops/cli-statusline-bridge.js`：CLI 侧信号与快照消费。
 - `public/js/app.js` 与 `public/js/app/`：客户端状态、事件派发与交互模块。
-- `scripts/contract-check.js`：双向 Socket.io 事件契约门禁。
+- `tests/gates/contract-check.js`：双向 Socket.io 事件契约门禁。
 
 完整目录职责与文件清单见[仓库地图](repository-map.md)；模型、effort 与 statusline 的跨层变换见[展示契约](display-contracts.md)；n=1 取舍与已决技术债见[硬性规则索引](hard-rules.md)。

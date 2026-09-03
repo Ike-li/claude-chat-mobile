@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { unitTestFiles, findUnloadedProductionFiles, summarizeCoverageGap } from '../../scripts/coverage-check.js';
+import { unitTestFiles, findUnloadedProductionFiles, summarizeCoverageGap } from '../../tests/gates/coverage-check.js';
 
 test('coverage check expands unit test files without relying on shell globs', () => {
   const files = unitTestFiles();
@@ -19,7 +19,7 @@ test('coverage check expands unit test files without relying on shell globs', ()
 // 生产文件是 0% 却完全不拉低数字，于是「达标」会被读成「整体安全」。
 
 test('默认门槛贴近实测（缓冲不超过 5 个点，防再次拉开 12 点空隙）', () => {
-  const source = readFileSync(new URL('../../scripts/coverage-check.js', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../tests/gates/coverage-check.js', import.meta.url), 'utf8');
   const declared = source.match(/\|\| '(\d+(?:\.\d+)?)'\)/);
   assert.ok(declared, '默认门槛应写在 --threshold 的回退值里');
   const threshold = parseFloat(declared[1]);
@@ -74,7 +74,7 @@ test('findUnloadedProductionFiles：同名文件不互相顶替（只加载了�
 });
 
 test('缺口扫描真的接进主流程并会打印（算了不说等于没算）', () => {
-  const source = readFileSync(new URL('../../scripts/coverage-check.js', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../../tests/gates/coverage-check.js', import.meta.url), 'utf8');
   assert.match(source, /summarizeCoverageGap\(stdout\)/, '主流程必须真的调用缺口扫描');
   assert.match(source, /从未被任何单测加载/, '缺口必须打印出来，不能只算不说');
   assert.match(source, /覆盖面: 分母含/, '覆盖面是那个百分比的限定条件，必须恒打印');

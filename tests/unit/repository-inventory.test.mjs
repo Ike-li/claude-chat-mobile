@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
-import { classifyRepositoryPath, renderRepositoryMap } from '../../scripts/repo-inventory.js';
+import { classifyRepositoryPath, renderRepositoryMap } from '../../tests/gates/repo-inventory.js';
 
 test('final inventory rejects legacy roots and loose test files', () => {
   assert.equal(classifyRepositoryPath('agent.js'), null);
@@ -45,7 +45,7 @@ test('repository inventory classifies every tracked or unignored project file', 
 }, () => {
   const result = spawnSync(
     process.execPath,
-    ['scripts/repo-inventory.js', '--check'],
+    ['tests/gates/repo-inventory.js', '--check'],
     { cwd: process.cwd(), encoding: 'utf8' },
   );
 

@@ -70,7 +70,7 @@ jobs:
       #   单测），而 npm run check 的脚本链里从来没有它 —— 两件事叠起来就是门槛一个执行点都不剩。
       #   排在 integration 之后：那是唯一执行真实 src/server/app.js 的一层，它红了比覆盖率跌了更该先看见。
       #   只在 24 上跑：门槛是全仓一个数，两个 node 版本各算一遍只是把同一批单测再跑 70 秒。
-      - run: node scripts/coverage-check.js
+      - run: node tests/gates/coverage-check.js
         if: matrix.node == '24'
 
   e2e:

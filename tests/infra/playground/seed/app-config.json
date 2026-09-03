@@ -1,0 +1,11 @@
+{
+  "$schemaVersion": 1,
+  "AUTH_TOKEN": "playground-local-not-a-secret",
+  "WORK_DIR": "/home/ccm-test/workspace",
+  "WORKDIRS": ["/home/ccm-test/workspace"],
+  "BIND_MODE": "lan",
+  "ACCESS_PROFILE": "lan",
+  "DEV_MODE": false,
+  "LOG_TERMINAL": false,
+  "FILE_EDIT": true
+}

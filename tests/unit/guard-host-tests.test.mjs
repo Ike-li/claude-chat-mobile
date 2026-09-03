@@ -8,7 +8,7 @@
 // 用黑名单去防归类失败，判据和它自己宣称的原则是反的（CLAUDE.md 讲的一直是白名单）。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decide } from '../../scripts/guard-host-tests.js';
+import { decide } from '../../tests/gates/guard-host-tests.js';
 
 const blocked = cmd => assert.ok(decide(cmd), `应拦下: ${cmd}`);
 const allowed = cmd => assert.equal(decide(cmd), null, `不该拦: ${cmd}`);
@@ -17,7 +17,7 @@ const allowed = cmd => assert.equal(decide(cmd), null, `不该拦: ${cmd}`);
 test('拦: 变异检查——上次删库的直接凶手', () => {
   blocked('npm run mutate -- src/sessions/history.js');
   blocked('npm run mutate -- src/x.js --limit=25');
-  blocked('node scripts/mutate.js src/x.js');
+  blocked('node tests/gates/mutate.js src/x.js');
 });
 
 test('拦: 集成测试（起真 server + spawn claude，且有用例按设计操作真实 ~/.claude）', () => {
@@ -97,8 +97,8 @@ test('拦: tests/unit/../integration 路径穿越', () => {
 // 提到某个脚本路径或变量名就被拦。钩子挂在每一次 Bash 上，误拦一次就是一轮人工确认。
 test('放行: 只读命令仅仅提到测试脚本名 / 变量名', () => {
   allowed('grep -rn RUN_CLAUDE_INTEGRATION src/');
-  allowed('git diff -- scripts/mutate.js');
-  allowed('cat scripts/mutate.js');
+  allowed('git diff -- tests/gates/mutate.js');
+  allowed('cat tests/gates/mutate.js');
   allowed('wc -l tests/integration/session-delete.test.mjs');
 });
 
@@ -116,8 +116,14 @@ test('放行: CLAUDE.md 白名单里的四条', () => {
 test('放行: 已经走容器的形态', () => {
   allowed('npm run test:docker');
   allowed('npm run test:docker:e2e');
+  allowed('npm run test:docker:playground');
   allowed('npm run mutate:docker -- src/sessions/history.js');
   allowed('docker compose -f docker-compose.test.yml run --rm test npm run test:integration');
+  allowed('docker compose -f docker-compose.playground.yml run --rm probe');
+});
+
+test('拦: 宿主机原生 test:playground（必须走 test:docker:playground）', () => {
+  blocked('npm run test:playground');
 });
 
 // TDD 单文件循环必须留出来，否则「写一个失败测试→最小实现」这一步会被钩子逐次打断，

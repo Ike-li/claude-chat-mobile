@@ -1,6 +1,6 @@
 // tests/unit/cross-side-parity.test.mjs —— 前后端「同语义两份实现」的对照闸。
 //
-// 【为什么需要这道闸】模块边界闸（scripts/check-import-boundaries.js）禁止前后端互相 import，
+// 【为什么需要这道闸】模块边界闸（tests/gates/check-import-boundaries.js）禁止前后端互相 import，
 // 这是对的。但它只保证了「不许共享代码」，**没有任何东西保证那两份代码等价** —— 于是每次
 // 有人写下「与 xxx 同语义（两侧不能互相 import，边界闸）」这句注释，就诞生一对无人看管的孪生实现。
 //

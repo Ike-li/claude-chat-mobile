@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/guard-host-tests.js\""
+            "command": "node \"$CLAUDE_PROJECT_DIR/tests/gates/guard-host-tests.js\""
           }
         ]
       }

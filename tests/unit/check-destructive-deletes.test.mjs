@@ -1,11 +1,11 @@
 // tests/unit/check-destructive-deletes.test.mjs —— 破坏性删除门禁自身的测试
 //
-// 这条闸是为了防 2026-08-02 那次真实数据丢失（详见 scripts/check-destructive-deletes.js 头部）。
+// 这条闸是为了防 2026-08-02 那次真实数据丢失（详见 tests/gates/check-destructive-deletes.js 头部）。
 // 闸本身判错的代价是【假绿】——看着有防护，其实没有。所以这里正反两面都要测：
 // 正向（安全写法不许误报）保证它不会被嫌吵而绕过；反向（危险写法必须报）保证它真的在工作。
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { checkFile } from '../../scripts/check-destructive-deletes.js';
+import { checkFile } from '../../tests/gates/check-destructive-deletes.js';
 
 const check = src => checkFile(src, 'x.test.mjs');
 
@@ -146,7 +146,7 @@ test('字符串/模板串里的 rmSync 是文案不是调用，不报', () => {
 // 测试的判据是「追得到 mkdtemp」，生产代码没这回事——它删的本来就是真实文件。
 // 生产侧盯的是另一个形态：真实数据根下，某一段【目录】由代码算出来。那一段算成空串，
 // 删除就打到另一个目录上去了——2026-08-02 的事故正是它的递归版本。
-import { checkSourceFile } from '../../scripts/check-destructive-deletes.js';
+import { checkSourceFile } from '../../tests/gates/check-destructive-deletes.js';
 
 const checkSrc = src => checkSourceFile(src, 'x.js');
 

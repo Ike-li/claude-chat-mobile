@@ -9,7 +9,7 @@ import {
   checkAgentEventContract,
   checkInboundSocketContract,
   checkFrontendDispatchCoverage,
-} from '../../scripts/agent-event-contract.js';
+} from '../../tests/gates/agent-event-contract.js';
 
 async function writeFixture(root, relativePath, source) {
   const fullPath = join(root, relativePath);

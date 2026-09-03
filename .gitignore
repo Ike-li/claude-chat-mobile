@@ -69,7 +69,7 @@ reasonix.toml
 .agents/
 .codex/
 
-# scripts/mutate.js 运行期的源文件备份（崩溃时靠它还原）。
+# tests/gates/mutate.js 运行期的源文件备份（崩溃时靠它还原）。
 # 必须忽略：否则会被 git ls-files --others 扫到，污染 repo-inventory / doc 一致性等按文件清单工作的门禁。
 *.mutate-backup
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// scripts/coverage-check.js —— 覆盖率门槛检查
-// 用法: node scripts/coverage-check.js [--threshold=75]
+// tests/gates/coverage-check.js —— 覆盖率门槛检查
+// 用法: node tests/gates/coverage-check.js [--threshold=75]
 //   默认阈值 75% 行覆盖率（2026-08-02 实测 77.5%，留 ~2.5% 缓冲防退化）。在 doctor.js 中调用。
 //   exit 0 = 达标, exit 1 = 不达标, exit 2 = 运行失败。
 //
@@ -23,7 +23,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const ROOT = join(import.meta.dirname, '..');
+const ROOT = join(import.meta.dirname, '..', '..');
 
 export function unitTestFiles(rootDir = ROOT) {
   return readdirSync(join(rootDir, 'tests', 'unit'), { withFileTypes: true })
@@ -56,7 +56,7 @@ function listProductionFiles(rootDir, dir) {
 // app.js（src/server + public/js）与 notifications.js（src/ops + public/js/app）各有两份，
 // 而认错是【静默】的：本文件拿它算「哪些生产文件从未被加载」，认错就让最该报的那个文件从缺口
 // 名单里消失（src/server/app.js 一旦有了首个单测，public/js/app.js 这个全仓最大的 0% 文件
-// 就会被它的同名兄弟顶掉）；scripts/mutate.js 拿它挑「哪些行被覆盖过」，认错则把变异体生成到
+// 就会被它的同名兄弟顶掉）；tests/gates/mutate.js 拿它挑「哪些行被覆盖过」，认错则把变异体生成到
 // 错的行集合上——要么全存活（假警报），要么跳过真被覆盖的行（假绿）。
 //
 // 返回 [{ path, cells }]，cells 是按 `|` 切开的原始单元格（cells[4] = 未覆盖行）。
