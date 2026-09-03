@@ -3,6 +3,7 @@
 // 这些断言锁的是「干净 Linux 用户」夹具不会吃进宿主机 ccm.config.json / .env / data/ / 秘密。
 // YAML 按原文扫，不 parse：${ 插值、列表式 environment、漏写的空键，parse 之后就看不见了。
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -18,6 +19,8 @@ const TEST_OVERRIDE = join(ROOT, 'tests/infra/docker-compose.playground.test.yml
 const TEST_COMPOSE = join(ROOT, 'tests/infra/docker-compose.test.yml');
 const RUNTIME_ENV = join(ROOT, 'tests/infra/playground/runtime.env');
 const PACKAGE_JSON = join(ROOT, 'package.json');
+const TEST_WORKFLOW = join(ROOT, '.github/workflows/test.yml');
+const FAKE_CLAUDE = join(ROOT, 'tests/fixtures/fake-claude.sh');
 
 const ANTHROPIC_KEYS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'];
 const YAML_EMPTY_OR_LITERAL = (key) => new RegExp(`^\\s+${key}:\\s*(?:""|''|\\S)`, 'm');
@@ -48,6 +51,15 @@ function serviceBlock(yaml, name) {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
+function workflowJobBlock(yaml, name) {
+  const start = yaml.search(new RegExp(`^  ${name}:`, 'm'));
+  assert.notEqual(start, -1, `workflow 里没有 ${name} job`);
+  const header = `  ${name}:\n`;
+  const rest = yaml.slice(start + header.length);
+  const next = rest.search(/\n {2}[a-zA-Z][a-zA-Z0-9_-]*:/);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
 test('runtime.env 钉死隔离键，不把 HOME 当工作区，不设 CI', () => {
   const env = parseEnvFile(read(RUNTIME_ENV));
   assert.equal(env.AUTH_TOKEN, PLAYGROUND_TOKEN);
@@ -61,6 +73,7 @@ test('runtime.env 钉死隔离键，不把 HOME 当工作区，不设 CI', () =>
   assert.equal(env.CCM_TEST_PRESERVE_EMPTY_ENV, '1');
   assert.notEqual(env.DEV_MODE, '1');
   assert.equal(Object.hasOwn(env, 'CI'), false);
+  assert.equal(Object.hasOwn(env, 'CCM_FAKE_CLAUDE_TURNS'), false, 'deterministic turn 只能由 playground app 显式开启');
 
   for (const key of SPAWN_ENV_BLOCKLIST) {
     assert.equal(Object.hasOwn(env, key), true, `runtime.env 缺少 blocklist 键 ${key}`);
@@ -81,19 +94,12 @@ test('playground compose：镜像、端口、overlay、profiles、零插值、�
   assert.match(yaml, /127\.0\.0\.1:13100:3100/);
   assert.match(yaml, /127\.0\.0\.1:18080:8080/);
   assert.doesNotMatch(yaml, /^\s+-\s+["']?3000:3000["']?\s*$/m);
-  // Docker Desktop virtiofs 不能在 `.:/app` 上再叠 /app/.env（宿主机若已有该文件会
-  // OCI mount 失败）。隔离改成：不挂仓库根，只挂源码目录；配置由 entrypoint 写进容器层。
-  // 两种写法都要防：compose 移进 tests/infra/ 后，「挂仓库根」写出来是 `../..:/app` 而不再是 `.:/app`。
   assert.doesNotMatch(yaml, /^\s+-\s+["']?(?:\.|\.\.\/\.\.):\/app["']?\s*$/m);
   assert.doesNotMatch(yaml, /^\s+- .*:\/app\/\.env/m);
   assert.doesNotMatch(yaml, /^\s+- .*:\/app\/ccm\.config\.json/m);
-  // 运行时代码整体在 app/ 下，一条挂载即可；容器内路径与仓库结构一致（/app 恒等于仓库根）。
   assert.match(yaml, /\.\.\/\.\.\/app:\/app\/app/);
   assert.match(yaml, /\.\.\/\.\.\/scripts:\/app\/scripts/);
   assert.match(yaml, /\.\.\/\.\.\/tests:\/app\/tests/);
-  // 夹具（tests/infra/playground/）随 ../../tests 挂载一起进容器，不再单独挂一条。
-  // 所以这里断言的不是挂载，而是【容器里那条路径真能找到入口脚本】——挂载写对了但
-  // command 指向旧路径的话，容器会以 "No such file" 起不来，而挂载断言看不出来。
   assert.match(yaml, /\/app\/tests\/infra\/playground\/entrypoint-app\.sh/);
   assert.doesNotMatch(yaml, /\$\{/);
   assert.doesNotMatch(yaml, /env_file:\s*\.env\b/);
@@ -106,6 +112,7 @@ test('playground compose：镜像、端口、overlay、profiles、零插值、�
 
   const app = serviceBlock(yaml, 'app');
   assert.match(app, /init:\s*true/);
+  assert.match(app, /^\s+CCM_FAKE_CLAUDE_TURNS:\s*"1"\s*$/m);
   assert.doesNotMatch(app, /^\s+profiles:/m);
 
   for (const name of ['mock', 'proxy', 'probe', 'browser']) {
@@ -122,6 +129,44 @@ test('playground compose：镜像、端口、overlay、profiles、零插值、�
   for (const name of ['app', 'probe', 'browser']) {
     assert.match(serviceBlock(yaml, name), /playground-home/, `${name} 必须挂 playground-home（或同名数据卷）`);
   }
+});
+
+test('fake Claude 默认静默，只有显式 turn 模式才完成 initialize + user 回合', () => {
+  const version = spawnSync(FAKE_CLAUDE, ['--version'], { cwd: ROOT, encoding: 'utf8' });
+  assert.equal(version.status, 0, version.stderr);
+  assert.match(version.stdout, /0\.0\.0-fake/);
+
+  const userText = 'hello deterministic fake';
+  const input = [
+    JSON.stringify({ type: 'control_request', request_id: 'req-init', request: { subtype: 'initialize' } }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: userText }] } }),
+    '',
+  ].join('\n');
+
+  const silent = spawnSync(FAKE_CLAUDE, ['--output-format', 'stream-json'], {
+    cwd: ROOT,
+    input,
+    encoding: 'utf8',
+    timeout: 5_000,
+    env: { ...process.env, CCM_FAKE_CLAUDE_TURNS: '' },
+  });
+  assert.equal(silent.status, 0, silent.stderr);
+  assert.equal(silent.stdout, '');
+
+  const turn = spawnSync(FAKE_CLAUDE, ['--output-format', 'stream-json', '--input-format', 'stream-json', '--verbose'], {
+    cwd: ROOT,
+    input,
+    encoding: 'utf8',
+    timeout: 5_000,
+    env: { ...process.env, CCM_FAKE_CLAUDE_TURNS: '1' },
+  });
+  assert.equal(turn.status, 0, turn.stderr);
+  const messages = turn.stdout.trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
+  const init = messages.find(message => message.type === 'system' && message.subtype === 'init');
+  assert.equal(init?.model, 'claude-fake-test');
+  assert.equal(messages.find(message => message.type === 'assistant')?.message?.content?.[0]?.text,
+    `CCM deterministic fake reply: ${userText}`);
+  assert.equal(messages.find(message => message.type === 'result')?.subtype, 'success');
 });
 
 test('test compose 仍不发端口，并与 playground 共享 ccm-test:local 标签', () => {
@@ -142,6 +187,14 @@ test('package.json 有 test:docker:playground、没有宿主机原生 test:playg
   const scripts = JSON.parse(read(PACKAGE_JSON)).scripts;
   assert.equal(Object.hasOwn(scripts, 'test:docker:playground'), true);
   assert.equal(Object.hasOwn(scripts, 'test:playground'), false);
+});
+
+test('GitHub CI 必须持续执行真实 app playground，而不是只靠维护者手工运行', () => {
+  const yaml = read(TEST_WORKFLOW);
+  const job = workflowJobBlock(yaml, 'real-app-e2e');
+  assert.match(job, /runs-on:\s*ubuntu-latest/);
+  assert.match(job, /npm run test:docker:playground/);
+  assert.doesNotMatch(job, /continue-on-error:\s*true/);
 });
 
 test('inventory 认得 playground 树', () => {

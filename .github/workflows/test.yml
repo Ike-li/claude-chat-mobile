@@ -5,7 +5,7 @@ on:
     branches: [master, dev]
   pull_request:
 
-# 两个 job 都只做 checkout/setup-node/npm/upload-artifact，不写回仓库任何东西，
+# 所有 job 只做 checkout/setup/test/upload-artifact，不写回仓库任何东西，
 # 所以把 GITHUB_TOKEN 收到最小面。（upload-artifact 走 ACTIONS_RUNTIME_TOKEN，不吃这里的权限。）
 permissions:
   contents: read
@@ -58,18 +58,12 @@ jobs:
       # 「fail 0 但 cancelled 5」，exit 1。7/30 起 CI 连红即此，与被测代码无关。
       # test:unit 本就不带该 flag，拆开跑即可，防挂死保护仍留在 integration 上。
       - run: npm run test:unit
-      # 集成测试是【唯一执行真实 app/src/server/app.js 的一层】：quality 是纯静态、test:unit 从不加载
-      # 那个文件、e2e 打的是 tests/e2e/mock/server.js 而非真 server。此前它在 CI 里被整体 skip
-      # （21 个文件全带 `process.env.CI ? {skip}`，实测 30 suites 只出 3 tests），于是仓库最大的
-      # 两个文件在 CI 零执行。2026-08-02 改：CLAUDE_BIN 指向 stub 让 preflight 过关，接线类测试
-      # 照常跑；真需要 agent turn 的仍由各文件自己的 RUN_CLAUDE_INTEGRATION 门跳过（不受这里影响）。
+      # 集成测试会执行真实 app/src/server/app.js；真需要 agent turn 的文件仍由
+      # RUN_CLAUDE_INTEGRATION 门控，CI 通过 CLAUDE_BIN stub 只验证零 token 接线。
       - run: npm run test:integration
         env:
           CLAUDE_BIN: ${{ github.workspace }}/tests/fixtures/fake-claude.sh
-      # ★ 覆盖率门槛的【唯一】自动执行点。doctor 的 D11 默认跳过它（装机预检不该让新用户等一分钟
-      #   单测），而 npm run check 的脚本链里从来没有它 —— 两件事叠起来就是门槛一个执行点都不剩。
-      #   排在 integration 之后：那是唯一执行真实 app/src/server/app.js 的一层，它红了比覆盖率跌了更该先看见。
-      #   只在 24 上跑：门槛是全仓一个数，两个 node 版本各算一遍只是把同一批单测再跑 70 秒。
+      # 覆盖率门槛只在 Node 24 上算一次。
       - run: node tests/gates/coverage-check.js
         if: matrix.node == '24'
 
@@ -99,3 +93,30 @@ jobs:
           name: playwright-e2e-report
           path: playwright-report/
           retention-days: 7
+
+  # 真实产品接线浏览器验收：Docker 内启动真正 app/server.js，走真实 HTTP/Socket、
+  # TOFU/device approve/workspace；Claude 仍用 fake-claude.sh，因此零 token、无外部凭据。
+  # 这条 lane 的目的不是替代 tests/e2e/mock，而是防 mock server 与 production server 协议漂移。
+  real-app-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run real-app playground E2E
+        run: npm run test:docker:playground
+
+      - name: Dump playground logs on failure
+        if: failure()
+        run: |
+          COMPOSE_PROFILES=mock,proxy docker compose \
+            -f tests/infra/docker-compose.playground.yml \
+            -f tests/infra/docker-compose.playground.test.yml \
+            logs --no-color --tail=300 || true
